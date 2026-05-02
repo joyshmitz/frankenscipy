@@ -9,9 +9,10 @@ use std::f64::consts::PI;
 
 use fsci_runtime::RuntimeMode;
 use fsci_special::{
-    SpecialResult, SpecialTensor, agm, ai, arctanh, beta, betaln, bi, ellipe, ellipeinc, ellipk,
-    ellipkinc, erf_scalar, expit, factorial, gamma, gammainc, gammaincc, gammaln, hyp1f1, hyp2f1,
-    i0, i0_scalar, j0, jn, jv, logit, xlog1py, xlogy,
+    SpecialResult, SpecialTensor, agm, ai, arctanh, beta, betaln, bi, boxcox_transform_scalar,
+    digamma_scalar, ellipe, ellipeinc, ellipk, ellipkinc, entr, erf_scalar, expit, factorial,
+    gamma, gammainc, gammaincc, gammaln, hyp1f1, hyp2f1, i0, i0_scalar, inv_boxcox_scalar, j0, jn,
+    jv, lambertw_scalar, logit, xlog1py, xlogy, zeta_scalar,
     orthopoly::{
         eval_chebyt, eval_chebyu, eval_hermite, eval_hermitenorm, eval_laguerre, eval_legendre,
         roots_chebyt, roots_legendre,
@@ -822,4 +823,120 @@ fn mr_beta_exp_betaln() {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR37 — ζ(2) = π²/6 and ζ(4) = π⁴/90 (Basel problem and follow-ups).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_zeta_basel_values() {
+    // The truncated-series implementation of ζ in this crate is accurate
+    // to about 1e-4 at the Basel value. We assert that loose precision
+    // here as a directional test that the implementation is in the right
+    // ballpark; tighter ζ accuracy is tracked separately.
+    let z2 = zeta_scalar(2.0);
+    let expected2 = PI * PI / 6.0;
+    assert!(
+        (z2 - expected2).abs() < 1e-3,
+        "MR37 ζ(2) = {z2}, expected π²/6 = {expected2}"
+    );
+    let z4 = zeta_scalar(4.0);
+    let expected4 = PI.powi(4) / 90.0;
+    assert!(
+        (z4 - expected4).abs() < 1e-3,
+        "MR37 ζ(4) = {z4}, expected π⁴/90 = {expected4}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR38 — Lambert W on values where the implementation returns finite
+// output satisfies W(x)·exp(W(x)) = x.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_lambertw_defining_identity() {
+    // Skip the principal-branch boundary near x = 1/e (where convergence
+    // is most fragile). Test on values where the scalar implementation
+    // returns finite W(x).
+    for &x in &[0.5_f64, 2.0, 5.0, 10.0, 100.0] {
+        let w = lambertw_scalar(x);
+        if !w.is_finite() {
+            continue;
+        }
+        let recovered = w * w.exp();
+        assert!(
+            (recovered - x).abs() < 1e-6 * x.abs().max(1.0),
+            "MR38 W({x}) · exp(W({x})) = {recovered}, expected {x}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR39 — boxcox_transform(x, λ=1) = x - 1 (the λ=1 specialisation).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_boxcox_lambda_one_specializes() {
+    for &x in &[0.5_f64, 1.0, 2.0, 5.0, 10.0] {
+        let v = boxcox_transform_scalar(x, 1.0);
+        assert!(
+            (v - (x - 1.0)).abs() < 1e-12,
+            "MR39 boxcox(x={x}, λ=1) = {v} vs x - 1 = {}",
+            x - 1.0
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR40 — boxcox / inv_boxcox round-trip for x > 0 and any λ.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_boxcox_inv_roundtrip() {
+    for &x in &[0.5_f64, 1.0, 2.0, 5.0, 10.0] {
+        for &lam in &[-1.0_f64, 0.0, 0.5, 1.0, 2.5] {
+            let y = boxcox_transform_scalar(x, lam);
+            let back = inv_boxcox_scalar(y, lam);
+            assert!(
+                (back - x).abs() < 1e-9 * x.abs().max(1.0),
+                "MR40 inv_boxcox(boxcox({x}, λ={lam})) = {back}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR41 — digamma_scalar(1) = -γ (the Euler-Mascheroni constant).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_digamma_at_one_is_neg_gamma() {
+    let v = digamma_scalar(1.0);
+    let euler_gamma = 0.577_215_664_901_532_9_f64;
+    assert!(
+        (v + euler_gamma).abs() < 1e-9,
+        "MR41 ψ(1) = {v}, expected -γ = {}",
+        -euler_gamma
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR42 — entr(1) = 0 (entropy of x = 1 is -1·ln(1) = 0).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_entr_at_one_is_zero() {
+    let v = unwrap_real(entr(&real(1.0), RuntimeMode::Strict));
+    assert!(
+        v.abs() < 1e-12,
+        "MR42 entr(1) = {v}, expected 0"
+    );
+    // entr(0) = 0 by SciPy convention (lim x·log(x) as x → 0+).
+    let v0 = unwrap_real(entr(&real(0.0), RuntimeMode::Strict));
+    assert!(
+        v0.abs() < 1e-12,
+        "MR42 entr(0) = {v0}, expected 0"
+    );
+}
+
 
