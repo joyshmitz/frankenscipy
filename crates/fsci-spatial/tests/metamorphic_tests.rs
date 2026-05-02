@@ -7,8 +7,10 @@
 //! Run with: `cargo test -p fsci-spatial --test metamorphic_tests`
 
 use fsci_spatial::{
-    ConvexHull, DistanceMetric, KDTree, cdist_metric, chebyshev, cityblock, cosine, euclidean,
-    jensenshannon, metric_distance, minkowski, pdist, procrustes, squareform_to_condensed,
+    ConvexHull, DistanceMetric, KDTree, angle_between, cartesian_to_cylindrical,
+    cartesian_to_spherical, cdist_metric, chebyshev, cityblock, cosine, cross_3d,
+    cylindrical_to_cartesian, dot, euclidean, jensenshannon, metric_distance, minkowski, pdist,
+    procrustes, rotate_point, rotation_matrix, spherical_to_cartesian, squareform_to_condensed,
     squareform_to_matrix,
 };
 
@@ -662,4 +664,181 @@ fn mr_kdtree_query_self_match_distance_zero() {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR23 — spherical→cartesian→spherical preserves r and yields the same
+// (x, y, z) when round-tripped via cartesian_to_spherical.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_spherical_cartesian_roundtrip() {
+    use std::f64::consts::PI;
+    let cases = [
+        (1.0_f64, PI / 4.0, 0.5),
+        (3.5, PI / 3.0, 1.2),
+        (2.0, PI / 2.0, 0.0),
+        (5.0, PI / 6.0, -1.0),
+    ];
+    for &(r, theta, phi) in &cases {
+        let (x, y, z) = spherical_to_cartesian(r, theta, phi);
+        let (r2, theta2, phi2) = cartesian_to_spherical(x, y, z);
+        assert!(
+            (r - r2).abs() < 1e-12,
+            "MR23 r mismatch: {r} vs {r2}"
+        );
+        assert!(
+            (theta - theta2).abs() < 1e-12,
+            "MR23 theta mismatch: {theta} vs {theta2}"
+        );
+        // φ may differ by ±2π — compare via cos and sin.
+        assert!(
+            (phi.cos() - phi2.cos()).abs() < 1e-9
+                && (phi.sin() - phi2.sin()).abs() < 1e-9,
+            "MR23 phi mismatch: {phi} vs {phi2}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR24 — cylindrical→cartesian→cylindrical preserves ρ and z; θ
+// matches modulo 2π.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_cylindrical_cartesian_roundtrip() {
+    use std::f64::consts::PI;
+    let cases = [
+        (1.0_f64, 0.0, 0.0),
+        (2.5, PI / 4.0, 1.0),
+        (3.0, PI / 2.0, -2.5),
+        (0.5, PI, 5.0),
+    ];
+    for &(rho, theta, z) in &cases {
+        let (x, y, zc) = cylindrical_to_cartesian(rho, theta, z);
+        let (rho2, theta2, z2) = cartesian_to_cylindrical(x, y, zc);
+        assert!(
+            (rho - rho2).abs() < 1e-12,
+            "MR24 rho mismatch: {rho} vs {rho2}"
+        );
+        assert!(
+            (z - z2).abs() < 1e-12,
+            "MR24 z mismatch: {z} vs {z2}"
+        );
+        assert!(
+            (theta.cos() - theta2.cos()).abs() < 1e-9
+                && (theta.sin() - theta2.sin()).abs() < 1e-9,
+            "MR24 theta mismatch: {theta} vs {theta2}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR25 — A rotation about a unit axis preserves the L2 norm of any
+// vector it is applied to.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_rotation_preserves_norm() {
+    use std::f64::consts::PI;
+    let axes: &[[f64; 3]] = &[
+        [0.0, 0.0, 1.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [
+            1.0 / (3.0_f64).sqrt(),
+            1.0 / (3.0_f64).sqrt(),
+            1.0 / (3.0_f64).sqrt(),
+        ],
+    ];
+    let points: &[[f64; 3]] = &[
+        [1.0, 2.0, 3.0],
+        [-1.0, 0.5, 4.0],
+        [2.5, -3.0, 1.0],
+    ];
+    for axis in axes {
+        for angle in &[0.0_f64, PI / 6.0, PI / 4.0, PI / 2.0, PI] {
+            let r = rotation_matrix(axis, *angle);
+            for p in points {
+                let q = rotate_point(&r, p);
+                let np: f64 = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
+                let nq: f64 = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2]).sqrt();
+                assert!(
+                    (np - nq).abs() < 1e-9,
+                    "MR25 rotation broke norm: {np} vs {nq}"
+                );
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR26 — cross_3d is antisymmetric: a × b = -(b × a).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_cross_3d_antisymmetric() {
+    let pairs: &[([f64; 3], [f64; 3])] = &[
+        ([1.0, 2.0, 3.0], [4.0, 5.0, 6.0]),
+        ([-1.0, 0.5, 2.5], [3.0, -1.5, 1.0]),
+        ([0.0, 0.0, 1.0], [1.0, 0.0, 0.0]),
+    ];
+    for (a, b) in pairs {
+        let ab = cross_3d(a, b);
+        let ba = cross_3d(b, a);
+        for k in 0..3 {
+            assert!(
+                (ab[k] + ba[k]).abs() < 1e-12,
+                "MR26 a×b + b×a [{k}] = {} != 0",
+                ab[k] + ba[k]
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR27 — dot(a, a) = ‖a‖² and dot is symmetric in its arguments.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_dot_self_norm_squared_and_symmetry() {
+    let vectors = sample_points();
+    for a in &vectors {
+        let aa = dot(a, a);
+        let norm_sq: f64 = a.iter().map(|&v| v * v).sum();
+        assert!(
+            (aa - norm_sq).abs() < 1e-9,
+            "MR27 dot(a, a) = {aa} vs ‖a‖² = {norm_sq}"
+        );
+        for b in &vectors {
+            let ab = dot(a, b);
+            let ba = dot(b, a);
+            assert!(
+                (ab - ba).abs() < 1e-12,
+                "MR27 dot symmetry: {ab} vs {ba}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR28 — angle_between is in [0, π] for any two non-zero vectors.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_angle_between_in_zero_pi() {
+    use std::f64::consts::PI;
+    let vectors = sample_points();
+    for a in &vectors {
+        for b in &vectors {
+            let ang = angle_between(a, b);
+            if ang.is_finite() {
+                assert!(
+                    ang >= -1e-12 && ang <= PI + 1e-12,
+                    "MR28 angle_between = {ang} not in [0, π]"
+                );
+            }
+        }
+    }
+}
+
 
