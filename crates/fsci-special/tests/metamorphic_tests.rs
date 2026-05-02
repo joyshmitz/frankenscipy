@@ -9,8 +9,9 @@ use std::f64::consts::PI;
 
 use fsci_runtime::RuntimeMode;
 use fsci_special::{
-    SpecialResult, SpecialTensor, ai, beta, bi, ellipe, ellipeinc, ellipk, ellipkinc, erf_scalar,
-    factorial, gamma, gammainc, gammaincc, gammaln, hyp1f1, hyp2f1, i0, i0_scalar, j0, jn, jv,
+    SpecialResult, SpecialTensor, agm, ai, arctanh, beta, betaln, bi, ellipe, ellipeinc, ellipk,
+    ellipkinc, erf_scalar, expit, factorial, gamma, gammainc, gammaincc, gammaln, hyp1f1, hyp2f1,
+    i0, i0_scalar, j0, jn, jv, logit, xlog1py, xlogy,
     orthopoly::{
         eval_chebyt, eval_chebyu, eval_hermite, eval_hermitenorm, eval_laguerre, eval_legendre,
         roots_chebyt, roots_legendre,
@@ -683,3 +684,142 @@ fn mr_ellipkinc_at_half_pi_matches_complete() {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// MR31 — expit∘logit = id on (0, 1), and logit∘expit = id on R.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_expit_logit_round_trip() {
+    for &p in &[0.05_f64, 0.25, 0.5, 0.75, 0.95] {
+        let l = unwrap_real(logit(&real(p), RuntimeMode::Strict));
+        let back = unwrap_real(expit(&real(l), RuntimeMode::Strict));
+        assert!(
+            (back - p).abs() < 1e-12,
+            "MR31 expit(logit({p})) = {back}"
+        );
+    }
+    for &x in &[-3.5_f64, -1.0, 0.0, 1.0, 3.5] {
+        let e = unwrap_real(expit(&real(x), RuntimeMode::Strict));
+        let back = unwrap_real(logit(&real(e), RuntimeMode::Strict));
+        assert!(
+            (back - x).abs() < 1e-9,
+            "MR31 logit(expit({x})) = {back}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR32 — xlogy(0, y) = 0 for any finite y > 0; xlogy(x, 1) = 0;
+// xlog1py(0, y) = 0 for finite y; xlog1py(x, 0) = 0.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_xlogy_xlog1py_boundary_zeros() {
+    for &y in &[0.5_f64, 1.0, 2.0, 100.0] {
+        let v = unwrap_real(xlogy(&real(0.0), &real(y), RuntimeMode::Strict));
+        assert!(v.abs() < 1e-15, "MR32 xlogy(0, {y}) = {v}, expected 0");
+    }
+    for &x in &[1.0_f64, 5.0, 100.0] {
+        let v = unwrap_real(xlogy(&real(x), &real(1.0), RuntimeMode::Strict));
+        assert!(v.abs() < 1e-15, "MR32 xlogy({x}, 1) = {v}, expected 0");
+    }
+    for &y in &[-0.5_f64, 0.0, 1.0, 5.0] {
+        let v = unwrap_real(xlog1py(&real(0.0), &real(y), RuntimeMode::Strict));
+        assert!(v.abs() < 1e-15, "MR32 xlog1py(0, {y}) = {v}, expected 0");
+    }
+    for &x in &[1.0_f64, 5.0, 100.0] {
+        let v = unwrap_real(xlog1py(&real(x), &real(0.0), RuntimeMode::Strict));
+        assert!(v.abs() < 1e-15, "MR32 xlog1py({x}, 0) = {v}, expected 0");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR33 — Arithmetic-Geometric Mean (AGM) is symmetric in its arguments
+// and AGM(a, a) = a.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_agm_symmetric_and_diagonal() {
+    for &(a, b) in &[(1.0_f64, 4.0), (0.5, 2.5), (2.0, 7.0), (10.0, 1.0)] {
+        let ab = agm(a, b);
+        let ba = agm(b, a);
+        assert!(
+            (ab - ba).abs() < 1e-12,
+            "MR33 agm({a}, {b}) = {ab}, agm({b}, {a}) = {ba}"
+        );
+    }
+    for &a in &[0.5_f64, 1.0, 2.0, 5.0, 10.0] {
+        let v = agm(a, a);
+        assert!((v - a).abs() < 1e-12, "MR33 agm({a}, {a}) = {v}");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR34 — betaln(a, b) = lnΓ(a) + lnΓ(b) - lnΓ(a + b).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_betaln_via_gammaln() {
+    for &(a, b) in &[
+        (0.5_f64, 0.5),
+        (1.0, 1.0),
+        (2.0, 3.0),
+        (5.5, 4.2),
+        (10.0, 0.7),
+    ] {
+        let bln = unwrap_real(betaln(&real(a), &real(b), RuntimeMode::Strict));
+        let gln_a = unwrap_real(gammaln(&real(a), RuntimeMode::Strict));
+        let gln_b = unwrap_real(gammaln(&real(b), RuntimeMode::Strict));
+        let gln_ab = unwrap_real(gammaln(&real(a + b), RuntimeMode::Strict));
+        let expected = gln_a + gln_b - gln_ab;
+        assert!(
+            (bln - expected).abs() < 1e-9,
+            "MR34 betaln({a}, {b}) = {bln} vs gammaln combo = {expected}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR35 — arctanh(0) = 0, arctanh(tanh(x)) = x for |x| < 17.
+// (arctanh saturates near ±1 due to log; tanh(17) is ≈ 1, so any x
+// with |x| ≤ 17 is well within numerical range.)
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_arctanh_round_trip() {
+    assert!(arctanh(0.0).abs() < 1e-15, "MR35 arctanh(0) != 0");
+    for &x in &[-2.5_f64, -1.0, -0.3, 0.5, 1.5, 3.0] {
+        let back = arctanh(x.tanh());
+        assert!(
+            (back - x).abs() < 1e-9,
+            "MR35 arctanh(tanh({x})) = {back}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR36 — beta(a, b) = exp(betaln(a, b)) for moderate a, b. (Cross-check
+// of the two flavours of the beta function.)
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_beta_exp_betaln() {
+    for &(a, b) in &[
+        (0.5_f64, 0.5),
+        (1.0, 1.0),
+        (2.0, 3.0),
+        (4.0, 4.0),
+        (1.5, 2.5),
+    ] {
+        let b_val = unwrap_real(beta(&real(a), &real(b), RuntimeMode::Strict));
+        let bln = unwrap_real(betaln(&real(a), &real(b), RuntimeMode::Strict));
+        let expected = bln.exp();
+        let rel = (b_val - expected).abs() / expected.abs().max(1.0);
+        assert!(
+            rel < 1e-9,
+            "MR36 beta({a}, {b}) = {b_val} vs exp(betaln) = {expected}"
+        );
+    }
+}
+
