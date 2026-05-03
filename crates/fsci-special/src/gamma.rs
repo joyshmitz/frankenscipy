@@ -1437,6 +1437,44 @@ pub fn factorial2(n: i64) -> f64 {
     }
 }
 
+/// Compute the binomial coefficient `C(x, y) = Γ(x+1) / (Γ(y+1) · Γ(x−y+1))`
+/// for real `x ≥ 0` and `y ≥ 0`.
+///
+/// Matches `scipy.special.binom(x, y)` on the common domain. Differences
+/// from `comb`:
+/// - accepts any non-negative real `x`, `y` (not just integers)
+/// - uses the gamma-function generalization, so `binom(0.5, 0.25)` is
+///   well-defined (≈ 1.069 via Γ(1.5)/(Γ(1.25)·Γ(1.25)))
+///
+/// Conventions:
+/// - `y > x` returns 0.0 (matching scipy's vanishing-coefficient rule on
+///   the real generalization)
+/// - `x < 0` or `y < 0` returns NaN. The full negative-argument path needs
+///   the gamma reflection formula and is tracked as a follow-on under
+///   `frankenscipy-b6z3m`.
+/// - NaN propagates.
+pub fn binom(x: f64, y: f64) -> f64 {
+    if x.is_nan() || y.is_nan() {
+        return f64::NAN;
+    }
+    if x < 0.0 || y < 0.0 {
+        return f64::NAN;
+    }
+    if y > x {
+        return 0.0;
+    }
+    if y == 0.0 || y == x {
+        return 1.0;
+    }
+    // Use lnΓ for large arguments; small / non-integer arguments still
+    // route through lngamma_positive which handles the (0, 8) branch via
+    // the reflection-free recurrence.
+    let l = lngamma_positive(x + 1.0)
+        - lngamma_positive(y + 1.0)
+        - lngamma_positive(x - y + 1.0);
+    l.exp()
+}
+
 /// k-step factorial: `n * (n − k) * (n − 2k) * … * r`, where the iteration
 /// stops at the smallest positive remainder `r`.
 ///
@@ -3498,6 +3536,54 @@ mod tests {
             "gamma should equal exp(gammaln)"
         );
         Ok(())
+    }
+
+    #[test]
+    fn binom_metamorphic_matches_comb_for_integer_arguments() {
+        // For non-negative integer (n, k), binom(n, k) == comb(n, k) within
+        // ulp.
+        for n in 0..=15u64 {
+            for k in 0..=n {
+                let b = binom(n as f64, k as f64);
+                let c = comb(n, k);
+                let rel = (b - c).abs() / c.abs().max(1.0);
+                assert!(rel < 1e-10, "binom({n},{k}) = {b}, comb = {c}");
+            }
+        }
+    }
+
+    #[test]
+    fn binom_real_arguments_match_gamma_definition() {
+        // binom(0.5, 0.25) = Γ(1.5) / (Γ(1.25) · Γ(1.25))
+        let b = binom(0.5, 0.25);
+        let lng = |x: f64| lngamma_positive(x);
+        let expected = (lng(1.5) - 2.0 * lng(1.25)).exp();
+        assert!(
+            (b - expected).abs() < 1e-12,
+            "binom(0.5, 0.25) = {b}, expected {expected}"
+        );
+    }
+
+    #[test]
+    fn binom_y_greater_than_x_returns_zero() {
+        assert_eq!(binom(3.0, 5.0), 0.0);
+        assert_eq!(binom(0.5, 0.6), 0.0);
+    }
+
+    #[test]
+    fn binom_endpoints_return_one() {
+        assert_eq!(binom(5.0, 0.0), 1.0);
+        assert_eq!(binom(5.0, 5.0), 1.0);
+        assert_eq!(binom(2.5, 0.0), 1.0);
+        assert_eq!(binom(2.5, 2.5), 1.0);
+    }
+
+    #[test]
+    fn binom_negative_or_nan_propagates() {
+        assert!(binom(-1.0, 0.5).is_nan());
+        assert!(binom(2.0, -0.5).is_nan());
+        assert!(binom(f64::NAN, 1.0).is_nan());
+        assert!(binom(2.0, f64::NAN).is_nan());
     }
 
     #[test]

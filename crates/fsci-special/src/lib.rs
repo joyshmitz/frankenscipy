@@ -202,10 +202,12 @@ pub use convenience::{
     tetragamma,
     threshold,
     tklmbda,
-    voigt_profile_real_gamma_zero,
-    wofz_real,
     trigamma,
     trunc,
+    voigt_profile_real_gamma_zero,
+    wofz,
+    wofz_real,
+    wofz_scalar,
     wrightomega,
     wrightomega_scalar,
     xlog1py,
@@ -221,19 +223,19 @@ pub use error::{
     ERROR_DISPATCH_PLAN, erf, erf_scalar, erfc, erfc_scalar, erfcinv, erfinv, erfinv_scalar,
 };
 pub use gamma::{
-    GAMMA_DISPATCH_PLAN, chdtr, chdtrc, chdtri, chdtriv, comb, digamma, factorial, factorial2,
-    factorialk,
-    gamma, gamma_with_audit, gammainc, gammainc_scalar, gammaincc, gammaincc_scalar, gammaln,
-    gammaln_scalar, gdtr, gdtrc, gdtria, gdtrib, gdtrix, multigammaln, pdtr, pdtrc, pdtri, pdtrik,
-    perm, polygamma, rgamma, zeta, zetac,
+    GAMMA_DISPATCH_PLAN, binom, chdtr, chdtrc, chdtri, chdtriv, comb, digamma, factorial,
+    factorial2, factorialk, gamma, gamma_with_audit, gammainc, gammainc_scalar, gammaincc,
+    gammaincc_scalar,
+    gammaln, gammaln_scalar, gdtr, gdtrc, gdtria, gdtrib, gdtrix, multigammaln, pdtr, pdtrc, pdtri,
+    pdtrik, perm, polygamma, rgamma, zeta, zetac,
 };
 pub use hyper::{HYPER_DISPATCH_PLAN, hyp0f1, hyp0f1_scalar, hyp1f1, hyp2f1};
 pub use orthopoly::{
     eval_chebyt, eval_chebyu, eval_gegenbauer, eval_genlaguerre, eval_hermite, eval_hermitenorm,
     eval_jacobi, eval_laguerre, eval_legendre, eval_sh_chebyt, eval_sh_chebyu, eval_sh_legendre,
     lpmv, lpn, lqn, roots_chebyc, roots_chebys, roots_chebyt, roots_chebyu, roots_gegenbauer,
-    roots_genlaguerre, roots_hermite, roots_sh_chebyt, roots_sh_chebyu, roots_sh_legendre,
-    roots_hermitenorm, roots_jacobi, roots_laguerre, roots_legendre, sph_harm, sph_harm_y,
+    roots_genlaguerre, roots_hermite, roots_hermitenorm, roots_jacobi, roots_laguerre,
+    roots_legendre, roots_sh_chebyt, roots_sh_chebyu, roots_sh_legendre, sph_harm, sph_harm_y,
 };
 pub use types::{
     Complex64, DispatchPlan, DispatchStep, KernelRegime, SpecialError, SpecialErrorKind,
