@@ -53,6 +53,64 @@ pub fn eval_legendre(n: u32, x: f64) -> f64 {
     p_curr
 }
 
+/// Compute Legendre polynomial values P_k(x) and derivatives P'_k(x) for
+/// k = 0..=n using the standard three-term recurrence.
+///
+/// Matches `scipy.special.lpn(n, x)` which returns `(Pn, Pn_deriv)` arrays
+/// of length n+1.
+///
+/// Recurrence (values):
+///   P_0(x) = 1, P_1(x) = x
+///   (k+1) P_{k+1}(x) = (2k+1) x P_k(x) - k P_{k-1}(x)
+///
+/// Recurrence (derivatives):
+///   P'_0(x) = 0, P'_1(x) = 1
+///   (1 - x^2) P'_k(x) = k (P_{k-1}(x) - x P_k(x))
+/// At |x| = 1 the derivative is given by the closed form
+///   P'_k(±1) = (±1)^(k+1) * k(k+1) / 2
+/// to avoid division by 1 - x^2 = 0.
+pub fn lpn(n: u32, x: f64) -> (Vec<f64>, Vec<f64>) {
+    let len = n as usize + 1;
+    let mut values = Vec::with_capacity(len);
+    let mut derivs = Vec::with_capacity(len);
+    if n == 0 {
+        values.push(1.0);
+        derivs.push(0.0);
+        return (values, derivs);
+    }
+    if !x.is_finite() {
+        return (vec![f64::NAN; len], vec![f64::NAN; len]);
+    }
+    values.push(1.0); // P_0
+    values.push(x); // P_1
+    for k in 1..n {
+        let kf = k as f64;
+        let p_next = ((2.0 * kf + 1.0) * x * values[k as usize] - kf * values[(k - 1) as usize])
+            / (kf + 1.0);
+        values.push(p_next);
+    }
+    let near_unit = (x.abs() - 1.0).abs() <= f64::EPSILON;
+    if near_unit {
+        let sign: f64 = if x > 0.0 { 1.0 } else { -1.0 };
+        for k in 0..=n {
+            let kf = k as f64;
+            // P'_k(±1) = (±1)^(k+1) * k(k+1) / 2.
+            let factor = sign.powi(k as i32 + 1) * kf * (kf + 1.0) * 0.5;
+            derivs.push(factor);
+        }
+    } else {
+        let one_minus_xsq = 1.0 - x * x;
+        derivs.push(0.0); // P'_0
+        for k in 1..=n {
+            let kf = k as f64;
+            let p_k = values[k as usize];
+            let p_km1 = values[(k - 1) as usize];
+            derivs.push(kf * (p_km1 - x * p_k) / one_minus_xsq);
+        }
+    }
+    (values, derivs)
+}
+
 /// Evaluate the Chebyshev polynomial of the first kind T_n(x).
 ///
 /// Uses the three-term recurrence:
@@ -1535,5 +1593,110 @@ mod tests {
         // U_n*(0.5) = U_n(0) = 0 for odd n
         assert_close(eval_sh_chebyu(1, 0.5), 0.0, 1e-12, "U*_1(0.5)");
         assert_close(eval_sh_chebyu(3, 0.5), 0.0, 1e-12, "U*_3(0.5)");
+    }
+
+    #[test]
+    fn lpn_zero_order_returns_singletons() {
+        let (vals, ders) = lpn(0, 0.5);
+        assert_eq!(vals, vec![1.0]);
+        assert_eq!(ders, vec![0.0]);
+    }
+
+    #[test]
+    fn lpn_first_kind_known_values_at_half() {
+        // Hand-computed P_k(0.5):
+        // P_0=1, P_1=0.5, P_2=-0.125, P_3=-0.4375, P_4=-0.2890625
+        let (vals, _) = lpn(4, 0.5);
+        let expected = [1.0, 0.5, -0.125, -0.4375, -0.2890625];
+        for (k, e) in expected.iter().enumerate() {
+            assert_close(vals[k], *e, 1e-15, &format!("P_{k}(0.5)"));
+        }
+    }
+
+    #[test]
+    fn lpn_metamorphic_endpoint_values() {
+        // P_k(1) = 1 for all k; P_k(-1) = (-1)^k.
+        let (vals_plus, _) = lpn(8, 1.0);
+        let (vals_minus, _) = lpn(8, -1.0);
+        for k in 0..=8 {
+            assert!(
+                (vals_plus[k] - 1.0).abs() < 1e-12,
+                "P_{k}(1) = {} should be 1",
+                vals_plus[k]
+            );
+            let expected = if k % 2 == 0 { 1.0 } else { -1.0 };
+            assert!(
+                (vals_minus[k] - expected).abs() < 1e-12,
+                "P_{k}(-1) should be {expected}, got {}",
+                vals_minus[k]
+            );
+        }
+    }
+
+    #[test]
+    fn lpn_metamorphic_parity() {
+        // P_k(-x) = (-1)^k P_k(x).
+        let x = 0.37;
+        let (a, _) = lpn(7, x);
+        let (b, _) = lpn(7, -x);
+        for k in 0..=7 {
+            let expected = if k % 2 == 0 { a[k] } else { -a[k] };
+            assert!(
+                (b[k] - expected).abs() < 1e-12,
+                "parity violated at k={k}: P_k(-x)={}, expected {expected}",
+                b[k]
+            );
+        }
+    }
+
+    #[test]
+    fn lpn_derivative_endpoint_closed_form() {
+        // P'_k(±1) = (±1)^(k+1) k(k+1) / 2.
+        let (_, ders_plus) = lpn(5, 1.0);
+        let (_, ders_minus) = lpn(5, -1.0);
+        for k in 1..=5 {
+            let kf = k as f64;
+            let half_kk1 = 0.5 * kf * (kf + 1.0);
+            assert!(
+                (ders_plus[k] - half_kk1).abs() < 1e-12,
+                "P'_{k}(1) should be {half_kk1}, got {}",
+                ders_plus[k]
+            );
+            let expected = if k % 2 == 0 { -half_kk1 } else { half_kk1 };
+            assert!(
+                (ders_minus[k] - expected).abs() < 1e-12,
+                "P'_{k}(-1) should be {expected}, got {}",
+                ders_minus[k]
+            );
+        }
+    }
+
+    #[test]
+    fn lpn_value_matches_eval_legendre() {
+        // The lpn array's k-th entry must agree with eval_legendre(k, x) for
+        // every k. This is the metamorphic invariant tying lpn to the
+        // pre-existing scalar implementation.
+        let xs = [-0.9, -0.3, 0.0, 0.3, 0.9];
+        for &x in &xs {
+            let (vals, _) = lpn(10, x);
+            for k in 0..=10 {
+                let scalar = eval_legendre(k as u32, x);
+                assert!(
+                    (vals[k] - scalar).abs() < 1e-12,
+                    "lpn[{k}] vs eval_legendre at x={x}: {} vs {scalar}",
+                    vals[k]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn lpn_non_finite_x_propagates_nan() {
+        let (vals, ders) = lpn(3, f64::NAN);
+        assert_eq!(vals.len(), 4);
+        assert_eq!(ders.len(), 4);
+        for v in vals.iter().chain(ders.iter()) {
+            assert!(v.is_nan(), "expected NaN, got {v}");
+        }
     }
 }
