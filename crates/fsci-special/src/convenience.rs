@@ -2693,6 +2693,9 @@ pub fn debye(n: usize, x: f64) -> f64 {
 /// Finds w such that w * exp(w) = x.
 /// Scalar convenience wrapper matching `scipy.special.lambertw`.
 pub fn lambertw_scalar(x: f64) -> f64 {
+    if x == f64::INFINITY {
+        return f64::INFINITY;
+    }
     if x == 0.0 {
         return 0.0;
     }

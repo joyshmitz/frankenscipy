@@ -827,6 +827,12 @@ fn mr_zeta_basel_values() {
 
 #[test]
 fn mr_lambertw_defining_identity() {
+    assert_eq!(
+        lambertw_scalar(f64::INFINITY),
+        f64::INFINITY,
+        "MR38 W(+inf) should be +inf"
+    );
+
     for &x in &[0.5_f64, 1.0, 2.0, 5.0, 10.0, 100.0] {
         let w = lambertw_scalar(x);
         assert!(w.is_finite(), "MR38 W({x}) returned non-finite: {w}");

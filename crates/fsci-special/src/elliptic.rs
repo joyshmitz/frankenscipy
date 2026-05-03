@@ -476,6 +476,9 @@ fn lambertw_scalar(x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
     if x.is_nan() {
         return Ok(f64::NAN);
     }
+    if x == f64::INFINITY {
+        return Ok(f64::INFINITY);
+    }
     let min_x = -1.0 / std::f64::consts::E;
     if x < min_x - 1.0e-12 {
         return domain_error("lambertw", mode, "x must be >= -1/e for principal branch");
@@ -1753,6 +1756,13 @@ mod tests {
         let x = SpecialTensor::RealScalar(std::f64::consts::E);
         let result = eval_scalar(lambertw(&x, RuntimeMode::Strict));
         assert_close(result, 1.0, 1e-10, "W(e) = 1");
+    }
+
+    #[test]
+    fn lambertw_at_positive_infinity() {
+        let x = SpecialTensor::RealScalar(f64::INFINITY);
+        let result = eval_scalar(lambertw(&x, RuntimeMode::Strict));
+        assert_eq!(result, f64::INFINITY);
     }
 
     #[test]
