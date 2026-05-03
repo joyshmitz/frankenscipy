@@ -7,10 +7,10 @@
 
 use fsci_signal::{
     ConvolveMode, FilterType, FindPeaksOptions, argrelmax, argrelmin, autocorrelation, bartlett,
-    bessel as iir_bessel, blackman, boxcar, butter, cheby1, cheby2, convolve, correlate, cwt,
-    deconvolve, deemphasis, downsample, ellip, exponential_smooth, fftconvolve, filtfilt,
+    bessel as iir_bessel, blackman, boxcar, butter, cheby1, convolve, correlate, cwt, deconvolve,
+    deemphasis, downsample, exponential_smooth, fftconvolve, filtfilt,
     find_peaks, freqz, gaussian, group_delay_from_ba, hamming, hann, hilbert, hilbert_envelope,
-    iirnotch, iirpeak, impulse_response, kaiser, lanczos, lfilter, lfilter_zi, magnitude_response,
+    iirnotch, iirpeak, impulse_response, kaiser, lanczos, lfilter, magnitude_response,
     matched_filter, max_len_seq, medfilt1, morlet, normalize_signal, parzen, peak_to_peak,
     phase_response, preemphasis, resample, ricker, rms, savgol_filter, signal_energy, sos2tf,
     sosfilt, sosfiltfilt, spectral_centroid, step_response, sweep_poly, tf2sos, tf2zpk, triang,
@@ -581,7 +581,7 @@ fn mr_boxcar_ones_lanczos_bounded() {
         let l = lanczos(n);
         for (i, &v) in l.iter().enumerate() {
             assert!(
-                v >= -1e-12 && v <= 1.0 + 1e-12,
+                (-1e-12..=1.0 + 1e-12).contains(&v),
                 "MR25 lanczos(n={n})[{i}] = {v} outside [0, 1]"
             );
         }
@@ -1039,7 +1039,7 @@ fn mr_unwrap_phase_preserves_length() {
 fn mr_cwt_rows_match_widths() {
     let data: Vec<f64> = (0..64).map(|i| (i as f64 * 0.4).sin()).collect();
     let widths = vec![1.0_f64, 2.0, 4.0, 8.0];
-    let result = cwt(&data, |n, w| ricker(n, w), &widths).unwrap();
+    let result = cwt(&data, ricker, &widths).unwrap();
     assert_eq!(result.len(), widths.len(), "MR47 cwt rows = widths");
     for (i, row) in result.iter().enumerate() {
         assert_eq!(row.len(), data.len(), "MR47 cwt row {i} length");
@@ -1213,6 +1213,14 @@ fn mr_group_delay_finite() {
     for (i, &g) in gd.iter().enumerate() {
         assert!(g.is_finite(), "MR55 group_delay[{i}] = {g}");
     }
+
+    let (_, pure_delay) = group_delay_from_ba(&[0.0, 1.0], &[1.0], 16);
+    for (i, &g) in pure_delay.iter().enumerate() {
+        assert!(
+            (g - 1.0).abs() < 1e-12,
+            "MR55 pure one-sample delay group_delay[{i}] = {g}"
+        );
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1293,9 +1301,6 @@ fn mr_phase_response_finite() {
         assert!(p.is_finite(), "MR59 phase[{i}] = {p}");
     }
 }
-
-
-
 
 
 

@@ -2386,58 +2386,7 @@ pub fn group_delay_from_ba(b: &[f64], a: &[f64], n_freqs: usize) -> (Vec<f64>, V
     for k in 0..n_freqs {
         let w = std::f64::consts::PI * k as f64 / n_freqs as f64;
         freqs.push(w);
-
-        // Evaluate B(e^{jω}) and A(e^{jω})
-        let mut br = 0.0;
-        let mut bi = 0.0;
-        for (i, &coeff) in b.iter().enumerate() {
-            br += coeff * (w * i as f64).cos();
-            bi -= coeff * (w * i as f64).sin();
-        }
-
-        let mut ar = 0.0;
-        let mut ai = 0.0;
-        for (i, &coeff) in a.iter().enumerate() {
-            ar += coeff * (w * i as f64).cos();
-            ai -= coeff * (w * i as f64).sin();
-        }
-
-        // Derivative: d/dω B(e^{jω})
-        let mut dbr = 0.0;
-        let mut dbi = 0.0;
-        for (i, &coeff) in b.iter().enumerate() {
-            let n = i as f64;
-            dbr -= n * coeff * (w * n).sin();
-            dbi -= n * coeff * (w * n).cos();
-        }
-
-        let mut dar = 0.0;
-        let mut dai = 0.0;
-        for (i, &coeff) in a.iter().enumerate() {
-            let n = i as f64;
-            dar -= n * coeff * (w * n).sin();
-            dai -= n * coeff * (w * n).cos();
-        }
-
-        // Group delay: -d/dω[arg(H)] = Re[(dB*A - B*dA) / (B*A)]
-        // Using: d/dω[arg(H)] = Im[H'/H] where H = B/A
-        let h_mag2 = br * br + bi * bi;
-        if h_mag2 > 1e-30 {
-            let num_r = dbr * br + dbi * bi;
-            let gd_b = -num_r / h_mag2;
-
-            let a_mag2 = ar * ar + ai * ai;
-            let gd_a = if a_mag2 > 1e-30 {
-                let num_a = dar * ar + dai * ai;
-                -num_a / a_mag2
-            } else {
-                0.0
-            };
-
-            delays.push(gd_b - gd_a);
-        } else {
-            delays.push(0.0);
-        }
+        delays.push(group_delay_at_frequency(b, a, w));
     }
 
     (freqs, delays)
