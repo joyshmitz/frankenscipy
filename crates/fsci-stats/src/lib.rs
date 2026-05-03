@@ -6666,6 +6666,7 @@ impl ContinuousDistribution for Levy {
 /// Left-skewed Levy distribution.
 ///
 /// Matches `scipy.stats.levy_l`.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LevyLeft {
     pub loc: f64,
     pub scale: f64,
@@ -6725,6 +6726,52 @@ impl ContinuousDistribution for LevyLeft {
 
     fn var(&self) -> f64 {
         f64::INFINITY
+    }
+
+    fn fit(data: &[f64]) -> Self {
+        Self::try_fit(data).unwrap_or_else(|e| {
+            panic!("LevyLeft::fit failed: {e}");
+        })
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        if data.len() < 2 {
+            return Err(FitError::InsufficientData {
+                required: 2,
+                actual: data.len(),
+            });
+        }
+        // Mirror of Levy::try_fit. With loc = 0 fixed, the support of LevyLeft
+        // is x < 0; the MLE for scale is scale = n / Σ 1/(-x_i) (harmonic mean
+        // of the negated observations).
+        let mut reciprocal_sum = 0.0_f64;
+        let mut count = 0usize;
+        for &x in data {
+            if !x.is_finite() {
+                return Err(FitError::UnsupportedData(format!(
+                    "LevyLeft data contains non-finite value: {x}"
+                )));
+            }
+            if x >= 0.0 {
+                return Err(FitError::UnsupportedData(format!(
+                    "LevyLeft MLE with floc=0 requires negative observations; got {x}"
+                )));
+            }
+            reciprocal_sum += 1.0 / (-x);
+            count += 1;
+        }
+        if reciprocal_sum <= 0.0 || !reciprocal_sum.is_finite() {
+            return Err(FitError::NonConvergent(format!(
+                "LevyLeft MLE: reciprocal sum {reciprocal_sum} is non-positive or non-finite"
+            )));
+        }
+        let scale = count as f64 / reciprocal_sum;
+        if !scale.is_finite() || scale <= 0.0 {
+            return Err(FitError::NonConvergent(format!(
+                "LevyLeft MLE produced non-positive scale: {scale}"
+            )));
+        }
+        Ok(Self { loc: 0.0, scale })
     }
 }
 
@@ -29217,6 +29264,50 @@ mod tests {
     #[test]
     fn pearson3_fit_rejects_too_few_samples() {
         let err = Pearson3::try_fit(&[1.0, 2.0]).expect_err("n=2 must be rejected");
+        assert!(matches!(err, FitError::InsufficientData { .. }));
+    }
+
+    #[test]
+    fn levyleft_fit_metamorphic_mirror_of_levy() {
+        // Negating Levy data and fitting LevyLeft gives the same scale.
+        let positive = [0.5_f64, 1.0, 1.5, 2.0, 3.0, 5.0, 10.0];
+        let negative: Vec<f64> = positive.iter().map(|x| -x).collect();
+        let levy = Levy::try_fit(&positive).unwrap();
+        let levy_left = LevyLeft::try_fit(&negative).unwrap();
+        assert!(
+            (levy.scale - levy_left.scale).abs() < 1e-12,
+            "Levy.scale {} ≠ LevyLeft.scale {}",
+            levy.scale,
+            levy_left.scale
+        );
+        assert_eq!(levy_left.loc, 0.0);
+    }
+
+    #[test]
+    fn levyleft_fit_harmonic_mean_identity() {
+        let data = [-0.5_f64, -1.0, -2.0, -5.0];
+        let fitted = LevyLeft::try_fit(&data).unwrap();
+        let expected = data.len() as f64 / data.iter().map(|x| 1.0 / (-x)).sum::<f64>();
+        assert!(
+            (fitted.scale - expected).abs() < 1e-12,
+            "harmonic-mean identity: fit={}, expected={expected}",
+            fitted.scale
+        );
+    }
+
+    #[test]
+    fn levyleft_fit_rejects_non_negative_observation() {
+        let err = LevyLeft::try_fit(&[-1.0, 2.0])
+            .expect_err("positive must be rejected");
+        assert!(matches!(err, FitError::UnsupportedData(_)));
+        let err = LevyLeft::try_fit(&[-1.0, 0.0])
+            .expect_err("zero must be rejected");
+        assert!(matches!(err, FitError::UnsupportedData(_)));
+    }
+
+    #[test]
+    fn levyleft_fit_rejects_too_few_samples() {
+        let err = LevyLeft::try_fit(&[-1.0]).expect_err("n=1 must be rejected");
         assert!(matches!(err, FitError::InsufficientData { .. }));
     }
 
