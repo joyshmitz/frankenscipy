@@ -387,6 +387,27 @@ fn log_probability(probability: f64) -> f64 {
     }
 }
 
+/// Helper: validate fit() data for parameterless / standardized distributions.
+/// Requires at least one observation and rejects non-finite values. Used by
+/// the no-op fit() implementations on parameterless distributions where the
+/// only thing to check is whether the data is well-formed.
+fn validate_parameterless_fit_data(data: &[f64]) -> Result<(), FitError> {
+    if data.is_empty() {
+        return Err(FitError::InsufficientData {
+            required: 1,
+            actual: 0,
+        });
+    }
+    for &x in data {
+        if !x.is_finite() {
+            return Err(FitError::UnsupportedData(format!(
+                "fit data contains non-finite value: {x}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Generic inverse CDF via bisection search.
 fn ppf_bisection(cdf: impl Fn(f64) -> f64, q: f64, mean: f64, std: f64) -> f64 {
     // Initial bracket: start around mean ± 10*std
@@ -2481,6 +2502,7 @@ impl ContinuousDistribution for Logistic {
 /// Hyperbolic secant distribution.
 ///
 /// Matches `scipy.stats.hypsecant`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HypSecant;
 
 impl ContinuousDistribution for HypSecant {
@@ -2516,6 +2538,16 @@ impl ContinuousDistribution for HypSecant {
 
     fn var(&self) -> f64 {
         PI * PI / 4.0
+    }
+
+    fn fit(_data: &[f64]) -> Self {
+        // Standardized parameterless distribution; nothing to estimate.
+        Self
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        validate_parameterless_fit_data(data)?;
+        Ok(Self)
     }
 }
 
@@ -5144,6 +5176,7 @@ impl ContinuousDistribution for PowerLaw {
 /// Half-normal distribution (folded normal).
 ///
 /// Matches `scipy.stats.halfnorm`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HalfNormal;
 
 impl ContinuousDistribution for HalfNormal {
@@ -5184,11 +5217,26 @@ impl ContinuousDistribution for HalfNormal {
     fn var(&self) -> f64 {
         1.0 - 2.0 / PI
     }
+
+    fn fit(_data: &[f64]) -> Self {
+        Self
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        validate_parameterless_fit_data(data)?;
+        if data.iter().any(|&x| x < 0.0) {
+            return Err(FitError::UnsupportedData(
+                "HalfNormal data must be non-negative".to_owned(),
+            ));
+        }
+        Ok(Self)
+    }
 }
 
 /// Half-logistic distribution.
 ///
 /// Matches `scipy.stats.halflogistic`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HalfLogistic;
 
 impl ContinuousDistribution for HalfLogistic {
@@ -5228,11 +5276,26 @@ impl ContinuousDistribution for HalfLogistic {
     fn var(&self) -> f64 {
         PI * PI / 3.0 - 4.0 * LN_2 * LN_2
     }
+
+    fn fit(_data: &[f64]) -> Self {
+        Self
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        validate_parameterless_fit_data(data)?;
+        if data.iter().any(|&x| x < 0.0) {
+            return Err(FitError::UnsupportedData(
+                "HalfLogistic data must be non-negative".to_owned(),
+            ));
+        }
+        Ok(Self)
+    }
 }
 
 /// Half-Cauchy distribution.
 ///
 /// Matches `scipy.stats.halfcauchy`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HalfCauchy;
 
 impl ContinuousDistribution for HalfCauchy {
@@ -5269,6 +5332,20 @@ impl ContinuousDistribution for HalfCauchy {
 
     fn var(&self) -> f64 {
         f64::NAN
+    }
+
+    fn fit(_data: &[f64]) -> Self {
+        Self
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        validate_parameterless_fit_data(data)?;
+        if data.iter().any(|&x| x < 0.0) {
+            return Err(FitError::UnsupportedData(
+                "HalfCauchy data must be non-negative".to_owned(),
+            ));
+        }
+        Ok(Self)
     }
 }
 
@@ -6014,6 +6091,7 @@ impl ContinuousDistribution for DoubleGamma {
 /// Semicircular distribution on [-1, 1].
 ///
 /// Matches `scipy.stats.semicircular`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Semicircular;
 
 impl ContinuousDistribution for Semicircular {
@@ -6066,6 +6144,20 @@ impl ContinuousDistribution for Semicircular {
 
     fn var(&self) -> f64 {
         0.25 // 1/4
+    }
+
+    fn fit(_data: &[f64]) -> Self {
+        Self
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        validate_parameterless_fit_data(data)?;
+        if data.iter().any(|&x| !(-1.0..=1.0).contains(&x)) {
+            return Err(FitError::UnsupportedData(
+                "Semicircular data must lie in [-1, 1]".to_owned(),
+            ));
+        }
+        Ok(Self)
     }
 }
 
@@ -6971,6 +7063,7 @@ impl ContinuousDistribution for Gompertz {
 /// f(x) = 1 / (π * sqrt(x * (1-x))) for x in (0, 1)
 ///
 /// This is a special case of the Beta distribution with α = β = 0.5.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Arcsine;
 
 impl ContinuousDistribution for Arcsine {
@@ -7016,6 +7109,20 @@ impl ContinuousDistribution for Arcsine {
 
     fn var(&self) -> f64 {
         0.125 // 1/8
+    }
+
+    fn fit(_data: &[f64]) -> Self {
+        Self
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        validate_parameterless_fit_data(data)?;
+        if data.iter().any(|&x| !(0.0..=1.0).contains(&x)) {
+            return Err(FitError::UnsupportedData(
+                "Arcsine data must lie in [0, 1]".to_owned(),
+            ));
+        }
+        Ok(Self)
     }
 }
 
@@ -28879,6 +28986,60 @@ mod tests {
         let err = LogLaplace::try_fit(&[1.0, 1.0, 1.0])
             .expect_err("all-unit data must be rejected");
         assert!(matches!(err, FitError::NonConvergent(_)));
+    }
+
+    #[test]
+    fn parameterless_fit_returns_singleton_for_well_formed_data() {
+        // Each parameterless distribution has nothing to estimate; fit is a
+        // no-op that just validates the input. Exercising every distribution
+        // here ensures the trait method actually compiles and dispatches.
+        assert_eq!(HypSecant::try_fit(&[0.0, -0.5, 0.5]).unwrap(), HypSecant);
+        assert_eq!(HalfNormal::try_fit(&[0.5, 1.0]).unwrap(), HalfNormal);
+        assert_eq!(HalfLogistic::try_fit(&[0.5, 1.0]).unwrap(), HalfLogistic);
+        assert_eq!(HalfCauchy::try_fit(&[0.5, 1.0]).unwrap(), HalfCauchy);
+        assert_eq!(Arcsine::try_fit(&[0.1, 0.5, 0.9]).unwrap(), Arcsine);
+        assert_eq!(
+            Semicircular::try_fit(&[-0.5, 0.0, 0.5]).unwrap(),
+            Semicircular
+        );
+    }
+
+    #[test]
+    fn parameterless_fit_rejects_out_of_support_data() {
+        // Each parameterless distribution validates that the data is inside
+        // its support; out-of-support observations must fail.
+        assert!(matches!(
+            HalfNormal::try_fit(&[1.0, -0.1]),
+            Err(FitError::UnsupportedData(_))
+        ));
+        assert!(matches!(
+            HalfLogistic::try_fit(&[1.0, -0.5]),
+            Err(FitError::UnsupportedData(_))
+        ));
+        assert!(matches!(
+            HalfCauchy::try_fit(&[1.0, -0.5]),
+            Err(FitError::UnsupportedData(_))
+        ));
+        assert!(matches!(
+            Arcsine::try_fit(&[0.5, 1.5]),
+            Err(FitError::UnsupportedData(_))
+        ));
+        assert!(matches!(
+            Semicircular::try_fit(&[-0.5, 1.5]),
+            Err(FitError::UnsupportedData(_))
+        ));
+    }
+
+    #[test]
+    fn parameterless_fit_rejects_empty_or_nonfinite() {
+        assert!(matches!(
+            HypSecant::try_fit(&[]),
+            Err(FitError::InsufficientData { .. })
+        ));
+        assert!(matches!(
+            HypSecant::try_fit(&[0.0, f64::NAN]),
+            Err(FitError::UnsupportedData(_))
+        ));
     }
 
     #[test]
