@@ -7549,6 +7549,7 @@ impl ContinuousDistribution for Arcsine {
 /// Generalized logistic distribution.
 ///
 /// Matches `scipy.stats.genlogistic`.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GenLogistic {
     pub c: f64,
 }
@@ -7590,6 +7591,58 @@ impl ContinuousDistribution for GenLogistic {
 
     fn var(&self) -> f64 {
         PI * PI / 6.0 + fsci_special::trigamma(self.c)
+    }
+
+    fn fit(data: &[f64]) -> Self {
+        Self::try_fit(data).unwrap_or_else(|e| {
+            panic!("GenLogistic::fit failed: {e}");
+        })
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        if data.len() < 2 {
+            return Err(FitError::InsufficientData {
+                required: 2,
+                actual: data.len(),
+            });
+        }
+        for &x in data {
+            if !x.is_finite() {
+                return Err(FitError::UnsupportedData(format!(
+                    "GenLogistic data contains non-finite value: {x}"
+                )));
+            }
+        }
+        // Method-of-moments: standardized mean = ψ(c) + γ. Sample mean
+        // m_hat = (1/n) Σ x_i, then solve ψ(c) = m_hat - γ via bisection
+        // (digamma is monotone increasing on (0, ∞)).
+        let mean: f64 = data.iter().sum::<f64>() / data.len() as f64;
+        let target = mean - EULER_MASCHERONI;
+        // Bracket: ψ(1e-6) ≈ -1e6, ψ(1e6) ≈ ln(1e6) ≈ 13.8
+        let mut lo = 1.0e-6_f64;
+        let mut hi = 1.0e6_f64;
+        let f_lo = fsci_special::digamma_scalar(lo);
+        let f_hi = fsci_special::digamma_scalar(hi);
+        if !(f_lo <= target && target <= f_hi) {
+            return Err(FitError::NonConvergent(format!(
+                "GenLogistic MoM bracket failed: ψ({lo})={f_lo}, ψ({hi})={f_hi}, target={target}"
+            )));
+        }
+        for _ in 0..200 {
+            let mid = 0.5 * (lo + hi);
+            let f_mid = fsci_special::digamma_scalar(mid);
+            if (f_mid - target).abs() < 1.0e-12 || (hi - lo) < lo * 1.0e-12 + 1.0e-15 {
+                return Ok(Self { c: mid });
+            }
+            if f_mid < target {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        Ok(Self {
+            c: 0.5 * (lo + hi),
+        })
     }
 }
 
@@ -29639,6 +29692,55 @@ mod tests {
     fn pearson3_fit_rejects_too_few_samples() {
         let err = Pearson3::try_fit(&[1.0, 2.0]).expect_err("n=2 must be rejected");
         assert!(matches!(err, FitError::InsufficientData { .. }));
+    }
+
+    #[test]
+    fn genlogistic_fit_metamorphic_recovers_mean() {
+        // After fitting, the fitted distribution's mean must match the
+        // sample mean to bisection precision (the MoM equation IS the
+        // moment-matching identity).
+        let data = [-0.5_f64, 0.0, 0.3, 0.7, 1.2, -0.2, 0.8];
+        let m: f64 = data.iter().sum::<f64>() / data.len() as f64;
+        let fitted = GenLogistic::try_fit(&data).expect("fit");
+        let recovered = fitted.mean();
+        assert!(
+            (recovered - m).abs() < 1.0e-6,
+            "MoM mean recovery: sample {m}, fitted dist mean {recovered}"
+        );
+    }
+
+    #[test]
+    fn genlogistic_fit_synthetic_recovery() {
+        // Synthesize n=2000 samples from GenLogistic(c=2.0) via inverse CDF;
+        // MoM bisection on digamma recovers c within 5%.
+        let true_c = 2.0;
+        let dist = GenLogistic::new(true_c);
+        let n = 2000;
+        let samples: Vec<f64> = (1..=n)
+            .map(|i| dist.ppf((i as f64 - 0.5) / n as f64))
+            .filter(|x| x.is_finite() && x.abs() < 1.0e6)
+            .collect();
+        assert!(samples.len() > 1500);
+        let fitted = GenLogistic::try_fit(&samples).expect("fit");
+        let rel = (fitted.c - true_c).abs() / true_c;
+        assert!(
+            rel < 0.05,
+            "GenLogistic::fit recovery: got c={}, true {true_c}, rel_err={rel}",
+            fitted.c
+        );
+    }
+
+    #[test]
+    fn genlogistic_fit_rejects_too_few_samples() {
+        let err = GenLogistic::try_fit(&[1.0]).expect_err("n=1 must be rejected");
+        assert!(matches!(err, FitError::InsufficientData { .. }));
+    }
+
+    #[test]
+    fn genlogistic_fit_rejects_non_finite_observation() {
+        let err = GenLogistic::try_fit(&[0.0, f64::INFINITY])
+            .expect_err("inf must be rejected");
+        assert!(matches!(err, FitError::UnsupportedData(_)));
     }
 
     #[test]
