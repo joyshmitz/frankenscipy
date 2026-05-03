@@ -3955,9 +3955,9 @@ mod tests {
         BasinhoppingOptions, Bounds, ConvergenceStatus, DifferentialEvolutionOptions, Integrality,
         LinearConstraint, MilpOptions, MilpProblem, MinimizeOptions, NonlinearConstraint,
         OptimizeMethod, RootOptions, approx_fprime, basinhopping, check_grad, cobyla, derivative,
-        differential_evolution, dual_annealing, gradient_descent, hessian, jacobian,
-        linear_sum_assignment, linprog, milp, nnls, projected_gradient_descent, pso, rosen,
-        rosen_der, rosen_hess, rosen_hess_prod, shgo,
+        differential_evolution, differential_evolution_constrained, dual_annealing,
+        gradient_descent, hessian, jacobian, linear_sum_assignment, linprog, milp, nnls,
+        projected_gradient_descent, pso, rosen, rosen_der, rosen_hess, rosen_hess_prod, shgo,
     };
 
     #[test]
@@ -4736,6 +4736,33 @@ mod tests {
         };
         let err = differential_evolution(sphere, &bounds, opts).unwrap_err();
         assert!(matches!(err, crate::OptError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn de_constrained_respects_feasible_boundary() {
+        let objective = |x: &[f64]| x[0] * x[0];
+        let lower_bound_constraint = |x: &[f64]| (1.0 - x[0]).max(0.0);
+        let bounds = vec![(0.0, 2.0)];
+        let opts = DifferentialEvolutionOptions {
+            maxiter: 160,
+            seed: Some(101),
+            ..Default::default()
+        };
+
+        let result =
+            differential_evolution_constrained(objective, &bounds, lower_bound_constraint, opts)
+                .expect("constrained differential evolution");
+
+        assert!(result.success, "should converge: {}", result.message);
+        assert!(
+            result.x[0] >= 0.99,
+            "constrained optimum must stay feasible, got {:?}",
+            result.x
+        );
+        assert!(
+            result.fun.unwrap_or(f64::INFINITY) < 1.05,
+            "objective should be close to boundary optimum"
+        );
     }
 
     // ── Basinhopping tests ─────────────────────────────────────────

@@ -4482,6 +4482,34 @@ mod tests {
         );
     }
 
+    fn quadratic_hessp(_x: &[f64], p: &[f64]) -> Vec<f64> {
+        vec![4.0 * p[0]]
+    }
+
+    #[test]
+    fn newton_cg_uses_hessian_product_api_under_tight_eval_budget() {
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::NewtonCg),
+            tol: Some(1e-10),
+            maxiter: Some(8),
+            maxfev: Some(10),
+            hessp: Some(quadratic_hessp),
+            ..MinimizeOptions::default()
+        };
+        let result = minimize(|x| 2.0 * x[0] * x[0], &[3.0], options).expect("minimize");
+        assert!(
+            result.success,
+            "should converge via hessp: {}",
+            result.message
+        );
+        assert!(result.nfev <= 10, "hessp path should stay within budget");
+        assert!(
+            result.x[0].abs() < 1e-8,
+            "minimizer should be near zero, got {}",
+            result.x[0]
+        );
+    }
+
     #[test]
     fn trust_exact_shifted_quadratic_converges() {
         let options = MinimizeOptions {

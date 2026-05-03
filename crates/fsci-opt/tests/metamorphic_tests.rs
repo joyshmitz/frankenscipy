@@ -407,11 +407,11 @@ fn mr_minimize_far_initial_guess_strictly_convex() {
 fn mr_root_methods_agree_on_cubic_root() {
     let f = |x: f64| x.powi(3) - 2.0 * x - 5.0;
     let opts = RootOptions::default();
-    let r_bisect = bisect(&f, (0.0, 3.0), opts).unwrap().root;
-    let r_brentq = brentq(&f, (0.0, 3.0), opts).unwrap().root;
-    let r_brenth = brenth(&f, (0.0, 3.0), opts).unwrap().root;
-    let r_ridder = ridder(&f, (0.0, 3.0), opts).unwrap().root;
-    let r_toms = toms748(&f, (0.0, 3.0), opts).unwrap().root;
+    let r_bisect = bisect(f, (0.0, 3.0), opts).unwrap().root;
+    let r_brentq = brentq(f, (0.0, 3.0), opts).unwrap().root;
+    let r_brenth = brenth(f, (0.0, 3.0), opts).unwrap().root;
+    let r_ridder = ridder(f, (0.0, 3.0), opts).unwrap().root;
+    let r_toms = toms748(f, (0.0, 3.0), opts).unwrap().root;
     let expected = 2.094_551_481_542_326_5;
     for (name, r) in [
         ("bisect", r_bisect),
@@ -513,8 +513,10 @@ fn mr_de_bimodal_finds_a_minimum() {
     // f(x) = (x² - 4)² has minima at x = ±2 with f = 0.
     let f = |x: &[f64]| (x[0] * x[0] - 4.0).powi(2);
     let bounds = vec![(-5.0_f64, 5.0_f64)];
-    let mut opts = DifferentialEvolutionOptions::default();
-    opts.seed = Some(42);
+    let opts = DifferentialEvolutionOptions {
+        seed: Some(42),
+        ..Default::default()
+    };
     let res = differential_evolution(f, &bounds, opts).unwrap();
     let fmin = res.fun.unwrap();
     assert!(fmin < 1e-3, "MR20 DE bimodal fmin = {fmin}, expected ≈ 0");
@@ -769,13 +771,13 @@ fn mr_numerical_gradient_matches_analytical() {
 fn mr_numerical_hessian_quadratic() {
     let f = |x: &[f64]| x[0].powi(2) + x[1].powi(2);
     let h = numerical_hessian(f, &[1.0_f64, -1.5], 1e-3);
-    for i in 0..2 {
-        for j in 0..2 {
+    for (i, row) in h.iter().enumerate().take(2) {
+        for (j, value) in row.iter().enumerate().take(2) {
             let expected = if i == j { 2.0 } else { 0.0 };
             assert!(
-                (h[i][j] - expected).abs() < 0.05,
+                (*value - expected).abs() < 0.05,
                 "MR34 hessian[{i}, {j}] = {} vs {expected}",
-                h[i][j]
+                value
             );
         }
     }
@@ -962,7 +964,7 @@ fn mr_pso_finds_parabola_minimum() {
 fn mr_least_squares_reduces_residual_norm() {
     // Residual function: r(x) = [x[0] - 1, x[1] - 2, x[0] + x[1] - 4].
     let r = |x: &[f64]| vec![x[0] - 1.0, x[1] - 2.0, x[0] + x[1] - 4.0];
-    let res = least_squares(&r, &[0.0, 0.0], LeastSquaresOptions::default()).unwrap();
+    let res = least_squares(r, &[0.0, 0.0], LeastSquaresOptions::default()).unwrap();
     let r0 = r(&[0.0_f64, 0.0]);
     let n0: f64 = r0.iter().map(|v| v * v).sum::<f64>().sqrt();
     let r_final = r(&res.x);
@@ -981,9 +983,11 @@ fn mr_least_squares_reduces_residual_norm() {
 #[test]
 fn mr_basinhopping_convex_objective() {
     let f = |x: &[f64]| (x[0] - 2.0).powi(2) + (x[1] + 3.0).powi(2);
-    let mut opts = BasinhoppingOptions::default();
-    opts.seed = Some(42);
-    opts.niter = 5;
+    let opts = BasinhoppingOptions {
+        seed: Some(42),
+        niter: 5,
+        ..Default::default()
+    };
     let res = basinhopping(f, &[10.0, -10.0], opts).unwrap();
     assert!(
         (res.x[0] - 2.0).abs() < 0.5 && (res.x[1] + 3.0).abs() < 0.5,
@@ -1103,12 +1107,12 @@ fn mr_rosen_hess_symmetric_at_minimum() {
     for n in [2usize, 3, 5] {
         let x = vec![1.0_f64; n];
         let h = rosen_hess(&x);
-        for i in 0..n {
-            for j in 0..n {
+        for (i, row) in h.iter().enumerate().take(n) {
+            for (j, value) in row.iter().enumerate().take(n) {
                 assert!(
-                    (h[i][j] - h[j][i]).abs() < 1e-9,
+                    (*value - h[j][i]).abs() < 1e-9,
                     "MR51 rosen_hess[{i}, {j}] = {} vs [{j}, {i}] = {}",
-                    h[i][j],
+                    value,
                     h[j][i]
                 );
             }
