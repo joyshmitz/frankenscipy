@@ -8,15 +8,21 @@
 //!
 //! Run with: `cargo test -p fsci-linalg --test metamorphic_tests`
 
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::needless_range_loop,
+    clippy::useless_vec
+)]
+
 use fsci_linalg::{
     DecompOptions, InvOptions, LstsqOptions, NormKind, PinvOptions, SolveOptions,
-    TriangularSolveOptions, bandwidth, block_diag as linalg_block_diag, cho_factor, cho_solve,
-    cholesky, circulant, companion, convolution_matrix, cosm, coshm, det, diag, diagm, dft_matrix,
-    eigh, eigvalsh, expm, fiedler, hadamard, hadamard_product, hessenberg,
-    hilbert as linalg_hilbert, inv, ishermitian, issymmetric, leslie, logm, lstsq, lu, lu_factor,
-    lu_solve, matrix_power, matrix_rank, norm, null_space, orth, outer, pascal, pinv, polar, qr,
-    schur, signm, sinhm, sinm, solve, solve_continuous_lyapunov, solve_triangular, sqrtm, svd,
-    tanhm, tanm, toeplitz, trace, tri, vdot, vnorm,
+    TriangularSolveOptions, bandwidth, cho_factor, cho_solve, cholesky, circulant, companion,
+    convolution_matrix, coshm, cosm, det, dft_matrix, diag, diagm, eigh, eigvalsh, expm, fiedler,
+    hadamard, hadamard_product, hessenberg, hilbert as linalg_hilbert, inv, ishermitian,
+    issymmetric, leslie, logm, lstsq, lu, lu_factor, lu_solve, matrix_power, matrix_rank, norm,
+    null_space, orth, outer, pascal, pinv, polar, qr, schur, signm, sinhm, sinm, solve,
+    solve_continuous_lyapunov, solve_triangular, sqrtm, svd, tanm, toeplitz, trace, tri, vdot,
+    vnorm,
 };
 
 const RTOL: f64 = 1e-9;
@@ -292,7 +298,10 @@ fn mr_inverse_identity() {
     let prod = matmul(&a, &result.inverse);
     let id = identity(a.len());
     let diff = frobenius_diff(&prod, &id);
-    assert!(diff <= 1e-10, "MR6 A * A^-1 != I: ||AA^-1 - I||_F = {diff:e}");
+    assert!(
+        diff <= 1e-10,
+        "MR6 A * A^-1 != I: ||AA^-1 - I||_F = {diff:e}"
+    );
 
     let prod2 = matmul(&result.inverse, &a);
     let diff2 = frobenius_diff(&prod2, &id);
@@ -417,7 +426,10 @@ fn mr_expm_of_zero_is_identity() {
     let e = expm(&zero, DecompOptions::default()).unwrap();
     let id = identity(n);
     let diff = frobenius_diff(&e, &id);
-    assert!(diff <= 1e-10, "MR10 expm(0) != I: ||expm(0) - I||_F = {diff:e}");
+    assert!(
+        diff <= 1e-10,
+        "MR10 expm(0) != I: ||expm(0) - I||_F = {diff:e}"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -720,10 +732,7 @@ fn mr_det_of_identity_is_one() {
             id[i][i] = 1.0;
         }
         let d = det(&id, RuntimeMode::Strict, true).unwrap();
-        assert!(
-            (d - 1.0).abs() < 1e-12,
-            "MR19 det(I_{n}) = {d}, expected 1"
-        );
+        assert!((d - 1.0).abs() < 1e-12, "MR19 det(I_{n}) = {d}, expected 1");
     }
 }
 
@@ -849,10 +858,7 @@ fn mr_diag_diagm_roundtrip() {
         let v2 = diag(&m);
         assert_eq!(v.len(), v2.len(), "MR24 length mismatch");
         for (i, (&a, &b)) in v.iter().zip(&v2).enumerate() {
-            assert!(
-                (a - b).abs() < 1e-12,
-                "MR24 diag∘diagm at {i}: {a} vs {b}"
-            );
+            assert!((a - b).abs() < 1e-12, "MR24 diag∘diagm at {i}: {a} vs {b}");
         }
     }
 }
@@ -955,10 +961,7 @@ fn mr_sinm_cosm_at_zero() {
     let s = sinm(&zero, DecompOptions::default()).unwrap();
     for row in &s {
         for &v in row {
-            assert!(
-                v.abs() < 1e-12,
-                "MR29 sinm(0) entry = {v}, expected 0"
-            );
+            assert!(v.abs() < 1e-12, "MR29 sinm(0) entry = {v}, expected 0");
         }
     }
     let c = cosm(&zero, DecompOptions::default()).unwrap();
@@ -1575,14 +1578,8 @@ fn mr_solve_triangular_identity_returns_rhs() {
 
 #[test]
 fn mr_solve_continuous_lyapunov_shape_and_finite() {
-    let a = vec![
-        vec![-2.0_f64, 0.5],
-        vec![0.5, -3.0],
-    ];
-    let q = vec![
-        vec![1.0_f64, 0.0],
-        vec![0.0, 1.0],
-    ];
+    let a = vec![vec![-2.0_f64, 0.5], vec![0.5, -3.0]];
+    let q = vec![vec![1.0_f64, 0.0], vec![0.0, 1.0]];
     let p = solve_continuous_lyapunov(&a, &q, DecompOptions::default()).unwrap();
     assert_eq!(p.len(), a.len(), "MR56 lyap rows");
     for row in &p {
@@ -1657,7 +1654,3 @@ fn mr_solve_residual_check_on_random_spd() {
         residual_sq.sqrt()
     );
 }
-
-
-
-

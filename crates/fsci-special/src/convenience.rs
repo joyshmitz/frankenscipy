@@ -2735,15 +2735,10 @@ pub fn zeta_scalar(s: f64) -> f64 {
     if s <= 1.0 {
         return f64::NAN;
     }
-    let mut sum = 0.0;
-    for k in 1..=10000 {
-        let term = (k as f64).powf(-s);
-        sum += term;
-        if term < 1e-15 * sum {
-            break;
-        }
+    if s == f64::INFINITY {
+        return 1.0;
     }
-    sum
+    crate::gamma::zeta(s)
 }
 
 /// Arithmetic-geometric mean of two positive numbers.

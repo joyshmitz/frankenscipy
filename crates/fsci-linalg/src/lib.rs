@@ -5409,9 +5409,7 @@ pub fn solve_sylvester(
 
     // Solve via LU
     let lu = system.full_piv_lu();
-    let sol = lu
-        .solve(&rhs_vec)
-        .unwrap_or_else(|| nalgebra::DVector::zeros(mn));
+    let sol = lu.solve(&rhs_vec).ok_or(LinalgError::SingularMatrix)?;
 
     // Unvectorize Y
     let mut y = DMatrix::<f64>::zeros(m, n);
@@ -5516,9 +5514,7 @@ pub fn solve_discrete_lyapunov(
 
     // Solve
     let lu = system.full_piv_lu();
-    let sol = lu
-        .solve(&rhs)
-        .unwrap_or_else(|| nalgebra::DVector::zeros(nn));
+    let sol = lu.solve(&rhs).ok_or(LinalgError::SingularMatrix)?;
 
     // Unvectorize
     let mut x = DMatrix::<f64>::zeros(n, n);
@@ -10553,6 +10549,16 @@ mod proptest_tests {
     }
 
     #[test]
+    fn solve_sylvester_singular_system_errors() {
+        let a = vec![vec![1.0]];
+        let b = vec![vec![-1.0]];
+        let q = vec![vec![1.0]];
+        let err = solve_sylvester(&a, &b, &q, DecompOptions::default())
+            .expect_err("singular Sylvester operator");
+        assert_eq!(err, LinalgError::SingularMatrix);
+    }
+
+    #[test]
     fn solve_continuous_lyapunov_basic() {
         // A = [[1,0],[0,2]], X = I → Q = AX + XA^T = A + A^T = 2*A (since A is symmetric)
         let a = vec![vec![1.0, 0.0], vec![0.0, 2.0]];
@@ -10653,6 +10659,15 @@ mod proptest_tests {
         let err =
             solve_discrete_lyapunov(&a, &q, DecompOptions::default()).expect_err("non-square");
         assert!(matches!(err, LinalgError::ExpectedSquareMatrix));
+    }
+
+    #[test]
+    fn solve_discrete_lyapunov_unit_eigenvalue_errors() {
+        let a = vec![vec![1.0]];
+        let q = vec![vec![1.0]];
+        let err = solve_discrete_lyapunov(&a, &q, DecompOptions::default())
+            .expect_err("singular discrete Lyapunov operator");
+        assert_eq!(err, LinalgError::SingularMatrix);
     }
 
     // ── solve_continuous_are / solve_discrete_are tests (br-60cm) ─────

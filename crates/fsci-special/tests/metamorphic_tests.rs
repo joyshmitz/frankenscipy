@@ -13,13 +13,13 @@ use fsci_special::{
     boxcox_transform_scalar, chdtr, chdtrc, comb, digamma_scalar, ellipe, ellipeinc, ellipj,
     ellipk, ellipkinc, ellipkm1, entr, erf_scalar, exp1, expi, expit, expn_scalar, factorial,
     factorial2, fresnel, gamma, gammainc, gammaincc, gammaln, hyp1f1, hyp2f1, i0, i0_scalar,
-    inv_boxcox_scalar, j0, jn, jv, kei, ker, lambertw_scalar, logit, perm, rgamma, shichi, sici,
-    struve, xlog1py, xlogy, zeta_scalar,
+    inv_boxcox_scalar, j0, jn, jv, lambertw_scalar, logit,
     orthopoly::{
         eval_chebyt, eval_chebyu, eval_gegenbauer, eval_genlaguerre, eval_hermite,
-        eval_hermitenorm, eval_jacobi, eval_laguerre, eval_legendre, eval_sh_chebyt,
-        eval_sh_chebyu, eval_sh_legendre, lpmv, roots_chebyt, roots_legendre, sph_harm,
+        eval_hermitenorm, eval_jacobi, eval_laguerre, eval_legendre, eval_sh_legendre, lpmv,
+        roots_chebyt, roots_legendre, sph_harm,
     },
+    perm, rgamma, shichi, sici, struve, xlog1py, xlogy, zeta_scalar,
 };
 
 const ATOL: f64 = 1e-10;
@@ -34,9 +34,9 @@ fn real(value: f64) -> SpecialTensor {
 }
 
 fn unwrap_real(result: SpecialResult) -> f64 {
-    match result.unwrap() {
-        SpecialTensor::RealScalar(v) => v,
-        other => panic!("expected RealScalar, got {other:?}"),
+    match result {
+        Ok(SpecialTensor::RealScalar(v)) => v,
+        Ok(_) | Err(_) => f64::NAN,
     }
 }
 
@@ -85,7 +85,10 @@ fn mr_beta_symmetric() {
     for (a, b) in pairs {
         let bab = unwrap_real(beta(&real(a), &real(b), RuntimeMode::Strict));
         let bba = unwrap_real(beta(&real(b), &real(a), RuntimeMode::Strict));
-        assert!(close(bab, bba), "MR3 beta symmetry: B({a},{b})={bab} vs B({b},{a})={bba}");
+        assert!(
+            close(bab, bba),
+            "MR3 beta symmetry: B({a},{b})={bab} vs B({b},{a})={bba}"
+        );
     }
 }
 
@@ -105,10 +108,7 @@ fn mr_ellipk_endpoint_and_monotonicity() {
             v >= prev - 1e-12,
             "MR4 ellipk not monotone at m={m}: {v} < prev={prev}"
         );
-        assert!(
-            v >= PI / 2.0 - 1e-12,
-            "MR4 ellipk({m}) below π/2: {v}"
-        );
+        assert!(v >= PI / 2.0 - 1e-12, "MR4 ellipk({m}) below π/2: {v}");
         prev = v;
     }
 }
@@ -316,10 +316,7 @@ fn mr_roots_legendre_evaluate_to_zero() {
         assert_eq!(weights.len(), n);
         for &x in &xs {
             let v = eval_legendre(n as u32, x);
-            assert!(
-                v.abs() < 1e-10,
-                "MR16 P_{n}(root={x}) = {v}, expected 0"
-            );
+            assert!(v.abs() < 1e-10, "MR16 P_{n}(root={x}) = {v}, expected 0");
             // Roots must be in (-1, 1).
             assert!(x.abs() < 1.0, "MR16 root {x} outside open interval");
         }
@@ -343,10 +340,7 @@ fn mr_roots_chebyt_evaluate_to_zero() {
         assert_eq!(xs.len(), n);
         for &x in &xs {
             let v = eval_chebyt(n as u32, x);
-            assert!(
-                v.abs() < 1e-10,
-                "MR17 T_{n}(root={x}) = {v}, expected 0"
-            );
+            assert!(v.abs() < 1e-10, "MR17 T_{n}(root={x}) = {v}, expected 0");
             assert!(x.abs() < 1.0, "MR17 root {x} outside (-1, 1)");
         }
         let sum: f64 = weights.iter().sum();
@@ -555,9 +549,15 @@ fn mr_bessel_jn_recurrence() {
 #[test]
 fn mr_ellipe_endpoint_and_monotonicity() {
     let e0 = unwrap_real(ellipe(&real(0.0), RuntimeMode::Strict));
-    assert!((e0 - PI / 2.0).abs() < 1e-12, "MR25 ellipe(0) = {e0}, expected π/2");
+    assert!(
+        (e0 - PI / 2.0).abs() < 1e-12,
+        "MR25 ellipe(0) = {e0}, expected π/2"
+    );
     let e1 = unwrap_real(ellipe(&real(1.0), RuntimeMode::Strict));
-    assert!((e1 - 1.0).abs() < 1e-12, "MR25 ellipe(1) = {e1}, expected 1");
+    assert!(
+        (e1 - 1.0).abs() < 1e-12,
+        "MR25 ellipe(1) = {e1}, expected 1"
+    );
     let mut prev = e0;
     for k in 1..50 {
         let m = k as f64 / 50.0;
@@ -647,24 +647,10 @@ fn mr_airy_at_zero() {
 #[test]
 fn mr_ellipinc_at_zero_phi() {
     for &m in &[0.0_f64, 0.25, 0.5, 0.75] {
-        let f = unwrap_real(ellipkinc(
-            &real(0.0),
-            &real(m),
-            RuntimeMode::Strict,
-        ));
-        assert!(
-            f.abs() < 1e-12,
-            "MR29 ellipkinc(0, {m}) = {f}, expected 0"
-        );
-        let e = unwrap_real(ellipeinc(
-            &real(0.0),
-            &real(m),
-            RuntimeMode::Strict,
-        ));
-        assert!(
-            e.abs() < 1e-12,
-            "MR29 ellipeinc(0, {m}) = {e}, expected 0"
-        );
+        let f = unwrap_real(ellipkinc(&real(0.0), &real(m), RuntimeMode::Strict));
+        assert!(f.abs() < 1e-12, "MR29 ellipkinc(0, {m}) = {f}, expected 0");
+        let e = unwrap_real(ellipeinc(&real(0.0), &real(m), RuntimeMode::Strict));
+        assert!(e.abs() < 1e-12, "MR29 ellipeinc(0, {m}) = {e}, expected 0");
     }
 }
 
@@ -676,11 +662,7 @@ fn mr_ellipinc_at_zero_phi() {
 #[test]
 fn mr_ellipkinc_at_half_pi_matches_complete() {
     for &m in &[0.0_f64, 0.1, 0.3, 0.5, 0.7, 0.9] {
-        let inc = unwrap_real(ellipkinc(
-            &real(PI / 2.0),
-            &real(m),
-            RuntimeMode::Strict,
-        ));
+        let inc = unwrap_real(ellipkinc(&real(PI / 2.0), &real(m), RuntimeMode::Strict));
         let comp = unwrap_real(ellipk(&real(m), RuntimeMode::Strict));
         assert!(
             (inc - comp).abs() < 1e-9,
@@ -698,18 +680,12 @@ fn mr_expit_logit_round_trip() {
     for &p in &[0.05_f64, 0.25, 0.5, 0.75, 0.95] {
         let l = unwrap_real(logit(&real(p), RuntimeMode::Strict));
         let back = unwrap_real(expit(&real(l), RuntimeMode::Strict));
-        assert!(
-            (back - p).abs() < 1e-12,
-            "MR31 expit(logit({p})) = {back}"
-        );
+        assert!((back - p).abs() < 1e-12, "MR31 expit(logit({p})) = {back}");
     }
     for &x in &[-3.5_f64, -1.0, 0.0, 1.0, 3.5] {
         let e = unwrap_real(expit(&real(x), RuntimeMode::Strict));
         let back = unwrap_real(logit(&real(e), RuntimeMode::Strict));
-        assert!(
-            (back - x).abs() < 1e-9,
-            "MR31 logit(expit({x})) = {back}"
-        );
+        assert!((back - x).abs() < 1e-9, "MR31 logit(expit({x})) = {back}");
     }
 }
 
@@ -795,10 +771,7 @@ fn mr_arctanh_round_trip() {
     assert!(arctanh(0.0).abs() < 1e-15, "MR35 arctanh(0) != 0");
     for &x in &[-2.5_f64, -1.0, -0.3, 0.5, 1.5, 3.0] {
         let back = arctanh(x.tanh());
-        assert!(
-            (back - x).abs() < 1e-9,
-            "MR35 arctanh(tanh({x})) = {back}"
-        );
+        assert!((back - x).abs() < 1e-9, "MR35 arctanh(tanh({x})) = {back}");
     }
 }
 
@@ -833,20 +806,16 @@ fn mr_beta_exp_betaln() {
 
 #[test]
 fn mr_zeta_basel_values() {
-    // The truncated-series implementation of ζ in this crate is accurate
-    // to about 1e-4 at the Basel value. We assert that loose precision
-    // here as a directional test that the implementation is in the right
-    // ballpark; tighter ζ accuracy is tracked separately.
     let z2 = zeta_scalar(2.0);
     let expected2 = PI * PI / 6.0;
     assert!(
-        (z2 - expected2).abs() < 1e-3,
+        (z2 - expected2).abs() < 1e-10,
         "MR37 ζ(2) = {z2}, expected π²/6 = {expected2}"
     );
     let z4 = zeta_scalar(4.0);
     let expected4 = PI.powi(4) / 90.0;
     assert!(
-        (z4 - expected4).abs() < 1e-3,
+        (z4 - expected4).abs() < 1e-12,
         "MR37 ζ(4) = {z4}, expected π⁴/90 = {expected4}"
     );
 }
@@ -925,16 +894,10 @@ fn mr_digamma_at_one_is_neg_gamma() {
 #[test]
 fn mr_entr_at_one_is_zero() {
     let v = unwrap_real(entr(&real(1.0), RuntimeMode::Strict));
-    assert!(
-        v.abs() < 1e-12,
-        "MR42 entr(1) = {v}, expected 0"
-    );
+    assert!(v.abs() < 1e-12, "MR42 entr(1) = {v}, expected 0");
     // entr(0) = 0 by SciPy convention (lim x·log(x) as x → 0+).
     let v0 = unwrap_real(entr(&real(0.0), RuntimeMode::Strict));
-    assert!(
-        v0.abs() < 1e-12,
-        "MR42 entr(0) = {v0}, expected 0"
-    );
+    assert!(v0.abs() < 1e-12, "MR42 entr(0) = {v0}, expected 0");
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1217,14 +1180,8 @@ fn mr_shichi_at_zero() {
 fn mr_kelvin_at_zero() {
     let b = ber(0.0);
     let bi_v = bei(0.0);
-    assert!(
-        (b - 1.0).abs() < 1e-12,
-        "MR58 ber(0) = {b}, expected 1"
-    );
-    assert!(
-        bi_v.abs() < 1e-12,
-        "MR58 bei(0) = {bi_v}, expected 0"
-    );
+    assert!((b - 1.0).abs() < 1e-12, "MR58 ber(0) = {b}, expected 1");
+    assert!(bi_v.abs() < 1e-12, "MR58 bei(0) = {bi_v}, expected 0");
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1235,10 +1192,7 @@ fn mr_kelvin_at_zero() {
 fn mr_struve_at_zero() {
     for &v in &[0.0_f64, 0.5, 1.0, 1.5, 2.0] {
         let s = struve(v, 0.0);
-        assert!(
-            s.abs() < 1e-9,
-            "MR59 struve({v}, 0) = {s}, expected 0"
-        );
+        assert!(s.abs() < 1e-9, "MR59 struve({v}, 0) = {s}, expected 0");
     }
 }
 
@@ -1248,12 +1202,7 @@ fn mr_struve_at_zero() {
 
 #[test]
 fn mr_bernoulli_known_values() {
-    let cases: &[(u32, f64)] = &[
-        (0, 1.0),
-        (2, 1.0 / 6.0),
-        (4, -1.0 / 30.0),
-        (6, 1.0 / 42.0),
-    ];
+    let cases: &[(u32, f64)] = &[(0, 1.0), (2, 1.0 / 6.0), (4, -1.0 / 30.0), (6, 1.0 / 42.0)];
     for &(n, expected) in cases {
         let v = bernoulli(n);
         assert!(
@@ -1325,10 +1274,7 @@ fn mr_expi_increasing_positive() {
     let mut prev = f64::NEG_INFINITY;
     for &x in &xs {
         let v = unwrap_real(expi(&real(x), RuntimeMode::Strict));
-        assert!(
-            v >= prev - 1e-9,
-            "MR64 expi({x}) = {v} < previous = {prev}"
-        );
+        assert!(v >= prev - 1e-9, "MR64 expi({x}) = {v} < previous = {prev}");
         prev = v;
     }
 }
@@ -1367,9 +1313,3 @@ fn mr_ellipj_pythagorean_identity() {
         }
     }
 }
-
-
-
-
-
-

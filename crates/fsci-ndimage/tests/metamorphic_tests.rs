@@ -13,9 +13,9 @@ use fsci_ndimage::{
     gaussian_laplace, generate_binary_structure, gradient_magnitude, grey_dilation, grey_erosion,
     histogram_labels, label, laplace, masked_select, maximum_filter, maximum_filter1d, mean_labels,
     median_filter, minimum_filter, minimum_filter1d, morphological_gradient, ones, otsu_threshold,
-    percentile_filter, prewitt, range_filter, reshape, rotate, shift, sobel, standard_deviation_labels,
-    std_filter, sum_labels, threshold, uniform_filter, uniform_filter1d, variance_filter,
-    variance_labels, where_cond, white_tophat, zoom,
+    percentile_filter, prewitt, range_filter, reshape, rotate, shift, sobel, std_filter,
+    sum_labels, threshold, uniform_filter, uniform_filter1d, variance_filter, variance_labels,
+    where_cond, white_tophat, zoom,
 };
 
 fn arr_2d(rows: usize, cols: usize, fill: impl Fn(usize, usize) -> f64) -> NdArray {
@@ -41,10 +41,7 @@ fn mr_gaussian_filter_shape_and_finite() {
     let img = arr_2d(10, 12, |i, j| ((i + j) as f64).sin());
     for &sigma in &[0.5_f64, 1.0, 2.0, 5.0] {
         let out = gaussian_filter(&img, sigma, BoundaryMode::Reflect, 0.0).unwrap();
-        assert_eq!(
-            out.shape, img.shape,
-            "MR1 shape changed for sigma={sigma}"
-        );
+        assert_eq!(out.shape, img.shape, "MR1 shape changed for sigma={sigma}");
         assert_eq!(out.data.len(), img.data.len());
         for (i, &v) in out.data.iter().enumerate() {
             assert!(
@@ -298,10 +295,7 @@ fn mr_convolve_correlate_agree_on_symmetric_kernel() {
     let corr = correlate(&img, &weights, BoundaryMode::Reflect, 0.0).unwrap();
     assert_eq!(conv.shape, corr.shape, "MR12 shape mismatch");
     for (i, (c, k)) in conv.data.iter().zip(&corr.data).enumerate() {
-        assert!(
-            close(*c, *k),
-            "MR12 conv vs corr at i={i}: {c} vs {k}"
-        );
+        assert!(close(*c, *k), "MR12 conv vs corr at i={i}: {c} vs {k}");
     }
 }
 
@@ -532,8 +526,16 @@ fn mr_sum_labels_counts_pixels() {
     });
     let sums = sum_labels(&img, &labels, 2).unwrap();
     assert_eq!(sums.len(), 2, "MR23 sum_labels length");
-    assert!((sums[0] - 4.0).abs() < 1e-12, "MR23 region 1 area = {}", sums[0]);
-    assert!((sums[1] - 9.0).abs() < 1e-12, "MR23 region 2 area = {}", sums[1]);
+    assert!(
+        (sums[0] - 4.0).abs() < 1e-12,
+        "MR23 region 1 area = {}",
+        sums[0]
+    );
+    assert!(
+        (sums[1] - 9.0).abs() < 1e-12,
+        "MR23 region 2 area = {}",
+        sums[1]
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -544,9 +546,7 @@ fn mr_sum_labels_counts_pixels() {
 fn mr_mean_labels_constant_input() {
     let c = 5.5_f64;
     let img = arr_2d(5, 5, |_, _| c);
-    let labels = arr_2d(5, 5, |i, j| {
-        if (i + j) % 2 == 0 { 1.0 } else { 2.0 }
-    });
+    let labels = arr_2d(5, 5, |i, j| if (i + j) % 2 == 0 { 1.0 } else { 2.0 });
     let means = mean_labels(&img, &labels, 2).unwrap();
     for (k, &m) in means.iter().enumerate() {
         assert!(
@@ -566,10 +566,7 @@ fn mr_variance_labels_nonneg() {
     let labels = arr_2d(5, 5, |i, j| if (i + j) % 3 == 0 { 1.0 } else { 2.0 });
     let v = variance_labels(&img, &labels, 2).unwrap();
     for (k, &val) in v.iter().enumerate() {
-        assert!(
-            val >= -1e-12,
-            "MR25 variance_labels region {k} = {val} < 0"
-        );
+        assert!(val >= -1e-12, "MR25 variance_labels region {k} = {val} < 0");
     }
 }
 
@@ -739,10 +736,7 @@ fn mr_morphological_gradient_nonneg() {
     let img = arr_2d(7, 9, |i, j| ((i * 13 + j * 7) % 17) as f64);
     let g = morphological_gradient(&img, 3, BoundaryMode::Reflect, 0.0).unwrap();
     for (i, &v) in g.data.iter().enumerate() {
-        assert!(
-            v >= -1e-12,
-            "MR35 morphological_gradient[{i}] = {v} < 0"
-        );
+        assert!(v >= -1e-12, "MR35 morphological_gradient[{i}] = {v} < 0");
     }
 }
 
@@ -755,10 +749,7 @@ fn mr_white_tophat_nonneg() {
     let img = arr_2d(7, 9, |i, j| ((i * 13 + j * 7) % 17) as f64);
     let w = white_tophat(&img, 3, BoundaryMode::Reflect, 0.0).unwrap();
     for (i, &v) in w.data.iter().enumerate() {
-        assert!(
-            v >= -1e-9,
-            "MR36 white_tophat[{i}] = {v} < 0"
-        );
+        assert!(v >= -1e-9, "MR36 white_tophat[{i}] = {v} < 0");
     }
 }
 
@@ -771,10 +762,7 @@ fn mr_black_tophat_nonneg() {
     let img = arr_2d(7, 9, |i, j| ((i * 13 + j * 7) % 17) as f64);
     let b = black_tophat(&img, 3, BoundaryMode::Reflect, 0.0).unwrap();
     for (i, &v) in b.data.iter().enumerate() {
-        assert!(
-            v >= -1e-9,
-            "MR37 black_tophat[{i}] = {v} < 0"
-        );
+        assert!(v >= -1e-9, "MR37 black_tophat[{i}] = {v} < 0");
     }
 }
 
@@ -806,10 +794,7 @@ fn mr_full_constant_array() {
         let arr = full(vec![3, 5], c);
         assert_eq!(arr.shape, vec![3, 5], "MR39 full shape");
         for (i, &v) in arr.data.iter().enumerate() {
-            assert!(
-                (v - c).abs() < 1e-15,
-                "MR39 full({c})[{i}] = {v}"
-            );
+            assert!((v - c).abs() < 1e-15, "MR39 full({c})[{i}] = {v}");
         }
     }
 }
@@ -843,10 +828,7 @@ fn mr_array_max_geq_min() {
     let img = arr_2d(7, 9, |i, j| ((i * 13 + j * 7) % 17) as f64);
     let mx = array_max(&img);
     let mn = array_min(&img);
-    assert!(
-        mx >= mn - 1e-12,
-        "MR41 array_max = {mx} < array_min = {mn}"
-    );
+    assert!(mx >= mn - 1e-12, "MR41 array_max = {mx} < array_min = {mn}");
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -858,10 +840,7 @@ fn mr_gradient_magnitude_constant_is_zero() {
     let img = arr_2d(8, 10, |_, _| 7.5);
     let g = gradient_magnitude(&img).unwrap();
     for (i, &v) in g.data.iter().enumerate() {
-        assert!(
-            v.abs() < 1e-9,
-            "MR42 gradient_magnitude(const)[{i}] = {v}"
-        );
+        assert!(v.abs() < 1e-9, "MR42 gradient_magnitude(const)[{i}] = {v}");
     }
 }
 
@@ -906,10 +885,7 @@ fn mr_range_filter_nonneg() {
     let img = arr_2d(7, 9, |i, j| ((i * 11 + j * 5) % 19) as f64);
     let r = range_filter(&img, 3, BoundaryMode::Reflect, 0.0).unwrap();
     for (i, &v) in r.data.iter().enumerate() {
-        assert!(
-            v >= -1e-12,
-            "MR45 range_filter[{i}] = {v} < 0"
-        );
+        assert!(v >= -1e-12, "MR45 range_filter[{i}] = {v} < 0");
     }
 }
 
@@ -1046,10 +1022,7 @@ fn mr_extrema_labels_min_leq_max() {
     let (mins, maxs) = extrema_labels(&img, &labels, 2);
     assert_eq!(mins.len(), 2, "MR53 extrema mins length");
     for (k, (mn, mx)) in mins.iter().zip(&maxs).enumerate() {
-        assert!(
-            mn <= mx,
-            "MR53 region {k}: min = {mn} > max = {mx}"
-        );
+        assert!(mn <= mx, "MR53 region {k}: min = {mn} > max = {mx}");
     }
 }
 
@@ -1072,6 +1045,9 @@ fn mr_histogram_labels_counts_nonneg_sum_correct() {
             );
         }
     }
+
+    let empty_bins = histogram_labels(&img, &labels, 2, 0.0, 25.0, 0);
+    assert_eq!(empty_bins, vec![Vec::<usize>::new(), Vec::new()]);
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1164,9 +1140,3 @@ fn mr_diff_array_length_and_constant() {
         assert!(v.abs() < 1e-12, "MR58 diff_array(const)[{v}] != 0");
     }
 }
-
-
-
-
-
-

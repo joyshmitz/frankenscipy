@@ -1035,7 +1035,12 @@ pub fn histogram_labels(
     nbins: usize,
 ) -> Vec<Vec<usize>> {
     let mut histograms = vec![vec![0usize; nbins]; num_labels];
-    if !min_val.is_finite() || !max_val.is_finite() || input.data.iter().any(|v| !v.is_finite()) {
+    if nbins == 0
+        || !min_val.is_finite()
+        || !max_val.is_finite()
+        || max_val <= min_val
+        || input.data.iter().any(|v| !v.is_finite())
+    {
         return histograms;
     }
     let bin_width = (max_val - min_val) / nbins as f64;
