@@ -10,16 +10,16 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-use fsci_linalg::{solve, SolveOptions};
+use fsci_linalg::{SolveOptions, solve};
 use fsci_runtime::RuntimeMode;
 use fsci_signal::lfilter;
 use fsci_special::{
-    beta, betainc, betaln, gamma, gammainc, gammaincc, gammaln, rgamma, SpecialResult,
-    SpecialTensor,
+    SpecialResult, SpecialTensor, beta, betainc, betaln, gamma, gammainc, gammaincc, gammaln,
+    rgamma,
 };
 use fsci_stats::{ChiSquared, ContinuousDistribution, Normal, StudentT};
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 
 const REQUIRE_SCIPY_ENV: &str = "FSCI_REQUIRE_SCIPY_ORACLE";
 
@@ -134,11 +134,7 @@ where
 
 fn ordered_float_bits(value: f64) -> i64 {
     let bits = value.to_bits() as i64;
-    if bits < 0 {
-        i64::MIN - bits
-    } else {
-        bits
-    }
+    if bits < 0 { i64::MIN - bits } else { bits }
 }
 
 fn ulp_distance(left: f64, right: f64) -> u64 {

@@ -12,8 +12,8 @@ use std::process::{Command, Stdio};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use fsci_cluster::{
-    cophenet, fcluster, inconsistent, is_monotonic, is_valid_linkage, leaves_list, linkage,
-    LinkageMethod,
+    LinkageMethod, cophenet, fcluster, inconsistent, is_monotonic, is_valid_linkage, leaves_list,
+    linkage,
 };
 use serde::{Deserialize, Serialize};
 
@@ -362,9 +362,17 @@ fn diff_cluster_linkage() {
 
                 let leaves_match = rust_leaves.len() == scipy_result.leaves.len();
 
-                let pass = z_len_match && valid_match && mono_match && leaves_match && coph_len_match;
+                let pass =
+                    z_len_match && valid_match && mono_match && leaves_match && coph_len_match;
 
-                (pass, z_dists_diff, 0.0, valid_match, mono_match, leaves_match)
+                (
+                    pass,
+                    z_dists_diff,
+                    0.0,
+                    valid_match,
+                    mono_match,
+                    leaves_match,
+                )
             } else if scipy_result.z.is_empty() {
                 (true, 0.0, 0.0, true, true, true)
             } else {
@@ -467,7 +475,9 @@ fn generate_fcluster_data() -> Vec<(String, Vec<Vec<f64>>, usize)> {
     cases
 }
 
-fn scipy_fcluster_oracle_or_skip(cases: &[(String, Vec<Vec<f64>>, usize)]) -> Vec<FclusterOracleResult> {
+fn scipy_fcluster_oracle_or_skip(
+    cases: &[(String, Vec<Vec<f64>>, usize)],
+) -> Vec<FclusterOracleResult> {
     let input_cases: Vec<FclusterInputCase> = cases
         .iter()
         .map(|(id, data, k)| FclusterInputCase {
@@ -592,11 +602,25 @@ fn diff_cluster_fcluster() {
 
                 match fcluster(&scipy_z, *max_clusters) {
                     Ok(rust_labels) => {
-                        let rust_n_clusters = rust_labels.iter().copied().collect::<std::collections::HashSet<_>>().len();
-                        let scipy_n_clusters = scipy.labels.iter().copied().collect::<std::collections::HashSet<_>>().len();
-                        let both_within_max = rust_n_clusters <= *max_clusters && scipy_n_clusters <= *max_clusters;
+                        let rust_n_clusters = rust_labels
+                            .iter()
+                            .copied()
+                            .collect::<std::collections::HashSet<_>>()
+                            .len();
+                        let scipy_n_clusters = scipy
+                            .labels
+                            .iter()
+                            .copied()
+                            .collect::<std::collections::HashSet<_>>()
+                            .len();
+                        let both_within_max =
+                            rust_n_clusters <= *max_clusters && scipy_n_clusters <= *max_clusters;
                         let labels_len_match = rust_labels.len() == scipy.labels.len();
-                        (both_within_max && labels_len_match, labels_len_match, both_within_max)
+                        (
+                            both_within_max && labels_len_match,
+                            labels_len_match,
+                            both_within_max,
+                        )
                     }
                     Err(_) => (false, false, false),
                 }
@@ -626,7 +650,10 @@ fn diff_cluster_fcluster() {
         }
     }
 
-    assert!(all_pass, "scipy.cluster.hierarchy.fcluster conformance failed");
+    assert!(
+        all_pass,
+        "scipy.cluster.hierarchy.fcluster conformance failed"
+    );
 }
 
 #[derive(Debug, Clone, Serialize)]

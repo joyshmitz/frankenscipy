@@ -11,9 +11,9 @@
 
 use fsci_runtime::RuntimeMode;
 use fsci_sparse::{
-    add_csr, coo_to_csr_with_mode, csr_to_csc_with_mode, diags, eye, random, scale_coo, scale_csc,
-    scale_csr, spmv_coo, spmv_csc, spmv_csr, spsolve, sub_csr, CooMatrix, CsrMatrix,
-    FormatConvertible, Shape2D, SolveOptions, SparseError,
+    CooMatrix, CsrMatrix, FormatConvertible, Shape2D, SolveOptions, SparseError, add_csr,
+    coo_to_csr_with_mode, csr_to_csc_with_mode, diags, eye, random, scale_coo, scale_csc,
+    scale_csr, spmv_coo, spmv_csc, spmv_csr, spsolve, sub_csr,
 };
 use serde::Serialize;
 use std::fs;

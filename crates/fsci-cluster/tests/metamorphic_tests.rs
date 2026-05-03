@@ -236,7 +236,11 @@ fn mr_dbscan_tiny_eps_marks_all_noise() {
 fn mr_dbscan_separable_clusters() {
     let data = small_dataset(); // 3 well-separated clusters of 4 each
     let res = dbscan(&data, 1.5, 2).unwrap();
-    assert_eq!(res.n_clusters, 3, "MR9 expected 3 clusters, got {}", res.n_clusters);
+    assert_eq!(
+        res.n_clusters, 3,
+        "MR9 expected 3 clusters, got {}",
+        res.n_clusters
+    );
     for (i, &lab) in res.labels.iter().enumerate() {
         assert!(lab >= 0, "MR9 point {i} should not be noise: lab={lab}");
     }
@@ -269,7 +273,13 @@ fn mr_linkage_shape() {
     let data = small_dataset();
     let n = data.len();
     let z = linkage(&data, LinkageMethod::Ward).unwrap();
-    assert_eq!(z.len(), n - 1, "MR11 linkage rows: got {}, expected {}", z.len(), n - 1);
+    assert_eq!(
+        z.len(),
+        n - 1,
+        "MR11 linkage rows: got {}, expected {}",
+        z.len(),
+        n - 1
+    );
     // Each row already has fixed length 4 (the [f64; 4] type), so
     // structural shape is enforced by the type system.
 }
@@ -285,11 +295,19 @@ fn mr_leaves_list_is_permutation() {
     let n = data.len();
     let z = linkage(&data, LinkageMethod::Ward).unwrap();
     let leaves = leaves_list(&z);
-    assert_eq!(leaves.len(), n, "MR12 leaves count: got {}, expected {n}", leaves.len());
+    assert_eq!(
+        leaves.len(),
+        n,
+        "MR12 leaves count: got {}, expected {n}",
+        leaves.len()
+    );
     let mut sorted = leaves.clone();
     sorted.sort_unstable();
     for (i, &v) in sorted.iter().enumerate() {
-        assert_eq!(v, i, "MR12 missing index {i} in leaves_list: got {sorted:?}");
+        assert_eq!(
+            v, i,
+            "MR12 missing index {i} in leaves_list: got {sorted:?}"
+        );
     }
 }
 
@@ -491,7 +509,10 @@ fn mr_normalized_mutual_info_symmetric() {
         (nmi_ab - nmi_ba).abs() < 1e-10,
         "MR23 NMI(a, b) = {nmi_ab}, NMI(b, a) = {nmi_ba}"
     );
-    assert!(nmi_ab >= -1e-10 && nmi_ab <= 1.0 + 1e-10, "MR23 NMI not in [0, 1]");
+    assert!(
+        nmi_ab >= -1e-10 && nmi_ab <= 1.0 + 1e-10,
+        "MR23 NMI not in [0, 1]"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -586,8 +607,7 @@ fn mr_whiten_columns_have_unit_variance() {
     let d = w[0].len();
     for j in 0..d {
         let mean: f64 = w.iter().map(|row| row[j]).sum::<f64>() / n as f64;
-        let var: f64 =
-            w.iter().map(|row| (row[j] - mean).powi(2)).sum::<f64>() / n as f64;
+        let var: f64 = w.iter().map(|row| (row[j] - mean).powi(2)).sum::<f64>() / n as f64;
         assert!(
             (var - 1.0).abs() < 1e-9,
             "MR27 whiten column {j} variance = {var}, expected 1"
@@ -660,10 +680,7 @@ fn mr_kmedoids_labels_in_range() {
     for k in 1..=4 {
         let res = kmedoids(&data, k, 100, 7).unwrap();
         for (i, &lbl) in res.labels.iter().enumerate() {
-            assert!(
-                lbl < k,
-                "MR30 kmedoids k={k} label[{i}] = {lbl} ≥ k"
-            );
+            assert!(lbl < k, "MR30 kmedoids k={k} label[{i}] = {lbl} ≥ k");
         }
     }
 }
@@ -849,11 +866,7 @@ fn mr_davies_bouldin_nonneg_explicit() {
 #[test]
 fn mr_vq_labels_bounded_by_k() {
     let data = small_dataset();
-    let centroids = vec![
-        vec![0.0_f64, 0.0],
-        vec![5.0, 5.0],
-        vec![10.0, 0.0],
-    ];
+    let centroids = vec![vec![0.0_f64, 0.0], vec![5.0, 5.0], vec![10.0, 0.0]];
     let (labels, _dists) = vq(&data, &centroids).unwrap();
     assert_eq!(labels.len(), data.len(), "MR40 vq labels length");
     for (i, &lbl) in labels.iter().enumerate() {
@@ -1076,10 +1089,7 @@ fn mr_mini_batch_kmeans_label_range() {
     for k in [1usize, 2, 3] {
         let res = mini_batch_kmeans(&data, k, 50, 4, 13).unwrap();
         for &lbl in &res.labels {
-            assert!(
-                lbl < k,
-                "MR52 mini_batch_kmeans label {lbl} ≥ k = {k}"
-            );
+            assert!(lbl < k, "MR52 mini_batch_kmeans label {lbl} ≥ k = {k}");
         }
     }
 }
@@ -1118,15 +1128,7 @@ fn mr_linkage_from_distances_consistent_merge_count() {
     }
     let first = counts[0];
     for c in &counts[1..] {
-        assert_eq!(
-            *c, first,
-            "MR54 linkage merge counts differ: {:?}",
-            counts
-        );
+        assert_eq!(*c, first, "MR54 linkage merge counts differ: {:?}", counts);
     }
     assert_eq!(first, n - 1, "MR54 expected {} merges", n - 1);
 }
-
-
-
-

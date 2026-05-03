@@ -35,7 +35,11 @@ fn mr_minimize_finds_known_minimum_on_bowl() {
     let f = |x: &[f64]| (x[0] - 2.0).powi(2) + (x[1] + 3.0).powi(2);
     let opts = MinimizeOptions::default();
     let res = minimize(f, &[0.0, 0.0], opts).unwrap();
-    assert!(res.success, "MR1 minimize did not converge: {}", res.message);
+    assert!(
+        res.success,
+        "MR1 minimize did not converge: {}",
+        res.message
+    );
     assert!(
         (res.x[0] - 2.0).abs() < 1e-3,
         "MR1 x[0]={} expected 2.0",
@@ -123,10 +127,7 @@ fn mr_minimize_constant_shift_invariance() {
     let r1 = minimize(f, &[0.0, 0.0], opts).unwrap();
     let r2 = minimize(g, &[0.0, 0.0], opts).unwrap();
     for (a, b) in r1.x.iter().zip(&r2.x) {
-        assert!(
-            (a - b).abs() < 1e-3,
-            "MR4 minimize shift: x_f={a} x_g={b}"
-        );
+        assert!((a - b).abs() < 1e-3, "MR4 minimize shift: x_f={a} x_g={b}");
     }
 }
 
@@ -266,9 +267,7 @@ fn mr_least_squares_recovers_linear_params() {
 #[test]
 fn mr_fsolve_2x2_linear_system() {
     // A = [[3, 1], [1, 2]],  b = [9, 8] → exact solution x = [2, 3]
-    let func = |x: &[f64]| -> Vec<f64> {
-        vec![3.0 * x[0] + x[1] - 9.0, x[0] + 2.0 * x[1] - 8.0]
-    };
+    let func = |x: &[f64]| -> Vec<f64> { vec![3.0 * x[0] + x[1] - 9.0, x[0] + 2.0 * x[1] - 8.0] };
     let res = fsolve(func, &[0.0, 0.0]).unwrap();
     let r = func(&res.x);
     let resid: f64 = r.iter().map(|v| v * v).sum::<f64>().sqrt();
@@ -437,10 +436,7 @@ fn mr_minimize_sphere_finds_origin() {
     let f = |x: &[f64]| x.iter().map(|&xi| xi * xi).sum::<f64>();
     let res = minimize(f, &[3.0, -4.0, 1.5, -0.5], MinimizeOptions::default()).unwrap();
     for (i, &xi) in res.x.iter().enumerate() {
-        assert!(
-            xi.abs() < 1e-3,
-            "MR16 sphere x[{i}] = {xi}, expected ≈ 0"
-        );
+        assert!(xi.abs() < 1e-3, "MR16 sphere x[{i}] = {xi}, expected ≈ 0");
     }
     assert!(
         res.fun.unwrap() < 1e-6,
@@ -521,10 +517,7 @@ fn mr_de_bimodal_finds_a_minimum() {
     opts.seed = Some(42);
     let res = differential_evolution(f, &bounds, opts).unwrap();
     let fmin = res.fun.unwrap();
-    assert!(
-        fmin < 1e-3,
-        "MR20 DE bimodal fmin = {fmin}, expected ≈ 0"
-    );
+    assert!(fmin < 1e-3, "MR20 DE bimodal fmin = {fmin}, expected ≈ 0");
     let x = res.x[0];
     assert!(
         (x - 2.0).abs() < 0.05 || (x + 2.0).abs() < 0.05,
@@ -674,10 +667,7 @@ fn mr_brent_minimize_matches_golden() {
     let f = |x: f64| (x + 1.5).powi(2) + 2.0;
     let (xg, _) = golden(f, -5.0, 3.0, 1e-9, 200);
     let (xb, _) = brent_minimize(f, -5.0, 3.0, 1e-9, 200);
-    assert!(
-        (xg - xb).abs() < 1e-4,
-        "MR28 golden = {xg} vs brent = {xb}"
-    );
+    assert!((xg - xb).abs() < 1e-4, "MR28 golden = {xg} vs brent = {xb}");
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -712,10 +702,7 @@ fn mr_nnls_coefficients_nonneg() {
     let b = vec![1.0_f64, 2.0, 4.0, 0.5];
     let (x, _residual) = nnls(&a, &b).unwrap();
     for (i, &xi) in x.iter().enumerate() {
-        assert!(
-            xi >= -1e-9,
-            "MR30 nnls x[{i}] = {xi} < 0"
-        );
+        assert!(xi >= -1e-9, "MR30 nnls x[{i}] = {xi} < 0");
     }
 }
 
@@ -884,10 +871,7 @@ fn mr_minimize_trisection_parabola() {
 #[test]
 fn mr_numerical_jacobian_linear_map() {
     // A = [[2, -1, 0], [1, 3, -2]] is 2×3.
-    let a = vec![
-        vec![2.0_f64, -1.0, 0.0],
-        vec![1.0, 3.0, -2.0],
-    ];
+    let a = vec![vec![2.0_f64, -1.0, 0.0], vec![1.0, 3.0, -2.0]];
     let f = {
         let a = a.clone();
         move |x: &[f64]| {
@@ -962,10 +946,7 @@ fn mr_pso_finds_parabola_minimum() {
     let lb = vec![-5.0_f64, -5.0];
     let ub = vec![5.0_f64, 5.0];
     let (x, fmin) = pso(f, &lb, &ub, 30, 100, 7);
-    assert!(
-        fmin < 0.5,
-        "MR42 pso fmin = {fmin}, expected ≈ 0"
-    );
+    assert!(fmin < 0.5, "MR42 pso fmin = {fmin}, expected ≈ 0");
     assert!(
         x.iter().all(|&v| v.abs() < 1.0),
         "MR42 pso x = {x:?} far from origin"
@@ -1020,10 +1001,7 @@ fn mr_check_grad_analytical_match() {
     let f = |x: &[f64]| x[0].powi(2) + x[1].powi(2);
     let g = |x: &[f64]| vec![2.0 * x[0], 2.0 * x[1]];
     let err = check_grad(f, g, &[1.5_f64, -2.5]).unwrap();
-    assert!(
-        err < 1e-3,
-        "MR45 check_grad error = {err}, expected small"
-    );
+    assert!(err < 1e-3, "MR45 check_grad error = {err}, expected small");
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1083,10 +1061,7 @@ fn mr_shgo_parabola_minimum() {
     let bounds = vec![(-5.0_f64, 5.0_f64), (-5.0, 5.0)];
     let res = shgo(f, &bounds).unwrap();
     let fmin = res.fun.unwrap();
-    assert!(
-        fmin < 1.0,
-        "MR48 shgo fmin = {fmin} on parabola"
-    );
+    assert!(fmin < 1.0, "MR48 shgo fmin = {fmin} on parabola");
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1099,10 +1074,7 @@ fn mr_rosen_gradient_norm_at_min() {
         let x = vec![1.0_f64; n];
         let g = rosen_der(&x);
         let norm: f64 = g.iter().map(|v| v * v).sum::<f64>().sqrt();
-        assert!(
-            norm < 1e-12,
-            "MR49 ‖∇rosen(1, …, 1)‖ (n={n}) = {norm}"
-        );
+        assert!(norm < 1e-12, "MR49 ‖∇rosen(1, …, 1)‖ (n={n}) = {norm}");
     }
 }
 
@@ -1242,9 +1214,3 @@ fn mr_minimize_origin_to_shifted() {
         res.x[1]
     );
 }
-
-
-
-
-
-

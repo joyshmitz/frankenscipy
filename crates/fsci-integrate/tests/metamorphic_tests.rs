@@ -17,8 +17,8 @@ use fsci_integrate::{
     cumulative_trapezoid_uniform, dblquad, dblquad_rect, fixed_quad, gauss_kronrod_quad,
     gauss_legendre, line_integral, monte_carlo_integrate, newton_cotes, nquad, odeint, qmc_quad,
     quad, quad_full_inf, quad_inf, quad_neg_inf, quad_vec, romb, romb_func, romberg, simpson,
-    simpson_irregular, simpson_uniform, solve_ivp, trapezoid, trapezoid_irregular,
-    trapezoid_uniform, tplquad, trapezoid_richardson,
+    simpson_irregular, simpson_uniform, solve_ivp, tplquad, trapezoid, trapezoid_irregular,
+    trapezoid_richardson, trapezoid_uniform,
 };
 
 /// Tolerance for metamorphic relation comparisons.
@@ -459,13 +459,7 @@ fn mr_quad_sin_over_pi_is_two() {
 #[test]
 fn mr_quad_cos_squared_over_pi() {
     let opts = QuadOptions::default();
-    let result = quad(
-        |x: f64| x.cos().powi(2),
-        0.0,
-        std::f64::consts::PI,
-        opts,
-    )
-    .unwrap();
+    let result = quad(|x: f64| x.cos().powi(2), 0.0, std::f64::consts::PI, opts).unwrap();
     let expected = std::f64::consts::PI / 2.0;
     assert!(
         (result.integral - expected).abs() < 1e-9,
@@ -658,11 +652,7 @@ fn mr_cumulative_trapezoid_initial_first_entry() {
             "MR26 cumulative_trapezoid_initial[0] = {} vs initial = {c}",
             cum[0]
         );
-        assert_eq!(
-            cum.len(),
-            x.len(),
-            "MR26 length should equal input"
-        );
+        assert_eq!(cum.len(), x.len(), "MR26 length should equal input");
     }
 }
 
@@ -1236,7 +1226,3 @@ fn mr_cumulative_simpson_final_close_to_simpson_uniform() {
         cum[cum.len() - 1]
     );
 }
-
-
-
-

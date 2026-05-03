@@ -11,8 +11,8 @@ use fsci_interpolate::{
     PchipInterpolator, RbfInterpolator, RbfKernel, RegularGridInterpolator, RegularGridMethod,
     SplineBc, barycentric_eval, barycentric_weights, chebyshev_nodes, chebyshev_nodes2, griddata,
     hermite_interp, interp1d_linear, interp2d, interpn, lagrange, make_interp_spline,
-    make_lsq_spline, neville, pade, polyadd, polyder, polyfit, polyint, polyint_definite,
-    polymul, polyroots, polysub, polyval, polyval_with_error, ratval, splantider, splder, splev,
+    make_lsq_spline, neville, pade, polyadd, polyder, polyfit, polyint, polyint_definite, polymul,
+    polyroots, polysub, polyval, polyval_with_error, ratval, splantider, splder, splev,
     splev_with_derivative, splint, splrep, sproot,
 };
 
@@ -33,7 +33,11 @@ fn mr_interp1d_passes_through_data() {
     let x = vec![0.0, 1.0, 2.0, 3.5, 5.0, 7.5, 10.0];
     let y = vec![0.0, 1.0, 4.0, 12.25, 25.0, 56.25, 100.0]; // y = x²
 
-    for &kind in &[InterpKind::Linear, InterpKind::Nearest, InterpKind::CubicSpline] {
+    for &kind in &[
+        InterpKind::Linear,
+        InterpKind::Nearest,
+        InterpKind::CubicSpline,
+    ] {
         let opts = Interp1dOptions {
             kind,
             ..Default::default()
@@ -507,8 +511,8 @@ fn mr_polyder_of_constant_is_zero() {
 #[test]
 fn mr_polyint_polyder_inverse() {
     let polys = [
-        vec![3.0_f64, 2.0, 1.0],          // 3x² + 2x + 1
-        vec![1.0_f64, -2.0, 0.5, 4.0],    // cubic
+        vec![3.0_f64, 2.0, 1.0],            // 3x² + 2x + 1
+        vec![1.0_f64, -2.0, 0.5, 4.0],      // cubic
         vec![5.0_f64, 0.0, -3.0, 1.0, 2.0], // quartic
     ];
     for p in &polys {
@@ -599,7 +603,7 @@ fn mr_ratval_matches_polyval_ratio() {
     // ratval uses ascending coefficient order (c[0] + c[1]·x + ...);
     // polyval uses descending order. Reverse to bridge conventions.
     let p_asc = vec![1.0_f64, 3.0, -1.0, 2.0]; // 1 + 3x - x² + 2x³
-    let q_asc = vec![2.0_f64, 0.5, 1.0];       // 2 + 0.5x + x²
+    let q_asc = vec![2.0_f64, 0.5, 1.0]; // 2 + 0.5x + x²
     let p_desc: Vec<f64> = p_asc.iter().rev().copied().collect();
     let q_desc: Vec<f64> = q_asc.iter().rev().copied().collect();
     for &x in &[-2.0_f64, -0.5, 0.0, 1.0, 2.5, 4.0] {
@@ -766,10 +770,7 @@ fn mr_splint_zero_width_zero() {
     let tck = splrep(&x, &y, 3, 0.0).unwrap();
     for &a in &[0.0_f64, 1.5, 3.0, 4.5] {
         let v = splint(a, a, &tck).unwrap();
-        assert!(
-            v.abs() < 1e-12,
-            "MR34 splint({a}, {a}) = {v}, expected 0"
-        );
+        assert!(v.abs() < 1e-12, "MR34 splint({a}, {a}) = {v}, expected 0");
     }
 }
 
@@ -843,7 +844,10 @@ fn mr_cubic_spline_standalone_passes_through_data() {
 #[test]
 fn mr_splrep_splev_smooth_recovery() {
     let x: Vec<f64> = (0..21).map(|i| i as f64 * 0.25).collect();
-    let y: Vec<f64> = x.iter().map(|&xi| (xi * 0.3).sin() + 0.4 * (xi * 0.7).cos()).collect();
+    let y: Vec<f64> = x
+        .iter()
+        .map(|&xi| (xi * 0.3).sin() + 0.4 * (xi * 0.7).cos())
+        .collect();
     let tck = splrep(&x, &y, 5, 0.0).unwrap();
     let yhat = splev(&x, &tck).unwrap();
     let mut max_err = 0.0_f64;
@@ -853,10 +857,7 @@ fn mr_splrep_splev_smooth_recovery() {
             max_err = e;
         }
     }
-    assert!(
-        max_err < 1e-4,
-        "MR38 splrep/splev max error = {max_err}"
-    );
+    assert!(max_err < 1e-4, "MR38 splrep/splev max error = {max_err}");
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -869,7 +870,13 @@ fn mr_splder_reduces_degree() {
     let y: Vec<f64> = x.iter().map(|&xi| xi.sin()).collect();
     let tck = splrep(&x, &y, 3, 0.0).unwrap();
     let dtck = splder(&tck).unwrap();
-    assert_eq!(dtck.2, tck.2 - 1, "MR39 splder degree {} vs {}", dtck.2, tck.2 - 1);
+    assert_eq!(
+        dtck.2,
+        tck.2 - 1,
+        "MR39 splder degree {} vs {}",
+        dtck.2,
+        tck.2 - 1
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -882,7 +889,13 @@ fn mr_splantider_increases_degree() {
     let y: Vec<f64> = x.iter().map(|&xi| xi.sin()).collect();
     let tck = splrep(&x, &y, 3, 0.0).unwrap();
     let itck = splantider(&tck).unwrap();
-    assert_eq!(itck.2, tck.2 + 1, "MR40 splantider degree {} vs {}", itck.2, tck.2 + 1);
+    assert_eq!(
+        itck.2,
+        tck.2 + 1,
+        "MR40 splantider degree {} vs {}",
+        itck.2,
+        tck.2 + 1
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -951,7 +964,8 @@ fn mr_akima_passes_through_data_extra() {
 fn mr_krogh_reproduces_polynomial() {
     // p(x) = 2x³ - x² + 3x + 5 sampled at 4 points (deg 3 = n-1 with n = 4).
     let xi: Vec<f64> = vec![-1.0, 0.0, 1.0, 2.0];
-    let yi: Vec<f64> = xi.iter()
+    let yi: Vec<f64> = xi
+        .iter()
         .map(|&xi| 2.0 * xi.powi(3) - xi.powi(2) + 3.0 * xi + 5.0)
         .collect();
     let interp = KroghInterpolator::new(&xi, &yi).unwrap();
@@ -996,8 +1010,7 @@ fn mr_rbf_passes_through_data() {
         vec![0.5, 0.5],
     ];
     let values: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-    let interp =
-        RbfInterpolator::new(&points, &values, RbfKernel::Gaussian, 1.0).unwrap();
+    let interp = RbfInterpolator::new(&points, &values, RbfKernel::Gaussian, 1.0).unwrap();
     for (i, p) in points.iter().enumerate() {
         let v = interp.eval(p);
         assert!(
@@ -1098,7 +1111,12 @@ fn mr_interp1d_linear_in_range_finite() {
 
 #[test]
 fn mr_nearest_nd_at_training_point() {
-    let pts = vec![vec![0.0, 0.0], vec![1.0, 0.0], vec![0.0, 1.0], vec![1.0, 1.0]];
+    let pts = vec![
+        vec![0.0, 0.0],
+        vec![1.0, 0.0],
+        vec![0.0, 1.0],
+        vec![1.0, 1.0],
+    ];
     let vals = vec![1.0_f64, 2.0, 3.0, 4.0];
     let interp = NearestNDInterpolator::new(&pts, &vals).unwrap();
     for (i, p) in pts.iter().enumerate() {
@@ -1219,9 +1237,3 @@ fn mr_pchip_monotone_on_increasing_data() {
         );
     }
 }
-
-
-
-
-
-

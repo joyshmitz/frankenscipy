@@ -92,10 +92,7 @@ fn mr_studentt_cdf_ppf_roundtrip() {
 
 #[test]
 fn mr_gamma_cdf_ppf_roundtrip() {
-    let d = GammaDist {
-        a: 2.5,
-        scale: 1.0,
-    };
+    let d = GammaDist { a: 2.5, scale: 1.0 };
     let xs: Vec<f64> = (1..=40).map(|i| 0.2 * i as f64).collect();
     cdf_ppf_roundtrip(&d, &xs, "Gamma a=2.5");
 }
@@ -456,10 +453,7 @@ fn mr_skew_of_symmetric_data_is_zero() {
     // Symmetric data around 0: [-3, -2, -1, 0, 1, 2, 3] mirrored.
     let data: Vec<f64> = vec![-3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0];
     let s = skew(&data);
-    assert!(
-        s.abs() < 1e-12,
-        "MR18 symmetric skew = {s}, expected 0"
-    );
+    assert!(s.abs() < 1e-12, "MR18 symmetric skew = {s}, expected 0");
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -476,7 +470,10 @@ fn mr_skew_sign_for_skewed_data() {
     // Right-skewed: long upper tail.
     let right: Vec<f64> = left.iter().map(|v| -v).collect();
     let s_right = skew(&right);
-    assert!(s_right > 0.0, "MR19 right-skew should be positive: {s_right}");
+    assert!(
+        s_right > 0.0,
+        "MR19 right-skew should be positive: {s_right}"
+    );
     // Mirror symmetry: skew(-x) = -skew(x).
     assert!(
         (s_left + s_right).abs() < 1e-9,
@@ -568,14 +565,8 @@ fn mr_power_mean_ordering() {
         let g = gmean(x);
         let a = pmean(x, 1.0);
         let q = pmean(x, 2.0);
-        assert!(
-            h <= g + 1e-12,
-            "MR24 hmean = {h} > gmean = {g} on {x:?}"
-        );
-        assert!(
-            g <= a + 1e-12,
-            "MR24 gmean = {g} > amean = {a} on {x:?}"
-        );
+        assert!(h <= g + 1e-12, "MR24 hmean = {h} > gmean = {g} on {x:?}");
+        assert!(g <= a + 1e-12, "MR24 gmean = {g} > amean = {a} on {x:?}");
         assert!(
             a <= q + 1e-12,
             "MR24 amean = {a} > pmean(p=2) = {q} on {x:?}"
@@ -615,10 +606,7 @@ fn mr_wasserstein_self_distance_zero() {
         vec![-3.0, -1.0, 0.5, 2.0, 4.0, 7.0],
     ] {
         let d = wasserstein_distance(x, x);
-        assert!(
-            d.abs() < 1e-12,
-            "MR26 wasserstein(u, u) = {d}, expected 0"
-        );
+        assert!(d.abs() < 1e-12, "MR26 wasserstein(u, u) = {d}, expected 0");
     }
 }
 
@@ -710,7 +698,9 @@ fn mr_diff_length_and_arithmetic_progression() {
 
 #[test]
 fn mr_histogram_counts_sum_to_n() {
-    let data = vec![1.0_f64, 2.5, 3.0, 4.5, 5.0, 6.0, 7.5, 8.0, 9.5, 10.0, -1.0, -3.0];
+    let data = vec![
+        1.0_f64, 2.5, 3.0, 4.5, 5.0, 6.0, 7.5, 8.0, 9.5, 10.0, -1.0, -3.0,
+    ];
     for &bins in &[3usize, 5, 8, 12] {
         let (counts, _edges) = histogram(&data, bins);
         let total: usize = counts.iter().sum();
@@ -784,10 +774,7 @@ fn mr_ridge_zero_alpha_recovers_known_signal() {
         vec![5.0, 1.0],
         vec![6.0, 3.0],
     ];
-    let y: Vec<f64> = x
-        .iter()
-        .map(|r| 0.5 + 1.5 * r[0] + 0.5 * r[1])
-        .collect();
+    let y: Vec<f64> = x.iter().map(|r| 0.5 + 1.5 * r[0] + 0.5 * r[1]).collect();
     let coeffs = ridge_regression(&x, &y, 0.0);
     // coeffs is [intercept, β1, β2]. Predictions follow that layout.
     let residual: f64 = x
@@ -1039,9 +1026,7 @@ fn mr_mannkendall_monotone_trend() {
 
 #[test]
 fn mr_runs_test_at_least_one_run() {
-    let x: Vec<f64> = (0..30)
-        .map(|i| (i as f64 * 0.4).sin())
-        .collect();
+    let x: Vec<f64> = (0..30).map(|i| (i as f64 * 0.4).sin()).collect();
     let (n_runs, _stat, _p) = runs_test(&x);
     assert!(
         n_runs >= 1,
@@ -1062,10 +1047,7 @@ fn mr_zscore_normalises_to_zero_mean_unit_std() {
     let var: f64 = z.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n;
     let std = var.sqrt();
     assert!(mean.abs() < 1e-9, "MR48 zscore mean = {mean}");
-    assert!(
-        (std - 1.0).abs() < 1e-9,
-        "MR48 zscore std = {std}"
-    );
+    assert!((std - 1.0).abs() < 1e-9, "MR48 zscore std = {std}");
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1154,8 +1136,3 @@ fn mr_variation_equals_std_over_mean() {
         "MR53 variation = {v} vs std/mean = {expected}"
     );
 }
-
-
-
-
-

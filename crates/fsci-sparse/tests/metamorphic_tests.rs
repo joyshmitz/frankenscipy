@@ -9,14 +9,13 @@ use fsci_runtime::RuntimeMode;
 use fsci_sparse::{
     CooMatrix, CsrMatrix, EigsOptions, ExpmOptions, IluOptions, IterativeSolveOptions,
     LgmresOptions, LuOptions, Shape2D, SolveOptions, add_csr, bicg, bicgstab, block_diag,
-    breadth_first_order, cg, cgs, connected_components, coo_to_csr_with_mode,
-    csr_to_csc_with_mode, diags, dijkstra, eigsh, expm as sparse_expm, eye, floyd_warshall, gmres,
-    kron, laplacian, lgmres, lsmr, lsqr, matrix_power as sparse_matrix_power,
-    minimum_spanning_tree, minres, pcg, qmr, reverse_cuthill_mckee, scale_csr, sparse_diagonal,
-    sparse_eliminate_zeros, sparse_has_explicit_zeros, sparse_nnz, sparse_norm, sparse_row_min,
-    sparse_sum, sparse_trace, sparse_transpose, spilu, spmv, spmv_csc, spmv_csr, splu, splu_solve,
-    spsolve, spsolve_triangular, strongly_connected_components, structural_rank, sub_csr, svds,
-    tril, triu,
+    breadth_first_order, cg, cgs, connected_components, coo_to_csr_with_mode, csr_to_csc_with_mode,
+    diags, dijkstra, eigsh, expm as sparse_expm, eye, floyd_warshall, gmres, kron, laplacian,
+    lgmres, lsmr, lsqr, matrix_power as sparse_matrix_power, minimum_spanning_tree, minres, pcg,
+    qmr, reverse_cuthill_mckee, scale_csr, sparse_diagonal, sparse_eliminate_zeros,
+    sparse_has_explicit_zeros, sparse_nnz, sparse_norm, sparse_row_min, sparse_sum, sparse_trace,
+    sparse_transpose, spilu, splu, splu_solve, spmv, spmv_csc, spmv_csr, spsolve,
+    spsolve_triangular, strongly_connected_components, structural_rank, sub_csr, svds, tril, triu,
 };
 
 const ATOL: f64 = 1e-9;
@@ -65,7 +64,9 @@ fn build_spd_csr() -> CsrMatrix {
     }
     let coo =
         CooMatrix::from_triplets(Shape2D { rows: n, cols: n }, data, rows, cols, true).unwrap();
-    coo_to_csr_with_mode(&coo, RuntimeMode::Strict, "test_build_spd").unwrap().0
+    coo_to_csr_with_mode(&coo, RuntimeMode::Strict, "test_build_spd")
+        .unwrap()
+        .0
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -92,7 +93,9 @@ fn mr_csr_csc_roundtrip() {
         }
     }
     let coo = CooMatrix::from_triplets(csc.shape(), data, rows, cols, true).unwrap();
-    let back = coo_to_csr_with_mode(&coo, RuntimeMode::Strict, "mr1_back").unwrap().0;
+    let back = coo_to_csr_with_mode(&coo, RuntimeMode::Strict, "mr1_back")
+        .unwrap()
+        .0;
     let dense_back = csr_to_dense(&back);
     assert_eq!(dense_orig.len(), dense_back.len(), "MR1 row count");
     for (r1, r2) in dense_orig.iter().zip(&dense_back) {
@@ -132,7 +135,11 @@ fn mr_spmv_linearity() {
     let y: Vec<f64> = (0..n).map(|i| (i as f64 + 1.0) * (-0.3)).collect();
     let alpha = 1.7_f64;
     let beta = -0.4_f64;
-    let combined: Vec<f64> = x.iter().zip(&y).map(|(a, b)| alpha * a + beta * b).collect();
+    let combined: Vec<f64> = x
+        .iter()
+        .zip(&y)
+        .map(|(a, b)| alpha * a + beta * b)
+        .collect();
 
     let r_combined = spmv(&a, &combined);
     let r_x = spmv(&a, &x);
@@ -458,7 +465,10 @@ fn mr_sub_self_is_zero() {
     let dense = csr_to_dense(&z);
     for row in &dense {
         for &v in row {
-            assert!(v.abs() < 1e-15, "MR15 sub_csr(A, A) entry = {v}, expected 0");
+            assert!(
+                v.abs() < 1e-15,
+                "MR15 sub_csr(A, A) entry = {v}, expected 0"
+            );
         }
     }
 }
@@ -507,8 +517,7 @@ fn mr_eye_spmv_is_identity() {
 #[test]
 fn mr_spmv_csr_csc_agree() {
     let a = build_spd_csr();
-    let (csc, _) =
-        csr_to_csc_with_mode(&a, RuntimeMode::Strict, "test_csr_csc_agree").unwrap();
+    let (csc, _) = csr_to_csc_with_mode(&a, RuntimeMode::Strict, "test_csr_csc_agree").unwrap();
     let v: Vec<f64> = vec![1.0, -0.5, 2.0, 0.25, -1.5];
     let yr = spmv_csr(&a, &v).unwrap();
     let yc = spmv_csc(&csc, &v).unwrap();
@@ -611,7 +620,7 @@ fn mr_kron_of_identities_is_identity() {
 #[test]
 fn mr_kron_output_shape() {
     let a = build_spd_csr(); // 5×5
-    let b = eye(3).unwrap();  // 3×3
+    let b = eye(3).unwrap(); // 3×3
     let k = kron(&a, &b).unwrap();
     assert_eq!(k.shape().rows, 5 * 3, "MR22 kron rows");
     assert_eq!(k.shape().cols, 5 * 3, "MR22 kron cols");
@@ -711,8 +720,7 @@ fn mr_sparse_nnz_zero_matrix() {
 #[test]
 fn mr_splu_roundtrip() {
     let a = build_spd_csr();
-    let (csc, _) =
-        csr_to_csc_with_mode(&a, RuntimeMode::Strict, "test_splu").unwrap();
+    let (csc, _) = csr_to_csc_with_mode(&a, RuntimeMode::Strict, "test_splu").unwrap();
     let b = vec![1.0_f64, 0.5, -1.0, 0.25, -0.5];
     let lu = splu(&csc, LuOptions::default()).unwrap();
     let x = splu_solve(&lu, &b).unwrap();
@@ -771,10 +779,7 @@ fn mr_sparse_norm_zero_matrix() {
     let m = diags(&[zero], &[0_isize], Some(Shape2D::new(n, n))).unwrap();
     for kind in &["fro", "1", "inf"] {
         let v = sparse_norm(&m, kind);
-        assert!(
-            v.abs() < 1e-12,
-            "MR30 sparse_norm({kind}) of zero = {v}"
-        );
+        assert!(v.abs() < 1e-12, "MR30 sparse_norm({kind}) of zero = {v}");
     }
 }
 
@@ -867,10 +872,7 @@ fn mr_dijkstra_source_distance_zero() {
     );
     for (i, &d) in r.distances.iter().enumerate() {
         if d.is_finite() {
-            assert!(
-                d >= -1e-12,
-                "MR34 dijkstra distances[{i}] = {d} < 0"
-            );
+            assert!(d >= -1e-12, "MR34 dijkstra distances[{i}] = {d} < 0");
         }
     }
 }
@@ -1073,11 +1075,7 @@ fn mr_sparse_expm_of_zero_is_identity() {
 fn mr_sparse_row_min_length() {
     let a = build_spd_csr();
     let mins = sparse_row_min(&a);
-    assert_eq!(
-        mins.len(),
-        a.shape().rows,
-        "MR44 sparse_row_min length"
-    );
+    assert_eq!(mins.len(), a.shape().rows, "MR44 sparse_row_min length");
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1102,10 +1100,7 @@ fn mr_laplacian_rows_sum_to_zero() {
     let l = laplacian(&g, false).unwrap();
     for (i, row) in l.iter().enumerate() {
         let s: f64 = row.iter().sum();
-        assert!(
-            s.abs() < 1e-9,
-            "MR45 laplacian row {i} sum = {s} ≠ 0"
-        );
+        assert!(s.abs() < 1e-9, "MR45 laplacian row {i} sum = {s} ≠ 0");
     }
 }
 
@@ -1182,8 +1177,7 @@ fn mr_sparse_norm_frobenius_matches_definition() {
 #[test]
 fn mr_pcg_residual_small_on_spd() {
     let a = build_spd_csr();
-    let (csc, _) =
-        csr_to_csc_with_mode(&a, RuntimeMode::Strict, "test_pcg_pre").unwrap();
+    let (csc, _) = csr_to_csc_with_mode(&a, RuntimeMode::Strict, "test_pcg_pre").unwrap();
     let pre = spilu(&csc, IluOptions::default()).unwrap();
     let b = vec![1.0_f64, -0.5, 2.0, 0.25, -0.5];
     let mut opts = IterativeSolveOptions::default();
@@ -1283,10 +1277,7 @@ fn mr_strongly_connected_path_graph() {
     // For a connected undirected graph, all nodes share the same SCC.
     let first = labels[0];
     for (i, &l) in labels.iter().enumerate() {
-        assert_eq!(
-            l, first,
-            "MR53 SCC label[{i}] = {l} vs first = {first}"
-        );
+        assert_eq!(l, first, "MR53 SCC label[{i}] = {l} vs first = {first}");
     }
 }
 
@@ -1337,7 +1328,7 @@ fn mr_connected_components_fully_connected() {
 #[test]
 fn mr_block_diag_shape() {
     let a = build_spd_csr(); // 5×5
-    let b = eye(3).unwrap();  // 3×3
+    let b = eye(3).unwrap(); // 3×3
     let bd = block_diag(&[&a, &b]).unwrap();
     assert_eq!(
         bd.shape().rows,
@@ -1371,5 +1362,3 @@ fn mr_block_diag_shape() {
         }
     }
 }
-
-

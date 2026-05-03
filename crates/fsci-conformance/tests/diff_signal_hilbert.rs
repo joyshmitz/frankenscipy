@@ -111,8 +111,7 @@ fn generate_hilbert_cases() -> Vec<HilbertCase> {
             let signal: Vec<f64> = (0..n)
                 .map(|i| {
                     let t = i as f64 / n as f64;
-                    (1.0 + 0.5 * (2.0 * PI * modulator * t).cos())
-                        * (2.0 * PI * carrier * t).sin()
+                    (1.0 + 0.5 * (2.0 * PI * modulator * t).cos()) * (2.0 * PI * carrier * t).sin()
                 })
                 .collect();
             cases.push(HilbertCase {
@@ -378,9 +377,11 @@ fn diff_signal_hilbert() {
             .get(&case.case_id)
             .expect("validated complete oracle map");
 
-        let (Some(scipy_real), Some(scipy_imag), Some(scipy_env)) =
-            (&scipy_result.real, &scipy_result.imag, &scipy_result.envelope)
-        else {
+        let (Some(scipy_real), Some(scipy_imag), Some(scipy_env)) = (
+            &scipy_result.real,
+            &scipy_result.imag,
+            &scipy_result.envelope,
+        ) else {
             continue;
         };
 

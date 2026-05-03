@@ -480,8 +480,13 @@ fn diff_stats_correlation() {
         if !diff.pass {
             eprintln!(
                 "{} mismatch: rust_stat={} scipy_stat={} stat_diff={} rust_pval={} scipy_pval={} pval_diff={}",
-                diff.case_id, diff.rust_stat, diff.scipy_stat, diff.stat_diff,
-                diff.rust_pval, diff.scipy_pval, diff.pval_diff
+                diff.case_id,
+                diff.rust_stat,
+                diff.scipy_stat,
+                diff.stat_diff,
+                diff.rust_pval,
+                diff.scipy_pval,
+                diff.pval_diff
             );
         }
     }

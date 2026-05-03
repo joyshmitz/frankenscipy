@@ -81,10 +81,7 @@ fn mr_distance_self_zero() {
     for &metric in ALL_METRICS {
         for (i, p) in pts.iter().enumerate() {
             let d = metric_distance(p, p, metric);
-            assert!(
-                close(d, 0.0),
-                "MR2 {metric:?} d({i},{i}) = {d}, expected 0"
-            );
+            assert!(close(d, 0.0), "MR2 {metric:?} d({i},{i}) = {d}, expected 0");
         }
     }
 }
@@ -341,7 +338,11 @@ fn mr_convex_hull_encloses_all_inputs() {
 fn mr_convex_hull_triangle() {
     let pts = vec![(0.0_f64, 0.0), (4.0, 0.0), (0.0, 3.0)];
     let hull = ConvexHull::new(&pts).unwrap();
-    assert_eq!(hull.vertices.len(), 3, "triangle should have 3 hull vertices");
+    assert_eq!(
+        hull.vertices.len(),
+        3,
+        "triangle should have 3 hull vertices"
+    );
     let expected_area = 6.0_f64; // 1/2 · base · height = 1/2 · 4 · 3
     assert!(
         (hull.area - expected_area).abs() < 1e-10,
@@ -408,8 +409,11 @@ fn mr_kdtree_query_k_sorted_and_correct() {
     }
 
     // Cross-check: sort all brute-force distances and compare top-k.
-    let mut brute: Vec<(usize, f64)> =
-        pts.iter().enumerate().map(|(i, p)| (i, euclidean(&q, p))).collect();
+    let mut brute: Vec<(usize, f64)> = pts
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (i, euclidean(&q, p)))
+        .collect();
     brute.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
     for i in 0..k {
         assert!(
@@ -444,15 +448,8 @@ fn mr_kdtree_size_matches_input() {
 
 #[test]
 fn mr_cdist_dimensions_and_nonneg() {
-    let xa = vec![
-        vec![0.0_f64, 0.0],
-        vec![1.0, 0.0],
-        vec![0.0, 1.0],
-    ];
-    let xb = vec![
-        vec![5.0_f64, 5.0],
-        vec![5.0, 6.0],
-    ];
+    let xa = vec![vec![0.0_f64, 0.0], vec![1.0, 0.0], vec![0.0, 1.0]];
+    let xb = vec![vec![5.0_f64, 5.0], vec![5.0, 6.0]];
     let m = cdist_metric(&xa, &xb, DistanceMetric::Euclidean).unwrap();
     assert_eq!(m.len(), xa.len(), "MR14 cdist row count");
     for (i, row) in m.iter().enumerate() {
@@ -619,10 +616,7 @@ fn mr_jensenshannon_symmetric_nonneg() {
             let pq = jensenshannon(p, q, None);
             let qp = jensenshannon(q, p, None);
             assert!(pq >= -1e-12, "MR20 JS = {pq} negative");
-            assert!(
-                close(pq, qp),
-                "MR20 JS not symmetric: pq = {pq}, qp = {qp}"
-            );
+            assert!(close(pq, qp), "MR20 JS not symmetric: pq = {pq}, qp = {qp}");
         }
     }
 }
@@ -685,18 +679,14 @@ fn mr_spherical_cartesian_roundtrip() {
     for &(r, theta, phi) in &cases {
         let (x, y, z) = spherical_to_cartesian(r, theta, phi);
         let (r2, theta2, phi2) = cartesian_to_spherical(x, y, z);
-        assert!(
-            (r - r2).abs() < 1e-12,
-            "MR23 r mismatch: {r} vs {r2}"
-        );
+        assert!((r - r2).abs() < 1e-12, "MR23 r mismatch: {r} vs {r2}");
         assert!(
             (theta - theta2).abs() < 1e-12,
             "MR23 theta mismatch: {theta} vs {theta2}"
         );
         // φ may differ by ±2π — compare via cos and sin.
         assert!(
-            (phi.cos() - phi2.cos()).abs() < 1e-9
-                && (phi.sin() - phi2.sin()).abs() < 1e-9,
+            (phi.cos() - phi2.cos()).abs() < 1e-9 && (phi.sin() - phi2.sin()).abs() < 1e-9,
             "MR23 phi mismatch: {phi} vs {phi2}"
         );
     }
@@ -723,13 +713,9 @@ fn mr_cylindrical_cartesian_roundtrip() {
             (rho - rho2).abs() < 1e-12,
             "MR24 rho mismatch: {rho} vs {rho2}"
         );
+        assert!((z - z2).abs() < 1e-12, "MR24 z mismatch: {z} vs {z2}");
         assert!(
-            (z - z2).abs() < 1e-12,
-            "MR24 z mismatch: {z} vs {z2}"
-        );
-        assert!(
-            (theta.cos() - theta2.cos()).abs() < 1e-9
-                && (theta.sin() - theta2.sin()).abs() < 1e-9,
+            (theta.cos() - theta2.cos()).abs() < 1e-9 && (theta.sin() - theta2.sin()).abs() < 1e-9,
             "MR24 theta mismatch: {theta} vs {theta2}"
         );
     }
@@ -753,11 +739,7 @@ fn mr_rotation_preserves_norm() {
             1.0 / (3.0_f64).sqrt(),
         ],
     ];
-    let points: &[[f64; 3]] = &[
-        [1.0, 2.0, 3.0],
-        [-1.0, 0.5, 4.0],
-        [2.5, -3.0, 1.0],
-    ];
+    let points: &[[f64; 3]] = &[[1.0, 2.0, 3.0], [-1.0, 0.5, 4.0], [2.5, -3.0, 1.0]];
     for axis in axes {
         for angle in &[0.0_f64, PI / 6.0, PI / 4.0, PI / 2.0, PI] {
             let r = rotation_matrix(axis, *angle);
@@ -815,10 +797,7 @@ fn mr_dot_self_norm_squared_and_symmetry() {
         for b in &vectors {
             let ab = dot(a, b);
             let ba = dot(b, a);
-            assert!(
-                (ab - ba).abs() < 1e-12,
-                "MR27 dot symmetry: {ab} vs {ba}"
-            );
+            assert!((ab - ba).abs() < 1e-12, "MR27 dot symmetry: {ab} vs {ba}");
         }
     }
 }
@@ -870,16 +849,8 @@ fn mr_normalize_unit_length() {
 
 #[test]
 fn mr_hausdorff_distance_symmetric() {
-    let a: Vec<Vec<f64>> = vec![
-        vec![0.0, 0.0],
-        vec![1.0, 0.0],
-        vec![0.0, 1.0],
-    ];
-    let b: Vec<Vec<f64>> = vec![
-        vec![3.0, 3.0],
-        vec![3.5, 4.0],
-        vec![4.0, 3.5],
-    ];
+    let a: Vec<Vec<f64>> = vec![vec![0.0, 0.0], vec![1.0, 0.0], vec![0.0, 1.0]];
+    let b: Vec<Vec<f64>> = vec![vec![3.0, 3.0], vec![3.5, 4.0], vec![4.0, 3.5]];
     let hab = hausdorff_distance(&a, &b).unwrap();
     let hba = hausdorff_distance(&b, &a).unwrap();
     assert!(
@@ -925,10 +896,7 @@ fn mr_centroid_of_constant_points() {
     let c = centroid(&pts);
     assert_eq!(c.len(), p.len(), "MR32 centroid dim");
     for (i, (&a, &b)) in c.iter().zip(&p).enumerate() {
-        assert!(
-            (a - b).abs() < 1e-12,
-            "MR32 centroid[{i}] = {a} vs {b}"
-        );
+        assert!((a - b).abs() < 1e-12, "MR32 centroid[{i}] = {a} vs {b}");
     }
 }
 
@@ -977,10 +945,7 @@ fn mr_diameter_nonneg() {
                 }
             }
         }
-        assert!(
-            mn <= d + 1e-9,
-            "MR34 min pairwise = {mn} > diameter = {d}"
-        );
+        assert!(mn <= d + 1e-9, "MR34 min pairwise = {mn} > diameter = {d}");
     }
 }
 
@@ -1000,10 +965,7 @@ fn mr_matching_rogers_self_zero() {
         let m = matching(b, b);
         let r = rogerstanimoto(b, b);
         assert!(m.abs() < 1e-12, "MR35 matching(x, x) = {m} on {b:?}");
-        assert!(
-            r.abs() < 1e-12,
-            "MR35 rogerstanimoto(x, x) = {r} on {b:?}"
-        );
+        assert!(r.abs() < 1e-12, "MR35 rogerstanimoto(x, x) = {r} on {b:?}");
     }
 }
 
@@ -1015,10 +977,16 @@ fn mr_matching_rogers_self_zero() {
 #[test]
 fn mr_russellrao_in_unit_interval() {
     let pairs: &[(Vec<bool>, Vec<bool>)] = &[
-        (vec![true, false, true, false], vec![true, true, false, false]),
+        (
+            vec![true, false, true, false],
+            vec![true, true, false, false],
+        ),
         (vec![false; 8], vec![false; 8]),
         (vec![true; 8], vec![true; 8]),
-        (vec![true, false, true, true, false, true, false], vec![false, true, false, true, true, false, true]),
+        (
+            vec![true, false, true, true, false, true, false],
+            vec![false, true, false, true, true, false, true],
+        ),
     ];
     for (u, v) in pairs {
         let r = russellrao(u, v);
@@ -1040,11 +1008,7 @@ fn mr_medoid_index_in_range() {
     let m = medoid(&pts);
     assert!(m.is_some(), "MR37 medoid returned None on non-empty input");
     let idx = m.unwrap();
-    assert!(
-        idx < pts.len(),
-        "MR37 medoid index = {idx} ≥ {}",
-        pts.len()
-    );
+    assert!(idx < pts.len(), "MR37 medoid index = {idx} ≥ {}", pts.len());
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1056,10 +1020,7 @@ fn mr_spread_dominated_by_diameter() {
     let pts = sample_points();
     let s = spread(&pts);
     let d = diameter(&pts);
-    assert!(
-        s <= d + 1e-9,
-        "MR38 spread = {s} > diameter = {d}"
-    );
+    assert!(s <= d + 1e-9, "MR38 spread = {s} > diameter = {d}");
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1076,10 +1037,7 @@ fn mr_nearest_neighbors_length_and_validity() {
     assert_eq!(dists.len(), n, "MR39 nearest_neighbors dist length");
     for (i, &maybe_j) in nn.iter().enumerate() {
         if let Some(j) = maybe_j {
-            assert!(
-                j < n,
-                "MR39 nearest_neighbors[{i}] = {j} ≥ {n}"
-            );
+            assert!(j < n, "MR39 nearest_neighbors[{i}] = {j} ≥ {n}");
             assert_ne!(j, i, "MR39 nearest_neighbors[{i}] = self");
         }
     }
@@ -1104,7 +1062,9 @@ fn mr_hausdorff_nonneg() {
 #[test]
 fn mr_distance_matrix_shape() {
     let x: Vec<Vec<f64>> = (0..5).map(|i| vec![i as f64, (i * 2) as f64]).collect();
-    let y: Vec<Vec<f64>> = (0..3).map(|j| vec![j as f64 + 0.5, (j * 3) as f64 - 1.0]).collect();
+    let y: Vec<Vec<f64>> = (0..3)
+        .map(|j| vec![j as f64 + 0.5, (j * 3) as f64 - 1.0])
+        .collect();
     let d = distance_matrix(&x, &y).unwrap();
     assert_eq!(d.len(), x.len(), "MR41 distance_matrix rows");
     for row in &d {
@@ -1171,8 +1131,14 @@ fn mr_mahalanobis_identity_inv_cov_equals_euclidean() {
 #[test]
 fn mr_kulsinski_finite() {
     let pairs: &[(Vec<bool>, Vec<bool>)] = &[
-        (vec![true, false, true, false], vec![true, true, false, false]),
-        (vec![true, false, false, true], vec![false, true, true, false]),
+        (
+            vec![true, false, true, false],
+            vec![true, true, false, false],
+        ),
+        (
+            vec![true, false, false, true],
+            vec![false, true, true, false],
+        ),
     ];
     for (u, v) in pairs {
         let k = kulsinski(u, v);
@@ -1195,10 +1161,7 @@ fn mr_sokalmichener_self_zero() {
     ];
     for b in bs {
         let s = sokalmichener(b, b);
-        assert!(
-            s.abs() < 1e-12,
-            "MR45 sokalmichener(x, x) = {s} on {b:?}"
-        );
+        assert!(s.abs() < 1e-12, "MR45 sokalmichener(x, x) = {s} on {b:?}");
     }
 }
 
@@ -1215,10 +1178,7 @@ fn mr_sokalsneath_self_zero() {
     ];
     for b in bs {
         let s = sokalsneath(b, b);
-        assert!(
-            s.abs() < 1e-12,
-            "MR46 sokalsneath(x, x) = {s} on {b:?}"
-        );
+        assert!(s.abs() < 1e-12, "MR46 sokalsneath(x, x) = {s} on {b:?}");
     }
 }
 
@@ -1231,11 +1191,7 @@ fn mr_sokalsneath_self_zero() {
 fn mr_convex_hull_area_positive() {
     let points = vec![(0.0, 0.0), (4.0, 0.0), (0.0, 3.0), (1.0, 1.0)];
     let hull = ConvexHull::new(&points).unwrap();
-    assert!(
-        hull.area > 0.0,
-        "MR47 ConvexHull area = {} ≤ 0",
-        hull.area
-    );
+    assert!(hull.area > 0.0, "MR47 ConvexHull area = {} ≤ 0", hull.area);
     // Triangle area is 6 (base 4, height 3, area = 6).
     assert!(
         (hull.area - 6.0).abs() < 1e-9,
@@ -1250,13 +1206,7 @@ fn mr_convex_hull_area_positive() {
 
 #[test]
 fn mr_convex_hull_unique_vertices() {
-    let points = vec![
-        (0.0, 0.0),
-        (4.0, 0.0),
-        (4.0, 3.0),
-        (0.0, 3.0),
-        (2.0, 1.5),
-    ];
+    let points = vec![(0.0, 0.0), (4.0, 0.0), (4.0, 3.0), (0.0, 3.0), (2.0, 1.5)];
     let hull = ConvexHull::new(&points).unwrap();
     let mut seen = vec![false; points.len()];
     for &v in &hull.vertices {
@@ -1316,13 +1266,7 @@ fn mr_delaunay_simplices_in_range() {
 
 #[test]
 fn mr_voronoi_regions_exist() {
-    let points = vec![
-        (0.0, 0.0),
-        (4.0, 0.0),
-        (4.0, 3.0),
-        (0.0, 3.0),
-        (2.0, 1.5),
-    ];
+    let points = vec![(0.0, 0.0), (4.0, 0.0), (4.0, 3.0), (0.0, 3.0), (2.0, 1.5)];
     let v = Voronoi::new(&points).unwrap();
     assert_eq!(
         v.point_region.len(),
@@ -1487,9 +1431,3 @@ fn mr_rotation_preserves_dot_product() {
         "MR58 rotation changed dot product: {original} vs {rotated}"
     );
 }
-
-
-
-
-
-

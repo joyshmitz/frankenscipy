@@ -32,7 +32,9 @@ fn close_complex(a: Complex64, b: Complex64) -> bool {
 fn prng(seed: u64) -> impl FnMut() -> f64 {
     let mut state = seed.max(1);
     move || {
-        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         let bits = (state >> 32) as u32;
         // Map to [-1, 1)
         (bits as f64 / (1u64 << 32) as f64) * 2.0 - 1.0
@@ -320,7 +322,11 @@ fn mr_fft2_parseval() {
         let xf = fft2(&x, (rows, cols), &opts).unwrap();
         let lhs: f64 = x.iter().map(|(re, im)| re * re + im * im).sum();
         let rhs: f64 = xf.iter().map(|(re, im)| re * re + im * im).sum::<f64>() / n as f64;
-        assert_close(lhs, rhs, &format!("MR10 fft2 Parseval rows={rows} cols={cols}"));
+        assert_close(
+            lhs,
+            rhs,
+            &format!("MR10 fft2 Parseval rows={rows} cols={cols}"),
+        );
     }
 }
 
@@ -478,10 +484,7 @@ fn mr_fftfreq_odd_sum_is_zero() {
     for n in [3usize, 5, 7, 9, 17, 33, 65] {
         let f = fftfreq(n, 1.0).expect("fftfreq");
         let s: f64 = f.iter().sum();
-        assert!(
-            s.abs() < 1e-12,
-            "MR17 Σfftfreq(n={n}) = {s}, expected 0"
-        );
+        assert!(s.abs() < 1e-12, "MR17 Σfftfreq(n={n}) = {s}, expected 0");
         assert_eq!(f.len(), n, "MR17 fftfreq length n={n}");
     }
 }
@@ -603,10 +606,7 @@ fn mr_fft_zero_input_zero_spectrum() {
 fn mr_next_fast_len_dominates_input() {
     for n in [0usize, 1, 2, 3, 5, 7, 11, 13, 17, 23, 100, 1000] {
         let m = next_fast_len(n);
-        assert!(
-            m >= n,
-            "MR22 next_fast_len({n}) = {m} < {n}"
-        );
+        assert!(m >= n, "MR22 next_fast_len({n}) = {m} < {n}");
     }
 }
 
@@ -990,10 +990,7 @@ fn mr_dctn_idctn_inverse_default() {
     let y = dctn(&x, &shape, &opts).unwrap();
     let z = idctn(&y, &shape, &opts).unwrap();
     for (i, (a, b)) in x.iter().zip(&z).enumerate() {
-        assert!(
-            close(*a, *b),
-            "MR37 dctn∘idctn at {i}: {a} vs {b}"
-        );
+        assert!(close(*a, *b), "MR37 dctn∘idctn at {i}: {a} vs {b}");
     }
 }
 
@@ -1011,10 +1008,7 @@ fn mr_dstn_idstn_inverse_default() {
     let y = dstn(&x, &shape, &opts).unwrap();
     let z = idstn(&y, &shape, &opts).unwrap();
     for (i, (a, b)) in x.iter().zip(&z).enumerate() {
-        assert!(
-            close(*a, *b),
-            "MR38 dstn∘idstn at {i}: {a} vs {b}"
-        );
+        assert!(close(*a, *b), "MR38 dstn∘idstn at {i}: {a} vs {b}");
     }
 }
 
@@ -1053,10 +1047,7 @@ fn mr_rfftn_irfftn_inverse() {
     let xf = rfftn(&x, &shape, &opts).unwrap();
     let xb = irfftn(&xf, &shape, &opts).unwrap();
     for (i, (a, b)) in x.iter().zip(&xb).enumerate() {
-        assert!(
-            (a - b).abs() < 1e-9,
-            "MR40 irfftn∘rfftn at {i}: {a} vs {b}"
-        );
+        assert!((a - b).abs() < 1e-9, "MR40 irfftn∘rfftn at {i}: {a} vs {b}");
     }
 }
 
@@ -1151,10 +1142,7 @@ fn mr_rfft_dc_bin_real() {
         let y = rfft(&x, &opts).unwrap();
         assert_eq!(y.len(), n / 2 + 1, "MR44 rfft length");
         let (_re, im) = y[0];
-        assert!(
-            im.abs() < 1e-12,
-            "MR44 rfft DC imag = {im} for real input"
-        );
+        assert!(im.abs() < 1e-12, "MR44 rfft DC imag = {im} for real input");
     }
 }
 
@@ -1311,9 +1299,3 @@ fn mr_dctn_shape_mismatch_errors() {
         "MR51 dctn(input_len=10, shape=[4,4]) should error"
     );
 }
-
-
-
-
-
-
