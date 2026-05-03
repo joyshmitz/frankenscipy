@@ -5720,6 +5720,7 @@ impl ContinuousDistribution for Chi {
 /// Rice distribution.
 ///
 /// Matches `scipy.stats.rice`.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Rice {
     pub b: f64, // non-centrality parameter
 }
@@ -5800,6 +5801,52 @@ impl ContinuousDistribution for Rice {
         }
         let ex2 = sum * h / 3.0;
         ex2 - m * m
+    }
+
+    fn fit(data: &[f64]) -> Self {
+        Self::try_fit(data).unwrap_or_else(|e| {
+            panic!("Rice::fit failed: {e}");
+        })
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        if data.len() < 2 {
+            return Err(FitError::InsufficientData {
+                required: 2,
+                actual: data.len(),
+            });
+        }
+        // Standardized Rice (σ=1) has E[X²] = 2 + b².
+        // Closed-form: b_hat = sqrt(max(0, sample_E[X²] - 2)).
+        let mut sum2 = 0.0_f64;
+        let mut count = 0usize;
+        for &x in data {
+            if !x.is_finite() {
+                return Err(FitError::UnsupportedData(format!(
+                    "Rice data contains non-finite value: {x}"
+                )));
+            }
+            if x < 0.0 {
+                return Err(FitError::UnsupportedData(format!(
+                    "Rice support is [0, ∞); got {x}"
+                )));
+            }
+            sum2 += x * x;
+            count += 1;
+        }
+        let m2 = sum2 / count as f64;
+        if m2 < 2.0 {
+            return Err(FitError::UnsupportedData(format!(
+                "Rice MoM (σ=1) requires sample E[x²] ≥ 2; got {m2}"
+            )));
+        }
+        let b = (m2 - 2.0).sqrt();
+        if !b.is_finite() {
+            return Err(FitError::NonConvergent(format!(
+                "Rice MoM produced non-finite b: {b}"
+            )));
+        }
+        Ok(Self { b })
     }
 }
 
@@ -29895,6 +29942,55 @@ mod tests {
     #[test]
     fn pearson3_fit_rejects_too_few_samples() {
         let err = Pearson3::try_fit(&[1.0, 2.0]).expect_err("n=2 must be rejected");
+        assert!(matches!(err, FitError::InsufficientData { .. }));
+    }
+
+    #[test]
+    fn rice_fit_metamorphic_e_x_sq_inverts_b() {
+        // For Rice(b) at σ=1, E[X²] = 2 + b², so b_hat = sqrt(E[x²] - 2).
+        let data = [1.5_f64, 2.0, 2.5, 1.8, 2.2, 1.7];
+        let n = data.len() as f64;
+        let m2 = data.iter().map(|x| x * x).sum::<f64>() / n;
+        let fitted = Rice::try_fit(&data).expect("fit");
+        let expected = (m2 - 2.0).sqrt();
+        assert!(
+            (fitted.b - expected).abs() < 1e-13,
+            "Rice MoM b-inversion: got {}, expected {expected}",
+            fitted.b
+        );
+    }
+
+    #[test]
+    fn rice_fit_pinned_synthetic_value() {
+        // Construct samples whose E[x²] = 5, then b_hat must be sqrt(3).
+        let data: Vec<f64> = (0..1000).map(|_| 5.0_f64.sqrt()).collect();
+        let fitted = Rice::try_fit(&data).expect("fit");
+        let expected = 3.0_f64.sqrt();
+        assert!(
+            (fitted.b - expected).abs() < 1e-12,
+            "Rice MoM at E[x²]=5: got {}, expected {expected}",
+            fitted.b
+        );
+    }
+
+    #[test]
+    fn rice_fit_rejects_low_e_x_sq() {
+        // All-zero data → E[x²] = 0 < 2 → impossible for Rice with σ=1.
+        let err = Rice::try_fit(&[0.0, 0.0, 0.0])
+            .expect_err("E[x²]<2 must be rejected");
+        assert!(matches!(err, FitError::UnsupportedData(_)));
+    }
+
+    #[test]
+    fn rice_fit_rejects_negative_observation() {
+        let err = Rice::try_fit(&[1.0, -0.5])
+            .expect_err("negative must be rejected");
+        assert!(matches!(err, FitError::UnsupportedData(_)));
+    }
+
+    #[test]
+    fn rice_fit_rejects_too_few_samples() {
+        let err = Rice::try_fit(&[1.5]).expect_err("n=1 must be rejected");
         assert!(matches!(err, FitError::InsufficientData { .. }));
     }
 
