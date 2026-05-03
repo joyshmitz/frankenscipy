@@ -1482,6 +1482,247 @@ pub fn read_npy_text(content: &str) -> Result<(Vec<usize>, Vec<f64>), IoError> {
     Ok((shape, data))
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Harwell-Boeing sparse matrix format
+// ══════════════════════════════════════════════════════════════════════
+
+/// Harwell-Boeing matrix data type from the title-line "Type" code (RUA/RSA/etc).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HbType {
+    /// "R" — real values, "U" — unsymmetric, "A" — assembled.
+    RealUnsymmetricAssembled,
+    /// "R" — real values, "S" — symmetric, "A" — assembled. Only the lower
+    /// triangle is stored; callers wanting the full matrix must symmetrize.
+    RealSymmetricAssembled,
+}
+
+/// Result of reading a Harwell-Boeing sparse matrix.
+///
+/// Returns the matrix in CSC (compressed sparse column) form: the canonical
+/// on-disk Harwell-Boeing layout. `col_ptr` has `cols + 1` entries; row
+/// indices and values are 0-indexed (the on-disk format is 1-indexed).
+#[derive(Debug, Clone, PartialEq)]
+pub struct HbMatrix {
+    pub title: String,
+    pub key: String,
+    pub matrix_type: HbType,
+    pub rows: usize,
+    pub cols: usize,
+    pub nnz: usize,
+    pub col_ptr: Vec<usize>,
+    pub row_idx: Vec<usize>,
+    pub values: Vec<f64>,
+}
+
+/// Read a real, assembled Harwell-Boeing sparse matrix file.
+///
+/// Supports the dominant subset of `scipy.io.hb_read`: real (R), assembled (A),
+/// either unsymmetric (U) or symmetric (S). The unassembled (E), pattern-only
+/// (P), and complex (C) variants intentionally return an UnsupportedFeature
+/// error and are tracked under the parent bead `frankenscipy-vsas0`.
+///
+/// The on-disk format uses 1-based indexing per the spec; the returned
+/// `col_ptr` and `row_idx` are converted to 0-based for parity with the
+/// rest of `fsci-io` and `fsci-sparse`.
+pub fn read_harwell_boeing(content: &str) -> Result<HbMatrix, IoError> {
+    let mut lines = content.lines();
+    let title_line = lines.next().ok_or_else(|| {
+        IoError::InvalidFormat("Harwell-Boeing file missing title line".to_string())
+    })?;
+    if title_line.len() < 72 {
+        return Err(IoError::InvalidFormat(format!(
+            "Harwell-Boeing title line must be ≥72 chars, got {}",
+            title_line.len()
+        )));
+    }
+    let title = title_line[..72].trim_end().to_string();
+    let key = title_line[72..].trim().to_string();
+
+    let totcrd_line = lines.next().ok_or_else(|| {
+        IoError::InvalidFormat("Harwell-Boeing file missing totcrd line".to_string())
+    })?;
+    let counts = parse_hb_int_fields(totcrd_line, 5, "totcrd")?;
+    let _totcrd = counts[0];
+    let ptrcrd = counts[1] as usize;
+    let indcrd = counts[2] as usize;
+    let valcrd = counts[3] as usize;
+    let rhscrd = counts[4] as usize;
+
+    let mxtype_line = lines.next().ok_or_else(|| {
+        IoError::InvalidFormat("Harwell-Boeing file missing mxtype line".to_string())
+    })?;
+    let mxtype_field = mxtype_line.get(..3).map(str::trim_start).unwrap_or("");
+    let dims = parse_hb_int_fields(&mxtype_line[3.min(mxtype_line.len())..], 4, "mxtype")?;
+    let rows = dims[0] as usize;
+    let cols = dims[1] as usize;
+    let nnz = dims[2] as usize;
+    let neltvl = dims[3];
+
+    let matrix_type = match mxtype_field {
+        "RUA" => HbType::RealUnsymmetricAssembled,
+        "RSA" => HbType::RealSymmetricAssembled,
+        other => {
+            return Err(IoError::UnsupportedFeature(format!(
+                "Harwell-Boeing type '{other}' not supported (only RUA and RSA today; \
+                 see frankenscipy-vsas0 for follow-on)"
+            )));
+        }
+    };
+
+    if neltvl != 0 {
+        return Err(IoError::UnsupportedFeature(
+            "Harwell-Boeing unassembled (NELTVL != 0) is not supported".to_string(),
+        ));
+    }
+
+    // Format-line records — we don't need to parse Fortran format specs because
+    // the value/index lists are whitespace-tolerant when read as flat token streams.
+    // SciPy is similarly relaxed in hb_read for fixed-format real assembled files.
+    let _ptrfmt = lines.next().ok_or_else(|| {
+        IoError::InvalidFormat("Harwell-Boeing missing ptrfmt line".to_string())
+    })?;
+    let _indfmt = lines.next().ok_or_else(|| {
+        IoError::InvalidFormat("Harwell-Boeing missing indfmt line".to_string())
+    })?;
+    let _valfmt = lines.next().ok_or_else(|| {
+        IoError::InvalidFormat("Harwell-Boeing missing valfmt line".to_string())
+    })?;
+    if valcrd == 0 {
+        return Err(IoError::UnsupportedFeature(
+            "Harwell-Boeing pattern-only (valcrd == 0) is not supported".to_string(),
+        ));
+    }
+
+    // Optional rhsfmt line iff rhscrd > 0; we don't consume an RHS payload.
+    let mut remaining: Vec<&str> = lines.collect();
+    if rhscrd > 0 && !remaining.is_empty() {
+        // First rhsfmt line; we then ignore the RHS payload past the matrix data.
+        remaining.remove(0);
+    }
+
+    // ptrcrd lines hold col_ptr (cols+1 ints), then indcrd lines row_idx (nnz ints),
+    // then valcrd lines hold the values (nnz reals). All whitespace-separated within
+    // each card group.
+    if remaining.len() < ptrcrd + indcrd + valcrd {
+        return Err(IoError::InvalidFormat(format!(
+            "Harwell-Boeing payload truncated: need {} cards, got {}",
+            ptrcrd + indcrd + valcrd,
+            remaining.len()
+        )));
+    }
+    let ptr_lines = &remaining[..ptrcrd];
+    let ind_lines = &remaining[ptrcrd..ptrcrd + indcrd];
+    let val_lines = &remaining[ptrcrd + indcrd..ptrcrd + indcrd + valcrd];
+
+    let raw_col_ptr = parse_hb_int_stream(ptr_lines, cols + 1, "col_ptr")?;
+    let raw_row_idx = parse_hb_int_stream(ind_lines, nnz, "row_idx")?;
+    let raw_values = parse_hb_real_stream(val_lines, nnz, "values")?;
+
+    // Convert 1-based → 0-based and sanity-check.
+    let mut col_ptr = Vec::with_capacity(cols + 1);
+    for (i, &p) in raw_col_ptr.iter().enumerate() {
+        if p < 1 {
+            return Err(IoError::InvalidFormat(format!(
+                "Harwell-Boeing col_ptr[{i}] = {p} is below 1 (1-based input expected)"
+            )));
+        }
+        col_ptr.push((p - 1) as usize);
+    }
+    if col_ptr[0] != 0 {
+        return Err(IoError::InvalidFormat(format!(
+            "Harwell-Boeing col_ptr[0] = {} (after 0-based shift) but must be 0",
+            col_ptr[0]
+        )));
+    }
+    if *col_ptr.last().unwrap() != nnz {
+        return Err(IoError::InvalidFormat(format!(
+            "Harwell-Boeing col_ptr[last] = {} but nnz = {nnz}",
+            col_ptr.last().unwrap()
+        )));
+    }
+    let mut row_idx = Vec::with_capacity(nnz);
+    for (i, &r) in raw_row_idx.iter().enumerate() {
+        if r < 1 || (r as usize) > rows {
+            return Err(IoError::InvalidFormat(format!(
+                "Harwell-Boeing row_idx[{i}] = {r} out of range [1, {rows}]"
+            )));
+        }
+        row_idx.push((r - 1) as usize);
+    }
+
+    Ok(HbMatrix {
+        title,
+        key,
+        matrix_type,
+        rows,
+        cols,
+        nnz,
+        col_ptr,
+        row_idx,
+        values: raw_values,
+    })
+}
+
+fn parse_hb_int_fields(line: &str, expected: usize, ctx: &str) -> Result<Vec<i64>, IoError> {
+    let toks: Vec<i64> = line
+        .split_whitespace()
+        .map(|s| s.parse::<i64>())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| IoError::InvalidFormat(format!("Harwell-Boeing {ctx}: {e}")))?;
+    if toks.len() < expected {
+        return Err(IoError::InvalidFormat(format!(
+            "Harwell-Boeing {ctx} line expected {expected} integers, got {}",
+            toks.len()
+        )));
+    }
+    Ok(toks.into_iter().take(expected).collect())
+}
+
+fn parse_hb_int_stream(lines: &[&str], expected: usize, ctx: &str) -> Result<Vec<i64>, IoError> {
+    let mut out = Vec::with_capacity(expected);
+    for line in lines {
+        for tok in line.split_whitespace() {
+            let v: i64 = tok
+                .parse()
+                .map_err(|e| IoError::InvalidFormat(format!("Harwell-Boeing {ctx}: {e}")))?;
+            out.push(v);
+        }
+    }
+    if out.len() < expected {
+        return Err(IoError::InvalidFormat(format!(
+            "Harwell-Boeing {ctx} expected {expected} integers, got {}",
+            out.len()
+        )));
+    }
+    out.truncate(expected);
+    Ok(out)
+}
+
+fn parse_hb_real_stream(lines: &[&str], expected: usize, ctx: &str) -> Result<Vec<f64>, IoError> {
+    // Harwell-Boeing values are written in Fortran D-format (e.g. "1.0D+00").
+    // Tokenize on whitespace and rewrite the Fortran exponent marker before parsing.
+    let mut out = Vec::with_capacity(expected);
+    for line in lines {
+        for tok in line.split_whitespace() {
+            let normalized = tok
+                .replace('D', "E")
+                .replace('d', "e");
+            let v: f64 = normalized
+                .parse()
+                .map_err(|e| IoError::InvalidFormat(format!("Harwell-Boeing {ctx}: {e}")))?;
+            out.push(v);
+        }
+    }
+    if out.len() < expected {
+        return Err(IoError::InvalidFormat(format!(
+            "Harwell-Boeing {ctx} expected {expected} reals, got {}",
+            out.len()
+        )));
+    }
+    out.truncate(expected);
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2380,5 +2621,103 @@ mod tests {
     fn read_csv_empty_no_header() {
         let (_header, data) = read_csv("", ',', false).expect("empty without header is ok");
         assert!(data.is_empty());
+    }
+
+    /// Tiny canonical HB file: 3x3 RUA, 4 nonzeros at (0,0)=1.0, (1,1)=2.0,
+    /// (2,1)=3.0, (2,2)=4.0. Title is exactly 72 chars long (padded), key 8.
+    fn sample_hb_rua_3x3_4nnz() -> String {
+        let title = format!("{:<72}", "Test 3x3 RUA");
+        format!(
+            "{title}KEY00001\n\
+             4 1 1 1 0\n\
+             RUA            3            3            4            0\n\
+             (4I20)\n\
+             (4I20)\n\
+             (4D20.13)\n\
+             1 2 3 5\n\
+             1 2 3 3\n\
+             1.0D+00 2.0D+00 3.0D+00 4.0D+00\n"
+        )
+    }
+
+    #[test]
+    fn read_harwell_boeing_rua_basic_dimensions() {
+        let content = sample_hb_rua_3x3_4nnz();
+        let mat = read_harwell_boeing(&content).expect("RUA parse");
+        assert_eq!(mat.rows, 3);
+        assert_eq!(mat.cols, 3);
+        assert_eq!(mat.nnz, 4);
+        assert_eq!(mat.matrix_type, HbType::RealUnsymmetricAssembled);
+        assert_eq!(mat.col_ptr, vec![0, 1, 2, 4]);
+        assert_eq!(mat.row_idx, vec![0, 1, 2, 2]);
+        assert_eq!(mat.values, vec![1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(mat.title, "Test 3x3 RUA");
+        assert_eq!(mat.key, "KEY00001");
+    }
+
+    #[test]
+    fn read_harwell_boeing_metamorphic_value_sum_invariant() {
+        let mat = read_harwell_boeing(&sample_hb_rua_3x3_4nnz()).unwrap();
+        let direct: f64 = mat.values.iter().sum();
+        let by_column: f64 = (0..mat.cols)
+            .map(|j| mat.values[mat.col_ptr[j]..mat.col_ptr[j + 1]].iter().sum::<f64>())
+            .sum();
+        assert!((direct - by_column).abs() < 1e-12);
+    }
+
+    #[test]
+    fn read_harwell_boeing_metamorphic_col_ptr_monotone() {
+        let mat = read_harwell_boeing(&sample_hb_rua_3x3_4nnz()).unwrap();
+        for w in mat.col_ptr.windows(2) {
+            assert!(w[0] <= w[1], "col_ptr must be monotone non-decreasing");
+        }
+        assert_eq!(*mat.col_ptr.last().unwrap(), mat.nnz);
+    }
+
+    #[test]
+    fn read_harwell_boeing_rejects_unsupported_complex() {
+        let title = format!("{:<72}", "Bad type");
+        let content = format!(
+            "{title}KEY00002\n\
+             4 1 1 1 0\n\
+             CUA            3            3            4            0\n\
+             (4I20)\n(4I20)\n(4D20.13)\n\
+             1 2 3 5\n1 2 3 3\n1.0D+00 2.0D+00 3.0D+00 4.0D+00\n"
+        );
+        let err = read_harwell_boeing(&content)
+            .expect_err("complex unsupported variant must be rejected");
+        match err {
+            IoError::UnsupportedFeature(m) => assert!(m.contains("CUA"), "{m}"),
+            _ => panic!("wrong error: {err:?}"),
+        }
+    }
+
+    #[test]
+    fn read_harwell_boeing_rejects_truncated_payload() {
+        let title = format!("{:<72}", "Truncated");
+        let content = format!(
+            "{title}KEY00003\n\
+             4 1 1 1 0\n\
+             RUA            3            3            4            0\n\
+             (4I20)\n(4I20)\n(4D20.13)\n\
+             1 2 3 5\n"
+        );
+        let err =
+            read_harwell_boeing(&content).expect_err("truncated payload must be rejected");
+        assert!(matches!(err, IoError::InvalidFormat(_)));
+    }
+
+    #[test]
+    fn read_harwell_boeing_handles_lowercase_d_exponent() {
+        let title = format!("{:<72}", "Lowercase D");
+        let content = format!(
+            "{title}KEY00004\n\
+             4 1 1 1 0\n\
+             RUA            2            2            2            0\n\
+             (4I20)\n(4I20)\n(4D20.13)\n\
+             1 2 3\n1 2\n1.5d+00 -2.5d-01\n"
+        );
+        let mat = read_harwell_boeing(&content).expect("lowercase d parse");
+        assert_eq!(mat.values, vec![1.5, -0.25]);
     }
 }
