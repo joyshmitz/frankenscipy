@@ -6648,6 +6648,7 @@ impl ContinuousDistribution for Bradford {
 /// Gilbrat distribution (log-normal with s=1).
 ///
 /// Matches `scipy.stats.gilbrat`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Gilbrat;
 
 impl ContinuousDistribution for Gilbrat {
@@ -6687,6 +6688,20 @@ impl ContinuousDistribution for Gilbrat {
 
     fn var(&self) -> f64 {
         std::f64::consts::E * (std::f64::consts::E - 1.0) // e(e-1)
+    }
+
+    fn fit(_data: &[f64]) -> Self {
+        Self
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        validate_parameterless_fit_data(data)?;
+        if data.iter().any(|&x| x <= 0.0) {
+            return Err(FitError::UnsupportedData(
+                "Gilbrat support is (0, ∞)".to_owned(),
+            ));
+        }
+        Ok(Self)
     }
 }
 
@@ -29274,6 +29289,20 @@ mod tests {
         ));
         assert!(matches!(
             HypSecant::try_fit(&[0.0, f64::NAN]),
+            Err(FitError::UnsupportedData(_))
+        ));
+    }
+
+    #[test]
+    fn parameterless_fit_gilbrat() {
+        // Positive support; no parameters to estimate.
+        assert_eq!(Gilbrat::try_fit(&[0.5, 1.0, 2.5]).unwrap(), Gilbrat);
+        assert!(matches!(
+            Gilbrat::try_fit(&[1.0, 0.0]),
+            Err(FitError::UnsupportedData(_))
+        ));
+        assert!(matches!(
+            Gilbrat::try_fit(&[1.0, -0.5]),
             Err(FitError::UnsupportedData(_))
         ));
     }
