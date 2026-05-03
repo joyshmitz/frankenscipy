@@ -7125,6 +7125,7 @@ impl ContinuousDistribution for FrechetR {
 /// Truncated exponential distribution on [0, b].
 ///
 /// Matches `scipy.stats.truncexpon`.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TruncExpon {
     pub b: f64,
 }
@@ -7181,6 +7182,46 @@ impl ContinuousDistribution for TruncExpon {
         let eb = (-self.b).exp();
         let e2 = (2.0 - (2.0 + 2.0 * self.b + self.b * self.b) * eb) / (1.0 - eb);
         e2 - m * m
+    }
+
+    fn fit(data: &[f64]) -> Self {
+        Self::try_fit(data).unwrap_or_else(|e| {
+            panic!("TruncExpon::fit failed: {e}");
+        })
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        if data.len() < 2 {
+            return Err(FitError::InsufficientData {
+                required: 2,
+                actual: data.len(),
+            });
+        }
+        // Boundary MLE: at fixed rate λ=1, the support is [0, b], so the
+        // log-likelihood is monotonically decreasing in b on [max(x_i), ∞).
+        // The MLE is therefore b_hat = max(x_i).
+        let mut max_obs = f64::NEG_INFINITY;
+        for &x in data {
+            if !x.is_finite() {
+                return Err(FitError::UnsupportedData(format!(
+                    "TruncExpon data contains non-finite value: {x}"
+                )));
+            }
+            if x < 0.0 {
+                return Err(FitError::UnsupportedData(format!(
+                    "TruncExpon data must be non-negative; got {x}"
+                )));
+            }
+            if x > max_obs {
+                max_obs = x;
+            }
+        }
+        if max_obs <= 0.0 {
+            return Err(FitError::NonConvergent(format!(
+                "TruncExpon MLE: max observation {max_obs} must be > 0"
+            )));
+        }
+        Ok(Self { b: max_obs })
     }
 }
 
@@ -28838,6 +28879,62 @@ mod tests {
         let err = LogLaplace::try_fit(&[1.0, 1.0, 1.0])
             .expect_err("all-unit data must be rejected");
         assert!(matches!(err, FitError::NonConvergent(_)));
+    }
+
+    #[test]
+    fn truncexpon_fit_recovers_max_as_boundary() {
+        let data = [0.1_f64, 0.5, 1.2, 2.7, 3.4, 1.9];
+        let fitted = TruncExpon::try_fit(&data).expect("fit");
+        assert_eq!(fitted.b, 3.4, "boundary MLE = max observation");
+    }
+
+    #[test]
+    fn truncexpon_fit_metamorphic_no_observation_above_b() {
+        // The fitted b must dominate every observation (boundary invariant).
+        let data: Vec<f64> = (1..=200).map(|i| (i as f64) * 0.01).collect();
+        let fitted = TruncExpon::try_fit(&data).expect("fit");
+        for &x in &data {
+            assert!(
+                x <= fitted.b,
+                "observation {x} exceeds fitted boundary {}",
+                fitted.b
+            );
+        }
+        assert_eq!(fitted.b, 2.0);
+    }
+
+    #[test]
+    fn truncexpon_fit_metamorphic_synthetic_recovery() {
+        // Synthesize n=2000 samples from TruncExpon(b=4.0) via inverse-CDF
+        // grid; the boundary MLE recovers b within 0.5% (the deterministic
+        // grid samples (k-0.5)/n approach 1, so ppf((n-0.5)/n) is close to
+        // but slightly less than the true b).
+        let true_b = 4.0;
+        let dist = TruncExpon::new(true_b);
+        let n = 2000;
+        let samples: Vec<f64> = (1..=n)
+            .map(|k| dist.ppf((k as f64 - 0.5) / n as f64))
+            .collect();
+        let fitted = TruncExpon::try_fit(&samples).expect("fit");
+        let rel = (fitted.b - true_b).abs() / true_b;
+        assert!(
+            rel < 0.005,
+            "TruncExpon fit recovery: got b={}, true b={true_b}, rel_err={rel}",
+            fitted.b
+        );
+    }
+
+    #[test]
+    fn truncexpon_fit_rejects_negative_observations() {
+        let err = TruncExpon::try_fit(&[1.0, 2.0, -0.5])
+            .expect_err("negative must be rejected");
+        assert!(matches!(err, FitError::UnsupportedData(_)));
+    }
+
+    #[test]
+    fn truncexpon_fit_rejects_too_few_samples() {
+        let err = TruncExpon::try_fit(&[1.5]).expect_err("n=1 must be rejected");
+        assert!(matches!(err, FitError::InsufficientData { .. }));
     }
 
     #[test]
