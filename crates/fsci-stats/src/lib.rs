@@ -5877,7 +5877,7 @@ impl ContinuousDistribution for Loguniform {
                 max_obs = x;
             }
         }
-        if !(min_obs < max_obs) {
+        if min_obs >= max_obs {
             return Err(FitError::NonConvergent(format!(
                 "Loguniform MLE: data has zero range (min={min_obs}, max={max_obs})"
             )));

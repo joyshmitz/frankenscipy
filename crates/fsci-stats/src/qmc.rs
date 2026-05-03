@@ -1,9 +1,8 @@
 //! Quasi-Monte Carlo low-discrepancy sequences.
 //!
-//! Scaffold for `scipy.stats.qmc`. This module currently provides only the
-//! Halton sequence; Sobol, LatinHypercube, PoissonDisk, Owen scrambling, and
-//! the L2/star/wraparound discrepancy metrics are tracked as follow-on slices
-//! under bead `frankenscipy-e5j6p`.
+//! Compact `scipy.stats.qmc` surface for deterministic integration tests:
+//! Halton, Sobol, Latin Hypercube, Poisson-disk sampling, scale, and the
+//! centered/L2-star/mixture/wraparound discrepancy metrics.
 
 use crate::StatsError;
 
@@ -13,6 +12,21 @@ const HALTON_PRIMES: &[u64] = &[
     2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97,
     101, 103, 107, 109, 113, 127, 131,
 ];
+
+/// Common stateful engine surface for QMC samplers.
+pub trait QmcEngine {
+    /// Dimension of each emitted point.
+    fn dimension(&self) -> usize;
+
+    /// Rewind to the engine's initial state.
+    fn reset(&mut self);
+
+    /// Advance the engine by `n` points without returning them.
+    fn fast_forward(&mut self, n: u64);
+
+    /// Draw `n` points in row-major order.
+    fn sample(&mut self, n: usize) -> Vec<f64>;
+}
 
 /// Halton low-discrepancy sequence sampler in `[0, 1)^d`.
 ///
@@ -95,6 +109,24 @@ impl HaltonSampler {
     }
 }
 
+impl QmcEngine for HaltonSampler {
+    fn dimension(&self) -> usize {
+        HaltonSampler::dimension(self)
+    }
+
+    fn reset(&mut self) {
+        HaltonSampler::reset(self);
+    }
+
+    fn fast_forward(&mut self, n: u64) {
+        self.skip(n);
+    }
+
+    fn sample(&mut self, n: usize) -> Vec<f64> {
+        HaltonSampler::sample(self, n)
+    }
+}
+
 /// Radical inverse of `index` in base `prime`.
 ///
 /// φ_b(n) = sum over i of d_i / b^(i+1) where n = sum d_i * b^i.
@@ -113,6 +145,137 @@ fn radical_inverse(mut index: u64, prime: u64) -> f64 {
         f *= inv_prime;
     }
     result
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Sobol sampling
+// ══════════════════════════════════════════════════════════════════════
+
+/// Sobol low-discrepancy sequence sampler for one or two dimensions.
+///
+/// The first two Sobol dimensions are enough for the common QMC integration
+/// smoke paths in this crate and match SciPy's unscrambled prefix:
+/// `(0,0), (1/2,1/2), (3/4,1/4), (1/4,3/4), ...`.
+///
+/// `with_digital_shift` applies a deterministic xor shift to each coordinate.
+/// This is not a full Owen tree permutation, but it is the standard
+/// random-shifted digital net primitive and preserves the low-discrepancy
+/// structure while moving the origin off the boundary.
+#[derive(Debug, Clone)]
+pub struct SobolSampler {
+    dimension: usize,
+    next_index: u64,
+    digital_shift: Vec<u64>,
+}
+
+impl SobolSampler {
+    /// Construct an unscrambled Sobol sampler.
+    pub fn new(dimension: usize) -> Result<Self, StatsError> {
+        Self::with_shift_words(dimension, vec![0; dimension])
+    }
+
+    /// Construct a deterministic digital-shifted Sobol sampler.
+    pub fn with_digital_shift(dimension: usize, seed: u64) -> Result<Self, StatsError> {
+        let shifts = (0..dimension)
+            .map(|idx| splitmix64(seed.wrapping_add(idx as u64)))
+            .collect();
+        Self::with_shift_words(dimension, shifts)
+    }
+
+    fn with_shift_words(dimension: usize, digital_shift: Vec<u64>) -> Result<Self, StatsError> {
+        if dimension == 0 {
+            return Err(StatsError::InvalidArgument(
+                "Sobol dimension must be ≥ 1".to_string(),
+            ));
+        }
+        if dimension > 2 {
+            return Err(StatsError::InvalidArgument(
+                "Sobol supports dimensions 1..=2 in this QMC surface".to_string(),
+            ));
+        }
+        Ok(Self {
+            dimension,
+            next_index: 0,
+            digital_shift,
+        })
+    }
+
+    pub fn dimension(&self) -> usize {
+        self.dimension
+    }
+
+    pub fn next_index(&self) -> u64 {
+        self.next_index
+    }
+
+    pub fn reset(&mut self) {
+        self.next_index = 0;
+    }
+
+    pub fn skip(&mut self, k: u64) {
+        self.next_index = self.next_index.saturating_add(k);
+    }
+
+    pub fn sample(&mut self, n: usize) -> Vec<f64> {
+        let mut out = Vec::with_capacity(n.saturating_mul(self.dimension));
+        for _ in 0..n {
+            let idx = self.next_index;
+            for dim in 0..self.dimension {
+                let bits = sobol_bits(idx, dim) ^ self.digital_shift[dim];
+                out.push(bits_to_unit(bits));
+            }
+            self.next_index = self.next_index.saturating_add(1);
+        }
+        out
+    }
+}
+
+impl QmcEngine for SobolSampler {
+    fn dimension(&self) -> usize {
+        SobolSampler::dimension(self)
+    }
+
+    fn reset(&mut self) {
+        SobolSampler::reset(self);
+    }
+
+    fn fast_forward(&mut self, n: u64) {
+        self.skip(n);
+    }
+
+    fn sample(&mut self, n: usize) -> Vec<f64> {
+        SobolSampler::sample(self, n)
+    }
+}
+
+fn sobol_bits(index: u64, dimension: usize) -> u64 {
+    let mut gray = index ^ (index >> 1);
+    let mut bit = 0usize;
+    let mut value = 0u64;
+    while gray != 0 {
+        if gray & 1 == 1 {
+            value ^= sobol_direction(dimension, bit);
+        }
+        gray >>= 1;
+        bit += 1;
+    }
+    value
+}
+
+fn sobol_direction(dimension: usize, bit: usize) -> u64 {
+    let mut direction = 1u64 << 63;
+    if dimension == 0 {
+        return direction >> bit.min(63);
+    }
+
+    for _ in 0..bit.min(63) {
+        direction ^= direction >> 1;
+    }
+    direction
+}
+
+fn bits_to_unit(bits: u64) -> f64 {
+    unit_interval_from_u64(bits)
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -141,7 +304,7 @@ pub fn centered_discrepancy(sample: &[f64], dimension: usize) -> Result<f64, Sta
             "centered_discrepancy: dimension must be ≥ 1".to_string(),
         ));
     }
-    if sample.len() % dimension != 0 {
+    if !sample.len().is_multiple_of(dimension) {
         return Err(StatsError::InvalidArgument(format!(
             "centered_discrepancy: sample.len() {} not a multiple of dimension {dimension}",
             sample.len()
@@ -182,10 +345,8 @@ pub fn centered_discrepancy(sample: &[f64], dimension: usize) -> Result<f64, Sta
             for k in 0..dimension {
                 let xi = sample[i * dimension + k];
                 let xj = sample[j * dimension + k];
-                prod *= 1.0
-                    + 0.5 * (xi - 0.5).abs()
-                    + 0.5 * (xj - 0.5).abs()
-                    - 0.5 * (xi - xj).abs();
+                prod *=
+                    1.0 + 0.5 * (xi - 0.5).abs() + 0.5 * (xj - 0.5).abs() - 0.5 * (xi - xj).abs();
             }
             double += prod;
         }
@@ -214,7 +375,7 @@ pub fn mixture_discrepancy(sample: &[f64], dimension: usize) -> Result<f64, Stat
             "mixture_discrepancy: dimension must be ≥ 1".to_string(),
         ));
     }
-    if sample.len() % dimension != 0 {
+    if !sample.len().is_multiple_of(dimension) {
         return Err(StatsError::InvalidArgument(format!(
             "mixture_discrepancy: sample.len() {} not a multiple of dimension {dimension}",
             sample.len()
@@ -252,8 +413,7 @@ pub fn mixture_discrepancy(sample: &[f64], dimension: usize) -> Result<f64, Stat
                 let xi = sample[i * dimension + k];
                 let xj = sample[j * dimension + k];
                 let d = (xi - xj).abs();
-                prod *= 15.0 / 8.0 - 0.25 * (xi - 0.5).abs() - 0.25 * (xj - 0.5).abs()
-                    - 0.75 * d
+                prod *= 15.0 / 8.0 - 0.25 * (xi - 0.5).abs() - 0.25 * (xj - 0.5).abs() - 0.75 * d
                     + 0.5 * (xi - xj).powi(2);
             }
             double += prod;
@@ -291,7 +451,7 @@ pub fn scale(
             u_bounds.len()
         )));
     }
-    if sample.len() % dimension != 0 {
+    if !sample.len().is_multiple_of(dimension) {
         return Err(StatsError::InvalidArgument(format!(
             "qmc::scale: sample.len() {} not a multiple of dimension {dimension}",
             sample.len()
@@ -345,7 +505,7 @@ pub fn update_centered_discrepancy(
             "update_centered_discrepancy: dimension must be ≥ 1".to_string(),
         ));
     }
-    if existing_sample.len() % dimension != 0 {
+    if !existing_sample.len().is_multiple_of(dimension) {
         return Err(StatsError::InvalidArgument(format!(
             "update_centered_discrepancy: existing_sample.len() {} not a multiple of dimension {dimension}",
             existing_sample.len()
@@ -370,8 +530,8 @@ pub fn update_centered_discrepancy(
     // Compute B_old = Σ_i s1(x_i) on the existing sample.
     let s1 = |point: &[f64]| -> f64 {
         let mut prod = 1.0_f64;
-        for k in 0..dimension {
-            let centered = point[k] - 0.5;
+        for &coordinate in point.iter().take(dimension) {
+            let centered = coordinate - 0.5;
             prod *= 1.0 + 0.5 * centered.abs() - 0.5 * centered * centered;
         }
         prod
@@ -379,9 +539,7 @@ pub fn update_centered_discrepancy(
     let s2_pair = |a: &[f64], b: &[f64]| -> f64 {
         let mut prod = 1.0_f64;
         for k in 0..dimension {
-            prod *= 1.0
-                + 0.5 * (a[k] - 0.5).abs()
-                + 0.5 * (b[k] - 0.5).abs()
+            prod *= 1.0 + 0.5 * (a[k] - 0.5).abs() + 0.5 * (b[k] - 0.5).abs()
                 - 0.5 * (a[k] - b[k]).abs();
         }
         prod
@@ -439,7 +597,7 @@ pub fn l2_star_discrepancy(sample: &[f64], dimension: usize) -> Result<f64, Stat
             "l2_star_discrepancy: dimension must be ≥ 1".to_string(),
         ));
     }
-    if sample.len() % dimension != 0 {
+    if !sample.len().is_multiple_of(dimension) {
         return Err(StatsError::InvalidArgument(format!(
             "l2_star_discrepancy: sample.len() {} not a multiple of dimension {dimension}",
             sample.len()
@@ -506,7 +664,7 @@ pub fn wraparound_discrepancy(sample: &[f64], dimension: usize) -> Result<f64, S
             "wraparound_discrepancy: dimension must be ≥ 1".to_string(),
         ));
     }
-    if sample.len() % dimension != 0 {
+    if !sample.len().is_multiple_of(dimension) {
         return Err(StatsError::InvalidArgument(format!(
             "wraparound_discrepancy: sample.len() {} not a multiple of dimension {dimension}",
             sample.len()
@@ -634,9 +792,95 @@ impl LatinHypercubeSampler {
     }
 
     fn next_uniform(&mut self) -> f64 {
-        // 53-bit mantissa division: standard f64 [0,1) sample.
-        (self.next_u64() >> 11) as f64 * (1.0_f64 / (1u64 << 53) as f64)
+        unit_interval_from_u64(self.next_u64())
     }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Poisson-disk sampling
+// ══════════════════════════════════════════════════════════════════════
+
+/// Two-dimensional Poisson-disk sampler over the unit square.
+///
+/// This is a deterministic dart-throwing implementation: candidate points are
+/// drawn from a SplitMix stream and accepted only when they are at least
+/// `radius` away from every previous point. It is intentionally compact and
+/// bounded for conformance and metamorphic tests; callers requesting more
+/// points than the radius permits may receive fewer than `n` points.
+#[derive(Debug, Clone)]
+pub struct PoissonDiskSampler {
+    radius: f64,
+    rng_state: u64,
+}
+
+impl PoissonDiskSampler {
+    pub fn new_2d(radius: f64, seed: u64) -> Result<Self, StatsError> {
+        if !radius.is_finite() || radius <= 0.0 || radius >= 1.0 {
+            return Err(StatsError::InvalidArgument(
+                "PoissonDisk radius must be finite and in (0, 1)".to_string(),
+            ));
+        }
+        Ok(Self {
+            radius,
+            rng_state: splitmix64(seed.wrapping_add(0xA5A5_A5A5_5A5A_5A5A)),
+        })
+    }
+
+    pub fn dimension(&self) -> usize {
+        2
+    }
+
+    pub fn radius(&self) -> f64 {
+        self.radius
+    }
+
+    /// Draw up to `n` points in row-major `[x0, y0, x1, y1, ...]` order.
+    pub fn sample(&mut self, n: usize) -> Vec<f64> {
+        let mut out = Vec::with_capacity(n.saturating_mul(2));
+        if n == 0 {
+            return out;
+        }
+
+        let min_dist2 = self.radius * self.radius;
+        let max_attempts = n.saturating_mul(2_000).max(2_000);
+        for _ in 0..max_attempts {
+            if out.len() / 2 == n {
+                break;
+            }
+            let x = self.next_uniform();
+            let y = self.next_uniform();
+            if poisson_candidate_is_valid(&out, x, y, min_dist2) {
+                out.push(x);
+                out.push(y);
+            }
+        }
+        out
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        self.rng_state = self.rng_state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        splitmix64(self.rng_state)
+    }
+
+    fn next_uniform(&mut self) -> f64 {
+        unit_interval_from_u64(self.next_u64())
+    }
+}
+
+fn poisson_candidate_is_valid(sample: &[f64], x: f64, y: f64, min_dist2: f64) -> bool {
+    for point in sample.chunks_exact(2) {
+        let dx = x - point[0];
+        let dy = y - point[1];
+        if dx.mul_add(dx, dy * dy) < min_dist2 {
+            return false;
+        }
+    }
+    true
+}
+
+fn unit_interval_from_u64(bits: u64) -> f64 {
+    // 53-bit mantissa division: standard f64 [0,1) sample.
+    (bits >> 11) as f64 * (1.0_f64 / (1u64 << 53) as f64)
 }
 
 fn splitmix64(mut z: u64) -> u64 {
@@ -751,6 +995,71 @@ mod tests {
     }
 
     #[test]
+    fn sobol_construct_rejects_unsupported_dimensions() {
+        assert!(matches!(
+            SobolSampler::new(0),
+            Err(StatsError::InvalidArgument(_))
+        ));
+        assert!(matches!(
+            SobolSampler::new(3),
+            Err(StatsError::InvalidArgument(_))
+        ));
+    }
+
+    #[test]
+    fn sobol_sample_first_2d_canonical() {
+        let mut sobol = SobolSampler::new(2).unwrap();
+        let sample = sobol.sample(5);
+        let expected = [
+            (0.0, 0.0),
+            (0.5, 0.5),
+            (0.75, 0.25),
+            (0.25, 0.75),
+            (0.375, 0.375),
+        ];
+        for (i, (x, y)) in expected.iter().enumerate() {
+            assert!((sample[i * 2] - x).abs() < 1e-15, "x[{i}]");
+            assert!((sample[i * 2 + 1] - y).abs() < 1e-15, "y[{i}]");
+        }
+    }
+
+    #[test]
+    fn sobol_metamorphic_skip_equivalent_to_consume() {
+        let mut a = SobolSampler::new(2).unwrap();
+        let mut b = SobolSampler::new(2).unwrap();
+        let _ = a.sample(11);
+        b.skip(11);
+        assert_eq!(a.sample(8), b.sample(8));
+    }
+
+    #[test]
+    fn sobol_digital_shift_is_reproducible_and_bounded() {
+        let mut a = SobolSampler::with_digital_shift(2, 99).unwrap();
+        let mut b = SobolSampler::with_digital_shift(2, 99).unwrap();
+        let shifted = a.sample(16);
+        assert_eq!(shifted, b.sample(16));
+        assert_ne!(shifted, SobolSampler::new(2).unwrap().sample(16));
+        for value in shifted {
+            assert!((0.0..1.0).contains(&value), "shifted value {value}");
+        }
+    }
+
+    #[test]
+    fn qmc_engine_trait_dispatches_halton_and_sobol() {
+        fn draw_prefix(engine: &mut dyn QmcEngine, n: usize) -> Vec<f64> {
+            engine.sample(n)
+        }
+
+        let mut halton = HaltonSampler::new(2).unwrap();
+        let mut sobol = SobolSampler::new(2).unwrap();
+        assert_eq!(
+            draw_prefix(&mut halton, 2),
+            vec![0.5, 1.0 / 3.0, 0.25, 2.0 / 3.0]
+        );
+        assert_eq!(draw_prefix(&mut sobol, 2), vec![0.0, 0.0, 0.5, 0.5]);
+    }
+
+    #[test]
     fn lhs_construct_rejects_zero_dimension() {
         let err = LatinHypercubeSampler::new(0, 0).expect_err("zero-dim must fail");
         assert!(matches!(err, StatsError::InvalidArgument(_)));
@@ -831,6 +1140,39 @@ mod tests {
     }
 
     #[test]
+    fn poisson_disk_rejects_invalid_radius() {
+        for radius in [0.0, -0.1, 1.0, f64::NAN] {
+            assert!(
+                matches!(
+                    PoissonDiskSampler::new_2d(radius, 0),
+                    Err(StatsError::InvalidArgument(_))
+                ),
+                "radius {radius} should fail"
+            );
+        }
+    }
+
+    #[test]
+    fn poisson_disk_samples_are_separated_and_reproducible() {
+        let mut a = PoissonDiskSampler::new_2d(0.08, 123).unwrap();
+        let mut b = PoissonDiskSampler::new_2d(0.08, 123).unwrap();
+        let sample = a.sample(24);
+        assert_eq!(sample, b.sample(24));
+        assert_eq!(sample.len(), 48);
+        for value in &sample {
+            assert!((0.0..1.0).contains(value), "value {value}");
+        }
+        for i in 0..24 {
+            for j in i + 1..24 {
+                let dx = sample[i * 2] - sample[j * 2];
+                let dy = sample[i * 2 + 1] - sample[j * 2 + 1];
+                let dist = dx.mul_add(dx, dy * dy).sqrt();
+                assert!(dist >= 0.08 - 1e-15, "distance {dist} too small");
+            }
+        }
+    }
+
+    #[test]
     fn discrepancy_rejects_zero_dimension() {
         let err = centered_discrepancy(&[], 0).expect_err("d=0 must fail");
         assert!(matches!(err, StatsError::InvalidArgument(_)));
@@ -838,15 +1180,14 @@ mod tests {
 
     #[test]
     fn discrepancy_rejects_misshaped_sample() {
-        let err = centered_discrepancy(&[0.1, 0.2, 0.3], 2)
-            .expect_err("3 values for d=2 must fail");
+        let err =
+            centered_discrepancy(&[0.1, 0.2, 0.3], 2).expect_err("3 values for d=2 must fail");
         assert!(matches!(err, StatsError::InvalidArgument(_)));
     }
 
     #[test]
     fn discrepancy_rejects_out_of_range_value() {
-        let err = centered_discrepancy(&[0.5, 1.5], 2)
-            .expect_err("1.5 must be rejected");
+        let err = centered_discrepancy(&[0.5, 1.5], 2).expect_err("1.5 must be rejected");
         assert!(matches!(err, StatsError::InvalidArgument(_)));
     }
 
@@ -891,15 +1232,14 @@ mod tests {
 
     #[test]
     fn scale_rejects_mismatched_bounds() {
-        let err = scale(&[0.5, 0.5], 2, &[0.0], &[1.0])
-            .expect_err("bounds shape must match dim");
+        let err = scale(&[0.5, 0.5], 2, &[0.0], &[1.0]).expect_err("bounds shape must match dim");
         assert!(matches!(err, StatsError::InvalidArgument(_)));
     }
 
     #[test]
     fn scale_rejects_inverted_bounds() {
-        let err = scale(&[0.5, 0.5], 2, &[2.0, 0.0], &[1.0, 1.0])
-            .expect_err("u<l must be rejected");
+        let err =
+            scale(&[0.5, 0.5], 2, &[2.0, 0.0], &[1.0, 1.0]).expect_err("u<l must be rejected");
         assert!(matches!(err, StatsError::InvalidArgument(_)));
     }
 
@@ -950,8 +1290,7 @@ mod tests {
         let initial = h.sample(16);
         let cd_initial = centered_discrepancy(&initial, 2).unwrap();
         let extra = h.sample(1); // one new point
-        let cd_via_update =
-            update_centered_discrepancy(&initial, 2, cd_initial, &extra).unwrap();
+        let cd_via_update = update_centered_discrepancy(&initial, 2, cd_initial, &extra).unwrap();
         let mut combined = initial.clone();
         combined.extend_from_slice(&extra);
         let cd_via_batch = centered_discrepancy(&combined, 2).unwrap();
@@ -970,10 +1309,7 @@ mod tests {
         let empty_cd = centered_discrepancy(&[], 2).unwrap();
         let after = update_centered_discrepancy(&[], 2, empty_cd, &new_point).unwrap();
         let direct = centered_discrepancy(&new_point, 2).unwrap();
-        assert!(
-            (after - direct).abs() < 1e-12,
-            "{after} != {direct}"
-        );
+        assert!((after - direct).abs() < 1e-12, "{after} != {direct}");
     }
 
     #[test]
@@ -1125,8 +1461,8 @@ mod tests {
         // every distance zero). Thus WD² = (3/2)^d - (4/3)^d.
         for d in 1..=4 {
             let mut sample = vec![0.0_f64; d];
-            for k in 0..d {
-                sample[k] = 0.1 + 0.07 * k as f64;
+            for (k, coordinate) in sample.iter_mut().enumerate().take(d) {
+                *coordinate = 0.1 + 0.07 * k as f64;
             }
             let wd = wraparound_discrepancy(&sample, d).unwrap();
             let expected = 1.5_f64.powi(d as i32) - (4.0_f64 / 3.0).powi(d as i32);

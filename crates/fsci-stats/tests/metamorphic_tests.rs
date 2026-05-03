@@ -11,8 +11,8 @@ use fsci_stats::{
     bartlett as bartlett_var, cumfreq, diff, durbin_watson, ecdf, energy_distance, f_oneway, gmean,
     histogram, hmean, kruskal, ks_2samp, kurtosis, levene, linregress, mannkendall, mannwhitneyu,
     pacf, pearsonr, percentile, pmean, quantile, ranksums, relfreq, ridge_regression, runs_test,
-    sigmaclip, skew, spearmanr, theil_sen, tmean, trim_mean, trimboth, tstd, ttest_1samp,
-    ttest_ind, ttest_rel, tukey_hsd, tvar, variation, wasserstein_distance, wilcoxon, zscore,
+    sigmaclip, skew, spearmanr, theil_sen, tmean, trim_mean, ttest_1samp, ttest_ind, ttest_rel,
+    tukey_hsd, variation, wasserstein_distance, wilcoxon, zscore,
 };
 
 const ATOL: f64 = 1e-8;
@@ -728,7 +728,7 @@ fn mr_ecdf_monotonic_in_unit_interval() {
     }
     for &v in &cdf {
         assert!(
-            v >= -1e-12 && v <= 1.0 + 1e-12,
+            (-1e-12..=1.0 + 1e-12).contains(&v),
             "MR32 ecdf value = {v} outside [0, 1]"
         );
     }
@@ -984,7 +984,7 @@ fn mr_durbin_watson_in_zero_four() {
         .collect();
     let dw = durbin_watson(&residuals);
     assert!(
-        dw >= -1e-12 && dw <= 4.0 + 1e-12,
+        (-1e-12..=4.0 + 1e-12).contains(&dw),
         "MR44 durbin_watson = {dw} outside [0, 4]"
     );
 }
