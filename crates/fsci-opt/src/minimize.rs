@@ -8,6 +8,111 @@ use crate::types::{
     OptimizeTraceEntry,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OptCaspProblem {
+    /// Number of decision variables in the minimize problem.
+    pub dimension: usize,
+    /// Scale diagnostic `max(abs(x_i).max(1)) / min(abs(x_i).max(1))`.
+    pub variable_scale_ratio: f64,
+    /// Whether finite box bounds are present.
+    pub has_box_bounds: bool,
+    /// Whether linear or nonlinear constraints are present.
+    pub has_general_constraints: bool,
+    /// Whether a reliable gradient signal is available.
+    pub gradient_available: bool,
+    /// Whether a Hessian-vector product is available.
+    pub hessian_product_available: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OptCaspDecision {
+    /// Selected optimizer from the fsci-opt portfolio.
+    pub method: OptimizeMethod,
+    /// Human-readable stability rationale for audit traces.
+    pub reason: String,
+}
+
+impl OptCaspProblem {
+    #[must_use]
+    pub fn unbounded_from_x0(x0: &[f64], options: MinimizeOptions) -> Self {
+        Self {
+            dimension: x0.len(),
+            variable_scale_ratio: variable_scale_ratio(x0),
+            has_box_bounds: false,
+            has_general_constraints: false,
+            gradient_available: true,
+            hessian_product_available: options.hessp.is_some(),
+        }
+    }
+}
+
+/// Select a minimize solver using the fsci-opt CASP policy.
+///
+/// State space: constraint class, gradient availability, Hessian-product
+/// availability, dimension, and variable scale ratio. Evidence signals come
+/// from the public problem description rather than trial execution, so the
+/// selector is deterministic and side-effect free. The loss matrix prioritizes
+/// stability first: general constraints route to KKT-aware `trust-constr`, box
+/// constraints to projected `L-BFGS-B`, available curvature to Newton-CG or
+/// trust-region steps, high-dimensional finite-difference problems to CG, and
+/// ordinary smooth unconstrained problems to BFGS.
+pub fn select_minimize_method(problem: OptCaspProblem) -> Result<OptCaspDecision, OptError> {
+    if problem.dimension == 0 {
+        return Err(OptError::InvalidArgument {
+            detail: String::from("CASP selector requires dimension >= 1"),
+        });
+    }
+    if !problem.variable_scale_ratio.is_finite() || problem.variable_scale_ratio < 1.0 {
+        return Err(OptError::InvalidArgument {
+            detail: String::from("CASP selector requires finite variable_scale_ratio >= 1"),
+        });
+    }
+
+    if problem.has_general_constraints {
+        return Ok(OptCaspDecision {
+            method: OptimizeMethod::TrustConstr,
+            reason: String::from("general constraints require trust-constr KKT handling"),
+        });
+    }
+    if problem.has_box_bounds {
+        return Ok(OptCaspDecision {
+            method: OptimizeMethod::LBfgsB,
+            reason: String::from("box constraints require projected L-BFGS-B steps"),
+        });
+    }
+    if !problem.gradient_available {
+        return Ok(OptCaspDecision {
+            method: OptimizeMethod::NelderMead,
+            reason: String::from("no gradient signal available; using derivative-free simplex"),
+        });
+    }
+    if problem.hessian_product_available {
+        if problem.dimension <= 4 && problem.variable_scale_ratio >= 1.0e4 {
+            return Ok(OptCaspDecision {
+                method: OptimizeMethod::TrustExact,
+                reason: String::from(
+                    "small ill-scaled problem with Hessian product uses trust-region stability",
+                ),
+            });
+        }
+        return Ok(OptCaspDecision {
+            method: OptimizeMethod::NewtonCg,
+            reason: String::from("Hessian product available; using Newton-CG curvature steps"),
+        });
+    }
+    if problem.dimension >= 40 {
+        return Ok(OptCaspDecision {
+            method: OptimizeMethod::ConjugateGradient,
+            reason: String::from("large unconstrained finite-difference problem avoids dense BFGS"),
+        });
+    }
+
+    Ok(OptCaspDecision {
+        method: OptimizeMethod::Bfgs,
+        reason: String::from("default smooth unconstrained problem uses BFGS"),
+    })
+}
+
 pub fn minimize<F>(fun: F, x0: &[f64], options: MinimizeOptions) -> Result<OptimizeResult, OptError>
 where
     F: Fn(&[f64]) -> f64,
@@ -23,7 +128,15 @@ where
         });
     }
 
-    match options.method.unwrap_or(OptimizeMethod::Bfgs) {
+    let selected_method = if let Some(method) = options.method {
+        method
+    } else {
+        let decision = select_minimize_method(OptCaspProblem::unbounded_from_x0(x0, options))?;
+        log_casp_decision(options, &decision);
+        decision.method
+    };
+
+    match selected_method {
         OptimizeMethod::Bfgs => bfgs(&fun, x0, options),
         OptimizeMethod::ConjugateGradient => cg_pr_plus(&fun, x0, options),
         OptimizeMethod::Powell => powell(&fun, x0, options),
@@ -2252,6 +2365,26 @@ fn log_completion(
     push_trace(trace);
 }
 
+fn log_casp_decision(options: MinimizeOptions, decision: &OptCaspDecision) {
+    let trace = OptimizeTraceEntry {
+        ts_unix_ms: now_unix_ms(),
+        event: String::from("casp_decision"),
+        method: decision.method,
+        iter_num: 0,
+        f_val: None,
+        grad_norm: None,
+        step_size: None,
+        mode: options.mode,
+        reason: Some(decision.reason.clone()),
+        final_x: None,
+        final_f: None,
+        total_nfev: 0,
+        fixture_id: options.fixture_id.map(ToOwned::to_owned),
+        seed: options.seed,
+    };
+    push_trace(trace);
+}
+
 fn trace_log() -> &'static Mutex<Vec<OptimizeTraceEntry>> {
     static TRACE_LOG: OnceLock<Mutex<Vec<OptimizeTraceEntry>>> = OnceLock::new();
     TRACE_LOG.get_or_init(|| Mutex::new(Vec::new()))
@@ -2267,6 +2400,17 @@ fn now_unix_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as u64)
+}
+
+fn variable_scale_ratio(values: &[f64]) -> f64 {
+    let mut min_positive = f64::INFINITY;
+    let mut max_scale = 1.0_f64;
+    for value in values {
+        let scale = value.abs().max(1.0);
+        min_positive = min_positive.min(scale);
+        max_scale = max_scale.max(scale);
+    }
+    max_scale / min_positive
 }
 
 fn dot(lhs: &[f64], rhs: &[f64]) -> f64 {
@@ -3116,8 +3260,9 @@ mod tests {
 
     use super::{Objective, golden_section_direction_search};
     use crate::{
-        ConvergenceStatus, MinimizeOptions, MinimizeScalarOptions, OptError, OptimizeMethod,
-        OptimizeResult, bfgs, cg_pr_plus, get_optimize_traces, minimize, minimize_scalar, powell,
+        ConvergenceStatus, MinimizeOptions, MinimizeScalarOptions, OptCaspProblem, OptError,
+        OptimizeMethod, OptimizeResult, bfgs, cg_pr_plus, get_optimize_traces, minimize,
+        minimize_scalar, powell, select_minimize_method,
     };
 
     #[derive(Debug, Serialize)]
@@ -3231,12 +3376,104 @@ mod tests {
         0.0
     }
 
+    fn unit_hessp(_x: &[f64], p: &[f64]) -> Vec<f64> {
+        p.to_vec()
+    }
+
     fn callback_record_and_stop(x: &[f64]) -> bool {
         callback_points()
             .lock()
             .expect("callback points lock")
             .push(x.to_vec());
         false
+    }
+
+    #[test]
+    fn casp_selector_chooses_bfgs_for_smooth_unconstrained_problem() {
+        let decision = select_minimize_method(OptCaspProblem {
+            dimension: 3,
+            variable_scale_ratio: 10.0,
+            has_box_bounds: false,
+            has_general_constraints: false,
+            gradient_available: true,
+            hessian_product_available: false,
+        })
+        .expect("selector");
+        assert_eq!(decision.method, OptimizeMethod::Bfgs);
+        assert!(decision.reason.contains("BFGS"));
+    }
+
+    #[test]
+    fn casp_selector_chooses_lbfgsb_for_box_constraints() {
+        let decision = select_minimize_method(OptCaspProblem {
+            dimension: 8,
+            variable_scale_ratio: 1.0,
+            has_box_bounds: true,
+            has_general_constraints: false,
+            gradient_available: true,
+            hessian_product_available: false,
+        })
+        .expect("selector");
+        assert_eq!(decision.method, OptimizeMethod::LBfgsB);
+        assert!(decision.reason.contains("box constraints"));
+    }
+
+    #[test]
+    fn casp_selector_chooses_curvature_methods_by_scale_and_hessp() {
+        let newton = select_minimize_method(OptCaspProblem {
+            dimension: 20,
+            variable_scale_ratio: 100.0,
+            has_box_bounds: false,
+            has_general_constraints: false,
+            gradient_available: true,
+            hessian_product_available: true,
+        })
+        .expect("selector");
+        assert_eq!(newton.method, OptimizeMethod::NewtonCg);
+
+        let trust = select_minimize_method(OptCaspProblem {
+            dimension: 2,
+            variable_scale_ratio: 1.0e8,
+            has_box_bounds: false,
+            has_general_constraints: false,
+            gradient_available: true,
+            hessian_product_available: true,
+        })
+        .expect("selector");
+        assert_eq!(trust.method, OptimizeMethod::TrustExact);
+        assert!(trust.reason.contains("trust-region"));
+    }
+
+    #[test]
+    fn casp_default_minimize_logs_decision_and_uses_newton_cg_when_hessp_available() {
+        const FIXTURE_ID: &str = "casp-default-newton-cg";
+        let _ = get_optimize_traces();
+        let options = MinimizeOptions {
+            method: None,
+            hessp: Some(unit_hessp),
+            fixture_id: Some(FIXTURE_ID),
+            tol: Some(1.0e-10),
+            maxiter: Some(20),
+            maxfev: Some(200),
+            ..MinimizeOptions::default()
+        };
+        let result = minimize(|x| 0.5 * x[0] * x[0], &[3.0], options).expect("minimize");
+        assert!(result.success, "selected optimizer should converge");
+
+        let traces = get_optimize_traces();
+        let decision = traces
+            .iter()
+            .find(|entry| {
+                entry.event == "casp_decision" && entry.fixture_id.as_deref() == Some(FIXTURE_ID)
+            })
+            .expect("CASP decision trace");
+        assert_eq!(decision.method, OptimizeMethod::NewtonCg);
+        assert!(
+            decision
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("Hessian product"))
+        );
     }
 
     #[test]
