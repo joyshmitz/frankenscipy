@@ -195,6 +195,74 @@ pub fn centered_discrepancy(sample: &[f64], dimension: usize) -> Result<f64, Sta
     Ok(leading - 2.0 / n_f * single + double / (n_f * n_f))
 }
 
+/// Compute the mixture L2 discrepancy MD²(P) of an `n × d` point set in
+/// `[0, 1)^d`, with `sample` row-major.
+///
+/// Matches `scipy.stats.qmc.discrepancy(sample, method='MD')`. The formula
+///
+///   MD² = (19/12)^d
+///       − (2/N) Σ_i  Π_k [ 5/3 − 1/4·|xi^k − 1/2| − 1/4·(xi^k − 1/2)² ]
+///       + (1/N²) Σ_{i,j} Π_k [ 15/8 − 1/4·|xi^k − 1/2| − 1/4·|xj^k − 1/2|
+///                                  − 3/4·|xi^k − xj^k|
+///                                  + 1/2·(xi^k − xj^k)² ]
+///
+/// is a "mix" of centered- and wraparound-style weighting and is one of the
+/// four standard L2 discrepancy metrics in scipy.stats.qmc.
+pub fn mixture_discrepancy(sample: &[f64], dimension: usize) -> Result<f64, StatsError> {
+    if dimension == 0 {
+        return Err(StatsError::InvalidArgument(
+            "mixture_discrepancy: dimension must be ≥ 1".to_string(),
+        ));
+    }
+    if sample.len() % dimension != 0 {
+        return Err(StatsError::InvalidArgument(format!(
+            "mixture_discrepancy: sample.len() {} not a multiple of dimension {dimension}",
+            sample.len()
+        )));
+    }
+    let n = sample.len() / dimension;
+    if n == 0 {
+        return Ok((19.0_f64 / 12.0).powi(dimension as i32));
+    }
+    for (idx, &v) in sample.iter().enumerate() {
+        if !v.is_finite() || !(0.0..=1.0).contains(&v) {
+            return Err(StatsError::InvalidArgument(format!(
+                "mixture_discrepancy: sample[{idx}] = {v} outside [0, 1]"
+            )));
+        }
+    }
+    let leading = (19.0_f64 / 12.0).powi(dimension as i32);
+    // Single-sum term.
+    let mut single = 0.0_f64;
+    for i in 0..n {
+        let mut prod = 1.0_f64;
+        for k in 0..dimension {
+            let x = sample[i * dimension + k];
+            let centered = x - 0.5;
+            prod *= 5.0 / 3.0 - 0.25 * centered.abs() - 0.25 * centered * centered;
+        }
+        single += prod;
+    }
+    // Double-sum term.
+    let mut double = 0.0_f64;
+    for i in 0..n {
+        for j in 0..n {
+            let mut prod = 1.0_f64;
+            for k in 0..dimension {
+                let xi = sample[i * dimension + k];
+                let xj = sample[j * dimension + k];
+                let d = (xi - xj).abs();
+                prod *= 15.0 / 8.0 - 0.25 * (xi - 0.5).abs() - 0.25 * (xj - 0.5).abs()
+                    - 0.75 * d
+                    + 0.5 * (xi - xj).powi(2);
+            }
+            double += prod;
+        }
+    }
+    let n_f = n as f64;
+    Ok(leading - 2.0 / n_f * single + double / (n_f * n_f))
+}
+
 /// Compute the wraparound L2 discrepancy WD²(P) of an `n × d` point set in
 /// `[0, 1)^d`, with `sample` row-major (`sample[i * d + j]` is coordinate j
 /// of point i).
@@ -596,6 +664,67 @@ mod tests {
         assert!(
             cd_halton.abs() < 0.01,
             "Halton CD² {cd_halton} unexpectedly large"
+        );
+    }
+
+    #[test]
+    fn mixture_rejects_invalid_inputs() {
+        assert!(matches!(
+            mixture_discrepancy(&[], 0),
+            Err(StatsError::InvalidArgument(_))
+        ));
+        assert!(matches!(
+            mixture_discrepancy(&[0.1, 0.2, 0.3], 2),
+            Err(StatsError::InvalidArgument(_))
+        ));
+        assert!(matches!(
+            mixture_discrepancy(&[1.5], 1),
+            Err(StatsError::InvalidArgument(_))
+        ));
+    }
+
+    #[test]
+    fn mixture_empty_sample_is_leading_constant() {
+        let d = 3;
+        let md = mixture_discrepancy(&[], d).unwrap();
+        let expected = (19.0_f64 / 12.0).powi(d as i32);
+        assert!(
+            (md - expected).abs() < 1e-15,
+            "empty MD² should equal (19/12)^d = {expected}, got {md}"
+        );
+    }
+
+    #[test]
+    fn mixture_metamorphic_single_point_at_center() {
+        // For n=1 at the center of every dimension, |xi-1/2| = 0 and the
+        // single/double products reduce to (5/3)^d / 1 and (15/8)^d / 1.
+        // MD² = (19/12)^d - 2·(5/3)^d + (15/8)^d.
+        for d in 1..=4 {
+            let sample = vec![0.5_f64; d];
+            let md = mixture_discrepancy(&sample, d).unwrap();
+            let leading = (19.0_f64 / 12.0).powi(d as i32);
+            let single = (5.0_f64 / 3.0).powi(d as i32);
+            let double = (15.0_f64 / 8.0).powi(d as i32);
+            let expected = leading - 2.0 * single + double;
+            assert!(
+                (md - expected).abs() < 1e-13,
+                "d={d}: center-point MD²={md}, expected={expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn mixture_metamorphic_halton_beats_aligned_2d() {
+        let n = 64;
+        let d = 2;
+        let mut h = HaltonSampler::new(d).unwrap();
+        let halton = h.sample(n);
+        let aligned = vec![0.5_f64; n * d];
+        let md_halton = mixture_discrepancy(&halton, d).unwrap();
+        let md_aligned = mixture_discrepancy(&aligned, d).unwrap();
+        assert!(
+            md_halton < md_aligned,
+            "Halton MD²={md_halton} should beat aligned MD²={md_aligned}"
         );
     }
 
