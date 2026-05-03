@@ -6164,6 +6164,7 @@ impl ContinuousDistribution for Semicircular {
 /// Cosine distribution on [-π, π].
 ///
 /// Matches `scipy.stats.cosine`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CosineDistribution;
 
 impl ContinuousDistribution for CosineDistribution {
@@ -6191,6 +6192,20 @@ impl ContinuousDistribution for CosineDistribution {
 
     fn var(&self) -> f64 {
         PI * PI / 3.0 - 2.0 // π²/3 - 2
+    }
+
+    fn fit(_data: &[f64]) -> Self {
+        Self
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        validate_parameterless_fit_data(data)?;
+        if data.iter().any(|&x| x.abs() > PI) {
+            return Err(FitError::UnsupportedData(
+                "CosineDistribution data must lie in [-π, π]".to_owned(),
+            ));
+        }
+        Ok(Self)
     }
 }
 
@@ -6280,6 +6295,7 @@ impl ContinuousDistribution for Erlang {
 /// Anglit distribution on [-π/4, π/4].
 ///
 /// Matches `scipy.stats.anglit`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Anglit;
 
 impl ContinuousDistribution for Anglit {
@@ -6323,6 +6339,21 @@ impl ContinuousDistribution for Anglit {
 
     fn var(&self) -> f64 {
         PI * PI / 16.0 - 0.5 // π²/16 - 1/2
+    }
+
+    fn fit(_data: &[f64]) -> Self {
+        Self
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        validate_parameterless_fit_data(data)?;
+        let quarter_pi = PI / 4.0;
+        if data.iter().any(|&x| x.abs() > quarter_pi) {
+            return Err(FitError::UnsupportedData(
+                "Anglit data must lie in [-π/4, π/4]".to_owned(),
+            ));
+        }
+        Ok(Self)
     }
 }
 
@@ -6954,6 +6985,7 @@ impl ContinuousDistribution for Mielke {
 /// Moyal distribution.
 ///
 /// Matches `scipy.stats.moyal`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Moyal;
 
 impl ContinuousDistribution for Moyal {
@@ -6995,6 +7027,16 @@ impl ContinuousDistribution for Moyal {
 
     fn var(&self) -> f64 {
         PI * PI / 2.0
+    }
+
+    fn fit(_data: &[f64]) -> Self {
+        Self
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        // Moyal has unbounded support; only finite-value validation applies.
+        validate_parameterless_fit_data(data)?;
+        Ok(Self)
     }
 }
 
@@ -29038,6 +29080,31 @@ mod tests {
         ));
         assert!(matches!(
             HypSecant::try_fit(&[0.0, f64::NAN]),
+            Err(FitError::UnsupportedData(_))
+        ));
+    }
+
+    #[test]
+    fn parameterless_fit_anglit_cosine_moyal() {
+        // Anglit support [-π/4, π/4]
+        assert_eq!(Anglit::try_fit(&[-0.5, 0.0, 0.5]).unwrap(), Anglit);
+        assert!(matches!(
+            Anglit::try_fit(&[1.0]),
+            Err(FitError::UnsupportedData(_))
+        ));
+        // CosineDistribution support [-π, π]
+        assert_eq!(
+            CosineDistribution::try_fit(&[-2.0, 0.0, 2.0]).unwrap(),
+            CosineDistribution
+        );
+        assert!(matches!(
+            CosineDistribution::try_fit(&[10.0]),
+            Err(FitError::UnsupportedData(_))
+        ));
+        // Moyal support ℝ; only NaN/empty are rejected.
+        assert_eq!(Moyal::try_fit(&[-50.0, 0.0, 50.0]).unwrap(), Moyal);
+        assert!(matches!(
+            Moyal::try_fit(&[f64::INFINITY]),
             Err(FitError::UnsupportedData(_))
         ));
     }
