@@ -8071,6 +8071,7 @@ impl ContinuousDistribution for InvWeibull {
 /// Generalized normal distribution (exponential power).
 ///
 /// Matches `scipy.stats.gennorm`.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GenNorm {
     pub beta: f64,
 }
@@ -8108,6 +8109,70 @@ impl ContinuousDistribution for GenNorm {
     fn var(&self) -> f64 {
         let b = self.beta;
         ln_gamma(3.0 / b).exp() / ln_gamma(1.0 / b).exp()
+    }
+
+    fn fit(data: &[f64]) -> Self {
+        Self::try_fit(data).unwrap_or_else(|e| {
+            panic!("GenNorm::fit failed: {e}");
+        })
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        if data.len() < 2 {
+            return Err(FitError::InsufficientData {
+                required: 2,
+                actual: data.len(),
+            });
+        }
+        for &x in data {
+            if !x.is_finite() {
+                return Err(FitError::UnsupportedData(format!(
+                    "GenNorm data contains non-finite value: {x}"
+                )));
+            }
+        }
+        // Method-of-moments: standardized variance is
+        //   Var(β) = Γ(3/β) / Γ(1/β)
+        // monotone-decreasing in β. β=1 → Var=2 (Laplace);
+        // β=2 → Var=1 (standard normal); β→∞ → Var → 1/3 (uniform).
+        // Sample variance about 0 is the natural moment (the distribution
+        // is centered at 0).
+        let n = data.len() as f64;
+        let m2_about_zero: f64 = data.iter().map(|x| x * x).sum::<f64>() / n;
+        if !m2_about_zero.is_finite() || m2_about_zero <= 0.0 {
+            return Err(FitError::NonConvergent(format!(
+                "GenNorm MoM: sample E[x²] {m2_about_zero} non-positive"
+            )));
+        }
+        let var_of = |beta: f64| -> f64 {
+            ln_gamma(3.0 / beta).exp() / ln_gamma(1.0 / beta).exp()
+        };
+        // Bracket. β=0.1 gives huge variance; β=50 gives variance ~ 1/3.
+        let mut lo = 0.1_f64;
+        let mut hi = 50.0_f64;
+        let v_lo = var_of(lo);
+        let v_hi = var_of(hi);
+        // var is monotone-decreasing in β, so v_lo ≥ target ≥ v_hi.
+        if !(v_hi <= m2_about_zero && m2_about_zero <= v_lo) {
+            return Err(FitError::NonConvergent(format!(
+                "GenNorm MoM bracket failed: var({lo})={v_lo}, var({hi})={v_hi}, target={m2_about_zero}"
+            )));
+        }
+        for _ in 0..200 {
+            let mid = 0.5 * (lo + hi);
+            let v_mid = var_of(mid);
+            if (v_mid - m2_about_zero).abs() < 1.0e-12 || (hi - lo) < lo * 1.0e-12 + 1.0e-15 {
+                return Ok(Self { beta: mid });
+            }
+            if v_mid > m2_about_zero {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        Ok(Self {
+            beta: 0.5 * (lo + hi),
+        })
     }
 }
 
@@ -29692,6 +29757,55 @@ mod tests {
     fn pearson3_fit_rejects_too_few_samples() {
         let err = Pearson3::try_fit(&[1.0, 2.0]).expect_err("n=2 must be rejected");
         assert!(matches!(err, FitError::InsufficientData { .. }));
+    }
+
+    #[test]
+    fn gennorm_fit_metamorphic_var_recovery() {
+        // After fitting, the fitted distribution's variance must match the
+        // sample variance about 0 to bisection precision.
+        let data = [-0.5_f64, 0.0, 0.5, -1.0, 1.0, 0.3, -0.7, 0.8, -0.4];
+        let n = data.len() as f64;
+        let m2: f64 = data.iter().map(|x| x * x).sum::<f64>() / n;
+        let fitted = GenNorm::try_fit(&data).expect("fit");
+        let recovered = fitted.var();
+        assert!(
+            (recovered - m2).abs() < 1.0e-6,
+            "MoM var recovery: sample E[x²] {m2}, fitted var {recovered}"
+        );
+    }
+
+    #[test]
+    fn gennorm_fit_synthetic_recovery_unit_variance() {
+        // β=2 corresponds to the standard normal with var=1. Synthesizing
+        // n=2000 from GenNorm(2.0) and fitting should give β ≈ 2.
+        let true_beta = 2.0;
+        let dist = GenNorm::new(true_beta);
+        let n = 2000;
+        let samples: Vec<f64> = (1..=n)
+            .map(|i| dist.ppf((i as f64 - 0.5) / n as f64))
+            .filter(|x| x.is_finite() && x.abs() < 1.0e6)
+            .collect();
+        assert!(samples.len() > 1500);
+        let fitted = GenNorm::try_fit(&samples).expect("fit");
+        let rel = (fitted.beta - true_beta).abs() / true_beta;
+        assert!(
+            rel < 0.10,
+            "GenNorm::fit recovery: got β={}, true {true_beta}, rel_err={rel}",
+            fitted.beta
+        );
+    }
+
+    #[test]
+    fn gennorm_fit_rejects_too_few_samples() {
+        let err = GenNorm::try_fit(&[1.0]).expect_err("n=1 must be rejected");
+        assert!(matches!(err, FitError::InsufficientData { .. }));
+    }
+
+    #[test]
+    fn gennorm_fit_rejects_zero_data() {
+        let err = GenNorm::try_fit(&[0.0, 0.0])
+            .expect_err("zero variance must be rejected");
+        assert!(matches!(err, FitError::NonConvergent(_)));
     }
 
     #[test]
