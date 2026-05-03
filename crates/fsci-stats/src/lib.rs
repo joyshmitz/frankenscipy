@@ -4438,6 +4438,7 @@ impl ContinuousDistribution for InverseGamma {
 /// Inverse Gaussian (Wald) distribution.
 ///
 /// Matches `scipy.stats.invgauss`.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct InverseGaussian {
     pub mu: f64, // mean
 }
@@ -4476,6 +4477,47 @@ impl ContinuousDistribution for InverseGaussian {
 
     fn var(&self) -> f64 {
         self.mu.powi(3)
+    }
+
+    fn fit(data: &[f64]) -> Self {
+        Self::try_fit(data).unwrap_or_else(|e| {
+            panic!("InverseGaussian::fit failed: {e}");
+        })
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        if data.len() < 2 {
+            return Err(FitError::InsufficientData {
+                required: 2,
+                actual: data.len(),
+            });
+        }
+        // The standardized scipy.stats.invgauss has implicit λ=1, so its
+        // single shape parameter `mu` is also the population mean. The MLE
+        // collapses to the sample mean: mu_hat = (1/n) Σ x_i.
+        let mut sum = 0.0_f64;
+        let mut count = 0usize;
+        for &x in data {
+            if !x.is_finite() {
+                return Err(FitError::UnsupportedData(format!(
+                    "InverseGaussian data contains non-finite value: {x}"
+                )));
+            }
+            if x <= 0.0 {
+                return Err(FitError::UnsupportedData(format!(
+                    "InverseGaussian support is (0, ∞); got {x}"
+                )));
+            }
+            sum += x;
+            count += 1;
+        }
+        let mu = sum / count as f64;
+        if !mu.is_finite() || mu <= 0.0 {
+            return Err(FitError::NonConvergent(format!(
+                "InverseGaussian MLE produced non-positive mu: {mu}"
+            )));
+        }
+        Ok(Self { mu })
     }
 }
 
@@ -29313,6 +29355,52 @@ mod tests {
     #[test]
     fn pearson3_fit_rejects_too_few_samples() {
         let err = Pearson3::try_fit(&[1.0, 2.0]).expect_err("n=2 must be rejected");
+        assert!(matches!(err, FitError::InsufficientData { .. }));
+    }
+
+    #[test]
+    fn invgauss_fit_mu_equals_sample_mean() {
+        let data = [0.5_f64, 1.0, 1.5, 2.0, 2.5, 3.0];
+        let fitted = InverseGaussian::try_fit(&data).expect("fit");
+        let expected = data.iter().sum::<f64>() / data.len() as f64;
+        assert!(
+            (fitted.mu - expected).abs() < 1e-13,
+            "InverseGaussian::fit.mu {} != sample mean {expected}",
+            fitted.mu
+        );
+    }
+
+    #[test]
+    fn invgauss_fit_metamorphic_synthetic_recovery() {
+        // Synthesize n=2000 samples from InverseGaussian(mu=1.5) via
+        // ppf grid; the sample mean recovers mu within 1%.
+        let true_mu = 1.5;
+        let dist = InverseGaussian::new(true_mu);
+        let n = 2000;
+        let samples: Vec<f64> = (1..=n)
+            .map(|k| dist.ppf((k as f64 - 0.5) / n as f64))
+            .filter(|x| x.is_finite())
+            .collect();
+        assert!(samples.len() > 1500, "ppf yielded too many infinities");
+        let fitted = InverseGaussian::try_fit(&samples).expect("fit");
+        let rel_err = (fitted.mu - true_mu).abs() / true_mu;
+        assert!(
+            rel_err < 0.01,
+            "InverseGaussian::fit recovery: got mu={}, true mu={true_mu}, rel_err={rel_err}",
+            fitted.mu
+        );
+    }
+
+    #[test]
+    fn invgauss_fit_rejects_non_positive() {
+        let err = InverseGaussian::try_fit(&[1.0, 2.0, 0.0])
+            .expect_err("zero must be rejected");
+        assert!(matches!(err, FitError::UnsupportedData(_)));
+    }
+
+    #[test]
+    fn invgauss_fit_rejects_too_few_samples() {
+        let err = InverseGaussian::try_fit(&[1.0]).expect_err("n=1 must be rejected");
         assert!(matches!(err, FitError::InsufficientData { .. }));
     }
 
