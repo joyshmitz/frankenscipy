@@ -20,6 +20,7 @@ members = [
   "crates/fsci-conformance",
   "crates/fsci-runtime",
   "crates/fsci-datasets",
+  "crates/fsci-odr",
 ]
 
 [workspace.package]
@@ -42,6 +43,7 @@ fsci-interpolate = { path = "crates/fsci-interpolate" }
 fsci-io = { path = "crates/fsci-io" }
 fsci-linalg = { path = "crates/fsci-linalg" }
 fsci-ndimage = { path = "crates/fsci-ndimage" }
+fsci-odr = { path = "crates/fsci-odr" }
 fsci-opt = { path = "crates/fsci-opt" }
 fsci-runtime = { path = "crates/fsci-runtime" }
 fsci-sparse = { path = "crates/fsci-sparse" }
