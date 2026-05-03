@@ -219,6 +219,7 @@ pub use error::{
 };
 pub use gamma::{
     GAMMA_DISPATCH_PLAN, chdtr, chdtrc, chdtri, chdtriv, comb, digamma, factorial, factorial2,
+    factorialk,
     gamma, gamma_with_audit, gammainc, gammainc_scalar, gammaincc, gammaincc_scalar, gammaln,
     gammaln_scalar, gdtr, gdtrc, gdtria, gdtrib, gdtrix, multigammaln, pdtr, pdtrc, pdtri, pdtrik,
     perm, polygamma, rgamma, zeta, zetac,

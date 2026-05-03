@@ -1437,6 +1437,35 @@ pub fn factorial2(n: i64) -> f64 {
     }
 }
 
+/// k-step factorial: `n * (n − k) * (n − 2k) * … * r`, where the iteration
+/// stops at the smallest positive remainder `r`.
+///
+/// Matches `scipy.special.factorialk(n, k, exact=False)`. Conventions:
+/// - `n == 0` returns 1.0 (empty-product identity).
+/// - `n < 0` returns NaN (real factorialk only defined on non-negative
+///   integers; scipy.special's exact=False mode also returns NaN here).
+/// - `k < 1` returns NaN (k must be a positive integer).
+/// - `k == 1` reduces to the ordinary factorial; `k == 2` to the double
+///   factorial.
+pub fn factorialk(n: i64, k: i64) -> f64 {
+    if k < 1 {
+        return f64::NAN;
+    }
+    if n < 0 {
+        return f64::NAN;
+    }
+    if n == 0 {
+        return 1.0;
+    }
+    let mut result = 1.0_f64;
+    let mut step = n;
+    while step > 0 {
+        result *= step as f64;
+        step -= k;
+    }
+    result
+}
+
 /// Poisson distribution CDF: P(X <= k) for Poisson with mean m.
 ///
 /// Matches `scipy.special.pdtr(k, m)`.
@@ -3469,5 +3498,63 @@ mod tests {
             "gamma should equal exp(gammaln)"
         );
         Ok(())
+    }
+
+    #[test]
+    fn factorialk_zero_and_negative_conventions() {
+        assert_eq!(factorialk(0, 1), 1.0);
+        assert_eq!(factorialk(0, 5), 1.0);
+        assert!(factorialk(-1, 1).is_nan());
+        assert!(factorialk(5, 0).is_nan());
+        assert!(factorialk(5, -2).is_nan());
+    }
+
+    #[test]
+    fn factorialk_metamorphic_k_one_matches_factorial() {
+        // factorialk(n, 1) == n! for n in 0..=10
+        for n in 0..=10 {
+            let fk = factorialk(n, 1);
+            let fact = factorial(n as u64);
+            assert!(
+                (fk - fact).abs() < 1e-12,
+                "factorialk({n}, 1) = {fk}, factorial({n}) = {fact}"
+            );
+        }
+    }
+
+    #[test]
+    fn factorialk_metamorphic_k_two_matches_factorial2() {
+        // factorialk(n, 2) == n!! for n in 0..=15
+        for n in 0..=15 {
+            let fk = factorialk(n, 2);
+            let f2 = factorial2(n);
+            assert!(
+                (fk - f2).abs() < 1e-12,
+                "factorialk({n}, 2) = {fk}, factorial2({n}) = {f2}"
+            );
+        }
+    }
+
+    #[test]
+    fn factorialk_metamorphic_recurrence() {
+        // For n >= k, factorialk(n, k) == n * factorialk(n - k, k).
+        for n in 1..=20 {
+            for k in 1..=5 {
+                if n >= k {
+                    let lhs = factorialk(n, k);
+                    let rhs = (n as f64) * factorialk(n - k, k);
+                    assert!(
+                        (lhs - rhs).abs() < 1e-9 * lhs.abs().max(1.0),
+                        "factorialk({n}, {k}) = {lhs}, n * factorialk({n}-{k}, {k}) = {rhs}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn factorialk_known_value_n_10_k_3() {
+        // 10 * 7 * 4 * 1 = 280
+        assert_eq!(factorialk(10, 3), 280.0);
     }
 }
