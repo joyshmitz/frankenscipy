@@ -8179,6 +8179,7 @@ impl ContinuousDistribution for GenNorm {
 /// Half generalized normal distribution (upper half of `gennorm`).
 ///
 /// Matches `scipy.stats.halfgennorm`.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HalfGenNorm {
     pub beta: f64,
 }
@@ -8237,6 +8238,69 @@ impl ContinuousDistribution for HalfGenNorm {
         let b = self.beta;
         let mean = self.mean();
         ln_gamma(3.0 / b).exp() / ln_gamma(1.0 / b).exp() - mean * mean
+    }
+
+    fn fit(data: &[f64]) -> Self {
+        Self::try_fit(data).unwrap_or_else(|e| {
+            panic!("HalfGenNorm::fit failed: {e}");
+        })
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        if data.len() < 2 {
+            return Err(FitError::InsufficientData {
+                required: 2,
+                actual: data.len(),
+            });
+        }
+        let mut sum = 0.0_f64;
+        let mut count = 0usize;
+        for &x in data {
+            if !x.is_finite() {
+                return Err(FitError::UnsupportedData(format!(
+                    "HalfGenNorm data contains non-finite value: {x}"
+                )));
+            }
+            if x < 0.0 {
+                return Err(FitError::UnsupportedData(format!(
+                    "HalfGenNorm support is [0, ∞); got {x}"
+                )));
+            }
+            sum += x;
+            count += 1;
+        }
+        let mean = sum / count as f64;
+        if mean <= 0.0 || !mean.is_finite() {
+            return Err(FitError::NonConvergent(format!(
+                "HalfGenNorm MoM: sample mean {mean} non-positive"
+            )));
+        }
+        // Mean(β) = Γ(2/β) / Γ(1/β), monotone-decreasing in β.
+        let mean_of = |beta: f64| ln_gamma(2.0 / beta).exp() / ln_gamma(1.0 / beta).exp();
+        let mut lo = 0.1_f64;
+        let mut hi = 50.0_f64;
+        let m_lo = mean_of(lo);
+        let m_hi = mean_of(hi);
+        if !(m_hi <= mean && mean <= m_lo) {
+            return Err(FitError::NonConvergent(format!(
+                "HalfGenNorm MoM bracket failed: mean({lo})={m_lo}, mean({hi})={m_hi}, target={mean}"
+            )));
+        }
+        for _ in 0..200 {
+            let mid = 0.5 * (lo + hi);
+            let m_mid = mean_of(mid);
+            if (m_mid - mean).abs() < 1.0e-12 || (hi - lo) < lo * 1.0e-12 + 1.0e-15 {
+                return Ok(Self { beta: mid });
+            }
+            if m_mid > mean {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        Ok(Self {
+            beta: 0.5 * (lo + hi),
+        })
     }
 }
 
@@ -29756,6 +29820,53 @@ mod tests {
     #[test]
     fn pearson3_fit_rejects_too_few_samples() {
         let err = Pearson3::try_fit(&[1.0, 2.0]).expect_err("n=2 must be rejected");
+        assert!(matches!(err, FitError::InsufficientData { .. }));
+    }
+
+    #[test]
+    fn halfgennorm_fit_metamorphic_mean_recovery() {
+        let data = [0.5_f64, 1.0, 1.5, 0.7, 1.2, 0.3, 0.8];
+        let m: f64 = data.iter().sum::<f64>() / data.len() as f64;
+        let fitted = HalfGenNorm::try_fit(&data).expect("fit");
+        let recovered = fitted.mean();
+        assert!(
+            (recovered - m).abs() < 1.0e-6,
+            "MoM mean recovery: sample {m}, fitted {recovered}"
+        );
+    }
+
+    #[test]
+    fn halfgennorm_fit_recovers_synthetic_shape() {
+        // Synthesize n=2000 samples from HalfGenNorm(β=2.0). Population
+        // mean is Γ(1)/Γ(0.5) = 1/√π ≈ 0.564. MoM bisection on mean
+        // recovers β within 5%.
+        let true_beta = 2.0;
+        let dist = HalfGenNorm::new(true_beta);
+        let n = 2000;
+        let samples: Vec<f64> = (1..=n)
+            .map(|i| dist.ppf((i as f64 - 0.5) / n as f64))
+            .filter(|x| x.is_finite() && *x < 1.0e6)
+            .collect();
+        assert!(samples.len() > 1500);
+        let fitted = HalfGenNorm::try_fit(&samples).expect("fit");
+        let rel = (fitted.beta - true_beta).abs() / true_beta;
+        assert!(
+            rel < 0.05,
+            "HalfGenNorm::fit recovery: got β={}, true {true_beta}, rel_err={rel}",
+            fitted.beta
+        );
+    }
+
+    #[test]
+    fn halfgennorm_fit_rejects_negative_observation() {
+        let err = HalfGenNorm::try_fit(&[0.5, 1.0, -0.1])
+            .expect_err("negative must be rejected");
+        assert!(matches!(err, FitError::UnsupportedData(_)));
+    }
+
+    #[test]
+    fn halfgennorm_fit_rejects_too_few_samples() {
+        let err = HalfGenNorm::try_fit(&[0.5]).expect_err("n=1 must be rejected");
         assert!(matches!(err, FitError::InsufficientData { .. }));
     }
 
