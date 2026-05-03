@@ -2653,12 +2653,12 @@ fn parse_arff_attribute(line: &str) -> Result<ArffAttribute, IoError> {
         }
         Ok(ArffAttribute::Nominal { name, domain })
     } else {
-        let type_token = rest
+        let type_part = rest
             .split_whitespace()
             .next()
             .unwrap_or("")
             .to_ascii_lowercase();
-        match type_token.as_str() {
+        match type_part.as_str() {
             "numeric" | "real" | "integer" => Ok(ArffAttribute::Numeric { name }),
             "string" => Ok(ArffAttribute::String { name }),
             "date" => Err(IoError::UnsupportedFeature(format!(
@@ -2728,10 +2728,10 @@ fn parse_arff_data_row(
                 continue;
             }
             let mut parts = entry.splitn(2, char::is_whitespace);
-            let idx_token = parts.next().unwrap_or("");
-            let val_token = parts.next().unwrap_or("").trim();
-            let idx: usize = idx_token.parse().map_err(|e| {
-                IoError::InvalidFormat(format!("ARFF sparse index '{idx_token}': {e}"))
+            let idx_part = parts.next().unwrap_or("");
+            let value_part = parts.next().unwrap_or("").trim();
+            let idx: usize = idx_part.parse().map_err(|e| {
+                IoError::InvalidFormat(format!("ARFF sparse index '{idx_part}': {e}"))
             })?;
             if idx >= attributes.len() {
                 return Err(IoError::InvalidFormat(format!(
@@ -2739,7 +2739,7 @@ fn parse_arff_data_row(
                     attributes.len()
                 )));
             }
-            row[idx] = parse_arff_cell(val_token, &attributes[idx])?;
+            row[idx] = parse_arff_cell(value_part, &attributes[idx])?;
         }
         Ok(row)
     } else {
@@ -3884,10 +3884,7 @@ mod tests {
         );
         let err = read_harwell_boeing(&content)
             .expect_err("complex unsupported variant must be rejected");
-        match err {
-            IoError::UnsupportedFeature(m) => assert!(m.contains("CUA"), "{m}"),
-            _ => panic!("wrong error: {err:?}"),
-        }
+        assert!(matches!(err, IoError::UnsupportedFeature(ref m) if m.contains("CUA")));
     }
 
     #[test]
@@ -3930,14 +3927,11 @@ mod tests {
         assert_eq!(parsed.relation, "iris");
         assert_eq!(parsed.attributes.len(), 2);
         assert_eq!(parsed.rows.len(), 2);
-        match &parsed.rows[0][0] {
-            ArffValue::Numeric(v) => assert!((v - 5.1).abs() < 1e-12),
-            other => panic!("expected numeric, got {other:?}"),
-        }
-        match &parsed.rows[0][1] {
-            ArffValue::Nominal(v) => assert_eq!(v, "Iris-setosa"),
-            other => panic!("expected nominal, got {other:?}"),
-        }
+        assert!(matches!(&parsed.rows[0][0], ArffValue::Numeric(v) if (v - 5.1).abs() < 1e-12));
+        assert_eq!(
+            parsed.rows[0][1],
+            ArffValue::Nominal("Iris-setosa".to_string())
+        );
     }
 
     #[test]
@@ -3965,15 +3959,15 @@ mod tests {
                     b\n\
                     c\n";
         let parsed = read_arff(arff).unwrap();
-        let domain = match &parsed.attributes[0] {
-            ArffAttribute::Nominal { domain, .. } => domain.clone(),
-            _ => panic!("expected nominal"),
-        };
+        assert!(matches!(
+            &parsed.attributes[0],
+            ArffAttribute::Nominal { .. }
+        ));
         for row in &parsed.rows {
-            match &row[0] {
-                ArffValue::Nominal(v) => assert!(domain.contains(v), "{v} not in {domain:?}"),
-                other => panic!("expected nominal, got {other:?}"),
-            }
+            assert!(matches!(
+                (&parsed.attributes[0], &row[0]),
+                (ArffAttribute::Nominal { domain, .. }, ArffValue::Nominal(v)) if domain.contains(v)
+            ));
         }
     }
 
@@ -3989,18 +3983,9 @@ mod tests {
         assert_eq!(parsed.rows.len(), 1);
         let row = &parsed.rows[0];
         // Per ARFF sparse semantics: missing numeric cells default to 0.0.
-        match &row[0] {
-            ArffValue::Numeric(v) => assert!((v - 5.5).abs() < 1e-12),
-            other => panic!("got {other:?}"),
-        }
-        match &row[1] {
-            ArffValue::Numeric(v) => assert_eq!(*v, 0.0),
-            other => panic!("got {other:?}"),
-        }
-        match &row[2] {
-            ArffValue::Nominal(v) => assert_eq!(v, "y"),
-            other => panic!("got {other:?}"),
-        }
+        assert!(matches!(&row[0], ArffValue::Numeric(v) if (v - 5.5).abs() < 1e-12));
+        assert_eq!(row[1], ArffValue::Numeric(0.0));
+        assert_eq!(row[2], ArffValue::Nominal("y".to_string()));
     }
 
     #[test]
@@ -4016,10 +4001,10 @@ mod tests {
         let parsed = read_arff(arff).expect("ARFF parse with comments");
         assert_eq!(parsed.relation, "fancy name");
         assert_eq!(parsed.rows.len(), 3);
-        match &parsed.rows[1][1] {
-            ArffValue::String(s) => assert_eq!(s, "with comma, here"),
-            other => panic!("got {other:?}"),
-        }
+        assert_eq!(
+            parsed.rows[1][1],
+            ArffValue::String("with comma, here".to_string())
+        );
         assert_eq!(parsed.rows[2][0], ArffValue::Missing);
         assert_eq!(parsed.rows[2][1], ArffValue::Missing);
     }
@@ -4102,10 +4087,7 @@ mod tests {
         bytes.extend_from_slice(&7_i32.to_le_bytes()); // wrong trailer
         let err = read_fortran_unformatted(&bytes, FortranEndian::Little)
             .expect_err("trailer mismatch must fail");
-        match err {
-            IoError::InvalidFormat(msg) => assert!(msg.contains("trailer"), "{msg}"),
-            _ => panic!("wrong error: {err:?}"),
-        }
+        assert!(matches!(err, IoError::InvalidFormat(ref msg) if msg.contains("trailer")));
     }
 
     #[test]
