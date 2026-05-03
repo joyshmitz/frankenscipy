@@ -2744,6 +2744,39 @@ pub fn zeta_scalar(s: f64) -> f64 {
     crate::gamma::zeta(s)
 }
 
+/// Compute the Faddeeva function w(z) = exp(−z²) · erfc(−iz) at a real
+/// argument `x`, returning the real and imaginary parts as `(re, im)`.
+///
+/// On the real axis the closed form is
+///   Re[w(x)] = exp(−x²)
+///   Im[w(x)] = (2/√π) · F(x)
+/// where F is the Dawson function `dawsn`. This matches
+/// `scipy.special.wofz(x + 0j)` for real x. Complex argument support is a
+/// follow-on tracked under bead `frankenscipy-b6z3m`.
+pub fn wofz_real(x: f64) -> (f64, f64) {
+    if x.is_nan() {
+        return (f64::NAN, f64::NAN);
+    }
+    let re = (-x * x).exp();
+    let two_over_sqrt_pi = 2.0 / std::f64::consts::PI.sqrt();
+    let im = two_over_sqrt_pi * dawsn_scalar(x);
+    (re, im)
+}
+
+/// Voigt profile V(x; σ, γ) on the real axis at γ = 0.
+///
+/// `scipy.special.voigt_profile(x, sigma, 0)` collapses to a Gaussian and is
+/// a useful real-only fast path. Adding the full γ ≠ 0 path (which needs
+/// complex `wofz`) is a follow-on.
+pub fn voigt_profile_real_gamma_zero(x: f64, sigma: f64) -> f64 {
+    if sigma <= 0.0 || sigma.is_nan() || x.is_nan() {
+        return f64::NAN;
+    }
+    // Gaussian PDF with mean 0 and stddev sigma.
+    let coeff = 1.0 / (sigma * (2.0 * std::f64::consts::PI).sqrt());
+    coeff * (-(x * x) / (2.0 * sigma * sigma)).exp()
+}
+
 /// Compute the Tukey-lambda CDF F(x; λ).
 ///
 /// Matches `scipy.special.tklmbda(x, lam)`. The Tukey-lambda family has a
@@ -7803,6 +7836,78 @@ mod tests {
         assert!(cosm1_scalar(f64::NAN).is_nan());
         // Exactly π: cos(π) - 1 = -2.
         assert!((cosm1_scalar(std::f64::consts::PI) - (-2.0)).abs() < 1e-15);
+    }
+
+    #[test]
+    fn wofz_real_at_zero_is_one_zero() {
+        let (re, im) = wofz_real(0.0);
+        assert!((re - 1.0).abs() < 1e-15);
+        assert!((im - 0.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn wofz_real_metamorphic_real_part_is_gaussian() {
+        // Re[w(x)] = exp(-x²) for all real x.
+        for &x in &[-3.0_f64, -1.0, -0.3, 0.3, 1.0, 3.0] {
+            let (re, _) = wofz_real(x);
+            let expected = (-x * x).exp();
+            assert!(
+                (re - expected).abs() < 1e-15,
+                "Re[w({x})] = {re}, expected {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn wofz_real_metamorphic_imag_relates_to_dawson() {
+        // Im[w(x)] = (2/√π) · dawsn(x).
+        let scale = 2.0 / std::f64::consts::PI.sqrt();
+        for &x in &[-2.0_f64, -0.5, 0.0, 0.5, 2.0] {
+            let (_, im) = wofz_real(x);
+            let expected = scale * dawsn_scalar(x);
+            assert!(
+                (im - expected).abs() < 1e-12,
+                "Im[w({x})] = {im}, expected {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn wofz_real_metamorphic_odd_imag() {
+        // Im[w(-x)] = -Im[w(x)] (because dawsn is odd).
+        for &x in &[0.5_f64, 1.5, 3.0] {
+            let (_, im_pos) = wofz_real(x);
+            let (_, im_neg) = wofz_real(-x);
+            assert!(
+                (im_pos + im_neg).abs() < 1e-13,
+                "Im[w({x})]={im_pos}, Im[w(-{x})]={im_neg} should be antisymmetric"
+            );
+        }
+    }
+
+    #[test]
+    fn wofz_real_propagates_nan() {
+        let (re, im) = wofz_real(f64::NAN);
+        assert!(re.is_nan() && im.is_nan());
+    }
+
+    #[test]
+    fn voigt_profile_real_gamma_zero_is_gaussian() {
+        // V(x; σ, 0) = (1/(σ√(2π))) exp(-x²/(2σ²)).
+        let sigma = 1.5;
+        let coeff = 1.0 / (sigma * (2.0 * std::f64::consts::PI).sqrt());
+        for &x in &[-2.0_f64, 0.0, 1.0, 2.5] {
+            let v = voigt_profile_real_gamma_zero(x, sigma);
+            let expected = coeff * (-(x * x) / (2.0 * sigma * sigma)).exp();
+            assert!((v - expected).abs() < 1e-15);
+        }
+    }
+
+    #[test]
+    fn voigt_profile_real_gamma_zero_rejects_nonpositive_sigma() {
+        assert!(voigt_profile_real_gamma_zero(1.0, 0.0).is_nan());
+        assert!(voigt_profile_real_gamma_zero(1.0, -0.5).is_nan());
+        assert!(voigt_profile_real_gamma_zero(f64::NAN, 1.0).is_nan());
     }
 
     #[test]

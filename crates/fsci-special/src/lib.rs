@@ -201,6 +201,8 @@ pub use convenience::{
     tetragamma,
     threshold,
     tklmbda,
+    voigt_profile_real_gamma_zero,
+    wofz_real,
     trigamma,
     trunc,
     wrightomega,
