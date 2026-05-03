@@ -4449,6 +4449,7 @@ impl ContinuousDistribution for InverseGaussian {
 /// Pearson type III distribution.
 ///
 /// Matches `scipy.stats.pearson3`.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Pearson3 {
     pub skew: f64,
 }
@@ -4539,6 +4540,56 @@ impl ContinuousDistribution for Pearson3 {
 
     fn var(&self) -> f64 {
         1.0
+    }
+
+    fn fit(data: &[f64]) -> Self {
+        Self::try_fit(data).unwrap_or_else(|e| {
+            panic!("Pearson3::fit failed: {e}");
+        })
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        if data.len() < 3 {
+            return Err(FitError::InsufficientData {
+                required: 3,
+                actual: data.len(),
+            });
+        }
+        for &x in data {
+            if !x.is_finite() {
+                return Err(FitError::UnsupportedData(format!(
+                    "Pearson3 data contains non-finite value: {x}"
+                )));
+            }
+        }
+        // Method-of-moments skewness estimator g₁ = m₃ / m₂^1.5,
+        // where m_k is the k-th central moment. Pearson3 in this crate
+        // is the standardized form (loc=0, scale=1), so its single shape
+        // parameter is the skewness — and the natural estimator is
+        // exactly the sample skewness.
+        let n = data.len() as f64;
+        let mean: f64 = data.iter().sum::<f64>() / n;
+        let mut m2 = 0.0_f64;
+        let mut m3 = 0.0_f64;
+        for &x in data {
+            let d = x - mean;
+            m2 += d * d;
+            m3 += d * d * d;
+        }
+        m2 /= n;
+        m3 /= n;
+        if !m2.is_finite() || m2 <= 0.0 {
+            return Err(FitError::NonConvergent(format!(
+                "Pearson3 fit: sample variance {m2} is non-positive"
+            )));
+        }
+        let skew = m3 / m2.powf(1.5);
+        if !skew.is_finite() {
+            return Err(FitError::NonConvergent(format!(
+                "Pearson3 fit: skew estimate {skew} is non-finite"
+            )));
+        }
+        Ok(Self { skew })
     }
 }
 
@@ -28786,6 +28837,61 @@ mod tests {
         let err = LogLaplace::try_fit(&[1.0, 1.0, 1.0])
             .expect_err("all-unit data must be rejected");
         assert!(matches!(err, FitError::NonConvergent(_)));
+    }
+
+    #[test]
+    fn pearson3_fit_zero_skew_for_symmetric_data() {
+        // Symmetric data around 0 must have zero sample skewness.
+        let data: Vec<f64> = (-100..=100).map(|i| i as f64 * 0.01).collect();
+        let fitted = Pearson3::try_fit(&data).expect("fit");
+        assert!(
+            fitted.skew.abs() < 1e-12,
+            "symmetric data should yield zero skew, got {}",
+            fitted.skew
+        );
+    }
+
+    #[test]
+    fn pearson3_fit_metamorphic_sign_invariance_under_negation() {
+        // skew(-x) = -skew(x).
+        let data: Vec<f64> = (1..=200).map(|i| (i as f64 / 50.0).powi(2)).collect();
+        let pos = Pearson3::try_fit(&data).unwrap();
+        let neg_data: Vec<f64> = data.iter().map(|x| -x).collect();
+        let neg = Pearson3::try_fit(&neg_data).unwrap();
+        assert!(
+            (pos.skew + neg.skew).abs() < 1e-10,
+            "negation flips skew: pos={}, neg={}",
+            pos.skew,
+            neg.skew
+        );
+    }
+
+    #[test]
+    fn pearson3_fit_metamorphic_scale_invariance() {
+        // Skewness is scale-invariant: skew(α x) = skew(x) for α > 0.
+        let data: Vec<f64> = (1..=500).map(|i| (i as f64 / 100.0).powi(2) - 5.0).collect();
+        let a = Pearson3::try_fit(&data).unwrap();
+        let scaled: Vec<f64> = data.iter().map(|x| 7.5 * x).collect();
+        let b = Pearson3::try_fit(&scaled).unwrap();
+        assert!(
+            (a.skew - b.skew).abs() < 1e-10,
+            "scale invariance violated: {} vs {}",
+            a.skew,
+            b.skew
+        );
+    }
+
+    #[test]
+    fn pearson3_fit_rejects_constant_data() {
+        let err = Pearson3::try_fit(&[2.0, 2.0, 2.0])
+            .expect_err("zero-variance data must be rejected");
+        assert!(matches!(err, FitError::NonConvergent(_)));
+    }
+
+    #[test]
+    fn pearson3_fit_rejects_too_few_samples() {
+        let err = Pearson3::try_fit(&[1.0, 2.0]).expect_err("n=2 must be rejected");
+        assert!(matches!(err, FitError::InsufficientData { .. }));
     }
 
     #[test]
