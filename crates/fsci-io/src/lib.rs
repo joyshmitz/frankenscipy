@@ -1483,6 +1483,695 @@ pub fn read_npy_text(content: &str) -> Result<(Vec<usize>, Vec<f64>), IoError> {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// NetCDF classic v3
+// ══════════════════════════════════════════════════════════════════════
+
+const NC_DIMENSION: u32 = 10;
+const NC_VARIABLE: u32 = 11;
+const NC_ATTRIBUTE: u32 = 12;
+const NC_BYTE: u32 = 1;
+const NC_CHAR: u32 = 2;
+const NC_SHORT: u32 = 3;
+const NC_INT: u32 = 4;
+const NC_FLOAT: u32 = 5;
+const NC_DOUBLE: u32 = 6;
+
+/// NetCDF classic scalar type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetcdfType {
+    Byte,
+    Char,
+    Short,
+    Int,
+    Float,
+    Double,
+}
+
+/// NetCDF dimension. `len == None` represents the classic unlimited dimension.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetcdfDimension {
+    pub name: String,
+    pub len: Option<usize>,
+}
+
+/// NetCDF typed payload.
+#[derive(Debug, Clone, PartialEq)]
+pub enum NetcdfValue {
+    Byte(Vec<i8>),
+    Char(String),
+    Short(Vec<i16>),
+    Int(Vec<i32>),
+    Float(Vec<f32>),
+    Double(Vec<f64>),
+}
+
+impl NetcdfValue {
+    fn value_type(&self) -> NetcdfType {
+        match self {
+            Self::Byte(_) => NetcdfType::Byte,
+            Self::Char(_) => NetcdfType::Char,
+            Self::Short(_) => NetcdfType::Short,
+            Self::Int(_) => NetcdfType::Int,
+            Self::Float(_) => NetcdfType::Float,
+            Self::Double(_) => NetcdfType::Double,
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Self::Byte(v) => v.len(),
+            Self::Char(s) => s.len(),
+            Self::Short(v) => v.len(),
+            Self::Int(v) => v.len(),
+            Self::Float(v) => v.len(),
+            Self::Double(v) => v.len(),
+        }
+    }
+}
+
+/// NetCDF attribute.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NetcdfAttribute {
+    pub name: String,
+    pub value: NetcdfValue,
+}
+
+/// NetCDF variable. `dim_ids` indexes into `NetcdfFile::dimensions`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NetcdfVariable {
+    pub name: String,
+    pub dim_ids: Vec<usize>,
+    pub attributes: Vec<NetcdfAttribute>,
+    pub data: NetcdfValue,
+}
+
+/// Parsed NetCDF classic file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NetcdfFile {
+    pub dimensions: Vec<NetcdfDimension>,
+    pub attributes: Vec<NetcdfAttribute>,
+    pub variables: Vec<NetcdfVariable>,
+}
+
+#[derive(Debug, Clone)]
+struct NetcdfVariableHeader {
+    name: String,
+    dim_ids: Vec<usize>,
+    attributes: Vec<NetcdfAttribute>,
+    value_type: NetcdfType,
+    begin: usize,
+}
+
+struct NetcdfReader<'a> {
+    bytes: &'a [u8],
+    offset: usize,
+    version: u8,
+}
+
+/// Read a NetCDF classic or 64-bit-offset file from bytes.
+///
+/// This covers the fixed-size NetCDF v3 subset exposed by
+/// `scipy.io.netcdf_file`: dimensions, global attributes, variables, and
+/// primitive numeric/character arrays. Unlimited record variables are rejected
+/// until the record-interleaving path is implemented.
+pub fn read_netcdf_classic(bytes: &[u8]) -> Result<NetcdfFile, IoError> {
+    if bytes.len() < 4 {
+        return Err(IoError::InvalidFormat("NetCDF file too short".to_string()));
+    }
+    if &bytes[0..3] != b"CDF" {
+        return Err(IoError::InvalidFormat(
+            "NetCDF missing CDF magic".to_string(),
+        ));
+    }
+    let version = bytes[3];
+    if version != 1 && version != 2 {
+        return Err(IoError::UnsupportedFeature(format!(
+            "NetCDF version byte {version} is not supported"
+        )));
+    }
+
+    let mut reader = NetcdfReader {
+        bytes,
+        offset: 4,
+        version,
+    };
+    let numrecs = read_netcdf_u32(&mut reader)? as usize;
+    let dimensions = read_netcdf_dimensions(&mut reader)?;
+    if dimensions.iter().filter(|dim| dim.len.is_none()).count() > 1 {
+        return Err(IoError::InvalidFormat(
+            "NetCDF classic permits at most one unlimited dimension".to_string(),
+        ));
+    }
+    let attributes = read_netcdf_attributes(&mut reader)?;
+    let variable_headers = read_netcdf_variable_headers(&mut reader)?;
+
+    let mut variables = Vec::with_capacity(variable_headers.len());
+    for header in variable_headers {
+        let element_count = netcdf_element_count_for_dims(&dimensions, &header.dim_ids, numrecs)?;
+        if header
+            .dim_ids
+            .iter()
+            .any(|&dim_id| dimensions[dim_id].len.is_none())
+        {
+            return Err(IoError::UnsupportedFeature(
+                "NetCDF unlimited record variables are not supported".to_string(),
+            ));
+        }
+        let raw_len = netcdf_value_raw_len(header.value_type, element_count)?;
+        let end = header.begin.checked_add(raw_len).ok_or_else(|| {
+            IoError::InvalidFormat("NetCDF variable payload offset overflowed usize".to_string())
+        })?;
+        let payload = bytes.get(header.begin..end).ok_or_else(|| {
+            IoError::InvalidFormat(format!(
+                "NetCDF variable '{}' payload extends past file",
+                header.name
+            ))
+        })?;
+        let data = decode_netcdf_values(header.value_type, payload, element_count, &header.name)?;
+        variables.push(NetcdfVariable {
+            name: header.name,
+            dim_ids: header.dim_ids,
+            attributes: header.attributes,
+            data,
+        });
+    }
+
+    Ok(NetcdfFile {
+        dimensions,
+        attributes,
+        variables,
+    })
+}
+
+/// Write a fixed-size NetCDF classic file.
+///
+/// The writer emits NetCDF classic v1 files and fails closed for unlimited
+/// dimensions or payload offsets that require the 64-bit-offset variant.
+pub fn write_netcdf_classic(file: &NetcdfFile) -> Result<Vec<u8>, IoError> {
+    validate_netcdf_fixed_file(file)?;
+
+    let placeholder_begins = vec![0usize; file.variables.len()];
+    let header = encode_netcdf_header(file, &placeholder_begins)?;
+    let mut cursor = align4(header.len());
+    let mut begins = Vec::with_capacity(file.variables.len());
+    let mut payloads = Vec::with_capacity(file.variables.len());
+    for variable in &file.variables {
+        let payload = encode_netcdf_padded_values(&variable.data)?;
+        begins.push(cursor);
+        cursor = cursor.checked_add(payload.len()).ok_or_else(|| {
+            IoError::InvalidFormat("NetCDF output size overflowed usize".to_string())
+        })?;
+        payloads.push(payload);
+    }
+    if begins.iter().any(|&begin| u32::try_from(begin).is_err()) {
+        return Err(IoError::UnsupportedFeature(
+            "NetCDF output requires 64-bit variable offsets".to_string(),
+        ));
+    }
+
+    let mut out = encode_netcdf_header(file, &begins)?;
+    while out.len() < align4(out.len()) {
+        out.push(0);
+    }
+    for payload in payloads {
+        out.extend_from_slice(&payload);
+    }
+    Ok(out)
+}
+
+/// Alias matching the SciPy surface name.
+pub fn netcdf_file_read(bytes: &[u8]) -> Result<NetcdfFile, IoError> {
+    read_netcdf_classic(bytes)
+}
+
+/// Alias matching the SciPy surface name.
+pub fn netcdf_file_write(file: &NetcdfFile) -> Result<Vec<u8>, IoError> {
+    write_netcdf_classic(file)
+}
+
+fn netcdf_type_code(value_type: NetcdfType) -> u32 {
+    match value_type {
+        NetcdfType::Byte => NC_BYTE,
+        NetcdfType::Char => NC_CHAR,
+        NetcdfType::Short => NC_SHORT,
+        NetcdfType::Int => NC_INT,
+        NetcdfType::Float => NC_FLOAT,
+        NetcdfType::Double => NC_DOUBLE,
+    }
+}
+
+fn netcdf_type_from_code(code: u32) -> Result<NetcdfType, IoError> {
+    match code {
+        NC_BYTE => Ok(NetcdfType::Byte),
+        NC_CHAR => Ok(NetcdfType::Char),
+        NC_SHORT => Ok(NetcdfType::Short),
+        NC_INT => Ok(NetcdfType::Int),
+        NC_FLOAT => Ok(NetcdfType::Float),
+        NC_DOUBLE => Ok(NetcdfType::Double),
+        other => Err(IoError::UnsupportedFeature(format!(
+            "NetCDF type code {other} is not supported"
+        ))),
+    }
+}
+
+fn netcdf_type_size(value_type: NetcdfType) -> usize {
+    match value_type {
+        NetcdfType::Byte | NetcdfType::Char => 1,
+        NetcdfType::Short => 2,
+        NetcdfType::Int | NetcdfType::Float => 4,
+        NetcdfType::Double => 8,
+    }
+}
+
+fn align4(value: usize) -> usize {
+    value + ((4 - (value % 4)) % 4)
+}
+
+fn netcdf_value_raw_len(value_type: NetcdfType, count: usize) -> Result<usize, IoError> {
+    count
+        .checked_mul(netcdf_type_size(value_type))
+        .ok_or_else(|| {
+            IoError::InvalidFormat("NetCDF value byte length overflowed usize".to_string())
+        })
+}
+
+fn read_netcdf_u32(reader: &mut NetcdfReader<'_>) -> Result<u32, IoError> {
+    let end = reader
+        .offset
+        .checked_add(4)
+        .ok_or_else(|| IoError::InvalidFormat("NetCDF u32 offset overflowed usize".to_string()))?;
+    let slice = reader
+        .bytes
+        .get(reader.offset..end)
+        .ok_or_else(|| IoError::InvalidFormat("truncated NetCDF u32".to_string()))?;
+    reader.offset = end;
+    Ok(u32::from_be_bytes([slice[0], slice[1], slice[2], slice[3]]))
+}
+
+fn read_netcdf_begin(reader: &mut NetcdfReader<'_>) -> Result<usize, IoError> {
+    if reader.version == 1 {
+        Ok(read_netcdf_u32(reader)? as usize)
+    } else {
+        let hi = read_netcdf_u32(reader)? as u64;
+        let lo = read_netcdf_u32(reader)? as u64;
+        let value = (hi << 32) | lo;
+        usize::try_from(value).map_err(|_| {
+            IoError::InvalidFormat(format!(
+                "NetCDF 64-bit offset {value} cannot be represented as usize"
+            ))
+        })
+    }
+}
+
+fn read_netcdf_name(reader: &mut NetcdfReader<'_>, context: &str) -> Result<String, IoError> {
+    let len = read_netcdf_u32(reader)? as usize;
+    let end = reader.offset.checked_add(len).ok_or_else(|| {
+        IoError::InvalidFormat(format!("NetCDF {context} name offset overflowed usize"))
+    })?;
+    let name_bytes = reader
+        .bytes
+        .get(reader.offset..end)
+        .ok_or_else(|| IoError::InvalidFormat(format!("truncated NetCDF {context} name")))?;
+    reader.offset = align4(end);
+    if reader.offset > reader.bytes.len() {
+        return Err(IoError::InvalidFormat(format!(
+            "truncated NetCDF {context} name padding"
+        )));
+    }
+    let name = String::from_utf8(name_bytes.to_vec())
+        .map_err(|e| IoError::InvalidFormat(format!("NetCDF {context} name is not UTF-8: {e}")))?;
+    validate_netcdf_name(&name, context)?;
+    Ok(name)
+}
+
+fn read_netcdf_list_count(
+    reader: &mut NetcdfReader<'_>,
+    expected_tag: u32,
+    context: &str,
+) -> Result<usize, IoError> {
+    let tag = read_netcdf_u32(reader)?;
+    let count = read_netcdf_u32(reader)? as usize;
+    if tag == 0 && count == 0 {
+        return Ok(0);
+    }
+    if tag != expected_tag {
+        return Err(IoError::InvalidFormat(format!(
+            "NetCDF {context} list tag {tag} does not match expected {expected_tag}"
+        )));
+    }
+    Ok(count)
+}
+
+fn read_netcdf_dimensions(reader: &mut NetcdfReader<'_>) -> Result<Vec<NetcdfDimension>, IoError> {
+    let count = read_netcdf_list_count(reader, NC_DIMENSION, "dimension")?;
+    let mut dimensions = Vec::with_capacity(count);
+    for _ in 0..count {
+        let name = read_netcdf_name(reader, "dimension")?;
+        let raw_len = read_netcdf_u32(reader)?;
+        let len = if raw_len == 0 {
+            None
+        } else {
+            Some(raw_len as usize)
+        };
+        dimensions.push(NetcdfDimension { name, len });
+    }
+    Ok(dimensions)
+}
+
+fn read_netcdf_attributes(reader: &mut NetcdfReader<'_>) -> Result<Vec<NetcdfAttribute>, IoError> {
+    let count = read_netcdf_list_count(reader, NC_ATTRIBUTE, "attribute")?;
+    let mut attributes = Vec::with_capacity(count);
+    for _ in 0..count {
+        let name = read_netcdf_name(reader, "attribute")?;
+        let value_type = netcdf_type_from_code(read_netcdf_u32(reader)?)?;
+        let value_count = read_netcdf_u32(reader)? as usize;
+        let raw_len = netcdf_value_raw_len(value_type, value_count)?;
+        let value_end = reader.offset.checked_add(raw_len).ok_or_else(|| {
+            IoError::InvalidFormat("NetCDF attribute payload offset overflowed usize".to_string())
+        })?;
+        let payload = reader.bytes.get(reader.offset..value_end).ok_or_else(|| {
+            IoError::InvalidFormat(format!("truncated NetCDF attribute '{name}'"))
+        })?;
+        let value = decode_netcdf_values(value_type, payload, value_count, &name)?;
+        reader.offset = align4(value_end);
+        if reader.offset > reader.bytes.len() {
+            return Err(IoError::InvalidFormat(format!(
+                "truncated NetCDF attribute '{name}' padding"
+            )));
+        }
+        attributes.push(NetcdfAttribute { name, value });
+    }
+    Ok(attributes)
+}
+
+fn read_netcdf_variable_headers(
+    reader: &mut NetcdfReader<'_>,
+) -> Result<Vec<NetcdfVariableHeader>, IoError> {
+    let count = read_netcdf_list_count(reader, NC_VARIABLE, "variable")?;
+    let mut variables = Vec::with_capacity(count);
+    for _ in 0..count {
+        let name = read_netcdf_name(reader, "variable")?;
+        let dim_count = read_netcdf_u32(reader)? as usize;
+        let mut dim_ids = Vec::with_capacity(dim_count);
+        for _ in 0..dim_count {
+            dim_ids.push(read_netcdf_u32(reader)? as usize);
+        }
+        let attributes = read_netcdf_attributes(reader)?;
+        let value_type = netcdf_type_from_code(read_netcdf_u32(reader)?)?;
+        let _vsize = read_netcdf_u32(reader)?;
+        let begin = read_netcdf_begin(reader)?;
+        variables.push(NetcdfVariableHeader {
+            name,
+            dim_ids,
+            attributes,
+            value_type,
+            begin,
+        });
+    }
+    Ok(variables)
+}
+
+fn netcdf_element_count_for_dims(
+    dimensions: &[NetcdfDimension],
+    dim_ids: &[usize],
+    numrecs: usize,
+) -> Result<usize, IoError> {
+    if dim_ids.is_empty() {
+        return Ok(1);
+    }
+    let mut count = 1usize;
+    for &dim_id in dim_ids {
+        let dimension = dimensions.get(dim_id).ok_or_else(|| {
+            IoError::InvalidFormat(format!(
+                "NetCDF variable references bad dimension id {dim_id}"
+            ))
+        })?;
+        let dim_len = dimension.len.unwrap_or(numrecs);
+        if dim_len == 0 {
+            return Err(IoError::InvalidFormat(format!(
+                "NetCDF dimension '{}' has zero length",
+                dimension.name
+            )));
+        }
+        count = count.checked_mul(dim_len).ok_or_else(|| {
+            IoError::InvalidFormat("NetCDF variable shape overflowed usize".to_string())
+        })?;
+    }
+    Ok(count)
+}
+
+fn decode_netcdf_values(
+    value_type: NetcdfType,
+    payload: &[u8],
+    count: usize,
+    name: &str,
+) -> Result<NetcdfValue, IoError> {
+    let expected_len = netcdf_value_raw_len(value_type, count)?;
+    if payload.len() < expected_len {
+        return Err(IoError::InvalidFormat(format!(
+            "NetCDF value '{name}' expected {expected_len} bytes but found {}",
+            payload.len()
+        )));
+    }
+    match value_type {
+        NetcdfType::Byte => Ok(NetcdfValue::Byte(
+            payload[..count].iter().map(|&byte| byte as i8).collect(),
+        )),
+        NetcdfType::Char => {
+            let s = String::from_utf8(payload[..count].to_vec()).map_err(|e| {
+                IoError::InvalidFormat(format!("NetCDF char value '{name}' is not UTF-8: {e}"))
+            })?;
+            Ok(NetcdfValue::Char(s))
+        }
+        NetcdfType::Short => {
+            let mut values = Vec::with_capacity(count);
+            for chunk in payload[..expected_len].chunks_exact(2) {
+                values.push(i16::from_be_bytes([chunk[0], chunk[1]]));
+            }
+            Ok(NetcdfValue::Short(values))
+        }
+        NetcdfType::Int => {
+            let mut values = Vec::with_capacity(count);
+            for chunk in payload[..expected_len].chunks_exact(4) {
+                values.push(i32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+            }
+            Ok(NetcdfValue::Int(values))
+        }
+        NetcdfType::Float => {
+            let mut values = Vec::with_capacity(count);
+            for chunk in payload[..expected_len].chunks_exact(4) {
+                values.push(f32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+            }
+            Ok(NetcdfValue::Float(values))
+        }
+        NetcdfType::Double => {
+            let mut values = Vec::with_capacity(count);
+            for chunk in payload[..expected_len].chunks_exact(8) {
+                values.push(f64::from_be_bytes([
+                    chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7],
+                ]));
+            }
+            Ok(NetcdfValue::Double(values))
+        }
+    }
+}
+
+fn validate_netcdf_name(name: &str, context: &str) -> Result<(), IoError> {
+    if name.is_empty() {
+        return Err(IoError::InvalidFormat(format!(
+            "NetCDF {context} name cannot be empty"
+        )));
+    }
+    if name.contains('\0') {
+        return Err(IoError::InvalidFormat(format!(
+            "NetCDF {context} name '{}' contains NUL",
+            name.escape_debug()
+        )));
+    }
+    Ok(())
+}
+
+fn validate_netcdf_fixed_file(file: &NetcdfFile) -> Result<(), IoError> {
+    let unlimited_count = file
+        .dimensions
+        .iter()
+        .filter(|dimension| dimension.len.is_none())
+        .count();
+    if unlimited_count > 0 {
+        return Err(IoError::UnsupportedFeature(
+            "NetCDF writer does not yet support unlimited record dimensions".to_string(),
+        ));
+    }
+    for dimension in &file.dimensions {
+        validate_netcdf_name(&dimension.name, "dimension")?;
+        if dimension.len == Some(0) {
+            return Err(IoError::InvalidFormat(format!(
+                "NetCDF dimension '{}' has zero length",
+                dimension.name
+            )));
+        }
+    }
+    for attribute in &file.attributes {
+        validate_netcdf_name(&attribute.name, "attribute")?;
+    }
+    for variable in &file.variables {
+        validate_netcdf_name(&variable.name, "variable")?;
+        for attribute in &variable.attributes {
+            validate_netcdf_name(&attribute.name, "attribute")?;
+        }
+        let expected = netcdf_element_count_for_dims(&file.dimensions, &variable.dim_ids, 0)?;
+        if variable.data.len() != expected {
+            return Err(IoError::InvalidFormat(format!(
+                "NetCDF variable '{}' expected {expected} values from its dimensions but found {}",
+                variable.name,
+                variable.data.len()
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn write_netcdf_u32(out: &mut Vec<u8>, value: usize, context: &str) -> Result<(), IoError> {
+    let value = u32::try_from(value).map_err(|_| {
+        IoError::InvalidFormat(format!("NetCDF {context} {value} exceeds u32 range"))
+    })?;
+    out.extend_from_slice(&value.to_be_bytes());
+    Ok(())
+}
+
+fn write_netcdf_name(out: &mut Vec<u8>, name: &str, context: &str) -> Result<(), IoError> {
+    validate_netcdf_name(name, context)?;
+    write_netcdf_u32(out, name.len(), "name length")?;
+    out.extend_from_slice(name.as_bytes());
+    while !out.len().is_multiple_of(4) {
+        out.push(0);
+    }
+    Ok(())
+}
+
+fn encode_netcdf_header(file: &NetcdfFile, begins: &[usize]) -> Result<Vec<u8>, IoError> {
+    if begins.len() != file.variables.len() {
+        return Err(IoError::InvalidFormat(
+            "NetCDF begin-offset count does not match variable count".to_string(),
+        ));
+    }
+    let mut out = Vec::new();
+    out.extend_from_slice(b"CDF");
+    out.push(1);
+    out.extend_from_slice(&0u32.to_be_bytes());
+
+    if file.dimensions.is_empty() {
+        out.extend_from_slice(&0u32.to_be_bytes());
+        out.extend_from_slice(&0u32.to_be_bytes());
+    } else {
+        out.extend_from_slice(&NC_DIMENSION.to_be_bytes());
+        write_netcdf_u32(&mut out, file.dimensions.len(), "dimension count")?;
+        for dimension in &file.dimensions {
+            write_netcdf_name(&mut out, &dimension.name, "dimension")?;
+            let len = dimension.len.ok_or_else(|| {
+                IoError::UnsupportedFeature(
+                    "NetCDF classic writer does not support unlimited dimensions".to_string(),
+                )
+            })?;
+            write_netcdf_u32(&mut out, len, "dimension length")?;
+        }
+    }
+
+    encode_netcdf_attribute_list(&mut out, &file.attributes)?;
+
+    if file.variables.is_empty() {
+        out.extend_from_slice(&0u32.to_be_bytes());
+        out.extend_from_slice(&0u32.to_be_bytes());
+    } else {
+        out.extend_from_slice(&NC_VARIABLE.to_be_bytes());
+        write_netcdf_u32(&mut out, file.variables.len(), "variable count")?;
+        for (idx, variable) in file.variables.iter().enumerate() {
+            write_netcdf_name(&mut out, &variable.name, "variable")?;
+            write_netcdf_u32(&mut out, variable.dim_ids.len(), "variable dimension count")?;
+            for &dim_id in &variable.dim_ids {
+                if dim_id >= file.dimensions.len() {
+                    return Err(IoError::InvalidFormat(format!(
+                        "NetCDF variable '{}' references bad dimension id {dim_id}",
+                        variable.name
+                    )));
+                }
+                write_netcdf_u32(&mut out, dim_id, "variable dimension id")?;
+            }
+            encode_netcdf_attribute_list(&mut out, &variable.attributes)?;
+            out.extend_from_slice(&netcdf_type_code(variable.data.value_type()).to_be_bytes());
+            write_netcdf_u32(
+                &mut out,
+                encode_netcdf_padded_values(&variable.data)?.len(),
+                "variable byte size",
+            )?;
+            write_netcdf_u32(&mut out, begins[idx], "variable begin offset")?;
+        }
+    }
+    Ok(out)
+}
+
+fn encode_netcdf_attribute_list(
+    out: &mut Vec<u8>,
+    attributes: &[NetcdfAttribute],
+) -> Result<(), IoError> {
+    if attributes.is_empty() {
+        out.extend_from_slice(&0u32.to_be_bytes());
+        out.extend_from_slice(&0u32.to_be_bytes());
+        return Ok(());
+    }
+    out.extend_from_slice(&NC_ATTRIBUTE.to_be_bytes());
+    write_netcdf_u32(out, attributes.len(), "attribute count")?;
+    for attribute in attributes {
+        write_netcdf_name(out, &attribute.name, "attribute")?;
+        out.extend_from_slice(&netcdf_type_code(attribute.value.value_type()).to_be_bytes());
+        write_netcdf_u32(out, attribute.value.len(), "attribute value count")?;
+        out.extend_from_slice(&encode_netcdf_padded_values(&attribute.value)?);
+    }
+    Ok(())
+}
+
+fn encode_netcdf_padded_values(value: &NetcdfValue) -> Result<Vec<u8>, IoError> {
+    let mut out = Vec::new();
+    match value {
+        NetcdfValue::Byte(values) => {
+            out.reserve(values.len());
+            for &value in values {
+                out.push(value as u8);
+            }
+        }
+        NetcdfValue::Char(value) => out.extend_from_slice(value.as_bytes()),
+        NetcdfValue::Short(values) => {
+            out.reserve(values.len() * 2);
+            for &value in values {
+                out.extend_from_slice(&value.to_be_bytes());
+            }
+        }
+        NetcdfValue::Int(values) => {
+            out.reserve(values.len() * 4);
+            for &value in values {
+                out.extend_from_slice(&value.to_be_bytes());
+            }
+        }
+        NetcdfValue::Float(values) => {
+            out.reserve(values.len() * 4);
+            for &value in values {
+                out.extend_from_slice(&value.to_be_bytes());
+            }
+        }
+        NetcdfValue::Double(values) => {
+            out.reserve(values.len() * 8);
+            for &value in values {
+                out.extend_from_slice(&value.to_be_bytes());
+            }
+        }
+    }
+    while !out.len().is_multiple_of(4) {
+        out.push(0);
+    }
+    Ok(out)
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Harwell-Boeing sparse matrix format
 // ══════════════════════════════════════════════════════════════════════
 
@@ -1578,15 +2267,15 @@ pub fn read_harwell_boeing(content: &str) -> Result<HbMatrix, IoError> {
     // Format-line records — we don't need to parse Fortran format specs because
     // the value/index lists are whitespace-tolerant when read as flat token streams.
     // SciPy is similarly relaxed in hb_read for fixed-format real assembled files.
-    let _ptrfmt = lines.next().ok_or_else(|| {
-        IoError::InvalidFormat("Harwell-Boeing missing ptrfmt line".to_string())
-    })?;
-    let _indfmt = lines.next().ok_or_else(|| {
-        IoError::InvalidFormat("Harwell-Boeing missing indfmt line".to_string())
-    })?;
-    let _valfmt = lines.next().ok_or_else(|| {
-        IoError::InvalidFormat("Harwell-Boeing missing valfmt line".to_string())
-    })?;
+    let _ptrfmt = lines
+        .next()
+        .ok_or_else(|| IoError::InvalidFormat("Harwell-Boeing missing ptrfmt line".to_string()))?;
+    let _indfmt = lines
+        .next()
+        .ok_or_else(|| IoError::InvalidFormat("Harwell-Boeing missing indfmt line".to_string()))?;
+    let _valfmt = lines
+        .next()
+        .ok_or_else(|| IoError::InvalidFormat("Harwell-Boeing missing valfmt line".to_string()))?;
     if valcrd == 0 {
         return Err(IoError::UnsupportedFeature(
             "Harwell-Boeing pattern-only (valcrd == 0) is not supported".to_string(),
@@ -1704,9 +2393,7 @@ fn parse_hb_real_stream(lines: &[&str], expected: usize, ctx: &str) -> Result<Ve
     let mut out = Vec::with_capacity(expected);
     for line in lines {
         for tok in line.split_whitespace() {
-            let normalized = tok
-                .replace('D', "E")
-                .replace('d', "e");
+            let normalized = tok.replace('D', "E").replace('d', "e");
             let v: f64 = normalized
                 .parse()
                 .map_err(|e| IoError::InvalidFormat(format!("Harwell-Boeing {ctx}: {e}")))?;
@@ -1753,18 +2440,16 @@ pub fn read_fortran_unformatted(
     let mut records = Vec::new();
     let mut cursor = 0usize;
     while cursor < bytes.len() {
-        let header_end = cursor.checked_add(4).ok_or_else(|| {
-            IoError::InvalidFormat("Fortran record offset overflow".to_string())
-        })?;
+        let header_end = cursor
+            .checked_add(4)
+            .ok_or_else(|| IoError::InvalidFormat("Fortran record offset overflow".to_string()))?;
         if header_end > bytes.len() {
             return Err(IoError::InvalidFormat(format!(
                 "Fortran record at offset {cursor}: header truncated ({} bytes remaining)",
                 bytes.len() - cursor
             )));
         }
-        let header_bytes: [u8; 4] = bytes[cursor..header_end]
-            .try_into()
-            .expect("4-byte slice");
+        let header_bytes: [u8; 4] = bytes[cursor..header_end].try_into().expect("4-byte slice");
         let length = match endian {
             FortranEndian::Little => i32::from_le_bytes(header_bytes),
             FortranEndian::Big => i32::from_be_bytes(header_bytes),
@@ -1992,7 +2677,9 @@ fn parse_arff_attribute(line: &str) -> Result<ArffAttribute, IoError> {
 fn split_arff_first_token(input: &str) -> Result<(String, &str), IoError> {
     let bytes = input.as_bytes();
     if bytes.is_empty() {
-        return Err(IoError::InvalidFormat("ARFF: missing attribute name".into()));
+        return Err(IoError::InvalidFormat(
+            "ARFF: missing attribute name".into(),
+        ));
     }
     let (end, _quote) = match bytes[0] {
         b'\'' | b'"' => {
@@ -3021,6 +3708,115 @@ mod tests {
         assert!(data.is_empty());
     }
 
+    #[test]
+    fn netcdf_classic_roundtrip_double_matrix_with_attributes() {
+        let file = NetcdfFile {
+            dimensions: vec![
+                NetcdfDimension {
+                    name: "time".to_string(),
+                    len: Some(2),
+                },
+                NetcdfDimension {
+                    name: "station".to_string(),
+                    len: Some(3),
+                },
+            ],
+            attributes: vec![NetcdfAttribute {
+                name: "title".to_string(),
+                value: NetcdfValue::Char("demo".to_string()),
+            }],
+            variables: vec![NetcdfVariable {
+                name: "temperature".to_string(),
+                dim_ids: vec![0, 1],
+                attributes: vec![NetcdfAttribute {
+                    name: "units".to_string(),
+                    value: NetcdfValue::Char("K".to_string()),
+                }],
+                data: NetcdfValue::Double(vec![280.0, 281.5, 282.25, 283.0, 284.5, 285.25]),
+            }],
+        };
+
+        let bytes = write_netcdf_classic(&file).expect("NetCDF classic encode");
+        assert_eq!(&bytes[..4], b"CDF\x01");
+        let parsed = read_netcdf_classic(&bytes).expect("NetCDF classic decode");
+        assert_eq!(parsed, file);
+    }
+
+    #[test]
+    fn netcdf_file_aliases_roundtrip_int_scalar() {
+        let file = NetcdfFile {
+            dimensions: Vec::new(),
+            attributes: Vec::new(),
+            variables: vec![NetcdfVariable {
+                name: "answer".to_string(),
+                dim_ids: Vec::new(),
+                attributes: Vec::new(),
+                data: NetcdfValue::Int(vec![42]),
+            }],
+        };
+
+        let bytes = netcdf_file_write(&file).expect("NetCDF alias encode");
+        let parsed = netcdf_file_read(&bytes).expect("NetCDF alias decode");
+        assert_eq!(parsed.variables.len(), 1);
+        assert_eq!(parsed.variables[0].name, "answer");
+        assert_eq!(parsed.variables[0].data, NetcdfValue::Int(vec![42]));
+    }
+
+    #[test]
+    fn netcdf_classic_metamorphic_variable_shape_matches_dimension_product() {
+        let file = NetcdfFile {
+            dimensions: vec![
+                NetcdfDimension {
+                    name: "x".to_string(),
+                    len: Some(4),
+                },
+                NetcdfDimension {
+                    name: "y".to_string(),
+                    len: Some(2),
+                },
+            ],
+            attributes: Vec::new(),
+            variables: vec![NetcdfVariable {
+                name: "mask".to_string(),
+                dim_ids: vec![0, 1],
+                attributes: Vec::new(),
+                data: NetcdfValue::Byte(vec![1, 0, 1, 0, 1, 0, 1, 0]),
+            }],
+        };
+        let bytes = write_netcdf_classic(&file).expect("NetCDF encode");
+        let parsed = read_netcdf_classic(&bytes).expect("NetCDF decode");
+        let variable = &parsed.variables[0];
+        let expected_len = variable
+            .dim_ids
+            .iter()
+            .map(|&dim_id| parsed.dimensions[dim_id].len.unwrap_or(0))
+            .product::<usize>();
+        assert_eq!(variable.data.len(), expected_len);
+    }
+
+    #[test]
+    fn netcdf_classic_rejects_bad_magic() {
+        let err = read_netcdf_classic(b"BAD\x01\0\0\0\0").expect_err("bad magic should fail");
+        assert_eq!(
+            err,
+            IoError::InvalidFormat("NetCDF missing CDF magic".to_string())
+        );
+    }
+
+    #[test]
+    fn netcdf_classic_writer_rejects_unlimited_dimension() {
+        let file = NetcdfFile {
+            dimensions: vec![NetcdfDimension {
+                name: "time".to_string(),
+                len: None,
+            }],
+            attributes: Vec::new(),
+            variables: Vec::new(),
+        };
+        let err = write_netcdf_classic(&file).expect_err("unlimited dims are follow-on work");
+        assert!(matches!(err, IoError::UnsupportedFeature(_)));
+    }
+
     /// Tiny canonical HB file: 3x3 RUA, 4 nonzeros at (0,0)=1.0, (1,1)=2.0,
     /// (2,1)=3.0, (2,2)=4.0. Title is exactly 72 chars long (padded), key 8.
     fn sample_hb_rua_3x3_4nnz() -> String {
@@ -3058,7 +3854,11 @@ mod tests {
         let mat = read_harwell_boeing(&sample_hb_rua_3x3_4nnz()).unwrap();
         let direct: f64 = mat.values.iter().sum();
         let by_column: f64 = (0..mat.cols)
-            .map(|j| mat.values[mat.col_ptr[j]..mat.col_ptr[j + 1]].iter().sum::<f64>())
+            .map(|j| {
+                mat.values[mat.col_ptr[j]..mat.col_ptr[j + 1]]
+                    .iter()
+                    .sum::<f64>()
+            })
             .sum();
         assert!((direct - by_column).abs() < 1e-12);
     }
@@ -3100,8 +3900,7 @@ mod tests {
              (4I20)\n(4I20)\n(4D20.13)\n\
              1 2 3 5\n"
         );
-        let err =
-            read_harwell_boeing(&content).expect_err("truncated payload must be rejected");
+        let err = read_harwell_boeing(&content).expect_err("truncated payload must be rejected");
         assert!(matches!(err, IoError::InvalidFormat(_)));
     }
 
@@ -3251,8 +4050,7 @@ mod tests {
         let r2 = b"world!".to_vec();
         let mut bytes = write_fortran_record(&r1, FortranEndian::Little);
         bytes.extend(write_fortran_record(&r2, FortranEndian::Little));
-        let parsed =
-            read_fortran_unformatted(&bytes, FortranEndian::Little).expect("two records");
+        let parsed = read_fortran_unformatted(&bytes, FortranEndian::Little).expect("two records");
         assert_eq!(parsed, vec![r1, r2]);
     }
 
