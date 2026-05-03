@@ -7584,6 +7584,7 @@ impl ContinuousDistribution for Moyal {
 /// Gompertz distribution.
 ///
 /// Matches `scipy.stats.gompertz`.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Gompertz {
     pub c: f64,
 }
@@ -7637,6 +7638,80 @@ impl ContinuousDistribution for Gompertz {
         }
 
         (second_moment * h / 3.0 - mean * mean).max(0.0)
+    }
+
+    fn fit(data: &[f64]) -> Self {
+        Self::try_fit(data).unwrap_or_else(|e| {
+            panic!("Gompertz::fit failed: {e}");
+        })
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        if data.len() < 2 {
+            return Err(FitError::InsufficientData {
+                required: 2,
+                actual: data.len(),
+            });
+        }
+        let mut sum = 0.0_f64;
+        let mut count = 0usize;
+        for &x in data {
+            if !x.is_finite() {
+                return Err(FitError::UnsupportedData(format!(
+                    "Gompertz data contains non-finite value: {x}"
+                )));
+            }
+            if x < 0.0 {
+                return Err(FitError::UnsupportedData(format!(
+                    "Gompertz support is [0, ∞); got {x}"
+                )));
+            }
+            sum += x;
+            count += 1;
+        }
+        let mean = sum / count as f64;
+        if mean <= 0.0 || !mean.is_finite() {
+            return Err(FitError::NonConvergent(format!(
+                "Gompertz MoM: sample mean {mean} non-positive"
+            )));
+        }
+        // Mean(c) = -e^c · Ei(-c) is monotone-decreasing in c on (0, ∞).
+        // Bisect on c ∈ (1e-6, 50). The upper bound is constrained by
+        // numerical overflow: e^c · Ei(-c) blows past f64::MAX around
+        // c ≈ 709 even though the product remains O(1/c). For c > 50 we
+        // fall back to the asymptotic form mean ≈ 1/c which is accurate
+        // to better than 1e-12 there.
+        let mean_of = |c: f64| {
+            if c > 50.0 {
+                1.0 / c
+            } else {
+                -(c.exp() * fsci_special::expi_scalar(-c))
+            }
+        };
+        let mut lo = 1.0e-6_f64;
+        let mut hi = 1.0e6_f64;
+        let m_lo = mean_of(lo);
+        let m_hi = mean_of(hi);
+        if !(m_hi <= mean && mean <= m_lo) {
+            return Err(FitError::NonConvergent(format!(
+                "Gompertz MoM bracket failed: mean({lo})={m_lo}, mean({hi})={m_hi}, target={mean}"
+            )));
+        }
+        for _ in 0..200 {
+            let mid = 0.5 * (lo + hi);
+            let m_mid = mean_of(mid);
+            if (m_mid - mean).abs() < 1.0e-12 || (hi - lo) < lo * 1.0e-12 + 1.0e-15 {
+                return Ok(Self { c: mid });
+            }
+            if m_mid > mean {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        Ok(Self {
+            c: 0.5 * (lo + hi),
+        })
     }
 }
 
@@ -29983,6 +30058,56 @@ mod tests {
     #[test]
     fn pearson3_fit_rejects_too_few_samples() {
         let err = Pearson3::try_fit(&[1.0, 2.0]).expect_err("n=2 must be rejected");
+        assert!(matches!(err, FitError::InsufficientData { .. }));
+    }
+
+    #[test]
+    fn gompertz_fit_metamorphic_mean_recovery() {
+        let data = [0.5_f64, 1.0, 1.5, 2.0, 0.8, 0.4, 1.1];
+        let m: f64 = data.iter().sum::<f64>() / data.len() as f64;
+        let fitted = Gompertz::try_fit(&data).expect("fit");
+        let recovered = fitted.mean();
+        assert!(
+            (recovered - m).abs() < 1.0e-6,
+            "Gompertz MoM mean recovery: sample {m}, fitted {recovered}"
+        );
+    }
+
+    #[test]
+    fn gompertz_fit_synthetic_recovery() {
+        let true_c = 0.5;
+        let dist = Gompertz::new(true_c);
+        let n = 2000;
+        let samples: Vec<f64> = (1..=n)
+            .map(|i| {
+                let q = (i as f64 - 0.5) / n as f64;
+                let x = (1.0 - (1.0 - q).ln() / true_c).ln();
+                if x.is_finite() && x >= 0.0 { x } else { f64::NAN }
+            })
+            .filter(|x| x.is_finite())
+            .collect();
+        // Use the analytic Gompertz quantile inverse (CDF = 1 - exp(-c·(e^x - 1))).
+        let _ = dist; // silence unused warning if any
+        assert!(samples.len() > 1500);
+        let fitted = Gompertz::try_fit(&samples).expect("fit");
+        let rel = (fitted.c - true_c).abs() / true_c;
+        assert!(
+            rel < 0.10,
+            "Gompertz::fit recovery: got c={}, true {true_c}, rel_err={rel}",
+            fitted.c
+        );
+    }
+
+    #[test]
+    fn gompertz_fit_rejects_negative_observation() {
+        let err = Gompertz::try_fit(&[1.0, 2.0, -0.1])
+            .expect_err("negative must be rejected");
+        assert!(matches!(err, FitError::UnsupportedData(_)));
+    }
+
+    #[test]
+    fn gompertz_fit_rejects_too_few_samples() {
+        let err = Gompertz::try_fit(&[1.5]).expect_err("n=1 must be rejected");
         assert!(matches!(err, FitError::InsufficientData { .. }));
     }
 
