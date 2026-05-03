@@ -1469,9 +1469,7 @@ pub fn binom(x: f64, y: f64) -> f64 {
     // Use lnΓ for large arguments; small / non-integer arguments still
     // route through lngamma_positive which handles the (0, 8) branch via
     // the reflection-free recurrence.
-    let l = lngamma_positive(x + 1.0)
-        - lngamma_positive(y + 1.0)
-        - lngamma_positive(x - y + 1.0);
+    let l = lngamma_positive(x + 1.0) - lngamma_positive(y + 1.0) - lngamma_positive(x - y + 1.0);
     l.exp()
 }
 

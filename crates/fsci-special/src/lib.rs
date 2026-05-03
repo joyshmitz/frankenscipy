@@ -225,9 +225,8 @@ pub use error::{
 pub use gamma::{
     GAMMA_DISPATCH_PLAN, binom, chdtr, chdtrc, chdtri, chdtriv, comb, digamma, factorial,
     factorial2, factorialk, gamma, gamma_with_audit, gammainc, gammainc_scalar, gammaincc,
-    gammaincc_scalar,
-    gammaln, gammaln_scalar, gdtr, gdtrc, gdtria, gdtrib, gdtrix, multigammaln, pdtr, pdtrc, pdtri,
-    pdtrik, perm, polygamma, rgamma, zeta, zetac,
+    gammaincc_scalar, gammaln, gammaln_scalar, gdtr, gdtrc, gdtria, gdtrib, gdtrix, multigammaln,
+    pdtr, pdtrc, pdtri, pdtrik, perm, polygamma, rgamma, zeta, zetac,
 };
 pub use hyper::{HYPER_DISPATCH_PLAN, hyp0f1, hyp0f1_scalar, hyp1f1, hyp2f1};
 pub use orthopoly::{

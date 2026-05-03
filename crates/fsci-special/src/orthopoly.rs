@@ -536,9 +536,7 @@ pub fn roots_sh_chebyu(n: usize) -> (Vec<f64>, Vec<f64>) {
 /// Map `(nodes, weights)` from the canonical `[-1, 1]` interval to the
 /// shifted `[0, 1]` interval. The node transformation is `x ↦ (1 + x) / 2`
 /// and weights scale by `1/2` to preserve the integral identity.
-fn shift_unit_to_zero_one(
-    (nodes, weights): (Vec<f64>, Vec<f64>),
-) -> (Vec<f64>, Vec<f64>) {
+fn shift_unit_to_zero_one((nodes, weights): (Vec<f64>, Vec<f64>)) -> (Vec<f64>, Vec<f64>) {
     let shifted_nodes = nodes.into_iter().map(|x| 0.5 * (1.0 + x)).collect();
     let shifted_weights = weights.into_iter().map(|w| 0.5 * w).collect();
     (shifted_nodes, shifted_weights)
@@ -1813,12 +1811,12 @@ mod tests {
         let xs = [-0.9, -0.3, 0.0, 0.3, 0.9];
         for &x in &xs {
             let (vals, _) = lpn(10, x);
-            for k in 0..=10 {
+            for (k, value) in vals.iter().enumerate().take(11) {
                 let scalar = eval_legendre(k as u32, x);
                 assert!(
-                    (vals[k] - scalar).abs() < 1e-12,
+                    (*value - scalar).abs() < 1e-12,
                     "lpn[{k}] vs eval_legendre at x={x}: {} vs {scalar}",
-                    vals[k]
+                    value
                 );
             }
         }
@@ -1970,11 +1968,7 @@ mod tests {
 
     #[test]
     fn roots_sh_n_zero_returns_empty() {
-        for (a, b) in [
-            roots_sh_legendre(0),
-            roots_sh_chebyt(0),
-            roots_sh_chebyu(0),
-        ] {
+        for (a, b) in [roots_sh_legendre(0), roots_sh_chebyt(0), roots_sh_chebyu(0)] {
             assert!(a.is_empty() && b.is_empty());
         }
     }

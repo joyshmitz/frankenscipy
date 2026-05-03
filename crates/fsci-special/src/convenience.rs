@@ -2793,6 +2793,127 @@ pub fn log1pmx_scalar(x: f64) -> f64 {
     }
 }
 
+/// Compute the Faddeeva function w(z) = exp(−z²) · erfc(−iz).
+///
+/// Matches `scipy.special.wofz` for real inputs and the stable upper-half-plane
+/// complex region used by the Voigt-profile family. Real inputs are returned as
+/// complex values because SciPy exposes `wofz` as a complex-valued function.
+pub fn wofz(z_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    match z_tensor {
+        SpecialTensor::RealScalar(x) => Ok(SpecialTensor::ComplexScalar(wofz_scalar(
+            Complex64::from_real(*x),
+            mode,
+        )?)),
+        SpecialTensor::RealVec(values) => values
+            .iter()
+            .copied()
+            .map(|x| wofz_scalar(Complex64::from_real(x), mode))
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::ComplexVec),
+        SpecialTensor::ComplexScalar(z) => wofz_scalar(*z, mode).map(SpecialTensor::ComplexScalar),
+        SpecialTensor::ComplexVec(values) => values
+            .iter()
+            .copied()
+            .map(|z| wofz_scalar(z, mode))
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::ComplexVec),
+        SpecialTensor::Empty => {
+            record_special_trace(
+                "wofz",
+                mode,
+                "domain_error",
+                "input=empty",
+                "fail_closed",
+                "empty tensor is not a valid Faddeeva input",
+                false,
+            );
+            Err(SpecialError {
+                function: "wofz",
+                kind: SpecialErrorKind::DomainError,
+                mode,
+                detail: "empty tensor is not a valid Faddeeva input",
+            })
+        }
+    }
+}
+
+pub fn wofz_scalar(z: Complex64, mode: RuntimeMode) -> Result<Complex64, SpecialError> {
+    if !z.is_finite() {
+        if mode == RuntimeMode::Hardened {
+            record_special_trace(
+                "wofz",
+                mode,
+                "domain_error",
+                "nonfinite_input",
+                "fail_closed",
+                "complex Faddeeva input must be finite",
+                false,
+            );
+            return Err(SpecialError {
+                function: "wofz",
+                kind: SpecialErrorKind::DomainError,
+                mode,
+                detail: "complex Faddeeva input must be finite",
+            });
+        }
+        return Ok(Complex64::new(f64::NAN, f64::NAN));
+    }
+
+    if z.im == 0.0 {
+        let (re, im) = wofz_real(z.re);
+        return Ok(Complex64::new(re, im));
+    }
+
+    if z.im < 0.0 {
+        let reflected = wofz_scalar(-z, mode)?;
+        return Ok(Complex64::from_real(2.0) * (-(z * z)).exp() - reflected);
+    }
+
+    if z.abs() >= 8.0 {
+        return Ok(wofz_asymptotic_upper_half_plane(z));
+    }
+
+    Ok(wofz_integral_upper_half_plane(z))
+}
+
+fn wofz_asymptotic_upper_half_plane(z: Complex64) -> Complex64 {
+    let two_z_squared = (z * z) * 2.0;
+    let mut term = Complex64::from_real(1.0);
+    let mut sum = term;
+    for k in 1..30 {
+        term = term * f64::from(2 * k - 1) / two_z_squared;
+        sum = sum + term;
+        if term.abs() <= f64::EPSILON * sum.abs().max(1.0) {
+            break;
+        }
+    }
+    Complex64::new(0.0, 1.0 / PI.sqrt()) * (sum / z)
+}
+
+fn wofz_integral_upper_half_plane(z: Complex64) -> Complex64 {
+    const STEPS: usize = 768;
+    const LOWER: f64 = -12.0;
+    const UPPER: f64 = 12.0;
+
+    let h = (UPPER - LOWER) / STEPS as f64;
+    let mut sum = Complex64::new(0.0, 0.0);
+    for i in 0..=STEPS {
+        let t = LOWER + h * i as f64;
+        let weight = if i == 0 || i == STEPS {
+            1.0
+        } else if i % 2 == 0 {
+            2.0
+        } else {
+            4.0
+        };
+        let numerator = (-t * t).exp();
+        let denominator = z - Complex64::from_real(t);
+        sum = sum + denominator.recip() * (weight * numerator);
+    }
+
+    Complex64::new(0.0, 1.0 / PI) * (sum * (h / 3.0))
+}
+
 /// Compute the Faddeeva function w(z) = exp(−z²) · erfc(−iz) at a real
 /// argument `x`, returning the real and imaginary parts as `(re, im)`.
 ///
@@ -2800,8 +2921,7 @@ pub fn log1pmx_scalar(x: f64) -> f64 {
 ///   Re[w(x)] = exp(−x²)
 ///   Im[w(x)] = (2/√π) · F(x)
 /// where F is the Dawson function `dawsn`. This matches
-/// `scipy.special.wofz(x + 0j)` for real x. Complex argument support is a
-/// follow-on tracked under bead `frankenscipy-b6z3m`.
+/// `scipy.special.wofz(x + 0j)` for real x.
 pub fn wofz_real(x: f64) -> (f64, f64) {
     if x.is_nan() {
         return (f64::NAN, f64::NAN);
@@ -7986,6 +8106,68 @@ mod tests {
     fn wofz_real_propagates_nan() {
         let (re, im) = wofz_real(f64::NAN);
         assert!(re.is_nan() && im.is_nan());
+    }
+
+    #[test]
+    fn wofz_real_tensor_returns_complex_scipy_contract_point() -> Result<(), String> {
+        let value = wofz(&SpecialTensor::RealScalar(1.0), RuntimeMode::Strict)
+            .map_err(|err| err.to_string())?;
+        let actual = expect_complex_scalar(value)?;
+        let expected = Complex64::new(0.367_879_441_171_442_33, 0.607_157_705_841_393_7);
+        assert_complex_close(actual, expected, 2.0e-10, "wofz(1 + 0j)");
+        Ok(())
+    }
+
+    #[test]
+    fn wofz_complex_matches_scipy_contract_points() -> Result<(), String> {
+        let samples = [
+            (
+                Complex64::new(1.0, 0.5),
+                Complex64::new(0.354_900_332_867_577_83, 0.342_871_719_131_100_8),
+            ),
+            (
+                Complex64::new(-1.0, 0.5),
+                Complex64::new(0.354_900_332_867_577_83, -0.342_871_719_131_100_8),
+            ),
+            (
+                Complex64::new(0.25, 1.25),
+                Complex64::new(0.361_233_314_847_938_97, 0.051_429_596_928_865_56),
+            ),
+            (
+                Complex64::new(2.0, 1.0),
+                Complex64::new(0.140_239_581_366_277_98, 0.222_213_440_179_899_25),
+            ),
+            (
+                Complex64::new(1.0, -0.5),
+                Complex64::new(0.155_541_142_454_331_15, 1.137_837_215_781_686_5),
+            ),
+        ];
+
+        for (z, expected) in samples {
+            let actual = wofz_scalar(z, RuntimeMode::Strict).map_err(|err| err.to_string())?;
+            assert_complex_close(actual, expected, 5.0e-8, "wofz complex SciPy contract");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn wofz_complex_vector_preserves_shape_and_conjugation() -> Result<(), String> {
+        let z = Complex64::new(0.75, 0.4);
+        let values = expect_complex_vec(
+            wofz(
+                &SpecialTensor::ComplexVec(vec![z, -z.conj()]),
+                RuntimeMode::Strict,
+            )
+            .map_err(|err| err.to_string())?,
+        )?;
+        assert_eq!(values.len(), 2);
+        assert_complex_close(
+            values[0],
+            values[1].conj(),
+            5.0e-8,
+            "wofz conjugation for upper half-plane pair",
+        );
+        Ok(())
     }
 
     #[test]
