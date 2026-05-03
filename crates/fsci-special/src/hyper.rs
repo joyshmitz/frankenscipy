@@ -1502,10 +1502,30 @@ mod tests {
         );
     }
 
+    fn select_casp_for_test(problem: HyperCaspProblem) -> HyperCaspDecision {
+        let result = select_hypergeometric_branch(problem, RuntimeMode::Strict);
+        assert!(
+            result.is_ok(),
+            "unexpected CASP selection error: {result:?}"
+        );
+
+        match result {
+            Ok(decision) => decision,
+            Err(_) => HyperCaspDecision {
+                branch: HypergeometricBranch::UnsupportedAnalyticContinuation,
+                precision_target: problem.precision_target,
+                max_terms: 0,
+                parameter_stability_margin: problem.parameter_stability_margin,
+                fallback_chain: HYPER_UNSUPPORTED_CHAIN,
+                reason: "unexpected CASP selection error",
+            },
+        }
+    }
+
     #[test]
     fn hyper_casp_selects_direct_series_for_moderate_hyp1f1() {
         let problem = HyperCaspProblem::hyp1f1(1.0, 2.0, 0.5, 1.0e-14);
-        let decision = select_hypergeometric_branch(problem, RuntimeMode::Strict).unwrap();
+        let decision = select_casp_for_test(problem);
 
         assert_eq!(decision.branch, HypergeometricBranch::DirectSeries);
         assert_eq!(decision.max_terms, 500);
@@ -1516,7 +1536,7 @@ mod tests {
     #[test]
     fn hyper_casp_selects_kummer_for_large_negative_hyp1f1() {
         let problem = HyperCaspProblem::hyp1f1(1.0, 2.0, -30.0, 1.0e-14);
-        let decision = select_hypergeometric_branch(problem, RuntimeMode::Strict).unwrap();
+        let decision = select_casp_for_test(problem);
 
         assert_eq!(decision.branch, HypergeometricBranch::KummerTransform);
         assert_eq!(decision.fallback_chain, HYP1F1_KUMMER_CHAIN);
@@ -1525,7 +1545,7 @@ mod tests {
     #[test]
     fn hyper_casp_guards_lower_parameter_near_pole() {
         let problem = HyperCaspProblem::hyp1f1(1.0, 1.0e-16, 0.5, 1.0e-14);
-        let decision = select_hypergeometric_branch(problem, RuntimeMode::Strict).unwrap();
+        let decision = select_casp_for_test(problem);
 
         assert_eq!(decision.branch, HypergeometricBranch::ParameterGuard);
         assert!(decision.parameter_stability_margin <= decision.precision_target);
@@ -1534,7 +1554,7 @@ mod tests {
     #[test]
     fn hyper_casp_selects_terminating_polynomial_for_hyp2f1() {
         let problem = HyperCaspProblem::hyp2f1(-2.0, 1.0, 1.5, 2.0, 1.0e-14);
-        let decision = select_hypergeometric_branch(problem, RuntimeMode::Strict).unwrap();
+        let decision = select_casp_for_test(problem);
 
         assert_eq!(decision.branch, HypergeometricBranch::TerminatingPolynomial);
         assert_eq!(decision.fallback_chain, HYP2F1_TERMINATING_CHAIN);
@@ -1543,7 +1563,7 @@ mod tests {
     #[test]
     fn hyper_casp_selects_direct_series_for_hyp2f1_inside_unit_disk() {
         let problem = HyperCaspProblem::hyp2f1(1.0, 1.0, 2.0, 0.5, 1.0e-14);
-        let decision = select_hypergeometric_branch(problem, RuntimeMode::Strict).unwrap();
+        let decision = select_casp_for_test(problem);
 
         assert_eq!(decision.branch, HypergeometricBranch::DirectSeries);
     }
@@ -1551,7 +1571,7 @@ mod tests {
     #[test]
     fn hyper_casp_selects_gauss_sum_at_unit_argument() {
         let problem = HyperCaspProblem::hyp2f1(1.0, 1.0, 3.0, 1.0, 1.0e-14);
-        let decision = select_hypergeometric_branch(problem, RuntimeMode::Strict).unwrap();
+        let decision = select_casp_for_test(problem);
 
         assert_eq!(decision.branch, HypergeometricBranch::GaussSummation);
         assert_eq!(decision.max_terms, 0);
@@ -1560,7 +1580,7 @@ mod tests {
     #[test]
     fn hyper_casp_selects_pfaff_for_negative_outside_unit_disk() {
         let problem = HyperCaspProblem::hyp2f1(1.0, 1.0, 2.0, -2.0, 1.0e-14);
-        let decision = select_hypergeometric_branch(problem, RuntimeMode::Strict).unwrap();
+        let decision = select_casp_for_test(problem);
 
         assert_eq!(decision.branch, HypergeometricBranch::PfaffTransform);
         assert_eq!(decision.fallback_chain, HYP2F1_PFAFF_CHAIN);
@@ -1569,7 +1589,7 @@ mod tests {
     #[test]
     fn hyper_casp_selects_identity_for_z_greater_than_one_reduction() {
         let problem = HyperCaspProblem::hyp2f1(1.0, 1.0, 1.0, 1.5, 1.0e-14);
-        let decision = select_hypergeometric_branch(problem, RuntimeMode::Strict).unwrap();
+        let decision = select_casp_for_test(problem);
 
         assert_eq!(
             decision.branch,
@@ -1580,7 +1600,7 @@ mod tests {
     #[test]
     fn hyper_casp_marks_generic_z_greater_than_one_unsupported() {
         let problem = HyperCaspProblem::hyp2f1(1.0, 2.0, 3.0, 1.5, 1.0e-14);
-        let decision = select_hypergeometric_branch(problem, RuntimeMode::Strict).unwrap();
+        let decision = select_casp_for_test(problem);
 
         assert_eq!(
             decision.branch,
@@ -1591,9 +1611,17 @@ mod tests {
     #[test]
     fn hyper_casp_hardened_rejects_nonfinite_inputs() {
         let problem = HyperCaspProblem::hyp2f1(1.0, 2.0, 3.0, f64::NAN, 1.0e-14);
-        let err = select_hypergeometric_branch(problem, RuntimeMode::Hardened).unwrap_err();
+        let result = select_hypergeometric_branch(problem, RuntimeMode::Hardened);
+        assert!(
+            result.is_err(),
+            "non-finite CASP input should fail in hardened mode"
+        );
+        let kind = match result {
+            Err(err) => err.kind,
+            Ok(_) => SpecialErrorKind::DomainError,
+        };
 
-        assert_eq!(err.kind, SpecialErrorKind::NonFiniteInput);
+        assert_eq!(kind, SpecialErrorKind::NonFiniteInput);
     }
 
     // ── hyp0f1 tests ────────────────────────────────────────────────
