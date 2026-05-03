@@ -4,7 +4,7 @@ use crate::formats::{
     BsrMatrix, CooMatrix, CscMatrix, CsrMatrix, DiaMatrix, DokMatrix, LilMatrix, Shape2D,
     SparseError, SparseFormat, SparseResult,
 };
-use crate::ops::FormatConvertible;
+use crate::ops::{FormatConvertible, add_csr};
 
 pub fn eye(size: usize) -> SparseResult<CsrMatrix> {
     let shape = Shape2D::new(size, size);
@@ -426,6 +426,32 @@ pub fn kron(a: &CsrMatrix, b: &CsrMatrix) -> SparseResult<CsrMatrix> {
 
     let coo = CooMatrix::from_triplets(shape, data, rows, cols, false)?;
     coo.to_csr()
+}
+
+/// Kronecker sum of two square sparse matrices.
+///
+/// For A (m×m) and B (n×n), produces `kron(I_n, A) + kron(B, I_m)`.
+/// Matches `scipy.sparse.kronsum(A, B)`.
+pub fn kronsum(a: &CsrMatrix, b: &CsrMatrix) -> SparseResult<CsrMatrix> {
+    let a_shape = a.shape();
+    let b_shape = b.shape();
+
+    if !a_shape.is_square() {
+        return Err(SparseError::IncompatibleShape {
+            message: "kronsum first input must be square".to_string(),
+        });
+    }
+    if !b_shape.is_square() {
+        return Err(SparseError::IncompatibleShape {
+            message: "kronsum second input must be square".to_string(),
+        });
+    }
+
+    let left_identity = eye(b_shape.rows)?;
+    let right_identity = eye(a_shape.rows)?;
+    let left = kron(&left_identity, a)?;
+    let right = kron(b, &right_identity)?;
+    add_csr(&left, &right)
 }
 
 fn xorshift64(mut x: u64) -> u64 {

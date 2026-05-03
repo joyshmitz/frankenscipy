@@ -10,9 +10,9 @@ use fsci_sparse::{
     CooMatrix, CsrMatrix, EigsOptions, ExpmOptions, IluOptions, IterativeSolveOptions,
     LgmresOptions, LuOptions, Shape2D, SolveOptions, add_csr, bicg, bicgstab, block_diag,
     breadth_first_order, cg, cgs, connected_components, coo_to_csr_with_mode, csr_to_csc_with_mode,
-    diags, dijkstra, eigsh, expm as sparse_expm, eye, floyd_warshall, gmres, kron, laplacian,
-    lgmres, lsmr, lsqr, matrix_power as sparse_matrix_power, minimum_spanning_tree, minres, pcg,
-    qmr, reverse_cuthill_mckee, scale_csr, sparse_diagonal, sparse_eliminate_zeros,
+    diags, dijkstra, eigsh, expm as sparse_expm, eye, floyd_warshall, gmres, kron, kronsum,
+    laplacian, lgmres, lsmr, lsqr, matrix_power as sparse_matrix_power, minimum_spanning_tree,
+    minres, pcg, qmr, reverse_cuthill_mckee, scale_csr, sparse_diagonal, sparse_eliminate_zeros,
     sparse_has_explicit_zeros, sparse_nnz, sparse_norm, sparse_row_min, sparse_sum, sparse_trace,
     sparse_transpose, spilu, splu, splu_solve, spmv, spmv_csc, spmv_csr, spsolve,
     spsolve_triangular, strongly_connected_components, structural_rank, sub_csr, svds, tril, triu,
@@ -624,6 +624,71 @@ fn mr_kron_output_shape() {
     let k = kron(&a, &b).unwrap();
     assert_eq!(k.shape().rows, 5 * 3, "MR22 kron rows");
     assert_eq!(k.shape().cols, 5 * 3, "MR22 kron cols");
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR22b — kronsum(A, B) equals kron(I_n, A) + kron(B, I_m) for square
+// inputs A (m×m) and B (n×n).
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_kronsum_matches_dense_definition() {
+    let a = diags(
+        &[vec![2.0, 3.0], vec![1.0]],
+        &[0, 1],
+        Some(Shape2D::new(2, 2)),
+    )
+    .unwrap();
+    let b = diags(
+        &[vec![5.0, 7.0, 11.0], vec![-2.0, -3.0]],
+        &[0, -1],
+        Some(Shape2D::new(3, 3)),
+    )
+    .unwrap();
+
+    let sum = kronsum(&a, &b).unwrap();
+    assert_eq!(sum.shape(), Shape2D::new(6, 6), "MR22b kronsum shape");
+
+    let dense_sum = csr_to_dense(&sum);
+    let dense_a = csr_to_dense(&a);
+    let dense_b = csr_to_dense(&b);
+    for b_row in 0..3 {
+        for b_col in 0..3 {
+            for a_row in 0..2 {
+                for a_col in 0..2 {
+                    let row = b_row * 2 + a_row;
+                    let col = b_col * 2 + a_col;
+                    let expected = if b_row == b_col {
+                        dense_a[a_row][a_col]
+                    } else {
+                        0.0
+                    } + if a_row == a_col {
+                        dense_b[b_row][b_col]
+                    } else {
+                        0.0
+                    };
+                    assert!(
+                        close(dense_sum[row][col], expected),
+                        "MR22b kronsum entry ({row}, {col}) = {} vs {expected}",
+                        dense_sum[row][col]
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn mr_kronsum_rejects_rectangular_inputs() {
+    let rect_coo =
+        CooMatrix::from_triplets(Shape2D::new(2, 3), vec![1.0], vec![0], vec![1], true).unwrap();
+    let rect = coo_to_csr_with_mode(&rect_coo, RuntimeMode::Strict, "mr22b_rect")
+        .unwrap()
+        .0;
+    let square = eye(2).unwrap();
+
+    assert!(kronsum(&rect, &square).is_err());
+    assert!(kronsum(&square, &rect).is_err());
 }
 
 // ─────────────────────────────────────────────────────────────────────
