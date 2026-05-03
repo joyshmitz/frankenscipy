@@ -12,7 +12,7 @@ pub mod hyper;
 pub mod orthopoly;
 pub mod types;
 
-pub use airy::{AIRY_DISPATCH_PLAN, AiryResult, ai, airy, bi};
+pub use airy::{AIRY_DISPATCH_PLAN, ai, ai_zeros, airy, AiryResult, bi, bi_zeros};
 pub use audit::{
     SyncSharedAuditLedger, record_bounded_recovery, record_fail_closed, sync_audit_ledger,
 };

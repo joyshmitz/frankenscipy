@@ -143,6 +143,108 @@ pub fn bi(x: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     map_airy_component("bi", x, mode, |result| result.bi, |result| result.bi)
 }
 
+/// First `n` zeros of Ai(x), strictly negative and monotonically decreasing.
+///
+/// Matches `scipy.special.ai_zeros(nt)` (the zeros portion). Uses the
+/// asymptotic series
+///   t = (3π(4k − 1)/8)^(2/3)
+///   a_k ≈ -t · (1 + 5/(48 t²) − 5/(36 t⁴) + ...)
+/// as the initial guess for the k-th zero, then refines via Newton's
+/// method using Ai and Ai'.
+pub fn ai_zeros(n: usize) -> Vec<f64> {
+    airy_zeros_inner(n, true)
+}
+
+/// First `n` zeros of Bi(x), strictly negative and monotonically decreasing.
+///
+/// Matches `scipy.special.bi_zeros(nt)`. Uses the asymptotic series
+///   t = (3π(4k − 3)/8)^(2/3)
+///   b_k ≈ -t · (1 + 5/(48 t²) − 5/(36 t⁴) + ...)
+/// (same series shape as Ai zeros — only the (4k − 1) vs (4k − 3)
+/// argument differs) as the initial guess, then refines via Newton's
+/// method using Bi and Bi'.
+pub fn bi_zeros(n: usize) -> Vec<f64> {
+    airy_zeros_inner(n, false)
+}
+
+fn airy_zeros_inner(n: usize, ai_kind: bool) -> Vec<f64> {
+    let mut out = Vec::with_capacity(n);
+    for k in 1..=n {
+        let kf = k as f64;
+        let t_arg = if ai_kind {
+            3.0 * std::f64::consts::PI * (4.0 * kf - 1.0) / 8.0
+        } else {
+            3.0 * std::f64::consts::PI * (4.0 * kf - 3.0) / 8.0
+        };
+        let t = t_arg.powf(2.0 / 3.0);
+        let inv_t2 = 1.0 / (t * t);
+        // Both Ai and Bi zeros use the same series shape; only the t_arg
+        // argument distinguishes them: Ai uses (4k - 1), Bi uses (4k - 3).
+        let initial = -t * (1.0 + 5.0 / 48.0 * inv_t2 - 5.0 / 36.0 * inv_t2 * inv_t2);
+        // Refine via bisection inside a 0.5-radius bracket around the
+        // asymptotic guess. The asymptotic series is accurate to <0.1 for
+        // every zero, so the bracket reliably captures the true zero;
+        // bisection is more robust than Newton near the slope reversals
+        // inside Ai/Bi where Newton can flip basins.
+        let radius = 0.5_f64;
+        let mut lo = initial - radius;
+        let mut hi = initial + radius;
+        let f_at = |x: f64| -> f64 {
+            match airy_scalar(x, RuntimeMode::Strict) {
+                Ok(r) => {
+                    if ai_kind {
+                        r.ai
+                    } else {
+                        r.bi
+                    }
+                }
+                Err(_) => f64::NAN,
+            }
+        };
+        let mut f_lo = f_at(lo);
+        let mut f_hi = f_at(hi);
+        // If the bracket doesn't straddle zero, expand outward in steps of
+        // 0.2 up to a few extra units.
+        let mut tries = 0;
+        while f_lo.is_finite()
+            && f_hi.is_finite()
+            && f_lo.signum() == f_hi.signum()
+            && tries < 8
+        {
+            lo -= 0.2;
+            hi += 0.2;
+            f_lo = f_at(lo);
+            f_hi = f_at(hi);
+            tries += 1;
+        }
+        if !f_lo.is_finite() || !f_hi.is_finite() || f_lo.signum() == f_hi.signum() {
+            // Fallback: keep the asymptotic guess if bracket couldn't be
+            // formed (only realistically happens on numerical pathologies).
+            out.push(initial);
+            continue;
+        }
+        for _ in 0..120 {
+            let mid = 0.5 * (lo + hi);
+            let f_mid = f_at(mid);
+            if !f_mid.is_finite() {
+                break;
+            }
+            if f_mid.signum() == f_lo.signum() {
+                lo = mid;
+                f_lo = f_mid;
+            } else {
+                hi = mid;
+                f_hi = f_mid;
+            }
+            if (hi - lo) < 1.0e-12 {
+                break;
+            }
+        }
+        out.push(0.5 * (lo + hi));
+    }
+    out
+}
+
 fn airy_scalar(x: f64, mode: RuntimeMode) -> Result<AiryResult, SpecialError> {
     if x.is_nan() {
         return Ok(AiryResult {
@@ -804,6 +906,86 @@ mod tests {
                 assert_complex_close(*bi_value, *airy_bi, 1.0e-12, "bi convenience");
             }
             _ => panic!("expected complex scalar"),
+        }
+    }
+
+    #[test]
+    fn ai_zeros_first_five_match_known_values() {
+        // Tabulated zeros of Ai (Abramowitz & Stegun, Table 10.13):
+        //  a_1 = -2.33810741045976...
+        //  a_2 = -4.08794944413097...
+        //  a_3 = -5.52055982809555...
+        //  a_4 = -6.78670809007175...
+        //  a_5 = -7.94413358712085...
+        let zeros = ai_zeros(5);
+        let expected = [
+            -2.338_107_410_459_77_f64,
+            -4.087_949_444_130_97,
+            -5.520_559_828_095_55,
+            -6.786_708_090_071_75,
+            -7.944_133_587_120_85,
+        ];
+        assert_eq!(zeros.len(), 5);
+        for (got, exp) in zeros.iter().zip(expected.iter()) {
+            assert!(
+                (got - exp).abs() < 1e-4,
+                "ai_zero {got} vs expected {exp}"
+            );
+        }
+    }
+
+    #[test]
+    fn ai_zeros_metamorphic_zero_value() {
+        // At every returned zero, Ai(zero) must be small. Tolerance reflects
+        // the underlying Ai accuracy at the negative zero crossings (where
+        // the Airy series is oscillatory and harder to evaluate to full
+        // f64 precision).
+        let zeros = ai_zeros(8);
+        for z in &zeros {
+            let r = airy_scalar(*z, RuntimeMode::Strict).expect("airy_scalar");
+            assert!(r.ai.abs() < 1e-6, "Ai({z}) = {} is not ~0", r.ai);
+        }
+    }
+
+    #[test]
+    fn ai_zeros_metamorphic_strictly_decreasing() {
+        // Zeros are strictly negative and monotonically decreasing.
+        let zeros = ai_zeros(10);
+        for z in &zeros {
+            assert!(*z < 0.0, "ai_zero {z} should be negative");
+        }
+        for w in zeros.windows(2) {
+            assert!(w[0] > w[1], "zeros must be decreasing: {} > {}", w[0], w[1]);
+        }
+    }
+
+    #[test]
+    fn bi_zeros_first_three_match_known_values() {
+        // Tabulated zeros of Bi (Abramowitz & Stegun):
+        //  b_1 = -1.17371322270913...
+        //  b_2 = -3.27109330283635...
+        //  b_3 = -4.83073784166202...
+        let zeros = bi_zeros(3);
+        let expected = [
+            -1.173_713_222_709_13_f64,
+            -3.271_093_302_836_35,
+            -4.830_737_841_662_02,
+        ];
+        assert_eq!(zeros.len(), 3);
+        for (got, exp) in zeros.iter().zip(expected.iter()) {
+            assert!(
+                (got - exp).abs() < 1e-4,
+                "bi_zero {got} vs expected {exp}"
+            );
+        }
+    }
+
+    #[test]
+    fn bi_zeros_metamorphic_zero_value() {
+        let zeros = bi_zeros(6);
+        for z in &zeros {
+            let r = airy_scalar(*z, RuntimeMode::Strict).expect("airy_scalar");
+            assert!(r.bi.abs() < 1e-6, "Bi({z}) = {} is not ~0", r.bi);
         }
     }
 }
