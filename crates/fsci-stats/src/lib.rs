@@ -16,8 +16,9 @@ pub use audit::{
     SyncSharedAuditLedger, record_bounded_recovery, record_fail_closed, sync_audit_ledger,
 };
 pub use qmc::{
-    HaltonSampler, LatinHypercubeSampler, centered_discrepancy, l2_star_discrepancy,
-    mixture_discrepancy, scale as qmc_scale, update_centered_discrepancy, wraparound_discrepancy,
+    HaltonSampler, LatinHypercubeSampler, PoissonDiskSampler, QmcEngine, SobolSampler,
+    centered_discrepancy, l2_star_discrepancy, mixture_discrepancy, scale as qmc_scale,
+    update_centered_discrepancy, wraparound_discrepancy,
 };
 
 use std::f64::consts::{FRAC_1_SQRT_2, LN_2, PI};
@@ -6116,6 +6117,7 @@ impl ContinuousDistribution for DoubleWeibull {
 /// Double gamma distribution.
 ///
 /// Matches `scipy.stats.dgamma`.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DoubleGamma {
     pub a: f64,
 }
@@ -6176,6 +6178,47 @@ impl ContinuousDistribution for DoubleGamma {
 
     fn var(&self) -> f64 {
         self.a * (self.a + 1.0)
+    }
+
+    fn fit(data: &[f64]) -> Self {
+        Self::try_fit(data).unwrap_or_else(|e| {
+            panic!("DoubleGamma::fit failed: {e}");
+        })
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        if data.len() < 2 {
+            return Err(FitError::InsufficientData {
+                required: 2,
+                actual: data.len(),
+            });
+        }
+        for &x in data {
+            if !x.is_finite() {
+                return Err(FitError::UnsupportedData(format!(
+                    "DoubleGamma data contains non-finite value: {x}"
+                )));
+            }
+        }
+        // DoubleGamma has mean = 0 and var = a(a+1). MoM: solve
+        //   a² + a − sample_var = 0  ⟹  a = (−1 + √(1 + 4·var)) / 2
+        // (the positive root, since a > 0). We use sample variance about
+        // 0 (the population mean) — not about the sample mean — because
+        // that is the moment the distribution actually defines.
+        let n = data.len() as f64;
+        let m2_about_zero: f64 = data.iter().map(|x| x * x).sum::<f64>() / n;
+        if !m2_about_zero.is_finite() || m2_about_zero <= 0.0 {
+            return Err(FitError::NonConvergent(format!(
+                "DoubleGamma MoM: sample E[x²] {m2_about_zero} is non-positive"
+            )));
+        }
+        let a = 0.5 * (-1.0 + (1.0 + 4.0 * m2_about_zero).sqrt());
+        if !a.is_finite() || a <= 0.0 {
+            return Err(FitError::NonConvergent(format!(
+                "DoubleGamma MoM produced non-positive a: {a}"
+            )));
+        }
+        Ok(Self { a })
     }
 }
 
@@ -29440,6 +29483,55 @@ mod tests {
     #[test]
     fn pearson3_fit_rejects_too_few_samples() {
         let err = Pearson3::try_fit(&[1.0, 2.0]).expect_err("n=2 must be rejected");
+        assert!(matches!(err, FitError::InsufficientData { .. }));
+    }
+
+    #[test]
+    fn doublegamma_fit_recovers_synthetic_shape() {
+        // Synthesize n=2000 samples from DoubleGamma(a=2.5) via inverse CDF
+        // grid; MoM recovers a within 5%.
+        let true_a = 2.5;
+        let dist = DoubleGamma::new(true_a);
+        let n = 2000;
+        let samples: Vec<f64> = (1..=n)
+            .map(|i| dist.ppf((i as f64 - 0.5) / n as f64))
+            .filter(|x| x.is_finite())
+            .collect();
+        assert!(samples.len() > 1500);
+        let fitted = DoubleGamma::try_fit(&samples).expect("fit");
+        let rel_err = (fitted.a - true_a).abs() / true_a;
+        assert!(
+            rel_err < 0.05,
+            "DoubleGamma::fit recovery: got a={}, true {true_a}, rel_err={rel_err}",
+            fitted.a
+        );
+    }
+
+    #[test]
+    fn doublegamma_fit_metamorphic_var_identity() {
+        // After fitting, the fitted distribution's var equals sample E[x²]
+        // bit-for-bit (because a is solved exactly from the moment equation).
+        let data = [-1.5_f64, -0.5, 0.5, 1.0, 2.0, -2.5, 0.7, -0.3];
+        let n = data.len() as f64;
+        let m2: f64 = data.iter().map(|x| x * x).sum::<f64>() / n;
+        let fitted = DoubleGamma::try_fit(&data).expect("fit");
+        let expected_var = fitted.a * (fitted.a + 1.0);
+        assert!(
+            (expected_var - m2).abs() < 1e-12,
+            "fitted var {expected_var} != sample E[x²] {m2}"
+        );
+    }
+
+    #[test]
+    fn doublegamma_fit_rejects_zero_data() {
+        let err = DoubleGamma::try_fit(&[0.0, 0.0])
+            .expect_err("zero data must be rejected");
+        assert!(matches!(err, FitError::NonConvergent(_)));
+    }
+
+    #[test]
+    fn doublegamma_fit_rejects_too_few_samples() {
+        let err = DoubleGamma::try_fit(&[1.0]).expect_err("n=1 must be rejected");
         assert!(matches!(err, FitError::InsufficientData { .. }));
     }
 
