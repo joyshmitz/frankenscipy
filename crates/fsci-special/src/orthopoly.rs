@@ -111,6 +111,53 @@ pub fn lpn(n: u32, x: f64) -> (Vec<f64>, Vec<f64>) {
     (values, derivs)
 }
 
+/// Compute Legendre polynomials of the second kind Q_k(x) and derivatives
+/// Q'_k(x) for k = 0..=n on the real interval |x| < 1.
+///
+/// Matches `scipy.special.lqn(n, x)` which returns `(Qn, Qn_deriv)` arrays
+/// of length n+1.
+///
+/// Q_0(x) = atanh(x) = (1/2) ln((1+x)/(1-x))
+/// Q_1(x) = x * Q_0(x) - 1
+/// (k+1) Q_{k+1}(x) = (2k+1) x Q_k(x) - k Q_{k-1}(x)
+/// (1 - x^2) Q'_k(x) = k (Q_{k-1}(x) - x Q_k(x))
+///
+/// Returns NaN-filled arrays at the singular points x = ±1 (where Q_0
+/// diverges) and outside (-1, 1), matching scipy's domain convention for
+/// real-valued evaluation.
+pub fn lqn(n: u32, x: f64) -> (Vec<f64>, Vec<f64>) {
+    let len = n as usize + 1;
+    if !x.is_finite() || x.abs() >= 1.0 {
+        return (vec![f64::NAN; len], vec![f64::NAN; len]);
+    }
+    let mut values = Vec::with_capacity(len);
+    let mut derivs = Vec::with_capacity(len);
+    let q0 = x.atanh();
+    values.push(q0);
+    if n == 0 {
+        derivs.push(1.0 / (1.0 - x * x));
+        return (values, derivs);
+    }
+    values.push(x * q0 - 1.0);
+    for k in 1..n {
+        let kf = k as f64;
+        let q_next = ((2.0 * kf + 1.0) * x * values[k as usize] - kf * values[(k - 1) as usize])
+            / (kf + 1.0);
+        values.push(q_next);
+    }
+    // Derivatives via the same recurrence shape as P: (1-x²) Q'_k = k(Q_{k-1} − x Q_k).
+    // For k=0 the formula collapses to Q'_0 = 1/(1-x²) directly.
+    let one_minus_xsq = 1.0 - x * x;
+    derivs.push(1.0 / one_minus_xsq);
+    for k in 1..=n {
+        let kf = k as f64;
+        let q_k = values[k as usize];
+        let q_km1 = values[(k - 1) as usize];
+        derivs.push(kf * (q_km1 - x * q_k) / one_minus_xsq);
+    }
+    (values, derivs)
+}
+
 /// Evaluate the Chebyshev polynomial of the first kind T_n(x).
 ///
 /// Uses the three-term recurrence:
@@ -1697,6 +1744,86 @@ mod tests {
         assert_eq!(ders.len(), 4);
         for v in vals.iter().chain(ders.iter()) {
             assert!(v.is_nan(), "expected NaN, got {v}");
+        }
+    }
+
+    #[test]
+    fn lqn_zero_order_q0_is_atanh() {
+        let (vals, ders) = lqn(0, 0.5);
+        assert_close(vals[0], 0.5_f64.atanh(), 1e-15, "Q_0(0.5)");
+        // Q'_0 = 1/(1-x²) = 1/0.75
+        assert_close(ders[0], 1.0 / 0.75, 1e-15, "Q'_0(0.5)");
+    }
+
+    #[test]
+    fn lqn_q1_relation_to_q0() {
+        // Q_1(x) = x · Q_0(x) - 1.
+        let x = 0.3;
+        let (vals, _) = lqn(1, x);
+        let expected = x * x.atanh() - 1.0;
+        assert_close(vals[1], expected, 1e-15, "Q_1(0.3)");
+    }
+
+    #[test]
+    fn lqn_metamorphic_parity() {
+        // Q_k(-x) = (-1)^(k+1) Q_k(x).
+        let x = 0.4;
+        let (a, _) = lqn(6, x);
+        let (b, _) = lqn(6, -x);
+        for k in 0..=6 {
+            let expected = if k % 2 == 0 { -a[k] } else { a[k] };
+            assert_close(b[k], expected, 1e-12, &format!("parity at k={k}"));
+        }
+    }
+
+    #[test]
+    fn lqn_metamorphic_origin_zero_for_even_indices() {
+        // Q_{2m}(0) = 0 for all m ≥ 0.
+        let (vals, _) = lqn(8, 0.0);
+        for k in (0..=8).step_by(2) {
+            assert!(
+                vals[k].abs() < 1e-15,
+                "Q_{k}(0) should be 0, got {}",
+                vals[k]
+            );
+        }
+        // Q_1(0) = -1, Q_3(0) = 2/3, Q_5(0) = -8/15, Q_7(0) = 16/35.
+        assert_close(vals[1], -1.0, 1e-15, "Q_1(0)");
+        assert_close(vals[3], 2.0 / 3.0, 1e-15, "Q_3(0)");
+        assert_close(vals[5], -8.0 / 15.0, 1e-15, "Q_5(0)");
+        assert_close(vals[7], 16.0 / 35.0, 1e-15, "Q_7(0)");
+    }
+
+    #[test]
+    fn lqn_outside_unit_interval_returns_nan() {
+        let (vals_above, ders_above) = lqn(3, 1.5);
+        for v in vals_above.iter().chain(ders_above.iter()) {
+            assert!(v.is_nan(), "expected NaN, got {v}");
+        }
+        let (vals_at_one, _) = lqn(2, 1.0);
+        for v in &vals_at_one {
+            assert!(v.is_nan(), "expected NaN at x=1, got {v}");
+        }
+    }
+
+    #[test]
+    fn lqn_derivative_recurrence_consistency() {
+        // (1 - x²) Q'_k(x) = k (Q_{k-1} − x Q_k) — the same recurrence we
+        // use to compute the derivative. Validate symmetrically by computing
+        // it from the values array directly and comparing against the lqn
+        // output.
+        let x = 0.6;
+        let (vals, ders) = lqn(5, x);
+        let one_minus_xsq = 1.0 - x * x;
+        for k in 1..=5 {
+            let kf = k as f64;
+            let direct = kf * (vals[k - 1] - x * vals[k]) / one_minus_xsq;
+            assert_close(
+                ders[k],
+                direct,
+                1e-12,
+                &format!("derivative recurrence at k={k}"),
+            );
         }
     }
 }
