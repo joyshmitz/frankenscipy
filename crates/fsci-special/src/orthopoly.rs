@@ -457,6 +457,51 @@ pub fn roots_chebyu(n: usize) -> (Vec<f64>, Vec<f64>) {
     (sorted_nodes, sorted_weights)
 }
 
+/// Compute Gauss-Chebyshev (first kind, scaled) quadrature nodes and weights
+/// on `[-2, 2]`. The polynomials `C_n(x) = 2 T_n(x/2)` are orthogonal on
+/// this interval with weight `1 / sqrt(1 − x²/4)`.
+///
+/// Roots: `x_k = 2 cos((2k+1)π / (2n))` for `k ∈ 0..n` (the T-roots scaled by 2).
+/// Weights: `π / n` (uniform), matching scipy.special.roots_chebyc.
+#[must_use]
+pub fn roots_chebyc(n: usize) -> (Vec<f64>, Vec<f64>) {
+    if n == 0 {
+        return (Vec::new(), Vec::new());
+    }
+    let mut nodes = Vec::with_capacity(n);
+    let weights = vec![PI / n as f64; n];
+    for k in 0..n {
+        let theta = PI * (2.0 * k as f64 + 1.0) / (2.0 * n as f64);
+        nodes.push(2.0 * theta.cos());
+    }
+    nodes.sort_by(|a, b| a.total_cmp(b));
+    (nodes, weights)
+}
+
+/// Compute Gauss-Chebyshev (second kind, scaled) quadrature nodes and weights
+/// on `[-2, 2]`. The polynomials `S_n(x) = U_n(x/2)` are orthogonal on this
+/// interval with weight `sqrt(1 − x²/4)`.
+///
+/// Roots: `x_k = 2 cos((k+1)π / (n+1))` (the U-roots scaled by 2).
+/// Weights: `(π/(n+1)) · sin²((k+1)π/(n+1))`, matching scipy.special.roots_chebys.
+#[must_use]
+pub fn roots_chebys(n: usize) -> (Vec<f64>, Vec<f64>) {
+    if n == 0 {
+        return (Vec::new(), Vec::new());
+    }
+    let n1 = n as f64 + 1.0;
+    let mut pairs: Vec<(f64, f64)> = Vec::with_capacity(n);
+    for k in 1..=n {
+        let theta = PI * k as f64 / n1;
+        let sin_theta = theta.sin();
+        let weight = PI / n1 * sin_theta * sin_theta;
+        pairs.push((2.0 * theta.cos(), weight));
+    }
+    pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let (nodes, weights): (Vec<f64>, Vec<f64>) = pairs.into_iter().unzip();
+    (nodes, weights)
+}
+
 /// Compute Gauss-Hermite quadrature nodes and weights on `(-∞, ∞)`.
 ///
 /// The weight function is `exp(-x^2)`.
@@ -1804,6 +1849,92 @@ mod tests {
         for v in &vals_at_one {
             assert!(v.is_nan(), "expected NaN at x=1, got {v}");
         }
+    }
+
+    #[test]
+    fn roots_chebyc_basic_dimensions_and_range() {
+        let (nodes, weights) = roots_chebyc(5);
+        assert_eq!(nodes.len(), 5);
+        assert_eq!(weights.len(), 5);
+        for x in &nodes {
+            assert!(*x > -2.0 && *x < 2.0, "node {x} outside (-2, 2)");
+        }
+        // Uniform weights π / n.
+        let expected = std::f64::consts::PI / 5.0;
+        for w in &weights {
+            assert!((w - expected).abs() < 1e-15);
+        }
+    }
+
+    #[test]
+    fn roots_chebyc_metamorphic_scales_chebyt_by_two() {
+        // C_n's roots are exactly 2 × T_n's roots.
+        let n = 7;
+        let (c_nodes, _) = roots_chebyc(n);
+        let (t_nodes, _) = roots_chebyt(n);
+        assert_eq!(c_nodes.len(), t_nodes.len());
+        for (c, t) in c_nodes.iter().zip(t_nodes.iter()) {
+            assert!(
+                (c - 2.0 * t).abs() < 1e-13,
+                "C-root {c} should be 2 × T-root {t}"
+            );
+        }
+    }
+
+    #[test]
+    fn roots_chebyc_weight_sum_equals_pi() {
+        // ∑ w_k = n · (π / n) = π for any n.
+        for n in 1..=8 {
+            let (_, weights) = roots_chebyc(n);
+            let sum: f64 = weights.iter().sum();
+            assert!(
+                (sum - std::f64::consts::PI).abs() < 1e-13,
+                "n={n}: weight sum {sum} != π"
+            );
+        }
+    }
+
+    #[test]
+    fn roots_chebys_basic_dimensions_and_range() {
+        let (nodes, weights) = roots_chebys(6);
+        assert_eq!(nodes.len(), 6);
+        assert_eq!(weights.len(), 6);
+        for x in &nodes {
+            assert!(*x > -2.0 && *x < 2.0, "S-node {x} outside (-2, 2)");
+        }
+        for w in &weights {
+            assert!(*w > 0.0, "weight {w} should be positive");
+        }
+    }
+
+    #[test]
+    fn roots_chebys_metamorphic_scales_chebyu_by_two() {
+        // S_n's roots are exactly 2 × U_n's roots.
+        let n = 6;
+        let (s_nodes, s_weights) = roots_chebys(n);
+        let (u_nodes, u_weights) = roots_chebyu(n);
+        assert_eq!(s_nodes.len(), u_nodes.len());
+        for (s, u) in s_nodes.iter().zip(u_nodes.iter()) {
+            assert!(
+                (s - 2.0 * u).abs() < 1e-13,
+                "S-root {s} should be 2 × U-root {u}"
+            );
+        }
+        // S and U share the same weight formula (π/(n+1)) sin²(...).
+        for (sw, uw) in s_weights.iter().zip(u_weights.iter()) {
+            assert!(
+                (sw - uw).abs() < 1e-15,
+                "S weight {sw} should equal U weight {uw}"
+            );
+        }
+    }
+
+    #[test]
+    fn roots_chebyc_n_zero_returns_empty() {
+        let (n, w) = roots_chebyc(0);
+        assert!(n.is_empty() && w.is_empty());
+        let (n, w) = roots_chebys(0);
+        assert!(n.is_empty() && w.is_empty());
     }
 
     #[test]
