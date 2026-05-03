@@ -115,6 +115,110 @@ fn radical_inverse(mut index: u64, prime: u64) -> f64 {
     result
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Latin Hypercube Sampling
+// ══════════════════════════════════════════════════════════════════════
+
+/// Latin Hypercube Sampling (LHS) over `[0, 1)^d`.
+///
+/// For each dimension, the unit interval is partitioned into `n` equal-width
+/// strata; exactly one sample is placed in each stratum. The per-dimension
+/// stratum order is a uniform random permutation. This is the construction
+/// used by `scipy.stats.qmc.LatinHypercube`.
+///
+/// Two modes:
+/// - `centered = true` (default): each sample sits at the midpoint of its
+///   stratum, i.e. `(perm_j[i] + 0.5) / n`. Deterministic given the seed.
+/// - `centered = false`: each sample is drawn uniformly inside its stratum,
+///   i.e. `(perm_j[i] + u) / n` for `u ∈ [0, 1)`.
+#[derive(Debug, Clone)]
+pub struct LatinHypercubeSampler {
+    dimension: usize,
+    centered: bool,
+    rng_state: u64,
+}
+
+impl LatinHypercubeSampler {
+    /// Construct a centered LHS sampler in `dimension`-dimensional unit
+    /// hypercube, seeded so subsequent `sample(n)` calls are reproducible.
+    pub fn new(dimension: usize, seed: u64) -> Result<Self, StatsError> {
+        if dimension == 0 {
+            return Err(StatsError::InvalidArgument(
+                "LatinHypercube dimension must be ≥ 1".to_string(),
+            ));
+        }
+        Ok(Self {
+            dimension,
+            centered: true,
+            // Derive the live RNG state from the seed via splitmix mixing so
+            // seed=0 produces a non-trivial state.
+            rng_state: splitmix64(seed.wrapping_add(0x9E37_79B9_7F4A_7C15)),
+        })
+    }
+
+    /// Switch between centered (cell midpoint) and randomized (uniform within
+    /// cell) modes. Returns the previous setting.
+    pub fn set_centered(&mut self, centered: bool) -> bool {
+        let prev = self.centered;
+        self.centered = centered;
+        prev
+    }
+
+    pub fn dimension(&self) -> usize {
+        self.dimension
+    }
+
+    /// Draw an `n × d` LHS design, row-major (`out[i*d + j]` is sample i,
+    /// dimension j).
+    pub fn sample(&mut self, n: usize) -> Vec<f64> {
+        let d = self.dimension;
+        let mut out = vec![0.0_f64; n.saturating_mul(d)];
+        if n == 0 {
+            return out;
+        }
+        let inv_n = 1.0_f64 / n as f64;
+        for j in 0..d {
+            let perm = self.permutation(n);
+            for i in 0..n {
+                let stratum = perm[i] as f64;
+                let u = if self.centered {
+                    0.5
+                } else {
+                    self.next_uniform()
+                };
+                out[i * d + j] = (stratum + u) * inv_n;
+            }
+        }
+        out
+    }
+
+    fn permutation(&mut self, n: usize) -> Vec<usize> {
+        let mut perm: Vec<usize> = (0..n).collect();
+        // Fisher-Yates with the internal splitmix RNG.
+        for i in (1..n).rev() {
+            let j = (self.next_u64() % (i as u64 + 1)) as usize;
+            perm.swap(i, j);
+        }
+        perm
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        self.rng_state = self.rng_state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        splitmix64(self.rng_state)
+    }
+
+    fn next_uniform(&mut self) -> f64 {
+        // 53-bit mantissa division: standard f64 [0,1) sample.
+        (self.next_u64() >> 11) as f64 * (1.0_f64 / (1u64 << 53) as f64)
+    }
+}
+
+fn splitmix64(mut z: u64) -> u64 {
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,5 +322,85 @@ mod tests {
     fn halton_dimension_query() {
         let h = HaltonSampler::new(7).unwrap();
         assert_eq!(h.dimension(), 7);
+    }
+
+    #[test]
+    fn lhs_construct_rejects_zero_dimension() {
+        let err = LatinHypercubeSampler::new(0, 0).expect_err("zero-dim must fail");
+        assert!(matches!(err, StatsError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn lhs_metamorphic_one_per_stratum_centered() {
+        // Centered LHS: every sample's coordinate is (k + 0.5) / n for some
+        // integer k ∈ [0, n). Each dimension must hit every k exactly once.
+        let n = 10;
+        let d = 4;
+        let mut lhs = LatinHypercubeSampler::new(d, 42).unwrap();
+        let s = lhs.sample(n);
+        for j in 0..d {
+            let mut strata: Vec<i64> = (0..n)
+                .map(|i| (s[i * d + j] * n as f64 - 0.5).round() as i64)
+                .collect();
+            strata.sort_unstable();
+            assert_eq!(
+                strata,
+                (0..n as i64).collect::<Vec<_>>(),
+                "dim {j}: each stratum must appear exactly once"
+            );
+        }
+    }
+
+    #[test]
+    fn lhs_metamorphic_seed_reproducibility() {
+        let mut a = LatinHypercubeSampler::new(3, 1234).unwrap();
+        let mut b = LatinHypercubeSampler::new(3, 1234).unwrap();
+        assert_eq!(a.sample(20), b.sample(20));
+    }
+
+    #[test]
+    fn lhs_metamorphic_distinct_seeds_diverge() {
+        let mut a = LatinHypercubeSampler::new(3, 1).unwrap();
+        let mut b = LatinHypercubeSampler::new(3, 2).unwrap();
+        assert_ne!(a.sample(20), b.sample(20));
+    }
+
+    #[test]
+    fn lhs_randomized_in_unit_hypercube() {
+        let mut lhs = LatinHypercubeSampler::new(4, 7).unwrap();
+        lhs.set_centered(false);
+        let s = lhs.sample(50);
+        for v in &s {
+            assert!(*v >= 0.0 && *v < 1.0, "value {v} out of [0,1)");
+        }
+        assert_eq!(s.len(), 50 * 4);
+    }
+
+    #[test]
+    fn lhs_randomized_one_per_stratum_invariant() {
+        // Randomized LHS still places exactly one sample per stratum per
+        // dimension; only the within-cell offset is random. Stratum index
+        // is `floor(value * n)`.
+        let n = 16;
+        let d = 3;
+        let mut lhs = LatinHypercubeSampler::new(d, 12345).unwrap();
+        lhs.set_centered(false);
+        let s = lhs.sample(n);
+        for j in 0..d {
+            let mut strata: Vec<usize> =
+                (0..n).map(|i| (s[i * d + j] * n as f64) as usize).collect();
+            strata.sort_unstable();
+            assert_eq!(
+                strata,
+                (0..n).collect::<Vec<_>>(),
+                "dim {j}: every stratum hit exactly once"
+            );
+        }
+    }
+
+    #[test]
+    fn lhs_zero_samples_returns_empty_design() {
+        let mut lhs = LatinHypercubeSampler::new(3, 0).unwrap();
+        assert!(lhs.sample(0).is_empty());
     }
 }
