@@ -233,6 +233,57 @@ fn print_report(results: &[GateResult]) -> bool {
     all_pass
 }
 
+/// Regression check: walk every benchmark in every loaded baseline and
+/// compare its `median_ms` / `upper_ms` against a candidate JSON of the
+/// same `BaselineFile` shape. Returns the deltas plus a pass flag.
+///
+/// `tolerance` is the maximum permitted relative regression on either median
+/// or `upper_ms` (p95). bead frankenscipy-d64uj specifies 5%.
+fn check_regression(
+    baselines: &HashMap<String, BaselineFile>,
+    candidates: &HashMap<String, BaselineFile>,
+    tolerance: f64,
+) -> (Vec<(String, String, f64, f64, f64)>, bool) {
+    let mut deltas = Vec::new();
+    let mut pass = true;
+    for (family, baseline) in baselines {
+        let Some(candidate) = candidates.get(family) else {
+            continue;
+        };
+        for (group, benches) in &baseline.benchmarks {
+            let Some(cand_group) = candidate.benchmarks.get(group) else {
+                continue;
+            };
+            for (name, base_entry) in benches {
+                let Some(cand_entry) = cand_group.get(name) else {
+                    continue;
+                };
+                for (metric, base_val, cand_val) in [
+                    ("median", base_entry.median_ms(), cand_entry.median_ms()),
+                    ("upper", base_entry.upper_ms(), cand_entry.upper_ms()),
+                ] {
+                    if let (Some(b), Some(c)) = (base_val, cand_val)
+                        && b > 0.0
+                    {
+                        let rel = (c - b) / b;
+                        deltas.push((
+                            family.clone(),
+                            format!("{group}/{name} [{metric}]"),
+                            b,
+                            c,
+                            rel,
+                        ));
+                        if rel > tolerance {
+                            pass = false;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    (deltas, pass)
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
@@ -244,6 +295,17 @@ fn main() {
         .unwrap_or_else(|| PathBuf::from("docs"));
 
     let check_spec = args.iter().any(|a| a == "--check-spec");
+    let compare_dir = args
+        .iter()
+        .position(|a| a == "--compare")
+        .and_then(|i| args.get(i + 1))
+        .map(PathBuf::from);
+    let tolerance = args
+        .iter()
+        .position(|a| a == "--regression-tolerance")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(0.05);
     let help = args.iter().any(|a| a == "--help" || a == "-h");
 
     if help {
@@ -251,10 +313,19 @@ fn main() {
         println!();
         println!("Options:");
         println!(
-            "  --baselines-dir DIR  Directory containing baseline_*.json files (default: docs)"
+            "  --baselines-dir DIR        Directory of baseline_*.json files (default: docs)"
         );
-        println!("  --check-spec         Validate baselines against SPEC §17 budgets");
-        println!("  -h, --help           Show this help");
+        println!("  --check-spec               Validate baselines against SPEC §17 budgets");
+        println!(
+            "  --compare DIR              Compare baseline_*.json files in DIR against"
+        );
+        println!(
+            "                             those in --baselines-dir; fail if regression > tolerance"
+        );
+        println!(
+            "  --regression-tolerance F   Max permitted relative regression (default 0.05 = 5%)"
+        );
+        println!("  -h, --help                 Show this help");
         std::process::exit(0);
     }
 
@@ -274,11 +345,42 @@ fn main() {
     }
     println!();
 
+    if let Some(dir) = compare_dir {
+        println!("Loading candidate baselines from: {}", dir.display());
+        let candidates = match load_baselines(&dir) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("Error loading candidate baselines: {e}");
+                std::process::exit(2);
+            }
+        };
+        let (deltas, pass) = check_regression(&baselines, &candidates, tolerance);
+        println!(
+            "Regression check (tolerance = {:.2}%):",
+            tolerance * 100.0
+        );
+        println!("===================================");
+        for (family, label, base, cand, rel) in &deltas {
+            let mark = if *rel > tolerance {
+                "FAIL"
+            } else if *rel > 0.0 {
+                "warn"
+            } else {
+                "ok"
+            };
+            println!(
+                "  {family:>10} {label:50} {base:>10.4}ms → {cand:>10.4}ms  ({:+.2}%) [{mark}]",
+                rel * 100.0
+            );
+        }
+        std::process::exit(if pass { 0 } else { 1 });
+    }
+
     if check_spec || !baselines.is_empty() {
         let results = check_spec_compliance(&baselines);
         let pass = print_report(&results);
         std::process::exit(if pass { 0 } else { 1 });
     }
 
-    println!("No action specified. Use --check-spec to validate baselines.");
+    println!("No action specified. Use --check-spec or --compare DIR.");
 }
