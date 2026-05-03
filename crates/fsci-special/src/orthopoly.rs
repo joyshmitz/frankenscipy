@@ -158,6 +158,64 @@ pub fn lqn(n: u32, x: f64) -> (Vec<f64>, Vec<f64>) {
     (values, derivs)
 }
 
+/// Associated Legendre polynomial array `P_l^m(x)` for `0 ≤ m ≤ m_max` and
+/// `0 ≤ l ≤ n_max`. Returns a `(m_max+1) × (n_max+1)` row-major matrix
+/// indexed as `out[m][l]`.
+///
+/// Matches `scipy.special.lpmn(m, n, x)` shape (the values portion). For
+/// each fixed `m`, the row `out[m][..]` is filled by:
+///   P_m^m(x) = (-1)^m (2m-1)!! (1-x²)^(m/2)
+///   P_(m+1)^m(x) = (2m+1) x P_m^m(x)
+///   (l-m+1) P_(l+1)^m(x) = (2l+1) x P_l^m(x) - (l+m) P_(l-1)^m(x)
+///
+/// Cells where `m > l` are 0.0 by convention.
+pub fn lpmn(m_max: u32, n_max: u32, x: f64) -> Vec<Vec<f64>> {
+    let rows = m_max as usize + 1;
+    let cols = n_max as usize + 1;
+    let mut out = vec![vec![0.0_f64; cols]; rows];
+    if !x.is_finite() {
+        for row in &mut out {
+            for cell in row.iter_mut() {
+                *cell = f64::NAN;
+            }
+        }
+        return out;
+    }
+    let somx2 = (1.0 - x * x).max(0.0).sqrt();
+    // For each m, compute P_m^m, P_(m+1)^m, then recurrence to fill row m.
+    for m in 0..=m_max {
+        // P_m^m(x) = (-1)^m (2m-1)!! (1-x²)^(m/2).
+        let mut pmm = 1.0_f64;
+        if m > 0 {
+            let mut fact = 1.0_f64;
+            for _ in 1..=m {
+                pmm *= -fact * somx2;
+                fact += 2.0;
+            }
+        }
+        let m_idx = m as usize;
+        // Cells with l < m are zero by convention; leave them at 0.0.
+        if m_idx >= cols {
+            continue;
+        }
+        out[m_idx][m_idx] = pmm;
+        if (m_idx + 1) < cols {
+            // P_(m+1)^m(x) = (2m+1) x P_m^m(x)
+            out[m_idx][m_idx + 1] = x * (2.0 * m as f64 + 1.0) * pmm;
+            // Forward recurrence on l.
+            for l in (m + 2)..=n_max {
+                let lf = l as f64;
+                let mf = m as f64;
+                let prev = out[m_idx][l as usize - 2];
+                let curr = out[m_idx][l as usize - 1];
+                out[m_idx][l as usize] =
+                    ((2.0 * (lf - 1.0) + 1.0) * x * curr - (lf - 1.0 + mf) * prev) / (lf - mf);
+            }
+        }
+    }
+    out
+}
+
 /// Evaluate the Chebyshev polynomial of the first kind T_n(x).
 ///
 /// Uses the three-term recurrence:
@@ -1725,6 +1783,59 @@ mod tests {
         // U_n*(0.5) = U_n(0) = 0 for odd n
         assert_close(eval_sh_chebyu(1, 0.5), 0.0, 1e-12, "U*_1(0.5)");
         assert_close(eval_sh_chebyu(3, 0.5), 0.0, 1e-12, "U*_3(0.5)");
+    }
+
+    #[test]
+    fn lpmn_metamorphic_matches_lpmv_pointwise() {
+        // For each (m, l) in 0..=4, lpmn[m][l] must agree with lpmv(m, l, x).
+        let xs = [-0.7_f64, -0.3, 0.0, 0.3, 0.7];
+        for &x in &xs {
+            let arr = lpmn(4, 4, x);
+            for m in 0..=4 {
+                for l in 0..=4 {
+                    let from_array = arr[m as usize][l as usize];
+                    let from_scalar = lpmv(m as i32, l, x);
+                    if l < m {
+                        // m > l ⇒ 0 by convention
+                        assert!(
+                            from_array.abs() < 1e-15,
+                            "lpmn[{m}][{l}] should be 0, got {from_array}"
+                        );
+                    } else {
+                        assert!(
+                            (from_array - from_scalar).abs() < 1e-12,
+                            "lpmn[{m}][{l}]={from_array} vs lpmv={from_scalar} at x={x}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn lpmn_first_row_matches_lpn() {
+        // m=0 row is just standard Legendre P_l(x).
+        let x = 0.4;
+        let arr = lpmn(2, 6, x);
+        let (vals, _) = lpn(6, x);
+        for l in 0..=6 {
+            assert!(
+                (arr[0][l as usize] - vals[l as usize]).abs() < 1e-13,
+                "row m=0, l={l}: {} vs {}",
+                arr[0][l as usize],
+                vals[l as usize]
+            );
+        }
+    }
+
+    #[test]
+    fn lpmn_propagates_nan_for_non_finite_x() {
+        let arr = lpmn(2, 3, f64::NAN);
+        for row in &arr {
+            for &v in row {
+                assert!(v.is_nan(), "expected NaN, got {v}");
+            }
+        }
     }
 
     #[test]
