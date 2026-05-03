@@ -54,6 +54,13 @@ struct ScalarOracle {
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
+struct SpecialOracle {
+    case_id: String,
+    /// Either a finite float, or one of the sentinels "posinf"/"neginf"/"nan".
+    value: serde_json::Value,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
 struct ErrorOracle {
     case_id: String,
     status: String,
@@ -96,6 +103,16 @@ struct LfilterStateOracle {
 
 #[derive(Debug, Clone, Serialize)]
 struct SpecialCase {
+    case_id: String,
+    func: String,
+    args: Vec<f64>,
+    /// "finite" | "posinf" | "neginf" | "nan" — matches the Python oracle's
+    /// expected non-finite class, used for pole and tail coverage.
+    expect: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct SpecialVectorCase {
     case_id: String,
     func: String,
     args: Vec<f64>,
@@ -358,16 +375,19 @@ fn special_cases() -> Vec<SpecialCase> {
             case_id: format!("gamma_{x}"),
             func: "gamma".to_owned(),
             args: vec![x],
+            expect: "finite".to_owned(),
         });
         cases.push(SpecialCase {
             case_id: format!("gammaln_{x}"),
             func: "gammaln".to_owned(),
             args: vec![x],
+            expect: "finite".to_owned(),
         });
         cases.push(SpecialCase {
             case_id: format!("rgamma_{x}"),
             func: "rgamma".to_owned(),
             args: vec![x],
+            expect: "finite".to_owned(),
         });
     }
 
@@ -376,11 +396,13 @@ fn special_cases() -> Vec<SpecialCase> {
             case_id: format!("beta_{a}_{b}"),
             func: "beta".to_owned(),
             args: vec![a, b],
+            expect: "finite".to_owned(),
         });
         cases.push(SpecialCase {
             case_id: format!("betaln_{a}_{b}"),
             func: "betaln".to_owned(),
             args: vec![a, b],
+            expect: "finite".to_owned(),
         });
     }
 
@@ -389,6 +411,7 @@ fn special_cases() -> Vec<SpecialCase> {
             case_id: format!("betainc_{a}_{b}_{x}"),
             func: "betainc".to_owned(),
             args: vec![a, b, x],
+            expect: "finite".to_owned(),
         });
     }
 
@@ -397,14 +420,124 @@ fn special_cases() -> Vec<SpecialCase> {
             case_id: format!("gammainc_{a}_{x}"),
             func: "gammainc".to_owned(),
             args: vec![a, x],
+            expect: "finite".to_owned(),
         });
         cases.push(SpecialCase {
             case_id: format!("gammaincc_{a}_{x}"),
             func: "gammaincc".to_owned(),
             args: vec![a, x],
+            expect: "finite".to_owned(),
         });
     }
+
+    // ── Poles at non-positive integers: gamma(0), gamma(-1), gamma(-2), …
+    //    SciPy returns +∞ at 0 and ±∞ at negative integers; conventions
+    //    differ slightly (gamma(-1) is +inf in scipy.special.gamma). The
+    //    expectation classes follow SciPy's actual behavior captured by
+    //    the live oracle.
+    for n in [0.0_f64, -1.0, -2.0, -3.0] {
+        cases.push(SpecialCase {
+            case_id: format!("gamma_pole_{n}"),
+            func: "gamma".to_owned(),
+            args: vec![n],
+            expect: "posinf".to_owned(),
+        });
+    }
+    // gammaln of a non-positive integer is +∞ (log of the pole).
+    for n in [0.0_f64, -1.0, -5.0] {
+        cases.push(SpecialCase {
+            case_id: format!("gammaln_pole_{n}"),
+            func: "gammaln".to_owned(),
+            args: vec![n],
+            expect: "posinf".to_owned(),
+        });
+    }
+    // rgamma at non-positive integers is exactly 0.
+    for n in [0.0_f64, -1.0, -3.0, -10.0] {
+        cases.push(SpecialCase {
+            case_id: format!("rgamma_pole_{n}"),
+            func: "rgamma".to_owned(),
+            args: vec![n],
+            expect: "finite".to_owned(),
+        });
+    }
+
+    // ── Sign handling near reflection boundaries: gamma alternates sign
+    //    on each non-integer negative interval. -0.5 is positive,
+    //    -1.5 is positive (-2 ⇒ + by convention), -2.5 is negative, etc.
+    for x in [-0.5_f64, -1.5, -2.5, -3.5, -4.25, -10.75] {
+        cases.push(SpecialCase {
+            case_id: format!("gamma_neg_{x}"),
+            func: "gamma".to_owned(),
+            args: vec![x],
+            expect: "finite".to_owned(),
+        });
+    }
+
+    // ── Extreme tail: large positive overflows (gamma(171.6)+) and very
+    //    small positive underflows (gammainc with a≪x).
+    for x in [150.0_f64, 170.0, 171.0, 172.0, 200.0] {
+        cases.push(SpecialCase {
+            case_id: format!("gamma_overflow_{x}"),
+            func: "gamma".to_owned(),
+            args: vec![x],
+            expect: if x >= 172.0 { "posinf" } else { "finite" }.to_owned(),
+        });
+        cases.push(SpecialCase {
+            case_id: format!("gammaln_large_{x}"),
+            func: "gammaln".to_owned(),
+            args: vec![x],
+            expect: "finite".to_owned(),
+        });
+    }
+
+    // Tiny positive (near 0+ but not at the pole) — gamma(1e-12) ~ 1e12.
+    for x in [1e-12_f64, 1e-8, 1e-4] {
+        cases.push(SpecialCase {
+            case_id: format!("gamma_tiny_{x:e}"),
+            func: "gamma".to_owned(),
+            args: vec![x],
+            expect: "finite".to_owned(),
+        });
+    }
+
+    // Extreme regularised incomplete gamma: a ≪ x → P(a,x) → 1, Q(a,x) → 0.
+    for (a, x) in [(0.5, 100.0), (1.0, 50.0), (5.0, 200.0)] {
+        cases.push(SpecialCase {
+            case_id: format!("gammainc_tail_{a}_{x}"),
+            func: "gammainc".to_owned(),
+            args: vec![a, x],
+            expect: "finite".to_owned(),
+        });
+        cases.push(SpecialCase {
+            case_id: format!("gammaincc_tail_{a}_{x}"),
+            func: "gammaincc".to_owned(),
+            args: vec![a, x],
+            expect: "finite".to_owned(),
+        });
+    }
+
     cases
+}
+
+fn special_vector_cases() -> Vec<SpecialVectorCase> {
+    vec![
+        SpecialVectorCase {
+            case_id: "gamma_vec_basic".to_owned(),
+            func: "gamma".to_owned(),
+            args: vec![0.5, 1.0, 2.5, 5.0, 8.25],
+        },
+        SpecialVectorCase {
+            case_id: "gammaln_vec_mixed".to_owned(),
+            func: "gammaln".to_owned(),
+            args: vec![0.1, 1.0, 10.0, 50.0, 100.0],
+        },
+        SpecialVectorCase {
+            case_id: "rgamma_vec_neg".to_owned(),
+            func: "rgamma".to_owned(),
+            args: vec![-0.5, 0.5, 1.5, 2.5, 3.5],
+        },
+    ]
 }
 
 fn stats_cases() -> Vec<StatsCase> {
@@ -928,8 +1061,17 @@ fn live_scipy_special_gamma_beta_family_ulp_conformance() -> Result<(), String> 
     let cases = special_cases();
     let script = r#"
 import json
+import math
 import sys
 from scipy import special
+
+def encode(v):
+    f = float(v)
+    if math.isnan(f):
+        return "nan"
+    if math.isinf(f):
+        return "posinf" if f > 0 else "neginf"
+    return f
 
 cases = json.load(sys.stdin)
 results = []
@@ -954,10 +1096,10 @@ for case in cases:
         value = special.gammaincc(args[0], args[1])
     else:
         raise ValueError(func)
-    results.append({"case_id": case["case_id"], "value": float(value)})
+    results.append({"case_id": case["case_id"], "value": encode(value)})
 print(json.dumps(results))
 "#;
-    let oracle_results: Vec<ScalarOracle> = run_python_oracle(script, &cases)?;
+    let oracle_results: Vec<SpecialOracle> = run_python_oracle(script, &cases)?;
     let case_ids: Vec<String> = cases.iter().map(|case| case.case_id.clone()).collect();
     let oracle = oracle_map(test_id, &case_ids, oracle_results, |result| &result.case_id)?;
     let policy = ULPPolicy {
@@ -1022,9 +1164,151 @@ print(json.dumps(results))
             )?,
             other => return Err(format!("unsupported special case func {other}")),
         };
-        assert_ulp_close(&case.case_id, actual, oracle[&case.case_id].value, policy)?;
+        let oracle_value = &oracle[&case.case_id].value;
+        assert_special_value_match(&case.case_id, actual, oracle_value, &case.expect, policy)?;
     }
     Ok(())
+}
+
+#[test]
+fn live_scipy_special_gamma_family_vector_broadcasting() -> Result<(), String> {
+    let test_id = "live_scipy_special_gamma_family_vector_broadcasting";
+    if !scipy_available_or_skip(test_id)? {
+        return Ok(());
+    }
+
+    let cases = special_vector_cases();
+    let script = r#"
+import json
+import sys
+from scipy import special
+
+cases = json.load(sys.stdin)
+results = []
+for case in cases:
+    func = case["func"]
+    args = case["args"]
+    if func == "gamma":
+        out = special.gamma(args)
+    elif func == "gammaln":
+        out = special.gammaln(args)
+    elif func == "rgamma":
+        out = special.rgamma(args) if hasattr(special, "rgamma") else 1.0 / special.gamma(args)
+    else:
+        raise ValueError(func)
+    values = [float(v) for v in list(out)]
+    results.append({"case_id": case["case_id"], "values": values})
+print(json.dumps(results))
+"#;
+    let oracle_results: Vec<VectorOracle> = run_python_oracle(script, &cases)?;
+    let case_ids: Vec<String> = cases.iter().map(|c| c.case_id.clone()).collect();
+    let oracle = oracle_map(test_id, &case_ids, oracle_results, |r| &r.case_id)?;
+
+    let policy = ULPPolicy {
+        max_ulps: 50_000_000,
+        abs_floor: 1.0e-10,
+    };
+
+    for case in &cases {
+        let input_tensor = SpecialTensor::RealVec(case.args.clone());
+        let result = match case.func.as_str() {
+            "gamma" => gamma(&input_tensor, RuntimeMode::Strict),
+            "gammaln" => gammaln(&input_tensor, RuntimeMode::Strict),
+            "rgamma" => rgamma(&input_tensor, RuntimeMode::Strict),
+            other => return Err(format!("vector case unsupported func {other}")),
+        };
+        let actual = match result.map_err(|e| format!("{}: {e:?}", case.case_id))? {
+            SpecialTensor::RealVec(v) => v,
+            other => {
+                return Err(format!(
+                    "{}: expected RealVec output, got {other:?}",
+                    case.case_id
+                ));
+            }
+        };
+        let expected = &oracle[&case.case_id].values;
+        if actual.len() != expected.len() {
+            return Err(format!(
+                "{}: vector length mismatch — rust={} scipy={}",
+                case.case_id,
+                actual.len(),
+                expected.len()
+            ));
+        }
+        for (i, (a, b)) in actual.iter().zip(expected).enumerate() {
+            assert_ulp_close(
+                &format!("{}_idx{}", case.case_id, i),
+                *a,
+                *b,
+                policy,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Assert agreement between an fsci scalar result and the SciPy oracle's
+/// possibly-non-finite encoded value, dispatching on the case's expectation.
+///
+/// `oracle_value` is JSON: either a numeric `f64` (finite case) or one of the
+/// string sentinels "posinf"/"neginf"/"nan".
+fn assert_special_value_match(
+    label: &str,
+    actual: f64,
+    oracle_value: &serde_json::Value,
+    expect: &str,
+    policy: ULPPolicy,
+) -> Result<(), String> {
+    use serde_json::Value;
+    match (expect, oracle_value) {
+        ("finite", Value::Number(n)) => {
+            let expected = n
+                .as_f64()
+                .ok_or_else(|| format!("{label}: oracle value not f64-convertible"))?;
+            if !actual.is_finite() {
+                return Err(format!(
+                    "{label}: expected finite agreement but rust returned {actual:?} \
+                     (scipy = {expected:.17e})"
+                ));
+            }
+            assert_ulp_close(label, actual, expected, policy)?;
+            Ok(())
+        }
+        ("posinf", Value::String(s)) if s == "posinf" => {
+            if actual.is_infinite() && actual > 0.0 {
+                Ok(())
+            } else {
+                Err(format!(
+                    "{label}: expected +∞ (matches scipy), got rust = {actual:?}"
+                ))
+            }
+        }
+        ("neginf", Value::String(s)) if s == "neginf" => {
+            if actual.is_infinite() && actual < 0.0 {
+                Ok(())
+            } else {
+                Err(format!(
+                    "{label}: expected -∞ (matches scipy), got rust = {actual:?}"
+                ))
+            }
+        }
+        ("nan", Value::String(s)) if s == "nan" => {
+            if actual.is_nan() {
+                Ok(())
+            } else {
+                Err(format!(
+                    "{label}: expected NaN (matches scipy), got rust = {actual:?}"
+                ))
+            }
+        }
+        // Drift detected: the case was tagged with one expectation but SciPy
+        // returned a different class. Surface this as a discrepancy record.
+        (tag, oracle) => Err(format!(
+            "{label}: expectation tag '{tag}' did not match SciPy oracle {oracle}; \
+             this is an explicit strict/hardened deviation that should be added \
+             to the discrepancy ledger before relaxing the test"
+        )),
+    }
 }
 
 #[test]
