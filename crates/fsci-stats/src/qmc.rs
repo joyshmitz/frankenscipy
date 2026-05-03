@@ -263,6 +263,163 @@ pub fn mixture_discrepancy(sample: &[f64], dimension: usize) -> Result<f64, Stat
     Ok(leading - 2.0 / n_f * single + double / (n_f * n_f))
 }
 
+/// Linearly scale a unit-cube `[0, 1)^d` design into the box `[l_bounds, u_bounds]`.
+///
+/// `sample` is row-major (`sample[i * d + j]` is the j-th coordinate of the
+/// i-th point). The result has the same shape; coordinate `j` is mapped via
+///   `out_j = l_bounds[j] + (u_bounds[j] - l_bounds[j]) * sample_j`.
+///
+/// Matches the *forward* direction of `scipy.stats.qmc.scale(sample,
+/// l_bounds, u_bounds)`. Returns `Err(StatsError::InvalidArgument)` when the
+/// bound vectors disagree with `dimension` or when any `u_bounds[j] <
+/// l_bounds[j]`.
+pub fn scale(
+    sample: &[f64],
+    dimension: usize,
+    l_bounds: &[f64],
+    u_bounds: &[f64],
+) -> Result<Vec<f64>, StatsError> {
+    if dimension == 0 {
+        return Err(StatsError::InvalidArgument(
+            "qmc::scale: dimension must be ≥ 1".to_string(),
+        ));
+    }
+    if l_bounds.len() != dimension || u_bounds.len() != dimension {
+        return Err(StatsError::InvalidArgument(format!(
+            "qmc::scale: bounds vectors of length ({}, {}) do not match dimension {dimension}",
+            l_bounds.len(),
+            u_bounds.len()
+        )));
+    }
+    if sample.len() % dimension != 0 {
+        return Err(StatsError::InvalidArgument(format!(
+            "qmc::scale: sample.len() {} not a multiple of dimension {dimension}",
+            sample.len()
+        )));
+    }
+    for k in 0..dimension {
+        if !l_bounds[k].is_finite() || !u_bounds[k].is_finite() {
+            return Err(StatsError::InvalidArgument(format!(
+                "qmc::scale: non-finite bound at dim {k}"
+            )));
+        }
+        if u_bounds[k] < l_bounds[k] {
+            return Err(StatsError::InvalidArgument(format!(
+                "qmc::scale: u_bounds[{k}]={} < l_bounds[{k}]={}",
+                u_bounds[k], l_bounds[k]
+            )));
+        }
+    }
+    let n = sample.len() / dimension;
+    let mut out = Vec::with_capacity(sample.len());
+    for i in 0..n {
+        for k in 0..dimension {
+            let scale_k = u_bounds[k] - l_bounds[k];
+            out.push(l_bounds[k] + scale_k * sample[i * dimension + k]);
+        }
+    }
+    Ok(out)
+}
+
+/// Update the centered L2 discrepancy `existing_disc` to reflect a new point
+/// appended to `existing_sample` — without recomputing the full O((N+1)²)
+/// double-sum from scratch.
+///
+/// Algebra: with `A = (13/12)^d`, `B = Σ_i s1(x_i)`, `C = Σ_{i,j} s2(x_i, x_j)`,
+/// the centered discrepancy is `A - 2B/N + C/N²`. We can recover `C` from
+/// `existing_disc` once `B` is computed in one O(N·d) pass over the sample,
+/// then add the new point's `s1`, cross, and self contributions in another
+/// O(N·d) pass — total O(N·d), strictly faster than the O((N+1)²·d) full
+/// recomputation.
+///
+/// Matches the incremental-update pattern in
+/// `scipy.stats.qmc.update_discrepancy(x_new, sample, initial_disc)`.
+pub fn update_centered_discrepancy(
+    existing_sample: &[f64],
+    dimension: usize,
+    existing_disc: f64,
+    new_point: &[f64],
+) -> Result<f64, StatsError> {
+    if dimension == 0 {
+        return Err(StatsError::InvalidArgument(
+            "update_centered_discrepancy: dimension must be ≥ 1".to_string(),
+        ));
+    }
+    if existing_sample.len() % dimension != 0 {
+        return Err(StatsError::InvalidArgument(format!(
+            "update_centered_discrepancy: existing_sample.len() {} not a multiple of dimension {dimension}",
+            existing_sample.len()
+        )));
+    }
+    if new_point.len() != dimension {
+        return Err(StatsError::InvalidArgument(format!(
+            "update_centered_discrepancy: new_point length {} != dimension {dimension}",
+            new_point.len()
+        )));
+    }
+    for &v in existing_sample.iter().chain(new_point.iter()) {
+        if !v.is_finite() || !(0.0..=1.0).contains(&v) {
+            return Err(StatsError::InvalidArgument(format!(
+                "update_centered_discrepancy: value {v} outside [0, 1]"
+            )));
+        }
+    }
+    let n_old = existing_sample.len() / dimension;
+    let n_new = n_old + 1;
+    let leading = (13.0_f64 / 12.0).powi(dimension as i32);
+    // Compute B_old = Σ_i s1(x_i) on the existing sample.
+    let s1 = |point: &[f64]| -> f64 {
+        let mut prod = 1.0_f64;
+        for k in 0..dimension {
+            let centered = point[k] - 0.5;
+            prod *= 1.0 + 0.5 * centered.abs() - 0.5 * centered * centered;
+        }
+        prod
+    };
+    let s2_pair = |a: &[f64], b: &[f64]| -> f64 {
+        let mut prod = 1.0_f64;
+        for k in 0..dimension {
+            prod *= 1.0
+                + 0.5 * (a[k] - 0.5).abs()
+                + 0.5 * (b[k] - 0.5).abs()
+                - 0.5 * (a[k] - b[k]).abs();
+        }
+        prod
+    };
+
+    if n_old == 0 {
+        // Singleton extension.
+        let s1z = s1(new_point);
+        let s2zz = s2_pair(new_point, new_point);
+        let cd = leading - 2.0 * s1z + s2zz;
+        return Ok(cd);
+    }
+
+    let n_old_f = n_old as f64;
+    let mut b_old = 0.0_f64;
+    for i in 0..n_old {
+        let row = &existing_sample[i * dimension..(i + 1) * dimension];
+        b_old += s1(row);
+    }
+    // Recover C_old from existing_disc:
+    //   existing_disc = A - 2 B_old / N + C_old / N²
+    //   ⟹ C_old = N² · (existing_disc - A) + 2 N · B_old
+    let c_old = n_old_f * n_old_f * (existing_disc - leading) + 2.0 * n_old_f * b_old;
+
+    let s1z = s1(new_point);
+    let mut cross = 0.0_f64;
+    for i in 0..n_old {
+        let row = &existing_sample[i * dimension..(i + 1) * dimension];
+        cross += s2_pair(row, new_point);
+    }
+    let self_term = s2_pair(new_point, new_point);
+
+    let b_new = b_old + s1z;
+    let c_new = c_old + 2.0 * cross + self_term;
+    let n_new_f = n_new as f64;
+    Ok(leading - 2.0 / n_new_f * b_new + c_new / (n_new_f * n_new_f))
+}
+
 /// Compute the L2-star discrepancy SD²(P) of an `n × d` point set in
 /// `[0, 1)^d`, with `sample` row-major.
 ///
@@ -730,6 +887,100 @@ mod tests {
             cd_halton.abs() < 0.01,
             "Halton CD² {cd_halton} unexpectedly large"
         );
+    }
+
+    #[test]
+    fn scale_rejects_mismatched_bounds() {
+        let err = scale(&[0.5, 0.5], 2, &[0.0], &[1.0])
+            .expect_err("bounds shape must match dim");
+        assert!(matches!(err, StatsError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn scale_rejects_inverted_bounds() {
+        let err = scale(&[0.5, 0.5], 2, &[2.0, 0.0], &[1.0, 1.0])
+            .expect_err("u<l must be rejected");
+        assert!(matches!(err, StatsError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn scale_identity_with_unit_bounds() {
+        let sample = [0.0_f64, 0.5, 0.99, 0.25, 0.75, 0.5];
+        let out = scale(&sample, 2, &[0.0, 0.0], &[1.0, 1.0]).unwrap();
+        for (a, b) in sample.iter().zip(out.iter()) {
+            assert!((a - b).abs() < 1e-15);
+        }
+    }
+
+    #[test]
+    fn scale_metamorphic_inverse_recovers_unit() {
+        // forward: x ↦ l + (u-l)·x; inverse: y ↦ (y-l)/(u-l).
+        let sample = [0.1_f64, 0.4, 0.7, 0.9, 0.5, 0.3];
+        let l = [-2.0_f64, 5.0];
+        let u = [3.0_f64, 8.5];
+        let scaled = scale(&sample, 2, &l, &u).unwrap();
+        for i in 0..3 {
+            for k in 0..2 {
+                let recovered = (scaled[i * 2 + k] - l[k]) / (u[k] - l[k]);
+                let expected = sample[i * 2 + k];
+                assert!(
+                    (recovered - expected).abs() < 1e-12,
+                    "roundtrip at ({i},{k}): got {recovered}, expected {expected}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn scale_zero_width_bound_is_collapsed_dimension() {
+        // u == l yields the constant value at that dimension.
+        let sample = [0.1_f64, 0.5, 0.9];
+        let out = scale(&sample, 1, &[2.0], &[2.0]).unwrap();
+        for v in &out {
+            assert_eq!(*v, 2.0);
+        }
+    }
+
+    #[test]
+    fn update_centered_disc_metamorphic_matches_batch_recompute() {
+        // Build a 16-point Halton 2D design, compute CD² on first 16 points
+        // batch, then incrementally extend with one more point and compare
+        // against the batch CD² of the full 17-point set.
+        let mut h = HaltonSampler::new(2).unwrap();
+        let initial = h.sample(16);
+        let cd_initial = centered_discrepancy(&initial, 2).unwrap();
+        let extra = h.sample(1); // one new point
+        let cd_via_update =
+            update_centered_discrepancy(&initial, 2, cd_initial, &extra).unwrap();
+        let mut combined = initial.clone();
+        combined.extend_from_slice(&extra);
+        let cd_via_batch = centered_discrepancy(&combined, 2).unwrap();
+        assert!(
+            (cd_via_update - cd_via_batch).abs() < 1e-12,
+            "incremental {cd_via_update} != batch {cd_via_batch}"
+        );
+    }
+
+    #[test]
+    fn update_centered_disc_singleton_starts_from_empty() {
+        // Adding a point to an empty sample must equal the CD² of the
+        // singleton design.
+        let new_point = [0.4_f64, 0.7];
+        // CD² of empty sample is the (13/12)^d leading constant.
+        let empty_cd = centered_discrepancy(&[], 2).unwrap();
+        let after = update_centered_discrepancy(&[], 2, empty_cd, &new_point).unwrap();
+        let direct = centered_discrepancy(&new_point, 2).unwrap();
+        assert!(
+            (after - direct).abs() < 1e-12,
+            "{after} != {direct}"
+        );
+    }
+
+    #[test]
+    fn update_centered_disc_rejects_dimension_mismatch() {
+        let err = update_centered_discrepancy(&[0.5, 0.5], 2, 0.0, &[0.5])
+            .expect_err("new_point length must match dim");
+        assert!(matches!(err, StatsError::InvalidArgument(_)));
     }
 
     #[test]

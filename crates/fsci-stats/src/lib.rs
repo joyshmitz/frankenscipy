@@ -17,7 +17,7 @@ pub use audit::{
 };
 pub use qmc::{
     HaltonSampler, LatinHypercubeSampler, centered_discrepancy, l2_star_discrepancy,
-    mixture_discrepancy, wraparound_discrepancy,
+    mixture_discrepancy, scale as qmc_scale, update_centered_discrepancy, wraparound_discrepancy,
 };
 
 use std::f64::consts::{FRAC_1_SQRT_2, LN_2, PI};
