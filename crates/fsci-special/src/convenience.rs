@@ -2703,8 +2703,16 @@ pub fn lambertw_scalar(x: f64) -> f64 {
         return f64::NAN;
     }
 
-    // Initial guess
-    let mut w = if x < 1.0 { x } else { x.ln() - x.ln().ln() };
+    // Initial guess. The asymptotic form x.ln() - ln(ln(x)) is only valid
+    // when ln(x) > 1 (i.e. x > e). Below that, ln(ln(x)) is undefined or
+    // -∞, so use a Padé-style approximation that is well-behaved for
+    // small positive x.
+    let mut w = if x < std::f64::consts::E {
+        // Bürmann's series gives a good seed: W(x) ≈ x / (1 + x).
+        x / (1.0 + x)
+    } else {
+        x.ln() - x.ln().ln()
+    };
 
     // Halley's method
     for _ in 0..50 {

@@ -858,14 +858,9 @@ fn mr_zeta_basel_values() {
 
 #[test]
 fn mr_lambertw_defining_identity() {
-    // Skip the principal-branch boundary near x = 1/e (where convergence
-    // is most fragile). Test on values where the scalar implementation
-    // returns finite W(x).
-    for &x in &[0.5_f64, 2.0, 5.0, 10.0, 100.0] {
+    for &x in &[0.5_f64, 1.0, 2.0, 5.0, 10.0, 100.0] {
         let w = lambertw_scalar(x);
-        if !w.is_finite() {
-            continue;
-        }
+        assert!(w.is_finite(), "MR38 W({x}) returned non-finite: {w}");
         let recovered = w * w.exp();
         assert!(
             (recovered - x).abs() < 1e-6 * x.abs().max(1.0),
