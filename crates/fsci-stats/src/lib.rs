@@ -6500,6 +6500,7 @@ impl ContinuousDistribution for Burr12 {
 /// Log-Laplace distribution.
 ///
 /// Matches `scipy.stats.loglaplace`.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LogLaplace {
     pub c: f64,
 }
@@ -6573,6 +6574,53 @@ impl ContinuousDistribution for LogLaplace {
         } else {
             f64::INFINITY
         }
+    }
+
+    fn fit(data: &[f64]) -> Self {
+        Self::try_fit(data).unwrap_or_else(|e| {
+            panic!("LogLaplace::fit failed: {e}");
+        })
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        if data.len() < 2 {
+            return Err(FitError::InsufficientData {
+                required: 2,
+                actual: data.len(),
+            });
+        }
+        let mut abs_log_sum = 0.0_f64;
+        let mut count = 0usize;
+        for &x in data {
+            if !x.is_finite() {
+                return Err(FitError::UnsupportedData(format!(
+                    "LogLaplace data contains non-finite value: {x}"
+                )));
+            }
+            if x <= 0.0 {
+                return Err(FitError::UnsupportedData(format!(
+                    "LogLaplace data contains non-positive value: {x}"
+                )));
+            }
+            // Skip x == 1.0 exactly: ln(1) = 0 contributes no information
+            // and would otherwise need to be folded into one branch arbitrarily.
+            // SciPy's MLE collapses to the same value because abs(ln(1)) = 0.
+            abs_log_sum += x.ln().abs();
+            count += 1;
+        }
+        if abs_log_sum == 0.0 {
+            return Err(FitError::NonConvergent(
+                "LogLaplace MLE undefined when all observations equal 1.0".to_string(),
+            ));
+        }
+        // MLE: c_hat = n / sum |ln(x_i)|
+        let c = count as f64 / abs_log_sum;
+        if !c.is_finite() || c <= 0.0 {
+            return Err(FitError::NonConvergent(format!(
+                "LogLaplace MLE produced non-positive shape: {c}"
+            )));
+        }
+        Ok(Self { c })
     }
 }
 
@@ -28541,5 +28589,101 @@ mod tests {
         assert_eq!(result_nan[0], 1.0);
         assert!(result_nan[1].is_nan());
         assert_eq!(result_nan[2], -1.0);
+    }
+
+    #[test]
+    fn loglaplace_fit_recovers_synthetic_shape() {
+        // Synthesize n samples from LogLaplace(c=2.0) using its inverse CDF
+        // applied to a deterministic uniform grid (no RNG dependency). MLE
+        // on those samples must recover c within 5%.
+        let true_c = 2.0;
+        let dist = LogLaplace::new(true_c);
+        let n = 2000;
+        let samples: Vec<f64> = (1..=n)
+            .map(|k| dist.ppf((k as f64 - 0.5) / n as f64))
+            .collect();
+        let fitted = LogLaplace::try_fit(&samples).expect("fit");
+        let rel_err = (fitted.c - true_c).abs() / true_c;
+        assert!(
+            rel_err < 0.05,
+            "LogLaplace::fit should recover c={true_c} within 5%; got c={}, rel_err={rel_err}",
+            fitted.c
+        );
+    }
+
+    #[test]
+    fn loglaplace_fit_metamorphic_inverse_invariance() {
+        // LogLaplace(c) is invariant under x → 1/x because ln(1/x) = -ln(x)
+        // and the MLE depends only on |ln(x)|. So fit(data) == fit(1/data).
+        let dist = LogLaplace::new(1.5);
+        let n = 500;
+        let samples: Vec<f64> = (1..=n)
+            .map(|k| dist.ppf((k as f64 - 0.5) / n as f64))
+            .collect();
+        let inverted: Vec<f64> = samples.iter().map(|x| 1.0 / x).collect();
+        let a = LogLaplace::try_fit(&samples).expect("fit a");
+        let b = LogLaplace::try_fit(&inverted).expect("fit b");
+        assert!(
+            (a.c - b.c).abs() < 1e-12,
+            "fit(x) and fit(1/x) must agree; got a={}, b={}",
+            a.c,
+            b.c
+        );
+    }
+
+    #[test]
+    fn loglaplace_fit_rejects_non_positive_observations() {
+        let err = LogLaplace::try_fit(&[1.0, 2.0, -0.5])
+            .expect_err("non-positive must be rejected");
+        assert!(matches!(err, FitError::UnsupportedData(_)));
+    }
+
+    #[test]
+    fn loglaplace_fit_rejects_non_finite_observations() {
+        let err = LogLaplace::try_fit(&[1.0, 2.0, f64::INFINITY])
+            .expect_err("non-finite must be rejected");
+        assert!(matches!(err, FitError::UnsupportedData(_)));
+    }
+
+    #[test]
+    fn loglaplace_fit_rejects_too_few_observations() {
+        let err = LogLaplace::try_fit(&[1.5]).expect_err("n=1 must be rejected");
+        assert!(matches!(err, FitError::InsufficientData { .. }));
+    }
+
+    #[test]
+    fn loglaplace_fit_rejects_all_unit_observations() {
+        // sum |ln(1.0)| = 0 → MLE undefined.
+        let err = LogLaplace::try_fit(&[1.0, 1.0, 1.0])
+            .expect_err("all-unit data must be rejected");
+        assert!(matches!(err, FitError::NonConvergent(_)));
+    }
+
+    #[test]
+    fn loglaplace_fit_metamorphic_kolmogorov_smirnov_under_5pct() {
+        // After fitting, plug observations back through the fitted CDF and
+        // assert the Kolmogorov-Smirnov statistic against the empirical
+        // uniform [0,1] is small (n=2000 → expected ~0.03 under H0).
+        let dist = LogLaplace::new(2.5);
+        let n = 2000;
+        let mut samples: Vec<f64> = (1..=n)
+            .map(|k| dist.ppf((k as f64 - 0.5) / n as f64))
+            .collect();
+        let fitted = LogLaplace::try_fit(&samples).expect("fit");
+        // Sort original samples for KS statistic (independent of fit shuffle).
+        samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mut max_d = 0.0_f64;
+        for (i, &x) in samples.iter().enumerate() {
+            let cdf = fitted.cdf(x);
+            let empirical = (i + 1) as f64 / n as f64;
+            let d = (cdf - empirical).abs();
+            if d > max_d {
+                max_d = d;
+            }
+        }
+        assert!(
+            max_d < 0.05,
+            "KS statistic between fitted CDF and empirical should be <5%; got {max_d}"
+        );
     }
 }
