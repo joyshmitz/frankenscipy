@@ -27,6 +27,8 @@ const SPEC_BUDGETS_MS: &[(&str, f64)] = &[
     ("fft", 210.0),       // FFT transform p95
 ];
 
+type RegressionDelta = (String, String, f64, f64, f64);
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct BaselineFile {
     baseline_version: String,
@@ -243,7 +245,7 @@ fn check_regression(
     baselines: &HashMap<String, BaselineFile>,
     candidates: &HashMap<String, BaselineFile>,
     tolerance: f64,
-) -> (Vec<(String, String, f64, f64, f64)>, bool) {
+) -> (Vec<RegressionDelta>, bool) {
     let mut deltas = Vec::new();
     let mut pass = true;
     for (family, baseline) in baselines {
@@ -312,13 +314,9 @@ fn main() {
         println!("Usage: benchmark_gate [OPTIONS]");
         println!();
         println!("Options:");
-        println!(
-            "  --baselines-dir DIR        Directory of baseline_*.json files (default: docs)"
-        );
+        println!("  --baselines-dir DIR        Directory of baseline_*.json files (default: docs)");
         println!("  --check-spec               Validate baselines against SPEC §17 budgets");
-        println!(
-            "  --compare DIR              Compare baseline_*.json files in DIR against"
-        );
+        println!("  --compare DIR              Compare baseline_*.json files in DIR against");
         println!(
             "                             those in --baselines-dir; fail if regression > tolerance"
         );
@@ -355,10 +353,7 @@ fn main() {
             }
         };
         let (deltas, pass) = check_regression(&baselines, &candidates, tolerance);
-        println!(
-            "Regression check (tolerance = {:.2}%):",
-            tolerance * 100.0
-        );
+        println!("Regression check (tolerance = {:.2}%):", tolerance * 100.0);
         println!("===================================");
         for (family, label, base, cand, rel) in &deltas {
             let mark = if *rel > tolerance {

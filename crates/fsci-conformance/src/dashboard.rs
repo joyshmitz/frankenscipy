@@ -1,5 +1,9 @@
-use crate::{HarnessConfig, HarnessError, PacketReport, PacketSummary, packet_summary};
+use crate::{
+    DecodeProofArtifact, DifferentialCaseResult, HarnessConfig, HarnessError, PacketReport,
+    PacketSummary, RaptorQSidecar, packet_summary,
+};
 use serde_json::from_str;
+use std::cmp::Ordering;
 use std::fs;
 use std::path::Path;
 
@@ -74,6 +78,11 @@ pub struct PacketArtifactPresence {
     pub has_decode_proof: bool,
     pub has_oracle_capture: bool,
     pub has_oracle_error: bool,
+    pub sidecar_source_hash: Option<String>,
+    pub sidecar_source_symbols: Option<usize>,
+    pub sidecar_repair_symbols: Option<usize>,
+    pub decode_proof_hash: Option<String>,
+    pub decode_proof_reason: Option<String>,
     /// Classification of how the parity_report.json (if any) was produced.
     /// Per frankenscipy-7h9o: previously the dashboard showed pass/fail
     /// counts without distinguishing oracle-verified vs self-check. This
@@ -91,6 +100,11 @@ impl PacketArtifactPresence {
             has_decode_proof: false,
             has_oracle_capture: false,
             has_oracle_error: false,
+            sidecar_source_hash: None,
+            sidecar_source_symbols: None,
+            sidecar_repair_symbols: None,
+            decode_proof_hash: None,
+            decode_proof_reason: None,
             report_source: ReportSource::None,
         }
     }
@@ -130,6 +144,13 @@ pub struct DashboardMetrics {
 }
 
 type DiscoveryResult = (Vec<PacketReport>, Vec<PacketArtifactPresence>, Vec<String>);
+
+#[derive(Debug, Clone, Copy)]
+pub struct DashboardCaseListEntry<'a> {
+    pub source_index: usize,
+    pub case: &'a crate::CaseResult,
+    pub max_diff: Option<f64>,
+}
 
 #[derive(Debug, Clone)]
 pub struct DashboardState {
@@ -252,8 +273,72 @@ impl DashboardState {
 
     #[must_use]
     pub fn selected_case(&self) -> Option<&crate::CaseResult> {
+        self.case_list_entries()
+            .get(self.selected_case)
+            .map(|entry| entry.case)
+    }
+
+    #[must_use]
+    pub fn case_list_entries(&self) -> Vec<DashboardCaseListEntry<'_>> {
+        let Some(packet) = self.selected_packet() else {
+            return Vec::new();
+        };
+
+        let mut entries = packet
+            .case_results
+            .iter()
+            .enumerate()
+            .map(|(source_index, case)| DashboardCaseListEntry {
+                source_index,
+                case,
+                max_diff: differential_max_diff(packet, case),
+            })
+            .collect::<Vec<_>>();
+        entries.sort_by(compare_case_list_entries);
+        entries
+    }
+
+    #[must_use]
+    pub fn selected_differential_case(&self) -> Option<&DifferentialCaseResult> {
         let packet = self.selected_packet()?;
-        packet.case_results.get(self.selected_case)
+        let case = self.selected_case()?;
+        packet
+            .differential_case_results
+            .as_ref()?
+            .iter()
+            .find(|result| result.case_id == case.case_id)
+    }
+
+    #[must_use]
+    pub fn selected_case_drilldown_lines(&self) -> Vec<String> {
+        let Some(case) = self.selected_case() else {
+            return vec![String::from("case=<none>")];
+        };
+
+        let mut lines = vec![
+            format!("case={} passed={}", case.case_id, case.passed),
+            format!("assertion={}", case.message),
+        ];
+
+        if let Some(diff) = self.selected_differential_case() {
+            lines.push(match diff.max_diff {
+                Some(max_diff) => format!("max_abs_diff={max_diff:.6e}"),
+                None => String::from("max_abs_diff=<not numeric>"),
+            });
+            if let Some(tolerance) = &diff.tolerance_used {
+                lines.push(format!(
+                    "tolerance atol={:.6e} rtol={:.6e} mode={}",
+                    tolerance.atol, tolerance.rtol, tolerance.comparison_mode
+                ));
+            } else {
+                lines.push(String::from("tolerance=<none>"));
+            }
+            lines.push(format!("oracle_status={:?}", diff.oracle_status));
+        } else {
+            lines.push(String::from("differential=<not recorded>"));
+        }
+
+        lines
     }
 
     #[must_use]
@@ -381,6 +466,36 @@ pub fn load_dashboard_state_from_artifact_root(
     ))
 }
 
+fn differential_max_diff(packet: &PacketReport, case: &crate::CaseResult) -> Option<f64> {
+    packet
+        .differential_case_results
+        .as_ref()?
+        .iter()
+        .find(|result| result.case_id == case.case_id)
+        .and_then(|result| result.max_diff)
+}
+
+fn compare_case_list_entries(
+    left: &DashboardCaseListEntry<'_>,
+    right: &DashboardCaseListEntry<'_>,
+) -> Ordering {
+    left.case
+        .passed
+        .cmp(&right.case.passed)
+        .then_with(|| compare_max_diff_desc(left.max_diff, right.max_diff))
+        .then_with(|| left.case.case_id.cmp(&right.case.case_id))
+        .then_with(|| left.source_index.cmp(&right.source_index))
+}
+
+fn compare_max_diff_desc(left: Option<f64>, right: Option<f64>) -> Ordering {
+    match (left, right) {
+        (Some(left), Some(right)) => right.total_cmp(&left),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
+    }
+}
+
 fn apply_filter(reports: Vec<PacketReport>, packet_filter: Option<&str>) -> Vec<PacketReport> {
     match packet_filter {
         None => reports,
@@ -456,6 +571,43 @@ fn discover_reports_best_effort(artifact_root: &Path) -> Result<DiscoveryResult,
         packet_presence.has_decode_proof = decode_proof_path.exists();
         packet_presence.has_oracle_capture = oracle_capture_path.exists();
         packet_presence.has_oracle_error = oracle_error_path.exists();
+        if packet_presence.has_sidecar {
+            match fs::read_to_string(&sidecar_path) {
+                Ok(raw) => match from_str::<RaptorQSidecar>(&raw) {
+                    Ok(sidecar) => {
+                        packet_presence.sidecar_source_hash = Some(sidecar.source_hash);
+                        packet_presence.sidecar_source_symbols = Some(sidecar.source_symbols);
+                        packet_presence.sidecar_repair_symbols = Some(sidecar.repair_symbols);
+                    }
+                    Err(error) => warnings.push(format!(
+                        "failed to parse `{}`: {error}",
+                        sidecar_path.display()
+                    )),
+                },
+                Err(error) => warnings.push(format!(
+                    "failed to read `{}`: {error}",
+                    sidecar_path.display()
+                )),
+            }
+        }
+        if packet_presence.has_decode_proof {
+            match fs::read_to_string(&decode_proof_path) {
+                Ok(raw) => match from_str::<DecodeProofArtifact>(&raw) {
+                    Ok(proof) => {
+                        packet_presence.decode_proof_hash = Some(proof.proof_hash);
+                        packet_presence.decode_proof_reason = Some(proof.reason);
+                    }
+                    Err(error) => warnings.push(format!(
+                        "failed to parse `{}`: {error}",
+                        decode_proof_path.display()
+                    )),
+                },
+                Err(error) => warnings.push(format!(
+                    "failed to read `{}`: {error}",
+                    decode_proof_path.display()
+                )),
+            }
+        }
         packet_presence.classify_report_source();
 
         if report_path.exists() {
@@ -488,7 +640,7 @@ mod tests {
         DashboardPanel, DashboardState, PacketArtifactPresence,
         load_dashboard_state_from_artifact_root,
     };
-    use crate::{CaseResult, PacketReport};
+    use crate::{CaseResult, DifferentialCaseResult, OracleStatus, PacketReport};
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -561,6 +713,86 @@ mod tests {
     }
 
     #[test]
+    fn dashboard_case_list_prioritizes_failures_by_numeric_delta() {
+        let reports = vec![PacketReport {
+            schema_version: 2,
+            packet_id: "PKT-SORT".to_owned(),
+            family: "demo".to_owned(),
+            case_results: vec![
+                CaseResult {
+                    case_id: "pass-small".to_owned(),
+                    passed: true,
+                    message: "ok".to_owned(),
+                },
+                CaseResult {
+                    case_id: "fail-low".to_owned(),
+                    passed: false,
+                    message: "low mismatch".to_owned(),
+                },
+                CaseResult {
+                    case_id: "fail-high".to_owned(),
+                    passed: false,
+                    message: "high mismatch".to_owned(),
+                },
+            ],
+            passed_cases: 1,
+            failed_cases: 2,
+            fixture_path: None,
+            oracle_status: None,
+            differential_case_results: Some(vec![
+                DifferentialCaseResult {
+                    case_id: "pass-small".to_owned(),
+                    passed: true,
+                    message: "ok".to_owned(),
+                    max_diff: Some(1.0e-12),
+                    tolerance_used: None,
+                    oracle_status: OracleStatus::Available,
+                },
+                DifferentialCaseResult {
+                    case_id: "fail-low".to_owned(),
+                    passed: false,
+                    message: "low mismatch".to_owned(),
+                    max_diff: Some(2.0e-6),
+                    tolerance_used: None,
+                    oracle_status: OracleStatus::Available,
+                },
+                DifferentialCaseResult {
+                    case_id: "fail-high".to_owned(),
+                    passed: false,
+                    message: "high mismatch".to_owned(),
+                    max_diff: Some(5.0e-3),
+                    tolerance_used: None,
+                    oracle_status: OracleStatus::Available,
+                },
+            ]),
+            report_kind: crate::ReportKind::Unspecified,
+            generated_unix_ms: 0,
+        }];
+        let presence = vec![PacketArtifactPresence::new("PKT-SORT".to_owned())];
+        let state = DashboardState::new(reports, presence, Vec::new(), None);
+
+        let ordered_case_ids = state
+            .case_list_entries()
+            .iter()
+            .map(|entry| entry.case.case_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ordered_case_ids,
+            vec!["fail-high", "fail-low", "pass-small"]
+        );
+        assert_eq!(
+            state.selected_case().expect("selected case").case_id,
+            "fail-high"
+        );
+        assert!(
+            state
+                .selected_case_drilldown_lines()
+                .iter()
+                .any(|line| line.contains("max_abs_diff=5.000000e-3"))
+        );
+    }
+
+    #[test]
     fn dashboard_loader_skips_malformed_reports() {
         let root = temp_dir("best-effort");
         let good = root.join("PKT-GOOD");
@@ -577,8 +809,29 @@ mod tests {
   "generated_unix_ms": 0
 }"#;
         fs::write(good.join("parity_report.json"), good_report).expect("write good report");
-        fs::write(good.join("parity_report.raptorq.json"), "{}").expect("write sidecar");
-        fs::write(good.join("parity_report.decode_proof.json"), "{}").expect("write proof");
+        fs::write(
+            good.join("parity_report.raptorq.json"),
+            r#"{
+  "schema_version": 1,
+  "source_hash": "abcdef0123456789abcdef0123456789",
+  "symbol_size": 1024,
+  "seed": 7,
+  "source_symbols": 3,
+  "repair_symbols": 2,
+  "repair_symbol_hashes": ["r1", "r2"]
+}"#,
+        )
+        .expect("write sidecar");
+        fs::write(
+            good.join("parity_report.decode_proof.json"),
+            r#"{
+  "ts_unix_ms": 123,
+  "reason": "test decode proof",
+  "recovered_blocks": 1,
+  "proof_hash": "fedcba9876543210fedcba9876543210"
+}"#,
+        )
+        .expect("write proof");
         fs::write(good.join("oracle_capture.json"), "{}").expect("write oracle");
 
         fs::write(bad.join("parity_report.json"), "{not_json").expect("write bad report");
@@ -593,6 +846,23 @@ mod tests {
         assert_eq!(metrics.packets_with_sidecar, 1);
         assert_eq!(metrics.packets_with_decode_proof, 1);
         assert_eq!(metrics.packets_with_oracle_capture, 1);
+        let artifact = state
+            .selected_packet_artifacts()
+            .expect("artifact presence");
+        assert_eq!(artifact.sidecar_source_symbols, Some(3));
+        assert_eq!(artifact.sidecar_repair_symbols, Some(2));
+        assert_eq!(
+            artifact.sidecar_source_hash.as_deref(),
+            Some("abcdef0123456789abcdef0123456789")
+        );
+        assert_eq!(
+            artifact.decode_proof_hash.as_deref(),
+            Some("fedcba9876543210fedcba9876543210")
+        );
+        assert_eq!(
+            artifact.decode_proof_reason.as_deref(),
+            Some("test decode proof")
+        );
     }
 
     #[test]
@@ -664,6 +934,26 @@ mod tests {
             Some("fixtures/FSCI-P2C-777_stats.json")
         );
         assert!(report.differential_case_results.is_some());
+        let drilldown = state.selected_case_drilldown_lines();
+        assert!(
+            drilldown
+                .iter()
+                .any(|line| line.contains("max_abs_diff=1.000000e-12")),
+            "drilldown should surface numeric differential deltas: {drilldown:?}"
+        );
+        assert!(
+            drilldown
+                .iter()
+                .any(|line| line
+                    .contains("tolerance atol=1.000000e-12 rtol=1.000000e-12 mode=scalar")),
+            "drilldown should surface tolerance policy: {drilldown:?}"
+        );
+        assert!(
+            drilldown
+                .iter()
+                .any(|line| line.contains("oracle_status=Available")),
+            "drilldown should surface oracle status: {drilldown:?}"
+        );
     }
 
     #[test]

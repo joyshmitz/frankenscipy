@@ -21,6 +21,8 @@ const PACKET_ID: &str = "FSCI-P2C-012";
 const TOL: f64 = 0.1;
 const REQUIRE_SCIPY_ENV: &str = "FSCI_REQUIRE_SCIPY_ORACLE";
 
+type RustLinkageOutput = (Vec<[f64; 4]>, bool, bool, Vec<usize>, Vec<f64>);
+
 #[derive(Debug, Clone, Serialize)]
 struct LinkageCase {
     case_id: String,
@@ -266,9 +268,7 @@ fn method_from_str(s: &str) -> LinkageMethod {
     }
 }
 
-fn compute_rust_linkage(
-    case: &LinkageCase,
-) -> Option<(Vec<[f64; 4]>, bool, bool, Vec<usize>, Vec<f64>)> {
+fn compute_rust_linkage(case: &LinkageCase) -> Option<RustLinkageOutput> {
     let method = method_from_str(&case.method);
     let z = linkage(&case.data, method).ok()?;
     let valid = is_valid_linkage(&z);

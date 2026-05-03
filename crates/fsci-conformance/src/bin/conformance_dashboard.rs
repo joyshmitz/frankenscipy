@@ -205,14 +205,19 @@ impl DashboardApp {
         styles.push(header_style);
 
         if let Some(packet) = self.state.selected_packet() {
-            for (idx, case) in packet.case_results.iter().enumerate() {
+            for (idx, entry) in self.state.case_list_entries().iter().enumerate() {
+                let case = entry.case;
                 let prefix = if idx == self.state.selected_case_index() {
                     ">"
                 } else {
                     " "
                 };
                 let status = if case.passed { "PASS" } else { "FAIL" };
-                let line = format!("{prefix} {} [{}]", case.case_id, status);
+                let line = if let Some(max_diff) = entry.max_diff {
+                    format!("{prefix} {} [{status}] diff={max_diff:.3e}", case.case_id)
+                } else {
+                    format!("{prefix} {} [{status}]", case.case_id)
+                };
 
                 let mut style = style_for_case_result(case);
                 if idx == self.state.selected_case_index() {
@@ -277,15 +282,47 @@ impl DashboardApp {
                     bool_as_flag(artifact.has_oracle_error)
                 ));
                 styles.push(Style::new().fg(PackedRgba::rgb(150, 210, 180)));
+
+                if let (Some(source_symbols), Some(repair_symbols)) = (
+                    artifact.sidecar_source_symbols,
+                    artifact.sidecar_repair_symbols,
+                ) {
+                    lines.push(format!(
+                        "raptorq: source_symbols={source_symbols} repair_symbols={repair_symbols}"
+                    ));
+                    styles.push(Style::new().fg(PackedRgba::rgb(150, 210, 180)));
+                }
+                if let Some(source_hash) = &artifact.sidecar_source_hash {
+                    lines.push(format!("sidecar_source_hash={}", short_hash(source_hash)));
+                    styles.push(Style::new().fg(PackedRgba::rgb(150, 210, 180)));
+                }
+                if let Some(proof_hash) = &artifact.decode_proof_hash {
+                    lines.push(format!("decode_proof_hash={}", short_hash(proof_hash)));
+                    styles.push(Style::new().fg(PackedRgba::rgb(150, 210, 180)));
+                }
+                if let Some(reason) = &artifact.decode_proof_reason {
+                    lines.push(format!("decode_reason={reason}"));
+                    styles.push(Style::new().fg(PackedRgba::rgb(150, 210, 180)));
+                }
             }
         }
 
         if let Some(case) = self.state.selected_case() {
-            lines.push(format!("case={} passed={}", case.case_id, case.passed));
-            styles.push(style_for_case_result(case));
-
-            lines.push(format!("message={}", case.message));
-            styles.push(Style::new().fg(PackedRgba::rgb(195, 195, 195)));
+            let case_style = style_for_case_result(case);
+            for (idx, line) in self
+                .state
+                .selected_case_drilldown_lines()
+                .into_iter()
+                .enumerate()
+            {
+                let style = if idx == 0 {
+                    case_style
+                } else {
+                    Style::new().fg(PackedRgba::rgb(195, 195, 195))
+                };
+                lines.push(line);
+                styles.push(style);
+            }
         }
 
         for warning in self.state.warnings().iter().take(3) {
@@ -346,6 +383,10 @@ fn panel_header_style(active: bool) -> Style {
 
 fn bool_as_flag(value: bool) -> &'static str {
     if value { "yes" } else { "no" }
+}
+
+fn short_hash(value: &str) -> &str {
+    value.get(..16).unwrap_or(value)
 }
 
 fn single_line(area: Rect, row: u16) -> Rect {
