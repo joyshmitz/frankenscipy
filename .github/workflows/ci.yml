@@ -150,3 +150,27 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
       - run: cargo test -p fsci-conformance --test raptorq_proofs -- --nocapture
         timeout-minutes: 5
+
+  # ── G9: Tolerance Policy Ratchet (parallel) ──────────────────────
+  # Lints fixture cases against artifacts/TOLERANCE_POLICY.md §2 baseline tiers.
+  # A case is a violation if its rtol exceeds the per-packet baseline AND it
+  # carries no `rationale` field. The threshold below is the audit datum from
+  # artifacts/tolerance-audit-2026-05-03.md (361 violations at policy
+  # publication time).
+  #
+  # Ratchet protocol: when a fixture is regenerated with a `rationale` for
+  # one of its previously-implicit relaxations, the violation count drops.
+  # When that drop is observed, lower --max-violations in this step to the
+  # new count. The threshold MUST monotonically decrease — never raise it.
+  # The eventual goal is --max-violations=0 (full §5 audit-trail compliance).
+  g9-tolerance-lint:
+    name: "G9: tolerance-policy ratchet"
+    needs: g2-unit-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: |
+          cargo run --release -p fsci-conformance --bin tolerance_lint -- \
+            --max-violations 361
+        timeout-minutes: 5
