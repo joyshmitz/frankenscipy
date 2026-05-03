@@ -20,6 +20,11 @@ pub use formats::{
     SparseSliceSpec,
 };
 pub use linalg::{
+    CaspIterativeDecision,
+    CaspIterativeSolveOptions,
+    CaspIterativeSolveResult,
+    CaspIterativeSolver,
+    CaspMatvecCost,
     ConnectedComponentsResult,
     EigsOptions,
     EigsResult,
@@ -44,6 +49,8 @@ pub use linalg::{
     bicg,
     bicgstab,
     breadth_first_order,
+    casp_iterative_solve,
+    casp_iterative_solve_with_audit,
     // Iterative solvers
     cg,
     cgs,
@@ -76,6 +83,7 @@ pub use linalg::{
     pcg,
     qmr,
     reverse_cuthill_mckee,
+    select_casp_iterative_solver,
     shortest_path,
     sparse_abs,
     sparse_add,

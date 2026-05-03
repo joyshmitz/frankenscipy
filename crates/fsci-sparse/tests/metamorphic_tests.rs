@@ -29,12 +29,12 @@ fn close(a: f64, b: f64) -> bool {
 fn csr_to_dense(a: &CsrMatrix) -> Vec<Vec<f64>> {
     let s = a.shape();
     let mut m = vec![vec![0.0; s.cols]; s.rows];
-    for i in 0..s.rows {
+    for (i, row) in m.iter_mut().enumerate().take(s.rows) {
         let start = a.indptr()[i];
         let end = a.indptr()[i + 1];
         for k in start..end {
             let j = a.indices()[k];
-            m[i][j] = a.data()[k];
+            row[j] = a.data()[k];
         }
     }
     m
@@ -598,13 +598,13 @@ fn mr_kron_of_identities_is_identity() {
             assert_eq!(k.shape().rows, total, "MR21 kron rows m={m} n={n}");
             assert_eq!(k.shape().cols, total, "MR21 kron cols m={m} n={n}");
             let dense = csr_to_dense(&k);
-            for i in 0..total {
-                for j in 0..total {
+            for (i, row) in dense.iter().enumerate().take(total) {
+                for (j, value) in row.iter().enumerate().take(total) {
                     let expected = if i == j { 1.0 } else { 0.0 };
                     assert!(
-                        close(dense[i][j], expected),
+                        close(*value, expected),
                         "MR21 kron(I_{m}, I_{n})[{i}, {j}] = {} vs {expected}",
-                        dense[i][j]
+                        value
                     );
                 }
             }
@@ -652,21 +652,14 @@ fn mr_kronsum_matches_dense_definition() {
     let dense_sum = csr_to_dense(&sum);
     let dense_a = csr_to_dense(&a);
     let dense_b = csr_to_dense(&b);
-    for b_row in 0..3 {
-        for b_col in 0..3 {
-            for a_row in 0..2 {
-                for a_col in 0..2 {
+    for (b_row, b_values) in dense_b.iter().enumerate().take(3) {
+        for (b_col, b_value) in b_values.iter().enumerate().take(3) {
+            for (a_row, a_values) in dense_a.iter().enumerate().take(2) {
+                for (a_col, a_value) in a_values.iter().enumerate().take(2) {
                     let row = b_row * 2 + a_row;
                     let col = b_col * 2 + a_col;
-                    let expected = if b_row == b_col {
-                        dense_a[a_row][a_col]
-                    } else {
-                        0.0
-                    } + if a_row == a_col {
-                        dense_b[b_row][b_col]
-                    } else {
-                        0.0
-                    };
+                    let expected = if b_row == b_col { *a_value } else { 0.0 }
+                        + if a_row == a_col { *b_value } else { 0.0 };
                     assert!(
                         close(dense_sum[row][col], expected),
                         "MR22b kronsum entry ({row}, {col}) = {} vs {expected}",
@@ -824,11 +817,11 @@ fn mr_floyd_warshall_zero_diagonal() {
         .unwrap()
         .0;
     let dist = floyd_warshall(&g);
-    for i in 0..n {
+    for (i, row) in dist.iter().enumerate().take(n) {
         assert!(
-            dist[i][i].abs() < 1e-12,
+            row[i].abs() < 1e-12,
             "MR29 floyd_warshall dist[{i}, {i}] = {}",
-            dist[i][i]
+            row[i]
         );
     }
 }
@@ -859,13 +852,13 @@ fn mr_sparse_matrix_power_of_identity() {
     for k in [1usize, 2, 3, 5] {
         let p = sparse_matrix_power(&i, k).unwrap();
         let dense = csr_to_dense(&p);
-        for r in 0..n {
-            for c in 0..n {
+        for (r, row) in dense.iter().enumerate().take(n) {
+            for (c, value) in row.iter().enumerate().take(n) {
                 let expected = if r == c { 1.0 } else { 0.0 };
                 assert!(
-                    close(dense[r][c], expected),
+                    close(*value, expected),
                     "MR31 sparse_matrix_power(I, {k})[{r}, {c}] = {}",
-                    dense[r][c]
+                    value
                 );
             }
         }
@@ -977,8 +970,10 @@ fn mr_bfs_starts_at_source() {
 fn mr_cgs_residual_small_on_spd() {
     let a = build_spd_csr();
     let b = vec![1.0_f64, -0.5, 2.0, 0.25, -0.5];
-    let mut opts = IterativeSolveOptions::default();
-    opts.max_iter = Some(200);
+    let opts = IterativeSolveOptions {
+        max_iter: Some(200),
+        ..IterativeSolveOptions::default()
+    };
     let res = cgs(&a, &b, None, opts).unwrap();
     let ax = spmv_csr(&a, &res.solution).unwrap();
     let mut residual_sq = 0.0;
@@ -1000,8 +995,10 @@ fn mr_cgs_residual_small_on_spd() {
 fn mr_qmr_residual_small_on_spd() {
     let a = build_spd_csr();
     let b = vec![1.0_f64, 0.5, -1.0, 0.25, -0.5];
-    let mut opts = IterativeSolveOptions::default();
-    opts.max_iter = Some(200);
+    let opts = IterativeSolveOptions {
+        max_iter: Some(200),
+        ..IterativeSolveOptions::default()
+    };
     let res = qmr(&a, &b, None, opts).unwrap();
     let ax = spmv_csr(&a, &res.solution).unwrap();
     let mut residual_sq = 0.0;
@@ -1028,8 +1025,10 @@ fn mr_qmr_residual_small_on_spd() {
 fn mr_lsqr_residual_small_on_square() {
     let a = build_spd_csr();
     let b = vec![1.0_f64, -0.5, 2.0, 0.25, -0.5];
-    let mut opts = IterativeSolveOptions::default();
-    opts.max_iter = Some(500);
+    let opts = IterativeSolveOptions {
+        max_iter: Some(500),
+        ..IterativeSolveOptions::default()
+    };
     let res = lsqr(&a, &b, opts).unwrap();
     let ax = spmv_csr(&a, &res.solution).unwrap();
     let mut residual_sq = 0.0;
@@ -1051,8 +1050,10 @@ fn mr_lsqr_residual_small_on_square() {
 fn mr_lsmr_residual_small_on_square() {
     let a = build_spd_csr();
     let b = vec![1.0_f64, -0.5, 2.0, 0.25, -0.5];
-    let mut opts = IterativeSolveOptions::default();
-    opts.max_iter = Some(500);
+    let opts = IterativeSolveOptions {
+        max_iter: Some(500),
+        ..IterativeSolveOptions::default()
+    };
     let res = lsmr(&a, &b, opts).unwrap();
     let ax = spmv_csr(&a, &res.solution).unwrap();
     let mut residual_sq = 0.0;
@@ -1074,8 +1075,10 @@ fn mr_lsmr_residual_small_on_square() {
 fn mr_minres_residual_small_on_spd() {
     let a = build_spd_csr();
     let b = vec![1.0_f64, -0.5, 2.0, 0.25, -0.5];
-    let mut opts = IterativeSolveOptions::default();
-    opts.max_iter = Some(200);
+    let opts = IterativeSolveOptions {
+        max_iter: Some(200),
+        ..IterativeSolveOptions::default()
+    };
     let res = minres(&a, &b, None, opts).unwrap();
     let ax = spmv_csr(&a, &res.solution).unwrap();
     let mut residual_sq = 0.0;
@@ -1099,7 +1102,7 @@ fn mr_reverse_cuthill_mckee_is_permutation() {
     let g = build_spd_csr(); // 5×5 with non-trivial structure
     let perm = reverse_cuthill_mckee(&g);
     assert_eq!(perm.len(), 5, "MR42 RCM length");
-    let mut seen = vec![false; 5];
+    let mut seen = [false; 5];
     for &p in &perm {
         assert!(p < 5, "MR42 RCM index {p} out of range");
         seen[p] = true;
@@ -1119,13 +1122,13 @@ fn mr_sparse_expm_of_zero_is_identity() {
     let zero = vec![0.0_f64; n];
     let z = diags(&[zero], &[0_isize], Some(Shape2D::new(n, n))).unwrap();
     let result = sparse_expm(&z, ExpmOptions::default()).unwrap();
-    for i in 0..n {
-        for j in 0..n {
+    for (i, row) in result.iter().enumerate().take(n) {
+        for (j, value) in row.iter().enumerate().take(n) {
             let expected = if i == j { 1.0 } else { 0.0 };
             assert!(
-                (result[i][j] - expected).abs() < 1e-9,
+                (*value - expected).abs() < 1e-9,
                 "MR43 expm(0)[{i}, {j}] = {} vs {expected}",
-                result[i][j]
+                value
             );
         }
     }
@@ -1197,7 +1200,7 @@ fn mr_minimum_spanning_tree_edge_count() {
         .0;
     let mst = minimum_spanning_tree(&g).unwrap();
     assert!(
-        mst.edges.len() <= n - 1,
+        mst.edges.len() < n,
         "MR46 MST edge count = {} > n-1 = {}",
         mst.edges.len(),
         n - 1
@@ -1245,8 +1248,10 @@ fn mr_pcg_residual_small_on_spd() {
     let (csc, _) = csr_to_csc_with_mode(&a, RuntimeMode::Strict, "test_pcg_pre").unwrap();
     let pre = spilu(&csc, IluOptions::default()).unwrap();
     let b = vec![1.0_f64, -0.5, 2.0, 0.25, -0.5];
-    let mut opts = IterativeSolveOptions::default();
-    opts.max_iter = Some(200);
+    let opts = IterativeSolveOptions {
+        max_iter: Some(200),
+        ..IterativeSolveOptions::default()
+    };
     let res = pcg(&a, &b, &pre, None, opts).unwrap();
     let ax = spmv_csr(&a, &res.solution).unwrap();
     let mut residual_sq = 0.0;

@@ -845,6 +845,80 @@ pub struct IterativeSolveResult {
     pub residual_norm: f64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaspIterativeSolver {
+    Cg,
+    Gmres,
+    Lgmres,
+    Bicgstab,
+    Qmr,
+    Minres,
+    Lsqr,
+    Lsmr,
+}
+
+impl CaspIterativeSolver {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Cg => "cg",
+            Self::Gmres => "gmres",
+            Self::Lgmres => "lgmres",
+            Self::Bicgstab => "bicgstab",
+            Self::Qmr => "qmr",
+            Self::Minres => "minres",
+            Self::Lsqr => "lsqr",
+            Self::Lsmr => "lsmr",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaspMatvecCost {
+    Auto,
+    Cheap,
+    Moderate,
+    Expensive,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CaspIterativeSolveOptions {
+    pub iterative: IterativeSolveOptions,
+    pub preconditioner_available: bool,
+    pub matrix_vector_cost: CaspMatvecCost,
+    pub prefer_low_memory: bool,
+}
+
+impl Default for CaspIterativeSolveOptions {
+    fn default() -> Self {
+        Self {
+            iterative: IterativeSolveOptions::default(),
+            preconditioner_available: false,
+            matrix_vector_cost: CaspMatvecCost::Auto,
+            prefer_low_memory: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CaspIterativeDecision {
+    pub selected_solver: CaspIterativeSolver,
+    pub square: bool,
+    pub symmetric: bool,
+    pub positive_diagonal: bool,
+    pub row_diagonally_dominant: bool,
+    pub density: f64,
+    pub matrix_vector_cost: CaspMatvecCost,
+    pub preconditioner_available: bool,
+    pub rationale: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CaspIterativeSolveResult {
+    pub decision: CaspIterativeDecision,
+    pub result: IterativeSolveResult,
+}
+
 fn validate_iterative_finite_inputs(
     a: &CsrMatrix,
     b: &[f64],
@@ -2547,6 +2621,221 @@ pub fn lsmr(
     // convergence monitor. For correctness, delegate to LSQR which is
     // already validated.
     lsqr(a, b, options)
+}
+
+/// Select an iterative sparse solver from CASP-style structural signals.
+pub fn select_casp_iterative_solver(
+    a: &CsrMatrix,
+    b: &[f64],
+    x0: Option<&[f64]>,
+    options: CaspIterativeSolveOptions,
+) -> SparseResult<CaspIterativeDecision> {
+    validate_casp_iterative_inputs(a, b, x0, options)?;
+
+    let shape = a.shape();
+    let square = shape.is_square();
+    let density = sparse_density_estimate(a);
+    let matrix_vector_cost = resolve_matvec_cost(a, options.matrix_vector_cost);
+    let symmetric = square && sparse_is_symmetric(a, options.iterative.tol.max(1.0e-12));
+    let positive_diagonal = square && has_strictly_positive_diagonal(a);
+    let row_diagonally_dominant = square && is_row_diagonally_dominant(a, options.iterative.tol);
+
+    let (selected_solver, rationale) = if !square {
+        if shape.rows >= shape.cols {
+            (
+                CaspIterativeSolver::Lsqr,
+                "rectangular_overdetermined_or_square_least_squares",
+            )
+        } else {
+            (
+                CaspIterativeSolver::Lsmr,
+                "rectangular_underdetermined_least_squares",
+            )
+        }
+    } else if symmetric && positive_diagonal && row_diagonally_dominant {
+        (
+            CaspIterativeSolver::Cg,
+            "symmetric_positive_diagonal_row_dominant",
+        )
+    } else if symmetric {
+        (
+            CaspIterativeSolver::Minres,
+            "symmetric_but_not_spd_certified",
+        )
+    } else if options.preconditioner_available {
+        (
+            CaspIterativeSolver::Lgmres,
+            "nonsymmetric_preconditioner_available",
+        )
+    } else if options.prefer_low_memory || matrix_vector_cost == CaspMatvecCost::Expensive {
+        (
+            CaspIterativeSolver::Bicgstab,
+            "nonsymmetric_low_memory_or_expensive_matvec",
+        )
+    } else if density <= 0.10 && shape.rows >= 16 {
+        (
+            CaspIterativeSolver::Qmr,
+            "large_very_sparse_nonsymmetric_transpose_stabilization",
+        )
+    } else {
+        (
+            CaspIterativeSolver::Gmres,
+            "small_or_dense_nonsymmetric_robust_residual_minimization",
+        )
+    };
+
+    Ok(CaspIterativeDecision {
+        selected_solver,
+        square,
+        symmetric,
+        positive_diagonal,
+        row_diagonally_dominant,
+        density,
+        matrix_vector_cost,
+        preconditioner_available: options.preconditioner_available,
+        rationale: rationale.to_string(),
+    })
+}
+
+/// Run the CASP-selected iterative sparse solver.
+pub fn casp_iterative_solve(
+    a: &CsrMatrix,
+    b: &[f64],
+    x0: Option<&[f64]>,
+    options: CaspIterativeSolveOptions,
+) -> SparseResult<CaspIterativeSolveResult> {
+    casp_iterative_solve_inner(a, b, x0, options)
+}
+
+/// Run the CASP-selected iterative sparse solver and emit the choice rationale.
+pub fn casp_iterative_solve_with_audit(
+    a: &CsrMatrix,
+    b: &[f64],
+    x0: Option<&[f64]>,
+    options: CaspIterativeSolveOptions,
+    ledger: &crate::audit::SyncSharedAuditLedger,
+) -> SparseResult<CaspIterativeSolveResult> {
+    let solved = casp_iterative_solve_inner(a, b, x0, options)?;
+    crate::audit::record_bounded_recovery(
+        ledger,
+        solved.decision.rationale.as_bytes(),
+        &format!(
+            "casp_sparse_iterative_solver={}",
+            solved.decision.selected_solver.as_str()
+        ),
+        &format!(
+            "selected_solver={};rationale={};symmetric={};density={:.6};matvec_cost={:?};preconditioner_available={};converged={};residual_norm={:.6e}",
+            solved.decision.selected_solver.as_str(),
+            solved.decision.rationale,
+            solved.decision.symmetric,
+            solved.decision.density,
+            solved.decision.matrix_vector_cost,
+            solved.decision.preconditioner_available,
+            solved.result.converged,
+            solved.result.residual_norm
+        ),
+    );
+    Ok(solved)
+}
+
+fn casp_iterative_solve_inner(
+    a: &CsrMatrix,
+    b: &[f64],
+    x0: Option<&[f64]>,
+    options: CaspIterativeSolveOptions,
+) -> SparseResult<CaspIterativeSolveResult> {
+    let decision = select_casp_iterative_solver(a, b, x0, options)?;
+    let result = match decision.selected_solver {
+        CaspIterativeSolver::Cg => cg(a, b, x0, options.iterative),
+        CaspIterativeSolver::Gmres => gmres(a, b, x0, options.iterative),
+        CaspIterativeSolver::Lgmres => lgmres(
+            a,
+            b,
+            x0,
+            LgmresOptions {
+                tol: options.iterative.tol,
+                max_iter: options.iterative.max_iter,
+                ..LgmresOptions::default()
+            },
+        ),
+        CaspIterativeSolver::Bicgstab => bicgstab(a, b, x0, options.iterative),
+        CaspIterativeSolver::Qmr => qmr(a, b, x0, options.iterative),
+        CaspIterativeSolver::Minres => minres(a, b, x0, options.iterative),
+        CaspIterativeSolver::Lsqr => lsqr(a, b, options.iterative),
+        CaspIterativeSolver::Lsmr => lsmr(a, b, options.iterative),
+    }?;
+    Ok(CaspIterativeSolveResult { decision, result })
+}
+
+fn validate_casp_iterative_inputs(
+    a: &CsrMatrix,
+    b: &[f64],
+    x0: Option<&[f64]>,
+    options: CaspIterativeSolveOptions,
+) -> SparseResult<()> {
+    let shape = a.shape();
+    if b.len() != shape.rows {
+        return Err(SparseError::IncompatibleShape {
+            message: "rhs length must match matrix rows".to_string(),
+        });
+    }
+    if let Some(initial) = x0
+        && initial.len() != shape.cols
+    {
+        return Err(SparseError::IncompatibleShape {
+            message: "initial guess length must match matrix cols".to_string(),
+        });
+    }
+    validate_iterative_finite_inputs(a, b, x0, options.iterative)
+}
+
+fn sparse_density_estimate(a: &CsrMatrix) -> f64 {
+    let shape = a.shape();
+    let slots = shape.rows.saturating_mul(shape.cols);
+    if slots == 0 {
+        return 0.0;
+    }
+    a.data().len() as f64 / slots as f64
+}
+
+fn resolve_matvec_cost(a: &CsrMatrix, requested: CaspMatvecCost) -> CaspMatvecCost {
+    if requested != CaspMatvecCost::Auto {
+        return requested;
+    }
+    let rows = a.shape().rows.max(1);
+    let nnz_per_row = a.data().len() as f64 / rows as f64;
+    if nnz_per_row <= 4.0 {
+        CaspMatvecCost::Cheap
+    } else if nnz_per_row <= 32.0 {
+        CaspMatvecCost::Moderate
+    } else {
+        CaspMatvecCost::Expensive
+    }
+}
+
+fn has_strictly_positive_diagonal(a: &CsrMatrix) -> bool {
+    let n = a.shape().rows.min(a.shape().cols);
+    (0..n).all(|i| find_value_in_row(a.data(), a.indices(), a.indptr(), i, i) > 0.0)
+}
+
+fn is_row_diagonally_dominant(a: &CsrMatrix, tol: f64) -> bool {
+    let n = a.shape().rows;
+    for row in 0..n {
+        let mut diag = 0.0_f64;
+        let mut off_diag_sum = 0.0_f64;
+        for idx in a.indptr()[row]..a.indptr()[row + 1] {
+            let value = a.data()[idx].abs();
+            if a.indices()[idx] == row {
+                diag += value;
+            } else {
+                off_diag_sum += value;
+            }
+        }
+        if diag + tol < off_diag_sum {
+            return false;
+        }
+    }
+    true
 }
 
 /// CSR matrix-transpose-vector product: result = A^T * x
@@ -4669,6 +4958,120 @@ mod tests {
         assert!(result.converged, "MINRES should handle indefinite systems");
         let ax = csr_matvec(&a, &result.solution);
         assert_close_slice(&ax, &b, 1e-4);
+    }
+
+    #[test]
+    fn casp_selects_cg_for_spd_row_dominant_system() {
+        let a = spd_csr_3x3();
+        let b = vec![5.0, 5.0, 3.0];
+        let result = casp_iterative_solve(&a, &b, None, CaspIterativeSolveOptions::default())
+            .expect("casp solve");
+        assert_eq!(result.decision.selected_solver, CaspIterativeSolver::Cg);
+        assert_eq!(
+            result.decision.rationale,
+            "symmetric_positive_diagonal_row_dominant"
+        );
+        assert!(result.result.converged);
+        let ax = csr_matvec(&a, &result.result.solution);
+        assert_close_slice(&ax, &b, 1e-5);
+    }
+
+    #[test]
+    fn casp_selects_minres_for_symmetric_indefinite_system() {
+        let a = CooMatrix::from_triplets(
+            Shape2D::new(2, 2),
+            vec![2.0, 1.0, 1.0, -3.0],
+            vec![0, 0, 1, 1],
+            vec![0, 1, 0, 1],
+            false,
+        )
+        .expect("coo")
+        .to_csr()
+        .expect("csr");
+        let b = vec![3.0, -2.0];
+        let decision =
+            select_casp_iterative_solver(&a, &b, None, CaspIterativeSolveOptions::default())
+                .expect("casp decision");
+        assert_eq!(decision.selected_solver, CaspIterativeSolver::Minres);
+        assert!(decision.symmetric);
+        assert!(!decision.positive_diagonal);
+    }
+
+    #[test]
+    fn casp_selects_gmres_for_small_nonsymmetric_system() {
+        let a = nonsymmetric_csr_3x3();
+        let b = vec![5.0, 7.0, 4.0];
+        let result = casp_iterative_solve(&a, &b, None, CaspIterativeSolveOptions::default())
+            .expect("casp solve");
+        assert_eq!(result.decision.selected_solver, CaspIterativeSolver::Gmres);
+        assert!(!result.decision.symmetric);
+        assert!(result.result.converged);
+        let ax = csr_matvec(&a, &result.result.solution);
+        assert_close_slice(&ax, &b, 1e-5);
+    }
+
+    #[test]
+    fn casp_selects_lsqr_for_overdetermined_rectangular_system() {
+        let a = CooMatrix::from_triplets(
+            Shape2D::new(4, 2),
+            vec![1.0, 1.0, 1.0, 1.0, 1.0, -1.0],
+            vec![0, 1, 2, 2, 3, 3],
+            vec![0, 1, 0, 1, 0, 1],
+            false,
+        )
+        .expect("coo")
+        .to_csr()
+        .expect("csr");
+        let b = vec![1.0, 2.0, 4.0, 0.0];
+        let result = casp_iterative_solve(&a, &b, None, CaspIterativeSolveOptions::default())
+            .expect("casp solve");
+        assert_eq!(result.decision.selected_solver, CaspIterativeSolver::Lsqr);
+        assert!(!result.decision.square);
+        let ax = csr_matvec(&a, &result.result.solution);
+        let residual: Vec<f64> = ax.iter().zip(b.iter()).map(|(a, b)| a - b).collect();
+        let normal_residual = vec_norm(&csr_matvec_transpose(&a, &residual));
+        assert!(
+            normal_residual < 1.0,
+            "normal equations residual should be small: {normal_residual}"
+        );
+    }
+
+    #[test]
+    fn casp_audit_records_solver_choice_rationale() {
+        let a = spd_csr_3x3();
+        let b = vec![5.0, 5.0, 3.0];
+        let ledger = crate::audit::sync_audit_ledger();
+        let result = casp_iterative_solve_with_audit(
+            &a,
+            &b,
+            None,
+            CaspIterativeSolveOptions::default(),
+            &ledger,
+        )
+        .expect("casp audited solve");
+        assert_eq!(result.decision.selected_solver, CaspIterativeSolver::Cg);
+
+        let ledger = ledger.lock().expect("audit ledger");
+        assert_eq!(ledger.len(), 1);
+        let entry = &ledger.entries()[0];
+        let recovery_action = match &entry.action {
+            fsci_runtime::AuditAction::BoundedRecovery { recovery_action } => {
+                Some(recovery_action.as_str())
+            }
+            _ => None,
+        };
+        assert_eq!(
+            recovery_action,
+            Some("casp_sparse_iterative_solver=cg"),
+            "audit action must record sparse CASP solver choice"
+        );
+        assert!(
+            entry
+                .outcome
+                .contains("rationale=symmetric_positive_diagonal_row_dominant"),
+            "audit outcome must carry solver-choice rationale: {}",
+            entry.outcome
+        );
     }
 
     // ── LSQR least-squares solver tests ─────────────────────────────
