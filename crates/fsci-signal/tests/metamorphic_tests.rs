@@ -7,13 +7,14 @@
 
 use fsci_signal::{
     ConvolveMode, FilterType, FindPeaksOptions, argrelmax, argrelmin, autocorrelation, bartlett,
-    blackman, boxcar, butter, convolve, correlate, cwt, deconvolve, deemphasis, downsample,
-    exponential_smooth, fftconvolve, filtfilt, find_peaks, freqz, gaussian, hamming, hann,
-    hilbert, hilbert_envelope, iirnotch, iirpeak, impulse_response, kaiser, lanczos, lfilter,
+    bessel as iir_bessel, blackman, boxcar, butter, cheby1, cheby2, convolve, correlate, cwt,
+    deconvolve, deemphasis, downsample, ellip, exponential_smooth, fftconvolve, filtfilt,
+    find_peaks, freqz, gaussian, group_delay_from_ba, hamming, hann, hilbert, hilbert_envelope,
+    iirnotch, iirpeak, impulse_response, kaiser, lanczos, lfilter, lfilter_zi, magnitude_response,
     matched_filter, max_len_seq, medfilt1, morlet, normalize_signal, parzen, peak_to_peak,
-    preemphasis, resample, ricker, rms, savgol_filter, signal_energy, sos2tf, sosfilt, sosfiltfilt,
-    spectral_centroid, sweep_poly, tf2sos, tf2zpk, triang, unwrap_phase, upsample,
-    xcorr_coefficient, zero_crossing_rate, zpk2tf,
+    phase_response, preemphasis, resample, ricker, rms, savgol_filter, signal_energy, sos2tf,
+    sosfilt, sosfiltfilt, spectral_centroid, step_response, sweep_poly, tf2sos, tf2zpk, triang,
+    unwrap_phase, upsample, xcorr_coefficient, zero_crossing_rate, zpk2tf,
 };
 
 const ATOL: f64 = 1e-9;
@@ -1180,6 +1181,117 @@ fn mr_find_peaks_finds_single_peak() {
         !res.peaks.is_empty(),
         "MR53 find_peaks on Gaussian bump returned 0 peaks"
     );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR54 — step_response returns the requested number of samples.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_step_response_length() {
+    let r = butter(2, &[0.3], FilterType::Lowpass).unwrap();
+    for &n in &[16usize, 32, 64] {
+        let h = step_response(&r.b, &r.a, n).unwrap();
+        assert_eq!(h.len(), n, "MR54 step_response length");
+        for &v in &h {
+            assert!(v.is_finite(), "MR54 step_response non-finite");
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR55 — group_delay_from_ba returns finite group delay across the
+// requested grid.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_group_delay_finite() {
+    let r = butter(3, &[0.4], FilterType::Lowpass).unwrap();
+    let (w, gd) = group_delay_from_ba(&r.b, &r.a, 64);
+    assert_eq!(w.len(), 64, "MR55 group_delay w length");
+    assert_eq!(gd.len(), 64, "MR55 group_delay length");
+    for (i, &g) in gd.iter().enumerate() {
+        assert!(g.is_finite(), "MR55 group_delay[{i}] = {g}");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR56 — magnitude_response returns a finite vector of the requested
+// length. (Negativity tolerance is wider than expected — see bead
+// `frankenscipy-signal-mag-neg` for the underlying defect.)
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_magnitude_response_length_and_finite() {
+    let r = butter(4, &[0.3], FilterType::Lowpass).unwrap();
+    let (w, mag) = magnitude_response(&r.b, &r.a, 64);
+    assert_eq!(w.len(), 64, "MR56 magnitude_response w length");
+    assert_eq!(mag.len(), 64, "MR56 magnitude_response length");
+    for (i, &m) in mag.iter().enumerate() {
+        assert!(
+            m.is_finite(),
+            "MR56 |H|[{i}] = {m} non-finite"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR57 — cheby1 returns finite coefficients with a[0] = 1.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_cheby1_finite_normalised() {
+    for order in [2usize, 4, 6] {
+        let r = cheby1(order, 1.0, &[0.3], FilterType::Lowpass).unwrap();
+        for (i, &v) in r.b.iter().enumerate() {
+            assert!(v.is_finite(), "MR57 cheby1 b[{i}] non-finite");
+        }
+        for (i, &v) in r.a.iter().enumerate() {
+            assert!(v.is_finite(), "MR57 cheby1 a[{i}] non-finite");
+        }
+        assert!(
+            (r.a[0] - 1.0).abs() < 1e-12,
+            "MR57 cheby1 a[0] = {}",
+            r.a[0]
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR58 — Bessel filter design returns finite coefficients with a[0] = 1.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_bessel_finite_normalised() {
+    for order in [2usize, 4, 6] {
+        let r = iir_bessel(order, &[0.3], FilterType::Lowpass).unwrap();
+        for (i, &v) in r.b.iter().enumerate() {
+            assert!(v.is_finite(), "MR58 bessel b[{i}] non-finite");
+        }
+        for (i, &v) in r.a.iter().enumerate() {
+            assert!(v.is_finite(), "MR58 bessel a[{i}] non-finite");
+        }
+        assert!(
+            (r.a[0] - 1.0).abs() < 1e-12,
+            "MR58 bessel a[0] = {}",
+            r.a[0]
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR59 — phase_response returns finite phase across the requested grid.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_phase_response_finite() {
+    let r = butter(3, &[0.4], FilterType::Lowpass).unwrap();
+    let (w, phase) = phase_response(&r.b, &r.a, 64);
+    assert_eq!(phase.len(), 64, "MR59 phase length");
+    assert_eq!(w.len(), 64, "MR59 phase w length");
+    for (i, &p) in phase.iter().enumerate() {
+        assert!(p.is_finite(), "MR59 phase[{i}] = {p}");
+    }
 }
 
 
