@@ -18,7 +18,7 @@ pub use audit::{
 };
 pub use bessel::{
     BESSEL_DISPATCH_PLAN, h1vp, h2vp, hankel1, hankel2, i0, i0_scalar, i1, i1_scalar, iv, ivp, j0,
-    j1, jn, jv, jvp, kv, kvp, spherical_in, spherical_jn, spherical_kn, spherical_yn,
+    j1, jn, jn_zeros, jv, jvp, kv, kvp, spherical_in, spherical_jn, spherical_kn, spherical_yn,
     wright_bessel, y0, y1, yn, yv, yvp,
 };
 pub use beta::{
