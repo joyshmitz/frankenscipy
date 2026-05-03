@@ -812,10 +812,12 @@ fn hyp2f1_scalar(a: f64, b: f64, c: f64, z: f64, mode: RuntimeMode) -> Result<f6
         return Ok(1.0);
     }
 
+    let terminates = is_nonpositive_integer(a) || is_nonpositive_integer(b);
+
     // |z| must be < 1 for direct series convergence
     // For |z| >= 1, use Euler's transformation: 2F1(a,b;c;z) = (1-z)^(c-a-b) 2F1(c-a, c-b; c; z)
     // (valid when |z| < 1 after transformation)
-    if z.abs() < 1.0 {
+    if z.abs() < 1.0 || terminates {
         return hyp2f1_series(a, b, c, z);
     }
 
@@ -848,23 +850,23 @@ fn hyp2f1_scalar(a: f64, b: f64, c: f64, z: f64, mode: RuntimeMode) -> Result<f6
         }
     }
 
-    // For z > 1, use 1/z transformation when possible
-    if z > 1.0 && z.abs() > 1.0 {
-        // Use the linear transformation formula for 1/z
-        let z_inv = 1.0 / z;
-        if z_inv.abs() < 1.0 {
-            // 2F1(a,b;c;z) = Γ(c)Γ(b-a)/(Γ(b)Γ(c-a)) (-z)^(-a) 2F1(a,1-c+a;1-b+a;1/z)
-            //              + Γ(c)Γ(a-b)/(Γ(a)Γ(c-b)) (-z)^(-b) 2F1(b,1-c+b;1-a+b;1/z)
-            // Simplified: use Pfaff on the already-transformed result
-            if mode == RuntimeMode::Hardened {
-                return Err(SpecialError {
-                    function: "hyp2f1",
-                    kind: SpecialErrorKind::DomainError,
-                    mode,
-                    detail: "2F1 with |z| > 1 may not converge reliably",
-                });
-            }
+    if z > 1.0 {
+        if b == c && is_integer(a) {
+            return Ok((1.0 - z).powi(-(a as i32)));
         }
+        if a == c && is_integer(b) {
+            return Ok((1.0 - z).powi(-(b as i32)));
+        }
+
+        if mode == RuntimeMode::Hardened {
+            return Err(SpecialError {
+                function: "hyp2f1",
+                kind: SpecialErrorKind::DomainError,
+                mode,
+                detail: "2F1 analytic continuation for z > 1 is not implemented",
+            });
+        }
+        return Ok(f64::NAN);
     }
 
     // Fallback: direct series (may not converge for |z| >= 1)
@@ -889,12 +891,24 @@ fn hyp2f1_series(a: f64, b: f64, c: f64, z: f64) -> Result<f64, SpecialError> {
 
         sum += term;
 
+        if term == 0.0 {
+            return Ok(sum);
+        }
+
         if term.abs() < eps * sum.abs() {
             return Ok(sum);
         }
     }
 
-    Ok(sum)
+    Ok(f64::NAN)
+}
+
+fn is_integer(x: f64) -> bool {
+    x.is_finite() && x == x.trunc() && x >= f64::from(i32::MIN) && x <= f64::from(i32::MAX)
+}
+
+fn is_nonpositive_integer(x: f64) -> bool {
+    x <= 0.0 && is_integer(x)
 }
 
 fn hyp2f1_complex_parameters(
@@ -1484,6 +1498,64 @@ mod tests {
             "2F1(-2,1;1;z) should be (1-z)²: got {} expected {expected}",
             get_scalar(&r).unwrap_or(f64::NAN)
         );
+    }
+
+    #[test]
+    fn hyp2f1_terminating_polynomial_allows_z_outside_unit_disk() {
+        let z = 2.0;
+        let r = hyp2f1(
+            &scalar(-2.0),
+            &scalar(1.0),
+            &scalar(1.5),
+            &scalar(z),
+            RuntimeMode::Strict,
+        );
+        let expected = 1.0
+            + (-2.0 * 1.0 / 1.5) * z
+            + ((-2.0 * -1.0) * (1.0 * 2.0) / ((1.5 * 2.5) * 2.0)) * z * z;
+        assert!(
+            (get_scalar(&r).unwrap_or(f64::NAN) - expected).abs() < 1e-12,
+            "terminating 2F1 polynomial should remain valid outside |z| < 1"
+        );
+    }
+
+    #[test]
+    fn hyp2f1_z_greater_than_one_identity_matches_scipy_sample() {
+        let r = hyp2f1(
+            &scalar(1.0),
+            &scalar(1.0),
+            &scalar(1.0),
+            &scalar(1.5),
+            RuntimeMode::Strict,
+        );
+        assert!((get_scalar(&r).unwrap_or(f64::NAN) + 2.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn hyp2f1_strict_z_greater_than_one_unsupported_returns_nan() {
+        let r = hyp2f1(
+            &scalar(1.0),
+            &scalar(2.0),
+            &scalar(3.0),
+            &scalar(1.5),
+            RuntimeMode::Strict,
+        );
+        assert!(
+            get_scalar(&r).unwrap_or(0.0).is_nan(),
+            "unsupported z > 1 continuation must not return a divergent partial sum"
+        );
+    }
+
+    #[test]
+    fn hyp2f1_hardened_z_greater_than_one_unsupported_errors() {
+        let r = hyp2f1(
+            &scalar(1.0),
+            &scalar(2.0),
+            &scalar(3.0),
+            &scalar(1.5),
+            RuntimeMode::Hardened,
+        );
+        assert_eq!(error_kind(&r), Some(SpecialErrorKind::DomainError));
     }
 
     #[test]
