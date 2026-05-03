@@ -12,7 +12,7 @@ use std::process::{Command, Stdio};
 
 use fsci_linalg::{LinalgError, MatrixAssumption, SolveOptions, solve};
 use fsci_runtime::RuntimeMode;
-use fsci_signal::lfilter;
+use fsci_signal::{lfilter, lfilter_axis_2d, lfilter_with_state};
 use fsci_special::{
     SpecialResult, SpecialTensor, beta, betainc, betaln, gamma, gammainc, gammaincc, gammaln,
     rgamma,
@@ -67,6 +67,31 @@ struct LfilterCase {
     b: Vec<f64>,
     a: Vec<f64>,
     x: Vec<f64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct LfilterStateCase {
+    case_id: String,
+    b: Vec<f64>,
+    a: Vec<f64>,
+    x: Vec<f64>,
+    zi: Vec<f64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct LfilterAxisCase {
+    case_id: String,
+    b: Vec<f64>,
+    a: Vec<f64>,
+    x: Vec<Vec<f64>>,
+    axis: isize,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct LfilterStateOracle {
+    case_id: String,
+    values: Vec<f64>,
+    final_state: Vec<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -276,6 +301,54 @@ fn lfilter_cases() -> Vec<LfilterCase> {
             x: vec![3.0, 1.0, -2.0, 4.0, 0.5, -0.25],
         },
     ]
+}
+
+fn lfilter_state_cases() -> Vec<LfilterStateCase> {
+    vec![
+        LfilterStateCase {
+            case_id: "zi_iir_first_order".to_owned(),
+            b: vec![0.2, 0.1],
+            a: vec![1.0, -0.7],
+            x: vec![1.0, -1.0, 0.5, 0.25],
+            zi: vec![0.3],
+        },
+        LfilterStateCase {
+            case_id: "zi_fir_two_delay_states".to_owned(),
+            b: vec![0.25, 0.5, 0.25],
+            a: vec![1.0],
+            x: vec![0.0, 1.0, 4.0, 9.0],
+            zi: vec![0.125, -0.25],
+        },
+    ]
+}
+
+fn lfilter_axis_cases() -> Vec<LfilterAxisCase> {
+    vec![
+        LfilterAxisCase {
+            case_id: "axis_last_iir_matrix".to_owned(),
+            b: vec![0.2, 0.1],
+            a: vec![1.0, -0.7],
+            x: vec![vec![1.0, 2.0, 3.0, 4.0], vec![0.5, -1.0, 0.25, 2.0]],
+            axis: -1,
+        },
+        LfilterAxisCase {
+            case_id: "axis_zero_iir_matrix".to_owned(),
+            b: vec![0.2, 0.1],
+            a: vec![1.0, -0.7],
+            x: vec![vec![1.0, 2.0, 3.0, 4.0], vec![0.5, -1.0, 0.25, 2.0]],
+            axis: 0,
+        },
+    ]
+}
+
+fn lfilter_zi_error_cases() -> Vec<LfilterStateCase> {
+    vec![LfilterStateCase {
+        case_id: "bad_zi_length_iir_first_order".to_owned(),
+        b: vec![0.2, 0.1],
+        a: vec![1.0, -0.7],
+        x: vec![1.0, 2.0],
+        zi: vec![0.1, 0.2],
+    }]
 }
 
 fn special_cases() -> Vec<SpecialCase> {
@@ -590,6 +663,178 @@ print(json.dumps(results))
                 expected,
                 policy,
             )?;
+        }
+    }
+
+    let state_cases = lfilter_state_cases();
+    let state_script = r#"
+import json
+import sys
+import numpy as np
+from scipy import signal
+
+cases = json.load(sys.stdin)
+results = []
+for case in cases:
+    y, zf = signal.lfilter(
+        case["b"],
+        case["a"],
+        case["x"],
+        zi=np.asarray(case["zi"], dtype=float),
+    )
+    results.append({
+        "case_id": case["case_id"],
+        "values": [float(v) for v in y],
+        "final_state": [float(v) for v in zf],
+    })
+print(json.dumps(results))
+"#;
+    let state_oracle_results: Vec<LfilterStateOracle> =
+        run_python_oracle(state_script, &state_cases)?;
+    let state_case_ids: Vec<String> = state_cases
+        .iter()
+        .map(|case| case.case_id.clone())
+        .collect();
+    let state_oracle = oracle_map(test_id, &state_case_ids, state_oracle_results, |result| {
+        &result.case_id
+    })?;
+
+    for case in &state_cases {
+        let (rust_y, rust_zf) = lfilter_with_state(&case.b, &case.a, &case.x, Some(&case.zi))
+            .map_err(|err| format!("{}: Rust lfilter_with_state failed: {err}", case.case_id))?;
+        let scipy = &state_oracle[&case.case_id];
+        if rust_y.len() != scipy.values.len() {
+            return Err(format!("{}: zi output length diverged", case.case_id));
+        }
+        if rust_zf.len() != scipy.final_state.len() {
+            return Err(format!("{}: zi final-state length diverged", case.case_id));
+        }
+        for (idx, (&actual, &expected)) in rust_y.iter().zip(&scipy.values).enumerate() {
+            assert_ulp_close(
+                &format!("{} y[{idx}]", case.case_id),
+                actual,
+                expected,
+                policy,
+            )?;
+        }
+        for (idx, (&actual, &expected)) in rust_zf.iter().zip(&scipy.final_state).enumerate() {
+            assert_ulp_close(
+                &format!("{} zf[{idx}]", case.case_id),
+                actual,
+                expected,
+                policy,
+            )?;
+        }
+    }
+
+    let axis_cases = lfilter_axis_cases();
+    let axis_script = r#"
+import json
+import sys
+import numpy as np
+from scipy import signal
+
+cases = json.load(sys.stdin)
+results = []
+for case in cases:
+    x = np.asarray(case["x"], dtype=float)
+    y = signal.lfilter(case["b"], case["a"], x, axis=int(case["axis"]))
+    results.append({
+        "case_id": case["case_id"],
+        "values": [[float(v) for v in row] for row in y.tolist()],
+    })
+print(json.dumps(results))
+"#;
+    let axis_oracle_results: Vec<MatrixOracle> = run_python_oracle(axis_script, &axis_cases)?;
+    let axis_case_ids: Vec<String> = axis_cases.iter().map(|case| case.case_id.clone()).collect();
+    let axis_oracle = oracle_map(test_id, &axis_case_ids, axis_oracle_results, |result| {
+        &result.case_id
+    })?;
+
+    for case in &axis_cases {
+        let rust = lfilter_axis_2d(&case.b, &case.a, &case.x, case.axis)
+            .map_err(|err| format!("{}: Rust lfilter_axis_2d failed: {err}", case.case_id))?;
+        let scipy = &axis_oracle[&case.case_id].values;
+        if rust.len() != scipy.len() {
+            return Err(format!("{}: axis row count diverged", case.case_id));
+        }
+        for (row_idx, (rust_row, scipy_row)) in rust.iter().zip(scipy.iter()).enumerate() {
+            if rust_row.len() != scipy_row.len() {
+                return Err(format!("{}: axis column count diverged", case.case_id));
+            }
+            for (col_idx, (&actual, &expected)) in rust_row.iter().zip(scipy_row).enumerate() {
+                assert_ulp_close(
+                    &format!("{}[{row_idx}][{col_idx}]", case.case_id),
+                    actual,
+                    expected,
+                    policy,
+                )?;
+            }
+        }
+    }
+
+    let error_cases = lfilter_zi_error_cases();
+    let error_script = r#"
+import json
+import sys
+import numpy as np
+from scipy import signal
+
+cases = json.load(sys.stdin)
+results = []
+for case in cases:
+    try:
+        signal.lfilter(
+            case["b"],
+            case["a"],
+            case["x"],
+            zi=np.asarray(case["zi"], dtype=float),
+        )
+        results.append({
+            "case_id": case["case_id"],
+            "status": "ok",
+            "error_type": "",
+            "message": "",
+        })
+    except Exception as exc:
+        results.append({
+            "case_id": case["case_id"],
+            "status": "error",
+            "error_type": type(exc).__name__,
+            "message": str(exc),
+        })
+print(json.dumps(results))
+"#;
+    let error_oracle_results: Vec<ErrorOracle> = run_python_oracle(error_script, &error_cases)?;
+    let error_case_ids: Vec<String> = error_cases
+        .iter()
+        .map(|case| case.case_id.clone())
+        .collect();
+    let error_oracle = oracle_map(test_id, &error_case_ids, error_oracle_results, |result| {
+        &result.case_id
+    })?;
+
+    for case in &error_cases {
+        let scipy_error = &error_oracle[&case.case_id];
+        if scipy_error.status != "error" {
+            return Err(format!(
+                "{}: SciPy accepted malformed zi unexpectedly",
+                case.case_id
+            ));
+        }
+        if scipy_error.error_type != "ValueError" {
+            return Err(format!(
+                "{}: expected SciPy ValueError for malformed zi, got {}: {}",
+                case.case_id, scipy_error.error_type, scipy_error.message
+            ));
+        }
+        let rust_error = lfilter_with_state(&case.b, &case.a, &case.x, Some(&case.zi))
+            .expect_err("malformed zi must fail");
+        if !rust_error.to_string().contains("zi length") {
+            return Err(format!(
+                "{}: Rust malformed zi error lost context: {rust_error}",
+                case.case_id
+            ));
         }
     }
     Ok(())

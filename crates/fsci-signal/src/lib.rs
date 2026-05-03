@@ -4072,6 +4072,18 @@ pub fn lfilter(
     x: &[f64],
     zi: Option<&[f64]>,
 ) -> Result<Vec<f64>, SignalError> {
+    lfilter_with_state(b, a, x, zi).map(|(y, _zf)| y)
+}
+
+/// Apply a digital IIR filter and return the final delay state.
+///
+/// Matches the `(y, zf)` result from `scipy.signal.lfilter(b, a, x, zi=zi)`.
+pub fn lfilter_with_state(
+    b: &[f64],
+    a: &[f64],
+    x: &[f64],
+    zi: Option<&[f64]>,
+) -> Result<(Vec<f64>, Vec<f64>), SignalError> {
     if b.is_empty() || a.is_empty() {
         return Err(SignalError::InvalidArgument(
             "b and a must be non-empty".to_string(),
@@ -4121,7 +4133,52 @@ pub fn lfilter(
         }
     }
 
-    Ok(y)
+    let zf = d[..nfilt - 1].to_vec();
+    Ok((y, zf))
+}
+
+/// Apply `lfilter` across one axis of a rectangular 2-D input.
+///
+/// Supports SciPy's common `axis=0` and `axis=-1`/`axis=1` cases for matrix
+/// inputs. Each row or column is filtered independently with zero initial
+/// conditions.
+pub fn lfilter_axis_2d(
+    b: &[f64],
+    a: &[f64],
+    x: &[Vec<f64>],
+    axis: isize,
+) -> Result<Vec<Vec<f64>>, SignalError> {
+    if x.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let cols = x[0].len();
+    if x.iter().any(|row| row.len() != cols) {
+        return Err(SignalError::InvalidInputShape {
+            detail: "x must be a rectangular 2-D matrix".to_string(),
+        });
+    }
+
+    match axis {
+        -1 | 1 => x
+            .iter()
+            .map(|row| lfilter(b, a, row, None))
+            .collect::<Result<Vec<_>, _>>(),
+        0 => {
+            let mut y = vec![vec![0.0; cols]; x.len()];
+            for col in 0..cols {
+                let column: Vec<f64> = x.iter().map(|row| row[col]).collect();
+                let filtered = lfilter(b, a, &column, None)?;
+                for (row_idx, value) in filtered.into_iter().enumerate() {
+                    y[row_idx][col] = value;
+                }
+            }
+            Ok(y)
+        }
+        other => Err(SignalError::InvalidArgument(format!(
+            "axis must be 0, 1, or -1 for 2-D lfilter, got {other}"
+        ))),
+    }
 }
 
 /// Apply a digital filter forward and backward (zero-phase filtering).
@@ -10208,6 +10265,70 @@ mod tests {
                 (value - 0.909_090_909_090_909_2).abs() <= 1.0e-12,
                 "got {value}"
             );
+        }
+    }
+
+    #[test]
+    fn lfilter_with_state_matches_scipy_reference_vectors() {
+        let (y, zf) = lfilter_with_state(
+            &[0.2, 0.1],
+            &[1.0, -0.7],
+            &[1.0, -1.0, 0.5, 0.25],
+            Some(&[0.3]),
+        )
+        .expect("lfilter_with_state");
+
+        let expected_y = [
+            0.5,
+            0.249_999_999_999_999_94,
+            0.174_999_999_999_999_96,
+            0.222_5,
+        ];
+        let expected_zf = [0.180_749_999_999_999_97];
+        assert_eq!(y.len(), expected_y.len());
+        assert_eq!(zf.len(), expected_zf.len());
+        for (got, want) in y.iter().zip(expected_y.iter()) {
+            assert!((got - want).abs() <= 1.0e-12, "got {got}, want {want}");
+        }
+        for (got, want) in zf.iter().zip(expected_zf.iter()) {
+            assert!((got - want).abs() <= 1.0e-12, "got {got}, want {want}");
+        }
+    }
+
+    #[test]
+    fn lfilter_axis_2d_matches_scipy_reference_vectors() {
+        let x = vec![vec![1.0, 2.0, 3.0, 4.0], vec![0.5, -1.0, 0.25, 2.0]];
+        let axis_last =
+            lfilter_axis_2d(&[0.2, 0.1], &[1.0, -0.7], &x, -1).expect("axis=-1 lfilter");
+        let expected_last = [
+            [0.2, 0.64, 1.248, 1.973_6],
+            [
+                0.1,
+                -0.080_000_000_000_000_02,
+                -0.106_000_000_000_000_02,
+                0.350_8,
+            ],
+        ];
+        for (row, expected_row) in axis_last.iter().zip(expected_last.iter()) {
+            for (got, want) in row.iter().zip(expected_row.iter()) {
+                assert!((got - want).abs() <= 1.0e-12, "got {got}, want {want}");
+            }
+        }
+
+        let axis_zero = lfilter_axis_2d(&[0.2, 0.1], &[1.0, -0.7], &x, 0).expect("axis=0 lfilter");
+        let expected_zero = [
+            [0.2, 0.4, 0.600_000_000_000_000_1, 0.8],
+            [
+                0.339_999_999_999_999_97,
+                0.279_999_999_999_999_97,
+                0.770_000_000_000_000_1,
+                1.36,
+            ],
+        ];
+        for (row, expected_row) in axis_zero.iter().zip(expected_zero.iter()) {
+            for (got, want) in row.iter().zip(expected_row.iter()) {
+                assert!((got - want).abs() <= 1.0e-12, "got {got}, want {want}");
+            }
         }
     }
 
