@@ -5806,6 +5806,7 @@ impl ContinuousDistribution for Rice {
 /// Nakagami distribution.
 ///
 /// Matches `scipy.stats.nakagami`.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Nakagami {
     pub nu: f64, // shape parameter >= 0.5
 }
@@ -5841,6 +5842,80 @@ impl ContinuousDistribution for Nakagami {
     fn var(&self) -> f64 {
         let m = self.mean();
         1.0 - m * m
+    }
+
+    fn fit(data: &[f64]) -> Self {
+        Self::try_fit(data).unwrap_or_else(|e| {
+            panic!("Nakagami::fit failed: {e}");
+        })
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        if data.len() < 2 {
+            return Err(FitError::InsufficientData {
+                required: 2,
+                actual: data.len(),
+            });
+        }
+        let mut sum1 = 0.0_f64;
+        let mut sum2 = 0.0_f64;
+        let mut count = 0usize;
+        for &x in data {
+            if !x.is_finite() {
+                return Err(FitError::UnsupportedData(format!(
+                    "Nakagami data contains non-finite value: {x}"
+                )));
+            }
+            if x < 0.0 {
+                return Err(FitError::UnsupportedData(format!(
+                    "Nakagami support is [0, ∞); got {x}"
+                )));
+            }
+            sum1 += x;
+            sum2 += x * x;
+            count += 1;
+        }
+        let n = count as f64;
+        let mean = sum1 / n;
+        let m2 = sum2 / n;
+        if m2 <= 0.0 {
+            return Err(FitError::NonConvergent(format!(
+                "Nakagami MoM: sample E[x²]={m2} non-positive"
+            )));
+        }
+        // Ω-invariant moment ratio:
+        //   r = (E[X])² / E[X²] = Γ(ν+0.5)² / (Γ(ν)² · ν)
+        // monotone-increasing in ν from 2/π at ν=0.5 to 1 as ν→∞.
+        let target = (mean * mean) / m2;
+        let ratio_of = |nu: f64| {
+            let log_num = 2.0 * ln_gamma(nu + 0.5);
+            let log_den = 2.0 * ln_gamma(nu) + nu.ln();
+            (log_num - log_den).exp()
+        };
+        let mut lo = 0.5_f64;
+        let mut hi = 50.0_f64;
+        let r_lo = ratio_of(lo); // ≈ 0.6366
+        let r_hi = ratio_of(hi); // ≈ 0.995
+        if !(r_lo <= target && target <= r_hi) {
+            return Err(FitError::NonConvergent(format!(
+                "Nakagami MoM bracket failed: r({lo})={r_lo}, r({hi})={r_hi}, target={target}"
+            )));
+        }
+        for _ in 0..200 {
+            let mid = 0.5 * (lo + hi);
+            let r_mid = ratio_of(mid);
+            if (r_mid - target).abs() < 1.0e-12 || (hi - lo) < lo * 1.0e-12 + 1.0e-15 {
+                return Ok(Self { nu: mid });
+            }
+            if r_mid < target {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        Ok(Self {
+            nu: 0.5 * (lo + hi),
+        })
     }
 }
 
@@ -29820,6 +29895,66 @@ mod tests {
     #[test]
     fn pearson3_fit_rejects_too_few_samples() {
         let err = Pearson3::try_fit(&[1.0, 2.0]).expect_err("n=2 must be rejected");
+        assert!(matches!(err, FitError::InsufficientData { .. }));
+    }
+
+    #[test]
+    fn nakagami_fit_recovers_synthetic_shape() {
+        // Synthesize Nakagami(ν=2.0) samples using the relation
+        // X = sqrt(G/ν) where G ~ Gamma(ν, 1). We approximate by
+        // mapping ChiSquared(2ν) ppf grid to X via X = sqrt(Y / (2ν)).
+        let true_nu = 2.0;
+        let chi2 = ChiSquared::new(2.0 * true_nu);
+        let n = 2000;
+        let samples: Vec<f64> = (1..=n)
+            .map(|i| {
+                let q = (i as f64 - 0.5) / n as f64;
+                let y = chi2.ppf(q);
+                if y.is_finite() && y >= 0.0 {
+                    (y / (2.0 * true_nu)).sqrt()
+                } else {
+                    f64::NAN
+                }
+            })
+            .filter(|x| x.is_finite())
+            .collect();
+        assert!(samples.len() > 1500);
+        let fitted = Nakagami::try_fit(&samples).expect("fit");
+        let rel = (fitted.nu - true_nu).abs() / true_nu;
+        assert!(
+            rel < 0.10,
+            "Nakagami::fit recovery: got ν={}, true {true_nu}, rel_err={rel}",
+            fitted.nu
+        );
+    }
+
+    #[test]
+    fn nakagami_fit_metamorphic_omega_invariant_ratio() {
+        // The fit's MoM ratio is invariant under multiplicative scaling of
+        // the data (it's r = mean² / E[x²]). So fit(data) == fit(α·data)
+        // for any α > 0.
+        let data = [0.5_f64, 0.7, 1.0, 1.2, 1.5, 0.8, 1.1];
+        let scaled: Vec<f64> = data.iter().map(|x| 3.5 * x).collect();
+        let a = Nakagami::try_fit(&data).expect("fit a");
+        let b = Nakagami::try_fit(&scaled).expect("fit b");
+        assert!(
+            (a.nu - b.nu).abs() < 1e-10,
+            "Ω-invariance: ν_unscaled {} ≠ ν_scaled {}",
+            a.nu,
+            b.nu
+        );
+    }
+
+    #[test]
+    fn nakagami_fit_rejects_negative_observation() {
+        let err = Nakagami::try_fit(&[0.5, 1.0, -0.1])
+            .expect_err("negative must be rejected");
+        assert!(matches!(err, FitError::UnsupportedData(_)));
+    }
+
+    #[test]
+    fn nakagami_fit_rejects_too_few_samples() {
+        let err = Nakagami::try_fit(&[1.0]).expect_err("n=1 must be rejected");
         assert!(matches!(err, FitError::InsufficientData { .. }));
     }
 
