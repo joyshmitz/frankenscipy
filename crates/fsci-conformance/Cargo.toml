@@ -18,6 +18,9 @@ name = "e2e_orchestrator"
 name = "fixture_regen"
 
 [[bin]]
+name = "live_oracle_capture"
+
+[[bin]]
 name = "benchmark_gate"
 
 [[bin]]

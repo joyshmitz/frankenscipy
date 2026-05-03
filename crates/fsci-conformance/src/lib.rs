@@ -10439,6 +10439,146 @@ pub fn write_differential_parity_artifacts(
     write_packet_report_artifacts(&output_dir, &packet_report)
 }
 
+#[must_use]
+pub fn build_drift_diff_report(report: &ConformanceReport) -> DriftDiffReport {
+    let cases = report
+        .per_case_results
+        .iter()
+        .map(|case| DriftCaseDiff {
+            case_id: case.case_id.clone(),
+            passed: case.passed,
+            message: case.message.clone(),
+            max_diff: case.max_diff,
+            tolerance_used: case.tolerance_used.clone(),
+            oracle_status: case.oracle_status.clone(),
+        })
+        .collect::<Vec<_>>();
+    let drifted_cases = cases.iter().filter(|case| !case.passed).count();
+
+    DriftDiffReport {
+        schema_version: 1,
+        packet_id: report.packet_id.clone(),
+        family: report.family.clone(),
+        fixture_path: report.fixture_path.clone(),
+        generated_unix_ms: report.generated_unix_ms,
+        oracle_status: report.oracle_status.clone(),
+        total_cases: report.per_case_results.len(),
+        drifted_cases,
+        cases,
+    }
+}
+
+pub fn write_drift_diff_artifact(
+    fixture_path: &Path,
+    drift: &DriftDiffReport,
+) -> Result<PathBuf, HarnessError> {
+    let output_dir = differential_artifact_dir_for_fixture(fixture_path, &drift.packet_id);
+    fs::create_dir_all(&output_dir).map_err(|source| HarnessError::ArtifactIo {
+        path: output_dir.clone(),
+        source,
+    })?;
+
+    let path = output_dir.join("drift_diff.json");
+    let bytes =
+        serde_json::to_vec_pretty(drift).map_err(|e| HarnessError::Serialization(e.to_string()))?;
+    fs::write(&path, bytes).map_err(|source| HarnessError::ArtifactIo {
+        path: path.clone(),
+        source,
+    })?;
+    Ok(path)
+}
+
+pub fn discover_differential_fixture_paths(
+    config: &HarnessConfig,
+) -> Result<Vec<PathBuf>, HarnessError> {
+    let mut fixtures = Vec::new();
+    let entries = fs::read_dir(&config.fixture_root).map_err(|source| HarnessError::FixtureIo {
+        path: config.fixture_root.clone(),
+        source,
+    })?;
+
+    for entry in entries {
+        let entry = entry.map_err(|source| HarnessError::FixtureIo {
+            path: config.fixture_root.clone(),
+            source,
+        })?;
+        let path = entry.path();
+        if !is_p2c_fixture_path(&path) {
+            continue;
+        }
+        let raw = fs::read_to_string(&path).map_err(|source| HarnessError::FixtureIo {
+            path: path.clone(),
+            source,
+        })?;
+        let _: FixtureEnvelope =
+            serde_json::from_str(&raw).map_err(|source| HarnessError::FixtureParse {
+                path: path.clone(),
+                source,
+            })?;
+        fixtures.push(path);
+    }
+
+    fixtures.sort();
+    Ok(fixtures)
+}
+
+pub fn run_live_oracle_capture_lane(
+    config: &HarnessConfig,
+    oracle_config: &DifferentialOracleConfig,
+    packet_filter: Option<&str>,
+) -> Result<LiveOracleCaptureReport, HarnessError> {
+    let packet_filter = packet_filter.map(str::to_owned);
+    let fixtures = discover_differential_fixture_paths(config)?;
+    let mut packets = Vec::new();
+
+    for fixture_path in fixtures {
+        if !matches_packet_filter(&fixture_path, packet_filter.as_deref()) {
+            continue;
+        }
+        let report = run_differential_test(&fixture_path, oracle_config)?;
+        let drift = build_drift_diff_report(&report);
+        let _ = write_drift_diff_artifact(&fixture_path, &drift)?;
+        packets.push(drift);
+    }
+
+    let total_cases = packets.iter().map(|packet| packet.total_cases).sum();
+    let drifted_cases = packets.iter().map(|packet| packet.drifted_cases).sum();
+    let oracle_available_packets = packets
+        .iter()
+        .filter(|packet| matches!(packet.oracle_status, OracleStatus::Available))
+        .count();
+    let oracle_unavailable_packets = packets.len().saturating_sub(oracle_available_packets);
+
+    Ok(LiveOracleCaptureReport {
+        schema_version: 1,
+        generated_unix_ms: now_unix_ms(),
+        fixture_root: config.fixture_root.display().to_string(),
+        total_packets: packets.len(),
+        total_cases,
+        drifted_cases,
+        oracle_available_packets,
+        oracle_unavailable_packets,
+        packets,
+    })
+}
+
+fn is_p2c_fixture_path(path: &Path) -> bool {
+    path.extension().and_then(OsStr::to_str) == Some("json")
+        && path
+            .file_name()
+            .and_then(OsStr::to_str)
+            .is_some_and(|name| name.starts_with("FSCI-P2C-"))
+}
+
+fn matches_packet_filter(path: &Path, packet_filter: Option<&str>) -> bool {
+    let Some(filter) = packet_filter else {
+        return true;
+    };
+    path.file_stem()
+        .and_then(OsStr::to_str)
+        .is_some_and(|stem| stem.contains(filter))
+}
+
 #[cfg(feature = "dashboard")]
 #[must_use]
 pub fn style_for_case_result(case: &CaseResult) -> Style {
@@ -13044,6 +13184,42 @@ pub struct ConformanceReport {
     pub generated_unix_ms: u128,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DriftCaseDiff {
+    pub case_id: String,
+    pub passed: bool,
+    pub message: String,
+    pub max_diff: Option<f64>,
+    pub tolerance_used: Option<ToleranceUsed>,
+    pub oracle_status: OracleStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DriftDiffReport {
+    pub schema_version: u8,
+    pub packet_id: String,
+    pub family: String,
+    pub fixture_path: String,
+    pub generated_unix_ms: u128,
+    pub oracle_status: OracleStatus,
+    pub total_cases: usize,
+    pub drifted_cases: usize,
+    pub cases: Vec<DriftCaseDiff>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LiveOracleCaptureReport {
+    pub schema_version: u8,
+    pub generated_unix_ms: u128,
+    pub fixture_root: String,
+    pub total_packets: usize,
+    pub total_cases: usize,
+    pub drifted_cases: usize,
+    pub oracle_available_packets: usize,
+    pub oracle_unavailable_packets: usize,
+    pub packets: Vec<DriftDiffReport>,
+}
+
 impl From<&DifferentialCaseResult> for CaseResult {
     fn from(result: &DifferentialCaseResult) -> Self {
         Self {
@@ -13224,6 +13400,7 @@ pub fn run_differential_test(
         })?;
 
     let family = envelope.family.as_str();
+    let resolved_oracle_config = resolve_differential_oracle_config(oracle_config, family);
     // Exact-family dispatch per frankenscipy-ubkg. The previous cascade
     // used `family.contains(...)` which caused fragile matches (e.g.
     // family='integrate.validate_tol' matched BOTH 'validate_tol' AND
@@ -13235,34 +13412,48 @@ pub fn run_differential_test(
         // validate_tol packet (also integrate.validate_tol for the
         // shared-tolerance lane).
         "validate_tol" | "integrate.validate_tol" => {
-            run_differential_validate_tol(fixture_path, &raw, oracle_config)
+            run_differential_validate_tol(fixture_path, &raw, &resolved_oracle_config)
         }
-        "linalg_core" | "linalg" => run_differential_linalg(fixture_path, &raw, oracle_config),
+        "linalg_core" | "linalg" => {
+            run_differential_linalg(fixture_path, &raw, &resolved_oracle_config)
+        }
         "array_api" | "array_api_core" => {
-            run_differential_array_api(fixture_path, &raw, oracle_config)
+            run_differential_array_api(fixture_path, &raw, &resolved_oracle_config)
         }
-        "special_core" | "special" => run_differential_special(fixture_path, &raw, oracle_config),
-        "fft_core" | "fft" => run_differential_fft(fixture_path, &raw, oracle_config),
+        "special_core" | "special" => {
+            run_differential_special(fixture_path, &raw, &resolved_oracle_config)
+        }
+        "fft_core" | "fft" => run_differential_fft(fixture_path, &raw, &resolved_oracle_config),
         "optimize_core" | "optimize" => {
-            run_differential_optimize(fixture_path, &raw, oracle_config)
+            run_differential_optimize(fixture_path, &raw, &resolved_oracle_config)
         }
         "interpolate_core" | "interpolate" => {
-            run_differential_interpolate(fixture_path, &raw, oracle_config)
+            run_differential_interpolate(fixture_path, &raw, &resolved_oracle_config)
         }
-        "io_core" | "io" => run_differential_io(fixture_path, &raw, oracle_config),
-        "ndimage_core" | "ndimage" => run_differential_ndimage(fixture_path, &raw, oracle_config),
+        "io_core" | "io" => run_differential_io(fixture_path, &raw, &resolved_oracle_config),
+        "ndimage_core" | "ndimage" => {
+            run_differential_ndimage(fixture_path, &raw, &resolved_oracle_config)
+        }
         "runtime_casp" | "casp" | "casp_core" => {
-            run_differential_casp(fixture_path, &raw, oracle_config)
+            run_differential_casp(fixture_path, &raw, &resolved_oracle_config)
         }
-        "cluster_core" | "cluster" => run_differential_cluster(fixture_path, &raw, oracle_config),
-        "spatial_core" | "spatial" => run_differential_spatial(fixture_path, &raw, oracle_config),
-        "signal_core" | "signal" => run_differential_signal(fixture_path, &raw, oracle_config),
-        "stats_core" | "stats" => run_differential_stats(fixture_path, &raw, oracle_config),
+        "cluster_core" | "cluster" => {
+            run_differential_cluster(fixture_path, &raw, &resolved_oracle_config)
+        }
+        "spatial_core" | "spatial" => {
+            run_differential_spatial(fixture_path, &raw, &resolved_oracle_config)
+        }
+        "signal_core" | "signal" => {
+            run_differential_signal(fixture_path, &raw, &resolved_oracle_config)
+        }
+        "stats_core" | "stats" => {
+            run_differential_stats(fixture_path, &raw, &resolved_oracle_config)
+        }
         "integrate_core" | "integrate" => {
-            run_differential_integrate(fixture_path, &raw, oracle_config)
+            run_differential_integrate(fixture_path, &raw, &resolved_oracle_config)
         }
         "constants_core" | "constants" => {
-            run_differential_constants(fixture_path, &raw, oracle_config)
+            run_differential_constants(fixture_path, &raw, &resolved_oracle_config)
         }
         _ => Err(HarnessError::FixtureParse {
             path: fixture_path.to_path_buf(),
@@ -18145,16 +18336,16 @@ mod tests {
         OracleStatus, PacketFamily, PacketReport, PythonOracleConfig, SignalPacketFixture,
         SparsePacketFixture, SpatialPacketFixture, SpecialCase, SpecialCaseFunction,
         SpecialExpectedOutcome, SpecialPacketFixture, StatsCase, StatsExpected, StatsObserved,
-        StatsPacketFixture, ToleranceUsed, aggregate_packet_reports,
-        compare_linalg_case_against_oracle, compare_stats_case_against_oracle, discover_fixtures,
-        ensure_artifact_layout, load_array_api_contract_table, load_oracle_capture,
-        resolve_array_api_contract_tolerance, run_array_api_packet, run_casp_packet,
-        run_cluster_packet, run_differential_test, run_fft_packet, run_integrate_packet,
-        run_interpolate_packet, run_io_packet, run_linalg_packet,
-        run_linalg_packet_with_oracle_capture, run_ndimage_packet, run_optimize_packet,
-        run_signal_packet, run_smoke, run_sparse_packet, run_spatial_packet, run_special_packet,
-        run_stats_packet, run_validate_tol_packet, write_differential_parity_artifacts,
-        write_parity_artifacts,
+        StatsPacketFixture, ToleranceUsed, aggregate_packet_reports, build_drift_diff_report,
+        compare_linalg_case_against_oracle, compare_stats_case_against_oracle,
+        discover_differential_fixture_paths, discover_fixtures, ensure_artifact_layout,
+        load_array_api_contract_table, load_oracle_capture, resolve_array_api_contract_tolerance,
+        run_array_api_packet, run_casp_packet, run_cluster_packet, run_differential_test,
+        run_fft_packet, run_integrate_packet, run_interpolate_packet, run_io_packet,
+        run_linalg_packet, run_linalg_packet_with_oracle_capture, run_live_oracle_capture_lane,
+        run_ndimage_packet, run_optimize_packet, run_signal_packet, run_smoke, run_sparse_packet,
+        run_spatial_packet, run_special_packet, run_stats_packet, run_validate_tol_packet,
+        write_differential_parity_artifacts, write_drift_diff_artifact, write_parity_artifacts,
     };
     use fsci_linalg::LinalgError;
     use fsci_runtime::RuntimeMode;
@@ -23039,6 +23230,119 @@ Path(args.output).write_text(json.dumps(result, indent=2))
         );
         assert!(artifacts.sidecar_path.exists());
         assert!(artifacts.decode_proof_path.exists());
+    }
+
+    #[test]
+    fn drift_diff_artifact_surfaces_failed_cases() {
+        let unique = format!("fsci-drift-diff-{}", super::now_unix_ms());
+        let fixture_root = PathBuf::from("/tmp").join(unique);
+        fs::create_dir_all(&fixture_root).expect("create temp dir");
+        let fixture_path = fixture_root.join("FSCI-P2C-888_stats.json");
+        fs::write(&fixture_path, "{}").expect("write placeholder fixture");
+
+        let report = ConformanceReport {
+            fixture_path: fixture_path.display().to_string(),
+            packet_id: "FSCI-P2C-888".to_owned(),
+            family: "stats_core".to_owned(),
+            pass_count: 1,
+            fail_count: 1,
+            oracle_status: OracleStatus::Available,
+            per_case_results: vec![
+                DifferentialCaseResult {
+                    case_id: "ok".to_owned(),
+                    passed: true,
+                    message: "matched".to_owned(),
+                    max_diff: Some(0.0),
+                    tolerance_used: None,
+                    oracle_status: OracleStatus::Available,
+                },
+                DifferentialCaseResult {
+                    case_id: "drift".to_owned(),
+                    passed: false,
+                    message: "max diff exceeded tolerance".to_owned(),
+                    max_diff: Some(1.0e-3),
+                    tolerance_used: Some(ToleranceUsed {
+                        atol: 1.0e-6,
+                        rtol: 1.0e-6,
+                        comparison_mode: "scalar".to_owned(),
+                    }),
+                    oracle_status: OracleStatus::Available,
+                },
+            ],
+            generated_unix_ms: 123,
+        };
+
+        let drift = build_drift_diff_report(&report);
+        assert_eq!(drift.total_cases, 2);
+        assert_eq!(drift.drifted_cases, 1);
+        assert_eq!(drift.cases[1].case_id, "drift");
+        assert_eq!(drift.cases[1].max_diff, Some(1.0e-3));
+
+        let drift_path =
+            write_drift_diff_artifact(&fixture_path, &drift).expect("write drift artifact");
+        let raw = fs::read_to_string(&drift_path).expect("read drift artifact");
+        let parsed: super::DriftDiffReport =
+            serde_json::from_str(&raw).expect("parse drift artifact");
+        assert_eq!(parsed, drift);
+    }
+
+    #[test]
+    fn live_oracle_capture_lane_discovers_p2c_fixtures_and_writes_drift() {
+        let unique = format!("fsci-live-oracle-lane-{}", super::now_unix_ms());
+        let fixture_root = PathBuf::from("/tmp").join(unique);
+        fs::create_dir_all(&fixture_root).expect("create temp fixture root");
+        let fixture_path = fixture_root.join("FSCI-P2C-001_validate_tol.json");
+        let fixture = serde_json::json!({
+            "packet_id": "FSCI-P2C-001",
+            "family": "integrate.validate_tol",
+            "cases": [{
+                "case_id": "scalar_rtol_clamp",
+                "mode": "Strict",
+                "n": 3,
+                "rtol": {"kind": "scalar", "value": 1e-30},
+                "atol": {"kind": "scalar", "value": 1e-8},
+                "expected": {
+                    "kind": "ok",
+                    "rtol": {"kind": "scalar", "value": 2.220446049250313e-14},
+                    "atol": {"kind": "scalar", "value": 1e-8},
+                    "warning_rtol_clamped": true
+                }
+            }]
+        });
+        fs::write(
+            &fixture_path,
+            serde_json::to_vec_pretty(&fixture).expect("serialize fixture"),
+        )
+        .expect("write fixture");
+        fs::write(fixture_root.join("smoke_case.json"), "{}").expect("write ignored smoke file");
+
+        let config = HarnessConfig {
+            oracle_root: PathBuf::from("/unused/oracle-root"),
+            fixture_root: fixture_root.clone(),
+            strict_mode: true,
+        };
+        let oracle = DifferentialOracleConfig {
+            python_path: PathBuf::from("/nonexistent/python"),
+            script_path: PathBuf::from("/nonexistent/script.py"),
+            timeout_secs: 1,
+            required: false,
+        };
+
+        let discovered =
+            discover_differential_fixture_paths(&config).expect("discover differential fixtures");
+        assert_eq!(discovered, vec![fixture_path.clone()]);
+
+        let report = run_live_oracle_capture_lane(&config, &oracle, Some("P2C-001"))
+            .expect("live oracle lane should tolerate optional missing oracle");
+        assert_eq!(report.total_packets, 1);
+        assert_eq!(report.total_cases, 1);
+        assert_eq!(report.drifted_cases, 0);
+        assert_eq!(report.oracle_unavailable_packets, 1);
+        assert!(
+            fixture_root
+                .join("artifacts/FSCI-P2C-001/differential/drift_diff.json")
+                .exists()
+        );
     }
 
     // ═══════════════════════════════════════════════════════════════
