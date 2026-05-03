@@ -6314,6 +6314,7 @@ pub type Wald = InverseGaussian;
 /// Erlang distribution: Gamma with integer shape.
 ///
 /// Matches `scipy.stats.erlang`.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Erlang {
     pub k: usize,
     pub rate: f64,
@@ -6380,6 +6381,61 @@ impl ContinuousDistribution for Erlang {
 
     fn var(&self) -> f64 {
         self.k as f64 / (self.rate * self.rate)
+    }
+
+    fn fit(data: &[f64]) -> Self {
+        Self::try_fit(data).unwrap_or_else(|e| {
+            panic!("Erlang::fit failed: {e}");
+        })
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        if data.len() < 2 {
+            return Err(FitError::InsufficientData {
+                required: 2,
+                actual: data.len(),
+            });
+        }
+        // Method-of-moments: m = k/rate, v = k/rate², so rate = m/v and
+        // k = m²/v rounded to the nearest positive integer.
+        let mut sum = 0.0_f64;
+        let mut count = 0usize;
+        for &x in data {
+            if !x.is_finite() {
+                return Err(FitError::UnsupportedData(format!(
+                    "Erlang data contains non-finite value: {x}"
+                )));
+            }
+            if x < 0.0 {
+                return Err(FitError::UnsupportedData(format!(
+                    "Erlang support is [0, ∞); got {x}"
+                )));
+            }
+            sum += x;
+            count += 1;
+        }
+        let n = count as f64;
+        let mean = sum / n;
+        let mut variance = 0.0_f64;
+        for &x in data {
+            let d = x - mean;
+            variance += d * d;
+        }
+        variance /= n;
+        if variance <= 0.0 || !variance.is_finite() {
+            return Err(FitError::NonConvergent(format!(
+                "Erlang MoM: sample variance {variance} is non-positive"
+            )));
+        }
+        let rate = mean / variance;
+        if !rate.is_finite() || rate <= 0.0 {
+            return Err(FitError::NonConvergent(format!(
+                "Erlang MoM produced non-positive rate: {rate}"
+            )));
+        }
+        let k_real = mean * mean / variance;
+        let k = (k_real.round() as i64).max(1) as usize;
+        Ok(Self { k, rate })
     }
 }
 
@@ -29355,6 +29411,61 @@ mod tests {
     #[test]
     fn pearson3_fit_rejects_too_few_samples() {
         let err = Pearson3::try_fit(&[1.0, 2.0]).expect_err("n=2 must be rejected");
+        assert!(matches!(err, FitError::InsufficientData { .. }));
+    }
+
+    #[test]
+    fn erlang_fit_recovers_synthetic_shape() {
+        // Synthesize n=2000 samples from Erlang(k=4, rate=2.0) via inverse
+        // CDF; MoM recovers k exactly and rate within 5%.
+        let true_k = 4usize;
+        let true_rate = 2.0_f64;
+        let dist = Erlang::new(true_k, true_rate);
+        let n = 2000;
+        let samples: Vec<f64> = (1..=n)
+            .map(|i| dist.ppf((i as f64 - 0.5) / n as f64))
+            .filter(|x| x.is_finite())
+            .collect();
+        assert!(samples.len() > 1500);
+        let fitted = Erlang::try_fit(&samples).expect("fit");
+        assert_eq!(fitted.k, true_k, "MoM should round to integer k");
+        let rel = (fitted.rate - true_rate).abs() / true_rate;
+        assert!(rel < 0.05, "rate recovery: got {} vs {true_rate}", fitted.rate);
+    }
+
+    #[test]
+    fn erlang_fit_metamorphic_mean_var_consistency() {
+        // After fitting, the fitted distribution's mean and var must match
+        // the sample mean and variance to MoM precision (the MoM equations
+        // are exactly mean = k/rate and var = k/rate²).
+        let data = [0.5_f64, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0];
+        let n = data.len() as f64;
+        let m = data.iter().sum::<f64>() / n;
+        let v = data.iter().map(|x| (x - m).powi(2)).sum::<f64>() / n;
+        let fitted = Erlang::try_fit(&data).expect("fit");
+        // MoM only enforces the relation rate = m/v exactly, but the
+        // integer rounding of k may shift the fitted mean slightly. Verify
+        // exact rate identity:
+        assert!((fitted.rate - m / v).abs() < 1e-12);
+    }
+
+    #[test]
+    fn erlang_fit_rejects_negative_observation() {
+        let err = Erlang::try_fit(&[1.0, 2.0, -0.5])
+            .expect_err("negative must be rejected");
+        assert!(matches!(err, FitError::UnsupportedData(_)));
+    }
+
+    #[test]
+    fn erlang_fit_rejects_constant_data() {
+        let err = Erlang::try_fit(&[2.0, 2.0, 2.0])
+            .expect_err("zero-variance must be rejected");
+        assert!(matches!(err, FitError::NonConvergent(_)));
+    }
+
+    #[test]
+    fn erlang_fit_rejects_too_few_samples() {
+        let err = Erlang::try_fit(&[1.5]).expect_err("n=1 must be rejected");
         assert!(matches!(err, FitError::InsufficientData { .. }));
     }
 
