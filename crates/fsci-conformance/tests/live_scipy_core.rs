@@ -430,6 +430,27 @@ fn stats_cases() -> Vec<StatsCase> {
                 value: q,
             });
         }
+        for z in [-8.0, -5.0, 5.0, 8.0] {
+            let x = loc + scale * z;
+            for method in ["pdf", "cdf", "sf", "logpdf", "logcdf", "logsf"] {
+                cases.push(StatsCase {
+                    case_id: format!("norm_{loc}_{scale}_{method}_tail_z{z}"),
+                    dist: "norm".to_owned(),
+                    params: vec![loc, scale],
+                    method: method.to_owned(),
+                    value: x,
+                });
+            }
+        }
+        for q in [1.0e-6, 1.0e-3, 0.999, 0.999_999] {
+            cases.push(StatsCase {
+                case_id: format!("norm_{loc}_{scale}_isf_{q}"),
+                dist: "norm".to_owned(),
+                params: vec![loc, scale],
+                method: "isf".to_owned(),
+                value: q,
+            });
+        }
     }
 
     for df in [1.0, 2.5, 8.0] {
@@ -453,6 +474,26 @@ fn stats_cases() -> Vec<StatsCase> {
                 value: q,
             });
         }
+        for x in [-12.0, -6.0, 6.0, 12.0] {
+            for method in ["pdf", "cdf", "sf", "logpdf", "logcdf", "logsf"] {
+                cases.push(StatsCase {
+                    case_id: format!("t_{df}_{method}_tail_{x}"),
+                    dist: "t".to_owned(),
+                    params: vec![df],
+                    method: method.to_owned(),
+                    value: x,
+                });
+            }
+        }
+        for q in [1.0e-4, 1.0e-3, 0.999, 0.9999] {
+            cases.push(StatsCase {
+                case_id: format!("t_{df}_isf_{q}"),
+                dist: "t".to_owned(),
+                params: vec![df],
+                method: "isf".to_owned(),
+                value: q,
+            });
+        }
     }
 
     for df in [1.0, 2.0, 5.0] {
@@ -473,6 +514,26 @@ fn stats_cases() -> Vec<StatsCase> {
                 dist: "chi2".to_owned(),
                 params: vec![df],
                 method: "ppf".to_owned(),
+                value: q,
+            });
+        }
+        for x in [1.0e-6, 0.05, 20.0, 60.0] {
+            for method in ["pdf", "cdf", "sf", "logpdf", "logcdf", "logsf"] {
+                cases.push(StatsCase {
+                    case_id: format!("chi2_{df}_{method}_tail_{x}"),
+                    dist: "chi2".to_owned(),
+                    params: vec![df],
+                    method: method.to_owned(),
+                    value: x,
+                });
+            }
+        }
+        for q in [1.0e-6, 1.0e-3, 0.999, 0.999_999] {
+            cases.push(StatsCase {
+                case_id: format!("chi2_{df}_isf_{q}"),
+                dist: "chi2".to_owned(),
+                params: vec![df],
+                method: "isf".to_owned(),
                 value: q,
             });
         }
@@ -596,6 +657,23 @@ fn solve_options(
         transposed,
         ..SolveOptions::default()
     })
+}
+
+fn stats_policy(case: &StatsCase) -> ULPPolicy {
+    match case.method.as_str() {
+        "logpdf" | "logcdf" | "logsf" => ULPPolicy {
+            max_ulps: 500_000_000,
+            abs_floor: 1.0e-9,
+        },
+        "isf" | "ppf" => ULPPolicy {
+            max_ulps: 5_000_000_000,
+            abs_floor: 1.0e-7,
+        },
+        _ => ULPPolicy {
+            max_ulps: 1_000_000_000,
+            abs_floor: 1.0e-8,
+        },
+    }
 }
 
 fn solve_matrix_rhs_by_columns(case: &SolveMatrixRhsCase) -> Result<Vec<Vec<f64>>, String> {
@@ -984,20 +1062,19 @@ print(json.dumps(results))
     let oracle_results: Vec<ScalarOracle> = run_python_oracle(script, &cases)?;
     let case_ids: Vec<String> = cases.iter().map(|case| case.case_id.clone()).collect();
     let oracle = oracle_map(test_id, &case_ids, oracle_results, |result| &result.case_id)?;
-    let policy = ULPPolicy {
-        max_ulps: 5_000_000_000,
-        abs_floor: 1.0e-7,
-    };
-
     for case in &cases {
         let actual = match case.dist.as_str() {
             "norm" => {
                 let dist = Normal::new(case.params[0], case.params[1]);
                 match case.method.as_str() {
                     "pdf" => dist.pdf(case.value),
+                    "logpdf" => dist.logpdf(case.value),
                     "cdf" => dist.cdf(case.value),
+                    "logcdf" => dist.logcdf(case.value),
                     "sf" => dist.sf(case.value),
+                    "logsf" => dist.logsf(case.value),
                     "ppf" => dist.ppf(case.value),
+                    "isf" => dist.isf(case.value),
                     other => return Err(format!("unsupported norm method {other}")),
                 }
             }
@@ -1005,9 +1082,13 @@ print(json.dumps(results))
                 let dist = StudentT::new(case.params[0]);
                 match case.method.as_str() {
                     "pdf" => dist.pdf(case.value),
+                    "logpdf" => dist.logpdf(case.value),
                     "cdf" => dist.cdf(case.value),
+                    "logcdf" => dist.logcdf(case.value),
                     "sf" => dist.sf(case.value),
+                    "logsf" => dist.logsf(case.value),
                     "ppf" => dist.ppf(case.value),
+                    "isf" => dist.isf(case.value),
                     other => return Err(format!("unsupported t method {other}")),
                 }
             }
@@ -1015,15 +1096,24 @@ print(json.dumps(results))
                 let dist = ChiSquared::new(case.params[0]);
                 match case.method.as_str() {
                     "pdf" => dist.pdf(case.value),
+                    "logpdf" => dist.logpdf(case.value),
                     "cdf" => dist.cdf(case.value),
+                    "logcdf" => dist.logcdf(case.value),
                     "sf" => dist.sf(case.value),
+                    "logsf" => dist.logsf(case.value),
                     "ppf" => dist.ppf(case.value),
+                    "isf" => dist.isf(case.value),
                     other => return Err(format!("unsupported chi2 method {other}")),
                 }
             }
             other => return Err(format!("unsupported stats distribution {other}")),
         };
-        assert_ulp_close(&case.case_id, actual, oracle[&case.case_id].value, policy)?;
+        assert_ulp_close(
+            &case.case_id,
+            actual,
+            oracle[&case.case_id].value,
+            stats_policy(case),
+        )?;
     }
     Ok(())
 }

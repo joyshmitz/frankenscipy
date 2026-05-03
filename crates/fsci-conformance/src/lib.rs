@@ -14794,12 +14794,7 @@ fn execute_array_api_case_inner(
     let backend = FsciArrayApiCoreArrayBackend::new(mode);
 
     match case {
-        ArrayApiCase::Zeros {
-            shape,
-            dtype,
-            expected: _,
-            ..
-        } => {
+        ArrayApiCase::Zeros { shape, dtype, .. } => {
             let request = ArrayApiCreationRequest {
                 shape: FsciArrayApiShape::new(shape.clone()),
                 dtype: fixture_dtype_to_runtime(*dtype),
@@ -14808,12 +14803,7 @@ fn execute_array_api_case_inner(
             let array = arrayapi_zeros(&backend, &request).map_err(array_api_error_kind)?;
             Ok(observed_array(&array))
         }
-        ArrayApiCase::Ones {
-            shape,
-            dtype,
-            expected: _,
-            ..
-        } => {
+        ArrayApiCase::Ones { shape, dtype, .. } => {
             let request = ArrayApiCreationRequest {
                 shape: FsciArrayApiShape::new(shape.clone()),
                 dtype: fixture_dtype_to_runtime(*dtype),
@@ -14826,7 +14816,6 @@ fn execute_array_api_case_inner(
             shape,
             fill_value,
             dtype,
-            expected: _,
             ..
         } => {
             let request = ArrayApiFullRequest {
@@ -14843,7 +14832,6 @@ fn execute_array_api_case_inner(
             stop,
             step,
             dtype,
-            expected: _,
             ..
         } => {
             let request = ArrayApiArangeRequest {
@@ -14865,7 +14853,6 @@ fn execute_array_api_case_inner(
             num,
             endpoint,
             dtype,
-            expected: _,
             ..
         } => {
             let request = ArrayApiLinspaceRequest {
@@ -14878,11 +14865,7 @@ fn execute_array_api_case_inner(
             let array = arrayapi_linspace(&backend, &request).map_err(array_api_error_kind)?;
             Ok(observed_array(&array))
         }
-        ArrayApiCase::BroadcastShapes {
-            shapes,
-            expected: _,
-            ..
-        } => {
+        ArrayApiCase::BroadcastShapes { shapes, .. } => {
             let runtime_shapes = shapes
                 .iter()
                 .map(|shape| FsciArrayApiShape::new(shape.clone()))
@@ -14897,7 +14880,6 @@ fn execute_array_api_case_inner(
         ArrayApiCase::ResultType {
             dtypes,
             force_floating,
-            expected: _,
             ..
         } => {
             let runtime_dtypes = dtypes
@@ -14914,7 +14896,6 @@ fn execute_array_api_case_inner(
             values,
             shape,
             dtype,
-            expected: _,
             ..
         } => {
             let request = ArrayApiCreationRequest {
@@ -14941,7 +14922,6 @@ fn execute_array_api_case_inner(
             source_dtype,
             indexing_mode,
             index,
-            expected: _,
             ..
         } => {
             let source = array_api_source_array(
@@ -14967,7 +14947,6 @@ fn execute_array_api_case_inner(
             source_shape,
             source_dtype,
             new_shape,
-            expected: _,
             ..
         } => {
             let source = array_api_source_array(
@@ -14991,7 +14970,6 @@ fn execute_array_api_case_inner(
             source_values,
             source_shape,
             source_dtype,
-            expected: _,
             ..
         } => {
             let source = array_api_source_array(
@@ -15007,7 +14985,6 @@ fn execute_array_api_case_inner(
         ArrayApiCase::RelationBroadcastCommutative {
             left_shape,
             right_shape,
-            expected: _,
             ..
         } => {
             let left = FsciArrayApiShape::new(left_shape.clone());
@@ -15025,7 +15002,6 @@ fn execute_array_api_case_inner(
             left_dtype,
             right_dtype,
             force_floating,
-            expected: _,
             ..
         } => {
             let left = fixture_dtype_to_runtime(*left_dtype);
@@ -15042,7 +15018,6 @@ fn execute_array_api_case_inner(
             values,
             dtype,
             index,
-            expected: _,
             ..
         } => {
             let len = values.len();

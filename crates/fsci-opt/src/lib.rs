@@ -3315,7 +3315,7 @@ fn validate_differentiate_options(options: DifferentiateOptions) -> Result<usize
         });
     }
 
-    if options.order % 2 == 0 {
+    if options.order.is_multiple_of(2) {
         Ok(options.order.max(2))
     } else {
         let rounded = options

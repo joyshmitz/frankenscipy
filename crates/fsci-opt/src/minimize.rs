@@ -2517,12 +2517,10 @@ where
     let mut f = objective.eval(&x)?;
     let mut njev = 0usize;
 
-    let mut grad = match finite_diff_gradient(&mut objective, &x, options.gradient_eps) {
-        Ok(v) => {
-            njev += 1;
-            v
-        }
-        Err(e) => return Err(e),
+    let mut grad = {
+        let value = finite_diff_gradient(&mut objective, &x, options.gradient_eps)?;
+        njev += 1;
+        value
     };
     let mut hess_approx = vec![vec![0.0; n]; n];
     for (i, row) in hess_approx.iter_mut().enumerate().take(n) {
