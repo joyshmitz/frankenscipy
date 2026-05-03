@@ -4354,6 +4354,7 @@ impl ContinuousDistribution for Trapezoid {
 /// Inverse Gamma distribution.
 ///
 /// Matches `scipy.stats.invgamma`.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct InverseGamma {
     pub a: f64, // shape
 }
@@ -4428,6 +4429,53 @@ impl ContinuousDistribution for InverseGamma {
         } else {
             f64::INFINITY
         }
+    }
+
+    fn fit(data: &[f64]) -> Self {
+        Self::try_fit(data).unwrap_or_else(|e| {
+            panic!("InverseGamma::fit failed: {e}");
+        })
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        if data.len() < 2 {
+            return Err(FitError::InsufficientData {
+                required: 2,
+                actual: data.len(),
+            });
+        }
+        // MoM at unit scale: E[X | a] = 1/(a-1) for a>1, so
+        //   a_hat = 1 + 1/sample_mean
+        // Requires positive observations and a positive (>1) result.
+        let mut sum = 0.0_f64;
+        let mut count = 0usize;
+        for &x in data {
+            if !x.is_finite() {
+                return Err(FitError::UnsupportedData(format!(
+                    "InverseGamma data contains non-finite value: {x}"
+                )));
+            }
+            if x <= 0.0 {
+                return Err(FitError::UnsupportedData(format!(
+                    "InverseGamma support is (0, ∞); got {x}"
+                )));
+            }
+            sum += x;
+            count += 1;
+        }
+        let mean = sum / count as f64;
+        if mean <= 0.0 || !mean.is_finite() {
+            return Err(FitError::NonConvergent(format!(
+                "InverseGamma MoM: sample mean {mean} non-positive"
+            )));
+        }
+        let a = 1.0 + 1.0 / mean;
+        if !a.is_finite() || a <= 1.0 {
+            return Err(FitError::NonConvergent(format!(
+                "InverseGamma MoM produced a={a} (must be > 1)"
+            )));
+        }
+        Ok(Self { a })
     }
 }
 
@@ -6762,9 +6810,7 @@ impl ContinuousDistribution for Bradford {
                 hi = mid;
             }
         }
-        Ok(Self {
-            c: 0.5 * (lo + hi),
-        })
+        Ok(Self { c: 0.5 * (lo + hi) })
     }
 }
 
@@ -26579,6 +26625,34 @@ mod tests {
     }
 
     #[test]
+    fn inverse_gamma_fit_recovers_unit_scale_shape_from_mean() {
+        let data = [0.25, 0.5, 0.75, 0.5];
+        let fit = InverseGamma::try_fit(&data).expect("InverseGamma fit");
+        assert_close(fit.a, 3.0, 1e-12, "InverseGamma shape from MoM");
+        assert_close(fit.mean(), 0.5, 1e-12, "InverseGamma fitted mean");
+    }
+
+    #[test]
+    fn inverse_gamma_fit_rejects_too_few_samples() {
+        let err = InverseGamma::try_fit(&[1.0]).expect_err("too few samples");
+        assert!(matches!(
+            err,
+            FitError::InsufficientData {
+                required: 2,
+                actual: 1
+            }
+        ));
+    }
+
+    #[test]
+    fn inverse_gamma_fit_rejects_non_positive_or_non_finite_data() {
+        for data in [[0.5, 0.0], [0.5, -0.25], [0.5, f64::NAN]] {
+            let err = InverseGamma::try_fit(&data).expect_err("invalid sample");
+            assert!(matches!(err, FitError::UnsupportedData(_)));
+        }
+    }
+
+    #[test]
     fn burr12_variance_matches_scipy_reference_values() {
         let cases = [
             (
@@ -29336,8 +29410,8 @@ mod tests {
 
     #[test]
     fn loglaplace_fit_rejects_non_positive_observations() {
-        let err = LogLaplace::try_fit(&[1.0, 2.0, -0.5])
-            .expect_err("non-positive must be rejected");
+        let err =
+            LogLaplace::try_fit(&[1.0, 2.0, -0.5]).expect_err("non-positive must be rejected");
         assert!(matches!(err, FitError::UnsupportedData(_)));
     }
 
@@ -29357,8 +29431,8 @@ mod tests {
     #[test]
     fn loglaplace_fit_rejects_all_unit_observations() {
         // sum |ln(1.0)| = 0 → MLE undefined.
-        let err = LogLaplace::try_fit(&[1.0, 1.0, 1.0])
-            .expect_err("all-unit data must be rejected");
+        let err =
+            LogLaplace::try_fit(&[1.0, 1.0, 1.0]).expect_err("all-unit data must be rejected");
         assert!(matches!(err, FitError::NonConvergent(_)));
     }
 
@@ -29500,8 +29574,7 @@ mod tests {
 
     #[test]
     fn truncexpon_fit_rejects_negative_observations() {
-        let err = TruncExpon::try_fit(&[1.0, 2.0, -0.5])
-            .expect_err("negative must be rejected");
+        let err = TruncExpon::try_fit(&[1.0, 2.0, -0.5]).expect_err("negative must be rejected");
         assert!(matches!(err, FitError::UnsupportedData(_)));
     }
 
@@ -29541,7 +29614,9 @@ mod tests {
     #[test]
     fn pearson3_fit_metamorphic_scale_invariance() {
         // Skewness is scale-invariant: skew(α x) = skew(x) for α > 0.
-        let data: Vec<f64> = (1..=500).map(|i| (i as f64 / 100.0).powi(2) - 5.0).collect();
+        let data: Vec<f64> = (1..=500)
+            .map(|i| (i as f64 / 100.0).powi(2) - 5.0)
+            .collect();
         let a = Pearson3::try_fit(&data).unwrap();
         let scaled: Vec<f64> = data.iter().map(|x| 7.5 * x).collect();
         let b = Pearson3::try_fit(&scaled).unwrap();
@@ -29555,14 +29630,60 @@ mod tests {
 
     #[test]
     fn pearson3_fit_rejects_constant_data() {
-        let err = Pearson3::try_fit(&[2.0, 2.0, 2.0])
-            .expect_err("zero-variance data must be rejected");
+        let err =
+            Pearson3::try_fit(&[2.0, 2.0, 2.0]).expect_err("zero-variance data must be rejected");
         assert!(matches!(err, FitError::NonConvergent(_)));
     }
 
     #[test]
     fn pearson3_fit_rejects_too_few_samples() {
         let err = Pearson3::try_fit(&[1.0, 2.0]).expect_err("n=2 must be rejected");
+        assert!(matches!(err, FitError::InsufficientData { .. }));
+    }
+
+    #[test]
+    fn invgamma_fit_metamorphic_mean_inverts_a() {
+        // For unit-scale InverseGamma, sample_mean = 1/(a-1) ⟺ a = 1 + 1/mean.
+        let data = [0.5_f64, 1.0, 1.5, 2.0, 3.0];
+        let m = data.iter().sum::<f64>() / data.len() as f64;
+        let fitted = InverseGamma::try_fit(&data).expect("fit");
+        let expected = 1.0 + 1.0 / m;
+        assert!(
+            (fitted.a - expected).abs() < 1e-13,
+            "MoM mean-inversion: a={} expected {expected}",
+            fitted.a
+        );
+    }
+
+    #[test]
+    fn invgamma_fit_synthetic_recovery() {
+        // Synthesize n=2000 samples from InverseGamma(a=3.0); MoM recovers a within 5%.
+        let true_a = 3.0;
+        let dist = InverseGamma::new(true_a);
+        let n = 2000;
+        let samples: Vec<f64> = (1..=n)
+            .map(|i| dist.ppf((i as f64 - 0.5) / n as f64))
+            .filter(|x| x.is_finite() && *x < 1.0e6)
+            .collect();
+        assert!(samples.len() > 1500);
+        let fitted = InverseGamma::try_fit(&samples).expect("fit");
+        let rel = (fitted.a - true_a).abs() / true_a;
+        assert!(
+            rel < 0.05,
+            "InverseGamma::fit recovery: got a={}, true {true_a}, rel_err={rel}",
+            fitted.a
+        );
+    }
+
+    #[test]
+    fn invgamma_fit_rejects_non_positive() {
+        let err = InverseGamma::try_fit(&[1.0, 2.0, 0.0]).expect_err("zero must be rejected");
+        assert!(matches!(err, FitError::UnsupportedData(_)));
+    }
+
+    #[test]
+    fn invgamma_fit_rejects_too_few_samples() {
+        let err = InverseGamma::try_fit(&[1.0]).expect_err("n=1 must be rejected");
         assert!(matches!(err, FitError::InsufficientData { .. }));
     }
 
@@ -29606,13 +29727,16 @@ mod tests {
         let v = samples.iter().map(|x| (x - m).powi(2)).sum::<f64>() / n_f;
         let predicted_var = 1.0 + fitted.k * fitted.k;
         let rel = (v - predicted_var).abs() / predicted_var;
-        assert!(rel < 0.10, "var relation: sample var {v} vs predicted {predicted_var}");
+        assert!(
+            rel < 0.10,
+            "var relation: sample var {v} vs predicted {predicted_var}"
+        );
     }
 
     #[test]
     fn expnorm_fit_rejects_non_positive_mean() {
-        let err = ExponNorm::try_fit(&[-1.0, -2.0, -3.0])
-            .expect_err("negative-mean must be rejected");
+        let err =
+            ExponNorm::try_fit(&[-1.0, -2.0, -3.0]).expect_err("negative-mean must be rejected");
         assert!(matches!(err, FitError::UnsupportedData(_)));
     }
 
@@ -29662,15 +29786,14 @@ mod tests {
 
     #[test]
     fn genpareto_fit_rejects_negative_observation() {
-        let err = GenPareto::try_fit(&[0.5, 1.0, -0.1])
-            .expect_err("negative must be rejected");
+        let err = GenPareto::try_fit(&[0.5, 1.0, -0.1]).expect_err("negative must be rejected");
         assert!(matches!(err, FitError::UnsupportedData(_)));
     }
 
     #[test]
     fn genpareto_fit_rejects_zero_data() {
-        let err = GenPareto::try_fit(&[0.0, 0.0])
-            .expect_err("all-zero must be rejected (mean = 0)");
+        let err =
+            GenPareto::try_fit(&[0.0, 0.0]).expect_err("all-zero must be rejected (mean = 0)");
         assert!(matches!(err, FitError::NonConvergent(_)));
     }
 
@@ -29718,8 +29841,7 @@ mod tests {
 
     #[test]
     fn doublegamma_fit_rejects_zero_data() {
-        let err = DoubleGamma::try_fit(&[0.0, 0.0])
-            .expect_err("zero data must be rejected");
+        let err = DoubleGamma::try_fit(&[0.0, 0.0]).expect_err("zero data must be rejected");
         assert!(matches!(err, FitError::NonConvergent(_)));
     }
 
@@ -29745,7 +29867,11 @@ mod tests {
         let fitted = Erlang::try_fit(&samples).expect("fit");
         assert_eq!(fitted.k, true_k, "MoM should round to integer k");
         let rel = (fitted.rate - true_rate).abs() / true_rate;
-        assert!(rel < 0.05, "rate recovery: got {} vs {true_rate}", fitted.rate);
+        assert!(
+            rel < 0.05,
+            "rate recovery: got {} vs {true_rate}",
+            fitted.rate
+        );
     }
 
     #[test]
@@ -29766,15 +29892,13 @@ mod tests {
 
     #[test]
     fn erlang_fit_rejects_negative_observation() {
-        let err = Erlang::try_fit(&[1.0, 2.0, -0.5])
-            .expect_err("negative must be rejected");
+        let err = Erlang::try_fit(&[1.0, 2.0, -0.5]).expect_err("negative must be rejected");
         assert!(matches!(err, FitError::UnsupportedData(_)));
     }
 
     #[test]
     fn erlang_fit_rejects_constant_data() {
-        let err = Erlang::try_fit(&[2.0, 2.0, 2.0])
-            .expect_err("zero-variance must be rejected");
+        let err = Erlang::try_fit(&[2.0, 2.0, 2.0]).expect_err("zero-variance must be rejected");
         assert!(matches!(err, FitError::NonConvergent(_)));
     }
 
@@ -29835,8 +29959,7 @@ mod tests {
 
     #[test]
     fn invgauss_fit_rejects_non_positive() {
-        let err = InverseGaussian::try_fit(&[1.0, 2.0, 0.0])
-            .expect_err("zero must be rejected");
+        let err = InverseGaussian::try_fit(&[1.0, 2.0, 0.0]).expect_err("zero must be rejected");
         assert!(matches!(err, FitError::UnsupportedData(_)));
     }
 
@@ -29870,18 +29993,15 @@ mod tests {
 
     #[test]
     fn loguniform_fit_rejects_non_positive() {
-        let err = Loguniform::try_fit(&[1.0, 2.0, 0.0])
-            .expect_err("zero must be rejected");
+        let err = Loguniform::try_fit(&[1.0, 2.0, 0.0]).expect_err("zero must be rejected");
         assert!(matches!(err, FitError::UnsupportedData(_)));
-        let err = Loguniform::try_fit(&[1.0, -0.5])
-            .expect_err("negative must be rejected");
+        let err = Loguniform::try_fit(&[1.0, -0.5]).expect_err("negative must be rejected");
         assert!(matches!(err, FitError::UnsupportedData(_)));
     }
 
     #[test]
     fn loguniform_fit_rejects_constant_data() {
-        let err = Loguniform::try_fit(&[2.0, 2.0, 2.0])
-            .expect_err("zero range must be rejected");
+        let err = Loguniform::try_fit(&[2.0, 2.0, 2.0]).expect_err("zero range must be rejected");
         assert!(matches!(err, FitError::NonConvergent(_)));
     }
 
@@ -29921,11 +30041,9 @@ mod tests {
 
     #[test]
     fn levyleft_fit_rejects_non_negative_observation() {
-        let err = LevyLeft::try_fit(&[-1.0, 2.0])
-            .expect_err("positive must be rejected");
+        let err = LevyLeft::try_fit(&[-1.0, 2.0]).expect_err("positive must be rejected");
         assert!(matches!(err, FitError::UnsupportedData(_)));
-        let err = LevyLeft::try_fit(&[-1.0, 0.0])
-            .expect_err("zero must be rejected");
+        let err = LevyLeft::try_fit(&[-1.0, 0.0]).expect_err("zero must be rejected");
         assert!(matches!(err, FitError::UnsupportedData(_)));
     }
 
@@ -29974,8 +30092,7 @@ mod tests {
 
     #[test]
     fn levy_fit_rejects_non_positive_observation() {
-        let err = Levy::try_fit(&[1.0, 2.0, 0.0])
-            .expect_err("zero must be rejected");
+        let err = Levy::try_fit(&[1.0, 2.0, 0.0]).expect_err("zero must be rejected");
         assert!(matches!(err, FitError::UnsupportedData(_)));
     }
 
@@ -30031,16 +30148,14 @@ mod tests {
 
     #[test]
     fn bradford_fit_rejects_out_of_interval_data() {
-        let err = Bradford::try_fit(&[0.5, 0.5, 1.5])
-            .expect_err("> 1 must be rejected");
+        let err = Bradford::try_fit(&[0.5, 0.5, 1.5]).expect_err("> 1 must be rejected");
         assert!(matches!(err, FitError::UnsupportedData(_)));
     }
 
     #[test]
     fn bradford_fit_rejects_mean_at_uniform_limit() {
         // A sample with mean ≥ 0.5 is the c→0⁺ degenerate limit (uniform).
-        let err = Bradford::try_fit(&[0.4, 0.6])
-            .expect_err("mean=0.5 must be rejected");
+        let err = Bradford::try_fit(&[0.4, 0.6]).expect_err("mean=0.5 must be rejected");
         assert!(matches!(err, FitError::UnsupportedData(_)));
     }
 
