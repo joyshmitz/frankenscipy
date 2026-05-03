@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-use fsci_linalg::{SolveOptions, solve};
+use fsci_linalg::{LinalgError, MatrixAssumption, SolveOptions, solve};
 use fsci_runtime::RuntimeMode;
 use fsci_signal::lfilter;
 use fsci_special::{
@@ -42,9 +42,23 @@ struct VectorOracle {
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
+struct MatrixOracle {
+    case_id: String,
+    values: Vec<Vec<f64>>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
 struct ScalarOracle {
     case_id: String,
     value: f64,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct ErrorOracle {
+    case_id: String,
+    status: String,
+    error_type: String,
+    message: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -76,6 +90,26 @@ struct SolveCase {
     case_id: String,
     a: Vec<Vec<f64>>,
     b: Vec<f64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct SolveMatrixRhsCase {
+    case_id: String,
+    a: Vec<Vec<f64>>,
+    b: Vec<Vec<f64>>,
+    assume_a: Option<String>,
+    transposed: bool,
+    check_finite: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct SolveErrorCase {
+    case_id: String,
+    a: Vec<Vec<f64>>,
+    b: Vec<f64>,
+    assume_a: Option<String>,
+    transposed: bool,
+    check_finite: bool,
 }
 
 fn scipy_available_or_skip(test_id: &str) -> Result<bool, String> {
@@ -402,6 +436,118 @@ fn solve_cases() -> Vec<SolveCase> {
     ]
 }
 
+fn solve_matrix_rhs_cases() -> Vec<SolveMatrixRhsCase> {
+    vec![
+        SolveMatrixRhsCase {
+            case_id: "solve_multi_rhs_2x2_general".to_owned(),
+            a: vec![vec![3.0, 1.0], vec![1.0, 2.0]],
+            b: vec![vec![9.0, 3.0], vec![8.0, 4.0]],
+            assume_a: None,
+            transposed: false,
+            check_finite: true,
+        },
+        SolveMatrixRhsCase {
+            case_id: "solve_multi_rhs_3x3_transposed".to_owned(),
+            a: vec![
+                vec![2.0, -1.0, 0.5],
+                vec![0.25, 3.0, -0.75],
+                vec![1.5, 0.5, 4.0],
+            ],
+            b: vec![vec![1.0, 2.0], vec![-3.0, 0.5], vec![4.0, -1.0]],
+            assume_a: None,
+            transposed: true,
+            check_finite: true,
+        },
+        SolveMatrixRhsCase {
+            case_id: "solve_multi_rhs_diagonal_assumption".to_owned(),
+            a: vec![
+                vec![2.0, 0.0, 0.0],
+                vec![0.0, -4.0, 0.0],
+                vec![0.0, 0.0, 0.5],
+            ],
+            b: vec![vec![2.0, 1.0], vec![8.0, -4.0], vec![1.5, 0.25]],
+            assume_a: Some("diagonal".to_owned()),
+            transposed: false,
+            check_finite: true,
+        },
+    ]
+}
+
+fn solve_error_cases() -> Vec<SolveErrorCase> {
+    vec![
+        SolveErrorCase {
+            case_id: "solve_singular_duplicate_rows".to_owned(),
+            a: vec![vec![1.0, 2.0], vec![2.0, 4.0]],
+            b: vec![3.0, 6.0],
+            assume_a: None,
+            transposed: false,
+            check_finite: true,
+        },
+        SolveErrorCase {
+            case_id: "solve_singular_diagonal_assumption".to_owned(),
+            a: vec![
+                vec![1.0, 0.0, 0.0],
+                vec![0.0, 0.0, 0.0],
+                vec![0.0, 0.0, 2.0],
+            ],
+            b: vec![1.0, 4.0, 8.0],
+            assume_a: Some("diagonal".to_owned()),
+            transposed: false,
+            check_finite: true,
+        },
+    ]
+}
+
+fn matrix_assumption_from_name(name: &str) -> Result<MatrixAssumption, String> {
+    match name {
+        "general" => Ok(MatrixAssumption::General),
+        "diagonal" => Ok(MatrixAssumption::Diagonal),
+        "upper_triangular" => Ok(MatrixAssumption::UpperTriangular),
+        "lower_triangular" => Ok(MatrixAssumption::LowerTriangular),
+        "symmetric" => Ok(MatrixAssumption::Symmetric),
+        "hermitian" => Ok(MatrixAssumption::Hermitian),
+        "positive_definite" => Ok(MatrixAssumption::PositiveDefinite),
+        other => Err(format!("unsupported solve assumption {other}")),
+    }
+}
+
+fn solve_options(
+    assume_a: Option<&str>,
+    transposed: bool,
+    check_finite: bool,
+) -> Result<SolveOptions, String> {
+    Ok(SolveOptions {
+        mode: RuntimeMode::Strict,
+        check_finite,
+        assume_a: assume_a.map(matrix_assumption_from_name).transpose()?,
+        transposed,
+        ..SolveOptions::default()
+    })
+}
+
+fn solve_matrix_rhs_by_columns(case: &SolveMatrixRhsCase) -> Result<Vec<Vec<f64>>, String> {
+    let rows = case.b.len();
+    let cols = case.b.first().map_or(0, Vec::len);
+    if rows != case.a.len() || cols == 0 || case.b.iter().any(|row| row.len() != cols) {
+        return Err(format!("{}: malformed matrix RHS shape", case.case_id));
+    }
+
+    let mut result = vec![vec![0.0; cols]; rows];
+    for col in 0..cols {
+        let rhs: Vec<f64> = case.b.iter().map(|row| row[col]).collect();
+        let solution = solve(
+            &case.a,
+            &rhs,
+            solve_options(case.assume_a.as_deref(), case.transposed, case.check_finite)?,
+        )
+        .map_err(|err| format!("{} column {col}: Rust solve failed: {err}", case.case_id))?;
+        for (row, value) in solution.x.into_iter().enumerate() {
+            result[row][col] = value;
+        }
+    }
+    Ok(result)
+}
+
 #[test]
 fn live_scipy_signal_lfilter_ulp_conformance() -> Result<(), String> {
     let test_id = "live_scipy_signal_lfilter_ulp_conformance";
@@ -692,5 +838,180 @@ print(json.dumps(results))
             )?;
         }
     }
+    Ok(())
+}
+
+#[test]
+fn live_scipy_linalg_solve_singular_and_multi_rhs_conformance() -> Result<(), String> {
+    let test_id = "live_scipy_linalg_solve_singular_and_multi_rhs_conformance";
+    if !scipy_available_or_skip(test_id)? {
+        return Ok(());
+    }
+
+    let matrix_cases = solve_matrix_rhs_cases();
+    let matrix_script = r#"
+import json
+import sys
+import numpy as np
+from scipy import linalg
+
+cases = json.load(sys.stdin)
+results = []
+for case in cases:
+    a = np.array(case["a"], dtype=np.float64)
+    b = np.array(case["b"], dtype=np.float64)
+    if case.get("transposed", False):
+        a = a.T
+    assume_a = case.get("assume_a")
+    if assume_a == "diagonal":
+        diag = np.diag(a)
+        if np.any(diag == 0.0):
+            raise linalg.LinAlgError("singular matrix")
+        x = b / diag[:, None]
+    else:
+        scipy_assume = {
+            None: "gen",
+            "general": "gen",
+            "symmetric": "sym",
+            "hermitian": "her",
+            "positive_definite": "pos",
+        }.get(assume_a, "gen")
+        x = linalg.solve(
+            a,
+            b,
+            assume_a=scipy_assume,
+            check_finite=bool(case.get("check_finite", True)),
+        )
+    results.append({
+        "case_id": case["case_id"],
+        "values": [[float(v) for v in row] for row in np.asarray(x)],
+    })
+print(json.dumps(results))
+"#;
+    let matrix_oracle_results: Vec<MatrixOracle> = run_python_oracle(matrix_script, &matrix_cases)?;
+    let matrix_case_ids: Vec<String> = matrix_cases
+        .iter()
+        .map(|case| case.case_id.clone())
+        .collect();
+    let matrix_oracle = oracle_map(test_id, &matrix_case_ids, matrix_oracle_results, |result| {
+        &result.case_id
+    })?;
+    let matrix_policy = ULPPolicy {
+        max_ulps: 1_000_000,
+        abs_floor: 1.0e-11,
+    };
+
+    for case in &matrix_cases {
+        let rust = solve_matrix_rhs_by_columns(case)?;
+        let scipy = &matrix_oracle[&case.case_id].values;
+        if rust.len() != scipy.len() {
+            return Err(format!("{}: matrix RHS row count diverged", case.case_id));
+        }
+        for (row_idx, (rust_row, scipy_row)) in rust.iter().zip(scipy).enumerate() {
+            if rust_row.len() != scipy_row.len() {
+                return Err(format!(
+                    "{}: matrix RHS column count diverged at row {row_idx}",
+                    case.case_id
+                ));
+            }
+            for (col_idx, (&actual, &expected)) in rust_row.iter().zip(scipy_row).enumerate() {
+                assert_ulp_close(
+                    &format!("{}[{row_idx},{col_idx}]", case.case_id),
+                    actual,
+                    expected,
+                    matrix_policy,
+                )?;
+            }
+        }
+    }
+
+    let error_cases = solve_error_cases();
+    let error_script = r#"
+import json
+import sys
+import numpy as np
+from scipy import linalg
+
+cases = json.load(sys.stdin)
+results = []
+for case in cases:
+    try:
+        a = np.array(case["a"], dtype=np.float64)
+        b = np.array(case["b"], dtype=np.float64)
+        if case.get("transposed", False):
+            a = a.T
+        assume_a = case.get("assume_a")
+        if assume_a == "diagonal":
+            diag = np.diag(a)
+            if np.any(diag == 0.0):
+                raise linalg.LinAlgError("singular matrix")
+            _ = b / diag
+        else:
+            scipy_assume = {
+                None: "gen",
+                "general": "gen",
+                "symmetric": "sym",
+                "hermitian": "her",
+                "positive_definite": "pos",
+            }.get(assume_a, "gen")
+            _ = linalg.solve(
+                a,
+                b,
+                assume_a=scipy_assume,
+                check_finite=bool(case.get("check_finite", True)),
+            )
+        results.append({
+            "case_id": case["case_id"],
+            "status": "ok",
+            "error_type": "",
+            "message": "",
+        })
+    except Exception as exc:
+        results.append({
+            "case_id": case["case_id"],
+            "status": "error",
+            "error_type": exc.__class__.__name__,
+            "message": str(exc),
+        })
+print(json.dumps(results))
+"#;
+    let error_oracle_results: Vec<ErrorOracle> = run_python_oracle(error_script, &error_cases)?;
+    let error_case_ids: Vec<String> = error_cases
+        .iter()
+        .map(|case| case.case_id.clone())
+        .collect();
+    let error_oracle = oracle_map(test_id, &error_case_ids, error_oracle_results, |result| {
+        &result.case_id
+    })?;
+
+    for case in &error_cases {
+        let scipy = &error_oracle[&case.case_id];
+        if scipy.status != "error" || scipy.error_type != "LinAlgError" {
+            return Err(format!(
+                "{}: expected SciPy LinAlgError, got status={} type={} message={}",
+                case.case_id, scipy.status, scipy.error_type, scipy.message
+            ));
+        }
+        match solve(
+            &case.a,
+            &case.b,
+            solve_options(case.assume_a.as_deref(), case.transposed, case.check_finite)?,
+        ) {
+            Err(LinalgError::SingularMatrix) => {}
+            Err(err) => {
+                return Err(format!(
+                    "{}: expected Rust SingularMatrix, got {err}",
+                    case.case_id
+                ));
+            }
+            Ok(result) => {
+                return Err(format!(
+                    "{}: expected Rust SingularMatrix, got solution {:?}",
+                    case.case_id, result.x
+                ));
+            }
+        }
+    }
+
     Ok(())
 }
