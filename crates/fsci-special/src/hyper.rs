@@ -50,6 +50,185 @@ pub const HYPER_DISPATCH_PLAN: &[DispatchPlan] = &[
     },
 ];
 
+/// Hypergeometric routine covered by the special-function CASP selector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HypergeometricFunction {
+    /// Confluent hypergeometric 1F1(a; b; z).
+    Hyp1f1,
+    /// Gauss hypergeometric 2F1(a, b; c; z).
+    Hyp2f1,
+}
+
+/// Evaluation branch selected for a hypergeometric problem instance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HypergeometricBranch {
+    /// Power series in the original argument.
+    DirectSeries,
+    /// Kummer transformation for large negative real 1F1 arguments.
+    KummerTransform,
+    /// Finite polynomial when a numerator parameter is a nonpositive integer.
+    TerminatingPolynomial,
+    /// Gauss summation at z = 1 when c - a - b > 0.
+    GaussSummation,
+    /// Pfaff transform for real 2F1 arguments outside the direct-series disk.
+    PfaffTransform,
+    /// Closed-form reduction when a numerator parameter equals c.
+    LinearFractionalIdentity,
+    /// Divergent z = 1 boundary.
+    DivergentAtUnitArgument,
+    /// Lower parameter is too close to a pole for the requested precision.
+    ParameterGuard,
+    /// No stable analytic-continuation branch is implemented.
+    UnsupportedAnalyticContinuation,
+}
+
+/// Scalar hypergeometric CASP input.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HyperCaspProblem {
+    /// Function family to select for.
+    pub function: HypergeometricFunction,
+    /// First numerator parameter.
+    pub a: f64,
+    /// Second parameter: denominator for 1F1, numerator for 2F1.
+    pub b: f64,
+    /// Optional denominator parameter for 2F1.
+    pub c: Option<f64>,
+    /// Real argument.
+    pub z: f64,
+    /// Absolute value of the real argument.
+    pub z_abs: f64,
+    /// Requested absolute branch-selection precision.
+    pub precision_target: f64,
+    /// Distance from the lower parameter to the nearest nonpositive-integer pole.
+    pub parameter_stability_margin: f64,
+}
+
+impl HyperCaspProblem {
+    /// Build a 1F1 CASP problem.
+    pub fn hyp1f1(a: f64, b: f64, z: f64, precision_target: f64) -> Self {
+        Self {
+            function: HypergeometricFunction::Hyp1f1,
+            a,
+            b,
+            c: None,
+            z,
+            z_abs: z.abs(),
+            precision_target,
+            parameter_stability_margin: lower_parameter_stability_margin(b),
+        }
+    }
+
+    /// Build a 2F1 CASP problem.
+    pub fn hyp2f1(a: f64, b: f64, c: f64, z: f64, precision_target: f64) -> Self {
+        Self {
+            function: HypergeometricFunction::Hyp2f1,
+            a,
+            b,
+            c: Some(c),
+            z,
+            z_abs: z.abs(),
+            precision_target,
+            parameter_stability_margin: lower_parameter_stability_margin(c),
+        }
+    }
+}
+
+/// Branch decision plus the convergence and fallback metadata used by CASP.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HyperCaspDecision {
+    /// Selected evaluation branch.
+    pub branch: HypergeometricBranch,
+    /// Requested precision copied from the problem.
+    pub precision_target: f64,
+    /// Maximum terms expected for the branch's convergence check.
+    pub max_terms: usize,
+    /// Lower-parameter pole margin copied from the problem.
+    pub parameter_stability_margin: f64,
+    /// Ordered fallback chain for the selected branch.
+    pub fallback_chain: &'static [HypergeometricBranch],
+    /// Static explanation for audit logs and tests.
+    pub reason: &'static str,
+}
+
+const HYP1F1_DIRECT_CHAIN: &[HypergeometricBranch] = &[HypergeometricBranch::DirectSeries];
+const HYP1F1_KUMMER_CHAIN: &[HypergeometricBranch] = &[
+    HypergeometricBranch::KummerTransform,
+    HypergeometricBranch::DirectSeries,
+    HypergeometricBranch::UnsupportedAnalyticContinuation,
+];
+const HYP2F1_DIRECT_CHAIN: &[HypergeometricBranch] = &[HypergeometricBranch::DirectSeries];
+const HYP2F1_TERMINATING_CHAIN: &[HypergeometricBranch] =
+    &[HypergeometricBranch::TerminatingPolynomial];
+const HYP2F1_GAUSS_CHAIN: &[HypergeometricBranch] = &[HypergeometricBranch::GaussSummation];
+const HYP2F1_PFAFF_CHAIN: &[HypergeometricBranch] = &[
+    HypergeometricBranch::PfaffTransform,
+    HypergeometricBranch::DirectSeries,
+    HypergeometricBranch::UnsupportedAnalyticContinuation,
+];
+const HYP2F1_IDENTITY_CHAIN: &[HypergeometricBranch] =
+    &[HypergeometricBranch::LinearFractionalIdentity];
+const HYPER_GUARD_CHAIN: &[HypergeometricBranch] = &[
+    HypergeometricBranch::ParameterGuard,
+    HypergeometricBranch::UnsupportedAnalyticContinuation,
+];
+const HYPER_UNSUPPORTED_CHAIN: &[HypergeometricBranch] =
+    &[HypergeometricBranch::UnsupportedAnalyticContinuation];
+const HYP2F1_DIVERGENT_CHAIN: &[HypergeometricBranch] =
+    &[HypergeometricBranch::DivergentAtUnitArgument];
+
+/// Select the hypergeometric branch for a scalar special-function problem.
+pub fn select_hypergeometric_branch(
+    problem: HyperCaspProblem,
+    mode: RuntimeMode,
+) -> Result<HyperCaspDecision, SpecialError> {
+    if !problem.precision_target.is_finite() || problem.precision_target <= 0.0 {
+        return Err(SpecialError {
+            function: hyper_function_name(problem.function),
+            kind: SpecialErrorKind::DomainError,
+            mode,
+            detail: "precision_target must be positive and finite",
+        });
+    }
+
+    if !problem.a.is_finite()
+        || !problem.b.is_finite()
+        || !problem.z.is_finite()
+        || !problem.parameter_stability_margin.is_finite()
+        || problem.c.is_some_and(|c| !c.is_finite())
+    {
+        if mode == RuntimeMode::Hardened {
+            return Err(SpecialError {
+                function: hyper_function_name(problem.function),
+                kind: SpecialErrorKind::NonFiniteInput,
+                mode,
+                detail: "hypergeometric CASP inputs must be finite",
+            });
+        }
+        return Ok(hyper_casp_decision(
+            HypergeometricBranch::UnsupportedAnalyticContinuation,
+            problem,
+            0,
+            HYPER_UNSUPPORTED_CHAIN,
+            "non-finite strict-mode input is delegated to the unsupported branch",
+        ));
+    }
+
+    if problem.parameter_stability_margin <= problem.precision_target {
+        return Ok(hyper_casp_decision(
+            HypergeometricBranch::ParameterGuard,
+            problem,
+            0,
+            HYPER_GUARD_CHAIN,
+            "lower parameter is too close to a nonpositive-integer pole",
+        ));
+    }
+
+    match problem.function {
+        HypergeometricFunction::Hyp1f1 => Ok(select_hyp1f1_branch(problem)),
+        HypergeometricFunction::Hyp2f1 => select_hyp2f1_branch(problem, mode),
+    }
+}
+
 /// Confluent hypergeometric function 1F1(a; b; z).
 ///
 /// Also known as Kummer's function M(a, b, z).
@@ -438,6 +617,193 @@ fn complex_series_converged(term: Complex64, sum: Complex64, tol: f64) -> bool {
     term.abs() <= tol * sum.abs().max(1.0)
 }
 
+fn hyper_function_name(function: HypergeometricFunction) -> &'static str {
+    match function {
+        HypergeometricFunction::Hyp1f1 => "hyp1f1",
+        HypergeometricFunction::Hyp2f1 => "hyp2f1",
+    }
+}
+
+fn hyper_casp_decision(
+    branch: HypergeometricBranch,
+    problem: HyperCaspProblem,
+    max_terms: usize,
+    fallback_chain: &'static [HypergeometricBranch],
+    reason: &'static str,
+) -> HyperCaspDecision {
+    HyperCaspDecision {
+        branch,
+        precision_target: problem.precision_target,
+        max_terms,
+        parameter_stability_margin: problem.parameter_stability_margin,
+        fallback_chain,
+        reason,
+    }
+}
+
+fn select_hyp1f1_branch(problem: HyperCaspProblem) -> HyperCaspDecision {
+    if problem.z < -20.0 {
+        return hyper_casp_decision(
+            HypergeometricBranch::KummerTransform,
+            problem,
+            500,
+            HYP1F1_KUMMER_CHAIN,
+            "large negative z is evaluated through Kummer's transformation",
+        );
+    }
+
+    hyper_casp_decision(
+        HypergeometricBranch::DirectSeries,
+        problem,
+        500,
+        HYP1F1_DIRECT_CHAIN,
+        "moderate real 1F1 argument uses the direct power series",
+    )
+}
+
+fn select_hyp2f1_branch(
+    problem: HyperCaspProblem,
+    mode: RuntimeMode,
+) -> Result<HyperCaspDecision, SpecialError> {
+    let c = problem.c.ok_or(SpecialError {
+        function: "hyp2f1",
+        kind: SpecialErrorKind::DomainError,
+        mode,
+        detail: "2F1 CASP problem requires denominator parameter c",
+    })?;
+
+    if is_nonpositive_integer(problem.a) || is_nonpositive_integer(problem.b) {
+        return Ok(hyper_casp_decision(
+            HypergeometricBranch::TerminatingPolynomial,
+            problem,
+            500,
+            HYP2F1_TERMINATING_CHAIN,
+            "nonpositive-integer numerator parameter terminates the 2F1 series",
+        ));
+    }
+
+    if problem.z_abs < 1.0 {
+        return Ok(hyper_casp_decision(
+            HypergeometricBranch::DirectSeries,
+            problem,
+            500,
+            HYP2F1_DIRECT_CHAIN,
+            "argument inside the unit disk uses the direct 2F1 series",
+        ));
+    }
+
+    if (problem.z - 1.0).abs() < f64::EPSILON {
+        if c - problem.a - problem.b > 0.0 {
+            return Ok(hyper_casp_decision(
+                HypergeometricBranch::GaussSummation,
+                problem,
+                0,
+                HYP2F1_GAUSS_CHAIN,
+                "z = 1 with c - a - b > 0 uses Gauss summation",
+            ));
+        }
+
+        return Ok(hyper_casp_decision(
+            HypergeometricBranch::DivergentAtUnitArgument,
+            problem,
+            0,
+            HYP2F1_DIVERGENT_CHAIN,
+            "2F1 diverges at z = 1 when c <= a + b",
+        ));
+    }
+
+    if problem.z < 0.0 {
+        return Ok(hyper_casp_decision(
+            HypergeometricBranch::PfaffTransform,
+            problem,
+            500,
+            HYP2F1_PFAFF_CHAIN,
+            "negative real argument outside the unit disk uses the Pfaff transform",
+        ));
+    }
+
+    if problem.z > 1.0
+        && ((problem.b == c && is_integer(problem.a)) || (problem.a == c && is_integer(problem.b)))
+    {
+        return Ok(hyper_casp_decision(
+            HypergeometricBranch::LinearFractionalIdentity,
+            problem,
+            0,
+            HYP2F1_IDENTITY_CHAIN,
+            "z > 1 case reduces through a SciPy-compatible linear-fractional identity",
+        ));
+    }
+
+    Ok(hyper_casp_decision(
+        HypergeometricBranch::UnsupportedAnalyticContinuation,
+        problem,
+        0,
+        HYPER_UNSUPPORTED_CHAIN,
+        "2F1 analytic continuation for this real argument is not implemented",
+    ))
+}
+
+fn lower_parameter_stability_margin(x: f64) -> f64 {
+    if !x.is_finite() {
+        return f64::NAN;
+    }
+
+    if x > 0.0 {
+        return x;
+    }
+
+    let nearest = x.round();
+    if nearest <= 0.0 {
+        (x - nearest).abs()
+    } else {
+        x.abs()
+    }
+}
+
+fn guarded_hypergeometric_parameter(
+    function: &'static str,
+    mode: RuntimeMode,
+    detail: &'static str,
+) -> Result<f64, SpecialError> {
+    if mode == RuntimeMode::Hardened {
+        return Err(SpecialError {
+            function,
+            kind: SpecialErrorKind::PoleInput,
+            mode,
+            detail,
+        });
+    }
+    Ok(f64::NAN)
+}
+
+fn unsupported_hypergeometric_branch(
+    function: &'static str,
+    mode: RuntimeMode,
+    detail: &'static str,
+) -> Result<f64, SpecialError> {
+    if mode == RuntimeMode::Hardened {
+        return Err(SpecialError {
+            function,
+            kind: SpecialErrorKind::DomainError,
+            mode,
+            detail,
+        });
+    }
+    Ok(f64::NAN)
+}
+
+fn divergent_hyp2f1_at_unit_argument(mode: RuntimeMode) -> Result<f64, SpecialError> {
+    if mode == RuntimeMode::Hardened {
+        return Err(SpecialError {
+            function: "hyp2f1",
+            kind: SpecialErrorKind::DomainError,
+            mode,
+            detail: "2F1 diverges at z=1 when c <= a+b",
+        });
+    }
+    Ok(f64::INFINITY)
+}
+
 fn hyp0f1_complex_scalar(
     b: Complex64,
     z: Complex64,
@@ -683,13 +1049,26 @@ fn hyp1f1_scalar(a: f64, b: f64, z: f64, mode: RuntimeMode) -> Result<f64, Speci
         return Ok(z.exp());
     }
 
-    // For large negative z, use Kummer's transformation: M(a,b,z) = e^z M(b-a, b, -z)
-    if z < -20.0 {
-        let inner = hyp1f1_series(b - a, b, -z, mode)?;
-        return Ok(z.exp() * inner);
+    let decision = select_hypergeometric_branch(HyperCaspProblem::hyp1f1(a, b, z, 1.0e-14), mode)?;
+    match decision.branch {
+        HypergeometricBranch::KummerTransform => {
+            // M(a,b,z) = e^z M(b-a, b, -z)
+            let inner = hyp1f1_series(b - a, b, -z, mode)?;
+            Ok(z.exp() * inner)
+        }
+        HypergeometricBranch::DirectSeries => hyp1f1_series(a, b, z, mode),
+        HypergeometricBranch::ParameterGuard => {
+            guarded_hypergeometric_parameter("hyp1f1", mode, decision.reason)
+        }
+        HypergeometricBranch::UnsupportedAnalyticContinuation => {
+            unsupported_hypergeometric_branch("hyp1f1", mode, decision.reason)
+        }
+        _ => unsupported_hypergeometric_branch(
+            "hyp1f1",
+            mode,
+            "selected branch is not valid for 1F1",
+        ),
     }
-
-    hyp1f1_series(a, b, z, mode)
 }
 
 /// Direct series summation for 1F1.
@@ -841,65 +1220,41 @@ fn hyp2f1_scalar(a: f64, b: f64, c: f64, z: f64, mode: RuntimeMode) -> Result<f6
         return Ok(1.0);
     }
 
-    let terminates = is_nonpositive_integer(a) || is_nonpositive_integer(b);
-
-    // |z| must be < 1 for direct series convergence
-    // For |z| >= 1, use Euler's transformation: 2F1(a,b;c;z) = (1-z)^(c-a-b) 2F1(c-a, c-b; c; z)
-    // (valid when |z| < 1 after transformation)
-    if z.abs() < 1.0 || terminates {
-        return hyp2f1_series(a, b, c, z);
-    }
-
-    // z = 1: converges when c > a + b (Gauss sum)
-    if (z - 1.0).abs() < f64::EPSILON {
-        let cab = c - a - b;
-        if cab > 0.0 {
-            // 2F1(a,b;c;1) = Gamma(c)Gamma(c-a-b) / (Gamma(c-a)Gamma(c-b))
-            let result = gamma_ratio_for_hyp2f1(c, cab, c - a, c - b);
-            return Ok(result);
+    let decision =
+        select_hypergeometric_branch(HyperCaspProblem::hyp2f1(a, b, c, z, 1.0e-14), mode)?;
+    match decision.branch {
+        HypergeometricBranch::DirectSeries | HypergeometricBranch::TerminatingPolynomial => {
+            hyp2f1_series(a, b, c, z)
         }
-        if mode == RuntimeMode::Hardened {
-            return Err(SpecialError {
-                function: "hyp2f1",
-                kind: SpecialErrorKind::DomainError,
-                mode,
-                detail: "2F1 diverges at z=1 when c <= a+b",
-            });
+        HypergeometricBranch::GaussSummation => {
+            let cab = c - a - b;
+            Ok(gamma_ratio_for_hyp2f1(c, cab, c - a, c - b))
         }
-        return Ok(f64::INFINITY);
-    }
-
-    // For z < 0, use Pfaff transformation: 2F1(a,b;c;z) = (1-z)^(-a) 2F1(a, c-b; c; z/(z-1))
-    if z < 0.0 {
-        let z_new = z / (z - 1.0);
-        if z_new.abs() < 1.0 {
+        HypergeometricBranch::PfaffTransform => {
+            let z_new = z / (z - 1.0);
             let factor = (1.0 - z).powf(-a);
             let inner = hyp2f1_series(a, c - b, c, z_new)?;
-            return Ok(factor * inner);
+            Ok(factor * inner)
         }
+        HypergeometricBranch::LinearFractionalIdentity => {
+            if b == c && is_integer(a) {
+                return Ok((1.0 - z).powi(-(a as i32)));
+            }
+            Ok((1.0 - z).powi(-(b as i32)))
+        }
+        HypergeometricBranch::DivergentAtUnitArgument => divergent_hyp2f1_at_unit_argument(mode),
+        HypergeometricBranch::ParameterGuard => {
+            guarded_hypergeometric_parameter("hyp2f1", mode, decision.reason)
+        }
+        HypergeometricBranch::UnsupportedAnalyticContinuation => {
+            unsupported_hypergeometric_branch("hyp2f1", mode, decision.reason)
+        }
+        HypergeometricBranch::KummerTransform => unsupported_hypergeometric_branch(
+            "hyp2f1",
+            mode,
+            "selected branch is not valid for 2F1",
+        ),
     }
-
-    if z > 1.0 {
-        if b == c && is_integer(a) {
-            return Ok((1.0 - z).powi(-(a as i32)));
-        }
-        if a == c && is_integer(b) {
-            return Ok((1.0 - z).powi(-(b as i32)));
-        }
-
-        if mode == RuntimeMode::Hardened {
-            return Err(SpecialError {
-                function: "hyp2f1",
-                kind: SpecialErrorKind::DomainError,
-                mode,
-                detail: "2F1 analytic continuation for z > 1 is not implemented",
-            });
-        }
-        return Ok(f64::NAN);
-    }
-
-    // Fallback: direct series (may not converge for |z| >= 1)
-    hyp2f1_series(a, b, c, z)
 }
 
 /// Direct series summation for 2F1.
@@ -1145,6 +1500,100 @@ mod tests {
             actual.re,
             actual.im
         );
+    }
+
+    #[test]
+    fn hyper_casp_selects_direct_series_for_moderate_hyp1f1() {
+        let problem = HyperCaspProblem::hyp1f1(1.0, 2.0, 0.5, 1.0e-14);
+        let decision = select_hypergeometric_branch(problem, RuntimeMode::Strict).unwrap();
+
+        assert_eq!(decision.branch, HypergeometricBranch::DirectSeries);
+        assert_eq!(decision.max_terms, 500);
+        assert_eq!(decision.fallback_chain, HYP1F1_DIRECT_CHAIN);
+        assert!(decision.parameter_stability_margin > decision.precision_target);
+    }
+
+    #[test]
+    fn hyper_casp_selects_kummer_for_large_negative_hyp1f1() {
+        let problem = HyperCaspProblem::hyp1f1(1.0, 2.0, -30.0, 1.0e-14);
+        let decision = select_hypergeometric_branch(problem, RuntimeMode::Strict).unwrap();
+
+        assert_eq!(decision.branch, HypergeometricBranch::KummerTransform);
+        assert_eq!(decision.fallback_chain, HYP1F1_KUMMER_CHAIN);
+    }
+
+    #[test]
+    fn hyper_casp_guards_lower_parameter_near_pole() {
+        let problem = HyperCaspProblem::hyp1f1(1.0, 1.0e-16, 0.5, 1.0e-14);
+        let decision = select_hypergeometric_branch(problem, RuntimeMode::Strict).unwrap();
+
+        assert_eq!(decision.branch, HypergeometricBranch::ParameterGuard);
+        assert!(decision.parameter_stability_margin <= decision.precision_target);
+    }
+
+    #[test]
+    fn hyper_casp_selects_terminating_polynomial_for_hyp2f1() {
+        let problem = HyperCaspProblem::hyp2f1(-2.0, 1.0, 1.5, 2.0, 1.0e-14);
+        let decision = select_hypergeometric_branch(problem, RuntimeMode::Strict).unwrap();
+
+        assert_eq!(decision.branch, HypergeometricBranch::TerminatingPolynomial);
+        assert_eq!(decision.fallback_chain, HYP2F1_TERMINATING_CHAIN);
+    }
+
+    #[test]
+    fn hyper_casp_selects_direct_series_for_hyp2f1_inside_unit_disk() {
+        let problem = HyperCaspProblem::hyp2f1(1.0, 1.0, 2.0, 0.5, 1.0e-14);
+        let decision = select_hypergeometric_branch(problem, RuntimeMode::Strict).unwrap();
+
+        assert_eq!(decision.branch, HypergeometricBranch::DirectSeries);
+    }
+
+    #[test]
+    fn hyper_casp_selects_gauss_sum_at_unit_argument() {
+        let problem = HyperCaspProblem::hyp2f1(1.0, 1.0, 3.0, 1.0, 1.0e-14);
+        let decision = select_hypergeometric_branch(problem, RuntimeMode::Strict).unwrap();
+
+        assert_eq!(decision.branch, HypergeometricBranch::GaussSummation);
+        assert_eq!(decision.max_terms, 0);
+    }
+
+    #[test]
+    fn hyper_casp_selects_pfaff_for_negative_outside_unit_disk() {
+        let problem = HyperCaspProblem::hyp2f1(1.0, 1.0, 2.0, -2.0, 1.0e-14);
+        let decision = select_hypergeometric_branch(problem, RuntimeMode::Strict).unwrap();
+
+        assert_eq!(decision.branch, HypergeometricBranch::PfaffTransform);
+        assert_eq!(decision.fallback_chain, HYP2F1_PFAFF_CHAIN);
+    }
+
+    #[test]
+    fn hyper_casp_selects_identity_for_z_greater_than_one_reduction() {
+        let problem = HyperCaspProblem::hyp2f1(1.0, 1.0, 1.0, 1.5, 1.0e-14);
+        let decision = select_hypergeometric_branch(problem, RuntimeMode::Strict).unwrap();
+
+        assert_eq!(
+            decision.branch,
+            HypergeometricBranch::LinearFractionalIdentity
+        );
+    }
+
+    #[test]
+    fn hyper_casp_marks_generic_z_greater_than_one_unsupported() {
+        let problem = HyperCaspProblem::hyp2f1(1.0, 2.0, 3.0, 1.5, 1.0e-14);
+        let decision = select_hypergeometric_branch(problem, RuntimeMode::Strict).unwrap();
+
+        assert_eq!(
+            decision.branch,
+            HypergeometricBranch::UnsupportedAnalyticContinuation
+        );
+    }
+
+    #[test]
+    fn hyper_casp_hardened_rejects_nonfinite_inputs() {
+        let problem = HyperCaspProblem::hyp2f1(1.0, 2.0, 3.0, f64::NAN, 1.0e-14);
+        let err = select_hypergeometric_branch(problem, RuntimeMode::Hardened).unwrap_err();
+
+        assert_eq!(err.kind, SpecialErrorKind::NonFiniteInput);
     }
 
     // ── hyp0f1 tests ────────────────────────────────────────────────

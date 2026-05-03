@@ -228,7 +228,10 @@ pub use gamma::{
     gammaincc_scalar, gammaln, gammaln_scalar, gdtr, gdtrc, gdtria, gdtrib, gdtrix, multigammaln,
     pdtr, pdtrc, pdtri, pdtrik, perm, polygamma, rgamma, zeta, zetac,
 };
-pub use hyper::{HYPER_DISPATCH_PLAN, hyp0f1, hyp0f1_scalar, hyp1f1, hyp2f1};
+pub use hyper::{
+    HYPER_DISPATCH_PLAN, HyperCaspDecision, HyperCaspProblem, HypergeometricBranch,
+    HypergeometricFunction, hyp0f1, hyp0f1_scalar, hyp1f1, hyp2f1, select_hypergeometric_branch,
+};
 pub use orthopoly::{
     eval_chebyt, eval_chebyu, eval_gegenbauer, eval_genlaguerre, eval_hermite, eval_hermitenorm,
     eval_jacobi, eval_laguerre, eval_legendre, eval_sh_chebyt, eval_sh_chebyu, eval_sh_legendre,
