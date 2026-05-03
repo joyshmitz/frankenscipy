@@ -406,6 +406,7 @@ dependencies = [
  "arbitrary",
  "fsci-cluster",
  "fsci-conformance",
+ "fsci-datasets",
  "fsci-fft",
  "fsci-integrate",
  "fsci-interpolate",
@@ -470,6 +471,10 @@ dependencies = [
 
 [[package]]
 name = "fsci-constants"
+version = "0.1.0"
+
+[[package]]
+name = "fsci-datasets"
 version = "0.1.0"
 
 [[package]]

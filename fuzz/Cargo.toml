@@ -11,6 +11,7 @@ cargo-fuzz = true
 arbitrary = { version = "1.4.2", features = ["derive"] }
 fsci-cluster = { path = "../crates/fsci-cluster" }
 fsci-conformance = { path = "../crates/fsci-conformance", default-features = false }
+fsci-datasets = { path = "../crates/fsci-datasets" }
 fsci-fft = { path = "../crates/fsci-fft" }
 fsci-integrate = { path = "../crates/fsci-integrate" }
 fsci-interpolate = { path = "../crates/fsci-interpolate" }
@@ -214,6 +215,13 @@ bench = false
 [[bin]]
 name = "p2c017_io_wav_read"
 path = "fuzz_targets/p2c017_io_wav_read.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "p2c019_datasets_loaders"
+path = "fuzz_targets/p2c019_datasets_loaders.rs"
 test = false
 doc = false
 bench = false

@@ -19,6 +19,7 @@ members = [
   "crates/fsci-arrayapi",
   "crates/fsci-conformance",
   "crates/fsci-runtime",
+  "crates/fsci-datasets",
 ]
 
 [workspace.package]
@@ -34,6 +35,7 @@ fsci-arrayapi = { path = "crates/fsci-arrayapi" }
 fsci-cluster = { path = "crates/fsci-cluster" }
 fsci-conformance = { path = "crates/fsci-conformance" }
 fsci-constants = { path = "crates/fsci-constants" }
+fsci-datasets = { path = "crates/fsci-datasets" }
 fsci-fft = { path = "crates/fsci-fft" }
 fsci-integrate = { path = "crates/fsci-integrate" }
 fsci-interpolate = { path = "crates/fsci-interpolate" }

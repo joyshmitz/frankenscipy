@@ -671,6 +671,10 @@ name = "fsci-constants"
 version = "0.1.0"
 
 [[package]]
+name = "fsci-datasets"
+version = "0.1.0"
+
+[[package]]
 name = "fsci-fft"
 version = "0.1.0"
 dependencies = [
