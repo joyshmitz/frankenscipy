@@ -8,8 +8,24 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use crate::mode::RuntimeMode;
-use crate::policy::{PolicyAction, RiskState};
+use crate::policy::{PolicyAction, RiskState, decision_loss_matrix};
 use crate::signals::DecisionSignals;
+
+/// Spec §6 decision-theory record with every model input and output surfaced.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AlienArtifactDecision {
+    pub state_space: [RiskState; 3],
+    pub state: RiskState,
+    pub evidence: DecisionSignals,
+    pub logits: [f64; 3],
+    pub loss_matrix: [[f64; 3]; 3],
+    pub posterior: [f64; 3],
+    pub expected_losses: [f64; 3],
+    pub action: PolicyAction,
+    pub confidence: f64,
+    pub calibration_fallback_trigger: bool,
+    pub reason: String,
+}
 
 /// Complete record of a single policy decision for audit/forensic analysis.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -22,6 +38,37 @@ pub struct DecisionEvidenceEntry {
     pub action: PolicyAction,
     pub top_state: RiskState,
     pub reason: String,
+}
+
+impl DecisionEvidenceEntry {
+    #[must_use]
+    pub fn confidence(&self) -> f64 {
+        self.posterior[self.top_state.index()]
+    }
+
+    #[must_use]
+    pub fn calibration_fallback_trigger(&self) -> bool {
+        !self.signals.is_finite()
+            || (self.action == PolicyAction::FailClosed
+                && self.top_state == RiskState::IncompatibleMetadata)
+    }
+
+    #[must_use]
+    pub fn alien_artifact_decision(&self) -> AlienArtifactDecision {
+        AlienArtifactDecision {
+            state_space: RiskState::ALL,
+            state: self.top_state,
+            evidence: self.signals,
+            logits: self.logits,
+            loss_matrix: decision_loss_matrix(self.mode),
+            posterior: self.posterior,
+            expected_losses: self.expected_losses,
+            action: self.action,
+            confidence: self.confidence(),
+            calibration_fallback_trigger: self.calibration_fallback_trigger(),
+            reason: self.reason.clone(),
+        }
+    }
 }
 
 /// Bounded FIFO evidence buffer recording all policy decisions.
@@ -66,6 +113,34 @@ impl PolicyEvidenceLedger {
     #[must_use]
     pub fn latest(&self) -> Option<&DecisionEvidenceEntry> {
         self.entries.back()
+    }
+
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &DecisionEvidenceEntry> {
+        self.entries.iter()
+    }
+
+    #[must_use]
+    pub fn alien_artifact_decisions(&self) -> Vec<AlienArtifactDecision> {
+        self.entries
+            .iter()
+            .map(DecisionEvidenceEntry::alien_artifact_decision)
+            .collect()
+    }
+
+    #[must_use]
+    pub fn latest_alien_artifact_decision(&self) -> Option<AlienArtifactDecision> {
+        self.latest()
+            .map(DecisionEvidenceEntry::alien_artifact_decision)
+    }
+
+    /// Serialize Spec §6 decision records as JSONL for audit artifacts.
+    #[must_use]
+    pub fn to_alien_artifact_jsonl(&self) -> String {
+        self.entries
+            .iter()
+            .filter_map(|entry| serde_json::to_string(&entry.alien_artifact_decision()).ok())
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     #[must_use]
@@ -262,5 +337,63 @@ mod tests {
             }
         }
         assert_eq!(event.outcome, "recovered");
+    }
+
+    #[test]
+    fn alien_artifact_decision_surfaces_spec_fields() {
+        let entry = DecisionEvidenceEntry {
+            mode: RuntimeMode::Strict,
+            signals: DecisionSignals::new(8.0, 0.4, 0.2),
+            logits: [1.0, 0.5, -1.0],
+            posterior: [0.6, 0.3, 0.1],
+            expected_losses: [39.5, 14.0, 31.6],
+            action: PolicyAction::FullValidate,
+            top_state: RiskState::Compatible,
+            reason: String::from("test"),
+        };
+
+        let decision = entry.alien_artifact_decision();
+
+        assert_eq!(decision.state_space, RiskState::ALL);
+        assert_eq!(decision.state, RiskState::Compatible);
+        assert_eq!(decision.evidence, entry.signals);
+        assert_eq!(
+            decision.loss_matrix,
+            decision_loss_matrix(RuntimeMode::Strict)
+        );
+        assert_eq!(decision.posterior, entry.posterior);
+        assert_eq!(decision.action, PolicyAction::FullValidate);
+        assert_eq!(decision.confidence, 0.6);
+        assert!(!decision.calibration_fallback_trigger);
+    }
+
+    #[test]
+    fn policy_evidence_ledger_emits_alien_artifact_jsonl() {
+        let mut ledger = PolicyEvidenceLedger::new(2);
+        ledger.record(DecisionEvidenceEntry {
+            mode: RuntimeMode::Hardened,
+            signals: DecisionSignals::new(f64::NAN, 0.0, 0.0),
+            logits: [-1.0e30, -1.0e30, 0.0],
+            posterior: [0.0, 0.0, 1.0],
+            expected_losses: [180.0, 60.0, 1.0],
+            action: PolicyAction::FailClosed,
+            top_state: RiskState::IncompatibleMetadata,
+            reason: String::from("non_finite_signals=true"),
+        });
+
+        let latest = ledger
+            .latest_alien_artifact_decision()
+            .expect("latest decision");
+        assert_eq!(latest.confidence, 1.0);
+        assert!(latest.calibration_fallback_trigger);
+
+        let jsonl = ledger.to_alien_artifact_jsonl();
+        let parsed =
+            serde_json::from_str::<serde_json::Value>(&jsonl).expect("valid JSONL decision");
+        assert!(parsed.get("state_space").is_some());
+        assert!(parsed.get("evidence").is_some());
+        assert!(parsed.get("loss_matrix").is_some());
+        assert_eq!(parsed["confidence"], 1.0);
+        assert_eq!(parsed["calibration_fallback_trigger"], true);
     }
 }

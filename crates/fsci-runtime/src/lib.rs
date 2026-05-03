@@ -19,11 +19,11 @@ pub mod signals;
 
 // ── Re-exports: preserve the flat public API ────────────────────────
 pub use evidence::{
-    AuditAction, AuditEvent, AuditLedger, DecisionEvidenceEntry, PolicyEvidenceLedger,
-    SharedAuditLedger, SyncSharedAuditLedger,
+    AlienArtifactDecision, AuditAction, AuditEvent, AuditLedger, DecisionEvidenceEntry,
+    PolicyEvidenceLedger, SharedAuditLedger, SyncSharedAuditLedger,
 };
 pub use mode::RuntimeMode;
-pub use policy::{PolicyAction, PolicyController, PolicyDecision, RiskState};
+pub use policy::{PolicyAction, PolicyController, PolicyDecision, RiskState, decision_loss_matrix};
 pub use signals::{DecisionSignals, SignalSequence};
 
 use std::collections::VecDeque;

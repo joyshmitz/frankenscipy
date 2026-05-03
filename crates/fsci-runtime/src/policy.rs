@@ -34,6 +34,15 @@ impl RiskState {
         Self::IllConditioned,
         Self::IncompatibleMetadata,
     ];
+
+    #[must_use]
+    pub const fn index(self) -> usize {
+        match self {
+            Self::Compatible => 0,
+            Self::IllConditioned => 1,
+            Self::IncompatibleMetadata => 2,
+        }
+    }
 }
 
 /// Actions available to the policy controller.
@@ -186,7 +195,8 @@ pub(crate) fn softmax(logits: [f64; 3]) -> [f64; 3] {
     exps.map(|v| v / denom)
 }
 
-pub(crate) fn loss_matrix(mode: RuntimeMode) -> [[f64; 3]; 3] {
+#[must_use]
+pub const fn decision_loss_matrix(mode: RuntimeMode) -> [[f64; 3]; 3] {
     match mode {
         RuntimeMode::Strict => [[0.0, 65.0, 200.0], [8.0, 4.0, 80.0], [40.0, 25.0, 1.0]],
         RuntimeMode::Hardened => [[0.0, 50.0, 180.0], [5.0, 3.0, 60.0], [55.0, 30.0, 1.0]],
@@ -194,7 +204,7 @@ pub(crate) fn loss_matrix(mode: RuntimeMode) -> [[f64; 3]; 3] {
 }
 
 pub(crate) fn expected_loss(mode: RuntimeMode, posterior: [f64; 3]) -> [f64; 3] {
-    let matrix = loss_matrix(mode);
+    let matrix = decision_loss_matrix(mode);
     let mut losses = [0.0; 3];
     for (row_idx, row) in matrix.iter().enumerate() {
         losses[row_idx] = row
