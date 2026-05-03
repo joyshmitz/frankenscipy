@@ -1724,6 +1724,106 @@ fn parse_hb_real_stream(lines: &[&str], expected: usize, ctx: &str) -> Result<Ve
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Fortran sequential unformatted binary records
+// ══════════════════════════════════════════════════════════════════════
+
+/// Endianness of the i32 length-marker words framing each record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FortranEndian {
+    Little,
+    Big,
+}
+
+/// Read a Fortran sequential unformatted file.
+///
+/// Each record on disk is framed as `<len:i32><payload:len><len:i32>` with
+/// the leading and trailing length words matching. Returns the concatenated
+/// list of payloads in order. Matches the most common subset of
+/// `scipy.io.FortranFile.read_record()` driven across the whole file.
+///
+/// Errors:
+/// - `InvalidFormat` if a record header is truncated or the trailing length
+///   does not match the leading length.
+/// - `InvalidFormat` if the input contains trailing bytes that do not form
+///   a complete record.
+pub fn read_fortran_unformatted(
+    bytes: &[u8],
+    endian: FortranEndian,
+) -> Result<Vec<Vec<u8>>, IoError> {
+    let mut records = Vec::new();
+    let mut cursor = 0usize;
+    while cursor < bytes.len() {
+        let header_end = cursor.checked_add(4).ok_or_else(|| {
+            IoError::InvalidFormat("Fortran record offset overflow".to_string())
+        })?;
+        if header_end > bytes.len() {
+            return Err(IoError::InvalidFormat(format!(
+                "Fortran record at offset {cursor}: header truncated ({} bytes remaining)",
+                bytes.len() - cursor
+            )));
+        }
+        let header_bytes: [u8; 4] = bytes[cursor..header_end]
+            .try_into()
+            .expect("4-byte slice");
+        let length = match endian {
+            FortranEndian::Little => i32::from_le_bytes(header_bytes),
+            FortranEndian::Big => i32::from_be_bytes(header_bytes),
+        };
+        if length < 0 {
+            return Err(IoError::InvalidFormat(format!(
+                "Fortran record at offset {cursor}: negative length {length}"
+            )));
+        }
+        let length = length as usize;
+        let payload_end = header_end
+            .checked_add(length)
+            .ok_or_else(|| IoError::InvalidFormat("Fortran payload offset overflow".into()))?;
+        let trailer_end = payload_end
+            .checked_add(4)
+            .ok_or_else(|| IoError::InvalidFormat("Fortran trailer offset overflow".into()))?;
+        if trailer_end > bytes.len() {
+            return Err(IoError::InvalidFormat(format!(
+                "Fortran record at offset {cursor}: payload+trailer truncated \
+                 (need {trailer_end}, have {})",
+                bytes.len()
+            )));
+        }
+        let payload = bytes[header_end..payload_end].to_vec();
+        let trailer_bytes: [u8; 4] = bytes[payload_end..trailer_end]
+            .try_into()
+            .expect("4-byte slice");
+        let trailer = match endian {
+            FortranEndian::Little => i32::from_le_bytes(trailer_bytes),
+            FortranEndian::Big => i32::from_be_bytes(trailer_bytes),
+        };
+        if trailer as usize != length {
+            return Err(IoError::InvalidFormat(format!(
+                "Fortran record at offset {cursor}: header length {length} does not match \
+                 trailer {trailer}"
+            )));
+        }
+        records.push(payload);
+        cursor = trailer_end;
+    }
+    Ok(records)
+}
+
+/// Frame a payload with the Fortran sequential unformatted header+trailer.
+/// Useful for building fixtures and for round-trip tests.
+pub fn write_fortran_record(payload: &[u8], endian: FortranEndian) -> Vec<u8> {
+    let length = payload.len() as i32;
+    let length_bytes = match endian {
+        FortranEndian::Little => length.to_le_bytes(),
+        FortranEndian::Big => length.to_be_bytes(),
+    };
+    let mut out = Vec::with_capacity(payload.len() + 8);
+    out.extend_from_slice(&length_bytes);
+    out.extend_from_slice(payload);
+    out.extend_from_slice(&length_bytes);
+    out
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // ARFF (Weka attribute-relation file format)
 // ══════════════════════════════════════════════════════════════════════
 
@@ -3143,5 +3243,84 @@ mod tests {
                     z\n";
         let err = read_arff(arff).expect_err("z not in {a,b}");
         assert!(matches!(err, IoError::InvalidFormat(_)));
+    }
+
+    #[test]
+    fn fortran_roundtrip_two_little_endian_records() {
+        let r1 = b"hello".to_vec();
+        let r2 = b"world!".to_vec();
+        let mut bytes = write_fortran_record(&r1, FortranEndian::Little);
+        bytes.extend(write_fortran_record(&r2, FortranEndian::Little));
+        let parsed =
+            read_fortran_unformatted(&bytes, FortranEndian::Little).expect("two records");
+        assert_eq!(parsed, vec![r1, r2]);
+    }
+
+    #[test]
+    fn fortran_roundtrip_big_endian() {
+        let payload = vec![0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0xFF];
+        let bytes = write_fortran_record(&payload, FortranEndian::Big);
+        let parsed = read_fortran_unformatted(&bytes, FortranEndian::Big).expect("BE record");
+        assert_eq!(parsed, vec![payload.clone()]);
+        // Reading the same bytes with the wrong endian must fail at the
+        // length-mismatch check (or report a header far larger than the
+        // input).
+        let err = read_fortran_unformatted(&bytes, FortranEndian::Little)
+            .expect_err("wrong endian must fail");
+        assert!(matches!(err, IoError::InvalidFormat(_)));
+    }
+
+    #[test]
+    fn fortran_metamorphic_record_count_invariant() {
+        // For any sequence of payloads, the number of decoded records equals
+        // the number we framed.
+        let payloads: Vec<Vec<u8>> = (1..=5).map(|i| vec![i as u8; i * 3]).collect();
+        let mut bytes = Vec::new();
+        for p in &payloads {
+            bytes.extend(write_fortran_record(p, FortranEndian::Little));
+        }
+        let parsed = read_fortran_unformatted(&bytes, FortranEndian::Little).unwrap();
+        assert_eq!(parsed.len(), payloads.len());
+        for (orig, got) in payloads.iter().zip(parsed.iter()) {
+            assert_eq!(orig, got);
+        }
+    }
+
+    #[test]
+    fn fortran_rejects_truncated_payload() {
+        let mut bytes = write_fortran_record(b"abcdef", FortranEndian::Little);
+        bytes.truncate(bytes.len() - 4); // drop the trailer + 1
+        let err = read_fortran_unformatted(&bytes, FortranEndian::Little)
+            .expect_err("truncated must fail");
+        assert!(matches!(err, IoError::InvalidFormat(_)));
+    }
+
+    #[test]
+    fn fortran_rejects_length_mismatch() {
+        // Hand-craft a record whose trailer disagrees with the header.
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&5_i32.to_le_bytes());
+        bytes.extend_from_slice(b"hello");
+        bytes.extend_from_slice(&7_i32.to_le_bytes()); // wrong trailer
+        let err = read_fortran_unformatted(&bytes, FortranEndian::Little)
+            .expect_err("trailer mismatch must fail");
+        match err {
+            IoError::InvalidFormat(msg) => assert!(msg.contains("trailer"), "{msg}"),
+            _ => panic!("wrong error: {err:?}"),
+        }
+    }
+
+    #[test]
+    fn fortran_empty_input_produces_no_records() {
+        let parsed = read_fortran_unformatted(&[], FortranEndian::Little).unwrap();
+        assert!(parsed.is_empty());
+    }
+
+    #[test]
+    fn fortran_zero_length_record_is_supported() {
+        let bytes = write_fortran_record(&[], FortranEndian::Little);
+        let parsed = read_fortran_unformatted(&bytes, FortranEndian::Little).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert!(parsed[0].is_empty());
     }
 }
