@@ -985,7 +985,7 @@ fn e2e_p2c002_11_large_solve_500x500() {
 
 // ══════════════════ DECOMPOSITION CONFORMANCE ══════════════════
 
-/// Scenario 12: LU decomposition - verify P @ A = L @ U
+/// Scenario 12: LU decomposition - verify A = P @ L @ U
 #[test]
 fn e2e_p2c002_12_lu_decomposition() {
     let mut r = ScenarioRunner::new("p2c002_12_lu_decomposition");
@@ -1011,21 +1011,19 @@ fn e2e_p2c002_12_lu_decomposition() {
     );
 
     r.record_step(
-        "verify_pa_equals_lu",
-        "P @ A == L @ U",
+        "verify_a_equals_plu",
+        "A == P @ L @ U",
         "fundamental LU identity",
         "strict",
         || {
             let res = lu_result.as_ref().unwrap();
-            // Compute P @ A
-            let pa = mat_mul(&res.p, &a);
-            // Compute L @ U
             let lu_prod = mat_mul(&res.l, &res.u);
-            let max_diff = max_abs_diff_matrix(&pa, &lu_prod);
+            let plu = mat_mul(&res.p, &lu_prod);
+            let max_diff = max_abs_diff_matrix(&a, &plu);
             if max_diff < 1e-12 {
-                Ok(format!("PA == LU verified: max_diff={max_diff:.2e}"))
+                Ok(format!("A == PLU verified: max_diff={max_diff:.2e}"))
             } else {
-                Err(format!("PA != LU: max_diff={max_diff:.2e}"))
+                Err(format!("A != PLU: max_diff={max_diff:.2e}"))
             }
         },
     );
