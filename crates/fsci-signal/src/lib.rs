@@ -2394,7 +2394,7 @@ pub fn group_delay_from_ba(b: &[f64], a: &[f64], n_freqs: usize) -> (Vec<f64>, V
 
 /// Compute the magnitude response of a digital filter.
 ///
-/// Returns (frequencies, magnitudes_db).
+/// Returns (frequencies, magnitudes).
 pub fn magnitude_response(b: &[f64], a: &[f64], n_freqs: usize) -> (Vec<f64>, Vec<f64>) {
     let mut freqs = Vec::with_capacity(n_freqs);
     let mut mags = Vec::with_capacity(n_freqs);
@@ -2425,11 +2425,7 @@ pub fn magnitude_response(b: &[f64], a: &[f64], n_freqs: usize) -> (Vec<f64>, Ve
             0.0
         };
 
-        mags.push(if mag > 0.0 {
-            20.0 * mag.log10()
-        } else {
-            f64::NEG_INFINITY
-        });
+        mags.push(mag);
     }
 
     (freqs, mags)
@@ -10869,6 +10865,19 @@ mod tests {
         assert_eq!(result.h_mag.len(), 64);
         for (i, &mag) in result.h_mag.iter().enumerate() {
             assert_close(mag, 1.0, 1e-12, &format!("unity mag at bin {i}"));
+        }
+    }
+
+    #[test]
+    fn magnitude_response_reports_linear_gain() {
+        let (_, unity) = magnitude_response(&[1.0], &[1.0], 8);
+        for (i, &mag) in unity.iter().enumerate() {
+            assert_close(mag, 1.0, 1e-12, &format!("unity magnitude at bin {i}"));
+        }
+
+        let (_, two_times) = magnitude_response(&[2.0], &[1.0], 8);
+        for (i, &mag) in two_times.iter().enumerate() {
+            assert_close(mag, 2.0, 1e-12, &format!("two-times magnitude at bin {i}"));
         }
     }
 

@@ -8,13 +8,13 @@
 use fsci_signal::{
     ConvolveMode, FilterType, FindPeaksOptions, argrelmax, argrelmin, autocorrelation, bartlett,
     bessel as iir_bessel, blackman, boxcar, butter, cheby1, convolve, correlate, cwt, deconvolve,
-    deemphasis, downsample, exponential_smooth, fftconvolve, filtfilt,
-    find_peaks, freqz, gaussian, group_delay_from_ba, hamming, hann, hilbert, hilbert_envelope,
-    iirnotch, iirpeak, impulse_response, kaiser, lanczos, lfilter, magnitude_response,
-    matched_filter, max_len_seq, medfilt1, morlet, normalize_signal, parzen, peak_to_peak,
-    phase_response, preemphasis, resample, ricker, rms, savgol_filter, signal_energy, sos2tf,
-    sosfilt, sosfiltfilt, spectral_centroid, step_response, sweep_poly, tf2sos, tf2zpk, triang,
-    unwrap_phase, upsample, xcorr_coefficient, zero_crossing_rate, zpk2tf,
+    deemphasis, downsample, exponential_smooth, fftconvolve, filtfilt, find_peaks, freqz, gaussian,
+    group_delay_from_ba, hamming, hann, hilbert, hilbert_envelope, iirnotch, iirpeak,
+    impulse_response, kaiser, lanczos, lfilter, magnitude_response, matched_filter, max_len_seq,
+    medfilt1, morlet, normalize_signal, parzen, peak_to_peak, phase_response, preemphasis,
+    resample, ricker, rms, savgol_filter, signal_energy, sos2tf, sosfilt, sosfiltfilt,
+    spectral_centroid, step_response, sweep_poly, tf2sos, tf2zpk, triang, unwrap_phase, upsample,
+    xcorr_coefficient, zero_crossing_rate, zpk2tf,
 };
 
 const ATOL: f64 = 1e-9;
@@ -129,10 +129,7 @@ fn mr_filtfilt_preserves_constant() {
     let out = filtfilt(&b, &a, &x).unwrap();
     assert_eq!(out.len(), n);
     for (i, &v) in out.iter().enumerate() {
-        assert!(
-            close(v, 3.7),
-            "MR6 filtfilt changed constant at i={i}: {v}"
-        );
+        assert!(close(v, 3.7), "MR6 filtfilt changed constant at i={i}: {v}");
     }
 }
 
@@ -407,7 +404,9 @@ fn mr_zero_crossing_rate_constant_vs_alternator() {
         zcr_const.abs() < 1e-12,
         "MR18 zcr(constant) = {zcr_const}, expected 0"
     );
-    let alt: Vec<f64> = (0..32).map(|i| if i % 2 == 0 { 1.0 } else { -1.0 }).collect();
+    let alt: Vec<f64> = (0..32)
+        .map(|i| if i % 2 == 0 { 1.0 } else { -1.0 })
+        .collect();
     let zcr_alt = zero_crossing_rate(&alt);
     assert!(
         zcr_alt > 0.0,
@@ -752,11 +751,7 @@ fn mr_downsample_upsample_lengths() {
     let x: Vec<f64> = (0..16).map(|i| i as f64).collect();
     for &k in &[2usize, 4, 8] {
         let d = downsample(&x, k);
-        assert_eq!(
-            d.len(),
-            x.len().div_ceil(k),
-            "MR33 downsample length k={k}"
-        );
+        assert_eq!(d.len(), x.len().div_ceil(k), "MR33 downsample length k={k}");
         let u = upsample(&x, k);
         assert_eq!(u.len(), x.len() * k, "MR33 upsample length k={k}");
     }
@@ -792,7 +787,9 @@ fn mr_xcorr_coefficient_self_is_one() {
     let xs: &[Vec<f64>] = &[
         vec![1.0, 2.0, 3.0, 4.0, 5.0],
         (0..16).map(|i| (i as f64 * 0.5).sin()).collect(),
-        (0..32).map(|i| if i % 2 == 0 { 1.0 } else { -1.0 }).collect(),
+        (0..32)
+            .map(|i| if i % 2 == 0 { 1.0 } else { -1.0 })
+            .collect(),
     ];
     for x in xs {
         let c = xcorr_coefficient(x, x);
@@ -896,16 +893,10 @@ fn mr_freqz_finite_response() {
     let resp = freqz(&r.b, &r.a, Some(64)).unwrap();
     assert_eq!(resp.h_mag.len(), 64, "MR40 freqz length");
     for (k, &m) in resp.h_mag.iter().enumerate() {
-        assert!(
-            m.is_finite() && m >= -1e-12,
-            "MR40 freqz h_mag[{k}] = {m}"
-        );
+        assert!(m.is_finite() && m >= -1e-12, "MR40 freqz h_mag[{k}] = {m}");
     }
     for (k, &p) in resp.h_phase.iter().enumerate() {
-        assert!(
-            p.is_finite(),
-            "MR40 freqz h_phase[{k}] = {p}"
-        );
+        assert!(p.is_finite(), "MR40 freqz h_phase[{k}] = {p}");
     }
 }
 
@@ -945,7 +936,9 @@ fn mr_iirnotch_iirpeak_finite() {
 #[test]
 fn mr_savgol_filter_polynomial_exactness() {
     // p(x) = 2x² - 0.5x + 1 sampled at uniform x.
-    let x: Vec<f64> = (0..32).map(|i| 2.0 * (i as f64).powi(2) - 0.5 * i as f64 + 1.0).collect();
+    let x: Vec<f64> = (0..32)
+        .map(|i| 2.0 * (i as f64).powi(2) - 0.5 * i as f64 + 1.0)
+        .collect();
     let y = savgol_filter(&x, 7, 2).unwrap();
     // Check interior (skip first/last few samples affected by boundary).
     for i in 5..(x.len() - 5) {
@@ -1021,11 +1014,7 @@ fn mr_unwrap_phase_preserves_length() {
         .map(|i| ((i as f64 * 0.5).sin() * 4.0).rem_euclid(2.0 * std::f64::consts::PI))
         .collect();
     let unwrapped = unwrap_phase(&phase);
-    assert_eq!(
-        unwrapped.len(),
-        phase.len(),
-        "MR46 unwrap_phase length"
-    );
+    assert_eq!(unwrapped.len(), phase.len(), "MR46 unwrap_phase length");
     for &v in &unwrapped {
         assert!(v.is_finite(), "MR46 unwrap_phase non-finite");
     }
@@ -1058,10 +1047,7 @@ fn mr_medfilt1_preserves_length_and_constant() {
     let c = vec![5.5_f64; 16];
     let yc = medfilt1(&c, 3);
     for &v in &yc {
-        assert!(
-            (v - 5.5).abs() < 1e-12,
-            "MR48 medfilt1(const)[{v}] != 5.5"
-        );
+        assert!((v - 5.5).abs() < 1e-12, "MR48 medfilt1(const)[{v}] != 5.5");
     }
 }
 
@@ -1130,10 +1116,7 @@ fn mr_matched_filter_peak_position() {
         .enumerate()
         .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
         .unwrap();
-    assert!(
-        peak_val > 0.0,
-        "MR51 matched_filter peak = {peak_val} ≤ 0"
-    );
+    assert!(peak_val > 0.0, "MR51 matched_filter peak = {peak_val} ≤ 0");
     // Peak should land near the embedding (offset 5..8 in 16-sample signal,
     // depending on filter convention — start of match or end of match).
     assert!(
@@ -1224,9 +1207,8 @@ fn mr_group_delay_finite() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// MR56 — magnitude_response returns a finite vector of the requested
-// length. (Negativity tolerance is wider than expected — see bead
-// `frankenscipy-signal-mag-neg` for the underlying defect.)
+// MR56 — magnitude_response returns a finite linear-magnitude vector of
+// the requested length.
 // ─────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -1236,10 +1218,7 @@ fn mr_magnitude_response_length_and_finite() {
     assert_eq!(w.len(), 64, "MR56 magnitude_response w length");
     assert_eq!(mag.len(), 64, "MR56 magnitude_response length");
     for (i, &m) in mag.iter().enumerate() {
-        assert!(
-            m.is_finite(),
-            "MR56 |H|[{i}] = {m} non-finite"
-        );
+        assert!(m.is_finite(), "MR56 |H|[{i}] = {m} non-finite");
     }
 }
 
@@ -1301,6 +1280,3 @@ fn mr_phase_response_finite() {
         assert!(p.is_finite(), "MR59 phase[{i}] = {p}");
     }
 }
-
-
-
