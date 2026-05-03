@@ -2744,6 +2744,61 @@ pub fn zeta_scalar(s: f64) -> f64 {
     crate::gamma::zeta(s)
 }
 
+/// Compute `x.powf(y) - 1` with extra accuracy near `x^y == 1`.
+///
+/// Matches `scipy.special.powm1`. The naive `x.powf(y) - 1` loses precision
+/// catastrophically when `y * ln(x)` is small; this implementation uses
+/// `expm1(y * ln(x))` which preserves the leading-order term.
+///
+/// Edge cases:
+/// - `x == 1` or `y == 0`: returns `0.0` exactly (no expm1 cancellation).
+/// - `x < 0`: returns NaN unless `y` is an integer; non-integer fractional
+///   powers of negatives are not real-valued and scipy's powm1 surfaces NaN
+///   the same way.
+/// - `x == 0` and `y > 0`: returns `-1.0`.
+/// - `x == 0` and `y <= 0`: NaN (limit is undefined / +∞).
+/// - any non-finite input: propagates the standard f64 powf result minus 1
+///   so behavior at ±∞ matches the IEEE convention.
+pub fn powm1_scalar(x: f64, y: f64) -> f64 {
+    if x.is_nan() || y.is_nan() {
+        return f64::NAN;
+    }
+    if x == 1.0 || y == 0.0 {
+        return 0.0;
+    }
+    if x == 0.0 {
+        if y > 0.0 {
+            return -1.0;
+        }
+        return f64::NAN;
+    }
+    if x < 0.0 {
+        // Integer y is well-defined; otherwise the result isn't real.
+        if y.fract() == 0.0 && y.is_finite() {
+            return x.powf(y) - 1.0;
+        }
+        return f64::NAN;
+    }
+    if !x.is_finite() || !y.is_finite() {
+        return x.powf(y) - 1.0;
+    }
+    (y * x.ln()).exp_m1()
+}
+
+/// Compute `cos(x) - 1` with extra accuracy near `x == 0`.
+///
+/// Matches `scipy.special.cosm1`. The naive `cos(x) - 1` loses up to 16 bits
+/// of precision when `x` is near a multiple of 2π; this implementation uses
+/// the half-angle identity `cos(x) - 1 = -2 sin(x/2)^2` which has no
+/// catastrophic cancellation.
+pub fn cosm1_scalar(x: f64) -> f64 {
+    if x.is_nan() {
+        return f64::NAN;
+    }
+    let s = (x * 0.5).sin();
+    -2.0 * s * s
+}
+
 /// Arithmetic-geometric mean of two positive numbers.
 pub fn agm(a: f64, b: f64) -> f64 {
     if a <= 0.0 || b <= 0.0 {
@@ -7597,5 +7652,83 @@ mod tests {
             "wrightomega vector lane matches scalar",
         );
         Ok(())
+    }
+
+    #[test]
+    fn powm1_scalar_matches_naive_at_large_y_log_x() {
+        // Where y * ln(x) is large, both formulations agree.
+        for &x in &[2.0, 10.0, 100.0] {
+            for &y in &[1.0, 2.5, 10.0] {
+                let pm1 = powm1_scalar(x, y);
+                let naive = x.powf(y) - 1.0;
+                let rel = (pm1 - naive).abs() / naive.abs().max(1.0);
+                assert!(rel < 1e-12, "powm1({x},{y})={pm1} vs naive={naive}");
+            }
+        }
+    }
+
+    #[test]
+    fn powm1_scalar_metamorphic_beats_naive_near_one() {
+        // For x.powf(y) ≈ 1 + ε with ε tiny, naive subtraction loses bits.
+        // powm1 should preserve the linear ε term to full f64 precision.
+        let x = 1.0 + 1.0e-15;
+        let y = 1.0;
+        let powm1 = powm1_scalar(x, y);
+        let naive = x.powf(y) - 1.0;
+        // The exact answer is 1.0e-15. Naive may round to 0; powm1 must not.
+        assert!(
+            powm1 > 0.5e-15 && powm1 < 1.5e-15,
+            "powm1 should preserve 1e-15: got {powm1}"
+        );
+        // Sanity: prove naive is *worse*, i.e. powm1 is closer to truth.
+        let truth = 1.0e-15;
+        assert!(
+            (powm1 - truth).abs() <= (naive - truth).abs(),
+            "powm1 must beat naive near 1: powm1={powm1} naive={naive}"
+        );
+    }
+
+    #[test]
+    fn powm1_scalar_edge_cases() {
+        assert_eq!(powm1_scalar(1.0, 5.0), 0.0);
+        assert_eq!(powm1_scalar(2.5, 0.0), 0.0);
+        assert_eq!(powm1_scalar(0.0, 2.0), -1.0);
+        assert!(powm1_scalar(0.0, -1.0).is_nan());
+        assert!(powm1_scalar(-2.0, 0.5).is_nan(), "negative^non-int = NaN");
+        assert_eq!(powm1_scalar(-2.0, 3.0), -9.0, "(-2)^3 - 1 = -9");
+        assert!(powm1_scalar(f64::NAN, 1.0).is_nan());
+        assert!(powm1_scalar(2.0, f64::NAN).is_nan());
+    }
+
+    #[test]
+    fn cosm1_scalar_matches_naive_at_moderate_x() {
+        for &x in &[0.5, 1.0, 1.5, 2.0, 2.5] {
+            let cm1 = cosm1_scalar(x);
+            let naive = x.cos() - 1.0;
+            assert!(
+                (cm1 - naive).abs() < 1e-14,
+                "cosm1({x})={cm1} vs naive={naive}"
+            );
+        }
+    }
+
+    #[test]
+    fn cosm1_scalar_metamorphic_preserves_near_zero_quadratic() {
+        // For x near 0, cos(x) - 1 ≈ -x²/2 + x⁴/24 - ...
+        // The naive cos(x) - 1 returns 0 once cos(x) rounds to 1.0; cosm1
+        // must return -x²/2 to leading order.
+        let x = 1.0e-6;
+        let cm1 = cosm1_scalar(x);
+        let truth = -x * x * 0.5; // dominant quadratic term
+        let rel = (cm1 - truth).abs() / truth.abs();
+        assert!(rel < 1e-6, "cosm1({x})={cm1} vs truth≈{truth}, rel={rel}");
+    }
+
+    #[test]
+    fn cosm1_scalar_edge_cases() {
+        assert_eq!(cosm1_scalar(0.0), 0.0);
+        assert!(cosm1_scalar(f64::NAN).is_nan());
+        // Exactly π: cos(π) - 1 = -2.
+        assert!((cosm1_scalar(std::f64::consts::PI) - (-2.0)).abs() < 1e-15);
     }
 }
