@@ -15,7 +15,9 @@ pub mod qmc;
 pub use audit::{
     SyncSharedAuditLedger, record_bounded_recovery, record_fail_closed, sync_audit_ledger,
 };
-pub use qmc::{HaltonSampler, LatinHypercubeSampler, centered_discrepancy};
+pub use qmc::{
+    HaltonSampler, LatinHypercubeSampler, centered_discrepancy, wraparound_discrepancy,
+};
 
 use std::f64::consts::{FRAC_1_SQRT_2, LN_2, PI};
 

@@ -195,6 +195,62 @@ pub fn centered_discrepancy(sample: &[f64], dimension: usize) -> Result<f64, Sta
     Ok(leading - 2.0 / n_f * single + double / (n_f * n_f))
 }
 
+/// Compute the wraparound L2 discrepancy WD²(P) of an `n × d` point set in
+/// `[0, 1)^d`, with `sample` row-major (`sample[i * d + j]` is coordinate j
+/// of point i).
+///
+/// Matches `scipy.stats.qmc.discrepancy(sample, method='WD')`. The formula
+///
+///   WD² = -(4/3)^d
+///       + (1/N²) Σ_{i,j} Π_k [ 3/2 - |x_i^k − x_j^k| · (1 − |x_i^k − x_j^k|) ]
+///
+/// is invariant under cyclic shifts of any dimension's coordinates — so it
+/// captures the design's quality on the unit *torus*, complementing the
+/// centered discrepancy which weights points near the cube's center.
+///
+/// Returns `Err(StatsError::InvalidArgument)` for the same reasons as
+/// `centered_discrepancy`.
+pub fn wraparound_discrepancy(sample: &[f64], dimension: usize) -> Result<f64, StatsError> {
+    if dimension == 0 {
+        return Err(StatsError::InvalidArgument(
+            "wraparound_discrepancy: dimension must be ≥ 1".to_string(),
+        ));
+    }
+    if sample.len() % dimension != 0 {
+        return Err(StatsError::InvalidArgument(format!(
+            "wraparound_discrepancy: sample.len() {} not a multiple of dimension {dimension}",
+            sample.len()
+        )));
+    }
+    let n = sample.len() / dimension;
+    if n == 0 {
+        return Ok(-(4.0_f64 / 3.0).powi(dimension as i32));
+    }
+    for (idx, &v) in sample.iter().enumerate() {
+        if !v.is_finite() || !(0.0..=1.0).contains(&v) {
+            return Err(StatsError::InvalidArgument(format!(
+                "wraparound_discrepancy: sample[{idx}] = {v} outside [0, 1]"
+            )));
+        }
+    }
+    let leading = -(4.0_f64 / 3.0).powi(dimension as i32);
+    let mut double = 0.0_f64;
+    for i in 0..n {
+        for j in 0..n {
+            let mut prod = 1.0_f64;
+            for k in 0..dimension {
+                let xi = sample[i * dimension + k];
+                let xj = sample[j * dimension + k];
+                let d = (xi - xj).abs();
+                prod *= 1.5 - d * (1.0 - d);
+            }
+            double += prod;
+        }
+    }
+    let n_f = n as f64;
+    Ok(leading + double / (n_f * n_f))
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Latin Hypercube Sampling
 // ══════════════════════════════════════════════════════════════════════
@@ -541,6 +597,65 @@ mod tests {
             cd_halton.abs() < 0.01,
             "Halton CD² {cd_halton} unexpectedly large"
         );
+    }
+
+    #[test]
+    fn wraparound_rejects_invalid_inputs() {
+        assert!(matches!(
+            wraparound_discrepancy(&[], 0),
+            Err(StatsError::InvalidArgument(_))
+        ));
+        assert!(matches!(
+            wraparound_discrepancy(&[0.1, 0.2, 0.3], 2),
+            Err(StatsError::InvalidArgument(_))
+        ));
+        assert!(matches!(
+            wraparound_discrepancy(&[0.5, -0.1], 2),
+            Err(StatsError::InvalidArgument(_))
+        ));
+    }
+
+    #[test]
+    fn wraparound_metamorphic_single_point_closed_form() {
+        // For n=1 in d dimensions the double sum is exactly Π (3/2) = (3/2)^d
+        // regardless of the point's coordinates (because xi == xj makes
+        // every distance zero). Thus WD² = (3/2)^d - (4/3)^d.
+        for d in 1..=4 {
+            let mut sample = vec![0.0_f64; d];
+            for k in 0..d {
+                sample[k] = 0.1 + 0.07 * k as f64;
+            }
+            let wd = wraparound_discrepancy(&sample, d).unwrap();
+            let expected = 1.5_f64.powi(d as i32) - (4.0_f64 / 3.0).powi(d as i32);
+            assert!(
+                (wd - expected).abs() < 1e-15,
+                "d={d}: WD²={wd}, expected={expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn wraparound_metamorphic_halton_beats_aligned_points() {
+        let n = 64;
+        let d = 2;
+        let mut h = HaltonSampler::new(d).unwrap();
+        let halton = h.sample(n);
+        let aligned = vec![0.5_f64; n * d];
+        let wd_halton = wraparound_discrepancy(&halton, d).unwrap();
+        let wd_aligned = wraparound_discrepancy(&aligned, d).unwrap();
+        assert!(
+            wd_halton < wd_aligned,
+            "Halton WD²={wd_halton} should beat aligned WD²={wd_aligned}"
+        );
+    }
+
+    #[test]
+    fn wraparound_empty_sample_is_negative_leading_constant() {
+        // Empty sample: only the -(4/3)^d term survives.
+        let d = 2;
+        let wd = wraparound_discrepancy(&[], d).unwrap();
+        let expected = -(4.0_f64 / 3.0).powi(d as i32);
+        assert!((wd - expected).abs() < 1e-15);
     }
 
     #[test]
