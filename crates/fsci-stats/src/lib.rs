@@ -8545,6 +8545,7 @@ impl ContinuousDistribution for HalfGenNorm {
 /// Log-gamma distribution.
 ///
 /// Matches `scipy.stats.loggamma`.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LogGamma {
     pub c: f64,
 }
@@ -8591,6 +8592,55 @@ impl ContinuousDistribution for LogGamma {
 
     fn var(&self) -> f64 {
         fsci_special::trigamma(self.c)
+    }
+
+    fn fit(data: &[f64]) -> Self {
+        Self::try_fit(data).unwrap_or_else(|e| {
+            panic!("LogGamma::fit failed: {e}");
+        })
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        if data.len() < 2 {
+            return Err(FitError::InsufficientData {
+                required: 2,
+                actual: data.len(),
+            });
+        }
+        for &x in data {
+            if !x.is_finite() {
+                return Err(FitError::UnsupportedData(format!(
+                    "LogGamma data contains non-finite value: {x}"
+                )));
+            }
+        }
+        // Method-of-moments: mean = ψ(c). Solve via bisection on c ∈ (1e-6, 1e6).
+        // digamma is monotone-increasing so a single root exists.
+        let mean: f64 = data.iter().sum::<f64>() / data.len() as f64;
+        let mut lo = 1.0e-6_f64;
+        let mut hi = 1.0e6_f64;
+        let f_lo = fsci_special::digamma_scalar(lo);
+        let f_hi = fsci_special::digamma_scalar(hi);
+        if !(f_lo <= mean && mean <= f_hi) {
+            return Err(FitError::NonConvergent(format!(
+                "LogGamma MoM bracket failed: ψ({lo})={f_lo}, ψ({hi})={f_hi}, target={mean}"
+            )));
+        }
+        for _ in 0..200 {
+            let mid = 0.5 * (lo + hi);
+            let f_mid = fsci_special::digamma_scalar(mid);
+            if (f_mid - mean).abs() < 1.0e-12 || (hi - lo) < lo * 1.0e-12 + 1.0e-15 {
+                return Ok(Self { c: mid });
+            }
+            if f_mid < mean {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        Ok(Self {
+            c: 0.5 * (lo + hi),
+        })
     }
 }
 
@@ -30059,6 +30109,50 @@ mod tests {
     fn pearson3_fit_rejects_too_few_samples() {
         let err = Pearson3::try_fit(&[1.0, 2.0]).expect_err("n=2 must be rejected");
         assert!(matches!(err, FitError::InsufficientData { .. }));
+    }
+
+    #[test]
+    fn loggamma_fit_metamorphic_mean_recovery() {
+        let data = [-0.5_f64, 0.0, 0.3, 0.7, 1.2, -0.2, 0.8];
+        let m: f64 = data.iter().sum::<f64>() / data.len() as f64;
+        let fitted = LogGamma::try_fit(&data).expect("fit");
+        let recovered = fitted.mean();
+        assert!(
+            (recovered - m).abs() < 1.0e-6,
+            "MoM mean recovery: sample {m}, fitted {recovered}"
+        );
+    }
+
+    #[test]
+    fn loggamma_fit_synthetic_recovery() {
+        let true_c = 3.0;
+        let dist = LogGamma::new(true_c);
+        let n = 2000;
+        let samples: Vec<f64> = (1..=n)
+            .map(|i| dist.ppf((i as f64 - 0.5) / n as f64))
+            .filter(|x| x.is_finite() && x.abs() < 1.0e6)
+            .collect();
+        assert!(samples.len() > 1500);
+        let fitted = LogGamma::try_fit(&samples).expect("fit");
+        let rel = (fitted.c - true_c).abs() / true_c;
+        assert!(
+            rel < 0.05,
+            "LogGamma::fit recovery: got c={}, true {true_c}, rel_err={rel}",
+            fitted.c
+        );
+    }
+
+    #[test]
+    fn loggamma_fit_rejects_too_few_samples() {
+        let err = LogGamma::try_fit(&[1.0]).expect_err("n=1 must be rejected");
+        assert!(matches!(err, FitError::InsufficientData { .. }));
+    }
+
+    #[test]
+    fn loggamma_fit_rejects_non_finite_observation() {
+        let err = LogGamma::try_fit(&[0.0, f64::INFINITY])
+            .expect_err("inf must be rejected");
+        assert!(matches!(err, FitError::UnsupportedData(_)));
     }
 
     #[test]
