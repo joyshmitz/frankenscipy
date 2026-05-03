@@ -8313,6 +8313,7 @@ impl ContinuousDistribution for TukeyLambda {
 /// Inverse Weibull (Frechet) distribution.
 ///
 /// Matches `scipy.stats.invweibull`.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct InvWeibull {
     pub c: f64,
 }
@@ -8371,6 +8372,70 @@ impl ContinuousDistribution for InvWeibull {
         let g1 = ln_gamma(1.0 - 1.0 / self.c).exp();
         let g2 = ln_gamma(1.0 - 2.0 / self.c).exp();
         g2 - g1 * g1
+    }
+
+    fn fit(data: &[f64]) -> Self {
+        Self::try_fit(data).unwrap_or_else(|e| {
+            panic!("InvWeibull::fit failed: {e}");
+        })
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        if data.len() < 2 {
+            return Err(FitError::InsufficientData {
+                required: 2,
+                actual: data.len(),
+            });
+        }
+        let mut sum = 0.0_f64;
+        let mut count = 0usize;
+        for &x in data {
+            if !x.is_finite() {
+                return Err(FitError::UnsupportedData(format!(
+                    "InvWeibull data contains non-finite value: {x}"
+                )));
+            }
+            if x < 0.0 {
+                return Err(FitError::UnsupportedData(format!(
+                    "InvWeibull support is [0, ∞); got {x}"
+                )));
+            }
+            sum += x;
+            count += 1;
+        }
+        let mean = sum / count as f64;
+        if mean <= 1.0 || !mean.is_finite() {
+            return Err(FitError::UnsupportedData(format!(
+                "InvWeibull MoM (unit-scale) requires sample mean > 1; got {mean}"
+            )));
+        }
+        // Mean(c) = Γ(1 - 1/c) for c > 1. Monotone-decreasing from ∞ at
+        // c→1+ to 1 at c→∞. Bisect on c ∈ (1.001, 1e3).
+        let mean_of = |c: f64| ln_gamma(1.0 - 1.0 / c).exp();
+        let mut lo = 1.001_f64;
+        let mut hi = 1.0e3_f64;
+        let m_lo = mean_of(lo);
+        let m_hi = mean_of(hi);
+        if !(m_hi <= mean && mean <= m_lo) {
+            return Err(FitError::NonConvergent(format!(
+                "InvWeibull MoM bracket failed: mean({lo})={m_lo}, mean({hi})={m_hi}, target={mean}"
+            )));
+        }
+        for _ in 0..200 {
+            let mid = 0.5 * (lo + hi);
+            let m_mid = mean_of(mid);
+            if (m_mid - mean).abs() < 1.0e-12 || (hi - lo) < lo * 1.0e-12 + 1.0e-15 {
+                return Ok(Self { c: mid });
+            }
+            if m_mid > mean {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        Ok(Self {
+            c: 0.5 * (lo + hi),
+        })
     }
 }
 
@@ -30176,6 +30241,57 @@ mod tests {
     #[test]
     fn pearson3_fit_rejects_too_few_samples() {
         let err = Pearson3::try_fit(&[1.0, 2.0]).expect_err("n=2 must be rejected");
+        assert!(matches!(err, FitError::InsufficientData { .. }));
+    }
+
+    #[test]
+    fn invweibull_fit_metamorphic_mean_recovery() {
+        let data = [1.5_f64, 2.0, 2.5, 1.8, 3.0, 1.7];
+        let m: f64 = data.iter().sum::<f64>() / data.len() as f64;
+        let fitted = InvWeibull::try_fit(&data).expect("fit");
+        let recovered = fitted.mean();
+        assert!(
+            (recovered - m).abs() < 1.0e-6,
+            "InvWeibull MoM mean recovery: sample {m}, fitted {recovered}"
+        );
+    }
+
+    #[test]
+    fn invweibull_fit_synthetic_recovery() {
+        let true_c = 4.0;
+        let dist = InvWeibull::new(true_c);
+        let n = 2000;
+        let samples: Vec<f64> = (1..=n)
+            .map(|i| dist.ppf((i as f64 - 0.5) / n as f64))
+            .filter(|x| x.is_finite() && *x < 1.0e6)
+            .collect();
+        assert!(samples.len() > 1500);
+        let fitted = InvWeibull::try_fit(&samples).expect("fit");
+        let rel = (fitted.c - true_c).abs() / true_c;
+        assert!(
+            rel < 0.05,
+            "InvWeibull::fit recovery: got c={}, true {true_c}, rel_err={rel}",
+            fitted.c
+        );
+    }
+
+    #[test]
+    fn invweibull_fit_rejects_mean_at_or_below_one() {
+        let err = InvWeibull::try_fit(&[0.5, 0.7, 1.0])
+            .expect_err("mean ≤ 1 must be rejected");
+        assert!(matches!(err, FitError::UnsupportedData(_)));
+    }
+
+    #[test]
+    fn invweibull_fit_rejects_negative_observation() {
+        let err = InvWeibull::try_fit(&[1.5, -0.5])
+            .expect_err("negative must be rejected");
+        assert!(matches!(err, FitError::UnsupportedData(_)));
+    }
+
+    #[test]
+    fn invweibull_fit_rejects_too_few_samples() {
+        let err = InvWeibull::try_fit(&[2.0]).expect_err("n=1 must be rejected");
         assert!(matches!(err, FitError::InsufficientData { .. }));
     }
 
