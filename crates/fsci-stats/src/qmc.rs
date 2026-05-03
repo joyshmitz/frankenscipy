@@ -116,6 +116,86 @@ fn radical_inverse(mut index: u64, prime: u64) -> f64 {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Centered L2 discrepancy
+// ══════════════════════════════════════════════════════════════════════
+
+/// Compute the centered L2 discrepancy CD²(P) of an `n × d` point set in
+/// `[0, 1)^d`, where `sample` is row-major (`sample[i * d + j]` is the j-th
+/// coordinate of the i-th point).
+///
+/// Matches `scipy.stats.qmc.discrepancy(sample, method='CD')`. The formula is
+///
+///   CD²(P) = (13/12)^d
+///          - (2/N) Σ_i Π_k [ 1 + 0.5·|x_i^k − 0.5|
+///                              - 0.5·(x_i^k − 0.5)² ]
+///          + (1/N²) Σ_{i,j} Π_k [ 1 + 0.5·|x_i^k − 0.5|
+///                                    + 0.5·|x_j^k − 0.5|
+///                                    - 0.5·|x_i^k − x_j^k| ]
+///
+/// Returns `Err(StatsError::InvalidArgument)` when `dimension == 0`, when
+/// `sample.len()` is not a multiple of `dimension`, or when any coordinate is
+/// outside `[0, 1]`.
+pub fn centered_discrepancy(sample: &[f64], dimension: usize) -> Result<f64, StatsError> {
+    if dimension == 0 {
+        return Err(StatsError::InvalidArgument(
+            "centered_discrepancy: dimension must be ≥ 1".to_string(),
+        ));
+    }
+    if sample.len() % dimension != 0 {
+        return Err(StatsError::InvalidArgument(format!(
+            "centered_discrepancy: sample.len() {} not a multiple of dimension {dimension}",
+            sample.len()
+        )));
+    }
+    let n = sample.len() / dimension;
+    if n == 0 {
+        return Ok((13.0_f64 / 12.0).powi(dimension as i32));
+    }
+    for (idx, &v) in sample.iter().enumerate() {
+        if !v.is_finite() || !(0.0..=1.0).contains(&v) {
+            return Err(StatsError::InvalidArgument(format!(
+                "centered_discrepancy: sample[{idx}] = {v} outside [0, 1]"
+            )));
+        }
+    }
+
+    let leading = (13.0_f64 / 12.0).powi(dimension as i32);
+
+    // Single-sum term Σ_i Π_k [1 + 0.5|x − 0.5| - 0.5 (x − 0.5)²].
+    let mut single = 0.0_f64;
+    for i in 0..n {
+        let mut prod = 1.0_f64;
+        for k in 0..dimension {
+            let x = sample[i * dimension + k];
+            let centered = x - 0.5;
+            prod *= 1.0 + 0.5 * centered.abs() - 0.5 * centered * centered;
+        }
+        single += prod;
+    }
+
+    // Double-sum term Σ_{i,j} Π_k [...]. Quadratic in n; QMC users typically
+    // call this on samples with n ≤ a few thousand.
+    let mut double = 0.0_f64;
+    for i in 0..n {
+        for j in 0..n {
+            let mut prod = 1.0_f64;
+            for k in 0..dimension {
+                let xi = sample[i * dimension + k];
+                let xj = sample[j * dimension + k];
+                prod *= 1.0
+                    + 0.5 * (xi - 0.5).abs()
+                    + 0.5 * (xj - 0.5).abs()
+                    - 0.5 * (xi - xj).abs();
+            }
+            double += prod;
+        }
+    }
+
+    let n_f = n as f64;
+    Ok(leading - 2.0 / n_f * single + double / (n_f * n_f))
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Latin Hypercube Sampling
 // ══════════════════════════════════════════════════════════════════════
 
@@ -402,5 +482,82 @@ mod tests {
     fn lhs_zero_samples_returns_empty_design() {
         let mut lhs = LatinHypercubeSampler::new(3, 0).unwrap();
         assert!(lhs.sample(0).is_empty());
+    }
+
+    #[test]
+    fn discrepancy_rejects_zero_dimension() {
+        let err = centered_discrepancy(&[], 0).expect_err("d=0 must fail");
+        assert!(matches!(err, StatsError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn discrepancy_rejects_misshaped_sample() {
+        let err = centered_discrepancy(&[0.1, 0.2, 0.3], 2)
+            .expect_err("3 values for d=2 must fail");
+        assert!(matches!(err, StatsError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn discrepancy_rejects_out_of_range_value() {
+        let err = centered_discrepancy(&[0.5, 1.5], 2)
+            .expect_err("1.5 must be rejected");
+        assert!(matches!(err, StatsError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn discrepancy_empty_sample_is_leading_constant() {
+        // With n=0 the single and double sums vanish and only the (13/12)^d
+        // leading term remains.
+        let d = 3;
+        let cd = centered_discrepancy(&[], d).unwrap();
+        let expected = (13.0_f64 / 12.0).powi(d as i32);
+        assert!(
+            (cd - expected).abs() < 1e-15,
+            "empty-sample CD² should equal (13/12)^d = {expected}, got {cd}"
+        );
+    }
+
+    #[test]
+    fn discrepancy_metamorphic_halton_beats_uniform_grid_2d() {
+        // For 64 points in [0,1)^2, a Halton design has CD² much smaller
+        // than a deterministic offset uniform grid (which has rows of points
+        // exactly aligned, blowing up the double-sum term).
+        let n = 64;
+        let d = 2;
+        let mut h = HaltonSampler::new(d).unwrap();
+        let halton = h.sample(n);
+        // Aligned grid: every point at (0.5, 0.5) — pathological, maximally
+        // bad CD² because all single-sum products are identical and the
+        // double-sum is dominated by the single-distance pair.
+        let aligned = vec![0.5_f64; n * d];
+        let cd_halton = centered_discrepancy(&halton, d).unwrap();
+        let cd_aligned = centered_discrepancy(&aligned, d).unwrap();
+        assert!(
+            cd_halton < cd_aligned,
+            "Halton CD²={cd_halton} should beat aligned-point CD²={cd_aligned}"
+        );
+        // Halton CD² for n=64, d=2 should be small (<0.01).
+        assert!(
+            cd_halton.abs() < 0.01,
+            "Halton CD² {cd_halton} unexpectedly large"
+        );
+    }
+
+    #[test]
+    fn discrepancy_lhs_is_lower_than_random_offset_1d() {
+        // 1D LHS: each cell has exactly one centered sample. CD² ought to
+        // be smaller than a degenerate sample where all points cluster
+        // (e.g. all at 0.25).
+        let n = 32;
+        let d = 1;
+        let mut lhs = LatinHypercubeSampler::new(d, 0xc0ffee).unwrap();
+        let sample = lhs.sample(n);
+        let cd_lhs = centered_discrepancy(&sample, d).unwrap();
+        let clustered = vec![0.25_f64; n];
+        let cd_cluster = centered_discrepancy(&clustered, d).unwrap();
+        assert!(
+            cd_lhs < cd_cluster,
+            "LHS CD²={cd_lhs} should beat clustered CD²={cd_cluster}"
+        );
     }
 }
