@@ -28,6 +28,96 @@ pub use types::{
     OptimizeMethod, OptimizeResult, RootMethod, RootOptions,
 };
 
+/// Exit status for adaptive numerical differentiation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DifferentiateStatus {
+    Converged,
+    ErrorIncreased,
+    MaxIterations,
+}
+
+/// Direction of finite-difference steps for first derivatives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepDirection {
+    Central,
+    Forward,
+    Backward,
+}
+
+/// Absolute and relative tolerances for adaptive differentiation.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DifferentiateTolerances {
+    pub atol: f64,
+    pub rtol: f64,
+}
+
+impl Default for DifferentiateTolerances {
+    fn default() -> Self {
+        Self {
+            atol: f64::MIN_POSITIVE,
+            rtol: f64::EPSILON.sqrt(),
+        }
+    }
+}
+
+/// Options for `derivative`, `jacobian`, and `hessian`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DifferentiateOptions {
+    pub tolerances: DifferentiateTolerances,
+    pub maxiter: usize,
+    pub order: usize,
+    pub initial_step: f64,
+    pub step_factor: f64,
+    pub step_direction: StepDirection,
+}
+
+impl Default for DifferentiateOptions {
+    fn default() -> Self {
+        Self {
+            tolerances: DifferentiateTolerances::default(),
+            maxiter: 10,
+            order: 8,
+            initial_step: 0.5,
+            step_factor: 2.0,
+            step_direction: StepDirection::Central,
+        }
+    }
+}
+
+/// Scalar first-derivative result matching the core fields of SciPy's RichResult.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DerivativeResult {
+    pub df: f64,
+    pub error: f64,
+    pub success: bool,
+    pub status: DifferentiateStatus,
+    pub nit: usize,
+    pub nfev: usize,
+    pub step: f64,
+}
+
+/// Jacobian result. `df[row][column]` is d f[row] / d x[column].
+#[derive(Debug, Clone, PartialEq)]
+pub struct JacobianResult {
+    pub df: Vec<Vec<f64>>,
+    pub error: Vec<Vec<f64>>,
+    pub success: bool,
+    pub status: DifferentiateStatus,
+    pub nit: usize,
+    pub nfev: usize,
+}
+
+/// Hessian result. `ddf[row][column]` is the second partial derivative.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HessianResult {
+    pub ddf: Vec<Vec<f64>>,
+    pub error: Vec<Vec<f64>>,
+    pub success: bool,
+    pub status: DifferentiateStatus,
+    pub nit: usize,
+    pub nfev: usize,
+}
+
 /// Forward-difference gradient approximation.
 ///
 /// Matches `scipy.optimize.approx_fprime(xk, f, epsilon)`.
@@ -3053,6 +3143,546 @@ where
     }
 }
 
+/// Evaluate the first derivative of a scalar function numerically.
+///
+/// This mirrors `scipy.differentiate.derivative` for scalar-in/scalar-out
+/// callables: adaptive real finite differences, Richardson extrapolation,
+/// convergence metadata, and explicit non-finite failure handling.
+pub fn derivative<F>(
+    f: F,
+    x: f64,
+    options: DifferentiateOptions,
+) -> Result<DerivativeResult, OptError>
+where
+    F: Fn(f64) -> f64,
+{
+    adaptive_first_derivative(&f, x, options)
+}
+
+/// Evaluate the Jacobian of a vector-valued function numerically.
+///
+/// `df[row][column]` is the derivative of `f(x)[row]` with respect to
+/// `x[column]`.
+pub fn jacobian<F>(
+    f: F,
+    x: &[f64],
+    options: DifferentiateOptions,
+) -> Result<JacobianResult, OptError>
+where
+    F: Fn(&[f64]) -> Vec<f64>,
+{
+    validate_differentiate_input(x)?;
+    validate_differentiate_options(options)?;
+
+    let f0 = f(x);
+    if f0.is_empty() {
+        return Err(OptError::InvalidArgument {
+            detail: String::from("f(x) must return at least one element"),
+        });
+    }
+    if f0.iter().any(|value| !value.is_finite()) {
+        return Err(OptError::NonFiniteInput {
+            detail: String::from("f(x) returned non-finite values"),
+        });
+    }
+
+    let rows = f0.len();
+    let columns = x.len();
+    let mut df = vec![vec![0.0; columns]; rows];
+    let mut error = vec![vec![0.0; columns]; rows];
+    let mut status = DifferentiateStatus::Converged;
+    let mut success = true;
+    let mut nit = 0;
+    let mut nfev = 1;
+
+    for row in 0..rows {
+        for column in 0..columns {
+            let component = |value: f64| {
+                let mut shifted = x.to_vec();
+                shifted[column] = value;
+                f(&shifted).get(row).copied().unwrap_or(f64::NAN)
+            };
+            let result = adaptive_first_derivative(&component, x[column], options)?;
+            df[row][column] = result.df;
+            error[row][column] = result.error;
+            success &= result.success;
+            status = merge_differentiate_status(status, result.status);
+            nit = nit.max(result.nit);
+            nfev += result.nfev;
+        }
+    }
+
+    Ok(JacobianResult {
+        df,
+        error,
+        success,
+        status,
+        nit,
+        nfev,
+    })
+}
+
+/// Evaluate the Hessian of a scalar function numerically.
+///
+/// This uses central second differences with Richardson extrapolation and
+/// returns a symmetric Hessian matrix.
+pub fn hessian<F>(f: F, x: &[f64], options: DifferentiateOptions) -> Result<HessianResult, OptError>
+where
+    F: Fn(&[f64]) -> f64,
+{
+    validate_differentiate_input(x)?;
+    let order = validate_differentiate_options(options)?;
+    let f0 = evaluate_finite_vector_scalar(&f, x, "f(x)")?;
+
+    let n = x.len();
+    let mut ddf = vec![vec![0.0; n]; n];
+    let mut error = vec![vec![0.0; n]; n];
+    let mut status = DifferentiateStatus::Converged;
+    let mut success = true;
+    let mut nit = 0;
+    let mut nfev = 1;
+
+    for row in 0..n {
+        for column in row..n {
+            let result = adaptive_hessian_component(&f, x, f0, row, column, options, order)?;
+            ddf[row][column] = result.df;
+            ddf[column][row] = result.df;
+            error[row][column] = result.error;
+            error[column][row] = result.error;
+            success &= result.success;
+            status = merge_differentiate_status(status, result.status);
+            nit = nit.max(result.nit);
+            nfev += result.nfev;
+        }
+    }
+
+    Ok(HessianResult {
+        ddf,
+        error,
+        success,
+        status,
+        nit,
+        nfev,
+    })
+}
+
+fn validate_differentiate_input(x: &[f64]) -> Result<(), OptError> {
+    if x.is_empty() {
+        return Err(OptError::InvalidArgument {
+            detail: String::from("x must have at least one element"),
+        });
+    }
+    if x.iter().any(|value| !value.is_finite()) {
+        return Err(OptError::NonFiniteInput {
+            detail: String::from("x must contain only finite values"),
+        });
+    }
+    Ok(())
+}
+
+fn validate_differentiate_options(options: DifferentiateOptions) -> Result<usize, OptError> {
+    if options.maxiter == 0 {
+        return Err(OptError::InvalidArgument {
+            detail: String::from("maxiter must be greater than zero"),
+        });
+    }
+    if options.order == 0 {
+        return Err(OptError::InvalidArgument {
+            detail: String::from("order must be greater than zero"),
+        });
+    }
+    if !options.initial_step.is_finite() || options.initial_step <= 0.0 {
+        return Err(OptError::InvalidArgument {
+            detail: String::from("initial_step must be finite and positive"),
+        });
+    }
+    if !options.step_factor.is_finite()
+        || options.step_factor <= 0.0
+        || (options.step_factor - 1.0).abs() <= f64::EPSILON
+    {
+        return Err(OptError::InvalidArgument {
+            detail: String::from("step_factor must be finite, positive, and not equal to one"),
+        });
+    }
+    if !options.tolerances.atol.is_finite() || options.tolerances.atol < 0.0 {
+        return Err(OptError::InvalidArgument {
+            detail: String::from("atol must be finite and non-negative"),
+        });
+    }
+    if !options.tolerances.rtol.is_finite() || options.tolerances.rtol < 0.0 {
+        return Err(OptError::InvalidArgument {
+            detail: String::from("rtol must be finite and non-negative"),
+        });
+    }
+
+    if options.order % 2 == 0 {
+        Ok(options.order.max(2))
+    } else {
+        let rounded = options
+            .order
+            .checked_add(1)
+            .ok_or_else(|| OptError::InvalidArgument {
+                detail: String::from("order is too large"),
+            })?;
+        Ok(rounded.max(2))
+    }
+}
+
+fn component_step(initial_step: f64, x: f64) -> f64 {
+    let scale = 1.0 + x.abs();
+    (initial_step * scale).max(f64::EPSILON.sqrt() * scale)
+}
+
+fn step_at_iteration(initial_step: f64, step_factor: f64, iteration: usize) -> f64 {
+    initial_step / step_factor.powf(iteration as f64)
+}
+
+fn extrapolation_levels(
+    order: usize,
+    direction: StepDirection,
+    iteration: usize,
+    previous_levels: usize,
+) -> usize {
+    let maximum = match direction {
+        StepDirection::Central => (order / 2).max(1),
+        StepDirection::Forward | StepDirection::Backward => order.max(1),
+    };
+    maximum.min(iteration + 1).min(previous_levels + 1)
+}
+
+fn richardson_estimate(
+    base: f64,
+    previous_tableau: &[f64],
+    levels: usize,
+    step_factor: f64,
+    error_power: usize,
+) -> (f64, Vec<f64>) {
+    let mut current = base;
+    let mut next_tableau = Vec::with_capacity(levels);
+    next_tableau.push(base);
+    for level in 1..levels {
+        let denominator = step_factor.powf((error_power * level) as f64) - 1.0;
+        let previous_lower_order = previous_tableau[level - 1];
+        current += (current - previous_lower_order) / denominator;
+        next_tableau.push(current);
+    }
+    (current, next_tableau)
+}
+
+fn evaluate_finite_scalar<F>(f: &F, x: f64, context: &str) -> Result<f64, OptError>
+where
+    F: Fn(f64) -> f64,
+{
+    let value = f(x);
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(OptError::NonFiniteInput {
+            detail: format!("{context} returned a non-finite value"),
+        })
+    }
+}
+
+fn evaluate_finite_vector_scalar<F>(f: &F, x: &[f64], context: &str) -> Result<f64, OptError>
+where
+    F: Fn(&[f64]) -> f64,
+{
+    let value = f(x);
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(OptError::NonFiniteInput {
+            detail: format!("{context} returned a non-finite value"),
+        })
+    }
+}
+
+fn adaptive_first_derivative<F>(
+    f: &F,
+    x: f64,
+    options: DifferentiateOptions,
+) -> Result<DerivativeResult, OptError>
+where
+    F: Fn(f64) -> f64,
+{
+    if !x.is_finite() {
+        return Err(OptError::NonFiniteInput {
+            detail: String::from("x must be finite"),
+        });
+    }
+    let order = validate_differentiate_options(options)?;
+    let initial_step = component_step(options.initial_step, x);
+    let error_power = match options.step_direction {
+        StepDirection::Central => 2,
+        StepDirection::Forward | StepDirection::Backward => 1,
+    };
+    let mut nfev = 0;
+    let f0 = match options.step_direction {
+        StepDirection::Central => None,
+        StepDirection::Forward | StepDirection::Backward => {
+            nfev += 1;
+            Some(evaluate_finite_scalar(f, x, "f(x)")?)
+        }
+    };
+    let mut previous_estimate = None;
+    let mut previous_tableau = Vec::new();
+    let mut best_df = f64::NAN;
+    let mut best_error = f64::INFINITY;
+    let mut best_nit = 0;
+    let mut best_step = initial_step;
+
+    for iteration in 0..options.maxiter {
+        let step = step_at_iteration(initial_step, options.step_factor, iteration);
+        let base = match options.step_direction {
+            StepDirection::Central => {
+                let plus = evaluate_finite_scalar(f, x + step, "f(x + h)")?;
+                let minus = evaluate_finite_scalar(f, x - step, "f(x - h)")?;
+                nfev += 2;
+                (plus - minus) / (2.0 * step)
+            }
+            StepDirection::Forward => {
+                let plus = evaluate_finite_scalar(f, x + step, "f(x + h)")?;
+                nfev += 1;
+                let f_at_x = f0.ok_or_else(|| OptError::InvalidArgument {
+                    detail: String::from("one-sided derivative missing base evaluation"),
+                })?;
+                (plus - f_at_x) / step
+            }
+            StepDirection::Backward => {
+                let minus = evaluate_finite_scalar(f, x - step, "f(x - h)")?;
+                nfev += 1;
+                let f_at_x = f0.ok_or_else(|| OptError::InvalidArgument {
+                    detail: String::from("one-sided derivative missing base evaluation"),
+                })?;
+                (f_at_x - minus) / step
+            }
+        };
+        if !base.is_finite() {
+            return Err(OptError::NonFiniteInput {
+                detail: String::from("finite-difference estimate became non-finite"),
+            });
+        }
+
+        let levels = extrapolation_levels(
+            order,
+            options.step_direction,
+            iteration,
+            previous_tableau.len(),
+        );
+        let (estimate, next_tableau) = richardson_estimate(
+            base,
+            &previous_tableau,
+            levels,
+            options.step_factor,
+            error_power,
+        );
+        if !estimate.is_finite() {
+            return Err(OptError::NonFiniteInput {
+                detail: String::from("Richardson estimate became non-finite"),
+            });
+        }
+
+        let error =
+            previous_estimate.map_or(f64::INFINITY, |previous: f64| (estimate - previous).abs());
+        let nit = iteration + 1;
+        if iteration == 0 || error < best_error {
+            best_df = estimate;
+            best_error = error;
+            best_nit = nit;
+            best_step = step;
+        } else if error.is_finite() && best_error.is_finite() && error > best_error {
+            return Ok(DerivativeResult {
+                df: best_df,
+                error: best_error,
+                success: false,
+                status: DifferentiateStatus::ErrorIncreased,
+                nit,
+                nfev,
+                step: best_step,
+            });
+        }
+
+        if error.is_finite()
+            && error <= options.tolerances.atol + options.tolerances.rtol * estimate.abs()
+        {
+            return Ok(DerivativeResult {
+                df: estimate,
+                error,
+                success: true,
+                status: DifferentiateStatus::Converged,
+                nit,
+                nfev,
+                step,
+            });
+        }
+        previous_estimate = Some(estimate);
+        previous_tableau = next_tableau;
+    }
+
+    Ok(DerivativeResult {
+        df: best_df,
+        error: best_error,
+        success: false,
+        status: DifferentiateStatus::MaxIterations,
+        nit: best_nit,
+        nfev,
+        step: best_step,
+    })
+}
+
+fn adaptive_hessian_component<F>(
+    f: &F,
+    x: &[f64],
+    f0: f64,
+    row: usize,
+    column: usize,
+    options: DifferentiateOptions,
+    order: usize,
+) -> Result<DerivativeResult, OptError>
+where
+    F: Fn(&[f64]) -> f64,
+{
+    let row_step = component_step(options.initial_step, x[row]);
+    let column_step = component_step(options.initial_step, x[column]);
+    let mut previous_estimate = None;
+    let mut previous_tableau = Vec::new();
+    let mut best_ddf = f64::NAN;
+    let mut best_error = f64::INFINITY;
+    let mut best_nit = 0;
+    let mut best_step = row_step.max(column_step);
+    let mut nfev = 0;
+
+    for iteration in 0..options.maxiter {
+        let h_row = step_at_iteration(row_step, options.step_factor, iteration);
+        let h_column = step_at_iteration(column_step, options.step_factor, iteration);
+        let (base, evaluations) =
+            hessian_component_estimate(f, x, f0, row, column, h_row, h_column)?;
+        nfev += evaluations;
+        if !base.is_finite() {
+            return Err(OptError::NonFiniteInput {
+                detail: String::from("finite-difference Hessian estimate became non-finite"),
+            });
+        }
+
+        let levels = (order / 2)
+            .max(1)
+            .min(iteration + 1)
+            .min(previous_tableau.len() + 1);
+        let (estimate, next_tableau) =
+            richardson_estimate(base, &previous_tableau, levels, options.step_factor, 2);
+        if !estimate.is_finite() {
+            return Err(OptError::NonFiniteInput {
+                detail: String::from("Richardson Hessian estimate became non-finite"),
+            });
+        }
+
+        let error =
+            previous_estimate.map_or(f64::INFINITY, |previous: f64| (estimate - previous).abs());
+        let nit = iteration + 1;
+        if iteration == 0 || error < best_error {
+            best_ddf = estimate;
+            best_error = error;
+            best_nit = nit;
+            best_step = h_row.max(h_column);
+        } else if error.is_finite() && best_error.is_finite() && error > best_error {
+            return Ok(DerivativeResult {
+                df: best_ddf,
+                error: best_error,
+                success: false,
+                status: DifferentiateStatus::ErrorIncreased,
+                nit,
+                nfev,
+                step: best_step,
+            });
+        }
+
+        if error.is_finite()
+            && error <= options.tolerances.atol + options.tolerances.rtol * estimate.abs()
+        {
+            return Ok(DerivativeResult {
+                df: estimate,
+                error,
+                success: true,
+                status: DifferentiateStatus::Converged,
+                nit,
+                nfev,
+                step: h_row.max(h_column),
+            });
+        }
+        previous_estimate = Some(estimate);
+        previous_tableau = next_tableau;
+    }
+
+    Ok(DerivativeResult {
+        df: best_ddf,
+        error: best_error,
+        success: false,
+        status: DifferentiateStatus::MaxIterations,
+        nit: best_nit,
+        nfev,
+        step: best_step,
+    })
+}
+
+fn hessian_component_estimate<F>(
+    f: &F,
+    x: &[f64],
+    f0: f64,
+    row: usize,
+    column: usize,
+    h_row: f64,
+    h_column: f64,
+) -> Result<(f64, usize), OptError>
+where
+    F: Fn(&[f64]) -> f64,
+{
+    if row == column {
+        let mut plus = x.to_vec();
+        plus[row] += h_row;
+        let f_plus = evaluate_finite_vector_scalar(f, &plus, "f(x + h)")?;
+
+        let mut minus = x.to_vec();
+        minus[row] -= h_row;
+        let f_minus = evaluate_finite_vector_scalar(f, &minus, "f(x - h)")?;
+
+        Ok(((f_plus - 2.0 * f0 + f_minus) / (h_row * h_row), 2))
+    } else {
+        let mut point = x.to_vec();
+        point[row] += h_row;
+        point[column] += h_column;
+        let f_pp = evaluate_finite_vector_scalar(f, &point, "f(x + h_i + h_j)")?;
+
+        point[column] = x[column] - h_column;
+        let f_pm = evaluate_finite_vector_scalar(f, &point, "f(x + h_i - h_j)")?;
+
+        point[row] = x[row] - h_row;
+        point[column] = x[column] + h_column;
+        let f_mp = evaluate_finite_vector_scalar(f, &point, "f(x - h_i + h_j)")?;
+
+        point[column] = x[column] - h_column;
+        let f_mm = evaluate_finite_vector_scalar(f, &point, "f(x - h_i - h_j)")?;
+
+        Ok(((f_pp - f_pm - f_mp + f_mm) / (4.0 * h_row * h_column), 4))
+    }
+}
+
+fn merge_differentiate_status(
+    left: DifferentiateStatus,
+    right: DifferentiateStatus,
+) -> DifferentiateStatus {
+    match (left, right) {
+        (DifferentiateStatus::ErrorIncreased, _) | (_, DifferentiateStatus::ErrorIncreased) => {
+            DifferentiateStatus::ErrorIncreased
+        }
+        (DifferentiateStatus::MaxIterations, _) | (_, DifferentiateStatus::MaxIterations) => {
+            DifferentiateStatus::MaxIterations
+        }
+        (DifferentiateStatus::Converged, DifferentiateStatus::Converged) => {
+            DifferentiateStatus::Converged
+        }
+    }
+}
+
 /// Compute numerical gradient via forward differences.
 pub fn numerical_gradient<F>(f: F, x: &[f64], eps: f64) -> Vec<f64>
 where
@@ -3324,10 +3954,10 @@ mod tests {
     use crate::{
         BasinhoppingOptions, Bounds, ConvergenceStatus, DifferentialEvolutionOptions, Integrality,
         LinearConstraint, MilpOptions, MilpProblem, MinimizeOptions, NonlinearConstraint,
-        OptimizeMethod, RootOptions, approx_fprime, basinhopping, check_grad, cobyla,
-        differential_evolution, dual_annealing, gradient_descent, linear_sum_assignment, linprog,
-        milp, nnls, projected_gradient_descent, pso, rosen, rosen_der, rosen_hess, rosen_hess_prod,
-        shgo,
+        OptimizeMethod, RootOptions, approx_fprime, basinhopping, check_grad, cobyla, derivative,
+        differential_evolution, dual_annealing, gradient_descent, hessian, jacobian,
+        linear_sum_assignment, linprog, milp, nnls, projected_gradient_descent, pso, rosen,
+        rosen_der, rosen_hess, rosen_hess_prod, shgo,
     };
 
     #[test]
@@ -3494,6 +4124,95 @@ mod tests {
         let wrong = |_x: &[f64]| vec![0.0, 0.0];
         let error = check_grad(f, wrong, &[2.0, -3.0]).expect("gradient check should succeed");
         assert!(error > 1.0, "expected large error, got {error}");
+    }
+
+    #[test]
+    fn differentiate_derivative_matches_cubic() {
+        let f = |x: f64| x.powi(3) - 2.0 * x;
+        let x = 1.25_f64;
+        let result = derivative(f, x, crate::DifferentiateOptions::default())
+            .expect("derivative should evaluate");
+        let expected = 3.0 * x * x - 2.0;
+        assert!(result.success, "status: {:?}", result.status);
+        assert!(
+            (result.df - expected).abs() < 1.0e-8,
+            "df = {}, expected {expected}",
+            result.df
+        );
+        assert!(result.error.is_finite());
+    }
+
+    #[test]
+    fn differentiate_derivative_supports_one_sided_steps() {
+        let options = crate::DifferentiateOptions {
+            step_direction: crate::StepDirection::Forward,
+            ..crate::DifferentiateOptions::default()
+        };
+        let result = derivative(|x| x * x, 0.0, options).expect("forward derivative");
+        assert!(result.success, "status: {:?}", result.status);
+        assert!(result.df.abs() < 1.0e-8, "df = {}", result.df);
+    }
+
+    #[test]
+    fn differentiate_jacobian_recovers_linear_map() {
+        let f = |x: &[f64]| {
+            vec![
+                2.0 * x[0] - x[1] + 0.5 * x[2],
+                -3.0 * x[0] + 4.0 * x[1] + x[2],
+            ]
+        };
+        let result = jacobian(
+            f,
+            &[1.0, -2.0, 0.25],
+            crate::DifferentiateOptions::default(),
+        )
+        .expect("jacobian should evaluate");
+        let expected = [[2.0, -1.0, 0.5], [-3.0, 4.0, 1.0]];
+        assert!(result.success, "status: {:?}", result.status);
+        for (row_index, row) in expected.iter().enumerate() {
+            for (column_index, expected_value) in row.iter().enumerate() {
+                assert!(
+                    (result.df[row_index][column_index] - expected_value).abs() < 1.0e-8,
+                    "jac[{row_index},{column_index}] = {} vs {expected_value}",
+                    result.df[row_index][column_index]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn differentiate_hessian_matches_quadratic() {
+        let f = |x: &[f64]| 3.0 * x[0] * x[0] + 2.0 * x[0] * x[1] + 5.0 * x[1] * x[1] - x[0];
+        let result = hessian(f, &[0.75, -1.25], crate::DifferentiateOptions::default())
+            .expect("hessian should evaluate");
+        let expected = [[6.0, 2.0], [2.0, 10.0]];
+        assert!(result.success, "status: {:?}", result.status);
+        for (row_index, row) in expected.iter().enumerate() {
+            for (column_index, expected_value) in row.iter().enumerate() {
+                assert!(
+                    (result.ddf[row_index][column_index] - expected_value).abs() < 1.0e-7,
+                    "hess[{row_index},{column_index}] = {} vs {expected_value}",
+                    result.ddf[row_index][column_index]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn differentiate_rejects_non_finite_inputs() {
+        let error = derivative(|x| x, f64::NAN, crate::DifferentiateOptions::default())
+            .expect_err("NaN x should fail");
+        assert!(matches!(error, crate::OptError::NonFiniteInput { .. }));
+    }
+
+    #[test]
+    fn differentiate_rejects_degenerate_step_factor() {
+        let options = crate::DifferentiateOptions {
+            step_factor: 1.0,
+            ..crate::DifferentiateOptions::default()
+        };
+        let error = derivative(|x| x, 1.0, options).expect_err("step_factor=1 should fail");
+        assert!(matches!(error, crate::OptError::InvalidArgument { .. }));
     }
 
     #[test]
