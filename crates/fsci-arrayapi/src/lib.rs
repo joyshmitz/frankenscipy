@@ -115,4 +115,55 @@ mod tests {
             })
         );
     }
+
+    #[test]
+    fn metamorphic_broadcast_shapes_are_permutation_and_scalar_invariant() {
+        let base = [Shape::new(vec![2, 1, 3]), Shape::new(vec![1, 4, 3])];
+        let expected = Shape::new(vec![2, 4, 3]);
+
+        assert_eq!(
+            broadcast_shapes(&base).expect("base shapes should broadcast"),
+            expected
+        );
+        assert_eq!(
+            broadcast_shapes(&[base[1].clone(), base[0].clone()])
+                .expect("permuted shapes should broadcast"),
+            expected
+        );
+        assert_eq!(
+            broadcast_shapes(&[Shape::scalar(), base[0].clone(), base[1].clone()])
+                .expect("adding a scalar operand should not change the target shape"),
+            expected
+        );
+    }
+
+    #[test]
+    fn metamorphic_broadcast_to_repeats_singleton_axes_without_value_drift() {
+        let backend = CoreArrayBackend::new(ExecutionMode::Strict);
+        let source = backend
+            .array_from_slice(
+                &[ScalarValue::F64(1.0), ScalarValue::F64(2.0)],
+                &Shape::new(vec![2, 1]),
+                DType::Float64,
+                MemoryOrder::C,
+            )
+            .expect("source array should build");
+        let target_shape = Shape::new(vec![2, 3]);
+        let broadcasted = backend
+            .broadcast_to(&source, &target_shape)
+            .expect("singleton axis should broadcast");
+
+        assert_eq!(broadcasted.shape(), &target_shape);
+        assert_eq!(
+            broadcasted.values(),
+            &[
+                ScalarValue::F64(1.0),
+                ScalarValue::F64(1.0),
+                ScalarValue::F64(1.0),
+                ScalarValue::F64(2.0),
+                ScalarValue::F64(2.0),
+                ScalarValue::F64(2.0),
+            ]
+        );
+    }
 }

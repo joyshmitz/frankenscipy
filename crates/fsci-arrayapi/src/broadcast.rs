@@ -102,6 +102,77 @@ mod tests {
     }
 
     #[test]
+    fn broadcast_shapes_metamorphic_scalar_identity_and_idempotence() {
+        let shapes = [
+            Shape::scalar(),
+            Shape::new(vec![1]),
+            Shape::new(vec![2, 3]),
+            Shape::new(vec![1, 4, 1]),
+            Shape::new(vec![2, 1, 3]),
+        ];
+
+        for shape in shapes {
+            assert_eq!(
+                broadcast_shapes(&[shape.clone(), Shape::scalar()])
+                    .expect("scalar should be the broadcast identity"),
+                shape
+            );
+            assert_eq!(
+                broadcast_shapes(&[shape.clone(), shape.clone()])
+                    .expect("broadcasting a shape with itself should be idempotent"),
+                shape
+            );
+        }
+    }
+
+    #[test]
+    fn broadcast_shapes_metamorphic_associative_for_compatible_triples() {
+        let triples = [
+            (
+                Shape::new(vec![2, 1, 3]),
+                Shape::new(vec![1, 4, 3]),
+                Shape::new(vec![2, 4, 1]),
+            ),
+            (
+                Shape::new(vec![1, 5]),
+                Shape::new(vec![3, 1, 5]),
+                Shape::scalar(),
+            ),
+            (
+                Shape::new(vec![0, 1]),
+                Shape::new(vec![1, 7]),
+                Shape::new(vec![0, 7]),
+            ),
+        ];
+
+        for (left, middle, right) in triples {
+            let all_at_once = broadcast_shapes(&[left.clone(), middle.clone(), right.clone()])
+                .expect("triple should broadcast");
+            let left_fold = broadcast_shapes(&[
+                broadcast_shapes(&[left, middle]).expect("pair should broadcast"),
+                right,
+            ])
+            .expect("folded broadcast should succeed");
+
+            assert_eq!(all_at_once, left_fold);
+        }
+    }
+
+    #[test]
+    fn broadcast_shapes_metamorphic_scalar_does_not_repair_incompatibility() {
+        let without_scalar = broadcast_shapes(&[Shape::new(vec![2, 3]), Shape::new(vec![3, 2])])
+            .expect_err("base shapes are incompatible");
+        let with_scalar = broadcast_shapes(&[
+            Shape::new(vec![2, 3]),
+            Shape::scalar(),
+            Shape::new(vec![3, 2]),
+        ])
+        .expect_err("adding scalar should not hide incompatibility");
+
+        assert_eq!(without_scalar.kind, with_scalar.kind);
+    }
+
+    #[test]
     fn promote_and_broadcast_promotes_dtype_and_targets_common_shape() {
         let backend = CoreArrayBackend::new(ExecutionMode::Strict);
         let left = backend

@@ -1736,6 +1736,39 @@ mod tests {
     }
 
     #[test]
+    fn metamorphic_text_roundtrips_preserve_payload_and_metadata() {
+        let dense_cases = [
+            (1, 1, vec![42.0]),
+            (2, 3, vec![1.0, -2.5, 3.25, 4.0, 0.0, 9.5]),
+            (3, 2, vec![0.125, 1.25, 2.5, 5.0, 10.0, 20.0]),
+        ];
+        for (rows, cols, data) in dense_cases {
+            let encoded = mmwrite(rows, cols, &data).expect("Matrix Market encode succeeds");
+            let info = mminfo(&encoded).expect("mminfo should parse writer output");
+            let decoded = mmread(&encoded).expect("mmread should parse writer output");
+
+            assert_eq!(info.rows, rows);
+            assert_eq!(info.cols, cols);
+            assert_eq!(info.nnz, rows * cols);
+            assert_eq!(info.rows, decoded.info.rows);
+            assert_eq!(info.cols, decoded.info.cols);
+            assert_eq!(info.nnz, decoded.info.nnz);
+            assert_eq!(decoded.data, data);
+        }
+
+        let csv_rows = vec![vec![0.0, 1.5], vec![1.0, 2.25], vec![2.0, 3.0]];
+        let csv = write_csv(Some(&["time", "value"]), &csv_rows, ',').expect("CSV encode");
+        let (header, decoded_csv) = read_csv(&csv, ',', true).expect("CSV decode");
+        assert_eq!(header, Some(vec!["time".to_string(), "value".to_string()]));
+        assert_eq!(decoded_csv, csv_rows);
+
+        let json_values = vec![1.5, -2.25, 0.0, 3.75];
+        let json = write_json_array(&json_values).expect("JSON array encode");
+        let decoded_json = read_json_array(&json).expect("JSON array decode");
+        assert_eq!(decoded_json, json_values);
+    }
+
+    #[test]
     fn mmwrite_rejects_dense_size_overflow() {
         let err = mmwrite(usize::MAX, 2, &[])
             .expect_err("overflowing dense dimensions should fail before length comparison");

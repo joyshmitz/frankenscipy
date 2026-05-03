@@ -722,4 +722,29 @@ mod tests {
         assert_eq!(MILLI, 1e-3);
         assert_eq!(NANO, 1e-9);
     }
+
+    #[test]
+    fn metamorphic_derived_constants_are_self_consistent() {
+        let gas_from_micro_constants = BOLTZMANN * AVOGADRO;
+        assert!(
+            (gas_from_micro_constants - GAS_CONSTANT).abs() < 1e-9,
+            "k_B * N_A should recover R"
+        );
+
+        let faraday_from_charge_count = ELEMENTARY_CHARGE * AVOGADRO;
+        assert!(
+            (faraday_from_charge_count - FARADAY).abs() < 1e-9,
+            "e * N_A should recover Faraday"
+        );
+
+        assert!(
+            (HBAR * TAU - PLANCK).abs() < 1e-48,
+            "hbar * tau should recover h"
+        );
+
+        assert!(
+            (CONDUCTANCE_QUANTUM * VON_KLITZING - 2.0).abs() < 1e-9,
+            "G0 * R_K should equal 2"
+        );
+    }
 }
