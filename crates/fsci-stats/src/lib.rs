@@ -6369,6 +6369,7 @@ impl ContinuousDistribution for Gilbrat {
 /// Levy distribution (one-sided stable with α=1/2, β=1).
 ///
 /// Matches `scipy.stats.levy`.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Levy {
     pub loc: f64,
     pub scale: f64,
@@ -6435,6 +6436,53 @@ impl ContinuousDistribution for Levy {
 
     fn var(&self) -> f64 {
         f64::INFINITY
+    }
+
+    fn fit(data: &[f64]) -> Self {
+        Self::try_fit(data).unwrap_or_else(|e| {
+            panic!("Levy::fit failed: {e}");
+        })
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        if data.len() < 2 {
+            return Err(FitError::InsufficientData {
+                required: 2,
+                actual: data.len(),
+            });
+        }
+        // Closed-form MLE with floc = 0. The log-likelihood
+        //   ln L = (n/2) ln(scale) - (n/2) ln(2π) - (scale/2) Σ 1/x_i - (3/2) Σ ln(x_i)
+        // has dL/dscale = n/(2 scale) - (1/2) Σ 1/x_i = 0
+        // ⟹ scale = n / Σ 1/x_i (the harmonic mean of the observations).
+        let mut reciprocal_sum = 0.0_f64;
+        let mut count = 0usize;
+        for &x in data {
+            if !x.is_finite() {
+                return Err(FitError::UnsupportedData(format!(
+                    "Levy data contains non-finite value: {x}"
+                )));
+            }
+            if x <= 0.0 {
+                return Err(FitError::UnsupportedData(format!(
+                    "Levy MLE with floc=0 requires positive observations; got {x}"
+                )));
+            }
+            reciprocal_sum += 1.0 / x;
+            count += 1;
+        }
+        if reciprocal_sum <= 0.0 || !reciprocal_sum.is_finite() {
+            return Err(FitError::NonConvergent(format!(
+                "Levy MLE: reciprocal sum {reciprocal_sum} is non-positive or non-finite"
+            )));
+        }
+        let scale = count as f64 / reciprocal_sum;
+        if !scale.is_finite() || scale <= 0.0 {
+            return Err(FitError::NonConvergent(format!(
+                "Levy MLE produced non-positive scale: {scale}"
+            )));
+        }
+        Ok(Self { loc: 0.0, scale })
     }
 }
 
@@ -28736,6 +28784,56 @@ mod tests {
         let err = LogLaplace::try_fit(&[1.0, 1.0, 1.0])
             .expect_err("all-unit data must be rejected");
         assert!(matches!(err, FitError::NonConvergent(_)));
+    }
+
+    #[test]
+    fn levy_fit_recovers_synthetic_scale() {
+        // Synthesize Levy(loc=0, scale=2.5) samples via a deterministic ppf
+        // grid (Levy has heavy right tail so we cap at q=0.95 to keep
+        // values finite enough for the harmonic mean to converge cleanly).
+        let true_scale = 2.5;
+        let dist = Levy::new(0.0, true_scale);
+        let n = 1000;
+        let samples: Vec<f64> = (1..=n)
+            .map(|k| dist.ppf((k as f64 - 0.5) / n as f64).min(1.0e6))
+            .collect();
+        let fitted = Levy::try_fit(&samples).expect("fit");
+        // The harmonic mean of x_i is dominated by small x; recovery is
+        // robust here. Allow 5% relative error.
+        let rel = (fitted.scale - true_scale).abs() / true_scale;
+        assert!(
+            rel < 0.05,
+            "Levy::fit should recover scale={true_scale} within 5%; got scale={}, rel={rel}",
+            fitted.scale
+        );
+    }
+
+    #[test]
+    fn levy_fit_metamorphic_harmonic_mean_identity() {
+        // For any data, fitted scale must equal n / Σ 1/x_i exactly. This
+        // pins the closed-form path against an independent computation.
+        let data = [0.5, 1.0, 1.5, 2.0, 3.0, 5.0, 10.0];
+        let fitted = Levy::try_fit(&data).unwrap();
+        let expected = data.len() as f64 / data.iter().map(|x| 1.0 / x).sum::<f64>();
+        assert!(
+            (fitted.scale - expected).abs() < 1e-12,
+            "harmonic-mean identity: fit={}, expected={expected}",
+            fitted.scale
+        );
+        assert_eq!(fitted.loc, 0.0, "fit pins loc to 0");
+    }
+
+    #[test]
+    fn levy_fit_rejects_non_positive_observation() {
+        let err = Levy::try_fit(&[1.0, 2.0, 0.0])
+            .expect_err("zero must be rejected");
+        assert!(matches!(err, FitError::UnsupportedData(_)));
+    }
+
+    #[test]
+    fn levy_fit_rejects_too_few_samples() {
+        let err = Levy::try_fit(&[1.0]).expect_err("n=1 must be rejected");
+        assert!(matches!(err, FitError::InsufficientData { .. }));
     }
 
     #[test]
