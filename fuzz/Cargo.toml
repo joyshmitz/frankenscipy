@@ -378,3 +378,31 @@ path = "fuzz_targets/p2c009_signal_filtfilt_robustness.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "p2c006_special_real_edges"
+path = "fuzz_targets/p2c006_special_real_edges.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "p2c002_eigvals_edges"
+path = "fuzz_targets/p2c002_eigvals_edges.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "p2c009_signal_filter_edges"
+path = "fuzz_targets/p2c009_signal_filter_edges.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "p2c007_stats_percentile_edges"
+path = "fuzz_targets/p2c007_stats_percentile_edges.rs"
+test = false
+doc = false
+bench = false
