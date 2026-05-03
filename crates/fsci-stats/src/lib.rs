@@ -6183,6 +6183,7 @@ impl ContinuousDistribution for Anglit {
 /// Bradford distribution on [0, 1] with shape c.
 ///
 /// Matches `scipy.stats.bradford`.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Bradford {
     pub c: f64,
 }
@@ -6239,6 +6240,84 @@ impl ContinuousDistribution for Bradford {
         // E[X²] = (c² - 2c + 2k) / (2c²k), derived from ∫₀¹ x²·c/((1+cx)·k) dx
         let ex2 = (c * c - 2.0 * c + 2.0 * k) / (2.0 * c * c * k);
         ex2 - m * m
+    }
+
+    fn fit(data: &[f64]) -> Self {
+        Self::try_fit(data).unwrap_or_else(|e| {
+            panic!("Bradford::fit failed: {e}");
+        })
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        if data.len() < 2 {
+            return Err(FitError::InsufficientData {
+                required: 2,
+                actual: data.len(),
+            });
+        }
+        let mut sum = 0.0_f64;
+        let mut count = 0usize;
+        for &x in data {
+            if !x.is_finite() {
+                return Err(FitError::UnsupportedData(format!(
+                    "Bradford data contains non-finite value: {x}"
+                )));
+            }
+            if !(0.0..=1.0).contains(&x) {
+                return Err(FitError::UnsupportedData(format!(
+                    "Bradford data outside [0, 1]: {x}"
+                )));
+            }
+            sum += x;
+            count += 1;
+        }
+        let mean = sum / count as f64;
+        // Method-of-moments: E[X | c] = (c - ln(1+c)) / (c · ln(1+c)).
+        // The mapping c ↦ E[X] is monotone DECREASING from 1/2 at c=0⁺ to 0 at c=∞.
+        // Reject means outside the open interval (0, 0.5); endpoints map to
+        // degenerate c (uniform-on-[0,1] for c→0; degenerate point mass at 0 for c→∞).
+        if !(0.0..0.5).contains(&mean) {
+            return Err(FitError::UnsupportedData(format!(
+                "Bradford method-of-moments requires sample mean in (0, 0.5), got {mean}"
+            )));
+        }
+        let mom = |c: f64| {
+            // Use the small-c Taylor expansion to avoid catastrophic
+            // cancellation in (c - ln(1+c)) when c is tiny. The exact
+            // closed form is (c - ln1p(c)) / (c · ln1p(c)).
+            if c < 1.0e-4 {
+                // f(c) = 1/2 - c/6 + c²/24 - 19c³/720 + ...
+                0.5 - c / 6.0 + c * c / 24.0 - 19.0 * c * c * c / 720.0
+            } else {
+                let k = c.ln_1p();
+                (c - k) / (c * k)
+            }
+        };
+        // Bisection on c ∈ (1e-6, 1e6]. f(low) > mean > f(high) by monotonicity.
+        let mut lo = 1.0e-6_f64;
+        let mut hi = 1.0e6_f64;
+        let f_lo = mom(lo);
+        let f_hi = mom(hi);
+        if !(f_hi <= mean && mean <= f_lo) {
+            return Err(FitError::NonConvergent(format!(
+                "Bradford bisection bracket failed: f(lo)={f_lo}, f(hi)={f_hi}, mean={mean}"
+            )));
+        }
+        for _ in 0..200 {
+            let mid = 0.5 * (lo + hi);
+            let f_mid = mom(mid);
+            if (f_mid - mean).abs() < 1.0e-12 || (hi - lo) < lo * 1.0e-12 + 1.0e-15 {
+                return Ok(Self { c: mid });
+            }
+            if f_mid > mean {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        Ok(Self {
+            c: 0.5 * (lo + hi),
+        })
     }
 }
 
@@ -28657,6 +28736,71 @@ mod tests {
         let err = LogLaplace::try_fit(&[1.0, 1.0, 1.0])
             .expect_err("all-unit data must be rejected");
         assert!(matches!(err, FitError::NonConvergent(_)));
+    }
+
+    #[test]
+    fn bradford_fit_recovers_synthetic_shape() {
+        // Synthesize n samples from Bradford(c=3.0) via deterministic ppf
+        // grid; method-of-moments fit must recover the population mean
+        // exactly (since the mapping is the deterministic inverse of MoM).
+        let true_c = 3.0;
+        let dist = Bradford::new(true_c);
+        let n = 500;
+        let samples: Vec<f64> = (1..=n)
+            .map(|k| dist.ppf((k as f64 - 0.5) / n as f64))
+            .collect();
+        let fitted = Bradford::try_fit(&samples).expect("fit");
+        // The MoM estimator is consistent for the analytical mean. With
+        // n=500 deterministic ppf samples the recovered c is within 5%.
+        let rel_err = (fitted.c - true_c).abs() / true_c;
+        assert!(
+            rel_err < 0.05,
+            "Bradford::fit should recover c={true_c} within 5%; got c={}, rel_err={rel_err}",
+            fitted.c
+        );
+    }
+
+    #[test]
+    fn bradford_fit_metamorphic_idempotence_on_population_mean() {
+        // For any c, fit on the population mean (n synthesized via ppf grid)
+        // must produce a Bradford whose own population mean matches the
+        // sample mean within bisection tolerance.
+        for &c in &[0.5_f64, 2.0, 5.0, 10.0] {
+            let dist = Bradford::new(c);
+            let n = 1000;
+            let samples: Vec<f64> = (1..=n)
+                .map(|k| dist.ppf((k as f64 - 0.5) / n as f64))
+                .collect();
+            let sample_mean = samples.iter().sum::<f64>() / n as f64;
+            let fitted = Bradford::try_fit(&samples).expect("fit");
+            let recovered_mean = fitted.mean();
+            assert!(
+                (recovered_mean - sample_mean).abs() < 1e-6,
+                "MoM idempotence at c={c}: sample_mean={sample_mean}, \
+                 recovered={recovered_mean}"
+            );
+        }
+    }
+
+    #[test]
+    fn bradford_fit_rejects_out_of_interval_data() {
+        let err = Bradford::try_fit(&[0.5, 0.5, 1.5])
+            .expect_err("> 1 must be rejected");
+        assert!(matches!(err, FitError::UnsupportedData(_)));
+    }
+
+    #[test]
+    fn bradford_fit_rejects_mean_at_uniform_limit() {
+        // A sample with mean ≥ 0.5 is the c→0⁺ degenerate limit (uniform).
+        let err = Bradford::try_fit(&[0.4, 0.6])
+            .expect_err("mean=0.5 must be rejected");
+        assert!(matches!(err, FitError::UnsupportedData(_)));
+    }
+
+    #[test]
+    fn bradford_fit_rejects_too_few_samples() {
+        let err = Bradford::try_fit(&[0.3]).expect_err("n=1 must be rejected");
+        assert!(matches!(err, FitError::InsufficientData { .. }));
     }
 
     #[test]
