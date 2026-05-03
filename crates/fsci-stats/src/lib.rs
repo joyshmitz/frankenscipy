@@ -5740,6 +5740,7 @@ impl ContinuousDistribution for Fisk {
 /// Loguniform (reciprocal) distribution on [a, b].
 ///
 /// Matches `scipy.stats.loguniform`.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Loguniform {
     pub a: f64,
     pub b: f64,
@@ -5794,6 +5795,54 @@ impl ContinuousDistribution for Loguniform {
         let log_ratio = (self.b / self.a).ln();
         let m = self.mean();
         (self.b * self.b - self.a * self.a) / (2.0 * log_ratio) - m * m
+    }
+
+    fn fit(data: &[f64]) -> Self {
+        Self::try_fit(data).unwrap_or_else(|e| {
+            panic!("Loguniform::fit failed: {e}");
+        })
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        if data.len() < 2 {
+            return Err(FitError::InsufficientData {
+                required: 2,
+                actual: data.len(),
+            });
+        }
+        // Boundary MLE: a = min(x_i), b = max(x_i). The Loguniform PDF
+        // 1/(x · ln(b/a)) is non-zero only on [a, b], so the likelihood is
+        // strictly increasing as the support shrinks toward the observed
+        // range — the minimum and maximum are the MLEs.
+        let mut min_obs = f64::INFINITY;
+        let mut max_obs = f64::NEG_INFINITY;
+        for &x in data {
+            if !x.is_finite() {
+                return Err(FitError::UnsupportedData(format!(
+                    "Loguniform data contains non-finite value: {x}"
+                )));
+            }
+            if x <= 0.0 {
+                return Err(FitError::UnsupportedData(format!(
+                    "Loguniform support is (0, ∞); got {x}"
+                )));
+            }
+            if x < min_obs {
+                min_obs = x;
+            }
+            if x > max_obs {
+                max_obs = x;
+            }
+        }
+        if !(min_obs < max_obs) {
+            return Err(FitError::NonConvergent(format!(
+                "Loguniform MLE: data has zero range (min={min_obs}, max={max_obs})"
+            )));
+        }
+        Ok(Self {
+            a: min_obs,
+            b: max_obs,
+        })
     }
 }
 
@@ -29264,6 +29313,51 @@ mod tests {
     #[test]
     fn pearson3_fit_rejects_too_few_samples() {
         let err = Pearson3::try_fit(&[1.0, 2.0]).expect_err("n=2 must be rejected");
+        assert!(matches!(err, FitError::InsufficientData { .. }));
+    }
+
+    #[test]
+    fn loguniform_fit_recovers_range() {
+        let data = [0.5_f64, 1.5, 2.0, 3.7, 0.8, 4.2];
+        let fitted = Loguniform::try_fit(&data).expect("fit");
+        assert_eq!(fitted.a, 0.5);
+        assert_eq!(fitted.b, 4.2);
+    }
+
+    #[test]
+    fn loguniform_fit_metamorphic_no_observation_outside_support() {
+        let data: Vec<f64> = (1..=300).map(|i| (i as f64) * 0.1).collect();
+        let fitted = Loguniform::try_fit(&data).expect("fit");
+        for &x in &data {
+            assert!(
+                x >= fitted.a && x <= fitted.b,
+                "observation {x} outside fitted support [{}, {}]",
+                fitted.a,
+                fitted.b
+            );
+        }
+    }
+
+    #[test]
+    fn loguniform_fit_rejects_non_positive() {
+        let err = Loguniform::try_fit(&[1.0, 2.0, 0.0])
+            .expect_err("zero must be rejected");
+        assert!(matches!(err, FitError::UnsupportedData(_)));
+        let err = Loguniform::try_fit(&[1.0, -0.5])
+            .expect_err("negative must be rejected");
+        assert!(matches!(err, FitError::UnsupportedData(_)));
+    }
+
+    #[test]
+    fn loguniform_fit_rejects_constant_data() {
+        let err = Loguniform::try_fit(&[2.0, 2.0, 2.0])
+            .expect_err("zero range must be rejected");
+        assert!(matches!(err, FitError::NonConvergent(_)));
+    }
+
+    #[test]
+    fn loguniform_fit_rejects_too_few_samples() {
+        let err = Loguniform::try_fit(&[1.5]).expect_err("n=1 must be rejected");
         assert!(matches!(err, FitError::InsufficientData { .. }));
     }
 
