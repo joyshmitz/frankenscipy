@@ -5647,6 +5647,7 @@ impl ContinuousDistribution for TruncNormal {
 /// Chi distribution (not chi-squared).
 ///
 /// Matches `scipy.stats.chi`.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Chi {
     pub df: f64,
 }
@@ -5714,6 +5715,46 @@ impl ContinuousDistribution for Chi {
     fn var(&self) -> f64 {
         let m = self.mean();
         self.df - m * m
+    }
+
+    fn fit(data: &[f64]) -> Self {
+        Self::try_fit(data).unwrap_or_else(|e| {
+            panic!("Chi::fit failed: {e}");
+        })
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        if data.len() < 2 {
+            return Err(FitError::InsufficientData {
+                required: 2,
+                actual: data.len(),
+            });
+        }
+        // Chi(df) is sqrt of ChiSquared(df), so E[X²] = df.
+        // Closed-form MoM: df_hat = sample_E[x²].
+        let mut sum2 = 0.0_f64;
+        let mut count = 0usize;
+        for &x in data {
+            if !x.is_finite() {
+                return Err(FitError::UnsupportedData(format!(
+                    "Chi data contains non-finite value: {x}"
+                )));
+            }
+            if x < 0.0 {
+                return Err(FitError::UnsupportedData(format!(
+                    "Chi support is [0, ∞); got {x}"
+                )));
+            }
+            sum2 += x * x;
+            count += 1;
+        }
+        let df = sum2 / count as f64;
+        if df <= 0.0 || !df.is_finite() {
+            return Err(FitError::NonConvergent(format!(
+                "Chi MoM produced non-positive df: {df}"
+            )));
+        }
+        Ok(Self { df })
     }
 }
 
@@ -29943,6 +29984,60 @@ mod tests {
     fn pearson3_fit_rejects_too_few_samples() {
         let err = Pearson3::try_fit(&[1.0, 2.0]).expect_err("n=2 must be rejected");
         assert!(matches!(err, FitError::InsufficientData { .. }));
+    }
+
+    #[test]
+    fn chi_fit_e_x_sq_equals_df() {
+        let data = [0.5_f64, 1.0, 1.5, 2.0, 2.5, 3.0, 1.7, 1.3];
+        let n = data.len() as f64;
+        let m2 = data.iter().map(|x| x * x).sum::<f64>() / n;
+        let fitted = Chi::try_fit(&data).expect("fit");
+        assert!(
+            (fitted.df - m2).abs() < 1e-13,
+            "Chi MoM df-inversion: got {}, expected {m2}",
+            fitted.df
+        );
+    }
+
+    #[test]
+    fn chi_fit_synthetic_recovery() {
+        // Synthesize Chi(df=4) samples via sqrt of ChiSquared(4) ppf grid;
+        // MoM recovers df within 5%.
+        let true_df = 4.0;
+        let chi2 = ChiSquared::new(true_df);
+        let n = 2000;
+        let samples: Vec<f64> = (1..=n)
+            .map(|i| chi2.ppf((i as f64 - 0.5) / n as f64).max(0.0).sqrt())
+            .filter(|x| x.is_finite())
+            .collect();
+        assert!(samples.len() > 1500);
+        let fitted = Chi::try_fit(&samples).expect("fit");
+        let rel = (fitted.df - true_df).abs() / true_df;
+        assert!(
+            rel < 0.05,
+            "Chi::fit recovery: got df={}, true {true_df}, rel_err={rel}",
+            fitted.df
+        );
+    }
+
+    #[test]
+    fn chi_fit_rejects_negative_observation() {
+        let err = Chi::try_fit(&[1.0, 2.0, -0.5])
+            .expect_err("negative must be rejected");
+        assert!(matches!(err, FitError::UnsupportedData(_)));
+    }
+
+    #[test]
+    fn chi_fit_rejects_too_few_samples() {
+        let err = Chi::try_fit(&[1.5]).expect_err("n=1 must be rejected");
+        assert!(matches!(err, FitError::InsufficientData { .. }));
+    }
+
+    #[test]
+    fn chi_fit_rejects_zero_data() {
+        let err = Chi::try_fit(&[0.0, 0.0])
+            .expect_err("all-zero data must be rejected");
+        assert!(matches!(err, FitError::NonConvergent(_)));
     }
 
     #[test]
