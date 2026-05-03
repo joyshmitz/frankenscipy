@@ -502,6 +502,48 @@ pub fn roots_chebys(n: usize) -> (Vec<f64>, Vec<f64>) {
     (nodes, weights)
 }
 
+/// Compute Gauss-Legendre quadrature nodes and weights on `[0, 1]` via the
+/// shifted Legendre polynomials `P*_n(x) = P_n(2x − 1)`.
+///
+/// Matches `scipy.special.roots_sh_legendre(n)`. Nodes are mapped from the
+/// unshifted Legendre roots via `x_shift = (1 + x_unshift) / 2`; weights are
+/// scaled by `1/2` so the quadrature integrates against the unit weight on
+/// `[0, 1]`.
+#[must_use]
+pub fn roots_sh_legendre(n: usize) -> (Vec<f64>, Vec<f64>) {
+    shift_unit_to_zero_one(roots_legendre(n))
+}
+
+/// Compute Gauss-Chebyshev (first kind) quadrature on `[0, 1]` via the
+/// shifted polynomials `T*_n(x) = T_n(2x − 1)`.
+///
+/// Matches `scipy.special.roots_sh_chebyt(n)`. Same shift-and-halve
+/// transformation as `roots_sh_legendre`.
+#[must_use]
+pub fn roots_sh_chebyt(n: usize) -> (Vec<f64>, Vec<f64>) {
+    shift_unit_to_zero_one(roots_chebyt(n))
+}
+
+/// Compute Gauss-Chebyshev (second kind) quadrature on `[0, 1]` via the
+/// shifted polynomials `U*_n(x) = U_n(2x − 1)`.
+///
+/// Matches `scipy.special.roots_sh_chebyu(n)`.
+#[must_use]
+pub fn roots_sh_chebyu(n: usize) -> (Vec<f64>, Vec<f64>) {
+    shift_unit_to_zero_one(roots_chebyu(n))
+}
+
+/// Map `(nodes, weights)` from the canonical `[-1, 1]` interval to the
+/// shifted `[0, 1]` interval. The node transformation is `x ↦ (1 + x) / 2`
+/// and weights scale by `1/2` to preserve the integral identity.
+fn shift_unit_to_zero_one(
+    (nodes, weights): (Vec<f64>, Vec<f64>),
+) -> (Vec<f64>, Vec<f64>) {
+    let shifted_nodes = nodes.into_iter().map(|x| 0.5 * (1.0 + x)).collect();
+    let shifted_weights = weights.into_iter().map(|w| 0.5 * w).collect();
+    (shifted_nodes, shifted_weights)
+}
+
 /// Compute Gauss-Hermite quadrature nodes and weights on `(-∞, ∞)`.
 ///
 /// The weight function is `exp(-x^2)`.
@@ -1848,6 +1890,92 @@ mod tests {
         let (vals_at_one, _) = lqn(2, 1.0);
         for v in &vals_at_one {
             assert!(v.is_nan(), "expected NaN at x=1, got {v}");
+        }
+    }
+
+    #[test]
+    fn roots_sh_legendre_in_unit_interval() {
+        let (nodes, weights) = roots_sh_legendre(7);
+        assert_eq!(nodes.len(), 7);
+        assert_eq!(weights.len(), 7);
+        for x in &nodes {
+            assert!(*x > 0.0 && *x < 1.0, "node {x} outside (0, 1)");
+        }
+        for w in &weights {
+            assert!(*w > 0.0, "weight {w} should be positive");
+        }
+    }
+
+    #[test]
+    fn roots_sh_legendre_metamorphic_weight_sum_is_one() {
+        // The shifted-Legendre weights are halved so they integrate against
+        // unit weight on [0, 1]. Their sum equals the integral of 1 on
+        // [0, 1] = 1.
+        for n in 1..=8 {
+            let (_, w) = roots_sh_legendre(n);
+            let sum: f64 = w.iter().sum();
+            assert!(
+                (sum - 1.0).abs() < 1e-12,
+                "n={n}: shifted-Legendre weight sum {sum} != 1"
+            );
+        }
+    }
+
+    #[test]
+    fn roots_sh_legendre_metamorphic_node_relation() {
+        // Shifted node = (1 + unshifted node) / 2.
+        let n = 6;
+        let (sh_nodes, sh_weights) = roots_sh_legendre(n);
+        let (un_nodes, un_weights) = roots_legendre(n);
+        for (sh, un) in sh_nodes.iter().zip(un_nodes.iter()) {
+            let expected = 0.5 * (1.0 + un);
+            assert!(
+                (sh - expected).abs() < 1e-13,
+                "shifted node {sh} should be (1+{un})/2 = {expected}"
+            );
+        }
+        for (sh, un) in sh_weights.iter().zip(un_weights.iter()) {
+            assert!(
+                (sh - 0.5 * un).abs() < 1e-13,
+                "shifted weight {sh} should be {un}/2"
+            );
+        }
+    }
+
+    #[test]
+    fn roots_sh_chebyt_in_unit_interval_with_uniform_weights() {
+        let n = 5;
+        let (nodes, weights) = roots_sh_chebyt(n);
+        for x in &nodes {
+            assert!(*x > 0.0 && *x < 1.0);
+        }
+        // Shifted Chebyshev-T weights are π/(2n) (uniform π/n halved).
+        let expected = std::f64::consts::PI / (2.0 * n as f64);
+        for w in &weights {
+            assert!((w - expected).abs() < 1e-15);
+        }
+    }
+
+    #[test]
+    fn roots_sh_chebyu_in_unit_interval() {
+        let (nodes, weights) = roots_sh_chebyu(6);
+        assert_eq!(nodes.len(), 6);
+        for x in &nodes {
+            assert!(*x > 0.0 && *x < 1.0);
+        }
+        for w in &weights {
+            assert!(*w > 0.0);
+        }
+    }
+
+    #[test]
+    fn roots_sh_n_zero_returns_empty() {
+        for (a, b) in [
+            roots_sh_legendre(0),
+            roots_sh_chebyt(0),
+            roots_sh_chebyu(0),
+        ] {
+            assert!(a.is_empty() && b.is_empty());
         }
     }
 
