@@ -23,6 +23,9 @@ name = "benchmark_gate"
 [[bin]]
 name = "raptorq_sidecar"
 
+[[bin]]
+name = "tolerance_lint"
+
 [lints]
 workspace = true
 
