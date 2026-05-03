@@ -2744,6 +2744,55 @@ pub fn zeta_scalar(s: f64) -> f64 {
     crate::gamma::zeta(s)
 }
 
+/// Compute `ln(1 + x) − x` with stable evaluation near zero.
+///
+/// Matches `scipy.special.log1pmx(x)`. The naive form loses precision for
+/// small `x` because `ln(1+x)` and `x` cancel each other. For `|x| ≤ 0.5`
+/// this implementation uses the convergent Taylor expansion
+///
+///   log1pmx(x) = −x²/2 + x³/3 − x⁴/4 + x⁵/5 − …
+///
+/// truncated when the next term is below ULP-level relative to the current
+/// partial sum (typically ≤ 25 terms for any |x| ≤ 0.5). For larger |x|
+/// the direct `ln_1p(x) - x` form is accurate enough and is used directly.
+///
+/// Edge cases:
+/// - `x = 0` returns `0.0` exactly (no subtraction).
+/// - `x ≤ -1` returns NaN (ln domain), matching scipy.
+/// - NaN propagates.
+pub fn log1pmx_scalar(x: f64) -> f64 {
+    if x.is_nan() {
+        return f64::NAN;
+    }
+    if x == 0.0 {
+        return 0.0;
+    }
+    if x <= -1.0 {
+        return f64::NAN;
+    }
+    if x.abs() <= 0.5 {
+        // Taylor: -x²/2 + x³/3 - x⁴/4 + ...
+        // Compute from k=2 upward; accumulator term at step k is (-x)^k / k.
+        let mut term = -x * x / 2.0;
+        let mut sum = term;
+        let mut k = 2.0_f64;
+        // We decrement |term| by |x| · k/(k+1) per step. With |x| ≤ 0.5 and
+        // 24 iterations we already crush the term to < 0.5^24 / 24 ≈ 2.5e-9
+        // relative; in practice an f64-relative test exits much earlier.
+        for _ in 0..50 {
+            term = -term * x * (k / (k + 1.0));
+            sum += term;
+            if term.abs() < f64::EPSILON * sum.abs() {
+                return sum;
+            }
+            k += 1.0;
+        }
+        sum
+    } else {
+        x.ln_1p() - x
+    }
+}
+
 /// Compute the Faddeeva function w(z) = exp(−z²) · erfc(−iz) at a real
 /// argument `x`, returning the real and imaginary parts as `(re, im)`.
 ///
@@ -7836,6 +7885,54 @@ mod tests {
         assert!(cosm1_scalar(f64::NAN).is_nan());
         // Exactly π: cos(π) - 1 = -2.
         assert!((cosm1_scalar(std::f64::consts::PI) - (-2.0)).abs() < 1e-15);
+    }
+
+    #[test]
+    fn log1pmx_at_zero_is_exact_zero() {
+        assert_eq!(log1pmx_scalar(0.0), 0.0);
+    }
+
+    #[test]
+    fn log1pmx_metamorphic_matches_naive_at_moderate_x() {
+        for &x in &[0.5_f64, 1.0, 2.0, 5.0, 10.0] {
+            let lp = log1pmx_scalar(x);
+            let naive = x.ln_1p() - x;
+            assert!(
+                (lp - naive).abs() < 1e-13 * naive.abs().max(1.0),
+                "log1pmx({x}) = {lp} vs naive {naive}"
+            );
+        }
+    }
+
+    #[test]
+    fn log1pmx_metamorphic_beats_naive_near_zero() {
+        // At x = 1e-8, log1pmx(x) ≈ -x²/2 = -5e-17. The naive form
+        // ln(1 + 1e-8) - 1e-8 has only ~7 significant digits left after
+        // cancellation; the Taylor path keeps full precision.
+        let x = 1.0e-8_f64;
+        let lp = log1pmx_scalar(x);
+        let truth = -x * x * 0.5; // dominant term
+        let rel_err = (lp - truth).abs() / truth.abs();
+        assert!(
+            rel_err < 1e-6,
+            "log1pmx({x}) = {lp}, expected ~{truth}, rel_err={rel_err}"
+        );
+    }
+
+    #[test]
+    fn log1pmx_propagates_nan_and_domain_error() {
+        assert!(log1pmx_scalar(f64::NAN).is_nan());
+        assert!(log1pmx_scalar(-1.0).is_nan());
+        assert!(log1pmx_scalar(-2.0).is_nan());
+    }
+
+    #[test]
+    fn log1pmx_metamorphic_signs() {
+        // log1pmx(x) ≤ 0 for all x > -1 because ln(1+x) ≤ x by concavity.
+        for &x in &[-0.5_f64, -0.1, -0.01, 0.01, 0.5, 1.0, 5.0, 100.0] {
+            let v = log1pmx_scalar(x);
+            assert!(v <= 0.0, "log1pmx({x}) = {v} should be ≤ 0");
+        }
     }
 
     #[test]

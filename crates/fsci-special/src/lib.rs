@@ -132,6 +132,7 @@ pub use convenience::{
     log1mexp,
     log1p,
     log1pexp,
+    log1pmx_scalar,
     log2,
     log10,
     logaddexp,
