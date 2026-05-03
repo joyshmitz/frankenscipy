@@ -1723,6 +1723,304 @@ fn parse_hb_real_stream(lines: &[&str], expected: usize, ctx: &str) -> Result<Ve
     Ok(out)
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// ARFF (Weka attribute-relation file format)
+// ══════════════════════════════════════════════════════════════════════
+
+/// ARFF attribute type. Date and relational attributes are intentionally
+/// not supported in this initial slice and are tracked as follow-ons under
+/// bead `frankenscipy-vsas0`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ArffAttribute {
+    /// `@attribute name numeric` / `real` / `integer`.
+    Numeric { name: String },
+    /// `@attribute name {a, b, c}`. Domain is the ordered list of allowed
+    /// nominal values (case-sensitive).
+    Nominal { name: String, domain: Vec<String> },
+    /// `@attribute name string`. Free-form text.
+    String { name: String },
+}
+
+impl ArffAttribute {
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Numeric { name } | Self::Nominal { name, .. } | Self::String { name } => name,
+        }
+    }
+}
+
+/// One ARFF data cell. Missing values are encoded as `?` in the file and
+/// surface as `Missing` here.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ArffValue {
+    Numeric(f64),
+    Nominal(String),
+    String(String),
+    Missing,
+}
+
+/// Parsed ARFF file. Sparse rows are expanded to their dense equivalent
+/// (missing positions filled with the type-appropriate zero/empty value)
+/// for parity with `scipy.io.arff.loadarff`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArffData {
+    pub relation: String,
+    pub attributes: Vec<ArffAttribute>,
+    pub rows: Vec<Vec<ArffValue>>,
+}
+
+/// Read an ARFF (Weka attribute-relation file format) string.
+///
+/// Supports numeric, nominal, and string attributes; comments (`%`); sparse
+/// rows (`{ idx val, idx val }`); single- and double-quoted string values.
+/// Date and relational attributes return `UnsupportedFeature`.
+pub fn read_arff(content: &str) -> Result<ArffData, IoError> {
+    let mut relation: Option<String> = None;
+    let mut attributes: Vec<ArffAttribute> = Vec::new();
+    let mut rows: Vec<Vec<ArffValue>> = Vec::new();
+    let mut in_data_section = false;
+
+    for raw_line in content.lines() {
+        let line = strip_arff_comment(raw_line).trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        if !in_data_section {
+            let lower = line.to_ascii_lowercase();
+            if lower.starts_with("@relation") {
+                relation = Some(unquote_arff(line["@relation".len()..].trim()));
+            } else if lower.starts_with("@attribute") {
+                attributes.push(parse_arff_attribute(line)?);
+            } else if lower == "@data" {
+                in_data_section = true;
+            } else {
+                return Err(IoError::InvalidFormat(format!(
+                    "ARFF: unexpected directive in header: {line}"
+                )));
+            }
+        } else {
+            rows.push(parse_arff_data_row(line, &attributes)?);
+        }
+    }
+
+    let relation = relation
+        .ok_or_else(|| IoError::InvalidFormat("ARFF: missing @relation header".to_string()))?;
+    if attributes.is_empty() {
+        return Err(IoError::InvalidFormat(
+            "ARFF: at least one @attribute is required".to_string(),
+        ));
+    }
+    Ok(ArffData {
+        relation,
+        attributes,
+        rows,
+    })
+}
+
+fn strip_arff_comment(line: &str) -> &str {
+    // Comments start with '%' but not inside quotes. ARFF doesn't escape
+    // '%' inside quotes by anything other than scanning past the quote.
+    let bytes = line.as_bytes();
+    let mut in_single = false;
+    let mut in_double = false;
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            b'\'' if !in_double => in_single = !in_single,
+            b'"' if !in_single => in_double = !in_double,
+            b'%' if !in_single && !in_double => return &line[..i],
+            _ => {}
+        }
+    }
+    line
+}
+
+fn unquote_arff(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if (trimmed.starts_with('\'') && trimmed.ends_with('\'') && trimmed.len() >= 2)
+        || (trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2)
+    {
+        trimmed[1..trimmed.len() - 1].to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn parse_arff_attribute(line: &str) -> Result<ArffAttribute, IoError> {
+    // After '@attribute', tokens: name TYPE_OR_DOMAIN
+    let body = &line[10.min(line.len())..].trim_start();
+    let (name, rest) = split_arff_first_token(body)?;
+    let name = unquote_arff(&name);
+    let rest = rest.trim();
+    if rest.starts_with('{') {
+        let close = rest.find('}').ok_or_else(|| {
+            IoError::InvalidFormat(format!("ARFF nominal attribute '{name}': missing '}}'"))
+        })?;
+        let domain: Vec<String> = rest[1..close]
+            .split(',')
+            .map(|s| unquote_arff(s.trim()))
+            .filter(|s| !s.is_empty())
+            .collect();
+        if domain.is_empty() {
+            return Err(IoError::InvalidFormat(format!(
+                "ARFF nominal attribute '{name}': empty domain"
+            )));
+        }
+        Ok(ArffAttribute::Nominal { name, domain })
+    } else {
+        let type_token = rest
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        match type_token.as_str() {
+            "numeric" | "real" | "integer" => Ok(ArffAttribute::Numeric { name }),
+            "string" => Ok(ArffAttribute::String { name }),
+            "date" => Err(IoError::UnsupportedFeature(format!(
+                "ARFF date attribute '{name}' (frankenscipy-vsas0 follow-on)"
+            ))),
+            "relational" => Err(IoError::UnsupportedFeature(format!(
+                "ARFF relational attribute '{name}' (frankenscipy-vsas0 follow-on)"
+            ))),
+            other => Err(IoError::InvalidFormat(format!(
+                "ARFF attribute '{name}': unknown type '{other}'"
+            ))),
+        }
+    }
+}
+
+fn split_arff_first_token(input: &str) -> Result<(String, &str), IoError> {
+    let bytes = input.as_bytes();
+    if bytes.is_empty() {
+        return Err(IoError::InvalidFormat("ARFF: missing attribute name".into()));
+    }
+    let (end, _quote) = match bytes[0] {
+        b'\'' | b'"' => {
+            let quote = bytes[0];
+            let mut i = 1usize;
+            while i < bytes.len() && bytes[i] != quote {
+                i += 1;
+            }
+            if i >= bytes.len() {
+                return Err(IoError::InvalidFormat(
+                    "ARFF: unterminated quoted attribute name".into(),
+                ));
+            }
+            (i + 1, Some(quote))
+        }
+        _ => (
+            bytes
+                .iter()
+                .position(|b| b.is_ascii_whitespace())
+                .unwrap_or(bytes.len()),
+            None,
+        ),
+    };
+    Ok((input[..end].to_string(), &input[end..]))
+}
+
+fn parse_arff_data_row(
+    line: &str,
+    attributes: &[ArffAttribute],
+) -> Result<Vec<ArffValue>, IoError> {
+    let trimmed = line.trim();
+    if trimmed.starts_with('{') {
+        let close = trimmed
+            .find('}')
+            .ok_or_else(|| IoError::InvalidFormat("ARFF sparse row: missing '}'".into()))?;
+        let mut row = vec![ArffValue::Missing; attributes.len()];
+        // Initialize numeric cells to 0.0 per ARFF sparse semantics.
+        for (i, attr) in attributes.iter().enumerate() {
+            if matches!(attr, ArffAttribute::Numeric { .. }) {
+                row[i] = ArffValue::Numeric(0.0);
+            }
+        }
+        for entry in trimmed[1..close].split(',') {
+            let entry = entry.trim();
+            if entry.is_empty() {
+                continue;
+            }
+            let mut parts = entry.splitn(2, char::is_whitespace);
+            let idx_token = parts.next().unwrap_or("");
+            let val_token = parts.next().unwrap_or("").trim();
+            let idx: usize = idx_token.parse().map_err(|e| {
+                IoError::InvalidFormat(format!("ARFF sparse index '{idx_token}': {e}"))
+            })?;
+            if idx >= attributes.len() {
+                return Err(IoError::InvalidFormat(format!(
+                    "ARFF sparse index {idx} out of range for {} attributes",
+                    attributes.len()
+                )));
+            }
+            row[idx] = parse_arff_cell(val_token, &attributes[idx])?;
+        }
+        Ok(row)
+    } else {
+        let cells = split_arff_csv_cells(trimmed);
+        if cells.len() != attributes.len() {
+            return Err(IoError::InvalidFormat(format!(
+                "ARFF dense row: got {} cells but {} attributes declared",
+                cells.len(),
+                attributes.len()
+            )));
+        }
+        cells
+            .iter()
+            .zip(attributes.iter())
+            .map(|(cell, attr)| parse_arff_cell(cell.trim(), attr))
+            .collect()
+    }
+}
+
+fn split_arff_csv_cells(line: &str) -> Vec<String> {
+    let mut cells = Vec::new();
+    let mut current = String::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    for ch in line.chars() {
+        match ch {
+            '\'' if !in_double => {
+                in_single = !in_single;
+                current.push(ch);
+            }
+            '"' if !in_single => {
+                in_double = !in_double;
+                current.push(ch);
+            }
+            ',' if !in_single && !in_double => {
+                cells.push(std::mem::take(&mut current));
+            }
+            _ => current.push(ch),
+        }
+    }
+    cells.push(current);
+    cells
+}
+
+fn parse_arff_cell(token: &str, attribute: &ArffAttribute) -> Result<ArffValue, IoError> {
+    if token == "?" {
+        return Ok(ArffValue::Missing);
+    }
+    match attribute {
+        ArffAttribute::Numeric { name } => {
+            let v: f64 = token.parse().map_err(|e| {
+                IoError::InvalidFormat(format!("ARFF numeric '{name}' value '{token}': {e}"))
+            })?;
+            Ok(ArffValue::Numeric(v))
+        }
+        ArffAttribute::Nominal { name, domain } => {
+            let unquoted = unquote_arff(token);
+            if !domain.contains(&unquoted) {
+                return Err(IoError::InvalidFormat(format!(
+                    "ARFF nominal '{name}': value '{unquoted}' not in domain"
+                )));
+            }
+            Ok(ArffValue::Nominal(unquoted))
+        }
+        ArffAttribute::String { .. } => Ok(ArffValue::String(unquote_arff(token))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2719,5 +3017,131 @@ mod tests {
         );
         let mat = read_harwell_boeing(&content).expect("lowercase d parse");
         assert_eq!(mat.values, vec![1.5, -0.25]);
+    }
+
+    #[test]
+    fn read_arff_minimal_dense_numeric_and_nominal() {
+        let arff = "@relation iris\n\
+                    @attribute sepal_length numeric\n\
+                    @attribute class {Iris-setosa, Iris-versicolor, Iris-virginica}\n\
+                    @data\n\
+                    5.1, Iris-setosa\n\
+                    7.0, Iris-versicolor\n";
+        let parsed = read_arff(arff).expect("ARFF parse");
+        assert_eq!(parsed.relation, "iris");
+        assert_eq!(parsed.attributes.len(), 2);
+        assert_eq!(parsed.rows.len(), 2);
+        match &parsed.rows[0][0] {
+            ArffValue::Numeric(v) => assert!((v - 5.1).abs() < 1e-12),
+            other => panic!("expected numeric, got {other:?}"),
+        }
+        match &parsed.rows[0][1] {
+            ArffValue::Nominal(v) => assert_eq!(v, "Iris-setosa"),
+            other => panic!("expected nominal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn read_arff_metamorphic_attribute_count_invariant() {
+        let arff = "@relation r\n\
+                    @attribute a numeric\n\
+                    @attribute b numeric\n\
+                    @attribute c {x, y}\n\
+                    @data\n\
+                    1, 2, x\n\
+                    3, 4, y\n";
+        let parsed = read_arff(arff).unwrap();
+        for (idx, row) in parsed.rows.iter().enumerate() {
+            assert_eq!(row.len(), parsed.attributes.len(), "row {idx}");
+        }
+    }
+
+    #[test]
+    fn read_arff_metamorphic_nominal_domain_consistency() {
+        // Every nominal cell in a row must match its column's declared domain.
+        let arff = "@relation r\n\
+                    @attribute c {a, b, c}\n\
+                    @data\n\
+                    a\n\
+                    b\n\
+                    c\n";
+        let parsed = read_arff(arff).unwrap();
+        let domain = match &parsed.attributes[0] {
+            ArffAttribute::Nominal { domain, .. } => domain.clone(),
+            _ => panic!("expected nominal"),
+        };
+        for row in &parsed.rows {
+            match &row[0] {
+                ArffValue::Nominal(v) => assert!(domain.contains(v), "{v} not in {domain:?}"),
+                other => panic!("expected nominal, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn read_arff_sparse_row_expansion() {
+        let arff = "@relation r\n\
+                    @attribute a numeric\n\
+                    @attribute b numeric\n\
+                    @attribute c {x, y}\n\
+                    @data\n\
+                    {0 5.5, 2 y}\n";
+        let parsed = read_arff(arff).unwrap();
+        assert_eq!(parsed.rows.len(), 1);
+        let row = &parsed.rows[0];
+        // Per ARFF sparse semantics: missing numeric cells default to 0.0.
+        match &row[0] {
+            ArffValue::Numeric(v) => assert!((v - 5.5).abs() < 1e-12),
+            other => panic!("got {other:?}"),
+        }
+        match &row[1] {
+            ArffValue::Numeric(v) => assert_eq!(*v, 0.0),
+            other => panic!("got {other:?}"),
+        }
+        match &row[2] {
+            ArffValue::Nominal(v) => assert_eq!(v, "y"),
+            other => panic!("got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn read_arff_handles_comments_and_quotes() {
+        let arff = "% top comment\n\
+                    @relation 'fancy name'\n\
+                    @attribute a numeric % inline numeric\n\
+                    @attribute b string\n\
+                    @data\n\
+                    1.0, 'hello world'\n\
+                    2.0, \"with comma, here\"\n\
+                    ?, ?\n";
+        let parsed = read_arff(arff).expect("ARFF parse with comments");
+        assert_eq!(parsed.relation, "fancy name");
+        assert_eq!(parsed.rows.len(), 3);
+        match &parsed.rows[1][1] {
+            ArffValue::String(s) => assert_eq!(s, "with comma, here"),
+            other => panic!("got {other:?}"),
+        }
+        assert_eq!(parsed.rows[2][0], ArffValue::Missing);
+        assert_eq!(parsed.rows[2][1], ArffValue::Missing);
+    }
+
+    #[test]
+    fn read_arff_rejects_date_attribute_as_unsupported() {
+        let arff = "@relation r\n\
+                    @attribute when date \"yyyy-MM-dd\"\n\
+                    @data\n\
+                    \"2026-05-03\"\n";
+        let err = read_arff(arff).expect_err("date should be unsupported");
+        assert!(matches!(err, IoError::UnsupportedFeature(_)));
+    }
+
+    #[test]
+    fn read_arff_rejects_value_outside_nominal_domain() {
+        let arff = "@relation r\n\
+                    @attribute c {a, b}\n\
+                    @data\n\
+                    z\n";
+        let err = read_arff(arff).expect_err("z not in {a,b}");
+        assert!(matches!(err, IoError::InvalidFormat(_)));
     }
 }
