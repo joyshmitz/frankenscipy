@@ -200,6 +200,7 @@ pub use convenience::{
     tanhshrink,
     tetragamma,
     threshold,
+    tklmbda,
     trigamma,
     trunc,
     wrightomega,

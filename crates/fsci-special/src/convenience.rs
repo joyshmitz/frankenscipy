@@ -2744,6 +2744,79 @@ pub fn zeta_scalar(s: f64) -> f64 {
     crate::gamma::zeta(s)
 }
 
+/// Compute the Tukey-lambda CDF F(x; λ).
+///
+/// Matches `scipy.special.tklmbda(x, lam)`. The Tukey-lambda family has a
+/// closed-form inverse-CDF (PPF) but no closed-form CDF. The PPF is
+///
+///   F⁻¹(p; λ) = (p^λ - (1-p)^λ) / λ  for λ ≠ 0
+///   F⁻¹(p; 0) = ln(p / (1-p))         (logistic limit)
+///
+/// We invert it by bisection on `p ∈ (0, 1)`: the function p ↦ F⁻¹(p; λ) is
+/// strictly increasing for any λ, so a single root exists when `x` is inside
+/// the support. For λ > 0 the support is the bounded interval
+/// `[-(1/λ), 1/λ]`; outside, the CDF saturates to 0 or 1.
+///
+/// Special cases:
+/// - λ == 0: F(x) = 1 / (1 + e^{-x}) (logistic CDF, returned directly).
+/// - x == 0: F(0; λ) = 1/2 for any λ (closed-form, by symmetry).
+pub fn tklmbda(x: f64, lam: f64) -> f64 {
+    if x.is_nan() || lam.is_nan() {
+        return f64::NAN;
+    }
+    if x == 0.0 {
+        return 0.5;
+    }
+    if lam == 0.0 {
+        // Logistic CDF: 1 / (1 + e^{-x}). Use the negative-x branch for
+        // stability when x is very negative.
+        if x >= 0.0 {
+            return 1.0 / (1.0 + (-x).exp());
+        }
+        let ex = x.exp();
+        return ex / (1.0 + ex);
+    }
+    // Bounded support for λ > 0: x ∈ [-1/λ, 1/λ].
+    if lam > 0.0 {
+        let bound = 1.0 / lam;
+        if x <= -bound {
+            return 0.0;
+        }
+        if x >= bound {
+            return 1.0;
+        }
+    }
+    // Bisection for p ∈ (eps, 1 - eps).
+    let ppf = |p: f64| (p.powf(lam) - (1.0 - p).powf(lam)) / lam;
+    let eps = 1.0e-300;
+    let mut lo = eps;
+    let mut hi = 1.0 - eps;
+    let f_lo = ppf(lo);
+    let f_hi = ppf(hi);
+    // Verify the root is bracketed; if x is outside the closed form's
+    // image (which happens for λ ≤ 0 with extreme x), return the saturated
+    // tail value.
+    if x <= f_lo {
+        return 0.0;
+    }
+    if x >= f_hi {
+        return 1.0;
+    }
+    for _ in 0..100 {
+        let mid = 0.5 * (lo + hi);
+        let f_mid = ppf(mid);
+        if (f_mid - x).abs() < 1.0e-14 || (hi - lo) < 1.0e-15 {
+            return mid;
+        }
+        if f_mid < x {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    0.5 * (lo + hi)
+}
+
 /// Compute `x.powf(y) - 1` with extra accuracy near `x^y == 1`.
 ///
 /// Matches `scipy.special.powm1`. The naive `x.powf(y) - 1` loses precision
@@ -7730,5 +7803,67 @@ mod tests {
         assert!(cosm1_scalar(f64::NAN).is_nan());
         // Exactly π: cos(π) - 1 = -2.
         assert!((cosm1_scalar(std::f64::consts::PI) - (-2.0)).abs() < 1e-15);
+    }
+
+    #[test]
+    fn tklmbda_at_origin_is_half_for_all_lambda() {
+        // F(0; λ) = 1/2 for any λ by symmetry.
+        for &lam in &[-0.5_f64, 0.0, 0.5, 1.0, 2.0] {
+            let f = tklmbda(0.0, lam);
+            assert!((f - 0.5).abs() < 1e-15, "F(0; {lam}) = {f}");
+        }
+    }
+
+    #[test]
+    fn tklmbda_lambda_zero_matches_logistic() {
+        // λ = 0 collapses to the logistic CDF.
+        for &x in &[-3.0_f64, -1.0, 0.0, 1.0, 3.0] {
+            let logistic = 1.0 / (1.0 + (-x).exp());
+            let f = tklmbda(x, 0.0);
+            assert!(
+                (f - logistic).abs() < 1e-12,
+                "λ=0 logistic mismatch at x={x}: {f} vs {logistic}"
+            );
+        }
+    }
+
+    #[test]
+    fn tklmbda_metamorphic_complement_symmetry() {
+        // F(-x; λ) = 1 - F(x; λ) by symmetry of the Tukey-lambda family.
+        for &lam in &[-0.5_f64, 0.5, 1.0, 1.5] {
+            for &x in &[-1.0_f64, -0.3, 0.5, 1.0] {
+                let a = tklmbda(x, lam);
+                let b = tklmbda(-x, lam);
+                assert!(
+                    (a + b - 1.0).abs() < 1e-10,
+                    "complement violated at (x={x}, λ={lam}): {a} + {b} = {}",
+                    a + b
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tklmbda_lambda_one_uniform_image() {
+        // For λ = 1, F⁻¹(p; 1) = (p^1 - (1-p)^1) / 1 = 2p - 1, so F(x; 1) = (x+1)/2 on [-1, 1].
+        for &x in &[-0.8_f64, -0.3, 0.0, 0.5, 0.7] {
+            let expected = (x + 1.0) * 0.5;
+            let f = tklmbda(x, 1.0);
+            assert!(
+                (f - expected).abs() < 1e-10,
+                "λ=1 affine mismatch at x={x}: {f} vs {expected}"
+            );
+        }
+        // Saturation: x = ±1 must give 0 / 1 exactly.
+        assert_eq!(tklmbda(-1.0, 1.0), 0.0);
+        assert_eq!(tklmbda(1.0, 1.0), 1.0);
+        assert_eq!(tklmbda(-2.0, 1.0), 0.0);
+        assert_eq!(tklmbda(2.0, 1.0), 1.0);
+    }
+
+    #[test]
+    fn tklmbda_propagates_nan() {
+        assert!(tklmbda(f64::NAN, 0.5).is_nan());
+        assert!(tklmbda(0.5, f64::NAN).is_nan());
     }
 }
