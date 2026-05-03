@@ -675,6 +675,14 @@ pub fn lb_to_kg(lb: f64) -> f64 {
 mod tests {
     use super::*;
 
+    fn assert_close(actual: f64, expected: f64, tolerance: f64, relation: &str) {
+        let delta = (actual - expected).abs();
+        assert!(
+            delta <= tolerance,
+            "{relation}: actual={actual:.17e}, expected={expected:.17e}, delta={delta:.17e}, tolerance={tolerance:.17e}"
+        );
+    }
+
     #[test]
     fn speed_of_light_exact() {
         assert_eq!(SPEED_OF_LIGHT, 299_792_458.0);
@@ -745,6 +753,207 @@ mod tests {
         assert!(
             (CONDUCTANCE_QUANTUM * VON_KLITZING - 2.0).abs() < 1e-9,
             "G0 * R_K should equal 2"
+        );
+    }
+
+    #[test]
+    fn metamorphic_temperature_conversions_are_roundtrip_stable() {
+        let kelvin_cases = [0.0, 1.0, 273.15, 310.15, 373.15, 1_000.0];
+        let scales = ["kelvin", "celsius", "fahrenheit", "rankine"];
+
+        for kelvin in kelvin_cases {
+            for from_scale in scales {
+                let source = convert_temperature(kelvin, "kelvin", from_scale)
+                    .expect("kelvin should convert to every supported scale");
+                for to_scale in scales {
+                    let converted = convert_temperature(source, from_scale, to_scale)
+                        .expect("supported source and target scales should convert");
+                    let roundtrip = convert_temperature(converted, to_scale, from_scale)
+                        .expect("supported target scale should convert back");
+                    assert_close(
+                        roundtrip,
+                        source,
+                        1e-10,
+                        "temperature conversion should roundtrip through any supported scale",
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn metamorphic_unit_conversions_are_inverse_and_linear() {
+        for ev in [1e-9, 1.0, 13.605_693_122_994, 1e9] {
+            assert_close(
+                joules_to_ev(ev_to_joules(ev)),
+                ev,
+                ev.abs().max(1.0) * 1e-15,
+                "electron-volt conversion should invert joule conversion",
+            );
+            assert_close(
+                ev_to_joules(ev * 2.0),
+                ev_to_joules(ev) * 2.0,
+                ev_to_joules(ev.abs()).max(1.0) * 1e-15,
+                "electron-volt conversion should be linear",
+            );
+        }
+
+        for degrees in [-720.0, -45.0, 0.0, 90.0, 360.0] {
+            assert_close(
+                rad2deg(deg2rad(degrees)),
+                degrees,
+                1e-12,
+                "degree/radian conversion should roundtrip",
+            );
+        }
+
+        for pounds in [0.0, 1.0, 2.2, 150.5] {
+            assert_close(
+                kg_to_lb(lb_to_kg(pounds)),
+                pounds,
+                1e-12,
+                "pound/kilogram conversion should roundtrip",
+            );
+        }
+
+        for wavelength in [1e-12, 532e-9, 21.106_114_054_160e-2] {
+            assert_close(
+                freq_to_wavelength(wavelength_to_freq(wavelength)),
+                wavelength,
+                wavelength * 1e-15,
+                "wavelength/frequency conversion should roundtrip",
+            );
+        }
+    }
+
+    #[test]
+    fn metamorphic_particle_energy_and_wavelength_constants_are_self_consistent() {
+        let mass_energy_cases = [
+            (
+                ELECTRON_MASS,
+                ELECTRON_MASS_MEV,
+                5e-9,
+                "electron mass energy",
+            ),
+            (PROTON_MASS, PROTON_MASS_MEV, 5e-9, "proton mass energy"),
+            (NEUTRON_MASS, NEUTRON_MASS_MEV, 5e-9, "neutron mass energy"),
+            (MUON_MASS, MUON_MASS_MEV, 5e-9, "muon mass energy"),
+            (TAU_MASS, TAU_MASS_MEV, 5e-5, "tau mass energy"),
+            (
+                DEUTERON_MASS,
+                DEUTERON_MASS_MEV,
+                5e-9,
+                "deuteron mass energy",
+            ),
+            (
+                ALPHA_PARTICLE_MASS,
+                ALPHA_PARTICLE_MASS_MEV,
+                5e-9,
+                "alpha particle mass energy",
+            ),
+            (HELION_MASS, HELION_MASS_MEV, 5e-9, "helion mass energy"),
+            (TRITON_MASS, TRITON_MASS_MEV, 5e-9, "triton mass energy"),
+        ];
+
+        for (mass_kg, energy_mev, relative_tolerance, relation) in mass_energy_cases {
+            let derived_mev = joules_to_ev(mass_kg * SPEED_OF_LIGHT * SPEED_OF_LIGHT) / 1e6;
+            assert_close(
+                derived_mev,
+                energy_mev,
+                energy_mev.abs().max(1.0) * relative_tolerance,
+                relation,
+            );
+        }
+
+        let compton_cases = [
+            (
+                ELECTRON_MASS,
+                COMPTON_WAVELENGTH,
+                5e-9,
+                "electron Compton wavelength",
+            ),
+            (
+                PROTON_MASS,
+                PROTON_COMPTON_WAVELENGTH,
+                5e-9,
+                "proton Compton wavelength",
+            ),
+            (
+                NEUTRON_MASS,
+                NEUTRON_COMPTON_WAVELENGTH,
+                5e-9,
+                "neutron Compton wavelength",
+            ),
+            (
+                MUON_MASS,
+                MUON_COMPTON_WAVELENGTH,
+                5e-9,
+                "muon Compton wavelength",
+            ),
+            (
+                TAU_MASS,
+                TAU_COMPTON_WAVELENGTH,
+                5e-5,
+                "tau Compton wavelength",
+            ),
+        ];
+
+        for (mass_kg, wavelength, relative_tolerance, relation) in compton_cases {
+            let derived = PLANCK / (mass_kg * SPEED_OF_LIGHT);
+            assert_close(
+                derived,
+                wavelength,
+                wavelength * relative_tolerance,
+                relation,
+            );
+        }
+    }
+
+    #[test]
+    fn metamorphic_reciprocal_and_radiation_constants_are_self_consistent() {
+        let reciprocal_cases = [
+            (
+                ELECTRON_PROTON_MASS_RATIO,
+                PROTON_ELECTRON_MASS_RATIO,
+                "electron/proton mass ratios",
+            ),
+            (
+                ELECTRON_NEUTRON_MASS_RATIO,
+                NEUTRON_ELECTRON_MASS_RATIO,
+                "electron/neutron mass ratios",
+            ),
+            (
+                ELECTRON_MUON_MASS_RATIO,
+                MUON_ELECTRON_MASS_RATIO,
+                "electron/muon mass ratios",
+            ),
+            (
+                PROTON_NEUTRON_MASS_RATIO,
+                NEUTRON_PROTON_MASS_RATIO,
+                "proton/neutron mass ratios",
+            ),
+        ];
+        for (forward, inverse, relation) in reciprocal_cases {
+            assert_close(forward * inverse, 1.0, 5e-9, relation);
+        }
+
+        assert_close(
+            PLANCK * AVOGADRO,
+            MOLAR_PLANCK,
+            MOLAR_PLANCK * 1e-15,
+            "molar Planck constant should equal h * N_A",
+        );
+        assert_close(
+            2.0 * PI * PLANCK * SPEED_OF_LIGHT * SPEED_OF_LIGHT,
+            FIRST_RADIATION_CONSTANT,
+            FIRST_RADIATION_CONSTANT * 1e-15,
+            "first radiation constant should equal 2*pi*h*c^2",
+        );
+        assert_close(
+            PLANCK * SPEED_OF_LIGHT / BOLTZMANN,
+            SECOND_RADIATION_CONSTANT,
+            SECOND_RADIATION_CONSTANT * 1e-15,
+            "second radiation constant should equal h*c/k",
         );
     }
 }
