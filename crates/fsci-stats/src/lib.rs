@@ -29591,6 +29591,22 @@ mod tests {
     }
 
     #[test]
+    fn wald_fit_propagates_through_inverse_gaussian_alias() {
+        // Wald is defined as `pub type Wald = InverseGaussian;` so calling
+        // Wald::try_fit must dispatch through InverseGaussian's fit and
+        // produce the same Wald instance. Pinning this contract ensures a
+        // future change that de-aliases Wald (giving it its own struct)
+        // doesn't silently lose fit() coverage.
+        let data = [0.5_f64, 1.0, 1.5, 2.0, 2.5];
+        let via_alias = Wald::try_fit(&data).expect("Wald::try_fit");
+        let via_concrete = InverseGaussian::try_fit(&data).expect("InverseGaussian::try_fit");
+        assert_eq!(via_alias, via_concrete);
+        // The mu coincides with the sample mean (per the InverseGaussian MLE).
+        let m = data.iter().sum::<f64>() / data.len() as f64;
+        assert!((via_alias.mu - m).abs() < 1e-13);
+    }
+
+    #[test]
     fn invgauss_fit_mu_equals_sample_mean() {
         let data = [0.5_f64, 1.0, 1.5, 2.0, 2.5, 3.0];
         let fitted = InverseGaussian::try_fit(&data).expect("fit");
