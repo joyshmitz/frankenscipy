@@ -5039,6 +5039,7 @@ impl ContinuousDistribution for GenExtreme {
 /// Generalized Pareto distribution.
 ///
 /// Matches `scipy.stats.genpareto`.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GenPareto {
     pub c: f64,
 }
@@ -5119,6 +5120,52 @@ impl ContinuousDistribution for GenPareto {
         } else {
             f64::INFINITY
         }
+    }
+
+    fn fit(data: &[f64]) -> Self {
+        Self::try_fit(data).unwrap_or_else(|e| {
+            panic!("GenPareto::fit failed: {e}");
+        })
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        if data.len() < 2 {
+            return Err(FitError::InsufficientData {
+                required: 2,
+                actual: data.len(),
+            });
+        }
+        // Method-of-moments: at unit scale, E[X | c] = 1/(1-c) for c < 1.
+        // Solving for c: c_hat = 1 - 1/sample_mean = (mean - 1) / mean.
+        let mut sum = 0.0_f64;
+        let mut count = 0usize;
+        for &x in data {
+            if !x.is_finite() {
+                return Err(FitError::UnsupportedData(format!(
+                    "GenPareto data contains non-finite value: {x}"
+                )));
+            }
+            if x < 0.0 {
+                return Err(FitError::UnsupportedData(format!(
+                    "GenPareto support starts at 0; got {x}"
+                )));
+            }
+            sum += x;
+            count += 1;
+        }
+        let mean = sum / count as f64;
+        if mean <= 0.0 || !mean.is_finite() {
+            return Err(FitError::NonConvergent(format!(
+                "GenPareto MoM: sample mean {mean} is non-positive"
+            )));
+        }
+        let c = (mean - 1.0) / mean;
+        if !c.is_finite() {
+            return Err(FitError::NonConvergent(format!(
+                "GenPareto MoM produced non-finite shape: {c}"
+            )));
+        }
+        Ok(Self { c })
     }
 }
 
@@ -29483,6 +29530,64 @@ mod tests {
     #[test]
     fn pearson3_fit_rejects_too_few_samples() {
         let err = Pearson3::try_fit(&[1.0, 2.0]).expect_err("n=2 must be rejected");
+        assert!(matches!(err, FitError::InsufficientData { .. }));
+    }
+
+    #[test]
+    fn genpareto_fit_metamorphic_mean_inverts_c() {
+        // For any c < 1 at unit scale, drawing samples whose mean is m
+        // should recover c = (m-1)/m. Verify directly with synthetic data.
+        let data = [0.5_f64, 1.0, 1.5, 2.0, 2.5, 3.0];
+        let n = data.len() as f64;
+        let m = data.iter().sum::<f64>() / n;
+        let fitted = GenPareto::try_fit(&data).expect("fit");
+        let expected = (m - 1.0) / m;
+        assert!(
+            (fitted.c - expected).abs() < 1e-15,
+            "GenPareto MoM: c={} expected {expected}",
+            fitted.c
+        );
+    }
+
+    #[test]
+    fn genpareto_fit_synthetic_recovery() {
+        // Synthesize n=2000 samples from GenPareto(c=0.3) via inverse CDF;
+        // MoM recovers c within 5%. Note: the deterministic-ppf grid is
+        // biased for heavy tails so we cap the upper-tail samples.
+        let true_c = 0.3;
+        let dist = GenPareto::new(true_c);
+        let n = 2000;
+        let samples: Vec<f64> = (1..=n)
+            .map(|i| dist.ppf((i as f64 - 0.5) / n as f64))
+            .filter(|x| x.is_finite() && *x < 1.0e6)
+            .collect();
+        assert!(samples.len() > 1500);
+        let fitted = GenPareto::try_fit(&samples).expect("fit");
+        let rel = (fitted.c - true_c).abs() / true_c;
+        assert!(
+            rel < 0.05,
+            "GenPareto::fit recovery: got c={}, true {true_c}, rel_err={rel}",
+            fitted.c
+        );
+    }
+
+    #[test]
+    fn genpareto_fit_rejects_negative_observation() {
+        let err = GenPareto::try_fit(&[0.5, 1.0, -0.1])
+            .expect_err("negative must be rejected");
+        assert!(matches!(err, FitError::UnsupportedData(_)));
+    }
+
+    #[test]
+    fn genpareto_fit_rejects_zero_data() {
+        let err = GenPareto::try_fit(&[0.0, 0.0])
+            .expect_err("all-zero must be rejected (mean = 0)");
+        assert!(matches!(err, FitError::NonConvergent(_)));
+    }
+
+    #[test]
+    fn genpareto_fit_rejects_too_few_samples() {
+        let err = GenPareto::try_fit(&[1.0]).expect_err("n=1 must be rejected");
         assert!(matches!(err, FitError::InsufficientData { .. }));
     }
 
