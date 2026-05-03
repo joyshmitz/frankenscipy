@@ -4672,6 +4672,7 @@ impl ContinuousDistribution for Pearson3 {
 /// Exponentially modified normal distribution.
 ///
 /// Matches `scipy.stats.exponnorm`.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ExponNorm {
     pub k: f64,
 }
@@ -4716,6 +4717,38 @@ impl ContinuousDistribution for ExponNorm {
 
     fn var(&self) -> f64 {
         1.0 + self.k * self.k
+    }
+
+    fn fit(data: &[f64]) -> Self {
+        Self::try_fit(data).unwrap_or_else(|e| {
+            panic!("ExponNorm::fit failed: {e}");
+        })
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        if data.len() < 2 {
+            return Err(FitError::InsufficientData {
+                required: 2,
+                actual: data.len(),
+            });
+        }
+        for &x in data {
+            if !x.is_finite() {
+                return Err(FitError::UnsupportedData(format!(
+                    "ExponNorm data contains non-finite value: {x}"
+                )));
+            }
+        }
+        // ExponNorm at standardized (loc=0, scale=1) has E[X] = k, so the
+        // method-of-moments shape estimator is just the sample mean. The
+        // shape parameter must be positive — reject non-positive means.
+        let mean: f64 = data.iter().sum::<f64>() / data.len() as f64;
+        if mean <= 0.0 || !mean.is_finite() {
+            return Err(FitError::UnsupportedData(format!(
+                "ExponNorm requires positive sample mean (k > 0); got {mean}"
+            )));
+        }
+        Ok(Self { k: mean })
     }
 }
 
@@ -29530,6 +29563,62 @@ mod tests {
     #[test]
     fn pearson3_fit_rejects_too_few_samples() {
         let err = Pearson3::try_fit(&[1.0, 2.0]).expect_err("n=2 must be rejected");
+        assert!(matches!(err, FitError::InsufficientData { .. }));
+    }
+
+    #[test]
+    fn expnorm_fit_recovers_synthetic_shape() {
+        // Synthesize n=2000 samples from ExponNorm(k=1.2) via the
+        // standardized inverse CDF (numerical via bisection in the impl);
+        // MoM (sample mean) recovers k within 5%.
+        let true_k = 1.2;
+        let dist = ExponNorm::new(true_k);
+        let n = 2000;
+        let samples: Vec<f64> = (1..=n)
+            .map(|i| dist.ppf((i as f64 - 0.5) / n as f64))
+            .filter(|x| x.is_finite() && x.abs() < 1.0e6)
+            .collect();
+        assert!(samples.len() > 1500);
+        let fitted = ExponNorm::try_fit(&samples).expect("fit");
+        let rel = (fitted.k - true_k).abs() / true_k;
+        assert!(
+            rel < 0.05,
+            "ExponNorm::fit recovery: got k={}, true {true_k}, rel_err={rel}",
+            fitted.k
+        );
+    }
+
+    #[test]
+    fn expnorm_fit_metamorphic_var_relation() {
+        // After fitting, the fitted distribution's variance should be
+        // approximately 1 + k² (since k = sample_mean, this just probes
+        // whether the sample variance lines up with that prediction).
+        let true_k = 0.7;
+        let dist = ExponNorm::new(true_k);
+        let n = 2000;
+        let samples: Vec<f64> = (1..=n)
+            .map(|i| dist.ppf((i as f64 - 0.5) / n as f64))
+            .filter(|x| x.is_finite() && x.abs() < 1.0e6)
+            .collect();
+        let fitted = ExponNorm::try_fit(&samples).expect("fit");
+        let n_f = samples.len() as f64;
+        let m = samples.iter().sum::<f64>() / n_f;
+        let v = samples.iter().map(|x| (x - m).powi(2)).sum::<f64>() / n_f;
+        let predicted_var = 1.0 + fitted.k * fitted.k;
+        let rel = (v - predicted_var).abs() / predicted_var;
+        assert!(rel < 0.10, "var relation: sample var {v} vs predicted {predicted_var}");
+    }
+
+    #[test]
+    fn expnorm_fit_rejects_non_positive_mean() {
+        let err = ExponNorm::try_fit(&[-1.0, -2.0, -3.0])
+            .expect_err("negative-mean must be rejected");
+        assert!(matches!(err, FitError::UnsupportedData(_)));
+    }
+
+    #[test]
+    fn expnorm_fit_rejects_too_few_samples() {
+        let err = ExponNorm::try_fit(&[1.0]).expect_err("n=1 must be rejected");
         assert!(matches!(err, FitError::InsufficientData { .. }));
     }
 
