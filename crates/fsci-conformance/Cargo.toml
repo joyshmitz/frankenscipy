@@ -20,6 +20,9 @@ name = "fixture_regen"
 [[bin]]
 name = "benchmark_gate"
 
+[[bin]]
+name = "raptorq_sidecar"
+
 [lints]
 workspace = true
 
