@@ -2995,6 +2995,72 @@ fn bessel_complex_scalar(
     }
 }
 
+/// First `k` positive zeros of the Bessel function Y_n(x), for integer
+/// order `n ≥ 0`. Returns a Vec of length `k`, sorted ascending.
+///
+/// Matches `scipy.special.yn_zeros(n, k)`. Uses McMahon's asymptotic
+/// (DLMF 10.21.19, second-kind variant)
+///   μ = (4 k + 2 n - 3) · π / 4
+///   y_{n,k} ≈ μ - (4 n² - 1)/(8 μ) - (4 n² - 1)(28 n² - 31)/(384 μ³)
+/// as the initial guess (the offset differs from `jn_zeros` by 2: zeros
+/// of Y_n are interlaced halfway between zeros of J_n), then refines via
+/// bisection inside a ±1 bracket.
+pub fn yn_zeros(n: u32, k: usize) -> Vec<f64> {
+    let mut out = Vec::with_capacity(k);
+    let n_f = n as f64;
+    let four_n_sq = 4.0 * n_f * n_f;
+    for ki in 1..=k {
+        let mu = (4.0 * ki as f64 + 2.0 * n_f - 3.0) * std::f64::consts::PI / 4.0;
+        let inv_mu = 1.0 / mu;
+        let inv_mu2 = inv_mu * inv_mu;
+        let initial = mu - (four_n_sq - 1.0) / (8.0 * mu)
+            - (four_n_sq - 1.0) * (28.0 * four_n_sq - 31.0) / 384.0 * inv_mu * inv_mu2;
+        let f_at = |x: f64| -> f64 {
+            yn_scalar(n_f, x, RuntimeMode::Strict).unwrap_or(f64::NAN)
+        };
+        let radius = 1.0_f64;
+        let mut lo = (initial - radius).max(1.0e-6);
+        let mut hi = initial + radius;
+        let mut f_lo = f_at(lo);
+        let mut f_hi = f_at(hi);
+        let mut tries = 0;
+        while f_lo.is_finite()
+            && f_hi.is_finite()
+            && f_lo.signum() == f_hi.signum()
+            && tries < 8
+        {
+            lo = (lo - 0.3).max(1.0e-6);
+            hi += 0.3;
+            f_lo = f_at(lo);
+            f_hi = f_at(hi);
+            tries += 1;
+        }
+        if !f_lo.is_finite() || !f_hi.is_finite() || f_lo.signum() == f_hi.signum() {
+            out.push(initial);
+            continue;
+        }
+        for _ in 0..120 {
+            let mid = 0.5 * (lo + hi);
+            let f_mid = f_at(mid);
+            if !f_mid.is_finite() {
+                break;
+            }
+            if f_mid.signum() == f_lo.signum() {
+                lo = mid;
+                f_lo = f_mid;
+            } else {
+                hi = mid;
+                f_hi = f_mid;
+            }
+            if (hi - lo) < 1.0e-12 {
+                break;
+            }
+        }
+        out.push(0.5 * (lo + hi));
+    }
+    out
+}
+
 /// First `k` positive zeros of the Bessel function J_n(x), for integer
 /// order `n ≥ 0`. Returns a Vec of length `k`, sorted ascending.
 ///
@@ -3897,6 +3963,53 @@ mod tests {
             _ => return Err("expected ComplexVec".into()),
         }
         Ok(())
+    }
+
+    #[test]
+    fn yn_zeros_first_three_of_y0_match_known() {
+        // First three zeros of Y_0:
+        //   0.893577_695_5
+        //   3.957678_419_3
+        //   7.086051_060_3
+        let zeros = yn_zeros(0, 3);
+        let expected = [
+            0.893_577_695_5_f64,
+            3.957_678_419_3,
+            7.086_051_060_3,
+        ];
+        assert_eq!(zeros.len(), 3);
+        for (got, exp) in zeros.iter().zip(expected.iter()) {
+            assert!(
+                (got - exp).abs() < 1e-4,
+                "y0 zero {got} vs {exp}"
+            );
+        }
+    }
+
+    #[test]
+    fn yn_zeros_metamorphic_zero_value() {
+        for &n in &[0_u32, 1, 2] {
+            let zeros = yn_zeros(n, 4);
+            for z in &zeros {
+                let val =
+                    yn_scalar(n as f64, *z, RuntimeMode::Strict).expect("yn");
+                assert!(
+                    val.abs() < 1e-5,
+                    "Y_{n}({z}) = {val} should be ≈ 0"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn yn_zeros_metamorphic_strictly_increasing() {
+        let zeros = yn_zeros(0, 8);
+        for z in &zeros {
+            assert!(*z > 0.0);
+        }
+        for w in zeros.windows(2) {
+            assert!(w[0] < w[1]);
+        }
     }
 
     #[test]
