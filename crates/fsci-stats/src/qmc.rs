@@ -263,6 +263,71 @@ pub fn mixture_discrepancy(sample: &[f64], dimension: usize) -> Result<f64, Stat
     Ok(leading - 2.0 / n_f * single + double / (n_f * n_f))
 }
 
+/// Compute the L2-star discrepancy SD²(P) of an `n × d` point set in
+/// `[0, 1)^d`, with `sample` row-major.
+///
+/// Matches `scipy.stats.qmc.discrepancy(sample, method='L2-star')`. The
+/// closed form (Hickernell):
+///
+///   SD² = (1/3)^d
+///       − (2^(1−d) / N) Σ_i Π_k (1 − (xi^k)²)
+///       + (1/N²) Σ_{i,j} Π_k (1 − max(xi^k, xj^k))
+///
+/// SD² weights how well the design covers the lower-left orthants
+/// `[0, x]^d` and is the most common deterministic-sequence quality
+/// measure in the QMC literature.
+pub fn l2_star_discrepancy(sample: &[f64], dimension: usize) -> Result<f64, StatsError> {
+    if dimension == 0 {
+        return Err(StatsError::InvalidArgument(
+            "l2_star_discrepancy: dimension must be ≥ 1".to_string(),
+        ));
+    }
+    if sample.len() % dimension != 0 {
+        return Err(StatsError::InvalidArgument(format!(
+            "l2_star_discrepancy: sample.len() {} not a multiple of dimension {dimension}",
+            sample.len()
+        )));
+    }
+    let n = sample.len() / dimension;
+    if n == 0 {
+        return Ok((1.0_f64 / 3.0).powi(dimension as i32));
+    }
+    for (idx, &v) in sample.iter().enumerate() {
+        if !v.is_finite() || !(0.0..=1.0).contains(&v) {
+            return Err(StatsError::InvalidArgument(format!(
+                "l2_star_discrepancy: sample[{idx}] = {v} outside [0, 1]"
+            )));
+        }
+    }
+    let leading = (1.0_f64 / 3.0).powi(dimension as i32);
+    let two_pow_one_minus_d = 2.0_f64.powi(1 - dimension as i32);
+    // Single-sum Σ_i Π_k (1 - x_i^k²).
+    let mut single = 0.0_f64;
+    for i in 0..n {
+        let mut prod = 1.0_f64;
+        for k in 0..dimension {
+            let x = sample[i * dimension + k];
+            prod *= 1.0 - x * x;
+        }
+        single += prod;
+    }
+    // Double-sum Σ_ij Π_k (1 - max(x_i^k, x_j^k)).
+    let mut double = 0.0_f64;
+    for i in 0..n {
+        for j in 0..n {
+            let mut prod = 1.0_f64;
+            for k in 0..dimension {
+                let xi = sample[i * dimension + k];
+                let xj = sample[j * dimension + k];
+                prod *= 1.0 - xi.max(xj);
+            }
+            double += prod;
+        }
+    }
+    let n_f = n as f64;
+    Ok(leading - two_pow_one_minus_d / n_f * single + double / (n_f * n_f))
+}
+
 /// Compute the wraparound L2 discrepancy WD²(P) of an `n × d` point set in
 /// `[0, 1)^d`, with `sample` row-major (`sample[i * d + j]` is coordinate j
 /// of point i).
@@ -664,6 +729,64 @@ mod tests {
         assert!(
             cd_halton.abs() < 0.01,
             "Halton CD² {cd_halton} unexpectedly large"
+        );
+    }
+
+    #[test]
+    fn l2_star_rejects_invalid_inputs() {
+        assert!(matches!(
+            l2_star_discrepancy(&[], 0),
+            Err(StatsError::InvalidArgument(_))
+        ));
+        assert!(matches!(
+            l2_star_discrepancy(&[0.5, 0.5, 0.5], 2),
+            Err(StatsError::InvalidArgument(_))
+        ));
+        assert!(matches!(
+            l2_star_discrepancy(&[1.5], 1),
+            Err(StatsError::InvalidArgument(_))
+        ));
+    }
+
+    #[test]
+    fn l2_star_empty_sample_is_one_third_to_d() {
+        for d in 1..=4 {
+            let sd = l2_star_discrepancy(&[], d).unwrap();
+            let expected = (1.0_f64 / 3.0).powi(d as i32);
+            assert!((sd - expected).abs() < 1e-15, "d={d}: got {sd}");
+        }
+    }
+
+    #[test]
+    fn l2_star_metamorphic_single_corner_point() {
+        // For n=1 at the corner (0,…,0), the single product Π (1 - 0²) = 1
+        // and the double product Π (1 - max(0,0)) = 1.
+        // SD² = (1/3)^d − 2^(1−d) + 1.
+        for d in 1..=4 {
+            let sample = vec![0.0_f64; d];
+            let sd = l2_star_discrepancy(&sample, d).unwrap();
+            let expected = (1.0_f64 / 3.0).powi(d as i32) - 2.0_f64.powi(1 - d as i32) + 1.0;
+            assert!(
+                (sd - expected).abs() < 1e-13,
+                "d={d}: SD²={sd}, expected={expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn l2_star_metamorphic_halton_beats_corner_clustered_2d() {
+        let n = 64;
+        let d = 2;
+        let mut h = HaltonSampler::new(d).unwrap();
+        let halton = h.sample(n);
+        // All-zeros design: every point at the lower-left corner. SD² is
+        // dominated by huge contributions (single sum=N, double sum=N²).
+        let clustered = vec![0.0_f64; n * d];
+        let sd_halton = l2_star_discrepancy(&halton, d).unwrap();
+        let sd_cluster = l2_star_discrepancy(&clustered, d).unwrap();
+        assert!(
+            sd_halton < sd_cluster,
+            "Halton SD²={sd_halton} should beat corner-clustered SD²={sd_cluster}"
         );
     }
 
