@@ -679,18 +679,21 @@ fn hyp1f1_scalar(a: f64, b: f64, z: f64, mode: RuntimeMode) -> Result<f64, Speci
     if a == 0.0 {
         return Ok(1.0);
     }
+    if a == b {
+        return Ok(z.exp());
+    }
 
     // For large negative z, use Kummer's transformation: M(a,b,z) = e^z M(b-a, b, -z)
     if z < -20.0 {
-        let inner = hyp1f1_series(b - a, b, -z)?;
+        let inner = hyp1f1_series(b - a, b, -z, mode)?;
         return Ok(z.exp() * inner);
     }
 
-    hyp1f1_series(a, b, z)
+    hyp1f1_series(a, b, z, mode)
 }
 
 /// Direct series summation for 1F1.
-fn hyp1f1_series(a: f64, b: f64, z: f64) -> Result<f64, SpecialError> {
+fn hyp1f1_series(a: f64, b: f64, z: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
     let max_terms = 500;
     let eps = f64::EPSILON;
 
@@ -702,17 +705,43 @@ fn hyp1f1_series(a: f64, b: f64, z: f64) -> Result<f64, SpecialError> {
         term *= (a + nf) * z / ((b + nf) * (nf + 1.0));
 
         if !term.is_finite() {
-            break;
+            return hyp1f1_unconverged(
+                mode,
+                "series term overflowed before convergence was established",
+            );
         }
 
         sum += term;
+
+        if !sum.is_finite() {
+            return hyp1f1_unconverged(
+                mode,
+                "series sum overflowed before convergence was established",
+            );
+        }
+
+        if term == 0.0 {
+            return Ok(sum);
+        }
 
         if term.abs() < eps * sum.abs() {
             return Ok(sum);
         }
     }
 
-    Ok(sum)
+    hyp1f1_unconverged(mode, "series did not converge within 500 terms")
+}
+
+fn hyp1f1_unconverged(mode: RuntimeMode, detail: &'static str) -> Result<f64, SpecialError> {
+    if mode == RuntimeMode::Hardened {
+        return Err(SpecialError {
+            function: "hyp1f1",
+            kind: SpecialErrorKind::OverflowRisk,
+            mode,
+            detail,
+        });
+    }
+    Ok(f64::NAN)
 }
 
 fn complex_nan() -> Complex64 {
@@ -1282,6 +1311,32 @@ mod tests {
         );
         let val = get_scalar(&r).unwrap_or(f64::NAN);
         assert!(val.is_finite(), "should handle large negative z");
+    }
+
+    #[test]
+    fn hyp1f1_large_positive_unconverged_returns_nan_strict() {
+        let r = hyp1f1(
+            &scalar(1.0),
+            &scalar(2.0),
+            &scalar(500.0),
+            RuntimeMode::Strict,
+        );
+        let val = get_scalar(&r).unwrap_or(0.0);
+        assert!(
+            val.is_nan(),
+            "strict mode must not return a finite partial sum when 1F1 fails to converge"
+        );
+    }
+
+    #[test]
+    fn hyp1f1_large_positive_unconverged_errors_hardened() {
+        let r = hyp1f1(
+            &scalar(1.0),
+            &scalar(2.0),
+            &scalar(500.0),
+            RuntimeMode::Hardened,
+        );
+        assert_eq!(error_kind(&r), Some(SpecialErrorKind::OverflowRisk));
     }
 
     #[test]
