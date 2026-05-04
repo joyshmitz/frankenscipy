@@ -2282,6 +2282,30 @@ pub fn frame_signal(x: &[f64], frame_len: usize, hop_len: usize) -> Vec<Vec<f64>
 
 /// Bilinear transform: convert analog (s-domain) to digital (z-domain) filter.
 ///
+/// Transform a normalized lowpass ZPK prototype to a lowpass with a
+/// different cutoff frequency.
+///
+/// Matches `scipy.signal.lp2lp_zpk(z, p, k, wo=1.0)`. The transform is
+/// the substitution s → s/wo applied to the analog transfer function,
+/// which on the zero-pole-gain side reduces to:
+///   z_new = wo · z
+///   p_new = wo · p
+///   k_new = k · wo^(len(p) − len(z))
+/// preserving the magnitude response shape but shifting its 3 dB point
+/// from 1 rad/s to `wo` rad/s.
+pub fn lp2lp_zpk(
+    z: &[fsci_fft::Complex64],
+    p: &[fsci_fft::Complex64],
+    k: f64,
+    wo: f64,
+) -> (Vec<fsci_fft::Complex64>, Vec<fsci_fft::Complex64>, f64) {
+    let z_new: Vec<_> = z.iter().map(|&(re, im)| (wo * re, wo * im)).collect();
+    let p_new: Vec<_> = p.iter().map(|&(re, im)| (wo * re, wo * im)).collect();
+    let degree_diff = p.len() as i32 - z.len() as i32;
+    let k_new = k * wo.powi(degree_diff);
+    (z_new, p_new, k_new)
+}
+
 /// Transforms analog numerator/denominator to digital using the bilinear transform
 /// s = 2*fs*(z-1)/(z+1).
 ///
@@ -13731,6 +13755,56 @@ mod tests {
         assert_eq!(half.w.len(), 128);
         assert_eq!(whole.w.len(), 256);
         assert!(whole.w.last().unwrap() > &std::f64::consts::PI);
+    }
+
+    #[test]
+    fn lp2lp_zpk_identity_when_wo_is_one() {
+        let z: Vec<fsci_fft::Complex64> = vec![(0.0, 1.0), (0.0, -1.0)];
+        let p: Vec<fsci_fft::Complex64> = vec![(-1.0, 0.0), (-2.0, 0.0)];
+        let k = 3.0_f64;
+        let (z2, p2, k2) = lp2lp_zpk(&z, &p, k, 1.0);
+        assert_eq!(z2, z);
+        assert_eq!(p2, p);
+        assert_eq!(k2, k);
+    }
+
+    #[test]
+    fn lp2lp_zpk_metamorphic_zeros_and_poles_scale_by_wo() {
+        let z: Vec<fsci_fft::Complex64> = vec![(0.0, 1.0)];
+        let p: Vec<fsci_fft::Complex64> = vec![(-1.0, 0.0), (0.0, -2.0)];
+        let k = 2.0_f64;
+        let wo = 7.5_f64;
+        let (z2, p2, k2) = lp2lp_zpk(&z, &p, k, wo);
+        for (a, b) in z.iter().zip(z2.iter()) {
+            assert!((b.0 - wo * a.0).abs() < 1e-12);
+            assert!((b.1 - wo * a.1).abs() < 1e-12);
+        }
+        for (a, b) in p.iter().zip(p2.iter()) {
+            assert!((b.0 - wo * a.0).abs() < 1e-12);
+            assert!((b.1 - wo * a.1).abs() < 1e-12);
+        }
+        // gain scales by wo^(len(p) - len(z)) = 7.5^(2-1) = 7.5
+        assert!((k2 - k * wo.powi(1)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn lp2lp_zpk_metamorphic_compose_with_inverse() {
+        // Applying lp2lp_zpk with wo, then with 1/wo, recovers the original.
+        let z: Vec<fsci_fft::Complex64> = vec![(0.5, 1.0)];
+        let p: Vec<fsci_fft::Complex64> = vec![(-1.0, 0.5), (-3.0, 0.0)];
+        let k = 1.5_f64;
+        let wo = 4.0_f64;
+        let (z1, p1, k1) = lp2lp_zpk(&z, &p, k, wo);
+        let (z2, p2, k2) = lp2lp_zpk(&z1, &p1, k1, 1.0 / wo);
+        for (a, b) in z.iter().zip(z2.iter()) {
+            assert!((b.0 - a.0).abs() < 1e-12);
+            assert!((b.1 - a.1).abs() < 1e-12);
+        }
+        for (a, b) in p.iter().zip(p2.iter()) {
+            assert!((b.0 - a.0).abs() < 1e-12);
+            assert!((b.1 - a.1).abs() < 1e-12);
+        }
+        assert!((k2 - k).abs() < 1e-12);
     }
 
     #[test]
