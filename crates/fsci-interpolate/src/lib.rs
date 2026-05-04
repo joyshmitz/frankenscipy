@@ -850,6 +850,93 @@ impl Akima1DInterpolator {
     }
 }
 
+/// Cubic Hermite spline: piecewise cubic interpolant with user-specified
+/// derivatives at each knot.
+///
+/// Matches `scipy.interpolate.CubicHermiteSpline`. The Hermite basis on
+/// segment `[x_i, x_{i+1}]` reduces to the same per-segment cubic
+/// coefficients used by Akima / PCHIP:
+///   a = y_i
+///   b = dy_i
+///   c = (3·δ − 2·dy_i − dy_{i+1}) / h
+///   d = (dy_i + dy_{i+1} − 2·δ) / h²
+/// where δ = (y_{i+1} − y_i) / h and h = x_{i+1} − x_i.
+#[derive(Debug)]
+pub struct CubicHermiteSpline {
+    x: Vec<f64>,
+    coeffs: Vec<[f64; 4]>,
+}
+
+impl CubicHermiteSpline {
+    pub fn new(x: &[f64], y: &[f64], dydx: &[f64]) -> Result<Self, InterpError> {
+        if x.len() != y.len() || x.len() != dydx.len() {
+            return Err(InterpError::LengthMismatch {
+                x_len: x.len(),
+                y_len: y.len(),
+            });
+        }
+        if x.len() < 2 {
+            return Err(InterpError::TooFewPoints {
+                minimum: 2,
+                actual: x.len(),
+            });
+        }
+        if x.iter().any(|&v| !v.is_finite()) || y.iter().any(|&v| !v.is_finite())
+            || dydx.iter().any(|&v| !v.is_finite())
+        {
+            return Err(InterpError::NonFiniteX);
+        }
+        if x.windows(2).any(|w| w[1] <= w[0]) {
+            return Err(InterpError::UnsortedX);
+        }
+        let n = x.len();
+        let m = n - 1;
+        let mut coeffs = Vec::with_capacity(m);
+        for i in 0..m {
+            let h = x[i + 1] - x[i];
+            let delta = (y[i + 1] - y[i]) / h;
+            let dy = dydx[i];
+            let dy_next = dydx[i + 1];
+            coeffs.push([
+                y[i],
+                dy,
+                (3.0 * delta - 2.0 * dy - dy_next) / h,
+                (dy + dy_next - 2.0 * delta) / (h * h),
+            ]);
+        }
+        Ok(Self {
+            x: x.to_vec(),
+            coeffs,
+        })
+    }
+
+    pub fn eval(&self, x_new: f64) -> f64 {
+        if !x_new.is_finite() {
+            return f64::NAN;
+        }
+        let i = find_interval_helper(&self.x, x_new);
+        let dx = x_new - self.x[i];
+        let [a, b, c, d] = self.coeffs[i];
+        a + dx * (b + dx * (c + dx * d))
+    }
+
+    pub fn eval_many(&self, x_new: &[f64]) -> Vec<f64> {
+        x_new.iter().map(|&xi| self.eval(xi)).collect()
+    }
+}
+
+/// One-shot cubic Hermite interpolation: build a `CubicHermiteSpline` and
+/// evaluate at every point.
+pub fn cubic_hermite_interpolate(
+    xi: &[f64],
+    yi: &[f64],
+    dydx: &[f64],
+    x_new: &[f64],
+) -> Result<Vec<f64>, InterpError> {
+    let interp = CubicHermiteSpline::new(xi, yi, dydx)?;
+    Ok(interp.eval_many(x_new))
+}
+
 /// One-shot Akima 1-D interpolation: build an `Akima1DInterpolator` from
 /// `(x, y)` and evaluate at every point in `x_new`.
 ///
@@ -5871,6 +5958,58 @@ mod tests {
         let z = vec![vec![0.0, 1.0, 2.0, 3.0], vec![1.0, 2.0, 3.0, 4.0]];
         let err = RectBivariateSpline::new(&x, &y, &z, 3, 3).expect_err("too few points");
         assert!(matches!(err, InterpError::TooFewPoints { .. }));
+    }
+
+    #[test]
+    fn cubic_hermite_passes_through_nodes() {
+        // Interpolating at the original xi recovers yi exactly regardless
+        // of supplied slopes.
+        let xi = [0.0_f64, 1.0, 2.0, 3.0];
+        let yi = [1.0_f64, 4.0, 2.0, 5.0];
+        let dydx = [0.5_f64, 1.0, -1.0, 0.0];
+        let got = cubic_hermite_interpolate(&xi, &yi, &dydx, &xi).expect("interp");
+        for (g, y) in got.iter().zip(yi.iter()) {
+            assert!((g - y).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn cubic_hermite_metamorphic_recovers_polynomial_with_correct_slopes() {
+        // For f(x) = x³ - 2x + 1 with exact slopes f'(x) = 3x² - 2, the
+        // cubic Hermite reconstruction is exact at every dense point.
+        let xi = [-2.0_f64, 0.0, 2.0];
+        let f = |x: f64| x * x * x - 2.0 * x + 1.0;
+        let df = |x: f64| 3.0 * x * x - 2.0;
+        let yi: Vec<f64> = xi.iter().copied().map(f).collect();
+        let dydx: Vec<f64> = xi.iter().copied().map(df).collect();
+        let dense: Vec<f64> = (0..=200).map(|i| -2.0 + i as f64 * 4.0 / 200.0).collect();
+        let got = cubic_hermite_interpolate(&xi, &yi, &dydx, &dense).expect("interp");
+        let expected: Vec<f64> = dense.iter().copied().map(f).collect();
+        for (g, e) in got.iter().zip(expected.iter()) {
+            assert!(
+                (g - e).abs() < 1e-12,
+                "polynomial reproduction: got {g}, expected {e}"
+            );
+        }
+    }
+
+    #[test]
+    fn cubic_hermite_rejects_mismatched_dydx_length() {
+        let err = cubic_hermite_interpolate(&[0.0, 1.0], &[2.0, 3.0], &[0.5], &[0.5])
+            .expect_err("mismatched dydx must be rejected");
+        assert!(matches!(err, InterpError::LengthMismatch { .. }));
+    }
+
+    #[test]
+    fn cubic_hermite_rejects_unsorted_x() {
+        let err = cubic_hermite_interpolate(
+            &[0.0, 2.0, 1.0],
+            &[0.0, 4.0, 2.0],
+            &[0.5, 1.0, 1.5],
+            &[0.5],
+        )
+        .expect_err("unsorted x must be rejected");
+        assert!(matches!(err, InterpError::UnsortedX));
     }
 
     #[test]
