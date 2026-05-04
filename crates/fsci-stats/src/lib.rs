@@ -3369,6 +3369,12 @@ impl NegBinomial {
 
 impl DiscreteDistribution for NegBinomial {
     fn pmf(&self, k: u64) -> f64 {
+        // Limit case: with p=1 every trial succeeds, so the count of
+        // failures is 0 with probability 1. Without this short-circuit
+        // the formula evaluates 0 · ln(0) = NaN at k=0.
+        if self.p == 1.0 {
+            return if k == 0 { 1.0 } else { 0.0 };
+        }
         let kf = k as f64;
         // C(k+n-1, k) = Γ(k+n) / (Γ(k+1) * Γ(n))
         let ln_comb = ln_gamma(kf + self.n) - ln_gamma(kf + 1.0) - ln_gamma(self.n);
@@ -23550,6 +23556,19 @@ mod tests {
         let nb = NegBinomial::new(5.0, 0.4);
         let sum: f64 = (0..=200).map(|k| nb.pmf(k)).sum();
         assert!((sum - 1.0).abs() < 1e-6, "PMF sum = {sum}");
+    }
+
+    #[test]
+    fn negbinomial_pmf_at_p_one_limit() {
+        // [frankenscipy-rkgdl] regression: at p=1 every trial succeeds,
+        // so the failure count is 0 with probability 1. Without the
+        // short-circuit the formula evaluates 0·ln(0) = NaN at k=0.
+        for &n in &[1.0_f64, 3.5, 10.0] {
+            let nb = NegBinomial::new(n, 1.0);
+            assert_eq!(nb.pmf(0), 1.0, "pmf(0) at p=1 with n={n}");
+            assert_eq!(nb.pmf(1), 0.0, "pmf(1) at p=1 with n={n}");
+            assert_eq!(nb.pmf(5), 0.0, "pmf(5) at p=1 with n={n}");
+        }
     }
 
     #[test]
