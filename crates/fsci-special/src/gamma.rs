@@ -3760,6 +3760,26 @@ mod tests {
     }
 
     #[test]
+    fn gamma_metamorphic_factorial_identity() {
+        // /testing-metamorphic: Γ(n+1) = n! for non-negative integer n.
+        // Pin across n = 0..=10 to a tolerance of 1 ulp (closed-form
+        // integer arithmetic, no rounding error in either side).
+        let mut fact = 1.0_f64;
+        for n in 0..=10_u64 {
+            if n > 0 {
+                fact *= n as f64;
+            }
+            let gamma_val = gamma_core((n + 1) as f64);
+            let rel = ((gamma_val - fact) / fact).abs();
+            assert!(
+                rel < 1e-13,
+                "Γ({}) = {gamma_val}, expected {n}! = {fact} (rel = {rel})",
+                n + 1
+            );
+        }
+    }
+
+    #[test]
     fn gamma_metamorphic_reflection_formula() {
         // /testing-metamorphic: Γ(x) · Γ(1−x) = π/sin(πx) for any
         // non-integer x. Independent of any specific gamma value;
