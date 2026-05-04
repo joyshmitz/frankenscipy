@@ -2293,6 +2293,59 @@ pub fn frame_signal(x: &[f64], frame_len: usize, hop_len: usize) -> Vec<Vec<f64>
 
 /// Bilinear transform: convert analog (s-domain) to digital (z-domain) filter.
 ///
+/// Analog Chebyshev type-I lowpass prototype.
+///
+/// Matches `scipy.signal.cheb1ap(N, rp)`. Returns ZPK for the Type-I
+/// Chebyshev lowpass with passband ripple `rp` dB:
+///   ε  = √(10^(rp/10) − 1)
+///   μ  = arcsinh(1/ε) / N
+///   poles[k] = −sinh(μ + i θ_k),  θ_k = π · (2k − 1 − N) / (2N)
+///   zeros = []
+///   gain  = Re(Π(−p)) / √(1 + ε²)   (even N)
+///         = Re(Π(−p))                (odd N)
+///
+/// Type-I concentrates ripple in the passband, giving smaller order
+/// than Butterworth for the same stopband spec.
+pub fn cheb1ap(
+    n: u32,
+    rp: f64,
+) -> Result<(Vec<fsci_fft::Complex64>, Vec<fsci_fft::Complex64>, f64), SignalError> {
+    if n == 0 {
+        return Err(SignalError::InvalidArgument(
+            "cheb1ap: order must be ≥ 1".to_string(),
+        ));
+    }
+    if !rp.is_finite() || rp <= 0.0 {
+        return Err(SignalError::InvalidArgument(
+            "cheb1ap: rp must be positive finite".to_string(),
+        ));
+    }
+    let eps = (10.0_f64.powf(rp / 10.0) - 1.0).sqrt();
+    let mu = (1.0 / eps).asinh() / n as f64;
+    let sinh_mu = mu.sinh();
+    let cosh_mu = mu.cosh();
+    let mut poles = Vec::with_capacity(n as usize);
+    for k in 1..=n {
+        // θ = π · (2k − 1 − N) / (2N)
+        let theta = std::f64::consts::PI * (2.0 * k as f64 - 1.0 - n as f64) / (2.0 * n as f64);
+        // pole = −sinh(μ + iθ) = −[sinh(μ) cos(θ) + i cosh(μ) sin(θ)]
+        let pole_re = -sinh_mu * theta.cos();
+        let pole_im = -cosh_mu * theta.sin();
+        poles.push((pole_re, pole_im));
+    }
+    // gain = Re(Π(-p))  (with even-N correction).
+    let prod = poles.iter().fold((1.0_f64, 0.0_f64), |acc, &(re, im)| {
+        let (a, b) = acc;
+        let (c, d) = (-re, -im);
+        (a * c - b * d, a * d + b * c)
+    });
+    let mut k = prod.0;
+    if n % 2 == 0 {
+        k /= (1.0 + eps * eps).sqrt();
+    }
+    Ok((Vec::new(), poles, k))
+}
+
 /// Analog Butterworth lowpass prototype.
 ///
 /// Matches `scipy.signal.buttap(N)`. Returns `(zeros, poles, gain)` for
@@ -14294,6 +14347,52 @@ mod tests {
         let (n, wn) = cheb1ord(1.0, 2.0, 1.0, 40.0).expect("cheb1ord");
         assert_eq!(n, 5);
         assert!((wn - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn cheb1ap_returns_no_zeros_for_all_orders() {
+        for n in 1..=6 {
+            let (z, p, _) = cheb1ap(n, 1.0).expect("cheb1ap");
+            assert!(z.is_empty(), "Cheb1 has no finite zeros");
+            assert_eq!(p.len(), n as usize);
+        }
+    }
+
+    #[test]
+    fn cheb1ap_metamorphic_poles_in_left_half_plane() {
+        // Stable filter ⇒ all poles strictly in the open left half-plane.
+        for n in 1..=6 {
+            let (_, p, _) = cheb1ap(n, 1.0).unwrap();
+            for &(re, _) in &p {
+                assert!(re < 0.0, "n={n}: pole real part {re} should be < 0");
+            }
+        }
+    }
+
+    #[test]
+    fn cheb1ap_metamorphic_lower_ripple_pushes_pole_real_part_more_negative() {
+        // Smaller rp ⇒ larger μ ⇒ larger sinh(μ) ⇒ poles shift further left.
+        let (_, p_loose, _) = cheb1ap(4, 3.0).unwrap();
+        let (_, p_tight, _) = cheb1ap(4, 0.1).unwrap();
+        let max_loose = p_loose
+            .iter()
+            .map(|&(re, _)| re)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let max_tight = p_tight
+            .iter()
+            .map(|&(re, _)| re)
+            .fold(f64::NEG_INFINITY, f64::max);
+        assert!(
+            max_tight < max_loose,
+            "tighter ripple should push poles left: max_re tight={max_tight}, loose={max_loose}"
+        );
+    }
+
+    #[test]
+    fn cheb1ap_rejects_invalid_specs() {
+        assert!(cheb1ap(0, 1.0).is_err());
+        assert!(cheb1ap(2, 0.0).is_err());
+        assert!(cheb1ap(2, -1.0).is_err());
     }
 
     #[test]
