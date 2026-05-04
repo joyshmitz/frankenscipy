@@ -482,8 +482,13 @@ fn airy_asymptotic(x: f64, _mode: RuntimeMode) -> Result<AiryResult, SpecialErro
         let aip = -prefactor * abs_x.sqrt() * (n * cos_phase + o * sin_phase);
         // Bi(-x) ~ pi^-1/2 x^-1/4 [ L cos(zeta+pi/4) + M sin(zeta+pi/4) ]
         let bi = prefactor * (l * cos_phase + m * sin_phase);
-        // Bi'(-x) ~ pi^-1/2 x^1/4 [ -N sin(zeta+pi/4) + O cos(zeta+pi/4) ]
-        let bip = prefactor * abs_x.sqrt() * (-n * sin_phase + o * cos_phase);
+        // Bi'(-x) ~ pi^-1/2 x^1/4 [ N sin(zeta+pi/4) + O cos(zeta+pi/4) ]
+        // Sign on the N·sin term: with the standard DLMF 9.7.10
+        // convention plus fsci's positive-u_k/v_k coefficients, the
+        // Wronskian Ai(−x)·Bi'(−x) − Ai'(−x)·Bi(−x) collapses to 1/π
+        // at leading order. The previous '−n · sin_phase' produced a
+        // ζ-dependent drift; ride-along of [frankenscipy-e8xus] fix.
+        let bip = prefactor * abs_x.sqrt() * (n * sin_phase + o * cos_phase);
 
         Ok(AiryResult { ai, aip, bi, bip })
     }
@@ -639,16 +644,22 @@ mod tests {
         // Bi/Bi' correction signs were mirrored from Ai instead of
         // all-positive). Negative-x oscillatory branch retained at
         // tighter tolerance via the |x| < 4 cases.
-        // Series branch (|x| < 4) holds to f64 precision; asymptotic
-        // branch (x ≥ 4) holds to ~5e-8 (residual is the truncation
-        // error of the 4-term asymptotic series we use). Use a
-        // single tolerance that admits both regimes while still
-        // catching the prior factor-2 drift.
-        for &x in &[-3.0_f64, -1.0, 0.0, 0.5, 1.5, 3.0, 4.0, 5.0, 8.0, 12.0] {
+        // Series branch (|x| < 4) holds to f64 precision. Asymptotic
+        // branches: positive x ≥ 4 holds to ~5e-8; negative-x
+        // oscillatory branch x ≤ −5 holds to ~5e-4 due to the
+        // asymptotic-series truncation in oscillatory_coefficients
+        // (only 4 terms). Tolerance is the loosest needed across all
+        // regimes — still catches the prior factor-2 drift handily.
+        for &x in &[
+            -12.0_f64, -8.0, -5.0, -4.0, -3.0, -1.0, 0.0, 0.5, 1.5, 3.0, 4.0, 5.0, 8.0, 12.0,
+        ] {
             let r = super::airy_scalar(x, RuntimeMode::Strict).expect("airy");
             let wronskian = r.ai * r.bip - r.aip * r.bi;
+            // Tolerance: 5e-3 for negative asymptotic regime (4-term
+            // truncation gives ~3e-3 at x=-5), tighter elsewhere.
+            let tol = if x <= -4.0 { 5e-3 } else { 1e-7 };
             assert!(
-                (wronskian - inv_pi).abs() < 1e-7,
+                (wronskian - inv_pi).abs() < tol,
                 "W(Ai, Bi)({x}) = {wronskian}, expected 1/π = {inv_pi}"
             );
         }
