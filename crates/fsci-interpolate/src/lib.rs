@@ -595,6 +595,23 @@ impl PchipInterpolator {
     }
 }
 
+/// One-shot PCHIP (piecewise cubic Hermite) interpolation: build a
+/// `PchipInterpolator` from `(x, y)` and evaluate it at every point in
+/// `x_new`.
+///
+/// Matches `scipy.interpolate.pchip_interpolate(xi, yi, x)` for 1-D real
+/// inputs at derivative order 0. PCHIP preserves monotonicity of the
+/// input data, so it's the standard choice when avoiding overshoot
+/// matters more than smoothness at the knots.
+pub fn pchip_interpolate(
+    xi: &[f64],
+    yi: &[f64],
+    x_new: &[f64],
+) -> Result<Vec<f64>, InterpError> {
+    let interp = PchipInterpolator::new(xi, yi)?;
+    Ok(interp.eval_many(x_new))
+}
+
 fn pchip_end_slope(h: &[f64], delta: &[f64], is_left: bool) -> f64 {
     let m = delta.len();
     if m < 2 {
@@ -5838,6 +5855,40 @@ mod tests {
         let z = vec![vec![0.0, 1.0, 2.0, 3.0], vec![1.0, 2.0, 3.0, 4.0]];
         let err = RectBivariateSpline::new(&x, &y, &z, 3, 3).expect_err("too few points");
         assert!(matches!(err, InterpError::TooFewPoints { .. }));
+    }
+
+    #[test]
+    fn pchip_interpolate_metamorphic_passes_through_nodes() {
+        let xi = [0.0_f64, 1.0, 2.0, 3.0, 4.0];
+        let yi = [0.0_f64, 1.0, 4.0, 9.0, 16.0];
+        let got = pchip_interpolate(&xi, &yi, &xi).expect("interp");
+        for (g, y) in got.iter().zip(yi.iter()) {
+            assert!((g - y).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn pchip_interpolate_metamorphic_monotone_preservation() {
+        // PCHIP's defining property: monotone data → monotone interpolant.
+        let xi = [0.0_f64, 1.0, 2.0, 3.0, 4.0, 5.0];
+        let yi = [0.0_f64, 0.5, 1.0, 1.8, 3.5, 7.0]; // strictly increasing
+        let dense: Vec<f64> = (0..=200).map(|i| i as f64 * 5.0 / 200.0).collect();
+        let got = pchip_interpolate(&xi, &yi, &dense).expect("interp");
+        for w in got.windows(2) {
+            assert!(
+                w[0] <= w[1] + 1e-12,
+                "monotonicity violated: {} > {}",
+                w[0],
+                w[1]
+            );
+        }
+    }
+
+    #[test]
+    fn pchip_interpolate_rejects_unsorted_x() {
+        let err = pchip_interpolate(&[0.0, 2.0, 1.0], &[0.0, 4.0, 2.0], &[0.5])
+            .expect_err("unsorted x must be rejected");
+        assert!(matches!(err, InterpError::UnsortedX));
     }
 
     #[test]
