@@ -3701,6 +3701,37 @@ mod tests {
     }
 
     #[test]
+    fn comb_perm_match_scipy_reference_points() {
+        // /testing-conformance-harnesses: pin canonical scipy values
+        // for comb (binomial) and perm (k-permutations).
+        //   comb(5, 2)  = 10
+        //   comb(10, 5) = 252
+        //   comb(0, 0)  = 1   (vacuous identity)
+        //   comb(7, 0)  = 1
+        //   comb(7, 7)  = 1
+        //   comb(7, 8)  = 0   (k > n short-circuit)
+        //   perm(5, 2)  = 5·4 = 20
+        //   perm(10, 3) = 10·9·8 = 720
+        //   perm(7, 0)  = 1   (empty product)
+        //   perm(0, 0)  = 1
+        //   perm(7, 8)  = 0
+        assert_eq!(comb(5, 2), 10.0);
+        assert_eq!(comb(10, 5), 252.0);
+        assert_eq!(comb(0, 0), 1.0);
+        assert_eq!(comb(7, 0), 1.0);
+        assert_eq!(comb(7, 7), 1.0);
+        assert_eq!(comb(7, 8), 0.0);
+        assert_eq!(perm(5, 2), 20.0);
+        assert_eq!(perm(10, 3), 720.0);
+        assert_eq!(perm(7, 0), 1.0);
+        assert_eq!(perm(0, 0), 1.0);
+        assert_eq!(perm(7, 8), 0.0);
+        // Symmetry C(n, k) = C(n, n-k).
+        assert_eq!(comb(20, 7), comb(20, 13));
+        assert_eq!(comb(50, 17), comb(50, 33));
+    }
+
+    #[test]
     fn gammaln_matches_scipy_reference_points() {
         // /testing-conformance-harnesses: pin gammaln at canonical
         // points scipy gives in closed form:
