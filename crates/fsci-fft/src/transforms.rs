@@ -2988,6 +2988,25 @@ mod tests {
     }
 
     #[test]
+    fn fft_metamorphic_parseval_ortho_normalization() {
+        // /testing-metamorphic: with ortho normalization, the FFT
+        // preserves energy: Σ|x[n]|² = Σ|X[k]|². Reference-free
+        // identity that catches any normalization drift in either
+        // the forward path or the apply_normalization helper.
+        let input: Vec<(f64, f64)> = (0..16)
+            .map(|i| ((i as f64).sin(), (0.5 * i as f64).cos()))
+            .collect();
+        let opts = FftOptions::default().with_normalization(Normalization::Ortho);
+        let spectrum = fft(&input, &opts).expect("fft");
+        let energy_x: f64 = input.iter().map(|(re, im)| re * re + im * im).sum();
+        let energy_xf: f64 = spectrum.iter().map(|(re, im)| re * re + im * im).sum();
+        assert!(
+            (energy_x - energy_xf).abs() < 1e-12,
+            "Parseval (ortho): Σ|x|² = {energy_x}, Σ|X|² = {energy_xf}"
+        );
+    }
+
+    #[test]
     fn fft_impulse_produces_constant_spectrum() {
         // DFT of impulse [1,0,0,0] = [1,1,1,1]
         let input = vec![(1.0, 0.0), (0.0, 0.0), (0.0, 0.0), (0.0, 0.0)];
