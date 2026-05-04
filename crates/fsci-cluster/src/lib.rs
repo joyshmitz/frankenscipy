@@ -2428,6 +2428,36 @@ mod tests {
     }
 
     #[test]
+    fn linkage_metamorphic_n_points_yield_n_minus_1_merges() {
+        // /testing-metamorphic: scipy.cluster.hierarchy.linkage on n
+        // observations always returns an (n−1)×4 linkage matrix —
+        // each merge reduces the cluster count by 1. Pin across
+        // multiple n and methods.
+        for &n in &[2_usize, 3, 5, 8, 12] {
+            // Build n distinct 1-D points.
+            let data: Vec<Vec<f64>> = (0..n).map(|i| vec![i as f64]).collect();
+            for method in [
+                LinkageMethod::Single,
+                LinkageMethod::Complete,
+                LinkageMethod::Average,
+                LinkageMethod::Ward,
+            ] {
+                let z = linkage(&data, method).unwrap();
+                assert_eq!(
+                    z.len(),
+                    n - 1,
+                    "method={method:?}, n={n}: linkage rows = {}, expected n-1",
+                    z.len()
+                );
+                // Every merge must produce a positive cluster size.
+                for row in &z {
+                    assert!(row[3] >= 2.0, "merge cluster count {} should be ≥ 2", row[3]);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn linkage_single() {
         let data = vec![vec![0.0], vec![1.0], vec![5.0]];
         let z = linkage(&data, LinkageMethod::Single).unwrap();
