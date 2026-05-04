@@ -5045,6 +5045,25 @@ mod tests {
     }
 
     #[test]
+    fn expi_scalar_matches_scipy_reference_points() {
+        // /testing-conformance-harnesses: pin Ei(x) at canonical
+        // points. References from Abramowitz & Stegun Table 5.1 and
+        // scipy.special.expi. Tolerance reflects the current
+        // implementation's series-truncation accuracy (~1e-7 for the
+        // E₁ branch via expn, ~1e-9 for the positive-x series); the
+        // test fails cleanly if either branch regresses outside that
+        // observed envelope.
+        //   Ei(0) = −∞
+        //   Ei(1) ≈ 1.895_117_816_355_937   (γ + Σ 1/(k·k!))
+        //   Ei(2) ≈ 4.954_234_356_001_891
+        //   Ei(−1) ≈ −0.219_383_934_395_520 (= −E₁(1))
+        assert_eq!(expi_scalar(0.0), f64::NEG_INFINITY);
+        assert!((expi_scalar(1.0) - 1.895_117_816_355_937).abs() < 1e-9);
+        assert!((expi_scalar(2.0) - 4.954_234_356_001_891).abs() < 1e-9);
+        assert!((expi_scalar(-1.0) - (-0.219_383_934_395_520)).abs() < 1e-6);
+    }
+
+    #[test]
     fn softmax_matches_scipy_reference_points() {
         // Skill rotation: /testing-conformance-harnesses (parity vs scipy
         // reference values). softmax is closed-form; pin three regimes:
