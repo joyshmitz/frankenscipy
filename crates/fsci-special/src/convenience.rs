@@ -5064,6 +5064,22 @@ mod tests {
     }
 
     #[test]
+    fn expit_logit_metamorphic_roundtrip() {
+        // /testing-metamorphic: expit(logit(p)) = p for p in (0, 1).
+        // Both inverses share the floating-point logistic kernel, so
+        // a roundtrip identity catches branch drift in either path.
+        for &p in &[0.001_f64, 0.1, 0.25, 0.5, 0.75, 0.9, 0.999] {
+            let l = logit_scalar(p, RuntimeMode::Strict).unwrap();
+            let p_back = expit_scalar(l);
+            let rel = ((p_back - p) / p).abs();
+            assert!(
+                rel < 1e-14,
+                "expit(logit({p})) = {p_back}, expected {p} (rel = {rel})"
+            );
+        }
+    }
+
+    #[test]
     fn softmax_matches_scipy_reference_points() {
         // Skill rotation: /testing-conformance-harnesses (parity vs scipy
         // reference values). softmax is closed-form; pin three regimes:
