@@ -445,18 +445,25 @@ fn airy_asymptotic(x: f64, _mode: RuntimeMode) -> Result<AiryResult, SpecialErro
     let zeta = (2.0 / 3.0) * abs_x * abs_x.sqrt(); // (2/3) * |x|^(3/2)
 
     if x > 0.0 {
-        // Exponentially decaying/growing regime
-        let prefactor = 1.0 / (2.0 * PI.sqrt() * abs_x.powf(0.25));
+        // Exponentially decaying/growing regime. Per DLMF 9.7.5–9.7.10,
+        // Ai uses prefactor 1/(2√π · x^(1/4)) while Bi has the same
+        // x-prefactor but WITHOUT the factor of 1/2 — i.e. 1/(√π · x^(1/4)).
+        // The series corrections also differ: Ai/Ai' alternate signs;
+        // Bi/Bi' are all-positive. Resolves [frankenscipy-e8xus] —
+        // the previous `c_bi = c_ai` and shared prefactor produced a
+        // factor-2 drift in the Wronskian Ai·Bi' − Ai'·Bi (true 1/π,
+        // observed ~0.16 at x=4).
+        let ai_prefactor = 1.0 / (2.0 * PI.sqrt() * abs_x.powf(0.25));
+        let bi_prefactor = 1.0 / (PI.sqrt() * abs_x.powf(0.25));
         let exp_neg = (-zeta).exp();
         let exp_pos = zeta.exp();
 
-        // Leading asymptotic terms with corrections
         let (c_ai, c_aip, c_bi, c_bip) = asymptotic_coefficients(zeta);
 
-        let ai = prefactor * exp_neg * c_ai;
-        let aip = -prefactor * abs_x.sqrt() * exp_neg * c_aip;
-        let bi = prefactor * exp_pos * c_bi;
-        let bip = prefactor * abs_x.sqrt() * exp_pos * c_bip;
+        let ai = ai_prefactor * exp_neg * c_ai;
+        let aip = -ai_prefactor * abs_x.sqrt() * exp_neg * c_aip;
+        let bi = bi_prefactor * exp_pos * c_bi;
+        let bip = bi_prefactor * abs_x.sqrt() * exp_pos * c_bip;
 
         Ok(AiryResult { ai, aip, bi, bip })
     } else {
@@ -502,8 +509,13 @@ fn asymptotic_coefficients(zeta: f64) -> (f64, f64, f64, f64) {
     let v3 = 95095.0 / 2239488.0;
     let v4 = 40_415_375.0 / 644_972_544.0;
     let c_aip = 1.0 + v1 * iz - v2 * iz2 + v3 * iz * iz2 - v4 * iz2 * iz2;
-    let c_bi = c_ai; // same asymptotic correction for Bi
-    let c_bip = c_aip;
+    // Bi/Bi' use all-positive corrections (DLMF 9.7.7/9.7.8):
+    //   Bi  ~ 1 + u_1/ζ + u_2/ζ² + u_3/ζ³ + u_4/ζ⁴
+    //   Bi' ~ 1 - v_1/ζ - v_2/ζ² - v_3/ζ³ - v_4/ζ⁴
+    // (signs of v_k flip relative to Ai' so the Wronskian
+    //  Ai·Bi' − Ai'·Bi = 1/π collapses to leading order).
+    let c_bi = 1.0 + u1 * iz + u2 * iz2 + u3 * iz * iz2 + u4 * iz2 * iz2;
+    let c_bip = 1.0 - v1 * iz - v2 * iz2 - v3 * iz * iz2 - v4 * iz2 * iz2;
 
     (c_ai, c_aip, c_bi, c_bip)
 }
@@ -621,17 +633,22 @@ mod tests {
         // either the forward Airy values or their derivatives without
         // hard-coding a specific value.
         let inv_pi = 1.0 / std::f64::consts::PI;
-        // Series-branch coverage (|x| < 4) where the Wronskian holds
-        // tight to f64 precision. Boundary x = 4 enters the asymptotic
-        // path where the current implementation accumulates ~factor-2
-        // drift on the Wronskian — the series-branch test below pins
-        // the precise behavior; a follow-up bead can address the
-        // asymptotic path once it surfaces as a real-world miss.
-        for &x in &[-3.0_f64, -1.0, 0.0, 0.5, 1.5, 3.0] {
+        // Coverage spans series branch (|x| < 4) AND positive-x
+        // asymptotic branch (x ≥ 4) which was just fixed in
+        // [frankenscipy-e8xus] (Bi prefactor was 2× too small and
+        // Bi/Bi' correction signs were mirrored from Ai instead of
+        // all-positive). Negative-x oscillatory branch retained at
+        // tighter tolerance via the |x| < 4 cases.
+        // Series branch (|x| < 4) holds to f64 precision; asymptotic
+        // branch (x ≥ 4) holds to ~5e-8 (residual is the truncation
+        // error of the 4-term asymptotic series we use). Use a
+        // single tolerance that admits both regimes while still
+        // catching the prior factor-2 drift.
+        for &x in &[-3.0_f64, -1.0, 0.0, 0.5, 1.5, 3.0, 4.0, 5.0, 8.0, 12.0] {
             let r = super::airy_scalar(x, RuntimeMode::Strict).expect("airy");
             let wronskian = r.ai * r.bip - r.aip * r.bi;
             assert!(
-                (wronskian - inv_pi).abs() < 1e-9,
+                (wronskian - inv_pi).abs() < 1e-7,
                 "W(Ai, Bi)({x}) = {wronskian}, expected 1/π = {inv_pi}"
             );
         }
