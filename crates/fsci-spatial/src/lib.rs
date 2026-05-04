@@ -3702,6 +3702,28 @@ mod tests {
     }
 
     #[test]
+    fn cdist_metamorphic_transpose_symmetry() {
+        // /testing-metamorphic: cdist(X, Y)[i][j] = cdist(Y, X)[j][i]
+        // for any metric (Euclidean is symmetric in its arguments).
+        // Catches any regression that introduces direction-dependent
+        // logic into the matrix-pair distance loop.
+        let xa = vec![vec![0.0_f64, 0.0], vec![1.0, 0.0], vec![3.0, 4.0]];
+        let xb = vec![vec![0.0_f64, 1.0], vec![1.0, 1.0]];
+        let d_ab = cdist(&xa, &xb).unwrap();
+        let d_ba = cdist(&xb, &xa).unwrap();
+        for i in 0..xa.len() {
+            for j in 0..xb.len() {
+                assert!(
+                    (d_ab[i][j] - d_ba[j][i]).abs() < 1e-12,
+                    "cdist(X,Y)[{i}][{j}] = {} != cdist(Y,X)[{j}][{i}] = {}",
+                    d_ab[i][j],
+                    d_ba[j][i]
+                );
+            }
+        }
+    }
+
+    #[test]
     fn cdist_basic() {
         let xa = vec![vec![0.0, 0.0], vec![1.0, 0.0]];
         let xb = vec![vec![0.0, 1.0], vec![1.0, 1.0]];
