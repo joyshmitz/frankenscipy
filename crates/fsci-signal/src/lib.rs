@@ -1367,6 +1367,31 @@ pub fn morlet(m: usize, w: f64, s: f64, complete: bool) -> Vec<(f64, f64)> {
     output
 }
 
+/// Morlet-2 wavelet kernel (the default cwt wavelet in modern scipy).
+///
+/// Matches `scipy.signal.morlet2(M, s, w=5)`. Returns the M-sample
+/// complex Morlet-2
+///   ψ(t) = (π s²)^(−1/4) · exp(i ω t / s) · exp(−t² / (2 s²))
+/// sampled at integer offsets `t ∈ [−M/2, M/2 − 1]`. Differs from
+/// `morlet` in the `1/√(s)` envelope normalization that makes the
+/// energy of `morlet2(M, s)` independent of `s`.
+pub fn morlet2(m: usize, s: f64, w: f64) -> Vec<(f64, f64)> {
+    if m == 0 || s <= 0.0 || !s.is_finite() || !w.is_finite() {
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(m);
+    let coeff = (std::f64::consts::PI * s * s).powf(-0.25);
+    let half = m as f64 / 2.0;
+    for i in 0..m {
+        let t = i as f64 - half;
+        let phase = w * t / s;
+        let gauss = (-t * t / (2.0 * s * s)).exp();
+        let envelope = coeff * gauss;
+        out.push((envelope * phase.cos(), envelope * phase.sin()));
+    }
+    out
+}
+
 /// Continuous Wavelet Transform.
 ///
 /// Computes CWT using the specified wavelet function at different scales.
@@ -13706,6 +13731,38 @@ mod tests {
         assert_eq!(half.w.len(), 128);
         assert_eq!(whole.w.len(), 256);
         assert!(whole.w.last().unwrap() > &std::f64::consts::PI);
+    }
+
+    #[test]
+    fn morlet2_length_matches_request() {
+        for &m in &[8_usize, 16, 32, 64] {
+            assert_eq!(morlet2(m, 4.0, 5.0).len(), m);
+        }
+    }
+
+    #[test]
+    fn morlet2_metamorphic_energy_invariant_under_s() {
+        // (π s²)^(−1/4) · gauss(t/s) preserves energy: ∑|ψ_t|² ≈ ∫|ψ|² ≈ 1
+        // for any s as long as M is wide enough.
+        for &s in &[1.0_f64, 2.0, 4.0, 8.0] {
+            let m = (16.0 * s) as usize;
+            let psi = morlet2(m, s, 5.0);
+            let energy: f64 = psi.iter().map(|(re, im)| re * re + im * im).sum();
+            // Energy should be close to 1; coarse discrete sampling adds
+            // some bias, accept ±10%.
+            assert!(
+                (energy - 1.0).abs() < 0.10,
+                "s={s}: energy = {energy}, expected ≈ 1"
+            );
+        }
+    }
+
+    #[test]
+    fn morlet2_metamorphic_zero_arguments_short_circuit() {
+        assert!(morlet2(0, 1.0, 5.0).is_empty());
+        assert!(morlet2(8, 0.0, 5.0).is_empty());
+        assert!(morlet2(8, -1.0, 5.0).is_empty());
+        assert!(morlet2(8, f64::NAN, 5.0).is_empty());
     }
 
     #[test]
