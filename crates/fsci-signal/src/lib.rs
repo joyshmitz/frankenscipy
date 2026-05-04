@@ -1383,7 +1383,7 @@ pub fn morlet(m: usize, w: f64, s: f64, complete: bool) -> Vec<(f64, f64)> {
 /// Matches `scipy.signal.morlet2(M, s, w=5)`. Returns the M-sample
 /// complex Morlet-2
 ///   ψ(t) = (π s²)^(−1/4) · exp(i ω t / s) · exp(−t² / (2 s²))
-/// sampled at integer offsets `t ∈ [−M/2, M/2 − 1]`. Differs from
+/// sampled at offsets `t = i − (M − 1)/2` for `i = 0, ..., M − 1`. Differs from
 /// `morlet` in the `1/√(s)` envelope normalization that makes the
 /// energy of `morlet2(M, s)` independent of `s`.
 pub fn morlet2(m: usize, s: f64, w: f64) -> Vec<(f64, f64)> {
