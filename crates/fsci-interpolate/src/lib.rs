@@ -850,6 +850,22 @@ impl Akima1DInterpolator {
     }
 }
 
+/// One-shot Akima 1-D interpolation: build an `Akima1DInterpolator` from
+/// `(x, y)` and evaluate at every point in `x_new`.
+///
+/// Akima's piecewise cubic resists overshoot from outliers (it weights
+/// adjacent slopes by the local-curvature norm), making it the standard
+/// choice for noisy data where PCHIP's strict monotonicity is too
+/// conservative.
+pub fn akima1d_interpolate(
+    xi: &[f64],
+    yi: &[f64],
+    x_new: &[f64],
+) -> Result<Vec<f64>, InterpError> {
+    let interp = Akima1DInterpolator::new(xi, yi)?;
+    Ok(interp.eval_many(x_new))
+}
+
 fn akima_slopes(delta: &[f64]) -> Vec<f64> {
     let m = delta.len();
     let n = m + 1;
@@ -5855,6 +5871,43 @@ mod tests {
         let z = vec![vec![0.0, 1.0, 2.0, 3.0], vec![1.0, 2.0, 3.0, 4.0]];
         let err = RectBivariateSpline::new(&x, &y, &z, 3, 3).expect_err("too few points");
         assert!(matches!(err, InterpError::TooFewPoints { .. }));
+    }
+
+    #[test]
+    fn akima1d_interpolate_passes_through_nodes() {
+        let xi = [0.0_f64, 1.0, 2.0, 3.0, 4.0];
+        let yi = [0.0_f64, 1.0, 4.0, 9.0, 16.0];
+        let got = akima1d_interpolate(&xi, &yi, &xi).expect("interp");
+        for (g, y) in got.iter().zip(yi.iter()) {
+            assert!((g - y).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn akima1d_interpolate_metamorphic_dense_in_data_range() {
+        // Akima interpolation at 200 dense interior points stays within
+        // the y-range of the original data — Akima resists overshoot.
+        let xi = [0.0_f64, 1.0, 2.0, 3.0, 4.0];
+        let yi = [0.5_f64, 1.0, 1.0, 1.5, 2.0];
+        let dense: Vec<f64> = (1..=199).map(|i| i as f64 * 4.0 / 200.0).collect();
+        let got = akima1d_interpolate(&xi, &yi, &dense).expect("interp");
+        let (min_y, max_y) = (
+            yi.iter().cloned().fold(f64::INFINITY, f64::min),
+            yi.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
+        );
+        for v in &got {
+            assert!(
+                *v >= min_y - 0.01 && *v <= max_y + 0.01,
+                "Akima overshoot: {v} outside [{min_y}-eps, {max_y}+eps]"
+            );
+        }
+    }
+
+    #[test]
+    fn akima1d_interpolate_rejects_unsorted_x() {
+        let err = akima1d_interpolate(&[0.0, 2.0, 1.0], &[0.0, 4.0, 2.0], &[0.5])
+            .expect_err("unsorted x must be rejected");
+        assert!(matches!(err, InterpError::UnsortedX));
     }
 
     #[test]
