@@ -2282,6 +2282,79 @@ pub fn frame_signal(x: &[f64], frame_len: usize, hop_len: usize) -> Vec<Vec<f64>
 
 /// Bilinear transform: convert analog (s-domain) to digital (z-domain) filter.
 ///
+/// Transform a normalized lowpass ZPK prototype to a bandstop with
+/// center frequency `wo` and stopband bandwidth `bw`.
+///
+/// Matches `scipy.signal.lp2bs_zpk(z, p, k, wo=1.0, bw=1.0)`. The
+/// transform first inverts to a highpass (zhp = bw / (2 z)), then
+/// pair-splits each zhp via the bandpass-style formula
+///   zhp ± √(zhp² − wo²)
+/// and finally appends `degree = len(p) − len(z)` zeros at +i·wo and
+/// `degree` zeros at −i·wo (the lp prototype's zeros at infinity become
+/// imaginary-axis zeros at the bandstop's notch). Gain follows the
+/// lp→hp formula k_new = k · Re(Π(−z)/Π(−p)).
+pub fn lp2bs_zpk(
+    z: &[fsci_fft::Complex64],
+    p: &[fsci_fft::Complex64],
+    k: f64,
+    wo: f64,
+    bw: f64,
+) -> (Vec<fsci_fft::Complex64>, Vec<fsci_fft::Complex64>, f64) {
+    let half_bw = 0.5 * bw;
+    // First invert to highpass.
+    let cinv = |c: fsci_fft::Complex64| -> fsci_fft::Complex64 {
+        let (re, im) = c;
+        let denom = re * re + im * im;
+        if denom == 0.0 {
+            (f64::INFINITY, 0.0)
+        } else {
+            (half_bw * re / denom, -half_bw * im / denom)
+        }
+    };
+    let split = |c: fsci_fft::Complex64| -> (fsci_fft::Complex64, fsci_fft::Complex64) {
+        let asq_bsq = c.0 * c.0 - c.1 * c.1;
+        let two_ab = 2.0 * c.0 * c.1;
+        let arg = (asq_bsq - wo * wo, two_ab);
+        let r = csqrt(arg);
+        ((c.0 + r.0, c.1 + r.1), (c.0 - r.0, c.1 - r.1))
+    };
+    let mut z_bs: Vec<fsci_fft::Complex64> = Vec::with_capacity(2 * z.len());
+    for &c in z {
+        let (a, b) = split(cinv(c));
+        z_bs.push(a);
+        z_bs.push(b);
+    }
+    let mut p_bs: Vec<fsci_fft::Complex64> = Vec::with_capacity(2 * p.len());
+    for &c in p {
+        let (a, b) = split(cinv(c));
+        p_bs.push(a);
+        p_bs.push(b);
+    }
+    let degree = p.len() as i32 - z.len() as i32;
+    if degree > 0 {
+        let d = degree as usize;
+        z_bs.extend(std::iter::repeat_n((0.0, wo), d));
+        z_bs.extend(std::iter::repeat_n((0.0, -wo), d));
+    }
+    // gain k * Re(Π(-z) / Π(-p)) — same formula as lp2hp.
+    let neg_prod = |xs: &[fsci_fft::Complex64]| -> fsci_fft::Complex64 {
+        xs.iter().fold((1.0_f64, 0.0_f64), |acc, &(re, im)| {
+            let (a, b) = acc;
+            let (c, d) = (-re, -im);
+            (a * c - b * d, a * d + b * c)
+        })
+    };
+    let num = neg_prod(z);
+    let den = neg_prod(p);
+    let denom = den.0 * den.0 + den.1 * den.1;
+    let ratio_re = if denom == 0.0 {
+        0.0
+    } else {
+        (num.0 * den.0 + num.1 * den.1) / denom
+    };
+    (z_bs, p_bs, k * ratio_re)
+}
+
 /// Transform a normalized lowpass ZPK prototype to a bandpass with
 /// center frequency `wo` and bandwidth `bw`.
 ///
@@ -13878,6 +13951,55 @@ mod tests {
         assert_eq!(half.w.len(), 128);
         assert_eq!(whole.w.len(), 256);
         assert!(whole.w.last().unwrap() > &std::f64::consts::PI);
+    }
+
+    #[test]
+    fn lp2bs_zpk_appends_imaginary_zeros_for_zero_free_prototype() {
+        // Prototype with no zeros: degree = len(p). lp2bs_zpk pads `degree`
+        // zeros at +iwo and `degree` more at -iwo.
+        let z: Vec<fsci_fft::Complex64> = Vec::new();
+        let p: Vec<fsci_fft::Complex64> = vec![(-1.0, 0.0), (-2.0, 0.0)];
+        let wo = 3.0_f64;
+        let bw = 1.0_f64;
+        let (z_bs, p_bs, _) = lp2bs_zpk(&z, &p, 1.0, wo, bw);
+        // 0 split zeros + 2 ± i·wo padding × 2 = 4 zeros.
+        assert_eq!(z_bs.len(), 4);
+        // 2 split poles × 2 = 4 poles.
+        assert_eq!(p_bs.len(), 4);
+        // Half the padded zeros should be at +i·wo, half at -i·wo.
+        let pos = z_bs.iter().filter(|&&(re, im)| re == 0.0 && (im - wo).abs() < 1e-12).count();
+        let neg = z_bs.iter().filter(|&&(re, im)| re == 0.0 && (im + wo).abs() < 1e-12).count();
+        assert_eq!(pos, 2);
+        assert_eq!(neg, 2);
+    }
+
+    #[test]
+    fn lp2bs_zpk_metamorphic_split_pair_product_is_wo_squared() {
+        let p: Vec<fsci_fft::Complex64> = vec![(-1.0, 0.0)];
+        let z: Vec<fsci_fft::Complex64> = Vec::new();
+        let wo = 2.0_f64;
+        let bw = 0.5_f64;
+        let (_, p_bs, _) = lp2bs_zpk(&z, &p, 1.0, wo, bw);
+        let (a, b) = (p_bs[0], p_bs[1]);
+        let prod_re = a.0 * b.0 - a.1 * b.1;
+        let prod_im = a.0 * b.1 + a.1 * b.0;
+        assert!((prod_re - wo * wo).abs() < 1e-12);
+        assert!(prod_im.abs() < 1e-12);
+    }
+
+    #[test]
+    fn lp2bs_zpk_metamorphic_gain_matches_lp2hp() {
+        // Gain formula k * Re(prod(-z) / prod(-p)) — same as lp2hp_zpk
+        // (independent of bw and wo). Verify by comparing across both.
+        let z: Vec<fsci_fft::Complex64> = vec![(2.0, 0.0)];
+        let p: Vec<fsci_fft::Complex64> = vec![(-1.0, 0.5), (-1.0, -0.5)];
+        let k_in = 3.0_f64;
+        let (_, _, k_hp) = lp2hp_zpk(&z, &p, k_in, 1.0);
+        let (_, _, k_bs) = lp2bs_zpk(&z, &p, k_in, 1.0, 0.7);
+        assert!(
+            (k_hp - k_bs).abs() < 1e-12,
+            "lp2hp gain {k_hp} != lp2bs gain {k_bs}"
+        );
     }
 
     #[test]
