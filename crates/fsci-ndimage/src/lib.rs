@@ -2638,12 +2638,20 @@ pub fn binary_hit_or_miss(
         .collect();
     let comp = NdArray::new(complement, input.shape.clone())?;
 
-    // Erode complement with structure2 (or complement of structure1)
+    // Erode complement with structure2 (default: element-wise NOT of
+    // structure1, matching scipy.ndimage.binary_hit_or_miss).
+    // [frankenscipy-ee82u]
+    let owned_complement;
     let miss_struct = if let Some(s2) = structure2 {
         s2
     } else {
-        // Use complement of structure1
-        return Ok(hit); // simplified: skip miss if no structure2
+        let complement: Vec<f64> = structure1
+            .data
+            .iter()
+            .map(|&v| if v == 0.0 { 1.0 } else { 0.0 })
+            .collect();
+        owned_complement = NdArray::new(complement, structure1.shape.clone())?;
+        &owned_complement
     };
 
     let miss = binary_erosion_with_struct(&comp, miss_struct)?;
@@ -3738,5 +3746,49 @@ mod tests {
         let err = rotate(&input, f64::INFINITY, false, 1, BoundaryMode::Constant, 0.0)
             .expect_err("should reject Inf");
         assert!(matches!(err, NdimageError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn binary_hit_or_miss_default_structure2_uses_complement() {
+        // [frankenscipy-ee82u] Regression: when structure2 is None,
+        // scipy uses logical_not(structure1) as the miss structure.
+        // fsci was returning just `hit` (the structure1-erosion),
+        // skipping the miss filter. Verify a small case where the
+        // miss filter actually rejects a candidate.
+        //
+        // Input has an isolated foreground pixel surrounded by
+        // background. With structure1 = [[0,0,0],[0,1,0],[0,0,0]]
+        // (single-cell), every foreground pixel passes the hit. With
+        // the default structure2 (= NOT(structure1)), the miss filter
+        // requires every NEIGHBOR cell to be 0. Only the isolated
+        // pixel passes both.
+        #[rustfmt::skip]
+        let input_data = vec![
+            0.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 1.0, 1.0,
+            0.0, 0.0, 0.0, 1.0, 1.0,
+            0.0, 0.0, 0.0, 0.0, 0.0,
+        ];
+        let input = NdArray::new(input_data, vec![5, 5]).unwrap();
+        #[rustfmt::skip]
+        let s1_data = vec![
+            0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0,
+        ];
+        let structure1 = NdArray::new(s1_data, vec![3, 3]).unwrap();
+
+        let result = binary_hit_or_miss(&input, &structure1, None).unwrap();
+        // Only the isolated pixel at (1, 1) passes both hit and miss.
+        // The 2×2 block at (2..4, 3..4) has every corner pixel as
+        // foreground but each pixel has at least one foreground
+        // neighbor, so the miss filter (requiring all 8 neighbors = 0)
+        // rejects them all.
+        assert_eq!(result.data[5 + 1], 1.0, "isolated pixel at (1,1) should pass");
+        assert_eq!(result.data[10 + 3], 0.0, "block pixel (2,3) should fail miss");
+        assert_eq!(result.data[10 + 4], 0.0, "block pixel (2,4) should fail miss");
+        assert_eq!(result.data[15 + 3], 0.0, "block pixel (3,3) should fail miss");
+        assert_eq!(result.data[15 + 4], 0.0, "block pixel (3,4) should fail miss");
     }
 }
