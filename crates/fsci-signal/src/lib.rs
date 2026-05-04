@@ -2303,6 +2303,8 @@ pub fn frame_signal(x: &[f64], frame_len: usize, hop_len: usize) -> Vec<Vec<f64>
 ///   zeros = []
 ///   gain  = Re(Π(−p)) / √(1 + ε²)   (even N)
 ///         = Re(Π(−p))                (odd N)
+/// For `N == 0`, SciPy returns the empty prototype with gain
+/// `10^(-rp/20)`.
 ///
 /// Type-I concentrates ripple in the passband, giving smaller order
 /// than Butterworth for the same stopband spec.
@@ -2311,9 +2313,7 @@ pub fn cheb1ap(
     rp: f64,
 ) -> Result<(Vec<fsci_fft::Complex64>, Vec<fsci_fft::Complex64>, f64), SignalError> {
     if n == 0 {
-        return Err(SignalError::InvalidArgument(
-            "cheb1ap: order must be ≥ 1".to_string(),
-        ));
+        return Ok((Vec::new(), Vec::new(), 10.0_f64.powf(-rp / 20.0)));
     }
     if !rp.is_finite() || rp <= 0.0 {
         return Err(SignalError::InvalidArgument(
@@ -2380,7 +2380,7 @@ pub fn buttap(
 ///   k    = wp / ws
 ///   k1   = √((10^(gpass/10) − 1) / (10^(gstop/10) − 1))
 ///   k'   = √(1 − k²),  k1' = √(1 − k1²)
-///   N    = ⌈ K(k1²) · K(k'²) / (K(k²) · K(k1'²)) ⌉
+///   N    = ⌈ K(k²) · K(k1'²) / (K(k'²) · K(k1²)) ⌉
 ///   Wn   = wp
 ///
 /// Elliptic filters allow ripple in both passband and stopband and
@@ -2388,12 +2388,7 @@ pub fn buttap(
 /// spec. The inline `ellipk_internal` helper computes K(m) via the
 /// arithmetic-geometric mean (Carlson, AGM iteration) to avoid pulling
 /// fsci-special as a workspace dependency.
-pub fn ellipord(
-    wp: f64,
-    ws: f64,
-    gpass: f64,
-    gstop: f64,
-) -> Result<(u32, f64), SignalError> {
+pub fn ellipord(wp: f64, ws: f64, gpass: f64, gstop: f64) -> Result<(u32, f64), SignalError> {
     if !wp.is_finite() || !ws.is_finite() || wp <= 0.0 || ws <= 0.0 {
         return Err(SignalError::InvalidArgument(
             "ellipord: wp and ws must be positive finite".to_string(),
@@ -2401,8 +2396,7 @@ pub fn ellipord(
     }
     if wp >= ws {
         return Err(SignalError::InvalidArgument(
-            "ellipord lowpass: passband edge wp must be < stopband edge ws"
-                .to_string(),
+            "ellipord lowpass: passband edge wp must be < stopband edge ws".to_string(),
         ));
     }
     if gpass <= 0.0 || gstop <= 0.0 || gpass >= gstop {
@@ -2423,8 +2417,8 @@ pub fn ellipord(
     let k1_sq = k1 * k1;
     let k_p_sq = 1.0 - k_sq;
     let k1_p_sq = 1.0 - k1_sq;
-    let num = ellipk_internal(k1_sq) * ellipk_internal(k_p_sq);
-    let den = ellipk_internal(k_sq) * ellipk_internal(k1_p_sq);
+    let num = ellipk_internal(k_sq) * ellipk_internal(k1_p_sq);
+    let den = ellipk_internal(k_p_sq) * ellipk_internal(k1_sq);
     if !num.is_finite() || !den.is_finite() || den <= 0.0 {
         return Err(SignalError::InvalidArgument(format!(
             "ellipord: degenerate K-ratio (num={num}, den={den})"
@@ -2468,12 +2462,7 @@ fn ellipk_internal(m: f64) -> f64 {
 ///   Wn = ws / cosh(acosh(√((10^(gstop/10) − 1) / (10^(gpass/10) − 1))) / N)
 /// Type-II concentrates ripple in the stopband, so the −3 dB point
 /// sits below the stopband edge ws.
-pub fn cheb2ord(
-    wp: f64,
-    ws: f64,
-    gpass: f64,
-    gstop: f64,
-) -> Result<(u32, f64), SignalError> {
+pub fn cheb2ord(wp: f64, ws: f64, gpass: f64, gstop: f64) -> Result<(u32, f64), SignalError> {
     if !wp.is_finite() || !ws.is_finite() || wp <= 0.0 || ws <= 0.0 {
         return Err(SignalError::InvalidArgument(
             "cheb2ord: wp and ws must be positive finite".to_string(),
@@ -2481,8 +2470,7 @@ pub fn cheb2ord(
     }
     if wp >= ws {
         return Err(SignalError::InvalidArgument(
-            "cheb2ord lowpass: passband edge wp must be < stopband edge ws"
-                .to_string(),
+            "cheb2ord lowpass: passband edge wp must be < stopband edge ws".to_string(),
         ));
     }
     if gpass <= 0.0 || gstop <= 0.0 || gpass >= gstop {
@@ -2524,12 +2512,7 @@ pub fn cheb2ord(
 /// Type-I Chebyshev concentrates ripple in the passband, so it
 /// typically produces a smaller N than `buttord` for the same spec at
 /// the cost of equiripple passband behavior.
-pub fn cheb1ord(
-    wp: f64,
-    ws: f64,
-    gpass: f64,
-    gstop: f64,
-) -> Result<(u32, f64), SignalError> {
+pub fn cheb1ord(wp: f64, ws: f64, gpass: f64, gstop: f64) -> Result<(u32, f64), SignalError> {
     if !wp.is_finite() || !ws.is_finite() || wp <= 0.0 || ws <= 0.0 {
         return Err(SignalError::InvalidArgument(
             "cheb1ord: wp and ws must be positive finite".to_string(),
@@ -2537,8 +2520,7 @@ pub fn cheb1ord(
     }
     if wp >= ws {
         return Err(SignalError::InvalidArgument(
-            "cheb1ord lowpass: passband edge wp must be < stopband edge ws"
-                .to_string(),
+            "cheb1ord lowpass: passband edge wp must be < stopband edge ws".to_string(),
         ));
     }
     if gpass <= 0.0 || gstop <= 0.0 || gpass >= gstop {
@@ -2571,18 +2553,12 @@ pub fn cheb1ord(
 /// Matches `scipy.signal.buttord(wp, ws, gpass, gstop, analog=True)` for
 /// the lowpass case. Returns `(order, wn)` where:
 ///   order = ⌈ log10((10^(gstop/10) − 1) / (10^(gpass/10) − 1)) / (2·log10(ws/wp)) ⌉
-///   wn = wp  (the −3 dB point coincides with the passband edge for the
-///             tightest design satisfying both specs)
+///   wn = wp / (10^(gpass/10) − 1)^(1 / (2·order))
 ///
 /// `wp` and `ws` are angular frequencies in rad/s (analog form). `gpass`
 /// is the maximum passband loss in dB; `gstop` is the minimum stopband
 /// attenuation in dB. Requires `wp < ws` and `0 < gpass < gstop`.
-pub fn buttord(
-    wp: f64,
-    ws: f64,
-    gpass: f64,
-    gstop: f64,
-) -> Result<(u32, f64), SignalError> {
+pub fn buttord(wp: f64, ws: f64, gpass: f64, gstop: f64) -> Result<(u32, f64), SignalError> {
     if !wp.is_finite() || !ws.is_finite() || wp <= 0.0 || ws <= 0.0 {
         return Err(SignalError::InvalidArgument(
             "buttord: wp and ws must be positive finite".to_string(),
@@ -2608,7 +2584,13 @@ pub fn buttord(
     }
     let order_real = (stop_factor / pass_factor).log10() / (2.0 * ratio);
     let order = order_real.ceil().max(1.0) as u32;
-    Ok((order, wp))
+    let wn = wp / pass_factor.powf(1.0 / (2.0 * order as f64));
+    if !wn.is_finite() {
+        return Err(SignalError::InvalidArgument(
+            "buttord: natural frequency is not finite".to_string(),
+        ));
+    }
+    Ok((order, wn))
 }
 
 /// Map an analog ZPK to digital via the bilinear transform.
@@ -2626,7 +2608,8 @@ pub fn bilinear_zpk(
     p: &[fsci_fft::Complex64],
     k: f64,
     fs: f64,
-) -> (Vec<fsci_fft::Complex64>, Vec<fsci_fft::Complex64>, f64) {
+) -> Result<(Vec<fsci_fft::Complex64>, Vec<fsci_fft::Complex64>, f64), SignalError> {
+    check_proper_prototype("bilinear_zpk", z, p)?;
     let fs2 = 2.0 * fs;
     let bilin = |c: fsci_fft::Complex64| -> fsci_fft::Complex64 {
         // (fs2 + c) / (fs2 - c)
@@ -2665,7 +2648,7 @@ pub fn bilinear_zpk(
     } else {
         (num.0 * den.0 + num.1 * den.1) / denom
     };
-    (z_z, p_z, k * ratio_re)
+    Ok((z_z, p_z, k * ratio_re))
 }
 
 /// Transform a normalized lowpass ZPK prototype to a bandstop with
@@ -2685,7 +2668,8 @@ pub fn lp2bs_zpk(
     k: f64,
     wo: f64,
     bw: f64,
-) -> (Vec<fsci_fft::Complex64>, Vec<fsci_fft::Complex64>, f64) {
+) -> Result<(Vec<fsci_fft::Complex64>, Vec<fsci_fft::Complex64>, f64), SignalError> {
+    check_proper_prototype("lp2bs_zpk", z, p)?;
     let half_bw = 0.5 * bw;
     // First invert to highpass.
     let cinv = |c: fsci_fft::Complex64| -> fsci_fft::Complex64 {
@@ -2738,7 +2722,7 @@ pub fn lp2bs_zpk(
     } else {
         (num.0 * den.0 + num.1 * den.1) / denom
     };
-    (z_bs, p_bs, k * ratio_re)
+    Ok((z_bs, p_bs, k * ratio_re))
 }
 
 /// Transform a normalized lowpass ZPK prototype to a bandpass with
@@ -2758,7 +2742,8 @@ pub fn lp2bp_zpk(
     k: f64,
     wo: f64,
     bw: f64,
-) -> (Vec<fsci_fft::Complex64>, Vec<fsci_fft::Complex64>, f64) {
+) -> Result<(Vec<fsci_fft::Complex64>, Vec<fsci_fft::Complex64>, f64), SignalError> {
+    check_proper_prototype("lp2bp_zpk", z, p)?;
     let scale = 0.5 * bw;
     let split = |c: fsci_fft::Complex64| -> (fsci_fft::Complex64, fsci_fft::Complex64) {
         // z_lp = c · scale; root_arg = z_lp² − wo²; sqrt of complex.
@@ -2791,14 +2776,18 @@ pub fn lp2bp_zpk(
         z_bp.extend(std::iter::repeat_n((0.0, 0.0), degree as usize));
     }
     let k_bp = k * bw.powi(degree);
-    (z_bp, p_bp, k_bp)
+    Ok((z_bp, p_bp, k_bp))
 }
 
 /// Principal-branch complex square root for a `(re, im)` tuple.
 fn csqrt(c: fsci_fft::Complex64) -> fsci_fft::Complex64 {
     let (a, b) = c;
     if b == 0.0 {
-        return if a >= 0.0 { (a.sqrt(), 0.0) } else { (0.0, (-a).sqrt()) };
+        return if a >= 0.0 {
+            (a.sqrt(), 0.0)
+        } else {
+            (0.0, (-a).sqrt())
+        };
     }
     let r = (a * a + b * b).sqrt();
     let re = ((r + a) * 0.5).sqrt();
@@ -2827,7 +2816,8 @@ pub fn lp2hp_zpk(
     p: &[fsci_fft::Complex64],
     k: f64,
     wo: f64,
-) -> (Vec<fsci_fft::Complex64>, Vec<fsci_fft::Complex64>, f64) {
+) -> Result<(Vec<fsci_fft::Complex64>, Vec<fsci_fft::Complex64>, f64), SignalError> {
+    check_proper_prototype("lp2hp_zpk", z, p)?;
     let cinv = |c: fsci_fft::Complex64| -> fsci_fft::Complex64 {
         let (re, im) = c;
         let denom = re * re + im * im;
@@ -2861,7 +2851,7 @@ pub fn lp2hp_zpk(
         (num.0 * den.0 + num.1 * den.1) / denom
     };
     let k_new = k * ratio_re;
-    (z_new, p_new, k_new)
+    Ok((z_new, p_new, k_new))
 }
 
 /// Transform a normalized lowpass ZPK prototype to a lowpass with a
@@ -2880,12 +2870,32 @@ pub fn lp2lp_zpk(
     p: &[fsci_fft::Complex64],
     k: f64,
     wo: f64,
-) -> (Vec<fsci_fft::Complex64>, Vec<fsci_fft::Complex64>, f64) {
+) -> Result<(Vec<fsci_fft::Complex64>, Vec<fsci_fft::Complex64>, f64), SignalError> {
+    check_proper_prototype("lp2lp_zpk", z, p)?;
     let z_new: Vec<_> = z.iter().map(|&(re, im)| (wo * re, wo * im)).collect();
     let p_new: Vec<_> = p.iter().map(|&(re, im)| (wo * re, wo * im)).collect();
     let degree_diff = p.len() as i32 - z.len() as i32;
     let k_new = k * wo.powi(degree_diff);
-    (z_new, p_new, k_new)
+    Ok((z_new, p_new, k_new))
+}
+
+/// Reject improper prototypes (more zeros than poles) — matches scipy's
+/// `_relative_degree` ValueError.
+fn check_proper_prototype(
+    name: &str,
+    z: &[fsci_fft::Complex64],
+    p: &[fsci_fft::Complex64],
+) -> Result<(), SignalError> {
+    if z.len() > p.len() {
+        Err(SignalError::InvalidArgument(format!(
+            "{name}: improper prototype — zeros ({}) exceeds poles ({}). \
+             scipy.signal._relative_degree raises ValueError here.",
+            z.len(),
+            p.len()
+        )))
+    } else {
+        Ok(())
+    }
 }
 
 /// Transforms analog numerator/denominator to digital using the bilinear transform
@@ -9330,10 +9340,7 @@ fn rk4_step(a: &[Vec<f64>], b: &[f64], x: &[f64], u: f64, dt: f64) -> Vec<f64> {
 /// `SignalError::InvalidArgument`.
 pub fn daub(p: usize) -> Result<Vec<f64>, SignalError> {
     let coeffs: &[f64] = match p {
-        1 => &[
-            7.071_067_811_865_476e-1,
-            7.071_067_811_865_476e-1,
-        ],
+        1 => &[7.071_067_811_865_476e-1, 7.071_067_811_865_476e-1],
         2 => &[
             4.829_629_131_445_341e-1,
             8.365_163_037_378_077e-1,
@@ -14359,6 +14366,19 @@ mod tests {
     }
 
     #[test]
+    fn cheb1ap_zero_order_matches_scipy_empty_prototype() {
+        for (rp, expected_gain) in [(1.0_f64, 0.8912509381337456), (3.0_f64, 0.7079457843841379)] {
+            let (z, p, k) = cheb1ap(0, rp).expect("zero-order cheb1ap");
+            assert!(z.is_empty());
+            assert!(p.is_empty());
+            assert!(
+                (k - expected_gain).abs() < 1e-15,
+                "rp={rp}: gain={k}, expected {expected_gain}"
+            );
+        }
+    }
+
+    #[test]
     fn cheb1ap_metamorphic_poles_in_left_half_plane() {
         // Stable filter ⇒ all poles strictly in the open left half-plane.
         for n in 1..=6 {
@@ -14390,7 +14410,6 @@ mod tests {
 
     #[test]
     fn cheb1ap_rejects_invalid_specs() {
-        assert!(cheb1ap(0, 1.0).is_err());
         assert!(cheb1ap(2, 0.0).is_err());
         assert!(cheb1ap(2, -1.0).is_err());
     }
@@ -14412,10 +14431,7 @@ mod tests {
             let (_, p, _) = buttap(n).unwrap();
             for &(re, im) in &p {
                 let r = (re * re + im * im).sqrt();
-                assert!(
-                    (r - 1.0).abs() < 1e-12,
-                    "n={n}: |pole|={r}, expected 1"
-                );
+                assert!((r - 1.0).abs() < 1e-12, "n={n}: |pole|={r}, expected 1");
                 assert!(re <= 1e-15, "n={n}: pole {re}+{im}i must have Re ≤ 0");
             }
         }
@@ -14443,6 +14459,7 @@ mod tests {
         let (n_butter, _) = buttord(1.0, 2.0, 1.0, 40.0).unwrap();
         let (n_cheby, _) = cheb1ord(1.0, 2.0, 1.0, 40.0).unwrap();
         let (n_ellip, _) = ellipord(1.0, 2.0, 1.0, 40.0).unwrap();
+        assert_eq!(n_ellip, 4);
         assert!(
             n_ellip <= n_cheby,
             "elliptic N={n_ellip} should be ≤ Chebyshev N={n_cheby}"
@@ -14470,6 +14487,24 @@ mod tests {
     }
 
     #[test]
+    fn ellipord_scipy_analog_lowpass_order_regression_cases() {
+        // Values generated by scipy.signal.ellipord(..., analog=True).
+        for (wp, ws, gpass, gstop, expected_n, expected_wn) in [
+            (1.0_f64, 2.0, 1.0, 40.0, 4_u32, 1.0),
+            (1.0, 1.5, 0.5, 60.0, 6, 1.0),
+            (1.0, 3.0, 2.0, 80.0, 5, 1.0),
+            (0.2, 0.3, 1.0, 40.0, 5, 0.2),
+        ] {
+            let (n, wn) = ellipord(wp, ws, gpass, gstop).expect("ellipord");
+            assert_eq!(n, expected_n);
+            assert!(
+                (wn - expected_wn).abs() < 1e-12,
+                "spec ({wp}, {ws}, {gpass}, {gstop}) Wn={wn}, expected {expected_wn}"
+            );
+        }
+    }
+
+    #[test]
     fn ellipord_rejects_invalid_specs() {
         assert!(ellipord(2.0, 1.0, 1.0, 40.0).is_err());
         assert!(ellipord(1.0, 2.0, 40.0, 1.0).is_err());
@@ -14487,10 +14522,7 @@ mod tests {
         ] {
             let (n1, _) = cheb1ord(spec.0, spec.1, spec.2, spec.3).unwrap();
             let (n2, _) = cheb2ord(spec.0, spec.1, spec.2, spec.3).unwrap();
-            assert_eq!(
-                n1, n2,
-                "spec {spec:?}: cheb1ord N={n1} vs cheb2ord N={n2}"
-            );
+            assert_eq!(n1, n2, "spec {spec:?}: cheb1ord N={n1} vs cheb2ord N={n2}");
         }
     }
 
@@ -14541,7 +14573,25 @@ mod tests {
         //                        = ceil(4.587 / 0.602) = ceil(7.62) = 8.
         let (n, wn) = buttord(1.0, 2.0, 1.0, 40.0).expect("buttord");
         assert_eq!(n, 8);
-        assert!((wn - 1.0).abs() < 1e-12);
+        assert!((wn - 1.0881194736627366).abs() < 1e-12);
+    }
+
+    #[test]
+    fn buttord_scipy_analog_lowpass_wn_regression_cases() {
+        // Values generated by scipy.signal.buttord(..., analog=True).
+        for (wp, ws, gpass, gstop, expected_n, expected_wn) in [
+            (1.0_f64, 2.0, 1.0, 40.0, 8_u32, 1.0881194736627366),
+            (1.0, 1.5, 0.5, 60.0, 20, 1.0539969691259425),
+            (1.0, 3.0, 2.0, 80.0, 9, 1.0302442296515495),
+            (0.2, 0.3, 1.0, 40.0, 14, 0.20988820962077465),
+        ] {
+            let (n, wn) = buttord(wp, ws, gpass, gstop).expect("buttord");
+            assert_eq!(n, expected_n);
+            assert!(
+                (wn - expected_wn).abs() < 1e-12,
+                "spec ({wp}, {ws}, {gpass}, {gstop}) Wn={wn}, expected {expected_wn}"
+            );
+        }
     }
 
     #[test]
@@ -14576,7 +14626,7 @@ mod tests {
         // s = 0 maps to z = 1 because (2fs + 0) / (2fs - 0) = 1.
         let z: Vec<fsci_fft::Complex64> = vec![(0.0, 0.0)];
         let p: Vec<fsci_fft::Complex64> = vec![(-1.0, 0.0)];
-        let (z_z, _, _) = bilinear_zpk(&z, &p, 1.0, 100.0);
+        let (z_z, _, _) = bilinear_zpk(&z, &p, 1.0, 100.0).unwrap();
         assert!((z_z[0].0 - 1.0).abs() < 1e-12);
         assert!(z_z[0].1.abs() < 1e-12);
     }
@@ -14586,7 +14636,7 @@ mod tests {
         // Prototype with no zeros: degree zeros padded at -1 + 0i.
         let z: Vec<fsci_fft::Complex64> = Vec::new();
         let p: Vec<fsci_fft::Complex64> = vec![(-1.0, 0.0), (-2.0, 0.0)];
-        let (z_z, _, _) = bilinear_zpk(&z, &p, 1.0, 50.0);
+        let (z_z, _, _) = bilinear_zpk(&z, &p, 1.0, 50.0).unwrap();
         assert_eq!(z_z.len(), 2);
         for &(re, im) in &z_z {
             assert!((re - (-1.0)).abs() < 1e-12 && im.abs() < 1e-12);
@@ -14599,10 +14649,14 @@ mod tests {
         // (|z| < 1) under the bilinear transform.
         let z: Vec<fsci_fft::Complex64> = Vec::new();
         let p: Vec<fsci_fft::Complex64> = vec![(-2.0, 1.0), (-2.0, -1.0), (-3.0, 0.0)];
-        let (_, p_z, _) = bilinear_zpk(&z, &p, 1.0, 100.0);
+        let (_, p_z, _) = bilinear_zpk(&z, &p, 1.0, 100.0).unwrap();
         for &(re, im) in &p_z {
             let r = (re * re + im * im).sqrt();
-            assert!(r < 1.0, "digital pole {:?} has |z|={r}, must be < 1", (re, im));
+            assert!(
+                r < 1.0,
+                "digital pole {:?} has |z|={r}, must be < 1",
+                (re, im)
+            );
         }
     }
 
@@ -14614,14 +14668,20 @@ mod tests {
         let p: Vec<fsci_fft::Complex64> = vec![(-1.0, 0.0), (-2.0, 0.0)];
         let wo = 3.0_f64;
         let bw = 1.0_f64;
-        let (z_bs, p_bs, _) = lp2bs_zpk(&z, &p, 1.0, wo, bw);
+        let (z_bs, p_bs, _) = lp2bs_zpk(&z, &p, 1.0, wo, bw).unwrap();
         // 0 split zeros + 2 ± i·wo padding × 2 = 4 zeros.
         assert_eq!(z_bs.len(), 4);
         // 2 split poles × 2 = 4 poles.
         assert_eq!(p_bs.len(), 4);
         // Half the padded zeros should be at +i·wo, half at -i·wo.
-        let pos = z_bs.iter().filter(|&&(re, im)| re == 0.0 && (im - wo).abs() < 1e-12).count();
-        let neg = z_bs.iter().filter(|&&(re, im)| re == 0.0 && (im + wo).abs() < 1e-12).count();
+        let pos = z_bs
+            .iter()
+            .filter(|&&(re, im)| re == 0.0 && (im - wo).abs() < 1e-12)
+            .count();
+        let neg = z_bs
+            .iter()
+            .filter(|&&(re, im)| re == 0.0 && (im + wo).abs() < 1e-12)
+            .count();
         assert_eq!(pos, 2);
         assert_eq!(neg, 2);
     }
@@ -14632,7 +14692,7 @@ mod tests {
         let z: Vec<fsci_fft::Complex64> = Vec::new();
         let wo = 2.0_f64;
         let bw = 0.5_f64;
-        let (_, p_bs, _) = lp2bs_zpk(&z, &p, 1.0, wo, bw);
+        let (_, p_bs, _) = lp2bs_zpk(&z, &p, 1.0, wo, bw).unwrap();
         let (a, b) = (p_bs[0], p_bs[1]);
         let prod_re = a.0 * b.0 - a.1 * b.1;
         let prod_im = a.0 * b.1 + a.1 * b.0;
@@ -14647,8 +14707,8 @@ mod tests {
         let z: Vec<fsci_fft::Complex64> = vec![(2.0, 0.0)];
         let p: Vec<fsci_fft::Complex64> = vec![(-1.0, 0.5), (-1.0, -0.5)];
         let k_in = 3.0_f64;
-        let (_, _, k_hp) = lp2hp_zpk(&z, &p, k_in, 1.0);
-        let (_, _, k_bs) = lp2bs_zpk(&z, &p, k_in, 1.0, 0.7);
+        let (_, _, k_hp) = lp2hp_zpk(&z, &p, k_in, 1.0).unwrap();
+        let (_, _, k_bs) = lp2bs_zpk(&z, &p, k_in, 1.0, 0.7).unwrap();
         assert!(
             (k_hp - k_bs).abs() < 1e-12,
             "lp2hp gain {k_hp} != lp2bs gain {k_bs}"
@@ -14662,7 +14722,7 @@ mod tests {
         // len(p_bp) = 2*len(p).
         let z: Vec<fsci_fft::Complex64> = vec![(1.0, 0.0)];
         let p: Vec<fsci_fft::Complex64> = vec![(-1.0, 0.0), (-2.0, 0.0), (-3.0, 0.0)];
-        let (z_bp, p_bp, _) = lp2bp_zpk(&z, &p, 1.0, 2.0, 0.5);
+        let (z_bp, p_bp, _) = lp2bp_zpk(&z, &p, 1.0, 2.0, 0.5).unwrap();
         let degree = p.len() - z.len();
         assert_eq!(z_bp.len(), 2 * z.len() + degree);
         assert_eq!(p_bp.len(), 2 * p.len());
@@ -14677,7 +14737,7 @@ mod tests {
         let z: Vec<fsci_fft::Complex64> = Vec::new();
         let wo = 3.0_f64;
         let bw = 0.7_f64;
-        let (_, p_bp, _) = lp2bp_zpk(&z, &p, 1.0, wo, bw);
+        let (_, p_bp, _) = lp2bp_zpk(&z, &p, 1.0, wo, bw).unwrap();
         // p_bp = (a, b) where a*b = wo² + 0i.
         let (a, b) = (p_bp[0], p_bp[1]);
         let product_re = a.0 * b.0 - a.1 * b.1;
@@ -14698,7 +14758,7 @@ mod tests {
         let k_in = 4.5_f64;
         let bw = 1.25_f64;
         let degree = (p.len() - z.len()) as i32;
-        let (_, _, k_out) = lp2bp_zpk(&z, &p, k_in, 1.0, bw);
+        let (_, _, k_out) = lp2bp_zpk(&z, &p, k_in, 1.0, bw).unwrap();
         assert!((k_out - k_in * bw.powi(degree)).abs() < 1e-12);
     }
 
@@ -14708,7 +14768,7 @@ mod tests {
         // (since wo / (-1) = -1) and add a zero at origin.
         let p: Vec<fsci_fft::Complex64> = vec![(-1.0, 0.0)];
         let z: Vec<fsci_fft::Complex64> = Vec::new();
-        let (z2, p2, k2) = lp2hp_zpk(&z, &p, 1.0, 1.0);
+        let (z2, p2, k2) = lp2hp_zpk(&z, &p, 1.0, 1.0).unwrap();
         assert_eq!(z2.len(), 1);
         assert!(z2[0].0.abs() < 1e-12 && z2[0].1.abs() < 1e-12);
         assert!((p2[0].0 - (-1.0)).abs() < 1e-12);
@@ -14723,7 +14783,7 @@ mod tests {
         let p: Vec<fsci_fft::Complex64> = vec![(-1.0, 0.0), (-2.0, 0.0)];
         let z: Vec<fsci_fft::Complex64> = Vec::new();
         let wo = 5.0_f64;
-        let (z2, p2, _) = lp2hp_zpk(&z, &p, 1.0, wo);
+        let (z2, p2, _) = lp2hp_zpk(&z, &p, 1.0, wo).unwrap();
         assert_eq!(p2.len(), 2);
         assert!((p2[0].0 - (-wo)).abs() < 1e-12);
         assert!((p2[1].0 - (-wo / 2.0)).abs() < 1e-12);
@@ -14744,13 +14804,42 @@ mod tests {
         let p: Vec<fsci_fft::Complex64> = vec![(-0.5, 1.0), (-0.5, -1.0)];
         let z: Vec<fsci_fft::Complex64> = Vec::new();
         let k = 2.5_f64;
-        let (z1, p1, k1) = lp2hp_zpk(&z, &p, k, 1.0);
+        let (z1, p1, k1) = lp2hp_zpk(&z, &p, k, 1.0).unwrap();
         // After this, z1 has 2 zeros at origin (which become poles at
         // infinity on the second invert). lp2hp_zpk on this configuration
         // would inject 0/inf, so we instead check the symmetry of the
         // analog transform by hand: the new poles must match wo/p.
-        let (_, p2_again, _) = lp2lp_zpk(&z1, &p1, k1, 1.0); // identity to verify shape
+        let (_, p2_again, _) = lp2lp_zpk(&z1, &p1, k1, 1.0).unwrap(); // identity to verify shape
         assert_eq!(p2_again.len(), 2);
+    }
+
+    #[test]
+    fn zpk_transforms_reject_improper_prototypes() {
+        // scipy raises ValueError when len(z) > len(p); fsci must do the
+        // same. Prototype with 3 finite zeros and only 1 finite pole is
+        // improper.
+        let z_improper: Vec<fsci_fft::Complex64> = vec![(0.0, 1.0), (0.0, -1.0), (1.0, 0.0)];
+        let p_improper: Vec<fsci_fft::Complex64> = vec![(-1.0, 0.0)];
+        assert!(
+            lp2lp_zpk(&z_improper, &p_improper, 1.0, 2.0).is_err(),
+            "lp2lp_zpk must reject improper prototype"
+        );
+        assert!(
+            lp2hp_zpk(&z_improper, &p_improper, 1.0, 2.0).is_err(),
+            "lp2hp_zpk must reject improper prototype"
+        );
+        assert!(
+            lp2bp_zpk(&z_improper, &p_improper, 1.0, 2.0, 0.5).is_err(),
+            "lp2bp_zpk must reject improper prototype"
+        );
+        assert!(
+            lp2bs_zpk(&z_improper, &p_improper, 1.0, 2.0, 0.5).is_err(),
+            "lp2bs_zpk must reject improper prototype"
+        );
+        assert!(
+            bilinear_zpk(&z_improper, &p_improper, 1.0, 100.0).is_err(),
+            "bilinear_zpk must reject improper prototype"
+        );
     }
 
     #[test]
@@ -14758,7 +14847,7 @@ mod tests {
         let z: Vec<fsci_fft::Complex64> = vec![(0.0, 1.0), (0.0, -1.0)];
         let p: Vec<fsci_fft::Complex64> = vec![(-1.0, 0.0), (-2.0, 0.0)];
         let k = 3.0_f64;
-        let (z2, p2, k2) = lp2lp_zpk(&z, &p, k, 1.0);
+        let (z2, p2, k2) = lp2lp_zpk(&z, &p, k, 1.0).unwrap();
         assert_eq!(z2, z);
         assert_eq!(p2, p);
         assert_eq!(k2, k);
@@ -14770,7 +14859,7 @@ mod tests {
         let p: Vec<fsci_fft::Complex64> = vec![(-1.0, 0.0), (0.0, -2.0)];
         let k = 2.0_f64;
         let wo = 7.5_f64;
-        let (z2, p2, k2) = lp2lp_zpk(&z, &p, k, wo);
+        let (z2, p2, k2) = lp2lp_zpk(&z, &p, k, wo).unwrap();
         for (a, b) in z.iter().zip(z2.iter()) {
             assert!((b.0 - wo * a.0).abs() < 1e-12);
             assert!((b.1 - wo * a.1).abs() < 1e-12);
@@ -14790,8 +14879,8 @@ mod tests {
         let p: Vec<fsci_fft::Complex64> = vec![(-1.0, 0.5), (-3.0, 0.0)];
         let k = 1.5_f64;
         let wo = 4.0_f64;
-        let (z1, p1, k1) = lp2lp_zpk(&z, &p, k, wo);
-        let (z2, p2, k2) = lp2lp_zpk(&z1, &p1, k1, 1.0 / wo);
+        let (z1, p1, k1) = lp2lp_zpk(&z, &p, k, wo).unwrap();
+        let (z2, p2, k2) = lp2lp_zpk(&z1, &p1, k1, 1.0 / wo).unwrap();
         for (a, b) in z.iter().zip(z2.iter()) {
             assert!((b.0 - a.0).abs() < 1e-12);
             assert!((b.1 - a.1).abs() < 1e-12);
