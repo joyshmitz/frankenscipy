@@ -1562,6 +1562,48 @@ fn spherical_jn_nonneg(n: u32, x: f64) -> f64 {
         return if n == 0 { 1.0 } else { 0.0 };
     }
 
+    // For x >= n, forward recurrence is stable; below that threshold,
+    // forward recurrence catastrophically cancels (e.g., x=0.1, n=6
+    // gives the wrong sign, n=9 yields O(1) results when the true
+    // value is ~1e-19). Switch to Miller's downward recurrence in
+    // that regime — it's unconditionally stable for j_n. Resolves
+    // [frankenscipy-xlci0].
+    let n_f = n as f64;
+    if n >= 2 && ax < n_f {
+        // Start the backward recurrence well above the order so
+        // truncation error decays exponentially down to k=0.
+        // m_start needs enough headroom that the truncation error from
+        // setting j_{m_start+1} = 0 decays away by the time we reach
+        // k=n. For small x, j_{m+1}/j_m ~ x/(2m+3); pick m_start so
+        // that 30+ recurrence steps separate it from n.
+        let m_start = (2 * n + 30).max((n_f + 8.0 * (40.0 * n_f).sqrt().ceil()) as u32);
+        let mut j_kplus1 = 0.0_f64;
+        let mut j_k = 1.0e-30_f64;
+        let mut j_at_n = 0.0_f64;
+        // Iterate k = m_start down to 1, computing j_{k-1} each step;
+        // after the loop j_k holds j_0 (un-normalized). Rescale on
+        // overflow — Miller's recurrence grows by ~(2k+1)/x per step
+        // for small x and would overflow f64 within a few dozen orders.
+        for k in (1..=m_start).rev() {
+            let kf = k as f64;
+            let j_kminus1 = (2.0 * kf + 1.0) / x * j_k - j_kplus1;
+            if k == n {
+                j_at_n = j_k;
+            }
+            j_kplus1 = j_k;
+            j_k = j_kminus1;
+            if j_k.abs() > 1.0e100 {
+                let scale = 1.0e-100;
+                j_k *= scale;
+                j_kplus1 *= scale;
+                j_at_n *= scale;
+            }
+        }
+        // Normalize using the analytic j_0 = sin(x)/x.
+        let true_j0 = x.sin() / x;
+        return j_at_n * (true_j0 / j_k);
+    }
+
     let mut j_prev = x.sin() / x; // j_0
     if n == 0 {
         return j_prev;
@@ -3846,6 +3888,54 @@ mod tests {
             SpecialTensor::ComplexScalar(c) => Ok(c),
             other => Err(format!("expected complex scalar, got {other:?}")),
         }
+    }
+
+    #[test]
+    fn spherical_jn_small_x_large_n_matches_series() {
+        // [frankenscipy-xlci0] regression: forward recurrence
+        // catastrophically cancels when x << 2n+1. The previous
+        // algorithm returned values off by 10× to many orders of
+        // magnitude (e.g. n=9 gave -5.62 when the true value is ~3e-19).
+        // Verify the Miller's-recurrence path agrees with the
+        // small-x Taylor series j_n(x) ≈ x^n / (2n+1)!! * (1 -
+        // x²/(2(2n+3))) which is accurate to ~1e-3 at x=0.1.
+        let x = 0.1_f64;
+        for n in 5_u32..=10 {
+            let got = super::spherical_jn_nonneg(n, x);
+            // Series truth: j_n ≈ x^n / (2n+1)!! · (1 − x²/(2(2n+3))).
+            let mut double_fact = 1.0_f64;
+            for k in 1..=n {
+                double_fact *= (2 * k + 1) as f64;
+            }
+            let leading = x.powi(n as i32) / double_fact;
+            let series_truth = leading * (1.0 - x * x / (2.0 * (2 * n + 3) as f64));
+            let rel = ((got - series_truth) / series_truth).abs();
+            // 1% accuracy is enough to reject the broken forward
+            // recurrence (which returned wrong-sign or 10⁵× wrong
+            // results).  Series itself is only accurate to a few
+            // parts in 10⁴ at x=0.1.
+            assert!(
+                rel < 1e-2,
+                "spherical_jn({n}, 0.1) = {got}, series truth ≈ {series_truth} (rel = {rel})"
+            );
+            // Also pin the sign — the catastrophic-cancellation
+            // failure mode often flipped the sign.
+            assert!(got > 0.0, "spherical_jn({n}, 0.1) = {got} should be positive");
+        }
+    }
+
+    #[test]
+    fn spherical_jn_recurrence_threshold_continuity() {
+        // The Miller-vs-forward switch happens at x = n. Verify the
+        // result is continuous across that boundary by checking n=4
+        // at three x values straddling x=n: 3.9, 4.0, 4.1.
+        let prev = super::spherical_jn_nonneg(4, 3.9);
+        let mid = super::spherical_jn_nonneg(4, 4.0);
+        let next = super::spherical_jn_nonneg(4, 4.1);
+        // Continuity: the three values should be close (within 5%
+        // since j_n is smooth in x).
+        assert!((mid - prev).abs() < 0.05_f64.max(prev.abs() * 0.05));
+        assert!((next - mid).abs() < 0.05_f64.max(mid.abs() * 0.05));
     }
 
     #[test]
