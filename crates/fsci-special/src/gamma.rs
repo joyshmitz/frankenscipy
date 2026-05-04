@@ -3584,6 +3584,30 @@ mod tests {
     }
 
     #[test]
+    fn binom_metamorphic_symmetry_x_minus_y() {
+        // Apply /testing-metamorphic: binom(x, y) == binom(x, x − y)
+        // for x ≥ y ≥ 0 (gamma-form symmetry of the binomial). Pin
+        // across integer, half-integer, and non-integer x.
+        let cases: &[(f64, f64)] = &[
+            (5.0, 2.0),   // integer: C(5,2) = C(5,3) = 10
+            (10.0, 4.0),  // integer
+            (7.5, 2.5),   // half-integer x, integer y differential
+            (4.25, 1.25), // non-integer
+            (3.0, 0.0),   // y=0 endpoint
+        ];
+        for &(x, y) in cases {
+            let lhs = binom(x, y);
+            let rhs = binom(x, x - y);
+            let tol = 1e-9 * (lhs.abs() + 1.0);
+            assert!(
+                (lhs - rhs).abs() < tol,
+                "binom({x}, {y}) = {lhs} but binom({x}, {x}-{y}={}) = {rhs}",
+                x - y
+            );
+        }
+    }
+
+    #[test]
     fn binom_real_y_greater_than_x_uses_gamma_formula() {
         // [frankenscipy-du5m4] Regression: scipy.special.binom for
         // non-integer y > x (where y - x is non-integer) returns the
