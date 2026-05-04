@@ -1461,7 +1461,18 @@ pub fn binom(x: f64, y: f64) -> f64 {
         return f64::NAN;
     }
     if y > x {
-        return 0.0;
+        // For integer overshoot (y > x with y, x both integers, or
+        // y - x integer such that x - y + 1 ≤ 0), the gamma formula
+        // hits a pole or negative argument that lngamma_positive
+        // can't handle without reflection. Return 0 in that
+        // vanishing-coefficient regime. For non-integer y > x where
+        // x - y + 1 > 0, fall through to the gamma formula — scipy
+        // returns the finite nonzero value (e.g. binom(0.5, 1) = 0.5).
+        // [frankenscipy-du5m4]
+        if x - y + 1.0 <= 0.0 || (y - x).fract() == 0.0 {
+            return 0.0;
+        }
+        // else fall through
     }
     if y == 0.0 || y == x {
         return 1.0;
@@ -3564,8 +3575,31 @@ mod tests {
 
     #[test]
     fn binom_y_greater_than_x_returns_zero() {
+        // Integer overshoot: vanishing-coefficient rule.
         assert_eq!(binom(3.0, 5.0), 0.0);
-        assert_eq!(binom(0.5, 0.6), 0.0);
+        // Non-integer y - x with integer y - x = 0 (full y-x).fract() = 0:
+        // (y, x) where the difference is an exact integer ≥ 1 → 0.
+        assert_eq!(binom(2.5, 3.5), 0.0);
+        assert_eq!(binom(2.5, 4.5), 0.0);
+    }
+
+    #[test]
+    fn binom_real_y_greater_than_x_uses_gamma_formula() {
+        // [frankenscipy-du5m4] Regression: scipy.special.binom for
+        // non-integer y > x (where y - x is non-integer) returns the
+        // gamma formula value, not 0.
+        // binom(0.5, 1.0) = Γ(1.5)/(Γ(2)·Γ(0.5)) = (√π/2)/√π = 0.5.
+        // The lngamma asymptotic-with-recurrence loses ~1e-11 of precision
+        // here; a 1e-9 tolerance cleanly distinguishes the new gamma path
+        // (≈0.5) from the old vanishing-coefficient bug (= 0.0).
+        let v05_1 = binom(0.5_f64, 1.0);
+        assert!((v05_1 - 0.5).abs() < 1e-9, "binom(0.5, 1.0) = {v05_1}");
+        // binom(0.5, 0.6) = Γ(1.5)/(Γ(1.6)·Γ(0.9)).
+        let expected = lngamma_positive(1.5)
+            - lngamma_positive(1.6)
+            - lngamma_positive(0.9);
+        let expected = expected.exp();
+        assert!((binom(0.5_f64, 0.6) - expected).abs() < 1e-9);
     }
 
     #[test]
