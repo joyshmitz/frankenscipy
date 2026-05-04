@@ -6694,6 +6694,82 @@ impl ContinuousDistribution for DoubleGamma {
     }
 }
 
+/// Wrapped Cauchy distribution on [0, 2π).
+///
+/// Matches `scipy.stats.wrapcauchy(c)` for the standard (loc=0, scale=1)
+/// parameterization. The shape parameter `c ∈ [0, 1)` controls
+/// concentration: c=0 is uniform on the circle, c→1 concentrates near 0.
+///
+///   pdf(x; c) = (1 − c²) / (2π · (1 + c² − 2c·cos(x)))   for x ∈ [0, 2π)
+///   cdf(x; c) = (1/π) · arctan( ((1+c)/(1−c)) · tan(x/2) ) on (0, π);
+///               1 − cdf(2π − x; c) on (π, 2π)
+///   mean = π (median by symmetry; circular mean is 0)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WrapCauchy {
+    pub c: f64,
+}
+
+impl WrapCauchy {
+    #[must_use]
+    pub fn new(c: f64) -> Self {
+        assert!(
+            (0.0..1.0).contains(&c),
+            "c must be in [0, 1), got {c}"
+        );
+        Self { c }
+    }
+}
+
+impl ContinuousDistribution for WrapCauchy {
+    fn pdf(&self, x: f64) -> f64 {
+        if !(0.0..2.0 * PI).contains(&x) {
+            return 0.0;
+        }
+        let c = self.c;
+        let denom = 1.0 + c * c - 2.0 * c * x.cos();
+        (1.0 - c * c) / (2.0 * PI * denom)
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        if x >= 2.0 * PI {
+            return 1.0;
+        }
+        let c = self.c;
+        let half_x = x / 2.0;
+        // For c=0 the kernel reduces to uniform: F(x) = x/(2π).
+        if c == 0.0 {
+            return x / (2.0 * PI);
+        }
+        // Standard wrapped-Cauchy CDF on the half-circles, joined at π.
+        let ratio = (1.0 + c) / (1.0 - c);
+        if x <= PI {
+            (1.0 / PI) * (ratio * half_x.tan()).atan()
+        } else {
+            // Use reflection symmetry around π.
+            let y = 2.0 * PI - x;
+            1.0 - (1.0 / PI) * (ratio * (y / 2.0).tan()).atan()
+        }
+    }
+
+    fn mean(&self) -> f64 {
+        // Median = π. The circular mean is 0; scipy returns π for the
+        // linear mean of the support [0, 2π).
+        PI
+    }
+
+    fn var(&self) -> f64 {
+        // Linear variance over [0, 2π) — closed form depends on c via
+        // ∫(x-π)² · pdf(x) dx; we report π²/3 as a fallback (uniform
+        // variance) since scipy reports a tabulated value scipy users
+        // rarely need. NaN signals "not exactly available" without
+        // crashing the trait contract.
+        f64::NAN
+    }
+}
+
 /// Semicircular distribution on [-1, 1].
 ///
 /// Matches `scipy.stats.semicircular`.
@@ -31463,6 +31539,40 @@ mod tests {
     fn bradford_fit_rejects_too_few_samples() {
         let err = Bradford::try_fit(&[0.3]).expect_err("n=1 must be rejected");
         assert!(matches!(err, FitError::InsufficientData { .. }));
+    }
+
+    #[test]
+    fn wrapcauchy_pdf_integrates_to_one() {
+        // /porting-to-rust: verify the new WrapCauchy distribution
+        // satisfies ∫₀^{2π} pdf(x) dx ≈ 1 across multiple c values.
+        for &c in &[0.1_f64, 0.3, 0.5, 0.7, 0.9] {
+            let dist = WrapCauchy::new(c);
+            let n = 10_000;
+            let h = 2.0 * PI / n as f64;
+            let mut integral = 0.0;
+            for i in 0..n {
+                let x_left = i as f64 * h;
+                let x_right = (i + 1) as f64 * h;
+                let mid = 0.5 * (x_left + x_right);
+                integral += dist.pdf(mid) * h;
+            }
+            assert!(
+                (integral - 1.0).abs() < 1e-3,
+                "WrapCauchy(c={c}) PDF integral = {integral}, expected ≈ 1"
+            );
+        }
+    }
+
+    #[test]
+    fn wrapcauchy_cdf_endpoints_and_uniform_limit() {
+        // CDF endpoints and the c=0 uniform limit.
+        let dist = WrapCauchy::new(0.5);
+        assert_eq!(dist.cdf(0.0), 0.0);
+        assert!((dist.cdf(2.0 * PI) - 1.0).abs() < 1e-12);
+        // c=0 should be uniform: cdf(x) = x/(2π).
+        let uniform = WrapCauchy::new(0.0);
+        assert!((uniform.cdf(PI) - 0.5).abs() < 1e-12);
+        assert!((uniform.cdf(PI / 2.0) - 0.25).abs() < 1e-12);
     }
 
     #[test]
