@@ -211,7 +211,7 @@ fn mr_cumulative_trapezoid_final_equals_total() {
 fn mr_simpson_cubic_invariant_under_refinement() {
     fn integrate_simpson(n_intervals: usize) -> f64 {
         // n_intervals must be even for Simpson's 1/3 rule.
-        let n = if n_intervals % 2 == 0 {
+        let n = if n_intervals.is_multiple_of(2) {
             n_intervals
         } else {
             n_intervals + 1
@@ -584,7 +584,7 @@ fn mr_cumulative_trapezoid_monotone_on_nonneg_integrand() {
 fn mr_quad_odd_function_symmetric_interval_zero() {
     let opts = QuadOptions::default();
     for &a in &[1.0_f64, std::f64::consts::PI, 2.5, 5.0, 10.0] {
-        let r = quad(|x: f64| x.sin(), -a, a, opts.clone()).unwrap();
+        let r = quad(|x: f64| x.sin(), -a, a, opts).unwrap();
         assert!(
             r.integral.abs() < 1e-9,
             "MR23 ∫_{{-{a}}}^{{{a}}} sin(x) dx = {}, expected 0",

@@ -1070,8 +1070,10 @@ fn mr_make_lsq_spline_degree() {
 fn mr_interp1d_cubic_close_to_data_at_xs() {
     let x: Vec<f64> = (0..10).map(|i| i as f64).collect();
     let y: Vec<f64> = x.iter().map(|&xi| xi.sin()).collect();
-    let mut opts = Interp1dOptions::default();
-    opts.kind = InterpKind::CubicSpline;
+    let opts = Interp1dOptions {
+        kind: InterpKind::CubicSpline,
+        ..Default::default()
+    };
     let interp = Interp1d::new(&x, &y, opts).unwrap();
     for (i, &xi) in x.iter().enumerate() {
         let v = interp.eval(xi).unwrap();
@@ -1094,7 +1096,7 @@ fn mr_interp1d_linear_in_range_finite() {
     let y: Vec<f64> = vec![10.0, 20.0, 30.0, 40.0];
     let x_query: Vec<f64> = vec![0.5, 1.5, 2.5];
     let yhat = interp1d_linear(&x, &y, &x_query).unwrap();
-    let expected = vec![15.0_f64, 25.0, 35.0];
+    let expected = [15.0_f64, 25.0, 35.0];
     for (i, (a, b)) in expected.iter().zip(&yhat).enumerate() {
         assert!(
             (a - b).abs() < 1e-12,

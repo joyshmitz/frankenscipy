@@ -863,10 +863,10 @@ fn mr_hamming_hann_windows_symmetric() {
             );
         }
         for &v in &h {
-            assert!(v >= -1e-12 && v <= 1.001, "MR32 hamming val = {v}");
+            assert!((-1e-12..=1.001).contains(&v), "MR32 hamming val = {v}");
         }
         for &v in &hn {
-            assert!(v >= -1e-12 && v <= 1.0 + 1e-12, "MR32 hann val = {v}");
+            assert!((-1e-12..=1.0 + 1e-12).contains(&v), "MR32 hann val = {v}");
         }
     }
 }
@@ -1170,12 +1170,12 @@ fn mr_fft_constant_input_only_dc_nonzero() {
             "MR45 fft(const) DC imag = {}",
             xf[0].1
         );
-        for k in 1..n {
+        for (k, val) in xf.iter().enumerate().take(n).skip(1) {
             assert!(
-                xf[k].0.abs() < 1e-9 && xf[k].1.abs() < 1e-9,
+                val.0.abs() < 1e-9 && val.1.abs() < 1e-9,
                 "MR45 fft(const)[{k}] = ({}, {}), expected (0, 0)",
-                xf[k].0,
-                xf[k].1
+                val.0,
+                val.1
             );
         }
     }
@@ -1197,12 +1197,12 @@ fn mr_rfft_all_ones_dc_bin_is_n() {
             y[0].0,
             n as f64
         );
-        for k in 1..y.len() {
+        for (k, val) in y.iter().enumerate().skip(1) {
             assert!(
-                y[k].0.abs() < 1e-9 && y[k].1.abs() < 1e-9,
+                val.0.abs() < 1e-9 && val.1.abs() < 1e-9,
                 "MR46 rfft(ones)[{k}] = ({}, {})",
-                y[k].0,
-                y[k].1
+                val.0,
+                val.1
             );
         }
     }

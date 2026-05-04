@@ -144,11 +144,11 @@ fn mr_pdist_squareform_roundtrip() {
     // Square matrix must be symmetric with zero diagonal.
     let n = pts.len();
     assert_eq!(square.len(), n);
-    for i in 0..n {
-        assert!((square[i][i]).abs() < 1e-15, "diagonal not zero at {i}");
+    for (i, row) in square.iter().enumerate() {
+        assert!((row[i]).abs() < 1e-15, "diagonal not zero at {i}");
         for j in (i + 1)..n {
             assert!(
-                close(square[i][j], square[j][i]),
+                close(row[j], square[j][i]),
                 "square not symmetric at ({i},{j})"
             );
         }
@@ -165,18 +165,18 @@ fn mr_cdist_self_symmetric_zero_diagonal() {
     let m = cdist_metric(&pts, &pts, DistanceMetric::Euclidean).unwrap();
     let n = pts.len();
     assert_eq!(m.len(), n);
-    for i in 0..n {
-        assert_eq!(m[i].len(), n);
+    for (i, row) in m.iter().enumerate() {
+        assert_eq!(row.len(), n);
         assert!(
-            m[i][i].abs() < 1e-12,
+            row[i].abs() < 1e-12,
             "MR5 cdist diagonal not zero at {i}: {}",
-            m[i][i]
+            row[i]
         );
         for j in (i + 1)..n {
             assert!(
-                close(m[i][j], m[j][i]),
+                close(row[j], m[j][i]),
                 "MR5 cdist not symmetric at ({i},{j}): {} vs {}",
-                m[i][j],
+                row[j],
                 m[j][i]
             );
             assert!(
@@ -495,12 +495,11 @@ fn mr_cdist_self_matches_pdist() {
     let condensed = pdist(&pts, DistanceMetric::Euclidean).unwrap();
     let n = pts.len();
     let mut idx = 0;
-    for i in 0..n {
-        for j in (i + 1)..n {
-            let from_cdist = cd[i][j];
+    for (i, row) in cd.iter().enumerate() {
+        for (j, from_cdist) in row.iter().enumerate().take(n).skip(i + 1) {
             let from_pdist = condensed[idx];
             assert!(
-                close(from_cdist, from_pdist),
+                close(*from_cdist, from_pdist),
                 "MR16 cdist[{i},{j}]={from_cdist} pdist[{idx}]={from_pdist}"
             );
             idx += 1;
@@ -582,7 +581,7 @@ fn mr_cosine_distance_bounds_and_scale_invariance() {
         for b in &pts {
             let d = cosine(a, b);
             assert!(
-                d >= -1e-12 && d <= 2.0 + 1e-12,
+                (-1e-12..=2.0 + 1e-12).contains(&d),
                 "MR19 cosine = {d}, expected in [0, 2]"
             );
         }
@@ -815,7 +814,7 @@ fn mr_angle_between_in_zero_pi() {
             let ang = angle_between(a, b);
             if ang.is_finite() {
                 assert!(
-                    ang >= -1e-12 && ang <= PI + 1e-12,
+                    (-1e-12..=PI + 1e-12).contains(&ang),
                     "MR28 angle_between = {ang} not in [0, π]"
                 );
             }
@@ -991,7 +990,7 @@ fn mr_russellrao_in_unit_interval() {
     for (u, v) in pairs {
         let r = russellrao(u, v);
         assert!(
-            r >= -1e-12 && r <= 1.0 + 1e-12,
+            (-1e-12..=1.0 + 1e-12).contains(&r),
             "MR36 russellrao = {r} outside [0, 1]"
         );
     }
@@ -1108,8 +1107,8 @@ fn mr_mahalanobis_identity_inv_cov_equals_euclidean() {
     let pts = sample_points();
     let d = pts[0].len();
     let mut id = vec![vec![0.0; d]; d];
-    for i in 0..d {
-        id[i][i] = 1.0;
+    for (i, row) in id.iter_mut().enumerate() {
+        row[i] = 1.0;
     }
     for a in &pts {
         for b in &pts {
@@ -1397,7 +1396,7 @@ fn mr_rotation_preserves_magnitude() {
 
 #[test]
 fn mr_rotation_rotvec_roundtrip() {
-    let r1 = Rotation::from_quat([0.3, 0.4, 0.5, 0.7071067811865476]);
+    let r1 = Rotation::from_quat([0.3, 0.4, 0.5, std::f64::consts::FRAC_1_SQRT_2]);
     let rv = r1.as_rotvec();
     let r2 = Rotation::from_rotvec(rv);
     let probe = [1.0_f64, 2.0, -1.5];

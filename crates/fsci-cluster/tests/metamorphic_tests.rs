@@ -131,7 +131,7 @@ fn mr_fcluster_respects_max_clusters() {
     for &max_k in &[1usize, 2, 3, 5, 10] {
         let labels = fcluster(&z, max_k).unwrap();
         assert_eq!(labels.len(), data.len());
-        let mut sorted_unique: Vec<usize> = labels.iter().copied().collect();
+        let mut sorted_unique: Vec<usize> = labels.to_vec();
         sorted_unique.sort_unstable();
         sorted_unique.dedup();
         assert!(
@@ -510,7 +510,7 @@ fn mr_normalized_mutual_info_symmetric() {
         "MR23 NMI(a, b) = {nmi_ab}, NMI(b, a) = {nmi_ba}"
     );
     assert!(
-        nmi_ab >= -1e-10 && nmi_ab <= 1.0 + 1e-10,
+        (-1e-10..=1.0 + 1e-10).contains(&nmi_ab),
         "MR23 NMI not in [0, 1]"
     );
 }
@@ -552,7 +552,7 @@ fn mr_homogeneity_in_unit_interval() {
     for (i, (t, p)) in cases.iter().enumerate() {
         let h = homogeneity_score(t, p).unwrap();
         assert!(
-            h >= -1e-10 && h <= 1.0 + 1e-10,
+            (-1e-10..=1.0 + 1e-10).contains(&h),
             "MR25 homogeneity[{i}] = {h} outside [0, 1]"
         );
     }
@@ -581,7 +581,7 @@ fn mr_completeness_in_unit_interval() {
     for (i, (t, p)) in cases.iter().enumerate() {
         let c = completeness_score(t, p).unwrap();
         assert!(
-            c >= -1e-10 && c <= 1.0 + 1e-10,
+            (-1e-10..=1.0 + 1e-10).contains(&c),
             "MR26 completeness[{i}] = {c} outside [0, 1]"
         );
     }
@@ -640,7 +640,7 @@ fn mr_v_measure_symmetric_and_bounded() {
             "MR28 v_measure[{i}] not symmetric: {v_tp} vs {v_pt}"
         );
         assert!(
-            v_tp >= -1e-10 && v_tp <= 1.0 + 1e-10,
+            (-1e-10..=1.0 + 1e-10).contains(&v_tp),
             "MR28 v_measure[{i}] = {v_tp} outside [0, 1]"
         );
     }
@@ -660,7 +660,7 @@ fn mr_silhouette_samples_bounded_and_mean_matches_score() {
     let mean: f64 = s_each.iter().sum::<f64>() / s_each.len() as f64;
     for (i, &v) in s_each.iter().enumerate() {
         assert!(
-            v >= -1.0 - 1e-9 && v <= 1.0 + 1e-9,
+            (-1.0 - 1e-9..=1.0 + 1e-9).contains(&v),
             "MR29 silhouette[{i}] = {v} outside [-1, 1]"
         );
     }
