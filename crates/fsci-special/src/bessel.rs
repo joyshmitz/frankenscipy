@@ -3046,68 +3046,133 @@ pub fn riccati_yn(n: u32, x: f64) -> (Vec<f64>, Vec<f64>) {
     (c, cp)
 }
 
+/// Olver/Tricomi initial-guess for the first zero of J_n at large n,
+/// from DLMF 10.21.40 (asymptotic expansion in n^(-1/3)):
+///   j_{n,1} ≈ n + a·n^(1/3) + b·n^(-1/3) − c·n^(-1) − d·n^(-5/3)
+/// with a ≈ 1.855_757, b ≈ 1.033_150, c ≈ 0.003_972, d ≈ 0.090_8.
+fn olver_jn_first_zero(n_f: f64) -> f64 {
+    let n_one_third = n_f.cbrt();
+    let inv_n_one_third = 1.0 / n_one_third;
+    let inv_n = 1.0 / n_f;
+    let inv_n_five_thirds = inv_n * inv_n_one_third * inv_n_one_third;
+    n_f + 1.855_757_081_206_722 * n_one_third + 1.033_150_071_8 * inv_n_one_third
+        - 0.003_972 * inv_n
+        - 0.090_8 * inv_n_five_thirds
+}
+
+/// Olver/Tricomi initial-guess for the first zero of Y_n at large n
+/// (DLMF 10.21.40 second-kind variant).
+fn olver_yn_first_zero(n_f: f64) -> f64 {
+    let n_one_third = n_f.cbrt();
+    let inv_n_one_third = 1.0 / n_one_third;
+    let inv_n = 1.0 / n_f;
+    let inv_n_five_thirds = inv_n * inv_n_one_third * inv_n_one_third;
+    n_f + 0.931_577_4 * n_one_third + 0.260_086 * inv_n_one_third
+        - 0.011_911 * inv_n
+        - 0.043_4 * inv_n_five_thirds
+}
+
+/// Refine a bessel-zero initial guess by bracket expansion + bisection.
+/// Walks outward from `initial` in steps of `step`, bounded by [`floor`,
+/// initial+max_outward], until a sign change of `f_at` is found, then
+/// bisects to ~1e-12 precision. Returns `initial` unchanged if no
+/// bracket can be found within `max_outward`.
+fn bracket_and_bisect_zero(
+    f_at: impl Fn(f64) -> f64,
+    initial: f64,
+    floor: f64,
+    step: f64,
+    max_outward: f64,
+) -> f64 {
+    let mut lo = (initial - step).max(floor);
+    let mut hi = (initial + step).max(lo + step);
+    let mut f_lo = f_at(lo);
+    let mut f_hi = f_at(hi);
+    let mut walked = step;
+    while walked < max_outward {
+        if f_lo.is_finite() && f_hi.is_finite() && f_lo.signum() != f_hi.signum() {
+            break;
+        }
+        let new_lo = (lo - step).max(floor);
+        let new_hi = hi + step;
+        if new_lo == lo && new_hi == hi {
+            break;
+        }
+        lo = new_lo;
+        hi = new_hi;
+        f_lo = f_at(lo);
+        f_hi = f_at(hi);
+        walked += step;
+    }
+    if !f_lo.is_finite()
+        || !f_hi.is_finite()
+        || f_lo.signum() == f_hi.signum()
+    {
+        return initial;
+    }
+    for _ in 0..120 {
+        let mid = 0.5 * (lo + hi);
+        let f_mid = f_at(mid);
+        if !f_mid.is_finite() {
+            break;
+        }
+        if f_mid.signum() == f_lo.signum() {
+            lo = mid;
+            f_lo = f_mid;
+        } else {
+            hi = mid;
+        }
+        if (hi - lo) < 1.0e-12 {
+            break;
+        }
+    }
+    0.5 * (lo + hi)
+}
+
 /// First `k` positive zeros of the Bessel function Y_n(x), for integer
 /// order `n ≥ 0`. Returns a Vec of length `k`, sorted ascending.
 ///
-/// Matches `scipy.special.yn_zeros(n, k)`. Uses McMahon's asymptotic
-/// (DLMF 10.21.19, second-kind variant)
+/// Matches `scipy.special.yn_zeros(n, k)`. Initial guess is piecewise:
+/// for k=1 with n ≥ 5 use Olver/Tricomi (DLMF 10.21.40); otherwise use
+/// McMahon's asymptotic
 ///   μ = (4 k + 2 n - 3) · π / 4
 ///   y_{n,k} ≈ μ - (4 n² - 1)/(8 μ) - (4 n² - 1)(28 n² - 31)/(384 μ³)
-/// as the initial guess (the offset differs from `jn_zeros` by 2: zeros
-/// of Y_n are interlaced halfway between zeros of J_n), then refines via
-/// bisection inside a ±1 bracket.
+/// (DLMF 10.21.19 second-kind variant — offset differs from jn_zeros by
+/// 2 because zeros of Y_n interlace those of J_n). Refines via bracket
+/// expansion + bisection.
 pub fn yn_zeros(n: u32, k: usize) -> Vec<f64> {
     let mut out = Vec::with_capacity(k);
     let n_f = n as f64;
     let four_n_sq = 4.0 * n_f * n_f;
+    let mut prev_zero = 0.0_f64;
     for ki in 1..=k {
         let mu = (4.0 * ki as f64 + 2.0 * n_f - 3.0) * std::f64::consts::PI / 4.0;
         let inv_mu = 1.0 / mu;
         let inv_mu2 = inv_mu * inv_mu;
-        let initial = mu - (four_n_sq - 1.0) / (8.0 * mu)
+        let mcmahon = mu - (four_n_sq - 1.0) / (8.0 * mu)
             - (four_n_sq - 1.0) * (28.0 * four_n_sq - 31.0) / 384.0 * inv_mu * inv_mu2;
+        let initial = if ki == 1 && n >= 5 {
+            olver_yn_first_zero(n_f)
+        } else if ki >= 2 {
+            // Successive zeros are separated by ~π; if the asymptotic
+            // mcmahon falls below prev_zero + π/4 (sign that mcmahon is
+            // too low for this regime), nudge it up.
+            mcmahon.max(prev_zero + 0.5 * std::f64::consts::PI)
+        } else {
+            mcmahon
+        };
         let f_at = |x: f64| -> f64 {
             yn_scalar(n_f, x, RuntimeMode::Strict).unwrap_or(f64::NAN)
         };
-        let radius = 1.0_f64;
-        let mut lo = (initial - radius).max(1.0e-6);
-        let mut hi = initial + radius;
-        let mut f_lo = f_at(lo);
-        let mut f_hi = f_at(hi);
-        let mut tries = 0;
-        while f_lo.is_finite()
-            && f_hi.is_finite()
-            && f_lo.signum() == f_hi.signum()
-            && tries < 8
-        {
-            lo = (lo - 0.3).max(1.0e-6);
-            hi += 0.3;
-            f_lo = f_at(lo);
-            f_hi = f_at(hi);
-            tries += 1;
-        }
-        if !f_lo.is_finite() || !f_hi.is_finite() || f_lo.signum() == f_hi.signum() {
-            out.push(initial);
-            continue;
-        }
-        for _ in 0..120 {
-            let mid = 0.5 * (lo + hi);
-            let f_mid = f_at(mid);
-            if !f_mid.is_finite() {
-                break;
-            }
-            if f_mid.signum() == f_lo.signum() {
-                lo = mid;
-                f_lo = f_mid;
-            } else {
-                hi = mid;
-                f_hi = f_mid;
-            }
-            if (hi - lo) < 1.0e-12 {
-                break;
-            }
-        }
-        out.push(0.5 * (lo + hi));
+        let floor = if ki >= 2 {
+            prev_zero + 1.0e-6
+        } else {
+            1.0e-6
+        };
+        let zero =
+            bracket_and_bisect_zero(f_at, initial, floor, 0.5, (n_f * 0.25).max(20.0));
+        out.push(zero);
+        prev_zero = zero;
     }
     out
 }
@@ -3115,69 +3180,46 @@ pub fn yn_zeros(n: u32, k: usize) -> Vec<f64> {
 /// First `k` positive zeros of the Bessel function J_n(x), for integer
 /// order `n ≥ 0`. Returns a Vec of length `k`, sorted ascending.
 ///
-/// Matches `scipy.special.jn_zeros(n, k)`. Uses McMahon's asymptotic
-/// expansion (DLMF 10.21.19)
+/// Matches `scipy.special.jn_zeros(n, k)`. Initial guess is piecewise:
+/// for k=1 with n ≥ 5 use Olver/Tricomi (DLMF 10.21.40); otherwise use
+/// McMahon's asymptotic
 ///   μ = (4 k + 2 n - 1) · π / 4 = (k + n/2 − 1/4) · π
 ///   j_{n,k} ≈ μ - (4 n² - 1)/(8 μ) - (4 n² - 1)(28 n² - 31)/(384 μ³)
-/// as the initial guess, then refines via bisection in a 1.0-radius
-/// bracket (with adaptive expansion). Bisection is preferred over Newton
-/// for the same basin-flip robustness reason as ai_zeros / bi_zeros.
+/// (DLMF 10.21.19). Refines via bracket expansion + bisection. Bisection
+/// is preferred over Newton for the same basin-flip robustness reason
+/// as ai_zeros / bi_zeros. Without the Olver fallback, McMahon's
+/// expansion produces useless guesses for moderate-large n at small k
+/// (e.g. n=100, k=1 places McMahon at ~120 vs the true 108.84).
 pub fn jn_zeros(n: u32, k: usize) -> Vec<f64> {
     let mut out = Vec::with_capacity(k);
     let n_f = n as f64;
     let four_n_sq = 4.0 * n_f * n_f;
+    let mut prev_zero = 0.0_f64;
     for ki in 1..=k {
         let mu = (4.0 * ki as f64 + 2.0 * n_f - 1.0) * std::f64::consts::PI / 4.0;
         let inv_mu = 1.0 / mu;
         let inv_mu2 = inv_mu * inv_mu;
-        // McMahon's expansion truncated at the second correction.
-        let initial = mu - (four_n_sq - 1.0) / (8.0 * mu)
+        let mcmahon = mu - (four_n_sq - 1.0) / (8.0 * mu)
             - (four_n_sq - 1.0) * (28.0 * four_n_sq - 31.0) / 384.0 * inv_mu * inv_mu2;
-        // Bisect around the asymptotic guess. Adjacent zeros of J_n are
-        // separated by ~π for large k, so a bracket of radius 1 is safe.
+        let initial = if ki == 1 && n >= 5 {
+            olver_jn_first_zero(n_f)
+        } else if ki >= 2 {
+            mcmahon.max(prev_zero + 0.5 * std::f64::consts::PI)
+        } else {
+            mcmahon
+        };
         let f_at = |x: f64| -> f64 {
             jn_scalar(n_f, x, RuntimeMode::Strict).unwrap_or(f64::NAN)
         };
-        let radius = 1.0_f64;
-        let mut lo = (initial - radius).max(1.0e-6);
-        let mut hi = initial + radius;
-        let mut f_lo = f_at(lo);
-        let mut f_hi = f_at(hi);
-        let mut tries = 0;
-        while f_lo.is_finite()
-            && f_hi.is_finite()
-            && f_lo.signum() == f_hi.signum()
-            && tries < 8
-        {
-            lo = (lo - 0.3).max(1.0e-6);
-            hi += 0.3;
-            f_lo = f_at(lo);
-            f_hi = f_at(hi);
-            tries += 1;
-        }
-        if !f_lo.is_finite() || !f_hi.is_finite() || f_lo.signum() == f_hi.signum() {
-            // Fallback: keep the asymptotic guess.
-            out.push(initial);
-            continue;
-        }
-        for _ in 0..120 {
-            let mid = 0.5 * (lo + hi);
-            let f_mid = f_at(mid);
-            if !f_mid.is_finite() {
-                break;
-            }
-            if f_mid.signum() == f_lo.signum() {
-                lo = mid;
-                f_lo = f_mid;
-            } else {
-                hi = mid;
-                f_hi = f_mid;
-            }
-            if (hi - lo) < 1.0e-12 {
-                break;
-            }
-        }
-        out.push(0.5 * (lo + hi));
+        let floor = if ki >= 2 {
+            prev_zero + 1.0e-6
+        } else {
+            1.0e-6
+        };
+        let zero =
+            bracket_and_bisect_zero(f_at, initial, floor, 0.5, (n_f * 0.25).max(20.0));
+        out.push(zero);
+        prev_zero = zero;
     }
     out
 }
@@ -4164,6 +4206,36 @@ mod tests {
                     "J_{n}({z}) = {val} should be ≈ 0"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn jn_zeros_large_n_first_zero_matches_olver() {
+        // Regression for [frankenscipy-zppm2]: McMahon's asymptotic guess
+        // diverges from the true first zero for moderate-large n. Olver
+        // expansion fixes it; verify J_n(jn_zeros(n,1)[0]) ≈ 0 across the
+        // failure regime (n=10, 20, 50, 100).
+        for &n in &[10_u32, 20, 50, 100] {
+            let zeros = jn_zeros(n, 1);
+            let z = zeros[0];
+            let val = jn_scalar(n as f64, z, RuntimeMode::Strict).expect("jn");
+            assert!(
+                val.abs() < 1e-6,
+                "J_{n}({z}) = {val} should be ≈ 0 (n={n}, k=1)"
+            );
+        }
+    }
+
+    #[test]
+    fn yn_zeros_large_n_first_zero_matches_olver() {
+        for &n in &[10_u32, 20, 50, 100] {
+            let zeros = yn_zeros(n, 1);
+            let z = zeros[0];
+            let val = yn_scalar(n as f64, z, RuntimeMode::Strict).expect("yn");
+            assert!(
+                val.abs() < 1e-6,
+                "Y_{n}({z}) = {val} should be ≈ 0 (n={n}, k=1)"
+            );
         }
     }
 

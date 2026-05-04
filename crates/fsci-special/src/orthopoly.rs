@@ -1897,13 +1897,12 @@ mod tests {
     fn lqmn_zeros_below_diagonal() {
         // Cells with m > l are zero by convention.
         let arr = lqmn(4, 3, 0.5);
-        for m in 0..=4_usize {
-            for l in 0..=3_usize {
+        for (m, row) in arr.iter().enumerate() {
+            for (l, &cell) in row.iter().enumerate() {
                 if m > l {
                     assert!(
-                        arr[m][l].abs() < 1e-15,
-                        "lqmn[{m}][{l}] should be 0 (m > l), got {}",
-                        arr[m][l]
+                        cell.abs() < 1e-15,
+                        "lqmn[{m}][{l}] should be 0 (m > l), got {cell}"
                     );
                 }
             }
