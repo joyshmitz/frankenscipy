@@ -5045,6 +5045,46 @@ mod tests {
     }
 
     #[test]
+    fn softmax_matches_scipy_reference_points() {
+        // Skill rotation: /testing-conformance-harnesses (parity vs scipy
+        // reference values). softmax is closed-form; pin three regimes:
+        //
+        //   softmax([1, 2, 3]) = [e/(e+e²+e³), e²/..., e³/...]
+        //   softmax([0]) = [1.0]
+        //   softmax([-1000, -1000, -1000]) = [1/3, 1/3, 1/3]
+        //   (numerical stability via max subtraction)
+        let r = softmax(&[1.0_f64, 2.0, 3.0]);
+        let e1 = 1.0_f64.exp();
+        let e2 = 2.0_f64.exp();
+        let e3 = 3.0_f64.exp();
+        let denom = e1 + e2 + e3;
+        let expected = [e1 / denom, e2 / denom, e3 / denom];
+        for (i, (got, want)) in r.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-12,
+                "softmax([1,2,3])[{i}] = {got}, expected {want}"
+            );
+        }
+        // Sum-to-one invariant.
+        let s: f64 = r.iter().sum();
+        assert!((s - 1.0).abs() < 1e-12, "softmax sum = {s}, expected 1.0");
+
+        // Single-element softmax is always [1.0].
+        assert_eq!(softmax(&[0.0]), vec![1.0]);
+        assert_eq!(softmax(&[42.0]), vec![1.0]);
+
+        // Numerical stability: large negative inputs should not underflow
+        // to all-zero with NaN sum. Three identical entries → [1/3, 1/3, 1/3].
+        let stable = softmax(&[-1000.0, -1000.0, -1000.0]);
+        for (i, &v) in stable.iter().enumerate() {
+            assert!(
+                (v - 1.0 / 3.0).abs() < 1e-12,
+                "softmax(extreme)[{i}] = {v}, expected 1/3"
+            );
+        }
+    }
+
+    #[test]
     fn nrdtrimn_recovers_mean() {
         let mean = 3.0;
         let std = 2.0;
