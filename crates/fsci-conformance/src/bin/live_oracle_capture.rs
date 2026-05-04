@@ -39,8 +39,8 @@ fn parse_cli_args(args: &[String]) -> Result<CliArgs, CliParseError> {
     let mut allow_drift = false;
 
     let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
+    while let Some(arg) = args.get(index) {
+        match arg.as_str() {
             "-h" | "--help" => return Err(CliParseError::Help),
             "--fixture-root" => {
                 fixture_root = next_path(args, index, "--fixture-root")?;
@@ -139,13 +139,56 @@ fn write_summary(
     Ok(())
 }
 
+fn enforce_exit_policy(
+    report: &LiveOracleCaptureReport,
+    allow_missing_oracle: bool,
+    allow_drift: bool,
+) -> Result<(), ExitCode> {
+    if !allow_missing_oracle && report.oracle_unavailable_packets > 0 {
+        eprintln!(
+            "oracle unavailable for {} packet(s)",
+            report.oracle_unavailable_packets
+        );
+        return Err(ExitCode::from(1));
+    }
+    if allow_drift {
+        return Ok(());
+    }
+
+    let must_validate_oracle_coverage =
+        !allow_missing_oracle || report.oracle_available_packets > 0 || report.total_packets == 0;
+    if must_validate_oracle_coverage
+        && let Err(message) = validate_zero_drift_oracle_coverage(report)
+    {
+        eprintln!("{message}");
+        return Err(ExitCode::from(1));
+    }
+
+    let drift_gate = evaluate_drift_gate(report, &default_zero_drift_thresholds());
+    if !drift_gate.passed() {
+        eprintln!(
+            "detected {} drifted case(s) above threshold across {} packet(s)",
+            drift_gate.total_drifted_cases, drift_gate.failed_packets
+        );
+        for packet in drift_gate.packets.iter().filter(|packet| !packet.passed) {
+            eprintln!(
+                "{}: {} drifted case(s), max allowed {}",
+                packet.packet_id, packet.drifted_cases, packet.max_allowed_drifted_cases
+            );
+        }
+        return Err(ExitCode::from(1));
+    }
+    Ok(())
+}
+
 fn main() -> ExitCode {
     let argv = std::env::args().collect::<Vec<_>>();
     let program = argv
         .first()
         .cloned()
         .unwrap_or_else(|| String::from("live_oracle_capture"));
-    let args = match parse_cli_args(&argv[1..]) {
+    let arg_slice = argv.get(1..).unwrap_or(&[]);
+    let args = match parse_cli_args(arg_slice) {
         Ok(args) => args,
         Err(CliParseError::Help) => {
             print_usage(&program);
@@ -163,11 +206,13 @@ fn main() -> ExitCode {
         fixture_root: args.fixture_root,
         strict_mode: true,
     };
+    let allow_missing_oracle = args.allow_missing_oracle;
+    let allow_drift = args.allow_drift;
     let oracle = DifferentialOracleConfig {
         python_path: args.python_path,
         script_path: DifferentialOracleConfig::default().script_path,
         timeout_secs: args.timeout_secs,
-        required: !args.allow_missing_oracle,
+        required: !allow_missing_oracle,
     };
 
     let report =
@@ -182,32 +227,91 @@ fn main() -> ExitCode {
     if let Err(code) = write_summary(&report, args.output_path.as_ref()) {
         return code;
     }
-    if !args.allow_missing_oracle && report.oracle_unavailable_packets > 0 {
-        eprintln!(
-            "oracle unavailable for {} packet(s)",
-            report.oracle_unavailable_packets
-        );
-        return ExitCode::from(1);
-    }
-    if !args.allow_drift {
-        if let Err(message) = validate_zero_drift_oracle_coverage(&report) {
-            eprintln!("{message}");
-            return ExitCode::from(1);
-        }
-        let drift_gate = evaluate_drift_gate(&report, &default_zero_drift_thresholds());
-        if !drift_gate.passed() {
-            eprintln!(
-                "detected {} drifted case(s) above threshold across {} packet(s)",
-                drift_gate.total_drifted_cases, drift_gate.failed_packets
-            );
-            for packet in drift_gate.packets.iter().filter(|packet| !packet.passed) {
-                eprintln!(
-                    "{}: {} drifted case(s), max allowed {}",
-                    packet.packet_id, packet.drifted_cases, packet.max_allowed_drifted_cases
-                );
-            }
-            return ExitCode::from(1);
-        }
+    if let Err(code) = enforce_exit_policy(&report, allow_missing_oracle, allow_drift) {
+        return code;
     }
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::enforce_exit_policy;
+    use fsci_conformance::{DriftDiffReport, LiveOracleCaptureReport, OracleStatus};
+
+    fn report_with_packet(
+        oracle_status: OracleStatus,
+        oracle_available_packets: usize,
+        oracle_unavailable_packets: usize,
+        drifted_cases: usize,
+    ) -> LiveOracleCaptureReport {
+        LiveOracleCaptureReport {
+            schema_version: 1,
+            generated_unix_ms: 123,
+            fixture_root: "fixtures".to_owned(),
+            total_packets: 1,
+            total_cases: 1,
+            drifted_cases,
+            oracle_available_packets,
+            oracle_unavailable_packets,
+            packets: vec![DriftDiffReport {
+                schema_version: 1,
+                packet_id: "FSCI-P2C-011".to_owned(),
+                family: "signal_core".to_owned(),
+                fixture_path: "FSCI-P2C-011_signal_core.json".to_owned(),
+                generated_unix_ms: 123,
+                oracle_status,
+                total_cases: 1,
+                drifted_cases,
+                cases: Vec::new(),
+            }],
+        }
+    }
+
+    #[test]
+    fn allow_missing_oracle_permits_all_missing_packets_without_drift() {
+        let report = report_with_packet(
+            OracleStatus::Missing {
+                reason: "scipy not installed".to_owned(),
+            },
+            0,
+            1,
+            0,
+        );
+        assert!(enforce_exit_policy(&report, true, false).is_ok());
+    }
+
+    #[test]
+    fn default_policy_rejects_all_missing_packets() {
+        let report = report_with_packet(
+            OracleStatus::Missing {
+                reason: "scipy not installed".to_owned(),
+            },
+            0,
+            1,
+            0,
+        );
+        assert!(enforce_exit_policy(&report, false, false).is_err());
+    }
+
+    #[test]
+    fn allow_missing_oracle_still_rejects_oracle_backed_drift() {
+        let report = report_with_packet(OracleStatus::Available, 1, 0, 1);
+        assert!(enforce_exit_policy(&report, true, false).is_err());
+    }
+
+    #[test]
+    fn allow_missing_oracle_rejects_empty_capture() {
+        let report = LiveOracleCaptureReport {
+            schema_version: 1,
+            generated_unix_ms: 123,
+            fixture_root: "fixtures".to_owned(),
+            total_packets: 0,
+            total_cases: 0,
+            drifted_cases: 0,
+            oracle_available_packets: 0,
+            oracle_unavailable_packets: 0,
+            packets: Vec::new(),
+        };
+        assert!(enforce_exit_policy(&report, true, false).is_err());
+    }
 }
