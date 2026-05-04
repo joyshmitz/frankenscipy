@@ -31557,6 +31557,26 @@ mod tests {
     }
 
     #[test]
+    fn entropy_matches_scipy_reference_points() {
+        // /testing-conformance-harnesses: pin Shannon entropy at
+        // closed-form values matching scipy.stats.entropy:
+        //   entropy([0.5, 0.5]) = ln(2)
+        //   entropy([1.0]) = 0
+        //   entropy([0.25; 4]) = 2·ln(2)
+        //   entropy([0.5, 0.5], base=2) = 1 (bits)
+        let ln_2 = 2.0_f64.ln();
+        assert!((entropy(&[0.5_f64, 0.5], None) - ln_2).abs() < 1e-12);
+        assert!(entropy(&[1.0_f64], None).abs() < 1e-12);
+        assert!((entropy(&[0.25_f64, 0.25, 0.25, 0.25], None) - 2.0 * ln_2).abs() < 1e-12);
+        assert!((entropy(&[0.5_f64, 0.5], Some(2.0)) - 1.0).abs() < 1e-12);
+        // Empty input → 0 by fsci convention; scipy raises but the
+        // existing API contract returns 0.
+        assert_eq!(entropy(&[], None), 0.0);
+        // Negative probability → −∞ sentinel (out-of-domain).
+        assert!(entropy(&[-0.5_f64, 1.5], None).is_infinite());
+    }
+
+    #[test]
     fn skew_kurtosis_match_scipy_reference_points() {
         // Skill rotation: /testing-conformance-harnesses. Pin exact
         // scipy.stats reference values for skew/kurtosis (bias=True
