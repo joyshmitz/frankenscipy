@@ -2282,6 +2282,57 @@ pub fn frame_signal(x: &[f64], frame_len: usize, hop_len: usize) -> Vec<Vec<f64>
 
 /// Bilinear transform: convert analog (s-domain) to digital (z-domain) filter.
 ///
+/// Chebyshev type-I filter order and natural frequency for analog
+/// lowpass design.
+///
+/// Matches `scipy.signal.cheb1ord(wp, ws, gpass, gstop, analog=True)`
+/// for the lowpass case. Closed-form:
+///   N = ⌈ acosh(√((10^(gstop/10) − 1) / (10^(gpass/10) − 1))) / acosh(ws/wp) ⌉
+///   Wn = wp
+/// Type-I Chebyshev concentrates ripple in the passband, so it
+/// typically produces a smaller N than `buttord` for the same spec at
+/// the cost of equiripple passband behavior.
+pub fn cheb1ord(
+    wp: f64,
+    ws: f64,
+    gpass: f64,
+    gstop: f64,
+) -> Result<(u32, f64), SignalError> {
+    if !wp.is_finite() || !ws.is_finite() || wp <= 0.0 || ws <= 0.0 {
+        return Err(SignalError::InvalidArgument(
+            "cheb1ord: wp and ws must be positive finite".to_string(),
+        ));
+    }
+    if wp >= ws {
+        return Err(SignalError::InvalidArgument(
+            "cheb1ord lowpass: passband edge wp must be < stopband edge ws"
+                .to_string(),
+        ));
+    }
+    if gpass <= 0.0 || gstop <= 0.0 || gpass >= gstop {
+        return Err(SignalError::InvalidArgument(
+            "cheb1ord: require 0 < gpass < gstop".to_string(),
+        ));
+    }
+    let pass_factor = 10.0_f64.powf(gpass / 10.0) - 1.0;
+    let stop_factor = 10.0_f64.powf(gstop / 10.0) - 1.0;
+    if pass_factor <= 0.0 {
+        return Err(SignalError::InvalidArgument(
+            "cheb1ord: degenerate passband loss factor".to_string(),
+        ));
+    }
+    let num = (stop_factor / pass_factor).sqrt().acosh();
+    let den = (ws / wp).acosh();
+    if !num.is_finite() || !den.is_finite() || den <= 0.0 {
+        return Err(SignalError::InvalidArgument(format!(
+            "cheb1ord: degenerate spec produced num={num}, den={den}"
+        )));
+    }
+    let order_real = num / den;
+    let order = order_real.ceil().max(1.0) as u32;
+    Ok((order, wp))
+}
+
 /// Butterworth filter order and natural frequency for analog lowpass
 /// design.
 ///
@@ -14054,6 +14105,41 @@ mod tests {
         assert_eq!(half.w.len(), 128);
         assert_eq!(whole.w.len(), 256);
         assert!(whole.w.last().unwrap() > &std::f64::consts::PI);
+    }
+
+    #[test]
+    fn cheb1ord_known_design_returns_order_5() {
+        // acosh(√(9999 / 0.2589)) ≈ 5.974, acosh(2) ≈ 1.317
+        // → order = ceil(5.974 / 1.317) = ceil(4.535) = 5.
+        // Even with this saving, Cheby beats Butterworth's order 8 here.
+        let (n, wn) = cheb1ord(1.0, 2.0, 1.0, 40.0).expect("cheb1ord");
+        assert_eq!(n, 5);
+        assert!((wn - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn cheb1ord_metamorphic_lower_than_butterworth_for_same_spec() {
+        // For any meaningful spec, Chebyshev I requires ≤ Butterworth order
+        // because Cheby concentrates the design effort in the passband.
+        for spec in &[
+            (1.0_f64, 2.0, 1.0, 40.0),
+            (1.0, 1.5, 0.5, 60.0),
+            (1.0, 3.0, 2.0, 80.0),
+        ] {
+            let (n_butter, _) = buttord(spec.0, spec.1, spec.2, spec.3).unwrap();
+            let (n_cheby, _) = cheb1ord(spec.0, spec.1, spec.2, spec.3).unwrap();
+            assert!(
+                n_cheby <= n_butter,
+                "spec {spec:?}: Chebyshev N={n_cheby} should be ≤ Butterworth N={n_butter}"
+            );
+        }
+    }
+
+    #[test]
+    fn cheb1ord_rejects_invalid_specs() {
+        assert!(cheb1ord(2.0, 1.0, 1.0, 40.0).is_err());
+        assert!(cheb1ord(1.0, 2.0, 40.0, 1.0).is_err());
+        assert!(cheb1ord(-1.0, 2.0, 1.0, 40.0).is_err());
     }
 
     #[test]
