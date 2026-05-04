@@ -2293,6 +2293,32 @@ pub fn frame_signal(x: &[f64], frame_len: usize, hop_len: usize) -> Vec<Vec<f64>
 
 /// Bilinear transform: convert analog (s-domain) to digital (z-domain) filter.
 ///
+/// Analog Butterworth lowpass prototype.
+///
+/// Matches `scipy.signal.buttap(N)`. Returns `(zeros, poles, gain)` for
+/// the normalized analog Butterworth lowpass with N poles:
+///   zeros = []
+///   poles[k] = exp(i · π · (2k − 1 + N) / (2N))   for k = 1..=N
+///   gain   = 1
+///
+/// The poles are equally spaced on the left-half unit circle.
+pub fn buttap(
+    n: u32,
+) -> Result<(Vec<fsci_fft::Complex64>, Vec<fsci_fft::Complex64>, f64), SignalError> {
+    if n == 0 {
+        return Err(SignalError::InvalidArgument(
+            "buttap: order must be ≥ 1".to_string(),
+        ));
+    }
+    let nf = n as f64;
+    let mut poles = Vec::with_capacity(n as usize);
+    for k in 1..=n {
+        let theta = std::f64::consts::PI * (2.0 * k as f64 - 1.0 + nf) / (2.0 * nf);
+        poles.push((theta.cos(), theta.sin()));
+    }
+    Ok((Vec::new(), poles, 1.0))
+}
+
 /// Elliptic (Cauer) filter order and natural frequency for analog
 /// lowpass design.
 ///
@@ -14268,6 +14294,46 @@ mod tests {
         let (n, wn) = cheb1ord(1.0, 2.0, 1.0, 40.0).expect("cheb1ord");
         assert_eq!(n, 5);
         assert!((wn - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn buttap_returns_no_zeros_and_gain_one() {
+        for n in 1..=10 {
+            let (z, p, k) = buttap(n).expect("buttap");
+            assert!(z.is_empty(), "Butterworth has no finite zeros at any order");
+            assert_eq!(p.len(), n as usize);
+            assert_eq!(k, 1.0);
+        }
+    }
+
+    #[test]
+    fn buttap_metamorphic_poles_on_unit_circle_left_half() {
+        // Each pole has |s| = 1 (unit circle) and Re(s) ≤ 0 (left half).
+        for n in 1..=10 {
+            let (_, p, _) = buttap(n).unwrap();
+            for &(re, im) in &p {
+                let r = (re * re + im * im).sqrt();
+                assert!(
+                    (r - 1.0).abs() < 1e-12,
+                    "n={n}: |pole|={r}, expected 1"
+                );
+                assert!(re <= 1e-15, "n={n}: pole {re}+{im}i must have Re ≤ 0");
+            }
+        }
+    }
+
+    #[test]
+    fn buttap_metamorphic_first_order_real_pole_at_minus_one() {
+        // N=1: the single pole is at exp(iπ) = -1.
+        let (_, p, _) = buttap(1).unwrap();
+        assert!((p[0].0 - (-1.0)).abs() < 1e-12);
+        assert!(p[0].1.abs() < 1e-12);
+    }
+
+    #[test]
+    fn buttap_rejects_zero_order() {
+        let err = buttap(0).expect_err("order 0 must be rejected");
+        assert!(format!("{err:?}").contains("buttap"));
     }
 
     #[test]
