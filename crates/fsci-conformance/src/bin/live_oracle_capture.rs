@@ -1,7 +1,8 @@
 #![forbid(unsafe_code)]
 
 use fsci_conformance::{
-    DifferentialOracleConfig, HarnessConfig, LiveOracleCaptureReport, run_live_oracle_capture_lane,
+    DifferentialOracleConfig, HarnessConfig, LiveOracleCaptureReport,
+    default_zero_drift_thresholds, evaluate_drift_gate, run_live_oracle_capture_lane,
 };
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -187,9 +188,21 @@ fn main() -> ExitCode {
         );
         return ExitCode::from(1);
     }
-    if !args.allow_drift && report.drifted_cases > 0 {
-        eprintln!("detected {} drifted case(s)", report.drifted_cases);
-        return ExitCode::from(1);
+    if !args.allow_drift {
+        let drift_gate = evaluate_drift_gate(&report, &default_zero_drift_thresholds());
+        if !drift_gate.passed() {
+            eprintln!(
+                "detected {} drifted case(s) above threshold across {} packet(s)",
+                drift_gate.total_drifted_cases, drift_gate.failed_packets
+            );
+            for packet in drift_gate.packets.iter().filter(|packet| !packet.passed) {
+                eprintln!(
+                    "{}: {} drifted case(s), max allowed {}",
+                    packet.packet_id, packet.drifted_cases, packet.max_allowed_drifted_cases
+                );
+            }
+            return ExitCode::from(1);
+        }
     }
     ExitCode::SUCCESS
 }

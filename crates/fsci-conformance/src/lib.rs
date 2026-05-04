@@ -13220,6 +13220,89 @@ pub struct LiveOracleCaptureReport {
     pub packets: Vec<DriftDiffReport>,
 }
 
+pub const DEFAULT_MAX_DRIFTED_CASES_PER_PACKET: usize = 0;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DriftGateThreshold {
+    pub packet_id: String,
+    pub max_drifted_cases: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DriftGatePacketResult {
+    pub packet_id: String,
+    pub family: String,
+    pub drifted_cases: usize,
+    pub max_allowed_drifted_cases: usize,
+    pub passed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DriftGateReport {
+    pub schema_version: u8,
+    pub generated_unix_ms: u128,
+    pub total_packets: usize,
+    pub total_cases: usize,
+    pub total_drifted_cases: usize,
+    pub failed_packets: usize,
+    pub packets: Vec<DriftGatePacketResult>,
+}
+
+impl DriftGateReport {
+    #[must_use]
+    pub const fn passed(&self) -> bool {
+        self.failed_packets == 0
+    }
+}
+
+#[must_use]
+pub fn default_zero_drift_thresholds() -> Vec<DriftGateThreshold> {
+    PacketFamily::ALL
+        .iter()
+        .map(|family| DriftGateThreshold {
+            packet_id: family.packet_id().to_owned(),
+            max_drifted_cases: DEFAULT_MAX_DRIFTED_CASES_PER_PACKET,
+        })
+        .collect()
+}
+
+#[must_use]
+pub fn evaluate_drift_gate(
+    report: &LiveOracleCaptureReport,
+    thresholds: &[DriftGateThreshold],
+) -> DriftGateReport {
+    let packets = report
+        .packets
+        .iter()
+        .map(|packet| {
+            let max_allowed_drifted_cases = thresholds
+                .iter()
+                .find(|threshold| threshold.packet_id == packet.packet_id)
+                .map_or(DEFAULT_MAX_DRIFTED_CASES_PER_PACKET, |threshold| {
+                    threshold.max_drifted_cases
+                });
+            DriftGatePacketResult {
+                packet_id: packet.packet_id.clone(),
+                family: packet.family.clone(),
+                drifted_cases: packet.drifted_cases,
+                max_allowed_drifted_cases,
+                passed: packet.drifted_cases <= max_allowed_drifted_cases,
+            }
+        })
+        .collect::<Vec<_>>();
+    let failed_packets = packets.iter().filter(|packet| !packet.passed).count();
+
+    DriftGateReport {
+        schema_version: 1,
+        generated_unix_ms: report.generated_unix_ms,
+        total_packets: report.total_packets,
+        total_cases: report.total_cases,
+        total_drifted_cases: report.drifted_cases,
+        failed_packets,
+        packets,
+    }
+}
+
 impl From<&DifferentialCaseResult> for CaseResult {
     fn from(result: &DifferentialCaseResult) -> Self {
         Self {
@@ -18331,20 +18414,22 @@ mod tests {
     use super::{
         AggregateParityReport, ArrayApiExpectedOutcome, ArrayApiPacketFixture, CaspPacketFixture,
         ClusterPacketFixture, ConformanceReport, DifferentialCaseResult, DifferentialOracleConfig,
-        FftPacketFixture, HarnessConfig, IntegratePacketFixture, IoPacketFixture, LinalgCase,
-        LinalgExpectedOutcome, LinalgPacketFixture, OptimizePacketFixture, OracleCaseOutput,
+        DriftDiffReport, DriftGateThreshold, FftPacketFixture, HarnessConfig,
+        IntegratePacketFixture, IoPacketFixture, LinalgCase, LinalgExpectedOutcome,
+        LinalgPacketFixture, LiveOracleCaptureReport, OptimizePacketFixture, OracleCaseOutput,
         OracleStatus, PacketFamily, PacketReport, PythonOracleConfig, SignalPacketFixture,
         SparsePacketFixture, SpatialPacketFixture, SpecialCase, SpecialCaseFunction,
         SpecialExpectedOutcome, SpecialPacketFixture, StatsCase, StatsExpected, StatsObserved,
         StatsPacketFixture, ToleranceUsed, aggregate_packet_reports, build_drift_diff_report,
         compare_linalg_case_against_oracle, compare_stats_case_against_oracle,
-        discover_differential_fixture_paths, discover_fixtures, ensure_artifact_layout,
-        load_array_api_contract_table, load_oracle_capture, resolve_array_api_contract_tolerance,
-        run_array_api_packet, run_casp_packet, run_cluster_packet, run_differential_test,
-        run_fft_packet, run_integrate_packet, run_interpolate_packet, run_io_packet,
-        run_linalg_packet, run_linalg_packet_with_oracle_capture, run_live_oracle_capture_lane,
-        run_ndimage_packet, run_optimize_packet, run_signal_packet, run_smoke, run_sparse_packet,
-        run_spatial_packet, run_special_packet, run_stats_packet, run_validate_tol_packet,
+        default_zero_drift_thresholds, discover_differential_fixture_paths, discover_fixtures,
+        ensure_artifact_layout, evaluate_drift_gate, load_array_api_contract_table,
+        load_oracle_capture, resolve_array_api_contract_tolerance, run_array_api_packet,
+        run_casp_packet, run_cluster_packet, run_differential_test, run_fft_packet,
+        run_integrate_packet, run_interpolate_packet, run_io_packet, run_linalg_packet,
+        run_linalg_packet_with_oracle_capture, run_live_oracle_capture_lane, run_ndimage_packet,
+        run_optimize_packet, run_signal_packet, run_smoke, run_sparse_packet, run_spatial_packet,
+        run_special_packet, run_stats_packet, run_validate_tol_packet,
         write_differential_parity_artifacts, write_drift_diff_artifact, write_parity_artifacts,
     };
     use fsci_linalg::LinalgError;
@@ -23343,6 +23428,73 @@ Path(args.output).write_text(json.dumps(result, indent=2))
                 .join("artifacts/FSCI-P2C-001/differential/drift_diff.json")
                 .exists()
         );
+    }
+
+    #[test]
+    fn drift_gate_blocks_packet_above_zero_threshold() {
+        let report = LiveOracleCaptureReport {
+            schema_version: 1,
+            generated_unix_ms: 123,
+            fixture_root: "fixtures".to_owned(),
+            total_packets: 1,
+            total_cases: 2,
+            drifted_cases: 1,
+            oracle_available_packets: 1,
+            oracle_unavailable_packets: 0,
+            packets: vec![DriftDiffReport {
+                schema_version: 1,
+                packet_id: "FSCI-P2C-012".to_owned(),
+                family: "stats_core".to_owned(),
+                fixture_path: "FSCI-P2C-012_stats_core.json".to_owned(),
+                generated_unix_ms: 123,
+                oracle_status: OracleStatus::Available,
+                total_cases: 2,
+                drifted_cases: 1,
+                cases: Vec::new(),
+            }],
+        };
+
+        let gate = evaluate_drift_gate(&report, &default_zero_drift_thresholds());
+
+        assert!(!gate.passed());
+        assert_eq!(gate.failed_packets, 1);
+        assert_eq!(gate.total_drifted_cases, 1);
+        assert_eq!(gate.packets[0].max_allowed_drifted_cases, 0);
+    }
+
+    #[test]
+    fn drift_gate_honors_packet_specific_threshold() {
+        let report = LiveOracleCaptureReport {
+            schema_version: 1,
+            generated_unix_ms: 456,
+            fixture_root: "fixtures".to_owned(),
+            total_packets: 1,
+            total_cases: 2,
+            drifted_cases: 1,
+            oracle_available_packets: 1,
+            oracle_unavailable_packets: 0,
+            packets: vec![DriftDiffReport {
+                schema_version: 1,
+                packet_id: "FSCI-P2C-011".to_owned(),
+                family: "signal_core".to_owned(),
+                fixture_path: "FSCI-P2C-011_signal_core.json".to_owned(),
+                generated_unix_ms: 456,
+                oracle_status: OracleStatus::Available,
+                total_cases: 2,
+                drifted_cases: 1,
+                cases: Vec::new(),
+            }],
+        };
+        let thresholds = [DriftGateThreshold {
+            packet_id: "FSCI-P2C-011".to_owned(),
+            max_drifted_cases: 1,
+        }];
+
+        let gate = evaluate_drift_gate(&report, &thresholds);
+
+        assert!(gate.passed());
+        assert_eq!(gate.failed_packets, 0);
+        assert_eq!(gate.packets[0].max_allowed_drifted_cases, 1);
     }
 
     // ═══════════════════════════════════════════════════════════════

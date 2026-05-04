@@ -53,6 +53,11 @@ jobs:
         timeout-minutes: 5
       - run: cargo test -p fsci-conformance --lib tests::differential -- --nocapture
         timeout-minutes: 10
+      - run: |
+          cargo run -p fsci-conformance --bin live_oracle_capture -- \
+            --allow-missing-oracle \
+            --output target/live-oracle-capture.json
+        timeout-minutes: 10
 
   # ── G4: Adversarial/Smoke Test ─────────────────────────────────────
   # Runs the conformance smoke test to catch obvious regressions.
