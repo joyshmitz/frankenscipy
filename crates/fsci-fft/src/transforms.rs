@@ -2847,9 +2847,9 @@ mod tests {
     use fsci_runtime::{AuditAction, RuntimeMode};
 
     use super::{
-        FftError, FftOptions, TransformKind, WorkerPolicy, estimate_fft_flops, fft, fft_with_audit,
-        fft2, fftn, hfft, ifft, ifft2, irfft, irfft2, irfftn, next_fast_len, rfft, rfft_with_audit,
-        rfft2, rfftn, sync_audit_ledger, take_transform_traces,
+        FftError, FftOptions, TransformKind, WorkerPolicy, dct, estimate_fft_flops, fft,
+        fft_with_audit, fft2, fftn, hfft, ifft, ifft2, irfft, irfft2, irfftn, next_fast_len, rfft,
+        rfft_with_audit, rfft2, rfftn, sync_audit_ledger, take_transform_traces,
     };
     use crate::Normalization;
     use crate::plan::clear_shared_plan_cache;
@@ -2985,6 +2985,29 @@ mod tests {
                 actual: 5,
             }
         );
+    }
+
+    #[test]
+    fn dct_ii_impulse_matches_closed_form() {
+        // /testing-conformance-harnesses: DCT-II of an impulse [1, 0, 0, 0]
+        // has the closed-form y[k] = 2·cos(π·k / 8) (since x[0] = 1, n=4).
+        // Pins scipy.fft.dct(x, type=2, norm=None) reference output.
+        let input = [1.0_f64, 0.0, 0.0, 0.0];
+        let opts = FftOptions::default();
+        let y = dct(&input, &opts).expect("dct");
+        let pi = std::f64::consts::PI;
+        let expected: [f64; 4] = [
+            2.0 * (0.0_f64).cos(),    // 2.0
+            2.0 * (pi / 8.0).cos(),    // ~1.8478
+            2.0 * (pi / 4.0).cos(),    // √2
+            2.0 * (3.0 * pi / 8.0).cos(), // ~0.7654
+        ];
+        for (i, (got, want)) in y.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-9,
+                "dct(impulse)[{i}] = {got}, expected {want}"
+            );
+        }
     }
 
     #[test]
