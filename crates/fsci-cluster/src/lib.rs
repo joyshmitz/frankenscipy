@@ -2328,6 +2328,35 @@ mod tests {
     }
 
     #[test]
+    fn whiten_metamorphic_positive_scaling_invariant() {
+        // /testing-metamorphic: whiten(α·x) ≡ whiten(x) for α > 0.
+        // The std normalization cancels the scale factor: x/std(x) and
+        // (αx)/(α·std(x)) are bit-equal up to f64 arithmetic.
+        let data = vec![
+            vec![1.0_f64, 10.0],
+            vec![2.0, 30.0],
+            vec![3.0, 60.0],
+            vec![4.0, 50.0],
+        ];
+        let baseline = whiten(&data).unwrap();
+        for &alpha in &[0.5_f64, 2.0, 7.3, 1000.0] {
+            let scaled: Vec<Vec<f64>> = data
+                .iter()
+                .map(|row| row.iter().map(|&v| alpha * v).collect())
+                .collect();
+            let scaled_whitened = whiten(&scaled).unwrap();
+            for (i, (b_row, s_row)) in baseline.iter().zip(scaled_whitened.iter()).enumerate() {
+                for (j, (&b, &s)) in b_row.iter().zip(s_row.iter()).enumerate() {
+                    assert!(
+                        (b - s).abs() < 1e-12,
+                        "α={alpha}: whiten[{i}][{j}] differs ({b} vs {s})"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn whiten_normalizes_std() {
         let data = vec![vec![1.0, 100.0], vec![2.0, 200.0], vec![3.0, 300.0]];
         let whitened = whiten(&data).unwrap();
