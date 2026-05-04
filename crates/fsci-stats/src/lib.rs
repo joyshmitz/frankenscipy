@@ -31557,6 +31557,25 @@ mod tests {
     }
 
     #[test]
+    fn pmean_metamorphic_p1_is_arithmetic_p_minus_1_is_harmonic() {
+        // /testing-metamorphic: power mean specializes to known means.
+        //   p =  1 → arithmetic mean
+        //   p = −1 → harmonic mean
+        //   p =  0 → geometric mean (already short-circuits)
+        let data = [1.0_f64, 2.0, 4.0, 8.0];
+        let arith = data.iter().sum::<f64>() / data.len() as f64;
+        let harm = data.len() as f64 / data.iter().map(|x| 1.0 / x).sum::<f64>();
+        let geo = data.iter().map(|x| x.ln()).sum::<f64>() / data.len() as f64;
+        let geo = geo.exp();
+        assert!((pmean(&data, 1.0) - arith).abs() < 1e-12);
+        assert!((pmean(&data, -1.0) - harm).abs() < 1e-12);
+        assert!((pmean(&data, 0.0) - geo).abs() < 1e-12);
+        // Power-mean inequality at p > p': arithmetic ≥ geometric ≥ harmonic.
+        assert!(arith >= geo - 1e-12);
+        assert!(geo >= harm - 1e-12);
+    }
+
+    #[test]
     fn entropy_matches_scipy_reference_points() {
         // /testing-conformance-harnesses: pin Shannon entropy at
         // closed-form values matching scipy.stats.entropy:
