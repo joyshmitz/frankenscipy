@@ -158,6 +158,60 @@ pub fn lqn(n: u32, x: f64) -> (Vec<f64>, Vec<f64>) {
     (values, derivs)
 }
 
+/// Associated Legendre Q array `Q_l^m(x)` for `0 ≤ m ≤ m_max` and
+/// `0 ≤ l ≤ n_max`, on the open real interval `|x| < 1`.
+///
+/// Matches `scipy.special.lqmn(m, n, x)` shape (the values portion).
+/// Returns a `(m_max+1) × (n_max+1)` row-major matrix.
+///
+/// Algorithm: row 0 is the standard Legendre Q sequence from `lqn`. Row
+/// m (for m ≥ 1) is built from row m−1 using DLMF 14.10.4:
+///   √(1−x²) · Q_l^m(x) = (l−m+1) x · Q_l^{m−1}(x) − (l+m−1) · Q_{l−1}^{m−1}(x)
+/// for l = m..=n_max. Cells with m > l are zero by convention.
+///
+/// For `|x| ≥ 1` or non-finite `x`, returns NaN-filled arrays — matching
+/// the lqn singular convention (`Q_0(x) = atanh(x)` diverges at the
+/// endpoints).
+pub fn lqmn(m_max: u32, n_max: u32, x: f64) -> Vec<Vec<f64>> {
+    let rows = m_max as usize + 1;
+    let cols = n_max as usize + 1;
+    let mut out = vec![vec![0.0_f64; cols]; rows];
+    if !x.is_finite() || x.abs() >= 1.0 {
+        for row in &mut out {
+            for cell in row.iter_mut() {
+                *cell = f64::NAN;
+            }
+        }
+        return out;
+    }
+    // Row 0: standard Legendre Q.
+    let (q0, _) = lqn(n_max, x);
+    for (l, &q) in q0.iter().enumerate() {
+        out[0][l] = q;
+    }
+    let one_minus_xsq = 1.0 - x * x;
+    let denom = one_minus_xsq.sqrt();
+    if denom == 0.0 {
+        // Defensive — shouldn't happen since we already rejected |x| ≥ 1.
+        return out;
+    }
+    // Row m for m ≥ 1.
+    for m in 1..=m_max {
+        let m_idx = m as usize;
+        for l in m..=n_max {
+            let l_idx = l as usize;
+            let lf = l as f64;
+            let mf = m as f64;
+            let q_l_prev = out[m_idx - 1][l_idx];
+            let q_lm1_prev = out[m_idx - 1][l_idx - 1];
+            out[m_idx][l_idx] =
+                ((lf - mf + 1.0) * x * q_l_prev - (lf + mf - 1.0) * q_lm1_prev) / denom;
+        }
+        // Cells with l < m remain 0.0 by convention.
+    }
+    out
+}
+
 /// Associated Legendre polynomial array `P_l^m(x)` for `0 ≤ m ≤ m_max` and
 /// `0 ≤ l ≤ n_max`. Returns a `(m_max+1) × (n_max+1)` row-major matrix
 /// indexed as `out[m][l]`.
@@ -1783,6 +1837,77 @@ mod tests {
         // U_n*(0.5) = U_n(0) = 0 for odd n
         assert_close(eval_sh_chebyu(1, 0.5), 0.0, 1e-12, "U*_1(0.5)");
         assert_close(eval_sh_chebyu(3, 0.5), 0.0, 1e-12, "U*_3(0.5)");
+    }
+
+    #[test]
+    fn lqmn_first_row_matches_lqn() {
+        let x = 0.4;
+        let arr = lqmn(2, 6, x);
+        let (vals, _) = lqn(6, x);
+        for l in 0..=6 {
+            assert!(
+                (arr[0][l as usize] - vals[l as usize]).abs() < 1e-13,
+                "lqmn[0][{l}] = {}, lqn = {}",
+                arr[0][l as usize],
+                vals[l as usize]
+            );
+        }
+    }
+
+    #[test]
+    fn lqmn_metamorphic_dlmf_recurrence() {
+        // The internal builder uses DLMF 14.10.4
+        //   √(1-x²) Q_l^m = (l-m+1) x Q_l^{m-1} - (l+m-1) Q_{l-1}^{m-1}
+        // Verify the same identity holds for the produced grid.
+        let x = 0.3;
+        let arr = lqmn(3, 5, x);
+        let denom = (1.0_f64 - x * x).sqrt();
+        for m in 1..=3_u32 {
+            for l in m..=5_u32 {
+                let lf = l as f64;
+                let mf = m as f64;
+                let lhs = arr[m as usize][l as usize] * denom;
+                let rhs = (lf - mf + 1.0) * x * arr[m as usize - 1][l as usize]
+                    - (lf + mf - 1.0) * arr[m as usize - 1][l as usize - 1];
+                assert!(
+                    (lhs - rhs).abs() < 1e-12,
+                    "DLMF 14.10.4 violated at (m={m}, l={l})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn lqmn_outside_unit_interval_returns_nan() {
+        let arr = lqmn(2, 3, 1.5);
+        for row in &arr {
+            for &v in row {
+                assert!(v.is_nan());
+            }
+        }
+        let arr = lqmn(2, 3, -1.0);
+        for row in &arr {
+            for &v in row {
+                assert!(v.is_nan());
+            }
+        }
+    }
+
+    #[test]
+    fn lqmn_zeros_below_diagonal() {
+        // Cells with m > l are zero by convention.
+        let arr = lqmn(4, 3, 0.5);
+        for m in 0..=4_usize {
+            for l in 0..=3_usize {
+                if m > l {
+                    assert!(
+                        arr[m][l].abs() < 1e-15,
+                        "lqmn[{m}][{l}] should be 0 (m > l), got {}",
+                        arr[m][l]
+                    );
+                }
+            }
+        }
     }
 
     #[test]
