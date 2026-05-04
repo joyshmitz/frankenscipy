@@ -14817,6 +14817,98 @@ mod tests {
     }
 
     #[test]
+    fn zpk_transforms_metamorphic_relative_degree_invariants() {
+        // Metamorphic relations every lp→* transform must satisfy on a
+        // proper prototype:
+        //
+        //   lp2lp_zpk:  len(z_new) = len(z),       len(p_new) = len(p)
+        //   lp2hp_zpk:  len(z_new) = len(p),       len(p_new) = len(p)
+        //               (zeros at infinity move to origin; total zero
+        //                count rises to match pole count)
+        //   lp2bp_zpk:  len(z_new) = 2·len(z) + (len(p) − len(z))
+        //                            = len(p) + len(z),
+        //               len(p_new) = 2·len(p)
+        //   lp2bs_zpk:  len(z_new) = 2·len(p),     len(p_new) = 2·len(p)
+        let z: Vec<fsci_fft::Complex64> = vec![(0.5, 0.0)];
+        let p: Vec<fsci_fft::Complex64> = vec![(-1.0, 0.0), (-2.0, 0.0), (-3.0, 0.0)];
+        let nz = z.len();
+        let np = p.len();
+
+        let (zlp, plp, _) = lp2lp_zpk(&z, &p, 1.0, 2.0).unwrap();
+        assert_eq!(zlp.len(), nz);
+        assert_eq!(plp.len(), np);
+
+        let (zhp, php, _) = lp2hp_zpk(&z, &p, 1.0, 2.0).unwrap();
+        assert_eq!(zhp.len(), np);
+        assert_eq!(php.len(), np);
+
+        let (zbp, pbp, _) = lp2bp_zpk(&z, &p, 1.0, 2.0, 0.5).unwrap();
+        assert_eq!(zbp.len(), nz + np);
+        assert_eq!(pbp.len(), 2 * np);
+
+        let (zbs, pbs, _) = lp2bs_zpk(&z, &p, 1.0, 2.0, 0.5).unwrap();
+        assert_eq!(zbs.len(), 2 * np);
+        assert_eq!(pbs.len(), 2 * np);
+    }
+
+    #[test]
+    fn zpk_transforms_metamorphic_lp2lp_inverse_recovers_original() {
+        // Composing lp2lp_zpk(·, wo) with lp2lp_zpk(·, 1/wo) is the
+        // identity on (z, p, k) up to floating-point tolerance.
+        let z: Vec<fsci_fft::Complex64> = vec![(0.0, 1.0), (0.0, -1.0)];
+        let p: Vec<fsci_fft::Complex64> = vec![(-0.5, 0.5), (-0.5, -0.5), (-2.0, 0.0)];
+        let k: f64 = 1.5;
+        let wo: f64 = 7.3;
+
+        let (z2, p2, k2) = lp2lp_zpk(&z, &p, k, wo).unwrap();
+        let (z3, p3, k3) = lp2lp_zpk(&z2, &p2, k2, 1.0 / wo).unwrap();
+
+        assert_eq!(z3.len(), z.len());
+        assert_eq!(p3.len(), p.len());
+        for (a, b) in z3.iter().zip(z.iter()) {
+            assert!((a.0 - b.0).abs() < 1e-10);
+            assert!((a.1 - b.1).abs() < 1e-10);
+        }
+        for (a, b) in p3.iter().zip(p.iter()) {
+            assert!((a.0 - b.0).abs() < 1e-10);
+            assert!((a.1 - b.1).abs() < 1e-10);
+        }
+        assert!((k3 - k).abs() < 1e-10);
+    }
+
+    #[test]
+    fn zpk_transforms_metamorphic_lp2bp_pole_pair_product_equals_wo_squared() {
+        // For lp2bp_zpk, each prototype pole splits into a pair whose
+        // product equals wo² (algebraic invariant of the s → (s² + wo²)/(bw·s)
+        // substitution: the two roots of s² − bw·s·p + wo² = 0 multiply to wo²).
+        // The invariant should hold regardless of bandwidth.
+        let z: Vec<fsci_fft::Complex64> = vec![];
+        let p: Vec<fsci_fft::Complex64> = vec![(-1.0, 0.0), (-2.0, 0.0)];
+        let k: f64 = 1.0;
+        for &wo in &[1.0_f64, 3.0, 10.0] {
+            for &bw in &[0.1_f64, 0.5, 2.0] {
+                let (_, pbp, _) = lp2bp_zpk(&z, &p, k, wo, bw).unwrap();
+                assert_eq!(pbp.len(), 2 * p.len());
+                for chunk in pbp.chunks_exact(2) {
+                    let (a_re, a_im) = chunk[0];
+                    let (b_re, b_im) = chunk[1];
+                    let prod_re = a_re * b_re - a_im * b_im;
+                    let prod_im = a_re * b_im + a_im * b_re;
+                    assert!(
+                        (prod_re - wo * wo).abs() < 1e-9,
+                        "wo={wo} bw={bw}: pair-product real {prod_re} != wo²={}",
+                        wo * wo
+                    );
+                    assert!(
+                        prod_im.abs() < 1e-9,
+                        "wo={wo} bw={bw}: pair-product imag {prod_im} != 0"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn zpk_transforms_reject_improper_prototypes() {
         // scipy raises ValueError when len(z) > len(p); fsci must do the
         // same. Prototype with 3 finite zeros and only 1 finite pole is
