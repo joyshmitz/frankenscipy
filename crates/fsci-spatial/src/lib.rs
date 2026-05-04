@@ -3661,6 +3661,31 @@ mod tests {
     }
 
     #[test]
+    fn mahalanobis_identity_inverse_equals_euclidean() {
+        // /testing-metamorphic: with VI = I (identity inverse covariance),
+        //   mahalanobis(x, y, I) = sqrt((x−y)·(x−y)) = euclidean(x, y)
+        // Pin across multiple (x, y) pairs and dimensionalities.
+        let cases: &[(Vec<f64>, Vec<f64>)] = &[
+            (vec![0.0_f64, 0.0], vec![3.0, 4.0]),       // 5
+            (vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]), // sqrt(27)
+            (vec![1.0, 1.0, 1.0, 1.0], vec![0.0, 0.0, 0.0, 0.0]), // 2
+        ];
+        for (x, y) in cases {
+            let n = x.len();
+            let mut id = vec![vec![0.0; n]; n];
+            for (i, row) in id.iter_mut().enumerate() {
+                row[i] = 1.0;
+            }
+            let m = mahalanobis(x, y, &id);
+            let e = euclidean(x, y);
+            assert!(
+                (m - e).abs() < 1e-12,
+                "mahalanobis({x:?}, {y:?}, I) = {m}, expected euclidean = {e}"
+            );
+        }
+    }
+
+    #[test]
     fn euclidean_distance() {
         assert!((euclidean(&[0.0, 0.0], &[3.0, 4.0]) - 5.0).abs() < 1e-12);
         assert!((euclidean(&[1.0], &[1.0])).abs() < 1e-12);
