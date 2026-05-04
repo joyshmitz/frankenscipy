@@ -8169,6 +8169,41 @@ mod tests {
     }
 
     #[test]
+    fn inv_metamorphic_double_inverse_recovers_original() {
+        // /testing-metamorphic: inv(inv(A)) ≈ A within numerical
+        // accuracy, for any non-singular A. Tests both the LU path
+        // and the recovery from numerical drift across two solves.
+        let a = vec![vec![2.0_f64, 1.0], vec![1.0, 3.0]];
+        let inv1 = inv(&a, InvOptions::default()).unwrap().inverse;
+        let inv2 = inv(&inv1, InvOptions::default()).unwrap().inverse;
+        for (row_a, row_back) in a.iter().zip(inv2.iter()) {
+            for (&va, &vb) in row_a.iter().zip(row_back.iter()) {
+                assert!(
+                    (va - vb).abs() < 1e-10,
+                    "inv(inv(A)) entry {vb} differs from A entry {va}"
+                );
+            }
+        }
+
+        // 3x3 case
+        let b = vec![
+            vec![1.0_f64, 2.0, 3.0],
+            vec![0.0, 1.0, 4.0],
+            vec![5.0, 6.0, 0.0],
+        ];
+        let inv1 = inv(&b, InvOptions::default()).unwrap().inverse;
+        let inv2 = inv(&inv1, InvOptions::default()).unwrap().inverse;
+        for (row_a, row_back) in b.iter().zip(inv2.iter()) {
+            for (&va, &vb) in row_a.iter().zip(row_back.iter()) {
+                assert!(
+                    (va - vb).abs() < 1e-10,
+                    "3x3 inv(inv(A)) entry {vb} differs from A entry {va}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn inv_identity_matrix() {
         let a = vec![
             vec![1.0, 0.0, 0.0],
