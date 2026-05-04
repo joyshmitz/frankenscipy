@@ -350,6 +350,22 @@ mod tests {
         store_shared_plan_with_config,
     };
     use crate::{Normalization, TransformKind};
+    use std::sync::{Mutex, MutexGuard};
+
+    // The shared_cache_* tests all mutate the same static Mutex<BoundedPlanCache>
+    // exposed via shared_cache(). cargo test runs tests in parallel by default,
+    // so they intermittently race and corrupt each other's expected state. We
+    // serialize them via this test-only mutex; each test acquires the guard
+    // first.  Resolves [frankenscipy-a6f8b].
+    fn serial_cache_lock() -> MutexGuard<'static, ()> {
+        static LOCK: Mutex<()> = Mutex::new(());
+        match LOCK.lock() {
+            Ok(g) => g,
+            // If a previous test panicked while holding the guard, recover —
+            // the static cache itself already handles poison via lock_shared_cache.
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
 
     fn test_key(n: usize) -> PlanKey {
         PlanKey::new(
@@ -395,6 +411,7 @@ mod tests {
 
     #[test]
     fn shared_cache_roundtrip_works() {
+        let _g = serial_cache_lock();
         clear_shared_plan_cache();
         let key = PlanKey::new(
             TransformKind::Fft,
@@ -419,6 +436,7 @@ mod tests {
 
     #[test]
     fn shared_cache_recovers_after_poisoned_lock() {
+        let _g = serial_cache_lock();
         clear_shared_plan_cache();
         let poison_result = std::panic::catch_unwind(|| {
             let _guard = match shared_cache().lock() {
@@ -445,6 +463,7 @@ mod tests {
 
     #[test]
     fn shared_cache_respects_disabled_admission_policy() {
+        let _g = serial_cache_lock();
         clear_shared_plan_cache();
         let config = PlanCacheConfig {
             admission_policy: CacheAdmissionPolicy::Disabled,
@@ -458,6 +477,7 @@ mod tests {
 
     #[test]
     fn shared_cache_enforces_capacity_limit() {
+        let _g = serial_cache_lock();
         clear_shared_plan_cache();
         let config = PlanCacheConfig {
             capacity: 2,
@@ -486,6 +506,7 @@ mod tests {
 
     #[test]
     fn shared_cache_enforces_working_set_limit() {
+        let _g = serial_cache_lock();
         clear_shared_plan_cache();
         let config = PlanCacheConfig {
             capacity: 8,
@@ -509,6 +530,7 @@ mod tests {
 
     #[test]
     fn cost_weighted_cache_rejects_cheap_plan_when_full() {
+        let _g = serial_cache_lock();
         clear_shared_plan_cache();
         let config = PlanCacheConfig {
             capacity: 1,
