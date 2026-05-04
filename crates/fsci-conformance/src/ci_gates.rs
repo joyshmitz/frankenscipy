@@ -71,6 +71,7 @@ impl GateId {
             Self::G3Conformance => &[
                 "cargo test -p fsci-conformance --test golden_journeys -- --nocapture",
                 "cargo test -p fsci-conformance --test diff_fft -- --nocapture",
+                "cargo test -p fsci-conformance --test diff_signal -- --nocapture",
                 "cargo test -p fsci-conformance --test diff_sparse -- --nocapture",
                 "cargo test -p fsci-conformance --lib tests::differential -- --nocapture",
             ],

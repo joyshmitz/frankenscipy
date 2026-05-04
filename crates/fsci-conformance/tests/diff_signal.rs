@@ -11,13 +11,15 @@ use std::process::{Command, Stdio};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use fsci_signal::{
-    ConvolveMode, blackman, convolve, correlate, hamming, hann, kaiser, ricker, savgol_coeffs,
+    ConvolveMode, blackman, convolve, correlate, hamming, hann, kaiser, lombscargle, ricker,
+    savgol_coeffs,
 };
 use serde::{Deserialize, Serialize};
 
 const PACKET_ID: &str = "FSCI-P2C-018";
 const WINDOW_TOL: f64 = 1.0e-7;
 const CONV_TOL: f64 = 1.0e-10;
+const LOMBSCARGLE_TOL: f64 = 1.0e-10;
 const REQUIRE_SCIPY_ENV: &str = "FSCI_REQUIRE_SCIPY_ORACLE";
 
 #[derive(Debug, Clone, Serialize)]
@@ -42,6 +44,15 @@ struct SavgolCase {
     window_length: usize,
     polyorder: usize,
     deriv: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct LombScargleCase {
+    case_id: String,
+    x: Vec<f64>,
+    y: Vec<f64>,
+    freqs: Vec<f64>,
+    normalize: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -282,6 +293,47 @@ fn ricker_cases() -> Vec<RickerCase> {
     ]
 }
 
+fn lombscargle_cases() -> Vec<LombScargleCase> {
+    let mut cases = Vec::new();
+
+    for omega in [1.0_f64, 2.0, 4.0, 8.0] {
+        let x: Vec<f64> = (0..96).map(|i| i as f64 * 0.125).collect();
+        let y: Vec<f64> = x.iter().map(|&t| (omega * t).sin()).collect();
+        let freqs = vec![0.5, 1.0, 2.0, 4.0, 8.0, 12.0];
+        for normalize in [false, true] {
+            cases.push(LombScargleCase {
+                case_id: format!(
+                    "regular_omega_{}_{}",
+                    omega as i32,
+                    if normalize { "norm" } else { "power" }
+                ),
+                x: x.clone(),
+                y: y.clone(),
+                freqs: freqs.clone(),
+                normalize,
+            });
+        }
+    }
+
+    let x = vec![0.0, 0.5, 1.1, 1.7, 2.4];
+    let y = vec![1.0, -0.5, 0.75, 0.25, -1.25];
+    let freqs = vec![0.5, 1.0, 1.5, 2.0];
+    for normalize in [false, true] {
+        cases.push(LombScargleCase {
+            case_id: format!(
+                "irregular_reference_{}",
+                if normalize { "norm" } else { "power" }
+            ),
+            x: x.clone(),
+            y: y.clone(),
+            freqs: freqs.clone(),
+            normalize,
+        });
+    }
+
+    cases
+}
+
 fn run_scipy_window_oracle(cases: &[WindowCase]) -> HashMap<String, Vec<f64>> {
     let python_code = r#"
 import sys
@@ -452,6 +504,61 @@ print(json.dumps(results))
         .collect()
 }
 
+fn run_scipy_lombscargle_oracle(cases: &[LombScargleCase]) -> HashMap<String, Vec<f64>> {
+    let python_code = r#"
+import sys
+import json
+import numpy as np
+from scipy import signal
+
+cases = json.loads(sys.stdin.read())
+results = []
+for case in cases:
+    try:
+        values = signal.lombscargle(
+            np.array(case['x'], dtype=float),
+            np.array(case['y'], dtype=float),
+            np.array(case['freqs'], dtype=float),
+            normalize=case['normalize'],
+        )
+        results.append({'case_id': case['case_id'], 'values': values.tolist()})
+    except Exception:
+        results.append({'case_id': case['case_id'], 'values': None})
+print(json.dumps(results))
+"#;
+
+    let json_input = serde_json::to_string(cases).expect("serialize lombscargle cases");
+    let mut child = Command::new("python3")
+        .args(["-c", python_code])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn python3");
+
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(json_input.as_bytes())
+        .unwrap();
+
+    let output = child.wait_with_output().expect("wait python3");
+    if !output.status.success() {
+        eprintln!(
+            "scipy lombscargle oracle stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return HashMap::new();
+    }
+
+    let results: Vec<OracleResult> = serde_json::from_slice(&output.stdout).expect("parse oracle");
+    results
+        .into_iter()
+        .filter_map(|r| r.values.map(|v| (r.case_id, v)))
+        .collect()
+}
+
 fn run_scipy_ricker_oracle(cases: &[RickerCase]) -> HashMap<String, Vec<f64>> {
     let python_code = r#"
 import sys
@@ -524,6 +631,63 @@ fn max_diff(a: &[f64], b: &[f64]) -> f64 {
             0.0_f64,
             |acc, d| if d.is_nan() { f64::NAN } else { acc.max(d) },
         )
+}
+
+#[test]
+fn diff_lombscargle() {
+    let start = Instant::now();
+    let cases = lombscargle_cases();
+    let scipy = run_scipy_lombscargle_oracle(&cases);
+
+    if scipy_oracle_unavailable("lombscargle", scipy.len()) {
+        return;
+    }
+    assert_complete_oracle_results(
+        "lombscargle",
+        cases.iter().map(|case| case.case_id.clone()),
+        &scipy,
+    );
+
+    let mut diffs = Vec::new();
+    let mut max_global = 0.0f64;
+    let mut all_pass = true;
+
+    for case in &cases {
+        let rust_vals =
+            lombscargle(&case.x, &case.y, &case.freqs, case.normalize).unwrap_or_default();
+        if let Some(scipy_vals) = scipy.get(&case.case_id) {
+            let md = max_diff(&rust_vals, scipy_vals);
+            let pass = md <= LOMBSCARGLE_TOL;
+            max_global = max_global.max(md);
+            all_pass = all_pass && pass;
+            diffs.push(CaseDiff {
+                case_id: case.case_id.clone(),
+                method: "lombscargle".into(),
+                rust_values: rust_vals,
+                scipy_values: scipy_vals.clone(),
+                max_diff: md,
+                tolerance: LOMBSCARGLE_TOL,
+                pass,
+            });
+        }
+    }
+    all_pass = all_pass && diffs.len() == cases.len();
+
+    let log = DiffLog {
+        test_id: "diff_signal_lombscargle".into(),
+        category: "scipy.signal.lombscargle".into(),
+        case_count: diffs.len(),
+        max_abs_diff: max_global,
+        tolerance: LOMBSCARGLE_TOL,
+        pass: all_pass,
+        timestamp_ms: timestamp_ms(),
+        duration_ns: start.elapsed().as_nanos(),
+        cases: diffs,
+    };
+
+    emit_log(&log);
+    assert_all_cases_compared("lombscargle", log.case_count, cases.len());
+    assert!(all_pass, "lombscargle diff failed: max_diff={max_global}");
 }
 
 #[test]
