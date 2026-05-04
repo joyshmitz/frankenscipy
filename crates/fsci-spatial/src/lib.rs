@@ -5160,4 +5160,29 @@ mod tests {
         assert!((vs1[0] - vr2[0]).abs() < 1e-10);
         assert!((vs1[1] - vr2[1]).abs() < 1e-10);
     }
+
+    #[test]
+    fn jensenshannon_metamorphic_symmetry_under_swap() {
+        // JSD is symmetric: jensenshannon(p, q) == jensenshannon(q, p).
+        let p = [0.5_f64, 0.3, 0.2];
+        let q = [0.1_f64, 0.7, 0.2];
+        let d_pq = jensenshannon(&p, &q, None);
+        let d_qp = jensenshannon(&q, &p, None);
+        assert!(
+            (d_pq - d_qp).abs() < 1e-15,
+            "symmetry: d(p,q)={d_pq}, d(q,p)={d_qp}"
+        );
+    }
+
+    #[test]
+    fn jensenshannon_metamorphic_disjoint_natural_log_bound() {
+        // For maximally-disjoint distributions [1, 0] vs [0, 1], the JSD
+        // in nats is ln(2), so the distance √JSD = √ln(2) ≈ 0.832.
+        let d = jensenshannon(&[1.0, 0.0], &[0.0, 1.0], None);
+        let bound = (2.0_f64.ln()).sqrt();
+        assert!(
+            (d - bound).abs() < 1e-12,
+            "disjoint √ln(2): got {d}, expected {bound}"
+        );
+    }
 }
