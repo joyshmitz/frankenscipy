@@ -13221,6 +13221,7 @@ pub struct LiveOracleCaptureReport {
 }
 
 pub const DEFAULT_MAX_DRIFTED_CASES_PER_PACKET: usize = 0;
+pub const MIN_ZERO_DRIFT_GATE_ORACLE_AVAILABLE_PACKETS: usize = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DriftGateThreshold {
@@ -13301,6 +13302,26 @@ pub fn evaluate_drift_gate(
         failed_packets,
         packets,
     }
+}
+
+#[must_use]
+pub fn validate_zero_drift_oracle_coverage(report: &LiveOracleCaptureReport) -> Result<(), String> {
+    if report.total_packets == 0 {
+        return Err(
+            "zero-drift gate found no differential packets; refusing to pass an empty oracle gate"
+                .to_string(),
+        );
+    }
+    if report.oracle_available_packets < MIN_ZERO_DRIFT_GATE_ORACLE_AVAILABLE_PACKETS {
+        return Err(format!(
+            "zero-drift gate had {} oracle-backed packet(s), below required minimum {}; \
+             {} packet(s) were oracle-unavailable",
+            report.oracle_available_packets,
+            MIN_ZERO_DRIFT_GATE_ORACLE_AVAILABLE_PACKETS,
+            report.oracle_unavailable_packets
+        ));
+    }
+    Ok(())
 }
 
 impl From<&DifferentialCaseResult> for CaseResult {
@@ -18430,7 +18451,8 @@ mod tests {
         run_linalg_packet_with_oracle_capture, run_live_oracle_capture_lane, run_ndimage_packet,
         run_optimize_packet, run_signal_packet, run_smoke, run_sparse_packet, run_spatial_packet,
         run_special_packet, run_stats_packet, run_validate_tol_packet,
-        write_differential_parity_artifacts, write_drift_diff_artifact, write_parity_artifacts,
+        validate_zero_drift_oracle_coverage, write_differential_parity_artifacts,
+        write_drift_diff_artifact, write_parity_artifacts,
     };
     use fsci_linalg::LinalgError;
     use fsci_runtime::RuntimeMode;
@@ -23460,6 +23482,97 @@ Path(args.output).write_text(json.dumps(result, indent=2))
         assert_eq!(gate.failed_packets, 1);
         assert_eq!(gate.total_drifted_cases, 1);
         assert_eq!(gate.packets[0].max_allowed_drifted_cases, 0);
+    }
+
+    #[test]
+    fn zero_drift_oracle_coverage_blocks_all_missing_packets() {
+        let report = LiveOracleCaptureReport {
+            schema_version: 1,
+            generated_unix_ms: 789,
+            fixture_root: "fixtures".to_owned(),
+            total_packets: 2,
+            total_cases: 2,
+            drifted_cases: 0,
+            oracle_available_packets: 0,
+            oracle_unavailable_packets: 2,
+            packets: vec![
+                DriftDiffReport {
+                    schema_version: 1,
+                    packet_id: "FSCI-P2C-011".to_owned(),
+                    family: "signal_core".to_owned(),
+                    fixture_path: "FSCI-P2C-011_signal_core.json".to_owned(),
+                    generated_unix_ms: 789,
+                    oracle_status: OracleStatus::Missing {
+                        reason: "python missing".to_owned(),
+                    },
+                    total_cases: 1,
+                    drifted_cases: 0,
+                    cases: Vec::new(),
+                },
+                DriftDiffReport {
+                    schema_version: 1,
+                    packet_id: "FSCI-P2C-012".to_owned(),
+                    family: "stats_core".to_owned(),
+                    fixture_path: "FSCI-P2C-012_stats_core.json".to_owned(),
+                    generated_unix_ms: 789,
+                    oracle_status: OracleStatus::Missing {
+                        reason: "scipy missing".to_owned(),
+                    },
+                    total_cases: 1,
+                    drifted_cases: 0,
+                    cases: Vec::new(),
+                },
+            ],
+        };
+
+        let message = validate_zero_drift_oracle_coverage(&report)
+            .expect_err("all-missing oracle coverage must fail the zero-drift gate");
+
+        assert!(message.contains("0 oracle-backed packet(s)"));
+        assert!(message.contains("below required minimum 1"));
+    }
+
+    #[test]
+    fn zero_drift_oracle_coverage_allows_partial_oracle_availability() {
+        let report = LiveOracleCaptureReport {
+            schema_version: 1,
+            generated_unix_ms: 790,
+            fixture_root: "fixtures".to_owned(),
+            total_packets: 2,
+            total_cases: 2,
+            drifted_cases: 0,
+            oracle_available_packets: 1,
+            oracle_unavailable_packets: 1,
+            packets: vec![
+                DriftDiffReport {
+                    schema_version: 1,
+                    packet_id: "FSCI-P2C-011".to_owned(),
+                    family: "signal_core".to_owned(),
+                    fixture_path: "FSCI-P2C-011_signal_core.json".to_owned(),
+                    generated_unix_ms: 790,
+                    oracle_status: OracleStatus::Available,
+                    total_cases: 1,
+                    drifted_cases: 0,
+                    cases: Vec::new(),
+                },
+                DriftDiffReport {
+                    schema_version: 1,
+                    packet_id: "FSCI-P2C-012".to_owned(),
+                    family: "stats_core".to_owned(),
+                    fixture_path: "FSCI-P2C-012_stats_core.json".to_owned(),
+                    generated_unix_ms: 790,
+                    oracle_status: OracleStatus::Missing {
+                        reason: "scipy missing".to_owned(),
+                    },
+                    total_cases: 1,
+                    drifted_cases: 0,
+                    cases: Vec::new(),
+                },
+            ],
+        };
+
+        validate_zero_drift_oracle_coverage(&report)
+            .expect("one oracle-backed packet keeps the drift gate meaningful");
     }
 
     #[test]

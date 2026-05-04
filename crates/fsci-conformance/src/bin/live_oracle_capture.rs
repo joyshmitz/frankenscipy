@@ -3,6 +3,7 @@
 use fsci_conformance::{
     DifferentialOracleConfig, HarnessConfig, LiveOracleCaptureReport,
     default_zero_drift_thresholds, evaluate_drift_gate, run_live_oracle_capture_lane,
+    validate_zero_drift_oracle_coverage,
 };
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -189,6 +190,10 @@ fn main() -> ExitCode {
         return ExitCode::from(1);
     }
     if !args.allow_drift {
+        if let Err(message) = validate_zero_drift_oracle_coverage(&report) {
+            eprintln!("{message}");
+            return ExitCode::from(1);
+        }
         let drift_gate = evaluate_drift_gate(&report, &default_zero_drift_thresholds());
         if !drift_gate.passed() {
             eprintln!(
