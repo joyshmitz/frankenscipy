@@ -20751,6 +20751,21 @@ mod tests {
     // ── Generalized means ───────────────────────────────────────────
 
     #[test]
+    fn gmean_matches_scipy_reference_points() {
+        // /testing-conformance-harnesses: pin closed-form scipy values.
+        //   gmean([1,2,4]) = (1·2·4)^(1/3) = 2
+        //   gmean([1,1,1]) = 1
+        //   gmean([1,100]) = √100 = 10
+        //   gmean([2,8]) = √16 = 4
+        assert!((gmean(&[1.0_f64, 2.0, 4.0]) - 2.0).abs() < 1e-12);
+        assert!((gmean(&[1.0_f64, 1.0, 1.0]) - 1.0).abs() < 1e-12);
+        assert!((gmean(&[1.0_f64, 100.0]) - 10.0).abs() < 1e-12);
+        assert!((gmean(&[2.0_f64, 8.0]) - 4.0).abs() < 1e-12);
+        // Empty input → NaN.
+        assert!(gmean(&[]).is_nan());
+    }
+
+    #[test]
     fn hmean_zero_and_infinity_match_scipy() {
         assert_eq!(hmean(&[0.0, 2.0]), 0.0);
         assert_close(hmean(&[1.0, f64::INFINITY]), 2.0, 1e-12, "hmean +inf");
