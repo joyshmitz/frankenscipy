@@ -190,30 +190,29 @@ pub fn hamming(a: &[f64], b: &[f64]) -> f64 {
     mismatches as f64 / a.len() as f64
 }
 
-/// Jaccard dissimilarity for binary vectors.
+/// Jaccard dissimilarity.
 ///
-/// Matches `scipy.spatial.distance.jaccard(u, v)`.
-/// J(u,v) = (c_TF + c_FT) / (c_TT + c_TF + c_FT) where c_TT is count
-/// of positions where both are nonzero, etc.
+/// Matches `scipy.spatial.distance.jaccard(u, v)`. For real-valued inputs
+/// scipy counts positions where elements are unequal AND at least one is
+/// nonzero; the result is that count divided by the count of positions
+/// where at least one is nonzero. For binary inputs this reduces to
+/// (c_TF + c_FT) / (c_TT + c_TF + c_FT).
 pub fn jaccard(a: &[f64], b: &[f64]) -> f64 {
-    let mut tt = 0usize;
-    let mut tf = 0usize;
-    let mut ft = 0usize;
+    let mut nonzero = 0usize;
+    let mut unequal_nonzero = 0usize;
     for (&ai, &bi) in a.iter().zip(b.iter()) {
-        let a_nz = ai != 0.0;
-        let b_nz = bi != 0.0;
-        match (a_nz, b_nz) {
-            (true, true) => tt += 1,
-            (true, false) => tf += 1,
-            (false, true) => ft += 1,
-            (false, false) => {}
+        let any_nz = ai != 0.0 || bi != 0.0;
+        if any_nz {
+            nonzero += 1;
+            if ai != bi {
+                unequal_nonzero += 1;
+            }
         }
     }
-    let denom = tt + tf + ft;
-    if denom == 0 {
+    if nonzero == 0 {
         return 0.0;
     }
-    (tf + ft) as f64 / denom as f64
+    unequal_nonzero as f64 / nonzero as f64
 }
 
 /// Canberra distance.
@@ -4098,6 +4097,24 @@ mod tests {
     fn jaccard_all_zeros() {
         // Both zero → J = 0 (no nonzero elements)
         assert!(jaccard(&[0.0, 0.0], &[0.0, 0.0]).abs() < 1e-12);
+    }
+
+    #[test]
+    fn jaccard_real_valued_unequal_nonzero_matches_scipy() {
+        // [frankenscipy-ayl5s] Regression: scipy counts positions that are
+        // both nonzero but unequal as "differing" — fsci was treating them
+        // as agreement (TT in the binary sense).
+        // scipy.spatial.distance.jaccard([2.5], [3.7]) returns 1.0.
+        assert!((jaccard(&[2.5_f64], &[3.7]) - 1.0).abs() < 1e-12);
+        // Two unequal nonzero out of three nonzero positions → 2/3.
+        assert!(
+            (jaccard(&[1.0, 2.0, 3.0], &[1.0, 5.0, 7.0]) - 2.0 / 3.0).abs() < 1e-12
+        );
+        // Mixed case: index 0 both nonzero & equal (skip from numerator);
+        // indices 1, 2 are TF and FT (unequal nonzero) → 2/3.
+        assert!(
+            (jaccard(&[1.0, 1.0, 0.0], &[1.0, 0.0, 1.0]) - 2.0 / 3.0).abs() < 1e-12
+        );
     }
 
     #[test]
