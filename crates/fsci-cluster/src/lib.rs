@@ -2318,6 +2318,56 @@ mod tests {
     }
 
     #[test]
+    fn vq_metamorphic_centroids_self_assign_with_zero_distance() {
+        // /testing-metamorphic: when data is the centroid set itself,
+        // vq returns labels = [0, 1, 2, ...] and distances = [0, 0, ...].
+        // Each centroid is its own nearest neighbor at zero distance.
+        let centroids = vec![
+            vec![0.0_f64, 0.0],
+            vec![10.0, 5.0],
+            vec![-3.0, 7.5],
+            vec![1e6, 1e6],
+        ];
+        let (labels, dists) = vq(&centroids, &centroids).unwrap();
+        for (i, &lbl) in labels.iter().enumerate() {
+            assert_eq!(lbl, i, "centroid {i} should self-assign");
+            assert!(
+                dists[i].abs() < 1e-12,
+                "centroid {i} self-distance = {}, expected 0",
+                dists[i]
+            );
+        }
+    }
+
+    #[test]
+    fn vq_metamorphic_translation_invariance() {
+        // /testing-metamorphic: translating data and centroids by the
+        // same vector preserves the (labels, distances) output exactly.
+        // Catches any regression that introduces an absolute-position
+        // dependence into the distance metric.
+        let data = vec![vec![1.0_f64, 2.0], vec![5.0, 5.0], vec![-1.0, 0.5]];
+        let centroids = vec![vec![0.0_f64, 0.0], vec![6.0, 6.0]];
+        let (l0, d0) = vq(&data, &centroids).unwrap();
+        let shift = [100.0_f64, -50.0];
+        let shifted_data: Vec<Vec<f64>> = data
+            .iter()
+            .map(|p| vec![p[0] + shift[0], p[1] + shift[1]])
+            .collect();
+        let shifted_centroids: Vec<Vec<f64>> = centroids
+            .iter()
+            .map(|p| vec![p[0] + shift[0], p[1] + shift[1]])
+            .collect();
+        let (l1, d1) = vq(&shifted_data, &shifted_centroids).unwrap();
+        assert_eq!(l0, l1, "labels must be translation-invariant");
+        for (a, b) in d0.iter().zip(d1.iter()) {
+            assert!(
+                (a - b).abs() < 1e-9,
+                "distances must be translation-invariant: {a} vs {b}"
+            );
+        }
+    }
+
+    #[test]
     fn vq_assigns_nearest() {
         let centroids = vec![vec![0.0, 0.0], vec![10.0, 10.0]];
         let data = vec![vec![1.0, 1.0], vec![9.0, 9.0]];
