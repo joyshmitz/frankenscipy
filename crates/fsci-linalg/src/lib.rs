@@ -3428,6 +3428,7 @@ pub fn eig(a: &[Vec<f64>], options: DecompOptions) -> Result<EigResult, LinalgEr
 
     let mut eigenvalues_re = Vec::with_capacity(rows);
     let mut eigenvalues_im = Vec::with_capacity(rows);
+    let mut block_starts: Vec<(usize, bool)> = Vec::with_capacity(rows); // (col, is_2x2_block)
 
     let mut i = 0;
     while i < rows {
@@ -3444,13 +3445,89 @@ pub fn eig(a: &[Vec<f64>], options: DecompOptions) -> Result<EigResult, LinalgEr
             let im = (-disc).max(0.0).sqrt() / 2.0;
             eigenvalues_re.push(re);
             eigenvalues_im.push(im);
+            block_starts.push((i, true));
             eigenvalues_re.push(re);
             eigenvalues_im.push(-im);
+            block_starts.push((i, true));
             i += 2;
         } else {
             eigenvalues_re.push(t_mat[(i, i)]);
             eigenvalues_im.push(0.0);
+            block_starts.push((i, false));
             i += 1;
+        }
+    }
+
+    // Build right eigenvectors: for each real eigenvalue, solve
+    // (T − λI) y = 0 by upper-triangular back-substitution and then
+    // map back via v = Q y. Resolves [frankenscipy-eobzj]. For
+    // 2×2 complex-conjugate blocks the API can't express complex
+    // vectors so we keep the Schur columns there (still a partial
+    // gap vs scipy, which returns complex eigenvectors).
+    let mut eigvec_cols: Vec<Vec<f64>> = vec![vec![0.0; rows]; rows];
+    for (col_idx, &(block_col, is_block)) in block_starts.iter().enumerate() {
+        if is_block {
+            let dest_col = q_mat.column(col_idx);
+            for r in 0..rows {
+                eigvec_cols[col_idx][r] = dest_col[r];
+            }
+            continue;
+        }
+        let lambda = t_mat[(block_col, block_col)];
+        // y has length `rows`. y[block_col] = 1, y[k>block_col] = 0,
+        // y[k<block_col] from upper-triangular back-substitution.
+        let mut y = vec![0.0_f64; rows];
+        y[block_col] = 1.0;
+        let mut j = block_col;
+        while j > 0 {
+            j -= 1;
+            // (T − λI)[j][k] for k > j sums against y[k].
+            let mut s = 0.0_f64;
+            for k in (j + 1)..=block_col {
+                s += t_mat[(j, k)] * y[k];
+            }
+            let denom = t_mat[(j, j)] - lambda;
+            if denom.abs() < 1.0e-15 {
+                // Defective / repeated eigenvalue — back-sub fails.
+                // Fall back to the Schur basis column for this index.
+                let dest_col = q_mat.column(col_idx);
+                for r in 0..rows {
+                    eigvec_cols[col_idx][r] = dest_col[r];
+                }
+                y[block_col] = 0.0; // sentinel: skip Q multiplication below
+                break;
+            }
+            y[j] = -s / denom;
+        }
+        if y[block_col] == 0.0 {
+            // Already filled with Schur fallback above.
+            continue;
+        }
+        // v = Q · y; normalize to unit length so columns match scipy
+        // (which returns unit-length eigenvectors by default).
+        let mut v = vec![0.0_f64; rows];
+        for r in 0..rows {
+            let mut s = 0.0;
+            for k in 0..rows {
+                s += q_mat[(r, k)] * y[k];
+            }
+            v[r] = s;
+        }
+        let norm = v.iter().map(|&x| x * x).sum::<f64>().sqrt();
+        if norm > 0.0 {
+            for x in v.iter_mut() {
+                *x /= norm;
+            }
+        }
+        eigvec_cols[col_idx] = v;
+    }
+
+    // Transpose eigvec_cols (per-column-as-vec) into row-major Vec<Vec<f64>>
+    // matching the rest of the linalg API: result[row][col].
+    let mut eigenvectors = vec![vec![0.0_f64; rows]; rows];
+    for col_idx in 0..rows {
+        for row_idx in 0..rows {
+            eigenvectors[row_idx][col_idx] = eigvec_cols[col_idx][row_idx];
         }
     }
 
@@ -3466,7 +3543,7 @@ pub fn eig(a: &[Vec<f64>], options: DecompOptions) -> Result<EigResult, LinalgEr
     Ok(EigResult {
         eigenvalues_re,
         eigenvalues_im,
-        eigenvectors: rows_from_dmatrix(&q_mat),
+        eigenvectors,
     })
 }
 
@@ -8878,6 +8955,39 @@ mod tests {
             (im_sorted[1] - 1.0).abs() < 1e-10,
             "imaginary part should be +1"
         );
+    }
+
+    #[test]
+    fn eig_eigenvectors_satisfy_av_eq_lambda_v() {
+        // [frankenscipy-eobzj] regression: previously returned the
+        // Schur basis Q under the 'eigenvectors' field, which only
+        // diagonalizes symmetric matrices. Now non-symmetric A must
+        // yield true eigenvectors satisfying A · v_i = λ_i · v_i.
+        let a = vec![vec![1.0_f64, 2.0], vec![3.0, 4.0]];
+        let r = eig(&a, DecompOptions::default()).unwrap();
+        for col in 0..2 {
+            // Skip complex eigenvalues (their eigenvectors are complex
+            // and outside the real-vector API surface).
+            if r.eigenvalues_im[col].abs() > 1e-10 {
+                continue;
+            }
+            let lambda = r.eigenvalues_re[col];
+            // Extract column `col` from row-major eigenvectors.
+            let v: Vec<f64> = r.eigenvectors.iter().map(|row| row[col]).collect();
+            // Compute A · v and λ · v.
+            let av: Vec<f64> = (0..2).map(|i| a[i][0] * v[0] + a[i][1] * v[1]).collect();
+            let lv: Vec<f64> = v.iter().map(|&x| lambda * x).collect();
+            for i in 0..2 {
+                assert!(
+                    (av[i] - lv[i]).abs() < 1e-10,
+                    "(A · v)[{i}] = {} but λ · v[{i}] = {} for col={col} λ={lambda}",
+                    av[i], lv[i]
+                );
+            }
+            // Eigenvectors are unit-length.
+            let norm = (v[0] * v[0] + v[1] * v[1]).sqrt();
+            assert!((norm - 1.0).abs() < 1e-10, "v[col={col}] not unit-length: {norm}");
+        }
     }
 
     #[test]
