@@ -4681,6 +4681,31 @@ mod tests {
     }
 
     #[test]
+    fn iv_matches_scipy_reference_points() {
+        // /testing-conformance-harnesses: pin modified Bessel I_v at
+        // canonical scipy values:
+        //   I_0(0)   = 1
+        //   I_v(0)   = 0   for v > 0
+        //   I_0(1)   ≈ 1.266_065_877_752_009
+        //   I_1(1)   ≈ 0.565_159_103_992_485
+        //   I_0(2)   ≈ 2.279_585_302_336_067
+        // I_n(z) symmetry: I_v(-z) = (-1)^v · I_v(z) for integer v.
+        assert_eq!(super::iv_scalar(0.0, 0.0), 1.0);
+        assert_eq!(super::iv_scalar(1.0, 0.0), 0.0);
+        assert_eq!(super::iv_scalar(2.0, 0.0), 0.0);
+        assert!((super::iv_scalar(0.0, 1.0) - 1.266_065_877_752_009).abs() < 1e-9);
+        assert!((super::iv_scalar(1.0, 1.0) - 0.565_159_103_992_485).abs() < 1e-9);
+        assert!((super::iv_scalar(0.0, 2.0) - 2.279_585_302_336_067).abs() < 1e-9);
+        // Parity (integer v): I_0(-1) = I_0(1) (even), I_1(-1) = -I_1(1).
+        assert!(
+            (super::iv_scalar(0.0, -1.0) - super::iv_scalar(0.0, 1.0)).abs() < 1e-12
+        );
+        assert!(
+            (super::iv_scalar(1.0, -1.0) + super::iv_scalar(1.0, 1.0)).abs() < 1e-12
+        );
+    }
+
+    #[test]
     fn jn_zeros_metamorphic_strictly_increasing() {
         let zeros = jn_zeros(0, 10);
         for z in &zeros {
