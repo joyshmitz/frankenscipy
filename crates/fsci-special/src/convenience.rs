@@ -1002,7 +1002,16 @@ pub fn modstruve(v: f64, x: f64) -> f64 {
         return f64::NAN;
     }
     if x == 0.0 {
-        return 0.0;
+        // Same leading-term behavior as struve at x=0; the only
+        // difference between H_v and L_v is the (-1)^k alternation
+        // which doesn't affect the k=0 term.
+        if v > -1.0 {
+            return 0.0;
+        }
+        if v == -1.0 {
+            return 2.0 / PI;
+        }
+        return f64::NAN;
     }
     modstruve_series(v, x)
 }
@@ -8261,6 +8270,21 @@ mod tests {
     fn tklmbda_propagates_nan() {
         assert!(tklmbda(f64::NAN, 0.5).is_nan());
         assert!(tklmbda(0.5, f64::NAN).is_nan());
+    }
+
+    #[test]
+    fn modstruve_at_zero_handles_v_minus_one() {
+        // Same leading-term behavior as struve: ride-along with
+        // [frankenscipy-udtt9].
+        assert_eq!(modstruve(0.0, 0.0), 0.0);
+        assert_eq!(modstruve(1.5, 0.0), 0.0);
+        let l_minus_one = modstruve(-1.0, 0.0);
+        let expected = 2.0 / PI;
+        assert!(
+            (l_minus_one - expected).abs() < 1e-12,
+            "modstruve(-1, 0) = {l_minus_one}, expected {expected}"
+        );
+        assert!(modstruve(-2.0, 0.0).is_nan());
     }
 
     #[test]
