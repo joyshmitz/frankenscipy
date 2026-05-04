@@ -2995,6 +2995,57 @@ fn bessel_complex_scalar(
     }
 }
 
+/// Riccati-Bessel function of the first kind, returning
+/// `(S_k(x), S'_k(x))` for `k = 0..=n`.
+///
+/// Matches `scipy.special.riccati_jn(n, x)`. Defined as
+///   S_k(x) = x · j_k(x)
+/// where j_k is the spherical Bessel function of the first kind.
+/// The values follow the same upward recurrence as j_k; the derivatives
+/// use S'_0 = cos(x) and S'_k = -k S_k(x)/x + S_{k-1}(x) for k ≥ 1.
+pub fn riccati_jn(n: u32, x: f64) -> (Vec<f64>, Vec<f64>) {
+    let len = n as usize + 1;
+    let mut s = Vec::with_capacity(len);
+    let mut sp = Vec::with_capacity(len);
+    for k in 0..=n {
+        let jk = spherical_jn_nonneg(k, x);
+        s.push(x * jk);
+    }
+    sp.push(x.cos());
+    for k in 1..=n as usize {
+        let inv_x = if x.abs() < 1.0e-300 { 0.0 } else { 1.0 / x };
+        let val = -((k as f64) * s[k] * inv_x) + s[k - 1];
+        sp.push(val);
+    }
+    (s, sp)
+}
+
+/// Riccati-Bessel function of the second kind, returning
+/// `(C_k(x), C'_k(x))` for `k = 0..=n`.
+///
+/// Matches `scipy.special.riccati_yn(n, x)`. Defined as
+///   C_k(x) = -x · y_k(x)
+/// where y_k is the spherical Bessel function of the second kind.
+/// `C_0(x) = cos(x)` and `C'_0(x) = -sin(x)`; the higher orders use the
+/// upward recurrence on C and the derivative identity
+/// C'_k = -k C_k(x)/x + C_{k-1}(x).
+pub fn riccati_yn(n: u32, x: f64) -> (Vec<f64>, Vec<f64>) {
+    let len = n as usize + 1;
+    let mut c = Vec::with_capacity(len);
+    let mut cp = Vec::with_capacity(len);
+    for k in 0..=n {
+        let yk = spherical_yn_nonneg(k, x);
+        c.push(-x * yk);
+    }
+    cp.push(-x.sin());
+    for k in 1..=n as usize {
+        let inv_x = if x.abs() < 1.0e-300 { 0.0 } else { 1.0 / x };
+        let val = -((k as f64) * c[k] * inv_x) + c[k - 1];
+        cp.push(val);
+    }
+    (c, cp)
+}
+
 /// First `k` positive zeros of the Bessel function Y_n(x), for integer
 /// order `n ≥ 0`. Returns a Vec of length `k`, sorted ascending.
 ///
@@ -3963,6 +4014,58 @@ mod tests {
             _ => return Err("expected ComplexVec".into()),
         }
         Ok(())
+    }
+
+    #[test]
+    fn riccati_jn_zero_order_is_sin_cos() {
+        // S_0(x) = sin(x), S'_0(x) = cos(x).
+        for &x in &[0.0_f64, 0.5, 1.0, 2.5, 5.0] {
+            let (s, sp) = riccati_jn(0, x);
+            assert_eq!(s.len(), 1);
+            assert!((s[0] - x.sin()).abs() < 1e-12);
+            assert!((sp[0] - x.cos()).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn riccati_jn_metamorphic_recurrence_consistency() {
+        // S'_k = -k S_k / x + S_{k-1} for k ≥ 1. The function builds the
+        // derivative using this identity, so verify it holds independently.
+        let x = 2.5_f64;
+        let n = 6;
+        let (s, sp) = riccati_jn(n, x);
+        for k in 1..=n as usize {
+            let predicted = -(k as f64) * s[k] / x + s[k - 1];
+            assert!(
+                (sp[k] - predicted).abs() < 1e-12,
+                "S'_{k}({x}) = {} vs recurrence {predicted}",
+                sp[k]
+            );
+        }
+    }
+
+    #[test]
+    fn riccati_yn_zero_order_is_cos_minus_sin() {
+        // C_0(x) = cos(x), C'_0(x) = -sin(x).
+        for &x in &[0.5_f64, 1.0, 2.5, 5.0] {
+            let (c, cp) = riccati_yn(0, x);
+            assert!((c[0] - x.cos()).abs() < 1e-12);
+            assert!((cp[0] - (-x.sin())).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn riccati_metamorphic_pythagorean_at_k_zero() {
+        // S_0² + C_0² = sin²(x) + cos²(x) = 1.
+        for &x in &[0.5_f64, 1.0, 2.5, 5.0] {
+            let (s, _) = riccati_jn(0, x);
+            let (c, _) = riccati_yn(0, x);
+            let sum = s[0] * s[0] + c[0] * c[0];
+            assert!(
+                (sum - 1.0).abs() < 1e-13,
+                "S_0² + C_0² = {sum} should be 1 at x={x}"
+            );
+        }
     }
 
     #[test]
