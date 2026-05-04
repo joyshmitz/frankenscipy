@@ -2473,6 +2473,38 @@ fn jn_nonnegative(n: u32, x: f64) -> f64 {
         return 0.0;
     }
 
+    // Forward recurrence J_{k+1} = 2k/x · J_k − J_{k-1} is unstable when
+    // x ≪ 2k (J_n decays super-exponentially while the prefactor grows).
+    // Switch to Miller's downward recurrence in that regime. Resolves
+    // [frankenscipy-ls0q1].
+    let n_f = n as f64;
+    let ax = x.abs();
+    if n >= 2 && ax < n_f {
+        let m_start = (2 * n + 30).max((n_f + 8.0 * (40.0 * n_f).sqrt().ceil()) as u32);
+        let mut j_kplus1 = 0.0_f64;
+        let mut j_k = 1.0e-30_f64;
+        let mut j_at_n = 0.0_f64;
+        // J_{k-1} = 2k/x · J_k − J_{k+1}
+        for k in (1..=m_start).rev() {
+            let kf = k as f64;
+            let j_kminus1 = (2.0 * kf / x) * j_k - j_kplus1;
+            if k == n {
+                j_at_n = j_k;
+            }
+            j_kplus1 = j_k;
+            j_k = j_kminus1;
+            if j_k.abs() > 1.0e100 {
+                let scale = 1.0e-100;
+                j_k *= scale;
+                j_kplus1 *= scale;
+                j_at_n *= scale;
+            }
+        }
+        // Normalize against the analytic J_0(x).
+        let true_j0 = j0_core(x);
+        return j_at_n * (true_j0 / j_k);
+    }
+
     let mut j_prev = j0_core(x);
     let mut j_curr = j1_core(x);
     for k in 1..n {
@@ -4398,6 +4430,33 @@ mod tests {
         }
         for w in zeros.windows(2) {
             assert!(w[0] < w[1]);
+        }
+    }
+
+    #[test]
+    fn jn_small_x_large_n_matches_series() {
+        // [frankenscipy-ls0q1] regression: forward recurrence
+        // catastrophically cancels when x ≪ 2n; the previous code
+        // returned 9.7e9 for n=10, x=0.1 when the true value is
+        // ~2.7e-22. Compare against the small-x Taylor series
+        // J_n(x) ≈ (x/2)^n / n! · (1 − (x/2)²/(n+1) + ...).
+        let x = 0.1_f64;
+        for n in 5_u32..=10 {
+            let got = super::jn_nonnegative(n, x);
+            // Series: (x/2)^n / n! · (1 − (x/2)² / (n+1)).
+            let mut fact = 1.0_f64;
+            for k in 1..=n {
+                fact *= k as f64;
+            }
+            let half_x = x / 2.0;
+            let leading = half_x.powi(n as i32) / fact;
+            let series_truth = leading * (1.0 - half_x * half_x / (n as f64 + 1.0));
+            let rel = ((got - series_truth) / series_truth).abs();
+            assert!(
+                rel < 1e-2,
+                "jn({n}, 0.1) = {got}, series truth ≈ {series_truth} (rel = {rel})"
+            );
+            assert!(got > 0.0, "jn({n}, 0.1) = {got} should be positive");
         }
     }
 
