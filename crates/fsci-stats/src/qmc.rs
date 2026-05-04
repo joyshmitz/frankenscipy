@@ -1514,6 +1514,29 @@ mod tests {
     }
 
     #[test]
+    fn wraparound_metamorphic_invariant_under_cyclic_shift() {
+        // The wraparound L2 discrepancy is, by construction, invariant
+        // under any per-dimension cyclic shift on the unit torus —
+        // because the kernel K(d) = 3/2 − d(1−d) satisfies K(d) = K(1−d)
+        // and shifting all points uniformly preserves pairwise
+        // wraparound distances. Verify across shifts in {0.0, 0.13, 0.5,
+        // 0.87} for a 4-point 3D Halton sample.
+        let d = 3;
+        let n = 4;
+        let mut h = HaltonSampler::new(d).unwrap();
+        let original = h.sample(n);
+        let baseline = wraparound_discrepancy(&original, d).unwrap();
+        for &shift in &[0.0_f64, 0.13, 0.5, 0.87] {
+            let shifted: Vec<f64> = original.iter().map(|x| (x + shift).fract()).collect();
+            let wd = wraparound_discrepancy(&shifted, d).unwrap();
+            assert!(
+                (wd - baseline).abs() < 1e-12,
+                "shift={shift}: WD² changed from {baseline} to {wd} — kernel must be torus-invariant"
+            );
+        }
+    }
+
+    #[test]
     fn wraparound_empty_sample_is_negative_leading_constant() {
         // Empty sample: only the -(4/3)^d term survives.
         let d = 2;
