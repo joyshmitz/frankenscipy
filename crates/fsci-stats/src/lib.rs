@@ -31557,6 +31557,40 @@ mod tests {
     }
 
     #[test]
+    fn circular_stats_metamorphic_known_distributions() {
+        // /testing-metamorphic + /testing-conformance-harnesses:
+        //   - circmean of n equally-spaced angles {0, 2π/n, 4π/n, …} → 0
+        //     (rotation-symmetric: vector sum is zero).
+        //   - circvar of single point = 0 (zero spread).
+        //   - circmean is rotation-equivariant: circmean(x + α) ≡
+        //     circmean(x) + α (mod 2π).
+        let pi = std::f64::consts::PI;
+        let symm: Vec<f64> = (0..6).map(|k| k as f64 * 2.0 * pi / 6.0).collect();
+        let cv = circvar(&symm);
+        // Rotation-symmetric → R = 0 → variance = 1.
+        assert!((cv - 1.0).abs() < 1e-12, "circvar(symmetric) = {cv}");
+
+        // Single point → variance = 0.
+        let single = [0.42_f64];
+        let cv1 = circvar(&single);
+        assert!(cv1.abs() < 1e-12, "circvar(single) = {cv1}");
+
+        // Rotation equivariance: circmean(x + α) = circmean(x) + α (mod 2π).
+        let x = [0.1_f64, 0.3, 0.5];
+        let alpha = 1.2_f64;
+        let m_x = circmean(&x);
+        let x_shifted: Vec<f64> = x.iter().map(|&v| v + alpha).collect();
+        let m_shifted = circmean(&x_shifted);
+        // Compare modulo 2π.
+        let diff = ((m_shifted - m_x - alpha) / (2.0 * pi)).round() * 2.0 * pi;
+        let residual = m_shifted - m_x - alpha - diff;
+        assert!(
+            residual.abs() < 1e-12,
+            "circmean rotation equivariance: residual = {residual}"
+        );
+    }
+
+    #[test]
     fn pmean_metamorphic_p1_is_arithmetic_p_minus_1_is_harmonic() {
         // /testing-metamorphic: power mean specializes to known means.
         //   p =  1 → arithmetic mean
