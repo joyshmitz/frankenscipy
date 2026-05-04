@@ -2282,6 +2282,63 @@ pub fn frame_signal(x: &[f64], frame_len: usize, hop_len: usize) -> Vec<Vec<f64>
 
 /// Bilinear transform: convert analog (s-domain) to digital (z-domain) filter.
 ///
+/// Map an analog ZPK to digital via the bilinear transform.
+///
+/// Matches `scipy.signal.bilinear_zpk(z, p, k, fs)`. The bilinear
+/// substitution s = 2fs · (z − 1)/(z + 1) on the analog transfer
+/// function reduces on the ZPK side to:
+///   z_z = (2fs + z) / (2fs − z)
+///   p_z = (2fs + p) / (2fs − p)
+///   any analog zero at infinity maps to a digital zero at −1; pad
+///   `len(p) − len(z)` such zeros
+///   k_z = k · Re(Π(2fs − z) / Π(2fs − p))
+pub fn bilinear_zpk(
+    z: &[fsci_fft::Complex64],
+    p: &[fsci_fft::Complex64],
+    k: f64,
+    fs: f64,
+) -> (Vec<fsci_fft::Complex64>, Vec<fsci_fft::Complex64>, f64) {
+    let fs2 = 2.0 * fs;
+    let bilin = |c: fsci_fft::Complex64| -> fsci_fft::Complex64 {
+        // (fs2 + c) / (fs2 - c)
+        let (re, im) = c;
+        let num = (fs2 + re, im);
+        let den = (fs2 - re, -im);
+        let denom = den.0 * den.0 + den.1 * den.1;
+        if denom == 0.0 {
+            (f64::INFINITY, 0.0)
+        } else {
+            (
+                (num.0 * den.0 + num.1 * den.1) / denom,
+                (num.1 * den.0 - num.0 * den.1) / denom,
+            )
+        }
+    };
+    let mut z_z: Vec<fsci_fft::Complex64> = z.iter().copied().map(bilin).collect();
+    let p_z: Vec<fsci_fft::Complex64> = p.iter().copied().map(bilin).collect();
+    let degree = p.len() as i32 - z.len() as i32;
+    if degree > 0 {
+        z_z.extend(std::iter::repeat_n((-1.0, 0.0), degree as usize));
+    }
+    // gain = k * Re(Π(fs2 - z) / Π(fs2 - p))
+    let prod_diff = |xs: &[fsci_fft::Complex64]| -> fsci_fft::Complex64 {
+        xs.iter().fold((1.0_f64, 0.0_f64), |acc, &(re, im)| {
+            let (a, b) = acc;
+            let (c, d) = (fs2 - re, -im);
+            (a * c - b * d, a * d + b * c)
+        })
+    };
+    let num = prod_diff(z);
+    let den = prod_diff(p);
+    let denom = den.0 * den.0 + den.1 * den.1;
+    let ratio_re = if denom == 0.0 {
+        0.0
+    } else {
+        (num.0 * den.0 + num.1 * den.1) / denom
+    };
+    (z_z, p_z, k * ratio_re)
+}
+
 /// Transform a normalized lowpass ZPK prototype to a bandstop with
 /// center frequency `wo` and stopband bandwidth `bw`.
 ///
@@ -3610,7 +3667,7 @@ fn design_digital_iir(
         FilterType::Bandstop => bandstop_zpk(&analog_zpk, warped[0], warped[1]),
     };
 
-    let digital_zpk = bilinear_zpk(&analog_zpk);
+    let digital_zpk = bilinear_zpk_internal(&analog_zpk);
     let mut ba = zpk2tf(&digital_zpk);
     normalize_digital_ba(&mut ba, &warped, btype)?;
     Ok(ba)
@@ -4087,7 +4144,7 @@ fn bandstop_zpk(zpk: &ZpkCoeffs, w1: f64, w2: f64) -> ZpkCoeffs {
     }
 }
 
-fn bilinear_zpk(zpk: &ZpkCoeffs) -> ZpkCoeffs {
+fn bilinear_zpk_internal(zpk: &ZpkCoeffs) -> ZpkCoeffs {
     let fs2 = 2.0;
     let degree = zpk.poles_re.len().saturating_sub(zpk.zeros_re.len());
     let mut zeros_re = Vec::with_capacity(zpk.zeros_re.len() + degree);
@@ -13951,6 +14008,41 @@ mod tests {
         assert_eq!(half.w.len(), 128);
         assert_eq!(whole.w.len(), 256);
         assert!(whole.w.last().unwrap() > &std::f64::consts::PI);
+    }
+
+    #[test]
+    fn bilinear_zpk_real_pole_at_origin_maps_to_unity() {
+        // s = 0 maps to z = 1 because (2fs + 0) / (2fs - 0) = 1.
+        let z: Vec<fsci_fft::Complex64> = vec![(0.0, 0.0)];
+        let p: Vec<fsci_fft::Complex64> = vec![(-1.0, 0.0)];
+        let (z_z, _, _) = bilinear_zpk(&z, &p, 1.0, 100.0);
+        assert!((z_z[0].0 - 1.0).abs() < 1e-12);
+        assert!(z_z[0].1.abs() < 1e-12);
+    }
+
+    #[test]
+    fn bilinear_zpk_pads_zeros_at_minus_one() {
+        // Prototype with no zeros: degree zeros padded at -1 + 0i.
+        let z: Vec<fsci_fft::Complex64> = Vec::new();
+        let p: Vec<fsci_fft::Complex64> = vec![(-1.0, 0.0), (-2.0, 0.0)];
+        let (z_z, _, _) = bilinear_zpk(&z, &p, 1.0, 50.0);
+        assert_eq!(z_z.len(), 2);
+        for &(re, im) in &z_z {
+            assert!((re - (-1.0)).abs() < 1e-12 && im.abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn bilinear_zpk_metamorphic_real_pole_inside_unit_circle() {
+        // Stable analog poles (Re < 0) map to stable digital poles
+        // (|z| < 1) under the bilinear transform.
+        let z: Vec<fsci_fft::Complex64> = Vec::new();
+        let p: Vec<fsci_fft::Complex64> = vec![(-2.0, 1.0), (-2.0, -1.0), (-3.0, 0.0)];
+        let (_, p_z, _) = bilinear_zpk(&z, &p, 1.0, 100.0);
+        for &(re, im) in &p_z {
+            let r = (re * re + im * im).sqrt();
+            assert!(r < 1.0, "digital pole {:?} has |z|={r}, must be < 1", (re, im));
+        }
     }
 
     #[test]
