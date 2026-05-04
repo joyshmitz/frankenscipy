@@ -4240,6 +4240,104 @@ mod tests {
     }
 
     #[test]
+    fn jn_zeros_large_order_match_scipy_first_five() {
+        // SciPy-generated goldens for k>1 guard against wrong-root-index
+        // regressions that still satisfy zero-value and ordering checks.
+        let cases: &[(u32, [f64; 5])] = &[
+            (
+                10,
+                [
+                    14.475_500_686_554_541,
+                    18.433_463_666_966_58,
+                    22.046_985_364_697_803,
+                    25.509_450_554_182_83,
+                    28.887_375_063_530_5,
+                ],
+            ),
+            (
+                20,
+                [
+                    25.417_140_814_072_52,
+                    29.961_603_789_935_07,
+                    33.988_702_785_496_85,
+                    37.772_857_844_688_884,
+                    41.413_065_513_892_63,
+                ],
+            ),
+            (
+                50,
+                [
+                    57.116_899_160_119_17,
+                    62.807_698_764_835_36,
+                    67.697_408_410_764_31,
+                    72.190_366_544_956_8,
+                    76.437_072_182_667_59,
+                ],
+            ),
+        ];
+
+        for &(n, expected) in cases {
+            let zeros = jn_zeros(n, expected.len());
+            for (idx, (&got, &want)) in zeros.iter().zip(expected.iter()).enumerate() {
+                assert!(
+                    (got - want).abs() < 1.0e-8,
+                    "J_{n} zero {} got {got}, expected {want}",
+                    idx + 1
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn yn_zeros_large_order_match_scipy_first_five() {
+        // SciPy-generated goldens for k>1 guard against wrong-root-index
+        // regressions that still satisfy zero-value and ordering checks.
+        let cases: &[(u32, [f64; 5])] = &[
+            (
+                10,
+                [
+                    12.128_927_704_415_54,
+                    16.522_284_387_521_69,
+                    20.265_984_504_165_354,
+                    23.791_669_720_030_3,
+                    27.206_568_880_356_8,
+                ],
+            ),
+            (
+                20,
+                [
+                    22.625_159_281_412_943,
+                    27.788_445_040_035_606,
+                    32.015_532_244_516_92,
+                    35.903_160_004_884_45,
+                    39.607_249_902_856_74,
+                ],
+            ),
+            (
+                50,
+                [
+                    53.502_858_820_400_37,
+                    60.112_444_427_740_58,
+                    65.317_141_148_304_92,
+                    69.981_432_994_306_49,
+                    74.338_747_169_198_36,
+                ],
+            ),
+        ];
+
+        for &(n, expected) in cases {
+            let zeros = yn_zeros(n, expected.len());
+            for (idx, (&got, &want)) in zeros.iter().zip(expected.iter()).enumerate() {
+                assert!(
+                    (got - want).abs() < 1.0e-8,
+                    "Y_{n} zero {} got {got}, expected {want}",
+                    idx + 1
+                );
+            }
+        }
+    }
+
+    #[test]
     fn bessel_zeros_metamorphic_interlace_relation() {
         // DLMF 10.21.2: zeros of J_n and Y_n strictly interlace —
         //   y_{n,1} < j_{n,1} < y_{n,2} < j_{n,2} < ...
