@@ -1392,7 +1392,9 @@ pub fn morlet2(m: usize, s: f64, w: f64) -> Vec<(f64, f64)> {
     }
     let mut out = Vec::with_capacity(m);
     let coeff = (std::f64::consts::PI * s * s).powf(-0.25);
-    let half = m as f64 / 2.0;
+    // scipy.signal.morlet2 centers on (M-1)/2, not M/2: see scipy
+    // _wavelets.py — a half-sample offset would phase-rotate every value.
+    let half = (m as f64 - 1.0) / 2.0;
     for i in 0..m {
         let t = i as f64 - half;
         let phase = w * t / s;
@@ -15012,6 +15014,56 @@ mod tests {
                 (energy - 1.0).abs() < 0.10,
                 "s={s}: energy = {energy}, expected ≈ 1"
             );
+        }
+    }
+
+    #[test]
+    fn morlet2_centering_matches_scipy_symmetry() {
+        // scipy uses x = (i − (M−1)/2)/s. For w=0 the kernel is real
+        // and symmetric: ψ_i = ψ_{M-1-i}. The earlier M/2 centering
+        // broke this symmetry by half a sample; pin against regression.
+        for &m in &[4_usize, 5, 8, 9] {
+            let psi = morlet2(m, 1.5, 0.0);
+            for i in 0..m {
+                let j = m - 1 - i;
+                assert!(
+                    (psi[i].0 - psi[j].0).abs() < 1e-12,
+                    "M={m}: morlet2[{i}].re={} vs morlet2[{j}].re={} (centering off?)",
+                    psi[i].0,
+                    psi[j].0
+                );
+                assert!(
+                    (psi[i].1 - psi[j].1).abs() < 1e-12,
+                    "M={m}: morlet2[{i}].im={} vs morlet2[{j}].im={}",
+                    psi[i].1,
+                    psi[j].1
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn morlet2_centering_matches_scipy_golden() {
+        // Hand-derived from scipy.signal.morlet2(4, 1.0, 0.0):
+        //   x = ([0,1,2,3] - 1.5)/1 = [-1.5, -0.5, 0.5, 1.5]
+        //   ψ = π^(-1/4) · exp(-x²/2)   (purely real, w=0)
+        //   √(1/s) = 1
+        //   →  [0.2440..., 0.6629..., 0.6629..., 0.2440...]
+        let psi = morlet2(4, 1.0, 0.0);
+        let pi_quarter_pow = std::f64::consts::PI.powf(-0.25);
+        let expected: [f64; 4] = [
+            pi_quarter_pow * (-1.125_f64).exp(),
+            pi_quarter_pow * (-0.125_f64).exp(),
+            pi_quarter_pow * (-0.125_f64).exp(),
+            pi_quarter_pow * (-1.125_f64).exp(),
+        ];
+        for (i, exp) in expected.iter().enumerate() {
+            assert!(
+                (psi[i].0 - exp).abs() < 1e-12,
+                "morlet2(4,1,0)[{i}]: got {} expected {exp}",
+                psi[i].0
+            );
+            assert!(psi[i].1.abs() < 1e-12, "imag should be 0 for w=0");
         }
     }
 
