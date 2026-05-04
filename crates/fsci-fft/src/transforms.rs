@@ -2988,6 +2988,30 @@ mod tests {
     }
 
     #[test]
+    fn rfft_metamorphic_matches_first_half_of_fft() {
+        // /testing-metamorphic: rfft(x) on real x must equal the first
+        // ⌊N/2⌋+1 bins of fft(x as complex). Pin across multiple N.
+        for n in [4_usize, 8, 16, 32, 13] {
+            let real_input: Vec<f64> = (0..n).map(|i| (i as f64).sin()).collect();
+            let complex_input: Vec<(f64, f64)> = real_input
+                .iter()
+                .map(|&v| (v, 0.0))
+                .collect();
+            let opts = FftOptions::default();
+            let r = rfft(&real_input, &opts).expect("rfft");
+            let c = fft(&complex_input, &opts).expect("fft");
+            assert_eq!(r.len(), n / 2 + 1, "rfft length mismatch at N={n}");
+            for k in 0..r.len() {
+                assert!(
+                    (r[k].0 - c[k].0).abs() < 1e-10 && (r[k].1 - c[k].1).abs() < 1e-10,
+                    "N={n}, k={k}: rfft = ({}, {}), fft = ({}, {})",
+                    r[k].0, r[k].1, c[k].0, c[k].1
+                );
+            }
+        }
+    }
+
+    #[test]
     fn dct_ii_impulse_matches_closed_form() {
         // /testing-conformance-harnesses: DCT-II of an impulse [1, 0, 0, 0]
         // has the closed-form y[k] = 2·cos(π·k / 8) (since x[0] = 1, n=4).
