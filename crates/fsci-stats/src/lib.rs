@@ -31542,6 +31542,37 @@ mod tests {
     }
 
     #[test]
+    fn skew_kurtosis_match_scipy_reference_points() {
+        // Skill rotation: /testing-conformance-harnesses. Pin exact
+        // scipy.stats reference values for skew/kurtosis (bias=True
+        // defaults). Hand-derived from the moment definitions:
+        //
+        //   data = [1, 2, 3, 4, 5]
+        //     mean=3, m2=10, m3=0 (symmetric), m4=34
+        //     skew = 0
+        //     kurtosis = (34/5) / (10/5)² − 3 = 6.8 / 4 − 3 = −1.3
+        //
+        //   data = [1, 1, 1, 1, 2, 2, 2, 3, 3, 4]
+        //     mean=2, m2_sum=10, m3_sum=6
+        //     skew = 6·√10 / 10^(3/2) = 0.6
+        let symm = [1.0_f64, 2.0, 3.0, 4.0, 5.0];
+        let s_symm = skew(&symm);
+        assert!(s_symm.abs() < 1e-12, "skew(symmetric) = {s_symm}, expected 0");
+        let k_symm = kurtosis(&symm);
+        assert!(
+            (k_symm - (-1.3)).abs() < 1e-12,
+            "kurtosis(uniform-discrete-5) = {k_symm}, expected −1.3"
+        );
+
+        let skewed = [1.0_f64, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 3.0, 3.0, 4.0];
+        let s_skew = skew(&skewed);
+        assert!(
+            (s_skew - 0.6).abs() < 1e-12,
+            "skew(right-skewed) = {s_skew}, expected 0.6"
+        );
+    }
+
+    #[test]
     fn wrapcauchy_pdf_integrates_to_one() {
         // /porting-to-rust: verify the new WrapCauchy distribution
         // satisfies ∫₀^{2π} pdf(x) dx ≈ 1 across multiple c values.
