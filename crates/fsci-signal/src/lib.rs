@@ -8687,6 +8687,157 @@ fn rk4_step(a: &[Vec<f64>], b: &[f64], x: &[f64], u: f64, dt: f64) -> Vec<f64> {
         .collect()
 }
 
+/// Daubechies orthogonal wavelet filter coefficients of order `p`.
+///
+/// Matches `scipy.signal.daub(p)`. Returns the lowpass synthesis filter
+/// `h_k` of length `2p`. The filter satisfies
+///   Σ_k h_k = √2,
+///   Σ_k h_k · h_{k + 2j} = δ_{j, 0}  (orthogonality)
+/// and has `p` vanishing moments. Supported for `p ∈ 1..=10` via the
+/// standard tabulated coefficients (Daubechies, *Ten Lectures on
+/// Wavelets*, Table 6.1); larger orders return
+/// `SignalError::InvalidArgument`.
+pub fn daub(p: usize) -> Result<Vec<f64>, SignalError> {
+    let coeffs: &[f64] = match p {
+        1 => &[
+            7.071_067_811_865_476e-1,
+            7.071_067_811_865_476e-1,
+        ],
+        2 => &[
+            4.829_629_131_445_341e-1,
+            8.365_163_037_378_077e-1,
+            2.241_438_680_420_134e-1,
+            -1.294_095_225_512_603e-1,
+        ],
+        3 => &[
+            3.326_705_529_500_825e-1,
+            8.068_915_093_110_924e-1,
+            4.598_775_021_184_914e-1,
+            -1.350_110_200_102_546e-1,
+            -8.544_127_388_202_667e-2,
+            3.522_629_188_570_953e-2,
+        ],
+        4 => &[
+            2.303_778_133_088_964e-1,
+            7.148_465_705_529_154e-1,
+            6.308_807_679_398_587e-1,
+            -2.798_376_941_698_385e-2,
+            -1.870_348_117_190_931e-1,
+            3.084_138_183_556_076e-2,
+            3.288_301_166_698_295e-2,
+            -1.059_740_178_506_903e-2,
+        ],
+        5 => &[
+            1.601_023_979_741_929e-1,
+            6.038_292_697_971_896e-1,
+            7.243_085_284_385_744e-1,
+            1.384_281_459_013_207e-1,
+            -2.422_948_870_663_823e-1,
+            -3.224_486_958_463_837e-2,
+            7.757_149_384_004_572e-2,
+            -6.241_490_212_798_274e-3,
+            -1.258_075_199_908_199e-2,
+            3.335_725_285_473_771e-3,
+        ],
+        6 => &[
+            1.115_407_433_501_095e-1,
+            4.946_238_903_984_530e-1,
+            7.511_339_080_210_955e-1,
+            3.152_503_517_091_982e-1,
+            -2.262_646_939_654_399e-1,
+            -1.297_668_675_672_625e-1,
+            9.750_160_558_707_936e-2,
+            2.752_286_553_030_572e-2,
+            -3.158_203_931_748_602e-2,
+            5.538_422_011_614_961e-4,
+            4.777_257_510_945_510e-3,
+            -1.077_301_085_308_479e-3,
+        ],
+        7 => &[
+            7.785_205_408_500_917e-2,
+            3.965_393_194_819_173e-1,
+            7.291_320_908_465_551e-1,
+            4.697_822_874_051_932e-1,
+            -1.439_060_039_285_212e-1,
+            -2.240_361_849_938_415e-1,
+            7.130_921_926_683_026e-2,
+            8.061_260_915_108_307e-2,
+            -3.802_993_693_501_440e-2,
+            -1.657_454_163_066_688e-2,
+            1.255_099_855_609_984e-2,
+            4.295_779_729_213_665e-4,
+            -1.801_640_704_047_490e-3,
+            3.537_137_999_745_202e-4,
+        ],
+        8 => &[
+            5.441_584_224_310_400e-2,
+            3.128_715_909_142_999e-1,
+            6.756_307_362_972_898e-1,
+            5.853_546_836_542_067e-1,
+            -1.582_910_525_634_930e-2,
+            -2.840_155_429_615_469e-1,
+            4.724_845_739_132_828e-4,
+            1.287_474_266_204_823e-1,
+            -1.736_930_100_180_754e-2,
+            -4.408_825_393_079_475e-2,
+            1.398_102_791_739_828e-2,
+            8.746_094_047_405_776e-3,
+            -4.870_352_993_451_574e-3,
+            -3.917_403_733_769_549e-4,
+            6.754_494_064_505_693e-4,
+            -1.174_767_841_247_695e-4,
+        ],
+        9 => &[
+            3.807_794_736_316_728e-2,
+            2.438_346_746_125_903e-1,
+            6.048_231_236_900_955e-1,
+            6.572_880_780_512_736e-1,
+            1.331_973_858_249_883e-1,
+            -2.932_737_832_793_372e-1,
+            -9.684_078_322_297_432e-2,
+            1.485_407_493_381_063e-1,
+            3.072_568_147_933_338e-2,
+            -6.763_282_906_132_607e-2,
+            2.509_471_148_314_519e-4,
+            2.236_166_212_367_909e-2,
+            -4.723_204_757_751_397e-3,
+            -4.281_503_682_463_429e-3,
+            1.847_646_883_056_046e-3,
+            2.303_857_635_231_959e-4,
+            -2.519_631_889_427_101e-4,
+            3.934_732_031_627_159e-5,
+        ],
+        10 => &[
+            2.667_005_790_055_555e-2,
+            1.881_768_000_776_347e-1,
+            5.272_011_889_315_757e-1,
+            6.884_590_394_534_363e-1,
+            2.811_723_436_605_775e-1,
+            -2.498_464_243_273_826e-1,
+            -1.959_462_743_773_385e-1,
+            1.273_693_403_357_560e-1,
+            9.305_736_460_357_726e-2,
+            -7.139_414_716_639_708e-2,
+            -2.945_753_682_187_581e-2,
+            3.321_267_405_934_100e-2,
+            3.606_553_566_956_620e-3,
+            -1.073_317_548_333_057e-2,
+            1.395_351_747_052_901e-3,
+            1.992_405_295_185_056e-3,
+            -6.858_566_949_597_116e-4,
+            -1.164_668_551_292_854e-4,
+            9.358_867_032_006_959e-5,
+            -1.326_420_289_452_124e-5,
+        ],
+        other => {
+            return Err(SignalError::InvalidArgument(format!(
+                "daub: only orders 1..=10 are tabulated; got p={other}"
+            )));
+        }
+    };
+    Ok(coeffs.to_vec())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -13555,5 +13706,63 @@ mod tests {
         assert_eq!(half.w.len(), 128);
         assert_eq!(whole.w.len(), 256);
         assert!(whole.w.last().unwrap() > &std::f64::consts::PI);
+    }
+
+    #[test]
+    fn daub_p1_matches_haar() {
+        // p=1 is the Haar wavelet: both coefficients are 1/√2.
+        let h = daub(1).expect("daub(1)");
+        assert_eq!(h.len(), 2);
+        let inv_sqrt_2 = 1.0_f64 / 2.0_f64.sqrt();
+        assert!((h[0] - inv_sqrt_2).abs() < 1e-12);
+        assert!((h[1] - inv_sqrt_2).abs() < 1e-12);
+    }
+
+    #[test]
+    fn daub_filter_lengths_are_2p() {
+        for p in 1..=10 {
+            let h = daub(p).expect("daub");
+            assert_eq!(h.len(), 2 * p, "filter length for p={p}");
+        }
+    }
+
+    #[test]
+    fn daub_metamorphic_coefficient_sum_equals_sqrt_two() {
+        // Σ_k h_k = √2 is the lowpass DC condition.
+        let target = 2.0_f64.sqrt();
+        for p in 1..=10 {
+            let h = daub(p).expect("daub");
+            let sum: f64 = h.iter().sum();
+            assert!(
+                (sum - target).abs() < 5e-7,
+                "p={p}: sum = {sum}, expected √2 ≈ {target}"
+            );
+        }
+    }
+
+    #[test]
+    fn daub_metamorphic_orthogonality_at_lag_zero() {
+        // Σ_k h_k² = 1 (unit-energy condition; equivalently Σ h h = δ_0
+        // at lag 0). This is the orthogonality condition's diagonal entry.
+        for p in 1..=10 {
+            let h = daub(p).expect("daub");
+            let energy: f64 = h.iter().map(|x| x * x).sum();
+            assert!(
+                (energy - 1.0).abs() < 5e-7,
+                "p={p}: Σh² = {energy}, expected 1"
+            );
+        }
+    }
+
+    #[test]
+    fn daub_rejects_unsupported_order() {
+        // SignalError::InvalidArgument routes through classify_invalid_argument
+        // which falls back to UnclassifiedArgument for our message wording.
+        let err = daub(11).expect_err("p=11 unsupported");
+        let msg = format!("{err:?}");
+        assert!(msg.contains("daub"), "{msg}");
+        let err = daub(0).expect_err("p=0 unsupported");
+        let msg = format!("{err:?}");
+        assert!(msg.contains("daub"), "{msg}");
     }
 }
