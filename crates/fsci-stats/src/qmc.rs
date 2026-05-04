@@ -431,8 +431,8 @@ pub fn mixture_discrepancy(sample: &[f64], dimension: usize) -> Result<f64, Stat
 ///
 /// Matches the *forward* direction of `scipy.stats.qmc.scale(sample,
 /// l_bounds, u_bounds)`. Returns `Err(StatsError::InvalidArgument)` when the
-/// bound vectors disagree with `dimension` or when any `u_bounds[j] <
-/// l_bounds[j]`.
+/// bound vectors disagree with `dimension`, when any non-NaN coordinate is
+/// outside `[0, 1]`, or when any `u_bounds[j] < l_bounds[j]`.
 pub fn scale(
     sample: &[f64],
     dimension: usize,
@@ -474,8 +474,14 @@ pub fn scale(
     let mut out = Vec::with_capacity(sample.len());
     for i in 0..n {
         for k in 0..dimension {
+            let value = sample[i * dimension + k];
+            if !value.is_nan() && !(0.0..=1.0).contains(&value) {
+                return Err(StatsError::InvalidArgument(
+                    "qmc::scale: sample is not in unit hypercube".to_string(),
+                ));
+            }
             let scale_k = u_bounds[k] - l_bounds[k];
-            out.push(l_bounds[k] + scale_k * sample[i * dimension + k]);
+            out.push(l_bounds[k] + scale_k * value);
         }
     }
     Ok(out)
@@ -1241,6 +1247,25 @@ mod tests {
         let err =
             scale(&[0.5, 0.5], 2, &[2.0, 0.0], &[1.0, 1.0]).expect_err("u<l must be rejected");
         assert!(matches!(err, StatsError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn scale_rejects_coordinates_outside_unit_hypercube() {
+        for sample in [
+            &[-0.1_f64][..],
+            &[1.5],
+            &[f64::INFINITY],
+            &[f64::NEG_INFINITY],
+        ] {
+            let err = scale(sample, 1, &[0.0], &[1.0]).expect_err("outside unit cube");
+            assert!(matches!(err, StatsError::InvalidArgument(_)));
+        }
+    }
+
+    #[test]
+    fn scale_preserves_scipy_nan_propagation() {
+        let out = scale(&[f64::NAN], 1, &[2.0], &[5.0]).expect("NaN propagates");
+        assert!(out[0].is_nan());
     }
 
     #[test]

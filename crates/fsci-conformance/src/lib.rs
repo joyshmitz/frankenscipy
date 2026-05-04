@@ -13304,7 +13304,6 @@ pub fn evaluate_drift_gate(
     }
 }
 
-#[must_use]
 pub fn validate_zero_drift_oracle_coverage(report: &LiveOracleCaptureReport) -> Result<(), String> {
     if report.total_packets == 0 {
         return Err(
