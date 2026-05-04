@@ -3104,10 +3104,7 @@ fn bracket_and_bisect_zero(
         f_hi = f_at(hi);
         walked += step;
     }
-    if !f_lo.is_finite()
-        || !f_hi.is_finite()
-        || f_lo.signum() == f_hi.signum()
-    {
+    if !f_lo.is_finite() || !f_hi.is_finite() || f_lo.signum() == f_hi.signum() {
         return initial;
     }
     for _ in 0..120 {
@@ -3149,7 +3146,8 @@ pub fn yn_zeros(n: u32, k: usize) -> Vec<f64> {
         let mu = (4.0 * ki as f64 + 2.0 * n_f - 3.0) * std::f64::consts::PI / 4.0;
         let inv_mu = 1.0 / mu;
         let inv_mu2 = inv_mu * inv_mu;
-        let mcmahon = mu - (four_n_sq - 1.0) / (8.0 * mu)
+        let mcmahon = mu
+            - (four_n_sq - 1.0) / (8.0 * mu)
             - (four_n_sq - 1.0) * (28.0 * four_n_sq - 31.0) / 384.0 * inv_mu * inv_mu2;
         let initial = if ki == 1 && n >= 5 {
             olver_yn_first_zero(n_f)
@@ -3161,16 +3159,9 @@ pub fn yn_zeros(n: u32, k: usize) -> Vec<f64> {
         } else {
             mcmahon
         };
-        let f_at = |x: f64| -> f64 {
-            yn_scalar(n_f, x, RuntimeMode::Strict).unwrap_or(f64::NAN)
-        };
-        let floor = if ki >= 2 {
-            prev_zero + 1.0e-6
-        } else {
-            1.0e-6
-        };
-        let zero =
-            bracket_and_bisect_zero(f_at, initial, floor, 0.5, (n_f * 0.25).max(20.0));
+        let f_at = |x: f64| -> f64 { yn_scalar(n_f, x, RuntimeMode::Strict).unwrap_or(f64::NAN) };
+        let floor = if ki >= 2 { prev_zero + 1.0e-6 } else { 1.0e-6 };
+        let zero = bracket_and_bisect_zero(f_at, initial, floor, 0.5, (n_f * 0.25).max(20.0));
         out.push(zero);
         prev_zero = zero;
     }
@@ -3199,7 +3190,8 @@ pub fn jn_zeros(n: u32, k: usize) -> Vec<f64> {
         let mu = (4.0 * ki as f64 + 2.0 * n_f - 1.0) * std::f64::consts::PI / 4.0;
         let inv_mu = 1.0 / mu;
         let inv_mu2 = inv_mu * inv_mu;
-        let mcmahon = mu - (four_n_sq - 1.0) / (8.0 * mu)
+        let mcmahon = mu
+            - (four_n_sq - 1.0) / (8.0 * mu)
             - (four_n_sq - 1.0) * (28.0 * four_n_sq - 31.0) / 384.0 * inv_mu * inv_mu2;
         let initial = if ki == 1 && n >= 5 {
             olver_jn_first_zero(n_f)
@@ -3208,16 +3200,9 @@ pub fn jn_zeros(n: u32, k: usize) -> Vec<f64> {
         } else {
             mcmahon
         };
-        let f_at = |x: f64| -> f64 {
-            jn_scalar(n_f, x, RuntimeMode::Strict).unwrap_or(f64::NAN)
-        };
-        let floor = if ki >= 2 {
-            prev_zero + 1.0e-6
-        } else {
-            1.0e-6
-        };
-        let zero =
-            bracket_and_bisect_zero(f_at, initial, floor, 0.5, (n_f * 0.25).max(20.0));
+        let f_at = |x: f64| -> f64 { jn_scalar(n_f, x, RuntimeMode::Strict).unwrap_or(f64::NAN) };
+        let floor = if ki >= 2 { prev_zero + 1.0e-6 } else { 1.0e-6 };
+        let zero = bracket_and_bisect_zero(f_at, initial, floor, 0.5, (n_f * 0.25).max(20.0));
         out.push(zero);
         prev_zero = zero;
     }
@@ -4117,17 +4102,10 @@ mod tests {
         //   3.957678_419_3
         //   7.086051_060_3
         let zeros = yn_zeros(0, 3);
-        let expected = [
-            0.893_577_695_5_f64,
-            3.957_678_419_3,
-            7.086_051_060_3,
-        ];
+        let expected = [0.893_577_695_5_f64, 3.957_678_419_3, 7.086_051_060_3];
         assert_eq!(zeros.len(), 3);
         for (got, exp) in zeros.iter().zip(expected.iter()) {
-            assert!(
-                (got - exp).abs() < 1e-4,
-                "y0 zero {got} vs {exp}"
-            );
+            assert!((got - exp).abs() < 1e-4, "y0 zero {got} vs {exp}");
         }
     }
 
@@ -4136,12 +4114,8 @@ mod tests {
         for &n in &[0_u32, 1, 2] {
             let zeros = yn_zeros(n, 4);
             for z in &zeros {
-                let val =
-                    yn_scalar(n as f64, *z, RuntimeMode::Strict).expect("yn");
-                assert!(
-                    val.abs() < 1e-5,
-                    "Y_{n}({z}) = {val} should be ≈ 0"
-                );
+                let val = yn_scalar(n as f64, *z, RuntimeMode::Strict).expect("yn");
+                assert!(val.abs() < 1e-5, "Y_{n}({z}) = {val} should be ≈ 0");
             }
         }
     }
@@ -4171,10 +4145,7 @@ mod tests {
         ];
         assert_eq!(zeros.len(), 3);
         for (got, exp) in zeros.iter().zip(expected.iter()) {
-            assert!(
-                (got - exp).abs() < 1e-6,
-                "j0 zero {got} vs {exp}"
-            );
+            assert!((got - exp).abs() < 1e-6, "j0 zero {got} vs {exp}");
         }
     }
 
@@ -4186,10 +4157,7 @@ mod tests {
         let zeros = jn_zeros(1, 2);
         let expected = [3.831_705_970_207_512_f64, 7.015_586_669_815_619];
         for (got, exp) in zeros.iter().zip(expected.iter()) {
-            assert!(
-                (got - exp).abs() < 1e-6,
-                "j1 zero {got} vs {exp}"
-            );
+            assert!((got - exp).abs() < 1e-6, "j1 zero {got} vs {exp}");
         }
     }
 
@@ -4199,12 +4167,8 @@ mod tests {
         for &n in &[0_u32, 1, 2, 3] {
             let zeros = jn_zeros(n, 5);
             for z in &zeros {
-                let val =
-                    jn_scalar(n as f64, *z, RuntimeMode::Strict).expect("jn");
-                assert!(
-                    val.abs() < 1e-6,
-                    "J_{n}({z}) = {val} should be ≈ 0"
-                );
+                let val = jn_scalar(n as f64, *z, RuntimeMode::Strict).expect("jn");
+                assert!(val.abs() < 1e-6, "J_{n}({z}) = {val} should be ≈ 0");
             }
         }
     }

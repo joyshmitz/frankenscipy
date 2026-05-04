@@ -206,11 +206,7 @@ fn airy_zeros_inner(n: usize, ai_kind: bool) -> Vec<f64> {
         // If the bracket doesn't straddle zero, expand outward in steps of
         // 0.2 up to a few extra units.
         let mut tries = 0;
-        while f_lo.is_finite()
-            && f_hi.is_finite()
-            && f_lo.signum() == f_hi.signum()
-            && tries < 8
-        {
+        while f_lo.is_finite() && f_hi.is_finite() && f_lo.signum() == f_hi.signum() && tries < 8 {
             lo -= 0.2;
             hi += 0.2;
             f_lo = f_at(lo);
@@ -927,10 +923,7 @@ mod tests {
         ];
         assert_eq!(zeros.len(), 5);
         for (got, exp) in zeros.iter().zip(expected.iter()) {
-            assert!(
-                (got - exp).abs() < 1e-4,
-                "ai_zero {got} vs expected {exp}"
-            );
+            assert!((got - exp).abs() < 1e-4, "ai_zero {got} vs expected {exp}");
         }
     }
 
@@ -973,10 +966,7 @@ mod tests {
         ];
         assert_eq!(zeros.len(), 3);
         for (got, exp) in zeros.iter().zip(expected.iter()) {
-            assert!(
-                (got - exp).abs() < 1e-4,
-                "bi_zero {got} vs expected {exp}"
-            );
+            assert!((got - exp).abs() < 1e-4, "bi_zero {got} vs expected {exp}");
         }
     }
 

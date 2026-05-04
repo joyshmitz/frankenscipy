@@ -61,9 +61,7 @@ struct Violation {
 
 fn extract_case_tolerance(case: &Value) -> Option<(f64, f64, Option<String>)> {
     let case_obj = case.as_object()?;
-    let expected = case_obj
-        .get("expected")
-        .and_then(|v| v.as_object());
+    let expected = case_obj.get("expected").and_then(|v| v.as_object());
     let rtol = expected
         .and_then(|e| e.get("rtol"))
         .or_else(|| case_obj.get("rtol"))
@@ -87,8 +85,8 @@ fn extract_case_tolerance(case: &Value) -> Option<(f64, f64, Option<String>)> {
 
 fn lint_fixture(path: &PathBuf) -> Result<Vec<Violation>, String> {
     let content = fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
-    let parsed: Value = serde_json::from_str(&content)
-        .map_err(|e| format!("parse {}: {e}", path.display()))?;
+    let parsed: Value =
+        serde_json::from_str(&content).map_err(|e| format!("parse {}: {e}", path.display()))?;
     let cases = parsed
         .as_object()
         .and_then(|o| o.get("cases"))
@@ -96,10 +94,7 @@ fn lint_fixture(path: &PathBuf) -> Result<Vec<Violation>, String> {
         .cloned()
         .unwrap_or_default();
 
-    let stem = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
     let packet = stem.split('_').next().unwrap_or("").to_owned();
     let Some(baseline) = packet_baseline_rtol(&packet) else {
         return Ok(Vec::new());
@@ -120,7 +115,11 @@ fn lint_fixture(path: &PathBuf) -> Result<Vec<Violation>, String> {
                 .and_then(|v| v.as_str())
                 .unwrap_or("(unnamed)")
                 .to_owned();
-            let multiple = if baseline > 0.0 { rtol / baseline } else { f64::INFINITY };
+            let multiple = if baseline > 0.0 {
+                rtol / baseline
+            } else {
+                f64::INFINITY
+            };
             violations.push(Violation {
                 packet: packet.clone(),
                 case_id,
@@ -154,7 +153,11 @@ fn print_text_report(violations: &[Violation]) {
         }
         println!();
     }
-    println!("Total: {} violations across {} packets", violations.len(), by_packet.len());
+    println!(
+        "Total: {} violations across {} packets",
+        violations.len(),
+        by_packet.len()
+    );
 }
 
 fn main() -> ExitCode {
@@ -168,7 +171,9 @@ fn main() -> ExitCode {
         );
         println!("  --json                 Emit JSON instead of text report");
         println!("  --max-violations N     Pass if violation count <= N (default 0)");
-        println!("  --baseline N           Pass if violation count <= N (alias for --max-violations)");
+        println!(
+            "  --baseline N           Pass if violation count <= N (alias for --max-violations)"
+        );
         println!("  -h, --help             Show this help");
         return ExitCode::SUCCESS;
     }
@@ -224,7 +229,10 @@ fn main() -> ExitCode {
             "max_violations": max_violations,
             "violations": all,
         });
-        println!("{}", serde_json::to_string_pretty(&payload).unwrap_or_default());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&payload).unwrap_or_default()
+        );
     } else {
         print_text_report(&all);
     }

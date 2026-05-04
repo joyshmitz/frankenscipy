@@ -1236,12 +1236,7 @@ print(json.dumps(results))
             ));
         }
         for (i, (a, b)) in actual.iter().zip(expected).enumerate() {
-            assert_ulp_close(
-                &format!("{}_idx{}", case.case_id, i),
-                *a,
-                *b,
-                policy,
-            )?;
+            assert_ulp_close(&format!("{}_idx{}", case.case_id, i), *a, *b, policy)?;
         }
     }
     Ok(())

@@ -12,7 +12,7 @@ pub mod hyper;
 pub mod orthopoly;
 pub mod types;
 
-pub use airy::{AIRY_DISPATCH_PLAN, ai, ai_zeros, airy, AiryResult, bi, bi_zeros};
+pub use airy::{AIRY_DISPATCH_PLAN, AiryResult, ai, ai_zeros, airy, bi, bi_zeros};
 pub use audit::{
     SyncSharedAuditLedger, record_bounded_recovery, record_fail_closed, sync_audit_ledger,
 };
@@ -236,9 +236,9 @@ pub use orthopoly::{
     eval_chebyt, eval_chebyu, eval_gegenbauer, eval_genlaguerre, eval_hermite, eval_hermitenorm,
     eval_jacobi, eval_laguerre, eval_legendre, eval_sh_chebyt, eval_sh_chebyu, eval_sh_legendre,
     lpmn, lpmv, lpn, lqmn, lqn, roots_chebyc, roots_chebys, roots_chebyt, roots_chebyu,
-    roots_gegenbauer,
-    roots_genlaguerre, roots_hermite, roots_hermitenorm, roots_jacobi, roots_laguerre,
-    roots_legendre, roots_sh_chebyt, roots_sh_chebyu, roots_sh_legendre, sph_harm, sph_harm_y,
+    roots_gegenbauer, roots_genlaguerre, roots_hermite, roots_hermitenorm, roots_jacobi,
+    roots_laguerre, roots_legendre, roots_sh_chebyt, roots_sh_chebyu, roots_sh_legendre, sph_harm,
+    sph_harm_y,
 };
 pub use types::{
     Complex64, DispatchPlan, DispatchStep, KernelRegime, SpecialError, SpecialErrorKind,

@@ -603,11 +603,7 @@ impl PchipInterpolator {
 /// inputs at derivative order 0. PCHIP preserves monotonicity of the
 /// input data, so it's the standard choice when avoiding overshoot
 /// matters more than smoothness at the knots.
-pub fn pchip_interpolate(
-    xi: &[f64],
-    yi: &[f64],
-    x_new: &[f64],
-) -> Result<Vec<f64>, InterpError> {
+pub fn pchip_interpolate(xi: &[f64], yi: &[f64], x_new: &[f64]) -> Result<Vec<f64>, InterpError> {
     let interp = PchipInterpolator::new(xi, yi)?;
     Ok(interp.eval_many(x_new))
 }
@@ -881,7 +877,8 @@ impl CubicHermiteSpline {
                 actual: x.len(),
             });
         }
-        if x.iter().any(|&v| !v.is_finite()) || y.iter().any(|&v| !v.is_finite())
+        if x.iter().any(|&v| !v.is_finite())
+            || y.iter().any(|&v| !v.is_finite())
             || dydx.iter().any(|&v| !v.is_finite())
         {
             return Err(InterpError::NonFiniteX);
@@ -944,11 +941,7 @@ pub fn cubic_hermite_interpolate(
 /// adjacent slopes by the local-curvature norm), making it the standard
 /// choice for noisy data where PCHIP's strict monotonicity is too
 /// conservative.
-pub fn akima1d_interpolate(
-    xi: &[f64],
-    yi: &[f64],
-    x_new: &[f64],
-) -> Result<Vec<f64>, InterpError> {
+pub fn akima1d_interpolate(xi: &[f64], yi: &[f64], x_new: &[f64]) -> Result<Vec<f64>, InterpError> {
     let interp = Akima1DInterpolator::new(xi, yi)?;
     Ok(interp.eval_many(x_new))
 }
@@ -2920,11 +2913,7 @@ impl KroghInterpolator {
 /// Matches `scipy.interpolate.krogh_interpolate(xi, yi, x)` for 1-D real
 /// inputs. Returns the interpolated values as a `Vec<f64>` of the same
 /// length as `x_new`.
-pub fn krogh_interpolate(
-    xi: &[f64],
-    yi: &[f64],
-    x_new: &[f64],
-) -> Result<Vec<f64>, InterpError> {
+pub fn krogh_interpolate(xi: &[f64], yi: &[f64], x_new: &[f64]) -> Result<Vec<f64>, InterpError> {
     let interp = KroghInterpolator::new(xi, yi)?;
     Ok(interp.evaluate_many(x_new))
 }
@@ -6002,13 +5991,9 @@ mod tests {
 
     #[test]
     fn cubic_hermite_rejects_unsorted_x() {
-        let err = cubic_hermite_interpolate(
-            &[0.0, 2.0, 1.0],
-            &[0.0, 4.0, 2.0],
-            &[0.5, 1.0, 1.5],
-            &[0.5],
-        )
-        .expect_err("unsorted x must be rejected");
+        let err =
+            cubic_hermite_interpolate(&[0.0, 2.0, 1.0], &[0.0, 4.0, 2.0], &[0.5, 1.0, 1.5], &[0.5])
+                .expect_err("unsorted x must be rejected");
         assert!(matches!(err, InterpError::UnsortedX));
     }
 
@@ -6091,10 +6076,7 @@ mod tests {
         let yi: Vec<f64> = xi.iter().map(|x| 2.0 * x * x - 3.0 * x + 1.0).collect();
         let x_new = [-1.5_f64, -0.5, 0.5, 1.5];
         let got = krogh_interpolate(&xi, &yi, &x_new).expect("interp");
-        let expected: Vec<f64> = x_new
-            .iter()
-            .map(|x| 2.0 * x * x - 3.0 * x + 1.0)
-            .collect();
+        let expected: Vec<f64> = x_new.iter().map(|x| 2.0 * x * x - 3.0 * x + 1.0).collect();
         for (g, e) in got.iter().zip(expected.iter()) {
             assert!((g - e).abs() < 1e-12, "krogh: got {g}, expected {e}");
         }
@@ -6125,10 +6107,7 @@ mod tests {
         let yi: Vec<f64> = xi.iter().map(|x| x * x * x - 2.0 * x + 1.0).collect();
         let x_new = [-1.5_f64, -0.5, 0.5, 1.5];
         let got = barycentric_interpolate(&xi, &yi, &x_new).expect("interp");
-        let expected: Vec<f64> = x_new
-            .iter()
-            .map(|x| x * x * x - 2.0 * x + 1.0)
-            .collect();
+        let expected: Vec<f64> = x_new.iter().map(|x| x * x * x - 2.0 * x + 1.0).collect();
         for (g, e) in got.iter().zip(expected.iter()) {
             assert!(
                 (g - e).abs() < 1e-12,

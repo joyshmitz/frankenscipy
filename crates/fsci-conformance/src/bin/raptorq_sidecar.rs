@@ -39,8 +39,8 @@ fn write_sidecar(target: &Path) -> Result<PathBuf, String> {
 fn verify_sidecar(target: &Path) -> Result<(), String> {
     let payload = fs::read(target).map_err(|e| format!("read {}: {e}", target.display()))?;
     let sidecar_path = sidecar_path_for(target);
-    let sidecar_bytes = fs::read(&sidecar_path)
-        .map_err(|e| format!("read {}: {e}", sidecar_path.display()))?;
+    let sidecar_bytes =
+        fs::read(&sidecar_path).map_err(|e| format!("read {}: {e}", sidecar_path.display()))?;
     let stored: RaptorQSidecar = serde_json::from_slice(&sidecar_bytes)
         .map_err(|e| format!("parse {}: {e}", sidecar_path.display()))?;
     let recomputed = generate_raptorq_sidecar(&payload).map_err(|e| format!("encode: {e}"))?;

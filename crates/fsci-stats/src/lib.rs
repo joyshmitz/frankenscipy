@@ -6242,9 +6242,7 @@ impl ContinuousDistribution for Fisk {
                 hi = mid;
             }
         }
-        Ok(Self {
-            c: 0.5 * (lo + hi),
-        })
+        Ok(Self { c: 0.5 * (lo + hi) })
     }
 }
 
@@ -7886,9 +7884,7 @@ impl ContinuousDistribution for Gompertz {
                 hi = mid;
             }
         }
-        Ok(Self {
-            c: 0.5 * (lo + hi),
-        })
+        Ok(Self { c: 0.5 * (lo + hi) })
     }
 }
 
@@ -8055,9 +8051,7 @@ impl ContinuousDistribution for GenLogistic {
                 hi = mid;
             }
         }
-        Ok(Self {
-            c: 0.5 * (lo + hi),
-        })
+        Ok(Self { c: 0.5 * (lo + hi) })
     }
 }
 
@@ -8542,9 +8536,7 @@ impl ContinuousDistribution for InvWeibull {
                 hi = mid;
             }
         }
-        Ok(Self {
-            c: 0.5 * (lo + hi),
-        })
+        Ok(Self { c: 0.5 * (lo + hi) })
     }
 }
 
@@ -8624,9 +8616,7 @@ impl ContinuousDistribution for GenNorm {
                 "GenNorm MoM: sample E[x²] {m2_about_zero} non-positive"
             )));
         }
-        let var_of = |beta: f64| -> f64 {
-            ln_gamma(3.0 / beta).exp() / ln_gamma(1.0 / beta).exp()
-        };
+        let var_of = |beta: f64| -> f64 { ln_gamma(3.0 / beta).exp() / ln_gamma(1.0 / beta).exp() };
         // Bracket. β=0.1 gives huge variance; β=50 gives variance ~ 1/3.
         let mut lo = 0.1_f64;
         let mut hi = 50.0_f64;
@@ -8880,9 +8870,7 @@ impl ContinuousDistribution for LogGamma {
                 hi = mid;
             }
         }
-        Ok(Self {
-            c: 0.5 * (lo + hi),
-        })
+        Ok(Self { c: 0.5 * (lo + hi) })
     }
 }
 
@@ -30467,15 +30455,13 @@ mod tests {
 
     #[test]
     fn invweibull_fit_rejects_mean_at_or_below_one() {
-        let err = InvWeibull::try_fit(&[0.5, 0.7, 1.0])
-            .expect_err("mean ≤ 1 must be rejected");
+        let err = InvWeibull::try_fit(&[0.5, 0.7, 1.0]).expect_err("mean ≤ 1 must be rejected");
         assert!(matches!(err, FitError::UnsupportedData(_)));
     }
 
     #[test]
     fn invweibull_fit_rejects_negative_observation() {
-        let err = InvWeibull::try_fit(&[1.5, -0.5])
-            .expect_err("negative must be rejected");
+        let err = InvWeibull::try_fit(&[1.5, -0.5]).expect_err("negative must be rejected");
         assert!(matches!(err, FitError::UnsupportedData(_)));
     }
 
@@ -30524,15 +30510,13 @@ mod tests {
 
     #[test]
     fn fisk_fit_rejects_mean_at_or_below_one() {
-        let err = Fisk::try_fit(&[0.5, 0.7, 1.0])
-            .expect_err("mean ≤ 1 must be rejected");
+        let err = Fisk::try_fit(&[0.5, 0.7, 1.0]).expect_err("mean ≤ 1 must be rejected");
         assert!(matches!(err, FitError::UnsupportedData(_)));
     }
 
     #[test]
     fn fisk_fit_rejects_negative_observation() {
-        let err = Fisk::try_fit(&[1.5, 2.0, -0.5])
-            .expect_err("negative must be rejected");
+        let err = Fisk::try_fit(&[1.5, 2.0, -0.5]).expect_err("negative must be rejected");
         assert!(matches!(err, FitError::UnsupportedData(_)));
     }
 
@@ -30581,8 +30565,7 @@ mod tests {
 
     #[test]
     fn loggamma_fit_rejects_non_finite_observation() {
-        let err = LogGamma::try_fit(&[0.0, f64::INFINITY])
-            .expect_err("inf must be rejected");
+        let err = LogGamma::try_fit(&[0.0, f64::INFINITY]).expect_err("inf must be rejected");
         assert!(matches!(err, FitError::UnsupportedData(_)));
     }
 
@@ -30607,7 +30590,11 @@ mod tests {
             .map(|i| {
                 let q = (i as f64 - 0.5) / n as f64;
                 let x = (1.0 - (1.0 - q).ln() / true_c).ln();
-                if x.is_finite() && x >= 0.0 { x } else { f64::NAN }
+                if x.is_finite() && x >= 0.0 {
+                    x
+                } else {
+                    f64::NAN
+                }
             })
             .filter(|x| x.is_finite())
             .collect();
@@ -30625,8 +30612,7 @@ mod tests {
 
     #[test]
     fn gompertz_fit_rejects_negative_observation() {
-        let err = Gompertz::try_fit(&[1.0, 2.0, -0.1])
-            .expect_err("negative must be rejected");
+        let err = Gompertz::try_fit(&[1.0, 2.0, -0.1]).expect_err("negative must be rejected");
         assert!(matches!(err, FitError::UnsupportedData(_)));
     }
 
@@ -30672,8 +30658,7 @@ mod tests {
 
     #[test]
     fn chi_fit_rejects_negative_observation() {
-        let err = Chi::try_fit(&[1.0, 2.0, -0.5])
-            .expect_err("negative must be rejected");
+        let err = Chi::try_fit(&[1.0, 2.0, -0.5]).expect_err("negative must be rejected");
         assert!(matches!(err, FitError::UnsupportedData(_)));
     }
 
@@ -30685,8 +30670,7 @@ mod tests {
 
     #[test]
     fn chi_fit_rejects_zero_data() {
-        let err = Chi::try_fit(&[0.0, 0.0])
-            .expect_err("all-zero data must be rejected");
+        let err = Chi::try_fit(&[0.0, 0.0]).expect_err("all-zero data must be rejected");
         assert!(matches!(err, FitError::NonConvergent(_)));
     }
 
@@ -30721,15 +30705,13 @@ mod tests {
     #[test]
     fn rice_fit_rejects_low_e_x_sq() {
         // All-zero data → E[x²] = 0 < 2 → impossible for Rice with σ=1.
-        let err = Rice::try_fit(&[0.0, 0.0, 0.0])
-            .expect_err("E[x²]<2 must be rejected");
+        let err = Rice::try_fit(&[0.0, 0.0, 0.0]).expect_err("E[x²]<2 must be rejected");
         assert!(matches!(err, FitError::UnsupportedData(_)));
     }
 
     #[test]
     fn rice_fit_rejects_negative_observation() {
-        let err = Rice::try_fit(&[1.0, -0.5])
-            .expect_err("negative must be rejected");
+        let err = Rice::try_fit(&[1.0, -0.5]).expect_err("negative must be rejected");
         assert!(matches!(err, FitError::UnsupportedData(_)));
     }
 
@@ -30788,8 +30770,7 @@ mod tests {
 
     #[test]
     fn nakagami_fit_rejects_negative_observation() {
-        let err = Nakagami::try_fit(&[0.5, 1.0, -0.1])
-            .expect_err("negative must be rejected");
+        let err = Nakagami::try_fit(&[0.5, 1.0, -0.1]).expect_err("negative must be rejected");
         assert!(matches!(err, FitError::UnsupportedData(_)));
     }
 
@@ -30835,8 +30816,7 @@ mod tests {
 
     #[test]
     fn halfgennorm_fit_rejects_negative_observation() {
-        let err = HalfGenNorm::try_fit(&[0.5, 1.0, -0.1])
-            .expect_err("negative must be rejected");
+        let err = HalfGenNorm::try_fit(&[0.5, 1.0, -0.1]).expect_err("negative must be rejected");
         assert!(matches!(err, FitError::UnsupportedData(_)));
     }
 
@@ -30890,8 +30870,7 @@ mod tests {
 
     #[test]
     fn gennorm_fit_rejects_zero_data() {
-        let err = GenNorm::try_fit(&[0.0, 0.0])
-            .expect_err("zero variance must be rejected");
+        let err = GenNorm::try_fit(&[0.0, 0.0]).expect_err("zero variance must be rejected");
         assert!(matches!(err, FitError::NonConvergent(_)));
     }
 
@@ -30939,8 +30918,7 @@ mod tests {
 
     #[test]
     fn genlogistic_fit_rejects_non_finite_observation() {
-        let err = GenLogistic::try_fit(&[0.0, f64::INFINITY])
-            .expect_err("inf must be rejected");
+        let err = GenLogistic::try_fit(&[0.0, f64::INFINITY]).expect_err("inf must be rejected");
         assert!(matches!(err, FitError::UnsupportedData(_)));
     }
 
