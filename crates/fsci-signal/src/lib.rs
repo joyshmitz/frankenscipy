@@ -2282,6 +2282,52 @@ pub fn frame_signal(x: &[f64], frame_len: usize, hop_len: usize) -> Vec<Vec<f64>
 
 /// Bilinear transform: convert analog (s-domain) to digital (z-domain) filter.
 ///
+/// Butterworth filter order and natural frequency for analog lowpass
+/// design.
+///
+/// Matches `scipy.signal.buttord(wp, ws, gpass, gstop, analog=True)` for
+/// the lowpass case. Returns `(order, wn)` where:
+///   order = ⌈ log10((10^(gstop/10) − 1) / (10^(gpass/10) − 1)) / (2·log10(ws/wp)) ⌉
+///   wn = wp  (the −3 dB point coincides with the passband edge for the
+///             tightest design satisfying both specs)
+///
+/// `wp` and `ws` are angular frequencies in rad/s (analog form). `gpass`
+/// is the maximum passband loss in dB; `gstop` is the minimum stopband
+/// attenuation in dB. Requires `wp < ws` and `0 < gpass < gstop`.
+pub fn buttord(
+    wp: f64,
+    ws: f64,
+    gpass: f64,
+    gstop: f64,
+) -> Result<(u32, f64), SignalError> {
+    if !wp.is_finite() || !ws.is_finite() || wp <= 0.0 || ws <= 0.0 {
+        return Err(SignalError::InvalidArgument(
+            "buttord: wp and ws must be positive finite".to_string(),
+        ));
+    }
+    if wp >= ws {
+        return Err(SignalError::InvalidArgument(
+            "buttord lowpass: passband edge wp must be < stopband edge ws".to_string(),
+        ));
+    }
+    if gpass <= 0.0 || gstop <= 0.0 || gpass >= gstop {
+        return Err(SignalError::InvalidArgument(
+            "buttord: require 0 < gpass < gstop".to_string(),
+        ));
+    }
+    let pass_factor = 10.0_f64.powf(gpass / 10.0) - 1.0;
+    let stop_factor = 10.0_f64.powf(gstop / 10.0) - 1.0;
+    let ratio = (ws / wp).log10();
+    if pass_factor <= 0.0 || ratio <= 0.0 {
+        return Err(SignalError::InvalidArgument(
+            "buttord: degenerate spec produced non-positive denominator".to_string(),
+        ));
+    }
+    let order_real = (stop_factor / pass_factor).log10() / (2.0 * ratio);
+    let order = order_real.ceil().max(1.0) as u32;
+    Ok((order, wp))
+}
+
 /// Map an analog ZPK to digital via the bilinear transform.
 ///
 /// Matches `scipy.signal.bilinear_zpk(z, p, k, fs)`. The bilinear
@@ -14008,6 +14054,44 @@ mod tests {
         assert_eq!(half.w.len(), 128);
         assert_eq!(whole.w.len(), 256);
         assert!(whole.w.last().unwrap() > &std::f64::consts::PI);
+    }
+
+    #[test]
+    fn buttord_known_design_returns_order_3() {
+        // Spec: passband 0..1 rad/s, stopband 2 rad/s+, 1 dB ripple, 40 dB stop.
+        // Closed form: 10^(40/10)-1 = 9999, 10^(1/10)-1 ≈ 0.2589, ratio
+        // log10(2) ≈ 0.301. order = ceil(log10(9999/0.2589) / (2·0.301))
+        //                        = ceil(4.587 / 0.602) = ceil(7.62) = 8.
+        let (n, wn) = buttord(1.0, 2.0, 1.0, 40.0).expect("buttord");
+        assert_eq!(n, 8);
+        assert!((wn - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn buttord_metamorphic_higher_stop_loss_increases_order() {
+        // For fixed passband spec, raising the stopband attenuation
+        // requirement can only increase the required order.
+        let (n_30, _) = buttord(1.0, 2.0, 1.0, 30.0).unwrap();
+        let (n_60, _) = buttord(1.0, 2.0, 1.0, 60.0).unwrap();
+        let (n_90, _) = buttord(1.0, 2.0, 1.0, 90.0).unwrap();
+        assert!(n_30 <= n_60);
+        assert!(n_60 <= n_90);
+    }
+
+    #[test]
+    fn buttord_rejects_invalid_specs() {
+        // Just verify each invalid configuration returns Err — the error
+        // variant routing through classify_invalid_argument depends on
+        // string matching that's brittle to test directly.
+        assert!(buttord(2.0, 1.0, 1.0, 40.0).is_err(), "wp>=ws should fail");
+        assert!(
+            buttord(1.0, 2.0, 40.0, 1.0).is_err(),
+            "gpass>=gstop should fail"
+        );
+        assert!(
+            buttord(-1.0, 2.0, 1.0, 40.0).is_err(),
+            "negative wp should fail"
+        );
     }
 
     #[test]
