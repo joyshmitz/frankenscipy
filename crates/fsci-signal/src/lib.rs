@@ -2282,6 +2282,72 @@ pub fn frame_signal(x: &[f64], frame_len: usize, hop_len: usize) -> Vec<Vec<f64>
 
 /// Bilinear transform: convert analog (s-domain) to digital (z-domain) filter.
 ///
+/// Transform a normalized lowpass ZPK prototype to a bandpass with
+/// center frequency `wo` and bandwidth `bw`.
+///
+/// Matches `scipy.signal.lp2bp_zpk(z, p, k, wo=1.0, bw=1.0)`. Each
+/// finite pole or zero splits into a complex-conjugate-related pair
+/// via the substitution s → (s² + wo²) / (bw · s):
+///   z_lp = z · bw / 2
+///   z_bp = { z_lp + √(z_lp² − wo²),  z_lp − √(z_lp² − wo²) }
+/// (and identically for p). The lp prototype's `degree = len(p) − len(z)`
+/// zeros at infinity become zeros at origin in the bandpass, padded
+/// onto z_bp. Gain scales by `bw^degree`.
+pub fn lp2bp_zpk(
+    z: &[fsci_fft::Complex64],
+    p: &[fsci_fft::Complex64],
+    k: f64,
+    wo: f64,
+    bw: f64,
+) -> (Vec<fsci_fft::Complex64>, Vec<fsci_fft::Complex64>, f64) {
+    let scale = 0.5 * bw;
+    let split = |c: fsci_fft::Complex64| -> (fsci_fft::Complex64, fsci_fft::Complex64) {
+        // z_lp = c · scale; root_arg = z_lp² − wo²; sqrt of complex.
+        let zlp = (scale * c.0, scale * c.1);
+        // c² − wo² where c = (a + bi):
+        //   c² = (a² − b², 2ab)
+        //   c² − wo² = (a² − b² − wo², 2ab)
+        let asq_bsq = zlp.0 * zlp.0 - zlp.1 * zlp.1;
+        let two_ab = 2.0 * zlp.0 * zlp.1;
+        let arg = (asq_bsq - wo * wo, two_ab);
+        let r = csqrt(arg);
+        let plus = (zlp.0 + r.0, zlp.1 + r.1);
+        let minus = (zlp.0 - r.0, zlp.1 - r.1);
+        (plus, minus)
+    };
+    let mut z_bp: Vec<fsci_fft::Complex64> = Vec::with_capacity(2 * z.len());
+    for &c in z {
+        let (a, b) = split(c);
+        z_bp.push(a);
+        z_bp.push(b);
+    }
+    let mut p_bp: Vec<fsci_fft::Complex64> = Vec::with_capacity(2 * p.len());
+    for &c in p {
+        let (a, b) = split(c);
+        p_bp.push(a);
+        p_bp.push(b);
+    }
+    let degree = p.len() as i32 - z.len() as i32;
+    if degree > 0 {
+        z_bp.extend(std::iter::repeat_n((0.0, 0.0), degree as usize));
+    }
+    let k_bp = k * bw.powi(degree);
+    (z_bp, p_bp, k_bp)
+}
+
+/// Principal-branch complex square root for a `(re, im)` tuple.
+fn csqrt(c: fsci_fft::Complex64) -> fsci_fft::Complex64 {
+    let (a, b) = c;
+    if b == 0.0 {
+        return if a >= 0.0 { (a.sqrt(), 0.0) } else { (0.0, (-a).sqrt()) };
+    }
+    let r = (a * a + b * b).sqrt();
+    let re = ((r + a) * 0.5).sqrt();
+    let im_mag = ((r - a) * 0.5).sqrt();
+    let im = if b >= 0.0 { im_mag } else { -im_mag };
+    (re, im)
+}
+
 /// Transform a normalized lowpass ZPK prototype to a highpass with
 /// cutoff frequency `wo`.
 ///
@@ -13812,6 +13878,53 @@ mod tests {
         assert_eq!(half.w.len(), 128);
         assert_eq!(whole.w.len(), 256);
         assert!(whole.w.last().unwrap() > &std::f64::consts::PI);
+    }
+
+    #[test]
+    fn lp2bp_zpk_doubles_pole_and_zero_count() {
+        // Each finite zero/pole splits into a pair; degree zeros are
+        // appended at origin. So len(z_bp) = 2*len(z) + degree, and
+        // len(p_bp) = 2*len(p).
+        let z: Vec<fsci_fft::Complex64> = vec![(1.0, 0.0)];
+        let p: Vec<fsci_fft::Complex64> = vec![(-1.0, 0.0), (-2.0, 0.0), (-3.0, 0.0)];
+        let (z_bp, p_bp, _) = lp2bp_zpk(&z, &p, 1.0, 2.0, 0.5);
+        let degree = p.len() - z.len();
+        assert_eq!(z_bp.len(), 2 * z.len() + degree);
+        assert_eq!(p_bp.len(), 2 * p.len());
+    }
+
+    #[test]
+    fn lp2bp_zpk_metamorphic_split_pair_product_is_wo_squared() {
+        // Each split pair (zlp + √(zlp² − wo²), zlp − √…) multiplies to
+        //   (zlp + r)·(zlp − r) = zlp² − r² = zlp² − (zlp² − wo²) = wo².
+        // So the product of any pair equals wo² (within rounding).
+        let p: Vec<fsci_fft::Complex64> = vec![(-0.5, 1.0)];
+        let z: Vec<fsci_fft::Complex64> = Vec::new();
+        let wo = 3.0_f64;
+        let bw = 0.7_f64;
+        let (_, p_bp, _) = lp2bp_zpk(&z, &p, 1.0, wo, bw);
+        // p_bp = (a, b) where a*b = wo² + 0i.
+        let (a, b) = (p_bp[0], p_bp[1]);
+        let product_re = a.0 * b.0 - a.1 * b.1;
+        let product_im = a.0 * b.1 + a.1 * b.0;
+        assert!(
+            (product_re - wo * wo).abs() < 1e-12,
+            "Re(prod) = {product_re}, expected {}",
+            wo * wo
+        );
+        assert!(product_im.abs() < 1e-12);
+    }
+
+    #[test]
+    fn lp2bp_zpk_metamorphic_gain_scales_with_bw_to_degree() {
+        // k_new = k * bw^degree where degree = len(p) - len(z).
+        let p: Vec<fsci_fft::Complex64> = vec![(-1.0, 0.0), (-2.0, 0.0)];
+        let z: Vec<fsci_fft::Complex64> = vec![(1.5, 0.0)];
+        let k_in = 4.5_f64;
+        let bw = 1.25_f64;
+        let degree = (p.len() - z.len()) as i32;
+        let (_, _, k_out) = lp2bp_zpk(&z, &p, k_in, 1.0, bw);
+        assert!((k_out - k_in * bw.powi(degree)).abs() < 1e-12);
     }
 
     #[test]
