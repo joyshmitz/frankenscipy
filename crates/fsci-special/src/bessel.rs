@@ -1748,6 +1748,10 @@ fn spherical_kn_nonneg(n: u32, x: f64) -> f64 {
 // ============================================================================
 
 /// Complex spherical Bessel function of the first kind j_n(z).
+///
+/// Uses Miller's downward recurrence in the |z| < n regime to avoid
+/// the same forward-recurrence catastrophic cancellation that affects
+/// the real-valued spherical_jn (resolves [frankenscipy-tt2v2]).
 fn complex_spherical_jn(n: u32, z: Complex64) -> Complex64 {
     if z.re == 0.0 && z.im == 0.0 {
         return if n == 0 {
@@ -1758,9 +1762,35 @@ fn complex_spherical_jn(n: u32, z: Complex64) -> Complex64 {
     }
 
     let sin_z = z.sin();
-    let cos_z = z.cos();
     let z_inv = z.recip();
+    let n_f = n as f64;
 
+    if n >= 2 && z.abs() < n_f {
+        let m_start = (2 * n + 30).max((n_f + 8.0 * (40.0 * n_f).sqrt().ceil()) as u32);
+        let mut j_kplus1 = Complex64::new(0.0, 0.0);
+        let mut j_k = Complex64::new(1.0e-30, 0.0);
+        let mut j_at_n = Complex64::new(0.0, 0.0);
+        for k in (1..=m_start).rev() {
+            let coeff = Complex64::new(2.0 * k as f64 + 1.0, 0.0) * z_inv;
+            let j_kminus1 = coeff * j_k - j_kplus1;
+            if k == n {
+                j_at_n = j_k;
+            }
+            j_kplus1 = j_k;
+            j_k = j_kminus1;
+            if j_k.abs() > 1.0e100 {
+                let scale = Complex64::new(1.0e-100, 0.0);
+                j_k = j_k * scale;
+                j_kplus1 = j_kplus1 * scale;
+                j_at_n = j_at_n * scale;
+            }
+        }
+        // Normalize so j_0 matches sin(z)/z.
+        let true_j0 = sin_z * z_inv;
+        return j_at_n * (true_j0 * j_k.recip());
+    }
+
+    let cos_z = z.cos();
     let mut j_prev = sin_z * z_inv; // j_0
     if n == 0 {
         return j_prev;
@@ -1812,6 +1842,9 @@ fn complex_spherical_yn(n: u32, z: Complex64) -> Complex64 {
 }
 
 /// Complex modified spherical Bessel function of the first kind i_n(z).
+///
+/// Same Miller's-recurrence treatment as complex_spherical_jn for the
+/// |z| < n regime (resolves [frankenscipy-tt2v2]).
 fn complex_spherical_in(n: u32, z: Complex64) -> Complex64 {
     if z.re == 0.0 && z.im == 0.0 {
         return if n == 0 {
@@ -1822,9 +1855,34 @@ fn complex_spherical_in(n: u32, z: Complex64) -> Complex64 {
     }
 
     let sinh_z = z.sinh();
-    let cosh_z = z.cosh();
     let z_inv = z.recip();
+    let n_f = n as f64;
 
+    if n >= 2 && z.abs() < n_f {
+        let m_start = (2 * n + 30).max((n_f + 8.0 * (40.0 * n_f).sqrt().ceil()) as u32);
+        let mut i_kplus1 = Complex64::new(0.0, 0.0);
+        let mut i_k = Complex64::new(1.0e-30, 0.0);
+        let mut i_at_n = Complex64::new(0.0, 0.0);
+        for k in (1..=m_start).rev() {
+            let coeff = Complex64::new(2.0 * k as f64 + 1.0, 0.0) * z_inv;
+            let i_kminus1 = coeff * i_k + i_kplus1;
+            if k == n {
+                i_at_n = i_k;
+            }
+            i_kplus1 = i_k;
+            i_k = i_kminus1;
+            if i_k.abs() > 1.0e100 {
+                let scale = Complex64::new(1.0e-100, 0.0);
+                i_k = i_k * scale;
+                i_kplus1 = i_kplus1 * scale;
+                i_at_n = i_at_n * scale;
+            }
+        }
+        let true_i0 = sinh_z * z_inv;
+        return i_at_n * (true_i0 * i_k.recip());
+    }
+
+    let cosh_z = z.cosh();
     let mut i_prev = sinh_z * z_inv; // i_0
     if n == 0 {
         return i_prev;
@@ -4062,6 +4120,49 @@ mod tests {
             assert!(
                 (neg - expected).abs() < 1e-30 + 1e-10 * pos.abs(),
                 "spherical_in({n}, -0.1) = {neg}, expected {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn complex_spherical_jn_small_z_large_n_matches_real() {
+        // [frankenscipy-tt2v2] regression: complex_spherical_jn forward
+        // recurrence had the same catastrophic-cancellation defect as
+        // the real path. For z on the real axis with small |z| and
+        // moderate n, the complex result must match the real result
+        // to high accuracy.
+        for n in 5_u32..=10 {
+            let real = super::spherical_jn_nonneg(n, 0.1);
+            let complex = super::complex_spherical_jn(n, Complex64::new(0.1, 0.0));
+            let rel = ((complex.re - real) / real).abs();
+            assert!(
+                rel < 1e-9,
+                "complex_spherical_jn({n}, 0.1+0i).re = {}, real = {real} (rel = {rel})",
+                complex.re
+            );
+            assert!(
+                complex.im.abs() < 1e-25,
+                "complex_spherical_jn({n}, 0.1+0i).im = {} should be ≈ 0",
+                complex.im
+            );
+        }
+    }
+
+    #[test]
+    fn complex_spherical_in_small_z_large_n_matches_real() {
+        for n in 5_u32..=10 {
+            let real = super::spherical_in_nonneg(n, 0.1);
+            let complex = super::complex_spherical_in(n, Complex64::new(0.1, 0.0));
+            let rel = ((complex.re - real) / real).abs();
+            assert!(
+                rel < 1e-9,
+                "complex_spherical_in({n}, 0.1+0i).re = {}, real = {real} (rel = {rel})",
+                complex.re
+            );
+            assert!(
+                complex.im.abs() < 1e-25,
+                "complex_spherical_in({n}, 0.1+0i).im = {} should be ≈ 0",
+                complex.im
             );
         }
     }
