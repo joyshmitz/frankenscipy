@@ -144,6 +144,12 @@ fn enforce_exit_policy(
     allow_missing_oracle: bool,
     allow_drift: bool,
 ) -> Result<(), ExitCode> {
+    if report.total_packets == 0
+        && let Err(message) = validate_zero_drift_oracle_coverage(report)
+    {
+        eprintln!("{message}");
+        return Err(ExitCode::from(1));
+    }
     if !allow_missing_oracle && report.oracle_unavailable_packets > 0 {
         eprintln!(
             "oracle unavailable for {} packet(s)",
@@ -313,5 +319,21 @@ mod tests {
             packets: Vec::new(),
         };
         assert!(enforce_exit_policy(&report, true, false).is_err());
+    }
+
+    #[test]
+    fn allow_drift_rejects_empty_capture() {
+        let report = LiveOracleCaptureReport {
+            schema_version: 1,
+            generated_unix_ms: 123,
+            fixture_root: "fixtures".to_owned(),
+            total_packets: 0,
+            total_cases: 0,
+            drifted_cases: 0,
+            oracle_available_packets: 0,
+            oracle_unavailable_packets: 0,
+            packets: Vec::new(),
+        };
+        assert!(enforce_exit_policy(&report, true, true).is_err());
     }
 }
