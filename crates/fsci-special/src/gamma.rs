@@ -3699,4 +3699,23 @@ mod tests {
         // 10 * 7 * 4 * 1 = 280
         assert_eq!(factorialk(10, 3), 280.0);
     }
+
+    #[test]
+    fn gamma_metamorphic_reflection_formula() {
+        // /testing-metamorphic: Γ(x) · Γ(1−x) = π/sin(πx) for any
+        // non-integer x. Independent of any specific gamma value;
+        // catches any drift in either the Lanczos or recurrence
+        // branches without hard-coding a reference number.
+        let pi = std::f64::consts::PI;
+        // Avoid x near integer poles where Γ diverges.
+        for &x in &[0.25_f64, 0.5, 0.75, 1.5, 2.5, 3.7, 5.3, 7.1] {
+            let lhs = gamma_core(x) * gamma_core(1.0 - x);
+            let rhs = pi / (pi * x).sin();
+            let rel = (lhs - rhs).abs() / rhs.abs().max(1.0);
+            assert!(
+                rel < 1e-12,
+                "Γ({x})·Γ(1-{x}) = {lhs}, expected π/sin(π·{x}) = {rhs} (rel = {rel})"
+            );
+        }
+    }
 }
