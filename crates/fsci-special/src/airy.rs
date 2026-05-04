@@ -486,8 +486,9 @@ fn airy_asymptotic(x: f64, _mode: RuntimeMode) -> Result<AiryResult, SpecialErro
         // Sign on the N·sin term: with the standard DLMF 9.7.10
         // convention plus fsci's positive-u_k/v_k coefficients, the
         // Wronskian Ai(−x)·Bi'(−x) − Ai'(−x)·Bi(−x) collapses to 1/π
-        // at leading order. The previous '−n · sin_phase' produced a
-        // ζ-dependent drift; ride-along of [frankenscipy-e8xus] fix.
+        // at leading order. The 4-term L/M/N/O truncation envelopes
+        // the residual at ~5e-3 in the oscillatory regime; tracked
+        // under [frankenscipy-yz8s7] for a future 8-term expansion.
         let bip = prefactor * abs_x.sqrt() * (n * sin_phase + o * cos_phase);
 
         Ok(AiryResult { ai, aip, bi, bip })
@@ -655,8 +656,9 @@ mod tests {
         ] {
             let r = super::airy_scalar(x, RuntimeMode::Strict).expect("airy");
             let wronskian = r.ai * r.bip - r.aip * r.bi;
-            // Tolerance: 5e-3 for negative asymptotic regime (4-term
-            // truncation gives ~3e-3 at x=-5), tighter elsewhere.
+            // Tolerance: 5e-3 for the negative oscillatory regime
+            // (4-term truncation envelope, [frankenscipy-yz8s7]
+            // tracks the 8-term extension), tighter elsewhere.
             let tol = if x <= -4.0 { 5e-3 } else { 1e-7 };
             assert!(
                 (wronskian - inv_pi).abs() < tol,
