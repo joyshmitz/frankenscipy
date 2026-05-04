@@ -220,6 +220,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "p2c017_io_fortran_record"
+path = "fuzz_targets/p2c017_io_fortran_record.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "p2c019_datasets_loaders"
 path = "fuzz_targets/p2c019_datasets_loaders.rs"
 test = false
