@@ -4240,6 +4240,56 @@ mod tests {
     }
 
     #[test]
+    fn bessel_zeros_metamorphic_interlace_relation() {
+        // DLMF 10.21.2: zeros of J_n and Y_n strictly interlace —
+        //   y_{n,1} < j_{n,1} < y_{n,2} < j_{n,2} < ...
+        // Verify across multiple n. This is a stronger metamorphic
+        // property than zero-value-is-zero: it pins the *count and
+        // ordering* of zeros across two different functions.
+        for &n in &[0_u32, 1, 2, 5, 10, 20] {
+            let k = 5;
+            let jzs = jn_zeros(n, k);
+            let yzs = yn_zeros(n, k);
+            for i in 0..k {
+                assert!(
+                    yzs[i] < jzs[i],
+                    "interlace fail (n={n}, i={i}): y={} should be < j={}",
+                    yzs[i],
+                    jzs[i]
+                );
+                if i + 1 < k {
+                    assert!(
+                        jzs[i] < yzs[i + 1],
+                        "interlace fail (n={n}, i={i}): j={} should be < y_next={}",
+                        jzs[i],
+                        yzs[i + 1]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bessel_zeros_metamorphic_pi_separation_for_large_k() {
+        // DLMF 10.21.20: consecutive zeros of J_n satisfy
+        //   j_{n,k+1} - j_{n,k} → π as k → ∞.
+        // Take k=20..30 across n=0..3 and check the separation lies
+        // within [π − 0.05, π + 0.05].
+        for &n in &[0_u32, 1, 2, 3] {
+            let zs = jn_zeros(n, 30);
+            for i in 19..29 {
+                let dx = zs[i + 1] - zs[i];
+                let pi = std::f64::consts::PI;
+                assert!(
+                    (dx - pi).abs() < 0.05,
+                    "n={n}, k={}: separation {dx} should be ≈ π",
+                    i + 1
+                );
+            }
+        }
+    }
+
+    #[test]
     fn jn_zeros_metamorphic_strictly_increasing() {
         let zeros = jn_zeros(0, 10);
         for z in &zeros {
