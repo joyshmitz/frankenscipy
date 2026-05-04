@@ -2358,10 +2358,9 @@ pub fn cheb1ap(
 pub fn buttap(
     n: u32,
 ) -> Result<(Vec<fsci_fft::Complex64>, Vec<fsci_fft::Complex64>, f64), SignalError> {
+    // scipy.signal.buttap(0) returns ([], [], 1) silently — match that.
     if n == 0 {
-        return Err(SignalError::InvalidArgument(
-            "buttap: order must be ≥ 1".to_string(),
-        ));
+        return Ok((Vec::new(), Vec::new(), 1.0));
     }
     let nf = n as f64;
     let mut poles = Vec::with_capacity(n as usize);
@@ -14449,9 +14448,14 @@ mod tests {
     }
 
     #[test]
-    fn buttap_rejects_zero_order() {
-        let err = buttap(0).expect_err("order 0 must be rejected");
-        assert!(format!("{err:?}").contains("buttap"));
+    fn buttap_zero_order_returns_empty_prototype() {
+        // scipy.signal.buttap(0) returns ([], [], 1); fsci must match
+        // for parity (np.arange(-N+1, N, 2) is empty when N=0, so
+        // scipy's pole-construction loop is skipped silently).
+        let (z, p, k) = buttap(0).unwrap();
+        assert_eq!(z.len(), 0);
+        assert_eq!(p.len(), 0);
+        assert_eq!(k, 1.0);
     }
 
     #[test]
