@@ -6132,4 +6132,27 @@ mod tests {
             .expect_err("length mismatch must be rejected");
         assert!(matches!(err, InterpError::LengthMismatch { .. }));
     }
+
+    #[test]
+    fn lagrange_recovers_known_polynomials() {
+        // /testing-conformance-harnesses: pin closed-form Lagrange
+        // interpolating polynomials. Output is highest-degree-first.
+        //
+        //   nodes (0,1,2) values (0,1,4) → x²       → [1, 0, 0]
+        //   nodes (0,1)   values (3,5)   → 2x + 3   → [2, 3]
+        //   nodes (0)     values (42)    → 42       → [42]
+        let p = lagrange(&[0.0_f64, 1.0, 2.0], &[0.0, 1.0, 4.0]).unwrap();
+        assert_eq!(p.len(), 3);
+        assert!((p[0] - 1.0).abs() < 1e-12, "x² coeff = {}", p[0]);
+        assert!(p[1].abs() < 1e-12, "x¹ coeff = {}", p[1]);
+        assert!(p[2].abs() < 1e-12, "x⁰ coeff = {}", p[2]);
+
+        let q = lagrange(&[0.0_f64, 1.0], &[3.0, 5.0]).unwrap();
+        assert_eq!(q.len(), 2);
+        assert!((q[0] - 2.0).abs() < 1e-12, "x¹ coeff = {}", q[0]);
+        assert!((q[1] - 3.0).abs() < 1e-12, "x⁰ coeff = {}", q[1]);
+
+        let r = lagrange(&[0.0_f64], &[42.0]).unwrap();
+        assert_eq!(r, vec![42.0]);
+    }
 }
