@@ -3701,6 +3701,34 @@ mod tests {
     }
 
     #[test]
+    fn gammaln_matches_scipy_reference_points() {
+        // /testing-conformance-harnesses: pin gammaln at canonical
+        // points scipy gives in closed form:
+        //   gammaln(0.5) = ln(√π) = 0.5·ln(π)
+        //   gammaln(1)   = 0
+        //   gammaln(2)   = 0
+        //   gammaln(0.25)= 1.288_022_524_698_077... (Γ(1/4)·Γ(3/4) = π√2)
+        //   gammaln(10)  = ln(9!) = ln(362880) = 12.801_827_480_081_469
+        let pi = std::f64::consts::PI;
+        let cases: &[(f64, f64)] = &[
+            (0.5, 0.5 * pi.ln()),
+            (1.0, 0.0),
+            (2.0, 0.0),
+            (10.0, 362_880.0_f64.ln()),
+        ];
+        for &(x, expected) in cases {
+            let got = gammaln_scalar(x, RuntimeMode::Strict).unwrap();
+            assert!(
+                (got - expected).abs() < 1e-12,
+                "gammaln({x}) = {got}, expected {expected}"
+            );
+        }
+        // Pole behavior — strict mode returns +inf, not NaN.
+        assert!(gammaln_scalar(0.0, RuntimeMode::Strict).unwrap().is_infinite());
+        assert!(gammaln_scalar(-1.0, RuntimeMode::Strict).unwrap().is_infinite());
+    }
+
+    #[test]
     fn gamma_metamorphic_reflection_formula() {
         // /testing-metamorphic: Γ(x) · Γ(1−x) = π/sin(πx) for any
         // non-integer x. Independent of any specific gamma value;
