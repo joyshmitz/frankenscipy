@@ -1645,7 +1645,11 @@ fn spherical_yn_nonneg(n: u32, x: f64) -> f64 {
 }
 
 /// i_0(z) = sinh(z)/z, i_1(z) = cosh(z)/z - sinh(z)/z²
-/// Recurrence: i_{k+1}(z) = i_{k-1}(z) - (2k+1)/z * i_k(z)
+/// Forward recurrence: i_{k+1}(z) = i_{k-1}(z) - (2k+1)/z * i_k(z),
+/// stable when |z| ≥ k. For small z the forward recurrence
+/// catastrophically cancels (i_n decays super-exponentially while
+/// (2k+1)/z grows), so we switch to Miller's downward recurrence
+/// exactly as in spherical_jn_nonneg. Resolves [frankenscipy-0j009].
 fn spherical_in_nonneg(n: u32, x: f64) -> f64 {
     if x == 0.0 {
         return if n == 0 { 1.0 } else { 0.0 };
@@ -1654,6 +1658,40 @@ fn spherical_in_nonneg(n: u32, x: f64) -> f64 {
         return f64::INFINITY;
     }
     let ax = x.abs();
+
+    // Miller's downward recurrence in the small-x regime.
+    let n_f = n as f64;
+    if n >= 2 && ax < n_f {
+        let m_start = (2 * n + 30).max((n_f + 8.0 * (40.0 * n_f).sqrt().ceil()) as u32);
+        let mut i_kplus1 = 0.0_f64;
+        let mut i_k = 1.0e-30_f64;
+        let mut i_at_n = 0.0_f64;
+        // i_{k-1} = (2k+1)/x · i_k + i_{k+1}
+        for k in (1..=m_start).rev() {
+            let kf = k as f64;
+            let i_kminus1 = (2.0 * kf + 1.0) / ax * i_k + i_kplus1;
+            if k == n {
+                i_at_n = i_k;
+            }
+            i_kplus1 = i_k;
+            i_k = i_kminus1;
+            if i_k.abs() > 1.0e100 {
+                let scale = 1.0e-100;
+                i_k *= scale;
+                i_kplus1 *= scale;
+                i_at_n *= scale;
+            }
+        }
+        // Normalize using the analytic i_0(x) = sinh(x)/x.
+        let true_i0 = ax.sinh() / ax;
+        let result = i_at_n * (true_i0 / i_k);
+        return if x < 0.0 && !n.is_multiple_of(2) {
+            -result
+        } else {
+            result
+        };
+    }
+
     let sh = ax.sinh();
     let ch = ax.cosh();
 
@@ -1673,7 +1711,7 @@ fn spherical_in_nonneg(n: u32, x: f64) -> f64 {
         i_curr = next;
     }
     // Parity: i_n(-x) = (-1)^n i_n(x)
-    if x < 0.0 && n % 2 == 1 {
+    if x < 0.0 && !n.is_multiple_of(2) {
         -i_curr
     } else {
         i_curr
@@ -3985,6 +4023,47 @@ mod tests {
     fn complex_spherical_yn_at_zero_is_negative_inf() {
         let y0 = complex_spherical_yn(0, Complex64::new(0.0, 0.0));
         assert!(y0.re.is_infinite() && y0.re < 0.0);
+    }
+
+    #[test]
+    fn spherical_in_small_x_large_n_matches_series() {
+        // [frankenscipy-0j009] regression: forward recurrence for
+        // spherical i_n catastrophically cancels at small x (e.g.
+        // n=10, x=0.1 gave −213 when the true value is ~7e−21).
+        // Verify the Miller's-recurrence path matches the small-x
+        // Taylor series i_n(x) ≈ x^n/(2n+1)!! · (1 + x²/(2(2n+3))).
+        let x = 0.1_f64;
+        for n in 5_u32..=10 {
+            let got = super::spherical_in_nonneg(n, x);
+            let mut double_fact = 1.0_f64;
+            for k in 1..=n {
+                double_fact *= (2 * k + 1) as f64;
+            }
+            let leading = x.powi(n as i32) / double_fact;
+            let series_truth = leading * (1.0 + x * x / (2.0 * (2 * n + 3) as f64));
+            let rel = ((got - series_truth) / series_truth).abs();
+            assert!(
+                rel < 1e-2,
+                "spherical_in({n}, 0.1) = {got}, series truth ≈ {series_truth} (rel = {rel})"
+            );
+            assert!(got > 0.0, "spherical_in({n}, 0.1) = {got} should be positive");
+        }
+    }
+
+    #[test]
+    fn spherical_in_negative_x_parity() {
+        // i_n(-x) = (-1)^n · i_n(x); verify both even and odd n
+        // round-trip through the Miller's path.
+        let x = 0.1_f64;
+        for n in 5_u32..=8 {
+            let pos = super::spherical_in_nonneg(n, x);
+            let neg = super::spherical_in_nonneg(n, -x);
+            let expected = if n.is_multiple_of(2) { pos } else { -pos };
+            assert!(
+                (neg - expected).abs() < 1e-30 + 1e-10 * pos.abs(),
+                "spherical_in({n}, -0.1) = {neg}, expected {expected}"
+            );
+        }
     }
 
     #[test]
