@@ -2293,6 +2293,92 @@ pub fn frame_signal(x: &[f64], frame_len: usize, hop_len: usize) -> Vec<Vec<f64>
 
 /// Bilinear transform: convert analog (s-domain) to digital (z-domain) filter.
 ///
+/// Elliptic (Cauer) filter order and natural frequency for analog
+/// lowpass design.
+///
+/// Matches `scipy.signal.ellipord(wp, ws, gpass, gstop, analog=True)`
+/// for the lowpass case. Closed-form via complete elliptic integrals K:
+///   k    = wp / ws
+///   k1   = √((10^(gpass/10) − 1) / (10^(gstop/10) − 1))
+///   k'   = √(1 − k²),  k1' = √(1 − k1²)
+///   N    = ⌈ K(k1²) · K(k'²) / (K(k²) · K(k1'²)) ⌉
+///   Wn   = wp
+///
+/// Elliptic filters allow ripple in both passband and stopband and
+/// achieve the lowest order of any classical IIR design for a given
+/// spec. The inline `ellipk_internal` helper computes K(m) via the
+/// arithmetic-geometric mean (Carlson, AGM iteration) to avoid pulling
+/// fsci-special as a workspace dependency.
+pub fn ellipord(
+    wp: f64,
+    ws: f64,
+    gpass: f64,
+    gstop: f64,
+) -> Result<(u32, f64), SignalError> {
+    if !wp.is_finite() || !ws.is_finite() || wp <= 0.0 || ws <= 0.0 {
+        return Err(SignalError::InvalidArgument(
+            "ellipord: wp and ws must be positive finite".to_string(),
+        ));
+    }
+    if wp >= ws {
+        return Err(SignalError::InvalidArgument(
+            "ellipord lowpass: passband edge wp must be < stopband edge ws"
+                .to_string(),
+        ));
+    }
+    if gpass <= 0.0 || gstop <= 0.0 || gpass >= gstop {
+        return Err(SignalError::InvalidArgument(
+            "ellipord: require 0 < gpass < gstop".to_string(),
+        ));
+    }
+    let pass_factor = 10.0_f64.powf(gpass / 10.0) - 1.0;
+    let stop_factor = 10.0_f64.powf(gstop / 10.0) - 1.0;
+    if pass_factor <= 0.0 {
+        return Err(SignalError::InvalidArgument(
+            "ellipord: degenerate passband loss factor".to_string(),
+        ));
+    }
+    let k = wp / ws;
+    let k1 = (pass_factor / stop_factor).sqrt();
+    let k_sq = k * k;
+    let k1_sq = k1 * k1;
+    let k_p_sq = 1.0 - k_sq;
+    let k1_p_sq = 1.0 - k1_sq;
+    let num = ellipk_internal(k1_sq) * ellipk_internal(k_p_sq);
+    let den = ellipk_internal(k_sq) * ellipk_internal(k1_p_sq);
+    if !num.is_finite() || !den.is_finite() || den <= 0.0 {
+        return Err(SignalError::InvalidArgument(format!(
+            "ellipord: degenerate K-ratio (num={num}, den={den})"
+        )));
+    }
+    let order_real = num / den;
+    let order = order_real.ceil().max(1.0) as u32;
+    Ok((order, wp))
+}
+
+/// Complete elliptic integral of the first kind K(m) via the
+/// arithmetic-geometric mean iteration. Domain m ∈ [0, 1).
+fn ellipk_internal(m: f64) -> f64 {
+    if m < 0.0 || m >= 1.0 {
+        return f64::NAN;
+    }
+    if m == 0.0 {
+        return std::f64::consts::FRAC_PI_2;
+    }
+    let mut a = 1.0_f64;
+    let mut b = (1.0 - m).sqrt();
+    for _ in 0..50 {
+        let next_a = 0.5 * (a + b);
+        let next_b = (a * b).sqrt();
+        if (next_a - next_b).abs() < 1.0e-15 * next_a {
+            return std::f64::consts::FRAC_PI_2 / next_a;
+        }
+        a = next_a;
+        b = next_b;
+    }
+    std::f64::consts::FRAC_PI_2 / a
+}
+
 /// Chebyshev type-II (inverse) filter order and natural frequency for
 /// analog lowpass design.
 ///
@@ -14182,6 +14268,47 @@ mod tests {
         let (n, wn) = cheb1ord(1.0, 2.0, 1.0, 40.0).expect("cheb1ord");
         assert_eq!(n, 5);
         assert!((wn - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn ellipord_known_design_returns_smallest_order_among_filter_types() {
+        // Elliptic is the lowest-order classical filter for any spec.
+        // For (wp=1, ws=2, gpass=1 dB, gstop=40 dB) it should beat both
+        // Butterworth (8) and Chebyshev (5).
+        let (n_butter, _) = buttord(1.0, 2.0, 1.0, 40.0).unwrap();
+        let (n_cheby, _) = cheb1ord(1.0, 2.0, 1.0, 40.0).unwrap();
+        let (n_ellip, _) = ellipord(1.0, 2.0, 1.0, 40.0).unwrap();
+        assert!(
+            n_ellip <= n_cheby,
+            "elliptic N={n_ellip} should be ≤ Chebyshev N={n_cheby}"
+        );
+        assert!(
+            n_cheby <= n_butter,
+            "Chebyshev N={n_cheby} should be ≤ Butterworth N={n_butter}"
+        );
+    }
+
+    #[test]
+    fn ellipord_metamorphic_lower_than_chebyshev_across_specs() {
+        for spec in &[
+            (1.0_f64, 2.0, 1.0, 40.0),
+            (1.0, 1.5, 0.5, 60.0),
+            (1.0, 3.0, 2.0, 80.0),
+        ] {
+            let (n_cheby, _) = cheb1ord(spec.0, spec.1, spec.2, spec.3).unwrap();
+            let (n_ellip, _) = ellipord(spec.0, spec.1, spec.2, spec.3).unwrap();
+            assert!(
+                n_ellip <= n_cheby,
+                "spec {spec:?}: elliptic N={n_ellip} should be ≤ Chebyshev N={n_cheby}"
+            );
+        }
+    }
+
+    #[test]
+    fn ellipord_rejects_invalid_specs() {
+        assert!(ellipord(2.0, 1.0, 1.0, 40.0).is_err());
+        assert!(ellipord(1.0, 2.0, 40.0, 1.0).is_err());
+        assert!(ellipord(-1.0, 2.0, 1.0, 40.0).is_err());
     }
 
     #[test]

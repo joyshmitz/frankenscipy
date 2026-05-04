@@ -881,6 +881,29 @@ impl ContinuousDistribution for StudentT {
         }
     }
 
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        if data.len() < 3 {
+            return Err(FitError::InsufficientData {
+                required: 3,
+                actual: data.len(),
+            });
+        }
+        if let Some(&x) = data.iter().find(|&&x| !x.is_finite()) {
+            return Err(FitError::UnsupportedData(format!(
+                "StudentT fit data contains non-finite value: {x}"
+            )));
+        }
+
+        let fitted = Self::fit(data);
+        if fitted.df.is_finite() && fitted.df > 0.0 {
+            Ok(fitted)
+        } else {
+            Err(FitError::NonConvergent(
+                "StudentT fit could not estimate positive degrees of freedom".to_owned(),
+            ))
+        }
+    }
+
     fn skewness(&self) -> f64 {
         if self.df > 3.0 { 0.0 } else { f64::NAN }
     }
@@ -1115,6 +1138,34 @@ impl ContinuousDistribution for ChiSquared {
         }
 
         Self { df: mean }
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        if data.is_empty() {
+            return Err(FitError::InsufficientData {
+                required: 1,
+                actual: 0,
+            });
+        }
+        if let Some(&x) = data.iter().find(|&&x| !x.is_finite()) {
+            return Err(FitError::UnsupportedData(format!(
+                "ChiSquared fit data contains non-finite value: {x}"
+            )));
+        }
+        if let Some(&x) = data.iter().find(|&&x| x < 0.0) {
+            return Err(FitError::UnsupportedData(format!(
+                "ChiSquared support is [0, infinity); got {x}"
+            )));
+        }
+
+        let fitted = Self::fit(data);
+        if fitted.df.is_finite() && fitted.df > 0.0 {
+            Ok(fitted)
+        } else {
+            Err(FitError::NonConvergent(
+                "ChiSquared fit produced non-positive degrees of freedom".to_owned(),
+            ))
+        }
     }
 
     fn skewness(&self) -> f64 {
@@ -1530,6 +1581,35 @@ impl ContinuousDistribution for FDistribution {
 
         Self { dfn, dfd }
     }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        if data.len() < 2 {
+            return Err(FitError::InsufficientData {
+                required: 2,
+                actual: data.len(),
+            });
+        }
+        if let Some(&x) = data.iter().find(|&&x| !x.is_finite()) {
+            return Err(FitError::UnsupportedData(format!(
+                "FDistribution fit data contains non-finite value: {x}"
+            )));
+        }
+        if let Some(&x) = data.iter().find(|&&x| x < 0.0) {
+            return Err(FitError::UnsupportedData(format!(
+                "FDistribution support is [0, infinity); got {x}"
+            )));
+        }
+
+        let fitted = Self::fit(data);
+        if fitted.dfn.is_finite() && fitted.dfn > 0.0 && fitted.dfd.is_finite() && fitted.dfd > 4.0
+        {
+            Ok(fitted)
+        } else {
+            Err(FitError::NonConvergent(
+                "FDistribution moment fit could not estimate valid degrees of freedom".to_owned(),
+            ))
+        }
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -1935,6 +2015,35 @@ impl ContinuousDistribution for Weibull {
         let xc_sum: f64 = data.iter().map(|&x| x.powf(c)).sum();
         let scale = (xc_sum / n).powf(1.0 / c);
         Self { c, scale }
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        if data.len() < 2 {
+            return Err(FitError::InsufficientData {
+                required: 2,
+                actual: data.len(),
+            });
+        }
+        if let Some(&x) = data.iter().find(|&&x| !x.is_finite()) {
+            return Err(FitError::UnsupportedData(format!(
+                "Weibull fit data contains non-finite value: {x}"
+            )));
+        }
+        if let Some(&x) = data.iter().find(|&&x| x <= 0.0) {
+            return Err(FitError::UnsupportedData(format!(
+                "Weibull support is (0, infinity); got {x}"
+            )));
+        }
+
+        let fitted = Self::fit(data);
+        if fitted.c.is_finite() && fitted.c > 0.0 && fitted.scale.is_finite() && fitted.scale > 0.0
+        {
+            Ok(fitted)
+        } else {
+            Err(FitError::NonConvergent(
+                "Weibull MLE could not estimate positive shape and scale".to_owned(),
+            ))
+        }
     }
 }
 
@@ -20548,6 +20657,27 @@ mod tests {
         );
     }
 
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct NoFitDistribution;
+
+    impl ContinuousDistribution for NoFitDistribution {
+        fn pdf(&self, _x: f64) -> f64 {
+            0.0
+        }
+
+        fn cdf(&self, _x: f64) -> f64 {
+            0.0
+        }
+
+        fn mean(&self) -> f64 {
+            f64::NAN
+        }
+
+        fn var(&self) -> f64 {
+            f64::NAN
+        }
+    }
+
     // ── Generalized means ───────────────────────────────────────────
 
     #[test]
@@ -22099,7 +22229,8 @@ mod tests {
         assert_eq!(ledger.lock().unwrap().len(), 2, "UnsupportedData must emit");
 
         // NotImplemented distribution — emits too.
-        let r = <Chi as ContinuousDistribution>::try_fit_with_audit(&[1.0, 2.0], &ledger);
+        let r =
+            <NoFitDistribution as ContinuousDistribution>::try_fit_with_audit(&[1.0, 2.0], &ledger);
         assert!(matches!(r, Err(FitError::NotImplemented { .. })));
         assert_eq!(ledger.lock().unwrap().len(), 3, "NotImplemented must emit");
     }
@@ -22110,7 +22241,7 @@ mod tests {
         // must return FitError::NotImplemented from try_fit rather than
         // panic via the legacy fit() default.
         let data = [1.0, 2.0, 3.0];
-        let result = <Chi as ContinuousDistribution>::try_fit(&data);
+        let result = <NoFitDistribution as ContinuousDistribution>::try_fit(&data);
         assert!(
             matches!(result, Err(FitError::NotImplemented { .. })),
             "try_fit default should return NotImplemented"
@@ -22487,6 +22618,65 @@ mod tests {
         assert!(StudentT::fit(&[]).df.is_nan());
         assert!(StudentT::fit(&[1.0, f64::NAN, 3.0]).df.is_nan());
         assert!(StudentT::fit(&[7.0, 7.0, 7.0]).df.is_nan());
+    }
+
+    #[test]
+    fn fit_only_stats_distributions_expose_typed_try_fit() {
+        let chi_data = [2.0, 4.0, 6.0];
+        let chi = ChiSquared::try_fit(&chi_data).expect("chi-squared try_fit");
+        assert_close(chi.df, ChiSquared::fit(&chi_data).df, 1e-12, "chi2 df");
+
+        let f_reference = FDistribution::new(20.0, 30.0);
+        let f_mean = f_reference.mean();
+        let f_var = f_reference.var();
+        let f_delta = (1.5 * f_var).sqrt();
+        let f_data = [f_mean - f_delta, f_mean, f_mean + f_delta];
+        let f = FDistribution::try_fit(&f_data).expect("F try_fit");
+        assert_close(f.dfn, f_reference.dfn, 1e-10, "F dfn");
+        assert_close(f.dfd, f_reference.dfd, 1e-10, "F dfd");
+
+        let weibull_reference = Weibull::new(2.0, 3.0);
+        let weibull_data: Vec<f64> = (1..100)
+            .map(|i| weibull_reference.ppf(i as f64 / 100.0))
+            .collect();
+        let weibull = Weibull::try_fit(&weibull_data).expect("Weibull try_fit");
+        assert!(
+            weibull.c.is_finite() && weibull.c > 0.0,
+            "Weibull shape should be positive: {}",
+            weibull.c
+        );
+        assert!(
+            weibull.scale.is_finite() && weibull.scale > 0.0,
+            "Weibull scale should be positive: {}",
+            weibull.scale
+        );
+
+        let student_reference = StudentT::new(8.0);
+        let student_data: Vec<f64> = (1..120)
+            .map(|i| student_reference.ppf(i as f64 / 120.0))
+            .collect();
+        let student = StudentT::try_fit(&student_data).expect("StudentT try_fit");
+        assert_close(student.df, StudentT::fit(&student_data).df, 1e-12, "t df");
+    }
+
+    #[test]
+    fn fit_only_stats_try_fit_rejects_bad_samples() {
+        assert!(matches!(
+            ChiSquared::try_fit(&[-1.0, 2.0]),
+            Err(FitError::UnsupportedData(_))
+        ));
+        assert!(matches!(
+            FDistribution::try_fit(&[1.0]),
+            Err(FitError::InsufficientData { .. })
+        ));
+        assert!(matches!(
+            Weibull::try_fit(&[1.0, 0.0]),
+            Err(FitError::UnsupportedData(_))
+        ));
+        assert!(matches!(
+            StudentT::try_fit(&[7.0, 7.0, 7.0]),
+            Err(FitError::NonConvergent(_))
+        ));
     }
 
     // ── Inverse survival function tests ───────────────────────────
