@@ -971,7 +971,19 @@ pub fn struve(v: f64, x: f64) -> f64 {
         return f64::NAN;
     }
     if x == 0.0 {
-        return 0.0;
+        // Leading term (x/2)^(v+1) / (Γ(3/2)·Γ(v+3/2)). Resolves
+        // [frankenscipy-udtt9].
+        if v > -1.0 {
+            return 0.0;
+        }
+        if v == -1.0 {
+            // 1 / (Γ(3/2) · Γ(1/2)) = 1 / ((√π/2)·√π) = 2/π
+            return 2.0 / PI;
+        }
+        // v < -1: leading term diverges; sign depends on Γ(v+3/2)
+        // which oscillates at half-integer poles. Return NaN rather
+        // than guessing.
+        return f64::NAN;
     }
     if x.abs() > 30.0 && v.abs() < x.abs() / 2.0 {
         return struve_asymptotic(v, x);
@@ -8249,5 +8261,28 @@ mod tests {
     fn tklmbda_propagates_nan() {
         assert!(tklmbda(f64::NAN, 0.5).is_nan());
         assert!(tklmbda(0.5, f64::NAN).is_nan());
+    }
+
+    #[test]
+    fn struve_at_zero_handles_v_minus_one() {
+        // [frankenscipy-udtt9] Regression: previously returned 0 for
+        // every v at x=0; the leading series term gives a finite
+        // value at v=-1 and 0 only for v > -1.
+        // For v > -1, H_v(0) = 0.
+        assert_eq!(struve(0.0, 0.0), 0.0);
+        assert_eq!(struve(0.5, 0.0), 0.0);
+        assert_eq!(struve(1.5, 0.0), 0.0);
+        assert_eq!(struve(2.0, 0.0), 0.0);
+        // For v = -1, H_{-1}(0) = 2/π.
+        let h_minus_one = struve(-1.0, 0.0);
+        let expected = 2.0 / PI;
+        assert!(
+            (h_minus_one - expected).abs() < 1e-12,
+            "struve(-1, 0) = {h_minus_one}, expected {expected}"
+        );
+        // For v < -1, the leading term diverges and the limit sign is
+        // undefined; we conservatively return NaN.
+        assert!(struve(-1.5, 0.0).is_nan());
+        assert!(struve(-2.0, 0.0).is_nan());
     }
 }
