@@ -1178,6 +1178,21 @@ impl BarycentricInterpolator {
     }
 }
 
+/// One-shot barycentric interpolation: build a `BarycentricInterpolator`
+/// from `(xi, yi)` and evaluate it at every point in `x_new`.
+///
+/// Matches `scipy.interpolate.barycentric_interpolate(xi, yi, x)` for
+/// 1-D real inputs. Returns the interpolated values as a `Vec<f64>` of
+/// the same length as `x_new`.
+pub fn barycentric_interpolate(
+    xi: &[f64],
+    yi: &[f64],
+    x_new: &[f64],
+) -> Result<Vec<f64>, InterpError> {
+    let interp = BarycentricInterpolator::new(xi, yi)?;
+    Ok(interp.eval_many(x_new))
+}
+
 #[derive(Debug, Clone)]
 pub struct UnivariateSpline {
     spline: BSpline,
@@ -5808,5 +5823,42 @@ mod tests {
         let z = vec![vec![0.0, 1.0, 2.0, 3.0], vec![1.0, 2.0, 3.0, 4.0]];
         let err = RectBivariateSpline::new(&x, &y, &z, 3, 3).expect_err("too few points");
         assert!(matches!(err, InterpError::TooFewPoints { .. }));
+    }
+
+    #[test]
+    fn barycentric_interpolate_recovers_polynomial_exactly() {
+        // f(x) = x³ - 2x + 1 sampled at five nodes; barycentric interpolation
+        // through n+1 nodes recovers any polynomial of degree ≤ n exactly.
+        let xi = [-2.0_f64, -1.0, 0.0, 1.0, 2.0];
+        let yi: Vec<f64> = xi.iter().map(|x| x * x * x - 2.0 * x + 1.0).collect();
+        let x_new = [-1.5_f64, -0.5, 0.5, 1.5];
+        let got = barycentric_interpolate(&xi, &yi, &x_new).expect("interp");
+        let expected: Vec<f64> = x_new
+            .iter()
+            .map(|x| x * x * x - 2.0 * x + 1.0)
+            .collect();
+        for (g, e) in got.iter().zip(expected.iter()) {
+            assert!(
+                (g - e).abs() < 1e-12,
+                "barycentric reproduction: got {g}, expected {e}"
+            );
+        }
+    }
+
+    #[test]
+    fn barycentric_interpolate_passes_through_nodes() {
+        let xi = [0.0_f64, 1.0, 3.0, 5.0];
+        let yi = [2.0_f64, 5.0, 1.0, 4.0];
+        let got = barycentric_interpolate(&xi, &yi, &xi).expect("interp");
+        for (g, y) in got.iter().zip(yi.iter()) {
+            assert!((g - y).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn barycentric_interpolate_rejects_mismatched_lengths() {
+        let err = barycentric_interpolate(&[0.0, 1.0], &[2.0], &[0.5])
+            .expect_err("length mismatch must be rejected");
+        assert!(matches!(err, InterpError::LengthMismatch { .. }));
     }
 }
