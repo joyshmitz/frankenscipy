@@ -938,7 +938,9 @@ pub fn lombscargle(
     }
 
     let mut power = Vec::with_capacity(freqs.len());
-    let signal_energy = y.iter().map(|value| value * value).sum::<f64>();
+    let sample_count = x.len() as f64;
+    let inv_sample_count = 1.0 / sample_count;
+    let mean_square = y.iter().map(|value| value * value).sum::<f64>() * inv_sample_count;
 
     for &omega in freqs {
         if !omega.is_finite() {
@@ -949,51 +951,60 @@ pub fn lombscargle(
             let y_sum = y.iter().sum::<f64>();
             let p = 0.5 * y_sum.powi(2) / x.len() as f64;
             power.push(if normalize {
-                if signal_energy == 0.0 {
+                if mean_square == 0.0 {
                     f64::NAN
                 } else {
-                    p * (2.0 / signal_energy)
+                    p * (2.0 / (sample_count * mean_square))
                 }
             } else {
                 p
             });
             continue;
         }
-        // Compute tau: phase offset for orthogonality
-        let mut s2 = 0.0;
-        let mut c2 = 0.0;
+
+        let mut cos2_mean = 0.0;
+        let mut cos_sin_mean = 0.0;
         for &xi in x {
-            s2 += (2.0 * omega * xi).sin();
-            c2 += (2.0 * omega * xi).cos();
-        }
-        let tau = (s2 / c2).atan() / (2.0 * omega);
-
-        // Compute power at this frequency
-        let mut y_cos_sum = 0.0;
-        let mut cos2_sum = 0.0;
-        let mut y_sin_sum = 0.0;
-        let mut sin2_sum = 0.0;
-
-        for (&xi, &yi) in x.iter().zip(y.iter()) {
-            let phase = omega * (xi - tau);
+            let phase = omega * xi;
             let c = phase.cos();
             let s = phase.sin();
-            y_cos_sum += yi * c;
-            cos2_sum += c * c;
-            y_sin_sum += yi * s;
-            sin2_sum += s * s;
+            cos2_mean += c * c;
+            cos_sin_mean += c * s;
         }
+        cos2_mean *= inv_sample_count;
+        cos_sin_mean *= inv_sample_count;
+        let sin2_mean = 1.0 - cos2_mean;
+        let tau_angle = 0.5 * (2.0 * cos_sin_mean).atan2(cos2_mean - sin2_mean);
 
-        let p = if cos2_sum > 0.0 && sin2_sum > 0.0 {
-            0.5 * (y_cos_sum.powi(2) / cos2_sum + y_sin_sum.powi(2) / sin2_sum)
-        } else {
-            0.0
-        };
+        let mut y_cos_mean = 0.0;
+        let mut y_sin_mean = 0.0;
+        let mut shifted_cos2_mean = 0.0;
+        for (&xi, &yi) in x.iter().zip(y.iter()) {
+            let phase = omega * xi - tau_angle;
+            let c = phase.cos();
+            let s = phase.sin();
+            y_cos_mean += yi * c;
+            y_sin_mean += yi * s;
+            shifted_cos2_mean += c * c;
+        }
+        y_cos_mean *= inv_sample_count;
+        y_sin_mean *= inv_sample_count;
+        shifted_cos2_mean *= inv_sample_count;
+        let shifted_sin2_mean = 1.0 - shifted_cos2_mean;
+
+        let epsneg = f64::EPSILON / 2.0;
+        let shifted_cos2_mean = shifted_cos2_mean.max(epsneg);
+        let shifted_sin2_mean = shifted_sin2_mean.max(epsneg);
+        let a = y_cos_mean / shifted_cos2_mean;
+        let b = y_sin_mean / shifted_sin2_mean;
+        let normalized_power = 2.0 * (a * y_cos_mean + b * y_sin_mean);
+        let p = normalized_power * sample_count / 4.0;
+
         power.push(if normalize {
-            if signal_energy == 0.0 {
+            if mean_square == 0.0 {
                 f64::NAN
             } else {
-                p * (2.0 / signal_energy)
+                normalized_power * 0.5 / mean_square
             }
         } else {
             p
@@ -2282,6 +2293,62 @@ pub fn frame_signal(x: &[f64], frame_len: usize, hop_len: usize) -> Vec<Vec<f64>
 
 /// Bilinear transform: convert analog (s-domain) to digital (z-domain) filter.
 ///
+/// Chebyshev type-II (inverse) filter order and natural frequency for
+/// analog lowpass design.
+///
+/// Matches `scipy.signal.cheb2ord(wp, ws, gpass, gstop, analog=True)`
+/// for the lowpass case. The order formula is identical to cheb1ord
+/// (both Chebyshev variants share the same order curve); the
+/// difference is the natural frequency:
+///   Wn = ws / cosh(acosh(√((10^(gstop/10) − 1) / (10^(gpass/10) − 1))) / N)
+/// Type-II concentrates ripple in the stopband, so the −3 dB point
+/// sits below the stopband edge ws.
+pub fn cheb2ord(
+    wp: f64,
+    ws: f64,
+    gpass: f64,
+    gstop: f64,
+) -> Result<(u32, f64), SignalError> {
+    if !wp.is_finite() || !ws.is_finite() || wp <= 0.0 || ws <= 0.0 {
+        return Err(SignalError::InvalidArgument(
+            "cheb2ord: wp and ws must be positive finite".to_string(),
+        ));
+    }
+    if wp >= ws {
+        return Err(SignalError::InvalidArgument(
+            "cheb2ord lowpass: passband edge wp must be < stopband edge ws"
+                .to_string(),
+        ));
+    }
+    if gpass <= 0.0 || gstop <= 0.0 || gpass >= gstop {
+        return Err(SignalError::InvalidArgument(
+            "cheb2ord: require 0 < gpass < gstop".to_string(),
+        ));
+    }
+    let pass_factor = 10.0_f64.powf(gpass / 10.0) - 1.0;
+    let stop_factor = 10.0_f64.powf(gstop / 10.0) - 1.0;
+    if pass_factor <= 0.0 {
+        return Err(SignalError::InvalidArgument(
+            "cheb2ord: degenerate passband loss factor".to_string(),
+        ));
+    }
+    let q = (stop_factor / pass_factor).sqrt();
+    let q_acosh = q.acosh();
+    let den = (ws / wp).acosh();
+    if !q_acosh.is_finite() || !den.is_finite() || den <= 0.0 {
+        return Err(SignalError::InvalidArgument(format!(
+            "cheb2ord: degenerate spec (q_acosh={q_acosh}, den={den})"
+        )));
+    }
+    let order_real = q_acosh / den;
+    let order = order_real.ceil().max(1.0) as u32;
+    // Wn = ws / cosh(q_acosh / N) — the −3 dB point of the Type-II
+    // design that just meets the stopband spec at ws.
+    let cosh_arg = q_acosh / order as f64;
+    let wn = ws / cosh_arg.cosh();
+    Ok((order, wn))
+}
+
 /// Chebyshev type-I filter order and natural frequency for analog
 /// lowpass design.
 ///
@@ -14115,6 +14182,38 @@ mod tests {
         let (n, wn) = cheb1ord(1.0, 2.0, 1.0, 40.0).expect("cheb1ord");
         assert_eq!(n, 5);
         assert!((wn - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn cheb2ord_metamorphic_order_matches_cheb1ord() {
+        // Order formula is identical for type-I and type-II; only Wn
+        // differs.
+        for spec in &[
+            (1.0_f64, 2.0, 1.0, 40.0),
+            (1.0, 1.5, 0.5, 60.0),
+            (1.0, 3.0, 2.0, 80.0),
+        ] {
+            let (n1, _) = cheb1ord(spec.0, spec.1, spec.2, spec.3).unwrap();
+            let (n2, _) = cheb2ord(spec.0, spec.1, spec.2, spec.3).unwrap();
+            assert_eq!(
+                n1, n2,
+                "spec {spec:?}: cheb1ord N={n1} vs cheb2ord N={n2}"
+            );
+        }
+    }
+
+    #[test]
+    fn cheb2ord_metamorphic_wn_between_wp_and_ws() {
+        // Type-II's −3 dB point sits between wp and ws.
+        let (_, wn) = cheb2ord(1.0, 2.0, 1.0, 40.0).expect("cheb2ord");
+        assert!(wn > 1.0 && wn < 2.0, "wn={wn} should be in (wp, ws)");
+    }
+
+    #[test]
+    fn cheb2ord_rejects_invalid_specs() {
+        assert!(cheb2ord(2.0, 1.0, 1.0, 40.0).is_err());
+        assert!(cheb2ord(1.0, 2.0, 40.0, 1.0).is_err());
+        assert!(cheb2ord(-1.0, 2.0, 1.0, 40.0).is_err());
     }
 
     #[test]
