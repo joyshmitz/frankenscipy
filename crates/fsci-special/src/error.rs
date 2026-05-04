@@ -642,4 +642,32 @@ mod tests {
         assert_complex_close(values[1], values[0].conj(), 1.0e-10);
         Ok(())
     }
+
+    #[test]
+    fn erf_metamorphic_complementary_identity() {
+        // /testing-metamorphic: erf(x) + erfc(x) = 1 for all x.
+        // Independent of any specific value, so it catches drift in
+        // either function without hard-coded references. Verify
+        // across small, moderate, and tail arguments.
+        for &x in &[-3.0_f64, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0, 3.5] {
+            let lhs = erf_scalar(x) + erfc_scalar(x);
+            assert!(
+                (lhs - 1.0).abs() < 1e-15,
+                "erf({x}) + erfc({x}) = {lhs}, expected 1"
+            );
+        }
+    }
+
+    #[test]
+    fn erf_metamorphic_odd_symmetry() {
+        // erf(-x) = -erf(x). Closed-form identity from the integral.
+        for &x in &[0.1_f64, 0.5, 1.0, 2.0, 3.5] {
+            let lhs = super::erf_scalar(-x);
+            let rhs = -super::erf_scalar(x);
+            assert!(
+                (lhs - rhs).abs() < 1e-15,
+                "erf(-{x}) = {lhs}, expected -erf({x}) = {rhs}"
+            );
+        }
+    }
 }
