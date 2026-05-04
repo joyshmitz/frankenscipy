@@ -2794,6 +2794,21 @@ impl KroghInterpolator {
     }
 }
 
+/// One-shot Krogh interpolation: build a `KroghInterpolator` from
+/// `(xi, yi)` and evaluate it at every point in `x_new`.
+///
+/// Matches `scipy.interpolate.krogh_interpolate(xi, yi, x)` for 1-D real
+/// inputs. Returns the interpolated values as a `Vec<f64>` of the same
+/// length as `x_new`.
+pub fn krogh_interpolate(
+    xi: &[f64],
+    yi: &[f64],
+    x_new: &[f64],
+) -> Result<Vec<f64>, InterpError> {
+    let interp = KroghInterpolator::new(xi, yi)?;
+    Ok(interp.evaluate_many(x_new))
+}
+
 /// Lagrange interpolation polynomial.
 ///
 /// Returns the polynomial coefficients (highest degree first) that interpolate
@@ -5823,6 +5838,40 @@ mod tests {
         let z = vec![vec![0.0, 1.0, 2.0, 3.0], vec![1.0, 2.0, 3.0, 4.0]];
         let err = RectBivariateSpline::new(&x, &y, &z, 3, 3).expect_err("too few points");
         assert!(matches!(err, InterpError::TooFewPoints { .. }));
+    }
+
+    #[test]
+    fn krogh_interpolate_recovers_polynomial_exactly() {
+        // Krogh polynomial through n+1 nodes recovers degree-≤n polynomials
+        // exactly — same property as barycentric and Lagrange.
+        let xi = [-2.0_f64, -1.0, 0.0, 1.0, 2.0];
+        let yi: Vec<f64> = xi.iter().map(|x| 2.0 * x * x - 3.0 * x + 1.0).collect();
+        let x_new = [-1.5_f64, -0.5, 0.5, 1.5];
+        let got = krogh_interpolate(&xi, &yi, &x_new).expect("interp");
+        let expected: Vec<f64> = x_new
+            .iter()
+            .map(|x| 2.0 * x * x - 3.0 * x + 1.0)
+            .collect();
+        for (g, e) in got.iter().zip(expected.iter()) {
+            assert!((g - e).abs() < 1e-12, "krogh: got {g}, expected {e}");
+        }
+    }
+
+    #[test]
+    fn krogh_interpolate_metamorphic_passes_through_nodes() {
+        let xi = [0.0_f64, 0.5, 1.5, 3.0];
+        let yi = [1.0_f64, 4.0, 2.0, 5.0];
+        let got = krogh_interpolate(&xi, &yi, &xi).expect("interp");
+        for (g, y) in got.iter().zip(yi.iter()) {
+            assert!((g - y).abs() < 1e-10);
+        }
+    }
+
+    #[test]
+    fn krogh_interpolate_rejects_duplicate_knots() {
+        let err = krogh_interpolate(&[0.0, 1.0, 1.0], &[2.0, 3.0, 4.0], &[0.5])
+            .expect_err("duplicate knots must be rejected");
+        assert!(matches!(err, InterpError::InvalidArgument { .. }));
     }
 
     #[test]
