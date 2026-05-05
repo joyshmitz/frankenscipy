@@ -10335,14 +10335,12 @@ pub fn energy_distance(u: &[f64], v: &[f64]) -> f64 {
     let nu = u.len() as f64;
     let nv = v.len() as f64;
 
-    // E|X-Y|: mean of |u_i - v_j| over all pairs
-    let mut e_xy = 0.0;
-    for &ui in u {
-        for &vj in v {
-            e_xy += (ui - vj).abs();
-        }
-    }
-    e_xy /= nu * nv;
+    // E|X-Y|: mean of |u_i - v_j| over all pairs.
+    // Resolves [frankenscipy-ggmrw]: closed-form sweep on sorted u and v,
+    // O((N+M) log(N+M)) total instead of the previous O(N·M) double loop.
+    // For each sorted u_i with c = #{v_j ≤ u_i} and S = Σ_{v_j ≤ u_i} v_j,
+    //   Σ_j |u_i − v_j| = (2c − M)·u_i + S_total − 2·S.
+    let e_xy = cross_set_l1_pair_sum(u, v) / (nu * nv);
 
     // E|X-X'|: mean of |u_i - u_j| over all pairs.
     // Resolves [frankenscipy-6nuo5]: for sorted s of length n, the
@@ -10359,6 +10357,34 @@ pub fn energy_distance(u: &[f64], v: &[f64]) -> f64 {
     } else {
         d_sq.max(0.0).sqrt()
     }
+}
+
+/// Compute the cross-set L1 pair sum  Σ_i Σ_j |u_i − v_j|  in
+/// O((N+M) log(N+M)) via a two-pointer sweep on the sorted inputs.
+/// Equivalent to the naïve O(N·M) double loop. Used by
+/// energy_distance to avoid the quadratic cross-set term.
+fn cross_set_l1_pair_sum(u: &[f64], v: &[f64]) -> f64 {
+    let mut su: Vec<f64> = u.to_vec();
+    su.sort_by(|a, b| a.total_cmp(b));
+    let mut sv: Vec<f64> = v.to_vec();
+    sv.sort_by(|a, b| a.total_cmp(b));
+
+    let m = sv.len();
+    let m_f = m as f64;
+    let s_total_v: f64 = sv.iter().sum();
+
+    let mut total = 0.0_f64;
+    let mut j = 0_usize;
+    let mut s_le_v = 0.0_f64;
+    for &ui in &su {
+        while j < m && sv[j] <= ui {
+            s_le_v += sv[j];
+            j += 1;
+        }
+        let c_le = j as f64;
+        total += (2.0 * c_le - m_f) * ui + s_total_v - 2.0 * s_le_v;
+    }
+    total
 }
 
 /// Compute the upper-triangle pair sum  Σ_{i<j} |x_j − x_i|  in
@@ -27976,6 +28002,51 @@ mod tests {
         // Empty / singleton → 0.
         assert_eq!(within_set_l1_pair_sum(&[]), 0.0);
         assert_eq!(within_set_l1_pair_sum(&[7.0]), 0.0);
+    }
+
+    #[test]
+    fn energy_distance_cross_set_pair_sum_matches_naive() {
+        // /profiling-software-performance regression for
+        // [frankenscipy-ggmrw]: energy_distance now uses the sorted
+        // two-pointer closed form for the cross-set L1 pair sum.
+        // Verify equivalence to the naïve O(N·M) double loop on
+        // varied-shape, varied-overlap pairs.
+        let cases: &[(&[f64], &[f64])] = &[
+            (&[1.0, 2.0, 3.0], &[2.0, 4.0]),
+            (&[1.0, 3.0], &[2.0, 4.0]),
+            (&[5.0, 6.0, 7.0], &[1.0, 2.0]),
+            (&[1.5, 2.5, 0.5, 4.0, -1.0], &[3.0, 0.0, 2.0]),
+            (&[7.0, 7.0, 7.0], &[7.0, 7.0]),
+            (&[-2.0, 0.0, 2.0, 4.0], &[1.0, 3.0, 5.0, 7.0]),
+        ];
+        for (u, v) in cases {
+            let mut naive = 0.0_f64;
+            for &ui in *u {
+                for &vj in *v {
+                    naive += (ui - vj).abs();
+                }
+            }
+            let closed = cross_set_l1_pair_sum(u, v);
+            assert!(
+                (naive - closed).abs() < 1e-9 * naive.abs().max(1.0),
+                "cross-set closed form ({closed}) != naive ({naive}) for u={u:?}, v={v:?}"
+            );
+        }
+
+        // Larger varied case to exercise the merge-pointer path.
+        let big_u: Vec<f64> = (0..50).map(|i| (i as f64).sin() * 2.0 + 0.3).collect();
+        let big_v: Vec<f64> = (0..37).map(|i| (i as f64 * 1.7).cos() * 3.0 - 0.2).collect();
+        let mut naive = 0.0_f64;
+        for &ui in &big_u {
+            for &vj in &big_v {
+                naive += (ui - vj).abs();
+            }
+        }
+        let closed = cross_set_l1_pair_sum(&big_u, &big_v);
+        assert!(
+            (naive - closed).abs() < 1e-9 * naive.abs().max(1.0),
+            "cross-set closed form ({closed}) != naive ({naive}) on 50×37 sample"
+        );
     }
 
     #[test]
