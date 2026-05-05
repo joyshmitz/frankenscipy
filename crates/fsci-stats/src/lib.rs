@@ -29086,6 +29086,68 @@ mod tests {
     }
 
     #[test]
+    fn logseries_pmf_at_p_half_matches_closed_form() {
+        // /testing-golden-artifacts for [frankenscipy-7axi5]:
+        //   pmf(1; 0.5) = -0.5 / ln(0.5)              ≈ 0.7213475
+        //   pmf(2; 0.5) = -0.25 / (2·ln(0.5))         ≈ 0.1803369
+        //   pmf(3; 0.5) = -0.125 / (3·ln(0.5))        ≈ 0.0601123
+        let dist = LogSeries::new(0.5);
+        let log_half = (0.5_f64).ln();
+        for &(k, expected) in &[
+            (1u64, -0.5 / log_half),
+            (2, -0.25 / (2.0 * log_half)),
+            (3, -0.125 / (3.0 * log_half)),
+        ] {
+            let actual = dist.pmf(k);
+            assert!(
+                (actual - expected).abs() < 1e-12,
+                "logser pmf({k}; 0.5) = {actual}, expected {expected}"
+            );
+        }
+        // pmf(0) = 0 (out of support)
+        assert_eq!(dist.pmf(0u64), 0.0);
+    }
+
+    #[test]
+    fn logseries_cdf_converges_to_one_in_tail() {
+        // The PMF sums to 1 by construction; cdf at large k should
+        // be very close to 1.
+        let dist = LogSeries::new(0.7);
+        let tail = dist.cdf(200u64);
+        assert!(
+            (tail - 1.0).abs() < 1e-9,
+            "logser cdf(200; 0.7) = {tail}, expected ≈ 1"
+        );
+    }
+
+    #[test]
+    fn logseries_mean_matches_closed_form() {
+        // mean = -p / ((1-p) · ln(1-p))  =  p / ((1-p) · norm)
+        // For p=0.5: mean = -0.5 / (0.5 · ln(0.5)) = -1/ln(0.5)
+        //                 = 1/ln(2) ≈ 1.44269504
+        let dist = LogSeries::new(0.5);
+        let expected = 1.0 / (2.0_f64).ln();
+        assert!(
+            (dist.mean() - expected).abs() < 1e-12,
+            "logser mean = {}, expected {}",
+            dist.mean(),
+            expected
+        );
+    }
+
+    #[test]
+    fn logseries_var_is_positive() {
+        // Verify variance is positive and finite for interior p.
+        for &p in &[0.2_f64, 0.5, 0.8, 0.95] {
+            let v = LogSeries::new(p).var();
+            assert!(
+                v > 0.0 && v.is_finite(),
+                "logser({p}).var() = {v}, expected positive finite"
+            );
+        }
+    }
+
+    #[test]
     fn rv_discrete_basic() {
         let xk = vec![1.0, 2.0, 3.0];
         let pk = vec![0.2, 0.5, 0.3];
