@@ -1311,40 +1311,44 @@ pub fn silhouette_score(data: &[Vec<f64>], labels: &[usize]) -> Result<f64, Clus
     let (labels, k) = validate_cluster_metric_data(data, labels, "silhouette_score")?;
     let mut total = 0.0;
 
+    // Single sweep over j buckets per-cluster (sum, count) so we can
+    // derive both a(i) and b(i) in O(N + k) per anchor instead of
+    // O(N·k). Resolves [frankenscipy-ktpz0]: previous loop was
+    // O(N²·k); this is O(N² + Nk).
+    let mut cluster_sum = vec![0.0_f64; k];
+    let mut cluster_count = vec![0usize; k];
     for i in 0..n {
         let li = labels[i];
 
-        // a(i) = mean distance to same-cluster points
-        let mut a_sum = 0.0;
-        let mut a_count = 0;
-        for j in 0..n {
-            if i != j && labels[j] == li {
-                a_sum += sq_dist(&data[i], &data[j]).sqrt();
-                a_count += 1;
-            }
+        for v in cluster_sum.iter_mut() {
+            *v = 0.0;
         }
-        let a = if a_count > 0 {
-            a_sum / a_count as f64
+        for v in cluster_count.iter_mut() {
+            *v = 0;
+        }
+        for j in 0..n {
+            if i == j {
+                continue;
+            }
+            let d = sq_dist(&data[i], &data[j]).sqrt();
+            cluster_sum[labels[j]] += d;
+            cluster_count[labels[j]] += 1;
+        }
+
+        let a = if cluster_count[li] > 0 {
+            cluster_sum[li] / cluster_count[li] as f64
         } else {
             0.0
         };
 
-        // b(i) = min over other clusters of mean distance
         let mut b = f64::INFINITY;
         for c in 0..k {
-            if c == li {
+            if c == li || cluster_count[c] == 0 {
                 continue;
             }
-            let mut c_sum = 0.0;
-            let mut c_count = 0;
-            for j in 0..n {
-                if labels[j] == c {
-                    c_sum += sq_dist(&data[i], &data[j]).sqrt();
-                    c_count += 1;
-                }
-            }
-            if c_count > 0 {
-                b = b.min(c_sum / c_count as f64);
+            let mean_c = cluster_sum[c] / cluster_count[c] as f64;
+            if mean_c < b {
+                b = mean_c;
             }
         }
 
@@ -2731,6 +2735,40 @@ mod tests {
         let labels = vec![0, 0, 1, 1];
         let score = silhouette_score(&data, &labels).unwrap();
         assert!(score > 0.9, "silhouette = {score}, expected > 0.9");
+    }
+
+    #[test]
+    fn silhouette_score_three_clusters_pinned_value() {
+        // /profiling-software-performance regression pin for the
+        // O(N²·k) → O(N² + Nk) optimization (frankenscipy-ktpz0).
+        //
+        // 6 points, 3 perfectly-separated 2-element clusters along
+        // the x-axis: {(0,0),(0.1,0)}, {(10,0),(10.1,0)}, {(20,0),(20.1,0)}.
+        // For each anchor a(i)=0.1 (same-cluster partner). For b(i),
+        // the asymmetry between "near edge" and "far edge" of each
+        // cluster relative to its neighbour gives two distinct b
+        // values:
+        //   - 4 anchors (the inner-facing point of each end cluster
+        //     plus both points of the middle cluster) see b = 9.95
+        //     ⇒ s = 9.85/9.95
+        //   - 2 anchors (the outer-facing point of each end cluster)
+        //     see b = 10.05 ⇒ s = 9.95/10.05
+        // Mean = (4·9.85/9.95 + 2·9.95/10.05) / 6.
+        let data = vec![
+            vec![0.0, 0.0],
+            vec![0.1, 0.0],
+            vec![10.0, 0.0],
+            vec![10.1, 0.0],
+            vec![20.0, 0.0],
+            vec![20.1, 0.0],
+        ];
+        let labels = vec![0, 0, 1, 1, 2, 2];
+        let score = silhouette_score(&data, &labels).expect("silhouette");
+        let expected = (4.0 * (9.85 / 9.95) + 2.0 * (9.95 / 10.05)) / 6.0;
+        assert!(
+            (score - expected).abs() < 1e-12,
+            "silhouette_score = {score}, expected {expected}"
+        );
     }
 
     #[test]
