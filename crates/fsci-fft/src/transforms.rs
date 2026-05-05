@@ -2914,8 +2914,8 @@ mod tests {
     use fsci_runtime::{AuditAction, RuntimeMode};
 
     use super::{
-        FftError, FftOptions, TransformKind, WorkerPolicy, dct, dct_iv, dst_ii, dst_iii,
-        estimate_fft_flops, fft, fft_with_audit, fft2, fftn, hfft, idct, ifft, ifft2, irfft,
+        FftError, FftOptions, TransformKind, WorkerPolicy, dct, dct_iv, dctn, dst_ii, dst_iii,
+        estimate_fft_flops, fft, fft_with_audit, fft2, fftn, hfft, idct, idctn, ifft, ifft2, irfft,
         irfft2, irfftn, is_fast_len, next_fast_len, prev_fast_len, rfft, rfft_with_audit, rfft2,
         rfftn, sync_audit_ledger, take_transform_traces,
     };
@@ -3634,6 +3634,66 @@ mod tests {
         assert_eq!(next_fast_len(30), 30);
         // 100 = 2^2 * 5^2
         assert_eq!(next_fast_len(100), 100);
+    }
+
+    // ── dctn / idctn tests ─────────────────────────────────────────
+
+    #[test]
+    fn dctn_idctn_roundtrip_2d_under_all_normalizations() {
+        // /mock-code-finder regression for [frankenscipy-ilbpb]:
+        // dctn and idctn ship as scipy.fft parity surfaces but had
+        // ZERO direct tests. Verify the n-D roundtrip identity
+        // idctn(dctn(x, shape), shape) ≈ x on a 4×4 input across all
+        // 3 normalizations.
+        let x: Vec<f64> = (0..16).map(|i| (i as f64) * 0.5 + 1.0).collect();
+        let shape = [4usize, 4];
+        for norm in [
+            Normalization::Backward,
+            Normalization::Forward,
+            Normalization::Ortho,
+        ] {
+            let opts = FftOptions {
+                normalization: norm,
+                ..FftOptions::default()
+            };
+            let forward = dctn(&x, &shape, &opts).expect("dctn");
+            let recovered = idctn(&forward, &shape, &opts).expect("idctn");
+            assert_eq!(recovered.len(), x.len());
+            for (i, (&got, &orig)) in recovered.iter().zip(x.iter()).enumerate() {
+                assert!(
+                    (got - orig).abs() < 1e-9 + 1e-9 * orig.abs(),
+                    "dctn↔idctn[{i}] = {got}, expected {orig} (norm={norm:?})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn dctn_1d_shape_matches_dct_directly() {
+        // For a 1-D shape, dctn must reduce to the 1-D dct exactly.
+        let x = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+        let opts = FftOptions::default();
+        let from_dctn = dctn(&x, &[8usize], &opts).expect("dctn 1d");
+        let from_dct = dct(&x, &opts).expect("dct");
+        assert_eq!(from_dctn.len(), from_dct.len());
+        for (i, (&a, &b)) in from_dctn.iter().zip(from_dct.iter()).enumerate() {
+            assert!(
+                (a - b).abs() < 1e-12,
+                "dctn(x, [8])[{i}] = {a} != dct(x)[{i}] = {b}"
+            );
+        }
+    }
+
+    #[test]
+    fn dctn_rejects_shape_length_mismatch() {
+        // shape product != input length → error.
+        let x = vec![1.0; 12];
+        let opts = FftOptions::default();
+        assert!(dctn(&x, &[3usize, 5], &opts).is_err()); // 15 != 12
+        assert!(dctn(&x, &[2usize, 4], &opts).is_err()); // 8  != 12
+
+        // empty shape → error.
+        assert!(dctn(&x, &[], &opts).is_err());
     }
 
     // ── prev_fast_len tests ────────────────────────────────────────
