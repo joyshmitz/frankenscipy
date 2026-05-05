@@ -3760,6 +3760,28 @@ mod tests {
     }
 
     #[test]
+    fn trigamma_metamorphic_recurrence() {
+        // /testing-metamorphic: ψ'(x+1) = ψ'(x) − 1/x² for x not at a
+        // non-positive integer pole.
+        // Plus closed-form trigamma values:
+        //   ψ'(1) = π²/6   ψ'(0.5) = π²/2   ψ'(2) = π²/6 − 1
+        let pi_sq_over_6 = std::f64::consts::PI * std::f64::consts::PI / 6.0;
+        let pi_sq_over_2 = std::f64::consts::PI * std::f64::consts::PI / 2.0;
+        assert!((trigamma_core(1.0) - pi_sq_over_6).abs() < 1e-9);
+        assert!((trigamma_core(0.5) - pi_sq_over_2).abs() < 1e-9);
+        assert!((trigamma_core(2.0) - (pi_sq_over_6 - 1.0)).abs() < 1e-9);
+        // Recurrence across multiple x.
+        for &x in &[0.25_f64, 0.5, 1.3, 2.7, 5.3, 9.1, 17.4] {
+            let lhs = trigamma_core(x + 1.0);
+            let rhs = trigamma_core(x) - 1.0 / (x * x);
+            assert!(
+                (lhs - rhs).abs() < 1e-9,
+                "ψ'({x}+1) = {lhs}, expected ψ'({x}) − 1/{x}² = {rhs}"
+            );
+        }
+    }
+
+    #[test]
     fn digamma_metamorphic_recurrence() {
         // /testing-metamorphic: ψ(x+1) = ψ(x) + 1/x for any x not at
         // a non-positive integer. Independent of any specific value;
