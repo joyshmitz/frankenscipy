@@ -1265,6 +1265,76 @@ mod tests {
         assert_close(eval_hermite(3, x), 8.0 * x * x * x - 12.0 * x, 1e-12, "H_3");
     }
 
+    #[test]
+    fn hermite_three_term_recurrence_holds() {
+        // /testing-metamorphic for [frankenscipy-8hsiu]:
+        //   H_{n+1}(x) = 2x · H_n(x) − 2n · H_{n-1}(x)
+        // for n ≥ 1. Pin across high-degree n and several x values
+        // — catches drift in the recurrence that low-degree closed
+        // forms wouldn't see.
+        for &x in &[-2.0_f64, -0.5, 0.5, 2.0] {
+            for n in 1u32..=10 {
+                let h_nm1 = eval_hermite(n - 1, x);
+                let h_n = eval_hermite(n, x);
+                let h_np1 = eval_hermite(n + 1, x);
+                let lhs = h_np1;
+                let rhs = 2.0 * x * h_n - 2.0 * n as f64 * h_nm1;
+                let scale = lhs.abs().max(rhs.abs()).max(1.0);
+                assert!(
+                    (lhs - rhs).abs() < 1e-9 * scale,
+                    "Hermite recurrence broken at n={n}, x={x}: \
+                     H_{n_plus_one}({x}) = {lhs}, expected {rhs}",
+                    n_plus_one = n + 1
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn legendre_three_term_recurrence_holds() {
+        //   (n+1) P_{n+1}(x) = (2n+1) · x · P_n(x) − n · P_{n-1}(x)
+        for &x in &[-0.9_f64, -0.3, 0.3, 0.7] {
+            for n in 1u32..=10 {
+                let p_nm1 = eval_legendre(n - 1, x);
+                let p_n = eval_legendre(n, x);
+                let p_np1 = eval_legendre(n + 1, x);
+                let lhs = (n + 1) as f64 * p_np1;
+                let rhs = (2 * n + 1) as f64 * x * p_n - n as f64 * p_nm1;
+                let scale = lhs.abs().max(rhs.abs()).max(1.0);
+                assert!(
+                    (lhs - rhs).abs() < 1e-9 * scale,
+                    "Legendre recurrence broken at n={n}, x={x}: \
+                     {n}+1 · P_{n_plus_one}({x}) = {lhs}, expected {rhs}",
+                    n_plus_one = n + 1
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn gegenbauer_three_term_recurrence_holds() {
+        //   (n+1) C_{n+1}^α(x) = 2(n+α) · x · C_n^α(x)
+        //                       − (n + 2α − 1) · C_{n-1}^α(x)
+        for &alpha in &[0.5_f64, 1.0, 1.5, 2.5] {
+            for &x in &[-0.7_f64, -0.2, 0.4, 0.8] {
+                for n in 1u32..=8 {
+                    let c_nm1 = eval_gegenbauer(n - 1, alpha, x);
+                    let c_n = eval_gegenbauer(n, alpha, x);
+                    let c_np1 = eval_gegenbauer(n + 1, alpha, x);
+                    let lhs = (n + 1) as f64 * c_np1;
+                    let rhs =
+                        2.0 * (n as f64 + alpha) * x * c_n - (n as f64 + 2.0 * alpha - 1.0) * c_nm1;
+                    let scale = lhs.abs().max(rhs.abs()).max(1.0);
+                    assert!(
+                        (lhs - rhs).abs() < 1e-9 * scale,
+                        "Gegenbauer recurrence broken at n={n}, α={alpha}, \
+                         x={x}: lhs={lhs}, rhs={rhs}"
+                    );
+                }
+            }
+        }
+    }
+
     // ── Hermite (probabilist) ─────────────────────────────────────
 
     #[test]
