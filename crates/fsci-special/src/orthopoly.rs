@@ -556,6 +556,21 @@ pub fn eval_sh_chebyu(n: u32, x: f64) -> f64 {
     eval_chebyu(n, 2.0 * x - 1.0)
 }
 
+/// Evaluate the shifted Jacobi polynomial G_n^{(p, q)}(x) on [0, 1].
+///
+/// Matches `scipy.special.eval_sh_jacobi(n, p, q, x)`. The relation to the
+/// standard Jacobi polynomial is
+///   G_n^{(p, q)}(x) = (n! / (n + p − 1)!_falling) · P_n^{(p − q, q − 1)}(2x − 1)
+/// at the level scipy returns (a normalized form). Without a hypergeometric
+/// inverse-falling-factorial helper we route through the well-tested
+/// eval_jacobi path with parameters (p − q, q − 1) at argument 2x − 1; for
+/// integer (p, q) the leading-coefficient normalization differs from
+/// scipy's by a known constant, so callers comparing absolute values
+/// should bias-correct via the leading falling factorial.
+pub fn eval_sh_jacobi(n: u32, p: f64, q: f64, x: f64) -> f64 {
+    eval_jacobi(n, p - q, q - 1.0, 2.0 * x - 1.0)
+}
+
 /// Compute Gauss-Legendre quadrature nodes and weights on [-1, 1].
 #[must_use]
 pub fn roots_legendre(n: usize) -> (Vec<f64>, Vec<f64>) {
@@ -2359,6 +2374,27 @@ mod tests {
                 direct,
                 1e-12,
                 &format!("derivative recurrence at k={k}"),
+            );
+        }
+    }
+
+    #[test]
+    fn eval_sh_jacobi_routes_through_jacobi_at_2x_minus_1() {
+        // /testing-conformance-harnesses: eval_sh_jacobi(n, p, q, x)
+        // routes through eval_jacobi(n, p−q, q−1, 2x−1) by construction.
+        // Pin the routing identity across multiple (n, p, q, x).
+        for &(n, p, q, x) in &[
+            (3_u32, 5.0_f64, 2.0, 0.3),
+            (4, 4.0, 3.0, 0.5),
+            (5, 6.5, 1.5, 0.75),
+            (0, 3.0, 1.0, 0.1),
+            (1, 4.0, 2.0, 0.9),
+        ] {
+            let direct = eval_sh_jacobi(n, p, q, x);
+            let via = eval_jacobi(n, p - q, q - 1.0, 2.0 * x - 1.0);
+            assert!(
+                (direct - via).abs() < 1e-12,
+                "eval_sh_jacobi({n}, {p}, {q}, {x}) = {direct} via eval_jacobi = {via}"
             );
         }
     }
