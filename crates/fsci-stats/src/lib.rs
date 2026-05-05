@@ -10326,23 +10326,14 @@ pub fn energy_distance(u: &[f64], v: &[f64]) -> f64 {
     }
     e_xy /= nu * nv;
 
-    // E|X-X'|: mean of |u_i - u_j| over all pairs
-    let mut e_xx = 0.0;
-    for i in 0..u.len() {
-        for j in (i + 1)..u.len() {
-            e_xx += (u[i] - u[j]).abs();
-        }
-    }
-    e_xx *= 2.0 / (nu * nu); // double because we only summed upper triangle
-
-    // E|Y-Y'|
-    let mut e_yy = 0.0;
-    for i in 0..v.len() {
-        for j in (i + 1)..v.len() {
-            e_yy += (v[i] - v[j]).abs();
-        }
-    }
-    e_yy *= 2.0 / (nv * nv);
+    // E|X-X'|: mean of |u_i - u_j| over all pairs.
+    // Resolves [frankenscipy-6nuo5]: for sorted s of length n, the
+    // upper-triangle sum  Σ_{i<j} (s[j] - s[i])  has the closed form
+    //   Σ_i s[i] · (2i − n + 1)         (0-indexed)
+    // dropping the inner pair from O(N²) to O(N) after one O(N log N)
+    // sort.
+    let e_xx = within_set_l1_pair_sum(u) * 2.0 / (nu * nu);
+    let e_yy = within_set_l1_pair_sum(v) * 2.0 / (nv * nv);
 
     let d_sq = 2.0 * e_xy - e_xx - e_yy;
     if d_sq.is_nan() {
@@ -10350,6 +10341,25 @@ pub fn energy_distance(u: &[f64], v: &[f64]) -> f64 {
     } else {
         d_sq.max(0.0).sqrt()
     }
+}
+
+/// Compute the upper-triangle pair sum  Σ_{i<j} |x_j − x_i|  in
+/// O(N log N) using the sorted closed form. Equivalent to the naïve
+/// O(N²) double loop; used by energy_distance and any other test that
+/// needs the within-set L1 pair sum.
+fn within_set_l1_pair_sum(x: &[f64]) -> f64 {
+    let n = x.len();
+    if n < 2 {
+        return 0.0;
+    }
+    let mut sorted: Vec<f64> = x.to_vec();
+    sorted.sort_by(|a, b| a.total_cmp(b));
+    let mut sum = 0.0_f64;
+    let n_f = n as f64;
+    for (i, &val) in sorted.iter().enumerate() {
+        sum += val * (2.0 * i as f64 - n_f + 1.0);
+    }
+    sum
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -27736,6 +27746,36 @@ mod tests {
             (d - 4.268_749_491_621_899).abs() < 1e-12,
             "should match SciPy oracle for separated samples: {d}"
         );
+    }
+
+    #[test]
+    fn energy_distance_within_set_pair_sum_matches_naive() {
+        // /profiling-software-performance regression for
+        // [frankenscipy-6nuo5]: energy_distance now uses the sorted
+        // closed-form Σ_i s[i]·(2i − n + 1) for the within-set L1
+        // pair sum. Verify the closed form against a naïve O(N²)
+        // computation on a 20-point sample.
+        let data: Vec<f64> = (0..20).map(|i| (i as f64).sin() * 3.0 + 0.5).collect();
+
+        let mut naive = 0.0_f64;
+        for i in 0..data.len() {
+            for j in (i + 1)..data.len() {
+                naive += (data[i] - data[j]).abs();
+            }
+        }
+        let closed_form = within_set_l1_pair_sum(&data);
+        assert!(
+            (naive - closed_form).abs() < 1e-9,
+            "closed form ({closed_form}) != naive ({naive})"
+        );
+
+        // Constant sample → all pairs are 0, sum = 0.
+        let constant = vec![3.5_f64; 10];
+        assert!(within_set_l1_pair_sum(&constant).abs() < 1e-12);
+
+        // Empty / singleton → 0.
+        assert_eq!(within_set_l1_pair_sum(&[]), 0.0);
+        assert_eq!(within_set_l1_pair_sum(&[7.0]), 0.0);
     }
 
     #[test]
