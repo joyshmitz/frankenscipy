@@ -2091,7 +2091,12 @@ pub fn autocorrelation(x: &[f64], max_lag: usize) -> Vec<f64> {
     }
 
     let mean: f64 = x.iter().sum::<f64>() / n as f64;
-    let var: f64 = x.iter().map(|&v| (v - mean).powi(2)).sum();
+    // Resolves [frankenscipy-ry4ll]: precompute the centered series
+    // once (N subs) instead of recomputing (x[i] - mean) n·max_lag
+    // times in the inner loop. Same big-O but ~50% fewer subtractions
+    // and much better cache locality (centered fits in L1).
+    let centered: Vec<f64> = x.iter().map(|&v| v - mean).collect();
+    let var: f64 = centered.iter().map(|&v| v * v).sum();
 
     if var == 0.0 {
         return vec![1.0; max_lag + 1];
@@ -2099,8 +2104,10 @@ pub fn autocorrelation(x: &[f64], max_lag: usize) -> Vec<f64> {
 
     (0..=max_lag.min(n - 1))
         .map(|lag| {
-            let sum: f64 = (0..n - lag)
-                .map(|i| (x[i] - mean) * (x[i + lag] - mean))
+            let sum: f64 = centered[..n - lag]
+                .iter()
+                .zip(centered[lag..].iter())
+                .map(|(&a, &b)| a * b)
                 .sum();
             sum / var
         })
@@ -13458,6 +13465,52 @@ mod tests {
     }
 
     // ── Cross-correlation tests ──────────────────────────────────────
+
+    #[test]
+    fn autocorrelation_lag_zero_is_one() {
+        // /profiling-software-performance regression for
+        // [frankenscipy-ry4ll]: lag-0 autocorrelation must be 1.0
+        // (variance / variance). Verify across multiple inputs after
+        // the centered-series optimization.
+        for input in [
+            vec![1.0_f64, 2.0, 3.0, 4.0, 5.0],
+            vec![-1.0_f64, 0.0, 1.0],
+            vec![10.0_f64, 20.0, 10.0, 20.0, 10.0, 20.0],
+        ] {
+            let r = autocorrelation(&input, 3);
+            assert!(
+                (r[0] - 1.0).abs() < 1e-12,
+                "autocorrelation lag 0 = {} != 1.0 for {input:?}",
+                r[0]
+            );
+        }
+    }
+
+    #[test]
+    fn autocorrelation_constant_input_returns_all_ones() {
+        // Constant input has zero variance; the function returns
+        // [1.0; max_lag + 1] in that branch.
+        let r = autocorrelation(&[5.0; 10], 4);
+        assert_eq!(r.len(), 5);
+        for &v in &r {
+            assert_eq!(v, 1.0);
+        }
+    }
+
+    #[test]
+    fn autocorrelation_periodic_signal_peaks_at_period() {
+        // Period-2 ±1 alternating sequence: lag 1 should be near -1
+        // (anti-correlated), lag 2 should be near +1 (re-correlated).
+        let x: Vec<f64> = (0..16)
+            .map(|i| if i % 2 == 0 { 1.0 } else { -1.0 })
+            .collect();
+        let r = autocorrelation(&x, 4);
+        // r[0] = 1, r[1] ≈ -(15/16), r[2] ≈ 14/16, r[3] ≈ -(13/16),
+        // r[4] ≈ 12/16 (each lag drops one sample).
+        assert!((r[0] - 1.0).abs() < 1e-12, "r[0] = {}", r[0]);
+        assert!(r[1] < -0.5, "r[1] = {} should be strongly anti-correlated", r[1]);
+        assert!(r[2] > 0.5, "r[2] = {} should be re-correlated", r[2]);
+    }
 
     #[test]
     fn correlate_autocorrelation_peak_at_zero_lag() {
