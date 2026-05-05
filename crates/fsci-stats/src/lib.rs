@@ -25269,6 +25269,54 @@ mod tests {
         assert!(yeojohnson_llf(1.0, &[]).is_nan());
     }
 
+    #[test]
+    fn yeojohnson_closed_form_reference_values() {
+        // /testing-golden-artifacts: pin the four branch arms of the
+        // Yeo-Johnson formula against analytic values where the
+        // expression collapses to a closed form.
+        //
+        //   yeojohnson(1,   0)   = ln(2)
+        //   yeojohnson(1,   1)   = 1                  (identity branch)
+        //   yeojohnson(2,   0.5) = 2(√3 − 1)
+        //   yeojohnson(-1,  2)   = -ln(2)             (negative + λ=2)
+        //   yeojohnson(-1,  1)   = -1
+        //   yeojohnson(-2,  0.5) = -(3√3 − 1)/1.5     (negative + general)
+        let cases: &[(f64, f64, f64)] = &[
+            (1.0, 0.0, 2.0_f64.ln()),
+            (1.0, 1.0, 1.0),
+            (2.0, 0.5, 2.0 * (3.0_f64.sqrt() - 1.0)),
+            (-1.0, 2.0, -(2.0_f64.ln())),
+            (-1.0, 1.0, -1.0),
+            (-2.0, 0.5, -(3.0 * 3.0_f64.sqrt() - 1.0) / 1.5),
+        ];
+        for &(x, lam, expected) in cases {
+            let actual = yeojohnson(&[x], lam)[0];
+            assert!(
+                (actual - expected).abs() < 1e-12,
+                "yeojohnson({x}, {lam}) = {actual}, expected {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn yeojohnson_inv_roundtrip_recovers_x() {
+        // /testing-metamorphic: yeojohnson_inv(yeojohnson(x, λ), λ) = x
+        // across both signs and the four branch arms.
+        let xs: &[f64] = &[-3.0, -1.5, -0.7, -0.1, 0.0, 0.1, 0.7, 1.5, 3.0];
+        let lams: &[f64] = &[0.0, 0.5, 1.0, 1.5, 2.0];
+        for &x in xs {
+            for &lam in lams {
+                let y = yeojohnson(&[x], lam)[0];
+                let recovered = yeojohnson_inv(&[y], lam)[0];
+                assert!(
+                    (recovered - x).abs() < 1e-9 + 1e-9 * x.abs(),
+                    "yeojohnson_inv(yeojohnson({x}, {lam})={y}, {lam}) = \
+                     {recovered}, expected {x}"
+                );
+            }
+        }
+    }
+
     // ── Kendall's tau tests ────────────────────────────────────────
 
     #[test]
