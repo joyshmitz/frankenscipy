@@ -8448,6 +8448,87 @@ mod tests {
         assert_close_matrix(&a_ap_a, &a, 1e-10, 1e-10);
     }
 
+    #[test]
+    fn pinv_moore_penrose_conditions_2_3_4() {
+        // /testing-metamorphic on the four Moore-Penrose identities.
+        // Condition 1 (A·A⁺·A = A) is already pinned at line 8421.
+        // This test pins the remaining three:
+        //   2.  A⁺ · A · A⁺ = A⁺
+        //   3.  (A · A⁺)ᵀ = A · A⁺      (Hermitian — real ⇒ symmetric)
+        //   4.  (A⁺ · A)ᵀ = A⁺ · A      (Hermitian)
+        // Together with condition 1 these four identities uniquely
+        // characterize the pseudo-inverse.
+        let a = vec![vec![1.0, 2.0], vec![3.0, 4.0], vec![5.0, 6.0]];
+        let result = pinv(&a, PinvOptions::default()).expect("pinv works");
+        let a_pinv = &result.pseudo_inverse;
+        let m = a.len();
+        let n = a[0].len();
+        let p = a_pinv.len();
+        let q = a_pinv[0].len();
+        assert_eq!(p, n);
+        assert_eq!(q, m);
+
+        let matmul = |x: &[Vec<f64>], y: &[Vec<f64>]| -> Vec<Vec<f64>> {
+            let r = x.len();
+            let c = y[0].len();
+            let inner = y.len();
+            let mut out = vec![vec![0.0; c]; r];
+            for i in 0..r {
+                for j in 0..c {
+                    for k in 0..inner {
+                        out[i][j] += x[i][k] * y[k][j];
+                    }
+                }
+            }
+            out
+        };
+
+        // MP-2: A⁺ · A · A⁺ = A⁺   (n×n × n×m × n×... wait:
+        // A⁺ is n×m, A is m×n, so A⁺·A is n×n, then ·A⁺ is n×m.
+        let ap_a = matmul(a_pinv, &a);
+        let ap_a_ap = matmul(&ap_a, a_pinv);
+        assert_close_matrix(&ap_a_ap, a_pinv, 1e-10, 1e-10);
+
+        // MP-3: (A · A⁺)ᵀ = A · A⁺.  A·A⁺ is m×m.
+        let a_ap = matmul(&a, a_pinv);
+        for i in 0..m {
+            for j in 0..m {
+                assert!(
+                    (a_ap[i][j] - a_ap[j][i]).abs() < 1e-10,
+                    "A·A⁺ not symmetric at [{i}][{j}]: {} vs {}",
+                    a_ap[i][j],
+                    a_ap[j][i]
+                );
+            }
+        }
+
+        // MP-4: (A⁺ · A)ᵀ = A⁺ · A.  A⁺·A is n×n.
+        for i in 0..n {
+            for j in 0..n {
+                assert!(
+                    (ap_a[i][j] - ap_a[j][i]).abs() < 1e-10,
+                    "A⁺·A not symmetric at [{i}][{j}]: {} vs {}",
+                    ap_a[i][j],
+                    ap_a[j][i]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pinv_involution_pinv_of_pinv_recovers_a() {
+        // /testing-metamorphic: pinv(pinv(A)) ≈ A for any A. This is a
+        // direct consequence of the four MP conditions.
+        let a = vec![
+            vec![1.0, 2.0, 3.0],
+            vec![4.0, 5.0, 6.0],
+            vec![7.0, 8.0, 10.0], // perturb to avoid rank deficiency
+        ];
+        let first = pinv(&a, PinvOptions::default()).expect("pinv");
+        let second = pinv(&first.pseudo_inverse, PinvOptions::default()).expect("pinv²");
+        assert_close_matrix(&second.pseudo_inverse, &a, 1e-9, 1e-9);
+    }
+
     // ── LU decomposition tests ──────────────────────────────────────
 
     #[test]
