@@ -1356,7 +1356,8 @@ pub fn elliprc(x: f64, y: f64) -> f64 {
         let yp = -y;
         return (x / xm).sqrt() * elliprc(xm, yp);
     }
-    if (x - y).abs() < 1e-15 {
+    let diagonal_tol = 8.0 * f64::EPSILON * x.abs().max(y.abs()).max(1.0);
+    if (x - y).abs() <= diagonal_tol {
         return 1.0 / x.sqrt();
     }
     let ratio = (x / y).sqrt();
@@ -1620,7 +1621,39 @@ pub fn elliprj(x: f64, y: f64, z: f64, p: f64) -> f64 {
     let mut factor = 1.0_f64;
     const TOL: f64 = 5e-4;
 
-    for _ in 0..32 {
+    for _ in 0..100 {
+        let mu = 0.2 * (xn + yn + zn + 2.0 * pn);
+        let ex = 1.0 - xn / mu;
+        let ey = 1.0 - yn / mu;
+        let ez = 1.0 - zn / mu;
+        let ep = 1.0 - pn / mu;
+        let max_e = ex.abs().max(ey.abs()).max(ez.abs()).max(ep.abs());
+        if max_e < TOL {
+            // 5th-order Taylor closing (Carlson 1995, Numerical Recipes 6.11).
+            // Note: the eb term's leading coefficient is C7 = C2/2 = 1/6,
+            // not C2 itself — that distinction is the difference between
+            // a correct RJ and one that fails the RJ(x, y, z, z) = RD test.
+            const C1: f64 = 3.0 / 14.0;
+            const C2: f64 = 1.0 / 3.0;
+            const C3: f64 = 3.0 / 22.0;
+            const C4: f64 = 3.0 / 26.0;
+            const C5: f64 = 0.75 * C3;
+            const C6: f64 = 1.5 * C4;
+            const C7: f64 = 0.5 * C2;
+            const C8: f64 = C3 + C3;
+            let ea = ex * (ey + ez) + ey * ez;
+            let eb = ex * ey * ez;
+            let ec = ep * ep;
+            let ed = ea - 3.0 * ec;
+            let ee = eb + 2.0 * ep * (ea - ec);
+            let series = 1.0
+                + ed * (-C1 + C5 * ed - C6 * ee)
+                + eb * (C7 + ep * (-C8 + ep * C4))
+                + ep * ea * (C2 - ep * C3)
+                - C2 * ep * ec;
+            return 3.0 * sum + factor * series / (mu * mu.sqrt());
+        }
+
         let sqx = xn.sqrt();
         let sqy = yn.sqrt();
         let sqz = zn.sqrt();
@@ -1630,38 +1663,11 @@ pub fn elliprj(x: f64, y: f64, z: f64, p: f64) -> f64 {
         let beta = pn * (pn + lambda) * (pn + lambda);
         sum += factor * elliprc(alpha, beta);
 
-        // Step.
         factor *= 0.25;
         xn = 0.25 * (xn + lambda);
         yn = 0.25 * (yn + lambda);
         zn = 0.25 * (zn + lambda);
         pn = 0.25 * (pn + lambda);
-
-        // Convergence check.
-        let mu = 0.2 * (xn + yn + zn + 2.0 * pn);
-        let ex = 1.0 - xn / mu;
-        let ey = 1.0 - yn / mu;
-        let ez = 1.0 - zn / mu;
-        let ep = 1.0 - pn / mu;
-        let max_e = ex.abs().max(ey.abs()).max(ez.abs()).max(ep.abs());
-        if max_e < TOL {
-            // 5th-order Taylor closing (Carlson 1995, Numerical Recipes 6.11).
-            const C1: f64 = 3.0 / 14.0;
-            const C2: f64 = 1.0 / 3.0;
-            const C3: f64 = 3.0 / 22.0;
-            const C4: f64 = 3.0 / 26.0;
-            let ea = ex * (ey + ez) + ey * ez;
-            let eb = ex * ey * ez;
-            let ec = ep * ep;
-            let ed = ea - 3.0 * ec;
-            let ee = eb + 2.0 * ep * (ea - ec);
-            let series = 1.0
-                + ed * (-C1 + 0.75 * C3 * ed - 1.5 * C4 * ee)
-                + eb * (C2 + ep * (-C3 - C3 + ep * C4))
-                + ep * ea * (C2 - ep * C3)
-                - C2 * ep * ec;
-            return 3.0 * sum + factor * series / (mu * mu.sqrt());
-        }
     }
     f64::NAN
 }
@@ -2877,6 +2883,13 @@ mod tests {
             let rd = elliprd(x, y, z);
             assert_close(rj, rd, 1e-9, &format!("RJ({x}, {y}, {z}, {z}) vs RD"));
         }
+    }
+
+    #[test]
+    fn elliprj_scipy_reference_value() {
+        // scipy.special.elliprj(1.0, 2.0, 3.0, 4.0) ≈ 0.239848099749568
+        let actual = elliprj(1.0, 2.0, 3.0, 4.0);
+        assert_close(actual, 0.239_848_099_749_568, 1e-9, "RJ SciPy reference");
     }
 
     #[test]

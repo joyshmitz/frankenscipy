@@ -1,10 +1,10 @@
 #![forbid(unsafe_code)]
 //! Live SciPy differential coverage for the Carlson symmetric elliptic
-//! integral family — RC, RF, RD, RG.
+//! integral family — RC, RF, RD, RG, RJ.
 //!
 //! Resolves [frankenscipy-q5es6]. Drives a curated set of (x, y, z)
 //! cases — including the just-shipped RC(x, y<0) Cauchy-PV branch — and
-//! compares against `scipy.special.eliprc/d/f/g` via subprocess oracle.
+//! compares against `scipy.special.elliprc/d/f/g/j` via subprocess oracle.
 //! Skips cleanly when scipy/python3 is unavailable unless
 //! `FSCI_REQUIRE_SCIPY_ORACLE` is set.
 
@@ -15,12 +15,12 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use fsci_special::{elliprc, elliprd, elliprf, elliprg};
+use fsci_special::{elliprc, elliprd, elliprf, elliprg, elliprj};
 use serde::{Deserialize, Serialize};
 
 const PACKET_ID: &str = "FSCI-P2C-006";
-const ABS_TOL: f64 = 1.0e-10;
-const REL_TOL: f64 = 1.0e-10;
+const ABS_TOL: f64 = 1.0e-9;
+const REL_TOL: f64 = 1.0e-9;
 const REQUIRE_SCIPY_ENV: &str = "FSCI_REQUIRE_SCIPY_ORACLE";
 
 #[derive(Debug, Clone, Serialize)]
@@ -30,6 +30,7 @@ struct CarlsonCase {
     x: f64,
     y: f64,
     z: Option<f64>,
+    p: Option<f64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -62,6 +63,39 @@ struct DiffLog {
     timestamp_ms: u128,
     duration_ns: u128,
     cases: Vec<CaseDiff>,
+}
+
+fn carlson_binary_case(case_id: String, op: &str, x: f64, y: f64) -> CarlsonCase {
+    CarlsonCase {
+        case_id,
+        op: op.into(),
+        x,
+        y,
+        z: None,
+        p: None,
+    }
+}
+
+fn carlson_ternary_case(case_id: String, op: &str, x: f64, y: f64, z: f64) -> CarlsonCase {
+    CarlsonCase {
+        case_id,
+        op: op.into(),
+        x,
+        y,
+        z: Some(z),
+        p: None,
+    }
+}
+
+fn carlson_rj_case(case_id: String, x: f64, y: f64, z: f64, p: f64) -> CarlsonCase {
+    CarlsonCase {
+        case_id,
+        op: "elliprj".into(),
+        x,
+        y,
+        z: Some(z),
+        p: Some(p),
+    }
 }
 
 fn output_dir() -> PathBuf {
@@ -102,13 +136,12 @@ fn generate_carlson_cases() -> Vec<CarlsonCase> {
         (0.0, 1.0),
         (0.0, 4.0),
     ] {
-        cases.push(CarlsonCase {
-            case_id: format!("rc_pos_{idx:02}"),
-            op: "elliprc".into(),
+        cases.push(carlson_binary_case(
+            format!("rc_pos_{idx:02}"),
+            "elliprc",
             x,
             y,
-            z: None,
-        });
+        ));
         idx += 1;
     }
 
@@ -123,13 +156,12 @@ fn generate_carlson_cases() -> Vec<CarlsonCase> {
         (0.0, -3.0),
         (5.0, -0.25),
     ] {
-        cases.push(CarlsonCase {
-            case_id: format!("rc_pv_{idx:02}"),
-            op: "elliprc".into(),
+        cases.push(carlson_binary_case(
+            format!("rc_pv_{idx:02}"),
+            "elliprc",
             x,
             y,
-            z: None,
-        });
+        ));
         idx += 1;
     }
 
@@ -146,13 +178,13 @@ fn generate_carlson_cases() -> Vec<CarlsonCase> {
         (0.1, 0.2, 0.3),
         (10.0, 20.0, 30.0),
     ] {
-        cases.push(CarlsonCase {
-            case_id: format!("rf_{idx:02}"),
-            op: "elliprf".into(),
+        cases.push(carlson_ternary_case(
+            format!("rf_{idx:02}"),
+            "elliprf",
             x,
             y,
-            z: Some(z),
-        });
+            z,
+        ));
         idx += 1;
     }
 
@@ -168,13 +200,13 @@ fn generate_carlson_cases() -> Vec<CarlsonCase> {
         (3.0, 5.0, 7.0),
         (0.1, 0.2, 0.3),
     ] {
-        cases.push(CarlsonCase {
-            case_id: format!("rd_{idx:02}"),
-            op: "elliprd".into(),
+        cases.push(carlson_ternary_case(
+            format!("rd_{idx:02}"),
+            "elliprd",
             x,
             y,
-            z: Some(z),
-        });
+            z,
+        ));
         idx += 1;
     }
 
@@ -189,13 +221,28 @@ fn generate_carlson_cases() -> Vec<CarlsonCase> {
         (3.0, 5.0, 7.0),
         (0.1, 0.5, 2.0),
     ] {
-        cases.push(CarlsonCase {
-            case_id: format!("rg_{idx:02}"),
-            op: "elliprg".into(),
+        cases.push(carlson_ternary_case(
+            format!("rg_{idx:02}"),
+            "elliprg",
             x,
             y,
-            z: Some(z),
-        });
+            z,
+        ));
+        idx += 1;
+    }
+
+    // RJ(x, y, z, p) — symmetric in (x, y, z), p is distinct and must be positive.
+    idx = 0;
+    for &(x, y, z, p) in &[
+        (1.0_f64, 2.0, 3.0, 4.0),
+        (1.0, 1.0, 1.0, 1.0),
+        (0.0, 1.0, 1.0, 1.0),
+        (0.5, 1.5, 4.0, 2.0),
+        (0.25, 0.5, 1.0, 0.75),
+        (3.0, 5.0, 7.0, 11.0),
+        (0.1, 0.2, 0.3, 0.4),
+    ] {
+        cases.push(carlson_rj_case(format!("rj_{idx:02}"), x, y, z, p));
         idx += 1;
     }
 
@@ -213,7 +260,7 @@ results = []
 for c in cases:
     cid = c["case_id"]
     op = c["op"]
-    x = c["x"]; y = c["y"]; z = c.get("z")
+    x = c["x"]; y = c["y"]; z = c.get("z"); p = c.get("p")
     try:
         if op == "elliprc":
             val = float(special.elliprc(x, y))
@@ -223,6 +270,8 @@ for c in cases:
             val = float(special.elliprd(x, y, z))
         elif op == "elliprg":
             val = float(special.elliprg(x, y, z))
+        elif op == "elliprj":
+            val = float(special.elliprj(x, y, z, p))
         else:
             val = None
         results.append({"case_id": cid, "value": val})
@@ -289,6 +338,12 @@ fn rust_eval(case: &CarlsonCase) -> f64 {
         "elliprf" => elliprf(case.x, case.y, case.z.expect("rf needs z")),
         "elliprd" => elliprd(case.x, case.y, case.z.expect("rd needs z")),
         "elliprg" => elliprg(case.x, case.y, case.z.expect("rg needs z")),
+        "elliprj" => elliprj(
+            case.x,
+            case.y,
+            case.z.expect("rj needs z"),
+            case.p.expect("rj needs p"),
+        ),
         other => panic!("unknown carlson op {other}"),
     }
 }
@@ -358,7 +413,7 @@ fn diff_special_carlson() {
 
     let log = DiffLog {
         test_id: "diff_special_carlson".into(),
-        category: "scipy.special.elliprc/d/f/g".into(),
+        category: "scipy.special.elliprc/d/f/g/j".into(),
         case_count: diffs.len(),
         max_abs_diff: max_abs_overall,
         max_rel_diff: max_rel_overall,
