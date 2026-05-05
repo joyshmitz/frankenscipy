@@ -2007,10 +2007,15 @@ pub fn order_filter(x: &[f64], window_size: usize, rank: usize) -> Vec<f64> {
     let half = window_size / 2;
     let mut result = Vec::with_capacity(x.len());
 
+    // Resolves [frankenscipy-6feia]: hoist the per-window Vec
+    // allocation to a single reusable buffer. Previously this
+    // allocated N Vecs for an N-sample input.
+    let mut window: Vec<f64> = Vec::with_capacity(window_size);
     for i in 0..x.len() {
         let start = i.saturating_sub(half);
         let end = (i + half + 1).min(x.len());
-        let mut window: Vec<f64> = x[start..end].to_vec();
+        window.clear();
+        window.extend_from_slice(&x[start..end]);
         window.sort_by(|a, b| a.total_cmp(b));
         let idx = rank.min(window.len() - 1);
         result.push(window[idx]);
@@ -13538,6 +13543,60 @@ mod tests {
                 result[mid]
             );
         }
+    }
+
+    #[test]
+    fn order_filter_min_max_median_match_known_values() {
+        // /profiling-software-performance regression for
+        // [frankenscipy-6feia]: verify that the buffer-reuse
+        // optimization preserves the rank-based selection on a
+        // pinned input.
+        //
+        //   x = [3, 1, 4, 1, 5, 9, 2, 6]
+        //   window_size = 3 (half = 1)
+        //
+        // Window at i=0: [3, 1] (truncated at start) — rank=0 (min) → 1
+        // Window at i=1: [3, 1, 4] sorted=[1,3,4] — min=1, max=4, median=3
+        // Window at i=2: [1, 4, 1] sorted=[1,1,4] — min=1, max=4, median=1
+        // Window at i=4: [1, 5, 9] sorted=[1,5,9] — min=1, max=9, median=5
+        let x = vec![3.0_f64, 1.0, 4.0, 1.0, 5.0, 9.0, 2.0, 6.0];
+
+        // rank=0 → minimum filter
+        let min_filter = order_filter(&x, 3, 0);
+        assert_eq!(min_filter[1], 1.0);
+        assert_eq!(min_filter[2], 1.0);
+        assert_eq!(min_filter[4], 1.0);
+
+        // rank=window_size-1 (capped to window-1 by impl) → maximum filter
+        let max_filter = order_filter(&x, 3, 2);
+        assert_eq!(max_filter[1], 4.0);
+        assert_eq!(max_filter[2], 4.0);
+        assert_eq!(max_filter[4], 9.0);
+
+        // rank=1 (middle of full window) → median filter
+        let med_filter = order_filter(&x, 3, 1);
+        assert_eq!(med_filter[1], 3.0);
+        assert_eq!(med_filter[2], 1.0);
+        assert_eq!(med_filter[4], 5.0);
+    }
+
+    #[test]
+    fn order_filter_constant_input_returns_constant() {
+        // Constant input → output is the same constant for any rank.
+        let x = vec![7.0_f64; 16];
+        for rank in [0usize, 2, 4] {
+            let result = order_filter(&x, 5, rank);
+            assert_eq!(result.len(), 16);
+            for &v in &result {
+                assert_eq!(v, 7.0);
+            }
+        }
+    }
+
+    #[test]
+    fn order_filter_empty_or_zero_window_returns_empty() {
+        assert_eq!(order_filter(&[], 5, 2), Vec::<f64>::new());
+        assert_eq!(order_filter(&[1.0, 2.0], 0, 0), Vec::<f64>::new());
     }
 
     #[test]
