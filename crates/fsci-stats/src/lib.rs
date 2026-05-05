@@ -27793,6 +27793,82 @@ mod tests {
     }
 
     #[test]
+    fn wasserstein_metamorphic_symmetry() {
+        // /testing-metamorphic for [frankenscipy-kc6o4]:
+        // W(u, v) = W(v, u). The Wasserstein distance is a metric,
+        // so symmetry is required. Catches any direction-dependent
+        // logic in the empirical-CDF integration.
+        let cases: &[(&[f64], &[f64])] = &[
+            (&[1.0, 2.0, 3.0], &[2.5, 3.5, 4.0]),
+            (&[0.0, 5.0, 10.0, 15.0], &[1.0, 2.0, 8.0, 9.0]),
+            (&[-3.0, -1.0, 0.5], &[0.7, 1.5, 2.3, 3.1]),
+        ];
+        for (u, v) in cases {
+            let d_uv = wasserstein_distance(u, v);
+            let d_vu = wasserstein_distance(v, u);
+            assert!(
+                (d_uv - d_vu).abs() < 1e-12,
+                "W({u:?}, {v:?}) = {d_uv} but W(v, u) = {d_vu}"
+            );
+        }
+    }
+
+    #[test]
+    fn wasserstein_metamorphic_translation_invariance() {
+        // W(u + c, v + c) = W(u, v) for any constant c.
+        // Translating both samples by the same amount can't change
+        // the distance between their empirical CDFs.
+        let u = vec![0.0_f64, 1.0, 2.0, 3.0, 4.0];
+        let v = vec![0.5_f64, 1.5, 2.5, 3.5, 4.5];
+        let baseline = wasserstein_distance(&u, &v);
+        for &c in &[0.0_f64, 1.0, -3.5, 100.0] {
+            let u_c: Vec<f64> = u.iter().map(|&x| x + c).collect();
+            let v_c: Vec<f64> = v.iter().map(|&x| x + c).collect();
+            let d_c = wasserstein_distance(&u_c, &v_c);
+            assert!(
+                (d_c - baseline).abs() < 1e-10,
+                "translation c={c} changed W: {baseline} → {d_c}"
+            );
+        }
+    }
+
+    #[test]
+    fn wasserstein_metamorphic_scale_homogeneity() {
+        // W(α·u, α·v) = |α| · W(u, v) for any α (positive or negative).
+        let u = vec![1.0_f64, 2.0, 3.0, 4.0];
+        let v = vec![2.0_f64, 3.0, 4.0, 5.0];
+        let baseline = wasserstein_distance(&u, &v);
+        for &alpha in &[0.5_f64, 2.0, 10.0, -1.0, -3.5] {
+            let u_a: Vec<f64> = u.iter().map(|&x| alpha * x).collect();
+            let v_a: Vec<f64> = v.iter().map(|&x| alpha * x).collect();
+            let d_a = wasserstein_distance(&u_a, &v_a);
+            let expected = alpha.abs() * baseline;
+            assert!(
+                (d_a - expected).abs() < 1e-9 * expected.abs().max(1.0),
+                "scale α={alpha}: W = {d_a}, expected |α|·baseline = {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn wasserstein_metamorphic_non_negativity() {
+        // W(u, v) ≥ 0 for any inputs.
+        let cases: &[(&[f64], &[f64])] = &[
+            (&[1.0], &[1.0]),
+            (&[1.0, 2.0], &[2.0, 1.0]), // permutation only — should be 0
+            (&[0.0, 1.0], &[100.0, 200.0]),
+            (&[-5.0, 3.0], &[-3.0, 5.0]),
+        ];
+        for (u, v) in cases {
+            let d = wasserstein_distance(u, v);
+            assert!(
+                d >= -1e-12,
+                "W({u:?}, {v:?}) = {d} should be non-negative"
+            );
+        }
+    }
+
+    #[test]
     fn wasserstein_empty() {
         assert!(wasserstein_distance(&[], &[1.0]).is_nan());
     }
