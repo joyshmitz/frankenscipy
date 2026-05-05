@@ -217,8 +217,8 @@ pub use convenience::{
     zeta_scalar,
 };
 pub use elliptic::{
-    ELLIPTIC_DISPATCH_PLAN, ellipe, ellipeinc, ellipj, ellipk, ellipkinc, ellipkm1, exp1, expi,
-    expn_scalar, lambertw,
+    ELLIPTIC_DISPATCH_PLAN, ellipe, ellipeinc, ellipj, ellipk, ellipkinc, ellipkm1, elliprc,
+    elliprf, exp1, expi, expn_scalar, lambertw,
 };
 pub use error::{
     ERROR_DISPATCH_PLAN, erf, erf_scalar, erfc, erfc_scalar, erfcinv, erfinv, erfinv_scalar,
