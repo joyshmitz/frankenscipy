@@ -3200,7 +3200,12 @@ where
             let component = |value: f64| {
                 let mut shifted = x.to_vec();
                 shifted[column] = value;
-                f(&shifted).get(row).copied().unwrap_or(f64::NAN)
+                let values = f(&shifted);
+                if values.len() == rows {
+                    values[row]
+                } else {
+                    f64::NAN
+                }
             };
             let result = adaptive_first_derivative(&component, x[column], options)?;
             df[row][column] = result.df;
@@ -4178,6 +4183,25 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn differentiate_jacobian_rejects_output_shape_changes() {
+        let f = |x: &[f64]| {
+            if x[0].is_sign_positive() {
+                vec![x[0], x[0] * x[0]]
+            } else {
+                vec![x[0]]
+            }
+        };
+        let options = crate::DifferentiateOptions {
+            maxiter: 2,
+            initial_step: 0.25,
+            ..crate::DifferentiateOptions::default()
+        };
+        let error =
+            jacobian(f, &[0.0], options).expect_err("shape-changing outputs must fail closed");
+        assert!(matches!(error, crate::OptError::NonFiniteInput { .. }));
     }
 
     #[test]
