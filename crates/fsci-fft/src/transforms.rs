@@ -2728,6 +2728,28 @@ pub fn next_fast_len(target: usize) -> usize {
     }
 }
 
+/// Find the previous fast FFT length.
+///
+/// Matches `scipy.fft.prev_fast_len(target)`.
+///
+/// Returns the largest integer ≤ `target` that is a product of small
+/// prime factors {2, 3, 5}. Used to downsize an FFT to a length cheaper
+/// than `target`. The empty-product `1` is always 5-smooth, so the
+/// search terminates at 1 in the worst case. Input `0` returns `0`.
+#[must_use]
+pub fn prev_fast_len(target: usize) -> usize {
+    if target == 0 {
+        return 0;
+    }
+    let mut n = target;
+    loop {
+        if is_fast_len(n) {
+            return n;
+        }
+        n -= 1;
+    }
+}
+
 /// Check if n is composed only of factors 2, 3, 5 (Hamming numbers / regular numbers).
 #[allow(clippy::manual_is_multiple_of)]
 fn is_fast_len(mut n: usize) -> bool {
@@ -2876,8 +2898,8 @@ mod tests {
     use super::{
         FftError, FftOptions, TransformKind, WorkerPolicy, dct, dct_iv, dst_ii, dst_iii,
         estimate_fft_flops, fft, fft_with_audit, fft2, fftn, hfft, idct, ifft, ifft2, irfft,
-        irfft2, irfftn, next_fast_len, rfft, rfft_with_audit, rfft2, rfftn, sync_audit_ledger,
-        take_transform_traces,
+        irfft2, irfftn, is_fast_len, next_fast_len, prev_fast_len, rfft, rfft_with_audit, rfft2,
+        rfftn, sync_audit_ledger, take_transform_traces,
     };
     use crate::Normalization;
     use crate::plan::clear_shared_plan_cache;
@@ -3549,6 +3571,45 @@ mod tests {
         assert_eq!(next_fast_len(30), 30);
         // 100 = 2^2 * 5^2
         assert_eq!(next_fast_len(100), 100);
+    }
+
+    // ── prev_fast_len tests ────────────────────────────────────────
+
+    #[test]
+    fn prev_fast_len_already_fast_returns_self() {
+        // Each {2,3,5}-smooth value is its own predecessor.
+        assert_eq!(prev_fast_len(1), 1);
+        assert_eq!(prev_fast_len(2), 2);
+        assert_eq!(prev_fast_len(8), 8);
+        assert_eq!(prev_fast_len(30), 30); // 2·3·5
+        assert_eq!(prev_fast_len(100), 100); // 2²·5²
+    }
+
+    #[test]
+    fn prev_fast_len_non_smooth() {
+        assert_eq!(prev_fast_len(7), 6); // 6 = 2·3, 7 prime
+        assert_eq!(prev_fast_len(11), 10); // 10 = 2·5
+        assert_eq!(prev_fast_len(13), 12); // 12 = 2²·3
+        assert_eq!(prev_fast_len(17), 16); // 16 = 2⁴
+        assert_eq!(prev_fast_len(31), 30); // 30 = 2·3·5
+    }
+
+    #[test]
+    fn prev_fast_len_zero_input() {
+        assert_eq!(prev_fast_len(0), 0);
+    }
+
+    #[test]
+    fn prev_next_fast_len_bracket_target() {
+        // For any target ≥ 1, prev_fast_len(t) ≤ t ≤ next_fast_len(t).
+        for t in 1usize..=128 {
+            let p = prev_fast_len(t);
+            let n = next_fast_len(t);
+            assert!(p <= t, "prev_fast_len({t}) = {p} should be ≤ {t}");
+            assert!(t <= n, "next_fast_len({t}) = {n} should be ≥ {t}");
+            assert!(is_fast_len(p), "prev_fast_len({t}) = {p} not 5-smooth");
+            assert!(is_fast_len(n), "next_fast_len({t}) = {n} not 5-smooth");
+        }
     }
 
     // ── hfft tests ─────────────────────────────────────────────────
