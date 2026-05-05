@@ -396,20 +396,30 @@ fn next_operation_id() -> String {
     format!("fft-op-{next:016x}")
 }
 
-fn record_trace(trace: TransformTrace) {
-    if let Ok(mut log) = trace_log().lock() {
-        log.push(trace);
+/// Acquire the trace-log guard, recovering from a poisoned mutex so
+/// trace entries are preserved across panics.
+/// Resolves [frankenscipy-wtxpg].
+fn lock_trace_log_or_recover() -> std::sync::MutexGuard<'static, Vec<TransformTrace>> {
+    let log = trace_log();
+    match log.lock() {
+        Ok(g) => g,
+        Err(poisoned) => {
+            log.clear_poison();
+            poisoned.into_inner()
+        }
     }
+}
+
+fn record_trace(trace: TransformTrace) {
+    lock_trace_log_or_recover().push(trace);
 }
 
 #[must_use]
 pub fn take_transform_traces() -> Vec<TransformTrace> {
-    if let Ok(mut log) = trace_log().lock() {
-        let mut out = Vec::with_capacity(log.len());
-        std::mem::swap(&mut *log, &mut out);
-        return out;
-    }
-    Vec::new()
+    let mut log = lock_trace_log_or_recover();
+    let mut out = Vec::with_capacity(log.len());
+    std::mem::swap(&mut *log, &mut out);
+    out
 }
 
 /// 1D forward complex FFT.

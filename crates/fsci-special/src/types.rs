@@ -331,14 +331,26 @@ fn trace_log() -> &'static Mutex<Vec<SpecialTraceEntry>> {
     TRACE_LOG.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+/// Acquire the trace-log guard, recovering from a poisoned mutex so
+/// trace entries are preserved across panics.
+/// Resolves [frankenscipy-wtxpg].
+fn lock_trace_log_or_recover() -> std::sync::MutexGuard<'static, Vec<SpecialTraceEntry>> {
+    let log = trace_log();
+    match log.lock() {
+        Ok(g) => g,
+        Err(poisoned) => {
+            log.clear_poison();
+            poisoned.into_inner()
+        }
+    }
+}
+
 #[must_use]
 pub fn take_special_traces() -> Vec<SpecialTraceEntry> {
-    if let Ok(mut log) = trace_log().lock() {
-        let mut out = Vec::with_capacity(log.len());
-        std::mem::swap(&mut *log, &mut out);
-        return out;
-    }
-    Vec::new()
+    let mut log = lock_trace_log_or_recover();
+    let mut out = Vec::with_capacity(log.len());
+    std::mem::swap(&mut *log, &mut out);
+    out
 }
 
 pub fn record_special_trace(
@@ -350,18 +362,17 @@ pub fn record_special_trace(
     result_summary: impl Into<String>,
     clamped: bool,
 ) {
-    if let Ok(mut log) = trace_log().lock() {
-        log.push(SpecialTraceEntry {
-            timestamp_ms: now_unix_ms(),
-            function,
-            mode,
-            category,
-            input_summary: input_summary.into(),
-            action_taken,
-            result_summary: result_summary.into(),
-            clamped,
-        });
-    }
+    let mut log = lock_trace_log_or_recover();
+    log.push(SpecialTraceEntry {
+        timestamp_ms: now_unix_ms(),
+        function,
+        mode,
+        category,
+        input_summary: input_summary.into(),
+        action_taken,
+        result_summary: result_summary.into(),
+        clamped,
+    });
 }
 
 pub fn not_yet_implemented(
