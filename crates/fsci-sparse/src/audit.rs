@@ -74,7 +74,7 @@ mod tests {
             let l = ledger.clone();
             std::thread::spawn(move || {
                 let _g = l.lock().expect("acquire");
-                panic!("poison fsci-sparse audit ledger on purpose");
+                std::panic::panic_any("poison fsci-sparse audit ledger on purpose");
             })
             .join()
         };

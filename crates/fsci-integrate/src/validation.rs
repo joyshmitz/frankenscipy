@@ -735,7 +735,7 @@ mod tests {
             ledger.entries()[0].action,
             AuditAction::BoundedRecovery {
                 ref recovery_action
-            } if recovery_action == "clamp_rtol_to_min"
+            } if recovery_action.as_str().eq("clamp_rtol_to_min")
         ));
     }
 
@@ -783,7 +783,7 @@ mod tests {
             let ledger = audit_ledger.clone();
             std::thread::spawn(move || {
                 let _guard = ledger.lock().expect("acquire ledger");
-                panic!("poison fsci-integrate audit ledger on purpose");
+                std::panic::panic_any("poison fsci-integrate audit ledger on purpose");
             })
             .join()
         };

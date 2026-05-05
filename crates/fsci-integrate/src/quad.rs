@@ -3018,7 +3018,8 @@ mod tests {
         fn f_poly(x: f64) -> f64 {
             x * x * x + 2.0 * x + 1.0
         }
-        let cases: &[(fn(f64) -> f64, f64, f64)] = &[
+        type QuadCase = (fn(f64) -> f64, f64, f64);
+        let cases: &[QuadCase] = &[
             (f_exp, 0.0, 2.0),
             (f64::sin, 0.0, std::f64::consts::PI),
             (f_poly, -1.5, 2.5),
@@ -3082,8 +3083,8 @@ mod tests {
                     1 => Box::new(move |x: f64| (x - t).sin()),
                     _ => Box::new(move |x: f64| 1.0 / (1.0 + (x - t) * (x - t))),
                 };
-                let lhs = quad(|x| untranslated(x), a, b, opts).expect("lhs");
-                let rhs = quad(|x| translated(x), a + t, b + t, opts).expect("rhs");
+                let lhs = quad(untranslated, a, b, opts).expect("lhs");
+                let rhs = quad(translated, a + t, b + t, opts).expect("rhs");
                 assert!(
                     (lhs.integral - rhs.integral).abs() < 1e-9 + 1e-9 * lhs.integral.abs(),
                     "translation by {t} broken on f_choice {f_choice}: \

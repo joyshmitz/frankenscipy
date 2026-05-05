@@ -7421,7 +7421,7 @@ mod tests {
             let ledger = audit_ledger.clone();
             std::thread::spawn(move || {
                 let _guard = ledger.lock().expect("acquire ledger");
-                panic!("poison fsci-linalg audit ledger on purpose");
+                std::panic::panic_any("poison fsci-linalg audit ledger on purpose");
             })
             .join()
         };
@@ -8530,24 +8530,24 @@ mod tests {
 
         // MP-3: (A · A⁺)ᵀ = A · A⁺.  A·A⁺ is m×m.
         let a_ap = matmul(&a, a_pinv);
-        for i in 0..m {
-            for j in 0..m {
+        for (i, row) in a_ap.iter().enumerate().take(m) {
+            for (j, value) in row.iter().enumerate().take(m) {
                 assert!(
-                    (a_ap[i][j] - a_ap[j][i]).abs() < 1e-10,
+                    (*value - a_ap[j][i]).abs() < 1e-10,
                     "A·A⁺ not symmetric at [{i}][{j}]: {} vs {}",
-                    a_ap[i][j],
+                    value,
                     a_ap[j][i]
                 );
             }
         }
 
         // MP-4: (A⁺ · A)ᵀ = A⁺ · A.  A⁺·A is n×n.
-        for i in 0..n {
-            for j in 0..n {
+        for (i, row) in ap_a.iter().enumerate().take(n) {
+            for (j, value) in row.iter().enumerate().take(n) {
                 assert!(
-                    (ap_a[i][j] - ap_a[j][i]).abs() < 1e-10,
+                    (*value - ap_a[j][i]).abs() < 1e-10,
                     "A⁺·A not symmetric at [{i}][{j}]: {} vs {}",
-                    ap_a[i][j],
+                    value,
                     ap_a[j][i]
                 );
             }

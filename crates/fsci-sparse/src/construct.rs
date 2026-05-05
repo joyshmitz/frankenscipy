@@ -1311,16 +1311,10 @@ mod tests {
 
     #[test]
     fn kronsum_rejects_non_square() {
-        let rect = CooMatrix::from_triplets(
-            Shape2D::new(2, 3),
-            vec![1.0],
-            vec![0],
-            vec![0],
-            false,
-        )
-        .expect("coo")
-        .to_csr()
-        .expect("csr");
+        let rect = CooMatrix::from_triplets(Shape2D::new(2, 3), vec![1.0], vec![0], vec![0], false)
+            .expect("coo")
+            .to_csr()
+            .expect("csr");
         let sq = eye(2).expect("eye");
         assert!(kronsum(&rect, &sq).is_err());
         assert!(kronsum(&sq, &rect).is_err());
