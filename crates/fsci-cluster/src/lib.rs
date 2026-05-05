@@ -320,18 +320,22 @@ pub fn vq(
     let mut labels = Vec::with_capacity(data.len());
     let mut dists = Vec::with_capacity(data.len());
 
+    // Resolves [frankenscipy-dnunq]: compare in squared-distance space
+    // so we only sqrt the winning min_sq once per data point instead
+    // of once per (point, centroid) pair. Monotone-equivalent for
+    // nearest-neighbor selection.
     for point in data {
-        let mut min_dist = f64::INFINITY;
+        let mut min_sq = f64::INFINITY;
         let mut best_c = 0;
         for (c, centroid) in centroids.iter().enumerate() {
-            let d = sq_dist(point, centroid).sqrt();
-            if d < min_dist {
-                min_dist = d;
+            let sd = sq_dist(point, centroid);
+            if sd < min_sq {
+                min_sq = sd;
                 best_c = c;
             }
         }
         labels.push(best_c);
-        dists.push(min_dist);
+        dists.push(min_sq.sqrt());
     }
 
     Ok((labels, dists))
@@ -2379,6 +2383,32 @@ mod tests {
         assert_eq!(labels[0], 0);
         assert_eq!(labels[1], 1);
         assert!(dists[0] < 2.0);
+    }
+
+    #[test]
+    fn vq_distances_are_true_euclidean() {
+        // /profiling-software-performance regression for
+        // frankenscipy-dnunq: vq used to call sqrt() inside the inner
+        // k-loop; the new version compares squared distances and only
+        // sqrt's the winning min. Verify the output dists are still the
+        // *true Euclidean* distance to the assigned centroid, not the
+        // squared distance.
+        //
+        //   centroid 0 = (0, 0), centroid 1 = (3, 4)
+        //   point     = (3, 0)   → centroid 0 (sq 9 < 16) → dist √9 = 3.0
+        //   point     = (3, 5)   → centroid 1 (sq 1 < 34) → dist √1 = 1.0
+        //   point     = (0, 4)   → centroid 1 (sq 9 < 16) → dist √9 = 3.0
+        let centroids = vec![vec![0.0, 0.0], vec![3.0, 4.0]];
+        let data = vec![vec![3.0, 0.0], vec![3.0, 5.0], vec![0.0, 4.0]];
+        let (labels, dists) = vq(&data, &centroids).unwrap();
+        assert_eq!(labels, vec![0, 1, 1]);
+        let expected_dists = [3.0_f64, 1.0, 3.0];
+        for (i, (&got, &exp)) in dists.iter().zip(expected_dists.iter()).enumerate() {
+            assert!(
+                (got - exp).abs() < 1e-12,
+                "vq dists[{i}] = {got}, expected {exp}"
+            );
+        }
     }
 
     #[test]
