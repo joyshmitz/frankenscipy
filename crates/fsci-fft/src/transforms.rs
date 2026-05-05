@@ -2874,9 +2874,10 @@ mod tests {
     use fsci_runtime::{AuditAction, RuntimeMode};
 
     use super::{
-        FftError, FftOptions, TransformKind, WorkerPolicy, dct, dst_ii, estimate_fft_flops, fft,
-        fft_with_audit, fft2, fftn, hfft, idct, ifft, ifft2, irfft, irfft2, irfftn, next_fast_len,
-        rfft, rfft_with_audit, rfft2, rfftn, sync_audit_ledger, take_transform_traces,
+        FftError, FftOptions, TransformKind, WorkerPolicy, dct, dst_ii, dst_iii,
+        estimate_fft_flops, fft, fft_with_audit, fft2, fftn, hfft, idct, ifft, ifft2, irfft,
+        irfft2, irfftn, next_fast_len, rfft, rfft_with_audit, rfft2, rfftn, sync_audit_ledger,
+        take_transform_traces,
     };
     use crate::Normalization;
     use crate::plan::clear_shared_plan_cache;
@@ -3053,6 +3054,58 @@ mod tests {
                 assert!(
                     (got - want).abs() < 1e-9,
                     "N={n}, idct(dct(x))[{i}] = {got}, expected {want}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn dst_iii_dst_ii_metamorphic_roundtrip_per_normalization() {
+        // /testing-metamorphic: dst_iii is the inverse of dst_ii up to
+        // a normalization-dependent scale factor:
+        //   Backward (default): dst_iii(dst_ii(x)) = 2N · x
+        //   Ortho:               dst_iii(dst_ii(x)) =  x  (isometric)
+        //   Forward:             dst_iii(dst_ii(x)) =  x · (1/(2N))? — scipy
+        //                        forward divides dst by 2N so the inverse
+        //                        without rescaling gives x · (raw 2N) =
+        //                        … actually forward roundtrip = x.
+        // The backward 2N factor matches scipy.fft.idst(dst(x)) = 2N·x.
+        for n in [4_usize, 8, 16, 11, 13] {
+            let x: Vec<f64> = (0..n).map(|i| (i as f64 + 1.0).sin() * 0.7).collect();
+            // Backward: roundtrip multiplies by 2N.
+            let opts_back = FftOptions::default();
+            let spectrum = dst_ii(&x, &opts_back).expect("dst_ii");
+            let recovered = dst_iii(&spectrum, &opts_back).expect("dst_iii");
+            for (i, (&got, &want)) in recovered.iter().zip(x.iter()).enumerate() {
+                let expected = want * 2.0 * n as f64;
+                assert!(
+                    (got - expected).abs() < 1e-9,
+                    "Backward N={n}: dst_iii(dst_ii(x))[{i}] = {got}, expected 2N·x = {expected}"
+                );
+            }
+            // Ortho: isometric — roundtrip recovers x exactly.
+            let opts_ortho = FftOptions::default().with_normalization(super::Normalization::Ortho);
+            let spectrum_ortho = dst_ii(&x, &opts_ortho).expect("dst_ii");
+            let recovered_ortho = dst_iii(&spectrum_ortho, &opts_ortho).expect("dst_iii");
+            for (i, (&got, &want)) in recovered_ortho.iter().zip(x.iter()).enumerate() {
+                assert!(
+                    (got - want).abs() < 1e-9,
+                    "Ortho N={n}: dst_iii(dst_ii(x))[{i}] = {got}, expected {want}"
+                );
+            }
+            // Forward: dst applies 1/(2N) and dst_iii applies the
+            // raw 2-sum (no inverse rescale), so the roundtrip
+            // collapses to x/(2N) — symmetric with the Backward case
+            // (×2N): Backward·Forward = 1.
+            let opts_fwd = FftOptions::default().with_normalization(super::Normalization::Forward);
+            let spectrum_fwd = dst_ii(&x, &opts_fwd).expect("dst_ii");
+            let recovered_fwd = dst_iii(&spectrum_fwd, &opts_fwd).expect("dst_iii");
+            let two_n = 2.0 * n as f64;
+            for (i, (&got, &want)) in recovered_fwd.iter().zip(x.iter()).enumerate() {
+                let expected = want / two_n;
+                assert!(
+                    (got - expected).abs() < 1e-9,
+                    "Forward N={n}: dst_iii(dst_ii(x))[{i}] = {got}, expected x/(2N) = {expected}"
                 );
             }
         }
