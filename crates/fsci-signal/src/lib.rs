@@ -9653,6 +9653,51 @@ mod tests {
     }
 
     #[test]
+    fn blackman_window_closed_form_values() {
+        // /testing-golden-artifacts for [frankenscipy-rd0ai]:
+        // The Blackman window for n=1 is [1] by convention (single-
+        // sample edge case); for n=3 it's [0, 1, 0] (m=2, t∈{0,π,2π}
+        // give exact factors 1, -1, 1); for n=5 the interior values
+        // 0.34 follow from cos(π/2)=0, cos(π)=-1 directly.
+        assert_eq!(blackman(0), Vec::<f64>::new());
+        assert_eq!(blackman(1), vec![1.0]);
+
+        let w3 = blackman(3);
+        assert_eq!(w3.len(), 3);
+        assert!(w3[0].abs() < 1e-15, "blackman(3)[0] = {}", w3[0]);
+        assert!((w3[1] - 1.0).abs() < 1e-15, "blackman(3)[1] = {}", w3[1]);
+        assert!(w3[2].abs() < 1e-15, "blackman(3)[2] = {}", w3[2]);
+
+        // n=5: w[1] = 0.42 + 0.08·(-1) = 0.34
+        let w5 = blackman(5);
+        let expected_5 = [0.0, 0.34, 1.0, 0.34, 0.0];
+        for (i, (&got, &exp)) in w5.iter().zip(expected_5.iter()).enumerate() {
+            assert!(
+                (got - exp).abs() < 1e-12,
+                "blackman(5)[{i}] = {got}, expected {exp}"
+            );
+        }
+    }
+
+    #[test]
+    fn blackman_window_is_symmetric() {
+        // /testing-metamorphic: w[i] = w[n-1-i] for any n ≥ 1.
+        for &n in &[3usize, 5, 7, 11, 16, 33] {
+            let w = blackman(n);
+            for i in 0..n / 2 {
+                assert!(
+                    (w[i] - w[n - 1 - i]).abs() < 1e-15,
+                    "blackman({n}) not symmetric at index {i}: \
+                     w[{i}] = {}, w[{}] = {}",
+                    w[i],
+                    n - 1 - i,
+                    w[n - 1 - i]
+                );
+            }
+        }
+    }
+
+    #[test]
     fn blackmanharris_window_matches_scipy_reference() {
         let w = blackmanharris(5);
         let expected = [0.00006, 0.21747, 1.0, 0.21747, 0.00006];
