@@ -3278,14 +3278,27 @@ pub fn find_delay(x: &[f64], y: &[f64]) -> i64 {
     let mut best_lag: i64 = 0;
     let mut best_corr = f64::NEG_INFINITY;
 
+    // Resolves [frankenscipy-9pkqs]: hoist the per-lag bounds out of
+    // the inner loop. For lag L, the valid i range is
+    //   [max(0, L), min(n, m + L))
+    // since j = i - L must satisfy 0 ≤ j < m. Iterating over slices
+    // with .zip eliminates the runtime branch and enables better
+    // auto-vectorization.
+    let n_i = n as i64;
+    let m_i = m as i64;
     for lag in -(max_lag as i64)..=(max_lag as i64) {
-        let mut sum = 0.0;
-        for (i, &x_i) in x.iter().enumerate().take(n) {
-            let j = i as i64 - lag;
-            if j >= 0 && (j as usize) < m {
-                sum += x_i * y[j as usize];
-            }
+        let i_lo = lag.max(0) as usize;
+        let i_hi = (n_i.min(m_i + lag)).max(0) as usize;
+        if i_lo >= i_hi {
+            continue;
         }
+        let j_lo = (i_lo as i64 - lag) as usize;
+        let len = i_hi - i_lo;
+        let sum: f64 = x[i_lo..i_lo + len]
+            .iter()
+            .zip(y[j_lo..j_lo + len].iter())
+            .map(|(&xi, &yj)| xi * yj)
+            .sum();
         if sum > best_corr {
             best_corr = sum;
             best_lag = lag;
@@ -13546,6 +13559,45 @@ mod tests {
             (peak_idx as i64 - center as i64).abs() <= 2,
             "peak at {peak_idx}, center at {center}"
         );
+    }
+
+    #[test]
+    fn find_delay_recovers_known_shift_after_bounds_hoist() {
+        // /profiling-software-performance regression for
+        // [frankenscipy-9pkqs]: find_delay's inner loop now hoists
+        // the per-i bounds check out of the lag loop. Verify the
+        // optimized version still recovers the correct shift on
+        // a known-shifted signal pair.
+        //
+        // Construct a clear template-and-shifted-copy:
+        //   x = [0, 0, 1, 2, 3, 0, 0, 0]
+        //   y = [0, 0, 0, 0, 1, 2, 3, 0]   (shifted right by 2)
+        // Cross-correlation peaks where (i - lag = j) for the
+        // shared spike pattern; lag = -2 (i.e., y is shifted forward
+        // relative to x by 2 samples).
+        let x = vec![0.0_f64, 0.0, 1.0, 2.0, 3.0, 0.0, 0.0, 0.0];
+        let y = vec![0.0_f64, 0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 0.0];
+        let lag = find_delay(&x, &y);
+        assert_eq!(lag, -2, "expected lag = -2 for right-shifted y, got {lag}");
+    }
+
+    #[test]
+    fn find_delay_zero_lag_for_identical_signals() {
+        // Two identical signals correlate maximally at lag 0.
+        let x = vec![1.0_f64, 2.0, 3.0, 2.0, 1.0];
+        let lag = find_delay(&x, &x);
+        assert_eq!(lag, 0, "identical signals should give lag = 0, got {lag}");
+    }
+
+    #[test]
+    fn find_delay_handles_unequal_lengths() {
+        // Bounds-hoist regression: the new inner loop must correctly
+        // truncate when x and y have different lengths.
+        let x = vec![1.0_f64, 2.0, 3.0, 0.0, 0.0, 0.0];
+        let y = vec![3.0_f64, 0.0, 0.0]; // shorter; matches x[2]
+        let lag = find_delay(&x, &y);
+        // Best correlation: x[2..3] · y[0..1] = 3*3 = 9 at lag = 2.
+        assert_eq!(lag, 2, "unequal lengths: expected lag=2, got {lag}");
     }
 
     #[test]
