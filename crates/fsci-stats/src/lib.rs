@@ -29100,6 +29100,115 @@ mod tests {
     }
 
     #[test]
+    fn gen_extreme_cdf_at_zero_is_exp_neg_one_all_branches() {
+        // /testing-golden-artifacts for [frankenscipy-f7bys]:
+        // GEV(c).cdf(0) = exp(-(1 + c·0)^(-1/c)) = exp(-1) for every
+        // c ≠ 0, and = exp(-exp(-0)) = exp(-1) for c = 0. Universal
+        // anchor across the three branches (Gumbel / Fréchet / Weibull).
+        let target = (-1.0_f64).exp();
+        for &c in &[-0.5_f64, -0.25, -1e-9, 0.0, 1e-9, 0.25, 0.5, 1.0] {
+            let v = GenExtreme::new(c).cdf(0.0);
+            assert_close(
+                v,
+                target,
+                1e-12,
+                &format!("GEV({c}).cdf(0) = {v}, expected exp(-1) = {target}"),
+            );
+        }
+    }
+
+    #[test]
+    fn gen_extreme_gumbel_moments_match_closed_form() {
+        // Gumbel: mean = Euler-Mascheroni γ; var = π²/6.
+        let gev = GenExtreme::new(0.0);
+        let euler = 0.577_215_664_901_532_9_f64;
+        assert_close(gev.mean(), euler, 1e-12, "Gumbel mean = γ");
+        assert_close(gev.var(), PI * PI / 6.0, 1e-12, "Gumbel var = π²/6");
+    }
+
+    #[test]
+    fn gen_extreme_endpoint_cdf_per_branch() {
+        // Fréchet (c > 0): support = [-1/c, ∞). cdf at left endpoint = 0.
+        for &c in &[0.25_f64, 0.5, 1.0] {
+            let v = GenExtreme::new(c).cdf(-1.0 / c);
+            assert!(
+                v.abs() < 1e-12,
+                "Fréchet GEV(c={c}) cdf at -1/c should be 0, got {v}"
+            );
+        }
+        // Weibull (c < 0): support = (-∞, -1/c]. cdf at right endpoint = 1.
+        for &c in &[-0.25_f64, -0.5, -1.0] {
+            let v = GenExtreme::new(c).cdf(-1.0 / c);
+            assert!(
+                (v - 1.0).abs() < 1e-12,
+                "Weibull GEV(c={c}) cdf at -1/c should be 1, got {v}"
+            );
+        }
+    }
+
+    #[test]
+    fn gen_extreme_ppf_cdf_roundtrip_all_branches() {
+        // CDF(PPF(q)) = q across each branch and a sweep of q.
+        let qs = [0.05_f64, 0.25, 0.5, 0.75, 0.95];
+        for &c in &[-0.5_f64, -0.25, 0.0, 0.25, 0.5] {
+            let gev = GenExtreme::new(c);
+            for &q in &qs {
+                let x = gev.ppf(q);
+                let r = gev.cdf(x);
+                assert_close(
+                    r,
+                    q,
+                    1e-9,
+                    &format!("GEV(c={c}) cdf(ppf({q})) = {r}, expected {q}"),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn gen_extreme_pdf_cdf_closed_form_reference_values() {
+        // Closed-form anchors derived directly from the GEV(c, x)
+        // identity. SciPy uses the opposite sign convention
+        // (scipy_shape = -c), so equivalent scipy values would be
+        // scipy.stats.genextreme.{cdf,pdf}(x, c=-c).
+        //
+        // (c = +0.5, x = 0.5):
+        //   t = 1 + 0.5·0.5 = 1.25; tp = 1.25^(-2) = 0.64
+        //   cdf = exp(-tp) = exp(-0.64)
+        //   pdf = tp^(c+1)·exp(-tp) = 0.64^1.5·exp(-0.64)
+        let gev_pos = GenExtreme::new(0.5);
+        assert_close(
+            gev_pos.cdf(0.5),
+            (-0.64_f64).exp(),
+            1e-12,
+            "GEV(c=+0.5).cdf(0.5) closed form",
+        );
+        assert_close(
+            gev_pos.pdf(0.5),
+            0.64_f64.powf(1.5) * (-0.64_f64).exp(),
+            1e-12,
+            "GEV(c=+0.5).pdf(0.5) closed form",
+        );
+
+        // (c = -0.5, x = 0.5):
+        //   t = 1 - 0.5·0.5 = 0.75; tp = 0.75^(2) = 0.5625
+        //   cdf = exp(-0.5625);  pdf = 0.5625^(0.5)·exp(-0.5625)
+        let gev_neg = GenExtreme::new(-0.5);
+        assert_close(
+            gev_neg.cdf(0.5),
+            (-0.5625_f64).exp(),
+            1e-12,
+            "GEV(c=-0.5).cdf(0.5) closed form",
+        );
+        assert_close(
+            gev_neg.pdf(0.5),
+            0.5625_f64.powf(0.5) * (-0.5625_f64).exp(),
+            1e-12,
+            "GEV(c=-0.5).pdf(0.5) closed form",
+        );
+    }
+
+    #[test]
     fn gen_pareto_pdf_cdf() {
         let gp = GenPareto::new(0.5);
         assert!(gp.pdf(1.0) > 0.0);
