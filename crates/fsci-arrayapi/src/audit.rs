@@ -8,6 +8,21 @@ pub fn sync_audit_ledger() -> SyncSharedAuditLedger {
     AuditLedger::shared()
 }
 
+/// Acquire the ledger guard, recovering from a poisoned mutex so
+/// audit events still record after any prior thread panicked.
+/// Resolves [frankenscipy-kt4od].
+fn lock_or_recover(
+    ledger: &SyncSharedAuditLedger,
+) -> std::sync::MutexGuard<'_, AuditLedger> {
+    match ledger.lock() {
+        Ok(g) => g,
+        Err(poisoned) => {
+            ledger.clear_poison();
+            poisoned.into_inner()
+        }
+    }
+}
+
 pub fn record_fail_closed(
     ledger: &SyncSharedAuditLedger,
     input_bytes: &[u8],
@@ -22,9 +37,7 @@ pub fn record_fail_closed(
         },
         outcome.to_string(),
     );
-    if let Ok(mut ledger) = ledger.lock() {
-        ledger.record(event);
-    }
+    lock_or_recover(ledger).record(event);
 }
 
 pub(crate) fn record_array_api_error(

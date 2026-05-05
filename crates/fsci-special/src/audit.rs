@@ -21,6 +21,24 @@ pub fn sync_audit_ledger() -> SyncSharedAuditLedger {
     AuditLedger::shared()
 }
 
+/// Acquire the ledger guard, recovering from a poisoned mutex.
+///
+/// The previous `if let Ok(mut ledger) = ledger.lock()` pattern
+/// silently dropped audit events when any prior thread panicked while
+/// holding the guard, violating the fail-closed audit invariant.
+/// Resolves [frankenscipy-kt4od].
+fn lock_or_recover(
+    ledger: &SyncSharedAuditLedger,
+) -> std::sync::MutexGuard<'_, AuditLedger> {
+    match ledger.lock() {
+        Ok(g) => g,
+        Err(poisoned) => {
+            ledger.clear_poison();
+            poisoned.into_inner()
+        }
+    }
+}
+
 /// Record a fail-closed audit event when Hardened mode rejects input.
 ///
 /// `input_bytes` is hashed into the event fingerprint; callers with
@@ -40,9 +58,7 @@ pub fn record_fail_closed(
         },
         outcome.to_string(),
     );
-    if let Ok(mut ledger) = ledger.lock() {
-        ledger.record(event);
-    }
+    lock_or_recover(ledger).record(event);
 }
 
 /// Record a bounded-recovery audit event when Hardened mode falls
@@ -61,7 +77,5 @@ pub fn record_bounded_recovery(
         },
         outcome.to_string(),
     );
-    if let Ok(mut ledger) = ledger.lock() {
-        ledger.record(event);
-    }
+    lock_or_recover(ledger).record(event);
 }

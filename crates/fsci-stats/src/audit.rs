@@ -17,6 +17,24 @@ pub fn sync_audit_ledger() -> SyncSharedAuditLedger {
     AuditLedger::shared()
 }
 
+/// Acquire the ledger guard, recovering from a poisoned mutex.
+///
+/// The previous `if let Ok(mut ledger) = ledger.lock()` pattern
+/// silently dropped audit events when any prior thread panicked while
+/// holding the guard, violating the fail-closed audit invariant.
+/// Resolves [frankenscipy-kt4od].
+fn lock_or_recover(
+    ledger: &SyncSharedAuditLedger,
+) -> std::sync::MutexGuard<'_, AuditLedger> {
+    match ledger.lock() {
+        Ok(g) => g,
+        Err(poisoned) => {
+            ledger.clear_poison();
+            poisoned.into_inner()
+        }
+    }
+}
+
 pub fn record_fail_closed(
     ledger: &SyncSharedAuditLedger,
     input_bytes: &[u8],
@@ -31,9 +49,7 @@ pub fn record_fail_closed(
         },
         outcome.to_string(),
     );
-    if let Ok(mut ledger) = ledger.lock() {
-        ledger.record(event);
-    }
+    lock_or_recover(ledger).record(event);
 }
 
 pub fn record_bounded_recovery(
@@ -50,7 +66,54 @@ pub fn record_bounded_recovery(
         },
         outcome.to_string(),
     );
-    if let Ok(mut ledger) = ledger.lock() {
-        ledger.record(event);
+    lock_or_recover(ledger).record(event);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn record_after_poison_still_lands_in_ledger() {
+        // /deadlock-finder-and-fixer regression for frankenscipy-kt4od:
+        // a prior panic while holding the audit-ledger guard must NOT
+        // silently drop subsequent record_fail_closed events. Before
+        // the fix, `if let Ok(mut g) = ledger.lock()` returned Err on
+        // poison and the event was lost. After the fix, lock_or_recover
+        // clears the poison and proceeds.
+        let ledger = sync_audit_ledger();
+
+        // Deliberately poison the ledger: panic while holding the lock.
+        let poisoned_thread = {
+            let l = ledger.clone();
+            std::thread::spawn(move || {
+                let _g = l.lock().expect("acquire");
+                panic!("poison the ledger on purpose");
+            })
+            .join()
+        };
+        assert!(poisoned_thread.is_err(), "thread should have panicked");
+        assert!(ledger.lock().is_err(), "ledger must be poisoned after panic");
+
+        // The fixed record_fail_closed must still land an event.
+        record_fail_closed(&ledger, b"x=NaN", "non_finite_input", "rejected");
+        record_bounded_recovery(&ledger, b"x=Inf", "clamp_to_max", "recovered");
+
+        // After clear_poison + into_inner the lock is healthy again.
+        let g = ledger.lock().expect("ledger should be healthy after recovery");
+        assert_eq!(g.len(), 2, "both events must be recorded");
+        let kinds: Vec<_> = g
+            .entries()
+            .iter()
+            .map(|e| match &e.action {
+                fsci_runtime::AuditAction::FailClosed { reason } => format!("FC:{reason}"),
+                fsci_runtime::AuditAction::BoundedRecovery { recovery_action } => {
+                    format!("BR:{recovery_action}")
+                }
+                _ => "OTHER".to_string(),
+            })
+            .collect();
+        assert!(kinds.contains(&"FC:non_finite_input".to_string()));
+        assert!(kinds.contains(&"BR:clamp_to_max".to_string()));
     }
 }
