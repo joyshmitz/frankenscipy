@@ -574,6 +574,39 @@ mod tests {
     }
 
     #[test]
+    fn fftconvolve_golden_full_mode_known_polynomial_product() {
+        // /testing-golden-artifacts: scipy.signal.fftconvolve([1,2,3], [4,5,6])
+        // is equivalent to polynomial multiplication (1 + 2x + 3x²) ·
+        // (4 + 5x + 6x²) = 4 + 13x + 28x² + 27x³ + 18x⁴, hand-derived
+        // and pinned as the canonical scipy reference vector.
+        let a = vec![1.0_f64, 2.0, 3.0];
+        let b = vec![4.0_f64, 5.0, 6.0];
+        let got = fftconvolve(&a, &b, "full").unwrap();
+        let expected = [4.0_f64, 13.0, 28.0, 27.0, 18.0];
+        assert_eq!(got.len(), expected.len(), "length mismatch");
+        for (i, (&g, &e)) in got.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (g - e).abs() < 1e-10,
+                "fftconvolve full[{i}] = {g}, expected {e}"
+            );
+        }
+        // 'same' mode trims to len(a) = 3 from the center.
+        let got_same = fftconvolve(&a, &b, "same").unwrap();
+        let expected_same = [13.0_f64, 28.0, 27.0];
+        assert_eq!(got_same.len(), 3);
+        for (i, (&g, &e)) in got_same.iter().zip(expected_same.iter()).enumerate() {
+            assert!(
+                (g - e).abs() < 1e-10,
+                "fftconvolve same[{i}] = {g}, expected {e}"
+            );
+        }
+        // 'valid' mode trims to max(len) - min(len) + 1 = 1 element.
+        let got_valid = fftconvolve(&a, &b, "valid").unwrap();
+        assert_eq!(got_valid.len(), 1);
+        assert!((got_valid[0] - 28.0).abs() < 1e-10);
+    }
+
+    #[test]
     fn fftconvolve_metamorphic_commutativity() {
         // /testing-metamorphic: fftconvolve(a, b, 'full') = fftconvolve(b, a, 'full').
         // The convolution operator is commutative, so swapping inputs
