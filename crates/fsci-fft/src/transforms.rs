@@ -2848,8 +2848,8 @@ mod tests {
 
     use super::{
         FftError, FftOptions, TransformKind, WorkerPolicy, dct, dst_ii, estimate_fft_flops, fft,
-        fft_with_audit, fft2, fftn, hfft, ifft, ifft2, irfft, irfft2, irfftn, next_fast_len, rfft,
-        rfft_with_audit, rfft2, rfftn, sync_audit_ledger, take_transform_traces,
+        fft_with_audit, fft2, fftn, hfft, idct, ifft, ifft2, irfft, irfft2, irfftn, next_fast_len,
+        rfft, rfft_with_audit, rfft2, rfftn, sync_audit_ledger, take_transform_traces,
     };
     use crate::Normalization;
     use crate::plan::clear_shared_plan_cache;
@@ -3006,6 +3006,30 @@ mod tests {
                     (r[k].0 - c[k].0).abs() < 1e-10 && (r[k].1 - c[k].1).abs() < 1e-10,
                     "N={n}, k={k}: rfft = ({}, {}), fft = ({}, {})",
                     r[k].0, r[k].1, c[k].0, c[k].1
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn idct_dct_metamorphic_roundtrip_under_backward() {
+        // /testing-metamorphic: under default (backward) normalization,
+        // dct returns 2·sum and idct's 1/(2N) inverse cancels exactly,
+        // so idct(dct(x)) = x. The ortho path is broken at the moment
+        // ([frankenscipy-v0vm5]): idct hardcodes 1/(2N) regardless of
+        // options.normalization and needs ortho-aware boundary
+        // adjustments. Pinning the working backward path so it
+        // doesn't regress.
+        for n in [4_usize, 8, 16, 11, 13] {
+            let x: Vec<f64> = (0..n).map(|i| (i as f64).sin() * 0.5 + 0.25).collect();
+            let opts = FftOptions::default();
+            let spectrum = dct(&x, &opts).expect("dct");
+            let recovered = idct(&spectrum, &opts).expect("idct");
+            assert_eq!(recovered.len(), n);
+            for (i, (&got, &want)) in recovered.iter().zip(x.iter()).enumerate() {
+                assert!(
+                    (got - want).abs() < 1e-9,
+                    "N={n}, idct(dct(x))[{i}] = {got}, expected {want}"
                 );
             }
         }
