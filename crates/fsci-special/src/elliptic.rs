@@ -1426,6 +1426,72 @@ pub fn elliprf(x: f64, y: f64, z: f64) -> f64 {
     1.0 / mu.sqrt()
 }
 
+/// Carlson symmetric elliptic integral of the second kind, `RD(x, y, z)`.
+///
+/// Definition (Carlson 1995, scipy.special.elliprd):
+///
+/// ```text
+///   RD(x, y, z) = (3/2) ∫₀^∞ (t + x)^{-1/2} (t + y)^{-1/2}
+///                          (t + z)^{-3/2} dt
+/// ```
+///
+/// Computed via Carlson's duplication algorithm; the third argument
+/// `z` is special (the integrand is t^{-3/2} in z), so the iterative
+/// substitution accumulates a running `sum_term` that contributes to
+/// the final result. RD is symmetric only in `(x, y)` — `z` plays a
+/// distinguished role.
+///
+/// Returns NaN for negative or NaN inputs and for the case where two
+/// or more arguments are zero (non-integrable singularity).
+///
+/// Resolves [frankenscipy-xdi1c].
+#[must_use]
+pub fn elliprd(x: f64, y: f64, z: f64) -> f64 {
+    if x.is_nan() || y.is_nan() || z.is_nan() {
+        return f64::NAN;
+    }
+    if x < 0.0 || y < 0.0 || z <= 0.0 {
+        // z must be strictly positive; x, y can be 0 (but not both).
+        return f64::NAN;
+    }
+    if x == 0.0 && y == 0.0 {
+        return f64::INFINITY;
+    }
+
+    let mut xn = x;
+    let mut yn = y;
+    let mut zn = z;
+    let mut sum_term = 0.0_f64;
+    let mut factor = 1.0_f64;
+    const TOL: f64 = 1e-4;
+
+    for _ in 0..32 {
+        let mu = (xn + yn + 3.0 * zn) / 5.0;
+        let ex = 1.0 - xn / mu;
+        let ey = 1.0 - yn / mu;
+        let ez = 1.0 - zn / mu;
+        let max_e = ex.abs().max(ey.abs()).max(ez.abs());
+        if max_e < TOL {
+            // 5th-order Taylor correction (Carlson 1995 eq. 2.14).
+            let ea = ex * ey;
+            let eb = ez * ez;
+            let ec = ea - eb;
+            let ed = ea - 6.0 * eb;
+            let ef = ed + ec + ec;
+            let s1 = ed * (-3.0 / 14.0 + 9.0 / 88.0 * ed - 4.5 / 26.0 * ez * ef);
+            let s2 = ez * (ef / 6.0 + ez * (-9.0 / 22.0 * ec + ez * 3.0 / 26.0 * ea));
+            return 3.0 * sum_term + factor * (1.0 + s1 + s2) / (mu * mu.sqrt());
+        }
+        let lam = (xn * yn).sqrt() + (yn * zn).sqrt() + (xn * zn).sqrt();
+        sum_term += factor / ((zn + lam) * zn.sqrt());
+        factor /= 4.0;
+        xn = 0.25 * (xn + lam);
+        yn = 0.25 * (yn + lam);
+        zn = 0.25 * (zn + lam);
+    }
+    f64::NAN
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2469,5 +2535,53 @@ mod tests {
         assert!(elliprf(f64::NAN, 1.0, 1.0).is_nan());
         // Two zeros → divergent → +∞.
         assert!(elliprf(0.0, 0.0, 1.0).is_infinite());
+    }
+
+    #[test]
+    fn elliprd_diagonal_is_x_to_minus_three_halves() {
+        // /porting-to-rust + /testing-golden-artifacts for
+        // [frankenscipy-xdi1c]: RD(x, x, x) = x^{-3/2} for x > 0.
+        // Closed form: the integrand becomes (t + x)^{-5/2}.
+        for &x in &[0.5_f64, 1.0, 2.0, 4.0, 9.0, 25.0] {
+            let actual = elliprd(x, x, x);
+            let expected = x.powf(-1.5);
+            assert_close(
+                actual,
+                expected,
+                1e-9,
+                &format!("RD({x}, {x}, {x}) = {actual}, expected x^{{-3/2}} = {expected}"),
+            );
+        }
+    }
+
+    #[test]
+    fn elliprd_symmetric_in_first_two_args() {
+        // RD(x, y, z) = RD(y, x, z) but NOT RD(z, y, x). Symmetry is
+        // only in the first two arguments.
+        for &(x, y, z) in &[(1.0_f64, 2.0, 3.0), (0.5, 1.5, 4.0)] {
+            let xyz = elliprd(x, y, z);
+            let yxz = elliprd(y, x, z);
+            assert_close(xyz, yxz, 1e-10, "RD(x, y, z) = RD(y, x, z)");
+        }
+    }
+
+    #[test]
+    fn elliprd_scipy_reference_value() {
+        // scipy.special.elliprd(0, 2, 1) ≈ 1.7972103521033898 — Carlson
+        // 1995 reference value (and a known scipy-doc test case).
+        let actual = elliprd(0.0, 2.0, 1.0);
+        let expected = 1.797_210_352_103_389_8_f64;
+        assert_close(actual, expected, 1e-9, "RD(0, 2, 1) scipy reference");
+    }
+
+    #[test]
+    fn elliprd_negative_or_nan_returns_nan() {
+        assert!(elliprd(-1.0, 1.0, 1.0).is_nan());
+        assert!(elliprd(1.0, -1.0, 1.0).is_nan());
+        assert!(elliprd(1.0, 1.0, 0.0).is_nan()); // z must be > 0
+        assert!(elliprd(1.0, 1.0, -1.0).is_nan());
+        assert!(elliprd(f64::NAN, 1.0, 1.0).is_nan());
+        // x = y = 0 → divergent → +∞.
+        assert!(elliprd(0.0, 0.0, 1.0).is_infinite());
     }
 }
