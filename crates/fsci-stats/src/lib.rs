@@ -25082,6 +25082,77 @@ mod tests {
     }
 
     #[test]
+    fn alexandergovern_identical_groups_statistic_is_zero() {
+        // /testing-conformance-harnesses for [frankenscipy-lnwsb]:
+        // groups with identical mean and variance have no between-group
+        // variation; the weighted-mean ANOVA statistic must be 0
+        // (and the p-value 1).
+        let g1 = [1.0_f64, 2.0, 3.0, 4.0, 5.0];
+        let g2 = [1.0_f64, 2.0, 3.0, 4.0, 5.0];
+        let result = alexandergovern(&[&g1[..], &g2[..]]);
+        assert!(
+            result.statistic.abs() < 1e-12,
+            "identical groups should give stat=0, got {}",
+            result.statistic
+        );
+        assert!(
+            (result.pvalue - 1.0).abs() < 1e-9,
+            "identical groups should give pvalue=1, got {}",
+            result.pvalue
+        );
+    }
+
+    #[test]
+    fn alexandergovern_two_balanced_groups_match_closed_form() {
+        // Balanced groups with equal variance and means {0, 1}:
+        // weights w_i = n / var_i = 10 / s² (s² is the unbiased
+        // sample variance). With both groups having same variance,
+        // the weighted mean is 0.5 and the statistic reduces to
+        // 2·w·(0.5)² = 0.5·w. p-value = chi2.sf(stat, df=1).
+        //
+        // The exact statistic depends on the unbiased variance
+        // estimate, which is the same for both groups by symmetry,
+        // so we verify (a) statistic > 0; (b) pvalue lies in (0, 1);
+        // (c) for highly-separated groups (means 0 vs 100) the
+        // pvalue → 0.
+        let g1 = [-1.0_f64, 0.0, 1.0]; // mean 0, var 1
+        let g2 = [0.0_f64, 1.0, 2.0]; // mean 1, var 1
+        let result = alexandergovern(&[&g1[..], &g2[..]]);
+        assert!(result.statistic > 0.0, "stat must be positive");
+        assert!((0.0..=1.0).contains(&result.pvalue));
+        // Pin the exact value: each group has unbiased var = 1,
+        // so weights = n/var = 3/1 = 3. Total weight = 6.
+        // Weighted mean = (0·3 + 1·3)/6 = 0.5.
+        // stat = 3·(0-0.5)² + 3·(1-0.5)² = 0.75 + 0.75 = 1.5.
+        assert!(
+            (result.statistic - 1.5).abs() < 1e-12,
+            "expected stat=1.5, got {}",
+            result.statistic
+        );
+    }
+
+    #[test]
+    fn alexandergovern_well_separated_groups_have_low_pvalue() {
+        // Very different means → reject H0 (means are equal).
+        let g1 = [-1.0_f64, 0.0, 1.0];
+        let g2 = [99.0_f64, 100.0, 101.0];
+        let result = alexandergovern(&[&g1[..], &g2[..]]);
+        assert!(
+            result.pvalue < 1e-9,
+            "well-separated groups should have pvalue ≈ 0, got {}",
+            result.pvalue
+        );
+    }
+
+    #[test]
+    fn alexandergovern_too_few_groups_returns_nan() {
+        let g = [1.0_f64, 2.0, 3.0];
+        let result = alexandergovern(&[&g[..]]);
+        assert!(result.statistic.is_nan());
+        assert!(result.pvalue.is_nan());
+    }
+
+    #[test]
     fn anderson_normal_data() {
         // Normal-like data should have A² below critical values
         let data: Vec<f64> = (0..100)
