@@ -561,4 +561,29 @@ mod tests {
         let result = fftconvolve(&a, &b, "same").unwrap();
         assert_eq!(result.len(), 5); // same length as a
     }
+
+    #[test]
+    fn fftconvolve_metamorphic_commutativity() {
+        // /testing-metamorphic: fftconvolve(a, b, 'full') = fftconvolve(b, a, 'full').
+        // The convolution operator is commutative, so swapping inputs
+        // must produce identical output (up to floating-point noise).
+        // Pin across multiple length pairs.
+        let cases: &[(Vec<f64>, Vec<f64>)] = &[
+            (vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]),
+            (vec![1.0, 0.5, -0.25], vec![2.0, -1.0]),
+            (vec![1.0, 2.0, 3.0, 4.0, 5.0], vec![0.5, 0.5]),
+            (vec![1.0], vec![3.0, 1.0, 4.0, 1.0, 5.0]),
+        ];
+        for (a, b) in cases {
+            let ab = fftconvolve(a, b, "full").unwrap();
+            let ba = fftconvolve(b, a, "full").unwrap();
+            assert_eq!(ab.len(), ba.len(), "length mismatch");
+            for (i, (&v1, &v2)) in ab.iter().zip(ba.iter()).enumerate() {
+                assert!(
+                    (v1 - v2).abs() < 1e-10,
+                    "fftconvolve commutativity broken at i={i}: {v1} vs {v2}"
+                );
+            }
+        }
+    }
 }
