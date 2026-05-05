@@ -1223,6 +1223,109 @@ mod tests {
         }
     }
 
+    #[test]
+    fn kronsum_scalar_inputs_sum_values() {
+        // kronsum([[a]], [[b]]) = [[a + b]] since kron(I_1,A) = A and
+        // kron(B,I_1) = B for 1×1 inputs.
+        let a = CooMatrix::from_triplets(Shape2D::new(1, 1), vec![3.0], vec![0], vec![0], false)
+            .expect("coo")
+            .to_csr()
+            .expect("csr");
+        let b = CooMatrix::from_triplets(Shape2D::new(1, 1), vec![4.0], vec![0], vec![0], false)
+            .expect("coo")
+            .to_csr()
+            .expect("csr");
+        let result = kronsum(&a, &b).expect("kronsum");
+        assert_eq!(result.shape(), Shape2D::new(1, 1));
+        let dense = dense_from_csr(&result);
+        assert!((dense[0][0] - 7.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn kronsum_two_by_two_matches_scipy_reference() {
+        // /testing-conformance-harnesses: scipy.sparse.kronsum
+        //
+        //   A = [[1, 2], [3, 4]]      (2×2)
+        //   B = [[10, 0], [0, 20]]    (2×2)
+        //
+        //   kron(I_2, A) = [[1, 2, 0, 0],
+        //                   [3, 4, 0, 0],
+        //                   [0, 0, 1, 2],
+        //                   [0, 0, 3, 4]]
+        //   kron(B, I_2) = [[10,  0,  0,  0],
+        //                   [ 0, 10,  0,  0],
+        //                   [ 0,  0, 20,  0],
+        //                   [ 0,  0,  0, 20]]
+        //   sum         = [[11,  2,  0,  0],
+        //                   [ 3, 14,  0,  0],
+        //                   [ 0,  0, 21,  2],
+        //                   [ 0,  0,  3, 24]]
+        let a = CooMatrix::from_triplets(
+            Shape2D::new(2, 2),
+            vec![1.0, 2.0, 3.0, 4.0],
+            vec![0, 0, 1, 1],
+            vec![0, 1, 0, 1],
+            false,
+        )
+        .expect("coo")
+        .to_csr()
+        .expect("csr");
+        let b = diags(&[vec![10.0, 20.0]], &[0], None).expect("diags");
+        let result = kronsum(&a, &b).expect("kronsum");
+        assert_eq!(result.shape(), Shape2D::new(4, 4));
+        let dense = dense_from_csr(&result);
+        let expected = [
+            [11.0, 2.0, 0.0, 0.0],
+            [3.0, 14.0, 0.0, 0.0],
+            [0.0, 0.0, 21.0, 2.0],
+            [0.0, 0.0, 3.0, 24.0],
+        ];
+        for (i, (d_row, e_row)) in dense.iter().zip(expected.iter()).enumerate() {
+            for (j, (&d_val, &e_val)) in d_row.iter().zip(e_row.iter()).enumerate() {
+                assert!(
+                    (d_val - e_val).abs() < 1e-12,
+                    "kronsum at [{i}][{j}]: {d_val} vs {e_val}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn kronsum_identity_doubles_to_2_eye() {
+        // kronsum(I_m, I_n) = kron(I_n, I_m) + kron(I_n, I_m) = 2·I_{mn}
+        let i2 = eye(2).expect("eye(2)");
+        let i3 = eye(3).expect("eye(3)");
+        let result = kronsum(&i2, &i3).expect("kronsum");
+        assert_eq!(result.shape(), Shape2D::new(6, 6));
+        let dense = dense_from_csr(&result);
+        for (i, row) in dense.iter().enumerate() {
+            for (j, &val) in row.iter().enumerate() {
+                let expected = if i == j { 2.0 } else { 0.0 };
+                assert!(
+                    (val - expected).abs() < 1e-12,
+                    "kronsum I_2⊕I_3 at [{i}][{j}]: got {val}, expected {expected}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn kronsum_rejects_non_square() {
+        let rect = CooMatrix::from_triplets(
+            Shape2D::new(2, 3),
+            vec![1.0],
+            vec![0],
+            vec![0],
+            false,
+        )
+        .expect("coo")
+        .to_csr()
+        .expect("csr");
+        let sq = eye(2).expect("eye");
+        assert!(kronsum(&rect, &sq).is_err());
+        assert!(kronsum(&sq, &rect).is_err());
+    }
+
     fn dense_from_csr(csr: &CsrMatrix) -> Vec<Vec<f64>> {
         let shape = csr.shape();
         let mut dense = vec![vec![0.0; shape.cols]; shape.rows];
