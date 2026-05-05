@@ -3037,6 +3037,77 @@ mod tests {
     }
 
     #[test]
+    fn gdtr_closed_form_reference_values() {
+        // /testing-golden-artifacts: pin gdtr against three closed-form
+        // values where gammainc collapses to a finite series:
+        //   gdtr(1, 1, 1) = P(1, 1)   = 1 - e^{-1}
+        //   gdtr(2, 3, 2) = P(3, 4)   = 1 - 13 e^{-4}
+        //   gdtr(0.5, 2, 4) = P(2, 2) = 1 - 3 e^{-2}
+        let cases: &[(f64, f64, f64, f64)] = &[
+            (1.0, 1.0, 1.0, 1.0 - (-1.0_f64).exp()),
+            (2.0, 3.0, 2.0, 1.0 - 13.0 * (-4.0_f64).exp()),
+            (0.5, 2.0, 4.0, 1.0 - 3.0 * (-2.0_f64).exp()),
+        ];
+        for &(a, b, x, expected) in cases {
+            let actual = gdtr(a, b, x);
+            assert!(
+                (actual - expected).abs() < 1e-12,
+                "gdtr({a}, {b}, {x}) = {actual}, expected {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn gdtria_roundtrip_recovers_rate() {
+        // gdtria(gdtr(a, b, x), b, x) ≈ a
+        // Closed form: a = gammaincinv(b, p) / x.
+        for &a in &[0.5, 1.0, 2.5] {
+            for &b in &[1.0, 2.0, 3.5] {
+                for &x in &[0.5, 2.0, 5.0] {
+                    let p = gdtr(a, b, x);
+                    let recovered = gdtria(p, b, x);
+                    assert!(
+                        (recovered - a).abs() < 1e-9,
+                        "gdtria(gdtr({a}, {b}, {x})={p}, {b}, {x}) = {recovered}, expected {a}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn gdtrib_roundtrip_recovers_shape() {
+        // gdtrib(a, gdtr(a, b, x), x) ≈ b
+        // gdtrib uses gammainc_shape_inv, a Newton root finder over b.
+        for &a in &[0.5, 1.0, 2.5] {
+            for &b in &[1.0, 2.0, 3.5] {
+                for &x in &[0.5, 2.0, 5.0] {
+                    let p = gdtr(a, b, x);
+                    let recovered = gdtrib(a, p, x);
+                    assert!(
+                        (recovered - b).abs() < 1e-7,
+                        "gdtrib({a}, gdtr({a}, {b}, {x})={p}, {x}) = {recovered}, expected {b}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn gdtria_gdtrib_domain_error_returns_nan() {
+        // Out-of-domain inputs return NaN per scipy.special semantics.
+        assert!(gdtria(0.5, -1.0, 1.0).is_nan(), "gdtria b<0");
+        assert!(gdtria(-0.1, 1.0, 1.0).is_nan(), "gdtria p<0");
+        assert!(gdtria(1.1, 1.0, 1.0).is_nan(), "gdtria p>1");
+        assert!(gdtria(0.5, 1.0, 0.0).is_nan(), "gdtria x=0");
+
+        assert!(gdtrib(-1.0, 0.5, 1.0).is_nan(), "gdtrib a<0");
+        assert!(gdtrib(1.0, -0.1, 1.0).is_nan(), "gdtrib p<0");
+        assert!(gdtrib(1.0, 1.1, 1.0).is_nan(), "gdtrib p>1");
+        assert!(gdtrib(1.0, 0.5, -1.0).is_nan(), "gdtrib x<0");
+    }
+
+    #[test]
     fn gdtrc_complement() {
         // gdtr + gdtrc should equal 1
         for &a in &[1.0, 2.0, 5.0] {
