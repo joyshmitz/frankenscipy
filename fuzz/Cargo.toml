@@ -304,6 +304,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "p2c011_spatial_pdist_validators"
+path = "fuzz_targets/p2c011_spatial_pdist_validators.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "p2c012_cluster_fcluster_bounds"
 path = "fuzz_targets/p2c012_cluster_fcluster_bounds.rs"
 test = false
