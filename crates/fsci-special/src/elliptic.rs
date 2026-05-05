@@ -1363,6 +1363,69 @@ pub fn elliprc(x: f64, y: f64) -> f64 {
     }
 }
 
+/// Carlson symmetric elliptic integral of the first kind, `RF(x, y, z)`.
+///
+/// Definition (Carlson 1995, scipy.special.elliprf):
+///
+/// ```text
+///   RF(x, y, z) = (1/2) ∫₀^∞ [(t + x)(t + y)(t + z)]^{-1/2} dt
+/// ```
+///
+/// Computed via Carlson's duplication algorithm: iterate the
+/// substitution `(x, y, z) → ((x + λ)/4, (y + λ)/4, (z + λ)/4)` with
+/// `λ = √(xy) + √(yz) + √(xz)` until the relative residuals
+/// `1 - x/μ` are small, then apply a 5th-order Taylor correction
+/// around the geometric mean.
+///
+/// All three arguments must be non-negative, and at most one may be 0.
+/// Returns NaN on negative or NaN inputs and on the all-zero corner.
+///
+/// Resolves [frankenscipy-1ww0j].
+#[must_use]
+pub fn elliprf(x: f64, y: f64, z: f64) -> f64 {
+    if x.is_nan() || y.is_nan() || z.is_nan() {
+        return f64::NAN;
+    }
+    if x < 0.0 || y < 0.0 || z < 0.0 {
+        return f64::NAN;
+    }
+    let zero_count = (x == 0.0) as usize + (y == 0.0) as usize + (z == 0.0) as usize;
+    if zero_count >= 2 {
+        // RF diverges when two or more arguments are zero (the integrand
+        // singularity is non-integrable).
+        return f64::INFINITY;
+    }
+
+    // Carlson duplication: shrink the spread between (xn, yn, zn).
+    let mut xn = x;
+    let mut yn = y;
+    let mut zn = z;
+    const TOL: f64 = 2e-3; // Carlson's recommended threshold for
+                           // truncating duplication and switching to
+                           // the Taylor series.
+    for _ in 0..32 {
+        let mu = (xn + yn + zn) / 3.0;
+        let ex = 1.0 - xn / mu;
+        let ey = 1.0 - yn / mu;
+        let ez = 1.0 - zn / mu;
+        let max_e = ex.abs().max(ey.abs()).max(ez.abs());
+        if max_e < TOL {
+            // 5th-order Taylor correction.
+            let e2 = ex * ey + ey * ez + ex * ez;
+            let e3 = ex * ey * ez;
+            return mu.powf(-0.5)
+                * (1.0 - e2 / 10.0 + e3 / 14.0 + e2 * e2 / 24.0 - 3.0 * e2 * e3 / 44.0);
+        }
+        let lambda = (xn * yn).sqrt() + (yn * zn).sqrt() + (xn * zn).sqrt();
+        xn = 0.25 * (xn + lambda);
+        yn = 0.25 * (yn + lambda);
+        zn = 0.25 * (zn + lambda);
+    }
+    // Fallback if convergence is slow (shouldn't happen for valid input).
+    let mu = (xn + yn + zn) / 3.0;
+    1.0 / mu.sqrt()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2344,5 +2407,67 @@ mod tests {
         assert!(elliprc(1.0, 0.0).is_infinite());
         // y<0 (Cauchy PV path, deferred) → NaN.
         assert!(elliprc(1.0, -1.0).is_nan());
+    }
+
+    #[test]
+    fn elliprf_diagonal_is_one_over_sqrt_x() {
+        // /porting-to-rust + /testing-golden-artifacts for
+        // [frankenscipy-1ww0j]: RF(x, x, x) = 1/√x for x > 0.
+        // Closed form, since the integrand collapses to (t+x)^{-3/2}.
+        for &x in &[0.5_f64, 1.0, 2.0, 4.0, 9.0, 25.0] {
+            let actual = elliprf(x, x, x);
+            let expected = 1.0 / x.sqrt();
+            assert_close(
+                actual,
+                expected,
+                1e-12,
+                &format!("RF({x}, {x}, {x}) = {actual}, expected {expected}"),
+            );
+        }
+    }
+
+    #[test]
+    fn elliprf_zero_argument_with_equal_others() {
+        // RF(0, y, y) = π / (2√y) (the complete elliptic integral
+        // of the first kind degenerates here).
+        for &y in &[0.5_f64, 1.0, 4.0, 16.0] {
+            let expected = std::f64::consts::FRAC_PI_2 / y.sqrt();
+            let actual = elliprf(0.0, y, y);
+            assert_close(
+                actual,
+                expected,
+                1e-9,
+                &format!("RF(0, {y}, {y}) = {actual}, expected π/(2√{y}) = {expected}"),
+            );
+        }
+    }
+
+    #[test]
+    fn elliprf_scipy_reference_value() {
+        // scipy.special.elliprf(1.0, 2.0, 4.0) ≈ 0.6850858166334364
+        // (Carlson 1995, table of reference values).
+        let actual = elliprf(1.0, 2.0, 4.0);
+        let expected = 0.685_085_816_633_436_4_f64;
+        assert_close(actual, expected, 1e-9, "RF(1, 2, 4) scipy reference");
+    }
+
+    #[test]
+    fn elliprf_symmetric_in_arguments() {
+        // RF(x, y, z) is symmetric in all three arguments.
+        for &(x, y, z) in &[(1.0_f64, 2.0, 3.0), (0.5, 1.5, 4.0)] {
+            let xyz = elliprf(x, y, z);
+            let yxz = elliprf(y, x, z);
+            let zyx = elliprf(z, y, x);
+            assert_close(xyz, yxz, 1e-12, "RF symmetry x↔y");
+            assert_close(xyz, zyx, 1e-12, "RF symmetry x↔z");
+        }
+    }
+
+    #[test]
+    fn elliprf_negative_or_nan_returns_nan() {
+        assert!(elliprf(-1.0, 1.0, 1.0).is_nan());
+        assert!(elliprf(f64::NAN, 1.0, 1.0).is_nan());
+        // Two zeros → divergent → +∞.
+        assert!(elliprf(0.0, 0.0, 1.0).is_infinite());
     }
 }
