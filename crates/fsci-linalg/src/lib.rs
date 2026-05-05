@@ -10119,6 +10119,61 @@ mod tests {
     }
 
     #[test]
+    fn helmert_first_row_is_uniform() {
+        // /mock-code-finder for [frankenscipy-d1jml]:
+        // First row of the Helmert matrix is [1/√n, ..., 1/√n].
+        for &n in &[2usize, 3, 5, 10] {
+            let h = helmert(n);
+            assert_eq!(h.len(), n);
+            assert_eq!(h[0].len(), n);
+            let expected = 1.0 / (n as f64).sqrt();
+            for &v in &h[0] {
+                assert!(
+                    (v - expected).abs() < 1e-12,
+                    "helmert({n}) first row entry {v} != 1/√{n} = {expected}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn helmert_rows_have_unit_norm() {
+        // Each row is a unit vector (the matrix is orthogonal/orthonormal).
+        for &n in &[2usize, 3, 5, 10] {
+            let h = helmert(n);
+            for (i, row) in h.iter().enumerate() {
+                let norm_sq: f64 = row.iter().map(|&v| v * v).sum();
+                assert!(
+                    (norm_sq - 1.0).abs() < 1e-12,
+                    "helmert({n}) row {i} has norm² = {norm_sq}, expected 1"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn helmert_rows_are_pairwise_orthogonal() {
+        // Different rows are orthogonal (row_i · row_j = 0 for i ≠ j).
+        for &n in &[3usize, 5, 8] {
+            let h = helmert(n);
+            for i in 0..n {
+                for j in (i + 1)..n {
+                    let dot: f64 = h[i].iter().zip(h[j].iter()).map(|(&a, &b)| a * b).sum();
+                    assert!(
+                        dot.abs() < 1e-12,
+                        "helmert({n}) row {i} · row {j} = {dot} ≠ 0"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn helmert_n_zero_is_empty() {
+        assert_eq!(helmert(0), Vec::<Vec<f64>>::new());
+    }
+
+    #[test]
     fn convolution_matrix_full() {
         let m = convolution_matrix(&[1.0, 2.0, 3.0], 4, "full");
         assert_eq!(m.len(), 6); // 4 + 3 - 1
