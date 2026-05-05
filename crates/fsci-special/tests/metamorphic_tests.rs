@@ -11,9 +11,9 @@ use fsci_runtime::RuntimeMode;
 use fsci_special::{
     SpecialResult, SpecialTensor, agm, ai, arctanh, bei, ber, bernoulli, beta, betaln, bi,
     boxcox_transform_scalar, chdtr, chdtrc, comb, digamma_scalar, ellipe, ellipeinc, ellipj,
-    ellipk, ellipkinc, ellipkm1, entr, erf_scalar, exp1, expi, expit, expn_scalar, factorial,
-    factorial2, fresnel, gamma, gammainc, gammaincc, gammaln, hyp1f1, hyp2f1, i0, i0_scalar,
-    inv_boxcox_scalar, j0, jn, jv, lambertw_scalar, logit,
+    ellipk, ellipkinc, ellipkm1, elliprc, elliprd, elliprf, elliprg, entr, erf_scalar, exp1, expi,
+    expit, expn_scalar, factorial, factorial2, fresnel, gamma, gammainc, gammaincc, gammaln,
+    hyp1f1, hyp2f1, i0, i0_scalar, inv_boxcox_scalar, j0, jn, jv, lambertw_scalar, logit,
     orthopoly::{
         eval_chebyt, eval_chebyu, eval_gegenbauer, eval_genlaguerre, eval_hermite,
         eval_hermitenorm, eval_jacobi, eval_laguerre, eval_legendre, eval_sh_legendre, lpmv,
@@ -1315,6 +1315,116 @@ fn mr_ellipj_pythagorean_identity() {
             assert!(
                 (s - 1.0).abs() < 1e-9,
                 "MR66 sn² + cn² = {s} for u = {u}, m = {m}"
+            );
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR67 — Carlson elliptic homogeneity (scaling) laws.
+//
+// All four Carlson symmetric integrals are homogeneous functions:
+//
+//   RC(λx, λy)        = λ^(-1/2) · RC(x, y)
+//   RF(λx, λy, λz)    = λ^(-1/2) · RF(x, y, z)
+//   RD(λx, λy, λz)    = λ^(-3/2) · RD(x, y, z)
+//   RG(λx, λy, λz)    = λ^( 1/2) · RG(x, y, z)
+//
+// These exercise the duplication+convergence path at multiple input
+// scales. A normalization or transcription bug anywhere in the
+// duplication formula or the closing series would break the identity.
+// Resolves [frankenscipy-ekfyi].
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_elliprc_homogeneity() {
+    let bases: &[(f64, f64)] = &[(1.0, 2.0), (0.5, 4.0), (3.0, 7.5), (0.1, 0.9)];
+    let lambdas: &[f64] = &[0.25_f64, 1.0, 4.0, 16.0];
+    for &(x, y) in bases {
+        let base = elliprc(x, y);
+        for &lam in lambdas {
+            let scaled = elliprc(lam * x, lam * y);
+            let predicted = base * lam.powf(-0.5);
+            assert!(
+                close(scaled, predicted),
+                "MR67 RC homogeneity broken: RC({} ,{}) = {}, RC(λ·,λ·) = {}, predicted {} (λ={})",
+                x,
+                y,
+                base,
+                scaled,
+                predicted,
+                lam
+            );
+        }
+    }
+}
+
+#[test]
+fn mr_elliprf_homogeneity() {
+    let bases: &[(f64, f64, f64)] =
+        &[(1.0, 2.0, 3.0), (0.5, 1.5, 4.0), (0.0, 1.0, 1.0), (0.1, 0.5, 2.0)];
+    let lambdas: &[f64] = &[0.25_f64, 1.0, 4.0, 16.0];
+    for &(x, y, z) in bases {
+        let base = elliprf(x, y, z);
+        for &lam in lambdas {
+            let scaled = elliprf(lam * x, lam * y, lam * z);
+            let predicted = base * lam.powf(-0.5);
+            assert!(
+                close(scaled, predicted),
+                "MR67 RF homogeneity broken at ({}, {}, {}) λ={}: scaled {} vs predicted {}",
+                x,
+                y,
+                z,
+                lam,
+                scaled,
+                predicted
+            );
+        }
+    }
+}
+
+#[test]
+fn mr_elliprd_homogeneity() {
+    let bases: &[(f64, f64, f64)] = &[(1.0, 2.0, 3.0), (0.5, 1.5, 4.0), (0.1, 0.5, 2.0)];
+    let lambdas: &[f64] = &[0.25_f64, 1.0, 4.0, 16.0];
+    for &(x, y, z) in bases {
+        let base = elliprd(x, y, z);
+        for &lam in lambdas {
+            let scaled = elliprd(lam * x, lam * y, lam * z);
+            let predicted = base * lam.powf(-1.5);
+            assert!(
+                close(scaled, predicted),
+                "MR67 RD homogeneity broken at ({}, {}, {}) λ={}: scaled {} vs predicted {}",
+                x,
+                y,
+                z,
+                lam,
+                scaled,
+                predicted
+            );
+        }
+    }
+}
+
+#[test]
+fn mr_elliprg_homogeneity() {
+    let bases: &[(f64, f64, f64)] =
+        &[(1.0, 2.0, 3.0), (0.5, 1.5, 4.0), (0.0, 1.0, 1.0), (0.1, 0.5, 2.0)];
+    let lambdas: &[f64] = &[0.25_f64, 1.0, 4.0, 16.0];
+    for &(x, y, z) in bases {
+        let base = elliprg(x, y, z);
+        for &lam in lambdas {
+            let scaled = elliprg(lam * x, lam * y, lam * z);
+            let predicted = base * lam.powf(0.5);
+            assert!(
+                close(scaled, predicted),
+                "MR67 RG homogeneity broken at ({}, {}, {}) λ={}: scaled {} vs predicted {}",
+                x,
+                y,
+                z,
+                lam,
+                scaled,
+                predicted
             );
         }
     }
