@@ -843,6 +843,33 @@ pub fn idct(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError> {
     validate_finite_real(input, options)?;
 
     let n = input.len();
+    let nf = n as f64;
+
+    // Pre-scale the input to invert whichever forward normalization
+    // dct() applied. Resolves [frankenscipy-v0vm5]: idct previously
+    // hardcoded 1/(2N) regardless of options.normalization, so
+    // idct(dct(x, ortho), ortho) returned x/(2N·N·...) instead of x.
+    //
+    //   Backward (default):  dct returned 2·sum  → no pre-scale needed.
+    //   Ortho:               dct returned 2·sum / √(2N) (with extra
+    //                         /√2 on [0]) → pre-scale input by √(2N)
+    //                         (and ×√2 on [0]) to recover 2·sum.
+    //   Forward:             dct returned (2·sum)/(2N) = sum/N → pre-
+    //                         scale input by 2N.
+    //
+    // After pre-scaling, the existing 1/(2N) tail-scale recovers x.
+    let scaled_input: Vec<f64> = match options.normalization {
+        Normalization::Backward => input.to_vec(),
+        Normalization::Ortho => {
+            let s = (2.0 * nf).sqrt();
+            let mut v: Vec<f64> = input.iter().map(|x| x * s).collect();
+            if let Some(first) = v.first_mut() {
+                *first *= 2.0_f64.sqrt();
+            }
+            v
+        }
+        Normalization::Forward => input.iter().map(|x| x * (2.0 * nf)).collect(),
+    };
 
     // DCT-III: x[n] = X[0]/(2N) + (1/N) * sum_{k=1}^{N-1} X[k] * cos(π*k*(2n+1)/(2N))
     // Compute via inverse of the DCT-II process
@@ -851,9 +878,9 @@ pub fn idct(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError> {
     // Prepare: multiply by twiddle and create Hermitian-symmetric spectrum
     let mut spectrum = vec![(0.0, 0.0); 2 * n];
     for k in 0..n {
-        let angle = PI * k as f64 / (2.0 * n as f64);
+        let angle = PI * k as f64 / (2.0 * nf);
         let twiddle = (angle.cos(), angle.sin());
-        spectrum[k] = complex_mul((input[k], 0.0), twiddle);
+        spectrum[k] = complex_mul((scaled_input[k], 0.0), twiddle);
     }
     // Hermitian symmetry for real output
     for k in 1..n {
@@ -863,7 +890,7 @@ pub fn idct(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError> {
     let time_domain = backend.transform_1d_unscaled(&spectrum, true);
 
     // Extract: take first N values, scale by 1/(2N)
-    let scale = 1.0 / (2.0 * n as f64);
+    let scale = 1.0 / (2.0 * nf);
     let result: Vec<f64> = time_domain.iter().take(n).map(|v| v.0 * scale).collect();
 
     Ok(result)
@@ -3015,11 +3042,7 @@ mod tests {
     fn idct_dct_metamorphic_roundtrip_under_backward() {
         // /testing-metamorphic: under default (backward) normalization,
         // dct returns 2·sum and idct's 1/(2N) inverse cancels exactly,
-        // so idct(dct(x)) = x. The ortho path is broken at the moment
-        // ([frankenscipy-v0vm5]): idct hardcodes 1/(2N) regardless of
-        // options.normalization and needs ortho-aware boundary
-        // adjustments. Pinning the working backward path so it
-        // doesn't regress.
+        // so idct(dct(x)) = x.
         for n in [4_usize, 8, 16, 11, 13] {
             let x: Vec<f64> = (0..n).map(|i| (i as f64).sin() * 0.5 + 0.25).collect();
             let opts = FftOptions::default();
@@ -3031,6 +3054,30 @@ mod tests {
                     (got - want).abs() < 1e-9,
                     "N={n}, idct(dct(x))[{i}] = {got}, expected {want}"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn idct_dct_metamorphic_roundtrip_under_ortho_and_forward() {
+        // /testing-metamorphic: idct(dct(x)) under ortho and forward
+        // normalizations. After [frankenscipy-v0vm5] fix idct now
+        // pre-scales the input to invert whichever normalization dct
+        // applied, so the roundtrip is the identity in all three
+        // modes within f64 precision.
+        for n in [4_usize, 8, 16, 11, 13] {
+            let x: Vec<f64> = (0..n).map(|i| (i as f64).sin() * 0.5 + 0.25).collect();
+            for norm in [super::Normalization::Ortho, super::Normalization::Forward] {
+                let opts = FftOptions::default().with_normalization(norm);
+                let spectrum = dct(&x, &opts).expect("dct");
+                let recovered = idct(&spectrum, &opts).expect("idct");
+                assert_eq!(recovered.len(), n);
+                for (i, (&got, &want)) in recovered.iter().zip(x.iter()).enumerate() {
+                    assert!(
+                        (got - want).abs() < 1e-9,
+                        "norm={norm:?} N={n}: idct(dct(x))[{i}] = {got}, expected {want}"
+                    );
+                }
             }
         }
     }
