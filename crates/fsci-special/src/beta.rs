@@ -1546,6 +1546,66 @@ mod tests {
     }
 
     #[test]
+    fn fdtr_metamorphic_boundary_zero_and_monotone() {
+        // /testing-metamorphic for [frankenscipy-xybu7]:
+        // fdtr at x=0 must be exactly 0; fdtr must be monotonically
+        // non-decreasing in x for any (dfn, dfd) > 0.
+        for &dfn in &[1.0_f64, 2.0, 5.0, 10.0] {
+            for &dfd in &[1.0_f64, 2.0, 5.0, 10.0] {
+                assert_eq!(fdtr(dfn, dfd, 0.0), 0.0, "fdtr({dfn},{dfd},0) must be 0");
+
+                let xs = [0.1_f64, 0.5, 1.0, 2.0, 5.0, 10.0, 100.0];
+                let mut prev = 0.0_f64;
+                for &x in &xs {
+                    let p = fdtr(dfn, dfd, x);
+                    assert!(
+                        p >= prev - 1e-12,
+                        "fdtr({dfn}, {dfd}, {x}) = {p} < prev {prev} (not monotone)"
+                    );
+                    assert!(
+                        (0.0..=1.0).contains(&p),
+                        "fdtr({dfn}, {dfd}, {x}) = {p} outside [0, 1]"
+                    );
+                    prev = p;
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fdtr_dfn_equals_dfd_median_at_x_one() {
+        // For F(d, d) the distribution is symmetric around 1 in the
+        // sense that 1/F ~ F(d, d). Thus the median is exactly 1:
+        //   fdtr(d, d, 1) = 0.5 for any d > 0.
+        for &d in &[1.0_f64, 2.0, 5.0, 10.0, 50.0] {
+            let p = fdtr(d, d, 1.0);
+            assert!(
+                (p - 0.5).abs() < 1e-10,
+                "fdtr({d}, {d}, 1) = {p}, expected 0.5"
+            );
+        }
+    }
+
+    #[test]
+    fn fdtri_roundtrip_recovers_x() {
+        // fdtri(dfn, dfd, fdtr(dfn, dfd, x)) ≈ x for any positive x
+        // and any (dfn, dfd) > 0.
+        for &dfn in &[1.0_f64, 2.0, 5.0] {
+            for &dfd in &[1.0_f64, 2.0, 5.0] {
+                for &x in &[0.5_f64, 1.0, 2.0, 5.0] {
+                    let p = fdtr(dfn, dfd, x);
+                    let recovered = fdtri(dfn, dfd, p);
+                    assert!(
+                        (recovered - x).abs() < 1e-7,
+                        "fdtri({dfn}, {dfd}, {p}={fdtr_val}) = {recovered}, expected {x}",
+                        fdtr_val = p
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn fdtridfd_inverse() {
         for &dfn in &[1.0, 2.0, 5.0, 10.0] {
             for &dfd in &[0.1, 0.5, 1.0, 2.0, 5.0, 10.0] {
