@@ -2229,30 +2229,41 @@ pub fn kmedoids(
             }
         }
 
-        // Update medoids: for each cluster, find the point that minimizes total distance
+        // Update medoids: for each cluster, find the point that
+        // minimizes total within-cluster distance. Resolves
+        // [frankenscipy-ebx8l]: precompute the M×M distance matrix
+        // once per cluster (M(M-1)/2 sqrts) instead of recomputing
+        // M² distances inside the candidate loop.
         let mut changed = false;
         for (c, medoid_index) in medoid_indices.iter_mut().enumerate().take(k) {
             let members: Vec<usize> = (0..n).filter(|&i| labels[i] == c).collect();
             if members.is_empty() {
                 continue;
             }
+            let m = members.len();
 
-            let mut best_med = *medoid_index;
-            let mut best_cost: f64 = members
-                .iter()
-                .map(|&i| sq_dist(&data[i], &data[best_med]).sqrt())
-                .sum();
-
-            for &candidate in &members {
-                let cost: f64 = members
-                    .iter()
-                    .map(|&i| sq_dist(&data[i], &data[candidate]).sqrt())
-                    .sum();
-                if cost < best_cost {
-                    best_cost = cost;
-                    best_med = candidate;
+            // Symmetric M×M intra-cluster distance matrix.
+            let mut dmat = vec![vec![0.0_f64; m]; m];
+            for i in 0..m {
+                for j in (i + 1)..m {
+                    let d = sq_dist(&data[members[i]], &data[members[j]]).sqrt();
+                    dmat[i][j] = d;
+                    dmat[j][i] = d;
                 }
             }
+
+            // For each candidate row, sum the distances to all other
+            // members. The minimizing row is the new medoid.
+            let mut best_local = 0usize;
+            let mut best_cost = dmat[0].iter().sum::<f64>();
+            for (i, row) in dmat.iter().enumerate().skip(1) {
+                let cost: f64 = row.iter().sum();
+                if cost < best_cost {
+                    best_cost = cost;
+                    best_local = i;
+                }
+            }
+            let best_med = members[best_local];
 
             if best_med != *medoid_index {
                 *medoid_index = best_med;
@@ -2925,6 +2936,42 @@ mod tests {
         assert_eq!(result.labels[0], result.labels[1]);
         assert_eq!(result.labels[2], result.labels[3]);
         assert_ne!(result.labels[0], result.labels[2]);
+    }
+
+    #[test]
+    fn kmedoids_picks_medoid_minimizing_total_l1_distance() {
+        // /profiling-software-performance regression for
+        // [frankenscipy-ebx8l]: the medoid update step now
+        // pre-computes the M×M intra-cluster distance matrix once
+        // and selects the row-sum minimum. Verify the medoid is
+        // truly a member of the cluster minimizing the total
+        // sum of distances to other members.
+        //
+        // Tight cluster on the x-axis: {0, 1, 5, 6, 100}.
+        // Medoid should be the geometric median ≈ 5 (sum of
+        // distances |0-5| + |1-5| + |6-5| + |100-5| = 5+4+1+95 = 105
+        // vs. medoid=6: |0-6| + |1-6| + |5-6| + |100-6| = 6+5+1+94 = 106
+        // vs. medoid=1: 1+4+5+99 = 109).
+        let data = vec![
+            vec![0.0_f64],
+            vec![1.0],
+            vec![5.0],
+            vec![6.0],
+            vec![100.0],
+        ];
+        let result = kmedoids(&data, 1, 100, 42).expect("kmedoids");
+        assert_eq!(result.labels.len(), 5);
+        // All points belong to the single cluster.
+        for &lbl in &result.labels {
+            assert_eq!(lbl, 0);
+        }
+        // The selected medoid must be the row whose total L1 sum is
+        // minimal — for this dataset that's the index 2 (value 5.0).
+        let centroid = &result.centroids[0];
+        assert!(
+            (centroid[0] - 5.0).abs() < 1e-12,
+            "medoid should be the value-5 point, got {centroid:?}"
+        );
     }
 
     #[test]
