@@ -94,6 +94,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "p2c005_dct_dst_roundtrip"
+path = "fuzz_targets/p2c005_dct_dst_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "p2c005_sparse_formats"
 path = "fuzz_targets/p2c005_sparse_formats.rs"
 test = false
