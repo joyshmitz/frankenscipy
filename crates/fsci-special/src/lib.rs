@@ -218,7 +218,7 @@ pub use convenience::{
 };
 pub use elliptic::{
     ELLIPTIC_DISPATCH_PLAN, ellipe, ellipeinc, ellipj, ellipk, ellipkinc, ellipkm1, elliprc,
-    elliprf, exp1, expi, expn_scalar, lambertw,
+    elliprd, elliprf, exp1, expi, expn_scalar, lambertw,
 };
 pub use error::{
     ERROR_DISPATCH_PLAN, erf, erf_scalar, erfc, erfc_scalar, erfcinv, erfinv, erfinv_scalar,
