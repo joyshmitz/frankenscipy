@@ -3760,6 +3760,24 @@ mod tests {
     }
 
     #[test]
+    fn digamma_metamorphic_recurrence() {
+        // /testing-metamorphic: ψ(x+1) = ψ(x) + 1/x for any x not at
+        // a non-positive integer. Independent of any specific value;
+        // catches drift in either the recurrence-shift branch or the
+        // asymptotic series. Pin across multiple x.
+        // 1e-9 envelope reflects the asymptotic-series truncation
+        // residual (~5e-11 for moderate x, growing with x).
+        for &x in &[0.25_f64, 0.5, 1.5, 2.7, 5.3, 9.1, 17.4] {
+            let lhs = digamma_core(x + 1.0);
+            let rhs = digamma_core(x) + 1.0 / x;
+            assert!(
+                (lhs - rhs).abs() < 1e-9,
+                "ψ({x}+1) = {lhs}, expected ψ({x}) + 1/{x} = {rhs}"
+            );
+        }
+    }
+
+    #[test]
     fn digamma_matches_scipy_reference_points() {
         // /testing-conformance-harnesses: pin canonical scipy.special
         // .psi values:
