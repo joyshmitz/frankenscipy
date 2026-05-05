@@ -3351,6 +3351,73 @@ mod tests {
     }
 
     #[test]
+    fn prewitt_constant_image_is_zero() {
+        // /testing-metamorphic for [frankenscipy-il5nf]: any uniform
+        // image has zero gradient, so prewitt(const) must be 0
+        // everywhere (interior — boundary depends on mode but Reflect
+        // preserves the constant beyond the edge).
+        let input = NdArray::new(vec![7.0; 9], vec![3, 3]).unwrap();
+        let result = prewitt(&input, 0, BoundaryMode::Reflect, 0.0).unwrap();
+        for (i, &v) in result.data.iter().enumerate() {
+            assert!(
+                v.abs() < 1e-12,
+                "prewitt(const, axis=0) at flat index {i} = {v}, expected 0"
+            );
+        }
+    }
+
+    #[test]
+    fn prewitt_detects_horizontal_edge_along_axis0() {
+        // 3×3 image with a step function across rows: top row 0, middle
+        // 0, bottom row 1. Prewitt along axis=0 should produce a strong
+        // positive gradient at the row=1 / row=2 boundary (interior
+        // center pixel).
+        #[rustfmt::skip]
+        let data = vec![
+            0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0,
+            1.0, 1.0, 1.0,
+        ];
+        let input = NdArray::new(data, vec![3, 3]).unwrap();
+        let result = prewitt(&input, 0, BoundaryMode::Constant, 0.0).unwrap();
+        // Center pixel (row=1, col=1, flat index 4) sees a step in
+        // axis=0; the smoothing along axis=1 averages 3 zeros and
+        // 3 ones giving a non-trivial response.
+        assert!(
+            result.data[4].abs() > 0.5,
+            "prewitt should detect horizontal edge at center; got {}",
+            result.data[4]
+        );
+    }
+
+    #[test]
+    fn prewitt_detects_vertical_edge_along_axis1() {
+        // Step across columns: left two cols 0, right col 1. Prewitt
+        // along axis=1 should produce a strong response at the
+        // col=1 / col=2 boundary.
+        #[rustfmt::skip]
+        let data = vec![
+            0.0, 0.0, 1.0,
+            0.0, 0.0, 1.0,
+            0.0, 0.0, 1.0,
+        ];
+        let input = NdArray::new(data, vec![3, 3]).unwrap();
+        let result = prewitt(&input, 1, BoundaryMode::Constant, 0.0).unwrap();
+        // Center pixel sees the step.
+        assert!(
+            result.data[4].abs() > 0.5,
+            "prewitt should detect vertical edge at center; got {}",
+            result.data[4]
+        );
+    }
+
+    #[test]
+    fn prewitt_axis_out_of_range_returns_error() {
+        let input = NdArray::new(vec![1.0; 4], vec![2, 2]).unwrap();
+        assert!(prewitt(&input, 5, BoundaryMode::Reflect, 0.0).is_err());
+    }
+
+    #[test]
     fn laplace_constant_image() {
         let input = NdArray::new(vec![5.0; 9], vec![3, 3]).unwrap();
         let result = laplace(&input, BoundaryMode::Reflect, 0.0).unwrap();
