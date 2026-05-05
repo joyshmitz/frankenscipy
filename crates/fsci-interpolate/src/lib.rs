@@ -3615,6 +3615,35 @@ pub fn polyint(coeffs: &[f64], m: usize, k: f64) -> Vec<f64> {
 
 /// Find roots of a polynomial given coefficients (highest degree first).
 ///
+/// Construct a polynomial from its roots.
+///
+/// Matches `numpy.polynomial.polynomial.polyfromroots(roots)` in the
+/// fsci-interpolate convention (highest-degree-first). Given roots
+/// `[r₁, r₂, ..., rₙ]`, returns the coefficients of the monic
+/// polynomial `(x - r₁)(x - r₂) ... (x - rₙ)` with the leading 1 first.
+///
+/// `polyfromroots([])` returns `[1.0]` (the empty product).
+///
+/// Resolves [frankenscipy-bbc5k].
+#[must_use]
+pub fn polyfromroots(roots: &[f64]) -> Vec<f64> {
+    // Start from the constant polynomial 1 (degree-0).
+    let mut coeffs: Vec<f64> = vec![1.0];
+    for &r in roots {
+        // Multiply current polynomial by (x − r). In highest-first
+        // form, multiplying by (x − r) shifts every coefficient one
+        // position toward the leading term and subtracts r times the
+        // unshifted coefficient at the same position.
+        let mut next = vec![0.0_f64; coeffs.len() + 1];
+        for (i, &c) in coeffs.iter().enumerate() {
+            next[i] += c; // shifted up by one degree
+            next[i + 1] -= r * c;
+        }
+        coeffs = next;
+    }
+    coeffs
+}
+
 /// Uses companion matrix eigenvalue method for degree > 2.
 /// Matches `numpy.roots`.
 pub fn polyroots(coeffs: &[f64]) -> Vec<f64> {
@@ -6189,6 +6218,56 @@ mod tests {
             result[1]
         );
         assert!(result[2].is_nan(), "x=2.5 should be NaN, got {}", result[2]);
+    }
+
+    #[test]
+    fn polyfromroots_closed_form_examples() {
+        // /porting-to-rust + /testing-golden-artifacts for
+        // [frankenscipy-bbc5k]:
+        //   roots []         → [1]                  (empty product)
+        //   roots [a]        → [1, -a]              (x − a)
+        //   roots [1, 2]     → [1, -3, 2]           (x² − 3x + 2)
+        //   roots [1, 2, 3]  → [1, -6, 11, -6]      (x³ − 6x² + 11x − 6)
+        //   roots [-1, 1]    → [1, 0, -1]           (x² − 1)
+        let cases: &[(&[f64], &[f64])] = &[
+            (&[], &[1.0]),
+            (&[3.0], &[1.0, -3.0]),
+            (&[1.0, 2.0], &[1.0, -3.0, 2.0]),
+            (&[1.0, 2.0, 3.0], &[1.0, -6.0, 11.0, -6.0]),
+            (&[-1.0, 1.0], &[1.0, 0.0, -1.0]),
+        ];
+        for (roots, expected) in cases {
+            let got = polyfromroots(roots);
+            assert_eq!(
+                got.len(),
+                expected.len(),
+                "polyfromroots({roots:?}) length {} != expected {}",
+                got.len(),
+                expected.len()
+            );
+            for (i, (&g, &e)) in got.iter().zip(expected.iter()).enumerate() {
+                assert!(
+                    (g - e).abs() < 1e-12,
+                    "polyfromroots({roots:?})[{i}] = {g}, expected {e}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn polyfromroots_metamorphic_recovers_root_at_polyval() {
+        // /testing-metamorphic: polyval(polyfromroots(roots), root) ≈ 0
+        // for every input root. The constructed polynomial vanishes
+        // exactly at each root by construction.
+        let roots = [-2.5_f64, -0.7, 0.3, 1.4, 5.0];
+        let coeffs = polyfromroots(&roots);
+        for &r in &roots {
+            let v = polyval(&coeffs, r);
+            assert!(
+                v.abs() < 1e-9,
+                "polyval(polyfromroots({roots:?}), {r}) = {v}, expected ≈ 0"
+            );
+        }
     }
 
     #[test]
