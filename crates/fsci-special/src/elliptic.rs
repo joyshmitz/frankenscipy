@@ -1335,11 +1335,11 @@ pub fn ellipj(u: f64, m: f64) -> (f64, f64, f64, f64) {
 ///   * `x < y`:  `RC(x, y) = arccos(√(x/y)) / √(y − x)`
 ///   * `x > y > 0`: `RC(x, y) = arccosh(√(x/y)) / √(x − y)`
 ///   * `x = y > 0`: `RC(x, y) = 1 / √x`
-///   * `y < 0`: Cauchy-principal-value form via Carlson identity
-///       `RC(x, y) = √(x/(x − y)) · RC(x − y, −y)` — currently
-///       returns NaN as not-implemented.
+///   * `y < 0`: Cauchy principal value via Carlson 1995 identity
+///       `RC(x, y) = √(x/(x − y)) · RC(x − y, −y)`. Always real.
 ///
-/// Resolves [frankenscipy-mxxij].
+/// Resolves [frankenscipy-mxxij]; Cauchy-PV branch closes
+/// [frankenscipy-43vts].
 #[must_use]
 pub fn elliprc(x: f64, y: f64) -> f64 {
     if x.is_nan() || y.is_nan() || x < 0.0 {
@@ -1349,8 +1349,12 @@ pub fn elliprc(x: f64, y: f64) -> f64 {
         return f64::INFINITY;
     }
     if y < 0.0 {
-        // Cauchy-PV path is non-trivial; defer.
-        return f64::NAN;
+        // Cauchy principal value (Carlson 1995, eq. 2.13):
+        //   RC(x, y) = √(x / (x − y)) · RC(x − y, −y)   for y < 0, x ≥ 0.
+        // x − y > 0 and −y > 0 land cleanly in the positive branch.
+        let xm = x - y;
+        let yp = -y;
+        return (x / xm).sqrt() * elliprc(xm, yp);
     }
     if (x - y).abs() < 1e-15 {
         return 1.0 / x.sqrt();
@@ -2536,8 +2540,30 @@ mod tests {
         assert!(elliprc(1.0, f64::NAN).is_nan());
         // y=0 → +∞.
         assert!(elliprc(1.0, 0.0).is_infinite());
-        // y<0 (Cauchy PV path, deferred) → NaN.
-        assert!(elliprc(1.0, -1.0).is_nan());
+    }
+
+    #[test]
+    fn elliprc_negative_y_uses_cauchy_pv() {
+        // Closed form for y < 0 via the identity:
+        //   RC(x, y) = √(x / (x − y)) · RC(x − y, −y).
+        // RC(x − y, −y) lands in the x > y > 0 branch, where
+        // RC(a, b) = arccosh(√(a/b)) / √(a − b). Pin a few cases.
+
+        // RC(1, -1): xm=2, yp=1. RC(2, 1) = arccosh(√2). Prefactor √(1/2).
+        let actual = elliprc(1.0, -1.0);
+        assert!(actual.is_finite(), "RC(1, -1) must be real and finite");
+        let expected = (1.0_f64 / 2.0).sqrt() * 2.0_f64.sqrt().acosh();
+        assert_close(actual, expected, 1e-12, "RC(1, -1) Cauchy PV");
+
+        // RC(0, -1): xm=1, yp=1. RC(1, 1) = 1. Prefactor √(0/1) = 0.
+        // So RC(0, -1) = 0.
+        let actual = elliprc(0.0, -1.0);
+        assert_close(actual, 0.0, 1e-15, "RC(0, -1) Cauchy PV degenerate");
+
+        // RC(3, -1): xm=4, yp=1. RC(4, 1) = arccosh(2) / √3. Prefactor √(3/4).
+        let actual = elliprc(3.0, -1.0);
+        let expected = (3.0_f64 / 4.0).sqrt() * 2.0_f64.acosh() / 3.0_f64.sqrt();
+        assert_close(actual, expected, 1e-12, "RC(3, -1) Cauchy PV");
     }
 
     #[test]
