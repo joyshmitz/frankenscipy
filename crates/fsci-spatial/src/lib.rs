@@ -5075,6 +5075,81 @@ mod tests {
         );
     }
 
+    #[test]
+    fn procrustes_metamorphic_translation_invariance() {
+        // /testing-metamorphic for [frankenscipy-q9yi6]:
+        // procrustes centers both inputs to remove the translation, so
+        // procrustes(A, B).disparity must equal procrustes(A+t, B+s)
+        // for any constant translation vectors t, s. This catches a
+        // future bug that drops the centering step or applies it
+        // incorrectly per-axis.
+        let data1 = vec![
+            vec![0.0_f64, 0.0],
+            vec![1.0, 0.0],
+            vec![0.0, 1.0],
+            vec![1.0, 1.0],
+        ];
+        let data2 = vec![
+            vec![0.5_f64, 0.3],
+            vec![1.7, 0.6],
+            vec![0.2, 1.4],
+            vec![1.9, 2.1],
+        ];
+        let baseline = procrustes(&data1, &data2).expect("baseline");
+
+        for &(t1x, t1y, t2x, t2y) in &[
+            (5.0_f64, 0.0, 0.0, 0.0),
+            (0.0, 0.0, -3.0, 7.0),
+            (10.0, -10.0, 100.0, 100.0),
+        ] {
+            let shifted1: Vec<Vec<f64>> = data1
+                .iter()
+                .map(|p| vec![p[0] + t1x, p[1] + t1y])
+                .collect();
+            let shifted2: Vec<Vec<f64>> = data2
+                .iter()
+                .map(|p| vec![p[0] + t2x, p[1] + t2y])
+                .collect();
+            let shifted = procrustes(&shifted1, &shifted2).expect("shifted");
+            assert!(
+                (shifted.disparity - baseline.disparity).abs() < 1e-10,
+                "translation t1=({t1x},{t1y}) t2=({t2x},{t2y}) changed \
+                 disparity: baseline={} vs shifted={}",
+                baseline.disparity,
+                shifted.disparity
+            );
+        }
+    }
+
+    #[test]
+    fn procrustes_metamorphic_disparity_is_symmetric() {
+        // procrustes(A, B).disparity ≈ procrustes(B, A).disparity:
+        // the optimal rotation R is orthogonal, so finding R that
+        // minimizes ||A - BR||² is equivalent to finding R^T that
+        // minimizes ||AR^T - B||². The disparity (Frobenius distance
+        // after centering + scaling + rotation) must agree.
+        let data1 = vec![
+            vec![0.0_f64, 0.0],
+            vec![1.0, 0.0],
+            vec![0.0, 1.0],
+            vec![1.5, 0.7],
+        ];
+        let data2 = vec![
+            vec![0.0_f64, 0.0],
+            vec![0.0, 1.0],
+            vec![-1.0, 0.0],
+            vec![-0.7, 1.5],
+        ];
+        let ab = procrustes(&data1, &data2).expect("a->b");
+        let ba = procrustes(&data2, &data1).expect("b->a");
+        assert!(
+            (ab.disparity - ba.disparity).abs() < 1e-10,
+            "disparity asymmetry: A→B = {}, B→A = {}",
+            ab.disparity,
+            ba.disparity
+        );
+    }
+
     // ── Geometric SLERP tests ────────────────────────────────────────
 
     #[test]
