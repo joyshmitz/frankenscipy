@@ -1,0 +1,4 @@
+@relation z
+@attribute s string
+@data
+'hello world'

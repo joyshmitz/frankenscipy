@@ -227,6 +227,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "p2c017_io_arff_read"
+path = "fuzz_targets/p2c017_io_arff_read.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "p2c019_datasets_loaders"
 path = "fuzz_targets/p2c019_datasets_loaders.rs"
 test = false

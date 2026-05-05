@@ -1,0 +1,5 @@
+@relation y
+@attribute c {a,b,c}
+@data
+a
+b

@@ -1,0 +1,4 @@
+@relation x
+@attribute a numeric
+@data
+1.0
