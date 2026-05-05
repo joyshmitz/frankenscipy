@@ -6651,10 +6651,19 @@ pub fn vander(x: &[f64], n: Option<usize>, increasing: bool) -> Vec<Vec<f64>> {
 
 /// Hankel matrix from first column and (optionally) last row.
 ///
-/// Matches `scipy.linalg.hankel`.
+/// Matches `scipy.linalg.hankel(c, r)`. If `r` is None, scipy uses
+/// `zeros_like(c)` for the last row — NOT `c` itself. Resolves the
+/// `r = c` default-mismatch parity bug (frankenscipy-azhz0).
 pub fn hankel(c: &[f64], r: Option<&[f64]>) -> Vec<Vec<f64>> {
     let n = c.len();
-    let r_vals = r.unwrap_or(c);
+    let zero_default;
+    let r_vals: &[f64] = match r {
+        Some(values) => values,
+        None => {
+            zero_default = vec![0.0_f64; n];
+            &zero_default
+        }
+    };
     let m = r_vals.len();
 
     let mut h = vec![vec![0.0; m]; n];
@@ -10044,6 +10053,69 @@ mod tests {
         assert_eq!(l[1][0], 0.9); // survival[0]
         assert_eq!(l[2][1], 0.7); // survival[1]
         assert_eq!(l[1][1], 0.0);
+    }
+
+    #[test]
+    fn hankel_single_arg_pads_with_zeros() {
+        // /testing-conformance-harnesses for [frankenscipy-azhz0]:
+        // scipy.linalg.hankel(c) with no r argument uses c again,
+        // and entries beyond the c length pad with 0.
+        //   hankel([1, 2, 3]) =
+        //   [[1, 2, 3],
+        //    [2, 3, 0],
+        //    [3, 0, 0]]
+        let h = hankel(&[1.0_f64, 2.0, 3.0], None);
+        assert_eq!(h.len(), 3);
+        assert_eq!(h[0], vec![1.0, 2.0, 3.0]);
+        assert_eq!(h[1], vec![2.0, 3.0, 0.0]);
+        assert_eq!(h[2], vec![3.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn hankel_two_arg_matches_scipy_docs_example() {
+        // scipy docs example:
+        //   hankel([1, 17, 99], [99, 23, 45, 67, 89])
+        // First column is [1, 17, 99], last row is [99, 23, 45, 67, 89].
+        // The c[-1] and r[0] elements must agree (both 99).
+        //   row 0: c[0], r[1], r[2], r[3], r[4]  = [1, 23, 45, 67, 89]
+        //   row 1: c[1], r[1], r[2], r[3], r[4]?
+        // Actually scipy fills along the anti-diagonals; let me compute
+        // it directly from the implementation:
+        //   H[i, j] = c[i+j]                     if i+j < n
+        //           = r[i+j-n+1]                 if i+j-n+1 < m
+        //           = 0
+        // For c=[1, 17, 99], r=[99, 23, 45, 67, 89] (n=3, m=5):
+        //   H[0]: idx=0 c=1; idx=1 c=17; idx=2 c=99; idx=3-3+1=1 r=23; idx=4-3+1=2 r=45
+        //         = [1, 17, 99, 23, 45]
+        //   H[1]: idx=1 c=17; idx=2 c=99; idx=3-3+1=1 r=23; idx=4-3+1=2 r=45; idx=5-3+1=3 r=67
+        //         = [17, 99, 23, 45, 67]
+        //   H[2]: idx=2 c=99; idx=3-3+1=1 r=23; idx=4-3+1=2 r=45; idx=5-3+1=3 r=67; idx=6-3+1=4 r=89
+        //         = [99, 23, 45, 67, 89]
+        let h = hankel(&[1.0_f64, 17.0, 99.0], Some(&[99.0, 23.0, 45.0, 67.0, 89.0]));
+        assert_eq!(h.len(), 3);
+        assert_eq!(h[0].len(), 5);
+        assert_eq!(h[0], vec![1.0, 17.0, 99.0, 23.0, 45.0]);
+        assert_eq!(h[1], vec![17.0, 99.0, 23.0, 45.0, 67.0]);
+        assert_eq!(h[2], vec![99.0, 23.0, 45.0, 67.0, 89.0]);
+    }
+
+    #[test]
+    fn hankel_metamorphic_constant_on_antidiagonals() {
+        // /testing-metamorphic: H[i, j] depends only on i + j, so
+        // H[i, j] = H[i+1, j-1] whenever both indices are in range.
+        let c = [10.0_f64, 20.0, 30.0, 40.0];
+        let r = [40.0_f64, 50.0, 60.0, 70.0, 80.0];
+        let h = hankel(&c, Some(&r));
+        for i in 0..h.len() - 1 {
+            for j in 1..h[0].len() {
+                assert!(
+                    (h[i][j] - h[i + 1][j - 1]).abs() < 1e-15,
+                    "hankel anti-diagonal broken at ({i}, {j}): {} vs {}",
+                    h[i][j],
+                    h[i + 1][j - 1]
+                );
+            }
+        }
     }
 
     #[test]
