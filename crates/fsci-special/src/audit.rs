@@ -79,3 +79,49 @@ pub fn record_bounded_recovery(
     );
     lock_or_recover(ledger).record(event);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn record_after_poison_still_lands_in_ledger() {
+        // /mock-code-finder regression for [frankenscipy-h5hj3]:
+        // lock_or_recover is duplicated across fsci-stats, fsci-special,
+        // fsci-arrayapi, and fsci-opt audit.rs modules. fsci-stats has
+        // a direct regression test; this test mirrors it for fsci-special
+        // so a peer agent can't silently revert to the
+        // 'if let Ok(mut g) = lock()' silent-drop pattern.
+        let ledger = sync_audit_ledger();
+
+        let poisoned_thread = {
+            let l = ledger.clone();
+            std::thread::spawn(move || {
+                let _g = l.lock().expect("acquire");
+                panic!("poison fsci-special audit ledger on purpose");
+            })
+            .join()
+        };
+        assert!(poisoned_thread.is_err(), "thread should have panicked");
+        assert!(ledger.lock().is_err(), "ledger must be poisoned after panic");
+
+        record_fail_closed(&ledger, b"x=NaN", "non_finite_input", "rejected");
+        record_bounded_recovery(&ledger, b"x=Inf", "clamp_to_max", "recovered");
+
+        let g = ledger.lock().expect("ledger should recover after poison");
+        assert_eq!(g.len(), 2, "both audit events must be recorded");
+        let kinds: Vec<_> = g
+            .entries()
+            .iter()
+            .map(|e| match &e.action {
+                fsci_runtime::AuditAction::FailClosed { reason } => format!("FC:{reason}"),
+                fsci_runtime::AuditAction::BoundedRecovery { recovery_action } => {
+                    format!("BR:{recovery_action}")
+                }
+                _ => "OTHER".to_string(),
+            })
+            .collect();
+        assert!(kinds.contains(&"FC:non_finite_input".to_string()));
+        assert!(kinds.contains(&"BR:clamp_to_max".to_string()));
+    }
+}
