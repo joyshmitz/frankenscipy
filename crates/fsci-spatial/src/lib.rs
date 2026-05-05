@@ -2877,16 +2877,24 @@ pub fn directed_hausdorff(xa: &[Vec<f64>], xb: &[Vec<f64>]) -> Result<f64, Spati
         ));
     }
 
-    let mut max_dist = 0.0f64;
+    // Resolves [frankenscipy-ws4co]: compare squared distances in
+    // the inner loop and sqrt only the winning min once per a∈xa.
+    // For |xa|=|xb|=N this drops sqrt calls from N² to N. Monotone
+    // equivalence preserves the min/max semantics exactly.
+    let mut max_dist_sq = 0.0_f64;
     for a in xa {
-        let mut min_dist = f64::INFINITY;
+        let mut min_dist_sq = f64::INFINITY;
         for b in xb {
-            let d = euclidean(a, b);
-            min_dist = min_dist.min(d);
+            let d_sq = sqeuclidean(a, b);
+            if d_sq < min_dist_sq {
+                min_dist_sq = d_sq;
+            }
         }
-        max_dist = max_dist.max(min_dist);
+        if min_dist_sq > max_dist_sq {
+            max_dist_sq = min_dist_sq;
+        }
     }
-    Ok(max_dist)
+    Ok(max_dist_sq.sqrt())
 }
 
 /// Hausdorff distance between two point sets (symmetric).
@@ -5245,6 +5253,41 @@ mod tests {
         let xb = vec![vec![0.0, 1.0], vec![1.0, 1.0]];
         let d = directed_hausdorff(&xa, &xb).expect("valid input");
         assert!((d - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn directed_hausdorff_returns_true_euclidean_after_sq_optimization() {
+        // /profiling-software-performance regression for
+        // [frankenscipy-ws4co]: the inner loop now compares squared
+        // distances and only sqrt's the surviving max-of-mins. Verify
+        // the output is still the *Euclidean* directed Hausdorff
+        // distance, not the squared variant.
+        //
+        //   xa = {(0, 0), (3, 0)}
+        //   xb = {(4, 0)}
+        //   nearest distance (0,0) → (4,0) = 4
+        //   nearest distance (3,0) → (4,0) = 1
+        //   directed_hausdorff(xa, xb) = max(4, 1) = 4
+        let xa = vec![vec![0.0_f64, 0.0], vec![3.0, 0.0]];
+        let xb = vec![vec![4.0_f64, 0.0]];
+        let d = directed_hausdorff(&xa, &xb).expect("valid input");
+        assert!(
+            (d - 4.0).abs() < 1e-12,
+            "directed_hausdorff = {d}, expected 4 (true Euclidean, not 16 squared)"
+        );
+    }
+
+    #[test]
+    fn directed_hausdorff_symmetric_pair_pythagorean() {
+        // Higher-dimension sanity: a 3-4-5 right triangle in 2D.
+        //   xa = {(0, 0)}, xb = {(3, 4)} → distance = 5.
+        let xa = vec![vec![0.0_f64, 0.0]];
+        let xb = vec![vec![3.0_f64, 4.0]];
+        let d = directed_hausdorff(&xa, &xb).expect("valid input");
+        assert!(
+            (d - 5.0).abs() < 1e-12,
+            "directed_hausdorff = {d}, expected 5 (sqrt(9+16))"
+        );
     }
 
     #[test]
