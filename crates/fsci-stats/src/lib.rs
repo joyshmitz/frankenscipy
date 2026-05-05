@@ -31630,6 +31630,37 @@ mod tests {
     }
 
     #[test]
+    fn trapezoid_metamorphic_endpoint_invariants_and_pdf_integrates() {
+        // /testing-metamorphic + /testing-conformance-harnesses for the
+        // previously-untested Trapezoid distribution.
+        //   cdf(loc) = 0
+        //   cdf(loc + scale) = 1
+        //   ppf(0) = loc, ppf(1) = loc + scale (boundary identities)
+        //   ∫_{loc}^{loc+scale} pdf(x) dx ≈ 1
+        let dist = Trapezoid::new(0.3, 0.7, 1.0, 4.0);
+        assert_eq!(dist.cdf(1.0), 0.0);
+        assert_eq!(dist.cdf(5.0), 1.0);
+        assert!((dist.ppf(0.0) - 1.0).abs() < 1e-12);
+        assert!((dist.ppf(1.0) - 5.0).abs() < 1e-12);
+        // PDF integrand. Composite Simpson with 1000 panels over the
+        // 4-unit support — accuracy is bounded by piecewise-linear
+        // truncation at the c/d corners but stays within 1e-3.
+        let n = 1000;
+        let h = 4.0 / n as f64;
+        let mut total = 0.0;
+        for i in 0..n {
+            let xl = 1.0 + i as f64 * h;
+            let xr = xl + h;
+            let mid = 0.5 * (xl + xr);
+            total += (dist.pdf(xl) + 4.0 * dist.pdf(mid) + dist.pdf(xr)) * h / 6.0;
+        }
+        assert!(
+            (total - 1.0).abs() < 1e-3,
+            "Trapezoid pdf integrates to {total}, expected ~1"
+        );
+    }
+
+    #[test]
     fn studentt_pdf_cdf_match_scipy_reference_points() {
         // /testing-conformance-harnesses + /testing-golden-artifacts:
         // pin scipy.stats.t reference values:
