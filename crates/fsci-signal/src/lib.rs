@@ -13820,6 +13820,68 @@ mod tests {
     }
 
     #[test]
+    fn flattop_window_center_is_one() {
+        // /testing-conformance-harnesses for [frankenscipy-8knc6]:
+        // For odd n, the center sample i = (n-1)/2 has arg = π, so
+        // cos(arg) = -1, cos(2arg) = 1, cos(3arg) = -1, cos(4arg) = 1.
+        // The flattop value collapses to:
+        //   0.21557895 + 0.41663158 + 0.277263158 + 0.083578947
+        //     + 0.006947368 = 1.000000003 ≈ 1.0.
+        for &n in &[5usize, 11, 21, 51] {
+            let w = flattop(n);
+            assert_eq!(w.len(), n);
+            let center = (n - 1) / 2;
+            assert!(
+                (w[center] - 1.0).abs() < 1e-6,
+                "flattop({n})[{center}] = {} should be ≈ 1",
+                w[center]
+            );
+        }
+    }
+
+    #[test]
+    fn flattop_window_endpoints_near_zero() {
+        // At i = 0 and i = n-1, arg = 0 or 2π, so all cos terms are 1.
+        // Sum: 0.21557895 - 0.41663158 + 0.277263158 - 0.083578947
+        //      + 0.006947368 ≈ -0.000420.
+        // Within 1e-3 of zero — much smaller than the body amplitude.
+        for &n in &[16usize, 32, 64] {
+            let w = flattop(n);
+            assert!(
+                w[0].abs() < 1e-3,
+                "flattop({n})[0] = {} should be near 0",
+                w[0]
+            );
+            assert!(
+                w[n - 1].abs() < 1e-3,
+                "flattop({n})[n-1] = {} should be near 0",
+                w[n - 1]
+            );
+        }
+    }
+
+    #[test]
+    fn flattop_window_is_symmetric() {
+        for &n in &[5usize, 16, 33, 65] {
+            let w = flattop(n);
+            for i in 0..n / 2 {
+                assert!(
+                    (w[i] - w[n - 1 - i]).abs() < 1e-12,
+                    "flattop({n}) asymmetric at i={i}: {} vs {}",
+                    w[i],
+                    w[n - 1 - i]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn flattop_window_n_one_and_zero() {
+        assert_eq!(flattop(0), Vec::<f64>::new());
+        assert_eq!(flattop(1), vec![1.0]);
+    }
+
+    #[test]
     fn bohman_window_endpoints_zero() {
         let w = bohman_window(64);
         assert!(w[0].abs() < 1e-12, "bohman start should be 0");
