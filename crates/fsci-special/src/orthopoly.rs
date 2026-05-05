@@ -454,6 +454,15 @@ pub fn eval_genlaguerre(n: u32, alpha: f64, x: f64) -> f64 {
     l_curr
 }
 
+/// Generalized Laguerre with the legacy scipy argument order
+/// (x first, then n, then k). Matches `scipy.special.assoc_laguerre(x, n, k=0.0)`.
+/// Routes through `eval_genlaguerre(n, k, x)` — the entry point exists
+/// for callers that reach for the historical name.
+/// Resolves [frankenscipy-fdefl].
+pub fn assoc_laguerre(x: f64, n: u32, k: f64) -> f64 {
+    eval_genlaguerre(n, k, x)
+}
+
 /// Evaluate the Jacobi polynomial P_n^{α,β}(x).
 ///
 /// The most general classical orthogonal polynomial on [-1, 1].
@@ -2395,6 +2404,36 @@ mod tests {
             assert!(
                 (direct - via).abs() < 1e-12,
                 "eval_sh_jacobi({n}, {p}, {q}, {x}) = {direct} via eval_jacobi = {via}"
+            );
+        }
+    }
+
+    #[test]
+    fn assoc_laguerre_routes_through_eval_genlaguerre() {
+        // [frankenscipy-fdefl] /porting-to-rust: assoc_laguerre(x, n, k)
+        // ≡ eval_genlaguerre(n, k, x) for any (x, n, k). Pin across
+        // multiple cases including k=0 collapse to eval_laguerre.
+        for &(x, n, k) in &[
+            (0.0_f64, 0_u32, 0.0_f64),
+            (0.5, 3, 0.0),
+            (1.5, 4, 1.5),
+            (2.7, 5, 0.25),
+            (-0.3, 2, 3.0),
+        ] {
+            let direct = assoc_laguerre(x, n, k);
+            let via = eval_genlaguerre(n, k, x);
+            assert!(
+                (direct - via).abs() < 1e-12 || (direct.is_nan() && via.is_nan()),
+                "assoc_laguerre({x}, {n}, {k}) = {direct} via eval_genlaguerre = {via}"
+            );
+        }
+        // k = 0 must collapse to standard Laguerre L_n.
+        for n in 0..=5_u32 {
+            let direct = assoc_laguerre(1.7, n, 0.0);
+            let lag = eval_laguerre(n, 1.7);
+            assert!(
+                (direct - lag).abs() < 1e-12,
+                "assoc_laguerre(1.7, {n}, 0) = {direct} but eval_laguerre = {lag}"
             );
         }
     }
