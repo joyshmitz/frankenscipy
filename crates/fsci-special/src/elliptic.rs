@@ -1492,6 +1492,71 @@ pub fn elliprd(x: f64, y: f64, z: f64) -> f64 {
     f64::NAN
 }
 
+/// Carlson symmetric elliptic integral of the second kind, `RG(x, y, z)`.
+///
+/// Definition (Carlson 1995, scipy.special.elliprg):
+///
+/// ```text
+///   RG(x, y, z) = (1/(4π)) ∫∫_{S²} √(x·u² + y·v² + z·w²) dω
+/// ```
+///
+/// the average of √(x·u² + y·v² + z·w²) over the unit sphere. This
+/// connects the Carlson family to the standard complete elliptic
+/// integrals: RG(0, 1, 1) = E(0)/2 = π/4, and 2·RG(0, 1−k², 1) =
+/// E(k) (the complete elliptic integral of the second kind).
+///
+/// Implemented via Carlson's stable identity:
+///
+/// ```text
+///   RG(x, y, z) = (z · RF(x, y, z) + √(x·y / z)) / 2
+///                  + (z − x) · (z − y) · RD(x, y, z) / (−6)
+/// ```
+///
+/// for `z > 0`. When any argument is `0` we permute to place a
+/// positive value last (RG is symmetric in all three arguments).
+///
+/// Returns NaN for negative or NaN inputs.
+///
+/// Resolves [frankenscipy-781n7].
+#[must_use]
+pub fn elliprg(x: f64, y: f64, z: f64) -> f64 {
+    if x.is_nan() || y.is_nan() || z.is_nan() {
+        return f64::NAN;
+    }
+    if x < 0.0 || y < 0.0 || z < 0.0 {
+        return f64::NAN;
+    }
+
+    // RG is symmetric in all three arguments; permute so that the last
+    // argument is positive (the Carlson formula requires z > 0).
+    let (a, b, c) = if z > 0.0 {
+        (x, y, z)
+    } else if y > 0.0 {
+        (x, z, y)
+    } else if x > 0.0 {
+        (y, z, x)
+    } else {
+        // All zero — RG(0, 0, 0) = 0.
+        return 0.0;
+    };
+
+    // Carlson identity (a, b, c) with c > 0:
+    //   RG = (c · RF(a, b, c) + √(a·b/c)) / 2
+    //        + (c − a)·(c − b) · RD(a, b, c) / (−6)
+    let rf = elliprf(a, b, c);
+    let term_rf = (c * rf + (a * b / c).sqrt()) / 2.0;
+    let term_rd = if a == 0.0 && b == 0.0 {
+        // (c − 0)(c − 0)·RD(0, 0, c)/(−6) — RD(0, 0, c) is +∞,
+        // but the (c − a)(c − b) factor makes the limit well-defined.
+        // Skip: when a = b = 0, RG(0, 0, c) = √c / 2.
+        return c.sqrt() / 2.0;
+    } else {
+        let rd = elliprd(a, b, c);
+        (c - a) * (c - b) * rd / (-6.0)
+    };
+    term_rf + term_rd
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2583,5 +2648,68 @@ mod tests {
         assert!(elliprd(f64::NAN, 1.0, 1.0).is_nan());
         // x = y = 0 → divergent → +∞.
         assert!(elliprd(0.0, 0.0, 1.0).is_infinite());
+    }
+
+    #[test]
+    fn elliprg_diagonal_is_sqrt_x() {
+        // /porting-to-rust + /testing-golden-artifacts for
+        // [frankenscipy-781n7]: RG(x, x, x) = √x.
+        // Surface average of √(x·1) over the unit sphere = √x.
+        for &x in &[0.5_f64, 1.0, 2.0, 4.0, 9.0, 25.0] {
+            let actual = elliprg(x, x, x);
+            let expected = x.sqrt();
+            assert_close(
+                actual,
+                expected,
+                1e-9,
+                &format!("RG({x}, {x}, {x}) = {actual}, expected √{x} = {expected}"),
+            );
+        }
+    }
+
+    #[test]
+    fn elliprg_zero_one_one_is_pi_over_four() {
+        // RG(0, 1, 1) = π/4 (= half of E(0) = π/2).
+        let actual = elliprg(0.0, 1.0, 1.0);
+        let expected = std::f64::consts::PI / 4.0;
+        assert_close(actual, expected, 1e-9, "RG(0, 1, 1) = π/4");
+    }
+
+    #[test]
+    fn elliprg_two_zeros_is_half_sqrt_remaining() {
+        // RG(0, 0, c) = √c / 2 for c > 0 (degenerate case).
+        for &c in &[1.0_f64, 4.0, 9.0, 16.0] {
+            let actual = elliprg(0.0, 0.0, c);
+            let expected = c.sqrt() / 2.0;
+            assert_close(
+                actual,
+                expected,
+                1e-12,
+                &format!("RG(0, 0, {c}) = {actual}, expected √c/2 = {expected}"),
+            );
+        }
+        // All zero → 0.
+        assert_eq!(elliprg(0.0, 0.0, 0.0), 0.0);
+    }
+
+    #[test]
+    fn elliprg_symmetric_in_all_three_arguments() {
+        // RG is fully symmetric (unlike RD).
+        let (x, y, z) = (1.0_f64, 2.0, 3.0);
+        let xyz = elliprg(x, y, z);
+        let yxz = elliprg(y, x, z);
+        let zyx = elliprg(z, y, x);
+        let yzx = elliprg(y, z, x);
+        assert_close(xyz, yxz, 1e-10, "RG x↔y");
+        assert_close(xyz, zyx, 1e-10, "RG x↔z");
+        assert_close(xyz, yzx, 1e-10, "RG cyclic");
+    }
+
+    #[test]
+    fn elliprg_negative_or_nan_returns_nan() {
+        assert!(elliprg(-1.0, 1.0, 1.0).is_nan());
+        assert!(elliprg(1.0, -1.0, 1.0).is_nan());
+        assert!(elliprg(1.0, 1.0, -1.0).is_nan());
+        assert!(elliprg(f64::NAN, 1.0, 1.0).is_nan());
     }
 }
