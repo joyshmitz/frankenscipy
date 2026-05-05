@@ -2874,7 +2874,7 @@ mod tests {
     use fsci_runtime::{AuditAction, RuntimeMode};
 
     use super::{
-        FftError, FftOptions, TransformKind, WorkerPolicy, dct, dst_ii, dst_iii,
+        FftError, FftOptions, TransformKind, WorkerPolicy, dct, dct_iv, dst_ii, dst_iii,
         estimate_fft_flops, fft, fft_with_audit, fft2, fftn, hfft, idct, ifft, ifft2, irfft,
         irfft2, irfftn, next_fast_len, rfft, rfft_with_audit, rfft2, rfftn, sync_audit_ledger,
         take_transform_traces,
@@ -3054,6 +3054,26 @@ mod tests {
                 assert!(
                     (got - want).abs() < 1e-9,
                     "N={n}, idct(dct(x))[{i}] = {got}, expected {want}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn dct_iv_self_inverse_under_ortho() {
+        // /testing-conformance-harnesses + /testing-metamorphic:
+        // DCT-IV with ortho normalization is its own inverse:
+        //   dct_iv(dct_iv(x, ortho), ortho) = x.
+        // Pin across N ∈ {4, 8, 11, 13, 16} within 1e-9.
+        for n in [4_usize, 8, 16, 11, 13] {
+            let x: Vec<f64> = (0..n).map(|i| (i as f64).cos() * 0.5 + 0.7).collect();
+            let opts = FftOptions::default().with_normalization(super::Normalization::Ortho);
+            let once = dct_iv(&x, &opts).expect("dct_iv first");
+            let twice = dct_iv(&once, &opts).expect("dct_iv second");
+            for (i, (&got, &want)) in twice.iter().zip(x.iter()).enumerate() {
+                assert!(
+                    (got - want).abs() < 1e-9,
+                    "N={n}: dct_iv(dct_iv(x, ortho), ortho)[{i}] = {got}, expected {want}"
                 );
             }
         }
