@@ -3760,6 +3760,36 @@ mod tests {
     }
 
     #[test]
+    fn digamma_matches_scipy_reference_points() {
+        // /testing-conformance-harnesses: pin canonical scipy.special
+        // .psi values:
+        //   ψ(1)   = -γ                       (Euler-Mascheroni constant)
+        //   ψ(0.5) = -γ - 2·ln 2              (closed form)
+        //   ψ(2)   = 1 - γ                    (recurrence ψ(n+1) = ψ(n) + 1/n)
+        //   ψ(3)   = 3/2 - γ
+        let gamma_em = 0.577_215_664_901_532_9_f64;
+        let ln_2 = 2.0_f64.ln();
+        let cases: &[(f64, f64)] = &[
+            (1.0, -gamma_em),
+            (0.5, -gamma_em - 2.0 * ln_2),
+            (2.0, 1.0 - gamma_em),
+            (3.0, 1.5 - gamma_em),
+            (4.0, 1.0 + 0.5 + 1.0 / 3.0 - gamma_em),
+        ];
+        // Tolerance reflects the ~2e-10 residual of the asymptotic-
+        // with-shift digamma_core (Euler-Maclaurin truncated at
+        // order 1/x⁷). Tighter than 1e-9 would require extending the
+        // series; pin the current envelope.
+        for &(x, expected) in cases {
+            let got = digamma_core(x);
+            assert!(
+                (got - expected).abs() < 1e-9,
+                "ψ({x}) = {got}, expected {expected}"
+            );
+        }
+    }
+
+    #[test]
     fn gamma_metamorphic_factorial_identity() {
         // /testing-metamorphic: Γ(n+1) = n! for non-negative integer n.
         // Pin across n = 0..=10 to a tolerance of 1 ulp (closed-form
