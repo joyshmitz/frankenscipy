@@ -1322,6 +1322,47 @@ pub fn ellipj(u: f64, m: f64) -> (f64, f64, f64, f64) {
     (sn, cn, dn, phi)
 }
 
+/// Carlson symmetric elliptic integral of the first kind, degenerate
+/// case `RC(x, y)`.
+///
+/// Definition (Carlson 1995, scipy.special.elliprc):
+///
+/// ```text
+///   RC(x, y) = (1/2) ∫₀^∞ (t + x)^{-1/2} (t + y)^{-1} dt
+/// ```
+///
+/// Closed forms (assuming `x ≥ 0` and `y ≠ 0`):
+///   * `x < y`:  `RC(x, y) = arccos(√(x/y)) / √(y − x)`
+///   * `x > y > 0`: `RC(x, y) = arccosh(√(x/y)) / √(x − y)`
+///   * `x = y > 0`: `RC(x, y) = 1 / √x`
+///   * `y < 0`: Cauchy-principal-value form via Carlson identity
+///       `RC(x, y) = √(x/(x − y)) · RC(x − y, −y)` — currently
+///       returns NaN as not-implemented.
+///
+/// Resolves [frankenscipy-mxxij].
+#[must_use]
+pub fn elliprc(x: f64, y: f64) -> f64 {
+    if x.is_nan() || y.is_nan() || x < 0.0 {
+        return f64::NAN;
+    }
+    if y == 0.0 {
+        return f64::INFINITY;
+    }
+    if y < 0.0 {
+        // Cauchy-PV path is non-trivial; defer.
+        return f64::NAN;
+    }
+    if (x - y).abs() < 1e-15 {
+        return 1.0 / x.sqrt();
+    }
+    let ratio = (x / y).sqrt();
+    if x < y {
+        ratio.acos() / (y - x).sqrt()
+    } else {
+        ratio.acosh() / (x - y).sqrt()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2247,5 +2288,61 @@ mod tests {
             let k2 = ellipk_scalar(1.0 - p, RuntimeMode::Strict).unwrap();
             assert_close(k1, k2, 1e-10, &format!("ellipkm1({p}) vs ellipk(1-{p})"));
         }
+    }
+
+    #[test]
+    fn elliprc_x_equals_y_is_one_over_sqrt_x() {
+        // /porting-to-rust + /testing-golden-artifacts for
+        // [frankenscipy-mxxij]: closed form RC(x, x) = 1/√x.
+        for &x in &[0.5_f64, 1.0, 2.0, 4.0, 9.0, 25.0] {
+            let actual = elliprc(x, x);
+            let expected = 1.0 / x.sqrt();
+            assert_close(
+                actual,
+                expected,
+                1e-12,
+                &format!("RC({x}, {x}) = {actual}, expected {expected}"),
+            );
+        }
+    }
+
+    #[test]
+    fn elliprc_x_zero_y_positive_is_pi_over_2_sqrt_y() {
+        // RC(0, y) = arccos(0) / √y = (π/2) / √y for y > 0.
+        for &y in &[0.5_f64, 1.0, 4.0, 16.0] {
+            let expected = std::f64::consts::FRAC_PI_2 / y.sqrt();
+            let actual = elliprc(0.0, y);
+            assert_close(
+                actual,
+                expected,
+                1e-12,
+                &format!("RC(0, {y}) = {actual}, expected π/(2√{y}) = {expected}"),
+            );
+        }
+    }
+
+    #[test]
+    fn elliprc_x_greater_than_y_uses_acosh_branch() {
+        // For x > y > 0: RC(x, y) = arccosh(√(x/y)) / √(x − y).
+        // Pin RC(2, 1) = arccosh(√2) / 1 = arccosh(√2).
+        let r = elliprc(2.0, 1.0);
+        let expected = (2.0_f64.sqrt()).acosh();
+        assert_close(r, expected, 1e-12, "RC(2, 1) = arccosh(√2)");
+
+        // RC(4, 1) = arccosh(2) / √3.
+        let r = elliprc(4.0, 1.0);
+        let expected = 2.0_f64.acosh() / 3.0_f64.sqrt();
+        assert_close(r, expected, 1e-12, "RC(4, 1)");
+    }
+
+    #[test]
+    fn elliprc_negative_x_or_nan_returns_nan() {
+        assert!(elliprc(-1.0, 1.0).is_nan());
+        assert!(elliprc(f64::NAN, 1.0).is_nan());
+        assert!(elliprc(1.0, f64::NAN).is_nan());
+        // y=0 → +∞.
+        assert!(elliprc(1.0, 0.0).is_infinite());
+        // y<0 (Cauchy PV path, deferred) → NaN.
+        assert!(elliprc(1.0, -1.0).is_nan());
     }
 }
