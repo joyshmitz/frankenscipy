@@ -316,6 +316,54 @@ pub fn eval_chebyu(n: u32, x: f64) -> f64 {
     u_curr
 }
 
+/// Evaluate the Chebyshev polynomial of the first kind C_n on [-2, 2].
+///
+/// Matches `scipy.special.eval_chebyc(n, x)`. Defined by C_n(x) = 2·T_n(x/2),
+/// so it inherits the three-term recurrence
+///   C_0(x) = 2, C_1(x) = x,
+///   C_{n+1}(x) = x C_n(x) - C_{n-1}(x).
+/// Resolves [frankenscipy-1qax5].
+pub fn eval_chebyc(n: u32, x: f64) -> f64 {
+    if n == 0 {
+        return 2.0;
+    }
+    if n == 1 {
+        return x;
+    }
+    let mut c_prev = 2.0;
+    let mut c_curr = x;
+    for _ in 1..n {
+        let c_next = x * c_curr - c_prev;
+        c_prev = c_curr;
+        c_curr = c_next;
+    }
+    c_curr
+}
+
+/// Evaluate the Chebyshev polynomial of the second kind S_n on [-2, 2].
+///
+/// Matches `scipy.special.eval_chebys(n, x)`. Defined by S_n(x) = U_n(x/2),
+/// so it satisfies
+///   S_0(x) = 1, S_1(x) = x,
+///   S_{n+1}(x) = x S_n(x) - S_{n-1}(x).
+/// Resolves [frankenscipy-1qax5].
+pub fn eval_chebys(n: u32, x: f64) -> f64 {
+    if n == 0 {
+        return 1.0;
+    }
+    if n == 1 {
+        return x;
+    }
+    let mut s_prev = 1.0;
+    let mut s_curr = x;
+    for _ in 1..n {
+        let s_next = x * s_curr - s_prev;
+        s_prev = s_curr;
+        s_curr = s_next;
+    }
+    s_curr
+}
+
 /// Evaluate the physicist's Hermite polynomial H_n(x).
 ///
 /// Uses the three-term recurrence:
@@ -2311,6 +2359,68 @@ mod tests {
                 direct,
                 1e-12,
                 &format!("derivative recurrence at k={k}"),
+            );
+        }
+    }
+
+    #[test]
+    fn eval_chebyc_matches_closed_form_low_degree() {
+        // [frankenscipy-1qax5] Chebyshev C polynomials on [−2, 2]:
+        //   C_0(x) = 2
+        //   C_1(x) = x
+        //   C_2(x) = x² − 2
+        //   C_3(x) = x³ − 3x
+        //   C_4(x) = x⁴ − 4x² + 2
+        for &x in &[-2.0_f64, -1.5, -0.5, 0.0, 0.5, 1.5, 2.0] {
+            assert!((eval_chebyc(0, x) - 2.0).abs() < 1e-12);
+            assert!((eval_chebyc(1, x) - x).abs() < 1e-12);
+            assert!((eval_chebyc(2, x) - (x * x - 2.0)).abs() < 1e-12);
+            assert!((eval_chebyc(3, x) - (x.powi(3) - 3.0 * x)).abs() < 1e-12);
+            let c4_expected = x.powi(4) - 4.0 * x * x + 2.0;
+            assert!(
+                (eval_chebyc(4, x) - c4_expected).abs() < 1e-12,
+                "C_4({x}) = {} expected {c4_expected}",
+                eval_chebyc(4, x)
+            );
+        }
+        // Identity C_n(x) = 2·T_n(x/2). Pin across n=2..=5, x=1.7.
+        for n in 2..=5_u32 {
+            let from_t = 2.0 * eval_chebyt(n, 1.7 / 2.0);
+            let direct = eval_chebyc(n, 1.7);
+            assert!(
+                (from_t - direct).abs() < 1e-12,
+                "C_{n}(1.7): from T = {from_t}, direct = {direct}"
+            );
+        }
+    }
+
+    #[test]
+    fn eval_chebys_matches_closed_form_low_degree() {
+        // [frankenscipy-1qax5] Chebyshev S polynomials on [−2, 2]:
+        //   S_0(x) = 1
+        //   S_1(x) = x
+        //   S_2(x) = x² − 1
+        //   S_3(x) = x³ − 2x
+        //   S_4(x) = x⁴ − 3x² + 1
+        for &x in &[-2.0_f64, -1.5, -0.5, 0.0, 0.5, 1.5, 2.0] {
+            assert!((eval_chebys(0, x) - 1.0).abs() < 1e-12);
+            assert!((eval_chebys(1, x) - x).abs() < 1e-12);
+            assert!((eval_chebys(2, x) - (x * x - 1.0)).abs() < 1e-12);
+            assert!((eval_chebys(3, x) - (x.powi(3) - 2.0 * x)).abs() < 1e-12);
+            let s4_expected = x.powi(4) - 3.0 * x * x + 1.0;
+            assert!(
+                (eval_chebys(4, x) - s4_expected).abs() < 1e-12,
+                "S_4({x}) = {} expected {s4_expected}",
+                eval_chebys(4, x)
+            );
+        }
+        // Identity S_n(x) = U_n(x/2). Pin across n=2..=5, x=0.7.
+        for n in 2..=5_u32 {
+            let from_u = eval_chebyu(n, 0.7 / 2.0);
+            let direct = eval_chebys(n, 0.7);
+            assert!(
+                (from_u - direct).abs() < 1e-12,
+                "S_{n}(0.7): from U = {from_u}, direct = {direct}"
             );
         }
     }
