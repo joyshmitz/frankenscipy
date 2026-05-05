@@ -427,6 +427,84 @@ pub fn squareform_to_condensed(matrix: &[Vec<f64>]) -> Result<Vec<f64>, SpatialE
     Ok(condensed)
 }
 
+/// Validate that `matrix` is a square symmetric distance matrix with
+/// zeros on the diagonal (within `tol`).
+///
+/// Matches `scipy.spatial.distance.is_valid_dm(D, tol)`. Returns `true`
+/// for any conformant matrix; rejects ragged rows, asymmetry beyond
+/// `tol`, and non-zero diagonal entries beyond `tol`. NaN entries fail
+/// validation.
+#[must_use]
+pub fn is_valid_dm(matrix: &[Vec<f64>], tol: f64) -> bool {
+    let n = matrix.len();
+    if n == 0 {
+        return false;
+    }
+    for row in matrix {
+        if row.len() != n {
+            return false;
+        }
+        if row.iter().any(|v| v.is_nan()) {
+            return false;
+        }
+    }
+    for (i, row) in matrix.iter().enumerate() {
+        if row[i].abs() > tol {
+            return false;
+        }
+        for j in (i + 1)..n {
+            if (row[j] - matrix[j][i]).abs() > tol {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Validate that `condensed` is a valid condensed distance vector,
+/// i.e. its length equals n*(n-1)/2 for some integer n ≥ 1.
+///
+/// Matches `scipy.spatial.distance.is_valid_y(y)`. NaN entries fail.
+#[must_use]
+pub fn is_valid_y(condensed: &[f64]) -> bool {
+    if condensed.iter().any(|v| v.is_nan()) {
+        return false;
+    }
+    let len = condensed.len();
+    if len == 0 {
+        // Length 0 corresponds to n=1 (a single observation has no
+        // pairwise distances). scipy treats this as valid.
+        return true;
+    }
+    let n = ((1.0 + (1.0 + 8.0 * len as f64).sqrt()) / 2.0).round() as usize;
+    n >= 1 && n * (n - 1) / 2 == len
+}
+
+/// Number of observations represented by a square distance matrix.
+///
+/// Matches `scipy.spatial.distance.num_obs_dm(D)`. Returns the matrix
+/// side length. Caller is responsible for prior validation via
+/// [`is_valid_dm`] if untrusted input.
+#[must_use]
+pub fn num_obs_dm(matrix: &[Vec<f64>]) -> usize {
+    matrix.len()
+}
+
+/// Number of observations represented by a condensed distance vector.
+///
+/// Matches `scipy.spatial.distance.num_obs_y(y)`. Returns `N` such that
+/// `y.len() = N*(N-1)/2`. Returns `0` on invalid input lengths to mirror
+/// scipy's failing-with-zero behavior on malformed vectors.
+#[must_use]
+pub fn num_obs_y(condensed: &[f64]) -> usize {
+    let len = condensed.len();
+    if len == 0 {
+        return 1;
+    }
+    let n = ((1.0 + (1.0 + 8.0 * len as f64).sqrt()) / 2.0).round() as usize;
+    if n * (n - 1) / 2 == len { n } else { 0 }
+}
+
 /// Compute pairwise Euclidean distance matrix.
 ///
 /// Matches `scipy.spatial.distance.cdist(XA, XB, 'euclidean')`.
@@ -3993,6 +4071,82 @@ mod tests {
     fn squareform_to_condensed_rejects_nonzero_diagonal() {
         let matrix = vec![vec![1.0, 2.0], vec![2.0, 0.0]];
         assert!(squareform_to_condensed(&matrix).is_err());
+    }
+
+    #[test]
+    fn is_valid_dm_accepts_symmetric_zero_diagonal() {
+        let m = vec![
+            vec![0.0, 1.0, 2.0],
+            vec![1.0, 0.0, 3.0],
+            vec![2.0, 3.0, 0.0],
+        ];
+        assert!(is_valid_dm(&m, 0.0));
+        assert_eq!(num_obs_dm(&m), 3);
+    }
+
+    #[test]
+    fn is_valid_dm_rejects_asymmetric() {
+        let m = vec![vec![0.0, 1.0], vec![2.0, 0.0]];
+        assert!(!is_valid_dm(&m, 0.0));
+        assert!(is_valid_dm(&m, 1.5));
+    }
+
+    #[test]
+    fn is_valid_dm_rejects_nonzero_diagonal_and_ragged_and_nan() {
+        assert!(!is_valid_dm(&[vec![1.0, 2.0], vec![2.0, 0.0]], 0.0));
+        assert!(!is_valid_dm(&[vec![0.0, 1.0], vec![1.0]], 0.0));
+        assert!(!is_valid_dm(
+            &[vec![0.0, f64::NAN], vec![f64::NAN, 0.0]],
+            0.0
+        ));
+        assert!(!is_valid_dm(&[], 0.0));
+    }
+
+    #[test]
+    fn is_valid_y_correct_lengths() {
+        // n=1 has 0 pairs; n=2 → 1; n=3 → 3; n=4 → 6; n=5 → 10.
+        assert!(is_valid_y(&[]));
+        assert!(is_valid_y(&[1.0]));
+        assert!(is_valid_y(&[1.0, 2.0, 3.0]));
+        assert!(is_valid_y(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]));
+        assert!(is_valid_y(&[1.0; 10]));
+    }
+
+    #[test]
+    fn is_valid_y_rejects_invalid_lengths_and_nan() {
+        // 2 and 4 and 5 and 7 are not triangular numbers.
+        assert!(!is_valid_y(&[1.0, 2.0]));
+        assert!(!is_valid_y(&[1.0, 2.0, 3.0, 4.0]));
+        assert!(!is_valid_y(&[1.0; 5]));
+        assert!(!is_valid_y(&[1.0; 7]));
+        assert!(!is_valid_y(&[f64::NAN, 1.0, 2.0]));
+    }
+
+    #[test]
+    fn num_obs_y_inverse_of_pair_count() {
+        // num_obs_y(condensed) gives back N.
+        assert_eq!(num_obs_y(&[]), 1);
+        assert_eq!(num_obs_y(&[1.0]), 2);
+        assert_eq!(num_obs_y(&[1.0, 2.0, 3.0]), 3);
+        assert_eq!(num_obs_y(&[1.0; 6]), 4);
+        assert_eq!(num_obs_y(&[1.0; 10]), 5);
+        assert_eq!(num_obs_y(&[1.0, 2.0]), 0); // invalid
+    }
+
+    #[test]
+    fn squareform_validators_roundtrip() {
+        let m = vec![
+            vec![0.0, 1.0, 2.0, 3.0],
+            vec![1.0, 0.0, 4.0, 5.0],
+            vec![2.0, 4.0, 0.0, 6.0],
+            vec![3.0, 5.0, 6.0, 0.0],
+        ];
+        assert!(is_valid_dm(&m, 0.0));
+        let y = squareform_to_condensed(&m).expect("to condensed");
+        assert!(is_valid_y(&y));
+        assert_eq!(num_obs_y(&y), num_obs_dm(&m));
+        let m2 = squareform_to_matrix(&y).expect("to matrix");
+        assert!(is_valid_dm(&m2, 0.0));
     }
 
     #[test]
