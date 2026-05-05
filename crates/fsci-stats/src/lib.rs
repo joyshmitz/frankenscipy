@@ -7760,6 +7760,132 @@ impl ContinuousDistribution for LogLaplace {
     }
 }
 
+/// Log-logistic distribution (Fisk).
+///
+/// Matches `scipy.stats.fisk` (sometimes called "log-logistic" or
+/// "Fisk distribution"). Closed-form pdf and cdf:
+///     pdf(x; c) = c · x^(c-1) / (1 + x^c)²,  x > 0
+///     cdf(x; c) = x^c / (1 + x^c)
+///     ppf(q; c) = (q / (1 - q))^(1/c)
+///     median = 1 (independent of c)
+///
+/// Resolves [frankenscipy-ryd47].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Loglogistic {
+    pub c: f64,
+}
+
+impl Loglogistic {
+    #[must_use]
+    pub fn new(c: f64) -> Self {
+        assert!(c > 0.0, "c must be positive");
+        Self { c }
+    }
+}
+
+impl ContinuousDistribution for Loglogistic {
+    fn pdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        let c = self.c;
+        let xc = x.powf(c);
+        c * x.powf(c - 1.0) / ((1.0 + xc) * (1.0 + xc))
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        let c = self.c;
+        let xc = x.powf(c);
+        xc / (1.0 + xc)
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return 0.0;
+        }
+        if q == 1.0 {
+            return f64::INFINITY;
+        }
+        (q / (1.0 - q)).powf(1.0 / self.c)
+    }
+
+    fn mean(&self) -> f64 {
+        // E[X] = π/c · 1/sin(π/c) for c > 1, else infinite.
+        let c = self.c;
+        if c > 1.0 {
+            let theta = std::f64::consts::PI / c;
+            theta / theta.sin()
+        } else {
+            f64::INFINITY
+        }
+    }
+
+    fn var(&self) -> f64 {
+        // Var[X] = (2π/c)/sin(2π/c) − ((π/c)/sin(π/c))² for c > 2.
+        let c = self.c;
+        if c > 2.0 {
+            let theta = std::f64::consts::PI / c;
+            let two_theta = 2.0 * theta;
+            let m1 = theta / theta.sin();
+            let m2 = two_theta / two_theta.sin();
+            m2 - m1 * m1
+        } else {
+            f64::INFINITY
+        }
+    }
+
+    fn fit(data: &[f64]) -> Self {
+        Self::try_fit(data).unwrap_or_else(|e| {
+            panic!("Loglogistic::fit failed: {e}");
+        })
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        if data.len() < 2 {
+            return Err(FitError::InsufficientData {
+                required: 2,
+                actual: data.len(),
+            });
+        }
+        for &x in data {
+            if !x.is_finite() || x <= 0.0 {
+                return Err(FitError::UnsupportedData(format!(
+                    "Loglogistic data must be finite and positive: {x}"
+                )));
+            }
+        }
+        // Method-of-moments-via-quartiles: scipy's MLE has no closed
+        // form, so we use the analytic relation between the log-logistic
+        // quartile ratio Q3/Q1 and the shape parameter c. With pinned
+        // ppf, Q1/Q3 = (1/3)^(1/c) / 3^(1/c) = (1/9)^(1/c), so
+        // c = ln(9) / ln(Q3/Q1). Median is 1 by construction; this
+        // matches scipy's default fixed-loc=0 fit signature.
+        let mut sorted: Vec<f64> = data.iter().copied().collect();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let n = sorted.len();
+        let q1 = sorted[(n / 4).max(1) - 1];
+        let q3 = sorted[((3 * n) / 4).min(n - 1)];
+        if q3 <= q1 || q1 <= 0.0 {
+            return Err(FitError::NonConvergent(
+                "Loglogistic quartile ratio is non-positive".to_string(),
+            ));
+        }
+        let c = (9.0_f64).ln() / (q3 / q1).ln();
+        if !c.is_finite() || c <= 0.0 {
+            return Err(FitError::NonConvergent(format!(
+                "Loglogistic shape estimate is non-positive: {c}"
+            )));
+        }
+        Ok(Self { c })
+    }
+}
+
 /// Mielke Beta-Kappa distribution.
 ///
 /// Matches `scipy.stats.mielke`.
@@ -28173,6 +28299,71 @@ mod tests {
     fn log_laplace_variance_is_infinite_when_second_moment_diverges() {
         assert!(LogLaplace::new(1.5).var().is_infinite());
         assert!(LogLaplace::new(2.0).var().is_infinite());
+    }
+
+    #[test]
+    fn loglogistic_pdf_cdf_match_closed_form() {
+        // /porting-to-rust + /testing-golden-artifacts for
+        // [frankenscipy-ryd47]: scipy.stats.fisk(c) closed-form pins.
+        let dist = Loglogistic::new(2.0);
+        // pdf(1; c=2) = 2·1^1 / (1 + 1)² = 2/4 = 0.5
+        assert!((dist.pdf(1.0) - 0.5).abs() < 1e-12);
+        // cdf(1; c=2) = 1/(1+1) = 0.5  (median = 1)
+        assert!((dist.cdf(1.0) - 0.5).abs() < 1e-12);
+        // ppf(0.5; c=2) = (0.5/0.5)^(1/2) = 1
+        assert!((dist.ppf(0.5) - 1.0).abs() < 1e-12);
+        // pdf out of support
+        assert_eq!(dist.pdf(0.0), 0.0);
+        assert_eq!(dist.pdf(-1.0), 0.0);
+        assert_eq!(dist.cdf(0.0), 0.0);
+        assert_eq!(dist.cdf(-1.0), 0.0);
+        // cdf saturation at +∞
+        assert!((dist.cdf(1e9) - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn loglogistic_cdf_ppf_roundtrip_recovers_x() {
+        // /testing-metamorphic: cdf(ppf(q; c); c) ≈ q for q ∈ (0, 1)
+        // and ppf(cdf(x; c); c) ≈ x for x > 0.
+        let dist = Loglogistic::new(3.5);
+        for &q in &[0.05_f64, 0.25, 0.5, 0.75, 0.95] {
+            let x = dist.ppf(q);
+            let q_back = dist.cdf(x);
+            assert!(
+                (q_back - q).abs() < 1e-10,
+                "ppf({q}) = {x}; cdf({x}) = {q_back}"
+            );
+        }
+        for &x in &[0.1_f64, 0.5, 1.0, 2.0, 10.0] {
+            let q = dist.cdf(x);
+            let x_back = dist.ppf(q);
+            assert!(
+                (x_back - x).abs() < 1e-10,
+                "cdf({x}) = {q}; ppf({q}) = {x_back}"
+            );
+        }
+    }
+
+    #[test]
+    fn loglogistic_mean_finite_only_for_c_above_one() {
+        // Mean exists iff c > 1; var exists iff c > 2.
+        assert!(Loglogistic::new(0.5).mean().is_infinite());
+        assert!(Loglogistic::new(1.0).mean().is_infinite());
+        assert!(Loglogistic::new(1.5).mean().is_finite());
+        assert!(Loglogistic::new(2.5).mean().is_finite());
+
+        assert!(Loglogistic::new(1.5).var().is_infinite());
+        assert!(Loglogistic::new(2.0).var().is_infinite());
+        assert!(Loglogistic::new(2.5).var().is_finite());
+    }
+
+    #[test]
+    fn loglogistic_try_fit_rejects_invalid_data() {
+        // Negative, zero, NaN, and ∞ are all rejected.
+        assert!(Loglogistic::try_fit(&[1.0, 2.0, -0.5]).is_err());
+        assert!(Loglogistic::try_fit(&[1.0, 0.0, 2.0]).is_err());
+        assert!(Loglogistic::try_fit(&[1.0, f64::NAN]).is_err());
+        assert!(Loglogistic::try_fit(&[1.0]).is_err()); // too few
     }
 
     #[test]
