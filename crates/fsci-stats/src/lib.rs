@@ -26246,6 +26246,37 @@ mod tests {
     // ── Power divergence tests ───────────────────────────────────────
 
     #[test]
+    fn chisquare_perfect_fit_returns_zero_stat_and_unit_p() {
+        // /testing-golden-artifacts for [frankenscipy-qkt50]:
+        // observed exactly equals expected → χ² = 0, p = 1.
+        let (chi2, p) = chisquare(&[10.0, 10.0, 10.0, 10.0], Some(&[10.0, 10.0, 10.0, 10.0]));
+        assert!(chi2.abs() < 1e-12, "perfect fit chi² = {chi2}, expected 0");
+        assert!((p - 1.0).abs() < 1e-12, "perfect fit p = {p}, expected 1");
+    }
+
+    #[test]
+    fn chisquare_pinned_reference_value() {
+        // chisquare([10, 10, 10, 10], [12, 8, 12, 8]):
+        //   χ² = (10-12)²/12 + (10-8)²/8 + (10-12)²/12 + (10-8)²/8
+        //      = 4/12 + 4/8 + 4/12 + 4/8
+        //      = 8/12 + 8/8
+        //      = 2/3 + 1
+        //      = 5/3
+        let (chi2, p) = chisquare(
+            &[10.0, 10.0, 10.0, 10.0],
+            Some(&[12.0, 8.0, 12.0, 8.0]),
+        );
+        let expected_chi2 = 5.0 / 3.0;
+        assert!(
+            (chi2 - expected_chi2).abs() < 1e-12,
+            "chi² = {chi2}, expected 5/3 = {expected_chi2}"
+        );
+        // p-value from chi² distribution with df = 3 (categories - 1)
+        // is between 0 and 1; just verify finiteness and range.
+        assert!(p > 0.0 && p < 1.0, "p = {p} should be in (0, 1)");
+    }
+
+    #[test]
     fn power_divergence_pearson_uniform() {
         // Observed matches expected → stat ≈ 0, p ≈ 1
         let obs = [25.0, 25.0, 25.0, 25.0];
