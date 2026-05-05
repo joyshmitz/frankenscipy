@@ -10267,32 +10267,50 @@ pub fn wasserstein_distance(u: &[f64], v: &[f64]) -> f64 {
         return f64::NAN;
     }
 
-    // Sort both distributions
+    // Resolves [frankenscipy-k8sed]: linear merge sweep over the two
+    // sorted samples, advancing pointers to track CDF counts. The
+    // previous version sorted+deduped a third Vec and called
+    // partition_point (O(log N)) per step, totaling O((N+M)·log(N+M)).
+    // The two-pointer variant runs in O(N + M).
     let mut u_sorted = u.to_vec();
     let mut v_sorted = v.to_vec();
     u_sorted.sort_by(|a, b| a.total_cmp(b));
     v_sorted.sort_by(|a, b| a.total_cmp(b));
 
-    // Merge and compute the area between CDFs
     let nu = u.len() as f64;
     let nv = v.len() as f64;
 
-    // Combine all unique values and compute CDF difference at each
-    let mut all_vals: Vec<f64> = u_sorted.iter().chain(v_sorted.iter()).copied().collect();
-    all_vals.sort_by(|a, b| a.total_cmp(b));
-    all_vals.dedup_by(|a, b| a.total_cmp(b).is_eq());
+    // CDF counts: number of u/v values seen so far, ≤ current threshold.
+    let mut iu = 0_usize;
+    let mut iv = 0_usize;
+    let mut prev_val = u_sorted[0].min(v_sorted[0]);
+    let mut distance = 0.0_f64;
 
-    let mut distance = 0.0;
-    let mut prev_val = all_vals[0];
+    while iu < u_sorted.len() || iv < v_sorted.len() {
+        // Pick the next breakpoint = min of the two remaining heads.
+        let next_val = match (u_sorted.get(iu), v_sorted.get(iv)) {
+            (Some(&u_val), Some(&v_val)) => u_val.min(v_val),
+            (Some(&u_val), None) => u_val,
+            (None, Some(&v_val)) => v_val,
+            (None, None) => break,
+        };
 
-    for &val in &all_vals[1..] {
-        // CDF of u at prev_val
-        let cdf_u = u_sorted.partition_point(|&x| x <= prev_val) as f64 / nu;
-        // CDF of v at prev_val
-        let cdf_v = v_sorted.partition_point(|&x| x <= prev_val) as f64 / nv;
+        // Accumulate area at the previous breakpoint (CDF is a step
+        // function — the area between (prev_val, next_val] uses the
+        // CDF values established by counts iu, iv up to prev_val).
+        let cdf_u = iu as f64 / nu;
+        let cdf_v = iv as f64 / nv;
+        distance += (cdf_u - cdf_v).abs() * (next_val - prev_val);
 
-        distance += (cdf_u - cdf_v).abs() * (val - prev_val);
-        prev_val = val;
+        // Advance whichever pointers have head equal to next_val. This
+        // is equivalent to partition_point but in O(1) per step.
+        while iu < u_sorted.len() && u_sorted[iu] <= next_val {
+            iu += 1;
+        }
+        while iv < v_sorted.len() && v_sorted[iv] <= next_val {
+            iv += 1;
+        }
+        prev_val = next_val;
     }
 
     distance
