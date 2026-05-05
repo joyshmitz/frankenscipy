@@ -6196,17 +6196,24 @@ pub fn toeplitz(c: &[f64], r: Option<&[f64]>) -> Vec<Vec<f64>> {
     result
 }
 
-/// Construct a circulant matrix.
+/// Construct a circulant matrix whose first column is `c`.
 ///
-/// Matches `scipy.linalg.circulant(c)`.
+/// Matches `scipy.linalg.circulant(c)`. Each subsequent column is a
+/// cyclic-down-shift of the previous one, equivalently:
 ///
-/// Each row is a cyclic permutation of the first row.
+/// ```text
+///   result[i][j] = c[(i - j) mod n]
+/// ```
+///
+/// Resolves [frankenscipy-qfv5a]: the previous version put `c` on the
+/// FIRST ROW (returning the transpose of the scipy convention).
 pub fn circulant(c: &[f64]) -> Vec<Vec<f64>> {
     let n = c.len();
     let mut result = vec![vec![0.0; n]; n];
     for i in 0..n {
         for j in 0..n {
-            result[i][j] = c[(j + n - i) % n];
+            // (i - j) mod n via signed-safe arithmetic.
+            result[i][j] = c[(i + n - j) % n];
         }
     }
     result
@@ -9918,12 +9925,22 @@ mod tests {
     }
 
     #[test]
-    fn circulant_basic() {
+    fn circulant_basic_matches_scipy_first_column_convention() {
+        // Resolves [frankenscipy-qfv5a]: circulant returns the matrix
+        // whose FIRST COLUMN is c (scipy convention), not the first row.
+        //   circulant([1, 2, 3]) = [[1, 3, 2],
+        //                            [2, 1, 3],
+        //                            [3, 2, 1]]
+        // Verify both the column-as-c property and the cyclic-shift rule.
         let c = vec![1.0, 2.0, 3.0];
         let m = circulant(&c);
-        assert_eq!(m[0], vec![1.0, 2.0, 3.0]);
-        assert_eq!(m[1], vec![3.0, 1.0, 2.0]);
-        assert_eq!(m[2], vec![2.0, 3.0, 1.0]);
+        assert_eq!(m[0], vec![1.0, 3.0, 2.0]);
+        assert_eq!(m[1], vec![2.0, 1.0, 3.0]);
+        assert_eq!(m[2], vec![3.0, 2.0, 1.0]);
+        // First column equals c.
+        for (i, &cv) in c.iter().enumerate() {
+            assert_eq!(m[i][0], cv);
+        }
     }
 
     #[test]

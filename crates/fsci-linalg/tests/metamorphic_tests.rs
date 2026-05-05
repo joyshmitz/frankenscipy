@@ -1107,14 +1107,16 @@ fn mr_toeplitz_diagonal_matches_c0() {
 // ─────────────────────────────────────────────────────────────────────
 
 #[test]
-fn mr_circulant_first_row_matches_c() {
+fn mr_circulant_first_column_matches_c() {
+    // MR36 (post frankenscipy-qfv5a): scipy.linalg.circulant puts c on
+    // the FIRST COLUMN, not the first row. Verify circulant[i, 0] = c[i].
     let c = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0];
     let m = circulant(&c);
-    for (j, &cv) in c.iter().enumerate() {
+    for (i, &cv) in c.iter().enumerate() {
         assert!(
-            (m[0][j] - cv).abs() < 1e-12,
-            "MR36 circulant[0, {j}] = {} vs c[{j}] = {cv}",
-            m[0][j]
+            (m[i][0] - cv).abs() < 1e-12,
+            "MR36 circulant[{i}, 0] = {} vs c[{i}] = {cv}",
+            m[i][0]
         );
     }
 }
