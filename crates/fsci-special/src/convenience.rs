@@ -3842,6 +3842,31 @@ pub fn expm1(x: f64) -> f64 {
     x.exp_m1()
 }
 
+/// Tangent of π*x with higher accuracy at integer arguments and
+/// proper pole semantics at half-integers.
+///
+/// Computes tan(π·x) as sinpi(x) / cospi(x), so:
+///   - tanpi(n) = ±0      for integer n   (preserves sign of sin(πx))
+///   - tanpi(n + 0.5) = ±∞ for any integer n  (cospi vanishes)
+///   - tanpi(NaN/±∞) = NaN
+///
+/// Matches `scipy.special.tanpi`. Resolves [frankenscipy-cd205].
+#[must_use]
+pub fn tanpi(x: f64) -> f64 {
+    if x.is_nan() || x.is_infinite() {
+        return f64::NAN;
+    }
+    let s = sinpi(x);
+    let c = cospi(x);
+    if c == 0.0 {
+        // Half-integer pole: sign matches sinpi(x)/0⁺ where 0⁺ is the
+        // positive-side limit at the pole. Below we just return the
+        // raw IEEE-754 division which propagates the correct ±∞.
+        return s / c;
+    }
+    s / c
+}
+
 /// Compute log(exp(x) + exp(y)) without overflow.
 ///
 /// This is useful for adding probabilities in log-space.
@@ -5597,6 +5622,64 @@ mod tests {
         assert!((cospi(0.25) - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-14);
         // Negative
         assert!((cospi(-0.25) - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-14);
+    }
+
+    #[test]
+    fn tanpi_integer_arguments_are_exact_zero() {
+        // /porting-to-rust + /testing-golden-artifacts for
+        // [frankenscipy-cd205]: scipy.special.tanpi at integer
+        // arguments is exactly 0 (not the ±epsilon that tan(π·n) gives).
+        for &n in &[-3.0_f64, -1.0, 0.0, 1.0, 2.0, 5.0] {
+            assert_eq!(
+                tanpi(n),
+                0.0,
+                "tanpi({n}) must be exactly 0, got {}",
+                tanpi(n)
+            );
+        }
+    }
+
+    #[test]
+    fn tanpi_quarter_integers_match_unit_value() {
+        // tanpi(0.25) = tan(π/4) = 1; tanpi(-0.25) = -1.
+        assert!((tanpi(0.25) - 1.0).abs() < 1e-14);
+        assert!((tanpi(-0.25) - (-1.0)).abs() < 1e-14);
+        // tanpi(0.75) = tan(3π/4) = -1; tanpi(-0.75) = +1.
+        assert!((tanpi(0.75) - (-1.0)).abs() < 1e-14);
+        assert!((tanpi(-0.75) - 1.0).abs() < 1e-14);
+    }
+
+    #[test]
+    fn tanpi_half_integers_are_infinite() {
+        // tanpi at half-integers blows up because cospi vanishes.
+        // Specifically: 0.5 → +∞ (sinpi=+1, cospi=0⁺); 1.5 → +∞;
+        // -0.5 → -∞ (sinpi=-1, cospi=0⁺).
+        assert!(tanpi(0.5).is_infinite());
+        assert!(tanpi(-0.5).is_infinite());
+        assert!(tanpi(1.5).is_infinite());
+        assert!(tanpi(-1.5).is_infinite());
+    }
+
+    #[test]
+    fn tanpi_propagates_nan_and_infinity() {
+        assert!(tanpi(f64::NAN).is_nan());
+        assert!(tanpi(f64::INFINITY).is_nan());
+        assert!(tanpi(f64::NEG_INFINITY).is_nan());
+    }
+
+    #[test]
+    fn tanpi_matches_sinpi_over_cospi_for_regular_points() {
+        // Direct identity: tanpi(x) = sinpi(x) / cospi(x) for regular
+        // x. This is essentially the implementation, so the test is a
+        // smoke check on a grid of non-special values.
+        for &x in &[0.1_f64, 0.3, 0.7, 1.2, -0.4, -1.7] {
+            let expected = sinpi(x) / cospi(x);
+            assert!(
+                (tanpi(x) - expected).abs() < 1e-14,
+                "tanpi({x}) = {} != sinpi/cospi = {expected}",
+                tanpi(x)
+            );
+        }
     }
 
     #[test]
