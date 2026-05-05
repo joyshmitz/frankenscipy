@@ -13,6 +13,19 @@ pub(crate) fn audit_fingerprint(context: &str, detail: impl Into<String>) -> Vec
     format!("{context}:{}", detail.into()).into_bytes()
 }
 
+/// Acquire the ledger guard, recovering from a poisoned mutex so audit
+/// events still record after any prior thread panicked.
+/// Resolves [frankenscipy-l2irg] for fsci-integrate.
+fn lock_or_recover(ledger: &SyncSharedAuditLedger) -> std::sync::MutexGuard<'_, AuditLedger> {
+    match ledger.lock() {
+        Ok(g) => g,
+        Err(poisoned) => {
+            ledger.clear_poison();
+            poisoned.into_inner()
+        }
+    }
+}
+
 pub(crate) fn record_fail_closed(
     ledger: Option<&SyncSharedAuditLedger>,
     input_bytes: &[u8],
@@ -31,9 +44,7 @@ pub(crate) fn record_fail_closed(
         },
         outcome,
     );
-    if let Ok(mut guard) = ledger.lock() {
-        guard.record(event);
-    }
+    lock_or_recover(ledger).record(event);
 }
 
 pub(crate) fn record_bounded_recovery(
@@ -54,9 +65,7 @@ pub(crate) fn record_bounded_recovery(
         },
         outcome,
     );
-    if let Ok(mut guard) = ledger.lock() {
-        guard.record(event);
-    }
+    lock_or_recover(ledger).record(event);
 }
 
 pub const EPS: f64 = f64::EPSILON;
@@ -764,5 +773,42 @@ mod tests {
             ledger.entries()[0].action,
             AuditAction::FailClosed { ref reason } if reason == "rtol_must_not_be_nan"
         ));
+    }
+
+    #[test]
+    fn test_validation_audit_records_after_poisoned_ledger() {
+        let audit_ledger = sync_audit_ledger();
+
+        let poisoned_thread = {
+            let ledger = audit_ledger.clone();
+            std::thread::spawn(move || {
+                let _guard = ledger.lock().expect("acquire ledger");
+                panic!("poison fsci-integrate audit ledger on purpose");
+            })
+            .join()
+        };
+        assert!(poisoned_thread.is_err(), "thread should have panicked");
+        assert!(
+            audit_ledger.lock().is_err(),
+            "ledger must be poisoned after panic"
+        );
+
+        record_fail_closed(
+            Some(&audit_ledger),
+            b"bad first step",
+            "first_step_must_be_positive",
+            "rejected",
+        );
+        record_bounded_recovery(
+            Some(&audit_ledger),
+            b"small rtol",
+            "clamp_rtol_to_min",
+            "recovered",
+        );
+
+        let ledger = audit_ledger
+            .lock()
+            .expect("ledger poison should have been cleared");
+        assert_eq!(ledger.len(), 2);
     }
 }

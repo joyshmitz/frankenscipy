@@ -15,6 +15,19 @@ pub fn sync_audit_ledger() -> SyncSharedAuditLedger {
     AuditLedger::shared()
 }
 
+/// Acquire the ledger guard, recovering from a poisoned mutex so audit
+/// events still record after any prior thread panicked.
+/// Resolves [frankenscipy-l2irg] for fsci-sparse.
+fn lock_or_recover(ledger: &SyncSharedAuditLedger) -> std::sync::MutexGuard<'_, AuditLedger> {
+    match ledger.lock() {
+        Ok(g) => g,
+        Err(poisoned) => {
+            ledger.clear_poison();
+            poisoned.into_inner()
+        }
+    }
+}
+
 pub fn record_fail_closed(
     ledger: &SyncSharedAuditLedger,
     input_bytes: &[u8],
@@ -29,9 +42,7 @@ pub fn record_fail_closed(
         },
         outcome.to_string(),
     );
-    if let Ok(mut ledger) = ledger.lock() {
-        ledger.record(event);
-    }
+    lock_or_recover(ledger).record(event);
 }
 
 pub fn record_bounded_recovery(
@@ -48,7 +59,35 @@ pub fn record_bounded_recovery(
         },
         outcome.to_string(),
     );
-    if let Ok(mut ledger) = ledger.lock() {
-        ledger.record(event);
+    lock_or_recover(ledger).record(event);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn record_after_poison_still_lands_in_ledger() {
+        let ledger = sync_audit_ledger();
+
+        let poisoned_thread = {
+            let l = ledger.clone();
+            std::thread::spawn(move || {
+                let _g = l.lock().expect("acquire");
+                panic!("poison fsci-sparse audit ledger on purpose");
+            })
+            .join()
+        };
+        assert!(poisoned_thread.is_err(), "thread should have panicked");
+        assert!(
+            ledger.lock().is_err(),
+            "ledger must be poisoned after panic"
+        );
+
+        record_fail_closed(&ledger, b"shape", "csr_to_csc::shape", "rejected");
+        record_bounded_recovery(&ledger, b"recover", "duplicate_indices_dedup", "recovered");
+
+        let g = ledger.lock().expect("ledger should recover");
+        assert_eq!(g.len(), 2);
     }
 }

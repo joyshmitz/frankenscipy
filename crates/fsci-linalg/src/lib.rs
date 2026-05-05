@@ -47,6 +47,19 @@ pub struct LinalgTrace {
 // Audit Ledger Integration (§0.19)
 // ═══════════════════════════════════════════════════════════════════
 
+/// Acquire the ledger guard, recovering from a poisoned mutex so audit
+/// events still record after any prior thread panicked.
+/// Resolves [frankenscipy-l2irg] for fsci-linalg.
+fn lock_or_recover(ledger: &SyncSharedAuditLedger) -> std::sync::MutexGuard<'_, AuditLedger> {
+    match ledger.lock() {
+        Ok(g) => g,
+        Err(poisoned) => {
+            ledger.clear_poison();
+            poisoned.into_inner()
+        }
+    }
+}
+
 /// Record a fail-closed audit event when validation rejects input.
 fn record_fail_closed(
     ledger: &SyncSharedAuditLedger,
@@ -62,9 +75,7 @@ fn record_fail_closed(
         },
         outcome,
     );
-    if let Ok(mut guard) = ledger.lock() {
-        guard.record(event);
-    }
+    lock_or_recover(ledger).record(event);
 }
 
 /// Record a bounded recovery audit event when hardened mode recovers from an issue.
@@ -82,9 +93,7 @@ fn record_bounded_recovery(
         },
         outcome,
     );
-    if let Ok(mut guard) = ledger.lock() {
-        guard.record(event);
-    }
+    lock_or_recover(ledger).record(event);
 }
 
 /// Record a CASP solver selection decision for audit trail.
@@ -108,9 +117,7 @@ fn record_casp_decision(
         },
         decision_desc,
     );
-    if let Ok(mut guard) = ledger.lock() {
-        guard.record(event);
-    }
+    lock_or_recover(ledger).record(event);
 }
 
 fn record_mode_decision(
@@ -125,9 +132,7 @@ fn record_mode_decision(
         AuditAction::ModeDecision { mode },
         outcome,
     );
-    if let Ok(mut guard) = ledger.lock() {
-        guard.record(event);
-    }
+    lock_or_recover(ledger).record(event);
 }
 
 fn fail_closed_reason(error: &LinalgError) -> Option<&'static str> {
@@ -7408,6 +7413,40 @@ mod tests {
         }
     }
 
+    #[test]
+    fn audit_records_after_poisoned_ledger() {
+        let audit_ledger = sync_audit_ledger();
+
+        let poisoned_thread = {
+            let ledger = audit_ledger.clone();
+            std::thread::spawn(move || {
+                let _guard = ledger.lock().expect("acquire ledger");
+                panic!("poison fsci-linalg audit ledger on purpose");
+            })
+            .join()
+        };
+        assert!(poisoned_thread.is_err(), "thread should have panicked");
+        assert!(
+            audit_ledger.lock().is_err(),
+            "ledger must be poisoned after panic"
+        );
+
+        record_fail_closed(&audit_ledger, b"bad matrix", "non_finite_input", "rejected");
+        record_bounded_recovery(
+            &audit_ledger,
+            b"recovered matrix",
+            "svd_fallback",
+            "recovered",
+        );
+        record_casp_decision(&audit_ledger, b"casp", SolverAction::DirectLU, 1.0, false);
+        record_mode_decision(&audit_ledger, b"mode", RuntimeMode::Strict, "executed");
+
+        let ledger = audit_ledger
+            .lock()
+            .expect("ledger poison should have been cleared");
+        assert_eq!(ledger.len(), 4);
+    }
+
     fn rotated_diagonal(lambda1: f64, lambda2: f64) -> Vec<Vec<f64>> {
         let diag = 0.5 * (lambda1 + lambda2);
         let off_diag = 0.5 * (lambda1 - lambda2);
@@ -9097,12 +9136,16 @@ mod tests {
                 assert!(
                     (av[i] - lv[i]).abs() < 1e-10,
                     "(A · v)[{i}] = {} but λ · v[{i}] = {} for col={col} λ={lambda}",
-                    av[i], lv[i]
+                    av[i],
+                    lv[i]
                 );
             }
             // Eigenvectors are unit-length.
             let norm = (v[0] * v[0] + v[1] * v[1]).sqrt();
-            assert!((norm - 1.0).abs() < 1e-10, "v[col={col}] not unit-length: {norm}");
+            assert!(
+                (norm - 1.0).abs() < 1e-10,
+                "v[col={col}] not unit-length: {norm}"
+            );
         }
     }
 
