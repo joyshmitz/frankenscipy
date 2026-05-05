@@ -228,6 +228,10 @@ pub fn fftcorrelate(a: &[f64], b: &[f64], mode: &str) -> Result<Vec<f64>, FftErr
 /// Compute the power spectral density of a real signal.
 ///
 /// Returns (frequencies, power) using Welch-like periodogram.
+/// Resolves [frankenscipy-yyyaz]: routes through rfft directly to skip
+/// the complex-promotion allocation and halve the FFT compute on real
+/// input. scipy.signal.periodogram uses rfft internally for the same
+/// reason.
 pub fn periodogram_simple(x: &[f64], fs: f64) -> Result<(Vec<f64>, Vec<f64>), FftError> {
     if x.is_empty() {
         return Ok((vec![], vec![]));
@@ -235,17 +239,17 @@ pub fn periodogram_simple(x: &[f64], fs: f64) -> Result<(Vec<f64>, Vec<f64>), Ff
     let n = x.len();
     let opts = crate::FftOptions::default();
 
-    let complex_input: Vec<(f64, f64)> = x.iter().map(|&v| (v, 0.0)).collect();
-    let spectrum = crate::fft(&complex_input, &opts)?;
+    let spectrum = crate::rfft(x, &opts)?;
+    debug_assert_eq!(spectrum.len(), n / 2 + 1);
 
     let n_freq = n / 2 + 1;
     let mut power = Vec::with_capacity(n_freq);
     let mut freqs = Vec::with_capacity(n_freq);
 
-    for (k, item) in spectrum.iter().enumerate().take(n_freq) {
+    for (k, item) in spectrum.iter().enumerate() {
         let (re, im) = *item;
         let mut p = (re * re + im * im) / (n as f64 * fs);
-        // Double non-DC, non-Nyquist bins for one-sided spectrum
+        // Double non-DC, non-Nyquist bins for one-sided spectrum.
         if k > 0 && k < n / 2 {
             p *= 2.0;
         }
