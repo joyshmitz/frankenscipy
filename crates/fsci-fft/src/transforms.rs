@@ -2356,9 +2356,17 @@ fn record_audit_event(
         action,
         outcome,
     );
-    if let Ok(mut guard) = audit_ledger.lock() {
-        guard.record(event);
-    }
+    // Resolves [frankenscipy-be4cw] (deferred from kt4od): the previous
+    // `if let Ok(mut guard) = lock()` pattern silently dropped events
+    // on poisoned mutexes, breaking the fail-closed audit contract.
+    let mut guard = match audit_ledger.lock() {
+        Ok(g) => g,
+        Err(poisoned) => {
+            audit_ledger.clear_poison();
+            poisoned.into_inner()
+        }
+    };
+    guard.record(event);
 }
 
 fn record_mode_decision(
@@ -3022,6 +3030,51 @@ mod tests {
             &entry.action,
             AuditAction::FailClosed { reason } if reason == "empty_input"
         )));
+    }
+
+    #[test]
+    fn fft_with_audit_records_event_after_poison_recovery() {
+        // /modes-of-reasoning-project-analysis regression for
+        // frankenscipy-be4cw (deferred from kt4od): the silent-drop
+        // pattern at transforms.rs:2359 has been replaced with explicit
+        // poison recovery. After deliberately poisoning the ledger,
+        // fft_with_audit's failure path must still record an event.
+        let audit_ledger = sync_audit_ledger();
+        // Poison the ledger by panicking while holding the guard.
+        let poisoned_thread = {
+            let l = audit_ledger.clone();
+            std::thread::spawn(move || {
+                let _g = l.lock().expect("acquire");
+                panic!("poison the FFT audit ledger on purpose");
+            })
+            .join()
+        };
+        assert!(poisoned_thread.is_err(), "thread should have panicked");
+        assert!(
+            audit_ledger.lock().is_err(),
+            "ledger must be poisoned after panic"
+        );
+
+        // Trigger an audit-emitting failure path post-poison.
+        let err = fft_with_audit(&[], &FftOptions::default(), &audit_ledger)
+            .expect_err("empty input should still be rejected");
+        assert_eq!(
+            err,
+            FftError::InvalidShape {
+                detail: "input length must be greater than zero",
+            }
+        );
+
+        // The fail_closed event must be present despite the prior poison.
+        let ledger = audit_ledger.lock().expect("ledger should recover");
+        assert!(
+            ledger.entries().iter().any(|entry| matches!(
+                &entry.action,
+                AuditAction::FailClosed { reason } if reason == "empty_input"
+            )),
+            "fft_with_audit must record post-poison; entries: {:?}",
+            ledger.entries()
+        );
     }
 
     #[test]

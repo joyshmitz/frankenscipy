@@ -2391,9 +2391,19 @@ fn trace_log() -> &'static Mutex<Vec<OptimizeTraceEntry>> {
 }
 
 fn push_trace(entry: OptimizeTraceEntry) {
-    if let Ok(mut guard) = trace_log().lock() {
-        guard.push(entry);
-    }
+    // Resolves [frankenscipy-be4cw] (deferred from kt4od): the previous
+    // `if let Ok(mut guard) = trace_log().lock()` pattern silently
+    // dropped trace entries on poisoned mutexes. Recover from poison so
+    // the trace log keeps recording entries after any prior panic.
+    let log = trace_log();
+    let mut guard = match log.lock() {
+        Ok(g) => g,
+        Err(poisoned) => {
+            log.clear_poison();
+            poisoned.into_inner()
+        }
+    };
+    guard.push(entry);
 }
 
 fn now_unix_ms() -> u64 {
