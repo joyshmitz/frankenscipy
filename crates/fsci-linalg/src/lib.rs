@@ -6689,10 +6689,30 @@ pub fn hankel(c: &[f64], r: Option<&[f64]>) -> Vec<Vec<f64>> {
     h
 }
 
-/// Helmert matrix (orthogonal contrast matrix).
+/// Helmert matrix (orthogonal contrast matrix), `(n - 1, n)` form.
 ///
-/// Matches `scipy.linalg.helmert`.
+/// Matches `scipy.linalg.helmert(n)` (with default `full=False`),
+/// returning the submatrix that excludes the first row of constant
+/// `1/√n` entries. The remaining `n - 1` rows are pairwise orthogonal
+/// unit vectors.
+///
+/// For the `(n, n)` form including the first row, use [`helmert_full`].
+///
+/// Resolves [frankenscipy-3t31o].
 pub fn helmert(n: usize) -> Vec<Vec<f64>> {
+    let full = helmert_full(n);
+    if full.len() <= 1 {
+        return Vec::new();
+    }
+    full.into_iter().skip(1).collect()
+}
+
+/// Helmert matrix in the `(n, n)` "full" form, including the first
+/// row of constant `1/√n` entries.
+///
+/// Matches `scipy.linalg.helmert(n, full=True)`.
+#[must_use]
+pub fn helmert_full(n: usize) -> Vec<Vec<f64>> {
     if n == 0 {
         return vec![];
     }
@@ -10136,49 +10156,49 @@ mod tests {
     }
 
     #[test]
-    fn helmert_first_row_is_uniform() {
-        // /mock-code-finder for [frankenscipy-d1jml]:
-        // First row of the Helmert matrix is [1/√n, ..., 1/√n].
+    fn helmert_full_first_row_is_uniform() {
+        // /mock-code-finder + frankenscipy-3t31o: helmert_full is the
+        // (n, n) form including the constant first row [1/√n, ..., 1/√n].
         for &n in &[2usize, 3, 5, 10] {
-            let h = helmert(n);
+            let h = helmert_full(n);
             assert_eq!(h.len(), n);
             assert_eq!(h[0].len(), n);
             let expected = 1.0 / (n as f64).sqrt();
             for &v in &h[0] {
                 assert!(
                     (v - expected).abs() < 1e-12,
-                    "helmert({n}) first row entry {v} != 1/√{n} = {expected}"
+                    "helmert_full({n}) first row entry {v} != 1/√{n} = {expected}"
                 );
             }
         }
     }
 
     #[test]
-    fn helmert_rows_have_unit_norm() {
-        // Each row is a unit vector (the matrix is orthogonal/orthonormal).
+    fn helmert_full_rows_have_unit_norm() {
+        // Each row of the (n, n) full Helmert matrix is a unit vector.
         for &n in &[2usize, 3, 5, 10] {
-            let h = helmert(n);
+            let h = helmert_full(n);
             for (i, row) in h.iter().enumerate() {
                 let norm_sq: f64 = row.iter().map(|&v| v * v).sum();
                 assert!(
                     (norm_sq - 1.0).abs() < 1e-12,
-                    "helmert({n}) row {i} has norm² = {norm_sq}, expected 1"
+                    "helmert_full({n}) row {i} has norm² = {norm_sq}, expected 1"
                 );
             }
         }
     }
 
     #[test]
-    fn helmert_rows_are_pairwise_orthogonal() {
+    fn helmert_full_rows_are_pairwise_orthogonal() {
         // Different rows are orthogonal (row_i · row_j = 0 for i ≠ j).
         for &n in &[3usize, 5, 8] {
-            let h = helmert(n);
+            let h = helmert_full(n);
             for i in 0..n {
                 for j in (i + 1)..n {
                     let dot: f64 = h[i].iter().zip(h[j].iter()).map(|(&a, &b)| a * b).sum();
                     assert!(
                         dot.abs() < 1e-12,
-                        "helmert({n}) row {i} · row {j} = {dot} ≠ 0"
+                        "helmert_full({n}) row {i} · row {j} = {dot} ≠ 0"
                     );
                 }
             }
@@ -10186,8 +10206,28 @@ mod tests {
     }
 
     #[test]
-    fn helmert_n_zero_is_empty() {
+    fn helmert_default_excludes_first_row_per_scipy() {
+        // /modes-of-reasoning-project-analysis for frankenscipy-3t31o:
+        // helmert(n) defaults to scipy's full=False — returns (n-1, n)
+        // submatrix without the constant first row. Verify the first
+        // row of helmert_full equals the constant 1/√n entries and is
+        // dropped in helmert.
+        for &n in &[2usize, 3, 5, 10] {
+            let full = helmert_full(n);
+            let default = helmert(n);
+            assert_eq!(default.len(), n - 1);
+            assert_eq!(default[0].len(), n);
+            // helmert(n) should equal full[1..]
+            for (i, row) in default.iter().enumerate() {
+                for (j, &v) in row.iter().enumerate() {
+                    assert!((v - full[i + 1][j]).abs() < 1e-15);
+                }
+            }
+        }
+        // n = 0 still returns empty.
         assert_eq!(helmert(0), Vec::<Vec<f64>>::new());
+        // n = 1 returns empty (single row dropped).
+        assert_eq!(helmert(1), Vec::<Vec<f64>>::new());
     }
 
     #[test]
