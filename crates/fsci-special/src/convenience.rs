@@ -6908,6 +6908,64 @@ mod tests {
     }
 
     #[test]
+    fn owens_t_closed_form_reference_values() {
+        // /testing-golden-artifacts for [frankenscipy-puui1]: pin
+        // Owen's T at boundary points where it has analytic closed
+        // forms, in addition to the dispatch tests already in place.
+        use std::f64::consts::PI;
+
+        // T(0, a) = arctan(a) / (2π).
+        for &a in &[0.5_f64, 1.0, 2.0, 5.0] {
+            let expected = a.atan() / (2.0 * PI);
+            assert!(
+                (owens_t_scalar(0.0, a) - expected).abs() < 1e-12,
+                "T(0, {a}) = {} != arctan({a})/(2π) = {expected}",
+                owens_t_scalar(0.0, a)
+            );
+        }
+
+        // T(h, 0) = 0 for any h.
+        for &h in &[-2.0_f64, -0.5, 0.0, 0.5, 2.0] {
+            assert_eq!(owens_t_scalar(h, 0.0), 0.0, "T({h}, 0) must be 0");
+        }
+
+        // T(h, 1) = (1/2)·Φ(h)·[1 − Φ(h)] = (1/2)·Φ(h)·Φ(-h).
+        for &h in &[-1.5_f64, -0.5, 0.5, 1.5, 2.0] {
+            let phi_h = ndtr_scalar(h);
+            let expected = 0.5 * phi_h * (1.0 - phi_h);
+            assert!(
+                (owens_t_scalar(h, 1.0) - expected).abs() < 1e-9,
+                "T({h}, 1) = {} != (1/2)·Φ(h)·(1-Φ(h)) = {expected}",
+                owens_t_scalar(h, 1.0)
+            );
+        }
+    }
+
+    #[test]
+    fn owens_t_symmetry_and_antisymmetry_identities() {
+        // /testing-metamorphic anchor for owens_t (paired with the
+        // closed-form pins): T(-h, a) = T(h, a) (even in h) and
+        // T(h, -a) = -T(h, a) (odd in a).
+        for &h in &[-2.5_f64, -1.0, 0.5, 2.0] {
+            for &a in &[-3.0_f64, -0.5, 0.5, 3.0] {
+                let baseline = owens_t_scalar(h, a);
+                let flipped_h = owens_t_scalar(-h, a);
+                let flipped_a = owens_t_scalar(h, -a);
+                assert!(
+                    (baseline - flipped_h).abs() < 1e-12,
+                    "T(-h, a) symmetry broken at h={h}, a={a}: \
+                     baseline={baseline}, flipped_h={flipped_h}"
+                );
+                assert!(
+                    (baseline + flipped_a).abs() < 1e-12,
+                    "T(h, -a) antisymmetry broken at h={h}, a={a}: \
+                     baseline={baseline}, flipped_a={flipped_a}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn xlogx_tensor_dispatch_matches_scalar_path() -> Result<(), String> {
         let scalar = xlogx(&SpecialTensor::RealScalar(2.0), RuntimeMode::Strict)
             .map_err(|err| err.to_string())?;
