@@ -6134,6 +6134,64 @@ mod tests {
     }
 
     #[test]
+    fn interp1d_linear_midpoint_reference_values() {
+        // /testing-conformance-harnesses for [frankenscipy-g5bi0]:
+        // pin scipy.interpolate.interp1d(kind='linear') at midpoints.
+        //
+        //   x = [0, 1, 2, 3], y = [0, 2, 1, 4]
+        //   midpoint t = 0.5 on each interval:
+        //     0.5 = 0 + 0.5·(2 − 0) = 1.0
+        //     1.5 = 2 + 0.5·(1 − 2) = 1.5
+        //     2.5 = 1 + 0.5·(4 − 1) = 2.5
+        let x = vec![0.0_f64, 1.0, 2.0, 3.0];
+        let y = vec![0.0_f64, 2.0, 1.0, 4.0];
+        let xnew = vec![0.5_f64, 1.5, 2.5];
+        let result = interp1d_linear(&x, &y, &xnew).expect("interp1d_linear");
+        let expected = [1.0_f64, 1.5, 2.5];
+        for (i, (&got, &exp)) in result.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (got - exp).abs() < 1e-12,
+                "interp1d_linear[{i}] = {got}, expected {exp}"
+            );
+        }
+    }
+
+    #[test]
+    fn interp1d_linear_exact_at_nodes() {
+        // The interpolant must reproduce y exactly when queried at the
+        // input nodes — including the right endpoint, which is special-
+        // cased by the bounds check (xi >= self.x[n-1]).
+        let x = vec![-2.0_f64, 0.0, 1.5, 4.0];
+        let y = vec![3.0_f64, -1.0, 2.5, 7.0];
+        let result = interp1d_linear(&x, &y, &x).expect("interp1d_linear");
+        for (i, (&got, &exp)) in result.iter().zip(y.iter()).enumerate() {
+            assert!(
+                (got - exp).abs() < 1e-12,
+                "interp1d_linear at node {i} (x={}) = {got}, expected {exp}",
+                x[i]
+            );
+        }
+    }
+
+    #[test]
+    fn interp1d_linear_out_of_bounds_returns_nan() {
+        // The wrapper sets bounds_error=false and leaves fill_value=None,
+        // so out-of-domain queries fall through to NaN rather than
+        // erroring or extrapolating linearly.
+        let x = vec![0.0_f64, 1.0, 2.0];
+        let y = vec![0.0_f64, 1.0, 4.0];
+        let result =
+            interp1d_linear(&x, &y, &[-0.5, 0.5, 2.5]).expect("interp1d_linear");
+        assert!(result[0].is_nan(), "x=-0.5 should be NaN, got {}", result[0]);
+        assert!(
+            (result[1] - 0.5).abs() < 1e-12,
+            "x=0.5 should be 0.5, got {}",
+            result[1]
+        );
+        assert!(result[2].is_nan(), "x=2.5 should be NaN, got {}", result[2]);
+    }
+
+    #[test]
     fn lagrange_recovers_known_polynomials() {
         // /testing-conformance-harnesses: pin closed-form Lagrange
         // interpolating polynomials. Output is highest-degree-first.
