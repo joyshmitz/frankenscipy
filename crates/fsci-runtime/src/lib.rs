@@ -819,6 +819,48 @@ mod tests {
     }
 
     #[test]
+    fn close_within_tol_exact_equality_passes() {
+        // /mock-code-finder for [frankenscipy-ryfk0]:
+        // exact-equal values must pass even at zero tolerance.
+        for &v in &[0.0_f64, 1.0, -3.5, 1e10, -1e-10] {
+            assert!(close_within_tol(v, v, 0.0, 0.0));
+            assert!(close_within_tol(v, v, 1e-12, 1e-12));
+        }
+    }
+
+    #[test]
+    fn close_within_tol_at_threshold_accepts() {
+        // Boundary inclusion: |a - e| ≤ atol + rtol · |e| (≤, not <).
+        // For e=10, rtol=0.1, atol=0: tol = 1.0 exactly. So a=11 must pass.
+        assert!(close_within_tol(11.0, 10.0, 0.0, 0.1));
+        assert!(close_within_tol(9.0, 10.0, 0.0, 0.1));
+        // Above the threshold rejects.
+        assert!(!close_within_tol(11.0001, 10.0, 0.0, 0.1));
+    }
+
+    #[test]
+    fn close_within_tol_atol_only_for_zero_expected() {
+        // When expected=0, rtol contributes 0 — only atol matters.
+        assert!(close_within_tol(0.5, 0.0, 0.5, 1.0));
+        assert!(close_within_tol(0.5, 0.0, 0.5, 0.0));
+        assert!(!close_within_tol(0.6, 0.0, 0.5, 0.0));
+    }
+
+    #[test]
+    fn close_within_tol_rtol_scales_with_expected_magnitude() {
+        // rtol scales with |expected| not |actual|. For rtol=0.01:
+        //   expected=100, actual=101: tol=1.0, |diff|=1.0 → pass
+        //   expected=1, actual=100:   tol=0.01, |diff|=99 → fail
+        assert!(close_within_tol(101.0, 100.0, 0.0, 0.01));
+        assert!(!close_within_tol(100.0, 1.0, 0.0, 0.01));
+        // Asymmetry check: tolerance based on EXPECTED, so swapping
+        // actual and expected can flip the result.
+        assert!(close_within_tol(0.0001, 0.001, 0.0, 1.0));
+        // Now swap — expected is much smaller, rtol·|expected| collapses.
+        assert!(!close_within_tol(0.001, 0.0001, 0.0, 1.0));
+    }
+
+    #[test]
     fn within_tolerance_handles_nan_and_infinity() {
         // Per frankenscipy-gtcn: (NaN, NaN) accepted; (Inf, Inf) accepted
         // but sign-preserving; (Inf, -Inf) rejected.
