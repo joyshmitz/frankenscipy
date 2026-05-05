@@ -3282,6 +3282,65 @@ mod tests {
     }
 
     #[test]
+    fn gammainc_a_equals_one_matches_exponential_cdf() {
+        // /testing-golden-artifacts for [frankenscipy-swlxw]:
+        // gammainc(1, x) = 1 - e^{-x}, the Exp(1) CDF.
+        for &x in &[0.0_f64, 0.1, 0.5, 1.0, 2.5, 7.0] {
+            let actual = gammainc_scalar(1.0, x, RuntimeMode::Strict).unwrap();
+            let expected = if x == 0.0 { 0.0 } else { 1.0 - (-x).exp() };
+            assert!(
+                (actual - expected).abs() < 1e-12,
+                "gammainc(1, {x}) = {actual}, expected {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn gammainc_a_equals_two_matches_closed_form() {
+        // gammainc(2, x) = 1 - (1 + x)·e^{-x} (Erlang-2 CDF).
+        for &x in &[0.0_f64, 0.5, 1.0, 2.0, 5.0] {
+            let actual = gammainc_scalar(2.0, x, RuntimeMode::Strict).unwrap();
+            let expected = if x == 0.0 {
+                0.0
+            } else {
+                1.0 - (1.0 + x) * (-x).exp()
+            };
+            assert!(
+                (actual - expected).abs() < 1e-12,
+                "gammainc(2, {x}) = {actual}, expected 1 - (1+x)e^(-x) = {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn gammainc_at_x_zero_is_zero() {
+        // gammainc(a, 0) = 0 for any a > 0.
+        for &a in &[0.5_f64, 1.0, 2.5, 7.0, 100.0] {
+            let actual = gammainc_scalar(a, 0.0, RuntimeMode::Strict).unwrap();
+            assert!(
+                actual.abs() < 1e-15,
+                "gammainc({a}, 0) = {actual}, expected 0"
+            );
+        }
+    }
+
+    #[test]
+    fn gammainc_plus_gammaincc_equals_one() {
+        // gammainc(a, x) + gammaincc(a, x) = 1 (P + Q = 1).
+        for &a in &[0.5_f64, 1.5, 3.0, 10.0] {
+            for &x in &[0.1_f64, 1.0, 5.0, 20.0] {
+                let p = gammainc_scalar(a, x, RuntimeMode::Strict).unwrap();
+                let q = gammaincc_scalar(a, x, RuntimeMode::Strict).unwrap();
+                assert!(
+                    (p + q - 1.0).abs() < 1e-12,
+                    "gammainc({a},{x}) + gammaincc = {} != 1",
+                    p + q
+                );
+            }
+        }
+    }
+
+    #[test]
     fn complex_gammainc_reduces_to_real_for_real_z() -> Result<(), String> {
         // For real positive z, complex_gammainc_scalar should match gammainc_scalar
         let a = 2.0;
