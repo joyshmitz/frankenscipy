@@ -15,6 +15,45 @@ pub fn eye(size: usize) -> SparseResult<CsrMatrix> {
     coo.to_csr()
 }
 
+/// Construct a `rows × cols` sparse identity-like matrix with the
+/// `k`-th diagonal set to one (all other entries zero).
+///
+/// Matches `scipy.sparse.eye(m, n, k)`. `k = 0` is the main diagonal,
+/// `k > 0` shifts to the upper diagonal (col index = row index + k),
+/// `k < 0` shifts to the lower diagonal. For empty matrices or
+/// out-of-range `k`, returns an explicit-zero CSR.
+///
+/// Resolves [frankenscipy-xj9sq].
+pub fn eye_rectangular(rows: usize, cols: usize, k: isize) -> SparseResult<CsrMatrix> {
+    let shape = Shape2D::new(rows, cols);
+    // Determine the valid range of indices on the k-th diagonal:
+    //   row range: [max(0, -k), min(rows, cols - k))
+    let (row_start, length) = if k >= 0 {
+        let k_us = k as usize;
+        if k_us >= cols {
+            (0usize, 0usize)
+        } else {
+            (0usize, rows.min(cols - k_us))
+        }
+    } else {
+        let k_abs = (-k) as usize;
+        if k_abs >= rows {
+            (0usize, 0usize)
+        } else {
+            (k_abs, (rows - k_abs).min(cols))
+        }
+    };
+    let data = vec![1.0; length];
+    let r: Vec<usize> = (row_start..row_start + length).collect();
+    let c: Vec<usize> = if k >= 0 {
+        (k as usize..k as usize + length).collect()
+    } else {
+        (0..length).collect()
+    };
+    let coo = CooMatrix::from_triplets(shape, data, r, c, false)?;
+    coo.to_csr()
+}
+
 pub fn diags(
     diagonals: &[Vec<f64>],
     offsets: &[isize],
@@ -645,6 +684,63 @@ mod tests {
         let id = eye(0).expect("identity");
         assert_eq!(id.shape(), Shape2D::new(0, 0));
         assert_eq!(id.nnz(), 0);
+    }
+
+    #[test]
+    fn eye_rectangular_square_k0_matches_eye() {
+        // eye_rectangular(n, n, 0) ≡ eye(n).
+        for &n in &[1usize, 3, 7] {
+            let lhs = eye_rectangular(n, n, 0).expect("eye_rect");
+            let rhs = eye(n).expect("eye");
+            assert_eq!(lhs.shape(), rhs.shape());
+            assert_eq!(lhs.nnz(), rhs.nnz());
+            let lhs_coo = lhs.to_coo().expect("coo");
+            let rhs_coo = rhs.to_coo().expect("coo");
+            for i in 0..lhs_coo.nnz() {
+                assert_eq!(lhs_coo.row_indices()[i], rhs_coo.row_indices()[i]);
+                assert_eq!(lhs_coo.col_indices()[i], rhs_coo.col_indices()[i]);
+            }
+        }
+    }
+
+    #[test]
+    fn eye_rectangular_super_diagonal() {
+        // eye_rectangular(3, 3, 1): super-diagonal — entries at
+        // (0,1), (1,2). nnz = 2.
+        let m = eye_rectangular(3, 3, 1).expect("eye_rect");
+        assert_eq!(m.shape(), Shape2D::new(3, 3));
+        assert_eq!(m.nnz(), 2);
+        let coo = m.to_coo().expect("coo");
+        let mut pairs: Vec<(usize, usize)> = (0..coo.nnz())
+            .map(|i| (coo.row_indices()[i], coo.col_indices()[i]))
+            .collect();
+        pairs.sort();
+        assert_eq!(pairs, vec![(0, 1), (1, 2)]);
+    }
+
+    #[test]
+    fn eye_rectangular_wide_negative_k() {
+        // eye_rectangular(3, 4, -1): 3×4 sub-diagonal — entries at
+        // (1,0), (2,1). nnz = 2.
+        let m = eye_rectangular(3, 4, -1).expect("eye_rect");
+        assert_eq!(m.shape(), Shape2D::new(3, 4));
+        assert_eq!(m.nnz(), 2);
+        let coo = m.to_coo().expect("coo");
+        let mut pairs: Vec<(usize, usize)> = (0..coo.nnz())
+            .map(|i| (coo.row_indices()[i], coo.col_indices()[i]))
+            .collect();
+        pairs.sort();
+        assert_eq!(pairs, vec![(1, 0), (2, 1)]);
+    }
+
+    #[test]
+    fn eye_rectangular_out_of_range_k_is_empty() {
+        // |k| >= max(rows, cols) yields an all-zero matrix.
+        let m = eye_rectangular(3, 3, 5).expect("k > cols");
+        assert_eq!(m.shape(), Shape2D::new(3, 3));
+        assert_eq!(m.nnz(), 0);
+        let m = eye_rectangular(3, 3, -5).expect("|k| > rows");
+        assert_eq!(m.nnz(), 0);
     }
 
     #[test]
