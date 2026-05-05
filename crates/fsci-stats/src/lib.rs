@@ -31630,6 +31630,36 @@ mod tests {
     }
 
     #[test]
+    fn studentt_pdf_cdf_match_scipy_reference_points() {
+        // /testing-conformance-harnesses + /testing-golden-artifacts:
+        // pin scipy.stats.t reference values:
+        //   t(df=∞) → standard Normal:
+        //     pdf at 0 ≈ 1/√(2π) for very large df.
+        //   t(df=1) is Cauchy:
+        //     pdf(0; df=1) = 1/π
+        //     cdf(0; df=1) = 0.5
+        //     cdf(1; df=1) = 3/4
+        //   t(df=10):
+        //     cdf(0; df=10) = 0.5  (symmetry)
+        let pi = std::f64::consts::PI;
+        let cauchy = StudentT::new(1.0);
+        assert!((cauchy.pdf(0.0) - 1.0 / pi).abs() < 1e-12);
+        assert!((cauchy.cdf(0.0) - 0.5).abs() < 1e-12);
+        assert!((cauchy.cdf(1.0) - 0.75).abs() < 1e-12);
+        let t10 = StudentT::new(10.0);
+        assert!((t10.cdf(0.0) - 0.5).abs() < 1e-12);
+        // Symmetry: cdf(-x) + cdf(x) = 1 for any df.
+        let t5 = StudentT::new(5.0);
+        for &x in &[0.5_f64, 1.0, 2.0, 3.5] {
+            let s = t5.cdf(-x) + t5.cdf(x);
+            assert!(
+                (s - 1.0).abs() < 1e-9,
+                "cdf(-{x}) + cdf({x}) = {s}, expected 1"
+            );
+        }
+    }
+
+    #[test]
     fn skew_kurtosis_match_scipy_reference_points() {
         // Skill rotation: /testing-conformance-harnesses. Pin exact
         // scipy.stats reference values for skew/kurtosis (bias=True
