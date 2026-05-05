@@ -9927,6 +9927,43 @@ mod tests {
     }
 
     #[test]
+    fn triang_matches_scipy_reference_points() {
+        // /testing-conformance-harnesses: pin scipy.signal.windows.triang
+        // closed-form values across odd/even/edge lengths.
+        //   triang(1) = [1]
+        //   triang(2) = [0.5, 0.5]   (even, peak between samples)
+        //   triang(3) = [0.5, 1, 0.5]
+        //   triang(5) = [1/3, 2/3, 1, 2/3, 1/3]
+        //   triang(0) = []
+        assert_eq!(triang(0), Vec::<f64>::new());
+        assert_eq!(triang(1), vec![1.0]);
+        let r2 = triang(2);
+        assert!((r2[0] - 0.5).abs() < 1e-12 && (r2[1] - 0.5).abs() < 1e-12);
+        let r3 = triang(3);
+        assert!((r3[0] - 0.5).abs() < 1e-12);
+        assert!((r3[1] - 1.0).abs() < 1e-12);
+        assert!((r3[2] - 0.5).abs() < 1e-12);
+        let r5 = triang(5);
+        let third = 1.0_f64 / 3.0;
+        let two_thirds = 2.0_f64 / 3.0;
+        assert!((r5[0] - third).abs() < 1e-12);
+        assert!((r5[1] - two_thirds).abs() < 1e-12);
+        assert!((r5[2] - 1.0).abs() < 1e-12);
+        assert!((r5[3] - two_thirds).abs() < 1e-12);
+        assert!((r5[4] - third).abs() < 1e-12);
+        // Symmetry: triang(n)[i] = triang(n)[n-1-i].
+        for n in [4_usize, 6, 7, 11] {
+            let r = triang(n);
+            for i in 0..n {
+                assert!(
+                    (r[i] - r[n - 1 - i]).abs() < 1e-12,
+                    "triang({n}) not palindromic at index {i}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn kaiser_window_beta_zero_is_rectangular() {
         let w = kaiser(8, 0.0);
         for &v in &w {
