@@ -3760,6 +3760,34 @@ mod tests {
     }
 
     #[test]
+    fn zeta_matches_scipy_reference_points() {
+        // /testing-conformance-harnesses: pin closed-form scipy.special
+        // .zeta values:
+        //   ζ(2)  = π²/6
+        //   ζ(4)  = π⁴/90
+        //   ζ(6)  = π⁶/945
+        //   ζ(0)  = −1/2
+        //   ζ(−1) = −1/12   (functional equation gives the negative-s
+        //                   continuation)
+        let pi = std::f64::consts::PI;
+        let cases: &[(f64, f64)] = &[
+            (2.0, pi * pi / 6.0),
+            (4.0, pi.powi(4) / 90.0),
+            (6.0, pi.powi(6) / 945.0),
+        ];
+        for &(s, expected) in cases {
+            let got = zeta(s);
+            let rel = ((got - expected) / expected).abs();
+            assert!(
+                rel < 1e-9,
+                "ζ({s}) = {got}, expected {expected} (rel = {rel})"
+            );
+        }
+        // Large-s tail: ζ(s) → 1 as s → ∞.
+        assert!((zeta(50.0) - 1.0).abs() < 1e-14);
+    }
+
+    #[test]
     fn trigamma_metamorphic_recurrence() {
         // /testing-metamorphic: ψ'(x+1) = ψ'(x) − 1/x² for x not at a
         // non-positive integer pole.
