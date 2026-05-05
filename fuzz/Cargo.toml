@@ -220,6 +220,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "p2c008_simpson_trapezoid"
+path = "fuzz_targets/p2c008_simpson_trapezoid.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "p2c017_io_wav_read"
 path = "fuzz_targets/p2c017_io_wav_read.rs"
 test = false
