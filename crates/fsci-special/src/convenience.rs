@@ -6337,6 +6337,48 @@ mod tests {
     }
 
     #[test]
+    fn swish_beta_zero_is_x_over_two() {
+        // /testing-golden-artifacts for [frankenscipy-9rl85]:
+        // swish(x, 0) = x · σ(0) = x · 0.5 = x/2 for all x.
+        for &x in &[-3.0_f64, -0.5, 0.0, 0.5, 3.0, 100.0] {
+            let actual = swish(x, 0.0);
+            let expected = x / 2.0;
+            assert!(
+                (actual - expected).abs() < 1e-12,
+                "swish({x}, 0) = {actual}, expected x/2 = {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn swish_beta_one_equals_silu() {
+        // swish(x, 1) ≡ silu_scalar(x) by definition.
+        for &x in &[-3.0_f64, -0.5, 0.0, 0.5, 1.0, 3.0] {
+            let s_swish = swish(x, 1.0);
+            let s_silu = silu_scalar(x);
+            assert!(
+                (s_swish - s_silu).abs() < 1e-12,
+                "swish({x}, 1) = {s_swish} ≠ silu({x}) = {s_silu}"
+            );
+        }
+    }
+
+    #[test]
+    fn swish_joint_sign_flip_negates() {
+        // swish(-x, -β) = (-x) · σ(βx) = -x·σ(βx) = -swish(x, β).
+        for &x in &[1.0_f64, 2.5, 4.0] {
+            for &beta in &[0.5_f64, 1.0, 2.0] {
+                let s_pos = swish(x, beta);
+                let s_neg = swish(-x, -beta);
+                assert!(
+                    (s_pos + s_neg).abs() < 1e-12,
+                    "swish({x}, {beta}) = {s_pos}; swish(-x, -β) = {s_neg}; sum should be 0"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn mish_basic() {
         // mish(0) = 0
         assert!((mish_scalar(0.0) - 0.0).abs() < 1e-14);
