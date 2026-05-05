@@ -183,6 +183,17 @@ pub fn fftconvolve(a: &[f64], b: &[f64], mode: &str) -> Result<Vec<f64>, FftErro
     // Extract real parts, truncated to length n
     let full: Vec<f64> = result_full[..n].iter().map(|&(r, _)| r).collect();
 
+    // [frankenscipy-yjp4n] The 'same' and 'valid' arms below subtract
+    // 1 from a.len() / b.len() and would underflow on empty inputs.
+    // The early-return at the top of fftconvolve already guards
+    // against that; pin the precondition here so any future
+    // refactor that moves the guard fails under cargo test, not in
+    // production.
+    debug_assert!(
+        !a.is_empty() && !b.is_empty(),
+        "fftconvolve mode-arm precondition: both inputs must be non-empty here"
+    );
+
     // Apply mode
     match mode {
         "same" => {
