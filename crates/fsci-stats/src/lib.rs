@@ -23450,6 +23450,50 @@ mod tests {
     }
 
     #[test]
+    fn describe_skewness_and_kurtosis_match_scipy_reference() {
+        // /testing-conformance-harnesses for [frankenscipy-cfdds]:
+        // describe() returns 6 fields but the existing two tests only
+        // assert on (nobs, mean, minmax, variance). Pin skewness and
+        // kurtosis (Fisher's excess) against scipy reference values.
+        //
+        //   scipy.stats.describe([1, 2, 3, 4, 5])
+        //     skewness = 0.0       (symmetric data)
+        //     kurtosis = -1.3      (Fisher excess: m4/m2² - 3
+        //                           with m4 = 6.8, m2 = 2 ⇒ 1.7 - 3)
+        let data = [1.0_f64, 2.0, 3.0, 4.0, 5.0];
+        let result = describe(&data);
+        assert!(
+            result.skewness.abs() < 1e-12,
+            "describe([1..5]).skewness = {}, expected 0",
+            result.skewness
+        );
+        assert!(
+            (result.kurtosis - (-1.3)).abs() < 1e-12,
+            "describe([1..5]).kurtosis = {}, expected -1.3",
+            result.kurtosis
+        );
+    }
+
+    #[test]
+    fn describe_right_skewed_data_has_positive_skewness() {
+        // Right-skewed: many small + one large value yields
+        // skewness > 0 (long tail to the right). The kurtosis should
+        // also be positive (heavy-tailed compared to normal).
+        let data = [1.0_f64, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 10.0];
+        let result = describe(&data);
+        assert!(
+            result.skewness > 1.0,
+            "right-skewed describe.skewness = {}, expected > 1.0",
+            result.skewness
+        );
+        assert!(
+            result.kurtosis > 0.0,
+            "right-skewed describe.kurtosis = {}, expected > 0",
+            result.kurtosis
+        );
+    }
+
+    #[test]
     fn skew_symmetric() {
         // Symmetric data has skewness = 0
         let data = [-2.0, -1.0, 0.0, 1.0, 2.0];
