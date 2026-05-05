@@ -11506,6 +11506,46 @@ mod tests {
         assert!(periodogram(&[], 1.0, None).is_err());
     }
 
+    #[test]
+    fn coherence_clamped_to_unit_interval() {
+        // coherence ∈ [0, 1] for any inputs (clamped per spec).
+        let n = 256;
+        let x: Vec<f64> = (0..n).map(|i| (i as f64).sin()).collect();
+        let y: Vec<f64> = (0..n).map(|i| (i as f64).cos()).collect();
+        let result = coherence(&x, &y, 16.0, None, None, None).expect("coherence(x, y)");
+        for (i, &v) in result.coherence.iter().enumerate() {
+            assert!(
+                (0.0..=1.0).contains(&v),
+                "coherence(x, y)[{i}] = {v} out of [0, 1]"
+            );
+        }
+    }
+
+    #[test]
+    fn csd_self_is_conjugate_symmetric_with_swapped_args() {
+        // csd(x, y) should be the complex conjugate of csd(y, x)
+        // (Pxy = conj(Pyx) by definition of cross-spectral density).
+        let n = 128;
+        let x: Vec<f64> = (0..n).map(|i| (i as f64 * 0.3).sin()).collect();
+        let y: Vec<f64> = (0..n).map(|i| (i as f64 * 0.5).cos()).collect();
+        let pxy = csd(&x, &y, 16.0, None, None, None).expect("csd(x, y)");
+        let pyx = csd(&y, &x, 16.0, None, None, None).expect("csd(y, x)");
+        assert_eq!(pxy.csd.len(), pyx.csd.len());
+        for (i, (&(re_xy, im_xy), &(re_yx, im_yx))) in
+            pxy.csd.iter().zip(pyx.csd.iter()).enumerate()
+        {
+            // Real parts equal; imaginary parts are negatives.
+            assert!(
+                (re_xy - re_yx).abs() < 1e-9,
+                "Re(Pxy[{i}]) = {re_xy} != Re(Pyx) = {re_yx}"
+            );
+            assert!(
+                (im_xy + im_yx).abs() < 1e-9,
+                "Im(Pxy[{i}]) = {im_xy} should be -Im(Pyx) = {im_yx}"
+            );
+        }
+    }
+
     // ── Welch tests ────────────────────────────────────────────────
 
     #[test]
