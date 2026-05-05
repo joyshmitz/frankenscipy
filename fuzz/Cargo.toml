@@ -234,6 +234,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "p2c017_io_harwell_boeing_read"
+path = "fuzz_targets/p2c017_io_harwell_boeing_read.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "p2c019_datasets_loaders"
 path = "fuzz_targets/p2c019_datasets_loaders.rs"
 test = false
