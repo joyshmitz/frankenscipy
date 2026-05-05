@@ -20923,6 +20923,81 @@ mod tests {
         }
     }
 
+    // ── weighted_mean / weighted_var ─────────────────────────────────
+
+    #[test]
+    fn weighted_mean_uniform_weights_matches_arithmetic_mean() {
+        // /mock-code-finder for [frankenscipy-f779z]: with uniform
+        // weights, weighted_mean must reduce to the arithmetic mean.
+        let data = [1.0_f64, 2.0, 3.0, 4.0, 5.0];
+        let w = [1.0_f64; 5];
+        assert!((weighted_mean(&data, &w) - 3.0).abs() < 1e-12);
+        // Doubled weights still yield the same mean.
+        let w2 = [2.0_f64; 5];
+        assert!((weighted_mean(&data, &w2) - 3.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn weighted_mean_constant_data_is_that_constant() {
+        // For any (positive) weights, mean of a constant series = constant.
+        let data = [7.5_f64; 4];
+        let w = [0.1_f64, 0.5, 1.0, 3.7];
+        assert!((weighted_mean(&data, &w) - 7.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn weighted_mean_reference_value() {
+        // Closed form: w·v / Σw = (1·1 + 2·2 + 3·3) / 6 = 14/6 = 7/3
+        let data = [1.0_f64, 2.0, 3.0];
+        let w = [1.0_f64, 2.0, 3.0];
+        let expected = 14.0 / 6.0;
+        assert!((weighted_mean(&data, &w) - expected).abs() < 1e-12);
+    }
+
+    #[test]
+    fn weighted_var_uniform_weights_matches_population_variance() {
+        // weighted_var with uniform weights → population (ddof=0) variance.
+        // For [1, 2, 3, 4, 5], mean=3, sum sq dev = 4+1+0+1+4 = 10,
+        // population var = 10/5 = 2.
+        let data = [1.0_f64, 2.0, 3.0, 4.0, 5.0];
+        let w = [1.0_f64; 5];
+        assert!((weighted_var(&data, &w) - 2.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn weighted_mean_var_invariant_under_weight_scaling() {
+        // /testing-metamorphic: scaling all weights by α > 0 doesn't
+        // change weighted_mean or weighted_var (Σ(α·w·v) / Σ(α·w) = mean,
+        // and the variance formula is similarly homogeneous).
+        let data = [0.7_f64, 1.4, 3.1, 5.5];
+        let w = [0.2_f64, 0.5, 0.8, 0.1];
+        let m1 = weighted_mean(&data, &w);
+        let v1 = weighted_var(&data, &w);
+        for &alpha in &[0.5_f64, 2.0, 100.0] {
+            let scaled: Vec<f64> = w.iter().map(|&x| x * alpha).collect();
+            let m2 = weighted_mean(&data, &scaled);
+            let v2 = weighted_var(&data, &scaled);
+            assert!(
+                (m1 - m2).abs() < 1e-10,
+                "weighted_mean changed under α={alpha}: {m1} vs {m2}"
+            );
+            assert!(
+                (v1 - v2).abs() < 1e-10,
+                "weighted_var changed under α={alpha}: {v1} vs {v2}"
+            );
+        }
+    }
+
+    #[test]
+    fn weighted_mean_var_reject_invalid_inputs() {
+        // Length mismatch → NaN.
+        assert!(weighted_mean(&[1.0, 2.0], &[1.0]).is_nan());
+        assert!(weighted_var(&[1.0, 2.0], &[1.0]).is_nan());
+        // Zero total weight → NaN.
+        assert!(weighted_mean(&[1.0, 2.0], &[0.0, 0.0]).is_nan());
+        assert!(weighted_var(&[1.0, 2.0], &[0.0, 0.0]).is_nan());
+    }
+
     // ── Generalized means ───────────────────────────────────────────
 
     #[test]
