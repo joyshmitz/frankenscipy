@@ -162,6 +162,7 @@ pub use convenience::{
     nrdtrimn,
     nrdtrisd,
     owens_t,
+    owens_t_scalar,
     poch,
     positive,
     power,
