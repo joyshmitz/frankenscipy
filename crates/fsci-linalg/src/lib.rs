@@ -10100,6 +10100,95 @@ mod tests {
     }
 
     #[test]
+    fn kron_metamorphic_identity_is_identity() {
+        // /testing-metamorphic for [frankenscipy-crwkd]:
+        // kron(I_m, I_n) = I_{mn}.
+        for &(m, n) in &[(2usize, 3usize), (3, 2), (4, 4), (1, 5), (5, 1)] {
+            let i_m: Vec<Vec<f64>> = (0..m)
+                .map(|i| (0..m).map(|j| if i == j { 1.0 } else { 0.0 }).collect())
+                .collect();
+            let i_n: Vec<Vec<f64>> = (0..n)
+                .map(|i| (0..n).map(|j| if i == j { 1.0 } else { 0.0 }).collect())
+                .collect();
+            let k = kron(&i_m, &i_n);
+            assert_eq!(k.len(), m * n, "kron(I_{m}, I_{n}).rows");
+            assert_eq!(k[0].len(), m * n, "kron(I_{m}, I_{n}).cols");
+            for i in 0..m * n {
+                for j in 0..m * n {
+                    let expected = if i == j { 1.0 } else { 0.0 };
+                    assert!(
+                        (k[i][j] - expected).abs() < 1e-15,
+                        "kron(I_{m}, I_{n}) at [{i}][{j}] = {} != {expected}",
+                        k[i][j]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn kron_metamorphic_shape_is_product_of_dims() {
+        // shape(kron(A, B)) = (a_rows·b_rows, a_cols·b_cols).
+        let a = vec![vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]]; // 2×3
+        let b = vec![vec![7.0, 8.0], vec![9.0, 10.0]]; // 2×2
+        let k = kron(&a, &b);
+        assert_eq!(k.len(), 4, "rows = 2·2");
+        assert_eq!(k[0].len(), 6, "cols = 3·2");
+    }
+
+    #[test]
+    fn kron_metamorphic_trace_equals_product_of_traces() {
+        // For square A (m×m) and B (n×n):
+        //   tr(kron(A, B)) = tr(A) · tr(B)
+        let a = vec![vec![2.0, 1.0], vec![3.0, 5.0]]; // tr = 7
+        let b = vec![
+            vec![1.0, 0.0, 4.0],
+            vec![0.0, 2.0, 1.0],
+            vec![3.0, 1.0, 6.0],
+        ]; // tr = 9
+        let k = kron(&a, &b);
+        let tr_a: f64 = (0..a.len()).map(|i| a[i][i]).sum();
+        let tr_b: f64 = (0..b.len()).map(|i| b[i][i]).sum();
+        let tr_k: f64 = (0..k.len()).map(|i| k[i][i]).sum();
+        assert!(
+            (tr_k - tr_a * tr_b).abs() < 1e-12,
+            "tr(kron(A, B)) = {tr_k}, expected tr(A)·tr(B) = {} · {} = {}",
+            tr_a,
+            tr_b,
+            tr_a * tr_b
+        );
+    }
+
+    #[test]
+    fn kron_metamorphic_2x2_full_matrix_pinned() {
+        // Pin all 16 entries of the 2x2 ⊗ 2x2 example, not just 4.
+        let a = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        let b = vec![vec![0.0, 5.0], vec![6.0, 7.0]];
+        let k = kron(&a, &b);
+        // Expected: A_{ij} · B  block-by-block.
+        //   k[0..2][0..2] = 1·B = [[0, 5], [6, 7]]
+        //   k[0..2][2..4] = 2·B = [[0, 10], [12, 14]]
+        //   k[2..4][0..2] = 3·B = [[0, 15], [18, 21]]
+        //   k[2..4][2..4] = 4·B = [[0, 20], [24, 28]]
+        let expected = [
+            [0.0, 5.0, 0.0, 10.0],
+            [6.0, 7.0, 12.0, 14.0],
+            [0.0, 15.0, 0.0, 20.0],
+            [18.0, 21.0, 24.0, 28.0],
+        ];
+        for i in 0..4 {
+            for j in 0..4 {
+                assert!(
+                    (k[i][j] - expected[i][j]).abs() < 1e-15,
+                    "kron at [{i}][{j}] = {} != {}",
+                    k[i][j],
+                    expected[i][j]
+                );
+            }
+        }
+    }
+
+    #[test]
     fn tri_basic() {
         let t = tri(3, 4, 0);
         assert_eq!(t[0], vec![1.0, 0.0, 0.0, 0.0]);
