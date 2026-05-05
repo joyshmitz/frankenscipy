@@ -1973,9 +1973,18 @@ fn solve_linear_system(matrix: &[Vec<f64>], rhs: &[f64]) -> Option<Vec<f64>> {
 }
 
 pub fn get_optimize_traces() -> Vec<OptimizeTraceEntry> {
-    match trace_log().lock() {
+    // Resolves [frankenscipy-pvrjd]: previously this returned Vec::new()
+    // on poison, silently dropping the entire trace history even though
+    // push_trace recovers and keeps writing through poison. Mirror the
+    // write-side recovery so a single panic in trace machinery does not
+    // make all subsequent reads appear empty.
+    let log = trace_log();
+    match log.lock() {
         Ok(guard) => guard.clone(),
-        Err(_) => Vec::new(),
+        Err(poisoned) => {
+            log.clear_poison();
+            poisoned.into_inner().clone()
+        }
     }
 }
 
@@ -3452,6 +3461,48 @@ mod tests {
         .expect("selector");
         assert_eq!(trust.method, OptimizeMethod::TrustExact);
         assert!(trust.reason.contains("trust-region"));
+    }
+
+    #[test]
+    fn get_optimize_traces_recovers_from_poisoned_trace_log() {
+        // Regression for [frankenscipy-pvrjd]: read path used to return
+        // Vec::new() on poison even though push_trace recovered. The
+        // safety property under parallel tests: a sentinel pushed before
+        // poisoning must still be visible from get_optimize_traces.
+        // (Asserting the global mutex's poison state would race with
+        // any other test thread that hits the recovery branch first.)
+        use crate::types::OptimizeTraceEntry;
+        let sentinel = format!(
+            "pvrjd_sentinel_{}",
+            super::now_unix_ms() ^ (std::process::id() as u64)
+        );
+        super::push_trace(OptimizeTraceEntry {
+            ts_unix_ms: super::now_unix_ms(),
+            event: sentinel.clone(),
+            method: OptimizeMethod::Bfgs,
+            iter_num: 0,
+            f_val: None,
+            grad_norm: None,
+            step_size: None,
+            mode: RuntimeMode::Strict,
+            reason: None,
+            final_x: None,
+            final_f: None,
+            total_nfev: 0,
+            fixture_id: None,
+            seed: None,
+        });
+        let _ = std::thread::spawn(|| {
+            let _g = super::trace_log().lock().expect("acquire trace_log");
+            panic!("intentional poison for poison-recovery test");
+        })
+        .join();
+        let traces = get_optimize_traces();
+        assert!(
+            traces.iter().any(|t| t.event == sentinel),
+            "sentinel pushed before poison must survive the read path; got {} entries",
+            traces.len()
+        );
     }
 
     #[test]
