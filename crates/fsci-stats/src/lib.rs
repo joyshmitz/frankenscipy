@@ -20544,12 +20544,17 @@ pub fn theilslopes(x: &[f64], y: &[f64], alpha: f64) -> TheilslopesResult {
         };
     }
 
-    // Compute all pairwise slopes where deltax > 0
+    // Compute all pairwise slopes for unordered pairs {i, j} with x[i]
+    // ≠ x[j]. The slope (y_i - y_j)/(x_i - x_j) is symmetric in i↔j, so
+    // we iterate j > i and accept either sign of dx. Resolves
+    // [frankenscipy-a0hfa] (the original loop scanned both (i,j) and
+    // (j,i) but only one direction survived the dx > 0 filter, so it
+    // did 2x the work of the optimal version).
     let mut slopes = Vec::with_capacity(n * (n - 1) / 2);
     for i in 0..n {
-        for j in 0..n {
+        for j in (i + 1)..n {
             let dx = x[i] - x[j];
-            if dx > 1e-15 {
+            if dx.abs() > 1e-15 {
                 slopes.push((y[i] - y[j]) / dx);
             }
         }
@@ -26750,6 +26755,53 @@ mod tests {
             "CI [{}, {}] should contain 3.0",
             result.low_slope,
             result.high_slope
+        );
+    }
+
+    #[test]
+    fn theilslopes_with_x_ties_skips_zero_dx_pairs() {
+        // /profiling-software-performance metamorphic check on the
+        // post-optimization inner loop (resolves frankenscipy-a0hfa):
+        // tied x[i]=x[j] pairs must be filtered (dx=0) and not produce
+        // ±Inf slopes that would corrupt the median.
+        let x = vec![0.0, 1.0, 1.0, 2.0, 3.0]; // x[1]=x[2] tied
+        let y = vec![1.0, 3.1, 3.0, 4.9, 7.2];
+        let result = theilslopes(&x, &y, 0.95);
+        assert!(result.slope.is_finite(), "slope should be finite");
+        assert!(
+            (result.slope - 2.0).abs() < 0.5,
+            "slope ≈ 2 expected, got {}",
+            result.slope
+        );
+        // sanity: with the optimized loop iterating j>i, the slope
+        // count must equal the number of unordered pairs with dx ≠ 0,
+        // which here is C(5,2) - 1 = 9 (one tied pair removed).
+    }
+
+    #[test]
+    fn theilslopes_invariant_under_x_y_pair_permutation() {
+        // Permuting paired observations should not change the result —
+        // every implementation iterates over unordered pairs. Cheap
+        // smoke test that the symmetric-pair optimization preserves
+        // outputs.
+        let x = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let y = vec![2.5, 4.0, 7.1, 8.2, 11.3, 12.7];
+        let result_a = theilslopes(&x, &y, 0.95);
+        // permutation: reverse the pair order
+        let x_p: Vec<f64> = x.iter().rev().copied().collect();
+        let y_p: Vec<f64> = y.iter().rev().copied().collect();
+        let result_b = theilslopes(&x_p, &y_p, 0.95);
+        assert!(
+            (result_a.slope - result_b.slope).abs() < 1e-12,
+            "slope changes under permutation: {} vs {}",
+            result_a.slope,
+            result_b.slope
+        );
+        assert!(
+            (result_a.intercept - result_b.intercept).abs() < 1e-12,
+            "intercept changes under permutation: {} vs {}",
+            result_a.intercept,
+            result_b.intercept
         );
     }
 
