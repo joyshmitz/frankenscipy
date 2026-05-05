@@ -2847,7 +2847,7 @@ mod tests {
     use fsci_runtime::{AuditAction, RuntimeMode};
 
     use super::{
-        FftError, FftOptions, TransformKind, WorkerPolicy, dct, estimate_fft_flops, fft,
+        FftError, FftOptions, TransformKind, WorkerPolicy, dct, dst_ii, estimate_fft_flops, fft,
         fft_with_audit, fft2, fftn, hfft, ifft, ifft2, irfft, irfft2, irfftn, next_fast_len, rfft,
         rfft_with_audit, rfft2, rfftn, sync_audit_ledger, take_transform_traces,
     };
@@ -3008,6 +3008,25 @@ mod tests {
                     r[k].0, r[k].1, c[k].0, c[k].1
                 );
             }
+        }
+    }
+
+    #[test]
+    fn dst_ii_short_input_matches_closed_form() {
+        // /testing-conformance-harnesses: scipy.fft.dst([1, 2], type=2)
+        // closed-form derivation:
+        //   y[0] = 2·[sin(π/4) + 2·sin(3π/4)] = 2·(3/√2) = 3√2
+        //   y[1] = 2·[sin(π/2) + 2·sin(3π/2)] = 2·(1 − 2) = −2
+        let input = [1.0_f64, 2.0];
+        let opts = FftOptions::default();
+        let y = dst_ii(&input, &opts).expect("dst-ii");
+        let expected = [3.0 * 2.0_f64.sqrt(), -2.0];
+        assert_eq!(y.len(), expected.len());
+        for (i, (got, want)) in y.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-9,
+                "dst_ii[{i}] = {got}, expected {want}"
+            );
         }
     }
 
