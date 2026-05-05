@@ -1394,6 +1394,82 @@ mod tests {
     use super::*;
 
     #[test]
+    fn btdtr_closed_form_reference_values() {
+        // /testing-golden-artifacts for [frankenscipy-1ulgv]:
+        // btdtr (regularized incomplete beta I_x(a, b)) has multiple
+        // analytic closed-form arms:
+        //
+        //   btdtr(a, b, 0) = 0
+        //   btdtr(a, b, 1) = 1
+        //   btdtr(1, 1, x) = x                    (uniform CDF)
+        //   btdtr(a, 1, x) = x^a                  (power-law)
+        //   btdtr(1, b, x) = 1 - (1 - x)^b
+        //
+        // Catches subtle sign or exponent errors in the underlying
+        // incomplete-beta core.
+        for &a in &[0.5_f64, 1.0, 2.5, 7.0] {
+            for &b in &[0.5_f64, 1.0, 2.5, 7.0] {
+                assert_eq!(btdtr(a, b, 0.0), 0.0, "btdtr({a}, {b}, 0) must be 0");
+                assert!(
+                    (btdtr(a, b, 1.0) - 1.0).abs() < 1e-12,
+                    "btdtr({a}, {b}, 1) = {} != 1",
+                    btdtr(a, b, 1.0)
+                );
+            }
+        }
+
+        for &x in &[0.05_f64, 0.25, 0.5, 0.75, 0.95] {
+            assert!(
+                (btdtr(1.0, 1.0, x) - x).abs() < 1e-12,
+                "btdtr(1, 1, {x}) = {} != {x}",
+                btdtr(1.0, 1.0, x)
+            );
+        }
+
+        for &a in &[0.5_f64, 2.0, 5.0] {
+            for &x in &[0.1_f64, 0.5, 0.9] {
+                let expected = x.powf(a);
+                assert!(
+                    (btdtr(a, 1.0, x) - expected).abs() < 1e-12,
+                    "btdtr({a}, 1, {x}) = {} != x^a = {expected}",
+                    btdtr(a, 1.0, x)
+                );
+            }
+        }
+
+        for &b in &[0.5_f64, 2.0, 5.0] {
+            for &x in &[0.1_f64, 0.5, 0.9] {
+                let expected = 1.0 - (1.0 - x).powf(b);
+                assert!(
+                    (btdtr(1.0, b, x) - expected).abs() < 1e-12,
+                    "btdtr(1, {b}, {x}) = {} != 1 - (1-x)^b = {expected}",
+                    btdtr(1.0, b, x)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn btdtr_swap_symmetry_identity() {
+        // I_x(a, b) = 1 - I_{1-x}(b, a). Catches swapped-argument
+        // bugs in the regularized incomplete beta core that the
+        // closed-form arms above wouldn't detect.
+        for &a in &[0.5_f64, 1.5, 3.0] {
+            for &b in &[0.5_f64, 1.5, 3.0] {
+                for &x in &[0.1_f64, 0.4, 0.7] {
+                    let lhs = btdtr(a, b, x);
+                    let rhs = 1.0 - btdtr(b, a, 1.0 - x);
+                    assert!(
+                        (lhs - rhs).abs() < 1e-10,
+                        "btdtr({a},{b},{x}) = {lhs}, but 1 - btdtr({b},{a},{}) = {rhs}",
+                        1.0 - x
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn btdtrc_complement() {
         // btdtr + btdtrc should equal 1
         for &a in &[0.5, 1.0, 2.0, 5.0] {
