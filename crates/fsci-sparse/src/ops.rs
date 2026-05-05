@@ -630,3 +630,129 @@ fn format_label(format: SparseFormat) -> &'static str {
         SparseFormat::Lil => "lil",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::formats::{CooMatrix, CsrMatrix, Shape2D};
+
+    fn coo_full(n: usize) -> CsrMatrix {
+        // n×n matrix where M[i][j] = i*n + j + 1 (all entries non-zero
+        // and distinct so a wrong filter shows up).
+        let mut data = Vec::with_capacity(n * n);
+        let mut rows = Vec::with_capacity(n * n);
+        let mut cols = Vec::with_capacity(n * n);
+        for i in 0..n {
+            for j in 0..n {
+                data.push((i * n + j + 1) as f64);
+                rows.push(i);
+                cols.push(j);
+            }
+        }
+        CooMatrix::from_triplets(Shape2D::new(n, n), data, rows, cols, false)
+            .expect("coo")
+            .to_csr()
+            .expect("csr")
+    }
+
+    fn dense(coo: &CooMatrix) -> Vec<Vec<f64>> {
+        let shape = coo.shape();
+        let mut out = vec![vec![0.0_f64; shape.cols]; shape.rows];
+        for idx in 0..coo.nnz() {
+            out[coo.row_indices()[idx]][coo.col_indices()[idx]] = coo.data()[idx];
+        }
+        out
+    }
+
+    #[test]
+    fn tril_default_keeps_diagonal_and_below() {
+        // /testing-conformance-harnesses for [frankenscipy-y9m6n]:
+        // tril(M, 0) keeps M[i][j] for j <= i, zeros elsewhere.
+        let m = coo_full(3);
+        let lower = tril(&m, 0).expect("tril");
+        let d = dense(&lower);
+        let expected = [[1.0, 0.0, 0.0], [4.0, 5.0, 0.0], [7.0, 8.0, 9.0]];
+        for (i, row) in expected.iter().enumerate() {
+            for (j, &v) in row.iter().enumerate() {
+                assert!(
+                    (d[i][j] - v).abs() < 1e-12,
+                    "tril at ({i},{j}) = {} != {v}",
+                    d[i][j]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn triu_default_keeps_diagonal_and_above() {
+        let m = coo_full(3);
+        let upper = triu(&m, 0).expect("triu");
+        let d = dense(&upper);
+        let expected = [[1.0, 2.0, 3.0], [0.0, 5.0, 6.0], [0.0, 0.0, 9.0]];
+        for (i, row) in expected.iter().enumerate() {
+            for (j, &v) in row.iter().enumerate() {
+                assert!(
+                    (d[i][j] - v).abs() < 1e-12,
+                    "triu at ({i},{j}) = {} != {v}",
+                    d[i][j]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tril_negative_k_excludes_diagonal() {
+        // tril(M, -1) keeps strictly below the diagonal.
+        let m = coo_full(3);
+        let lower = tril(&m, -1).expect("tril");
+        let d = dense(&lower);
+        let expected = [[0.0, 0.0, 0.0], [4.0, 0.0, 0.0], [7.0, 8.0, 0.0]];
+        for (i, row) in expected.iter().enumerate() {
+            for (j, &v) in row.iter().enumerate() {
+                assert!(
+                    (d[i][j] - v).abs() < 1e-12,
+                    "tril k=-1 at ({i},{j}) = {} != {v}",
+                    d[i][j]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn triu_positive_k_excludes_diagonal() {
+        let m = coo_full(3);
+        let upper = triu(&m, 1).expect("triu");
+        let d = dense(&upper);
+        let expected = [[0.0, 2.0, 3.0], [0.0, 0.0, 6.0], [0.0, 0.0, 0.0]];
+        for (i, row) in expected.iter().enumerate() {
+            for (j, &v) in row.iter().enumerate() {
+                assert!(
+                    (d[i][j] - v).abs() < 1e-12,
+                    "triu k=1 at ({i},{j}) = {} != {v}",
+                    d[i][j]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tril_plus_triu_minus_diag_recovers_original() {
+        // /testing-metamorphic: for any square M,
+        //   tril(M, 0) + triu(M, 0) − diag(M) = M
+        let n = 4;
+        let m = coo_full(n);
+        let lower = dense(&tril(&m, 0).expect("tril"));
+        let upper = dense(&triu(&m, 0).expect("triu"));
+        for i in 0..n {
+            for j in 0..n {
+                let diag_val = if i == j { lower[i][j] } else { 0.0 };
+                let recovered = lower[i][j] + upper[i][j] - diag_val;
+                let original = (i * n + j + 1) as f64;
+                assert!(
+                    (recovered - original).abs() < 1e-12,
+                    "tril+triu-diag at ({i},{j}) = {recovered} != {original}"
+                );
+            }
+        }
+    }
+}
