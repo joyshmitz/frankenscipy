@@ -7866,7 +7866,7 @@ impl ContinuousDistribution for Loglogistic {
         // ppf, Q1/Q3 = (1/3)^(1/c) / 3^(1/c) = (1/9)^(1/c), so
         // c = ln(9) / ln(Q3/Q1). Median is 1 by construction; this
         // matches scipy's default fixed-loc=0 fit signature.
-        let mut sorted: Vec<f64> = data.iter().copied().collect();
+        let mut sorted: Vec<f64> = data.to_vec();
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let n = sorted.len();
         let q1 = sorted[(n / 4).max(1) - 1];
@@ -31145,6 +31145,61 @@ mod tests {
             Gilbrat::try_fit(&[1.0, -0.5]),
             Err(FitError::UnsupportedData(_))
         ));
+    }
+
+    #[test]
+    fn anglit_pdf_cdf_match_closed_form() {
+        // /testing-golden-artifacts for [frankenscipy-qznjs]:
+        // anglit pdf(x) = cos(2x), cdf(x) = (sin(2x) + 1)/2 on [-π/4, π/4].
+        let dist = Anglit;
+        // pdf(0) = cos(0) = 1
+        assert!((dist.pdf(0.0) - 1.0).abs() < 1e-12);
+        // pdf(±π/8) = cos(±π/4) = √2/2
+        let q = std::f64::consts::PI / 8.0;
+        assert!((dist.pdf(q) - 2.0_f64.sqrt() / 2.0).abs() < 1e-12);
+        assert!((dist.pdf(-q) - 2.0_f64.sqrt() / 2.0).abs() < 1e-12);
+        // pdf at boundary ±π/4 = cos(±π/2) = 0
+        assert!(dist.pdf(std::f64::consts::FRAC_PI_4).abs() < 1e-12);
+        assert!(dist.pdf(-std::f64::consts::FRAC_PI_4).abs() < 1e-12);
+        // pdf out of support
+        assert_eq!(dist.pdf(std::f64::consts::FRAC_PI_4 + 0.1), 0.0);
+        assert_eq!(dist.pdf(-std::f64::consts::FRAC_PI_4 - 0.1), 0.0);
+        // cdf endpoints
+        assert!(dist.cdf(-std::f64::consts::FRAC_PI_4).abs() < 1e-12);
+        assert!((dist.cdf(std::f64::consts::FRAC_PI_4) - 1.0).abs() < 1e-12);
+        // cdf(0) = (sin(0) + 1)/2 = 0.5 (median)
+        assert!((dist.cdf(0.0) - 0.5).abs() < 1e-12);
+        // cdf saturation outside support
+        assert_eq!(dist.cdf(-1.0), 0.0);
+        assert_eq!(dist.cdf(1.0), 1.0);
+    }
+
+    #[test]
+    fn anglit_ppf_inverts_cdf_on_grid() {
+        // /testing-metamorphic: ppf(cdf(x)) ≈ x and cdf(ppf(q)) ≈ q.
+        let dist = Anglit;
+        for &q in &[0.05_f64, 0.25, 0.5, 0.75, 0.95] {
+            let x = dist.ppf(q);
+            let q_back = dist.cdf(x);
+            assert!(
+                (q_back - q).abs() < 1e-12,
+                "anglit cdf(ppf({q}) = {x}) = {q_back}"
+            );
+        }
+        // Boundary identities.
+        assert!((dist.ppf(0.0) - (-std::f64::consts::FRAC_PI_4)).abs() < 1e-12);
+        assert!((dist.ppf(1.0) - std::f64::consts::FRAC_PI_4).abs() < 1e-12);
+        assert!((dist.ppf(0.5) - 0.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn anglit_mean_and_variance_match_closed_form() {
+        let dist = Anglit;
+        // Symmetric distribution centered at 0.
+        assert_eq!(dist.mean(), 0.0);
+        // var = π²/16 − 1/2 ≈ 0.116850275068
+        let expected_var = std::f64::consts::PI * std::f64::consts::PI / 16.0 - 0.5;
+        assert!((dist.var() - expected_var).abs() < 1e-12);
     }
 
     #[test]
