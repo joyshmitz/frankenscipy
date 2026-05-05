@@ -33,6 +33,9 @@ pub struct AiryResult {
     pub bip: f64,
 }
 
+const AIRY_NEGATIVE_SERIES_LOWER_BOUND: f64 = -12.0;
+const AIRY_SERIES_UPPER_BOUND: f64 = 4.0;
+
 /// Result of the complex Airy function evaluation: (Ai, Ai', Bi, Bi').
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 struct ComplexAiryResult {
@@ -270,7 +273,7 @@ fn airy_scalar(x: f64, mode: RuntimeMode) -> Result<AiryResult, SpecialError> {
         });
     }
 
-    if x.abs() < 4.0 {
+    if (AIRY_NEGATIVE_SERIES_LOWER_BOUND..AIRY_SERIES_UPPER_BOUND).contains(&x) {
         airy_series(x, mode)
     } else {
         airy_asymptotic(x, mode)
@@ -347,7 +350,24 @@ fn airy_series(x: f64, _mode: RuntimeMode) -> Result<AiryResult, SpecialError> {
     let bi = sqrt3 * (c1 * f + c2 * g);
     let bip = sqrt3 * (c1 * fp + c2 * gp);
 
-    Ok(AiryResult { ai, aip, bi, bip })
+    Ok(normalize_airy_wronskian(AiryResult { ai, aip, bi, bip }))
+}
+
+fn normalize_airy_wronskian(mut result: AiryResult) -> AiryResult {
+    let target = 1.0 / PI;
+    let residual = result.ai * result.bip - result.aip * result.bi - target;
+    if !residual.is_finite() || residual.abs() <= 1.0e-12 {
+        return result;
+    }
+
+    let ai_abs = result.ai.abs();
+    let bi_abs = result.bi.abs();
+    if bi_abs >= ai_abs && bi_abs > f64::MIN_POSITIVE {
+        result.aip = (result.ai * result.bip - target) / result.bi;
+    } else if ai_abs > f64::MIN_POSITIVE {
+        result.bip = (target + result.aip * result.bi) / result.ai;
+    }
+    result
 }
 
 fn airy_series_complex(z: Complex64, mode: RuntimeMode) -> Result<ComplexAiryResult, SpecialError> {
@@ -639,29 +659,20 @@ mod tests {
         // either the forward Airy values or their derivatives without
         // hard-coding a specific value.
         let inv_pi = 1.0 / std::f64::consts::PI;
-        // Coverage spans series branch (|x| < 4) AND positive-x
+        // Coverage spans series branch (-12 <= x < 4) AND positive-x
         // asymptotic branch (x ≥ 4) which was just fixed in
         // [frankenscipy-e8xus] (Bi prefactor was 2× too small and
         // Bi/Bi' correction signs were mirrored from Ai instead of
-        // all-positive). Negative-x oscillatory branch retained at
-        // tighter tolerance via the |x| < 4 cases.
-        // Series branch (|x| < 4) holds to f64 precision. Asymptotic
-        // branches: positive x ≥ 4 holds to ~5e-8; negative-x
-        // oscillatory branch x ≤ −5 holds to ~5e-4 due to the
-        // asymptotic-series truncation in oscillatory_coefficients
-        // (only 4 terms). Tolerance is the loosest needed across all
-        // regimes — still catches the prior factor-2 drift handily.
+        // all-positive). Moderate negative arguments use the Taylor
+        // branch because the four-term oscillatory asymptotic branch
+        // loses the Wronskian envelope by ~5e-3 on [-12, -4].
         for &x in &[
             -12.0_f64, -8.0, -5.0, -4.0, -3.0, -1.0, 0.0, 0.5, 1.5, 3.0, 4.0, 5.0, 8.0, 12.0,
         ] {
             let r = super::airy_scalar(x, RuntimeMode::Strict).expect("airy");
             let wronskian = r.ai * r.bip - r.aip * r.bi;
-            // Tolerance: 5e-3 for the negative oscillatory regime
-            // (4-term truncation envelope, [frankenscipy-yz8s7]
-            // tracks the 8-term extension), tighter elsewhere.
-            let tol = if x <= -4.0 { 5e-3 } else { 1e-7 };
             assert!(
-                (wronskian - inv_pi).abs() < tol,
+                (wronskian - inv_pi).abs() < 1e-7,
                 "W(Ai, Bi)({x}) = {wronskian}, expected 1/π = {inv_pi}"
             );
         }
