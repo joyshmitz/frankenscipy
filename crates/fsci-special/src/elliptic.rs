@@ -1561,6 +1561,111 @@ pub fn elliprg(x: f64, y: f64, z: f64) -> f64 {
     term_rf + term_rd
 }
 
+/// Carlson symmetric elliptic integral of the third kind, `RJ(x, y, z, p)`.
+///
+/// Definition (Carlson 1995, scipy.special.elliprj):
+///
+/// ```text
+///   RJ(x, y, z, p) = (3/2) ∫₀^∞ [(t + x)(t + y)(t + z)]^{-1/2} (t + p)^{-1} dt
+/// ```
+///
+/// Computed via Carlson's duplication algorithm with an auxiliary
+/// running RC sum that absorbs the (t + p) pole. At each step:
+///
+/// * `λ = √(xy) + √(yz) + √(xz)`, the standard substitution.
+/// * `α = (p (√x + √y + √z) + √(xyz))²`, `β = p (p + λ)²`,
+///   `sum += factor · RC(α, β)`.
+/// * `(x, y, z, p) → ((x + λ)/4, (y + λ)/4, (z + λ)/4, (p + λ)/4)`,
+///   `factor /= 4`.
+///
+/// When the relative residuals are small, close with a 5th-order
+/// Taylor series in (Eₓ, E_y, E_z, E_p). Returns
+/// `RJ = 3·sum + factor · (1 + Taylor) · μ^{-3/2}`.
+///
+/// Constraints (matches scipy's real-valued path):
+///   * `x, y, z ≥ 0` with at most one zero,
+///   * `p > 0` (Cauchy-PV path for `p < 0` deferred — returns NaN),
+///   * all finite.
+///
+/// Closed-form anchors:
+///   * `RJ(x, x, x, x) = x^{-3/2}` (the integrand collapses).
+///   * `RJ(x, y, z, z) = RD(x, y, z)` (the same integral).
+///   * `RJ(x, y, z, p)` is symmetric in `(x, y, z)`.
+///
+/// Resolves [frankenscipy-ewuqd]; completes the Carlson family
+/// (RC, RF, RD, RG, RJ).
+#[must_use]
+pub fn elliprj(x: f64, y: f64, z: f64, p: f64) -> f64 {
+    if x.is_nan() || y.is_nan() || z.is_nan() || p.is_nan() {
+        return f64::NAN;
+    }
+    if x < 0.0 || y < 0.0 || z < 0.0 {
+        return f64::NAN;
+    }
+    if p <= 0.0 {
+        // p ≤ 0 is the Cauchy-PV branch — deferred for now.
+        return f64::NAN;
+    }
+    let zero_count = (x == 0.0) as usize + (y == 0.0) as usize + (z == 0.0) as usize;
+    if zero_count >= 2 {
+        // RJ diverges when two of (x, y, z) are zero.
+        return f64::INFINITY;
+    }
+
+    let mut xn = x;
+    let mut yn = y;
+    let mut zn = z;
+    let mut pn = p;
+    let mut sum = 0.0_f64;
+    let mut factor = 1.0_f64;
+    const TOL: f64 = 5e-4;
+
+    for _ in 0..32 {
+        let sqx = xn.sqrt();
+        let sqy = yn.sqrt();
+        let sqz = zn.sqrt();
+        let lambda = sqx * sqy + sqy * sqz + sqx * sqz;
+        let alpha_root = pn * (sqx + sqy + sqz) + sqx * sqy * sqz;
+        let alpha = alpha_root * alpha_root;
+        let beta = pn * (pn + lambda) * (pn + lambda);
+        sum += factor * elliprc(alpha, beta);
+
+        // Step.
+        factor *= 0.25;
+        xn = 0.25 * (xn + lambda);
+        yn = 0.25 * (yn + lambda);
+        zn = 0.25 * (zn + lambda);
+        pn = 0.25 * (pn + lambda);
+
+        // Convergence check.
+        let mu = 0.2 * (xn + yn + zn + 2.0 * pn);
+        let ex = 1.0 - xn / mu;
+        let ey = 1.0 - yn / mu;
+        let ez = 1.0 - zn / mu;
+        let ep = 1.0 - pn / mu;
+        let max_e = ex.abs().max(ey.abs()).max(ez.abs()).max(ep.abs());
+        if max_e < TOL {
+            // 5th-order Taylor closing (Carlson 1995, Numerical Recipes 6.11).
+            const C1: f64 = 3.0 / 14.0;
+            const C2: f64 = 1.0 / 3.0;
+            const C3: f64 = 3.0 / 22.0;
+            const C4: f64 = 3.0 / 26.0;
+            let ea = ex * (ey + ez) + ey * ez;
+            let eb = ex * ey * ez;
+            let ec = ep * ep;
+            let ed = ea - 3.0 * ec;
+            let ee = eb + 2.0 * ep * (ea - ec);
+            let series = 1.0
+                + ed * (-C1 + 0.75 * C3 * ed - 1.5 * C4 * ee)
+                + eb * (C2 + ep * (-C3 - C3 + ep * C4))
+                + ep * ea * (C2 - ep * C3)
+                - C2 * ep * ec;
+            return 3.0 * sum + factor * series / (mu * mu.sqrt());
+        }
+    }
+    f64::NAN
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2737,5 +2842,94 @@ mod tests {
         assert!(elliprg(1.0, -1.0, 1.0).is_nan());
         assert!(elliprg(1.0, 1.0, -1.0).is_nan());
         assert!(elliprg(f64::NAN, 1.0, 1.0).is_nan());
+    }
+
+    // ─── elliprj: Carlson elliptic integral of the third kind ───────────
+
+    #[test]
+    fn elliprj_diagonal_is_x_pow_neg_three_halves() {
+        // /porting-to-rust + /testing-golden-artifacts for
+        // [frankenscipy-ewuqd]: RJ(x, x, x, x) = x^{-3/2} closed form
+        // (the integrand collapses to (t + x)^{-5/2}).
+        for &x in &[0.5_f64, 1.0, 2.0, 4.0, 9.0, 25.0] {
+            let actual = elliprj(x, x, x, x);
+            let expected = x.powf(-1.5);
+            assert_close(
+                actual,
+                expected,
+                1e-10,
+                &format!("RJ({x}, {x}, {x}, {x}) = {actual}, expected {expected}"),
+            );
+        }
+    }
+
+    #[test]
+    fn elliprj_p_equals_z_matches_elliprd() {
+        // RJ(x, y, z, z) = RD(x, y, z) — same integrand under p → z.
+        for &(x, y, z) in &[
+            (1.0_f64, 2.0, 3.0),
+            (0.5, 1.5, 4.0),
+            (0.25, 0.5, 1.0),
+            (0.0, 1.0, 1.0),
+            (3.0, 5.0, 7.0),
+        ] {
+            let rj = elliprj(x, y, z, z);
+            let rd = elliprd(x, y, z);
+            assert_close(rj, rd, 1e-9, &format!("RJ({x}, {y}, {z}, {z}) vs RD"));
+        }
+    }
+
+    #[test]
+    fn elliprj_symmetric_in_xyz() {
+        // RJ is symmetric in (x, y, z) but not p.
+        let p = 4.0_f64;
+        for &(x, y, z) in &[(1.0_f64, 2.0, 3.0), (0.5, 1.5, 4.0)] {
+            let xyz = elliprj(x, y, z, p);
+            let yxz = elliprj(y, x, z, p);
+            let zyx = elliprj(z, y, x, p);
+            let yzx = elliprj(y, z, x, p);
+            assert_close(xyz, yxz, 1e-10, "RJ x↔y");
+            assert_close(xyz, zyx, 1e-10, "RJ x↔z");
+            assert_close(xyz, yzx, 1e-10, "RJ cyclic");
+        }
+    }
+
+    #[test]
+    fn elliprj_input_contract() {
+        assert!(elliprj(-1.0, 1.0, 1.0, 1.0).is_nan());
+        assert!(elliprj(1.0, -1.0, 1.0, 1.0).is_nan());
+        assert!(elliprj(1.0, 1.0, -1.0, 1.0).is_nan());
+        assert!(elliprj(f64::NAN, 1.0, 1.0, 1.0).is_nan());
+        assert!(elliprj(1.0, 1.0, 1.0, f64::NAN).is_nan());
+        // p ≤ 0 is the Cauchy-PV path, currently deferred → NaN.
+        assert!(elliprj(1.0, 1.0, 1.0, 0.0).is_nan());
+        assert!(elliprj(1.0, 1.0, 1.0, -1.0).is_nan());
+        // Two zeros among (x, y, z) → divergence.
+        assert!(elliprj(0.0, 0.0, 1.0, 1.0).is_infinite());
+    }
+
+    #[test]
+    fn elliprj_homogeneity_scaling_law() {
+        // RJ(λx, λy, λz, λp) = λ^{-3/2} · RJ(x, y, z, p) — same
+        // homogeneity degree as RD; exercises the duplication path
+        // at very different scales for the same predicted ratio.
+        let bases: &[(f64, f64, f64, f64)] = &[
+            (1.0, 2.0, 3.0, 4.0),
+            (0.5, 1.5, 4.0, 2.0),
+            (0.25, 0.5, 1.0, 0.75),
+        ];
+        for &(x, y, z, p) in bases {
+            let base = elliprj(x, y, z, p);
+            for &lam in &[0.25_f64, 1.0, 4.0, 16.0] {
+                let scaled = elliprj(lam * x, lam * y, lam * z, lam * p);
+                let predicted = base * lam.powf(-1.5);
+                assert_close(
+                    scaled,
+                    predicted,
+                    1e-9 * predicted.abs().max(1.0),
+                    &format!("RJ homogeneity at ({x}, {y}, {z}, {p}) λ={lam}"),
+                );
+            }
+        }
     }
 }
