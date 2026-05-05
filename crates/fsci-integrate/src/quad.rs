@@ -3007,6 +3007,95 @@ mod tests {
     }
 
     #[test]
+    fn quad_metamorphic_additivity_split_at_midpoint() {
+        // /testing-metamorphic for [frankenscipy-1ncsg]:
+        // ∫_a^b f = ∫_a^c f + ∫_c^b f for any c ∈ (a, b).
+        // No reference value needed; this catches adaptive-step bugs
+        // that would silently bias the upper or lower half.
+        fn f_exp(x: f64) -> f64 {
+            x.exp()
+        }
+        fn f_poly(x: f64) -> f64 {
+            x * x * x + 2.0 * x + 1.0
+        }
+        let cases: &[(fn(f64) -> f64, f64, f64)] = &[
+            (f_exp, 0.0, 2.0),
+            (f64::sin, 0.0, std::f64::consts::PI),
+            (f_poly, -1.5, 2.5),
+        ];
+        for &(f, a, b) in cases {
+            let opts = QuadOptions::default();
+            let total = quad(f, a, b, opts).expect("total");
+            for &c_frac in &[0.25, 0.5, 0.75] {
+                let c = a + c_frac * (b - a);
+                let lo = quad(f, a, c, opts).expect("lo");
+                let hi = quad(f, c, b, opts).expect("hi");
+                let diff = (total.integral - (lo.integral + hi.integral)).abs();
+                assert!(
+                    diff < 1e-9 + 1e-9 * total.integral.abs(),
+                    "additivity broken at c={c}: total={} vs lo+hi={}, diff={diff}",
+                    total.integral,
+                    lo.integral + hi.integral
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn quad_metamorphic_linearity_alpha_f_plus_beta_g() {
+        // ∫(α·f + β·g) = α·∫f + β·∫g
+        let alpha = 2.5_f64;
+        let beta = -1.7_f64;
+        let f = |x: f64| x * x;
+        let g = f64::sin;
+        let a = 0.0_f64;
+        let b = std::f64::consts::PI;
+        let opts = QuadOptions::default();
+        let lhs = quad(|x| alpha * f(x) + beta * g(x), a, b, opts).expect("lhs");
+        let if_ = quad(f, a, b, opts).expect("∫f");
+        let ig = quad(g, a, b, opts).expect("∫g");
+        let rhs = alpha * if_.integral + beta * ig.integral;
+        assert!(
+            (lhs.integral - rhs).abs() < 1e-9 + 1e-9 * rhs.abs(),
+            "linearity broken: lhs={} rhs={}",
+            lhs.integral,
+            rhs
+        );
+    }
+
+    #[test]
+    fn quad_metamorphic_translation_invariance() {
+        // ∫_a^b f(x) dx = ∫_{a+t}^{b+t} f(x − t) dx for any shift t.
+        // Pure substitution u = x − t, du = dx — must hold to machine
+        // precision modulo the adaptive tolerance.
+        let opts = QuadOptions::default();
+        for &t in &[0.0, 1.0, -2.5, 5.0] {
+            for f_choice in 0..3 {
+                let (a, b) = (0.0_f64, 3.0_f64);
+                let untranslated: Box<dyn Fn(f64) -> f64> = match f_choice {
+                    0 => Box::new(|x: f64| (-x * x).exp()),
+                    1 => Box::new(f64::sin),
+                    _ => Box::new(|x: f64| 1.0 / (1.0 + x * x)),
+                };
+                let translated: Box<dyn Fn(f64) -> f64> = match f_choice {
+                    0 => Box::new(move |x: f64| (-(x - t) * (x - t)).exp()),
+                    1 => Box::new(move |x: f64| (x - t).sin()),
+                    _ => Box::new(move |x: f64| 1.0 / (1.0 + (x - t) * (x - t))),
+                };
+                let lhs = quad(|x| untranslated(x), a, b, opts).expect("lhs");
+                let rhs = quad(|x| translated(x), a + t, b + t, opts).expect("rhs");
+                assert!(
+                    (lhs.integral - rhs.integral).abs() < 1e-9 + 1e-9 * lhs.integral.abs(),
+                    "translation by {t} broken on f_choice {f_choice}: \
+                     lhs={} vs rhs={}",
+                    lhs.integral,
+                    rhs.integral
+                );
+            }
+        }
+    }
+
+    #[test]
     fn quad_negative_interval() {
         // ∫₋₁¹ x³ dx = 0 (odd function)
         let result = quad(|x| x.powi(3), -1.0, 1.0, QuadOptions::default()).expect("quad works");
