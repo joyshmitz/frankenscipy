@@ -6868,6 +6868,40 @@ impl ContinuousDistribution for CosineDistribution {
         }
     }
 
+    fn ppf(&self, q: f64) -> f64 {
+        // The support is finite ([-π, π]), so the default
+        // ContinuousDistribution::ppf returning ±∞ at q=0/1 is wrong
+        // here. Use bisection on the closed-form cdf — the derivative
+        // 1+cos(x) vanishes at the endpoints so Newton overshoots,
+        // but bisection always converges on a monotone cdf.
+        // Resolves [frankenscipy-2zdyv].
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return -PI;
+        }
+        if q == 1.0 {
+            return PI;
+        }
+        let target = 2.0 * PI * q;
+        let mut lo = -PI;
+        let mut hi = PI;
+        for _ in 0..60 {
+            let mid = 0.5 * (lo + hi);
+            let g_mid = PI + mid + mid.sin() - target;
+            if g_mid > 0.0 {
+                hi = mid;
+            } else {
+                lo = mid;
+            }
+            if hi - lo < 1e-14 {
+                break;
+            }
+        }
+        0.5 * (lo + hi)
+    }
+
     fn mean(&self) -> f64 {
         0.0
     }
@@ -22021,6 +22055,65 @@ mod tests {
             1e-12,
             "HypSecant cdf symmetry",
         );
+    }
+
+    #[test]
+    fn cosine_pdf_cdf_match_closed_form() {
+        // /testing-golden-artifacts: closed-form anchors for
+        // scipy.stats.cosine on [-π, π]. Pre-existing CosineDistribution
+        // (lib.rs:6940) had no reference pins.
+        let c = CosineDistribution;
+        // pdf(0) = (1 + 1) / (2π) = 1/π
+        assert!((c.pdf(0.0) - 1.0 / PI).abs() < 1e-12);
+        // pdf(±π) = (1 + cos(π)) / (2π) = 0
+        assert!(c.pdf(PI).abs() < 1e-12);
+        assert!(c.pdf(-PI).abs() < 1e-12);
+        // pdf outside support = 0
+        assert_eq!(c.pdf(PI + 0.1), 0.0);
+        assert_eq!(c.pdf(-PI - 0.1), 0.0);
+        // cdf endpoints
+        assert!(c.cdf(-PI).abs() < 1e-12);
+        assert!((c.cdf(PI) - 1.0).abs() < 1e-12);
+        // cdf(0) = (π + 0 + 0) / (2π) = 0.5
+        assert!((c.cdf(0.0) - 0.5).abs() < 1e-12);
+        // saturation
+        assert_eq!(c.cdf(-2.0 * PI), 0.0);
+        assert_eq!(c.cdf(2.0 * PI), 1.0);
+    }
+
+    #[test]
+    fn cosine_ppf_inverts_cdf_on_grid() {
+        let c = CosineDistribution;
+        for q in &[0.05, 0.25, 0.5, 0.75, 0.95] {
+            let x = c.ppf(*q);
+            let q_back = c.cdf(x);
+            assert!(
+                (q_back - q).abs() < 1e-10,
+                "cosine ppf({q}) = {x}, cdf({x}) = {q_back}"
+            );
+        }
+        // Boundary identities
+        assert!((c.ppf(0.0) - (-PI)).abs() < 1e-12);
+        assert!((c.ppf(1.0) - PI).abs() < 1e-12);
+    }
+
+    #[test]
+    fn cosine_mean_and_variance_match_closed_form() {
+        let c = CosineDistribution;
+        // Symmetric distribution centered at 0
+        assert_eq!(c.mean(), 0.0);
+        // var = π²/3 - 2 ≈ 1.28986813...
+        let expected_var = PI * PI / 3.0 - 2.0;
+        assert!((c.var() - expected_var).abs() < 1e-12);
+    }
+
+    #[test]
+    fn cosine_try_fit_rejects_out_of_support() {
+        // Parameterless distribution accepts any data on [-π, π].
+        assert!(CosineDistribution::try_fit(&[-1.0, 0.0, 1.0]).is_ok());
+        // Out-of-support samples are rejected.
+        assert!(CosineDistribution::try_fit(&[-PI - 0.01, 0.0]).is_err());
+        assert!(CosineDistribution::try_fit(&[0.0, PI + 0.01]).is_err());
     }
 
     #[test]
