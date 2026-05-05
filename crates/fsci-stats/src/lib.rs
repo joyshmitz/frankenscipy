@@ -31148,6 +31148,68 @@ mod tests {
     }
 
     #[test]
+    fn cumsum_closed_form_and_last_equals_total() {
+        // /testing-metamorphic for [frankenscipy-cvcna]:
+        //   cumsum([1, 2, 3, 4]) = [1, 3, 6, 10]; last entry = sum.
+        let r = cumsum(&[1.0_f64, 2.0, 3.0, 4.0]);
+        assert_eq!(r, vec![1.0, 3.0, 6.0, 10.0]);
+        assert_eq!(*r.last().unwrap(), 10.0);
+
+        // Single-element input returns the element.
+        assert_eq!(cumsum(&[42.0_f64]), vec![42.0]);
+
+        // Empty input returns empty.
+        assert_eq!(cumsum(&[]), Vec::<f64>::new());
+
+        // Random-ish input: last entry equals raw sum.
+        let data = vec![1.7_f64, -3.1, 2.9, 0.4, 5.0];
+        let raw_sum: f64 = data.iter().sum();
+        let cs = cumsum(&data);
+        assert!((cs.last().copied().unwrap() - raw_sum).abs() < 1e-12);
+    }
+
+    #[test]
+    fn cumprod_closed_form_and_last_equals_product() {
+        // cumprod([1, 2, 3, 4]) = [1, 2, 6, 24] (factorial sequence).
+        let r = cumprod(&[1.0_f64, 2.0, 3.0, 4.0]);
+        assert_eq!(r, vec![1.0, 2.0, 6.0, 24.0]);
+        assert_eq!(*r.last().unwrap(), 24.0);
+
+        // cumprod containing zero must yield zeros from that point on.
+        let r = cumprod(&[2.0_f64, 3.0, 0.0, 5.0]);
+        assert_eq!(r, vec![2.0, 6.0, 0.0, 0.0]);
+
+        assert_eq!(cumprod(&[]), Vec::<f64>::new());
+        assert_eq!(cumprod(&[7.0]), vec![7.0]);
+    }
+
+    #[test]
+    fn diff_basic_and_inverse_with_cumsum() {
+        // diff([1, 3, 6, 10, 4]) = [2, 3, 4, -6]
+        let r = diff(&[1.0_f64, 3.0, 6.0, 10.0, 4.0]);
+        assert_eq!(r, vec![2.0, 3.0, 4.0, -6.0]);
+
+        // Empty / singleton return empty.
+        assert_eq!(diff(&[]), Vec::<f64>::new());
+        assert_eq!(diff(&[5.0_f64]), Vec::<f64>::new());
+
+        // Metamorphic: diff(cumsum(x)) = x[1..]. Each pairwise
+        // difference of the running sum recovers the original value.
+        let x = vec![3.0_f64, 1.5, -2.7, 5.0, 0.3];
+        let cs = cumsum(&x);
+        let dcs = diff(&cs);
+        // dcs[i] = cs[i+1] - cs[i] = x[i+1].
+        for (i, &expected) in x.iter().skip(1).enumerate() {
+            assert!(
+                (dcs[i] - expected).abs() < 1e-12,
+                "diff(cumsum)[{i}] = {} != x[{}] = {expected}",
+                dcs[i],
+                i + 1
+            );
+        }
+    }
+
+    #[test]
     fn anglit_pdf_cdf_match_closed_form() {
         // /testing-golden-artifacts for [frankenscipy-qznjs]:
         // anglit pdf(x) = cos(2x), cdf(x) = (sin(2x) + 1)/2 on [-π/4, π/4].
