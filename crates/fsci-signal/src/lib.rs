@@ -13526,7 +13526,11 @@ mod tests {
         // r[0] = 1, r[1] ≈ -(15/16), r[2] ≈ 14/16, r[3] ≈ -(13/16),
         // r[4] ≈ 12/16 (each lag drops one sample).
         assert!((r[0] - 1.0).abs() < 1e-12, "r[0] = {}", r[0]);
-        assert!(r[1] < -0.5, "r[1] = {} should be strongly anti-correlated", r[1]);
+        assert!(
+            r[1] < -0.5,
+            "r[1] = {} should be strongly anti-correlated",
+            r[1]
+        );
         assert!(r[2] > 0.5, "r[2] = {} should be re-correlated", r[2]);
     }
 
