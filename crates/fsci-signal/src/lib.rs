@@ -3168,6 +3168,65 @@ pub fn normalize_filter(b: &[f64], a: &[f64]) -> Result<(Vec<f64>, Vec<f64>), Si
     Ok((b_norm, a_norm))
 }
 
+/// Combine roots that are within `tol` of each other into unique groups.
+///
+/// Matches `scipy.signal.unique_roots(p, tol, rtype)`. Sorts the
+/// input, then walks the sorted array greedily grouping consecutive
+/// entries where the gap from the group's first element is within
+/// `tol`. Each group is collapsed via `rtype` ("min", "max", or
+/// "avg"); unknown rtype falls back to "avg" (matching scipy's
+/// permissive default).
+///
+/// Returns `(unique, multiplicities)` — a vector of representative
+/// roots and a vector of how many input roots fell into each group.
+///
+/// Resolves [frankenscipy-sx2yp].
+pub fn unique_roots(p: &[f64], tol: f64, rtype: &str) -> (Vec<f64>, Vec<usize>) {
+    if p.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+    let mut sorted: Vec<f64> = p.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut roots = Vec::new();
+    let mut mult = Vec::new();
+    let mut group: Vec<f64> = Vec::with_capacity(sorted.len());
+    for &val in &sorted {
+        let extend = match group.first() {
+            Some(&first) => (val - first).abs() <= tol,
+            None => true,
+        };
+        if extend {
+            group.push(val);
+        } else {
+            collapse_unique_root_group(&mut roots, &mut mult, &group, rtype);
+            group.clear();
+            group.push(val);
+        }
+    }
+    if !group.is_empty() {
+        collapse_unique_root_group(&mut roots, &mut mult, &group, rtype);
+    }
+    (roots, mult)
+}
+
+fn collapse_unique_root_group(
+    roots: &mut Vec<f64>,
+    mult: &mut Vec<usize>,
+    group: &[f64],
+    rtype: &str,
+) {
+    let n = group.len();
+    let r = match rtype {
+        "min" => group.iter().copied().fold(f64::INFINITY, f64::min),
+        "max" => group.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+        // "avg" or any other value — match scipy's permissive behaviour.
+        _ => group.iter().sum::<f64>() / n as f64,
+    };
+    roots.push(r);
+    mult.push(n);
+}
+
 /// Normalize a signal to have zero mean and unit variance.
 pub fn normalize_signal(x: &[f64]) -> Vec<f64> {
     if x.is_empty() {
@@ -12769,6 +12828,70 @@ mod tests {
         assert!(normalize_filter(&[1.0], &[f64::NEG_INFINITY, 1.0]).is_err());
         assert!(normalize_filter(&[f64::NAN], &[1.0, 2.0]).is_err());
         assert!(normalize_filter(&[f64::INFINITY], &[1.0]).is_err());
+    }
+
+    // ── unique_roots tests ──────────────────────────────────────────
+
+    #[test]
+    fn unique_roots_empty_returns_empty() {
+        let (r, m) = unique_roots(&[], 1e-3, "min");
+        assert!(r.is_empty() && m.is_empty());
+    }
+
+    #[test]
+    fn unique_roots_all_distinct_returns_each_with_multiplicity_one() {
+        let p = [1.0, 5.0, 10.0];
+        let (r, m) = unique_roots(&p, 0.5, "min");
+        assert_eq!(r, vec![1.0, 5.0, 10.0]);
+        assert_eq!(m, vec![1, 1, 1]);
+    }
+
+    #[test]
+    fn unique_roots_groups_within_tolerance() {
+        // tol comparison is `|x - leader| <= tol` (inclusive). Use
+        // exact f64 values to avoid float-precision artifacts.
+        // tol=1.0, leader 0.0: 0.5 ≤ 1, 1.0 ≤ 1 → all join. 2.5 starts
+        // new cluster. 5.0 is also outside |2.5-5.0|=2.5 > 1 → another.
+        let p = [0.0, 0.5, 1.0, 2.5, 5.0];
+        let (r, m) = unique_roots(&p, 1.0, "min");
+        assert_eq!(r.len(), 3, "expected 3 clusters, got {r:?}");
+        assert_eq!(r, vec![0.0, 2.5, 5.0]);
+        assert_eq!(m, vec![3, 1, 1]);
+    }
+
+    #[test]
+    fn unique_roots_avg_combine() {
+        let p = [1.0, 2.0, 3.0];
+        let (r, m) = unique_roots(&p, 5.0, "avg");
+        assert_eq!(r.len(), 1);
+        assert!((r[0] - 2.0).abs() < 1e-15);
+        assert_eq!(m, vec![3]);
+    }
+
+    #[test]
+    fn unique_roots_max_combine() {
+        let p = [1.0, 2.0, 3.0];
+        let (r, m) = unique_roots(&p, 5.0, "max");
+        assert_eq!(r, vec![3.0]);
+        assert_eq!(m, vec![3]);
+    }
+
+    #[test]
+    fn unique_roots_zero_tol_keeps_only_exact_duplicates_together() {
+        // tol = 0: only equal values are grouped.
+        let p = [1.0, 1.0, 2.0];
+        let (r, m) = unique_roots(&p, 0.0, "min");
+        assert_eq!(r, vec![1.0, 2.0]);
+        assert_eq!(m, vec![2, 1]);
+    }
+
+    #[test]
+    fn unique_roots_unknown_rtype_falls_back_to_avg() {
+        // scipy is permissive — unknown rtype shouldn't panic; we treat
+        // it as "avg" to match the documented permissive behaviour.
+        let p = [1.0, 2.0, 3.0];
+        let (r, _) = unique_roots(&p, 5.0, "garbage");
+        assert!((r[0] - 2.0).abs() < 1e-15);
     }
 
     #[test]
