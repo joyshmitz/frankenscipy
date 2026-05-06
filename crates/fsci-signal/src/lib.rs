@@ -5792,6 +5792,103 @@ pub fn freqz_with_whole(
     Ok(FreqzResult { w, h_mag, h_phase })
 }
 
+/// Compute the frequency response of a digital filter from ZPK form.
+///
+/// Matches `scipy.signal.freqz_zpk(z, p, k, worN)`.
+///
+/// Evaluates H(e^jω) = k · Π(e^jω − z_i) / Π(e^jω − p_i) directly.
+/// Resolves [frankenscipy-kca5u].
+pub fn freqz_zpk(zpk: &ZpkCoeffs, n_freqs: Option<usize>) -> Result<FreqzResult, SignalError> {
+    freqz_zpk_with_whole(zpk, n_freqs, false)
+}
+
+/// Compute the frequency response of a digital filter from ZPK form
+/// over half or the whole unit circle.
+///
+/// Matches `scipy.signal.freqz_zpk(z, p, k, worN, whole=...)`.
+pub fn freqz_zpk_with_whole(
+    zpk: &ZpkCoeffs,
+    n_freqs: Option<usize>,
+    whole: bool,
+) -> Result<FreqzResult, SignalError> {
+    if zpk.zeros_re.len() != zpk.zeros_im.len() {
+        return Err(SignalError::InvalidArgument(
+            "zeros real and imaginary slices must agree on length".into(),
+        ));
+    }
+    if zpk.poles_re.len() != zpk.poles_im.len() {
+        return Err(SignalError::InvalidArgument(
+            "poles real and imaginary slices must agree on length".into(),
+        ));
+    }
+    if !zpk.gain.is_finite() {
+        return Err(SignalError::InvalidArgument(
+            "gain must be finite".into(),
+        ));
+    }
+
+    let n = n_freqs.unwrap_or(512);
+    if n == 0 {
+        return Err(SignalError::InvalidArgument(
+            "n_freqs must be > 0".into(),
+        ));
+    }
+
+    let mut w = Vec::with_capacity(n);
+    let mut h_mag = Vec::with_capacity(n);
+    let mut h_phase = Vec::with_capacity(n);
+
+    for i in 0..n {
+        let omega = if whole {
+            std::f64::consts::TAU * i as f64 / n as f64
+        } else {
+            std::f64::consts::PI * i as f64 / n as f64
+        };
+        w.push(omega);
+
+        // e^{jω} = cos(ω) + j·sin(ω). f64::sin_cos returns (sin, cos)
+        // — destructure accordingly.
+        let (e_im, e_re) = omega.sin_cos();
+
+        // Numerator: gain · Π (e^{jω} − z_i)
+        let mut num_re = zpk.gain;
+        let mut num_im = 0.0_f64;
+        for k in 0..zpk.zeros_re.len() {
+            let dr = e_re - zpk.zeros_re[k];
+            let di = e_im - zpk.zeros_im[k];
+            let new_re = num_re * dr - num_im * di;
+            let new_im = num_re * di + num_im * dr;
+            num_re = new_re;
+            num_im = new_im;
+        }
+
+        // Denominator: Π (e^{jω} − p_i)
+        let mut den_re = 1.0_f64;
+        let mut den_im = 0.0_f64;
+        for k in 0..zpk.poles_re.len() {
+            let dr = e_re - zpk.poles_re[k];
+            let di = e_im - zpk.poles_im[k];
+            let new_re = den_re * dr - den_im * di;
+            let new_im = den_re * di + den_im * dr;
+            den_re = new_re;
+            den_im = new_im;
+        }
+
+        let denom_mag_sq = den_re * den_re + den_im * den_im;
+        if denom_mag_sq < 1e-30 {
+            h_mag.push(f64::INFINITY);
+            h_phase.push(0.0);
+        } else {
+            let h_re = (num_re * den_re + num_im * den_im) / denom_mag_sq;
+            let h_im = (num_im * den_re - num_re * den_im) / denom_mag_sq;
+            h_mag.push((h_re * h_re + h_im * h_im).sqrt());
+            h_phase.push(h_im.atan2(h_re));
+        }
+    }
+
+    Ok(FreqzResult { w, h_mag, h_phase })
+}
+
 /// Compute the frequency response of a digital filter from SOS form.
 ///
 /// Matches `scipy.signal.sosfreqz(sos, worN)`.
@@ -12839,6 +12936,91 @@ mod tests {
         assert!(normalize_filter(&[1.0], &[f64::NEG_INFINITY, 1.0]).is_err());
         assert!(normalize_filter(&[f64::NAN], &[1.0, 2.0]).is_err());
         assert!(normalize_filter(&[f64::INFINITY], &[1.0]).is_err());
+    }
+
+    // ── freqz_zpk tests ──────────────────────────────────────────────
+
+    #[test]
+    fn freqz_zpk_matches_freqz_via_zpk2tf() {
+        // /porting-to-rust [frankenscipy-kca5u]: freqz_zpk on a ZPK
+        // form should match freqz on the ZPK→TF converted form within
+        // numerical tolerance.
+        let zpk = ZpkCoeffs {
+            zeros_re: vec![1.0, -1.0],
+            zeros_im: vec![0.0, 0.0],
+            poles_re: vec![0.5, -0.5],
+            poles_im: vec![0.0, 0.0],
+            gain: 0.5,
+        };
+        let ba = zpk2tf(&zpk);
+
+        let r_zpk = freqz_zpk(&zpk, Some(64)).expect("freqz_zpk");
+        let r_ba = freqz(&ba.b, &ba.a, Some(64)).expect("freqz");
+
+        assert_eq!(r_zpk.w.len(), r_ba.w.len());
+        for k in 0..r_zpk.w.len() {
+            assert!(
+                (r_zpk.w[k] - r_ba.w[k]).abs() < 1e-12,
+                "freqz_zpk frequency grid mismatch at k={k}"
+            );
+            assert!(
+                (r_zpk.h_mag[k] - r_ba.h_mag[k]).abs() < 1e-9 * r_ba.h_mag[k].abs().max(1.0),
+                "freqz_zpk h_mag mismatch at k={k}: {} vs {}",
+                r_zpk.h_mag[k],
+                r_ba.h_mag[k]
+            );
+            // Phase comparison can be ambiguous mod 2π near jumps; require
+            // either direct match or ±2π wrap match.
+            let dphi = (r_zpk.h_phase[k] - r_ba.h_phase[k]).abs();
+            assert!(
+                dphi < 1e-9 || (dphi - std::f64::consts::TAU).abs() < 1e-9,
+                "freqz_zpk h_phase mismatch at k={k}: {} vs {}",
+                r_zpk.h_phase[k],
+                r_ba.h_phase[k]
+            );
+        }
+    }
+
+    #[test]
+    fn freqz_zpk_dc_response_is_gain_times_zero_pole_ratio() {
+        // At ω=0, e^{jω}=1, so H(1) = gain · Π(1 − z_i) / Π(1 − p_i).
+        let zpk = ZpkCoeffs {
+            zeros_re: vec![0.0, 0.5],
+            zeros_im: vec![0.0, 0.0],
+            poles_re: vec![0.25],
+            poles_im: vec![0.0],
+            gain: 2.0,
+        };
+        let r = freqz_zpk(&zpk, Some(8)).expect("freqz_zpk");
+        // First sample is at ω=0.
+        let expected = 2.0 * (1.0 - 0.0) * (1.0 - 0.5) / (1.0 - 0.25);
+        assert!(
+            (r.h_mag[0] - expected).abs() < 1e-12,
+            "freqz_zpk DC: {} vs {expected}",
+            r.h_mag[0]
+        );
+        // Phase at DC is 0 (real-valued response).
+        assert!(r.h_phase[0].abs() < 1e-12, "DC phase should be 0");
+    }
+
+    #[test]
+    fn freqz_zpk_input_contract() {
+        let mut zpk = ZpkCoeffs {
+            zeros_re: vec![1.0],
+            zeros_im: vec![0.0, 0.0], // length mismatch
+            poles_re: vec![],
+            poles_im: vec![],
+            gain: 1.0,
+        };
+        assert!(freqz_zpk(&zpk, None).is_err());
+        zpk.zeros_im = vec![0.0];
+        zpk.poles_re = vec![0.5];
+        assert!(freqz_zpk(&zpk, None).is_err()); // poles len mismatch
+        zpk.poles_im = vec![0.0];
+        zpk.gain = f64::NAN;
+        assert!(freqz_zpk(&zpk, None).is_err());
+        zpk.gain = 1.0;
+        assert!(freqz_zpk(&zpk, Some(0)).is_err());
     }
 
     // ── unique_roots tests ──────────────────────────────────────────
