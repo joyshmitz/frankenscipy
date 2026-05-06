@@ -70,12 +70,20 @@ fn naive_tau(x: &[f64], y: &[f64]) -> Option<f64> {
 }
 
 fuzz_target!(|input: KendallInput| {
-    let len = input.x.len().min(input.y.len()).clamp(MIN_N, MAX_N);
-    if len < MIN_N {
+    // Resolves [frankenscipy-ht5ra]: the previous
+    // `min(...).clamp(MIN_N, MAX_N)` would INFLATE len above the
+    // shorter input's actual length when both sides had < MIN_N items,
+    // producing x and y of unequal lengths and panicking in naive_tau's
+    // index access. Compute true_len first; skip below MIN_N; then
+    // apply MAX_N only as an upper bound.
+    let true_len = input.x.len().min(input.y.len());
+    if true_len < MIN_N {
         return;
     }
+    let len = true_len.min(MAX_N);
     let x: Vec<f64> = input.x.iter().take(len).copied().map(sanitize).collect();
     let y: Vec<f64> = input.y.iter().take(len).copied().map(sanitize).collect();
+    debug_assert_eq!(x.len(), y.len(), "x/y length mismatch — fuzz contract broken");
 
     let opt = kendalltau(&x, &y);
     let alt = kendalltau_alternative(&x, &y, "two-sided");
