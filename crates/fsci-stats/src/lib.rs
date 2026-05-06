@@ -22667,6 +22667,46 @@ mod tests {
     }
 
     #[test]
+    fn laplace_is_symmetric_around_loc() {
+        // /testing-metamorphic for [frankenscipy-53yu7]: Laplace is
+        // symmetric around loc, so for any d:
+        //
+        //   Laplace(loc, s).cdf(loc + d) + Laplace(loc, s).cdf(loc - d) = 1
+        //   Laplace(loc, s).sf(loc + d) + Laplace(loc, s).sf(loc - d) = 1
+        //   Laplace(loc, s).pdf(loc + d) = Laplace(loc, s).pdf(loc - d)
+        //
+        // Independent verification of the cdf/sf piecewise split:
+        // a sign error in either branch would surface as mismatch.
+        let cases: &[(f64, f64)] = &[(0.0, 1.0), (-2.0, 0.5), (3.0, 2.0), (-1.5, 4.0)];
+        let ds = [0.0_f64, 0.25, 0.5, 1.0, 2.5, 5.0];
+        for &(loc, scale) in cases {
+            let l = Laplace::new(loc, scale);
+            for &d in &ds {
+                let xp = loc + d;
+                let xm = loc - d;
+                assert_close(
+                    l.cdf(xp) + l.cdf(xm),
+                    1.0,
+                    1e-12,
+                    &format!("Laplace({loc},{scale}).cdf(loc±d) sums to 1 at d={d}"),
+                );
+                assert_close(
+                    l.sf(xp) + l.sf(xm),
+                    1.0,
+                    1e-12,
+                    &format!("Laplace({loc},{scale}).sf(loc±d) sums to 1 at d={d}"),
+                );
+                assert_close(
+                    l.pdf(xp),
+                    l.pdf(xm),
+                    1e-12,
+                    &format!("Laplace({loc},{scale}).pdf is symmetric at d={d}"),
+                );
+            }
+        }
+    }
+
+    #[test]
     fn gumbel_and_gumbel_left_are_mirrors() {
         // /testing-metamorphic for [frankenscipy-bwwz7]: GumbelLeft is
         // the mirror of Gumbel through x → -x and loc → -loc:
