@@ -4886,9 +4886,14 @@ pub fn lfilter_with_state(
     let na = a.len();
     let nfilt = nb.max(na);
 
-    // Normalize coefficients
-    let b_norm: Vec<f64> = b.iter().map(|&v| v / a0).collect();
-    let a_norm: Vec<f64> = a.iter().map(|&v| v / a0).collect();
+    // Resolves [frankenscipy-rvwvw]: pad b_norm/a_norm to length
+    // nfilt and hoist b0 so the inner loop is N · nfilt straight
+    // multiply-add without per-iter bound checks or invariant lookups.
+    let mut b_norm: Vec<f64> = b.iter().map(|&v| v / a0).collect();
+    let mut a_norm: Vec<f64> = a.iter().map(|&v| v / a0).collect();
+    b_norm.resize(nfilt, 0.0);
+    a_norm.resize(nfilt, 0.0);
+    let b0 = b_norm[0];
 
     // Direct Form II transposed
     let mut y = Vec::with_capacity(x.len());
@@ -4908,14 +4913,17 @@ pub fn lfilter_with_state(
     };
 
     for &xi in x {
-        let yi = b_norm.first().copied().unwrap_or(0.0) * xi + d[0];
+        let yi = b0 * xi + d[0];
         y.push(yi);
 
-        // Update delay line
+        // Update delay line — b_norm/a_norm padded to nfilt, so j+1
+        // is always in range and the boundary `j+1 < nfilt-1` check
+        // collapses to a single tail-handling step after the loop.
         for j in 0..nfilt - 1 {
-            let bj = if j + 1 < nb { b_norm[j + 1] } else { 0.0 };
-            let aj = if j + 1 < na { a_norm[j + 1] } else { 0.0 };
-            d[j] = bj * xi - aj * yi + if j + 1 < nfilt - 1 { d[j + 1] } else { 0.0 };
+            let bj = b_norm[j + 1];
+            let aj = a_norm[j + 1];
+            let next_d = if j + 1 < nfilt - 1 { d[j + 1] } else { 0.0 };
+            d[j] = bj * xi - aj * yi + next_d;
         }
     }
 
@@ -12936,6 +12944,50 @@ mod tests {
         assert!(normalize_filter(&[1.0], &[f64::NEG_INFINITY, 1.0]).is_err());
         assert!(normalize_filter(&[f64::NAN], &[1.0, 2.0]).is_err());
         assert!(normalize_filter(&[f64::INFINITY], &[1.0]).is_err());
+    }
+
+    #[test]
+    fn lfilter_optimized_loop_matches_naive_logic() {
+        // /profiling-software-performance regression for [frankenscipy-rvwvw]:
+        // lfilter inner loop was tightened to pad b/a to nfilt, hoist b0,
+        // and drop per-iter bound checks. Verify against an explicit
+        // naïve implementation that mirrors the pre-fix branchy logic.
+
+        fn naive_lfilter(b: &[f64], a: &[f64], x: &[f64]) -> Vec<f64> {
+            let a0 = a[0];
+            let nb = b.len();
+            let na = a.len();
+            let nfilt = nb.max(na);
+            let b_norm: Vec<f64> = b.iter().map(|&v| v / a0).collect();
+            let a_norm: Vec<f64> = a.iter().map(|&v| v / a0).collect();
+            let mut y = Vec::with_capacity(x.len());
+            let mut d = vec![0.0_f64; nfilt];
+            for &xi in x {
+                let yi = b_norm.first().copied().unwrap_or(0.0) * xi + d[0];
+                y.push(yi);
+                for j in 0..nfilt - 1 {
+                    let bj = if j + 1 < nb { b_norm[j + 1] } else { 0.0 };
+                    let aj = if j + 1 < na { a_norm[j + 1] } else { 0.0 };
+                    d[j] = bj * xi - aj * yi + if j + 1 < nfilt - 1 { d[j + 1] } else { 0.0 };
+                }
+            }
+            y
+        }
+
+        // Order-5 IIR filter on a 200-sample signal.
+        let b = vec![0.5_f64, -0.3, 0.1, 0.05, -0.02, 0.01];
+        let a = vec![1.0_f64, -0.7, 0.4, -0.1, 0.05, 0.02];
+        let x: Vec<f64> = (0..200).map(|i| (i as f64 * 0.13).sin()).collect();
+
+        let opt = lfilter(&b, &a, &x, None).expect("lfilter");
+        let nav = naive_lfilter(&b, &a, &x);
+        assert_eq!(opt.len(), nav.len());
+        for (i, (&u, &v)) in opt.iter().zip(nav.iter()).enumerate() {
+            assert!(
+                (u - v).abs() < 1e-12 * v.abs().max(1.0),
+                "lfilter perf-opt diverges from naive at i={i}: opt={u}, naive={v}"
+            );
+        }
     }
 
     // ── freqz_zpk tests ──────────────────────────────────────────────
