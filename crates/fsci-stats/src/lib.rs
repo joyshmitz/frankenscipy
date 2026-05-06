@@ -7287,6 +7287,71 @@ impl ContinuousDistribution for DoubleGamma {
 /// Wrapped Cauchy distribution on [0, 2π).
 ///
 /// Matches `scipy.stats.wrapcauchy(c)` for the standard (loc=0, scale=1)
+/// Skewed Cauchy distribution with skewness parameter `a ∈ (−1, 1)`.
+///
+/// Matches `scipy.stats.skewcauchy(a)`. Resolves [frankenscipy-5co7w].
+/// Reduces to the standard Cauchy at `a = 0`. No finite moments
+/// (heavy tails like Cauchy), so mean/var/skew/kurt remain NaN.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SkewCauchy {
+    pub a: f64,
+}
+
+impl SkewCauchy {
+    #[must_use]
+    pub fn new(a: f64) -> Self {
+        assert!(a.abs() < 1.0, "a must be in (-1, 1), got {a}");
+        Self { a }
+    }
+}
+
+impl ContinuousDistribution for SkewCauchy {
+    fn pdf(&self, x: f64) -> f64 {
+        let a = self.a;
+        let scale = a * x.signum() + 1.0;
+        1.0 / (PI * (x * x / (scale * scale) + 1.0))
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        let a = self.a;
+        if x <= 0.0 {
+            (1.0 - a) / 2.0 + (1.0 - a) / PI * (x / (1.0 - a)).atan()
+        } else {
+            (1.0 - a) / 2.0 + (1.0 + a) / PI * (x / (1.0 + a)).atan()
+        }
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        if q == 1.0 {
+            return f64::INFINITY;
+        }
+        let a = self.a;
+        // Threshold cdf(0) = (1 - a) / 2.
+        let half = (1.0 - a) / 2.0;
+        if q < half {
+            (PI / (1.0 - a) * (q - half)).tan() * (1.0 - a)
+        } else {
+            (PI / (1.0 + a) * (q - half)).tan() * (1.0 + a)
+        }
+    }
+
+    fn mean(&self) -> f64 {
+        // SkewCauchy has no finite mean — heavy tails like Cauchy.
+        f64::NAN
+    }
+
+    fn var(&self) -> f64 {
+        // No finite variance.
+        f64::NAN
+    }
+}
+
 /// parameterization. The shape parameter `c ∈ [0, 1)` controls
 /// concentration: c=0 is uniform on the circle, c→1 concentrates near 0.
 ///
@@ -23959,6 +24024,84 @@ mod tests {
                     bp.sf(y),
                     1e-10,
                     &format!("BetaPrime({a},{b}).sf({x}) vs Beta.sf({y})"),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn skewcauchy_pdf_matches_scipy() {
+        // /porting-to-rust [frankenscipy-5co7w]: scipy reference values.
+        let cases = [
+            // (a, x, expected_pdf)
+            (0.0, -2.0, 0.063_661_977_236_758_14),
+            (0.0, 0.0, 0.318_309_886_183_790_7),
+            (0.0, 1.0, 0.159_154_943_091_895_35),
+            (0.3, -1.0, 0.104_679_090_087_286_86),
+            (0.3, 0.0, 0.318_309_886_183_790_7),
+            (0.3, 1.0, 0.199_979_073_476_061_8),
+            (0.3, 2.0, 0.094_541_952_135_431_69),
+            (0.7, 1.0, 0.236_482_151_946_312_36),
+            (0.7, 2.0, 0.133_514_596_672_156_04),
+            (-0.5, 1.0, 0.063_661_977_236_758_14),
+        ];
+        for (a, x, want) in cases {
+            assert_close(
+                SkewCauchy::new(a).pdf(x),
+                want,
+                1e-12,
+                &format!("SkewCauchy({a}).pdf({x})"),
+            );
+        }
+    }
+
+    #[test]
+    fn skewcauchy_cdf_matches_scipy() {
+        // /porting-to-rust [frankenscipy-5co7w]: scipy reference values.
+        let cases = [
+            (0.0, 0.0, 0.5),
+            (0.0, 1.0, 0.75),
+            (0.0, -1.0, 0.25),
+            (0.3, 0.0, 0.35),
+            (0.3, 1.0, 0.621_328_720_208_198_5),
+            (0.3, -1.0, 0.136_080_078_549_950_33),
+            (0.7, 0.0, 0.150_000_000_000_000_02),
+            (0.7, 1.0, 0.437_730_146_461_565_55),
+            (0.7, -2.0, 0.014_217_942_683_246_887),
+        ];
+        for (a, x, want) in cases {
+            assert_close(
+                SkewCauchy::new(a).cdf(x),
+                want,
+                1e-12,
+                &format!("SkewCauchy({a}).cdf({x})"),
+            );
+        }
+    }
+
+    #[test]
+    fn skewcauchy_at_zero_reduces_to_cauchy() {
+        // /porting-to-rust [frankenscipy-5co7w]: SkewCauchy(0) ≡ Cauchy.
+        let sc = SkewCauchy::new(0.0);
+        let c = Cauchy::new(0.0, 1.0);
+        for &x in &[-3.0_f64, -1.0, -0.1, 0.0, 0.5, 1.5, 4.0] {
+            assert_close(sc.pdf(x), c.pdf(x), 1e-15, "pdf");
+            assert_close(sc.cdf(x), c.cdf(x), 1e-15, "cdf");
+        }
+    }
+
+    #[test]
+    fn skewcauchy_ppf_inverts_cdf() {
+        // /porting-to-rust [frankenscipy-5co7w]: ppf(cdf(x)) ≈ x.
+        for &a in &[0.3_f64, -0.3, 0.7, -0.7] {
+            let sc = SkewCauchy::new(a);
+            for &x in &[-2.5_f64, -0.5, 0.0, 0.5, 2.5] {
+                let q = sc.cdf(x);
+                let recovered = sc.ppf(q);
+                let scale = x.abs().max(1.0);
+                assert!(
+                    (recovered - x).abs() < 1e-10 * scale,
+                    "SkewCauchy({a}).ppf(cdf({x})) = {recovered}, want {x}"
                 );
             }
         }
