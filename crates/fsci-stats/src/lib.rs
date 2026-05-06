@@ -23888,6 +23888,42 @@ mod tests {
     }
 
     #[test]
+    fn halflogistic_is_folded_logistic() {
+        // /testing-metamorphic for [frankenscipy-z6ssa]: textbook
+        // identity HalfLogistic ≡ |Logistic(0, 1)|. For x ≥ 0:
+        //   HalfLogistic.pdf(x) = 2 · Logistic.pdf(x)
+        //   HalfLogistic.cdf(x) = 2 · Logistic.cdf(x) − 1
+        //   HalfLogistic.sf(x)  = 2 · Logistic.sf(x)
+        // Independent verification across two distinct code paths:
+        // Logistic uses exp/(1+exp)² with translation/scale logic;
+        // HalfLogistic uses 2·exp(-x)/(1+exp(-x))² directly. The
+        // algebraic equivalence at x ≥ 0 holds only if both
+        // implementations are correct.
+        let hl = HalfLogistic;
+        let lg = Logistic::new(0.0, 1.0);
+        for &x in &[0.0_f64, 0.05, 0.5, 1.0, 2.5, 5.0, 10.0] {
+            assert_close(
+                hl.pdf(x),
+                2.0 * lg.pdf(x),
+                1e-12,
+                &format!("HalfLogistic.pdf({x}) vs 2·Logistic.pdf({x})"),
+            );
+            assert_close(
+                hl.cdf(x),
+                2.0 * lg.cdf(x) - 1.0,
+                1e-12,
+                &format!("HalfLogistic.cdf({x}) vs 2·Logistic.cdf({x}) − 1"),
+            );
+            assert_close(
+                hl.sf(x),
+                2.0 * lg.sf(x),
+                1e-12,
+                &format!("HalfLogistic.sf({x}) vs 2·Logistic.sf({x})"),
+            );
+        }
+    }
+
+    #[test]
     fn betaprime_is_beta_under_x_over_one_plus_x() {
         // /testing-metamorphic for [frankenscipy-2n31z]: textbook
         // identity BetaPrime(α, β) ≡ Beta(α, β) under Y = X/(1+X).
