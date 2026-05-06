@@ -6122,6 +6122,12 @@ impl ContinuousDistribution for HalfLogistic {
         // HalfLogistic mode = 0 (left edge of support) [frankenscipy-cxgdg].
         0.0
     }
+
+    fn entropy(&self) -> f64 {
+        // /mock-code-finder for [frankenscipy-8f97g]: scipy.stats.halflogistic
+        // reports differential entropy = 2 − ln(2) ≈ 1.30685.
+        2.0 - LN_2
+    }
 }
 
 /// Half-Cauchy distribution.
@@ -6194,6 +6200,13 @@ impl ContinuousDistribution for HalfCauchy {
     fn mode(&self) -> f64 {
         // HalfCauchy mode = 0 (left edge of support) [frankenscipy-cxgdg].
         0.0
+    }
+
+    fn entropy(&self) -> f64 {
+        // /mock-code-finder for [frankenscipy-8f97g]: scipy.stats.halfcauchy
+        // reports differential entropy = ln(2π) ≈ 1.83788. (mean and
+        // higher moments are NaN; only entropy has a closed form.)
+        (2.0 * PI).ln()
     }
 }
 
@@ -23758,6 +23771,28 @@ mod tests {
                 &format!("Beta(1,1).cdf({x}) vs Uniform(0,1).cdf"),
             );
         }
+    }
+
+    #[test]
+    fn halflogistic_entropy_matches_scipy() {
+        // /mock-code-finder for [frankenscipy-8f97g]:
+        //   scipy.stats.halflogistic.entropy() = 2 − ln(2) ≈ 1.3068528194400546
+        let dist = HalfLogistic;
+        assert_close(dist.entropy(), 2.0 - LN_2, 1e-15, "HalfLogistic.entropy");
+        assert!((dist.entropy() - 1.306_852_819_440_054_6).abs() < 1e-13);
+    }
+
+    #[test]
+    fn halfcauchy_entropy_matches_scipy() {
+        // /mock-code-finder for [frankenscipy-8f97g]:
+        //   scipy.stats.halfcauchy.entropy() = ln(2π) ≈ 1.8378770664093453
+        let dist = HalfCauchy;
+        assert_close(dist.entropy(), (2.0 * PI).ln(), 1e-15, "HalfCauchy.entropy");
+        assert!((dist.entropy() - 1.837_877_066_409_345_3).abs() < 1e-13);
+        // mean / var still NaN (no finite moments) — sanity-check that we
+        // didn't accidentally override them.
+        assert!(dist.mean().is_nan());
+        assert!(dist.var().is_nan());
     }
 
     #[test]
