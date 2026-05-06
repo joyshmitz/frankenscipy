@@ -5645,9 +5645,9 @@ impl ContinuousDistribution for HalfNormal {
         1.0 - 2.0 / PI
     }
 
-    fn fit(_data: &[f64]) -> Self {
-        Self
-    }
+    // fit() inherits the trait default (delegates to try_fit, panics on
+    // FitError). Resolves [frankenscipy-paejq]: previously fit silently
+    // accepted any data including negatives, while try_fit validated.
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         validate_parameterless_fit_data(data)?;
@@ -5704,9 +5704,7 @@ impl ContinuousDistribution for HalfLogistic {
         PI * PI / 3.0 - 4.0 * LN_2 * LN_2
     }
 
-    fn fit(_data: &[f64]) -> Self {
-        Self
-    }
+    // fit() inherits the trait default. Resolves [frankenscipy-paejq].
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         validate_parameterless_fit_data(data)?;
@@ -5761,9 +5759,7 @@ impl ContinuousDistribution for HalfCauchy {
         f64::NAN
     }
 
-    fn fit(_data: &[f64]) -> Self {
-        Self
-    }
+    // fit() inherits the trait default. Resolves [frankenscipy-paejq].
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         validate_parameterless_fit_data(data)?;
@@ -6966,9 +6962,7 @@ impl ContinuousDistribution for Semicircular {
         0.25 // 1/4
     }
 
-    fn fit(_data: &[f64]) -> Self {
-        Self
-    }
+    // fit() inherits the trait default. Resolves [frankenscipy-paejq].
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         validate_parameterless_fit_data(data)?;
@@ -7451,9 +7445,7 @@ impl ContinuousDistribution for Gilbrat {
         std::f64::consts::E * (std::f64::consts::E - 1.0) // e(e-1)
     }
 
-    fn fit(_data: &[f64]) -> Self {
-        Self
-    }
+    // fit() inherits the trait default. Resolves [frankenscipy-paejq].
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         validate_parameterless_fit_data(data)?;
@@ -8322,9 +8314,7 @@ impl ContinuousDistribution for Arcsine {
         0.125 // 1/8
     }
 
-    fn fit(_data: &[f64]) -> Self {
-        Self
-    }
+    // fit() inherits the trait default. Resolves [frankenscipy-paejq].
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         validate_parameterless_fit_data(data)?;
@@ -31981,6 +31971,58 @@ mod tests {
             HypSecant::try_fit(&[0.0, f64::NAN]),
             Err(FitError::UnsupportedData(_))
         ));
+    }
+
+    #[test]
+    fn parameterless_fit_panics_on_bad_data_for_six_more_distributions() {
+        // REVIEW MODE [LOW] regression for [frankenscipy-paejq]: extends
+        // 39a09ec/v6rct (HypSecant) — same fit-vs-try_fit asymmetry was
+        // present in 6 more parameterless distributions. After dropping
+        // the fit overrides, each should panic on data that try_fit would
+        // reject as out-of-support.
+        let bad_neg = [-0.5_f64];
+        for label in ["HalfNormal", "HalfLogistic", "HalfCauchy", "Gilbrat"] {
+            let panicked = match label {
+                "HalfNormal" => std::panic::catch_unwind(|| HalfNormal::fit(&bad_neg)).is_err(),
+                "HalfLogistic" => std::panic::catch_unwind(|| HalfLogistic::fit(&bad_neg)).is_err(),
+                "HalfCauchy" => std::panic::catch_unwind(|| HalfCauchy::fit(&bad_neg)).is_err(),
+                "Gilbrat" => std::panic::catch_unwind(|| Gilbrat::fit(&bad_neg)).is_err(),
+                _ => unreachable!(),
+            };
+            assert!(panicked, "{label}::fit on negative data must panic");
+        }
+        // Arcsine: out-of-[0,1] data must panic.
+        let arc_bad = [1.5_f64];
+        assert!(
+            std::panic::catch_unwind(|| Arcsine::fit(&arc_bad)).is_err(),
+            "Arcsine::fit on out-of-[0,1] data must panic"
+        );
+        // Semicircular: out-of-[-1,1] data must panic.
+        let sc_bad = [1.5_f64];
+        assert!(
+            std::panic::catch_unwind(|| Semicircular::fit(&sc_bad)).is_err(),
+            "Semicircular::fit on out-of-[-1,1] data must panic"
+        );
+        // Empty data must panic for all six.
+        for label in [
+            "HalfNormal",
+            "HalfLogistic",
+            "HalfCauchy",
+            "Arcsine",
+            "Semicircular",
+            "Gilbrat",
+        ] {
+            let panicked = match label {
+                "HalfNormal" => std::panic::catch_unwind(|| HalfNormal::fit(&[])).is_err(),
+                "HalfLogistic" => std::panic::catch_unwind(|| HalfLogistic::fit(&[])).is_err(),
+                "HalfCauchy" => std::panic::catch_unwind(|| HalfCauchy::fit(&[])).is_err(),
+                "Arcsine" => std::panic::catch_unwind(|| Arcsine::fit(&[])).is_err(),
+                "Semicircular" => std::panic::catch_unwind(|| Semicircular::fit(&[])).is_err(),
+                "Gilbrat" => std::panic::catch_unwind(|| Gilbrat::fit(&[])).is_err(),
+                _ => unreachable!(),
+            };
+            assert!(panicked, "{label}::fit on empty data must panic");
+        }
     }
 
     #[test]
