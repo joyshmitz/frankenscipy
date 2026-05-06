@@ -33413,6 +33413,106 @@ mod tests {
     }
 
     #[test]
+    fn trapezoid_uniform_limit_matches_uniform_closed_form() {
+        // /testing-golden-artifacts for [frankenscipy-uu6jt]:
+        // Trapezoid(c=0, d=1, loc, scale) is the Uniform distribution
+        // on [loc, loc+scale]. Pin pdf=1/scale, cdf(x)=(x-loc)/scale,
+        // mean=loc+scale/2, var=scale²/12.
+        let loc = 1.0_f64;
+        let scale = 4.0_f64;
+        let t = Trapezoid::new(0.0, 1.0, loc, scale);
+
+        // pdf at any interior point = 1/scale.
+        for &x in &[loc + 0.5, loc + 1.0, loc + 2.0, loc + 3.5] {
+            assert_close(t.pdf(x), 1.0 / scale, 1e-12, "Trapezoid uniform pdf");
+        }
+
+        // cdf linear in x.
+        for &q in &[0.0_f64, 0.25, 0.5, 0.75, 1.0] {
+            let x = loc + q * scale;
+            assert_close(t.cdf(x), q, 1e-12, &format!("Trapezoid uniform cdf at q={q}"));
+        }
+
+        assert_close(t.mean(), loc + 0.5 * scale, 1e-12, "Trapezoid uniform mean");
+        assert_close(t.var(), scale * scale / 12.0, 1e-12, "Trapezoid uniform var");
+    }
+
+    #[test]
+    fn trapezoid_triangular_limit_matches_triangular_closed_form() {
+        // Trapezoid(c=0.5, d=0.5, loc, scale) is the Triangular
+        // distribution with mode at loc + 0.5*scale.
+        //   peak height = 2/scale (since the flat-top shrinks to a point)
+        //   median = mode = loc + 0.5*scale
+        //   mean = loc + 0.5*scale (symmetric)
+        //   var = scale² / 24
+        let loc = -2.0_f64;
+        let scale = 6.0_f64;
+        let t = Trapezoid::new(0.5, 0.5, loc, scale);
+
+        // pdf at the mode (peak) = 2/scale.
+        let mode = loc + 0.5 * scale;
+        assert_close(t.pdf(mode), 2.0 / scale, 1e-12, "Trapezoid triangular peak");
+        // pdf decays linearly to 0 at the endpoints.
+        assert_close(t.pdf(loc + 1e-12 - 1e-12), 0.0, 1e-12, "Trapezoid triangular at left");
+        assert_close(t.pdf(loc), 0.0, 1e-12, "Trapezoid triangular at left endpoint");
+
+        // cdf at the mode = 0.5 (symmetric).
+        assert_close(t.cdf(mode), 0.5, 1e-12, "Trapezoid triangular cdf at mode");
+
+        assert_close(t.mean(), mode, 1e-12, "Trapezoid triangular mean = mode");
+        assert_close(t.var(), scale * scale / 24.0, 1e-12, "Trapezoid triangular var");
+    }
+
+    #[test]
+    fn trapezoid_pdf_at_flat_top_boundaries_equals_height() {
+        // For Trapezoid(c, d) with 0 < c ≤ d < 1, pdf is constant
+        // height = 2/(scale·(1+d-c)) on the flat top [loc + c·scale,
+        // loc + d·scale]. Pin pdf at both boundaries.
+        let cases: &[(f64, f64)] = &[(0.2, 0.8), (0.3, 0.7), (0.4, 0.6), (0.1, 0.9)];
+        let loc = 0.0_f64;
+        let scale = 2.0_f64;
+        for &(c, d) in cases {
+            let t = Trapezoid::new(c, d, loc, scale);
+            let height = 2.0 / (scale * (1.0 + d - c));
+            assert_close(
+                t.pdf(loc + c * scale),
+                height,
+                1e-12,
+                &format!("Trapezoid({c},{d}) pdf at left flat-top edge"),
+            );
+            assert_close(
+                t.pdf(loc + d * scale),
+                height,
+                1e-12,
+                &format!("Trapezoid({c},{d}) pdf at right flat-top edge"),
+            );
+        }
+    }
+
+    #[test]
+    fn trapezoid_ppf_cdf_roundtrip() {
+        // CDF(PPF(q)) = q across all three pdf branches (slope-up,
+        // flat-top, slope-down).
+        let cases: &[(f64, f64)] = &[(0.0, 1.0), (0.5, 0.5), (0.3, 0.7), (0.0, 0.5), (0.5, 1.0)];
+        let loc = 0.0_f64;
+        let scale = 1.0_f64;
+        let qs = [0.05_f64, 0.25, 0.5, 0.75, 0.95];
+        for &(c, d) in cases {
+            let t = Trapezoid::new(c, d, loc, scale);
+            for &q in &qs {
+                let x = t.ppf(q);
+                let r = t.cdf(x);
+                assert_close(
+                    r,
+                    q,
+                    1e-9,
+                    &format!("Trapezoid(c={c},d={d}) cdf(ppf({q})) = {r}, expected {q}"),
+                );
+            }
+        }
+    }
+
+    #[test]
     fn trapezoid_metamorphic_endpoint_invariants_and_pdf_integrates() {
         // /testing-metamorphic + /testing-conformance-harnesses for the
         // previously-untested Trapezoid distribution.
