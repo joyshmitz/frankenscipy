@@ -22362,6 +22362,51 @@ mod tests {
     }
 
     #[test]
+    fn lomax_is_pareto_shifted_by_one() {
+        // /testing-metamorphic regression for [frankenscipy-gnwtk]:
+        // Lomax (Pareto type II) is the textbook shift of Pareto
+        // type I by 1:
+        //   Lomax(c).pdf(x) = Pareto(c, scale=1).pdf(x + 1)
+        //   Lomax(c).cdf(x) = Pareto(c, scale=1).cdf(x + 1)
+        //   Lomax(c).sf(x)  = Pareto(c, scale=1).sf(x + 1)
+        // for x ≥ 0. Independent verification of both implementations:
+        // a normalization or sign error in either side would mismatch.
+        let shapes = [0.5_f64, 1.0, 2.0, 3.5, 7.0];
+        let xs = [0.0_f64, 0.1, 0.5, 1.0, 3.0, 10.0, 100.0];
+        for &c in &shapes {
+            let lomax = Lomax::new(c);
+            let pareto = Pareto::new(c, 1.0);
+            for &x in &xs {
+                let lp = lomax.pdf(x);
+                let pp = pareto.pdf(x + 1.0);
+                assert_close(
+                    lp,
+                    pp,
+                    1e-12 * pp.abs().max(1.0),
+                    &format!("Lomax(c={c}).pdf({x}) vs Pareto(c, 1).pdf({}+1)", x),
+                );
+
+                let lc = lomax.cdf(x);
+                let pc = pareto.cdf(x + 1.0);
+                assert_close(
+                    lc,
+                    pc,
+                    1e-12,
+                    &format!("Lomax(c={c}).cdf({x}) vs Pareto(c, 1).cdf({}+1)", x),
+                );
+
+                let ls = lomax.sf(x);
+                let ps = pareto.sf(x + 1.0);
+                let scale = ls.abs().max(ps.abs()).max(1.0);
+                assert!(
+                    (ls - ps).abs() < 1e-12 * scale,
+                    "Lomax(c={c}).sf({x}) = {ls} vs Pareto(c, 1).sf({x}+1) = {ps}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn hypsecant_pdf_cdf_match_scipy_reference_values() {
         let dist = HypSecant;
         let cases = [
