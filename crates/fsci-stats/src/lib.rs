@@ -4349,6 +4349,22 @@ impl ContinuousDistribution for Cauchy {
         0.5 + z.atan() / PI
     }
 
+    fn sf(&self, x: f64) -> f64 {
+        // Closed-form survival for [frankenscipy-ltdct]: for x > loc use
+        // the arctan reciprocal identity arctan(z) = π/2 - arctan(1/z)
+        // (z > 0) so sf = arctan(scale/(x-loc))/π. The default
+        // 1 - cdf collapses to 0 in the very deep tail (x ≈ loc + 1e30·scale)
+        // when cdf rounds to 1.0 — the closed form returns the actual value.
+        let dz = x - self.loc;
+        if dz > 0.0 {
+            (self.scale / dz).atan() / PI
+        } else {
+            // For x <= loc, the default 1 - cdf works fine because cdf is
+            // bounded away from 1; compute it explicitly.
+            0.5 - (dz / self.scale).atan() / PI
+        }
+    }
+
     fn ppf(&self, q: f64) -> f64 {
         if !(0.0..=1.0).contains(&q) {
             return f64::NAN;
@@ -22708,6 +22724,31 @@ mod tests {
         );
         for &x in &[-2.0_f64, 0.0, 1.0, 3.0] {
             assert_close(g.sf(x) + g.cdf(x), 1.0, 1e-12, "Gumbel sf + cdf = 1");
+        }
+    }
+
+    #[test]
+    fn cauchy_sf_preserves_deep_tail_precision() {
+        // REVIEW MODE [LOW] for [frankenscipy-ltdct]: extends h36zm/6uo0s
+        // sf-precision rotation to Cauchy. Deep right tail at x = 1e20·scale
+        // would collapse default 1-cdf to 0 (cdf rounds to 1.0); the
+        // closed form arctan(scale/(x-loc))/π preserves the value.
+        let c = Cauchy::new(0.0, 1.0);
+        let x = 1.0e20_f64;
+        let actual = c.sf(x);
+        let expected = (1.0_f64 / x).atan() / PI;
+        assert!(
+            actual > 0.0,
+            "Cauchy.sf(1e20) must be strictly positive, got {actual}"
+        );
+        let rel = (actual - expected).abs() / expected.abs();
+        assert!(
+            rel < 1e-12,
+            "Cauchy sf far right tail: got {actual}, expected {expected} (rel={rel})"
+        );
+        // sf + cdf = 1 near the centre.
+        for &x in &[-2.0_f64, 0.0, 1.0, 5.0] {
+            assert_close(c.sf(x) + c.cdf(x), 1.0, 1e-12, "Cauchy sf + cdf = 1");
         }
     }
 
