@@ -20438,7 +20438,12 @@ pub fn acf(data: &[f64], max_lag: usize) -> Vec<f64> {
         return vec![1.0];
     }
     let mean: f64 = data.iter().sum::<f64>() / n as f64;
-    let var: f64 = data.iter().map(|&v| (v - mean).powi(2)).sum();
+    // Resolves [frankenscipy-l9nh4]: pre-centre once instead of
+    // re-subtracting mean inside every lag's inner sum. Drops
+    // ~N·(max_lag+1) redundant subtractions (the autocorrelation pass
+    // in fsci-signal got this fix already; mirroring the pattern here).
+    let centered: Vec<f64> = data.iter().map(|&v| v - mean).collect();
+    let var: f64 = centered.iter().map(|&v| v * v).sum();
 
     if var == 0.0 {
         return vec![1.0; max_lag + 1];
@@ -20446,9 +20451,7 @@ pub fn acf(data: &[f64], max_lag: usize) -> Vec<f64> {
 
     (0..=max_lag.min(n - 1))
         .map(|lag| {
-            let sum: f64 = (0..n - lag)
-                .map(|i| (data[i] - mean) * (data[i + lag] - mean))
-                .sum();
+            let sum: f64 = (0..n - lag).map(|i| centered[i] * centered[i + lag]).sum();
             sum / var
         })
         .collect()
@@ -22504,6 +22507,55 @@ mod tests {
             Err(FitError::UnsupportedData(_)) => {}
             other => panic!("Lomax with negative sample -> UnsupportedData; got {other:?}"),
         }
+    }
+
+    #[test]
+    fn acf_centered_form_matches_naive_recompute() {
+        // /profiling-software-performance regression for
+        // [frankenscipy-l9nh4]: acf now pre-centers once instead of
+        // re-subtracting mean inside each lag's inner sum. Verify
+        // the optimized form produces identical lags vs. an explicit
+        // naïve implementation that recomputes at every lag.
+        fn naive_acf(data: &[f64], max_lag: usize) -> Vec<f64> {
+            let n = data.len();
+            if n < 2 {
+                return vec![1.0];
+            }
+            let mean: f64 = data.iter().sum::<f64>() / n as f64;
+            let var: f64 = data.iter().map(|&v| (v - mean).powi(2)).sum();
+            if var == 0.0 {
+                return vec![1.0; max_lag + 1];
+            }
+            (0..=max_lag.min(n - 1))
+                .map(|lag| {
+                    let sum: f64 = (0..n - lag)
+                        .map(|i| (data[i] - mean) * (data[i + lag] - mean))
+                        .sum();
+                    sum / var
+                })
+                .collect()
+        }
+
+        let series: Vec<f64> = (0..30)
+            .map(|i| {
+                let t = i as f64 * 0.1;
+                t.sin() + 0.3 * (1.7 * t).cos() - 0.5
+            })
+            .collect();
+        for &max_lag in &[0_usize, 5, 15] {
+            let opt = acf(&series, max_lag);
+            let nav = naive_acf(&series, max_lag);
+            assert_eq!(opt.len(), nav.len(), "acf length max_lag={max_lag}");
+            for (i, (&a, &b)) in opt.iter().zip(nav.iter()).enumerate() {
+                assert!(
+                    (a - b).abs() < 1e-12,
+                    "acf disagrees at lag {i}: optimized={a}, naive={b}"
+                );
+            }
+        }
+
+        // Constant input → all 1.0 (var == 0 branch).
+        assert_eq!(acf(&[5.0; 10], 4), vec![1.0; 5]);
     }
 
     #[test]
