@@ -2775,10 +2775,11 @@ impl ContinuousDistribution for HypSecant {
         PI * PI / 4.0
     }
 
-    fn fit(_data: &[f64]) -> Self {
-        // Standardized parameterless distribution; nothing to estimate.
-        Self
-    }
+    // fit() inherits the trait default which delegates to try_fit and
+    // panics on FitError. Resolves [frankenscipy-v6rct]: previously
+    // HypSecant.fit silently accepted any data (including NaN/empty)
+    // while HypSecant.try_fit validated, inverting the trait's
+    // panic-vs-Result contract.
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         validate_parameterless_fit_data(data)?;
@@ -31980,6 +31981,28 @@ mod tests {
             HypSecant::try_fit(&[0.0, f64::NAN]),
             Err(FitError::UnsupportedData(_))
         ));
+    }
+
+    #[test]
+    fn hypsecant_fit_panics_on_bad_data_consistent_with_try_fit() {
+        // /mock-code-finder regression for [frankenscipy-v6rct]:
+        // pre-fix HypSecant::fit accepted any data (including NaN/empty)
+        // while try_fit validated, inverting the trait contract. After
+        // dropping the override, fit inherits the default which delegates
+        // to try_fit and panics on FitError. Pin the symmetry.
+        // Good data: fit accepts.
+        assert_eq!(HypSecant::fit(&[0.0, 0.5, -0.5]), HypSecant);
+        // Bad data: fit panics (matching try_fit's typed error).
+        let panic_result = std::panic::catch_unwind(|| HypSecant::fit(&[]));
+        assert!(
+            panic_result.is_err(),
+            "HypSecant::fit on empty data must panic per trait contract"
+        );
+        let panic_nan = std::panic::catch_unwind(|| HypSecant::fit(&[0.0, f64::NAN]));
+        assert!(
+            panic_nan.is_err(),
+            "HypSecant::fit on NaN data must panic per trait contract"
+        );
     }
 
     #[test]
