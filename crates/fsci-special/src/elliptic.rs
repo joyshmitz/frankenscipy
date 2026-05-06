@@ -1336,7 +1336,7 @@ pub fn ellipj(u: f64, m: f64) -> (f64, f64, f64, f64) {
 ///   * `x > y > 0`: `RC(x, y) = arccosh(√(x/y)) / √(x − y)`
 ///   * `x = y > 0`: `RC(x, y) = 1 / √x`
 ///   * `y < 0`: Cauchy principal value via Carlson 1995 identity
-///       `RC(x, y) = √(x/(x − y)) · RC(x − y, −y)`. Always real.
+///     `RC(x, y) = √(x/(x − y)) · RC(x − y, −y)`. Always real.
 ///
 /// Resolves [frankenscipy-mxxij]; Cauchy-PV branch closes
 /// [frankenscipy-43vts].
