@@ -2914,6 +2914,44 @@ pub fn lp2lp_zpk(
     Ok((z_new, p_new, k_new))
 }
 
+/// Transform a lowpass filter prototype to a different cutoff frequency,
+/// in transfer-function (b, a) form.
+///
+/// Matches `scipy.signal.lp2lp(b, a, wo=1.0)`. Substitutes s → s/wo:
+///
+/// ```text
+///   B(s)/A(s) → B(s/wo)/A(s/wo)
+/// ```
+///
+/// Coefficient-wise: `new_b[i] = b[i] / wo^(n−1−i)`,
+/// `new_a[i] = a[i] / wo^(d−1−i)`, followed by normalization so
+/// `a[0] = 1`. Resolves [frankenscipy-xla38].
+pub fn lp2lp(b: &[f64], a: &[f64], wo: f64) -> Result<(Vec<f64>, Vec<f64>), SignalError> {
+    if !wo.is_finite() || wo <= 0.0 {
+        return Err(SignalError::InvalidArgument(
+            "wo must be positive finite".into(),
+        ));
+    }
+    if b.is_empty() || a.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "b and a must be non-empty".into(),
+        ));
+    }
+    let n = b.len();
+    let d = a.len();
+    let new_b: Vec<f64> = b
+        .iter()
+        .enumerate()
+        .map(|(i, &bi)| bi / wo.powi((n - 1 - i) as i32))
+        .collect();
+    let new_a: Vec<f64> = a
+        .iter()
+        .enumerate()
+        .map(|(i, &ai)| ai / wo.powi((d - 1 - i) as i32))
+        .collect();
+    normalize_filter(&new_b, &new_a)
+}
+
 /// Reject improper prototypes (more zeros than poles) — matches scipy's
 /// `_relative_degree` ValueError.
 fn check_proper_prototype(
@@ -16205,6 +16243,67 @@ mod tests {
             assert!((b.1 - a.1).abs() < 1e-12);
         }
         assert!((k2 - k).abs() < 1e-12);
+    }
+
+    #[test]
+    fn lp2lp_ba_identity_when_wo_is_one() {
+        // /porting-to-rust [frankenscipy-xla38]: wo=1 leaves (b, a)
+        // unchanged after normalization.
+        let b = [1.0_f64, 2.0];
+        let a = [3.0_f64, 4.0, 5.0];
+        let (nb, na) = lp2lp(&b, &a, 1.0).expect("lp2lp identity");
+        // After normalization a[0] = 1 → divide by 3.
+        for (got, want) in nb.iter().zip([1.0 / 3.0, 2.0 / 3.0].iter()) {
+            assert!((got - want).abs() < 1e-12);
+        }
+        for (got, want) in na.iter().zip([1.0, 4.0 / 3.0, 5.0 / 3.0].iter()) {
+            assert!((got - want).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn lp2lp_ba_first_order_substitution() {
+        // /porting-to-rust [frankenscipy-xla38]: H(s) = 1/(s+1) with
+        // wo=2 → 1/((s/2)+1) = 2/(s+2). After normalize a[0]=1:
+        // b=[2], a=[1, 2].
+        let (nb, na) = lp2lp(&[1.0], &[1.0, 1.0], 2.0).expect("lp2lp 1st order");
+        assert_eq!(nb.len(), 1);
+        assert_eq!(na.len(), 2);
+        assert!((nb[0] - 2.0).abs() < 1e-12);
+        assert!((na[0] - 1.0).abs() < 1e-12);
+        assert!((na[1] - 2.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn lp2lp_ba_second_order_substitution() {
+        // /porting-to-rust [frankenscipy-xla38]: B(s)/A(s) =
+        // (s + 2)/(s² + 3s + 4) with wo=2. Substituting s → s/2 and
+        // multiplying through by 4: (2s + 8)/(s² + 6s + 16). So
+        // b=[2, 8], a=[1, 6, 16].
+        let (nb, na) = lp2lp(&[1.0, 2.0], &[1.0, 3.0, 4.0], 2.0).expect("lp2lp 2nd order");
+        for (got, want) in nb.iter().zip([2.0, 8.0].iter()) {
+            assert!(
+                (got - want).abs() < 1e-12,
+                "b mismatch: got {got}, want {want}"
+            );
+        }
+        for (got, want) in na.iter().zip([1.0, 6.0, 16.0].iter()) {
+            assert!(
+                (got - want).abs() < 1e-12,
+                "a mismatch: got {got}, want {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn lp2lp_ba_rejects_invalid_wo() {
+        // /porting-to-rust [frankenscipy-xla38]: validation contract.
+        assert!(lp2lp(&[1.0], &[1.0], 0.0).is_err());
+        assert!(lp2lp(&[1.0], &[1.0], -1.0).is_err());
+        assert!(lp2lp(&[1.0], &[1.0], f64::NAN).is_err());
+        assert!(lp2lp(&[1.0], &[1.0], f64::INFINITY).is_err());
+        assert!(lp2lp(&[], &[1.0], 1.0).is_err());
+        assert!(lp2lp(&[1.0], &[], 1.0).is_err());
     }
 
     #[test]
