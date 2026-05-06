@@ -33707,6 +33707,71 @@ mod tests {
     }
 
     #[test]
+    fn fatigue_life_closed_form_anchors() {
+        // /testing-golden-artifacts for [frankenscipy-jodxb]: FatigueLife
+        // (Birnbaum-Saunders) had zero tests. Pin closed-form anchors.
+
+        // (1) cdf(0) = 0 and pdf(0) = 0 across multiple c.
+        for &c in &[0.1_f64, 0.5, 1.0, 2.0] {
+            let f = FatigueLife::new(c);
+            assert_eq!(f.cdf(0.0), 0.0);
+            assert_eq!(f.pdf(0.0), 0.0);
+            // (2) cdf(1) = 0.5 — at x=1, the z = (√1 - 1/√1)/c = 0,
+            // and Φ(0) = 0.5 universally across c.
+            assert_close(f.cdf(1.0), 0.5, 1e-12, &format!("FL(c={c}) cdf(1) = 0.5"));
+            // (3) ppf(0.5) = 1 (inverse).
+            assert_close(f.ppf(0.5), 1.0, 1e-9, &format!("FL(c={c}) ppf(0.5) = 1"));
+            // (4) mean closed form: 1 + c²/2.
+            assert_close(
+                f.mean(),
+                1.0 + 0.5 * c * c,
+                1e-12,
+                &format!("FL(c={c}) mean"),
+            );
+            // (5) var closed form: c² · (5c² + 4) / 4.
+            assert_close(
+                f.var(),
+                0.25 * c * c * (5.0 * c * c + 4.0),
+                1e-12,
+                &format!("FL(c={c}) var"),
+            );
+        }
+    }
+
+    #[test]
+    fn fatigue_life_ppf_cdf_roundtrip() {
+        for &c in &[0.25_f64, 0.5, 1.0, 2.5] {
+            let f = FatigueLife::new(c);
+            for &q in &[0.05_f64, 0.25, 0.5, 0.75, 0.95] {
+                let x = f.ppf(q);
+                let r = f.cdf(x);
+                assert_close(
+                    r,
+                    q,
+                    1e-9,
+                    &format!("FL(c={c}) cdf(ppf({q})) = {r}, expected {q}"),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fatigue_life_cdf_strictly_increasing() {
+        // The cdf must be strictly monotone on the (0, ∞) support.
+        let f = FatigueLife::new(0.5);
+        let xs: Vec<f64> = (1..=20).map(|k| 0.1 * k as f64).collect();
+        let mut prev = 0.0;
+        for &x in &xs {
+            let c = f.cdf(x);
+            assert!(
+                c > prev || (c == 0.0 && prev == 0.0),
+                "FL cdf must be monotone non-decreasing at x={x}: prev={prev}, cur={c}"
+            );
+            prev = c;
+        }
+    }
+
+    #[test]
     fn trapezoid_uniform_limit_matches_uniform_closed_form() {
         // /testing-golden-artifacts for [frankenscipy-uu6jt]:
         // Trapezoid(c=0, d=1, loc, scale) is the Uniform distribution
