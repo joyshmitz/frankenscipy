@@ -3122,6 +3122,68 @@ pub fn lp2bp(b: &[f64], a: &[f64], wo: f64, bw: f64) -> Result<(Vec<f64>, Vec<f6
     normalize_filter(&bprime, &aprime)
 }
 
+/// Transform a lowpass filter prototype to a bandstop filter, in
+/// transfer-function (b, a) form.
+///
+/// Matches `scipy.signal.lp2bs(b, a, wo=1.0, bw=1.0)`. Substitutes
+/// s → (s · bw) / (s² + wo²) — the wideband bandstop transformation.
+/// For input b of degree N and a of degree D with M = max(N, D),
+/// the output has degree 2M for both numerator and denominator.
+///
+/// Resolves [frankenscipy-9oqbs].
+pub fn lp2bs(b: &[f64], a: &[f64], wo: f64, bw: f64) -> Result<(Vec<f64>, Vec<f64>), SignalError> {
+    if !wo.is_finite() || wo <= 0.0 || !bw.is_finite() || bw <= 0.0 {
+        return Err(SignalError::InvalidArgument(
+            "wo and bw must be positive finite".into(),
+        ));
+    }
+    if b.is_empty() || a.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "b and a must be non-empty".into(),
+        ));
+    }
+    let big_n = b.len() - 1;
+    let big_d = a.len() - 1;
+    let m = big_n.max(big_d);
+    let np = 2 * m;
+    let wosq = wo * wo;
+
+    let mut bprime = vec![0.0_f64; np + 1];
+    let mut aprime = vec![0.0_f64; np + 1];
+
+    for j in 0..=np {
+        let mut val = 0.0_f64;
+        for i in 0..=big_n {
+            // k ranges 0..=M-i (always non-negative since i ≤ N ≤ M).
+            let k_max = m - i;
+            for k in 0..=k_max {
+                if i + 2 * k == j {
+                    val += binom_coeff_f64(m - i, k) * b[big_n - i]
+                        * wosq.powi((m - i - k) as i32)
+                        * bw.powi(i as i32);
+                }
+            }
+        }
+        bprime[np - j] = val;
+    }
+    for j in 0..=np {
+        let mut val = 0.0_f64;
+        for i in 0..=big_d {
+            let k_max = m - i;
+            for k in 0..=k_max {
+                if i + 2 * k == j {
+                    val += binom_coeff_f64(m - i, k) * a[big_d - i]
+                        * wosq.powi((m - i - k) as i32)
+                        * bw.powi(i as i32);
+                }
+            }
+        }
+        aprime[np - j] = val;
+    }
+
+    normalize_filter(&bprime, &aprime)
+}
+
 /// Reject improper prototypes (more zeros than poles) — matches scipy's
 /// `_relative_degree` ValueError.
 fn check_proper_prototype(
@@ -16696,6 +16758,65 @@ mod tests {
                 "a mismatch: got {got}, want {want}"
             );
         }
+    }
+
+    #[test]
+    fn lp2bs_ba_first_order_substitution() {
+        // /porting-to-rust [frankenscipy-9oqbs]: scipy reference
+        //   lp2bs([1], [1, 1], wo=2, bw=1) = b=[1, 0, 4], a=[1, 1, 4]
+        let (nb, na) = lp2bs(&[1.0], &[1.0, 1.0], 2.0, 1.0).expect("lp2bs 1st order");
+        for (got, want) in nb.iter().zip([1.0, 0.0, 4.0].iter()) {
+            assert!(
+                (got - want).abs() < 1e-12,
+                "b mismatch: got {got}, want {want}"
+            );
+        }
+        for (got, want) in na.iter().zip([1.0, 1.0, 4.0].iter()) {
+            assert!(
+                (got - want).abs() < 1e-12,
+                "a mismatch: got {got}, want {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn lp2bs_ba_second_order_substitution() {
+        // /porting-to-rust [frankenscipy-9oqbs]: scipy reference
+        //   lp2bs([1, 2], [1, 3, 4], wo=1.5, bw=0.5) =
+        //   b=[0.5, 0.125, 2.25, 0.28125, 2.53125]
+        //   a=[1, 0.375, 4.5625, 0.84375, 5.0625]
+        let (nb, na) =
+            lp2bs(&[1.0, 2.0], &[1.0, 3.0, 4.0], 1.5, 0.5).expect("lp2bs 2nd order");
+        for (got, want) in nb
+            .iter()
+            .zip([0.5, 0.125, 2.25, 0.281_25, 2.531_25].iter())
+        {
+            assert!(
+                (got - want).abs() < 1e-12,
+                "b mismatch: got {got}, want {want}"
+            );
+        }
+        for (got, want) in na
+            .iter()
+            .zip([1.0, 0.375, 4.5625, 0.843_75, 5.0625].iter())
+        {
+            assert!(
+                (got - want).abs() < 1e-12,
+                "a mismatch: got {got}, want {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn lp2bs_ba_rejects_invalid_args() {
+        // /porting-to-rust [frankenscipy-9oqbs]: validation contract.
+        assert!(lp2bs(&[1.0], &[1.0], 0.0, 1.0).is_err());
+        assert!(lp2bs(&[1.0], &[1.0], 1.0, 0.0).is_err());
+        assert!(lp2bs(&[1.0], &[1.0], -1.0, 1.0).is_err());
+        assert!(lp2bs(&[1.0], &[1.0], 1.0, f64::NAN).is_err());
+        assert!(lp2bs(&[1.0], &[1.0], f64::INFINITY, 1.0).is_err());
+        assert!(lp2bs(&[], &[1.0], 1.0, 1.0).is_err());
+        assert!(lp2bs(&[1.0], &[], 1.0, 1.0).is_err());
     }
 
     #[test]
