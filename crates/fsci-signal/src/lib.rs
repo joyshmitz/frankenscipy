@@ -625,6 +625,53 @@ pub fn convolve(a: &[f64], b: &[f64], mode: ConvolveMode) -> Result<Vec<f64>, Si
     }
 }
 
+/// Mode for cross-correlation output, used by [`correlation_lags`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CorrelationMode {
+    /// Full output of length `in1 + in2 - 1`.
+    Full,
+    /// Centered slice of the full output, of length `max(in1, in2)`.
+    Same,
+    /// Output only where the two arrays overlap fully.
+    Valid,
+}
+
+/// Return the lag indices used for the output of cross-correlation.
+///
+/// Matches `scipy.signal.correlation_lags(in1_len, in2_len, mode)`.
+/// Resolves [frankenscipy-r34vj].
+///
+/// * `Full`  — lags `−(in2 − 1) … in1 − 1`.
+/// * `Same`  — centered length-`max(in1, in2)` slice of the full lags.
+/// * `Valid` — lags where the two arrays fully overlap; either
+///             `0 … in1 − in2` (when `in1 >= in2`) or
+///             `in1 − in2 … 0` (when `in2 > in1`).
+pub fn correlation_lags(in1_len: usize, in2_len: usize, mode: CorrelationMode) -> Vec<i64> {
+    let n1 = in1_len as i64;
+    let n2 = in2_len as i64;
+    match mode {
+        CorrelationMode::Full => (-(n2 - 1)..n1).collect(),
+        CorrelationMode::Same => {
+            let full: Vec<i64> = (-(n2 - 1)..n1).collect();
+            let mid = full.len() / 2;
+            let lag_bound = in1_len / 2;
+            if in1_len % 2 == 0 {
+                full[mid - lag_bound..mid + lag_bound].to_vec()
+            } else {
+                full[mid - lag_bound..mid + lag_bound + 1].to_vec()
+            }
+        }
+        CorrelationMode::Valid => {
+            let lag_bound = n1 - n2;
+            if lag_bound >= 0 {
+                (0..=lag_bound).collect()
+            } else {
+                (lag_bound..=0).collect()
+            }
+        }
+    }
+}
+
 /// Deconvolve `divisor` out of `signal` using polynomial long division.
 ///
 /// Returns `(quotient, remainder)` such that
@@ -16398,6 +16445,50 @@ mod tests {
         assert!(lp2lp(&[1.0], &[1.0], f64::INFINITY).is_err());
         assert!(lp2lp(&[], &[1.0], 1.0).is_err());
         assert!(lp2lp(&[1.0], &[], 1.0).is_err());
+    }
+
+    #[test]
+    fn correlation_lags_matches_scipy() {
+        // /porting-to-rust [frankenscipy-r34vj]: scipy reference values.
+        // scipy.signal.correlation_lags(5, 3, 'full')  = [-2, -1, 0, 1, 2, 3, 4]
+        // scipy.signal.correlation_lags(5, 3, 'same')  = [-1, 0, 1, 2, 3]
+        // scipy.signal.correlation_lags(5, 3, 'valid') = [0, 1, 2]
+        // scipy.signal.correlation_lags(3, 5, 'valid') = [-2, -1, 0]
+        assert_eq!(
+            correlation_lags(5, 3, CorrelationMode::Full),
+            vec![-2, -1, 0, 1, 2, 3, 4]
+        );
+        assert_eq!(
+            correlation_lags(5, 3, CorrelationMode::Same),
+            vec![-1, 0, 1, 2, 3]
+        );
+        assert_eq!(
+            correlation_lags(5, 3, CorrelationMode::Valid),
+            vec![0, 1, 2]
+        );
+        // Reverse case: in2 > in1.
+        assert_eq!(
+            correlation_lags(3, 5, CorrelationMode::Valid),
+            vec![-2, -1, 0]
+        );
+        // Equal sizes:
+        // scipy.signal.correlation_lags(4, 4, 'same') = [-2, -1, 0, 1]
+        assert_eq!(
+            correlation_lags(4, 4, CorrelationMode::Same),
+            vec![-2, -1, 0, 1]
+        );
+        // scipy.signal.correlation_lags(5, 5, 'same') = [-2, -1, 0, 1, 2]
+        assert_eq!(
+            correlation_lags(5, 5, CorrelationMode::Same),
+            vec![-2, -1, 0, 1, 2]
+        );
+        // Output length sanity: Full = in1 + in2 - 1.
+        for &(n1, n2) in &[(1_usize, 1), (3, 7), (10, 4)] {
+            assert_eq!(
+                correlation_lags(n1, n2, CorrelationMode::Full).len(),
+                n1 + n2 - 1
+            );
+        }
     }
 
     #[test]
