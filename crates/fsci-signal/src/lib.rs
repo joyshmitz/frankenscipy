@@ -6652,6 +6652,45 @@ pub fn firwin2(
 ///
 /// # Returns
 /// `(numtaps, beta)` — Number of taps and Kaiser beta parameter.
+/// Compute the attenuation of a Kaiser FIR filter.
+///
+/// Matches `scipy.signal.kaiser_atten(numtaps, width)`. Returns the
+/// attenuation in dB given the number of taps and the normalized
+/// transition-band width: `atten = 2.285·(numtaps-1)·π·width + 7.95`.
+///
+/// Resolves [frankenscipy-ooa4k]; complement of [`kaiser_beta`] which
+/// goes the opposite direction (atten → beta).
+#[must_use]
+pub fn kaiser_atten(numtaps: usize, width: f64) -> f64 {
+    if numtaps == 0 {
+        return 7.95;
+    }
+    2.285 * (numtaps - 1) as f64 * std::f64::consts::PI * width + 7.95
+}
+
+/// Kaiser window β parameter from desired attenuation.
+///
+/// Matches `scipy.signal.kaiser_beta(a)` where `a` is the desired
+/// attenuation in dB (positive). Returns the empirical β:
+///
+/// ```text
+///   β = 0.1102·(a − 8.7)                          if a > 50
+///   β = 0.5842·(a − 21)^0.4 + 0.07886·(a − 21)    if 21 ≤ a ≤ 50
+///   β = 0.0                                        if a < 21
+/// ```
+///
+/// Resolves [frankenscipy-ooa4k].
+#[must_use]
+pub fn kaiser_beta(a: f64) -> f64 {
+    if a > 50.0 {
+        0.1102 * (a - 8.7)
+    } else if a >= 21.0 {
+        0.5842 * (a - 21.0).powf(0.4) + 0.07886 * (a - 21.0)
+    } else {
+        0.0
+    }
+}
+
 pub fn kaiserord(ripple: f64, width: f64) -> Result<(usize, f64), SignalError> {
     if !ripple.is_finite() || ripple <= 0.0 {
         return Err(SignalError::InvalidArgument(
@@ -12688,6 +12727,62 @@ mod tests {
         assert!(kaiserord(60.0, f64::NAN).is_err());
         assert!(kaiserord(f64::INFINITY, 0.1).is_err());
         assert!(kaiserord(60.0, f64::INFINITY).is_err());
+    }
+
+    #[test]
+    fn kaiser_atten_closed_form() {
+        // /porting-to-rust [frankenscipy-ooa4k]:
+        // atten(numtaps, width) = 2.285 · (numtaps − 1) · π · width + 7.95.
+        // numtaps = 1: zero-order term only → 7.95.
+        assert_close(kaiser_atten(1, 0.1), 7.95, 1e-12, "atten at numtaps=1");
+        // numtaps = 0 boundary: convention → 7.95.
+        assert_close(kaiser_atten(0, 0.1), 7.95, 1e-12, "atten at numtaps=0");
+        // Reference: numtaps=21, width=0.1.
+        let expected = 2.285 * 20.0 * std::f64::consts::PI * 0.1 + 7.95;
+        assert_close(kaiser_atten(21, 0.1), expected, 1e-12, "atten at 21,0.1");
+    }
+
+    #[test]
+    fn kaiser_beta_three_branch_closed_form() {
+        // a < 21: β = 0
+        assert_eq!(kaiser_beta(10.0), 0.0);
+        assert_eq!(kaiser_beta(20.99), 0.0);
+        // a in [21, 50]: 0.5842(a-21)^0.4 + 0.07886(a-21)
+        for &a in &[21.0_f64, 30.0, 40.0, 50.0] {
+            let expected = 0.5842 * (a - 21.0).powf(0.4) + 0.07886 * (a - 21.0);
+            assert_close(
+                kaiser_beta(a),
+                expected,
+                1e-12,
+                &format!("kaiser_beta({a}) middle branch"),
+            );
+        }
+        // a > 50: 0.1102 · (a - 8.7)
+        for &a in &[60.0_f64, 80.0, 100.0] {
+            assert_close(
+                kaiser_beta(a),
+                0.1102 * (a - 8.7),
+                1e-12,
+                &format!("kaiser_beta({a}) high branch"),
+            );
+        }
+    }
+
+    #[test]
+    fn kaiser_beta_consistent_with_kaiserord() {
+        // kaiserord internally uses the same beta formula; verify
+        // they agree on a range of attenuation values.
+        for &a in &[15.0_f64, 21.0, 30.0, 50.0, 60.0, 100.0] {
+            let beta_direct = kaiser_beta(a);
+            let (_taps, beta_via_kaiserord) =
+                kaiserord(a, 0.1).expect("kaiserord with reasonable args");
+            assert_close(
+                beta_direct,
+                beta_via_kaiserord,
+                1e-12,
+                &format!("kaiser_beta({a}) vs kaiserord"),
+            );
+        }
     }
 
     #[test]
