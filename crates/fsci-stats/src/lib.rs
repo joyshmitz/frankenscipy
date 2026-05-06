@@ -24108,6 +24108,39 @@ mod tests {
     }
 
     #[test]
+    fn gilbrat_is_lognormal_unit_unit() {
+        // /testing-metamorphic for [frankenscipy-97rpr]: textbook
+        // identity Gilbrat ≡ Lognormal(s=1, scale=1). Gilbrat is the
+        // parameterless lognormal at unit shape and scale.
+        // Independent verification across two distinct code paths:
+        // Gilbrat uses exp(-0.5·(ln x)²) / (x·√(2π)) directly and
+        // standard_normal_cdf for cdf; Lognormal uses
+        // (z = ln(x/scale)/s)·exp / (x·s·√(2π)) and erf_scalar.
+        let g = Gilbrat;
+        let ln = Lognormal::new(1.0, 1.0);
+        for &x in &[0.001_f64, 0.01, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 100.0] {
+            assert_close(
+                g.pdf(x),
+                ln.pdf(x),
+                1e-12,
+                &format!("Gilbrat.pdf({x}) vs Lognormal(1, 1).pdf({x})"),
+            );
+            assert_close(
+                g.cdf(x),
+                ln.cdf(x),
+                1e-12,
+                &format!("Gilbrat.cdf({x}) vs Lognormal(1, 1).cdf({x})"),
+            );
+            assert_close(
+                g.sf(x),
+                ln.sf(x),
+                1e-12,
+                &format!("Gilbrat.sf({x}) vs Lognormal(1, 1).sf({x})"),
+            );
+        }
+    }
+
+    #[test]
     fn genextreme_c0_is_gumbel() {
         // /testing-metamorphic for [frankenscipy-65eml]: textbook
         // identity GenExtreme(c=0) ≡ Gumbel(0, 1) — the standard
