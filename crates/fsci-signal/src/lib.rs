@@ -3137,6 +3137,20 @@ pub fn normalize_filter(b: &[f64], a: &[f64]) -> Result<(Vec<f64>, Vec<f64>), Si
             "denominator `a` must be non-empty".into(),
         ));
     }
+    // Reject non-finite coefficients up-front. Without this guard, NaN
+    // in `a` would slip past `v != 0.0` (NaN != 0 is true) and become
+    // the leading coefficient, propagating NaN through the normalized
+    // outputs with an Ok status — review-mode finding [n9ply].
+    if a.iter().any(|v| !v.is_finite()) {
+        return Err(SignalError::InvalidArgument(
+            "denominator `a` must contain only finite values".into(),
+        ));
+    }
+    if b.iter().any(|v| !v.is_finite()) {
+        return Err(SignalError::InvalidArgument(
+            "numerator `b` must contain only finite values".into(),
+        ));
+    }
     let first_nonzero = a
         .iter()
         .position(|&v| v != 0.0)
@@ -12741,6 +12755,20 @@ mod tests {
     #[test]
     fn normalize_filter_rejects_empty_a() {
         assert!(normalize_filter(&[1.0], &[]).is_err());
+    }
+
+    #[test]
+    fn normalize_filter_rejects_nonfinite_coefficients() {
+        // REVIEW MODE [LOW] regression for [frankenscipy-n9ply]:
+        // pre-fix the leading-zero scan `v != 0.0` returned true for
+        // NaN, so a leading NaN became the divisor and propagated
+        // NaN through the output with Ok status. Same for Inf.
+        assert!(normalize_filter(&[1.0], &[1.0, f64::NAN]).is_err());
+        assert!(normalize_filter(&[1.0], &[f64::NAN, 2.0]).is_err());
+        assert!(normalize_filter(&[1.0], &[1.0, f64::INFINITY]).is_err());
+        assert!(normalize_filter(&[1.0], &[f64::NEG_INFINITY, 1.0]).is_err());
+        assert!(normalize_filter(&[f64::NAN], &[1.0, 2.0]).is_err());
+        assert!(normalize_filter(&[f64::INFINITY], &[1.0]).is_err());
     }
 
     #[test]
