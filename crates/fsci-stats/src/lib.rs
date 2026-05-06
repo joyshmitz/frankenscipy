@@ -23395,6 +23395,43 @@ mod tests {
     }
 
     #[test]
+    fn maxwell_is_scaled_chi_df3() {
+        // /testing-metamorphic for [frankenscipy-p0gmv]: textbook
+        // identity Maxwell(scale=a) ≡ Chi(df=3) scaled by a:
+        //   Maxwell.pdf(x; a) = Chi(df=3).pdf(x/a) / a
+        //   Maxwell.cdf(x; a) = Chi(df=3).cdf(x/a)
+        //   Maxwell.sf(x; a)  = Chi(df=3).sf(x/a)
+        // Maxwell uses erf_scalar + closed form; Chi uses
+        // lower_regularized_gamma. A normalization or sign error on
+        // either side surfaces as a mismatch.
+        let chi = Chi::new(3.0);
+        for &a in &[0.5_f64, 1.0, 2.0, 7.5] {
+            let m = Maxwell::new(a);
+            for &x in &[0.0_f64, 0.1, 0.5, 1.0, 2.5, 5.0, 12.0] {
+                let z = x / a;
+                assert_close(
+                    m.pdf(x),
+                    chi.pdf(z) / a,
+                    1e-12,
+                    &format!("Maxwell({a}).pdf({x}) vs Chi(3).pdf({x}/{a}) / {a}"),
+                );
+                assert_close(
+                    m.cdf(x),
+                    chi.cdf(z),
+                    1e-9,
+                    &format!("Maxwell({a}).cdf({x}) vs Chi(3).cdf({x}/{a})"),
+                );
+                assert_close(
+                    m.sf(x),
+                    chi.sf(z),
+                    1e-9,
+                    &format!("Maxwell({a}).sf({x}) vs Chi(3).sf({x}/{a})"),
+                );
+            }
+        }
+    }
+
+    #[test]
     fn anglit_higher_moments_match_scipy() {
         // /mock-code-finder for [frankenscipy-a1kjq]: pin closed-form
         // skewness, excess kurtosis, and entropy. Values from
