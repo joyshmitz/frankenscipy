@@ -23395,6 +23395,61 @@ mod tests {
     }
 
     #[test]
+    fn levy_closed_form_anchors() {
+        // /testing-golden-artifacts for [frankenscipy-2ean2]: Levy had
+        // fit-side tests but no pdf/cdf/ppf/moment anchors.
+        //
+        //   cdf(loc + scale/2) = erfc(1)
+        //   cdf(loc + scale)   = erfc(1/√2)
+        //   pdf at loc         = 0  (boundary)
+        //   ppf(erfc(1))       = loc + scale/2  (inverse)
+        //   mean = +∞, var = +∞  (heavy tail)
+        let cases: &[(f64, f64)] = &[(0.0, 1.0), (-1.0, 2.0), (3.0, 0.5)];
+        for &(loc, scale) in cases {
+            let l = Levy::new(loc, scale);
+
+            // pdf at loc is 0 (left boundary of support).
+            assert_eq!(l.pdf(loc), 0.0, "Levy pdf at loc = 0");
+            // pdf below loc is also 0.
+            assert_eq!(l.pdf(loc - 1.0), 0.0, "Levy pdf below loc = 0");
+
+            // cdf at loc + scale/2.
+            let x_half = loc + scale / 2.0;
+            let cdf_half = l.cdf(x_half);
+            let expected_half = fsci_special::erfc_scalar(1.0);
+            assert_close(
+                cdf_half,
+                expected_half,
+                1e-12,
+                &format!("Levy({loc},{scale}).cdf(loc+scale/2) = erfc(1)"),
+            );
+
+            // cdf at loc + scale.
+            let cdf_one = l.cdf(loc + scale);
+            let expected_one = fsci_special::erfc_scalar(std::f64::consts::FRAC_1_SQRT_2);
+            assert_close(
+                cdf_one,
+                expected_one,
+                1e-12,
+                &format!("Levy({loc},{scale}).cdf(loc+scale) = erfc(1/√2)"),
+            );
+
+            // ppf(erfc(1)) = loc + scale/2 (inverse of the first identity).
+            let ppf_q = l.ppf(expected_half);
+            assert_close(
+                ppf_q,
+                x_half,
+                1e-9 * x_half.abs().max(1.0),
+                &format!("Levy({loc},{scale}).ppf(erfc(1)) = loc + scale/2"),
+            );
+
+            // Heavy-tail moments.
+            assert!(l.mean().is_infinite() && l.mean() > 0.0, "Levy mean = +∞");
+            assert!(l.var().is_infinite() && l.var() > 0.0, "Levy var = +∞");
+        }
+    }
+
+    #[test]
     fn levy_left_pdf_cdf_match_scipy_reference_values() {
         let dist = LevyLeft::default();
         let cases = [
