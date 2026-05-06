@@ -10337,6 +10337,16 @@ fn recover_payload_with_sidecar(
     sidecar: &RaptorQSidecar,
     drop_indices: &[usize],
 ) -> Result<Vec<u8>, HarnessError> {
+    // Reject zero symbol_size up front. RaptorQSidecar is serde-derived
+    // and may be loaded from an external JSON (raptorq_sidecar --verify),
+    // so a malformed/tampered file with symbol_size=0 would otherwise
+    // panic in chunk_payload (division by zero in div_ceil and chunks).
+    // Review-mode finding: typed error is the right surface here.
+    if sidecar.symbol_size == 0 {
+        return Err(HarnessError::RaptorQ(
+            "sidecar symbol_size must be non-zero".to_owned(),
+        ));
+    }
     let source_symbols = chunk_payload(payload, sidecar.symbol_size);
     let k = source_symbols.len();
     if k != sidecar.source_symbols {
@@ -18860,6 +18870,32 @@ mod tests {
         assert!(artifacts.report_path.exists());
         assert!(artifacts.sidecar_path.exists());
         assert!(artifacts.decode_proof_path.exists());
+    }
+
+    #[test]
+    fn recover_payload_with_sidecar_rejects_zero_symbol_size_sidecar() {
+        // REVIEW MODE [LOW] regression: RaptorQSidecar is serde-derived
+        // and may be loaded from external JSON. A tampered file with
+        // symbol_size=0 used to crash chunk_payload (div by zero). The
+        // fix returns a typed HarnessError before any panicky path.
+        let payload = b"any payload, doesn't matter";
+        let bogus_sidecar = super::RaptorQSidecar {
+            schema_version: 1,
+            source_hash: "0".repeat(64),
+            symbol_size: 0,
+            seed: 0,
+            source_symbols: 1,
+            repair_symbols: 0,
+            repair_symbol_hashes: Vec::new(),
+            repair_symbol_payloads_hex: Vec::new(),
+        };
+        let err = super::recover_payload_with_sidecar(payload, &bogus_sidecar, &[])
+            .expect_err("symbol_size=0 must be rejected, not panic");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("symbol_size"),
+            "error message should name the failed field; got {msg:?}"
+        );
     }
 
     #[test]
