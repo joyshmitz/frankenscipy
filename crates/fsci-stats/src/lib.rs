@@ -23812,6 +23812,47 @@ mod tests {
     }
 
     #[test]
+    fn betaprime_is_beta_under_x_over_one_plus_x() {
+        // /testing-metamorphic for [frankenscipy-2n31z]: textbook
+        // identity BetaPrime(α, β) ≡ Beta(α, β) under Y = X/(1+X).
+        //   cdf:  BetaPrime(a, b).cdf(x) = Beta(a, b).cdf(x/(1+x))
+        //   sf:   BetaPrime(a, b).sf(x)  = Beta(a, b).sf(x/(1+x))
+        //   pdf:  BetaPrime(a, b).pdf(x) = Beta(a, b).pdf(x/(1+x)) / (1+x)²
+        // Independent verification across two distinct implementations:
+        // BetaPrime.cdf and Beta.cdf both go through
+        // regularized_incomplete_beta but with different parameterization,
+        // and the pdf paths differ entirely.
+        let shapes = [(0.5_f64, 1.5), (1.0, 1.0), (2.0, 3.0), (5.0, 0.7)];
+        let xs = [0.001_f64, 0.1, 0.5, 1.0, 2.5, 10.0];
+        for (a, b) in shapes {
+            let bp = BetaDist::new(a, b);
+            let bprime = BetaPrime::new(a, b);
+            for x in xs {
+                let y = x / (1.0 + x);
+                let scale_pdf = (1.0 + x) * (1.0 + x);
+                assert_close(
+                    bprime.pdf(x),
+                    bp.pdf(y) / scale_pdf,
+                    1e-10 * bp.pdf(y).abs().max(1.0),
+                    &format!("BetaPrime({a},{b}).pdf({x}) vs Beta.pdf({y})/(1+{x})²"),
+                );
+                assert_close(
+                    bprime.cdf(x),
+                    bp.cdf(y),
+                    1e-10,
+                    &format!("BetaPrime({a},{b}).cdf({x}) vs Beta.cdf({y})"),
+                );
+                assert_close(
+                    bprime.sf(x),
+                    bp.sf(y),
+                    1e-10,
+                    &format!("BetaPrime({a},{b}).sf({x}) vs Beta.sf({y})"),
+                );
+            }
+        }
+    }
+
+    #[test]
     fn maxwell_is_scaled_chi_df3() {
         // /testing-metamorphic for [frankenscipy-p0gmv]: textbook
         // identity Maxwell(scale=a) ≡ Chi(df=3) scaled by a:
