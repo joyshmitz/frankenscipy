@@ -1175,6 +1175,11 @@ impl ContinuousDistribution for ChiSquared {
     fn kurtosis(&self) -> f64 {
         12.0 / self.df
     }
+
+    fn mode(&self) -> f64 {
+        // ChiSquared mode = max(df - 2, 0) [frankenscipy-cxgdg].
+        (self.df - 2.0).max(0.0)
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -2212,6 +2217,12 @@ impl ContinuousDistribution for Lognormal {
         let s2 = self.s * self.s;
         (4.0 * s2).exp() + 2.0 * (3.0 * s2).exp() + 3.0 * (2.0 * s2).exp() - 6.0
     }
+
+    fn mode(&self) -> f64 {
+        // Lognormal mode = scale · exp(-s²) = exp(μ - σ²) where
+        // μ = ln(scale), σ = s [frankenscipy-cxgdg].
+        self.scale * (-self.s * self.s).exp()
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -2334,6 +2345,11 @@ impl ContinuousDistribution for Pareto {
             data.len() as f64 / log_sum
         };
         Ok(Self { b, scale })
+    }
+
+    fn mode(&self) -> f64 {
+        // Pareto mode = scale (lower endpoint of support) [frankenscipy-cxgdg].
+        self.scale
     }
 }
 
@@ -2538,6 +2554,11 @@ impl ContinuousDistribution for Rayleigh {
             ));
         }
         Ok(fitted)
+    }
+
+    fn mode(&self) -> f64 {
+        // Rayleigh mode = scale [frankenscipy-cxgdg].
+        self.scale
     }
 }
 
@@ -2744,6 +2765,11 @@ impl ContinuousDistribution for GumbelLeft {
             ));
         }
         Ok(fitted)
+    }
+
+    fn mode(&self) -> f64 {
+        // GumbelLeft mode = loc [frankenscipy-cxgdg].
+        self.loc
     }
 }
 
@@ -3031,6 +3057,11 @@ impl ContinuousDistribution for Maxwell {
             ));
         }
         Ok(fitted)
+    }
+
+    fn mode(&self) -> f64 {
+        // Maxwell mode = scale · √2 [frankenscipy-cxgdg].
+        self.scale * std::f64::consts::SQRT_2
     }
 }
 
@@ -5875,6 +5906,11 @@ impl ContinuousDistribution for HalfNormal {
         }
         Ok(Self)
     }
+
+    fn mode(&self) -> f64 {
+        // HalfNormal mode = 0 (left edge of support) [frankenscipy-cxgdg].
+        0.0
+    }
 }
 
 /// Half-logistic distribution.
@@ -5932,6 +5968,11 @@ impl ContinuousDistribution for HalfLogistic {
         }
         Ok(Self)
     }
+
+    fn mode(&self) -> f64 {
+        // HalfLogistic mode = 0 (left edge of support) [frankenscipy-cxgdg].
+        0.0
+    }
 }
 
 /// Half-Cauchy distribution.
@@ -5986,6 +6027,11 @@ impl ContinuousDistribution for HalfCauchy {
             ));
         }
         Ok(Self)
+    }
+
+    fn mode(&self) -> f64 {
+        // HalfCauchy mode = 0 (left edge of support) [frankenscipy-cxgdg].
+        0.0
     }
 }
 
@@ -33787,6 +33833,34 @@ mod tests {
         assert_eq!(entropy(&[], None), 0.0);
         // Negative probability → −∞ sentinel (out-of-domain).
         assert!(entropy(&[-0.5_f64, 1.5], None).is_infinite());
+    }
+
+    #[test]
+    fn nine_distributions_now_have_closed_form_mode() {
+        // /modes-of-reasoning [frankenscipy-cxgdg]: pin closed-form
+        // mode for the 9 distributions that previously inherited the
+        // trait-default NaN. Independent of any test harness — these
+        // anchors guard the mode against regressions.
+        assert_close(ChiSquared::new(5.0).mode(), 3.0, 1e-12, "ChiSquared mode = max(df-2, 0)");
+        assert_close(ChiSquared::new(1.0).mode(), 0.0, 1e-12, "ChiSquared mode lower clamp");
+        // Lognormal mode = scale · exp(-s²); for s=1, scale=e: mode = e · e^-1 = 1.
+        let ln = Lognormal {
+            s: 1.0,
+            scale: std::f64::consts::E,
+        };
+        assert_close(ln.mode(), 1.0, 1e-12, "Lognormal mode");
+        assert_close(Pareto::new(2.0, 3.0).mode(), 3.0, 1e-12, "Pareto mode = scale");
+        assert_close(Rayleigh::new(2.5).mode(), 2.5, 1e-12, "Rayleigh mode = scale");
+        assert_close(GumbelLeft::new(-1.5, 2.0).mode(), -1.5, 1e-12, "GumbelLeft mode = loc");
+        assert_close(
+            Maxwell::new(1.0).mode(),
+            std::f64::consts::SQRT_2,
+            1e-12,
+            "Maxwell mode = scale·√2",
+        );
+        assert_close(HalfNormal.mode(), 0.0, 1e-12, "HalfNormal mode = 0");
+        assert_close(HalfLogistic.mode(), 0.0, 1e-12, "HalfLogistic mode = 0");
+        assert_close(HalfCauchy.mode(), 0.0, 1e-12, "HalfCauchy mode = 0");
     }
 
     #[test]
