@@ -915,6 +915,11 @@ impl ContinuousDistribution for StudentT {
             f64::NAN
         }
     }
+
+    fn mode(&self) -> f64 {
+        // StudentT mode = 0 (symmetric around origin) [frankenscipy-71mv5].
+        0.0
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -1765,6 +1770,18 @@ impl ContinuousDistribution for BetaDist {
         let num = 6.0 * ((a - b).powi(2) * (ab + 1.0) - a * b * (ab + 2.0));
         let den = a * b * (ab + 2.0) * (ab + 3.0);
         num / den
+    }
+
+    fn mode(&self) -> f64 {
+        // BetaDist mode = (a-1)/(a+b-2) for a > 1 and b > 1
+        // [frankenscipy-71mv5]. Outside this regime the mode is at a
+        // boundary (0 or 1) or the pdf has no interior maximum;
+        // return NaN to match the trait-default contract for such cases.
+        if self.a > 1.0 && self.b > 1.0 {
+            (self.a - 1.0) / (self.a + self.b - 2.0)
+        } else {
+            f64::NAN
+        }
     }
 }
 
@@ -4980,6 +4997,12 @@ impl ContinuousDistribution for InverseGamma {
             )));
         }
         Ok(Self { a })
+    }
+
+    fn mode(&self) -> f64 {
+        // InverseGamma mode = scale / (a + 1); fsci-stats uses unit scale,
+        // so mode = 1 / (a + 1) [frankenscipy-71mv5].
+        1.0 / (self.a + 1.0)
     }
 }
 
@@ -31450,8 +31473,11 @@ mod tests {
 
     #[test]
     fn dist_mode_default_nan() {
-        let t = StudentT::new(5.0);
-        assert!(t.mode().is_nan(), "StudentT mode should be NaN");
+        // Distributions that do NOT override mode() inherit the trait
+        // default returning NaN. After 71mv5 StudentT now has its own
+        // override; pick a distribution that still inherits the default.
+        let t = Trapezoid::new(0.3, 0.7, 1.0, 4.0);
+        assert!(t.mode().is_nan(), "Trapezoid mode should still be NaN (no override)");
     }
 
     // ── Interval tests ───────────────────────────────────────────────────
@@ -33833,6 +33859,31 @@ mod tests {
         assert_eq!(entropy(&[], None), 0.0);
         // Negative probability → −∞ sentinel (out-of-domain).
         assert!(entropy(&[-0.5_f64, 1.5], None).is_infinite());
+    }
+
+    #[test]
+    fn three_more_distributions_have_closed_form_mode() {
+        // /modes-of-reasoning extension [frankenscipy-71mv5].
+        // StudentT mode = 0.
+        assert_close(StudentT::new(5.0).mode(), 0.0, 1e-12, "StudentT mode = 0");
+        // BetaDist(a=3, b=2): mode = (3-1)/(3+2-2) = 2/3.
+        assert_close(
+            BetaDist::new(3.0, 2.0).mode(),
+            2.0 / 3.0,
+            1e-12,
+            "BetaDist mode = (a-1)/(a+b-2)",
+        );
+        // BetaDist(a=1, b=1): mode = NaN (uniform; no interior peak).
+        assert!(BetaDist::new(1.0, 1.0).mode().is_nan(), "BetaDist a=b=1 mode is NaN");
+        // BetaDist(a=0.5, b=2): mode = NaN (a < 1, pdf diverges at 0).
+        assert!(BetaDist::new(0.5, 2.0).mode().is_nan(), "BetaDist a<1 mode is NaN");
+        // InverseGamma(a=2): mode = 1/(2+1) = 1/3.
+        assert_close(
+            InverseGamma::new(2.0).mode(),
+            1.0 / 3.0,
+            1e-12,
+            "InverseGamma mode = 1/(a+1)",
+        );
     }
 
     #[test]
