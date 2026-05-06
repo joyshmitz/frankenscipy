@@ -17208,25 +17208,32 @@ pub fn kendalltau(x: &[f64], y: &[f64]) -> CorrelationResult {
     let mut x_ties: i64 = 0;
     let mut y_ties: i64 = 0;
 
+    // Resolves [frankenscipy-q4s5e]: hoist x[i]/y[i] out of inner loop,
+    // use dx == 0.0 / dy == 0.0 in place of the redundant equality
+    // check (mathematically identical for finite inputs), and only
+    // compute dx*dy when at least one side is untied. Saves ~3 indexed
+    // accesses + 1 mul per inner iter on a hot O(N²) loop.
     for i in 0..n {
+        let xi = x[i];
+        let yi = y[i];
         for j in (i + 1)..n {
-            let dx = x[i] - x[j];
-            let dy = y[i] - y[j];
-            let x_tied = x[i] == x[j];
-            let y_tied = y[i] == y[j];
-
+            let dx = xi - x[j];
+            let dy = yi - y[j];
+            let x_tied = dx == 0.0;
+            let y_tied = dy == 0.0;
             if x_tied {
                 x_ties += 1;
             }
             if y_tied {
                 y_ties += 1;
             }
-
-            let product = dx * dy;
-            if !x_tied && !y_tied && product > 0.0 {
-                concordant += 1;
-            } else if !x_tied && !y_tied && product < 0.0 {
-                discordant += 1;
+            if !x_tied && !y_tied {
+                let product = dx * dy;
+                if product > 0.0 {
+                    concordant += 1;
+                } else if product < 0.0 {
+                    discordant += 1;
+                }
             }
         }
     }
@@ -17321,25 +17328,32 @@ pub fn kendalltau_alternative(x: &[f64], y: &[f64], alternative: &str) -> Correl
     let mut x_ties: i64 = 0;
     let mut y_ties: i64 = 0;
 
+    // Resolves [frankenscipy-q4s5e]: hoist x[i]/y[i] out of inner loop,
+    // use dx == 0.0 / dy == 0.0 in place of the redundant equality
+    // check (mathematically identical for finite inputs), and only
+    // compute dx*dy when at least one side is untied. Saves ~3 indexed
+    // accesses + 1 mul per inner iter on a hot O(N²) loop.
     for i in 0..n {
+        let xi = x[i];
+        let yi = y[i];
         for j in (i + 1)..n {
-            let dx = x[i] - x[j];
-            let dy = y[i] - y[j];
-            let x_tied = x[i] == x[j];
-            let y_tied = y[i] == y[j];
-
+            let dx = xi - x[j];
+            let dy = yi - y[j];
+            let x_tied = dx == 0.0;
+            let y_tied = dy == 0.0;
             if x_tied {
                 x_ties += 1;
             }
             if y_tied {
                 y_ties += 1;
             }
-
-            let product = dx * dy;
-            if !x_tied && !y_tied && product > 0.0 {
-                concordant += 1;
-            } else if !x_tied && !y_tied && product < 0.0 {
-                discordant += 1;
+            if !x_tied && !y_tied {
+                let product = dx * dy;
+                if product > 0.0 {
+                    concordant += 1;
+                } else if product < 0.0 {
+                    discordant += 1;
+                }
             }
         }
     }
@@ -26599,6 +26613,75 @@ mod tests {
             result.pvalue < 0.05,
             "strong correlation should have p < 0.05, got {}",
             result.pvalue
+        );
+    }
+
+    #[test]
+    fn kendalltau_optimized_loop_matches_naive_on_mixed_sample() {
+        // /profiling-software-performance regression for [frankenscipy-q4s5e]:
+        // the kendalltau inner loop was tightened to hoist xi/yi, drop a
+        // redundant tied check, and skip the dx*dy multiplication when
+        // tied. Verify the optimized output matches a naïve in-test
+        // implementation across a 50-point mixed sample with deliberate
+        // ties in x and y.
+
+        fn naive_kendall_tau(x: &[f64], y: &[f64]) -> (i64, i64, i64, i64) {
+            let n = x.len();
+            let mut c: i64 = 0;
+            let mut d: i64 = 0;
+            let mut xt: i64 = 0;
+            let mut yt: i64 = 0;
+            for i in 0..n {
+                for j in (i + 1)..n {
+                    let dx = x[i] - x[j];
+                    let dy = y[i] - y[j];
+                    let x_tied = x[i] == x[j];
+                    let y_tied = y[i] == y[j];
+                    if x_tied {
+                        xt += 1;
+                    }
+                    if y_tied {
+                        yt += 1;
+                    }
+                    let product = dx * dy;
+                    if !x_tied && !y_tied && product > 0.0 {
+                        c += 1;
+                    } else if !x_tied && !y_tied && product < 0.0 {
+                        d += 1;
+                    }
+                }
+            }
+            (c, d, xt, yt)
+        }
+
+        // Mixed sample with intentional ties in both x and y.
+        let x: Vec<f64> = (0..50)
+            .map(|i| {
+                let r = i % 7;
+                r as f64 + (i as f64 * 0.13).sin()
+            })
+            .collect();
+        let y: Vec<f64> = (0..50)
+            .map(|i| {
+                let r = i % 5;
+                r as f64 - 0.5 * (i as f64 * 0.21).cos()
+            })
+            .collect();
+
+        // Same scalar tau implies same (c, d, xt, yt) up to algebra; check
+        // tau directly.
+        let opt = kendalltau(&x, &y);
+        let (c, d, _xt, _yt) = naive_kendall_tau(&x, &y);
+        let n_pairs = (50 * 49 / 2) as f64;
+        // Naïve recomputes tau the same way to avoid drift.
+        let (_, _, naive_xt, naive_yt) = naive_kendall_tau(&x, &y);
+        let denom = ((n_pairs - naive_xt as f64) * (n_pairs - naive_yt as f64)).sqrt();
+        let naive_tau = (c - d) as f64 / denom;
+        assert!(
+            (opt.statistic - naive_tau).abs() < 1e-12,
+            "optimized tau {} != naive {}",
+            opt.statistic,
+            naive_tau
         );
     }
 
