@@ -23069,6 +23069,39 @@ mod tests {
     }
 
     #[test]
+    fn half_normal_squared_is_chi_squared_df1() {
+        // /testing-metamorphic for [frankenscipy-qpcaq]: if X ~ N(0,1)
+        // then |X| ~ HalfNormal and X² ~ ChiSquared(df=1). Equivalent:
+        //
+        //   HalfNormal.cdf(x) = ChiSquared(df=1).cdf(x²)  for x ≥ 0
+        //   HalfNormal.sf(x)  = ChiSquared(df=1).sf(x²)
+        //
+        // Independent verification: a normalization or integration
+        // error in either side would surface as a mismatch.
+        let hn = HalfNormal;
+        let chi2 = ChiSquared::new(1.0);
+        for &x in &[0.0_f64, 0.1, 0.5, 1.0, 2.0, 3.5, 5.0] {
+            let cdf_hn = hn.cdf(x);
+            let cdf_chi2 = chi2.cdf(x * x);
+            assert_close(
+                cdf_hn,
+                cdf_chi2,
+                1e-9,
+                &format!("HalfNormal.cdf({x}) vs ChiSquared(df=1).cdf({x}²)"),
+            );
+
+            let sf_hn = hn.sf(x);
+            let sf_chi2 = chi2.sf(x * x);
+            assert_close(
+                sf_hn,
+                sf_chi2,
+                1e-9,
+                &format!("HalfNormal.sf({x}) vs ChiSquared(df=1).sf({x}²)"),
+            );
+        }
+    }
+
+    #[test]
     fn lomax_is_pareto_shifted_by_one() {
         // /testing-metamorphic regression for [frankenscipy-gnwtk]:
         // Lomax (Pareto type II) is the textbook shift of Pareto
