@@ -10411,8 +10411,14 @@ pub fn generate_decode_proof_artifact(
     payload: &[u8],
     sidecar: &RaptorQSidecar,
 ) -> Result<DecodeProofArtifact, HarnessError> {
-    let recovered_blocks = 1;
-    let recovered = recover_payload_with_sidecar(payload, sidecar, &[0])?;
+    // Single source of truth for which symbols we drop and how many
+    // we recover. Previously the count was a magic constant (= 1)
+    // separately defined from the drop_indices slice; a future refactor
+    // bumping the drops without the count would silently produce a
+    // misleading DecodeProofArtifact. Review-mode finding [byfq8].
+    let drop_indices: &[usize] = &[0];
+    let recovered_blocks = drop_indices.len();
+    let recovered = recover_payload_with_sidecar(payload, sidecar, drop_indices)?;
     let proof_hash = hash(&recovered).to_hex().to_string();
     let expected_hash = hash(payload).to_hex().to_string();
     if proof_hash != expected_hash {
@@ -10423,7 +10429,10 @@ pub fn generate_decode_proof_artifact(
 
     Ok(DecodeProofArtifact {
         ts_unix_ms: now_unix_ms(),
-        reason: format!("recovered from simulated corruption of {recovered_blocks} block"),
+        reason: format!(
+            "recovered from simulated corruption of {recovered_blocks} block{}",
+            if recovered_blocks == 1 { "" } else { "s" },
+        ),
         recovered_blocks,
         proof_hash,
     })
@@ -18870,6 +18879,34 @@ mod tests {
         assert!(artifacts.report_path.exists());
         assert!(artifacts.sidecar_path.exists());
         assert!(artifacts.decode_proof_path.exists());
+    }
+
+    #[test]
+    fn generate_decode_proof_artifact_recovered_blocks_matches_drop_count() {
+        // REVIEW MODE [LOW] regression: recovered_blocks used to be a
+        // magic constant separately maintained from drop_indices. After
+        // the fix it's derived from drop_indices.len(), so the public
+        // API's recovered_blocks always reflects what was actually
+        // dropped+recovered. Pin the contract: a single-block drop
+        // produces recovered_blocks == 1 and a singular reason string.
+        let payload: Vec<u8> = (0..2048u32)
+            .flat_map(|i| (i as u16).to_le_bytes())
+            .collect();
+        let sidecar = super::generate_raptorq_sidecar(&payload).expect("sidecar");
+        let proof = super::generate_decode_proof_artifact(&payload, &sidecar)
+            .expect("decode proof should succeed on a fresh sidecar");
+        assert_eq!(
+            proof.recovered_blocks, 1,
+            "default decode-proof drops one block"
+        );
+        assert!(
+            proof.reason.contains("1 block"),
+            "reason should be singular for 1 block, got {:?}",
+            proof.reason
+        );
+        // proof_hash equals payload hash (the recovery round-trip).
+        let expected = super::hash(&payload).to_hex().to_string();
+        assert_eq!(proof.proof_hash, expected, "decode-proof hash must round-trip");
     }
 
     #[test]
