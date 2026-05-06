@@ -23192,6 +23192,36 @@ mod tests {
     }
 
     #[test]
+    fn chi_squared_df2_is_exponential_scale_2() {
+        // /testing-metamorphic for [frankenscipy-wlsd1]: textbook identity
+        // ChiSquared(df=2) and Exponential(rate=1/2 = scale=2) are
+        // identically distributed — both have pdf (1/2)·exp(-x/2) for
+        // x ≥ 0. Pin pdf/cdf/sf agreement at multiple x.
+        let chi2 = ChiSquared::new(2.0);
+        let exp = Exponential::from_scale(2.0);
+        for &x in &[0.0_f64, 0.1, 0.5, 1.0, 2.0, 3.5, 5.0, 10.0] {
+            assert_close(
+                chi2.pdf(x),
+                exp.pdf(x),
+                1e-12,
+                &format!("ChiSquared(df=2).pdf({x}) vs Exponential(scale=2).pdf({x})"),
+            );
+            assert_close(
+                chi2.cdf(x),
+                exp.cdf(x),
+                1e-12,
+                &format!("ChiSquared(df=2).cdf({x}) vs Exponential(scale=2).cdf({x})"),
+            );
+            assert_close(
+                chi2.sf(x),
+                exp.sf(x),
+                1e-12,
+                &format!("ChiSquared(df=2).sf({x}) vs Exponential(scale=2).sf({x})"),
+            );
+        }
+    }
+
+    #[test]
     fn chi_df1_is_half_normal() {
         // /testing-metamorphic for [frankenscipy-qla9y]: Chi(df=1) is
         // identically HalfNormal — both have pdf √(2/π)·exp(-x²/2) on
