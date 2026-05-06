@@ -8204,8 +8204,23 @@ impl Burr12 {
 
 impl ContinuousDistribution for Burr12 {
     fn pdf(&self, x: f64) -> f64 {
-        if x <= 0.0 {
+        // /mock-code-finder boundary [frankenscipy-27u2d]: at x=0 the
+        // formula c·d·x^(c-1)/(1+x^c)^(d+1) has a c-dependent limit:
+        //   c < 1 → +∞   (x^(c-1) diverges)
+        //   c = 1 → d    (x^0 = 1, denom → 1)
+        //   c > 1 → 0    (x^(c-1) vanishes)
+        // scipy.stats.burr12 reports inf/d/0 in those regimes.
+        if x < 0.0 {
             return 0.0;
+        }
+        if x == 0.0 {
+            return if self.c < 1.0 {
+                f64::INFINITY
+            } else if self.c == 1.0 {
+                self.d
+            } else {
+                0.0
+            };
         }
         let c = self.c;
         let d = self.d;
@@ -8276,8 +8291,23 @@ impl LogLaplace {
 
 impl ContinuousDistribution for LogLaplace {
     fn pdf(&self, x: f64) -> f64 {
-        if x <= 0.0 {
+        // /mock-code-finder boundary [frankenscipy-27u2d]: at x=0 the
+        // formula (c/2)·x^(c-1) has a c-dependent limit:
+        //   c < 1 → +∞   (x^(c-1) diverges)
+        //   c = 1 → 1/2  (x^0 = 1)
+        //   c > 1 → 0    (x^(c-1) vanishes)
+        // scipy.stats.loglaplace reports inf/0.5/0 in those regimes.
+        if x < 0.0 {
             return 0.0;
+        }
+        if x == 0.0 {
+            return if self.c < 1.0 {
+                f64::INFINITY
+            } else if self.c == 1.0 {
+                0.5
+            } else {
+                0.0
+            };
         }
         let c = self.c;
         if x < 1.0 {
@@ -23506,6 +23536,52 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn burr12_pdf_boundary_matches_scipy() {
+        // /mock-code-finder regression for [frankenscipy-27u2d]:
+        // burr12.pdf at x=0 is 0/d/+∞ depending on shape c per scipy.
+        assert!(
+            Burr12::new(0.5, 2.0).pdf(0.0).is_infinite() && Burr12::new(0.5, 2.0).pdf(0.0) > 0.0,
+            "Burr12(c<1).pdf(0) = +∞"
+        );
+        assert_close(
+            Burr12::new(1.0, 3.5).pdf(0.0),
+            3.5,
+            1e-12,
+            "Burr12(c=1, d=3.5).pdf(0) = d",
+        );
+        assert_close(
+            Burr12::new(2.0, 3.0).pdf(0.0),
+            0.0,
+            1e-12,
+            "Burr12(c>1).pdf(0) = 0",
+        );
+        assert_eq!(Burr12::new(2.0, 3.0).pdf(-0.1), 0.0);
+    }
+
+    #[test]
+    fn loglaplace_pdf_boundary_matches_scipy() {
+        // /mock-code-finder regression for [frankenscipy-27u2d]:
+        // loglaplace.pdf at x=0 is 0/0.5/+∞ depending on shape c.
+        assert!(
+            LogLaplace::new(0.5).pdf(0.0).is_infinite() && LogLaplace::new(0.5).pdf(0.0) > 0.0,
+            "LogLaplace(c<1).pdf(0) = +∞"
+        );
+        assert_close(
+            LogLaplace::new(1.0).pdf(0.0),
+            0.5,
+            1e-12,
+            "LogLaplace(c=1).pdf(0) = 1/2",
+        );
+        assert_close(
+            LogLaplace::new(2.0).pdf(0.0),
+            0.0,
+            1e-12,
+            "LogLaplace(c>1).pdf(0) = 0",
+        );
+        assert_eq!(LogLaplace::new(2.0).pdf(-0.1), 0.0);
     }
 
     #[test]
