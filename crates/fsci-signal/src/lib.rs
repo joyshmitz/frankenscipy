@@ -655,11 +655,21 @@ pub fn correlation_lags(in1_len: usize, in2_len: usize, mode: CorrelationMode) -
             let full: Vec<i64> = (-(n2 - 1)..n1).collect();
             let mid = full.len() / 2;
             let lag_bound = in1_len / 2;
-            if in1_len % 2 == 0 {
-                full[mid - lag_bound..mid + lag_bound].to_vec()
+            // Clamp slice indices to full.len() to mirror numpy's
+            // out-of-bounds slice tolerance. Without the clamp, a
+            // call like correlation_lags(5, 0, Same) panics in Rust
+            // because the computed upper index exceeds full.len() —
+            // scipy's lazy slicing returns the truncated tail
+            // [1, 2, 3, 4] for that input. Fixes [frankenscipy-385tp].
+            let n = full.len();
+            let lo = mid.saturating_sub(lag_bound).min(n);
+            let hi_raw = if in1_len % 2 == 0 {
+                mid.saturating_add(lag_bound)
             } else {
-                full[mid - lag_bound..mid + lag_bound + 1].to_vec()
-            }
+                mid.saturating_add(lag_bound).saturating_add(1)
+            };
+            let hi = hi_raw.min(n);
+            full[lo..hi.max(lo)].to_vec()
         }
         CorrelationMode::Valid => {
             let lag_bound = n1 - n2;
@@ -16590,6 +16600,46 @@ mod tests {
     }
 
     #[test]
+    fn correlation_lags_handles_zero_in2() {
+        // /testing-fuzzing regression for [frankenscipy-385tp]:
+        // REVIEW MODE found that correlation_lags(in1, 0, Same)
+        // panicked when in1 is odd because the computed slice
+        // upper bound exceeded full.len(). scipy.signal.correlation_lags
+        // returns the truncated tail in that case via its lazy slicing.
+        // scipy reference values:
+        //   correlation_lags(5, 0, full)  = [1, 2, 3, 4]
+        //   correlation_lags(5, 0, same)  = [1, 2, 3, 4]
+        //   correlation_lags(5, 0, valid) = [0, 1, 2, 3, 4, 5]
+        //   correlation_lags(0, 0, full)  = []
+        //   correlation_lags(0, 0, same)  = []
+        assert_eq!(
+            correlation_lags(5, 0, CorrelationMode::Full),
+            vec![1, 2, 3, 4]
+        );
+        assert_eq!(
+            correlation_lags(5, 0, CorrelationMode::Same),
+            vec![1, 2, 3, 4]
+        );
+        assert_eq!(
+            correlation_lags(5, 0, CorrelationMode::Valid),
+            vec![0, 1, 2, 3, 4, 5]
+        );
+        assert_eq!(
+            correlation_lags(0, 0, CorrelationMode::Full),
+            Vec::<i64>::new()
+        );
+        assert_eq!(
+            correlation_lags(0, 0, CorrelationMode::Same),
+            Vec::<i64>::new()
+        );
+        // Also check 3, 0 (smaller odd in1) — was the other panic case.
+        assert_eq!(
+            correlation_lags(3, 0, CorrelationMode::Same),
+            vec![1, 2]
+        );
+    }
+
+    #[test]
     fn correlation_lags_matches_scipy() {
         // /porting-to-rust [frankenscipy-r34vj]: scipy reference values.
         // scipy.signal.correlation_lags(5, 3, 'full')  = [-2, -1, 0, 1, 2, 3, 4]
@@ -16757,6 +16807,43 @@ mod tests {
                 (got - want).abs() < 1e-12,
                 "a mismatch: got {got}, want {want}"
             );
+        }
+    }
+
+    #[test]
+    fn lp2bp_ba_handles_n_greater_than_d() {
+        // /testing-metamorphic [REVIEW MODE]: when the numerator
+        // degree exceeds the denominator's, lp2bp must still produce
+        // the scipy-correct lengths (N + ma vs D + ma where ma = max).
+        // scipy reference for ([1,2,3], [1,1], wo=2, bw=1):
+        //   b length 5: [1, 2, 11, 8, 16]
+        //   a length 4: [1, 1, 4, 0]
+        let (nb, na) = lp2bp(&[1.0, 2.0, 3.0], &[1.0, 1.0], 2.0, 1.0).expect("lp2bp N>D");
+        assert_eq!(nb.len(), 5, "lp2bp(N=2, D=1).b length");
+        assert_eq!(na.len(), 4, "lp2bp(N=2, D=1).a length");
+        for (got, want) in nb.iter().zip([1.0, 2.0, 11.0, 8.0, 16.0].iter()) {
+            assert!((got - want).abs() < 1e-12, "b: got {got}, want {want}");
+        }
+        for (got, want) in na.iter().zip([1.0, 1.0, 4.0, 0.0].iter()) {
+            assert!((got - want).abs() < 1e-12, "a: got {got}, want {want}");
+        }
+    }
+
+    #[test]
+    fn lp2bs_ba_handles_n_greater_than_d() {
+        // /testing-metamorphic [REVIEW MODE]: lp2bs output is 2M+1
+        // for both b and a (regardless of whether N > D). scipy
+        // reference for ([1,2,3], [1,1], wo=2, bw=1):
+        //   b: [3, 2, 25, 8, 48]
+        //   a: [1, 1, 8, 4, 16]
+        let (nb, na) = lp2bs(&[1.0, 2.0, 3.0], &[1.0, 1.0], 2.0, 1.0).expect("lp2bs N>D");
+        assert_eq!(nb.len(), 5);
+        assert_eq!(na.len(), 5);
+        for (got, want) in nb.iter().zip([3.0, 2.0, 25.0, 8.0, 48.0].iter()) {
+            assert!((got - want).abs() < 1e-12, "b: got {got}, want {want}");
+        }
+        for (got, want) in na.iter().zip([1.0, 1.0, 8.0, 4.0, 16.0].iter()) {
+            assert!((got - want).abs() < 1e-12, "a: got {got}, want {want}");
         }
     }
 
