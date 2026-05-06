@@ -23965,6 +23965,45 @@ mod tests {
     }
 
     #[test]
+    fn rayleigh_is_scaled_chi_df2() {
+        // /testing-metamorphic for [frankenscipy-sgq66]: textbook
+        // identity Rayleigh(σ) ≡ Chi(df=2) scaled by σ:
+        //   Rayleigh.pdf(x; σ) = Chi(df=2).pdf(x/σ) / σ
+        //   Rayleigh.cdf(x; σ) = Chi(df=2).cdf(x/σ)
+        //   Rayleigh.sf(x; σ)  = Chi(df=2).sf(x/σ)
+        // Same scaled-Chi pattern as Maxwell ≡ Chi(df=3) (5b6261e).
+        // Independent verification: Rayleigh uses closed-form
+        // (x/σ²)·exp(-x²/(2σ²)) and exp/exp_m1 for cdf/sf, while
+        // Chi.cdf goes through lower_regularized_gamma. A normalization
+        // or sign error on either side surfaces as a mismatch.
+        let chi = Chi::new(2.0);
+        for &sigma in &[0.5_f64, 1.0, 2.0, 7.5] {
+            let r = Rayleigh::new(sigma);
+            for &x in &[0.0_f64, 0.1, 0.5, 1.0, 2.5, 5.0, 12.0] {
+                let z = x / sigma;
+                assert_close(
+                    r.pdf(x),
+                    chi.pdf(z) / sigma,
+                    1e-12,
+                    &format!("Rayleigh({sigma}).pdf({x}) vs Chi(2).pdf({x}/{sigma}) / {sigma}"),
+                );
+                assert_close(
+                    r.cdf(x),
+                    chi.cdf(z),
+                    1e-9,
+                    &format!("Rayleigh({sigma}).cdf({x}) vs Chi(2).cdf({x}/{sigma})"),
+                );
+                assert_close(
+                    r.sf(x),
+                    chi.sf(z),
+                    1e-9,
+                    &format!("Rayleigh({sigma}).sf({x}) vs Chi(2).sf({x}/{sigma})"),
+                );
+            }
+        }
+    }
+
+    #[test]
     fn maxwell_is_scaled_chi_df3() {
         // /testing-metamorphic for [frankenscipy-p0gmv]: textbook
         // identity Maxwell(scale=a) ≡ Chi(df=3) scaled by a:
