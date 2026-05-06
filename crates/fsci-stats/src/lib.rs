@@ -20180,6 +20180,94 @@ impl ContinuousDistribution for BetaPrime {
     }
 }
 
+/// Exponential power distribution with shape `b`.
+///
+/// Matches `scipy.stats.exponpow(b)`. Resolves [frankenscipy-5q0ap].
+/// Support: x ≥ 0; b > 0. Note: this is NOT the generalized-normal
+/// distribution (which is `scipy.stats.gennorm` / `GenNorm` here).
+///
+///   pdf(x) = b · x^(b-1) · exp(1 + x^b − exp(x^b))
+///   cdf(x) = 1 − exp(1 − exp(x^b))
+///   sf(x)  = exp(1 − exp(x^b))
+///   ppf(q) = (ln(1 − ln(1 − q)))^(1/b)
+///
+/// Boundary at x=0 is shape-dependent: b<1 → ∞, b=1 → 1, b>1 → 0.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ExponPow {
+    pub b: f64,
+}
+
+impl ExponPow {
+    #[must_use]
+    pub fn new(b: f64) -> Self {
+        assert!(b > 0.0 && b.is_finite(), "b must be positive and finite");
+        Self { b }
+    }
+}
+
+impl ContinuousDistribution for ExponPow {
+    fn pdf(&self, x: f64) -> f64 {
+        if x < 0.0 {
+            return 0.0;
+        }
+        if x == 0.0 {
+            return if self.b < 1.0 {
+                f64::INFINITY
+            } else if self.b == 1.0 {
+                1.0
+            } else {
+                0.0
+            };
+        }
+        let xb = x.powf(self.b);
+        // logpdf = 1 + ln(b) + (b-1)·ln(x) + xb − exp(xb)
+        let log_pdf = 1.0 + self.b.ln() + (self.b - 1.0) * x.ln() + xb - xb.exp();
+        log_pdf.exp()
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        // 1 − exp(1 − exp(x^b)) via -expm1(-expm1(xb))
+        let xb = x.powf(self.b);
+        -((-(xb.exp_m1())).exp_m1())
+    }
+
+    fn sf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 1.0;
+        }
+        // exp(1 − exp(x^b)) = exp(-expm1(x^b))
+        (-x.powf(self.b).exp_m1()).exp()
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return 0.0;
+        }
+        if q == 1.0 {
+            return f64::INFINITY;
+        }
+        // ppf(q) = (ln(1 − ln(1 − q)))^(1/b)
+        // Use ln_1p for numerical stability near q≈0 and q≈1.
+        let inner = (-(1.0_f64 - q).ln()).ln_1p();
+        inner.powf(1.0 / self.b)
+    }
+
+    fn mean(&self) -> f64 {
+        // No clean closed form — leave as inherited NaN.
+        f64::NAN
+    }
+
+    fn var(&self) -> f64 {
+        f64::NAN
+    }
+}
+
 /// Exponentiated Weibull distribution.
 ///
 /// Matches `scipy.stats.exponweib`.
@@ -24102,6 +24190,81 @@ mod tests {
                 assert!(
                     (recovered - x).abs() < 1e-10 * scale,
                     "SkewCauchy({a}).ppf(cdf({x})) = {recovered}, want {x}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn exponpow_pdf_cdf_match_scipy() {
+        // /porting-to-rust [frankenscipy-5q0ap]: scipy reference values.
+        let pdf_cases = [
+            // (b, x, expected_pdf)
+            (0.5, 0.1, 1.495_454_882_790_225_4),
+            (0.5, 0.5, 0.512_947_493_582_394_7),
+            (0.5, 1.0, 0.243_794_649_359_630_5),
+            (1.0, 0.1, 0.994_842_428_107_309_5),
+            (1.0, 1.0, 0.487_589_298_719_261_04),
+            (2.0, 0.5, 0.966_546_937_903_597_4),
+            (2.0, 1.0, 0.975_178_597_438_522_2),
+        ];
+        for (b, x, want) in pdf_cases {
+            assert_close(
+                ExponPow::new(b).pdf(x),
+                want,
+                1e-12,
+                &format!("ExponPow({b}).pdf({x})"),
+            );
+        }
+        let cdf_cases = [
+            (0.5, 0.1, 0.310_606_257_701_966_4),
+            (0.5, 1.0, 0.820_625_921_265_982_8),
+            (1.0, 1.0, 0.820_625_921_265_982_8),
+            (2.0, 0.5, 0.247_252_487_885_409_88),
+            (2.0, 1.0, 0.820_625_921_265_982_8),
+        ];
+        for (b, x, want) in cdf_cases {
+            assert_close(
+                ExponPow::new(b).cdf(x),
+                want,
+                1e-12,
+                &format!("ExponPow({b}).cdf({x})"),
+            );
+        }
+    }
+
+    #[test]
+    fn exponpow_pdf_boundary_matches_scipy() {
+        // /porting-to-rust [frankenscipy-5q0ap]: shape-dependent
+        // boundary at x=0. b<1 → ∞; b=1 → 1; b>1 → 0.
+        assert!(
+            ExponPow::new(0.5).pdf(0.0).is_infinite() && ExponPow::new(0.5).pdf(0.0) > 0.0
+        );
+        assert_close(ExponPow::new(1.0).pdf(0.0), 1.0, 1e-12, "ExponPow(1).pdf(0) = 1");
+        assert_close(ExponPow::new(2.0).pdf(0.0), 0.0, 1e-12, "ExponPow(2).pdf(0) = 0");
+        // x outside support
+        assert_eq!(ExponPow::new(2.0).pdf(-0.1), 0.0);
+    }
+
+    #[test]
+    fn exponpow_ppf_inverts_cdf() {
+        // /porting-to-rust [frankenscipy-5q0ap]: round-trip on the
+        // interior of the support. The cdf saturates very rapidly
+        // (cdf(2; b=2) ≈ 1 to ~1 ulp), so the ppf can't recover x
+        // there — that's a numerical limit of any closed-form inverse.
+        for &b in &[0.5_f64, 1.0, 2.0, 3.5] {
+            let dist = ExponPow::new(b);
+            // Choose probes where cdf stays comfortably below saturation.
+            for &x in &[0.05_f64, 0.25, 0.5, 0.9] {
+                let q = dist.cdf(x);
+                if q >= 1.0 - 1e-12 {
+                    continue;
+                }
+                let recovered = dist.ppf(q);
+                let scale = x.abs().max(1.0);
+                assert!(
+                    (recovered - x).abs() < 1e-10 * scale,
+                    "ExponPow({b}).ppf(cdf({x})) = {recovered}, want {x}"
                 );
             }
         }
