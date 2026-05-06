@@ -2242,6 +2242,30 @@ impl ContinuousDistribution for Pareto {
         };
         Self { b, scale }
     }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        // [frankenscipy-covaj]: typed-error counterpart to fit().
+        // Pareto MLE: scale = min(data), b = N / Σ ln(x_i / scale).
+        if data.is_empty() {
+            return Err(FitError::InsufficientData {
+                required: 1,
+                actual: 0,
+            });
+        }
+        if data.iter().any(|&x| !x.is_finite() || x <= 0.0) {
+            return Err(FitError::UnsupportedData(
+                "Pareto fit requires positive finite samples".into(),
+            ));
+        }
+        let scale = data.iter().copied().fold(f64::INFINITY, f64::min);
+        let log_sum = data.iter().map(|&x| (x / scale).ln()).sum::<f64>();
+        let b = if log_sum == 0.0 {
+            f64::INFINITY
+        } else {
+            data.len() as f64 / log_sum
+        };
+        Ok(Self { b, scale })
+    }
 }
 
 /// Lomax distribution.
@@ -2328,6 +2352,30 @@ impl ContinuousDistribution for Lomax {
             return Self { c: f64::NAN };
         }
         Self { c: n / log_sum }
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        // [frankenscipy-covaj]: typed-error counterpart to fit().
+        // Lomax MLE: c = N / Σ ln(1 + x_i).
+        if data.is_empty() {
+            return Err(FitError::InsufficientData {
+                required: 1,
+                actual: 0,
+            });
+        }
+        if data.iter().any(|v| !v.is_finite() || *v < 0.0) {
+            return Err(FitError::UnsupportedData(
+                "Lomax fit requires non-negative finite samples".into(),
+            ));
+        }
+        let n = data.len() as f64;
+        let log_sum: f64 = data.iter().map(|&x| (1.0 + x).ln()).sum();
+        if log_sum <= 0.0 {
+            return Err(FitError::NonConvergent(
+                "Lomax fit: ln(1+x) sum is non-positive (degenerate sample)".into(),
+            ));
+        }
+        Ok(Self { c: n / log_sum })
     }
 }
 
@@ -2623,6 +2671,32 @@ impl ContinuousDistribution for Logistic {
             loc: mean,
             scale: var.sqrt() * 3.0_f64.sqrt() / PI,
         }
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        // [frankenscipy-covaj]: previously inherited the trait-default
+        // try_fit which returned NotImplemented even though fit() had a
+        // working method-of-moments closed form. Surface typed errors
+        // to non-panicking callers without touching fit() (which keeps
+        // its existing NaN-on-bad-input behavior for back-compat).
+        if data.is_empty() {
+            return Err(FitError::InsufficientData {
+                required: 1,
+                actual: 0,
+            });
+        }
+        if data.iter().any(|x| !x.is_finite()) {
+            return Err(FitError::UnsupportedData(
+                "Logistic fit requires all-finite samples".into(),
+            ));
+        }
+        let n = data.len() as f64;
+        let mean = data.iter().sum::<f64>() / n;
+        let var = data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / n;
+        Ok(Self {
+            loc: mean,
+            scale: var.sqrt() * 3.0_f64.sqrt() / PI,
+        })
     }
 
     fn entropy(&self) -> f64 {
@@ -22359,6 +22433,77 @@ mod tests {
         );
         // Below 0: sf = 1.
         assert_eq!(lomax.sf(-1.0), 1.0, "Lomax sf below 0 = 1");
+    }
+
+    #[test]
+    fn logistic_pareto_lomax_try_fit_returns_real_fit_not_not_implemented() {
+        // /mock-code-finder regression for [frankenscipy-covaj]: each
+        // distribution has a working fit() but used to inherit the
+        // trait-default try_fit returning NotImplemented. After the
+        // fix, try_fit must surface a real fit (or a typed error for
+        // bad input) rather than NotImplemented.
+
+        // Logistic: method-of-moments on a synthetic sample around loc=2.
+        let logistic_sample: Vec<f64> = (0..100)
+            .map(|i| {
+                // CDF inverse at evenly spaced quantiles to seed a clean fit.
+                let q = (i as f64 + 0.5) / 100.0;
+                2.0 + 0.5 * (q / (1.0 - q)).ln()
+            })
+            .collect();
+        let log_fit = <Logistic as ContinuousDistribution>::try_fit(&logistic_sample)
+            .expect("Logistic try_fit must succeed on clean sample");
+        assert!(
+            (log_fit.loc - 2.0).abs() < 0.05,
+            "Logistic try_fit loc {}, expected ~2.0",
+            log_fit.loc
+        );
+
+        // Pareto: MLE on samples drawn from Pareto(b=2, scale=1).
+        // Sample x_i = scale / (1 - q_i)^(1/b).
+        let pareto_sample: Vec<f64> = (0..100)
+            .map(|i| {
+                let q = (i as f64 + 0.5) / 100.0;
+                1.0 / (1.0 - q).powf(0.5)
+            })
+            .collect();
+        let par_fit = <Pareto as ContinuousDistribution>::try_fit(&pareto_sample)
+            .expect("Pareto try_fit must succeed on clean sample");
+        assert!(
+            par_fit.scale > 0.0 && par_fit.b > 0.0,
+            "Pareto try_fit produced positive params: b={}, scale={}",
+            par_fit.b,
+            par_fit.scale
+        );
+
+        // Lomax: MLE on samples drawn from Lomax(c=3).
+        let lomax_sample: Vec<f64> = (0..100)
+            .map(|i| {
+                let q = (i as f64 + 0.5) / 100.0;
+                (1.0 - q).powf(-1.0 / 3.0) - 1.0
+            })
+            .collect();
+        let lom_fit = <Lomax as ContinuousDistribution>::try_fit(&lomax_sample)
+            .expect("Lomax try_fit must succeed on clean sample");
+        assert!(
+            lom_fit.c > 0.0 && lom_fit.c.is_finite(),
+            "Lomax try_fit produced finite positive c: {}",
+            lom_fit.c
+        );
+
+        // Typed errors instead of panics on bad input.
+        match <Logistic as ContinuousDistribution>::try_fit(&[]) {
+            Err(FitError::InsufficientData { .. }) => {}
+            other => panic!("Logistic empty -> InsufficientData; got {other:?}"),
+        }
+        match <Pareto as ContinuousDistribution>::try_fit(&[1.0, -2.0]) {
+            Err(FitError::UnsupportedData(_)) => {}
+            other => panic!("Pareto with non-positive sample -> UnsupportedData; got {other:?}"),
+        }
+        match <Lomax as ContinuousDistribution>::try_fit(&[-1.0]) {
+            Err(FitError::UnsupportedData(_)) => {}
+            other => panic!("Lomax with negative sample -> UnsupportedData; got {other:?}"),
+        }
     }
 
     #[test]
