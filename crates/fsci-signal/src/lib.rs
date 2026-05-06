@@ -1985,9 +1985,20 @@ pub fn vectorstrength(events: &[f64], period: f64) -> (f64, f64) {
     let two_pi = 2.0 * std::f64::consts::PI;
     let n = events.len() as f64;
 
-    // Phase of each event in the cycle
-    let sin_sum: f64 = events.iter().map(|&t| (two_pi * t / period).sin()).sum();
-    let cos_sum: f64 = events.iter().map(|&t| (two_pi * t / period).cos()).sum();
+    // Single-pass accumulation using sin_cos() so the argument
+    // reduction `two_pi · t / period` is computed once per event and
+    // both trig values share it. Resolves [frankenscipy-51bzs]:
+    // pre-fix vectorstrength iterated events twice and computed the
+    // phase angle twice per event.
+    let inv_period = 1.0 / period;
+    let mut sin_sum = 0.0_f64;
+    let mut cos_sum = 0.0_f64;
+    for &t in events {
+        let angle = two_pi * t * inv_period;
+        let (s, c) = angle.sin_cos();
+        sin_sum += s;
+        cos_sum += c;
+    }
 
     let r = (sin_sum * sin_sum + cos_sum * cos_sum).sqrt() / n;
 
@@ -12831,6 +12842,44 @@ mod tests {
     }
 
     // ── unique_roots tests ──────────────────────────────────────────
+
+    #[test]
+    fn vectorstrength_single_pass_matches_naive_dual_pass() {
+        // /profiling-software-performance regression for [frankenscipy-51bzs]:
+        // vectorstrength now uses a single-pass loop with sin_cos() instead
+        // of two iter passes computing sin and cos separately. Verify the
+        // optimized form against an explicit naïve in-test implementation
+        // on a 50-event sample.
+
+        fn naive_vectorstrength(events: &[f64], period: f64) -> (f64, f64) {
+            if events.is_empty() || period <= 0.0 || !period.is_finite() {
+                return (0.0, 1.0);
+            }
+            let two_pi = 2.0 * std::f64::consts::PI;
+            let n = events.len() as f64;
+            let sin_sum: f64 = events.iter().map(|&t| (two_pi * t / period).sin()).sum();
+            let cos_sum: f64 = events.iter().map(|&t| (two_pi * t / period).cos()).sum();
+            let r = (sin_sum * sin_sum + cos_sum * cos_sum).sqrt() / n;
+            let p = (-n * r * r).exp();
+            (r, p.clamp(0.0, 1.0))
+        }
+
+        let events: Vec<f64> = (0..50)
+            .map(|i| (i as f64 * 0.13).sin().abs() * 5.0 + (i as f64 * 0.07))
+            .collect();
+        for &period in &[0.5_f64, 1.0, 2.5, 7.0] {
+            let (r_opt, p_opt) = vectorstrength(&events, period);
+            let (r_nav, p_nav) = naive_vectorstrength(&events, period);
+            assert!(
+                (r_opt - r_nav).abs() < 1e-12,
+                "r mismatch at period={period}: opt={r_opt}, naive={r_nav}"
+            );
+            assert!(
+                (p_opt - p_nav).abs() < 1e-12,
+                "pvalue mismatch at period={period}: opt={p_opt}, naive={p_nav}"
+            );
+        }
+    }
 
     #[test]
     fn unique_roots_empty_returns_empty() {
