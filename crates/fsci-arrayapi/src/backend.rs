@@ -237,9 +237,7 @@ impl CoreArrayBackend {
 
     #[must_use]
     pub fn dtype_dispatch_logs(&self) -> Vec<DTypeDispatchLog> {
-        self.dtype_dispatch_logs
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+        Self::lock_or_recover(&self.dtype_dispatch_logs)
             .iter()
             .cloned()
             .collect()
@@ -247,19 +245,31 @@ impl CoreArrayBackend {
 
     #[must_use]
     pub fn shape_mismatch_logs(&self) -> Vec<ShapeMismatchLog> {
-        self.shape_mismatch_logs
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+        Self::lock_or_recover(&self.shape_mismatch_logs)
             .iter()
             .cloned()
             .collect()
     }
 
+    /// Acquire a log mutex, restoring it to a healthy unpoisoned state
+    /// before handing back the guard. Resolves [frankenscipy-74g9v]:
+    /// the previous `.lock().unwrap_or_else(|e| e.into_inner())` pattern
+    /// recovered the data but left the mutex permanently poisoned, so
+    /// is_poisoned() stayed true forever and every subsequent call had
+    /// to walk the Err branch. Mirrors the workspace audit-ledger
+    /// pattern (clear_poison + into_inner).
+    fn lock_or_recover<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+        match m.lock() {
+            Ok(g) => g,
+            Err(poisoned) => {
+                m.clear_poison();
+                poisoned.into_inner()
+            }
+        }
+    }
+
     fn record_dtype_dispatch(&self, requested_dtype: Option<DType>, resolved_dtype: DType) {
-        let mut logs = self
-            .dtype_dispatch_logs
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut logs = Self::lock_or_recover(&self.dtype_dispatch_logs);
         push_bounded_log(
             &mut logs,
             DTypeDispatchLog {
@@ -276,10 +286,7 @@ impl CoreArrayBackend {
         expected_shape: Shape,
         actual_shape: Shape,
     ) {
-        let mut logs = self
-            .shape_mismatch_logs
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut logs = Self::lock_or_recover(&self.shape_mismatch_logs);
         push_bounded_log(
             &mut logs,
             ShapeMismatchLog {
@@ -1855,5 +1862,36 @@ mod tests {
         };
         let res4 = getitem(&backend, &array, &idx4).unwrap();
         assert_eq!(res4.values(), &[9.0, 8.0, 7.0, 6.0].map(ScalarValue::F64));
+    }
+
+    #[test]
+    fn dispatch_log_reads_clear_poison_after_recovery() {
+        // Regression for [frankenscipy-74g9v]: prior `.lock().unwrap_or_else(|e|
+        // e.into_inner())` recovered the data but did not clear_poison.
+        // After the lock_or_recover canonicalization, is_poisoned() must
+        // be false on the fresh recovery branch and on subsequent calls.
+        use std::sync::Arc;
+        let backend = Arc::new(CoreArrayBackend::new(ExecutionMode::Strict));
+
+        let bp = Arc::clone(&backend);
+        let _ = std::thread::spawn(move || {
+            let _g = bp
+                .dtype_dispatch_logs
+                .lock()
+                .expect("acquire dtype_dispatch_logs");
+            panic!("intentional poison for 74g9v regression");
+        })
+        .join();
+        assert!(
+            backend.dtype_dispatch_logs.is_poisoned(),
+            "setup: dtype_dispatch_logs must be poisoned"
+        );
+
+        // First call after poison should clear it.
+        let _ = backend.dtype_dispatch_logs();
+        assert!(
+            !backend.dtype_dispatch_logs.is_poisoned(),
+            "lock_or_recover must clear poison on the read path"
+        );
     }
 }
