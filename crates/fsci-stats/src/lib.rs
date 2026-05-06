@@ -2184,6 +2184,18 @@ impl ContinuousDistribution for Pareto {
         }
     }
 
+    fn sf(&self, x: f64) -> f64 {
+        // Closed-form survival for [frankenscipy-h36zm]:
+        //   sf(x) = (scale / x)^b   for x ≥ scale.
+        // The default 1 - (1 - (scale/x)^b) loses all precision in
+        // the deep right tail where (scale/x)^b ≈ 0.
+        if x < self.scale {
+            1.0
+        } else {
+            (self.scale / x).powf(self.b)
+        }
+    }
+
     fn ppf(&self, q: f64) -> f64 {
         if !(0.0..=1.0).contains(&q) {
             return f64::NAN;
@@ -2262,6 +2274,18 @@ impl ContinuousDistribution for Lomax {
             0.0
         } else {
             -(-self.c * x.ln_1p()).exp_m1()
+        }
+    }
+
+    fn sf(&self, x: f64) -> f64 {
+        // Closed-form survival for [frankenscipy-h36zm]:
+        //   sf(x) = (1 + x)^(-c) = exp(-c · ln(1+x))   for x ≥ 0.
+        // The default 1 - cdf would re-add the cancelling pair
+        // (1 - exp_m1(...)) and lose precision deep in the tail.
+        if x < 0.0 {
+            1.0
+        } else {
+            (-self.c * x.ln_1p()).exp()
         }
     }
 
@@ -2553,6 +2577,15 @@ impl ContinuousDistribution for Logistic {
     fn cdf(&self, x: f64) -> f64 {
         let z = (x - self.loc) / self.scale;
         1.0 / (1.0 + (-z).exp())
+    }
+
+    fn sf(&self, x: f64) -> f64 {
+        // Closed-form survival for [frankenscipy-h36zm]:
+        //   sf = 1/(1 + exp(z))  vs.  the imprecise default 1 - cdf.
+        // For large positive z (deep right tail), 1 - 1/(1 + exp(-z))
+        // catastrophically cancels.
+        let z = (x - self.loc) / self.scale;
+        1.0 / (1.0 + z.exp())
     }
 
     fn ppf(&self, q: f64) -> f64 {
@@ -22258,6 +22291,74 @@ mod tests {
         let l = Logistic::new(-1.0, 3.0);
         let x = l.ppf(0.25);
         assert_close(l.cdf(x), 0.25, 1e-10, "logistic cdf(ppf(q))");
+    }
+
+    #[test]
+    fn logistic_sf_preserves_right_tail_precision() {
+        // /modes-of-reasoning-project-analysis [frankenscipy-h36zm]:
+        // Default sf = 1 - cdf collapses to 0 in the deep right tail
+        // because 1/(1 + exp(-z)) → 1 below f64 ULP precision.
+        // Closed-form sf = 1/(1 + exp(z)) preserves the actual value.
+        let l = Logistic::new(0.0, 1.0);
+        // At z = 40, true sf = 1/(1 + e^40) ≈ 4.248e-18 — below
+        // the precision of (1.0 - cdf), which would round to 0.
+        let actual = l.sf(40.0);
+        let expected = 1.0 / (1.0 + 40.0_f64.exp());
+        assert_close(actual, expected, 1e-25, "Logistic sf far right tail");
+        assert!(
+            actual > 0.0,
+            "Logistic.sf(40) must be strictly positive (got {actual})"
+        );
+        // sf + cdf = 1 (precision-permitting, near the centre).
+        for &x in &[-3.0, -1.0, 0.0, 1.0, 3.0] {
+            let s = l.sf(x);
+            let c = l.cdf(x);
+            assert_close(s + c, 1.0, 1e-12, "Logistic sf + cdf = 1");
+        }
+    }
+
+    #[test]
+    fn pareto_sf_preserves_right_tail_precision() {
+        // /modes-of-reasoning-project-analysis [frankenscipy-h36zm]:
+        // sf(x) = (scale/x)^b is exact in the tail; default loses
+        // all significant digits when (scale/x)^b ≪ 1.
+        let p = Pareto::new(2.5, 1.0);
+        // At x = 1e6, sf = 1e-15 ≪ 1; the default would round to 0
+        // because cdf is 1 - 1e-15 ≈ 1.
+        let actual = p.sf(1e6);
+        let expected = 1e6_f64.powf(-2.5);
+        let rel = (actual - expected).abs() / expected.abs();
+        assert!(
+            rel < 1e-12,
+            "Pareto sf far right tail: got {actual}, expected {expected} (rel={rel})"
+        );
+        assert!(
+            actual > 0.0,
+            "Pareto.sf(1e6) must be strictly positive (got {actual})"
+        );
+        // Below scale: sf = 1.
+        assert_eq!(p.sf(0.5), 1.0, "Pareto sf below scale = 1");
+    }
+
+    #[test]
+    fn lomax_sf_preserves_right_tail_precision() {
+        // /modes-of-reasoning-project-analysis [frankenscipy-h36zm]:
+        // sf(x) = exp(-c · ln(1+x)) avoids the cdf's exp_m1 cancellation.
+        let lomax = Lomax::new(2.0);
+        // At x = 1e6, sf = (1 + 1e6)^(-2) ≈ 1e-12 ≪ 1.
+        let actual = lomax.sf(1e6);
+        let expected = (1e6_f64 + 1.0).powi(-2);
+        let rel = (actual - expected).abs() / expected.abs();
+        assert!(
+            rel < 1e-12,
+            "Lomax sf far right tail: got {actual}, expected {expected} (rel={rel})"
+        );
+        assert!(
+            actual > 0.0,
+            "Lomax.sf(1e6) must be strictly positive (got {actual})"
+        );
+        // Below 0: sf = 1.
+        assert_eq!(lomax.sf(-1.0), 1.0, "Lomax sf below 0 = 1");
     }
 
     #[test]
