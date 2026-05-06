@@ -1406,12 +1406,18 @@ pub fn morlet2(m: usize, s: f64, w: f64) -> Vec<(f64, f64)> {
     // scipy.signal.morlet2 centers on (M-1)/2, not M/2: see scipy
     // _wavelets.py — a half-sample offset would phase-rotate every value.
     let half = (m as f64 - 1.0) / 2.0;
+    // Resolves [frankenscipy-t4jxi]: hoist the loop-invariant
+    // 2·s² (gauss denominator) and w/s (phase prefactor); fold
+    // cos/sin into one sin_cos. Each saves M ops on the hot path.
+    let two_s_sq = 2.0 * s * s;
+    let w_over_s = w / s;
     for i in 0..m {
         let t = i as f64 - half;
-        let phase = w * t / s;
-        let gauss = (-t * t / (2.0 * s * s)).exp();
+        let phase = w_over_s * t;
+        let gauss = (-t * t / two_s_sq).exp();
         let envelope = coeff * gauss;
-        out.push((envelope * phase.cos(), envelope * phase.sin()));
+        let (sin_phase, cos_phase) = phase.sin_cos();
+        out.push((envelope * cos_phase, envelope * sin_phase));
     }
     out
 }
@@ -14824,6 +14830,57 @@ mod tests {
                 assert!(
                     (oi - ni).abs() <= 1e-12 * scale_im,
                     "morlet im mismatch at i={i}, (m={m}, w={w}, s={s}, complete={complete}): opt={oi}, naive={ni}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn morlet2_optimized_matches_naive_implementation() {
+        // /profiling-software-performance regression for [frankenscipy-t4jxi]:
+        // morlet2 hoists 2·s² and w/s, and folds cos+sin into sin_cos.
+        // Verify equivalence against an explicit naïve implementation
+        // mirroring the pre-fix per-iter recomputation.
+
+        fn naive_morlet2(m: usize, s: f64, w: f64) -> Vec<(f64, f64)> {
+            if m == 0 || s <= 0.0 || !s.is_finite() || !w.is_finite() {
+                return Vec::new();
+            }
+            let mut out = Vec::with_capacity(m);
+            let coeff = (std::f64::consts::PI * s * s).powf(-0.25);
+            let half = (m as f64 - 1.0) / 2.0;
+            for i in 0..m {
+                let t = i as f64 - half;
+                let phase = w * t / s;
+                let gauss = (-t * t / (2.0 * s * s)).exp();
+                let envelope = coeff * gauss;
+                out.push((envelope * phase.cos(), envelope * phase.sin()));
+            }
+            out
+        }
+
+        let configs: &[(usize, f64, f64)] = &[
+            (16, 1.0, 5.0),
+            (32, 4.0, 5.0),
+            (64, 5.0, 6.0),
+            (128, 10.0, 5.0),
+            (200, 8.0, 7.5),
+            (1, 1.0, 5.0),
+        ];
+        for &(m, s, w) in configs {
+            let opt = morlet2(m, s, w);
+            let nav = naive_morlet2(m, s, w);
+            assert_eq!(opt.len(), nav.len());
+            for (i, (&(or, oi), &(nr, ni))) in opt.iter().zip(nav.iter()).enumerate() {
+                let scale_re = or.abs().max(nr.abs()).max(1e-12);
+                let scale_im = oi.abs().max(ni.abs()).max(1e-12);
+                assert!(
+                    (or - nr).abs() <= 1e-12 * scale_re,
+                    "morlet2 re mismatch at i={i}, (m={m}, s={s}, w={w}): opt={or}, naive={nr}"
+                );
+                assert!(
+                    (oi - ni).abs() <= 1e-12 * scale_im,
+                    "morlet2 im mismatch at i={i}, (m={m}, s={s}, w={w}): opt={oi}, naive={ni}"
                 );
             }
         }
