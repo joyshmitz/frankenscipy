@@ -8751,8 +8751,15 @@ pub struct Arcsine;
 
 impl ContinuousDistribution for Arcsine {
     fn pdf(&self, x: f64) -> f64 {
-        if x <= 0.0 || x >= 1.0 {
+        // /mock-code-finder boundary [frankenscipy-1w4wg]: scipy.stats.arcsine
+        // returns +∞ at x=0 and x=1 (the limit of 1/(π·√(x(1-x)))).
+        // The previous "x ≤ 0 || x ≥ 1 → 0" short-circuit silently
+        // diverged from scipy at exactly those points.
+        if x < 0.0 || x > 1.0 {
             return 0.0;
+        }
+        if x == 0.0 || x == 1.0 {
+            return f64::INFINITY;
         }
         1.0 / (PI * (x * (1.0 - x)).sqrt())
     }
@@ -23471,6 +23478,30 @@ mod tests {
     }
 
     #[test]
+    fn arcsine_pdf_boundaries_match_scipy() {
+        // /mock-code-finder regression for [frankenscipy-1w4wg]:
+        // arcsine.pdf = 1/(π·√(x(1-x))) diverges to +∞ at x=0 and
+        // x=1 — scipy returns inf there. The previous short-circuit
+        // returned 0, silently diverging from scipy.
+        let dist = Arcsine;
+        assert!(dist.pdf(0.0).is_infinite() && dist.pdf(0.0) > 0.0);
+        assert!(dist.pdf(1.0).is_infinite() && dist.pdf(1.0) > 0.0);
+        // Outside support still returns 0.
+        assert_eq!(dist.pdf(-0.1), 0.0);
+        assert_eq!(dist.pdf(1.1), 0.0);
+        // Mid-interval still finite & positive.
+        let mid = dist.pdf(0.5);
+        assert!(mid.is_finite() && mid > 0.0);
+        // Near-boundary samples blow up smoothly.
+        for x in [0.001_f64, 0.01, 0.1].iter() {
+            let p = dist.pdf(*x);
+            let mirror = dist.pdf(1.0 - x);
+            assert!(p.is_finite() && p > 0.0);
+            assert_close(p, mirror, 1e-12, "Arcsine.pdf is symmetric around 0.5");
+        }
+    }
+
+    #[test]
     fn beta_pdf_boundaries_match_scipy() {
         // /testing-metamorphic regression for [frankenscipy-rsx33]:
         // scipy.stats.beta(a, b).pdf at x=0 is the limit of
@@ -31645,12 +31676,15 @@ mod tests {
     #[test]
     fn arcsine_pdf_boundaries() {
         let a = Arcsine;
-        // PDF is 0 outside [0, 1]
+        // PDF is 0 outside [0, 1].
         assert_eq!(a.pdf(-0.1), 0.0);
         assert_eq!(a.pdf(1.1), 0.0);
-        // At boundaries, PDF should be 0 (singularity)
-        assert_eq!(a.pdf(0.0), 0.0);
-        assert_eq!(a.pdf(1.0), 0.0);
+        // At x=0 and x=1 the formula 1/(π·√(x(1-x))) diverges to +∞.
+        // Updated to match scipy.stats.arcsine — this previously asserted
+        // 0 (which is what the buggy short-circuit returned), pinning a
+        // divergence from scipy. See [frankenscipy-1w4wg].
+        assert!(a.pdf(0.0).is_infinite() && a.pdf(0.0) > 0.0);
+        assert!(a.pdf(1.0).is_infinite() && a.pdf(1.0) > 0.0);
     }
 
     #[test]
