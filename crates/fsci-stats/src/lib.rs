@@ -2519,6 +2519,18 @@ impl ContinuousDistribution for Rayleigh {
         }
     }
 
+    fn sf(&self, x: f64) -> f64 {
+        // Closed-form survival for [frankenscipy-f66lp]:
+        //   sf(x) = exp(-x²/(2σ²)) for x ≥ 0.
+        // Direct exponential — preserves the deep-tail value where
+        // the default 1 - cdf would round to 0 (cdf rounds to 1).
+        if x < 0.0 {
+            1.0
+        } else {
+            (-(x * x) / (2.0 * self.scale * self.scale)).exp()
+        }
+    }
+
     fn ppf(&self, q: f64) -> f64 {
         if !(0.0..=1.0).contains(&q) {
             return f64::NAN;
@@ -5894,6 +5906,18 @@ impl ContinuousDistribution for HalfNormal {
         }
     }
 
+    fn sf(&self, x: f64) -> f64 {
+        // Closed-form survival for [frankenscipy-f66lp]:
+        //   sf(x) = erfc(x/√2) for x ≥ 0.
+        // erfc preserves deep-tail precision where 1 - erf would
+        // collapse to 0.
+        if x < 0.0 {
+            1.0
+        } else {
+            fsci_special::erfc_scalar(x / std::f64::consts::SQRT_2)
+        }
+    }
+
     fn ppf(&self, q: f64) -> f64 {
         if !(0.0..=1.0).contains(&q) {
             return f64::NAN;
@@ -6017,6 +6041,19 @@ impl ContinuousDistribution for HalfCauchy {
             return 0.0;
         }
         2.0 * x.atan() / PI
+    }
+
+    fn sf(&self, x: f64) -> f64 {
+        // Closed-form survival for [frankenscipy-f66lp]:
+        //   sf(x) = 2·atan(1/x)/π for x > 0  (arctan reciprocal)
+        // For very large x the default 1 - 2·atan(x)/π collapses to 0
+        // because atan(x) rounds to π/2; the closed form returns the
+        // actual ~2/(π·x) behaviour.
+        if x <= 0.0 {
+            1.0
+        } else {
+            2.0 * (1.0 / x).atan() / PI
+        }
     }
 
     fn ppf(&self, q: f64) -> f64 {
@@ -22807,6 +22844,58 @@ mod tests {
         );
         for &x in &[-2.0_f64, 0.0, 1.0, 3.0] {
             assert_close(g.sf(x) + g.cdf(x), 1.0, 1e-12, "Gumbel sf + cdf = 1");
+        }
+    }
+
+    #[test]
+    fn rayleigh_sf_preserves_right_tail_precision() {
+        // /mock-code-finder for [frankenscipy-f66lp]: extends sf-precision
+        // rotation to Rayleigh. At x = 30·scale: true sf = exp(-450) ≈
+        // 1.4e-196 — far below where the default 1 - cdf would round
+        // 1 - (1 - tiny) to 0.
+        let r = Rayleigh::new(1.0);
+        let actual = r.sf(30.0);
+        let expected = (-450.0_f64).exp();
+        assert!(actual > 0.0, "Rayleigh.sf(30) must be > 0, got {actual}");
+        let rel = (actual - expected).abs() / expected.abs();
+        assert!(
+            rel < 1e-12,
+            "Rayleigh sf right tail: got {actual}, expected {expected} (rel={rel})"
+        );
+        // sf + cdf = 1 near the centre.
+        for &x in &[0.5_f64, 1.0, 2.0] {
+            assert_close(r.sf(x) + r.cdf(x), 1.0, 1e-12, "Rayleigh sf + cdf = 1");
+        }
+    }
+
+    #[test]
+    fn half_normal_sf_preserves_deep_tail_via_erfc() {
+        // sf(x) = erfc(x/√2) preserves precision where the default
+        // 1 - erf(x/√2) collapses for large x (e.g., x > ~6 in f64).
+        let hn = HalfNormal;
+        let actual = hn.sf(8.0);
+        let expected = fsci_special::erfc_scalar(8.0 / std::f64::consts::SQRT_2);
+        assert!(actual > 0.0, "HalfNormal.sf(8) must be > 0, got {actual}");
+        assert_close(actual, expected, 1e-30, "HalfNormal sf via erfc");
+    }
+
+    #[test]
+    fn half_cauchy_sf_preserves_far_tail_via_arctan_reciprocal() {
+        // sf(x) = 2·atan(1/x)/π for x > 0. At x = 1e15, atan(x) rounds
+        // to π/2 in f64 → default 1 - 2·atan(x)/π = 0; closed form
+        // returns 2·atan(1e-15)/π ≈ 6.4e-16.
+        let hc = HalfCauchy;
+        let actual = hc.sf(1.0e15);
+        let expected = 2.0 * (1.0e-15_f64).atan() / PI;
+        assert!(actual > 0.0, "HalfCauchy.sf(1e15) must be > 0, got {actual}");
+        let rel = (actual - expected).abs() / expected.abs();
+        assert!(
+            rel < 1e-12,
+            "HalfCauchy sf far tail: got {actual}, expected {expected} (rel={rel})"
+        );
+        // sf + cdf = 1 near the centre.
+        for &x in &[0.5_f64, 1.0, 5.0] {
+            assert_close(hc.sf(x) + hc.cdf(x), 1.0, 1e-12, "HalfCauchy sf + cdf = 1");
         }
     }
 
