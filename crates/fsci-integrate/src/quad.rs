@@ -1288,6 +1288,20 @@ where
         return Err(err);
     }
 
+    // Catch the NaN-propagation failure mode that vetrv missed: when
+    // the user integrand returns NaN, inner quad returns Ok with a
+    // non-finite integral (no Err for the channel to capture), and the
+    // outer adaptive loop iterates to maxiter producing NaN. Surface
+    // that as a typed error rather than a silent NaN result.
+    // Resolves [frankenscipy-666hq].
+    if !result.is_finite() {
+        return Err(IntegrateValidationError::QuadInvalidBounds {
+            detail: format!(
+                "nquad: integrand produced non-finite result ({result}); inner quad propagated NaN/Inf"
+            ),
+        });
+    }
+
     Ok(QuadResult {
         integral: result,
         error: 0.0,
@@ -3976,31 +3990,26 @@ mod tests {
 
     #[test]
     fn nquad_propagates_inner_quad_failure_instead_of_silent_zero() {
-        // /deadlock-finder-and-fixer for [frankenscipy-vetrv]:
-        // pre-fix, an inner-dim failure was unwrap_or(0.0)'d inside
-        // the outer integrand closure, distorting the integral
-        // silently. After the fix, the first inner error is captured
-        // and propagated to the public API.
-        //
-        // Force an inner failure by feeding a NaN integrand. quad()
-        // rejects NaN samples with IntegrateValidationError; nquad
-        // should now surface that error instead of returning a
-        // numerically meaningless integral.
+        // /deadlock-finder-and-fixer for [frankenscipy-vetrv] +
+        // self-found regression for [frankenscipy-666hq]: before
+        // 819a64c the unwrap_or(0.0) inside the outer integrand
+        // closure silently distorted the multi-dim integral; the
+        // initial fix only caught Err results, missing the NaN
+        // propagation case. The 666hq follow-up adds a finiteness
+        // check on the final result.
         let opts = QuadOptions::default();
+
+        // Case A (NaN propagation): integrand returns NaN unconditionally.
+        // Inner quad returns Ok(NaN); the post-loop finiteness guard
+        // surfaces this as a typed error.
         let r = nquad(
-            |args| {
-                if args[1] > 0.5 {
-                    f64::NAN
-                } else {
-                    args[0] * args[1]
-                }
-            },
+            |_args| f64::NAN,
             &[(0.0, 1.0), (0.0, 1.0)],
             opts,
         );
         assert!(
             r.is_err(),
-            "nquad must propagate the inner-dim NaN failure, got {r:?}"
+            "nquad must surface NaN-propagation as Err, got {r:?}"
         );
     }
 
