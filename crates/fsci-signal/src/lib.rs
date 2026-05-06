@@ -12772,6 +12772,49 @@ mod tests {
     }
 
     #[test]
+    fn normalize_filter_scale_invariance() {
+        // /testing-metamorphic for [frankenscipy-oi7hx]: for any non-zero
+        // k, normalize_filter(k·b, k·a) = normalize_filter(b, a). The k
+        // cancels in the division by the (post-trim) leading coefficient.
+        let b: &[f64] = &[1.5, 2.0, 0.5];
+        let a: &[f64] = &[3.0, 6.0, 9.0];
+        let (b_ref, a_ref) = normalize_filter(b, a).expect("baseline");
+
+        for &k in &[0.5_f64, 2.0, -1.0, 100.0, -0.25] {
+            let b_scaled: Vec<f64> = b.iter().map(|&v| v * k).collect();
+            let a_scaled: Vec<f64> = a.iter().map(|&v| v * k).collect();
+            let (b_out, a_out) = normalize_filter(&b_scaled, &a_scaled)
+                .unwrap_or_else(|e| panic!("scaled by k={k}: {e:?}"));
+            assert_eq!(
+                b_out.len(),
+                b_ref.len(),
+                "b length must match baseline at k={k}"
+            );
+            assert_eq!(
+                a_out.len(),
+                a_ref.len(),
+                "a length must match baseline at k={k}"
+            );
+            for i in 0..b_ref.len() {
+                assert!(
+                    (b_out[i] - b_ref[i]).abs() < 1e-12,
+                    "b mismatch at k={k}, i={i}: {} vs baseline {}",
+                    b_out[i],
+                    b_ref[i]
+                );
+            }
+            for i in 0..a_ref.len() {
+                assert!(
+                    (a_out[i] - a_ref[i]).abs() < 1e-12,
+                    "a mismatch at k={k}, i={i}: {} vs baseline {}",
+                    a_out[i],
+                    a_ref[i]
+                );
+            }
+        }
+    }
+
+    #[test]
     fn normalize_filter_idempotent_on_monic_input() {
         // Already-normalized filter stays the same.
         let (b, a) = normalize_filter(&[0.5, 1.0, 1.5], &[1.0, 2.0, 3.0]).expect("normalize");
