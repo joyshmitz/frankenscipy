@@ -6912,6 +6912,79 @@ pub fn square(t: &[f64], duty: f64) -> Result<Vec<f64>, SignalError> {
 /// # Arguments
 /// * `shape` — Length of the output array.
 /// * `idx` — Index at which the impulse is placed. If `None`, places at index 0.
+/// Result of [`gauspuls`]: in-phase signal, quadrature signal, and envelope.
+///
+/// Matches `scipy.signal.gauspuls(retquad=True, retenv=True)` which
+/// returns `(yI, yQ, yenv)`. Callers that only want the in-phase
+/// component can read [`GauspulsResult::i`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct GauspulsResult {
+    /// In-phase signal: yenv · cos(2π·fc·t).
+    pub i: Vec<f64>,
+    /// Quadrature signal: yenv · sin(2π·fc·t).
+    pub q: Vec<f64>,
+    /// Gaussian envelope: exp(-a · t²).
+    pub envelope: Vec<f64>,
+}
+
+/// Gaussian-modulated sinusoidal pulse.
+///
+/// Matches `scipy.signal.gauspuls(t, fc=1000, bw=0.5, bwr=-6)`.
+///
+/// Computes:
+///
+/// ```text
+///   ref     = 10^(bwr / 20)
+///   a       = -(π · fc · bw)² / (4 · ln(ref))
+///   yenv(t) = exp(-a · t²)
+///   yI(t)   = yenv(t) · cos(2π · fc · t)
+///   yQ(t)   = yenv(t) · sin(2π · fc · t)
+/// ```
+///
+/// Returns the in-phase, quadrature, and envelope vectors. Callers that
+/// only need the real signal use the `.i` field. Resolves
+/// [frankenscipy-8jpj9].
+pub fn gauspuls(t: &[f64], fc: f64, bw: f64, bwr: f64) -> Result<GauspulsResult, SignalError> {
+    if !(fc > 0.0 && fc.is_finite()) {
+        return Err(SignalError::InvalidArgument(format!(
+            "fc must be a positive finite frequency; got {fc}"
+        )));
+    }
+    if !(bw > 0.0 && bw.is_finite()) {
+        return Err(SignalError::InvalidArgument(format!(
+            "bw (fractional bandwidth) must be positive; got {bw}"
+        )));
+    }
+    if !(bwr < 0.0 && bwr.is_finite()) {
+        return Err(SignalError::InvalidArgument(format!(
+            "bwr must be a negative dB level; got {bwr}"
+        )));
+    }
+
+    let r = 10.0_f64.powf(bwr / 20.0);
+    let pi_fc_bw = std::f64::consts::PI * fc * bw;
+    let a = -(pi_fc_bw * pi_fc_bw) / (4.0 * r.ln());
+
+    let two_pi_fc = std::f64::consts::TAU * fc;
+    let n = t.len();
+    let mut env = Vec::with_capacity(n);
+    let mut i_out = Vec::with_capacity(n);
+    let mut q_out = Vec::with_capacity(n);
+    for &ti in t {
+        let e = (-a * ti * ti).exp();
+        let phase = two_pi_fc * ti;
+        env.push(e);
+        i_out.push(e * phase.cos());
+        q_out.push(e * phase.sin());
+    }
+
+    Ok(GauspulsResult {
+        i: i_out,
+        q: q_out,
+        envelope: env,
+    })
+}
+
 pub fn unit_impulse(shape: usize, idx: Option<usize>) -> Result<Vec<f64>, SignalError> {
     let i = idx.unwrap_or(0);
     if i >= shape {
@@ -12547,6 +12620,61 @@ mod tests {
     #[test]
     fn unit_impulse_out_of_range() {
         assert!(unit_impulse(5, Some(5)).is_err());
+    }
+
+    // ── gauspuls tests ──────────────────────────────────────────────
+
+    #[test]
+    fn gauspuls_at_zero_is_unit_inphase_zero_quadrature() {
+        // /porting-to-rust [frankenscipy-8jpj9]: at t=0, yenv = 1,
+        // cos(0) = 1, sin(0) = 0 ⇒ yI(0) = 1, yQ(0) = 0, env(0) = 1.
+        let r = gauspuls(&[0.0], 1000.0, 0.5, -6.0).expect("gauspuls");
+        assert!((r.i[0] - 1.0).abs() < 1e-12);
+        assert!(r.q[0].abs() < 1e-12);
+        assert!((r.envelope[0] - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn gauspuls_quarter_period_swaps_inphase_and_quadrature() {
+        // At t = 1/(4·fc), 2π·fc·t = π/2 so yI ≈ 0 and yQ ≈ env.
+        let fc = 1000.0_f64;
+        let t = 1.0 / (4.0 * fc);
+        let r = gauspuls(&[t], fc, 0.5, -6.0).expect("gauspuls");
+        assert!(r.i[0].abs() < 1e-3, "yI at quarter period should be ~0");
+        assert!(
+            (r.q[0] - r.envelope[0]).abs() < 1e-12,
+            "yQ at quarter period should equal envelope"
+        );
+    }
+
+    #[test]
+    fn gauspuls_envelope_is_modulus_of_quadrature_pair() {
+        // yI² + yQ² = yenv² (the analytic-signal modulus).
+        let fc = 200.0_f64;
+        let ts: Vec<f64> = (-50..=50).map(|i| 0.0001 * i as f64).collect();
+        let r = gauspuls(&ts, fc, 0.5, -6.0).expect("gauspuls");
+        for k in 0..r.i.len() {
+            let mod_sq = r.i[k] * r.i[k] + r.q[k] * r.q[k];
+            let env_sq = r.envelope[k] * r.envelope[k];
+            assert!(
+                (mod_sq - env_sq).abs() < 1e-12,
+                "|yI + i·yQ|² = env² broken at k={k}: {mod_sq} vs {env_sq}"
+            );
+        }
+    }
+
+    #[test]
+    fn gauspuls_input_contract() {
+        // fc must be positive.
+        assert!(gauspuls(&[0.0], 0.0, 0.5, -6.0).is_err());
+        assert!(gauspuls(&[0.0], -100.0, 0.5, -6.0).is_err());
+        assert!(gauspuls(&[0.0], f64::NAN, 0.5, -6.0).is_err());
+        // bw must be positive.
+        assert!(gauspuls(&[0.0], 1000.0, 0.0, -6.0).is_err());
+        assert!(gauspuls(&[0.0], 1000.0, -0.5, -6.0).is_err());
+        // bwr must be negative dB.
+        assert!(gauspuls(&[0.0], 1000.0, 0.5, 0.0).is_err());
+        assert!(gauspuls(&[0.0], 1000.0, 0.5, 6.0).is_err());
     }
 
     // ── Detrend tests ──────────────────────────────────────────────
