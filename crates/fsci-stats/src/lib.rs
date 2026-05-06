@@ -3010,6 +3010,23 @@ impl ContinuousDistribution for HypSecant {
         PI * PI / 4.0
     }
 
+    fn skewness(&self) -> f64 {
+        // HypSecant is symmetric around 0.
+        0.0
+    }
+
+    fn kurtosis(&self) -> f64 {
+        // /mock-code-finder for [frankenscipy-a1kjq]: scipy.stats.hypsecant
+        // reports excess kurtosis = 2.
+        2.0
+    }
+
+    fn entropy(&self) -> f64 {
+        // /mock-code-finder for [frankenscipy-a1kjq]: scipy.stats.hypsecant
+        // reports differential entropy = ln(2π).
+        (2.0 * PI).ln()
+    }
+
     // fit() inherits the trait default which delegates to try_fit and
     // panics on FitError. Resolves [frankenscipy-v6rct]: previously
     // HypSecant.fit silently accepted any data (including NaN/empty)
@@ -7628,6 +7645,25 @@ impl ContinuousDistribution for Anglit {
 
     fn var(&self) -> f64 {
         PI * PI / 16.0 - 0.5 // π²/16 - 1/2
+    }
+
+    fn skewness(&self) -> f64 {
+        // Anglit is symmetric around 0 → odd central moments vanish.
+        0.0
+    }
+
+    fn kurtosis(&self) -> f64 {
+        // /mock-code-finder for [frankenscipy-a1kjq]: scipy.stats.anglit
+        // reports excess kurtosis = -2(π⁴ - 96)/(π² - 8)².
+        let pi2 = PI * PI;
+        let pi4 = pi2 * pi2;
+        -2.0 * (pi4 - 96.0) / (pi2 - 8.0).powi(2)
+    }
+
+    fn entropy(&self) -> f64 {
+        // /mock-code-finder for [frankenscipy-a1kjq]: scipy.stats.anglit
+        // reports differential entropy = 1 − ln(2).
+        1.0 - 2.0_f64.ln()
     }
 
     fn fit(_data: &[f64]) -> Self {
@@ -23356,6 +23392,42 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn anglit_higher_moments_match_scipy() {
+        // /mock-code-finder for [frankenscipy-a1kjq]: pin closed-form
+        // skewness, excess kurtosis, and entropy. Values from
+        // scipy.stats.anglit:
+        //   skew = 0
+        //   ex_kurt = -2·(π⁴ − 96)/(π² − 8)² ≈ -0.5028…
+        //   entropy = 1 − ln(2) ≈ 0.30685281944005466
+        let dist = Anglit;
+        assert_close(dist.skewness(), 0.0, 1e-15, "Anglit.skewness");
+        let pi2 = PI * PI;
+        let pi4 = pi2 * pi2;
+        let ex_kurt = -2.0 * (pi4 - 96.0) / (pi2 - 8.0).powi(2);
+        assert_close(dist.kurtosis(), ex_kurt, 1e-15, "Anglit.kurtosis");
+        assert_close(dist.entropy(), 1.0 - 2.0_f64.ln(), 1e-15, "Anglit.entropy");
+        // Cross-check against a third-party reference value (computed
+        // independently from the closed form, not from the override):
+        //   1 - ln(2) = 0.30685281944005469058...
+        assert!((dist.entropy() - 0.306_852_819_440_054_7).abs() < 1e-15);
+    }
+
+    #[test]
+    fn hypsecant_higher_moments_match_scipy() {
+        // /mock-code-finder for [frankenscipy-a1kjq]: pin closed-form
+        // skewness, excess kurtosis, and entropy. Values from
+        // scipy.stats.hypsecant:
+        //   skew = 0
+        //   ex_kurt = 2
+        //   entropy = ln(2π) ≈ 1.8378770664093453
+        let dist = HypSecant;
+        assert_close(dist.skewness(), 0.0, 1e-15, "HypSecant.skewness");
+        assert_close(dist.kurtosis(), 2.0, 1e-15, "HypSecant.kurtosis");
+        assert_close(dist.entropy(), (2.0 * PI).ln(), 1e-15, "HypSecant.entropy");
+        assert!((dist.entropy() - 1.837_877_066_409_345_3).abs() < 1e-13);
     }
 
     #[test]
