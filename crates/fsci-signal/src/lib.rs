@@ -3042,6 +3042,86 @@ pub fn lp2hp(b: &[f64], a: &[f64], wo: f64) -> Result<(Vec<f64>, Vec<f64>), Sign
     normalize_filter(&new_b, &new_a)
 }
 
+/// Binomial coefficient as `f64`.
+fn binom_coeff_f64(n: usize, k: usize) -> f64 {
+    if k > n {
+        return 0.0;
+    }
+    let k = k.min(n - k);
+    let mut result = 1.0_f64;
+    for i in 0..k {
+        result = result * (n - i) as f64 / (i + 1) as f64;
+    }
+    result
+}
+
+/// Transform a lowpass filter prototype to a bandpass filter, in
+/// transfer-function (b, a) form.
+///
+/// Matches `scipy.signal.lp2bp(b, a, wo=1.0, bw=1.0)`. Substitutes
+/// s → (s² + wo²) / (s · bw) — the wideband bandpass transformation
+/// producing a passband of geometric symmetry around `wo` with
+/// width `bw`. For input b of degree N and a of degree D, the
+/// output has degree N + max(N, D) for the numerator and D +
+/// max(N, D) for the denominator.
+///
+/// Resolves [frankenscipy-c7ukn].
+pub fn lp2bp(b: &[f64], a: &[f64], wo: f64, bw: f64) -> Result<(Vec<f64>, Vec<f64>), SignalError> {
+    if !wo.is_finite() || wo <= 0.0 || !bw.is_finite() || bw <= 0.0 {
+        return Err(SignalError::InvalidArgument(
+            "wo and bw must be positive finite".into(),
+        ));
+    }
+    if b.is_empty() || a.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "b and a must be non-empty".into(),
+        ));
+    }
+    let big_n = b.len() - 1;
+    let big_d = a.len() - 1;
+    let ma = big_n.max(big_d);
+    let np = big_n + ma;
+    let dp = big_d + ma;
+    let wosq = wo * wo;
+
+    let mut bprime = vec![0.0_f64; np + 1];
+    let mut aprime = vec![0.0_f64; dp + 1];
+
+    // For each output index j (in ascending position from the
+    // *trailing* end), sum over i,k where ma + 2k - i = j the term
+    // comb(i, k) · src[deg - i] · wo^(2(i-k)) / bw^i.
+    for j in 0..=np {
+        let mut val = 0.0_f64;
+        for i in 0..=big_n {
+            for k in 0..=i {
+                let lhs = ma + 2 * k;
+                if lhs >= i && lhs - i == j {
+                    val += binom_coeff_f64(i, k) * b[big_n - i]
+                        * wosq.powi((i - k) as i32)
+                        / bw.powi(i as i32);
+                }
+            }
+        }
+        bprime[np - j] = val;
+    }
+    for j in 0..=dp {
+        let mut val = 0.0_f64;
+        for i in 0..=big_d {
+            for k in 0..=i {
+                let lhs = ma + 2 * k;
+                if lhs >= i && lhs - i == j {
+                    val += binom_coeff_f64(i, k) * a[big_d - i]
+                        * wosq.powi((i - k) as i32)
+                        / bw.powi(i as i32);
+                }
+            }
+        }
+        aprime[dp - j] = val;
+    }
+
+    normalize_filter(&bprime, &aprime)
+}
+
 /// Reject improper prototypes (more zeros than poles) — matches scipy's
 /// `_relative_degree` ValueError.
 fn check_proper_prototype(
@@ -16555,6 +16635,79 @@ mod tests {
         assert!(lp2hp(&[1.0], &[1.0], f64::INFINITY).is_err());
         assert!(lp2hp(&[], &[1.0], 1.0).is_err());
         assert!(lp2hp(&[1.0], &[], 1.0).is_err());
+    }
+
+    #[test]
+    fn lp2bp_ba_first_order_substitution() {
+        // /porting-to-rust [frankenscipy-c7ukn]: scipy reference
+        //   lp2bp([1], [1, 1], wo=2, bw=1) = b=[1, 0], a=[1, 1, 4]
+        let (nb, na) = lp2bp(&[1.0], &[1.0, 1.0], 2.0, 1.0).expect("lp2bp 1st order");
+        for (got, want) in nb.iter().zip([1.0, 0.0].iter()) {
+            assert!(
+                (got - want).abs() < 1e-12,
+                "b mismatch: got {got}, want {want}"
+            );
+        }
+        for (got, want) in na.iter().zip([1.0, 1.0, 4.0].iter()) {
+            assert!(
+                (got - want).abs() < 1e-12,
+                "a mismatch: got {got}, want {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn lp2bp_ba_second_order_substitution() {
+        // /porting-to-rust [frankenscipy-c7ukn]: scipy reference
+        //   lp2bp([1, 2], [1, 3, 4], wo=1.5, bw=0.5) =
+        //   b=[0.5, 0.5, 1.125, 0], a=[1, 1.5, 5.5, 3.375, 5.0625]
+        let (nb, na) =
+            lp2bp(&[1.0, 2.0], &[1.0, 3.0, 4.0], 1.5, 0.5).expect("lp2bp 2nd order");
+        for (got, want) in nb.iter().zip([0.5, 0.5, 1.125, 0.0].iter()) {
+            assert!(
+                (got - want).abs() < 1e-12,
+                "b mismatch: got {got}, want {want}"
+            );
+        }
+        for (got, want) in na.iter().zip([1.0, 1.5, 5.5, 3.375, 5.0625].iter()) {
+            assert!(
+                (got - want).abs() < 1e-12,
+                "a mismatch: got {got}, want {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn lp2bp_ba_identity_when_wo_and_bw_are_one() {
+        // /porting-to-rust [frankenscipy-c7ukn]: at wo=1, bw=1 the
+        // substitution is s → s + 1/s, which doubles the order.
+        // For B=[1], A=[1, 1]: scipy returns
+        //   b=[1, 0], a=[1, 1, 1].
+        let (nb, na) = lp2bp(&[1.0], &[1.0, 1.0], 1.0, 1.0).expect("lp2bp wo=1 bw=1");
+        for (got, want) in nb.iter().zip([1.0, 0.0].iter()) {
+            assert!(
+                (got - want).abs() < 1e-12,
+                "b mismatch: got {got}, want {want}"
+            );
+        }
+        for (got, want) in na.iter().zip([1.0, 1.0, 1.0].iter()) {
+            assert!(
+                (got - want).abs() < 1e-12,
+                "a mismatch: got {got}, want {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn lp2bp_ba_rejects_invalid_args() {
+        // /porting-to-rust [frankenscipy-c7ukn]: validation contract.
+        assert!(lp2bp(&[1.0], &[1.0], 0.0, 1.0).is_err());
+        assert!(lp2bp(&[1.0], &[1.0], 1.0, 0.0).is_err());
+        assert!(lp2bp(&[1.0], &[1.0], -1.0, 1.0).is_err());
+        assert!(lp2bp(&[1.0], &[1.0], 1.0, f64::NAN).is_err());
+        assert!(lp2bp(&[1.0], &[1.0], f64::INFINITY, 1.0).is_err());
+        assert!(lp2bp(&[], &[1.0], 1.0, 1.0).is_err());
+        assert!(lp2bp(&[1.0], &[], 1.0, 1.0).is_err());
     }
 
     #[test]
