@@ -2368,6 +2368,11 @@ impl ContinuousDistribution for Pareto {
         // Pareto mode = scale (lower endpoint of support) [frankenscipy-cxgdg].
         self.scale
     }
+
+    fn entropy(&self) -> f64 {
+        // H(Pareto) = ln(scale/b) + 1/b + 1 [frankenscipy-vngzr].
+        (self.scale / self.b).ln() + 1.0 / self.b + 1.0
+    }
 }
 
 /// Lomax distribution.
@@ -2589,6 +2594,11 @@ impl ContinuousDistribution for Rayleigh {
         // Rayleigh mode = scale [frankenscipy-cxgdg].
         self.scale
     }
+
+    fn entropy(&self) -> f64 {
+        // H(Rayleigh) = 1 + ln(σ/√2) + γ/2 [frankenscipy-vngzr].
+        1.0 + (self.scale / std::f64::consts::SQRT_2).ln() + EULER_MASCHERONI / 2.0
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -2799,6 +2809,12 @@ impl ContinuousDistribution for GumbelLeft {
     fn mode(&self) -> f64 {
         // GumbelLeft mode = loc [frankenscipy-cxgdg].
         self.loc
+    }
+
+    fn entropy(&self) -> f64 {
+        // H(GumbelLeft) = ln(scale) + γ + 1; same as right Gumbel by
+        // symmetry [frankenscipy-vngzr].
+        self.scale.ln() + EULER_MASCHERONI + 1.0
     }
 }
 
@@ -4771,6 +4787,12 @@ impl ContinuousDistribution for Triangular {
         }
         Ok(fitted)
     }
+
+    fn entropy(&self) -> f64 {
+        // H(Triangular) = 0.5 + ln((right - left) / 2)
+        // [frankenscipy-vngzr].
+        0.5 + ((self.right - self.left) / 2.0).ln()
+    }
 }
 
 /// Trapezoidal distribution on `[loc, loc + scale]` with flat top spanning
@@ -5957,6 +5979,11 @@ impl ContinuousDistribution for HalfNormal {
     fn mode(&self) -> f64 {
         // HalfNormal mode = 0 (left edge of support) [frankenscipy-cxgdg].
         0.0
+    }
+
+    fn entropy(&self) -> f64 {
+        // H(HalfNormal) = 0.5·ln(πe/2) [frankenscipy-vngzr].
+        0.5 * (PI * std::f64::consts::E / 2.0).ln()
     }
 }
 
@@ -34091,6 +34118,55 @@ mod tests {
             1.0 / 3.0,
             1e-12,
             "InverseGamma mode = 1/(a+1)",
+        );
+    }
+
+    #[test]
+    fn five_distributions_have_closed_form_entropy() {
+        // /modes-of-reasoning [frankenscipy-vngzr]: pin closed-form
+        // entropy formulas. Each value is independent of any test
+        // harness — pure closed-form arithmetic in the implementation.
+
+        // HalfNormal: 0.5·ln(πe/2) ≈ 0.7257913526...
+        assert_close(
+            HalfNormal.entropy(),
+            0.5 * (PI * std::f64::consts::E / 2.0).ln(),
+            1e-12,
+            "HalfNormal entropy = 0.5·ln(πe/2)",
+        );
+
+        // Pareto(b=2, scale=3): ln(3/2) + 1/2 + 1.
+        let p = Pareto::new(2.0, 3.0);
+        assert_close(
+            p.entropy(),
+            (3.0_f64 / 2.0).ln() + 0.5 + 1.0,
+            1e-12,
+            "Pareto entropy = ln(scale/b) + 1/b + 1",
+        );
+
+        // Rayleigh(σ=2): 1 + ln(2/√2) + γ/2 = 1 + ln(√2) + γ/2.
+        let r = Rayleigh::new(2.0);
+        let expected_r = 1.0
+            + (2.0_f64 / std::f64::consts::SQRT_2).ln()
+            + 0.577_215_664_901_532_9 / 2.0;
+        assert_close(r.entropy(), expected_r, 1e-12, "Rayleigh entropy");
+
+        // GumbelLeft(loc=-1, scale=2): ln(2) + γ + 1.
+        let gl = GumbelLeft::new(-1.0, 2.0);
+        assert_close(
+            gl.entropy(),
+            2.0_f64.ln() + 0.577_215_664_901_532_9 + 1.0,
+            1e-12,
+            "GumbelLeft entropy",
+        );
+
+        // Triangular(left=0, mode=1, right=2): 0.5 + ln(2/2) = 0.5.
+        let t = Triangular::new(0.0, 1.0, 2.0);
+        assert_close(
+            t.entropy(),
+            0.5,
+            1e-12,
+            "Triangular entropy at width 2",
         );
     }
 
