@@ -1275,8 +1275,18 @@ where
     // Use RefCell for interior mutability since quad() takes Fn, not FnMut
     let args = RefCell::new(vec![0.0; ndim]);
     let total_neval = RefCell::new(0usize);
+    // Channel for the first inner-quad error: the Fn(&[f64]) -> f64
+    // signature can't propagate Result, so the inner closure stuffs
+    // any IntegrateValidationError here and returns 0; nquad checks
+    // it after the outer quad and propagates instead of silently
+    // distorting the integral. Resolves [frankenscipy-vetrv].
+    let inner_error: RefCell<Option<IntegrateValidationError>> = RefCell::new(None);
 
-    let result = nquad_inner(&func, ranges, &options, &args, &total_neval, 0)?;
+    let result = nquad_inner(&func, ranges, &options, &args, &total_neval, &inner_error, 0)?;
+
+    if let Some(err) = inner_error.into_inner() {
+        return Err(err);
+    }
 
     Ok(QuadResult {
         integral: result,
@@ -1292,6 +1302,7 @@ fn nquad_inner<F>(
     options: &QuadOptions,
     args: &std::cell::RefCell<Vec<f64>>,
     total_neval: &std::cell::RefCell<usize>,
+    inner_error: &std::cell::RefCell<Option<IntegrateValidationError>>,
     dim: usize,
 ) -> Result<f64, IntegrateValidationError>
 where
@@ -1313,11 +1324,22 @@ where
         *total_neval.borrow_mut() += result.neval;
         Ok(result.integral)
     } else {
-        // Outer dimension: integrate by nesting
+        // Outer dimension: integrate by nesting. Capture the first
+        // inner failure so the caller sees it instead of getting a
+        // silently-zeroed result.
         let result = quad(
             |x| {
                 args.borrow_mut()[dim] = x;
-                nquad_inner(func, ranges, options, args, total_neval, dim + 1).unwrap_or(0.0)
+                match nquad_inner(func, ranges, options, args, total_neval, inner_error, dim + 1) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        let mut slot = inner_error.borrow_mut();
+                        if slot.is_none() {
+                            *slot = Some(e);
+                        }
+                        0.0
+                    }
+                }
             },
             a,
             b,
@@ -3950,6 +3972,36 @@ mod tests {
         let opts = QuadOptions::default();
         let result = nquad(|_| 42.0, &[], opts).expect("nquad 0d");
         assert!((result.integral - 42.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn nquad_propagates_inner_quad_failure_instead_of_silent_zero() {
+        // /deadlock-finder-and-fixer for [frankenscipy-vetrv]:
+        // pre-fix, an inner-dim failure was unwrap_or(0.0)'d inside
+        // the outer integrand closure, distorting the integral
+        // silently. After the fix, the first inner error is captured
+        // and propagated to the public API.
+        //
+        // Force an inner failure by feeding a NaN integrand. quad()
+        // rejects NaN samples with IntegrateValidationError; nquad
+        // should now surface that error instead of returning a
+        // numerically meaningless integral.
+        let opts = QuadOptions::default();
+        let r = nquad(
+            |args| {
+                if args[1] > 0.5 {
+                    f64::NAN
+                } else {
+                    args[0] * args[1]
+                }
+            },
+            &[(0.0, 1.0), (0.0, 1.0)],
+            opts,
+        );
+        assert!(
+            r.is_err(),
+            "nquad must propagate the inner-dim NaN failure, got {r:?}"
+        );
     }
 
     // ── fixed_quad tests ─────────────────────────────────────────────
