@@ -34239,6 +34239,61 @@ mod tests {
     }
 
     #[test]
+    fn bradford_closed_form_anchors() {
+        // /testing-golden-artifacts for [frankenscipy-04ghb]: Bradford
+        // had fit-side tests but no pdf/cdf/ppf/mean anchors.
+        for &c in &[0.5_f64, 1.0, 2.0, 5.0] {
+            let bd = Bradford::new(c);
+            let k = (1.0 + c).ln();
+
+            // (1) cdf boundaries.
+            assert_eq!(bd.cdf(0.0), 0.0, "Bradford(c={c}) cdf(0) = 0");
+            assert_eq!(bd.cdf(1.0), 1.0, "Bradford(c={c}) cdf(1) = 1");
+            // (2) ppf boundaries.
+            assert_close(bd.ppf(0.0), 0.0, 1e-12, &format!("Bradford(c={c}) ppf(0) = 0"));
+            assert_close(bd.ppf(1.0), 1.0, 1e-12, &format!("Bradford(c={c}) ppf(1) = 1"));
+            // (3) pdf at boundaries (closed form).
+            assert_close(
+                bd.pdf(0.0),
+                c / k,
+                1e-12,
+                &format!("Bradford(c={c}) pdf(0) = c/ln(1+c)"),
+            );
+            assert_close(
+                bd.pdf(1.0),
+                c / ((1.0 + c) * k),
+                1e-12,
+                &format!("Bradford(c={c}) pdf(1) = c/((1+c)·ln(1+c))"),
+            );
+            // (4) cdf at midpoint x=0.5: ln(1 + c·0.5)/ln(1+c).
+            assert_close(
+                bd.cdf(0.5),
+                (1.0 + c * 0.5).ln() / k,
+                1e-12,
+                &format!("Bradford(c={c}) cdf(0.5) closed form"),
+            );
+            // (5) ppf↔cdf roundtrip.
+            for &q in &[0.1_f64, 0.25, 0.5, 0.75, 0.9] {
+                let x = bd.ppf(q);
+                let r = bd.cdf(x);
+                assert_close(
+                    r,
+                    q,
+                    1e-9,
+                    &format!("Bradford(c={c}) cdf(ppf({q})) = {r}"),
+                );
+            }
+            // (6) mean closed form.
+            assert_close(
+                bd.mean(),
+                (c - k) / (c * k),
+                1e-12,
+                &format!("Bradford(c={c}) mean = (c - ln(1+c))/(c·ln(1+c))"),
+            );
+        }
+    }
+
+    #[test]
     fn lomax_closed_form_entropy() {
         // /modes-of-reasoning extension [frankenscipy-2ea4i]:
         // H(Lomax(c)) = 1 + 1/c − ln(c).
