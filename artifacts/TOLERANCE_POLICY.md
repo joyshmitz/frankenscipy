@@ -15,6 +15,37 @@ When the two disagree, fix the fixture, not the policy.
 
 ---
 
+## 0. Packet audit index
+
+Every P2C packet must declare a comparison mode before it can claim `parity_green`. Scalar
+packets compare numeric outputs with the baseline `(rtol, atol)` below, mixed packets use the
+listed scalar baseline plus documented structural checks, and structural packets do not admit
+floating tolerances. Non-baseline scalar fixture cases must carry a `rationale` field and are
+tracked by `crates/fsci-conformance/src/bin/tolerance_lint.rs`. Current lint evidence is
+published in `artifacts/tolerance-audit-2026-05-03.md`.
+
+| Packet | Comparison mode | Baseline `(rtol, atol)` | Audit trail |
+|--------|-----------------|-------------------------|-------------|
+| FSCI-P2C-001 validate_tol | vector `Txn` | per-element fixture values | self-test for tolerance comparison machinery |
+| FSCI-P2C-002 linalg_core | scalar | `(1e-12, 1e-12)` | `tolerance_lint` baseline + §2 linalg exceptions |
+| FSCI-P2C-003 optimize_core | scalar, stochastic | case-by-case T2/T4/T6 | §2 optimizer seed/basin policy |
+| FSCI-P2C-004 sparse_ops | scalar | `(1e-10, 1e-12)` | `tolerance_lint` baseline + ARPACK exceptions |
+| FSCI-P2C-005 fft_core | scalar/mixed | `(1e-10, 1e-15)` | `tolerance_lint` baseline + bit-reversal exception |
+| FSCI-P2C-006 special_core | scalar | `(1e-12, 1e-12)` | `tolerance_lint` baseline + §5 special exceptions |
+| FSCI-P2C-007 arrayapi_core | structural `Tnone` | none | shape/dtype assertions only |
+| FSCI-P2C-008 runtime_casp | structural `Tnone` | none | solver-choice assertions only |
+| FSCI-P2C-009 cluster_core | mixed scalar/structural | `(1e-10, 1e-10)` | `tolerance_lint` baseline + relabel-invariant checks |
+| FSCI-P2C-010 spatial_core | mixed scalar/structural | `(1e-10, 1e-12)` | `tolerance_lint` baseline + index-set checks |
+| FSCI-P2C-011 signal_core | scalar | `(1e-10, 1e-15)` | `tolerance_lint` baseline + IIR/equiripple exceptions |
+| FSCI-P2C-012 stats_core | scalar | `(1e-10, 1e-10)` | `tolerance_lint` baseline + tail/inverse-CDF exceptions |
+| FSCI-P2C-013 integrate_core | scalar | `(1e-10, 1e-10)` | `tolerance_lint` baseline + IVP/QMC exceptions |
+| FSCI-P2C-014 interpolate_core | scalar/mixed | `(1e-12, 1e-12)` | `tolerance_lint` baseline + nearest-neighbor structural checks |
+| FSCI-P2C-015 ndimage_core | mixed scalar/structural | `(1e-12, 1e-12)` | direct convolution plus boolean/connectivity checks |
+| FSCI-P2C-016 constants_core | scalar/structural | `(1e-15, 0.0)` | `tolerance_lint` baseline + CODATA identity checks |
+| FSCI-P2C-017 io_core | scalar/structural | `(1e-12, 1e-12)` | serialization roundtrip plus schema/shape checks |
+
+---
+
 ## 1. Tolerance tiers
 
 Tiers are ordered tightest → loosest. Each tier states the rule, the algorithmic category it is
