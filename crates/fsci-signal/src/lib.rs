@@ -1359,17 +1359,28 @@ pub fn morlet(m: usize, w: f64, s: f64, complete: bool) -> Vec<(f64, f64)> {
     let mut output = Vec::with_capacity(m);
     let center = (m as f64 - 1.0) / 2.0;
 
+    // Resolves [frankenscipy-tmnrh]: hoist the loop-invariant
+    // correction (depends only on w) and the 2π·w prefactor for
+    // the phase. The inner loop now does one sin_cos per sample
+    // instead of separate sin and cos.
+    let two_pi_w = std::f64::consts::TAU * w;
+    let pi = std::f64::consts::PI;
+    let correction = if complete {
+        (-2.0 * pi * pi * w * w / 2.0).exp()
+    } else {
+        0.0
+    };
+
     for i in 0..m {
         let t = (i as f64 - center) / s;
         let gauss = (-t * t / 2.0).exp();
-        let phase = 2.0 * std::f64::consts::PI * w * t;
-        let mut re = gauss * phase.cos();
-        let im = gauss * phase.sin();
+        let phase = two_pi_w * t;
+        let (sin_phase, cos_phase) = phase.sin_cos();
+        let mut re = gauss * cos_phase;
+        let im = gauss * sin_phase;
 
         if complete {
-            // Correction: subtract the DC component to ensure zero mean
-            let correction =
-                (-2.0 * std::f64::consts::PI * std::f64::consts::PI * w * w / 2.0).exp();
+            // Correction: subtract the DC component to ensure zero mean.
             re -= gauss * correction;
         }
 
@@ -14719,6 +14730,65 @@ mod tests {
             max_im > 0.01,
             "morlet should have nonzero imaginary part, max_im = {max_im}"
         );
+    }
+
+    #[test]
+    fn morlet_optimized_matches_naive_implementation() {
+        // /profiling-software-performance regression for [frankenscipy-tmnrh]:
+        // morlet inner loop hoists the correction (loop-invariant in w)
+        // and uses sin_cos. Verify equivalence against an explicit
+        // naïve implementation that mirrors the pre-fix branchy logic
+        // across multiple (m, w, s) configurations and both complete
+        // settings.
+
+        fn naive_morlet(m: usize, w: f64, s: f64, complete: bool) -> Vec<(f64, f64)> {
+            if m == 0 || s <= 0.0 || !s.is_finite() || !w.is_finite() {
+                return vec![];
+            }
+            let mut output = Vec::with_capacity(m);
+            let center = (m as f64 - 1.0) / 2.0;
+            for i in 0..m {
+                let t = (i as f64 - center) / s;
+                let gauss = (-t * t / 2.0).exp();
+                let phase = 2.0 * std::f64::consts::PI * w * t;
+                let mut re = gauss * phase.cos();
+                let im = gauss * phase.sin();
+                if complete {
+                    let correction =
+                        (-2.0 * std::f64::consts::PI * std::f64::consts::PI * w * w / 2.0).exp();
+                    re -= gauss * correction;
+                }
+                output.push((re, im));
+            }
+            output
+        }
+
+        let configs: &[(usize, f64, f64, bool)] = &[
+            (32, 5.0, 1.0, false),
+            (32, 5.0, 1.0, true),
+            (101, 5.5, 10.0, false),
+            (101, 5.5, 10.0, true),
+            (200, 6.0, 5.0, true),
+            (200, 6.0, 5.0, false),
+            (1, 5.0, 1.0, true),
+        ];
+        for &(m, w, s, complete) in configs {
+            let opt = morlet(m, w, s, complete);
+            let nav = naive_morlet(m, w, s, complete);
+            assert_eq!(opt.len(), nav.len());
+            for (i, (&(or, oi), &(nr, ni))) in opt.iter().zip(nav.iter()).enumerate() {
+                let scale_re = or.abs().max(nr.abs()).max(1e-12);
+                let scale_im = oi.abs().max(ni.abs()).max(1e-12);
+                assert!(
+                    (or - nr).abs() <= 1e-12 * scale_re,
+                    "morlet re mismatch at i={i}, (m={m}, w={w}, s={s}, complete={complete}): opt={or}, naive={nr}"
+                );
+                assert!(
+                    (oi - ni).abs() <= 1e-12 * scale_im,
+                    "morlet im mismatch at i={i}, (m={m}, w={w}, s={s}, complete={complete}): opt={oi}, naive={ni}"
+                );
+            }
+        }
     }
 
     #[test]
