@@ -23359,6 +23359,71 @@ mod tests {
     }
 
     #[test]
+    fn weibull_c1_is_exponential() {
+        // /testing-metamorphic for [frankenscipy-aef05]: textbook
+        // identity Weibull(c=1, scale=θ) ≡ Exponential(scale=θ).
+        // Independent verification across 4 scales × 7 x-values.
+        // A normalization or sign error in either implementation
+        // surfaces immediately.
+        for &scale in &[0.5_f64, 1.0, 2.0, 7.5] {
+            let weib = Weibull::new(1.0, scale);
+            let expo = Exponential::from_scale(scale);
+            for &x in &[0.0_f64, 0.1, 0.5, 1.0, 2.5, 5.0, 12.0] {
+                assert_close(
+                    weib.pdf(x),
+                    expo.pdf(x),
+                    1e-12,
+                    &format!("Weibull(1, {scale}).pdf({x}) vs Exp(scale={scale}).pdf"),
+                );
+                assert_close(
+                    weib.cdf(x),
+                    expo.cdf(x),
+                    1e-12,
+                    &format!("Weibull(1, {scale}).cdf({x}) vs Exp(scale={scale}).cdf"),
+                );
+                assert_close(
+                    weib.sf(x),
+                    expo.sf(x),
+                    1e-12,
+                    &format!("Weibull(1, {scale}).sf({x}) vs Exp(scale={scale}).sf"),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn erlang_k1_is_exponential() {
+        // /testing-metamorphic for [frankenscipy-aef05]: textbook
+        // identity Erlang(k=1, rate=λ) ≡ Exponential(rate=λ). Erlang
+        // is Gamma with integer shape; k=1 collapses to Exponential.
+        // Verifies pdf/cdf/sf across 4 rates × 7 x-values.
+        for &lambda in &[0.25_f64, 1.0, 2.5, 10.0] {
+            let erl = Erlang::new(1, lambda);
+            let expo = Exponential::new(lambda);
+            for &x in &[0.0_f64, 0.05, 0.5, 1.0, 2.5, 5.0, 12.0] {
+                assert_close(
+                    erl.pdf(x),
+                    expo.pdf(x),
+                    1e-12,
+                    &format!("Erlang(1, {lambda}).pdf({x}) vs Exp({lambda}).pdf"),
+                );
+                assert_close(
+                    erl.cdf(x),
+                    expo.cdf(x),
+                    1e-9,
+                    &format!("Erlang(1, {lambda}).cdf({x}) vs Exp({lambda}).cdf"),
+                );
+                assert_close(
+                    erl.sf(x),
+                    expo.sf(x),
+                    1e-9,
+                    &format!("Erlang(1, {lambda}).sf({x}) vs Exp({lambda}).sf"),
+                );
+            }
+        }
+    }
+
+    #[test]
     fn hypsecant_pdf_cdf_match_scipy_reference_values() {
         let dist = HypSecant;
         let cases = [
