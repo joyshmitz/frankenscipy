@@ -3119,6 +3119,41 @@ pub fn phase_response(b: &[f64], a: &[f64], n_freqs: usize) -> (Vec<f64>, Vec<f6
     (freqs, phases)
 }
 
+/// Normalize filter coefficients so the denominator is monic.
+///
+/// Matches `scipy.signal.normalize(b, a)`. Trims leading zeros from
+/// `a`, then divides both `b` and `a` by the resulting `a[0]` so the
+/// returned denominator starts with `1.0`.
+///
+/// Errors:
+///   * `a` is all-zero (or empty after trim) — degenerate filter.
+///   * `a` is empty — invalid input.
+///
+/// Resolves [frankenscipy-fx18c]. Distinct from the existing
+/// `normalize_signal` (zero-mean / unit-variance time-series scaler).
+pub fn normalize_filter(b: &[f64], a: &[f64]) -> Result<(Vec<f64>, Vec<f64>), SignalError> {
+    if a.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "denominator `a` must be non-empty".into(),
+        ));
+    }
+    let first_nonzero = a
+        .iter()
+        .position(|&v| v != 0.0)
+        .ok_or_else(|| {
+            SignalError::InvalidArgument(
+                "denominator `a` must contain at least one nonzero coefficient".into(),
+            )
+        })?;
+    let leading = a[first_nonzero];
+    let a_norm: Vec<f64> = a[first_nonzero..]
+        .iter()
+        .map(|&v| v / leading)
+        .collect();
+    let b_norm: Vec<f64> = b.iter().map(|&v| v / leading).collect();
+    Ok((b_norm, a_norm))
+}
+
 /// Normalize a signal to have zero mean and unit variance.
 pub fn normalize_signal(x: &[f64]) -> Vec<f64> {
     if x.is_empty() {
@@ -12675,6 +12710,45 @@ mod tests {
         // bwr must be negative dB.
         assert!(gauspuls(&[0.0], 1000.0, 0.5, 0.0).is_err());
         assert!(gauspuls(&[0.0], 1000.0, 0.5, 6.0).is_err());
+    }
+
+    // ── normalize_filter tests ─────────────────────────────────────
+
+    #[test]
+    fn normalize_filter_makes_denominator_monic() {
+        // /porting-to-rust [frankenscipy-fx18c]: a[0] always 1 after
+        // normalization; b scaled consistently.
+        let (b, a) = normalize_filter(&[1.0, 2.0, 3.0], &[2.0, 4.0, 6.0]).expect("normalize");
+        assert_eq!(a[0], 1.0);
+        assert_eq!(a, vec![1.0, 2.0, 3.0]);
+        assert_eq!(b, vec![0.5, 1.0, 1.5]);
+    }
+
+    #[test]
+    fn normalize_filter_trims_leading_zeros_from_a() {
+        // a = [0, 0, 2, 4, 6] trims to [2, 4, 6] then normalizes to
+        // [1, 2, 3]; b is scaled by the trimmed leading 2.
+        let (b, a) = normalize_filter(&[1.0], &[0.0, 0.0, 2.0, 4.0, 6.0]).expect("normalize");
+        assert_eq!(a, vec![1.0, 2.0, 3.0]);
+        assert_eq!(b, vec![0.5]);
+    }
+
+    #[test]
+    fn normalize_filter_rejects_all_zero_a() {
+        assert!(normalize_filter(&[1.0], &[0.0, 0.0, 0.0]).is_err());
+    }
+
+    #[test]
+    fn normalize_filter_rejects_empty_a() {
+        assert!(normalize_filter(&[1.0], &[]).is_err());
+    }
+
+    #[test]
+    fn normalize_filter_idempotent_on_monic_input() {
+        // Already-normalized filter stays the same.
+        let (b, a) = normalize_filter(&[0.5, 1.0, 1.5], &[1.0, 2.0, 3.0]).expect("normalize");
+        assert_eq!(b, vec![0.5, 1.0, 1.5]);
+        assert_eq!(a, vec![1.0, 2.0, 3.0]);
     }
 
     // ── Detrend tests ──────────────────────────────────────────────
