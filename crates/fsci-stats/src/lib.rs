@@ -23069,6 +23069,37 @@ mod tests {
     }
 
     #[test]
+    fn chi_df1_is_half_normal() {
+        // /testing-metamorphic for [frankenscipy-qla9y]: Chi(df=1) is
+        // identically HalfNormal — both have pdf √(2/π)·exp(-x²/2) on
+        // x≥0. Pin pdf/cdf/sf agreement at multiple x.
+        // Combined with qpcaq this gives a triangle of identities tying
+        // HalfNormal, Chi(df=1), and ChiSquared(df=1) together.
+        let chi = Chi::new(1.0);
+        let hn = HalfNormal;
+        for &x in &[0.0_f64, 0.1, 0.5, 1.0, 2.0, 3.5, 5.0] {
+            assert_close(
+                chi.pdf(x),
+                hn.pdf(x),
+                1e-10,
+                &format!("Chi(df=1).pdf({x}) vs HalfNormal.pdf({x})"),
+            );
+            assert_close(
+                chi.cdf(x),
+                hn.cdf(x),
+                1e-9,
+                &format!("Chi(df=1).cdf({x}) vs HalfNormal.cdf({x})"),
+            );
+            assert_close(
+                chi.sf(x),
+                hn.sf(x),
+                1e-9,
+                &format!("Chi(df=1).sf({x}) vs HalfNormal.sf({x})"),
+            );
+        }
+    }
+
+    #[test]
     fn half_normal_squared_is_chi_squared_df1() {
         // /testing-metamorphic for [frankenscipy-qpcaq]: if X ~ N(0,1)
         // then |X| ~ HalfNormal and X² ~ ChiSquared(df=1). Equivalent:
