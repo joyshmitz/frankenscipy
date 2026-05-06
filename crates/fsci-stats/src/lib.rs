@@ -1647,8 +1647,31 @@ impl BetaDist {
 
 impl ContinuousDistribution for BetaDist {
     fn pdf(&self, x: f64) -> f64 {
-        if x <= 0.0 || x >= 1.0 {
+        // /testing-metamorphic boundary [frankenscipy-rsx33]: scipy.stats.beta
+        // returns the limit of x^(a-1)·(1-x)^(b-1)/B(a,b) at the boundary
+        // — finite when the relevant exponent is zero, +inf when it is
+        // negative. The previous short-circuit "x ≤ 0 || x ≥ 1 → 0" was
+        // wrong for both a=1 (pdf(0) = 1/B(1, b)) and a<1 (pdf(0) = ∞).
+        if x < 0.0 || x > 1.0 {
             return 0.0;
+        }
+        if x == 0.0 {
+            return if self.a < 1.0 {
+                f64::INFINITY
+            } else if self.a == 1.0 {
+                (-ln_beta(self.a, self.b)).exp()
+            } else {
+                0.0
+            };
+        }
+        if x == 1.0 {
+            return if self.b < 1.0 {
+                f64::INFINITY
+            } else if self.b == 1.0 {
+                (-ln_beta(self.a, self.b)).exp()
+            } else {
+                0.0
+            };
         }
         let ln_pdf =
             (self.a - 1.0) * x.ln() + (self.b - 1.0) * (1.0 - x).ln() - ln_beta(self.a, self.b);
@@ -23444,6 +23467,57 @@ mod tests {
                     "Lomax(c={c}).sf({x}) = {ls} vs Pareto(c, 1).sf({x}+1) = {ps}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn beta_pdf_boundaries_match_scipy() {
+        // /testing-metamorphic regression for [frankenscipy-rsx33]:
+        // scipy.stats.beta(a, b).pdf at x=0 is the limit of
+        // x^(a-1)·(1-x)^(b-1)/B(a,b):
+        //   a > 1 → 0
+        //   a = 1 → 1/B(1, b) = b
+        //   a < 1 → +∞
+        // Symmetric for x=1 in b. Pin all six branch cases plus
+        // x slightly inside the open interval to confirm continuity.
+        // x = 0
+        assert_close(BetaDist::new(2.0, 3.0).pdf(0.0), 0.0, 1e-12, "Beta(2,3).pdf(0) = 0 (a>1)");
+        assert_close(BetaDist::new(1.0, 1.0).pdf(0.0), 1.0, 1e-12, "Beta(1,1).pdf(0) = 1/B(1,1) = 1");
+        assert_close(BetaDist::new(1.0, 2.0).pdf(0.0), 2.0, 1e-12, "Beta(1,2).pdf(0) = 1/B(1,2) = 2");
+        assert!(BetaDist::new(0.5, 0.5).pdf(0.0).is_infinite(), "Beta(0.5,0.5).pdf(0) = ∞ (a<1)");
+        // x = 1
+        assert_close(BetaDist::new(2.0, 3.0).pdf(1.0), 0.0, 1e-12, "Beta(2,3).pdf(1) = 0 (b>1)");
+        assert_close(BetaDist::new(1.0, 1.0).pdf(1.0), 1.0, 1e-12, "Beta(1,1).pdf(1) = 1");
+        assert_close(BetaDist::new(2.0, 1.0).pdf(1.0), 2.0, 1e-12, "Beta(2,1).pdf(1) = 1/B(2,1) = 2");
+        assert!(BetaDist::new(0.5, 0.5).pdf(1.0).is_infinite(), "Beta(0.5,0.5).pdf(1) = ∞ (b<1)");
+        // x outside [0, 1]
+        assert_eq!(BetaDist::new(2.0, 3.0).pdf(-0.1), 0.0);
+        assert_eq!(BetaDist::new(2.0, 3.0).pdf(1.1), 0.0);
+    }
+
+    #[test]
+    fn beta_one_one_is_uniform_zero_one() {
+        // /testing-metamorphic for [frankenscipy-rsx33]: textbook
+        // identity Beta(1, 1) ≡ Uniform(0, 1). Across the whole
+        // support including boundaries, pdf and cdf must agree.
+        // Independent verification: BetaDist routes through
+        // ln_beta + regularized_incomplete_beta, while Uniform
+        // uses closed-form constant pdf and linear cdf.
+        let beta = BetaDist::new(1.0, 1.0);
+        let u = Uniform::new(0.0, 1.0);
+        for &x in &[0.0_f64, 0.001, 0.1, 0.25, 0.5, 0.75, 0.9, 0.999, 1.0] {
+            assert_close(
+                beta.pdf(x),
+                u.pdf(x),
+                1e-12,
+                &format!("Beta(1,1).pdf({x}) vs Uniform(0,1).pdf"),
+            );
+            assert_close(
+                beta.cdf(x),
+                u.cdf(x),
+                1e-12,
+                &format!("Beta(1,1).cdf({x}) vs Uniform(0,1).cdf"),
+            );
         }
     }
 
