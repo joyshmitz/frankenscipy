@@ -29554,6 +29554,93 @@ mod tests {
     }
 
     #[test]
+    fn gen_pareto_pdf_cdf_at_zero_universal() {
+        // /testing-golden-artifacts for [frankenscipy-x5plh]:
+        // GenPareto(c).pdf(0) = 1 and GenPareto(c).cdf(0) = 0 for all
+        // c (since 1 + c·0 = 1 and 1^(-1/c-1) = 1, 1 - 1^(-1/c) = 0).
+        // Universal anchor across the three branches.
+        for &c in &[-0.5_f64, -0.25, -1e-9, 0.0, 1e-9, 0.25, 0.5, 1.0] {
+            let gp = GenPareto::new(c);
+            assert_close(gp.pdf(0.0), 1.0, 1e-12, &format!("GP({c}).pdf(0)=1"));
+            assert_close(gp.cdf(0.0), 0.0, 1e-12, &format!("GP({c}).cdf(0)=0"));
+        }
+    }
+
+    #[test]
+    fn gen_pareto_exponential_limit_moments() {
+        // Exponential limit (c=0): GenPareto(0) is Exponential(1).
+        // mean = 1, var = 1.
+        let gp = GenPareto::new(0.0);
+        assert_close(gp.mean(), 1.0, 1e-12, "GP(c=0) mean = 1");
+        assert_close(gp.var(), 1.0, 1e-12, "GP(c=0) var = 1");
+        // pdf(x) = exp(-x), cdf(x) = 1 - exp(-x).
+        for &x in &[0.5_f64, 1.0, 2.0, 3.0] {
+            assert_close(
+                gp.pdf(x),
+                (-x).exp(),
+                1e-12,
+                &format!("GP(c=0).pdf({x}) = exp(-x)"),
+            );
+            assert_close(
+                gp.cdf(x),
+                1.0 - (-x).exp(),
+                1e-12,
+                &format!("GP(c=0).cdf({x}) = 1 - exp(-x)"),
+            );
+        }
+    }
+
+    #[test]
+    fn gen_pareto_bounded_right_endpoint_for_negative_c() {
+        // For c < 0, support = [0, -1/c]. cdf at right endpoint = 1.
+        for &c in &[-0.25_f64, -0.5, -1.0, -2.0] {
+            let gp = GenPareto::new(c);
+            let endpoint = -1.0 / c;
+            assert_close(
+                gp.cdf(endpoint),
+                1.0,
+                1e-12,
+                &format!("GP(c={c}).cdf(-1/c={endpoint}) = 1"),
+            );
+        }
+    }
+
+    #[test]
+    fn gen_pareto_ppf_cdf_roundtrip_all_branches() {
+        let qs = [0.05_f64, 0.25, 0.5, 0.75, 0.95];
+        for &c in &[-0.5_f64, -0.25, 0.0, 0.25, 0.5] {
+            let gp = GenPareto::new(c);
+            for &q in &qs {
+                let x = gp.ppf(q);
+                let r = gp.cdf(x);
+                assert_close(
+                    r,
+                    q,
+                    1e-9,
+                    &format!("GP(c={c}) cdf(ppf({q})) = {r}, expected {q}"),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn gen_pareto_pdf_cdf_closed_form_reference_values() {
+        // GP(c=+0.5, x=2): t = 1 + 0.5·2 = 2; tp = 2^(-2) = 0.25
+        //   cdf = 1 - tp = 0.75
+        //   pdf = t^(-1/c - 1) = 2^(-3) = 0.125
+        let gp_pos = GenPareto::new(0.5);
+        assert_close(gp_pos.cdf(2.0), 0.75, 1e-12, "GP(c=+0.5).cdf(2) closed form");
+        assert_close(gp_pos.pdf(2.0), 0.125, 1e-12, "GP(c=+0.5).pdf(2) closed form");
+
+        // GP(c=-0.5, x=1): t = 1 - 0.5·1 = 0.5; tp = 0.5^(2) = 0.25
+        //   cdf = 1 - tp = 0.75
+        //   pdf = t^(-1/c - 1) = 0.5^(2 - 1) = 0.5
+        let gp_neg = GenPareto::new(-0.5);
+        assert_close(gp_neg.cdf(1.0), 0.75, 1e-12, "GP(c=-0.5).cdf(1) closed form");
+        assert_close(gp_neg.pdf(1.0), 0.5, 1e-12, "GP(c=-0.5).pdf(1) closed form");
+    }
+
+    #[test]
     fn power_law_cdf_ppf() {
         let pl = PowerLaw::new(2.0);
         assert!((pl.cdf(0.5) - 0.25).abs() < 1e-10); // x^a = 0.25
