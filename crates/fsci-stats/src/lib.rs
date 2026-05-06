@@ -20120,8 +20120,27 @@ impl ExponWeibull {
 
 impl ContinuousDistribution for ExponWeibull {
     fn pdf(&self, x: f64) -> f64 {
-        if x <= 0.0 {
+        // /testing-metamorphic boundary [frankenscipy-3ahgi]: as x→0+,
+        // (1 - exp(-x^c)) ~ x^c, so the product
+        //   a·c·(1-exp(-x^c))^(a-1)·exp(-x^c)·x^(c-1)
+        // simplifies to a·c·x^(c·a - 1). Limit at x=0:
+        //   c·a < 1 → +∞
+        //   c·a = 1 → a·c           (= 1 when both = 1)
+        //   c·a > 1 → 0
+        // scipy.stats.exponweib agrees on the clean cases — pdf(0) = 1
+        // for a=c=1, +∞ for a=c=0.5, 0 for a=c=2.
+        if x < 0.0 {
             return 0.0;
+        }
+        if x == 0.0 {
+            let ca = self.c * self.a;
+            return if ca < 1.0 {
+                f64::INFINITY
+            } else if ca == 1.0 {
+                self.a * self.c
+            } else {
+                0.0
+            };
         }
         let a = self.a;
         let c = self.c;
@@ -23536,6 +23555,43 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn exponweib_pdf_boundary_matches_scipy() {
+        // /testing-metamorphic regression for [frankenscipy-3ahgi]:
+        // exponweib.pdf at x=0 is governed by c·a:
+        //   c·a < 1 → +∞;  c·a == 1 → a·c;  c·a > 1 → 0
+        // Pin all three regimes plus the canonical (a=c=1)
+        // identity scipy reports as 1.0.
+        // c·a > 1 → 0
+        assert_close(
+            ExponWeibull::new(2.0, 2.0).pdf(0.0),
+            0.0,
+            1e-12,
+            "ExponWeibull(a=2, c=2).pdf(0) = 0",
+        );
+        assert_close(
+            ExponWeibull::new(2.0, 1.0).pdf(0.0),
+            0.0,
+            1e-12,
+            "ExponWeibull(a=2, c=1).pdf(0) = 0",
+        );
+        // c·a == 1 → a·c = 1
+        assert_close(
+            ExponWeibull::new(1.0, 1.0).pdf(0.0),
+            1.0,
+            1e-12,
+            "ExponWeibull(a=1, c=1).pdf(0) = 1 (matches scipy)",
+        );
+        // c·a < 1 → +∞
+        let p = ExponWeibull::new(0.5, 0.5).pdf(0.0);
+        assert!(
+            p.is_infinite() && p > 0.0,
+            "ExponWeibull(a=0.5, c=0.5).pdf(0) = +∞"
+        );
+        // x outside support
+        assert_eq!(ExponWeibull::new(2.0, 2.0).pdf(-0.1), 0.0);
     }
 
     #[test]
