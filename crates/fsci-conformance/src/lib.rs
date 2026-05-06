@@ -10260,8 +10260,32 @@ fn write_packet_report_artifacts(
     })?;
 
     let report_path = output_dir.join("parity_report.json");
-    let report_bytes =
+    // /testing-golden-artifacts for [frankenscipy-okuhi]: stability —
+    // if a parity_report.json already exists and its content matches
+    // the new report modulo `generated_unix_ms`, reuse the on-disk
+    // bytes verbatim. The .raptorq.json and .decode_proof.json
+    // sidecars are hash-derived from these bytes, so preserving them
+    // unchanged transitively stabilises the whole bundle. Without
+    // this check, every test run would rewrite three committed files
+    // with no semantic difference, forcing periodic "refresh parity
+    // reports" churn commits.
+    let new_bytes =
         serde_json::to_vec_pretty(report).map_err(|e| HarnessError::RaptorQ(e.to_string()))?;
+    let report_bytes = match fs::read(&report_path) {
+        Ok(existing) => match serde_json::from_slice::<PacketReport>(&existing) {
+            Ok(existing_report) => {
+                let mut probe = report.clone();
+                probe.generated_unix_ms = existing_report.generated_unix_ms;
+                if probe == existing_report {
+                    existing
+                } else {
+                    new_bytes
+                }
+            }
+            Err(_) => new_bytes,
+        },
+        Err(_) => new_bytes,
+    };
     fs::write(&report_path, &report_bytes).map_err(|source| HarnessError::ArtifactIo {
         path: report_path.clone(),
         source,
@@ -10278,8 +10302,27 @@ fn write_packet_report_artifacts(
 
     let decode_proof = generate_decode_proof_artifact(&report_bytes, &sidecar)?;
     let decode_proof_path = output_dir.join("parity_report.decode_proof.json");
-    let decode_proof_bytes = serde_json::to_vec_pretty(&decode_proof)
+    // /testing-golden-artifacts for [frankenscipy-okuhi]: same
+    // content-stability rule as parity_report.json — if the on-disk
+    // decode proof matches the freshly-generated one modulo
+    // `ts_unix_ms`, keep the on-disk bytes verbatim.
+    let new_proof_bytes = serde_json::to_vec_pretty(&decode_proof)
         .map_err(|e| HarnessError::RaptorQ(e.to_string()))?;
+    let decode_proof_bytes = match fs::read(&decode_proof_path) {
+        Ok(existing) => match serde_json::from_slice::<DecodeProofArtifact>(&existing) {
+            Ok(existing_proof) => {
+                let mut probe = decode_proof.clone();
+                probe.ts_unix_ms = existing_proof.ts_unix_ms;
+                if probe == existing_proof {
+                    existing
+                } else {
+                    new_proof_bytes
+                }
+            }
+            Err(_) => new_proof_bytes,
+        },
+        Err(_) => new_proof_bytes,
+    };
     fs::write(&decode_proof_path, decode_proof_bytes).map_err(|source| {
         HarnessError::ArtifactIo {
             path: decode_proof_path.clone(),
@@ -18856,6 +18899,84 @@ mod tests {
         assert_eq!(
             decode_proof.proof_hash,
             blake3::hash(&report_bytes).to_hex().to_string()
+        );
+    }
+
+    #[test]
+    fn write_parity_artifacts_is_byte_stable_modulo_generated_unix_ms() {
+        // /testing-golden-artifacts regression for [frankenscipy-okuhi]:
+        // when the only difference between the existing on-disk
+        // parity_report.json and the freshly-built report is the
+        // generated_unix_ms field, the writer must reuse the on-disk
+        // bytes verbatim. Otherwise every test run would rewrite three
+        // committed files (parity_report.json + .raptorq.json sidecar +
+        // .decode_proof.json) with no semantic difference.
+        let root = PathBuf::from("/tmp").join(format!(
+            "fsci-conformance-okuhi-{}",
+            super::now_unix_ms()
+        ));
+        let cfg = HarnessConfig {
+            oracle_root: root.join("oracle"),
+            fixture_root: root.join("fixtures"),
+            strict_mode: true,
+        };
+        let mk_report = |ts: u128| PacketReport {
+            schema_version: super::packet_report_schema_v2(),
+            packet_id: "REGRESSION-OKUHI".to_owned(),
+            family: "synthetic".to_owned(),
+            case_results: vec![super::CaseResult {
+                case_id: "stable".to_owned(),
+                passed: true,
+                message: "deterministic".to_owned(),
+            }],
+            passed_cases: 1,
+            failed_cases: 0,
+            fixture_path: None,
+            oracle_status: None,
+            differential_case_results: None,
+            report_kind: super::ReportKind::Unspecified,
+            generated_unix_ms: ts,
+        };
+
+        // First write — fresh dir, must produce all three artifacts.
+        let r1 = mk_report(1_000);
+        let a1 = write_parity_artifacts(&cfg, &r1).expect("first write must succeed");
+        let bytes_report_1 = fs::read(&a1.report_path).expect("read parity_report.json #1");
+        let bytes_sidecar_1 = fs::read(&a1.sidecar_path).expect("read raptorq sidecar #1");
+        let bytes_proof_1 = fs::read(&a1.decode_proof_path).expect("read decode proof #1");
+
+        // Second write — same content, different timestamp.
+        // All three on-disk files must be byte-identical to the first
+        // run because the writer reuses the existing parity_report.json
+        // (and the sidecars are hash-derived from those bytes).
+        let r2 = mk_report(2_000);
+        let a2 = write_parity_artifacts(&cfg, &r2).expect("second write must succeed");
+        let bytes_report_2 = fs::read(&a2.report_path).expect("read parity_report.json #2");
+        let bytes_sidecar_2 = fs::read(&a2.sidecar_path).expect("read raptorq sidecar #2");
+        let bytes_proof_2 = fs::read(&a2.decode_proof_path).expect("read decode proof #2");
+
+        assert_eq!(
+            bytes_report_1, bytes_report_2,
+            "parity_report.json must be byte-stable when only generated_unix_ms differs"
+        );
+        assert_eq!(
+            bytes_sidecar_1, bytes_sidecar_2,
+            "parity_report.raptorq.json must be byte-stable when source is byte-stable"
+        );
+        assert_eq!(
+            bytes_proof_1, bytes_proof_2,
+            "parity_report.decode_proof.json must be byte-stable when source is byte-stable"
+        );
+
+        // Third write — content actually changed (different message).
+        // The writer must produce fresh bytes.
+        let mut r3 = mk_report(3_000);
+        r3.case_results[0].message = "different content".to_owned();
+        write_parity_artifacts(&cfg, &r3).expect("third write must succeed");
+        let bytes_report_3 = fs::read(&a1.report_path).expect("read parity_report.json #3");
+        assert_ne!(
+            bytes_report_1, bytes_report_3,
+            "writer must not be sticky when actual content changes"
         );
     }
 
