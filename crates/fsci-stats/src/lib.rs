@@ -22667,6 +22667,52 @@ mod tests {
     }
 
     #[test]
+    fn gumbel_and_gumbel_left_are_mirrors() {
+        // /testing-metamorphic for [frankenscipy-bwwz7]: GumbelLeft is
+        // the mirror of Gumbel through x → -x and loc → -loc:
+        //
+        //   Gumbel(loc, s).cdf(x) + GumbelLeft(-loc, s).cdf(-x) = 1
+        //   Gumbel(loc, s).pdf(x)  =  GumbelLeft(-loc, s).pdf(-x)
+        //   Gumbel(loc, s).sf(x)   =  GumbelLeft(-loc, s).cdf(-x)
+        //
+        // A sign error in either side would surface as a mismatch.
+        let cases: &[(f64, f64)] = &[(0.0, 1.0), (-1.0, 0.5), (2.0, 3.0), (-3.0, 2.5)];
+        let xs = [-4.0_f64, -1.0, -0.25, 0.0, 0.25, 1.0, 4.0];
+        for &(loc, scale) in cases {
+            let g = Gumbel::new(loc, scale);
+            let gl = GumbelLeft::new(-loc, scale);
+            for &x in &xs {
+                let g_cdf = g.cdf(x);
+                let gl_cdf_neg = gl.cdf(-x);
+                assert_close(
+                    g_cdf + gl_cdf_neg,
+                    1.0,
+                    1e-12,
+                    &format!("Gumbel({loc},{scale}).cdf({x}) + GumbelLeft.cdf(-{x}) = 1"),
+                );
+
+                let g_pdf = g.pdf(x);
+                let gl_pdf_neg = gl.pdf(-x);
+                assert_close(
+                    g_pdf,
+                    gl_pdf_neg,
+                    1e-12,
+                    &format!("Gumbel({loc},{scale}).pdf({x}) = GumbelLeft.pdf(-{x})"),
+                );
+
+                let g_sf = g.sf(x);
+                let gl_cdf_neg2 = gl.cdf(-x);
+                assert_close(
+                    g_sf,
+                    gl_cdf_neg2,
+                    1e-12,
+                    &format!("Gumbel({loc},{scale}).sf({x}) = GumbelLeft.cdf(-{x})"),
+                );
+            }
+        }
+    }
+
+    #[test]
     fn lomax_is_pareto_shifted_by_one() {
         // /testing-metamorphic regression for [frankenscipy-gnwtk]:
         // Lomax (Pareto type II) is the textbook shift of Pareto
