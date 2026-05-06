@@ -2958,6 +2958,43 @@ pub fn lp2lp(b: &[f64], a: &[f64], wo: f64) -> Result<(Vec<f64>, Vec<f64>), Sign
     normalize_filter(&new_b, &new_a)
 }
 
+/// Transform a lowpass filter prototype to a highpass filter, in
+/// transfer-function (b, a) form.
+///
+/// Matches `scipy.signal.lp2hp(b, a, wo=1.0)`. Substitutes s → wo/s.
+/// For the original B(s) of degree M_b stored in descending powers,
+/// the new coefficient at index j (in descending powers, length =
+/// max(b.len(), a.len())) is `b[M_b − j] · wo^j` for `j ≤ M_b` and
+/// 0 above. Same for `a`. Then normalize so `a[0] = 1`.
+///
+/// Resolves [frankenscipy-drh63].
+pub fn lp2hp(b: &[f64], a: &[f64], wo: f64) -> Result<(Vec<f64>, Vec<f64>), SignalError> {
+    if !wo.is_finite() || wo <= 0.0 {
+        return Err(SignalError::InvalidArgument(
+            "wo must be positive finite".into(),
+        ));
+    }
+    if b.is_empty() || a.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "b and a must be non-empty".into(),
+        ));
+    }
+    let nb = b.len();
+    let na = a.len();
+    let n = nb.max(na);
+    let mb = nb - 1;
+    let ma = na - 1;
+    let mut new_b = vec![0.0_f64; n];
+    let mut new_a = vec![0.0_f64; n];
+    for j in 0..=mb {
+        new_b[j] = b[mb - j] * wo.powi(j as i32);
+    }
+    for j in 0..=ma {
+        new_a[j] = a[ma - j] * wo.powi(j as i32);
+    }
+    normalize_filter(&new_b, &new_a)
+}
+
 /// Reject improper prototypes (more zeros than poles) — matches scipy's
 /// `_relative_degree` ValueError.
 fn check_proper_prototype(
@@ -16361,6 +16398,72 @@ mod tests {
         assert!(lp2lp(&[1.0], &[1.0], f64::INFINITY).is_err());
         assert!(lp2lp(&[], &[1.0], 1.0).is_err());
         assert!(lp2lp(&[1.0], &[], 1.0).is_err());
+    }
+
+    #[test]
+    fn lp2hp_ba_first_order_substitution() {
+        // /porting-to-rust [frankenscipy-drh63]: H(s) = 1/(s+1) with
+        // wo=2 → highpass via s → 2/s. scipy reference:
+        //   lp2hp([1], [1, 1], wo=2) = b=[1, 0], a=[1, 2].
+        let (nb, na) = lp2hp(&[1.0], &[1.0, 1.0], 2.0).expect("lp2hp 1st order");
+        assert_eq!(nb.len(), 2);
+        assert_eq!(na.len(), 2);
+        assert!((nb[0] - 1.0).abs() < 1e-12);
+        assert!((nb[1] - 0.0).abs() < 1e-12);
+        assert!((na[0] - 1.0).abs() < 1e-12);
+        assert!((na[1] - 2.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn lp2hp_ba_second_order_substitution() {
+        // /porting-to-rust [frankenscipy-drh63]: scipy reference
+        //   lp2hp([1, 2], [1, 3, 4], wo=2) =
+        //   b=[0.5, 0.5, 0.0], a=[1.0, 1.5, 1.0].
+        let (nb, na) = lp2hp(&[1.0, 2.0], &[1.0, 3.0, 4.0], 2.0).expect("lp2hp 2nd order");
+        for (got, want) in nb.iter().zip([0.5, 0.5, 0.0].iter()) {
+            assert!(
+                (got - want).abs() < 1e-12,
+                "b mismatch: got {got}, want {want}"
+            );
+        }
+        for (got, want) in na.iter().zip([1.0, 1.5, 1.0].iter()) {
+            assert!(
+                (got - want).abs() < 1e-12,
+                "a mismatch: got {got}, want {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn lp2hp_ba_identity_when_wo_is_one() {
+        // /porting-to-rust [frankenscipy-drh63]: at wo=1, the
+        // substitution s → 1/s reverses the coefficient order.
+        // For B = [1, 2], A = [1, 3, 4]: scipy returns
+        //   b=[0.5, 0.25, 0], a=[1, 0.75, 0.25].
+        let (nb, na) = lp2hp(&[1.0, 2.0], &[1.0, 3.0, 4.0], 1.0).expect("lp2hp wo=1");
+        for (got, want) in nb.iter().zip([0.5, 0.25, 0.0].iter()) {
+            assert!(
+                (got - want).abs() < 1e-12,
+                "b mismatch: got {got}, want {want}"
+            );
+        }
+        for (got, want) in na.iter().zip([1.0, 0.75, 0.25].iter()) {
+            assert!(
+                (got - want).abs() < 1e-12,
+                "a mismatch: got {got}, want {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn lp2hp_ba_rejects_invalid_wo() {
+        // /porting-to-rust [frankenscipy-drh63]: validation contract.
+        assert!(lp2hp(&[1.0], &[1.0], 0.0).is_err());
+        assert!(lp2hp(&[1.0], &[1.0], -1.0).is_err());
+        assert!(lp2hp(&[1.0], &[1.0], f64::NAN).is_err());
+        assert!(lp2hp(&[1.0], &[1.0], f64::INFINITY).is_err());
+        assert!(lp2hp(&[], &[1.0], 1.0).is_err());
+        assert!(lp2hp(&[1.0], &[], 1.0).is_err());
     }
 
     #[test]
