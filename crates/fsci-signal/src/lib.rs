@@ -6662,10 +6662,11 @@ pub fn firwin2(
 /// goes the opposite direction (atten → beta).
 #[must_use]
 pub fn kaiser_atten(numtaps: usize, width: f64) -> f64 {
-    if numtaps == 0 {
-        return 7.95;
-    }
-    2.285 * (numtaps - 1) as f64 * std::f64::consts::PI * width + 7.95
+    // Cast to f64 before subtracting so numtaps == 0 doesn't underflow
+    // usize. scipy.signal.kaiser_atten evaluates (numtaps - 1) as -1
+    // in that case, yielding e.g. ≈7.232 for width=0.1 — not 7.95.
+    // Resolves [frankenscipy-bg40m].
+    2.285 * (numtaps as f64 - 1.0) * std::f64::consts::PI * width + 7.95
 }
 
 /// Kaiser window β parameter from desired attenuation.
@@ -12731,12 +12732,29 @@ mod tests {
 
     #[test]
     fn kaiser_atten_closed_form() {
-        // /porting-to-rust [frankenscipy-ooa4k]:
+        // /porting-to-rust [frankenscipy-ooa4k] + boundary fix
+        // [frankenscipy-bg40m]:
         // atten(numtaps, width) = 2.285 · (numtaps − 1) · π · width + 7.95.
         // numtaps = 1: zero-order term only → 7.95.
         assert_close(kaiser_atten(1, 0.1), 7.95, 1e-12, "atten at numtaps=1");
-        // numtaps = 0 boundary: convention → 7.95.
-        assert_close(kaiser_atten(0, 0.1), 7.95, 1e-12, "atten at numtaps=0");
+        // numtaps = 0 boundary: scipy lets (numtaps − 1) underflow to
+        // −1, so result = −2.285·π·width + 7.95. The previous fsci
+        // override returned 7.95 here, diverging from scipy.
+        let scipy_at_zero = -2.285 * std::f64::consts::PI * 0.1 + 7.95;
+        assert_close(
+            kaiser_atten(0, 0.1),
+            scipy_at_zero,
+            1e-12,
+            "atten at numtaps=0 must match scipy boundary value",
+        );
+        // Reference value verified against scipy.signal.kaiser_atten:
+        //   scipy.signal.kaiser_atten(0, 0.1) = 7.232146078654733
+        assert_close(
+            kaiser_atten(0, 0.1),
+            7.232_146_078_654_733,
+            1e-12,
+            "atten(0, 0.1) vs hardcoded scipy reference",
+        );
         // Reference: numtaps=21, width=0.1.
         let expected = 2.285 * 20.0 * std::f64::consts::PI * 0.1 + 7.95;
         assert_close(kaiser_atten(21, 0.1), expected, 1e-12, "atten at 21,0.1");
