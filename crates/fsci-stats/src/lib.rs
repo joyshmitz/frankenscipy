@@ -6702,8 +6702,23 @@ impl Fisk {
 
 impl ContinuousDistribution for Fisk {
     fn pdf(&self, x: f64) -> f64 {
-        if x <= 0.0 {
+        // /mock-code-finder boundary [frankenscipy-zu96v]: at x=0 the
+        // formula c·x^(c-1)/(1+x^c)² has a shape-dependent limit:
+        //   c < 1 → +∞   (x^(c-1) diverges)
+        //   c = 1 → 1    (constant numerator)
+        //   c > 1 → 0    (x^(c-1) vanishes)
+        // scipy.stats.fisk reports inf/1/0 in those regimes.
+        if x < 0.0 {
             return 0.0;
+        }
+        if x == 0.0 {
+            return if self.c < 1.0 {
+                f64::INFINITY
+            } else if self.c == 1.0 {
+                1.0
+            } else {
+                0.0
+            };
         }
         let c = self.c;
         c * x.powf(c - 1.0) / (1.0 + x.powf(c)).powi(2)
@@ -8514,8 +8529,24 @@ impl Mielke {
 
 impl ContinuousDistribution for Mielke {
     fn pdf(&self, x: f64) -> f64 {
-        if x <= 0.0 {
+        // /mock-code-finder boundary [frankenscipy-zu96v]: at x=0 the
+        // formula k·x^(k-1)/(1+x^s)^(1+k/s) has a shape-dependent
+        // limit governed by k:
+        //   k < 1 → +∞   (x^(k-1) diverges)
+        //   k = 1 → 1    (constant numerator)
+        //   k > 1 → 0    (x^(k-1) vanishes)
+        // scipy.stats.mielke reports inf/1/0 in those regimes.
+        if x < 0.0 {
             return 0.0;
+        }
+        if x == 0.0 {
+            return if self.k < 1.0 {
+                f64::INFINITY
+            } else if self.k == 1.0 {
+                1.0
+            } else {
+                0.0
+            };
         }
         let k = self.k;
         let s = self.s;
@@ -23475,6 +23506,51 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn fisk_pdf_boundary_matches_scipy() {
+        // /mock-code-finder regression for [frankenscipy-zu96v]:
+        // fisk.pdf at x=0 is 0/1/+∞ depending on shape c per scipy.
+        assert!(
+            Fisk::new(0.5).pdf(0.0).is_infinite() && Fisk::new(0.5).pdf(0.0) > 0.0,
+            "Fisk(c<1).pdf(0) = +∞"
+        );
+        assert_close(Fisk::new(1.0).pdf(0.0), 1.0, 1e-12, "Fisk(c=1).pdf(0) = 1");
+        assert_close(Fisk::new(2.0).pdf(0.0), 0.0, 1e-12, "Fisk(c>1).pdf(0) = 0");
+        assert_close(Fisk::new(3.5).pdf(0.0), 0.0, 1e-12, "Fisk(c>1).pdf(0) = 0");
+        // Outside support still 0.
+        assert_eq!(Fisk::new(2.0).pdf(-0.1), 0.0);
+    }
+
+    #[test]
+    fn mielke_pdf_boundary_matches_scipy() {
+        // /mock-code-finder regression for [frankenscipy-zu96v]:
+        // mielke.pdf at x=0 is 0/1/+∞ depending on shape k per scipy.
+        assert!(
+            Mielke::new(0.5, 1.0).pdf(0.0).is_infinite() && Mielke::new(0.5, 1.0).pdf(0.0) > 0.0,
+            "Mielke(k<1).pdf(0) = +∞"
+        );
+        assert_close(
+            Mielke::new(1.0, 2.0).pdf(0.0),
+            1.0,
+            1e-12,
+            "Mielke(k=1).pdf(0) = 1",
+        );
+        assert_close(
+            Mielke::new(2.0, 1.0).pdf(0.0),
+            0.0,
+            1e-12,
+            "Mielke(k>1).pdf(0) = 0",
+        );
+        assert_close(
+            Mielke::new(1.5, 0.5).pdf(0.0),
+            0.0,
+            1e-12,
+            "Mielke(k>1).pdf(0) = 0",
+        );
+        // Outside support still 0.
+        assert_eq!(Mielke::new(2.0, 3.0).pdf(-0.1), 0.0);
     }
 
     #[test]
