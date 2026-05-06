@@ -6819,10 +6819,7 @@ pub struct WrapCauchy {
 impl WrapCauchy {
     #[must_use]
     pub fn new(c: f64) -> Self {
-        assert!(
-            (0.0..1.0).contains(&c),
-            "c must be in [0, 1), got {c}"
-        );
+        assert!((0.0..1.0).contains(&c), "c must be in [0, 1), got {c}");
         Self { c }
     }
 }
@@ -26631,10 +26628,7 @@ mod tests {
         //      = 8/12 + 8/8
         //      = 2/3 + 1
         //      = 5/3
-        let (chi2, p) = chisquare(
-            &[10.0, 10.0, 10.0, 10.0],
-            Some(&[12.0, 8.0, 12.0, 8.0]),
-        );
+        let (chi2, p) = chisquare(&[10.0, 10.0, 10.0, 10.0], Some(&[12.0, 8.0, 12.0, 8.0]));
         let expected_chi2 = 5.0 / 3.0;
         assert!(
             (chi2 - expected_chi2).abs() < 1e-12,
@@ -28279,10 +28273,7 @@ mod tests {
         ];
         for (u, v) in cases {
             let d = wasserstein_distance(u, v);
-            assert!(
-                d >= -1e-12,
-                "W({u:?}, {v:?}) = {d} should be non-negative"
-            );
+            assert!(d >= -1e-12, "W({u:?}, {v:?}) = {d} should be non-negative");
         }
     }
 
@@ -28378,7 +28369,9 @@ mod tests {
 
         // Larger varied case to exercise the merge-pointer path.
         let big_u: Vec<f64> = (0..50).map(|i| (i as f64).sin() * 2.0 + 0.3).collect();
-        let big_v: Vec<f64> = (0..37).map(|i| (i as f64 * 1.7).cos() * 3.0 - 0.2).collect();
+        let big_v: Vec<f64> = (0..37)
+            .map(|i| (i as f64 * 1.7).cos() * 3.0 - 0.2)
+            .collect();
         let mut naive = 0.0_f64;
         for &ui in &big_u {
             for &vj in &big_v {
@@ -33147,7 +33140,10 @@ mod tests {
         //     skew = 6·√10 / 10^(3/2) = 0.6
         let symm = [1.0_f64, 2.0, 3.0, 4.0, 5.0];
         let s_symm = skew(&symm);
-        assert!(s_symm.abs() < 1e-12, "skew(symmetric) = {s_symm}, expected 0");
+        assert!(
+            s_symm.abs() < 1e-12,
+            "skew(symmetric) = {s_symm}, expected 0"
+        );
         let k_symm = kurtosis(&symm);
         assert!(
             (k_symm - (-1.3)).abs() < 1e-12,
