@@ -23812,6 +23812,47 @@ mod tests {
     }
 
     #[test]
+    fn f_one_v_cdf_is_studentt_squared() {
+        // /testing-metamorphic for [frankenscipy-gfeto]: textbook
+        // identity If T ~ StudentT(ν), then T² ~ F(1, ν). At the
+        // CDF level, for t > 0 and x = t²:
+        //
+        //   F(1, ν).cdf(t²) = P(|T| ≤ t) = 2·StudentT(ν).cdf(t) − 1
+        //
+        // Independent verification: F.cdf invokes
+        // regularized_incomplete_beta(0.5, 0.5ν, t²/(t²+ν)) directly,
+        // while StudentT.cdf invokes the symmetric form
+        // regularized_incomplete_beta(0.5ν, 0.5, ν/(t²+ν)) and folds
+        // via I_x(a,b) + I_{1-x}(b,a) = 1. A bug in either parameter
+        // swap surfaces as a mismatch.
+        for &v in &[1.0_f64, 2.0, 5.0, 30.0, 100.0] {
+            let f = FDistribution::new(1.0, v);
+            let t = StudentT { df: v };
+            for &t_val in &[0.1_f64, 0.5, 1.0, 2.0, 5.0] {
+                let x = t_val * t_val;
+                let lhs = f.cdf(x);
+                let rhs = 2.0 * t.cdf(t_val) - 1.0;
+                assert_close(
+                    lhs,
+                    rhs,
+                    1e-10,
+                    &format!("F(1, {v}).cdf({x}) vs 2·T({v}).cdf({t_val}) − 1"),
+                );
+                // sf = 1 - cdf, equivalent through the same identity
+                // routed via two different code paths.
+                let lhs_sf = f.sf(x);
+                let rhs_sf = 2.0 * t.sf(t_val);
+                assert_close(
+                    lhs_sf,
+                    rhs_sf,
+                    1e-10,
+                    &format!("F(1, {v}).sf({x}) vs 2·T({v}).sf({t_val})"),
+                );
+            }
+        }
+    }
+
+    #[test]
     fn betaprime_is_beta_under_x_over_one_plus_x() {
         // /testing-metamorphic for [frankenscipy-2n31z]: textbook
         // identity BetaPrime(α, β) ≡ Beta(α, β) under Y = X/(1+X).
