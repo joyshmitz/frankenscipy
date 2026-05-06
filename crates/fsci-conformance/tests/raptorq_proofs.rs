@@ -14,7 +14,7 @@ use fsci_conformance::{
     generate_raptorq_sidecar,
 };
 use serde::Serialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const SYMBOL_SIZE: usize = 128;
 
@@ -587,4 +587,52 @@ fn sidecar_consistency_scrub() {
     });
 
     eprintln!("\n── Sidecar Consistency Scrub ──\n  Verified {checked} existing sidecars");
+}
+
+#[test]
+fn root_long_lived_artifacts_have_decode_proofs() {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("fsci-conformance should live under crates/");
+    let artifacts_dir = repo_root.join("artifacts");
+    if !artifacts_dir.exists() {
+        eprintln!("No root artifacts directory found — skipping root artifact sidecar test");
+        return;
+    }
+
+    let mut checked = 0usize;
+    for entry in std::fs::read_dir(&artifacts_dir).expect("artifacts dir should be readable") {
+        let path = entry.expect("artifact entry should be readable").path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("md") {
+            continue;
+        }
+
+        let payload = std::fs::read(&path).expect("root artifact should be readable");
+        let expected_hash = hash(&payload).to_hex().to_string();
+        let sidecar_path = PathBuf::from(format!("{}.raptorq.json", path.display()));
+        let decode_path = PathBuf::from(format!("{}.decode_proof.json", path.display()));
+
+        let sidecar: RaptorQSidecar = serde_json::from_slice(
+            &std::fs::read(&sidecar_path).expect("root artifact sidecar should exist"),
+        )
+        .expect("root artifact sidecar should parse");
+        let decode: DecodeProofArtifact = serde_json::from_slice(
+            &std::fs::read(&decode_path).expect("root artifact decode proof should exist"),
+        )
+        .expect("root artifact decode proof should parse");
+
+        assert_eq!(sidecar.source_hash, expected_hash);
+        assert_eq!(decode.proof_hash, expected_hash);
+        assert!(
+            decode.recovered_blocks > 0,
+            "decode proof should simulate at least one recovered source block for {path:?}"
+        );
+        checked += 1;
+    }
+
+    assert!(
+        checked >= 4,
+        "expected root markdown artifacts to carry RaptorQ sidecars and decode proofs"
+    );
 }

@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "generated_unix_ms": 1778037889900,
+  "checked_artifacts": 4,
+  "entries": [
+    {
+      "artifact_path": "artifacts/TOLERANCE_POLICY.md",
+      "sidecar_path": "artifacts/TOLERANCE_POLICY.md.raptorq.json",
+      "decode_proof_path": "artifacts/TOLERANCE_POLICY.md.decode_proof.json",
+      "source_hash": "aad901295561b2d3af142fcc2c3cab0535e12e6a6c5cc4a74d7018a94561cc5c",
+      "source_symbols": 175,
+      "repair_symbols": 35,
+      "recovered_blocks": 1,
+      "status": "ok"
+    },
+    {
+      "artifact_path": "artifacts/benchmark-baselines-2026-05-03.md",
+      "sidecar_path": "artifacts/benchmark-baselines-2026-05-03.md.raptorq.json",
+      "decode_proof_path": "artifacts/benchmark-baselines-2026-05-03.md.decode_proof.json",
+      "source_hash": "af633a7fecbd8bc15270f86e18b48fffe58ad94b6a9b1dfa0a67f0d0fa1c1d1b",
+      "source_symbols": 70,
+      "repair_symbols": 14,
+      "recovered_blocks": 1,
+      "status": "ok"
+    },
+    {
+      "artifact_path": "artifacts/reality-check-2026-05-03.md",
+      "sidecar_path": "artifacts/reality-check-2026-05-03.md.raptorq.json",
+      "decode_proof_path": "artifacts/reality-check-2026-05-03.md.decode_proof.json",
+      "source_hash": "375532c384bea60a1d3f1a697f533de9840ce7b1ef0840bd3355bd29ef73537c",
+      "source_symbols": 97,
+      "repair_symbols": 19,
+      "recovered_blocks": 1,
+      "status": "ok"
+    },
+    {
+      "artifact_path": "artifacts/tolerance-audit-2026-05-03.md",
+      "sidecar_path": "artifacts/tolerance-audit-2026-05-03.md.raptorq.json",
+      "decode_proof_path": "artifacts/tolerance-audit-2026-05-03.md.decode_proof.json",
+      "source_hash": "1b1359a9b3ab7dec3de2f7c9f4202bc4f13f0b2dc18e66aed75c99911e9dfe8e",
+      "source_symbols": 52,
+      "repair_symbols": 10,
+      "recovered_blocks": 1,
+      "status": "ok"
+    }
+  ]
+}

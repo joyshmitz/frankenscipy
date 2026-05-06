@@ -10276,7 +10276,7 @@ fn write_packet_report_artifacts(
         source,
     })?;
 
-    let decode_proof = simulate_decode_proof_artifact(&report_bytes, &sidecar)?;
+    let decode_proof = generate_decode_proof_artifact(&report_bytes, &sidecar)?;
     let decode_proof_path = output_dir.join("parity_report.decode_proof.json");
     let decode_proof_bytes = serde_json::to_vec_pretty(&decode_proof)
         .map_err(|e| HarnessError::RaptorQ(e.to_string()))?;
@@ -10389,7 +10389,7 @@ fn recover_payload_with_sidecar(
     Ok(recovered)
 }
 
-fn simulate_decode_proof_artifact(
+pub fn generate_decode_proof_artifact(
     payload: &[u8],
     sidecar: &RaptorQSidecar,
 ) -> Result<DecodeProofArtifact, HarnessError> {
