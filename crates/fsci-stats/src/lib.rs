@@ -7364,6 +7364,23 @@ impl ContinuousDistribution for Semicircular {
         0.25 // 1/4
     }
 
+    fn skewness(&self) -> f64 {
+        // Semicircular is symmetric around 0.
+        0.0
+    }
+
+    fn kurtosis(&self) -> f64 {
+        // /mock-code-finder for [frankenscipy-lud8x]: scipy.stats.semicircular
+        // reports excess kurtosis = -1.
+        -1.0
+    }
+
+    fn entropy(&self) -> f64 {
+        // /mock-code-finder for [frankenscipy-lud8x]: scipy.stats.semicircular
+        // reports differential entropy = ln(π) − 1/2 ≈ 0.6447.
+        PI.ln() - 0.5
+    }
+
     // fit() inherits the trait default. Resolves [frankenscipy-paejq].
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
@@ -7442,6 +7459,25 @@ impl ContinuousDistribution for CosineDistribution {
 
     fn var(&self) -> f64 {
         PI * PI / 3.0 - 2.0 // π²/3 - 2
+    }
+
+    fn skewness(&self) -> f64 {
+        // CosineDistribution is symmetric around 0.
+        0.0
+    }
+
+    fn kurtosis(&self) -> f64 {
+        // /mock-code-finder for [frankenscipy-lud8x]: scipy.stats.cosine
+        // reports excess kurtosis = -6·(π⁴ - 90)/(5·(π² - 6)²).
+        let pi2 = PI * PI;
+        let pi4 = pi2 * pi2;
+        -6.0 * (pi4 - 90.0) / (5.0 * (pi2 - 6.0).powi(2))
+    }
+
+    fn entropy(&self) -> f64 {
+        // /mock-code-finder for [frankenscipy-lud8x]: scipy.stats.cosine
+        // reports differential entropy = ln(4π) − 1 ≈ 1.531.
+        (4.0 * PI).ln() - 1.0
     }
 
     fn fit(_data: &[f64]) -> Self {
@@ -8733,6 +8769,23 @@ impl ContinuousDistribution for Arcsine {
 
     fn var(&self) -> f64 {
         0.125 // 1/8
+    }
+
+    fn skewness(&self) -> f64 {
+        // Arcsine is symmetric around 1/2.
+        0.0
+    }
+
+    fn kurtosis(&self) -> f64 {
+        // /mock-code-finder for [frankenscipy-lud8x]: scipy.stats.arcsine
+        // reports excess kurtosis = -3/2.
+        -1.5
+    }
+
+    fn entropy(&self) -> f64 {
+        // /mock-code-finder for [frankenscipy-lud8x]: scipy.stats.arcsine
+        // reports differential entropy = ln(π/4) ≈ -0.241564.
+        (PI / 4.0).ln()
     }
 
     // fit() inherits the trait default. Resolves [frankenscipy-paejq].
@@ -23392,6 +23445,57 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn arcsine_higher_moments_match_scipy() {
+        // /mock-code-finder for [frankenscipy-lud8x]: pin closed-form
+        // skew/kurt/entropy. scipy.stats.arcsine values:
+        //   skew = 0
+        //   ex_kurt = -3/2
+        //   entropy = ln(π/4) ≈ -0.24156447527049044
+        let dist = Arcsine;
+        assert_close(dist.skewness(), 0.0, 1e-15, "Arcsine.skewness");
+        assert_close(dist.kurtosis(), -1.5, 1e-15, "Arcsine.kurtosis");
+        assert_close(dist.entropy(), (PI / 4.0).ln(), 1e-15, "Arcsine.entropy");
+        assert!((dist.entropy() - (-0.241_564_475_270_490_44)).abs() < 1e-13);
+    }
+
+    #[test]
+    fn semicircular_higher_moments_match_scipy() {
+        // /mock-code-finder for [frankenscipy-lud8x]: pin closed-form
+        // skew/kurt/entropy. scipy.stats.semicircular values:
+        //   skew = 0
+        //   ex_kurt = -1
+        //   entropy = ln(π) − 1/2 ≈ 0.6447298858494002
+        let dist = Semicircular;
+        assert_close(dist.skewness(), 0.0, 1e-15, "Semicircular.skewness");
+        assert_close(dist.kurtosis(), -1.0, 1e-15, "Semicircular.kurtosis");
+        assert_close(dist.entropy(), PI.ln() - 0.5, 1e-15, "Semicircular.entropy");
+        assert!((dist.entropy() - 0.644_729_885_849_400_2).abs() < 1e-13);
+    }
+
+    #[test]
+    fn cosine_higher_moments_match_scipy() {
+        // /mock-code-finder for [frankenscipy-lud8x]: pin closed-form
+        // skew/kurt/entropy. scipy.stats.cosine values:
+        //   skew = 0
+        //   ex_kurt = -6(π⁴ - 90)/(5(π² - 6)²) ≈ -0.5937628755982794
+        //   entropy = ln(4π) − 1 ≈ 1.5310242469692907
+        let dist = CosineDistribution;
+        assert_close(dist.skewness(), 0.0, 1e-15, "Cosine.skewness");
+        let pi2 = PI * PI;
+        let pi4 = pi2 * pi2;
+        let ex_kurt = -6.0 * (pi4 - 90.0) / (5.0 * (pi2 - 6.0).powi(2));
+        assert_close(dist.kurtosis(), ex_kurt, 1e-15, "Cosine.kurtosis");
+        assert!((dist.kurtosis() - (-0.593_762_875_598_279_4)).abs() < 1e-13);
+        assert_close(
+            dist.entropy(),
+            (4.0 * PI).ln() - 1.0,
+            1e-15,
+            "Cosine.entropy",
+        );
+        assert!((dist.entropy() - 1.531_024_246_969_290_7).abs() < 1e-13);
     }
 
     #[test]
