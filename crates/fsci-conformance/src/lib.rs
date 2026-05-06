@@ -10353,11 +10353,19 @@ fn recover_payload_with_sidecar(
         )));
     }
 
+    // Fail loud on out-of-range drop_indices instead of silently
+    // skipping. Previously `if idx < k { dropped[idx] = true }`
+    // swallowed stale indices, so a caller passing a wrong/stale
+    // index would get a "decode proof" that didn't actually exercise
+    // recovery — review-mode finding.
     let mut dropped = vec![false; k];
     for &idx in drop_indices {
-        if idx < k {
-            dropped[idx] = true;
+        if idx >= k {
+            return Err(HarnessError::RaptorQ(format!(
+                "drop_indices contains out-of-range symbol index {idx} (k = {k})"
+            )));
         }
+        dropped[idx] = true;
     }
 
     let mut received = Vec::new();
@@ -18852,6 +18860,36 @@ mod tests {
         assert!(artifacts.report_path.exists());
         assert!(artifacts.sidecar_path.exists());
         assert!(artifacts.decode_proof_path.exists());
+    }
+
+    #[test]
+    fn recover_payload_with_sidecar_rejects_out_of_range_drop_index() {
+        // REVIEW MODE [LOW] regression: recover_payload_with_sidecar
+        // used to silently skip out-of-range entries in drop_indices,
+        // which would let a caller pass a stale/wrong index and still
+        // get a "decode proof" without exercising recovery. The fix
+        // returns an explicit RaptorQ error for any idx >= k.
+        let payload = b"hello, raptorq decode proof regression test"
+            .iter()
+            .copied()
+            .cycle()
+            .take(1024)
+            .collect::<Vec<u8>>();
+        let sidecar = super::generate_raptorq_sidecar(&payload).expect("generate sidecar");
+        let k = sidecar.source_symbols;
+        // k+5 is unambiguously out of range — must fail loud.
+        let bogus_idx = k + 5;
+        let err = super::recover_payload_with_sidecar(&payload, &sidecar, &[bogus_idx])
+            .expect_err("out-of-range drop_indices must error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("out-of-range"),
+            "error message should name the failure class; got {msg:?}"
+        );
+        assert!(
+            msg.contains(&bogus_idx.to_string()),
+            "error message should include the bogus index; got {msg:?}"
+        );
     }
 
     #[test]
