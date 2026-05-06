@@ -2373,6 +2373,16 @@ impl ContinuousDistribution for Pareto {
         // H(Pareto) = ln(scale/b) + 1/b + 1 [frankenscipy-vngzr].
         (self.scale / self.b).ln() + 1.0 / self.b + 1.0
     }
+
+    fn skewness(&self) -> f64 {
+        // Pareto skewness = 2·(1+b)/(b-3)·√((b-2)/b) for b > 3;
+        // NaN otherwise (third moment doesn't exist) [frankenscipy-y718j].
+        if self.b > 3.0 {
+            2.0 * (1.0 + self.b) / (self.b - 3.0) * ((self.b - 2.0) / self.b).sqrt()
+        } else {
+            f64::NAN
+        }
+    }
 }
 
 /// Lomax distribution.
@@ -2606,6 +2616,12 @@ impl ContinuousDistribution for Rayleigh {
         // H(Rayleigh) = 1 + ln(σ/√2) + γ/2 [frankenscipy-vngzr].
         1.0 + (self.scale / std::f64::consts::SQRT_2).ln() + EULER_MASCHERONI / 2.0
     }
+
+    fn skewness(&self) -> f64 {
+        // Rayleigh skewness = 2·(π-3)·√π / (4-π)^(3/2) ≈ 0.6311
+        // [frankenscipy-y718j]; constant in scale.
+        2.0 * (PI - 3.0) * PI.sqrt() / (4.0 - PI).powf(1.5)
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -2822,6 +2838,12 @@ impl ContinuousDistribution for GumbelLeft {
         // H(GumbelLeft) = ln(scale) + γ + 1; same as right Gumbel by
         // symmetry [frankenscipy-vngzr].
         self.scale.ln() + EULER_MASCHERONI + 1.0
+    }
+
+    fn skewness(&self) -> f64 {
+        // GumbelLeft skewness = -12·√6·ζ(3)/π³ — mirror of right
+        // Gumbel (= -1.139547...) [frankenscipy-y718j].
+        -1.139_547_099_404_648_7
     }
 }
 
@@ -3114,6 +3136,12 @@ impl ContinuousDistribution for Maxwell {
     fn mode(&self) -> f64 {
         // Maxwell mode = scale · √2 [frankenscipy-cxgdg].
         self.scale * std::f64::consts::SQRT_2
+    }
+
+    fn skewness(&self) -> f64 {
+        // Maxwell skewness = 2·√2·(16 - 5π) / (3π - 8)^(3/2) ≈ 0.4857
+        // [frankenscipy-y718j]; constant in scale.
+        2.0 * std::f64::consts::SQRT_2 * (16.0 - 5.0 * PI) / (3.0 * PI - 8.0).powf(1.5)
     }
 }
 
@@ -34156,6 +34184,58 @@ mod tests {
             1e-12,
             "InverseGamma mode = 1/(a+1)",
         );
+    }
+
+    #[test]
+    fn four_distributions_have_closed_form_skewness() {
+        // /mock-code-finder [frankenscipy-y718j]: pin closed-form
+        // skewness for 4 distributions that previously inherited NaN.
+
+        // Pareto(b=4, scale=1): 2(1+4)/(4-3) · √((4-2)/4) = 10·√0.5
+        let p = Pareto::new(4.0, 1.0);
+        assert_close(
+            p.skewness(),
+            10.0 * 0.5_f64.sqrt(),
+            1e-12,
+            "Pareto(b=4) skewness",
+        );
+        // Pareto(b=3): NaN (boundary, third moment undefined).
+        assert!(Pareto::new(3.0, 1.0).skewness().is_nan(), "Pareto(b=3) NaN");
+        assert!(Pareto::new(2.0, 1.0).skewness().is_nan(), "Pareto(b=2) NaN");
+
+        // Rayleigh: 2(π-3)·√π / (4-π)^1.5 ≈ 0.6311
+        let r = Rayleigh::new(1.0);
+        let expected_r = 2.0 * (PI - 3.0) * PI.sqrt() / (4.0 - PI).powf(1.5);
+        assert_close(r.skewness(), expected_r, 1e-12, "Rayleigh skewness");
+        // Constant in scale: scaling shouldn't change skewness.
+        assert_close(
+            Rayleigh::new(7.5).skewness(),
+            expected_r,
+            1e-12,
+            "Rayleigh skewness scale-invariant",
+        );
+
+        // GumbelLeft: -1.139547... (mirror of Gumbel).
+        let gl = GumbelLeft::new(0.0, 1.0);
+        assert_close(
+            gl.skewness(),
+            -1.139_547_099_404_648_7,
+            1e-12,
+            "GumbelLeft skewness",
+        );
+        // Gumbel skewness positive.
+        assert_close(
+            Gumbel::new(0.0, 1.0).skewness(),
+            1.139_547_099_404_648_7,
+            1e-12,
+            "Gumbel skewness (sign check)",
+        );
+
+        // Maxwell: 2√2·(16-5π) / (3π-8)^(3/2) ≈ 0.4857
+        let m = Maxwell::new(1.0);
+        let expected_m = 2.0 * std::f64::consts::SQRT_2 * (16.0 - 5.0 * PI)
+            / (3.0 * PI - 8.0).powf(1.5);
+        assert_close(m.skewness(), expected_m, 1e-12, "Maxwell skewness");
     }
 
     #[test]
