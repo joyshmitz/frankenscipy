@@ -16467,6 +16467,51 @@ mod tests {
     }
 
     #[test]
+    fn lp2hp_is_involution_under_same_wo() {
+        // /testing-metamorphic for [frankenscipy-o9jnv]: applying lp2hp
+        // with frequency wo is the substitution s → wo/s. Composing
+        // this with itself gives s → wo/(wo/s) = s, so lp2hp twice
+        // should recover the original B(s)/A(s) — modulo coefficient-
+        // vector zero-padding (each lp2hp call produces a result of
+        // length max(b.len(), a.len()), so b can pick up leading zeros)
+        // and modulo a global scale (normalize_filter rescales so
+        // a[0] = 1).
+        //
+        // We verify by evaluating B(s)/A(s) at multiple test points
+        // and asserting that the original ratio equals the after-two-
+        // applications ratio.
+        fn poly_eval(coeffs: &[f64], s: f64) -> f64 {
+            // Coefficients in descending powers of s (scipy convention).
+            let mut acc = 0.0;
+            for &c in coeffs {
+                acc = acc * s + c;
+            }
+            acc
+        }
+
+        let cases: &[(Vec<f64>, Vec<f64>, f64)] = &[
+            (vec![1.0], vec![1.0, 1.0], 2.0),
+            (vec![1.0, 2.0], vec![1.0, 3.0, 4.0], 2.0),
+            (vec![1.0, 2.0], vec![1.0, 3.0, 4.0], 0.5),
+            (vec![0.5, 1.0, 1.5], vec![1.0, 2.0, 3.0, 4.0], 1.7),
+        ];
+        for (b0, a0, wo) in cases {
+            let (b1, a1) = lp2hp(b0, a0, *wo).expect("first lp2hp");
+            let (b2, a2) = lp2hp(&b1, &a1, *wo).expect("second lp2hp");
+            for &s in &[0.5_f64, 1.0, 2.0, 3.5, 7.0] {
+                let original_ratio = poly_eval(b0, s) / poly_eval(a0, s);
+                let recovered_ratio = poly_eval(&b2, s) / poly_eval(&a2, s);
+                let scale = original_ratio.abs().max(recovered_ratio.abs()).max(1e-12);
+                assert!(
+                    (original_ratio - recovered_ratio).abs() <= 1e-10 * scale,
+                    "lp2hp involution failed at s={s} for (b={b0:?}, a={a0:?}, wo={wo}): \
+                     original={original_ratio}, recovered={recovered_ratio}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn morlet2_length_matches_request() {
         for &m in &[8_usize, 16, 32, 64] {
             assert_eq!(morlet2(m, 4.0, 5.0).len(), m);
