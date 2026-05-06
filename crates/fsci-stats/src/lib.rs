@@ -2483,6 +2483,15 @@ impl ContinuousDistribution for Gumbel {
         (-(-z).exp()).exp()
     }
 
+    fn sf(&self, x: f64) -> f64 {
+        // Closed-form survival for [frankenscipy-6uo0s]:
+        //   sf = 1 - exp(-exp(-z)) = -expm1(-exp(-z))
+        // Default 1 - cdf evaluates 1 - exp(-tiny) which collapses to 0
+        // for z far in the right tail; expm1 preserves the exact value.
+        let z = (x - self.loc) / self.scale;
+        -((-(-z).exp()).exp_m1())
+    }
+
     fn ppf(&self, q: f64) -> f64 {
         if !(0.0..=1.0).contains(&q) {
             return f64::NAN;
@@ -2553,6 +2562,15 @@ impl ContinuousDistribution for GumbelLeft {
     fn cdf(&self, x: f64) -> f64 {
         let z = (x - self.loc) / self.scale;
         -(-z.exp()).exp_m1()
+    }
+
+    fn sf(&self, x: f64) -> f64 {
+        // Closed-form survival for [frankenscipy-6uo0s]:
+        //   sf = exp(-exp(z))
+        // Default 1 - cdf collapses when cdf ≈ 1 in the right tail
+        // (z large positive); the direct exp form preserves the value.
+        let z = (x - self.loc) / self.scale;
+        (-z.exp()).exp()
     }
 
     fn ppf(&self, q: f64) -> f64 {
@@ -4267,6 +4285,21 @@ impl ContinuousDistribution for Laplace {
             0.5 * z.exp()
         } else {
             1.0 - 0.5 * (-z).exp()
+        }
+    }
+
+    fn sf(&self, x: f64) -> f64 {
+        // Closed-form survival for [frankenscipy-6uo0s]:
+        //   z >= 0: sf = 0.5 · exp(-z)
+        //   z < 0:  sf = 1 - 0.5 · exp(z)
+        // The right tail (z >= 0) is the precision-sensitive case;
+        // the default 1 - cdf computes 1 - (1 - 0.5·exp(-z)) and
+        // catastrophically cancels when 0.5·exp(-z) drops below ULP.
+        let z = (x - self.loc) / self.scale;
+        if z >= 0.0 {
+            0.5 * (-z).exp()
+        } else {
+            1.0 - 0.5 * z.exp()
         }
     }
 
@@ -22433,6 +22466,84 @@ mod tests {
         );
         // Below 0: sf = 1.
         assert_eq!(lomax.sf(-1.0), 1.0, "Lomax sf below 0 = 1");
+    }
+
+    #[test]
+    fn laplace_sf_preserves_right_tail_precision() {
+        // /modes-of-reasoning-project-analysis [frankenscipy-6uo0s]:
+        // sf for z >= 0 is 0.5·exp(-z); default 1 - cdf would collapse
+        // when 0.5·exp(-z) drops below ULP. At z = 80, true sf
+        // ≈ 0.5 · e^{-80} ≈ 9.3e-36 — well below f64 ULP of 1.0.
+        let l = Laplace::new(0.0, 1.0);
+        let z = 80.0_f64;
+        let actual = l.sf(z);
+        let expected = 0.5 * (-z).exp();
+        assert!(
+            actual > 0.0,
+            "Laplace.sf(80) must be strictly positive, got {actual}"
+        );
+        let rel = (actual - expected).abs() / expected.abs();
+        assert!(
+            rel < 1e-12,
+            "Laplace sf far right tail: got {actual}, expected {expected} (rel={rel})"
+        );
+        // sf + cdf = 1 near the centre.
+        for &x in &[-2.0_f64, -0.5, 0.0, 0.5, 2.0] {
+            assert_close(l.sf(x) + l.cdf(x), 1.0, 1e-12, "Laplace sf + cdf = 1");
+        }
+    }
+
+    #[test]
+    fn gumbel_sf_preserves_right_tail_precision() {
+        // /modes-of-reasoning-project-analysis [frankenscipy-6uo0s]:
+        // Gumbel.sf = -expm1(-exp(-z)). For large positive z,
+        // exp(-z) → tiny and expm1(-tiny) ≈ -tiny, so sf ≈ tiny.
+        // Default 1 - cdf would round to 0 when cdf ≈ 1.
+        let g = Gumbel::new(0.0, 1.0);
+        let z = 60.0_f64;
+        let actual = g.sf(z);
+        // The closed-form reference: 1 - exp(-exp(-z)) ≈ exp(-z)
+        // for very large z (since exp(-z) is tiny and 1 - exp(-tiny) ≈ tiny).
+        let expected = -((-(-z).exp()).exp_m1());
+        assert!(
+            actual > 0.0,
+            "Gumbel.sf(60) must be strictly positive, got {actual}"
+        );
+        let rel = (actual - expected).abs() / expected.abs();
+        assert!(
+            rel < 1e-12,
+            "Gumbel sf far right tail: got {actual}, expected {expected} (rel={rel})"
+        );
+        for &x in &[-2.0_f64, 0.0, 1.0, 3.0] {
+            assert_close(g.sf(x) + g.cdf(x), 1.0, 1e-12, "Gumbel sf + cdf = 1");
+        }
+    }
+
+    #[test]
+    fn gumbel_left_sf_preserves_right_tail_precision() {
+        // GumbelLeft.sf = exp(-exp(z)). For large positive z, exp(z) → ∞,
+        // exp(-∞) → 0, so sf → 0 directly. Default 1 - cdf = 1 - (1 - sf)
+        // would lose precision when cdf ≈ 1.
+        let g = GumbelLeft::new(0.0, 1.0);
+        // GumbelLeft has sf → 0 in the RIGHT tail (x → +∞), but the
+        // precision-sensitive case is x = +small (cdf near 1 minus tiny).
+        // At z = 4: cdf = 1 - exp(-e^4) ≈ 1 - exp(-54.6) ≈ 1 - 1.7e-24.
+        // Default 1 - cdf collapses; closed form returns ~1.7e-24 directly.
+        let z = 4.0_f64;
+        let actual = g.sf(z);
+        let expected = (-z.exp()).exp();
+        assert!(
+            actual > 0.0,
+            "GumbelLeft.sf(4) must be strictly positive, got {actual}"
+        );
+        let rel = (actual - expected).abs() / expected.abs();
+        assert!(
+            rel < 1e-12,
+            "GumbelLeft sf far right tail: got {actual}, expected {expected} (rel={rel})"
+        );
+        for &x in &[-2.0_f64, -1.0, 0.0, 1.0, 3.0] {
+            assert_close(g.sf(x) + g.cdf(x), 1.0, 1e-12, "GumbelLeft sf + cdf = 1");
+        }
     }
 
     #[test]
