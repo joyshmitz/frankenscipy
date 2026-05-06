@@ -24108,6 +24108,39 @@ mod tests {
     }
 
     #[test]
+    fn genextreme_c0_is_gumbel() {
+        // /testing-metamorphic for [frankenscipy-65eml]: textbook
+        // identity GenExtreme(c=0) ≡ Gumbel(0, 1) — the standard
+        // (Type I) extreme-value distribution. GenExtreme.pdf has an
+        // explicit c→0 branch using exp(-(x + exp(-x))); Gumbel
+        // computes the same as (1/scale)·exp(-z - exp(-z)). The
+        // algebraic identity holds only if both implementations are
+        // correct.
+        let ge = GenExtreme::new(0.0);
+        let g = Gumbel::new(0.0, 1.0);
+        for &x in &[-3.0_f64, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0, 5.0, 10.0] {
+            assert_close(
+                ge.pdf(x),
+                g.pdf(x),
+                1e-12,
+                &format!("GenExtreme(0).pdf({x}) vs Gumbel(0,1).pdf({x})"),
+            );
+            assert_close(
+                ge.cdf(x),
+                g.cdf(x),
+                1e-12,
+                &format!("GenExtreme(0).cdf({x}) vs Gumbel(0,1).cdf({x})"),
+            );
+            assert_close(
+                ge.sf(x),
+                g.sf(x),
+                1e-12,
+                &format!("GenExtreme(0).sf({x}) vs Gumbel(0,1).sf({x})"),
+            );
+        }
+    }
+
+    #[test]
     fn rayleigh_is_scaled_chi_df2() {
         // /testing-metamorphic for [frankenscipy-sgq66]: textbook
         // identity Rayleigh(σ) ≡ Chi(df=2) scaled by σ:
