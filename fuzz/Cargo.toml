@@ -514,6 +514,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "p2c007_stats_kendalltau_equiv"
+path = "fuzz_targets/p2c007_stats_kendalltau_equiv.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "p2c007_stats_percentile_edges"
 path = "fuzz_targets/p2c007_stats_percentile_edges.rs"
 test = false
