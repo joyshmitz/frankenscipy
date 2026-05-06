@@ -1724,6 +1724,31 @@ impl ContinuousDistribution for BetaDist {
         }
     }
 
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        // [frankenscipy-sf2ax]: typed-error counterpart to fit().
+        if data.is_empty() {
+            return Err(FitError::InsufficientData {
+                required: 1,
+                actual: 0,
+            });
+        }
+        if data
+            .iter()
+            .any(|&x| !x.is_finite() || !(0.0..=1.0).contains(&x))
+        {
+            return Err(FitError::UnsupportedData(
+                "BetaDist support is [0, 1]".into(),
+            ));
+        }
+        let fitted = Self::fit(data);
+        if !fitted.a.is_finite() || !fitted.b.is_finite() {
+            return Err(FitError::NonConvergent(
+                "BetaDist fit produced non-finite parameters".into(),
+            ));
+        }
+        Ok(fitted)
+    }
+
     fn skewness(&self) -> f64 {
         let (a, b) = (self.a, self.b);
         2.0 * (b - a) * (a + b + 1.0).sqrt() / ((a + b + 2.0) * (a * b).sqrt())
@@ -1848,6 +1873,28 @@ impl ContinuousDistribution for GammaDist {
         let a = mean * mean / var;
         let scale = var / mean;
         Self { a, scale }
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        // [frankenscipy-sf2ax]: typed-error counterpart to fit().
+        if data.is_empty() {
+            return Err(FitError::InsufficientData {
+                required: 1,
+                actual: 0,
+            });
+        }
+        if data.iter().any(|&x| !x.is_finite() || x < 0.0) {
+            return Err(FitError::UnsupportedData(
+                "GammaDist requires non-negative finite samples".into(),
+            ));
+        }
+        let fitted = Self::fit(data);
+        if !fitted.a.is_finite() || !fitted.scale.is_finite() {
+            return Err(FitError::NonConvergent(
+                "GammaDist fit produced non-finite parameters".into(),
+            ));
+        }
+        Ok(fitted)
     }
 
     fn entropy(&self) -> f64 {
@@ -2127,6 +2174,28 @@ impl ContinuousDistribution for Lognormal {
             s: var.sqrt(),
             scale: mu.exp(),
         }
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        // [frankenscipy-sf2ax]: typed-error counterpart to fit().
+        if data.is_empty() {
+            return Err(FitError::InsufficientData {
+                required: 1,
+                actual: 0,
+            });
+        }
+        if data.iter().any(|&x| !x.is_finite() || x <= 0.0) {
+            return Err(FitError::UnsupportedData(
+                "Lognormal requires positive finite samples".into(),
+            ));
+        }
+        let fitted = Self::fit(data);
+        if !fitted.s.is_finite() || !fitted.scale.is_finite() {
+            return Err(FitError::NonConvergent(
+                "Lognormal fit produced non-finite parameters".into(),
+            ));
+        }
+        Ok(fitted)
     }
 
     fn entropy(&self) -> f64 {
@@ -2448,6 +2517,28 @@ impl ContinuousDistribution for Rayleigh {
             scale: (sum_sq / (2.0 * n)).sqrt(),
         }
     }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        // [frankenscipy-sf2ax]: typed-error counterpart to fit().
+        if data.is_empty() {
+            return Err(FitError::InsufficientData {
+                required: 1,
+                actual: 0,
+            });
+        }
+        if data.iter().any(|&x| !x.is_finite() || x < 0.0) {
+            return Err(FitError::UnsupportedData(
+                "Rayleigh requires non-negative finite samples".into(),
+            ));
+        }
+        let fitted = Self::fit(data);
+        if !fitted.scale.is_finite() || fitted.scale <= 0.0 {
+            return Err(FitError::NonConvergent(
+                "Rayleigh fit produced non-finite or non-positive scale".into(),
+            ));
+        }
+        Ok(fitted)
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -2517,6 +2608,28 @@ impl ContinuousDistribution for Gumbel {
     fn fit(data: &[f64]) -> Self {
         let (loc, scale) = gumbel_fit_loc_scale(data);
         Self { loc, scale }
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        // [frankenscipy-sf2ax]: typed-error counterpart to fit().
+        if data.is_empty() {
+            return Err(FitError::InsufficientData {
+                required: 1,
+                actual: 0,
+            });
+        }
+        if data.iter().any(|&x| !x.is_finite()) {
+            return Err(FitError::UnsupportedData(
+                "Gumbel requires finite samples".into(),
+            ));
+        }
+        let fitted = Self::fit(data);
+        if !fitted.loc.is_finite() || !fitted.scale.is_finite() || fitted.scale <= 0.0 {
+            return Err(FitError::NonConvergent(
+                "Gumbel fit produced non-finite or non-positive parameters".into(),
+            ));
+        }
+        Ok(fitted)
     }
 
     fn entropy(&self) -> f64 {
@@ -2609,6 +2722,28 @@ impl ContinuousDistribution for GumbelLeft {
             loc: -mirrored_loc,
             scale,
         }
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        // [frankenscipy-sf2ax]: typed-error counterpart to fit().
+        if data.is_empty() {
+            return Err(FitError::InsufficientData {
+                required: 1,
+                actual: 0,
+            });
+        }
+        if data.iter().any(|&x| !x.is_finite()) {
+            return Err(FitError::UnsupportedData(
+                "GumbelLeft requires finite samples".into(),
+            ));
+        }
+        let fitted = Self::fit(data);
+        if !fitted.loc.is_finite() || !fitted.scale.is_finite() || fitted.scale <= 0.0 {
+            return Err(FitError::NonConvergent(
+                "GumbelLeft fit produced non-finite or non-positive parameters".into(),
+            ));
+        }
+        Ok(fitted)
     }
 }
 
@@ -2874,6 +3009,28 @@ impl ContinuousDistribution for Maxwell {
         Self {
             scale: (sum_sq / (3.0 * n)).sqrt(),
         }
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        // [frankenscipy-sf2ax]: typed-error counterpart to fit().
+        if data.is_empty() {
+            return Err(FitError::InsufficientData {
+                required: 1,
+                actual: 0,
+            });
+        }
+        if data.iter().any(|&x| !x.is_finite() || x < 0.0) {
+            return Err(FitError::UnsupportedData(
+                "Maxwell requires non-negative finite samples".into(),
+            ));
+        }
+        let fitted = Self::fit(data);
+        if !fitted.scale.is_finite() || fitted.scale <= 0.0 {
+            return Err(FitError::NonConvergent(
+                "Maxwell fit produced non-finite or non-positive scale".into(),
+            ));
+        }
+        Ok(fitted)
     }
 }
 
@@ -4234,6 +4391,28 @@ impl ContinuousDistribution for Cauchy {
         Self { loc, scale }
     }
 
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        // [frankenscipy-sf2ax]: typed-error counterpart to fit().
+        if data.is_empty() {
+            return Err(FitError::InsufficientData {
+                required: 1,
+                actual: 0,
+            });
+        }
+        if data.iter().any(|&x| !x.is_finite()) {
+            return Err(FitError::UnsupportedData(
+                "Cauchy requires finite samples".into(),
+            ));
+        }
+        let fitted = Self::fit(data);
+        if !fitted.loc.is_finite() || !fitted.scale.is_finite() || fitted.scale <= 0.0 {
+            return Err(FitError::NonConvergent(
+                "Cauchy fit produced non-finite or non-positive parameters (degenerate quantiles)".into(),
+            ));
+        }
+        Ok(fitted)
+    }
+
     fn entropy(&self) -> f64 {
         (4.0 * PI * self.scale).ln()
     }
@@ -4493,6 +4672,28 @@ impl ContinuousDistribution for Triangular {
         let mode = 3.0 * mean - left - right;
         let mode = mode.clamp(left, right);
         Self { left, mode, right }
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        // [frankenscipy-sf2ax]: typed-error counterpart to fit().
+        if data.len() < 3 {
+            return Err(FitError::InsufficientData {
+                required: 3,
+                actual: data.len(),
+            });
+        }
+        if data.iter().any(|v| !v.is_finite()) {
+            return Err(FitError::UnsupportedData(
+                "Triangular requires finite samples".into(),
+            ));
+        }
+        let fitted = Self::fit(data);
+        if !fitted.left.is_finite() || !fitted.right.is_finite() || fitted.left >= fitted.right {
+            return Err(FitError::NonConvergent(
+                "Triangular fit produced degenerate (left >= right) bounds".into(),
+            ));
+        }
+        Ok(fitted)
     }
 }
 
@@ -31971,6 +32172,58 @@ mod tests {
             HypSecant::try_fit(&[0.0, f64::NAN]),
             Err(FitError::UnsupportedData(_))
         ));
+    }
+
+    #[test]
+    fn nine_more_distributions_now_have_try_fit_overrides() {
+        // /modes-of-reasoning [frankenscipy-sf2ax] continuation of
+        // covaj/v6rct/paejq: the trait-default try_fit returning
+        // NotImplemented was inherited by 9 more distributions
+        // despite each having a working fit. After the overrides each
+        // returns a typed FitError on bad input and a real fitted Self
+        // on good input.
+
+        // Good inputs.
+        assert!(<BetaDist as ContinuousDistribution>::try_fit(&[0.1, 0.5, 0.9]).is_ok());
+        assert!(<GammaDist as ContinuousDistribution>::try_fit(&[1.0, 2.0, 3.0]).is_ok());
+        assert!(<Lognormal as ContinuousDistribution>::try_fit(&[1.0, 2.0, 3.0]).is_ok());
+        assert!(<Rayleigh as ContinuousDistribution>::try_fit(&[1.0, 2.0, 3.0]).is_ok());
+        assert!(<Gumbel as ContinuousDistribution>::try_fit(&[1.0, 2.0, 3.0, 4.0]).is_ok());
+        assert!(
+            <GumbelLeft as ContinuousDistribution>::try_fit(&[1.0, 2.0, 3.0, 4.0]).is_ok()
+        );
+        assert!(<Maxwell as ContinuousDistribution>::try_fit(&[1.0, 2.0, 3.0]).is_ok());
+        assert!(<Cauchy as ContinuousDistribution>::try_fit(&[1.0, 2.0, 3.0, 4.0]).is_ok());
+        assert!(
+            <Triangular as ContinuousDistribution>::try_fit(&[0.0, 0.5, 1.0, 1.5]).is_ok()
+        );
+
+        // Bad inputs surface typed errors, not NotImplemented.
+        macro_rules! assert_typed_err {
+            ($dist:ty, $data:expr) => {
+                let r = <$dist as ContinuousDistribution>::try_fit($data);
+                assert!(
+                    matches!(
+                        r,
+                        Err(FitError::InsufficientData { .. })
+                            | Err(FitError::UnsupportedData(_))
+                            | Err(FitError::NonConvergent(_))
+                    ),
+                    concat!(stringify!($dist), " try_fit must surface typed error; got {:?}"),
+                    r
+                );
+            };
+        }
+        assert_typed_err!(BetaDist, &[]);
+        assert_typed_err!(BetaDist, &[1.5]); // out of [0, 1]
+        assert_typed_err!(GammaDist, &[1.0, -2.0]); // negative
+        assert_typed_err!(Lognormal, &[1.0, 0.0]); // non-positive
+        assert_typed_err!(Rayleigh, &[1.0, -0.5]); // negative
+        assert_typed_err!(Gumbel, &[1.0, f64::NAN]); // non-finite
+        assert_typed_err!(GumbelLeft, &[]);
+        assert_typed_err!(Maxwell, &[1.0, -0.5]); // negative
+        assert_typed_err!(Cauchy, &[1.0, f64::NAN]);
+        assert_typed_err!(Triangular, &[1.0, 2.0]); // need 3+ samples
     }
 
     #[test]
