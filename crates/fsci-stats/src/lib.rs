@@ -2484,6 +2484,13 @@ impl ContinuousDistribution for Lomax {
         }
         Ok(Self { c: n / log_sum })
     }
+
+    fn entropy(&self) -> f64 {
+        // H(Lomax(c)) = 1 + 1/c − ln(c) for unit scale.
+        // Derivation: pdf = c/(1+x)^(c+1); E[log(1+x)] = 1/c, so
+        // H = -log(c) + (c+1)/c = 1 + 1/c − log(c). [frankenscipy-2ea4i].
+        1.0 + 1.0 / self.c - self.c.ln()
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -34119,6 +34126,17 @@ mod tests {
             1e-12,
             "InverseGamma mode = 1/(a+1)",
         );
+    }
+
+    #[test]
+    fn lomax_closed_form_entropy() {
+        // /modes-of-reasoning extension [frankenscipy-2ea4i]:
+        // H(Lomax(c)) = 1 + 1/c − ln(c).
+        let lomax = Lomax::new(2.0);
+        let expected = 1.0 + 1.0 / 2.0 - 2.0_f64.ln();
+        assert_close(lomax.entropy(), expected, 1e-12, "Lomax entropy");
+        // Sanity: c=1 → H = 1 + 1 - 0 = 2 (exponential limit).
+        assert_close(Lomax::new(1.0).entropy(), 2.0, 1e-12, "Lomax(c=1) entropy = 2");
     }
 
     #[test]
