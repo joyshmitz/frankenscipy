@@ -3899,6 +3899,77 @@ impl DiscreteDistribution for Boltzmann {
     }
 }
 
+/// Yule-Simon distribution.
+///
+/// Matches `scipy.stats.yulesimon(alpha)`. Resolves [frankenscipy-1obtd].
+/// One parameter `alpha > 0`. Support: k ∈ {1, 2, 3, …}.
+///
+///   pmf(k; α) = α · B(k, α + 1)
+///   cdf(k; α) = 1 − k · B(k, α + 1)
+///   mean      = α / (α − 1)             [α > 1, ∞ otherwise]
+///   var       = α² / ((α − 1)² · (α − 2))  [α > 2, ∞ otherwise]
+///
+/// where B is the Beta function. Computed via log-gamma to
+/// avoid overflow for large k.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct YuleSimon {
+    pub alpha: f64,
+}
+
+impl YuleSimon {
+    #[must_use]
+    pub fn new(alpha: f64) -> Self {
+        assert!(
+            alpha > 0.0 && alpha.is_finite(),
+            "alpha must be positive and finite"
+        );
+        Self { alpha }
+    }
+
+    #[inline]
+    fn ln_beta_k(&self, kf: f64) -> f64 {
+        // ln B(k, α + 1) = ln Γ(k) + ln Γ(α + 1) − ln Γ(k + α + 1)
+        ln_gamma(kf) + ln_gamma(self.alpha + 1.0) - ln_gamma(kf + self.alpha + 1.0)
+    }
+}
+
+impl DiscreteDistribution for YuleSimon {
+    fn pmf(&self, k: u64) -> f64 {
+        if k == 0 {
+            return 0.0;
+        }
+        let kf = k as f64;
+        // α · B(k, α + 1) = α · exp(ln B(k, α + 1))
+        self.alpha * self.ln_beta_k(kf).exp()
+    }
+
+    fn cdf(&self, k: u64) -> f64 {
+        if k == 0 {
+            return 0.0;
+        }
+        let kf = k as f64;
+        // 1 − k · B(k, α + 1)
+        (1.0 - kf * self.ln_beta_k(kf).exp()).clamp(0.0, 1.0)
+    }
+
+    fn mean(&self) -> f64 {
+        if self.alpha > 1.0 {
+            self.alpha / (self.alpha - 1.0)
+        } else {
+            f64::INFINITY
+        }
+    }
+
+    fn var(&self) -> f64 {
+        if self.alpha > 2.0 {
+            let am1 = self.alpha - 1.0;
+            self.alpha * self.alpha / (am1 * am1 * (self.alpha - 2.0))
+        } else {
+            f64::INFINITY
+        }
+    }
+}
+
 /// Planck (untruncated geometric) distribution.
 ///
 /// Matches `scipy.stats.planck(lambda_)`. Resolves [frankenscipy-lp6dv].
@@ -33964,6 +34035,114 @@ mod tests {
             );
             // pmf = 0 outside support.
             assert_eq!(dist.pmf(n as u64), 0.0);
+        }
+    }
+
+    #[test]
+    fn yulesimon_pmf_cdf_match_scipy() {
+        // /porting-to-rust [frankenscipy-1obtd]: scipy reference values.
+        // yulesimon(α=2).pmf(1)   = 0.6666666666666666
+        // yulesimon(α=2).cdf(1)   = 0.6666666666666667
+        // yulesimon(α=2).pmf(5)   = 0.0190476190476190
+        // yulesimon(α=2).cdf(5)   = 0.9523809523809523
+        // yulesimon(α=3.5).pmf(2) = 0.1414141414141414
+        // yulesimon(α=3.5).cdf(2) = 0.9191919191919191
+        // yulesimon(α=1.5).pmf(3) = 0.0761904761904762
+        // yulesimon(α=1.5).cdf(3) = 0.8476190476190476
+        // yulesimon(α=5).pmf(1)   = 0.8333333333333334
+        // yulesimon(α=5).cdf(1)   = 0.8333333333333333
+        // yulesimon(α=10).pmf(4)  = 0.0024975024975025
+        // yulesimon(α=10).cdf(4)  = 0.9990009990009990
+        let cases = [
+            (
+                2.0_f64,
+                1u64,
+                0.666_666_666_666_666_6,
+                0.666_666_666_666_666_7,
+            ),
+            (
+                2.0,
+                5,
+                0.019_047_619_047_619_05,
+                0.952_380_952_380_952_3,
+            ),
+            (
+                3.5,
+                2,
+                0.141_414_141_414_141_4,
+                0.919_191_919_191_919_1,
+            ),
+            (
+                1.5,
+                3,
+                0.076_190_476_190_476_2,
+                0.847_619_047_619_047_6,
+            ),
+            (
+                5.0,
+                1,
+                0.833_333_333_333_333_4,
+                0.833_333_333_333_333_3,
+            ),
+            (
+                10.0,
+                4,
+                0.002_497_502_497_502_5,
+                0.999_000_999_000_999_0,
+            ),
+        ];
+        for (alpha, k, want_pmf, want_cdf) in cases {
+            let dist = YuleSimon::new(alpha);
+            assert_close(dist.pmf(k), want_pmf, 1e-12, "YuleSimon pmf");
+            assert_close(dist.cdf(k), want_cdf, 1e-12, "YuleSimon cdf");
+        }
+    }
+
+    #[test]
+    fn yulesimon_moments_match_scipy() {
+        // /porting-to-rust [frankenscipy-1obtd]: closed-form moments.
+        // mean(2)   = 2.0          [α/(α-1) = 2/1]
+        // mean(3.5) = 1.4          [3.5/2.5]
+        // var(3.5)  = 1.3066666666666666
+        // var(10)   = 0.15432098765432098
+        // mean(1) and var(2) are infinite (boundary).
+        let dist2 = YuleSimon::new(2.0);
+        let dist35 = YuleSimon::new(3.5);
+        let dist10 = YuleSimon::new(10.0);
+        assert_close(dist2.mean(), 2.0, 1e-15, "YuleSimon mean(2)");
+        assert_close(dist35.mean(), 1.4, 1e-15, "YuleSimon mean(3.5)");
+        assert_close(
+            dist35.var(),
+            1.306_666_666_666_666_6,
+            1e-12,
+            "YuleSimon var(3.5)",
+        );
+        assert_close(
+            dist10.var(),
+            0.154_320_987_654_320_98,
+            1e-12,
+            "YuleSimon var(10)",
+        );
+        // Boundary: mean for α ≤ 1 is ∞, var for α ≤ 2 is ∞.
+        assert!(YuleSimon::new(1.0).mean().is_infinite());
+        assert!(YuleSimon::new(2.0).var().is_infinite());
+        assert!(YuleSimon::new(0.5).mean().is_infinite());
+    }
+
+    #[test]
+    fn yulesimon_pmf_telescopes_cdf() {
+        // /porting-to-rust [frankenscipy-1obtd]: pmf(k) = cdf(k) - cdf(k-1).
+        for &alpha in &[1.5_f64, 2.5, 3.0, 5.0, 10.0] {
+            let dist = YuleSimon::new(alpha);
+            for k in 1..=10u64 {
+                let prev = if k == 1 { 0.0 } else { dist.cdf(k - 1) };
+                let diff = dist.cdf(k) - prev;
+                assert!(
+                    (dist.pmf(k) - diff).abs() < 1e-12,
+                    "YuleSimon(α={alpha}).pmf({k}) ≠ cdf-diff: pmf={}, diff={diff}",
+                    dist.pmf(k)
+                );
+            }
         }
     }
 
