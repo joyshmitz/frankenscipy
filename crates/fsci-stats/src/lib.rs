@@ -21832,7 +21832,15 @@ impl ContinuousDistribution for FoldedCauchy {
             return 0.0;
         }
         let c = self.c;
-        ((x - c).atan() + (x + c).atan()) / PI + 0.5
+        // P(|Y| ≤ x) for Y ~ Cauchy(c, 1):
+        //   = F_Y(x) − F_Y(−x)
+        //   = (1/π)·[arctan(x − c) + 1/2] − (1/π)·[arctan(−x − c) + 1/2]
+        //   = (arctan(x − c) + arctan(x + c)) / π
+        // (caught by [frankenscipy-20ssp] diff harness — the
+        // previous `+ 0.5` term was a leftover from the
+        // unfolded-Cauchy form and made cdf off by exactly 0.5
+        // at c = 0.)
+        ((x - c).atan() + (x + c).atan()) / PI
     }
 
     fn mean(&self) -> f64 {
