@@ -9225,6 +9225,117 @@ impl ContinuousDistribution for FrechetR {
     }
 }
 
+/// Irwin–Hall distribution: the sum of `n` iid `Uniform(0, 1)`
+/// variables, with support [0, n].
+///
+/// Matches `scipy.stats.irwinhall(n)`. Resolves [frankenscipy-7dxwg].
+///
+///   pdf(x; n) = 1/(n−1)! · Σ_{k=0}^{⌊x⌋} (−1)^k · C(n, k) · (x − k)^(n−1)
+///   cdf(x; n) = 1/n!     · Σ_{k=0}^{⌊x⌋} (−1)^k · C(n, k) · (x − k)^n
+///
+/// Closed-form moments: mean = n/2, var = n/12, skew = 0, ex_kurt = −6/(5n).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IrwinHall {
+    pub n: u32,
+}
+
+impl IrwinHall {
+    #[must_use]
+    pub fn new(n: u32) -> Self {
+        assert!(n >= 1, "n must be ≥ 1, got {n}");
+        Self { n }
+    }
+}
+
+impl ContinuousDistribution for IrwinHall {
+    fn pdf(&self, x: f64) -> f64 {
+        let nf = self.n as f64;
+        // n=1 collapses to Uniform(0, 1). Handle directly so the
+        // closed boundary at x=0 and x=1 returns 1 (matches scipy's
+        // B-spline-based implementation; the (-1)^k cancellation in
+        // the alternating sum spuriously yields 0 at x=1 otherwise).
+        if self.n == 1 {
+            return if (0.0..=1.0).contains(&x) { 1.0 } else { 0.0 };
+        }
+        if x <= 0.0 || x >= nf {
+            return 0.0;
+        }
+        // 1 / (n-1)! · Σ (-1)^k · C(n, k) · (x-k)^(n-1) for k = 0..=floor(x).
+        let upper = x.floor() as u64;
+        let mut sum = 0.0_f64;
+        for k in 0..=upper {
+            let sign = if k % 2 == 0 { 1.0 } else { -1.0 };
+            let term = fsci_special::comb(self.n as u64, k) * (x - k as f64).powf(nf - 1.0);
+            sum += sign * term;
+        }
+        sum / fsci_special::factorial((self.n - 1) as u64)
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        let nf = self.n as f64;
+        if x >= nf {
+            return 1.0;
+        }
+        // 1 / n! · Σ (-1)^k · C(n, k) · (x-k)^n for k = 0..=floor(x).
+        let upper = x.floor() as u64;
+        let mut sum = 0.0_f64;
+        for k in 0..=upper {
+            let sign = if k % 2 == 0 { 1.0 } else { -1.0 };
+            let term = fsci_special::comb(self.n as u64, k) * (x - k as f64).powf(nf);
+            sum += sign * term;
+        }
+        sum / fsci_special::factorial(self.n as u64)
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return 0.0;
+        }
+        if q == 1.0 {
+            return self.n as f64;
+        }
+        // No closed-form inverse — bisect on the strictly-monotone cdf.
+        let mean = self.mean();
+        let std = self.std();
+        let lo = (mean - 4.0 * std).max(0.0);
+        let hi = (mean + 4.0 * std).min(self.n as f64);
+        let mut a = lo;
+        let mut b = hi;
+        for _ in 0..80 {
+            let mid = 0.5 * (a + b);
+            if self.cdf(mid) < q {
+                a = mid;
+            } else {
+                b = mid;
+            }
+        }
+        0.5 * (a + b)
+    }
+
+    fn mean(&self) -> f64 {
+        self.n as f64 / 2.0
+    }
+
+    fn var(&self) -> f64 {
+        self.n as f64 / 12.0
+    }
+
+    fn skewness(&self) -> f64 {
+        // IrwinHall is symmetric around n/2.
+        0.0
+    }
+
+    fn kurtosis(&self) -> f64 {
+        -6.0 / (5.0 * self.n as f64)
+    }
+}
+
 /// Upper-truncated Pareto distribution on [1, c] with shape `b ≠ 0`
 /// and `c > 1`.
 ///
@@ -24381,6 +24492,65 @@ mod tests {
                     &format!("TruncPareto({b}, 1e10).pdf({x}) vs Pareto({b}, 1).pdf({x})"),
                 );
             }
+        }
+    }
+
+    #[test]
+    fn irwinhall_pdf_cdf_match_scipy() {
+        // /porting-to-rust [frankenscipy-7dxwg]: scipy reference values.
+        // irwinhall(2).pdf(0.5) = 0.5; .pdf(1) = 1; .cdf(0.5) = 0.125; .cdf(1) = 0.5
+        let h2 = IrwinHall::new(2);
+        assert_close(h2.pdf(0.5), 0.5, 1e-12, "h2.pdf(0.5)");
+        assert_close(h2.pdf(1.0), 1.0, 1e-12, "h2.pdf(1)");
+        assert_close(h2.cdf(0.5), 0.125, 1e-12, "h2.cdf(0.5)");
+        assert_close(h2.cdf(1.0), 0.5, 1e-12, "h2.cdf(1)");
+        assert_close(h2.cdf(1.8), 0.98, 1e-12, "h2.cdf(1.8)");
+        // n=3
+        let h3 = IrwinHall::new(3);
+        assert_close(h3.pdf(0.5), 0.125, 1e-12, "h3.pdf(0.5)");
+        assert_close(h3.pdf(1.5), 0.75, 1e-12, "h3.pdf(1.5)");
+        assert_close(h3.cdf(1.5), 0.5, 1e-12, "h3.cdf(1.5)");
+        // n=5
+        let h5 = IrwinHall::new(5);
+        assert_close(h5.pdf(2.5), 0.598_958_333_333_333_3, 1e-12, "h5.pdf(2.5)");
+        assert_close(h5.cdf(2.5), 0.5, 1e-12, "h5.cdf(2.5)");
+        // Outside support
+        assert_eq!(h2.pdf(-0.5), 0.0);
+        assert_eq!(h2.pdf(2.5), 0.0);
+        assert_eq!(h2.cdf(-0.5), 0.0);
+        assert_eq!(h2.cdf(2.5), 1.0);
+    }
+
+    #[test]
+    fn irwinhall_moments_match_scipy() {
+        // /porting-to-rust [frankenscipy-7dxwg]: closed-form moments.
+        // n=2: mean=1, var=1/6, skew=0, ex_kurt=-3/5
+        // n=3: mean=1.5, var=0.25, skew=0, ex_kurt=-2/5
+        // n=5: mean=2.5, var=5/12, skew=0, ex_kurt=-6/25
+        let cases = [
+            (2_u32, 1.0, 1.0 / 6.0, -3.0 / 5.0),
+            (3, 1.5, 0.25, -2.0 / 5.0),
+            (5, 2.5, 5.0 / 12.0, -6.0 / 25.0),
+            (10, 5.0, 10.0 / 12.0, -6.0 / 50.0),
+        ];
+        for (n, want_mean, want_var, want_kurt) in cases {
+            let dist = IrwinHall::new(n);
+            assert_close(dist.mean(), want_mean, 1e-15, &format!("mean({n})"));
+            assert_close(dist.var(), want_var, 1e-15, &format!("var({n})"));
+            assert_close(dist.skewness(), 0.0, 1e-15, &format!("skew({n})"));
+            assert_close(dist.kurtosis(), want_kurt, 1e-15, &format!("kurt({n})"));
+        }
+    }
+
+    #[test]
+    fn irwinhall_n1_is_uniform() {
+        // /testing-metamorphic [frankenscipy-7dxwg]: IrwinHall(n=1) ≡
+        // Uniform(0, 1). n=1 is the trivial "sum of 1 uniform".
+        let h1 = IrwinHall::new(1);
+        let u = Uniform::new(0.0, 1.0);
+        for &x in &[0.0_f64, 0.1, 0.5, 0.9, 1.0] {
+            assert_close(h1.pdf(x), u.pdf(x), 1e-12, &format!("h1.pdf({x})"));
+            assert_close(h1.cdf(x), u.cdf(x), 1e-12, &format!("h1.cdf({x})"));
         }
     }
 
