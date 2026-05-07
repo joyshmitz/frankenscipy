@@ -9225,6 +9225,91 @@ impl ContinuousDistribution for FrechetR {
     }
 }
 
+/// Upper-truncated Pareto distribution on [1, c] with shape `b ≠ 0`
+/// and `c > 1`.
+///
+/// Matches `scipy.stats.truncpareto(b, c)`. Resolves [frankenscipy-yvjyl].
+///
+///   pdf(x; b, c) = b · x^(-b-1) / (1 − c^(-b))
+///   cdf(x; b, c) = (1 − x^(-b)) / (1 − c^(-b))
+///   ppf(q)       = (1 − q · (1 − c^(-b)))^(-1/b)
+///
+/// For `b > 1` the mean is `b·(1 − c^(1-b)) / ((b-1)·(1 − c^(-b)))`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TruncPareto {
+    pub b: f64,
+    pub c: f64,
+}
+
+impl TruncPareto {
+    #[must_use]
+    pub fn new(b: f64, c: f64) -> Self {
+        assert!(b != 0.0 && b.is_finite(), "b must be finite and nonzero");
+        assert!(c > 1.0 && c.is_finite(), "c must be > 1 and finite");
+        Self { b, c }
+    }
+
+    /// Common denominator 1 − c^(-b).
+    fn denom(&self) -> f64 {
+        1.0 - self.c.powf(-self.b)
+    }
+}
+
+impl ContinuousDistribution for TruncPareto {
+    fn pdf(&self, x: f64) -> f64 {
+        if !(1.0..=self.c).contains(&x) {
+            return 0.0;
+        }
+        self.b * x.powf(-self.b - 1.0) / self.denom()
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x < 1.0 {
+            return 0.0;
+        }
+        if x >= self.c {
+            return 1.0;
+        }
+        (1.0 - x.powf(-self.b)) / self.denom()
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return 1.0;
+        }
+        if q == 1.0 {
+            return self.c;
+        }
+        (1.0 - q * self.denom()).powf(-1.0 / self.b)
+    }
+
+    fn mean(&self) -> f64 {
+        // E[X] = b · (1 − c^(1-b)) / ((b - 1) · (1 − c^(-b))) for b ≠ 1.
+        // For b = 1: E[X] = (c - 1) / ln(c).
+        if self.b == 1.0 {
+            (self.c - 1.0) / self.c.ln()
+        } else {
+            self.b * (1.0 - self.c.powf(1.0 - self.b)) / ((self.b - 1.0) * self.denom())
+        }
+    }
+
+    fn var(&self) -> f64 {
+        // Closed form for var via E[X²] - E[X]². E[X²] = b·(c^(2-b) - 1)
+        // / ((2-b)·(1 - c^(-b))) for b ≠ 2; for b = 2: 2·ln(c)/(1 - c^(-2)).
+        let denom = self.denom();
+        let e2 = if self.b == 2.0 {
+            2.0 * self.c.ln() / denom
+        } else {
+            self.b * (self.c.powf(2.0 - self.b) - 1.0) / ((2.0 - self.b) * denom)
+        };
+        let m = self.mean();
+        e2 - m * m
+    }
+}
+
 /// Truncated exponential distribution on [0, b].
 ///
 /// Matches `scipy.stats.truncexpon`.
@@ -24266,6 +24351,64 @@ mod tests {
             assert_close(dist.pdf(x), pdf_want, 1e-12, &format!("SkewNorm({a}).pdf({x})"));
             assert_close(dist.cdf(x), cdf_want, 1e-9, &format!("SkewNorm({a}).cdf({x})"));
         }
+    }
+
+    #[test]
+    fn truncpareto_pdf_cdf_ppf_match_scipy() {
+        // /porting-to-rust [frankenscipy-yvjyl]: scipy reference values.
+        // truncpareto(b=2, c=5).pdf(2) = 0.2604166666666667
+        // truncpareto(b=2, c=5).cdf(2) = 0.78125
+        // truncpareto(b=2, c=5).ppf(0.5) = 1.3867504905630728
+        // truncpareto(b=2, c=5).pdf(1) = 2.0833333333333335
+        // truncpareto(b=2, c=5).pdf(5) = 0.016666666666666666
+        // truncpareto(b=0.5, c=10).pdf(2) = 0.25853154970459075
+        let d = TruncPareto::new(2.0, 5.0);
+        assert_close(d.pdf(2.0), 0.260_416_666_666_666_7, 1e-12, "pdf(2)");
+        assert_close(d.cdf(2.0), 0.781_25, 1e-12, "cdf(2)");
+        assert_close(d.ppf(0.5), 1.386_750_490_563_072_8, 1e-12, "ppf(0.5)");
+        assert_close(d.pdf(1.0), 2.083_333_333_333_333_5, 1e-12, "pdf(1) = b/denom");
+        assert_close(d.pdf(5.0), 0.016_666_666_666_666_666, 1e-12, "pdf(c)");
+        let d2 = TruncPareto::new(0.5, 10.0);
+        assert_close(d2.pdf(2.0), 0.258_531_549_704_590_75, 1e-12, "b<1 pdf");
+        // Outside support
+        assert_eq!(d.pdf(0.5), 0.0);
+        assert_eq!(d.pdf(6.0), 0.0);
+        assert_eq!(d.cdf(0.5), 0.0);
+        assert_eq!(d.cdf(6.0), 1.0);
+    }
+
+    #[test]
+    fn truncpareto_ppf_inverts_cdf() {
+        // /porting-to-rust [frankenscipy-yvjyl]: round-trip.
+        for &(b, c) in &[(2.0_f64, 5.0), (0.5, 10.0), (3.0, 100.0)] {
+            let d = TruncPareto::new(b, c);
+            for &x in &[1.5_f64, 2.0, 3.0, 4.5] {
+                if x > c {
+                    continue;
+                }
+                let q = d.cdf(x);
+                if (1e-10..1.0 - 1e-10).contains(&q) {
+                    let recovered = d.ppf(q);
+                    assert!(
+                        (recovered - x).abs() < 1e-10 * x,
+                        "TruncPareto({b}, {c}).ppf(cdf({x})) = {recovered}, want {x}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn truncpareto_rejects_invalid_args() {
+        // /porting-to-rust [frankenscipy-yvjyl]: validation contract.
+        let result = std::panic::catch_unwind(|| TruncPareto::new(0.0, 5.0));
+        assert!(result.is_err(), "b=0 must panic");
+        let result = std::panic::catch_unwind(|| TruncPareto::new(2.0, 1.0));
+        assert!(result.is_err(), "c=1 must panic");
+        let result = std::panic::catch_unwind(|| TruncPareto::new(2.0, 0.5));
+        assert!(result.is_err(), "c<1 must panic");
+        let result = std::panic::catch_unwind(|| TruncPareto::new(f64::NAN, 5.0));
+        assert!(result.is_err(), "NaN b must panic");
     }
 
     #[test]
