@@ -9225,6 +9225,101 @@ impl ContinuousDistribution for FrechetR {
     }
 }
 
+/// Reciprocal inverse Gaussian distribution with shape `mu > 0`.
+///
+/// Matches `scipy.stats.recipinvgauss(mu)`. Resolves [frankenscipy-k7e3h].
+/// If Y ~ InverseGaussian(mu) then 1/Y ~ RecipInvGauss(mu).
+///
+///   pdf(x; μ) = 1/√(2π x) · exp(−(1 − μx)² / (2 μ² x))   for x ≥ 0
+///   cdf(x; μ) = Φ(−(1/μ − x)/√x) − exp(2/μ) · Φ(−(1/μ + x)/√x)
+///   sf(x; μ)  = Φ((1/μ − x)/√x) + exp(2/μ) · Φ(−(1/μ + x)/√x)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RecipInvGauss {
+    pub mu: f64,
+}
+
+impl RecipInvGauss {
+    #[must_use]
+    pub fn new(mu: f64) -> Self {
+        assert!(mu > 0.0 && mu.is_finite(), "mu must be positive and finite");
+        Self { mu }
+    }
+}
+
+impl ContinuousDistribution for RecipInvGauss {
+    fn pdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        let mu = self.mu;
+        let log_pdf = -((1.0 - mu * x).powi(2)) / (2.0 * x * mu * mu)
+            - 0.5 * (2.0 * PI * x).ln();
+        log_pdf.exp()
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        let mu = self.mu;
+        let trm1 = 1.0 / mu - x;
+        let trm2 = 1.0 / mu + x;
+        let isqx = 1.0 / x.sqrt();
+        standard_normal_cdf(-isqx * trm1)
+            - (2.0 / mu).exp() * standard_normal_cdf(-isqx * trm2)
+    }
+
+    fn sf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 1.0;
+        }
+        let mu = self.mu;
+        let trm1 = 1.0 / mu - x;
+        let trm2 = 1.0 / mu + x;
+        let isqx = 1.0 / x.sqrt();
+        standard_normal_cdf(isqx * trm1)
+            + (2.0 / mu).exp() * standard_normal_cdf(-isqx * trm2)
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return 0.0;
+        }
+        if q == 1.0 {
+            return f64::INFINITY;
+        }
+        // Bisect on the strictly-monotone cdf. Bracket via mode-ish
+        // estimate; expand if cdf disagrees.
+        let mut a = 0.0_f64;
+        let mut b = (10.0 * self.mu).max(10.0);
+        // Expand b until cdf(b) > q.
+        while self.cdf(b) < q && b.is_finite() {
+            b *= 2.0;
+        }
+        for _ in 0..80 {
+            let mid = 0.5 * (a + b);
+            if self.cdf(mid) < q {
+                a = mid;
+            } else {
+                b = mid;
+            }
+        }
+        0.5 * (a + b)
+    }
+
+    fn mean(&self) -> f64 {
+        // No clean closed form; involves infinite series. Leave NaN.
+        f64::NAN
+    }
+
+    fn var(&self) -> f64 {
+        f64::NAN
+    }
+}
+
 /// Doubly-truncated Weibull minimum distribution on (a, b].
 ///
 /// Matches `scipy.stats.truncweibull_min(c, a, b)` with shape
@@ -24791,6 +24886,80 @@ mod tests {
                         "TruncWeibullMin({c}, {a}, {b}).ppf(cdf({x})) = {recovered}, want {x}"
                     );
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn recipinvgauss_pdf_cdf_match_scipy() {
+        // /porting-to-rust [frankenscipy-k7e3h]: scipy reference values.
+        // recipinvgauss(1).pdf(1) = 0.3989422804014327 (= 1/√(2π))
+        // recipinvgauss(1).cdf(1) = 0.33189799877682946
+        // recipinvgauss(2).pdf(0.5) = 0.5641895835477563
+        // recipinvgauss(0.5).pdf(2) = 0.28209479177387814
+        let cases = [
+            (1.0_f64, 1.0, 0.398_942_280_401_432_7, 0.331_897_998_776_829_46),
+            (2.0, 0.5, 0.564_189_583_547_756_3, 0.286_208_211_922_096_44),
+            (0.5, 2.0, 0.282_094_791_773_878_14, 0.372_302_161_844_747_1),
+        ];
+        for (mu, x, want_pdf, want_cdf) in cases {
+            let dist = RecipInvGauss::new(mu);
+            assert_close(
+                dist.pdf(x),
+                want_pdf,
+                1e-12,
+                &format!("RecipInvGauss({mu}).pdf({x})"),
+            );
+            assert_close(
+                dist.cdf(x),
+                want_cdf,
+                1e-9,
+                &format!("RecipInvGauss({mu}).cdf({x})"),
+            );
+        }
+        // Outside support
+        assert_eq!(RecipInvGauss::new(1.0).pdf(-0.1), 0.0);
+        assert_eq!(RecipInvGauss::new(1.0).pdf(0.0), 0.0);
+        assert_eq!(RecipInvGauss::new(1.0).cdf(0.0), 0.0);
+    }
+
+    #[test]
+    fn recipinvgauss_ppf_inverts_cdf() {
+        // /porting-to-rust [frankenscipy-k7e3h]: ppf round-trip.
+        for &mu in &[0.5_f64, 1.0, 2.0, 3.0] {
+            let dist = RecipInvGauss::new(mu);
+            for &x in &[0.1_f64, 0.5, 1.0, 2.0, 5.0] {
+                let q = dist.cdf(x);
+                if (1e-6..1.0 - 1e-6).contains(&q) {
+                    let recovered = dist.ppf(q);
+                    assert!(
+                        (recovered - x).abs() < 1e-6 * x.abs().max(1.0),
+                        "RecipInvGauss({mu}).ppf(cdf({x})) = {recovered}, want {x}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn recipinvgauss_is_one_over_inverse_gaussian() {
+        // /testing-metamorphic [frankenscipy-k7e3h]: textbook reciprocal
+        // identity. If Y ~ InverseGaussian(mu) then 1/Y ~ RecipInvGauss(mu).
+        // At the cdf level: RecipInvGauss(μ).cdf(x) = 1 - InverseGaussian(μ).cdf(1/x).
+        let mus = [0.5_f64, 1.0, 2.0];
+        let xs = [0.5_f64, 1.0, 2.0, 4.0];
+        for &mu in &mus {
+            let r = RecipInvGauss::new(mu);
+            let ig = InverseGaussian::new(mu);
+            for &x in &xs {
+                let lhs = r.cdf(x);
+                let rhs = 1.0 - ig.cdf(1.0 / x);
+                assert_close(
+                    lhs,
+                    rhs,
+                    1e-9,
+                    &format!("RecipInvGauss({mu}).cdf({x}) vs 1 - InverseGaussian({mu}).cdf(1/{x})"),
+                );
             }
         }
     }
