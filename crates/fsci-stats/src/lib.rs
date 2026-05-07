@@ -33841,6 +33841,44 @@ mod tests {
     }
 
     #[test]
+    fn frechet_r_matches_weibull_max() {
+        // /testing-metamorphic [frankenscipy-halw0]:
+        // FrechetR (lib.rs:9748) and WeibullMax (port a142592)
+        // are algebraic duplicates — both have support x ≤ 0
+        // and identical closed forms:
+        //
+        //   pdf(x; c) = c · (−x)^(c − 1) · exp(−(−x)^c)
+        //   cdf(x; c) = exp(−(−x)^c)
+        //
+        // Both correspond to scipy.stats.weibull_max (scipy
+        // removed scipy.stats.frechet_r). Pin the equivalence
+        // so future drift between the duplicate structs trips
+        // CI immediately.
+        for &c in &[0.5_f64, 1.0, 2.0, 3.5] {
+            let fr = FrechetR::new(c);
+            let wm = WeibullMax::new(c);
+            for &x in &[-3.0_f64, -1.5, -0.7, -0.2] {
+                let dp = (fr.pdf(x) - wm.pdf(x)).abs();
+                let dc = (fr.cdf(x) - wm.cdf(x)).abs();
+                assert!(
+                    dp < 1.0e-13,
+                    "pdf identity broken at c={c}, x={x}: \
+                     FrechetR={}, WeibullMax={}, diff={dp}",
+                    fr.pdf(x),
+                    wm.pdf(x)
+                );
+                assert!(
+                    dc < 1.0e-13,
+                    "cdf identity broken at c={c}, x={x}: \
+                     FrechetR={}, WeibullMax={}, diff={dc}",
+                    fr.cdf(x),
+                    wm.cdf(x)
+                );
+            }
+        }
+    }
+
+    #[test]
     fn weibull_max_inverts_weibull_min() {
         // /testing-metamorphic [frankenscipy-9nttn]:
         // WeibullMax(c) is the distribution of -X for X ~ Weibull(c, 1).
