@@ -619,6 +619,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "p2c007_stats_kappa3_robustness"
+path = "fuzz_targets/p2c007_stats_kappa3_robustness.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "p2c007_stats_kendalltau_equiv"
 path = "fuzz_targets/p2c007_stats_kendalltau_equiv.rs"
 test = false

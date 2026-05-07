@@ -10801,7 +10801,11 @@ impl ContinuousDistribution for Kappa3 {
         }
         let a = self.a;
         let xa = x.powf(a);
-        x * (a + xa).powf(-1.0 / a)
+        // Clamp to [0, 1]: when x^a ≫ a (large a + moderate x, or
+        // small a + huge x), the closed form drifts a few ulp
+        // above 1. Caught by [frankenscipy-4397j] fuzz at
+        // (a=19, x≈66) → 1.0 + 2e-16.
+        (x * (a + xa).powf(-1.0 / a)).clamp(0.0, 1.0)
     }
 
     fn ppf(&self, q: f64) -> f64 {
@@ -10816,7 +10820,13 @@ impl ContinuousDistribution for Kappa3 {
         }
         let a = self.a;
         let qa = q.powf(a);
-        q * (a / (1.0 - qa)).powf(1.0 / a)
+        let denom = 1.0 - qa;
+        if denom <= 0.0 {
+            // q^a ≥ 1 for q very near 1 with small a — ppf
+            // diverges. Return +∞ rather than NaN.
+            return f64::INFINITY;
+        }
+        q * (a / denom).powf(1.0 / a)
     }
 
     fn mean(&self) -> f64 {
