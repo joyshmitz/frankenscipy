@@ -18458,7 +18458,20 @@ fn kendalltau_exact_alternative_pvalue(
 
 /// Standard normal CDF approximation.
 fn standard_normal_cdf(x: f64) -> f64 {
-    0.5 * (1.0 + fsci_special::erf_scalar(x / std::f64::consts::SQRT_2))
+    // /mock-code-finder for [frankenscipy-6exgz]: the naïve form
+    // 0.5·(1 + erf(x/√2)) suffers catastrophic cancellation for
+    // x ≲ -3 because erf returns close to −1 and 1 + (−1 + ε) = ε
+    // loses most of its trailing bits. For negative x, use the
+    // numerically-stable Φ(x) = 0.5·erfc(−x/√2) instead. Drop-in
+    // — same inputs, just better tail precision. Fixes the latent
+    // defect family that produced clamps in SkewNorm.cdf (cc83022),
+    // IrwinHall.cdf (7612637), and RecipInvGauss.cdf (814af81).
+    let z = x / std::f64::consts::SQRT_2;
+    if x < 0.0 {
+        0.5 * fsci_special::erfc_scalar(-z)
+    } else {
+        0.5 * (1.0 + fsci_special::erf_scalar(z))
+    }
 }
 
 fn standard_normal_pdf(x: f64) -> f64 {
@@ -24945,6 +24958,62 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn standard_normal_cdf_deep_tail_precision() {
+        // /mock-code-finder regression for [frankenscipy-6exgz]:
+        // pre-fix Φ(x) = 0.5·(1 + erf(x/√2)) lost precision below
+        // x ≈ -3 due to 1 - (close to 1) catastrophic cancellation.
+        // Post-fix path uses 0.5·erfc(-x/√2) for x < 0, retaining
+        // full-precision tail values.
+        // scipy reference values:
+        //   Φ(-1) = 0.15865525393145707
+        //   Φ(-3) = 0.0013498980316301035
+        //   Φ(-5) = 2.866515719235352e-07
+        //   Φ(-7) = 1.279812543885835e-12
+        //   Φ(-10) = 7.61985302416051e-24
+        // Pre-fix Φ(-7) returned 0 (rounded); post-fix returns ~1.28e-12.
+        // Pre-fix Φ(-10) returned 0; post-fix returns ~7.6e-24.
+        let cases = [
+            (-1.0_f64, 0.158_655_253_931_457_07),
+            (-3.0, 0.001_349_898_031_630_103_5),
+            (-5.0, 2.866_515_719_235_352e-7),
+            (-7.0, 1.279_812_543_885_835e-12),
+            (-10.0, 7.619_853_024_160_51e-24),
+        ];
+        for (x, want) in cases {
+            let got = standard_normal_cdf(x);
+            // Relative tol 1e-6 — fsci_special::erfc_scalar has
+            // ~1e-7 relative precision in the deep tail. Pre-fix
+            // Φ(-7) returned 0 and Φ(-10) returned 0; post-fix
+            // returns the right order of magnitude.
+            let rel_err = (got - want).abs() / want.abs().max(f64::MIN_POSITIVE);
+            assert!(
+                rel_err < 1e-6 || (got == 0.0 && want < 1e-300),
+                "Φ({x}) = {got}, want {want}, rel_err = {rel_err:e}"
+            );
+            // Crucially: must not be 0 in the deep tail.
+            if x >= -10.0 {
+                assert!(got > 0.0, "Φ({x}) = {got} must be positive");
+            }
+        }
+        // Symmetry: Φ(-x) = 1 - Φ(x). Tolerance loosens deep in the
+        // tail because 1 - Φ(x) for large positive x is itself the
+        // catastrophic-cancellation form (Φ(x) is very close to 1).
+        // Φ(-x) via the erfc path doesn't suffer that, so the
+        // identity holds in the *direction* erfc → 1 - erf form
+        // accurately, but the reverse is fundamentally fp-limited.
+        for &x in &[1.0_f64, 3.0, 5.0] {
+            let lhs = standard_normal_cdf(-x);
+            let rhs = 1.0 - standard_normal_cdf(x);
+            assert_close(
+                lhs,
+                rhs,
+                1e-6 * lhs.abs().max(1e-15),
+                &format!("Φ(-{x}) vs 1 - Φ({x})"),
+            );
         }
     }
 
