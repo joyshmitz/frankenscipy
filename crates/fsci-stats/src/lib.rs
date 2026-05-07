@@ -24257,6 +24257,33 @@ mod tests {
     }
 
     #[test]
+    fn wald_alias_pdf_cdf_match_scipy() {
+        // /porting-to-rust [frankenscipy-lf798]: Wald is pub type
+        // alias for InverseGaussian (line 7751), so the canonical
+        // parameterless usage is `Wald::new(1.0)`. Pin scipy.stats.wald
+        // pdf and cdf reference values:
+        //   wald.pdf(1) = 1/√(2π) ≈ 0.39894
+        //   wald.cdf(1) ≈ 0.66810
+        let w = Wald::new(1.0);
+        assert_close(
+            w.pdf(1.0),
+            0.398_942_280_401_432_7,
+            1e-12,
+            "Wald.pdf(1) = 1/√(2π)",
+        );
+        assert_close(
+            w.cdf(1.0),
+            0.668_102_001_223_170_6,
+            1e-9,
+            "Wald.cdf(1) ≈ 0.6681",
+        );
+        // Outside support
+        assert_eq!(w.pdf(-0.1), 0.0);
+        assert_eq!(w.pdf(0.0), 0.0);
+        assert_eq!(w.cdf(0.0), 0.0);
+    }
+
+    #[test]
     fn skewnorm_reflection_identity() {
         // /testing-metamorphic for [frankenscipy-kj72r]: textbook
         // reflection of the skew-normal distribution. If
