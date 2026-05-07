@@ -18641,22 +18641,31 @@ pub fn anderson(data: &[f64], dist: &str) -> AndersonResult {
 
     let a2 = -nf - s / nf;
 
-    // Apply correction factor for estimated parameters (case 3 in SciPy)
-    let a2_star = a2 * (1.0 + 0.75 / nf + 2.25 / (nf * nf));
-
     AndersonResult {
-        statistic: a2_star,
+        statistic: a2,
         critical_values: anderson_critical_values_norm(nf),
         significance_level: [15.0, 10.0, 5.0, 2.5, 1.0],
     }
 }
 
-/// Critical values for Anderson-Darling test with normal distribution
-/// at significance levels [15%, 10%, 5%, 2.5%, 1%].
-/// These are the standard tabulated values (Stephens 1974/1986).
-fn anderson_critical_values_norm(_n: f64) -> [f64; 5] {
-    // Standard critical values for normal distribution (parameters estimated)
-    [0.576, 0.656, 0.787, 0.918, 1.092]
+/// Critical values for Anderson-Darling test with normal distribution at
+/// significance levels [15%, 10%, 5%, 2.5%, 1%]. Matches scipy 1.17.1's
+/// formula in `scipy/stats/_morestats.py::anderson` for `dist='norm'`:
+///   `around(_Avals_norm / (1.0 + 0.75/N + 2.25/N**2), 3)`
+/// scipy 1.17 updated `_Avals_norm` from the historical Stephens 1974 table
+/// `[0.576, 0.656, 0.787, 0.918, 1.092]` to the refined values below
+/// `[0.561, 0.631, 0.752, 0.873, 1.035]`.
+fn anderson_critical_values_norm(n: f64) -> [f64; 5] {
+    let avals = [0.561, 0.631, 0.752, 0.873, 1.035];
+    let scale = 1.0 + 0.75 / n + 2.25 / (n * n);
+    let round3 = |v: f64| (v * 1000.0).round() / 1000.0;
+    [
+        round3(avals[0] / scale),
+        round3(avals[1] / scale),
+        round3(avals[2] / scale),
+        round3(avals[3] / scale),
+        round3(avals[4] / scale),
+    ]
 }
 
 /// Kolmogorov distribution p-value: P(D_n >= d).
