@@ -9267,7 +9267,7 @@ const KSTWOBIGN_TOL: f64 = 1.0e-30;
 // epsilon within a handful of terms at this x.
 const KSTWOBIGN_THRESHOLD: f64 = 1.18;
 
-fn kstwobign_pdf_large(x: f64) -> f64 {
+pub(crate) fn kstwobign_pdf_large(x: f64) -> f64 {
     let mut sum = 0.0_f64;
     for k in 1..=KSTWOBIGN_KMAX {
         let kf = k as f64;
@@ -9281,7 +9281,7 @@ fn kstwobign_pdf_large(x: f64) -> f64 {
     sum.max(0.0)
 }
 
-fn kstwobign_cdf_large(x: f64) -> f64 {
+pub(crate) fn kstwobign_cdf_large(x: f64) -> f64 {
     let mut sum = 0.0_f64;
     for k in 1..=KSTWOBIGN_KMAX {
         let kf = k as f64;
@@ -9297,7 +9297,7 @@ fn kstwobign_cdf_large(x: f64) -> f64 {
 
 // Dual Jacobi-theta-form series: converges rapidly for small x
 // where the large-x alternating series barely decays in 50 terms.
-fn kstwobign_cdf_small(x: f64) -> f64 {
+pub(crate) fn kstwobign_cdf_small(x: f64) -> f64 {
     let xsq = x * x;
     let inv_xsq = 1.0 / xsq;
     let mut sum = 0.0_f64;
@@ -9319,7 +9319,7 @@ fn kstwobign_cdf_small(x: f64) -> f64 {
     result.clamp(0.0, 1.0)
 }
 
-fn kstwobign_pdf_small(x: f64) -> f64 {
+pub(crate) fn kstwobign_pdf_small(x: f64) -> f64 {
     let xsq = x * x;
     let xq4 = xsq * xsq;
     let inv_xsq = 1.0 / xsq;
@@ -25142,6 +25142,41 @@ mod tests {
                     "ppf(cdf({x})) = {recovered}, want {x}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn kstwobign_dual_series_agree_on_overlap() {
+        // /testing-metamorphic [frankenscipy-wsyea]:
+        // KsTwoBign uses two series — large-x for x ≥ 1.18 and the
+        // Jacobi-theta dual for x < 1.18. The dual-series fix from
+        // d0e7055 relies on these formulas being mathematically
+        // equivalent. Pin that they agree to fp epsilon across a
+        // band around the crossover, so any future re-derivation
+        // that breaks the equivalence (e.g. wrong constant in c_k,
+        // off-by-one on (2k−1)) trips this test.
+        //
+        // Tolerance 1e-12 is what we get when both series have
+        // converged to ~1e-30 internal floor; the residual is the
+        // fp summation error, which is typically a few ulp.
+        let xs = [
+            0.7_f64, 0.85, 1.0, 1.05, 1.1, 1.15, 1.18, 1.20, 1.25, 1.4, 1.6,
+        ];
+        for &x in &xs {
+            let cdf_l = kstwobign_cdf_large(x);
+            let cdf_s = kstwobign_cdf_small(x);
+            assert!(
+                (cdf_l - cdf_s).abs() < 1e-12,
+                "cdf series disagree at x={x}: large={cdf_l}, small={cdf_s}, diff={}",
+                (cdf_l - cdf_s).abs()
+            );
+            let pdf_l = kstwobign_pdf_large(x);
+            let pdf_s = kstwobign_pdf_small(x);
+            assert!(
+                (pdf_l - pdf_s).abs() < 1e-12,
+                "pdf series disagree at x={x}: large={pdf_l}, small={pdf_s}, diff={}",
+                (pdf_l - pdf_s).abs()
+            );
         }
     }
 
