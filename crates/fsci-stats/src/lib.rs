@@ -24579,6 +24579,33 @@ mod tests {
     }
 
     #[test]
+    fn irwinhall_n2_is_triangular() {
+        // /testing-metamorphic for [frankenscipy-fekdp]: textbook
+        // identity IrwinHall(n=2) ≡ Triangular(0, 1, 2) — the sum
+        // of 2 iid Uniform(0, 1) is the symmetric triangular on
+        // [0, 2] peaking at 1.
+        // Independent verification across two distinct code paths:
+        // IrwinHall uses the alternating-sign sum (1/1!)·Σ(-1)^k·C(2,k)·(x-k);
+        // Triangular uses piecewise linear 2(x-a)/((b-a)(c-a)).
+        let ih = IrwinHall::new(2);
+        let tr = Triangular::new(0.0, 1.0, 2.0);
+        for &x in &[0.1_f64, 0.25, 0.5, 1.0, 1.25, 1.5, 1.75, 1.9] {
+            assert_close(
+                ih.pdf(x),
+                tr.pdf(x),
+                1e-12,
+                &format!("IrwinHall(2).pdf({x}) vs Triangular(0,1,2).pdf({x})"),
+            );
+            assert_close(
+                ih.cdf(x),
+                tr.cdf(x),
+                1e-12,
+                &format!("IrwinHall(2).cdf({x}) vs Triangular(0,1,2).cdf({x})"),
+            );
+        }
+    }
+
+    #[test]
     fn irwinhall_n1_is_uniform() {
         // /testing-metamorphic [frankenscipy-7dxwg]: IrwinHall(n=1) ≡
         // Uniform(0, 1). n=1 is the trivial "sum of 1 uniform".
