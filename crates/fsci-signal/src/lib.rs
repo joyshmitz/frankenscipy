@@ -3348,9 +3348,15 @@ pub fn group_delay_from_ba(b: &[f64], a: &[f64], n_freqs: usize) -> (Vec<f64>, V
     (freqs, delays)
 }
 
-/// Compute the magnitude response of a digital filter.
+/// Compute the **linear** magnitude response of a digital filter.
 ///
-/// Returns (frequencies, magnitudes).
+/// Returns `(frequencies, |H(e^{jω})|)` where `H = B/A` is the
+/// transfer function and the magnitude is unitless and non-negative
+/// — matching the convention of `np.abs(h)` from
+/// `scipy.signal.freqz(b, a, worN=n_freqs)`. For the dB-scaled
+/// equivalent (`20 · log10(|H|)`) use [`magnitude_response_db`].
+///
+/// Resolves [frankenscipy-o8x6j].
 pub fn magnitude_response(b: &[f64], a: &[f64], n_freqs: usize) -> (Vec<f64>, Vec<f64>) {
     let mut freqs = Vec::with_capacity(n_freqs);
     let mut mags = Vec::with_capacity(n_freqs);
@@ -3385,6 +3391,28 @@ pub fn magnitude_response(b: &[f64], a: &[f64], n_freqs: usize) -> (Vec<f64>, Ve
     }
 
     (freqs, mags)
+}
+
+/// Compute the magnitude response of a digital filter in **decibels**.
+///
+/// Returns `(frequencies, 20 · log10(|H(e^{jω})|))` — the dB-scaled
+/// counterpart of [`magnitude_response`]. Frequencies where `|H| = 0`
+/// (or numerically below `1e-30`) are mapped to `f64::NEG_INFINITY`.
+///
+/// Resolves [frankenscipy-o8x6j].
+pub fn magnitude_response_db(b: &[f64], a: &[f64], n_freqs: usize) -> (Vec<f64>, Vec<f64>) {
+    let (freqs, mags) = magnitude_response(b, a, n_freqs);
+    let mags_db: Vec<f64> = mags
+        .iter()
+        .map(|&m| {
+            if m > 1e-30 {
+                20.0 * m.log10()
+            } else {
+                f64::NEG_INFINITY
+            }
+        })
+        .collect();
+    (freqs, mags_db)
 }
 
 /// Compute the phase response of a digital filter.
@@ -12567,6 +12595,51 @@ mod tests {
         let (_, two_times) = magnitude_response(&[2.0], &[1.0], 8);
         for (i, &mag) in two_times.iter().enumerate() {
             assert_close(mag, 2.0, 1e-12, &format!("two-times magnitude at bin {i}"));
+        }
+    }
+
+    #[test]
+    fn magnitude_response_db_is_20_log10_of_linear() {
+        // [frankenscipy-o8x6j]: magnitude_response_db must be the dB
+        // transform of magnitude_response. Pin the algebraic relation
+        // 20·log10(|H|) for several filter shapes.
+        let cases: &[(&[f64], &[f64])] = &[
+            (&[1.0], &[1.0]),
+            (&[2.0], &[1.0]),
+            (&[1.0, 0.5, 0.25], &[1.0, -0.3, 0.2]),
+            (&[0.5, 1.0, 0.5], &[1.0, 0.5]),
+        ];
+        for (b, a) in cases {
+            let (freqs_lin, mags_lin) = magnitude_response(b, a, 16);
+            let (freqs_db, mags_db) = magnitude_response_db(b, a, 16);
+            assert_eq!(freqs_lin, freqs_db);
+            for (i, (&lin, &db)) in mags_lin.iter().zip(mags_db.iter()).enumerate() {
+                if lin > 1e-30 {
+                    let expected_db = 20.0 * lin.log10();
+                    assert_close(
+                        db,
+                        expected_db,
+                        1e-12,
+                        &format!("dB at bin {i} for b={b:?}"),
+                    );
+                } else {
+                    assert!(
+                        db.is_infinite() && db < 0.0,
+                        "expected -inf at bin {i} for zero-magnitude bin"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn magnitude_response_db_doubles_at_six_db_per_octave_gain() {
+        // [frankenscipy-o8x6j]: a flat |H|=2 filter should report
+        // exactly 6.0206 dB everywhere (= 20·log10(2)).
+        let (_, mags_db) = magnitude_response_db(&[2.0], &[1.0], 8);
+        let expected = 20.0_f64 * 2.0_f64.log10();
+        for (i, &db) in mags_db.iter().enumerate() {
+            assert_close(db, expected, 1e-12, &format!("dB at bin {i}"));
         }
     }
 
