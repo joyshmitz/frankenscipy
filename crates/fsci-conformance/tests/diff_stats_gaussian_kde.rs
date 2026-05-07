@@ -6,14 +6,13 @@
 //! `GaussianKde::evaluate` vs scipy across multiple datasets
 //! and query points.
 //!
-//! Important convention note: fsci computes Silverman's
-//! bandwidth using population variance (n in denominator),
-//! while scipy uses sample variance (n-1 in denominator). To
-//! avoid a built-in disagreement, the harness pins an explicit
-//! bandwidth via `GaussianKde::with_bandwidth` and passes the
-//! same `bw_method=<float>` to scipy. The bandwidth is the
-//! direct factor multiplying the kernel sum, so both code
-//! paths receive identical inputs.
+//! Important convention note: fsci's `with_bandwidth(bw)`
+//! treats `bw` as the kernel sigma directly (sigma² = bw²).
+//! scipy's `gaussian_kde(data, bw_method=factor)` uses
+//! sigma = factor * std(data, ddof=1) (np.cov ddof=1
+//! internally). To reconcile, we pass scipy
+//! `bw_method = bw / std(ddof=1)` so its effective sigma
+//! lines up exactly with fsci's bandwidth.
 //!
 //! 3 datasets × 7 query points = 21 cases via subprocess.
 //! Tol 1e-12 abs (closed-form Gaussian sum).
