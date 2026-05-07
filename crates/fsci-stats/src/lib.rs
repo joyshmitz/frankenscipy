@@ -3822,6 +3822,83 @@ impl Geometric {
     }
 }
 
+/// Boltzmann (truncated geometric) distribution.
+///
+/// Matches `scipy.stats.boltzmann(lambda_, N)`. Resolves
+/// [frankenscipy-nvrxh]. Two parameters: rate `lambda > 0` and
+/// truncation `n` (positive integer). Support: k ∈ {0, 1, …, n−1}.
+///
+///   pmf(k; λ, n) = (1 − e^(−λ)) · e^(−λk) / (1 − e^(−λn))
+///   cdf(k; λ, n) = (1 − e^(−λ(k+1))) / (1 − e^(−λn))
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Boltzmann {
+    pub lambda: f64,
+    pub n: u32,
+}
+
+impl Boltzmann {
+    #[must_use]
+    pub fn new(lambda: f64, n: u32) -> Self {
+        assert!(
+            lambda > 0.0 && lambda.is_finite(),
+            "lambda must be positive and finite"
+        );
+        assert!(n >= 1, "n must be at least 1");
+        Self { lambda, n }
+    }
+
+    #[inline]
+    fn z(&self) -> f64 {
+        // Normalization: Z = 1 − e^(−λn).
+        -(-self.lambda * self.n as f64).exp_m1()
+    }
+}
+
+impl DiscreteDistribution for Boltzmann {
+    fn pmf(&self, k: u64) -> f64 {
+        if k >= self.n as u64 {
+            return 0.0;
+        }
+        let kf = k as f64;
+        // (1 − e^(−λ)) · e^(−λk) / (1 − e^(−λn))
+        (-(-self.lambda).exp_m1()) * (-self.lambda * kf).exp() / self.z()
+    }
+
+    fn cdf(&self, k: u64) -> f64 {
+        if k >= self.n as u64 {
+            return 1.0;
+        }
+        let kp1 = (k + 1) as f64;
+        // (1 − e^(−λ(k+1))) / (1 − e^(−λn))
+        (-(-self.lambda * kp1).exp_m1()) / self.z()
+    }
+
+    fn mean(&self) -> f64 {
+        // ⟨k⟩ = (e^(−λ) − n · e^(−λn) + (n−1) · e^(−λ(n+1)))
+        //       / ((1 − e^(−λ)) · (1 − e^(−λn)))
+        // Equivalent canonical form via geometric-sum derivative:
+        //   ⟨k⟩ = 1/(e^λ − 1) − n / (e^(λn) − 1)
+        let nf = self.n as f64;
+        let lam = self.lambda;
+        1.0 / lam.exp_m1() - nf / (lam * nf).exp_m1()
+    }
+
+    fn var(&self) -> f64 {
+        // Closed form: ⟨k²⟩ − ⟨k⟩².
+        // ⟨k²⟩ has a known form too — compute via the same trick:
+        //   ⟨k²⟩ = (e^λ + 1) / (e^λ − 1)² − n²/((e^(λn) − 1)·(e^(λn)·(1 − e^(−λn))/(1 − e^(−λ))))
+        // For simplicity and robustness, fall back to the direct
+        // sum since n is bounded.
+        let m = self.mean();
+        let mut e_k_sq = 0.0_f64;
+        for k in 0..self.n as u64 {
+            let kf = k as f64;
+            e_k_sq += kf * kf * self.pmf(k);
+        }
+        (e_k_sq - m * m).max(0.0)
+    }
+}
+
 impl DiscreteDistribution for Geometric {
     fn pmf(&self, k: u64) -> f64 {
         if k == 0 {
@@ -33755,6 +33832,105 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn boltzmann_pmf_cdf_match_scipy() {
+        // /porting-to-rust [frankenscipy-nvrxh]: scipy reference values.
+        // boltzmann(λ=1, N=5).pmf(0) = 0.6364086465588308
+        // boltzmann(λ=1, N=5).cdf(0) = 0.6364086465588308
+        // boltzmann(λ=1, N=5).pmf(2) = 0.0861285444362687
+        // boltzmann(λ=1, N=5).cdf(2) = 0.9566588482478361
+        // boltzmann(λ=0.5, N=10).pmf(5) = 0.0325170282690797
+        // boltzmann(λ=0.5, N=10).cdf(5) = 0.9566588482478361
+        // boltzmann(λ=2, N=3).pmf(1) = 0.1173104278261984
+        // boltzmann(λ=2, N=3).cdf(1) = 0.9841237600235332
+        // boltzmann(λ=0.7, N=7).pmf(4) = 0.0308423493192074
+        // boltzmann(λ=0.7, N=7).cdf(4) = 0.9770785128907377
+        let cases = [
+            (
+                1.0_f64,
+                5u32,
+                0u64,
+                0.636_408_646_558_830_8,
+                0.636_408_646_558_830_8,
+            ),
+            (
+                1.0,
+                5,
+                2,
+                0.086_128_544_436_268_70,
+                0.956_658_848_247_836_1,
+            ),
+            (
+                0.5,
+                10,
+                5,
+                0.032_517_028_269_079_70,
+                0.956_658_848_247_836_1,
+            ),
+            (
+                2.0,
+                3,
+                1,
+                0.117_310_427_826_198_38,
+                0.984_123_760_023_533_2,
+            ),
+            (
+                0.7,
+                7,
+                4,
+                0.030_842_349_319_207_42,
+                0.977_078_512_890_737_7,
+            ),
+        ];
+        for (lam, n, k, want_pmf, want_cdf) in cases {
+            let dist = Boltzmann::new(lam, n);
+            assert_close(dist.pmf(k), want_pmf, 1e-12, "Boltzmann pmf");
+            assert_close(dist.cdf(k), want_cdf, 1e-12, "Boltzmann cdf");
+        }
+    }
+
+    #[test]
+    fn boltzmann_pmf_sums_to_one() {
+        // /porting-to-rust [frankenscipy-nvrxh]: pmf normalisation.
+        for &(lam, n) in &[(0.5_f64, 10u32), (1.0, 5), (2.0, 3), (0.1, 20), (3.0, 8)] {
+            let dist = Boltzmann::new(lam, n);
+            let total: f64 = (0..n as u64).map(|k| dist.pmf(k)).sum();
+            assert!(
+                (total - 1.0).abs() < 1e-12,
+                "Boltzmann(λ={lam}, N={n}).pmf sums to {total}, want 1"
+            );
+            // cdf(N-1) = 1 exactly (by construction of Z).
+            assert!(
+                (dist.cdf((n - 1) as u64) - 1.0).abs() < 1e-12,
+                "Boltzmann(λ={lam}, N={n}).cdf(N-1) = {}, want 1",
+                dist.cdf((n - 1) as u64)
+            );
+            // pmf = 0 outside support.
+            assert_eq!(dist.pmf(n as u64), 0.0);
+        }
+    }
+
+    #[test]
+    fn boltzmann_geometric_limit() {
+        // /testing-metamorphic [frankenscipy-nvrxh]:
+        // As N → ∞ with λ fixed, Boltzmann(λ, N).pmf(k)
+        // approaches the standard truncated-geometric form
+        // (1 − e^(−λ)) · e^(−λk) — the geometric distribution
+        // with success probability p = 1 − e^(−λ), shifted so
+        // k = 0 is the first trial. Pin the limit.
+        let lam = 1.5_f64;
+        let p = -(-lam).exp_m1();
+        let large = Boltzmann::new(lam, 100);
+        for k in 0..6u64 {
+            let want = p * (-lam * k as f64).exp();
+            assert!(
+                (large.pmf(k) - want).abs() < 1e-12,
+                "Boltzmann(λ={lam}, N=100).pmf({k}) = {}, want {want} (geometric limit)",
+                large.pmf(k)
+            );
         }
     }
 
