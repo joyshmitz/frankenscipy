@@ -9261,7 +9261,16 @@ impl ContinuousDistribution for TruncWeibullMin {
         if !(self.a < x && x <= self.b) {
             return 0.0;
         }
-        self.c * x.powf(self.c - 1.0) * (-x.powf(self.c)).exp() / self.denom()
+        // Rewrite as c·x^(c-1)·exp(a^c - x^c) / (-expm1(a^c - b^c))
+        // to avoid underflow when both exp(-a^c) and exp(-b^c) are
+        // tiny (e.g., c=10, a=10 → a^c = 1e10). The naive denom
+        // exp(-a^c) - exp(-b^c) becomes 0/0 = NaN there.
+        // Resolves [frankenscipy-li9bu] (fuzz finding kin4s).
+        let ac = self.a.powf(self.c);
+        let xc = x.powf(self.c);
+        let bc = self.b.powf(self.c);
+        let denom_log = -(ac - bc).exp_m1(); // 1 - exp(a^c - b^c) > 0
+        self.c * x.powf(self.c - 1.0) * (ac - xc).exp() / denom_log
     }
 
     fn cdf(&self, x: f64) -> f64 {
@@ -9271,7 +9280,13 @@ impl ContinuousDistribution for TruncWeibullMin {
         if x >= self.b {
             return 1.0;
         }
-        ((-self.a.powf(self.c)).exp() - (-x.powf(self.c)).exp()) / self.denom()
+        // expm1(a^c - x^c) / expm1(a^c - b^c) — both expm1 args
+        // are non-positive so both are in (-1, 0]; the ratio is
+        // in [0, 1]. This avoids the same underflow issue as pdf.
+        let ac = self.a.powf(self.c);
+        let xc = x.powf(self.c);
+        let bc = self.b.powf(self.c);
+        (ac - xc).exp_m1() / (ac - bc).exp_m1()
     }
 
     fn ppf(&self, q: f64) -> f64 {
@@ -9284,10 +9299,13 @@ impl ContinuousDistribution for TruncWeibullMin {
         if q == 1.0 {
             return self.b;
         }
-        let exp_neg_ac = (-self.a.powf(self.c)).exp();
-        let arg = exp_neg_ac - q * self.denom();
-        // arg > 0 by construction (q in (0, 1) and denom = exp(-a^c) - exp(-b^c) > 0).
-        (-arg.ln()).powf(1.0 / self.c)
+        // From the rewritten cdf: q · expm1(a^c - b^c) = expm1(a^c - x^c)
+        // ⇒ a^c − x^c = ln1p(q · expm1(a^c − b^c))
+        // ⇒ x = (a^c − ln1p(q · expm1(a^c − b^c)))^(1/c)
+        let ac = self.a.powf(self.c);
+        let bc = self.b.powf(self.c);
+        let xc = ac - q.mul_add((ac - bc).exp_m1(), 0.0).ln_1p();
+        xc.powf(1.0 / self.c)
     }
 
     fn mean(&self) -> f64 {
@@ -24774,6 +24792,34 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn truncweibull_min_handles_extreme_c_a_underflow() {
+        // /testing-fuzzing regression for [frankenscipy-li9bu]:
+        // For (c=10, a=10, b=10.1), c·a^c = 1e10 and exp(-a^c)
+        // underflows to 0 — the original denom = exp(-a^c) - exp(-b^c)
+        // collapsed to 0/0 = NaN. The log-space rewrite via expm1
+        // / mul_add avoids the small-quantity subtraction.
+        let d = TruncWeibullMin::new(10.0, 10.0, 10.1);
+        // Mid-support point.
+        let x = 10.05_f64;
+        let p = d.pdf(x);
+        let c = d.cdf(x);
+        assert!(p.is_finite() && p >= 0.0, "pdf must be finite ≥ 0, got {p}");
+        assert!(
+            c.is_finite() && (0.0..=1.0).contains(&c),
+            "cdf must be in [0, 1], got {c}"
+        );
+        // ppf round-trip on a moderate q.
+        let q = d.cdf(10.05);
+        if (1e-6..1.0 - 1e-6).contains(&q) {
+            let recovered = d.ppf(q);
+            assert!(
+                (recovered - 10.05).abs() < 1e-9,
+                "ppf round-trip lost precision: {recovered} vs 10.05"
+            );
         }
     }
 
