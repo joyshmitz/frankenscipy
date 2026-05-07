@@ -24257,6 +24257,37 @@ mod tests {
     }
 
     #[test]
+    fn skewnorm_reflection_identity() {
+        // /testing-metamorphic for [frankenscipy-kj72r]: textbook
+        // reflection of the skew-normal distribution. If
+        // Y ~ SkewNorm(-a) then -Y ~ SkewNorm(a), so:
+        //   SkewNorm(-a).pdf(x) = SkewNorm(a).pdf(-x)
+        //   SkewNorm(-a).cdf(x) = SkewNorm(a).sf(-x)
+        // Independent verification: pdf goes through 2·φ(x)·Φ(a·x);
+        // cdf goes through Φ(x) − 2·T(x, a) and the reflection
+        // depends on T(h, -a) = -T(h, a) and T(-h, a) = -T(h, a)
+        // — Owen's T anti-symmetry properties.
+        for &a in &[0.5_f64, 1.5, 5.0, 10.0] {
+            let plus = SkewNorm::new(a);
+            let minus = SkewNorm::new(-a);
+            for &x in &[-3.0_f64, -1.0, -0.1, 0.0, 0.1, 1.0, 3.0] {
+                assert_close(
+                    minus.pdf(x),
+                    plus.pdf(-x),
+                    1e-12,
+                    &format!("SkewNorm(-{a}).pdf({x}) vs SkewNorm({a}).pdf({})", -x),
+                );
+                assert_close(
+                    minus.cdf(x),
+                    plus.sf(-x),
+                    1e-9,
+                    &format!("SkewNorm(-{a}).cdf({x}) vs SkewNorm({a}).sf({})", -x),
+                );
+            }
+        }
+    }
+
+    #[test]
     fn skewnorm_at_zero_reduces_to_normal() {
         // /porting-to-rust [frankenscipy-cquzz]: SkewNorm(a=0) ≡ N(0, 1).
         let sn = SkewNorm::new(0.0);
