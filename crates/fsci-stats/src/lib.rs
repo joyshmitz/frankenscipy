@@ -24271,6 +24271,38 @@ mod tests {
     }
 
     #[test]
+    fn exponpow_b1_is_gompertz_c1() {
+        // /testing-metamorphic for [frankenscipy-z5ssy]: textbook
+        // identity ExponPow(b=1) ≡ Gompertz(c=1). Both pdf forms
+        // reduce to exp(1 + x − exp(x)) for x ≥ 0.
+        // Independent verification across two distinct code paths:
+        // ExponPow uses logpdf = 1 + ln(b) + (b−1)·ln(x) + xb − exp(xb);
+        // Gompertz uses self.c · exp(x) · exp(-self.c · (exp(x) − 1)).
+        let ep = ExponPow::new(1.0);
+        let g = Gompertz::new(1.0);
+        for &x in &[0.0_f64, 0.05, 0.5, 1.0, 1.5, 2.0, 3.0] {
+            assert_close(
+                ep.pdf(x),
+                g.pdf(x),
+                1e-12,
+                &format!("ExponPow(1).pdf({x}) vs Gompertz(1).pdf({x})"),
+            );
+            assert_close(
+                ep.cdf(x),
+                g.cdf(x),
+                1e-12,
+                &format!("ExponPow(1).cdf({x}) vs Gompertz(1).cdf({x})"),
+            );
+            assert_close(
+                ep.sf(x),
+                g.sf(x),
+                1e-9,
+                &format!("ExponPow(1).sf({x}) vs Gompertz(1).sf({x})"),
+            );
+        }
+    }
+
+    #[test]
     fn gilbrat_is_lognormal_unit_unit() {
         // /testing-metamorphic for [frankenscipy-97rpr]: textbook
         // identity Gilbrat ≡ Lognormal(s=1, scale=1). Gilbrat is the
