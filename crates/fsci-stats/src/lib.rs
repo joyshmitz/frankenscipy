@@ -7372,6 +7372,87 @@ impl ContinuousDistribution for Loguniform {
 // Discrete distributions: Zipf, Boltzmann, etc.
 
 /// Zipf (zeta) distribution.
+/// Truncated Zipf (Zipfian) distribution.
+///
+/// Matches `scipy.stats.zipfian(a, n)`. Resolves [frankenscipy-kv0cb].
+/// Two parameters: shape `a > 0` and truncation `n ≥ 1`.
+/// Support: k ∈ {1, …, n}. Distinct from `Zipf` (= scipy.stats.zipf,
+/// infinite support).
+///
+///   pmf(k; a, n) = (1 / k^a) / Z
+///   cdf(k; a, n) = Σ_{j=1..k} (1 / j^a) / Z
+///   where Z = Σ_{j=1..n} 1 / j^a.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Zipfian {
+    pub a: f64,
+    pub n: u32,
+}
+
+impl Zipfian {
+    #[must_use]
+    pub fn new(a: f64, n: u32) -> Self {
+        assert!(a > 0.0 && a.is_finite(), "a must be positive and finite");
+        assert!(n >= 1, "n must be at least 1");
+        Self { a, n }
+    }
+
+    #[inline]
+    fn z(&self) -> f64 {
+        let mut s = 0.0_f64;
+        for j in 1..=self.n {
+            s += (j as f64).powf(-self.a);
+        }
+        s
+    }
+}
+
+impl DiscreteDistribution for Zipfian {
+    fn pmf(&self, k: u64) -> f64 {
+        if k == 0 || k > self.n as u64 {
+            return 0.0;
+        }
+        (k as f64).powf(-self.a) / self.z()
+    }
+
+    fn cdf(&self, k: u64) -> f64 {
+        if k == 0 {
+            return 0.0;
+        }
+        let bound = (k as u64).min(self.n as u64);
+        let z = self.z();
+        let mut acc = 0.0_f64;
+        for j in 1..=bound {
+            acc += (j as f64).powf(-self.a);
+        }
+        (acc / z).min(1.0)
+    }
+
+    fn mean(&self) -> f64 {
+        // ⟨k⟩ = Σ k · k^(−a) / Z = Σ k^(1−a) / Z
+        let z = self.z();
+        let mut acc = 0.0_f64;
+        for j in 1..=self.n {
+            let jf = j as f64;
+            acc += jf * jf.powf(-self.a);
+        }
+        acc / z
+    }
+
+    fn var(&self) -> f64 {
+        // Var = ⟨k²⟩ − ⟨k⟩²
+        let z = self.z();
+        let mut e1 = 0.0_f64;
+        let mut e2 = 0.0_f64;
+        for j in 1..=self.n {
+            let jf = j as f64;
+            let p = jf.powf(-self.a) / z;
+            e1 += jf * p;
+            e2 += jf * jf * p;
+        }
+        (e2 - e1 * e1).max(0.0)
+    }
+}
+
 ///
 /// Matches `scipy.stats.zipf`.
 pub struct Zipf {
@@ -34036,6 +34117,115 @@ mod tests {
             // pmf = 0 outside support.
             assert_eq!(dist.pmf(n as u64), 0.0);
         }
+    }
+
+    #[test]
+    fn zipfian_pmf_cdf_match_scipy() {
+        // /porting-to-rust [frankenscipy-kv0cb]: scipy reference values.
+        // zipfian(a=2, n=5).pmf(1)   = 0.6832416018219776
+        // zipfian(a=2, n=5).cdf(1)   = 0.6832416018219776
+        // zipfian(a=2, n=5).pmf(3)   = 0.0759157335357754
+        // zipfian(a=2, n=5).cdf(3)   = 0.9299677358132474
+        // zipfian(a=1.5, n=10).pmf(5) = 0.0448258824505445
+        // zipfian(a=1.5, n=10).cdf(5) = 0.8822803598762340
+        // zipfian(a=3, n=4).pmf(2)   = 0.1061425061425062
+        // zipfian(a=3, n=4).cdf(2)   = 0.9552825552825554
+        // zipfian(a=1.1, n=100).pmf(1) = 0.2337527780551643
+        // zipfian(a=1.1, n=100).cdf(1) = 0.2337527780551643
+        // zipfian(a=2.5, n=20).pmf(10) = 0.0023699768824349
+        // zipfian(a=2.5, n=20).cdf(10) = 0.9907168685783393
+        let cases = [
+            (
+                2.0_f64,
+                5u32,
+                1u64,
+                0.683_241_601_821_977_6,
+                0.683_241_601_821_977_6,
+            ),
+            (
+                2.0,
+                5,
+                3,
+                0.075_915_733_535_775_4,
+                0.929_967_735_813_247_4,
+            ),
+            (
+                1.5,
+                10,
+                5,
+                0.044_825_882_450_544_5,
+                0.882_280_359_876_234_0,
+            ),
+            (
+                3.0,
+                4,
+                2,
+                0.106_142_506_142_506_2,
+                0.955_282_555_282_555_4,
+            ),
+            (
+                1.1,
+                100,
+                1,
+                0.233_752_778_055_164_3,
+                0.233_752_778_055_164_3,
+            ),
+            (
+                2.5,
+                20,
+                10,
+                0.002_369_976_882_434_9,
+                0.990_716_868_578_339_3,
+            ),
+        ];
+        for (a, n, k, want_pmf, want_cdf) in cases {
+            let dist = Zipfian::new(a, n);
+            assert_close(dist.pmf(k), want_pmf, 1e-12, "Zipfian pmf");
+            assert_close(dist.cdf(k), want_cdf, 1e-12, "Zipfian cdf");
+        }
+    }
+
+    #[test]
+    fn zipfian_pmf_normalised() {
+        // /porting-to-rust [frankenscipy-kv0cb]: pmf sums to 1
+        // and cdf(n) = 1 across the support.
+        for &(a, n) in &[
+            (1.5_f64, 5u32),
+            (2.0, 10),
+            (3.0, 20),
+            (1.1, 50),
+            (5.0, 4),
+        ] {
+            let dist = Zipfian::new(a, n);
+            let total: f64 = (1..=n as u64).map(|k| dist.pmf(k)).sum();
+            assert!(
+                (total - 1.0).abs() < 1e-12,
+                "Zipfian(a={a}, n={n}).pmf sums to {total}, want 1"
+            );
+            assert!(
+                (dist.cdf(n as u64) - 1.0).abs() < 1e-12,
+                "Zipfian(a={a}, n={n}).cdf(n) = {}, want 1",
+                dist.cdf(n as u64)
+            );
+            assert_eq!(dist.pmf(0), 0.0);
+            assert_eq!(dist.pmf((n as u64) + 1), 0.0);
+        }
+    }
+
+    #[test]
+    fn zipfian_mean_matches_scipy() {
+        // /porting-to-rust [frankenscipy-kv0cb]: mean values vs scipy.
+        // zipfian.mean(2, 5)   = 1.560068324160182
+        // zipfian.mean(1.5, 10) = 2.5163664955948892
+        let d1 = Zipfian::new(2.0, 5);
+        let d2 = Zipfian::new(1.5, 10);
+        assert_close(d1.mean(), 1.560_068_324_160_182, 1e-12, "Zipfian mean(2, 5)");
+        assert_close(
+            d2.mean(),
+            2.516_366_495_594_889_2,
+            1e-12,
+            "Zipfian mean(1.5, 10)",
+        );
     }
 
     #[test]
