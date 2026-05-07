@@ -5030,8 +5030,16 @@ pub struct Triangular {
 impl Triangular {
     #[must_use]
     pub fn new(left: f64, mode: f64, right: f64) -> Self {
-        assert!(left < mode, "left must be < mode");
-        assert!(mode <= right, "mode must be <= right");
+        // scipy.stats.triang allows c = 0 (mode at left edge) and
+        // c = 1 (mode at right edge), so we need `left ≤ mode ≤ right`
+        // with strict `left < right` to keep the support
+        // non-degenerate. Caught by [frankenscipy-fkq6j] diff
+        // harness — the previous `left < mode` panicked at c = 0.
+        assert!(left < right, "left must be < right (degenerate support)");
+        assert!(
+            (left..=right).contains(&mode),
+            "mode must be in [left, right]"
+        );
         Self { left, mode, right }
     }
 }
