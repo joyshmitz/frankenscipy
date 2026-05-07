@@ -24973,6 +24973,35 @@ mod tests {
     }
 
     #[test]
+    fn normal_standardization_holds_in_deep_tail() {
+        // /testing-metamorphic for [frankenscipy-rspw1]: textbook
+        // standardization identity. Normal(μ, σ).cdf(x) =
+        // Normal(0, 1).cdf((x - μ)/σ). Exercises the erfc-path
+        // precision improvement (095a947 + 93a4cc0) at translated
+        // and scaled locations: e.g., Normal(5, 2).cdf(-9) must
+        // produce the same Φ(-7) ≈ 1.28e-12 that Normal(0, 1).cdf(-7)
+        // does. Pre-fix both returned 0; post-fix both return
+        // the same finite value.
+        let std_normal = Normal::new(0.0, 1.0);
+        let configs = [(5.0_f64, 2.0), (10.0, 0.5), (-3.0, 0.1), (0.0, 100.0)];
+        let z_values = [-10.0_f64, -7.0, -3.0, 0.0, 3.0, 7.0];
+        for (mu, sigma) in configs {
+            let n = Normal::new(mu, sigma);
+            for z in z_values {
+                let x = mu + sigma * z;
+                let lhs = n.cdf(x);
+                let rhs = std_normal.cdf(z);
+                let scale = lhs.abs().max(rhs.abs()).max(1e-300);
+                let rel = (lhs - rhs).abs() / scale;
+                assert!(
+                    rel < 1e-12,
+                    "Normal({mu}, {sigma}).cdf({x}) = {lhs} vs Normal(0, 1).cdf({z}) = {rhs}, rel = {rel:e}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn lognormal_and_fatiguelife_cdf_deep_tail_precision() {
         // /mock-code-finder regression for [frankenscipy-tkpgq]:
         // Lognormal.cdf for very small x and FatigueLife.cdf for
