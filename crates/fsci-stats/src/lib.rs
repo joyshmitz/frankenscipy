@@ -8375,6 +8375,92 @@ impl ContinuousDistribution for LevyLeft {
     }
 }
 
+/// Burr Type III distribution with shapes `c > 0`, `d > 0`.
+///
+/// Matches `scipy.stats.burr(c, d)`. Resolves [frankenscipy-wllk0].
+/// Support: x > 0. (Distinct from `Burr12` / scipy.stats.burr12,
+/// which is Type XII; the two families share names in the
+/// literature but have inverse-related cdfs.)
+///
+///   pdf(x; c, d) = c · d · x^(−c − 1) · (1 + x^(−c))^(−d − 1)
+///   cdf(x; c, d) = (1 + x^(−c))^(−d)
+///   ppf(q; c, d) = (q^(−1/d) − 1)^(−1/c)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Burr3 {
+    pub c: f64,
+    pub d: f64,
+}
+
+impl Burr3 {
+    #[must_use]
+    pub fn new(c: f64, d: f64) -> Self {
+        assert!(
+            c > 0.0 && c.is_finite() && d > 0.0 && d.is_finite(),
+            "c and d must be positive and finite"
+        );
+        Self { c, d }
+    }
+}
+
+impl ContinuousDistribution for Burr3 {
+    fn pdf(&self, x: f64) -> f64 {
+        if x <= 0.0 || !x.is_finite() {
+            return 0.0;
+        }
+        let c = self.c;
+        let d = self.d;
+        let xnc = x.powf(-c);
+        c * d * x.powf(-c - 1.0) * (1.0 + xnc).powf(-d - 1.0)
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        if !x.is_finite() {
+            return 1.0;
+        }
+        let c = self.c;
+        let d = self.d;
+        let xnc = x.powf(-c);
+        // Clamp: as x → ∞, x^(−c) → 0 and (1 + 0)^(−d) → 1; fp
+        // can drift slightly above 1.
+        (1.0 + xnc).powf(-d).clamp(0.0, 1.0)
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return 0.0;
+        }
+        if q == 1.0 {
+            return f64::INFINITY;
+        }
+        let c = self.c;
+        let d = self.d;
+        let inner = q.powf(-1.0 / d) - 1.0;
+        if inner <= 0.0 {
+            // q^(−1/d) → 1 from above as q → 1; underflow gives
+            // 0 or negative, ppf diverges.
+            return f64::INFINITY;
+        }
+        inner.powf(-1.0 / c)
+    }
+
+    fn mean(&self) -> f64 {
+        // E[X] exists only when c·d > 1; expressible via Beta
+        // function — leave NaN for now (covered by scipy oracle
+        // when fitness needed).
+        f64::NAN
+    }
+
+    fn var(&self) -> f64 {
+        f64::NAN
+    }
+}
+
 /// Burr (Type XII) distribution.
 ///
 /// Matches `scipy.stats.burr12`.
@@ -33073,6 +33159,90 @@ mod tests {
         let high = Argus::new(10.0);
         assert!(low.mean().is_finite() && low.var() >= 0.0);
         assert!(high.mean().is_finite() && high.var() >= 0.0);
+    }
+
+    #[test]
+    fn burr3_pdf_cdf_match_scipy() {
+        // /porting-to-rust [frankenscipy-wllk0]: scipy reference values.
+        // burr(c=1, d=1).pdf(1)   = 0.25
+        // burr(c=1, d=1).cdf(1)   = 0.5
+        // burr(c=2, d=3).pdf(0.5) = 0.07679999999999999
+        // burr(c=2, d=3).cdf(0.5) = 0.008
+        // burr(c=0.5, d=2).pdf(2) = 0.07106781186547526
+        // burr(c=0.5, d=2).cdf(2) = 0.34314575050761986
+        // burr(c=3, d=1.5).pdf(1.5) = 0.46460810003557917
+        // burr(c=3, d=1.5).cdf(1.5) = 0.677553479218553
+        // burr(c=4.5, d=0.7).pdf(0.3) = 0.2348837578061283
+        // burr(c=4.5, d=0.7).cdf(0.3) = 0.022469126855211279
+        let cases = [
+            (1.0_f64, 1.0, 1.0, 0.25, 0.5),
+            (2.0, 3.0, 0.5, 0.076_799_999_999_999_99, 0.008),
+            (
+                0.5,
+                2.0,
+                2.0,
+                0.071_067_811_865_475_26,
+                0.343_145_750_507_619_86,
+            ),
+            (
+                3.0,
+                1.5,
+                1.5,
+                0.464_608_100_035_579_17,
+                0.677_553_479_218_553,
+            ),
+            (
+                4.5,
+                0.7,
+                0.3,
+                0.234_883_757_806_128_3,
+                0.022_469_126_855_211_279,
+            ),
+        ];
+        for (c, d, x, want_pdf, want_cdf) in cases {
+            let dist = Burr3::new(c, d);
+            assert_close(dist.pdf(x), want_pdf, 1e-12, "Burr3 pdf");
+            assert_close(dist.cdf(x), want_cdf, 1e-12, "Burr3 cdf");
+            assert_close(dist.sf(x), 1.0 - want_cdf, 1e-12, "Burr3 sf");
+        }
+    }
+
+    #[test]
+    fn burr3_ppf_matches_scipy_anchor() {
+        // /porting-to-rust [frankenscipy-wllk0]: ppf anchors.
+        // burr(c=1, d=1).ppf(0.5)   = 1.0
+        // burr(c=2, d=3).ppf(0.25)  = 1.3047660265041068
+        // burr(c=3, d=1.5).ppf(0.9) = 2.3952850286001013
+        // burr(c=1.5, d=2).ppf(0.1) = 0.5980337477333039
+        let cases = [
+            (1.0_f64, 1.0, 0.5, 1.0),
+            (2.0, 3.0, 0.25, 1.304_766_026_504_106_8),
+            (3.0, 1.5, 0.9, 2.395_285_028_600_101_3),
+            (1.5, 2.0, 0.1, 0.598_033_747_733_303_9),
+        ];
+        for (c, d, q, want) in cases {
+            let dist = Burr3::new(c, d);
+            assert_close(dist.ppf(q), want, 1e-12, "Burr3 ppf anchor");
+        }
+    }
+
+    #[test]
+    fn burr3_ppf_inverts_cdf() {
+        // /porting-to-rust [frankenscipy-wllk0]: ppf round-trip.
+        for &c in &[0.5_f64, 1.0, 2.0, 5.0] {
+            for &d in &[0.5_f64, 1.0, 2.0, 5.0] {
+                let dist = Burr3::new(c, d);
+                for &q in &[0.1_f64, 0.25, 0.5, 0.75, 0.9] {
+                    let x = dist.ppf(q);
+                    assert!(x > 0.0 && x.is_finite(), "ppf must be positive finite");
+                    let recovered = dist.cdf(x);
+                    assert!(
+                        (recovered - q).abs() < 1e-12,
+                        "Burr3(c={c}, d={d}).cdf(ppf({q})) = {recovered}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
