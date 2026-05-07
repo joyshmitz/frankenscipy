@@ -9225,6 +9225,90 @@ impl ContinuousDistribution for FrechetR {
     }
 }
 
+/// R-distribution (symmetric beta) on [-1, 1] with shape `c > 0`.
+///
+/// Matches `scipy.stats.rdist(c)`. Resolves [frankenscipy-i4qnc].
+///
+///   pdf(x; c) = (1 − x²)^(c/2 − 1) / B(1/2, c/2)
+///   cdf(x; c) = Beta(c/2, c/2).cdf((x + 1)/2)
+///
+/// Special cases: c=2 → Uniform(-1, 1); c=3 → Semicircular;
+/// c=4 → Epanechnikov; c=6 → quartic. Closed-form moments:
+/// mean = 0 (symmetric), var = 1 / (c + 1).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RDist {
+    pub c: f64,
+}
+
+impl RDist {
+    #[must_use]
+    pub fn new(c: f64) -> Self {
+        assert!(c > 0.0 && c.is_finite(), "c must be positive and finite");
+        Self { c }
+    }
+}
+
+impl ContinuousDistribution for RDist {
+    fn pdf(&self, x: f64) -> f64 {
+        if !(-1.0..=1.0).contains(&x) {
+            return 0.0;
+        }
+        let c = self.c;
+        let one_minus_x2 = 1.0 - x * x;
+        if one_minus_x2 <= 0.0 {
+            // x = ±1 boundary: 0^(c/2 - 1) = 0 for c > 2, 1 for c = 2,
+            // ∞ for c < 2.
+            return if c > 2.0 {
+                0.0
+            } else if c == 2.0 {
+                (-ln_beta(0.5, c / 2.0)).exp()
+            } else {
+                f64::INFINITY
+            };
+        }
+        let log_pdf = (c / 2.0 - 1.0) * one_minus_x2.ln() - ln_beta(0.5, c / 2.0);
+        log_pdf.exp()
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= -1.0 {
+            return 0.0;
+        }
+        if x >= 1.0 {
+            return 1.0;
+        }
+        // Beta(c/2, c/2).cdf((x + 1)/2).
+        BetaDist::new(self.c / 2.0, self.c / 2.0).cdf((x + 1.0) / 2.0)
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return -1.0;
+        }
+        if q == 1.0 {
+            return 1.0;
+        }
+        // ppf via Beta(c/2, c/2).ppf(q), then map (z * 2 - 1).
+        2.0 * BetaDist::new(self.c / 2.0, self.c / 2.0).ppf(q) - 1.0
+    }
+
+    fn mean(&self) -> f64 {
+        0.0
+    }
+
+    fn var(&self) -> f64 {
+        1.0 / (self.c + 1.0)
+    }
+
+    fn skewness(&self) -> f64 {
+        // Symmetric around 0.
+        0.0
+    }
+}
+
 /// Irwin–Hall distribution: the sum of `n` iid `Uniform(0, 1)`
 /// variables, with support [0, n].
 ///
@@ -24575,6 +24659,80 @@ mod tests {
                     "pdf({x}; n={n}) = {p} must be ≥ 0 and finite"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn rdist_pdf_cdf_match_scipy() {
+        // /porting-to-rust [frankenscipy-i4qnc]: scipy reference values.
+        // rdist(2).pdf(*) = 0.5 (uniform on [-1, 1])
+        // rdist(3).pdf(0) = 2/π ≈ 0.6366
+        // rdist(4).pdf(0) = 0.75
+        // rdist(5).pdf(0) ≈ 0.8488
+        let cases = [
+            (2.0_f64, 0.0, 0.5, 0.5),
+            (2.0, -0.5, 0.5, 0.25),
+            (2.0, 0.5, 0.5, 0.75),
+            (3.0, 0.0, 0.636_619_772_367_581_5, 0.5),
+            (3.0, -0.5, 0.551_328_895_421_792_1, 0.195_501_109_477_885_38),
+            (4.0, 0.0, 0.75, 0.5),
+            (4.0, -0.5, 0.5625, 0.156_25),
+            (5.0, 0.0, 0.848_826_363_156_775_4, 0.5),
+        ];
+        for (c, x, want_pdf, want_cdf) in cases {
+            let dist = RDist::new(c);
+            assert_close(
+                dist.pdf(x),
+                want_pdf,
+                1e-12,
+                &format!("RDist({c}).pdf({x})"),
+            );
+            assert_close(
+                dist.cdf(x),
+                want_cdf,
+                1e-9,
+                &format!("RDist({c}).cdf({x})"),
+            );
+        }
+    }
+
+    #[test]
+    fn rdist_c2_is_uniform_neg1_pos1() {
+        // /testing-metamorphic [frankenscipy-i4qnc]: RDist(c=2) ≡
+        // Uniform(-1, 1). pdf is constant 1/2 on [-1, 1].
+        let r = RDist::new(2.0);
+        let u = Uniform::new(-1.0, 2.0); // loc=-1, scale=2 → [-1, 1]
+        for &x in &[-0.9_f64, -0.5, 0.0, 0.5, 0.9] {
+            assert_close(r.pdf(x), u.pdf(x), 1e-12, &format!("pdf({x})"));
+            assert_close(r.cdf(x), u.cdf(x), 1e-12, &format!("cdf({x})"));
+        }
+    }
+
+    #[test]
+    fn rdist_c3_is_semicircular() {
+        // /testing-metamorphic [frankenscipy-i4qnc]: RDist(c=3) ≡
+        // Semicircular. Both have pdf = 2/π · √(1 − x²) on [-1, 1].
+        let r = RDist::new(3.0);
+        let s = Semicircular;
+        for &x in &[-0.9_f64, -0.5, -0.1, 0.0, 0.1, 0.5, 0.9] {
+            assert_close(r.pdf(x), s.pdf(x), 1e-12, &format!("pdf({x})"));
+            assert_close(r.cdf(x), s.cdf(x), 1e-9, &format!("cdf({x})"));
+        }
+    }
+
+    #[test]
+    fn rdist_var_matches_one_over_c_plus_1() {
+        // /porting-to-rust [frankenscipy-i4qnc]: closed-form var = 1/(c+1).
+        for &c in &[2.0_f64, 3.0, 5.0, 10.0, 25.0] {
+            let dist = RDist::new(c);
+            assert_close(
+                dist.var(),
+                1.0 / (c + 1.0),
+                1e-15,
+                &format!("RDist({c}).var = 1/(c+1)"),
+            );
+            assert_close(dist.mean(), 0.0, 1e-15, "mean = 0");
+            assert_close(dist.skewness(), 0.0, 1e-15, "skew = 0");
         }
     }
 
