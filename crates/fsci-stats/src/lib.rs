@@ -9260,15 +9260,21 @@ impl ContinuousDistribution for IrwinHall {
         if x <= 0.0 || x >= nf {
             return 0.0;
         }
+        // Exploit symmetry around n/2: evaluate the alternating-sign
+        // sum on the lower half where ⌊x⌋ is smaller and there are
+        // fewer cancelling terms. For x > n/2, mirror to n − x and
+        // use pdf(n − x) = pdf(x). [frankenscipy-3f75d]
+        let xeff = if x > nf / 2.0 { nf - x } else { x };
         // 1 / (n-1)! · Σ (-1)^k · C(n, k) · (x-k)^(n-1) for k = 0..=floor(x).
-        let upper = x.floor() as u64;
+        let upper = xeff.floor() as u64;
         let mut sum = 0.0_f64;
         for k in 0..=upper {
             let sign = if k % 2 == 0 { 1.0 } else { -1.0 };
-            let term = fsci_special::comb(self.n as u64, k) * (x - k as f64).powf(nf - 1.0);
+            let term = fsci_special::comb(self.n as u64, k) * (xeff - k as f64).powf(nf - 1.0);
             sum += sign * term;
         }
-        sum / fsci_special::factorial((self.n - 1) as u64)
+        // Clamp to ≥ 0: residual fp error can drift slightly negative.
+        (sum / fsci_special::factorial((self.n - 1) as u64)).max(0.0)
     }
 
     fn cdf(&self, x: f64) -> f64 {
@@ -9287,7 +9293,12 @@ impl ContinuousDistribution for IrwinHall {
             let term = fsci_special::comb(self.n as u64, k) * (x - k as f64).powf(nf);
             sum += sign * term;
         }
-        sum / fsci_special::factorial(self.n as u64)
+        // Clamp to [0, 1]: for large n the alternating-sign sum
+        // accumulates floating-point error and the raw quotient can
+        // drift slightly outside the valid cdf range (e.g.,
+        // IrwinHall(19).cdf(17.1) raw ≈ 1.0000000037).
+        // Resolves [frankenscipy-3f75d] (fuzz finding mtg5c).
+        (sum / fsci_special::factorial(self.n as u64)).clamp(0.0, 1.0)
     }
 
     fn ppf(&self, q: f64) -> f64 {
@@ -9300,13 +9311,11 @@ impl ContinuousDistribution for IrwinHall {
         if q == 1.0 {
             return self.n as f64;
         }
-        // No closed-form inverse — bisect on the strictly-monotone cdf.
-        let mean = self.mean();
-        let std = self.std();
-        let lo = (mean - 4.0 * std).max(0.0);
-        let hi = (mean + 4.0 * std).min(self.n as f64);
-        let mut a = lo;
-        let mut b = hi;
+        // No closed-form inverse — bisect on the strictly-monotone
+        // cdf over the full support [0, n]. Earlier 4σ bracket missed
+        // tail q-values where the true x is outside the σ-band.
+        let mut a = 0.0_f64;
+        let mut b = self.n as f64;
         for _ in 0..80 {
             let mid = 0.5 * (a + b);
             if self.cdf(mid) < q {
@@ -24539,6 +24548,33 @@ mod tests {
             assert_close(dist.var(), want_var, 1e-15, &format!("var({n})"));
             assert_close(dist.skewness(), 0.0, 1e-15, &format!("skew({n})"));
             assert_close(dist.kurtosis(), want_kurt, 1e-15, &format!("kurt({n})"));
+        }
+    }
+
+    #[test]
+    fn irwinhall_cdf_clamps_for_large_n() {
+        // /testing-fuzzing regression for [frankenscipy-3f75d]:
+        // for large n the alternating-sign sum in cdf accumulates
+        // fp error and the raw quotient can drift outside [0, 1].
+        // Concrete fuzz finding: IrwinHall(19).cdf(17.1) ≈ 1.0000000037.
+        // Verify the clamp now keeps results in valid range across
+        // a stress sweep.
+        for &n in &[15_u32, 17, 19, 20] {
+            let dist = IrwinHall::new(n);
+            let nf = n as f64;
+            for k in 0..=20 {
+                let x = (k as f64) * nf / 20.0;
+                let c = dist.cdf(x);
+                assert!(
+                    (0.0..=1.0).contains(&c),
+                    "cdf({x}; n={n}) = {c} must be in [0, 1]"
+                );
+                let p = dist.pdf(x);
+                assert!(
+                    p >= 0.0 && p.is_finite(),
+                    "pdf({x}; n={n}) = {p} must be ≥ 0 and finite"
+                );
+            }
         }
     }
 
