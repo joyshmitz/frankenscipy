@@ -9225,6 +9225,81 @@ impl ContinuousDistribution for FrechetR {
     }
 }
 
+/// Doubly-truncated Weibull minimum distribution on (a, b].
+///
+/// Matches `scipy.stats.truncweibull_min(c, a, b)` with shape
+/// `c > 0` and bounds `0 ≤ a < b`. Resolves [frankenscipy-op097].
+///
+///   pdf(x; c, a, b) = c · x^(c−1) · exp(−x^c) / (exp(−a^c) − exp(−b^c))
+///   cdf(x; c, a, b) = (exp(−a^c) − exp(−x^c)) / (exp(−a^c) − exp(−b^c))
+///   ppf(q)          = (−ln(exp(−a^c) − q · denom))^(1/c)
+///
+/// where `denom = exp(−a^c) − exp(−b^c)`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TruncWeibullMin {
+    pub c: f64,
+    pub a: f64,
+    pub b: f64,
+}
+
+impl TruncWeibullMin {
+    #[must_use]
+    pub fn new(c: f64, a: f64, b: f64) -> Self {
+        assert!(c > 0.0 && c.is_finite(), "c must be positive and finite");
+        assert!(a >= 0.0 && a.is_finite(), "a must be ≥ 0 and finite");
+        assert!(b > a && b.is_finite(), "b must be > a and finite");
+        Self { c, a, b }
+    }
+
+    fn denom(&self) -> f64 {
+        (-self.a.powf(self.c)).exp() - (-self.b.powf(self.c)).exp()
+    }
+}
+
+impl ContinuousDistribution for TruncWeibullMin {
+    fn pdf(&self, x: f64) -> f64 {
+        if !(self.a < x && x <= self.b) {
+            return 0.0;
+        }
+        self.c * x.powf(self.c - 1.0) * (-x.powf(self.c)).exp() / self.denom()
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= self.a {
+            return 0.0;
+        }
+        if x >= self.b {
+            return 1.0;
+        }
+        ((-self.a.powf(self.c)).exp() - (-x.powf(self.c)).exp()) / self.denom()
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return self.a;
+        }
+        if q == 1.0 {
+            return self.b;
+        }
+        let exp_neg_ac = (-self.a.powf(self.c)).exp();
+        let arg = exp_neg_ac - q * self.denom();
+        // arg > 0 by construction (q in (0, 1) and denom = exp(-a^c) - exp(-b^c) > 0).
+        (-arg.ln()).powf(1.0 / self.c)
+    }
+
+    fn mean(&self) -> f64 {
+        // No clean closed form (involves regularized incomplete gamma).
+        f64::NAN
+    }
+
+    fn var(&self) -> f64 {
+        f64::NAN
+    }
+}
+
 /// R-distribution (symmetric beta) on [-1, 1] with shape `c > 0`.
 ///
 /// Matches `scipy.stats.rdist(c)`. Resolves [frankenscipy-i4qnc].
@@ -24660,6 +24735,56 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn truncweibull_min_pdf_cdf_match_scipy() {
+        // /porting-to-rust [frankenscipy-op097]: scipy reference values.
+        // truncweibull_min(c=2, a=0.5, b=2).pdf(1) = 0.9674862000540977
+        // truncweibull_min(c=2, a=0.5, b=2).cdf(1) = 0.5403410507664803
+        // truncweibull_min(c=2, a=0.5, b=2).ppf(0.5) = 0.9591150693152101
+        // truncweibull_min(c=1, a=0, b=5).cdf(2) = 0.8705303038115674
+        let d1 = TruncWeibullMin::new(2.0, 0.5, 2.0);
+        assert_close(d1.pdf(1.0), 0.967_486_200_054_097_7, 1e-12, "d1.pdf(1)");
+        assert_close(d1.cdf(1.0), 0.540_341_050_766_480_3, 1e-12, "d1.cdf(1)");
+        assert_close(d1.ppf(0.5), 0.959_115_069_315_210_1, 1e-12, "d1.ppf(0.5)");
+        let d2 = TruncWeibullMin::new(1.0, 0.0, 5.0);
+        assert_close(d2.cdf(2.0), 0.870_530_303_811_567_4, 1e-12, "d2.cdf(2)");
+        // Outside support
+        assert_eq!(d1.pdf(0.0), 0.0);
+        assert_eq!(d1.pdf(0.5), 0.0); // x must be > a strictly
+        assert_eq!(d1.pdf(2.5), 0.0);
+        assert_eq!(d1.cdf(0.4), 0.0);
+        assert_eq!(d1.cdf(2.5), 1.0);
+    }
+
+    #[test]
+    fn truncweibull_min_ppf_inverts_cdf() {
+        // /porting-to-rust [frankenscipy-op097]: round-trip.
+        for &(c, a, b) in &[(2.0_f64, 0.5, 2.0), (1.0, 0.0, 5.0), (3.0, 1.0, 10.0)] {
+            let d = TruncWeibullMin::new(c, a, b);
+            let xs = [a + 0.1 * (b - a), a + 0.5 * (b - a), a + 0.9 * (b - a)];
+            for &x in &xs {
+                let q = d.cdf(x);
+                if (1e-10..1.0 - 1e-10).contains(&q) {
+                    let recovered = d.ppf(q);
+                    assert!(
+                        (recovered - x).abs() < 1e-10 * x.abs().max(1.0),
+                        "TruncWeibullMin({c}, {a}, {b}).ppf(cdf({x})) = {recovered}, want {x}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn truncweibull_min_rejects_invalid_args() {
+        // /porting-to-rust [frankenscipy-op097]: validation contract.
+        assert!(std::panic::catch_unwind(|| TruncWeibullMin::new(0.0, 0.0, 1.0)).is_err());
+        assert!(std::panic::catch_unwind(|| TruncWeibullMin::new(-1.0, 0.0, 1.0)).is_err());
+        assert!(std::panic::catch_unwind(|| TruncWeibullMin::new(1.0, -0.1, 1.0)).is_err());
+        assert!(std::panic::catch_unwind(|| TruncWeibullMin::new(1.0, 1.0, 1.0)).is_err());
+        assert!(std::panic::catch_unwind(|| TruncWeibullMin::new(1.0, 2.0, 1.0)).is_err());
     }
 
     #[test]
