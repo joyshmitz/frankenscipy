@@ -10753,6 +10753,82 @@ impl ContinuousDistribution for LaplaceAsymmetric {
     }
 }
 
+/// Kappa 3-parameter distribution with shape `a > 0`.
+///
+/// Matches `scipy.stats.kappa3(a)`. Resolves [frankenscipy-okp6z].
+/// Support: x ≥ 0. (The "3-parameter" name refers to scipy's
+/// shape-only parameterisation; loc and scale come from the
+/// outer scipy machinery, not the distribution itself.)
+///
+///   pdf(x; a) = a · (a + x^a)^(−(a + 1) / a)
+///   cdf(x; a) = x · (a + x^a)^(−1 / a)
+///   ppf(q; a) = q · (a / (1 − q^a))^(1 / a)
+///
+/// Mean has no closed form for general a — left as NaN.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Kappa3 {
+    pub a: f64,
+}
+
+impl Kappa3 {
+    #[must_use]
+    pub fn new(a: f64) -> Self {
+        assert!(a > 0.0 && a.is_finite(), "a must be positive and finite");
+        Self { a }
+    }
+}
+
+impl ContinuousDistribution for Kappa3 {
+    fn pdf(&self, x: f64) -> f64 {
+        if x < 0.0 || !x.is_finite() {
+            return 0.0;
+        }
+        if x == 0.0 {
+            return 0.0;
+        }
+        let a = self.a;
+        let xa = x.powf(a);
+        let base = a + xa;
+        a * base.powf(-(a + 1.0) / a)
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        if !x.is_finite() {
+            return 1.0;
+        }
+        let a = self.a;
+        let xa = x.powf(a);
+        x * (a + xa).powf(-1.0 / a)
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return 0.0;
+        }
+        if q == 1.0 {
+            return f64::INFINITY;
+        }
+        let a = self.a;
+        let qa = q.powf(a);
+        q * (a / (1.0 - qa)).powf(1.0 / a)
+    }
+
+    fn mean(&self) -> f64 {
+        // No clean closed form for general a.
+        f64::NAN
+    }
+
+    fn var(&self) -> f64 {
+        f64::NAN
+    }
+}
+
 /// Kappa 4-parameter distribution.
 ///
 /// Matches `scipy.stats.kappa4`.
@@ -32987,6 +33063,75 @@ mod tests {
         let high = Argus::new(10.0);
         assert!(low.mean().is_finite() && low.var() >= 0.0);
         assert!(high.mean().is_finite() && high.var() >= 0.0);
+    }
+
+    #[test]
+    fn kappa3_pdf_cdf_match_scipy() {
+        // /porting-to-rust [frankenscipy-okp6z]: scipy reference values.
+        // kappa3.pdf(1.0, 0.5) = 0.14814814814814814
+        // kappa3.cdf(1.0, 0.5) = 0.4444444444444444
+        // kappa3.pdf(0.5, 2.0) = 0.5925925925925926
+        // kappa3.cdf(0.5, 2.0) = 0.3333333333333333
+        // kappa3.pdf(2.0, 1.0) = 0.1111111111111111
+        // kappa3.cdf(2.0, 1.0) = 0.6666666666666666
+        // kappa3.pdf(0.3, 5.0) = 0.7243571980316310
+        // kappa3.cdf(0.3, 5.0) = 0.21741277068896228
+        let cases = [
+            (
+                0.5_f64,
+                1.0,
+                0.148_148_148_148_148_14,
+                0.444_444_444_444_444_4,
+            ),
+            (2.0, 0.5, 0.592_592_592_592_592_6, 0.333_333_333_333_333_3),
+            (1.0, 2.0, 0.111_111_111_111_111_1, 0.666_666_666_666_666_6),
+            (
+                5.0,
+                0.3,
+                0.724_357_198_031_631_0,
+                0.217_412_770_688_962_28,
+            ),
+        ];
+        for (a, x, want_pdf, want_cdf) in cases {
+            let dist = Kappa3::new(a);
+            assert_close(dist.pdf(x), want_pdf, 1e-12, "Kappa3 pdf");
+            assert_close(dist.cdf(x), want_cdf, 1e-12, "Kappa3 cdf");
+            assert_close(dist.sf(x), 1.0 - want_cdf, 1e-12, "Kappa3 sf");
+        }
+    }
+
+    #[test]
+    fn kappa3_ppf_inverts_cdf() {
+        // /porting-to-rust [frankenscipy-okp6z]: ppf round-trip.
+        for &a in &[0.5_f64, 1.0, 2.0, 5.0] {
+            let dist = Kappa3::new(a);
+            for &q in &[0.1_f64, 0.25, 0.5, 0.75, 0.9] {
+                let x = dist.ppf(q);
+                assert!(x > 0.0 && x.is_finite(), "ppf must be positive finite");
+                let recovered = dist.cdf(x);
+                assert!(
+                    (recovered - q).abs() < 1e-12,
+                    "Kappa3(a={a}).cdf(ppf({q})) = {recovered}, want {q}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn kappa3_ppf_matches_scipy_anchor() {
+        // /porting-to-rust [frankenscipy-okp6z]: scipy ppf anchors.
+        // kappa3.ppf(0.5, 2.0) = 0.81649658092772603
+        // kappa3.ppf(0.75, 1.0) = 3.0
+        // kappa3.ppf(0.9, 5.0) = 1.4845116426820593
+        let cases = [
+            (2.0_f64, 0.5, 0.816_496_580_927_726_0),
+            (1.0, 0.75, 3.0),
+            (5.0, 0.9, 1.484_511_642_682_059_3),
+        ];
+        for (a, q, want) in cases {
+            let dist = Kappa3::new(a);
+            assert_close(dist.ppf(q), want, 1e-12, "Kappa3 ppf anchor");
+        }
     }
 
     #[test]
