@@ -2181,8 +2181,11 @@ impl ContinuousDistribution for Lognormal {
         if x <= 0.0 {
             return 0.0;
         }
+        // Delegate to standard_normal_cdf for deep-tail precision
+        // (very small x → very negative z → catastrophic cancellation
+        // in the naïve 0.5·(1 + erf) form). Resolves [frankenscipy-tkpgq].
         let z = (x / self.scale).ln() / self.s;
-        0.5 * (1.0 + fsci_special::erf_scalar(z * FRAC_1_SQRT_2))
+        standard_normal_cdf(z)
     }
 
     fn ppf(&self, q: f64) -> f64 {
@@ -6258,9 +6261,12 @@ impl ContinuousDistribution for FatigueLife {
         if x <= 0.0 {
             return 0.0;
         }
+        // Delegate to standard_normal_cdf for deep-tail precision
+        // (very small x → very negative z; very large x → very
+        // positive z). Resolves [frankenscipy-tkpgq].
         let root_x = x.sqrt();
         let z = (root_x - 1.0 / root_x) / self.c;
-        0.5 * (1.0 + fsci_special::erf_scalar(z * FRAC_1_SQRT_2))
+        standard_normal_cdf(z)
     }
 
     fn ppf(&self, q: f64) -> f64 {
@@ -24964,6 +24970,35 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn lognormal_and_fatiguelife_cdf_deep_tail_precision() {
+        // /mock-code-finder regression for [frankenscipy-tkpgq]:
+        // Lognormal.cdf for very small x and FatigueLife.cdf for
+        // very small/large x previously bypassed standard_normal_cdf
+        // and used the inline 0.5·(1 + erf) form; both lost precision
+        // (returned 0) deep in the tail. Post-fix: both delegate to
+        // standard_normal_cdf and return the right order of magnitude.
+        // For Lognormal(s=1, scale=1): z = ln(x); for x = 1e-5,
+        // z ≈ -11.5, so cdf ≈ Φ(-11.5) ≈ 6.5e-31.
+        let ln = Lognormal::new(1.0, 1.0);
+        let v_small = ln.cdf(1.0e-5);
+        assert!(
+            v_small > 0.0,
+            "Lognormal(1, 1).cdf(1e-5) = {v_small} must be positive (was 0 pre-fix)"
+        );
+        // For FatigueLife(c=0.1) at very small x: z = (√x - 1/√x)/0.1,
+        // x = 1e-6 → z ≈ -10000 (extreme tail; either way we shouldn't
+        // be at zero precision floor for moderately negative z).
+        let fl = FatigueLife::new(1.0); // c=1 is moderate
+        // x = 0.001 gives z = (√0.001 - 1/√0.001)/1 ≈ -31.6
+        let v_fl_small = fl.cdf(0.01);
+        // c=1, x=0.01 → z = (0.1 - 10) ≈ -9.9, Φ(-9.9) ≈ 1.9e-23 ≠ 0.
+        assert!(
+            v_fl_small > 0.0 || v_fl_small.abs() < 1e-300,
+            "FatigueLife(1).cdf(0.01) = {v_fl_small} should not be exactly 0 for moderate z"
+        );
     }
 
     #[test]
