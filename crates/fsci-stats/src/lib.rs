@@ -24796,6 +24796,35 @@ mod tests {
     }
 
     #[test]
+    fn truncweibull_min_large_b_limit_is_weibull() {
+        // /testing-metamorphic for [frankenscipy-qwg1y]: textbook
+        // limit TruncWeibullMin(c, a=0, b→∞) ≡ Weibull(c, scale=1).
+        // The truncation factor 1 − exp(−b^c) → 1, recovering the
+        // standard Weibull pdf c·x^(c-1)·exp(-x^c).
+        // Independent verification across two distinct paths:
+        // TruncWeibullMin uses log-space expm1 form;
+        // Weibull uses (c/scale)·z^(c-1)·exp(-z^c) where z = x/scale.
+        for &c in &[0.5_f64, 1.0, 2.0, 3.0, 5.0] {
+            let twm = TruncWeibullMin::new(c, 0.0, 1.0e20);
+            let w = Weibull::new(c, 1.0);
+            for &x in &[0.05_f64, 0.5, 1.0, 1.5, 3.0] {
+                assert_close(
+                    twm.pdf(x),
+                    w.pdf(x),
+                    1e-12,
+                    &format!("TruncWeibullMin({c}, 0, 1e20).pdf({x}) vs Weibull({c}, 1).pdf({x})"),
+                );
+                assert_close(
+                    twm.cdf(x),
+                    w.cdf(x),
+                    1e-12,
+                    &format!("TruncWeibullMin({c}, 0, 1e20).cdf({x}) vs Weibull({c}, 1).cdf({x})"),
+                );
+            }
+        }
+    }
+
+    #[test]
     fn truncweibull_min_handles_extreme_c_a_underflow() {
         // /testing-fuzzing regression for [frankenscipy-li9bu]:
         // For (c=10, a=10, b=10.1), c·a^c = 1e10 and exp(-a^c)
