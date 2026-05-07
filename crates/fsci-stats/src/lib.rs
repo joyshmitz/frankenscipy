@@ -24697,6 +24697,38 @@ mod tests {
     }
 
     #[test]
+    fn rdist_is_shifted_symmetric_beta() {
+        // /testing-metamorphic for [frankenscipy-y9rz1]: textbook
+        // identity. If Y ~ Beta(c/2, c/2) then 2Y − 1 ~ RDist(c).
+        // At the cdf level: RDist(c).cdf(x) = Beta(c/2, c/2).cdf((x+1)/2).
+        // At the pdf level: RDist(c).pdf(x) = Beta(c/2, c/2).pdf((x+1)/2) / 2
+        // (the /2 is the Jacobian dY/dX = 1/2).
+        // RDist's cdf goes through this identity by construction; the
+        // pdf path is independent so the test exercises both code paths
+        // — RDist via (1-x²)^(c/2-1)/B(1/2, c/2) and Beta via the
+        // ln_beta/ln-form pdf.
+        for &c in &[1.5_f64, 2.0, 3.0, 5.0, 10.0] {
+            let r = RDist::new(c);
+            let b = BetaDist::new(c / 2.0, c / 2.0);
+            for &x in &[-0.9_f64, -0.5, -0.1, 0.0, 0.1, 0.5, 0.9] {
+                let y = (x + 1.0) / 2.0;
+                assert_close(
+                    r.cdf(x),
+                    b.cdf(y),
+                    1e-12,
+                    &format!("RDist({c}).cdf({x}) vs Beta(c/2, c/2).cdf((x+1)/2)"),
+                );
+                assert_close(
+                    r.pdf(x),
+                    b.pdf(y) / 2.0,
+                    1e-10 * b.pdf(y).abs().max(1e-12),
+                    &format!("RDist({c}).pdf({x}) vs Beta(c/2, c/2).pdf((x+1)/2)/2"),
+                );
+            }
+        }
+    }
+
+    #[test]
     fn rdist_c2_is_uniform_neg1_pos1() {
         // /testing-metamorphic [frankenscipy-i4qnc]: RDist(c=2) ≡
         // Uniform(-1, 1). pdf is constant 1/2 on [-1, 1].
