@@ -33759,6 +33759,55 @@ mod tests {
     }
 
     #[test]
+    fn powerlognorm_c1_matches_lognormal() {
+        // /testing-metamorphic [frankenscipy-ybgru]:
+        // PowerLognorm(c=1, s) is algebraically identical to
+        // Lognormal(s=s, scale=1):
+        //
+        //   PowerLognorm pdf(x; 1, s) = 1 · φ(ln x / s) · Φ(−ln x / s)^0 / (x · s)
+        //                              = φ(ln x / s) / (x · s)
+        //
+        //   Lognormal    pdf(x; s, 1) = φ(ln x / s) / (x · s)
+        //
+        //   PowerLognorm cdf(x; 1, s) = 1 − Φ(−ln x / s)
+        //                              = Φ(ln x / s)
+        //
+        //   Lognormal    cdf(x; s, 1) = Φ(ln x / s)
+        //
+        // Pin both identities. Future tweaks to either family
+        // that accidentally break this equivalence (sign flips,
+        // z reformulation, divergent normal-helper paths) trip
+        // this test rather than slipping through.
+        let pl = PowerLognorm::new(1.0, 1.0);
+        let ln = Lognormal::new(1.0, 1.0);
+        for &s in &[0.5_f64, 1.0, 1.5, 2.0] {
+            let pl = PowerLognorm::new(1.0, s);
+            let ln = Lognormal::new(s, 1.0);
+            for &x in &[0.05_f64, 0.3, 1.0, 2.5, 5.0, 20.0] {
+                let dp = (pl.pdf(x) - ln.pdf(x)).abs();
+                let dc = (pl.cdf(x) - ln.cdf(x)).abs();
+                assert!(
+                    dp < 1.0e-13,
+                    "pdf identity broken at s={s}, x={x}: \
+                     PowerLognorm={}, Lognormal={}, diff={dp}",
+                    pl.pdf(x),
+                    ln.pdf(x)
+                );
+                assert!(
+                    dc < 1.0e-13,
+                    "cdf identity broken at s={s}, x={x}: \
+                     PowerLognorm={}, Lognormal={}, diff={dc}",
+                    pl.cdf(x),
+                    ln.cdf(x)
+                );
+            }
+        }
+        // Suppress unused-warning at default params if loop body
+        // gets refactored in future.
+        let _ = (pl, ln);
+    }
+
+    #[test]
     fn kappa3_a1_matches_lomax_c1() {
         // /testing-metamorphic [frankenscipy-zf1ms]:
         // Kappa3(a=1) is algebraically identical to Lomax(c=1):
