@@ -33315,6 +33315,41 @@ mod tests {
     }
 
     #[test]
+    fn burr3_inverse_relation_with_burr12() {
+        // /testing-metamorphic [frankenscipy-hots6]:
+        // Burr3 (Type III) is the distribution of Y = 1/X when
+        // X ~ Burr12(c, d). The structural identity:
+        //
+        //   Burr3(c, d).cdf(x) ≡ Burr12(c, d).sf(1/x)   for x > 0
+        //
+        // Algebraic proof:
+        //   Burr12 cdf = 1 − (1 + x^c)^(−d)
+        //   Burr12 sf(1/x) = (1 + (1/x)^c)^(−d)
+        //                  = (1 + x^(−c))^(−d)
+        //                  = Burr3 cdf(x)        ✓
+        //
+        // Pin this. Future drift that flips a sign, swaps an
+        // exponent between the two families, or confuses the
+        // c/d roles will trip immediately.
+        for &c in &[0.5_f64, 1.0, 2.0] {
+            for &d in &[0.5_f64, 1.0, 2.0] {
+                let burr3 = Burr3::new(c, d);
+                let burr12 = Burr12::new(c, d);
+                for &x in &[0.1_f64, 0.5, 1.0, 2.0, 5.0] {
+                    let lhs = burr3.cdf(x);
+                    let rhs = burr12.sf(1.0 / x);
+                    assert!(
+                        (lhs - rhs).abs() < 1e-13,
+                        "Y=1/X identity broken at c={c}, d={d}, x={x}: \
+                         burr3.cdf={lhs}, burr12.sf(1/x)={rhs}, diff={}",
+                        (lhs - rhs).abs()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn kappa3_a1_matches_lomax_c1() {
         // /testing-metamorphic [frankenscipy-zf1ms]:
         // Kappa3(a=1) is algebraically identical to Lomax(c=1):
