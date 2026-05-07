@@ -9241,8 +9241,21 @@ impl ContinuousDistribution for FrechetR {
 /// Matches `scipy.stats.kstwobign`. Resolves [frankenscipy-kfvg1].
 /// Parameterless. Support: x ≥ 0.
 ///
-///   pdf(x) = Σ_{k=1}^∞ (−1)^(k−1) · 8 · k² · x · exp(−2 · k² · x²)
-///   cdf(x) = 1 + 2 · Σ_{k=1}^∞ (−1)^k · exp(−2 · k² · x²)
+/// Two complementary series, picked by x relative to the
+/// Kolmogorov crossover at ≈ 1.18:
+///
+/// Large x (fast convergence for x ≳ 1.18):
+///   pdf(x) = 8x · Σ_{k=1}^∞ (−1)^(k−1) · k² · exp(−2 k² x²)
+///   cdf(x) = 1 + 2 · Σ_{k=1}^∞ (−1)^k · exp(−2 k² x²)
+///
+/// Small x (Jacobi theta dual; fast convergence for x ≲ 1.18):
+///   cdf(x) = (√(2π)/x) · Σ_{k=1}^∞ exp(−c_k / x²),   c_k = (2k−1)² π² / 8
+///   pdf(x) = (√(2π)/x⁴) · Σ_{k=1}^∞ (2 c_k − x²) · exp(−c_k / x²)
+///
+/// The dual form is essential for x ≲ 0.05 — the large-x series
+/// barely decays in 50 terms there, leaving cdf(x) clamped to 1
+/// instead of the correct ≈ 0 (caught by [frankenscipy-p1i9n]
+/// fuzz round-trip).
 ///
 /// Closed-form mean: √(π/2) · ln(2) ≈ 0.86873.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -9250,40 +9263,107 @@ pub struct KsTwoBign;
 
 const KSTWOBIGN_KMAX: u32 = 50;
 const KSTWOBIGN_TOL: f64 = 1.0e-30;
+// Kolmogorov-classic crossover. Both series converge to fp
+// epsilon within a handful of terms at this x.
+const KSTWOBIGN_THRESHOLD: f64 = 1.18;
+
+fn kstwobign_pdf_large(x: f64) -> f64 {
+    let mut sum = 0.0_f64;
+    for k in 1..=KSTWOBIGN_KMAX {
+        let kf = k as f64;
+        let term = 8.0 * kf * kf * x * (-2.0 * kf * kf * x * x).exp();
+        let signed = if k % 2 == 1 { term } else { -term };
+        sum += signed;
+        if term.abs() < KSTWOBIGN_TOL {
+            break;
+        }
+    }
+    sum.max(0.0)
+}
+
+fn kstwobign_cdf_large(x: f64) -> f64 {
+    let mut sum = 0.0_f64;
+    for k in 1..=KSTWOBIGN_KMAX {
+        let kf = k as f64;
+        let term = (-2.0 * kf * kf * x * x).exp();
+        let signed = if k % 2 == 1 { -term } else { term };
+        sum += signed;
+        if term < KSTWOBIGN_TOL {
+            break;
+        }
+    }
+    (1.0 + 2.0 * sum).clamp(0.0, 1.0)
+}
+
+// Dual Jacobi-theta-form series: converges rapidly for small x
+// where the large-x alternating series barely decays in 50 terms.
+fn kstwobign_cdf_small(x: f64) -> f64 {
+    let xsq = x * x;
+    let inv_xsq = 1.0 / xsq;
+    let mut sum = 0.0_f64;
+    for k in 1..=KSTWOBIGN_KMAX {
+        let m = (2 * k - 1) as f64;
+        let c_k = m * m * PI * PI / 8.0;
+        let exponent = -c_k * inv_xsq;
+        if exponent < -700.0 {
+            // exp will underflow to 0; safe to break.
+            break;
+        }
+        let term = exponent.exp();
+        sum += term;
+        if term < KSTWOBIGN_TOL {
+            break;
+        }
+    }
+    let result = (2.0 * PI).sqrt() * sum / x;
+    result.clamp(0.0, 1.0)
+}
+
+fn kstwobign_pdf_small(x: f64) -> f64 {
+    let xsq = x * x;
+    let xq4 = xsq * xsq;
+    let inv_xsq = 1.0 / xsq;
+    let mut sum = 0.0_f64;
+    for k in 1..=KSTWOBIGN_KMAX {
+        let m = (2 * k - 1) as f64;
+        let c_k = m * m * PI * PI / 8.0;
+        let exponent = -c_k * inv_xsq;
+        if exponent < -700.0 {
+            break;
+        }
+        let term = (2.0 * c_k - xsq) * exponent.exp();
+        sum += term;
+        // Sentinel: each successive term shrinks by exp(-Δc_k/x²)
+        // which exceeds 1e-30 in magnitude well before the early break.
+        if c_k > 80.0 * xsq && term.abs() < KSTWOBIGN_TOL {
+            break;
+        }
+    }
+    let result = (2.0 * PI).sqrt() * sum / xq4;
+    result.max(0.0)
+}
 
 impl ContinuousDistribution for KsTwoBign {
     fn pdf(&self, x: f64) -> f64 {
         if x <= 0.0 {
             return 0.0;
         }
-        let mut sum = 0.0_f64;
-        for k in 1..=KSTWOBIGN_KMAX {
-            let kf = k as f64;
-            let term = 8.0 * kf * kf * x * (-2.0 * kf * kf * x * x).exp();
-            let signed = if k % 2 == 1 { term } else { -term };
-            sum += signed;
-            if term.abs() < KSTWOBIGN_TOL {
-                break;
-            }
+        if x < KSTWOBIGN_THRESHOLD {
+            kstwobign_pdf_small(x)
+        } else {
+            kstwobign_pdf_large(x)
         }
-        sum.max(0.0)
     }
 
     fn cdf(&self, x: f64) -> f64 {
         if x <= 0.0 {
             return 0.0;
         }
-        let mut sum = 0.0_f64;
-        for k in 1..=KSTWOBIGN_KMAX {
-            let kf = k as f64;
-            let term = (-2.0 * kf * kf * x * x).exp();
-            let signed = if k % 2 == 1 { -term } else { term };
-            sum += signed;
-            if term < KSTWOBIGN_TOL {
-                break;
-            }
+        if x < KSTWOBIGN_THRESHOLD {
+            kstwobign_cdf_small(x)
+        } else {
+            kstwobign_cdf_large(x)
         }
-        (1.0 + 2.0 * sum).clamp(0.0, 1.0)
     }
 
     fn ppf(&self, q: f64) -> f64 {
