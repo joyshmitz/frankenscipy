@@ -7284,6 +7284,87 @@ impl ContinuousDistribution for DoubleGamma {
     }
 }
 
+/// Skew-normal distribution with skewness parameter `a` (any finite real).
+///
+/// Matches `scipy.stats.skewnorm(a)`. Resolves [frankenscipy-cquzz].
+/// Reduces to the standard normal at `a = 0`.
+///
+///   pdf(x; a) = 2 · φ(x) · Φ(a · x)
+///   cdf(x; a) = Φ(x) − 2 · T(x, a)        (Owen's T)
+///
+/// Closed-form moments via δ = a / √(1 + a²):
+///   mean        = δ · √(2/π)
+///   var         = 1 − 2 δ² / π
+///   skew        = (4 − π)/2 · (δ √(2/π))³ / (1 − 2δ²/π)^(3/2)
+///   ex_kurt     = 2(π − 3) · (δ √(2/π))⁴ / (1 − 2δ²/π)²
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SkewNorm {
+    pub a: f64,
+}
+
+impl SkewNorm {
+    #[must_use]
+    pub fn new(a: f64) -> Self {
+        assert!(a.is_finite(), "a must be finite, got {a}");
+        Self { a }
+    }
+
+    fn delta(&self) -> f64 {
+        self.a / (1.0 + self.a * self.a).sqrt()
+    }
+}
+
+impl ContinuousDistribution for SkewNorm {
+    fn pdf(&self, x: f64) -> f64 {
+        // 2 · φ(x) · Φ(a · x)
+        let phi = standard_normal_pdf(x);
+        let big_phi = standard_normal_cdf(self.a * x);
+        2.0 * phi * big_phi
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        // Φ(x) − 2 · T(x, a) where T is Owen's T.
+        standard_normal_cdf(x) - 2.0 * fsci_special::owens_t_scalar(x, self.a)
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        if q == 1.0 {
+            return f64::INFINITY;
+        }
+        // Bisection on the cdf (no clean closed-form inverse).
+        ppf_bisection(|v| self.cdf(v), q, self.mean(), self.std())
+    }
+
+    fn mean(&self) -> f64 {
+        self.delta() * (2.0 / PI).sqrt()
+    }
+
+    fn var(&self) -> f64 {
+        let d = self.delta();
+        1.0 - 2.0 * d * d / PI
+    }
+
+    fn skewness(&self) -> f64 {
+        let d = self.delta();
+        let m = d * (2.0 / PI).sqrt();
+        let v = 1.0 - 2.0 * d * d / PI;
+        (4.0 - PI) / 2.0 * m.powi(3) / v.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        let d = self.delta();
+        let m = d * (2.0 / PI).sqrt();
+        let v = 1.0 - 2.0 * d * d / PI;
+        2.0 * (PI - 3.0) * m.powi(4) / v.powi(2)
+    }
+}
+
 /// Wrapped Cauchy distribution on [0, 2π).
 ///
 /// Matches `scipy.stats.wrapcauchy(c)` for the standard (loc=0, scale=1)
@@ -24112,6 +24193,79 @@ mod tests {
                     bp.sf(y),
                     1e-10,
                     &format!("BetaPrime({a},{b}).sf({x}) vs Beta.sf({y})"),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn skewnorm_pdf_cdf_match_scipy() {
+        // /porting-to-rust [frankenscipy-cquzz]: scipy reference values.
+        let cases = [
+            // (a, x, pdf, cdf)
+            (0.0, -1.0, 0.241_970_724_519_143_37, 0.158_655_253_931_457_07),
+            (0.0, 0.0, 0.398_942_280_401_432_7, 0.5),
+            (0.0, 1.0, 0.241_970_724_519_143_37, 0.841_344_746_068_542_9),
+            (0.5, -1.0, 0.149_314_103_573_760_6, 0.072_525_871_689_886_35),
+            (0.5, 0.0, 0.398_942_280_401_432_7, 0.352_416_382_349_566_74),
+            (0.5, 1.0, 0.334_627_345_464_526_1, 0.755_215_363_826_972_2),
+            (2.0, -1.0, 0.011_009_731_820_814_06, 0.001_718_879_945_288_881_4),
+            (2.0, 0.0, 0.398_942_280_401_432_7, 0.147_583_617_650_433_26),
+            (2.0, 1.0, 0.472_931_717_217_472_7, 0.684_408_372_082_374_7),
+        ];
+        for (a, x, pdf_want, cdf_want) in cases {
+            let dist = SkewNorm::new(a);
+            assert_close(dist.pdf(x), pdf_want, 1e-12, &format!("SkewNorm({a}).pdf({x})"));
+            assert_close(dist.cdf(x), cdf_want, 1e-9, &format!("SkewNorm({a}).cdf({x})"));
+        }
+    }
+
+    #[test]
+    fn skewnorm_at_zero_reduces_to_normal() {
+        // /porting-to-rust [frankenscipy-cquzz]: SkewNorm(a=0) ≡ N(0, 1).
+        let sn = SkewNorm::new(0.0);
+        let n = Normal::new(0.0, 1.0);
+        for &x in &[-3.0_f64, -1.0, -0.1, 0.0, 0.1, 1.0, 3.0] {
+            assert_close(sn.pdf(x), n.pdf(x), 1e-15, "pdf");
+            assert_close(sn.cdf(x), n.cdf(x), 1e-9, "cdf");
+        }
+        assert_close(sn.mean(), 0.0, 1e-15, "mean");
+        assert_close(sn.var(), 1.0, 1e-15, "var");
+        assert_close(sn.skewness(), 0.0, 1e-15, "skew");
+        assert_close(sn.kurtosis(), 0.0, 1e-15, "ex_kurt");
+    }
+
+    #[test]
+    fn skewnorm_moments_match_scipy() {
+        // /porting-to-rust [frankenscipy-cquzz]: scipy reference values.
+        let dist = SkewNorm::new(0.5);
+        assert_close(dist.mean(), 0.356_824_823_230_554_26, 1e-12, "mean(0.5)");
+        assert_close(dist.var(), 0.872_676_045_526_483_7, 1e-12, "var(0.5)");
+        assert_close(dist.skewness(), 0.023_919_330_826_654_19, 1e-12, "skew(0.5)");
+        assert_close(dist.kurtosis(), 0.006_028_161_013_632_157, 1e-12, "kurt(0.5)");
+
+        let dist2 = SkewNorm::new(2.0);
+        assert_close(dist2.mean(), 0.713_649_646_461_108_5, 1e-12, "mean(2)");
+        assert_close(dist2.var(), 0.490_704_182_105_934_8, 1e-12, "var(2)");
+        assert_close(dist2.skewness(), 0.453_825_563_959_382_17, 1e-12, "skew(2)");
+        assert_close(dist2.kurtosis(), 0.305_050_272_902_792_5, 1e-12, "kurt(2)");
+    }
+
+    #[test]
+    fn skewnorm_ppf_inverts_cdf() {
+        // /porting-to-rust [frankenscipy-cquzz]: round-trip.
+        for &a in &[0.0_f64, 0.5, 2.0, -1.5] {
+            let dist = SkewNorm::new(a);
+            for &x in &[-1.5_f64, -0.5, 0.0, 0.5, 1.5] {
+                let q = dist.cdf(x);
+                if !(0.001..=0.999).contains(&q) {
+                    continue;
+                }
+                let recovered = dist.ppf(q);
+                let scale = x.abs().max(1.0);
+                assert!(
+                    (recovered - x).abs() < 1e-6 * scale,
+                    "SkewNorm({a}).ppf(cdf({x})) = {recovered}, want {x}"
                 );
             }
         }
