@@ -5164,6 +5164,18 @@ impl ContinuousDistribution for InverseGaussian {
         self.mu.powi(3)
     }
 
+    fn skewness(&self) -> f64 {
+        // /mock-code-finder for [frankenscipy-ggikd]:
+        // scipy.stats.invgauss reports skew = 3·√mu.
+        3.0 * self.mu.sqrt()
+    }
+
+    fn kurtosis(&self) -> f64 {
+        // /mock-code-finder for [frankenscipy-ggikd]:
+        // scipy.stats.invgauss reports excess kurtosis = 15·mu.
+        15.0 * self.mu
+    }
+
     fn fit(data: &[f64]) -> Self {
         Self::try_fit(data).unwrap_or_else(|e| {
             panic!("InverseGaussian::fit failed: {e}");
@@ -24253,6 +24265,54 @@ mod tests {
             let dist = SkewNorm::new(a);
             assert_close(dist.pdf(x), pdf_want, 1e-12, &format!("SkewNorm({a}).pdf({x})"));
             assert_close(dist.cdf(x), cdf_want, 1e-9, &format!("SkewNorm({a}).cdf({x})"));
+        }
+    }
+
+    #[test]
+    fn invgauss_skew_kurt_match_scipy_law() {
+        // /mock-code-finder for [frankenscipy-ggikd]: closed-form
+        // moments. scipy.stats.invgauss reports:
+        //   skew    = 3·√mu
+        //   ex_kurt = 15·mu
+        // Pin both at multiple mu values verified against scipy.
+        // Reference values:
+        //   invgauss(0.5).skew = 2.121320343559643, kurt = 7.5
+        //   invgauss(1.0).skew = 3.0,                kurt = 15.0
+        //   invgauss(2.0).skew = 4.242640687119286, kurt = 30.0
+        //   invgauss(5.0).skew = 6.708203932499369, kurt = 75.0
+        let cases = [
+            (0.5_f64, 2.121_320_343_559_643_0, 7.5),
+            (1.0, 3.0, 15.0),
+            (2.0, 4.242_640_687_119_286, 30.0),
+            (5.0, 6.708_203_932_499_369, 75.0),
+        ];
+        for (mu, want_skew, want_kurt) in cases {
+            let dist = InverseGaussian::new(mu);
+            assert_close(
+                dist.skewness(),
+                want_skew,
+                1e-12,
+                &format!("InverseGaussian({mu}).skewness vs 3·√mu"),
+            );
+            assert_close(
+                dist.kurtosis(),
+                want_kurt,
+                1e-12,
+                &format!("InverseGaussian({mu}).kurtosis vs 15·mu"),
+            );
+            // Also confirm the closed-form formula is used.
+            assert_close(
+                dist.skewness(),
+                3.0 * mu.sqrt(),
+                1e-15,
+                "skew formula",
+            );
+            assert_close(
+                dist.kurtosis(),
+                15.0 * mu,
+                1e-15,
+                "kurt formula",
+            );
         }
     }
 
