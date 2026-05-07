@@ -2144,6 +2144,81 @@ impl ContinuousDistribution for Weibull {
     }
 }
 
+/// Reverse Weibull (sign-flipped) distribution with shape `c > 0`.
+///
+/// Matches `scipy.stats.weibull_max(c)`. Resolves [frankenscipy-9nttn].
+/// Distribution of `-X` for `X ~ weibull_min(c)`. Support: x ≤ 0.
+///
+///   pdf(x; c) = c · (−x)^(c − 1) · exp(−(−x)^c)   for x ≤ 0
+///   cdf(x; c) = exp(−(−x)^c)
+///   sf(x; c)  = 1 − exp(−(−x)^c)
+///   ppf(q; c) = −(−ln q)^(1/c)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WeibullMax {
+    pub c: f64,
+}
+
+impl WeibullMax {
+    #[must_use]
+    pub fn new(c: f64) -> Self {
+        assert!(c > 0.0 && c.is_finite(), "c must be positive and finite");
+        Self { c }
+    }
+}
+
+impl ContinuousDistribution for WeibullMax {
+    fn pdf(&self, x: f64) -> f64 {
+        if x > 0.0 || !x.is_finite() {
+            return 0.0;
+        }
+        if x == 0.0 {
+            // Limit depends on c: c<1 → ∞, c=1 → 1, c>1 → 0.
+            // scipy returns 0 here (boundary); follow that.
+            return 0.0;
+        }
+        let c = self.c;
+        let neg = -x;
+        c * neg.powf(c - 1.0) * (-neg.powf(c)).exp()
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x >= 0.0 {
+            return 1.0;
+        }
+        if !x.is_finite() {
+            return 0.0;
+        }
+        let c = self.c;
+        (-((-x).powf(c))).exp()
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        if q == 1.0 {
+            return 0.0;
+        }
+        let c = self.c;
+        -((-q.ln()).powf(1.0 / c))
+    }
+
+    fn mean(&self) -> f64 {
+        // E[X] = -E[Y] where Y ~ weibull_min(c) → -Γ(1 + 1/c).
+        -ln_gamma(1.0 + 1.0 / self.c).exp()
+    }
+
+    fn var(&self) -> f64 {
+        // Var(X) = Var(Y) (sign flip preserves variance).
+        let g1 = ln_gamma(1.0 + 1.0 / self.c).exp();
+        let g2 = ln_gamma(1.0 + 2.0 / self.c).exp();
+        g2 - g1 * g1
+    }
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Lognormal Distribution
 // ══════════════════════════════════════════════════════════════════════
@@ -33159,6 +33234,99 @@ mod tests {
         let high = Argus::new(10.0);
         assert!(low.mean().is_finite() && low.var() >= 0.0);
         assert!(high.mean().is_finite() && high.var() >= 0.0);
+    }
+
+    #[test]
+    fn weibull_max_pdf_cdf_match_scipy() {
+        // /porting-to-rust [frankenscipy-9nttn]: scipy reference values.
+        // weibull_max(c=1).pdf(-0.5) = 0.6065306597126334
+        // weibull_max(c=1).cdf(-0.5) = 0.6065306597126334
+        // weibull_max(c=2).pdf(-1.0) = 0.7357588823428847
+        // weibull_max(c=2).cdf(-1.0) = 0.36787944117144233
+        // weibull_max(c=3).pdf(-0.7) = 1.0431681709935066
+        // weibull_max(c=3).cdf(-0.7) = 0.7096382115602087
+        // weibull_max(c=0.5).pdf(-2.0) = 0.08595474576918094
+        // weibull_max(c=0.5).cdf(-2.0) = 0.24311673443421419
+        // weibull_max(c=5).pdf(-0.3) = 0.040401704477428683
+        // weibull_max(c=5).cdf(-0.3) = 0.9975729500599676
+        let cases = [
+            (
+                1.0_f64,
+                -0.5,
+                0.606_530_659_712_633_4,
+                0.606_530_659_712_633_4,
+            ),
+            (
+                2.0,
+                -1.0,
+                0.735_758_882_342_884_7,
+                0.367_879_441_171_442_33,
+            ),
+            (
+                3.0,
+                -0.7,
+                1.043_168_170_993_506_6,
+                0.709_638_211_560_208_7,
+            ),
+            (
+                0.5,
+                -2.0,
+                0.085_954_745_769_180_94,
+                0.243_116_734_434_214_19,
+            ),
+            (
+                5.0,
+                -0.3,
+                0.040_401_704_477_428_683,
+                0.997_572_950_059_967_6,
+            ),
+        ];
+        for (c, x, want_pdf, want_cdf) in cases {
+            let dist = WeibullMax::new(c);
+            assert_close(dist.pdf(x), want_pdf, 1e-12, "WeibullMax pdf");
+            assert_close(dist.cdf(x), want_cdf, 1e-12, "WeibullMax cdf");
+            assert_close(dist.sf(x), 1.0 - want_cdf, 1e-12, "WeibullMax sf");
+        }
+    }
+
+    #[test]
+    fn weibull_max_ppf_matches_scipy_anchor() {
+        // /porting-to-rust [frankenscipy-9nttn]: ppf anchors.
+        // weibull_max(c=1).ppf(0.5)   = -0.6931471805599453
+        // weibull_max(c=2).ppf(0.25)  = -1.1774100225154747
+        // weibull_max(c=3).ppf(0.9)   = -0.4723087185696629
+        // weibull_max(c=0.5).ppf(0.1) = -5.301898110478397
+        let cases = [
+            (1.0_f64, 0.5, -0.693_147_180_559_945_3),
+            (2.0, 0.25, -1.177_410_022_515_474_7),
+            (3.0, 0.9, -0.472_308_718_569_662_9),
+            (0.5, 0.1, -5.301_898_110_478_397),
+        ];
+        for (c, q, want) in cases {
+            let dist = WeibullMax::new(c);
+            assert_close(dist.ppf(q), want, 1e-12, "WeibullMax ppf anchor");
+        }
+    }
+
+    #[test]
+    fn weibull_max_inverts_weibull_min() {
+        // /testing-metamorphic [frankenscipy-9nttn]:
+        // WeibullMax(c) is the distribution of -X for X ~ Weibull(c, 1).
+        //
+        //   pdf_max(x; c) = pdf_min(-x; c)
+        //   cdf_max(x; c) = sf_min(-x; c)
+        //
+        // Pin both identities.
+        for &c in &[0.5_f64, 1.0, 2.0, 3.5] {
+            let max = WeibullMax::new(c);
+            let min = Weibull::new(c, 1.0);
+            for &x in &[-3.0_f64, -1.5, -0.7, -0.2] {
+                let dp = (max.pdf(x) - min.pdf(-x)).abs();
+                let dc = (max.cdf(x) - min.sf(-x)).abs();
+                assert!(dp < 1e-13, "pdf identity broken at c={c}, x={x}: diff={dp}");
+                assert!(dc < 1e-13, "cdf identity broken at c={c}, x={x}: diff={dc}");
+            }
+        }
     }
 
     #[test]
