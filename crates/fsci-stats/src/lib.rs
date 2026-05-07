@@ -9265,8 +9265,14 @@ impl ContinuousDistribution for RecipInvGauss {
         let trm1 = 1.0 / mu - x;
         let trm2 = 1.0 / mu + x;
         let isqx = 1.0 / x.sqrt();
-        standard_normal_cdf(-isqx * trm1)
-            - (2.0 / mu).exp() * standard_normal_cdf(-isqx * trm2)
+        // Clamp to [0, 1]: the difference of two Φ terms can drift
+        // slightly outside the valid range for large mu (e.g.
+        // RecipInvGauss(50).cdf(40.4) raw ≈ 1.00000000004).
+        // Same defect class as SkewNorm.cdf (cc83022). Resolves
+        // [frankenscipy-n82pr].
+        (standard_normal_cdf(-isqx * trm1)
+            - (2.0 / mu).exp() * standard_normal_cdf(-isqx * trm2))
+            .clamp(0.0, 1.0)
     }
 
     fn sf(&self, x: f64) -> f64 {
@@ -9277,8 +9283,9 @@ impl ContinuousDistribution for RecipInvGauss {
         let trm1 = 1.0 / mu - x;
         let trm2 = 1.0 / mu + x;
         let isqx = 1.0 / x.sqrt();
-        standard_normal_cdf(isqx * trm1)
-            + (2.0 / mu).exp() * standard_normal_cdf(-isqx * trm2)
+        (standard_normal_cdf(isqx * trm1)
+            + (2.0 / mu).exp() * standard_normal_cdf(-isqx * trm2))
+            .clamp(0.0, 1.0)
     }
 
     fn ppf(&self, q: f64) -> f64 {
@@ -24937,6 +24944,30 @@ mod tests {
                         "RecipInvGauss({mu}).ppf(cdf({x})) = {recovered}, want {x}"
                     );
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn recipinvgauss_cdf_clamps_for_large_mu() {
+        // /testing-fuzzing regression for [frankenscipy-n82pr]: for
+        // large mu the cdf formula Φ(-isqx·trm1) - exp(2/μ)·Φ(-isqx·trm2)
+        // can accumulate fp error and drift outside [0, 1].
+        // Concrete fuzz finding: RecipInvGauss(50).cdf(40.4) ≈ 1.00000000004.
+        for &mu in &[10.0_f64, 25.0, 50.0] {
+            let dist = RecipInvGauss::new(mu);
+            for k in 1..=20 {
+                let x = (k as f64) * mu / 5.0;
+                let c = dist.cdf(x);
+                assert!(
+                    (0.0..=1.0).contains(&c),
+                    "cdf({x}; mu={mu}) = {c} must be in [0, 1]"
+                );
+                let s = dist.sf(x);
+                assert!(
+                    (0.0..=1.0).contains(&s),
+                    "sf({x}; mu={mu}) = {s} must be in [0, 1]"
+                );
             }
         }
     }
