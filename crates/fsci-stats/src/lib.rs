@@ -628,8 +628,13 @@ impl ContinuousDistribution for Normal {
     }
 
     fn cdf(&self, x: f64) -> f64 {
+        // Delegate to standard_normal_cdf for deep-tail precision.
+        // The naïve 0.5·(1 + erf(z·FRAC_1_SQRT_2)) form catastrophically
+        // cancels for z ≲ -3; standard_normal_cdf switches to the
+        // 0.5·erfc(-z·FRAC_1_SQRT_2) path for z < 0. Resolves
+        // [frankenscipy-701x0]; see also [frankenscipy-6exgz].
         let z = (x - self.loc) / self.scale;
-        0.5 * (1.0 + fsci_special::erf_scalar(z * FRAC_1_SQRT_2))
+        standard_normal_cdf(z)
     }
 
     fn logcdf(&self, x: f64) -> f64 {
@@ -24959,6 +24964,44 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn normal_cdf_deep_tail_precision_via_standard_normal_cdf() {
+        // /mock-code-finder regression for [frankenscipy-701x0]:
+        // Normal.cdf used to compute 0.5·(1 + erf(z·FRAC_1_SQRT_2))
+        // directly, bypassing the standard_normal_cdf erfc path and
+        // suffering the same catastrophic cancellation for z ≲ -3.
+        // Post-fix Normal.cdf delegates to standard_normal_cdf so
+        // the deep-tail precision improvement (frankenscipy-6exgz)
+        // applies uniformly.
+        let n = Normal::new(0.0, 1.0);
+        // scipy reference values:
+        //   Normal(0, 1).cdf(-7) = 1.279812543885835e-12
+        //   Normal(0, 1).cdf(-10) = 7.61985302416051e-24
+        assert!(
+            n.cdf(-7.0) > 0.0,
+            "Normal(0, 1).cdf(-7) = {} must be positive",
+            n.cdf(-7.0)
+        );
+        assert!(
+            n.cdf(-10.0) > 0.0,
+            "Normal(0, 1).cdf(-10) = {} must be positive",
+            n.cdf(-10.0)
+        );
+        // Order-of-magnitude check (1e-7 relative is enough — exercise
+        // proves we're not at the cancellation floor).
+        let r7 = (n.cdf(-7.0) / 1.279_812_543_885_835e-12 - 1.0).abs();
+        assert!(r7 < 1e-6, "Normal.cdf(-7) precision: rel err {r7:e}");
+        let r10 = (n.cdf(-10.0) / 7.619_853_024_160_51e-24 - 1.0).abs();
+        assert!(r10 < 1e-6, "Normal.cdf(-10) precision: rel err {r10:e}");
+        // Translation-scaled instance also picks up the fix.
+        let n2 = Normal::new(5.0, 2.0);
+        assert!(
+            n2.cdf(-9.0) > 0.0,
+            "Normal(5, 2).cdf(-9) = {} (≡ Φ(-7)) must be positive",
+            n2.cdf(-9.0)
+        );
     }
 
     #[test]
