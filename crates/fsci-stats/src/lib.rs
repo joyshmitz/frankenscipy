@@ -24354,6 +24354,37 @@ mod tests {
     }
 
     #[test]
+    fn truncpareto_large_c_limit_is_pareto() {
+        // /testing-metamorphic for [frankenscipy-rk8zd]: textbook
+        // limit TruncPareto(b, c→∞) ≡ Pareto(b, scale=1). The
+        // truncation factor (1 − c^(-b)) in the denominator
+        // converges to 1, leaving 1 − x^(-b) — Pareto's standard
+        // form. For b ≥ 1 the limit is essentially exact at c=1e10
+        // (c^(-b) ≤ 1e-10); for b < 1 it converges more slowly.
+        // Independent verification: TruncPareto's closed form goes
+        // through powf with 1 / (1 - c^(-b)); Pareto goes directly
+        // via 1 − (scale/x)^b with scale=1.
+        for &b in &[1.0_f64, 1.5, 2.0, 3.0] {
+            let tp = TruncPareto::new(b, 1.0e10);
+            let p = Pareto::new(b, 1.0);
+            for &x in &[1.5_f64, 2.0, 5.0, 100.0] {
+                assert_close(
+                    tp.cdf(x),
+                    p.cdf(x),
+                    1e-9,
+                    &format!("TruncPareto({b}, 1e10).cdf({x}) vs Pareto({b}, 1).cdf({x})"),
+                );
+                assert_close(
+                    tp.pdf(x),
+                    p.pdf(x),
+                    1e-9 * p.pdf(x).abs().max(1e-12),
+                    &format!("TruncPareto({b}, 1e10).pdf({x}) vs Pareto({b}, 1).pdf({x})"),
+                );
+            }
+        }
+    }
+
+    #[test]
     fn truncpareto_pdf_cdf_ppf_match_scipy() {
         // /porting-to-rust [frankenscipy-yvjyl]: scipy reference values.
         // truncpareto(b=2, c=5).pdf(2) = 0.2604166666666667
