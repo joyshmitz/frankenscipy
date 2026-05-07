@@ -5607,6 +5607,102 @@ impl ContinuousDistribution for PowerNorm {
     }
 }
 
+/// Power-lognormal distribution with shapes `c > 0`, `s > 0`.
+///
+/// Matches `scipy.stats.powerlognorm(c, s)`. Resolves [frankenscipy-bx7kx].
+/// Support: x > 0.
+///
+///   pdf(x; c, s) = c · φ(ln x / s) · Φ(−ln x / s)^(c − 1) / (x · s)
+///   cdf(x; c, s) = 1 − Φ(−ln x / s)^c
+///   sf(x;  c, s) = Φ(−ln x / s)^c
+///   ppf(q; c, s) = exp(−s · Φ⁻¹((1 − q)^(1/c)))
+///
+/// where φ, Φ are the standard normal pdf and cdf.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PowerLognorm {
+    pub c: f64,
+    pub s: f64,
+}
+
+impl PowerLognorm {
+    #[must_use]
+    pub fn new(c: f64, s: f64) -> Self {
+        assert!(
+            c > 0.0 && c.is_finite() && s > 0.0 && s.is_finite(),
+            "c and s must be positive and finite"
+        );
+        Self { c, s }
+    }
+}
+
+impl ContinuousDistribution for PowerLognorm {
+    fn pdf(&self, x: f64) -> f64 {
+        if x <= 0.0 || !x.is_finite() {
+            return 0.0;
+        }
+        let c = self.c;
+        let s = self.s;
+        let z = x.ln() / s;
+        let phi = standard_normal_pdf(z);
+        let big_phi_neg = standard_normal_cdf(-z);
+        c * phi * big_phi_neg.powf(c - 1.0) / (x * s)
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        if !x.is_finite() {
+            return 1.0;
+        }
+        let c = self.c;
+        let s = self.s;
+        let z = x.ln() / s;
+        let big_phi_neg = standard_normal_cdf(-z);
+        // sf = Φ(−z)^c. Compute that then take 1 − sf and clamp.
+        (1.0 - big_phi_neg.powf(c)).clamp(0.0, 1.0)
+    }
+
+    fn sf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 1.0;
+        }
+        if !x.is_finite() {
+            return 0.0;
+        }
+        let c = self.c;
+        let s = self.s;
+        let z = x.ln() / s;
+        standard_normal_cdf(-z).powf(c).clamp(0.0, 1.0)
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return 0.0;
+        }
+        if q == 1.0 {
+            return f64::INFINITY;
+        }
+        let c = self.c;
+        let s = self.s;
+        // x = exp(−s · Φ⁻¹((1 − q)^(1/c)))
+        let inner = (1.0 - q).powf(1.0 / c);
+        (-s * standard_normal_ppf(inner)).exp()
+    }
+
+    fn mean(&self) -> f64 {
+        // Mean has no clean closed form; scipy uses numerical integration.
+        f64::NAN
+    }
+
+    fn var(&self) -> f64 {
+        f64::NAN
+    }
+}
+
 /// Johnson SU distribution.
 ///
 /// Matches `scipy.stats.johnsonsu`.
@@ -33234,6 +33330,95 @@ mod tests {
         let high = Argus::new(10.0);
         assert!(low.mean().is_finite() && low.var() >= 0.0);
         assert!(high.mean().is_finite() && high.var() >= 0.0);
+    }
+
+    #[test]
+    fn powerlognorm_pdf_cdf_match_scipy() {
+        // /porting-to-rust [frankenscipy-bx7kx]: scipy reference values.
+        // powerlognorm(c=1, s=1).pdf(1)   = 0.39894228040143270 (= φ(0))
+        // powerlognorm(c=1, s=1).cdf(1)   = 0.5
+        // powerlognorm(c=2, s=0.5).pdf(1) = 0.79788456080286541
+        // powerlognorm(c=2, s=0.5).cdf(1) = 0.75
+        // powerlognorm(c=0.5, s=2).pdf(0.5) = 0.23562694040093551
+        // powerlognorm(c=0.5, s=2).cdf(0.5) = 0.20278976721101713
+        // powerlognorm(c=3, s=1).pdf(2)   = 0.028043900880623886
+        // powerlognorm(c=3, s=1).cdf(2)   = 0.9854538112901393
+        // powerlognorm(c=1.5, s=0.7).pdf(0.3) = 0.6352171315784477
+        // powerlognorm(c=1.5, s=0.7).cdf(0.3) = 0.06339030905076032
+        let cases = [
+            (1.0_f64, 1.0, 1.0, 0.398_942_280_401_432_70, 0.5),
+            (2.0, 0.5, 1.0, 0.797_884_560_802_865_41, 0.75),
+            (
+                0.5,
+                2.0,
+                0.5,
+                0.235_626_940_400_935_51,
+                0.202_789_767_211_017_13,
+            ),
+            (
+                3.0,
+                1.0,
+                2.0,
+                0.028_043_900_880_623_886,
+                0.985_453_811_290_139_3,
+            ),
+            (
+                1.5,
+                0.7,
+                0.3,
+                0.635_217_131_578_447_7,
+                0.063_390_309_050_760_32,
+            ),
+        ];
+        for (c, s, x, want_pdf, want_cdf) in cases {
+            let dist = PowerLognorm::new(c, s);
+            assert_close(dist.pdf(x), want_pdf, 1e-12, "PowerLognorm pdf");
+            assert_close(dist.cdf(x), want_cdf, 1e-12, "PowerLognorm cdf");
+            assert_close(dist.sf(x), 1.0 - want_cdf, 1e-12, "PowerLognorm sf");
+        }
+    }
+
+    #[test]
+    fn powerlognorm_ppf_matches_scipy_anchor() {
+        // /porting-to-rust [frankenscipy-bx7kx]: ppf anchors.
+        // powerlognorm(c=1, s=1).ppf(0.5)   = 1.0
+        // powerlognorm(c=2, s=0.5).ppf(0.25) = 0.5747047482367416
+        // powerlognorm(c=3, s=1).ppf(0.9)   = 1.0941322174010468
+        // powerlognorm(c=0.5, s=2).ppf(0.1) = 0.17277025201857144
+        let cases = [
+            (1.0_f64, 1.0, 0.5, 1.0),
+            (2.0, 0.5, 0.25, 0.574_704_748_236_741_6),
+            (3.0, 1.0, 0.9, 1.094_132_217_401_046_8),
+            (0.5, 2.0, 0.1, 0.172_770_252_018_571_44),
+        ];
+        for (c, s, q, want) in cases {
+            let dist = PowerLognorm::new(c, s);
+            // ppf precision floor here is set by the inverse standard
+            // normal helper (Beasley-Springer-Moro, ~1e-9 accuracy);
+            // tolerate that drift rather than upgrade the helper.
+            assert_close(dist.ppf(q), want, 1e-7, "PowerLognorm ppf anchor");
+        }
+    }
+
+    #[test]
+    fn powerlognorm_ppf_inverts_cdf() {
+        // /porting-to-rust [frankenscipy-bx7kx]: ppf round-trip.
+        for &c in &[0.5_f64, 1.0, 2.0, 3.0] {
+            for &s in &[0.5_f64, 1.0, 2.0] {
+                let dist = PowerLognorm::new(c, s);
+                for &q in &[0.1_f64, 0.25, 0.5, 0.75, 0.9] {
+                    let x = dist.ppf(q);
+                    assert!(x > 0.0 && x.is_finite(), "ppf must be positive finite");
+                    let recovered = dist.cdf(x);
+                    // Beasley-Springer-Moro inverse normal limits
+                    // round-trip precision to ~1e-7.
+                    assert!(
+                        (recovered - q).abs() < 1e-7,
+                        "PowerLognorm(c={c}, s={s}).cdf(ppf({q})) = {recovered}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
