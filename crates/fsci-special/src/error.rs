@@ -175,7 +175,15 @@ fn erf_complex_scalar(z: Complex64) -> Complex64 {
     if z.re < 0.0 {
         return -erf_complex_scalar(-z);
     }
-    if z.abs() <= 4.5 || z.re < 1.0 {
+    // Threshold lowered from 4.5 to 4.0, mirroring the erfc fix
+    // in this commit. The Maclaurin series for erf has 80-term
+    // limit and at z ≈ 4.5 the alternating-sign partial sum
+    // suffers cancellation that produces ~1e-12 jitter, breaking
+    // monotonicity downstream (caught by [frankenscipy-evspb] —
+    // PowerLognorm.cdf snapped to 1.0 at z ≈ 4.7 from over-rounded
+    // erf, then dropped to 0.93 at z ≈ 4.9 once the asymptotic
+    // path kicked in).
+    if z.abs() <= 4.0 || z.re < 1.0 {
         return erf_complex_series(z);
     }
     Complex64::from_real(1.0) - erfc_complex_asymptotic(z)
@@ -195,7 +203,15 @@ fn erfc_complex_scalar(z: Complex64) -> Complex64 {
     if z.re < 0.0 {
         return Complex64::from_real(2.0) - erfc_complex_scalar(-z);
     }
-    if z.abs() <= 4.5 || z.re < 1.0 {
+    // Threshold lowered from 4.5 to 4.0: the series form computes
+    // erfc(z) = 1 − erf_series(z), which catastrophically cancels
+    // when erf(z) is near 1 (z ≳ 4). Caught by [frankenscipy-evspb]
+    // fuzz: erfc_scalar(4.4956) returned −1.5e-10 (negative!),
+    // breaking standard_normal_cdf and PowerLognorm.cdf in the
+    // deep tail. 4.0 is the tightest split that keeps the
+    // asymptotic series above its precision floor (~3e-6 at
+    // z=3.5) while still catching the cancellation regime.
+    if z.abs() <= 4.0 || z.re < 1.0 {
         return Complex64::from_real(1.0) - erf_complex_series(z);
     }
     erfc_complex_asymptotic(z)

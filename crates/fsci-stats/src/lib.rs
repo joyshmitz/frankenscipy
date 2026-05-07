@@ -5644,6 +5644,12 @@ impl ContinuousDistribution for PowerLognorm {
         let s = self.s;
         let z = x.ln() / s;
         let phi = standard_normal_pdf(z);
+        // Deep-tail guard: φ(z) underflows to 0 for |z| > ~38.
+        // For c < 1, Φ(−z)^(c−1) = 0^negative = +∞, and 0 · +∞ = NaN.
+        // The pdf is effectively 0 there — return that directly.
+        if phi == 0.0 {
+            return 0.0;
+        }
         let big_phi_neg = standard_normal_cdf(-z);
         c * phi * big_phi_neg.powf(c - 1.0) / (x * s)
     }
@@ -5659,8 +5665,24 @@ impl ContinuousDistribution for PowerLognorm {
         let s = self.s;
         let z = x.ln() / s;
         let big_phi_neg = standard_normal_cdf(-z);
-        // sf = Φ(−z)^c. Compute that then take 1 − sf and clamp.
-        (1.0 - big_phi_neg.powf(c)).clamp(0.0, 1.0)
+        if big_phi_neg <= 0.5 {
+            // Φ(−z) is small (x ≥ median region): the literal
+            // 1 − Φ(−z)^c is precise because we're subtracting
+            // something small from 1.
+            (1.0 - big_phi_neg.powf(c)).clamp(0.0, 1.0)
+        } else {
+            // Φ(−z) is close to 1 (x < median region): the
+            // literal form catastrophically cancels. Use the
+            // stable rewrite via ln_1p / expm1:
+            //   1 − Φ(−z)^c = −expm1(c · ln_1p(−Φ(z)))
+            // (caught by [frankenscipy-evspb] fuzz: cdf became
+            // non-monotone at c=1, s=1, x ≈ 1e-3; and
+            // cdf + sf = 1.01 at c=0.1, s=0.1, x=2.5 in the
+            // wrong regime).
+            let big_phi_z = standard_normal_cdf(z);
+            let log_term = (-big_phi_z).ln_1p();
+            (-(c * log_term).exp_m1()).clamp(0.0, 1.0)
+        }
     }
 
     fn sf(&self, x: f64) -> f64 {
@@ -18989,11 +19011,17 @@ fn standard_normal_cdf(x: f64) -> f64 {
     // defect family that produced clamps in SkewNorm.cdf (cc83022),
     // IrwinHall.cdf (7612637), and RecipInvGauss.cdf (814af81).
     let z = x / std::f64::consts::SQRT_2;
-    if x < 0.0 {
+    let raw = if x < 0.0 {
         0.5 * fsci_special::erfc_scalar(-z)
     } else {
         0.5 * (1.0 + fsci_special::erf_scalar(z))
-    }
+    };
+    // erf_scalar's series can overshoot 1 by a few ulp for moderate
+    // arguments (z ≈ 4–4.5), pushing Φ slightly above 1; the dual
+    // path can drift slightly below 0. Clamp to keep callers safe
+    // (caught by [frankenscipy-evspb] fuzz: PowerLognorm.cdf got
+    // ln_1p(-1.0001) = NaN at c=10, s=0.1, x=1.87).
+    raw.clamp(0.0, 1.0)
 }
 
 fn standard_normal_pdf(x: f64) -> f64 {
@@ -33330,6 +33358,34 @@ mod tests {
         let high = Argus::new(10.0);
         assert!(low.mean().is_finite() && low.var() >= 0.0);
         assert!(high.mean().is_finite() && high.var() >= 0.0);
+    }
+
+    #[test]
+    fn powerlognorm_cdf_monotone_in_small_x_tail() {
+        // /testing-fuzzing [frankenscipy-evspb]: probe the regime
+        // where the original (1 − Φ(−z)^c) form lost monotonicity
+        // due to catastrophic cancellation. The stable form
+        // (−expm1(c · ln_1p(−Φ(z)))) should give a precise tiny
+        // positive value here.
+        let d = PowerLognorm::new(1.0, 1.0);
+        let cdf_a = d.cdf(0.000867);
+        let cdf_b = d.cdf(0.001733);
+        let z_a = 0.000867_f64.ln();
+        let z_b = 0.001733_f64.ln();
+        eprintln!(
+            "z_a={z_a}, Φ(z_a)={}, cdf(0.000867)={cdf_a:e}",
+            standard_normal_cdf(z_a)
+        );
+        eprintln!(
+            "z_b={z_b}, Φ(z_b)={}, cdf(0.001733)={cdf_b:e}",
+            standard_normal_cdf(z_b)
+        );
+        assert!(
+            cdf_a <= cdf_b,
+            "cdf must be monotone: cdf(0.000867)={cdf_a}, cdf(0.001733)={cdf_b}"
+        );
+        assert!(cdf_a > 0.0, "cdf must be positive on x > 0");
+        assert!(cdf_b > 0.0, "cdf must be positive on x > 0");
     }
 
     #[test]
