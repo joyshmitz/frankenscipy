@@ -9236,6 +9236,94 @@ impl ContinuousDistribution for FrechetR {
     }
 }
 
+/// Kolmogorov-Smirnov "n large" limiting distribution.
+///
+/// Matches `scipy.stats.kstwobign`. Resolves [frankenscipy-kfvg1].
+/// Parameterless. Support: x ≥ 0.
+///
+///   pdf(x) = Σ_{k=1}^∞ (−1)^(k−1) · 8 · k² · x · exp(−2 · k² · x²)
+///   cdf(x) = 1 + 2 · Σ_{k=1}^∞ (−1)^k · exp(−2 · k² · x²)
+///
+/// Closed-form mean: √(π/2) · ln(2) ≈ 0.86873.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KsTwoBign;
+
+const KSTWOBIGN_KMAX: u32 = 50;
+const KSTWOBIGN_TOL: f64 = 1.0e-30;
+
+impl ContinuousDistribution for KsTwoBign {
+    fn pdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        let mut sum = 0.0_f64;
+        for k in 1..=KSTWOBIGN_KMAX {
+            let kf = k as f64;
+            let term = 8.0 * kf * kf * x * (-2.0 * kf * kf * x * x).exp();
+            let signed = if k % 2 == 1 { term } else { -term };
+            sum += signed;
+            if term.abs() < KSTWOBIGN_TOL {
+                break;
+            }
+        }
+        sum.max(0.0)
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        let mut sum = 0.0_f64;
+        for k in 1..=KSTWOBIGN_KMAX {
+            let kf = k as f64;
+            let term = (-2.0 * kf * kf * x * x).exp();
+            let signed = if k % 2 == 1 { -term } else { term };
+            sum += signed;
+            if term < KSTWOBIGN_TOL {
+                break;
+            }
+        }
+        (1.0 + 2.0 * sum).clamp(0.0, 1.0)
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return 0.0;
+        }
+        if q == 1.0 {
+            return f64::INFINITY;
+        }
+        // Bisect on the strictly-monotone cdf.
+        let mut a = 0.0_f64;
+        let mut b = 10.0_f64;
+        while self.cdf(b) < q && b.is_finite() {
+            b *= 2.0;
+        }
+        for _ in 0..80 {
+            let mid = 0.5 * (a + b);
+            if self.cdf(mid) < q {
+                a = mid;
+            } else {
+                b = mid;
+            }
+        }
+        0.5 * (a + b)
+    }
+
+    fn mean(&self) -> f64 {
+        // √(π/2) · ln(2)
+        (PI / 2.0).sqrt() * 2.0_f64.ln()
+    }
+
+    fn var(&self) -> f64 {
+        // No clean closed form readily available — leave as NaN.
+        f64::NAN
+    }
+}
+
 /// Reciprocal inverse Gaussian distribution with shape `mu > 0`.
 ///
 /// Matches `scipy.stats.recipinvgauss(mu)`. Resolves [frankenscipy-k7e3h].
@@ -24917,6 +25005,62 @@ mod tests {
                         "TruncWeibullMin({c}, {a}, {b}).ppf(cdf({x})) = {recovered}, want {x}"
                     );
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn kstwobign_pdf_cdf_match_scipy() {
+        // /porting-to-rust [frankenscipy-kfvg1]: scipy reference values.
+        // kstwobign.pdf(0.5) = 0.6395828509404567
+        // kstwobign.cdf(0.5) = 0.036054756335124914
+        // kstwobign.cdf(1.0) = 0.7300003283226455
+        // kstwobign.cdf(2.0) = 0.9993290747442203
+        let dist = KsTwoBign;
+        assert_close(dist.pdf(0.5), 0.639_582_850_940_456_7, 1e-12, "pdf(0.5)");
+        assert_close(dist.cdf(0.5), 0.036_054_756_335_124_914, 1e-12, "cdf(0.5)");
+        assert_close(dist.cdf(1.0), 0.730_000_328_322_645_5, 1e-12, "cdf(1.0)");
+        assert_close(dist.cdf(2.0), 0.999_329_074_744_220_3, 1e-12, "cdf(2.0)");
+        // Outside support
+        assert_eq!(dist.pdf(-0.5), 0.0);
+        assert_eq!(dist.cdf(0.0), 0.0);
+        // Far-tail saturation
+        assert!(dist.cdf(10.0) > 1.0 - 1e-15);
+    }
+
+    #[test]
+    fn kstwobign_mean_matches_closed_form() {
+        // /porting-to-rust [frankenscipy-kfvg1]: closed-form mean
+        // = √(π/2) · ln(2) ≈ 0.8687311606361591.
+        // Note: scipy.stats.kstwobign.mean() returns 0.8687311606312806
+        // (numerical integration of x · pdf, accurate to ~1e-11). fsci's
+        // exact closed form is more accurate by 5e-12 — a small "we beat
+        // scipy" wins by going analytic.
+        let dist = KsTwoBign;
+        let exact = (PI / 2.0).sqrt() * 2.0_f64.ln();
+        assert_close(dist.mean(), exact, 1e-15, "exact formula");
+        // Also matches scipy to ~5e-12 (loose tol absorbs the
+        // scipy numerical-integration drift).
+        assert_close(
+            dist.mean(),
+            0.868_731_160_631_280_6,
+            1e-11,
+            "scipy numerical mean (loose tol)",
+        );
+    }
+
+    #[test]
+    fn kstwobign_ppf_inverts_cdf() {
+        // /porting-to-rust [frankenscipy-kfvg1]: ppf round-trip.
+        let dist = KsTwoBign;
+        for &x in &[0.5_f64, 0.8, 1.0, 1.5, 2.0] {
+            let q = dist.cdf(x);
+            if (1e-6..1.0 - 1e-6).contains(&q) {
+                let recovered = dist.ppf(q);
+                assert!(
+                    (recovered - x).abs() < 1e-9 * x,
+                    "ppf(cdf({x})) = {recovered}, want {x}"
+                );
             }
         }
     }
