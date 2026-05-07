@@ -3899,6 +3899,60 @@ impl DiscreteDistribution for Boltzmann {
     }
 }
 
+/// Planck (untruncated geometric) distribution.
+///
+/// Matches `scipy.stats.planck(lambda_)`. Resolves [frankenscipy-lp6dv].
+/// One parameter `lambda > 0`. Support: k ∈ {0, 1, 2, …}.
+///
+///   pmf(k; λ) = (1 − e^(−λ)) · e^(−λk)
+///   cdf(k; λ) = 1 − e^(−λ(k+1))
+///   mean      = 1 / (e^λ − 1)
+///   var       = e^λ / (e^λ − 1)²
+///
+/// This is the `N → ∞` limit of `Boltzmann(λ, N)`. Pinned via
+/// the `boltzmann_geometric_limit` metamorphic test.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Planck {
+    pub lambda: f64,
+}
+
+impl Planck {
+    #[must_use]
+    pub fn new(lambda: f64) -> Self {
+        assert!(
+            lambda > 0.0 && lambda.is_finite(),
+            "lambda must be positive and finite"
+        );
+        Self { lambda }
+    }
+}
+
+impl DiscreteDistribution for Planck {
+    fn pmf(&self, k: u64) -> f64 {
+        let kf = k as f64;
+        // (1 − e^(−λ)) · e^(−λk) — expm1 keeps precision when λ is small.
+        (-(-self.lambda).exp_m1()) * (-self.lambda * kf).exp()
+    }
+
+    fn cdf(&self, k: u64) -> f64 {
+        let kp1 = (k + 1) as f64;
+        // 1 − e^(−λ(k+1))
+        -(-self.lambda * kp1).exp_m1()
+    }
+
+    fn mean(&self) -> f64 {
+        1.0 / self.lambda.exp_m1()
+    }
+
+    fn var(&self) -> f64 {
+        let em = self.lambda.exp_m1();
+        // Var = e^λ / (e^λ − 1)² = (1 + (e^λ − 1)) / (e^λ − 1)²
+        //                      = 1/em + 1/em²
+        let inv = 1.0 / em;
+        inv * (1.0 + inv)
+    }
+}
+
 impl DiscreteDistribution for Geometric {
     fn pmf(&self, k: u64) -> f64 {
         if k == 0 {
@@ -33910,6 +33964,99 @@ mod tests {
             );
             // pmf = 0 outside support.
             assert_eq!(dist.pmf(n as u64), 0.0);
+        }
+    }
+
+    #[test]
+    fn planck_pmf_cdf_match_scipy() {
+        // /porting-to-rust [frankenscipy-lp6dv]: scipy reference values.
+        // planck(λ=1).pmf(0)   = 0.6321205588285577
+        // planck(λ=1).cdf(0)   = 0.6321205588285577
+        // planck(λ=1).pmf(2)   = 0.0855482148687488
+        // planck(λ=1).cdf(2)   = 0.9502129316321361
+        // planck(λ=0.5).pmf(5) = 0.0322979302560349
+        // planck(λ=0.5).cdf(5) = 0.9502129316321361
+        // planck(λ=2).pmf(1)   = 0.1170196443478785
+        // planck(λ=2).cdf(1)   = 0.9816843611112658
+        // planck(λ=0.7).pmf(4) = 0.0306126792028995
+        // planck(λ=0.7).cdf(4) = 0.9698026165776815
+        let cases = [
+            (
+                1.0_f64,
+                0u64,
+                0.632_120_558_828_557_7,
+                0.632_120_558_828_557_7,
+            ),
+            (1.0, 2, 0.085_548_214_868_748_8, 0.950_212_931_632_136_1),
+            (0.5, 5, 0.032_297_930_256_034_9, 0.950_212_931_632_136_1),
+            (
+                2.0,
+                1,
+                0.117_019_644_347_878_5,
+                0.981_684_361_111_265_8,
+            ),
+            (
+                0.7,
+                4,
+                0.030_612_679_202_899_5,
+                0.969_802_616_577_681_5,
+            ),
+        ];
+        for (lam, k, want_pmf, want_cdf) in cases {
+            let dist = Planck::new(lam);
+            assert_close(dist.pmf(k), want_pmf, 1e-12, "Planck pmf");
+            assert_close(dist.cdf(k), want_cdf, 1e-12, "Planck cdf");
+        }
+    }
+
+    #[test]
+    fn planck_moments_match_scipy() {
+        // /porting-to-rust [frankenscipy-lp6dv]: closed-form moments
+        // vs scipy 1.17.1.
+        // planck.mean(1.0) = 0.5819767068693265
+        // planck.mean(0.5) = 1.5414940825367982
+        // planck.mean(2.0) = 0.15651764274966565
+        // planck.var(1.0) = 0.9206735942077924
+        // planck.var(0.5) = 3.9176980890327635
+        let cases = [
+            (1.0_f64, 0.581_976_706_869_326_5, 0.920_673_594_207_792_4),
+            (
+                0.5,
+                1.541_494_082_536_798_2,
+                3.917_698_089_032_763_5,
+            ),
+            (
+                2.0,
+                0.156_517_642_749_665_65,
+                0.181_015_415_241_577_63,
+            ),
+        ];
+        for (lam, want_mean, want_var) in cases {
+            let dist = Planck::new(lam);
+            assert_close(dist.mean(), want_mean, 1e-12, "Planck mean");
+            assert_close(dist.var(), want_var, 1e-12, "Planck var");
+        }
+    }
+
+    #[test]
+    fn planck_is_boltzmann_limit() {
+        // /testing-metamorphic [frankenscipy-lp6dv]:
+        // Planck(λ) is exactly the N → ∞ limit of Boltzmann(λ, N).
+        // For finite N, the difference scales with e^(−λN) — at
+        // N = 50 with λ ≥ 1 the bound is ≤ exp(−50) ≈ 2e-22.
+        for &lam in &[1.0_f64, 1.5, 2.0, 3.0] {
+            let pl = Planck::new(lam);
+            let bo = Boltzmann::new(lam, 50);
+            for k in 0..6u64 {
+                assert!(
+                    (pl.pmf(k) - bo.pmf(k)).abs() < 1e-12,
+                    "Planck.pmf({k}; λ={lam}) ≠ Boltzmann.pmf({k}; λ={lam}, N=50)"
+                );
+                assert!(
+                    (pl.cdf(k) - bo.cdf(k)).abs() < 1e-12,
+                    "Planck.cdf({k}; λ={lam}) ≠ Boltzmann.cdf({k}; λ={lam}, N=50)"
+                );
+            }
         }
     }
 
