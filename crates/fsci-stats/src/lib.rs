@@ -33145,6 +33145,41 @@ mod tests {
     }
 
     #[test]
+    fn kappa3_a1_matches_lomax_c1() {
+        // /testing-metamorphic [frankenscipy-zf1ms]:
+        // Kappa3(a=1) is algebraically identical to Lomax(c=1):
+        //
+        //   Kappa3 pdf(x; 1) = 1 · (1 + x)^(−(1+1)/1) = (1 + x)^(−2)
+        //   Kappa3 cdf(x; 1) = x · (1 + x)^(−1/1) = x / (1 + x)
+        //
+        //   Lomax pdf(x; 1) = 1 / (1 + x)^(1+1) = (1 + x)^(−2)
+        //   Lomax cdf(x; 1) = 1 − (1 + x)^(−1) = x / (1 + x)
+        //
+        // Pin the identity. Future tweaks to either family that
+        // accidentally break it (e.g., a redefinition of the
+        // shape parameter, a sign flip in the exponent) trip
+        // this test rather than slipping through.
+        let kappa3 = Kappa3::new(1.0);
+        let lomax = Lomax::new(1.0);
+        for &x in &[0.1_f64, 0.5, 1.0, 2.0, 5.0, 10.0, 50.0, 100.0] {
+            let dp = (kappa3.pdf(x) - lomax.pdf(x)).abs();
+            let dc = (kappa3.cdf(x) - lomax.cdf(x)).abs();
+            assert!(
+                dp < 1.0e-13,
+                "pdf identity broken at x={x}: kappa3={}, lomax={}, diff={dp}",
+                kappa3.pdf(x),
+                lomax.pdf(x)
+            );
+            assert!(
+                dc < 1.0e-13,
+                "cdf identity broken at x={x}: kappa3={}, lomax={}, diff={dc}",
+                kappa3.cdf(x),
+                lomax.cdf(x)
+            );
+        }
+    }
+
+    #[test]
     fn kappa4_general_case_matches_scipy_reference() {
         let dist = Kappa4::new(0.5, 0.2);
         let (lower, upper) = dist.support();
