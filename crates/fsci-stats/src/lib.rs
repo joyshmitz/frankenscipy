@@ -7316,15 +7316,23 @@ impl SkewNorm {
 
 impl ContinuousDistribution for SkewNorm {
     fn pdf(&self, x: f64) -> f64 {
-        // 2 · φ(x) · Φ(a · x)
+        // 2 · φ(x) · Φ(a · x). Clamp Φ to [0, 1] before multiplying:
+        // standard_normal_cdf can drift slightly outside [0, 1] at
+        // extreme arguments due to fp roundoff in the erf path,
+        // which would yield a negative pdf. Resolves [frankenscipy-r7dbb].
         let phi = standard_normal_pdf(x);
-        let big_phi = standard_normal_cdf(self.a * x);
+        let big_phi = standard_normal_cdf(self.a * x).clamp(0.0, 1.0);
         2.0 * phi * big_phi
     }
 
     fn cdf(&self, x: f64) -> f64 {
         // Φ(x) − 2 · T(x, a) where T is Owen's T.
-        standard_normal_cdf(x) - 2.0 * fsci_special::owens_t_scalar(x, self.a)
+        // For large |a|, the 10-pt Gauss-Legendre quadrature in
+        // owens_t can lose precision and the result drifts slightly
+        // outside [0, 1] — clamp to match scipy's np.clip(cdf, 0, 1).
+        // Resolves [frankenscipy-r7dbb] (fuzz finding eb2vm).
+        let raw = standard_normal_cdf(x) - 2.0 * fsci_special::owens_t_scalar(x, self.a);
+        raw.clamp(0.0, 1.0)
     }
 
     fn ppf(&self, q: f64) -> f64 {
@@ -24193,6 +24201,34 @@ mod tests {
                     bp.sf(y),
                     1e-10,
                     &format!("BetaPrime({a},{b}).sf({x}) vs Beta.sf({y})"),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn skewnorm_cdf_clamps_for_large_a() {
+        // /testing-fuzzing regression for [frankenscipy-r7dbb]:
+        // For large |a|, Owen's T (10-pt Gauss-Legendre) loses
+        // precision in the deep tail and the raw formula
+        // Φ(x) − 2·T(x, a) can drift slightly outside [0, 1].
+        // scipy.stats.skewnorm clamps via np.clip(cdf, 0, 1);
+        // fsci must match.
+        let dist = SkewNorm::new(50.0);
+        // Pre-fix this returned -0.024.
+        let c = dist.cdf(-1.0);
+        assert!(
+            (0.0..=1.0).contains(&c),
+            "SkewNorm(50).cdf(-1) = {c} must be in [0, 1]"
+        );
+        // Stress sweep: every (a, x) result must lie in [0, 1].
+        for &a in &[-50.0_f64, -10.0, -1.0, 0.0, 1.0, 10.0, 50.0] {
+            let dist = SkewNorm::new(a);
+            for &x in &[-1.0e6_f64, -10.0, -1.0, 0.0, 1.0, 10.0, 1.0e6] {
+                let c = dist.cdf(x);
+                assert!(
+                    (0.0..=1.0).contains(&c),
+                    "cdf({x}; a={a}) = {c} must be in [0, 1]"
                 );
             }
         }
