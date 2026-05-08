@@ -560,20 +560,29 @@ print(json.dumps(results))
 }
 
 fn run_scipy_ricker_oracle(cases: &[RickerCase]) -> HashMap<String, Vec<f64>> {
+    // scipy.signal.ricker was deprecated in scipy 1.13 and removed in
+    // 1.15. Reproduce the closed-form Mexican-hat (Ricker) wavelet in
+    // numpy directly:
+    //   A      = 2 / (√(3a) · π^(1/4))
+    //   t      = arange(0, points) − (points − 1)/2
+    //   w(t)   = A · (1 − (t/a)²) · exp(−t² / (2a²))
     let python_code = r#"
 import sys
 import json
-from scipy import signal
+import math
+import numpy as np
 
 cases = json.loads(sys.stdin.read())
 results = []
 for case in cases:
     points = case['points']
-    a = case['a']
+    a = float(case['a'])
     try:
-        w = signal.ricker(points, a)
+        amp = 2.0 / (math.sqrt(3.0 * a) * (math.pi ** 0.25))
+        t = np.arange(0, points) - (points - 1) / 2.0
+        w = amp * (1.0 - (t / a) ** 2) * np.exp(-(t ** 2) / (2.0 * a * a))
         results.append({'case_id': case['case_id'], 'values': w.tolist()})
-    except Exception:
+    except Exception as e:
         results.append({'case_id': case['case_id'], 'values': None})
 print(json.dumps(results))
 "#;
