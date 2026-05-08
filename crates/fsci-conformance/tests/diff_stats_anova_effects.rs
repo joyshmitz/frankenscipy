@@ -8,10 +8,13 @@
 //!   • `contingency.association(observed, method='cramer')`
 //!     for `cramers_v(observed)`
 //!
-//! `alexandergovern` is intentionally omitted: fsci's
-//! statistic and pvalue diverge substantially from scipy
-//! (statistic off by up to 64 across the tested fixtures).
-//! Tracked as [frankenscipy-795bt].
+//! `alexandergovern` was previously omitted (statistic off by
+//! up to 64) but the underlying defect [frankenscipy-795bt] is
+//! now FIXED — fsci was computing a Welch-style weighted
+//! variance of means instead of the actual Alexander-Govern
+//! A statistic. The proper algorithm (Hill's normalising
+//! transform on per-group t-stats, summed) now matches scipy
+//! at machine precision.
 //!
 //! Resolves [frankenscipy-ynlff]. ~18 cases via subprocess.
 //! Tolerances:
@@ -162,10 +165,17 @@ fn generate_query() -> OracleQuery {
 
     let mut points = Vec::new();
     for (name, groups) in &group_fixtures {
-        // alexandergovern omitted — see frankenscipy-795bt.
         points.push(PointCase {
             case_id: format!("{name}_f_oneway"),
             func: "f_oneway".into(),
+            groups: groups.clone(),
+            pair_a: vec![],
+            pair_b: vec![],
+            table: vec![],
+        });
+        points.push(PointCase {
+            case_id: format!("{name}_alexandergovern"),
+            func: "alexandergovern".into(),
             groups: groups.clone(),
             pair_a: vec![],
             pair_b: vec![],

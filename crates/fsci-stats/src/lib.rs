@@ -20471,48 +20471,80 @@ pub fn brunnermunzel_alternative(x: &[f64], y: &[f64], alternative: &str) -> Tte
 /// Matches `scipy.stats.alexandergovern`.
 pub fn alexandergovern(groups: &[&[f64]]) -> VarianceTestResult {
     let k = groups.len();
-    if k < 2 {
+    if k < 2 || groups.iter().any(|g| g.len() < 2) {
         return VarianceTestResult {
             statistic: f64::NAN,
             pvalue: f64::NAN,
         };
     }
 
+    // Step 1: per-group mean and SE² = s²/n with ddof=1.
     let means: Vec<f64> = groups
         .iter()
         .map(|g| g.iter().sum::<f64>() / g.len() as f64)
         .collect();
-    let vars: Vec<f64> = groups
+    let se2: Vec<f64> = groups
         .iter()
         .zip(means.iter())
-        .map(|(g, &m)| g.iter().map(|&x| (x - m).powi(2)).sum::<f64>() / (g.len() - 1) as f64)
+        .map(|(g, &m)| {
+            let n = g.len() as f64;
+            let var = g.iter().map(|&x| (x - m).powi(2)).sum::<f64>() / (n - 1.0);
+            var / n
+        })
         .collect();
-    let weights: Vec<f64> = groups
-        .iter()
-        .zip(vars.iter())
-        .map(|(g, &v)| g.len() as f64 / v)
-        .collect();
-    let total_weight: f64 = weights.iter().sum();
-    let weighted_mean: f64 = means
-        .iter()
-        .zip(weights.iter())
-        .map(|(&m, &w)| m * w)
-        .sum::<f64>()
-        / total_weight;
+    if se2.iter().any(|&v| !v.is_finite() || v <= 0.0) {
+        return VarianceTestResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+        };
+    }
 
-    let stat: f64 = means
+    // Step 2: weights w_i = (1/SE_i²) / Σ(1/SE_j²); Step 3: variance-weighted
+    // common mean Σ w_i · mean_i.
+    let inv_se2: Vec<f64> = se2.iter().map(|v| 1.0 / v).collect();
+    let denom: f64 = inv_se2.iter().sum();
+    let weights: Vec<f64> = inv_se2.iter().map(|w| w / denom).collect();
+    let weighted_mean: f64 = weights.iter().zip(means.iter()).map(|(w, m)| w * m).sum();
+
+    // Step 4: per-group t-statistic.
+    let t_stats: Vec<f64> = means
         .iter()
-        .zip(weights.iter())
-        .map(|(&m, &w)| w * (m - weighted_mean).powi(2))
-        .sum();
+        .zip(se2.iter())
+        .map(|(&m, &v)| (m - weighted_mean) / v.sqrt())
+        .collect();
+
+    // Steps 5-8: Hill's normalising transformation. Per scipy.stats:
+    //   v = n_i − 1, a = v − 0.5, b = 48 a²
+    //   c = sqrt(a · ln(1 + t²/v))
+    //   z = c + (c³ + 3c)/b
+    //         − (4c⁷ + 33c⁵ + 240c³ + 855c) / (10b² + 8bc⁴ + 1000b)
+    let z_vals: Vec<f64> = groups
+        .iter()
+        .zip(t_stats.iter())
+        .map(|(g, &t)| {
+            let v = (g.len() - 1) as f64;
+            let a = v - 0.5;
+            let b = 48.0 * a * a;
+            let c = (a * (1.0 + t * t / v).ln()).sqrt();
+            let c3 = c * c * c;
+            let c5 = c3 * c * c;
+            let c7 = c5 * c * c;
+            let num_correct = 4.0 * c7 + 33.0 * c5 + 240.0 * c3 + 855.0 * c;
+            let den_correct = 10.0 * b * b + 8.0 * b * c * c * c * c + 1000.0 * b;
+            c + (c3 + 3.0 * c) / b - num_correct / den_correct
+        })
+        .collect();
+
+    // Step 9: A = Σ z_i².
+    let stat: f64 = z_vals.iter().map(|z| z * z).sum();
 
     let df = (k - 1) as f64;
     let chi2 = ChiSquared::new(df);
-    let pvalue = chi2.sf(stat);
+    let pvalue = chi2.sf(stat).clamp(0.0, 1.0);
 
     VarianceTestResult {
         statistic: stat,
-        pvalue: pvalue.clamp(0.0, 1.0),
+        pvalue,
     }
 }
 
@@ -30171,14 +30203,17 @@ mod tests {
         let result = alexandergovern(&[&g1[..], &g2[..]]);
         assert!(result.statistic > 0.0, "stat must be positive");
         assert!((0.0..=1.0).contains(&result.pvalue));
-        // Pin the exact value: each group has unbiased var = 1,
-        // so weights = n/var = 3/1 = 3. Total weight = 6.
-        // Weighted mean = (0·3 + 1·3)/6 = 0.5.
-        // stat = 3·(0-0.5)² + 3·(1-0.5)² = 0.75 + 0.75 = 1.5.
+        // scipy.stats.alexandergovern reference for these inputs:
+        // stat ≈ 1.00932105, pvalue ≈ 0.31506555.
         assert!(
-            (result.statistic - 1.5).abs() < 1e-12,
-            "expected stat=1.5, got {}",
+            (result.statistic - 1.0093210537).abs() < 1e-7,
+            "expected stat ≈ 1.0093, got {}",
             result.statistic
+        );
+        assert!(
+            (result.pvalue - 0.3150655485).abs() < 1e-7,
+            "expected pvalue ≈ 0.3151, got {}",
+            result.pvalue
         );
     }
 
@@ -30188,9 +30223,13 @@ mod tests {
         let g1 = [-1.0_f64, 0.0, 1.0];
         let g2 = [99.0_f64, 100.0, 101.0];
         let result = alexandergovern(&[&g1[..], &g2[..]]);
+        // scipy reference for these inputs: p ≈ 5.14e-8 (the Alexander-
+        // Govern A statistic is bounded by Hill's normalising
+        // approximation, so even very-separated groups don't crash p
+        // all the way to 0 the way an exact F-test would).
         assert!(
-            result.pvalue < 1e-9,
-            "well-separated groups should have pvalue ≈ 0, got {}",
+            result.pvalue < 1e-6,
+            "well-separated groups should have pvalue ≪ 0.05, got {}",
             result.pvalue
         );
     }
