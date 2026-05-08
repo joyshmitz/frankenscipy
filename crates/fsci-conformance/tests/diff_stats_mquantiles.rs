@@ -8,13 +8,14 @@
 //! betap=betap)`.
 //!
 //! 3 datasets × 4 (α, β) variants (Cunnane, R5, R7, R8) × 4
-//! probs (0.1, 0.25, 0.5, 0.9) = 48 cases via subprocess.
+//! probs (0.05, 0.25, 0.5, 0.95) = 48 cases via subprocess.
 //! Each case compares one quantile element-wise. Tol 1e-12 abs
 //! (closed-form linear-interpolation chain).
 //!
-//! Probs avoid extreme p < ~0.05 / p > ~0.95 to dodge the
-//! aleph < 1 / aleph > n-1 edge — fsci has a defect there
-//! that does not clamp like scipy does. See [frankenscipy-13w1q].
+//! Probs were widened back to [0.05, 0.95] after the fix for
+//! [frankenscipy-13w1q] landed — fsci now clamps aleph to
+//! [1, n-1] before splitting into the interpolation pair,
+//! matching scipy's mstats.mquantiles convention.
 
 use std::collections::HashMap;
 use std::fs;
@@ -97,7 +98,7 @@ fn emit_log(log: &DiffLog) {
 }
 
 fn generate_query() -> OracleQuery {
-    let probs = vec![0.1, 0.25, 0.5, 0.9];
+    let probs = vec![0.05, 0.25, 0.5, 0.95];
     let datasets: Vec<(&str, Vec<f64>)> = vec![
         ("compact_n12", (1..=12).map(|i| i as f64).collect()),
         (

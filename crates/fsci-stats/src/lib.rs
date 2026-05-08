@@ -15646,14 +15646,25 @@ pub fn mquantiles(data: &[f64], prob: &[f64], alphap: f64, betap: f64) -> Vec<f6
                 return f64::NAN;
             }
             let m = alphap + p * (1.0 - alphap - betap);
-            let j_float = nf * p + m;
-            let j = (j_float.floor() as usize).saturating_sub(1);
-            let g = j_float - j_float.floor();
-            if j >= n - 1 {
-                sorted[n - 1]
+            // scipy.stats.mstats.mquantiles formula:
+            //   aleph = n*p + m
+            //   k     = clip(floor(aleph), 1, n-1)        — clip applied to FLOOR
+            //   gamma = (aleph - k).clip(0, 1)            — gamma uses unclipped aleph
+            //   Q(p)  = (1 - gamma)*data[k-1] + gamma*data[k]
+            // fsci's previous code used `saturating_sub(1)` on the floor
+            // without clipping (silent k=0/gamma=aleph for sub-1 alephs).
+            // See [frankenscipy-13w1q].
+            let aleph = nf * p + m;
+            let k_unclipped = aleph.floor();
+            let k = if n >= 2 {
+                k_unclipped.clamp(1.0, nf - 1.0) as usize
             } else {
-                (1.0 - g) * sorted[j] + g * sorted[j + 1]
-            }
+                1
+            };
+            let gamma = (aleph - k as f64).clamp(0.0, 1.0);
+            let lo = k - 1;
+            let hi = k.min(n - 1);
+            (1.0 - gamma) * sorted[lo] + gamma * sorted[hi]
         })
         .collect()
 }
