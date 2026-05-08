@@ -13074,7 +13074,9 @@ pub fn friedmanchisquare(groups: &[&[f64]]) -> TtestResult {
     }
 
     // Rank within each block (row) with tie handling (average ranks)
+    // and accumulate Σ(t³-t) over tie groups for scipy's tie correction.
     let mut rank_sums = vec![0.0; k];
+    let mut tie_sum = 0.0_f64;
     for block in 0..n {
         let mut vals: Vec<(f64, usize)> = groups
             .iter()
@@ -13095,15 +13097,31 @@ pub fn friedmanchisquare(groups: &[&[f64]]) -> TtestResult {
             for tied in &vals[i..j] {
                 rank_sums[tied.1] += avg_rank;
             }
+            let t = (j - i) as f64;
+            if t > 1.0 {
+                tie_sum += t * t * t - t;
+            }
             i = j;
         }
     }
 
-    // Friedman statistic: χ² = 12/(nk(k+1)) Σ R_j² - 3n(k+1)
+    // Friedman statistic: χ² = 12/(nk(k+1)) Σ R_j² - 3n(k+1), then
+    // divided by scipy's tie-correction factor (1 - Σ(t³-t)/(n*k*(k²-1))).
     let kf = k as f64;
     let nf = n as f64;
     let sum_sq: f64 = rank_sums.iter().map(|&r| r * r).sum();
-    let chi2 = 12.0 / (nf * kf * (kf + 1.0)) * sum_sq - 3.0 * nf * (kf + 1.0);
+    let chi2_uncorrected = 12.0 / (nf * kf * (kf + 1.0)) * sum_sq - 3.0 * nf * (kf + 1.0);
+    let denom = nf * kf * (kf * kf - 1.0);
+    let c = if denom > 0.0 {
+        1.0 - tie_sum / denom
+    } else {
+        1.0
+    };
+    let chi2 = if c > 0.0 {
+        chi2_uncorrected / c
+    } else {
+        chi2_uncorrected
+    };
 
     let df = kf - 1.0;
     let dist = ChiSquared::new(df);
