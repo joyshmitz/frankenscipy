@@ -13164,18 +13164,8 @@ pub fn fligner(groups: &[&[f64]]) -> VarianceTestResult {
     }
 
     let n_total = all_scores.len();
-    // Rank all scores
-    let mut indexed: Vec<(f64, usize)> = all_scores
-        .iter()
-        .copied()
-        .enumerate()
-        .map(|(i, v)| (v, i))
-        .collect();
-    indexed.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let mut ranks = vec![0.0; n_total];
-    for (rank, &(_, idx)) in indexed.iter().enumerate() {
-        ranks[idx] = rank as f64 + 1.0;
-    }
+    // Rank all scores using average ranks for ties (matches scipy.stats.rankdata).
+    let ranks = rankdata_average(&all_scores);
 
     // Transform ranks to normal quantile scores
     let nf = n_total as f64;
@@ -13198,8 +13188,10 @@ pub fn fligner(groups: &[&[f64]]) -> VarianceTestResult {
         offset += ni;
     }
 
+    // scipy normalises by var(a, ddof=1) = sum_sq_dev / (N-1), so the
+    // multiplier here is (N - 1), not (N - k).
     let statistic = if denominator > 0.0 {
-        (nf - k as f64) * numerator / denominator
+        (nf - 1.0) * numerator / denominator
     } else {
         f64::NAN
     };
