@@ -15195,11 +15195,16 @@ pub fn kstatvar(data: &[f64], n: u32) -> f64 {
     match n {
         1 => k2 / nn, // Var(k1) = k2/n
         2 => {
-            // Var(k2) = 2*k2^2 / (n-1) for normal
-            if nn < 3.0 {
+            // scipy's general unbiased variance-of-k2 estimator (does
+            // NOT assume normality): var(k2) = (2*N*k2² + (N-1)*k4) /
+            // (N*(N+1)). The previous formula 2*k2²/(N-1) was the
+            // normal-distribution asymptotic and diverged from scipy
+            // on non-normal samples.
+            if nn < 4.0 {
                 return f64::NAN;
             }
-            2.0 * k2 * k2 / (nn - 1.0)
+            let k4 = kstat(&filtered, 4);
+            (2.0 * nn * k2 * k2 + (nn - 1.0) * k4) / (nn * (nn + 1.0))
         }
         _ => f64::NAN,
     }
