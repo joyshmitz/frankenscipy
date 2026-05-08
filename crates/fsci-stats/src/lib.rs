@@ -15764,25 +15764,21 @@ pub fn percentileofscore(data: &[f64], score: f64, kind: Option<&str>) -> f64 {
         .filter(|&&x| (x - score).abs() < f64::EPSILON)
         .count() as f64;
 
+    // scipy convention:
+    //   left  = count(< score)            = n_less
+    //   right = count(<= score)            = n_less + n_equal
+    //   plus1 = 1 if score is in data (left < right) else 0
+    //   rank  = (left + right + plus1) * 50 / n
+    //   weak  = right * 100 / n            (% values <= score)
+    //   strict= left * 100 / n             (% values < score)
+    //   mean  = (left + right) * 50 / n    (avg of weak and strict)
+    let plus1: f64 = if n_equal > 0.0 { 1.0 } else { 0.0 };
+    let right = n_less + n_equal;
     match kind {
-        "rank" => {
-            // (n_less + 0.5 * n_equal) / n * 100
-            100.0 * (n_less + 0.5 * n_equal) / n
-        }
-        "weak" => {
-            // Percentage of values < score
-            100.0 * n_less / n
-        }
-        "strict" => {
-            // Percentage of values <= score
-            100.0 * (n_less + n_equal) / n
-        }
-        "mean" => {
-            // Average of weak and strict
-            let weak = n_less / n;
-            let strict = (n_less + n_equal) / n;
-            100.0 * (weak + strict) / 2.0
-        }
+        "rank" => (n_less + right + plus1) * 50.0 / n,
+        "weak" => right * 100.0 / n,
+        "strict" => n_less * 100.0 / n,
+        "mean" => (n_less + right) * 50.0 / n,
         _ => f64::NAN,
     }
 }
@@ -31382,25 +31378,26 @@ mod tests {
     #[test]
     fn percentileofscore_rank() {
         let data = vec![1.0, 2.0, 3.0, 4.0];
-        // Score 3 is at position 3 out of 4, with rank method: (2 + 0.5*1)/4 * 100 = 62.5
+        // scipy 'rank' for score=3 with left=2, right=3, plus1=1:
+        // (2 + 3 + 1) * 50 / 4 = 75
         let result = percentileofscore(&data, 3.0, None);
-        assert!((result - 62.5).abs() < 1e-10, "rank method: {}", result);
+        assert!((result - 75.0).abs() < 1e-10, "rank method: {}", result);
     }
 
     #[test]
     fn percentileofscore_weak() {
         let data = vec![1.0, 2.0, 3.0, 4.0];
-        // Score 3: 2 values less than 3, so 50%
+        // scipy 'weak' = % values <= score. For score=3: 3/4 = 75%
         let result = percentileofscore(&data, 3.0, Some("weak"));
-        assert!((result - 50.0).abs() < 1e-10, "weak method: {}", result);
+        assert!((result - 75.0).abs() < 1e-10, "weak method: {}", result);
     }
 
     #[test]
     fn percentileofscore_strict() {
         let data = vec![1.0, 2.0, 3.0, 4.0];
-        // Score 3: 3 values <= 3, so 75%
+        // scipy 'strict' = % values < score. For score=3: 2/4 = 50%
         let result = percentileofscore(&data, 3.0, Some("strict"));
-        assert!((result - 75.0).abs() < 1e-10, "strict method: {}", result);
+        assert!((result - 50.0).abs() < 1e-10, "strict method: {}", result);
     }
 
     #[test]
