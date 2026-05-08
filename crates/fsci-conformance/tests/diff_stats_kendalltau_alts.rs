@@ -8,15 +8,16 @@
 //! this harness exercises the `'less'` and `'greater'` tails
 //! plus the explicit `'two-sided'` value for parity.
 //!
-//! 3 (x, y) fixtures × 3 alternatives × 2 arms = 18 cases.
-//! Tol 1e-12 statistic / 1e-4 pvalue (normal-tail chain via
-//! betainc / ndtri — widened from 1e-9 because fsci diverges
-//! from scipy's asymptotic chain by up to 6e-5 on n=20
-//! fixtures, see [frankenscipy-bzwml] P3).
+//! 4 (x, y) fixtures × 3 alternatives × 2 arms = 24 cases.
+//! Tol 1e-12 statistic / 1e-9 pvalue.
 //!
-//! Uncorrelated permutation fixture is intentionally dropped:
-//! pvalue gap there is ~0.025 — well outside any tolerance
-//! we'd ship until the underlying defect is fixed.
+//! Note: an earlier version of this harness forced the oracle
+//! into `method='asymptotic'` and saw a 0.025 abs gap on the
+//! uncorrelated fixture. That was a harness misconfiguration,
+//! not an fsci defect — fsci uses the EXACT path for untied
+//! n ≤ 25 and the asymptotic path otherwise. scipy's 'auto'
+//! method does the same, so the two branches align cleanly
+//! when the oracle uses 'auto' instead of forcing 'asymptotic'.
 
 use std::collections::HashMap;
 use std::fs;
@@ -30,7 +31,7 @@ use serde::{Deserialize, Serialize};
 
 const PACKET_ID: &str = "FSCI-P2C-007";
 const STAT_TOL: f64 = 1.0e-12;
-const PVALUE_TOL: f64 = 1.0e-4;
+const PVALUE_TOL: f64 = 1.0e-9;
 const REQUIRE_SCIPY_ENV: &str = "FSCI_REQUIRE_SCIPY_ORACLE";
 
 #[derive(Debug, Clone, Serialize)]
@@ -123,8 +124,12 @@ fn generate_query() -> OracleQuery {
                 .map(|i| (i as f64) + ((i as f64) * 0.5).sin() * 4.0)
                 .collect(),
         ),
-        // (uncorrelated permutation intentionally dropped — see
-        //  [frankenscipy-bzwml]; pvalue gap there is ~0.025.)
+        // Uncorrelated permutation (exact path covers this, n=11 untied)
+        (
+            "uncorrelated",
+            vec![5.0, 1.0, 6.0, 2.0, 7.0, 3.0, 8.0, 4.0, 9.0, 0.0, 10.0],
+            vec![3.0, 8.0, 1.0, 5.0, 9.0, 2.0, 7.0, 4.0, 6.0, 10.0, 0.0],
+        ),
     ];
 
     let alternatives = ["two-sided", "less", "greater"];
@@ -166,10 +171,11 @@ for case in q["points"]:
     alt = case["alternative"]
     stat = None; pval = None
     try:
-        # asymptotic method (default for ties or n > 33) matches fsci's
-        # normal-tail approximation. Force it explicitly so smaller-n
-        # fixtures don't switch into the exact-distribution branch.
-        res = stats.kendalltau(x, y, alternative=alt, method="asymptotic")
+        # method='auto' matches fsci's branching logic — fsci uses exact
+        # for untied n ≤ 25 and asymptotic otherwise. scipy's 'auto'
+        # picks exact for untied small samples too, so the two branches
+        # align without forcing one method.
+        res = stats.kendalltau(x, y, alternative=alt, method="auto")
         stat = fnone(res.statistic); pval = fnone(res.pvalue)
     except Exception:
         pass
