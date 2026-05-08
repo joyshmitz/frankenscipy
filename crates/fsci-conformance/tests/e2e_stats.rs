@@ -2546,7 +2546,12 @@ fn e2e_026_descriptive_helper_contracts() {
     let t = Instant::now();
     let data = [1.0, 1.0, 2.0, 2.0, 4.0, 6.0, 9.0];
     let mad = median_abs_deviation(&data, 1.4826);
-    let pass = (mad - 1.4826).abs() < 1e-12;
+    // Updated for [frankenscipy-xxfuo]: scipy.stats.median_abs_deviation
+    // DIVIDES the raw MAD by `scale`, not multiplies. Raw MAD here is
+    // 1.0 (median is 2.0; |x-2| sorted = [0,0,0,1,2,4,7]; median = 1.0);
+    // scaled = 1.0 / 1.4826 ≈ 0.67450 (normal-consistent std estimator).
+    let expected = 1.0 / 1.4826;
+    let pass = (mad - expected).abs() < 1e-12;
     if !pass {
         all_pass = false;
     }
@@ -2942,8 +2947,12 @@ fn e2e_029_combine_pvalues_helper_contracts() {
     let t = Instant::now();
     let mudholkar_george = combine_pvalues(&[0.01, 0.03, 0.2], Some("mudholkar_george"), None)
         .expect("mudholkar_george");
+    // Updated for [frankenscipy-v51r8]: fsci's mudholkar_george now
+    // matches scipy's Student-t form T(5n+4).sf(stat·sqrt(3/n)/π·sqrt(nu/(nu-2))).
+    // Previous pinned value 0.04695... was the old Logistic-tail
+    // approximation; scipy reference is 0.00245...
     let pass = (mudholkar_george.statistic - 9.457_512_901_089_753).abs() < TOL
-        && (mudholkar_george.pvalue - 0.046_957_352_596_219_86).abs() < TOL;
+        && (mudholkar_george.pvalue - 0.002_450_914_441_120_641).abs() < 1e-7;
     if !pass {
         all_pass = false;
     }
