@@ -13590,22 +13590,91 @@ pub fn ansari_alternative(x: &[f64], y: &[f64], alternative: &str) -> TtestResul
         m_f * n_f * (total_f + 2.0) * (total_f - 2.0) / (48.0 * (total_f - 1.0))
     };
 
-    if variance <= 0.0 {
-        return TtestResult {
-            statistic,
-            pvalue: 1.0,
-            df: f64::NAN,
-        };
-    }
-
-    let z = (mean - statistic) / variance.sqrt();
-    let pvalue = normal_alternative_pvalue(z, alternative).clamp(0.0, 1.0);
+    // scipy uses the exact distribution when n < 55, m < 55, and there
+    // are no ties in the pooled data. For ties or larger samples it
+    // falls through to the normal-tail approximation.
+    let exact_path = !repeats && n < 55 && m < 55;
+    let pvalue = if exact_path {
+        ansari_exact_pvalue(statistic, n, total, alternative)
+    } else {
+        if variance <= 0.0 {
+            return TtestResult {
+                statistic,
+                pvalue: 1.0,
+                df: f64::NAN,
+            };
+        }
+        let z = (mean - statistic) / variance.sqrt();
+        normal_alternative_pvalue(z, alternative).clamp(0.0, 1.0)
+    };
 
     TtestResult {
         statistic,
         pvalue,
         df: f64::NAN,
     }
+}
+
+/// Exact p-value for the Ansari-Bradley test under H0 (random allocation
+/// of n, m samples to a pooled rank stream of length N = n + m, no ties).
+///
+/// Builds the generating function product
+///   G(t, x) = ∏_{i=1..N} (1 + x · t^{s_i})    where s_i = min(i, N+1−i)
+/// via 2-D dynamic programming and reads off the count for choosing
+/// exactly n out of N (the AB statistic conditioning).
+///
+/// Matches the `_ABW` exact distribution scipy.stats.ansari uses for
+/// n + m < 55 with no ties — see scipy/_morestats.py:`ansari` exact
+/// branch.
+fn ansari_exact_pvalue(stat: f64, n: usize, total: usize, alternative: &str) -> f64 {
+    if total == 0 {
+        return f64::NAN;
+    }
+    // Symmetric ranks: s_i = min(i, N+1-i) for i = 1..=N.
+    let mut symranks = Vec::with_capacity(total);
+    for i in 1..=total {
+        symranks.push(i.min(total + 1 - i));
+    }
+    // DP: dp[j][k] = number of ways to choose j elements with sum k.
+    // max_k upper-bounded by sum of n largest symranks (for n=m=N/2 ≈ N²/8).
+    let max_sum: usize = {
+        let mut sorted = symranks.clone();
+        sorted.sort_unstable_by(|a, b| b.cmp(a));
+        sorted.iter().take(n).sum()
+    };
+    let mut dp = vec![vec![0u128; max_sum + 1]; n + 1];
+    dp[0][0] = 1;
+    for &s in &symranks {
+        // Iterate j and k in reverse so each item is used at most once
+        // (knapsack-style 0/1 selection).
+        for j in (1..=n).rev() {
+            for k in s..=max_sum {
+                dp[j][k] = dp[j][k].saturating_add(dp[j - 1][k - s]);
+            }
+        }
+    }
+    let total_count: u128 = dp[n].iter().sum();
+    if total_count == 0 {
+        return f64::NAN;
+    }
+    let total_f = total_count as f64;
+    let stat_int = stat.round() as usize;
+    if stat_int > max_sum {
+        return f64::NAN;
+    }
+    // CDF/SF on the rounded integer statistic. scipy uses:
+    //   cdf(k) = P(AB ≤ k) = sum freqs[..=k] / total
+    //   sf(k)  = P(AB ≥ k) = sum freqs[k..] / total
+    let cdf: u128 = dp[n][..=stat_int].iter().sum();
+    let sf: u128 = dp[n][stat_int..].iter().sum();
+    let cdf_f = cdf as f64 / total_f;
+    let sf_f = sf as f64 / total_f;
+    let pval = match alternative {
+        "two-sided" => (2.0 * cdf_f.min(sf_f)).min(1.0),
+        "greater" => cdf_f, // AB statistic is _smaller_ when scale ratio is larger
+        _ => sf_f,          // "less"
+    };
+    pval.clamp(0.0, 1.0)
 }
 
 ///

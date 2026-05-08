@@ -1,30 +1,29 @@
 #![forbid(unsafe_code)]
 //! Live SciPy differential coverage for the directional
-//! alternatives of `scipy.stats.spearmanr` (and originally
-//! `scipy.stats.ansari` — see below).
+//! alternatives of `scipy.stats.spearmanr` and
+//! `scipy.stats.ansari`.
 //!
 //! Resolves [frankenscipy-3wlbl]. fsci's two-sided defaults
 //! are already covered elsewhere; this harness exercises the
 //! `'less'` and `'greater'` tails plus the explicit two-sided
 //! variant for parity.
 //!
-//! 4 fixtures × 1 func (spearmanr_alt) × 3 alternatives ×
-//! 2 arms = 24 cases. Tol 1e-9 abs (Student-t-tail chain via
-//! betainc).
+//! 4 fixtures × 2 funcs (spearmanr_alt, ansari_alt) × 3
+//! alternatives × 2 arms = 48 cases. Tol 1e-9 abs (Student-t-
+//! tail chain via betainc; ansari exact distribution via
+//! polynomial-product DP).
 //!
 //! Surfaced and fixed [frankenscipy-yy9f3]: pearsonr_alternative
 //! and spearmanr_alternative both returned pvalue = 0 for all
 //! tails when |r| = 1. Fixed inline by dispatching on the
 //! alternative at the perfect-correlation boundary.
 //!
-//! Surfaced [frankenscipy-1vlpt] (open): ansari_alternative
-//! uses the standard-normal asymptotic approximation where
+//! Surfaced and fixed [frankenscipy-1vlpt]: ansari_alternative
+//! used the standard-normal asymptotic for the pvalue while
 //! scipy uses the exact convolution-recursion distribution for
-//! small n. Diverges by ~0.02–0.04 on balanced_n14 fixtures.
-//! ansari_alt arms are intentionally NOT included here until
-//! that defect is fixed; the existing diff_stats_ansari.rs
-//! covers the (two-sided, larger-n) case where the gap stays
-//! within tolerance.
+//! small n + m < 55 (no ties). Implemented the exact path via
+//! a 2-D polynomial-product DP over symmetric ranks; ansari_alt
+//! is now re-enabled in this harness.
 
 use std::collections::HashMap;
 use std::fs;
@@ -33,7 +32,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use fsci_stats::spearmanr_alternative;
+use fsci_stats::{ansari_alternative, spearmanr_alternative};
 use serde::{Deserialize, Serialize};
 
 const PACKET_ID: &str = "FSCI-P2C-007";
@@ -148,14 +147,16 @@ fn generate_query() -> OracleQuery {
     let alternatives = ["two-sided", "less", "greater"];
     let mut points = Vec::new();
     for (name, x, y) in &fixtures {
-        for alt in &alternatives {
-            points.push(PointCase {
-                case_id: format!("{name}_spearmanr_alt_{alt}"),
-                func: "spearmanr_alt".into(),
-                x: x.clone(),
-                y: y.clone(),
-                alternative: (*alt).to_string(),
-            });
+        for func in ["spearmanr_alt", "ansari_alt"] {
+            for alt in &alternatives {
+                points.push(PointCase {
+                    case_id: format!("{name}_{func}_{alt}"),
+                    func: func.to_string(),
+                    x: x.clone(),
+                    y: y.clone(),
+                    alternative: (*alt).to_string(),
+                });
+            }
         }
     }
     OracleQuery { points }
@@ -187,6 +188,8 @@ for case in q["points"]:
     try:
         if func == "spearmanr_alt":
             res = stats.spearmanr(x, y, alternative=alt)
+        elif func == "ansari_alt":
+            res = stats.ansari(x, y, alternative=alt)
         else:
             res = None
         if res is not None:
@@ -276,6 +279,10 @@ fn diff_stats_ansari_spearmanr_alts() {
         let (rust_stat, rust_p) = match case.func.as_str() {
             "spearmanr_alt" => {
                 let r = spearmanr_alternative(&case.x, &case.y, &case.alternative);
+                (r.statistic, r.pvalue)
+            }
+            "ansari_alt" => {
+                let r = ansari_alternative(&case.x, &case.y, &case.alternative);
                 (r.statistic, r.pvalue)
             }
             _ => continue,
