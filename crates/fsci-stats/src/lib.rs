@@ -13872,9 +13872,27 @@ pub fn wilcoxon(x: &[f64], y: &[f64]) -> TtestResult {
     let t_stat = t_plus.min(t_minus);
     let nrf = nr as f64;
 
-    // Normal approximation
+    // Normal approximation with tie correction. scipy:
+    //   sigma² = n*(n+1)*(2n+1)/24 - Σ(t³-t)/48
+    // where t are tie-group sizes among absolute differences.
     let mu = nrf * (nrf + 1.0) / 4.0;
-    let sigma = (nrf * (nrf + 1.0) * (2.0 * nrf + 1.0) / 24.0).sqrt();
+    let mut sorted_abs = abs_diffs.clone();
+    sorted_abs.sort_by(|a, b| a.total_cmp(b));
+    let mut tie_sum = 0.0_f64;
+    let mut i = 0;
+    while i < sorted_abs.len() {
+        let mut j = i + 1;
+        while j < sorted_abs.len() && (sorted_abs[j] - sorted_abs[i]).abs() < 1e-12 {
+            j += 1;
+        }
+        let t = (j - i) as f64;
+        if t > 1.0 {
+            tie_sum += t * t * t - t;
+        }
+        i = j;
+    }
+    let variance = (nrf * (nrf + 1.0) * (2.0 * nrf + 1.0) / 24.0) - tie_sum / 48.0;
+    let sigma = variance.max(0.0).sqrt();
 
     if sigma == 0.0 {
         return TtestResult {
@@ -13946,7 +13964,27 @@ pub fn wilcoxon_alternative(x: &[f64], y: &[f64], alternative: &str) -> TtestRes
 
     let nrf = nr as f64;
     let mu = nrf * (nrf + 1.0) / 4.0;
-    let sigma = (nrf * (nrf + 1.0) * (2.0 * nrf + 1.0) / 24.0).sqrt();
+
+    // Tie correction for sigma (matches scipy's wilcoxon mode='approx'):
+    //   sigma² = n*(n+1)*(2n+1)/24 - Σ(t³-t)/48
+    // where t are tie-group sizes among the absolute differences.
+    let mut sorted_abs = abs_diffs.clone();
+    sorted_abs.sort_by(|a, b| a.total_cmp(b));
+    let mut tie_sum = 0.0_f64;
+    let mut i = 0;
+    while i < sorted_abs.len() {
+        let mut j = i + 1;
+        while j < sorted_abs.len() && (sorted_abs[j] - sorted_abs[i]).abs() < 1e-12 {
+            j += 1;
+        }
+        let t = (j - i) as f64;
+        if t > 1.0 {
+            tie_sum += t * t * t - t;
+        }
+        i = j;
+    }
+    let variance = (nrf * (nrf + 1.0) * (2.0 * nrf + 1.0) / 24.0) - tie_sum / 48.0;
+    let sigma = variance.max(0.0).sqrt();
 
     if sigma == 0.0 {
         return TtestResult {
