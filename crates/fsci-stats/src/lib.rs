@@ -13467,73 +13467,13 @@ pub fn median_test(groups: &[&[f64]]) -> TtestResult {
 ///
 /// Matches the core behavior of `scipy.stats.ansari(x, y)` for the
 /// default two-sided alternative.
+///
+/// Delegates to `ansari_alternative(x, y, "two-sided")` so the
+/// exact-distribution path (n + m < 55, no ties — see
+/// [frankenscipy-1vlpt]) and the normal-tail fallback are shared
+/// across both entry points.
 pub fn ansari(x: &[f64], y: &[f64]) -> TtestResult {
-    let n = x.len();
-    let m = y.len();
-    if n < 1 || m < 1 || x.iter().any(|v| v.is_nan()) || y.iter().any(|v| v.is_nan()) {
-        return TtestResult {
-            statistic: f64::NAN,
-            pvalue: f64::NAN,
-            df: f64::NAN,
-        };
-    }
-
-    let total = n + m;
-    let mut pooled = Vec::with_capacity(total);
-    pooled.extend_from_slice(x);
-    pooled.extend_from_slice(y);
-    let ranks = rankdata_average(&pooled);
-    let total_f = total as f64;
-    let symranks: Vec<f64> = ranks.iter().map(|&r| r.min(total_f - r + 1.0)).collect();
-    let statistic: f64 = symranks[..n].iter().sum();
-
-    let repeats = {
-        let mut sorted = pooled.clone();
-        sorted.sort_by(|a, b| a.total_cmp(b));
-        sorted.windows(2).any(|w| w[0].total_cmp(&w[1]).is_eq())
-    };
-
-    let n_f = n as f64;
-    let m_f = m as f64;
-    let mean = if total % 2 == 1 {
-        n_f * (total_f + 1.0).powi(2) / (4.0 * total_f)
-    } else {
-        n_f * (total_f + 2.0) / 4.0
-    };
-
-    let variance = if repeats {
-        let fac: f64 = symranks.iter().map(|r| r * r).sum();
-        if total % 2 == 1 {
-            m_f * n_f * (16.0 * total_f * fac - (total_f + 1.0).powi(4))
-                / (16.0 * total_f.powi(2) * (total_f - 1.0))
-        } else {
-            m_f * n_f * (16.0 * fac - total_f * (total_f + 2.0).powi(2))
-                / (16.0 * total_f * (total_f - 1.0))
-        }
-    } else if total % 2 == 1 {
-        n_f * m_f * (total_f + 1.0) * (3.0 + total_f.powi(2)) / (48.0 * total_f.powi(2))
-    } else {
-        m_f * n_f * (total_f + 2.0) * (total_f - 2.0) / (48.0 * (total_f - 1.0))
-    };
-
-    if variance <= 0.0 {
-        return TtestResult {
-            statistic,
-            pvalue: 1.0,
-            df: f64::NAN,
-        };
-    }
-
-    // Smaller Ansari statistics indicate larger dispersion in x.
-    let z = (mean - statistic) / variance.sqrt();
-    let normal = Normal::standard();
-    let pvalue = 2.0 * normal.sf(z.abs());
-
-    TtestResult {
-        statistic,
-        pvalue: pvalue.clamp(0.0, 1.0),
-        df: f64::NAN,
-    }
+    ansari_alternative(x, y, "two-sided")
 }
 
 /// Ansari-Bradley scale test with alternative hypothesis.
