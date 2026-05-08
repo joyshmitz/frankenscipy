@@ -21433,8 +21433,13 @@ pub fn winsorize(data: &[f64], limits: (f64, f64)) -> Vec<f64> {
     sorted.sort_by(|a, b| a.total_cmp(b));
     let n = sorted.len();
 
-    let lo_idx = (limits.0.clamp(0.0, 1.0) * n as f64).floor() as usize;
-    let hi_idx = n.saturating_sub((limits.1.clamp(0.0, 1.0) * n as f64).ceil() as usize);
+    // scipy.mstats.winsorize uses Python int() truncation (floor for
+    // non-negative) for both the low and high element counts, then
+    // takes asorted[upidx - 1] as the high replacement value, where
+    // upidx = n - int(limits.1 * n).
+    let lo_idx = (limits.0.clamp(0.0, 1.0) * n as f64) as usize;
+    let upidx = n.saturating_sub((limits.1.clamp(0.0, 1.0) * n as f64) as usize);
+    let hi_idx = if upidx == 0 { 0 } else { upidx - 1 };
     let lo_idx = lo_idx.min(n - 1);
     let hi_idx = hi_idx.min(n - 1);
     let (lo_val, hi_val) = if lo_idx > hi_idx {
