@@ -430,17 +430,22 @@ fn special_cases() -> Vec<SpecialCase> {
         });
     }
 
-    // ── Poles at non-positive integers: gamma(0), gamma(-1), gamma(-2), …
-    //    SciPy returns +∞ at 0 and ±∞ at negative integers; conventions
-    //    differ slightly (gamma(-1) is +inf in scipy.special.gamma). The
-    //    expectation classes follow SciPy's actual behavior captured by
-    //    the live oracle.
-    for n in [0.0_f64, -1.0, -2.0, -3.0] {
+    // ── Poles at non-positive integers: gamma(0) is +∞; gamma(-1),
+    //    gamma(-2), ... are NaN in modern scipy (sign undefined at the
+    //    pole). The earlier comment that "gamma(-1) is +inf in
+    //    scipy.special.gamma" was incorrect — scipy returns NaN there.
+    cases.push(SpecialCase {
+        case_id: "gamma_pole_0".to_owned(),
+        func: "gamma".to_owned(),
+        args: vec![0.0_f64],
+        expect: "posinf".to_owned(),
+    });
+    for n in [-1.0_f64, -2.0, -3.0] {
         cases.push(SpecialCase {
             case_id: format!("gamma_pole_{n}"),
             func: "gamma".to_owned(),
             args: vec![n],
-            expect: "posinf".to_owned(),
+            expect: "nan".to_owned(),
         });
     }
     // gammaln of a non-positive integer is +∞ (log of the pole).
