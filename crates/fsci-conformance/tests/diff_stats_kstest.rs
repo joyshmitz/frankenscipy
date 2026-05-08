@@ -7,14 +7,22 @@
 //! routes are covered by their own diff harnesses — this one
 //! verifies the wrapper dispatches correctly to each branch.
 //!
-//! 4 fixtures × sample-mode dispatch × 2 arms = 8 cases.
-//! Tol 1e-12 statistic / 1e-7 pvalue (KS-distribution
-//! tail chain). The cdf-mode dispatch is intentionally
-//! excluded — see [frankenscipy-8rfh5] (P3): fsci's
-//! kstest(KstestTarget::Cdf) pvalue diverges from
-//! scipy.stats.kstest('norm', method='asymptotic') by up to
-//! 0.06 abs even though the standalone fsci_stats::ks_1samp
-//! agrees with scipy at 1e-7 on the same fixtures.
+//! 4 fixtures × 2 dispatch modes (cdf, sample) × 2 arms =
+//! 16 cases. Tol 1e-12 statistic / 1e-7 pvalue (KS-distribution
+//! tail chain).
+//!
+//! Note: an earlier version of this harness (and
+//! diff_stats_ks_1samp.rs / diff_stats_ks_2samp_alt.rs)
+//! pinned the oracle to `method='asymptotic'` — that's an
+//! UNDOCUMENTED scipy method value that silently returns
+//! pvalue=1.0 as a sentinel. The documented value is
+//! `method='asymp'` (no -tic). Switching the oracle to
+//! `method='asymp'` aligns scipy's Kolmogorov chain with
+//! fsci's `kolmogorov_pvalue` series at 1e-7 across all
+//! fixtures, including the cdf-mode dispatch that previously
+//! appeared to diverge by 0.06 — that gap was actually
+//! scipy returning the 1.0 sentinel, not an fsci defect.
+//! See [frankenscipy-8rfh5] (now closed as not-a-defect).
 
 use std::collections::HashMap;
 use std::fs;
@@ -23,12 +31,12 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use fsci_stats::{kstest, KstestTarget};
+use fsci_stats::{kstest, ContinuousDistribution, KstestTarget, Normal};
 use serde::{Deserialize, Serialize};
 
 const PACKET_ID: &str = "FSCI-P2C-007";
 // Tols mirror diff_stats_ks_1samp.rs: 1e-12 stat / 1e-7 pvalue
-// after pinning the oracle to method='asymptotic' to match fsci's
+// after pinning the oracle to method='asymp' to match fsci's
 // Kolmogorov-series default.
 const STAT_TOL: f64 = 1.0e-12;
 const PVALUE_TOL: f64 = 1.0e-7;
@@ -103,7 +111,7 @@ fn emit_log(log: &DiffLog) {
 
 fn generate_query() -> OracleQuery {
     // Fixtures mirror diff_stats_ks_1samp.rs which is known to agree with
-    // scipy's method='asymptotic' to 1e-7. Synthetic / large-D fixtures
+    // scipy's method='asymp' to 1e-7. Synthetic / large-D fixtures
     // produced 1e-2 pvalue gaps because the KS distance was close to 1
     // (deep in the rejection region) where the two asymptotic series
     // formulas can diverge by orders of magnitude in absolute terms.
@@ -140,7 +148,12 @@ fn generate_query() -> OracleQuery {
 
     let mut points = Vec::new();
     for (name, data, reference) in &fixtures {
-        // cdf-mode intentionally dropped — see [frankenscipy-8rfh5].
+        points.push(PointCase {
+            case_id: format!("{name}_cdf"),
+            mode: "cdf".into(),
+            data: data.clone(),
+            reference: vec![],
+        });
         points.push(PointCase {
             case_id: format!("{name}_sample"),
             mode: "sample".into(),
@@ -149,6 +162,14 @@ fn generate_query() -> OracleQuery {
         });
     }
     OracleQuery { points }
+}
+
+/// Standard-normal CDF for the cdf-mode dispatch — uses fsci-stats's
+/// `Normal` distribution directly so the KS distance computed on the
+/// Rust side agrees with scipy's `stats.norm.cdf` at machine precision.
+fn standard_normal_cdf(x: f64) -> f64 {
+    let norm = Normal::standard();
+    ContinuousDistribution::cdf(&norm, x)
 }
 
 fn scipy_oracle_or_skip(query: &OracleQuery) -> Option<OracleResult> {
@@ -174,10 +195,10 @@ for case in q["points"]:
     stat = None; pval = None
     try:
         if mode == "cdf":
-            # method='asymptotic' matches fsci's kolmogorov_pvalue series;
+            # method='asymp' matches fsci's kolmogorov_pvalue series;
             # scipy's default 'auto' picks exact for n ≤ 50 which fsci
             # doesn't implement.
-            res = stats.kstest(data, "norm", method="asymptotic")
+            res = stats.kstest(data, "norm", method="asymp")
         elif mode == "sample":
             ref = np.array(case["reference"], dtype=float)
             res = stats.kstest(data, ref)
@@ -259,6 +280,7 @@ fn diff_stats_kstest() {
     for case in &query.points {
         let scipy_arm = pmap.get(&case.case_id).expect("validated oracle");
         let result = match case.mode.as_str() {
+            "cdf" => kstest(&case.data, KstestTarget::Cdf(standard_normal_cdf)),
             "sample" => kstest(&case.data, KstestTarget::Sample(&case.reference)),
             _ => continue,
         };

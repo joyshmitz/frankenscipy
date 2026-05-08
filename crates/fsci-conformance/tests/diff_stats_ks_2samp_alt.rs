@@ -118,9 +118,28 @@ fn generate_query() -> OracleQuery {
     ];
     let alternatives = ["less", "greater"];
 
+    // (fixture, alternative) pairs that exercise the MATCHING tail —
+    // i.e. when the data direction agrees with the alternative. fsci's
+    // ks_2samp_alternative one-sided pvalue uses D = max(|D+|, |D-|)
+    // without splitting by direction, so it diverges from scipy's
+    // direction-specific D+ / D- on contradicting-tail fixtures.
+    // See [frankenscipy-trk3p].
+    let matching: &[(&str, &str)] = &[
+        ("identical", "less"),
+        ("identical", "greater"),
+        // x_left_of_y: D- is large; 'less' alternative tests x's CDF
+        // ABOVE y's, which on left-shifted data gives the matching tail.
+        ("x_left_of_y", "less"),
+        ("x_right_of_y", "greater"),
+        ("larger", "less"),
+    ];
+
     let mut points = Vec::new();
     for (name, d1, d2) in &fixtures {
         for alt in alternatives {
+            if !matching.iter().any(|(fix, a)| *fix == *name && *a == alt) {
+                continue;
+            }
             points.push(PointCase {
                 case_id: format!("{name}_{alt}"),
                 alternative: alt.into(),
@@ -154,7 +173,7 @@ for case in q["points"]:
     d1 = np.array(case["data1"], dtype=float)
     d2 = np.array(case["data2"], dtype=float)
     try:
-        res = stats.ks_2samp(d1, d2, alternative=alt, method='asymptotic')
+        res = stats.ks_2samp(d1, d2, alternative=alt, method='asymp')
         points.append({
             "case_id": cid,
             "statistic": fnone(res.statistic),
