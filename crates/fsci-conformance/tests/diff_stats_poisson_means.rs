@@ -97,20 +97,19 @@ fn emit_log(log: &DiffLog) {
 }
 
 fn generate_query() -> OracleQuery {
-    // Restricted to small-to-moderate fixtures with EQUAL exposure
-    // (n1 == n2) and diff = 0 — see [frankenscipy-jd4o2] for the
-    // divergence under (a) diff != 0, (b) asymmetric exposure
-    // (n1 != n2), or (c) larger counts (n>200). Statistic always
-    // matches; only the pvalue diverges in those regimes.
+    // Full fixture set — covers all regimes that previously diverged:
+    // diff != 0, asymmetric exposure (n1 != n2), and larger counts.
+    // [frankenscipy-jd4o2] is now FIXED — fsci's poisson_quantile_bounds
+    // was using an incremental `pmf *= mu/k` from `exp(-mu)` recursion
+    // that never terminated the upper-bound search for moderate mu
+    // (cdf saturated below upper_q due to floating-point drift).
+    // Switched to log-space pmf via lgamma with a fixed upper-search
+    // window of mode + 12·sqrt(mu) + 50.
     let fixtures: Vec<(&str, i64, f64, i64, f64, f64)> = vec![
-        // Equal rates, equal exposure (null fixture, p ≈ 1)
         ("equal_rates", 30, 100.0, 32, 100.0, 0.0),
-        // Different rates, equal exposure (clear signal)
         ("diff_rates", 50, 100.0, 30, 100.0, 0.0),
-        // Smaller counts, modest signal
-        ("small_signal", 15, 50.0, 10, 50.0, 0.0),
-        // Larger n with mild signal (still equal exposure)
-        ("moderate_n", 40, 150.0, 35, 150.0, 0.0),
+        ("diff_exposure_diff_null", 60, 200.0, 25, 100.0, 0.05),
+        ("large_counts", 200, 500.0, 180, 500.0, 0.0),
     ];
 
     let alternatives = ["two-sided", "less", "greater"];

@@ -20883,21 +20883,32 @@ fn poisson_quantile_bounds(mu: f64, lower_q: f64, upper_q: f64) -> (usize, usize
     debug_assert!(mu > 0.0);
     debug_assert!(lower_q >= 0.0 && upper_q <= 1.0 && lower_q <= upper_q);
 
-    let mut pmf = (-mu).exp();
-    let mut cdf = pmf;
+    // Compute log-pmf via the lgamma form for numerical stability
+    // (the previous incremental recursion `pmf *= mu/k` from `exp(-mu)`
+    // accumulated drift and never reached upper_q for moderate mu —
+    // see [frankenscipy-jd4o2]).
+    let log_mu = mu.ln();
+    let log_pmf_at = |k: usize| -> f64 {
+        let kf = k as f64;
+        -mu + kf * log_mu - ln_gamma(kf + 1.0)
+    };
+
+    // Search sufficient range: mode ± 12·sqrt(mu) + 50 covers >> 1−1e-16
+    // for mu up to a few thousand. Use saturating for the lower edge.
+    let span = (12.0 * mu.sqrt()).ceil() as usize + 50;
+    let upper_search = (mu as usize).saturating_add(span);
+
+    // Forward CDF accumulation in linear space — pmfs are bounded ≤ 1 so
+    // no overflow risk; underflow at extreme tails just adds 0, which is
+    // fine for the bound search.
+    let mut cdf = 0.0;
     let mut lower = None;
-    let mut upper = 0usize;
-
-    if cdf >= lower_q {
-        lower = Some(0);
-    }
-    if cdf >= upper_q {
-        return (lower.unwrap_or(0), 0);
-    }
-
-    for k in 1..=1_000_000usize {
-        pmf *= mu / k as f64;
-        cdf = (cdf + pmf).min(1.0);
+    let mut upper = upper_search;
+    for k in 0..=upper_search {
+        cdf += log_pmf_at(k).exp();
+        if cdf > 1.0 {
+            cdf = 1.0;
+        }
         if lower.is_none() && cdf >= lower_q {
             lower = Some(k);
         }
@@ -20907,18 +20918,7 @@ fn poisson_quantile_bounds(mu: f64, lower_q: f64, upper_q: f64) -> (usize, usize
         }
     }
 
-    (lower.unwrap_or(upper), upper)
-}
-
-fn poisson_pmf_at(mu: f64, k: usize) -> f64 {
-    let mut pmf = (-mu).exp();
-    if k == 0 {
-        return pmf;
-    }
-    for i in 1..=k {
-        pmf *= mu / i as f64;
-    }
-    pmf
+    (lower.unwrap_or(0), upper)
 }
 
 fn validate_poisson_means_test(
@@ -20987,19 +20987,28 @@ pub fn poisson_means_test(
     let (x1_lb, x1_ub) = poisson_quantile_bounds(mu1, 1e-10, 1.0 - 1e-16);
     let (x2_lb, x2_ub) = poisson_quantile_bounds(mu2, 1e-10, 1.0 - 1e-16);
 
+    // Pre-compute log-space PMFs once per dimension for numerical stability
+    // (the previous incremental recursion `pmf *= mu/k` from `exp(-mu)` was
+    // fine for small mu but accumulated drift on n=200+/k=60+ fixtures and
+    // produced summed pvalues of 0 — see [frankenscipy-jd4o2]).
+    //
+    //   ln pmf(k; mu) = -mu + k·ln(mu) - lgamma(k+1)
+    let log_mu1 = mu1.ln();
+    let log_mu2 = mu2.ln();
+    let pmf1: Vec<f64> = (x1_lb..=x1_ub)
+        .map(|x| (-mu1 + x as f64 * log_mu1 - ln_gamma(x as f64 + 1.0)).exp())
+        .collect();
+    let pmf2: Vec<f64> = (x2_lb..=x2_ub)
+        .map(|x| (-mu2 + x as f64 * log_mu2 - ln_gamma(x as f64 + 1.0)).exp())
+        .collect();
+
     let mut pvalue = 0.0;
-    let mut prob_x1 = poisson_pmf_at(mu1, x1_lb);
-    for x1 in x1_lb..=x1_ub {
-        if x1 > x1_lb {
-            prob_x1 *= mu1 / x1 as f64;
-        }
+    for (i, x1) in (x1_lb..=x1_ub).enumerate() {
+        let prob_x1 = pmf1[i];
         let lambda_x1 = x1 as f64 / n1;
 
-        let mut prob_x2 = poisson_pmf_at(mu2, x2_lb);
-        for x2 in x2_lb..=x2_ub {
-            if x2 > x2_lb {
-                prob_x2 *= mu2 / x2 as f64;
-            }
+        for (j, x2) in (x2_lb..=x2_ub).enumerate() {
+            let prob_x2 = pmf2[j];
             let lambda_x2 = x2 as f64 / n2;
             let delta = lambda_x1 - lambda_x2 - diff;
             let var_x1x2 = lambda_x1 / n1 + lambda_x2 / n2;
