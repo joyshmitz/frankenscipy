@@ -20081,6 +20081,21 @@ pub fn power_divergence(f_obs: &[f64], f_exp: Option<&[f64]>, lambda_: f64) -> (
                 }
             })
             .sum::<f64>()
+    } else if (lambda_ + 1.0).abs() < 1e-10 {
+        // Modified log-likelihood ratio (lambda=-1):
+        // 2 Σ e ln(e/o). The general formula above factors
+        // 2/(λ*(λ+1)) which is 2/0 here, so use the limit.
+        2.0 * f_obs
+            .iter()
+            .zip(exp.iter())
+            .map(|(&o, &e)| {
+                if o > 0.0 && e > 0.0 {
+                    e * (e / o).ln()
+                } else {
+                    0.0
+                }
+            })
+            .sum::<f64>()
     } else {
         // General power divergence: 2/(λ(λ+1)) Σ o((o/e)^λ - 1)
         let factor = 2.0 / (lambda_ * (lambda_ + 1.0));
