@@ -192,19 +192,27 @@ pub fn hamming(a: &[f64], b: &[f64]) -> f64 {
 
 /// Jaccard dissimilarity.
 ///
-/// Matches `scipy.spatial.distance.jaccard(u, v)`. For real-valued inputs
-/// scipy counts positions where elements are unequal AND at least one is
-/// nonzero; the result is that count divided by the count of positions
-/// where at least one is nonzero. For binary inputs this reduces to
-/// (c_TF + c_FT) / (c_TT + c_TF + c_FT).
+/// Matches `scipy.spatial.distance.jaccard(u, v)` (scipy ≥1.15
+/// semantics: numeric input is converted to Boolean before
+/// computation). The result is (c_TF + c_FT) / (c_TT + c_TF + c_FT)
+/// where positions are classified by `(ai != 0.0, bi != 0.0)`.
+/// If all positions are (False, False), returns 0.
+///
+/// frankenscipy-z747j: prior to this revision the impl counted
+/// real-valued inequality between nonzero positions, which matched
+/// scipy ≤1.14 but diverged from scipy ≥1.15 (per scipy 1.15
+/// changelog: "Non-0/1 numeric input used to produce an ad hoc
+/// result. Since 1.15.0, numeric input is converted to Boolean
+/// before computation.")
 pub fn jaccard(a: &[f64], b: &[f64]) -> f64 {
     let mut nonzero = 0usize;
     let mut unequal_nonzero = 0usize;
     for (&ai, &bi) in a.iter().zip(b.iter()) {
-        let any_nz = ai != 0.0 || bi != 0.0;
-        if any_nz {
+        let a_b = ai != 0.0;
+        let b_b = bi != 0.0;
+        if a_b || b_b {
             nonzero += 1;
-            if ai != bi {
+            if a_b != b_b {
                 unequal_nonzero += 1;
             }
         }
@@ -4309,18 +4317,22 @@ mod tests {
     }
 
     #[test]
-    fn jaccard_real_valued_unequal_nonzero_matches_scipy() {
-        // [frankenscipy-ayl5s] Regression: scipy counts positions that are
-        // both nonzero but unequal as "differing" — fsci was treating them
-        // as agreement (TT in the binary sense).
-        // scipy.spatial.distance.jaccard([2.5], [3.7]) returns 1.0.
-        assert!((jaccard(&[2.5_f64], &[3.7]) - 1.0).abs() < 1e-12);
-        // Two unequal nonzero out of three nonzero positions → 2/3.
-        assert!(
-            (jaccard(&[1.0, 2.0, 3.0], &[1.0, 5.0, 7.0]) - 2.0 / 3.0).abs() < 1e-12
-        );
-        // Mixed case: index 0 both nonzero & equal (skip from numerator);
-        // indices 1, 2 are TF and FT (unequal nonzero) → 2/3.
+    fn jaccard_real_valued_matches_modern_scipy() {
+        // [frankenscipy-z747j] scipy 1.15 changelog:
+        // "Non-0/1 numeric input used to produce an ad hoc result.
+        // Since 1.15.0, numeric input is converted to Boolean
+        // before computation." This test pins the modern semantics.
+        // (Supersedes [frankenscipy-ayl5s], which encoded the older
+        // scipy ≤1.14 ad-hoc semantics.)
+        //
+        // jaccard([2.5], [3.7]) — both positions bool=True → c_TT=1,
+        // c_TF=c_FT=0 → 0/1 = 0.0.
+        assert!(jaccard(&[2.5_f64], &[3.7]).abs() < 1e-12);
+        // jaccard([1,2,3], [1,5,7]) — all positions bool=True → all
+        // c_TT, no TF/FT → 0.
+        assert!(jaccard(&[1.0, 2.0, 3.0], &[1.0, 5.0, 7.0]).abs() < 1e-12);
+        // jaccard([1,1,0], [1,0,1]) — pos0 TT, pos1 TF, pos2 FT
+        // → 2/3.
         assert!(
             (jaccard(&[1.0, 1.0, 0.0], &[1.0, 0.0, 1.0]) - 2.0 / 3.0).abs() < 1e-12
         );

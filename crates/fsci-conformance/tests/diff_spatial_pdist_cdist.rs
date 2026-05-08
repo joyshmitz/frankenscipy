@@ -120,13 +120,10 @@ fn metric_for(name: &str) -> Option<DistanceMetric> {
     }
 }
 
-// 9 of 10 DistanceMetric variants. `jaccard` is excluded
-// because scipy ≥1.15 coerces non-0/1 numeric input to Boolean
-// before computation while fsci treats real-valued inputs as
-// elementwise inequality. Filed as frankenscipy-z747j.
-// Boolean-input jaccard is covered cleanly in
-// diff_spatial_boolean_distances.
-const METRICS: [&str; 9] = [
+// All 10 DistanceMetric variants. (jaccard real-valued semantics
+// were aligned with scipy ≥1.15 in frankenscipy-z747j — input is
+// coerced to Boolean before computation.)
+const METRICS: [&str; 10] = [
     "euclidean",
     "sqeuclidean",
     "cityblock",
@@ -134,6 +131,7 @@ const METRICS: [&str; 9] = [
     "cosine",
     "correlation",
     "hamming",
+    "jaccard",
     "canberra",
     "braycurtis",
 ];
