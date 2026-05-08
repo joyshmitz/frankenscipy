@@ -20381,7 +20381,18 @@ pub fn brunnermunzel_alternative(x: &[f64], y: &[f64], alternative: &str) -> Tte
         };
         let pvalue = if df.is_finite() {
             let t_dist = StudentT::new(df);
-            student_t_alternative_pvalue(w, &t_dist, alternative)
+            // scipy's brunnermunzel uses inverted alternative semantics
+            // because W > 0 corresponds to mean_ry > mean_rx:
+            //   'less'    (H1: x < y) → sf(w)   (small for w > 0)
+            //   'greater' (H1: x > y) → cdf(w)  (large for w > 0)
+            // student_t_alternative_pvalue uses the standard t-test
+            // convention, so swap 'less' ↔ 'greater' at the call site.
+            let bm_alt = match alternative {
+                "less" => "greater",
+                "greater" => "less",
+                other => other,
+            };
+            student_t_alternative_pvalue(w, &t_dist, bm_alt)
         } else {
             f64::NAN
         };
@@ -36620,13 +36631,15 @@ mod tests {
         assert_close(two_sided.statistic, original.statistic, 1e-10, "stat match");
         assert_close(two_sided.pvalue, original.pvalue, 1e-10, "two-sided pvalue");
 
-        // w > 0 when y > x (rank_delta = mean_ry - mean_rx > 0)
-        // For positive w: "greater" gives sf(w) = small, "less" gives cdf(w) = large
+        // w > 0 when y > x (rank_delta = mean_ry - mean_rx > 0). scipy
+        // brunnermunzel inverts the standard t-test convention:
+        //   "less"    (H1: x < y) → sf(w)   = small
+        //   "greater" (H1: x > y) → cdf(w)  = large
         let less = brunnermunzel_alternative(&x, &y, "less");
         let greater = brunnermunzel_alternative(&x, &y, "greater");
         assert!(
-            greater.pvalue < two_sided.pvalue,
-            "greater p < two-sided p when w > 0"
+            less.pvalue < two_sided.pvalue,
+            "less p < two-sided p when w > 0 (y stochastically larger)"
         );
         assert_close(
             less.pvalue + greater.pvalue,
