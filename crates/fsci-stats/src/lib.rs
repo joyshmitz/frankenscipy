@@ -15060,9 +15060,10 @@ pub fn kurtosis(data: &[f64]) -> f64 {
 /// Compute the median absolute deviation (MAD).
 ///
 /// Matches `scipy.stats.median_abs_deviation(a, scale=1.0)`.
-/// Default scale is 1.0. For normal consistency, use 1.4826.
+/// scipy DIVIDES the raw MAD by `scale`, so pass scale=1.4826
+/// to get the normal-consistent std estimator.
 pub fn median_abs_deviation(data: &[f64], scale: f64) -> f64 {
-    if data.is_empty() {
+    if data.is_empty() || scale == 0.0 {
         return f64::NAN;
     }
     let mut sorted = data.to_vec();
@@ -15072,7 +15073,7 @@ pub fn median_abs_deviation(data: &[f64], scale: f64) -> f64 {
     let mut diffs: Vec<f64> = data.iter().map(|&x| (x - med).abs()).collect();
     diffs.sort_by(|a, b| a.total_cmp(b));
     let mad = quantile_sorted(&diffs, 0.5);
-    mad * scale
+    mad / scale
 }
 
 /// Compute the mode (most frequent value) of a data set.
@@ -22056,14 +22057,16 @@ impl ContinuousDistribution for FoldedNormal {
 
 /// Compute the median absolute deviation (MAD) with optional scaling.
 ///
-/// With scale=1.4826, gives a consistent estimator for the normal distribution std.
+/// Matches `scipy.stats.median_abs_deviation`, which DIVIDES the
+/// raw MAD by `scale`. With scale=1.4826, this yields the normal-
+/// consistent std estimator.
 pub fn mad(data: &[f64], scale: f64) -> f64 {
-    if data.is_empty() {
+    if data.is_empty() || scale == 0.0 {
         return f64::NAN;
     }
     let med = median(data);
     let abs_devs: Vec<f64> = data.iter().map(|&x| (x - med).abs()).collect();
-    scale * median(&abs_devs)
+    median(&abs_devs) / scale
 }
 
 /// Compute the coefficient of variation (CV = std/mean).
