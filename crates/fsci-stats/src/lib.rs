@@ -20827,9 +20827,19 @@ pub fn combine_pvalues(
                     1.0
                 }
             } else {
-                let c = (k * std::f64::consts::PI * std::f64::consts::PI / 3.0).sqrt();
-                let normalized = statistic / c;
-                Logistic::new(0.0, 1.0).sf(normalized).clamp(0.0, 1.0)
+                // scipy.stats.combine_pvalues mudholkar_george branch:
+                //   normalizing_factor = sqrt(3/n) / π
+                //   nu                 = 5·n + 4
+                //   approx_factor      = sqrt(nu / (nu − 2))
+                //   pvalue             = T(nu).sf(statistic · normalizing · approx)
+                // fsci previously used a Logistic-tail approximation,
+                // which drifts from scipy by up to 0.12 abs on mixed
+                // fixtures (frankenscipy-v51r8).
+                let normalizing = (3.0 / k).sqrt() / std::f64::consts::PI;
+                let nu = 5.0 * k + 4.0;
+                let approx_factor = (nu / (nu - 2.0)).sqrt();
+                let z = statistic * normalizing * approx_factor;
+                StudentT::new(nu).sf(z).clamp(0.0, 1.0)
             };
 
             GoodnessOfFitResult { statistic, pvalue }

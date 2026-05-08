@@ -9,12 +9,13 @@
 //!   • "tippett" — minimum p-value (powf-based pvalue)
 //!   • "stouffer" — weighted sum of normal-ppf z-scores
 //!
-//! `mudholkar_george` is intentionally omitted: the pvalue
-//! path drifts from scipy by up to 0.12 across mixed and
-//! all_large fixtures (statistic matches). Tracked as
-//! [frankenscipy-v51r8].
+//! `mudholkar_george` was previously omitted but the underlying
+//! pvalue defect [frankenscipy-v51r8] is now FIXED — fsci
+//! switched from a Logistic-tail approximation to scipy's
+//! Mudholkar-George Student-t form: T(5n+4).sf(stat ·
+//! sqrt(3/n)/π · sqrt(nu/(nu−2))).
 //!
-//! 3 (pvalue-vector) fixtures × 4 methods × 2 arms = 24 cases
+//! 3 (pvalue-vector) fixtures × 5 methods × 2 arms = 30 cases
 //! via subprocess. Tolerances:
 //!   - fisher / pearson / tippett: 1e-12 abs.
 //!   - stouffer:                   1e-7  abs (fsci's
@@ -112,8 +113,7 @@ fn generate_query() -> OracleQuery {
         // All large (non-significant)
         ("all_large", vec![0.30, 0.45, 0.60, 0.75, 0.85, 0.92]),
     ];
-    // mudholkar_george omitted — see frankenscipy-v51r8.
-    let methods = ["fisher", "pearson", "tippett", "stouffer"];
+    let methods = ["fisher", "pearson", "tippett", "stouffer", "mudholkar_george"];
 
     let mut points = Vec::new();
     for (name, pvals) in &fixtures {
