@@ -18150,8 +18150,26 @@ pub fn ks_2samp_alternative(
     let pvalue = if mode == "two-sided" {
         kolmogorov_pvalue(d_stat, en * en)
     } else {
-        // One-sided p-value approximation
-        (-2.0 * en * en * d_stat * d_stat).exp()
+        // One-sided asymptotic: Hodges' Eqn 5.3 correction (matches
+        // scipy.stats.ks_2samp asymp branch). scipy uses
+        //   z = sqrt(m*n/(m+n)) * d_stat
+        // where m = max(n1, n2), n = min(n1, n2). fsci's `en` above is
+        // ALREADY sqrt(n1*n2/(n1+n2)) (the inner ratio is already taken
+        // sqrt of), so z = en * d_stat directly — DON'T sqrt again.
+        //   expt = -2 z² - 2 z (m + 2n) / [3 sqrt(m n (m+n))]
+        // (See Hodges 1958, "The significance probability of the
+        // Smirnov two-sample test", Eqn 5.3.)
+        let z = en * d_stat;
+        let m = n1f.max(n2f);
+        let n_min = n1f.min(n2f);
+        let denom = (m * n_min * (m + n_min)).sqrt();
+        let correction = if denom > 0.0 {
+            2.0 * z * (m + 2.0 * n_min) / denom / 3.0
+        } else {
+            0.0
+        };
+        let expt = -2.0 * z * z - correction;
+        expt.exp()
     };
 
     GoodnessOfFitResult {
