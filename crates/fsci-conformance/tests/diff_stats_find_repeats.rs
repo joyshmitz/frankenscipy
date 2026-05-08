@@ -130,7 +130,7 @@ import json
 import math
 import sys
 import numpy as np
-from scipy import stats
+from scipy.stats import mstats
 
 q = json.load(sys.stdin)
 points = []
@@ -138,12 +138,14 @@ for case in q["points"]:
     cid = case["case_id"]
     data = np.array(case["data"], dtype=float)
     try:
-        res = stats.find_repeats(data)
-        # find_repeats returns RepeatedResults(values, counts) where the
-        # values array contains only repeated values (count > 1) sorted
-        # ascending and counts[i] is the occurrence count of values[i].
-        values = [float(v) for v in res.values]
-        counts = [int(c) for c in res.counts]
+        # scipy.stats.find_repeats was removed in modern scipy; use the
+        # mstats variant which still ships and returns the same
+        # (values_arr, counts_arr) tuple. (Earlier this called
+        # stats.find_repeats which silently raised AttributeError,
+        # dropping all cases — case_count was 0 for ages.)
+        values_arr, counts_arr = mstats.find_repeats(data)
+        values = [float(v) for v in values_arr]
+        counts = [int(c) for c in counts_arr]
         points.append({
             "case_id": cid,
             "values": values,
