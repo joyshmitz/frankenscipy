@@ -16406,18 +16406,34 @@ pub fn weightedtau(x: &[f64], y: &[f64]) -> f64 {
         return f64::NAN;
     }
 
-    // Get ranks for both arrays
-    let rank_x = rank_values(x);
+    // scipy.stats.weightedtau defaults to rank=True which averages two τ
+    // computations using the *decreasing* lexicographical rank by (x, y)
+    // and by (y, x). fsci's rank_values returns ascending ranks (lowest=0),
+    // so we flip to descending: highest value gets the most-important rank 0.
+    let n_minus_one = (n - 1) as f64;
+    let asc_x = rank_values(x);
+    let asc_y = rank_values(y);
+    let desc_x: Vec<f64> = asc_x.iter().map(|r| n_minus_one - r).collect();
+    let desc_y: Vec<f64> = asc_y.iter().map(|r| n_minus_one - r).collect();
 
-    // Compute weighted concordance/discordance
+    let tau_x = weightedtau_one_side(x, y, &desc_x);
+    let tau_y = weightedtau_one_side(x, y, &desc_y);
+    if !tau_x.is_finite() || !tau_y.is_finite() {
+        return f64::NAN;
+    }
+    (tau_x + tau_y) / 2.0
+}
+
+fn weightedtau_one_side(x: &[f64], y: &[f64], ranks: &[f64]) -> f64 {
+    let n = x.len();
     let mut weighted_concordant = 0.0;
     let mut weighted_discordant = 0.0;
     let mut total_weight = 0.0;
 
     for i in 0..n {
         for j in (i + 1)..n {
-            // Weight based on ranks in x (hyperbolic weigher)
-            let w = 1.0 / (rank_x[i] + 1.0) + 1.0 / (rank_x[j] + 1.0);
+            // Hyperbolic weigher applied to the chosen ranking.
+            let w = 1.0 / (ranks[i] + 1.0) + 1.0 / (ranks[j] + 1.0);
 
             let x_diff = x[i] - x[j];
             let y_diff = y[i] - y[j];

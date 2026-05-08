@@ -138,12 +138,6 @@ fn generate_query() -> OracleQuery {
     let mut points = Vec::new();
     for (name, x, y) in &fixtures {
         for func in ["linregress", "kendalltau", "spearmanr", "weightedtau"] {
-            // weightedtau is restricted to the three monotone fixtures —
-            // see [frankenscipy-7b8nw] for the non-monotone divergence
-            // (fsci uses x-only ranking; scipy symmetrises across x and y).
-            if func == "weightedtau" && *name == "uncorrelated" {
-                continue;
-            }
             points.push(PointCase {
                 case_id: format!("{name}_{func}"),
                 func: func.into(),
