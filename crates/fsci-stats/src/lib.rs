@@ -14016,7 +14016,31 @@ pub fn kruskal(groups: &[&[f64]]) -> TtestResult {
         offset += ni;
     }
 
-    let h = 12.0 / (nf * (nf + 1.0)) * h_sum - 3.0 * (nf + 1.0);
+    let h_uncorrected = 12.0 / (nf * (nf + 1.0)) * h_sum - 3.0 * (nf + 1.0);
+
+    // Tie correction. scipy divides H by C = 1 - Σ(t³-t)/(N³-N) where the
+    // sum is over each tie-group size t in the combined sorted observations.
+    let mut sorted_values = all_values.clone();
+    sorted_values.sort_by(|a, b| a.total_cmp(b));
+    let mut tie_sum = 0.0_f64;
+    let mut i = 0;
+    while i < sorted_values.len() {
+        let mut j = i + 1;
+        while j < sorted_values.len() && sorted_values[j] == sorted_values[i] {
+            j += 1;
+        }
+        let t = (j - i) as f64;
+        if t > 1.0 {
+            tie_sum += t * t * t - t;
+        }
+        i = j;
+    }
+    let c = 1.0 - tie_sum / (nf * nf * nf - nf);
+    let h = if c > 0.0 {
+        h_uncorrected / c
+    } else {
+        h_uncorrected
+    };
     let df = groups.len() as f64 - 1.0;
 
     // P-value from chi-squared distribution
