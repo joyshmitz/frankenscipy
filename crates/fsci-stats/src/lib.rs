@@ -14542,8 +14542,19 @@ pub fn pearsonr_alternative(x: &[f64], y: &[f64], alternative: &str) -> Correlat
             "greater" => tdist.sf(t),
             _ => 2.0 * tdist.sf(t.abs()),
         }
-    } else if r.abs() >= 1.0 {
-        0.0
+    } else if r >= 1.0 {
+        // Perfect positive correlation: t → +∞. "less" tail covers
+        // everything; "greater" tail covers nothing; two-sided is 0.
+        match alternative {
+            "less" => 1.0,
+            _ => 0.0,
+        }
+    } else if r <= -1.0 {
+        // Perfect negative correlation: t → −∞.
+        match alternative {
+            "greater" => 1.0,
+            _ => 0.0,
+        }
     } else {
         f64::NAN
     };
@@ -14619,8 +14630,19 @@ pub fn spearmanr_alternative(x: &[f64], y: &[f64], alternative: &str) -> Correla
             "greater" => tdist.sf(t),
             _ => 2.0 * tdist.sf(t.abs()),
         }
-    } else if r.abs() >= 1.0 {
-        0.0
+    } else if r >= 1.0 {
+        // Perfect positive correlation: t → +∞. "less" tail covers
+        // everything; "greater" tail covers nothing; two-sided is 0.
+        match alternative {
+            "less" => 1.0,
+            _ => 0.0,
+        }
+    } else if r <= -1.0 {
+        // Perfect negative correlation: t → −∞.
+        match alternative {
+            "greater" => 1.0,
+            _ => 0.0,
+        }
     } else {
         f64::NAN
     };
