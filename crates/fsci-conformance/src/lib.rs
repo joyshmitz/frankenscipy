@@ -10032,6 +10032,12 @@ fn compare_stats_case_against_oracle(
     observed: &StatsObserved,
 ) -> (bool, String, Option<f64>, Option<ToleranceUsed>) {
     if oracle_case.status != "ok" {
+        // br-7vhu: result_kind "skipped" means the oracle deliberately
+        // declined this case (e.g. bootstrap_mean PRNG mismatch). Fall
+        // through to the fixture-expected comparison instead of failing.
+        if oracle_case.result_kind == "skipped" {
+            return compare_stats_case_differential(case, observed);
+        }
         return match observed {
             StatsObserved::Error(actual) => (
                 false,

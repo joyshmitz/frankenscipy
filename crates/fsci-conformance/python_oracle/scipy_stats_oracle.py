@@ -183,6 +183,21 @@ def _run_case(case: dict[str, Any], stats: Any) -> dict[str, Any]:
                 "error": None,
             }
 
+        if function_name == "bootstrap_mean":
+            # br-7vhu: bootstrap_mean uses fsci's deterministic LCG;
+            # scipy.stats.bootstrap uses PCG64 → the two RNGs cannot
+            # agree at any seed. Return a sentinel "skipped" status
+            # that the test framework treats as not-a-failure (the
+            # fixture's expected.array_value still locks fsci's output
+            # as a regression guard via the non-oracle path).
+            return {
+                "case_id": case_id,
+                "status": "error",
+                "result_kind": "skipped",
+                "result": {},
+                "error": "bootstrap_mean: oracle skipped (PRNG mismatch with scipy PCG64)",
+            }
+
         # --- Distribution method dispatcher (per frankenscipy-ygq3) ---
         # Routes every distribution pdf/cdf/ppf/sf/isf/logpdf/logcdf/mean/
         # var/entropy/fit/rvs query through scipy.stats.<dist>(...)(*args).
