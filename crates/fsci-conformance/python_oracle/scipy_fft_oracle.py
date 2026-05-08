@@ -314,7 +314,12 @@ def _self_check_shape_and_complex_paths() -> List[str]:
         errors.append(f"split shape self-check failed: {shape_result}")
     else:
         observed_shape = _oracle_values_to_complex_array(shape_result["result"]["values"], np)
-        if observed_shape.shape != expected_shape.shape or not np.allclose(
+        # _oracle_values_to_complex_array always returns a 1-D vector
+        # (the oracle serialises any N-D output as a flat [[re, im], ...]
+        # list — see br-gr99). Compare against the ravelled expected
+        # rather than the un-ravelled (5, 5) shape, which can never match
+        # the 1-D vector and would always mark the self-check as failed.
+        if observed_shape.size != expected_shape.size or not np.allclose(
             observed_shape, expected_shape.ravel(), atol=1.0e-12, rtol=1.0e-12
         ):
             errors.append("split shape self-check mismatch")

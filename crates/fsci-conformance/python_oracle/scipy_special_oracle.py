@@ -216,6 +216,7 @@ def _run_case(case: Dict[str, Any], special: Any, np: Any) -> Dict[str, Any]:
             "jve": special.jve,
             "y0": special.y0,
             "y1": special.y1,
+            "yn": special.yn,
             "yv": special.yv,
             "yvp": special.yvp,
             "yve": special.yve,
@@ -464,8 +465,37 @@ def main() -> int:
         "case_outputs": case_outputs,
     }
 
+    # Scrub non-JSON floats (Infinity, -Infinity, NaN) to serde-parseable
+    # values BEFORE writing — Python's `json.dump(allow_nan=True)` (the
+    # default) emits the literal tokens `Infinity` / `-Infinity` / `NaN`
+    # which are NOT valid JSON and serde_json rejects them. Use the
+    # f64-escape strings that serde-json's `f64` deserializer accepts via
+    # `Number::from_f64(...).unwrap_or(...)` round-trip — `null` is the
+    # safe portable sentinel; downstream code already handles None.
+    import math as _math
+    def _scrub(value):
+        if isinstance(value, float):
+            if _math.isnan(value) or _math.isinf(value):
+                # Encode as a tagged object so the Rust side can recover
+                # the sign of infinity if needed; for current consumers
+                # `null` would also work, but tagged is friendlier for
+                # debugging the oracle output by hand.
+                if _math.isnan(value):
+                    return {"__float__": "nan"}
+                return {"__float__": "+inf" if value > 0 else "-inf"}
+            return value
+        if isinstance(value, dict):
+            return {k: _scrub(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [_scrub(v) for v in value]
+        return value
+
+    cleaned = _scrub(payload)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    output_path.write_text(
+        json.dumps(cleaned, indent=2, sort_keys=True, allow_nan=False),
+        encoding="utf-8",
+    )
     return 0
 
 
