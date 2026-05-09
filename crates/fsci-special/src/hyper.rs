@@ -683,6 +683,21 @@ fn select_hyp2f1_branch(
     }
 
     if problem.z_abs < 1.0 {
+        // For z < 0 inside the unit disk the Pfaff transform z' = z/(z-1)
+        // always lands inside (0, 1/2) for z ∈ (-1, 0), which converges
+        // strictly faster than the direct series (and avoids cancellation
+        // from alternating signs). The original dispatch only enabled
+        // Pfaff for |z| ≥ 1, so e.g. z = -0.99 hit the 500-term cap on
+        // the direct series and returned NaN — frankenscipy-3zzep.
+        if problem.z < 0.0 {
+            return Ok(hyper_casp_decision(
+                HypergeometricBranch::PfaffTransform,
+                problem,
+                500,
+                HYP2F1_PFAFF_CHAIN,
+                "negative real argument uses the Pfaff transform for fast convergence",
+            ));
+        }
         return Ok(hyper_casp_decision(
             HypergeometricBranch::DirectSeries,
             problem,
@@ -1258,8 +1273,15 @@ fn hyp2f1_scalar(a: f64, b: f64, c: f64, z: f64, mode: RuntimeMode) -> Result<f6
 }
 
 /// Direct series summation for 2F1.
+///
+/// `max_terms` is sized for |z| up to ~0.99: the term ratio approaches z
+/// for large n, so the convergence criterion needs roughly
+/// log(EPSILON)/log(|z|) ≈ 3.7 × 10³ iterations at z = 0.99. Smaller |z|
+/// reaches the early-out within tens of iterations. For |z| close to 1
+/// from above scipy uses the (1−z)-transform with gamma ratios, which
+/// is not implemented here — frankenscipy-3zzep.
 fn hyp2f1_series(a: f64, b: f64, c: f64, z: f64) -> Result<f64, SpecialError> {
-    let max_terms = 500;
+    let max_terms = 5000;
     let eps = f64::EPSILON;
 
     let mut sum = 1.0;
@@ -2009,6 +2031,73 @@ mod tests {
             "2F1(1,1;2;0.5) should be -ln(0.5)/0.5: got {} expected {expected}",
             get_scalar(&r).unwrap_or(f64::NAN)
         );
+    }
+
+    /// 2F1(1, 2; 3; z) anchor (frankenscipy-3zzep).
+    ///
+    /// Pre-fix the dispatch sent z = -0.99 to the direct series, which
+    /// caps at 500 terms; the term ratio approaches |z| = 0.99 so the
+    /// convergence criterion was not met and the series returned NaN.
+    /// The fix routes any z < 0 (inside the unit disk) through the
+    /// Pfaff transform (where the inner series sees |w| = |z|/(1+|z|)
+    /// ≤ 1/2 and converges in a few dozen iterations) and bumps the
+    /// direct-series cap to 5000 so |z| → 1 from above also converges.
+    ///
+    /// Anchored against scipy.special.hyp2f1 values directly. The
+    /// closed form -2(z + ln(1-z))/z² is mathematically correct but
+    /// suffers catastrophic cancellation for |z| ≪ 1 and so is not a
+    /// useful oracle near zero.
+    #[test]
+    fn hyp2f1_matches_scipy_across_unit_disk() {
+        // (z, scipy.special.hyp2f1(1, 2, 3, z))
+        let cases: [(f64, f64); 8] = [
+            (-0.99, 0.6159889016704397),
+            (-0.95, 0.6253088696384367),
+            (-0.9, 0.6373978119200126),
+            (-0.5, 0.7562791351346845),
+            (-0.1, 0.9379640391350281),
+            (-0.001, 0.9993338329336662),
+            (0.5, 1.5451774444795623),
+            (0.99, 7.3771455687952),
+        ];
+        for (z, expected) in cases {
+            let r = hyp2f1(
+                &scalar(1.0),
+                &scalar(2.0),
+                &scalar(3.0),
+                &scalar(z),
+                RuntimeMode::Strict,
+            );
+            let got = get_scalar(&r).unwrap_or(f64::NAN);
+            let scale = expected.abs().max(1.0);
+            let diff = (got - expected).abs();
+            assert!(
+                diff < 1e-12 * scale,
+                "2F1(1,2;3;{z}) = {got}, expected {expected}, diff = {diff}"
+            );
+        }
+    }
+
+    /// Regression: hyp2f1 must not return NaN for any z in (-1, 1)
+    /// when c-a-b ≥ 0 and the series is absolutely convergent.
+    /// frankenscipy-3zzep — pre-fix the 500-term cap on the direct
+    /// series produced NaN at z = ±0.99.
+    #[test]
+    fn hyp2f1_does_not_return_nan_inside_unit_disk() {
+        for &z in &[-0.99_f64, -0.95, -0.5, 0.5, 0.95, 0.99] {
+            let r = hyp2f1(
+                &scalar(1.0),
+                &scalar(2.0),
+                &scalar(3.0),
+                &scalar(z),
+                RuntimeMode::Strict,
+            );
+            let got = get_scalar(&r).unwrap_or(f64::NAN);
+            assert!(
+                got.is_finite(),
+                "2F1(1,2;3;{z}) returned non-finite {got}"
+            );
+        }
     }
 
     #[test]
