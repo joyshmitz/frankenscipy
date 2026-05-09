@@ -3223,20 +3223,21 @@ pub fn riccati_jn(n: u32, x: f64) -> (Vec<f64>, Vec<f64>) {
 /// `(C_k(x), C'_k(x))` for `k = 0..=n`.
 ///
 /// Matches `scipy.special.riccati_yn(n, x)`. Defined as
-///   C_k(x) = -x · y_k(x)
+///   C_k(x) = x · y_k(x)
 /// where y_k is the spherical Bessel function of the second kind.
-/// `C_0(x) = cos(x)` and `C'_0(x) = -sin(x)`; the higher orders use the
-/// upward recurrence on C and the derivative identity
-/// C'_k = -k C_k(x)/x + C_{k-1}(x).
+/// `C_0(x) = -cos(x)` and `C'_0(x) = sin(x)`; higher orders use the
+/// derivative identity C'_k = -k C_k(x)/x + C_{k-1}(x). Pre-fix the
+/// implementation seeded `C_0 = +cos(x)`, opposite of scipy and of
+/// the upstream Riccati-Bessel convention — frankenscipy-gt5x9.
 pub fn riccati_yn(n: u32, x: f64) -> (Vec<f64>, Vec<f64>) {
     let len = n as usize + 1;
     let mut c = Vec::with_capacity(len);
     let mut cp = Vec::with_capacity(len);
     for k in 0..=n {
         let yk = spherical_yn_nonneg(k, x);
-        c.push(-x * yk);
+        c.push(x * yk);
     }
-    cp.push(-x.sin());
+    cp.push(x.sin());
     for k in 1..=n as usize {
         let inv_x = if x.abs() < 1.0e-300 { 0.0 } else { 1.0 / x };
         let val = -((k as f64) * c[k] * inv_x) + c[k - 1];
@@ -4403,12 +4404,46 @@ mod tests {
     }
 
     #[test]
-    fn riccati_yn_zero_order_is_cos_minus_sin() {
-        // C_0(x) = cos(x), C'_0(x) = -sin(x).
+    fn riccati_yn_zero_order_matches_scipy_convention() {
+        // scipy uses C_n(x) = x · y_n(x), so C_0(x) = -cos(x) and
+        // C'_0(x) = sin(x). frankenscipy-gt5x9.
         for &x in &[0.5_f64, 1.0, 2.5, 5.0] {
             let (c, cp) = riccati_yn(0, x);
-            assert!((c[0] - x.cos()).abs() < 1e-12);
-            assert!((cp[0] - (-x.sin())).abs() < 1e-12);
+            assert!((c[0] - (-x.cos())).abs() < 1e-12);
+            assert!((cp[0] - x.sin()).abs() < 1e-12);
+        }
+    }
+
+    /// Anchor riccati_yn against scipy.special.riccati_yn for a grid of
+    /// (n, x) — frankenscipy-gt5x9.
+    #[test]
+    fn riccati_yn_matches_scipy() {
+        // (n, x, scipy C_n, scipy C'_n)
+        let cases: [(u32, f64, f64, f64); 8] = [
+            (0, 1.0, -0.5403023058681398, 0.8414709848078965),
+            (0, 2.0, 0.4161468365471424, 0.9092974268256817),
+            (1, 1.0, -1.3817732906760363, 0.8414709848078965),
+            (1, 2.0, -0.7012240086157488, 0.7667588408010407),
+            (1, 5.0, 0.9021918376441532, -0.46410055305030),
+            (2, 1.0, -3.6050175661733055, 5.828261841594828),
+            (2, 5.0, 0.8249772880, 0.5722009224),
+            (3, 5.0, -0.0772145496, 0.8713060177),
+        ];
+        for (n, x, exp_c, exp_cp) in cases {
+            let (c, cp) = riccati_yn(n, x);
+            let last = n as usize;
+            let scale_c = exp_c.abs().max(1.0);
+            let scale_cp = exp_cp.abs().max(1.0);
+            assert!(
+                (c[last] - exp_c).abs() < 1e-9 * scale_c,
+                "C_{n}({x}) = {}, expected {exp_c}",
+                c[last]
+            );
+            assert!(
+                (cp[last] - exp_cp).abs() < 1e-9 * scale_cp,
+                "C'_{n}({x}) = {}, expected {exp_cp}",
+                cp[last]
+            );
         }
     }
 
