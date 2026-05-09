@@ -968,26 +968,55 @@ fn jv_series(v: f64, z: f64) -> f64 {
 
     let half_z_abs = (z / 2.0).abs();
 
-    // First term: (|z|/2)^v / Γ(v+1), computed in log space
+    // J_v(z) = Σ_{k=0}^∞ (-1)^k (z/2)^{v+2k} / (k! Γ(v+k+1)).
+    // log|term_k| evolves via the recurrence
+    //   log|term_{k+1}| = log|term_k| + log(z²/4) - log(k+1) - log|v+k+1|.
+    // sign(term_k) = (-1)^k · sign(Γ(v+k+1)). Pre-fix the recurrence used
+    // log(v+k+1) which is NaN whenever v+k+1<0 — this killed yv at every
+    // non-integer v > 1 (frankenscipy-6avjb).
     let log_first = v * half_z_abs.ln() - lgamma(v + 1.0);
     let mut sum = 0.0;
     let mut log_term = log_first;
+    let mut gamma_sign = gamma_sign_fn(v + 1.0);
 
     for k in 0..200 {
         let term = log_term.exp();
-        let term_sign = if k % 2 == 0 { 1.0 } else { -1.0 };
-        sum += term_sign * term;
+        let alternating = if k % 2 == 0 { 1.0 } else { -1.0 };
+        sum += alternating * gamma_sign * term;
 
-        if term.abs() < 1e-16 * sum.abs().max(1e-300) && k > 5 {
+        if term < 1e-16 * sum.abs().max(1e-300) && k > 5 {
             break;
         }
 
-        // Recurrence: next log-magnitude adds log(z²/4) - log(k+1) - log(v+k+1)
         let kf = k as f64;
-        log_term += (z * z / 4.0).ln() - (kf + 1.0).ln() - (v + kf + 1.0).ln();
+        let v_k_1 = v + kf + 1.0;
+        log_term += (z * z / 4.0).ln() - (kf + 1.0).ln() - v_k_1.abs().ln();
+        // sign(Γ(v+k+2)) = sign(v+k+1) · sign(Γ(v+k+1)).
+        if v_k_1 < 0.0 {
+            gamma_sign = -gamma_sign;
+        }
     }
 
     sum
+}
+
+/// Sign of Γ(x) for non-integer x. Returns +1 at non-negative arguments
+/// (Γ(0) is taken as +∞ which the caller should guard) and 0 at negative
+/// integer poles. For negative non-integer x, uses the reflection
+/// identity sign(Γ(x)) = sign(sin(πx)).
+fn gamma_sign_fn(x: f64) -> f64 {
+    if x >= 0.0 {
+        return 1.0;
+    }
+    if x.fract() == 0.0 {
+        // Pole — caller is responsible for guarding before reaching here.
+        return 0.0;
+    }
+    if (PI * x).sin() >= 0.0 {
+        1.0
+    } else {
+        -1.0
+    }
 }
 
 /// Asymptotic expansion for J_v(z) for large |z|.

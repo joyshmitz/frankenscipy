@@ -2319,6 +2319,49 @@ mod tests {
         assert_real_scalar_nan(result);
     }
 
+    /// yv at non-integer orders v > 1 (frankenscipy-6avjb).
+    ///
+    /// Pre-fix the reflection formula Y_v = (J_v cos(vπ) − J_{−v}) / sin(vπ)
+    /// called jv_series(-v, z), and that series used log(v+k+1) in its
+    /// log-magnitude recurrence — NaN whenever v+k+1 < 0 — and ignored
+    /// the sign of Γ(v+k+1). The result was NaN for every non-integer
+    /// v > 1, even though Y_v is real and well-defined for z > 0.
+    #[test]
+    fn yv_finite_at_non_integer_orders_above_one() {
+        let mode = RuntimeMode::Strict;
+        // (v, z, scipy.special.yv(v, z))
+        let cases: [(f64, f64, f64); 9] = [
+            (1.5, 1.0, -1.1024955751601793),
+            (1.5, 5.0, 0.32192444296114020),
+            (2.5, 5.0, 0.29437237496179253),
+            (2.5, 10.0, -0.16417847961494103),
+            (1.3, 5.0, 0.26631384911040207),
+            (1.7, 5.0, 0.35626412768764792),
+            (2.3, 5.0, 0.33554008065355417),
+            (3.7, 5.0, -0.09577011740148628),
+            (5.5, 10.0, 0.23675446066584144),
+        ];
+        for (v, z, expected) in cases {
+            let result = yv(
+                &SpecialTensor::RealScalar(v),
+                &SpecialTensor::RealScalar(z),
+                mode,
+            )
+            .expect("yv strict");
+            let value = expect_real_scalar(result, "yv at non-integer order");
+            let diff = (value - expected).abs();
+            let scale = expected.abs().max(1.0);
+            assert!(
+                value.is_finite(),
+                "yv({v}, {z}) returned non-finite {value}"
+            );
+            assert!(
+                diff < 1e-10 * scale,
+                "yv({v}, {z}) = {value}, expected {expected}, diff = {diff}"
+            );
+        }
+    }
+
     #[test]
     fn iv_at_zero() {
         let mode = RuntimeMode::Strict;
