@@ -8681,7 +8681,11 @@ impl ContinuousDistribution for Bradford {
 
 /// Gilbrat distribution (log-normal with s=1).
 ///
-/// Matches `scipy.stats.gilbrat`.
+/// `scipy.stats.gilbrat` was removed in scipy 1.17 in favour of the
+/// canonical one-arg lognormal `scipy.stats.lognorm(s=1, scale=1)`.
+/// The struct is kept here for backwards compatibility; the conformance
+/// harness in `fsci-conformance/tests/diff_stats_gilbrat.rs` uses the
+/// lognorm replacement as its oracle (frankenscipy-t2qia).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Gilbrat;
 
