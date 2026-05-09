@@ -15533,11 +15533,11 @@ pub fn bayes_mvs(data: &[f64], alpha: f64) -> BayesMvsResult {
 
     let nf = n as f64;
     let xbar = data.iter().sum::<f64>() / nf;
-    let var_biased: f64 = data.iter().map(|&x| (x - xbar).powi(2)).sum::<f64>() / nf;
+    let ss: f64 = data.iter().map(|&x| (x - xbar).powi(2)).sum();
 
     // For mean: t-distribution with df = n-1
     let df = nf - 1.0;
-    let se = (var_biased / df).sqrt(); // sqrt(C / (n-1))
+    let se = (ss / df / nf).sqrt();
     let tdist = StudentT::new(df);
     let t_crit = tdist.ppf(1.0 - (1.0 - alpha) / 2.0);
 
@@ -15547,24 +15547,39 @@ pub fn bayes_mvs(data: &[f64], alpha: f64) -> BayesMvsResult {
         high: xbar + t_crit * se,
     };
 
-    // For variance: use chi-squared based interval
-    // Chi2(df) = Gamma(df/2, 2)
-    // (n-1)*s^2 / chi2(alpha/2, n-1) to (n-1)*s^2 / chi2(1-alpha/2, n-1)
-    let s2 = var_biased * nf / df; // unbiased variance
+    // For variance: Jeffreys-prior posterior is InverseGamma((n-1)/2, ss/2),
+    // so the posterior mean is ss / (n - 3) and the central credible
+    // interval uses the chi²(n-1) quantiles via σ² = ss / χ². The
+    // .statistic field previously used the unbiased variance ss/(n-1)
+    // (frankenscipy-u2y4u), which is the MLE / unbiased estimate, not
+    // the posterior mean.
     let chi2_dist = GammaDist::new(df / 2.0, 2.0);
     let chi2_low = chi2_dist.ppf((1.0 - alpha) / 2.0);
     let chi2_high = chi2_dist.ppf(1.0 - (1.0 - alpha) / 2.0);
 
+    let var_stat = if df > 2.0 { ss / (df - 2.0) } else { ss / df };
+
     let var_est = CredibleInterval {
-        statistic: s2,
-        low: df * s2 / chi2_high,
-        high: df * s2 / chi2_low,
+        statistic: var_stat,
+        low: ss / chi2_high,
+        high: ss / chi2_low,
+    };
+
+    // Posterior mean of σ under the Jeffreys prior:
+    //   E[σ | data] = sqrt(ss/2) · Γ((n-2)/2) / Γ((n-1)/2)
+    // (sqrt of var_stat differs by a Gamma ratio that approaches 1 for
+    // large n; for n=10 it's ~3.6% off scipy). Use the closed form.
+    let std_stat = if df > 1.0 {
+        let log_gamma_ratio = ln_gamma((df - 1.0) / 2.0) - ln_gamma(df / 2.0);
+        (ss / 2.0).sqrt() * log_gamma_ratio.exp()
+    } else {
+        var_stat.sqrt()
     };
 
     let std_est = CredibleInterval {
-        statistic: s2.sqrt(),
-        low: (df * s2 / chi2_high).sqrt(),
-        high: (df * s2 / chi2_low).sqrt(),
+        statistic: std_stat,
+        low: (ss / chi2_high).sqrt(),
+        high: (ss / chi2_low).sqrt(),
     };
 
     BayesMvsResult {
@@ -32826,6 +32841,30 @@ mod tests {
         // Invalid alpha
         assert!(bayes_mvs(&[1.0, 2.0], 0.0).mean.statistic.is_nan());
         assert!(bayes_mvs(&[1.0, 2.0], 1.0).mean.statistic.is_nan());
+    }
+
+    /// bayes_mvs .statistic fields match scipy.stats.bayes_mvs
+    /// (frankenscipy-u2y4u). Pre-fix the variance .statistic was the
+    /// unbiased estimate ss/(n-1) rather than the Jeffreys posterior
+    /// mean ss/(n-3); the std .statistic was sqrt of that, ignoring
+    /// the gamma-ratio correction in the Generalized-Gamma posterior.
+    #[test]
+    fn bayes_mvs_matches_scipy_jeffreys_posterior() {
+        let data: Vec<f64> = (1..=10).map(|i| i as f64).collect();
+        let r = bayes_mvs(&data, 0.95);
+        // From scipy.stats.bayes_mvs(data, alpha=0.95):
+        //   mean.statistic = 5.5
+        //   var.statistic  = 11.785714285714285
+        //   var.minmax     = (4.336908323398193, 30.55114826975889)
+        //   std.statistic  = 3.3129812201742395
+        //   std.minmax     = (2.0825245072743304, 5.527309315549374)
+        assert!((r.mean.statistic - 5.5).abs() < 1e-12);
+        assert!((r.variance.statistic - 11.785714285714285).abs() < 1e-12);
+        assert!((r.variance.low - 4.336908323398193).abs() < 1e-9);
+        assert!((r.variance.high - 30.55114826975889).abs() < 1e-9);
+        assert!((r.std.statistic - 3.3129812201742395).abs() < 1e-12);
+        assert!((r.std.low - 2.0825245072743304).abs() < 1e-9);
+        assert!((r.std.high - 5.527309315549374).abs() < 1e-9);
     }
 
     // ── kstat tests ──────────────────────────────────────────────────
