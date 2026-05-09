@@ -4322,6 +4322,18 @@ impl DiscreteDistribution for Hypergeometric {
     }
 
     fn kurtosis(&self) -> f64 {
+        // Excess kurtosis of the hypergeometric distribution. The
+        // closed form already returns excess (k4 − 3); pre-fix the
+        // c-coefficient was wrong (3 instead of 6, and M+6 instead
+        // of 5M-6) AND the result was further reduced by an
+        // unjustified `- 3.0`, which together landed ~3.57 abs off
+        // scipy at (M=50, n=20, N=10). frankenscipy-r863g.
+        //
+        // Wikipedia / Johnson-Kotz closed form for excess kurtosis:
+        //   num = (M-1)·M²·(M(M+1) − 6n(M-n) − 6N(M-N))
+        //       + 6·n·N·(M-n)·(M-N)·(5M-6)
+        //   den = n·N·(M-n)·(M-N)·(M-2)·(M-3)
+        //   excess = num / den.
         let m = self.big_m as f64;
         let n = self.n as f64;
         let big_n = self.big_n as f64;
@@ -4330,10 +4342,10 @@ impl DiscreteDistribution for Hypergeometric {
         }
         let a = (m - 1.0) * m * m;
         let b = m * (m + 1.0) - 6.0 * n * (m - n) - 6.0 * big_n * (m - big_n);
-        let c = 3.0 * n * big_n * (m - n) * (m - big_n) * (m + 6.0);
+        let c = 6.0 * n * big_n * (m - n) * (m - big_n) * (5.0 * m - 6.0);
         let num = a * b + c;
         let den = n * big_n * (m - n) * (m - big_n) * (m - 2.0) * (m - 3.0);
-        num / den - 3.0
+        num / den
     }
 
     fn mode(&self) -> f64 {
@@ -29487,6 +29499,32 @@ mod tests {
             h.mode() >= 0.0 && h.mode() <= 20.0,
             "Hypergeometric mode in valid range"
         );
+    }
+
+    /// Hypergeometric.kurtosis matches scipy.stats.hypergeom (frankenscipy-r863g).
+    ///
+    /// Pre-fix the formula carried two compounding bugs (a wrong
+    /// numerator coefficient and a stray `- 3.0` after the closed
+    /// form already returned excess kurtosis), giving ~3.57 abs off
+    /// scipy at (M=50, n=20, N=10).
+    #[test]
+    fn hypergeometric_kurtosis_matches_scipy() {
+        // (M, n, N, scipy.stats.hypergeom.stats(M, n, N, moments='k'))
+        let cases: [(u64, u64, u64, f64); 4] = [
+            (50, 20, 10, -0.1316212322695035),
+            (20, 7, 12, -0.1526610644257703),
+            (52, 4, 5, 0.8640564481111593),
+            (10, 3, 5, -0.3673469387755102),
+        ];
+        for (m, n, big_n, expected) in cases {
+            let h = Hypergeometric::new(m, n, big_n);
+            let got = h.kurtosis();
+            let scale = expected.abs().max(1.0);
+            assert!(
+                (got - expected).abs() < 1e-12 * scale,
+                "Hypergeometric({m}, {n}, {big_n}).kurtosis() = {got}, expected {expected}"
+            );
+        }
     }
 
     #[test]
