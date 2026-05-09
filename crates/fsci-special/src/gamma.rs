@@ -1920,26 +1920,14 @@ pub fn zeta(s: f64) -> f64 {
 }
 
 /// Zeta for s > 1 via Euler-Maclaurin summation.
+///
+/// Delegates to `hurwitz_zeta(s, 1.0)`. Both Hurwitz and Riemann
+/// share the same Euler-Maclaurin kernel, and routing the Riemann
+/// case through hurwitz_zeta gives the full j=4 Bernoulli correction
+/// (versus the previous in-place j=2 truncation that floored at
+/// ~5e-11 abs accuracy near s=1.1) — frankenscipy-3u8ze.
 fn zeta_positive(s: f64) -> f64 {
-    // Direct sum for first N terms + Euler-Maclaurin correction
-    // Use N=20 for better performance/accuracy balance
-    let n = 20;
-    let mut sum = 0.0_f64;
-    for k in 1..=n {
-        sum += (k as f64).powf(-s);
-    }
-
-    // Euler-Maclaurin remainder: integral from N to infinity of x^(-s) dx
-    let n_f = n as f64;
-    let s_m_1 = s - 1.0;
-    let integral = n_f.powf(-s_m_1) / s_m_1;
-    let half_last = 0.5 * n_f.powf(-s);
-
-    // Bernoulli correction terms: s/12 * n^(-s-1) - s(s+1)(s+2)/720 * n^(-s-3) + ...
-    let term1 = (s / 12.0) * n_f.powf(-s - 1.0);
-    let term2 = (s * (s + 1.0) * (s + 2.0) / 720.0) * n_f.powf(-s - 3.0);
-
-    sum + integral - half_last + term1 - term2
+    crate::convenience::hurwitz_zeta(s, 1.0)
 }
 
 /// Dirichlet eta function η(s) = sum_{n=1}^∞ (-1)^{n+1} / n^s.

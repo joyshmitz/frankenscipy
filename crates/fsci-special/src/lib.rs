@@ -2463,7 +2463,7 @@ mod tests {
         let riemann = zeta(2.0);
         let hurwitz = hurwitz_zeta(2.0, 1.0);
         assert!(
-            (hurwitz - riemann).abs() < 1e-4,
+            (hurwitz - riemann).abs() < 1e-12,
             "hurwitz(2,1) = {hurwitz}, riemann(2) = {riemann}"
         );
     }
@@ -2474,9 +2474,57 @@ mod tests {
         let result = hurwitz_zeta(2.0, 0.5);
         let expected = std::f64::consts::PI * std::f64::consts::PI / 2.0;
         assert!(
-            (result - expected).abs() < 0.01,
+            (result - expected).abs() < 1e-12,
             "ζ(2, 0.5) = {result}, expected {expected}"
         );
+    }
+
+    /// Anchor tests at small s near the pole (frankenscipy-3u8ze).
+    ///
+    /// Pre-fix the Euler-Maclaurin tail correction stopped at the integral
+    /// term, so a 10 000-term direct sum still floored at ~1e-5 abs at
+    /// s=1.1. The full Bernoulli expansion (j up to 4) brings precision
+    /// back to floating-point limit (~1e-15) for both Hurwitz and Riemann.
+    #[test]
+    fn hurwitz_zeta_matches_scipy_at_small_s() {
+        // (s, a, scipy.special.zeta(s, a))
+        let cases: [(f64, f64, f64); 7] = [
+            (1.1, 1.0, 10.584448464950802),
+            (1.1, 2.0, 9.584448464950798),
+            (1.1, 0.5, 12.103813495683745),
+            (1.5, 2.0, 1.6123753486854886),
+            (2.0, 0.5, 4.934802200544680),
+            (2.0, 3.0, 0.3949340668482265),
+            (3.0, 1.5, 0.4143983221171600),
+        ];
+        for (s, a, expected) in cases {
+            let got = hurwitz_zeta(s, a);
+            let diff = (got - expected).abs();
+            assert!(
+                diff < 1e-12,
+                "hurwitz_zeta({s}, {a}) = {got}, expected {expected}, diff = {diff}"
+            );
+        }
+    }
+
+    #[test]
+    fn riemann_zeta_matches_scipy_at_small_s() {
+        // scipy.special.zeta(s) for s slightly above the pole at s=1.
+        let cases: [(f64, f64); 5] = [
+            (1.05, 20.580844302036990),
+            (1.1, 10.584448464950802),
+            (1.2, 5.591582441177753),
+            (1.5, 2.6123753486854882),
+            (2.0, 1.6449340668482264),
+        ];
+        for (s, expected) in cases {
+            let got = zeta(s);
+            let diff = (got - expected).abs();
+            assert!(
+                diff < 1e-12,
+                "zeta({s}) = {got}, expected {expected}, diff = {diff}"
+            );
+        }
     }
 
     #[test]

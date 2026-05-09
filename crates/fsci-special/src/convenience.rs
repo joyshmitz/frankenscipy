@@ -1198,6 +1198,24 @@ pub fn euler(n: u32) -> f64 {
 /// Generalizes the Riemann zeta function: ζ(s) = ζ(s, 1).
 ///
 /// Matches `scipy.special.zeta(s, a)` (the two-argument form).
+///
+/// Uses Euler-Maclaurin summation:
+///
+/// ```text
+///   ζ(s, a) ≈ Σ_{n=0}^{N-1} (n+a)^{-s}
+///           + (N+a)^{1-s} / (s-1)               [integral tail]
+///           - (1/2) (N+a)^{-s}                  [half-term]
+///           + (s/12) (N+a)^{-s-1}               [B_2 correction]
+///           - s(s+1)(s+2)/720 · (N+a)^{-s-3}    [B_4 correction]
+///           + s..(s+4)/30240 · (N+a)^{-s-5}     [B_6 correction]
+///           - s..(s+6)/1209600 · (N+a)^{-s-7}   [B_8 correction]
+/// ```
+///
+/// Direct sum to N=20 with four Bernoulli terms gives ~1e-13 absolute
+/// accuracy down to s≈1.1 (the previous implementation, which used a
+/// 10 000-term direct sum and only the integral tail, missed the
+/// half-term and Bernoulli corrections and so floored at ~1e-5 abs at
+/// s=1.1) — frankenscipy-3u8ze.
 pub fn hurwitz_zeta(s: f64, a: f64) -> f64 {
     if s.is_nan() || a.is_nan() {
         return f64::NAN;
@@ -1209,21 +1227,40 @@ pub fn hurwitz_zeta(s: f64, a: f64) -> f64 {
         return f64::INFINITY; // Pole at s=1
     }
 
-    // Direct summation for small a or moderate s
+    let n_direct: usize = 20;
     let mut sum = 0.0;
-    let max_terms = 10000;
-    for n in 0..max_terms {
-        let term = 1.0 / (n as f64 + a).powf(s);
-        sum += term;
-        if term < 1e-16 * sum.abs() && n > 10 {
-            break;
-        }
+    for k in 0..n_direct {
+        sum += (k as f64 + a).powf(-s);
     }
 
-    // Euler-Maclaurin correction for the tail
-    let n = max_terms as f64;
-    let tail = (n + a).powf(1.0 - s) / (s - 1.0);
-    sum += tail;
+    let na = n_direct as f64 + a;
+    let na_inv_sq = 1.0 / (na * na);
+
+    // (N+a)^{-s} computed via powf for accuracy across the supported
+    // s range; subsequent factors are obtained by multiplying by 1/na².
+    let na_neg_s = na.powf(-s);
+
+    // Integral tail: (N+a)^{1-s} / (s-1) = (N+a) · (N+a)^{-s} / (s-1).
+    sum += na * na_neg_s / (s - 1.0);
+    // Half-term: +(1/2) · (N+a)^{-s}. Direct sum covers k = 0..N-1,
+    // the Euler-Maclaurin tail Σ_{k=N}^∞ f(k+a) starts at k = N,
+    // so the half-term sits on the included left boundary y = N+a.
+    sum += 0.5 * na_neg_s;
+
+    // Bernoulli corrections. `term` tracks (N+a)^{-s-(2j-1)} for j=1,2,…
+    // and `poch` tracks the Pochhammer symbol [s]_{2j-1}.
+    let mut term = na_neg_s / na;
+    let mut poch = s;
+    sum += (1.0 / 12.0) * poch * term; // j=1
+    term *= na_inv_sq;
+    poch *= (s + 1.0) * (s + 2.0);
+    sum -= (1.0 / 720.0) * poch * term; // j=2
+    term *= na_inv_sq;
+    poch *= (s + 3.0) * (s + 4.0);
+    sum += (1.0 / 30240.0) * poch * term; // j=3
+    term *= na_inv_sq;
+    poch *= (s + 5.0) * (s + 6.0);
+    sum -= (1.0 / 1209600.0) * poch * term; // j=4
 
     sum
 }

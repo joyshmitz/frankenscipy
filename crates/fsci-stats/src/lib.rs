@@ -7616,16 +7616,13 @@ impl Zipf {
 }
 
 /// Helper: Riemann zeta function for real s > 1.
+///
+/// Delegates to `fsci_special::zeta`, which uses Euler-Maclaurin
+/// summation. The previous local implementation truncated a direct
+/// series at k=10000; for s near 1 the integral tail dominates and
+/// truncation gave ~37% error at s=1.1 (frankenscipy-3u8ze).
 fn riemann_zeta(s: f64) -> f64 {
-    let mut sum = 0.0;
-    for k in 1..=10000 {
-        let term = (k as f64).powf(-s);
-        sum += term;
-        if term < 1e-15 * sum {
-            break;
-        }
-    }
-    sum
+    fsci_special::zeta(s)
 }
 
 /// Generic discrete distribution from custom PMF values.
