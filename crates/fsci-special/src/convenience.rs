@@ -3369,11 +3369,24 @@ pub fn kolmogi_scalar(p: f64) -> f64 {
 
 /// One-sided Kolmogorov-Smirnov distribution (Smirnov distribution).
 ///
-/// Computes P(D_n^+ > d) where D_n^+ is the one-sided KS statistic
+/// Computes P(D_n^+ ≥ d) where D_n^+ is the one-sided KS statistic
 /// for sample size n.
 ///
-/// Uses the asymptotic approximation: P(D_n^+ > d) ≈ exp(-2 * n * d^2)
-/// which is accurate for practical purposes.
+/// For n < 1000 uses the exact Birnbaum-Tingey series
+///
+/// ```text
+///   P(D_n^+ ≥ d) = d · Σ_{v=0}^{m} C(n, v) · (d + v/n)^{v−1} · (1 − d − v/n)^{n−v}
+/// ```
+///
+/// where m = ⌊n(1−d)⌋. The (v=0) term has the (d + 0)^{-1} = 1/d
+/// factor, so v=0 contributes (1−d)^n; subsequent terms are positive.
+/// For n ≥ 1000 the asymptotic exp(−2nd²) is used (relative error
+/// O(1/n) per Smirnov).
+///
+/// Pre-fix the small-n branch only carried the asymptotic with a
+/// hand-tuned correction and could be off by 0.3 absolute at n=1
+/// (e.g. smirnov(1, 0.5) gave ≈0.39 instead of the exact 0.5)
+/// — frankenscipy-5bura.
 ///
 /// Matches `scipy.special.smirnov(n, d)`.
 #[must_use]
@@ -3390,19 +3403,32 @@ pub fn smirnov(n: i32, d: f64) -> f64 {
 
     let nf = n as f64;
 
-    // Use asymptotic approximation: P(D_n^+ > d) ≈ exp(-2 * n * d^2)
-    // This is accurate for most practical purposes
-    let x = 2.0 * nf * d * d;
-
-    // Add correction terms for better accuracy at small n
-    if n < 20 {
-        // For small n, use Birnbaum-Tingey formula with first-order correction
-        // P(D_n^+ > d) ≈ exp(-2nd^2) * (1 + O(1/n))
-        let correction = 1.0 + (2.0 / 3.0 - d) * d.sqrt() / nf.sqrt();
-        return ((-x).exp() * correction).clamp(0.0, 1.0);
+    if n < 1000 {
+        // Exact Birnbaum-Tingey series. Compute terms in log-space to
+        // avoid overflow of C(n, v) for n up to ~1000.
+        let m = ((nf * (1.0 - d)).floor() as i64).max(0);
+        let lgam_np1 = crate::gammaln_scalar(nf + 1.0, RuntimeMode::Strict).unwrap_or(f64::NAN);
+        let mut sum = 0.0_f64;
+        for v in 0..=m {
+            let vf = v as f64;
+            let evn = d + vf / nf;
+            if evn >= 1.0 {
+                // (1 − d − v/n) ≤ 0; no real contribution.
+                continue;
+            }
+            let omevn = 1.0 - evn;
+            let log_binom = lgam_np1
+                - crate::gammaln_scalar(vf + 1.0, RuntimeMode::Strict).unwrap_or(f64::NAN)
+                - crate::gammaln_scalar(nf - vf + 1.0, RuntimeMode::Strict).unwrap_or(f64::NAN);
+            let log_term = log_binom + (vf - 1.0) * evn.ln() + (nf - vf) * omevn.ln();
+            sum += log_term.exp();
+        }
+        return (sum * d).clamp(0.0, 1.0);
     }
 
-    (-x).exp()
+    // Asymptotic for large n.
+    let x = 2.0 * nf * d * d;
+    (-x).exp().clamp(0.0, 1.0)
 }
 
 /// Inverse one-sided Kolmogorov-Smirnov distribution.
@@ -5402,6 +5428,43 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    /// Anchor smirnov against scipy.special.smirnov (frankenscipy-5bura).
+    ///
+    /// Pre-fix the asymptotic-with-correction was off by up to ~0.3 abs
+    /// at small n (e.g. smirnov(1, 0.5) returned ≈0.39 vs the exact 0.5).
+    /// The new Birnbaum-Tingey exact branch matches scipy to floating
+    /// point for n ≤ 100. The asymptotic kicks in for n ≥ 1000 and
+    /// stays within the well-known O(1/n) bound.
+    #[test]
+    fn smirnov_matches_scipy_at_small_n() {
+        // (n, d, scipy.special.smirnov(n, d))
+        let cases: [(i32, f64, f64); 14] = [
+            (1, 0.1, 0.9),
+            (1, 0.5, 0.5),
+            (1, 0.8, 0.2),
+            (2, 0.3, 0.61),
+            (2, 0.5, 0.25),
+            (5, 0.1, 0.85359),
+            (5, 0.3, 0.34282),
+            (5, 0.5, 0.056),
+            (10, 0.1, 0.7642052309),
+            (10, 0.3, 0.1354635556),
+            (10, 0.5, 0.003888705),
+            (50, 0.1, 0.34490701996888),
+            (100, 0.1, 0.12659065846),
+            (500, 0.1, 4.171146533e-5),
+        ];
+        for (n, d, expected) in cases {
+            let got = smirnov(n, d);
+            let scale = expected.abs().max(1e-12);
+            let rel = (got - expected).abs() / scale;
+            assert!(
+                rel < 1e-9,
+                "smirnov({n}, {d}) = {got}, expected {expected}, rel = {rel}"
+            );
         }
     }
 
