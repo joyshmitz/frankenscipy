@@ -1,6 +1,6 @@
 {
   "packet_id": "FSCI-P2C-007",
-  "generated_at": "unix:1776859860",
+  "generated_at": "unix:1778246193",
   "fixtures": [
     {
       "fixture_id": "diff_zeros_scalar_f64",
@@ -258,6 +258,51 @@
       "fixture_id": "adv_broadcast_incompatible",
       "operation": "broadcast_shapes",
       "category": "adversarial",
+      "shape": "[[2,3],[3,2]]",
+      "dtype": "n/a",
+      "expected_kind": "error_kind",
+      "contract_ref": null
+    },
+    {
+      "fixture_id": "hardened_arange_zero_step_i64",
+      "operation": "arange",
+      "category": "hardened",
+      "shape": "n/a",
+      "dtype": "float64",
+      "expected_kind": "error_kind",
+      "contract_ref": null
+    },
+    {
+      "fixture_id": "hardened_from_slice_len_mismatch",
+      "operation": "from_slice",
+      "category": "hardened",
+      "shape": "[2,2]",
+      "dtype": "float64",
+      "expected_kind": "error_kind",
+      "contract_ref": null
+    },
+    {
+      "fixture_id": "hardened_getitem_mode_mismatch",
+      "operation": "getitem",
+      "category": "hardened",
+      "shape": "[3]",
+      "dtype": "n/a",
+      "expected_kind": "error_kind",
+      "contract_ref": null
+    },
+    {
+      "fixture_id": "hardened_reshape_size_mismatch",
+      "operation": "reshape",
+      "category": "hardened",
+      "shape": "[4]",
+      "dtype": "n/a",
+      "expected_kind": "error_kind",
+      "contract_ref": null
+    },
+    {
+      "fixture_id": "hardened_broadcast_incompatible",
+      "operation": "broadcast_shapes",
+      "category": "hardened",
       "shape": "[[2,3],[3,2]]",
       "dtype": "n/a",
       "expected_kind": "error_kind",

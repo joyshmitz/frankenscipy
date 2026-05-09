@@ -3,22 +3,22 @@
   "operation_summaries": [
     {
       "group": "creation",
-      "total_fixtures": 12,
-      "passed": 12,
+      "total_fixtures": 14,
+      "passed": 14,
       "failed": 0,
       "max_abs_diff_across_all": 0.0
     },
     {
       "group": "indexing",
-      "total_fixtures": 9,
-      "passed": 9,
+      "total_fixtures": 11,
+      "passed": 11,
       "failed": 0,
       "max_abs_diff_across_all": 0.0
     },
     {
       "group": "broadcasting",
-      "total_fixtures": 4,
-      "passed": 4,
+      "total_fixtures": 5,
+      "passed": 5,
       "failed": 0,
       "max_abs_diff_across_all": 0.0
     },

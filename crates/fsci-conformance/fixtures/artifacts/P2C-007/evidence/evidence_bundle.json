@@ -1,9 +1,9 @@
 {
   "packet_id": "FSCI-P2C-007",
-  "generated_at": "unix:1776859860",
+  "generated_at": "unix:1778246193",
   "fixture_manifest": {
     "packet_id": "FSCI-P2C-007",
-    "generated_at": "unix:1776859860",
+    "generated_at": "unix:1778246193",
     "fixtures": [
       {
         "fixture_id": "diff_zeros_scalar_f64",
@@ -265,6 +265,51 @@
         "dtype": "n/a",
         "expected_kind": "error_kind",
         "contract_ref": null
+      },
+      {
+        "fixture_id": "hardened_arange_zero_step_i64",
+        "operation": "arange",
+        "category": "hardened",
+        "shape": "n/a",
+        "dtype": "float64",
+        "expected_kind": "error_kind",
+        "contract_ref": null
+      },
+      {
+        "fixture_id": "hardened_from_slice_len_mismatch",
+        "operation": "from_slice",
+        "category": "hardened",
+        "shape": "[2,2]",
+        "dtype": "float64",
+        "expected_kind": "error_kind",
+        "contract_ref": null
+      },
+      {
+        "fixture_id": "hardened_getitem_mode_mismatch",
+        "operation": "getitem",
+        "category": "hardened",
+        "shape": "[3]",
+        "dtype": "n/a",
+        "expected_kind": "error_kind",
+        "contract_ref": null
+      },
+      {
+        "fixture_id": "hardened_reshape_size_mismatch",
+        "operation": "reshape",
+        "category": "hardened",
+        "shape": "[4]",
+        "dtype": "n/a",
+        "expected_kind": "error_kind",
+        "contract_ref": null
+      },
+      {
+        "fixture_id": "hardened_broadcast_incompatible",
+        "operation": "broadcast_shapes",
+        "category": "hardened",
+        "shape": "[[2,3],[3,2]]",
+        "dtype": "n/a",
+        "expected_kind": "error_kind",
+        "contract_ref": null
       }
     ]
   },
@@ -332,8 +377,8 @@
         "shape": "[5]",
         "dtype": "float64",
         "max_abs_diff": 0.0,
-        "tolerance_atol": 0.0,
-        "tolerance_rtol": 0.0,
+        "tolerance_atol": 1e-12,
+        "tolerance_rtol": 1e-12,
         "oracle_status": "available",
         "message": "array matched shape=[5] dtype=Float64 (max_diff=0.00e0)"
       },
@@ -345,8 +390,8 @@
         "shape": "[3]",
         "dtype": "float64",
         "max_abs_diff": 0.0,
-        "tolerance_atol": 0.0,
-        "tolerance_rtol": 0.0,
+        "tolerance_atol": 1e-12,
+        "tolerance_rtol": 1e-12,
         "oracle_status": "available",
         "message": "array matched shape=[3] dtype=Float64 (max_diff=0.00e0)"
       },
@@ -358,8 +403,8 @@
         "shape": "[5]",
         "dtype": "float64",
         "max_abs_diff": 0.0,
-        "tolerance_atol": 0.0,
-        "tolerance_rtol": 0.0,
+        "tolerance_atol": 1e-12,
+        "tolerance_rtol": 1e-12,
         "oracle_status": "available",
         "message": "array matched shape=[5] dtype=Float64 (max_diff=0.00e0)"
       },
@@ -371,8 +416,8 @@
         "shape": "[4]",
         "dtype": "float64",
         "max_abs_diff": 0.0,
-        "tolerance_atol": 0.0,
-        "tolerance_rtol": 0.0,
+        "tolerance_atol": 1e-12,
+        "tolerance_rtol": 1e-12,
         "oracle_status": "available",
         "message": "array matched shape=[4] dtype=Float64 (max_diff=0.00e0)"
       },
@@ -648,6 +693,71 @@
         "tolerance_rtol": null,
         "oracle_status": "available",
         "message": "error kind matched (BroadcastIncompatible)"
+      },
+      {
+        "fixture_id": "hardened_arange_zero_step_i64",
+        "operation": "arange",
+        "group": "creation",
+        "pass_fail": true,
+        "shape": "n/a",
+        "dtype": "float64",
+        "max_abs_diff": 0.0,
+        "tolerance_atol": null,
+        "tolerance_rtol": null,
+        "oracle_status": "available",
+        "message": "error kind matched (InvalidStep)"
+      },
+      {
+        "fixture_id": "hardened_from_slice_len_mismatch",
+        "operation": "from_slice",
+        "group": "creation",
+        "pass_fail": true,
+        "shape": "[2,2]",
+        "dtype": "float64",
+        "max_abs_diff": 0.0,
+        "tolerance_atol": null,
+        "tolerance_rtol": null,
+        "oracle_status": "available",
+        "message": "error kind matched (InvalidShape)"
+      },
+      {
+        "fixture_id": "hardened_getitem_mode_mismatch",
+        "operation": "getitem",
+        "group": "indexing",
+        "pass_fail": true,
+        "shape": "[3]",
+        "dtype": "n/a",
+        "max_abs_diff": 0.0,
+        "tolerance_atol": null,
+        "tolerance_rtol": null,
+        "oracle_status": "available",
+        "message": "error kind matched (InvalidIndex)"
+      },
+      {
+        "fixture_id": "hardened_reshape_size_mismatch",
+        "operation": "reshape",
+        "group": "indexing",
+        "pass_fail": true,
+        "shape": "[4]",
+        "dtype": "n/a",
+        "max_abs_diff": 0.0,
+        "tolerance_atol": null,
+        "tolerance_rtol": null,
+        "oracle_status": "available",
+        "message": "error kind matched (InvalidShape)"
+      },
+      {
+        "fixture_id": "hardened_broadcast_incompatible",
+        "operation": "broadcast_shapes",
+        "group": "broadcasting",
+        "pass_fail": true,
+        "shape": "[[2,3],[3,2]]",
+        "dtype": "n/a",
+        "max_abs_diff": 0.0,
+        "tolerance_atol": null,
+        "tolerance_rtol": null,
+        "oracle_status": "available",
+        "message": "error kind matched (BroadcastIncompatible)"
       }
     ]
   },
@@ -656,22 +766,22 @@
     "operation_summaries": [
       {
         "group": "creation",
-        "total_fixtures": 12,
-        "passed": 12,
+        "total_fixtures": 14,
+        "passed": 14,
         "failed": 0,
         "max_abs_diff_across_all": 0.0
       },
       {
         "group": "indexing",
-        "total_fixtures": 9,
-        "passed": 9,
+        "total_fixtures": 11,
+        "passed": 11,
         "failed": 0,
         "max_abs_diff_across_all": 0.0
       },
       {
         "group": "broadcasting",
-        "total_fixtures": 4,
-        "passed": 4,
+        "total_fixtures": 5,
+        "passed": 5,
         "failed": 0,
         "max_abs_diff_across_all": 0.0
       },
