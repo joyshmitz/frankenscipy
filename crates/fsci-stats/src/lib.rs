@@ -947,44 +947,119 @@ impl NoncentralT {
         Self { df, nc }
     }
 
-    /// CDF via numerical integration.
+    /// Upper integration limit S_max for the chi-scaled variable
+    /// S = sqrt(W/ν) so that P(S > S_max) is below ~1e-19 for the
+    /// supported range of ν. Uses the Cornish-Fisher tail expansion
+    /// for χ²(ν) at z = 10 standard deviations beyond the mean.
+    fn cdf_pdf_s_max(nu: f64) -> f64 {
+        let z_max: f64 = 10.0;
+        let w_max = nu + z_max * (2.0 * nu).sqrt() + (z_max * z_max - 1.0) * (2.0 / 3.0);
+        (w_max / nu).sqrt()
+    }
+
+    /// log of the density of S = sqrt(W/ν) for W ~ χ²(ν).
+    fn log_pdf_s(nu: f64, s: f64) -> f64 {
+        // pdf_S(s) = ν^(ν/2) · s^(ν-1) · exp(-ν s² / 2) / (2^(ν/2 - 1) · Γ(ν/2))
+        let log_norm = (nu / 2.0) * nu.ln() - (nu / 2.0 - 1.0) * 2.0_f64.ln() - ln_gamma(nu / 2.0);
+        log_norm + (nu - 1.0) * s.ln() - 0.5 * nu * s * s
+    }
+
+    /// CDF via numerical integration over the chi-scaled distribution.
+    ///
+    /// F_nct(t; ν, μ) = E_W[Φ(t·sqrt(W/ν) - μ)] for W ~ χ²(ν), which after
+    /// substituting S = sqrt(W/ν) becomes
+    ///   F_nct(t; ν, μ) = ∫_0^∞ Φ(t·s - μ) · pdf_S(s) ds.
+    /// Computed via composite Simpson's rule on [0, s_max] where the
+    /// chi-scaled tail is below ~1e-19.
     fn nct_cdf_integrate(&self, t: f64) -> f64 {
+        if t.is_nan() || self.nc.is_nan() || self.df.is_nan() {
+            return f64::NAN;
+        }
         if t.is_infinite() {
             return if t > 0.0 { 1.0 } else { 0.0 };
         }
-
         if self.nc.abs() < 1e-10 {
             return StudentT::new(self.df).cdf(t);
         }
 
-        let lower = t - 50.0 * (1.0 + self.df.sqrt());
-        let steps = 2000usize;
-        let h = (t - lower) / steps as f64;
-
-        let central_t = StudentT::new(self.df);
+        let nu = self.df;
+        let mu = self.nc;
         let norm = Normal::new(0.0, 1.0);
 
-        let integrand = |x: f64| {
-            let pdf_t = central_t.pdf(x);
-            let arg = x * (self.df / (self.df + x * x)).sqrt() - self.nc;
-            pdf_t * norm.cdf(arg)
+        let s_max = Self::cdf_pdf_s_max(nu);
+        let steps = 2000usize; // even number of panels for Simpson's rule
+        let h = s_max / steps as f64;
+
+        let integrand = |s: f64| -> f64 {
+            if s <= 0.0 {
+                return 0.0;
+            }
+            let log_d = Self::log_pdf_s(nu, s);
+            if log_d < -700.0 {
+                return 0.0;
+            }
+            log_d.exp() * norm.cdf(t * s - mu)
         };
 
-        let mut sum = 0.5 * (integrand(lower) + integrand(t));
+        let mut sum = integrand(0.0) + integrand(s_max);
         for i in 1..steps {
-            sum += integrand(lower + i as f64 * h);
+            let s = i as f64 * h;
+            let coef = if i % 2 == 0 { 2.0 } else { 4.0 };
+            sum += coef * integrand(s);
+        }
+        (sum * h / 3.0).clamp(0.0, 1.0)
+    }
+
+    /// PDF via the same chi-scaled quadrature.
+    ///
+    /// pdf_T_nc(x; ν, μ) = ∂/∂x F_nct(x; ν, μ)
+    ///                   = ∫_0^∞ s · φ(x·s - μ) · pdf_S(s) ds
+    /// where φ is the standard normal pdf.
+    fn nct_pdf_integrate(&self, x: f64) -> f64 {
+        if x.is_nan() || self.nc.is_nan() || self.df.is_nan() {
+            return f64::NAN;
+        }
+        if !x.is_finite() {
+            return 0.0;
+        }
+        if self.nc.abs() < 1e-10 {
+            return StudentT::new(self.df).pdf(x);
         }
 
-        (sum * h).clamp(0.0, 1.0)
+        let nu = self.df;
+        let mu = self.nc;
+
+        let s_max = Self::cdf_pdf_s_max(nu);
+        let steps = 2000usize;
+        let h = s_max / steps as f64;
+
+        let log_phi_const = -0.5 * (2.0 * PI).ln();
+
+        let integrand = |s: f64| -> f64 {
+            if s <= 0.0 {
+                return 0.0;
+            }
+            let arg = x * s - mu;
+            let log_total = Self::log_pdf_s(nu, s) + log_phi_const - 0.5 * arg * arg + s.ln();
+            if log_total < -700.0 {
+                return 0.0;
+            }
+            log_total.exp()
+        };
+
+        let mut sum = integrand(0.0) + integrand(s_max);
+        for i in 1..steps {
+            let s = i as f64 * h;
+            let coef = if i % 2 == 0 { 2.0 } else { 4.0 };
+            sum += coef * integrand(s);
+        }
+        (sum * h / 3.0).max(0.0)
     }
 }
 
 impl ContinuousDistribution for NoncentralT {
     fn pdf(&self, x: f64) -> f64 {
-        let h = 1e-6;
-        let cdf_plus = self.cdf(x + h);
-        let cdf_minus = self.cdf(x - h);
-        ((cdf_plus - cdf_minus) / (2.0 * h)).max(0.0)
+        self.nct_pdf_integrate(x)
     }
 
     fn cdf(&self, x: f64) -> f64 {
@@ -992,7 +1067,7 @@ impl ContinuousDistribution for NoncentralT {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        if !(0.0..=1.0).contains(&q) {
+        if q.is_nan() || !(0.0..=1.0).contains(&q) {
             return f64::NAN;
         }
         if q == 0.0 {
@@ -1001,14 +1076,51 @@ impl ContinuousDistribution for NoncentralT {
         if q == 1.0 {
             return f64::INFINITY;
         }
+        if self.nc.abs() < 1e-10 {
+            return StudentT::new(self.df).ppf(q);
+        }
 
-        let mut lo = self.nc - 10.0 * (1.0 + self.df).sqrt();
-        let mut hi = self.nc + 10.0 * (1.0 + self.df).sqrt();
+        let nu = self.df;
+        let mu = self.nc;
 
-        for _ in 0..100 {
-            let mid = (lo + hi) / 2.0;
+        // Initial bracket centred on (central StudentT.ppf shifted by the
+        // approximate location of nct), with width ≈ 6 · approximate std.
+        let central_ppf = StudentT::new(nu).ppf(q);
+        let approx_loc = if nu > 1.0 {
+            mu * (nu / 2.0).sqrt() * (ln_gamma((nu - 1.0) / 2.0) - ln_gamma(nu / 2.0)).exp()
+        } else {
+            mu
+        };
+        let approx_var = if nu > 2.0 {
+            nu * (1.0 + mu * mu) / (nu - 2.0) - approx_loc * approx_loc
+        } else {
+            nu + mu * mu + 1.0
+        };
+        let scale = approx_var.abs().sqrt().max(1.0);
+
+        let mut lo = central_ppf + approx_loc - 6.0 * scale;
+        let mut hi = central_ppf + approx_loc + 6.0 * scale;
+
+        // Expand bracket until cdf(lo) ≤ q ≤ cdf(hi).
+        for _ in 0..40 {
+            let cdf_lo = self.cdf(lo);
+            let cdf_hi = self.cdf(hi);
+            if cdf_lo <= q && cdf_hi >= q {
+                break;
+            }
+            if cdf_lo > q {
+                lo -= 4.0 * scale;
+            }
+            if cdf_hi < q {
+                hi += 4.0 * scale;
+            }
+        }
+
+        // Bisection.
+        for _ in 0..120 {
+            let mid = 0.5 * (lo + hi);
             let cdf_mid = self.cdf(mid);
-            if (cdf_mid - q).abs() < 1e-12 {
+            if (cdf_mid - q).abs() < 1e-10 || (hi - lo).abs() < 1e-12 {
                 return mid;
             }
             if cdf_mid < q {
@@ -1017,7 +1129,7 @@ impl ContinuousDistribution for NoncentralT {
                 hi = mid;
             }
         }
-        (lo + hi) / 2.0
+        0.5 * (lo + hi)
     }
 
     fn mean(&self) -> f64 {
@@ -4859,7 +4971,8 @@ impl ContinuousDistribution for Cauchy {
         let fitted = Self::fit(data);
         if !fitted.loc.is_finite() || !fitted.scale.is_finite() || fitted.scale <= 0.0 {
             return Err(FitError::NonConvergent(
-                "Cauchy fit produced non-finite or non-positive parameters (degenerate quantiles)".into(),
+                "Cauchy fit produced non-finite or non-positive parameters (degenerate quantiles)"
+                    .into(),
             ));
         }
         Ok(fitted)
@@ -10001,8 +10114,7 @@ impl ContinuousDistribution for RecipInvGauss {
             return 0.0;
         }
         let mu = self.mu;
-        let log_pdf = -((1.0 - mu * x).powi(2)) / (2.0 * x * mu * mu)
-            - 0.5 * (2.0 * PI * x).ln();
+        let log_pdf = -((1.0 - mu * x).powi(2)) / (2.0 * x * mu * mu) - 0.5 * (2.0 * PI * x).ln();
         log_pdf.exp()
     }
 
@@ -10019,8 +10131,7 @@ impl ContinuousDistribution for RecipInvGauss {
         // RecipInvGauss(50).cdf(40.4) raw ≈ 1.00000000004).
         // Same defect class as SkewNorm.cdf (cc83022). Resolves
         // [frankenscipy-n82pr].
-        (standard_normal_cdf(-isqx * trm1)
-            - (2.0 / mu).exp() * standard_normal_cdf(-isqx * trm2))
+        (standard_normal_cdf(-isqx * trm1) - (2.0 / mu).exp() * standard_normal_cdf(-isqx * trm2))
             .clamp(0.0, 1.0)
     }
 
@@ -10032,8 +10143,7 @@ impl ContinuousDistribution for RecipInvGauss {
         let trm1 = 1.0 / mu - x;
         let trm2 = 1.0 / mu + x;
         let isqx = 1.0 / x.sqrt();
-        (standard_normal_cdf(isqx * trm1)
-            + (2.0 / mu).exp() * standard_normal_cdf(-isqx * trm2))
+        (standard_normal_cdf(isqx * trm1) + (2.0 / mu).exp() * standard_normal_cdf(-isqx * trm2))
             .clamp(0.0, 1.0)
     }
 
@@ -23880,7 +23990,7 @@ mod tests {
         let nct = NoncentralT::new(10.0, 0.0);
         let t = StudentT::new(10.0);
         assert!(
-            (nct.cdf(1.5) - t.cdf(1.5)).abs() < 0.01,
+            (nct.cdf(1.5) - t.cdf(1.5)).abs() < 1e-12,
             "nc=0 should match central t"
         );
     }
@@ -23904,6 +24014,70 @@ mod tests {
     fn noncentralt_mean_positive_nc() {
         let nct = NoncentralT::new(10.0, 2.0);
         assert!(nct.mean() > 0.0, "mean should be positive for positive nc");
+    }
+
+    /// Anchor values from scipy.stats.nct (frankenscipy-evcuc).
+    ///
+    /// Pre-fix the cdf was off by up to 0.78 for moderate |nc|, with the
+    /// noisy cdf making ppf walk to the bracket edge (returning ~30-50
+    /// when scipy reports values near 1-2). The chi-scaled Simpson
+    /// quadrature now matches scipy to better than 1e-10 absolute.
+    #[test]
+    fn noncentralt_matches_scipy_anchor_values() {
+        // (df, nc, x, expected_cdf, expected_pdf) from scipy.stats.nct.
+        let cases = [
+            (5.0, 0.5, 0.5, 0.49036270180675584, 0.37504023489231403),
+            (5.0, 0.5, 1.5, 0.7997685641492409, 0.21549131606796273),
+            (10.0, 1.0, 1.0257209228280022, 0.5, 0.3790279287538437),
+            (15.0, -2.5, 1.5, 0.9999395205428545, 0.00019519322914816),
+            (15.0, -2.5, 3.0, 0.9999994362738605, 1.6570469892035188e-06),
+            (20.0, 2.0, 2.025952753998231, 0.5, 0.37501048228416767),
+        ];
+        for (df, nc, x, e_cdf, e_pdf) in cases {
+            let dist = NoncentralT::new(df, nc);
+            let cdf = dist.cdf(x);
+            let pdf = dist.pdf(x);
+            assert!(
+                (cdf - e_cdf).abs() < 1e-9,
+                "nct({df}, {nc}).cdf({x}) = {cdf}, expected {e_cdf}, diff = {}",
+                (cdf - e_cdf).abs()
+            );
+            assert!(
+                (pdf - e_pdf).abs() < 1e-9,
+                "nct({df}, {nc}).pdf({x}) = {pdf}, expected {e_pdf}, diff = {}",
+                (pdf - e_pdf).abs()
+            );
+        }
+    }
+
+    #[test]
+    fn noncentralt_ppf_matches_scipy_anchor_values() {
+        // ppf bisection over the new accurate cdf must converge to the
+        // scipy quantile with ~1e-9 relative precision (frankenscipy-evcuc).
+        let cases: [(f64, f64, f64, f64); 4] = [
+            (10.0, 1.0, 0.5, 1.0257209228280022),
+            (20.0, 2.0, 0.5, 2.025952753998231),
+            (5.0, 0.5, 0.25, -0.18452418567692463),
+            (5.0, 0.5, 0.75, 1.2898472692139387),
+        ];
+        for (df, nc, q, expected) in cases {
+            let dist = NoncentralT::new(df, nc);
+            let got = dist.ppf(q);
+            let scale = expected.abs().max(1.0);
+            assert!(
+                (got - expected).abs() < 1e-7 * scale,
+                "nct({df}, {nc}).ppf({q}) = {got}, expected {expected}, diff = {}",
+                (got - expected).abs()
+            );
+        }
+    }
+
+    #[test]
+    fn noncentralt_cdf_at_zero_equals_phi_minus_nc() {
+        // F_nct(0; ν, μ) = Φ(-μ).
+        let nct = NoncentralT::new(7.0, 1.5);
+        let phi = Normal::standard().cdf(-1.5);
+        assert!((nct.cdf(0.0) - phi).abs() < 1e-12);
     }
 
     // ── Exponential distribution ────────────────────────────────────
@@ -25004,7 +25178,10 @@ mod tests {
         let hc = HalfCauchy;
         let actual = hc.sf(1.0e15);
         let expected = 2.0 * (1.0e-15_f64).atan() / PI;
-        assert!(actual > 0.0, "HalfCauchy.sf(1e15) must be > 0, got {actual}");
+        assert!(
+            actual > 0.0,
+            "HalfCauchy.sf(1e15) must be > 0, got {actual}"
+        );
         let rel = (actual - expected).abs() / expected.abs();
         assert!(
             rel < 1e-12,
@@ -25576,15 +25753,51 @@ mod tests {
         // Symmetric for x=1 in b. Pin all six branch cases plus
         // x slightly inside the open interval to confirm continuity.
         // x = 0
-        assert_close(BetaDist::new(2.0, 3.0).pdf(0.0), 0.0, 1e-12, "Beta(2,3).pdf(0) = 0 (a>1)");
-        assert_close(BetaDist::new(1.0, 1.0).pdf(0.0), 1.0, 1e-12, "Beta(1,1).pdf(0) = 1/B(1,1) = 1");
-        assert_close(BetaDist::new(1.0, 2.0).pdf(0.0), 2.0, 1e-12, "Beta(1,2).pdf(0) = 1/B(1,2) = 2");
-        assert!(BetaDist::new(0.5, 0.5).pdf(0.0).is_infinite(), "Beta(0.5,0.5).pdf(0) = ∞ (a<1)");
+        assert_close(
+            BetaDist::new(2.0, 3.0).pdf(0.0),
+            0.0,
+            1e-12,
+            "Beta(2,3).pdf(0) = 0 (a>1)",
+        );
+        assert_close(
+            BetaDist::new(1.0, 1.0).pdf(0.0),
+            1.0,
+            1e-12,
+            "Beta(1,1).pdf(0) = 1/B(1,1) = 1",
+        );
+        assert_close(
+            BetaDist::new(1.0, 2.0).pdf(0.0),
+            2.0,
+            1e-12,
+            "Beta(1,2).pdf(0) = 1/B(1,2) = 2",
+        );
+        assert!(
+            BetaDist::new(0.5, 0.5).pdf(0.0).is_infinite(),
+            "Beta(0.5,0.5).pdf(0) = ∞ (a<1)"
+        );
         // x = 1
-        assert_close(BetaDist::new(2.0, 3.0).pdf(1.0), 0.0, 1e-12, "Beta(2,3).pdf(1) = 0 (b>1)");
-        assert_close(BetaDist::new(1.0, 1.0).pdf(1.0), 1.0, 1e-12, "Beta(1,1).pdf(1) = 1");
-        assert_close(BetaDist::new(2.0, 1.0).pdf(1.0), 2.0, 1e-12, "Beta(2,1).pdf(1) = 1/B(2,1) = 2");
-        assert!(BetaDist::new(0.5, 0.5).pdf(1.0).is_infinite(), "Beta(0.5,0.5).pdf(1) = ∞ (b<1)");
+        assert_close(
+            BetaDist::new(2.0, 3.0).pdf(1.0),
+            0.0,
+            1e-12,
+            "Beta(2,3).pdf(1) = 0 (b>1)",
+        );
+        assert_close(
+            BetaDist::new(1.0, 1.0).pdf(1.0),
+            1.0,
+            1e-12,
+            "Beta(1,1).pdf(1) = 1",
+        );
+        assert_close(
+            BetaDist::new(2.0, 1.0).pdf(1.0),
+            2.0,
+            1e-12,
+            "Beta(2,1).pdf(1) = 1/B(2,1) = 2",
+        );
+        assert!(
+            BetaDist::new(0.5, 0.5).pdf(1.0).is_infinite(),
+            "Beta(0.5,0.5).pdf(1) = ∞ (b<1)"
+        );
         // x outside [0, 1]
         assert_eq!(BetaDist::new(2.0, 3.0).pdf(-0.1), 0.0);
         assert_eq!(BetaDist::new(2.0, 3.0).pdf(1.1), 0.0);
@@ -25840,20 +26053,40 @@ mod tests {
         // /porting-to-rust [frankenscipy-cquzz]: scipy reference values.
         let cases = [
             // (a, x, pdf, cdf)
-            (0.0, -1.0, 0.241_970_724_519_143_37, 0.158_655_253_931_457_07),
+            (
+                0.0,
+                -1.0,
+                0.241_970_724_519_143_37,
+                0.158_655_253_931_457_07,
+            ),
             (0.0, 0.0, 0.398_942_280_401_432_7, 0.5),
             (0.0, 1.0, 0.241_970_724_519_143_37, 0.841_344_746_068_542_9),
             (0.5, -1.0, 0.149_314_103_573_760_6, 0.072_525_871_689_886_35),
             (0.5, 0.0, 0.398_942_280_401_432_7, 0.352_416_382_349_566_74),
             (0.5, 1.0, 0.334_627_345_464_526_1, 0.755_215_363_826_972_2),
-            (2.0, -1.0, 0.011_009_731_820_814_06, 0.001_718_879_945_288_881_4),
+            (
+                2.0,
+                -1.0,
+                0.011_009_731_820_814_06,
+                0.001_718_879_945_288_881_4,
+            ),
             (2.0, 0.0, 0.398_942_280_401_432_7, 0.147_583_617_650_433_26),
             (2.0, 1.0, 0.472_931_717_217_472_7, 0.684_408_372_082_374_7),
         ];
         for (a, x, pdf_want, cdf_want) in cases {
             let dist = SkewNorm::new(a);
-            assert_close(dist.pdf(x), pdf_want, 1e-12, &format!("SkewNorm({a}).pdf({x})"));
-            assert_close(dist.cdf(x), cdf_want, 1e-9, &format!("SkewNorm({a}).cdf({x})"));
+            assert_close(
+                dist.pdf(x),
+                pdf_want,
+                1e-12,
+                &format!("SkewNorm({a}).pdf({x})"),
+            );
+            assert_close(
+                dist.cdf(x),
+                cdf_want,
+                1e-9,
+                &format!("SkewNorm({a}).cdf({x})"),
+            );
         }
     }
 
@@ -26101,7 +26334,12 @@ mod tests {
         // recipinvgauss(2).pdf(0.5) = 0.5641895835477563
         // recipinvgauss(0.5).pdf(2) = 0.28209479177387814
         let cases = [
-            (1.0_f64, 1.0, 0.398_942_280_401_432_7, 0.331_897_998_776_829_46),
+            (
+                1.0_f64,
+                1.0,
+                0.398_942_280_401_432_7,
+                0.331_897_998_776_829_46,
+            ),
             (2.0, 0.5, 0.564_189_583_547_756_3, 0.286_208_211_922_096_44),
             (0.5, 2.0, 0.282_094_791_773_878_14, 0.372_302_161_844_747_1),
         ];
@@ -26337,7 +26575,9 @@ mod tests {
                     lhs,
                     rhs,
                     1e-9,
-                    &format!("RecipInvGauss({mu}).cdf({x}) vs 1 - InverseGaussian({mu}).cdf(1/{x})"),
+                    &format!(
+                        "RecipInvGauss({mu}).cdf({x}) vs 1 - InverseGaussian({mu}).cdf(1/{x})"
+                    ),
                 );
             }
         }
@@ -26435,12 +26675,7 @@ mod tests {
                 1e-12,
                 &format!("RDist({c}).pdf({x})"),
             );
-            assert_close(
-                dist.cdf(x),
-                want_cdf,
-                1e-9,
-                &format!("RDist({c}).cdf({x})"),
-            );
+            assert_close(dist.cdf(x), want_cdf, 1e-9, &format!("RDist({c}).cdf({x})"));
         }
     }
 
@@ -26568,7 +26803,12 @@ mod tests {
         assert_close(d.pdf(2.0), 0.260_416_666_666_666_7, 1e-12, "pdf(2)");
         assert_close(d.cdf(2.0), 0.781_25, 1e-12, "cdf(2)");
         assert_close(d.ppf(0.5), 1.386_750_490_563_072_8, 1e-12, "ppf(0.5)");
-        assert_close(d.pdf(1.0), 2.083_333_333_333_333_5, 1e-12, "pdf(1) = b/denom");
+        assert_close(
+            d.pdf(1.0),
+            2.083_333_333_333_333_5,
+            1e-12,
+            "pdf(1) = b/denom",
+        );
         assert_close(d.pdf(5.0), 0.016_666_666_666_666_666, 1e-12, "pdf(c)");
         let d2 = TruncPareto::new(0.5, 10.0);
         assert_close(d2.pdf(2.0), 0.258_531_549_704_590_75, 1e-12, "b<1 pdf");
@@ -26646,18 +26886,8 @@ mod tests {
                 &format!("InverseGaussian({mu}).kurtosis vs 15·mu"),
             );
             // Also confirm the closed-form formula is used.
-            assert_close(
-                dist.skewness(),
-                3.0 * mu.sqrt(),
-                1e-15,
-                "skew formula",
-            );
-            assert_close(
-                dist.kurtosis(),
-                15.0 * mu,
-                1e-15,
-                "kurt formula",
-            );
+            assert_close(dist.skewness(), 3.0 * mu.sqrt(), 1e-15, "skew formula");
+            assert_close(dist.kurtosis(), 15.0 * mu, 1e-15, "kurt formula");
         }
     }
 
@@ -26740,8 +26970,18 @@ mod tests {
         let dist = SkewNorm::new(0.5);
         assert_close(dist.mean(), 0.356_824_823_230_554_26, 1e-12, "mean(0.5)");
         assert_close(dist.var(), 0.872_676_045_526_483_7, 1e-12, "var(0.5)");
-        assert_close(dist.skewness(), 0.023_919_330_826_654_19, 1e-12, "skew(0.5)");
-        assert_close(dist.kurtosis(), 0.006_028_161_013_632_157, 1e-12, "kurt(0.5)");
+        assert_close(
+            dist.skewness(),
+            0.023_919_330_826_654_19,
+            1e-12,
+            "skew(0.5)",
+        );
+        assert_close(
+            dist.kurtosis(),
+            0.006_028_161_013_632_157,
+            1e-12,
+            "kurt(0.5)",
+        );
 
         let dist2 = SkewNorm::new(2.0);
         assert_close(dist2.mean(), 0.713_649_646_461_108_5, 1e-12, "mean(2)");
@@ -26890,11 +27130,19 @@ mod tests {
     fn exponpow_pdf_boundary_matches_scipy() {
         // /porting-to-rust [frankenscipy-5q0ap]: shape-dependent
         // boundary at x=0. b<1 → ∞; b=1 → 1; b>1 → 0.
-        assert!(
-            ExponPow::new(0.5).pdf(0.0).is_infinite() && ExponPow::new(0.5).pdf(0.0) > 0.0
+        assert!(ExponPow::new(0.5).pdf(0.0).is_infinite() && ExponPow::new(0.5).pdf(0.0) > 0.0);
+        assert_close(
+            ExponPow::new(1.0).pdf(0.0),
+            1.0,
+            1e-12,
+            "ExponPow(1).pdf(0) = 1",
         );
-        assert_close(ExponPow::new(1.0).pdf(0.0), 1.0, 1e-12, "ExponPow(1).pdf(0) = 1");
-        assert_close(ExponPow::new(2.0).pdf(0.0), 0.0, 1e-12, "ExponPow(2).pdf(0) = 0");
+        assert_close(
+            ExponPow::new(2.0).pdf(0.0),
+            0.0,
+            1e-12,
+            "ExponPow(2).pdf(0) = 0",
+        );
         // x outside support
         assert_eq!(ExponPow::new(2.0).pdf(-0.1), 0.0);
     }
@@ -34047,18 +34295,8 @@ mod tests {
                 0.606_530_659_712_633_4,
                 0.606_530_659_712_633_4,
             ),
-            (
-                2.0,
-                -1.0,
-                0.735_758_882_342_884_7,
-                0.367_879_441_171_442_33,
-            ),
-            (
-                3.0,
-                -0.7,
-                1.043_168_170_993_506_6,
-                0.709_638_211_560_208_7,
-            ),
+            (2.0, -1.0, 0.735_758_882_342_884_7, 0.367_879_441_171_442_33),
+            (3.0, -0.7, 1.043_168_170_993_506_6, 0.709_638_211_560_208_7),
             (
                 0.5,
                 -2.0,
@@ -34262,12 +34500,7 @@ mod tests {
             ),
             (2.0, 0.5, 0.592_592_592_592_592_6, 0.333_333_333_333_333_3),
             (1.0, 2.0, 0.111_111_111_111_111_1, 0.666_666_666_666_666_6),
-            (
-                5.0,
-                0.3,
-                0.724_357_198_031_631_0,
-                0.217_412_770_688_962_28,
-            ),
+            (5.0, 0.3, 0.724_357_198_031_631_0, 0.217_412_770_688_962_28),
         ];
         for (a, x, want_pdf, want_cdf) in cases {
             let dist = Kappa3::new(a);
@@ -34367,13 +34600,7 @@ mod tests {
                 0.636_408_646_558_830_8,
                 0.636_408_646_558_830_8,
             ),
-            (
-                1.0,
-                5,
-                2,
-                0.086_128_544_436_268_70,
-                0.956_658_848_247_836_1,
-            ),
+            (1.0, 5, 2, 0.086_128_544_436_268_70, 0.956_658_848_247_836_1),
             (
                 0.5,
                 10,
@@ -34381,20 +34608,8 @@ mod tests {
                 0.032_517_028_269_079_70,
                 0.956_658_848_247_836_1,
             ),
-            (
-                2.0,
-                3,
-                1,
-                0.117_310_427_826_198_38,
-                0.984_123_760_023_533_2,
-            ),
-            (
-                0.7,
-                7,
-                4,
-                0.030_842_349_319_207_42,
-                0.977_078_512_890_737_7,
-            ),
+            (2.0, 3, 1, 0.117_310_427_826_198_38, 0.984_123_760_023_533_2),
+            (0.7, 7, 4, 0.030_842_349_319_207_42, 0.977_078_512_890_737_7),
         ];
         for (lam, n, k, want_pmf, want_cdf) in cases {
             let dist = Boltzmann::new(lam, n);
@@ -34447,27 +34662,9 @@ mod tests {
                 0.683_241_601_821_977_6,
                 0.683_241_601_821_977_6,
             ),
-            (
-                2.0,
-                5,
-                3,
-                0.075_915_733_535_775_4,
-                0.929_967_735_813_247_4,
-            ),
-            (
-                1.5,
-                10,
-                5,
-                0.044_825_882_450_544_5,
-                0.882_280_359_876_234_0,
-            ),
-            (
-                3.0,
-                4,
-                2,
-                0.106_142_506_142_506_2,
-                0.955_282_555_282_555_4,
-            ),
+            (2.0, 5, 3, 0.075_915_733_535_775_4, 0.929_967_735_813_247_4),
+            (1.5, 10, 5, 0.044_825_882_450_544_5, 0.882_280_359_876_234_0),
+            (3.0, 4, 2, 0.106_142_506_142_506_2, 0.955_282_555_282_555_4),
             (
                 1.1,
                 100,
@@ -34494,13 +34691,7 @@ mod tests {
     fn zipfian_pmf_normalised() {
         // /porting-to-rust [frankenscipy-kv0cb]: pmf sums to 1
         // and cdf(n) = 1 across the support.
-        for &(a, n) in &[
-            (1.5_f64, 5u32),
-            (2.0, 10),
-            (3.0, 20),
-            (1.1, 50),
-            (5.0, 4),
-        ] {
+        for &(a, n) in &[(1.5_f64, 5u32), (2.0, 10), (3.0, 20), (1.1, 50), (5.0, 4)] {
             let dist = Zipfian::new(a, n);
             let total: f64 = (1..=n as u64).map(|k| dist.pmf(k)).sum();
             assert!(
@@ -34524,7 +34715,12 @@ mod tests {
         // zipfian.mean(1.5, 10) = 2.5163664955948892
         let d1 = Zipfian::new(2.0, 5);
         let d2 = Zipfian::new(1.5, 10);
-        assert_close(d1.mean(), 1.560_068_324_160_182, 1e-12, "Zipfian mean(2, 5)");
+        assert_close(
+            d1.mean(),
+            1.560_068_324_160_182,
+            1e-12,
+            "Zipfian mean(2, 5)",
+        );
         assert_close(
             d2.mean(),
             2.516_366_495_594_889_2,
@@ -34555,36 +34751,11 @@ mod tests {
                 0.666_666_666_666_666_6,
                 0.666_666_666_666_666_7,
             ),
-            (
-                2.0,
-                5,
-                0.019_047_619_047_619_05,
-                0.952_380_952_380_952_3,
-            ),
-            (
-                3.5,
-                2,
-                0.141_414_141_414_141_4,
-                0.919_191_919_191_919_1,
-            ),
-            (
-                1.5,
-                3,
-                0.076_190_476_190_476_2,
-                0.847_619_047_619_047_6,
-            ),
-            (
-                5.0,
-                1,
-                0.833_333_333_333_333_4,
-                0.833_333_333_333_333_3,
-            ),
-            (
-                10.0,
-                4,
-                0.002_497_502_497_502_5,
-                0.999_000_999_000_999_0,
-            ),
+            (2.0, 5, 0.019_047_619_047_619_05, 0.952_380_952_380_952_3),
+            (3.5, 2, 0.141_414_141_414_141_4, 0.919_191_919_191_919_1),
+            (1.5, 3, 0.076_190_476_190_476_2, 0.847_619_047_619_047_6),
+            (5.0, 1, 0.833_333_333_333_333_4, 0.833_333_333_333_333_3),
+            (10.0, 4, 0.002_497_502_497_502_5, 0.999_000_999_000_999_0),
         ];
         for (alpha, k, want_pmf, want_cdf) in cases {
             let dist = YuleSimon::new(alpha);
@@ -34663,18 +34834,8 @@ mod tests {
             ),
             (1.0, 2, 0.085_548_214_868_748_8, 0.950_212_931_632_136_1),
             (0.5, 5, 0.032_297_930_256_034_9, 0.950_212_931_632_136_1),
-            (
-                2.0,
-                1,
-                0.117_019_644_347_878_5,
-                0.981_684_361_111_265_8,
-            ),
-            (
-                0.7,
-                4,
-                0.030_612_679_202_899_5,
-                0.969_802_616_577_681_5,
-            ),
+            (2.0, 1, 0.117_019_644_347_878_5, 0.981_684_361_111_265_8),
+            (0.7, 4, 0.030_612_679_202_899_5, 0.969_802_616_577_681_5),
         ];
         for (lam, k, want_pmf, want_cdf) in cases {
             let dist = Planck::new(lam);
@@ -34694,16 +34855,8 @@ mod tests {
         // planck.var(0.5) = 3.9176980890327635
         let cases = [
             (1.0_f64, 0.581_976_706_869_326_5, 0.920_673_594_207_792_4),
-            (
-                0.5,
-                1.541_494_082_536_798_2,
-                3.917_698_089_032_763_5,
-            ),
-            (
-                2.0,
-                0.156_517_642_749_665_65,
-                0.181_015_415_241_577_63,
-            ),
+            (0.5, 1.541_494_082_536_798_2, 3.917_698_089_032_763_5),
+            (2.0, 0.156_517_642_749_665_65, 0.181_015_415_241_577_63),
         ];
         for (lam, want_mean, want_var) in cases {
             let dist = Planck::new(lam);
@@ -35288,14 +35441,29 @@ mod tests {
         //   cdf = 1 - tp = 0.75
         //   pdf = t^(-1/c - 1) = 2^(-3) = 0.125
         let gp_pos = GenPareto::new(0.5);
-        assert_close(gp_pos.cdf(2.0), 0.75, 1e-12, "GP(c=+0.5).cdf(2) closed form");
-        assert_close(gp_pos.pdf(2.0), 0.125, 1e-12, "GP(c=+0.5).pdf(2) closed form");
+        assert_close(
+            gp_pos.cdf(2.0),
+            0.75,
+            1e-12,
+            "GP(c=+0.5).cdf(2) closed form",
+        );
+        assert_close(
+            gp_pos.pdf(2.0),
+            0.125,
+            1e-12,
+            "GP(c=+0.5).pdf(2) closed form",
+        );
 
         // GP(c=-0.5, x=1): t = 1 - 0.5·1 = 0.5; tp = 0.5^(2) = 0.25
         //   cdf = 1 - tp = 0.75
         //   pdf = t^(-1/c - 1) = 0.5^(2 - 1) = 0.5
         let gp_neg = GenPareto::new(-0.5);
-        assert_close(gp_neg.cdf(1.0), 0.75, 1e-12, "GP(c=-0.5).cdf(1) closed form");
+        assert_close(
+            gp_neg.cdf(1.0),
+            0.75,
+            1e-12,
+            "GP(c=-0.5).cdf(1) closed form",
+        );
         assert_close(gp_neg.pdf(1.0), 0.5, 1e-12, "GP(c=-0.5).pdf(1) closed form");
     }
 
@@ -36557,7 +36725,10 @@ mod tests {
         // default returning NaN. After 71mv5 StudentT now has its own
         // override; pick a distribution that still inherits the default.
         let t = Trapezoid::new(0.3, 0.7, 1.0, 4.0);
-        assert!(t.mode().is_nan(), "Trapezoid mode should still be NaN (no override)");
+        assert!(
+            t.mode().is_nan(),
+            "Trapezoid mode should still be NaN (no override)"
+        );
     }
 
     // ── Interval tests ───────────────────────────────────────────────────
@@ -37467,14 +37638,10 @@ mod tests {
         assert!(<Lognormal as ContinuousDistribution>::try_fit(&[1.0, 2.0, 3.0]).is_ok());
         assert!(<Rayleigh as ContinuousDistribution>::try_fit(&[1.0, 2.0, 3.0]).is_ok());
         assert!(<Gumbel as ContinuousDistribution>::try_fit(&[1.0, 2.0, 3.0, 4.0]).is_ok());
-        assert!(
-            <GumbelLeft as ContinuousDistribution>::try_fit(&[1.0, 2.0, 3.0, 4.0]).is_ok()
-        );
+        assert!(<GumbelLeft as ContinuousDistribution>::try_fit(&[1.0, 2.0, 3.0, 4.0]).is_ok());
         assert!(<Maxwell as ContinuousDistribution>::try_fit(&[1.0, 2.0, 3.0]).is_ok());
         assert!(<Cauchy as ContinuousDistribution>::try_fit(&[1.0, 2.0, 3.0, 4.0]).is_ok());
-        assert!(
-            <Triangular as ContinuousDistribution>::try_fit(&[0.0, 0.5, 1.0, 1.5]).is_ok()
-        );
+        assert!(<Triangular as ContinuousDistribution>::try_fit(&[0.0, 0.5, 1.0, 1.5]).is_ok());
 
         // Bad inputs surface typed errors, not NotImplemented.
         macro_rules! assert_typed_err {
@@ -37487,7 +37654,10 @@ mod tests {
                             | Err(FitError::UnsupportedData(_))
                             | Err(FitError::NonConvergent(_))
                     ),
-                    concat!(stringify!($dist), " try_fit must surface typed error; got {:?}"),
+                    concat!(
+                        stringify!($dist),
+                        " try_fit must surface typed error; got {:?}"
+                    ),
                     r
                 );
             };
@@ -38956,9 +39126,15 @@ mod tests {
             "BetaDist mode = (a-1)/(a+b-2)",
         );
         // BetaDist(a=1, b=1): mode = NaN (uniform; no interior peak).
-        assert!(BetaDist::new(1.0, 1.0).mode().is_nan(), "BetaDist a=b=1 mode is NaN");
+        assert!(
+            BetaDist::new(1.0, 1.0).mode().is_nan(),
+            "BetaDist a=b=1 mode is NaN"
+        );
         // BetaDist(a=0.5, b=2): mode = NaN (a < 1, pdf diverges at 0).
-        assert!(BetaDist::new(0.5, 2.0).mode().is_nan(), "BetaDist a<1 mode is NaN");
+        assert!(
+            BetaDist::new(0.5, 2.0).mode().is_nan(),
+            "BetaDist a<1 mode is NaN"
+        );
         // InverseGamma(a=2): mode = 1/(2+1) = 1/3.
         assert_close(
             InverseGamma::new(2.0).mode(),
@@ -39015,8 +39191,8 @@ mod tests {
 
         // Maxwell: 2√2·(16-5π) / (3π-8)^(3/2) ≈ 0.4857
         let m = Maxwell::new(1.0);
-        let expected_m = 2.0 * std::f64::consts::SQRT_2 * (16.0 - 5.0 * PI)
-            / (3.0 * PI - 8.0).powf(1.5);
+        let expected_m =
+            2.0 * std::f64::consts::SQRT_2 * (16.0 - 5.0 * PI) / (3.0 * PI - 8.0).powf(1.5);
         assert_close(m.skewness(), expected_m, 1e-12, "Maxwell skewness");
     }
 
@@ -39032,8 +39208,18 @@ mod tests {
             assert_eq!(bd.cdf(0.0), 0.0, "Bradford(c={c}) cdf(0) = 0");
             assert_eq!(bd.cdf(1.0), 1.0, "Bradford(c={c}) cdf(1) = 1");
             // (2) ppf boundaries.
-            assert_close(bd.ppf(0.0), 0.0, 1e-12, &format!("Bradford(c={c}) ppf(0) = 0"));
-            assert_close(bd.ppf(1.0), 1.0, 1e-12, &format!("Bradford(c={c}) ppf(1) = 1"));
+            assert_close(
+                bd.ppf(0.0),
+                0.0,
+                1e-12,
+                &format!("Bradford(c={c}) ppf(0) = 0"),
+            );
+            assert_close(
+                bd.ppf(1.0),
+                1.0,
+                1e-12,
+                &format!("Bradford(c={c}) ppf(1) = 1"),
+            );
             // (3) pdf at boundaries (closed form).
             assert_close(
                 bd.pdf(0.0),
@@ -39058,12 +39244,7 @@ mod tests {
             for &q in &[0.1_f64, 0.25, 0.5, 0.75, 0.9] {
                 let x = bd.ppf(q);
                 let r = bd.cdf(x);
-                assert_close(
-                    r,
-                    q,
-                    1e-9,
-                    &format!("Bradford(c={c}) cdf(ppf({q})) = {r}"),
-                );
+                assert_close(r, q, 1e-9, &format!("Bradford(c={c}) cdf(ppf({q})) = {r}"));
             }
             // (6) mean closed form.
             assert_close(
@@ -39083,7 +39264,12 @@ mod tests {
         let expected = 1.0 + 1.0 / 2.0 - 2.0_f64.ln();
         assert_close(lomax.entropy(), expected, 1e-12, "Lomax entropy");
         // Sanity: c=1 → H = 1 + 1 - 0 = 2 (exponential limit).
-        assert_close(Lomax::new(1.0).entropy(), 2.0, 1e-12, "Lomax(c=1) entropy = 2");
+        assert_close(
+            Lomax::new(1.0).entropy(),
+            2.0,
+            1e-12,
+            "Lomax(c=1) entropy = 2",
+        );
     }
 
     #[test]
@@ -39111,9 +39297,8 @@ mod tests {
 
         // Rayleigh(σ=2): 1 + ln(2/√2) + γ/2 = 1 + ln(√2) + γ/2.
         let r = Rayleigh::new(2.0);
-        let expected_r = 1.0
-            + (2.0_f64 / std::f64::consts::SQRT_2).ln()
-            + 0.577_215_664_901_532_9 / 2.0;
+        let expected_r =
+            1.0 + (2.0_f64 / std::f64::consts::SQRT_2).ln() + 0.577_215_664_901_532_9 / 2.0;
         assert_close(r.entropy(), expected_r, 1e-12, "Rayleigh entropy");
 
         // GumbelLeft(loc=-1, scale=2): ln(2) + γ + 1.
@@ -39127,12 +39312,7 @@ mod tests {
 
         // Triangular(left=0, mode=1, right=2): 0.5 + ln(2/2) = 0.5.
         let t = Triangular::new(0.0, 1.0, 2.0);
-        assert_close(
-            t.entropy(),
-            0.5,
-            1e-12,
-            "Triangular entropy at width 2",
-        );
+        assert_close(t.entropy(), 0.5, 1e-12, "Triangular entropy at width 2");
     }
 
     #[test]
@@ -39141,17 +39321,42 @@ mod tests {
         // mode for the 9 distributions that previously inherited the
         // trait-default NaN. Independent of any test harness — these
         // anchors guard the mode against regressions.
-        assert_close(ChiSquared::new(5.0).mode(), 3.0, 1e-12, "ChiSquared mode = max(df-2, 0)");
-        assert_close(ChiSquared::new(1.0).mode(), 0.0, 1e-12, "ChiSquared mode lower clamp");
+        assert_close(
+            ChiSquared::new(5.0).mode(),
+            3.0,
+            1e-12,
+            "ChiSquared mode = max(df-2, 0)",
+        );
+        assert_close(
+            ChiSquared::new(1.0).mode(),
+            0.0,
+            1e-12,
+            "ChiSquared mode lower clamp",
+        );
         // Lognormal mode = scale · exp(-s²); for s=1, scale=e: mode = e · e^-1 = 1.
         let ln = Lognormal {
             s: 1.0,
             scale: std::f64::consts::E,
         };
         assert_close(ln.mode(), 1.0, 1e-12, "Lognormal mode");
-        assert_close(Pareto::new(2.0, 3.0).mode(), 3.0, 1e-12, "Pareto mode = scale");
-        assert_close(Rayleigh::new(2.5).mode(), 2.5, 1e-12, "Rayleigh mode = scale");
-        assert_close(GumbelLeft::new(-1.5, 2.0).mode(), -1.5, 1e-12, "GumbelLeft mode = loc");
+        assert_close(
+            Pareto::new(2.0, 3.0).mode(),
+            3.0,
+            1e-12,
+            "Pareto mode = scale",
+        );
+        assert_close(
+            Rayleigh::new(2.5).mode(),
+            2.5,
+            1e-12,
+            "Rayleigh mode = scale",
+        );
+        assert_close(
+            GumbelLeft::new(-1.5, 2.0).mode(),
+            -1.5,
+            1e-12,
+            "GumbelLeft mode = loc",
+        );
         assert_close(
             Maxwell::new(1.0).mode(),
             std::f64::consts::SQRT_2,
@@ -39246,11 +39451,21 @@ mod tests {
         // cdf linear in x.
         for &q in &[0.0_f64, 0.25, 0.5, 0.75, 1.0] {
             let x = loc + q * scale;
-            assert_close(t.cdf(x), q, 1e-12, &format!("Trapezoid uniform cdf at q={q}"));
+            assert_close(
+                t.cdf(x),
+                q,
+                1e-12,
+                &format!("Trapezoid uniform cdf at q={q}"),
+            );
         }
 
         assert_close(t.mean(), loc + 0.5 * scale, 1e-12, "Trapezoid uniform mean");
-        assert_close(t.var(), scale * scale / 12.0, 1e-12, "Trapezoid uniform var");
+        assert_close(
+            t.var(),
+            scale * scale / 12.0,
+            1e-12,
+            "Trapezoid uniform var",
+        );
     }
 
     #[test]
@@ -39269,14 +39484,29 @@ mod tests {
         let mode = loc + 0.5 * scale;
         assert_close(t.pdf(mode), 2.0 / scale, 1e-12, "Trapezoid triangular peak");
         // pdf decays linearly to 0 at the endpoints.
-        assert_close(t.pdf(loc + 1e-12 - 1e-12), 0.0, 1e-12, "Trapezoid triangular at left");
-        assert_close(t.pdf(loc), 0.0, 1e-12, "Trapezoid triangular at left endpoint");
+        assert_close(
+            t.pdf(loc + 1e-12 - 1e-12),
+            0.0,
+            1e-12,
+            "Trapezoid triangular at left",
+        );
+        assert_close(
+            t.pdf(loc),
+            0.0,
+            1e-12,
+            "Trapezoid triangular at left endpoint",
+        );
 
         // cdf at the mode = 0.5 (symmetric).
         assert_close(t.cdf(mode), 0.5, 1e-12, "Trapezoid triangular cdf at mode");
 
         assert_close(t.mean(), mode, 1e-12, "Trapezoid triangular mean = mode");
-        assert_close(t.var(), scale * scale / 24.0, 1e-12, "Trapezoid triangular var");
+        assert_close(
+            t.var(),
+            scale * scale / 24.0,
+            1e-12,
+            "Trapezoid triangular var",
+        );
     }
 
     #[test]
