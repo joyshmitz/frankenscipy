@@ -1720,6 +1720,14 @@ pub fn chdtriv(p: f64, x: f64) -> f64 {
 
 /// Inverse of the regularized lower incomplete gamma function.
 /// Finds x such that gammainc(a, x) = p.
+///
+/// Delegates to `crate::convenience::gammaincinv_scalar`. The local
+/// Newton-Raphson here was diverging when p was close to 0 or 1: the
+/// initial guess for small p reached x ≈ 8 even when the true root
+/// was ~0.15, and Newton walked to the iteration cap returning a
+/// value many orders of magnitude wrong (frankenscipy-jr3na). The
+/// convenience helper is the validated one that the diff_special
+/// gammainc harness already covers at 1e-9 rel.
 fn gammaincinv(a: f64, p: f64) -> f64 {
     if a <= 0.0 || !(0.0..=1.0).contains(&p) {
         return f64::NAN;
@@ -1730,43 +1738,7 @@ fn gammaincinv(a: f64, p: f64) -> f64 {
     if p == 1.0 {
         return f64::INFINITY;
     }
-
-    // Initial guess using approximations
-    let mut x = if p < 0.5 {
-        // For small p, use approximation from incomplete gamma
-        let ln_p = p.ln();
-        let a_inv = 1.0 / a;
-        (a * (1.0 + a_inv * ln_p + a_inv * a_inv * ln_p.powi(2) / 2.0)).max(0.01)
-    } else {
-        // For p near 1, start from a reasonable value
-        a + (p - 0.5).sqrt() * a.sqrt()
-    };
-
-    // Newton-Raphson iteration
-    for _ in 0..50 {
-        let f = gammainc_scalar(a, x, RuntimeMode::Strict).unwrap_or(f64::NAN) - p;
-        if f.abs() < 1e-14 {
-            break;
-        }
-
-        // Derivative: d/dx P(a,x) = x^(a-1) * exp(-x) / Gamma(a)
-        let gammaln_a = gammaln_scalar(a, RuntimeMode::Strict).unwrap_or(f64::NAN);
-        let df = ((a - 1.0) * x.ln() - x - gammaln_a).exp();
-
-        if df.abs() < 1e-30 {
-            break;
-        }
-
-        let delta = f / df;
-        x -= delta;
-        x = x.max(1e-15);
-
-        if delta.abs() < 1e-14 * x {
-            break;
-        }
-    }
-
-    x
+    crate::convenience::gammaincinv_scalar(a, p)
 }
 
 fn gammainc_shape_inv(x: f64, p: f64) -> f64 {
@@ -2973,6 +2945,50 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    /// pdtri / chdtri at p close to 0 or 1 (frankenscipy-jr3na).
+    ///
+    /// Pre-fix the local Newton-Raphson `gammaincinv` here diverged
+    /// when 1-p was small; pdtri(1, 0.99) returned ~1e13 instead of
+    /// scipy's 0.149, and chdtri(3, 0.99) returned ~5.6e5 instead of
+    /// 0.115. Both now delegate to the convenience-module
+    /// `gammaincinv_scalar`, which is validated by the diff_special
+    /// gammainc harness.
+    #[test]
+    fn pdtri_chdtri_match_scipy_at_extreme_p() {
+        // (k, p, scipy.special.pdtri(k, p))
+        let pdtri_cases: [(f64, f64, f64); 5] = [
+            (1.0, 0.99, 0.14855474025327913),
+            (1.0, 0.999, 0.04540201776948989),
+            (0.0, 0.99, 0.010050335853501444),
+            (5.0, 0.5, 5.670161188712083),
+            (3.0, 0.95, 1.3663183967498314),
+        ];
+        for (k, p, expected) in pdtri_cases {
+            let got = pdtri(k, p);
+            let scale = expected.abs().max(1.0);
+            assert!(
+                (got - expected).abs() < 1e-9 * scale,
+                "pdtri({k}, {p}) = {got}, expected {expected}"
+            );
+        }
+
+        // (v, p, scipy.special.chdtri(v, p))
+        let chdtri_cases: [(f64, f64, f64); 4] = [
+            (3.0, 0.99, 0.11483180189911714),
+            (3.0, 0.5, 2.3659738843753395),
+            (5.0, 0.95, 1.1454762260617706),
+            (1.0, 0.999, 1.5707971492623826e-06),
+        ];
+        for (v, p, expected) in chdtri_cases {
+            let got = chdtri(v, p);
+            let scale = expected.abs().max(1.0);
+            assert!(
+                (got - expected).abs() < 1e-9 * scale,
+                "chdtri({v}, {p}) = {got}, expected {expected}"
+            );
         }
     }
 
