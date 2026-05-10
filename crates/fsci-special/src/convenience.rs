@@ -56,6 +56,9 @@ pub const CONVENIENCE_DISPATCH_PLAN: &[DispatchPlan] = &[
     },
 ];
 
+const DILOG_SERIES_MAX_TERMS: usize = 128;
+const PI_SQUARED_OVER_SIX: f64 = PI * PI / 6.0;
+
 /// Normalized sinc function: sin(πx) / (πx).
 ///
 /// sinc(0) = 1. Matches `numpy.sinc(x)` (not the unnormalized version).
@@ -1975,7 +1978,7 @@ pub fn log_softmax(x: &[f64]) -> Vec<f64> {
     shifted.iter().map(|&s| s - log_sum_exp).collect()
 }
 
-/// Spence's function (dilogarithm): Li₂(z) via integral ∫₁ᶻ ln(t)/(1-t) dt.
+/// Spence's function (dilogarithm): Li₂(1 - x).
 ///
 /// Matches `scipy.special.spence`.
 pub fn spence(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
@@ -1984,44 +1987,47 @@ pub fn spence(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
 
 #[must_use]
 pub fn spence_scalar(x: f64) -> f64 {
-    if x == 1.0 {
-        return 0.0;
-    }
-    if x == 0.0 {
-        return std::f64::consts::PI * std::f64::consts::PI / 6.0;
-    }
-    if x < 0.0 {
+    if x.is_nan() || x.is_infinite() || x < 0.0 {
         return f64::NAN;
     }
+    dilog_real(1.0 - x)
+}
 
-    // For x > 2, use transformation: spence(x) = -spence(1/x) - ln(x)²/2
-    if x > 2.0 {
-        return -spence_scalar(1.0 / x) - x.ln().powi(2) / 2.0;
+fn dilog_real(z: f64) -> f64 {
+    if z.is_nan() {
+        return f64::NAN;
     }
+    if z == 1.0 {
+        return PI_SQUARED_OVER_SIX;
+    }
+    if z == 0.0 {
+        return 0.0;
+    }
+    if z < 0.0 {
+        let log_term = (1.0 - z).ln();
+        let transformed = z / (z - 1.0);
+        return -dilog_real(transformed) - 0.5 * log_term * log_term;
+    }
+    if z > 0.5 {
+        let complement = 1.0 - z;
+        return PI_SQUARED_OVER_SIX - z.ln() * complement.ln() - dilog_series(complement);
+    }
+    dilog_series(z)
+}
 
-    // Numerical integration: ∫₁ˣ ln(t)/(1-t) dt via Simpson's rule
-    // Scale grid with interval width for accuracy near singularities
-    let n = (500.0 * (1.0 + (x - 1.0).abs())).min(2000.0) as usize;
-    let n = n + (n % 2); // ensure even for Simpson
-    let a = 1.0;
-    let b = x;
-    let h = (b - a) / n as f64;
-    let f = |t: f64| {
-        if (1.0 - t).abs() < 1e-15 {
-            -1.0 // L'Hôpital limit: ln(t)/(1-t) → -1 as t → 1
-        } else {
-            t.ln() / (1.0 - t)
+fn dilog_series(z: f64) -> f64 {
+    let mut term = z;
+    let mut sum = z;
+    for k in 2..=DILOG_SERIES_MAX_TERMS {
+        term *= z;
+        let kf = k as f64;
+        let addend = term / (kf * kf);
+        sum += addend;
+        if addend.abs() <= f64::EPSILON * sum.abs().max(1.0) {
+            break;
         }
-    };
-
-    let mut integral = f(a) + f(b);
-    for i in 1..n {
-        let t = a + i as f64 * h;
-        let w = if i % 2 == 0 { 2.0 } else { 4.0 };
-        integral += w * f(t);
     }
-
-    integral * h / 3.0
+    sum
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -7766,6 +7772,37 @@ mod tests {
             assert!((actual - expected).abs() < 1e-12);
         }
         Ok(())
+    }
+
+    #[test]
+    fn spence_matches_scipy_reference_points() {
+        let cases: &[(f64, f64)] = &[
+            (0.0, 1.644_934_066_848_226_4),
+            (1.0e-12, 1.644_934_066_819_596),
+            (1.0e-6, 1.644_919_251_330_510_4),
+            (0.01, 1.588_625_448_076_375_3),
+            (0.1, 1.299_714_723_004_958_8),
+            (0.5, 0.582_240_526_465_013_5),
+            (0.99, 0.010_025_111_740_139_103),
+            (1.0, 0.0),
+            (1.01, -0.009_975_110_490_083_546),
+            (1.5, -0.448_414_206_923_646_2),
+            (2.0, -0.822_467_033_424_114_2),
+            (4.0, -1.939_375_420_766_708_7),
+            (10.0, -3.950_663_778_244_157),
+            (1000.0, -25.495_564_102_428_908),
+        ];
+
+        for &(x, expected) in cases {
+            let got = spence_scalar(x);
+            let tol = if x <= 1.0e-9 { 3.0e-11 } else { 3.0e-13 };
+            assert!(
+                (got - expected).abs() < tol,
+                "spence({x}) = {got}, expected {expected}"
+            );
+        }
+        assert!(spence_scalar(-1.0).is_nan());
+        assert!(spence_scalar(f64::INFINITY).is_nan());
     }
 
     #[test]
