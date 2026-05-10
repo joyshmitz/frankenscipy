@@ -1361,8 +1361,12 @@ fn mr_elliprc_homogeneity() {
 
 #[test]
 fn mr_elliprf_homogeneity() {
-    let bases: &[(f64, f64, f64)] =
-        &[(1.0, 2.0, 3.0), (0.5, 1.5, 4.0), (0.0, 1.0, 1.0), (0.1, 0.5, 2.0)];
+    let bases: &[(f64, f64, f64)] = &[
+        (1.0, 2.0, 3.0),
+        (0.5, 1.5, 4.0),
+        (0.0, 1.0, 1.0),
+        (0.1, 0.5, 2.0),
+    ];
     let lambdas: &[f64] = &[0.25_f64, 1.0, 4.0, 16.0];
     for &(x, y, z) in bases {
         let base = elliprf(x, y, z);
@@ -1408,8 +1412,12 @@ fn mr_elliprd_homogeneity() {
 
 #[test]
 fn mr_elliprg_homogeneity() {
-    let bases: &[(f64, f64, f64)] =
-        &[(1.0, 2.0, 3.0), (0.5, 1.5, 4.0), (0.0, 1.0, 1.0), (0.1, 0.5, 2.0)];
+    let bases: &[(f64, f64, f64)] = &[
+        (1.0, 2.0, 3.0),
+        (0.5, 1.5, 4.0),
+        (0.0, 1.0, 1.0),
+        (0.1, 0.5, 2.0),
+    ];
     let lambdas: &[f64] = &[0.25_f64, 1.0, 4.0, 16.0];
     for &(x, y, z) in bases {
         let base = elliprg(x, y, z);

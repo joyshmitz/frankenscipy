@@ -27,9 +27,7 @@ pub fn sync_audit_ledger() -> SyncSharedAuditLedger {
 /// silently dropped audit events when any prior thread panicked while
 /// holding the guard, violating the fail-closed audit invariant.
 /// Resolves [frankenscipy-kt4od].
-fn lock_or_recover(
-    ledger: &SyncSharedAuditLedger,
-) -> std::sync::MutexGuard<'_, AuditLedger> {
+fn lock_or_recover(ledger: &SyncSharedAuditLedger) -> std::sync::MutexGuard<'_, AuditLedger> {
     match ledger.lock() {
         Ok(g) => g,
         Err(poisoned) => {
@@ -103,7 +101,10 @@ mod tests {
             .join()
         };
         assert!(poisoned_thread.is_err(), "thread should have panicked");
-        assert!(ledger.lock().is_err(), "ledger must be poisoned after panic");
+        assert!(
+            ledger.lock().is_err(),
+            "ledger must be poisoned after panic"
+        );
 
         record_fail_closed(&ledger, b"x=NaN", "non_finite_input", "rejected");
         record_bounded_recovery(&ledger, b"x=Inf", "clamp_to_max", "recovered");

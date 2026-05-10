@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::f64::consts::{FRAC_2_PI, PI};
+use std::f64::consts::{FRAC_2_PI, LN_2, PI};
 
 use fsci_runtime::RuntimeMode;
 
@@ -209,6 +209,9 @@ pub const BESSEL_DISPATCH_PLAN: &[DispatchPlan] = &[
         notes: "SciPy only exposes the nonnegative real domain; strict mode returns NaN outside it.",
     },
 ];
+
+const EULER_MASCHERONI: f64 = 0.577_215_664_901_532_9;
+const BESSEL_SERIES_MAX_TERMS: usize = 96;
 
 pub fn j0(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     map_real_input("j0", z, mode, |x| Ok(j0_core(x)))
@@ -1012,11 +1015,7 @@ fn gamma_sign_fn(x: f64) -> f64 {
         // Pole — caller is responsible for guarding before reaching here.
         return 0.0;
     }
-    if (PI * x).sin() >= 0.0 {
-        1.0
-    } else {
-        -1.0
-    }
+    if (PI * x).sin() >= 0.0 { 1.0 } else { -1.0 }
 }
 
 /// Asymptotic expansion for J_v(z) for large |z|.
@@ -2572,21 +2571,11 @@ fn j0_core(x: f64) -> f64 {
 
     let ax = x.abs();
     if ax == 0.0 {
-        // J_0(0) = 1 exactly. The rational approximation below evaluates
-        // to 57568490574/57568490411 ≈ 1.000000003 at x=0, so this
-        // special case keeps the analytic value at the origin.
+        // J_0(0) = 1 exactly; keep the analytic value at the origin.
         return 1.0;
     }
     if ax < 8.0 {
-        let y = ax * ax;
-        let numer = 57_568_490_574.0
-            + y * (-13_362_590_354.0
-                + y * (651_619_640.7
-                    + y * (-11_214_424.18 + y * (77_392.330_17 + y * (-184.905_245_6)))));
-        let denom = 57_568_490_411.0
-            + y * (1_029_532_985.0
-                + y * (9_494_680.718 + y * (59_272.648_53 + y * (267.853_271_2 + y))));
-        numer / denom
+        j0_series_small(ax)
     } else {
         let z = 8.0 / ax;
         let y = z * z;
@@ -2601,6 +2590,21 @@ fn j0_core(x: f64) -> f64 {
                     + y * (0.000_000_762_109_516_1 + y * (-0.000_000_093_494_515_2))));
         (FRAC_2_PI / ax).sqrt() * (xx.cos() * p - z * xx.sin() * q)
     }
+}
+
+fn j0_series_small(x: f64) -> f64 {
+    let z = x * x * 0.25;
+    let mut term = 1.0;
+    let mut sum = 1.0;
+    for k in 1..=BESSEL_SERIES_MAX_TERMS {
+        let kf = k as f64;
+        term *= -z / (kf * kf);
+        sum += term;
+        if term.abs() <= f64::EPSILON * sum.abs().max(1.0) {
+            break;
+        }
+    }
+    sum
 }
 
 fn j1_core(x: f64) -> f64 {
@@ -2643,15 +2647,7 @@ fn j1_core(x: f64) -> f64 {
 
 fn y0_core_positive(x: f64) -> f64 {
     if x < 8.0 {
-        let y = x * x;
-        let numer = -2_957_821_389.0
-            + y * (7_062_834_065.0
-                + y * (-512_359_803.6
-                    + y * (10_879_881.29 + y * (-86_327.927_57 + y * 228.462_273_3))));
-        let denom = 40_076_544_269.0
-            + y * (745_249_964.8
-                + y * (7_189_466.438 + y * (47_447.264_70 + y * (226.103_024_4 + y))));
-        numer / denom + FRAC_2_PI * j0_core(x) * x.ln()
+        y0_series_small(x)
     } else {
         let z = 8.0 / x;
         let y = z * z;
@@ -2666,6 +2662,25 @@ fn y0_core_positive(x: f64) -> f64 {
                     + y * (0.000_000_762_109_516_1 + y * (-0.000_000_093_494_515_2))));
         (FRAC_2_PI / x).sqrt() * (xx.sin() * p + z * xx.cos() * q)
     }
+}
+
+fn y0_series_small(x: f64) -> f64 {
+    let z = x * x * 0.25;
+    let j0 = j0_series_small(x);
+    let mut harmonic = 0.0;
+    let mut term = 1.0;
+    let mut correction = 0.0;
+    for k in 1..=BESSEL_SERIES_MAX_TERMS {
+        let kf = k as f64;
+        harmonic += 1.0 / kf;
+        term *= -z / (kf * kf);
+        let addend = -harmonic * term;
+        correction += addend;
+        if addend.abs() <= f64::EPSILON * correction.abs().max(1.0) {
+            break;
+        }
+    }
+    FRAC_2_PI * ((x.ln() - LN_2 + EULER_MASCHERONI) * j0 + correction)
 }
 
 fn y1_core_positive(x: f64) -> f64 {
@@ -3451,6 +3466,32 @@ mod tests {
     }
 
     #[test]
+    fn j0_y0_small_arguments_match_scipy_reference_points() -> Result<(), String> {
+        let cases: &[(f64, f64, f64)] = &[
+            (1.0e-12, 1.0, -17.664_258_668_214_952),
+            (0.001, 0.999_999_750_000_015_5, -4.471_416_611_375_923),
+            (0.5, 0.938_469_807_240_813, -0.444_518_733_506_706_6),
+            (1.0, 0.765_197_686_557_966_5, 0.088_256_964_215_676_97),
+            (7.5, 0.266_339_657_880_378_4, 0.117_313_286_148_208_63),
+            (7.999, 0.171_885_372_282_320_45, 0.223_363_307_307_185_32),
+        ];
+
+        for &(x, expected_j0, expected_y0) in cases {
+            let got_j0 = real_value(tensor_result(j0(&scalar(x), RuntimeMode::Strict))?)?;
+            let got_y0 = real_value(tensor_result(y0(&scalar(x), RuntimeMode::Strict))?)?;
+            assert!(
+                (got_j0 - expected_j0).abs() < 2.0e-14,
+                "j0({x}) = {got_j0}, expected {expected_j0}"
+            );
+            assert!(
+                (got_y0 - expected_y0).abs() < 2.0e-13,
+                "y0({x}) = {got_y0}, expected {expected_y0}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn jvp_zero_order_matches_jv() -> Result<(), String> {
         let v = scalar(2.0);
         let x = scalar(1.25);
@@ -4078,7 +4119,10 @@ mod tests {
             );
             // Also pin the sign — the catastrophic-cancellation
             // failure mode often flipped the sign.
-            assert!(got > 0.0, "spherical_jn({n}, 0.1) = {got} should be positive");
+            assert!(
+                got > 0.0,
+                "spherical_jn({n}, 0.1) = {got} should be positive"
+            );
         }
     }
 
@@ -4166,7 +4210,10 @@ mod tests {
                 rel < 1e-2,
                 "spherical_in({n}, 0.1) = {got}, series truth ≈ {series_truth} (rel = {rel})"
             );
-            assert!(got > 0.0, "spherical_in({n}, 0.1) = {got} should be positive");
+            assert!(
+                got > 0.0,
+                "spherical_in({n}, 0.1) = {got} should be positive"
+            );
         }
     }
 
@@ -4761,12 +4808,8 @@ mod tests {
         assert!((super::iv_scalar(1.0, 1.0) - 0.565_159_103_992_485).abs() < 1e-9);
         assert!((super::iv_scalar(0.0, 2.0) - 2.279_585_302_336_067).abs() < 1e-9);
         // Parity (integer v): I_0(-1) = I_0(1) (even), I_1(-1) = -I_1(1).
-        assert!(
-            (super::iv_scalar(0.0, -1.0) - super::iv_scalar(0.0, 1.0)).abs() < 1e-12
-        );
-        assert!(
-            (super::iv_scalar(1.0, -1.0) + super::iv_scalar(1.0, 1.0)).abs() < 1e-12
-        );
+        assert!((super::iv_scalar(0.0, -1.0) - super::iv_scalar(0.0, 1.0)).abs() < 1e-12);
+        assert!((super::iv_scalar(1.0, -1.0) + super::iv_scalar(1.0, 1.0)).abs() < 1e-12);
     }
 
     #[test]

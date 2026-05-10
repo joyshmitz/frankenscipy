@@ -1406,8 +1406,8 @@ pub fn elliprf(x: f64, y: f64, z: f64) -> f64 {
     let mut yn = y;
     let mut zn = z;
     const TOL: f64 = 2e-3; // Carlson's recommended threshold for
-                           // truncating duplication and switching to
-                           // the Taylor series.
+    // truncating duplication and switching to
+    // the Taylor series.
     for _ in 0..32 {
         let mu = (xn + yn + zn) / 3.0;
         let ex = 1.0 - xn / mu;

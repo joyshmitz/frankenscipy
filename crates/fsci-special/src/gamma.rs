@@ -3753,9 +3753,7 @@ mod tests {
         let v05_1 = binom(0.5_f64, 1.0);
         assert!((v05_1 - 0.5).abs() < 1e-9, "binom(0.5, 1.0) = {v05_1}");
         // binom(0.5, 0.6) = Γ(1.5)/(Γ(1.6)·Γ(0.9)).
-        let expected = lngamma_positive(1.5)
-            - lngamma_positive(1.6)
-            - lngamma_positive(0.9);
+        let expected = lngamma_positive(1.5) - lngamma_positive(1.6) - lngamma_positive(0.9);
         let expected = expected.exp();
         assert!((binom(0.5_f64, 0.6) - expected).abs() < 1e-9);
     }
@@ -3889,8 +3887,16 @@ mod tests {
             );
         }
         // Pole behavior — strict mode returns +inf, not NaN.
-        assert!(gammaln_scalar(0.0, RuntimeMode::Strict).unwrap().is_infinite());
-        assert!(gammaln_scalar(-1.0, RuntimeMode::Strict).unwrap().is_infinite());
+        assert!(
+            gammaln_scalar(0.0, RuntimeMode::Strict)
+                .unwrap()
+                .is_infinite()
+        );
+        assert!(
+            gammaln_scalar(-1.0, RuntimeMode::Strict)
+                .unwrap()
+                .is_infinite()
+        );
     }
 
     #[test]

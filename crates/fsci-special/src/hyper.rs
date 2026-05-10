@@ -2093,10 +2093,7 @@ mod tests {
                 RuntimeMode::Strict,
             );
             let got = get_scalar(&r).unwrap_or(f64::NAN);
-            assert!(
-                got.is_finite(),
-                "2F1(1,2;3;{z}) returned non-finite {got}"
-            );
+            assert!(got.is_finite(), "2F1(1,2;3;{z}) returned non-finite {got}");
         }
     }
 
