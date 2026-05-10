@@ -2669,6 +2669,10 @@ fn frobenius_norm(data: &[Vec<f64>]) -> f64 {
         .sqrt()
 }
 
+#[expect(
+    dead_code,
+    reason = "scale-free wrapper pairs with the scaled Procrustes helper for internal callers"
+)]
 fn orthogonal_procrustes_rotation(m: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, SpatialError> {
     let (rotation, _scale) = orthogonal_procrustes_rotation_with_scale(m)?;
     Ok(rotation)
@@ -3784,8 +3788,8 @@ mod tests {
         //   mahalanobis(x, y, I) = sqrt((x−y)·(x−y)) = euclidean(x, y)
         // Pin across multiple (x, y) pairs and dimensionalities.
         let cases: &[(Vec<f64>, Vec<f64>)] = &[
-            (vec![0.0_f64, 0.0], vec![3.0, 4.0]),       // 5
-            (vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]), // sqrt(27)
+            (vec![0.0_f64, 0.0], vec![3.0, 4.0]),                 // 5
+            (vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]),           // sqrt(27)
             (vec![1.0, 1.0, 1.0, 1.0], vec![0.0, 0.0, 0.0, 0.0]), // 2
         ];
         for (x, y) in cases {
@@ -4357,9 +4361,7 @@ mod tests {
         assert!(jaccard(&[1.0, 2.0, 3.0], &[1.0, 5.0, 7.0]).abs() < 1e-12);
         // jaccard([1,1,0], [1,0,1]) — pos0 TT, pos1 TF, pos2 FT
         // → 2/3.
-        assert!(
-            (jaccard(&[1.0, 1.0, 0.0], &[1.0, 0.0, 1.0]) - 2.0 / 3.0).abs() < 1e-12
-        );
+        assert!((jaccard(&[1.0, 1.0, 0.0], &[1.0, 0.0, 1.0]) - 2.0 / 3.0).abs() < 1e-12);
     }
 
     #[test]
@@ -5194,14 +5196,10 @@ mod tests {
             (0.0, 0.0, -3.0, 7.0),
             (10.0, -10.0, 100.0, 100.0),
         ] {
-            let shifted1: Vec<Vec<f64>> = data1
-                .iter()
-                .map(|p| vec![p[0] + t1x, p[1] + t1y])
-                .collect();
-            let shifted2: Vec<Vec<f64>> = data2
-                .iter()
-                .map(|p| vec![p[0] + t2x, p[1] + t2y])
-                .collect();
+            let shifted1: Vec<Vec<f64>> =
+                data1.iter().map(|p| vec![p[0] + t1x, p[1] + t1y]).collect();
+            let shifted2: Vec<Vec<f64>> =
+                data2.iter().map(|p| vec![p[0] + t2x, p[1] + t2y]).collect();
             let shifted = procrustes(&shifted1, &shifted2).expect("shifted");
             assert!(
                 (shifted.disparity - baseline.disparity).abs() < 1e-10,

@@ -644,8 +644,8 @@ pub enum CorrelationMode {
 /// * `Full`  — lags `−(in2 − 1) … in1 − 1`.
 /// * `Same`  — centered length-`max(in1, in2)` slice of the full lags.
 /// * `Valid` — lags where the two arrays fully overlap; either
-///             `0 … in1 − in2` (when `in1 >= in2`) or
-///             `in1 − in2 … 0` (when `in2 > in1`).
+///   `0 … in1 − in2` (when `in1 >= in2`) or
+///   `in1 − in2 … 0` (when `in2 > in1`).
 pub fn correlation_lags(in1_len: usize, in2_len: usize, mode: CorrelationMode) -> Vec<i64> {
     let n1 = in1_len as i64;
     let n2 = in2_len as i64;
@@ -663,7 +663,7 @@ pub fn correlation_lags(in1_len: usize, in2_len: usize, mode: CorrelationMode) -
             // [1, 2, 3, 4] for that input. Fixes [frankenscipy-385tp].
             let n = full.len();
             let lo = mid.saturating_sub(lag_bound).min(n);
-            let hi_raw = if in1_len % 2 == 0 {
+            let hi_raw = if in1_len.is_multiple_of(2) {
                 mid.saturating_add(lag_bound)
             } else {
                 mid.saturating_add(lag_bound).saturating_add(1)
@@ -3106,8 +3106,7 @@ pub fn lp2bp(b: &[f64], a: &[f64], wo: f64, bw: f64) -> Result<(Vec<f64>, Vec<f6
             for k in 0..=i {
                 let lhs = ma + 2 * k;
                 if lhs >= i && lhs - i == j {
-                    val += binom_coeff_f64(i, k) * b[big_n - i]
-                        * wosq.powi((i - k) as i32)
+                    val += binom_coeff_f64(i, k) * b[big_n - i] * wosq.powi((i - k) as i32)
                         / bw.powi(i as i32);
                 }
             }
@@ -3120,8 +3119,7 @@ pub fn lp2bp(b: &[f64], a: &[f64], wo: f64, bw: f64) -> Result<(Vec<f64>, Vec<f6
             for k in 0..=i {
                 let lhs = ma + 2 * k;
                 if lhs >= i && lhs - i == j {
-                    val += binom_coeff_f64(i, k) * a[big_d - i]
-                        * wosq.powi((i - k) as i32)
+                    val += binom_coeff_f64(i, k) * a[big_d - i] * wosq.powi((i - k) as i32)
                         / bw.powi(i as i32);
                 }
             }
@@ -3168,7 +3166,8 @@ pub fn lp2bs(b: &[f64], a: &[f64], wo: f64, bw: f64) -> Result<(Vec<f64>, Vec<f6
             let k_max = m - i;
             for k in 0..=k_max {
                 if i + 2 * k == j {
-                    val += binom_coeff_f64(m - i, k) * b[big_n - i]
+                    val += binom_coeff_f64(m - i, k)
+                        * b[big_n - i]
                         * wosq.powi((m - i - k) as i32)
                         * bw.powi(i as i32);
                 }
@@ -3182,7 +3181,8 @@ pub fn lp2bs(b: &[f64], a: &[f64], wo: f64, bw: f64) -> Result<(Vec<f64>, Vec<f6
             let k_max = m - i;
             for k in 0..=k_max {
                 if i + 2 * k == j {
-                    val += binom_coeff_f64(m - i, k) * a[big_d - i]
+                    val += binom_coeff_f64(m - i, k)
+                        * a[big_d - i]
                         * wosq.powi((m - i - k) as i32)
                         * bw.powi(i as i32);
                 }
@@ -3481,19 +3481,13 @@ pub fn normalize_filter(b: &[f64], a: &[f64]) -> Result<(Vec<f64>, Vec<f64>), Si
             "numerator `b` must contain only finite values".into(),
         ));
     }
-    let first_nonzero = a
-        .iter()
-        .position(|&v| v != 0.0)
-        .ok_or_else(|| {
-            SignalError::InvalidArgument(
-                "denominator `a` must contain at least one nonzero coefficient".into(),
-            )
-        })?;
+    let first_nonzero = a.iter().position(|&v| v != 0.0).ok_or_else(|| {
+        SignalError::InvalidArgument(
+            "denominator `a` must contain at least one nonzero coefficient".into(),
+        )
+    })?;
     let leading = a[first_nonzero];
-    let a_norm: Vec<f64> = a[first_nonzero..]
-        .iter()
-        .map(|&v| v / leading)
-        .collect();
+    let a_norm: Vec<f64> = a[first_nonzero..].iter().map(|&v| v / leading).collect();
     let b_norm: Vec<f64> = b.iter().map(|&v| v / leading).collect();
     Ok((b_norm, a_norm))
 }
@@ -6149,16 +6143,12 @@ pub fn freqz_zpk_with_whole(
         ));
     }
     if !zpk.gain.is_finite() {
-        return Err(SignalError::InvalidArgument(
-            "gain must be finite".into(),
-        ));
+        return Err(SignalError::InvalidArgument("gain must be finite".into()));
     }
 
     let n = n_freqs.unwrap_or(512);
     if n == 0 {
-        return Err(SignalError::InvalidArgument(
-            "n_freqs must be > 0".into(),
-        ));
+        return Err(SignalError::InvalidArgument("n_freqs must be > 0".into()));
     }
 
     let mut w = Vec::with_capacity(n);
@@ -7488,13 +7478,6 @@ pub fn square(t: &[f64], duty: f64) -> Result<Vec<f64>, SignalError> {
     Ok(result)
 }
 
-/// Generate a discrete unit impulse (Kronecker delta).
-///
-/// Matches `scipy.signal.unit_impulse(shape, idx)`.
-///
-/// # Arguments
-/// * `shape` — Length of the output array.
-/// * `idx` — Index at which the impulse is placed. If `None`, places at index 0.
 /// Result of [`gauspuls`]: in-phase signal, quadrature signal, and envelope.
 ///
 /// Matches `scipy.signal.gauspuls(retquad=True, retenv=True)` which
@@ -7568,6 +7551,14 @@ pub fn gauspuls(t: &[f64], fc: f64, bw: f64, bwr: f64) -> Result<GauspulsResult,
     })
 }
 
+/// Generate a discrete unit impulse (Kronecker delta).
+///
+/// Matches `scipy.signal.unit_impulse(shape, idx)`.
+///
+/// # Arguments
+///
+/// * `shape` — length of the output array.
+/// * `idx` — index at which the impulse is placed. If `None`, places at index 0.
 pub fn unit_impulse(shape: usize, idx: Option<usize>) -> Result<Vec<f64>, SignalError> {
     let i = idx.unwrap_or(0);
     if i >= shape {
@@ -16706,10 +16697,7 @@ mod tests {
             Vec::<i64>::new()
         );
         // Also check 3, 0 (smaller odd in1) — was the other panic case.
-        assert_eq!(
-            correlation_lags(3, 0, CorrelationMode::Same),
-            vec![1, 2]
-        );
+        assert_eq!(correlation_lags(3, 0, CorrelationMode::Same), vec![1, 2]);
     }
 
     #[test]
@@ -16846,8 +16834,7 @@ mod tests {
         // /porting-to-rust [frankenscipy-c7ukn]: scipy reference
         //   lp2bp([1, 2], [1, 3, 4], wo=1.5, bw=0.5) =
         //   b=[0.5, 0.5, 1.125, 0], a=[1, 1.5, 5.5, 3.375, 5.0625]
-        let (nb, na) =
-            lp2bp(&[1.0, 2.0], &[1.0, 3.0, 4.0], 1.5, 0.5).expect("lp2bp 2nd order");
+        let (nb, na) = lp2bp(&[1.0, 2.0], &[1.0, 3.0, 4.0], 1.5, 0.5).expect("lp2bp 2nd order");
         for (got, want) in nb.iter().zip([0.5, 0.5, 1.125, 0.0].iter()) {
             assert!(
                 (got - want).abs() < 1e-12,
@@ -16945,21 +16932,14 @@ mod tests {
         //   lp2bs([1, 2], [1, 3, 4], wo=1.5, bw=0.5) =
         //   b=[0.5, 0.125, 2.25, 0.28125, 2.53125]
         //   a=[1, 0.375, 4.5625, 0.84375, 5.0625]
-        let (nb, na) =
-            lp2bs(&[1.0, 2.0], &[1.0, 3.0, 4.0], 1.5, 0.5).expect("lp2bs 2nd order");
-        for (got, want) in nb
-            .iter()
-            .zip([0.5, 0.125, 2.25, 0.281_25, 2.531_25].iter())
-        {
+        let (nb, na) = lp2bs(&[1.0, 2.0], &[1.0, 3.0, 4.0], 1.5, 0.5).expect("lp2bs 2nd order");
+        for (got, want) in nb.iter().zip([0.5, 0.125, 2.25, 0.281_25, 2.531_25].iter()) {
             assert!(
                 (got - want).abs() < 1e-12,
                 "b mismatch: got {got}, want {want}"
             );
         }
-        for (got, want) in na
-            .iter()
-            .zip([1.0, 0.375, 4.5625, 0.843_75, 5.0625].iter())
-        {
+        for (got, want) in na.iter().zip([1.0, 0.375, 4.5625, 0.843_75, 5.0625].iter()) {
             assert!(
                 (got - want).abs() < 1e-12,
                 "a mismatch: got {got}, want {want}"
