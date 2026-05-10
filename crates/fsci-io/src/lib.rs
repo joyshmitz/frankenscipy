@@ -7,6 +7,7 @@
 //! - `mmread` / `mmwrite` — Matrix Market format read/write
 //! - `wavfile.read` / `wavfile.write` — WAV audio file read/write
 //! - `netcdf_file` — NetCDF (simplified) read/write
+//! - `readsav` — IDL SAVE scalar and primitive array read support
 
 /// Error type for I/O operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1190,7 +1191,657 @@ pub fn loadmat_text(content: &str) -> Result<Vec<MatArray>, IoError> {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// IDL / Recarr Utility
+// IDL SAVE files
+// ══════════════════════════════════════════════════════════════════════
+
+const IDL_MAX_ARRAY_ELEMENTS: usize = 64 * 1024 * 1024;
+
+/// Primitive IDL SAVE type codes supported by `read_idl_save`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdlType {
+    Byte,
+    Int16,
+    Int32,
+    Float32,
+    Float64,
+    Complex32,
+    String,
+    Complex64,
+    UInt16,
+    UInt32,
+    Int64,
+    UInt64,
+}
+
+impl IdlType {
+    fn from_code(code: i32) -> Result<Self, IoError> {
+        match code {
+            1 => Ok(Self::Byte),
+            2 => Ok(Self::Int16),
+            3 => Ok(Self::Int32),
+            4 => Ok(Self::Float32),
+            5 => Ok(Self::Float64),
+            6 => Ok(Self::Complex32),
+            7 => Ok(Self::String),
+            9 => Ok(Self::Complex64),
+            12 => Ok(Self::UInt16),
+            13 => Ok(Self::UInt32),
+            14 => Ok(Self::Int64),
+            15 => Ok(Self::UInt64),
+            8 => Err(IoError::UnsupportedFeature(
+                "IDL SAVE structure type code 8 is not supported".to_string(),
+            )),
+            10 => Err(IoError::UnsupportedFeature(
+                "IDL SAVE heap pointer type code 10 is not supported".to_string(),
+            )),
+            11 => Err(IoError::UnsupportedFeature(
+                "IDL SAVE object pointer type code 11 is not supported".to_string(),
+            )),
+            other => Err(IoError::InvalidFormat(format!(
+                "IDL SAVE unknown type code {other}"
+            ))),
+        }
+    }
+}
+
+/// Scalar value read from an IDL SAVE file.
+#[derive(Debug, Clone, PartialEq)]
+pub enum IdlScalar {
+    Byte(u8),
+    Int16(i16),
+    Int32(i32),
+    Float32(f32),
+    Float64(f64),
+    Complex32 { real: f32, imag: f32 },
+    String(Vec<u8>),
+    Complex64 { real: f64, imag: f64 },
+    UInt16(u16),
+    UInt32(u32),
+    Int64(i64),
+    UInt64(u64),
+}
+
+/// Primitive IDL array. Dimensions follow SciPy's observable order: the IDL
+/// descriptor dimensions are reversed before being exposed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IdlArray {
+    pub element_type: IdlType,
+    pub dims: Vec<usize>,
+    pub values: Vec<IdlScalar>,
+}
+
+/// Variable value read from an IDL SAVE file.
+#[derive(Debug, Clone, PartialEq)]
+pub enum IdlValue {
+    Null,
+    Scalar(IdlScalar),
+    Array(IdlArray),
+}
+
+/// Named IDL SAVE variable.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IdlVariable {
+    pub name: String,
+    pub value: IdlValue,
+}
+
+/// Parsed IDL SAVE file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IdlSaveFile {
+    pub variables: Vec<IdlVariable>,
+}
+
+impl IdlSaveFile {
+    /// Case-insensitive variable lookup, matching SciPy's `readsav` access
+    /// behavior for variable names.
+    pub fn get(&self, name: &str) -> Option<&IdlValue> {
+        self.variables
+            .iter()
+            .find(|variable| variable.name.eq_ignore_ascii_case(name))
+            .map(|variable| &variable.value)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct IdlTypeDesc {
+    type_code: i32,
+    is_array: bool,
+    is_structure: bool,
+    array_desc: Option<IdlArrayDesc>,
+}
+
+#[derive(Debug, Clone)]
+struct IdlArrayDesc {
+    nbytes: usize,
+    nelements: usize,
+    dims: Vec<usize>,
+}
+
+struct IdlReader<'a> {
+    bytes: &'a [u8],
+    offset: usize,
+}
+
+impl<'a> IdlReader<'a> {
+    fn new(bytes: &'a [u8], offset: usize) -> Self {
+        Self { bytes, offset }
+    }
+
+    fn remaining(&self) -> usize {
+        self.bytes.len().saturating_sub(self.offset)
+    }
+
+    fn read_exact(&mut self, len: usize, context: &str) -> Result<&'a [u8], IoError> {
+        let end = self
+            .offset
+            .checked_add(len)
+            .ok_or_else(|| IoError::InvalidFormat(format!("IDL SAVE {context} offset overflow")))?;
+        if end > self.bytes.len() {
+            return Err(IoError::InvalidFormat(format!(
+                "IDL SAVE {context} truncated: need {len} bytes, have {}",
+                self.remaining()
+            )));
+        }
+        let slice = &self.bytes[self.offset..end];
+        self.offset = end;
+        Ok(slice)
+    }
+
+    fn skip(&mut self, len: usize, context: &str) -> Result<(), IoError> {
+        self.read_exact(len, context).map(|_| ())
+    }
+
+    fn seek(&mut self, offset: usize, context: &str) -> Result<(), IoError> {
+        if offset > self.bytes.len() {
+            return Err(IoError::InvalidFormat(format!(
+                "IDL SAVE {context} seeks past end: {offset} > {}",
+                self.bytes.len()
+            )));
+        }
+        self.offset = offset;
+        Ok(())
+    }
+
+    fn align_32(&mut self, context: &str) -> Result<(), IoError> {
+        let aligned = match self.offset % 4 {
+            0 => self.offset,
+            rem => self.offset + 4 - rem,
+        };
+        self.seek(aligned, context)
+    }
+
+    fn read_i32(&mut self, context: &str) -> Result<i32, IoError> {
+        let bytes = self.read_exact(4, context)?;
+        Ok(i32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+    }
+
+    fn read_u32(&mut self, context: &str) -> Result<u32, IoError> {
+        let bytes = self.read_exact(4, context)?;
+        Ok(u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+    }
+
+    fn read_i64(&mut self, context: &str) -> Result<i64, IoError> {
+        let bytes = self.read_exact(8, context)?;
+        Ok(i64::from_be_bytes([
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+        ]))
+    }
+
+    fn read_u64(&mut self, context: &str) -> Result<u64, IoError> {
+        let bytes = self.read_exact(8, context)?;
+        Ok(u64::from_be_bytes([
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+        ]))
+    }
+
+    fn read_f32(&mut self, context: &str) -> Result<f32, IoError> {
+        Ok(f32::from_bits(self.read_u32(context)?))
+    }
+
+    fn read_f64(&mut self, context: &str) -> Result<f64, IoError> {
+        Ok(f64::from_bits(self.read_u64(context)?))
+    }
+
+    fn read_padded_u8(&mut self, context: &str) -> Result<u8, IoError> {
+        Ok(self.read_exact(4, context)?[0])
+    }
+
+    fn read_padded_i16(&mut self, context: &str) -> Result<i16, IoError> {
+        let bytes = self.read_exact(4, context)?;
+        Ok(i16::from_be_bytes([bytes[2], bytes[3]]))
+    }
+
+    fn read_padded_u16(&mut self, context: &str) -> Result<u16, IoError> {
+        let bytes = self.read_exact(4, context)?;
+        Ok(u16::from_be_bytes([bytes[2], bytes[3]]))
+    }
+}
+
+/// Read an IDL SAVE (`.sav`) byte stream.
+///
+/// This covers the uncompressed `scipy.io.readsav` scalar and primitive-array
+/// surface: numeric scalars, byte strings, complex numbers, and arrays of those
+/// primitive values. Structures, heap/object pointers, and compressed SAVE
+/// files fail closed with `UnsupportedFeature`.
+pub fn read_idl_save(bytes: &[u8]) -> Result<IdlSaveFile, IoError> {
+    if bytes.len() < 4 {
+        return Err(IoError::InvalidFormat(
+            "IDL SAVE header truncated".to_string(),
+        ));
+    }
+    if &bytes[..2] != b"SR" {
+        return Err(IoError::InvalidFormat(format!(
+            "IDL SAVE invalid signature: {:02x?}",
+            &bytes[..2]
+        )));
+    }
+    match &bytes[2..4] {
+        b"\x00\x04" => {}
+        b"\x00\x06" => {
+            return Err(IoError::UnsupportedFeature(
+                "compressed IDL SAVE files are not supported".to_string(),
+            ));
+        }
+        recfmt => {
+            return Err(IoError::InvalidFormat(format!(
+                "IDL SAVE invalid record format: {recfmt:02x?}"
+            )));
+        }
+    }
+
+    let mut reader = IdlReader::new(bytes, 4);
+    let mut variables = Vec::new();
+    let mut saw_end = false;
+
+    while reader.offset < bytes.len() {
+        let record_start = reader.offset;
+        let rectype = reader.read_i32("record type")?;
+        let next_low = u64::from(reader.read_u32("next record low word")?);
+        let next_high = u64::from(reader.read_u32("next record high word")?);
+        reader.skip(4, "record header padding")?;
+
+        if rectype == 6 {
+            saw_end = true;
+            break;
+        }
+
+        let next_record = checked_idl_next_record(next_low, next_high, reader.offset)?;
+        if next_record > bytes.len() {
+            return Err(IoError::InvalidFormat(format!(
+                "IDL SAVE record at offset {record_start} points past end: {next_record} > {}",
+                bytes.len()
+            )));
+        }
+
+        match rectype {
+            0 | 1 | 3 | 10 | 12 | 13 | 14 | 15 | 17 | 19 | 20 => {}
+            2 => {
+                let variable = read_idl_variable_record(&mut reader, next_record)?;
+                variables.push(variable);
+            }
+            16 => {
+                return Err(IoError::UnsupportedFeature(
+                    "IDL SAVE heap data records are not supported".to_string(),
+                ));
+            }
+            other => {
+                return Err(IoError::InvalidFormat(format!(
+                    "IDL SAVE unknown record type {other} at offset {record_start}"
+                )));
+            }
+        }
+
+        if reader.offset > next_record {
+            return Err(IoError::InvalidFormat(format!(
+                "IDL SAVE record type {rectype} over-read next record boundary"
+            )));
+        }
+        reader.seek(next_record, "record boundary")?;
+    }
+
+    if !saw_end {
+        return Err(IoError::InvalidFormat(
+            "IDL SAVE missing END_MARKER record".to_string(),
+        ));
+    }
+
+    Ok(IdlSaveFile { variables })
+}
+
+/// Alias matching `scipy.io.readsav`.
+pub fn readsav(bytes: &[u8]) -> Result<IdlSaveFile, IoError> {
+    read_idl_save(bytes)
+}
+
+fn checked_idl_next_record(low: u64, high: u64, current: usize) -> Result<usize, IoError> {
+    let next = high
+        .checked_mul(1u64 << 32)
+        .and_then(|base| base.checked_add(low))
+        .ok_or_else(|| IoError::InvalidFormat("IDL SAVE next record overflow".to_string()))?;
+    let next = usize::try_from(next).map_err(|_| {
+        IoError::InvalidFormat("IDL SAVE next record does not fit usize".to_string())
+    })?;
+    if next < current {
+        return Err(IoError::InvalidFormat(format!(
+            "IDL SAVE next record {next} precedes current offset {current}"
+        )));
+    }
+    Ok(next)
+}
+
+fn read_idl_variable_record(
+    reader: &mut IdlReader<'_>,
+    next_record: usize,
+) -> Result<IdlVariable, IoError> {
+    let name = read_idl_string(reader, "variable name")?;
+    let typedesc = read_idl_typedesc(reader)?;
+    let value = if typedesc.type_code == 0 {
+        if reader.offset != next_record {
+            return Err(IoError::InvalidFormat(
+                "IDL SAVE null typedesc has trailing payload".to_string(),
+            ));
+        }
+        IdlValue::Null
+    } else {
+        let varstart = reader.read_i32("VARSTART")?;
+        if varstart != 7 {
+            return Err(IoError::InvalidFormat(format!(
+                "IDL SAVE VARSTART must be 7, got {varstart}"
+            )));
+        }
+        read_idl_value(reader, &typedesc)?
+    };
+    Ok(IdlVariable { name, value })
+}
+
+fn read_idl_typedesc(reader: &mut IdlReader<'_>) -> Result<IdlTypeDesc, IoError> {
+    let type_code = reader.read_i32("type descriptor type code")?;
+    let varflags = reader.read_i32("type descriptor flags")?;
+
+    if varflags & 2 == 2 {
+        return Err(IoError::UnsupportedFeature(
+            "IDL SAVE system variables are not supported".to_string(),
+        ));
+    }
+    let is_array = varflags & 4 == 4;
+    let is_structure = varflags & 32 == 32;
+    if is_structure {
+        return Err(IoError::UnsupportedFeature(
+            "IDL SAVE structure variables are not supported".to_string(),
+        ));
+    }
+    let array_desc = if is_array {
+        Some(read_idl_arraydesc(reader)?)
+    } else {
+        None
+    };
+
+    Ok(IdlTypeDesc {
+        type_code,
+        is_array,
+        is_structure,
+        array_desc,
+    })
+}
+
+fn read_idl_arraydesc(reader: &mut IdlReader<'_>) -> Result<IdlArrayDesc, IoError> {
+    let arrstart = reader.read_i32("array descriptor start")?;
+    if arrstart == 18 {
+        return Err(IoError::UnsupportedFeature(
+            "IDL SAVE 64-bit array descriptors are not supported".to_string(),
+        ));
+    }
+    if arrstart != 8 {
+        return Err(IoError::InvalidFormat(format!(
+            "IDL SAVE unknown array descriptor start {arrstart}"
+        )));
+    }
+
+    reader.skip(4, "array descriptor padding")?;
+    let nbytes = read_idl_nonnegative_usize(reader, "array byte count")?;
+    let nelements = read_idl_nonnegative_usize(reader, "array element count")?;
+    let ndims = read_idl_nonnegative_usize(reader, "array dimension count")?;
+    reader.skip(8, "array descriptor reserved fields")?;
+    let nmax = read_idl_nonnegative_usize(reader, "array max dimension count")?;
+    if ndims > nmax {
+        return Err(IoError::InvalidFormat(format!(
+            "IDL SAVE array ndims {ndims} exceeds nmax {nmax}"
+        )));
+    }
+    if nelements > IDL_MAX_ARRAY_ELEMENTS {
+        return Err(IoError::InvalidFormat(format!(
+            "IDL SAVE array element count {nelements} exceeds safety bound {IDL_MAX_ARRAY_ELEMENTS}"
+        )));
+    }
+
+    let mut raw_dims = Vec::with_capacity(nmax);
+    for _ in 0..nmax {
+        raw_dims.push(read_idl_nonnegative_usize(reader, "array dimension")?);
+    }
+    validate_idl_array_shape(&raw_dims, ndims, nelements)?;
+    let dims = raw_dims
+        .iter()
+        .take(ndims)
+        .rev()
+        .copied()
+        .collect::<Vec<_>>();
+
+    Ok(IdlArrayDesc {
+        nbytes,
+        nelements,
+        dims,
+    })
+}
+
+fn read_idl_nonnegative_usize(reader: &mut IdlReader<'_>, context: &str) -> Result<usize, IoError> {
+    let value = reader.read_i32(context)?;
+    if value < 0 {
+        return Err(IoError::InvalidFormat(format!(
+            "IDL SAVE {context} is negative: {value}"
+        )));
+    }
+    usize::try_from(value).map_err(|_| {
+        IoError::InvalidFormat(format!("IDL SAVE {context} does not fit usize: {value}"))
+    })
+}
+
+fn validate_idl_array_shape(
+    raw_dims: &[usize],
+    ndims: usize,
+    nelements: usize,
+) -> Result<(), IoError> {
+    let shape_product = raw_dims.iter().take(ndims).try_fold(1usize, |acc, &dim| {
+        acc.checked_mul(dim)
+            .ok_or_else(|| IoError::InvalidFormat("IDL SAVE array shape overflow".to_string()))
+    })?;
+    if shape_product != nelements {
+        return Err(IoError::InvalidFormat(format!(
+            "IDL SAVE array shape product {shape_product} does not match element count {nelements}"
+        )));
+    }
+    Ok(())
+}
+
+fn read_idl_value(reader: &mut IdlReader<'_>, typedesc: &IdlTypeDesc) -> Result<IdlValue, IoError> {
+    if typedesc.is_structure {
+        return Err(IoError::UnsupportedFeature(
+            "IDL SAVE structure values are not supported".to_string(),
+        ));
+    }
+    let idl_type = IdlType::from_code(typedesc.type_code)?;
+    if typedesc.is_array {
+        let array_desc = typedesc.array_desc.as_ref().ok_or_else(|| {
+            IoError::InvalidFormat("IDL SAVE array flag without descriptor".to_string())
+        })?;
+        Ok(IdlValue::Array(read_idl_array(
+            reader, idl_type, array_desc,
+        )?))
+    } else {
+        Ok(IdlValue::Scalar(read_idl_scalar(reader, idl_type)?))
+    }
+}
+
+fn read_idl_scalar(reader: &mut IdlReader<'_>, idl_type: IdlType) -> Result<IdlScalar, IoError> {
+    match idl_type {
+        IdlType::Byte => {
+            let byte_count = reader.read_i32("byte scalar marker")?;
+            if byte_count != 1 {
+                return Err(IoError::InvalidFormat(format!(
+                    "IDL SAVE byte scalar marker must be 1, got {byte_count}"
+                )));
+            }
+            Ok(IdlScalar::Byte(reader.read_padded_u8("byte scalar")?))
+        }
+        IdlType::Int16 => Ok(IdlScalar::Int16(reader.read_padded_i16("int16 scalar")?)),
+        IdlType::Int32 => Ok(IdlScalar::Int32(reader.read_i32("int32 scalar")?)),
+        IdlType::Float32 => Ok(IdlScalar::Float32(reader.read_f32("float32 scalar")?)),
+        IdlType::Float64 => Ok(IdlScalar::Float64(reader.read_f64("float64 scalar")?)),
+        IdlType::Complex32 => {
+            let real = reader.read_f32("complex32 real")?;
+            let imag = reader.read_f32("complex32 imag")?;
+            Ok(IdlScalar::Complex32 { real, imag })
+        }
+        IdlType::String => Ok(IdlScalar::String(read_idl_string_data(
+            reader,
+            "string scalar",
+        )?)),
+        IdlType::Complex64 => {
+            let real = reader.read_f64("complex64 real")?;
+            let imag = reader.read_f64("complex64 imag")?;
+            Ok(IdlScalar::Complex64 { real, imag })
+        }
+        IdlType::UInt16 => Ok(IdlScalar::UInt16(reader.read_padded_u16("uint16 scalar")?)),
+        IdlType::UInt32 => Ok(IdlScalar::UInt32(reader.read_u32("uint32 scalar")?)),
+        IdlType::Int64 => Ok(IdlScalar::Int64(reader.read_i64("int64 scalar")?)),
+        IdlType::UInt64 => Ok(IdlScalar::UInt64(reader.read_u64("uint64 scalar")?)),
+    }
+}
+
+fn read_idl_array(
+    reader: &mut IdlReader<'_>,
+    idl_type: IdlType,
+    desc: &IdlArrayDesc,
+) -> Result<IdlArray, IoError> {
+    let values = match idl_type {
+        IdlType::Byte => read_idl_byte_array(reader, desc)?,
+        IdlType::Int16 => read_idl_repeated(reader, desc.nelements, |reader| {
+            Ok(IdlScalar::Int16(
+                reader.read_padded_i16("int16 array element")?,
+            ))
+        })?,
+        IdlType::Int32 => read_idl_repeated(reader, desc.nelements, |reader| {
+            Ok(IdlScalar::Int32(reader.read_i32("int32 array element")?))
+        })?,
+        IdlType::Float32 => read_idl_repeated(reader, desc.nelements, |reader| {
+            Ok(IdlScalar::Float32(
+                reader.read_f32("float32 array element")?,
+            ))
+        })?,
+        IdlType::Float64 => read_idl_repeated(reader, desc.nelements, |reader| {
+            Ok(IdlScalar::Float64(
+                reader.read_f64("float64 array element")?,
+            ))
+        })?,
+        IdlType::Complex32 => read_idl_repeated(reader, desc.nelements, |reader| {
+            let real = reader.read_f32("complex32 array real")?;
+            let imag = reader.read_f32("complex32 array imag")?;
+            Ok(IdlScalar::Complex32 { real, imag })
+        })?,
+        IdlType::String => read_idl_repeated(reader, desc.nelements, |reader| {
+            Ok(IdlScalar::String(read_idl_string_data(
+                reader,
+                "string array element",
+            )?))
+        })?,
+        IdlType::Complex64 => read_idl_repeated(reader, desc.nelements, |reader| {
+            let real = reader.read_f64("complex64 array real")?;
+            let imag = reader.read_f64("complex64 array imag")?;
+            Ok(IdlScalar::Complex64 { real, imag })
+        })?,
+        IdlType::UInt16 => read_idl_repeated(reader, desc.nelements, |reader| {
+            Ok(IdlScalar::UInt16(
+                reader.read_padded_u16("uint16 array element")?,
+            ))
+        })?,
+        IdlType::UInt32 => read_idl_repeated(reader, desc.nelements, |reader| {
+            Ok(IdlScalar::UInt32(reader.read_u32("uint32 array element")?))
+        })?,
+        IdlType::Int64 => read_idl_repeated(reader, desc.nelements, |reader| {
+            Ok(IdlScalar::Int64(reader.read_i64("int64 array element")?))
+        })?,
+        IdlType::UInt64 => read_idl_repeated(reader, desc.nelements, |reader| {
+            Ok(IdlScalar::UInt64(reader.read_u64("uint64 array element")?))
+        })?,
+    };
+    reader.align_32("array payload alignment")?;
+    Ok(IdlArray {
+        element_type: idl_type,
+        dims: desc.dims.clone(),
+        values,
+    })
+}
+
+fn read_idl_repeated<F>(
+    reader: &mut IdlReader<'_>,
+    count: usize,
+    mut read_one: F,
+) -> Result<Vec<IdlScalar>, IoError>
+where
+    F: FnMut(&mut IdlReader<'_>) -> Result<IdlScalar, IoError>,
+{
+    let mut values = Vec::with_capacity(count);
+    for _ in 0..count {
+        values.push(read_one(reader)?);
+    }
+    Ok(values)
+}
+
+fn read_idl_byte_array(
+    reader: &mut IdlReader<'_>,
+    desc: &IdlArrayDesc,
+) -> Result<Vec<IdlScalar>, IoError> {
+    let byte_count = read_idl_nonnegative_usize(reader, "byte array payload byte count")?;
+    if byte_count != desc.nbytes || byte_count != desc.nelements {
+        return Err(IoError::InvalidFormat(format!(
+            "IDL SAVE byte array count {byte_count} does not match descriptor nbytes={} nelements={}",
+            desc.nbytes, desc.nelements
+        )));
+    }
+    reader
+        .read_exact(byte_count, "byte array payload")?
+        .iter()
+        .map(|&value| Ok(IdlScalar::Byte(value)))
+        .collect()
+}
+
+fn read_idl_string(reader: &mut IdlReader<'_>, context: &str) -> Result<String, IoError> {
+    let len = read_idl_nonnegative_usize(reader, context)?;
+    if len == 0 {
+        return Ok(String::new());
+    }
+    let bytes = reader.read_exact(len, context)?;
+    reader.align_32(context)?;
+    Ok(bytes.iter().map(|&byte| char::from(byte)).collect())
+}
+
+fn read_idl_string_data(reader: &mut IdlReader<'_>, context: &str) -> Result<Vec<u8>, IoError> {
+    let len = read_idl_nonnegative_usize(reader, context)?;
+    if len == 0 {
+        return Ok(Vec::new());
+    }
+    let repeated_len = read_idl_nonnegative_usize(reader, context)?;
+    if repeated_len != len {
+        return Err(IoError::InvalidFormat(format!(
+            "IDL SAVE string length marker mismatch: {len} != {repeated_len}"
+        )));
+    }
+    let bytes = reader.read_exact(len, context)?.to_vec();
+    reader.align_32(context)?;
+    Ok(bytes)
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Text matrix utility
 // ══════════════════════════════════════════════════════════════════════
 
 /// Load a whitespace-delimited text file as a matrix.
@@ -3482,6 +4133,90 @@ mod tests {
     }
 
     #[test]
+    fn read_idl_save_scalar_int32_matches_readsav_case_lookup() {
+        let mut bytes = idl_save_header();
+        idl_push_variable_record(&mut bytes, "I32S", 3, 0, |out| {
+            idl_push_i32(out, -1_234_567_890);
+        });
+        idl_push_end_record(&mut bytes);
+
+        let parsed = readsav(&bytes).expect("IDL SAVE scalar int32 should parse");
+
+        assert_eq!(
+            parsed.get("i32s"),
+            Some(&IdlValue::Scalar(IdlScalar::Int32(-1_234_567_890)))
+        );
+        assert_eq!(
+            parsed.get("I32S"),
+            Some(&IdlValue::Scalar(IdlScalar::Int32(-1_234_567_890)))
+        );
+    }
+
+    #[test]
+    fn read_idl_save_scalar_string_preserves_bytes() {
+        let mut bytes = idl_save_header();
+        idl_push_variable_record(&mut bytes, "S", 7, 0, |out| {
+            idl_push_string_data(out, b"The quick brown fox");
+        });
+        idl_push_end_record(&mut bytes);
+
+        let parsed = read_idl_save(&bytes).expect("IDL SAVE string should parse");
+
+        assert_eq!(
+            parsed.get("s"),
+            Some(&IdlValue::Scalar(IdlScalar::String(
+                b"The quick brown fox".to_vec()
+            )))
+        );
+    }
+
+    #[test]
+    fn read_idl_save_float32_array_reverses_dimensions_like_scipy() {
+        let mut bytes = idl_save_header();
+        idl_push_array_variable_record(&mut bytes, "ARRAY2D", 4, 24, 6, &[3, 2], |out| {
+            for value in [1.0_f32, 2.0, 3.5, 4.5, 5.25, 6.75] {
+                out.extend_from_slice(&value.to_be_bytes());
+            }
+        });
+        idl_push_end_record(&mut bytes);
+
+        let parsed = read_idl_save(&bytes).expect("IDL SAVE float32 array should parse");
+        let value = parsed.get("array2d").expect("array variable present");
+
+        let IdlValue::Array(array) = value else {
+            assert!(
+                matches!(value, IdlValue::Array(_)),
+                "expected IDL array, got {value:?}"
+            );
+            return;
+        };
+        assert_eq!(array.element_type, IdlType::Float32);
+        assert_eq!(array.dims, vec![2, 3]);
+        assert_eq!(
+            array.values,
+            vec![
+                IdlScalar::Float32(1.0),
+                IdlScalar::Float32(2.0),
+                IdlScalar::Float32(3.5),
+                IdlScalar::Float32(4.5),
+                IdlScalar::Float32(5.25),
+                IdlScalar::Float32(6.75),
+            ]
+        );
+    }
+
+    #[test]
+    fn read_idl_save_rejects_bad_signature_and_compressed_streams() {
+        let bad_signature =
+            read_idl_save(b"NO\x00\x04").expect_err("bad signature should fail closed");
+        assert!(matches!(bad_signature, IoError::InvalidFormat(_)));
+
+        let compressed =
+            read_idl_save(b"SR\x00\x06").expect_err("compressed IDL SAVE should be unsupported");
+        assert!(matches!(compressed, IoError::UnsupportedFeature(_)));
+    }
+
+    #[test]
     fn loadtxt_basic() {
         let content = "# comment\n1 2 3\n4 5 6\n";
         let (rows, cols, data) = loadtxt(content).unwrap();
@@ -4102,5 +4837,116 @@ mod tests {
         let parsed = read_fortran_unformatted(&bytes, FortranEndian::Little).unwrap();
         assert_eq!(parsed.len(), 1);
         assert!(parsed[0].is_empty());
+    }
+
+    fn idl_save_header() -> Vec<u8> {
+        b"SR\x00\x04".to_vec()
+    }
+
+    fn idl_push_variable_record<F>(
+        out: &mut Vec<u8>,
+        name: &str,
+        type_code: i32,
+        varflags: i32,
+        write_payload: F,
+    ) where
+        F: FnOnce(&mut Vec<u8>),
+    {
+        let record_start = idl_begin_record(out, 2);
+        idl_push_string(out, name.as_bytes());
+        idl_push_i32(out, type_code);
+        idl_push_i32(out, varflags);
+        idl_push_i32(out, 7);
+        write_payload(out);
+        idl_finish_record(out, record_start);
+    }
+
+    fn idl_push_array_variable_record<F>(
+        out: &mut Vec<u8>,
+        name: &str,
+        type_code: i32,
+        nbytes: usize,
+        nelements: usize,
+        dims: &[usize],
+        write_payload: F,
+    ) where
+        F: FnOnce(&mut Vec<u8>),
+    {
+        let record_start = idl_begin_record(out, 2);
+        idl_push_string(out, name.as_bytes());
+        idl_push_i32(out, type_code);
+        idl_push_i32(out, 4);
+        idl_push_array_desc(out, nbytes, nelements, dims);
+        idl_push_i32(out, 7);
+        write_payload(out);
+        idl_finish_record(out, record_start);
+    }
+
+    fn idl_push_end_record(out: &mut Vec<u8>) {
+        idl_push_i32(out, 6);
+        out.extend_from_slice(&0_u32.to_be_bytes());
+        out.extend_from_slice(&0_u32.to_be_bytes());
+        out.extend_from_slice(&0_u32.to_be_bytes());
+    }
+
+    fn idl_begin_record(out: &mut Vec<u8>, rectype: i32) -> usize {
+        let start = out.len();
+        idl_push_i32(out, rectype);
+        out.extend_from_slice(&0_u32.to_be_bytes());
+        out.extend_from_slice(&0_u32.to_be_bytes());
+        out.extend_from_slice(&0_u32.to_be_bytes());
+        start
+    }
+
+    fn idl_finish_record(out: &mut [u8], record_start: usize) {
+        let next = u64::try_from(out.len()).expect("test fixture length fits u64");
+        let low = u32::try_from(next & 0xffff_ffff).expect("low word fits u32");
+        let high = u32::try_from(next >> 32).expect("high word fits u32");
+        out[record_start + 4..record_start + 8].copy_from_slice(&low.to_be_bytes());
+        out[record_start + 8..record_start + 12].copy_from_slice(&high.to_be_bytes());
+    }
+
+    fn idl_push_array_desc(out: &mut Vec<u8>, nbytes: usize, nelements: usize, dims: &[usize]) {
+        idl_push_i32(out, 8);
+        idl_push_i32(out, 0);
+        idl_push_usize_as_i32(out, nbytes);
+        idl_push_usize_as_i32(out, nelements);
+        idl_push_usize_as_i32(out, dims.len());
+        idl_push_i32(out, 0);
+        idl_push_i32(out, 0);
+        idl_push_i32(out, 8);
+        for idx in 0..8 {
+            idl_push_usize_as_i32(out, dims.get(idx).copied().unwrap_or(0));
+        }
+    }
+
+    fn idl_push_string(out: &mut Vec<u8>, bytes: &[u8]) {
+        idl_push_usize_as_i32(out, bytes.len());
+        out.extend_from_slice(bytes);
+        idl_pad_32(out);
+    }
+
+    fn idl_push_string_data(out: &mut Vec<u8>, bytes: &[u8]) {
+        idl_push_usize_as_i32(out, bytes.len());
+        if !bytes.is_empty() {
+            idl_push_usize_as_i32(out, bytes.len());
+            out.extend_from_slice(bytes);
+            idl_pad_32(out);
+        }
+    }
+
+    fn idl_pad_32(out: &mut Vec<u8>) {
+        while !out.len().is_multiple_of(4) {
+            out.push(0);
+        }
+    }
+
+    fn idl_push_usize_as_i32(out: &mut Vec<u8>, value: usize) {
+        let value = i32::try_from(value).expect("IDL test fixture field fits i32");
+        idl_push_i32(out, value);
+    }
+
+    fn idl_push_i32(out: &mut Vec<u8>, value: i32) {
+        out.extend_from_slice(&value.to_be_bytes());
     }
 }
