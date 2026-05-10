@@ -15,6 +15,14 @@ pub fn eye(size: usize) -> SparseResult<CsrMatrix> {
     coo.to_csr()
 }
 
+/// Construct a square sparse identity matrix.
+///
+/// Mirrors `scipy.sparse.identity(n)`. The Rust constructor returns CSR to
+/// match the existing `eye` constructor convention in this crate.
+pub fn identity(size: usize) -> SparseResult<CsrMatrix> {
+    eye(size)
+}
+
 /// Construct a `rows × cols` sparse identity-like matrix with the
 /// `k`-th diagonal set to one (all other entries zero).
 ///
@@ -100,6 +108,20 @@ pub fn diags(
 
     let coo = CooMatrix::from_triplets(shape, data, rows, cols, true)?;
     coo.to_csr()
+}
+
+/// Construct a sparse DIA matrix from SciPy-style padded diagonal rows.
+///
+/// Mirrors `scipy.sparse.spdiags(data, diags, m, n)`: each row in `data`
+/// contains values indexed by output column, including any leading padding for
+/// positive offsets.
+pub fn spdiags(
+    data: &[Vec<f64>],
+    offsets: &[isize],
+    rows: usize,
+    cols: usize,
+) -> SparseResult<DiaMatrix> {
+    DiaMatrix::new(Shape2D::new(rows, cols), data.to_vec(), offsets.to_vec())
 }
 
 pub fn random(shape: Shape2D, density: f64, seed: u64) -> SparseResult<CooMatrix> {
@@ -680,6 +702,16 @@ mod tests {
     }
 
     #[test]
+    fn identity_matches_eye() {
+        let id = identity(5).expect("identity");
+        let eye = eye(5).expect("eye");
+        assert_eq!(id.shape(), eye.shape());
+        assert_eq!(id.data(), eye.data());
+        assert_eq!(id.indices(), eye.indices());
+        assert_eq!(id.indptr(), eye.indptr());
+    }
+
+    #[test]
     fn eye_zero_size_is_empty() {
         let id = eye(0).expect("identity");
         assert_eq!(id.shape(), Shape2D::new(0, 0));
@@ -793,6 +825,42 @@ mod tests {
         let err = diags(&[vec![1.0, 2.0, 3.0]], &[1], Some(Shape2D::new(3, 3)))
             .expect_err("bounds violation");
         assert!(matches!(err, SparseError::InvalidShape { .. }));
+    }
+
+    #[test]
+    fn spdiags_uses_column_indexed_padding_for_positive_offsets() {
+        let dia = spdiags(&[vec![1.0, 2.0, 3.0, 4.0]], &[1], 4, 4).expect("spdiags");
+        assert_eq!(dia.shape(), Shape2D::new(4, 4));
+        assert_eq!(dia.offsets(), &[1]);
+        assert_eq!(
+            dense_from_coo(&dia.to_coo().expect("dia->coo")),
+            vec![
+                vec![0.0, 2.0, 0.0, 0.0],
+                vec![0.0, 0.0, 3.0, 0.0],
+                vec![0.0, 0.0, 0.0, 4.0],
+                vec![0.0, 0.0, 0.0, 0.0],
+            ]
+        );
+    }
+
+    #[test]
+    fn spdiags_uses_column_indexed_values_for_negative_offsets() {
+        let dia = spdiags(&[vec![1.0, 2.0, 3.0, 4.0]], &[-1], 4, 4).expect("spdiags");
+        assert_eq!(
+            dense_from_coo(&dia.to_coo().expect("dia->coo")),
+            vec![
+                vec![0.0, 0.0, 0.0, 0.0],
+                vec![1.0, 0.0, 0.0, 0.0],
+                vec![0.0, 2.0, 0.0, 0.0],
+                vec![0.0, 0.0, 3.0, 0.0],
+            ]
+        );
+    }
+
+    #[test]
+    fn spdiags_rejects_repeated_offsets() {
+        let err = spdiags(&[vec![1.0], vec![2.0]], &[0, 0], 2, 2).expect_err("repeated offsets");
+        assert!(matches!(err, SparseError::InvalidArgument { .. }));
     }
 
     #[test]
