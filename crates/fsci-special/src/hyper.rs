@@ -9,6 +9,20 @@ use crate::types::{
 
 pub const HYPER_DISPATCH_PLAN: &[DispatchPlan] = &[
     DispatchPlan {
+        function: "hyp0f1",
+        steps: &[
+            DispatchStep {
+                regime: KernelRegime::Series,
+                when: "|z| < 50 and b is stable away from nonpositive-integer poles",
+            },
+            DispatchStep {
+                regime: KernelRegime::Asymptotic,
+                when: "|z| >= 50 and b is stable away from nonpositive-integer poles",
+            },
+        ],
+        notes: "CASP records the same magnitude split used by the scalar evaluator and guards near-pole lower parameters.",
+    },
+    DispatchPlan {
         function: "hyp1f1",
         steps: &[
             DispatchStep {
@@ -53,6 +67,8 @@ pub const HYPER_DISPATCH_PLAN: &[DispatchPlan] = &[
 /// Hypergeometric routine covered by the special-function CASP selector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HypergeometricFunction {
+    /// Confluent hypergeometric limit 0F1(; b; z).
+    Hyp0f1,
     /// Confluent hypergeometric 1F1(a; b; z).
     Hyp1f1,
     /// Gauss hypergeometric 2F1(a, b; c; z).
@@ -74,6 +90,8 @@ pub enum HypergeometricBranch {
     PfaffTransform,
     /// Closed-form reduction when a numerator parameter equals c.
     LinearFractionalIdentity,
+    /// Asymptotic expansion selected outside the stable direct-series region.
+    AsymptoticExpansion,
     /// Divergent z = 1 boundary.
     DivergentAtUnitArgument,
     /// Lower parameter is too close to a pole for the requested precision.
@@ -104,6 +122,20 @@ pub struct HyperCaspProblem {
 }
 
 impl HyperCaspProblem {
+    /// Build a 0F1 CASP problem.
+    pub fn hyp0f1(b: f64, z: f64, precision_target: f64) -> Self {
+        Self {
+            function: HypergeometricFunction::Hyp0f1,
+            a: 0.0,
+            b,
+            c: None,
+            z,
+            z_abs: z.abs(),
+            precision_target,
+            parameter_stability_margin: lower_parameter_stability_margin(b),
+        }
+    }
+
     /// Build a 1F1 CASP problem.
     pub fn hyp1f1(a: f64, b: f64, z: f64, precision_target: f64) -> Self {
         Self {
@@ -150,6 +182,12 @@ pub struct HyperCaspDecision {
     pub reason: &'static str,
 }
 
+const HYP0F1_DIRECT_CHAIN: &[HypergeometricBranch] = &[HypergeometricBranch::DirectSeries];
+const HYP0F1_ASYMPTOTIC_CHAIN: &[HypergeometricBranch] = &[
+    HypergeometricBranch::AsymptoticExpansion,
+    HypergeometricBranch::DirectSeries,
+    HypergeometricBranch::UnsupportedAnalyticContinuation,
+];
 const HYP1F1_DIRECT_CHAIN: &[HypergeometricBranch] = &[HypergeometricBranch::DirectSeries];
 const HYP1F1_KUMMER_CHAIN: &[HypergeometricBranch] = &[
     HypergeometricBranch::KummerTransform,
@@ -224,6 +262,7 @@ pub fn select_hypergeometric_branch(
     }
 
     match problem.function {
+        HypergeometricFunction::Hyp0f1 => Ok(select_hyp0f1_branch(problem)),
         HypergeometricFunction::Hyp1f1 => Ok(select_hyp1f1_branch(problem)),
         HypergeometricFunction::Hyp2f1 => select_hyp2f1_branch(problem, mode),
     }
@@ -564,13 +603,22 @@ pub fn hyp0f1_scalar(b: f64, z: f64, mode: RuntimeMode) -> Result<f64, SpecialEr
         return Ok(1.0);
     }
 
-    // For small |z|, use direct series
-    if z.abs() < 50.0 {
-        return Ok(hyp0f1_series(b, z));
+    let decision = select_hypergeometric_branch(HyperCaspProblem::hyp0f1(b, z, 1.0e-14), mode)?;
+    match decision.branch {
+        HypergeometricBranch::DirectSeries => Ok(hyp0f1_series(b, z)),
+        HypergeometricBranch::AsymptoticExpansion => Ok(hyp0f1_asymptotic(b, z)),
+        HypergeometricBranch::ParameterGuard => {
+            guarded_hypergeometric_parameter("hyp0f1", mode, decision.reason)
+        }
+        HypergeometricBranch::UnsupportedAnalyticContinuation => {
+            unsupported_hypergeometric_branch("hyp0f1", mode, decision.reason)
+        }
+        _ => unsupported_hypergeometric_branch(
+            "hyp0f1",
+            mode,
+            "selected branch is not valid for 0F1",
+        ),
     }
-
-    // For large |z|, use asymptotic expansion
-    Ok(hyp0f1_asymptotic(b, z))
 }
 
 /// Power series for 0F1(; b; z).
@@ -619,6 +667,7 @@ fn complex_series_converged(term: Complex64, sum: Complex64, tol: f64) -> bool {
 
 fn hyper_function_name(function: HypergeometricFunction) -> &'static str {
     match function {
+        HypergeometricFunction::Hyp0f1 => "hyp0f1",
         HypergeometricFunction::Hyp1f1 => "hyp1f1",
         HypergeometricFunction::Hyp2f1 => "hyp2f1",
     }
@@ -639,6 +688,26 @@ fn hyper_casp_decision(
         fallback_chain,
         reason,
     }
+}
+
+fn select_hyp0f1_branch(problem: HyperCaspProblem) -> HyperCaspDecision {
+    if problem.z_abs < 50.0 {
+        return hyper_casp_decision(
+            HypergeometricBranch::DirectSeries,
+            problem,
+            300,
+            HYP0F1_DIRECT_CHAIN,
+            "moderate real 0F1 argument uses the direct power series",
+        );
+    }
+
+    hyper_casp_decision(
+        HypergeometricBranch::AsymptoticExpansion,
+        problem,
+        10,
+        HYP0F1_ASYMPTOTIC_CHAIN,
+        "large real 0F1 argument uses the asymptotic Bessel expansion",
+    )
 }
 
 fn select_hyp1f1_branch(problem: HyperCaspProblem) -> HyperCaspDecision {
@@ -1264,11 +1333,13 @@ fn hyp2f1_scalar(a: f64, b: f64, c: f64, z: f64, mode: RuntimeMode) -> Result<f6
         HypergeometricBranch::UnsupportedAnalyticContinuation => {
             unsupported_hypergeometric_branch("hyp2f1", mode, decision.reason)
         }
-        HypergeometricBranch::KummerTransform => unsupported_hypergeometric_branch(
-            "hyp2f1",
-            mode,
-            "selected branch is not valid for 2F1",
-        ),
+        HypergeometricBranch::KummerTransform | HypergeometricBranch::AsymptoticExpansion => {
+            unsupported_hypergeometric_branch(
+                "hyp2f1",
+                mode,
+                "selected branch is not valid for 2F1",
+            )
+        }
     }
 }
 
@@ -1545,6 +1616,36 @@ mod tests {
     }
 
     #[test]
+    fn hyper_casp_selects_direct_series_for_moderate_hyp0f1() {
+        let problem = HyperCaspProblem::hyp0f1(2.0, 12.0, 1.0e-14);
+        let decision = select_casp_for_test(problem);
+
+        assert_eq!(decision.branch, HypergeometricBranch::DirectSeries);
+        assert_eq!(decision.max_terms, 300);
+        assert_eq!(decision.fallback_chain, HYP0F1_DIRECT_CHAIN);
+        assert!(decision.parameter_stability_margin > decision.precision_target);
+    }
+
+    #[test]
+    fn hyper_casp_selects_asymptotic_for_large_hyp0f1_argument() {
+        let problem = HyperCaspProblem::hyp0f1(2.0, 75.0, 1.0e-14);
+        let decision = select_casp_for_test(problem);
+
+        assert_eq!(decision.branch, HypergeometricBranch::AsymptoticExpansion);
+        assert_eq!(decision.max_terms, 10);
+        assert_eq!(decision.fallback_chain, HYP0F1_ASYMPTOTIC_CHAIN);
+    }
+
+    #[test]
+    fn hyper_casp_guards_hyp0f1_lower_parameter_near_pole() {
+        let problem = HyperCaspProblem::hyp0f1(1.0e-16, 0.5, 1.0e-14);
+        let decision = select_casp_for_test(problem);
+
+        assert_eq!(decision.branch, HypergeometricBranch::ParameterGuard);
+        assert!(decision.parameter_stability_margin <= decision.precision_target);
+    }
+
+    #[test]
     fn hyper_casp_selects_direct_series_for_moderate_hyp1f1() {
         let problem = HyperCaspProblem::hyp1f1(1.0, 2.0, 0.5, 1.0e-14);
         let decision = select_casp_for_test(problem);
@@ -1644,6 +1745,12 @@ mod tests {
         };
 
         assert_eq!(kind, SpecialErrorKind::NonFiniteInput);
+    }
+
+    #[test]
+    fn hyp0f1_hardened_errors_when_lower_parameter_near_pole() {
+        let result = hyp0f1(&scalar(1.0e-16), &scalar(0.5), RuntimeMode::Hardened);
+        assert_eq!(error_kind(&result), Some(SpecialErrorKind::PoleInput));
     }
 
     // ── hyp0f1 tests ────────────────────────────────────────────────
