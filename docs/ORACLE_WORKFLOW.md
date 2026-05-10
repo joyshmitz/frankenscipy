@@ -88,13 +88,27 @@ expected and should be preserved for auditability.
 
 ## CI Lane: SciPy-Present Oracle Capture
 
-Recommended CI steps:
+The primary CI lane is `g3-live-scipy-oracle` in `.github/workflows/ci.yml`.
+It installs NumPy + SciPy, runs the Rust capture binary in required-oracle mode,
+and uploads `target/live-oracle-capture.json`.
 
-1. Set up Python with SciPy + NumPy.
-2. Run the targeted oracle capture test:
-   - `cargo test -p fsci-conformance --test evidence_p2c002 oracle_capture_p2c002_linalg -- --nocapture`
-3. Upload `crates/fsci-conformance/fixtures/artifacts/FSCI-P2C-002/oracle_capture.json` as a CI artifact.
-4. Optionally run `fixture_regen --dry-run` and fail CI if it reports drift.
+```bash
+cargo run -p fsci-conformance --bin live_oracle_capture -- \
+  --python python \
+  --output target/live-oracle-capture.json
+```
 
-This lane is additive; the rest of CI should continue to run in environments
-without SciPy and rely on the explicit fallback behavior documented in README.
+Required-oracle mode is intentional: do not pass `--allow-missing-oracle` in the
+SciPy-present lane. The command fails if SciPy cannot be imported, if no packets
+are captured, or if any packet exceeds the zero-drift thresholds. The broader
+`g3-conformance` job may still run an optional fallback capture for non-SciPy
+environments, but that fallback is not the release signal for live oracle parity.
+
+For a targeted local smoke test, use the linalg capture test:
+
+```bash
+cargo test -p fsci-conformance --test evidence_p2c002 oracle_capture_p2c002_linalg -- --nocapture
+```
+
+Optionally run `fixture_regen --dry-run` against a specific capture and fail CI
+if it reports fixture drift.

@@ -59,6 +59,36 @@ jobs:
             --output target/live-oracle-capture.json
         timeout-minutes: 10
 
+  # ── G3b: Live SciPy Oracle Capture ────────────────────────────────
+  # Installs SciPy and runs the capture lane in required-oracle mode.
+  # Unlike G3's non-SciPy fallback smoke, this gate fails if SciPy is absent,
+  # no packets are captured, or any zero-drift threshold is exceeded.
+  g3-live-scipy-oracle:
+    name: "G3b: live SciPy oracle capture"
+    needs: g2-unit-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: "pip"
+      - name: Install SciPy oracle dependencies
+        run: python -m pip install --upgrade pip numpy scipy
+      - name: Capture live SciPy oracle report
+        run: |
+          cargo run -p fsci-conformance --bin live_oracle_capture -- \
+            --python python \
+            --output target/live-oracle-capture.json
+        timeout-minutes: 15
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: live-oracle-capture
+          path: target/live-oracle-capture.json
+          if-no-files-found: error
+
   # ── G4: Adversarial/Smoke Test ─────────────────────────────────────
   # Runs the conformance smoke test to catch obvious regressions.
   # NOTE: This does NOT replay fuzz/seeds/ — full fuzz corpus replay requires
