@@ -17,8 +17,9 @@ use fsci_sparse::{
 };
 use serde::Serialize;
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 // ───────────────────── Structured log types ─────────────────────
@@ -64,6 +65,7 @@ fn emit_log(log: &DiffTestLog) {
 }
 
 const TOL: f64 = 1e-12;
+const REQUIRE_SCIPY_ENV: &str = "FSCI_REQUIRE_SCIPY_ORACLE";
 
 fn dense_from_coo(coo: &CooMatrix) -> Vec<Vec<f64>> {
     let shape = coo.shape();
@@ -142,8 +144,88 @@ fn make_test_coo(rows: usize, cols: usize, triplets: &[(usize, usize, f64)]) -> 
     CooMatrix::from_triplets(Shape2D::new(rows, cols), d, r, c, false).expect("valid test coo")
 }
 
+fn run_scipy_sparse_oracle(label: &str, script: &str) -> Option<Vec<f64>> {
+    let required = std::env::var_os(REQUIRE_SCIPY_ENV).is_some();
+    let mut child = match Command::new("python3")
+        .arg("-")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(err) => {
+            assert!(
+                !required,
+                "{label} oracle required but failed to spawn python3: {err}"
+            );
+            eprintln!("skipping {label} oracle: python3 not available ({err})");
+            return None;
+        }
+    };
+
+    let Some(stdin) = child.stdin.as_mut() else {
+        assert!(
+            !required,
+            "{label} oracle required but stdin was unavailable"
+        );
+        eprintln!("skipping {label} oracle: stdin unavailable");
+        return None;
+    };
+    if let Err(err) = stdin.write_all(script.as_bytes()) {
+        let output = child.wait_with_output().ok();
+        let stderr = output
+            .as_ref()
+            .map(|output| String::from_utf8_lossy(&output.stderr).into_owned())
+            .unwrap_or_default();
+        assert!(
+            !required,
+            "{label} oracle required but stdin write failed: {err}; stderr: {stderr}"
+        );
+        eprintln!("skipping {label} oracle: stdin write failed ({err})\n{stderr}");
+        return None;
+    }
+
+    let output = match child.wait_with_output() {
+        Ok(output) => output,
+        Err(err) => {
+            assert!(!required, "{label} oracle required but wait failed: {err}");
+            eprintln!("skipping {label} oracle: wait failed ({err})");
+            return None;
+        }
+    };
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !required,
+            "{label} oracle required but SciPy exited nonzero:\n{stderr}"
+        );
+        eprintln!("skipping {label} oracle: SciPy unavailable\n{stderr}");
+        return None;
+    }
+
+    match serde_json::from_slice::<Vec<f64>>(&output.stdout) {
+        Ok(values) => Some(values),
+        Err(err) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                !required,
+                "{label} oracle required but returned invalid JSON: {err}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+            );
+            eprintln!(
+                "skipping {label} oracle: invalid JSON ({err})\nstdout:\n{stdout}\nstderr:\n{stderr}"
+            );
+            None
+        }
+    }
+}
+
 fn scipy_spsolve_tridiagonal_4x4() -> Option<Vec<f64>> {
-    let script = r#"
+    run_scipy_sparse_oracle(
+        "sparse spsolve 4x4",
+        r#"
 import json
 import numpy as np
 from scipy import sparse
@@ -156,24 +238,14 @@ rhs = np.array([15.0, 10.0, 10.0, 10.0], dtype=np.float64)
 matrix = sparse.coo_matrix((data, (row, col)), shape=(4, 4)).tocsr()
 solution = splinalg.spsolve(matrix, rhs)
 print(json.dumps([float(value) for value in np.atleast_1d(solution).tolist()]))
-"#;
-    let output = Command::new("python3")
-        .arg("-c")
-        .arg(script)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        eprintln!(
-            "SciPy sparse spsolve oracle unavailable: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        return None;
-    }
-    serde_json::from_slice(&output.stdout).ok()
+"#,
+    )
 }
 
 fn scipy_spsolve_large_diagonal_samples() -> Option<Vec<f64>> {
-    let script = r#"
+    run_scipy_sparse_oracle(
+        "large sparse spsolve",
+        r#"
 import json
 import numpy as np
 from scipy import sparse
@@ -188,20 +260,8 @@ matrix = sparse.diags(diag, offsets=0, format="csr")
 solution = splinalg.spsolve(matrix, rhs)
 sample_indices = [0, 1, 17, n // 2, n - 1]
 print(json.dumps([float(solution[i]) for i in sample_indices]))
-"#;
-    let output = Command::new("python3")
-        .arg("-c")
-        .arg(script)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        eprintln!(
-            "SciPy large sparse spsolve oracle unavailable: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        return None;
-    }
-    serde_json::from_slice(&output.stdout).ok()
+"#,
+    )
 }
 
 // ═══════════════════════════════════════════════════════════════
