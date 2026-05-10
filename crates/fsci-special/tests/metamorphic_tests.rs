@@ -40,6 +40,16 @@ fn unwrap_real(result: SpecialResult) -> f64 {
     }
 }
 
+fn hyp2f1_real(a: f64, b: f64, c: f64, z: f64) -> f64 {
+    unwrap_real(hyp2f1(
+        &real(a),
+        &real(b),
+        &real(c),
+        &real(z),
+        RuntimeMode::Strict,
+    ))
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // MR1 — Γ(x + 1) = x · Γ(x) for various non-integer x.
 // ─────────────────────────────────────────────────────────────────────
@@ -1435,5 +1445,58 @@ fn mr_elliprg_homogeneity() {
                 predicted
             );
         }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR68 — Pfaff transformation for Gauss hypergeometric 2F1:
+//
+//   2F1(a,b;c;z) = (1-z)^(-a) · 2F1(a,c-b;c;z/(z-1))
+//
+// This relates the branch-sensitive negative-z dispatch path to an
+// ordinary positive argument inside the unit disk.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_hyp2f1_pfaff_transformation() {
+    let cases: &[(f64, f64, f64, f64)] = &[
+        (0.5, 1.0, 2.5, -0.2),
+        (1.25, 0.75, 2.75, -0.75),
+        (2.0, 1.5, 4.0, -2.0),
+    ];
+    for &(a, b, c, z) in cases {
+        let lhs = hyp2f1_real(a, b, c, z);
+        let z_new = z / (z - 1.0);
+        let rhs = (1.0 - z).powf(-a) * hyp2f1_real(a, c - b, c, z_new);
+        assert!(
+            close(lhs, rhs),
+            "MR68 Pfaff identity failed for 2F1({a}, {b}; {c}; {z}): lhs={lhs}, rhs={rhs}, z_new={z_new}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR69 — Euler transformation for Gauss hypergeometric 2F1:
+//
+//   2F1(a,b;c;z) = (1-z)^(c-a-b) · 2F1(c-a,c-b;c;z)
+//
+// This catches parameter-transposition and exponent bugs without a
+// SciPy oracle.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_hyp2f1_euler_transformation() {
+    let cases: &[(f64, f64, f64, f64)] = &[
+        (0.5, 1.25, 2.75, 0.2),
+        (1.0, 0.75, 2.5, 0.4),
+        (1.5, 0.5, 3.2, 0.6),
+    ];
+    for &(a, b, c, z) in cases {
+        let lhs = hyp2f1_real(a, b, c, z);
+        let rhs = (1.0 - z).powf(c - a - b) * hyp2f1_real(c - a, c - b, c, z);
+        assert!(
+            close(lhs, rhs),
+            "MR69 Euler identity failed for 2F1({a}, {b}; {c}; {z}): lhs={lhs}, rhs={rhs}"
+        );
     }
 }
