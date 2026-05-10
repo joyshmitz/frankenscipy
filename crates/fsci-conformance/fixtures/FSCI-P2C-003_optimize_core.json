@@ -300,6 +300,34 @@
       }
     },
     {
+      "operation": "minimize",
+      "case_id": "diff_scaled_quadratic_newton_cg_hessp",
+      "category": "differential",
+      "mode": "Strict",
+      "method": "NewtonCg",
+      "objective": "scaled_quadratic",
+      "x0": [
+        8.0,
+        -8.0
+      ],
+      "hessp": true,
+      "tol": 1e-10,
+      "maxiter": 50,
+      "maxfev": 100,
+      "expected": {
+        "kind": "minimize_point",
+        "x": [
+          1.0,
+          -2.0
+        ],
+        "fun": 0.0,
+        "atol": 1e-08,
+        "rtol": 1e-08,
+        "require_success": true,
+        "contract_ref": "fsci_opt::newton_cg:hessp"
+      }
+    },
+    {
       "operation": "differential_evolution",
       "case_id": "diff_rosenbrock_differential_evolution_seeded",
       "category": "differential",

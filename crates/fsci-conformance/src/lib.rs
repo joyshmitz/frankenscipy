@@ -858,6 +858,8 @@ pub enum OptimizeCase {
         #[serde(default)]
         seed: Option<u64>,
         #[serde(default)]
+        hessp: bool,
+        #[serde(default)]
         tol: Option<f64>,
         #[serde(default)]
         maxiter: Option<usize>,
@@ -11133,11 +11135,17 @@ fn execute_optimize_case_inner(
             objective,
             x0,
             seed,
+            hessp,
             tol,
             maxiter,
             maxfev,
             ..
         } => {
+            let hessp = if *hessp {
+                Some(hessp_for_minimize_objective(objective)?)
+            } else {
+                None
+            };
             let objective = objective.clone();
             let options = MinimizeOptions {
                 method: Some(*method),
@@ -11145,6 +11153,7 @@ fn execute_optimize_case_inner(
                 maxiter: *maxiter,
                 maxfev: *maxfev,
                 seed: *seed,
+                hessp,
                 mode: *mode,
                 ..MinimizeOptions::default()
             };
@@ -11418,6 +11427,38 @@ fn evaluate_minimize_objective(objective: &OptimizeMinObjective, x: &[f64]) -> f
             }
         }
     }
+}
+
+fn hessp_for_minimize_objective(
+    objective: &OptimizeMinObjective,
+) -> Result<fsci_opt::types::HesspFunc, OptError> {
+    match objective {
+        OptimizeMinObjective::ShiftedQuadratic => Ok(shifted_quadratic_hessp),
+        OptimizeMinObjective::TranslatedQuadratic => Ok(translated_quadratic_hessp),
+        OptimizeMinObjective::ScaledQuadratic => Ok(scaled_quadratic_hessp),
+        other => Err(OptError::InvalidArgument {
+            detail: format!("hessp fixture support is not defined for {other:?}"),
+        }),
+    }
+}
+
+fn diagonal_hessp(p: &[f64], diag: &[f64]) -> Vec<f64> {
+    p.iter()
+        .enumerate()
+        .map(|(idx, value)| value * diag.get(idx).copied().unwrap_or(0.0))
+        .collect()
+}
+
+fn shifted_quadratic_hessp(_: &[f64], p: &[f64]) -> Vec<f64> {
+    diagonal_hessp(p, &[2.0, 8.0])
+}
+
+fn translated_quadratic_hessp(_: &[f64], p: &[f64]) -> Vec<f64> {
+    diagonal_hessp(p, &[2.0, 2.0])
+}
+
+fn scaled_quadratic_hessp(_: &[f64], p: &[f64]) -> Vec<f64> {
+    diagonal_hessp(p, &[20.0, 80.0])
 }
 
 fn evaluate_root_objective(objective: &OptimizeRootObjective, x: f64) -> f64 {
@@ -18917,10 +18958,8 @@ mod tests {
         // bytes verbatim. Otherwise every test run would rewrite three
         // committed files (parity_report.json + .raptorq.json sidecar +
         // .decode_proof.json) with no semantic difference.
-        let root = PathBuf::from("/tmp").join(format!(
-            "fsci-conformance-okuhi-{}",
-            super::now_unix_ms()
-        ));
+        let root =
+            PathBuf::from("/tmp").join(format!("fsci-conformance-okuhi-{}", super::now_unix_ms()));
         let cfg = HarnessConfig {
             oracle_root: root.join("oracle"),
             fixture_root: root.join("fixtures"),
@@ -19033,7 +19072,10 @@ mod tests {
         );
         // proof_hash equals payload hash (the recovery round-trip).
         let expected = super::hash(&payload).to_hex().to_string();
-        assert_eq!(proof.proof_hash, expected, "decode-proof hash must round-trip");
+        assert_eq!(
+            proof.proof_hash, expected,
+            "decode-proof hash must round-trip"
+        );
     }
 
     #[test]
@@ -20596,8 +20638,11 @@ Path(args.output).write_text(json.dumps(result, indent=2))
                 method,
                 objective,
                 x0,
+                hessp,
                 ..
-            } => format!("operation=minimize method={method:?} objective={objective:?} x0={x0:?}"),
+            } => format!(
+                "operation=minimize method={method:?} objective={objective:?} x0={x0:?} hessp={hessp}"
+            ),
             super::OptimizeCase::Root {
                 method,
                 objective,

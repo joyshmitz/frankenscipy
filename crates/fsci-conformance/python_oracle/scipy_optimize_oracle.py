@@ -75,7 +75,7 @@ def _scaled_quadratic(x: Any) -> float:
     """Scaled quadratic with minimum at (1, -2)."""
     import numpy as np
     x = np.asarray(x, dtype=float)
-    return (x[0] - 1.0) ** 2 + 4.0 * (x[1] + 2.0) ** 2
+    return 10.0 * ((x[0] - 1.0) ** 2 + 4.0 * (x[1] + 2.0) ** 2)
 
 
 def _shifted_quadratic(x: Any) -> float:
@@ -122,13 +122,13 @@ def _scaled_quadratic_grad(x: Any) -> Any:
     """Gradient of scaled_quadratic."""
     import numpy as np
     x = np.asarray(x, dtype=float)
-    return np.array([2.0 * (x[0] - 1.0), 8.0 * (x[1] + 2.0)], dtype=float)
+    return np.array([20.0 * (x[0] - 1.0), 80.0 * (x[1] + 2.0)], dtype=float)
 
 
 def _scaled_quadratic_hess(_: Any) -> Any:
     """Hessian of scaled_quadratic."""
     import numpy as np
-    return np.array([[2.0, 0.0], [0.0, 8.0]], dtype=float)
+    return np.array([[20.0, 0.0], [0.0, 80.0]], dtype=float)
 
 
 def _finite_difference_gradient(func: Callable[[Any], float], x: Any, step: float = 1e-6) -> Any:
@@ -297,6 +297,15 @@ def _get_jacobian_and_hessian(name: str) -> tuple[Callable | None, Callable | No
     return _derivative_map().get(name, (None, None))
 
 
+def _hessp_from_hessian(hessian: Callable) -> Callable:
+    """Build a SciPy-compatible Hessian-vector product from a Hessian callable."""
+    def hessp(x: Any, p: Any) -> Any:
+        import numpy as np
+        return np.asarray(hessian(x), dtype=float).dot(np.asarray(p, dtype=float))
+
+    return hessp
+
+
 def _root_function_map(np: Any) -> Dict[str, Callable]:
     return {
         "linear_shift_03": lambda x: x - 0.3,
@@ -434,6 +443,7 @@ def _run_case(case: Dict[str, Any], optimize: Any, np: Any) -> Dict[str, Any]:
                 "Bfgs": "BFGS",
                 "Lbfgsb": "L-BFGS-B",
                 "ConjugateGradient": "CG",
+                "NewtonCg": "Newton-CG",
                 "Powell": "Powell",
                 "NelderMead": "Nelder-Mead",
                 "Tnc": "TNC",
@@ -463,14 +473,19 @@ def _run_case(case: Dict[str, Any], optimize: Any, np: Any) -> Dict[str, Any]:
                 "tol": tol,
                 "options": options if options else None,
             }
-            if method == "trust-exact":
+            if method in ("trust-exact", "Newton-CG"):
                 jac, hess = _get_jacobian_and_hessian(objective_name)
                 if jac is None or hess is None:
                     raise ValueError(
-                        f"objective {objective_name!r} lacks jac/hess support for trust-exact"
+                        f"objective {objective_name!r} lacks jac/hess support for {method}"
                     )
                 minimize_kwargs["jac"] = jac
-                minimize_kwargs["hess"] = hess
+                if method == "trust-exact":
+                    minimize_kwargs["hess"] = hess
+                elif case.get("hessp"):
+                    minimize_kwargs["hessp"] = _hessp_from_hessian(hess)
+                else:
+                    minimize_kwargs["hess"] = hess
 
             result = optimize.minimize(
                 obj_func,

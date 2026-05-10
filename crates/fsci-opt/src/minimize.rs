@@ -1350,6 +1350,7 @@ where
         Err(err) => return Ok(result_from_error(x0, 0, 0, 0, err)),
     };
     let mut njev = 0usize;
+    let mut nhev = 0usize;
     let mut grad = match finite_diff_gradient(&mut objective, &x, eps) {
         Ok(v) => {
             njev += 1;
@@ -1369,7 +1370,7 @@ where
                 message: String::from("optimization converged (Newton-CG)"),
                 nfev: objective.nfev,
                 njev,
-                nhev: 0,
+                nhev,
                 nit: iteration,
                 jac: Some(grad.clone()),
                 hess_inv: None,
@@ -1390,7 +1391,7 @@ where
                 message: String::from("callback requested stop"),
                 nfev: objective.nfev,
                 njev,
-                nhev: 0,
+                nhev,
                 nit: iteration,
                 jac: Some(grad.clone()),
                 hess_inv: None,
@@ -1408,7 +1409,12 @@ where
                 Ok(v) => v,
                 Err(e) => return Ok(result_from_error(&x, iteration, objective.nfev, njev, e)),
             };
-        njev += nhvp; // each HVP requires one gradient evaluation
+        if options.hessp.is_some() {
+            nhev += nhvp;
+        } else {
+            // Each finite-difference HVP requires one gradient evaluation.
+            njev += nhvp;
+        }
 
         // Line search along direction
         let directional_deriv = dot(&grad, &direction);
@@ -1484,7 +1490,7 @@ where
         message: format!("maximum iterations reached ({maxiter})"),
         nfev: objective.nfev,
         njev,
-        nhev: 0,
+        nhev,
         nit: maxiter,
         jac: Some(grad),
         hess_inv: None,
@@ -4801,6 +4807,14 @@ mod tests {
             result.message
         );
         assert!(result.nfev <= 10, "hessp path should stay within budget");
+        assert!(
+            result.nhev > 0,
+            "explicit hessp calls should be counted as Hessian evaluations"
+        );
+        assert!(
+            result.njev <= 3,
+            "hessp calls should not be counted as gradient evaluations"
+        );
         assert!(
             result.x[0].abs() < 1e-8,
             "minimizer should be near zero, got {}",
