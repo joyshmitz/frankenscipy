@@ -7091,12 +7091,22 @@ pub fn mat_allclose(a: &[Vec<f64>], b: &[Vec<f64>], atol: f64, rtol: f64) -> boo
             return false;
         }
         for (&va, &vb) in ra.iter().zip(rb.iter()) {
-            if (va - vb).abs() > atol + rtol * vb.abs() {
+            if !scalar_allclose(va, vb, atol, rtol) {
                 return false;
             }
         }
     }
     true
+}
+
+fn scalar_allclose(actual: f64, expected: f64, atol: f64, rtol: f64) -> bool {
+    if actual.is_nan() || expected.is_nan() {
+        return actual.is_nan() && expected.is_nan();
+    }
+    if actual.is_infinite() || expected.is_infinite() {
+        return actual == expected;
+    }
+    (actual - expected).abs() <= atol + rtol * expected.abs()
 }
 
 /// Compute the 1-norm of a matrix (maximum column sum of absolute values).
@@ -10128,7 +10138,10 @@ mod tests {
         //         = [17, 99, 23, 45, 67]
         //   H[2]: idx=2 c=99; idx=3-3+1=1 r=23; idx=4-3+1=2 r=45; idx=5-3+1=3 r=67; idx=6-3+1=4 r=89
         //         = [99, 23, 45, 67, 89]
-        let h = hankel(&[1.0_f64, 17.0, 99.0], Some(&[99.0, 23.0, 45.0, 67.0, 89.0]));
+        let h = hankel(
+            &[1.0_f64, 17.0, 99.0],
+            Some(&[99.0, 23.0, 45.0, 67.0, 89.0]),
+        );
         assert_eq!(h.len(), 3);
         assert_eq!(h[0].len(), 5);
         assert_eq!(h[0], vec![1.0, 17.0, 99.0, 23.0, 45.0]);
@@ -10297,13 +10310,14 @@ mod tests {
             let k = kron(&i_m, &i_n);
             assert_eq!(k.len(), m * n, "kron(I_{m}, I_{n}).rows");
             assert_eq!(k[0].len(), m * n, "kron(I_{m}, I_{n}).cols");
-            for i in 0..m * n {
-                for j in 0..m * n {
+            for (i, row) in k.iter().enumerate() {
+                assert_eq!(row.len(), m * n, "kron(I_{m}, I_{n}).row[{i}].cols");
+                for (j, &actual) in row.iter().enumerate() {
                     let expected = if i == j { 1.0 } else { 0.0 };
                     assert!(
-                        (k[i][j] - expected).abs() < 1e-15,
+                        (actual - expected).abs() < 1e-15,
                         "kron(I_{m}, I_{n}) at [{i}][{j}] = {} != {expected}",
-                        k[i][j]
+                        actual
                     );
                 }
             }
@@ -11940,6 +11954,29 @@ mod proptest_tests {
 
         let non_finite = vec![vec![1.0, f64::NAN], vec![0.0, 1.0]];
         assert!(mat_norm_1(&non_finite).is_nan());
+    }
+
+    #[test]
+    fn mat_allclose_handles_nan_and_infinity_explicitly() {
+        assert!(mat_allclose(
+            &[vec![f64::NAN, f64::INFINITY, f64::NEG_INFINITY]],
+            &[vec![f64::NAN, f64::INFINITY, f64::NEG_INFINITY]],
+            1e-12,
+            1e-12,
+        ));
+        assert!(!mat_allclose(&[vec![f64::NAN]], &[vec![0.0]], 1e-12, 1e-12,));
+        assert!(!mat_allclose(
+            &[vec![f64::INFINITY]],
+            &[vec![f64::NEG_INFINITY]],
+            1e-12,
+            1e-12,
+        ));
+        assert!(!mat_allclose(
+            &[vec![f64::INFINITY]],
+            &[vec![1.0e308]],
+            1e-12,
+            1e-12,
+        ));
     }
 
     #[test]
