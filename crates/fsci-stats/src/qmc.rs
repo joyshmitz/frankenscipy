@@ -895,6 +895,131 @@ fn splitmix64(mut z: u64) -> u64 {
     z ^ (z >> 31)
 }
 
+/// Method selector for [`geometric_discrepancy`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GeometricDiscrepancyMethod {
+    /// Minimum pairwise Euclidean distance (default).
+    MinDist,
+    /// Mean edge length of the minimum spanning tree built on the sample.
+    Mst,
+}
+
+/// Geometric discrepancy of a sample. Higher values correspond to greater
+/// sample uniformity (the inverse polarity from the standard discrepancies
+/// in this module).
+///
+/// Matches `scipy.stats.qmc.geometric_discrepancy(sample, method, metric='euclidean')`.
+/// The `metric` parameter on the scipy side is currently fixed to euclidean
+/// here — sufficient for the QMC sample-quality use cases. The sample buffer
+/// is laid out row-major as `n × dimension` (the same convention the rest of
+/// the qmc module uses for its `sample(n)` outputs).
+///
+/// `MinDist` returns `min_{i<j} ||x_i − x_j||`. `Mst` builds the
+/// fully-connected weighted graph on the sample with edge weights = pairwise
+/// Euclidean distance and returns the mean edge length of its minimum
+/// spanning tree (Prim's algorithm; n ≤ a few thousand is the comfortable
+/// regime — the algorithm is O(n²) in time and memory).
+pub fn geometric_discrepancy(
+    sample: &[f64],
+    dimension: usize,
+    method: GeometricDiscrepancyMethod,
+) -> Result<f64, StatsError> {
+    if dimension == 0 {
+        return Err(StatsError::InvalidArgument(
+            "dimension must be >= 1".into(),
+        ));
+    }
+    if sample.len() % dimension != 0 {
+        return Err(StatsError::InvalidArgument(format!(
+            "sample length {} is not a multiple of dimension {dimension}",
+            sample.len()
+        )));
+    }
+    let n = sample.len() / dimension;
+    if n < 2 {
+        return Err(StatsError::InvalidArgument(
+            "sample must contain at least two points".into(),
+        ));
+    }
+    // Sample must lie in the unit hypercube — scipy raises a ValueError for
+    // out-of-range inputs. Mirror that.
+    if sample.iter().any(|v| !(0.0..=1.0).contains(v) || !v.is_finite()) {
+        return Err(StatsError::InvalidArgument(
+            "sample must lie in [0, 1] with finite coordinates".into(),
+        ));
+    }
+
+    let row = |i: usize| &sample[i * dimension..(i + 1) * dimension];
+    let euclid = |i: usize, j: usize| -> f64 {
+        let a = row(i);
+        let b = row(j);
+        a.iter()
+            .zip(b.iter())
+            .map(|(x, y)| (x - y) * (x - y))
+            .sum::<f64>()
+            .sqrt()
+    };
+
+    match method {
+        GeometricDiscrepancyMethod::MinDist => {
+            let mut best = f64::INFINITY;
+            for i in 0..n {
+                for j in (i + 1)..n {
+                    let d = euclid(i, j);
+                    if d > 0.0 && d < best {
+                        best = d;
+                    }
+                }
+            }
+            if !best.is_finite() {
+                // All pairs collapsed onto a duplicate — match scipy's behaviour
+                // of returning the smallest (zero) distance.
+                Ok(0.0)
+            } else {
+                Ok(best)
+            }
+        }
+        GeometricDiscrepancyMethod::Mst => {
+            // Prim's algorithm on the dense weighted graph. O(n²) time and
+            // O(n) auxiliary memory. Returns the mean MST edge length.
+            let mut in_tree = vec![false; n];
+            let mut min_edge = vec![f64::INFINITY; n];
+            in_tree[0] = true;
+            for j in 1..n {
+                min_edge[j] = euclid(0, j);
+            }
+            let mut total = 0.0_f64;
+            for _ in 1..n {
+                // Pick the cheapest fringe vertex.
+                let mut u = usize::MAX;
+                let mut best = f64::INFINITY;
+                for j in 0..n {
+                    if !in_tree[j] && min_edge[j] < best {
+                        best = min_edge[j];
+                        u = j;
+                    }
+                }
+                if u == usize::MAX {
+                    // Sample reduces to fewer than 2 distinct points; fall back.
+                    return Ok(0.0);
+                }
+                in_tree[u] = true;
+                total += best;
+                // Relax the fringe.
+                for j in 0..n {
+                    if !in_tree[j] {
+                        let w = euclid(u, j);
+                        if w < min_edge[j] {
+                            min_edge[j] = w;
+                        }
+                    }
+                }
+            }
+            Ok(total / (n - 1) as f64)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1543,6 +1668,70 @@ mod tests {
         let wd = wraparound_discrepancy(&[], d).unwrap();
         let expected = -(4.0_f64 / 3.0).powi(d as i32);
         assert!((wd - expected).abs() < 1e-15);
+    }
+
+    /// Anchor `geometric_discrepancy` against scipy.stats.qmc.geometric_discrepancy
+    /// on a deterministic 8-point 2-D Halton fixture (frankenscipy-b8s95).
+    #[test]
+    fn geometric_discrepancy_matches_scipy_halton_2d() {
+        // Coordinates from scipy.stats.qmc.Halton(d=2, seed=42).random(8).
+        let sample = vec![
+            0.5513058732778853,
+            0.15176798070427107,
+            0.05130587327788534,
+            0.8184346473709377,
+            0.8013058732778853,
+            0.4851013140376044,
+            0.30130587327788534,
+            0.262879090904271,
+            0.6763058732778853,
+            0.9295457584820488,
+            0.17630587327788534,
+            0.5962124251487155,
+            0.9263058732778853,
+            0.04065687070427107,
+            0.42630587327788534,
+            0.7073235362709377,
+        ];
+        let mindist =
+            geometric_discrepancy(&sample, 2, GeometricDiscrepancyMethod::MinDist).unwrap();
+        let mst = geometric_discrepancy(&sample, 2, GeometricDiscrepancyMethod::Mst).unwrap();
+        // scipy reports 0.25496610764841404 / 0.3286278710953668 to ~16 digits.
+        assert!(
+            (mindist - 0.25496610764841404).abs() < 1e-10,
+            "mindist {mindist} vs scipy 0.25497"
+        );
+        assert!(
+            (mst - 0.3286278710953668).abs() < 1e-10,
+            "mst {mst} vs scipy 0.32863"
+        );
+    }
+
+    #[test]
+    fn geometric_discrepancy_validates_inputs() {
+        // Empty/single-point samples are rejected.
+        let single = vec![0.5_f64, 0.5];
+        assert!(
+            geometric_discrepancy(&single, 2, GeometricDiscrepancyMethod::MinDist).is_err(),
+            "single-point sample must be rejected"
+        );
+        // Out-of-unit-cube coords are rejected.
+        let out = vec![0.5_f64, 1.5];
+        assert!(
+            geometric_discrepancy(&out, 1, GeometricDiscrepancyMethod::MinDist).is_err(),
+            "out-of-unit-cube must be rejected"
+        );
+        // dimension=0 rejected.
+        assert!(
+            geometric_discrepancy(&[0.5_f64], 0, GeometricDiscrepancyMethod::MinDist).is_err(),
+            "dimension=0 must be rejected"
+        );
+        // Length not multiple of dimension rejected.
+        assert!(
+            geometric_discrepancy(&[0.1_f64, 0.2, 0.3], 2, GeometricDiscrepancyMethod::MinDist)
+                .is_err(),
+            "ragged sample must be rejected"
+        );
     }
 
     #[test]
