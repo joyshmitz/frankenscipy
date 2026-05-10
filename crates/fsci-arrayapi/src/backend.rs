@@ -606,16 +606,19 @@ impl ArrayApiBackend for CoreArrayBackend {
         if dtypes.is_empty() {
             return self.resolve_supported_dtype(None);
         }
-        let mut rank = 0usize;
-        for dtype in dtypes {
-            rank = rank.max(dtype_rank(*dtype, force_floating)?);
-        }
-        let resolved = match rank {
-            0 => DType::Float32,
-            1 => DType::Float64,
-            2 => DType::Complex64,
-            _ => DType::Complex128,
+        let mut resolved = if force_floating {
+            force_floating_dtype(dtypes[0])
+        } else {
+            dtypes[0]
         };
+        for dtype in dtypes {
+            let candidate = if force_floating {
+                force_floating_dtype(*dtype)
+            } else {
+                *dtype
+            };
+            resolved = promote_dtype(resolved, candidate);
+        }
         self.resolve_supported_dtype(Some(resolved))
     }
 
@@ -696,7 +699,19 @@ impl ArrayApiBackend for CoreArrayBackend {
 fn is_scoped_dtype(dtype: DType) -> bool {
     matches!(
         dtype,
-        DType::Float32 | DType::Float64 | DType::Complex64 | DType::Complex128
+        DType::Bool
+            | DType::Int8
+            | DType::Int16
+            | DType::Int32
+            | DType::Int64
+            | DType::UInt8
+            | DType::UInt16
+            | DType::UInt32
+            | DType::UInt64
+            | DType::Float32
+            | DType::Float64
+            | DType::Complex64
+            | DType::Complex128
     )
 }
 
@@ -756,6 +771,13 @@ fn finite_scalar_to_f64(
 
 fn cast_scalar_to_dtype(value: ScalarValue, dtype: DType) -> ArrayApiResult<ScalarValue> {
     match dtype {
+        DType::Bool => Ok(ScalarValue::Bool(scalar_to_bool(value))),
+        DType::Int8 | DType::Int16 | DType::Int32 | DType::Int64 => Ok(ScalarValue::I64(
+            cast_scalar_to_signed_integer(value, dtype)?,
+        )),
+        DType::UInt8 | DType::UInt16 | DType::UInt32 | DType::UInt64 => Ok(ScalarValue::U64(
+            cast_scalar_to_unsigned_integer(value, dtype)?,
+        )),
         DType::Float32 => Ok(ScalarValue::F64((scalar_to_f64(value)? as f32) as f64)),
         DType::Float64 => Ok(ScalarValue::F64(scalar_to_f64(value)?)),
         DType::Complex64 => {
@@ -769,10 +791,119 @@ fn cast_scalar_to_dtype(value: ScalarValue, dtype: DType) -> ArrayApiResult<Scal
             let (re, im) = scalar_to_complex_components(value)?;
             Ok(ScalarValue::ComplexF64 { re, im })
         }
-        _ => Err(ArrayApiError::new(
+    }
+}
+
+fn scalar_to_bool(value: ScalarValue) -> bool {
+    match value {
+        ScalarValue::Bool(v) => v,
+        ScalarValue::I64(v) => v != 0,
+        ScalarValue::U64(v) => v != 0,
+        ScalarValue::F64(v) => v != 0.0,
+        ScalarValue::ComplexF64 { re, im } => re != 0.0 || im != 0.0,
+    }
+}
+
+fn cast_scalar_to_signed_integer(value: ScalarValue, dtype: DType) -> ArrayApiResult<i64> {
+    let Some((min, max)) = signed_integer_bounds(dtype) else {
+        return Err(ArrayApiError::new(
             ArrayApiErrorKind::UnsupportedDtype,
-            "only f32/f64/complex64/complex128 are supported",
-        )),
+            "dtype is not a signed integer",
+        ));
+    };
+    let candidate = match value {
+        ScalarValue::Bool(v) => i128::from(if v { 1_i64 } else { 0_i64 }),
+        ScalarValue::I64(v) => i128::from(v),
+        ScalarValue::U64(v) => i128::from(v),
+        ScalarValue::F64(v) => truncated_f64_to_i128(v)?,
+        ScalarValue::ComplexF64 { .. } => truncated_f64_to_i128(scalar_to_f64(value)?)?,
+    };
+    let lower = i128::from(min);
+    let upper = i128::from(max);
+    if candidate < lower || candidate > upper {
+        return Err(ArrayApiError::new(
+            ArrayApiErrorKind::Overflow,
+            "scalar value is outside the requested signed integer dtype range",
+        ));
+    }
+    Ok(candidate as i64)
+}
+
+fn cast_scalar_to_unsigned_integer(value: ScalarValue, dtype: DType) -> ArrayApiResult<u64> {
+    let Some(max) = unsigned_integer_max(dtype) else {
+        return Err(ArrayApiError::new(
+            ArrayApiErrorKind::UnsupportedDtype,
+            "dtype is not an unsigned integer",
+        ));
+    };
+    let candidate = match value {
+        ScalarValue::Bool(v) => u128::from(if v { 1_u64 } else { 0_u64 }),
+        ScalarValue::I64(v) => {
+            if v < 0 {
+                return Err(ArrayApiError::new(
+                    ArrayApiErrorKind::Overflow,
+                    "negative scalar value cannot be cast to unsigned integer dtype",
+                ));
+            }
+            u128::from(v as u64)
+        }
+        ScalarValue::U64(v) => u128::from(v),
+        ScalarValue::F64(v) => truncated_f64_to_u128(v)?,
+        ScalarValue::ComplexF64 { .. } => truncated_f64_to_u128(scalar_to_f64(value)?)?,
+    };
+    if candidate > u128::from(max) {
+        return Err(ArrayApiError::new(
+            ArrayApiErrorKind::Overflow,
+            "scalar value is outside the requested unsigned integer dtype range",
+        ));
+    }
+    Ok(candidate as u64)
+}
+
+fn truncated_f64_to_i128(value: f64) -> ArrayApiResult<i128> {
+    if !value.is_finite() {
+        return Err(ArrayApiError::new(
+            ArrayApiErrorKind::NonFiniteInput,
+            "non-finite scalar cannot be cast to integer dtype",
+        ));
+    }
+    Ok(value.trunc() as i128)
+}
+
+fn truncated_f64_to_u128(value: f64) -> ArrayApiResult<u128> {
+    if !value.is_finite() {
+        return Err(ArrayApiError::new(
+            ArrayApiErrorKind::NonFiniteInput,
+            "non-finite scalar cannot be cast to integer dtype",
+        ));
+    }
+    let truncated = value.trunc();
+    if truncated < 0.0 {
+        return Err(ArrayApiError::new(
+            ArrayApiErrorKind::Overflow,
+            "negative scalar value cannot be cast to unsigned integer dtype",
+        ));
+    }
+    Ok(truncated as u128)
+}
+
+fn signed_integer_bounds(dtype: DType) -> Option<(i64, i64)> {
+    match dtype {
+        DType::Int8 => Some((i64::from(i8::MIN), i64::from(i8::MAX))),
+        DType::Int16 => Some((i64::from(i16::MIN), i64::from(i16::MAX))),
+        DType::Int32 => Some((i64::from(i32::MIN), i64::from(i32::MAX))),
+        DType::Int64 => Some((i64::MIN, i64::MAX)),
+        _ => None,
+    }
+}
+
+fn unsigned_integer_max(dtype: DType) -> Option<u64> {
+    match dtype {
+        DType::UInt8 => Some(u64::from(u8::MAX)),
+        DType::UInt16 => Some(u64::from(u16::MAX)),
+        DType::UInt32 => Some(u64::from(u32::MAX)),
+        DType::UInt64 => Some(u64::MAX),
+        _ => None,
     }
 }
 
@@ -786,12 +917,8 @@ fn scalar_to_complex_components(value: ScalarValue) -> ArrayApiResult<(f64, f64)
     }
 }
 
-fn dtype_rank(dtype: DType, force_floating: bool) -> ArrayApiResult<usize> {
+fn force_floating_dtype(dtype: DType) -> DType {
     match dtype {
-        DType::Float32 => Ok(0),
-        DType::Float64 => Ok(1),
-        DType::Complex64 => Ok(2),
-        DType::Complex128 => Ok(3),
         DType::Bool
         | DType::Int8
         | DType::Int16
@@ -800,16 +927,110 @@ fn dtype_rank(dtype: DType, force_floating: bool) -> ArrayApiResult<usize> {
         | DType::UInt8
         | DType::UInt16
         | DType::UInt32
-        | DType::UInt64 => {
-            if force_floating {
-                Ok(1)
-            } else {
-                Err(ArrayApiError::new(
-                    ArrayApiErrorKind::UnsupportedDtype,
-                    "integer and boolean dtypes are not implemented in this scope",
-                ))
-            }
+        | DType::UInt64 => DType::Float64,
+        _ => dtype,
+    }
+}
+
+fn promote_dtype(left: DType, right: DType) -> DType {
+    if left == right {
+        return left;
+    }
+    if matches!(left, DType::Complex128) || matches!(right, DType::Complex128) {
+        return DType::Complex128;
+    }
+    if matches!(left, DType::Complex64) || matches!(right, DType::Complex64) {
+        return DType::Complex64;
+    }
+    if matches!(left, DType::Float64 | DType::Float32)
+        || matches!(right, DType::Float64 | DType::Float32)
+    {
+        return promote_float_dtype(left, right);
+    }
+    promote_integer_dtype(left, right)
+}
+
+fn promote_float_dtype(left: DType, right: DType) -> DType {
+    if matches!(left, DType::Float64)
+        || matches!(right, DType::Float64)
+        || integer_kind(left).is_some()
+        || integer_kind(right).is_some()
+    {
+        DType::Float64
+    } else {
+        DType::Float32
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IntegerKind {
+    Bool,
+    Signed(u8),
+    Unsigned(u8),
+}
+
+fn integer_kind(dtype: DType) -> Option<IntegerKind> {
+    match dtype {
+        DType::Bool => Some(IntegerKind::Bool),
+        DType::Int8 => Some(IntegerKind::Signed(8)),
+        DType::Int16 => Some(IntegerKind::Signed(16)),
+        DType::Int32 => Some(IntegerKind::Signed(32)),
+        DType::Int64 => Some(IntegerKind::Signed(64)),
+        DType::UInt8 => Some(IntegerKind::Unsigned(8)),
+        DType::UInt16 => Some(IntegerKind::Unsigned(16)),
+        DType::UInt32 => Some(IntegerKind::Unsigned(32)),
+        DType::UInt64 => Some(IntegerKind::Unsigned(64)),
+        _ => None,
+    }
+}
+
+fn promote_integer_dtype(left: DType, right: DType) -> DType {
+    match (integer_kind(left), integer_kind(right)) {
+        (Some(IntegerKind::Bool), Some(IntegerKind::Bool)) => DType::Bool,
+        (Some(IntegerKind::Bool), Some(_)) => right,
+        (Some(_), Some(IntegerKind::Bool)) => left,
+        (Some(IntegerKind::Signed(left_bits)), Some(IntegerKind::Signed(right_bits))) => {
+            signed_dtype_for_bits(left_bits.max(right_bits))
         }
+        (Some(IntegerKind::Unsigned(left_bits)), Some(IntegerKind::Unsigned(right_bits))) => {
+            unsigned_dtype_for_bits(left_bits.max(right_bits))
+        }
+        (Some(IntegerKind::Signed(signed_bits)), Some(IntegerKind::Unsigned(unsigned_bits)))
+        | (Some(IntegerKind::Unsigned(unsigned_bits)), Some(IntegerKind::Signed(signed_bits))) => {
+            promote_mixed_integer_dtype(signed_bits, unsigned_bits)
+        }
+        _ => DType::Float64,
+    }
+}
+
+fn signed_dtype_for_bits(bits: u8) -> DType {
+    match bits {
+        0..=8 => DType::Int8,
+        9..=16 => DType::Int16,
+        17..=32 => DType::Int32,
+        _ => DType::Int64,
+    }
+}
+
+fn unsigned_dtype_for_bits(bits: u8) -> DType {
+    match bits {
+        0..=8 => DType::UInt8,
+        9..=16 => DType::UInt16,
+        17..=32 => DType::UInt32,
+        _ => DType::UInt64,
+    }
+}
+
+fn promote_mixed_integer_dtype(signed_bits: u8, unsigned_bits: u8) -> DType {
+    if signed_bits > unsigned_bits {
+        return signed_dtype_for_bits(signed_bits);
+    }
+    match unsigned_bits {
+        0..=7 => DType::Int8,
+        8..=15 => DType::Int16,
+        16..=31 => DType::Int32,
+        32..=63 => DType::Int64,
+        _ => DType::Float64,
     }
 }
 
@@ -1278,15 +1499,106 @@ mod tests {
     }
 
     #[test]
-    fn strict_dtype_mismatch_errors_are_reported() {
+    fn integer_and_bool_dtypes_create_cast_and_promote() {
         let backend = strict_backend();
-        let request = CreationRequest {
+
+        let int_request = CreationRequest {
             shape: Shape::new(vec![2]),
             dtype: DType::Int64,
             order: MemoryOrder::C,
         };
-        let err = zeros(&backend, &request).expect_err("int dtype is unsupported in this scope");
-        assert_eq!(err.kind, ArrayApiErrorKind::UnsupportedDtype);
+        let int_array = zeros(&backend, &int_request).expect("int zeros should be supported");
+        assert_eq!(int_array.dtype(), DType::Int64);
+        assert_eq!(
+            int_array.values(),
+            &[ScalarValue::I64(0), ScalarValue::I64(0)]
+        );
+
+        let uint_request = CreationRequest {
+            shape: Shape::new(vec![3]),
+            dtype: DType::UInt8,
+            order: MemoryOrder::C,
+        };
+        let uint_array = ones(&backend, &uint_request).expect("uint ones should be supported");
+        assert_eq!(uint_array.dtype(), DType::UInt8);
+        assert_eq!(
+            uint_array.values(),
+            &[
+                ScalarValue::U64(1),
+                ScalarValue::U64(1),
+                ScalarValue::U64(1),
+            ]
+        );
+
+        let bool_request = FullRequest {
+            fill_value: ScalarValue::I64(2),
+            dtype: DType::Bool,
+            order: MemoryOrder::C,
+        };
+        let bool_array = full(&backend, &Shape::new(vec![1]), &bool_request)
+            .expect("bool full should be supported");
+        assert_eq!(bool_array.dtype(), DType::Bool);
+        assert_eq!(bool_array.values(), &[ScalarValue::Bool(true)]);
+
+        let float_request = CreationRequest {
+            shape: Shape::new(vec![2]),
+            dtype: DType::Float64,
+            order: MemoryOrder::C,
+        };
+        let float_values = [ScalarValue::F64(1.9), ScalarValue::F64(-2.1)];
+        let float_array =
+            from_slice(&backend, &float_values, &float_request).expect("float source");
+        let cast_array = backend
+            .astype(&float_array, DType::Int32)
+            .expect("integer astype should truncate toward zero");
+        assert_eq!(cast_array.dtype(), DType::Int32);
+        assert_eq!(
+            cast_array.values(),
+            &[ScalarValue::I64(1), ScalarValue::I64(-2)]
+        );
+
+        let narrow_overflow = FullRequest {
+            fill_value: ScalarValue::I64(128),
+            dtype: DType::Int8,
+            order: MemoryOrder::C,
+        };
+        let err = full(&backend, &Shape::new(vec![1]), &narrow_overflow)
+            .expect_err("out-of-range int8 cast should fail");
+        assert_eq!(err.kind, ArrayApiErrorKind::Overflow);
+
+        let unsigned_overflow = FullRequest {
+            fill_value: ScalarValue::I64(-1),
+            dtype: DType::UInt8,
+            order: MemoryOrder::C,
+        };
+        let err = full(&backend, &Shape::new(vec![1]), &unsigned_overflow)
+            .expect_err("negative unsigned cast should fail");
+        assert_eq!(err.kind, ArrayApiErrorKind::Overflow);
+
+        assert_eq!(
+            backend
+                .result_type(&[DType::Bool, DType::Int32], false)
+                .expect("bool should promote to int"),
+            DType::Int32
+        );
+        assert_eq!(
+            backend
+                .result_type(&[DType::Int8, DType::UInt8], false)
+                .expect("mixed int should widen"),
+            DType::Int16
+        );
+        assert_eq!(
+            backend
+                .result_type(&[DType::Int64, DType::UInt64], false)
+                .expect("unrepresentable mixed int should widen to float"),
+            DType::Float64
+        );
+        assert_eq!(
+            backend
+                .result_type(&[DType::Int32], true)
+                .expect("force floating should still coerce ints"),
+            DType::Float64
+        );
 
         let full_request = crate::creation::FullRequest {
             fill_value: ScalarValue::Bool(true),
@@ -1879,7 +2191,7 @@ mod tests {
                 .dtype_dispatch_logs
                 .lock()
                 .expect("acquire dtype_dispatch_logs");
-            panic!("intentional poison for 74g9v regression");
+            std::panic::resume_unwind(Box::new("intentional poison for 74g9v regression"));
         })
         .join();
         assert!(

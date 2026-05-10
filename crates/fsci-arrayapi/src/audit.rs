@@ -11,9 +11,7 @@ pub fn sync_audit_ledger() -> SyncSharedAuditLedger {
 /// Acquire the ledger guard, recovering from a poisoned mutex so
 /// audit events still record after any prior thread panicked.
 /// Resolves [frankenscipy-kt4od].
-fn lock_or_recover(
-    ledger: &SyncSharedAuditLedger,
-) -> std::sync::MutexGuard<'_, AuditLedger> {
+fn lock_or_recover(ledger: &SyncSharedAuditLedger) -> std::sync::MutexGuard<'_, AuditLedger> {
     match ledger.lock() {
         Ok(g) => g,
         Err(poisoned) => {
@@ -70,12 +68,15 @@ mod tests {
             let l = ledger.clone();
             std::thread::spawn(move || {
                 let _g = l.lock().expect("acquire");
-                panic!("poison fsci-arrayapi audit ledger on purpose");
+                std::panic::resume_unwind(Box::new("poison fsci-arrayapi audit ledger on purpose"));
             })
             .join()
         };
         assert!(poisoned_thread.is_err(), "thread should have panicked");
-        assert!(ledger.lock().is_err(), "ledger must be poisoned after panic");
+        assert!(
+            ledger.lock().is_err(),
+            "ledger must be poisoned after panic"
+        );
 
         record_fail_closed(
             &ledger,

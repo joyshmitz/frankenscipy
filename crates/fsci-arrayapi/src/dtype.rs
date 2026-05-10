@@ -45,9 +45,15 @@ mod tests {
                 .expect("force_floating should permit integral inputs"),
             DType::Float64
         );
-
-        let err = result_type(&backend, &[DType::Int32], false)
-            .expect_err("integral dtypes without force_floating are out of scope");
-        assert_eq!(err.kind, crate::error::ArrayApiErrorKind::UnsupportedDtype);
+        assert_eq!(
+            result_type(&backend, &[DType::Int32], false)
+                .expect("integral dtype promotion should be supported"),
+            DType::Int32
+        );
+        assert_eq!(
+            result_type(&backend, &[DType::Bool, DType::UInt16], false)
+                .expect("bool should promote to the numeric dtype"),
+            DType::UInt16
+        );
     }
 }
