@@ -73,16 +73,22 @@ impl ReportSource {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PacketArtifactPresence {
     pub packet_id: String,
+    pub report_path: Option<String>,
     pub has_report: bool,
     pub has_sidecar: bool,
     pub has_decode_proof: bool,
     pub has_oracle_capture: bool,
     pub has_oracle_error: bool,
+    pub sidecar_path: Option<String>,
+    pub decode_proof_path: Option<String>,
+    pub oracle_capture_path: Option<String>,
+    pub structured_case_log_path: Option<String>,
     pub sidecar_source_hash: Option<String>,
     pub sidecar_source_symbols: Option<usize>,
     pub sidecar_repair_symbols: Option<usize>,
     pub decode_proof_hash: Option<String>,
     pub decode_proof_reason: Option<String>,
+    pub case_drilldowns: Vec<DashboardCaseDrilldown>,
     /// Classification of how the parity_report.json (if any) was produced.
     /// Per frankenscipy-7h9o: previously the dashboard showed pass/fail
     /// counts without distinguishing oracle-verified vs self-check. This
@@ -95,16 +101,22 @@ impl PacketArtifactPresence {
     pub fn new(packet_id: String) -> Self {
         Self {
             packet_id,
+            report_path: None,
             has_report: false,
             has_sidecar: false,
             has_decode_proof: false,
             has_oracle_capture: false,
             has_oracle_error: false,
+            sidecar_path: None,
+            decode_proof_path: None,
+            oracle_capture_path: None,
+            structured_case_log_path: None,
             sidecar_source_hash: None,
             sidecar_source_symbols: None,
             sidecar_repair_symbols: None,
             decode_proof_hash: None,
             decode_proof_reason: None,
+            case_drilldowns: Vec::new(),
             report_source: ReportSource::None,
         }
     }
@@ -120,6 +132,16 @@ impl PacketArtifactPresence {
             ReportSource::SelfCheck
         };
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DashboardCaseDrilldown {
+    pub test_id: String,
+    pub input_summary: Option<String>,
+    pub expected: Option<String>,
+    pub actual: Option<String>,
+    pub diff: Option<String>,
+    pub tolerance: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -338,6 +360,24 @@ impl DashboardState {
             lines.push(String::from("differential=<not recorded>"));
         }
 
+        if let Some(drilldown) = self.selected_structured_case_drilldown(case) {
+            if let Some(expected) = &drilldown.expected {
+                lines.push(format!("oracle_or_expected={expected}"));
+            }
+            if let Some(actual) = &drilldown.actual {
+                lines.push(format!("target={actual}"));
+            }
+            if let Some(diff) = &drilldown.diff {
+                lines.push(format!("delta={diff}"));
+            }
+            if let Some(tolerance) = &drilldown.tolerance {
+                lines.push(format!("structured_tolerance={tolerance}"));
+            }
+            if let Some(input_summary) = &drilldown.input_summary {
+                lines.push(format!("input={input_summary}"));
+            }
+        }
+
         lines
     }
 
@@ -347,6 +387,16 @@ impl DashboardState {
         self.artifact_presence
             .iter()
             .find(|presence| presence.packet_id == packet.packet_id)
+    }
+
+    fn selected_structured_case_drilldown(
+        &self,
+        case: &crate::CaseResult,
+    ) -> Option<&DashboardCaseDrilldown> {
+        self.selected_packet_artifacts()?
+            .case_drilldowns
+            .iter()
+            .find(|drilldown| drilldown.test_id == case.case_id)
     }
 
     #[must_use]
@@ -553,26 +603,78 @@ fn discover_reports_best_effort(artifact_root: &Path) -> Result<DiscoveryResult,
         //                   under evidence/ subdirectory
         // Probe both locations so dashboards don't show the 10 P2C-N/
         // dirs as zombie packets with no report.
-        let report_path = {
-            let top = packet_dir.join("parity_report.json");
-            if top.exists() {
-                top
-            } else {
-                packet_dir.join("evidence").join("parity_report.json")
-            }
-        };
-        let sidecar_path = packet_dir.join("parity_report.raptorq.json");
-        let decode_proof_path = packet_dir.join("parity_report.decode_proof.json");
-        let oracle_capture_path = packet_dir.join("oracle_capture.json");
-        let oracle_error_path = packet_dir.join("oracle_capture.error.txt");
+        let report_path = first_existing_path([
+            packet_dir.join("parity_report.json"),
+            packet_dir.join("evidence").join("parity_report.json"),
+            packet_dir.join("differential").join("parity_report.json"),
+        ])
+        .unwrap_or_else(|| packet_dir.join("parity_report.json"));
+        let report_dir = report_path.parent().unwrap_or(packet_dir.as_path());
+        let sidecar_path = first_existing_path([
+            report_dir.join("parity_report.raptorq.json"),
+            packet_dir.join("parity_report.raptorq.json"),
+            packet_dir
+                .join("evidence")
+                .join("parity_report.raptorq.json"),
+            packet_dir
+                .join("differential")
+                .join("parity_report.raptorq.json"),
+        ]);
+        let decode_proof_path = first_existing_path([
+            report_dir.join("parity_report.decode_proof.json"),
+            packet_dir.join("parity_report.decode_proof.json"),
+            packet_dir
+                .join("evidence")
+                .join("parity_report.decode_proof.json"),
+            packet_dir
+                .join("differential")
+                .join("parity_report.decode_proof.json"),
+        ]);
+        let oracle_capture_path = first_existing_path([
+            report_dir.join("oracle_capture.json"),
+            packet_dir.join("oracle_capture.json"),
+            packet_dir.join("differential").join("oracle_capture.json"),
+        ]);
+        let oracle_error_path = first_existing_path([
+            report_dir.join("oracle_capture.error.txt"),
+            packet_dir.join("oracle_capture.error.txt"),
+            packet_dir
+                .join("differential")
+                .join("oracle_capture.error.txt"),
+        ]);
+        let structured_case_log_path = first_existing_path([
+            report_dir.join("structured_case_logs.json"),
+            packet_dir
+                .join("differential")
+                .join("structured_case_logs.json"),
+            packet_dir
+                .join("evidence")
+                .join("structured_case_logs.json"),
+        ]);
 
         packet_presence.has_report = report_path.exists();
-        packet_presence.has_sidecar = sidecar_path.exists();
-        packet_presence.has_decode_proof = decode_proof_path.exists();
-        packet_presence.has_oracle_capture = oracle_capture_path.exists();
-        packet_presence.has_oracle_error = oracle_error_path.exists();
-        if packet_presence.has_sidecar {
-            match fs::read_to_string(&sidecar_path) {
+        packet_presence.has_sidecar = sidecar_path.is_some();
+        packet_presence.has_decode_proof = decode_proof_path.is_some();
+        packet_presence.has_oracle_capture = oracle_capture_path.is_some();
+        packet_presence.has_oracle_error = oracle_error_path.is_some();
+        if packet_presence.has_report {
+            packet_presence.report_path = Some(relative_artifact_path(artifact_root, &report_path));
+        }
+        if let Some(path) = &sidecar_path {
+            packet_presence.sidecar_path = Some(relative_artifact_path(artifact_root, path));
+        }
+        if let Some(path) = &decode_proof_path {
+            packet_presence.decode_proof_path = Some(relative_artifact_path(artifact_root, path));
+        }
+        if let Some(path) = &oracle_capture_path {
+            packet_presence.oracle_capture_path = Some(relative_artifact_path(artifact_root, path));
+        }
+        if let Some(path) = &structured_case_log_path {
+            packet_presence.structured_case_log_path =
+                Some(relative_artifact_path(artifact_root, path));
+        }
+        if let Some(sidecar_path) = &sidecar_path {
+            match fs::read_to_string(sidecar_path) {
                 Ok(raw) => match from_str::<RaptorQSidecar>(&raw) {
                     Ok(sidecar) => {
                         packet_presence.sidecar_source_hash = Some(sidecar.source_hash);
@@ -590,8 +692,8 @@ fn discover_reports_best_effort(artifact_root: &Path) -> Result<DiscoveryResult,
                 )),
             }
         }
-        if packet_presence.has_decode_proof {
-            match fs::read_to_string(&decode_proof_path) {
+        if let Some(decode_proof_path) = &decode_proof_path {
+            match fs::read_to_string(decode_proof_path) {
                 Ok(raw) => match from_str::<DecodeProofArtifact>(&raw) {
                     Ok(proof) => {
                         packet_presence.decode_proof_hash = Some(proof.proof_hash);
@@ -607,6 +709,9 @@ fn discover_reports_best_effort(artifact_root: &Path) -> Result<DiscoveryResult,
                     decode_proof_path.display()
                 )),
             }
+        }
+        if let Some(path) = &structured_case_log_path {
+            packet_presence.case_drilldowns = load_structured_case_drilldowns(path, &mut warnings);
         }
         packet_presence.classify_report_source();
 
@@ -632,6 +737,73 @@ fn discover_reports_best_effort(artifact_root: &Path) -> Result<DiscoveryResult,
     reports.sort_by(|left, right| left.packet_id.cmp(&right.packet_id));
     presence.sort_by(|left, right| left.packet_id.cmp(&right.packet_id));
     Ok((reports, presence, warnings))
+}
+
+fn first_existing_path<const N: usize>(
+    paths: [std::path::PathBuf; N],
+) -> Option<std::path::PathBuf> {
+    paths.into_iter().find(|path| path.exists())
+}
+
+fn relative_artifact_path(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .display()
+        .to_string()
+}
+
+fn load_structured_case_drilldowns(
+    path: &Path,
+    warnings: &mut Vec<String>,
+) -> Vec<DashboardCaseDrilldown> {
+    let raw = match fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(error) => {
+            warnings.push(format!("failed to read `{}`: {error}", path.display()));
+            return Vec::new();
+        }
+    };
+    let parsed = match from_str::<serde_json::Value>(&raw) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            warnings.push(format!("failed to parse `{}`: {error}", path.display()));
+            return Vec::new();
+        }
+    };
+    let Some(items) = parsed.as_array() else {
+        warnings.push(format!(
+            "structured case log `{}` is not a JSON array",
+            path.display()
+        ));
+        return Vec::new();
+    };
+
+    items
+        .iter()
+        .filter_map(|item| {
+            let test_id = item
+                .get("test_id")
+                .or_else(|| item.get("case_id"))?
+                .as_str()?
+                .to_owned();
+            Some(DashboardCaseDrilldown {
+                test_id,
+                input_summary: json_field_to_string(item.get("input_summary")),
+                expected: json_field_to_string(item.get("expected")),
+                actual: json_field_to_string(item.get("actual")),
+                diff: json_field_to_string(item.get("diff")),
+                tolerance: json_field_to_string(item.get("tolerance")),
+            })
+        })
+        .collect()
+}
+
+fn json_field_to_string(value: Option<&serde_json::Value>) -> Option<String> {
+    match value? {
+        serde_json::Value::Null => None,
+        serde_json::Value::String(value) => Some(value.clone()),
+        value => Some(value.to_string()),
+    }
 }
 
 #[cfg(test)]
@@ -856,12 +1028,84 @@ mod tests {
             Some("abcdef0123456789abcdef0123456789")
         );
         assert_eq!(
+            artifact.sidecar_path.as_deref(),
+            Some("PKT-GOOD/parity_report.raptorq.json")
+        );
+        assert_eq!(
             artifact.decode_proof_hash.as_deref(),
             Some("fedcba9876543210fedcba9876543210")
         );
         assert_eq!(
+            artifact.decode_proof_path.as_deref(),
+            Some("PKT-GOOD/parity_report.decode_proof.json")
+        );
+        assert_eq!(
             artifact.decode_proof_reason.as_deref(),
             Some("test decode proof")
+        );
+    }
+
+    #[test]
+    fn dashboard_loader_reads_evidence_sibling_provenance() {
+        let root = temp_dir("evidence-provenance");
+        let evidence = root.join("P2C-007").join("evidence");
+        fs::create_dir_all(&evidence).expect("create evidence dir");
+
+        let report = r#"{
+  "packet_id": "P2C-007",
+  "family": "arrayapi",
+  "case_results": [{"case_id":"c","passed":true,"message":"ok"}],
+  "passed_cases": 1,
+  "failed_cases": 0,
+  "generated_unix_ms": 0
+}"#;
+        fs::write(evidence.join("parity_report.json"), report).expect("write report");
+        fs::write(
+            evidence.join("parity_report.raptorq.json"),
+            r#"{
+  "schema_version": 1,
+  "source_hash": "abcdef0123456789abcdef0123456789",
+  "symbol_size": 1024,
+  "seed": 7,
+  "source_symbols": 4,
+  "repair_symbols": 1,
+  "repair_symbol_hashes": ["r1"]
+}"#,
+        )
+        .expect("write sidecar");
+        fs::write(
+            evidence.join("parity_report.decode_proof.json"),
+            r#"{
+  "ts_unix_ms": 123,
+  "reason": "nested proof",
+  "recovered_blocks": 1,
+  "proof_hash": "fedcba9876543210fedcba9876543210"
+}"#,
+        )
+        .expect("write proof");
+
+        let state = load_dashboard_state_from_artifact_root(&root, None).expect("load state");
+        let artifact = state
+            .selected_packet_artifacts()
+            .expect("artifact presence");
+        assert!(artifact.has_sidecar);
+        assert!(artifact.has_decode_proof);
+        assert_eq!(
+            artifact.report_path.as_deref(),
+            Some("P2C-007/evidence/parity_report.json")
+        );
+        assert_eq!(
+            artifact.sidecar_path.as_deref(),
+            Some("P2C-007/evidence/parity_report.raptorq.json")
+        );
+        assert_eq!(
+            artifact.decode_proof_path.as_deref(),
+            Some("P2C-007/evidence/parity_report.decode_proof.json")
+        );
+        assert_eq!(artifact.sidecar_source_symbols, Some(4));
+        assert_eq!(
+            artifact.decode_proof_reason.as_deref(),
+            Some("nested proof")
         );
     }
 
@@ -924,6 +1168,23 @@ mod tests {
   "generated_unix_ms": 0
 }"#;
         fs::write(packet.join("parity_report.json"), rich_report).expect("write report");
+        let differential = packet.join("differential");
+        fs::create_dir_all(&differential).expect("create differential dir");
+        fs::write(
+            differential.join("structured_case_logs.json"),
+            r#"[
+  {
+    "test_id": "ok",
+    "input_summary": "function=demo args=[1,2,3]",
+    "expected": "kind=scalar value=3.0",
+    "actual": "target scalar value=3.0",
+    "diff": 1e-12,
+    "tolerance": {"atol": 1e-12, "rtol": 1e-12, "comparison_mode": "scalar"},
+    "pass": true
+  }
+]"#,
+        )
+        .expect("write structured logs");
 
         let state = load_dashboard_state_from_artifact_root(&root, None).expect("load state");
         assert_eq!(state.reports().len(), 1);
@@ -953,6 +1214,22 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("oracle_status=Available")),
             "drilldown should surface oracle status: {drilldown:?}"
+        );
+        assert!(
+            drilldown
+                .iter()
+                .any(|line| line.contains("oracle_or_expected=kind=scalar value=3.0")),
+            "drilldown should surface expected/oracle value: {drilldown:?}"
+        );
+        assert!(
+            drilldown
+                .iter()
+                .any(|line| line.contains("target=target scalar value=3.0")),
+            "drilldown should surface target value: {drilldown:?}"
+        );
+        assert!(
+            drilldown.iter().any(|line| line.contains("delta=1e-12")),
+            "drilldown should surface structured delta: {drilldown:?}"
         );
     }
 

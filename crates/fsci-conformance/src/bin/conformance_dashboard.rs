@@ -296,12 +296,24 @@ impl DashboardApp {
                     lines.push(format!("sidecar_source_hash={}", short_hash(source_hash)));
                     styles.push(Style::new().fg(PackedRgba::rgb(150, 210, 180)));
                 }
+                if let Some(path) = &artifact.sidecar_path {
+                    lines.push(format!("sidecar_ref={path}"));
+                    styles.push(Style::new().fg(PackedRgba::rgb(150, 210, 180)));
+                }
                 if let Some(proof_hash) = &artifact.decode_proof_hash {
                     lines.push(format!("decode_proof_hash={}", short_hash(proof_hash)));
                     styles.push(Style::new().fg(PackedRgba::rgb(150, 210, 180)));
                 }
+                if let Some(path) = &artifact.decode_proof_path {
+                    lines.push(format!("decode_proof_ref={path}"));
+                    styles.push(Style::new().fg(PackedRgba::rgb(150, 210, 180)));
+                }
                 if let Some(reason) = &artifact.decode_proof_reason {
                     lines.push(format!("decode_reason={reason}"));
+                    styles.push(Style::new().fg(PackedRgba::rgb(150, 210, 180)));
+                }
+                if let Some(path) = &artifact.structured_case_log_path {
+                    lines.push(format!("case_log_ref={path}"));
                     styles.push(Style::new().fg(PackedRgba::rgb(150, 210, 180)));
                 }
             }
