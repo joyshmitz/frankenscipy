@@ -14,8 +14,8 @@ use asupersync::raptorq::systematic::SystematicEncoder;
 use blake3::hash;
 use fsci_conformance::{RaptorQSidecar, chunk_payload, generate_raptorq_sidecar};
 use fsci_runtime::{
-    ConformalCalibrator, DecisionSignals, MatrixConditionState, PolicyAction, PolicyController,
-    RiskState, RuntimeMode, SignalSequence, SolverAction, SolverPortfolio,
+    AuditLedger, ConformalCalibrator, DecisionSignals, MatrixConditionState, PolicyAction,
+    PolicyController, RiskState, RuntimeMode, SignalSequence, SolverAction, SolverPortfolio,
 };
 use serde::Serialize;
 use std::path::Path;
@@ -618,6 +618,48 @@ fn check_evidence_jsonl_serialization() -> ParityGate {
     }
 }
 
+/// Verify shared AuditLedger can carry full Spec §6 decision records.
+fn check_audit_ledger_structured_decision_event() -> ParityGate {
+    let mut controller = PolicyController::new(RuntimeMode::Strict, 8);
+    let decision = controller.decide(DecisionSignals::new(12.0, 0.15, 0.05));
+    let structured = controller
+        .ledger()
+        .latest_alien_artifact_decision()
+        .expect("structured decision");
+    let mut audit = AuditLedger::new();
+    audit.record_alien_artifact_decision(
+        123,
+        AuditLedger::fingerprint_bytes(b"p2c008-structured-audit"),
+        structured,
+        "validated",
+    );
+
+    let payload = audit.to_json().expect("audit ledger JSON");
+    let parsed: serde_json::Value = serde_json::from_str(&payload).expect("parse audit ledger");
+    let action = &parsed["entries"][0]["action"];
+    let pass = action["kind"] == "alien_artifact_decision"
+        && action["decision"].get("state_space").is_some()
+        && action["decision"].get("evidence").is_some()
+        && action["decision"].get("loss_matrix").is_some()
+        && action["decision"].get("posterior").is_some()
+        && action["decision"].get("expected_losses").is_some()
+        && action["decision"].get("confidence").is_some()
+        && action["decision"]
+            .get("calibration_fallback_trigger")
+            .is_some();
+
+    ParityGate {
+        fixture_id: "audit_ledger_structured_decision_event".into(),
+        subsystem: "evidence_ledger",
+        pass,
+        description: "Shared AuditLedger emits full AlienArtifactDecision records".into(),
+        detail: format!(
+            "action={:?}, top_state={:?}, selected={:?}",
+            decision.action, decision.top_state, action["decision"]["action"]
+        ),
+    }
+}
+
 // ── Main evidence pack test ────────────────────────────────────────────────────
 
 #[test]
@@ -841,6 +883,7 @@ fn evidence_p2c008_final_pack() {
     gates.push(check_ledger_latest_entry());
     gates.push(check_signal_sequence_replay());
     gates.push(check_evidence_jsonl_serialization());
+    gates.push(check_audit_ledger_structured_decision_event());
 
     let all_pass = gates.iter().all(|g| g.pass);
     let parity_gates = ParityGateReport {

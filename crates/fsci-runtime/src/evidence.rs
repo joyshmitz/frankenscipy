@@ -153,9 +153,18 @@ impl PolicyEvidenceLedger {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AuditAction {
-    ModeDecision { mode: RuntimeMode },
-    BoundedRecovery { recovery_action: String },
-    FailClosed { reason: String },
+    ModeDecision {
+        mode: RuntimeMode,
+    },
+    BoundedRecovery {
+        recovery_action: String,
+    },
+    FailClosed {
+        reason: String,
+    },
+    AlienArtifactDecision {
+        decision: Box<AlienArtifactDecision>,
+    },
     // br-egba-1: `PolicyOverride { override_action: String }` was
     // defined here but never constructed by any crate in the workspace
     // (grep confirms zero call sites outside the enum definition).
@@ -207,6 +216,24 @@ impl AuditLedger {
     /// Record an audit event (append-only).
     pub fn record(&mut self, event: AuditEvent) {
         self.entries.push(event);
+    }
+
+    /// Record a fully surfaced Spec §6 decision-theory event.
+    pub fn record_alien_artifact_decision(
+        &mut self,
+        timestamp_ms: u64,
+        input_fingerprint: impl Into<String>,
+        decision: AlienArtifactDecision,
+        outcome: impl Into<String>,
+    ) {
+        self.record(AuditEvent::new(
+            timestamp_ms,
+            input_fingerprint,
+            AuditAction::AlienArtifactDecision {
+                decision: Box::new(decision),
+            },
+            outcome,
+        ));
     }
 
     #[must_use]
@@ -365,6 +392,38 @@ mod tests {
         assert_eq!(decision.action, PolicyAction::FullValidate);
         assert_eq!(decision.confidence, 0.6);
         assert!(!decision.calibration_fallback_trigger);
+    }
+
+    #[test]
+    fn audit_ledger_records_structured_alien_artifact_decision() {
+        let entry = DecisionEvidenceEntry {
+            mode: RuntimeMode::Hardened,
+            signals: DecisionSignals::new(14.0, 0.2, 0.1),
+            logits: [-1.0, 1.0, 0.0],
+            posterior: [0.1, 0.7, 0.2],
+            expected_losses: [71.0, 15.2, 26.7],
+            action: PolicyAction::FullValidate,
+            top_state: RiskState::IllConditioned,
+            reason: String::from("structured audit decision"),
+        };
+        let decision = entry.alien_artifact_decision();
+        let mut ledger = AuditLedger::new();
+
+        ledger.record_alien_artifact_decision(
+            11,
+            AuditLedger::fingerprint_bytes(b"structured"),
+            decision,
+            "validated",
+        );
+
+        let json = ledger.to_json().expect("serialize structured audit");
+        let parsed = serde_json::from_str::<serde_json::Value>(&json).expect("parse ledger JSON");
+        let action = &parsed["entries"][0]["action"];
+        assert_eq!(action["kind"], "alien_artifact_decision");
+        assert_eq!(action["decision"]["state"], "IllConditioned");
+        assert!(action["decision"].get("evidence").is_some());
+        assert!(action["decision"].get("loss_matrix").is_some());
+        assert_eq!(action["decision"]["confidence"], 0.7);
     }
 
     #[test]
