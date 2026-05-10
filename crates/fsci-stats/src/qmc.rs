@@ -36,9 +36,10 @@ pub trait QmcEngine {
 /// `O(1/sqrt(N))` — making Halton useful for low-dimensional Monte Carlo
 /// integration.
 ///
-/// The sequence is deterministic; reseeding via `reset` rewinds to index 0.
-/// `skip(k)` advances by `k` samples without materializing them, matching
-/// scipy.stats.qmc.Halton().fast_forward(k).
+/// The sequence is deterministic; `reset` rewinds to index 0. The first
+/// emitted point is the origin, matching `scipy.stats.qmc.Halton(...,
+/// scramble=False).random(...)`. `skip(k)` advances by `k` samples without
+/// materializing them, matching scipy.stats.qmc.Halton().fast_forward(k).
 #[derive(Debug, Clone)]
 pub struct HaltonSampler {
     primes: Vec<u64>,
@@ -65,7 +66,7 @@ impl HaltonSampler {
         }
         Ok(Self {
             primes: HALTON_PRIMES[..dimension].to_vec(),
-            next_index: 1,
+            next_index: 0,
         })
     }
 
@@ -79,11 +80,10 @@ impl HaltonSampler {
         self.next_index
     }
 
-    /// Rewind the sampler so the next call to `sample` returns sample index 1
-    /// (skipping index 0 which would land at the origin and is never used by
-    /// scipy.stats.qmc.Halton).
+    /// Rewind the sampler so the next call to `sample` returns sample index 0
+    /// (the origin), matching SciPy's unscrambled Halton prefix.
     pub fn reset(&mut self) {
-        self.next_index = 1;
+        self.next_index = 0;
     }
 
     /// Advance the sampler by `k` samples without materializing them. Useful
@@ -925,11 +925,9 @@ pub fn geometric_discrepancy(
     method: GeometricDiscrepancyMethod,
 ) -> Result<f64, StatsError> {
     if dimension == 0 {
-        return Err(StatsError::InvalidArgument(
-            "dimension must be >= 1".into(),
-        ));
+        return Err(StatsError::InvalidArgument("dimension must be >= 1".into()));
     }
-    if sample.len() % dimension != 0 {
+    if !sample.len().is_multiple_of(dimension) {
         return Err(StatsError::InvalidArgument(format!(
             "sample length {} is not a multiple of dimension {dimension}",
             sample.len()
@@ -943,7 +941,10 @@ pub fn geometric_discrepancy(
     }
     // Sample must lie in the unit hypercube — scipy raises a ValueError for
     // out-of-range inputs. Mirror that.
-    if sample.iter().any(|v| !(0.0..=1.0).contains(v) || !v.is_finite()) {
+    if sample
+        .iter()
+        .any(|v| !(0.0..=1.0).contains(v) || !v.is_finite())
+    {
         return Err(StatsError::InvalidArgument(
             "sample must lie in [0, 1] with finite coordinates".into(),
         ));
@@ -985,8 +986,8 @@ pub fn geometric_discrepancy(
             let mut in_tree = vec![false; n];
             let mut min_edge = vec![f64::INFINITY; n];
             in_tree[0] = true;
-            for j in 1..n {
-                min_edge[j] = euclid(0, j);
+            for (j, edge) in min_edge.iter_mut().enumerate().take(n).skip(1) {
+                *edge = euclid(0, j);
             }
             let mut total = 0.0_f64;
             for _ in 1..n {
@@ -1039,19 +1040,19 @@ mod tests {
     #[test]
     fn halton_sample_first_2d_canonical() {
         // Canonical first-five Halton points in 2D (bases 2 and 3):
+        //   index 0 → (0, 0)
         //   index 1 → (1/2, 1/3)
         //   index 2 → (1/4, 2/3)
         //   index 3 → (3/4, 1/9)
         //   index 4 → (1/8, 4/9)
-        //   index 5 → (5/8, 7/9)
         let mut h = HaltonSampler::new(2).unwrap();
         let s = h.sample(5);
         let expected = [
+            (0.0, 0.0),
             (1.0 / 2.0, 1.0 / 3.0),
             (1.0 / 4.0, 2.0 / 3.0),
             (3.0 / 4.0, 1.0 / 9.0),
             (1.0 / 8.0, 4.0 / 9.0),
-            (5.0 / 8.0, 7.0 / 9.0),
         ];
         for (i, (ex, ey)) in expected.iter().enumerate() {
             assert!((s[i * 2] - ex).abs() < 1e-15, "x[{i}]");
@@ -1114,9 +1115,9 @@ mod tests {
     #[test]
     fn halton_index_advances_with_each_sample() {
         let mut h = HaltonSampler::new(2).unwrap();
-        assert_eq!(h.next_index(), 1);
+        assert_eq!(h.next_index(), 0);
         let _ = h.sample(3);
-        assert_eq!(h.next_index(), 4);
+        assert_eq!(h.next_index(), 3);
     }
 
     #[test]
@@ -1183,10 +1184,7 @@ mod tests {
 
         let mut halton = HaltonSampler::new(2).unwrap();
         let mut sobol = SobolSampler::new(2).unwrap();
-        assert_eq!(
-            draw_prefix(&mut halton, 2),
-            vec![0.5, 1.0 / 3.0, 0.25, 2.0 / 3.0]
-        );
+        assert_eq!(draw_prefix(&mut halton, 2), vec![0.0, 0.0, 0.5, 1.0 / 3.0]);
         assert_eq!(draw_prefix(&mut sobol, 2), vec![0.0, 0.0, 0.5, 0.5]);
     }
 
