@@ -20,8 +20,8 @@
 
 use fsci_arrayapi::{
     ArrayApiArray, ArrayApiBackend, ArrayApiError, ArrayApiErrorKind, ArrayApiResult, CoreArray,
-    CoreArrayBackend, CreationRequest, DType, ExecutionMode, FullRequest, MemoryOrder, ScalarValue,
-    Shape, from_slice, full, zeros,
+    CoreArrayBackend, CreationRequest, DType, ExecutionMode, FullRequest, IndexExpr, MemoryOrder,
+    ScalarValue, Shape, SliceSpec, broadcast_shapes, from_slice, full, zeros,
 };
 use serde::Serialize;
 use std::time::Instant;
@@ -207,43 +207,204 @@ impl ArrayApiBackend for ProfileArrayBackend {
 
     fn arange(
         &self,
-        _start: ScalarValue,
-        _stop: ScalarValue,
-        _step: ScalarValue,
-        _dtype: Option<DType>,
+        start: ScalarValue,
+        stop: ScalarValue,
+        step: ScalarValue,
+        dtype: Option<DType>,
     ) -> ArrayApiResult<Self::Array> {
-        profile_unimplemented("arange")
+        let resolved_dtype = profile_resolve_dtype(dtype)?;
+        let start_v = profile_finite_scalar_to_f64(
+            start,
+            ArrayApiErrorKind::NonFiniteInput,
+            "arange start must be finite",
+        )?;
+        let stop_v = profile_finite_scalar_to_f64(
+            stop,
+            ArrayApiErrorKind::NonFiniteInput,
+            "arange stop must be finite",
+        )?;
+        let step_v = profile_finite_scalar_to_f64(
+            step,
+            ArrayApiErrorKind::InvalidStep,
+            "step must be finite",
+        )?;
+        if step_v == 0.0 {
+            return Err(ArrayApiError::new(
+                ArrayApiErrorKind::InvalidStep,
+                "step must be nonzero",
+            ));
+        }
+
+        let mut values = Vec::new();
+        let mut current = start_v;
+        if step_v > 0.0 {
+            while current < stop_v {
+                values.push(profile_cast_scalar(
+                    ScalarValue::F64(current),
+                    resolved_dtype,
+                )?);
+                current += step_v;
+            }
+        } else {
+            while current > stop_v {
+                values.push(profile_cast_scalar(
+                    ScalarValue::F64(current),
+                    resolved_dtype,
+                )?);
+                current += step_v;
+            }
+        }
+
+        Ok(ProfileArray {
+            shape: Shape::new(vec![values.len()]),
+            dtype: resolved_dtype,
+            values,
+        })
     }
 
     fn linspace(
         &self,
-        _start: ScalarValue,
-        _stop: ScalarValue,
-        _num: usize,
-        _endpoint: bool,
-        _dtype: Option<DType>,
+        start: ScalarValue,
+        stop: ScalarValue,
+        num: usize,
+        endpoint: bool,
+        dtype: Option<DType>,
     ) -> ArrayApiResult<Self::Array> {
-        profile_unimplemented("linspace")
+        let resolved_dtype = profile_resolve_dtype(dtype)?;
+        let start_v = profile_scalar_to_f64(start)?;
+        let stop_v = profile_scalar_to_f64(stop)?;
+        if num == 0 {
+            return Ok(ProfileArray {
+                shape: Shape::new(vec![0]),
+                dtype: resolved_dtype,
+                values: Vec::new(),
+            });
+        }
+
+        let step = if endpoint {
+            if num == 1 {
+                0.0
+            } else {
+                (stop_v - start_v) / (num.saturating_sub(1) as f64)
+            }
+        } else {
+            (stop_v - start_v) / (num as f64)
+        };
+
+        let mut values = Vec::with_capacity(num);
+        for idx in 0..num {
+            let value = if endpoint && idx == num - 1 {
+                stop_v
+            } else {
+                start_v + (idx as f64) * step
+            };
+            values.push(profile_cast_scalar(
+                ScalarValue::F64(value),
+                resolved_dtype,
+            )?);
+        }
+
+        Ok(ProfileArray {
+            shape: Shape::new(vec![values.len()]),
+            dtype: resolved_dtype,
+            values,
+        })
     }
 
-    fn getitem(
-        &self,
-        _array: &Self::Array,
-        _index: &fsci_arrayapi::IndexExpr,
-    ) -> ArrayApiResult<Self::Array> {
-        profile_unimplemented("getitem")
+    fn getitem(&self, array: &Self::Array, index: &IndexExpr) -> ArrayApiResult<Self::Array> {
+        match index {
+            IndexExpr::Basic { slices } => profile_basic_getitem(array, slices),
+            IndexExpr::Advanced { indices } => profile_advanced_getitem(array, indices),
+            IndexExpr::BooleanMask { mask_shape } => {
+                if *mask_shape != array.shape {
+                    return Err(ArrayApiError::new(
+                        ArrayApiErrorKind::InvalidShape,
+                        "boolean index did not match indexed array shape",
+                    ));
+                }
+                Ok(array.clone())
+            }
+        }
     }
 
-    fn broadcast_to(&self, _array: &Self::Array, _shape: &Shape) -> ArrayApiResult<Self::Array> {
-        profile_unimplemented("broadcast_to")
+    fn broadcast_to(&self, array: &Self::Array, shape: &Shape) -> ArrayApiResult<Self::Array> {
+        let target_shape = broadcast_shapes(&[array.shape.clone(), shape.clone()])?;
+        if target_shape != *shape {
+            return Err(ArrayApiError::new(
+                ArrayApiErrorKind::BroadcastIncompatible,
+                "operands could not be broadcast together with the requested shape",
+            ));
+        }
+
+        let output_size = profile_checked_size(shape)?;
+        if output_size == 0 {
+            return Ok(ProfileArray {
+                shape: shape.clone(),
+                dtype: array.dtype,
+                values: Vec::new(),
+            });
+        }
+
+        let out_rank = shape.rank();
+        let in_rank = array.shape.rank();
+        let in_strides = profile_row_major_strides(&array.shape.dims);
+        let mut out_coords = vec![0usize; out_rank];
+        let mut values = Vec::with_capacity(output_size);
+        for linear in 0..output_size {
+            let mut in_linear = 0usize;
+            for (in_dim_idx, in_dim) in array.shape.dims.iter().enumerate() {
+                let out_dim_idx = out_rank - in_rank + in_dim_idx;
+                let coord = if *in_dim == 1 {
+                    0
+                } else {
+                    out_coords[out_dim_idx]
+                };
+                in_linear += coord * in_strides[in_dim_idx];
+            }
+            values.push(array.values[in_linear]);
+            if linear + 1 < output_size {
+                profile_advance_row_major_coords(&mut out_coords, &shape.dims);
+            }
+        }
+
+        Ok(ProfileArray {
+            shape: shape.clone(),
+            dtype: array.dtype,
+            values,
+        })
     }
 
-    fn astype(&self, _array: &Self::Array, _dtype: DType) -> ArrayApiResult<Self::Array> {
-        profile_unimplemented("astype")
+    fn astype(&self, array: &Self::Array, dtype: DType) -> ArrayApiResult<Self::Array> {
+        let resolved_dtype = profile_resolve_dtype(Some(dtype))?;
+        let mut values = Vec::with_capacity(array.values.len());
+        for value in &array.values {
+            values.push(profile_cast_scalar(*value, resolved_dtype)?);
+        }
+        Ok(ProfileArray {
+            shape: array.shape.clone(),
+            dtype: resolved_dtype,
+            values,
+        })
     }
 
-    fn result_type(&self, _dtypes: &[DType], _force_floating: bool) -> ArrayApiResult<DType> {
-        profile_unimplemented("result_type")
+    fn result_type(&self, dtypes: &[DType], force_floating: bool) -> ArrayApiResult<DType> {
+        if dtypes.is_empty() {
+            return profile_resolve_dtype(None);
+        }
+        let mut resolved = if force_floating {
+            profile_force_floating_dtype(dtypes[0])
+        } else {
+            dtypes[0]
+        };
+        for dtype in dtypes {
+            let candidate = if force_floating {
+                profile_force_floating_dtype(*dtype)
+            } else {
+                *dtype
+            };
+            resolved = profile_promote_dtype(resolved, candidate);
+        }
+        profile_resolve_dtype(Some(resolved))
     }
 
     fn array_from_slice(
@@ -333,13 +494,16 @@ fn make_array(backend: &CoreArrayBackend, shape: Shape, dtype: DType) -> CoreArr
 }
 
 fn profile_resolve_dtype(dtype: Option<DType>) -> ArrayApiResult<DType> {
-    let resolved_dtype = dtype.unwrap_or(DType::Float64);
-    match resolved_dtype {
-        DType::Float32 | DType::Float64 | DType::Complex128 => Ok(resolved_dtype),
-        _ => Err(ArrayApiError::new(
-            ArrayApiErrorKind::UnsupportedDtype,
-            "profile backend only covers Float32/Float64/Complex128",
-        )),
+    Ok(dtype.unwrap_or(DType::Float64))
+}
+
+fn profile_scalar_to_bool(value: ScalarValue) -> bool {
+    match value {
+        ScalarValue::Bool(v) => v,
+        ScalarValue::I64(v) => v != 0,
+        ScalarValue::U64(v) => v != 0,
+        ScalarValue::F64(v) => v != 0.0,
+        ScalarValue::ComplexF64 { re, im } => re != 0.0 || im != 0.0,
     }
 }
 
@@ -362,20 +526,160 @@ fn profile_scalar_to_f64(value: ScalarValue) -> ArrayApiResult<f64> {
     }
 }
 
+fn profile_finite_scalar_to_f64(
+    value: ScalarValue,
+    kind: ArrayApiErrorKind,
+    message: &'static str,
+) -> ArrayApiResult<f64> {
+    let converted = profile_scalar_to_f64(value)?;
+    if converted.is_finite() {
+        Ok(converted)
+    } else {
+        Err(ArrayApiError::new(kind, message))
+    }
+}
+
+fn profile_scalar_to_complex_components(value: ScalarValue) -> ArrayApiResult<(f64, f64)> {
+    match value {
+        ScalarValue::Bool(v) => Ok((if v { 1.0 } else { 0.0 }, 0.0)),
+        ScalarValue::I64(v) => Ok((v as f64, 0.0)),
+        ScalarValue::U64(v) => Ok((v as f64, 0.0)),
+        ScalarValue::F64(v) => Ok((v, 0.0)),
+        ScalarValue::ComplexF64 { re, im } => Ok((re, im)),
+    }
+}
+
 fn profile_cast_scalar(value: ScalarValue, dtype: DType) -> ArrayApiResult<ScalarValue> {
     match dtype {
+        DType::Bool => Ok(ScalarValue::Bool(profile_scalar_to_bool(value))),
+        DType::Int8 | DType::Int16 | DType::Int32 | DType::Int64 => {
+            Ok(ScalarValue::I64(profile_cast_signed_integer(value, dtype)?))
+        }
+        DType::UInt8 | DType::UInt16 | DType::UInt32 | DType::UInt64 => Ok(ScalarValue::U64(
+            profile_cast_unsigned_integer(value, dtype)?,
+        )),
         DType::Float32 => Ok(ScalarValue::F64(
             (profile_scalar_to_f64(value)? as f32) as f64,
         )),
         DType::Float64 => Ok(ScalarValue::F64(profile_scalar_to_f64(value)?)),
-        DType::Complex128 => Ok(ScalarValue::ComplexF64 {
-            re: profile_scalar_to_f64(value)?,
-            im: 0.0,
-        }),
-        _ => Err(ArrayApiError::new(
+        DType::Complex64 => {
+            let (re, im) = profile_scalar_to_complex_components(value)?;
+            Ok(ScalarValue::ComplexF64 {
+                re: (re as f32) as f64,
+                im: (im as f32) as f64,
+            })
+        }
+        DType::Complex128 => {
+            let (re, im) = profile_scalar_to_complex_components(value)?;
+            Ok(ScalarValue::ComplexF64 { re, im })
+        }
+    }
+}
+
+fn profile_cast_signed_integer(value: ScalarValue, dtype: DType) -> ArrayApiResult<i64> {
+    let Some((min, max)) = profile_signed_integer_bounds(dtype) else {
+        return Err(ArrayApiError::new(
             ArrayApiErrorKind::UnsupportedDtype,
-            "profile backend only covers Float32/Float64/Complex128",
-        )),
+            "dtype is not a signed integer",
+        ));
+    };
+    let candidate = match value {
+        ScalarValue::Bool(v) => i128::from(if v { 1_i64 } else { 0_i64 }),
+        ScalarValue::I64(v) => i128::from(v),
+        ScalarValue::U64(v) => i128::from(v),
+        ScalarValue::F64(v) => profile_truncated_f64_to_i128(v)?,
+        ScalarValue::ComplexF64 { .. } => {
+            profile_truncated_f64_to_i128(profile_scalar_to_f64(value)?)?
+        }
+    };
+    let lower = i128::from(min);
+    let upper = i128::from(max);
+    if candidate < lower || candidate > upper {
+        return Err(ArrayApiError::new(
+            ArrayApiErrorKind::Overflow,
+            "scalar value is outside the requested signed integer dtype range",
+        ));
+    }
+    Ok(candidate as i64)
+}
+
+fn profile_cast_unsigned_integer(value: ScalarValue, dtype: DType) -> ArrayApiResult<u64> {
+    let Some(max) = profile_unsigned_integer_max(dtype) else {
+        return Err(ArrayApiError::new(
+            ArrayApiErrorKind::UnsupportedDtype,
+            "dtype is not an unsigned integer",
+        ));
+    };
+    let candidate = match value {
+        ScalarValue::Bool(v) => u128::from(if v { 1_u64 } else { 0_u64 }),
+        ScalarValue::I64(v) => {
+            if v < 0 {
+                return Err(ArrayApiError::new(
+                    ArrayApiErrorKind::Overflow,
+                    "negative scalar value cannot be cast to unsigned integer dtype",
+                ));
+            }
+            u128::from(v as u64)
+        }
+        ScalarValue::U64(v) => u128::from(v),
+        ScalarValue::F64(v) => profile_truncated_f64_to_u128(v)?,
+        ScalarValue::ComplexF64 { .. } => {
+            profile_truncated_f64_to_u128(profile_scalar_to_f64(value)?)?
+        }
+    };
+    if candidate > u128::from(max) {
+        return Err(ArrayApiError::new(
+            ArrayApiErrorKind::Overflow,
+            "scalar value is outside the requested unsigned integer dtype range",
+        ));
+    }
+    Ok(candidate as u64)
+}
+
+fn profile_truncated_f64_to_i128(value: f64) -> ArrayApiResult<i128> {
+    if !value.is_finite() {
+        return Err(ArrayApiError::new(
+            ArrayApiErrorKind::NonFiniteInput,
+            "non-finite scalar cannot be cast to integer dtype",
+        ));
+    }
+    Ok(value.trunc() as i128)
+}
+
+fn profile_truncated_f64_to_u128(value: f64) -> ArrayApiResult<u128> {
+    if !value.is_finite() {
+        return Err(ArrayApiError::new(
+            ArrayApiErrorKind::NonFiniteInput,
+            "non-finite scalar cannot be cast to integer dtype",
+        ));
+    }
+    let truncated = value.trunc();
+    if truncated < 0.0 {
+        return Err(ArrayApiError::new(
+            ArrayApiErrorKind::Overflow,
+            "negative scalar value cannot be cast to unsigned integer dtype",
+        ));
+    }
+    Ok(truncated as u128)
+}
+
+fn profile_signed_integer_bounds(dtype: DType) -> Option<(i64, i64)> {
+    match dtype {
+        DType::Int8 => Some((i64::from(i8::MIN), i64::from(i8::MAX))),
+        DType::Int16 => Some((i64::from(i16::MIN), i64::from(i16::MAX))),
+        DType::Int32 => Some((i64::from(i32::MIN), i64::from(i32::MAX))),
+        DType::Int64 => Some((i64::MIN, i64::MAX)),
+        _ => None,
+    }
+}
+
+fn profile_unsigned_integer_max(dtype: DType) -> Option<u64> {
+    match dtype {
+        DType::UInt8 => Some(u64::from(u8::MAX)),
+        DType::UInt16 => Some(u64::from(u16::MAX)),
+        DType::UInt32 => Some(u64::from(u32::MAX)),
+        DType::UInt64 => Some(u64::MAX),
+        _ => None,
     }
 }
 
@@ -402,11 +706,282 @@ fn profile_checked_size(shape: &Shape) -> ArrayApiResult<usize> {
     })
 }
 
-fn profile_unimplemented<T>(operation: &'static str) -> ArrayApiResult<T> {
-    Err(ArrayApiError::new(
-        ArrayApiErrorKind::UnsupportedShape,
-        operation,
-    ))
+fn profile_force_floating_dtype(dtype: DType) -> DType {
+    match dtype {
+        DType::Bool
+        | DType::Int8
+        | DType::Int16
+        | DType::Int32
+        | DType::Int64
+        | DType::UInt8
+        | DType::UInt16
+        | DType::UInt32
+        | DType::UInt64 => DType::Float64,
+        _ => dtype,
+    }
+}
+
+fn profile_promote_dtype(left: DType, right: DType) -> DType {
+    if left == right {
+        return left;
+    }
+    if matches!(left, DType::Complex128) || matches!(right, DType::Complex128) {
+        return DType::Complex128;
+    }
+    if matches!(left, DType::Complex64) || matches!(right, DType::Complex64) {
+        return DType::Complex64;
+    }
+    if matches!(left, DType::Float64 | DType::Float32)
+        || matches!(right, DType::Float64 | DType::Float32)
+    {
+        return profile_promote_float_dtype(left, right);
+    }
+    profile_promote_integer_dtype(left, right)
+}
+
+fn profile_promote_float_dtype(left: DType, right: DType) -> DType {
+    if matches!(left, DType::Float64)
+        || matches!(right, DType::Float64)
+        || profile_integer_kind(left).is_some()
+        || profile_integer_kind(right).is_some()
+    {
+        DType::Float64
+    } else {
+        DType::Float32
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProfileIntegerKind {
+    Bool,
+    Signed(u8),
+    Unsigned(u8),
+}
+
+fn profile_integer_kind(dtype: DType) -> Option<ProfileIntegerKind> {
+    match dtype {
+        DType::Bool => Some(ProfileIntegerKind::Bool),
+        DType::Int8 => Some(ProfileIntegerKind::Signed(8)),
+        DType::Int16 => Some(ProfileIntegerKind::Signed(16)),
+        DType::Int32 => Some(ProfileIntegerKind::Signed(32)),
+        DType::Int64 => Some(ProfileIntegerKind::Signed(64)),
+        DType::UInt8 => Some(ProfileIntegerKind::Unsigned(8)),
+        DType::UInt16 => Some(ProfileIntegerKind::Unsigned(16)),
+        DType::UInt32 => Some(ProfileIntegerKind::Unsigned(32)),
+        DType::UInt64 => Some(ProfileIntegerKind::Unsigned(64)),
+        _ => None,
+    }
+}
+
+fn profile_promote_integer_dtype(left: DType, right: DType) -> DType {
+    match (profile_integer_kind(left), profile_integer_kind(right)) {
+        (Some(ProfileIntegerKind::Bool), Some(ProfileIntegerKind::Bool)) => DType::Bool,
+        (Some(ProfileIntegerKind::Bool), Some(_)) => right,
+        (Some(_), Some(ProfileIntegerKind::Bool)) => left,
+        (
+            Some(ProfileIntegerKind::Signed(left_bits)),
+            Some(ProfileIntegerKind::Signed(right_bits)),
+        ) => profile_signed_dtype_for_bits(left_bits.max(right_bits)),
+        (
+            Some(ProfileIntegerKind::Unsigned(left_bits)),
+            Some(ProfileIntegerKind::Unsigned(right_bits)),
+        ) => profile_unsigned_dtype_for_bits(left_bits.max(right_bits)),
+        (
+            Some(ProfileIntegerKind::Signed(signed_bits)),
+            Some(ProfileIntegerKind::Unsigned(unsigned_bits)),
+        )
+        | (
+            Some(ProfileIntegerKind::Unsigned(unsigned_bits)),
+            Some(ProfileIntegerKind::Signed(signed_bits)),
+        ) => profile_promote_mixed_integer_dtype(signed_bits, unsigned_bits),
+        _ => DType::Float64,
+    }
+}
+
+fn profile_signed_dtype_for_bits(bits: u8) -> DType {
+    match bits {
+        0..=8 => DType::Int8,
+        9..=16 => DType::Int16,
+        17..=32 => DType::Int32,
+        _ => DType::Int64,
+    }
+}
+
+fn profile_unsigned_dtype_for_bits(bits: u8) -> DType {
+    match bits {
+        0..=8 => DType::UInt8,
+        9..=16 => DType::UInt16,
+        17..=32 => DType::UInt32,
+        _ => DType::UInt64,
+    }
+}
+
+fn profile_promote_mixed_integer_dtype(signed_bits: u8, unsigned_bits: u8) -> DType {
+    if signed_bits > unsigned_bits {
+        return profile_signed_dtype_for_bits(signed_bits);
+    }
+    match unsigned_bits {
+        0..=7 => DType::Int8,
+        8..=15 => DType::Int16,
+        16..=31 => DType::Int32,
+        32..=63 => DType::Int64,
+        _ => DType::Float64,
+    }
+}
+
+fn profile_basic_slice_indices(spec: &SliceSpec, len: usize) -> ArrayApiResult<Vec<usize>> {
+    if spec.step == 0 {
+        return Err(ArrayApiError::new(
+            ArrayApiErrorKind::InvalidStep,
+            "slice step cannot be zero",
+        ));
+    }
+
+    let len_i = len as isize;
+    let step = spec.step;
+    let mut start = spec.start.unwrap_or(if step > 0 { 0 } else { len_i - 1 });
+    let mut stop = spec
+        .stop
+        .unwrap_or(if step > 0 { len_i } else { -len_i - 1 });
+
+    if start < 0 {
+        start += len_i;
+    }
+    if stop < 0 && spec.stop.is_some() {
+        stop += len_i;
+    }
+
+    let mut out = Vec::new();
+    if step > 0 {
+        start = start.clamp(0, len_i);
+        stop = stop.clamp(0, len_i);
+        let mut cur = start;
+        while cur < stop {
+            out.push(cur as usize);
+            cur += step;
+        }
+    } else {
+        start = start.clamp(0, (len_i - 1).max(0));
+        let mut cur = start;
+        while cur > stop && cur >= 0 {
+            if cur < len_i {
+                out.push(cur as usize);
+            }
+            cur += step;
+        }
+    }
+    Ok(out)
+}
+
+fn profile_basic_getitem(
+    array: &ProfileArray,
+    slices: &[SliceSpec],
+) -> ArrayApiResult<ProfileArray> {
+    match array.shape.rank() {
+        1 => {
+            if slices.len() != 1 {
+                return Err(ArrayApiError::new(
+                    ArrayApiErrorKind::InvalidIndex,
+                    "1D indexing requires exactly one slice",
+                ));
+            }
+            let indices = profile_basic_slice_indices(&slices[0], array.shape.dims[0])?;
+            let mut values = Vec::with_capacity(indices.len());
+            for idx in &indices {
+                values.push(array.values[*idx]);
+            }
+            Ok(ProfileArray {
+                shape: Shape::new(vec![indices.len()]),
+                dtype: array.dtype,
+                values,
+            })
+        }
+        2 => {
+            if slices.len() != 2 {
+                return Err(ArrayApiError::new(
+                    ArrayApiErrorKind::InvalidIndex,
+                    "2D indexing requires two slices",
+                ));
+            }
+            let rows = profile_basic_slice_indices(&slices[0], array.shape.dims[0])?;
+            let cols = profile_basic_slice_indices(&slices[1], array.shape.dims[1])?;
+            let mut values = Vec::with_capacity(rows.len().saturating_mul(cols.len()));
+            let ncols = array.shape.dims[1];
+            for row in &rows {
+                for col in &cols {
+                    values.push(array.values[row * ncols + col]);
+                }
+            }
+            Ok(ProfileArray {
+                shape: Shape::new(vec![rows.len(), cols.len()]),
+                dtype: array.dtype,
+                values,
+            })
+        }
+        _ => Err(ArrayApiError::new(
+            ArrayApiErrorKind::UnsupportedShape,
+            "basic slicing is currently scoped to rank-1 and rank-2 arrays",
+        )),
+    }
+}
+
+fn profile_normalize_single_index(index: isize, len: usize) -> ArrayApiResult<usize> {
+    let len_i = len as isize;
+    let mut normalized = index;
+    if normalized < 0 {
+        normalized += len_i;
+    }
+    if normalized < 0 || normalized >= len_i {
+        return Err(ArrayApiError::new(
+            ArrayApiErrorKind::InvalidIndex,
+            "index out of bounds",
+        ));
+    }
+    Ok(normalized as usize)
+}
+
+fn profile_advanced_getitem(
+    array: &ProfileArray,
+    indices: &[Vec<isize>],
+) -> ArrayApiResult<ProfileArray> {
+    if array.shape.rank() != 1 || indices.len() != 1 {
+        return Err(ArrayApiError::new(
+            ArrayApiErrorKind::UnsupportedShape,
+            "advanced indexing is currently scoped to 1D arrays",
+        ));
+    }
+    let len = array.shape.dims[0];
+    let mut values = Vec::with_capacity(indices[0].len());
+    for index in &indices[0] {
+        let normalized = profile_normalize_single_index(*index, len)?;
+        values.push(array.values[normalized]);
+    }
+    Ok(ProfileArray {
+        shape: Shape::new(vec![values.len()]),
+        dtype: array.dtype,
+        values,
+    })
+}
+
+fn profile_row_major_strides(dims: &[usize]) -> Vec<usize> {
+    let mut strides = vec![0usize; dims.len()];
+    let mut stride = 1usize;
+    for pos in (0..dims.len()).rev() {
+        strides[pos] = stride;
+        stride = stride.saturating_mul(dims[pos].max(1));
+    }
+    strides
+}
+
+fn profile_advance_row_major_coords(coords: &mut [usize], dims: &[usize]) {
+    debug_assert_eq!(coords.len(), dims.len());
+    for axis in (0..coords.len()).rev() {
+        coords[axis] += 1;
+        if coords[axis] < dims[axis] {
+            break;
+        }
+        coords[axis] = 0;
+    }
 }
 
 fn legacy_unravel_index(mut index: usize, dims: &[usize]) -> Vec<usize> {
@@ -647,6 +1222,155 @@ fn bench_creation_profile(rows: &mut Vec<BenchmarkRow>, iso_details: &mut Vec<Is
             ));
         }
     }
+}
+
+#[test]
+fn profile_backend_scoped_operations_are_real() {
+    let backend = ProfileArrayBackend;
+
+    let aranged = backend
+        .arange(
+            ScalarValue::F64(0.0),
+            ScalarValue::F64(4.0),
+            ScalarValue::F64(1.0),
+            Some(DType::Int32),
+        )
+        .expect("profile arange should construct a real array");
+    assert_eq!(aranged.shape(), &Shape::new(vec![4]));
+    assert_eq!(aranged.dtype(), DType::Int32);
+    assert_eq!(
+        aranged.values(),
+        &[
+            ScalarValue::I64(0),
+            ScalarValue::I64(1),
+            ScalarValue::I64(2),
+            ScalarValue::I64(3),
+        ]
+    );
+
+    let cast = backend
+        .astype(&aranged, DType::Float64)
+        .expect("profile astype should cast values");
+    assert_eq!(
+        cast.values(),
+        &[
+            ScalarValue::F64(0.0),
+            ScalarValue::F64(1.0),
+            ScalarValue::F64(2.0),
+            ScalarValue::F64(3.0),
+        ]
+    );
+    assert_eq!(
+        backend
+            .result_type(&[DType::Bool, DType::UInt16, DType::Float32], false)
+            .expect("profile result_type should promote dtypes"),
+        DType::Float64
+    );
+    assert_eq!(
+        backend
+            .result_type(&[DType::Int32], true)
+            .expect("force_floating should promote integers"),
+        DType::Float64
+    );
+
+    let linspace = backend
+        .linspace(
+            ScalarValue::F64(0.0),
+            ScalarValue::F64(1.0),
+            3,
+            true,
+            Some(DType::Complex128),
+        )
+        .expect("profile linspace should construct complex values");
+    assert_eq!(
+        linspace.values(),
+        &[
+            ScalarValue::ComplexF64 { re: 0.0, im: 0.0 },
+            ScalarValue::ComplexF64 { re: 0.5, im: 0.0 },
+            ScalarValue::ComplexF64 { re: 1.0, im: 0.0 },
+        ]
+    );
+
+    let matrix = backend
+        .array_from_slice(
+            &[ScalarValue::F64(1.0), ScalarValue::F64(2.0)],
+            &Shape::new(vec![2, 1]),
+            DType::Float64,
+            MemoryOrder::C,
+        )
+        .expect("profile array_from_slice should build matrix");
+    let broadcast = backend
+        .broadcast_to(&matrix, &Shape::new(vec![2, 3]))
+        .expect("profile broadcast_to should repeat singleton axes");
+    assert_eq!(broadcast.shape(), &Shape::new(vec![2, 3]));
+    assert_eq!(
+        broadcast.values(),
+        &[
+            ScalarValue::F64(1.0),
+            ScalarValue::F64(1.0),
+            ScalarValue::F64(1.0),
+            ScalarValue::F64(2.0),
+            ScalarValue::F64(2.0),
+            ScalarValue::F64(2.0),
+        ]
+    );
+
+    let sliced = backend
+        .getitem(
+            &broadcast,
+            &IndexExpr::Basic {
+                slices: vec![
+                    SliceSpec {
+                        start: Some(0),
+                        stop: Some(2),
+                        step: 1,
+                    },
+                    SliceSpec {
+                        start: Some(1),
+                        stop: Some(3),
+                        step: 1,
+                    },
+                ],
+            },
+        )
+        .expect("profile getitem should slice rank-2 arrays");
+    assert_eq!(sliced.shape(), &Shape::new(vec![2, 2]));
+    assert_eq!(
+        sliced.values(),
+        &[
+            ScalarValue::F64(1.0),
+            ScalarValue::F64(1.0),
+            ScalarValue::F64(2.0),
+            ScalarValue::F64(2.0),
+        ]
+    );
+
+    let advanced = backend
+        .getitem(
+            &cast,
+            &IndexExpr::Advanced {
+                indices: vec![vec![3, 1, -1]],
+            },
+        )
+        .expect("profile getitem should handle 1D advanced indexing");
+    assert_eq!(
+        advanced.values(),
+        &[
+            ScalarValue::F64(3.0),
+            ScalarValue::F64(1.0),
+            ScalarValue::F64(3.0),
+        ]
+    );
+
+    let masked = backend
+        .getitem(
+            &cast,
+            &IndexExpr::BooleanMask {
+                mask_shape: cast.shape.clone(),
+            },
+        )
+        .expect("matching boolean mask should pass through profile array");
+    assert_eq!(masked.values(), cast.values());
 }
 
 #[test]
