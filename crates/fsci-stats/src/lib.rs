@@ -409,6 +409,50 @@ fn validate_parameterless_fit_data(data: &[f64]) -> Result<(), FitError> {
     Ok(())
 }
 
+fn validate_finite_fit_data(
+    data: &[f64],
+    required: usize,
+    distribution: &str,
+) -> Result<(), FitError> {
+    if data.len() < required {
+        return Err(FitError::InsufficientData {
+            required,
+            actual: data.len(),
+        });
+    }
+    for &x in data {
+        if !x.is_finite() {
+            return Err(FitError::UnsupportedData(format!(
+                "{distribution} data contains non-finite value: {x}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn sample_population_variance(data: &[f64]) -> f64 {
+    let mean = sample_mean(data);
+    data.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / data.len() as f64
+}
+
+fn sample_standardized_skewness(data: &[f64]) -> f64 {
+    let mean = sample_mean(data);
+    let mut m2 = 0.0_f64;
+    let mut m3 = 0.0_f64;
+    for &x in data {
+        let centered = x - mean;
+        m2 += centered * centered;
+        m3 += centered * centered * centered;
+    }
+    m2 /= data.len() as f64;
+    m3 /= data.len() as f64;
+    if m2 <= 0.0 {
+        f64::NAN
+    } else {
+        m3 / m2.powf(1.5)
+    }
+}
+
 /// Generic inverse CDF via bisection search.
 fn ppf_bisection(cdf: impl Fn(f64) -> f64, q: f64, mean: f64, std: f64) -> f64 {
     // Initial bracket: start around mean ± 10*std
@@ -1150,6 +1194,45 @@ impl ContinuousDistribution for NoncentralT {
         }
     }
 
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        validate_finite_fit_data(data, 3, "NoncentralT")?;
+        let mean = sample_mean(data);
+        let var = sample_population_variance(data);
+        if !var.is_finite() || var <= 0.0 {
+            return Err(FitError::NonConvergent(
+                "NoncentralT fit needs positive sample variance".to_owned(),
+            ));
+        }
+
+        let mut best = None::<(f64, f64, f64)>;
+        for step in 0..=1980 {
+            let df = 2.05 + 0.1 * step as f64;
+            let log_a = 0.5 * (df / 2.0).ln() + ln_gamma((df - 1.0) / 2.0) - ln_gamma(df / 2.0);
+            let a = log_a.exp();
+            if !a.is_finite() || a <= 0.0 {
+                continue;
+            }
+            let nc = mean / a;
+            let candidate = Self { df, nc };
+            let model_var = candidate.var();
+            if !model_var.is_finite() || model_var <= 0.0 {
+                continue;
+            }
+            let error = ((model_var / var).ln()).abs();
+            if best.is_none_or(|(_, _, best_error)| error < best_error) {
+                best = Some((df, nc, error));
+            }
+        }
+
+        if let Some((df, nc, _)) = best {
+            Ok(Self { df, nc })
+        } else {
+            Err(FitError::NonConvergent(
+                "NoncentralT moment fit did not find finite df/nc".to_owned(),
+            ))
+        }
+    }
+
     fn skewness(&self) -> f64 {
         f64::NAN
     }
@@ -1769,7 +1852,7 @@ impl ContinuousDistribution for BetaDist {
         // — finite when the relevant exponent is zero, +inf when it is
         // negative. The previous short-circuit "x ≤ 0 || x ≥ 1 → 0" was
         // wrong for both a=1 (pdf(0) = 1/B(1, b)) and a<1 (pdf(0) = ∞).
-        if x < 0.0 || x > 1.0 {
+        if !(0.0..=1.0).contains(&x) {
             return 0.0;
         }
         if x == 0.0 {
@@ -3651,6 +3734,31 @@ impl ContinuousDistribution for VonMises {
         let i0 = modified_bessel_i(0.0, self.kappa);
         let i1 = modified_bessel_i(1.0, self.kappa);
         1.0 - i1 / i0
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        validate_finite_fit_data(data, 2, "VonMises")?;
+        let n = data.len() as f64;
+        let sin_mean = data.iter().map(|x| x.sin()).sum::<f64>() / n;
+        let cos_mean = data.iter().map(|x| x.cos()).sum::<f64>() / n;
+        let r = sin_mean.hypot(cos_mean).clamp(0.0, 1.0 - f64::EPSILON);
+        let loc = sin_mean.atan2(cos_mean);
+        let kappa = if r < 1.0e-12 {
+            0.0
+        } else if r < 0.53 {
+            2.0 * r + r.powi(3) + 5.0 * r.powi(5) / 6.0
+        } else if r < 0.85 {
+            -0.4 + 1.39 * r + 0.43 / (1.0 - r)
+        } else {
+            1.0 / (r.powi(3) - 4.0 * r.powi(2) + 3.0 * r)
+        };
+        if kappa.is_finite() && kappa >= 0.0 {
+            Ok(Self { kappa, loc })
+        } else {
+            Err(FitError::NonConvergent(format!(
+                "VonMises circular fit produced invalid kappa: {kappa}"
+            )))
+        }
     }
 }
 
@@ -6058,6 +6166,58 @@ impl ContinuousDistribution for PowerLognorm {
     fn var(&self) -> f64 {
         f64::NAN
     }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        validate_finite_fit_data(data, 4, "PowerLognorm")?;
+        for &x in data {
+            if x <= 0.0 {
+                return Err(FitError::UnsupportedData(format!(
+                    "PowerLognorm support is (0, infinity); got {x}"
+                )));
+            }
+        }
+
+        let qs = quantile(data, &[0.25, 0.5, 0.75]);
+        let spread = qs[2] - qs[0];
+        if !spread.is_finite() || spread <= 0.0 || qs[1] <= 0.0 {
+            return Err(FitError::NonConvergent(
+                "PowerLognorm fit needs positive non-degenerate quartiles".to_owned(),
+            ));
+        }
+
+        let mut best = None::<(f64, f64, f64)>;
+        for step in 0..=990 {
+            let c = 0.1 + 0.01 * step as f64;
+            let inner50 = 0.5_f64.powf(1.0 / c);
+            let z50 = standard_normal_ppf(inner50);
+            if !z50.is_finite() || z50.abs() < 1e-12 {
+                continue;
+            }
+            let s = -qs[1].ln() / z50;
+            if !s.is_finite() || s <= 0.0 {
+                continue;
+            }
+            let dist = Self { c, s };
+            let model_q25 = dist.ppf(0.25);
+            let model_q75 = dist.ppf(0.75);
+            if !model_q25.is_finite() || !model_q75.is_finite() {
+                continue;
+            }
+            let error =
+                ((model_q25 - qs[0]) / spread).powi(2) + ((model_q75 - qs[2]) / spread).powi(2);
+            if best.is_none_or(|(_, _, best_error)| error < best_error) {
+                best = Some((c, s, error));
+            }
+        }
+
+        if let Some((c, s, _)) = best {
+            Ok(Self { c, s })
+        } else {
+            Err(FitError::NonConvergent(
+                "PowerLognorm quantile fit did not find finite c/s".to_owned(),
+            ))
+        }
+    }
 }
 
 /// Johnson SU distribution.
@@ -6297,6 +6457,43 @@ impl ContinuousDistribution for GenExtreme {
             (g2 - g1 * g1) / (c * c)
         } else {
             f64::INFINITY
+        }
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        validate_finite_fit_data(data, 3, "GenExtreme")?;
+        let qs = quantile(data, &[0.25, 0.5, 0.75]);
+        let spread = qs[2] - qs[0];
+        if !spread.is_finite() || spread <= 0.0 {
+            return Err(FitError::NonConvergent(
+                "GenExtreme fit needs non-degenerate quartiles".to_owned(),
+            ));
+        }
+
+        let mut best = None::<(f64, f64)>;
+        for step in 0..=1600 {
+            let c = -2.0 + 0.0025 * step as f64;
+            let dist = Self { c };
+            let model = [dist.ppf(0.25), dist.ppf(0.5), dist.ppf(0.75)];
+            if model.iter().any(|x| !x.is_finite()) {
+                continue;
+            }
+            let error = model
+                .iter()
+                .zip(qs.iter())
+                .map(|(m, q)| ((m - q) / spread).powi(2))
+                .sum::<f64>();
+            if best.is_none_or(|(_, best_error)| error < best_error) {
+                best = Some((c, error));
+            }
+        }
+
+        if let Some((c, _)) = best {
+            Ok(Self { c })
+        } else {
+            Err(FitError::NonConvergent(
+                "GenExtreme quantile fit did not find a finite shape".to_owned(),
+            ))
         }
     }
 }
@@ -7551,7 +7748,7 @@ impl DiscreteDistribution for Zipfian {
         if k == 0 {
             return 0.0;
         }
-        let bound = (k as u64).min(self.n as u64);
+        let bound = k.min(self.n as u64);
         let z = self.z();
         let mut acc = 0.0_f64;
         for j in 1..=bound {
@@ -8000,6 +8197,40 @@ impl ContinuousDistribution for SkewNorm {
         let v = 1.0 - 2.0 * d * d / PI;
         2.0 * (PI - 3.0) * m.powi(4) / v.powi(2)
     }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        validate_finite_fit_data(data, 3, "SkewNorm")?;
+        let sample_skew = sample_standardized_skewness(data);
+        if !sample_skew.is_finite() {
+            return Err(FitError::NonConvergent(
+                "SkewNorm fit needs positive sample variance".to_owned(),
+            ));
+        }
+        if sample_skew.abs() < 1e-14 {
+            return Ok(Self { a: 0.0 });
+        }
+
+        let max_skew = Self { a: 50.0 }.skewness();
+        if sample_skew.abs() >= max_skew {
+            return Err(FitError::NonConvergent(format!(
+                "SkewNorm sample skew {sample_skew} exceeds standardized family range"
+            )));
+        }
+
+        let target = sample_skew.abs();
+        let mut lo = 0.0_f64;
+        let mut hi = 50.0_f64;
+        for _ in 0..80 {
+            let mid = 0.5 * (lo + hi);
+            if (Self { a: mid }).skewness() < target {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        let a = 0.5 * (lo + hi) * sample_skew.signum();
+        Ok(Self { a })
+    }
 }
 
 /// Wrapped Cauchy distribution on [0, 2π).
@@ -8137,6 +8368,22 @@ impl ContinuousDistribution for WrapCauchy {
         // rarely need. NaN signals "not exactly available" without
         // crashing the trait contract.
         f64::NAN
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        validate_finite_fit_data(data, 2, "WrapCauchy")?;
+        let upper = 2.0 * PI;
+        let mut cos_sum = 0.0_f64;
+        for &x in data {
+            if !(0.0..upper).contains(&x) {
+                return Err(FitError::UnsupportedData(format!(
+                    "WrapCauchy support is [0, 2π); got {x}"
+                )));
+            }
+            cos_sum += x.cos();
+        }
+        let c = (cos_sum / data.len() as f64).clamp(0.0, 1.0 - f64::EPSILON);
+        Ok(Self { c })
     }
 }
 
@@ -9430,6 +9677,7 @@ impl ContinuousDistribution for Loglogistic {
 /// Mielke Beta-Kappa distribution.
 ///
 /// Matches `scipy.stats.mielke`.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Mielke {
     pub k: f64,
     pub s: f64,
@@ -9494,6 +9742,50 @@ impl ContinuousDistribution for Mielke {
         let log_second_moment = ln_gamma((self.k + 2.0) / self.s) + ln_gamma(1.0 - 2.0 / self.s)
             - ln_gamma(self.k / self.s);
         log_second_moment.exp() - mean * mean
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        validate_finite_fit_data(data, 4, "Mielke")?;
+        for &x in data {
+            if x <= 0.0 {
+                return Err(FitError::UnsupportedData(format!(
+                    "Mielke support is (0, infinity); got {x}"
+                )));
+            }
+        }
+        let qs = quantile(data, &[0.25, 0.5, 0.75]);
+        if qs.iter().any(|&x| x <= 0.0) || qs[0] >= qs[2] {
+            return Err(FitError::NonConvergent(
+                "Mielke fit needs positive non-degenerate quartiles".to_owned(),
+            ));
+        }
+
+        let mut best = None::<(f64, f64, f64)>;
+        for ki in 0..=195 {
+            let k = 0.25 + 0.05 * ki as f64;
+            for si in 0..=195 {
+                let s = 0.25 + 0.05 * si as f64;
+                let dist = Self { k, s };
+                let c25 = dist.cdf(qs[0]);
+                let c50 = dist.cdf(qs[1]);
+                let c75 = dist.cdf(qs[2]);
+                if !c25.is_finite() || !c50.is_finite() || !c75.is_finite() {
+                    continue;
+                }
+                let error = (c25 - 0.25).powi(2) + (c50 - 0.5).powi(2) + (c75 - 0.75).powi(2);
+                if best.is_none_or(|(_, _, best_error)| error < best_error) {
+                    best = Some((k, s, error));
+                }
+            }
+        }
+
+        if let Some((k, s, _)) = best {
+            Ok(Self { k, s })
+        } else {
+            Err(FitError::NonConvergent(
+                "Mielke quantile fit did not find finite k/s".to_owned(),
+            ))
+        }
     }
 }
 
@@ -9702,7 +9994,7 @@ impl ContinuousDistribution for Arcsine {
         // returns +∞ at x=0 and x=1 (the limit of 1/(π·√(x(1-x)))).
         // The previous "x ≤ 0 || x ≥ 1 → 0" short-circuit silently
         // diverged from scipy at exactly those points.
-        if x < 0.0 || x > 1.0 {
+        if !(0.0..=1.0).contains(&x) {
             return 0.0;
         }
         if x == 0.0 || x == 1.0 {
@@ -10098,6 +10390,16 @@ impl ContinuousDistribution for KsTwoBign {
         // No clean closed form readily available — leave as NaN.
         f64::NAN
     }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        validate_parameterless_fit_data(data)?;
+        if data.iter().any(|&x| x < 0.0) {
+            return Err(FitError::UnsupportedData(
+                "KsTwoBign data must be non-negative".to_owned(),
+            ));
+        }
+        Ok(Self)
+    }
 }
 
 /// Reciprocal inverse Gaussian distribution with shape `mu > 0`.
@@ -10197,6 +10499,27 @@ impl ContinuousDistribution for RecipInvGauss {
     fn var(&self) -> f64 {
         f64::NAN
     }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        validate_finite_fit_data(data, 2, "RecipInvGauss")?;
+        let mut reciprocal_sum = 0.0_f64;
+        for &x in data {
+            if x <= 0.0 {
+                return Err(FitError::UnsupportedData(format!(
+                    "RecipInvGauss support is (0, infinity); got {x}"
+                )));
+            }
+            reciprocal_sum += 1.0 / x;
+        }
+        let mu = reciprocal_sum / data.len() as f64;
+        if mu.is_finite() && mu > 0.0 {
+            Ok(Self { mu })
+        } else {
+            Err(FitError::NonConvergent(format!(
+                "RecipInvGauss reciprocal-mean fit produced invalid mu: {mu}"
+            )))
+        }
+    }
 }
 
 /// Doubly-truncated Weibull minimum distribution on (a, b].
@@ -10223,10 +10546,6 @@ impl TruncWeibullMin {
         assert!(a >= 0.0 && a.is_finite(), "a must be ≥ 0 and finite");
         assert!(b > a && b.is_finite(), "b must be > a and finite");
         Self { c, a, b }
-    }
-
-    fn denom(&self) -> f64 {
-        (-self.a.powf(self.c)).exp() - (-self.b.powf(self.c)).exp()
     }
 }
 
@@ -10373,6 +10692,31 @@ impl ContinuousDistribution for RDist {
     fn skewness(&self) -> f64 {
         // Symmetric around 0.
         0.0
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        validate_finite_fit_data(data, 2, "RDist")?;
+        for &x in data {
+            if !(-1.0..=1.0).contains(&x) {
+                return Err(FitError::UnsupportedData(format!(
+                    "RDist support is [-1, 1]; got {x}"
+                )));
+            }
+        }
+        let variance = sample_population_variance(data);
+        if !variance.is_finite() || variance <= 0.0 || variance >= 1.0 {
+            return Err(FitError::NonConvergent(format!(
+                "RDist variance must be in (0, 1); got {variance}"
+            )));
+        }
+        let c = 1.0 / variance - 1.0;
+        if c.is_finite() && c > 0.0 {
+            Ok(Self { c })
+        } else {
+            Err(FitError::NonConvergent(format!(
+                "RDist moment fit produced invalid c: {c}"
+            )))
+        }
     }
 }
 
@@ -10880,6 +11224,43 @@ impl ContinuousDistribution for TukeyLambda {
 
         let gamma_ratio = (2.0 * ln_gamma(lam + 1.0) - ln_gamma(2.0 * lam + 2.0)).exp();
         2.0 * (1.0 / (1.0 + 2.0 * lam) - gamma_ratio) / (lam * lam)
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        validate_finite_fit_data(data, 2, "TukeyLambda")?;
+        let target_var = sample_population_variance(data);
+        if !target_var.is_finite() || target_var <= 0.0 {
+            return Err(FitError::NonConvergent(
+                "TukeyLambda fit needs positive sample variance".to_owned(),
+            ));
+        }
+
+        let mut lo = -0.49_f64;
+        let mut hi = 20.0_f64;
+        if (Self { lam: lo }).var() < target_var {
+            return Err(FitError::NonConvergent(format!(
+                "TukeyLambda sample variance {target_var} exceeds finite-variance search range"
+            )));
+        }
+        while (Self { lam: hi }).var() > target_var && hi < 1.0e6 {
+            hi *= 2.0;
+        }
+        if (Self { lam: hi }).var() > target_var {
+            return Err(FitError::NonConvergent(format!(
+                "TukeyLambda sample variance {target_var} is too small to bracket"
+            )));
+        }
+        for _ in 0..100 {
+            let mid = 0.5 * (lo + hi);
+            if (Self { lam: mid }).var() > target_var {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        Ok(Self {
+            lam: 0.5 * (lo + hi),
+        })
     }
 }
 
@@ -22159,6 +22540,32 @@ impl ContinuousDistribution for ExponPow {
     fn var(&self) -> f64 {
         f64::NAN
     }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        validate_finite_fit_data(data, 2, "ExponPow")?;
+        for &x in data {
+            if x <= 0.0 {
+                return Err(FitError::UnsupportedData(format!(
+                    "ExponPow support is (0, infinity) for fitting; got {x}"
+                )));
+            }
+        }
+        let median = quantile(data, &[0.5])[0];
+        let median_base = (1.0_f64 - 0.5_f64.ln()).ln();
+        if !(0.0..1.0).contains(&median) {
+            return Err(FitError::NonConvergent(
+                "ExponPow median must lie in (0, 1) for standardized shape fit".to_owned(),
+            ));
+        }
+        let b = median_base.ln() / median.ln();
+        if b.is_finite() && b > 0.0 {
+            Ok(Self { b })
+        } else {
+            Err(FitError::NonConvergent(format!(
+                "ExponPow median fit produced invalid shape: {b}"
+            )))
+        }
+    }
 }
 
 /// Exponentiated Weibull distribution.
@@ -22263,6 +22670,58 @@ impl ContinuousDistribution for ExponWeibull {
                 8,
             );
         (second_moment - mean * mean).max(0.0)
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        validate_finite_fit_data(data, 4, "ExponWeibull")?;
+        for &x in data {
+            if x <= 0.0 {
+                return Err(FitError::UnsupportedData(format!(
+                    "ExponWeibull support is (0, infinity) for fitting; got {x}"
+                )));
+            }
+        }
+
+        let qs = quantile(data, &[0.25, 0.5, 0.75]);
+        let spread = qs[2] - qs[0];
+        if !spread.is_finite() || spread <= 0.0 || qs[1] <= 0.0 {
+            return Err(FitError::NonConvergent(
+                "ExponWeibull fit needs positive non-degenerate quartiles".to_owned(),
+            ));
+        }
+
+        let mut best = None::<(f64, f64, f64)>;
+        for step in 0..=990 {
+            let a = 0.1 + 0.01 * step as f64;
+            let median_base = -(1.0 - 0.5_f64.powf(1.0 / a)).ln();
+            let ln_median = qs[1].ln();
+            if !median_base.is_finite() || median_base <= 0.0 || ln_median.abs() < 1e-12 {
+                continue;
+            }
+            let c = median_base.ln() / ln_median;
+            if !c.is_finite() || c <= 0.0 {
+                continue;
+            }
+            let dist = Self { a, c };
+            let model_q25 = dist.ppf(0.25);
+            let model_q75 = dist.ppf(0.75);
+            if !model_q25.is_finite() || !model_q75.is_finite() {
+                continue;
+            }
+            let error =
+                ((model_q25 - qs[0]) / spread).powi(2) + ((model_q75 - qs[2]) / spread).powi(2);
+            if best.is_none_or(|(_, _, best_error)| error < best_error) {
+                best = Some((a, c, error));
+            }
+        }
+
+        if let Some((a, c, _)) = best {
+            Ok(Self { a, c })
+        } else {
+            Err(FitError::NonConvergent(
+                "ExponWeibull quantile fit did not find finite a/c".to_owned(),
+            ))
+        }
     }
 }
 
@@ -39270,6 +39729,137 @@ mod tests {
     fn bradford_fit_rejects_too_few_samples() {
         let err = Bradford::try_fit(&[0.3]).expect_err("n=1 must be rejected");
         assert!(matches!(err, FitError::InsufficientData { .. }));
+    }
+
+    fn mielke_ppf_for_test(dist: Mielke, q: f64) -> f64 {
+        let mut lo = 0.0_f64;
+        let mut hi = 1.0_f64;
+        while dist.cdf(hi) < q {
+            hi *= 2.0;
+        }
+        for _ in 0..80 {
+            let mid = 0.5 * (lo + hi);
+            if dist.cdf(mid) < q {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        0.5 * (lo + hi)
+    }
+
+    #[test]
+    fn fit_gap_quantile_families_recover_synthetic_shapes() {
+        let exponpow = ExponPow::new(2.5);
+        let data = [exponpow.ppf(0.25), exponpow.ppf(0.5), exponpow.ppf(0.75)];
+        let fitted = ExponPow::try_fit(&data).expect("ExponPow fit");
+        assert_close(fitted.b, 2.5, 1e-12, "ExponPow median fit");
+
+        let exponweib = ExponWeibull::new(2.0, 1.5);
+        let data = [0.1, 0.25, 0.5, 0.75, 0.9].map(|q| exponweib.ppf(q));
+        let fitted = ExponWeibull::try_fit(&data).expect("ExponWeibull fit");
+        assert!(
+            (fitted.a - 2.0).abs() <= 0.02 && (fitted.c - 1.5).abs() <= 0.02,
+            "ExponWeibull fit got a={}, c={}",
+            fitted.a,
+            fitted.c
+        );
+
+        let power_lognorm = PowerLognorm::new(2.0, 0.7);
+        let data = [0.1, 0.25, 0.5, 0.75, 0.9].map(|q| power_lognorm.ppf(q));
+        let fitted = PowerLognorm::try_fit(&data).expect("PowerLognorm fit");
+        assert!(
+            (fitted.c - 2.0).abs() <= 0.02 && (fitted.s - 0.7).abs() <= 0.02,
+            "PowerLognorm fit got c={}, s={}",
+            fitted.c,
+            fitted.s
+        );
+
+        let genextreme = GenExtreme::new(0.2);
+        let data = [0.1, 0.25, 0.5, 0.75, 0.9].map(|q| genextreme.ppf(q));
+        let fitted = GenExtreme::try_fit(&data).expect("GenExtreme fit");
+        assert_close(fitted.c, 0.2, 0.005, "GenExtreme quartile fit");
+
+        let mielke = Mielke::new(2.0, 4.0);
+        let data = [0.1, 0.25, 0.5, 0.75, 0.9].map(|q| mielke_ppf_for_test(mielke, q));
+        let fitted = Mielke::try_fit(&data).expect("Mielke fit");
+        assert!(
+            (fitted.k - 2.0).abs() <= 0.1 && (fitted.s - 4.0).abs() <= 0.1,
+            "Mielke fit got k={}, s={}",
+            fitted.k,
+            fitted.s
+        );
+    }
+
+    #[test]
+    fn fit_gap_moment_and_circular_families_validate_support_and_shapes() {
+        let rdist_std = (1.0_f64 / 5.0).sqrt();
+        let fitted = RDist::try_fit(&[-rdist_std, rdist_std]).expect("RDist fit");
+        assert_close(fitted.c, 4.0, 1e-12, "RDist variance inversion");
+
+        let recip = RecipInvGauss::try_fit(&[1.0, 2.0, 4.0]).expect("RecipInvGauss fit");
+        assert_close(
+            recip.mu,
+            (1.0 + 0.5 + 0.25) / 3.0,
+            1e-12,
+            "RecipInvGauss reciprocal mean",
+        );
+
+        let tukey_std = (1.0_f64 / 3.0).sqrt();
+        let fitted = TukeyLambda::try_fit(&[-tukey_std, tukey_std]).expect("TukeyLambda fit");
+        assert_close(fitted.lam, 1.0, 1e-6, "TukeyLambda variance inversion");
+
+        let true_nct = NoncentralT::new(8.05, 1.1);
+        let nct_mean = true_nct.mean();
+        let nct_std = true_nct.var().sqrt();
+        let fitted = NoncentralT::try_fit(&[
+            nct_mean - nct_std,
+            nct_mean + nct_std,
+            nct_mean - nct_std,
+            nct_mean + nct_std,
+        ])
+        .expect("NoncentralT fit");
+        assert!(
+            (fitted.df - true_nct.df).abs() <= 0.11 && (fitted.nc - true_nct.nc).abs() <= 0.03,
+            "NoncentralT fit got df={}, nc={}",
+            fitted.df,
+            fitted.nc
+        );
+
+        let skewed = [-0.3_f64, 0.0, 0.5, 1.2, 2.0];
+        let sample_skew = sample_standardized_skewness(&skewed);
+        let fitted = SkewNorm::try_fit(&skewed).expect("SkewNorm fit");
+        assert!(fitted.a > 0.0, "positive sample skew should fit positive a");
+        assert_close(
+            fitted.skewness(),
+            sample_skew,
+            1e-10,
+            "SkewNorm skew inversion",
+        );
+
+        assert_eq!(KsTwoBign::try_fit(&[0.1, 0.5, 1.0]).unwrap(), KsTwoBign);
+        assert!(matches!(
+            KsTwoBign::try_fit(&[-0.1]),
+            Err(FitError::UnsupportedData(_))
+        ));
+
+        let wrapped = WrapCauchy::try_fit(&[0.0, 0.2, 2.0 * PI - 0.2]).expect("WrapCauchy fit");
+        assert!(
+            wrapped.c > 0.9 && wrapped.c < 1.0,
+            "WrapCauchy concentration = {}",
+            wrapped.c
+        );
+
+        let vonmises = VonMises::try_fit(&[-0.2, -0.1, 0.0, 0.1, 0.2]).expect("VonMises fit");
+        assert!(
+            vonmises.kappa > 0.0,
+            "clustered angles should produce kappa > 0"
+        );
+        assert!(
+            vonmises.loc.abs() < 1e-12,
+            "symmetric angle cluster should fit loc=0, got {}",
+            vonmises.loc
+        );
     }
 
     #[test]
