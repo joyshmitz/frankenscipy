@@ -2591,9 +2591,21 @@ pub fn procrustes(
         scale_matrix(&mut mtx2, 1.0 / norm2);
     }
 
-    // Find optimal rotation: minimize ||mtx1 - mtx2 R||²
-    // Solution: R = U V^T where mtx2^T mtx1 = U S V^T (SVD)
-    // Compute M = mtx2^T mtx1 (d × d matrix)
+    // scipy.spatial.procrustes uses scipy.linalg.orthogonal_procrustes
+    // under the hood, which solves the rotation + scale problem
+    // mtx2 ≈ mtx1 @ R^T · s by:
+    //   1. M = mtx1^T @ mtx2
+    //   2. (U, Σ, V^T) = svd(M)
+    //   3. R = U @ V^T  (orthogonal)
+    //   4. s = trace(Σ) = Σ singular_values
+    //   5. mtx2_aligned = mtx2 @ R^T · s
+    //
+    // Pre-fix fsci built M = mtx2^T @ mtx1 (the transpose) and skipped
+    // the scale factor s, which left mtx2 under-scaled and rotated by
+    // R instead of R^T. The rotation difference cancels because
+    // svd(M_fsci) = svd(M^T) gives U_f = V, V^T_f = U^T, so
+    // R_fsci = R^T already; the missing factor was just the scale.
+    // (frankenscipy-u98xh)
     let mut m = vec![vec![0.0; d]; d];
     for i in 0..d {
         for j in 0..d {
@@ -2603,15 +2615,17 @@ pub fn procrustes(
         }
     }
 
-    let rotation = orthogonal_procrustes_rotation(&m)?;
+    let (rotation, scale) = orthogonal_procrustes_rotation_with_scale(&m)?;
 
-    // Apply rotation: mtx2_aligned = mtx2 * R
+    // Apply rotation and dilation: mtx2_aligned = mtx2 · R · scale.
     let mut aligned = vec![vec![0.0; d]; n];
     for i in 0..n {
         for j in 0..d {
+            let mut acc = 0.0;
             for k in 0..d {
-                aligned[i][j] += mtx2[i][k] * rotation[k][j];
+                acc += mtx2[i][k] * rotation[k][j];
             }
+            aligned[i][j] = acc * scale;
         }
     }
 
@@ -2656,17 +2670,26 @@ fn frobenius_norm(data: &[Vec<f64>]) -> f64 {
 }
 
 fn orthogonal_procrustes_rotation(m: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, SpatialError> {
+    let (rotation, _scale) = orthogonal_procrustes_rotation_with_scale(m)?;
+    Ok(rotation)
+}
+
+fn orthogonal_procrustes_rotation_with_scale(
+    m: &[Vec<f64>],
+) -> Result<(Vec<Vec<f64>>, f64), SpatialError> {
     let d = m.len();
     if d == 0 {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), 0.0));
     }
 
     let svd_result = svd(m, DecompOptions::default())
         .map_err(|err| SpatialError::InvalidArgument(format!("procrustes SVD failed: {err}")))?;
 
     // For M = mtx2^T @ mtx1 and M = U S V^T, the minimizer of
-    // ||mtx1 - mtx2 R||_F is the polar factor R = U V^T. This is the
-    // SciPy-compatible path and remains well-defined for rank-deficient M.
+    // ||mtx1 - mtx2 R||_F is the polar factor R = U V^T. The optimal
+    // dilation factor for the spatial procrustes is s = Σ singular
+    // values (sum, not Frobenius norm) — this gives mtx2_aligned the
+    // correct trace alignment with mtx1. SciPy compatible.
     let mut rotation = vec![vec![0.0; d]; d];
     for (i, row) in rotation.iter_mut().enumerate() {
         for (j, value) in row.iter_mut().enumerate() {
@@ -2675,7 +2698,8 @@ fn orthogonal_procrustes_rotation(m: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, Spati
                 .sum();
         }
     }
-    Ok(rotation)
+    let scale = svd_result.s.iter().sum::<f64>();
+    Ok((rotation, scale))
 }
 
 fn scale_matrix(data: &mut [Vec<f64>], factor: f64) {
@@ -5078,6 +5102,54 @@ mod tests {
             "scaled data should align: disparity = {}",
             result.disparity
         );
+    }
+
+    /// procrustes on noisy near-aligned 2-D data matches scipy
+    /// (frankenscipy-u98xh). Pre-fix the rotation-only alignment
+    /// (no dilation factor s = Σ singular values) drifted disparity
+    /// by ~1.5e-6 abs and mtx2 by ~6.2e-4 L∞ on the 5-point fixture
+    /// where data2 = data1 + small_noise.
+    #[test]
+    fn procrustes_noisy_near_aligned_matches_scipy() {
+        let data1: Vec<Vec<f64>> = vec![
+            vec![0.0, 0.0],
+            vec![1.0, 0.0],
+            vec![2.0, 0.5],
+            vec![3.0, 1.5],
+            vec![4.0, 3.0],
+        ];
+        let data2: Vec<Vec<f64>> = vec![
+            vec![0.05, -0.02],
+            vec![0.97, 0.04],
+            vec![2.04, 0.55],
+            vec![2.95, 1.47],
+            vec![4.02, 3.04],
+        ];
+        let result = procrustes(&data1, &data2).expect("procrustes");
+        // From scipy.spatial.procrustes(data1, data2):
+        let expected_disparity = 0.0007857355802631467;
+        let expected_mtx2 = [
+            [-0.48406838, -0.25356692],
+            [-0.2568692, -0.23979018],
+            [0.00786914, -0.11508539],
+            [0.23356811, 0.11102129],
+            [0.49950032, 0.49742119],
+        ];
+        assert!(
+            (result.disparity - expected_disparity).abs() < 1e-12,
+            "disparity {} vs scipy {}",
+            result.disparity,
+            expected_disparity
+        );
+        for (i, row) in result.mtx2.iter().enumerate() {
+            for (j, &got) in row.iter().enumerate() {
+                let exp = expected_mtx2[i][j];
+                assert!(
+                    (got - exp).abs() < 1e-7,
+                    "mtx2[{i}][{j}] = {got} vs scipy {exp}"
+                );
+            }
+        }
     }
 
     #[test]
