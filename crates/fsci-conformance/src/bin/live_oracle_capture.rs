@@ -2,10 +2,10 @@
 
 use fsci_conformance::{
     DifferentialOracleConfig, HarnessConfig, LiveOracleCaptureReport,
-    default_zero_drift_thresholds, evaluate_drift_gate, run_live_oracle_capture_lane,
-    validate_zero_drift_oracle_coverage,
+    default_zero_drift_thresholds, evaluate_drift_gate, generate_decode_proof_artifact,
+    generate_raptorq_sidecar, run_live_oracle_capture_lane, validate_zero_drift_oracle_coverage,
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 #[derive(Debug, Clone)]
@@ -113,11 +113,70 @@ fn print_usage(program: &str) {
     eprintln!(
         "Usage: {program} [--fixture-root <path>] [--oracle-root <path>] [--python <path>] [--packet <filter>] [--output <path>] [--timeout-secs <n>] [--allow-missing-oracle] [--allow-drift]"
     );
+    eprintln!(
+        "When --output is set, also writes <output>.raptorq.json and <output>.decode_proof.json."
+    );
+}
+
+fn sidecar_path_for(output_path: &Path) -> PathBuf {
+    let mut path = output_path.as_os_str().to_os_string();
+    path.push(".raptorq.json");
+    PathBuf::from(path)
+}
+
+fn decode_proof_path_for(output_path: &Path) -> PathBuf {
+    let mut path = output_path.as_os_str().to_os_string();
+    path.push(".decode_proof.json");
+    PathBuf::from(path)
+}
+
+fn write_sidecar_artifacts(output_path: &Path, report_bytes: &[u8]) -> Result<(), ExitCode> {
+    let sidecar = match generate_raptorq_sidecar(report_bytes) {
+        Ok(sidecar) => sidecar,
+        Err(error) => {
+            eprintln!("failed to generate RaptorQ sidecar: {error}");
+            return Err(ExitCode::from(2));
+        }
+    };
+    let sidecar_bytes = match serde_json::to_vec_pretty(&sidecar) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            eprintln!("failed to serialize RaptorQ sidecar: {error}");
+            return Err(ExitCode::from(2));
+        }
+    };
+    let sidecar_path = sidecar_path_for(output_path);
+    if let Err(error) = std::fs::write(&sidecar_path, sidecar_bytes) {
+        eprintln!("failed to write {}: {error}", sidecar_path.display());
+        return Err(ExitCode::from(2));
+    }
+
+    let decode_proof = match generate_decode_proof_artifact(report_bytes, &sidecar) {
+        Ok(proof) => proof,
+        Err(error) => {
+            eprintln!("failed to generate decode proof: {error}");
+            return Err(ExitCode::from(2));
+        }
+    };
+    let decode_proof_bytes = match serde_json::to_vec_pretty(&decode_proof) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            eprintln!("failed to serialize decode proof: {error}");
+            return Err(ExitCode::from(2));
+        }
+    };
+    let decode_proof_path = decode_proof_path_for(output_path);
+    if let Err(error) = std::fs::write(&decode_proof_path, decode_proof_bytes) {
+        eprintln!("failed to write {}: {error}", decode_proof_path.display());
+        return Err(ExitCode::from(2));
+    }
+
+    Ok(())
 }
 
 fn write_summary(
     report: &LiveOracleCaptureReport,
-    output_path: Option<&PathBuf>,
+    output_path: Option<&Path>,
 ) -> Result<(), ExitCode> {
     let bytes = match serde_json::to_vec_pretty(report) {
         Ok(bytes) => bytes,
@@ -128,10 +187,11 @@ fn write_summary(
     };
 
     if let Some(path) = output_path {
-        if let Err(error) = std::fs::write(path, bytes) {
+        if let Err(error) = std::fs::write(path, &bytes) {
             eprintln!("failed to write {}: {error}", path.display());
             return Err(ExitCode::from(2));
         }
+        write_sidecar_artifacts(path, &bytes)?;
     } else {
         println!("{}", String::from_utf8_lossy(&bytes));
     }
@@ -230,7 +290,7 @@ fn main() -> ExitCode {
             }
         };
 
-    if let Err(code) = write_summary(&report, args.output_path.as_ref()) {
+    if let Err(code) = write_summary(&report, args.output_path.as_deref()) {
         return code;
     }
     if let Err(code) = enforce_exit_policy(&report, allow_missing_oracle, allow_drift) {
@@ -241,8 +301,12 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::enforce_exit_policy;
-    use fsci_conformance::{DriftDiffReport, LiveOracleCaptureReport, OracleStatus};
+    use super::{decode_proof_path_for, enforce_exit_policy, sidecar_path_for, write_summary};
+    use fsci_conformance::{
+        DecodeProofArtifact, DriftDiffReport, LiveOracleCaptureReport, OracleStatus, RaptorQSidecar,
+    };
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn report_with_packet(
         oracle_status: OracleStatus,
@@ -335,5 +399,29 @@ mod tests {
             packets: Vec::new(),
         };
         assert!(enforce_exit_policy(&report, true, true).is_err());
+    }
+
+    #[test]
+    fn write_summary_emits_raptorq_sidecars_for_output_path()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let report = report_with_packet(OracleStatus::Available, 1, 0, 0);
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_nanos());
+        let path = std::env::temp_dir().join(format!(
+            "fsci-live-oracle-capture-{}-{unique}.json",
+            std::process::id()
+        ));
+
+        write_summary(&report, Some(&path))
+            .map_err(|code| format!("write_summary failed with exit code {code:?}"))?;
+
+        let sidecar_path = sidecar_path_for(&path);
+        let decode_proof_path = decode_proof_path_for(&path);
+        let sidecar: RaptorQSidecar = serde_json::from_slice(&fs::read(sidecar_path)?)?;
+        let decode_proof: DecodeProofArtifact =
+            serde_json::from_slice(&fs::read(decode_proof_path)?)?;
+        assert_eq!(sidecar.source_hash, decode_proof.proof_hash);
+        Ok(())
     }
 }

@@ -86,7 +86,10 @@ jobs:
         if: always()
         with:
           name: live-oracle-capture
-          path: target/live-oracle-capture.json
+          path: |
+            target/live-oracle-capture.json
+            target/live-oracle-capture.json.raptorq.json
+            target/live-oracle-capture.json.decode_proof.json
           if-no-files-found: error
 
   # ── G4: Adversarial/Smoke Test ─────────────────────────────────────
