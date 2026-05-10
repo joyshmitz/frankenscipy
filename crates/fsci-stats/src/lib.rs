@@ -14644,50 +14644,62 @@ pub fn pearsonr_alternative(x: &[f64], y: &[f64], alternative: &str) -> Correlat
     let xmean: f64 = x.iter().sum::<f64>() / nf;
     let ymean: f64 = y.iter().sum::<f64>() / nf;
 
-    let mut ssxm = 0.0;
-    let mut ssym = 0.0;
-    let mut ssxym = 0.0;
-    for (&xi, &yi) in x.iter().zip(y.iter()) {
-        let dx = xi - xmean;
-        let dy = yi - ymean;
-        ssxm += dx * dx;
-        ssym += dy * dy;
-        ssxym += dx * dy;
-    }
-
-    let denom = (ssxm * ssym).sqrt();
-    if denom == 0.0 {
+    // scipy-style normalize-first dot product: scale by max-abs first,
+    // then take the sqrt of the squared-sum, then dot product on the
+    // normalized centred vectors. This avoids overflow on huge inputs
+    // and matches scipy's computation order so r near ±1 lands at the
+    // same float as scipy (e.g. -0.99999999999999967 instead of exact
+    // -1) — relevant for the boundary pvalue (frankenscipy-vgl6u).
+    let xm: Vec<f64> = x.iter().map(|&xi| xi - xmean).collect();
+    let ym: Vec<f64> = y.iter().map(|&yi| yi - ymean).collect();
+    let xmax = xm.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
+    let ymax = ym.iter().map(|v| v.abs()).fold(0.0_f64, f64::max);
+    if xmax == 0.0 || ymax == 0.0 {
         return CorrelationResult {
             statistic: f64::NAN,
             pvalue: f64::NAN,
         };
     }
+    let normxm = xmax * xm.iter().map(|v| (v / xmax).powi(2)).sum::<f64>().sqrt();
+    let normym = ymax * ym.iter().map(|v| (v / ymax).powi(2)).sum::<f64>().sqrt();
+    if normxm == 0.0 || normym == 0.0 {
+        return CorrelationResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+        };
+    }
+    let r = xm
+        .iter()
+        .zip(ym.iter())
+        .map(|(&dx, &dy)| (dx / normxm) * (dy / normym))
+        .sum::<f64>()
+        .clamp(-1.0, 1.0);
 
-    let r = (ssxym / denom).clamp(-1.0, 1.0);
-    let df = nf - 2.0;
-
-    let pvalue = if df > 0.0 && r.abs() < 1.0 {
-        let t = r * (df / (1.0 - r * r)).sqrt();
-        let tdist = StudentT::new(df);
+    // p-value via the scipy convention: under the null, r is distributed
+    // as Beta(n/2 − 1, n/2 − 1) on (−1, 1). Translate r ∈ [−1, 1] onto
+    // u ∈ [0, 1] via u = (r + 1)/2 and call the standard BetaDist cdf.
+    // The previous t-distribution path produced p = 0 exactly at r = ±1
+    // because of the early clamp; the Beta path mirrors scipy and gives
+    // a vanishingly small but non-zero pvalue at the boundary
+    // (frankenscipy-vgl6u).
+    let ab = nf / 2.0 - 1.0;
+    let pvalue = if ab > 0.0 {
+        let u = (r + 1.0) / 2.0;
+        let beta = BetaDist::new(ab, ab);
         match alternative {
-            "less" => tdist.cdf(t),
-            "greater" => tdist.sf(t),
-            _ => 2.0 * tdist.sf(t.abs()),
-        }
-    } else if r >= 1.0 {
-        // Perfect positive correlation: t → +∞. "less" tail covers
-        // everything; "greater" tail covers nothing; two-sided is 0.
-        match alternative {
-            "less" => 1.0,
-            _ => 0.0,
-        }
-    } else if r <= -1.0 {
-        // Perfect negative correlation: t → −∞.
-        match alternative {
-            "greater" => 1.0,
-            _ => 0.0,
+            "less" => beta.cdf(u),
+            "greater" => regularized_incomplete_beta(ab, ab, 1.0 - u),
+            // Beta(ab, ab) on (−1, 1) is symmetric around 0, so the
+            // two-sided pvalue is 2·sf(|r|). Compute sf via the symmetry
+            // identity I(x; a, b) = 1 − I(1−x; b, a) to avoid
+            // catastrophic cancellation when |r| is close to 1.
+            _ => {
+                let u_abs = (r.abs() + 1.0) / 2.0;
+                (2.0 * regularized_incomplete_beta(ab, ab, 1.0 - u_abs)).clamp(0.0, 1.0)
+            }
         }
     } else {
+        // df ≤ 0 (n ≤ 2): pvalue undefined.
         f64::NAN
     };
 
@@ -37465,6 +37477,48 @@ mod tests {
             neg_greater.pvalue > 0.5,
             "neg corr greater p should be large"
         );
+    }
+
+    /// pearsonr_alternative at exact |r|=1 matches scipy
+    /// (frankenscipy-vgl6u). Pre-fix the t-distribution path with
+    /// an early r-clamp returned p=0 at the boundary; the Beta
+    /// distribution + scipy-style normalize-first dot product now
+    /// yields the same vanishingly small but non-zero p as scipy.
+    #[test]
+    fn pearsonr_alternative_boundary_matches_scipy() {
+        let x: Vec<f64> = (1..=10).map(|i| i as f64).collect();
+        let y_anti: Vec<f64> = (1..=10).rev().map(|i| i as f64).collect();
+        // scipy.stats.pearsonr(x, y_anti, alternative=*).pvalue:
+        let cases: [(&str, f64); 3] = [
+            ("two-sided", 1.701605740040155e-61),
+            ("less", 2.6919934559229012e-62),
+            ("greater", 1.0),
+        ];
+        for (alt, expected) in cases {
+            let got = pearsonr_alternative(&x, &y_anti, alt).pvalue;
+            // Boundary p-values are at the float-precision floor —
+            // accept up to 50% relative slack on the tiny ones.
+            let scale = expected.abs().max(1e-70);
+            assert!(
+                (got - expected).abs() < 0.5 * scale,
+                "anti pearsonr_alternative('{alt}') = {got}, scipy {expected}"
+            );
+        }
+        // Perfect positive correlation: same magnitudes with less/greater swapped.
+        let y_perf: Vec<f64> = (1..=10).map(|i| i as f64).collect();
+        let perf_cases: [(&str, f64); 3] = [
+            ("two-sided", 1.701605740040155e-61),
+            ("less", 1.0),
+            ("greater", 8.508028700200774e-62),
+        ];
+        for (alt, expected) in perf_cases {
+            let got = pearsonr_alternative(&x, &y_perf, alt).pvalue;
+            let scale = expected.abs().max(1e-70);
+            assert!(
+                (got - expected).abs() < 0.5 * scale,
+                "perfect pearsonr_alternative('{alt}') = {got}, scipy {expected}"
+            );
+        }
     }
 
     #[test]
