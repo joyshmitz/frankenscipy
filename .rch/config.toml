@@ -1,0 +1,2 @@
+[environment]
+allowlist = ["CARGO_TARGET_DIR", "FSCI_REQUIRE_SCIPY_ORACLE"]
