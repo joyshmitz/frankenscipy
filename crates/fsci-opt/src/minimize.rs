@@ -4,7 +4,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::types::{
-    ConvergenceStatus, MinimizeOptions, OptError, OptimizeMethod, OptimizeResult,
+    Bound, ConvergenceStatus, MinimizeOptions, OptError, OptimizeMethod, OptimizeResult,
     OptimizeTraceEntry,
 };
 
@@ -40,7 +40,19 @@ impl OptCaspProblem {
             variable_scale_ratio: variable_scale_ratio(x0),
             has_box_bounds: false,
             has_general_constraints: false,
-            gradient_available: true,
+            gradient_available: options.gradient_available,
+            hessian_product_available: options.hessp.is_some(),
+        }
+    }
+
+    #[must_use]
+    pub fn from_x0_and_options(x0: &[f64], options: MinimizeOptions) -> Self {
+        Self {
+            dimension: x0.len(),
+            variable_scale_ratio: variable_scale_ratio(x0),
+            has_box_bounds: options.bounds.is_some_and(bounds_have_finite_limit),
+            has_general_constraints: options.has_general_constraints,
+            gradient_available: options.gradient_available,
             hessian_product_available: options.hessp.is_some(),
         }
     }
@@ -131,7 +143,8 @@ where
     let selected_method = if let Some(method) = options.method {
         method
     } else {
-        let decision = select_minimize_method(OptCaspProblem::unbounded_from_x0(x0, options))?;
+        validate_bounds_for_x0(x0, options.bounds)?;
+        let decision = select_minimize_method(OptCaspProblem::from_x0_and_options(x0, options))?;
         log_casp_decision(options, &decision);
         decision.method
     };
@@ -141,7 +154,7 @@ where
         OptimizeMethod::ConjugateGradient => cg_pr_plus(&fun, x0, options),
         OptimizeMethod::Powell => powell(&fun, x0, options),
         OptimizeMethod::NelderMead => nelder_mead(&fun, x0, options),
-        OptimizeMethod::LBfgsB => lbfgsb(&fun, x0, options, None),
+        OptimizeMethod::LBfgsB => lbfgsb(&fun, x0, options, options.bounds),
         OptimizeMethod::NewtonCg => newton_cg(&fun, x0, options),
         OptimizeMethod::TrustExact => trust_exact(&fun, x0, options),
         OptimizeMethod::Tnc => tnc(&fun, x0, options),
@@ -980,10 +993,6 @@ where
     Ok(())
 }
 
-/// Bound constraint: (lower, upper) for each variable.
-/// `None` means unbounded in that direction.
-pub type Bound = (Option<f64>, Option<f64>);
-
 /// L-BFGS-B: Limited-memory BFGS with box constraints.
 ///
 /// Matches `scipy.optimize.minimize(f, x0, method='L-BFGS-B', bounds=...)`.
@@ -998,6 +1007,7 @@ where
     F: Fn(&[f64]) -> f64,
 {
     validate_minimize_options(options)?;
+    validate_bounds_for_x0(x0, bounds)?;
 
     let n = x0.len();
     let tol = options.tol.unwrap_or(1.0e-6).max(1.0e-12);
@@ -2284,6 +2294,49 @@ fn validate_minimize_options(options: MinimizeOptions) -> Result<(), OptError> {
     Ok(())
 }
 
+fn validate_bounds_for_x0(x0: &[f64], bounds: Option<&[Bound]>) -> Result<(), OptError> {
+    let Some(bounds) = bounds else {
+        return Ok(());
+    };
+    if bounds.len() != x0.len() {
+        return Err(OptError::InvalidBounds {
+            detail: format!(
+                "bounds length must match x0 length (got {} and {})",
+                bounds.len(),
+                x0.len()
+            ),
+        });
+    }
+    for (index, (lo, hi)) in bounds.iter().enumerate() {
+        if let Some(lo) = lo
+            && !lo.is_finite()
+        {
+            return Err(OptError::InvalidBounds {
+                detail: format!("lower bound at index {index} must be finite when present"),
+            });
+        }
+        if let Some(hi) = hi
+            && !hi.is_finite()
+        {
+            return Err(OptError::InvalidBounds {
+                detail: format!("upper bound at index {index} must be finite when present"),
+            });
+        }
+        if let (Some(lo), Some(hi)) = (lo, hi)
+            && lo > hi
+        {
+            return Err(OptError::InvalidBounds {
+                detail: format!("lower bound {lo} exceeds upper bound {hi} at index {index}"),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn bounds_have_finite_limit(bounds: &[Bound]) -> bool {
+    bounds.iter().any(|(lo, hi)| lo.is_some() || hi.is_some())
+}
+
 fn bfgs_inverse_update(h_inv: &[Vec<f64>], s: &[f64], y: &[f64], rho: f64) -> Vec<Vec<f64>> {
     let n = s.len();
 
@@ -3285,7 +3338,7 @@ mod tests {
 
     use super::{Objective, golden_section_direction_search};
     use crate::{
-        ConvergenceStatus, MinimizeOptions, MinimizeScalarOptions, OptCaspProblem, OptError,
+        Bound, ConvergenceStatus, MinimizeOptions, MinimizeScalarOptions, OptCaspProblem, OptError,
         OptimizeMethod, OptimizeResult, bfgs, cg_pr_plus, get_optimize_traces, minimize,
         minimize_scalar, powell, select_minimize_method,
     };
@@ -3541,6 +3594,128 @@ mod tests {
                 .as_deref()
                 .is_some_and(|reason| reason.contains("Hessian product"))
         );
+    }
+
+    #[test]
+    fn casp_default_minimize_uses_lbfgsb_for_static_box_bounds() {
+        const FIXTURE_ID: &str = "casp-default-lbfgsb-bounds";
+        static BOUNDS: [Bound; 2] = [(Some(0.0), Some(2.0)), (Some(0.0), Some(2.0))];
+        let _ = get_optimize_traces();
+        let options = MinimizeOptions {
+            method: None,
+            bounds: Some(&BOUNDS),
+            fixture_id: Some(FIXTURE_ID),
+            tol: Some(1.0e-8),
+            maxiter: Some(120),
+            maxfev: Some(2_000),
+            ..MinimizeOptions::default()
+        };
+        let result = minimize(
+            |x| (x[0] - 3.0).powi(2) + (x[1] - 3.0).powi(2),
+            &[0.0, 0.0],
+            options,
+        )
+        .expect("bounded minimize");
+
+        assert!(result.success, "{}", result.message);
+        assert!((result.x[0] - 2.0).abs() <= 1.0e-6, "x={:?}", result.x);
+        assert!((result.x[1] - 2.0).abs() <= 1.0e-6, "x={:?}", result.x);
+
+        let traces = get_optimize_traces();
+        let decision = traces
+            .iter()
+            .find(|entry| {
+                entry.event == "casp_decision" && entry.fixture_id.as_deref() == Some(FIXTURE_ID)
+            })
+            .expect("CASP decision trace");
+        assert_eq!(decision.method, OptimizeMethod::LBfgsB);
+        assert!(
+            decision
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("box constraints"))
+        );
+    }
+
+    #[test]
+    fn casp_default_minimize_uses_nelder_mead_when_gradient_unavailable() {
+        const FIXTURE_ID: &str = "casp-default-nelder-mead";
+        let _ = get_optimize_traces();
+        let options = MinimizeOptions {
+            method: None,
+            gradient_available: false,
+            fixture_id: Some(FIXTURE_ID),
+            tol: Some(1.0e-8),
+            maxiter: Some(120),
+            maxfev: Some(2_000),
+            ..MinimizeOptions::default()
+        };
+        let result =
+            minimize(one_dim_quadratic, &[0.0], options).expect("derivative-free minimize");
+        assert!(result.success, "{}", result.message);
+
+        let traces = get_optimize_traces();
+        let decision = traces
+            .iter()
+            .find(|entry| {
+                entry.event == "casp_decision" && entry.fixture_id.as_deref() == Some(FIXTURE_ID)
+            })
+            .expect("CASP decision trace");
+        assert_eq!(decision.method, OptimizeMethod::NelderMead);
+        assert!(
+            decision
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("no gradient"))
+        );
+    }
+
+    #[test]
+    fn casp_default_minimize_uses_trust_constr_when_constraints_are_flagged() {
+        const FIXTURE_ID: &str = "casp-default-trust-constr";
+        let _ = get_optimize_traces();
+        let options = MinimizeOptions {
+            method: None,
+            has_general_constraints: true,
+            fixture_id: Some(FIXTURE_ID),
+            tol: Some(1.0e-8),
+            maxiter: Some(10),
+            maxfev: Some(100),
+            ..MinimizeOptions::default()
+        };
+        let result = minimize(zero_function, &[0.0, 0.0], options).expect("trust-constr minimize");
+        assert!(result.success, "{}", result.message);
+
+        let traces = get_optimize_traces();
+        let decision = traces
+            .iter()
+            .find(|entry| {
+                entry.event == "casp_decision" && entry.fixture_id.as_deref() == Some(FIXTURE_ID)
+            })
+            .expect("CASP decision trace");
+        assert_eq!(decision.method, OptimizeMethod::TrustConstr);
+        assert!(
+            decision
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("general constraints"))
+        );
+    }
+
+    #[test]
+    fn casp_bounds_validate_against_x0_before_dispatch() {
+        static BAD_BOUNDS: [Bound; 1] = [(Some(0.0), Some(1.0))];
+        let error = minimize(
+            sphere,
+            &[0.0, 0.0],
+            MinimizeOptions {
+                method: None,
+                bounds: Some(&BAD_BOUNDS),
+                ..MinimizeOptions::default()
+            },
+        )
+        .expect_err("bounds dimension mismatch");
+        assert!(matches!(error, OptError::InvalidBounds { .. }));
     }
 
     #[test]

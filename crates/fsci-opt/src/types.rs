@@ -100,6 +100,11 @@ impl OptimizeResult {
 
 pub type HesspFunc = fn(&[f64], &[f64]) -> Vec<f64>;
 
+/// Bound constraint: (lower, upper) for one optimization variable.
+///
+/// `None` means unbounded in that direction.
+pub type Bound = (Option<f64>, Option<f64>);
+
 #[derive(Debug, Clone, Copy)]
 pub struct MinimizeOptions {
     pub method: Option<OptimizeMethod>,
@@ -109,6 +114,9 @@ pub struct MinimizeOptions {
     pub gradient_eps: f64,
     pub callback: Option<MinimizeCallback>,
     pub hessp: Option<HesspFunc>,
+    pub bounds: Option<&'static [Bound]>,
+    pub has_general_constraints: bool,
+    pub gradient_available: bool,
     pub fixture_id: Option<&'static str>,
     pub seed: Option<u64>,
     pub mode: RuntimeMode,
@@ -124,6 +132,9 @@ impl Default for MinimizeOptions {
             gradient_eps: 1.0e-8,
             callback: None,
             hessp: None,
+            bounds: None,
+            has_general_constraints: false,
+            gradient_available: true,
             fixture_id: None,
             seed: None,
             mode: RuntimeMode::Strict,

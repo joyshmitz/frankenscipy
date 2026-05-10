@@ -14,9 +14,9 @@ pub use curvefit::{
 };
 pub use linesearch::{LineSearchResult, WolfeParams, line_search_wolfe1, line_search_wolfe2};
 pub use minimize::{
-    Bound, MinimizeScalarOptions, MinimizeScalarResult, OptCaspDecision, OptCaspProblem, bfgs,
-    cg_pr_plus, get_optimize_traces, lbfgsb, minimize, minimize_scalar, minimize_with_audit,
-    nelder_mead, newton_cg, powell, select_minimize_method, trust_exact,
+    MinimizeScalarOptions, MinimizeScalarResult, OptCaspDecision, OptCaspProblem, bfgs, cg_pr_plus,
+    get_optimize_traces, lbfgsb, minimize, minimize_scalar, minimize_with_audit, nelder_mead,
+    newton_cg, powell, select_minimize_method, trust_exact,
 };
 pub use root::{
     MultivariateRootMethod, MultivariateRootOptions, MultivariateRootResult, RootResult, anderson,
@@ -24,8 +24,8 @@ pub use root::{
     root, root_scalar, secant, toms748,
 };
 pub use types::{
-    Bounds, ConvergenceStatus, LinearConstraint, MinimizeOptions, NonlinearConstraint, OptError,
-    OptimizeMethod, OptimizeResult, RootMethod, RootOptions,
+    Bound, Bounds, ConvergenceStatus, LinearConstraint, MinimizeOptions, NonlinearConstraint,
+    OptError, OptimizeMethod, OptimizeResult, RootMethod, RootOptions,
 };
 
 /// Exit status for adaptive numerical differentiation.
