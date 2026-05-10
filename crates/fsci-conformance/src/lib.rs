@@ -3093,6 +3093,16 @@ pub fn run_io_packet(
     ))
 }
 
+pub fn run_constants_packet(
+    config: &HarnessConfig,
+    fixture_name: &str,
+) -> Result<PacketReport, HarnessError> {
+    let fixture_path = config.fixture_root.join(fixture_name);
+    let oracle_config = DifferentialOracleConfig::default();
+    let report = run_differential_test(&fixture_path, &oracle_config)?;
+    Ok(PacketReport::from(&report))
+}
+
 pub fn run_ndimage_packet(
     config: &HarnessConfig,
     fixture_name: &str,
@@ -18282,13 +18292,15 @@ pub enum PacketFamily {
     InterpolateCore,
     /// P2C-015: ndimage filtering, morphology, measurements, and transforms
     NdimageCore,
+    /// P2C-016: physical constants and unit conversions
+    ConstantsCore,
     /// P2C-017: Input/output formats and helper routines
     IoCore,
 }
 
 impl PacketFamily {
     /// All known packet families for enumeration.
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 17] = [
         Self::ValidateTol,
         Self::LinalgCore,
         Self::Optimize,
@@ -18304,6 +18316,7 @@ impl PacketFamily {
         Self::IntegrateCore,
         Self::InterpolateCore,
         Self::NdimageCore,
+        Self::ConstantsCore,
         Self::IoCore,
     ];
 
@@ -18326,6 +18339,7 @@ impl PacketFamily {
             Self::IntegrateCore => "FSCI-P2C-013",
             Self::InterpolateCore => "FSCI-P2C-014",
             Self::NdimageCore => "FSCI-P2C-015",
+            Self::ConstantsCore => "FSCI-P2C-016",
             Self::IoCore => "FSCI-P2C-017",
         }
     }
@@ -18349,6 +18363,7 @@ impl PacketFamily {
             Self::IntegrateCore => "integrate_core",
             Self::InterpolateCore => "interpolate_core",
             Self::NdimageCore => "ndimage_core",
+            Self::ConstantsCore => "constants_core",
             Self::IoCore => "io_core",
         }
     }
@@ -18386,6 +18401,8 @@ impl PacketFamily {
             Some(Self::InterpolateCore)
         } else if s.contains("ndimage") {
             Some(Self::NdimageCore)
+        } else if s.contains("constants") {
+            Some(Self::ConstantsCore)
         } else if s.contains("io") {
             Some(Self::IoCore)
         } else {
@@ -18413,6 +18430,7 @@ impl PacketFamily {
                 | Self::IntegrateCore
                 | Self::InterpolateCore
                 | Self::NdimageCore
+                | Self::ConstantsCore
                 | Self::IoCore
         )
     }
@@ -18536,6 +18554,7 @@ pub fn run_all_packets(config: &HarnessConfig) -> Result<AggregateParityReport, 
             PacketFamily::IntegrateCore => run_integrate_packet(config, fixture_name)?,
             PacketFamily::InterpolateCore => run_interpolate_packet(config, fixture_name)?,
             PacketFamily::NdimageCore => run_ndimage_packet(config, fixture_name)?,
+            PacketFamily::ConstantsCore => run_constants_packet(config, fixture_name)?,
             PacketFamily::IoCore => run_io_packet(config, fixture_name)?,
         };
         reports.push(report);
@@ -23897,8 +23916,8 @@ Path(args.output).write_text(json.dumps(result, indent=2))
     // ═══════════════════════════════════════════════════════════════
 
     #[test]
-    fn packet_family_all_has_16_entries() {
-        assert_eq!(PacketFamily::ALL.len(), 16);
+    fn packet_family_all_has_17_entries() {
+        assert_eq!(PacketFamily::ALL.len(), 17);
     }
 
     #[test]
@@ -23949,6 +23968,7 @@ Path(args.output).write_text(json.dumps(result, indent=2))
         assert!(families.contains(&PacketFamily::Optimize));
         assert!(families.contains(&PacketFamily::InterpolateCore));
         assert!(families.contains(&PacketFamily::NdimageCore));
+        assert!(families.contains(&PacketFamily::ConstantsCore));
         assert!(families.contains(&PacketFamily::IoCore));
     }
 
@@ -24054,6 +24074,10 @@ Path(args.output).write_text(json.dumps(result, indent=2))
             "FSCI-P2C-015_ndimage_core.json"
         );
         assert_eq!(
+            PacketFamily::ConstantsCore.fixture_filename(),
+            "FSCI-P2C-016_constants_core.json"
+        );
+        assert_eq!(
             PacketFamily::IoCore.fixture_filename(),
             "FSCI-P2C-017_io_core.json"
         );
@@ -24069,9 +24093,44 @@ Path(args.output).write_text(json.dumps(result, indent=2))
         assert!(PacketFamily::Special.has_runner());
         assert!(PacketFamily::ArrayApi.has_runner());
         assert!(PacketFamily::RuntimeCasp.has_runner());
+        assert!(PacketFamily::ConstantsCore.has_runner());
         assert!(PacketFamily::InterpolateCore.has_runner());
         assert!(PacketFamily::NdimageCore.has_runner());
         assert!(PacketFamily::IoCore.has_runner());
+    }
+
+    #[test]
+    fn fixture_backed_p2c_packets_are_registered() -> Result<(), Box<dyn std::error::Error>> {
+        let config = HarnessConfig::default_paths();
+        let mut fixture_packet_ids = Vec::new();
+        for entry in fs::read_dir(&config.fixture_root)? {
+            let path = entry?.path();
+            if path.extension().and_then(std::ffi::OsStr::to_str) != Some("json") {
+                continue;
+            }
+            if let Some(name) = path.file_name().and_then(std::ffi::OsStr::to_str) {
+                if !name.starts_with("FSCI-P2C-") {
+                    continue;
+                }
+                if let Some(packet_id) = name.get(..12) {
+                    fixture_packet_ids.push(packet_id.to_owned());
+                }
+            }
+        }
+        fixture_packet_ids.sort();
+        fixture_packet_ids.dedup();
+
+        let mut registry_packet_ids: Vec<String> = PacketFamily::ALL
+            .iter()
+            .map(|family| family.packet_id().to_owned())
+            .collect();
+        registry_packet_ids.sort();
+
+        assert_eq!(
+            fixture_packet_ids, registry_packet_ids,
+            "every fixture-backed P2C packet must be in PacketFamily::ALL"
+        );
+        Ok(())
     }
 
     #[test]

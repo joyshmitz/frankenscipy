@@ -113,9 +113,13 @@ Overall V1 coverage: **~52% of full SciPy surface** (targets highest-value funct
 
 ## Packet Readiness Snapshot
 
+This table tracks the strict M3 packet exit gate. A module-level `parity_green` status above does
+not promote the P2C packet until extraction, implementation, conformance evidence, and sidecar
+artifacts are all green under `artifacts/TOLERANCE_POLICY.md`.
+
 | Packet ID | Extraction | Impl | Conformance | Sidecar | Overall |
 |---|---|---|---|---|---|
-| `FSCI-P2C-001` (IVP) | ready | parity_gap | in_progress | in_progress | parity_gap |
+| `FSCI-P2C-001` (validate_tol) | ready | in_progress | in_progress | in_progress | parity_gap |
 | `FSCI-P2C-002` (linalg) | ready | parity_gap | in_progress | in_progress | parity_gap |
 | `FSCI-P2C-003` (opt) | ready | parity_gap | in_progress | in_progress | parity_gap |
 | `FSCI-P2C-004` (sparse) | ready | parity_gap | in_progress | in_progress | parity_gap |
@@ -123,6 +127,16 @@ Overall V1 coverage: **~52% of full SciPy surface** (targets highest-value funct
 | `FSCI-P2C-006` (special) | ready | parity_gap | in_progress | in_progress | parity_gap |
 | `FSCI-P2C-007` (array API) | ready | in_progress | in_progress | in_progress | in_progress |
 | `FSCI-P2C-008` (CASP) | ready | in_progress | in_progress | in_progress | in_progress |
+| `FSCI-P2C-009` (cluster) | ready | parity_gap | in_progress | in_progress | parity_gap |
+| `FSCI-P2C-010` (spatial) | ready | parity_gap | in_progress | in_progress | parity_gap |
+| `FSCI-P2C-011` (signal core) | ready | parity_gap | in_progress | in_progress | parity_gap |
+| `FSCI-P2C-012` (stats) | ready | parity_gap | in_progress | in_progress | parity_gap |
+| `FSCI-P2C-013` (integrate) | ready | parity_gap | in_progress | in_progress | parity_gap |
+| `FSCI-P2C-014` (interpolate) | ready | parity_gap | in_progress | in_progress | parity_gap |
+| `FSCI-P2C-015` (ndimage) | ready | parity_gap | in_progress | in_progress | parity_gap |
+| `FSCI-P2C-016` (constants) | ready | parity_gap | in_progress | in_progress | parity_gap |
+| `FSCI-P2C-017` (IO) | ready | parity_gap | in_progress | in_progress | parity_gap |
+| `FSCI-P2C-018` (signal live oracle) | ready | parity_gap | in_progress | in_progress | parity_gap |
 
 ## Highest-Impact Missing Functions (V1 Priorities)
 

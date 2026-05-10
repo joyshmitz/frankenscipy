@@ -7,13 +7,42 @@
 
 use std::collections::HashSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-type TestResult = Result<(), Box<dyn std::error::Error>>;
+type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
 fn conformance_root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
 }
+
+fn workspace_root() -> TestResult<PathBuf> {
+    conformance_root()
+        .parent()
+        .and_then(|path| path.parent())
+        .map(Path::to_path_buf)
+        .ok_or_else(|| "fsci-conformance crate should live under crates/".into())
+}
+
+const CANONICAL_M3_PACKETS: &[&str] = &[
+    "FSCI-P2C-001",
+    "FSCI-P2C-002",
+    "FSCI-P2C-003",
+    "FSCI-P2C-004",
+    "FSCI-P2C-005",
+    "FSCI-P2C-006",
+    "FSCI-P2C-007",
+    "FSCI-P2C-008",
+    "FSCI-P2C-009",
+    "FSCI-P2C-010",
+    "FSCI-P2C-011",
+    "FSCI-P2C-012",
+    "FSCI-P2C-013",
+    "FSCI-P2C-014",
+    "FSCI-P2C-015",
+    "FSCI-P2C-016",
+    "FSCI-P2C-017",
+    "FSCI-P2C-018",
+];
 
 const ORACLE_EXEMPT: &[(&str, &str)] = &[
     (
@@ -49,6 +78,49 @@ const ORACLE_EXEMPT: &[(&str, &str)] = &[
         "Signal live-SciPy diff emits per-case diff artifacts and skips when SciPy is unavailable, not consolidated oracle_capture.json",
     ),
 ];
+
+#[test]
+fn m3_packet_surface_covers_all_canonical_packets() -> TestResult {
+    let artifacts_dir = conformance_root().join("fixtures/artifacts");
+    let workspace_root = workspace_root()?;
+    let feature_parity = fs::read_to_string(workspace_root.join("FEATURE_PARITY.md"))?;
+    let tolerance_policy =
+        fs::read_to_string(workspace_root.join("artifacts/TOLERANCE_POLICY.md"))?;
+
+    let mut missing_artifacts = Vec::new();
+    let mut missing_feature_rows = Vec::new();
+    let mut missing_tolerance_rows = Vec::new();
+
+    for packet in CANONICAL_M3_PACKETS {
+        if !artifacts_dir.join(packet).exists() {
+            missing_artifacts.push(*packet);
+        }
+        if !feature_parity.contains(packet) {
+            missing_feature_rows.push(*packet);
+        }
+        if !tolerance_policy.contains(packet) {
+            missing_tolerance_rows.push(*packet);
+        }
+    }
+
+    if missing_artifacts.is_empty()
+        && missing_feature_rows.is_empty()
+        && missing_tolerance_rows.is_empty()
+    {
+        return Ok(());
+    }
+
+    Err(format!(
+        "M3 packet surface must cover all 18 canonical P2C packets.\n\
+         Missing artifact dirs: {}\n\
+         Missing FEATURE_PARITY rows: {}\n\
+         Missing TOLERANCE_POLICY rows: {}",
+        missing_artifacts.join(", "),
+        missing_feature_rows.join(", "),
+        missing_tolerance_rows.join(", ")
+    )
+    .into())
+}
 
 #[test]
 fn every_packet_has_oracle_or_exemption() -> TestResult {

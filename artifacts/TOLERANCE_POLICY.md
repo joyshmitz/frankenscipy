@@ -43,6 +43,7 @@ published in `artifacts/tolerance-audit-2026-05-03.md`.
 | FSCI-P2C-015 ndimage_core | mixed scalar/structural | `(1e-12, 1e-12)` | direct convolution plus boolean/connectivity checks |
 | FSCI-P2C-016 constants_core | scalar/structural | `(1e-15, 0.0)` | `tolerance_lint` baseline + CODATA identity checks |
 | FSCI-P2C-017 io_core | scalar/structural | `(1e-12, 1e-12)` | serialization roundtrip plus schema/shape checks |
+| FSCI-P2C-018 signal_live | live scalar oracle | case-specific T3/T5 | `diff_signal*` live SciPy artifacts under `fixtures/artifacts/FSCI-P2C-018/diff/` |
 
 ---
 
@@ -251,6 +252,18 @@ arithmetic happens beyond a single multiply.
 |------|------------|-------|
 | **T2 (1e-12)** | loadmat, loadtxt, mmread, mmwrite, savemat, savetxt, wav_write | Roundtrip serialization; T2 absorbs the f64 ↔ ASCII conversion error |
 | Tnone | loadmat (1), loadtxt (1) | Schema/shape check |
+
+### FSCI-P2C-018 signal_live — live SciPy differential cases
+
+This packet is intentionally live-oracle only: there is no consolidated fixture JSON, and
+`crates/fsci-conformance/tests/oracle_topology.rs` exempts it from the `oracle_capture.json`
+topology rule because the tests emit per-case JSON logs under
+`crates/fsci-conformance/fixtures/artifacts/FSCI-P2C-018/diff/`.
+
+| Tier | Operations | Notes |
+|------|------------|-------|
+| **T3 (1e-10)** | convolve, correlate, lombscargle, hilbert | Direct-sum or analytic transform checks against SciPy subprocess output |
+| T5 (1e-07) | window functions, ricker | Bessel/window helper paths carry implementation-specific rounding at the final weights |
 
 ---
 
