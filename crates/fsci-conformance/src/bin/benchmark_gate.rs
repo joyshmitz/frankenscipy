@@ -130,31 +130,27 @@ fn load_baselines(dir: &Path) -> Result<HashMap<String, BaselineFile>, String> {
         let entry = entry.map_err(|e| format!("dir entry error: {e}"))?;
         let path = entry.path();
 
-        if path.extension().map(|s| s == "json").unwrap_or(false)
-            && path
-                .file_name()
-                .map(|s| s.to_string_lossy().starts_with("baseline_"))
-                .unwrap_or(false)
-        {
+        if let Some(family) = baseline_family_name(&path) {
             let content = fs::read_to_string(&path)
                 .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
 
             let baseline: BaselineFile = serde_json::from_str(&content)
                 .map_err(|e| format!("invalid JSON in {}: {e}", path.display()))?;
 
-            let family = path
-                .file_stem()
-                .unwrap()
-                .to_string_lossy()
-                .strip_prefix("baseline_")
-                .unwrap_or("unknown")
-                .to_string();
-
             baselines.insert(family, baseline);
         }
     }
 
     Ok(baselines)
+}
+
+fn baseline_family_name(path: &Path) -> Option<String> {
+    let file_name = path.file_name()?.to_str()?;
+    let family = file_name.strip_prefix("baseline_")?.strip_suffix(".json")?;
+    if family.is_empty() || family.contains('.') {
+        return None;
+    }
+    Some(family.to_owned())
 }
 
 fn check_spec_compliance(baselines: &HashMap<String, BaselineFile>) -> Vec<GateResult> {
@@ -378,4 +374,27 @@ fn main() {
     }
 
     println!("No action specified. Use --check-spec or --compare DIR.");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::baseline_family_name;
+    use std::path::Path;
+
+    #[test]
+    fn baseline_family_name_accepts_only_canonical_baseline_json() {
+        assert_eq!(
+            baseline_family_name(Path::new("docs/baseline_fft.json")),
+            Some("fft".to_owned())
+        );
+        assert_eq!(
+            baseline_family_name(Path::new("docs/baseline_linalg.json.raptorq.json")),
+            None
+        );
+        assert_eq!(
+            baseline_family_name(Path::new("docs/baseline_linalg.json.decode_proof.json")),
+            None
+        );
+        assert_eq!(baseline_family_name(Path::new("docs/other.json")), None);
+    }
 }

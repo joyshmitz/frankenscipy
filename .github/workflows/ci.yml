@@ -148,6 +148,21 @@ jobs:
             echo "=== Running $test ==="
             cargo test -p fsci-conformance --test "$test" -- --nocapture
           done
+      - name: Validate published benchmark baselines
+        run: |
+          cargo run -p fsci-conformance --bin benchmark_gate -- \
+            --baselines-dir docs \
+            --check-spec
+          cargo run -p fsci-conformance --bin benchmark_gate -- \
+            --baselines-dir docs \
+            --compare docs \
+            --regression-tolerance 0.05
+          cargo run -p fsci-conformance --bin raptorq_sidecar -- --verify \
+            docs/baseline_linalg.json \
+            docs/baseline_sparse.json \
+            docs/baseline_opt.json \
+            docs/baseline_integrate.json \
+            docs/baseline_fft.json
         timeout-minutes: 20
 
   # ── G7: Artifact Schema Validation + Evidence Packs (parallel) ────
