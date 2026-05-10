@@ -2724,10 +2724,13 @@ pub fn casp_iterative_solve_with_audit(
             solved.decision.selected_solver.as_str()
         ),
         &format!(
-            "selected_solver={};rationale={};symmetric={};density={:.6};matvec_cost={:?};preconditioner_available={};converged={};residual_norm={:.6e}",
+            "selected_solver={};rationale={};square={};symmetric={};positive_diagonal={};row_diagonally_dominant={};density={:.6};matvec_cost={:?};preconditioner_available={};converged={};residual_norm={:.6e}",
             solved.decision.selected_solver.as_str(),
             solved.decision.rationale,
+            solved.decision.square,
             solved.decision.symmetric,
+            solved.decision.positive_diagonal,
+            solved.decision.row_diagonally_dominant,
             solved.decision.density,
             solved.decision.matrix_vector_cost,
             solved.decision.preconditioner_available,
@@ -5037,6 +5040,99 @@ mod tests {
     }
 
     #[test]
+    fn casp_selects_lsmr_for_underdetermined_rectangular_system() {
+        let a = non_square_csr();
+        let b = vec![1.0, 2.0];
+        let decision =
+            select_casp_iterative_solver(&a, &b, None, CaspIterativeSolveOptions::default())
+                .expect("casp decision");
+        assert_eq!(decision.selected_solver, CaspIterativeSolver::Lsmr);
+        assert!(!decision.square);
+        assert_eq!(
+            decision.rationale,
+            "rectangular_underdetermined_least_squares"
+        );
+    }
+
+    #[test]
+    fn casp_selects_lgmres_when_preconditioner_available() {
+        let a = nonsymmetric_csr_3x3();
+        let b = vec![5.0, 7.0, 4.0];
+        let options = CaspIterativeSolveOptions {
+            preconditioner_available: true,
+            ..CaspIterativeSolveOptions::default()
+        };
+        let decision = select_casp_iterative_solver(&a, &b, None, options).expect("casp decision");
+        assert_eq!(decision.selected_solver, CaspIterativeSolver::Lgmres);
+        assert!(decision.preconditioner_available);
+        assert_eq!(decision.rationale, "nonsymmetric_preconditioner_available");
+    }
+
+    #[test]
+    fn casp_selects_bicgstab_for_low_memory_or_expensive_matvec() {
+        let a = nonsymmetric_csr_3x3();
+        let b = vec![5.0, 7.0, 4.0];
+        let low_memory = CaspIterativeSolveOptions {
+            prefer_low_memory: true,
+            ..CaspIterativeSolveOptions::default()
+        };
+        let low_memory_decision =
+            select_casp_iterative_solver(&a, &b, None, low_memory).expect("casp decision");
+        assert_eq!(
+            low_memory_decision.selected_solver,
+            CaspIterativeSolver::Bicgstab
+        );
+
+        let expensive_matvec = CaspIterativeSolveOptions {
+            matrix_vector_cost: CaspMatvecCost::Expensive,
+            ..CaspIterativeSolveOptions::default()
+        };
+        let expensive_decision =
+            select_casp_iterative_solver(&a, &b, None, expensive_matvec).expect("casp decision");
+        assert_eq!(
+            expensive_decision.selected_solver,
+            CaspIterativeSolver::Bicgstab
+        );
+        assert_eq!(
+            expensive_decision.rationale,
+            "nonsymmetric_low_memory_or_expensive_matvec"
+        );
+    }
+
+    #[test]
+    fn casp_selects_qmr_for_large_very_sparse_nonsymmetric_system() {
+        let n = 32;
+        let mut data = Vec::with_capacity(n * 2 - 1);
+        let mut rows = Vec::with_capacity(n * 2 - 1);
+        let mut cols = Vec::with_capacity(n * 2 - 1);
+        for i in 0..n {
+            data.push(4.0);
+            rows.push(i);
+            cols.push(i);
+            if i + 1 < n {
+                data.push(1.0);
+                rows.push(i);
+                cols.push(i + 1);
+            }
+        }
+        let a = CooMatrix::from_triplets(Shape2D::new(n, n), data, rows, cols, false)
+            .expect("coo")
+            .to_csr()
+            .expect("csr");
+        let b = vec![1.0; n];
+        let decision =
+            select_casp_iterative_solver(&a, &b, None, CaspIterativeSolveOptions::default())
+                .expect("casp decision");
+        assert_eq!(decision.selected_solver, CaspIterativeSolver::Qmr);
+        assert!(!decision.symmetric);
+        assert!(decision.density <= 0.10);
+        assert_eq!(
+            decision.rationale,
+            "large_very_sparse_nonsymmetric_transpose_stabilization"
+        );
+    }
+
+    #[test]
     fn casp_audit_records_solver_choice_rationale() {
         let a = spd_csr_3x3();
         let b = vec![5.0, 5.0, 3.0];
@@ -5072,6 +5168,9 @@ mod tests {
             "audit outcome must carry solver-choice rationale: {}",
             entry.outcome
         );
+        assert!(entry.outcome.contains("square=true"));
+        assert!(entry.outcome.contains("positive_diagonal=true"));
+        assert!(entry.outcome.contains("row_diagonally_dominant=true"));
     }
 
     // ── LSQR least-squares solver tests ─────────────────────────────
