@@ -40,6 +40,18 @@ fn unwrap_real(result: SpecialResult) -> f64 {
     }
 }
 
+fn gamma_real(x: f64) -> f64 {
+    unwrap_real(gamma(&real(x), RuntimeMode::Strict))
+}
+
+fn gammainc_real(a: f64, x: f64) -> f64 {
+    unwrap_real(gammainc(&real(a), &real(x), RuntimeMode::Strict))
+}
+
+fn gammaincc_real(a: f64, x: f64) -> f64 {
+    unwrap_real(gammaincc(&real(a), &real(x), RuntimeMode::Strict))
+}
+
 fn hyp2f1_real(a: f64, b: f64, c: f64, z: f64) -> f64 {
     unwrap_real(hyp2f1(
         &real(a),
@@ -1497,6 +1509,66 @@ fn mr_hyp2f1_euler_transformation() {
         assert!(
             close(lhs, rhs),
             "MR69 Euler identity failed for 2F1({a}, {b}; {c}; {z}): lhs={lhs}, rhs={rhs}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR70 — Lower regularized gamma adjacent-shape recurrence:
+//
+//   P(a+1,x) = P(a,x) - x^a · exp(-x) / Γ(a+1)
+//
+// This cross-checks the recurrence bridge between the lower incomplete
+// gamma and gamma normalization paths without a SciPy oracle.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_gammainc_adjacent_shape_recurrence() {
+    let cases: &[(f64, f64)] = &[
+        (0.25, 0.1),
+        (0.5, 0.75),
+        (1.25, 0.6),
+        (2.5, 3.0),
+        (5.0, 8.0),
+    ];
+    for &(a, x) in cases {
+        let p_a = gammainc_real(a, x);
+        let p_next = gammainc_real(a + 1.0, x);
+        let recurrence_term = x.powf(a) * (-x).exp() / gamma_real(a + 1.0);
+        let rhs = p_a - recurrence_term;
+        assert!(
+            close(p_next, rhs),
+            "MR70 P(a+1,x) recurrence failed for a={a}, x={x}: p_next={p_next}, rhs={rhs}, term={recurrence_term}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MR71 — Upper regularized gamma adjacent-shape recurrence:
+//
+//   Q(a+1,x) = Q(a,x) + x^a · exp(-x) / Γ(a+1)
+//
+// This exercises the complement implementation on the same recurrence
+// term as MR70 with the opposite sign.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn mr_gammaincc_adjacent_shape_recurrence() {
+    let cases: &[(f64, f64)] = &[
+        (0.25, 0.1),
+        (0.5, 0.75),
+        (1.25, 0.6),
+        (2.5, 3.0),
+        (5.0, 8.0),
+    ];
+    for &(a, x) in cases {
+        let q_a = gammaincc_real(a, x);
+        let q_next = gammaincc_real(a + 1.0, x);
+        let recurrence_term = x.powf(a) * (-x).exp() / gamma_real(a + 1.0);
+        let rhs = q_a + recurrence_term;
+        assert!(
+            close(q_next, rhs),
+            "MR71 Q(a+1,x) recurrence failed for a={a}, x={x}: q_next={q_next}, rhs={rhs}, term={recurrence_term}"
         );
     }
 }
