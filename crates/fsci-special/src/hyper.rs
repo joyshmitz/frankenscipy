@@ -1331,7 +1331,11 @@ fn hyp2f1_scalar(a: f64, b: f64, c: f64, z: f64, mode: RuntimeMode) -> Result<f6
             guarded_hypergeometric_parameter("hyp2f1", mode, decision.reason)
         }
         HypergeometricBranch::UnsupportedAnalyticContinuation => {
-            unsupported_hypergeometric_branch("hyp2f1", mode, decision.reason)
+            if mode == RuntimeMode::Strict && z > 1.0 {
+                Ok(f64::INFINITY)
+            } else {
+                unsupported_hypergeometric_branch("hyp2f1", mode, decision.reason)
+            }
         }
         HypergeometricBranch::KummerTransform | HypergeometricBranch::AsymptoticExpansion => {
             unsupported_hypergeometric_branch(
@@ -2257,7 +2261,7 @@ mod tests {
     }
 
     #[test]
-    fn hyp2f1_strict_z_greater_than_one_unsupported_returns_nan() {
+    fn hyp2f1_strict_z_greater_than_one_branch_cut_returns_infinity() {
         let r = hyp2f1(
             &scalar(1.0),
             &scalar(2.0),
@@ -2265,9 +2269,10 @@ mod tests {
             &scalar(1.5),
             RuntimeMode::Strict,
         );
+        let got = get_scalar(&r).unwrap_or(f64::NAN);
         assert!(
-            get_scalar(&r).unwrap_or(0.0).is_nan(),
-            "unsupported z > 1 continuation must not return a divergent partial sum"
+            got.is_infinite() && got.is_sign_positive(),
+            "real branch-cut z > 1 should match scipy's positive infinity, got {got}"
         );
     }
 

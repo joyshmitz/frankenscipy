@@ -10,9 +10,10 @@
 //! z<0 and 0<z<1 series regimes; near-z=1 and |z|>1 are tested
 //! separately.
 //!
-//! 24 (a, b, c, z) cases via subprocess. Tolerances: 5e-7 rel
-//! — same as hyp1f1; Gauss hypergeometric is wide-tolerance
-//! coverage, not a precision claim.
+//! 24 finite-valued (a, b, c, z) cases plus 4 real branch-cut
+//! cases via subprocess. Tolerances: 5e-7 rel — same as hyp1f1;
+//! Gauss hypergeometric is wide-tolerance coverage, not a
+//! precision claim.
 
 use std::collections::HashMap;
 use std::fs;
@@ -42,6 +43,7 @@ struct PointCase {
 #[derive(Debug, Clone, Serialize)]
 struct OracleQuery {
     points: Vec<PointCase>,
+    branch_cut_points: Vec<PointCase>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -51,8 +53,15 @@ struct PointArm {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+struct BranchCutArm {
+    case_id: String,
+    positive_infinity: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 struct OracleResult {
     points: Vec<PointArm>,
+    branch_cut_points: Vec<BranchCutArm>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -60,6 +69,15 @@ struct CaseDiff {
     case_id: String,
     abs_diff: f64,
     rel_diff: f64,
+    pass: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct BranchCutDiff {
+    case_id: String,
+    scipy_positive_infinity: bool,
+    rust_positive_infinity: bool,
+    hardened_error: bool,
     pass: bool,
 }
 
@@ -74,6 +92,7 @@ struct DiffLog {
     timestamp_ms: u128,
     duration_ns: u128,
     cases: Vec<CaseDiff>,
+    branch_cut_cases: Vec<BranchCutDiff>,
 }
 
 fn output_dir() -> PathBuf {
@@ -106,6 +125,14 @@ fn fsci_eval(a: f64, b: f64, c: f64, z: f64) -> Option<f64> {
         Ok(SpecialTensor::RealScalar(v)) => Some(v),
         _ => None,
     }
+}
+
+fn fsci_hardened_errors(a: f64, b: f64, c: f64, z: f64) -> bool {
+    let pa = SpecialTensor::RealScalar(a);
+    let pb = SpecialTensor::RealScalar(b);
+    let pc = SpecialTensor::RealScalar(c);
+    let pz = SpecialTensor::RealScalar(z);
+    hyp2f1(&pa, &pb, &pc, &pz, RuntimeMode::Hardened).is_err()
 }
 
 fn generate_query() -> OracleQuery {
@@ -161,7 +188,26 @@ fn generate_query() -> OracleQuery {
             z,
         });
     }
-    OracleQuery { points }
+    let branch_cut_cases: [(f64, f64, f64, f64); 4] = [
+        (1.0, 2.0, 3.0, 1.5),
+        (0.25, 0.75, 2.5, 1.25),
+        (2.0, 1.0, 5.0, 1.1),
+        (0.5, 1.5, 4.0, 2.0),
+    ];
+    let mut branch_cut_points = Vec::new();
+    for (i, &(a, b, c, z)) in branch_cut_cases.iter().enumerate() {
+        branch_cut_points.push(PointCase {
+            case_id: format!("branch_cut_a{a}_b{b}_c{c}_z{z}_i{i}"),
+            a,
+            b,
+            c,
+            z,
+        });
+    }
+    OracleQuery {
+        points,
+        branch_cut_points,
+    }
 }
 
 fn scipy_oracle_or_skip(query: &OracleQuery) -> Option<OracleResult> {
@@ -178,7 +224,7 @@ def finite_or_none(v):
         return None
     return v if math.isfinite(v) else None
 
-q = json.load(sys.stdin)
+q = json.loads(sys.argv[1])
 points = []
 for case in q["points"]:
     cid = case["case_id"]
@@ -189,13 +235,26 @@ for case in q["points"]:
         points.append({"case_id": cid, "value": finite_or_none(value)})
     except Exception:
         points.append({"case_id": cid, "value": None})
-print(json.dumps({"points": points}))
+branch_cut_points = []
+for case in q["branch_cut_points"]:
+    cid = case["case_id"]
+    a = float(case["a"]); b = float(case["b"])
+    c = float(case["c"]); z = float(case["z"])
+    try:
+        value = float(special.hyp2f1(a, b, c, z))
+        branch_cut_points.append({
+            "case_id": cid,
+            "positive_infinity": math.isinf(value) and value > 0.0,
+        })
+    except Exception:
+        branch_cut_points.append({"case_id": cid, "positive_infinity": False})
+print(json.dumps({"points": points, "branch_cut_points": branch_cut_points}))
 "#;
 
     let query_json = serde_json::to_string(query).expect("serialize hyp2f1 query");
     let mut child = match Command::new("python3")
-        .arg("-c")
-        .arg(script)
+        .arg("-")
+        .arg(&query_json)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -213,14 +272,14 @@ print(json.dumps({"points": points}))
     };
     {
         let stdin = child.stdin.as_mut().expect("open hyp2f1 oracle stdin");
-        if let Err(err) = stdin.write_all(query_json.as_bytes()) {
+        if let Err(err) = stdin.write_all(script.as_bytes()) {
             let output = child.wait_with_output().expect("wait for failed oracle");
             let stderr = String::from_utf8_lossy(&output.stderr);
             assert!(
                 std::env::var(REQUIRE_SCIPY_ENV).is_err(),
-                "hyp2f1 oracle stdin write failed: {err}; stderr: {stderr}"
+                "hyp2f1 oracle script write failed: {err}; stderr: {stderr}"
             );
-            eprintln!("skipping hyp2f1 oracle: stdin write failed ({err})\n{stderr}");
+            eprintln!("skipping hyp2f1 oracle: script write failed ({err})\n{stderr}");
             return None;
         }
     }
@@ -245,49 +304,77 @@ fn diff_special_hyp2f1() {
         return;
     };
     assert_eq!(oracle.points.len(), query.points.len());
+    assert_eq!(
+        oracle.branch_cut_points.len(),
+        query.branch_cut_points.len()
+    );
 
     let pmap: HashMap<String, PointArm> = oracle
         .points
         .into_iter()
         .map(|r| (r.case_id.clone(), r))
         .collect();
+    let branch_cut_map: HashMap<String, BranchCutArm> = oracle
+        .branch_cut_points
+        .into_iter()
+        .map(|r| (r.case_id.clone(), r))
+        .collect();
 
     let start = Instant::now();
     let mut diffs = Vec::new();
+    let mut branch_cut_diffs = Vec::new();
     let mut max_abs_overall = 0.0_f64;
     let mut max_rel_overall = 0.0_f64;
 
     for case in &query.points {
         let oracle = pmap.get(&case.case_id).expect("validated oracle");
-        if let Some(scipy_v) = oracle.value {
-            if let Some(rust_v) = fsci_eval(case.a, case.b, case.c, case.z) {
-                let abs_diff = (rust_v - scipy_v).abs();
-                let scale = scipy_v.abs().max(1.0);
-                let rel_diff = abs_diff / scale;
-                max_abs_overall = max_abs_overall.max(abs_diff);
-                max_rel_overall = max_rel_overall.max(rel_diff);
-                diffs.push(CaseDiff {
-                    case_id: case.case_id.clone(),
-                    abs_diff,
-                    rel_diff,
-                    pass: abs_diff <= TOL_REL * scale,
-                });
-            }
+        if let Some(scipy_v) = oracle.value
+            && let Some(rust_v) = fsci_eval(case.a, case.b, case.c, case.z)
+        {
+            let abs_diff = (rust_v - scipy_v).abs();
+            let scale = scipy_v.abs().max(1.0);
+            let rel_diff = abs_diff / scale;
+            max_abs_overall = max_abs_overall.max(abs_diff);
+            max_rel_overall = max_rel_overall.max(rel_diff);
+            diffs.push(CaseDiff {
+                case_id: case.case_id.clone(),
+                abs_diff,
+                rel_diff,
+                pass: abs_diff <= TOL_REL * scale,
+            });
         }
     }
 
-    let all_pass = diffs.iter().all(|d| d.pass);
+    for case in &query.branch_cut_points {
+        let oracle = branch_cut_map
+            .get(&case.case_id)
+            .expect("validated branch-cut oracle");
+        let rust_positive_infinity = fsci_eval(case.a, case.b, case.c, case.z)
+            .is_some_and(|v| v.is_infinite() && v.is_sign_positive());
+        let hardened_error = fsci_hardened_errors(case.a, case.b, case.c, case.z);
+        let pass = oracle.positive_infinity && rust_positive_infinity && hardened_error;
+        branch_cut_diffs.push(BranchCutDiff {
+            case_id: case.case_id.clone(),
+            scipy_positive_infinity: oracle.positive_infinity,
+            rust_positive_infinity,
+            hardened_error,
+            pass,
+        });
+    }
+
+    let all_pass = diffs.iter().all(|d| d.pass) && branch_cut_diffs.iter().all(|d| d.pass);
 
     let log = DiffLog {
         test_id: "diff_special_hyp2f1".into(),
         category: "scipy.special.hyp2f1".into(),
-        case_count: diffs.len(),
+        case_count: diffs.len() + branch_cut_diffs.len(),
         max_abs_diff: max_abs_overall,
         max_rel_diff: max_rel_overall,
         pass: all_pass,
         timestamp_ms: timestamp_ms(),
         duration_ns: start.elapsed().as_nanos(),
         cases: diffs.clone(),
+        branch_cut_cases: branch_cut_diffs.clone(),
     };
 
     emit_log(&log);
@@ -297,6 +384,14 @@ fn diff_special_hyp2f1() {
             eprintln!(
                 "hyp2f1 mismatch: {} abs={} rel={}",
                 d.case_id, d.abs_diff, d.rel_diff
+            );
+        }
+    }
+    for d in &branch_cut_diffs {
+        if !d.pass {
+            eprintln!(
+                "hyp2f1 branch-cut mismatch: {} scipy_inf={} rust_inf={} hardened_error={}",
+                d.case_id, d.scipy_positive_infinity, d.rust_positive_infinity, d.hardened_error
             );
         }
     }
