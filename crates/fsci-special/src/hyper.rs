@@ -90,6 +90,8 @@ pub enum HypergeometricBranch {
     PfaffTransform,
     /// Closed-form reduction when a numerator parameter equals c.
     LinearFractionalIdentity,
+    /// Real-axis branch cut for generic nonterminating 2F1 z > 1.
+    RealBranchCutInfinity,
     /// Asymptotic expansion selected outside the stable direct-series region.
     AsymptoticExpansion,
     /// Divergent z = 1 boundary.
@@ -205,6 +207,8 @@ const HYP2F1_PFAFF_CHAIN: &[HypergeometricBranch] = &[
 ];
 const HYP2F1_IDENTITY_CHAIN: &[HypergeometricBranch] =
     &[HypergeometricBranch::LinearFractionalIdentity];
+const HYP2F1_REAL_BRANCH_CUT_CHAIN: &[HypergeometricBranch] =
+    &[HypergeometricBranch::RealBranchCutInfinity];
 const HYPER_GUARD_CHAIN: &[HypergeometricBranch] = &[
     HypergeometricBranch::ParameterGuard,
     HypergeometricBranch::UnsupportedAnalyticContinuation,
@@ -818,6 +822,16 @@ fn select_hyp2f1_branch(
         ));
     }
 
+    if problem.z > 1.0 {
+        return Ok(hyper_casp_decision(
+            HypergeometricBranch::RealBranchCutInfinity,
+            problem,
+            0,
+            HYP2F1_REAL_BRANCH_CUT_CHAIN,
+            "generic real z > 1 lies on SciPy's branch cut and returns positive infinity",
+        ));
+    }
+
     Ok(hyper_casp_decision(
         HypergeometricBranch::UnsupportedAnalyticContinuation,
         problem,
@@ -1330,12 +1344,15 @@ fn hyp2f1_scalar(a: f64, b: f64, c: f64, z: f64, mode: RuntimeMode) -> Result<f6
         HypergeometricBranch::ParameterGuard => {
             guarded_hypergeometric_parameter("hyp2f1", mode, decision.reason)
         }
-        HypergeometricBranch::UnsupportedAnalyticContinuation => {
-            if mode == RuntimeMode::Strict && z > 1.0 {
-                Ok(f64::INFINITY)
-            } else {
+        HypergeometricBranch::RealBranchCutInfinity => {
+            if mode == RuntimeMode::Hardened {
                 unsupported_hypergeometric_branch("hyp2f1", mode, decision.reason)
+            } else {
+                Ok(f64::INFINITY)
             }
+        }
+        HypergeometricBranch::UnsupportedAnalyticContinuation => {
+            unsupported_hypergeometric_branch("hyp2f1", mode, decision.reason)
         }
         HypergeometricBranch::KummerTransform | HypergeometricBranch::AsymptoticExpansion => {
             unsupported_hypergeometric_branch(
@@ -1725,14 +1742,15 @@ mod tests {
     }
 
     #[test]
-    fn hyper_casp_marks_generic_z_greater_than_one_unsupported() {
+    fn hyper_casp_selects_real_branch_cut_for_generic_z_greater_than_one() {
         let problem = HyperCaspProblem::hyp2f1(1.0, 2.0, 3.0, 1.5, 1.0e-14);
         let decision = select_casp_for_test(problem);
 
         assert_eq!(
             decision.branch,
-            HypergeometricBranch::UnsupportedAnalyticContinuation
+            HypergeometricBranch::RealBranchCutInfinity
         );
+        assert_eq!(decision.max_terms, 0);
     }
 
     #[test]
@@ -2262,18 +2280,27 @@ mod tests {
 
     #[test]
     fn hyp2f1_strict_z_greater_than_one_branch_cut_returns_infinity() {
-        let r = hyp2f1(
-            &scalar(1.0),
-            &scalar(2.0),
-            &scalar(3.0),
-            &scalar(1.5),
-            RuntimeMode::Strict,
-        );
-        let got = get_scalar(&r).unwrap_or(f64::NAN);
-        assert!(
-            got.is_infinite() && got.is_sign_positive(),
-            "real branch-cut z > 1 should match scipy's positive infinity, got {got}"
-        );
+        let cases = [
+            (1.0, 2.0, 3.0, 1.5),
+            (0.25, 0.75, 2.5, 1.25),
+            (2.0, 1.0, 5.0, 1.1),
+            (0.5, 1.5, 4.0, 2.0),
+        ];
+        for (a, b, c, z) in cases {
+            let r = hyp2f1(
+                &scalar(a),
+                &scalar(b),
+                &scalar(c),
+                &scalar(z),
+                RuntimeMode::Strict,
+            );
+            let got = get_scalar(&r).unwrap_or(f64::NAN);
+            assert!(
+                got.is_infinite() && got.is_sign_positive(),
+                "real branch-cut z > 1 should match scipy's positive infinity for \
+                 a={a}, b={b}, c={c}, z={z}; got {got}"
+            );
+        }
     }
 
     #[test]
