@@ -3,14 +3,14 @@
 //! Produces a self-contained evidence bundle at:
 //!   fixtures/artifacts/P2C-001/evidence/
 //!
-//! Covers IVP solver validation, step-size selection, and RK45/RK23 integration
-//! with parity gates and risk notes.
+//! Covers IVP solver validation, step-size selection, and explicit RK
+//! integration with parity gates and risk notes.
 
 use blake3::hash;
-use fsci_conformance::{RaptorQSidecar, generate_raptorq_sidecar};
+use fsci_conformance::{generate_raptorq_sidecar, RaptorQSidecar};
 use fsci_integrate::{
-    SolveIvpOptions, SolverKind, ToleranceValue, solve_ivp, validate_first_step, validate_max_step,
-    validate_tol,
+    solve_ivp, validate_first_step, validate_max_step, validate_tol, SolveIvpOptions, SolverKind,
+    ToleranceValue,
 };
 use fsci_runtime::RuntimeMode;
 use serde::Serialize;
@@ -514,9 +514,9 @@ fn evidence_p2c001_final_pack() {
         notes: vec![
             RiskNote {
                 category: "step_size_selection",
-                description: "Initial step size heuristic (Hairer II.4) may overshoot for stiff systems. Only Rk45/Rk23 currently supported — stiff solvers (BDF, Radau) not yet implemented.".into(),
+                description: "Initial step size heuristic (Hairer II.4) may overshoot for stiff systems. P2C-001 still gates explicit RK paths here, while solve_ivp now dispatches BDF/Radau through the BDF backend and LSODA can switch from RK to BDF on stiff-like dynamics.".into(),
                 affected_operations: vec!["select_initial_step", "solve_ivp"],
-                mitigation: "Step size is bounded by max_step and min_step floor. Stiff solver variants return NotYetImplemented error.".into(),
+                mitigation: "Step size is bounded by max_step and min_step floor. Stiff solver behavior is covered by the BDF/LSODA solve_ivp lanes rather than being reported as unsupported in this evidence packet.".into(),
             },
             RiskNote {
                 category: "tolerance_clamping",
@@ -538,6 +538,16 @@ fn evidence_p2c001_final_pack() {
             },
         ],
     };
+    assert!(
+        risk_notes
+            .notes
+            .iter()
+            .all(|note| !note.description.contains("not implemented")
+                && !note.description.contains("NotYetImplemented")
+                && !note.mitigation.contains("not implemented")
+                && !note.mitigation.contains("NotYetImplemented")),
+        "P2C-001 risk notes must not claim implemented stiff solvers are still missing"
+    );
 
     let evidence = EvidenceBundle {
         manifest,
