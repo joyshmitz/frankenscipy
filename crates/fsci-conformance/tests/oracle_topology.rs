@@ -23,6 +23,23 @@ fn workspace_root() -> TestResult<PathBuf> {
         .ok_or_else(|| "fsci-conformance crate should live under crates/".into())
 }
 
+const REQUIRE_SCIPY_ENV: &str = "FSCI_REQUIRE_SCIPY_ORACLE";
+
+fn env_assignment_value<'a>(contents: &'a str, name: &str) -> Option<&'a str> {
+    contents
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                return None;
+            }
+            let assignment = trimmed.strip_prefix("export ").unwrap_or(trimmed);
+            let (key, value) = assignment.split_once('=')?;
+            (key.trim() == name).then_some(value.trim().trim_matches(['"', '\'']))
+        })
+        .next_back()
+}
+
 const CANONICAL_M3_PACKETS: &[&str] = &[
     "FSCI-P2C-001",
     "FSCI-P2C-002",
@@ -78,6 +95,47 @@ const ORACLE_EXEMPT: &[(&str, &str)] = &[
         "Signal live-SciPy diff emits per-case diff artifacts and skips when SciPy is unavailable, not consolidated oracle_capture.json",
     ),
 ];
+
+#[test]
+fn rch_env_enforces_strict_scipy_oracle_mode() -> TestResult {
+    let workspace_root = workspace_root()?;
+    let rch_env_path = workspace_root.join(".rch.env");
+    let rch_env = fs::read_to_string(&rch_env_path)?;
+
+    let Some(required_value) = env_assignment_value(&rch_env, REQUIRE_SCIPY_ENV) else {
+        return Err(format!(
+            "{} must define {REQUIRE_SCIPY_ENV}=1",
+            rch_env_path.display()
+        )
+        .into());
+    };
+    assert_eq!(
+        required_value,
+        "1",
+        "{} must require live SciPy oracles for RCH runs",
+        rch_env_path.display()
+    );
+
+    let Some(allowlist) = env_assignment_value(&rch_env, "RCH_ENV_ALLOWLIST") else {
+        return Err(format!("{} must define RCH_ENV_ALLOWLIST", rch_env_path.display()).into());
+    };
+    assert!(
+        allowlist
+            .split(',')
+            .map(str::trim)
+            .any(|entry| entry == REQUIRE_SCIPY_ENV),
+        "{} must allowlist {REQUIRE_SCIPY_ENV} for worker-side tests",
+        rch_env_path.display()
+    );
+
+    assert_eq!(
+        std::env::var(REQUIRE_SCIPY_ENV).as_deref(),
+        Ok("1"),
+        "fsci-conformance build.rs must export {REQUIRE_SCIPY_ENV}=1 from .rch.env \
+         when the process environment does not provide an override"
+    );
+    Ok(())
+}
 
 #[test]
 fn m3_packet_surface_covers_all_canonical_packets() -> TestResult {
