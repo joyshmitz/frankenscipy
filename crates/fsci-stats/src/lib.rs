@@ -29391,6 +29391,34 @@ mod tests {
     }
 
     #[test]
+    fn rankdata_metamorphic_monotone_transform_invariants() -> Result<(), StatsError> {
+        let tied = [3.0, -2.0, 3.0, 0.5, -2.0, 9.0];
+        let increasing: Vec<f64> = tied.iter().map(|&x| 4.0 * x + 11.0).collect();
+        for method in ["average", "min", "max", "dense", "ordinal"] {
+            let baseline = rankdata(&tied, Some(method))?;
+            let transformed = rankdata(&increasing, Some(method))?;
+            assert_eq!(
+                transformed, baseline,
+                "strictly increasing affine transform must preserve {method} ranks"
+            );
+        }
+
+        let no_ties = [-3.0, 7.0, 0.0, 11.0, 2.0];
+        let decreasing: Vec<f64> = no_ties.iter().map(|&x| -5.0 * x + 1.0).collect();
+        let n_plus_one = 6.0;
+        for method in ["average", "min", "max", "dense", "ordinal"] {
+            let baseline = rankdata(&no_ties, Some(method))?;
+            let transformed = rankdata(&decreasing, Some(method))?;
+            let expected: Vec<f64> = baseline.iter().map(|rank| n_plus_one - rank).collect();
+            assert_eq!(
+                transformed, expected,
+                "strictly decreasing affine transform must reverse no-tie {method} ranks"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn rankdata_nan_and_invalid_method_match_scipy_shape() {
         let ranks = rankdata(&[1.0, f64::NAN, 2.0], Some("ordinal")).expect("nan rankdata");
         assert!(
