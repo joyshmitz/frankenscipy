@@ -21633,7 +21633,7 @@ Path(args.output).write_text(json.dumps(result, indent=2))
         fs::create_dir_all(&root).expect("create temp root");
         let fixture_path = root.join("FSCI-P2C-014_interpolate_oracle.json");
         let fixture = serde_json::json!({
-            "packet_id": "FSCI-P2C-014-MOCK",
+            "packet_id": "FSCI-TEST-P2C-014-MOCK",
             "family": "interpolate_core",
             "cases": [{
                 "operation": "interp1d",
@@ -21723,7 +21723,7 @@ Path(args.output).write_text(json.dumps(result, indent=2))
         fs::create_dir_all(&root).expect("create temp root");
         let fixture_path = root.join("FSCI-P2C-017_io_oracle.json");
         let fixture = IoPacketFixture {
-            packet_id: "FSCI-P2C-017-MOCK".to_owned(),
+            packet_id: "FSCI-TEST-P2C-017-MOCK".to_owned(),
             family: "io_core".to_owned(),
             cases: vec![super::IoCase::Mmread {
                 case_id: "mmread_oracle_overrides_embedded_expected".to_owned(),
