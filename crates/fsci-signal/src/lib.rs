@@ -13718,6 +13718,27 @@ mod tests {
     }
 
     #[test]
+    fn detrend_metamorphic_constant_idempotent_and_zero_mean() -> Result<(), SignalError> {
+        let data = [3.0, -1.0, 4.0, 1.0, 5.0];
+        let once = detrend(&data, DetrendType::Constant)?;
+        let twice = detrend(&once, DetrendType::Constant)?;
+        assert_slice_close(&twice, &once, 1e-12, "constant detrend idempotent");
+
+        let mean = once.iter().sum::<f64>() / 5.0;
+        assert!(mean.abs() < 1e-12, "constant detrend mean: {mean}");
+
+        let constant = [4.25, 4.25, 4.25, 4.25, 4.25, 4.25];
+        let zeros = detrend(&constant, DetrendType::Constant)?;
+        assert_slice_close(
+            &zeros,
+            &[0.0; 6],
+            1e-12,
+            "constant detrend removes flat sequence",
+        );
+        Ok(())
+    }
+
+    #[test]
     fn detrend_preserves_residual() {
         // y = 2x + noise → detrend should remove trend, preserve noise structure
         let noise = [0.1, -0.2, 0.05, -0.15, 0.3];
@@ -13739,6 +13760,35 @@ mod tests {
                 }
             });
         assert!(max_residual < 0.5, "max residual: {max_residual}");
+    }
+
+    #[test]
+    fn detrend_metamorphic_linear_affine_removal_and_residual_invariance() -> Result<(), SignalError>
+    {
+        let affine = [13.0, 10.75, 8.5, 6.25, 4.0, 1.75, -0.5];
+        let removed = detrend(&affine, DetrendType::Linear)?;
+        assert_slice_close(
+            &removed,
+            &[0.0; 7],
+            1e-12,
+            "linear detrend removes affine sequence",
+        );
+
+        let residual = [0.5, -1.0, 0.25, 1.5, -0.75, 0.0, 1.25];
+        let residual_only = detrend(&residual, DetrendType::Linear)?;
+        let with_trend: Vec<f64> = residual
+            .iter()
+            .zip(affine.iter())
+            .map(|(&noise, &trend)| noise + trend)
+            .collect();
+        let with_trend_removed = detrend(&with_trend, DetrendType::Linear)?;
+        assert_slice_close(
+            &with_trend_removed,
+            &residual_only,
+            1e-12,
+            "linear detrend residual invariant to added affine trend",
+        );
+        Ok(())
     }
 
     // ── Medfilt tests ──────────────────────────────────────────────
