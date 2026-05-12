@@ -24203,6 +24203,17 @@ mod tests {
         );
     }
 
+    fn assert_vec_close(actual: &[f64], expected: &[f64], tol: f64, msg: &str) {
+        assert_eq!(actual.len(), expected.len(), "{msg}: length mismatch");
+        for (idx, (&got, &want)) in actual.iter().zip(expected).enumerate() {
+            let diff = (got - want).abs();
+            assert!(
+                diff < tol,
+                "{msg}[{idx}]: got {got}, expected {want} (diff={diff})"
+            );
+        }
+    }
+
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     struct NoFitDistribution;
 
@@ -29663,6 +29674,88 @@ mod tests {
     fn zscore_constant() {
         let z = zscore(&[5.0, 5.0, 5.0]);
         assert!(z.iter().all(|&v| v.is_nan()), "constant data => all NaNs");
+    }
+
+    #[test]
+    fn zscore_zmap_gzscore_metamorphic_affine_invariants() {
+        let data = [-4.0, -1.5, 0.25, 3.0, 8.5, 13.0];
+        let baseline = zscore(&data);
+
+        let shifted: Vec<f64> = data.iter().map(|&x| x + 17.25).collect();
+        assert_vec_close(
+            &zscore(&shifted),
+            &baseline,
+            1e-12,
+            "zscore shift invariant",
+        );
+
+        let scaled: Vec<f64> = data.iter().map(|&x| 3.5 * x - 2.0).collect();
+        assert_vec_close(
+            &zscore(&scaled),
+            &baseline,
+            1e-12,
+            "zscore positive affine invariant",
+        );
+
+        let reflected: Vec<f64> = data.iter().map(|&x| -2.0 * x + 4.0).collect();
+        for (idx, (&got, &base)) in zscore(&reflected).iter().zip(&baseline).enumerate() {
+            let expected = -base;
+            let diff = (got - expected).abs();
+            assert!(
+                diff < 1e-12,
+                "zscore negative affine sign flip[{idx}]: got {got}, expected {expected} (diff={diff})"
+            );
+        }
+
+        let compare = [-3.0, -1.0, 0.5, 4.0, 7.5];
+        let scores = [-2.0, 0.5, 6.0, 9.0];
+        let zmap_baseline = zmap(&scores, &compare);
+        let compare_affine: Vec<f64> = compare.iter().map(|&x| 2.25 * x - 10.0).collect();
+        let scores_affine: Vec<f64> = scores.iter().map(|&x| 2.25 * x - 10.0).collect();
+        assert_vec_close(
+            &zmap(&scores_affine, &compare_affine),
+            &zmap_baseline,
+            1e-12,
+            "zmap shared positive affine invariant",
+        );
+
+        let zmap_ddof_baseline = zmap_ddof(&scores, &compare, 1);
+        let compare_shifted: Vec<f64> = compare.iter().map(|&x| x + 42.0).collect();
+        let scores_shifted: Vec<f64> = scores.iter().map(|&x| x + 42.0).collect();
+        assert_vec_close(
+            &zmap_ddof(&scores_shifted, &compare_shifted, 1),
+            &zmap_ddof_baseline,
+            1e-12,
+            "zmap ddof shared shift invariant",
+        );
+
+        let positive = [0.5, 1.0, 2.0, 8.0, 16.0];
+        let gz_baseline = gzscore(&positive);
+        let multiplied: Vec<f64> = positive.iter().map(|&x| 12.5 * x).collect();
+        assert_vec_close(
+            &gzscore(&multiplied),
+            &gz_baseline,
+            1e-12,
+            "gzscore multiplicative shift invariant",
+        );
+
+        let powered: Vec<f64> = positive.iter().map(|&x| x.powf(2.0)).collect();
+        assert_vec_close(
+            &gzscore(&powered),
+            &gz_baseline,
+            1e-12,
+            "gzscore positive log scaling invariant",
+        );
+
+        let reciprocal: Vec<f64> = positive.iter().map(|&x| 1.0 / x).collect();
+        for (idx, (&got, &base)) in gzscore(&reciprocal).iter().zip(&gz_baseline).enumerate() {
+            let expected = -base;
+            let diff = (got - expected).abs();
+            assert!(
+                diff < 1e-12,
+                "gzscore reciprocal sign flip[{idx}]: got {got}, expected {expected} (diff={diff})"
+            );
+        }
     }
 
     #[test]
