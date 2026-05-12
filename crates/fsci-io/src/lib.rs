@@ -3163,9 +3163,8 @@ pub fn write_fortran_record(payload: &[u8], endian: FortranEndian) -> Vec<u8> {
 // ARFF (Weka attribute-relation file format)
 // ══════════════════════════════════════════════════════════════════════
 
-/// ARFF attribute type. Date and relational attributes are intentionally
-/// not supported in this initial slice and are tracked as follow-ons under
-/// bead `frankenscipy-vsas0`.
+/// ARFF attribute type. Relational attributes are intentionally not supported
+/// and return `UnsupportedFeature`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ArffAttribute {
     /// `@attribute name numeric` / `real` / `integer`.
@@ -3175,14 +3174,45 @@ pub enum ArffAttribute {
     Nominal { name: String, domain: Vec<String> },
     /// `@attribute name string`. Free-form text.
     String { name: String },
+    /// `@attribute name date "yyyy-MM-dd"`. Format uses Weka's Java-style
+    /// `SimpleDateFormat` subset, matching `scipy.io.arff` for simple fields.
+    Date {
+        name: String,
+        format: String,
+        unit: ArffDateUnit,
+    },
 }
 
 impl ArffAttribute {
     pub fn name(&self) -> &str {
         match self {
-            Self::Numeric { name } | Self::Nominal { name, .. } | Self::String { name } => name,
+            Self::Numeric { name }
+            | Self::Nominal { name, .. }
+            | Self::String { name }
+            | Self::Date { name, .. } => name,
         }
     }
+}
+
+/// Precision selected for an ARFF date attribute. This mirrors the numpy
+/// `datetime64` unit SciPy chooses from the declared format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ArffDateUnit {
+    Year,
+    Month,
+    Day,
+    Hour,
+    Minute,
+    Second,
+}
+
+/// Parsed ARFF date value. `raw` preserves the input token after unquoting;
+/// `normalized` matches numpy `datetime64` display at the selected unit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArffDateTime {
+    pub raw: String,
+    pub normalized: String,
+    pub unit: ArffDateUnit,
 }
 
 /// One ARFF data cell. Missing values are encoded as `?` in the file and
@@ -3192,6 +3222,7 @@ pub enum ArffValue {
     Numeric(f64),
     Nominal(String),
     String(String),
+    Date(ArffDateTime),
     Missing,
 }
 
@@ -3207,9 +3238,9 @@ pub struct ArffData {
 
 /// Read an ARFF (Weka attribute-relation file format) string.
 ///
-/// Supports numeric, nominal, and string attributes; comments (`%`); sparse
-/// rows (`{ idx val, idx val }`); single- and double-quoted string values.
-/// Date and relational attributes return `UnsupportedFeature`.
+/// Supports numeric, nominal, string, and simple date attributes; comments
+/// (`%`); sparse rows (`{ idx val, idx val }`); single- and double-quoted
+/// values. Relational attributes return `UnsupportedFeature`.
 pub fn read_arff(content: &str) -> Result<ArffData, IoError> {
     let mut relation: Option<String> = None;
     let mut attributes: Vec<ArffAttribute> = Vec::new();
@@ -3312,9 +3343,10 @@ fn parse_arff_attribute(line: &str) -> Result<ArffAttribute, IoError> {
         match type_part.as_str() {
             "numeric" | "real" | "integer" => Ok(ArffAttribute::Numeric { name }),
             "string" => Ok(ArffAttribute::String { name }),
-            "date" => Err(IoError::UnsupportedFeature(format!(
-                "ARFF date attribute '{name}' (frankenscipy-vsas0 follow-on)"
-            ))),
+            "date" => {
+                let (format, unit) = parse_arff_date_format(&name, rest)?;
+                Ok(ArffAttribute::Date { name, format, unit })
+            }
             "relational" => Err(IoError::UnsupportedFeature(format!(
                 "ARFF relational attribute '{name}' (frankenscipy-vsas0 follow-on)"
             ))),
@@ -3436,7 +3468,7 @@ fn split_arff_csv_cells(line: &str) -> Vec<String> {
 }
 
 fn parse_arff_cell(token: &str, attribute: &ArffAttribute) -> Result<ArffValue, IoError> {
-    if token == "?" {
+    if matches!(token.as_bytes(), [b'?']) {
         return Ok(ArffValue::Missing);
     }
     match attribute {
@@ -3456,7 +3488,294 @@ fn parse_arff_cell(token: &str, attribute: &ArffAttribute) -> Result<ArffValue, 
             Ok(ArffValue::Nominal(unquoted))
         }
         ArffAttribute::String { .. } => Ok(ArffValue::String(unquote_arff(token))),
+        ArffAttribute::Date { name, format, unit } => {
+            parse_arff_date_cell(token, name, format, *unit)
+        }
     }
+}
+
+fn parse_arff_date_format(
+    name: &str,
+    attribute_spec: &str,
+) -> Result<(String, ArffDateUnit), IoError> {
+    let raw_format = attribute_spec["date".len()..].trim();
+    let format = unquote_arff(raw_format);
+    if format.is_empty() {
+        return Err(IoError::InvalidFormat(format!(
+            "ARFF date attribute '{name}': missing date format"
+        )));
+    }
+    if format.contains('z') || format.contains('Z') {
+        return Err(IoError::UnsupportedFeature(format!(
+            "ARFF date attribute '{name}': timezone formats are not supported"
+        )));
+    }
+
+    let mut unit = None;
+    let mut i = 0usize;
+    while i < format.len() {
+        let rest = &format[i..];
+        if rest.starts_with("yyyy") {
+            unit = Some(max_arff_date_unit(unit, ArffDateUnit::Year));
+            i += 4;
+        } else if rest.starts_with("yy") {
+            unit = Some(max_arff_date_unit(unit, ArffDateUnit::Year));
+            i += 2;
+        } else if rest.starts_with("MM") {
+            unit = Some(max_arff_date_unit(unit, ArffDateUnit::Month));
+            i += 2;
+        } else if rest.starts_with("dd") {
+            unit = Some(max_arff_date_unit(unit, ArffDateUnit::Day));
+            i += 2;
+        } else if rest.starts_with("HH") {
+            unit = Some(max_arff_date_unit(unit, ArffDateUnit::Hour));
+            i += 2;
+        } else if rest.starts_with("mm") {
+            unit = Some(max_arff_date_unit(unit, ArffDateUnit::Minute));
+            i += 2;
+        } else if rest.starts_with("ss") {
+            unit = Some(max_arff_date_unit(unit, ArffDateUnit::Second));
+            i += 2;
+        } else {
+            let ch = rest.chars().next().expect("nonempty format tail");
+            i += ch.len_utf8();
+        }
+    }
+
+    let unit = unit.ok_or_else(|| {
+        IoError::InvalidFormat(format!(
+            "ARFF date attribute '{name}': invalid or unsupported date format '{format}'"
+        ))
+    })?;
+    Ok((format, unit))
+}
+
+fn max_arff_date_unit(current: Option<ArffDateUnit>, candidate: ArffDateUnit) -> ArffDateUnit {
+    current.map_or(candidate, |unit| unit.max(candidate))
+}
+
+fn parse_arff_date_cell(
+    token: &str,
+    name: &str,
+    format: &str,
+    unit: ArffDateUnit,
+) -> Result<ArffValue, IoError> {
+    let raw = unquote_arff(token);
+    let components = parse_arff_date_components(&raw, format).map_err(|message| {
+        IoError::InvalidFormat(format!("ARFF date '{name}' value '{raw}': {message}"))
+    })?;
+    let normalized = normalize_arff_date(&components, unit).map_err(|message| {
+        IoError::InvalidFormat(format!("ARFF date '{name}' value '{raw}': {message}"))
+    })?;
+    Ok(ArffValue::Date(ArffDateTime {
+        raw,
+        normalized,
+        unit,
+    }))
+}
+
+#[derive(Debug, Default)]
+struct ArffDateComponents {
+    year: Option<i32>,
+    month: Option<u8>,
+    day: Option<u8>,
+    hour: Option<u8>,
+    minute: Option<u8>,
+    second: Option<u8>,
+}
+
+fn parse_arff_date_components(value: &str, format: &str) -> Result<ArffDateComponents, String> {
+    let mut components = ArffDateComponents::default();
+    let mut format_pos = 0usize;
+    let mut value_pos = 0usize;
+
+    while format_pos < format.len() {
+        let rest = &format[format_pos..];
+        if rest.starts_with("yyyy") {
+            components.year = Some(read_arff_date_number(value, &mut value_pos, 4)?);
+            format_pos += 4;
+        } else if rest.starts_with("yy") {
+            let year: i32 = read_arff_date_number(value, &mut value_pos, 2)?;
+            components.year = Some(if year <= 68 { 2000 + year } else { 1900 + year });
+            format_pos += 2;
+        } else if rest.starts_with("MM") {
+            components.month = Some(read_arff_date_number(value, &mut value_pos, 2)?);
+            format_pos += 2;
+        } else if rest.starts_with("dd") {
+            components.day = Some(read_arff_date_number(value, &mut value_pos, 2)?);
+            format_pos += 2;
+        } else if rest.starts_with("HH") {
+            components.hour = Some(read_arff_date_number(value, &mut value_pos, 2)?);
+            format_pos += 2;
+        } else if rest.starts_with("mm") {
+            components.minute = Some(read_arff_date_number(value, &mut value_pos, 2)?);
+            format_pos += 2;
+        } else if rest.starts_with("ss") {
+            components.second = Some(read_arff_date_number(value, &mut value_pos, 2)?);
+            format_pos += 2;
+        } else if rest.starts_with('\'') {
+            format_pos += 1;
+            while format_pos < format.len() && !format[format_pos..].starts_with('\'') {
+                let ch = format[format_pos..]
+                    .chars()
+                    .next()
+                    .expect("nonempty quoted format literal");
+                consume_arff_date_literal(value, &mut value_pos, ch)?;
+                format_pos += ch.len_utf8();
+            }
+            if format_pos >= format.len() {
+                return Err("unterminated quoted literal in date format".to_string());
+            }
+            format_pos += 1;
+        } else {
+            let ch = rest.chars().next().expect("nonempty date format literal");
+            consume_arff_date_literal(value, &mut value_pos, ch)?;
+            format_pos += ch.len_utf8();
+        }
+    }
+
+    if value_pos != value.len() {
+        return Err(format!("trailing input '{}'", &value[value_pos..]));
+    }
+
+    Ok(components)
+}
+
+fn read_arff_date_number<T>(value: &str, value_pos: &mut usize, width: usize) -> Result<T, String>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    if *value_pos + width > value.len() {
+        return Err(format!("expected {width} digits"));
+    }
+    let field = &value[*value_pos..*value_pos + width];
+    if !field.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(format!("expected {width} digits, got '{field}'"));
+    }
+    *value_pos += width;
+    field
+        .parse()
+        .map_err(|e| format!("invalid number '{field}': {e}"))
+}
+
+fn consume_arff_date_literal(
+    value: &str,
+    value_pos: &mut usize,
+    expected: char,
+) -> Result<(), String> {
+    let actual = value[*value_pos..]
+        .chars()
+        .next()
+        .ok_or_else(|| format!("expected literal '{expected}'"))?;
+    if actual != expected {
+        return Err(format!("expected literal '{expected}', got '{actual}'"));
+    }
+    *value_pos += actual.len_utf8();
+    Ok(())
+}
+
+fn normalize_arff_date(
+    components: &ArffDateComponents,
+    unit: ArffDateUnit,
+) -> Result<String, String> {
+    let year = components
+        .year
+        .ok_or_else(|| "date format must include a year".to_string())?;
+    let month = components.month.unwrap_or(1);
+    let day = components.day.unwrap_or(1);
+    let hour = components.hour.unwrap_or(0);
+    let minute = components.minute.unwrap_or(0);
+    let second = components.second.unwrap_or(0);
+
+    validate_arff_date_components(year, month, day, hour, minute, second)?;
+
+    match unit {
+        ArffDateUnit::Year => Ok(format!("{year:04}")),
+        ArffDateUnit::Month => {
+            require_arff_date_component(components.month, "month")?;
+            Ok(format!("{year:04}-{month:02}"))
+        }
+        ArffDateUnit::Day => {
+            require_arff_date_component(components.month, "month")?;
+            require_arff_date_component(components.day, "day")?;
+            Ok(format!("{year:04}-{month:02}-{day:02}"))
+        }
+        ArffDateUnit::Hour => {
+            require_arff_date_component(components.month, "month")?;
+            require_arff_date_component(components.day, "day")?;
+            require_arff_date_component(components.hour, "hour")?;
+            Ok(format!("{year:04}-{month:02}-{day:02}T{hour:02}"))
+        }
+        ArffDateUnit::Minute => {
+            require_arff_date_component(components.month, "month")?;
+            require_arff_date_component(components.day, "day")?;
+            require_arff_date_component(components.hour, "hour")?;
+            require_arff_date_component(components.minute, "minute")?;
+            Ok(format!(
+                "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}"
+            ))
+        }
+        ArffDateUnit::Second => {
+            require_arff_date_component(components.month, "month")?;
+            require_arff_date_component(components.day, "day")?;
+            require_arff_date_component(components.hour, "hour")?;
+            require_arff_date_component(components.minute, "minute")?;
+            require_arff_date_component(components.second, "second")?;
+            Ok(format!(
+                "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}"
+            ))
+        }
+    }
+}
+
+fn require_arff_date_component<T>(component: Option<T>, name: &str) -> Result<(), String> {
+    if component.is_some() {
+        Ok(())
+    } else {
+        Err(format!("date format is missing required {name} field"))
+    }
+}
+
+fn validate_arff_date_components(
+    year: i32,
+    month: u8,
+    day: u8,
+    hour: u8,
+    minute: u8,
+    second: u8,
+) -> Result<(), String> {
+    if !(1..=12).contains(&month) {
+        return Err(format!("month {month} out of range"));
+    }
+    let max_day = days_in_arff_month(year, month);
+    if !(1..=max_day).contains(&day) {
+        return Err(format!("day {day} out of range for month {month}"));
+    }
+    if hour > 23 {
+        return Err(format!("hour {hour} out of range"));
+    }
+    if minute > 59 {
+        return Err(format!("minute {minute} out of range"));
+    }
+    if second > 59 {
+        return Err(format!("second {second} out of range"));
+    }
+    Ok(())
+}
+
+fn days_in_arff_month(year: i32, month: u8) -> u8 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_arff_leap_year(year) => 29,
+        2 => 28,
+        _ => 0,
+    }
+}
+
+fn is_arff_leap_year(year: i32) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
 }
 
 #[cfg(test)]
@@ -4745,12 +5064,83 @@ mod tests {
     }
 
     #[test]
-    fn read_arff_rejects_date_attribute_as_unsupported() {
+    fn read_arff_dense_date_attributes_match_scipy_units() {
         let arff = "@relation r\n\
+                    @attribute day date \"yyyy-MM-dd\"\n\
+                    @attribute instant date \"yyyy-MM-dd HH:mm:ss\"\n\
+                    @data\n\
+                    \"2026-05-03\", \"2026-05-03 14:05:09\"\n\
+                    ?, ?\n";
+        let parsed = read_arff(arff).expect("date attributes parse");
+        assert_eq!(
+            parsed.attributes[0],
+            ArffAttribute::Date {
+                name: "day".to_string(),
+                format: "yyyy-MM-dd".to_string(),
+                unit: ArffDateUnit::Day,
+            }
+        );
+        assert_eq!(
+            parsed.rows[0][0],
+            ArffValue::Date(ArffDateTime {
+                raw: "2026-05-03".to_string(),
+                normalized: "2026-05-03".to_string(),
+                unit: ArffDateUnit::Day,
+            })
+        );
+        assert_eq!(
+            parsed.rows[0][1],
+            ArffValue::Date(ArffDateTime {
+                raw: "2026-05-03 14:05:09".to_string(),
+                normalized: "2026-05-03T14:05:09".to_string(),
+                unit: ArffDateUnit::Second,
+            })
+        );
+        assert_eq!(parsed.rows[1][0], ArffValue::Missing);
+        assert_eq!(parsed.rows[1][1], ArffValue::Missing);
+    }
+
+    #[test]
+    fn read_arff_sparse_date_rows_keep_missing_dates() {
+        let arff = "@relation r\n\
+                    @attribute score numeric\n\
                     @attribute when date \"yyyy-MM-dd\"\n\
                     @data\n\
-                    \"2026-05-03\"\n";
-        let err = read_arff(arff).expect_err("date should be unsupported");
+                    {1 \"2026-05-03\"}\n\
+                    {0 2.5}\n";
+        let parsed = read_arff(arff).expect("sparse date row parse");
+        assert_eq!(parsed.rows[0][0], ArffValue::Numeric(0.0));
+        assert_eq!(
+            parsed.rows[0][1],
+            ArffValue::Date(ArffDateTime {
+                raw: "2026-05-03".to_string(),
+                normalized: "2026-05-03".to_string(),
+                unit: ArffDateUnit::Day,
+            })
+        );
+        assert_eq!(parsed.rows[1][0], ArffValue::Numeric(2.5));
+        assert_eq!(parsed.rows[1][1], ArffValue::Missing);
+    }
+
+    #[test]
+    fn read_arff_rejects_date_attribute_with_timezone() {
+        let arff = "@relation r\n\
+                    @attribute when date \"yyyy-MM-dd Z\"\n\
+                    @data\n\
+                    \"2026-05-03 +0000\"\n";
+        let err = read_arff(arff).expect_err("timezone date should be unsupported");
+        assert!(matches!(err, IoError::UnsupportedFeature(_)));
+    }
+
+    #[test]
+    fn read_arff_rejects_relational_attribute_as_unsupported() {
+        let arff = "@relation r\n\
+                    @attribute nested relational\n\
+                    @attribute child numeric\n\
+                    @end nested\n\
+                    @data\n\
+                    \"1\"\n";
+        let err = read_arff(arff).expect_err("relational should be unsupported");
         assert!(matches!(err, IoError::UnsupportedFeature(_)));
     }
 
