@@ -8513,6 +8513,20 @@ impl ContinuousDistribution for DoubleWeibull {
         let c = self.c;
         ln_gamma(1.0 + 2.0 / c).exp() // Γ(1 + 2/c) for unit scale
     }
+
+    fn skewness(&self) -> f64 {
+        // Symmetric about 0 ⇒ all odd central moments vanish ⇒ skew = 0.
+        0.0
+    }
+
+    fn kurtosis(&self) -> f64 {
+        // X = ±Y, Y ~ Weibull(c). Even moments: m_2 = Γ(1+2/c),
+        // m_4 = Γ(1+4/c); odd moments vanish. Excess kurt = m_4/m_2² − 3.
+        let c = self.c;
+        let m2 = ln_gamma(1.0 + 2.0 / c).exp();
+        let m4 = ln_gamma(1.0 + 4.0 / c).exp();
+        m4 / (m2 * m2) - 3.0
+    }
 }
 
 /// Double gamma distribution.
@@ -35934,6 +35948,22 @@ mod tests {
 
         for (&q, &want) in qs.iter().zip(expected.iter()) {
             assert_close(dist.ppf(q), want, 1e-12, &format!("DoubleWeibull ppf({q})"));
+        }
+    }
+
+    #[test]
+    fn doubleweibull_skewness_and_kurtosis_match_scipy_reference_values() {
+        // Symmetric ⇒ skew = 0 for all c. Excess kurt = Γ(1+4/c)/Γ(1+2/c)² − 3.
+        let cases = [
+            (1.0_f64, 0.0, 3.000_000_000_000_000),
+            (1.5, 0.0, -0.169_766_598_184_202),
+            (3.0, 0.0, -1.539_001_513_793_682),
+            (5.0, 0.0, -1.816_895_453_157_078),
+        ];
+        for &(c, sk, ku) in &cases {
+            let d = DoubleWeibull::new(c);
+            assert_close(d.skewness(), sk, 1e-12, &format!("DoubleWeibull({c}) skew"));
+            assert_close(d.kurtosis(), ku, 1e-12, &format!("DoubleWeibull({c}) kurt"));
         }
     }
 
