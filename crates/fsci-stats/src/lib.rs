@@ -11910,12 +11910,22 @@ impl ContinuousDistribution for Kappa3 {
     }
 
     fn mean(&self) -> f64 {
-        // No clean closed form for general a.
-        f64::NAN
+        // E[X] exists only when a > 1 — scipy returns NaN below that
+        // threshold (frankenscipy-4htpw).
+        if self.a <= 1.0 {
+            return f64::NAN;
+        }
+        kappa3_moment(self.a, 1)
     }
 
     fn var(&self) -> f64 {
-        f64::NAN
+        if self.a <= 2.0 {
+            return f64::NAN;
+        }
+        let m1 = kappa3_moment(self.a, 1);
+        let m2 = kappa3_moment(self.a, 2);
+        let v = m2 - m1 * m1;
+        if v.is_finite() && v >= 0.0 { v } else { f64::NAN }
     }
 }
 
@@ -20102,6 +20112,49 @@ fn powerlognorm_moment(c: f64, s: f64, k: u32) -> f64 {
         }
         let log_phi = log_norm_const - 0.5 * u * u;
         let log_int = -kf * s * u + ln_c + (c - 1.0) * big_phi.ln() + log_phi;
+        if !log_int.is_finite() || log_int < -700.0 {
+            return 0.0;
+        }
+        log_int.exp()
+    };
+    let mut sum = integrand(u_lo) + integrand(u_hi);
+    for i in 1..steps {
+        let u = u_lo + i as f64 * h;
+        let coef = if i % 2 == 0 { 2.0 } else { 4.0 };
+        sum += coef * integrand(u);
+    }
+    sum * h / 3.0
+}
+
+/// k-th raw moment of `Kappa3(a)`:
+///   E[X^k] = ∫_0^∞ x^k · a · (a + x^a)^{-(a+1)/a} dx
+/// substituted u = ln(x) gives
+///   E[X^k] = ∫_{-∞}^{∞} exp((k+1)u) · a · (a + exp(a·u))^{-(a+1)/a} du
+/// which integrates over a smooth bell-shaped curve when k < a (the
+/// existence condition for the moment). Returns `f64::INFINITY` when
+/// k ≥ a — caller is expected to gate that out. (frankenscipy-4htpw)
+fn kappa3_moment(a: f64, k: u32) -> f64 {
+    let kf = f64::from(k);
+    if kf >= a {
+        return f64::INFINITY;
+    }
+    let u_lo = -30.0_f64;
+    let u_hi = 30.0_f64;
+    let steps = 6000usize;
+    let h = (u_hi - u_lo) / steps as f64;
+    let ln_a = a.ln();
+    let integrand = |u: f64| -> f64 {
+        let au = a * u;
+        // a + exp(a·u) = a · (1 + exp(a·u - ln a)). Use log-add for stability.
+        let log_base = if au > ln_a + 700.0 {
+            au
+        } else if au < ln_a - 700.0 {
+            ln_a
+        } else {
+            let m = au.max(ln_a);
+            m + ((au - m).exp() + (ln_a - m).exp()).ln()
+        };
+        let log_int = (kf + 1.0) * u + ln_a - (a + 1.0) / a * log_base;
         if !log_int.is_finite() || log_int < -700.0 {
             return 0.0;
         }
@@ -35367,6 +35420,42 @@ mod tests {
                 assert!(
                     (recovered - q).abs() < 1e-12,
                     "Kappa3(a={a}).cdf(ppf({q})) = {recovered}, want {q}"
+                );
+            }
+        }
+    }
+
+    /// Kappa3.mean/var match scipy.stats.kappa3.stats
+    /// (frankenscipy-4htpw). Returns NaN when the moment diverges
+    /// (a ≤ 1 for mean, a ≤ 2 for var) — same convention as scipy.
+    #[test]
+    fn kappa3_mean_var_match_scipy() {
+        use std::f64::consts::SQRT_2;
+        let cases: [(f64, f64, f64); 5] = [
+            (0.5, f64::NAN, f64::NAN),
+            (1.0, f64::NAN, f64::NAN),
+            (2.0, SQRT_2, f64::NAN),
+            (5.0, 0.7761272901, 0.3172223381),
+            (10.0, 0.6492002378, 0.1587648372),
+        ];
+        for (a, em, ev) in cases {
+            let d = Kappa3::new(a);
+            let m = d.mean();
+            let v = d.var();
+            if em.is_nan() {
+                assert!(m.is_nan(), "Kappa3({a}).mean should be NaN, got {m}");
+            } else {
+                assert!(
+                    (m - em).abs() < 1e-6,
+                    "Kappa3({a}).mean = {m}, scipy {em}"
+                );
+            }
+            if ev.is_nan() {
+                assert!(v.is_nan(), "Kappa3({a}).var should be NaN, got {v}");
+            } else {
+                assert!(
+                    (v - ev).abs() < 1e-6,
+                    "Kappa3({a}).var = {v}, scipy {ev}"
                 );
             }
         }
