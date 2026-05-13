@@ -4767,6 +4767,42 @@ impl DiscreteDistribution for LogSeries {
         self.p * (norm - self.p) / ((1.0 - self.p).powi(2) * norm * norm)
     }
 
+    fn skewness(&self) -> f64 {
+        // Raw moments via differentiating the MGF (scipy.stats.logser._stats):
+        //   m_1 = p / ((p − 1) r)
+        //   m_2 = −p / (r (p − 1)²)
+        //   m_3 = −p (1 + p) / (r (1 − p)³)
+        //   m_4 = −p (1/(p−1)² − 6p/(p−1)³ + 6p²/(p−1)⁴) / r
+        // where r = ln(1 − p). Compose central moments and standardize.
+        let (p, r) = (self.p, (1.0 - self.p).ln());
+        let pm1 = p - 1.0;
+        let omp = 1.0 - p;
+        let m1 = p / (pm1 * r);
+        let m2 = -p / (r * pm1 * pm1);
+        let m3 = -p * (1.0 + p) / (r * omp.powi(3));
+        let var = m2 - m1 * m1;
+        let mu3 = 2.0_f64.mul_add(m1.powi(3), m3 - 3.0 * m1 * m2);
+        mu3 / var.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        let (p, r) = (self.p, (1.0 - self.p).ln());
+        let pm1 = p - 1.0;
+        let omp = 1.0 - p;
+        let m1 = p / (pm1 * r);
+        let m2 = -p / (r * pm1 * pm1);
+        let m3 = -p * (1.0 + p) / (r * omp.powi(3));
+        let m4 = -p
+            * (1.0 / (pm1 * pm1) - 6.0 * p / pm1.powi(3) + 6.0 * p * p / pm1.powi(4))
+            / r;
+        let var = m2 - m1 * m1;
+        let mu4 = (-3.0_f64).mul_add(
+            m1.powi(4),
+            6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
+        );
+        mu4 / (var * var) - 3.0
+    }
+
     fn mode(&self) -> f64 {
         1.0
     }
@@ -8590,6 +8626,48 @@ impl DiscreteDistribution for Zipfian {
             e2 += jf * jf * p;
         }
         (e2 - e1 * e1).max(0.0)
+    }
+
+    fn skewness(&self) -> f64 {
+        // Bounded support [1, n] → direct E[X^k] sums are exact and
+        // O(n) per moment. No elementary closed form for skewness here.
+        let z = self.z();
+        let (mut m1, mut m2, mut m3) = (0.0_f64, 0.0_f64, 0.0_f64);
+        for j in 1..=self.n {
+            let jf = j as f64;
+            let p = jf.powf(-self.a) / z;
+            m1 += jf * p;
+            m2 += jf * jf * p;
+            m3 += jf * jf * jf * p;
+        }
+        let var = m2 - m1 * m1;
+        if var <= 0.0 {
+            return f64::NAN;
+        }
+        let mu3 = 2.0_f64.mul_add(m1.powi(3), m3 - 3.0 * m1 * m2);
+        mu3 / var.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        let z = self.z();
+        let (mut m1, mut m2, mut m3, mut m4) = (0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64);
+        for j in 1..=self.n {
+            let jf = j as f64;
+            let p = jf.powf(-self.a) / z;
+            m1 += jf * p;
+            m2 += jf * jf * p;
+            m3 += jf * jf * jf * p;
+            m4 += jf * jf * jf * jf * p;
+        }
+        let var = m2 - m1 * m1;
+        if var <= 0.0 {
+            return f64::NAN;
+        }
+        let mu4 = (-3.0_f64).mul_add(
+            m1.powi(4),
+            6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
+        );
+        mu4 / (var * var) - 3.0
     }
 }
 
@@ -32997,6 +33075,23 @@ mod tests {
     }
 
     #[test]
+    fn logseries_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.logser(p).stats(moments='sk'). Closed-form via
+        // MGF derivatives (scipy.stats.logser._stats source).
+        let cases = [
+            (0.3_f64, 3.298_310_082_5, 14.698_934_125_1),
+            (0.5, 3.014_824_431_9, 13.388_420_819_5),
+            (0.7, 3.059_743_776_1, 14.423_790_814_7),
+            (0.9, 3.475_346_035_5, 18.905_563_196_9),
+        ];
+        for &(p, sk, ku) in &cases {
+            let d = LogSeries::new(p);
+            assert_close(d.skewness(), sk, 1e-8, &format!("LogSeries({p}) skew"));
+            assert_close(d.kurtosis(), ku, 1e-7, &format!("LogSeries({p}) kurt"));
+        }
+    }
+
+    #[test]
     fn discrete_poisson_skewness_kurtosis() {
         let p = Poisson::new(4.0);
         assert_close(p.skewness(), 0.5, 1e-10, "Poisson(4) skewness = 1/sqrt(4)");
@@ -38945,6 +39040,22 @@ mod tests {
             1e-12,
             "Zipfian mean(1.5, 10)",
         );
+    }
+
+    #[test]
+    fn zipfian_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.zipfian(α, n).stats(moments='sk'). Direct sum
+        // over bounded support [1, n].
+        let cases = [
+            (2.0_f64, 5_u32, 1.903_957_283_345_277, 2.947_785_977_582_695),
+            (1.5, 10, 1.678_577_049_540_835, 2.071_312_446_161_207),
+            (3.0, 7, 3.915_106_873_951_210, 18.512_387_519_770_584),
+        ];
+        for &(a, n, sk, ku) in &cases {
+            let d = Zipfian::new(a, n);
+            assert_close(d.skewness(), sk, 1e-7, &format!("Zipfian({a},{n}) skew"));
+            assert_close(d.kurtosis(), ku, 1e-7, &format!("Zipfian({a},{n}) kurt"));
+        }
     }
 
     #[test]
