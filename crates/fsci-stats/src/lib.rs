@@ -6392,6 +6392,34 @@ impl ContinuousDistribution for PowerLognorm {
         if v.is_finite() && v >= 0.0 { v } else { f64::NAN }
     }
 
+    fn skewness(&self) -> f64 {
+        let m1 = powerlognorm_moment(self.c, self.s, 1);
+        let m2 = powerlognorm_moment(self.c, self.s, 2);
+        let m3 = powerlognorm_moment(self.c, self.s, 3);
+        let var = m2 - m1 * m1;
+        if !var.is_finite() || var <= 0.0 {
+            return f64::NAN;
+        }
+        let mu3 = 2.0_f64.mul_add(m1.powi(3), m3 - 3.0 * m1 * m2);
+        mu3 / var.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        let m1 = powerlognorm_moment(self.c, self.s, 1);
+        let m2 = powerlognorm_moment(self.c, self.s, 2);
+        let m3 = powerlognorm_moment(self.c, self.s, 3);
+        let m4 = powerlognorm_moment(self.c, self.s, 4);
+        let var = m2 - m1 * m1;
+        if !var.is_finite() || var <= 0.0 {
+            return f64::NAN;
+        }
+        let mu4 = (-3.0_f64).mul_add(
+            m1.powi(4),
+            6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
+        );
+        mu4 / (var * var) - 3.0
+    }
+
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         validate_finite_fit_data(data, 4, "PowerLognorm")?;
         for &x in data {
@@ -13216,6 +13244,40 @@ impl ContinuousDistribution for Kappa3 {
         let m2 = kappa3_moment(self.a, 2);
         let v = m2 - m1 * m1;
         if v.is_finite() && v >= 0.0 { v } else { f64::NAN }
+    }
+
+    fn skewness(&self) -> f64 {
+        if self.a <= 3.0 {
+            return f64::NAN;
+        }
+        let m1 = kappa3_moment(self.a, 1);
+        let m2 = kappa3_moment(self.a, 2);
+        let m3 = kappa3_moment(self.a, 3);
+        let var = m2 - m1 * m1;
+        if !var.is_finite() || var <= 0.0 {
+            return f64::NAN;
+        }
+        let mu3 = 2.0_f64.mul_add(m1.powi(3), m3 - 3.0 * m1 * m2);
+        mu3 / var.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        if self.a <= 4.0 {
+            return f64::NAN;
+        }
+        let m1 = kappa3_moment(self.a, 1);
+        let m2 = kappa3_moment(self.a, 2);
+        let m3 = kappa3_moment(self.a, 3);
+        let m4 = kappa3_moment(self.a, 4);
+        let var = m2 - m1 * m1;
+        if !var.is_finite() || var <= 0.0 {
+            return f64::NAN;
+        }
+        let mu4 = (-3.0_f64).mul_add(
+            m1.powi(4),
+            6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
+        );
+        mu4 / (var * var) - 3.0
     }
 }
 
@@ -24071,6 +24133,34 @@ impl ContinuousDistribution for ExponPow {
         if v.is_finite() && v >= 0.0 { v } else { f64::NAN }
     }
 
+    fn skewness(&self) -> f64 {
+        let m1 = exponpow_moment(self.b, 1);
+        let m2 = exponpow_moment(self.b, 2);
+        let m3 = exponpow_moment(self.b, 3);
+        let var = m2 - m1 * m1;
+        if !var.is_finite() || var <= 0.0 {
+            return f64::NAN;
+        }
+        let mu3 = 2.0_f64.mul_add(m1.powi(3), m3 - 3.0 * m1 * m2);
+        mu3 / var.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        let m1 = exponpow_moment(self.b, 1);
+        let m2 = exponpow_moment(self.b, 2);
+        let m3 = exponpow_moment(self.b, 3);
+        let m4 = exponpow_moment(self.b, 4);
+        let var = m2 - m1 * m1;
+        if !var.is_finite() || var <= 0.0 {
+            return f64::NAN;
+        }
+        let mu4 = (-3.0_f64).mul_add(
+            m1.powi(4),
+            6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
+        );
+        mu4 / (var * var) - 3.0
+    }
+
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         validate_finite_fit_data(data, 2, "ExponPow")?;
         for &x in data {
@@ -29700,6 +29790,24 @@ mod tests {
                 (v - ev).abs() < 1e-5,
                 "ExponPow({b}).var = {v}, scipy {ev}"
             );
+        }
+    }
+
+    #[test]
+    fn exponpow_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.exponpow(b).stats(moments='sk'). Composed via
+        // existing exponpow_moment helper; tolerance reflects shared
+        // Simpson-vs-scipy quadrature error.
+        let cases = [
+            (0.5_f64, 2.067_397_285_7, 5.411_054_457_5),
+            (1.0, 0.718_586_645_0, -0.017_419_411_7),
+            (2.5, -0.282_871_851_6, -0.495_916_375_3),
+            (4.0, -0.648_501_333_3, 0.110_401_023_5),
+        ];
+        for &(b, sk, ku) in &cases {
+            let d = ExponPow::new(b);
+            assert_close(d.skewness(), sk, 1e-3, &format!("ExponPow({b}) skew"));
+            assert_close(d.kurtosis(), ku, 1e-2, &format!("ExponPow({b}) kurt"));
         }
     }
 
@@ -37427,6 +37535,23 @@ mod tests {
     }
 
     #[test]
+    fn powerlognorm_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.powerlognorm(c, s).stats(moments='sk'). Composed
+        // via powerlognorm_moment helper; tail behaviour at high
+        // s × c gives heavy skew and excess kurt that diverges past
+        // ~s·c = 4. Anchor cases stay below that boundary.
+        let cases = [
+            (1.5_f64, 0.5_f64, 1.381_063_386_5, 3.553_132_653_0),
+            (3.0, 1.0, 2.486_078_229_7, 12.286_151_305_2),
+        ];
+        for &(c, s, sk, ku) in &cases {
+            let d = PowerLognorm::new(c, s);
+            assert_close(d.skewness(), sk, 1e-4, &format!("PowerLognorm({c},{s}) skew"));
+            assert_close(d.kurtosis(), ku, 1e-3, &format!("PowerLognorm({c},{s}) kurt"));
+        }
+    }
+
+    #[test]
     fn powerlognorm_ppf_inverts_cdf() {
         // /porting-to-rust [frankenscipy-bx7kx]: ppf round-trip.
         for &c in &[0.5_f64, 1.0, 2.0, 3.0] {
@@ -37812,6 +37937,21 @@ mod tests {
                     "Kappa3({a}).var = {v}, scipy {ev}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn kappa3_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.kappa3(a).stats(moments='sk'). Skew finite for
+        // a > 3; kurt for a > 4. Cases at a = 5, 10 satisfy both.
+        let cases = [
+            (5.0_f64, 1.518_711_654_4, 9.641_704_949_4),
+            (10.0, 0.332_744_296_1, -0.494_530_524_8),
+        ];
+        for &(a, sk, ku) in &cases {
+            let d = Kappa3::new(a);
+            assert_close(d.skewness(), sk, 1e-5, &format!("Kappa3({a}) skew"));
+            assert_close(d.kurtosis(), ku, 1e-4, &format!("Kappa3({a}) kurt"));
         }
     }
 
