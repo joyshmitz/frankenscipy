@@ -9313,14 +9313,23 @@ impl ContinuousDistribution for Burr3 {
     }
 
     fn mean(&self) -> f64 {
-        // E[X] exists only when c·d > 1; expressible via Beta
-        // function — leave NaN for now (covered by scipy oracle
-        // when fitness needed).
-        f64::NAN
+        // Closed form: E[X^k] = d · B(d + k/c, 1 − k/c), valid when k < c.
+        // For mean (k=1) the existence condition is c > 1.
+        // (frankenscipy-hoazz)
+        if self.c <= 1.0 {
+            return f64::NAN;
+        }
+        self.d * ln_beta(self.d + 1.0 / self.c, 1.0 - 1.0 / self.c).exp()
     }
 
     fn var(&self) -> f64 {
-        f64::NAN
+        if self.c <= 2.0 {
+            return f64::NAN;
+        }
+        let m1 = self.d * ln_beta(self.d + 1.0 / self.c, 1.0 - 1.0 / self.c).exp();
+        let m2 = self.d * ln_beta(self.d + 2.0 / self.c, 1.0 - 2.0 / self.c).exp();
+        let v = m2 - m1 * m1;
+        if v.is_finite() && v >= 0.0 { v } else { f64::NAN }
     }
 }
 
@@ -35364,6 +35373,41 @@ mod tests {
             assert_close(dist.pdf(x), want_pdf, 1e-12, "Burr3 pdf");
             assert_close(dist.cdf(x), want_cdf, 1e-12, "Burr3 cdf");
             assert_close(dist.sf(x), 1.0 - want_cdf, 1e-12, "Burr3 sf");
+        }
+    }
+
+    /// Burr3.mean/var via closed form E[X^k] = d · B(d + k/c, 1 − k/c)
+    /// match scipy.stats.burr (frankenscipy-hoazz). mean exists when
+    /// c > 1; var when c > 2. Both NaN otherwise — same as scipy.
+    #[test]
+    fn burr3_mean_var_match_scipy() {
+        let cases: [(f64, f64, f64, f64); 5] = [
+            (3.0, 2.0, 1.6122661015415272, 1.431263271673902),
+            (5.0, 3.0, 1.4110263183925855, 0.22879948026191665),
+            (2.5, 1.5, 1.6161258261452374, 3.4319527972810535),
+            (1.5, 2.0, 4.030665253853816, f64::NAN),
+            (0.5, 2.0, f64::NAN, f64::NAN),
+        ];
+        for (c, d, em, ev) in cases {
+            let dist = Burr3::new(c, d);
+            let m = dist.mean();
+            let v = dist.var();
+            if em.is_nan() {
+                assert!(m.is_nan(), "Burr3({c}, {d}).mean should be NaN, got {m}");
+            } else {
+                assert!(
+                    (m - em).abs() < 1e-12,
+                    "Burr3({c}, {d}).mean = {m}, scipy {em}"
+                );
+            }
+            if ev.is_nan() {
+                assert!(v.is_nan(), "Burr3({c}, {d}).var should be NaN, got {v}");
+            } else {
+                assert!(
+                    (v - ev).abs() < 1e-10,
+                    "Burr3({c}, {d}).var = {v}, scipy {ev}"
+                );
+            }
         }
     }
 
