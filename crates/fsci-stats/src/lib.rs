@@ -12521,6 +12521,41 @@ impl ContinuousDistribution for IrwinHall {
     fn kurtosis(&self) -> f64 {
         -6.0 / (5.0 * self.n as f64)
     }
+
+    fn entropy(&self) -> f64 {
+        // n = 1 is Uniform(0, 1) with h = 0.
+        // n = 2 is Triangular(0, 1, 2) with h = 0.5 (the shape-independent
+        // Triangular entropy formula collapses to ln(b−a) + 0.5 − ln 2 =
+        // ln 2 + 0.5 − ln 2 = 0.5).
+        // For n ≥ 3 the IrwinHall PDF is piecewise polynomial of degree
+        // n − 1 and the entropy has no simple closed form; integrate
+        // −ln pdf with composite Simpson on the bounded support [0, n].
+        match self.n {
+            1 => 0.0,
+            2 => 0.5,
+            _ => {
+                let nf = self.n as f64;
+                let steps = 8_000usize;
+                let h = nf / steps as f64;
+                let mut sum = 0.0_f64;
+                for i in 0..=steps {
+                    let x = i as f64 * h;
+                    let w = if i == 0 || i == steps {
+                        1.0
+                    } else if i % 2 == 0 {
+                        2.0
+                    } else {
+                        4.0
+                    };
+                    let p = self.pdf(x);
+                    if p > 0.0 {
+                        sum += w * (-p * p.ln());
+                    }
+                }
+                sum * h / 3.0
+            }
+        }
+    }
 }
 
 /// Upper-truncated Pareto distribution on [1, c] with shape `b ≠ 0`
@@ -27960,6 +27995,27 @@ mod tests {
         // Below threshold b=4.
         assert!(Pareto::new(3.5, 1.0).kurtosis().is_nan());
         assert!(Pareto::new(4.0, 1.0).kurtosis().is_nan());
+    }
+
+    #[test]
+    fn irwinhall_entropy_matches_scipy_reference_values() {
+        // n = 1 is uniform(0, 1); n = 2 is triangular(0, 1, 2).
+        // n ≥ 3 uses Simpson over [0, n] on the piecewise-polynomial pdf.
+        let cases = [
+            (1_u32, 0.0_f64),
+            (2, 0.5),
+            (3, 0.719_294_852_8),
+            (4, 0.866_735_117_1),
+            (5, 0.979_557_938_9),
+        ];
+        for &(n, expected) in &cases {
+            assert_close(
+                IrwinHall::new(n).entropy(),
+                expected,
+                1e-6,
+                &format!("IrwinHall({n}) entropy"),
+            );
+        }
     }
 
     #[test]
