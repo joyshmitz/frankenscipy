@@ -2684,6 +2684,17 @@ impl ContinuousDistribution for Pareto {
             f64::NAN
         }
     }
+
+    fn kurtosis(&self) -> f64 {
+        // Excess kurtosis: 6(b³ + b² − 6b − 2) / (b(b-3)(b-4)) for b > 4;
+        // NaN otherwise (fourth moment diverges). (frankenscipy-026b5)
+        if self.b > 4.0 {
+            let b = self.b;
+            6.0 * (b * b * b + b * b - 6.0 * b - 2.0) / (b * (b - 3.0) * (b - 4.0))
+        } else {
+            f64::NAN
+        }
+    }
 }
 
 /// Lomax distribution.
@@ -2757,6 +2768,28 @@ impl ContinuousDistribution for Lomax {
             f64::INFINITY
         } else {
             self.c / ((self.c - 1.0).powi(2) * (self.c - 2.0))
+        }
+    }
+
+    fn skewness(&self) -> f64 {
+        // Lomax (Pareto-Type-II with location -1) inherits Pareto's
+        // shape-only third-moment formula: 2·(1+c)/(c-3)·√((c-2)/c)
+        // for c > 3. (frankenscipy-3moif)
+        if self.c > 3.0 {
+            2.0 * (1.0 + self.c) / (self.c - 3.0) * ((self.c - 2.0) / self.c).sqrt()
+        } else {
+            f64::NAN
+        }
+    }
+
+    fn kurtosis(&self) -> f64 {
+        // Excess kurtosis: 6(c³+c²-6c-2) / (c(c-3)(c-4)) for c > 4.
+        // (frankenscipy-3moif)
+        if self.c > 4.0 {
+            let c = self.c;
+            6.0 * (c * c * c + c * c - 6.0 * c - 2.0) / (c * (c - 3.0) * (c - 4.0))
+        } else {
+            f64::NAN
         }
     }
 
@@ -25472,6 +25505,62 @@ mod tests {
         let finite_mean_only = Lomax::new(1.5);
         assert!(finite_mean_only.mean().is_finite());
         assert!(finite_mean_only.var().is_infinite());
+    }
+
+    /// Lomax skew/kurt closed forms — frankenscipy-3moif.
+    #[test]
+    fn lomax_skew_kurt_match_scipy() {
+        // c ≤ 3 → skew NaN; c ≤ 4 → kurt NaN.
+        let cases: [(f64, f64, f64); 5] = [
+            (4.0, 7.0710678118654755, f64::NAN),
+            (5.0, 4.6475800154488962, 70.8),
+            (6.0, 3.8103173777332353, 35.66666666666667),
+            (8.0, 3.1176914535854433, 19.725),
+            (10.0, 2.811056886191325, 14.828571428571429),
+        ];
+        for (c, want_s, want_k) in cases {
+            let d = Lomax::new(c);
+            assert!(
+                (d.skewness() - want_s).abs() < 1e-10,
+                "Lomax({c}).skewness = {}, scipy {want_s}",
+                d.skewness()
+            );
+            if want_k.is_nan() {
+                assert!(d.kurtosis().is_nan(), "Lomax({c}).kurtosis should be NaN");
+            } else {
+                assert!(
+                    (d.kurtosis() - want_k).abs() < 1e-10,
+                    "Lomax({c}).kurtosis = {}, scipy {want_k}",
+                    d.kurtosis()
+                );
+            }
+        }
+        // Below-threshold: NaN.
+        let small = Lomax::new(2.5);
+        assert!(small.skewness().is_nan());
+        assert!(small.kurtosis().is_nan());
+    }
+
+    /// Pareto kurtosis closed form — frankenscipy-026b5.
+    #[test]
+    fn pareto_kurtosis_matches_scipy() {
+        let cases: [(f64, f64); 4] = [
+            (5.0, 70.8),
+            (6.0, 35.66666666666667),
+            (8.0, 19.725),
+            (10.0, 14.828571428571429),
+        ];
+        for (b, want_k) in cases {
+            let p = Pareto::new(b, 1.0);
+            assert!(
+                (p.kurtosis() - want_k).abs() < 1e-10,
+                "Pareto({b}, 1).kurtosis = {}, scipy {want_k}",
+                p.kurtosis()
+            );
+        }
+        // Below threshold b=4.
+        assert!(Pareto::new(3.5, 1.0).kurtosis().is_nan());
+        assert!(Pareto::new(4.0, 1.0).kurtosis().is_nan());
     }
 
     #[test]
