@@ -14481,6 +14481,37 @@ impl ContinuousDistribution for Kappa4 {
         );
         mu4 / (var * var) - 3.0
     }
+
+    fn entropy(&self) -> f64 {
+        // h(Kappa4) routes through quantile-space Simpson:
+        //   h = -∫ pdf(x) · ln pdf(x) dx
+        //     = -∫_0^1 ln pdf(ppf(q)) dq
+        // since pdf(ppf(q))·dx/dq = 1 makes the −ln pdf integrand
+        // already in q-coordinates. Same machinery as the existing
+        // raw_moment helper (Simpson on q ∈ [eps, 1−eps]).
+        let (h, k) = self.normalized_shapes();
+        if h == 0.0 {
+            // GenExtreme limit: h = γ(1 − k) + 1.
+            return GenExtreme::new(k).entropy();
+        }
+        if (h - 1.0).abs() < Self::SHAPE_TOL {
+            // GenPareto limit: h = 1 + (−k).
+            return GenPareto::new(-k).entropy();
+        }
+        simpson_integrate_adaptive(
+            |q| {
+                let x = self.ppf(q);
+                let p = self.pdf(x);
+                if p > 0.0 { -p.ln() } else { 0.0 }
+            },
+            1e-12,
+            1.0 - 1e-12,
+            4_096,
+            1e-12,
+            1e-12,
+            10,
+        )
+    }
 }
 
 /// Crystal Ball distribution (used in high-energy physics).
@@ -28076,6 +28107,18 @@ mod tests {
                 &format!("JohnsonSB({a},{b}) entropy"),
             );
         }
+    }
+
+    #[test]
+    fn kappa4_entropy_matches_scipy_reference_values() {
+        // Quantile-space Simpson; h=0 / h=1 special cases dispatch to
+        // GenExtreme / GenPareto's tighter closed forms.
+        assert_close(
+            Kappa4::new(0.5, 0.5).entropy(),
+            0.903_426_409_7,
+            1e-5,
+            "Kappa4(0.5, 0.5) entropy",
+        );
     }
 
     #[test]
