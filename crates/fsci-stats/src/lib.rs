@@ -1782,6 +1782,19 @@ impl ContinuousDistribution for FDistribution {
         }
     }
 
+    fn entropy(&self) -> f64 {
+        // h(F(d1, d2)) = ln(d2/d1 · B(d1/2, d2/2))
+        //              + (1 − d1/2) ψ(d1/2)
+        //              − (1 + d2/2) ψ(d2/2)
+        //              + ((d1 + d2)/2) ψ((d1 + d2)/2).
+        let (d1, d2) = (self.dfn, self.dfd);
+        let log_beta = ln_gamma(d1 / 2.0) + ln_gamma(d2 / 2.0) - ln_gamma((d1 + d2) / 2.0);
+        (d2 / d1).ln() + log_beta
+            + (1.0 - d1 / 2.0) * fsci_special::digamma_scalar(d1 / 2.0)
+            - (1.0 + d2 / 2.0) * fsci_special::digamma_scalar(d2 / 2.0)
+            + ((d1 + d2) / 2.0) * fsci_special::digamma_scalar((d1 + d2) / 2.0)
+    }
+
     fn fit(data: &[f64]) -> Self {
         if data.is_empty() || data.iter().any(|&x| !x.is_finite() || x < 0.0) {
             return Self {
@@ -28371,6 +28384,21 @@ mod tests {
                     &format!("Gumbel({loc},{scale}).sf({x}) = GumbelLeft.cdf(-{x})"),
                 );
             }
+        }
+    }
+
+    #[test]
+    fn f_distribution_entropy_matches_scipy_reference_values() {
+        // scipy.stats.f(d1, d2).entropy(). Closed form via Beta function
+        // and digamma at three nodes.
+        let cases = [
+            (5.0_f64, 10.0_f64, 1.130_759_804_9),
+            (3.0, 5.0, 1.428_144_231_9),
+            (2.0, 4.0, 1.5),
+        ];
+        for &(d1, d2, h) in &cases {
+            let d = FDistribution::new(d1, d2);
+            assert_close(d.entropy(), h, 1e-9, &format!("F({d1},{d2}) entropy"));
         }
     }
 
