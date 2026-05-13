@@ -27447,6 +27447,22 @@ mod tests {
         assert!(w.pdf(1.0) > 0.0);
     }
 
+    #[test]
+    fn weibull_entropy_matches_scipy_reference_values() {
+        // scipy.stats.weibull_min(c, scale).entropy(). Closed form:
+        // h = γ·(1 − 1/c) + ln(scale/c) + 1.
+        let cases = [
+            (1.5_f64, 1.0_f64, 0.786_940_113_5),
+            (2.0, 1.0, 0.595_460_651_9),
+            (5.0, 1.0, -0.147_665_380_5),
+            (2.0, 5.0, 2.204_898_564_324_921_5),
+        ];
+        for &(c, scale, h) in &cases {
+            let w = Weibull::new(c, scale);
+            assert_close(w.entropy(), h, 1e-8, &format!("Weibull({c},{scale}) entropy"));
+        }
+    }
+
     // ── Lognormal distribution ──────────────────────────────────────
 
     #[test]
