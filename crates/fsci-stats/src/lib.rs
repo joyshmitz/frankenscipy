@@ -6942,6 +6942,34 @@ impl ContinuousDistribution for JohnsonSB {
         );
         mu4 / (var * var) - 3.0
     }
+
+    fn entropy(&self) -> f64 {
+        // Direct −E[ln pdf]: PDF on x ∈ (0, 1) is
+        //   pdf(x) = b·φ(a + b·logit(x)) / (x·(1−x))
+        // where φ is the standard normal density. Integrate in the
+        // underlying N(0, 1) variable z (so x = expit((z − a)/b))
+        // using the same simpson_integrate_adaptive on [−12, 12]
+        // pattern as the JohnsonSB raw_moment helper. The integrand
+        //   −φ(z) · ln pdf(x(z))
+        // is bounded everywhere because φ kills both tails.
+        simpson_integrate_adaptive(
+            |z| {
+                let x = Self::expit((z - self.a) / self.b);
+                let p = self.pdf(x);
+                if p > 0.0 {
+                    -standard_normal_pdf(z) * p.ln()
+                } else {
+                    0.0
+                }
+            },
+            -12.0,
+            12.0,
+            4_096,
+            1e-11,
+            1e-11,
+            8,
+        )
+    }
 }
 
 /// Generalized Extreme Value (GEV) distribution.
@@ -28013,6 +28041,26 @@ mod tests {
         // Below threshold b=4.
         assert!(Pareto::new(3.5, 1.0).kurtosis().is_nan());
         assert!(Pareto::new(4.0, 1.0).kurtosis().is_nan());
+    }
+
+    #[test]
+    fn johnsonsb_entropy_matches_scipy_reference_values() {
+        // scipy.stats.johnsonsb(a, b).entropy(). a and -a give the
+        // same entropy (reflection symmetry around x = 1/2).
+        let cases = [
+            (0.5_f64, 1.5_f64, -0.503_640_292_6),
+            (-0.5, 1.5, -0.503_640_292_6),
+            (1.0, 2.0, -0.779_690_464_6),
+            (1.25, 2.5, -0.982_512_238_0),
+        ];
+        for &(a, b, expected) in &cases {
+            assert_close(
+                JohnsonSB::new(a, b).entropy(),
+                expected,
+                1e-5,
+                &format!("JohnsonSB({a},{b}) entropy"),
+            );
+        }
     }
 
     #[test]
