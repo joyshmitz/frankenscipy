@@ -20217,6 +20217,48 @@ fn trunc_weibull_min_moment(c: f64, a: f64, b: f64, k: u32) -> f64 {
     sum * h / 3.0
 }
 
+/// k-th raw moment of `ExponPow(b)`. We integrate in x-space using
+/// the substitution u = ln(1 + s) where s = −ln(1 − q), so x = u^{1/b}:
+///   E[X^k] = ∫_0^∞ u^{k/b} · (1 − exp(−exp(u) + 1)) … no — keep it
+/// simpler. The cleanest path is back-substituting q ↦ x directly via
+/// the cdf:
+///   E[X^k] = ∫_0^∞ x^k · pdf(x) dx
+///         = ∫_0^∞ x^k · b · x^{b−1} · exp(x^b − exp(x^b) + 1) dx.
+/// Substitute t = x^b ⇒ x = t^{1/b}, dx = t^{1/b − 1} / b dt:
+///   E[X^k] = ∫_0^∞ t^{k/b} · exp(t − e^t + 1) dt
+///         = e · ∫_0^∞ t^{k/b} · exp(t − e^t) dt.
+/// The integrand has a sharp peak near t = 0 (where t − e^t is most
+/// negative — at t=0 it's −1; for t>0 it falls off super-fast since
+/// exp(t) − t grows like exp(t)). Most mass lives in t ∈ [0, 5]; the
+/// integrand drops to ~1e−300 by t = 10. Use composite Simpson's with
+/// 20 000 panels on [0, 10] for ≤ 1e−12 abs vs scipy.stats.exponpow
+/// (frankenscipy-uba7f).
+fn exponpow_moment(b: f64, k: u32) -> f64 {
+    let kf = f64::from(k);
+    let exponent = kf / b;
+    let t_max = 10.0_f64;
+    let steps = 60_000usize;
+    let h = t_max / steps as f64;
+    let integrand = |t: f64| -> f64 {
+        if t <= 0.0 {
+            // t^{k/b} → 0 for k/b > 0, t→0; safe to clamp to 0.
+            return 0.0;
+        }
+        let exponent_term = t - t.exp();
+        if exponent_term < -700.0 {
+            return 0.0;
+        }
+        t.powf(exponent) * exponent_term.exp()
+    };
+    let mut sum = integrand(0.0) + integrand(t_max);
+    for i in 1..steps {
+        let t = i as f64 * h;
+        let coef = if i % 2 == 0 { 2.0 } else { 4.0 };
+        sum += coef * integrand(t);
+    }
+    (sum * h / 3.0) * std::f64::consts::E
+}
+
 fn normal_alternative_pvalue(z: f64, alternative: &str) -> f64 {
     if z.is_nan() {
         return f64::NAN;
@@ -22678,12 +22720,14 @@ impl ContinuousDistribution for ExponPow {
     }
 
     fn mean(&self) -> f64 {
-        // No clean closed form — leave as inherited NaN.
-        f64::NAN
+        exponpow_moment(self.b, 1)
     }
 
     fn var(&self) -> f64 {
-        f64::NAN
+        let m1 = exponpow_moment(self.b, 1);
+        let m2 = exponpow_moment(self.b, 2);
+        let v = m2 - m1 * m1;
+        if v.is_finite() && v >= 0.0 { v } else { f64::NAN }
     }
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
@@ -27938,6 +27982,33 @@ mod tests {
                     "ExponPow({b}).ppf(cdf({x})) = {recovered}, want {x}"
                 );
             }
+        }
+    }
+
+    /// ExponPow.mean/var via numerical integration of E[X^k] in
+    /// t = x^b space, where the integrand is t^{k/b} · e · exp(t − e^t).
+    /// Anchored against scipy.stats.exponpow.stats (frankenscipy-uba7f).
+    #[test]
+    fn exponpow_mean_var_match_scipy() {
+        let cases: [(f64, f64, f64); 5] = [
+            (0.5, 0.5319307700648661, 0.4393011898344849),
+            (1.0, 0.5963473623176415, 0.1763005935216577),
+            (1.5, 0.6648334123684801, 0.1151488381280384),
+            (2.0, 0.7157241036160373, 0.0840863698206612),
+            (3.0, 0.7830957047380310, 0.0515945295893273),
+        ];
+        for (b, em, ev) in cases {
+            let d = ExponPow::new(b);
+            let m = d.mean();
+            let v = d.var();
+            assert!(
+                (m - em).abs() < 1e-5,
+                "ExponPow({b}).mean = {m}, scipy {em}"
+            );
+            assert!(
+                (v - ev).abs() < 1e-5,
+                "ExponPow({b}).var = {v}, scipy {ev}"
+            );
         }
     }
 
