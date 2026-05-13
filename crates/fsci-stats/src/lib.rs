@@ -14251,6 +14251,24 @@ impl ContinuousDistribution for Argus {
         );
         mu4 / (var * var) - 3.0
     }
+
+    fn entropy(&self) -> f64 {
+        // Direct Simpson over (0, 1) on −pdf(x) · ln pdf(x). The pdf is
+        // smooth on the open interval and zero at the endpoints, so the
+        // adaptive integrator converges without special handling.
+        simpson_integrate_adaptive(
+            |x| {
+                let p = self.pdf(x);
+                if p > 0.0 { -p * p.ln() } else { 0.0 }
+            },
+            1e-12,
+            1.0 - 1e-12,
+            1_024,
+            1e-9,
+            1e-9,
+            6,
+        )
+    }
 }
 
 impl ContinuousDistribution for Kappa4 {
@@ -27995,6 +28013,27 @@ mod tests {
         // Below threshold b=4.
         assert!(Pareto::new(3.5, 1.0).kurtosis().is_nan());
         assert!(Pareto::new(4.0, 1.0).kurtosis().is_nan());
+    }
+
+    #[test]
+    fn argus_entropy_matches_scipy_reference_values() {
+        // scipy.stats.argus(chi).entropy(). Argus pdf is smooth on
+        // (0, 1) and zero at the endpoints, so adaptive Simpson on
+        // −p·ln p converges without special tail handling.
+        let cases = [
+            (1.0_f64, -0.151_614_263_4),
+            (2.0, -0.308_606_968_2),
+            (3.0, -0.735_890_851_7),
+            (5.0, -1.790_467_670_4),
+        ];
+        for &(chi, expected) in &cases {
+            assert_close(
+                Argus::new(chi).entropy(),
+                expected,
+                1e-4,
+                &format!("Argus({chi}) entropy"),
+            );
+        }
     }
 
     #[test]
