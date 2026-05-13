@@ -10219,6 +10219,39 @@ impl ContinuousDistribution for Loglogistic {
         }
     }
 
+    fn skewness(&self) -> f64 {
+        // Loglogistic ≡ Fisk: raw moments via Euler reflection,
+        //   m_k = B(1 + k/c, 1 − k/c) = (πk/c) / sin(πk/c).
+        // Skew finite for c > 3.
+        if self.c <= 3.0 {
+            return f64::NAN;
+        }
+        let theta = std::f64::consts::PI / self.c;
+        let m1 = theta / theta.sin();
+        let m2 = 2.0 * theta / (2.0 * theta).sin();
+        let m3 = 3.0 * theta / (3.0 * theta).sin();
+        let var = m2 - m1 * m1;
+        let mu3 = 2.0_f64.mul_add(m1.powi(3), m3 - 3.0 * m1 * m2);
+        mu3 / var.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        if self.c <= 4.0 {
+            return f64::NAN;
+        }
+        let theta = std::f64::consts::PI / self.c;
+        let m1 = theta / theta.sin();
+        let m2 = 2.0 * theta / (2.0 * theta).sin();
+        let m3 = 3.0 * theta / (3.0 * theta).sin();
+        let m4 = 4.0 * theta / (4.0 * theta).sin();
+        let var = m2 - m1 * m1;
+        let mu4 = (-3.0_f64).mul_add(
+            m1.powi(4),
+            6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
+        );
+        mu4 / (var * var) - 3.0
+    }
+
     fn fit(data: &[f64]) -> Self {
         Self::try_fit(data).unwrap_or_else(|e| {
             panic!("Loglogistic::fit failed: {e}");
@@ -36149,6 +36182,30 @@ mod tests {
         assert!(Loglogistic::new(1.5).var().is_infinite());
         assert!(Loglogistic::new(2.0).var().is_infinite());
         assert!(Loglogistic::new(2.5).var().is_finite());
+    }
+
+    #[test]
+    fn loglogistic_skewness_and_kurtosis_match_fisk() {
+        // Loglogistic ≡ Fisk by construction (same PDF). Verify the
+        // closed forms agree numerically across three c values that
+        // satisfy c > 4 (so both moments are finite). Differences
+        // should be at f64 round-off (≪ 1e-12).
+        for c in [5.0_f64, 7.5, 10.0] {
+            let ll = Loglogistic::new(c);
+            let fk = Fisk::new(c);
+            assert_close(
+                ll.skewness(),
+                fk.skewness(),
+                1e-12,
+                &format!("Loglogistic({c}) skew vs Fisk"),
+            );
+            assert_close(
+                ll.kurtosis(),
+                fk.kurtosis(),
+                1e-12,
+                &format!("Loglogistic({c}) kurt vs Fisk"),
+            );
+        }
     }
 
     #[test]
