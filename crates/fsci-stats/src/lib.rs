@@ -11890,6 +11890,46 @@ impl ContinuousDistribution for TruncPareto {
         let m = self.mean();
         e2 - m * m
     }
+
+    fn skewness(&self) -> f64 {
+        let (b, c) = (self.b, self.c);
+        let denom = self.denom();
+        let mk = |k: f64| {
+            if (k - b).abs() < 1e-15 {
+                b * c.ln() / denom
+            } else {
+                b * (c.powf(k - b) - 1.0) / ((k - b) * denom)
+            }
+        };
+        let m1 = mk(1.0);
+        let m2 = mk(2.0);
+        let m3 = mk(3.0);
+        let var = m2 - m1 * m1;
+        let mu3 = 2.0_f64.mul_add(m1.powi(3), m3 - 3.0 * m1 * m2);
+        mu3 / var.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        let (b, c) = (self.b, self.c);
+        let denom = self.denom();
+        let mk = |k: f64| {
+            if (k - b).abs() < 1e-15 {
+                b * c.ln() / denom
+            } else {
+                b * (c.powf(k - b) - 1.0) / ((k - b) * denom)
+            }
+        };
+        let m1 = mk(1.0);
+        let m2 = mk(2.0);
+        let m3 = mk(3.0);
+        let m4 = mk(4.0);
+        let var = m2 - m1 * m1;
+        let mu4 = (-3.0_f64).mul_add(
+            m1.powi(4),
+            6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
+        );
+        mu4 / (var * var) - 3.0
+    }
 }
 
 /// Truncated exponential distribution on [0, b].
@@ -29190,6 +29230,24 @@ mod tests {
         assert_eq!(d.pdf(6.0), 0.0);
         assert_eq!(d.cdf(0.5), 0.0);
         assert_eq!(d.cdf(6.0), 1.0);
+    }
+
+    #[test]
+    fn truncpareto_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.truncpareto(b, c).stats(moments='sk'). Closed-form
+        // raw moments m_k = b·(c^{k−b}−1)/((k−b)·(1−c^{−b})) (with the
+        // k = b removable singularity collapsing to b·log(c)/(1−c^{−b}))
+        // always finite on the bounded support [1, c] for any b > 1.
+        let cases = [
+            (3.0_f64, 5.0_f64, 2.574_077_093_064_304, 8.316_072_819_947_255),
+            (2.5, 10.0, 3.681_629_038_739_022, 18.870_500_186_124_893),
+            (1.5, 4.0, 1.292_786_253_135_568, 0.941_666_666_666_632),
+        ];
+        for &(b, c, sk, ku) in &cases {
+            let d = TruncPareto::new(b, c);
+            assert_close(d.skewness(), sk, 1e-9, &format!("TruncPareto({b},{c}) skew"));
+            assert_close(d.kurtosis(), ku, 1e-8, &format!("TruncPareto({b},{c}) kurt"));
+        }
     }
 
     #[test]
