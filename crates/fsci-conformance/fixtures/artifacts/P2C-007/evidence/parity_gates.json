@@ -312,7 +312,7 @@
       "tolerance_atol": null,
       "tolerance_rtol": null,
       "oracle_status": "available",
-      "message": "error kind matched (UnsupportedDtype)"
+      "message": "dtype matched Int64"
     },
     {
       "fixture_id": "adv_from_slice_len_mismatch",

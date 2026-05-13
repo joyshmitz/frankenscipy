@@ -1,6 +1,6 @@
 {
   "packet_id": "FSCI-P2C-007",
-  "generated_at": "unix:1778246193",
+  "generated_at": "unix:1778714349",
   "fixtures": [
     {
       "fixture_id": "diff_zeros_scalar_f64",
@@ -215,7 +215,7 @@
       "category": "adversarial",
       "shape": "n/a",
       "dtype": "[\"int64\"]",
-      "expected_kind": "error_kind",
+      "expected_kind": "dtype",
       "contract_ref": null
     },
     {
