@@ -29391,25 +29391,30 @@ mod tests {
 
     #[test]
     fn unsupported_distribution_moments_return_typed_errors() {
-        let chi = Chi::new(3.0);
+        // GenPareto still uses the trait NaN defaults for entropy,
+        // skewness, and kurtosis (closed forms not yet implemented),
+        // so it's the canonical fixture for verifying the typed-error
+        // path. (Chi previously held that role but has had skewness
+        // and kurtosis closed forms since frankenscipy-fubyp.)
+        let dist = GenPareto::new(0.3);
 
-        assert!(chi.entropy().is_nan());
+        assert!(dist.entropy().is_nan());
         assert!(matches!(
-            chi.try_entropy(),
+            dist.try_entropy(),
             Err(StatsError::Unsupported {
                 operation: "entropy",
                 ..
             })
         ));
         assert!(matches!(
-            chi.try_skewness(),
+            dist.try_skewness(),
             Err(StatsError::Unsupported {
                 operation: "skewness",
                 ..
             })
         ));
         assert!(matches!(
-            chi.try_kurtosis(),
+            dist.try_kurtosis(),
             Err(StatsError::Unsupported {
                 operation: "kurtosis",
                 ..
