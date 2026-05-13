@@ -13178,6 +13178,26 @@ impl ContinuousDistribution for TukeyLambda {
         0.0
     }
 
+    fn entropy(&self) -> f64 {
+        // h(TukeyLambda(λ)) = ∫_0^1 ln(q^{λ−1} + (1−q)^{λ−1}) dq.
+        // Derivation: pdf(ppf(q)) = 1/Q'(q) so −ln pdf = ln Q'(q);
+        // Q'(q) = q^{λ−1} + (1−q)^{λ−1}. λ = 0 collapses to the
+        // logistic h = 2.
+        let lam = self.lam;
+        if lam.abs() < 1e-15 {
+            return 2.0;
+        }
+        simpson_integrate_adaptive(
+            |q| (q.powf(lam - 1.0) + (1.0 - q).powf(lam - 1.0)).ln(),
+            1e-12,
+            1.0 - 1e-12,
+            2_048,
+            1e-11,
+            1e-11,
+            8,
+        )
+    }
+
     fn kurtosis(&self) -> f64 {
         // λ = 0 limit: logistic, ex.kurt = 6/5 = 1.2.
         let lam = self.lam;
@@ -28130,6 +28150,26 @@ mod tests {
                 expected,
                 1e-5,
                 &format!("JohnsonSB({a},{b}) entropy"),
+            );
+        }
+    }
+
+    #[test]
+    fn tukey_lambda_entropy_matches_scipy_reference_values() {
+        // h(TukeyLambda(λ)) = ∫_0^1 ln(q^{λ-1} + (1-q)^{λ-1}) dq;
+        // λ = 0 collapses to the logistic h = 2.
+        let cases = [
+            (-0.2_f64, 2.303_905_170_7),
+            (0.0, 2.0),
+            (0.5, 1.285_398_163_4),
+            (1.0, 0.693_147_180_6),
+        ];
+        for &(lam, expected) in &cases {
+            assert_close(
+                TukeyLambda::new(lam).entropy(),
+                expected,
+                1e-4,
+                &format!("TukeyLambda({lam}) entropy"),
             );
         }
     }
