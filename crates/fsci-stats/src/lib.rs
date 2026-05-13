@@ -10986,6 +10986,34 @@ impl ContinuousDistribution for FrechetR {
         let second = ln_gamma(1.0 + 2.0 / self.c).exp();
         second - first * first
     }
+
+    fn skewness(&self) -> f64 {
+        // FrechetR = -Y where Y ~ Weibull(c) (i.e. weibull_max). Raw
+        // moments of Y are g_k = Γ(1 + k/c), so the negation flips the
+        // sign of odd central moments and leaves even ones intact:
+        // skew(X) = -skew(Y).
+        let c = self.c;
+        let g1 = ln_gamma(1.0 + 1.0 / c).exp();
+        let g2 = ln_gamma(1.0 + 2.0 / c).exp();
+        let g3 = ln_gamma(1.0 + 3.0 / c).exp();
+        let var = g2 - g1 * g1;
+        let mu3_y = 2.0_f64.mul_add(g1.powi(3), g3 - 3.0 * g1 * g2);
+        -mu3_y / var.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        let c = self.c;
+        let g1 = ln_gamma(1.0 + 1.0 / c).exp();
+        let g2 = ln_gamma(1.0 + 2.0 / c).exp();
+        let g3 = ln_gamma(1.0 + 3.0 / c).exp();
+        let g4 = ln_gamma(1.0 + 4.0 / c).exp();
+        let var = g2 - g1 * g1;
+        let mu4 = (-3.0_f64).mul_add(
+            g1.powi(4),
+            6.0_f64.mul_add(g1 * g1 * g2, 4.0_f64.mul_add(-g1 * g3, g4)),
+        );
+        mu4 / (var * var) - 3.0
+    }
 }
 
 /// Kolmogorov-Smirnov "n large" limiting distribution.
@@ -36518,6 +36546,25 @@ mod tests {
             let dist = FrechetR::new(c);
             assert_close(dist.mean(), mean, 1e-12, "FrechetR mean");
             assert_close(dist.var(), var, 1e-12, "FrechetR variance");
+        }
+    }
+
+    #[test]
+    fn frechet_r_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.weibull_max(c).stats(moments='sk'). FrechetR = -Y
+        // with Y ~ Weibull(c), so skew flips sign and kurt is preserved.
+        // Coverage spans the sign-of-skew transition near c ≈ 3.6
+        // (where Weibull skew changes sign).
+        let cases = [
+            (1.5_f64, -1.071_986_572_890_958, 1.390_403_561_595_774),
+            (3.0, -0.168_102_842_229_385, -0.270_536_366_903_835),
+            (5.0, 0.254_109_603_706_686, -0.119_709_936_218_288),
+            (10.0, 0.637_637_133_903_015, 0.570_166_483_566_914),
+        ];
+        for &(c, sk, ku) in &cases {
+            let d = FrechetR::new(c);
+            assert_close(d.skewness(), sk, 1e-8, &format!("FrechetR({c}) skew"));
+            assert_close(d.kurtosis(), ku, 1e-7, &format!("FrechetR({c}) kurt"));
         }
     }
 
