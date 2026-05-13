@@ -9352,6 +9352,24 @@ impl ContinuousDistribution for Gilbrat {
         std::f64::consts::E * (std::f64::consts::E - 1.0) // e(e-1)
     }
 
+    fn skewness(&self) -> f64 {
+        // Gilbrat ≡ LogNormal(s=1) so ω = e^{s²} = e.
+        // skew = (ω + 2)·sqrt(ω − 1) with ω = e.
+        let e = std::f64::consts::E;
+        (e + 2.0) * (e - 1.0).sqrt()
+    }
+
+    fn kurtosis(&self) -> f64 {
+        // Excess kurtosis for LogNormal(s=1):
+        //   e^{4s²} + 2 e^{3s²} + 3 e^{2s²} − 6
+        // with s² = 1 this collapses to e⁴ + 2e³ + 3e² − 6.
+        let e = std::f64::consts::E;
+        let e2 = e * e;
+        let e3 = e2 * e;
+        let e4 = e2 * e2;
+        2.0_f64.mul_add(e3, 3.0_f64.mul_add(e2, e4)) - 6.0
+    }
+
     // fit() inherits the trait default. Resolves [frankenscipy-paejq].
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
@@ -28654,6 +28672,25 @@ mod tests {
                 &format!("Gilbrat.sf({x}) vs Lognormal(1, 1).sf({x})"),
             );
         }
+    }
+
+    #[test]
+    fn gilbrat_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.lognorm(s=1, scale=1).stats(moments='sk'); Gilbrat
+        // is the parameterless restriction so values are constants.
+        let g = Gilbrat;
+        assert_close(
+            g.skewness(),
+            6.184_877_138_632_554,
+            1e-12,
+            "Gilbrat skew",
+        );
+        assert_close(
+            g.kurtosis(),
+            110.936_392_176_311_5,
+            1e-10,
+            "Gilbrat kurt",
+        );
     }
 
     #[test]
