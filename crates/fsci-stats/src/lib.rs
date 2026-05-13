@@ -3153,6 +3153,13 @@ impl ContinuousDistribution for GumbelLeft {
         // Gumbel (= -1.139547...) [frankenscipy-y718j].
         -1.139_547_099_404_648_7
     }
+
+    fn kurtosis(&self) -> f64 {
+        // Excess kurtosis = 12/5 (constant, identical to right
+        // Gumbel — the family has the same fourth central moment).
+        // (frankenscipy-25tcp)
+        12.0 / 5.0
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -25480,6 +25487,20 @@ mod tests {
             1e-12,
             "GumbelLeft variance",
         );
+    }
+
+    /// GumbelLeft kurtosis is the constant 12/5, same as right Gumbel
+    /// — frankenscipy-25tcp.
+    #[test]
+    fn gumbel_left_kurtosis_is_constant_12_over_5() {
+        for (loc, scale) in [(0.0_f64, 1.0_f64), (3.7, 0.5), (-2.0, 4.0)] {
+            let dist = GumbelLeft::new(loc, scale);
+            assert!(
+                (dist.kurtosis() - 12.0 / 5.0).abs() < 1e-15,
+                "GumbelLeft kurtosis: got {}",
+                dist.kurtosis()
+            );
+        }
     }
 
     #[test]
