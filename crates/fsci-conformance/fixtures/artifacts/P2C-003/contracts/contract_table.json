@@ -609,6 +609,90 @@
       },
       "strict_mode_behavior": "Reject NaN/Inf x0 and objective values.",
       "hardened_mode_behavior": "Reject NaN/Inf with explicit hardened reason."
+    },
+    {
+      "function_name": "fsci_opt::newton_cg:hessp",
+      "scipy_equivalent": "scipy.optimize.minimize(method='Newton-CG', hessp=<callable>)",
+      "inputs": [
+        {
+          "name": "fun",
+          "type_desc": "Fn(&[f64]) -> f64",
+          "required": true,
+          "constraints": "Objective. Must be twice differentiable; returns finite f64."
+        },
+        {
+          "name": "x0",
+          "type_desc": "&[f64]",
+          "required": true,
+          "constraints": "Non-empty, all finite."
+        },
+        {
+          "name": "hessp",
+          "type_desc": "Fn(&[f64], &[f64]) -> Vec<f64>",
+          "required": true,
+          "constraints": "Hessian-vector product callable. The `:hessp` variant uses this in lieu of materializing the full Hessian; output length must equal x0.len()."
+        },
+        {
+          "name": "options",
+          "type_desc": "MinimizeOptions",
+          "required": false,
+          "constraints": "tol, maxiter, maxfev optional; gradient_eps controls finite-diff Jacobian."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "x",
+          "type_desc": "Vec<f64>",
+          "semantics": "Minimizer estimate."
+        },
+        {
+          "name": "fun",
+          "type_desc": "Option<f64>",
+          "semantics": "Objective at minimizer."
+        },
+        {
+          "name": "success",
+          "type_desc": "bool",
+          "semantics": "Convergence flag."
+        },
+        {
+          "name": "nit",
+          "type_desc": "usize",
+          "semantics": "Outer iteration count."
+        },
+        {
+          "name": "nfev",
+          "type_desc": "usize",
+          "semantics": "Function evaluations."
+        }
+      ],
+      "error_conditions": [
+        {
+          "condition": "x0 contains NaN/Inf",
+          "error_type": "NonFiniteInput",
+          "message_pattern": "x0 must not contain NaN or Inf",
+          "scipy_behavior": "ValueError"
+        },
+        {
+          "condition": "hessp output length mismatches x0",
+          "error_type": "InvalidShape",
+          "message_pattern": "hessp must return a vector of length x0.len()",
+          "scipy_behavior": "ValueError"
+        },
+        {
+          "condition": "objective or hessp returns NaN/Inf",
+          "error_type": "NonFiniteInput",
+          "message_pattern": "non-finite value encountered",
+          "scipy_behavior": "ValueError"
+        }
+      ],
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-08,
+        "default_rtol": 1e-08
+      },
+      "strict_mode_behavior": "Reject NaN/Inf x0, objective, or hessp outputs.",
+      "hardened_mode_behavior": "Reject NaN/Inf with explicit hardened reason."
     }
   ]
 }
