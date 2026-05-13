@@ -1746,6 +1746,36 @@ impl ContinuousDistribution for FDistribution {
         }
     }
 
+    fn skewness(&self) -> f64 {
+        // ((2·d1 + d2 − 2) · √(8(d2 − 4))) / ((d2 − 6) · √(d1 · (d1 + d2 − 2)))
+        // for d2 > 6, NaN otherwise. (frankenscipy-zhiof)
+        let d1 = self.dfn;
+        let d2 = self.dfd;
+        if d2 > 6.0 {
+            (2.0 * d1 + d2 - 2.0) * (8.0 * (d2 - 4.0)).sqrt()
+                / ((d2 - 6.0) * (d1 * (d1 + d2 - 2.0)).sqrt())
+        } else {
+            f64::NAN
+        }
+    }
+
+    fn kurtosis(&self) -> f64 {
+        // Excess kurtosis for d2 > 8 (frankenscipy-zhiof):
+        //   12·(d1·(5d2 − 22)·(d1 + d2 − 2) + (d2 − 4)·(d2 − 2)²)
+        //   / (d1·(d2 − 6)·(d2 − 8)·(d1 + d2 − 2))
+        let d1 = self.dfn;
+        let d2 = self.dfd;
+        if d2 > 8.0 {
+            let num = 12.0
+                * (d1 * (5.0 * d2 - 22.0) * (d1 + d2 - 2.0)
+                    + (d2 - 4.0) * (d2 - 2.0).powi(2));
+            let den = d1 * (d2 - 6.0) * (d2 - 8.0) * (d1 + d2 - 2.0);
+            num / den
+        } else {
+            f64::NAN
+        }
+    }
+
     fn fit(data: &[f64]) -> Self {
         if data.is_empty() || data.iter().any(|&x| !x.is_finite() || x < 0.0) {
             return Self {
@@ -5656,6 +5686,25 @@ impl ContinuousDistribution for InverseGamma {
             1.0 / ((self.a - 1.0).powi(2) * (self.a - 2.0))
         } else {
             f64::INFINITY
+        }
+    }
+
+    fn skewness(&self) -> f64 {
+        // 4·√(a − 2) / (a − 3) for a > 3 (frankenscipy-d4j8j).
+        if self.a > 3.0 {
+            4.0 * (self.a - 2.0).sqrt() / (self.a - 3.0)
+        } else {
+            f64::NAN
+        }
+    }
+
+    fn kurtosis(&self) -> f64 {
+        // Excess kurtosis: 6(5a − 11) / ((a − 3)(a − 4))  for a > 4.
+        // (frankenscipy-d4j8j)
+        if self.a > 4.0 {
+            6.0 * (5.0 * self.a - 11.0) / ((self.a - 3.0) * (self.a - 4.0))
+        } else {
+            f64::NAN
         }
     }
 
@@ -25103,6 +25152,67 @@ mod tests {
         let f = FDistribution::new(5.0, 10.0);
         // mean = dfd/(dfd-2) = 10/8 = 1.25
         assert_close(f.mean(), 1.25, 1e-10, "F(5,10) mean");
+    }
+
+    /// F-distribution skew/kurt closed forms — frankenscipy-zhiof.
+    #[test]
+    fn f_dist_skew_kurt_match_scipy() {
+        // scipy.stats.f.stats anchors at (dfn, dfd):
+        //   (5, 10): skew 3.8670, kurt 50.8615
+        //   (10, 20): skew 1.8352, kurt 6.8939
+        let cases: [(f64, f64, f64, f64); 2] = [
+            (5.0, 10.0, 3.867020319812938, 50.86153846153847),
+            (10.0, 20.0, 1.8351920959819217, 6.893877551020408),
+        ];
+        for (d1, d2, ws, wk) in cases {
+            let f = FDistribution::new(d1, d2);
+            assert!(
+                (f.skewness() - ws).abs() < 1e-10,
+                "F({d1},{d2}).skew = {}, scipy {ws}",
+                f.skewness()
+            );
+            assert!(
+                (f.kurtosis() - wk).abs() < 1e-10,
+                "F({d1},{d2}).kurt = {}, scipy {wk}",
+                f.kurtosis()
+            );
+        }
+        // Below thresholds: NaN.
+        let f1 = FDistribution::new(3.0, 6.0); // dfd = 6, need >6 for skew
+        assert!(f1.skewness().is_nan());
+        let f2 = FDistribution::new(3.0, 7.0); // dfd = 7, need >8 for kurt
+        assert!(!f2.skewness().is_nan());
+        assert!(f2.kurtosis().is_nan());
+    }
+
+    /// InverseGamma skew/kurt closed forms — frankenscipy-d4j8j.
+    #[test]
+    fn invgamma_skew_kurt_match_scipy() {
+        // skew = 4√(a−2)/(a−3), kurt = 6(5a−11)/((a−3)(a−4))
+        let cases: [(f64, f64, f64); 3] = [
+            (4.0, 5.656854249492381, f64::NAN),
+            (5.0, 3.4641016151377544, 42.0),
+            (10.0, 1.6162440712835373, 5.5714285714285721),
+        ];
+        for (a, ws, wk) in cases {
+            let g = InverseGamma::new(a);
+            assert!(
+                (g.skewness() - ws).abs() < 1e-10,
+                "InverseGamma({a}).skew = {}, scipy {ws}",
+                g.skewness()
+            );
+            if wk.is_nan() {
+                assert!(g.kurtosis().is_nan(), "InverseGamma({a}).kurt should be NaN");
+            } else {
+                assert!(
+                    (g.kurtosis() - wk).abs() < 1e-9,
+                    "InverseGamma({a}).kurt = {}, scipy {wk}",
+                    g.kurtosis()
+                );
+            }
+        }
+        // a≤3 → skew NaN.
+        assert!(InverseGamma::new(2.5).skewness().is_nan());
     }
 
     #[test]
