@@ -11232,6 +11232,16 @@ impl ContinuousDistribution for Gompertz {
         (m2 - mean * mean).max(0.0)
     }
 
+    fn entropy(&self) -> f64 {
+        // PDF: c · exp(x − c·(e^x − 1)), so −ln pdf = −ln c − x + c(e^x − 1).
+        // Taking expectations under X ~ Gompertz(c) via the substitution
+        // U = c(e^X − 1) ~ Exp(1):
+        //   E[e^X] = 1 + 1/c   ⇒   c·(E[e^X] − 1) = 1.
+        // So h(Gompertz(c)) = −ln c − E[X] + 1. The mean already uses
+        // the exponential-integral closed form.
+        -self.c.ln() - self.mean() + 1.0
+    }
+
     fn skewness(&self) -> f64 {
         let [m1, m2, m3, _m4] = self.raw_moments_via_u_substitution();
         let var = m2 - m1 * m1;
@@ -38501,6 +38511,21 @@ mod tests {
             let d = Gompertz::new(c);
             assert_close(d.skewness(), sk, 1e-6, &format!("Gompertz({c}) skew"));
             assert_close(d.kurtosis(), ku, 1e-6, &format!("Gompertz({c}) kurt"));
+        }
+    }
+
+    #[test]
+    fn gompertz_entropy_matches_scipy_reference_values() {
+        // h(Gompertz(c)) = −ln c − E[X] + 1. The mean uses the
+        // exponential-integral closed form (Ei).
+        let cases = [
+            (0.5_f64, 0.770_236_548_1),
+            (1.5, 0.146_278_222_6),
+            (3.0, -0.360_696_028_9),
+        ];
+        for &(c, h) in &cases {
+            let d = Gompertz::new(c);
+            assert_close(d.entropy(), h, 1e-8, &format!("Gompertz({c}) entropy"));
         }
     }
 
