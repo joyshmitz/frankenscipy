@@ -8949,6 +8949,13 @@ impl ContinuousDistribution for DoubleWeibull {
         0.0
     }
 
+    fn entropy(&self) -> f64 {
+        // DoubleWeibull is the symmetric reflection of Weibull(c):
+        //   h(DoubleWeibull(c)) = h(Weibull(c)) + ln 2
+        //                       = γ·(1 − 1/c) − ln(c) + 1 + ln 2.
+        EULER_MASCHERONI * (1.0 - 1.0 / self.c) - self.c.ln() + 1.0 + 2.0_f64.ln()
+    }
+
     fn kurtosis(&self) -> f64 {
         // X = ±Y, Y ~ Weibull(c). Even moments: m_2 = Γ(1+2/c),
         // m_4 = Γ(1+4/c); odd moments vanish. Excess kurt = m_4/m_2² − 3.
@@ -9028,6 +9035,14 @@ impl ContinuousDistribution for DoubleGamma {
     fn skewness(&self) -> f64 {
         // X = ±Y, Y ~ Gamma(a, 1). Symmetric about 0 ⇒ skew = 0.
         0.0
+    }
+
+    fn entropy(&self) -> f64 {
+        // DoubleGamma is the symmetric reflection of Gamma(a, 1):
+        //   h(DoubleGamma(a)) = h(Gamma(a, 1)) + ln 2
+        //                     = a + ln Γ(a) + (1 − a) ψ(a) + ln 2.
+        self.a + ln_gamma(self.a) + (1.0 - self.a) * fsci_special::digamma_scalar(self.a)
+            + 2.0_f64.ln()
     }
 
     fn kurtosis(&self) -> f64 {
@@ -10041,6 +10056,12 @@ impl ContinuousDistribution for Gilbrat {
         let e3 = e2 * e;
         let e4 = e2 * e2;
         2.0_f64.mul_add(e3, 3.0_f64.mul_add(e2, e4)) - 6.0
+    }
+
+    fn entropy(&self) -> f64 {
+        // Gilbrat ≡ LogNormal(s=1, scale=1).  Closed form
+        // h = 0.5 + 0.5·ln(2π·s²) + ln(scale) reduces to 0.5 + 0.5·ln(2π).
+        0.5 + 0.5 * (2.0 * PI).ln()
     }
 
     // fit() inherits the trait default. Resolves [frankenscipy-paejq].
@@ -12202,6 +12223,22 @@ impl ContinuousDistribution for RDist {
         -6.0 / (self.c + 3.0)
     }
 
+    fn entropy(&self) -> f64 {
+        // (X + 1)/2 ~ Beta(c/2, c/2). Mapping [0, 1] → [−1, 1] adds
+        // a ln 2 Jacobian to the entropy. Specializing the standard
+        // h(Beta(a, b)) = ln B(a, b) − (a−1)ψ(a) − (b−1)ψ(b)
+        //               + (a+b−2)ψ(a+b)
+        // to a = b = c/2 collapses the two ψ(c/2) terms:
+        //   h(Beta(c/2, c/2)) = ln B(c/2, c/2)
+        //                     − (c − 2) ψ(c/2)
+        //                     + (c − 2) ψ(c).
+        let a = self.c / 2.0;
+        let log_beta = 2.0 * ln_gamma(a) - ln_gamma(2.0 * a);
+        log_beta + (self.c - 2.0) * fsci_special::digamma_scalar(self.c)
+            - (self.c - 2.0) * fsci_special::digamma_scalar(a)
+            + 2.0_f64.ln()
+    }
+
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         validate_finite_fit_data(data, 2, "RDist")?;
         for &x in data {
@@ -13152,6 +13189,12 @@ impl ContinuousDistribution for GenNorm {
         ln_gamma(3.0 / b).exp() / ln_gamma(1.0 / b).exp()
     }
 
+    fn entropy(&self) -> f64 {
+        // h(GenNorm(β)) = 1/β − ln(β / (2·Γ(1/β))).
+        let b = self.beta;
+        1.0 / b - (b / (2.0 * ln_gamma(1.0 / b).exp())).ln()
+    }
+
     fn skewness(&self) -> f64 {
         // Symmetric about 0 ⇒ all odd central moments vanish.
         0.0
@@ -13292,6 +13335,14 @@ impl ContinuousDistribution for HalfGenNorm {
         let b = self.beta;
         let mean = self.mean();
         ln_gamma(3.0 / b).exp() / ln_gamma(1.0 / b).exp() - mean * mean
+    }
+
+    fn entropy(&self) -> f64 {
+        // h(HalfGenNorm(β)) = 1/β − ln(β / Γ(1/β)). One factor of
+        // ln 2 less than the symmetric GenNorm — folding halves the
+        // support.
+        let b = self.beta;
+        1.0 / b - (b / ln_gamma(1.0 / b).exp()).ln()
     }
 
     fn skewness(&self) -> f64 {
@@ -27722,6 +27773,86 @@ mod tests {
         // Below threshold b=4.
         assert!(Pareto::new(3.5, 1.0).kurtosis().is_nan());
         assert!(Pareto::new(4.0, 1.0).kurtosis().is_nan());
+    }
+
+    #[test]
+    fn rdist_entropy_matches_scipy_reference_values() {
+        // h(RDist(c)) = h(Beta(c/2, c/2)) + ln 2 (Jacobian for the
+        // [0, 1] → [−1, 1] linear map).
+        for &(c, expected) in &[
+            (3.0_f64, 0.644_729_885_8),
+            (5.0, 0.493_342_174_5),
+            (8.0, 0.308_647_615_1),
+        ] {
+            assert_close(
+                RDist::new(c).entropy(),
+                expected,
+                1e-9,
+                &format!("RDist({c}) entropy"),
+            );
+        }
+    }
+
+    #[test]
+    fn gilbrat_dweibull_dgamma_gennorm_entropy_match_scipy() {
+        // Gilbrat ≡ LogNormal(s=1): h = 0.5 + 0.5·ln(2π) ≈ 1.4189.
+        assert_close(
+            Gilbrat.entropy(),
+            0.5 + 0.5 * (2.0 * PI).ln(),
+            1e-12,
+            "Gilbrat entropy",
+        );
+        // DoubleWeibull(c) = Weibull(c) entropy + ln 2.
+        for &(c, expected) in &[
+            (1.5_f64, 1.480_087_294_1),
+            (2.0, 1.288_607_832_5),
+            (5.0, 0.545_481_800_0),
+        ] {
+            assert_close(
+                DoubleWeibull::new(c).entropy(),
+                expected,
+                1e-9,
+                &format!("DoubleWeibull({c}) entropy"),
+            );
+        }
+        // DoubleGamma(a) = Gamma(a, 1) entropy + ln 2.
+        for &(a, expected) in &[
+            (2.0_f64, 2.270_362_845_5),
+            (3.0, 2.540_725_690_9),
+        ] {
+            assert_close(
+                DoubleGamma::new(a).entropy(),
+                expected,
+                1e-8,
+                &format!("DoubleGamma({a}) entropy"),
+            );
+        }
+        // GenNorm(β): h = 1/β − ln(β / (2 Γ(1/β))).
+        for &(b, expected) in &[
+            (1.0_f64, 1.693_147_180_6),
+            (2.0, 1.072_364_942_9),
+            (4.0, 0.844_875_344_1),
+        ] {
+            assert_close(
+                GenNorm::new(b).entropy(),
+                expected,
+                1e-9,
+                &format!("GenNorm({b}) entropy"),
+            );
+        }
+        // HalfGenNorm(β): one ln 2 less than symmetric GenNorm.
+        for &(b, expected) in &[
+            (1.0_f64, 1.0),
+            (2.0, 0.379_217_762_4),
+            (4.0, 0.151_728_163_6),
+        ] {
+            assert_close(
+                HalfGenNorm::new(b).entropy(),
+                expected,
+                1e-9,
+                &format!("HalfGenNorm({b}) entropy"),
+            );
+        }
     }
 
     #[test]
