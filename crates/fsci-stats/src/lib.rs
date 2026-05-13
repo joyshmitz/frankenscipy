@@ -6243,6 +6243,21 @@ impl ContinuousDistribution for Pearson3 {
         1.5 * self.skew * self.skew
     }
 
+    fn entropy(&self) -> f64 {
+        // Pearson3(skew) = sign(skew) · Gamma(α = 4/skew², scale = |skew|/2)
+        // shifted by −2·sign(skew)/|skew|. Shifts and reflections preserve
+        // differential entropy, so h(Pearson3) equals h(Gamma(α, scale)):
+        //   h = α + ln Γ(α) + (1 − α) ψ(α) + ln(scale).
+        if self.skew.abs() < 1.6e-5 {
+            // Normal limit: h(N(0, 1)) = (1/2) ln(2πe).
+            return 0.5 * (2.0 * PI * std::f64::consts::E).ln();
+        }
+        let alpha = 4.0 / (self.skew * self.skew);
+        let scale = self.skew.abs() / 2.0;
+        alpha + ln_gamma(alpha) + (1.0 - alpha) * fsci_special::digamma_scalar(alpha)
+            + scale.ln()
+    }
+
     fn fit(data: &[f64]) -> Self {
         Self::try_fit(data).unwrap_or_else(|e| {
             panic!("Pearson3::fit failed: {e}");
@@ -11535,6 +11550,18 @@ impl ContinuousDistribution for GenLogistic {
         PI * PI / 6.0 + fsci_special::trigamma(self.c)
     }
 
+    fn entropy(&self) -> f64 {
+        // PDF = c·exp(−x)/(1+exp(−x))^{c+1}. Then
+        //   −ln pdf = −ln c + x + (c+1) ln(1 + exp(−x)).
+        // Mean E[X] = ψ(c) + γ; the substitution U = (1+e^{−X})^{−c}
+        // gives U ~ Uniform(0,1) and ln(1+e^{−X}) = −ln U / c, so
+        //   E[ln(1 + exp(−X))] = 1/c.
+        // Therefore h = −ln c + ψ(c) + γ + 1 + 1/c.
+        -self.c.ln() + fsci_special::digamma_scalar(self.c) + EULER_MASCHERONI
+            + 1.0
+            + 1.0 / self.c
+    }
+
     fn skewness(&self) -> f64 {
         // GenLogistic cumulants in terms of polygamma at c and at 1:
         //   κ_2 = ψ'(c) + ψ'(1) = trigamma(c) + π²/6
@@ -13579,6 +13606,13 @@ impl ContinuousDistribution for LogGamma {
 
     fn var(&self) -> f64 {
         fsci_special::trigamma(self.c)
+    }
+
+    fn entropy(&self) -> f64 {
+        // X = log Y, Y ~ Gamma(c); pdf(x) = e^{cx − e^x}/Γ(c).
+        // −ln pdf = ln Γ(c) − c·x + e^x. E[X] = ψ(c), E[e^X] = c, so
+        //   h = ln Γ(c) − c·ψ(c) + c.
+        ln_gamma(self.c) - self.c * fsci_special::digamma_scalar(self.c) + self.c
     }
 
     fn skewness(&self) -> f64 {
@@ -27872,6 +27906,57 @@ mod tests {
         // Below threshold b=4.
         assert!(Pareto::new(3.5, 1.0).kurtosis().is_nan());
         assert!(Pareto::new(4.0, 1.0).kurtosis().is_nan());
+    }
+
+    #[test]
+    fn pearson3_entropy_matches_scipy_reference_values() {
+        // h(Pearson3(skew)) reduces to h(Gamma(4/skew², |skew|/2)) via
+        // a shift+reflection that preserves differential entropy.
+        for &(skew, expected) in &[
+            (0.5_f64, 1.397_777_097_8),
+            (1.0, 1.330_259_283_3),
+            (2.0, 1.0),
+            (-1.0, 1.330_259_283_3),
+        ] {
+            assert_close(
+                Pearson3::new(skew).entropy(),
+                expected,
+                1e-8,
+                &format!("Pearson3({skew}) entropy"),
+            );
+        }
+    }
+
+    #[test]
+    fn genlogistic_loggamma_entropy_match_scipy() {
+        // GenLogistic: -ln c + ψ(c) + γ + 1 + 1/c.  c=1 collapses to
+        //   logistic h = 2.
+        for &(c, expected) in &[
+            (0.5_f64, 2.306_852_819_4),
+            (1.0, 2.0),
+            (2.5, 1.764_081_573_7),
+            (5.0, 1.673_895_420_9),
+        ] {
+            assert_close(
+                GenLogistic::new(c).entropy(),
+                expected,
+                1e-7,
+                &format!("GenLogistic({c}) entropy"),
+            );
+        }
+        // LogGamma: ln Γ(c) − c·ψ(c) + c.
+        for &(c, expected) in &[
+            (1.0_f64, 1.577_215_664_9),
+            (2.5, 1.026_791_268_9),
+            (5.0, 0.647_465_488_2),
+        ] {
+            assert_close(
+                LogGamma::new(c).entropy(),
+                expected,
+                1e-7,
+                &format!("LogGamma({c}) entropy"),
+            );
+        }
     }
 
     #[test]
