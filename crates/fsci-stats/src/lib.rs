@@ -27166,6 +27166,23 @@ mod tests {
     // ── Gamma distribution ──────────────────────────────────────────
 
     #[test]
+    fn gamma_entropy_matches_scipy_reference_values() {
+        // scipy.stats.gamma(shape, scale).entropy().
+        // h = shape + ln Γ(shape) + (1 − shape) ψ(shape) + ln(scale).
+        let cases = [
+            (0.5_f64, 1.0_f64, 0.090_609_929_9),
+            (2.0, 1.0, 1.577_215_664_9),
+            (5.0, 1.0, 2.153_583_156_6),
+            (2.0, 5.0, 3.186_653_577_3),
+            (5.0, 0.5, 1.460_435_976_1),
+        ];
+        for &(a, scale, h) in &cases {
+            let d = GammaDist::new(a, scale);
+            assert_close(d.entropy(), h, 1e-8, &format!("Gamma({a},{scale}) entropy"));
+        }
+    }
+
+    #[test]
     fn gamma_dist_exponential_special_case() {
         // Gamma(1, scale) = Exponential(1/scale)
         let g = GammaDist::new(1.0, 2.0);
