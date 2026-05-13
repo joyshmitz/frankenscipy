@@ -12623,6 +12623,17 @@ impl ContinuousDistribution for TruncPareto {
         );
         mu4 / (var * var) - 3.0
     }
+
+    fn entropy(&self) -> f64 {
+        // PDF = b·x^{−b−1}/(1 − c^{−b}) on [1, c].
+        // −ln pdf = −ln b + (b+1) ln x + ln(1 − c^{−b}).
+        // Integration by parts: E[ln X] = (1 − c^{−b}·(b·ln c + 1))
+        //                                / (b · (1 − c^{−b})).
+        let cb = self.c.powf(-self.b);
+        let denom = 1.0 - cb;
+        let e_ln_x = (1.0 - cb * self.b.mul_add(self.c.ln(), 1.0)) / (self.b * denom);
+        -self.b.ln() + (self.b + 1.0) * e_ln_x + denom.ln()
+    }
 }
 
 /// Truncated exponential distribution on [0, b].
@@ -12685,6 +12696,13 @@ impl ContinuousDistribution for TruncExpon {
         let eb = (-self.b).exp();
         let e2 = (2.0 - (2.0 + 2.0 * self.b + self.b * self.b) * eb) / (1.0 - eb);
         e2 - m * m
+    }
+
+    fn entropy(&self) -> f64 {
+        // PDF = e^{−x}/(1 − e^{−b}); −ln pdf = ln(1 − e^{−b}) + x.
+        //   h = ln(1 − e^{−b}) + E[X].
+        let one_minus_e_b = -(-self.b).exp_m1();
+        one_minus_e_b.ln() + self.mean()
     }
 
     fn skewness(&self) -> f64 {
@@ -24860,6 +24878,19 @@ impl ContinuousDistribution for BetaPrime {
         }
     }
 
+    fn entropy(&self) -> f64 {
+        // PDF = x^{a−1}·(1+x)^{−(a+b)} / B(a, b).
+        // X/(1+X) ~ Beta(a, b) so E[ln X] = ψ(a) − ψ(b) and
+        // E[ln(1+X)] = ψ(a+b) − ψ(b). Therefore
+        //   h = ln B(a, b) − (a−1)·(ψ(a) − ψ(b)) + (a+b)·(ψ(a+b) − ψ(b)).
+        let (a, b) = (self.a, self.b);
+        let log_beta = ln_gamma(a) + ln_gamma(b) - ln_gamma(a + b);
+        let psi_a = fsci_special::digamma_scalar(a);
+        let psi_b = fsci_special::digamma_scalar(b);
+        let psi_ab = fsci_special::digamma_scalar(a + b);
+        log_beta - (a - 1.0) * (psi_a - psi_b) + (a + b) * (psi_ab - psi_b)
+    }
+
     fn skewness(&self) -> f64 {
         // Raw moments m_k = Γ(a+k)·Γ(b−k)/(Γ(a)·Γ(b))
         //                = a(a+1)…(a+k−1) / ((b−1)(b−2)…(b−k))
@@ -27906,6 +27937,48 @@ mod tests {
         // Below threshold b=4.
         assert!(Pareto::new(3.5, 1.0).kurtosis().is_nan());
         assert!(Pareto::new(4.0, 1.0).kurtosis().is_nan());
+    }
+
+    #[test]
+    fn betaprime_truncexpon_truncpareto_entropy_match_scipy() {
+        // BetaPrime(a, b): ln B(a, b) − (a−1)·(ψ(a) − ψ(b)) + (a+b)·(ψ(a+b) − ψ(b)).
+        for &(a, b, expected) in &[
+            (2.0_f64, 5.0_f64, 0.248_802_618_3),
+            (3.0, 6.0, 0.353_416_973_0),
+        ] {
+            assert_close(
+                BetaPrime::new(a, b).entropy(),
+                expected,
+                1e-8,
+                &format!("BetaPrime({a},{b}) entropy"),
+            );
+        }
+        // TruncExpon(b): ln(1 − e^{−b}) + mean.
+        for &(b, expected) in &[
+            (1.0_f64, -0.040_651_852_3),
+            (3.0, 0.791_743_729_6),
+            (5.0, 0.959_320_976_0),
+        ] {
+            assert_close(
+                TruncExpon::new(b).entropy(),
+                expected,
+                1e-9,
+                &format!("TruncExpon({b}) entropy"),
+            );
+        }
+        // TruncPareto(b, c): -ln(b) + (b+1)·E[ln X] + ln(1 − c^{−b}).
+        for &(b, c, expected) in &[
+            (3.0_f64, 5.0_f64, 0.174_771_521_0),
+            (2.5, 10.0, 0.454_976_186_9),
+            (1.5, 4.0, 0.632_565_037_0),
+        ] {
+            assert_close(
+                TruncPareto::new(b, c).entropy(),
+                expected,
+                1e-9,
+                &format!("TruncPareto({b},{c}) entropy"),
+            );
+        }
     }
 
     #[test]
