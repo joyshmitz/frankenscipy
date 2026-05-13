@@ -10657,6 +10657,33 @@ impl ContinuousDistribution for Burr3 {
         );
         mu4 / (var * var) - 3.0
     }
+
+    fn entropy(&self) -> f64 {
+        // Compactify via u = arctan(x) ∈ (0, π/2): the 1/x^{cd+1}
+        // tail decays slowly, so direct integration over a finite
+        // range under-counts. Same trick as FoldedCauchy.
+        simpson_integrate_adaptive(
+            |u| {
+                let x = u.tan();
+                if !x.is_finite() {
+                    return 0.0;
+                }
+                let p = self.pdf(x);
+                if p > 0.0 {
+                    let sec2 = 1.0 / u.cos().powi(2);
+                    -p * p.ln() * sec2
+                } else {
+                    0.0
+                }
+            },
+            1e-12,
+            PI / 2.0 - 1e-12,
+            4_096,
+            1e-9,
+            1e-9,
+            10,
+        )
+    }
 }
 
 /// Burr (Type XII) distribution.
@@ -10784,6 +10811,31 @@ impl ContinuousDistribution for Burr12 {
             6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
         );
         mu4 / (var * var) - 3.0
+    }
+
+    fn entropy(&self) -> f64 {
+        // Burr12 has 1/x^{cd+1} tail; compactify via u = arctan(x).
+        simpson_integrate_adaptive(
+            |u| {
+                let x = u.tan();
+                if !x.is_finite() {
+                    return 0.0;
+                }
+                let p = self.pdf(x);
+                if p > 0.0 {
+                    let sec2 = 1.0 / u.cos().powi(2);
+                    -p * p.ln() * sec2
+                } else {
+                    0.0
+                }
+            },
+            1e-12,
+            PI / 2.0 - 1e-12,
+            4_096,
+            1e-9,
+            1e-9,
+            10,
+        )
     }
 }
 
@@ -11235,6 +11287,31 @@ impl ContinuousDistribution for Mielke {
             6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
         );
         mu4 / (var * var) - 3.0
+    }
+
+    fn entropy(&self) -> f64 {
+        // Mielke has 1/x^{s+1} tail; compactify via arctan.
+        simpson_integrate_adaptive(
+            |u| {
+                let x = u.tan();
+                if !x.is_finite() {
+                    return 0.0;
+                }
+                let p = self.pdf(x);
+                if p > 0.0 {
+                    let sec2 = 1.0 / u.cos().powi(2);
+                    -p * p.ln() * sec2
+                } else {
+                    0.0
+                }
+            },
+            1e-12,
+            PI / 2.0 - 1e-12,
+            4_096,
+            1e-9,
+            1e-9,
+            10,
+        )
     }
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
@@ -12230,6 +12307,27 @@ impl ContinuousDistribution for RecipInvGauss {
             6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
         );
         mu4 / (var * var) - 3.0
+    }
+
+    fn entropy(&self) -> f64 {
+        // Pdf has exp(−(1 − μ·x)²/(2 x μ²)) factor; decays fast enough
+        // that a wide x window suffices.
+        let upper = (40.0_f64).max(40.0 * self.mu);
+        simpson_integrate_adaptive(
+            |x| {
+                if x <= 0.0 {
+                    return 0.0;
+                }
+                let p = self.pdf(x);
+                if p > 0.0 { -p * p.ln() } else { 0.0 }
+            },
+            1e-12,
+            upper,
+            4_096,
+            1e-12,
+            1e-12,
+            10,
+        )
     }
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
@@ -13942,6 +14040,34 @@ impl ContinuousDistribution for Alpha {
 
     fn kurtosis(&self) -> f64 {
         f64::NAN
+    }
+
+    fn entropy(&self) -> f64 {
+        // Alpha pdf ~ 1/x² as x → ∞ but has finite entropy. Use
+        // arctan compactification — direct truncation undershoots
+        // because the 1/x² tail extends extremely far before becoming
+        // negligible vs the −ln pdf weighting.
+        simpson_integrate_adaptive(
+            |u| {
+                let x = u.tan();
+                if !x.is_finite() || x <= 0.0 {
+                    return 0.0;
+                }
+                let p = self.pdf(x);
+                if p > 0.0 {
+                    let sec2 = 1.0 / u.cos().powi(2);
+                    -p * p.ln() * sec2
+                } else {
+                    0.0
+                }
+            },
+            1e-12,
+            PI / 2.0 - 1e-12,
+            4_096,
+            1e-9,
+            1e-9,
+            10,
+        )
     }
 }
 
@@ -28244,6 +28370,77 @@ mod tests {
                 expected,
                 1e-5,
                 &format!("JohnsonSB({a},{b}) entropy"),
+            );
+        }
+    }
+
+    #[test]
+    fn burr_mielke_recipinvgauss_alpha_entropy_match_scipy() {
+        // Burr12(c, d)
+        for &(c, d, expected) in &[
+            (3.0_f64, 2.0_f64, 0.374_907_197_4),
+            (5.0, 2.5, -0.101_430_799_9),
+            (2.0, 5.0, -0.060_918_426_3),
+        ] {
+            assert_close(
+                Burr12::new(c, d).entropy(),
+                expected,
+                1e-4,
+                &format!("Burr12({c},{d}) entropy"),
+            );
+        }
+        // Burr3(c, d)
+        for &(c, d, expected) in &[
+            (5.0_f64, 2.0_f64, 0.397_414_907_0),
+            (7.5, 3.0, -0.080_181_975_9),
+            (10.0, 1.5, -0.366_307_331_7),
+        ] {
+            assert_close(
+                Burr3::new(c, d).entropy(),
+                expected,
+                1e-4,
+                &format!("Burr3({c},{d}) entropy"),
+            );
+        }
+        // Mielke(k, s)
+        for &(k, s, expected) in &[
+            (5.0_f64, 4.5_f64, 0.497_450_561_5),
+            (3.0, 6.0, 0.284_044_290_0),
+            (2.5, 8.0, 0.158_583_117_9),
+        ] {
+            assert_close(
+                Mielke::new(k, s).entropy(),
+                expected,
+                1e-4,
+                &format!("Mielke({k},{s}) entropy"),
+            );
+        }
+        // RecipInvGauss(mu)
+        for &(mu, expected) in &[
+            (0.5_f64, 1.868_684_948_4),
+            (1.0, 1.599_602_841_6),
+            (2.0, 1.370_538_624_1),
+            (5.0, 1.138_133_581_2),
+        ] {
+            assert_close(
+                RecipInvGauss::new(mu).entropy(),
+                expected,
+                1e-4,
+                &format!("RecipInvGauss({mu}) entropy"),
+            );
+        }
+        // Alpha(a)
+        for &(a, expected) in &[
+            (0.5_f64, 1.612_840_686_8),
+            (1.0, 1.172_811_340_4),
+            (2.0, 0.205_538_519_9),
+            (5.0, -1.757_122_101_0),
+        ] {
+            assert_close(
+                Alpha::new(a).entropy(),
+                expected,
+                1e-4,
+                &format!("Alpha({a}) entropy"),
             );
         }
     }
