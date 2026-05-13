@@ -5822,6 +5822,23 @@ impl ContinuousDistribution for Trapezoid {
         self.scale * self.scale * (ex2 - ex * ex)
     }
 
+    fn entropy(&self) -> f64 {
+        // Standardized form on z ∈ [0, 1] with plateau height
+        // h = 2/(1 + d − c). Split E[−ln pdf] over rise [0, c], flat
+        // [c, d], fall [d, 1]:
+        //   rise contrib: h·c·(1 − 2·ln h)/4
+        //   fall contrib: h·(1 − d)·(1 − 2·ln h)/4
+        //   flat contrib: −h·(d − c)·ln h
+        // Combined: h·[(1 − w)·(1 − 2·ln h)/4 − w·ln h] with w = d − c.
+        // Adding the location/scale Jacobian ln(scale):
+        let w = self.d - self.c;
+        let pdf_h = 2.0 / (1.0 + w);
+        let ln_h = pdf_h.ln();
+        let std_entropy = pdf_h
+            * ((1.0_f64 - w) * (1.0 - 2.0 * ln_h) / 4.0 - w * ln_h);
+        std_entropy + self.scale.ln()
+    }
+
     fn skewness(&self) -> f64 {
         // Standardized moments are loc/scale-invariant — compute in z.
         let m1 = self.standard_moment(1);
@@ -8174,6 +8191,19 @@ impl ContinuousDistribution for Nakagami {
     fn var(&self) -> f64 {
         let m = self.mean();
         1.0 - m * m
+    }
+
+    fn entropy(&self) -> f64 {
+        // Derivation: Y = ν·X² ~ Gamma(ν, 1) so E[ln X] = (ψ(ν) − ln ν)/2.
+        // The PDF gives −ln pdf = −ln 2 − ν ln ν + ln Γ(ν)
+        //                        − (2ν − 1) ln x + ν x²; E[X²] = 1.
+        // Combining:
+        //   h(Nakagami(ν)) = −ln 2 + ln Γ(ν) − (ν − 1/2) ψ(ν)
+        //                  − (1/2) ln ν + ν.
+        let nu = self.nu;
+        -2.0_f64.ln() + ln_gamma(nu) - (nu - 0.5) * fsci_special::digamma_scalar(nu)
+            - 0.5 * nu.ln()
+            + nu
     }
 
     fn skewness(&self) -> f64 {
@@ -11167,6 +11197,14 @@ impl ContinuousDistribution for Moyal {
         4.0
     }
 
+    fn entropy(&self) -> f64 {
+        // h(Moyal) = E[−ln pdf] = (1/2) · ln(2π) + E[X]/2 + E[e^{−X}]/2.
+        // E[X] = γ + ln 2; the substitution u = e^{−x}/2 collapses
+        // E[e^{−X}] = 2^{3/2}·Γ(3/2)/√(2π) = 1 exactly. So
+        //   h = (γ + 1 + ln(4π)) / 2.
+        0.5 * (EULER_MASCHERONI + 1.0 + (4.0 * PI).ln())
+    }
+
     fn fit(_data: &[f64]) -> Self {
         Self
     }
@@ -13753,6 +13791,12 @@ impl ContinuousDistribution for LaplaceAsymmetric {
             6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
         );
         mu4 / (var * var) - 3.0
+    }
+
+    fn entropy(&self) -> f64 {
+        // h(LaplaceAsymmetric(κ)) = 1 + ln((1 + κ²)/κ). κ = 1 collapses
+        // to standard Laplace's h = 1 + ln 2.
+        1.0 + (self.kappa.mul_add(self.kappa, 1.0) / self.kappa).ln()
     }
 }
 
@@ -27828,6 +27872,69 @@ mod tests {
         // Below threshold b=4.
         assert!(Pareto::new(3.5, 1.0).kurtosis().is_nan());
         assert!(Pareto::new(4.0, 1.0).kurtosis().is_nan());
+    }
+
+    #[test]
+    fn nakagami_entropy_matches_scipy_reference_values() {
+        // h(Nakagami(ν)) = −ln 2 + ln Γ(ν) − (ν − 1/2) ψ(ν) − (1/2) ln ν + ν.
+        for &(nu, expected) in &[
+            (0.7_f64, 0.690_062_248_7),
+            (1.0, 0.595_460_651_9),
+            (1.5, 0.446_848_053_8),
+            (3.0, 0.143_733_017_9),
+        ] {
+            assert_close(
+                Nakagami::new(nu).entropy(),
+                expected,
+                1e-8,
+                &format!("Nakagami({nu}) entropy"),
+            );
+        }
+    }
+
+    #[test]
+    fn trapezoid_entropy_matches_scipy_reference_values() {
+        // Symbolic split-region integration: h = h(z, c, d) + ln(scale),
+        // with h(z) = pdf_h · [(1 − w)(1 − 2·ln pdf_h)/4 − w·ln pdf_h],
+        // pdf_h = 2/(1 + w), w = d − c.
+        for &(c, d, loc, scale, expected) in &[
+            (0.2_f64, 0.7_f64, 0.0_f64, 1.0_f64, -0.121_015_405_8),
+            (0.0, 1.0, 0.0, 1.0, 0.0),
+            (0.3, 0.5, 0.0, 1.0, -0.177_492_290_4),
+            (0.0, 0.5, 0.0, 5.0, 1.488_422_506_6),
+        ] {
+            assert_close(
+                Trapezoid::new(c, d, loc, scale).entropy(),
+                expected,
+                1e-9,
+                &format!("Trapezoid({c},{d},{loc},{scale}) entropy"),
+            );
+        }
+    }
+
+    #[test]
+    fn moyal_laplace_asymmetric_entropy_match_scipy() {
+        // Moyal entropy: (γ + 1 + ln(4π)) / 2 ≈ 2.0541 (parameterless).
+        assert_close(
+            Moyal.entropy(),
+            2.054_119_955_935_411,
+            1e-12,
+            "Moyal entropy",
+        );
+        // LaplaceAsymmetric(κ): 1 + ln((1 + κ²)/κ). κ = 1 reduces to
+        // the standard Laplace's 1 + ln 2.
+        for &(k, expected) in &[
+            (0.5_f64, 1.916_290_731_9),
+            (1.0, 1.693_147_180_6),
+            (2.0, 1.916_290_731_9),
+        ] {
+            assert_close(
+                LaplaceAsymmetric::new(k).entropy(),
+                expected,
+                1e-9,
+                &format!("LaplaceAsymmetric({k}) entropy"),
+            );
+        }
     }
 
     #[test]
