@@ -12589,6 +12589,40 @@ impl ContinuousDistribution for TukeyLambda {
         2.0 * (1.0 / (1.0 + 2.0 * lam) - gamma_ratio) / (lam * lam)
     }
 
+    fn skewness(&self) -> f64 {
+        // Symmetric about 0 for every λ → skew = 0.
+        0.0
+    }
+
+    fn kurtosis(&self) -> f64 {
+        // λ = 0 limit: logistic, ex.kurt = 6/5 = 1.2.
+        let lam = self.lam;
+        if lam.abs() < 1e-15 {
+            return 1.2;
+        }
+        // m_4 finite only when 4λ + 1 > 0, i.e. λ > −1/4.
+        if lam <= -0.25 {
+            return f64::NAN;
+        }
+        // m_{2k} = (1/λ^{2k}) Σ_{j=0}^{2k} C(2k,j) (−1)^j B(λ(2k−j)+1, λj+1)
+        // (for 2k = 4):
+        //   m_4 = (1/λ^4) [2/(4λ+1) − 8 B(3λ+1, λ+1) + 6 B(2λ+1, 2λ+1)]
+        // (using B(a,b) = B(b,a) symmetry to collapse two pairs).
+        let lg = |a: f64, b: f64| (ln_gamma(a) + ln_gamma(b) - ln_gamma(a + b)).exp();
+        let inv4 = 1.0 / lam.powi(4);
+        let m4 = inv4
+            * 2.0_f64.mul_add(
+                1.0 / (4.0 * lam + 1.0),
+                6.0_f64.mul_add(
+                    lg(2.0 * lam + 1.0, 2.0 * lam + 1.0),
+                    -8.0 * lg(3.0 * lam + 1.0, lam + 1.0),
+                ),
+            );
+        let var = self.var();
+        // Symmetric ⇒ μ_4 = m_4 (mean = 0).
+        m4 / (var * var) - 3.0
+    }
+
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         validate_finite_fit_data(data, 2, "TukeyLambda")?;
         let target_var = sample_population_variance(data);
@@ -37373,6 +37407,33 @@ mod tests {
     fn tukey_lambda_variance_returns_nan_when_undefined() {
         assert!(TukeyLambda::new(-0.5).var().is_nan());
         assert!(TukeyLambda::new(-0.75).var().is_nan());
+    }
+
+    #[test]
+    fn tukey_lambda_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.tukeylambda(λ).stats(moments='sk'). Symmetric ⇒
+        // skew = 0 for all λ. Even moments via the binomial expansion
+        // of (q^λ − (1−q)^λ)^4 / λ^4 integrated against Beta kernels.
+        let cases = [
+            (-0.2_f64, 0.0, 19.212_645_820_4),
+            (-0.1, 0.0, 3.785_595_203_5),
+            (0.0, 0.0, 1.2),
+            (0.5, 0.0, -0.918_303_566_4),
+            (1.0, 0.0, -1.2),
+        ];
+        for &(lam, sk, ku) in &cases {
+            let d = TukeyLambda::new(lam);
+            assert_close(d.skewness(), sk, 1e-12, &format!("TukeyLambda({lam}) skew"));
+            assert_close(d.kurtosis(), ku, 1e-7, &format!("TukeyLambda({lam}) kurt"));
+        }
+    }
+
+    #[test]
+    fn tukey_lambda_kurtosis_returns_nan_when_undefined() {
+        // m_4 requires λ > −1/4; below that the (4λ + 1)⁻¹ term
+        // diverges and kurt is NaN.
+        assert!(TukeyLambda::new(-0.25).kurtosis().is_nan());
+        assert!(TukeyLambda::new(-0.5).kurtosis().is_nan());
     }
 
     fn legacy_tukey_lambda_cdf(dist: &TukeyLambda, x: f64) -> f64 {
