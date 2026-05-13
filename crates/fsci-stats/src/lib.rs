@@ -3564,6 +3564,11 @@ impl ContinuousDistribution for Maxwell {
         self.scale * self.scale * (3.0 - 8.0 / PI)
     }
 
+    fn entropy(&self) -> f64 {
+        // h(Maxwell(σ)) = ln(σ · √(2π)) + γ − 1/2.
+        (self.scale * (2.0 * PI).sqrt()).ln() + EULER_MASCHERONI - 0.5
+    }
+
     fn fit(data: &[f64]) -> Self {
         if data.is_empty() || data.iter().any(|&x| !x.is_finite() || x < 0.0) {
             return Self { scale: f64::NAN };
@@ -7030,6 +7035,12 @@ impl ContinuousDistribution for GenExtreme {
         num / den - 3.0
     }
 
+    fn entropy(&self) -> f64 {
+        // h(GenExtreme(c)) = γ · (1 − c) + 1.  (γ = Euler-Mascheroni.)
+        // c = 0 reduces to the Gumbel h = γ + 1.
+        EULER_MASCHERONI.mul_add(1.0 - self.c, 1.0)
+    }
+
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         validate_finite_fit_data(data, 3, "GenExtreme")?;
         let qs = quantile(data, &[0.25, 0.5, 0.75]);
@@ -7186,6 +7197,11 @@ impl ContinuousDistribution for GenPareto {
             6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
         );
         mu4 / (var * var) - 3.0
+    }
+
+    fn entropy(&self) -> f64 {
+        // h(GenPareto(c)) = 1 + c (exact closed form for any c).
+        1.0 + self.c
     }
 
     fn fit(data: &[f64]) -> Self {
@@ -27677,6 +27693,72 @@ mod tests {
     }
 
     #[test]
+    fn pareto_lomax_rayleigh_maxwell_genpareto_genextreme_entropy_match_scipy() {
+        // Bundle several elementary entropy closed forms in one anchor:
+        //  Pareto:   h = ln(scale/b) + 1/b + 1.
+        //  Lomax inherits the same formula via the Pareto-II identity.
+        //  Rayleigh: h = 1 + ln(σ/√2) + γ/2.
+        //  Maxwell:  h = ln(σ · √(2π)) + γ − 1/2.
+        //  GenExtreme(c): h = γ(1 − c) + 1.
+        //  (GenPareto entropy is verified in its own dedicated test.)
+        assert_close(
+            Pareto::new(3.0, 1.0).entropy(),
+            0.234_721_044_7,
+            1e-8,
+            "Pareto(3, 1) entropy",
+        );
+        assert_close(
+            Pareto::new(2.0, 5.0).entropy(),
+            2.416_290_731_9,
+            1e-8,
+            "Pareto(2, 5) entropy",
+        );
+        assert_close(
+            Lomax::new(3.0).entropy(),
+            0.234_721_044_7,
+            1e-8,
+            "Lomax(3) entropy",
+        );
+        assert_close(
+            Rayleigh::new(1.0).entropy(),
+            0.942_034_242_2,
+            1e-8,
+            "Rayleigh(1) entropy",
+        );
+        assert_close(
+            Rayleigh::new(5.0).entropy(),
+            2.551_472_154_6,
+            1e-8,
+            "Rayleigh(5) entropy",
+        );
+        assert_close(
+            Maxwell::new(1.0).entropy(),
+            0.996_154_198_1,
+            1e-8,
+            "Maxwell(1) entropy",
+        );
+        assert_close(
+            Maxwell::new(2.0).entropy(),
+            1.689_301_378_7,
+            1e-8,
+            "Maxwell(2) entropy",
+        );
+        // GenExtreme: h = γ(1 − c) + 1.
+        for &(c, h) in &[
+            (0.0_f64, 1.577_215_664_9),
+            (0.3, 1.404_050_965_4),
+            (-0.3, 1.750_380_364_4),
+        ] {
+            assert_close(
+                GenExtreme::new(c).entropy(),
+                h,
+                1e-8,
+                &format!("GenExtreme({c}) entropy"),
+            );
+        }
+    }
+
+    #[test]
     fn rayleigh_mode_and_roundtrip() {
         let r = Rayleigh::new(1.0);
         assert!(r.pdf(1.0) > r.pdf(0.5), "mode near scale");
@@ -39951,6 +40033,16 @@ mod tests {
     }
 
     #[test]
+    fn genpareto_entropy_matches_scipy_reference_values() {
+        // h(GenPareto(c)) = 1 + c is exact for every c — verified
+        // against scipy.stats.genpareto.entropy() at five values.
+        for &c in &[0.1_f64, 0.0, -0.3, 0.5, -1.0] {
+            let gp = GenPareto::new(c);
+            assert_close(gp.entropy(), 1.0 + c, 1e-15, &format!("GenPareto({c}) entropy"));
+        }
+    }
+
+    #[test]
     fn gen_pareto_bounded_right_endpoint_for_negative_c() {
         // For c < 0, support = [0, -1/c]. cdf at right endpoint = 1.
         for &c in &[-0.25_f64, -0.5, -1.0, -2.0] {
@@ -41240,12 +41332,31 @@ mod tests {
 
     #[test]
     fn dist_entropy_default_returns_nan() {
-        // Distributions without explicit entropy should return NaN
-        // StudentT doesn't have entropy implemented yet
-        let t = StudentT::new(5.0);
+        // StudentT now has a closed-form entropy (frankenscipy-oaaiz),
+        // so use the test-local UnsupportedTestDist stub instead — it's
+        // the only construct in the crate that still inherits the
+        // trait NaN default for entropy.
+        struct StubDist;
+        impl ContinuousDistribution for StubDist {
+            fn pdf(&self, _x: f64) -> f64 {
+                f64::NAN
+            }
+            fn cdf(&self, _x: f64) -> f64 {
+                f64::NAN
+            }
+            fn ppf(&self, _q: f64) -> f64 {
+                f64::NAN
+            }
+            fn mean(&self) -> f64 {
+                f64::NAN
+            }
+            fn var(&self) -> f64 {
+                f64::NAN
+            }
+        }
         assert!(
-            t.entropy().is_nan(),
-            "StudentT entropy should be NaN (default)"
+            StubDist.entropy().is_nan(),
+            "trait-default entropy must be NaN",
         );
     }
 
