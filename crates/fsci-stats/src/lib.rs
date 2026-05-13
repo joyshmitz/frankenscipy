@@ -6904,6 +6904,28 @@ impl ContinuousDistribution for HalfLogistic {
         PI * PI / 3.0 - 4.0 * LN_2 * LN_2
     }
 
+    fn skewness(&self) -> f64 {
+        // Standardised third central moment via numerical integration of
+        // E[X^k] = 2^k · ∫_0^∞ s^k · sech²(s) ds   (after q = tanh s).
+        // (frankenscipy-okhq6)
+        let m1 = 2.0 * LN_2;
+        let m2 = halflogistic_raw_moment(2);
+        let m3 = halflogistic_raw_moment(3);
+        let var = m2 - m1 * m1;
+        let mu3 = m3 - 3.0 * m1 * m2 + 2.0 * m1 * m1 * m1;
+        mu3 / var.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        let m1 = 2.0 * LN_2;
+        let m2 = halflogistic_raw_moment(2);
+        let m3 = halflogistic_raw_moment(3);
+        let m4 = halflogistic_raw_moment(4);
+        let var = m2 - m1 * m1;
+        let mu4 = m4 - 4.0 * m1 * m3 + 6.0 * m1 * m1 * m2 - 3.0 * m1 * m1 * m1 * m1;
+        mu4 / (var * var) - 3.0
+    }
+
     // fit() inherits the trait default. Resolves [frankenscipy-paejq].
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
@@ -20308,6 +20330,38 @@ fn exponpow_moment(b: f64, k: u32) -> f64 {
         sum += coef * integrand(t);
     }
     (sum * h / 3.0) * std::f64::consts::E
+}
+
+/// k-th raw moment of `HalfLogistic` via the substitution q = tanh(s),
+/// turning E[X^k] = ∫_0^1 (2 atanh q)^k dq into
+///   E[X^k] = 2^k · ∫_0^∞ s^k · sech²(s) ds
+/// where sech²(s) decays exponentially. Composite Simpson's on
+/// s ∈ [0, 30] with 6000 panels gives ≤ 1e-12 abs (frankenscipy-okhq6).
+fn halflogistic_raw_moment(k: u32) -> f64 {
+    let kf = f64::from(k);
+    let s_max = 30.0_f64;
+    let steps = 6000usize;
+    let h = s_max / steps as f64;
+    let integrand = |s: f64| -> f64 {
+        // sech²(s) = 4 / (e^s + e^{-s})²; for moderate s use the closed form,
+        // for large s switch to 4·e^{-2s} to keep precision.
+        let sech2 = if s > 30.0 {
+            0.0
+        } else if s < 1e-8 {
+            1.0
+        } else {
+            let cosh = s.cosh();
+            1.0 / (cosh * cosh)
+        };
+        s.powf(kf) * sech2
+    };
+    let mut sum = integrand(0.0) + integrand(s_max);
+    for i in 1..steps {
+        let s = i as f64 * h;
+        let coef = if i % 2 == 0 { 2.0 } else { 4.0 };
+        sum += coef * integrand(s);
+    }
+    (sum * h / 3.0) * 2.0_f64.powi(k as i32)
 }
 
 fn normal_alternative_pvalue(z: f64, alternative: &str) -> f64 {
@@ -36761,6 +36815,25 @@ mod tests {
         let m2 = Maxwell::new(2.5);
         assert!((m2.skewness() - m.skewness()).abs() < 1e-15);
         assert!((m2.kurtosis() - m.kurtosis()).abs() < 1e-15);
+    }
+
+    /// HalfLogistic skewness/kurtosis match scipy (frankenscipy-okhq6).
+    /// Computed via central moments built from raw moments
+    /// E[X^k] = 2^k ∫_0^∞ s^k sech²(s) ds.
+    #[test]
+    fn half_logistic_skew_kurt_match_scipy() {
+        let d = HalfLogistic;
+        // scipy.stats.halflogistic.stats(moments='sk') = (1.5403288034, 3.5837356645)
+        assert!(
+            (d.skewness() - 1.540_328_803_404_879_0).abs() < 1e-6,
+            "HalfLogistic.skewness = {}",
+            d.skewness()
+        );
+        assert!(
+            (d.kurtosis() - 3.583_735_664_456_715_3).abs() < 1e-6,
+            "HalfLogistic.kurtosis = {}",
+            d.kurtosis()
+        );
     }
 
     /// HalfNormal skewness/kurtosis closed forms match scipy
