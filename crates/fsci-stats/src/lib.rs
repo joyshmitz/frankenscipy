@@ -6447,6 +6447,45 @@ impl ContinuousDistribution for JohnsonSU {
         let exp_inv_b_sq = (inv_b * inv_b).exp();
         0.5 * exp_inv_b_sq.mul_add((2.0 * self.a * inv_b).cosh(), 1.0) * (inv_b * inv_b).exp_m1()
     }
+
+    fn skewness(&self) -> f64 {
+        // Raw moments via MGF of W = (U - a)/b ~ N(-a/b, 1/b^2):
+        // E[e^{tW}] = exp(-tΩ + t²/(2b²)) where Ω = a/b.
+        // Setting ω = exp(1/b²) gives closed-form raw moments m_n of
+        // X = sinh(W); central moments follow.
+        let omega = (self.b * self.b).recip().exp();
+        let ohm = self.a / self.b;
+        let m1 = -omega.sqrt() * ohm.sinh();
+        let m2 = (omega * omega).mul_add((2.0 * ohm).cosh(), -1.0) / 2.0;
+        let m3 = (3.0_f64.mul_add(
+            omega.sqrt() * ohm.sinh(),
+            -omega.powf(4.5) * (3.0 * ohm).sinh(),
+        )) / 4.0;
+        let var = m2 - m1 * m1;
+        let mu3 = 2.0_f64.mul_add(m1.powi(3), m3 - 3.0 * m1 * m2);
+        mu3 / var.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        let omega = (self.b * self.b).recip().exp();
+        let ohm = self.a / self.b;
+        let m1 = -omega.sqrt() * ohm.sinh();
+        let m2 = (omega * omega).mul_add((2.0 * ohm).cosh(), -1.0) / 2.0;
+        let m3 = (3.0_f64.mul_add(
+            omega.sqrt() * ohm.sinh(),
+            -omega.powf(4.5) * (3.0 * ohm).sinh(),
+        )) / 4.0;
+        let m4 = ((omega.powi(8)).mul_add(
+            (4.0 * ohm).cosh(),
+            (-4.0 * omega * omega).mul_add((2.0 * ohm).cosh(), 3.0),
+        )) / 8.0;
+        let var = m2 - m1 * m1;
+        let mu4 = (-3.0_f64).mul_add(
+            m1.powi(4),
+            6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
+        );
+        mu4 / (var * var) - 3.0
+    }
 }
 
 /// Johnson SB distribution.
@@ -26227,6 +26266,23 @@ mod tests {
             1e-12,
             "JohnsonSU variance",
         );
+    }
+
+    #[test]
+    fn johnsonsu_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.johnsonsu(a, b).stats(moments='sk') for three
+        // parameter pairs spanning positive, near-zero, and negative
+        // skew (sign flips with sign of a).
+        let cases = [
+            (1.25_f64, 2.5_f64, -0.642_757_668_866_944_2, 1.395_133_082_535_518_3),
+            (0.5, 1.5, -0.999_035_241_982_614_8, 5.379_444_246_948_418),
+            (-0.8, 3.0, 0.290_504_728_518_067_8, 0.643_586_700_228_836_4),
+        ];
+        for &(a, b, s, k) in &cases {
+            let dist = JohnsonSU::new(a, b);
+            assert_close(dist.skewness(), s, 1e-12, &format!("JohnsonSU({a},{b}) skew"));
+            assert_close(dist.kurtosis(), k, 1e-11, &format!("JohnsonSU({a},{b}) kurt"));
+        }
     }
 
     #[test]
