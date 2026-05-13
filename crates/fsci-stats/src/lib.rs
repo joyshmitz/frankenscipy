@@ -11409,6 +11409,28 @@ pub(crate) fn kstwobign_pdf_small(x: f64) -> f64 {
     result.max(0.0)
 }
 
+impl KsTwoBign {
+    /// k-th raw moment via direct Simpson on [eps, 8]. The pdf has
+    /// near-zero mass beyond x ≈ 5; capping at 8 leaves the truncation
+    /// error well below 1e-12.
+    fn kstwobign_raw_moment(&self, k: u32) -> f64 {
+        simpson_integrate_adaptive(
+            |x| {
+                if x <= 0.0 {
+                    return 0.0;
+                }
+                x.powi(k as i32) * self.pdf(x)
+            },
+            1e-12,
+            8.0,
+            4_096,
+            1e-12,
+            1e-12,
+            10,
+        )
+    }
+}
+
 impl ContinuousDistribution for KsTwoBign {
     fn pdf(&self, x: f64) -> f64 {
         if x <= 0.0 {
@@ -11465,8 +11487,42 @@ impl ContinuousDistribution for KsTwoBign {
     }
 
     fn var(&self) -> f64 {
-        // No clean closed form readily available — leave as NaN.
-        f64::NAN
+        // π²/12 − √(π/2)²·ln(2)² = π²/12 − (π/2)·ln²(2).
+        //
+        // Derivation: E[K²] = ∫_0^∞ 2x · P(K > x) dx
+        //                  = ∫_0^∞ 2x · (1 − F(x)) dx
+        // and a known identity (e.g. Marsaglia–Tsang–Wang 2003 and
+        // Wikipedia) gives E[K²] = π²/12. Subtract mean² to get var.
+        PI * PI / 12.0 - 0.5 * PI * 2.0_f64.ln().powi(2)
+    }
+
+    fn skewness(&self) -> f64 {
+        // No clean elementary closed form; integrate x^k · pdf(x).
+        let m1 = self.mean();
+        let m2 = self.kstwobign_raw_moment(2);
+        let m3 = self.kstwobign_raw_moment(3);
+        let var = m2 - m1 * m1;
+        if !var.is_finite() || var <= 0.0 {
+            return f64::NAN;
+        }
+        let mu3 = 2.0_f64.mul_add(m1.powi(3), m3 - 3.0 * m1 * m2);
+        mu3 / var.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        let m1 = self.mean();
+        let m2 = self.kstwobign_raw_moment(2);
+        let m3 = self.kstwobign_raw_moment(3);
+        let m4 = self.kstwobign_raw_moment(4);
+        let var = m2 - m1 * m1;
+        if !var.is_finite() || var <= 0.0 {
+            return f64::NAN;
+        }
+        let mu4 = (-3.0_f64).mul_add(
+            m1.powi(4),
+            6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
+        );
+        mu4 / (var * var) - 3.0
     }
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
@@ -29129,6 +29185,32 @@ mod tests {
             0.868_731_160_631_280_6,
             1e-11,
             "scipy numerical mean (loose tol)",
+        );
+    }
+
+    #[test]
+    fn kstwobign_var_skew_kurt_match_scipy() {
+        // scipy.stats.kstwobign.stats(moments='vsk'). var has the
+        // exact closed form π²/12 − (π/2)·ln²(2); skew/kurt use
+        // Simpson over the pdf.
+        let dist = KsTwoBign;
+        assert_close(
+            dist.var(),
+            0.067_773_204_0,
+            1e-8,
+            "KsTwoBign var",
+        );
+        assert_close(
+            dist.skewness(),
+            0.860_426_136_1,
+            1e-7,
+            "KsTwoBign skew",
+        );
+        assert_close(
+            dist.kurtosis(),
+            0.881_618_972_9,
+            1e-7,
+            "KsTwoBign kurt",
         );
     }
 
