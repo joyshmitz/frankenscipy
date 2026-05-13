@@ -11149,6 +11149,24 @@ impl ContinuousDistribution for GenLogistic {
         PI * PI / 6.0 + fsci_special::trigamma(self.c)
     }
 
+    fn skewness(&self) -> f64 {
+        // GenLogistic cumulants in terms of polygamma at c and at 1:
+        //   κ_2 = ψ'(c) + ψ'(1) = trigamma(c) + π²/6
+        //   κ_3 = ψ''(c) − ψ''(1) = tetragamma(c) − tetragamma(1)
+        //   κ_4 = ψ'''(c) + ψ'''(1) = pentagamma(c) + pentagamma(1)
+        // skew = κ_3 / κ_2^{3/2}.
+        let mu2 = self.var();
+        let kappa3 = fsci_special::tetragamma(self.c) - fsci_special::tetragamma(1.0);
+        kappa3 / mu2.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        // excess kurt = κ_4 / κ_2².
+        let mu2 = self.var();
+        let kappa4 = fsci_special::pentagamma(self.c) + fsci_special::pentagamma(1.0);
+        kappa4 / (mu2 * mu2)
+    }
+
     fn fit(data: &[f64]) -> Self {
         Self::try_fit(data).unwrap_or_else(|e| {
             panic!("GenLogistic::fit failed: {e}");
@@ -37349,6 +37367,24 @@ mod tests {
             let dist = GenLogistic::new(c);
             assert_close(dist.mean(), mean, 1e-9, "GenLogistic mean");
             assert_close(dist.var(), var, 1e-9, "GenLogistic variance");
+        }
+    }
+
+    #[test]
+    fn gen_logistic_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.genlogistic(c).stats(moments='sk'). Cumulant-based
+        // closed forms via tetra/pentagamma. c = 1 is standard logistic
+        // (skew = 0, ex.kurt = 6/5 = 1.2).
+        let cases = [
+            (0.5_f64, -0.854_660_324_6, 2.4),
+            (1.0, 0.0, 1.2),
+            (2.5, 0.694_792_855_7, 1.473_382_548_5),
+            (5.0, 0.923_833_036_5, 1.870_664_864_7),
+        ];
+        for &(c, sk, ku) in &cases {
+            let d = GenLogistic::new(c);
+            assert_close(d.skewness(), sk, 1e-7, &format!("GenLogistic({c}) skew"));
+            assert_close(d.kurtosis(), ku, 1e-7, &format!("GenLogistic({c}) kurt"));
         }
     }
 
