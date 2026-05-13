@@ -9932,6 +9932,39 @@ impl ContinuousDistribution for Burr3 {
         let v = m2 - m1 * m1;
         if v.is_finite() && v >= 0.0 { v } else { f64::NAN }
     }
+
+    fn skewness(&self) -> f64 {
+        // Raw moments m_k = d · B(d + k/c, 1 − k/c), finite for c > k.
+        if self.c <= 3.0 {
+            return f64::NAN;
+        }
+        let (c, d) = (self.c, self.d);
+        let mk = |k: f64| d * ln_beta(d + k / c, 1.0 - k / c).exp();
+        let m1 = mk(1.0);
+        let m2 = mk(2.0);
+        let m3 = mk(3.0);
+        let var = m2 - m1 * m1;
+        let mu3 = 2.0_f64.mul_add(m1.powi(3), m3 - 3.0 * m1 * m2);
+        mu3 / var.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        if self.c <= 4.0 {
+            return f64::NAN;
+        }
+        let (c, d) = (self.c, self.d);
+        let mk = |k: f64| d * ln_beta(d + k / c, 1.0 - k / c).exp();
+        let m1 = mk(1.0);
+        let m2 = mk(2.0);
+        let m3 = mk(3.0);
+        let m4 = mk(4.0);
+        let var = m2 - m1 * m1;
+        let mu4 = (-3.0_f64).mul_add(
+            m1.powi(4),
+            6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
+        );
+        mu4 / (var * var) - 3.0
+    }
 }
 
 /// Burr (Type XII) distribution.
@@ -37027,6 +37060,32 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn burr3_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.burr(c, d).stats(moments='sk'). Cases all satisfy
+        // c > 4 so both skew and kurt are finite. Raw moments m_k =
+        // d · B(d + k/c, 1 − k/c).
+        let cases = [
+            (5.0_f64, 2.0_f64, 2.964_766_361_466_782, 34.483_069_539_933_943),
+            (7.5, 3.0, 1.948_701_031_719_438, 9.982_845_018_476_885),
+            (10.0, 1.5, 1.233_176_967_477_120, 4.613_115_519_465_328),
+        ];
+        for &(c, d, sk, ku) in &cases {
+            let dist = Burr3::new(c, d);
+            assert_close(dist.skewness(), sk, 1e-9, &format!("Burr3({c},{d}) skew"));
+            assert_close(dist.kurtosis(), ku, 1e-8, &format!("Burr3({c},{d}) kurt"));
+        }
+    }
+
+    #[test]
+    fn burr3_skewness_and_kurtosis_nan_at_boundary() {
+        // c ≤ 3 ⇒ skew NaN; c ≤ 4 ⇒ kurt NaN.
+        assert!(Burr3::new(3.0, 2.0).skewness().is_nan());
+        assert!(Burr3::new(2.5, 2.0).skewness().is_nan());
+        assert!(Burr3::new(4.0, 2.0).kurtosis().is_nan());
+        assert!(Burr3::new(3.5, 2.0).kurtosis().is_nan());
     }
 
     #[test]
