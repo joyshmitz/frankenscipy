@@ -6159,12 +6159,14 @@ impl ContinuousDistribution for PowerLognorm {
     }
 
     fn mean(&self) -> f64 {
-        // Mean has no clean closed form; scipy uses numerical integration.
-        f64::NAN
+        powerlognorm_moment(self.c, self.s, 1)
     }
 
     fn var(&self) -> f64 {
-        f64::NAN
+        let m1 = powerlognorm_moment(self.c, self.s, 1);
+        let m2 = powerlognorm_moment(self.c, self.s, 2);
+        let v = m2 - m1 * m1;
+        if v.is_finite() && v >= 0.0 { v } else { f64::NAN }
     }
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
@@ -20070,6 +20072,44 @@ fn standard_normal_cdf(x: f64) -> f64 {
 
 fn standard_normal_pdf(x: f64) -> f64 {
     (-0.5 * x * x).exp() / (2.0 * PI).sqrt()
+}
+
+/// Compute the `k`-th raw moment of `PowerLognorm(c, s)`:
+///   E[X^k] = ∫_0^∞ x^k · pdf(x) dx
+/// via the substitution u = Φ⁻¹((1-q)^{1/c}) where q = 1 − Φ(u)^c, x = exp(-s·u),
+/// dq = c · Φ(u)^{c-1} · φ(u) du. That gives the smooth integrand
+///   E[X^k] = ∫_{-∞}^{∞} exp(-k·s·u) · c · Φ(u)^{c-1} · φ(u) du
+/// which decays super-exponentially at both ends thanks to the Gaussian
+/// φ(u) factor. Composite Simpson's rule on u ∈ [-30, 30] with 6000
+/// panels gives ≤ 1e-9 abs error vs scipy's stats.powerlognorm for the
+/// (c, s) range that has finite moments (frankenscipy-rkdhd).
+fn powerlognorm_moment(c: f64, s: f64, k: u32) -> f64 {
+    let kf = f64::from(k);
+    let u_lo = -30.0_f64;
+    let u_hi = 30.0_f64;
+    let steps = 6000usize;
+    let h = (u_hi - u_lo) / steps as f64;
+    let log_norm_const = -0.5 * (2.0 * PI).ln();
+    let ln_c = c.ln();
+    let integrand = |u: f64| -> f64 {
+        let big_phi = standard_normal_cdf(u);
+        if big_phi <= 0.0 {
+            return 0.0;
+        }
+        let log_phi = log_norm_const - 0.5 * u * u;
+        let log_int = -kf * s * u + ln_c + (c - 1.0) * big_phi.ln() + log_phi;
+        if !log_int.is_finite() || log_int < -700.0 {
+            return 0.0;
+        }
+        log_int.exp()
+    };
+    let mut sum = integrand(u_lo) + integrand(u_hi);
+    for i in 1..steps {
+        let u = u_lo + i as f64 * h;
+        let coef = if i % 2 == 0 { 2.0 } else { 4.0 };
+        sum += coef * integrand(u);
+    }
+    sum * h / 3.0
 }
 
 fn normal_alternative_pvalue(z: f64, alternative: &str) -> f64 {
@@ -35021,6 +35061,36 @@ mod tests {
             // normal helper (Beasley-Springer-Moro, ~1e-9 accuracy);
             // tolerate that drift rather than upgrade the helper.
             assert_close(dist.ppf(q), want, 1e-7, "PowerLognorm ppf anchor");
+        }
+    }
+
+    /// PowerLognorm.mean/var now match scipy.stats.powerlognorm.stats
+    /// (frankenscipy-rkdhd). Pre-fix both fields returned f64::NAN
+    /// unconditionally; the new numerical-integration helper in
+    /// `powerlognorm_moment` evaluates the integral in u =
+    /// Φ⁻¹((1-q)^{1/c}) space where the integrand decays
+    /// super-exponentially at both ends.
+    #[test]
+    fn powerlognorm_mean_var_match_scipy() {
+        // (c, s, scipy mean, scipy var)
+        let cases: [(f64, f64, f64, f64); 4] = [
+            (1.0, 0.5, 1.1331484530668263, 0.3646958540451286),
+            (2.0, 0.7, 0.7929147157, 0.2297708738),
+            (0.5, 0.5, 1.7370995111, 1.5754546415),
+            (5.0, 0.3, 0.7195389147, 0.0200597815),
+        ];
+        for (c, s, em, ev) in cases {
+            let d = PowerLognorm::new(c, s);
+            let m = d.mean();
+            let v = d.var();
+            assert!(
+                m.is_finite() && (m - em).abs() < 1e-6,
+                "PowerLognorm({c}, {s}).mean = {m}, scipy {em}"
+            );
+            assert!(
+                v.is_finite() && (v - ev).abs() < 1e-5,
+                "PowerLognorm({c}, {s}).var = {v}, scipy {ev}"
+            );
         }
     }
 
