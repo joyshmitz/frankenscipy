@@ -10618,12 +10618,18 @@ impl ContinuousDistribution for TruncWeibullMin {
     }
 
     fn mean(&self) -> f64 {
-        // No clean closed form (involves regularized incomplete gamma).
-        f64::NAN
+        // Truncated support [a, b] makes E[X^k] = ∫_0^1 ppf(q)^k dq a
+        // bounded integral; composite Simpson's on q ∈ [0, 1] with
+        // 4000 panels nails it to ~1e-12 abs vs scipy's
+        // truncweibull_min.stats (frankenscipy-ygfhj).
+        trunc_weibull_min_moment(self.c, self.a, self.b, 1)
     }
 
     fn var(&self) -> f64 {
-        f64::NAN
+        let m1 = trunc_weibull_min_moment(self.c, self.a, self.b, 1);
+        let m2 = trunc_weibull_min_moment(self.c, self.a, self.b, 2);
+        let v = m2 - m1 * m1;
+        if v.is_finite() && v >= 0.0 { v } else { f64::NAN }
     }
 }
 
@@ -20179,6 +20185,38 @@ fn kappa3_moment(a: f64, k: u32) -> f64 {
     sum * h / 3.0
 }
 
+/// k-th raw moment of `TruncWeibullMin(c, a, b)` via ppf substitution.
+///   E[X^k] = ∫_0^1 ppf(q)^k dq
+/// composite Simpson's on q ∈ [0, 1] with 4000 panels. The integrand
+/// is bounded (support is [a, b]), so this converges to ~1e-12 abs.
+/// (frankenscipy-ygfhj)
+fn trunc_weibull_min_moment(c: f64, a: f64, b: f64, k: u32) -> f64 {
+    let kf = f64::from(k);
+    let ac = a.powf(c);
+    let bc = b.powf(c);
+    let expm1_ab = (ac - bc).exp_m1();
+    let inv_c = 1.0 / c;
+    let ppf = |q: f64| -> f64 {
+        if q <= 0.0 {
+            return a;
+        }
+        if q >= 1.0 {
+            return b;
+        }
+        let xc = ac - (q * expm1_ab).ln_1p();
+        xc.powf(inv_c)
+    };
+    let steps = 4000usize;
+    let h = 1.0 / steps as f64;
+    let mut sum = ppf(0.0).powf(kf) + ppf(1.0).powf(kf);
+    for i in 1..steps {
+        let q = i as f64 * h;
+        let coef = if i % 2 == 0 { 2.0 } else { 4.0 };
+        sum += coef * ppf(q).powf(kf);
+    }
+    sum * h / 3.0
+}
+
 fn normal_alternative_pvalue(z: f64, alternative: &str) -> f64 {
     if z.is_nan() {
         return f64::NAN;
@@ -26895,6 +26933,31 @@ mod tests {
         assert_eq!(d1.pdf(2.5), 0.0);
         assert_eq!(d1.cdf(0.4), 0.0);
         assert_eq!(d1.cdf(2.5), 1.0);
+    }
+
+    /// TruncWeibullMin.mean/var match scipy.stats.truncweibull_min
+    /// (frankenscipy-ygfhj). Pre-fix returned NaN; the numerical
+    /// integration via ppf substitution converges to ~1e-12 abs.
+    #[test]
+    fn truncweibull_min_mean_var_match_scipy() {
+        let cases: [(f64, f64, f64, f64, f64); 3] = [
+            (2.0, 0.1, 2.0, 0.8693606096581452, 0.1790069975796863),
+            (1.0, 0.0, 1.0, 0.41802329313067343, 0.07932640579220776),
+            (3.0, 0.5, 1.5, 0.9355666648494023, 0.06111236036294787),
+        ];
+        for (c, a, b, em, ev) in cases {
+            let d = TruncWeibullMin::new(c, a, b);
+            let m = d.mean();
+            let v = d.var();
+            assert!(
+                (m - em).abs() < 1e-10,
+                "TruncWeibullMin({c}, {a}, {b}).mean = {m}, scipy {em}"
+            );
+            assert!(
+                (v - ev).abs() < 1e-10,
+                "TruncWeibullMin({c}, {a}, {b}).var = {v}, scipy {ev}"
+            );
+        }
     }
 
     #[test]
