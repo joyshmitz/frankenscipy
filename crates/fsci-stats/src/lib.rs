@@ -1255,6 +1255,32 @@ impl ContinuousDistribution for NoncentralT {
     fn kurtosis(&self) -> f64 {
         f64::NAN
     }
+
+    fn entropy(&self) -> f64 {
+        // Non-central T has Student-t-like tails (1/x^{df+1}); arctan
+        // compactify to keep the integrand bounded on both sides.
+        simpson_integrate_adaptive(
+            |u| {
+                let x = u.tan();
+                if !x.is_finite() {
+                    return 0.0;
+                }
+                let p = self.pdf(x);
+                if p > 0.0 {
+                    let sec2 = 1.0 / u.cos().powi(2);
+                    -p * p.ln() * sec2
+                } else {
+                    0.0
+                }
+            },
+            -PI / 2.0 + 1e-12,
+            PI / 2.0 - 1e-12,
+            4_096,
+            1e-9,
+            1e-9,
+            10,
+        )
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -6101,6 +6127,28 @@ impl ContinuousDistribution for InverseGaussian {
         15.0 * self.mu
     }
 
+    fn entropy(&self) -> f64 {
+        // InverseGaussian pdf has a 1/√(2π x³) factor near x = 0.
+        // Substitute u = ln x ∈ ℝ so dx = e^u du. The change-of-variable
+        // identity h(X) = −∫ pdf_X(x)·ln pdf_X(x) dx becomes
+        //   h(X) = −∫ pdf_X(e^u)·ln pdf_X(e^u) · e^u du
+        // and the e^u factor turns the singular x → 0 region into a
+        // tractable u → −∞ tail (handled by the integration window).
+        simpson_integrate_adaptive(
+            |u| {
+                let x = u.exp();
+                let p = self.pdf(x);
+                if p > 0.0 { -p * p.ln() * x } else { 0.0 }
+            },
+            -30.0,
+            30.0,
+            4_096,
+            1e-11,
+            1e-11,
+            10,
+        )
+    }
+
     fn fit(data: &[f64]) -> Self {
         Self::try_fit(data).unwrap_or_else(|e| {
             panic!("InverseGaussian::fit failed: {e}");
@@ -6381,6 +6429,27 @@ impl ContinuousDistribution for ExponNorm {
         let k2 = self.k * self.k;
         let one_plus = 1.0 + k2;
         6.0 * k2 * k2 / (one_plus * one_plus)
+    }
+
+    fn entropy(&self) -> f64 {
+        // ExponNorm (exponentially modified gaussian) has gaussian
+        // left tail and exponential right tail. Use the location/scale
+        // form X = Z + K·Y (Z ~ N(0,1), Y ~ Exp(1)) and integrate over
+        // [−20, 20 + 30K] so the K=3 case still has 30K = 90 panels of
+        // exponential tail at rate 1/K = 1/3 (exp(-30) ≈ 1e-13).
+        let upper = 20.0_f64 + 30.0 * self.k;
+        simpson_integrate_adaptive(
+            |x| {
+                let p = self.pdf(x);
+                if p > 0.0 { -p * p.ln() } else { 0.0 }
+            },
+            -20.0,
+            upper,
+            8_192,
+            1e-12,
+            1e-12,
+            12,
+        )
     }
 
     fn fit(data: &[f64]) -> Self {
@@ -28840,6 +28909,52 @@ mod tests {
     }
 
     #[test]
+    fn noncentralt_invgauss_exponnorm_entropy_match_scipy() {
+        // NoncentralT(df, nc): arctan-compactified Simpson on (-π/2, π/2).
+        // scipy.stats.nct(df, nc).entropy()
+        for &(df, nc, expected) in &[
+            (5.0_f64, 1.0, 1.666_155_106_7),
+            (10.0, 2.0, 1.603_874_241_5),
+            (3.0, 0.5, 1.787_891_003_7),
+        ] {
+            assert_close(
+                NoncentralT::new(df, nc).entropy(),
+                expected,
+                1e-4,
+                &format!("NoncentralT({df},{nc}) entropy"),
+            );
+        }
+        // InverseGaussian(mu): log-space substitution u = ln x.
+        // scipy.stats.invgauss(mu).entropy()
+        for &(mu, expected) in &[
+            (0.5_f64, 0.069_699_287_5),
+            (1.0, 0.876_945_607_9),
+            (2.0, 1.564_138_260_6),
+        ] {
+            assert_close(
+                InverseGaussian::new(mu).entropy(),
+                expected,
+                1e-5,
+                &format!("InverseGaussian({mu}) entropy"),
+            );
+        }
+        // ExponNorm(K): direct Simpson on a K-widening window.
+        // scipy.stats.exponnorm(K).entropy()
+        for &(k, expected) in &[
+            (0.5_f64, 1.527_600_924_7),
+            (1.0, 1.731_751_042_8),
+            (3.0, 2.378_418_986_9),
+        ] {
+            assert_close(
+                ExponNorm::new(k).entropy(),
+                expected,
+                1e-5,
+                &format!("ExponNorm({k}) entropy"),
+            );
+        }
+    }
+
+    #[test]
     fn tukey_lambda_entropy_matches_scipy_reference_values() {
         // h(TukeyLambda(λ)) = ∫_0^1 ln(q^{λ-1} + (1-q)^{λ-1}) dq;
         // λ = 0 collapses to the logistic h = 2.
@@ -32765,7 +32880,6 @@ mod tests {
         }
     }
 
-    #[test]
     /// Erlang and Chi skew/kurt closed forms — frankenscipy-6m3we,
     /// frankenscipy-fubyp.
     #[test]
