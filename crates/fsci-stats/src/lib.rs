@@ -4267,6 +4267,52 @@ impl DiscreteDistribution for Boltzmann {
         }
         (e_k_sq - m * m).max(0.0)
     }
+
+    fn skewness(&self) -> f64 {
+        // Boltzmann (truncated geometric) — no clean elementary closed
+        // form, direct-sum E[X^k] via the bounded support [0, n−1]
+        // (same pattern as var). Cost is O(n).
+        let mut m1 = 0.0;
+        let mut m2 = 0.0;
+        let mut m3 = 0.0;
+        for k in 0..self.n as u64 {
+            let kf = k as f64;
+            let p = self.pmf(k);
+            m1 += kf * p;
+            m2 += kf * kf * p;
+            m3 += kf * kf * kf * p;
+        }
+        let var = m2 - m1 * m1;
+        if var <= 0.0 {
+            return f64::NAN;
+        }
+        let mu3 = 2.0_f64.mul_add(m1.powi(3), m3 - 3.0 * m1 * m2);
+        mu3 / var.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        let mut m1 = 0.0;
+        let mut m2 = 0.0;
+        let mut m3 = 0.0;
+        let mut m4 = 0.0;
+        for k in 0..self.n as u64 {
+            let kf = k as f64;
+            let p = self.pmf(k);
+            m1 += kf * p;
+            m2 += kf * kf * p;
+            m3 += kf * kf * kf * p;
+            m4 += kf * kf * kf * kf * p;
+        }
+        let var = m2 - m1 * m1;
+        if var <= 0.0 {
+            return f64::NAN;
+        }
+        let mu4 = (-3.0_f64).mul_add(
+            m1.powi(4),
+            6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
+        );
+        mu4 / (var * var) - 3.0
+    }
 }
 
 /// Yule-Simon distribution.
@@ -4337,6 +4383,29 @@ impl DiscreteDistribution for YuleSimon {
         } else {
             f64::INFINITY
         }
+    }
+
+    fn skewness(&self) -> f64 {
+        // YuleSimon closed-form skew (scipy.stats.yulesimon):
+        //   skew = √(α − 2) · (α + 1)² / (α · (α − 3))   for α > 3
+        if self.alpha <= 3.0 {
+            return f64::INFINITY;
+        }
+        let a = self.alpha;
+        (a - 2.0).sqrt() * (a + 1.0).powi(2) / (a * (a - 3.0))
+    }
+
+    fn kurtosis(&self) -> f64 {
+        // YuleSimon closed-form excess kurt:
+        //   κ = α + 3 + (11 α³ − 49 α − 22) / (α · (α − 3) · (α − 4))
+        // for α > 4.
+        if self.alpha <= 4.0 {
+            return f64::INFINITY;
+        }
+        let a = self.alpha;
+        a + 3.0
+            + 11.0_f64.mul_add(a.powi(3), (-49.0_f64).mul_add(a, -22.0))
+                / (a * (a - 3.0) * (a - 4.0))
     }
 }
 
@@ -38942,6 +39011,47 @@ mod tests {
         assert!(YuleSimon::new(1.0).mean().is_infinite());
         assert!(YuleSimon::new(2.0).var().is_infinite());
         assert!(YuleSimon::new(0.5).mean().is_infinite());
+    }
+
+    #[test]
+    fn yulesimon_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.yulesimon(α).stats(moments='sk').
+        // skew = √(α − 2) · (α + 1)² / (α · (α − 3))         for α > 3
+        // kurt = α + 3 + (11 α³ − 49 α − 22) / (α(α − 3)(α − 4)) for α > 4
+        let cases = [
+            (4.5_f64, 7.085_844_386_673_591, 232.648_148_148_148_152),
+            (5.0, 6.235_382_907_247_958, 118.799_999_999_999_997),
+            (10.0, 4.889_138_315_632_700, 37.971_428_571_428_575),
+        ];
+        for &(a, sk, ku) in &cases {
+            let d = YuleSimon::new(a);
+            assert_close(d.skewness(), sk, 1e-12, &format!("YuleSimon({a}) skew"));
+            assert_close(d.kurtosis(), ku, 1e-10, &format!("YuleSimon({a}) kurt"));
+        }
+    }
+
+    #[test]
+    fn yulesimon_skewness_and_kurtosis_infinite_at_boundary() {
+        assert!(YuleSimon::new(3.0).skewness().is_infinite());
+        assert!(YuleSimon::new(2.5).skewness().is_infinite());
+        assert!(YuleSimon::new(4.0).kurtosis().is_infinite());
+        assert!(YuleSimon::new(3.5).kurtosis().is_infinite());
+    }
+
+    #[test]
+    fn boltzmann_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.boltzmann(λ, N).stats(moments='sk'). Direct sum
+        // over bounded support [0, N−1] is exact here.
+        let cases = [
+            (0.5_f64, 10_u32, 1.559_629_859_4, 2.380_894_817_1),
+            (1.0, 5, 1.735_371_610_1, 2.779_262_309_9),
+            (0.3, 15, 1.414_047_236_8, 1.761_705_443_0),
+        ];
+        for &(lam, n, sk, ku) in &cases {
+            let d = Boltzmann::new(lam, n);
+            assert_close(d.skewness(), sk, 1e-7, &format!("Boltzmann({lam},{n}) skew"));
+            assert_close(d.kurtosis(), ku, 1e-7, &format!("Boltzmann({lam},{n}) kurt"));
+        }
     }
 
     #[test]
