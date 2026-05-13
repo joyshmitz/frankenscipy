@@ -5367,6 +5367,24 @@ impl ContinuousDistribution for Triangular {
         (a * a + b * b + c * c - a * b - a * c - b * c) / 18.0
     }
 
+    fn skewness(&self) -> f64 {
+        // Standardised parameter c = (mode − left) / (right − left); skew
+        // is shift-and-scale invariant so the formula uses only c
+        //   skew(c) = √2 · (2c − 1) · (c − 2) · (c + 1)
+        //           / (5 · (c² − c + 1)^{3/2})
+        // (frankenscipy-mrmul)
+        let c = (self.mode - self.left) / (self.right - self.left);
+        let denom_base = c * c - c + 1.0;
+        std::f64::consts::SQRT_2 * (2.0 * c - 1.0) * (c - 2.0) * (c + 1.0)
+            / (5.0 * denom_base.powf(1.5))
+    }
+
+    fn kurtosis(&self) -> f64 {
+        // Excess kurtosis is the constant -3/5 (independent of mode
+        // location and scale). (frankenscipy-mrmul)
+        -3.0 / 5.0
+    }
+
     fn fit(data: &[f64]) -> Self {
         let nan = Self {
             left: f64::NAN,
@@ -28675,6 +28693,37 @@ mod tests {
         assert_close(t.mean(), 1.0, 1e-12, "mean = (a+b+c)/3");
         // var = (a²+b²+c²-ab-ac-bc)/18 = (0+4+1-0-0-2)/18 = 3/18 = 1/6
         assert_close(t.var(), 1.0 / 6.0, 1e-12, "Triangular var");
+    }
+
+    /// Triangular skewness via closed form + constant excess kurtosis
+    /// = -3/5 — match scipy.stats.triang. (frankenscipy-mrmul)
+    #[test]
+    fn triangular_skew_kurt_match_scipy() {
+        // scipy: triang.stats(c, moments='sk') with unit-scale (0,1) support.
+        let cases: [(f64, f64); 5] = [
+            (0.0, 0.5656854249492381),
+            (0.25, 0.4224039834072907),
+            (0.5, 0.0),
+            (0.75, -0.4224039834072907),
+            (1.0, -0.5656854249492381),
+        ];
+        for (c, want_skew) in cases {
+            let t = Triangular::new(0.0, c, 1.0);
+            assert!(
+                (t.skewness() - want_skew).abs() < 1e-10,
+                "Triangular(c={c}).skewness = {}, scipy {want_skew}",
+                t.skewness()
+            );
+            assert!(
+                (t.kurtosis() + 0.6).abs() < 1e-15,
+                "Triangular(c={c}).kurtosis = {}",
+                t.kurtosis()
+            );
+        }
+        // Shift+scale invariance.
+        let shifted = Triangular::new(2.0, 2.25, 10.0);
+        let canon = Triangular::new(0.0, 0.03125, 1.0); // c = (2.25-2)/(10-2) = 0.03125
+        assert!((shifted.skewness() - canon.skewness()).abs() < 1e-14);
     }
 
     #[test]
