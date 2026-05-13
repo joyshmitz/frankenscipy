@@ -4392,6 +4392,17 @@ impl DiscreteDistribution for Planck {
         let inv = 1.0 / em;
         inv * (1.0 + inv)
     }
+
+    fn skewness(&self) -> f64 {
+        // Planck is Geometric(p = 1 − e^{−λ}) shifted to start at 0;
+        // (2 − p)/√(1 − p) = (1 + e^{−λ}) · e^{λ/2} = 2·cosh(λ/2).
+        2.0 * (self.lambda / 2.0).cosh()
+    }
+
+    fn kurtosis(&self) -> f64 {
+        // Excess kurt = 6 + (1 − e^{−λ})²/e^{−λ} = 4 + 2·cosh(λ).
+        2.0_f64.mul_add(self.lambda.cosh(), 4.0)
+    }
 }
 
 impl DiscreteDistribution for Geometric {
@@ -39000,6 +39011,22 @@ mod tests {
             let dist = Planck::new(lam);
             assert_close(dist.mean(), want_mean, 1e-12, "Planck mean");
             assert_close(dist.var(), want_var, 1e-12, "Planck var");
+        }
+    }
+
+    #[test]
+    fn planck_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.planck(λ).stats(moments='sk').
+        // skew = 2·cosh(λ/2), ex.kurt = 4 + 2·cosh(λ).
+        let cases = [
+            (0.5_f64, 2.062_826_199_759_146, 6.255_251_930_412_761),
+            (1.0, 2.255_251_930_412_761, 7.086_161_269_630_487),
+            (2.0, 3.086_161_269_630_487, 11.524_391_382_167_263),
+        ];
+        for &(lam, sk, ku) in &cases {
+            let d = Planck::new(lam);
+            assert_close(d.skewness(), sk, 1e-12, &format!("Planck({lam}) skew"));
+            assert_close(d.kurtosis(), ku, 1e-12, &format!("Planck({lam}) kurt"));
         }
     }
 
