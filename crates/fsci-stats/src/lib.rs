@@ -6087,6 +6087,21 @@ impl ContinuousDistribution for ExponNorm {
         1.0 + self.k * self.k
     }
 
+    fn skewness(&self) -> f64 {
+        // EMG / ExponNorm: skew = 2·K³ / (1 + K²)^{3/2}.
+        // (frankenscipy-u65lx)
+        let k = self.k;
+        let k2 = k * k;
+        2.0 * k2 * k / (1.0 + k2).powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        // Excess kurtosis: 6·K⁴ / (1 + K²)². (frankenscipy-u65lx)
+        let k2 = self.k * self.k;
+        let one_plus = 1.0 + k2;
+        6.0 * k2 * k2 / (one_plus * one_plus)
+    }
+
     fn fit(data: &[f64]) -> Self {
         Self::try_fit(data).unwrap_or_else(|e| {
             panic!("ExponNorm::fit failed: {e}");
@@ -25976,6 +25991,27 @@ mod tests {
         let dist = ExponNorm::new(1.5);
         assert_close(dist.mean(), 1.5, 1e-12, "ExponNorm mean");
         assert_close(dist.var(), 3.25, 1e-12, "ExponNorm variance");
+    }
+
+    /// ExponNorm skew/kurt closed forms — frankenscipy-u65lx.
+    #[test]
+    fn exponnorm_skew_kurt_match_scipy() {
+        // scipy.stats.exponnorm.stats(K=1.5, moments='sk') = (1.1520696..., 2.8757396...)
+        let d = ExponNorm::new(1.5);
+        assert!(
+            (d.skewness() - 1.1520696383139375).abs() < 1e-12,
+            "ExponNorm(1.5).skew = {}",
+            d.skewness()
+        );
+        assert!(
+            (d.kurtosis() - 2.8757396449704142).abs() < 1e-12,
+            "ExponNorm(1.5).kurt = {}",
+            d.kurtosis()
+        );
+        // K=0 limit recovers standard normal: skew=0, kurt=0.
+        let normal_limit = ExponNorm::new(1e-6);
+        assert!(normal_limit.skewness().abs() < 1e-15);
+        assert!(normal_limit.kurtosis().abs() < 1e-20);
     }
 
     #[test]
