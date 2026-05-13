@@ -11880,6 +11880,45 @@ impl ContinuousDistribution for TruncExpon {
         e2 - m * m
     }
 
+    fn skewness(&self) -> f64 {
+        // Raw moments via the integration-by-parts recurrence
+        //   I_k = ∫_0^b x^k e^{−x} dx = −b^k e^{−b} + k · I_{k−1},
+        //   I_0 = 1 − e^{−b};
+        // then m_k = I_k / I_0. Always finite on the bounded support.
+        let b = self.b;
+        let e_b = (-b).exp();
+        let i0 = 1.0 - e_b;
+        let i1 = (1.0_f64).mul_add(i0, -b * e_b);
+        let i2 = 2.0_f64.mul_add(i1, -b * b * e_b);
+        let i3 = 3.0_f64.mul_add(i2, -b.powi(3) * e_b);
+        let m1 = i1 / i0;
+        let m2 = i2 / i0;
+        let m3 = i3 / i0;
+        let var = m2 - m1 * m1;
+        let mu3 = 2.0_f64.mul_add(m1.powi(3), m3 - 3.0 * m1 * m2);
+        mu3 / var.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        let b = self.b;
+        let e_b = (-b).exp();
+        let i0 = 1.0 - e_b;
+        let i1 = (1.0_f64).mul_add(i0, -b * e_b);
+        let i2 = 2.0_f64.mul_add(i1, -b * b * e_b);
+        let i3 = 3.0_f64.mul_add(i2, -b.powi(3) * e_b);
+        let i4 = 4.0_f64.mul_add(i3, -b.powi(4) * e_b);
+        let m1 = i1 / i0;
+        let m2 = i2 / i0;
+        let m3 = i3 / i0;
+        let m4 = i4 / i0;
+        let var = m2 - m1 * m1;
+        let mu4 = (-3.0_f64).mul_add(
+            m1.powi(4),
+            6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
+        );
+        mu4 / (var * var) - 3.0
+    }
+
     fn fit(data: &[f64]) -> Self {
         Self::try_fit(data).unwrap_or_else(|e| {
             panic!("TruncExpon::fit failed: {e}");
@@ -36262,6 +36301,23 @@ mod tests {
 
         for (&q, &want) in qs.iter().zip(expected.iter()) {
             assert_close(dist.ppf(q), want, 1e-12, &format!("TruncExpon ppf({q})"));
+        }
+    }
+
+    #[test]
+    fn truncexpon_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.truncexpon(b).stats(moments='sk'). Skew transitions
+        // from near-zero (very narrow truncation) through positive
+        // (b → ∞ recovers standard exponential with skew = 2).
+        let cases = [
+            (1.0_f64, 0.344_872_927_055_003, -1.034_980_012_946_226),
+            (3.0, 0.993_456_672_060_971, 0.220_224_106_082_554),
+            (5.0, 1.502_621_530_990_385, 2.263_498_204_087_065),
+        ];
+        for &(b, sk, ku) in &cases {
+            let d = TruncExpon::new(b);
+            assert_close(d.skewness(), sk, 1e-10, &format!("TruncExpon({b}) skew"));
+            assert_close(d.kurtosis(), ku, 1e-9, &format!("TruncExpon({b}) kurt"));
         }
     }
 
