@@ -8595,6 +8595,18 @@ impl ContinuousDistribution for DoubleGamma {
         self.a * (self.a + 1.0)
     }
 
+    fn skewness(&self) -> f64 {
+        // X = ±Y, Y ~ Gamma(a, 1). Symmetric about 0 ⇒ skew = 0.
+        0.0
+    }
+
+    fn kurtosis(&self) -> f64 {
+        // Even moments: m_2 = a(a+1), m_4 = a(a+1)(a+2)(a+3).
+        // Excess kurt = m_4/m_2² − 3 = (a+2)(a+3)/(a(a+1)) − 3.
+        let a = self.a;
+        (a + 2.0) * (a + 3.0) / (a * (a + 1.0)) - 3.0
+    }
+
     fn fit(data: &[f64]) -> Self {
         Self::try_fit(data).unwrap_or_else(|e| {
             panic!("DoubleGamma::fit failed: {e}");
@@ -36026,6 +36038,22 @@ mod tests {
         let dist = DoubleGamma::new(2.5);
         assert_eq!(dist.mean(), 0.0);
         assert_close(dist.var(), 8.75, 1e-12, "DoubleGamma variance");
+    }
+
+    #[test]
+    fn doublegamma_skewness_and_kurtosis_match_scipy_reference_values() {
+        // Symmetric ⇒ skew = 0. Excess kurt = (a+2)(a+3)/(a(a+1)) − 3.
+        let cases = [
+            (0.5_f64, 0.0, 8.666_666_666_666_666),
+            (1.0, 0.0, 3.000_000_000_000_000),
+            (2.5, 0.0, -0.171_428_571_428_571),
+            (5.0, 0.0, -1.133_333_333_333_333),
+        ];
+        for &(a, sk, ku) in &cases {
+            let d = DoubleGamma::new(a);
+            assert_close(d.skewness(), sk, 1e-12, &format!("DoubleGamma({a}) skew"));
+            assert_close(d.kurtosis(), ku, 1e-12, &format!("DoubleGamma({a}) kurt"));
+        }
     }
 
     #[test]
