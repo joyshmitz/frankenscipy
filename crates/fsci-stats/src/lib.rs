@@ -3845,6 +3845,18 @@ impl ContinuousDistribution for VonMises {
         1.0 - i1 / i0
     }
 
+    fn skewness(&self) -> f64 {
+        // VonMises is a circular distribution on [−π, π]; "linear"
+        // skewness/kurtosis aren't well-defined the way they are for
+        // distributions on ℝ. scipy.stats.vonmises returns NaN for
+        // both — match that contract explicitly.
+        f64::NAN
+    }
+
+    fn kurtosis(&self) -> f64 {
+        f64::NAN
+    }
+
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         validate_finite_fit_data(data, 2, "VonMises")?;
         let n = data.len() as f64;
@@ -11663,6 +11675,34 @@ impl ContinuousDistribution for TruncWeibullMin {
         let m2 = trunc_weibull_min_moment(self.c, self.a, self.b, 2);
         let v = m2 - m1 * m1;
         if v.is_finite() && v >= 0.0 { v } else { f64::NAN }
+    }
+
+    fn skewness(&self) -> f64 {
+        let m1 = trunc_weibull_min_moment(self.c, self.a, self.b, 1);
+        let m2 = trunc_weibull_min_moment(self.c, self.a, self.b, 2);
+        let m3 = trunc_weibull_min_moment(self.c, self.a, self.b, 3);
+        let var = m2 - m1 * m1;
+        if !var.is_finite() || var <= 0.0 {
+            return f64::NAN;
+        }
+        let mu3 = 2.0_f64.mul_add(m1.powi(3), m3 - 3.0 * m1 * m2);
+        mu3 / var.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        let m1 = trunc_weibull_min_moment(self.c, self.a, self.b, 1);
+        let m2 = trunc_weibull_min_moment(self.c, self.a, self.b, 2);
+        let m3 = trunc_weibull_min_moment(self.c, self.a, self.b, 3);
+        let m4 = trunc_weibull_min_moment(self.c, self.a, self.b, 4);
+        let var = m2 - m1 * m1;
+        if !var.is_finite() || var <= 0.0 {
+            return f64::NAN;
+        }
+        let mu4 = (-3.0_f64).mul_add(
+            m1.powi(4),
+            6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
+        );
+        mu4 / (var * var) - 3.0
     }
 }
 
@@ -21716,30 +21756,22 @@ fn kappa3_moment(a: f64, k: u32) -> f64 {
 /// is bounded (support is [a, b]), so this converges to ~1e-12 abs.
 /// (frankenscipy-ygfhj)
 fn trunc_weibull_min_moment(c: f64, a: f64, b: f64, k: u32) -> f64 {
-    let kf = f64::from(k);
+    // Closed form via incomplete gamma. The substitution u = x^c − a^c
+    // on the truncated Weibull pdf maps the truncation [a, b] to
+    // [0, b^c − a^c], and the e^{−u} measure recasts E[X^k] as
+    //   E[X^k] = e^{a^c}/s · Γ(k/c + 1) ·
+    //            (P(k/c + 1, b^c) − P(k/c + 1, a^c))
+    // where P is the regularized lower incomplete gamma and
+    // s = 1 − e^{−(b^c − a^c)} = −expm1(−(b^c − a^c)) is the
+    // truncation normaliser. This is exact (no quadrature) and
+    // matches scipy.stats.truncweibull_min to f64 round-off.
     let ac = a.powf(c);
     let bc = b.powf(c);
-    let expm1_ab = (ac - bc).exp_m1();
-    let inv_c = 1.0 / c;
-    let ppf = |q: f64| -> f64 {
-        if q <= 0.0 {
-            return a;
-        }
-        if q >= 1.0 {
-            return b;
-        }
-        let xc = ac - (q * expm1_ab).ln_1p();
-        xc.powf(inv_c)
-    };
-    let steps = 4000usize;
-    let h = 1.0 / steps as f64;
-    let mut sum = ppf(0.0).powf(kf) + ppf(1.0).powf(kf);
-    for i in 1..steps {
-        let q = i as f64 * h;
-        let coef = if i % 2 == 0 { 2.0 } else { 4.0 };
-        sum += coef * ppf(q).powf(kf);
-    }
-    sum * h / 3.0
+    let s = -(-(bc - ac)).exp_m1();
+    let alpha = f64::from(k) / c + 1.0;
+    let p_b = lower_regularized_gamma(alpha, bc);
+    let p_a = lower_regularized_gamma(alpha, ac);
+    ac.exp() / s * ln_gamma(alpha).exp() * (p_b - p_a)
 }
 
 /// k-th raw moment of `ExponPow(b)`. We integrate in x-space using
@@ -28941,6 +28973,36 @@ mod tests {
                 (v - ev).abs() < 1e-10,
                 "TruncWeibullMin({c}, {a}, {b}).var = {v}, scipy {ev}"
             );
+        }
+    }
+
+    #[test]
+    fn truncweibull_min_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.truncweibull_min(c, a, b).stats(moments='sk').
+        // Composed from existing trunc_weibull_min_moment helper.
+        let cases = [
+            (1.5_f64, 0.5_f64, 5.0_f64, 1.299_579_911_1, 2.048_969_373_4),
+            (2.5, 0.1, 3.0, 0.377_552_617_6, -0.147_197_095_1),
+            (3.0, 1.0, 10.0, 1.057_228_347_7, 1.002_385_040_1),
+        ];
+        for &(c, a, b, sk, ku) in &cases {
+            let d = TruncWeibullMin::new(c, a, b);
+            assert_close(d.skewness(), sk, 1e-9, &format!("TruncWeibullMin({c},{a},{b}) skew"));
+            assert_close(d.kurtosis(), ku, 1e-9, &format!("TruncWeibullMin({c},{a},{b}) kurt"));
+        }
+    }
+
+    #[test]
+    fn vonmises_skewness_and_kurtosis_are_nan() {
+        // VonMises is circular; linear skew/kurt aren't well-defined.
+        // scipy returns NaN, we match.
+        for &kappa in &[0.5_f64, 1.0, 2.5, 5.0] {
+            let v = VonMises {
+                kappa,
+                loc: 0.0,
+            };
+            assert!(v.skewness().is_nan(), "VonMises({kappa}) skew NaN");
+            assert!(v.kurtosis().is_nan(), "VonMises({kappa}) kurt NaN");
         }
     }
 
@@ -37905,7 +37967,6 @@ mod tests {
         }
     }
 
-    #[test]
     /// WeibullMax skew/kurt via mirrored WeibullMin moments —
     /// frankenscipy-lu2e1.
     #[test]
