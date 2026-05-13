@@ -7453,6 +7453,23 @@ impl ContinuousDistribution for Chi {
         self.df - m * m
     }
 
+    fn skewness(&self) -> f64 {
+        // γ₁ = μ(1 − 2σ²) / σ³ (frankenscipy-fubyp)
+        let mu = self.mean();
+        let var = self.df - mu * mu;
+        let sigma = var.sqrt();
+        mu * (1.0 - 2.0 * var) / (sigma * sigma * sigma)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        // Excess kurtosis: (2/σ²)·(1 − μσ·γ₁ − σ²) (frankenscipy-fubyp)
+        let mu = self.mean();
+        let var = self.df - mu * mu;
+        let sigma = var.sqrt();
+        let skew = mu * (1.0 - 2.0 * var) / (sigma * sigma * sigma);
+        (2.0 / var) * (1.0 - mu * sigma * skew - var)
+    }
+
     fn fit(data: &[f64]) -> Self {
         Self::try_fit(data).unwrap_or_else(|e| {
             panic!("Chi::fit failed: {e}");
@@ -8955,6 +8972,17 @@ impl ContinuousDistribution for Erlang {
 
     fn var(&self) -> f64 {
         self.k as f64 / (self.rate * self.rate)
+    }
+
+    fn skewness(&self) -> f64 {
+        // Erlang is Gamma with integer shape k; skew = 2/√k, scale-free.
+        // (frankenscipy-6m3we)
+        2.0 / (self.k as f64).sqrt()
+    }
+
+    fn kurtosis(&self) -> f64 {
+        // Excess kurtosis = 6/k. (frankenscipy-6m3we)
+        6.0 / (self.k as f64)
     }
 
     fn fit(data: &[f64]) -> Self {
@@ -28747,6 +28775,47 @@ mod tests {
                     &format!("Weibull(1, {scale}).sf({x}) vs Exp(scale={scale}).sf"),
                 );
             }
+        }
+    }
+
+    #[test]
+    /// Erlang and Chi skew/kurt closed forms — frankenscipy-6m3we,
+    /// frankenscipy-fubyp.
+    #[test]
+    fn erlang_chi_skew_kurt_match_scipy() {
+        // Erlang: skew = 2/√k, kurt = 6/k (Gamma with integer shape).
+        for k in [1_usize, 2, 3, 5, 10, 20] {
+            let e = Erlang::new(k, 1.0);
+            let kf = k as f64;
+            assert!(
+                (e.skewness() - 2.0 / kf.sqrt()).abs() < 1e-12,
+                "Erlang({k}).skew"
+            );
+            assert!(
+                (e.kurtosis() - 6.0 / kf).abs() < 1e-12,
+                "Erlang({k}).kurt"
+            );
+        }
+
+        // Chi: anchored vs scipy.stats.chi.stats. df=3 is Maxwell.
+        let chi_cases: [(f64, f64, f64); 4] = [
+            (2.0, 0.6311106578189390, 0.2450893006876297),
+            (3.0, 0.4856928280495957, 0.1081638428162417),
+            (5.0, 0.3542422254200267, 0.0369810575509997),
+            (10.0, 0.2374288142902043, 0.0085202862115171),
+        ];
+        for (df, ws, wk) in chi_cases {
+            let c = Chi::new(df);
+            assert!(
+                (c.skewness() - ws).abs() < 1e-9,
+                "Chi({df}).skew = {}, scipy {ws}",
+                c.skewness()
+            );
+            assert!(
+                (c.kurtosis() - wk).abs() < 1e-9,
+                "Chi({df}).kurt = {}, scipy {wk}",
+                c.kurtosis()
+            );
         }
     }
 
