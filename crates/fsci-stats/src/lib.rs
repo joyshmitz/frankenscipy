@@ -12788,6 +12788,45 @@ impl ContinuousDistribution for LaplaceAsymmetric {
     fn var(&self) -> f64 {
         1.0 / (self.kappa * self.kappa) + self.kappa * self.kappa
     }
+
+    fn skewness(&self) -> f64 {
+        // Piecewise exponential moments split at 0:
+        //   ∫_0^∞ x^k e^{−κx} dx = k!/κ^{k+1},
+        //   ∫_{−∞}^0 x^k e^{x/κ} dx = (−1)^k k! κ^{k+1}.
+        // Combine with the normalisation 1/(κ + 1/κ):
+        //   m_k = k! · (1 + (−1)^k κ^{2k+2}) / ((1 + κ²) κ^k)
+        let k = self.kappa;
+        let one_plus_k2 = k.mul_add(k, 1.0);
+        let mk = |n: u32, fact: f64, sign: f64| {
+            let pow_k = k.powi(n as i32);
+            fact * sign.mul_add(k.powi(2 * (n as i32) + 2), 1.0) / (one_plus_k2 * pow_k)
+        };
+        let m1 = mk(1, 1.0, -1.0);
+        let m2 = mk(2, 2.0, 1.0);
+        let m3 = mk(3, 6.0, -1.0);
+        let var = m2 - m1 * m1;
+        let mu3 = 2.0_f64.mul_add(m1.powi(3), m3 - 3.0 * m1 * m2);
+        mu3 / var.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        let k = self.kappa;
+        let one_plus_k2 = k.mul_add(k, 1.0);
+        let mk = |n: u32, fact: f64, sign: f64| {
+            let pow_k = k.powi(n as i32);
+            fact * sign.mul_add(k.powi(2 * (n as i32) + 2), 1.0) / (one_plus_k2 * pow_k)
+        };
+        let m1 = mk(1, 1.0, -1.0);
+        let m2 = mk(2, 2.0, 1.0);
+        let m3 = mk(3, 6.0, -1.0);
+        let m4 = mk(4, 24.0, 1.0);
+        let var = m2 - m1 * m1;
+        let mu4 = (-3.0_f64).mul_add(
+            m1.powi(4),
+            6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
+        );
+        mu4 / (var * var) - 3.0
+    }
 }
 
 /// Kappa 3-parameter distribution with shape `a > 0`.
@@ -29921,6 +29960,34 @@ mod tests {
         let l = Laplace::new(1.0, 2.0);
         for x in [-3.0, 0.0, 1.0, 4.0] {
             assert_close(l.sf(x) + l.cdf(x), 1.0, 1e-12, &format!("sf+cdf at {x}"));
+        }
+    }
+
+    #[test]
+    fn laplace_asymmetric_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.laplace_asymmetric(κ).stats(moments='sk').
+        // κ = 1 is the symmetric Laplace (skew = 0, ex.kurt = 3).
+        // κ and 1/κ produce skew with opposite signs and identical kurt.
+        let cases = [
+            (0.5_f64, 1.797_616_985_633, 5.335_640_138_4),
+            (1.0, 0.0, 3.0),
+            (2.0, -1.797_616_985_633, 5.335_640_138_4),
+            (3.0, -1.960_832_950_796, 5.855_443_188_6),
+        ];
+        for &(k, sk, ku) in &cases {
+            let d = LaplaceAsymmetric::new(k);
+            assert_close(
+                d.skewness(),
+                sk,
+                1e-9,
+                &format!("LaplaceAsymmetric({k}) skew"),
+            );
+            assert_close(
+                d.kurtosis(),
+                ku,
+                1e-8,
+                &format!("LaplaceAsymmetric({k}) kurt"),
+            );
         }
     }
 
