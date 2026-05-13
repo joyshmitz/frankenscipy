@@ -12496,6 +12496,21 @@ impl ContinuousDistribution for GenNorm {
         ln_gamma(3.0 / b).exp() / ln_gamma(1.0 / b).exp()
     }
 
+    fn skewness(&self) -> f64 {
+        // Symmetric about 0 ⇒ all odd central moments vanish.
+        0.0
+    }
+
+    fn kurtosis(&self) -> f64 {
+        // Raw moments via u = |x|^β: m_k = Γ((k+1)/β)/Γ(1/β) for k even,
+        // 0 for k odd. Excess kurt = m_4/m_2² − 3.
+        let b = self.beta;
+        let lg1 = ln_gamma(1.0 / b);
+        let m2 = (ln_gamma(3.0 / b) - lg1).exp();
+        let m4 = (ln_gamma(5.0 / b) - lg1).exp();
+        m4 / (m2 * m2) - 3.0
+    }
+
     fn fit(data: &[f64]) -> Self {
         Self::try_fit(data).unwrap_or_else(|e| {
             panic!("GenNorm::fit failed: {e}");
@@ -12621,6 +12636,33 @@ impl ContinuousDistribution for HalfGenNorm {
         let b = self.beta;
         let mean = self.mean();
         ln_gamma(3.0 / b).exp() / ln_gamma(1.0 / b).exp() - mean * mean
+    }
+
+    fn skewness(&self) -> f64 {
+        // Raw moments via u = x^β: m_k = Γ((k+1)/β)/Γ(1/β) for k ≥ 0.
+        let b = self.beta;
+        let lg1 = ln_gamma(1.0 / b);
+        let m1 = (ln_gamma(2.0 / b) - lg1).exp();
+        let m2 = (ln_gamma(3.0 / b) - lg1).exp();
+        let m3 = (ln_gamma(4.0 / b) - lg1).exp();
+        let var = m2 - m1 * m1;
+        let mu3 = 2.0_f64.mul_add(m1.powi(3), m3 - 3.0 * m1 * m2);
+        mu3 / var.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        let b = self.beta;
+        let lg1 = ln_gamma(1.0 / b);
+        let m1 = (ln_gamma(2.0 / b) - lg1).exp();
+        let m2 = (ln_gamma(3.0 / b) - lg1).exp();
+        let m3 = (ln_gamma(4.0 / b) - lg1).exp();
+        let m4 = (ln_gamma(5.0 / b) - lg1).exp();
+        let var = m2 - m1 * m1;
+        let mu4 = (-3.0_f64).mul_add(
+            m1.powi(4),
+            6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
+        );
+        mu4 / (var * var) - 3.0
     }
 
     fn fit(data: &[f64]) -> Self {
@@ -38830,6 +38872,40 @@ mod tests {
             1e-10,
             "HalfGenNorm variance",
         );
+    }
+
+    #[test]
+    fn gennorm_skewness_and_kurtosis_match_scipy_reference_values() {
+        // GenNorm is symmetric ⇒ skew = 0 for all β.
+        // Excess kurt = m_4/m_2² − 3 with m_2k = Γ((2k+1)/β)/Γ(1/β).
+        let cases = [
+            (0.5_f64, 0.0, 22.199_999_999_999_996),
+            (1.0, 0.0, 3.000_000_000_000_001),
+            (2.0, 0.0, 0.0),
+            (4.0, 0.0, -0.811_560_384_773_523),
+        ];
+        for &(b, sk, ku) in &cases {
+            let d = GenNorm::new(b);
+            assert_close(d.skewness(), sk, 1e-12, &format!("GenNorm({b}) skew"));
+            assert_close(d.kurtosis(), ku, 1e-10, &format!("GenNorm({b}) kurt"));
+        }
+    }
+
+    #[test]
+    fn half_gennorm_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.halfgennorm(β).stats(moments='sk'). Raw moments
+        // m_k = Γ((k+1)/β) / Γ(1/β); all moments finite for β > 0.
+        let cases = [
+            (0.5_f64, 4.302_009_836_679_562, 34.408_163_444_250_199),
+            (1.0, 1.999_999_999_999_678, 5.999_999_999_750_779),
+            (2.0, 0.995_271_746_174_999, 0.869_177_303_528_196),
+            (4.0, 0.442_786_743_123_021, -0.555_348_938_111_338),
+        ];
+        for &(b, sk, ku) in &cases {
+            let d = HalfGenNorm::new(b);
+            assert_close(d.skewness(), sk, 1e-7, &format!("HalfGenNorm({b}) skew"));
+            assert_close(d.kurtosis(), ku, 1e-6, &format!("HalfGenNorm({b}) kurt"));
+        }
     }
 
     #[test]
