@@ -37785,6 +37785,29 @@ mod tests {
     }
 
     #[test]
+    fn loglogistic_skewness_and_kurtosis_nan_at_boundary() {
+        // Loglogistic shares Fisk's c-gates: skew finite for c > 3,
+        // kurt for c > 4.
+        assert!(Loglogistic::new(3.0).skewness().is_nan());
+        assert!(Loglogistic::new(2.5).skewness().is_nan());
+        assert!(Loglogistic::new(4.0).kurtosis().is_nan());
+        assert!(Loglogistic::new(3.5).kurtosis().is_nan());
+    }
+
+    #[test]
+    fn pareto_lomax_skewness_and_kurtosis_nan_at_boundary() {
+        // Pareto skew needs b > 3; kurt needs b > 4. Lomax inherits.
+        assert!(Pareto::new(3.0, 1.0).skewness().is_nan());
+        assert!(Pareto::new(2.5, 1.0).skewness().is_nan());
+        assert!(Pareto::new(4.0, 1.0).kurtosis().is_nan());
+        assert!(Pareto::new(3.5, 1.0).kurtosis().is_nan());
+        assert!(Lomax::new(3.0).skewness().is_nan());
+        assert!(Lomax::new(2.5).skewness().is_nan());
+        assert!(Lomax::new(4.0).kurtosis().is_nan());
+        assert!(Lomax::new(3.5).kurtosis().is_nan());
+    }
+
+    #[test]
     fn loglogistic_skewness_and_kurtosis_match_fisk() {
         // Loglogistic ≡ Fisk by construction (same PDF). Verify the
         // closed forms agree numerically across three c values that
