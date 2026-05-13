@@ -10805,6 +10805,18 @@ impl ContinuousDistribution for Moyal {
         PI * PI / 2.0
     }
 
+    fn skewness(&self) -> f64 {
+        // μ_3 = 14 · ζ(3), var = π²/2 → skew = 14·ζ(3) · 2^{3/2}/π³
+        //                                    = 28√2 · ζ(3) / π³.
+        const ZETA3: f64 = 1.202_056_903_159_594_3;
+        28.0 * 2.0_f64.sqrt() * ZETA3 / (PI * PI * PI)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        // Excess kurtosis is exactly 4 for Moyal (well-known constant).
+        4.0
+    }
+
     fn fit(_data: &[f64]) -> Self {
         Self
     }
@@ -41952,6 +41964,20 @@ mod tests {
         // var = π²/16 − 1/2 ≈ 0.116850275068
         let expected_var = std::f64::consts::PI * std::f64::consts::PI / 16.0 - 0.5;
         assert!((dist.var() - expected_var).abs() < 1e-12);
+    }
+
+    #[test]
+    fn moyal_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.moyal.stats(moments='sk'): skew = 28√2 · ζ(3)/π³
+        // ≈ 1.535; ex.kurt = 4 exactly.
+        let m = Moyal;
+        assert_close(
+            m.skewness(),
+            1.535_141_590_722_906,
+            1e-12,
+            "Moyal skewness",
+        );
+        assert_close(m.kurtosis(), 4.0, 1e-12, "Moyal kurtosis");
     }
 
     #[test]
