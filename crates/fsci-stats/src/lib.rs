@@ -857,6 +857,21 @@ impl ContinuousDistribution for StudentT {
         }
     }
 
+    fn entropy(&self) -> f64 {
+        // h(T(df)) = (df+1)/2 · (ψ((df+1)/2) − ψ(df/2))
+        //          + 0.5 · ln(df) + ln B(df/2, 1/2)
+        //          = (df+1)/2 · (ψ((df+1)/2) − ψ(df/2))
+        //          + 0.5 · ln(df) + ln Γ(df/2) + 0.5·ln(π) − ln Γ((df+1)/2).
+        let df = self.df;
+        let half_df = df / 2.0;
+        let half_dfp1 = (df + 1.0) / 2.0;
+        half_dfp1 * (fsci_special::digamma_scalar(half_dfp1) - fsci_special::digamma_scalar(half_df))
+            + 0.5 * df.ln()
+            + ln_gamma(half_df)
+            + 0.5 * PI.ln()
+            - ln_gamma(half_dfp1)
+    }
+
     fn fit(data: &[f64]) -> Self {
         fn consider_student_t_df(
             best_df: &mut f64,
@@ -5926,6 +5941,11 @@ impl ContinuousDistribution for InverseGamma {
         } else {
             f64::NAN
         }
+    }
+
+    fn entropy(&self) -> f64 {
+        // h(InverseGamma(a)) = a + ln Γ(a) − (1 + a) ψ(a).
+        self.a + ln_gamma(self.a) - (1.0 + self.a) * fsci_special::digamma_scalar(self.a)
     }
 
     fn fit(data: &[f64]) -> Self {
@@ -27110,6 +27130,36 @@ mod tests {
         }
         // a≤3 → skew NaN.
         assert!(InverseGamma::new(2.5).skewness().is_nan());
+    }
+
+    #[test]
+    fn invgamma_entropy_matches_scipy_reference_values() {
+        // scipy.stats.invgamma(a).entropy() = a + ln Γ(a) − (1 + a) ψ(a).
+        let cases = [
+            (2.0_f64, 0.731_646_994_7),
+            (3.0, 0.002_009_840_2),
+            (5.0, -0.858_652_180_2),
+        ];
+        for &(a, h) in &cases {
+            let g = InverseGamma::new(a);
+            assert_close(g.entropy(), h, 1e-8, &format!("InverseGamma({a}) entropy"));
+        }
+    }
+
+    #[test]
+    fn studentt_entropy_matches_scipy_reference_values() {
+        // scipy.stats.t(df).entropy() = (df+1)/2·(ψ((df+1)/2) − ψ(df/2))
+        //                              + 0.5·ln(df) + ln Γ(df/2) + 0.5·ln(π)
+        //                              − ln Γ((df+1)/2).
+        let cases = [
+            (3.0_f64, 1.773_477_571_9),
+            (5.0, 1.627_502_672_4),
+            (10.0, 1.521_262_493_0),
+        ];
+        for &(df, h) in &cases {
+            let t = StudentT::new(df);
+            assert_close(t.entropy(), h, 1e-8, &format!("StudentT({df}) entropy"));
+        }
     }
 
     #[test]
