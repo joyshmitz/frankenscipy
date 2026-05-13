@@ -3901,6 +3901,15 @@ impl ContinuousDistribution for VonMises {
         1.0 - i1 / i0
     }
 
+    fn entropy(&self) -> f64 {
+        // PDF = exp(κ cos(x − loc)) / (2π · I_0(κ)).
+        // E[cos(X − loc)] = I_1(κ)/I_0(κ), so
+        //   h = ln(2π · I_0(κ)) − κ · I_1(κ)/I_0(κ).
+        let i0 = modified_bessel_i(0.0, self.kappa);
+        let i1 = modified_bessel_i(1.0, self.kappa);
+        (2.0 * PI * i0).ln() - self.kappa * i1 / i0
+    }
+
     fn skewness(&self) -> f64 {
         // VonMises is a circular distribution on [−π, π]; "linear"
         // skewness/kurtosis aren't well-defined the way they are for
@@ -7829,6 +7838,20 @@ impl ContinuousDistribution for TruncNormal {
         }
         let z = norm;
         1.0 + (self.a * phi_a - self.b * phi_b) / z - ((phi_a - phi_b) / z).powi(2)
+    }
+
+    fn entropy(&self) -> f64 {
+        // h(TruncNormal(a, b)) = ln(√(2πe) · Δ)
+        //                      + (a·φ(a) − b·φ(b)) / (2 Δ),
+        // where Δ = Φ(b) − Φ(a). (Standard normal truncation.)
+        let phi_a = (-self.a * self.a / 2.0).exp() / (2.0 * PI).sqrt();
+        let phi_b = (-self.b * self.b / 2.0).exp() / (2.0 * PI).sqrt();
+        let delta = standard_normal_cdf(self.b) - standard_normal_cdf(self.a);
+        if delta <= 0.0 {
+            return f64::NAN;
+        }
+        ((2.0 * PI * std::f64::consts::E).sqrt() * delta).ln()
+            + (self.a * phi_a - self.b * phi_b) / (2.0 * delta)
     }
 
     fn skewness(&self) -> f64 {
@@ -27937,6 +27960,34 @@ mod tests {
         // Below threshold b=4.
         assert!(Pareto::new(3.5, 1.0).kurtosis().is_nan());
         assert!(Pareto::new(4.0, 1.0).kurtosis().is_nan());
+    }
+
+    #[test]
+    fn vonmises_truncnormal_entropy_match_scipy() {
+        // VonMises(κ): ln(2π · I_0(κ)) − κ · I_1(κ)/I_0(κ).
+        for &(kappa, expected) in &[
+            (0.5_f64, 1.778_176_979_3),
+            (1.0, 1.627_401_459_0),
+            (2.0, 1.266_321_292_0),
+            (5.0, 0.675_643_157_0),
+        ] {
+            let v = VonMises { kappa, loc: 0.0 };
+            assert_close(v.entropy(), expected, 1e-9, &format!("VonMises({kappa}) entropy"));
+        }
+        // TruncNormal(a, b): ln(√(2πe)·Δ) + (a·φ(a) − b·φ(b))/(2Δ).
+        for &(a, b, expected) in &[
+            (-1.0_f64, 1.0_f64, 0.682_785_934_3),
+            (0.0, 2.5, 0.668_922_438_0),
+            (-2.0, 0.5, 0.804_177_896_9),
+            (-3.0, 3.0, 1.402_903_548_5),
+        ] {
+            assert_close(
+                TruncNormal::new(a, b).entropy(),
+                expected,
+                1e-9,
+                &format!("TruncNormal({a},{b}) entropy"),
+            );
+        }
     }
 
     #[test]
