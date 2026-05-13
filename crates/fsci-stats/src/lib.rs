@@ -5649,6 +5649,35 @@ impl ContinuousDistribution for Trapezoid {
         let ex2 = self.standard_moment(2);
         self.scale * self.scale * (ex2 - ex * ex)
     }
+
+    fn skewness(&self) -> f64 {
+        // Standardized moments are loc/scale-invariant — compute in z.
+        let m1 = self.standard_moment(1);
+        let m2 = self.standard_moment(2);
+        let m3 = self.standard_moment(3);
+        let var = m2 - m1 * m1;
+        if !var.is_finite() || var <= 0.0 {
+            return f64::NAN;
+        }
+        let mu3 = 2.0_f64.mul_add(m1.powi(3), m3 - 3.0 * m1 * m2);
+        mu3 / var.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        let m1 = self.standard_moment(1);
+        let m2 = self.standard_moment(2);
+        let m3 = self.standard_moment(3);
+        let m4 = self.standard_moment(4);
+        let var = m2 - m1 * m1;
+        if !var.is_finite() || var <= 0.0 {
+            return f64::NAN;
+        }
+        let mu4 = (-3.0_f64).mul_add(
+            m1.powi(4),
+            6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
+        );
+        mu4 / (var * var) - 3.0
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -31166,13 +31195,36 @@ mod tests {
 
     #[test]
     fn unsupported_distribution_moments_return_typed_errors() {
-        // Trapezoid still uses the trait NaN defaults for entropy,
-        // skewness, and kurtosis (closed forms not yet implemented),
-        // so it's the canonical fixture for verifying the typed-error
-        // path. (Chi held that role until frankenscipy-fubyp added
-        // skew/kurt; GenPareto until frankenscipy-ez5vt did the same.)
-        let dist = Trapezoid::new(0.2, 0.7, 0.0, 1.0);
+        // /testing-conformance: verify that the trait's NaN-default
+        // skewness/kurtosis/entropy surfaces are correctly translated
+        // to typed StatsError::Unsupported by try_*. Use a test-local
+        // stub distribution that intentionally does not override any
+        // of the three so the trait defaults fire. (History: Chi held
+        // this fixture role until frankenscipy-fubyp; GenPareto until
+        // frankenscipy-ez5vt; Trapezoid until frankenscipy-gjlms — at
+        // this point every concrete distribution in the crate overrides
+        // at least one of the three, so the dedicated stub is the only
+        // way to exercise the all-three-default path.)
+        struct UnsupportedTestDist;
+        impl ContinuousDistribution for UnsupportedTestDist {
+            fn pdf(&self, _x: f64) -> f64 {
+                f64::NAN
+            }
+            fn cdf(&self, _x: f64) -> f64 {
+                f64::NAN
+            }
+            fn ppf(&self, _q: f64) -> f64 {
+                f64::NAN
+            }
+            fn mean(&self) -> f64 {
+                f64::NAN
+            }
+            fn var(&self) -> f64 {
+                f64::NAN
+            }
+        }
 
+        let dist = UnsupportedTestDist;
         assert!(dist.entropy().is_nan());
         assert!(matches!(
             dist.try_entropy(),
@@ -43987,6 +44039,27 @@ mod tests {
                 "FL cdf must be monotone non-decreasing at x={x}: prev={prev}, cur={c}"
             );
             prev = c;
+        }
+    }
+
+    #[test]
+    fn trapezoid_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.trapezoid(c, d).stats(moments='sk'). Closed-form
+        // standardized moments via the existing standard_moment(n)
+        // helper (loc/scale-invariant). Symmetric c+d=1 cases produce
+        // skew = 0; asymmetric (e.g. c=0.0, d=0.5) flips sign vs the
+        // mirror image c=0.5, d=1.0.
+        let cases = [
+            (0.2_f64, 0.7_f64, 0.063_842_075_8, -0.977_679_120_3),
+            (0.0, 1.0, 0.0, -1.2),
+            (0.3, 0.5, 0.196_238_414_0, -0.681_212_318_8),
+            (0.0, 0.5, 0.273_967_408_1, -0.852_447_041_6),
+            (0.5, 1.0, -0.273_967_408_1, -0.852_447_041_6),
+        ];
+        for &(c, d, sk, ku) in &cases {
+            let t = Trapezoid::new(c, d, 0.0, 1.0);
+            assert_close(t.skewness(), sk, 1e-9, &format!("Trapezoid({c},{d}) skew"));
+            assert_close(t.kurtosis(), ku, 1e-9, &format!("Trapezoid({c},{d}) kurt"));
         }
     }
 
