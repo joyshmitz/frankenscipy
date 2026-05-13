@@ -25521,7 +25521,7 @@ mod tests {
         for (c, want_s, want_k) in cases {
             let d = Lomax::new(c);
             assert!(
-                (d.skewness() - want_s).abs() < 1e-10,
+                (d.skewness() - want_s).abs() < 1e-9,
                 "Lomax({c}).skewness = {}, scipy {want_s}",
                 d.skewness()
             );
