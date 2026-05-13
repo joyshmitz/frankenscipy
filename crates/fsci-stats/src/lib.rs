@@ -1332,6 +1332,12 @@ impl ContinuousDistribution for ChiSquared {
         2.0 * self.df
     }
 
+    fn entropy(&self) -> f64 {
+        // h(χ²(k)) = k/2 + ln(2·Γ(k/2)) + (1 − k/2)·ψ(k/2).
+        let half_k = self.df / 2.0;
+        half_k + 2.0_f64.ln() + ln_gamma(half_k) + (1.0 - half_k) * fsci_special::digamma_scalar(half_k)
+    }
+
     fn fit(data: &[f64]) -> Self {
         if data.is_empty() || data.iter().any(|&x| !x.is_finite() || x < 0.0) {
             return Self { df: f64::NAN };
@@ -7750,6 +7756,12 @@ impl ContinuousDistribution for Chi {
         let sigma = var.sqrt();
         let skew = mu * (1.0 - 2.0 * var) / (sigma * sigma * sigma);
         (2.0 / var) * (1.0 - mu * sigma * skew - var)
+    }
+
+    fn entropy(&self) -> f64 {
+        // h(Chi(k)) = ln Γ(k/2) + (k − ln 2 − (k − 1) ψ(k/2)) / 2.
+        let k = self.df;
+        ln_gamma(k / 2.0) + 0.5 * (k - 2.0_f64.ln() - (k - 1.0) * fsci_special::digamma_scalar(k / 2.0))
     }
 
     fn fit(data: &[f64]) -> Self {
@@ -28359,6 +28371,36 @@ mod tests {
                     &format!("Gumbel({loc},{scale}).sf({x}) = GumbelLeft.cdf(-{x})"),
                 );
             }
+        }
+    }
+
+    #[test]
+    fn chi_squared_entropy_matches_scipy_reference_values() {
+        // scipy.stats.chi2(k).entropy(). Closed form:
+        // h = k/2 + ln(2·Γ(k/2)) + (1 − k/2)·ψ(k/2).
+        let cases = [
+            (2.0_f64, 1.693_147_180_6),
+            (5.0, 2.423_095_090_1),
+            (10.0, 2.846_730_337_2),
+        ];
+        for &(k, h) in &cases {
+            let d = ChiSquared::new(k);
+            assert_close(d.entropy(), h, 1e-9, &format!("ChiSquared({k}) entropy"));
+        }
+    }
+
+    #[test]
+    fn chi_entropy_matches_scipy_reference_values() {
+        // scipy.stats.chi(k).entropy(). Closed form:
+        // h = ln Γ(k/2) + (k − ln 2 − (k − 1) ψ(k/2)) / 2.
+        let cases = [
+            (2.0_f64, 0.942_034_242_2),
+            (5.0, 1.031_795_998_9),
+            (10.0, 1.053_950_732_1),
+        ];
+        for &(k, h) in &cases {
+            let d = Chi::new(k);
+            assert_close(d.entropy(), h, 1e-8, &format!("Chi({k}) entropy"));
         }
     }
 
