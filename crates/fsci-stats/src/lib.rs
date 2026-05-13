@@ -13678,6 +13678,62 @@ impl CrystalBall {
         assert!(m > 1.0, "m must be > 1");
         Self { beta_param, m }
     }
+
+    /// Raw moments m_1..m_4 of CrystalBall computed exactly from
+    /// closed-form integrals over both pieces of the split pdf:
+    ///   gauss part: ∫_{−β}^∞ x^k e^{−x²/2} dx via recurrence
+    ///     J_k = (−β)^{k−1} e^{−β²/2} + (k−1) J_{k−2}
+    ///   tail part: A · Σ_{j=0..k} C(k,j) B^{k−j} (−1)^j ·
+    ///                y₀^{j−m+1} / (m − j − 1),  y₀ = m/β.
+    /// Convergence requires m > k + 1; the caller (skew/kurt) checks
+    /// those preconditions.
+    fn crystal_ball_raw_moments(&self) -> [f64; 4] {
+        let beta = self.beta_param;
+        let m = self.m;
+        let gauss_norm = (2.0 * PI).sqrt() * standard_normal_cdf(beta);
+        let a_coeff = (m / beta).powf(m) * (-0.5 * beta * beta).exp();
+        let b = m / beta - beta;
+        let y0 = m / beta;
+        let tail_norm = a_coeff * y0.powf(1.0 - m) / (m - 1.0);
+        let total_norm = gauss_norm + tail_norm;
+        let e_neg_b2 = (-0.5 * beta * beta).exp();
+        let j0 = gauss_norm;
+        let j1 = e_neg_b2;
+        let j2 = (-beta).mul_add(e_neg_b2, gauss_norm);
+        let j3 = (beta * beta + 2.0) * e_neg_b2;
+        let j4 = 3.0_f64.mul_add(j2, -beta.powi(3) * e_neg_b2);
+        let gauss = [j1, j2, j3, j4];
+        // Tail integrals for k = 1..4 via binomial expansion of (B − y)^k.
+        let tail_k = |k: u32| -> f64 {
+            let mut s = 0.0_f64;
+            for j in 0..=k {
+                let cj = match (k, j) {
+                    (1, 0) => 1.0,
+                    (1, 1) => 1.0,
+                    (2, 0) | (2, 2) => 1.0,
+                    (2, 1) => 2.0,
+                    (3, 0) | (3, 3) => 1.0,
+                    (3, 1) | (3, 2) => 3.0,
+                    (4, 0) | (4, 4) => 1.0,
+                    (4, 1) | (4, 3) => 4.0,
+                    (4, 2) => 6.0,
+                    _ => 0.0,
+                };
+                let sign = if j % 2 == 0 { 1.0 } else { -1.0 };
+                let denom = m - f64::from(j) - 1.0;
+                s += cj * b.powi((k - j) as i32) * sign * y0.powf(f64::from(j) - m + 1.0)
+                    / denom;
+            }
+            a_coeff * s
+        };
+        let mut out = [0.0_f64; 4];
+        for k in 1..=4u32 {
+            out[k as usize - 1] = (gauss[k as usize - 1] + tail_k(k)) / total_norm;
+        }
+        // Silence unused j0 warning.
+        let _ = j0;
+        out
+    }
 }
 
 impl ContinuousDistribution for CrystalBall {
@@ -13795,6 +13851,37 @@ impl ContinuousDistribution for CrystalBall {
         let second_moment = (gauss_second + tail_second) / total_norm;
 
         (second_moment - mean * mean).max(0.0)
+    }
+
+    fn skewness(&self) -> f64 {
+        // m_k requires m > k + 1 (power-tail convergence). Skew needs
+        // m > 4.
+        if self.m <= 4.0 {
+            return f64::NAN;
+        }
+        let [m1, m2, m3, _] = self.crystal_ball_raw_moments();
+        let var = m2 - m1 * m1;
+        if !var.is_finite() || var <= 0.0 {
+            return f64::NAN;
+        }
+        let mu3 = 2.0_f64.mul_add(m1.powi(3), m3 - 3.0 * m1 * m2);
+        mu3 / var.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        if self.m <= 5.0 {
+            return f64::NAN;
+        }
+        let [m1, m2, m3, m4] = self.crystal_ball_raw_moments();
+        let var = m2 - m1 * m1;
+        if !var.is_finite() || var <= 0.0 {
+            return f64::NAN;
+        }
+        let mu4 = (-3.0_f64).mul_add(
+            m1.powi(4),
+            6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
+        );
+        mu4 / (var * var) - 3.0
     }
 }
 
@@ -37473,6 +37560,33 @@ mod tests {
         assert!(CrystalBall::new(1.0, 2.0).mean().is_infinite());
         assert!(CrystalBall::new(1.0, 2.0).var().is_infinite());
         assert!(CrystalBall::new(2.0, 3.0).var().is_infinite());
+    }
+
+    #[test]
+    fn crystal_ball_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.crystalball(β, m).stats(moments='sk'). Closed-form
+        // integrals over both pieces of the split pdf — anchors exact
+        // up to f64 round-off. Skew needs m > 4, kurt needs m > 5.
+        let cases = [
+            (2.0_f64, 6.0_f64, -0.507_652_211_5, 3.886_322_158_1),
+            (3.0, 8.0, -0.021_539_618_1, 0.087_019_826_2),
+            (1.5, 10.0, -0.745_091_145_8, 3.130_691_848_2),
+        ];
+        for &(beta_param, m, sk, ku) in &cases {
+            let d = CrystalBall::new(beta_param, m);
+            assert_close(d.skewness(), sk, 1e-9, &format!("CrystalBall({beta_param},{m}) skew"));
+            assert_close(d.kurtosis(), ku, 1e-8, &format!("CrystalBall({beta_param},{m}) kurt"));
+        }
+    }
+
+    #[test]
+    fn crystal_ball_skewness_and_kurtosis_nan_at_boundary() {
+        // Power-tail convergence needs m > k + 1; skew k=3 → m > 4,
+        // kurt k=4 → m > 5.
+        assert!(CrystalBall::new(2.0, 4.0).skewness().is_nan());
+        assert!(CrystalBall::new(2.0, 3.5).skewness().is_nan());
+        assert!(CrystalBall::new(2.0, 5.0).kurtosis().is_nan());
+        assert!(CrystalBall::new(2.0, 4.5).kurtosis().is_nan());
     }
 
     #[test]
