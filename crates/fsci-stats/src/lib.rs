@@ -11627,6 +11627,13 @@ impl ContinuousDistribution for RDist {
         0.0
     }
 
+    fn kurtosis(&self) -> f64 {
+        // Raw moments via x² substitution + Beta integral identity:
+        //   m_4 = 3/((c+1)(c+3)).
+        // var = 1/(c+1), so excess kurt = m_4/var² − 3 = −6/(c+3).
+        -6.0 / (self.c + 3.0)
+    }
+
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         validate_finite_fit_data(data, 2, "RDist")?;
         for &x in data {
@@ -29056,6 +29063,18 @@ mod tests {
             );
             assert_close(dist.mean(), 0.0, 1e-15, "mean = 0");
             assert_close(dist.skewness(), 0.0, 1e-15, "skew = 0");
+        }
+    }
+
+    #[test]
+    fn rdist_kurtosis_matches_closed_form() {
+        // Excess kurt = −6/(c + 3) from m_4 = 3/((c+1)(c+3)) and var =
+        // 1/(c+1). Spans c = 3 (semicircle: ex.kurt = −1) through
+        // c = 8 (≈ −0.545) — all match scipy.stats.rdist exactly.
+        let cases = [(3.0_f64, -1.0), (5.0, -0.75), (8.0, -6.0 / 11.0)];
+        for &(c, ku) in &cases {
+            let dist = RDist::new(c);
+            assert_close(dist.kurtosis(), ku, 1e-15, &format!("RDist({c}) kurt"));
         }
     }
 
