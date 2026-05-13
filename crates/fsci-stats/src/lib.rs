@@ -7905,6 +7905,39 @@ impl ContinuousDistribution for Fisk {
         }
     }
 
+    fn skewness(&self) -> f64 {
+        // Raw moments via Euler reflection:
+        //   m_k = B(1+k/c, 1−k/c) = (πk/c) / sin(πk/c)
+        // Finite for c > k; skew requires c > 3.
+        if self.c <= 3.0 {
+            return f64::NAN;
+        }
+        let b = PI / self.c;
+        let m1 = b / b.sin();
+        let m2 = 2.0 * b / (2.0 * b).sin();
+        let m3 = 3.0 * b / (3.0 * b).sin();
+        let var = m2 - m1 * m1;
+        let mu3 = 2.0_f64.mul_add(m1.powi(3), m3 - 3.0 * m1 * m2);
+        mu3 / var.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        if self.c <= 4.0 {
+            return f64::NAN;
+        }
+        let b = PI / self.c;
+        let m1 = b / b.sin();
+        let m2 = 2.0 * b / (2.0 * b).sin();
+        let m3 = 3.0 * b / (3.0 * b).sin();
+        let m4 = 4.0 * b / (4.0 * b).sin();
+        let var = m2 - m1 * m1;
+        let mu4 = (-3.0_f64).mul_add(
+            m1.powi(4),
+            6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
+        );
+        mu4 / (var * var) - 3.0
+    }
+
     fn fit(data: &[f64]) -> Self {
         Self::try_fit(data).unwrap_or_else(|e| {
             panic!("Fisk::fit failed: {e}");
@@ -37904,6 +37937,32 @@ mod tests {
         let c = f.cdf(x);
         assert!((c - 0.5).abs() < 1e-10); // CDF(1) = 1/(1+1) = 0.5
         assert!((f.ppf(0.5) - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn fisk_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.fisk(c).stats(moments='sk'). Skew needs c > 3,
+        // kurt needs c > 4. Cases span moderate-to-thin tails.
+        let cases = [
+            (5.0_f64, 2.485_275_549_686_714, 26.556_191_909_249_137),
+            (7.5, 1.330_035_796_244_332, 6.188_671_909_426_150),
+            (10.0, 0.936_674_412_127_485, 3.510_209_942_779_613),
+        ];
+        for &(c, s, k) in &cases {
+            let d = Fisk::new(c);
+            assert_close(d.skewness(), s, 1e-10, &format!("Fisk({c}) skew"));
+            assert_close(d.kurtosis(), k, 1e-9, &format!("Fisk({c}) kurt"));
+        }
+    }
+
+    #[test]
+    fn fisk_skewness_and_kurtosis_nan_at_boundary() {
+        // c ≤ 3 ⇒ μ_3 diverges (m_3 has 1/sin(3π/c)).
+        assert!(Fisk::new(3.0).skewness().is_nan());
+        assert!(Fisk::new(2.5).skewness().is_nan());
+        // c ≤ 4 ⇒ μ_4 diverges.
+        assert!(Fisk::new(4.0).kurtosis().is_nan());
+        assert!(Fisk::new(3.5).kurtosis().is_nan());
     }
 
     #[test]
