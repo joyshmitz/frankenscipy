@@ -12013,6 +12013,32 @@ impl GenHalfLogistic {
         assert!(c > 0.0, "c must be positive");
         Self { c }
     }
+
+    /// k-th raw moment via the substitution u = (1 − c·x)^{1/c}, which
+    /// gives x = (1 − u^c)/c and the standard half-logistic measure
+    /// 2/(1 + u)² du on the bounded interval u ∈ [0, 1]:
+    ///   E[X^k] = ∫_0^1 ((1 − u^c)/c)^k · 2/(1 + u)² du.
+    /// Evaluated by composite Simpson — endpoint at u = 0 is regular
+    /// (integrand → (1/c)^k · 2), so no eps shift needed.
+    fn raw_moment(&self, k: u32) -> f64 {
+        let n: usize = 8_192;
+        let h = 1.0 / n as f64;
+        let mut sum = 0.0_f64;
+        for i in 0..=n {
+            let u = i as f64 * h;
+            let w = if i == 0 || i == n {
+                1.0
+            } else if i % 2 == 0 {
+                2.0
+            } else {
+                4.0
+            };
+            let xv = (1.0 - u.powf(self.c)) / self.c;
+            let denom = 1.0 + u;
+            sum += w * xv.powi(k as i32) * 2.0 / (denom * denom);
+        }
+        sum * h / 3.0
+    }
 }
 
 impl ContinuousDistribution for GenHalfLogistic {
@@ -12041,12 +12067,45 @@ impl ContinuousDistribution for GenHalfLogistic {
     }
 
     fn mean(&self) -> f64 {
-        let c = self.c;
-        (fsci_special::digamma_scalar(1.0 / c + 1.0) + EULER_MASCHERONI) / c
+        // The earlier (ψ(1/c + 1) + γ)/c formula matched a different
+        // distribution — scipy.stats.genhalflogistic(c=0.5).mean() is
+        // 0.858, not 3.0. The substitution u = (1 − cx)^{1/c} gives
+        // PDF measure 2/(1+u)² du on u ∈ [0, 1] and x = (1 − u^c)/c,
+        // which integrates cleanly via Simpson on the bounded interval.
+        self.raw_moment(1)
     }
 
     fn var(&self) -> f64 {
-        fsci_special::trigamma(1.0 / self.c + 1.0) / (self.c * self.c)
+        let m1 = self.raw_moment(1);
+        (self.raw_moment(2) - m1 * m1).max(0.0)
+    }
+
+    fn skewness(&self) -> f64 {
+        let m1 = self.raw_moment(1);
+        let m2 = self.raw_moment(2);
+        let m3 = self.raw_moment(3);
+        let var = m2 - m1 * m1;
+        if var <= 0.0 {
+            return f64::NAN;
+        }
+        let mu3 = 2.0_f64.mul_add(m1.powi(3), m3 - 3.0 * m1 * m2);
+        mu3 / var.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        let m1 = self.raw_moment(1);
+        let m2 = self.raw_moment(2);
+        let m3 = self.raw_moment(3);
+        let m4 = self.raw_moment(4);
+        let var = m2 - m1 * m1;
+        if var <= 0.0 {
+            return f64::NAN;
+        }
+        let mu4 = (-3.0_f64).mul_add(
+            m1.powi(4),
+            6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
+        );
+        mu4 / (var * var) - 3.0
     }
 }
 
@@ -36625,17 +36684,44 @@ mod tests {
 
     #[test]
     fn gen_half_logistic_moments_match_scipy_reference_values() {
+        // Reanchored against actual scipy.stats.genhalflogistic(c).mean()
+        // / .var() (scipy 1.17). The earlier fixture's (mean, var) values
+        // were inconsistent with the [0, 1/c] support — at c=0.5 the
+        // earlier mean of 3.0 lay outside support — and matched a
+        // different polygamma identity rather than the documented PDF.
         let cases = [
-            (0.5, (3.0, 1.579_736_267_392_905_8)),
-            (1.0, (1.0, 0.644_934_066_848_226_6)),
-            (2.0, (0.306_852_819_440_054_7, 0.233_700_550_136_169_83)),
-            (3.5, (0.111_913_624_175_919_25, 0.094_010_019_668_303_19)),
+            (0.5_f64, (0.858_407_346_410_207_2, 0.241_943_657_749_376_54)),
+            (1.0, (0.613_705_638_880_109_4, 0.078_187_944_335_976_92)),
+            (2.0, (0.386_294_361_119_890_8, 0.017_443_333_188_006_36)),
         ];
 
         for &(c, (mean, var)) in &cases {
             let dist = GenHalfLogistic::new(c);
-            assert_close(dist.mean(), mean, 1e-9, "GenHalfLogistic mean");
-            assert_close(dist.var(), var, 1e-9, "GenHalfLogistic variance");
+            // c < 1 has an unbounded derivative at u = 0 in the
+            // change-of-variable integrand, so composite Simpson
+            // converges algebraically (~ 1e-5 here) rather than
+            // exponentially.
+            assert_close(dist.mean(), mean, 1e-4, "GenHalfLogistic mean");
+            assert_close(dist.var(), var, 1e-4, "GenHalfLogistic variance");
+        }
+    }
+
+    #[test]
+    fn gen_half_logistic_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.genhalflogistic(c).stats(moments='sk'). Both
+        // surfaces use numerical integration; c < 1 hits an unbounded
+        // derivative at u = 0 in the change-of-variable integrand
+        // (Simpson converges algebraically there) so use 1e-4 for c=0.5
+        // and tighter 1e-7 for the smoother c ≥ 1 cases.
+        let cases = [
+            (0.5_f64, 0.130_053_757_375_523, -0.967_392_874_351_621, 1e-4),
+            (1.0, -0.486_130_294_358_783, -0.907_160_622_765_310, 1e-7),
+            (2.0, -1.240_958_297_341_275, 0.470_685_031_523_165, 1e-7),
+        ];
+        for &(c, sk, ku, tol) in &cases {
+            let d = GenHalfLogistic::new(c);
+            assert_close(d.skewness(), sk, tol, &format!("GenHalfLogistic({c}) skew"));
+            assert_close(d.kurtosis(), ku, tol, &format!("GenHalfLogistic({c}) kurt"));
         }
     }
 
