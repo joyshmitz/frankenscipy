@@ -2923,6 +2923,13 @@ impl ContinuousDistribution for Rayleigh {
         // [frankenscipy-y718j]; constant in scale.
         2.0 * (PI - 3.0) * PI.sqrt() / (4.0 - PI).powf(1.5)
     }
+
+    fn kurtosis(&self) -> f64 {
+        // Excess kurtosis: (24π − 6π² − 16) / (4 − π)² ≈ 0.24509
+        // (scale-invariant). (frankenscipy-5cd0j)
+        let four_minus_pi = 4.0 - PI;
+        (24.0 * PI - 6.0 * PI * PI - 16.0) / (four_minus_pi * four_minus_pi)
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -3460,6 +3467,13 @@ impl ContinuousDistribution for Maxwell {
         // Maxwell skewness = 2·√2·(16 - 5π) / (3π - 8)^(3/2) ≈ 0.4857
         // [frankenscipy-y718j]; constant in scale.
         2.0 * std::f64::consts::SQRT_2 * (16.0 - 5.0 * PI) / (3.0 * PI - 8.0).powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        // Excess kurtosis: 4·(40π − 3π² − 96) / (3π − 8)² ≈ 0.10816
+        // (scale-invariant). (frankenscipy-5cd0j)
+        let three_pi_minus_8 = 3.0 * PI - 8.0;
+        4.0 * (40.0 * PI - 3.0 * PI * PI - 96.0) / (three_pi_minus_8 * three_pi_minus_8)
     }
 }
 
@@ -6782,6 +6796,18 @@ impl ContinuousDistribution for HalfNormal {
 
     fn var(&self) -> f64 {
         1.0 - 2.0 / PI
+    }
+
+    fn skewness(&self) -> f64 {
+        // √2·(4 − π) / (π − 2)^{3/2} ≈ 0.99527 (frankenscipy-5cd0j).
+        let pm2 = PI - 2.0;
+        std::f64::consts::SQRT_2 * (4.0 - PI) / pm2.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        // Excess kurtosis: 8(π − 3) / (π − 2)² ≈ 0.86918 (frankenscipy-5cd0j).
+        let pm2 = PI - 2.0;
+        8.0 * (PI - 3.0) / (pm2 * pm2)
     }
 
     // fit() inherits the trait default (delegates to try_fit, panics on
@@ -36622,6 +36648,67 @@ mod tests {
         let c = hn.cdf(1.0);
         assert!(c > 0.0 && c < 1.0);
         assert!((hn.mean() - (2.0 / PI).sqrt()).abs() < 1e-10);
+    }
+
+    /// Rayleigh skewness/kurtosis closed forms match scipy
+    /// (frankenscipy-5cd0j). Scale-invariant — use unit-scale.
+    #[test]
+    fn rayleigh_skew_kurt_match_scipy() {
+        let r = Rayleigh::new(1.0);
+        // scipy.stats.rayleigh.stats(moments='sk') = (0.6311106578189364, 0.24508930068763846)
+        assert!(
+            (r.skewness() - 0.6311106578189364).abs() < 1e-12,
+            "Rayleigh.skewness = {}",
+            r.skewness()
+        );
+        assert!(
+            (r.kurtosis() - 0.24508930068763846).abs() < 1e-12,
+            "Rayleigh.kurtosis = {}",
+            r.kurtosis()
+        );
+        // Confirm scale invariance.
+        let r2 = Rayleigh::new(3.7);
+        assert!((r2.skewness() - r.skewness()).abs() < 1e-15);
+        assert!((r2.kurtosis() - r.kurtosis()).abs() < 1e-15);
+    }
+
+    /// Maxwell skewness/kurtosis closed forms match scipy
+    /// (frankenscipy-5cd0j). Scale-invariant — use unit-scale.
+    #[test]
+    fn maxwell_skew_kurt_match_scipy() {
+        let m = Maxwell::new(1.0);
+        // scipy.stats.maxwell.stats(moments='sk') = (0.4856928280495921, 0.10816384281629526)
+        assert!(
+            (m.skewness() - 0.4856928280495921).abs() < 1e-12,
+            "Maxwell.skewness = {}",
+            m.skewness()
+        );
+        assert!(
+            (m.kurtosis() - 0.10816384281629526).abs() < 1e-12,
+            "Maxwell.kurtosis = {}",
+            m.kurtosis()
+        );
+        let m2 = Maxwell::new(2.5);
+        assert!((m2.skewness() - m.skewness()).abs() < 1e-15);
+        assert!((m2.kurtosis() - m.kurtosis()).abs() < 1e-15);
+    }
+
+    /// HalfNormal skewness/kurtosis closed forms match scipy
+    /// (frankenscipy-5cd0j).
+    #[test]
+    fn half_normal_skew_kurt_match_scipy() {
+        let hn = HalfNormal;
+        // scipy.stats.halfnorm.stats(moments='sk') = (0.9952717464311565, 0.8691773036059736)
+        assert!(
+            (hn.skewness() - 0.9952717464311565).abs() < 1e-12,
+            "HalfNormal.skewness = {}",
+            hn.skewness()
+        );
+        assert!(
+            (hn.kurtosis() - 0.8691773036059736).abs() < 1e-12,
+            "HalfNormal.kurtosis = {}",
+            hn.kurtosis()
+        );
     }
 
     #[test]
