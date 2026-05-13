@@ -7594,46 +7594,66 @@ impl ContinuousDistribution for Rice {
     }
 
     fn mean(&self) -> f64 {
-        // Numerical integration — scale grid with the distribution's spread
-        let upper = self.b + 6.0;
-        let n = (500.0 * (1.0 + self.b / 5.0).min(10.0)) as usize;
-        let n = n + (n % 2);
-        let h = upper / n as f64;
-        let mut sum = 0.0;
-        for i in 0..=n {
-            let x = i as f64 * h;
-            let w = if i == 0 || i == n {
-                1.0
-            } else if i % 2 == 0 {
-                2.0
-            } else {
-                4.0
-            };
-            sum += w * x * self.pdf(x);
-        }
-        sum * h / 3.0
+        // Closed form: m_1 = √(π/2) · L_{1/2}(−b²/2) with
+        //   L_{1/2}(−w) = e^{−w/2} [(1+w) I_0(w/2) + w I_1(w/2)]
+        // and w = b²/2, so w/2 = b²/4. The i0_scalar/i1_scalar helpers
+        // return the *unscaled* Bessel I, so absorb the e^{−w/2} factor
+        // by computing e^{−b²/4} · I_n(b²/4) directly.
+        let w = self.b * self.b / 2.0;
+        let z = w / 2.0;
+        let damp = (-z).exp();
+        let l_half = damp
+            * ((1.0 + w) * fsci_special::i0_scalar(z) + w * fsci_special::i1_scalar(z));
+        (PI / 2.0).sqrt() * l_half
     }
 
     fn var(&self) -> f64 {
-        let m = self.mean();
-        let upper = self.b + 6.0;
-        let n = (500.0 * (1.0 + self.b / 5.0).min(10.0)) as usize;
-        let n = n + (n % 2);
-        let h = upper / n as f64;
-        let mut sum = 0.0;
-        for i in 0..=n {
-            let x = i as f64 * h;
-            let w = if i == 0 || i == n {
-                1.0
-            } else if i % 2 == 0 {
-                2.0
-            } else {
-                4.0
-            };
-            sum += w * x * x * self.pdf(x);
-        }
-        let ex2 = sum * h / 3.0;
-        ex2 - m * m
+        // m_2 = 2 + b² (X² is non-central χ²(2, b²) with mean 2 + b²).
+        let m1 = self.mean();
+        2.0_f64.mul_add(1.0, self.b * self.b) - m1 * m1
+    }
+
+    fn skewness(&self) -> f64 {
+        // m_3 = 3 √(π/2) · L_{3/2}(−b²/2) with
+        //   L_{3/2}(−w) = (2/3) e^{−w/2}
+        //               · [(3/2 + 3w + w²) I_0(w/2) + (2+w)w I_1(w/2)].
+        let w = self.b * self.b / 2.0;
+        let z = w / 2.0;
+        let damp = (-z).exp();
+        let i0 = fsci_special::i0_scalar(z);
+        let i1 = fsci_special::i1_scalar(z);
+        let l_half = damp * ((1.0 + w) * i0 + w * i1);
+        let l_3half = (2.0 / 3.0) * damp
+            * (3.0_f64.mul_add(w, w.mul_add(w, 1.5)) * i0 + (2.0 + w) * w * i1);
+        let m1 = (PI / 2.0).sqrt() * l_half;
+        let m2 = 2.0 + self.b * self.b;
+        let m3 = 3.0 * (PI / 2.0).sqrt() * l_3half;
+        let var = m2 - m1 * m1;
+        let mu3 = 2.0_f64.mul_add(m1.powi(3), m3 - 3.0 * m1 * m2);
+        mu3 / var.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        // m_4 = 8 + 8 b² + b⁴ (fourth moment of |Z + b|² for 2-vec Z).
+        let w = self.b * self.b / 2.0;
+        let z = w / 2.0;
+        let damp = (-z).exp();
+        let i0 = fsci_special::i0_scalar(z);
+        let i1 = fsci_special::i1_scalar(z);
+        let l_half = damp * ((1.0 + w) * i0 + w * i1);
+        let l_3half = (2.0 / 3.0) * damp
+            * (3.0_f64.mul_add(w, w.mul_add(w, 1.5)) * i0 + (2.0 + w) * w * i1);
+        let m1 = (PI / 2.0).sqrt() * l_half;
+        let m2 = 2.0 + self.b * self.b;
+        let m3 = 3.0 * (PI / 2.0).sqrt() * l_3half;
+        let b2 = self.b * self.b;
+        let m4 = 8.0_f64.mul_add(b2, b2.mul_add(b2, 8.0));
+        let var = m2 - m1 * m1;
+        let mu4 = (-3.0_f64).mul_add(
+            m1.powi(4),
+            6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
+        );
+        mu4 / (var * var) - 3.0
     }
 
     fn fit(data: &[f64]) -> Self {
@@ -38139,6 +38159,24 @@ mod tests {
         let r = Rice::new(1.0);
         assert!(r.pdf(1.0) > 0.0);
         assert!(r.pdf(-1.0) == 0.0);
+    }
+
+    #[test]
+    fn rice_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.rice(b).stats(moments='sk'). Closed forms use
+        // L_{1/2} / L_{3/2} Laguerre identities expressed via I_0, I_1.
+        // Three b values span the transition from Rayleigh-dominated
+        // (b small) to near-Gaussian (b large).
+        let cases = [
+            (0.5_f64, 0.617_744_246_266_062, 0.210_469_464_882_587),
+            (1.5, 0.354_846_416_684_098, -0.157_092_549_606_078),
+            (3.0, 0.059_483_147_708_322, -0.073_040_108_277_302),
+        ];
+        for &(b, s, k) in &cases {
+            let d = Rice::new(b);
+            assert_close(d.skewness(), s, 1e-9, &format!("Rice({b}) skew"));
+            assert_close(d.kurtosis(), k, 1e-8, &format!("Rice({b}) kurt"));
+        }
     }
 
     #[test]
