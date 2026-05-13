@@ -6636,6 +6636,51 @@ impl ContinuousDistribution for GenExtreme {
         }
     }
 
+    fn skewness(&self) -> f64 {
+        // Wikipedia closed form: sgn(c)·(g_3 − 3·g_1·g_2 + 2·g_1³) /
+        // (g_2 − g_1²)^{3/2} where g_k = Γ(1 − k·c). Exists when c < 1/3.
+        // c = 0 limit: -12·√6·ζ(3)/π³ ≈ -1.13955 (Gumbel value).
+        // (frankenscipy-ufsz9)
+        let c = self.c;
+        if c.abs() < 1e-15 {
+            // Gumbel-right limit; scipy.stats.gumbel_r.skewness =
+            // +12·√6·ζ(3)/π³ ≈ +1.1396. The Wikipedia sgn(c)·formula
+            // has a 0/0 singularity at c = 0 but its analytic limit
+            // matches this canonical value.
+            return 1.139_547_099_404_648_7;
+        }
+        if c >= 1.0 / 3.0 {
+            return f64::NAN;
+        }
+        let g1 = ln_gamma(1.0 - c).exp();
+        let g2 = ln_gamma(1.0 - 2.0 * c).exp();
+        let g3 = ln_gamma(1.0 - 3.0 * c).exp();
+        let num = g3 - 3.0 * g1 * g2 + 2.0 * g1 * g1 * g1;
+        let den = (g2 - g1 * g1).powf(1.5);
+        c.signum() * num / den
+    }
+
+    fn kurtosis(&self) -> f64 {
+        // Excess kurtosis: (g_4 − 4·g_1·g_3 + 6·g_1²·g_2 − 3·g_1⁴)
+        // / (g_2 − g_1²)² − 3. Exists when c < 1/4.
+        // c = 0 limit: 12/5 = 2.4 (Gumbel). (frankenscipy-ufsz9)
+        let c = self.c;
+        if c.abs() < 1e-15 {
+            return 12.0 / 5.0;
+        }
+        if c >= 0.25 {
+            return f64::NAN;
+        }
+        let g1 = ln_gamma(1.0 - c).exp();
+        let g2 = ln_gamma(1.0 - 2.0 * c).exp();
+        let g3 = ln_gamma(1.0 - 3.0 * c).exp();
+        let g4 = ln_gamma(1.0 - 4.0 * c).exp();
+        let g1_sq = g1 * g1;
+        let num = g4 - 4.0 * g1 * g3 + 6.0 * g1_sq * g2 - 3.0 * g1_sq * g1_sq;
+        let den = (g2 - g1_sq).powi(2);
+        num / den - 3.0
+    }
+
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         validate_finite_fit_data(data, 3, "GenExtreme")?;
         let qs = quantile(data, &[0.25, 0.5, 0.75]);
@@ -36926,6 +36971,45 @@ mod tests {
                 1e-12,
                 &format!("GEV({c}).cdf(0) = {v}, expected exp(-1) = {target}"),
             );
+        }
+    }
+
+    /// GenExtreme skew/kurt closed forms vs scipy.stats.genextreme.
+    /// (frankenscipy-ufsz9). Note fsci's c convention is opposite of
+    /// scipy's: fsci_c = -scipy_c.
+    #[test]
+    fn gen_extreme_skew_kurt_match_scipy() {
+        // fsci's `c` matches Wikipedia's GEV shape parameter ξ (opposite
+        // sign of scipy's `c`). scipy.genextreme(c=0.3) corresponds to
+        // fsci_c=-0.3, etc.
+        let cases: [(f64, f64, f64); 4] = [
+            // fsci_c=-0.3 ↔ scipy c=+0.3
+            (-0.3, -0.06874209942094471, -0.28939916210776717),
+            // fsci_c=-0.1 ↔ scipy c=+0.1 (skew +0.6376, kurt +0.5702)
+            (-0.1, 0.637_637_133_903_015, 0.570_166_483_566_913_6),
+            // c=0 → Gumbel-right (skew +1.1396, kurt 12/5)
+            (0.0, 1.139_547_099_404_648_7, 12.0 / 5.0),
+            // scipy.genextreme(c=-0.2) reports skew=+3.5351, kurt=+45.0915
+            (0.2, 3.535071604621334, 45.091512125815335),
+        ];
+        for (c, ws, wk) in cases {
+            let d = GenExtreme::new(c);
+            let s = d.skewness();
+            if !ws.is_nan() {
+                assert!(
+                    (s - ws).abs() < 1e-6,
+                    "GEV({c}).skew = {s}, scipy {ws}"
+                );
+            }
+            if wk.is_nan() {
+                assert!(d.kurtosis().is_nan(), "GEV({c}).kurt should be NaN");
+            } else {
+                assert!(
+                    (d.kurtosis() - wk).abs() < 1e-6,
+                    "GEV({c}).kurt = {}, scipy {wk}",
+                    d.kurtosis()
+                );
+            }
         }
     }
 
