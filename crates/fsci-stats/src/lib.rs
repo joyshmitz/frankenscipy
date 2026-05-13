@@ -6530,6 +6530,32 @@ impl ContinuousDistribution for PowerNorm {
         );
         mu4 / (var * var) - 3.0
     }
+
+    fn entropy(&self) -> f64 {
+        // PowerNorm: gaussian-like tails; use arctan to handle both
+        // sides uniformly when c < 1 spreads the right tail further.
+        simpson_integrate_adaptive(
+            |u| {
+                let x = u.tan();
+                if !x.is_finite() {
+                    return 0.0;
+                }
+                let p = self.pdf(x);
+                if p > 0.0 {
+                    let sec2 = 1.0 / u.cos().powi(2);
+                    -p * p.ln() * sec2
+                } else {
+                    0.0
+                }
+            },
+            -PI / 2.0 + 1e-12,
+            PI / 2.0 - 1e-12,
+            4_096,
+            1e-9,
+            1e-9,
+            10,
+        )
+    }
 }
 
 /// Power-lognormal distribution with shapes `c > 0`, `s > 0`.
@@ -6679,6 +6705,32 @@ impl ContinuousDistribution for PowerLognorm {
         mu4 / (var * var) - 3.0
     }
 
+    fn entropy(&self) -> f64 {
+        // PowerLognorm: support (0, ∞) with long log-normal tail.
+        // arctan compactification keeps integrand bounded.
+        simpson_integrate_adaptive(
+            |u| {
+                let x = u.tan();
+                if !x.is_finite() || x <= 0.0 {
+                    return 0.0;
+                }
+                let p = self.pdf(x);
+                if p > 0.0 {
+                    let sec2 = 1.0 / u.cos().powi(2);
+                    -p * p.ln() * sec2
+                } else {
+                    0.0
+                }
+            },
+            1e-12,
+            PI / 2.0 - 1e-12,
+            4_096,
+            1e-9,
+            1e-9,
+            10,
+        )
+    }
+
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         validate_finite_fit_data(data, 4, "PowerLognorm")?;
         for &x in data {
@@ -6821,6 +6873,28 @@ impl ContinuousDistribution for JohnsonSU {
             6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
         );
         mu4 / (var * var) - 3.0
+    }
+
+    fn entropy(&self) -> f64 {
+        // JohnsonSU: X = sinh((Z − a)/b), Z ~ N(0, 1). Integrate
+        // −E[ln pdf(X)] in z so the gaussian weight bounds both tails.
+        simpson_integrate_adaptive(
+            |z| {
+                let x = ((z - self.a) / self.b).sinh();
+                let p = self.pdf(x);
+                if p > 0.0 {
+                    -standard_normal_pdf(z) * p.ln()
+                } else {
+                    0.0
+                }
+            },
+            -12.0,
+            12.0,
+            4_096,
+            1e-11,
+            1e-11,
+            8,
+        )
     }
 }
 
@@ -25494,6 +25568,34 @@ impl ContinuousDistribution for ExponPow {
         mu4 / (var * var) - 3.0
     }
 
+    fn entropy(&self) -> f64 {
+        // ExponPow has a 1/x^{1−b} singularity at x = 0 for b < 1
+        // that defeats direct adaptive Simpson on x. Substitute
+        // u = x^b ⇒ X = U^{1/b}; then U ~ Gompertz(c=1) and the
+        // Jacobian-transformed entropy is
+        //   h(X) = h(U) − ln b − (b − 1)/b · E_U[ln U],
+        // with both U-side quadratures done on the gompertz pdf
+        // (which is smooth at u = 0).
+        let u_dist = Gompertz::new(1.0);
+        let h_u = u_dist.entropy();
+        let e_ln_u = simpson_integrate_adaptive(
+            |u| {
+                if u <= 0.0 {
+                    return 0.0;
+                }
+                let p = u_dist.pdf(u);
+                if p > 0.0 { p * u.ln() } else { 0.0 }
+            },
+            1e-12,
+            35.0,
+            4_096,
+            1e-12,
+            1e-12,
+            10,
+        );
+        h_u - self.b.ln() - (self.b - 1.0) / self.b * e_ln_u
+    }
+
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         validate_finite_fit_data(data, 2, "ExponPow")?;
         for &x in data {
@@ -25647,6 +25749,28 @@ impl ContinuousDistribution for ExponWeibull {
             6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
         );
         mu4 / (var * var) - 3.0
+    }
+
+    fn entropy(&self) -> f64 {
+        // ExponWeibull(a, c): support (0, ∞). The (1 − exp(−x^c))^{a−1}
+        // factor and Weibull tail mean direct Simpson on a wide x
+        // window suffices. Cap at 40 — far past where any reasonable
+        // (a, c) has mass.
+        simpson_integrate_adaptive(
+            |x| {
+                if x <= 0.0 {
+                    return 0.0;
+                }
+                let p = self.pdf(x);
+                if p > 0.0 { -p * p.ln() } else { 0.0 }
+            },
+            1e-12,
+            40.0,
+            4_096,
+            1e-11,
+            1e-11,
+            10,
+        )
     }
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
@@ -28461,6 +28585,77 @@ mod tests {
                 expected,
                 1e-5,
                 &format!("JohnsonSB({a},{b}) entropy"),
+            );
+        }
+    }
+
+    #[test]
+    fn powernorm_powerlognorm_johnsonsu_exponpow_exponweibull_entropy_match_scipy() {
+        // PowerNorm(c)
+        for &(c, expected) in &[
+            (0.5_f64, 1.638_726_941_6),
+            (1.0, 1.418_938_533_2),
+            (2.0, 1.225_791_352_6),
+            (4.0, 1.058_308_619_8),
+        ] {
+            assert_close(
+                PowerNorm::new(c).entropy(),
+                expected,
+                1e-4,
+                &format!("PowerNorm({c}) entropy"),
+            );
+        }
+        // PowerLognorm(c, s)
+        for &(c, s, expected) in &[
+            (1.5_f64, 0.5_f64, 0.437_577_288_7),
+            (3.0, 1.0, 0.278_540_759_7),
+            (2.5, 1.5, 0.489_848_026_7),
+        ] {
+            assert_close(
+                PowerLognorm::new(c, s).entropy(),
+                expected,
+                1e-3,
+                &format!("PowerLognorm({c},{s}) entropy"),
+            );
+        }
+        // JohnsonSU(a, b)
+        for &(a, b, expected) in &[
+            (1.25_f64, 2.5_f64, 0.683_747_250_4),
+            (0.5, 1.5, 1.243_591_889_8),
+            (-0.8, 3.0, 0.405_163_933_6),
+        ] {
+            assert_close(
+                JohnsonSU::new(a, b).entropy(),
+                expected,
+                1e-5,
+                &format!("JohnsonSU({a},{b}) entropy"),
+            );
+        }
+        // ExponPow(b)
+        for &(b, expected) in &[
+            (0.5_f64, 0.199_489_824_6),
+            (1.0, 0.403_652_637_7),
+            (2.5, 0.025_747_902_2),
+            (4.0, -0.309_659_227_9),
+        ] {
+            assert_close(
+                ExponPow::new(b).entropy(),
+                expected,
+                1e-4,
+                &format!("ExponPow({b}) entropy"),
+            );
+        }
+        // ExponWeibull(a, c)
+        for &(a, c, expected) in &[
+            (2.0_f64, 1.5_f64, 0.862_743_872_8),
+            (3.0, 2.5, 0.242_928_826_6),
+            (1.5, 3.0, 0.198_895_751_6),
+        ] {
+            assert_close(
+                ExponWeibull::new(a, c).entropy(),
+                expected,
+                1e-4,
+                &format!("ExponWeibull({a},{c}) entropy"),
             );
         }
     }
