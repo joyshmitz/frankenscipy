@@ -6760,6 +6760,29 @@ impl ContinuousDistribution for PowerLaw {
         self.a / ((self.a + 1.0).powi(2) * (self.a + 2.0))
     }
 
+    fn skewness(&self) -> f64 {
+        // Raw moments are E[X^k] = a/(a+k). Build central moments
+        // analytically. (frankenscipy-noof0)
+        let a = self.a;
+        let m1 = a / (a + 1.0);
+        let m2 = a / (a + 2.0);
+        let m3 = a / (a + 3.0);
+        let mu3 = m3 - 3.0 * m1 * m2 + 2.0 * m1 * m1 * m1;
+        let var = m2 - m1 * m1;
+        mu3 / var.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        let a = self.a;
+        let m1 = a / (a + 1.0);
+        let m2 = a / (a + 2.0);
+        let m3 = a / (a + 3.0);
+        let m4 = a / (a + 4.0);
+        let mu4 = m4 - 4.0 * m1 * m3 + 6.0 * m1 * m1 * m2 - 3.0 * m1 * m1 * m1 * m1;
+        let var = m2 - m1 * m1;
+        mu4 / (var * var) - 3.0
+    }
+
     fn fit(data: &[f64]) -> Self {
         if data.is_empty() || data.iter().any(|&x| !x.is_finite() || x <= 0.0 || x > 1.0) {
             return Self { a: f64::NAN };
@@ -29256,6 +29279,31 @@ mod tests {
         let expected_shape = data.len() as f64 / data.iter().map(|&x| x.ln()).sum::<f64>();
         assert_close(p.scale, 1.0, 1e-12, "pareto fit scale");
         assert_close(p.b, expected_shape, 1e-12, "pareto fit shape");
+    }
+
+    /// PowerLaw skew/kurt closed forms — frankenscipy-noof0.
+    #[test]
+    fn powerlaw_skew_kurt_match_scipy() {
+        // (a, scipy skew, scipy kurt)
+        let cases: [(f64, f64, f64); 4] = [
+            (0.5, 0.6388765649, -0.857142857142857),
+            (1.0, 0.0, -1.2),
+            (2.0, -0.565685424949238, -0.6000000000),
+            (5.0, -1.1832159566199232, 1.2),
+        ];
+        for (a, want_s, want_k) in cases {
+            let d = PowerLaw::new(a);
+            assert!(
+                (d.skewness() - want_s).abs() < 1e-9,
+                "PowerLaw({a}).skewness = {}, scipy {want_s}",
+                d.skewness()
+            );
+            assert!(
+                (d.kurtosis() - want_k).abs() < 1e-9,
+                "PowerLaw({a}).kurtosis = {}, scipy {want_k}",
+                d.kurtosis()
+            );
+        }
     }
 
     #[test]
