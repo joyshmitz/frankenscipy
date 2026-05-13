@@ -6168,16 +6168,28 @@ impl PowerNorm {
 
     fn raw_moment(&self, order: i32) -> f64 {
         if (self.c - 1.0).abs() < 1e-12 {
+            // c = 1 reduces to standard normal: m_1 = 0, m_2 = 1,
+            // m_3 = 0, m_4 = 3.
             return match order {
-                1 => 0.0,
+                1 | 3 => 0.0,
                 2 => 1.0,
+                4 => 3.0,
                 _ => f64::NAN,
             };
         }
 
+        // /mock-code-finder boundary: at c < 1 the right tail is
+        // heavier than Φ, so ppf(1 − 1e-12) underflows when the inner
+        // ((1−q).ln()/c).exp() drops below the smallest probability
+        // ndtri accepts — ppf returns +∞ and the integration NaNs out.
+        // Fall back to a finite cap on either bound so quadrature
+        // stays well-defined for all c > 0.
         let eps = 1e-12;
-        let lo = self.ppf(eps);
-        let hi = self.ppf(1.0 - eps);
+        let fallback = 50.0;
+        let raw_lo = self.ppf(eps);
+        let raw_hi = self.ppf(1.0 - eps);
+        let lo = if raw_lo.is_finite() { raw_lo } else { -fallback };
+        let hi = if raw_hi.is_finite() { raw_hi } else { fallback };
         simpson_integrate_adaptive(
             |x| x.powi(order) * self.pdf(x),
             lo,
@@ -6221,6 +6233,34 @@ impl ContinuousDistribution for PowerNorm {
     fn var(&self) -> f64 {
         let mean = self.mean();
         (self.raw_moment(2) - mean * mean).max(0.0)
+    }
+
+    fn skewness(&self) -> f64 {
+        let m1 = self.raw_moment(1);
+        let m2 = self.raw_moment(2);
+        let m3 = self.raw_moment(3);
+        let var = m2 - m1 * m1;
+        if var <= 0.0 {
+            return f64::NAN;
+        }
+        let mu3 = 2.0_f64.mul_add(m1.powi(3), m3 - 3.0 * m1 * m2);
+        mu3 / var.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        let m1 = self.raw_moment(1);
+        let m2 = self.raw_moment(2);
+        let m3 = self.raw_moment(3);
+        let m4 = self.raw_moment(4);
+        let var = m2 - m1 * m1;
+        if var <= 0.0 {
+            return f64::NAN;
+        }
+        let mu4 = (-3.0_f64).mul_add(
+            m1.powi(4),
+            6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
+        );
+        mu4 / (var * var) - 3.0
     }
 }
 
@@ -26936,6 +26976,24 @@ mod tests {
         let standard = PowerNorm::new(1.0);
         assert_close(standard.mean(), 0.0, 1e-12, "PowerNorm(c=1) mean");
         assert_close(standard.var(), 1.0, 1e-12, "PowerNorm(c=1) variance");
+    }
+
+    #[test]
+    fn powernorm_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.powernorm(c).stats(moments='sk'). c = 1 is the
+        // standard normal (skew = 0, ex.kurt = 0); c < 1 → right skew,
+        // c > 1 → left skew, both grow in magnitude with |c−1|.
+        let cases = [
+            (0.5_f64, 0.137_168_598_466_239, -0.016_856_328_859_058),
+            (1.0, 0.0, 0.0),
+            (2.0, -0.136_948_767_294_128, 0.061_744_315_487_371),
+            (4.0, -0.264_519_003_775_667, 0.162_317_661_097_766),
+        ];
+        for &(c, sk, ku) in &cases {
+            let d = PowerNorm::new(c);
+            assert_close(d.skewness(), sk, 1e-5, &format!("PowerNorm({c}) skew"));
+            assert_close(d.kurtosis(), ku, 1e-5, &format!("PowerNorm({c}) kurt"));
+        }
     }
 
     #[test]
