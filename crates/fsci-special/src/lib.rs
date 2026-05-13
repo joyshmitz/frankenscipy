@@ -200,6 +200,7 @@ pub use convenience::{
     swish,
     tandg,
     tanhshrink,
+    pentagamma,
     tetragamma,
     threshold,
     tklmbda,

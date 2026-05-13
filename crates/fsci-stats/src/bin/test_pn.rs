@@ -1,8 +1,6 @@
 fn main() {
-    use fsci_stats::{ContinuousDistribution, GenHalfLogistic};
-    for c in [0.5_f64, 1.0, 2.0] {
-        let p = GenHalfLogistic::new(c);
-        println!("c={c}: mean={:.10} var={:.10} skew={:.10} kurt={:.10}",
-            p.mean(), p.var(), p.skewness(), p.kurtosis());
+    for x in [1.0_f64, 2.0, 5.0, 10.0] {
+        println!("x={x}: tetragamma={:.10} pentagamma={:.10}",
+            fsci_special::tetragamma(x), fsci_special::pentagamma(x));
     }
 }

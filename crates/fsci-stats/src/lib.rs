@@ -12781,6 +12781,20 @@ impl ContinuousDistribution for LogGamma {
         fsci_special::trigamma(self.c)
     }
 
+    fn skewness(&self) -> f64 {
+        // LogGamma cumulants are derivatives of ln Γ:
+        //   κ_k = ψ^{(k−1)}(c).
+        // skew = κ_3 / κ_2^{3/2} = tetragamma(c) / trigamma(c)^{3/2}.
+        let kappa2 = fsci_special::trigamma(self.c);
+        fsci_special::tetragamma(self.c) / kappa2.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        // excess kurt = κ_4 / κ_2² = pentagamma(c) / trigamma(c)².
+        let kappa2 = fsci_special::trigamma(self.c);
+        fsci_special::pentagamma(self.c) / (kappa2 * kappa2)
+    }
+
     fn fit(data: &[f64]) -> Self {
         Self::try_fit(data).unwrap_or_else(|e| {
             panic!("LogGamma::fit failed: {e}");
@@ -38952,6 +38966,27 @@ mod tests {
             1e-9,
             "LogGamma variance",
         );
+    }
+
+    #[test]
+    fn loggamma_skewness_and_kurtosis_match_scipy_reference_values() {
+        // LogGamma cumulants are derivatives of ln Γ at c:
+        //   κ_k = ψ^{(k−1)}(c), so skew = ψ^{(2)}/ψ^{(1)^{3/2},
+        //   excess kurt = ψ^{(3)}/ψ^{(1)²}.
+        // Skew is always negative (ψ² < 0 for c > 0). Magnitudes
+        // shrink toward zero as c → ∞ (CLT-like).
+        let cases = [
+            (1.0_f64, -1.139_547_099_404_649, 2.400_000_000_000_000),
+            (3.0, -0.620_947_167_966_739, 0.762_564_453_125_000),
+            (10.0, -0.323_996_768_734_063, 0.209_756_788_519_870),
+        ];
+        for &(c, sk, ku) in &cases {
+            let d = LogGamma::new(c);
+            // Asymptotic-series truncation in tetragamma/pentagamma
+            // limits precision to ~1e-8 at small c.
+            assert_close(d.skewness(), sk, 1e-7, &format!("LogGamma({c}) skew"));
+            assert_close(d.kurtosis(), ku, 1e-7, &format!("LogGamma({c}) kurt"));
+        }
     }
 
     #[test]

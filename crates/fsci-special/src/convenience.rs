@@ -1858,6 +1858,49 @@ pub fn trigamma(x: f64) -> f64 {
     result
 }
 
+/// Pentagamma function ψ₃(x) = d⁴ln(Γ(x))/dx⁴.
+///
+/// Matches `scipy.special.polygamma(3, x)`. Same shift-then-asymptotic
+/// structure as `tetragamma`, with the recurrence
+///   ψ₃(x) = ψ₃(x + 1) + 6 / x⁴
+/// applied until x ≥ 8 and the asymptotic series
+///   ψ₃(x) ≈ 2/x³ + 3/x⁴ + 2/x⁵ − 1/x⁷ + 4/(3 x⁹)
+/// (from B_2 = 1/6, B_4 = −1/30, B_6 = 1/42) truncated thereafter.
+pub fn pentagamma(x: f64) -> f64 {
+    if x <= 0.0 && x == x.floor() {
+        return f64::NAN;
+    }
+    if x < 0.0 {
+        let pi = std::f64::consts::PI;
+        let s = (pi * x).sin();
+        let c = (pi * x).cos();
+        // d/dx [-π³ cos(πx)/sin³(πx)] · 2 — directly differentiate the
+        // tetragamma reflection. Closed form for the reflection of ψ₃
+        // is:  ψ₃(1 − x) − π⁴ (2 + 4 cos²(πx)) / sin⁴(πx).
+        let s2 = s * s;
+        return pentagamma(1.0 - x)
+            - pi * pi * pi * pi * 2.0_f64.mul_add(c * c, 1.0) * 2.0 / (s2 * s2);
+    }
+
+    let mut val = x;
+    let mut result = 0.0;
+    while val < 8.0 {
+        let v2 = val * val;
+        result += 6.0 / (v2 * v2);
+        val += 1.0;
+    }
+
+    let inv_x = 1.0 / val;
+    let inv_x2 = inv_x * inv_x;
+    let inv_x3 = inv_x2 * inv_x;
+    let inv_x5 = inv_x3 * inv_x2;
+    let inv_x7 = inv_x5 * inv_x2;
+    let inv_x9 = inv_x7 * inv_x2;
+    result += 2.0 * inv_x3 + 3.0 * inv_x2 * inv_x2 + 2.0 * inv_x5 - inv_x7 + 4.0 / 3.0 * inv_x9;
+
+    result
+}
+
 /// Tetragamma function ψ₂(x) = d³ln(Γ(x))/dx³.
 ///
 /// Matches `scipy.special.polygamma(2, x)`.
