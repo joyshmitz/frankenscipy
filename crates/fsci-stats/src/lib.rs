@@ -23749,6 +23749,49 @@ impl ContinuousDistribution for FoldedNormal {
         let m = self.mean();
         self.c * self.c + 1.0 - m * m
     }
+
+    fn skewness(&self) -> f64 {
+        // X = |Z + c|, Z ~ N(0, 1). Folding the negative tail gives
+        //   m_1 = c·erf(c/√2) + 2 φ(c)
+        //   m_2 = 1 + c²
+        //   m_3 = (c³ + 3c) · erf(c/√2) + 2 (c² + 2) φ(c)
+        //   m_4 = c⁴ + 6 c² + 3
+        // (derived by symbolic ∫(z+c)^k φ(z) dz split at z = −c.)
+        let c = self.c;
+        let erf_cs = fsci_special::erf_scalar(c / std::f64::consts::SQRT_2);
+        let phi_c = (-0.5 * c * c).exp() / (2.0 * PI).sqrt();
+        let m1 = c.mul_add(erf_cs, 2.0 * phi_c);
+        let m2 = c.mul_add(c, 1.0);
+        let c3 = c * c * c;
+        let m3 = (3.0_f64.mul_add(c, c3)).mul_add(
+            erf_cs,
+            2.0 * (c.mul_add(c, 2.0)) * phi_c,
+        );
+        let var = m2 - m1 * m1;
+        let mu3 = 2.0_f64.mul_add(m1.powi(3), m3 - 3.0 * m1 * m2);
+        mu3 / var.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        let c = self.c;
+        let erf_cs = fsci_special::erf_scalar(c / std::f64::consts::SQRT_2);
+        let phi_c = (-0.5 * c * c).exp() / (2.0 * PI).sqrt();
+        let m1 = c.mul_add(erf_cs, 2.0 * phi_c);
+        let m2 = c.mul_add(c, 1.0);
+        let c2 = c * c;
+        let c3 = c2 * c;
+        let m3 = (3.0_f64.mul_add(c, c3)).mul_add(
+            erf_cs,
+            2.0 * (c2 + 2.0) * phi_c,
+        );
+        let m4 = 6.0_f64.mul_add(c2, c2.mul_add(c2, 3.0));
+        let var = m2 - m1 * m1;
+        let mu4 = (-3.0_f64).mul_add(
+            m1.powi(4),
+            6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
+        );
+        mu4 / (var * var) - 3.0
+    }
 }
 
 /// Compute the median absolute deviation (MAD) with optional scaling.
@@ -38208,6 +38251,24 @@ mod tests {
         assert!(tn.pdf(2.0) == 0.0);
         assert!(tn.cdf(-1.0) == 0.0);
         assert!(tn.cdf(1.0) == 1.0);
+    }
+
+    #[test]
+    fn folded_normal_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.foldnorm(c).stats(moments='sk'). At c = 0 the
+        // distribution collapses to half-normal; large c approaches
+        // |N(c,1)| ≈ N(c,1) (small fold) so skew → 0.
+        let cases = [
+            (0.0_f64, 0.995_271_746_431_157, 0.869_177_303_605_979),
+            (0.5, 0.949_923_352_906_325, 0.705_644_819_122_480),
+            (1.5, 0.403_227_728_815_873, -0.284_126_089_902_097),
+            (3.0, 0.018_791_057_545_856, -0.059_389_974_423_036),
+        ];
+        for &(c, s, k) in &cases {
+            let d = FoldedNormal::new(c);
+            assert_close(d.skewness(), s, 1e-10, &format!("FoldedNormal({c}) skew"));
+            assert_close(d.kurtosis(), k, 1e-9, &format!("FoldedNormal({c}) kurt"));
+        }
     }
 
     #[test]
