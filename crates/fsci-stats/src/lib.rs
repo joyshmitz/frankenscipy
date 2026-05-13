@@ -6844,6 +6844,40 @@ impl ContinuousDistribution for GenPareto {
         }
     }
 
+    fn skewness(&self) -> f64 {
+        // Raw moments m_k = k! / prod_{j=1}^k (1 − jc); finite for c < 1/k.
+        // Skewness requires c < 1/3.
+        if self.c >= 1.0 / 3.0 {
+            return f64::NAN;
+        }
+        let c = self.c;
+        let m1 = 1.0 / (1.0 - c);
+        let m2 = 2.0 / ((1.0 - c) * (1.0 - 2.0 * c));
+        let m3 = 6.0 / ((1.0 - c) * (1.0 - 2.0 * c) * (1.0 - 3.0 * c));
+        let var = m2 - m1 * m1;
+        let mu3 = 2.0_f64.mul_add(m1.powi(3), m3 - 3.0 * m1 * m2);
+        mu3 / var.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        // Excess kurt requires c < 1/4.
+        if self.c >= 0.25 {
+            return f64::NAN;
+        }
+        let c = self.c;
+        let m1 = 1.0 / (1.0 - c);
+        let m2 = 2.0 / ((1.0 - c) * (1.0 - 2.0 * c));
+        let m3 = 6.0 / ((1.0 - c) * (1.0 - 2.0 * c) * (1.0 - 3.0 * c));
+        let m4 =
+            24.0 / ((1.0 - c) * (1.0 - 2.0 * c) * (1.0 - 3.0 * c) * (1.0 - 4.0 * c));
+        let var = m2 - m1 * m1;
+        let mu4 = (-3.0_f64).mul_add(
+            m1.powi(4),
+            6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
+        );
+        mu4 / (var * var) - 3.0
+    }
+
     fn fit(data: &[f64]) -> Self {
         Self::try_fit(data).unwrap_or_else(|e| {
             panic!("GenPareto::fit failed: {e}");
@@ -29675,12 +29709,12 @@ mod tests {
 
     #[test]
     fn unsupported_distribution_moments_return_typed_errors() {
-        // GenPareto still uses the trait NaN defaults for entropy,
+        // Trapezoid still uses the trait NaN defaults for entropy,
         // skewness, and kurtosis (closed forms not yet implemented),
         // so it's the canonical fixture for verifying the typed-error
-        // path. (Chi previously held that role but has had skewness
-        // and kurtosis closed forms since frankenscipy-fubyp.)
-        let dist = GenPareto::new(0.3);
+        // path. (Chi held that role until frankenscipy-fubyp added
+        // skew/kurt; GenPareto until frankenscipy-ez5vt did the same.)
+        let dist = Trapezoid::new(0.2, 0.7, 0.0, 1.0);
 
         assert!(dist.entropy().is_nan());
         assert!(matches!(
@@ -37558,6 +37592,34 @@ mod tests {
                 &format!("GP(c=0).cdf({x}) = 1 - exp(-x)"),
             );
         }
+    }
+
+    #[test]
+    fn genpareto_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.genpareto(c).stats(moments='sk'). Skew finite for
+        // c < 1/3; kurt finite for c < 1/4. Covers positive and negative
+        // shape parameters spanning both regimes.
+        let cases = [
+            (0.1_f64, 2.811_056_885_999_736, 14.828_571_428_571_433),
+            (-0.3, 0.932_039_731_418_049, 0.307_177_033_492_823),
+            (0.0, 2.000_000_000_000_000, 6.000_000_000_000_000),
+            (-0.5, 0.565_685_424_949_238, -0.600_000_000_000_000),
+            (0.2, 4.647_580_015_448_901, 70.800_000_000_000_040),
+        ];
+        for &(c, s, k) in &cases {
+            let gp = GenPareto::new(c);
+            assert_close(gp.skewness(), s, 1e-10, &format!("GenPareto({c}) skew"));
+            assert_close(gp.kurtosis(), k, 1e-9, &format!("GenPareto({c}) kurt"));
+        }
+    }
+
+    #[test]
+    fn genpareto_skewness_and_kurtosis_nan_at_boundary() {
+        // Skew diverges at c = 1/3; kurt at c = 1/4.
+        assert!(GenPareto::new(1.0 / 3.0).skewness().is_nan());
+        assert!(GenPareto::new(0.5).skewness().is_nan());
+        assert!(GenPareto::new(0.25).kurtosis().is_nan());
+        assert!(GenPareto::new(0.4).kurtosis().is_nan());
     }
 
     #[test]
