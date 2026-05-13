@@ -2442,6 +2442,31 @@ impl ContinuousDistribution for WeibullMax {
         let g2 = ln_gamma(1.0 + 2.0 / self.c).exp();
         g2 - g1 * g1
     }
+
+    fn skewness(&self) -> f64 {
+        // WeibullMax(c) = -WeibullMin(c). Sign flip negates skewness.
+        // (frankenscipy-lu2e1)
+        let c = self.c;
+        let g1 = ln_gamma(1.0 + 1.0 / c).exp();
+        let g2 = ln_gamma(1.0 + 2.0 / c).exp();
+        let g3 = ln_gamma(1.0 + 3.0 / c).exp();
+        let var = g2 - g1 * g1;
+        let mu3 = g3 - 3.0 * g1 * g2 + 2.0 * g1 * g1 * g1;
+        -mu3 / var.powf(1.5) // negation: mirror flips skew
+    }
+
+    fn kurtosis(&self) -> f64 {
+        // Kurtosis is invariant under sign-flip — identical to WeibullMin.
+        // (frankenscipy-lu2e1)
+        let c = self.c;
+        let g1 = ln_gamma(1.0 + 1.0 / c).exp();
+        let g2 = ln_gamma(1.0 + 2.0 / c).exp();
+        let g3 = ln_gamma(1.0 + 3.0 / c).exp();
+        let g4 = ln_gamma(1.0 + 4.0 / c).exp();
+        let var = g2 - g1 * g1;
+        let mu4 = g4 - 4.0 * g1 * g3 + 6.0 * g1 * g1 * g2 - 3.0 * g1 * g1 * g1 * g1;
+        mu4 / (var * var) - 3.0
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -35838,6 +35863,25 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    /// WeibullMax skew/kurt via mirrored WeibullMin moments —
+    /// frankenscipy-lu2e1.
+    #[test]
+    fn weibull_max_skew_kurt_match_scipy() {
+        // scipy.stats.weibull_max.stats(c=2) skew=-0.6311 kurt=0.2451
+        let d = WeibullMax::new(2.0);
+        assert!(
+            (d.skewness() - (-0.6311106578189344)).abs() < 1e-10,
+            "WeibullMax(2).skew = {}",
+            d.skewness()
+        );
+        assert!(
+            (d.kurtosis() - 0.24508930068764556).abs() < 1e-10,
+            "WeibullMax(2).kurt = {}",
+            d.kurtosis()
+        );
     }
 
     #[test]
