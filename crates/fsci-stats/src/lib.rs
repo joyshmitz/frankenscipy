@@ -12159,6 +12159,26 @@ impl ContinuousDistribution for KsTwoBign {
         }
         Ok(Self)
     }
+
+    fn entropy(&self) -> f64 {
+        // KsTwoBign pdf has near-zero mass beyond x ≈ 5; integrate
+        // −pdf·ln pdf on [eps, 8] (same window as the raw_moment helper).
+        simpson_integrate_adaptive(
+            |x| {
+                if x <= 0.0 {
+                    return 0.0;
+                }
+                let p = self.pdf(x);
+                if p > 0.0 { -p * p.ln() } else { 0.0 }
+            },
+            1e-12,
+            8.0,
+            4_096,
+            1e-12,
+            1e-12,
+            10,
+        )
+    }
 }
 
 /// Reciprocal inverse Gaussian distribution with shape `mu > 0`.
@@ -12472,6 +12492,22 @@ impl ContinuousDistribution for TruncWeibullMin {
             6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
         );
         mu4 / (var * var) - 3.0
+    }
+
+    fn entropy(&self) -> f64 {
+        // Bounded support [a, b]; integrate −pdf·ln pdf directly.
+        simpson_integrate_adaptive(
+            |x| {
+                let p = self.pdf(x);
+                if p > 0.0 { -p * p.ln() } else { 0.0 }
+            },
+            self.a,
+            self.b,
+            4_096,
+            1e-12,
+            1e-12,
+            10,
+        )
     }
 }
 
@@ -14290,6 +14326,32 @@ impl ContinuousDistribution for Kappa3 {
         );
         mu4 / (var * var) - 3.0
     }
+
+    fn entropy(&self) -> f64 {
+        // Kappa3 has power-law right tail x^{-(a+1)}; compactify via
+        // arctan so the integration interval is bounded.
+        simpson_integrate_adaptive(
+            |u| {
+                let x = u.tan();
+                if !x.is_finite() || x <= 0.0 {
+                    return 0.0;
+                }
+                let p = self.pdf(x);
+                if p > 0.0 {
+                    let sec2 = 1.0 / u.cos().powi(2);
+                    -p * p.ln() * sec2
+                } else {
+                    0.0
+                }
+            },
+            1e-12,
+            PI / 2.0 - 1e-12,
+            4_096,
+            1e-9,
+            1e-9,
+            10,
+        )
+    }
 }
 
 /// Kappa 4-parameter distribution.
@@ -14942,6 +15004,35 @@ impl ContinuousDistribution for CrystalBall {
             6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
         );
         mu4 / (var * var) - 3.0
+    }
+
+    fn entropy(&self) -> f64 {
+        // CrystalBall has a power-law left tail (1/x^m); the right
+        // tail is gaussian. Use arctan compactification to handle the
+        // left tail safely; right tail handled by capping at a wide
+        // positive bound first.
+        // Translate via u = arctan(x): u ∈ (−π/2, π/2).
+        simpson_integrate_adaptive(
+            |u| {
+                let x = u.tan();
+                if !x.is_finite() {
+                    return 0.0;
+                }
+                let p = self.pdf(x);
+                if p > 0.0 {
+                    let sec2 = 1.0 / u.cos().powi(2);
+                    -p * p.ln() * sec2
+                } else {
+                    0.0
+                }
+            },
+            -PI / 2.0 + 1e-12,
+            PI / 2.0 - 1e-12,
+            4_096,
+            1e-9,
+            1e-9,
+            10,
+        )
     }
 }
 
@@ -28370,6 +28461,56 @@ mod tests {
                 expected,
                 1e-5,
                 &format!("JohnsonSB({a},{b}) entropy"),
+            );
+        }
+    }
+
+    #[test]
+    fn kstwobign_twm_kappa3_crystalball_entropy_match_scipy() {
+        // KsTwoBign: parameterless.
+        assert_close(
+            KsTwoBign.entropy(),
+            0.000_890_322_3,
+            1e-5,
+            "KsTwoBign entropy",
+        );
+        // TruncWeibullMin(c, a, b)
+        for &(c, a, b, expected) in &[
+            (1.5_f64, 0.5_f64, 5.0_f64, 0.567_243_600_6),
+            (2.5, 0.1, 3.0, 0.418_291_828_5),
+            (3.0, 1.0, 10.0, -0.496_177_196_9),
+        ] {
+            assert_close(
+                TruncWeibullMin::new(c, a, b).entropy(),
+                expected,
+                1e-5,
+                &format!("TruncWeibullMin({c},{a},{b}) entropy"),
+            );
+        }
+        // Kappa3(a)
+        for &(a, expected) in &[
+            (2.0_f64, 1.267_132_048_6),
+            (5.0, 0.667_698_504_5),
+            (10.0, 0.399_065_306_2),
+        ] {
+            assert_close(
+                Kappa3::new(a).entropy(),
+                expected,
+                1e-4,
+                &format!("Kappa3({a}) entropy"),
+            );
+        }
+        // CrystalBall(beta, m)
+        for &(beta, m, expected) in &[
+            (2.0_f64, 6.0_f64, 1.461_691_411_4),
+            (3.0, 8.0, 1.421_311_245_1),
+            (1.5, 10.0, 1.515_111_370_2),
+        ] {
+            assert_close(
+                CrystalBall::new(beta, m).entropy(),
+                expected,
+                1e-3,
+                &format!("CrystalBall({beta},{m}) entropy"),
             );
         }
     }
