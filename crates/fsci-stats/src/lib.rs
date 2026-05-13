@@ -23646,6 +23646,31 @@ impl ExponWeibull {
         assert!(a > 0.0 && c > 0.0, "a and c must be positive");
         Self { a, c }
     }
+
+    /// k-th raw moment E[X^k] via the substitution u = 1 − e^{−x^c},
+    /// t = −log(1 − u) so dx = (1/c) t^{1/c − 1} dt and pdf(x) dx
+    /// becomes a · u^{a−1} du = a · (1 − e^{−t})^{a−1} e^{−t} dt.
+    /// Thus E[X^k] = a · ∫_0^∞ t^{k/c} (1 − e^{−t})^{a−1} e^{−t} dt,
+    /// evaluated by the same simpson_integrate_adaptive helper used
+    /// for mean/var (with a generic exponent of k/c).
+    fn raw_moment(&self, k: u32) -> f64 {
+        let eps = 1e-12;
+        let upper = 64.0;
+        let exponent = f64::from(k) / self.c;
+        self.a
+            * simpson_integrate_adaptive(
+                |t| {
+                    let exp_neg_t = (-t).exp();
+                    t.powf(exponent) * exp_neg_t * (1.0 - exp_neg_t).powf(self.a - 1.0)
+                },
+                eps,
+                upper,
+                1_024,
+                1e-11,
+                1e-11,
+                8,
+            )
+    }
 }
 
 impl ContinuousDistribution for ExponWeibull {
@@ -23699,41 +23724,40 @@ impl ContinuousDistribution for ExponWeibull {
     }
 
     fn mean(&self) -> f64 {
-        let eps = 1e-12;
-        let upper = 64.0;
-        self.a
-            * simpson_integrate_adaptive(
-                |t| {
-                    let exp_neg_t = (-t).exp();
-                    t.powf(1.0 / self.c) * exp_neg_t * (1.0 - exp_neg_t).powf(self.a - 1.0)
-                },
-                eps,
-                upper,
-                1_024,
-                1e-11,
-                1e-11,
-                8,
-            )
+        self.raw_moment(1)
     }
 
     fn var(&self) -> f64 {
-        let eps = 1e-12;
-        let upper = 64.0;
         let mean = self.mean();
-        let second_moment = self.a
-            * simpson_integrate_adaptive(
-                |t| {
-                    let exp_neg_t = (-t).exp();
-                    t.powf(2.0 / self.c) * exp_neg_t * (1.0 - exp_neg_t).powf(self.a - 1.0)
-                },
-                eps,
-                upper,
-                1_024,
-                1e-11,
-                1e-11,
-                8,
-            );
-        (second_moment - mean * mean).max(0.0)
+        (self.raw_moment(2) - mean * mean).max(0.0)
+    }
+
+    fn skewness(&self) -> f64 {
+        let m1 = self.raw_moment(1);
+        let m2 = self.raw_moment(2);
+        let m3 = self.raw_moment(3);
+        let var = m2 - m1 * m1;
+        if var <= 0.0 {
+            return f64::NAN;
+        }
+        let mu3 = 2.0_f64.mul_add(m1.powi(3), m3 - 3.0 * m1 * m2);
+        mu3 / var.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        let m1 = self.raw_moment(1);
+        let m2 = self.raw_moment(2);
+        let m3 = self.raw_moment(3);
+        let m4 = self.raw_moment(4);
+        let var = m2 - m1 * m1;
+        if var <= 0.0 {
+            return f64::NAN;
+        }
+        let mu4 = (-3.0_f64).mul_add(
+            m1.powi(4),
+            6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
+        );
+        mu4 / (var * var) - 3.0
     }
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
@@ -27493,6 +27517,25 @@ mod tests {
         );
         // x outside support
         assert_eq!(ExponWeibull::new(2.0, 2.0).pdf(-0.1), 0.0);
+    }
+
+    #[test]
+    fn exponweib_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.exponweib(a, c).stats(moments='sk'). Both impls
+        // use numerical integration (no elementary closed form for the
+        // 1−exp(−x^c) factor), so the looser 1e-5 tolerance reflects
+        // residual difference between our adaptive-Simpson quadrature
+        // and scipy's own integrator.
+        let cases = [
+            (2.0_f64, 1.5_f64, 0.863_150_517_466_189, 1.010_828_998_782_007),
+            (3.0, 2.5, 0.304_266_000_395_227, 0.081_143_291_135_782),
+            (1.5, 3.0, 0.138_088_727_628_945, -0.154_442_811_758_873),
+        ];
+        for &(a, c, sk, ku) in &cases {
+            let d = ExponWeibull::new(a, c);
+            assert_close(d.skewness(), sk, 1e-5, &format!("ExponWeibull({a},{c}) skew"));
+            assert_close(d.kurtosis(), ku, 1e-5, &format!("ExponWeibull({a},{c}) kurt"));
+        }
     }
 
     #[test]
