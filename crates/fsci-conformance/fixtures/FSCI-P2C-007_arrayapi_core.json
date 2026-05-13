@@ -461,8 +461,8 @@
       "dtypes": ["int64"],
       "force_floating": false,
       "expected": {
-        "kind": "error_kind",
-        "error": "UnsupportedDtype"
+        "kind": "dtype",
+        "dtype": "int64"
       }
     },
     {
