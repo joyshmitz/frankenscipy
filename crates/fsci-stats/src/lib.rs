@@ -9385,6 +9385,45 @@ impl ContinuousDistribution for Bradford {
         ex2 - m * m
     }
 
+    fn skewness(&self) -> f64 {
+        // Raw moments via u = 1 + cx substitution. Closed-form
+        // polynomial expressions (derived by expanding (u−1)^k / u and
+        // integrating over [1, 1+c]):
+        //   c K m_1 = c − K
+        //   c² K m_2 = c²/2 − c + K
+        //   c³ K m_3 = c³/3 − c²/2 + c − K
+        //   c⁴ K m_4 = c⁴/4 − c³/3 + c²/2 − c + K
+        // where K = log(1+c).
+        let c = self.c;
+        let k = (1.0 + c).ln();
+        let c2 = c * c;
+        let c3 = c2 * c;
+        let m1 = (c - k) / (c * k);
+        let m2 = (c2 / 2.0 - c + k) / (c2 * k);
+        let m3 = (c3 / 3.0 - c2 / 2.0 + c - k) / (c3 * k);
+        let var = m2 - m1 * m1;
+        let mu3 = 2.0_f64.mul_add(m1.powi(3), m3 - 3.0 * m1 * m2);
+        mu3 / var.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        let c = self.c;
+        let k = (1.0 + c).ln();
+        let c2 = c * c;
+        let c3 = c2 * c;
+        let c4 = c2 * c2;
+        let m1 = (c - k) / (c * k);
+        let m2 = (c2 / 2.0 - c + k) / (c2 * k);
+        let m3 = (c3 / 3.0 - c2 / 2.0 + c - k) / (c3 * k);
+        let m4 = (c4 / 4.0 - c3 / 3.0 + c2 / 2.0 - c + k) / (c4 * k);
+        let var = m2 - m1 * m1;
+        let mu4 = (-3.0_f64).mul_add(
+            m1.powi(4),
+            6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
+        );
+        mu4 / (var * var) - 3.0
+    }
+
     fn fit(data: &[f64]) -> Self {
         Self::try_fit(data).unwrap_or_else(|e| {
             panic!("Bradford::fit failed: {e}");
@@ -41560,6 +41599,24 @@ mod tests {
     fn levy_fit_rejects_too_few_samples() {
         let err = Levy::try_fit(&[1.0]).expect_err("n=1 must be rejected");
         assert!(matches!(err, FitError::InsufficientData { .. }));
+    }
+
+    #[test]
+    fn bradford_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.bradford(c).stats(moments='sk'). Closed-form
+        // polynomial moments derived by integrating x^k · c/((1+cx)·log(1+c))
+        // over [0, 1] after u = 1+cx substitution. Scipy itself returns
+        // these via numerical integration, so use a 1e-7 tolerance.
+        let cases = [
+            (0.3_f64, 0.090_843_496_607_793, -1.190_961_224_153_284),
+            (1.5, 0.315_641_880_947_058, -1.090_841_274_688_427),
+            (5.0, 0.607_983_047_807_104, -0.794_606_687_183_004),
+        ];
+        for &(c, s, k) in &cases {
+            let d = Bradford::new(c);
+            assert_close(d.skewness(), s, 1e-9, &format!("Bradford({c}) skew"));
+            assert_close(d.kurtosis(), k, 1e-9, &format!("Bradford({c}) kurt"));
+        }
     }
 
     #[test]
