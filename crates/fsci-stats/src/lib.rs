@@ -11754,6 +11754,37 @@ impl ContinuousDistribution for InvWeibull {
         g2 - g1 * g1
     }
 
+    fn skewness(&self) -> f64 {
+        // Raw moments m_k = Γ(1 − k/c), finite only for c > k.
+        // Skewness requires c > 3 (otherwise μ_3 diverges).
+        if self.c <= 3.0 {
+            return f64::NAN;
+        }
+        let g1 = ln_gamma(1.0 - 1.0 / self.c).exp();
+        let g2 = ln_gamma(1.0 - 2.0 / self.c).exp();
+        let g3 = ln_gamma(1.0 - 3.0 / self.c).exp();
+        let var = g2 - g1 * g1;
+        let mu3 = 2.0_f64.mul_add(g1.powi(3), g3 - 3.0 * g1 * g2);
+        mu3 / var.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        // Kurtosis requires c > 4 (otherwise μ_4 diverges).
+        if self.c <= 4.0 {
+            return f64::NAN;
+        }
+        let g1 = ln_gamma(1.0 - 1.0 / self.c).exp();
+        let g2 = ln_gamma(1.0 - 2.0 / self.c).exp();
+        let g3 = ln_gamma(1.0 - 3.0 / self.c).exp();
+        let g4 = ln_gamma(1.0 - 4.0 / self.c).exp();
+        let var = g2 - g1 * g1;
+        let mu4 = (-3.0_f64).mul_add(
+            g1.powi(4),
+            6.0_f64.mul_add(g1 * g1 * g2, 4.0_f64.mul_add(-g1 * g3, g4)),
+        );
+        mu4 / (var * var) - 3.0
+    }
+
     fn fit(data: &[f64]) -> Self {
         Self::try_fit(data).unwrap_or_else(|e| {
             panic!("InvWeibull::fit failed: {e}");
@@ -35434,6 +35465,32 @@ mod tests {
     fn invweibull_variance_returns_nan_at_boundary_or_below() {
         assert!(InvWeibull::new(2.0).var().is_nan());
         assert!(InvWeibull::new(1.9).var().is_nan());
+    }
+
+    #[test]
+    fn invweibull_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.invweibull(c).stats(moments='sk'). Skew is finite
+        // only for c > 3; kurt only for c > 4.
+        let cases = [
+            (5.0_f64, 3.535_071_604_621_325, 45.091_512_125_815_463),
+            (7.0, 2.425_096_816_498_218, 14.534_020_499_272_501),
+            (10.0, 1.910_339_134_169_258, 7.978_566_239_345_092),
+        ];
+        for &(c, s, k) in &cases {
+            let d = InvWeibull::new(c);
+            assert_close(d.skewness(), s, 1e-9, &format!("InvWeibull({c}) skew"));
+            assert_close(d.kurtosis(), k, 1e-8, &format!("InvWeibull({c}) kurt"));
+        }
+    }
+
+    #[test]
+    fn invweibull_skewness_and_kurtosis_nan_at_boundary() {
+        // c = 3 makes Γ(1 − 3/c) = Γ(0) — undefined; skew diverges.
+        assert!(InvWeibull::new(3.0).skewness().is_nan());
+        assert!(InvWeibull::new(2.5).skewness().is_nan());
+        // c = 4 makes Γ(1 − 4/c) diverge; kurt undefined.
+        assert!(InvWeibull::new(4.0).kurtosis().is_nan());
+        assert!(InvWeibull::new(3.5).kurtosis().is_nan());
     }
 
     #[test]
