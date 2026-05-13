@@ -5179,6 +5179,46 @@ mod tests {
     use super::*;
 
     #[test]
+    fn pentagamma_matches_scipy_polygamma_three() {
+        // scipy.special.polygamma(3, x) at five spread-out positive
+        // values. The shift-then-asymptotic implementation in
+        // pentagamma() converges to ~1e-7 even at x = 0.5 where the
+        // asymptotic truncation is least accurate.
+        let cases = [
+            (0.5_f64, 97.409_091_034_002_415),
+            (1.0, 6.493_939_402_266_829),
+            (2.0, 0.493_939_402_266_829),
+            (5.0, 0.021_427_828_192_755),
+            (10.0, 0.002_319_901_304_290),
+        ];
+        for &(x, want) in &cases {
+            let got = pentagamma(x);
+            assert!(
+                (got - want).abs() < 1e-6,
+                "pentagamma({x}) = {got}, scipy {want}",
+            );
+        }
+    }
+
+    #[test]
+    fn tetragamma_matches_scipy_polygamma_two_negative_x() {
+        // scipy.special.polygamma(2, x) at negative non-integer x; the
+        // reflection branch in tetragamma() takes over here.
+        let cases = [
+            (-0.5_f64, -0.828_796_644_234_320),
+            (-1.5, -0.236_204_051_641_728),
+            (-2.5, -0.108_204_051_641_728),
+        ];
+        for &(x, want) in &cases {
+            let got = tetragamma(x);
+            assert!(
+                (got - want).abs() < 1e-7,
+                "tetragamma({x}) = {got}, scipy {want}",
+            );
+        }
+    }
+
+    #[test]
     fn logsumexp_with_weights_matches_scipy_contract_point() {
         let value =
             logsumexp_with_b(&[1.0, 2.0, 3.0], &[1.0, 2.0, 0.5]).expect("weighted logsumexp");
