@@ -13571,6 +13571,48 @@ impl ContinuousDistribution for Kappa4 {
             variance.max(0.0)
         }
     }
+
+    fn skewness(&self) -> f64 {
+        let (h, k) = self.normalized_shapes();
+        if h == 0.0 {
+            return GenExtreme::new(k).skewness();
+        }
+        if (h - 1.0).abs() < Self::SHAPE_TOL {
+            return GenPareto::new(-k).skewness();
+        }
+        let m1 = self.raw_moment(1);
+        let m2 = self.raw_moment(2);
+        let m3 = self.raw_moment(3);
+        let var = m2 - m1 * m1;
+        if !var.is_finite() || var <= 0.0 {
+            return f64::NAN;
+        }
+        let mu3 = 2.0_f64.mul_add(m1.powi(3), m3 - 3.0 * m1 * m2);
+        mu3 / var.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        let (h, k) = self.normalized_shapes();
+        if h == 0.0 {
+            return GenExtreme::new(k).kurtosis();
+        }
+        if (h - 1.0).abs() < Self::SHAPE_TOL {
+            return GenPareto::new(-k).kurtosis();
+        }
+        let m1 = self.raw_moment(1);
+        let m2 = self.raw_moment(2);
+        let m3 = self.raw_moment(3);
+        let m4 = self.raw_moment(4);
+        let var = m2 - m1 * m1;
+        if !var.is_finite() || var <= 0.0 {
+            return f64::NAN;
+        }
+        let mu4 = (-3.0_f64).mul_add(
+            m1.powi(4),
+            6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
+        );
+        mu4 / (var * var) - 3.0
+    }
 }
 
 /// Crystal Ball distribution (used in high-energy physics).
@@ -38455,6 +38497,18 @@ mod tests {
 
         assert_close(dist.mean(), 0.648_869_867_435_464_7, 1e-7, "Kappa4 mean");
         assert_close(dist.var(), 0.703_200_955_990_783, 1e-7, "Kappa4 variance");
+    }
+
+    #[test]
+    fn kappa4_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.kappa4(h, k).stats(moments='sk'). Routes through
+        // the existing raw_moment quantile-Simpson helper (same engine
+        // used by mean/var). h=0 / h=1 special cases dispatch to
+        // GenExtreme / GenPareto respectively to inherit their tighter
+        // closed forms.
+        let dist = Kappa4::new(0.5, 0.5);
+        assert_close(dist.skewness(), 0.125_303_415_9, 1e-5, "Kappa4(0.5,0.5) skew");
+        assert_close(dist.kurtosis(), -0.819_952_774_5, 1e-4, "Kappa4(0.5,0.5) kurt");
     }
 
     #[test]
