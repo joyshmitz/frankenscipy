@@ -10407,6 +10407,42 @@ impl ContinuousDistribution for Mielke {
         log_second_moment.exp() - mean * mean
     }
 
+    fn skewness(&self) -> f64 {
+        // Raw moments E[X^n] = Γ((k+n)/s) · Γ(1 − n/s) / Γ(k/s),
+        // finite for s > n. Skew requires s > 3.
+        if self.s <= 3.0 {
+            return f64::NAN;
+        }
+        let (k, s) = (self.k, self.s);
+        let lg_ks = ln_gamma(k / s);
+        let mom = |n: f64| (ln_gamma((k + n) / s) + ln_gamma(1.0 - n / s) - lg_ks).exp();
+        let m1 = mom(1.0);
+        let m2 = mom(2.0);
+        let m3 = mom(3.0);
+        let var = m2 - m1 * m1;
+        let mu3 = 2.0_f64.mul_add(m1.powi(3), m3 - 3.0 * m1 * m2);
+        mu3 / var.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        if self.s <= 4.0 {
+            return f64::NAN;
+        }
+        let (k, s) = (self.k, self.s);
+        let lg_ks = ln_gamma(k / s);
+        let mom = |n: f64| (ln_gamma((k + n) / s) + ln_gamma(1.0 - n / s) - lg_ks).exp();
+        let m1 = mom(1.0);
+        let m2 = mom(2.0);
+        let m3 = mom(3.0);
+        let m4 = mom(4.0);
+        let var = m2 - m1 * m1;
+        let mu4 = (-3.0_f64).mul_add(
+            m1.powi(4),
+            6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
+        );
+        mu4 / (var * var) - 3.0
+    }
+
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         validate_finite_fit_data(data, 4, "Mielke")?;
         for &x in data {
@@ -36328,6 +36364,31 @@ mod tests {
         assert!(Mielke::new(3.5, 1.0).mean().is_infinite());
         assert!(Mielke::new(3.5, 1.2).var().is_infinite());
         assert!(Mielke::new(2.0, 2.0).var().is_infinite());
+    }
+
+    #[test]
+    fn mielke_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.mielke(k, s).stats(moments='sk'). Skew requires
+        // s > 3; kurt requires s > 4. Cases span across that boundary.
+        let cases = [
+            (5.0_f64, 4.5_f64, 3.198_748_863_494_355, 61.764_215_110_383_404),
+            (3.0, 6.0, 1.262_238_603_895_415, 7.043_925_294_973_457),
+            (2.5, 8.0, 0.419_914_095_845_220, 1.432_921_786_764_215),
+        ];
+        for &(k, s, sk, ku) in &cases {
+            let d = Mielke::new(k, s);
+            assert_close(d.skewness(), sk, 1e-9, &format!("Mielke({k},{s}) skew"));
+            assert_close(d.kurtosis(), ku, 1e-8, &format!("Mielke({k},{s}) kurt"));
+        }
+    }
+
+    #[test]
+    fn mielke_skewness_and_kurtosis_nan_at_boundary() {
+        // s ≤ 3 ⇒ skew NaN; s ≤ 4 ⇒ kurt NaN.
+        assert!(Mielke::new(2.0, 3.0).skewness().is_nan());
+        assert!(Mielke::new(2.0, 2.5).skewness().is_nan());
+        assert!(Mielke::new(2.0, 4.0).kurtosis().is_nan());
+        assert!(Mielke::new(2.0, 3.5).kurtosis().is_nan());
     }
 
     #[test]
