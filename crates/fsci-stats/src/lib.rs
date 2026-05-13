@@ -7417,6 +7417,51 @@ impl ContinuousDistribution for TruncNormal {
         let z = norm;
         1.0 + (self.a * phi_a - self.b * phi_b) / z - ((phi_a - phi_b) / z).powi(2)
     }
+
+    fn skewness(&self) -> f64 {
+        // Raw moments of the standard truncated normal follow the
+        // integration-by-parts recurrence m_k = (a^{k−1}φ(a) −
+        // b^{k−1}φ(b))/Δ + (k−1) m_{k−2} with m_0 = 1.
+        let (a, b) = (self.a, self.b);
+        let phi_a = (-a * a / 2.0).exp() / (2.0 * PI).sqrt();
+        let phi_b = (-b * b / 2.0).exp() / (2.0 * PI).sqrt();
+        let z = standard_normal_cdf(b) - standard_normal_cdf(a);
+        if z <= 0.0 {
+            return f64::NAN;
+        }
+        let m1 = (phi_a - phi_b) / z;
+        let m2 = (a * phi_a - b * phi_b) / z + 1.0;
+        let m3 = 2.0_f64.mul_add(m1, (a * a * phi_a - b * b * phi_b) / z);
+        let var = m2 - m1 * m1;
+        if var <= 0.0 {
+            return f64::NAN;
+        }
+        let mu3 = 2.0_f64.mul_add(m1.powi(3), m3 - 3.0 * m1 * m2);
+        mu3 / var.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        let (a, b) = (self.a, self.b);
+        let phi_a = (-a * a / 2.0).exp() / (2.0 * PI).sqrt();
+        let phi_b = (-b * b / 2.0).exp() / (2.0 * PI).sqrt();
+        let z = standard_normal_cdf(b) - standard_normal_cdf(a);
+        if z <= 0.0 {
+            return f64::NAN;
+        }
+        let m1 = (phi_a - phi_b) / z;
+        let m2 = (a * phi_a - b * phi_b) / z + 1.0;
+        let m3 = 2.0_f64.mul_add(m1, (a * a * phi_a - b * b * phi_b) / z);
+        let m4 = 3.0_f64.mul_add(m2, (a.powi(3) * phi_a - b.powi(3) * phi_b) / z);
+        let var = m2 - m1 * m1;
+        if var <= 0.0 {
+            return f64::NAN;
+        }
+        let mu4 = (-3.0_f64).mul_add(
+            m1.powi(4),
+            6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
+        );
+        mu4 / (var * var) - 3.0
+    }
 }
 
 /// Chi distribution (not chi-squared).
@@ -37940,6 +37985,35 @@ mod tests {
         assert!(tn.pdf(2.0) == 0.0);
         assert!(tn.cdf(-1.0) == 0.0);
         assert!(tn.cdf(1.0) == 1.0);
+    }
+
+    #[test]
+    fn truncnormal_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.truncnorm(a, b).stats(moments='sk'). Covers a
+        // symmetric, an asymmetric, and a wide window to exercise the
+        // by-parts recurrence m_k = (a^{k−1}φ(a) − b^{k−1}φ(b))/Δ +
+        // (k−1) m_{k−2}.
+        let cases = [
+            (-1.0_f64, 1.0_f64, 0.0, -1.059_080_080_096_887),
+            (0.0, 2.5, 0.754_028_885_696_173, -0.113_503_742_069_617),
+            (-2.0, 0.5, -0.467_304_661_758_473, -0.650_977_346_294_152),
+            (-3.0, 3.0, 0.0, -0.171_114_436_397_744),
+        ];
+        for &(a, b, s, k) in &cases {
+            let d = TruncNormal::new(a, b);
+            assert_close(
+                d.skewness(),
+                s,
+                1e-11,
+                &format!("TruncNormal({a},{b}) skew"),
+            );
+            assert_close(
+                d.kurtosis(),
+                k,
+                1e-10,
+                &format!("TruncNormal({a},{b}) kurt"),
+            );
+        }
     }
 
     #[test]
