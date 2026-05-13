@@ -10560,6 +10560,39 @@ impl Gompertz {
         assert!(c > 0.0, "c must be positive");
         Self { c }
     }
+
+    /// Raw moments m_1, m_2, m_3, m_4 via the substitution U = c(e^X − 1),
+    /// which gives U ~ Exp(1) and X = log(1 + U/c). Then
+    /// E[X^n] = ∫_0^∞ (log(1 + u/c))^n e^{−u} du, evaluated by composite
+    /// Simpson's on [0, 35] (e^{−35} ≈ 6e-16). Closed forms exist only
+    /// for the first moment (involving Ei); higher moments require
+    /// special integrals, so we ship the numerical evaluation here.
+    fn raw_moments_via_u_substitution(&self) -> [f64; 4] {
+        let u_max = 35.0;
+        let n_grid: usize = 10_000;
+        let h = u_max / n_grid as f64;
+        let mut m = [0.0_f64; 4];
+        for i in 0..=n_grid {
+            let u = i as f64 * h;
+            let w = if i == 0 || i == n_grid {
+                1.0
+            } else if i % 2 == 0 {
+                2.0
+            } else {
+                4.0
+            };
+            let lg = (1.0 + u / self.c).ln();
+            let e_u = (-u).exp();
+            let base = w * e_u;
+            m[0] += base * lg;
+            let lg2 = lg * lg;
+            m[1] += base * lg2;
+            m[2] += base * lg2 * lg;
+            m[3] += base * lg2 * lg2;
+        }
+        let factor = h / 3.0;
+        [m[0] * factor, m[1] * factor, m[2] * factor, m[3] * factor]
+    }
 }
 
 impl ContinuousDistribution for Gompertz {
@@ -10583,26 +10616,32 @@ impl ContinuousDistribution for Gompertz {
     }
 
     fn var(&self) -> f64 {
+        let [_m1, m2, _m3, _m4] = self.raw_moments_via_u_substitution();
         let mean = self.mean();
-        let tail_prob = 1e-12_f64;
-        let upper = (1.0_f64 - tail_prob.ln() / self.c).ln();
-        let n = 4_000;
-        let h = upper / n as f64;
-        let mut second_moment = 0.0;
+        (m2 - mean * mean).max(0.0)
+    }
 
-        for i in 0..=n {
-            let x = i as f64 * h;
-            let weight = if i == 0 || i == n {
-                1.0
-            } else if i % 2 == 0 {
-                2.0
-            } else {
-                4.0
-            };
-            second_moment += weight * x * x * self.pdf(x);
+    fn skewness(&self) -> f64 {
+        let [m1, m2, m3, _m4] = self.raw_moments_via_u_substitution();
+        let var = m2 - m1 * m1;
+        if var <= 0.0 {
+            return f64::NAN;
         }
+        let mu3 = 2.0_f64.mul_add(m1.powi(3), m3 - 3.0 * m1 * m2);
+        mu3 / var.powf(1.5)
+    }
 
-        (second_moment * h / 3.0 - mean * mean).max(0.0)
+    fn kurtosis(&self) -> f64 {
+        let [m1, m2, m3, m4] = self.raw_moments_via_u_substitution();
+        let var = m2 - m1 * m1;
+        if var <= 0.0 {
+            return f64::NAN;
+        }
+        let mu4 = (-3.0_f64).mul_add(
+            m1.powi(4),
+            6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
+        );
+        mu4 / (var * var) - 3.0
     }
 
     fn fit(data: &[f64]) -> Self {
@@ -36223,6 +36262,24 @@ mod tests {
             let dist = Gompertz::new(c);
             assert_close(dist.mean(), mean, 1e-6, "Gompertz mean");
             assert_close(dist.var(), var, 1e-6, "Gompertz variance");
+        }
+    }
+
+    #[test]
+    fn gompertz_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.gompertz(c).stats(moments='sk'). Closed-form
+        // moments aren't available in elementary functions; the impl
+        // and scipy both rely on numerical integration, so use a
+        // looser tolerance.
+        let cases = [
+            (0.5_f64, 0.434_242_855_041_819, -0.494_783_998_998_531),
+            (1.5, 0.889_325_652_546_841, 0.398_060_345_170_335),
+            (3.0, 1.176_435_681_000_342, 1.329_546_689_531_578),
+        ];
+        for &(c, sk, ku) in &cases {
+            let d = Gompertz::new(c);
+            assert_close(d.skewness(), sk, 1e-6, &format!("Gompertz({c}) skew"));
+            assert_close(d.kurtosis(), ku, 1e-6, &format!("Gompertz({c}) kurt"));
         }
     }
 
