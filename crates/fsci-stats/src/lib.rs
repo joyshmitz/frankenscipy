@@ -10189,6 +10189,39 @@ impl ContinuousDistribution for LogLaplace {
         }
     }
 
+    fn skewness(&self) -> f64 {
+        // Symbolic ∫ x^k pdf(x) dx split at x = 1 gives
+        //   m_k = c² / (c² − k²)
+        // (finite when c > k). Skew requires c > 3.
+        if self.c <= 3.0 {
+            return f64::NAN;
+        }
+        let c2 = self.c * self.c;
+        let m1 = c2 / (c2 - 1.0);
+        let m2 = c2 / (c2 - 4.0);
+        let m3 = c2 / (c2 - 9.0);
+        let var = m2 - m1 * m1;
+        let mu3 = 2.0_f64.mul_add(m1.powi(3), m3 - 3.0 * m1 * m2);
+        mu3 / var.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        if self.c <= 4.0 {
+            return f64::NAN;
+        }
+        let c2 = self.c * self.c;
+        let m1 = c2 / (c2 - 1.0);
+        let m2 = c2 / (c2 - 4.0);
+        let m3 = c2 / (c2 - 9.0);
+        let m4 = c2 / (c2 - 16.0);
+        let var = m2 - m1 * m1;
+        let mu4 = (-3.0_f64).mul_add(
+            m1.powi(4),
+            6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
+        );
+        mu4 / (var * var) - 3.0
+    }
+
     fn fit(data: &[f64]) -> Self {
         Self::try_fit(data).unwrap_or_else(|e| {
             panic!("LogLaplace::fit failed: {e}");
@@ -36463,6 +36496,31 @@ mod tests {
     fn log_laplace_variance_is_infinite_when_second_moment_diverges() {
         assert!(LogLaplace::new(1.5).var().is_infinite());
         assert!(LogLaplace::new(2.0).var().is_infinite());
+    }
+
+    #[test]
+    fn loglaplace_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.loglaplace(c).stats(moments='sk'). Skew finite
+        // for c > 3; kurt for c > 4. Cases all satisfy c > 4.
+        let cases = [
+            (5.0_f64, 3.004_614_132_612_485, 40.717_785_467_128_145),
+            (7.5, 1.614_577_549_014_959, 10.435_833_034_991_973),
+            (10.0, 1.138_804_434_722_818, 6.446_460_725_728_882),
+        ];
+        for &(c, sk, ku) in &cases {
+            let d = LogLaplace::new(c);
+            assert_close(d.skewness(), sk, 1e-9, &format!("LogLaplace({c}) skew"));
+            assert_close(d.kurtosis(), ku, 1e-8, &format!("LogLaplace({c}) kurt"));
+        }
+    }
+
+    #[test]
+    fn loglaplace_skewness_and_kurtosis_nan_at_boundary() {
+        // c ≤ 3 ⇒ skew NaN; c ≤ 4 ⇒ kurt NaN.
+        assert!(LogLaplace::new(3.0).skewness().is_nan());
+        assert!(LogLaplace::new(2.5).skewness().is_nan());
+        assert!(LogLaplace::new(4.0).kurtosis().is_nan());
+        assert!(LogLaplace::new(3.5).kurtosis().is_nan());
     }
 
     #[test]
