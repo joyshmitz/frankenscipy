@@ -5986,6 +5986,19 @@ impl ContinuousDistribution for Pearson3 {
         1.0
     }
 
+    fn skewness(&self) -> f64 {
+        // Pearson3 is parameterised by its skewness directly.
+        // (frankenscipy-okk7z)
+        self.skew
+    }
+
+    fn kurtosis(&self) -> f64 {
+        // Excess kurtosis = 1.5·skew² (Pearson3 is a shifted/scaled
+        // Gamma where shape k = 4/skew²; kurt = 6/k = 6·skew²/4 = 1.5·skew²).
+        // (frankenscipy-okk7z)
+        1.5 * self.skew * self.skew
+    }
+
     fn fit(data: &[f64]) -> Self {
         Self::try_fit(data).unwrap_or_else(|e| {
             panic!("Pearson3::fit failed: {e}");
@@ -25926,6 +25939,25 @@ mod tests {
                 q,
                 1e-10,
                 &format!("Pearson3(-1.5) cdf(ppf({q}))"),
+            );
+        }
+    }
+
+    /// Pearson3 skew/kurt closed forms — frankenscipy-okk7z.
+    #[test]
+    fn pearson3_skew_kurt_match_scipy() {
+        // scipy.stats.pearson3.stats(skew=s, moments='sk') = (s, 1.5*s²)
+        for s in [0.0_f64, 0.5, 1.0, 2.0, -1.5] {
+            let d = Pearson3::new(s);
+            assert!(
+                (d.skewness() - s).abs() < 1e-15,
+                "Pearson3({s}).skew = {}",
+                d.skewness()
+            );
+            assert!(
+                (d.kurtosis() - 1.5 * s * s).abs() < 1e-15,
+                "Pearson3({s}).kurt = {}",
+                d.kurtosis()
             );
         }
     }
