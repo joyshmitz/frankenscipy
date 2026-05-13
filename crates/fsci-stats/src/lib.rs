@@ -23106,6 +23106,41 @@ impl ContinuousDistribution for BetaPrime {
             f64::INFINITY
         }
     }
+
+    fn skewness(&self) -> f64 {
+        // Raw moments m_k = Γ(a+k)·Γ(b−k)/(Γ(a)·Γ(b))
+        //                = a(a+1)…(a+k−1) / ((b−1)(b−2)…(b−k))
+        // Finite for b > k; skew requires b > 3.
+        if self.b <= 3.0 {
+            return f64::NAN;
+        }
+        let (a, b) = (self.a, self.b);
+        let m1 = a / (b - 1.0);
+        let m2 = a * (a + 1.0) / ((b - 1.0) * (b - 2.0));
+        let m3 = a * (a + 1.0) * (a + 2.0) / ((b - 1.0) * (b - 2.0) * (b - 3.0));
+        let var = m2 - m1 * m1;
+        let mu3 = 2.0_f64.mul_add(m1.powi(3), m3 - 3.0 * m1 * m2);
+        mu3 / var.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        // Excess kurt requires b > 4.
+        if self.b <= 4.0 {
+            return f64::NAN;
+        }
+        let (a, b) = (self.a, self.b);
+        let m1 = a / (b - 1.0);
+        let m2 = a * (a + 1.0) / ((b - 1.0) * (b - 2.0));
+        let m3 = a * (a + 1.0) * (a + 2.0) / ((b - 1.0) * (b - 2.0) * (b - 3.0));
+        let m4 =
+            a * (a + 1.0) * (a + 2.0) * (a + 3.0) / ((b - 1.0) * (b - 2.0) * (b - 3.0) * (b - 4.0));
+        let var = m2 - m1 * m1;
+        let mu4 = (-3.0_f64).mul_add(
+            m1.powi(4),
+            6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
+        );
+        mu4 / (var * var) - 3.0
+    }
 }
 
 /// Exponential power distribution with shape `b`.
@@ -35662,6 +35697,32 @@ mod tests {
         for (&q, &want) in qs.iter().zip(expected.iter()) {
             assert_close(dist.ppf(q), want, 1e-10, &format!("BetaPrime ppf({q})"));
         }
+    }
+
+    #[test]
+    fn betaprime_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.betaprime(a,b).stats(moments='sk'). Skew needs
+        // b > 3, kurt needs b > 4. All three cases here satisfy both.
+        let cases = [
+            (2.0_f64, 5.0_f64, 4.0, 54.0),
+            (3.0, 6.0, 2.993_820_796_734_996, 23.166_666_666_666_671),
+            (1.5, 8.0, 2.743_977_362_280_141, 15.617_647_058_823_525),
+        ];
+        for &(a, b, s, k) in &cases {
+            let d = BetaPrime::new(a, b);
+            assert_close(d.skewness(), s, 1e-12, &format!("BetaPrime({a},{b}) skew"));
+            assert_close(d.kurtosis(), k, 1e-11, &format!("BetaPrime({a},{b}) kurt"));
+        }
+    }
+
+    #[test]
+    fn betaprime_skewness_and_kurtosis_nan_at_boundary() {
+        // b ≤ 3 → skew diverges (μ_3 includes 1/(b−3)).
+        assert!(BetaPrime::new(2.0, 3.0).skewness().is_nan());
+        assert!(BetaPrime::new(2.0, 2.5).skewness().is_nan());
+        // b ≤ 4 → kurt diverges (μ_4 includes 1/(b−4)).
+        assert!(BetaPrime::new(2.0, 4.0).kurtosis().is_nan());
+        assert!(BetaPrime::new(2.0, 3.5).kurtosis().is_nan());
     }
 
     #[test]
