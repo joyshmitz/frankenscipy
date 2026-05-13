@@ -11499,6 +11499,29 @@ impl RecipInvGauss {
         assert!(mu > 0.0 && mu.is_finite(), "mu must be positive and finite");
         Self { mu }
     }
+
+    /// k-th raw moment via adaptive Simpson on a wide x window. The
+    /// gaussian-like exp(−(1 − μx)²/(2 x μ²)) decay handles the tail.
+    fn recip_inv_gauss_raw_moment(&self, k: u32) -> f64 {
+        // Bulk lives around x ≈ 1/μ; scale the upper bound with μ to
+        // cover heavy-tail cases (μ large pushes both bulk and tail
+        // out).
+        let upper = (40.0_f64).max(40.0 * self.mu);
+        simpson_integrate_adaptive(
+            |x| {
+                if x <= 0.0 {
+                    return 0.0;
+                }
+                x.powi(k as i32) * self.pdf(x)
+            },
+            1e-12,
+            upper,
+            4_096,
+            1e-12,
+            1e-12,
+            10,
+        )
+    }
 }
 
 impl ContinuousDistribution for RecipInvGauss {
@@ -11577,6 +11600,32 @@ impl ContinuousDistribution for RecipInvGauss {
     fn var(&self) -> f64 {
         // Closed form: Var[X] = (1 + 2μ)/μ = 1/μ + 2 (frankenscipy-7um75).
         (1.0 + 2.0 * self.mu) / self.mu
+    }
+
+    fn skewness(&self) -> f64 {
+        // RecipInvGauss has no elementary closed form for higher
+        // moments. Integrate x^k · pdf(x) on a wide window — the pdf
+        // has a Gaussian-like exp(−(1 − μx)²/(2 x μ²)) factor that
+        // decays fast enough beyond x ≈ 10 · max(1/μ, 1).
+        let m1 = self.mean();
+        let m2 = m1 * m1 + self.var();
+        let m3 = self.recip_inv_gauss_raw_moment(3);
+        let var = self.var();
+        let mu3 = 2.0_f64.mul_add(m1.powi(3), m3 - 3.0 * m1 * m2);
+        mu3 / var.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        let m1 = self.mean();
+        let var = self.var();
+        let m2 = m1 * m1 + var;
+        let m3 = self.recip_inv_gauss_raw_moment(3);
+        let m4 = self.recip_inv_gauss_raw_moment(4);
+        let mu4 = (-3.0_f64).mul_add(
+            m1.powi(4),
+            6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
+        );
+        mu4 / (var * var) - 3.0
     }
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
@@ -29196,6 +29245,24 @@ mod tests {
         assert_eq!(RecipInvGauss::new(1.0).pdf(-0.1), 0.0);
         assert_eq!(RecipInvGauss::new(1.0).pdf(0.0), 0.0);
         assert_eq!(RecipInvGauss::new(1.0).cdf(0.0), 0.0);
+    }
+
+    #[test]
+    fn recipinvgauss_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.recipinvgauss(mu).stats(moments='sk'). No
+        // elementary closed form for higher moments; both scipy and
+        // we numerically integrate.
+        let cases = [
+            (0.5_f64, 1.75, 4.875),
+            (1.0, 2.116_950_992_8, 7.0),
+            (2.0, 2.403_331_021_7, 8.88),
+            (5.0, 2.635_508_555_0, 10.537_190_084_7),
+        ];
+        for &(mu, sk, ku) in &cases {
+            let d = RecipInvGauss::new(mu);
+            assert_close(d.skewness(), sk, 1e-3, &format!("RecipInvGauss({mu}) skew"));
+            assert_close(d.kurtosis(), ku, 1e-2, &format!("RecipInvGauss({mu}) kurt"));
+        }
     }
 
     #[test]
