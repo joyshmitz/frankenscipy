@@ -6552,6 +6552,25 @@ impl JohnsonSB {
             exp_x / (1.0 + exp_x)
         }
     }
+
+    /// k-th raw moment via the transformation X = expit((Z − a)/b),
+    /// Z ~ N(0, 1):  m_k = ∫ expit^k((z − a)/b) · φ(z) dz.
+    /// Evaluated by simpson_integrate_adaptive on [−12, 12] (φ tails
+    /// negligible beyond) — same machinery as mean/var.
+    fn raw_moment(&self, k: u32) -> f64 {
+        simpson_integrate_adaptive(
+            |z| {
+                let x = Self::expit((z - self.a) / self.b);
+                x.powi(k as i32) * standard_normal_pdf(z)
+            },
+            -12.0,
+            12.0,
+            4_096,
+            1e-11,
+            1e-11,
+            8,
+        )
+    }
 }
 
 impl ContinuousDistribution for JohnsonSB {
@@ -6592,32 +6611,40 @@ impl ContinuousDistribution for JohnsonSB {
     }
 
     fn mean(&self) -> f64 {
-        simpson_integrate_adaptive(
-            |z| Self::expit((z - self.a) / self.b) * standard_normal_pdf(z),
-            -12.0,
-            12.0,
-            4_096,
-            1e-11,
-            1e-11,
-            8,
-        )
+        self.raw_moment(1)
     }
 
     fn var(&self) -> f64 {
-        let mean = self.mean();
-        let second_moment = simpson_integrate_adaptive(
-            |z| {
-                let x = Self::expit((z - self.a) / self.b);
-                x * x * standard_normal_pdf(z)
-            },
-            -12.0,
-            12.0,
-            4_096,
-            1e-11,
-            1e-11,
-            8,
+        let m1 = self.raw_moment(1);
+        (self.raw_moment(2) - m1 * m1).max(0.0)
+    }
+
+    fn skewness(&self) -> f64 {
+        let m1 = self.raw_moment(1);
+        let m2 = self.raw_moment(2);
+        let m3 = self.raw_moment(3);
+        let var = m2 - m1 * m1;
+        if var <= 0.0 {
+            return f64::NAN;
+        }
+        let mu3 = 2.0_f64.mul_add(m1.powi(3), m3 - 3.0 * m1 * m2);
+        mu3 / var.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        let m1 = self.raw_moment(1);
+        let m2 = self.raw_moment(2);
+        let m3 = self.raw_moment(3);
+        let m4 = self.raw_moment(4);
+        let var = m2 - m1 * m1;
+        if var <= 0.0 {
+            return f64::NAN;
+        }
+        let mu4 = (-3.0_f64).mul_add(
+            m1.powi(4),
+            6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
         );
-        (second_moment - mean * mean).max(0.0)
+        mu4 / (var * var) - 3.0
     }
 }
 
@@ -27247,6 +27274,25 @@ mod tests {
             1e-10,
             "JohnsonSB variance",
         );
+    }
+
+    #[test]
+    fn johnsonsb_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.johnsonsb(a, b).stats(moments='sk'). Sign of skew
+        // flips with sign of a (expit transform is symmetric in a),
+        // anchored via three (a, b) pairs covering both directions.
+        let cases = [
+            (0.5_f64, 1.5_f64, 0.220_040_342_793_470, -0.471_830_225_239_042),
+            (-0.5, 1.5, -0.220_040_341_542_767, -0.471_825_405_121_920),
+            (1.0, 2.0, 0.287_744_675_823_816, -0.225_821_619_348_619),
+        ];
+        for &(a, b, sk, ku) in &cases {
+            let d = JohnsonSB::new(a, b);
+            // Adaptive Simpson on [−12, 12] converges to ~5e-6 here;
+            // matches scipy's own numerical integration to that level.
+            assert_close(d.skewness(), sk, 5e-5, &format!("JohnsonSB({a},{b}) skew"));
+            assert_close(d.kurtosis(), ku, 5e-5, &format!("JohnsonSB({a},{b}) kurt"));
+        }
     }
 
     #[test]
