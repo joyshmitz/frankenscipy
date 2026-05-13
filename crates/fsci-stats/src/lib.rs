@@ -27693,6 +27693,92 @@ mod tests {
     }
 
     #[test]
+    fn uniform_exponential_entropy_match_scipy() {
+        // Uniform(a, b): h = ln(b − a).
+        // Exponential(scale): h = 1 + ln(scale).
+        assert_close(
+            Uniform::new(0.0, 1.0).entropy(),
+            0.0,
+            1e-12,
+            "Uniform(0, 1) entropy",
+        );
+        assert_close(
+            Uniform::new(0.0, 5.0).entropy(),
+            5.0_f64.ln(),
+            1e-12,
+            "Uniform(0, 5) entropy",
+        );
+        assert_close(
+            Exponential::from_scale(1.0).entropy(),
+            1.0,
+            1e-12,
+            "Exponential(scale=1) entropy",
+        );
+        assert_close(
+            Exponential::from_scale(2.0).entropy(),
+            1.693_147_180_6,
+            1e-9,
+            "Exponential(scale=2) entropy",
+        );
+    }
+
+    #[test]
+    fn lognormal_logistic_laplace_triangular_entropy_match_scipy() {
+        // Lognormal(s, scale): h = 0.5 + 0.5·ln(2π·s²) + ln(scale).
+        // Logistic(loc, scale): h = 2 + ln(scale).
+        // Laplace(loc, b): h = 1 + ln(2b).
+        // Triangular(a, c, b): h = 0.5 − ln 2 + ln(b − a) (shape-independent).
+        for &(s, scale, expected) in &[
+            (1.0_f64, 1.0_f64, 1.418_938_533_2),
+            (0.5, 2.0, 1.418_938_533_2),
+            (1.5, 0.5, 1.131_256_460_8),
+        ] {
+            assert_close(
+                Lognormal::new(s, scale).entropy(),
+                expected,
+                1e-9,
+                &format!("Lognormal({s},{scale}) entropy"),
+            );
+        }
+        assert_close(
+            Logistic::new(0.0, 1.0).entropy(),
+            2.0,
+            1e-12,
+            "Logistic(0, 1) entropy",
+        );
+        assert_close(
+            Logistic::new(0.0, 2.0).entropy(),
+            2.693_147_180_6,
+            1e-9,
+            "Logistic(0, 2) entropy",
+        );
+        assert_close(
+            Laplace::new(0.0, 1.0).entropy(),
+            1.693_147_180_6,
+            1e-9,
+            "Laplace(0, 1) entropy",
+        );
+        assert_close(
+            Laplace::new(0.0, 2.0).entropy(),
+            2.386_294_361_1,
+            1e-9,
+            "Laplace(0, 2) entropy",
+        );
+        for &(left, mode, right, expected) in &[
+            (0.0_f64, 0.3, 1.0, -0.193_147_180_6),
+            (0.0, 2.5, 5.0, 1.416_290_731_9),
+            (2.0, 4.1, 5.0, 0.905_465_108_1),
+        ] {
+            assert_close(
+                Triangular::new(left, mode, right).entropy(),
+                expected,
+                1e-9,
+                &format!("Triangular({left},{mode},{right}) entropy"),
+            );
+        }
+    }
+
+    #[test]
     fn pareto_lomax_rayleigh_maxwell_genpareto_genextreme_entropy_match_scipy() {
         // Bundle several elementary entropy closed forms in one anchor:
         //  Pareto:   h = ln(scale/b) + 1/b + 1.
