@@ -8357,6 +8357,11 @@ impl ContinuousDistribution for Fisk {
         }
     }
 
+    fn entropy(&self) -> f64 {
+        // h(Fisk(c)) = 2 − ln(c). Independent of scale (scale=1).
+        2.0 - self.c.ln()
+    }
+
     fn skewness(&self) -> f64 {
         // Raw moments via Euler reflection:
         //   m_k = B(1+k/c, 1−k/c) = (πk/c) / sin(πk/c)
@@ -9882,6 +9887,12 @@ impl ContinuousDistribution for Bradford {
         ex2 - m * m
     }
 
+    fn entropy(&self) -> f64 {
+        // h(Bradford(c)) = K/2 − ln(c/K) where K = log(1 + c).
+        let k = (1.0 + self.c).ln();
+        0.5 * k - (self.c / k).ln()
+    }
+
     fn skewness(&self) -> f64 {
         // Raw moments via u = 1 + cx substitution. Closed-form
         // polynomial expressions (derived by expanding (u−1)^k / u and
@@ -10696,6 +10707,11 @@ impl ContinuousDistribution for LogLaplace {
         }
     }
 
+    fn entropy(&self) -> f64 {
+        // h(LogLaplace(c)) = 1 + ln(2/c) = 1 + ln 2 − ln c.
+        1.0 + (2.0 / self.c).ln()
+    }
+
     fn skewness(&self) -> f64 {
         // Symbolic ∫ x^k pdf(x) dx split at x = 1 gives
         //   m_k = c² / (c² − k²)
@@ -10855,6 +10871,11 @@ impl ContinuousDistribution for Loglogistic {
         } else {
             f64::INFINITY
         }
+    }
+
+    fn entropy(&self) -> f64 {
+        // Loglogistic ≡ Fisk. Entropy h = 2 − ln(c).
+        2.0 - self.c.ln()
     }
 
     fn skewness(&self) -> f64 {
@@ -12787,6 +12808,11 @@ impl ContinuousDistribution for GenHalfLogistic {
             6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
         );
         mu4 / (var * var) - 3.0
+    }
+
+    fn entropy(&self) -> f64 {
+        // h(GenHalfLogistic(c)) = 2 − (2c + 1) · ln 2.
+        2.0 - (2.0 * self.c + 1.0) * 2.0_f64.ln()
     }
 }
 
@@ -27802,6 +27828,63 @@ mod tests {
         // Below threshold b=4.
         assert!(Pareto::new(3.5, 1.0).kurtosis().is_nan());
         assert!(Pareto::new(4.0, 1.0).kurtosis().is_nan());
+    }
+
+    #[test]
+    fn fisk_loglogistic_loglaplace_genhalflogistic_bradford_entropy_match_scipy() {
+        // Fisk(c) and Loglogistic(c) share h = 2 − ln(c).
+        for &(c, expected) in &[
+            (1.5_f64, 1.594_534_891_9),
+            (3.0, 0.901_387_711_3),
+            (5.0, 0.390_562_087_6),
+        ] {
+            assert_close(Fisk::new(c).entropy(), expected, 1e-9, &format!("Fisk({c}) entropy"));
+            assert_close(
+                Loglogistic::new(c).entropy(),
+                expected,
+                1e-9,
+                &format!("Loglogistic({c}) entropy"),
+            );
+        }
+        // LogLaplace(c): 1 + ln(2/c).
+        for &(c, expected) in &[
+            (1.5_f64, 1.287_682_072_5),
+            (3.0, 0.594_534_891_9),
+            (5.0, 0.083_709_268_1),
+        ] {
+            assert_close(
+                LogLaplace::new(c).entropy(),
+                expected,
+                1e-9,
+                &format!("LogLaplace({c}) entropy"),
+            );
+        }
+        // GenHalfLogistic(c): 2 − (2c + 1) · ln 2.
+        for &(c, expected) in &[
+            (0.5_f64, 0.613_705_638_9),
+            (1.0, -0.079_441_541_7),
+            (2.0, -1.465_735_902_8),
+        ] {
+            assert_close(
+                GenHalfLogistic::new(c).entropy(),
+                expected,
+                1e-9,
+                &format!("GenHalfLogistic({c}) entropy"),
+            );
+        }
+        // Bradford(c): h = K/2 − ln(c/K), K = ln(1 + c).
+        for &(c, expected) in &[
+            (0.3_f64, -0.002_866_481_9),
+            (1.5, -0.034_741_314_0),
+            (5.0, -0.130_360_097_0),
+        ] {
+            assert_close(
+                Bradford::new(c).entropy(),
+                expected,
+                1e-9,
+                &format!("Bradford({c}) entropy"),
+            );
+        }
     }
 
     #[test]
