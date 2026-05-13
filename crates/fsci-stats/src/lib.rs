@@ -2487,6 +2487,13 @@ impl ContinuousDistribution for WeibullMax {
         g2 - g1 * g1
     }
 
+    fn entropy(&self) -> f64 {
+        // WeibullMax(c) = -WeibullMin(c, scale=1); entropy is
+        // reflection-invariant (h(-X) = h(X)), so it matches
+        // Weibull(c, 1) entropy = γ(1 - 1/c) - ln(c) + 1.
+        EULER_MASCHERONI * (1.0 - 1.0 / self.c) - self.c.ln() + 1.0
+    }
+
     fn skewness(&self) -> f64 {
         // WeibullMax(c) = -WeibullMin(c). Sign flip negates skewness.
         // (frankenscipy-lu2e1)
@@ -7306,6 +7313,11 @@ impl ContinuousDistribution for PowerLaw {
         self.a / ((self.a + 1.0).powi(2) * (self.a + 2.0))
     }
 
+    fn entropy(&self) -> f64 {
+        // h(PowerLaw(a)) = 1 − 1/a − ln(a).
+        1.0 - 1.0 / self.a - self.a.ln()
+    }
+
     fn skewness(&self) -> f64 {
         // Raw moments are E[X^k] = a/(a+k). Build central moments
         // analytically. (frankenscipy-noof0)
@@ -8502,6 +8514,13 @@ impl ContinuousDistribution for Loguniform {
         let log_ratio = (self.b / self.a).ln();
         let m = self.mean();
         (self.b * self.b - self.a * self.a) / (2.0 * log_ratio) - m * m
+    }
+
+    fn entropy(&self) -> f64 {
+        // h(Loguniform(a, b)) = ln(ln(b/a)) + (ln a + ln b)/2.
+        let log_a = self.a.ln();
+        let log_b = self.b.ln();
+        (log_b - log_a).ln() + 0.5 * (log_a + log_b)
     }
 
     fn skewness(&self) -> f64 {
@@ -11531,6 +11550,12 @@ impl ContinuousDistribution for FrechetR {
         second - first * first
     }
 
+    fn entropy(&self) -> f64 {
+        // FrechetR = -Y where Y ~ Weibull(c). Reflection preserves
+        // entropy: h(FrechetR(c)) = h(Weibull(c)) = γ(1 - 1/c) - ln(c) + 1.
+        EULER_MASCHERONI * (1.0 - 1.0 / self.c) - self.c.ln() + 1.0
+    }
+
     fn skewness(&self) -> f64 {
         // FrechetR = -Y where Y ~ Weibull(c) (i.e. weibull_max). Raw
         // moments of Y are g_k = Γ(1 + k/c), so the negation flips the
@@ -12981,6 +13006,13 @@ impl ContinuousDistribution for InvWeibull {
         let g1 = ln_gamma(1.0 - 1.0 / self.c).exp();
         let g2 = ln_gamma(1.0 - 2.0 / self.c).exp();
         g2 - g1 * g1
+    }
+
+    fn entropy(&self) -> f64 {
+        // h(InvWeibull(c, scale=1)) = γ·(1 + 1/c) + ln(1/c) + 1
+        //                          = γ + γ/c − ln(c) + 1.
+        // (Frechet Type II — Wikipedia.)
+        EULER_MASCHERONI + EULER_MASCHERONI / self.c - self.c.ln() + 1.0
     }
 
     fn skewness(&self) -> f64 {
@@ -27690,6 +27722,69 @@ mod tests {
         // Below threshold b=4.
         assert!(Pareto::new(3.5, 1.0).kurtosis().is_nan());
         assert!(Pareto::new(4.0, 1.0).kurtosis().is_nan());
+    }
+
+    #[test]
+    fn invweibull_powerlaw_weibullmax_loguniform_entropy_match_scipy() {
+        // InvWeibull(c): h = γ + γ/c − ln(c) + 1.
+        // PowerLaw(a):   h = 1 − 1/a − ln(a).
+        // WeibullMax(c): h = γ(1 − 1/c) − ln(c) + 1  (same as Weibull(c)).
+        // Loguniform(a, b): h = ln(ln(b/a)) + (ln a + ln b)/2.
+        // FrechetR(c) shares WeibullMax entropy.
+        for &(c, expected) in &[
+            (2.0_f64, 1.172_676_316_8),
+            (5.0, 0.083_220_885_4),
+            (10.0, -0.667_647_861_6),
+        ] {
+            assert_close(
+                InvWeibull::new(c).entropy(),
+                expected,
+                1e-9,
+                &format!("InvWeibull({c}) entropy"),
+            );
+        }
+        for &(a, expected) in &[
+            (0.5_f64, -0.306_852_819_4),
+            (2.0, -0.193_147_180_6),
+            (5.0, -0.809_437_912_4),
+        ] {
+            assert_close(
+                PowerLaw::new(a).entropy(),
+                expected,
+                1e-9,
+                &format!("PowerLaw({a}) entropy"),
+            );
+        }
+        for &(c, expected) in &[
+            (1.5_f64, 0.786_940_113_5),
+            (2.0, 0.595_460_651_9),
+            (5.0, -0.147_665_380_5),
+        ] {
+            assert_close(
+                WeibullMax::new(c).entropy(),
+                expected,
+                1e-9,
+                &format!("WeibullMax({c}) entropy"),
+            );
+            assert_close(
+                FrechetR::new(c).entropy(),
+                expected,
+                1e-9,
+                &format!("FrechetR({c}) entropy"),
+            );
+        }
+        for &(a, b, expected) in &[
+            (1.0_f64, 10.0_f64, 1.985_324_991_7),
+            (0.5, 5.0, 1.292_177_811_2),
+            (2.0, 100.0, 4.013_213_316_2),
+        ] {
+            assert_close(
+                Loguniform::new(a, b).entropy(),
+                expected,
+                1e-9,
+                &format!("Loguniform({a},{b}) entropy"),
+            );
+        }
     }
 
     #[test]
