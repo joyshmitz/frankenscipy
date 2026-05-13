@@ -8171,6 +8171,31 @@ impl ContinuousDistribution for Rice {
         mu4 / (var * var) - 3.0
     }
 
+    fn entropy(&self) -> f64 {
+        // No elementary closed form: −ln pdf = −ln x + (x² + b²)/2
+        //                                      − ln I_0(b·x).
+        // E[X²] = 2 + b² is closed; E[ln X] and E[ln I_0(bX)] need
+        // quadrature. Integrate directly: h = ∫ −pdf(x)·ln pdf(x) dx.
+        // The pdf decays as exp(−x²/2)·(thin polynomial), so [0, b+12]
+        // is enough.
+        let upper = (self.b + 12.0).max(20.0);
+        simpson_integrate_adaptive(
+            |x| {
+                if x <= 0.0 {
+                    return 0.0;
+                }
+                let p = self.pdf(x);
+                if p > 0.0 { -p * p.ln() } else { 0.0 }
+            },
+            1e-12,
+            upper,
+            2_048,
+            1e-10,
+            1e-10,
+            8,
+        )
+    }
+
     fn fit(data: &[f64]) -> Self {
         Self::try_fit(data).unwrap_or_else(|e| {
             panic!("Rice::fit failed: {e}");
@@ -28105,6 +28130,26 @@ mod tests {
                 expected,
                 1e-5,
                 &format!("JohnsonSB({a},{b}) entropy"),
+            );
+        }
+    }
+
+    #[test]
+    fn rice_entropy_matches_scipy_reference_values() {
+        // scipy.stats.rice(b).entropy(). Direct adaptive Simpson on
+        // −pdf·ln pdf since the pdf has no elementary entropy form.
+        let cases = [
+            (0.5_f64, 0.999_197_667_3),
+            (1.0, 1.123_588_721_5),
+            (1.5, 1.241_355_295_6),
+            (3.0, 1.384_387_196_2),
+        ];
+        for &(b, expected) in &cases {
+            assert_close(
+                Rice::new(b).entropy(),
+                expected,
+                1e-5,
+                &format!("Rice({b}) entropy"),
             );
         }
     }
