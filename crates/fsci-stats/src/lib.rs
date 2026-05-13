@@ -12971,6 +12971,16 @@ impl ContinuousDistribution for Alpha {
     fn var(&self) -> f64 {
         f64::INFINITY
     }
+
+    fn skewness(&self) -> f64 {
+        // pdf ~ 1/(x² Φ(a)) as x → ∞, so all raw moments diverge.
+        // scipy.stats.alpha.stats(moments='s') returns NaN — match.
+        f64::NAN
+    }
+
+    fn kurtosis(&self) -> f64 {
+        f64::NAN
+    }
 }
 
 /// Laplace-asymmetric distribution.
@@ -39154,6 +39164,19 @@ mod tests {
         let dist = Alpha::new(2.0);
         assert!(dist.mean().is_infinite() && dist.mean().is_sign_positive());
         assert!(dist.var().is_infinite() && dist.var().is_sign_positive());
+    }
+
+    #[test]
+    fn alpha_skewness_and_kurtosis_are_nan_for_all_a() {
+        // Alpha pdf ~ 1/(x² Φ(a)) on the right tail, so every raw
+        // moment diverges. scipy.stats.alpha.stats(moments='sk')
+        // reports NaN — we match by returning NaN explicitly rather
+        // than inheriting the trait default.
+        for &a in &[0.5_f64, 1.0, 2.0, 5.0] {
+            let d = Alpha::new(a);
+            assert!(d.skewness().is_nan(), "Alpha({a}) skew NaN");
+            assert!(d.kurtosis().is_nan(), "Alpha({a}) kurt NaN");
+        }
     }
 
     #[test]
