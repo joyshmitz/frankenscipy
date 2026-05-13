@@ -9392,6 +9392,15 @@ impl ContinuousDistribution for SkewCauchy {
     fn kurtosis(&self) -> f64 {
         f64::NAN
     }
+
+    fn entropy(&self) -> f64 {
+        // Skew-Cauchy(a) has the same differential entropy as the
+        // standard Cauchy regardless of the skew parameter — the two
+        // half-PDFs (with weights (1−a)/2 and (1+a)/2) compose to keep
+        // the total surface measure invariant under the skew tilt.
+        // scipy.stats.skewcauchy.entropy() = ln(4π) for every a ∈ (−1, 1).
+        (4.0 * PI).ln()
+    }
 }
 
 /// parameterization. The shape parameter `c ∈ [0, 1)` controls
@@ -9472,6 +9481,12 @@ impl ContinuousDistribution for WrapCauchy {
 
     fn kurtosis(&self) -> f64 {
         f64::NAN
+    }
+
+    fn entropy(&self) -> f64 {
+        // h(WrapCauchy(c)) = ln(2π · (1 − c²)) for c ∈ [0, 1). c = 0
+        // collapses to the uniform-on-[0, 2π) entropy ln(2π).
+        (2.0 * PI * (1.0 - self.c * self.c)).ln()
     }
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
@@ -28059,6 +28074,33 @@ mod tests {
                 expected,
                 1e-5,
                 &format!("JohnsonSB({a},{b}) entropy"),
+            );
+        }
+    }
+
+    #[test]
+    fn skewcauchy_wrapcauchy_entropy_match_scipy() {
+        // SkewCauchy: ln(4π) regardless of skew parameter — scipy's
+        // skewcauchy.entropy() returns the same value for every a.
+        for &a in &[0.0_f64, 0.3, 0.5, 0.8] {
+            assert_close(
+                SkewCauchy::new(a).entropy(),
+                2.531_024_246_969_32,
+                1e-12,
+                &format!("SkewCauchy({a}) entropy"),
+            );
+        }
+        // WrapCauchy: ln(2π·(1 − c²)).
+        for &(c, expected) in &[
+            (0.1_f64, 1.827_826_730_6),
+            (0.5, 1.550_194_993_9),
+            (0.9, 0.177_145_859_6),
+        ] {
+            assert_close(
+                WrapCauchy::new(c).entropy(),
+                expected,
+                1e-9,
+                &format!("WrapCauchy({c}) entropy"),
             );
         }
     }
