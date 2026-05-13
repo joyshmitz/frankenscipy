@@ -7224,6 +7224,22 @@ impl ContinuousDistribution for FatigueLife {
     fn var(&self) -> f64 {
         0.25 * self.c * self.c * (5.0 * self.c * self.c + 4.0)
     }
+
+    fn skewness(&self) -> f64 {
+        // Closed form for Birnbaum-Saunders / FatigueLife shape c:
+        //   skew = 4·c·(11c² + 6) / (5c² + 4)^{3/2}
+        // (frankenscipy-4iv2i)
+        let c2 = self.c * self.c;
+        4.0 * self.c * (11.0 * c2 + 6.0) / (5.0 * c2 + 4.0).powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        // Excess kurtosis: 6·c²·(93c² + 40) / (5c² + 4)²
+        // (frankenscipy-4iv2i)
+        let c2 = self.c * self.c;
+        let denom = 5.0 * c2 + 4.0;
+        6.0 * c2 * (93.0 * c2 + 40.0) / (denom * denom)
+    }
 }
 
 /// Truncated normal distribution on [a, b].
@@ -37229,6 +37245,31 @@ mod tests {
         let dist = FatigueLife::new(1.2);
         assert_close(dist.mean(), 1.72, 1e-12, "FatigueLife mean");
         assert_close(dist.var(), 4.032, 1e-12, "FatigueLife variance");
+    }
+
+    /// FatigueLife (Birnbaum-Saunders) skew/kurt closed forms —
+    /// frankenscipy-4iv2i.
+    #[test]
+    fn fatiguelife_skew_kurt_match_scipy() {
+        let cases: [(f64, f64, f64); 4] = [
+            (0.5, 1.4547859349, 3.4421768707),
+            (1.0, 2.5185185185, 9.8518518519),
+            (1.5, 3.0980727013, 14.4686912120),
+            (2.0, 3.4020690872, 17.1666666667),
+        ];
+        for (c, ws, wk) in cases {
+            let d = FatigueLife::new(c);
+            assert!(
+                (d.skewness() - ws).abs() < 1e-9,
+                "FatigueLife({c}).skew = {}, scipy {ws}",
+                d.skewness()
+            );
+            assert!(
+                (d.kurtosis() - wk).abs() < 1e-9,
+                "FatigueLife({c}).kurt = {}, scipy {wk}",
+                d.kurtosis()
+            );
+        }
     }
 
     #[test]
