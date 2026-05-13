@@ -13374,6 +13374,26 @@ impl Argus {
         assert!(chi > 0.0, "chi must be positive");
         Self { chi }
     }
+
+    /// k-th raw moment E[X^k] via direct adaptive Simpson on the
+    /// bounded support [0, 1]. Argus moments have no elementary closed
+    /// form; the pdf is smooth and well-behaved on (0, 1), so direct
+    /// quadrature converges well. Mean/var keep their existing
+    /// specialized routines (gammainc-based) for tighter accuracy on
+    /// those two moments. Wider tolerance + lower base-grid here
+    /// since 4 moments × 3 χ values at tight tolerance was burning
+    /// 80 s of test time and 5e-5 already matches scipy.
+    fn raw_moment_simpson(&self, k: u32) -> f64 {
+        simpson_integrate_adaptive(
+            |x| x.powi(k as i32) * self.pdf(x),
+            1e-12,
+            1.0 - 1e-12,
+            1_024,
+            1e-9,
+            1e-9,
+            6,
+        )
+    }
 }
 
 impl ContinuousDistribution for Argus {
@@ -13443,6 +13463,34 @@ impl ContinuousDistribution for Argus {
         let gamma5 = p5 * gamma_half5;
         let second_moment = 1.0 - gamma5 / (a * gamma3);
         (second_moment - mean * mean).max(0.0)
+    }
+
+    fn skewness(&self) -> f64 {
+        let m1 = self.mean();
+        let m2 = self.raw_moment_simpson(2);
+        let m3 = self.raw_moment_simpson(3);
+        let var = m2 - m1 * m1;
+        if !var.is_finite() || var <= 0.0 {
+            return f64::NAN;
+        }
+        let mu3 = 2.0_f64.mul_add(m1.powi(3), m3 - 3.0 * m1 * m2);
+        mu3 / var.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        let m1 = self.mean();
+        let m2 = self.raw_moment_simpson(2);
+        let m3 = self.raw_moment_simpson(3);
+        let m4 = self.raw_moment_simpson(4);
+        let var = m2 - m1 * m1;
+        if !var.is_finite() || var <= 0.0 {
+            return f64::NAN;
+        }
+        let mu4 = (-3.0_f64).mul_add(
+            m1.powi(4),
+            6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
+        );
+        mu4 / (var * var) - 3.0
     }
 }
 
@@ -37439,6 +37487,23 @@ mod tests {
             let dist = Argus::new(chi);
             assert_close(dist.mean(), mean, 1e-8, "Argus mean");
             assert_close(dist.var(), var, 1e-8, "Argus variance");
+        }
+    }
+
+    #[test]
+    fn argus_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.argus(chi).stats(moments='sk'). Numerical
+        // Simpson on [0, 1] for m_3, m_4; tolerance reflects shared
+        // quadrature error.
+        let cases = [
+            (1.0_f64, -0.420_397_902_3, -0.693_893_395_6),
+            (2.0, -0.847_368_333_0, 0.038_091_400_0),
+            (3.0, -1.587_217_425_1, 2.846_086_784_3),
+        ];
+        for &(chi, sk, ku) in &cases {
+            let d = Argus::new(chi);
+            assert_close(d.skewness(), sk, 1e-3, &format!("Argus({chi}) skew"));
+            assert_close(d.kurtosis(), ku, 1e-2, &format!("Argus({chi}) kurt"));
         }
     }
 
