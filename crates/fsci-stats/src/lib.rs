@@ -8163,6 +8163,34 @@ impl ContinuousDistribution for Loguniform {
         (self.b * self.b - self.a * self.a) / (2.0 * log_ratio) - m * m
     }
 
+    fn skewness(&self) -> f64 {
+        // Raw moments m_k = (b^k − a^k) / (k · log(b/a)), always finite
+        // on the bounded support (a, b).
+        let log_ratio = (self.b / self.a).ln();
+        let mk = |k: i32| (self.b.powi(k) - self.a.powi(k)) / (f64::from(k) * log_ratio);
+        let m1 = mk(1);
+        let m2 = mk(2);
+        let m3 = mk(3);
+        let var = m2 - m1 * m1;
+        let mu3 = 2.0_f64.mul_add(m1.powi(3), m3 - 3.0 * m1 * m2);
+        mu3 / var.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        let log_ratio = (self.b / self.a).ln();
+        let mk = |k: i32| (self.b.powi(k) - self.a.powi(k)) / (f64::from(k) * log_ratio);
+        let m1 = mk(1);
+        let m2 = mk(2);
+        let m3 = mk(3);
+        let m4 = mk(4);
+        let var = m2 - m1 * m1;
+        let mu4 = (-3.0_f64).mul_add(
+            m1.powi(4),
+            6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
+        );
+        mu4 / (var * var) - 3.0
+    }
+
     fn fit(data: &[f64]) -> Self {
         Self::try_fit(data).unwrap_or_else(|e| {
             panic!("Loguniform::fit failed: {e}");
@@ -38732,6 +38760,24 @@ mod tests {
         assert!((lu.cdf(1.0) - 0.0).abs() < 1e-10);
         assert!((lu.cdf(10.0) - 1.0).abs() < 1e-10);
         assert!((lu.ppf(0.5) - (10.0f64).sqrt()).abs() < 1e-10);
+    }
+
+    #[test]
+    fn loguniform_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.loguniform(a, b).stats(moments='sk'). Note: skew
+        // and kurt are scale-invariant (depend only on b/a), so the
+        // (0.1, 5.0) and (2.0, 100.0) cases — both at ratio 50 — give
+        // identical values.
+        let cases = [
+            (1.0_f64, 10.0_f64, 0.771_604_986_766_096, -0.546_529_582_810_115),
+            (0.1, 5.0, 1.244_921_194_046_174, 0.506_230_587_523_249),
+            (2.0, 100.0, 1.244_921_194_046_174, 0.506_230_587_523_246),
+        ];
+        for &(a, b, sk, ku) in &cases {
+            let d = Loguniform::new(a, b);
+            assert_close(d.skewness(), sk, 1e-10, &format!("Loguniform({a},{b}) skew"));
+            assert_close(d.kurtosis(), ku, 1e-10, &format!("Loguniform({a},{b}) kurt"));
+        }
     }
 
     #[test]
