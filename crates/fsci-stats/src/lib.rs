@@ -7802,6 +7802,26 @@ impl ContinuousDistribution for FatigueLife {
         let denom = 5.0 * c2 + 4.0;
         6.0 * c2 * (93.0 * c2 + 40.0) / (denom * denom)
     }
+
+    fn entropy(&self) -> f64 {
+        // Birnbaum-Saunders has no elementary entropy closed form;
+        // adaptive Simpson on -pdf · ln pdf with a tail cap that scales
+        // with c (heavier c → more right-tail mass). For c=2 the tail
+        // extends to ~200 and lower base grids underestimate.
+        let upper = (1.0 + 80.0 * self.c * self.c).max(200.0);
+        simpson_integrate_adaptive(
+            |x| {
+                let p = self.pdf(x);
+                if p > 0.0 { -p * p.ln() } else { 0.0 }
+            },
+            1e-12,
+            upper,
+            4_096,
+            1e-10,
+            1e-10,
+            10,
+        )
+    }
 }
 
 /// Truncated normal distribution on [a, b].
@@ -9306,6 +9326,24 @@ impl ContinuousDistribution for SkewNorm {
         let m = d * (2.0 / PI).sqrt();
         let v = 1.0 - 2.0 * d * d / PI;
         2.0 * (PI - 3.0) * m.powi(4) / v.powi(2)
+    }
+
+    fn entropy(&self) -> f64 {
+        // No elementary closed form (the Φ(α·x) factor inside ln pdf
+        // resists clean expectation). Direct adaptive Simpson with
+        // gaussian-like tail decay on both sides.
+        simpson_integrate_adaptive(
+            |x| {
+                let p = self.pdf(x);
+                if p > 0.0 { -p * p.ln() } else { 0.0 }
+            },
+            -20.0,
+            20.0,
+            2_048,
+            1e-10,
+            1e-10,
+            8,
+        )
     }
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
@@ -25502,6 +25540,40 @@ impl ContinuousDistribution for FoldedCauchy {
     fn kurtosis(&self) -> f64 {
         f64::NAN
     }
+
+    fn entropy(&self) -> f64 {
+        // c = 0 collapses to HalfCauchy with h = ln(2π).
+        if self.c == 0.0 {
+            return (2.0 * PI).ln();
+        }
+        // For c > 0, FoldedCauchy entropy is finite but the 1/x² tail
+        // means even 1e5 truncation under-integrates. Substitute
+        // u = atan(x) ∈ (0, π/2) to compactify the support:
+        //   ∫ −pdf(x) ln pdf(x) dx
+        //     = ∫_0^{π/2} −pdf(tan u) ln pdf(tan u) · sec²(u) du.
+        // The integrand stays bounded on (0, π/2).
+        simpson_integrate_adaptive(
+            |u| {
+                let x = u.tan();
+                if !x.is_finite() {
+                    return 0.0;
+                }
+                let p = self.pdf(x);
+                if p > 0.0 {
+                    let sec2 = 1.0 / u.cos().powi(2);
+                    -p * p.ln() * sec2
+                } else {
+                    0.0
+                }
+            },
+            1e-12,
+            PI / 2.0 - 1e-12,
+            4_096,
+            1e-9,
+            1e-9,
+            10,
+        )
+    }
 }
 
 /// Folded Normal distribution.
@@ -25587,6 +25659,28 @@ impl ContinuousDistribution for FoldedNormal {
             6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
         );
         mu4 / (var * var) - 3.0
+    }
+
+    fn entropy(&self) -> f64 {
+        // c = 0 reduces to half-normal: h = 0.5·ln(π/2) + 0.5.
+        // For general c, no clean closed form — Simpson on [0, c + 12]
+        // captures essentially all mass (PDF has exp(−(x−c)²/2) tail).
+        if self.c == 0.0 {
+            return 0.5 * (PI / 2.0).ln() + 0.5;
+        }
+        let upper = (self.c + 12.0).max(20.0);
+        simpson_integrate_adaptive(
+            |x| {
+                let p = self.pdf(x);
+                if p > 0.0 { -p * p.ln() } else { 0.0 }
+            },
+            1e-12,
+            upper,
+            2_048,
+            1e-10,
+            1e-10,
+            8,
+        )
     }
 }
 
@@ -28150,6 +28244,64 @@ mod tests {
                 expected,
                 1e-5,
                 &format!("JohnsonSB({a},{b}) entropy"),
+            );
+        }
+    }
+
+    #[test]
+    fn fatiguelife_skewnorm_foldednormal_foldedcauchy_entropy_match_scipy() {
+        // FatigueLife(c)
+        for &(c, expected) in &[
+            (0.5_f64, 0.697_002_136_4),
+            (1.0, 1.322_062_571_0),
+            (2.0, 1.845_359_123_8),
+        ] {
+            assert_close(
+                FatigueLife::new(c).entropy(),
+                expected,
+                1e-4,
+                &format!("FatigueLife({c}) entropy"),
+            );
+        }
+        // SkewNorm(a)
+        for &(a, expected) in &[
+            (0.0_f64, 1.418_938_533_2),
+            (1.0, 1.225_791_352_6),
+            (5.0, 0.866_920_745_0),
+        ] {
+            assert_close(
+                SkewNorm::new(a).entropy(),
+                expected,
+                1e-5,
+                &format!("SkewNorm({a}) entropy"),
+            );
+        }
+        // FoldedNormal(c)
+        for &(c, expected) in &[
+            (0.0_f64, 0.725_791_352_6),
+            (0.5, 0.837_212_834_8),
+            (1.5, 1.252_568_659_2),
+            (3.0, 1.415_089_285_7),
+        ] {
+            assert_close(
+                FoldedNormal::new(c).entropy(),
+                expected,
+                1e-5,
+                &format!("FoldedNormal({c}) entropy"),
+            );
+        }
+        // FoldedCauchy(c)
+        for &(c, expected) in &[
+            (0.0_f64, 1.837_877_066_4),
+            (0.5, 1.892_107_728_0),
+            (1.0, 1.996_224_250_2),
+            (2.0, 2.161_384_197_6),
+        ] {
+            assert_close(
+                FoldedCauchy::new(c).entropy(),
+                expected,
+                1e-3,
+                &format!("FoldedCauchy({c}) entropy"),
             );
         }
     }
