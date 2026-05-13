@@ -10498,12 +10498,13 @@ impl ContinuousDistribution for RecipInvGauss {
     }
 
     fn mean(&self) -> f64 {
-        // No clean closed form; involves infinite series. Leave NaN.
-        f64::NAN
+        // Closed form: E[X] = (1 + μ)/μ = 1/μ + 1 (frankenscipy-7um75).
+        (1.0 + self.mu) / self.mu
     }
 
     fn var(&self) -> f64 {
-        f64::NAN
+        // Closed form: Var[X] = (1 + 2μ)/μ = 1/μ + 2 (frankenscipy-7um75).
+        (1.0 + 2.0 * self.mu) / self.mu
     }
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
@@ -26993,6 +26994,32 @@ mod tests {
                 (pdf_l - pdf_s).abs() < 1e-12,
                 "pdf series disagree at x={x}: large={pdf_l}, small={pdf_s}, diff={}",
                 (pdf_l - pdf_s).abs()
+            );
+        }
+    }
+
+    /// RecipInvGauss.mean/var match scipy.stats.recipinvgauss
+    /// (frankenscipy-7um75). Closed forms:
+    ///   E[X] = (1 + μ)/μ,   Var[X] = (1 + 2μ)/μ.
+    #[test]
+    fn recipinvgauss_mean_var_match_scipy() {
+        let cases: [(f64, f64, f64); 4] = [
+            (0.5, 3.0, 4.0),
+            (1.0, 2.0, 3.0),
+            (1.5, 5.0 / 3.0, 8.0 / 3.0),
+            (2.0, 1.5, 2.5),
+        ];
+        for (mu, em, ev) in cases {
+            let d = RecipInvGauss::new(mu);
+            assert!(
+                (d.mean() - em).abs() < 1e-12,
+                "RecipInvGauss({mu}).mean = {}, scipy {em}",
+                d.mean()
+            );
+            assert!(
+                (d.var() - ev).abs() < 1e-12,
+                "RecipInvGauss({mu}).var = {}, scipy {ev}",
+                d.var()
             );
         }
     }
