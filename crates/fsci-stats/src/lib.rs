@@ -9673,6 +9673,13 @@ impl ContinuousDistribution for Erlang {
         6.0 / (self.k as f64)
     }
 
+    fn entropy(&self) -> f64 {
+        // Erlang(k, rate) is Gamma(k, scale=1/rate):
+        //   h = k + ln Γ(k) + (1 − k) ψ(k) − ln(rate).
+        let k = self.k as f64;
+        k + ln_gamma(k) + (1.0 - k) * fsci_special::digamma_scalar(k) - self.rate.ln()
+    }
+
     fn fit(data: &[f64]) -> Self {
         Self::try_fit(data).unwrap_or_else(|e| {
             panic!("Erlang::fit failed: {e}");
@@ -10158,6 +10165,12 @@ impl ContinuousDistribution for Levy {
         f64::NAN
     }
 
+    fn entropy(&self) -> f64 {
+        // h(Levy(loc, scale)) = (1 + 3γ + ln(16π·scale²)) / 2. Mean/var
+        // diverge but entropy is finite (well-known for α-stable laws).
+        0.5 * (1.0 + 3.0 * EULER_MASCHERONI + (16.0 * PI * self.scale * self.scale).ln())
+    }
+
     fn fit(data: &[f64]) -> Self {
         Self::try_fit(data).unwrap_or_else(|e| {
             panic!("Levy::fit failed: {e}");
@@ -10278,6 +10291,12 @@ impl ContinuousDistribution for LevyLeft {
 
     fn kurtosis(&self) -> f64 {
         f64::NAN
+    }
+
+    fn entropy(&self) -> f64 {
+        // LevyLeft is the mirror of Levy across the location; entropy is
+        // reflection-invariant.
+        0.5 * (1.0 + 3.0 * EULER_MASCHERONI + (16.0 * PI * self.scale * self.scale).ln())
     }
 
     fn fit(data: &[f64]) -> Self {
@@ -27773,6 +27792,61 @@ mod tests {
         // Below threshold b=4.
         assert!(Pareto::new(3.5, 1.0).kurtosis().is_nan());
         assert!(Pareto::new(4.0, 1.0).kurtosis().is_nan());
+    }
+
+    #[test]
+    fn cauchy_halfcauchy_levy_levyleft_erlang_entropy_match_scipy() {
+        // Cauchy(scale=1): ln(4π) ≈ 2.5310.
+        assert_close(
+            Cauchy::new(0.0, 1.0).entropy(),
+            (4.0 * PI).ln(),
+            1e-12,
+            "Cauchy(0, 1) entropy",
+        );
+        assert_close(
+            Cauchy::new(0.0, 2.0).entropy(),
+            3.224_171_427_5,
+            1e-9,
+            "Cauchy(0, 2) entropy",
+        );
+        // HalfCauchy (parameterless = scale 1): ln(2π).
+        assert_close(
+            HalfCauchy.entropy(),
+            (2.0 * PI).ln(),
+            1e-12,
+            "HalfCauchy entropy",
+        );
+        // Levy / LevyLeft: (1 + 3γ + ln(16π·scale²))/2.
+        for &(scale, expected) in &[
+            (1.0_f64, 3.324_482_801_4),
+            (2.0, 4.017_629_982_0),
+        ] {
+            assert_close(
+                Levy::new(0.0, scale).entropy(),
+                expected,
+                1e-9,
+                &format!("Levy(0, {scale}) entropy"),
+            );
+            assert_close(
+                LevyLeft::new(0.0, scale).entropy(),
+                expected,
+                1e-9,
+                &format!("LevyLeft(0, {scale}) entropy"),
+            );
+        }
+        // Erlang(k, rate): same as Gamma(k, scale=1/rate).
+        for &(k, rate, expected) in &[
+            (2_usize, 1.0_f64, 1.577_215_664_9),
+            (5, 1.0, 2.153_583_156_6),
+            (3, 0.5, 2.540_725_690_9),
+        ] {
+            assert_close(
+                Erlang::new(k, rate).entropy(),
+                expected,
+                1e-8,
+                &format!("Erlang({k}, {rate}) entropy"),
+            );
+        }
     }
 
     #[test]
