@@ -6925,11 +6925,15 @@ impl ContinuousDistribution for HalfCauchy {
     }
 
     fn mean(&self) -> f64 {
-        f64::NAN
+        // HalfCauchy has no finite moments — scipy reports +∞, not NaN,
+        // so callers that distinguish "moment doesn't exist" from
+        // "not yet implemented" can rely on the same dispatch
+        // (frankenscipy-59anq).
+        f64::INFINITY
     }
 
     fn var(&self) -> f64 {
-        f64::NAN
+        f64::INFINITY
     }
 
     // fit() inherits the trait default. Resolves [frankenscipy-paejq].
@@ -26458,10 +26462,11 @@ mod tests {
         let dist = HalfCauchy;
         assert_close(dist.entropy(), (2.0 * PI).ln(), 1e-15, "HalfCauchy.entropy");
         assert!((dist.entropy() - 1.837_877_066_409_345_3).abs() < 1e-13);
-        // mean / var still NaN (no finite moments) — sanity-check that we
-        // didn't accidentally override them.
-        assert!(dist.mean().is_nan());
-        assert!(dist.var().is_nan());
+        // mean / var: scipy reports +∞ (not NaN) since the Cauchy
+        // tail makes every positive moment divergent
+        // (frankenscipy-59anq).
+        assert!(dist.mean().is_infinite() && dist.mean() > 0.0);
+        assert!(dist.var().is_infinite() && dist.var() > 0.0);
     }
 
     #[test]
@@ -36360,10 +36365,14 @@ mod tests {
     }
 
     #[test]
-    fn half_cauchy_mean_var_are_undefined() {
+    fn half_cauchy_mean_var_match_scipy_infinity() {
+        // scipy.stats.halfcauchy.stats(moments='mv') returns (+∞, +∞):
+        // the Cauchy tail makes every positive moment diverge, but the
+        // limit is +∞ rather than the undefined NaN we previously
+        // returned (frankenscipy-59anq).
         let hc = HalfCauchy;
-        assert!(hc.mean().is_nan());
-        assert!(hc.var().is_nan());
+        assert!(hc.mean().is_infinite() && hc.mean() > 0.0);
+        assert!(hc.var().is_infinite() && hc.var() > 0.0);
     }
 
     #[test]
