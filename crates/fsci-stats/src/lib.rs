@@ -7724,6 +7724,33 @@ impl ContinuousDistribution for Nakagami {
         1.0 - m * m
     }
 
+    fn skewness(&self) -> f64 {
+        // Raw moments m_k = Γ(ν+k/2)/Γ(ν) · ν^{-k/2}; m_2 = 1.
+        // Evaluate in log space to stay stable across ν.
+        let nu = self.nu;
+        let lg_nu = ln_gamma(nu);
+        let m1 = (ln_gamma(nu + 0.5) - lg_nu - 0.5 * nu.ln()).exp();
+        let m3 = (ln_gamma(nu + 1.5) - lg_nu - 1.5 * nu.ln()).exp();
+        let var = 1.0 - m1 * m1;
+        let mu3 = 2.0_f64.mul_add(m1.powi(3), m3 - 3.0 * m1);
+        mu3 / var.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        let nu = self.nu;
+        let lg_nu = ln_gamma(nu);
+        let m1 = (ln_gamma(nu + 0.5) - lg_nu - 0.5 * nu.ln()).exp();
+        let m3 = (ln_gamma(nu + 1.5) - lg_nu - 1.5 * nu.ln()).exp();
+        // m_4 = Γ(ν+2)/Γ(ν)/ν² = ν(ν+1)/ν² = (ν+1)/ν.
+        let m4 = (nu + 1.0) / nu;
+        let var = 1.0 - m1 * m1;
+        let mu4 = (-3.0_f64).mul_add(
+            m1.powi(4),
+            6.0_f64.mul_add(m1 * m1, 4.0_f64.mul_add(-m1 * m3, m4)),
+        );
+        mu4 / (var * var) - 3.0
+    }
+
     fn fit(data: &[f64]) -> Self {
         Self::try_fit(data).unwrap_or_else(|e| {
             panic!("Nakagami::fit failed: {e}");
@@ -37909,6 +37936,25 @@ mod tests {
         assert!(n.pdf(1.0) > 0.0);
         let c = n.cdf(1.0);
         assert!(c > 0.0 && c < 1.0);
+    }
+
+    #[test]
+    fn nakagami_skewness_and_kurtosis_match_scipy_reference_values() {
+        // scipy.stats.nakagami(nu).stats(moments='sk').
+        // Spans nu < 1 (heavy skew, Rayleigh-like), nu = 1 (Rayleigh),
+        // and nu > 1 (closer to half-normal). All converge cleanly via
+        // log-space gamma evaluation.
+        let cases = [
+            (0.7_f64, 0.798_077_579_646_594, 0.481_641_052_514_496),
+            (1.0, 0.631_110_657_818_934, 0.245_089_300_687_629),
+            (1.5, 0.485_692_828_049_597, 0.108_163_842_816_250),
+            (3.0, 0.317_910_876_930_565, 0.025_111_348_684_700),
+        ];
+        for &(nu, s, k) in &cases {
+            let n = Nakagami::new(nu);
+            assert_close(n.skewness(), s, 1e-10, &format!("Nakagami({nu}) skew"));
+            assert_close(n.kurtosis(), k, 1e-9, &format!("Nakagami({nu}) kurt"));
+        }
     }
 
     #[test]
