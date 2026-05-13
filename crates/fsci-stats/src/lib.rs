@@ -1951,6 +1951,16 @@ impl ContinuousDistribution for BetaDist {
         self.a * self.b / (ab * ab * (ab + 1.0))
     }
 
+    fn entropy(&self) -> f64 {
+        // h(Beta(a, b)) = ln B(a, b) − (a − 1) ψ(a) − (b − 1) ψ(b)
+        //               + (a + b − 2) ψ(a + b).
+        let (a, b) = (self.a, self.b);
+        let log_beta = ln_gamma(a) + ln_gamma(b) - ln_gamma(a + b);
+        log_beta - (a - 1.0) * fsci_special::digamma_scalar(a)
+            - (b - 1.0) * fsci_special::digamma_scalar(b)
+            + (a + b - 2.0) * fsci_special::digamma_scalar(a + b)
+    }
+
     fn fit(data: &[f64]) -> Self {
         if data.is_empty()
             || data
@@ -28659,6 +28669,21 @@ mod tests {
             let mirror = dist.pdf(1.0 - x);
             assert!(p.is_finite() && p > 0.0);
             assert_close(p, mirror, 1e-12, "Arcsine.pdf is symmetric around 0.5");
+        }
+    }
+
+    #[test]
+    fn beta_entropy_matches_scipy_reference_values() {
+        // scipy.stats.beta(a, b).entropy(). Closed form:
+        // ln B(a, b) − (a − 1) ψ(a) − (b − 1) ψ(b) + (a + b − 2) ψ(a + b).
+        let cases = [
+            (2.0_f64, 3.0_f64, -0.234_906_649_8),
+            (0.5, 0.5, -0.241_564_475_3),
+            (5.0, 1.5, -0.579_905_141_1),
+        ];
+        for &(a, b, h) in &cases {
+            let d = BetaDist::new(a, b);
+            assert_close(d.entropy(), h, 1e-8, &format!("BetaDist({a},{b}) entropy"));
         }
     }
 
