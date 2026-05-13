@@ -5163,6 +5163,15 @@ impl ContinuousDistribution for Cauchy {
         f64::NAN // Cauchy has no finite variance
     }
 
+    fn skewness(&self) -> f64 {
+        // Heavy 1/x² tails → all moments diverge. scipy reports NaN.
+        f64::NAN
+    }
+
+    fn kurtosis(&self) -> f64 {
+        f64::NAN
+    }
+
     fn fit(data: &[f64]) -> Self {
         if data.is_empty() || data.iter().any(|&x| !x.is_finite()) {
             return Self {
@@ -7352,6 +7361,15 @@ impl ContinuousDistribution for HalfCauchy {
         f64::INFINITY
     }
 
+    fn skewness(&self) -> f64 {
+        // Heavy 1/x² tails (one-sided), all higher moments diverge.
+        f64::NAN
+    }
+
+    fn kurtosis(&self) -> f64 {
+        f64::NAN
+    }
+
     // fit() inherits the trait default. Resolves [frankenscipy-paejq].
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
@@ -8933,6 +8951,14 @@ impl ContinuousDistribution for SkewCauchy {
         // No finite variance.
         f64::NAN
     }
+
+    fn skewness(&self) -> f64 {
+        f64::NAN
+    }
+
+    fn kurtosis(&self) -> f64 {
+        f64::NAN
+    }
 }
 
 /// parameterization. The shape parameter `c ∈ [0, 1)` controls
@@ -9001,6 +9027,17 @@ impl ContinuousDistribution for WrapCauchy {
         // variance) since scipy reports a tabulated value scipy users
         // rarely need. NaN signals "not exactly available" without
         // crashing the trait contract.
+        f64::NAN
+    }
+
+    fn skewness(&self) -> f64 {
+        // Linear higher moments of WrapCauchy aren't routinely
+        // tabulated; scipy itself returns NaN. We do the same to
+        // preserve trait-contract symmetry with var.
+        f64::NAN
+    }
+
+    fn kurtosis(&self) -> f64 {
         f64::NAN
     }
 
@@ -9774,6 +9811,15 @@ impl ContinuousDistribution for Levy {
         f64::INFINITY
     }
 
+    fn skewness(&self) -> f64 {
+        // Levy is α = 1/2 stable: no finite moments at all.
+        f64::NAN
+    }
+
+    fn kurtosis(&self) -> f64 {
+        f64::NAN
+    }
+
     fn fit(data: &[f64]) -> Self {
         Self::try_fit(data).unwrap_or_else(|e| {
             panic!("Levy::fit failed: {e}");
@@ -9885,6 +9931,15 @@ impl ContinuousDistribution for LevyLeft {
 
     fn var(&self) -> f64 {
         f64::INFINITY
+    }
+
+    fn skewness(&self) -> f64 {
+        // LevyLeft is α = 1/2 stable on the left tail: no finite moments.
+        f64::NAN
+    }
+
+    fn kurtosis(&self) -> f64 {
+        f64::NAN
     }
 
     fn fit(data: &[f64]) -> Self {
@@ -24269,6 +24324,15 @@ impl ContinuousDistribution for FoldedCauchy {
 
     fn var(&self) -> f64 {
         f64::INFINITY
+    }
+
+    fn skewness(&self) -> f64 {
+        // Cauchy tails on both halves → all moments diverge.
+        f64::NAN
+    }
+
+    fn kurtosis(&self) -> f64 {
+        f64::NAN
     }
 }
 
