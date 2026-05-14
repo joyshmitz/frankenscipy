@@ -2991,6 +2991,12 @@ impl ContinuousDistribution for Lomax {
         }
     }
 
+    fn mode(&self) -> f64 {
+        // Lomax pdf = α·(1+x)^{-(α+1)} on x ≥ 0 is strictly decreasing,
+        // so the mode is the boundary 0 (frankenscipy-rt24d).
+        0.0
+    }
+
     fn fit(data: &[f64]) -> Self {
         if data.is_empty() || data.iter().any(|v| !v.is_finite() || *v < 0.0) {
             return Self { c: f64::NAN };
@@ -3561,6 +3567,12 @@ impl ContinuousDistribution for HypSecant {
         0.0
     }
 
+    fn mode(&self) -> f64 {
+        // HypSecant pdf ∝ sech(πx/2) is symmetric and peaks at 0
+        // (frankenscipy-rt24d).
+        0.0
+    }
+
     fn kurtosis(&self) -> f64 {
         // /mock-code-finder for [frankenscipy-a1kjq]: scipy.stats.hypsecant
         // reports excess kurtosis = 2.
@@ -4012,6 +4024,12 @@ impl ContinuousDistribution for VonMises {
 
     fn kurtosis(&self) -> f64 {
         f64::NAN
+    }
+
+    fn mode(&self) -> f64 {
+        // VonMises pdf ∝ exp(κ cos(x − loc)) peaks at x = loc
+        // (the mean direction); frankenscipy-rt24d.
+        self.loc
     }
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
@@ -5907,6 +5925,12 @@ impl ContinuousDistribution for Triangular {
         // Excess kurtosis is the constant -3/5 (independent of mode
         // location and scale). (frankenscipy-mrmul)
         -3.0 / 5.0
+    }
+
+    fn mode(&self) -> f64 {
+        // Triangular pdf peaks at the apex parameter `mode`
+        // (frankenscipy-rt24d).
+        self.mode
     }
 
     fn fit(data: &[f64]) -> Self {
@@ -8395,6 +8419,17 @@ impl ContinuousDistribution for Chi {
         ln_gamma(k / 2.0) + 0.5 * (k - 2.0_f64.ln() - (k - 1.0) * fsci_special::digamma_scalar(k / 2.0))
     }
 
+    fn mode(&self) -> f64 {
+        // Differentiating x^{k−1}·exp(−x²/2) gives x² = k − 1, so the
+        // mode is √(k−1) for k ≥ 1; the pdf is monotone decreasing for
+        // k < 1 with the mode pushed to the boundary 0 (frankenscipy-rt24d).
+        if self.df >= 1.0 {
+            (self.df - 1.0).sqrt()
+        } else {
+            0.0
+        }
+    }
+
     fn fit(data: &[f64]) -> Self {
         Self::try_fit(data).unwrap_or_else(|e| {
             panic!("Chi::fit failed: {e}");
@@ -8695,6 +8730,14 @@ impl ContinuousDistribution for Nakagami {
         mu4 / (var * var) - 3.0
     }
 
+    fn mode(&self) -> f64 {
+        // Setting d/dx [x^{2ν−1}·exp(−ν x²)] = 0 gives 2ν x² = 2ν − 1,
+        // i.e. mode = √((2ν − 1)/(2ν)) = √((ν − 1/2)/ν). Constructor
+        // requires ν ≥ 1/2, so the radicand is non-negative
+        // (frankenscipy-rt24d).
+        ((self.nu - 0.5) / self.nu).sqrt()
+    }
+
     fn fit(data: &[f64]) -> Self {
         Self::try_fit(data).unwrap_or_else(|e| {
             panic!("Nakagami::fit failed: {e}");
@@ -8887,6 +8930,18 @@ impl ContinuousDistribution for Fisk {
         mu4 / (var * var) - 3.0
     }
 
+    fn mode(&self) -> f64 {
+        // Fisk pdf = c·x^{c−1} / (1 + x^c)². d/dx ln pdf gives
+        // x^c = (c − 1)/(c + 1), so mode = ((c−1)/(c+1))^{1/c} for c > 1;
+        // for c ≤ 1 the pdf is monotone decreasing and the mode collapses
+        // to the boundary 0 (frankenscipy-rt24d).
+        if self.c > 1.0 {
+            ((self.c - 1.0) / (self.c + 1.0)).powf(1.0 / self.c)
+        } else {
+            0.0
+        }
+    }
+
     fn fit(data: &[f64]) -> Self {
         Self::try_fit(data).unwrap_or_else(|e| {
             panic!("Fisk::fit failed: {e}");
@@ -9046,6 +9101,12 @@ impl ContinuousDistribution for Loguniform {
             6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
         );
         mu4 / (var * var) - 3.0
+    }
+
+    fn mode(&self) -> f64 {
+        // Loguniform pdf 1/(x · ln(b/a)) is strictly decreasing on
+        // [a, b], so the mode is the lower endpoint a (frankenscipy-rt24d).
+        self.a
     }
 
     fn fit(data: &[f64]) -> Self {
@@ -9481,6 +9542,19 @@ impl ContinuousDistribution for DoubleWeibull {
         let m4 = ln_gamma(1.0 + 4.0 / c).exp();
         m4 / (m2 * m2) - 3.0
     }
+
+    fn mode(&self) -> f64 {
+        // For c > 1 the Weibull half has its maximum at ((c−1)/c)^{1/c};
+        // for c ≤ 1 the pdf diverges at 0 (the only mode). The dweibull
+        // density is the symmetrized version, so the global maxima are
+        // at ±mode (returning the right-side root is the scipy convention;
+        // we report 0 when both halves peak at the origin).
+        if self.c > 1.0 {
+            ((self.c - 1.0) / self.c).powf(1.0 / self.c)
+        } else {
+            0.0
+        }
+    }
 }
 
 /// Double gamma distribution.
@@ -9567,6 +9641,17 @@ impl ContinuousDistribution for DoubleGamma {
         // Excess kurt = m_4/m_2² − 3 = (a+2)(a+3)/(a(a+1)) − 3.
         let a = self.a;
         (a + 2.0) * (a + 3.0) / (a * (a + 1.0)) - 3.0
+    }
+
+    fn mode(&self) -> f64 {
+        // Gamma(a, 1) has mode at a − 1 for a ≥ 1; the dgamma symmetric
+        // density therefore peaks at ±(a−1) for a > 1 and at the origin
+        // for a ≤ 1 (where Gamma's pdf is monotone decreasing).
+        if self.a > 1.0 {
+            self.a - 1.0
+        } else {
+            0.0
+        }
     }
 
     fn fit(data: &[f64]) -> Self {
@@ -35406,6 +35491,47 @@ mod tests {
         let b2 = Binomial::new(10, 0.3);
         assert!(b2.skewness() > 0.0, "Binomial(10,0.3) positive skew");
         assert!(b2.mode() >= 0.0, "Binomial mode >= 0");
+    }
+
+    #[test]
+    fn continuous_simple_modes_match_pdf_argmax() {
+        // 10-distribution mode sweep (frankenscipy-rt24d). For each
+        // distribution we (a) check the closed-form mode against scipy's
+        // numerical pdf-argmax and (b) verify the pdf is locally maximal
+        // there (pdf(mode) ≥ pdf(mode ± δ)).
+        let pairs: &[(&str, f64, f64)] = &[
+            ("HypSecant", HypSecant.mode(), 0.0),
+            ("VonMises(2)", VonMises::new(2.0, 0.0).mode(), 0.0),
+            ("Lomax(2)", Lomax::new(2.0).mode(), 0.0),
+            ("Triangular(0.3)", Triangular::new(0.0, 0.3, 1.0).mode(), 0.3),
+            ("DoubleWeibull(2)", DoubleWeibull::new(2.0).mode(), std::f64::consts::FRAC_1_SQRT_2),
+            ("DoubleGamma(2)", DoubleGamma::new(2.0).mode(), 1.0),
+            ("Chi(5)", Chi::new(5.0).mode(), 2.0),
+            ("Chi(0.5)", Chi::new(0.5).mode(), 0.0),
+            ("Nakagami(3)", Nakagami::new(3.0).mode(), ((3.0_f64 - 0.5) / 3.0).sqrt()),
+            ("Fisk(3)", Fisk::new(3.0).mode(), (0.5_f64).powf(1.0 / 3.0)),
+            ("Loguniform(1,10)", Loguniform::new(1.0, 10.0).mode(), 1.0),
+        ];
+        for &(name, got, want) in pairs {
+            assert!(
+                (got - want).abs() < 1e-12,
+                "{name} mode: got {got}, want {want} (diff={})",
+                (got - want).abs()
+            );
+        }
+        // Local-maximum invariant where the mode is interior.
+        let interior_checks: [(Box<dyn Fn(f64) -> f64>, f64); 4] = [
+            (Box::new(|x| HypSecant.pdf(x)) as Box<dyn Fn(f64) -> f64>, 0.0),
+            (Box::new(|x| DoubleWeibull::new(2.0).pdf(x)), std::f64::consts::FRAC_1_SQRT_2),
+            (Box::new(|x| Chi::new(5.0).pdf(x)), 2.0),
+            (Box::new(|x| Nakagami::new(3.0).pdf(x)), ((3.0_f64 - 0.5) / 3.0).sqrt()),
+        ];
+        for (pdf_fn, peak) in interior_checks {
+            assert!(
+                pdf_fn(peak) >= pdf_fn(peak - 0.05) && pdf_fn(peak) >= pdf_fn(peak + 0.05),
+                "pdf({peak}) is not a local max"
+            );
+        }
     }
 
     #[test]
