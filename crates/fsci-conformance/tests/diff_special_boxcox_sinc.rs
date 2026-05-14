@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 //! Live SciPy differential coverage for the Box-Cox transform
 //! and cardinal sine kernels
-//! `scipy.special.boxcox1p/inv_boxcox/sinc`.
+//! `scipy.special.boxcox/boxcox1p/inv_boxcox/sinc`.
 //!
 //! Resolves [frankenscipy-0gei0]. Three commonly-used kernels:
 //!   • boxcox1p(x, λ) = ((1+x)^λ − 1)/λ  (continuous at λ=0)
@@ -19,7 +19,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use fsci_runtime::RuntimeMode;
 use fsci_special::types::SpecialTensor;
-use fsci_special::{boxcox1p, inv_boxcox, sinc};
+use fsci_special::{boxcox_transform, boxcox1p, inv_boxcox, sinc};
 use serde::{Deserialize, Serialize};
 
 const PACKET_ID: &str = "FSCI-P2C-007";
@@ -95,6 +95,7 @@ fn fsci_eval(func: &str, arg1: f64, arg2: f64) -> Option<f64> {
     let p1 = SpecialTensor::RealScalar(arg1);
     let p2 = SpecialTensor::RealScalar(arg2);
     let result = match func {
+        "boxcox" => boxcox_transform(&p1, &p2, RuntimeMode::Strict),
         "boxcox1p" => boxcox1p(&p1, &p2, RuntimeMode::Strict),
         "inv_boxcox" => inv_boxcox(&p1, &p2, RuntimeMode::Strict),
         "sinc" => sinc(&p1, RuntimeMode::Strict),
@@ -118,6 +119,16 @@ fn generate_query() -> OracleQuery {
     let mut points = Vec::new();
     for &lam in &lams {
         for &x in &xs {
+            // boxcox(x, λ) defined for x > 0; skip x=0 since the
+            // standard boxcox(0, λ) = NaN (boxcox1p(0, λ) = 0).
+            if x > 0.0 {
+                points.push(PointCase {
+                    case_id: format!("boxcox_lam{lam}_x{x}"),
+                    func: "boxcox".into(),
+                    arg1: x,
+                    arg2: lam,
+                });
+            }
             points.push(PointCase {
                 case_id: format!("boxcox1p_lam{lam}_x{x}"),
                 func: "boxcox1p".into(),
@@ -168,7 +179,8 @@ for case in q["points"]:
     cid = case["case_id"]; func = case["func"]
     a1 = float(case["arg1"]); a2 = float(case["arg2"])
     try:
-        if func == "boxcox1p":   value = special.boxcox1p(a1, a2)
+        if func == "boxcox":     value = special.boxcox(a1, a2)
+        elif func == "boxcox1p": value = special.boxcox1p(a1, a2)
         elif func == "inv_boxcox":value = special.inv_boxcox(a1, a2)
         elif func == "sinc":     value = float(np.sinc(a1))
         else: value = None
@@ -268,7 +280,7 @@ fn diff_special_boxcox_sinc() {
 
     let log = DiffLog {
         test_id: "diff_special_boxcox_sinc".into(),
-        category: "scipy.special.boxcox1p/inv_boxcox/sinc".into(),
+        category: "scipy.special.boxcox/boxcox1p/inv_boxcox/sinc".into(),
         case_count: diffs.len(),
         max_abs_diff: max_overall,
         pass: all_pass,
