@@ -703,6 +703,14 @@ fn all_fixtures_have_valid_envelope() {
         if !(name.starts_with("FSCI-P2C-") && name.ends_with(".json")) {
             continue;
         }
+        // Golden fixtures (FSCI-P2C-*_golden.json) are scipy ppf snapshots
+        // with their own envelope (packet_id/family/oracle/points/ppf) and
+        // are consumed by golden-runner integration tests, not the packet
+        // runners. They don't carry a `cases` array; exempt them from the
+        // packet-envelope sweep (frankenscipy-ohv09).
+        if name.ends_with("_golden.json") {
+            continue;
+        }
         let raw = match fs::read_to_string(&path) {
             Ok(s) => s,
             Err(e) => {
