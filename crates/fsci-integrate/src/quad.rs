@@ -335,6 +335,17 @@ where
     F: Fn(f64) -> f64,
 {
     let (integral, error) = gauss_kronrod_15(f, a, b, neval);
+
+    // Short-circuit on non-finite values: a NaN integrand would otherwise
+    // bypass the `error <= tolerance` check (NaN comparisons return false)
+    // and force the recursion to expand to 2^limit leaves, hanging the
+    // caller. Surface the non-finite result immediately and let upstream
+    // wrappers (e.g. nquad) translate it into a typed error.
+    // (frankenscipy-t45u3)
+    if !integral.is_finite() || !error.is_finite() {
+        return (integral, error, false);
+    }
+
     let tolerance = epsabs.max(epsrel * integral.abs());
 
     if error <= tolerance || limit == 0 {
@@ -370,6 +381,13 @@ where
     F: Fn(f64) -> Vec<f64>,
 {
     let (integral, error) = gauss_kronrod_15_vec(f, a, b, neval, spec.dim)?;
+
+    // Same non-finite short-circuit as adaptive_gk15 (frankenscipy-t45u3):
+    // a NaN component would otherwise cause 2^limit recursive subdivisions.
+    if !error.is_finite() || integral.iter().any(|v| !v.is_finite()) {
+        return Ok((integral, error, false));
+    }
+
     let tolerance = spec.epsabs.max(spec.epsrel * max_abs_component(&integral));
 
     if error <= tolerance || limit == 0 {
