@@ -1976,6 +1976,17 @@ impl ContinuousDistribution for FDistribution {
             ))
         }
     }
+
+    fn mode(&self) -> f64 {
+        // Standard result: mode = ((dfn − 2)/dfn) · (dfd/(dfd + 2)) for
+        // dfn > 2 (else pdf is monotone decreasing and the mode collapses
+        // to 0); requires dfd > 0 throughout. frankenscipy-tlw2q.
+        if self.dfn > 2.0 {
+            ((self.dfn - 2.0) / self.dfn) * (self.dfd / (self.dfd + 2.0))
+        } else {
+            0.0
+        }
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -2503,6 +2514,17 @@ impl ContinuousDistribution for Weibull {
             ))
         }
     }
+
+    fn mode(&self) -> f64 {
+        // Standard Weibull(c, scale): mode = scale·((c−1)/c)^{1/c} for
+        // c > 1, else the pdf is monotone decreasing and the mode
+        // collapses to the boundary 0 (frankenscipy-tlw2q).
+        if self.c > 1.0 {
+            self.scale * ((self.c - 1.0) / self.c).powf(1.0 / self.c)
+        } else {
+            0.0
+        }
+    }
 }
 
 /// Reverse Weibull (sign-flipped) distribution with shape `c > 0`.
@@ -2609,6 +2631,16 @@ impl ContinuousDistribution for WeibullMax {
         let var = g2 - g1 * g1;
         let mu4 = g4 - 4.0 * g1 * g3 + 6.0 * g1 * g1 * g2 - 3.0 * g1 * g1 * g1 * g1;
         mu4 / (var * var) - 3.0
+    }
+
+    fn mode(&self) -> f64 {
+        // WeibullMax is the sign-flip of WeibullMin, so its mode lives
+        // at −Weibull mode (frankenscipy-tlw2q).
+        if self.c > 1.0 {
+            -((self.c - 1.0) / self.c).powf(1.0 / self.c)
+        } else {
+            0.0
+        }
     }
 }
 
@@ -7528,6 +7560,20 @@ impl ContinuousDistribution for GenExtreme {
             ))
         }
     }
+
+    fn mode(&self) -> f64 {
+        // fsci GenExtreme uses pdf ∝ (1 + c·x)^{-(1/c+1)}·exp(-(1+c·x)^{-1/c}).
+        // Solving d/dx ln pdf = 0 gives (1 + c·x)^{-1/c} = 1 + c, hence
+        //   mode = ((1 + c)^{-c} − 1) / c     for c ≠ 0
+        // c = 0 collapses to standard Gumbel, mode = 0. The opposite-sign
+        // convention vs scipy.stats.genextreme is intentional — fsci's c
+        // matches scipy's −c. (frankenscipy-tlw2q)
+        if self.c == 0.0 {
+            0.0
+        } else {
+            ((1.0 + self.c).powf(-self.c) - 1.0) / self.c
+        }
+    }
 }
 
 /// Generalized Pareto distribution.
@@ -7700,6 +7746,13 @@ impl ContinuousDistribution for GenPareto {
         }
         Ok(Self { c })
     }
+
+    fn mode(&self) -> f64 {
+        // GenPareto pdf = (1 + c·x)^{−(1/c + 1)} on x ≥ 0 is strictly
+        // decreasing in x for every valid c, so the mode is the boundary
+        // 0 (frankenscipy-tlw2q).
+        0.0
+    }
 }
 
 /// Power-law distribution: x^(a-1) on [0, 1].
@@ -7821,6 +7874,14 @@ impl ContinuousDistribution for PowerLaw {
             ));
         }
         Ok(Self::fit(data))
+    }
+
+    fn mode(&self) -> f64 {
+        // PowerLaw pdf = a·x^{a−1} on [0, 1]. For a > 1 the pdf is
+        // strictly increasing on (0, 1], so the maximum is at x = 1.
+        // For a < 1 it is strictly decreasing, mode at the boundary 0
+        // (frankenscipy-tlw2q).
+        if self.a > 1.0 { 1.0 } else { 0.0 }
     }
 }
 
@@ -10111,6 +10172,12 @@ impl ContinuousDistribution for Semicircular {
         }
         Ok(Self)
     }
+
+    fn mode(&self) -> f64 {
+        // Semicircular pdf = 2/π · √(1 − x²) on [−1, 1] peaks at the
+        // centre (frankenscipy-tlw2q).
+        0.0
+    }
 }
 
 /// Cosine distribution on [-π, π].
@@ -10197,6 +10264,12 @@ impl ContinuousDistribution for CosineDistribution {
         // /mock-code-finder for [frankenscipy-lud8x]: scipy.stats.cosine
         // reports differential entropy = ln(4π) − 1 ≈ 1.531.
         (4.0 * PI).ln() - 1.0
+    }
+
+    fn mode(&self) -> f64 {
+        // Cosine pdf = (1 + cos x)/(2π) on [−π, π] peaks at x = 0
+        // (frankenscipy-tlw2q).
+        0.0
     }
 
     fn fit(_data: &[f64]) -> Self {
@@ -10369,6 +10442,17 @@ impl ContinuousDistribution for Erlang {
         let k = (k_real.round() as i64).max(1) as usize;
         Ok(Self { k, rate })
     }
+
+    fn mode(&self) -> f64 {
+        // Erlang(k, rate) is Gamma(k, 1/rate); pdf ∝ x^{k−1}·e^{−rate·x}
+        // peaks at (k − 1)/rate for k ≥ 1, else at the boundary 0
+        // (frankenscipy-tlw2q).
+        if self.k >= 1 {
+            (self.k as f64 - 1.0) / self.rate
+        } else {
+            0.0
+        }
+    }
 }
 
 /// Anglit distribution on [-π/4, π/4].
@@ -10452,6 +10536,12 @@ impl ContinuousDistribution for Anglit {
             ));
         }
         Ok(Self)
+    }
+
+    fn mode(&self) -> f64 {
+        // Anglit pdf = sin(2(x + π/4)) on [−π/4, π/4]; peaks at the
+        // centre x = 0 (frankenscipy-tlw2q).
+        0.0
     }
 }
 
@@ -10637,6 +10727,13 @@ impl ContinuousDistribution for Bradford {
         }
         Ok(Self { c: 0.5 * (lo + hi) })
     }
+
+    fn mode(&self) -> f64 {
+        // Bradford pdf = c / ((1 + c·x) · ln(1 + c)) on [0, 1] is
+        // strictly decreasing in x for c > 0, so the mode is the left
+        // boundary 0 (frankenscipy-tlw2q).
+        0.0
+    }
 }
 
 /// Gilbrat distribution (log-normal with s=1).
@@ -10722,6 +10819,12 @@ impl ContinuousDistribution for Gilbrat {
             ));
         }
         Ok(Self)
+    }
+
+    fn mode(&self) -> f64 {
+        // Gilbrat is LogNormal(μ=0, σ=1); LogNormal(μ, σ).mode = exp(μ − σ²).
+        // Here μ = 0, σ = 1 so mode = e^{−1} (frankenscipy-tlw2q).
+        (-1.0_f64).exp()
     }
 }
 
@@ -10858,6 +10961,14 @@ impl ContinuousDistribution for Levy {
         }
         Ok(Self { loc: 0.0, scale })
     }
+
+    fn mode(&self) -> f64 {
+        // Solve d/dx ln pdf = 0 for Levy(loc, scale):
+        //   −3/(2(x − loc)) + scale / (2(x − loc)²) = 0
+        //   ⟹ x − loc = scale/3, so mode = loc + scale/3
+        // (frankenscipy-tlw2q).
+        self.loc + self.scale / 3.0
+    }
 }
 
 /// Left-skewed Levy distribution.
@@ -10984,6 +11095,12 @@ impl ContinuousDistribution for LevyLeft {
             )));
         }
         Ok(Self { loc: 0.0, scale })
+    }
+
+    fn mode(&self) -> f64 {
+        // LevyLeft is the mirror of Levy through `loc`; its mode is
+        // therefore loc − scale/3 (frankenscipy-tlw2q).
+        self.loc - self.scale / 3.0
     }
 }
 
@@ -35491,6 +35608,55 @@ mod tests {
         let b2 = Binomial::new(10, 0.3);
         assert!(b2.skewness() > 0.0, "Binomial(10,0.3) positive skew");
         assert!(b2.mode() >= 0.0, "Binomial mode >= 0");
+    }
+
+    #[test]
+    fn fourteen_more_continuous_modes_match_pdf_argmax() {
+        // frankenscipy-tlw2q. Each closed-form mode is anchored against
+        // its analytical expression; for the interior cases we also
+        // verify pdf(mode) ≥ pdf(mode ± δ).
+        let analytical: &[(&str, f64, f64)] = &[
+            ("Weibull(c=2)", Weibull::new(2.0, 1.0).mode(), std::f64::consts::FRAC_1_SQRT_2),
+            ("Weibull(c=0.5)", Weibull::new(0.5, 1.0).mode(), 0.0),
+            ("WeibullMax(c=2)", WeibullMax::new(2.0).mode(), -std::f64::consts::FRAC_1_SQRT_2),
+            ("Anglit", Anglit.mode(), 0.0),
+            ("Bradford(c=0.5)", Bradford::new(0.5).mode(), 0.0),
+            ("Bradford(c=2)", Bradford::new(2.0).mode(), 0.0),
+            ("Gilbrat", Gilbrat.mode(), (-1.0_f64).exp()),
+            ("Semicircular", Semicircular.mode(), 0.0),
+            ("Cosine", CosineDistribution.mode(), 0.0),
+            ("Erlang(k=3)", Erlang::new(3, 1.0).mode(), 2.0),
+            ("PowerLaw(a=2)", PowerLaw::new(2.0).mode(), 1.0),
+            ("PowerLaw(a=0.5)", PowerLaw::new(0.5).mode(), 0.0),
+            ("Levy", Levy::new(0.0, 1.0).mode(), 1.0 / 3.0),
+            ("LevyLeft", LevyLeft::new(0.0, 1.0).mode(), -1.0 / 3.0),
+            ("GenPareto(c=0.5)", GenPareto::new(0.5).mode(), 0.0),
+            ("GenExtreme(c=0)", GenExtreme::new(0.0).mode(), 0.0),
+            ("GenExtreme(c=0.5)", GenExtreme::new(0.5).mode(), (1.5_f64.powf(-0.5) - 1.0) / 0.5),
+            ("FDist(10, 20)", FDistribution::new(10.0, 20.0).mode(), (10.0 - 2.0) / 10.0 * 20.0 / 22.0),
+            ("FDist(2, 20)", FDistribution::new(2.0, 20.0).mode(), 0.0),
+        ];
+        for &(name, got, want) in analytical {
+            assert!(
+                (got - want).abs() < 1e-12,
+                "{name} mode: got {got}, want {want} (diff={})",
+                (got - want).abs()
+            );
+        }
+        // Local-maximum invariant for the interior modes.
+        let interior: [(Box<dyn Fn(f64) -> f64>, f64); 5] = [
+            (Box::new(|x| Weibull::new(2.0, 1.0).pdf(x)) as Box<dyn Fn(f64) -> f64>, std::f64::consts::FRAC_1_SQRT_2),
+            (Box::new(|x| Gilbrat.pdf(x)), (-1.0_f64).exp()),
+            (Box::new(|x| Erlang::new(3, 1.0).pdf(x)), 2.0),
+            (Box::new(|x| FDistribution::new(10.0, 20.0).pdf(x)), 0.727_272_727_273),
+            (Box::new(|x| GenExtreme::new(0.5).pdf(x)), (1.5_f64.powf(-0.5) - 1.0) / 0.5),
+        ];
+        for (pdf_fn, peak) in interior {
+            assert!(
+                pdf_fn(peak) >= pdf_fn(peak - 0.05) && pdf_fn(peak) >= pdf_fn(peak + 0.05),
+                "pdf({peak}) is not a local max"
+            );
+        }
     }
 
     #[test]
