@@ -341,6 +341,25 @@ pub fn clear_shared_plan_cache() {
     *lock_shared_cache() = BoundedPlanCache::default();
 }
 
+/// Acquire a workspace-wide guard that serialises tests touching the
+/// shared FFT plan cache. The cache is a process-global Mutex; cargo
+/// test schedules unit tests in parallel by default, and unrelated tests
+/// in different modules (notably plan.rs and transforms.rs) can race
+/// while inserting / clearing / inspecting cache state. Every test
+/// that calls `clear_shared_plan_cache`, `store_shared_plan*`, or
+/// `lookup_shared_plan` should hold this guard for its duration.
+/// Recovers from a poisoned mutex so a panicking sibling can't wedge
+/// the rest of the suite (the underlying cache also handles poison via
+/// `lock_shared_cache`). (frankenscipy-lw3rl)
+#[cfg(test)]
+pub(crate) fn shared_cache_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    match LOCK.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -350,21 +369,15 @@ mod tests {
         store_shared_plan_with_config,
     };
     use crate::{Normalization, TransformKind};
-    use std::sync::{Mutex, MutexGuard};
+    use std::sync::MutexGuard;
 
     // The shared_cache_* tests all mutate the same static Mutex<BoundedPlanCache>
     // exposed via shared_cache(). cargo test runs tests in parallel by default,
     // so they intermittently race and corrupt each other's expected state. We
     // serialize them via this test-only mutex; each test acquires the guard
-    // first.  Resolves [frankenscipy-a6f8b].
+    // first. Resolves [frankenscipy-a6f8b].
     fn serial_cache_lock() -> MutexGuard<'static, ()> {
-        static LOCK: Mutex<()> = Mutex::new(());
-        match LOCK.lock() {
-            Ok(g) => g,
-            // If a previous test panicked while holding the guard, recover —
-            // the static cache itself already handles poison via lock_shared_cache.
-            Err(poisoned) => poisoned.into_inner(),
-        }
+        super::shared_cache_test_lock()
     }
 
     fn test_key(n: usize) -> PlanKey {

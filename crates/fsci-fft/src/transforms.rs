@@ -2920,7 +2920,7 @@ mod tests {
         rfftn, sync_audit_ledger, take_transform_traces,
     };
     use crate::Normalization;
-    use crate::plan::clear_shared_plan_cache;
+    use crate::plan::{clear_shared_plan_cache, shared_cache_test_lock};
 
     fn assert_close(actual: f64, expected: f64, tol: f64) {
         assert!((actual - expected).abs() <= tol, "{actual} !~= {expected}");
@@ -3511,6 +3511,10 @@ mod tests {
 
     #[test]
     fn repeated_calls_emit_plan_cache_hits_in_trace() {
+        // Hold the shared-plan-cache test lock so this test does not race
+        // with the plan.rs::tests::shared_cache_* suite under cargo test's
+        // default parallelism (frankenscipy-lw3rl).
+        let _g = shared_cache_test_lock();
         clear_shared_plan_cache();
         let _ = take_transform_traces();
 
