@@ -65,12 +65,12 @@ pub const MU_0: f64 = 1.256_637_062_12e-6;
 /// Electric constant (vacuum permittivity) ε₀ [F/m]
 pub const EPSILON_0: f64 = 8.854_187_812_8e-12;
 
-/// Planck constant [J·s]
+/// Planck constant `J·s`
 pub const PLANCK: f64 = 6.626_070_15e-34;
 /// Shorthand alias
 pub const H: f64 = PLANCK;
 
-/// Reduced Planck constant ℏ = h/(2π) [J·s]
+/// Reduced Planck constant ℏ = h/(2π) `J·s`
 ///
 /// Defined as `PLANCK / TAU` so precision is automatically correct to
 /// machine epsilon. The prior hand-typed `1.054_571_817e-34` truncated
@@ -86,7 +86,7 @@ pub const G: f64 = GRAVITATIONAL_CONSTANT;
 /// Standard acceleration of gravity [m/s²]
 pub const G_N: f64 = 9.806_65;
 
-/// Elementary charge [C]
+/// Elementary charge `C`
 pub const ELEMENTARY_CHARGE: f64 = 1.602_176_634e-19;
 /// Shorthand alias
 pub const E_CHARGE: f64 = ELEMENTARY_CHARGE;
@@ -111,7 +111,7 @@ pub const STEFAN_BOLTZMANN: f64 = 5.670_374_419e-8;
 /// Shorthand alias
 pub const SIGMA: f64 = STEFAN_BOLTZMANN;
 
-/// Wien displacement law constant [m·K]
+/// Wien displacement law constant `m·K`
 pub const WIEN: f64 = 2.897_771_955e-3;
 
 /// Rydberg constant [1/m]
@@ -121,22 +121,22 @@ pub const RYDBERG: f64 = 1.097_373_156_816_0e7;
 // Particle Masses
 // ══════════════════════════════════════════════════════════════════════
 
-/// Electron mass [kg]
+/// Electron mass `kg`
 pub const ELECTRON_MASS: f64 = 9.109_383_701_5e-31;
 /// Shorthand alias
 pub const M_E: f64 = ELECTRON_MASS;
 
-/// Proton mass [kg]
+/// Proton mass `kg`
 pub const PROTON_MASS: f64 = 1.672_621_923_69e-27;
 /// Shorthand alias
 pub const M_P: f64 = PROTON_MASS;
 
-/// Neutron mass [kg]
+/// Neutron mass `kg`
 pub const NEUTRON_MASS: f64 = 1.674_927_498_04e-27;
 /// Shorthand alias
 pub const M_N: f64 = NEUTRON_MASS;
 
-/// Atomic mass constant (1/12 of ¹²C mass) [kg]
+/// Atomic mass constant (1/12 of ¹²C mass) `kg`
 pub const ATOMIC_MASS: f64 = 1.660_539_066_60e-27;
 /// Shorthand alias
 pub const U: f64 = ATOMIC_MASS;
@@ -151,10 +151,10 @@ pub const BOHR_MAGNETON: f64 = 9.274_010_078_3e-24;
 /// Nuclear magneton [J/T]
 pub const NUCLEAR_MAGNETON: f64 = 5.050_783_746_1e-27;
 
-/// Magnetic flux quantum Φ₀ = h/(2e) [Wb]
+/// Magnetic flux quantum Φ₀ = h/(2e) `Wb`
 pub const MAGNETIC_FLUX_QUANTUM: f64 = 2.067_833_848e-15;
 
-/// Conductance quantum G₀ = 2e²/h [S]
+/// Conductance quantum G₀ = 2e²/h `S`
 ///
 /// Derived as `2 * ELEMENTARY_CHARGE^2 / PLANCK` so precision tracks the
 /// SI-exact inputs. Per frankenscipy-h0su.
@@ -163,7 +163,7 @@ pub const CONDUCTANCE_QUANTUM: f64 = 2.0 * ELEMENTARY_CHARGE * ELEMENTARY_CHARGE
 /// Josephson constant K_J = 2e/h [Hz/V]
 pub const JOSEPHSON: f64 = 4.835_978_484e14;
 
-/// Von Klitzing constant R_K = h/e² [Ω]
+/// Von Klitzing constant R_K = h/e² `Ω`
 pub const VON_KLITZING: f64 = 2.581_280_745e4;
 
 // ══════════════════════════════════════════════════════════════════════
@@ -175,16 +175,16 @@ pub const FINE_STRUCTURE: f64 = 7.297_352_569_3e-3;
 /// Shorthand alias
 pub const ALPHA: f64 = FINE_STRUCTURE;
 
-/// Bohr radius [m]
+/// Bohr radius `m`
 pub const BOHR_RADIUS: f64 = 5.291_772_109_03e-11;
 
-/// Hartree energy [J]
+/// Hartree energy `J`
 pub const HARTREE: f64 = 4.359_744_722_207_1e-18;
 
-/// Classical electron radius [m]
+/// Classical electron radius `m`
 pub const CLASSICAL_ELECTRON_RADIUS: f64 = 2.817_940_326_2e-15;
 
-/// Compton wavelength of electron [m]
+/// Compton wavelength of electron `m`
 pub const COMPTON_WAVELENGTH: f64 = 2.426_310_235_38e-12;
 /// Explicit electron alias for the physical_constants table key.
 pub const ELECTRON_COMPTON_WAVELENGTH: f64 = COMPTON_WAVELENGTH;
@@ -211,28 +211,28 @@ pub const NEUTRON_G_FACTOR: f64 = -3.826_085_52;
 /// Muon g-factor (dimensionless, negative)
 pub const MUON_G_FACTOR: f64 = -2.002_331_841_23;
 
-/// Thomson cross section [m²]
+/// Thomson cross section `m²`
 pub const THOMSON_CROSS_SECTION: f64 = 6.652_458_705_1e-29;
 
-/// Characteristic impedance of vacuum [Ω]
+/// Characteristic impedance of vacuum `Ω`
 pub const CHARACTERISTIC_IMPEDANCE_OF_VACUUM: f64 = 376.730_313_412;
 
-/// Deuteron mass [kg]
+/// Deuteron mass `kg`
 pub const DEUTERON_MASS: f64 = 3.343_583_776_8e-27;
 
-/// Alpha particle mass [kg]
+/// Alpha particle mass `kg`
 pub const ALPHA_PARTICLE_MASS: f64 = 6.644_657_345e-27;
 
-/// Muon mass [kg]
+/// Muon mass `kg`
 pub const MUON_MASS: f64 = 1.883_531_627e-28;
 
-/// Tau mass [kg]
+/// Tau mass `kg`
 pub const TAU_MASS: f64 = 3.167_54e-27;
 
-/// Helion mass [kg]
+/// Helion mass `kg`
 pub const HELION_MASS: f64 = 5.006_412_786_2e-27;
 
-/// Triton mass [kg]
+/// Triton mass `kg`
 pub const TRITON_MASS: f64 = 5.007_356_751_2e-27;
 
 /// Molar volume of ideal gas (273.15 K, 101.325 kPa) [m³·mol⁻¹]
@@ -241,7 +241,7 @@ pub const MOLAR_VOLUME_IDEAL_GAS: f64 = 0.022_413_969_545_014_137;
 /// Molar Planck constant [J·Hz⁻¹·mol⁻¹]
 pub const MOLAR_PLANCK: f64 = 3.990_312_712_893_431e-10;
 
-/// Rydberg constant times c in Hz [Hz]
+/// Rydberg constant times c in Hz `Hz`
 pub const RYDBERG_HZ: f64 = 3_289_841_960_250_000.0;
 
 /// Inverse fine-structure constant α⁻¹ (dimensionless)
@@ -250,7 +250,7 @@ pub const INVERSE_FINE_STRUCTURE: f64 = 137.035_999_177;
 /// First radiation constant c₁ = 2π·h·c² [W·m²]
 pub const FIRST_RADIATION_CONSTANT: f64 = 3.741_771_852_192_757_3e-16;
 
-/// Second radiation constant c₂ = h·c/k [m·K]
+/// Second radiation constant c₂ = h·c/k `m·K`
 pub const SECOND_RADIATION_CONSTANT: f64 = 0.014_387_768_775_039_337;
 
 /// Electron-proton mass ratio (dimensionless)
@@ -266,43 +266,43 @@ pub const BOHR_MAGNETON_EV_T: f64 = 5.788_381_798_2e-5;
 // Additional Physical Constants — br-sl60
 // ══════════════════════════════════════════════════════════════════════
 
-/// Electron mass energy equivalent [MeV]
+/// Electron mass energy equivalent `MeV`
 pub const ELECTRON_MASS_MEV: f64 = 0.510_998_950_69;
 
-/// Proton mass energy equivalent [MeV]
+/// Proton mass energy equivalent `MeV`
 pub const PROTON_MASS_MEV: f64 = 938.272_089_43;
 
-/// Neutron mass energy equivalent [MeV]
+/// Neutron mass energy equivalent `MeV`
 pub const NEUTRON_MASS_MEV: f64 = 939.565_421_94;
 
-/// Muon mass energy equivalent [MeV]
+/// Muon mass energy equivalent `MeV`
 pub const MUON_MASS_MEV: f64 = 105.658_375_5;
 
-/// Tau mass energy equivalent [MeV]
+/// Tau mass energy equivalent `MeV`
 pub const TAU_MASS_MEV: f64 = 1_776.82;
 
-/// Deuteron mass energy equivalent [MeV]
+/// Deuteron mass energy equivalent `MeV`
 pub const DEUTERON_MASS_MEV: f64 = 1_875.612_945;
 
-/// Alpha particle mass energy equivalent [MeV]
+/// Alpha particle mass energy equivalent `MeV`
 pub const ALPHA_PARTICLE_MASS_MEV: f64 = 3_727.379_411_8;
 
-/// Helion mass energy equivalent [MeV]
+/// Helion mass energy equivalent `MeV`
 pub const HELION_MASS_MEV: f64 = 2_808.391_611_12;
 
-/// Triton mass energy equivalent [MeV]
+/// Triton mass energy equivalent `MeV`
 pub const TRITON_MASS_MEV: f64 = 2_808.921_136_68;
 
-/// Proton Compton wavelength [m]
+/// Proton Compton wavelength `m`
 pub const PROTON_COMPTON_WAVELENGTH: f64 = 1.321_409_853_6e-15;
 
-/// Neutron Compton wavelength [m]
+/// Neutron Compton wavelength `m`
 pub const NEUTRON_COMPTON_WAVELENGTH: f64 = 1.319_590_903_82e-15;
 
-/// Muon Compton wavelength [m]
+/// Muon Compton wavelength `m`
 pub const MUON_COMPTON_WAVELENGTH: f64 = 1.173_444_11e-14;
 
-/// Tau Compton wavelength [m]
+/// Tau Compton wavelength `m`
 pub const TAU_COMPTON_WAVELENGTH: f64 = 6.977_71e-16;
 
 /// Neutron-electron mass ratio (dimensionless)
@@ -345,20 +345,20 @@ pub const ELECTRON_TAU_MASS_RATIO: f64 = 0.000_287_585;
 // Conversion Factors
 // ══════════════════════════════════════════════════════════════════════
 
-/// Electron volt [J]
+/// Electron volt `J`
 pub const ELECTRON_VOLT: f64 = 1.602_176_634e-19;
 /// Shorthand alias
 pub const EV: f64 = ELECTRON_VOLT;
 
-/// Calorie (thermochemical) [J]
+/// Calorie (thermochemical) `J`
 pub const CALORIE: f64 = 4.184;
 
-/// Standard atmosphere [Pa]
+/// Standard atmosphere `Pa`
 pub const ATMOSPHERE: f64 = 101_325.0;
 /// Shorthand alias
 pub const ATM: f64 = ATMOSPHERE;
 
-/// Torr (mmHg) [Pa]
+/// Torr (mmHg) `Pa`
 ///
 /// Defined as `ATMOSPHERE / 760.0` — the physics-exact ratio.
 /// Per frankenscipy-h0su.
@@ -366,60 +366,60 @@ pub const TORR: f64 = ATMOSPHERE / 760.0;
 /// Shorthand alias
 pub const MMHG: f64 = TORR;
 
-/// Bar [Pa]
+/// Bar `Pa`
 pub const BAR: f64 = 1e5;
 
-/// Pound-force [N]
+/// Pound-force `N`
 pub const POUND_FORCE: f64 = 4.448_221_615_260_5;
 
-/// Angstrom [m]
+/// Angstrom `m`
 pub const ANGSTROM: f64 = 1e-10;
 
-/// Nautical mile [m]
+/// Nautical mile `m`
 pub const NAUTICAL_MILE: f64 = 1852.0;
 
-/// Light year [m]
+/// Light year `m`
 pub const LIGHT_YEAR: f64 = 9.460_730_472_580_8e15;
 
-/// Astronomical unit [m]
+/// Astronomical unit `m`
 pub const ASTRONOMICAL_UNIT: f64 = 1.495_978_707e11;
 /// Shorthand alias
 pub const AU: f64 = ASTRONOMICAL_UNIT;
 
-/// Parsec [m]
+/// Parsec `m`
 pub const PARSEC: f64 = 3.085_677_581_28e16;
 
-/// Inch [m]
+/// Inch `m`
 pub const INCH: f64 = 0.0254;
 
-/// Foot [m]
+/// Foot `m`
 pub const FOOT: f64 = 0.3048;
 
-/// Yard [m]
+/// Yard `m`
 pub const YARD: f64 = 0.9144;
 
-/// Mile [m]
+/// Mile `m`
 pub const MILE: f64 = 1609.344;
 
-/// Pound mass (avoirdupois) [kg]
+/// Pound mass (avoirdupois) `kg`
 pub const POUND: f64 = 0.453_592_37;
 
-/// Ounce (avoirdupois) [kg]
+/// Ounce (avoirdupois) `kg`
 pub const OUNCE: f64 = 0.028_349_523_125;
 
-/// Gallon (US liquid) [m³]
+/// Gallon (US liquid) `m³`
 pub const GALLON: f64 = 3.785_411_784e-3;
 
-/// Liter [m³]
+/// Liter `m³`
 pub const LITER: f64 = 1e-3;
 
-/// Degree (angle) [rad]
+/// Degree (angle) `rad`
 pub const DEGREE: f64 = std::f64::consts::PI / 180.0;
 
-/// Arc minute [rad]
+/// Arc minute `rad`
 pub const ARCMINUTE: f64 = DEGREE / 60.0;
 
-/// Arc second [rad]
+/// Arc second `rad`
 pub const ARCSECOND: f64 = DEGREE / 3600.0;
 
 // ══════════════════════════════════════════════════════════════════════
@@ -480,12 +480,12 @@ pub fn joules_to_ev(j: f64) -> f64 {
     j / ELECTRON_VOLT
 }
 
-/// Convert wavelength [m] to frequency [Hz].
+/// Convert wavelength `m` to frequency `Hz`.
 pub fn wavelength_to_freq(wavelength: f64) -> f64 {
     SPEED_OF_LIGHT / wavelength
 }
 
-/// Convert frequency [Hz] to wavelength [m].
+/// Convert frequency `Hz` to wavelength `m`.
 pub fn freq_to_wavelength(freq: f64) -> f64 {
     SPEED_OF_LIGHT / freq
 }
