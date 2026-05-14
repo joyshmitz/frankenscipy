@@ -258,15 +258,18 @@ fn diff_stats_bayes_mvs() {
         let scipy_arm = pmap.get(&case.case_id).expect("validated oracle");
         let result = bayes_mvs(&case.data, case.alpha);
 
-        // var_stat and std_stat omitted — see frankenscipy-u2y4u.
-        let _ = scipy_arm.var_stat;
-        let _ = scipy_arm.std_stat;
-        let arms: [(&str, Option<f64>, f64); 7] = [
+        // var_stat and std_stat re-enabled after u2y4u (point-estimate
+        // formula fix): variance.statistic = ss/(n−3) matches scipy's
+        // Jeffreys posterior mean; std.statistic uses the Generalized-
+        // Gamma posterior mean.
+        let arms: [(&str, Option<f64>, f64); 9] = [
             ("mean_stat", scipy_arm.mean_stat, result.mean.statistic),
             ("mean_lo", scipy_arm.mean_lo, result.mean.low),
             ("mean_hi", scipy_arm.mean_hi, result.mean.high),
+            ("var_stat", scipy_arm.var_stat, result.variance.statistic),
             ("var_lo", scipy_arm.var_lo, result.variance.low),
             ("var_hi", scipy_arm.var_hi, result.variance.high),
+            ("std_stat", scipy_arm.std_stat, result.std.statistic),
             ("std_lo", scipy_arm.std_lo, result.std.low),
             ("std_hi", scipy_arm.std_hi, result.std.high),
         ];
