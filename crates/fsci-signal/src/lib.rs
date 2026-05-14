@@ -902,7 +902,7 @@ pub fn correlate2d(
 ///
 /// # Algorithm
 /// 1. Compute FFT of the input
-/// 2. Create a filter: h[0] = 1, h[1..N/2] = 2, h[N/2] = 1 (if N even), h[N/2+1..] = 0
+/// 2. Create a filter: `h[0] = 1, h[1..N/2] = 2, h[N/2] = 1 (if N even), h[N/2+1..] = 0`
 /// 3. Multiply FFT by h
 /// 4. Inverse FFT gives the analytic signal
 pub fn hilbert(x: &[f64]) -> Result<Vec<(f64, f64)>, SignalError> {
@@ -1127,8 +1127,8 @@ pub fn sweep_poly(t: &[f64], poly: &[f64]) -> Vec<f64> {
 /// Chirp Z-Transform: evaluate the Z-transform at M points along a spiral
 /// in the complex plane starting at `a`, stepping by `w`.
 ///
-/// Given x[n] for n=0..N-1, computes:
-///   X[k] = Σ_{n=0}^{N-1} x[n] · a^{-n} · w^{nk},  k = 0..M-1
+/// Given `x[n]` for n=0..N-1, computes:
+///   `X[k] = Σ_{n=0}^{N-1} x[n] · a^{-n} · w^{nk},  k = 0..M-1`
 ///
 /// # Arguments
 /// * `x` — Input signal (real-valued).
@@ -2336,7 +2336,7 @@ pub fn power_db(x: &[f64], ref_power: f64) -> f64 {
     10.0 * (power / ref_power).log10()
 }
 
-/// Apply pre-emphasis filter: y[n] = x[n] - coeff * x[n-1].
+/// Apply pre-emphasis filter: `y[n] = x[n] - coeff * x[n-1]`.
 ///
 /// Common in speech processing with coeff ≈ 0.97.
 ///
@@ -2398,7 +2398,7 @@ pub fn frame_signal(x: &[f64], frame_len: usize, hop_len: usize) -> Vec<Vec<f64>
 /// Chebyshev lowpass with passband ripple `rp` dB:
 ///   ε  = √(10^(rp/10) − 1)
 ///   μ  = arcsinh(1/ε) / N
-///   poles[k] = −sinh(μ + i θ_k),  θ_k = π · (2k − 1 − N) / (2N)
+///   `poles[k] = −sinh(μ + i θ_k),  θ_k = π · (2k − 1 − N) / (2N)`
 ///   zeros = []
 ///   gain  = Re(Π(−p)) / √(1 + ε²)   (even N)
 ///         = Re(Π(−p))                (odd N)
@@ -2450,7 +2450,7 @@ pub fn cheb1ap(
 /// Matches `scipy.signal.buttap(N)`. Returns `(zeros, poles, gain)` for
 /// the normalized analog Butterworth lowpass with N poles:
 ///   zeros = []
-///   poles[k] = exp(i · π · (2k − 1 + N) / (2N))   for k = 1..=N
+///   `poles[k] = exp(i · π · (2k − 1 + N) / (2N))   for k = 1..=N`
 ///   gain   = 1
 ///
 /// The poles are equally spaced on the left-half unit circle.
@@ -4059,12 +4059,12 @@ pub enum IirFamily {
 
 /// IIR filter coefficients in transfer function form (b, a).
 ///
-/// H(z) = B(z)/A(z) where B(z) = b[0] + b[1]*z^-1 + ... and A(z) = 1 + a[1]*z^-1 + ...
+/// `H(z) = B(z)/A(z)` where `B(z) = b[0] + b[1]*z^-1 + ...` and `A(z) = 1 + a[1]*z^-1 + ...`
 #[derive(Debug, Clone, PartialEq)]
 pub struct BaCoeffs {
     /// Numerator coefficients.
     pub b: Vec<f64>,
-    /// Denominator coefficients (a[0] is always 1.0).
+    /// Denominator coefficients (`a[0]` is always 1.0).
     pub a: Vec<f64>,
 }
 
