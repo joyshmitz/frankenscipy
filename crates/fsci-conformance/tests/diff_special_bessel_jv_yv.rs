@@ -115,12 +115,13 @@ fn fsci_eval(func: &str, v: f64, x: f64) -> Option<f64> {
 }
 
 fn generate_query() -> OracleQuery {
-    // Non-integer orders restricted to v < 1 — fsci's yv
-    // returns NaN for v > 1 across the entire tested x range
-    // (not just half-integers). Tracked as [frankenscipy-6avjb].
-    // The harness covers jv and yv at v ∈ {0.5, 0.7} only;
-    // bigger v requires upstream yv fix.
-    let vs = [0.5_f64, 0.7];
+    // Non-integer order coverage expanded after 6avjb (jv_series
+    // sign + Γ recurrence fix). fsci jv/yv now return finite values
+    // matching scipy across v ∈ {0.5, 0.7, 1.3, 1.5, 1.7, 2.5} on
+    // the x grid below. The asymptotic-seam at z ≥ 30 still has
+    // ~7e-4 drift (separate follow-up); the harness keeps x ≤ 15
+    // where the agreement is within the 1e-6 tolerance.
+    let vs = [0.5_f64, 0.7, 1.3, 1.5, 1.7, 2.5];
     let xs = [0.5_f64, 1.0, 2.0, 3.0, 5.0, 8.0, 15.0];
     let mut points = Vec::new();
     for &v in &vs {
