@@ -5185,7 +5185,7 @@ mod tests {
         // pentagamma() converges to ~1e-7 even at x = 0.5 where the
         // asymptotic truncation is least accurate.
         let cases = [
-            (0.5_f64, 97.409_091_034_002_415),
+            (0.5_f64, 97.409_091_034_002_42),
             (1.0, 6.493_939_402_266_829),
             (2.0, 0.493_939_402_266_829),
             (5.0, 0.021_427_828_192_755),
