@@ -200,7 +200,7 @@ impl std::error::Error for OptError {}
 ///
 /// Matches `scipy.optimize.Bounds(lb, ub)`.
 ///
-/// Each element constrains one variable: lb[i] <= x[i] <= ub[i].
+/// Each element constrains one variable: `lb[i] <= x[i] <= ub[i]`.
 /// Use `f64::NEG_INFINITY` / `f64::INFINITY` for unbounded.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Bounds {
@@ -212,7 +212,7 @@ pub struct Bounds {
 
 impl Bounds {
     /// Create bounds from lower and upper bound vectors.
-    /// Validates that lb[i] <= ub[i] for all i.
+    /// Validates that `lb[i] <= ub[i]` for all i.
     pub fn new(lb: Vec<f64>, ub: Vec<f64>) -> Result<Self, OptError> {
         if lb.len() != ub.len() {
             return Err(OptError::InvalidBounds {

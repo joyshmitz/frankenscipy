@@ -4217,7 +4217,7 @@ pub fn square(x: f64) -> f64 {
 /// Return the positive part of x (max(x, 0)).
 ///
 /// Matches `numpy.positive(x)` conceptually, though numpy.positive
-/// just returns x. This matches the mathematical positive part [x]⁺.
+/// just returns x. This matches the mathematical positive part `[x]⁺`.
 #[must_use]
 pub fn positive(x: f64) -> f64 {
     if x.is_nan() {
@@ -4231,7 +4231,7 @@ pub fn positive(x: f64) -> f64 {
 
 /// Return the negative part of x (max(-x, 0)).
 ///
-/// This matches the mathematical negative part [x]⁻ = max(-x, 0).
+/// This matches the mathematical negative part `[x]⁻ = max(-x, 0)`.
 #[must_use]
 pub fn negative(x: f64) -> f64 {
     if x.is_nan() {

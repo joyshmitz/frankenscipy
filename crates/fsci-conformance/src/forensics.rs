@@ -71,7 +71,7 @@ impl std::fmt::Display for FailureCategory {
 /// Side-by-side comparison of expected vs actual for a single numeric value.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct NumericDiffEntry {
-    /// Label for this comparison (e.g., "x[0]", "det", "residual_norm").
+    /// Label for this comparison (e.g., `"x[0]"`, `"det"`, `"residual_norm"`).
     pub label: String,
     /// Expected value (from oracle or fixture).
     pub expected: f64,

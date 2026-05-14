@@ -42,7 +42,7 @@ pub use validation::{
 ///
 /// Matches `scipy.integrate.odeint(func, y0, t)`.
 /// Integrates an ODE system y' = func(y, t) over a sequence of time points.
-/// Returns `(y_matrix, info)` where y_matrix[i] is the state at t[i].
+/// Returns `(y_matrix, info)` where `y_matrix[i]` is the state at `t[i]`.
 pub fn odeint<F>(
     func: &mut F,
     y0: &[f64],

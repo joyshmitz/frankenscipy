@@ -6168,7 +6168,7 @@ mod tests {
 pub struct EigsResult {
     /// Eigenvalues (real parts).
     pub eigenvalues: Vec<f64>,
-    /// Eigenvectors as columns (row-major: eigenvectors[i] is the i-th eigenvector).
+    /// Eigenvectors as columns (row-major: `eigenvectors[i]` is the i-th eigenvector).
     pub eigenvectors: Vec<Vec<f64>>,
     /// Number of matrix-vector products performed.
     pub nmatvec: usize,

@@ -516,7 +516,7 @@ pub fn num_obs_y(condensed: &[f64]) -> usize {
 /// Compute pairwise Euclidean distance matrix.
 ///
 /// Matches `scipy.spatial.distance.cdist(XA, XB, 'euclidean')`.
-/// Returns a matrix where result[i][j] = distance(xa[i], xb[j]).
+/// Returns a matrix where `result[i][j] = distance(xa[i], xb[j])`.
 pub fn cdist(xa: &[Vec<f64>], xb: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, SpatialError> {
     if xa.is_empty() || xb.is_empty() {
         return Err(SpatialError::EmptyData);

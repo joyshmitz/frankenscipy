@@ -96,7 +96,7 @@ pub struct DerivativeResult {
     pub step: f64,
 }
 
-/// Jacobian result. `df[row][column]` is d f[row] / d x[column].
+/// Jacobian result. `df[row][column]` is `d f[row] / d x[column]`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct JacobianResult {
     pub df: Vec<Vec<f64>>,

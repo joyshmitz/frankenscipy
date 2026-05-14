@@ -4869,7 +4869,7 @@ pub fn fractional_matrix_power(
 /// Khatri-Rao product (column-wise Kronecker product).
 ///
 /// For matrices A (m×n) and B (p×n), produces an (m*p × n) matrix where
-/// column j is the Kronecker product of A[:,j] and B[:,j].
+/// column j is the Kronecker product of `A[:,j]` and `B[:,j]`.
 ///
 /// Matches `scipy.linalg.khatri_rao(A, B)`.
 pub fn khatri_rao(a: &[Vec<f64>], b: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, LinalgError> {
@@ -6406,7 +6406,7 @@ pub fn pascal(n: usize, symmetric: bool) -> Vec<Vec<f64>> {
 
 /// DFT matrix of size n.
 ///
-/// F[j][k] = exp(-2πijk/n) / sqrt(n)  (unitary normalization).
+/// `F[j][k] = exp(-2πijk/n) / sqrt(n)`  (unitary normalization).
 ///
 /// Matches `scipy.linalg.dft`.
 pub fn dft_matrix(n: usize) -> Vec<Vec<(f64, f64)>> {
@@ -6422,7 +6422,7 @@ pub fn dft_matrix(n: usize) -> Vec<Vec<(f64, f64)>> {
     f
 }
 
-/// Fiedler matrix: F[i][j] = |i - j|.
+/// Fiedler matrix: `F[i][j] = |i - j|`.
 ///
 /// Matches `scipy.linalg.fiedler`.
 pub fn fiedler(a: &[f64]) -> Vec<Vec<f64>> {
@@ -6640,7 +6640,7 @@ pub fn kron(a: &[Vec<f64>], b: &[Vec<f64>]) -> Vec<Vec<f64>> {
 // Additional Matrix Constructors
 // ══════════════════════════════════════════════════════════════════════
 
-/// Vandermonde matrix: V[i][j] = x[i]^j.
+/// Vandermonde matrix: `V[i][j] = x[i]^j`.
 ///
 /// Matches `numpy.vander`.
 pub fn vander(x: &[f64], n: Option<usize>, increasing: bool) -> Vec<Vec<f64>> {

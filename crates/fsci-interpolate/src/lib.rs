@@ -36,7 +36,7 @@ pub enum SplineBc {
     NotAKnot,
     /// Clamped: S'(x_0) = deriv_left, S'(x_n) = deriv_right.
     Clamped(f64, f64),
-    /// Periodic: y[0] == y[n-1], S'(x_0)=S'(x_n), S''(x_0)=S''(x_n).
+    /// Periodic: `y[0] == y[n-1]`, S'(x_0)=S'(x_n), S''(x_0)=S''(x_n).
     Periodic,
 }
 
@@ -2978,7 +2978,7 @@ pub fn lagrange(xi: &[f64], yi: &[f64]) -> Result<Vec<f64>, InterpError> {
 
 /// Evaluate a polynomial given coefficients (highest degree first).
 ///
-/// p(x) = coeffs[0] * x^(n-1) + coeffs[1] * x^(n-2) + ... + coeffs[n-1]
+/// `p(x) = coeffs[0] * x^(n-1) + coeffs[1] * x^(n-2) + ... + coeffs[n-1]`
 pub fn polyval(coeffs: &[f64], x: f64) -> f64 {
     let mut result = 0.0;
     for &c in coeffs {
@@ -2992,7 +2992,7 @@ pub fn polyval(coeffs: &[f64], x: f64) -> f64 {
 /// Stores polynomial coefficients for each interval between breakpoints.
 /// Matches `scipy.interpolate.PPoly`.
 pub struct PPoly {
-    /// Coefficients: c[i][j] is the j-th coefficient (highest degree first)
+    /// Coefficients: `c[i][j]` is the j-th coefficient (highest degree first)
     /// for the i-th interval.
     pub c: Vec<Vec<f64>>,
     /// Breakpoints (n+1 values for n intervals).

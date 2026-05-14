@@ -935,7 +935,7 @@ pub fn simpson_uniform(
 /// Cumulatively integrate y using the trapezoidal rule.
 ///
 /// Matches `scipy.integrate.cumulative_trapezoid(y, x)`.
-/// Returns a vector of length n-1 where result[i] = ∫₀ⁱ⁺¹ y dx.
+/// Returns a vector of length n-1 where `result[i] = ∫₀ⁱ⁺¹ y dx`.
 pub fn cumulative_trapezoid(y: &[f64], x: &[f64]) -> Result<Vec<f64>, IntegrateValidationError> {
     if y.len() != x.len() {
         return Err(IntegrateValidationError::QuadInvalidBounds {
@@ -2795,7 +2795,7 @@ where
     total * h / 3.0
 }
 
-/// Monte Carlo integration of a function over [a,b]^d.
+/// Monte Carlo integration of a function over `[a,b]^d`.
 ///
 /// Uses random sampling to estimate the integral.
 pub fn monte_carlo_integrate<F>(
