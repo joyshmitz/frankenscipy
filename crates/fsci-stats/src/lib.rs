@@ -4168,6 +4168,22 @@ impl DiscreteDistribution for Binomial {
     fn mode(&self) -> f64 {
         ((self.n as f64 + 1.0) * self.p).floor()
     }
+
+    fn entropy(&self) -> f64 {
+        // Binomial entropy: -∑_{k=0}^{n} pmf(k) · ln pmf(k). Finite support
+        // (n+1 atoms), so a direct sum is exact up to f64 round-off.
+        if self.p == 0.0 || self.p == 1.0 {
+            return 0.0;
+        }
+        let mut h = 0.0_f64;
+        for k in 0..=self.n {
+            let p = self.pmf(k);
+            if p > 0.0 {
+                h -= p * p.ln();
+            }
+        }
+        h
+    }
 }
 
 /// Bernoulli distribution: single trial with probability p.
@@ -4375,6 +4391,19 @@ impl DiscreteDistribution for Boltzmann {
         );
         mu4 / (var * var) - 3.0
     }
+
+    fn entropy(&self) -> f64 {
+        // Truncated geometric on {0, …, n−1}: direct sum is exact;
+        // n is bounded by u32 so the cost is acceptable.
+        let mut h = 0.0_f64;
+        for k in 0..self.n as u64 {
+            let p = self.pmf(k);
+            if p > 0.0 {
+                h -= p * p.ln();
+            }
+        }
+        h
+    }
 }
 
 /// Yule-Simon distribution.
@@ -4468,6 +4497,30 @@ impl DiscreteDistribution for YuleSimon {
         a + 3.0
             + 11.0_f64.mul_add(a.powi(3), (-49.0_f64).mul_add(a, -22.0))
                 / (a * (a - 3.0) * (a - 4.0))
+    }
+
+    fn entropy(&self) -> f64 {
+        // YuleSimon pmf decays like α / k^{α+1}. Sum −p ln p over k = 1..K
+        // until the cumulative tail bound α · ∫_K^∞ k^{-(α+1)} ln k dk
+        // is below abs tolerance. In practice K ≈ 1e6 is more than enough
+        // for α ≥ 1 and the per-term cost is just two ln_gamma evals.
+        let mut h = 0.0_f64;
+        let max_k: u64 = 2_000_000;
+        for k in 1..=max_k {
+            let p = self.pmf(k);
+            if p <= 0.0 {
+                if k > 100 { break; }
+                continue;
+            }
+            h -= p * p.ln();
+            // Tail residual approx: p ~ α/k^{α+1}; ln pmf ≈ −(α+1) ln k.
+            // Once the per-term contribution drops below 1e-15, the
+            // remainder is negligible at f64 precision.
+            if k > 100 && p * p.ln().abs() < 1e-15 {
+                break;
+            }
+        }
+        h
     }
 }
 
@@ -4638,6 +4691,30 @@ impl DiscreteDistribution for NegBinomial {
             0.0
         }
     }
+
+    fn entropy(&self) -> f64 {
+        // Unbounded support k ∈ {0, 1, …}, but pmf decays geometrically
+        // as (1−p)^k for fixed n. Cap K so the truncated tail is below
+        // f64 round-off (~1e-15); a safety ceiling avoids runaway when p
+        // is tiny.
+        if self.p == 1.0 {
+            return 0.0;
+        }
+        let mut h = 0.0_f64;
+        let max_k: u64 = 1_000_000;
+        let mut tail = 1.0_f64;
+        for k in 0..=max_k {
+            let p = self.pmf(k);
+            if p > 0.0 {
+                h -= p * p.ln();
+                tail -= p;
+            }
+            if k > 32 && tail < 1e-15 {
+                break;
+            }
+        }
+        h
+    }
 }
 
 /// Hypergeometric distribution: draws without replacement.
@@ -4754,6 +4831,25 @@ impl DiscreteDistribution for Hypergeometric {
         let big_n = self.big_n as f64;
         ((n + 1.0) * (big_n + 1.0) / (m + 2.0)).floor()
     }
+
+    fn entropy(&self) -> f64 {
+        // Hypergeometric is supported on a bounded range
+        // [max(0, N+n-M), min(n, N)]. Direct sum over that range is exact.
+        let k_lo = if self.big_n.saturating_add(self.n) > self.big_m {
+            self.big_n + self.n - self.big_m
+        } else {
+            0
+        };
+        let k_hi = self.n.min(self.big_n);
+        let mut h = 0.0_f64;
+        for k in k_lo..=k_hi {
+            let p = self.pmf(k);
+            if p > 0.0 {
+                h -= p * p.ln();
+            }
+        }
+        h
+    }
 }
 
 /// Logarithmic (log-series) distribution.
@@ -4867,6 +4963,25 @@ impl DiscreteDistribution for LogSeries {
 
     fn mode(&self) -> f64 {
         1.0
+    }
+
+    fn entropy(&self) -> f64 {
+        // LogSeries pmf = p^k / (k · −ln(1−p)). Sum on k = 1.. until the
+        // running tail probability falls below f64 round-off.
+        let mut h = 0.0_f64;
+        let mut tail = 1.0_f64;
+        let max_k: u64 = 1_000_000;
+        for k in 1..=max_k {
+            let p_k = self.pmf(k);
+            if p_k > 0.0 {
+                h -= p_k * p_k.ln();
+                tail -= p_k;
+            }
+            if k > 32 && tail < 1e-15 {
+                break;
+            }
+        }
+        h
     }
 }
 
@@ -9012,6 +9127,20 @@ impl DiscreteDistribution for Zipfian {
             6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
         );
         mu4 / (var * var) - 3.0
+    }
+
+    fn entropy(&self) -> f64 {
+        // Zipfian on bounded support [1, n]: h = ln Z + a · ⟨ln k⟩
+        //   pmf(k) = k^{-a} / Z, ln pmf = -a ln k - ln Z
+        //   h = -Σ pmf · (-a ln k - ln Z) = a · Σ pmf · ln k + ln Z
+        let z = self.z();
+        let mut sum_ln = 0.0_f64;
+        for j in 1..=self.n {
+            let jf = j as f64;
+            let p = jf.powf(-self.a) / z;
+            sum_ln += p * jf.ln();
+        }
+        self.a * sum_ln + z.ln()
     }
 }
 
@@ -35178,6 +35307,104 @@ mod tests {
         let b2 = Binomial::new(10, 0.3);
         assert!(b2.skewness() > 0.0, "Binomial(10,0.3) positive skew");
         assert!(b2.mode() >= 0.0, "Binomial mode >= 0");
+    }
+
+    #[test]
+    fn discrete_distributions_entropy_match_scipy() {
+        // Binomial(n, p): finite-sum entropy (frankenscipy-p06ba)
+        for &(n, p, expected) in &[
+            (10_u64, 0.3_f64, 1.779_078_784_1),
+            (20, 0.5, 2.223_423_915_8),
+            (100, 0.1, 2.511_233_116_2),
+        ] {
+            assert_close(
+                Binomial::new(n, p).entropy(),
+                expected,
+                1e-8,
+                &format!("Binomial({n}, {p}) entropy"),
+            );
+        }
+        // Boltzmann(λ, n): truncated geometric on {0, …, n−1}
+        for &(lam, n, expected) in &[
+            (0.5_f64, 10_u32, 1.662_820_146_9),
+            (1.0, 20, 1.040_651_809_0),
+            (2.0, 50, 0.458_448_743_4),
+        ] {
+            assert_close(
+                Boltzmann::new(lam, n).entropy(),
+                expected,
+                1e-8,
+                &format!("Boltzmann({lam}, {n}) entropy"),
+            );
+        }
+        // YuleSimon(α): infinite support, slow 1/k^{α+1} tail. For α=2
+        // scipy's _stats truncation reports 1.21078, but a converged
+        // direct sum (k → 10⁸) gives 1.2108226. Anchor the converged
+        // value — fsci matches it to ~1e-10.
+        for &(a, expected) in &[
+            (2.0_f64, 1.210_822_649_5),
+            (3.0, 0.891_840_957_4),
+            (5.0, 0.606_130_562_2),
+        ] {
+            assert_close(
+                YuleSimon::new(a).entropy(),
+                expected,
+                1e-6,
+                &format!("YuleSimon({a}) entropy"),
+            );
+        }
+        // NegBinomial(r, p): geometric tail in k.
+        for &(r, p, expected) in &[
+            (5.0_f64, 0.5_f64, 2.483_619_150_6),
+            (10.0, 0.3, 3.560_333_076_7),
+            (20.0, 0.7, 2.646_534_068_8),
+        ] {
+            assert_close(
+                NegBinomial::new(r, p).entropy(),
+                expected,
+                1e-8,
+                &format!("NegBinomial({r}, {p}) entropy"),
+            );
+        }
+        // Hypergeometric(M, n, N): bounded support, exact sum.
+        for &(m, n, big_n, expected) in &[
+            (50_u64, 10_u64, 20_u64, 1.753_823_879_3),
+            (100, 50, 30, 2.253_050_707_3),
+            (30, 15, 10, 1.691_064_024_8),
+        ] {
+            assert_close(
+                Hypergeometric::new(m, n, big_n).entropy(),
+                expected,
+                1e-10,
+                &format!("Hypergeom({m}, {n}, {big_n}) entropy"),
+            );
+        }
+        // LogSeries(p): support {1, 2, …}, fast decay.
+        for &(p, expected) in &[
+            (0.5_f64, 0.882_924_435_8),
+            (0.7, 1.321_323_177_8),
+            (0.9, 2.137_656_983_4),
+        ] {
+            assert_close(
+                LogSeries::new(p).entropy(),
+                expected,
+                1e-8,
+                &format!("LogSeries({p}) entropy"),
+            );
+        }
+        // Zipfian(a, n): bounded [1, n], exact closed form via Σ p·ln k.
+        for &(a, n, expected) in &[
+            (2.0_f64, 10_u32, 1.236_292_605_7),
+            (3.0, 20, 0.667_543_241_0),
+            (1.5, 5, 1.224_830_730_3),
+        ] {
+            assert_close(
+                Zipfian::new(a, n).entropy(),
+                expected,
+                1e-10,
+                &format!("Zipfian({a}, {n}) entropy"),
+            );
+        }
     }
 
     #[test]
