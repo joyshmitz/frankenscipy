@@ -271,7 +271,7 @@ fn diff_stats_contingency_table() {
         // row_labels
         if let Some(scipy_rows) = &scipy_arm.row_labels {
             let mut max_local = 0.0_f64;
-            let mut shape_ok = rust_rows.len() == scipy_rows.len();
+            let shape_ok = rust_rows.len() == scipy_rows.len();
             if shape_ok {
                 for (a, b) in rust_rows.iter().zip(scipy_rows.iter()) {
                     let abs = (*a as i64 - b).unsigned_abs() as f64;
@@ -290,7 +290,7 @@ fn diff_stats_contingency_table() {
         // col_labels
         if let Some(scipy_cols) = &scipy_arm.col_labels {
             let mut max_local = 0.0_f64;
-            let mut shape_ok = rust_cols.len() == scipy_cols.len();
+            let shape_ok = rust_cols.len() == scipy_cols.len();
             if shape_ok {
                 for (a, b) in rust_cols.iter().zip(scipy_cols.iter()) {
                     let abs = (*a as i64 - b).unsigned_abs() as f64;

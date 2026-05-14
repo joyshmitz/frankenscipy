@@ -22,7 +22,6 @@
 //! 4 fixtures × variable invariants ≈ 18 cases.
 
 use std::fs;
-use std::io::Write;
 use std::path::PathBuf;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 

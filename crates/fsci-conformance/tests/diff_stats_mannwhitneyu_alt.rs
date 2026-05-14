@@ -53,6 +53,7 @@ struct PointArm {
     case_id: String,
     statistic: Option<f64>,
     pvalue: Option<f64>,
+    #[allow(dead_code)]
     df: Option<f64>,
 }
 

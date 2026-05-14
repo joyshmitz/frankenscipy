@@ -48,6 +48,7 @@ struct OracleQuery {
 struct PointArm {
     case_id: String,
     scalar: Option<f64>,
+    #[allow(dead_code)]
     vector: Option<Vec<f64>>,
     qlo: Option<f64>,
     qup: Option<f64>,

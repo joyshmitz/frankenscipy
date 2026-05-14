@@ -61,6 +61,7 @@ struct PointArm {
     statistic: Option<f64>,
     pvalue: Option<f64>,
     df: Option<f64>,
+    #[allow(dead_code)]
     scalar: Option<f64>,
 }
 

@@ -276,7 +276,7 @@ fn diff_stats_correlation_basic() {
     let mut diffs = Vec::new();
     let mut max_overall = 0.0_f64;
 
-    let mut record = |case_id: &str,
+    let record = |case_id: &str,
                       arm: &str,
                       rust_v: f64,
                       scipy_v: f64,
