@@ -992,6 +992,41 @@ impl ContinuousDistribution for StudentT {
 
 /// Non-central t-distribution.
 ///
+/// Raw moment E[T^k] for NoncentralT(df, nc), valid for df > k:
+///   E[T^k] = (df/2)^{k/2} · Γ((df−k)/2)/Γ(df/2) · M_k(nc)
+/// where M_k(nc) = E[(Z+nc)^k] = Σ_{j=0..⌊k/2⌋} C(k, 2j)·nc^{k−2j}·(2j)!/(2^j·j!).
+/// Returns NaN when df ≤ k.
+fn nct_raw_moment(df: f64, nc: f64, k: u32) -> f64 {
+    if df <= k as f64 {
+        return f64::NAN;
+    }
+    // (2j)!/(2^j · j!) gives the standard-normal central moment E[Z^{2j}].
+    fn double_factorial_quotient(j: u32) -> f64 {
+        let mut acc = 1.0_f64;
+        for i in 1..=j {
+            acc *= (2 * i - 1) as f64;
+        }
+        acc
+    }
+    fn binomial_coef(k: u32, m: u32) -> f64 {
+        let mut acc = 1.0_f64;
+        for i in 0..m {
+            acc *= (k - i) as f64 / (i + 1) as f64;
+        }
+        acc
+    }
+    let mut m_k = 0.0_f64;
+    for j in 0..=(k / 2) {
+        let coef = binomial_coef(k, 2 * j);
+        let z_moment = double_factorial_quotient(j);
+        m_k += coef * nc.powi((k - 2 * j) as i32) * z_moment;
+    }
+    let log_scale = (k as f64 * 0.5) * (df / 2.0).ln()
+        + ln_gamma((df - k as f64) / 2.0)
+        - ln_gamma(df / 2.0);
+    log_scale.exp() * m_k
+}
+
 /// Matches `scipy.stats.nct(df, nc)`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct NoncentralT {
@@ -1249,11 +1284,42 @@ impl ContinuousDistribution for NoncentralT {
     }
 
     fn skewness(&self) -> f64 {
-        f64::NAN
+        // Closed-form raw-moment derivation (frankenscipy-4tew7):
+        //   E[T^k] = (df/2)^{k/2} · Γ((df−k)/2)/Γ(df/2) · E[(Z+nc)^k]
+        // with E[(Z+nc)^k] = Σ_{j=0..⌊k/2⌋} C(k, 2j)·nc^{k−2j}·(2j)!/(2^j·j!).
+        // Skew requires df > 3 (else third raw moment diverges).
+        if self.df <= 3.0 {
+            return f64::NAN;
+        }
+        let m1 = nct_raw_moment(self.df, self.nc, 1);
+        let m2 = nct_raw_moment(self.df, self.nc, 2);
+        let m3 = nct_raw_moment(self.df, self.nc, 3);
+        let var = m2 - m1 * m1;
+        if !(var > 0.0 && var.is_finite()) {
+            return f64::NAN;
+        }
+        let mu3 = 2.0_f64.mul_add(m1.powi(3), m3 - 3.0 * m1 * m2);
+        mu3 / var.powf(1.5)
     }
 
     fn kurtosis(&self) -> f64 {
-        f64::NAN
+        // Excess kurtosis. Requires df > 4 (fourth raw moment).
+        if self.df <= 4.0 {
+            return f64::NAN;
+        }
+        let m1 = nct_raw_moment(self.df, self.nc, 1);
+        let m2 = nct_raw_moment(self.df, self.nc, 2);
+        let m3 = nct_raw_moment(self.df, self.nc, 3);
+        let m4 = nct_raw_moment(self.df, self.nc, 4);
+        let var = m2 - m1 * m1;
+        if !(var > 0.0 && var.is_finite()) {
+            return f64::NAN;
+        }
+        let mu4 = (-3.0_f64).mul_add(
+            m1.powi(4),
+            6.0_f64.mul_add(m1 * m1 * m2, 4.0_f64.mul_add(-m1 * m3, m4)),
+        );
+        mu4 / (var * var) - 3.0
     }
 
     fn entropy(&self) -> f64 {
@@ -35307,6 +35373,52 @@ mod tests {
         let b2 = Binomial::new(10, 0.3);
         assert!(b2.skewness() > 0.0, "Binomial(10,0.3) positive skew");
         assert!(b2.mode() >= 0.0, "Binomial mode >= 0");
+    }
+
+    #[test]
+    fn noncentralt_skewness_kurtosis_match_scipy() {
+        // scipy.stats.nct(df, nc).stats(moments='sk'). Cases chosen so that
+        // df > 4 (kurt) and df > 3 (skew). The df=20, nc=0 case in scipy
+        // hits a special-cased branch that returns kurt=1.0 regardless of
+        // df; mathematically the limit is 6/(df−4) = 0.375. fsci returns
+        // the correct value; we test it separately below.
+        for &(df, nc, skew, kurt) in &[
+            (5.0_f64, 1.0_f64, 1.266_329_998, 10.320_671_990),
+            (10.0, 2.0, 0.723_633_363, 1.827_330_293),
+            (4.5, 1.5, 2.219_885_572, 32.160_975_866),
+        ] {
+            let d = NoncentralT::new(df, nc);
+            assert_close(
+                d.skewness(),
+                skew,
+                1e-6,
+                &format!("nct({df},{nc}).skewness"),
+            );
+            assert_close(
+                d.kurtosis(),
+                kurt,
+                1e-5,
+                &format!("nct({df},{nc}).kurtosis"),
+            );
+        }
+        // nc=0 collapses to central StudentT.
+        let d = NoncentralT::new(20.0, 0.0);
+        assert_close(d.skewness(), 0.0, 1e-12, "nct(20, 0).skewness == 0");
+        assert_close(
+            d.kurtosis(),
+            6.0 / 16.0,
+            1e-12,
+            "nct(20, 0).kurtosis == 6/(df-4) (StudentT(20))",
+        );
+        // Domain edges: NaN when the moment doesn't exist.
+        assert!(
+            NoncentralT::new(3.0, 0.5).skewness().is_nan(),
+            "skew should be NaN at df = 3"
+        );
+        assert!(
+            NoncentralT::new(4.0, 0.5).kurtosis().is_nan(),
+            "kurt should be NaN at df = 4"
+        );
     }
 
     #[test]
