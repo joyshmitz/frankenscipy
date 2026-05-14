@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 
 const PACKET_ID: &str = "FSCI-P2C-007";
 const STAT_TOL: f64 = 1.0e-9;
-const CVM_PVALUE_TOL: f64 = 1.0e-2;
+const CVM_PVALUE_TOL: f64 = 1.0e-5;
 const MOOD_PVALUE_TOL: f64 = 1.0e-9;
 const REQUIRE_SCIPY_ENV: &str = "FSCI_REQUIRE_SCIPY_ORACLE";
 
