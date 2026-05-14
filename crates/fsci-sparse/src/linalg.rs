@@ -1641,8 +1641,16 @@ fn lgmres_inner(
         h[k + 1][k] = vec_norm(&wj);
 
         if h[k + 1][k].abs() < f64::EPSILON * 100.0 {
-            // Lucky breakdown
+            // Lucky breakdown: A·v[k] lies entirely in span(v[0..=k]),
+            // so the Krylov space has stabilised after k+1 steps.
+            // Apply pending Givens rotations and finalise this column.
             apply_givens_to_column(&mut h, &cs, &sn, k);
+            // Advance k so that the upper-triangular solve below covers
+            // this dimension. Without this, lucky breakdown at k=0
+            // (e.g. A = I) leaves y empty, z = 0, and the outer lgmres
+            // loop spins forever because no iteration is reported.
+            // (frankenscipy-3yrl6)
+            k += 1;
             break;
         }
 
