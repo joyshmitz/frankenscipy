@@ -4470,6 +4470,12 @@ impl DiscreteDistribution for Boltzmann {
         }
         h
     }
+
+    fn mode(&self) -> f64 {
+        // Truncated geometric pmf ∝ e^{−λk} is strictly decreasing in k,
+        // so the mode is the leftmost support point (frankenscipy-ckykz).
+        0.0
+    }
 }
 
 /// Yule-Simon distribution.
@@ -4563,6 +4569,13 @@ impl DiscreteDistribution for YuleSimon {
         a + 3.0
             + 11.0_f64.mul_add(a.powi(3), (-49.0_f64).mul_add(a, -22.0))
                 / (a * (a - 3.0) * (a - 4.0))
+    }
+
+    fn mode(&self) -> f64 {
+        // YuleSimon pmf α · B(k, α+1) is strictly decreasing in k for
+        // every α > 0; mode is the leftmost support point k=1
+        // (frankenscipy-ckykz).
+        1.0
     }
 
     fn entropy(&self) -> f64 {
@@ -4660,6 +4673,12 @@ impl DiscreteDistribution for Planck {
         // Uses log1p / expm1 for stable evaluation at small λ;
         // (−e^{−λ}).ln_1p() = ln(1 − e^{−λ}).
         -(-(-self.lambda).exp()).ln_1p() + self.lambda / self.lambda.exp_m1()
+    }
+
+    fn mode(&self) -> f64 {
+        // Geometric-like pmf ∝ e^{−λk} (strictly decreasing in k);
+        // mode at the leftmost support point (frankenscipy-ckykz).
+        0.0
     }
 }
 
@@ -9215,6 +9234,12 @@ impl DiscreteDistribution for Zipfian {
             sum_ln += p * jf.ln();
         }
         self.a * sum_ln + z.ln()
+    }
+
+    fn mode(&self) -> f64 {
+        // Zipfian pmf ∝ k^{−a} on [1, n] is strictly decreasing in k for
+        // every a > 0; mode at k=1 (frankenscipy-ckykz).
+        1.0
     }
 }
 
@@ -35381,6 +35406,28 @@ mod tests {
         let b2 = Binomial::new(10, 0.3);
         assert!(b2.skewness() > 0.0, "Binomial(10,0.3) positive skew");
         assert!(b2.mode() >= 0.0, "Binomial mode >= 0");
+    }
+
+    #[test]
+    fn boltzmann_yulesimon_planck_zipfian_modes() {
+        // Pmf-argmax verification (frankenscipy-ckykz). All four are
+        // unimodal with the mode at the leftmost support point.
+        assert_eq!(Boltzmann::new(0.5, 10).mode(), 0.0, "Boltzmann mode");
+        assert_eq!(Boltzmann::new(2.0, 5).mode(), 0.0, "Boltzmann mode (λ=2)");
+        assert_eq!(YuleSimon::new(2.0).mode(), 1.0, "YuleSimon(2) mode");
+        assert_eq!(YuleSimon::new(0.5).mode(), 1.0, "YuleSimon(0.5) mode");
+        assert_eq!(Planck::new(0.5).mode(), 0.0, "Planck mode");
+        assert_eq!(Zipfian::new(2.0, 10).mode(), 1.0, "Zipfian(2,10) mode");
+        assert_eq!(Zipfian::new(0.5, 10).mode(), 1.0, "Zipfian(0.5,10) mode");
+        // Sanity: pmf strictly decreases away from the mode for each.
+        let b = Boltzmann::new(0.5, 10);
+        assert!(b.pmf(0) > b.pmf(1) && b.pmf(1) > b.pmf(2));
+        let y = YuleSimon::new(2.0);
+        assert!(y.pmf(1) > y.pmf(2) && y.pmf(2) > y.pmf(3));
+        let p = Planck::new(0.5);
+        assert!(p.pmf(0) > p.pmf(1) && p.pmf(1) > p.pmf(2));
+        let z = Zipfian::new(2.0, 10);
+        assert!(z.pmf(1) > z.pmf(2) && z.pmf(2) > z.pmf(3));
     }
 
     #[test]
