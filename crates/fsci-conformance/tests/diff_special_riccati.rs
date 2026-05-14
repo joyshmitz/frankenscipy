@@ -116,10 +116,10 @@ fn generate_query() -> OracleQuery {
     let mut points = Vec::new();
     for &n in &ns {
         for &x in &xs {
-            // riccati_yn omitted: fsci's sign convention is
-            // opposite of scipy's at n=0 (cos(x) instead of
-            // −cos(x)). Tracked as [frankenscipy-gt5x9].
-            for func in ["riccati_jn"] {
+            // riccati_yn re-enabled after gt5x9 (sign-convention fix):
+            // fsci now matches scipy to ~1e-10 across the n × x grid
+            // (frankenscipy-lbsb1).
+            for func in ["riccati_jn", "riccati_yn"] {
                 points.push(PointCase {
                     case_id: format!("{func}_n{n}_x{x}"),
                     func: func.to_string(),
