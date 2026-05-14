@@ -2,7 +2,7 @@
 //!
 //! Mirrors the workspace audit pattern: a shared ledger re-export, a
 //! factory, and `record_*` helpers. First emission site
-//! demonstrated is [`super::try_fit_with_audit`] on Normal, which
+//! demonstrated is `super::try_fit_with_audit` on Normal, which
 //! records a FailClosed event when input validation rejects the sample.
 //!
 //! At the time of this slice, `try_fit` itself already fails closed

@@ -94,7 +94,7 @@ pub enum FitError {
     /// The provided sample is too small (or degenerate) to fit.
     InsufficientData { required: usize, actual: usize },
     /// The sample violates a distribution-specific support constraint
-    /// (e.g. negative values for HalfNormal, data not in [0,1] for Beta).
+    /// (e.g. negative values for HalfNormal, data not in `[0,1]` for Beta).
     UnsupportedData(String),
     /// Numerical fitting did not converge within the configured budget.
     NonConvergent(String),
@@ -16160,7 +16160,7 @@ pub fn ttest_ind_welch(a: &[f64], b: &[f64]) -> TtestResult {
 
 /// Paired t-test for related samples.
 ///
-/// Tests H0: mean of differences a[i] - b[i] is zero.
+/// Tests H0: mean of differences `a[i] - b[i]` is zero.
 /// Requires equal-length paired observations.
 ///
 /// Matches `scipy.stats.ttest_rel(a, b, alternative=...)`.
@@ -19433,7 +19433,7 @@ pub fn hdquantiles_sd(data: &[f64], prob: &[f64]) -> Vec<f64> {
 ///
 /// Matches `scipy.stats.mstats.mquantiles(a, prob, alphap, betap)`.
 /// Returns quantiles at the specified probabilities using the formula:
-/// Q(p) = (1-g)*x[j] + g*x[j+1], where j = floor(n*p + m), m = alphap + p*(1 - alphap - betap).
+/// `Q(p) = (1-g)*x[j] + g*x[j+1]`, where `j = floor(n*p + m)`, `m = alphap + p*(1 - alphap - betap)`.
 ///
 /// Common (alphap, betap) values:
 /// - (0.4, 0.4): Cunnane (default) - approximately quantile unbiased
@@ -23760,7 +23760,7 @@ pub fn somersd(
 /// Result of Fisher's exact test.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FisherExactResult {
-    /// Sample odds ratio: (a*d) / (b*c) for table [[a,b],[c,d]].
+    /// Sample odds ratio: `(a*d) / (b*c)` for table `[[a,b],[c,d]]`.
     pub odds_ratio: f64,
     /// Two-sided p-value from the hypergeometric distribution.
     pub pvalue: f64,
@@ -26723,7 +26723,7 @@ pub fn contingency_table(x: &[usize], y: &[usize]) -> (Vec<Vec<usize>>, Vec<usiz
 
 /// Compute the relative risk from a 2x2 contingency table.
 ///
-/// RR = (a/(a+b)) / (c/(c+d)) where [[a,b],[c,d]].
+/// `RR = (a/(a+b)) / (c/(c+d))` where `[[a,b],[c,d]]`.
 pub fn relative_risk(table: &[[usize; 2]; 2]) -> f64 {
     let a = table[0][0] as f64;
     let b = table[0][1] as f64;
@@ -26741,7 +26741,7 @@ pub fn relative_risk(table: &[[usize; 2]; 2]) -> f64 {
 
 /// Compute the odds ratio from a 2x2 contingency table.
 ///
-/// OR = (a*d) / (b*c) where [[a,b],[c,d]].
+/// `OR = (a*d) / (b*c)` where `[[a,b],[c,d]]`.
 pub fn odds_ratio(table: &[[usize; 2]; 2]) -> f64 {
     let a = table[0][0] as f64;
     let b = table[0][1] as f64;
