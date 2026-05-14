@@ -260,6 +260,7 @@ fn function_coverage_bucket(function: SpecialCaseFunction) -> FunctionCoverageBu
         | SpecialCaseFunction::SphericalIn
         | SpecialCaseFunction::SphericalKn
         | SpecialCaseFunction::Lpmv
+        | SpecialCaseFunction::SphHarmY
         | SpecialCaseFunction::Struve
         | SpecialCaseFunction::Modstruve
         | SpecialCaseFunction::Ber

@@ -70,7 +70,12 @@ fuzz_target!(|input: ClusterInput| {
     };
 
     let max_clusters = (input.max_clusters as usize).clamp(1, n);
-    let labels = fcluster(&z, max_clusters);
+    // fcluster signature returns Result<Vec<usize>, ClusterError>; ignore
+    // input shapes that fail validation (typically n < 2 or degenerate z).
+    let labels = match fcluster(&z, max_clusters) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
 
     if labels.len() != n {
         panic!(
