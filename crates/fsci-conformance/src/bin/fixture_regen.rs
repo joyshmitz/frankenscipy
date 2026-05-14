@@ -4,7 +4,7 @@
 //! fixture file with oracle-captured expected values and provenance metadata.
 //!
 //! Usage:
-//!   cargo run --bin fixture_regen -- --fixture <path> --oracle <path> [--dry-run]
+//!   cargo run --bin fixture_regen -- --fixture `<path>` --oracle `<path>` [--dry-run]
 //!
 //! Example:
 //!   cargo run --bin fixture_regen -- \

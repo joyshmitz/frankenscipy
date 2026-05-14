@@ -548,7 +548,7 @@ pub fn assert_close_slice(actual: &[f64], expected: &[f64], atol: f64, rtol: f64
     }
 }
 
-/// Assert two 2D f64 matrices (Vec<Vec<f64>>) are element-wise close.
+/// Assert two 2D f64 matrices (`Vec<Vec<f64>>`) are element-wise close.
 pub fn assert_close_matrix(actual: &[Vec<f64>], expected: &[Vec<f64>], atol: f64, rtol: f64) {
     assert_eq!(
         actual.len(),

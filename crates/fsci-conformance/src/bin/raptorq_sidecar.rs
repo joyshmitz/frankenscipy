@@ -7,9 +7,9 @@
 //! `<path>.decode_proof.json` next to it.
 //!
 //! Usage:
-//!     raptorq_sidecar <file> [<file> ...]
-//!     raptorq_sidecar --verify <file> [<file> ...]
-//!     raptorq_sidecar --verify --scrub-report <out.json> <file> [<file> ...]
+//!     raptorq_sidecar `<file>` [`<file>` ...]
+//!     raptorq_sidecar --verify `<file>` [`<file>` ...]
+//!     raptorq_sidecar --verify --scrub-report `<out.json>` `<file>` [`<file>` ...]
 //!
 //! Exit codes:
 //!     0 — all sidecars generated/verified

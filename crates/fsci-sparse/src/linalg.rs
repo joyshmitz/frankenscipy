@@ -7067,7 +7067,7 @@ pub fn depth_first_order(graph: &CsrMatrix, source: usize) -> SparseResult<(Vec<
 /// * `graph` — Adjacency matrix in CSR format (edge weights as values).
 /// * `normed` — If true, compute the symmetric normalized Laplacian L_sym = D^(-1/2) L D^(-1/2).
 ///
-/// Returns the Laplacian as a dense matrix (Vec<Vec<f64>>).
+/// Returns the Laplacian as a dense matrix (`Vec<Vec<f64>>`).
 pub fn laplacian(graph: &CsrMatrix, normed: bool) -> SparseResult<Vec<Vec<f64>>> {
     let n = graph.shape().rows;
     let indptr = graph.indptr();
