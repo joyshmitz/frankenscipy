@@ -4653,6 +4653,14 @@ impl DiscreteDistribution for Planck {
         // Excess kurt = 6 + (1 − e^{−λ})²/e^{−λ} = 4 + 2·cosh(λ).
         2.0_f64.mul_add(self.lambda.cosh(), 4.0)
     }
+
+    fn entropy(&self) -> f64 {
+        // Planck = Geometric(p = 1 − e^{−λ}) shifted to start at 0.
+        //   h = −ln(1 − e^{−λ}) + λ / (e^λ − 1)
+        // Uses log1p / expm1 for stable evaluation at small λ;
+        // (−e^{−λ}).ln_1p() = ln(1 − e^{−λ}).
+        -(-(-self.lambda).exp()).ln_1p() + self.lambda / self.lambda.exp_m1()
+    }
 }
 
 impl DiscreteDistribution for Geometric {
@@ -35515,6 +35523,20 @@ mod tests {
                 expected,
                 1e-10,
                 &format!("Zipfian({a}, {n}) entropy"),
+            );
+        }
+        // Planck(λ): closed form h = -ln(1-e^{-λ}) + λ/(e^λ-1).
+        for &(lam, expected) in &[
+            (0.5_f64, 1.703_499_170_8),
+            (1.0, 1.040_651_852_3),
+            (2.0, 0.458_448_743_4),
+            (0.1, 3.303_001_655_5),
+        ] {
+            assert_close(
+                Planck::new(lam).entropy(),
+                expected,
+                1e-9,
+                &format!("Planck({lam}) entropy"),
             );
         }
     }
