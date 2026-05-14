@@ -791,7 +791,7 @@ fn rfftn_impl(
 /// Discrete Cosine Transform (Type II).
 ///
 /// Matches `scipy.fft.dct(x, type=2)`.
-/// DCT-II: X[k] = 2 * sum_{n=0}^{N-1} x[n] * cos(π*(2n+1)*k / (2N))
+/// DCT-II: `X[k] = 2 * sum_{n=0}^{N-1} x[n] * cos(π*(2n+1)*k / (2N))`
 ///
 /// Computed via FFT of a reordered and mirrored sequence.
 pub fn dct(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError> {
@@ -908,7 +908,7 @@ pub fn idct(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError> {
 
 /// Discrete Cosine Transform Type I.
 ///
-/// DCT-I: X[k] = x[0] + (-1)^k * x[N-1] + 2 * Σ_{n=1}^{N-2} x[n] * cos(πnk/(N-1))
+/// DCT-I: `X[k] = x[0] + (-1)^k * x[N-1] + 2 * Σ_{n=1}^{N-2} x[n] * cos(πnk/(N-1))`
 ///
 /// Matches `scipy.fft.dct(x, type=1)`.
 pub fn dct_i(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError> {
@@ -967,7 +967,7 @@ pub fn dct_i(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError> 
 
 /// Discrete Cosine Transform Type III.
 ///
-/// DCT-III: x[n] = X[0]/2 + Σ_{k=1}^{N-1} X[k] * cos(πk(2n+1)/(2N))
+/// DCT-III: `x[n] = X[0]/2 + Σ_{k=1}^{N-1} X[k] * cos(πk(2n+1)/(2N))`
 ///
 /// This is the inverse of DCT-II (up to scaling).
 /// Matches `scipy.fft.dct(x, type=3)`.
@@ -1005,7 +1005,7 @@ pub fn dct_iii(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError
 
 /// Discrete Cosine Transform Type IV.
 ///
-/// DCT-IV: X[k] = 2 * Σ_{n=0}^{N-1} x[n] * cos(π(2n+1)(2k+1)/(4N))
+/// DCT-IV: `X[k] = 2 * Σ_{n=0}^{N-1} x[n] * cos(π(2n+1)(2k+1)/(4N))`
 ///
 /// Matches `scipy.fft.dct(x, type=4)`.
 pub fn dct_iv(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError> {
@@ -1047,7 +1047,7 @@ pub fn dct_iv(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError>
 
 /// Discrete Sine Transform Type I.
 ///
-/// DST-I: X[k] = 2 * Σ_{n=0}^{N-1} x[n] * sin(π(n+1)(k+1)/(N+1))
+/// DST-I: `X[k] = 2 * Σ_{n=0}^{N-1} x[n] * sin(π(n+1)(k+1)/(N+1))`
 ///
 /// Matches `scipy.fft.dst(x, type=1)`.
 pub fn dst_i(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError> {
@@ -1088,7 +1088,7 @@ pub fn dst_i(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError> 
 
 /// Discrete Sine Transform Type II.
 ///
-/// DST-II: X[k] = Σ_{n=0}^{N-1} x[n] * sin(π(2n+1)(k+1)/(2N))
+/// DST-II: `X[k] = Σ_{n=0}^{N-1} x[n] * sin(π(2n+1)(k+1)/(2N))`
 ///
 /// Matches `scipy.fft.dst(x, type=2)`.
 pub fn dst_ii(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError> {
@@ -1142,7 +1142,7 @@ pub fn dst_ii(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError>
 
 /// Discrete Sine Transform Type III.
 ///
-/// DST-III: x[n] = (-1)^n * X[N-1]/2 + Σ_{k=0}^{N-2} X[k] * sin(π(k+1)(2n+1)/(2N))
+/// DST-III: `x[n] = (-1)^n * X[N-1]/2 + Σ_{k=0}^{N-2} X[k] * sin(π(k+1)(2n+1)/(2N))`
 ///
 /// This is the inverse of DST-II (up to scaling).
 /// Matches `scipy.fft.dst(x, type=3)`.
@@ -1198,7 +1198,7 @@ pub fn dst_iii(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError
 
 /// Discrete Sine Transform Type IV.
 ///
-/// DST-IV: X[k] = 2 * Σ_{n=0}^{N-1} x[n] * sin(π(2n+1)(2k+1)/(4N))
+/// DST-IV: `X[k] = 2 * Σ_{n=0}^{N-1} x[n] * sin(π(2n+1)(2k+1)/(4N))`
 ///
 /// Matches `scipy.fft.dst(x, type=4)`.
 pub fn dst_iv(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError> {
