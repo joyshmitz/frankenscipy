@@ -711,11 +711,9 @@ where
                         ys.push(interpolate_state(&y_old, &y, &f_old, &f, t_old, t, te));
                         next_t_eval_index += 1;
                     }
-                } else {
-                    if is_new_time_point(&ts, t) {
-                        ts.push(t);
-                        ys.push(y);
-                    }
+                } else if is_new_time_point(&ts, t) {
+                    ts.push(t);
+                    ys.push(y);
                 }
 
                 if outcome.state == OdeSolverState::Finished {

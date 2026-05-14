@@ -298,8 +298,8 @@ fn diff_special_gdtr_pdtr_chdtr() {
 
     for case in &query.points {
         let oracle = pmap.get(&case.case_id).expect("validated oracle");
-        if let Some(scipy_v) = oracle.value {
-            if let Some(rust_v) = fsci_eval(&case.func, case.p1, case.p2, case.arg) {
+        if let Some(scipy_v) = oracle.value
+            && let Some(rust_v) = fsci_eval(&case.func, case.p1, case.p2, case.arg) {
                 let abs_diff = (rust_v - scipy_v).abs();
                 let scale = scipy_v.abs().max(1.0);
                 let rel_diff = abs_diff / scale;
@@ -319,7 +319,6 @@ fn diff_special_gdtr_pdtr_chdtr() {
                     pass,
                 });
             }
-        }
     }
 
     let all_pass = diffs.iter().all(|d| d.pass);

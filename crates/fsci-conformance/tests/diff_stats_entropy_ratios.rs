@@ -289,8 +289,8 @@ fn diff_stats_entropy_ratios() {
 
     for case in &query.points {
         let scipy_arm = pmap.get(&case.case_id).expect("validated oracle");
-        if let Some(scipy_v) = scipy_arm.value {
-            if let Some(rust_v) = fsci_eval(case) {
+        if let Some(scipy_v) = scipy_arm.value
+            && let Some(rust_v) = fsci_eval(case) {
                 let abs_diff = (rust_v - scipy_v).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -300,7 +300,6 @@ fn diff_stats_entropy_ratios() {
                     pass: abs_diff <= ABS_TOL,
                 });
             }
-        }
     }
 
     let all_pass = diffs.iter().all(|d| d.pass);

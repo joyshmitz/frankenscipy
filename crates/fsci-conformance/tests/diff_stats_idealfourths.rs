@@ -235,8 +235,8 @@ fn diff_stats_idealfourths() {
         let (rust_qlo, rust_qup) = idealfourths(&case.data);
         let rust_iqr = iqr(&case.data);
 
-        if let Some(s_qlo) = scipy_arm.qlo {
-            if rust_qlo.is_finite() {
+        if let Some(s_qlo) = scipy_arm.qlo
+            && rust_qlo.is_finite() {
                 let abs_diff = (rust_qlo - s_qlo).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -246,9 +246,8 @@ fn diff_stats_idealfourths() {
                     pass: abs_diff <= ABS_TOL,
                 });
             }
-        }
-        if let Some(s_qup) = scipy_arm.qup {
-            if rust_qup.is_finite() {
+        if let Some(s_qup) = scipy_arm.qup
+            && rust_qup.is_finite() {
                 let abs_diff = (rust_qup - s_qup).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -258,9 +257,8 @@ fn diff_stats_idealfourths() {
                     pass: abs_diff <= ABS_TOL,
                 });
             }
-        }
-        if let Some(s_iqr) = scipy_arm.iqr {
-            if rust_iqr.is_finite() {
+        if let Some(s_iqr) = scipy_arm.iqr
+            && rust_iqr.is_finite() {
                 let abs_diff = (rust_iqr - s_iqr).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -270,7 +268,6 @@ fn diff_stats_idealfourths() {
                     pass: abs_diff <= ABS_TOL,
                 });
             }
-        }
     }
 
     let all_pass = diffs.iter().all(|d| d.pass);

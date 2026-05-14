@@ -289,8 +289,8 @@ fn diff_stats_nan_policy() {
                 abs_diff: 0.0,
                 pass: true,
             });
-        } else if let Some(s_stat) = scipy_arm.statistic {
-            if rust_stat.is_finite() {
+        } else if let Some(s_stat) = scipy_arm.statistic
+            && rust_stat.is_finite() {
                 let abs_diff = (rust_stat - s_stat).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -300,7 +300,6 @@ fn diff_stats_nan_policy() {
                     pass: abs_diff <= ABS_TOL,
                 });
             }
-        }
         if !rust_p.is_finite() && scipy_arm.pvalue.is_none() {
             diffs.push(CaseDiff {
                 case_id: case.case_id.clone(),
@@ -308,8 +307,8 @@ fn diff_stats_nan_policy() {
                 abs_diff: 0.0,
                 pass: true,
             });
-        } else if let Some(s_p) = scipy_arm.pvalue {
-            if rust_p.is_finite() {
+        } else if let Some(s_p) = scipy_arm.pvalue
+            && rust_p.is_finite() {
                 let abs_diff = (rust_p - s_p).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -319,7 +318,6 @@ fn diff_stats_nan_policy() {
                     pass: abs_diff <= ABS_TOL,
                 });
             }
-        }
     }
 
     let all_pass = diffs.iter().all(|d| d.pass);

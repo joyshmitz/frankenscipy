@@ -254,8 +254,8 @@ fn diff_stats_anderson() {
         let scipy_arm = pmap.get(&case.case_id).expect("validated oracle");
         let result = anderson(&case.data, "norm");
 
-        if let Some(scipy_stat) = scipy_arm.statistic {
-            if result.statistic.is_finite() {
+        if let Some(scipy_stat) = scipy_arm.statistic
+            && result.statistic.is_finite() {
                 let abs_diff = (result.statistic - scipy_stat).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -265,7 +265,6 @@ fn diff_stats_anderson() {
                     pass: abs_diff <= STAT_TOL,
                 });
             }
-        }
 
         if let Some(scipy_crit) = &scipy_arm.critical_values {
             for (idx, &scipy_v) in scipy_crit.iter().enumerate() {

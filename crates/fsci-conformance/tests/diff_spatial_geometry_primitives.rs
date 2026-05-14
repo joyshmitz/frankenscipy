@@ -278,8 +278,8 @@ fn diff_spatial_geometry_primitives() {
         }
 
         // medoid
-        if let Some(scipy_m) = scipy_arm.medoid {
-            if let Some(rust_m) = medoid(&case.points) {
+        if let Some(scipy_m) = scipy_arm.medoid
+            && let Some(rust_m) = medoid(&case.points) {
                 cases.push(CaseDiff {
                     case_id: case.case_id.clone(),
                     sub_check: "medoid".into(),
@@ -287,7 +287,6 @@ fn diff_spatial_geometry_primitives() {
                     pass: rust_m as i64 == scipy_m,
                 });
             }
-        }
 
         // diameter
         if let Some(scipy_d) = scipy_arm.diameter {

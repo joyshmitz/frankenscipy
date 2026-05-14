@@ -246,8 +246,8 @@ fn diff_special_fresnel_shichi() {
 
     for case in &query.points {
         let oracle = pmap.get(&case.case_id).expect("validated oracle");
-        if let Some(scipy_v) = oracle.value {
-            if let Some(rust_v) = fsci_eval(&case.func, case.x) {
+        if let Some(scipy_v) = oracle.value
+            && let Some(rust_v) = fsci_eval(&case.func, case.x) {
                 let abs_diff = (rust_v - scipy_v).abs();
                 max_overall = max_overall.max(abs_diff);
                 let tol = if case.func == "Chi" {
@@ -262,7 +262,6 @@ fn diff_special_fresnel_shichi() {
                     pass: abs_diff <= tol,
                 });
             }
-        }
     }
 
     let all_pass = diffs.iter().all(|d| d.pass);

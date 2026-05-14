@@ -335,8 +335,8 @@ fn diff_stats_anova_effects() {
                     case.groups.iter().map(|g| g.as_slice()).collect();
                 let r = f_oneway(&groups);
                 let (rust_stat, rust_p) = (r.statistic, r.pvalue);
-                if let Some(scipy_stat) = scipy_arm.statistic {
-                    if rust_stat.is_finite() {
+                if let Some(scipy_stat) = scipy_arm.statistic
+                    && rust_stat.is_finite() {
                         let abs_diff = (rust_stat - scipy_stat).abs();
                         max_overall = max_overall.max(abs_diff);
                         diffs.push(CaseDiff {
@@ -347,9 +347,8 @@ fn diff_stats_anova_effects() {
                             pass: abs_diff <= STAT_TOL,
                         });
                     }
-                }
-                if let Some(scipy_p) = scipy_arm.pvalue {
-                    if rust_p.is_finite() {
+                if let Some(scipy_p) = scipy_arm.pvalue
+                    && rust_p.is_finite() {
                         let abs_diff = (rust_p - scipy_p).abs();
                         max_overall = max_overall.max(abs_diff);
                         diffs.push(CaseDiff {
@@ -360,7 +359,6 @@ fn diff_stats_anova_effects() {
                             pass: abs_diff <= STAT_TOL,
                         });
                     }
-                }
             }
             "cohens_d" => {
                 if let Some(scipy_v) = scipy_arm.scalar {

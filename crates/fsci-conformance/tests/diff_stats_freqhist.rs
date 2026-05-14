@@ -248,8 +248,8 @@ fn diff_stats_freqhist() {
             _ => continue,
         };
 
-        if let Some(scipy_freqs) = &scipy_arm.freqs {
-            if rust_freqs.len() == scipy_freqs.len() {
+        if let Some(scipy_freqs) = &scipy_arm.freqs
+            && rust_freqs.len() == scipy_freqs.len() {
                 let mut max_local = 0.0_f64;
                 for (r, s) in rust_freqs.iter().zip(scipy_freqs.iter()) {
                     if r.is_finite() {
@@ -264,9 +264,8 @@ fn diff_stats_freqhist() {
                     pass: max_local <= ABS_TOL,
                 });
             }
-        }
-        if let Some(scipy_edges) = &scipy_arm.edges {
-            if rust_edges.len() == scipy_edges.len() {
+        if let Some(scipy_edges) = &scipy_arm.edges
+            && rust_edges.len() == scipy_edges.len() {
                 let mut max_local = 0.0_f64;
                 for (r, s) in rust_edges.iter().zip(scipy_edges.iter()) {
                     if r.is_finite() {
@@ -281,7 +280,6 @@ fn diff_stats_freqhist() {
                     pass: max_local <= ABS_TOL,
                 });
             }
-        }
     }
 
     let all_pass = diffs.iter().all(|d| d.pass);

@@ -266,8 +266,8 @@ fn diff_stats_cvm2samp_methods() {
             ASYMP_PVALUE_TOL
         };
 
-        if let Some(s_stat) = scipy_arm.statistic {
-            if result.statistic.is_finite() {
+        if let Some(s_stat) = scipy_arm.statistic
+            && result.statistic.is_finite() {
                 let abs_diff = (result.statistic - s_stat).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -277,9 +277,8 @@ fn diff_stats_cvm2samp_methods() {
                     pass: abs_diff <= STAT_TOL,
                 });
             }
-        }
-        if let Some(s_p) = scipy_arm.pvalue {
-            if result.pvalue.is_finite() {
+        if let Some(s_p) = scipy_arm.pvalue
+            && result.pvalue.is_finite() {
                 let abs_diff = (result.pvalue - s_p).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -289,7 +288,6 @@ fn diff_stats_cvm2samp_methods() {
                     pass: abs_diff <= pvalue_tol,
                 });
             }
-        }
     }
 
     let all_pass = diffs.iter().all(|d| d.pass);

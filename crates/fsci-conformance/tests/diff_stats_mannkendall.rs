@@ -254,8 +254,8 @@ fn diff_stats_mannkendall() {
         let scipy_arm = pmap.get(&case.case_id).expect("validated oracle");
         let (rust_tau, rust_p, rust_trend) = mannkendall(&case.data);
 
-        if let Some(scipy_tau) = scipy_arm.tau {
-            if rust_tau.is_finite() {
+        if let Some(scipy_tau) = scipy_arm.tau
+            && rust_tau.is_finite() {
                 let abs_diff = (rust_tau - scipy_tau).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -265,9 +265,8 @@ fn diff_stats_mannkendall() {
                     pass: abs_diff <= TAU_TOL,
                 });
             }
-        }
-        if let Some(scipy_p) = scipy_arm.pvalue {
-            if rust_p.is_finite() {
+        if let Some(scipy_p) = scipy_arm.pvalue
+            && rust_p.is_finite() {
                 let abs_diff = (rust_p - scipy_p).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -277,7 +276,6 @@ fn diff_stats_mannkendall() {
                     pass: abs_diff <= PVALUE_TOL,
                 });
             }
-        }
         if let Some(scipy_trend) = scipy_arm.trend {
             let abs_diff = (rust_trend as i64 - scipy_trend).unsigned_abs() as f64;
             max_overall = max_overall.max(abs_diff);

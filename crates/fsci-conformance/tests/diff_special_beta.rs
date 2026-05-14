@@ -283,8 +283,8 @@ fn diff_special_beta() {
 
     for case in &query.two_arg {
         let oracle = two_map.get(&case.case_id).expect("validated oracle");
-        if let Some(scipy_v) = oracle.value {
-            if let Some(rust_v) = fsci_two_arg(&case.func, case.a, case.b) {
+        if let Some(scipy_v) = oracle.value
+            && let Some(rust_v) = fsci_two_arg(&case.func, case.a, case.b) {
                 let abs_diff = (rust_v - scipy_v).abs();
                 let rel_diff = if scipy_v.abs() > 1.0 {
                     abs_diff / scipy_v.abs()
@@ -303,13 +303,12 @@ fn diff_special_beta() {
                     pass,
                 });
             }
-        }
     }
 
     for case in &query.three_arg {
         let oracle = three_map.get(&case.case_id).expect("validated oracle");
-        if let Some(scipy_v) = oracle.value {
-            if let Some(rust_v) = fsci_three_arg(case.a, case.b, case.x) {
+        if let Some(scipy_v) = oracle.value
+            && let Some(rust_v) = fsci_three_arg(case.a, case.b, case.x) {
                 let abs_diff = (rust_v - scipy_v).abs();
                 let rel_diff = if scipy_v.abs() > 1.0 {
                     abs_diff / scipy_v.abs()
@@ -326,7 +325,6 @@ fn diff_special_beta() {
                     pass: abs_diff <= BETAINC_TOL,
                 });
             }
-        }
     }
 
     let all_pass = diffs.iter().all(|d| d.pass);

@@ -279,8 +279,8 @@ fn diff_linalg_inv_pinv_cholesky() {
         let scipy_arm = pmap.get(&case.case_id).expect("validated oracle");
 
         // inv
-        if let Some(scipy_inv_m) = scipy_arm.inv.as_ref() {
-            if let Ok(rust_res) = inv(&case.a, InvOptions::default()) {
+        if let Some(scipy_inv_m) = scipy_arm.inv.as_ref()
+            && let Ok(rust_res) = inv(&case.a, InvOptions::default()) {
                 let max_d = max_abs_diff_mat(&rust_res.inverse, scipy_inv_m);
                 max_overall = max_overall.max(max_d);
                 diffs.push(CaseDiff {
@@ -290,11 +290,10 @@ fn diff_linalg_inv_pinv_cholesky() {
                     pass: max_d <= ABS_TOL,
                 });
             }
-        }
 
         // pinv
-        if let Some(scipy_pinv_m) = scipy_arm.pinv.as_ref() {
-            if let Ok(rust_res) = pinv(&case.a, PinvOptions::default()) {
+        if let Some(scipy_pinv_m) = scipy_arm.pinv.as_ref()
+            && let Ok(rust_res) = pinv(&case.a, PinvOptions::default()) {
                 let max_d = max_abs_diff_mat(&rust_res.pseudo_inverse, scipy_pinv_m);
                 max_overall = max_overall.max(max_d);
                 diffs.push(CaseDiff {
@@ -304,11 +303,10 @@ fn diff_linalg_inv_pinv_cholesky() {
                     pass: max_d <= ABS_TOL,
                 });
             }
-        }
 
         // cholesky (lower)
-        if let Some(scipy_chol_m) = scipy_arm.chol_lower.as_ref() {
-            if let Ok(rust_res) = cholesky(&case.a, true, DecompOptions::default()) {
+        if let Some(scipy_chol_m) = scipy_arm.chol_lower.as_ref()
+            && let Ok(rust_res) = cholesky(&case.a, true, DecompOptions::default()) {
                 let max_d = max_abs_diff_mat(&rust_res.factor, scipy_chol_m);
                 max_overall = max_overall.max(max_d);
                 diffs.push(CaseDiff {
@@ -318,7 +316,6 @@ fn diff_linalg_inv_pinv_cholesky() {
                     pass: max_d <= ABS_TOL,
                 });
             }
-        }
     }
 
     let all_pass = diffs.iter().all(|d| d.pass);

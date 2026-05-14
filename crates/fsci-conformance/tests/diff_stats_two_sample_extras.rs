@@ -277,8 +277,8 @@ fn diff_stats_two_sample_extras() {
             _ => continue,
         };
 
-        if let Some(s_stat) = scipy_arm.statistic {
-            if rust_stat.is_finite() {
+        if let Some(s_stat) = scipy_arm.statistic
+            && rust_stat.is_finite() {
                 let abs_diff = (rust_stat - s_stat).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -288,9 +288,8 @@ fn diff_stats_two_sample_extras() {
                     pass: abs_diff <= STAT_TOL,
                 });
             }
-        }
-        if let Some(s_p) = scipy_arm.pvalue {
-            if rust_p.is_finite() {
+        if let Some(s_p) = scipy_arm.pvalue
+            && rust_p.is_finite() {
                 let abs_diff = (rust_p - s_p).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -300,7 +299,6 @@ fn diff_stats_two_sample_extras() {
                     pass: abs_diff <= pvalue_tol,
                 });
             }
-        }
     }
 
     let all_pass = diffs.iter().all(|d| d.pass);

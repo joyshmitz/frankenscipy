@@ -259,8 +259,8 @@ fn diff_stats_ttest_from_stats() {
             case.equal_var,
         );
 
-        if let Some(s_stat) = scipy_arm.statistic {
-            if result.statistic.is_finite() {
+        if let Some(s_stat) = scipy_arm.statistic
+            && result.statistic.is_finite() {
                 let abs_diff = (result.statistic - s_stat).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -270,9 +270,8 @@ fn diff_stats_ttest_from_stats() {
                     pass: abs_diff <= STAT_TOL,
                 });
             }
-        }
-        if let Some(s_p) = scipy_arm.pvalue {
-            if result.pvalue.is_finite() {
+        if let Some(s_p) = scipy_arm.pvalue
+            && result.pvalue.is_finite() {
                 let abs_diff = (result.pvalue - s_p).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -282,9 +281,8 @@ fn diff_stats_ttest_from_stats() {
                     pass: abs_diff <= PVALUE_TOL,
                 });
             }
-        }
-        if let Some(s_df) = scipy_arm.df {
-            if result.df.is_finite() {
+        if let Some(s_df) = scipy_arm.df
+            && result.df.is_finite() {
                 let abs_diff = (result.df - s_df).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -294,7 +292,6 @@ fn diff_stats_ttest_from_stats() {
                     pass: abs_diff <= STAT_TOL,
                 });
             }
-        }
     }
 
     let all_pass = diffs.iter().all(|d| d.pass);

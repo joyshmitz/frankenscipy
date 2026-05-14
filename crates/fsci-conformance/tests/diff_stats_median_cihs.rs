@@ -222,8 +222,8 @@ fn diff_stats_median_cihs() {
         let scipy_arm = pmap.get(&case.case_id).expect("validated oracle");
         let (rust_lo, rust_hi) = median_cihs(&case.data, case.alpha);
 
-        if let Some(s_lo) = scipy_arm.lo {
-            if rust_lo.is_finite() {
+        if let Some(s_lo) = scipy_arm.lo
+            && rust_lo.is_finite() {
                 let abs_diff = (rust_lo - s_lo).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -233,9 +233,8 @@ fn diff_stats_median_cihs() {
                     pass: abs_diff <= ABS_TOL,
                 });
             }
-        }
-        if let Some(s_hi) = scipy_arm.hi {
-            if rust_hi.is_finite() {
+        if let Some(s_hi) = scipy_arm.hi
+            && rust_hi.is_finite() {
                 let abs_diff = (rust_hi - s_hi).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -245,7 +244,6 @@ fn diff_stats_median_cihs() {
                     pass: abs_diff <= ABS_TOL,
                 });
             }
-        }
     }
 
     let all_pass = diffs.iter().all(|d| d.pass);

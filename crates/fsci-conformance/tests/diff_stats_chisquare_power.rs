@@ -274,8 +274,8 @@ fn diff_stats_chisquare_power() {
             power_divergence(&case.f_obs, exp_ref, case.lambda_)
         };
 
-        if let Some(scipy_stat) = scipy_arm.statistic {
-            if stat.is_finite() {
+        if let Some(scipy_stat) = scipy_arm.statistic
+            && stat.is_finite() {
                 let abs_diff = (stat - scipy_stat).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -285,9 +285,8 @@ fn diff_stats_chisquare_power() {
                     pass: abs_diff <= ABS_TOL,
                 });
             }
-        }
-        if let Some(scipy_p) = scipy_arm.pvalue {
-            if pval.is_finite() {
+        if let Some(scipy_p) = scipy_arm.pvalue
+            && pval.is_finite() {
                 let abs_diff = (pval - scipy_p).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -297,7 +296,6 @@ fn diff_stats_chisquare_power() {
                     pass: abs_diff <= ABS_TOL,
                 });
             }
-        }
     }
 
     let all_pass = diffs.iter().all(|d| d.pass);

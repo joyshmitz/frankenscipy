@@ -303,8 +303,8 @@ fn diff_stats_multipletests() {
             _ => continue,
         };
 
-        if let Some(scipy_p) = &scipy_arm.pvalues_corrected {
-            if result.pvalues_corrected.len() == scipy_p.len() {
+        if let Some(scipy_p) = &scipy_arm.pvalues_corrected
+            && result.pvalues_corrected.len() == scipy_p.len() {
                 let mut max_local = 0.0_f64;
                 for (r, s) in result.pvalues_corrected.iter().zip(scipy_p.iter()) {
                     if r.is_finite() {
@@ -319,9 +319,8 @@ fn diff_stats_multipletests() {
                     pass: max_local <= ABS_TOL,
                 });
             }
-        }
-        if let Some(scipy_r) = &scipy_arm.reject {
-            if result.reject.len() == scipy_r.len() {
+        if let Some(scipy_r) = &scipy_arm.reject
+            && result.reject.len() == scipy_r.len() {
                 let mismatches = result
                     .reject
                     .iter()
@@ -336,7 +335,6 @@ fn diff_stats_multipletests() {
                     pass: mismatches == 0.0,
                 });
             }
-        }
     }
 
     let all_pass = diffs.iter().all(|d| d.pass);

@@ -219,8 +219,8 @@ fn diff_special_zeta() {
 
     for case in &query.points {
         let oracle = pmap.get(&case.case_id).expect("validated oracle");
-        if let Some(scipy_v) = oracle.value {
-            if let Some(rust_v) = fsci_eval(case.s, case.a) {
+        if let Some(scipy_v) = oracle.value
+            && let Some(rust_v) = fsci_eval(case.s, case.a) {
                 let abs_diff = (rust_v - scipy_v).abs();
                 let rel_diff = if scipy_v.abs() > 1.0 {
                     abs_diff / scipy_v.abs()
@@ -238,7 +238,6 @@ fn diff_special_zeta() {
                     pass,
                 });
             }
-        }
     }
 
     let all_pass = diffs.iter().all(|d| d.pass);

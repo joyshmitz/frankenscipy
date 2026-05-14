@@ -246,8 +246,8 @@ fn diff_stats_siegelslopes() {
         let scipy_arm = pmap.get(&case.case_id).expect("validated oracle");
         let result = siegelslopes(&case.x, &case.y);
 
-        if let Some(scipy_slope) = scipy_arm.slope {
-            if result.slope.is_finite() {
+        if let Some(scipy_slope) = scipy_arm.slope
+            && result.slope.is_finite() {
                 let abs_diff = (result.slope - scipy_slope).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -257,9 +257,8 @@ fn diff_stats_siegelslopes() {
                     pass: abs_diff <= ABS_TOL,
                 });
             }
-        }
-        if let Some(scipy_int) = scipy_arm.intercept {
-            if result.intercept.is_finite() {
+        if let Some(scipy_int) = scipy_arm.intercept
+            && result.intercept.is_finite() {
                 let abs_diff = (result.intercept - scipy_int).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -269,7 +268,6 @@ fn diff_stats_siegelslopes() {
                     pass: abs_diff <= ABS_TOL,
                 });
             }
-        }
     }
 
     let all_pass = diffs.iter().all(|d| d.pass);

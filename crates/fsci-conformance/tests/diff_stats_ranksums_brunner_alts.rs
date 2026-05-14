@@ -266,8 +266,8 @@ fn diff_stats_ranksums_brunner_alts() {
             _ => continue,
         };
 
-        if let Some(s_stat) = scipy_arm.statistic {
-            if result.statistic.is_finite() {
+        if let Some(s_stat) = scipy_arm.statistic
+            && result.statistic.is_finite() {
                 let abs_diff = (result.statistic - s_stat).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -277,9 +277,8 @@ fn diff_stats_ranksums_brunner_alts() {
                     pass: abs_diff <= ABS_TOL,
                 });
             }
-        }
-        if let Some(s_p) = scipy_arm.pvalue {
-            if result.pvalue.is_finite() {
+        if let Some(s_p) = scipy_arm.pvalue
+            && result.pvalue.is_finite() {
                 let abs_diff = (result.pvalue - s_p).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -289,7 +288,6 @@ fn diff_stats_ranksums_brunner_alts() {
                     pass: abs_diff <= ABS_TOL,
                 });
             }
-        }
     }
 
     let all_pass = diffs.iter().all(|d| d.pass);

@@ -273,8 +273,8 @@ fn diff_stats_binned_statistic() {
         // stats vector: scipy nests `null` in JSON for empty bins (NaN
         // in numpy); fsci returns NaN. Compare per-element only when
         // both are finite-or-both-NaN.
-        if let Some(scipy_stats) = &scipy_arm.stats {
-            if rust_stats.len() == scipy_stats.len() {
+        if let Some(scipy_stats) = &scipy_arm.stats
+            && rust_stats.len() == scipy_stats.len() {
                 let mut max_local = 0.0_f64;
                 let mut shape_ok = true;
                 for (a, b_opt) in rust_stats.iter().zip(scipy_stats.iter()) {
@@ -302,10 +302,9 @@ fn diff_stats_binned_statistic() {
                     });
                 }
             }
-        }
 
-        if let Some(scipy_edges) = &scipy_arm.bin_edges {
-            if rust_edges.len() == scipy_edges.len() {
+        if let Some(scipy_edges) = &scipy_arm.bin_edges
+            && rust_edges.len() == scipy_edges.len() {
                 let mut max_local = 0.0_f64;
                 for (a, b) in rust_edges.iter().zip(scipy_edges.iter()) {
                     if a.is_finite() {
@@ -321,7 +320,6 @@ fn diff_stats_binned_statistic() {
                     pass: max_local <= ABS_TOL,
                 });
             }
-        }
     }
 
     let all_pass = diffs.iter().all(|d| d.pass);

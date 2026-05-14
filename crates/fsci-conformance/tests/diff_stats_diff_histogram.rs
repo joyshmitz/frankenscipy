@@ -271,8 +271,8 @@ fn diff_stats_diff_histogram() {
             }
             "histogram" => {
                 let (rust_counts, rust_edges) = histogram(&case.data, case.bins);
-                if let Some(scipy_counts) = &scipy_arm.counts {
-                    if rust_counts.len() == scipy_counts.len() {
+                if let Some(scipy_counts) = &scipy_arm.counts
+                    && rust_counts.len() == scipy_counts.len() {
                         let mut max_local = 0.0_f64;
                         for (r, s) in rust_counts.iter().zip(scipy_counts.iter()) {
                             let abs = (*r as i64 - *s).unsigned_abs() as f64;
@@ -286,9 +286,8 @@ fn diff_stats_diff_histogram() {
                             pass: max_local <= ABS_TOL,
                         });
                     }
-                }
-                if let Some(scipy_edges) = &scipy_arm.edges {
-                    if rust_edges.len() == scipy_edges.len() {
+                if let Some(scipy_edges) = &scipy_arm.edges
+                    && rust_edges.len() == scipy_edges.len() {
                         let mut max_local = 0.0_f64;
                         for (r, s) in rust_edges.iter().zip(scipy_edges.iter()) {
                             if r.is_finite() {
@@ -303,7 +302,6 @@ fn diff_stats_diff_histogram() {
                             pass: max_local <= ABS_TOL,
                         });
                     }
-                }
             }
             _ => continue,
         }

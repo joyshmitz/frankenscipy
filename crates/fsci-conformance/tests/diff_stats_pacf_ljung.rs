@@ -302,8 +302,8 @@ fn diff_stats_pacf_ljung() {
 
         // ljung_box
         let (rust_q, rust_p) = ljung_box(&case.data, case.max_lag as usize);
-        if let Some(scipy_q) = scipy_arm.ljung_q {
-            if rust_q.is_finite() {
+        if let Some(scipy_q) = scipy_arm.ljung_q
+            && rust_q.is_finite() {
                 let abs_diff = (rust_q - scipy_q).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -313,9 +313,8 @@ fn diff_stats_pacf_ljung() {
                     pass: abs_diff <= ABS_TOL,
                 });
             }
-        }
-        if let Some(scipy_p) = scipy_arm.ljung_p {
-            if rust_p.is_finite() {
+        if let Some(scipy_p) = scipy_arm.ljung_p
+            && rust_p.is_finite() {
                 let abs_diff = (rust_p - scipy_p).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -325,7 +324,6 @@ fn diff_stats_pacf_ljung() {
                     pass: abs_diff <= ABS_TOL,
                 });
             }
-        }
     }
 
     let all_pass = diffs.iter().all(|d| d.pass);

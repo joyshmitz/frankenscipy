@@ -358,8 +358,8 @@ fn diff_spatial_squareform() {
         }
 
         // squareform_to_matrix (round-trip on the condensed)
-        if let Some(scipy_mat) = scipy_arm.matrix.as_ref() {
-            if let Ok(rust_cond) = squareform_to_condensed(&case.matrix) {
+        if let Some(scipy_mat) = scipy_arm.matrix.as_ref()
+            && let Ok(rust_cond) = squareform_to_condensed(&case.matrix) {
                 match squareform_to_matrix(&rust_cond) {
                     Ok(rust_mat) => {
                         let pass = rust_mat.len() == scipy_mat.len()
@@ -384,7 +384,6 @@ fn diff_spatial_squareform() {
                     }),
                 }
             }
-        }
 
         // num_obs_dm
         if let Some(scipy_n) = scipy_arm.num_obs_dm {
@@ -398,8 +397,8 @@ fn diff_spatial_squareform() {
         }
 
         // num_obs_y
-        if let Some(scipy_n) = scipy_arm.num_obs_y {
-            if let Ok(rust_cond) = squareform_to_condensed(&case.matrix) {
+        if let Some(scipy_n) = scipy_arm.num_obs_y
+            && let Ok(rust_cond) = squareform_to_condensed(&case.matrix) {
                 let rust_n = num_obs_y(&rust_cond) as i64;
                 cases.push(CaseDiff {
                     case_id: case.case_id.clone(),
@@ -408,7 +407,6 @@ fn diff_spatial_squareform() {
                     detail: format!("rust={rust_n}, scipy={scipy_n}"),
                 });
             }
-        }
 
         // is_valid_dm — both should agree (true on valid fixtures).
         if let Some(scipy_b) = scipy_arm.is_valid_dm {
@@ -422,8 +420,8 @@ fn diff_spatial_squareform() {
         }
 
         // is_valid_y — both should agree on the condensed form.
-        if let Some(scipy_b) = scipy_arm.is_valid_y {
-            if let Ok(rust_cond) = squareform_to_condensed(&case.matrix) {
+        if let Some(scipy_b) = scipy_arm.is_valid_y
+            && let Ok(rust_cond) = squareform_to_condensed(&case.matrix) {
                 let rust_b = is_valid_y(&rust_cond);
                 cases.push(CaseDiff {
                     case_id: case.case_id.clone(),
@@ -432,7 +430,6 @@ fn diff_spatial_squareform() {
                     detail: format!("rust={rust_b}, scipy={scipy_b}"),
                 });
             }
-        }
     }
 
     for case in &query.invalid_dms {

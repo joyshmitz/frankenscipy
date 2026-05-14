@@ -251,8 +251,8 @@ fn diff_stats_quantile_test() {
                 pass: abs_diff <= PVAL_TOL,
             });
         }
-        if let Some(scipy_p) = scipy_arm.pvalue {
-            if result.pvalue.is_finite() {
+        if let Some(scipy_p) = scipy_arm.pvalue
+            && result.pvalue.is_finite() {
                 let abs_diff = (result.pvalue - scipy_p).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -262,7 +262,6 @@ fn diff_stats_quantile_test() {
                     pass: abs_diff <= PVAL_TOL,
                 });
             }
-        }
     }
 
     let all_pass = diffs.iter().all(|d| d.pass);

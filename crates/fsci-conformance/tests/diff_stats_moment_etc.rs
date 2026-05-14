@@ -292,8 +292,8 @@ fn diff_stats_moment_etc() {
             }
             "idealfourths" => {
                 let (rust_lo, rust_hi) = idealfourths(&case.data);
-                if let Some(scipy_lo) = scipy_arm.qlo {
-                    if rust_lo.is_finite() {
+                if let Some(scipy_lo) = scipy_arm.qlo
+                    && rust_lo.is_finite() {
                         let abs_diff = (rust_lo - scipy_lo).abs();
                         max_overall = max_overall.max(abs_diff);
                         diffs.push(CaseDiff {
@@ -304,9 +304,8 @@ fn diff_stats_moment_etc() {
                             pass: abs_diff <= ABS_TOL,
                         });
                     }
-                }
-                if let Some(scipy_hi) = scipy_arm.qup {
-                    if rust_hi.is_finite() {
+                if let Some(scipy_hi) = scipy_arm.qup
+                    && rust_hi.is_finite() {
                         let abs_diff = (rust_hi - scipy_hi).abs();
                         max_overall = max_overall.max(abs_diff);
                         diffs.push(CaseDiff {
@@ -317,7 +316,6 @@ fn diff_stats_moment_etc() {
                             pass: abs_diff <= ABS_TOL,
                         });
                     }
-                }
             }
             _ => {}
         }

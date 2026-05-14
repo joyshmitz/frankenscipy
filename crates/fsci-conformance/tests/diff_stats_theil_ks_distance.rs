@@ -314,8 +314,8 @@ fn diff_stats_theil_ks_distance() {
         match case.func.as_str() {
             "theil_sen" => {
                 let (rs, ri) = theil_sen(&case.x, &case.y);
-                if let Some(scipy_s) = scipy_arm.slope {
-                    if rs.is_finite() {
+                if let Some(scipy_s) = scipy_arm.slope
+                    && rs.is_finite() {
                         let abs_diff = (rs - scipy_s).abs();
                         max_overall = max_overall.max(abs_diff);
                         diffs.push(CaseDiff {
@@ -326,9 +326,8 @@ fn diff_stats_theil_ks_distance() {
                             pass: abs_diff <= ABS_TOL,
                         });
                     }
-                }
-                if let Some(scipy_i) = scipy_arm.intercept {
-                    if ri.is_finite() {
+                if let Some(scipy_i) = scipy_arm.intercept
+                    && ri.is_finite() {
                         let abs_diff = (ri - scipy_i).abs();
                         max_overall = max_overall.max(abs_diff);
                         diffs.push(CaseDiff {
@@ -339,12 +338,11 @@ fn diff_stats_theil_ks_distance() {
                             pass: abs_diff <= ABS_TOL,
                         });
                     }
-                }
             }
             "ks_distance" => {
                 let rd = ks_distance(&case.x, &cdf_norm);
-                if let Some(scipy_d) = scipy_arm.distance {
-                    if rd.is_finite() {
+                if let Some(scipy_d) = scipy_arm.distance
+                    && rd.is_finite() {
                         let abs_diff = (rd - scipy_d).abs();
                         max_overall = max_overall.max(abs_diff);
                         diffs.push(CaseDiff {
@@ -355,7 +353,6 @@ fn diff_stats_theil_ks_distance() {
                             pass: abs_diff <= ABS_TOL,
                         });
                     }
-                }
             }
             _ => {}
         }

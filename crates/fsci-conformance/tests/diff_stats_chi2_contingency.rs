@@ -251,8 +251,8 @@ fn diff_stats_chi2_contingency() {
         let scipy_arm = pmap.get(&case.case_id).expect("validated oracle");
         let result = chi2_contingency(&case.table, case.correction);
 
-        if let Some(scipy_stat) = scipy_arm.statistic {
-            if result.statistic.is_finite() {
+        if let Some(scipy_stat) = scipy_arm.statistic
+            && result.statistic.is_finite() {
                 let abs_diff = (result.statistic - scipy_stat).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -262,9 +262,8 @@ fn diff_stats_chi2_contingency() {
                     pass: abs_diff <= ABS_TOL,
                 });
             }
-        }
-        if let Some(scipy_p) = scipy_arm.pvalue {
-            if result.pvalue.is_finite() {
+        if let Some(scipy_p) = scipy_arm.pvalue
+            && result.pvalue.is_finite() {
                 let abs_diff = (result.pvalue - scipy_p).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -274,7 +273,6 @@ fn diff_stats_chi2_contingency() {
                     pass: abs_diff <= ABS_TOL,
                 });
             }
-        }
         if let Some(scipy_dof) = scipy_arm.dof {
             let abs_diff = (result.dof as i64 - scipy_dof).unsigned_abs() as f64;
             max_overall = max_overall.max(abs_diff);

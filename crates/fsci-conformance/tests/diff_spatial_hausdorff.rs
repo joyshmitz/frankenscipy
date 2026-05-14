@@ -242,8 +242,8 @@ fn diff_spatial_hausdorff() {
     for case in &query.points {
         let scipy_arm = pmap.get(&case.case_id).expect("validated oracle");
 
-        if let Some(scipy_ab) = scipy_arm.directed_ab {
-            if let Ok(rust_ab) = directed_hausdorff(&case.xa, &case.xb) {
+        if let Some(scipy_ab) = scipy_arm.directed_ab
+            && let Ok(rust_ab) = directed_hausdorff(&case.xa, &case.xb) {
                 let abs_diff = (rust_ab - scipy_ab).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -255,10 +255,9 @@ fn diff_spatial_hausdorff() {
                     pass: abs_diff <= ABS_TOL,
                 });
             }
-        }
 
-        if let Some(scipy_sym) = scipy_arm.symmetric {
-            if let Ok(rust_sym) = hausdorff_distance(&case.xa, &case.xb) {
+        if let Some(scipy_sym) = scipy_arm.symmetric
+            && let Ok(rust_sym) = hausdorff_distance(&case.xa, &case.xb) {
                 let abs_diff = (rust_sym - scipy_sym).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -270,7 +269,6 @@ fn diff_spatial_hausdorff() {
                     pass: abs_diff <= ABS_TOL,
                 });
             }
-        }
     }
 
     let all_pass = diffs.iter().all(|d| d.pass);

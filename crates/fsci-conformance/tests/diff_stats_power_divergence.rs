@@ -255,8 +255,8 @@ fn diff_stats_power_divergence() {
         let f_exp_ref: Option<&[f64]> = case.f_exp.as_deref();
         let (rust_stat, rust_p) = power_divergence(&case.f_obs, f_exp_ref, case.lambda_);
 
-        if let Some(s_stat) = scipy_arm.statistic {
-            if rust_stat.is_finite() {
+        if let Some(s_stat) = scipy_arm.statistic
+            && rust_stat.is_finite() {
                 let abs_diff = (rust_stat - s_stat).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -266,9 +266,8 @@ fn diff_stats_power_divergence() {
                     pass: abs_diff <= ABS_TOL,
                 });
             }
-        }
-        if let Some(s_p) = scipy_arm.pvalue {
-            if rust_p.is_finite() {
+        if let Some(s_p) = scipy_arm.pvalue
+            && rust_p.is_finite() {
                 let abs_diff = (rust_p - s_p).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -278,7 +277,6 @@ fn diff_stats_power_divergence() {
                     pass: abs_diff <= ABS_TOL,
                 });
             }
-        }
     }
 
     let all_pass = diffs.iter().all(|d| d.pass);

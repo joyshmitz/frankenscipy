@@ -234,8 +234,8 @@ fn diff_special_bessel_zeros() {
 
     for case in &query.points {
         let oracle = pmap.get(&case.case_id).expect("validated oracle");
-        if let Some(scipy_zs) = oracle.values.as_ref() {
-            if let Some(rust_zs) = fsci_eval(&case.func, case.n, case.k) {
+        if let Some(scipy_zs) = oracle.values.as_ref()
+            && let Some(rust_zs) = fsci_eval(&case.func, case.n, case.k) {
                 if rust_zs.len() != scipy_zs.len() {
                     diffs.push(CaseDiff {
                         case_id: case.case_id.clone(),
@@ -258,7 +258,6 @@ fn diff_special_bessel_zeros() {
                     pass: max_abs <= ABS_TOL,
                 });
             }
-        }
     }
 
     let all_pass = diffs.iter().all(|d| d.pass);

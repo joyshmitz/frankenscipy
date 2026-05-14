@@ -237,8 +237,8 @@ fn diff_stats_ansari() {
         let scipy_arm = pmap.get(&case.case_id).expect("validated oracle");
         let result = ansari_alternative(&case.x, &case.y, &case.alternative);
 
-        if let Some(scipy_stat) = scipy_arm.statistic {
-            if result.statistic.is_finite() {
+        if let Some(scipy_stat) = scipy_arm.statistic
+            && result.statistic.is_finite() {
                 let abs_diff = (result.statistic - scipy_stat).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -248,9 +248,8 @@ fn diff_stats_ansari() {
                     pass: abs_diff <= ABS_TOL,
                 });
             }
-        }
-        if let Some(scipy_p) = scipy_arm.pvalue {
-            if result.pvalue.is_finite() {
+        if let Some(scipy_p) = scipy_arm.pvalue
+            && result.pvalue.is_finite() {
                 let abs_diff = (result.pvalue - scipy_p).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -260,7 +259,6 @@ fn diff_stats_ansari() {
                     pass: abs_diff <= ABS_TOL,
                 });
             }
-        }
     }
 
     let all_pass = diffs.iter().all(|d| d.pass);

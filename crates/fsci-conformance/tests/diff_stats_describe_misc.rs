@@ -320,8 +320,8 @@ fn diff_stats_describe_misc() {
                     ("kurtosis", scipy_arm.kurtosis, Some(r.kurtosis)),
                 ];
                 for (arm_name, scipy_v, rust_v) in arms {
-                    if let (Some(scipy_v), Some(rust_v)) = (scipy_v, rust_v) {
-                        if rust_v.is_finite() {
+                    if let (Some(scipy_v), Some(rust_v)) = (scipy_v, rust_v)
+                        && rust_v.is_finite() {
                             let abs_diff = (rust_v - scipy_v).abs();
                             max_overall = max_overall.max(abs_diff);
                             diffs.push(CaseDiff {
@@ -331,7 +331,6 @@ fn diff_stats_describe_misc() {
                                 pass: abs_diff <= ABS_TOL,
                             });
                         }
-                    }
                 }
             }
             "gstd" => {

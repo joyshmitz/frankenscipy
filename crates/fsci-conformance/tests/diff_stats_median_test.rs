@@ -253,8 +253,8 @@ fn diff_stats_median_test() {
         ];
 
         for (arm_name, scipy_v, rust_v) in arms {
-            if let Some(scipy_v) = scipy_v {
-                if rust_v.is_finite() {
+            if let Some(scipy_v) = scipy_v
+                && rust_v.is_finite() {
                     let abs_diff = (rust_v - scipy_v).abs();
                     max_overall = max_overall.max(abs_diff);
                     diffs.push(CaseDiff {
@@ -264,7 +264,6 @@ fn diff_stats_median_test() {
                         pass: abs_diff <= ABS_TOL,
                     });
                 }
-            }
         }
     }
 

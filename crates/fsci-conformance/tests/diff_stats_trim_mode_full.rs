@@ -331,8 +331,8 @@ fn diff_stats_trim_mode_full() {
             }
             "mode_full" => {
                 let r = mode_full(&case.data);
-                if let Some(s_mode) = scipy_arm.mode {
-                    if r.mode.is_finite() {
+                if let Some(s_mode) = scipy_arm.mode
+                    && r.mode.is_finite() {
                         let abs_diff = (r.mode - s_mode).abs();
                         max_overall = max_overall.max(abs_diff);
                         diffs.push(CaseDiff {
@@ -342,7 +342,6 @@ fn diff_stats_trim_mode_full() {
                             pass: abs_diff <= ABS_TOL,
                         });
                     }
-                }
                 if let Some(s_count) = scipy_arm.count {
                     let abs_diff = (r.count as i64 - s_count).unsigned_abs() as f64;
                     max_overall = max_overall.max(abs_diff);

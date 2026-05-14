@@ -258,8 +258,8 @@ fn diff_stats_sigmaclip() {
                 pass: abs_diff <= ABS_TOL,
             });
         }
-        if let Some(scipy_lo) = scipy_arm.lower {
-            if result.lower.is_finite() {
+        if let Some(scipy_lo) = scipy_arm.lower
+            && result.lower.is_finite() {
                 let abs_diff = (result.lower - scipy_lo).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -269,9 +269,8 @@ fn diff_stats_sigmaclip() {
                     pass: abs_diff <= ABS_TOL,
                 });
             }
-        }
-        if let Some(scipy_hi) = scipy_arm.upper {
-            if result.upper.is_finite() {
+        if let Some(scipy_hi) = scipy_arm.upper
+            && result.upper.is_finite() {
                 let abs_diff = (result.upper - scipy_hi).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -281,7 +280,6 @@ fn diff_stats_sigmaclip() {
                     pass: abs_diff <= ABS_TOL,
                 });
             }
-        }
     }
 
     let all_pass = diffs.iter().all(|d| d.pass);

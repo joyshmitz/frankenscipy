@@ -258,8 +258,8 @@ fn diff_stats_runs_test() {
                 pass: abs_diff <= STAT_TOL,
             });
         }
-        if let Some(scipy_z) = scipy_arm.z {
-            if rust_z.is_finite() {
+        if let Some(scipy_z) = scipy_arm.z
+            && rust_z.is_finite() {
                 let abs_diff = (rust_z - scipy_z).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -269,9 +269,8 @@ fn diff_stats_runs_test() {
                     pass: abs_diff <= STAT_TOL,
                 });
             }
-        }
-        if let Some(scipy_p) = scipy_arm.pvalue {
-            if rust_p.is_finite() {
+        if let Some(scipy_p) = scipy_arm.pvalue
+            && rust_p.is_finite() {
                 let abs_diff = (rust_p - scipy_p).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -281,7 +280,6 @@ fn diff_stats_runs_test() {
                     pass: abs_diff <= PVALUE_TOL,
                 });
             }
-        }
     }
 
     let all_pass = diffs.iter().all(|d| d.pass);

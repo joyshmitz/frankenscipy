@@ -254,8 +254,8 @@ fn diff_special_bessel() {
 
     for case in &query.points {
         let oracle = pmap.get(&case.case_id).expect("validated oracle");
-        if let Some(scipy_v) = oracle.value {
-            if let Some(rust_v) = fsci_eval(&case.func, case.x) {
+        if let Some(scipy_v) = oracle.value
+            && let Some(rust_v) = fsci_eval(&case.func, case.x) {
                 let d = (rust_v - scipy_v).abs();
                 max_overall = max_overall.max(d);
                 diffs.push(CaseDiff {
@@ -265,7 +265,6 @@ fn diff_special_bessel() {
                     pass: d <= ABS_TOL,
                 });
             }
-        }
     }
 
     let all_pass = diffs.iter().all(|d| d.pass);

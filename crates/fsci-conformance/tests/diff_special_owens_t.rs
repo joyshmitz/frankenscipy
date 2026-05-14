@@ -215,8 +215,8 @@ fn diff_special_owens_t() {
 
     for case in &query.points {
         let oracle = pmap.get(&case.case_id).expect("validated oracle");
-        if let Some(scipy_v) = oracle.value {
-            if let Some(rust_v) = fsci_eval(case.h, case.a) {
+        if let Some(scipy_v) = oracle.value
+            && let Some(rust_v) = fsci_eval(case.h, case.a) {
                 let abs_diff = (rust_v - scipy_v).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -225,7 +225,6 @@ fn diff_special_owens_t() {
                     pass: abs_diff <= ABS_TOL,
                 });
             }
-        }
     }
 
     let all_pass = diffs.iter().all(|d| d.pass);

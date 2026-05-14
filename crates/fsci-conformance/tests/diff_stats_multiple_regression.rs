@@ -284,8 +284,8 @@ fn diff_stats_multiple_regression() {
             multiple_regression(&case.x, &case.y);
 
         // coeffs vector
-        if let Some(scipy_coeffs) = &scipy_arm.coeffs {
-            if rust_coeffs.len() == scipy_coeffs.len() {
+        if let Some(scipy_coeffs) = &scipy_arm.coeffs
+            && rust_coeffs.len() == scipy_coeffs.len() {
                 let mut max_local = 0.0_f64;
                 for (a, b) in rust_coeffs.iter().zip(scipy_coeffs.iter()) {
                     if a.is_finite() {
@@ -300,11 +300,10 @@ fn diff_stats_multiple_regression() {
                     pass: max_local <= ABS_TOL,
                 });
             }
-        }
 
         // r_squared
-        if let Some(scipy_r2) = scipy_arm.r_squared {
-            if rust_r2.is_finite() {
+        if let Some(scipy_r2) = scipy_arm.r_squared
+            && rust_r2.is_finite() {
                 let abs_diff = (rust_r2 - scipy_r2).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -314,11 +313,10 @@ fn diff_stats_multiple_regression() {
                     pass: abs_diff <= ABS_TOL,
                 });
             }
-        }
 
         // residuals (vector)
-        if let Some(scipy_resid) = &scipy_arm.residuals {
-            if rust_resid.len() == scipy_resid.len() {
+        if let Some(scipy_resid) = &scipy_arm.residuals
+            && rust_resid.len() == scipy_resid.len() {
                 let mut max_local = 0.0_f64;
                 for (a, b) in rust_resid.iter().zip(scipy_resid.iter()) {
                     if a.is_finite() {
@@ -333,11 +331,10 @@ fn diff_stats_multiple_regression() {
                     pass: max_local <= ABS_TOL,
                 });
             }
-        }
 
         // std_errors (vector)
-        if let Some(scipy_se) = &scipy_arm.std_errors {
-            if rust_se.len() == scipy_se.len() {
+        if let Some(scipy_se) = &scipy_arm.std_errors
+            && rust_se.len() == scipy_se.len() {
                 let mut max_local = 0.0_f64;
                 for (a, b) in rust_se.iter().zip(scipy_se.iter()) {
                     if a.is_finite() {
@@ -352,7 +349,6 @@ fn diff_stats_multiple_regression() {
                     pass: max_local <= ABS_TOL,
                 });
             }
-        }
     }
 
     let all_pass = diffs.iter().all(|d| d.pass);

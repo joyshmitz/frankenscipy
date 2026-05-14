@@ -277,8 +277,8 @@ fn diff_stats_anderson_ksamp_variants() {
             Err(_) => continue,
         };
 
-        if let Some(scipy_stat) = scipy_arm.statistic {
-            if result.statistic.is_finite() {
+        if let Some(scipy_stat) = scipy_arm.statistic
+            && result.statistic.is_finite() {
                 let abs_diff = (result.statistic - scipy_stat).abs();
                 max_overall = max_overall.max(abs_diff);
                 diffs.push(CaseDiff {
@@ -288,7 +288,6 @@ fn diff_stats_anderson_ksamp_variants() {
                     pass: abs_diff <= STAT_TOL,
                 });
             }
-        }
         if let Some(scipy_crit) = &scipy_arm.critical_values {
             for (idx, &scipy_v) in scipy_crit.iter().enumerate() {
                 if idx >= result.critical_values.len() {
