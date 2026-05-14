@@ -14,12 +14,13 @@
 //!   - statistic : 1e-12 abs (closed-form sum of squared
 //!     deviations from the empirical CDF — matches scipy's
 //!     formulation exactly modulo accumulator rounding).
-//!   - pvalue    : 1e-2 abs. fsci's `cvm_cdf` uses the
-//!     asymptotic Bessel-K series for ALL n; scipy applies a
-//!     Csörgő-Faraway finite-sample correction at small n.
-//!     The two diverge by up to ~7.6e-3 at n=14. Tracked as
-//!     [frankenscipy-4cv67]; tighten back to 1e-9 once the
-//!     finite-sample correction lands.
+//!   - pvalue    : 1e-5 abs. After 4cv67 landed the Csörgő-Faraway
+//!     finite-sample correction via _psi1_mod, the conformance diff
+//!     against scipy drops to ~3e-6 max on the 4-dataset grid. The
+//!     remaining gap is the asymptotic Bessel-K series tail (still
+//!     used for the asymptotic regime, dominated at n ≥ 50); the
+//!     lib unit test cramervonmises_pvalue_matches_scipy_across_n
+//!     anchors that path at 1e-6 across n ∈ {5, 6, 10, 14}.
 
 use std::collections::HashMap;
 use std::fs;
@@ -33,7 +34,7 @@ use serde::{Deserialize, Serialize};
 
 const PACKET_ID: &str = "FSCI-P2C-007";
 const STAT_TOL: f64 = 1.0e-12;
-const PVALUE_TOL: f64 = 1.0e-2;
+const PVALUE_TOL: f64 = 1.0e-5;
 const REQUIRE_SCIPY_ENV: &str = "FSCI_REQUIRE_SCIPY_ORACLE";
 
 #[derive(Debug, Clone, Serialize)]
