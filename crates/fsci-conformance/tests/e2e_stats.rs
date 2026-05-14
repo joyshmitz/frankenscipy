@@ -1256,8 +1256,12 @@ fn e2e_011_closed_form_moments() {
 
     let t = Instant::now();
     let gen_half = GenHalfLogistic::new(2.0);
-    let pass = (gen_half.mean() - 0.306_852_819_440_054_7).abs() < 1e-9
-        && (gen_half.var() - 0.233_700_550_136_169_83).abs() < 1e-9
+    // Re-anchored to scipy.stats.genhalflogistic(c=2): mean = 2·ln 2 − 1,
+    // var follows from numerical integration on x∈[0,1/c]. The earlier
+    // 0.3068528 / 0.2337006 anchors came from the pre-fix (ψ(1/c+1)+γ)/c
+    // formula (frankenscipy-viybt).
+    let pass = (gen_half.mean() - 0.386_294_361_119_890_6).abs() < 1e-9
+        && (gen_half.var() - 0.017_443_333_233_642_28).abs() < 1e-9
         && gen_half.pdf(0.1).is_finite()
         && (0.0..=1.0).contains(&gen_half.cdf(0.1));
     if !pass {
