@@ -22,7 +22,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use fsci_runtime::RuntimeMode;
 use fsci_special::types::SpecialTensor;
-use fsci_special::{ellipe, ellipk};
+use fsci_special::{ellipe, ellipk, ellipkm1};
 use serde::{Deserialize, Serialize};
 
 const PACKET_ID: &str = "FSCI-P2C-007";
@@ -98,6 +98,7 @@ fn fsci_eval(func: &str, m: f64) -> Option<f64> {
     let result = match func {
         "ellipk" => ellipk(&arg, RuntimeMode::Strict),
         "ellipe" => ellipe(&arg, RuntimeMode::Strict),
+        "ellipkm1" => ellipkm1(&arg, RuntimeMode::Strict),
         _ => return None,
     };
     match result {
@@ -144,6 +145,17 @@ fn generate_query() -> OracleQuery {
             m,
         });
     }
+    // ellipkm1(p) = K(1 − p) — probes the near-m=1 regime where direct
+    // ellipk(m) suffers catastrophic cancellation. m here plays the role
+    // of `p` (the small offset from 1).
+    let ellipkm1_ps: &[f64] = &[1e-10, 1e-6, 1e-3, 0.01, 0.1, 0.5, 0.9, 0.99];
+    for &p in ellipkm1_ps {
+        points.push(PointCase {
+            case_id: format!("ellipkm1_p{p}"),
+            func: "ellipkm1".into(),
+            m: p,
+        });
+    }
     OracleQuery { points }
 }
 
@@ -169,6 +181,7 @@ for case in q["points"]:
     try:
         if func == "ellipk":   value = special.ellipk(m)
         elif func == "ellipe": value = special.ellipe(m)
+        elif func == "ellipkm1": value = special.ellipkm1(m)
         else: value = None
         points.append({"case_id": cid, "value": finite_or_none(value)})
     except Exception:
