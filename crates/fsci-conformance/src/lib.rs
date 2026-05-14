@@ -175,7 +175,7 @@ use std::io;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
@@ -10268,6 +10268,16 @@ pub fn load_packet_reports(config: &HarnessConfig) -> Result<Vec<PacketReport>, 
     Ok(reports)
 }
 
+/// Serializes concurrent writers of the parity-report triple
+/// (parity_report.json + .raptorq.json + .decode_proof.json) so that
+/// multi-test runs targeting the same packet output dir cannot
+/// interleave their writes and leave the sidecar pointing at a hash
+/// that no longer matches the on-disk report (frankenscipy-prngc).
+fn packet_report_write_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
 fn write_packet_report_artifacts(
     output_dir: &Path,
     report: &PacketReport,
@@ -10276,6 +10286,14 @@ fn write_packet_report_artifacts(
         path: output_dir.to_path_buf(),
         source,
     })?;
+
+    // Hold the global writer mutex for the duration of the report +
+    // sidecar + decode-proof writes so the trio is always coherent
+    // even when cargo test schedules many P2C-* differential tests in
+    // parallel against the same output dir.
+    let _guard = packet_report_write_lock()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
 
     let report_path = output_dir.join("parity_report.json");
     // /testing-golden-artifacts for [frankenscipy-okuhi]: stability —
