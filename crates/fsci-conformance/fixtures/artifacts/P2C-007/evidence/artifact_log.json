@@ -2,109 +2,109 @@
   {
     "artifact_name": "fixture_manifest.json",
     "size_bytes": 8712,
-    "blake3_hash": "4b345503143da7a8e8ff3b9aad0a62a315bc42247724de7b7ac6b7fbe77e60e6",
-    "timestamp": "unix:1778734437"
+    "blake3_hash": "fcf575176d6814bd911cb37231c02a44e554083550ee9f92ef0702c7bd98b39d",
+    "timestamp": "unix:1778816283"
   },
   {
     "artifact_name": "parity_gates.json",
     "size_bytes": 13122,
     "blake3_hash": "fe04b09e0f2015a97a4831882a9a53092c6e5375bb3894a6995a804873a647bd",
-    "timestamp": "unix:1778734437"
+    "timestamp": "unix:1778816283"
   },
   {
     "artifact_name": "risk_notes.json",
     "size_bytes": 1583,
     "blake3_hash": "ead92f387e191c4598143261eaf7f3a566900c9dcbe1f28cedf81533f104b8c3",
-    "timestamp": "unix:1778734437"
+    "timestamp": "unix:1778816283"
   },
   {
     "artifact_name": "parity_report.json",
     "size_bytes": 646,
     "blake3_hash": "749eae6c91d3b78db7f8ec5d56e6d89ce58f199139273fde0b4a6407201178e0",
-    "timestamp": "unix:1778734437"
+    "timestamp": "unix:1778816283"
   },
   {
     "artifact_name": "fixture_log.json",
     "size_bytes": 5388,
     "blake3_hash": "e78411d2cf1b9ec2d52094ac820b1399e9f52dba4ef998e66fb1a09729f601e6",
-    "timestamp": "unix:1778734437"
+    "timestamp": "unix:1778816283"
   },
   {
     "artifact_name": "evidence_bundle.json",
     "size_bytes": 25862,
-    "blake3_hash": "04066de7500764eedbac2a71096308792b59557feecd8398618fb87ccded9c06",
-    "timestamp": "unix:1778734437"
+    "blake3_hash": "024f5a3c4c2160a2a0290f44ffe916a25461f863e07918a389351be7286d5720",
+    "timestamp": "unix:1778816283"
   },
   {
     "artifact_name": "fixture_manifest.raptorq.json",
     "size_bytes": 4634,
-    "blake3_hash": "f99c5257a3a3a3065953168e8381208c272f4c584794183c9e5902c099d263aa",
-    "timestamp": "unix:1778734437"
+    "blake3_hash": "6357b8009a8dccfed29b785a1ba7124896a0c825755c8ddf7b1f6963bfd3b066",
+    "timestamp": "unix:1778816283"
   },
   {
     "artifact_name": "fixture_manifest.decode_proof.json",
     "size_bytes": 204,
-    "blake3_hash": "0065facb31703e67c85db17e7ac1d9db79b5c3502edcc97fb5ad31f5fc94994a",
-    "timestamp": "unix:1778734437"
+    "blake3_hash": "7c3a35a140983079a18706e287e8e3fd3d71c77698d56c1c5e44d025fb97610e",
+    "timestamp": "unix:1778816283"
   },
   {
     "artifact_name": "parity_gates.raptorq.json",
     "size_bytes": 6987,
     "blake3_hash": "fe8554efebd69d8dd0421003fa59d24889008bbee2c27d806a43d54be5b141e7",
-    "timestamp": "unix:1778734437"
+    "timestamp": "unix:1778816284"
   },
   {
     "artifact_name": "parity_gates.decode_proof.json",
     "size_bytes": 204,
-    "blake3_hash": "08d783884ad32c7cc546e4f7a1ea059e82bcb5985f83475121e7e6bff81a3a50",
-    "timestamp": "unix:1778734437"
+    "blake3_hash": "e8d862b44a8e2503b9d0ffacde0959c6dbf78d3df0b5293d3f822bd396410943",
+    "timestamp": "unix:1778816284"
   },
   {
     "artifact_name": "risk_notes.raptorq.json",
     "size_bytes": 937,
     "blake3_hash": "f751246a96f370e0f3fc42ba6dbb8e95c5e08ef2f7ac3475cc17c55b6becc817",
-    "timestamp": "unix:1778734437"
+    "timestamp": "unix:1778816284"
   },
   {
     "artifact_name": "risk_notes.decode_proof.json",
     "size_bytes": 204,
-    "blake3_hash": "41292563692df8f32cd071afb627e37e86af9aa0542520d68340cdfe00a0bce4",
-    "timestamp": "unix:1778734437"
+    "blake3_hash": "ef6cf63e550adee2b3a2ec351843559af8e64136c1f7732e97ca3958fa6452de",
+    "timestamp": "unix:1778816284"
   },
   {
     "artifact_name": "parity_report.raptorq.json",
     "size_bytes": 600,
     "blake3_hash": "49d6edea6d48cad9f80428682bda7183c59a07349f59813c3ba40d31637b53f0",
-    "timestamp": "unix:1778734437"
+    "timestamp": "unix:1778816284"
   },
   {
     "artifact_name": "parity_report.decode_proof.json",
     "size_bytes": 204,
-    "blake3_hash": "ed2ef09965940d36404e0ad3b67b65ad07bca36284b800b17cbdaf5270eca97b",
-    "timestamp": "unix:1778734437"
+    "blake3_hash": "b52f8779978e01e12eb3cf5cdea62f93f4c2eb8e9c70735c4a2f758ea9f98bfa",
+    "timestamp": "unix:1778816284"
   },
   {
     "artifact_name": "fixture_log.raptorq.json",
     "size_bytes": 2953,
     "blake3_hash": "49ef974cc01d2494b037e358a6d27fa123b95894780473a1b843deebbbf4d500",
-    "timestamp": "unix:1778734437"
+    "timestamp": "unix:1778816284"
   },
   {
     "artifact_name": "fixture_log.decode_proof.json",
     "size_bytes": 204,
-    "blake3_hash": "2f7269aa9fb5ec30ccf5f72e39b758d2bed7f282ed40615dca21c574964f6ac0",
-    "timestamp": "unix:1778734437"
+    "blake3_hash": "eff0d88434f911f31003a859082014020ceda91eb9436145675a62bb89617dea",
+    "timestamp": "unix:1778816284"
   },
   {
     "artifact_name": "evidence_bundle.raptorq.json",
     "size_bytes": 13707,
-    "blake3_hash": "49845e2c7c62e7bf352195c521d01296eafd202a1c8e2cc1dabb69c40882e797",
-    "timestamp": "unix:1778734437"
+    "blake3_hash": "02e6fc5bf59d76a8c6dfd7b5204da4637ff10fd239fa9809de4bf2cb4b05d40a",
+    "timestamp": "unix:1778816284"
   },
   {
     "artifact_name": "evidence_bundle.decode_proof.json",
     "size_bytes": 204,
-    "blake3_hash": "99d9d17f067c470317c1bc216ac0c58fa0c52ccda0e4a13b0500ace5a37963f8",
-    "timestamp": "unix:1778734437"
+    "blake3_hash": "78f6f00dacc91114cdc4d89a974f40c079e723769dfff902f472beefd0de3d61",
+    "timestamp": "unix:1778816284"
   }
 ]
