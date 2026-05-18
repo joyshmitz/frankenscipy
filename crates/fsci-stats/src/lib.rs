@@ -453,17 +453,22 @@ fn sample_standardized_skewness(data: &[f64]) -> f64 {
     }
 }
 
-/// MLE for the shape parameter `c` of the standard Weibull distribution
-/// (scale = 1) on strictly positive data `y_i > 0`. Returns `Err(...)`
-/// if the data is empty, non-finite, non-positive, or numerically unable
-/// to bracket a finite root.
+/// Maximum-likelihood shape `c` for Weibull-shaped data on strictly
+/// positive samples `y_i > 0`. Returns `Err(...)` if the data is empty,
+/// non-finite, non-positive, or numerically unable to bracket a finite
+/// root.
 ///
-/// The MLE solves
-///   g(c) = 1/c + mean(ln y) − Σ y^c ln y / Σ y^c = 0,
-/// monotonically decreasing in `c`. We bracket a sign change on a
-/// logarithmically spaced grid of candidate shapes and refine with the
-/// secant method (no derivative table needed). Caller is responsible
-/// for any sign-mirror or absolute-value transform.
+/// This is the profile-likelihood form of the joint Weibull (c, λ)
+/// MLE: the score equation
+///   g(c) = 1/c + mean(ln y) − Σ y^c ln y / Σ y^c = 0
+/// is the derivative of the log-likelihood with respect to `c` after
+/// profiling out `λ̂(c)^c = (1/n) Σ y^c`, monotonically decreasing in
+/// `c`. The returned `c` is the maximum-likelihood shape for the data
+/// at any scale; the (discarded) scale estimate is `λ̂ = ((1/n) Σ y^c)^{1/c}`.
+/// We bracket a sign change on a logarithmically spaced grid of
+/// candidate shapes and refine with the secant method (with bisection
+/// fallback when the secant step escapes the bracket). Caller is
+/// responsible for any sign-mirror or absolute-value transform.
 fn fit_standard_weibull_shape_mle(
     positive_data: &[f64],
     distribution_label: &str,
