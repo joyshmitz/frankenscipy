@@ -7,11 +7,9 @@
 //!   associated Legendre polynomials P_l^m(x) for x ∈ (-1, 1) and
 //!   l ≤ m_max + n_max. scipy.special.lpmn returns a tuple
 //!   `(Pmn, Pmn_d)`; we use `[0]` (values only).
-//! - `lqmn(m_max, n_max, x)`: standard Q_l (m=0 row) only.
-//!   fsci diverges from scipy.special.lqmn by 1-262 abs for m≥1
-//!   across all x in (-1,1) — likely Legendre vs Ferrer recurrence
-//!   convention mismatch. Defect frankenscipy-5wjc2 filed; harness
-//!   restricted to m_max=0 for lqmn.
+//! - `lqmn(m_max, n_max, x)` returns the (m+1)×(n+1) table of
+//!   associated Legendre functions Q_l^m(x), including SciPy's
+//!   derivative-definition cells where l < m.
 //!
 //! Tolerance: 1e-10 abs.
 
@@ -115,13 +113,12 @@ fn generate_query() -> OracleQuery {
             });
         }
     }
-    // lqmn restricted to m_max=0 (only the standard Q_l row matches scipy)
-    for &n_max in &[3_u32, 5, 7] {
+    for &(m_max, n_max) in dims {
         for &x in &xs {
             points.push(Case {
-                case_id: format!("lqmn_m0_n{n_max}_x{x}"),
+                case_id: format!("lqmn_m{m_max}_n{n_max}_x{x}"),
                 op: "lqmn".into(),
-                m_max: 0,
+                m_max,
                 n_max,
                 x,
             });
@@ -211,7 +208,10 @@ fn vec_max_diff(a: &[f64], b: &[f64]) -> f64 {
     if a.len() != b.len() {
         return f64::INFINITY;
     }
-    a.iter().zip(b.iter()).map(|(x, y)| (x - y).abs()).fold(0.0_f64, f64::max)
+    a.iter()
+        .zip(b.iter())
+        .map(|(x, y)| (x - y).abs())
+        .fold(0.0_f64, f64::max)
 }
 
 #[test]

@@ -23,7 +23,7 @@
 
 use std::f64::consts::PI;
 
-use fsci_linalg::{DecompOptions, eigh};
+use fsci_linalg::{eigh, DecompOptions};
 
 /// Evaluate the Legendre polynomial P_n(x) of degree n at point x.
 ///
@@ -164,10 +164,13 @@ pub fn lqn(n: u32, x: f64) -> (Vec<f64>, Vec<f64>) {
 /// Matches `scipy.special.lqmn(m, n, x)` shape (the values portion).
 /// Returns a `(m_max+1) × (n_max+1)` row-major matrix.
 ///
-/// Algorithm: row 0 is the standard Legendre Q sequence from `lqn`. Row
-/// m (for m ≥ 1) is built from row m−1 using DLMF 14.10.4:
+/// Algorithm: row 0 is the standard Legendre Q sequence from `lqn`. Cells
+/// with `l < m` are seeded from SciPy's derivative definition,
+/// `Q_l^m(x) = (-1)^m (1-x^2)^(m/2) d^m Q_l(x)/dx^m`, then each row
+/// is continued through the standard degree recurrence until the diagonal.
+/// Cells with `l ≥ m` are built from row m−1 using DLMF 14.10.4:
 ///   √(1−x²) · Q_l^m(x) = (l−m+1) x · Q_l^{m−1}(x) − (l+m−1) · Q_{l−1}^{m−1}(x)
-/// for l = m..=n_max. Cells with m > l are zero by convention.
+/// for l = m..=n_max.
 ///
 /// For `|x| ≥ 1` or non-finite `x`, returns NaN-filled arrays — matching
 /// the lqn singular convention (`Q_0(x) = atanh(x)` diverges at the
@@ -195,9 +198,37 @@ pub fn lqmn(m_max: u32, n_max: u32, x: f64) -> Vec<Vec<f64>> {
         // Defensive — shouldn't happen since we already rejected |x| ≥ 1.
         return out;
     }
+    let atanh_derivs = atanh_derivatives(m_max, x);
+    let mut sqrt_power = 1.0_f64;
+
     // Row m for m ≥ 1.
     for m in 1..=m_max {
         let m_idx = m as usize;
+        sqrt_power *= denom;
+        let signed_sqrt_power = if m % 2 == 0 { sqrt_power } else { -sqrt_power };
+
+        // Below the diagonal, scipy.special.lqmn follows the derivative
+        // definition rather than the finite-degree polynomial convention.
+        out[m_idx][0] = signed_sqrt_power * atanh_derivs[m_idx];
+        if cols > 1 {
+            out[m_idx][1] = signed_sqrt_power
+                * (x * atanh_derivs[m_idx] + (m as f64) * atanh_derivs[m_idx - 1]);
+        }
+        if n_max >= 2 {
+            for l_prev in 1..n_max {
+                let l = l_prev + 1;
+                if l >= m {
+                    break;
+                }
+                let l_prev_idx = l_prev as usize;
+                let lf = l_prev as f64;
+                let mf = m as f64;
+                out[m_idx][l as usize] = ((2.0 * lf + 1.0) * x * out[m_idx][l_prev_idx]
+                    - (lf + mf) * out[m_idx][l_prev_idx - 1])
+                    / (lf - mf + 1.0);
+            }
+        }
+
         for l in m..=n_max {
             let l_idx = l as usize;
             let lf = l as f64;
@@ -207,9 +238,47 @@ pub fn lqmn(m_max: u32, n_max: u32, x: f64) -> Vec<Vec<f64>> {
             out[m_idx][l_idx] =
                 ((lf - mf + 1.0) * x * q_l_prev - (lf + mf - 1.0) * q_lm1_prev) / denom;
         }
-        // Cells with l < m remain 0.0 by convention.
     }
     out
+}
+
+fn eval_poly(coeffs: &[f64], x: f64) -> f64 {
+    coeffs.iter().rev().fold(0.0_f64, |acc, &c| acc * x + c)
+}
+
+fn next_atanh_derivative_poly(poly: &[f64], order: usize) -> Vec<f64> {
+    let mut next = vec![0.0_f64; poly.len() + 2];
+    for (degree, &coeff) in poly.iter().enumerate().skip(1) {
+        let derivative_coeff = (degree as f64) * coeff;
+        next[degree - 1] += derivative_coeff;
+        next[degree + 1] -= derivative_coeff;
+    }
+    let scale = 2.0 * (order as f64);
+    for (degree, &coeff) in poly.iter().enumerate() {
+        next[degree + 1] += scale * coeff;
+    }
+    next
+}
+
+fn atanh_derivatives(max_order: u32, x: f64) -> Vec<f64> {
+    let max_order = max_order as usize;
+    let mut derivs = vec![0.0_f64; max_order + 1];
+    derivs[0] = x.atanh();
+    if max_order == 0 {
+        return derivs;
+    }
+
+    let one_minus_xsq = 1.0 - x * x;
+    let mut denom_power = one_minus_xsq;
+    let mut poly = vec![1.0_f64]; // P_1 where d/dx atanh(x) = P_1(x)/(1-x^2).
+    for (order, deriv) in derivs.iter_mut().enumerate().take(max_order + 1).skip(1) {
+        *deriv = eval_poly(&poly, x) / denom_power;
+        if order < max_order {
+            poly = next_atanh_derivative_poly(&poly, order);
+            denom_power *= one_minus_xsq;
+        }
+    }
+    derivs
 }
 
 /// Associated Legendre polynomial array `P_l^m(x)` for `0 ≤ m ≤ m_max` and
@@ -2036,17 +2105,25 @@ mod tests {
     }
 
     #[test]
-    fn lqmn_zeros_below_diagonal() {
-        // Cells with m > l are zero by convention.
-        let arr = lqmn(4, 3, 0.5);
-        for (m, row) in arr.iter().enumerate() {
-            for (l, &cell) in row.iter().enumerate() {
-                if m > l {
-                    assert!(
-                        cell.abs() < 1e-15,
-                        "lqmn[{m}][{l}] should be 0 (m > l), got {cell}"
-                    );
-                }
+    fn lqmn_below_diagonal_matches_scipy_derivative_convention() {
+        let arr = lqmn(3, 3, 0.5);
+        let expected = [
+            [-1.154_700_538_379_251_5, 0.0, 0.0],
+            [1.333_333_333_333_333_3, 2.666_666_666_666_666_5, 0.0],
+            [
+                -5.388_602_512_436_506,
+                -6.158_402_871_356_006,
+                -12.316_805_742_712_011,
+            ],
+        ];
+        for m in 1..=3 {
+            for l in 0..m {
+                assert!(
+                    (arr[m][l] - expected[m - 1][l]).abs() < 1e-12,
+                    "lqmn[{m}][{l}] = {}, expected {}",
+                    arr[m][l],
+                    expected[m - 1][l]
+                );
             }
         }
     }
