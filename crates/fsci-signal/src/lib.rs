@@ -3243,18 +3243,18 @@ pub fn bilinear(b_analog: &[f64], a_analog: &[f64], fs: f64) -> (Vec<f64>, Vec<f
         let mut val_a = 0.0;
         for i in 0..n {
             let k = d - i;
-            // Binomial coefficient C(k, j') and C(d-k, j-j') patterns
+            // Substituting s = 2·fs·(z−1)/(z+1) and clearing the (z+1)^d
+            // denominator sends the analog s^k coefficient to
+            // (2·fs)^k·(z−1)^k·(z+1)^(d−k). `coeff` is the coefficient of
+            // z^(d−j) in (z−1)^k·(z+1)^(d−k): the (z−1)^k factor expands as
+            // Σ C(k, jp)·(−1)^jp·z^(k−jp), so the sign is (−1)^jp.
             let mut coeff = 0.0;
             for jp in 0..=j.min(k) {
                 let rem = j - jp;
                 if rem <= d - k {
                     let c1 = binom_coeff(k, jp);
                     let c2 = binom_coeff(d - k, rem);
-                    let sign = if (d - k - rem).is_multiple_of(2) {
-                        1.0
-                    } else {
-                        -1.0
-                    };
+                    let sign = if jp.is_multiple_of(2) { 1.0 } else { -1.0 };
                     coeff += c1 * c2 * sign;
                 }
             }
@@ -16325,6 +16325,55 @@ mod tests {
                 "digital pole {:?} has |z|={r}, must be < 1",
                 (re, im)
             );
+        }
+    }
+
+    #[test]
+    fn bilinear_matches_scipy_first_order() {
+        // scipy.signal.bilinear([1, 2], [1, 3], fs=2).
+        let (b, a) = bilinear(&[1.0, 2.0], &[1.0, 3.0], 2.0);
+        let want_b = [0.857_142_857_142_857_1, -0.285_714_285_714_285_7];
+        let want_a = [1.0, -0.142_857_142_857_142_85];
+        for (g, w) in b.iter().zip(want_b.iter()) {
+            assert!((g - w).abs() < 1e-12, "b: got {g}, want {w}");
+        }
+        for (g, w) in a.iter().zip(want_a.iter()) {
+            assert!((g - w).abs() < 1e-12, "a: got {g}, want {w}");
+        }
+    }
+
+    #[test]
+    fn bilinear_matches_scipy_higher_order() {
+        // scipy.signal.bilinear([2, 0, 1], [1, 1, 1], fs=4) — 2nd order.
+        let (b, a) = bilinear(&[2.0, 0.0, 1.0], &[1.0, 1.0, 1.0], 4.0);
+        let want_b = [1.767_123_287_671_232_8, -3.479_452_054_794_520_7, 1.767_123_287_671_232_8];
+        let want_a = [1.0, -1.726_027_397_260_274, 0.780_821_917_808_219_2];
+        for (g, w) in b.iter().zip(want_b.iter()) {
+            assert!((g - w).abs() < 1e-12, "b: got {g}, want {w}");
+        }
+        for (g, w) in a.iter().zip(want_a.iter()) {
+            assert!((g - w).abs() < 1e-12, "a: got {g}, want {w}");
+        }
+
+        // scipy.signal.bilinear([1,3,3,1], [1,2,2,1], fs=1) — 3rd order.
+        let (b3, a3) = bilinear(&[1.0, 3.0, 3.0, 1.0], &[1.0, 2.0, 2.0, 1.0], 1.0);
+        let want_b3 = [
+            1.285_714_285_714_285_6,
+            -1.285_714_285_714_286,
+            0.428_571_428_571_428_66,
+            -0.047_619_047_619_047_52,
+        ];
+        let want_a3 = [
+            1.0,
+            -1.190_476_190_476_190_7,
+            0.714_285_714_285_714_3,
+            -0.142_857_142_857_142_9,
+        ];
+        for (g, w) in b3.iter().zip(want_b3.iter()) {
+            assert!((g - w).abs() < 1e-12, "b3: got {g}, want {w}");
+        }
+        for (g, w) in a3.iter().zip(want_a3.iter()) {
+            assert!((g - w).abs() < 1e-12, "a3: got {g}, want {w}");
         }
     }
 
