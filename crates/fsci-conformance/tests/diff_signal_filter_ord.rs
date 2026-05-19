@@ -102,10 +102,7 @@ fn generate_query() -> OracleQuery {
         (0.2, 0.4, 0.5, 50.0),
         (0.4, 0.6, 1.0, 40.0),
     ];
-    // cheb2ord intentionally excluded: fsci returns the natural-frequency
-    // wn while scipy reports the stopband edge — same N, different wn
-    // convention. Tracked separately if needed.
-    let ops = ["buttord", "cheb1ord", "ellipord"];
+    let ops = ["buttord", "cheb1ord", "cheb2ord", "ellipord"];
 
     let mut points = Vec::new();
     for (i, (wp, ws, gpass, gstop)) in configs.iter().enumerate() {

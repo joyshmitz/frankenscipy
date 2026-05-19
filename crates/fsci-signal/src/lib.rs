@@ -2557,9 +2557,10 @@ fn ellipk_internal(m: f64) -> f64 {
 /// for the lowpass case. The order formula is identical to cheb1ord
 /// (both Chebyshev variants share the same order curve); the
 /// difference is the natural frequency:
-///   Wn = ws / cosh(acosh(√((10^(gstop/10) − 1) / (10^(gpass/10) − 1))) / N)
-/// Type-II concentrates ripple in the stopband, so the −3 dB point
-/// sits below the stopband edge ws.
+///   Wn = wp · cosh(acosh(√((10^(gstop/10) − 1) / (10^(gpass/10) − 1))) / N)
+/// After rounding the order up, scipy recomputes Wn by scaling the
+/// passband edge `wp` so the realized Type-II design meets the
+/// stopband edge; Wn therefore lands just below `ws`.
 pub fn cheb2ord(wp: f64, ws: f64, gpass: f64, gstop: f64) -> Result<(u32, f64), SignalError> {
     if !wp.is_finite() || !ws.is_finite() || wp <= 0.0 || ws <= 0.0 {
         return Err(SignalError::InvalidArgument(
@@ -2593,10 +2594,10 @@ pub fn cheb2ord(wp: f64, ws: f64, gpass: f64, gstop: f64) -> Result<(u32, f64), 
     }
     let order_real = q_acosh / den;
     let order = order_real.ceil().max(1.0) as u32;
-    // Wn = ws / cosh(q_acosh / N) — the −3 dB point of the Type-II
-    // design that just meets the stopband spec at ws.
-    let cosh_arg = q_acosh / order as f64;
-    let wn = ws / cosh_arg.cosh();
+    // Wn = wp · cosh(q_acosh / N): scipy recomputes the natural
+    // frequency after the order is rounded up, scaling the passband
+    // edge so the realized design lands on the stopband edge.
+    let wn = wp * (q_acosh / order as f64).cosh();
     Ok((order, wn))
 }
 
@@ -16196,9 +16197,27 @@ mod tests {
 
     #[test]
     fn cheb2ord_metamorphic_wn_between_wp_and_ws() {
-        // Type-II's −3 dB point sits between wp and ws.
+        // Type-II's natural frequency sits between wp and ws.
         let (_, wn) = cheb2ord(1.0, 2.0, 1.0, 40.0).expect("cheb2ord");
         assert!(wn > 1.0 && wn < 2.0, "wn={wn} should be in (wp, ws)");
+    }
+
+    #[test]
+    fn cheb2ord_wn_matches_scipy_reference() {
+        // scipy.signal.cheb2ord(wp, ws, gpass, gstop, analog=True) places
+        // Wn just below the stopband edge ws.
+        for &(wp, ws, gp, gs, n_exp, wn_exp) in &[
+            (1.0_f64, 2.0, 1.0, 40.0, 5_u32, 1.802_791_365_577_485),
+            (0.5, 1.5, 0.5, 30.0, 3, 1.458_262_371_465_648),
+            (2.0, 5.0, 2.0, 60.0, 6, 3.981_189_966_239_977),
+        ] {
+            let (n, wn) = cheb2ord(wp, ws, gp, gs).expect("cheb2ord");
+            assert_eq!(n, n_exp, "order for ({wp}, {ws}, {gp}, {gs})");
+            assert!(
+                (wn - wn_exp).abs() < 1e-12,
+                "wn for ({wp}, {ws}, {gp}, {gs}): got {wn}, want {wn_exp}"
+            );
+        }
     }
 
     #[test]
