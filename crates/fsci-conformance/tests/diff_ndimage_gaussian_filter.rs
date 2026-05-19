@@ -1,13 +1,10 @@
 #![forbid(unsafe_code)]
 //! Live SciPy differential coverage for `scipy.ndimage.gaussian_filter`.
 //!
-//! Resolves [frankenscipy-6u7yg]. fsci_ndimage::gaussian_filter applies
-//! a separable 1-D Gaussian along each axis. fsci uses `radius =
-//! ceil(4σ)` while scipy uses `int(truncate*σ + 0.5)` with
-//! `truncate=4.0`. The two agree at integer or half-integer σ (e.g.,
-//! σ ∈ {0.5, 1.0, 2.0}). This harness restricts to those σ values so
-//! both implementations pick the same kernel size and tail values
-//! agree to machine precision.
+//! Resolves [frankenscipy-6u7yg] and [frankenscipy-0venh].
+//! fsci_ndimage::gaussian_filter applies a separable 1-D Gaussian along
+//! each axis and uses SciPy's default radius rule:
+//! `int(truncate*σ + 0.5)` with `truncate=4.0`.
 
 use std::collections::HashMap;
 use std::fs;
@@ -125,11 +122,7 @@ fn generate_query() -> OracleQuery {
                 .collect(),
         ),
     ];
-    // sigmas where fsci `ceil(4σ)` and scipy `int(4σ+0.5)` agree:
-    //   σ=0.5: fsci=2, scipy=2
-    //   σ=1.0: fsci=4, scipy=4
-    //   σ=2.0: fsci=8, scipy=8
-    let sigmas: &[f64] = &[0.5, 1.0, 2.0];
+    let sigmas: &[f64] = &[0.5, 1.0, 1.3, 2.0];
     let modes = ["reflect", "constant", "nearest"];
 
     let mut points = Vec::new();
@@ -290,7 +283,7 @@ fn diff_ndimage_gaussian_filter() {
 
     let log = DiffLog {
         test_id: "diff_ndimage_gaussian_filter".into(),
-        category: "scipy.ndimage.gaussian_filter (aligned σ)".into(),
+        category: "scipy.ndimage.gaussian_filter".into(),
         case_count: diffs.len(),
         max_abs_diff: max_overall,
         pass: all_pass,

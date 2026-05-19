@@ -150,8 +150,15 @@ fn generate_query() -> OracleQuery {
                 }
             }
         }
-        // gauss_multi with several (σy, σx)
-        for &(sy, sx) in &[(0.5, 0.5), (1.0, 0.5), (0.5, 1.5), (1.5, 1.5)] {
+        // gauss_multi with several (σy, σx), including non-half-integer
+        // values that exercise SciPy's default truncate-radius rounding.
+        for &(sy, sx) in &[
+            (0.5, 0.5),
+            (1.0, 0.5),
+            (0.5, 1.5),
+            (1.3, 0.7),
+            (1.5, 1.5),
+        ] {
             for mode in ["reflect", "nearest"] {
                 points.push(Case {
                     case_id: format!("gauss_{label}_sy{sy}_sx{sx}_{mode}"),

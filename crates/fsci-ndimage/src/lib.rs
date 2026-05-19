@@ -44,6 +44,12 @@ pub enum BoundaryMode {
     Wrap,
 }
 
+const DEFAULT_GAUSSIAN_TRUNCATE: f64 = 4.0;
+
+fn gaussian_kernel_radius(sigma: f64) -> usize {
+    (DEFAULT_GAUSSIAN_TRUNCATE * sigma + 0.5) as usize
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // N-D Array Helper
 // ══════════════════════════════════════════════════════════════════════
@@ -716,7 +722,7 @@ pub fn gaussian_filter(
     let mut current = input.clone();
 
     for axis in 0..input.ndim() {
-        let radius = (4.0 * sigma).ceil() as usize;
+        let radius = gaussian_kernel_radius(sigma);
         let ksize = 2 * radius + 1;
         let mut kernel_1d = vec![0.0; ksize];
         let mut total = 0.0;
@@ -2221,7 +2227,7 @@ pub fn gaussian_filter_multi_sigma(
         if sigma <= 0.0 {
             continue;
         }
-        let radius = (4.0 * sigma).ceil() as usize;
+        let radius = gaussian_kernel_radius(sigma);
         let ksize = 2 * radius + 1;
         let mut kernel_1d = vec![0.0; ksize];
         let mut total = 0.0;
@@ -3213,6 +3219,15 @@ mod tests {
         for &v in &result.data {
             assert!((v - 5.0).abs() < 1e-10, "constant image changed: {v}");
         }
+    }
+
+    #[test]
+    fn gaussian_kernel_radius_matches_scipy_truncate_rule() {
+        assert_eq!(gaussian_kernel_radius(0.1), 0);
+        assert_eq!(gaussian_kernel_radius(0.5), 2);
+        assert_eq!(gaussian_kernel_radius(1.0), 4);
+        assert_eq!(gaussian_kernel_radius(1.3), 5);
+        assert_eq!(gaussian_kernel_radius(2.0), 8);
     }
 
     #[test]
