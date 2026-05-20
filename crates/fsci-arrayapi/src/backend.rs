@@ -498,7 +498,9 @@ impl ArrayApiBackend for CoreArrayBackend {
 
         let mut values = Vec::with_capacity(num);
         for idx in 0..num {
-            let value = if endpoint && idx == num - 1 {
+            // numpy pins the final sample to `stop` only when there is more
+            // than one sample; linspace(start, stop, num=1) is [start].
+            let value = if endpoint && num > 1 && idx == num - 1 {
                 stop_v
             } else {
                 start_v + (idx as f64) * step

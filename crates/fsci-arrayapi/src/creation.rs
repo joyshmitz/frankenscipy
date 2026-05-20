@@ -278,4 +278,35 @@ mod tests {
         assert_eq!(full_array.dtype(), DType::Complex64);
         assert_eq!(full_array.size(), 4);
     }
+
+    #[test]
+    fn linspace_single_sample_is_start() {
+        // numpy/scipy: linspace(start, stop, num=1) == [start], for either
+        // endpoint value — the lone sample sits at `start`, not `stop`.
+        let backend = strict_backend();
+        for endpoint in [true, false] {
+            let request = LinspaceRequest {
+                start: ScalarValue::F64(2.0),
+                stop: ScalarValue::F64(10.0),
+                num: 1,
+                endpoint,
+                dtype: Some(DType::Float64),
+            };
+            let arr = linspace(&backend, &request).expect("linspace num=1");
+            assert_eq!(arr.values(), &[ScalarValue::F64(2.0)], "endpoint={endpoint}");
+        }
+        // num=2 with endpoint still spans the full [start, stop] interval.
+        let request = LinspaceRequest {
+            start: ScalarValue::F64(2.0),
+            stop: ScalarValue::F64(10.0),
+            num: 2,
+            endpoint: true,
+            dtype: Some(DType::Float64),
+        };
+        let arr = linspace(&backend, &request).expect("linspace num=2");
+        assert_eq!(
+            arr.values(),
+            &[ScalarValue::F64(2.0), ScalarValue::F64(10.0)]
+        );
+    }
 }
