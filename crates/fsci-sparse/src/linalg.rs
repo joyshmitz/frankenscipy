@@ -5307,6 +5307,70 @@ mod tests {
     }
 
     #[test]
+    fn eigs_returns_actual_eigenpairs() {
+        // Eigenvectors must satisfy ||A x - lambda x|| ~ 0, not merely carry
+        // the right eigenvalue. Regression: eigs previously returned raw
+        // Arnoldi basis vectors, whose residual is O(||x||).
+        let check = |a: &CsrMatrix, k: usize| {
+            let result = eigs(a, k, EigsOptions::default()).expect("eigs works");
+            for (lambda, x) in result.eigenvalues.iter().zip(&result.eigenvectors) {
+                let ax = csr_matvec(a, x);
+                let residual: f64 = ax
+                    .iter()
+                    .zip(x)
+                    .map(|(&axi, &xi)| (axi - lambda * xi).powi(2))
+                    .sum::<f64>()
+                    .sqrt();
+                assert!(
+                    (vec_norm(x) - 1.0).abs() < 1e-9,
+                    "eigenvector must be unit-norm"
+                );
+                assert!(
+                    residual < 1e-6,
+                    "eigenpair residual too large: lambda={lambda}, ||Ax-lx||={residual}"
+                );
+            }
+        };
+
+        // Diagonal matrix (the bead's reproduction case).
+        let diag = CooMatrix::from_triplets(
+            Shape2D::new(4, 4),
+            vec![7.0, 4.0, 2.0, 9.0],
+            vec![0, 1, 2, 3],
+            vec![0, 1, 2, 3],
+            false,
+        )
+        .expect("coo")
+        .to_csr()
+        .expect("csr");
+        check(&diag, 3);
+
+        // Symmetric tridiagonal tridiag(-1, 2, -1), size 6.
+        let n = 6;
+        let mut vals = Vec::new();
+        let mut rows = Vec::new();
+        let mut cols = Vec::new();
+        for i in 0..n {
+            vals.push(2.0);
+            rows.push(i);
+            cols.push(i);
+            if i + 1 < n {
+                vals.push(-1.0);
+                rows.push(i);
+                cols.push(i + 1);
+                vals.push(-1.0);
+                rows.push(i + 1);
+                cols.push(i);
+            }
+        }
+        let tri = CooMatrix::from_triplets(Shape2D::new(n, n), vals, rows, cols, false)
+            .expect("coo")
+            .to_csr()
+            .expect("csr");
+        check(&tri, 3);
+    }
+
+    #[test]
     fn eigs_identity() {
         let a = identity_csr(4);
         let result = eigs(&a, 2, EigsOptions::default()).expect("eigs works");
@@ -6474,18 +6538,28 @@ pub fn eigs(a: &CsrMatrix, k: usize, options: EigsOptions) -> SparseResult<EigsR
     let mut eigenvalues = Vec::with_capacity(k_actual);
     let mut eigenvectors = Vec::with_capacity(k_actual);
 
-    for &(idx, val) in indexed.iter().take(k_actual) {
+    for &(_, val) in indexed.iter().take(k_actual) {
         eigenvalues.push(val);
 
-        // Compute approximate eigenvector: x = V * y
-        // where y is the eigenvector of H corresponding to this eigenvalue
-        // For simplicity, use power iteration from Arnoldi basis
+        // Back-transform the Ritz vector into the original space: the
+        // eigenvector of A is x = V @ y, where y is the eigenvector of the
+        // projected Hessenberg matrix H for this eigenvalue. Returning a raw
+        // Arnoldi basis vector v[idx] is wrong — those are not eigenpairs of A.
+        let y = hessenberg_eigenvector(&h, actual_m, val);
         let mut evec = vec![0.0; n];
-        // Simple approximation: use the Arnoldi vector that contributed most
-        if idx < v.len() {
-            evec = v[idx.min(actual_m)].clone();
-        } else {
-            evec = v[0].clone();
+        for (j, &yj) in y.iter().enumerate() {
+            if yj == 0.0 {
+                continue;
+            }
+            for (xi, vji) in evec.iter_mut().zip(v[j].iter()) {
+                *xi += yj * vji;
+            }
+        }
+        let norm = vec_norm(&evec);
+        if norm > 0.0 {
+            for xi in &mut evec {
+                *xi /= norm;
+            }
         }
         eigenvectors.push(evec);
     }
@@ -6496,6 +6570,39 @@ pub fn eigs(a: &CsrMatrix, k: usize, options: EigsOptions) -> SparseResult<EigsR
         nmatvec: total_matvec,
         converged: true,
     })
+}
+
+/// Compute an eigenvector of the upper Hessenberg matrix `H[0..m, 0..m]` for
+/// the (real) eigenvalue `lambda`.
+///
+/// Solves `(H - lambda*I) y = 0` by back-substitution against the subdiagonal:
+/// with `y[m-1] = 1`, row `r` of the system determines `y[r-1]` from the
+/// already-known `y[r..m]`. When `lambda` is an exact eigenvalue the unused
+/// top row is satisfied automatically; for a converged Ritz value its residual
+/// is negligible.
+fn hessenberg_eigenvector(h: &[Vec<f64>], m: usize, lambda: f64) -> Vec<f64> {
+    if m == 0 {
+        return Vec::new();
+    }
+    if m == 1 {
+        return vec![1.0];
+    }
+    let mut y = vec![0.0; m];
+    y[m - 1] = 1.0;
+    for r in (1..m).rev() {
+        // Row r: h[r][r-1]*y[r-1] + sum_{c>=r} h[r][c]*y[c] - lambda*y[r] = 0.
+        let mut acc = -lambda * y[r];
+        for c in r..m {
+            acc += h[r][c] * y[c];
+        }
+        let sub = h[r][r - 1];
+        if sub.abs() < f64::MIN_POSITIVE {
+            // Decoupled block: leave the remaining components at zero.
+            break;
+        }
+        y[r - 1] = -acc / sub;
+    }
+    y
 }
 
 /// Extract eigenvalues from an upper Hessenberg matrix using QR iteration.
