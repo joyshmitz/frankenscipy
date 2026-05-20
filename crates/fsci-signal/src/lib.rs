@@ -2003,11 +2003,17 @@ pub fn instantaneous_frequency(x: &[f64], fs: f64) -> Result<Vec<f64>, SignalErr
 /// Matches `scipy.signal.argrelmax`.
 pub fn argrelmax(x: &[f64], order: usize) -> Vec<usize> {
     let order = order.max(1);
+    let n = x.len();
     let mut maxima = Vec::new();
-    for i in order..x.len().saturating_sub(order) {
+    for i in 0..n {
         let mut is_max = true;
         for j in 1..=order {
-            if x[i] <= x[i - j] || x[i] <= x[i + j] {
+            // scipy._boolrelextrema uses mode='clip': neighbour indices
+            // past either edge clamp to the boundary, so extrema within
+            // `order` of an edge are still tested rather than skipped.
+            let left = i.saturating_sub(j);
+            let right = (i + j).min(n - 1);
+            if x[i] <= x[left] || x[i] <= x[right] {
                 is_max = false;
                 break;
             }
@@ -2024,11 +2030,15 @@ pub fn argrelmax(x: &[f64], order: usize) -> Vec<usize> {
 /// Matches `scipy.signal.argrelmin`.
 pub fn argrelmin(x: &[f64], order: usize) -> Vec<usize> {
     let order = order.max(1);
+    let n = x.len();
     let mut minima = Vec::new();
-    for i in order..x.len().saturating_sub(order) {
+    for i in 0..n {
         let mut is_min = true;
         for j in 1..=order {
-            if x[i] >= x[i - j] || x[i] >= x[i + j] {
+            // scipy._boolrelextrema uses mode='clip' (see argrelmax).
+            let left = i.saturating_sub(j);
+            let right = (i + j).min(n - 1);
+            if x[i] >= x[left] || x[i] >= x[right] {
                 is_min = false;
                 break;
             }
@@ -13601,6 +13611,22 @@ mod tests {
                 "phase mismatch at period={period}: opt={phase_opt}, naive={phase_nav}"
             );
         }
+    }
+
+    #[test]
+    fn argrel_order_ge_2_includes_boundary_adjacent_extrema() {
+        // scipy.signal.argrelmax/argrelmin with mode='clip': extrema within
+        // `order` of an edge are still detected (frankenscipy-mufw9).
+        let y = [0.0, 3.0, 1.0, 0.0, 1.0, 2.0, 1.0, 0.0, 1.0, 4.0, 0.0];
+        assert_eq!(argrelmax(&y, 2), vec![1, 5, 9]);
+        assert_eq!(argrelmax(&y, 3), vec![1, 5, 9]);
+        assert_eq!(argrelmin(&y, 2), vec![3, 7]);
+
+        let z = [
+            5.0, 1.0, 2.0, 3.0, 2.0, 1.0, 2.0, 3.0, 4.0, 3.0, 2.0, 1.0, 0.0, 1.0,
+        ];
+        assert_eq!(argrelmin(&z, 3), vec![1, 5, 12]);
+        assert_eq!(argrelmax(&z, 3), vec![8]);
     }
 
     #[test]

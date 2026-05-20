@@ -26,6 +26,7 @@ struct PointCase {
     case_id: String,
     func: String,
     x: Vec<f64>,
+    order: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -127,7 +128,22 @@ fn generate_query() -> OracleQuery {
                 case_id: format!("{func}_{label}"),
                 func: func.into(),
                 x: sig.clone(),
+                order: 1,
             });
+        }
+    }
+    // order >= 2 coverage for argrelextrema: extrema within `order` of an
+    // edge must still be detected (scipy mode='clip'; frankenscipy-mufw9).
+    for (label, sig) in signals {
+        for func in ["argrelextrema_max", "argrelextrema_min"] {
+            for order in [2_usize, 3] {
+                points.push(PointCase {
+                    case_id: format!("{func}_{label}_o{order}"),
+                    func: func.into(),
+                    x: sig.clone(),
+                    order,
+                });
+            }
         }
     }
     OracleQuery { points }
@@ -145,15 +161,16 @@ points = []
 for case in q["points"]:
     cid = case["case_id"]; func = case["func"]
     x = np.array(case["x"], dtype=float)
+    order = int(case["order"])
     try:
         if func == "find_peaks":
             peaks, _ = signal.find_peaks(x)
             points.append({"case_id": cid, "indices": [int(p) for p in peaks]})
         elif func == "argrelextrema_max":
-            idx = signal.argrelextrema(x, np.greater)
+            idx = signal.argrelextrema(x, np.greater, order=order)
             points.append({"case_id": cid, "indices": [int(p) for p in idx[0]]})
         elif func == "argrelextrema_min":
-            idx = signal.argrelextrema(x, np.less)
+            idx = signal.argrelextrema(x, np.less, order=order)
             points.append({"case_id": cid, "indices": [int(p) for p in idx[0]]})
         else:
             points.append({"case_id": cid, "indices": None})
@@ -209,11 +226,11 @@ print(json.dumps({"points": points}))
     Some(serde_json::from_str(&stdout).expect("parse find_peaks oracle JSON"))
 }
 
-fn fsci_eval(func: &str, x: &[f64]) -> Vec<usize> {
+fn fsci_eval(func: &str, x: &[f64], order: usize) -> Vec<usize> {
     match func {
         "find_peaks" => find_peaks(x, FindPeaksOptions::default()).peaks,
-        "argrelextrema_max" => argrelextrema(x, 1, true),
-        "argrelextrema_min" => argrelextrema(x, 1, false),
+        "argrelextrema_max" => argrelextrema(x, order, true),
+        "argrelextrema_min" => argrelextrema(x, order, false),
         _ => Vec::new(),
     }
 }
@@ -240,7 +257,7 @@ fn diff_signal_find_peaks_argrelextrema() {
         let Some(scipy_idx) = scipy_arm.indices.as_ref() else {
             continue;
         };
-        let fsci_idx = fsci_eval(&case.func, &case.x);
+        let fsci_idx = fsci_eval(&case.func, &case.x, case.order);
         let pass = fsci_idx == *scipy_idx;
         diffs.push(CaseDiff {
             case_id: case.case_id.clone(),
