@@ -63,6 +63,7 @@ struct FindCase {
 struct FindArm {
     case_id: String,
     found: bool,
+    names: Vec<String>,
     value: Option<f64>,
 }
 
@@ -261,9 +262,9 @@ for case in q.get("finds", []):
         v = float(constants.value(sk)) if found else None
         if v is not None and not math.isfinite(v):
             v = None
-        finds.append({"case_id": cid, "found": found, "value": v})
+        finds.append({"case_id": cid, "found": found, "names": names, "value": v})
     except Exception:
-        finds.append({"case_id": cid, "found": False, "value": None})
+        finds.append({"case_id": cid, "found": False, "names": [], "value": None})
 print(json.dumps({"points": points, "finds": finds}))
 "#;
     let query_json = serde_json::to_string(query).expect("serialize value_lookup query");
@@ -477,5 +478,47 @@ fn diff_constants_find_queries_include_scipy_values() {
         "constants.find conformance failed: {} cases, max_rel_diff={}",
         diffs.len(),
         max_overall
+    );
+}
+
+#[test]
+fn diff_constants_find_preserves_scipy_order_for_supported_names() {
+    let query = OracleQuery {
+        points: Vec::new(),
+        finds: vec![FindCase {
+            case_id: "find_g_factor_order".into(),
+            query: "g factor".into(),
+            scipy_key: "electron g factor".into(),
+        }],
+    };
+    let Some(oracle) = scipy_oracle_or_skip(&query) else {
+        return;
+    };
+    let scipy_arm = oracle
+        .finds
+        .into_iter()
+        .find(|arm| arm.case_id == "find_g_factor_order")
+        .expect("validated constants.find order oracle");
+    let supported = [
+        "electron g factor",
+        "muon g factor",
+        "neutron g factor",
+        "proton g factor",
+    ];
+    let scipy_supported: Vec<&str> = scipy_arm
+        .names
+        .iter()
+        .map(String::as_str)
+        .filter(|name| supported.contains(name))
+        .collect();
+    let fsci_supported: Vec<&str> = fc::find("g factor")
+        .into_iter()
+        .map(|(name, _)| name)
+        .filter(|name| supported.contains(name))
+        .collect();
+
+    assert_eq!(
+        fsci_supported, scipy_supported,
+        "constants.find should preserve scipy's sorted result order for supported keys"
     );
 }

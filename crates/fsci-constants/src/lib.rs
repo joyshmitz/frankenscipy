@@ -661,10 +661,13 @@ pub fn find(query: &str) -> Vec<(&'static str, f64)> {
         ("tau-electron mass ratio", TAU_ELECTRON_MASS_RATIO),
         ("electron-tau mass ratio", ELECTRON_TAU_MASS_RATIO),
     ];
-    all.iter()
+    let mut matches: Vec<_> = all
+        .iter()
         .filter(|(name, _)| name.to_lowercase().contains(&q))
         .cloned()
-        .collect()
+        .collect();
+    matches.sort_by(|(a, _), (b, _)| a.cmp(b));
+    matches
 }
 
 /// Convert between physical units.
