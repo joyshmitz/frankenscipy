@@ -4,9 +4,8 @@
 //! Resolves [frankenscipy-w5bho]. fsci uses Ryser's formula (O(2^n n));
 //! oracle uses the naive sum over permutations (O(n!)) — these agree
 //! exactly in exact arithmetic and within machine precision for small
-//! matrices. Restricted to **even n only** (n ∈ {2, 4}); fsci returns
-//! -perm for odd n due to a doubled sign flip in the Ryser formula
-//! (defect frankenscipy-lsney).
+//! matrices, for both even and odd n ∈ {2, 3, 4, 5} (the odd-n Ryser
+//! doubled-sign-flip is fixed — frankenscipy-lsney).
 
 use std::collections::HashMap;
 use std::fs;
@@ -85,41 +84,67 @@ fn emit_log(log: &DiffLog) {
 }
 
 fn generate_query() -> OracleQuery {
-    let mut points = Vec::new();
-    // 2x2 known: perm([[a,b],[c,d]]) = a*d + b*c
-    points.push(Case {
-        case_id: "p2_basic".into(),
-        rows: vec![vec![1.0, 2.0], vec![3.0, 4.0]],
-    });
-    points.push(Case {
-        case_id: "p2_neg".into(),
-        rows: vec![vec![-1.0, 2.5], vec![3.0, -0.5]],
-    });
-    // 3x3 / 5x5 probes removed: fsci has sign-flip bug for odd n
-    // (defect frankenscipy-lsney).
-    // 4x4
-    points.push(Case {
-        case_id: "p4_ones".into(),
-        rows: vec![vec![1.0; 4]; 4],
-    });
-    points.push(Case {
-        case_id: "p4_diag".into(),
-        rows: vec![
-            vec![2.0, 0.0, 0.0, 0.0],
-            vec![0.0, 3.0, 0.0, 0.0],
-            vec![0.0, 0.0, 5.0, 0.0],
-            vec![0.0, 0.0, 0.0, 7.0],
-        ],
-    });
-    points.push(Case {
-        case_id: "p4_rand".into(),
-        rows: vec![
-            vec![0.1, 0.2, 0.3, 0.4],
-            vec![0.5, 0.6, 0.7, 0.8],
-            vec![-0.3, 0.4, -0.5, 0.6],
-            vec![1.0, 0.1, -0.2, 0.3],
-        ],
-    });
+    // Even and odd n ∈ {2, 3, 4, 5}; perm([[a,b],[c,d]]) = a·d + b·c.
+    let points = vec![
+        Case {
+            case_id: "p2_basic".into(),
+            rows: vec![vec![1.0, 2.0], vec![3.0, 4.0]],
+        },
+        Case {
+            case_id: "p2_neg".into(),
+            rows: vec![vec![-1.0, 2.5], vec![3.0, -0.5]],
+        },
+        Case {
+            case_id: "p3_identity".into(),
+            rows: vec![
+                vec![1.0, 0.0, 0.0],
+                vec![0.0, 1.0, 0.0],
+                vec![0.0, 0.0, 1.0],
+            ],
+        },
+        Case {
+            case_id: "p3_ints".into(),
+            rows: vec![
+                vec![1.0, 2.0, 3.0],
+                vec![4.0, 5.0, 6.0],
+                vec![7.0, 8.0, 9.0],
+            ],
+        },
+        Case {
+            case_id: "p3_mixed".into(),
+            rows: vec![
+                vec![-1.0, 2.0, 0.5],
+                vec![3.0, -0.5, 1.5],
+                vec![0.25, 4.0, -2.0],
+            ],
+        },
+        Case {
+            case_id: "p5_ones".into(),
+            rows: vec![vec![1.0; 5]; 5],
+        },
+        Case {
+            case_id: "p4_ones".into(),
+            rows: vec![vec![1.0; 4]; 4],
+        },
+        Case {
+            case_id: "p4_diag".into(),
+            rows: vec![
+                vec![2.0, 0.0, 0.0, 0.0],
+                vec![0.0, 3.0, 0.0, 0.0],
+                vec![0.0, 0.0, 5.0, 0.0],
+                vec![0.0, 0.0, 0.0, 7.0],
+            ],
+        },
+        Case {
+            case_id: "p4_rand".into(),
+            rows: vec![
+                vec![0.1, 0.2, 0.3, 0.4],
+                vec![0.5, 0.6, 0.7, 0.8],
+                vec![-0.3, 0.4, -0.5, 0.6],
+                vec![1.0, 0.1, -0.2, 0.3],
+            ],
+        },
+    ];
     OracleQuery { points }
 }
 

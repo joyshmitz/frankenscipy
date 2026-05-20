@@ -7027,7 +7027,10 @@ pub fn permanent(a: &[Vec<f64>]) -> f64 {
         result += sign * prod_sum;
     }
 
-    if n.is_multiple_of(2) { result } else { -result }
+    // The in-loop sign (-1)^(n-|S|) already carries Ryser's leading
+    // (-1)^n factor, so `result` is the permanent directly — a further
+    // negation for odd n would double-count it.
+    result
 }
 
 /// Create an anti-diagonal matrix.
