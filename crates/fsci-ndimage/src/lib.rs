@@ -456,6 +456,55 @@ fn cubic_constant_wrap_coefficients(line: &[f64]) -> Vec<f64> {
     rhs
 }
 
+/// Exact cubic (order-3) B-spline prefilter coefficients for the half-sample
+/// `reflect` boundary.
+///
+/// The interpolation condition `s[i] = (1/6)c[i-1] + (2/3)c[i] + (1/6)c[i+1]`
+/// is solved exactly by a tridiagonal system. For the half-sample-reflect
+/// boundary the coefficient sequence inherits the sample sequence's symmetry
+/// about index `-0.5`, so `c[-1] = c[0]` (and `c[n] = c[n-1]`); substituting
+/// that into the first/last rows collapses the `(1/6, 2/3, 1/6)` stencil to
+/// `(5/6, 1/6)`. This direct solve is the *exact* infinite-reflect cubic
+/// spline — no truncated geometric-series initial condition. scipy's
+/// `_spline_filter1d` uses a horizon-truncated recursive filter that converges
+/// to this same value (to within f64 precision once the axis is more than a
+/// few dozen samples long). It is also the per-line prefilter for `nearest`
+/// after the input has been edge-padded.
+fn cubic_reflect_coefficients(line: &[f64]) -> Vec<f64> {
+    let n = line.len();
+    if n <= 1 {
+        return line.to_vec();
+    }
+    let mut diag: Vec<f64> = vec![2.0 / 3.0; n];
+    let mut rhs: Vec<f64> = line.to_vec();
+    let mut lower: Vec<f64> = vec![0.0; n];
+    let mut upper: Vec<f64> = vec![0.0; n];
+    // Boundary rows: (1/6)c[-1] + (2/3)c[0] + (1/6)c[1] with c[-1]=c[0]
+    // gives (5/6)c[0] + (1/6)c[1]; symmetric at the far end.
+    diag[0] = 5.0 / 6.0;
+    upper[0] = 1.0 / 6.0;
+    diag[n - 1] = 5.0 / 6.0;
+    lower[n - 1] = 1.0 / 6.0;
+    for i in 1..n.saturating_sub(1) {
+        lower[i] = 1.0 / 6.0;
+        diag[i] = 2.0 / 3.0;
+        upper[i] = 1.0 / 6.0;
+    }
+    for i in 1..n {
+        if diag[i - 1].abs() < 1e-18 {
+            continue;
+        }
+        let w = lower[i] / diag[i - 1];
+        diag[i] -= w * upper[i - 1];
+        rhs[i] -= w * rhs[i - 1];
+    }
+    rhs[n - 1] /= diag[n - 1];
+    for i in (0..n - 1).rev() {
+        rhs[i] = (rhs[i] - upper[i] * rhs[i + 1]) / diag[i];
+    }
+    rhs
+}
+
 fn pad_array_mode(
     input: &NdArray,
     pad: usize,
@@ -506,15 +555,24 @@ fn prefilter_spline_coefficients(
             coord_offsets: vec![0.0; ndim],
         });
     }
-    let (mut current, coord_offsets) =
-        if matches!(mode, BoundaryMode::Nearest | BoundaryMode::Reflect) {
-            (
-                pad_array_mode(input, SPLINE_NEAREST_PAD, mode)?,
-                vec![SPLINE_NEAREST_PAD as f64; ndim],
-            )
-        } else {
-            (input.clone(), vec![0.0; ndim])
-        };
+    // Order-3 reflect is solved exactly and in-place by
+    // `cubic_reflect_coefficients` (the exact half-sample-reflect cubic spline).
+    // Order-3 nearest mirrors scipy: pad with edge values by SPLINE_NEAREST_PAD,
+    // then run that same exact reflect prefilter on the padded lines. Orders
+    // 2/4/5 reflect/nearest (and order-3 reflect on arrays too short for a
+    // cubic stencil) still use the padded de Boor path.
+    let exact_reflect =
+        order == 3 && mode == BoundaryMode::Reflect && input.shape.iter().all(|&s| s >= 4);
+    let pad_input =
+        matches!(mode, BoundaryMode::Nearest | BoundaryMode::Reflect) && !exact_reflect;
+    let (mut current, coord_offsets) = if pad_input {
+        (
+            pad_array_mode(input, SPLINE_NEAREST_PAD, mode)?,
+            vec![SPLINE_NEAREST_PAD as f64; ndim],
+        )
+    } else {
+        (input.clone(), vec![0.0; ndim])
+    };
     for axis in 0..ndim {
         let axis_len = current.shape[axis];
         if axis_len <= 1 {
@@ -544,12 +602,16 @@ fn prefilter_spline_coefficients(
                 idx[axis] = i;
                 line.push(current.get(&idx));
             }
-            let coeffs =
-                if order == 3 && matches!(mode, BoundaryMode::Constant | BoundaryMode::Wrap) {
+            let coeffs = match (order, mode) {
+                (3, BoundaryMode::Constant | BoundaryMode::Wrap) => {
                     cubic_constant_wrap_coefficients(&line)
-                } else {
-                    spline_coefficients_for_line(&line, order)?
-                };
+                }
+                (3, BoundaryMode::Nearest) => cubic_reflect_coefficients(&line),
+                (3, BoundaryMode::Reflect) if exact_reflect => {
+                    cubic_reflect_coefficients(&line)
+                }
+                _ => spline_coefficients_for_line(&line, order)?,
+            };
             for (i, coeff) in coeffs.into_iter().enumerate() {
                 idx[axis] = i;
                 next.set(&idx, coeff);
@@ -676,6 +738,52 @@ fn sample_interpolated(
                     (-3.0 * t * t * t + 3.0 * t * t + 3.0 * t + 1.0) / 6.0,
                 ),
                 (fold_wrap_cubic_index(base + 3, max), t * t * t / 6.0),
+            ];
+            bases.push(support);
+            continue;
+        }
+        // Reflect / Nearest order-3: reconstruct from the cubic_reflect
+        // coefficients with the cardinal cubic B-spline kernel. scipy folds the
+        // support TAPS, not the coordinate, so the lookup coordinate is used
+        // directly (offset by SPLINE_NEAREST_PAD for the edge-padded `nearest`
+        // case) and each tap index is mapped back through the boundary rule —
+        // half-sample mirror for reflect, edge-clamp for nearest. The padded
+        // de Boor fallback for short reflect axes has coord_offsets > 0 and is
+        // excluded here so it keeps using the de Boor evaluator.
+        let cardinal_reflect_nearest = effective_order == 3
+            && ((mode == BoundaryMode::Reflect && coord_offsets[axis] == 0.0)
+                || mode == BoundaryMode::Nearest);
+        if cardinal_reflect_nearest {
+            let cc = coord + coord_offsets[axis];
+            let floor = cc.floor();
+            let base = floor as isize - 1;
+            let t = cc - floor;
+            let omt = 1.0 - t;
+            let len = coeff_len as isize;
+            let fold = |i: isize| -> usize {
+                match mode {
+                    BoundaryMode::Nearest => i.clamp(0, len - 1) as usize,
+                    _ => {
+                        let period = 2 * len;
+                        let mut m = i.rem_euclid(period);
+                        if m >= len {
+                            m = period - 1 - m;
+                        }
+                        m as usize
+                    }
+                }
+            };
+            let support = vec![
+                (fold(base), omt * omt * omt / 6.0),
+                (
+                    fold(base + 1),
+                    (3.0 * t * t * t - 6.0 * t * t + 4.0) / 6.0,
+                ),
+                (
+                    fold(base + 2),
+                    (-3.0 * t * t * t + 3.0 * t * t + 3.0 * t + 1.0) / 6.0,
+                ),
+                (fold(base + 3), t * t * t / 6.0),
             ];
             bases.push(support);
             continue;
@@ -4132,6 +4240,101 @@ mod tests {
                     "rotate {angle} order={order}: {g} vs {e}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn cubic_spline_reflect_nearest_match_scipy_golden() {
+        // Golden artifact: order-3 spline interpolation under reflect/nearest
+        // verified bit-exact (< 1e-12) against scipy.ndimage. Reference values
+        // from scipy.ndimage.shift / affine_transform with order=3.
+        const TOL: f64 = 1e-12;
+
+        // --- reflect: 24-sample signal (long enough that scipy's horizon-
+        //     truncated prefilter agrees with the exact reflect spline) ---
+        let sig: Vec<f64> = (0..24)
+            .map(|i| (0.4 * i as f64).sin() + 0.3 * (1.1 * i as f64).cos())
+            .collect();
+        let reflect_cases: [(f64, [f64; 24]); 2] = [
+            (
+                0.5,
+                [
+                    0.2549519461363663, 0.4182832550693081, 0.5503201419186977,
+                    0.5630315082005458, 0.75939030868993, 1.0438558503915527,
+                    1.0988845947235066, 0.7086425641651631, 0.0259778299038867,
+                    -0.5531644869252663, -0.7666962224403977, -0.7143820624311663,
+                    -0.6961908799143749, -0.8461639176777535, -0.9679067171611121,
+                    -0.7543452796765424, -0.15076474016681216, 0.5398766786148524,
+                    0.9318552948605892, 0.9194294048003819, 0.7433831008074291,
+                    0.6848505021971074, 0.7708537655741882, 0.6506793676224725,
+                ],
+            ),
+            (
+                -0.37,
+                [
+                    0.38450699002959776, 0.5503167919057529, 0.5526729990650662,
+                    0.7235709352531765, 1.0119842950436544, 1.1156728556271387,
+                    0.7833116499893292, 0.1179284905124495, -0.496484277981438,
+                    -0.7599223082061909, -0.725710233983912, -0.6883221473472944,
+                    -0.8209994795970635, -0.9655278330938318, -0.8072254128679976,
+                    -0.24356750836028815, 0.4602459875379331, 0.9058336192772003,
+                    0.938045035700508, 0.7636513064920336, 0.6814966064066657,
+                    0.7600438511231556, 0.6867381661848023, 0.47144793799382007,
+                ],
+            ),
+        ];
+        let sig_arr = NdArray::new(sig, vec![24]).unwrap();
+        for (sh, expected) in reflect_cases {
+            let got = shift(&sig_arr, &[sh], 3, BoundaryMode::Reflect, 0.0).unwrap();
+            for (g, e) in got.data.iter().zip(&expected) {
+                assert!((g - e).abs() < TOL, "reflect shift {sh}: {g} vs {e}");
+            }
+        }
+
+        // --- nearest: scipy edge-pads then prefilters, so even a short signal
+        //     is reproduced exactly ---
+        let small = vec![0., 10., 20., 30., 5., -5., 12., 3.];
+        let nearest_cases: [(f64, [f64; 8]); 2] = [
+            (
+                0.5,
+                [
+                    -0.8481660654709604, 4.415398849593355, 14.436570667097536,
+                    27.838318482016504, 19.83515540483645, -4.678940101362298,
+                    4.130605000612735, 9.281520098911361,
+                ],
+            ),
+            (
+                -0.37,
+                [
+                    3.0149073903035344, 13.312958134830174, 25.93326007037581,
+                    23.381146583666645, -2.949696405042477, 1.3359750365031913,
+                    10.780087259029772, 1.5183309273777084,
+                ],
+            ),
+        ];
+        let small_arr = NdArray::new(small, vec![8]).unwrap();
+        for (sh, expected) in nearest_cases {
+            let got = shift(&small_arr, &[sh], 3, BoundaryMode::Nearest, 0.0).unwrap();
+            for (g, e) in got.data.iter().zip(&expected) {
+                assert!((g - e).abs() < TOL, "nearest shift {sh}: {g} vs {e}");
+            }
+        }
+
+        // --- nearest, 2-D: affine_transform on a 5x5 image ---
+        let img = NdArray::new((0..25).map(f64::from).collect(), vec![5, 5]).unwrap();
+        let matrix = [[0.8, 0.1, 0.5], [-0.2, 1.1, -0.3]];
+        let aff_near: [f64; 25] = [
+            2.0146251551549565, 3.4209130558546903, 5.143254751465219, 6.827687752661231,
+            8.460719421510634, 6.549318909071743, 7.668924898935514, 9.354219461368206,
+            10.899941103456493, 12.540003700962757, 10.413530228321878, 11.244918977395098,
+            12.928921197972759, 14.45181146728866, 16.14830632579837, 14.423340955417984,
+            15.131075101064493, 16.906402812731706, 18.548188532711343, 20.344624494677564,
+            18.925743768149676, 19.34462449467756, 20.822282799067025, 22.1862150202129,
+            23.560224563000926,
+        ];
+        let got = affine_transform(&img, &matrix, 3, BoundaryMode::Nearest, 0.0).unwrap();
+        for (g, e) in got.data.iter().zip(&aff_near) {
+            assert!((g - e).abs() < TOL, "affine nearest: {g} vs {e}");
         }
     }
 
