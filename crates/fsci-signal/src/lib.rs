@@ -5332,7 +5332,10 @@ pub fn filtfilt_with_padtype(
     }
 
     let nfilt = b.len().max(a.len());
-    let padlen = (3 * (nfilt - 1)).min(n - 1);
+    // scipy filtfilt's default edge is 3·max(len(b), len(a)) — three full
+    // filter lengths, not 3·(nfilt−1). The clamp keeps short inputs (which
+    // scipy rejects outright) usable rather than panicking.
+    let padlen = (3 * nfilt).min(n - 1);
     let padtype = padtype.unwrap_or("odd");
 
     // 1. Pad signal with mirrored values
@@ -9391,10 +9394,9 @@ pub fn minimum_phase(h: &[f64]) -> Result<Vec<f64>, SignalError> {
 
 /// Downsample a signal after applying an anti-aliasing filter.
 ///
-/// Matches `scipy.signal.decimate(x, q)`.
-///
-/// Applies a lowpass Butterworth filter at Nyquist/q frequency, then
-/// takes every q-th sample.
+/// Matches `scipy.signal.decimate(x, q)` with its default IIR filter:
+/// an order-8 Chebyshev type-I lowpass with 0.05 dB passband ripple and
+/// cutoff `0.8/q`, applied zero-phase, then every `q`-th sample is kept.
 ///
 /// # Arguments
 /// * `x` — Input signal.
@@ -9409,12 +9411,12 @@ pub fn decimate(x: &[f64], q: usize) -> Result<Vec<f64>, SignalError> {
         return Err(SignalError::InvalidArgument("q must be >= 2".to_string()));
     }
 
-    // Design lowpass filter at cutoff = 1/q (normalized to Nyquist = 1).
-    let cutoff = 1.0 / q as f64;
-    let order = 8.min(q); // order 8 max, reduce for small q
-    let ba = butter(order, &[cutoff], FilterType::Lowpass)?;
+    // scipy.signal.decimate default: cheby1(8, 0.05, 0.8/q) anti-alias
+    // filter (a fixed order 8 — not reduced for small q — and cutoff
+    // 0.8/q rather than 1/q), applied zero-phase via filtfilt.
+    let cutoff = 0.8 / q as f64;
+    let ba = cheby1(8, 0.05, &[cutoff], FilterType::Lowpass)?;
 
-    // Zero-phase filtering for no distortion.
     let filtered = filtfilt(&ba.b, &ba.a, x)?;
 
     // Downsample.
@@ -13093,6 +13095,42 @@ mod tests {
 
         // Even numtaps with nonzero Nyquist gain is rejected (Type II).
         assert!(firwin2(32, &[0.0, 1.0], &[1.0, 1.0], FirWindow::Hamming).is_err());
+    }
+
+    #[test]
+    fn decimate_matches_scipy_cheby1_default() {
+        // scipy.signal.decimate uses cheby1(8, 0.05, 0.8/q) by default.
+        let x: Vec<f64> = (0..60)
+            .map(|i| (i as f64 * 8.0 * std::f64::consts::PI / 59.0).sin())
+            .collect();
+
+        let y2 = decimate(&x, 2).expect("decimate q=2");
+        assert_eq!(y2.len(), 30);
+        for (got, want) in y2[2..6].iter().zip(
+            [
+                0.985_343_317_375_530_9,
+                0.549_199_148_335_503_8,
+                -0.261_846_123_422_117_1,
+                -0.892_756_255_192_343_1,
+            ]
+            .iter(),
+        ) {
+            assert!((got - want).abs() < 1e-7, "decimate q=2: {got} != {want}");
+        }
+
+        let y3 = decimate(&x, 3).expect("decimate q=3");
+        assert_eq!(y3.len(), 20);
+        for (got, want) in y3[2..6].iter().zip(
+            [
+                0.553_544_209_769_113_1,
+                -0.637_346_726_024_172_2,
+                -0.917_280_480_999_162,
+                0.107_330_905_569_789_44,
+            ]
+            .iter(),
+        ) {
+            assert!((got - want).abs() < 1e-7, "decimate q=3: {got} != {want}");
+        }
     }
 
     #[test]
