@@ -25,6 +25,9 @@ use serde::Serialize;
 const PACKET_ID: &str = "FSCI-P2C-007";
 const ABS_TOL: f64 = 1.0e-9;
 
+/// A `(label, A, B)` ordqz probe.
+type OrdqzProbe = (&'static str, Vec<Vec<f64>>, Vec<Vec<f64>>);
+
 #[derive(Debug, Clone, Serialize)]
 struct CaseDiff {
     case_id: String,
@@ -102,9 +105,10 @@ fn diff_linalg_ordqz_property() {
     let mut max_overall = 0.0_f64;
     let opts = DecompOptions::default();
 
-    // Narrowed to B = identity. Non-identity diagonal B exposes defect
-    // frankenscipy-ijt72 in fsci's ordqz permutation.
-    let probes: &[(&str, Vec<Vec<f64>>, Vec<Vec<f64>>)] = &[
+    // The reordering permutation P acts as Q→QP, Z→ZP, AA→PᵀAA P, so
+    // QᵀAZ=AA is preserved for any regular B (frankenscipy-ijt72) — both
+    // identity and non-identity diagonal B are exercised.
+    let probes: &[OrdqzProbe] = &[
         (
             "sym_pd_3x3_Bid",
             vec![
@@ -144,6 +148,47 @@ fn diff_linalg_ordqz_property() {
                 vec![1.0, 0.0, 0.0],
                 vec![0.0, 1.0, 0.0],
                 vec![0.0, 0.0, 1.0],
+            ],
+        ),
+        (
+            "sym_pd_3x3_Bdiag",
+            vec![
+                vec![2.0, 1.0, 0.0],
+                vec![1.0, 2.0, 1.0],
+                vec![0.0, 1.0, 2.0],
+            ],
+            vec![
+                vec![2.0, 0.0, 0.0],
+                vec![0.0, 3.0, 0.0],
+                vec![0.0, 0.0, 5.0],
+            ],
+        ),
+        (
+            "off_diag_3x3_Bdiag",
+            vec![
+                vec![1.0, 2.0, 0.0],
+                vec![0.0, -1.0, 1.0],
+                vec![1.0, 0.0, 3.0],
+            ],
+            vec![
+                vec![4.0, 0.0, 0.0],
+                vec![0.0, 1.5, 0.0],
+                vec![0.0, 0.0, 2.5],
+            ],
+        ),
+        (
+            "diag_dom_4x4_Bdiag",
+            vec![
+                vec![5.0, 1.0, 0.0, 0.0],
+                vec![1.0, 5.0, 1.0, 0.0],
+                vec![0.0, 1.0, 5.0, 1.0],
+                vec![0.0, 0.0, 1.0, 5.0],
+            ],
+            vec![
+                vec![3.0, 0.0, 0.0, 0.0],
+                vec![0.0, 2.0, 0.0, 0.0],
+                vec![0.0, 0.0, 4.0, 0.0],
+                vec![0.0, 0.0, 0.0, 1.5],
             ],
         ),
     ];
