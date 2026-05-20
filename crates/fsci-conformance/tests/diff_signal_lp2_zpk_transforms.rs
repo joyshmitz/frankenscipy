@@ -106,16 +106,47 @@ fn emit_log(log: &DiffLog) {
     fs::write(path, json).expect("write log");
 }
 
-fn sort_complex_pairs(pairs: &[(f64, f64)]) -> Vec<(f64, f64)> {
-    let mut p = pairs.to_vec();
-    p.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap().then(a.1.partial_cmp(&b.1).unwrap()));
-    p
+/// Max residual of a tolerance-greedy bijection between two root sets.
+///
+/// zpk roots have no canonical order, so comparing them position-wise
+/// after a lexicographic sort is fragile: a sub-ULP difference in the
+/// real part of a conjugate pair flips the sort and pairs `+iω` against
+/// `−iω`. Matching each root to its nearest unused partner is
+/// order-independent and robust to that noise.
+fn root_set_max_diff(a: &[(f64, f64)], b: &[(f64, f64)]) -> f64 {
+    if a.len() != b.len() {
+        return f64::INFINITY;
+    }
+    let mut used = vec![false; b.len()];
+    let mut worst = 0.0_f64;
+    for &(ar, ai) in a {
+        let mut best = f64::INFINITY;
+        let mut best_j = None;
+        for (j, &(br, bi)) in b.iter().enumerate() {
+            if used[j] {
+                continue;
+            }
+            let d = (ar - br).abs().max((ai - bi).abs());
+            if d < best {
+                best = d;
+                best_j = Some(j);
+            }
+        }
+        match best_j {
+            Some(j) => {
+                used[j] = true;
+                worst = worst.max(best);
+            }
+            None => return f64::INFINITY,
+        }
+    }
+    worst
 }
 
 fn generate_query() -> OracleQuery {
     let mut points = Vec::new();
-    // lp2lp_zpk and bilinear_zpk only (lp2hp/lpbp/lpbs filed as
-    // defect 8fw59; bilinear n=5/fs=1 also diverges).
+    // All five zpk transforms; roots are sorted before comparison so
+    // emission order does not matter (frankenscipy-8fw59).
     for &n in &[2_u32, 3, 4] {
         for &wo in &[1.0_f64, 0.5, 2.5] {
             points.push(Case {
@@ -126,6 +157,32 @@ fn generate_query() -> OracleQuery {
                 bw: 0.0,
                 fs: 0.0,
             });
+            points.push(Case {
+                case_id: format!("lphp_n{n}_wo{wo}"),
+                op: "lphp".into(),
+                n,
+                wo,
+                bw: 0.0,
+                fs: 0.0,
+            });
+            for &bw in &[0.5_f64, 1.5] {
+                points.push(Case {
+                    case_id: format!("lpbp_n{n}_wo{wo}_bw{bw}"),
+                    op: "lpbp".into(),
+                    n,
+                    wo,
+                    bw,
+                    fs: 0.0,
+                });
+                points.push(Case {
+                    case_id: format!("lpbs_n{n}_wo{wo}_bw{bw}"),
+                    op: "lpbs".into(),
+                    n,
+                    wo,
+                    bw,
+                    fs: 0.0,
+                });
+            }
         }
         for &fs in &[2.0_f64, 10.0] {
             points.push(Case {
@@ -276,26 +333,13 @@ fn diff_signal_lp2_zpk_transforms() {
             _ => continue,
         };
         let Ok((zout, pout, kout)) = res else { continue };
-        let zs = sort_complex_pairs(&zout);
-        let ps = sort_complex_pairs(&pout);
-        if zs.len() != z_re.len() || ps.len() != p_re.len() {
-            diffs.push(CaseDiff {
-                case_id: case.case_id.clone(),
-                op: case.op.clone(),
-                abs_diff: f64::INFINITY,
-                pass: false,
-            });
-            max_overall = f64::INFINITY;
-            continue;
-        }
-        let mut max_d = 0.0_f64;
-        for ((re, im), (er, ei)) in zs.iter().zip(z_re.iter().zip(z_im.iter())) {
-            max_d = max_d.max((re - er).abs()).max((im - ei).abs());
-        }
-        for ((re, im), (er, ei)) in ps.iter().zip(p_re.iter().zip(p_im.iter())) {
-            max_d = max_d.max((re - er).abs()).max((im - ei).abs());
-        }
-        max_d = max_d.max((kout - k_exp).abs());
+        let scipy_z: Vec<(f64, f64)> =
+            z_re.iter().copied().zip(z_im.iter().copied()).collect();
+        let scipy_p: Vec<(f64, f64)> =
+            p_re.iter().copied().zip(p_im.iter().copied()).collect();
+        let max_d = root_set_max_diff(&zout, &scipy_z)
+            .max(root_set_max_diff(&pout, &scipy_p))
+            .max((kout - k_exp).abs());
         max_overall = max_overall.max(max_d);
         diffs.push(CaseDiff {
             case_id: case.case_id.clone(),
