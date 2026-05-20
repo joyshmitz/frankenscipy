@@ -16071,6 +16071,80 @@ mod tests {
     }
 
     #[test]
+    fn periodogram_matches_scipy_density() {
+        // scipy.signal.periodogram(x, fs, window, scaling='density').
+        let n = 64;
+        let fs = 8.0;
+        let tp = 2.0 * std::f64::consts::PI;
+        let x: Vec<f64> = (0..n)
+            .map(|i| {
+                let t = i as f64 / fs;
+                (tp * 1.0 * t).sin() + 0.5 * (tp * 2.5 * t).cos()
+            })
+            .collect();
+
+        // Boxcar (rectangular) window.
+        let r = periodogram(&x, fs, None).unwrap();
+        assert!((r.psd[8] - 4.0).abs() < 1e-9, "boxcar peak: {}", r.psd[8]);
+        assert!((r.psd[20] - 1.0).abs() < 1e-9, "boxcar peak: {}", r.psd[20]);
+
+        // Periodic Hann window.
+        let hann: Vec<f64> = (0..n)
+            .map(|i| 0.5 - 0.5 * (tp * i as f64 / n as f64).cos())
+            .collect();
+        let rh = periodogram(&x, fs, Some(&hann)).unwrap();
+        for (k, expect) in [(7, 2.0 / 3.0), (8, 8.0 / 3.0), (9, 2.0 / 3.0)] {
+            assert!(
+                (rh.psd[k] - expect).abs() < 1e-9,
+                "hann psd[{k}]={}, want {expect}",
+                rh.psd[k]
+            );
+        }
+    }
+
+    #[test]
+    fn welch_matches_scipy_density() {
+        // scipy.signal.welch(x, fs, window, nperseg, noverlap, scaling='density').
+        let n = 128;
+        let fs = 16.0;
+        let tp = 2.0 * std::f64::consts::PI;
+        let x: Vec<f64> = (0..n)
+            .map(|i| {
+                let t = i as f64 / fs;
+                (tp * 2.0 * t).sin() + 0.3 * (tp * 5.0 * t).cos()
+            })
+            .collect();
+
+        let r = welch(&x, fs, Some("hann"), Some(32), Some(16)).unwrap();
+        for (k, expect) in [
+            (3, 1.0 / 6.0),
+            (4, 2.0 / 3.0),
+            (5, 1.0 / 6.0),
+            (9, 0.015),
+            (10, 0.06),
+            (11, 0.015),
+        ] {
+            assert!(
+                (r.psd[k] - expect).abs() < 1e-9,
+                "welch hann psd[{k}]={}, want {expect}",
+                r.psd[k]
+            );
+        }
+
+        let rb = welch(&x, fs, Some("boxcar"), Some(64), Some(32)).unwrap();
+        assert!(
+            (rb.psd[8] - 2.0).abs() < 1e-9,
+            "welch boxcar psd[8]={}",
+            rb.psd[8]
+        );
+        assert!(
+            (rb.psd[20] - 0.18).abs() < 1e-9,
+            "welch boxcar psd[20]={}",
+            rb.psd[20]
+        );
+    }
+
+    #[test]
     fn czt_empty_output() {
         let x = vec![1.0, 2.0];
         let result = czt(&x, 0, None, None).unwrap();
