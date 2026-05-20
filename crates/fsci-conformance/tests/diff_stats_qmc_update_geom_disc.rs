@@ -1,11 +1,11 @@
 #![forbid(unsafe_code)]
 //! Live scipy parity for fsci_stats qmc `geometric_discrepancy`
-//! (both MinDist and Mst variants).
+//! (both MinDist and Mst variants) and `update_centered_discrepancy`.
 //!
 //! Resolves [frankenscipy-68ea5]. Tolerances: 1e-12 abs.
 //!
-//! `update_centered_discrepancy` divergence tracked in defect bead
-//! frankenscipy-wzk18 and excluded here.
+//! `update_centered_discrepancy` is checked against
+//! scipy.stats.qmc.update_discrepancy since frankenscipy-wzk18.
 
 use std::collections::HashMap;
 use std::fs;
@@ -14,7 +14,10 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use fsci_stats::{GeometricDiscrepancyMethod, geometric_discrepancy};
+use fsci_stats::{
+    GeometricDiscrepancyMethod, centered_discrepancy, geometric_discrepancy,
+    update_centered_discrepancy,
+};
 use serde::{Deserialize, Serialize};
 
 const PACKET_ID: &str = "FSCI-P2C-007";
@@ -264,8 +267,33 @@ fn diff_stats_qmc_update_geom_disc() {
     let mut diffs = Vec::new();
     let mut max_overall = 0.0_f64;
 
-    // update_centered_discrepancy excluded — defect frankenscipy-wzk18.
-    let _ = &upd_map;
+    // update_centered_discrepancy vs scipy.stats.qmc.update_discrepancy,
+    // both seeded with the centered discrepancy of the existing sample
+    // (frankenscipy-wzk18 — additive-update formula fixed).
+    for case in &query.update {
+        let Some(arm) = upd_map.get(&case.case_id) else {
+            continue;
+        };
+        let Some(expected) = arm.value else {
+            continue;
+        };
+        let Ok(prev) = centered_discrepancy(&case.existing, case.dimension) else {
+            continue;
+        };
+        let Ok(actual) =
+            update_centered_discrepancy(&case.existing, case.dimension, prev, &case.new_point)
+        else {
+            continue;
+        };
+        let abs_d = (actual - expected).abs();
+        max_overall = max_overall.max(abs_d);
+        diffs.push(CaseDiff {
+            case_id: case.case_id.clone(),
+            op: "update_centered_discrepancy".into(),
+            abs_diff: abs_d,
+            pass: abs_d <= ABS_TOL,
+        });
+    }
 
     for case in &query.geom {
         let Some(arm) = geom_map.get(&case.case_id) else {

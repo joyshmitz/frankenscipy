@@ -488,18 +488,19 @@ pub fn scale(
 }
 
 /// Update the centered L2 discrepancy `existing_disc` to reflect a new point
-/// appended to `existing_sample` — without recomputing the full O((N+1)²)
-/// double-sum from scratch.
-///
-/// Algebra: with `A = (13/12)^d`, `B = Σ_i s1(x_i)`, `C = Σ_{i,j} s2(x_i, x_j)`,
-/// the centered discrepancy is `A - 2B/N + C/N²`. We can recover `C` from
-/// `existing_disc` once `B` is computed in one O(N·d) pass over the sample,
-/// then add the new point's `s1`, cross, and self contributions in another
-/// O(N·d) pass — total O(N·d), strictly faster than the O((N+1)²·d) full
+/// appended to `existing_sample`, in O(N·d) instead of an O((N+1)²·d) full
 /// recomputation.
 ///
-/// Matches the incremental-update pattern in
-/// `scipy.stats.qmc.update_discrepancy(x_new, sample, initial_disc)`.
+/// Matches `scipy.stats.qmc.update_discrepancy(x_new, sample, initial_disc)`:
+/// the discrepancy of the augmented design is the prior `existing_disc` plus
+/// three correction terms, each normalized by `N = n_old + 1`,
+///
+///   disc1 = −(2/N)·s1(z),
+///   disc2 = (2/N²)·Σ_i s2(x_i, z),
+///   disc3 = (1/N²)·s2(z, z),
+///
+/// with `s1(x) = Π_k [1 + ½|x_k−½| − ½(x_k−½)²]` and
+/// `s2(a,b) = Π_k [1 + ½|a_k−½| + ½|b_k−½| − ½|a_k−b_k|]`.
 pub fn update_centered_discrepancy(
     existing_sample: &[f64],
     dimension: usize,
@@ -531,9 +532,9 @@ pub fn update_centered_discrepancy(
         }
     }
     let n_old = existing_sample.len() / dimension;
-    let n_new = n_old + 1;
-    let leading = (13.0_f64 / 12.0).powi(dimension as i32);
-    // Compute B_old = Σ_i s1(x_i) on the existing sample.
+    let n_new = (n_old + 1) as f64;
+
+    // s1(x) = Π_k [1 + ½|x_k−½| − ½(x_k−½)²].
     let s1 = |point: &[f64]| -> f64 {
         let mut prod = 1.0_f64;
         for &coordinate in point.iter().take(dimension) {
@@ -542,6 +543,7 @@ pub fn update_centered_discrepancy(
         }
         prod
     };
+    // s2(a,b) = Π_k [1 + ½|a_k−½| + ½|b_k−½| − ½|a_k−b_k|].
     let s2_pair = |a: &[f64], b: &[f64]| -> f64 {
         let mut prod = 1.0_f64;
         for k in 0..dimension {
@@ -551,25 +553,9 @@ pub fn update_centered_discrepancy(
         prod
     };
 
-    if n_old == 0 {
-        // Singleton extension.
-        let s1z = s1(new_point);
-        let s2zz = s2_pair(new_point, new_point);
-        let cd = leading - 2.0 * s1z + s2zz;
-        return Ok(cd);
-    }
-
-    let n_old_f = n_old as f64;
-    let mut b_old = 0.0_f64;
-    for i in 0..n_old {
-        let row = &existing_sample[i * dimension..(i + 1) * dimension];
-        b_old += s1(row);
-    }
-    // Recover C_old from existing_disc:
-    //   existing_disc = A - 2 B_old / N + C_old / N²
-    //   ⟹ C_old = N² · (existing_disc - A) + 2 N · B_old
-    let c_old = n_old_f * n_old_f * (existing_disc - leading) + 2.0 * n_old_f * b_old;
-
+    // scipy's additive correction (see the doc comment above). The cross
+    // loop is empty for an initially empty sample, so this also handles the
+    // singleton-extension case uniformly.
     let s1z = s1(new_point);
     let mut cross = 0.0_f64;
     for i in 0..n_old {
@@ -578,10 +564,10 @@ pub fn update_centered_discrepancy(
     }
     let self_term = s2_pair(new_point, new_point);
 
-    let b_new = b_old + s1z;
-    let c_new = c_old + 2.0 * cross + self_term;
-    let n_new_f = n_new as f64;
-    Ok(leading - 2.0 / n_new_f * b_new + c_new / (n_new_f * n_new_f))
+    let disc1 = -2.0 / n_new * s1z;
+    let disc2 = 2.0 / (n_new * n_new) * cross;
+    let disc3 = self_term / (n_new * n_new);
+    Ok(existing_disc + disc1 + disc2 + disc3)
 }
 
 /// Compute the L2-star discrepancy SD(P) of an `n × d` point set in
@@ -1434,21 +1420,27 @@ mod tests {
     }
 
     #[test]
-    fn update_centered_disc_metamorphic_matches_batch_recompute() {
-        // Build a 16-point Halton 2D design, compute CD² on first 16 points
-        // batch, then incrementally extend with one more point and compare
-        // against the batch CD² of the full 17-point set.
-        let mut h = HaltonSampler::new(2).unwrap();
-        let initial = h.sample(16);
-        let cd_initial = centered_discrepancy(&initial, 2).unwrap();
-        let extra = h.sample(1); // one new point
-        let cd_via_update = update_centered_discrepancy(&initial, 2, cd_initial, &extra).unwrap();
-        let mut combined = initial.clone();
-        combined.extend_from_slice(&extra);
-        let cd_via_batch = centered_discrepancy(&combined, 2).unwrap();
+    fn update_centered_disc_matches_scipy() {
+        // scipy.stats.qmc.update_discrepancy is an additive correction to
+        // the prior discrepancy, not a full recompute, so it does NOT equal
+        // centered_discrepancy of the augmented design. Reference values
+        // from scipy seeded with discrepancy(sample, method='CD').
+        let sample2 = [0.1, 0.2, 0.5, 0.7, 0.9, 0.3, 0.3, 0.85, 0.65, 0.45];
+        let init2 = centered_discrepancy(&sample2, 2).unwrap();
+        let got2 = update_centered_discrepancy(&sample2, 2, init2, &[0.4, 0.6]).unwrap();
         assert!(
-            (cd_via_update - cd_via_batch).abs() < 1e-12,
-            "incremental {cd_via_update} != batch {cd_via_batch}"
+            (got2 - (-0.014_156_180_555_556_32)).abs() < 1e-12,
+            "2D update = {got2}"
+        );
+
+        let sample3 = [
+            0.1, 0.2, 0.3, 0.5, 0.7, 0.15, 0.9, 0.3, 0.8, 0.35, 0.6, 0.55,
+        ];
+        let init3 = centered_discrepancy(&sample3, 3).unwrap();
+        let got3 = update_centered_discrepancy(&sample3, 3, init3, &[0.45, 0.25, 0.7]).unwrap();
+        assert!(
+            (got3 - 0.026_812_939_380_786_77).abs() < 1e-12,
+            "3D update = {got3}"
         );
     }
 
