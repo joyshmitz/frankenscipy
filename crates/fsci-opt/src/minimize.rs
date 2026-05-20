@@ -2840,13 +2840,20 @@ where
         let sy: f64 = s.iter().zip(y.iter()).map(|(si, yi)| si * yi).sum();
 
         if sy > 1.0e-12 {
-            let rho = 1.0 / sy;
-            for i in 0..n {
-                for j in 0..n {
-                    hess_approx[i][j] +=
-                        rho * (s[i] * y[j] + y[i] * s[j]) - rho * rho * sy * s[i] * s[j];
-                    if i == j {
-                        hess_approx[i][j] = hess_approx[i][j].max(1.0e-8);
+            // BFGS update of the Hessian approximation B (the search direction
+            // solves B d = grad): B_{k+1} = B_k - (B s)(B s)^T / (s^T B s)
+            //                                     + (y y^T) / (y^T s).
+            // The previous formula mixed inverse- and direct-Hessian terms and
+            // never referenced B_k, so the approximation degraded into noise
+            // and the iteration stalled in narrow valleys (e.g. Rosenbrock).
+            let bs: Vec<f64> = (0..n)
+                .map(|i| (0..n).map(|j| hess_approx[i][j] * s[j]).sum())
+                .collect();
+            let s_bs: f64 = s.iter().zip(bs.iter()).map(|(si, bsi)| si * bsi).sum();
+            if s_bs > 1.0e-12 {
+                for i in 0..n {
+                    for j in 0..n {
+                        hess_approx[i][j] += y[i] * y[j] / sy - bs[i] * bs[j] / s_bs;
                     }
                 }
             }
@@ -3168,6 +3175,13 @@ where
     let mut grad = finite_diff_gradient(&mut objective, &x, options.gradient_eps)?;
     let mut trust_radius = 1.0;
     let eta = 0.15;
+    // Quasi-Newton Hessian approximation B for the quadratic trust-region
+    // model m(s) = f + g·s + ½ s^T B s, updated by BFGS. A pure Cauchy
+    // (steepest-descent) step ignores curvature and stalls in narrow valleys.
+    let mut b_hess = vec![vec![0.0; n]; n];
+    for (i, row) in b_hess.iter_mut().enumerate() {
+        row[i] = 1.0;
+    }
 
     for iteration in 0..maxiter {
         let kkt_optimality = unconstrained_kkt_optimality(&grad);
@@ -3209,7 +3223,7 @@ where
             });
         }
 
-        let step = cauchy_point(&grad, trust_radius);
+        let step = dogleg_step(&b_hess, &grad, trust_radius);
 
         let x_new: Vec<f64> = x.iter().zip(step.iter()).map(|(xi, si)| xi + si).collect();
         let f_new = match objective.eval(&x_new) {
@@ -3233,11 +3247,13 @@ where
             Err(e) => return Err(e),
         };
 
-        let predicted = -grad
-            .iter()
-            .zip(step.iter())
-            .map(|(gi, si)| gi * si)
-            .sum::<f64>();
+        // Reduction predicted by the quadratic model: -(g·s + ½ s^T B s).
+        let bs: Vec<f64> = (0..n)
+            .map(|i| (0..n).map(|j| b_hess[i][j] * step[j]).sum())
+            .collect();
+        let s_bs: f64 = step.iter().zip(bs.iter()).map(|(si, bsi)| si * bsi).sum();
+        let g_s: f64 = grad.iter().zip(step.iter()).map(|(gi, si)| gi * si).sum();
+        let predicted = -(g_s + 0.5 * s_bs);
         let actual = f - f_new;
         let rho = if predicted.abs() > 1.0e-15 {
             actual / predicted
@@ -3245,18 +3261,33 @@ where
             0.0
         };
 
+        let step_norm = step.iter().map(|s| s * s).sum::<f64>().sqrt();
         if rho < 0.25 {
             trust_radius *= 0.25;
-        } else if rho > 0.75
-            && (step.iter().map(|s| s * s).sum::<f64>().sqrt() - trust_radius).abs() < 1.0e-10
-        {
+        } else if rho > 0.75 && (step_norm - trust_radius).abs() < 1.0e-10 {
             trust_radius = (2.0 * trust_radius).min(100.0);
         }
 
         if rho > eta {
+            let grad_new = finite_diff_gradient(&mut objective, &x_new, options.gradient_eps)?;
+            // BFGS update of the Hessian model:
+            //   B_{k+1} = B_k - (B s)(B s)^T / (s^T B s) + (y y^T) / (y^T s).
+            let y: Vec<f64> = grad_new
+                .iter()
+                .zip(grad.iter())
+                .map(|(gn, go)| gn - go)
+                .collect();
+            let sy: f64 = step.iter().zip(y.iter()).map(|(si, yi)| si * yi).sum();
+            if sy > 1.0e-12 && s_bs > 1.0e-12 {
+                for i in 0..n {
+                    for j in 0..n {
+                        b_hess[i][j] += y[i] * y[j] / sy - bs[i] * bs[j] / s_bs;
+                    }
+                }
+            }
             x = x_new;
             f = f_new;
-            grad = finite_diff_gradient(&mut objective, &x, options.gradient_eps)?;
+            grad = grad_new;
         }
 
         if trust_radius < tol * 1.0e-6 {
@@ -3316,13 +3347,68 @@ fn unconstrained_kkt_optimality(grad: &[f64]) -> f64 {
     linf_norm(grad)
 }
 
-fn cauchy_point(grad: &[f64], trust_radius: f64) -> Vec<f64> {
+/// Powell's dogleg step for the trust-region subproblem
+/// `min g·s + ½ s^T B s` subject to `||s|| <= trust_radius`.
+///
+/// Combines the Cauchy point (steepest-descent model minimizer) and the
+/// Newton point `-B^{-1} g`: returns the Newton point when it lies inside the
+/// region, the boundary-scaled steepest-descent step when even the Cauchy
+/// point lies outside, and otherwise the point where the segment joining them
+/// crosses the trust boundary.
+fn dogleg_step(b: &[Vec<f64>], grad: &[f64], trust_radius: f64) -> Vec<f64> {
+    let n = grad.len();
     let grad_norm = grad.iter().map(|g| g * g).sum::<f64>().sqrt();
     if grad_norm < 1.0e-15 {
-        return vec![0.0; grad.len()];
+        return vec![0.0; n];
     }
-    let scale = trust_radius / grad_norm;
-    grad.iter().map(|g| -scale * g).collect()
+
+    // Newton point p_b = -B^{-1} g.
+    let binv_g = conjugate_gradient_solve(b, grad, 1.0e-10, n.clamp(1, 50));
+    let p_newton: Vec<f64> = binv_g.iter().map(|v| -v).collect();
+    let newton_norm = p_newton.iter().map(|p| p * p).sum::<f64>().sqrt();
+    if newton_norm.is_finite() && newton_norm <= trust_radius {
+        return p_newton;
+    }
+
+    // Cauchy point p_u = -(g·g / g^T B g) g.
+    let gg = grad_norm * grad_norm;
+    let bg: Vec<f64> = (0..n)
+        .map(|i| (0..n).map(|j| b[i][j] * grad[j]).sum())
+        .collect();
+    let gbg: f64 = grad.iter().zip(bg.iter()).map(|(g, bgi)| g * bgi).sum();
+    if gbg <= 0.0 || gbg.is_nan() {
+        // Non-positive curvature: ride the boundary along -g.
+        let scale = trust_radius / grad_norm;
+        return grad.iter().map(|g| -scale * g).collect();
+    }
+    let p_cauchy: Vec<f64> = grad.iter().map(|g| -(gg / gbg) * g).collect();
+    let cauchy_norm = p_cauchy.iter().map(|p| p * p).sum::<f64>().sqrt();
+    if cauchy_norm >= trust_radius || !newton_norm.is_finite() {
+        let scale = trust_radius / grad_norm;
+        return grad.iter().map(|g| -scale * g).collect();
+    }
+
+    // Second dogleg leg: p(t) = p_cauchy + t (p_newton - p_cauchy), t in [0,1];
+    // pick t where ||p(t)|| = trust_radius.
+    let diff: Vec<f64> = p_newton
+        .iter()
+        .zip(p_cauchy.iter())
+        .map(|(pn, pc)| pn - pc)
+        .collect();
+    let a: f64 = diff.iter().map(|d| d * d).sum();
+    let b_coef: f64 = 2.0 * p_cauchy.iter().zip(diff.iter()).map(|(pc, d)| pc * d).sum::<f64>();
+    let c = cauchy_norm * cauchy_norm - trust_radius * trust_radius;
+    let t = if a.abs() < 1.0e-15 {
+        0.0
+    } else {
+        let disc = (b_coef * b_coef - 4.0 * a * c).max(0.0).sqrt();
+        ((-b_coef + disc) / (2.0 * a)).clamp(0.0, 1.0)
+    };
+    p_cauchy
+        .iter()
+        .zip(diff.iter())
+        .map(|(pc, d)| pc + t * d)
+        .collect()
 }
 
 #[cfg(test)]
@@ -5068,6 +5154,22 @@ mod tests {
     }
 
     #[test]
+    fn tnc_converges_on_rosenbrock() {
+        // From (0, 0) at default options. Previously stalled at f ~ 0.95
+        // because the quasi-Newton update never referenced B_k.
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::Tnc),
+            ..MinimizeOptions::default()
+        };
+        let result = tnc(&rosenbrock, &[0.0, 0.0], options).expect("tnc rosenbrock");
+        assert!(
+            result.fun.is_some_and(|v| v < 1e-3),
+            "tnc Rosenbrock f={:?} should be < 1e-3",
+            result.fun
+        );
+    }
+
+    #[test]
     fn tnc_respects_maxfev_limit() -> Result<(), OptError> {
         // Pathologically tight budget: one function evaluation is not enough
         // to converge. TNC should hit the budget limit, not hang.
@@ -5142,6 +5244,24 @@ mod tests {
             (result.x[0] - 2.0).abs() < 1e-2 && (result.x[1] + 3.0).abs() < 1e-2,
             "trust_constr x={:?}",
             result.x
+        );
+    }
+
+    #[test]
+    fn trust_constr_converges_on_rosenbrock() {
+        // From (0, 0). A Cauchy-only (steepest-descent) trust step stalled at
+        // f ~ 0.048; the dogleg step with a BFGS Hessian model descends the
+        // narrow valley.
+        let options = MinimizeOptions {
+            method: Some(OptimizeMethod::TrustConstr),
+            ..MinimizeOptions::default()
+        };
+        let result =
+            trust_constr(&rosenbrock, &[0.0, 0.0], options).expect("trust_constr rosenbrock");
+        assert!(
+            result.fun.is_some_and(|v| v < 1e-3),
+            "trust_constr Rosenbrock f={:?} should be < 1e-3",
+            result.fun
         );
     }
 
