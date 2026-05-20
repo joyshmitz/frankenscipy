@@ -1,15 +1,15 @@
 #![forbid(unsafe_code)]
 //! Live scipy.interpolate parity for spline derivative/antiderivative
-//! operations: splder, splantider, splint.
+//! operations: splder, splantider, splint, sproot.
 //!
 //! Resolves [frankenscipy-pq6k2]. Strategy: build the spline once via
 //! fsci.splrep(x, y, k, 0.0), pass the resulting tck to BOTH fsci and
 //! scipy's spline ops. Compare derived tck (knots, coefs) and
 //! evaluated outputs (antider compared after constant-shift removal).
 //!
-//! splint (definite integral) is covered here since the splantider
-//! indexing fix (frankenscipy-05m2t). sproot is still excluded —
-//! tracked in frankenscipy-5lyd8.
+//! splint (definite integral) is covered since the splantider indexing
+//! fix (frankenscipy-05m2t); sproot (spline zeros) since the analytic
+//! per-interval root finder (frankenscipy-5lyd8).
 //!
 //! Tolerances: 1e-9 abs for tck/values.
 
@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use fsci_interpolate::{splantider, splder, splev, splint, splrep};
+use fsci_interpolate::{splantider, splder, splev, splint, splrep, sproot};
 use serde::{Deserialize, Serialize};
 
 const PACKET_ID: &str = "FSCI-P2C-007";
@@ -441,8 +441,22 @@ fn diff_interpolate_spl_ops() {
             });
         }
 
-        // sproot remains excluded — tracked in frankenscipy-5lyd8.
-        let _ = (case.do_sproot, &arm.sproot);
+        // sproot: zeros of a cubic spline, sorted ascending
+        // (frankenscipy-5lyd8 — analytic per-interval cubic root finder).
+        if case.do_sproot
+            && let Some(expected) = arm.sproot.as_ref()
+            && let Ok(mut found) = sproot(&(tck.t.clone(), tck.c.clone(), tck.k))
+        {
+            found.sort_by(f64::total_cmp);
+            let abs_d = vec_max_diff(&found, expected);
+            max_overall = max_overall.max(abs_d);
+            diffs.push(CaseDiff {
+                case_id: format!("{}_sproot", case.case_id),
+                op: "sproot".into(),
+                abs_diff: abs_d,
+                pass: abs_d <= VAL_TOL,
+            });
+        }
     }
 
     let all_pass = diffs.iter().all(|d| d.pass);

@@ -3326,47 +3326,106 @@ pub fn sproot(tck: &(Vec<f64>, Vec<f64>, usize)) -> Result<Vec<f64>, InterpError
     }
 
     let bspl = BSpline::new(t.clone(), c.clone(), *k)?;
-    let mut roots = Vec::new();
+    let d1 = bspl.derivative(1)?;
+    let d2 = bspl.derivative(2)?;
+    let d3 = bspl.derivative(3)?;
 
-    // Search for roots by evaluating on a fine grid and finding sign changes
-    let x_lo = t[*k];
-    let x_hi = t[c.len()];
-    let n_search = (c.len() * 20).max(200);
-    let h = (x_hi - x_lo) / n_search as f64;
-
-    let mut prev = bspl.eval(x_lo);
-    for i in 1..=n_search {
-        let x = x_lo + i as f64 * h;
-        let curr = bspl.eval(x);
-
-        if prev.signum() != curr.signum() && prev.is_finite() && curr.is_finite() {
-            // Bisection to find root
-            let mut lo = x - h;
-            let mut hi = x;
-            for _ in 0..60 {
-                let mid = (lo + hi) / 2.0;
-                let fmid = bspl.eval(mid);
-                if fmid.signum() == bspl.eval(lo).signum() {
-                    lo = mid;
-                } else {
-                    hi = mid;
-                }
-            }
-            roots.push((lo + hi) / 2.0);
+    // On every knot interval [t[l], t[l+1]] the spline is a single cubic
+    // polynomial. Recover that cubic from a Taylor expansion at the left
+    // knot and solve it exactly, instead of scanning a fixed grid (which
+    // misses closely spaced roots and double-counts roots near knots).
+    let n_coeff = c.len(); // == t.len() - k - 1 for the tight BSpline tck
+    let mut roots: Vec<f64> = Vec::new();
+    for l in *k..n_coeff {
+        let a = t[l];
+        let b = t[l + 1];
+        if b <= a {
+            continue; // repeated knot — empty interval
         }
-
-        if curr.abs() < 1e-14 {
-            roots.push(x);
+        // p(u) = c0 + c1·u + c2·u² + c3·u³, u ∈ [0, b−a).
+        let c0 = bspl.eval(a);
+        let c1 = d1.eval(a);
+        let c2 = d2.eval(a) / 2.0;
+        let c3 = d3.eval(a) / 6.0;
+        for u in cubic_roots_on_interval(c0, c1, c2, c3, b - a) {
+            roots.push(a + u);
         }
-
-        prev = curr;
+    }
+    // The half-open intervals above exclude the domain's right endpoint;
+    // include it explicitly when the spline vanishes there.
+    let x_hi = t[n_coeff];
+    let v_hi = bspl.eval(x_hi);
+    let hi_scale = 1.0 + c.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+    if v_hi.abs() <= 1e-9 * hi_scale {
+        roots.push(x_hi);
     }
 
-    // Deduplicate nearby roots
-    roots.sort_by(|a, b| a.total_cmp(b));
-    roots.dedup_by(|a, b| (*a - *b).abs() < h * 0.5);
-
+    roots.sort_by(f64::total_cmp);
+    // Roots coinciding at a shared knot collapse to a single entry.
+    roots.dedup_by(|x, y| (*x - *y).abs() <= 1e-7 * (1.0 + x.abs()));
     Ok(roots)
+}
+
+/// Real roots of the cubic `c0 + c1·u + c2·u² + c3·u³` lying in `[0, h)`.
+///
+/// The cubic's critical points split `[0, h]` into monotonic segments; each
+/// segment contains at most one root, located by a sign change (with a
+/// tolerance check at the segment's left breakpoint for roots that land on
+/// a knot or a tangency).
+fn cubic_roots_on_interval(c0: f64, c1: f64, c2: f64, c3: f64, h: f64) -> Vec<f64> {
+    let p = |u: f64| ((c3 * u + c2) * u + c1) * u + c0;
+    let scale = c0.abs() + c1.abs() * h + c2.abs() * h * h + c3.abs() * h * h * h;
+    let eps = 1e-12 * (1.0 + scale);
+
+    // Critical points of p: roots of p'(u) = 3·c3·u² + 2·c2·u + c1.
+    let mut breaks = vec![0.0_f64, h];
+    let (qa, qb, qc) = (3.0 * c3, 2.0 * c2, c1);
+    if qa.abs() > 1e-300 {
+        let disc = qb * qb - 4.0 * qa * qc;
+        if disc >= 0.0 {
+            let sq = disc.sqrt();
+            for r in [(-qb - sq) / (2.0 * qa), (-qb + sq) / (2.0 * qa)] {
+                if r > 0.0 && r < h {
+                    breaks.push(r);
+                }
+            }
+        }
+    } else if qb.abs() > 1e-300 {
+        let r = -qc / qb;
+        if r > 0.0 && r < h {
+            breaks.push(r);
+        }
+    }
+    breaks.sort_by(f64::total_cmp);
+
+    let mut roots = Vec::new();
+    for w in breaks.windows(2) {
+        let (lo, hi) = (w[0], w[1]);
+        if hi <= lo {
+            continue;
+        }
+        let plo = p(lo);
+        let phi = p(hi);
+        if plo.abs() <= eps {
+            // Root at the left breakpoint (knot, or a tangency at a
+            // critical point that a sign-change test would miss).
+            roots.push(lo);
+        } else if (plo < 0.0) != (phi < 0.0) {
+            // One sign change on a monotonic segment: bisect for the root.
+            let (mut a, mut b) = (lo, hi);
+            for _ in 0..80 {
+                let mid = 0.5 * (a + b);
+                if (p(mid) < 0.0) == (plo < 0.0) {
+                    a = mid;
+                } else {
+                    b = mid;
+                }
+            }
+            roots.push(0.5 * (a + b));
+        }
+    }
+    roots.retain(|&u| (0.0..h).contains(&u));
+    roots
 }
 
 /// Evaluate a polynomial and its derivatives.
@@ -6422,5 +6481,37 @@ mod tests {
         let starved = (vec![0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 3.0, 3.0], vec![1.0], 2);
         assert!(splantider(&starved).is_err());
         assert!(splder(&starved).is_err());
+    }
+
+    #[test]
+    fn sproot_matches_scipy_on_cubic_bspline() {
+        // Hand-built cubic B-spline; reference roots from
+        // scipy.interpolate.sproot on the same tck.
+        let tck = (
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 4.0, 4.0, 4.0, 4.0],
+            vec![-2.0, -1.0, 1.0, -1.0, 1.0, 2.0, 3.0],
+            3,
+        );
+        let roots = sproot(&tck).expect("sproot");
+        let expected = [
+            0.819_600_955_053_800_3,
+            1.476_002_243_894_599,
+            2.447_523_768_942_384_8,
+        ];
+        assert_eq!(roots.len(), expected.len(), "root count: {roots:?}");
+        for (got, want) in roots.iter().zip(expected.iter()) {
+            assert!((got - want).abs() < 1e-7, "root {got} != {want}");
+        }
+        // Each reported root really is a zero of the spline.
+        let bspl = BSpline::new(tck.0.clone(), tck.1.clone(), tck.2).unwrap();
+        for &r in &roots {
+            assert!(bspl.eval(r).abs() < 1e-7, "spline({r}) != 0");
+        }
+    }
+
+    #[test]
+    fn sproot_rejects_non_cubic() {
+        let tck = (vec![0.0, 0.0, 0.0, 1.0, 2.0, 2.0, 2.0], vec![1.0, -1.0, 1.0], 2);
+        assert!(sproot(&tck).is_err());
     }
 }
