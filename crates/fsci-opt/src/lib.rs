@@ -1792,6 +1792,36 @@ where
     let mut x_current = x_best.clone();
     let mut f_current = f_best;
 
+    // Local search: dual annealing's defining step is a deterministic local
+    // minimization after each annealing move (scipy uses L-BFGS-B). The bfgs
+    // result is clamped back into the bounds and re-evaluated.
+    let minimize_opts = MinimizeOptions {
+        method: Some(OptimizeMethod::Bfgs),
+        maxiter: Some(200),
+        ..MinimizeOptions::default()
+    };
+    let local_search = |start: &[f64], nfev: &mut usize| -> (Vec<f64>, f64) {
+        match crate::bfgs(&func, start, minimize_opts) {
+            Ok(res) => {
+                *nfev += res.nfev;
+                let x_clamped: Vec<f64> = res
+                    .x
+                    .iter()
+                    .zip(bounds.iter())
+                    .map(|(&xi, &(lo, hi))| xi.clamp(lo, hi))
+                    .collect();
+                let f_clamped = func(&x_clamped);
+                *nfev += 1;
+                (x_clamped, f_clamped)
+            }
+            Err(_) => {
+                let f = func(start);
+                *nfev += 1;
+                (start.to_vec(), f)
+            }
+        }
+    };
+
     // Temperature schedule
     let t_initial = 5230.0; // SciPy default
     for iteration in 0..maxiter {
@@ -1821,51 +1851,28 @@ where
         };
 
         if accept {
-            x_current = x_candidate;
+            x_current = x_candidate.clone();
             f_current = f_candidate;
+        }
+
+        // Local search from the annealing candidate.
+        let (x_local, f_local) = local_search(&x_candidate, &mut nfev);
+        if f_local < f_current {
+            x_current = x_local.clone();
+            f_current = f_local;
         }
 
         if f_current < f_best {
             x_best.clone_from(&x_current);
             f_best = f_current;
         }
+    }
 
-        // Periodic local search (every 100 iterations)
-        if iteration % 100 == 99 {
-            // Simple coordinate descent as local search
-            for d in 0..ndim {
-                let (lo, hi) = bounds[d];
-                let mut h = (hi - lo) * 0.01;
-                let mut x_local = x_best.clone();
-                let original_val = x_local[d];
-                for _ in 0..10 {
-                    x_local[d] = (original_val + h).min(hi);
-                    let fp = func(&x_local);
-                    nfev += 1;
-
-                    x_local[d] = (original_val - h).max(lo);
-                    let fm = func(&x_local);
-                    nfev += 1;
-
-                    x_local[d] = original_val; // restore
-
-                    if fp < fm && fp < f_best {
-                        x_local[d] = (original_val + h).min(hi);
-                        f_best = fp;
-                        x_best.clone_from(&x_local);
-                        break; // Step successful
-                    } else if fm < f_best {
-                        x_local[d] = (original_val - h).max(lo);
-                        f_best = fm;
-                        x_best.clone_from(&x_local);
-                        break; // Step successful
-                    }
-                    h /= 2.0; // Reduce step size if neither improved
-                }
-            }
-            x_current.clone_from(&x_best);
-            f_current = f_best;
-        }
+    // Final local polish of the best point found.
+    let (x_polished, f_polished) = local_search(&x_best, &mut nfev);
+    if f_polished < f_best {
+        x_best = x_polished;
+        f_best = f_polished;
     }
 
     Ok(OptimizeResult {
@@ -4884,35 +4891,54 @@ mod tests {
 
     #[test]
     fn dual_annealing_finds_sphere_minimum() {
-        // Sphere function: f(x) = Σ x_i²  — minimum at origin
+        // Sphere function: f(x) = Σ x_i²  — minimum 0 at origin. The bead's
+        // reproduction parameters: 100 iterations, seed 42. With a real local
+        // search per annealing step this converges essentially exactly.
         let result = dual_annealing(
             |x| x.iter().map(|&xi| xi * xi).sum(),
             &[(-5.0, 5.0), (-5.0, 5.0)],
-            1000,
+            100,
             42,
         )
         .expect("dual_annealing");
         assert!(result.success);
         assert!(
-            result.fun.unwrap() < 0.1,
+            result.fun.unwrap() < 1e-6,
             "should find near-zero minimum: {}",
             result.fun.unwrap()
         );
     }
 
     #[test]
+    fn dual_annealing_finds_shifted_quadratic() {
+        // Shifted convex quadratic with interior minimum 0 at (2, -3).
+        let result = dual_annealing(
+            |x| (x[0] - 2.0).powi(2) + (x[1] + 3.0).powi(2),
+            &[(-5.0, 5.0), (-5.0, 5.0)],
+            100,
+            42,
+        )
+        .expect("dual_annealing shifted");
+        assert!(
+            result.fun.unwrap() < 1e-6,
+            "should find the shifted minimum: {}",
+            result.fun.unwrap()
+        );
+    }
+
+    #[test]
     fn dual_annealing_finds_rosenbrock_valley() {
-        // Rosenbrock: f(x,y) = (1-x)² + 100(y-x²)²  — minimum at (1,1)
+        // Rosenbrock: f(x,y) = (1-x)² + 100(y-x²)²  — minimum 0 at (1,1).
         let result = dual_annealing(
             |x| (1.0 - x[0]).powi(2) + 100.0 * (x[1] - x[0] * x[0]).powi(2),
             &[(-5.0, 5.0), (-5.0, 5.0)],
-            2000,
+            100,
             123,
         )
         .expect("dual_annealing rosenbrock");
         assert!(
-            result.fun.unwrap() < 10.0,
-            "should find reasonable minimum: {}",
+            result.fun.unwrap() < 1e-3,
+            "should find the Rosenbrock minimum: {}",
             result.fun.unwrap()
         );
     }
