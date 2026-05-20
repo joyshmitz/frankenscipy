@@ -90,9 +90,9 @@ fn emit_log(log: &DiffLog) {
 
 fn generate_query() -> OracleQuery {
     let mut points = Vec::new();
-    // kolmogi(0.5) has a numerical bug in fsci (returns ~3.8e10 vs
-    // scipy's 0.8275); tracked as defect frankenscipy-or0dc. Skip 0.5.
-    let kolmogi_ps = [0.01_f64, 0.05, 0.1, 0.25, 0.75, 0.9, 0.95, 0.99];
+    // p = 0.5 included since the safeguarded Newton-bisection fix
+    // (frankenscipy-or0dc); a bare Newton previously diverged there.
+    let kolmogi_ps = [0.01_f64, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99];
     for &p in &kolmogi_ps {
         points.push(Case {
             case_id: format!("kolmogi_p{p}").replace('.', "p"),

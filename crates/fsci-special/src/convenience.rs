@@ -3402,47 +3402,67 @@ pub fn kolmogi_scalar(p: f64) -> f64 {
         return 0.0;
     }
 
-    // Initial guess from asymptotic: p ~ 2*exp(-2*y^2) => y ~ sqrt(-ln(p/2)/2)
-    let y0 = if p < 0.5 {
-        (-(p / 2.0).ln() / 2.0).sqrt()
-    } else {
-        0.5 // Start from center for larger p
-    };
+    // K(y) decreases monotonically from K(0) = 1 to 0, so the inverse is
+    // bracketed by [lo, hi] with K(lo) ≥ p ≥ K(hi). K(0) = 1 ≥ p gives the
+    // lower bound; grow the upper bound until the survival value drops
+    // below p.
+    let mut lo = 0.0_f64;
+    let mut hi = 1.0_f64;
+    while kolmogorov_scalar(hi) > p {
+        hi *= 2.0;
+        if hi > 1.0e6 {
+            return hi; // p indistinguishable from 0
+        }
+    }
 
-    // Newton-Raphson iteration
-    let mut y = y0;
-    for _ in 0..50 {
+    // Asymptotic seed from the dominant term p ≈ 2·exp(-2y²); valid for
+    // every p ∈ (0, 1) since p/2 ≤ 1/2. A bare Newton iteration from a
+    // fixed seed overshoots and diverges (notably at p = 0.5), so each
+    // step is safeguarded: it is accepted only while it stays inside the
+    // bracket, otherwise the method falls back to bisection.
+    let mut y = (-(p / 2.0).ln() / 2.0).sqrt().clamp(1.0e-12, hi);
+    for _ in 0..100 {
         let f = kolmogorov_scalar(y) - p;
-        if f.abs() < 1e-14 {
+        if f > 0.0 {
+            lo = y; // K(y) > p ⇒ y below the root
+        } else {
+            hi = y;
+        }
+        if f.abs() < 1.0e-15 {
             break;
         }
 
-        // Derivative: dK/dy = -8*y * sum_{k=1}^{inf} (-1)^{k-1} * k^2 * exp(-2*k^2*y^2)
+        // dK/dy = -8y · Σ_{k≥1} (-1)^{k-1} k² exp(-2k²y²).
         let y2 = y * y;
         let mut dsum = 0.0;
         let mut sign = 1.0;
         for k in 1..100 {
-            let kf = k as f64;
+            let kf = f64::from(k);
             let term = sign * kf * kf * (-2.0 * kf * kf * y2).exp();
             dsum += term;
-            if term.abs() < 1e-16 {
+            if term.abs() < 1.0e-18 {
                 break;
             }
             sign = -sign;
         }
         let df = -8.0 * y * dsum;
 
-        if df.abs() < 1e-30 {
+        let next = if df.abs() > 1.0e-300 {
+            let candidate = y - f / df;
+            if candidate > lo && candidate < hi {
+                candidate
+            } else {
+                0.5 * (lo + hi)
+            }
+        } else {
+            0.5 * (lo + hi)
+        };
+
+        if (next - y).abs() < 1.0e-15 * (1.0 + y) {
+            y = next;
             break;
         }
-
-        let delta = f / df;
-        y -= delta;
-        y = y.max(1e-15);
-
-        if delta.abs() < 1e-14 * y {
-            break;
-        }
+        y = next;
     }
 
     y
@@ -5460,6 +5480,27 @@ mod tests {
         assert!(kolmogi_scalar(0.0).is_infinite() && kolmogi_scalar(0.0).is_sign_positive());
         // kolmogi(1) = 0
         assert!((kolmogi_scalar(1.0) - 0.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn kolmogi_matches_scipy_reference() {
+        // Reference values from scipy.special.kolmogi. p = 0.5 previously
+        // diverged to ~3.8e10 because Newton overshot from a fixed seed
+        // (frankenscipy-or0dc).
+        for &(p, expected) in &[
+            (0.5_f64, 0.827_573_555_189_905_9),
+            (0.25, 1.019_184_720_253_685_7),
+            (0.75, 0.676_447_691_502_820_1),
+            (0.1, 1.223_847_870_217_082_3),
+            (0.9, 0.571_173_265_106_340_1),
+            (0.01, 1.627_623_611_518_950_4),
+        ] {
+            let got = kolmogi_scalar(p);
+            assert!(
+                (got - expected).abs() < 1e-9,
+                "kolmogi({p}) = {got}, expected {expected}"
+            );
+        }
     }
 
     #[test]
