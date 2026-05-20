@@ -438,24 +438,27 @@ impl ArrayApiBackend for CoreArrayBackend {
             ));
         }
 
-        let mut values = Vec::new();
-        let mut current = start_v;
-        if step_v > 0.0 {
-            while current < stop_v {
-                values.push(cast_scalar_to_dtype(
-                    ScalarValue::F64(current),
-                    resolved_dtype,
-                )?);
-                current += step_v;
+        // numpy computes the length analytically as ceil((stop-start)/step),
+        // then fills value[i] = start + i*step. Accumulating `current += step`
+        // lets floating-point drift emit a spurious extra element (e.g.
+        // arange(0, 1, 0.1) would yield 11 values instead of 10).
+        let length = {
+            let raw = (stop_v - start_v) / step_v;
+            let n = raw.ceil();
+            if n.is_finite() && n > 0.0 {
+                n as usize
+            } else {
+                0
             }
-        } else {
-            while current > stop_v {
-                values.push(cast_scalar_to_dtype(
-                    ScalarValue::F64(current),
-                    resolved_dtype,
-                )?);
-                current += step_v;
-            }
+        };
+
+        let mut values = Vec::with_capacity(length);
+        for i in 0..length {
+            let current = start_v + (i as f64) * step_v;
+            values.push(cast_scalar_to_dtype(
+                ScalarValue::F64(current),
+                resolved_dtype,
+            )?);
         }
 
         Ok(CoreArray {

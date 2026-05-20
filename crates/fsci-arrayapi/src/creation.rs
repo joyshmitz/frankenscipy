@@ -254,6 +254,46 @@ mod tests {
     }
 
     #[test]
+    fn arange_non_integer_step_matches_numpy_length() {
+        // numpy uses an analytic length n = ceil((stop-start)/step); accumulating
+        // `current += step` lets FP drift emit a spurious extra element.
+        let backend = strict_backend();
+        // (start, stop, step, expected_len) — verified against numpy.arange.
+        let cases = [
+            (0.0, 1.0, 0.1, 10),
+            (0.0, 1.0, 0.2, 5),
+            (1.0, 2.0, 0.3, 4),
+            (-2.0, 2.0, 0.5, 8),
+            (0.0, 1.0, 0.3, 4),
+            (5.0, 0.0, -1.0, 5),
+            (0.0, 0.0, 1.0, 0),
+            (0.0, -1.0, 1.0, 0),
+        ];
+        for (start, stop, step, expected_len) in cases {
+            let request = ArangeRequest {
+                start: ScalarValue::F64(start),
+                stop: ScalarValue::F64(stop),
+                step: ScalarValue::F64(step),
+                dtype: Some(DType::Float64),
+            };
+            let arr = arange(&backend, &request).expect("arange should succeed");
+            assert_eq!(
+                arr.values().len(),
+                expected_len,
+                "arange({start}, {stop}, {step}) length"
+            );
+            for (i, value) in arr.values().iter().enumerate() {
+                let expected = start + (i as f64) * step;
+                assert_eq!(
+                    *value,
+                    ScalarValue::F64(expected),
+                    "arange({start}, {stop}, {step})[{i}]"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn linspace_and_full_generate_expected_shapes() {
         let backend = strict_backend();
         let linspace_request = LinspaceRequest {
