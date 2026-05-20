@@ -1250,8 +1250,9 @@ pub fn czt(
 /// Zoom FFT: compute the DFT over a frequency sub-range [f1, f2] with M points.
 ///
 /// This uses the Chirp Z-Transform to evaluate the Z-transform at M equally
-/// spaced points on the unit circle arc from f1 to f2 (normalized frequencies,
-/// where 1.0 = sampling rate).
+/// spaced points on the unit circle arc from f1 to f2 using SciPy's default
+/// `fs=2` convention, where 1.0 is the Nyquist frequency and 2.0 spans the
+/// full unit circle.
 ///
 /// # Arguments
 /// * `x` — Input signal.
@@ -1270,15 +1271,18 @@ pub fn zoom_fft(x: &[f64], f_range: (f64, f64), m: usize) -> Result<Vec<(f64, f6
     }
 
     let two_pi = 2.0 * std::f64::consts::PI;
+    let scipy_default_fs = 2.0;
     let (f1, f2) = f_range;
 
-    // Starting point on unit circle: a = exp(j * 2π * f1)
-    let a = (1.0, two_pi * f1);
+    // SciPy's default fs is 2.0, so f=1.0 is Nyquist and f=2.0
+    // completes the unit circle.
+    let a = (1.0, two_pi * f1 / scipy_default_fs);
 
-    // We want z_k = exp(j*2π*f_k) where f_k = f1 + k*(f2-f1)/M.
-    // In CZT: z_k = a * w^{-k}, so w = exp(-j*2π*(f2-f1)/M).
+    // We want z_k = exp(j*2π*f_k/fs) where
+    // f_k = f1 + k*(f2-f1)/M and fs = 2.0. In CZT:
+    // z_k = a * w^{-k}, so w = exp(-j*2π*(f2-f1)/(fs*M)).
 
-    let w = (1.0, -two_pi * (f2 - f1) / m as f64);
+    let w = (1.0, -two_pi * (f2 - f1) / (scipy_default_fs * m as f64));
 
     czt(x, m, Some(w), Some(a))
 }
@@ -15697,7 +15701,7 @@ mod tests {
 
         // Zoom into the frequency range containing both tones
         let m = 64;
-        let result = zoom_fft(&x, (8.0 / n as f64, 14.0 / n as f64), m).unwrap();
+        let result = zoom_fft(&x, (16.0 / n as f64, 28.0 / n as f64), m).unwrap();
 
         // Should have two peaks in the zoomed spectrum
         let mags: Vec<f64> = result
@@ -15722,6 +15726,27 @@ mod tests {
             "zoom FFT should resolve 2 peaks, got {} peaks",
             peaks.len()
         );
+    }
+
+    #[test]
+    fn zoom_fft_full_range_matches_czt_default() {
+        let x: Vec<f64> = (0..8).map(|i| (i as f64 + 1.0).sin()).collect();
+        let zoomed = zoom_fft(&x, (0.0, 2.0), x.len()).unwrap();
+        let full = czt(&x, x.len(), None, None).unwrap();
+        for (idx, (got, want)) in zoomed.iter().zip(full.iter()).enumerate() {
+            assert!(
+                (got.0 - want.0).abs() < 1e-10,
+                "zoom real[{idx}]={}, czt={}",
+                got.0,
+                want.0
+            );
+            assert!(
+                (got.1 - want.1).abs() < 1e-10,
+                "zoom imag[{idx}]={}, czt={}",
+                got.1,
+                want.1
+            );
+        }
     }
 
     #[test]
@@ -16365,7 +16390,11 @@ mod tests {
     fn bilinear_matches_scipy_higher_order() {
         // scipy.signal.bilinear([2, 0, 1], [1, 1, 1], fs=4) — 2nd order.
         let (b, a) = bilinear(&[2.0, 0.0, 1.0], &[1.0, 1.0, 1.0], 4.0);
-        let want_b = [1.767_123_287_671_232_8, -3.479_452_054_794_520_7, 1.767_123_287_671_232_8];
+        let want_b = [
+            1.767_123_287_671_232_8,
+            -3.479_452_054_794_520_7,
+            1.767_123_287_671_232_8,
+        ];
         let want_a = [1.0, -1.726_027_397_260_274, 0.780_821_917_808_219_2];
         for (g, w) in b.iter().zip(want_b.iter()) {
             assert!((g - w).abs() < 1e-12, "b: got {g}, want {w}");
