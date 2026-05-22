@@ -17254,6 +17254,28 @@ pub fn weighted_var(values: &[f64], weights: &[f64]) -> f64 {
         / total_w
 }
 
+/// Kish's effective sample size for weighted data.
+///
+/// Computes the effective sample size when observations have different weights.
+/// n_eff = (Σw)² / Σ(w²)
+///
+/// For equal weights, returns the actual sample size.
+/// For highly variable weights, returns a smaller effective size.
+pub fn neff(weights: &[f64]) -> f64 {
+    if weights.is_empty() {
+        return 0.0;
+    }
+    if weights.iter().any(|&w| !w.is_finite() || w < 0.0) {
+        return f64::NAN;
+    }
+    let sum_w: f64 = weights.iter().sum();
+    let sum_w2: f64 = weights.iter().map(|&w| w * w).sum();
+    if sum_w2 == 0.0 {
+        return 0.0;
+    }
+    (sum_w * sum_w) / sum_w2
+}
+
 /// Compute the geometric mean.
 ///
 /// Matches `scipy.stats.gmean`.
@@ -52334,6 +52356,18 @@ mod tests {
         let exact = ttest_1samp_from_stats(5.0, 2.0, 30, 5.0, None);
         assert!((exact.statistic).abs() < 1e-10);
         assert!(exact.pvalue > 0.99);
+    }
+
+    #[test]
+    fn test_neff() {
+        let equal = neff(&[1.0, 1.0, 1.0, 1.0]);
+        assert!((equal - 4.0).abs() < 1e-10);
+        let unequal = neff(&[1.0, 2.0, 3.0, 4.0]);
+        assert!(unequal < 4.0 && unequal > 2.0);
+        let concentrated = neff(&[0.1, 0.1, 0.1, 10.0]);
+        assert!(concentrated < 2.0);
+        let empty = neff(&[]);
+        assert_eq!(empty, 0.0);
     }
 
 }
