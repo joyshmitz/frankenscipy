@@ -7742,11 +7742,6 @@ impl ContinuousDistribution for InverseGamma {
         self.a + ln_gamma(self.a) - (1.0 + self.a) * fsci_special::digamma_scalar(self.a)
     }
 
-    fn fit(data: &[f64]) -> Self {
-        Self::try_fit(data).unwrap_or_else(|e| {
-            panic!("InverseGamma::fit failed: {e}");
-        })
-    }
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
@@ -7879,11 +7874,6 @@ impl ContinuousDistribution for InverseGaussian {
         )
     }
 
-    fn fit(data: &[f64]) -> Self {
-        Self::try_fit(data).unwrap_or_else(|e| {
-            panic!("InverseGaussian::fit failed: {e}");
-        })
-    }
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
@@ -8044,11 +8034,6 @@ impl ContinuousDistribution for Pearson3 {
         alpha + ln_gamma(alpha) + (1.0 - alpha) * fsci_special::digamma_scalar(alpha) + scale.ln()
     }
 
-    fn fit(data: &[f64]) -> Self {
-        Self::try_fit(data).unwrap_or_else(|e| {
-            panic!("Pearson3::fit failed: {e}");
-        })
-    }
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 3 {
@@ -8181,11 +8166,6 @@ impl ContinuousDistribution for ExponNorm {
         )
     }
 
-    fn fit(data: &[f64]) -> Self {
-        Self::try_fit(data).unwrap_or_else(|e| {
-            panic!("ExponNorm::fit failed: {e}");
-        })
-    }
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
@@ -9173,11 +9153,6 @@ impl ContinuousDistribution for GenPareto {
         1.0 + self.c
     }
 
-    fn fit(data: &[f64]) -> Self {
-        Self::try_fit(data).unwrap_or_else(|e| {
-            panic!("GenPareto::fit failed: {e}");
-        })
-    }
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
@@ -9964,11 +9939,6 @@ impl ContinuousDistribution for Chi {
         }
     }
 
-    fn fit(data: &[f64]) -> Self {
-        Self::try_fit(data).unwrap_or_else(|e| {
-            panic!("Chi::fit failed: {e}");
-        })
-    }
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
@@ -10136,11 +10106,6 @@ impl ContinuousDistribution for Rice {
         )
     }
 
-    fn fit(data: &[f64]) -> Self {
-        Self::try_fit(data).unwrap_or_else(|e| {
-            panic!("Rice::fit failed: {e}");
-        })
-    }
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
@@ -10271,11 +10236,6 @@ impl ContinuousDistribution for Nakagami {
         ((self.nu - 0.5) / self.nu).sqrt()
     }
 
-    fn fit(data: &[f64]) -> Self {
-        Self::try_fit(data).unwrap_or_else(|e| {
-            panic!("Nakagami::fit failed: {e}");
-        })
-    }
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
@@ -10475,11 +10435,6 @@ impl ContinuousDistribution for Fisk {
         }
     }
 
-    fn fit(data: &[f64]) -> Self {
-        Self::try_fit(data).unwrap_or_else(|e| {
-            panic!("Fisk::fit failed: {e}");
-        })
-    }
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
@@ -10642,11 +10597,6 @@ impl ContinuousDistribution for Loguniform {
         self.a
     }
 
-    fn fit(data: &[f64]) -> Self {
-        Self::try_fit(data).unwrap_or_else(|e| {
-            panic!("Loguniform::fit failed: {e}");
-        })
-    }
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
@@ -11205,11 +11155,6 @@ impl ContinuousDistribution for DoubleGamma {
         if self.a > 1.0 { self.a - 1.0 } else { 0.0 }
     }
 
-    fn fit(data: &[f64]) -> Self {
-        Self::try_fit(data).unwrap_or_else(|e| {
-            panic!("DoubleGamma::fit failed: {e}");
-        })
-    }
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
@@ -11878,11 +11823,6 @@ impl ContinuousDistribution for Erlang {
         k + ln_gamma(k) + (1.0 - k) * fsci_special::digamma_scalar(k) - self.rate.ln()
     }
 
-    fn fit(data: &[f64]) -> Self {
-        Self::try_fit(data).unwrap_or_else(|e| {
-            panic!("Erlang::fit failed: {e}");
-        })
-    }
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
@@ -12142,11 +12082,6 @@ impl ContinuousDistribution for Bradford {
         mu4 / (var * var) - 3.0
     }
 
-    fn fit(data: &[f64]) -> Self {
-        Self::try_fit(data).unwrap_or_else(|e| {
-            panic!("Bradford::fit failed: {e}");
-        })
-    }
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
@@ -12405,11 +12340,6 @@ impl ContinuousDistribution for Levy {
         0.5 * (1.0 + 3.0 * EULER_MASCHERONI + (16.0 * PI * self.scale * self.scale).ln())
     }
 
-    fn fit(data: &[f64]) -> Self {
-        Self::try_fit(data).unwrap_or_else(|e| {
-            panic!("Levy::fit failed: {e}");
-        })
-    }
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
@@ -12541,11 +12471,6 @@ impl ContinuousDistribution for LevyLeft {
         0.5 * (1.0 + 3.0 * EULER_MASCHERONI + (16.0 * PI * self.scale * self.scale).ln())
     }
 
-    fn fit(data: &[f64]) -> Self {
-        Self::try_fit(data).unwrap_or_else(|e| {
-            panic!("LevyLeft::fit failed: {e}");
-        })
-    }
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
@@ -13034,11 +12959,6 @@ impl ContinuousDistribution for LogLaplace {
         mu4 / (var * var) - 3.0
     }
 
-    fn fit(data: &[f64]) -> Self {
-        Self::try_fit(data).unwrap_or_else(|e| {
-            panic!("LogLaplace::fit failed: {e}");
-        })
-    }
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
@@ -13200,11 +13120,6 @@ impl ContinuousDistribution for Loglogistic {
         mu4 / (var * var) - 3.0
     }
 
-    fn fit(data: &[f64]) -> Self {
-        Self::try_fit(data).unwrap_or_else(|e| {
-            panic!("Loglogistic::fit failed: {e}");
-        })
-    }
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
@@ -13608,11 +13523,6 @@ impl ContinuousDistribution for Gompertz {
         mu4 / (var * var) - 3.0
     }
 
-    fn fit(data: &[f64]) -> Self {
-        Self::try_fit(data).unwrap_or_else(|e| {
-            panic!("Gompertz::fit failed: {e}");
-        })
-    }
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
@@ -13847,11 +13757,6 @@ impl ContinuousDistribution for GenLogistic {
         kappa4 / (mu2 * mu2)
     }
 
-    fn fit(data: &[f64]) -> Self {
-        Self::try_fit(data).unwrap_or_else(|e| {
-            panic!("GenLogistic::fit failed: {e}");
-        })
-    }
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
@@ -15165,11 +15070,6 @@ impl ContinuousDistribution for TruncExpon {
         mu4 / (var * var) - 3.0
     }
 
-    fn fit(data: &[f64]) -> Self {
-        Self::try_fit(data).unwrap_or_else(|e| {
-            panic!("TruncExpon::fit failed: {e}");
-        })
-    }
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
@@ -15662,11 +15562,6 @@ impl ContinuousDistribution for InvWeibull {
         mu4 / (var * var) - 3.0
     }
 
-    fn fit(data: &[f64]) -> Self {
-        Self::try_fit(data).unwrap_or_else(|e| {
-            panic!("InvWeibull::fit failed: {e}");
-        })
-    }
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
@@ -15789,11 +15684,6 @@ impl ContinuousDistribution for GenNorm {
         m4 / (m2 * m2) - 3.0
     }
 
-    fn fit(data: &[f64]) -> Self {
-        Self::try_fit(data).unwrap_or_else(|e| {
-            panic!("GenNorm::fit failed: {e}");
-        })
-    }
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
@@ -15951,11 +15841,6 @@ impl ContinuousDistribution for HalfGenNorm {
         mu4 / (var * var) - 3.0
     }
 
-    fn fit(data: &[f64]) -> Self {
-        Self::try_fit(data).unwrap_or_else(|e| {
-            panic!("HalfGenNorm::fit failed: {e}");
-        })
-    }
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
@@ -16088,11 +15973,6 @@ impl ContinuousDistribution for LogGamma {
         fsci_special::pentagamma(self.c) / (kappa2 * kappa2)
     }
 
-    fn fit(data: &[f64]) -> Self {
-        Self::try_fit(data).unwrap_or_else(|e| {
-            panic!("LogGamma::fit failed: {e}");
-        })
-    }
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
@@ -37787,18 +37667,27 @@ mod tests {
         );
 
         // Typed errors instead of panics on bad input.
-        match <Logistic as ContinuousDistribution>::try_fit(&[]) {
-            Err(FitError::InsufficientData { .. }) => {}
-            other => panic!("Logistic empty -> InsufficientData; got {other:?}"),
-        }
-        match <Pareto as ContinuousDistribution>::try_fit(&[1.0, -2.0]) {
-            Err(FitError::UnsupportedData(_)) => {}
-            other => panic!("Pareto with non-positive sample -> UnsupportedData; got {other:?}"),
-        }
-        match <Lomax as ContinuousDistribution>::try_fit(&[-1.0]) {
-            Err(FitError::UnsupportedData(_)) => {}
-            other => panic!("Lomax with negative sample -> UnsupportedData; got {other:?}"),
-        }
+        assert!(
+            matches!(
+                <Logistic as ContinuousDistribution>::try_fit(&[]),
+                Err(FitError::InsufficientData { .. })
+            ),
+            "Logistic empty sample must return InsufficientData"
+        );
+        assert!(
+            matches!(
+                <Pareto as ContinuousDistribution>::try_fit(&[1.0, -2.0]),
+                Err(FitError::UnsupportedData(_))
+            ),
+            "Pareto non-positive sample must return UnsupportedData"
+        );
+        assert!(
+            matches!(
+                <Lomax as ContinuousDistribution>::try_fit(&[-1.0]),
+                Err(FitError::UnsupportedData(_))
+            ),
+            "Lomax negative sample must return UnsupportedData"
+        );
     }
 
     #[test]
