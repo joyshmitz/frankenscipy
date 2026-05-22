@@ -56604,6 +56604,36 @@ mod tests {
     }
 
     #[test]
+    fn percentile_matches_numpy_reference() {
+        // numpy.percentile([1,2,3,4,5], 50) = 3.0 (median)
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let p50 = percentile(&data, 50.0);
+        assert!((p50 - 3.0).abs() < 1e-10, "percentile 50 (median), got {}", p50);
+
+        // numpy.percentile([1,2,3,4,5], 0) = 1.0 (min)
+        let p0 = percentile(&data, 0.0);
+        assert!((p0 - 1.0).abs() < 1e-10, "percentile 0 (min), got {}", p0);
+
+        // numpy.percentile([1,2,3,4,5], 100) = 5.0 (max)
+        let p100 = percentile(&data, 100.0);
+        assert!((p100 - 5.0).abs() < 1e-10, "percentile 100 (max), got {}", p100);
+
+        // numpy.percentile([1,2,3,4,5], 25) = 2.0
+        let p25 = percentile(&data, 25.0);
+        assert!((p25 - 2.0).abs() < 1e-10, "percentile 25 (Q1), got {}", p25);
+    }
+
+    #[test]
+    fn quantile_matches_numpy_reference() {
+        // numpy.quantile([1,2,3,4,5], 0.5) = 3.0
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let q = quantile(&data, &[0.0, 0.25, 0.5, 0.75, 1.0]);
+        assert!((q[0] - 1.0).abs() < 1e-10, "quantile 0.0");
+        assert!((q[2] - 3.0).abs() < 1e-10, "quantile 0.5");
+        assert!((q[4] - 5.0).abs() < 1e-10, "quantile 1.0");
+    }
+
+    #[test]
     fn var_weighted_matches_numpy_reference() {
         // numpy.average([1,2,3,4], weights=[1,1,1,1]) = 2.5, variance computed from this
         // For uniform weights, weighted var should equal standard var
