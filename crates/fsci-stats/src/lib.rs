@@ -17436,6 +17436,64 @@ pub fn cov_weighted(x: &[f64], y: &[f64], weights: &[f64]) -> f64 {
         / total_w
 }
 
+/// Compute the Pearson correlation coefficient between two arrays.
+///
+/// r = cov(x, y) / (std(x) * std(y))
+pub fn corrcoef(x: &[f64], y: &[f64]) -> f64 {
+    if x.len() != y.len() || x.len() < 2 {
+        return f64::NAN;
+    }
+    let n = x.len() as f64;
+    let mean_x: f64 = x.iter().sum::<f64>() / n;
+    let mean_y: f64 = y.iter().sum::<f64>() / n;
+    let mut cov_xy = 0.0;
+    let mut var_x = 0.0;
+    let mut var_y = 0.0;
+    for (&xi, &yi) in x.iter().zip(y) {
+        let dx = xi - mean_x;
+        let dy = yi - mean_y;
+        cov_xy += dx * dy;
+        var_x += dx * dx;
+        var_y += dy * dy;
+    }
+    if var_x == 0.0 || var_y == 0.0 {
+        return f64::NAN;
+    }
+    cov_xy / (var_x * var_y).sqrt()
+}
+
+/// Compute the weighted Pearson correlation coefficient.
+///
+/// r_w = cov_w(x, y) / (std_w(x) * std_w(y))
+pub fn corrcoef_weighted(x: &[f64], y: &[f64], weights: &[f64]) -> f64 {
+    if x.len() != y.len() || x.len() != weights.len() || x.len() < 2 {
+        return f64::NAN;
+    }
+    if weights.iter().any(|&w| !w.is_finite() || w < 0.0) {
+        return f64::NAN;
+    }
+    let total_w: f64 = weights.iter().sum();
+    if total_w <= 0.0 {
+        return f64::NAN;
+    }
+    let mean_x: f64 = x.iter().zip(weights).map(|(&xi, &w)| w * xi).sum::<f64>() / total_w;
+    let mean_y: f64 = y.iter().zip(weights).map(|(&yi, &w)| w * yi).sum::<f64>() / total_w;
+    let mut cov_xy = 0.0;
+    let mut var_x = 0.0;
+    let mut var_y = 0.0;
+    for ((&xi, &yi), &w) in x.iter().zip(y).zip(weights) {
+        let dx = xi - mean_x;
+        let dy = yi - mean_y;
+        cov_xy += w * dx * dy;
+        var_x += w * dx * dx;
+        var_y += w * dy * dy;
+    }
+    if var_x == 0.0 || var_y == 0.0 {
+        return f64::NAN;
+    }
+    cov_xy / (var_x * var_y).sqrt()
+}
+
 /// Compute the weighted geometric mean.
 ///
 /// G_w = exp(Σ(w·ln(x)) / Σw)
