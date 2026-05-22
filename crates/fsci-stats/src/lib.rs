@@ -58902,4 +58902,69 @@ mod tests {
             result.pvalue
         );
     }
+
+    #[test]
+    fn jackknife_mean_matches_scipy_reference_values() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let result = jackknife_mean(&data);
+        assert!(
+            (result.statistic - 3.0).abs() < 1e-10,
+            "jackknife_mean statistic got {}, expected 3.0",
+            result.statistic
+        );
+        assert!(
+            result.bias.abs() < 1e-10,
+            "jackknife_mean bias got {}, expected 0.0",
+            result.bias
+        );
+        assert!(
+            (result.se - 0.7071067811865476).abs() < 1e-10,
+            "jackknife_mean se got {}, expected 0.7071067811865476",
+            result.se
+        );
+    }
+
+    #[test]
+    fn variation_matches_scipy_reference_values() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let result = variation(&data);
+        assert!(
+            (result - 0.5222329678670935).abs() < 1e-10,
+            "variation got {result}, expected 0.5222329678670935"
+        );
+    }
+
+    #[test]
+    fn mean_absolute_error_matches_scipy_reference_values() {
+        let y_true = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let y_pred = vec![1.1, 2.2, 2.8, 4.1, 5.0];
+        let result = mean_absolute_error(&y_true, &y_pred);
+        assert!(
+            (result - 0.12).abs() < 1e-10,
+            "mean_absolute_error got {result}, expected 0.12"
+        );
+    }
+
+    #[test]
+    fn median_absolute_error_matches_scipy_reference_values() {
+        let y_true = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let y_pred = vec![1.1, 2.2, 2.8, 4.1, 5.0];
+        let result = median_absolute_error(&y_true, &y_pred);
+        assert!(
+            (result - 0.1).abs() < 1e-10,
+            "median_absolute_error got {result}, expected 0.1"
+        );
+    }
+
+    #[test]
+    fn mean_absolute_percentage_error_matches_scipy_reference_values() {
+        // Our implementation returns ratio, not percentage (scipy returns percentage)
+        let y_true = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let y_pred = vec![1.1, 2.2, 2.8, 4.1, 5.0];
+        let result = mean_absolute_percentage_error(&y_true, &y_pred);
+        assert!(
+            (result - 0.05833333333333336).abs() < 1e-10,
+            "mean_absolute_percentage_error got {result}, expected 0.05833333333333336"
+        );
+    }
 }
