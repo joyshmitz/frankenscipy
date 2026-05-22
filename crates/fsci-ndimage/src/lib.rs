@@ -2207,6 +2207,23 @@ pub fn white_tophat(
     white_tophat_with_origins(input, size, &[0], mode, cval)
 }
 
+/// White top-hat over a SciPy-style signed axes subset.
+pub fn white_tophat_axes(
+    input: &NdArray,
+    size: usize,
+    axes: &[isize],
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError> {
+    let opened = grey_opening_axes(input, size, axes, mode, cval)?;
+
+    let mut result = NdArray::zeros(input.shape.clone());
+    for i in 0..result.data.len() {
+        result.data[i] = input.data[i] - opened.data[i];
+    }
+    Ok(result)
+}
+
 /// White top-hat with SciPy `origin` semantics.
 pub fn white_tophat_with_origins(
     input: &NdArray,
@@ -10664,6 +10681,49 @@ mod tests {
         assert!(morphological_laplace_axes(&input, 2, &[2], BoundaryMode::Reflect, 0.0).is_err());
         assert!(morphological_laplace_axes(&input, 2, &[-3], BoundaryMode::Reflect, 0.0).is_err());
         assert!(morphological_laplace_axes(&input, 0, &[-1], BoundaryMode::Reflect, 0.0).is_err());
+    }
+
+    #[test]
+    fn white_tophat_axes_match_scipy_subset_fixtures() {
+        let input = NdArray::new(vec![4.0, 1.0, 7.0, 2.0, 9.0, 3.0], vec![2, 3]).unwrap();
+
+        // scipy.ndimage.white_tophat(input, size=2, mode='constant', cval=-10.0, axes=(-1,))
+        assert_eq!(
+            white_tophat_axes(&input, 2, &[-1], BoundaryMode::Constant, -10.0)
+                .unwrap()
+                .data,
+            vec![3.0, 0.0, 6.0, 0.0, 6.0, 0.0]
+        );
+        // scipy.ndimage.white_tophat(input, size=2, mode='constant', cval=-10.0, axes=(-2,))
+        assert_eq!(
+            white_tophat_axes(&input, 2, &[-2], BoundaryMode::Constant, -10.0)
+                .unwrap()
+                .data,
+            vec![2.0, 0.0, 4.0, 0.0, 8.0, 0.0]
+        );
+        // scipy.ndimage.white_tophat(input, size=2, mode='constant', cval=-10.0, axes=(-2, -1))
+        assert_eq!(
+            white_tophat_axes(&input, 2, &[-2, -1], BoundaryMode::Constant, -10.0)
+                .unwrap()
+                .data,
+            vec![3.0, 0.0, 6.0, 1.0, 8.0, 2.0]
+        );
+        assert_eq!(
+            white_tophat_axes(&input, 0, &[], BoundaryMode::Constant, -10.0)
+                .unwrap()
+                .data,
+            vec![0.0; 6]
+        );
+    }
+
+    #[test]
+    fn white_tophat_axes_rejects_duplicate_and_out_of_range_axes() {
+        let input = NdArray::new(vec![1.0; 6], vec![2, 3]).unwrap();
+
+        assert!(white_tophat_axes(&input, 2, &[1, -1], BoundaryMode::Reflect, 0.0).is_err());
+        assert!(white_tophat_axes(&input, 2, &[2], BoundaryMode::Reflect, 0.0).is_err());
+        assert!(white_tophat_axes(&input, 2, &[-3], BoundaryMode::Reflect, 0.0).is_err());
+        assert!(white_tophat_axes(&input, 0, &[-1], BoundaryMode::Reflect, 0.0).is_err());
     }
 
     #[test]
