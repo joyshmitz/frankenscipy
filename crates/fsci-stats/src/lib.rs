@@ -4753,6 +4753,104 @@ impl DiscreteDistribution for Binomial {
     }
 }
 
+/// Beta-binomial distribution.
+///
+/// Matches `scipy.stats.betabinom(n, a, b)`.
+/// PMF: P(k) = C(n,k) * B(k+a, n-k+b) / B(a, b)
+/// where B is the beta function.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BetaBinomial {
+    pub n: u64,
+    pub a: f64,
+    pub b: f64,
+}
+
+impl BetaBinomial {
+    #[must_use]
+    pub fn new(n: u64, a: f64, b: f64) -> Self {
+        assert!(a > 0.0, "a must be positive, got {a}");
+        assert!(b > 0.0, "b must be positive, got {b}");
+        Self { n, a, b }
+    }
+}
+
+impl DiscreteDistribution for BetaBinomial {
+    fn pmf(&self, k: u64) -> f64 {
+        if k > self.n {
+            return 0.0;
+        }
+        let ln_comb = ln_gamma(self.n as f64 + 1.0)
+            - ln_gamma(k as f64 + 1.0)
+            - ln_gamma((self.n - k) as f64 + 1.0);
+        let ln_beta_num = ln_gamma(k as f64 + self.a) + ln_gamma((self.n - k) as f64 + self.b)
+            - ln_gamma(self.n as f64 + self.a + self.b);
+        let ln_beta_den = ln_gamma(self.a) + ln_gamma(self.b) - ln_gamma(self.a + self.b);
+        (ln_comb + ln_beta_num - ln_beta_den).exp()
+    }
+
+    fn mean(&self) -> f64 {
+        self.n as f64 * self.a / (self.a + self.b)
+    }
+
+    fn var(&self) -> f64 {
+        let n = self.n as f64;
+        let ab = self.a + self.b;
+        n * self.a * self.b * (ab + n) / (ab * ab * (ab + 1.0))
+    }
+
+    fn skewness(&self) -> f64 {
+        let n = self.n as f64;
+        let a = self.a;
+        let b = self.b;
+        let ab = a + b;
+        (ab + 2.0 * n) * (b - a) / (ab + 2.0)
+            * ((1.0 + ab) / (n * a * b * (ab + n))).sqrt()
+    }
+
+    fn kurtosis(&self) -> f64 {
+        let n = self.n as f64;
+        let a = self.a;
+        let b = self.b;
+        let ab = a + b;
+        let ab1 = ab + 1.0;
+        let ab2 = ab + 2.0;
+        let ab3 = ab + 3.0;
+        let abn = ab + n;
+        let num = (ab1 * ab * ab * (ab * (ab1 + 3.0 * n) + n * (n - 1.0) * 6.0))
+            / (n * a * b * abn)
+            + ab * ab * (ab1 - 6.0) / (a * b)
+            + 3.0 * ab * ab * (1.0 - 2.0 * ab) / (n * a * b)
+            - 18.0 * ab * ab / (a * b * abn);
+        let den = ab2 * ab3;
+        num / den - 3.0
+    }
+
+    fn mode(&self) -> f64 {
+        if self.a > 1.0 && self.b > 1.0 {
+            ((self.n as f64 + self.a - 1.0) * (self.a - 1.0)
+                / (self.a + self.b - 2.0))
+            .floor()
+        } else if self.a <= 1.0 && self.b > 1.0 {
+            0.0
+        } else if self.a > 1.0 && self.b <= 1.0 {
+            self.n as f64
+        } else {
+            0.0
+        }
+    }
+
+    fn entropy(&self) -> f64 {
+        let mut h = 0.0_f64;
+        for k in 0..=self.n {
+            let p = self.pmf(k);
+            if p > 0.0 {
+                h -= p * p.ln();
+            }
+        }
+        h
+    }
+}
+
 /// Bernoulli distribution: single trial with probability p.
 ///
 /// Matches `scipy.stats.bernoulli(p)`.
@@ -51011,5 +51109,20 @@ mod tests {
         assert!((ps - pv.sqrt()).abs() < 1e-12);
         assert!(pooled_variance(&[&[1.0]]).is_nan());
         assert!(pooled_variance(&[]).is_nan());
+    }
+
+    #[test]
+    fn test_betabinomial() {
+        let bb = BetaBinomial::new(10, 2.0, 3.0);
+        let mut total = 0.0;
+        for k in 0..=10 {
+            total += bb.pmf(k);
+        }
+        assert!((total - 1.0).abs() < 1e-12);
+        let m = bb.mean();
+        assert!((m - 10.0 * 2.0 / 5.0).abs() < 1e-12);
+        assert!(bb.var() > 0.0);
+        assert!(bb.skewness().is_finite());
+        assert!(bb.kurtosis().is_finite());
     }
 }
