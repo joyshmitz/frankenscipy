@@ -5769,6 +5769,26 @@ pub fn spline_filter1d(
     Ok(result)
 }
 
+/// Compute spline filter coefficients along one signed axis with SciPy-style normalization.
+pub fn spline_filter1d_signed_axis(
+    input: &NdArray,
+    order: usize,
+    axis: isize,
+    mode: BoundaryMode,
+) -> Result<NdArray, NdimageError> {
+    let axis = normalize_signed_axis(axis, input.ndim())?;
+    spline_filter1d(input, order, axis, mode)
+}
+
+/// Compute spline filter coefficients along SciPy's default `axis=-1`.
+pub fn spline_filter1d_default_axis(
+    input: &NdArray,
+    order: usize,
+    mode: BoundaryMode,
+) -> Result<NdArray, NdimageError> {
+    spline_filter1d_signed_axis(input, order, -1, mode)
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Watershed Transform
 // ══════════════════════════════════════════════════════════════════════
@@ -7634,6 +7654,38 @@ mod tests {
         let input = NdArray::new(vec![0.0; 9], vec![3, 3]).unwrap();
         let err = distance_transform_edt(&input, Some(&[1.0, 2.0, 3.0])).unwrap_err();
         assert!(matches!(err, NdimageError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn spline_filter1d_signed_axis_matches_scipy_axis_normalization() {
+        let input = NdArray::new(vec![1.0, 2.0, 4.0, 8.0, 16.0, 32.0], vec![2, 3]).unwrap();
+
+        let axis_one = spline_filter1d(&input, 3, 1, BoundaryMode::Reflect).unwrap();
+        let default_axis = spline_filter1d_default_axis(&input, 3, BoundaryMode::Reflect).unwrap();
+        let last_axis = spline_filter1d_signed_axis(&input, 3, -1, BoundaryMode::Reflect).unwrap();
+
+        let axis_zero = spline_filter1d(&input, 3, 0, BoundaryMode::Reflect).unwrap();
+        let first_axis = spline_filter1d_signed_axis(&input, 3, -2, BoundaryMode::Reflect).unwrap();
+
+        // scipy.ndimage.spline_filter1d defaults axis=-1 and normalizes negative axes.
+        assert_close_or_nan(&default_axis.data, &axis_one.data);
+        assert_close_or_nan(&last_axis.data, &axis_one.data);
+        assert_close_or_nan(&first_axis.data, &axis_zero.data);
+        assert!(
+            default_axis
+                .data
+                .iter()
+                .zip(&first_axis.data)
+                .any(|(left, right)| (left - right).abs() > 1e-12)
+        );
+    }
+
+    #[test]
+    fn spline_filter1d_signed_axis_rejects_out_of_range_axes() {
+        let input = NdArray::new(vec![1.0; 6], vec![2, 3]).unwrap();
+
+        assert!(spline_filter1d_signed_axis(&input, 3, 2, BoundaryMode::Reflect).is_err());
+        assert!(spline_filter1d_signed_axis(&input, 3, -3, BoundaryMode::Reflect).is_err());
     }
 
     #[test]
