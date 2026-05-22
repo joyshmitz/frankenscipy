@@ -30964,6 +30964,86 @@ pub fn phi_coefficient(table: &[[usize; 2]; 2]) -> f64 {
     num / denom
 }
 
+/// Compute Tschuprow's T coefficient for a contingency table.
+///
+/// T = sqrt(chi2 / (n * sqrt((r-1)*(c-1))))
+/// where r = rows, c = cols.
+///
+/// Matches `scipy.stats.contingency.association` with method='tschuprow'.
+pub fn tschuprow_t(observed: &[Vec<f64>]) -> f64 {
+    if observed.is_empty() || observed[0].is_empty() {
+        return f64::NAN;
+    }
+    let r = observed.len();
+    let c = observed[0].len();
+    if r < 2 || c < 2 {
+        return f64::NAN;
+    }
+
+    let n: f64 = observed.iter().flat_map(|row| row.iter()).sum();
+    if n <= 0.0 {
+        return f64::NAN;
+    }
+
+    let result = chi2_contingency(observed, false);
+    let chi2 = result.statistic;
+
+    let denom = n * ((r - 1) as f64 * (c - 1) as f64).sqrt();
+    if denom <= 0.0 {
+        return 0.0;
+    }
+    (chi2 / denom).sqrt()
+}
+
+/// Compute Pearson's contingency coefficient C.
+///
+/// C = sqrt(chi2 / (chi2 + n))
+///
+/// Matches `scipy.stats.contingency.association` with method='pearson'.
+pub fn pearson_c(observed: &[Vec<f64>]) -> f64 {
+    if observed.is_empty() || observed[0].is_empty() {
+        return f64::NAN;
+    }
+
+    let n: f64 = observed.iter().flat_map(|row| row.iter()).sum();
+    if n <= 0.0 {
+        return f64::NAN;
+    }
+
+    let result = chi2_contingency(observed, false);
+    let chi2 = result.statistic;
+
+    (chi2 / (chi2 + n)).sqrt()
+}
+
+/// Compute expected frequencies for a contingency table.
+///
+/// Returns a 2D array of expected frequencies under the assumption
+/// of independence between rows and columns.
+///
+/// Matches `scipy.stats.contingency.expected_freq`.
+pub fn expected_freq(observed: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    if observed.is_empty() || observed[0].is_empty() {
+        return vec![];
+    }
+    let r = observed.len();
+    let c = observed[0].len();
+
+    let row_sums: Vec<f64> = observed.iter().map(|row| row.iter().sum()).collect();
+    let col_sums: Vec<f64> = (0..c)
+        .map(|j| observed.iter().map(|row| row[j]).sum())
+        .collect();
+    let total: f64 = row_sums.iter().sum();
+
+    if total <= 0.0 {
+        return vec![vec![0.0; c]; r];
+    }
+
+    (0..r)
+        .map(|i| (0..c).map(|j| row_sums[i] * col_sums[j] / total).collect())
+        .collect()
+}
+
 /// Compute exponentially weighted moving average.
 ///
 /// Matches `pandas.DataFrame.ewm(span=span).mean()`.
