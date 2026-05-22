@@ -17288,6 +17288,52 @@ pub fn gmean(data: &[f64]) -> f64 {
     (log_sum / n).exp()
 }
 
+/// Weighted arithmetic mean.
+///
+/// Computes the weighted mean: Σ(w·x) / Σw
+pub fn mean_weighted(data: &[f64], weights: &[f64]) -> f64 {
+    if data.is_empty() || data.len() != weights.len() {
+        return f64::NAN;
+    }
+    if weights.iter().any(|&w| !w.is_finite() || w < 0.0) {
+        return f64::NAN;
+    }
+    let total_w: f64 = weights.iter().sum();
+    if total_w <= 0.0 {
+        return f64::NAN;
+    }
+    data.iter().zip(weights).map(|(&x, &w)| w * x).sum::<f64>() / total_w
+}
+
+/// Weighted variance (population variance with frequency weights).
+///
+/// Computes: Σ(w·(x - μ)²) / Σw where μ is the weighted mean.
+pub fn var_weighted(data: &[f64], weights: &[f64]) -> f64 {
+    if data.len() < 2 || data.len() != weights.len() {
+        return f64::NAN;
+    }
+    if weights.iter().any(|&w| !w.is_finite() || w < 0.0) {
+        return f64::NAN;
+    }
+    let total_w: f64 = weights.iter().sum();
+    if total_w <= 0.0 {
+        return f64::NAN;
+    }
+    let mean_val: f64 = data.iter().zip(weights).map(|(&x, &w)| w * x).sum::<f64>() / total_w;
+    data.iter()
+        .zip(weights)
+        .map(|(&x, &w)| w * (x - mean_val).powi(2))
+        .sum::<f64>()
+        / total_w
+}
+
+/// Weighted standard deviation.
+///
+/// Square root of weighted variance.
+pub fn std_weighted(data: &[f64], weights: &[f64]) -> f64 {
+    var_weighted(data, weights).sqrt()
+}
+
 /// Compute the weighted geometric mean.
 ///
 /// G_w = exp(Σ(w·ln(x)) / Σw)
