@@ -22593,6 +22593,63 @@ pub fn zscore_weighted(data: &[f64], weights: &[f64]) -> Vec<f64> {
     data.iter().map(|&x| (x - mean_val) / std_val).collect()
 }
 
+/// Compute robust z-scores using median and IQR.
+///
+/// robust_zscore = (x - median) / (IQR * scale)
+///
+/// Uses the IQR (interquartile range) scaled to match the normal distribution
+/// standard deviation (IQR / 1.349).
+///
+/// This is more resistant to outliers than standard z-scores.
+///
+/// # Arguments
+/// * `data` - Input data
+/// * `scale` - If true (default), scale IQR by 1.349 to match normal std
+pub fn robust_zscore(data: &[f64], scale: bool) -> Vec<f64> {
+    if data.len() < 4 {
+        return vec![f64::NAN; data.len()];
+    }
+
+    let med = median(data);
+    let iqr_val = iqr(data);
+
+    if iqr_val == 0.0 {
+        return vec![f64::NAN; data.len()];
+    }
+
+    let scale_factor = if scale { iqr_val / 1.3489795003921634 } else { iqr_val };
+
+    data.iter().map(|&x| (x - med) / scale_factor).collect()
+}
+
+/// Compute robust z-scores using median and MAD.
+///
+/// mad_zscore = (x - median) / MAD
+///
+/// Uses the median absolute deviation scaled to match the normal distribution
+/// standard deviation (MAD * 1.4826).
+///
+/// Even more resistant to outliers than IQR-based robust z-scores.
+///
+/// # Arguments
+/// * `data` - Input data
+/// * `scale` - If true (default), scale MAD by 1.4826 to match normal std
+pub fn mad_zscore(data: &[f64], scale: bool) -> Vec<f64> {
+    if data.len() < 2 {
+        return vec![f64::NAN; data.len()];
+    }
+
+    let med = median(data);
+    let scale_factor = if scale { 1.4826022185056018 } else { 1.0 };
+    let mad_val = mad(data, 1.0) * scale_factor;
+
+    if mad_val == 0.0 {
+        return vec![f64::NAN; data.len()];
+    }
+
+    data.iter().map(|&x| (x - med) / mad_val).collect()
+}
+
 /// Compute relative z-scores using the mean and variance of `compare`.
 ///
 /// Matches the core 1D behavior of `scipy.stats.zmap(scores, compare)`.
