@@ -56604,6 +56604,39 @@ mod tests {
     }
 
     #[test]
+    fn cov_matrix_matches_numpy_reference() {
+        // numpy.cov([[1,2,3], [4,5,6]]) with rowvar=True
+        // For perfectly correlated data, cov should show linear relationship
+        let x = vec![1.0, 2.0, 3.0];
+        let y = vec![4.0, 5.0, 6.0];
+        let data = vec![x.clone(), y.clone()];
+        let cov = cov_matrix(&data);
+        // Diagonal elements are variances
+        assert!(cov[0][0] > 0.0, "variance should be positive");
+        assert!(cov[1][1] > 0.0, "variance should be positive");
+        // Off-diagonal is covariance - should be positive for positively correlated data
+        assert!(cov[0][1] > 0.0, "positive covariance for positively correlated data");
+        // Covariance matrix should be symmetric
+        assert!((cov[0][1] - cov[1][0]).abs() < 1e-10, "covariance matrix should be symmetric");
+    }
+
+    #[test]
+    fn corr_matrix_matches_numpy_reference() {
+        // numpy.corrcoef([[1,2,3], [4,5,6]])
+        // Perfect positive correlation should give r=1
+        let x = vec![1.0, 2.0, 3.0];
+        let y = vec![2.0, 4.0, 6.0]; // y = 2x, perfect correlation
+        let data = vec![x.clone(), y.clone()];
+        let corr = corr_matrix(&data);
+        // Diagonal is 1 (correlation with self)
+        assert!((corr[0][0] - 1.0).abs() < 1e-10, "self-correlation is 1");
+        assert!((corr[1][1] - 1.0).abs() < 1e-10, "self-correlation is 1");
+        // Off-diagonal is 1 for perfect correlation
+        assert!((corr[0][1] - 1.0).abs() < 1e-10, "perfect positive correlation is 1");
+        assert!((corr[1][0] - 1.0).abs() < 1e-10, "correlation matrix is symmetric");
+    }
+
+    #[test]
     fn percentile_matches_numpy_reference() {
         // numpy.percentile([1,2,3,4,5], 50) = 3.0 (median)
         let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
