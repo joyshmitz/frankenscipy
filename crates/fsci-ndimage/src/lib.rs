@@ -2154,6 +2154,16 @@ pub fn binary_propagation(
     structure_size: usize,
     mask: Option<&NdArray>,
 ) -> Result<NdArray, NdimageError> {
+    binary_propagation_with_origins(input, structure_size, &[0], mask)
+}
+
+/// Binary propagation with SciPy `origin` semantics for dense structuring elements.
+pub fn binary_propagation_with_origins(
+    input: &NdArray,
+    structure_size: usize,
+    origins: &[i64],
+    mask: Option<&NdArray>,
+) -> Result<NdArray, NdimageError> {
     if input.size() == 0 {
         return Err(NdimageError::EmptyInput);
     }
@@ -2175,7 +2185,8 @@ pub fn binary_propagation(
     for value in &mut current.data {
         *value = if *value != 0.0 { 1.0 } else { 0.0 };
     }
-    let origins = vec![0; current.ndim()];
+    let kernel_shape = vec![size; current.ndim()];
+    let origins = normalize_filter_origins(current.ndim(), &kernel_shape, origins)?;
 
     loop {
         let mut next = binary_dilation_once_with_origins(&current, size, &origins);
@@ -6288,6 +6299,29 @@ mod tests {
             0.0, 0.0, 0.0, 0.0, 0.0,
         ];
         assert_eq!(result.data, expected);
+    }
+
+    #[test]
+    fn binary_propagation_origins_match_scipy_dense_mask() {
+        let input = NdArray::new(vec![0., 0., 1., 0., 0.], vec![5]).unwrap();
+        let mask = NdArray::new(vec![0., 1., 1., 1., 1.], vec![5]).unwrap();
+
+        let shifted_right = binary_propagation_with_origins(&input, 3, &[-1], Some(&mask)).unwrap();
+        assert_eq!(shifted_right.data, vec![0., 0., 1., 1., 1.]);
+
+        let shifted_left = binary_propagation_with_origins(&input, 3, &[1], Some(&mask)).unwrap();
+        assert_eq!(shifted_left.data, vec![0., 1., 1., 0., 0.]);
+    }
+
+    #[test]
+    fn binary_propagation_origin_validation_matches_filter_bounds() {
+        let input = NdArray::new(vec![0., 0., 1., 0., 0.], vec![5]).unwrap();
+        let mask = NdArray::new(vec![0., 1., 1., 1., 1.], vec![5]).unwrap();
+
+        assert!(binary_propagation_with_origins(&input, 2, &[-1], Some(&mask)).is_ok());
+        assert!(binary_propagation_with_origins(&input, 2, &[1], Some(&mask)).is_err());
+        assert!(binary_propagation_with_origins(&input, 3, &[-2], Some(&mask)).is_err());
+        assert!(binary_propagation_with_origins(&input, 3, &[2], Some(&mask)).is_err());
     }
 
     #[test]
