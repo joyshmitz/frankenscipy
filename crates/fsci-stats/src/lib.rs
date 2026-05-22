@@ -58546,4 +58546,74 @@ mod tests {
             "tmax(upperlimit=8) got {ma}, expected 8.0"
         );
     }
+
+    #[test]
+    fn histogram_matches_scipy_reference_values() {
+        let data: Vec<f64> = vec![1.0, 2.0, 2.0, 3.0, 3.0, 3.0, 4.0, 4.0, 5.0];
+        let (counts, edges) = histogram(&data, 5);
+        assert_eq!(counts, vec![1, 2, 3, 2, 1], "histogram counts mismatch");
+        assert_eq!(edges.len(), 6, "histogram should have 6 bin edges for 5 bins");
+        assert!(
+            (edges[0] - 1.0).abs() < 1e-10,
+            "histogram first edge should be 1.0"
+        );
+        assert!(
+            (edges[5] - 5.0).abs() < 1e-10,
+            "histogram last edge should be 5.0"
+        );
+    }
+
+    #[test]
+    fn histogram_bin_edges_returns_valid_edges() {
+        let data: Vec<f64> = (0..100).map(|i| (i as f64 * 0.1).sin()).collect();
+
+        let edges_auto = histogram_bin_edges(&data, "auto");
+        assert!(
+            edges_auto.len() > 2,
+            "histogram_bin_edges(auto) should return multiple edges"
+        );
+
+        let edges_sturges = histogram_bin_edges(&data, "sturges");
+        assert!(
+            edges_sturges.len() > 2,
+            "histogram_bin_edges(sturges) should return multiple edges"
+        );
+
+        let edges_scott = histogram_bin_edges(&data, "scott");
+        assert!(
+            edges_scott.len() > 2,
+            "histogram_bin_edges(scott) should return multiple edges"
+        );
+    }
+
+    #[test]
+    fn binned_statistic_matches_scipy_reference_values() {
+        let x: Vec<f64> = (1..=10).map(|i| i as f64).collect();
+        let values: Vec<f64> = (1..=10).map(|i| i as f64 * 10.0).collect();
+
+        let (stats_mean, _edges) = binned_statistic(&x, &values, 2, "mean");
+        assert_eq!(stats_mean.len(), 2, "binned_statistic should return 2 bins");
+        assert!(
+            (stats_mean[0] - 30.0).abs() < 1e-10,
+            "binned_statistic mean[0] got {}, expected 30.0",
+            stats_mean[0]
+        );
+        assert!(
+            (stats_mean[1] - 80.0).abs() < 1e-10,
+            "binned_statistic mean[1] got {}, expected 80.0",
+            stats_mean[1]
+        );
+
+        let (stats_sum, _) = binned_statistic(&x, &values, 2, "sum");
+        assert!(
+            (stats_sum[0] - 150.0).abs() < 1e-10,
+            "binned_statistic sum[0] got {}, expected 150.0",
+            stats_sum[0]
+        );
+        assert!(
+            (stats_sum[1] - 400.0).abs() < 1e-10,
+            "binned_statistic sum[1] got {}, expected 400.0",
+            stats_sum[1]
+        );
+    }
 }
