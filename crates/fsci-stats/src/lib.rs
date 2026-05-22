@@ -56778,6 +56778,34 @@ mod tests {
     }
 
     #[test]
+    fn zscore_matches_scipy_reference() {
+        // scipy.stats.zscore([1,2,3,4,5]) normalizes to mean=0, std=1
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let z = zscore(&data);
+
+        // Mean of z-scores should be 0
+        let z_mean: f64 = z.iter().sum::<f64>() / z.len() as f64;
+        assert!(z_mean.abs() < 1e-10, "zscore mean should be 0, got {}", z_mean);
+
+        // Middle element (3) is at the mean, so zscore = 0
+        assert!(z[2].abs() < 1e-10, "zscore of mean element should be 0");
+
+        // z-scores are symmetric around 0 for symmetric data
+        assert!((z[0] + z[4]).abs() < 1e-10, "symmetric z-scores");
+        assert!((z[1] + z[3]).abs() < 1e-10, "symmetric z-scores");
+    }
+
+    #[test]
+    fn variation_matches_scipy_reference() {
+        // scipy.stats.variation([1,2,3,4,5]) = std/mean = sqrt(2)/3 ≈ 0.4714
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let cv = variation(&data);
+        // Population std = sqrt(2), mean = 3
+        let expected = (2.0f64).sqrt() / 3.0;
+        assert!((cv - expected).abs() < 1e-10, "variation (CV), got {}", cv);
+    }
+
+    #[test]
     fn cov_matrix_matches_numpy_reference() {
         // numpy.cov([[1,2,3], [4,5,6]]) with rowvar=True
         // For perfectly correlated data, cov should show linear relationship
