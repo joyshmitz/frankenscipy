@@ -1704,8 +1704,26 @@ fn rank_filter_index_usize_axes(
     cval: f64,
     rank: usize,
 ) -> Result<NdArray, NdimageError> {
+    let origins = vec![0; axes.len()];
+    rank_filter_index_usize_axes_with_origins(input, size, axes, &origins, mode, cval, rank)
+}
+
+fn rank_filter_index_usize_axes_with_origins(
+    input: &NdArray,
+    size: usize,
+    axes: &[usize],
+    origins: &[i64],
+    mode: BoundaryMode,
+    cval: f64,
+    rank: usize,
+) -> Result<NdArray, NdimageError> {
     if axes.is_empty() {
         return Ok(input.clone());
+    }
+    if origins.len() != axes.len() {
+        return Err(NdimageError::InvalidArgument(
+            "origin must match selected axes".to_string(),
+        ));
     }
     let kernel_total = filter_footprint_size(axes.len(), size)?;
     if input.size() == 0 {
@@ -1719,6 +1737,9 @@ fn rank_filter_index_usize_axes(
                 "axis {axis} out of range for {ndim}-dimensional input"
             )));
         }
+    }
+    for &origin in origins {
+        validate_filter_origin(size, origin)?;
     }
 
     let mut output = NdArray::zeros(input.shape.clone());
@@ -1740,7 +1761,7 @@ fn rank_filter_index_usize_axes(
 
             let mut in_idx: Vec<i64> = out_idx.iter().map(|&coord| coord as i64).collect();
             for (d, &axis) in axes.iter().enumerate() {
-                in_idx[axis] += k_idx[d] as i64 - offsets[d];
+                in_idx[axis] += k_idx[d] as i64 - offsets[d] - origins[d];
             }
             neighborhood.push(input.get_boundary(&in_idx, mode, cval));
         }
@@ -4412,6 +4433,44 @@ pub fn grey_dilation(
     cval: f64,
 ) -> Result<NdArray, NdimageError> {
     grey_dilation_with_origins(input, size, &[0], mode, cval)
+}
+
+/// Grey-scale dilation over a SciPy-style signed axes subset.
+pub fn grey_dilation_axes(
+    input: &NdArray,
+    size: usize,
+    axes: &[isize],
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError> {
+    let axes = normalize_signed_axes(axes, input.ndim())?;
+    if axes.is_empty() {
+        return Ok(input.clone());
+    }
+
+    let filter_size = filter_footprint_size(axes.len(), size)?;
+    let shape = vec![size; axes.len()];
+    let origins = normalize_filter_origins(axes.len(), &shape, &[0])?;
+    let origins = origins
+        .into_iter()
+        .map(|origin| {
+            let mut origin = -origin;
+            if size.is_multiple_of(2) {
+                origin -= 1;
+            }
+            origin
+        })
+        .collect::<Vec<_>>();
+
+    rank_filter_index_usize_axes_with_origins(
+        input,
+        size,
+        &axes,
+        &origins,
+        mode,
+        cval,
+        filter_size - 1,
+    )
 }
 
 /// Grey-scale dilation with SciPy `origin` semantics.
@@ -10326,6 +10385,49 @@ mod tests {
         assert!(grey_erosion_axes(&input, 2, &[2], BoundaryMode::Reflect, 0.0).is_err());
         assert!(grey_erosion_axes(&input, 2, &[-3], BoundaryMode::Reflect, 0.0).is_err());
         assert!(grey_erosion_axes(&input, 0, &[-1], BoundaryMode::Reflect, 0.0).is_err());
+    }
+
+    #[test]
+    fn grey_dilation_axes_match_scipy_subset_fixtures() {
+        let input = NdArray::new(vec![4.0, 1.0, 7.0, 2.0, 9.0, 3.0], vec![2, 3]).unwrap();
+
+        // scipy.ndimage.grey_dilation(input, size=2, mode='constant', cval=-10.0, axes=(-1,))
+        assert_eq!(
+            grey_dilation_axes(&input, 2, &[-1], BoundaryMode::Constant, -10.0)
+                .unwrap()
+                .data,
+            vec![4.0, 7.0, 7.0, 9.0, 9.0, 3.0]
+        );
+        // scipy.ndimage.grey_dilation(input, size=2, mode='constant', cval=-10.0, axes=(-2,))
+        assert_eq!(
+            grey_dilation_axes(&input, 2, &[-2], BoundaryMode::Constant, -10.0)
+                .unwrap()
+                .data,
+            vec![4.0, 9.0, 7.0, 2.0, 9.0, 3.0]
+        );
+        // scipy.ndimage.grey_dilation(input, size=2, mode='constant', cval=-10.0, axes=(-2, -1))
+        assert_eq!(
+            grey_dilation_axes(&input, 2, &[-2, -1], BoundaryMode::Constant, -10.0)
+                .unwrap()
+                .data,
+            vec![9.0, 9.0, 7.0, 9.0, 9.0, 3.0]
+        );
+        assert_eq!(
+            grey_dilation_axes(&input, 0, &[], BoundaryMode::Constant, -10.0)
+                .unwrap()
+                .data,
+            input.data
+        );
+    }
+
+    #[test]
+    fn grey_dilation_axes_rejects_duplicate_and_out_of_range_axes() {
+        let input = NdArray::new(vec![1.0; 6], vec![2, 3]).unwrap();
+
+        assert!(grey_dilation_axes(&input, 2, &[1, -1], BoundaryMode::Reflect, 0.0).is_err());
+        assert!(grey_dilation_axes(&input, 2, &[2], BoundaryMode::Reflect, 0.0).is_err());
+        assert!(grey_dilation_axes(&input, 2, &[-3], BoundaryMode::Reflect, 0.0).is_err());
+        assert!(grey_dilation_axes(&input, 0, &[-1], BoundaryMode::Reflect, 0.0).is_err());
     }
 
     #[test]
