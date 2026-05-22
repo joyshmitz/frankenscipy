@@ -3488,23 +3488,24 @@ pub fn uniform_filter1d(
     mode: BoundaryMode,
     cval: f64,
 ) -> Result<NdArray, NdimageError> {
-    if axis >= input.ndim() {
-        return Err(NdimageError::InvalidArgument(format!(
-            "axis {axis} out of range for {}-dimensional input",
-            input.ndim()
-        )));
-    }
-    if size == 0 {
-        return Err(NdimageError::InvalidArgument(
-            "size must be positive".to_string(),
-        ));
-    }
+    uniform_filter1d_with_origin(input, size, axis, mode, cval, 0)
+}
 
-    let val = 1.0 / size as f64;
-    let mut kernel_shape = vec![1usize; input.ndim()];
-    kernel_shape[axis] = size;
-    let kernel = NdArray::new(vec![val; size], kernel_shape)?;
-    convolve(input, &kernel, mode, cval)
+/// Apply a uniform filter along a single axis with SciPy `origin` semantics.
+///
+/// Positive origins shift the window toward lower input coordinates; negative
+/// origins shift it toward higher coordinates.
+pub fn uniform_filter1d_with_origin(
+    input: &NdArray,
+    size: usize,
+    axis: usize,
+    mode: BoundaryMode,
+    cval: f64,
+    origin: i64,
+) -> Result<NdArray, NdimageError> {
+    filter1d_axis_with_origin(input, size, axis, mode, cval, origin, |window| {
+        window.iter().sum::<f64>() / window.len() as f64
+    })
 }
 
 /// Compute the gradient magnitude of an array.
@@ -3540,12 +3541,13 @@ pub fn gradient_magnitude(input: &NdArray) -> Result<NdArray, NdimageError> {
 ///
 /// The window spans only `axis` (width `size`, centered with offset
 /// `size / 2`); every other axis is untouched.
-fn filter1d_axis<F>(
+fn filter1d_axis_with_origin<F>(
     input: &NdArray,
     size: usize,
     axis: usize,
     mode: BoundaryMode,
     cval: f64,
+    origin: i64,
     reduce: F,
 ) -> Result<NdArray, NdimageError>
 where
@@ -3565,6 +3567,7 @@ where
     if input.size() == 0 {
         return Err(NdimageError::EmptyInput);
     }
+    validate_filter_origin(size, origin)?;
 
     let offset = size as i64 / 2;
     let mut output = NdArray::zeros(input.shape.clone());
@@ -3574,12 +3577,21 @@ where
         let mut in_idx: Vec<i64> = out_idx.iter().map(|&i| i as i64).collect();
         window.clear();
         for k in 0..size as i64 {
-            in_idx[axis] = out_idx[axis] as i64 + k - offset;
+            in_idx[axis] = out_idx[axis] as i64 + k - offset - origin;
             window.push(input.get_boundary(&in_idx, mode, cval));
         }
         output.data[flat_out] = reduce(&window);
     }
     Ok(output)
+}
+
+fn validate_filter_origin(size: usize, origin: i64) -> Result<(), NdimageError> {
+    let lower = -(size as i64 / 2);
+    let upper = (size as i64 - 1) / 2;
+    if origin < lower || origin > upper {
+        return Err(NdimageError::InvalidArgument("invalid origin".to_string()));
+    }
+    Ok(())
 }
 
 /// Apply a maximum filter along a single axis.
@@ -3592,7 +3604,19 @@ pub fn maximum_filter1d(
     mode: BoundaryMode,
     cval: f64,
 ) -> Result<NdArray, NdimageError> {
-    filter1d_axis(input, size, axis, mode, cval, |window| {
+    maximum_filter1d_with_origin(input, size, axis, mode, cval, 0)
+}
+
+/// Apply a maximum filter along a single axis with SciPy `origin` semantics.
+pub fn maximum_filter1d_with_origin(
+    input: &NdArray,
+    size: usize,
+    axis: usize,
+    mode: BoundaryMode,
+    cval: f64,
+    origin: i64,
+) -> Result<NdArray, NdimageError> {
+    filter1d_axis_with_origin(input, size, axis, mode, cval, origin, |window| {
         window
             .iter()
             .copied()
@@ -3616,7 +3640,19 @@ pub fn minimum_filter1d(
     mode: BoundaryMode,
     cval: f64,
 ) -> Result<NdArray, NdimageError> {
-    filter1d_axis(input, size, axis, mode, cval, |window| {
+    minimum_filter1d_with_origin(input, size, axis, mode, cval, 0)
+}
+
+/// Apply a minimum filter along a single axis with SciPy `origin` semantics.
+pub fn minimum_filter1d_with_origin(
+    input: &NdArray,
+    size: usize,
+    axis: usize,
+    mode: BoundaryMode,
+    cval: f64,
+    origin: i64,
+) -> Result<NdArray, NdimageError> {
+    filter1d_axis_with_origin(input, size, axis, mode, cval, origin, |window| {
         window
             .iter()
             .copied()
@@ -6623,6 +6659,40 @@ mod tests {
                 17., 18., 19.,
             ]
         );
+    }
+
+    #[test]
+    fn filter1d_origin_wrappers_match_scipy() {
+        let input = NdArray::new(vec![1., 2., 3., 4., 5.], vec![5]).unwrap();
+
+        let uniform_left =
+            uniform_filter1d_with_origin(&input, 3, 0, BoundaryMode::Constant, 0.0, -1).unwrap();
+        assert_eq!(uniform_left.data, vec![2.0, 3.0, 4.0, 3.0, 5.0 / 3.0]);
+
+        let uniform_right =
+            uniform_filter1d_with_origin(&input, 3, 0, BoundaryMode::Constant, 0.0, 1).unwrap();
+        assert_eq!(uniform_right.data, vec![1.0 / 3.0, 1.0, 2.0, 3.0, 4.0]);
+
+        let max_left =
+            maximum_filter1d_with_origin(&input, 3, 0, BoundaryMode::Constant, 0.0, -1).unwrap();
+        assert_eq!(max_left.data, vec![3.0, 4.0, 5.0, 5.0, 5.0]);
+
+        let min_right =
+            minimum_filter1d_with_origin(&input, 3, 0, BoundaryMode::Constant, 0.0, 1).unwrap();
+        assert_eq!(min_right.data, vec![0.0, 0.0, 1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn filter1d_origin_validation_matches_scipy_bounds() {
+        let input = NdArray::new(vec![1., 2., 3., 4., 5.], vec![5]).unwrap();
+
+        assert!(
+            uniform_filter1d_with_origin(&input, 3, 0, BoundaryMode::Reflect, 0.0, -2).is_err()
+        );
+        assert!(uniform_filter1d_with_origin(&input, 3, 0, BoundaryMode::Reflect, 0.0, 2).is_err());
+        assert!(uniform_filter1d_with_origin(&input, 4, 0, BoundaryMode::Reflect, 0.0, -2).is_ok());
+        assert!(uniform_filter1d_with_origin(&input, 4, 0, BoundaryMode::Reflect, 0.0, 1).is_ok());
+        assert!(uniform_filter1d_with_origin(&input, 4, 0, BoundaryMode::Reflect, 0.0, 2).is_err());
     }
 
     #[test]
