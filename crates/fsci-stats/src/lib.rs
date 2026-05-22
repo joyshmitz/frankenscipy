@@ -26951,6 +26951,93 @@ pub fn bootstrap_mean(data: &[f64], n_bootstrap: usize, confidence: f64, seed: u
     (boot_means[idx_lo], boot_means[idx_hi])
 }
 
+/// Wilson score confidence interval for a proportion.
+///
+/// More accurate than the normal approximation, especially for small n or extreme p.
+///
+/// # Arguments
+/// * `successes` — Number of successes
+/// * `n` — Total number of trials
+/// * `confidence` — Confidence level (e.g., 0.95)
+///
+/// # Returns
+/// (lower, upper) bounds of the confidence interval
+pub fn wilson_ci(successes: usize, n: usize, confidence: f64) -> (f64, f64) {
+    if n == 0 {
+        return (f64::NAN, f64::NAN);
+    }
+
+    let p_hat = successes as f64 / n as f64;
+    let n_f = n as f64;
+    let alpha = 1.0 - confidence;
+    let z = standard_normal_ppf(1.0 - alpha / 2.0);
+    let z2 = z * z;
+
+    let denom = 1.0 + z2 / n_f;
+    let center = (p_hat + z2 / (2.0 * n_f)) / denom;
+    let margin = z * (p_hat * (1.0 - p_hat) / n_f + z2 / (4.0 * n_f * n_f)).sqrt() / denom;
+
+    ((center - margin).max(0.0), (center + margin).min(1.0))
+}
+
+/// Clopper-Pearson exact confidence interval for a proportion.
+///
+/// Also known as the "exact" binomial confidence interval.
+/// Conservative coverage (often slightly wider than nominal).
+///
+/// # Arguments
+/// * `successes` — Number of successes
+/// * `n` — Total number of trials
+/// * `confidence` — Confidence level (e.g., 0.95)
+///
+/// # Returns
+/// (lower, upper) bounds of the confidence interval
+pub fn clopper_pearson_ci(successes: usize, n: usize, confidence: f64) -> (f64, f64) {
+    if n == 0 {
+        return (f64::NAN, f64::NAN);
+    }
+
+    let k = successes as f64;
+    let n_f = n as f64;
+    let alpha = 1.0 - confidence;
+
+    let lower = if successes == 0 {
+        0.0
+    } else {
+        let beta = BetaDist::new(k, n_f - k + 1.0);
+        beta.ppf(alpha / 2.0)
+    };
+
+    let upper = if successes == n {
+        1.0
+    } else {
+        let beta = BetaDist::new(k + 1.0, n_f - k);
+        beta.ppf(1.0 - alpha / 2.0)
+    };
+
+    (lower, upper)
+}
+
+/// Agresti-Coull confidence interval for a proportion.
+///
+/// Also known as the "add 2 successes and 2 failures" method.
+/// Often preferred for practical use due to good coverage.
+pub fn agresti_coull_ci(successes: usize, n: usize, confidence: f64) -> (f64, f64) {
+    if n == 0 {
+        return (f64::NAN, f64::NAN);
+    }
+
+    let alpha = 1.0 - confidence;
+    let z = standard_normal_ppf(1.0 - alpha / 2.0);
+    let z2 = z * z;
+
+    let n_tilde = n as f64 + z2;
+    let p_tilde = (successes as f64 + z2 / 2.0) / n_tilde;
+    let margin = z * (p_tilde * (1.0 - p_tilde) / n_tilde).sqrt();
+
+    ((p_tilde - margin).max(0.0), (p_tilde + margin).min(1.0))
+}
+
 /// T-test from summary statistics (no raw data needed).
 ///
 /// Matches `scipy.stats.ttest_ind_from_stats(..., equal_var=...)`.
@@ -46264,6 +46351,43 @@ mod tests {
         let g = [1.0, 2.0, 3.0, 4.0];
         let a = vargha_delaney_a(&g, &g);
         assert_close(a, 0.5, 1e-10, "no effect A = 0.5");
+    }
+
+    // ── Proportion CI tests ──────────────────────────────────────────
+
+    #[test]
+    fn wilson_ci_half_proportion() {
+        let (lo, hi) = wilson_ci(50, 100, 0.95);
+        assert!(lo < 0.5 && hi > 0.5, "wilson_ci should contain 0.5");
+        assert!(lo > 0.3 && hi < 0.7, "wilson_ci bounds reasonable");
+    }
+
+    #[test]
+    fn wilson_ci_extreme_proportion() {
+        let (lo, hi) = wilson_ci(0, 10, 0.95);
+        assert_close(lo, 0.0, 1e-10, "lower bound should be 0");
+        assert!(hi > 0.0 && hi < 1.0, "upper bound reasonable");
+    }
+
+    #[test]
+    fn clopper_pearson_contains_true() {
+        let (lo, hi) = clopper_pearson_ci(30, 100, 0.95);
+        assert!(lo < 0.3 && hi > 0.3, "should contain true p=0.3");
+    }
+
+    #[test]
+    fn clopper_pearson_edge_cases() {
+        let (lo, _) = clopper_pearson_ci(0, 10, 0.95);
+        assert_close(lo, 0.0, 1e-10, "k=0 should have lower=0");
+        let (_, hi) = clopper_pearson_ci(10, 10, 0.95);
+        assert_close(hi, 1.0, 1e-10, "k=n should have upper=1");
+    }
+
+    #[test]
+    fn agresti_coull_reasonable_bounds() {
+        let (lo, hi) = agresti_coull_ci(25, 100, 0.95);
+        assert!(lo > 0.0 && lo < 0.25, "lower bound reasonable");
+        assert!(hi > 0.25 && hi < 0.5, "upper bound reasonable");
     }
 
     #[test]
