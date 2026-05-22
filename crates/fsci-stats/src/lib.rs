@@ -31531,6 +31531,46 @@ pub fn peak_prominences(data: &[f64], peaks: &[usize]) -> Vec<f64> {
         .collect()
 }
 
+/// Bray-Curtis dissimilarity between two arrays.
+/// Commonly used in ecology for abundance data.
+pub fn braycurtis_distance(u: &[f64], v: &[f64]) -> f64 {
+    if u.len() != v.len() || u.is_empty() {
+        return f64::NAN;
+    }
+    let num: f64 = u.iter().zip(v.iter()).map(|(&a, &b)| (a - b).abs()).sum();
+    let den: f64 = u.iter().zip(v.iter()).map(|(&a, &b)| a.abs() + b.abs()).sum();
+    if den == 0.0 { 0.0 } else { num / den }
+}
+
+/// Hamming distance - proportion of differing elements.
+pub fn hamming_distance(u: &[f64], v: &[f64]) -> f64 {
+    if u.len() != v.len() || u.is_empty() {
+        return f64::NAN;
+    }
+    let diff = u.iter().zip(v.iter()).filter(|(a, b)| *a != *b).count();
+    diff as f64 / u.len() as f64
+}
+
+/// Jaccard distance for binary data (1 - Jaccard similarity).
+pub fn jaccard_distance(u: &[f64], v: &[f64]) -> f64 {
+    if u.len() != v.len() || u.is_empty() {
+        return f64::NAN;
+    }
+    let mut intersection = 0usize;
+    let mut union = 0usize;
+    for (&a, &b) in u.iter().zip(v.iter()) {
+        let a_pos = a > 0.0;
+        let b_pos = b > 0.0;
+        if a_pos || b_pos {
+            union += 1;
+            if a_pos && b_pos {
+                intersection += 1;
+            }
+        }
+    }
+    if union == 0 { 0.0 } else { 1.0 - intersection as f64 / union as f64 }
+}
+
 /// Compute the log-likelihood for a normal distribution.
 pub fn norm_loglikelihood(data: &[f64], mu: f64, sigma: f64) -> f64 {
     let n = data.len() as f64;
