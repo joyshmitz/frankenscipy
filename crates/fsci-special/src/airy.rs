@@ -24,6 +24,25 @@ pub const AIRY_DISPATCH_PLAN: &[DispatchPlan] = &[DispatchPlan {
     notes: "Returns (Ai, Ai', Bi, Bi'). Matches scipy.special.airy(x).",
 }];
 
+pub const AIRYE_DISPATCH_PLAN: &[DispatchPlan] = &[DispatchPlan {
+    function: "airye",
+    steps: &[
+        DispatchStep {
+            regime: KernelRegime::Series,
+            when: "|x| < 4: evaluate airy(x), then apply scipy.special.airye scaling",
+        },
+        DispatchStep {
+            regime: KernelRegime::Asymptotic,
+            when: "x >= 4: evaluate scaled positive-x asymptotics directly",
+        },
+        DispatchStep {
+            regime: KernelRegime::Asymptotic,
+            when: "x < 0: preserve Bi/Bi' oscillatory values; Ai/Ai' follow SciPy real-domain NaN semantics",
+        },
+    ],
+    notes: "Returns exponentially scaled (Ai, Ai', Bi, Bi'). Matches scipy.special.airye(x).",
+}];
+
 /// Result of the Airy function evaluation: (Ai, Ai', Bi, Bi').
 #[derive(Debug, Clone, PartialEq)]
 pub struct AiryResult {
@@ -129,6 +148,76 @@ pub fn airy(x: &SpecialTensor, mode: RuntimeMode) -> Result<Vec<SpecialTensor>, 
         }
         SpecialTensor::Empty => Err(SpecialError {
             function: "airy",
+            kind: SpecialErrorKind::DomainError,
+            mode,
+            detail: "empty tensor is not a valid input",
+        }),
+    }
+}
+
+/// Compute exponentially scaled Airy functions.
+///
+/// Matches `scipy.special.airye(x)`, returning `(eAi, eAip, eBi, eBip)`.
+pub fn airye(x: &SpecialTensor, mode: RuntimeMode) -> Result<Vec<SpecialTensor>, SpecialError> {
+    match x {
+        SpecialTensor::RealScalar(val) => {
+            let result = airye_scalar(*val, mode)?;
+            Ok(vec![
+                SpecialTensor::RealScalar(result.ai),
+                SpecialTensor::RealScalar(result.aip),
+                SpecialTensor::RealScalar(result.bi),
+                SpecialTensor::RealScalar(result.bip),
+            ])
+        }
+        SpecialTensor::RealVec(values) => {
+            let mut ai_vec = Vec::with_capacity(values.len());
+            let mut aip_vec = Vec::with_capacity(values.len());
+            let mut bi_vec = Vec::with_capacity(values.len());
+            let mut bip_vec = Vec::with_capacity(values.len());
+            for &val in values {
+                let result = airye_scalar(val, mode)?;
+                ai_vec.push(result.ai);
+                aip_vec.push(result.aip);
+                bi_vec.push(result.bi);
+                bip_vec.push(result.bip);
+            }
+            Ok(vec![
+                SpecialTensor::RealVec(ai_vec),
+                SpecialTensor::RealVec(aip_vec),
+                SpecialTensor::RealVec(bi_vec),
+                SpecialTensor::RealVec(bip_vec),
+            ])
+        }
+        SpecialTensor::ComplexScalar(val) => {
+            let result = airye_complex_scalar(*val, mode)?;
+            Ok(vec![
+                SpecialTensor::ComplexScalar(result.ai),
+                SpecialTensor::ComplexScalar(result.aip),
+                SpecialTensor::ComplexScalar(result.bi),
+                SpecialTensor::ComplexScalar(result.bip),
+            ])
+        }
+        SpecialTensor::ComplexVec(values) => {
+            let mut ai_vec = Vec::with_capacity(values.len());
+            let mut aip_vec = Vec::with_capacity(values.len());
+            let mut bi_vec = Vec::with_capacity(values.len());
+            let mut bip_vec = Vec::with_capacity(values.len());
+            for &val in values {
+                let result = airye_complex_scalar(val, mode)?;
+                ai_vec.push(result.ai);
+                aip_vec.push(result.aip);
+                bi_vec.push(result.bi);
+                bip_vec.push(result.bip);
+            }
+            Ok(vec![
+                SpecialTensor::ComplexVec(ai_vec),
+                SpecialTensor::ComplexVec(aip_vec),
+                SpecialTensor::ComplexVec(bi_vec),
+                SpecialTensor::ComplexVec(bip_vec),
+            ])
+        }
+        SpecialTensor::Empty => Err(SpecialError {
+            function: "airye",
             kind: SpecialErrorKind::DomainError,
             mode,
             detail: "empty tensor is not a valid input",
@@ -280,6 +369,52 @@ fn airy_scalar(x: f64, mode: RuntimeMode) -> Result<AiryResult, SpecialError> {
     }
 }
 
+fn airye_scalar(x: f64, mode: RuntimeMode) -> Result<AiryResult, SpecialError> {
+    if !x.is_finite() {
+        return Ok(AiryResult {
+            ai: f64::NAN,
+            aip: f64::NAN,
+            bi: f64::NAN,
+            bip: f64::NAN,
+        });
+    }
+
+    if x < 0.0 {
+        let result = airy_scalar(x, mode)?;
+        return Ok(AiryResult {
+            ai: f64::NAN,
+            aip: f64::NAN,
+            bi: result.bi,
+            bip: result.bip,
+        });
+    }
+
+    let zeta = airy_zeta_positive(x);
+    if x >= AIRY_SERIES_UPPER_BOUND {
+        let root_x = x.sqrt();
+        let x_quarter = x.powf(0.25);
+        let ai_prefactor = 1.0 / (2.0 * PI.sqrt() * x_quarter);
+        let bi_prefactor = 1.0 / (PI.sqrt() * x_quarter);
+        let (c_ai, c_aip, c_bi, c_bip) = asymptotic_coefficients(zeta);
+        return Ok(AiryResult {
+            ai: ai_prefactor * c_ai,
+            aip: -ai_prefactor * root_x * c_aip,
+            bi: bi_prefactor * c_bi,
+            bip: bi_prefactor * root_x * c_bip,
+        });
+    }
+
+    let result = airy_scalar(x, mode)?;
+    let ai_scale = zeta.exp();
+    let bi_scale = (-zeta.abs()).exp();
+    Ok(AiryResult {
+        ai: result.ai * ai_scale,
+        aip: result.aip * ai_scale,
+        bi: result.bi * bi_scale,
+        bip: result.bip * bi_scale,
+    })
+}
+
 fn airy_complex_scalar(z: Complex64, mode: RuntimeMode) -> Result<ComplexAiryResult, SpecialError> {
     if z.im == 0.0 {
         return airy_scalar(z.re, mode).map(ComplexAiryResult::from_real);
@@ -298,6 +433,26 @@ fn airy_complex_scalar(z: Complex64, mode: RuntimeMode) -> Result<ComplexAiryRes
     }
 
     airy_series_complex(z, mode)
+}
+
+fn airye_complex_scalar(
+    z: Complex64,
+    mode: RuntimeMode,
+) -> Result<ComplexAiryResult, SpecialError> {
+    let result = airy_complex_scalar(z, mode)?;
+    let zeta = (z * z.powf(0.5)) * (2.0 / 3.0);
+    let ai_scale = zeta.exp();
+    let bi_scale = (-zeta.re.abs()).exp();
+    Ok(ComplexAiryResult {
+        ai: result.ai * ai_scale,
+        aip: result.aip * ai_scale,
+        bi: result.bi * bi_scale,
+        bip: result.bip * bi_scale,
+    })
+}
+
+fn airy_zeta_positive(x: f64) -> f64 {
+    (2.0 / 3.0) * x * x.sqrt()
 }
 
 /// Taylor series for Airy functions around x=0.
@@ -830,6 +985,69 @@ mod tests {
             }
         };
         assert_close(val, 0.614_926_627_446_001, 1e-8, "bi(0)");
+    }
+
+    #[test]
+    fn airye_positive_large_stays_scaled() {
+        let x = SpecialTensor::RealScalar(10.0);
+        let result = airye(&x, RuntimeMode::Strict).expect("airye(10)");
+        assert_eq!(result.len(), 4);
+        let values: Vec<f64> = result
+            .into_iter()
+            .filter_map(|value| match value {
+                SpecialTensor::RealScalar(v) => Some(v),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(values.len(), 4);
+        assert_close(values[0], 0.158_123_666_854_346, 5e-4, "eAi(10)");
+        assert_close(values[1], -0.503_909_360_711_311, 5e-4, "eAip(10)");
+        assert_close(values[2], 0.318_340_105_336_741, 5e-4, "eBi(10)");
+        assert_close(values[3], 0.998_555_942_674_061, 5e-4, "eBip(10)");
+    }
+
+    #[test]
+    fn airye_negative_real_matches_scipy_nan_ai_scaling() {
+        let x = SpecialTensor::RealScalar(-5.0);
+        let result = airye(&x, RuntimeMode::Strict).expect("airye(-5)");
+        let values: Vec<f64> = result
+            .into_iter()
+            .filter_map(|value| match value {
+                SpecialTensor::RealScalar(v) => Some(v),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(values.len(), 4);
+        assert!(values[0].is_nan(), "eAi(-5) follows SciPy real-domain NaN");
+        assert!(values[1].is_nan(), "eAip(-5) follows SciPy real-domain NaN");
+        assert_close(values[2], -0.138_369_134_901_601, 1e-6, "eBi(-5)");
+        assert_close(values[3], 0.778_411_773_001_895, 1e-6, "eBip(-5)");
+    }
+
+    #[test]
+    fn airye_complex_negative_real_uses_principal_complex_scale() {
+        let z = SpecialTensor::ComplexScalar(Complex64::new(-1.0, 0.0));
+        let result = airye(&z, RuntimeMode::Strict).expect("airye(-1+0i)");
+        let values: Vec<Complex64> = result
+            .into_iter()
+            .filter_map(|value| match value {
+                SpecialTensor::ComplexScalar(v) => Some(v),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(values.len(), 4);
+        assert_complex_close(
+            values[0],
+            Complex64::new(0.420_890_475_549_909, -0.331_174_677_933_346),
+            1e-9,
+            "eAi(-1+0i)",
+        );
+        assert_complex_close(
+            values[2],
+            Complex64::new(0.103_997_389_496_945, 0.0),
+            1e-9,
+            "eBi(-1+0i)",
+        );
     }
 
     #[test]
