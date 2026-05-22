@@ -2252,6 +2252,167 @@ impl ContinuousDistribution for FDistribution {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Non-central F Distribution
+// ══════════════════════════════════════════════════════════════════════
+
+/// Non-central F distribution with numerator df `dfn`, denominator df `dfd`,
+/// and non-centrality parameter `nc`.
+///
+/// Matches `scipy.stats.ncf(dfn, dfd, nc)`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NoncentralF {
+    pub dfn: f64,
+    pub dfd: f64,
+    pub nc: f64,
+}
+
+impl NoncentralF {
+    #[must_use]
+    pub fn new(dfn: f64, dfd: f64, nc: f64) -> Self {
+        assert!(dfn > 0.0, "dfn must be positive, got {dfn}");
+        assert!(dfd > 0.0, "dfd must be positive, got {dfd}");
+        assert!(nc >= 0.0, "nc must be non-negative, got {nc}");
+        Self { dfn, dfd, nc }
+    }
+}
+
+impl ContinuousDistribution for NoncentralF {
+    fn pdf(&self, x: f64) -> f64 {
+        if x <= 0.0 || x.is_nan() {
+            return if x.is_nan() { f64::NAN } else { 0.0 };
+        }
+        if self.nc == 0.0 {
+            return FDistribution::new(self.dfn, self.dfd).pdf(x);
+        }
+
+        // Use series representation
+        let d1 = self.dfn;
+        let d2 = self.dfd;
+        let lam = self.nc;
+        let half_lam = lam / 2.0;
+
+        let mut sum = 0.0;
+        let mut poisson_term = (-half_lam).exp();
+
+        for j in 0..150 {
+            let d1_j = d1 + 2.0 * j as f64;
+            let f_pdf = FDistribution::new(d1_j, d2).pdf(x);
+            sum += poisson_term * f_pdf;
+
+            poisson_term *= half_lam / (j + 1) as f64;
+            if poisson_term < 1e-20 && j > 10 {
+                break;
+            }
+        }
+
+        sum
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        if x.is_nan() {
+            return f64::NAN;
+        }
+        if self.nc == 0.0 {
+            return FDistribution::new(self.dfn, self.dfd).cdf(x);
+        }
+
+        // Use Poisson-weighted sum of central F CDFs
+        let d1 = self.dfn;
+        let d2 = self.dfd;
+        let half_lam = self.nc / 2.0;
+
+        let mut sum = 0.0;
+        let mut poisson_term = (-half_lam).exp();
+
+        for j in 0..150 {
+            let d1_j = d1 + 2.0 * j as f64;
+            let f_cdf = FDistribution::new(d1_j, d2).cdf(x);
+            sum += poisson_term * f_cdf;
+
+            poisson_term *= half_lam / (j + 1) as f64;
+            if poisson_term < 1e-16 && j > 10 {
+                break;
+            }
+        }
+
+        sum.clamp(0.0, 1.0)
+    }
+
+    fn sf(&self, x: f64) -> f64 {
+        1.0 - self.cdf(x)
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return 0.0;
+        }
+        if q == 1.0 {
+            return f64::INFINITY;
+        }
+
+        ppf_bisection(|v| self.cdf(v), q, self.mean(), self.std())
+    }
+
+    fn mean(&self) -> f64 {
+        if self.dfd > 2.0 {
+            self.dfd * (self.dfn + self.nc) / (self.dfn * (self.dfd - 2.0))
+        } else {
+            f64::NAN
+        }
+    }
+
+    fn var(&self) -> f64 {
+        if self.dfd > 4.0 {
+            let d1 = self.dfn;
+            let d2 = self.dfd;
+            let lam = self.nc;
+
+            2.0 * (d2 / d1).powi(2)
+                * ((d1 + lam).powi(2) + (d1 + 2.0 * lam) * (d2 - 2.0))
+                / ((d2 - 2.0).powi(2) * (d2 - 4.0))
+        } else {
+            f64::NAN
+        }
+    }
+
+    fn entropy(&self) -> f64 {
+        f64::NAN
+    }
+
+    fn fit(_data: &[f64]) -> Self {
+        Self {
+            dfn: f64::NAN,
+            dfd: f64::NAN,
+            nc: f64::NAN,
+        }
+    }
+
+    fn try_fit(_data: &[f64]) -> Result<Self, FitError> {
+        Err(FitError::NotImplemented {
+            distribution: "NoncentralF",
+        })
+    }
+
+    fn skewness(&self) -> f64 {
+        f64::NAN
+    }
+
+    fn kurtosis(&self) -> f64 {
+        f64::NAN
+    }
+
+    fn mode(&self) -> f64 {
+        f64::NAN
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Beta Distribution
 // ══════════════════════════════════════════════════════════════════════
 
@@ -32143,6 +32304,59 @@ mod tests {
         for &(d1, d2, h) in &cases {
             let d = FDistribution::new(d1, d2);
             assert_close(d.entropy(), h, 1e-9, &format!("F({d1},{d2}) entropy"));
+        }
+    }
+
+    // ── Non-central F distribution ─────────────────────────────────────
+
+    #[test]
+    fn ncf_reduces_to_f_when_nc_zero() {
+        let ncf = NoncentralF::new(5.0, 10.0, 0.0);
+        let f = FDistribution::new(5.0, 10.0);
+
+        for &x in &[0.5, 1.0, 2.0, 5.0] {
+            assert_close(
+                ncf.pdf(x),
+                f.pdf(x),
+                1e-10,
+                &format!("ncf pdf at x={x} should match f"),
+            );
+            assert_close(
+                ncf.cdf(x),
+                f.cdf(x),
+                1e-10,
+                &format!("ncf cdf at x={x} should match f"),
+            );
+        }
+    }
+
+    #[test]
+    fn ncf_mean() {
+        let ncf = NoncentralF::new(4.0, 10.0, 2.0);
+        // Mean = dfd * (dfn + nc) / (dfn * (dfd - 2))
+        //      = 10 * (4 + 2) / (4 * 8) = 60 / 32 = 1.875
+        assert_close(ncf.mean(), 1.875, 1e-10, "ncf mean");
+    }
+
+    #[test]
+    fn ncf_cdf_increases_with_x() {
+        let ncf = NoncentralF::new(5.0, 10.0, 3.0);
+        let cdf_1 = ncf.cdf(1.0);
+        let cdf_5 = ncf.cdf(5.0);
+        let cdf_10 = ncf.cdf(10.0);
+
+        assert!(cdf_1 < cdf_5, "CDF should increase");
+        assert!(cdf_5 < cdf_10, "CDF should increase");
+        assert!(cdf_10 < 1.0, "CDF should be < 1 for finite x");
+    }
+
+    #[test]
+    fn ncf_ppf_inverts_cdf() {
+        let ncf = NoncentralF::new(4.0, 8.0, 2.0);
+        for &q in &[0.1, 0.5, 0.9] {
+            let x = ncf.ppf(q);
+            let cdf_x = ncf.cdf(x);
+            assert_close(cdf_x, q, 1e-3, &format!("ncf ppf({q}) roundtrip"));
         }
     }
 
