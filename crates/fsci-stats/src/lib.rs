@@ -1672,7 +1672,7 @@ impl ContinuousDistribution for NoncentralChiSquared {
 
     fn cdf(&self, x: f64) -> f64 {
         if x <= 0.0 {
-            return if x < 0.0 { 0.0 } else { 0.0 };
+            return 0.0;
         }
         if x.is_nan() {
             return f64::NAN;
@@ -2118,7 +2118,7 @@ impl ContinuousDistribution for GeneralizedExponential {
 
     fn try_fit(_data: &[f64]) -> Result<Self, FitError> {
         Err(FitError::NotImplemented {
-            distribution: "GeneralizedExponential".into(),
+            distribution: "GeneralizedExponential",
         })
     }
 
@@ -2965,7 +2965,7 @@ impl ContinuousDistribution for GenGamma {
 
     fn try_fit(_data: &[f64]) -> Result<Self, FitError> {
         Err(FitError::NotImplemented {
-            distribution: "GenGamma".into(),
+            distribution: "GenGamma",
         })
     }
 
@@ -2990,7 +2990,6 @@ impl ContinuousDistribution for GenGamma {
         let g4 = (ln_gamma(a + 4.0 / c) - ln_gamma(a)).exp();
         let mu = g1;
         let var = g2 - g1 * g1;
-        let mu3 = g3 - 3.0 * mu * var - mu * mu * mu;
         let mu4 = g4 - 4.0 * mu * g3 + 6.0 * mu * mu * g2 - 3.0 * mu.powi(4);
         mu4 / (var * var) - 3.0
     }
@@ -3962,7 +3961,7 @@ impl ContinuousDistribution for NormInvGauss {
 
     fn try_fit(_data: &[f64]) -> Result<Self, FitError> {
         Err(FitError::NotImplemented {
-            distribution: "NormInvGauss".into(),
+            distribution: "NormInvGauss",
         })
     }
 
@@ -4070,7 +4069,7 @@ impl ContinuousDistribution for RelBreitWigner {
 
     fn try_fit(_data: &[f64]) -> Result<Self, FitError> {
         Err(FitError::NotImplemented {
-            distribution: "RelBreitWigner".into(),
+            distribution: "RelBreitWigner",
         })
     }
 
@@ -17755,7 +17754,7 @@ pub fn nanmedian(data: &[f64]) -> f64 {
     }
     valid.sort_by(|a, b| a.total_cmp(b));
     let n = valid.len();
-    if n % 2 == 0 {
+    if n.is_multiple_of(2) {
         (valid[n / 2 - 1] + valid[n / 2]) / 2.0
     } else {
         valid[n / 2]
@@ -28359,7 +28358,7 @@ pub struct CochranQResult {
 ///
 /// # Arguments
 /// * `data` — Binary data matrix where rows are subjects and columns are treatments.
-///           Each element should be 0 or 1.
+///   Each element should be 0 or 1.
 ///
 /// # Returns
 /// `CochranQResult` with test statistic and p-value (chi-squared with k-1 df)
@@ -30980,7 +30979,7 @@ pub fn median_absolute_error(y_true: &[f64], y_pred: &[f64]) -> f64 {
         .collect();
     errors.sort_by(|a, b| a.total_cmp(b));
     let n = errors.len();
-    if n % 2 == 0 {
+    if n.is_multiple_of(2) {
         (errors[n / 2 - 1] + errors[n / 2]) / 2.0
     } else {
         errors[n / 2]
@@ -31398,10 +31397,8 @@ pub fn gini_coefficient(data: &[f64]) -> f64 {
         return 0.0;
     }
 
-    let mut cum_sum = 0.0f64;
     let mut gini_sum = 0.0f64;
     for (i, &x) in sorted.iter().enumerate() {
-        cum_sum += x;
         gini_sum += (2.0 * (i + 1) as f64 - n as f64 - 1.0) * x;
     }
     gini_sum / (n as f64 * total)
@@ -31480,11 +31477,11 @@ pub fn correlate_1d(a: &[f64], v: &[f64]) -> Vec<f64> {
     let out_len = n + m - 1;
     let mut result = vec![0.0; out_len];
 
-    for k in 0..out_len {
-        for j in 0..m {
+    for (k, output) in result.iter_mut().enumerate() {
+        for (j, &kernel) in v.iter().enumerate() {
             let i = k as isize - (m - 1 - j) as isize;
             if i >= 0 && (i as usize) < n {
-                result[k] += a[i as usize] * v[j];
+                *output += a[i as usize] * kernel;
             }
         }
     }
@@ -32931,7 +32928,7 @@ pub fn medcouple(data: &[f64]) -> f64 {
     let mut sorted: Vec<f64> = data.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
-    let med = if n % 2 == 0 {
+    let med = if n.is_multiple_of(2) {
         (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
     } else {
         sorted[n / 2]
@@ -32957,7 +32954,7 @@ pub fn medcouple(data: &[f64]) -> f64 {
 
     h_values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let m = h_values.len();
-    if m % 2 == 0 {
+    if m.is_multiple_of(2) {
         (h_values[m / 2 - 1] + h_values[m / 2]) / 2.0
     } else {
         h_values[m / 2]
@@ -33005,8 +33002,8 @@ pub fn biweight_midcorrelation(x: &[f64], y: &[f64], c: f64) -> f64 {
     let mut den_y = 0.0;
 
     for (&xi, &yi) in x.iter().zip(y) {
-        let (bx, wx) = biweight(xi, med_x, mad_x);
-        let (by, wy) = biweight(yi, med_y, mad_y);
+        let (bx, _wx) = biweight(xi, med_x, mad_x);
+        let (by, _wy) = biweight(yi, med_y, mad_y);
         num += bx * by;
         den_x += bx * bx;
         den_y += by * by;
@@ -33816,7 +33813,7 @@ pub fn binned_statistic(
                     let mut sorted = bv.clone();
                     sorted.sort_by(|a, b| a.total_cmp(b));
                     let n = sorted.len();
-                    if n % 2 == 0 {
+                    if n.is_multiple_of(2) {
                         (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
                     } else {
                         sorted[n / 2]
@@ -56803,6 +56800,38 @@ mod tests {
         // Population std = sqrt(2), mean = 3
         let expected = (2.0f64).sqrt() / 3.0;
         assert!((cv - expected).abs() < 1e-10, "variation (CV), got {}", cv);
+    }
+
+    #[test]
+    fn ecdf_matches_scipy_reference() {
+        // scipy.stats.ecdf evaluates the empirical CDF
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let x_eval = vec![0.0, 1.0, 2.5, 5.0, 6.0];
+        let e = ecdf(&data, &x_eval);
+
+        // At x=0 (below all data), ecdf = 0
+        assert!((e[0] - 0.0).abs() < 1e-10, "ecdf at 0");
+        // At x=1 (at first point), ecdf = 1/5 = 0.2
+        assert!((e[1] - 0.2).abs() < 1e-10, "ecdf at 1");
+        // At x=2.5 (between 2 and 3), ecdf = 2/5 = 0.4
+        assert!((e[2] - 0.4).abs() < 1e-10, "ecdf at 2.5");
+        // At x=5 (at last point), ecdf = 1.0
+        assert!((e[3] - 1.0).abs() < 1e-10, "ecdf at 5");
+        // At x=6 (above all data), ecdf = 1.0
+        assert!((e[4] - 1.0).abs() < 1e-10, "ecdf at 6");
+    }
+
+    #[test]
+    fn median_matches_scipy_reference() {
+        // scipy.ndimage.median([1,2,3,4,5]) = 3.0 (odd count)
+        let odd_data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let m1 = median(&odd_data);
+        assert!((m1 - 3.0).abs() < 1e-10, "median of odd count, got {}", m1);
+
+        // scipy.ndimage.median([1,2,3,4]) = 2.5 (even count, average of middle two)
+        let even_data = vec![1.0, 2.0, 3.0, 4.0];
+        let m2 = median(&even_data);
+        assert!((m2 - 2.5).abs() < 1e-10, "median of even count, got {}", m2);
     }
 
     #[test]
