@@ -2748,6 +2748,117 @@ pub fn generate_binary_structure(ndim: usize, connectivity: usize) -> NdArray {
     }
 }
 
+fn binary_dilation_with_structure_once(
+    input: &NdArray,
+    structure: &NdArray,
+) -> Result<NdArray, NdimageError> {
+    if input.ndim() != structure.ndim() {
+        return Err(NdimageError::DimensionMismatch(format!(
+            "input ndim {} != structure ndim {}",
+            input.ndim(),
+            structure.ndim()
+        )));
+    }
+    if structure.shape.contains(&0) {
+        return Err(NdimageError::InvalidArgument(
+            "structure dimensions must be positive".to_string(),
+        ));
+    }
+
+    let centers: Vec<i64> = structure
+        .shape
+        .iter()
+        .map(|&dim| (dim / 2) as i64)
+        .collect();
+    let mut offsets = Vec::new();
+    for flat in 0..structure.size() {
+        if structure.data[flat] == 0.0 {
+            continue;
+        }
+        let idx = structure.unravel(flat);
+        offsets.push(
+            idx.iter()
+                .zip(&centers)
+                .map(|(&coord, &center)| coord as i64 - center)
+                .collect::<Vec<_>>(),
+        );
+    }
+
+    let mut output = NdArray::zeros(input.shape.clone());
+    for flat in 0..input.size() {
+        if input.data[flat] == 0.0 {
+            continue;
+        }
+        let idx = input.unravel(flat);
+        for offset in &offsets {
+            let mut out_idx = Vec::with_capacity(input.ndim());
+            let mut in_bounds = true;
+            for axis in 0..input.ndim() {
+                let coord = idx[axis] as i64 + offset[axis];
+                if coord < 0 || coord >= input.shape[axis] as i64 {
+                    in_bounds = false;
+                    break;
+                }
+                out_idx.push(coord as usize);
+            }
+            if in_bounds {
+                output.set(&out_idx, 1.0);
+            }
+        }
+    }
+
+    Ok(output)
+}
+
+/// Iterate a binary structuring element by dilating it with itself.
+///
+/// Matches `scipy.ndimage.iterate_structure` when called without `origin`.
+pub fn iterate_structure(structure: &NdArray, iterations: usize) -> Result<NdArray, NdimageError> {
+    if iterations < 2 {
+        return Ok(structure.clone());
+    }
+    if structure.shape.contains(&0) {
+        return Err(NdimageError::InvalidArgument(
+            "structure dimensions must be positive".to_string(),
+        ));
+    }
+
+    let dilation_count = iterations - 1;
+    let mut shape = Vec::with_capacity(structure.ndim());
+    let mut insert_at = Vec::with_capacity(structure.ndim());
+    for &dim in &structure.shape {
+        let growth = dilation_count.checked_mul(dim - 1).ok_or_else(|| {
+            NdimageError::InvalidArgument("iterated structure is too large".to_string())
+        })?;
+        shape.push(dim.checked_add(growth).ok_or_else(|| {
+            NdimageError::InvalidArgument("iterated structure is too large".to_string())
+        })?);
+        insert_at.push(dilation_count.checked_mul(dim / 2).ok_or_else(|| {
+            NdimageError::InvalidArgument("iterated structure is too large".to_string())
+        })?);
+    }
+
+    let mut current = NdArray::zeros(shape);
+    for flat in 0..structure.size() {
+        if structure.data[flat] == 0.0 {
+            continue;
+        }
+        let idx = structure.unravel(flat);
+        let out_idx: Vec<usize> = idx
+            .iter()
+            .enumerate()
+            .map(|(axis, &coord)| insert_at[axis] + coord)
+            .collect();
+        current.set(&out_idx, 1.0);
+    }
+
+    for _ in 0..dilation_count {
+        current = binary_dilation_with_structure_once(&current, structure)?;
+    }
+
+    Ok(current)
+}
+
 /// Compute the variance filter (local variance in each neighborhood).
 ///
 /// Matches `scipy.ndimage.generic_filter` with variance function.
@@ -3830,6 +3941,56 @@ mod tests {
         assert!(rank_filter(&input, 3, 3, BoundaryMode::Constant, 0.0).is_err());
         assert!(rank_filter(&input, -4, 3, BoundaryMode::Constant, 0.0).is_err());
         assert!(rank_filter(&input, 0, 0, BoundaryMode::Constant, 0.0).is_err());
+    }
+
+    #[test]
+    fn iterate_structure_matches_scipy_cross_second_iteration() {
+        let structure = generate_binary_structure(2, 1);
+        let result = iterate_structure(&structure, 2).unwrap();
+
+        #[rustfmt::skip]
+        let expected = vec![
+            0.0, 0.0, 1.0, 0.0, 0.0,
+            0.0, 1.0, 1.0, 1.0, 0.0,
+            1.0, 1.0, 1.0, 1.0, 1.0,
+            0.0, 1.0, 1.0, 1.0, 0.0,
+            0.0, 0.0, 1.0, 0.0, 0.0,
+        ];
+        assert_eq!(result.shape, vec![5, 5]);
+        assert_eq!(result.data, expected);
+    }
+
+    #[test]
+    fn iterate_structure_matches_scipy_cross_third_iteration() {
+        let structure = generate_binary_structure(2, 1);
+        let result = iterate_structure(&structure, 3).unwrap();
+
+        #[rustfmt::skip]
+        let expected = vec![
+            0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0,
+            0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0,
+            1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+            0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0,
+            0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0,
+        ];
+        assert_eq!(result.shape, vec![7, 7]);
+        assert_eq!(result.data, expected);
+    }
+
+    #[test]
+    fn iterate_structure_small_iterations_copy_input_values() {
+        let structure = NdArray::new(vec![0.0, 2.0, 3.0, 0.0], vec![2, 2]).unwrap();
+
+        assert_eq!(
+            iterate_structure(&structure, 0).unwrap().data,
+            structure.data
+        );
+        assert_eq!(
+            iterate_structure(&structure, 1).unwrap().data,
+            structure.data
+        );
     }
 
     #[test]
