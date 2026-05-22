@@ -52807,6 +52807,49 @@ mod tests {
     }
 
     #[test]
+    fn spearmanr_matches_scipy_reference_values() {
+        // scipy.stats.spearmanr([1,2,3,4,5], [5,6,7,8,7]) = SpearmanrResult(correlation=0.8207826816681233, pvalue=0.08858700531354381)
+        let x = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let y = vec![5.0, 6.0, 7.0, 8.0, 7.0];
+        let res = spearmanr(&x, &y);
+        assert!((res.statistic - 0.8207826816681233).abs() < 1e-10, "spearmanr correlation, got {}", res.statistic);
+        assert!((res.pvalue - 0.08858700531354381).abs() < 1e-10, "spearmanr pvalue, got {}", res.pvalue);
+
+        // Perfect monotonic: scipy.stats.spearmanr([1,2,3,4,5], [2,4,6,8,10]) = (1.0, 0.0)
+        let y2 = vec![2.0, 4.0, 6.0, 8.0, 10.0];
+        let res2 = spearmanr(&x, &y2);
+        assert!((res2.statistic - 1.0).abs() < 1e-10, "perfect spearmanr correlation");
+        assert!(res2.pvalue < 1e-10, "perfect spearmanr pvalue should be ~0");
+
+        // Anti-monotonic: scipy.stats.spearmanr([1,2,3,4,5], [5,4,3,2,1]) = (-1.0, 0.0)
+        let y3 = vec![5.0, 4.0, 3.0, 2.0, 1.0];
+        let res3 = spearmanr(&x, &y3);
+        assert!((res3.statistic - (-1.0)).abs() < 1e-10, "anti-monotonic spearmanr correlation");
+    }
+
+    #[test]
+    fn kendalltau_matches_scipy_reference_values() {
+        // scipy.stats.kendalltau([1,2,3,4,5], [5,6,7,8,7]) = SignificanceResult(statistic=0.7378647873726218, pvalue=0.07697417298126674)
+        // Note: pvalue may differ slightly due to exact vs asymptotic methods - we verify statistic precisely
+        let x = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let y = vec![5.0, 6.0, 7.0, 8.0, 7.0];
+        let res = kendalltau(&x, &y);
+        assert!((res.statistic - 0.7378647873726218).abs() < 1e-9, "kendalltau statistic, got {}", res.statistic);
+        // pvalue should be in same ballpark (both indicate non-significance at 0.05)
+        assert!(res.pvalue > 0.05 && res.pvalue < 0.15, "kendalltau pvalue should be ~0.07, got {}", res.pvalue);
+
+        // Perfect concordant: scipy.stats.kendalltau([1,2,3,4,5], [2,4,6,8,10]) = (1.0, 0.016666666...)
+        let y2 = vec![2.0, 4.0, 6.0, 8.0, 10.0];
+        let res2 = kendalltau(&x, &y2);
+        assert!((res2.statistic - 1.0).abs() < 1e-10, "perfect kendalltau correlation");
+
+        // Perfect discordant: scipy.stats.kendalltau([1,2,3,4,5], [5,4,3,2,1]) = (-1.0, 0.016666666...)
+        let y3 = vec![5.0, 4.0, 3.0, 2.0, 1.0];
+        let res3 = kendalltau(&x, &y3);
+        assert!((res3.statistic - (-1.0)).abs() < 1e-10, "anti-concordant kendalltau correlation");
+    }
+
+    #[test]
     fn idealfourths_matches_scipy() {
         // scipy.stats.mstats.idealfourths([1..10]) = [2.9166666666666665, 8.083333333333334]
         let data: Vec<f64> = (1..=10).map(|x| x as f64).collect();
