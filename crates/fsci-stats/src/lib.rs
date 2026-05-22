@@ -58740,4 +58740,65 @@ mod tests {
             "semi_partial_corr got {result}, expected 0.04505376932801801"
         );
     }
+
+    #[test]
+    fn anderson_matches_scipy_reference_values() {
+        let data = vec![0.1, 0.2, 0.3, 0.5, 0.8, 1.0, 1.3, 1.5, 2.0, 2.5];
+        let result = anderson(&data, "norm");
+        assert!(
+            (result.statistic - 0.2633528824172089).abs() < 1e-6,
+            "anderson statistic got {}, expected 0.2633528824172089",
+            result.statistic
+        );
+    }
+
+    #[test]
+    fn chisquare_matches_scipy_reference_values() {
+        let observed = vec![16.0, 18.0, 16.0, 14.0, 12.0, 12.0];
+        let expected = vec![16.0, 16.0, 16.0, 16.0, 16.0, 8.0];
+        let (statistic, pvalue) = chisquare(&observed, Some(&expected));
+        assert!(
+            (statistic - 3.5).abs() < 1e-10,
+            "chisquare statistic got {statistic}, expected 3.5"
+        );
+        assert!(
+            (pvalue - 0.6233876277495822).abs() < 1e-10,
+            "chisquare pvalue got {pvalue}, expected 0.6233876277495822"
+        );
+    }
+
+    #[test]
+    fn brunnermunzel_matches_scipy_reference_values() {
+        let x: Vec<f64> = vec![1.0, 2.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 2.0, 4.0, 1.0, 1.0];
+        let y: Vec<f64> = vec![3.0, 3.0, 4.0, 3.0, 1.0, 2.0, 3.0, 1.0, 1.0, 5.0, 4.0];
+        let result = brunnermunzel(&x, &y);
+        assert!(
+            (result.statistic - 3.1374674823029505).abs() < 1e-6,
+            "brunnermunzel statistic got {}, expected 3.1374674823029505",
+            result.statistic
+        );
+        assert!(
+            (result.pvalue - 0.005786208666151469).abs() < 1e-6,
+            "brunnermunzel pvalue got {}, expected 0.005786208666151469",
+            result.pvalue
+        );
+    }
+
+    #[test]
+    fn ansari_matches_scipy_reference_values() {
+        let x: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let y: Vec<f64> = vec![3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+        let result = ansari(&x, &y);
+        assert!(
+            (result.statistic - 16.5).abs() < 1e-6,
+            "ansari statistic got {}, expected 16.5",
+            result.statistic
+        );
+        assert!(
+            (result.pvalue - 0.959683603443619).abs() < 1e-6,
+            "ansari pvalue got {}, expected 0.959683603443619",
+            result.pvalue
+        );
+    }
+
 }
