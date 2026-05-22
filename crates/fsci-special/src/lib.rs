@@ -175,6 +175,7 @@ pub use convenience::{
     poch,
     positive,
     power,
+    powm1,
     powm1_scalar,
     pseudo_huber,
     rad2deg,

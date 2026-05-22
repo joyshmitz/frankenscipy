@@ -3194,7 +3194,7 @@ pub fn tklmbda(x: f64, lam: f64) -> f64 {
 ///   powers of negatives are not real-valued and scipy's powm1 surfaces NaN
 ///   the same way.
 /// - `x == 0` and `y > 0`: returns `-1.0`.
-/// - `x == 0` and `y <= 0`: NaN (limit is undefined / +∞).
+/// - `x == 0` and `y < 0`: +∞.
 /// - any non-finite input: propagates the standard f64 powf result minus 1
 ///   so behavior at ±∞ matches the IEEE convention.
 pub fn powm1_scalar(x: f64, y: f64) -> f64 {
@@ -3208,7 +3208,7 @@ pub fn powm1_scalar(x: f64, y: f64) -> f64 {
         if y > 0.0 {
             return -1.0;
         }
-        return f64::NAN;
+        return f64::INFINITY;
     }
     if x < 0.0 {
         // Integer y is well-defined; otherwise the result isn't real.
@@ -3221,6 +3221,16 @@ pub fn powm1_scalar(x: f64, y: f64) -> f64 {
         return x.powf(y) - 1.0;
     }
     (y * x.ln()).exp_m1()
+}
+
+pub fn powm1(
+    x_tensor: &SpecialTensor,
+    y_tensor: &SpecialTensor,
+    mode: RuntimeMode,
+) -> SpecialResult {
+    map_real_binary("powm1", x_tensor, y_tensor, mode, |x, y| {
+        Ok(powm1_scalar(x, y))
+    })
 }
 
 /// Compute `cos(x) - 1` with extra accuracy near `x == 0`.
@@ -8657,11 +8667,38 @@ mod tests {
         assert_eq!(powm1_scalar(1.0, 5.0), 0.0);
         assert_eq!(powm1_scalar(2.5, 0.0), 0.0);
         assert_eq!(powm1_scalar(0.0, 2.0), -1.0);
-        assert!(powm1_scalar(0.0, -1.0).is_nan());
+        assert_eq!(powm1_scalar(0.0, -1.0), f64::INFINITY);
+        assert_eq!(powm1_scalar(0.0, f64::NEG_INFINITY), f64::INFINITY);
         assert!(powm1_scalar(-2.0, 0.5).is_nan(), "negative^non-int = NaN");
         assert_eq!(powm1_scalar(-2.0, 3.0), -9.0, "(-2)^3 - 1 = -9");
         assert!(powm1_scalar(f64::NAN, 1.0).is_nan());
         assert!(powm1_scalar(2.0, f64::NAN).is_nan());
+    }
+
+    #[test]
+    fn powm1_supports_real_tensor_dispatch() -> Result<(), String> {
+        let scalar = powm1(
+            &SpecialTensor::RealScalar(1.0 + 1.0e-15),
+            &SpecialTensor::RealScalar(1.0),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let scalar_value = expect_real_scalar(scalar)?;
+        assert!(scalar_value > 0.5e-15 && scalar_value < 1.5e-15);
+
+        let bases = SpecialTensor::RealVec(vec![0.0, 1.0, 2.0, -2.0, -2.0]);
+        let powers = SpecialTensor::RealVec(vec![-1.0, 5.0, 3.0, 3.0, 0.5]);
+        let result = powm1(&bases, &powers, RuntimeMode::Strict).map_err(|err| err.to_string())?;
+        let values = expect_real_vec(result)?;
+        let expected = [f64::INFINITY, 0.0, powm1_scalar(2.0, 3.0), -9.0, f64::NAN];
+        for (actual, expected) in values.into_iter().zip(expected) {
+            if expected.is_nan() {
+                assert!(actual.is_nan());
+            } else {
+                assert_eq!(actual, expected);
+            }
+        }
+        Ok(())
     }
 
     #[test]
