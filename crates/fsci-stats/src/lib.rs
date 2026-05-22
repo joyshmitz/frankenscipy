@@ -31813,6 +31813,48 @@ pub fn rel_entr(x: f64, y: f64) -> f64 {
     }
 }
 
+/// Logit function: log(p / (1 - p)).
+pub fn logit(p: f64) -> f64 {
+    if p <= 0.0 {
+        f64::NEG_INFINITY
+    } else if p >= 1.0 {
+        f64::INFINITY
+    } else {
+        (p / (1.0 - p)).ln()
+    }
+}
+
+/// Expit (logistic sigmoid): 1 / (1 + exp(-x)).
+pub fn expit(x: f64) -> f64 {
+    if x >= 0.0 {
+        1.0 / (1.0 + (-x).exp())
+    } else {
+        let ex = x.exp();
+        ex / (1.0 + ex)
+    }
+}
+
+/// Softmax function over an array.
+pub fn softmax(x: &[f64]) -> Vec<f64> {
+    if x.is_empty() {
+        return vec![];
+    }
+    let max_x = x.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let exp_x: Vec<f64> = x.iter().map(|&xi| (xi - max_x).exp()).collect();
+    let sum_exp: f64 = exp_x.iter().sum();
+    exp_x.iter().map(|&e| e / sum_exp).collect()
+}
+
+/// Log-softmax function (numerically stable).
+pub fn log_softmax(x: &[f64]) -> Vec<f64> {
+    if x.is_empty() {
+        return vec![];
+    }
+    let max_x = x.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let log_sum_exp = max_x + x.iter().map(|&xi| (xi - max_x).exp()).sum::<f64>().ln();
+    x.iter().map(|&xi| xi - log_sum_exp).collect()
+}
+
 /// Adjusted Rand Index for comparing cluster assignments.
 /// labels_true and labels_pred should be integer labels (encoded as f64).
 pub fn adjusted_rand_index(labels_true: &[f64], labels_pred: &[f64]) -> f64 {
