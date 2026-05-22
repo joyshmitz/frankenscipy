@@ -612,11 +612,9 @@ fn prefilter_spline_coefficients(
     // on an axis too short for the order's stencil falls back to the padded
     // de Boor path.
     let bspline_reflect = matches!(order, 2..=5);
-    let exact_reflect = bspline_reflect
-        && mode == BoundaryMode::Reflect
-        && input.shape.iter().all(|&s| s > order);
-    let pad_input =
-        matches!(mode, BoundaryMode::Nearest | BoundaryMode::Reflect) && !exact_reflect;
+    let exact_reflect =
+        bspline_reflect && mode == BoundaryMode::Reflect && input.shape.iter().all(|&s| s > order);
+    let pad_input = matches!(mode, BoundaryMode::Nearest | BoundaryMode::Reflect) && !exact_reflect;
     let (mut current, coord_offsets) = if pad_input {
         (
             pad_array_mode(input, SPLINE_NEAREST_PAD, mode)?,
@@ -909,7 +907,11 @@ pub fn convolve(
     Ok(output)
 }
 
-fn weights_1d_kernel(input: &NdArray, weights: &[f64], axis: usize) -> Result<NdArray, NdimageError> {
+fn weights_1d_kernel(
+    input: &NdArray,
+    weights: &[f64],
+    axis: usize,
+) -> Result<NdArray, NdimageError> {
     if axis >= input.ndim() {
         return Err(NdimageError::InvalidArgument(format!(
             "axis {axis} out of range for {}-dimensional input",
@@ -2184,7 +2186,9 @@ fn measurement_label_value_positions(
     index: Option<&[usize]>,
 ) -> Result<Vec<Vec<(f64, usize)>>, NdimageError> {
     let Some(labels) = labels else {
-        return Ok(vec![input.data.iter().copied().zip(0..input.size()).collect()]);
+        return Ok(vec![
+            input.data.iter().copied().zip(0..input.size()).collect(),
+        ]);
     };
     if input.shape != labels.shape {
         return Err(NdimageError::DimensionMismatch(format!(
@@ -2775,50 +2779,34 @@ pub fn distance_transform_edt(
     if input.size() == 0 {
         return Err(NdimageError::EmptyInput);
     }
-    if input.ndim() != 2 {
-        return Err(NdimageError::InvalidArgument(
-            "distance_transform_edt currently supports 2D arrays only".to_string(),
-        ));
-    }
 
     let sampling = normalize_sampling(input.ndim(), sampling)?;
-
-    let rows = input.shape[0];
-    let cols = input.shape[1];
     let mut output = NdArray::zeros(input.shape.clone());
-
-    // Collect background pixel positions.
-    let mut bg_pixels = Vec::new();
-    for r in 0..rows {
-        for c in 0..cols {
-            if input.get(&[r, c]) == 0.0 {
-                bg_pixels.push((r, c));
-            }
-        }
-    }
+    let backgrounds = background_coordinates(input);
 
     // For each foreground pixel, find distance to nearest background pixel.
-    for r in 0..rows {
-        for c in 0..cols {
-            if input.get(&[r, c]) == 0.0 {
-                output.set(&[r, c], 0.0);
-            } else if bg_pixels.is_empty() {
-                let dr = (r as f64 + 1.0) * sampling[0];
-                let dc = c as f64 * sampling[1];
-                output.set(&[r, c], (dr * dr + dc * dc).sqrt());
-            } else {
-                let mut min_dist = f64::INFINITY;
-                for &(br, bc) in &bg_pixels {
-                    let dr = (r as f64 - br as f64) * sampling[0];
-                    let dc = (c as f64 - bc as f64) * sampling[1];
-                    let dist = (dr * dr + dc * dc).sqrt();
-                    if dist < min_dist {
-                        min_dist = dist;
-                    }
-                }
-                output.set(&[r, c], min_dist);
-            }
+    for (flat, &value) in input.data.iter().enumerate() {
+        if value == 0.0 {
+            output.data[flat] = 0.0;
+            continue;
         }
+
+        let coords = input.unravel(flat);
+        output.data[flat] = if backgrounds.is_empty() {
+            edt_all_foreground_distance(&coords, &sampling)
+        } else {
+            backgrounds
+                .iter()
+                .map(|background| {
+                    metric_distance(
+                        &coords,
+                        background,
+                        DistanceMetric::Euclidean,
+                        Some(&sampling),
+                    )
+                })
+                .fold(f64::INFINITY, f64::min)
+        };
     }
 
     Ok(output)
@@ -2953,6 +2941,22 @@ fn metric_distance(
             .map(|(&coord, &background_coord)| coord.abs_diff(background_coord) as f64)
             .fold(0.0, f64::max),
     }
+}
+
+fn edt_all_foreground_distance(coords: &[usize], sampling: &[f64]) -> f64 {
+    coords
+        .iter()
+        .enumerate()
+        .map(|(axis, &coord)| {
+            let delta = if axis == 0 {
+                coord as f64 + 1.0
+            } else {
+                coord as f64
+            } * sampling[axis];
+            delta * delta
+        })
+        .sum::<f64>()
+        .sqrt()
 }
 
 fn normalize_sampling(ndim: usize, sampling: Option<&[f64]>) -> Result<Vec<f64>, NdimageError> {
@@ -3537,13 +3541,16 @@ pub fn minimum_filter1d(
     cval: f64,
 ) -> Result<NdArray, NdimageError> {
     filter1d_axis(input, size, axis, mode, cval, |window| {
-        window.iter().copied().fold(f64::INFINITY, |a: f64, b: f64| {
-            if a.is_nan() || b.is_nan() {
-                f64::NAN
-            } else {
-                a.min(b)
-            }
-        })
+        window
+            .iter()
+            .copied()
+            .fold(f64::INFINITY, |a: f64, b: f64| {
+                if a.is_nan() || b.is_nan() {
+                    f64::NAN
+                } else {
+                    a.min(b)
+                }
+            })
     })
 }
 
@@ -4929,7 +4936,8 @@ pub fn watershed_ift(
     let default_struct = generate_binary_structure(ndim, 1);
     let struct_arr = structure.unwrap_or(&default_struct);
 
-    let struct_offsets = compute_structure_offsets(&input.shape, &struct_arr.shape, &struct_arr.data);
+    let struct_offsets =
+        compute_structure_offsets(&input.shape, &struct_arr.shape, &struct_arr.data);
 
     let mut output = markers.data.clone();
     let mut costs: Vec<f64> = vec![f64::INFINITY; input.size()];
@@ -4960,7 +4968,10 @@ pub fn watershed_ift(
             if new_cost < costs[neighbor_idx] {
                 costs[neighbor_idx] = new_cost;
                 output[neighbor_idx] = output[idx];
-                queue.push(std::cmp::Reverse(((new_cost * 1000.0) as i64, neighbor_idx)));
+                queue.push(std::cmp::Reverse((
+                    (new_cost * 1000.0) as i64,
+                    neighbor_idx,
+                )));
             }
         }
     }
@@ -4968,14 +4979,18 @@ pub fn watershed_ift(
     Ok(NdArray::new(output, input.shape.clone()).unwrap())
 }
 
-fn compute_structure_offsets(shape: &[usize], struct_shape: &[usize], struct_data: &[f64]) -> Vec<i64> {
+fn compute_structure_offsets(
+    shape: &[usize],
+    struct_shape: &[usize],
+    struct_data: &[f64],
+) -> Vec<i64> {
     let ndim = shape.len();
     let mut offsets = Vec::new();
     let center: Vec<usize> = struct_shape.iter().map(|&s| s / 2).collect();
 
     let struct_size: usize = struct_shape.iter().product();
-    for struct_idx in 0..struct_size {
-        if struct_data[struct_idx] == 0.0 {
+    for (struct_idx, &struct_value) in struct_data.iter().enumerate().take(struct_size) {
+        if struct_value == 0.0 {
             continue;
         }
 
@@ -5042,8 +5057,7 @@ mod tests {
     #[test]
     fn correlate1d_matches_scipy_1d_constant() {
         let input = NdArray::new(vec![1.0, 2.0, 4.0, 7.0], vec![4]).unwrap();
-        let got = correlate1d(&input, &[1.0, 2.0, -1.0], 0, BoundaryMode::Constant, 0.5)
-            .unwrap();
+        let got = correlate1d(&input, &[1.0, 2.0, -1.0], 0, BoundaryMode::Constant, 0.5).unwrap();
         // scipy.ndimage.correlate1d(x, [1, 2, -1], mode='constant', cval=0.5)
         let expect = vec![0.5, 1.0, 3.0, 17.5];
         assert_eq!(got.data, expect);
@@ -5052,8 +5066,7 @@ mod tests {
     #[test]
     fn convolve1d_matches_scipy_1d_constant() {
         let input = NdArray::new(vec![1.0, 2.0, 4.0, 7.0], vec![4]).unwrap();
-        let got = convolve1d(&input, &[1.0, 2.0, -1.0], 0, BoundaryMode::Constant, 0.5)
-            .unwrap();
+        let got = convolve1d(&input, &[1.0, 2.0, -1.0], 0, BoundaryMode::Constant, 0.5).unwrap();
         // scipy.ndimage.convolve1d(x, [1, 2, -1], mode='constant', cval=0.5)
         let expect = vec![3.5, 7.0, 13.0, 10.5];
         assert_eq!(got.data, expect);
@@ -5177,7 +5190,10 @@ mod tests {
         ];
         let got = gaussian_filter1d(&input, 0.75, 0, 0, BoundaryMode::Reflect, 0.0).unwrap();
         for (g, e) in got.data.iter().zip(&expect) {
-            assert!((g - e).abs() < 1e-12, "axis0 gaussian_filter1d mismatch: {g} vs {e}");
+            assert!(
+                (g - e).abs() < 1e-12,
+                "axis0 gaussian_filter1d mismatch: {g} vs {e}"
+            );
         }
     }
 
@@ -5195,7 +5211,10 @@ mod tests {
         ];
         let got = gaussian_filter1d(&input, 0.75, 1, 0, BoundaryMode::Reflect, 0.0).unwrap();
         for (g, e) in got.data.iter().zip(&expect) {
-            assert!((g - e).abs() < 1e-12, "axis1 gaussian_filter1d mismatch: {g} vs {e}");
+            assert!(
+                (g - e).abs() < 1e-12,
+                "axis1 gaussian_filter1d mismatch: {g} vs {e}"
+            );
         }
     }
 
@@ -5212,7 +5231,10 @@ mod tests {
         ];
         let got = gaussian_filter1d(&input, 1.0, 0, 1, BoundaryMode::Constant, -1.0).unwrap();
         for (g, e) in got.data.iter().zip(&expect) {
-            assert!((g - e).abs() < 1e-11, "order1 gaussian_filter1d mismatch: {g} vs {e}");
+            assert!(
+                (g - e).abs() < 1e-11,
+                "order1 gaussian_filter1d mismatch: {g} vs {e}"
+            );
         }
     }
 
@@ -5245,7 +5267,10 @@ mod tests {
         ];
         let got = gaussian_laplace(&input, 1.0, BoundaryMode::Reflect, 0.0).unwrap();
         for (g, e) in got.data.iter().zip(&expect) {
-            assert!((g - e).abs() < 1e-9, "gaussian_laplace mismatch: {g} vs {e}");
+            assert!(
+                (g - e).abs() < 1e-9,
+                "gaussian_laplace mismatch: {g} vs {e}"
+            );
         }
     }
 
@@ -5266,7 +5291,10 @@ mod tests {
         ];
         let got = gaussian_laplace(&input, 0.5, BoundaryMode::Constant, 0.0).unwrap();
         for (g, e) in got.data.iter().zip(&expect) {
-            assert!((g - e).abs() < 1e-9, "gaussian_laplace mismatch: {g} vs {e}");
+            assert!(
+                (g - e).abs() < 1e-9,
+                "gaussian_laplace mismatch: {g} vs {e}"
+            );
         }
     }
 
@@ -5324,7 +5352,10 @@ mod tests {
         ];
         let got = gaussian_laplace(&input, 1.0, BoundaryMode::Reflect, 0.0).unwrap();
         for (g, e) in got.data.iter().zip(&expect) {
-            assert!((g - e).abs() < 1e-9, "gaussian_laplace 2d mismatch: {g} vs {e}");
+            assert!(
+                (g - e).abs() < 1e-9,
+                "gaussian_laplace 2d mismatch: {g} vs {e}"
+            );
         }
     }
 
@@ -5653,8 +5684,8 @@ mod tests {
     fn measurement_reduction_wrappers_reject_label_shape_mismatch() {
         let data = NdArray::new(vec![1.0, 2.0, 3.0, 4.0], vec![4]).unwrap();
         let labels = NdArray::new(vec![1.0, 1.0, 2.0, 2.0], vec![2, 2]).unwrap();
-        let err = mean(&data, Some(&labels), Some(&[1]))
-            .expect_err("shape mismatch must be rejected");
+        let err =
+            mean(&data, Some(&labels), Some(&[1])).expect_err("shape mismatch must be rejected");
         assert!(matches!(err, NdimageError::DimensionMismatch(_)));
     }
 
@@ -5748,9 +5779,8 @@ mod tests {
         let labels = NdArray::new(vec![1.0, 1.0, 2.0, 2.0, 4.0], vec![5]).unwrap();
         let index = [1, 2, 3, 4];
 
-        let mean_func = |values: &[f64], _: Option<&[usize]>| {
-            values.iter().sum::<f64>() / values.len() as f64
-        };
+        let mean_func =
+            |values: &[f64], _: Option<&[usize]>| values.iter().sum::<f64>() / values.len() as f64;
 
         // scipy.ndimage.labeled_comprehension(data, labels, [1, 2, 3, 4], np.mean, float, -1)
         assert_eq!(
@@ -5798,8 +5828,9 @@ mod tests {
             vec![4.0, 12.0, 9.0]
         );
 
-        let err = labeled_comprehension(&data, None, Some(&index), values_plus_positions, -1.0, true)
-            .expect_err("SciPy rejects index without labels");
+        let err =
+            labeled_comprehension(&data, None, Some(&index), values_plus_positions, -1.0, true)
+                .expect_err("SciPy rejects index without labels");
         assert!(matches!(err, NdimageError::InvalidArgument(_)));
     }
 
@@ -5812,13 +5843,21 @@ mod tests {
         assert_eq!(one_dim_indices.get(&2).unwrap(), &vec![vec![0, 2]]);
         assert_eq!(one_dim_indices.get(&3).unwrap(), &vec![vec![3]]);
 
-        let two_dim = NdArray::new(vec![1.0, 2.0, 1.0, 3.0, 2.0, 3.0], vec![2, 3])
-            .unwrap();
+        let two_dim = NdArray::new(vec![1.0, 2.0, 1.0, 3.0, 2.0, 3.0], vec![2, 3]).unwrap();
         let two_dim_indices = value_indices(&two_dim, None).unwrap();
         // scipy.ndimage.value_indices(np.array([[1, 2, 1], [3, 2, 3]]))
-        assert_eq!(two_dim_indices.get(&1).unwrap(), &vec![vec![0, 0], vec![0, 2]]);
-        assert_eq!(two_dim_indices.get(&2).unwrap(), &vec![vec![0, 1], vec![1, 1]]);
-        assert_eq!(two_dim_indices.get(&3).unwrap(), &vec![vec![1, 1], vec![0, 2]]);
+        assert_eq!(
+            two_dim_indices.get(&1).unwrap(),
+            &vec![vec![0, 0], vec![0, 2]]
+        );
+        assert_eq!(
+            two_dim_indices.get(&2).unwrap(),
+            &vec![vec![0, 1], vec![1, 1]]
+        );
+        assert_eq!(
+            two_dim_indices.get(&3).unwrap(),
+            &vec![vec![1, 1], vec![0, 2]]
+        );
 
         let ignored = value_indices(&two_dim, Some(2)).unwrap();
         // scipy.ndimage.value_indices(..., ignore_value=2)
@@ -5830,8 +5869,8 @@ mod tests {
     #[test]
     fn value_indices_rejects_non_integer_values() {
         let arr = NdArray::new(vec![1.0, 2.5], vec![2]).unwrap();
-        let err = value_indices(&arr, None)
-            .expect_err("SciPy rejects non-integer value_indices inputs");
+        let err =
+            value_indices(&arr, None).expect_err("SciPy rejects non-integer value_indices inputs");
         assert!(matches!(err, NdimageError::InvalidArgument(_)));
     }
 
@@ -5977,6 +6016,88 @@ mod tests {
         assert!((result.data[1] - 2.0).abs() < 1e-10);
         assert!((result.data[3] - 1.0).abs() < 1e-10);
         assert!((result.data[0] - 5.0f64.sqrt()).abs() < 1e-10);
+    }
+
+    #[test]
+    fn distance_transform_edt_matches_scipy_one_dimensional_fixture() {
+        let input = NdArray::new(vec![1.0, 1.0, 0.0, 1.0, 1.0], vec![5]).unwrap();
+        let result = distance_transform_edt(&input, None).unwrap();
+        assert_eq!(result.shape, vec![5]);
+        assert_eq!(result.data, vec![2.0, 1.0, 0.0, 1.0, 2.0]);
+    }
+
+    #[test]
+    fn distance_transform_edt_matches_scipy_three_dimensional_fixture() {
+        let mut data = vec![1.0; 12];
+        data[4] = 0.0;
+        let input = NdArray::new(data, vec![2, 2, 3]).unwrap();
+        let result = distance_transform_edt(&input, None).unwrap();
+        let expected = [
+            2.0f64.sqrt(),
+            1.0,
+            2.0f64.sqrt(),
+            1.0,
+            0.0,
+            1.0,
+            3.0f64.sqrt(),
+            2.0f64.sqrt(),
+            3.0f64.sqrt(),
+            2.0f64.sqrt(),
+            1.0,
+            2.0f64.sqrt(),
+        ];
+
+        assert_eq!(result.shape, vec![2, 2, 3]);
+        for (actual, expected) in result.data.iter().zip(expected) {
+            assert!((actual - expected).abs() < 1e-10);
+        }
+    }
+
+    #[test]
+    fn distance_transform_edt_three_dimensional_sampling_matches_scipy() {
+        let mut data = vec![1.0; 12];
+        data[8] = 0.0;
+        let input = NdArray::new(data, vec![2, 2, 3]).unwrap();
+        let result = distance_transform_edt(&input, Some(&[2.0, 1.0, 0.5])).unwrap();
+        let expected = [
+            5.0f64.sqrt(),
+            4.25f64.sqrt(),
+            2.0,
+            6.0f64.sqrt(),
+            5.25f64.sqrt(),
+            5.0f64.sqrt(),
+            1.0,
+            0.5,
+            0.0,
+            2.0f64.sqrt(),
+            1.25f64.sqrt(),
+            1.0,
+        ];
+
+        assert_eq!(result.shape, vec![2, 2, 3]);
+        for (actual, expected) in result.data.iter().zip(expected) {
+            assert!((actual - expected).abs() < 1e-10);
+        }
+    }
+
+    #[test]
+    fn distance_transform_edt_all_foreground_three_dimensional_matches_scipy() {
+        let input = NdArray::new(vec![1.0; 8], vec![2, 2, 2]).unwrap();
+        let result = distance_transform_edt(&input, None).unwrap();
+        let expected = [
+            1.0,
+            2.0f64.sqrt(),
+            2.0f64.sqrt(),
+            3.0f64.sqrt(),
+            2.0,
+            5.0f64.sqrt(),
+            5.0f64.sqrt(),
+            6.0f64.sqrt(),
+        ];
+
+        for (actual, expected) in result.data.iter().zip(expected) {
+            assert!((actual - expected).abs() < 1e-10);
+        }
     }
 
     #[test]
@@ -6227,11 +6348,31 @@ mod tests {
                 BoundaryMode::Constant,
                 1e-9,
                 [
-                    0.0, 3.045714285714, 4.889142857143, 6.657142857143, 0.0, 0.0,
-                    7.737142857143, 9.506857142857, 10.99885714286, 12.67857142857, 0.0,
-                    11.09142857143, 12.85857142857, 14.30514285714, 16.09714285714, 0.0,
-                    15.06285714286, 17.01171428571, 18.69485714286, 20.68571428571, 0.0,
-                    19.68571428571, 21.04228571429, 22.17257142857, 0.0,
+                    0.0,
+                    3.045714285714,
+                    4.889142857143,
+                    6.657142857143,
+                    0.0,
+                    0.0,
+                    7.737142857143,
+                    9.506857142857,
+                    10.99885714286,
+                    12.67857142857,
+                    0.0,
+                    11.09142857143,
+                    12.85857142857,
+                    14.30514285714,
+                    16.09714285714,
+                    0.0,
+                    15.06285714286,
+                    17.01171428571,
+                    18.69485714286,
+                    20.68571428571,
+                    0.0,
+                    19.68571428571,
+                    21.04228571429,
+                    22.17257142857,
+                    0.0,
                 ],
             ),
             (
@@ -6248,12 +6389,30 @@ mod tests {
                 BoundaryMode::Reflect,
                 1e-4,
                 [
-                    2.071312652477, 3.522103918644, 5.211788632913, 6.873683576956,
-                    8.497631252012, 6.436047805932, 7.650524974355, 9.313053236502,
-                    10.87326342174, 12.50263186751, 10.34130828363, 11.28631180975,
-                    12.94789529848, 14.49136816267, 16.16210518486, 14.39814861670,
-                    15.14946641848, 16.87800090509, 18.50863134397, 20.25263168215,
-                    18.87314778636, 19.25262023910, 20.76294794134, 22.18989448276,
+                    2.071312652477,
+                    3.522103918644,
+                    5.211788632913,
+                    6.873683576956,
+                    8.497631252012,
+                    6.436047805932,
+                    7.650524974355,
+                    9.313053236502,
+                    10.87326342174,
+                    12.50263186751,
+                    10.34130828363,
+                    11.28631180975,
+                    12.94789529848,
+                    14.49136816267,
+                    16.16210518486,
+                    14.39814861670,
+                    15.14946641848,
+                    16.87800090509,
+                    18.50863134397,
+                    20.25263168215,
+                    18.87314778636,
+                    19.25262023910,
+                    20.76294794134,
+                    22.18989448276,
                     23.62289481757,
                 ],
             ),
@@ -6329,10 +6488,26 @@ mod tests {
                 90.0,
                 3,
                 [
-                    0.0, 5.410714285714, 11.16071428571, 16.91071428571, 0.0, 0.0,
-                    4.196428571429, 9.946428571429, 15.69642857143, 0.0, 0.0, 3.303571428571,
-                    9.053571428571, 14.80357142857, 0.0, 0.0, 2.089285714286, 7.839285714286,
-                    13.58928571429, 0.0,
+                    0.0,
+                    5.410714285714,
+                    11.16071428571,
+                    16.91071428571,
+                    0.0,
+                    0.0,
+                    4.196428571429,
+                    9.946428571429,
+                    15.69642857143,
+                    0.0,
+                    0.0,
+                    3.303571428571,
+                    9.053571428571,
+                    14.80357142857,
+                    0.0,
+                    0.0,
+                    2.089285714286,
+                    7.839285714286,
+                    13.58928571429,
+                    0.0,
                 ],
             ),
             (
@@ -6347,10 +6522,26 @@ mod tests {
                 270.0,
                 3,
                 [
-                    0.0, 13.58928571429, 7.839285714286, 2.089285714286, 0.0, 0.0,
-                    14.80357142857, 9.053571428571, 3.303571428571, 0.0, 0.0, 15.69642857143,
-                    9.946428571429, 4.196428571429, 0.0, 0.0, 16.91071428571, 11.16071428571,
-                    5.410714285714, 0.0,
+                    0.0,
+                    13.58928571429,
+                    7.839285714286,
+                    2.089285714286,
+                    0.0,
+                    0.0,
+                    14.80357142857,
+                    9.053571428571,
+                    3.303571428571,
+                    0.0,
+                    0.0,
+                    15.69642857143,
+                    9.946428571429,
+                    4.196428571429,
+                    0.0,
+                    0.0,
+                    16.91071428571,
+                    11.16071428571,
+                    5.410714285714,
+                    0.0,
                 ],
             ),
         ];
@@ -6381,27 +6572,59 @@ mod tests {
             (
                 0.5,
                 [
-                    0.2549519461363663, 0.4182832550693081, 0.5503201419186977,
-                    0.5630315082005458, 0.75939030868993, 1.0438558503915527,
-                    1.0988845947235066, 0.7086425641651631, 0.0259778299038867,
-                    -0.5531644869252663, -0.7666962224403977, -0.7143820624311663,
-                    -0.6961908799143749, -0.8461639176777535, -0.9679067171611121,
-                    -0.7543452796765424, -0.15076474016681216, 0.5398766786148524,
-                    0.9318552948605892, 0.9194294048003819, 0.7433831008074291,
-                    0.6848505021971074, 0.7708537655741882, 0.6506793676224725,
+                    0.2549519461363663,
+                    0.4182832550693081,
+                    0.5503201419186977,
+                    0.5630315082005458,
+                    0.75939030868993,
+                    1.0438558503915527,
+                    1.0988845947235066,
+                    0.7086425641651631,
+                    0.0259778299038867,
+                    -0.5531644869252663,
+                    -0.7666962224403977,
+                    -0.7143820624311663,
+                    -0.6961908799143749,
+                    -0.8461639176777535,
+                    -0.9679067171611121,
+                    -0.7543452796765424,
+                    -0.15076474016681216,
+                    0.5398766786148524,
+                    0.9318552948605892,
+                    0.9194294048003819,
+                    0.7433831008074291,
+                    0.6848505021971074,
+                    0.7708537655741882,
+                    0.6506793676224725,
                 ],
             ),
             (
                 -0.37,
                 [
-                    0.38450699002959776, 0.5503167919057529, 0.5526729990650662,
-                    0.7235709352531765, 1.0119842950436544, 1.1156728556271387,
-                    0.7833116499893292, 0.1179284905124495, -0.496484277981438,
-                    -0.7599223082061909, -0.725710233983912, -0.6883221473472944,
-                    -0.8209994795970635, -0.9655278330938318, -0.8072254128679976,
-                    -0.24356750836028815, 0.4602459875379331, 0.9058336192772003,
-                    0.938045035700508, 0.7636513064920336, 0.6814966064066657,
-                    0.7600438511231556, 0.6867381661848023, 0.47144793799382007,
+                    0.38450699002959776,
+                    0.5503167919057529,
+                    0.5526729990650662,
+                    0.7235709352531765,
+                    1.0119842950436544,
+                    1.1156728556271387,
+                    0.7833116499893292,
+                    0.1179284905124495,
+                    -0.496484277981438,
+                    -0.7599223082061909,
+                    -0.725710233983912,
+                    -0.6883221473472944,
+                    -0.8209994795970635,
+                    -0.9655278330938318,
+                    -0.8072254128679976,
+                    -0.24356750836028815,
+                    0.4602459875379331,
+                    0.9058336192772003,
+                    0.938045035700508,
+                    0.7636513064920336,
+                    0.6814966064066657,
+                    0.7600438511231556,
+                    0.6867381661848023,
+                    0.47144793799382007,
                 ],
             ),
         ];
@@ -6420,17 +6643,27 @@ mod tests {
             (
                 0.5,
                 [
-                    -0.8481660654709604, 4.415398849593355, 14.436570667097536,
-                    27.838318482016504, 19.83515540483645, -4.678940101362298,
-                    4.130605000612735, 9.281520098911361,
+                    -0.8481660654709604,
+                    4.415398849593355,
+                    14.436570667097536,
+                    27.838318482016504,
+                    19.83515540483645,
+                    -4.678940101362298,
+                    4.130605000612735,
+                    9.281520098911361,
                 ],
             ),
             (
                 -0.37,
                 [
-                    3.0149073903035344, 13.312958134830174, 25.93326007037581,
-                    23.381146583666645, -2.949696405042477, 1.3359750365031913,
-                    10.780087259029772, 1.5183309273777084,
+                    3.0149073903035344,
+                    13.312958134830174,
+                    25.93326007037581,
+                    23.381146583666645,
+                    -2.949696405042477,
+                    1.3359750365031913,
+                    10.780087259029772,
+                    1.5183309273777084,
                 ],
             ),
         ];
@@ -6446,12 +6679,30 @@ mod tests {
         let img = NdArray::new((0..25).map(f64::from).collect(), vec![5, 5]).unwrap();
         let matrix = [[0.8, 0.1, 0.5], [-0.2, 1.1, -0.3]];
         let aff_near: [f64; 25] = [
-            2.0146251551549565, 3.4209130558546903, 5.143254751465219, 6.827687752661231,
-            8.460719421510634, 6.549318909071743, 7.668924898935514, 9.354219461368206,
-            10.899941103456493, 12.540003700962757, 10.413530228321878, 11.244918977395098,
-            12.928921197972759, 14.45181146728866, 16.14830632579837, 14.423340955417984,
-            15.131075101064493, 16.906402812731706, 18.548188532711343, 20.344624494677564,
-            18.925743768149676, 19.34462449467756, 20.822282799067025, 22.1862150202129,
+            2.0146251551549565,
+            3.4209130558546903,
+            5.143254751465219,
+            6.827687752661231,
+            8.460719421510634,
+            6.549318909071743,
+            7.668924898935514,
+            9.354219461368206,
+            10.899941103456493,
+            12.540003700962757,
+            10.413530228321878,
+            11.244918977395098,
+            12.928921197972759,
+            14.45181146728866,
+            16.14830632579837,
+            14.423340955417984,
+            15.131075101064493,
+            16.906402812731706,
+            18.548188532711343,
+            20.344624494677564,
+            18.925743768149676,
+            19.34462449467756,
+            20.822282799067025,
+            22.1862150202129,
             23.560224563000926,
         ];
         let got = affine_transform(&img, &matrix, 3, BoundaryMode::Nearest, 0.0).unwrap();
@@ -6469,116 +6720,395 @@ mod tests {
         // 24-sample signal — long enough that scipy's horizon-truncated
         // reflect prefilter agrees with the exact reflect spline.
         let reflect_sig: Vec<f64> = vec![
-            0.3, 0.5254971787363237, 0.5408057557229191, 0.635795154994567,
-            0.9073737420479793, 1.1218983591130598, 0.9605329581387094, 0.3810003087672637,
-            -0.3017020476460769, -0.7092777890824606, -0.755474785911513, -0.683640240436719,
-            -0.7543994215437057, -0.9320889866700686, -0.9171525129384751, -0.4901346154497399,
-            0.21127233132626663, 0.7907645539468529, 0.9680644073934838, 0.8294796607067128,
-            0.6893699987049906, 0.7208919079549805, 0.7636074874743252, 0.5187033633516349,
+            0.3,
+            0.5254971787363237,
+            0.5408057557229191,
+            0.635795154994567,
+            0.9073737420479793,
+            1.1218983591130598,
+            0.9605329581387094,
+            0.3810003087672637,
+            -0.3017020476460769,
+            -0.7092777890824606,
+            -0.755474785911513,
+            -0.683640240436719,
+            -0.7543994215437057,
+            -0.9320889866700686,
+            -0.9171525129384751,
+            -0.4901346154497399,
+            0.21127233132626663,
+            0.7907645539468529,
+            0.9680644073934838,
+            0.8294796607067128,
+            0.6893699987049906,
+            0.7208919079549805,
+            0.7636074874743252,
+            0.5187033633516349,
         ];
         // 20-sample signal for nearest (scipy edge-pads then prefilters).
         let nearest_sig: Vec<f64> = vec![
-            3.0, 6.659085290854023, 7.733103563999704, 7.262733439989361, 6.402699019254376,
-            5.352334042747226, 3.3152787084265762, -0.5082563677459531, -5.742971009482519,
-            -10.505933637858343, -12.322633532285415, -9.722976713580003, -3.377144701355263,
-            4.093988896839788, 9.568169743690905, 11.164761757677065, 9.11413039759255,
-            5.2310787849920235, 1.4770673813308624, -1.28493841798744,
+            3.0,
+            6.659085290854023,
+            7.733103563999704,
+            7.262733439989361,
+            6.402699019254376,
+            5.352334042747226,
+            3.3152787084265762,
+            -0.5082563677459531,
+            -5.742971009482519,
+            -10.505933637858343,
+            -12.322633532285415,
+            -9.722976713580003,
+            -3.377144701355263,
+            4.093988896839788,
+            9.568169743690905,
+            11.164761757677065,
+            9.11413039759255,
+            5.2310787849920235,
+            1.4770673813308624,
+            -1.28493841798744,
         ];
 
         // (order, shift, reflect_expected[24], nearest_expected[20])
         let reflect_cases: [(usize, f64, [f64; 24]); 6] = [
-            (2, 0.5, [
-                0.26148308720278246, 0.4155507383916525, 0.5472011973925972, 0.5664538150897354,
-                0.7604795549389343, 1.0433444434468437, 1.09654218902416, 0.7071276914152734,
-                0.026824730108091693, -0.5508830275790764, -0.7654459115477829, -0.7154518031101201,
-                -0.6983033751844239, -0.8468865937050349, -0.9663306954404633, -0.7520952320863598,
-                -0.15024642559423818, 0.5381246491578959, 0.929646071739341, 0.9193147657674041,
-                0.74464160605702, 0.688234235537289, 0.7670006073591302, 0.6477597020251524,
-            ]),
-            (2, -0.37, [
-                0.3780968923876382, 0.55004707350839, 0.5567027348546525, 0.7227376085775954,
-                1.0090429004084585, 1.113130943496916, 0.7843065594109809, 0.12160861701575015,
-                -0.49372903854689265, -0.7606764023822605, -0.7287487672977672, -0.6900200942581103,
-                -0.8193391026409322, -0.9623302689796851, -0.8061576943691924, -0.24611398750032565,
-                0.45647795796202273, 0.9044804339423547, 0.940375232004542, 0.7662187840164019,
-                0.6833216657503591, 0.7537183567179542, 0.6886982650692292, 0.47859265329190565,
-            ]),
-            (4, 0.5, [
-                0.24919710286198923, 0.4210244727263792, 0.5524281034476087, 0.5602266698366776,
-                0.7592912141355752, 1.0438683473422665, 1.1003630566341693, 0.7094684774167466,
-                0.025503727675793522, -0.5544978018281325, -0.7674151045724874, -0.7137523113281415,
-                -0.6949508843909721, -0.8457354387839149, -0.9688133468477396, -0.7556590938567713,
-                -0.15104338293567277, 0.5408374075539142, 0.9332702314723473, 0.9191833468382019,
-                0.7432418789219479, 0.6819812577573401, 0.7734287692536976, 0.6536480506760897,
-            ]),
-            (4, -0.37, [
-                0.3869529341080939, 0.5523304004529634, 0.5499485827935139, 0.7236393917242437,
-                1.0119800113189061, 1.1170115675786068, 0.7839958190189207, 0.1174707972542666,
-                -0.4976674323370129, -0.7605187702755805, -0.7251160523592382, -0.6872301772854028,
-                -0.8206614372669139, -0.9663613020780203, -0.8083726625442841, -0.24377069109259103,
-                0.46112959985545743, 0.9070523141560112, 0.937816217926544, 0.763427599299972,
-                0.6791291174592256, 0.7621964050599042, 0.6894720825029287, 0.4654505812331833,
-            ]),
-            (5, 0.5, [
-                0.24664420183516106, 0.4225212997266592, 0.5528012064287837, 0.5591957745312407,
-                0.7598435317911724, 1.0435143378614826, 1.100718716223185, 0.7094658229233732,
-                0.025493853573514993, -0.554673693440588, -0.7674842359598136, -0.7136784807659607,
-                -0.6947950173637502, -0.8456848730447002, -0.9689022894220467, -0.7558335020671808,
-                -0.15102415968874833, 0.54084205720131, 0.9336389967679087, 0.9187634898419974,
-                0.743848977053193, 0.6808670364500307, 0.7738768938002417, 0.6552941151329906,
-            ]),
-            (5, -0.37, [
-                0.3887104336475638, 0.5523483633366845, 0.5490039930189293, 0.7242224945828809,
-                1.0117050291181455, 1.1173694128105638, 0.783923750904463, 0.11739358978258295,
-                -0.497837122526764, -0.760515821762791, -0.7249843007003728, -0.6870949028912255,
-                -0.8206862478588601, -0.9665005790472293, -0.808509601008641, -0.24368011714684484,
-                0.46119264644791735, 0.9073455158365293, 0.9373781680623959, 0.7639226336515214,
-                0.6781161253053056, 0.7629494473761906, 0.690543922427542, 0.46281529288662704,
-            ]),
+            (
+                2,
+                0.5,
+                [
+                    0.26148308720278246,
+                    0.4155507383916525,
+                    0.5472011973925972,
+                    0.5664538150897354,
+                    0.7604795549389343,
+                    1.0433444434468437,
+                    1.09654218902416,
+                    0.7071276914152734,
+                    0.026824730108091693,
+                    -0.5508830275790764,
+                    -0.7654459115477829,
+                    -0.7154518031101201,
+                    -0.6983033751844239,
+                    -0.8468865937050349,
+                    -0.9663306954404633,
+                    -0.7520952320863598,
+                    -0.15024642559423818,
+                    0.5381246491578959,
+                    0.929646071739341,
+                    0.9193147657674041,
+                    0.74464160605702,
+                    0.688234235537289,
+                    0.7670006073591302,
+                    0.6477597020251524,
+                ],
+            ),
+            (
+                2,
+                -0.37,
+                [
+                    0.3780968923876382,
+                    0.55004707350839,
+                    0.5567027348546525,
+                    0.7227376085775954,
+                    1.0090429004084585,
+                    1.113130943496916,
+                    0.7843065594109809,
+                    0.12160861701575015,
+                    -0.49372903854689265,
+                    -0.7606764023822605,
+                    -0.7287487672977672,
+                    -0.6900200942581103,
+                    -0.8193391026409322,
+                    -0.9623302689796851,
+                    -0.8061576943691924,
+                    -0.24611398750032565,
+                    0.45647795796202273,
+                    0.9044804339423547,
+                    0.940375232004542,
+                    0.7662187840164019,
+                    0.6833216657503591,
+                    0.7537183567179542,
+                    0.6886982650692292,
+                    0.47859265329190565,
+                ],
+            ),
+            (
+                4,
+                0.5,
+                [
+                    0.24919710286198923,
+                    0.4210244727263792,
+                    0.5524281034476087,
+                    0.5602266698366776,
+                    0.7592912141355752,
+                    1.0438683473422665,
+                    1.1003630566341693,
+                    0.7094684774167466,
+                    0.025503727675793522,
+                    -0.5544978018281325,
+                    -0.7674151045724874,
+                    -0.7137523113281415,
+                    -0.6949508843909721,
+                    -0.8457354387839149,
+                    -0.9688133468477396,
+                    -0.7556590938567713,
+                    -0.15104338293567277,
+                    0.5408374075539142,
+                    0.9332702314723473,
+                    0.9191833468382019,
+                    0.7432418789219479,
+                    0.6819812577573401,
+                    0.7734287692536976,
+                    0.6536480506760897,
+                ],
+            ),
+            (
+                4,
+                -0.37,
+                [
+                    0.3869529341080939,
+                    0.5523304004529634,
+                    0.5499485827935139,
+                    0.7236393917242437,
+                    1.0119800113189061,
+                    1.1170115675786068,
+                    0.7839958190189207,
+                    0.1174707972542666,
+                    -0.4976674323370129,
+                    -0.7605187702755805,
+                    -0.7251160523592382,
+                    -0.6872301772854028,
+                    -0.8206614372669139,
+                    -0.9663613020780203,
+                    -0.8083726625442841,
+                    -0.24377069109259103,
+                    0.46112959985545743,
+                    0.9070523141560112,
+                    0.937816217926544,
+                    0.763427599299972,
+                    0.6791291174592256,
+                    0.7621964050599042,
+                    0.6894720825029287,
+                    0.4654505812331833,
+                ],
+            ),
+            (
+                5,
+                0.5,
+                [
+                    0.24664420183516106,
+                    0.4225212997266592,
+                    0.5528012064287837,
+                    0.5591957745312407,
+                    0.7598435317911724,
+                    1.0435143378614826,
+                    1.100718716223185,
+                    0.7094658229233732,
+                    0.025493853573514993,
+                    -0.554673693440588,
+                    -0.7674842359598136,
+                    -0.7136784807659607,
+                    -0.6947950173637502,
+                    -0.8456848730447002,
+                    -0.9689022894220467,
+                    -0.7558335020671808,
+                    -0.15102415968874833,
+                    0.54084205720131,
+                    0.9336389967679087,
+                    0.9187634898419974,
+                    0.743848977053193,
+                    0.6808670364500307,
+                    0.7738768938002417,
+                    0.6552941151329906,
+                ],
+            ),
+            (
+                5,
+                -0.37,
+                [
+                    0.3887104336475638,
+                    0.5523483633366845,
+                    0.5490039930189293,
+                    0.7242224945828809,
+                    1.0117050291181455,
+                    1.1173694128105638,
+                    0.783923750904463,
+                    0.11739358978258295,
+                    -0.497837122526764,
+                    -0.760515821762791,
+                    -0.7249843007003728,
+                    -0.6870949028912255,
+                    -0.8206862478588601,
+                    -0.9665005790472293,
+                    -0.808509601008641,
+                    -0.24368011714684484,
+                    0.46119264644791735,
+                    0.9073455158365293,
+                    0.9373781680623959,
+                    0.7639226336515214,
+                    0.6781161253053056,
+                    0.7629494473761906,
+                    0.690543922427542,
+                    0.46281529288662704,
+                ],
+            ),
         ];
         let nearest_cases: [(usize, f64, [f64; 20]); 6] = [
-            (2, 0.5, [
-                2.702782168545731, 4.7323124708063045, 7.539684170032537, 7.59833792841338,
-                6.853636275443444, 5.941574255900906, 4.517050437157529, 1.626574125849127,
-                -3.0484058295297993, -8.341048657584219, -11.90092081432834, -11.567695137020781,
-                -6.875349347008646, 0.41930555933159286, 7.226892772957188, 10.867972365048056,
-                10.496999042226356, 7.265602002672257, 3.290225672078391, -0.17437136985106116,
-            ]),
-            (2, -0.37, [
-                4.143855124090996, 7.411370394557743, 7.664948393508871, 6.9670715336683084,
-                6.062446732562023, 4.757893548963193, 2.112480257859293, -2.348975284726245,
-                -7.674830569641832, -11.61228831717209, -11.87717295688152, -7.7122123026463765,
-                -0.5964627366132293, 6.464456949352444, 10.630213515905218, 10.763407261040815,
-                7.79101585332909, 3.785836417357385, 0.23944528575002455, -1.5144466683392535,
-            ]),
-            (4, 0.5, [
-                2.6306032753377897, 4.697677989716788, 7.6402814064148314, 7.545366113966397,
-                6.862294863414422, 5.9281809547987425, 4.525437316966706, 1.6393818602944958,
-                -3.0367250821189504, -8.34239817893728, -11.915925475875854, -11.587814629608703,
-                -6.887227531241737, 0.4227348301443286, 7.24463922503075, 10.88318185549883,
-                10.51233129984018, 7.241531466614057, 3.313945117527742, -0.20634453768157623,
-            ]),
-            (4, -0.37, [
-                4.162142563509179, 7.497026260222897, 7.602893110891612, 6.975955770303944,
-                6.055591973804203, 4.772478754215038, 2.121701266176032, -2.3521289394036264,
-                -7.69463788238694, -11.63716593410173, -11.890714552701453, -7.703612968518502,
-                -0.5700891403689989, 6.494366064096208, 10.642371222821803, 10.762808027340544,
-                7.75581615791813, 3.8007888645719055, 0.19652586496626542, -1.508641460236482,
-            ]),
-            (5, 0.5, [
-                2.617324371623272, 4.690581905217046, 7.6620204610085985, 7.525044246696608,
-                6.874675819576095, 5.9209275253562055, 4.5291241625419305, 1.6380438152728438,
-                -3.0355217064381708, -8.342752526750935, -11.916013984915796, -11.588518485130257,
-                -6.88716496823088, 0.42215713803932103, 7.2464605870211765, 10.8808616974449,
-                10.517502421146744, 7.233213623388482, 3.3227201112356703, -0.21129098372014327,
-            ]),
-            (5, -0.37, [
-                4.1610753206808875, 7.5146000230372225, 7.583725393528469, 6.987998134141277,
-                6.048632205806019, 4.776376928836171, 2.120389642875675, -2.3511217898395307,
-                -7.695294262733125, -11.637447867735148, -11.891319351908553, -7.703307768605489,
-                -0.5702480314364181, 6.496092676469299, 10.640308006662673, 10.7670381892709,
-                7.748081030883152, 3.8095536403517665, 0.19015282605698844, -1.50938219040037,
-            ]),
+            (
+                2,
+                0.5,
+                [
+                    2.702782168545731,
+                    4.7323124708063045,
+                    7.539684170032537,
+                    7.59833792841338,
+                    6.853636275443444,
+                    5.941574255900906,
+                    4.517050437157529,
+                    1.626574125849127,
+                    -3.0484058295297993,
+                    -8.341048657584219,
+                    -11.90092081432834,
+                    -11.567695137020781,
+                    -6.875349347008646,
+                    0.41930555933159286,
+                    7.226892772957188,
+                    10.867972365048056,
+                    10.496999042226356,
+                    7.265602002672257,
+                    3.290225672078391,
+                    -0.17437136985106116,
+                ],
+            ),
+            (
+                2,
+                -0.37,
+                [
+                    4.143855124090996,
+                    7.411370394557743,
+                    7.664948393508871,
+                    6.9670715336683084,
+                    6.062446732562023,
+                    4.757893548963193,
+                    2.112480257859293,
+                    -2.348975284726245,
+                    -7.674830569641832,
+                    -11.61228831717209,
+                    -11.87717295688152,
+                    -7.7122123026463765,
+                    -0.5964627366132293,
+                    6.464456949352444,
+                    10.630213515905218,
+                    10.763407261040815,
+                    7.79101585332909,
+                    3.785836417357385,
+                    0.23944528575002455,
+                    -1.5144466683392535,
+                ],
+            ),
+            (
+                4,
+                0.5,
+                [
+                    2.6306032753377897,
+                    4.697677989716788,
+                    7.6402814064148314,
+                    7.545366113966397,
+                    6.862294863414422,
+                    5.9281809547987425,
+                    4.525437316966706,
+                    1.6393818602944958,
+                    -3.0367250821189504,
+                    -8.34239817893728,
+                    -11.915925475875854,
+                    -11.587814629608703,
+                    -6.887227531241737,
+                    0.4227348301443286,
+                    7.24463922503075,
+                    10.88318185549883,
+                    10.51233129984018,
+                    7.241531466614057,
+                    3.313945117527742,
+                    -0.20634453768157623,
+                ],
+            ),
+            (
+                4,
+                -0.37,
+                [
+                    4.162142563509179,
+                    7.497026260222897,
+                    7.602893110891612,
+                    6.975955770303944,
+                    6.055591973804203,
+                    4.772478754215038,
+                    2.121701266176032,
+                    -2.3521289394036264,
+                    -7.69463788238694,
+                    -11.63716593410173,
+                    -11.890714552701453,
+                    -7.703612968518502,
+                    -0.5700891403689989,
+                    6.494366064096208,
+                    10.642371222821803,
+                    10.762808027340544,
+                    7.75581615791813,
+                    3.8007888645719055,
+                    0.19652586496626542,
+                    -1.508641460236482,
+                ],
+            ),
+            (
+                5,
+                0.5,
+                [
+                    2.617324371623272,
+                    4.690581905217046,
+                    7.6620204610085985,
+                    7.525044246696608,
+                    6.874675819576095,
+                    5.9209275253562055,
+                    4.5291241625419305,
+                    1.6380438152728438,
+                    -3.0355217064381708,
+                    -8.342752526750935,
+                    -11.916013984915796,
+                    -11.588518485130257,
+                    -6.88716496823088,
+                    0.42215713803932103,
+                    7.2464605870211765,
+                    10.8808616974449,
+                    10.517502421146744,
+                    7.233213623388482,
+                    3.3227201112356703,
+                    -0.21129098372014327,
+                ],
+            ),
+            (
+                5,
+                -0.37,
+                [
+                    4.1610753206808875,
+                    7.5146000230372225,
+                    7.583725393528469,
+                    6.987998134141277,
+                    6.048632205806019,
+                    4.776376928836171,
+                    2.120389642875675,
+                    -2.3511217898395307,
+                    -7.695294262733125,
+                    -11.637447867735148,
+                    -11.891319351908553,
+                    -7.703307768605489,
+                    -0.5702480314364181,
+                    6.496092676469299,
+                    10.640308006662673,
+                    10.7670381892709,
+                    7.748081030883152,
+                    3.8095536403517665,
+                    0.19015282605698844,
+                    -1.50938219040037,
+                ],
+            ),
         ];
 
         let refl_arr = NdArray::new(reflect_sig, vec![24]).unwrap();
@@ -6723,8 +7253,7 @@ mod tests {
             vec![3.0, 6.0, 9.0, 7.0]
         );
 
-        let two_dim =
-            NdArray::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![2, 3]).unwrap();
+        let two_dim = NdArray::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![2, 3]).unwrap();
         // scipy.ndimage.generic_filter1d(two_dim, sum3, 3, axis=0, mode='constant', cval=0.0)
         assert_eq!(
             generic_filter1d(&two_dim, sum_window, 3, 0, BoundaryMode::Constant, 0.0)
@@ -6754,8 +7283,7 @@ mod tests {
             vec![3.0, 6.0, 9.0, 7.0]
         );
 
-        let two_dim =
-            NdArray::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![2, 3]).unwrap();
+        let two_dim = NdArray::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![2, 3]).unwrap();
         // scipy.ndimage.vectorized_filter(two_dim, np.sum, size=2, mode='constant', cval=0.0)
         assert_eq!(
             vectorized_filter(&two_dim, sum_window, 2, BoundaryMode::Constant, 0.0)
@@ -6936,10 +7464,30 @@ mod tests {
         // foreground but each pixel has at least one foreground
         // neighbor, so the miss filter (requiring all 8 neighbors = 0)
         // rejects them all.
-        assert_eq!(result.data[5 + 1], 1.0, "isolated pixel at (1,1) should pass");
-        assert_eq!(result.data[10 + 3], 0.0, "block pixel (2,3) should fail miss");
-        assert_eq!(result.data[10 + 4], 0.0, "block pixel (2,4) should fail miss");
-        assert_eq!(result.data[15 + 3], 0.0, "block pixel (3,3) should fail miss");
-        assert_eq!(result.data[15 + 4], 0.0, "block pixel (3,4) should fail miss");
+        assert_eq!(
+            result.data[5 + 1],
+            1.0,
+            "isolated pixel at (1,1) should pass"
+        );
+        assert_eq!(
+            result.data[10 + 3],
+            0.0,
+            "block pixel (2,3) should fail miss"
+        );
+        assert_eq!(
+            result.data[10 + 4],
+            0.0,
+            "block pixel (2,4) should fail miss"
+        );
+        assert_eq!(
+            result.data[15 + 3],
+            0.0,
+            "block pixel (3,3) should fail miss"
+        );
+        assert_eq!(
+            result.data[15 + 4],
+            0.0,
+            "block pixel (3,4) should fail miss"
+        );
     }
 }
