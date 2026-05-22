@@ -1249,7 +1249,18 @@ pub fn minimum_filter(
     mode: BoundaryMode,
     cval: f64,
 ) -> Result<NdArray, NdimageError> {
-    rank_filter_impl(input, size, mode, cval, 0)
+    minimum_filter_with_origins(input, size, &[0], mode, cval)
+}
+
+/// Minimum filter with SciPy `origin` semantics.
+pub fn minimum_filter_with_origins(
+    input: &NdArray,
+    size: usize,
+    origins: &[i64],
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError> {
+    rank_filter_index_with_origins(input, size, origins, mode, cval, 0)
 }
 
 /// Maximum filter.
@@ -1261,13 +1272,19 @@ pub fn maximum_filter(
     mode: BoundaryMode,
     cval: f64,
 ) -> Result<NdArray, NdimageError> {
-    if size == 0 {
-        return Err(NdimageError::InvalidArgument(
-            "filter size must be positive".to_string(),
-        ));
-    }
-    let kernel_total: usize = vec![size; input.ndim()].iter().product();
-    rank_filter_impl(input, size, mode, cval, kernel_total - 1)
+    maximum_filter_with_origins(input, size, &[0], mode, cval)
+}
+
+/// Maximum filter with SciPy `origin` semantics.
+pub fn maximum_filter_with_origins(
+    input: &NdArray,
+    size: usize,
+    origins: &[i64],
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError> {
+    let kernel_total = filter_footprint_size(input.ndim(), size)?;
+    rank_filter_index_with_origins(input, size, origins, mode, cval, kernel_total - 1)
 }
 
 /// Rank filter: select the element at `rank` from each sorted neighborhood.
@@ -1281,17 +1298,19 @@ pub fn rank_filter(
     mode: BoundaryMode,
     cval: f64,
 ) -> Result<NdArray, NdimageError> {
-    if size == 0 {
-        return Err(NdimageError::InvalidArgument(
-            "filter size must be positive".to_string(),
-        ));
-    }
+    rank_filter_with_origins(input, rank, size, &[0], mode, cval)
+}
 
-    let footprint_size = (0..input.ndim()).try_fold(1usize, |acc, _| {
-        acc.checked_mul(size).ok_or_else(|| {
-            NdimageError::InvalidArgument("filter footprint is too large".to_string())
-        })
-    })?;
+/// Rank filter with SciPy `origin` semantics.
+pub fn rank_filter_with_origins(
+    input: &NdArray,
+    rank: isize,
+    size: usize,
+    origins: &[i64],
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError> {
+    let footprint_size = filter_footprint_size(input.ndim(), size)?;
     let footprint_size = isize::try_from(footprint_size)
         .map_err(|_| NdimageError::InvalidArgument("filter footprint is too large".to_string()))?;
     let normalized_rank = if rank < 0 {
@@ -1308,21 +1327,32 @@ pub fn rank_filter(
         NdimageError::InvalidArgument("rank not within filter footprint size".to_string())
     })?;
 
-    rank_filter_impl(input, size, mode, cval, rank_index)
+    rank_filter_index_with_origins(input, size, origins, mode, cval, rank_index)
 }
 
-fn rank_filter_impl(
-    input: &NdArray,
-    size: usize,
-    mode: BoundaryMode,
-    cval: f64,
-    rank: usize,
-) -> Result<NdArray, NdimageError> {
+fn filter_footprint_size(ndim: usize, size: usize) -> Result<usize, NdimageError> {
     if size == 0 {
         return Err(NdimageError::InvalidArgument(
             "filter size must be positive".to_string(),
         ));
     }
+
+    (0..ndim).try_fold(1usize, |acc, _| {
+        acc.checked_mul(size).ok_or_else(|| {
+            NdimageError::InvalidArgument("filter footprint is too large".to_string())
+        })
+    })
+}
+
+fn rank_filter_index_with_origins(
+    input: &NdArray,
+    size: usize,
+    origins: &[i64],
+    mode: BoundaryMode,
+    cval: f64,
+    rank: usize,
+) -> Result<NdArray, NdimageError> {
+    filter_footprint_size(input.ndim(), size)?;
     if input.size() == 0 {
         return Err(NdimageError::EmptyInput);
     }
@@ -1333,6 +1363,7 @@ fn rank_filter_impl(
     let kernel_shape: Vec<usize> = vec![size; ndim];
     let kernel_total: usize = kernel_shape.iter().product();
     let kernel_strides = compute_strides(&kernel_shape);
+    let origins = normalize_filter_origins(ndim, &kernel_shape, origins)?;
 
     for flat_out in 0..input.size() {
         let out_idx = input.unravel(flat_out);
@@ -1348,7 +1379,7 @@ fn rank_filter_impl(
 
             let mut in_idx = vec![0i64; ndim];
             for d in 0..ndim {
-                in_idx[d] = out_idx[d] as i64 + k_idx[d] as i64 - offsets[d];
+                in_idx[d] = out_idx[d] as i64 + k_idx[d] as i64 - offsets[d] - origins[d];
             }
             neighborhood.push(input.get_boundary(&in_idx, mode, cval));
         }
@@ -5795,6 +5826,57 @@ mod tests {
 
         let negative_rank = rank_filter(&input, -1, 3, BoundaryMode::Constant, 0.0).unwrap();
         assert_eq!(negative_rank.data, max_rank.data);
+    }
+
+    #[test]
+    fn rank_filter_origin_matches_scipy_even_window() {
+        let input = NdArray::new(vec![1., 2., 3., 4., 5.], vec![5]).unwrap();
+
+        let origin_zero =
+            rank_filter_with_origins(&input, 0, 2, &[0], BoundaryMode::Constant, 0.0).unwrap();
+        assert_eq!(origin_zero.data, vec![0., 1., 2., 3., 4.]);
+
+        let shifted_min =
+            rank_filter_with_origins(&input, 0, 2, &[-1], BoundaryMode::Constant, 0.0).unwrap();
+        assert_eq!(shifted_min.data, vec![1., 2., 3., 4., 0.]);
+
+        let shifted_max =
+            rank_filter_with_origins(&input, 1, 2, &[-1], BoundaryMode::Constant, 0.0).unwrap();
+        assert_eq!(shifted_max.data, vec![2., 3., 4., 5., 5.]);
+    }
+
+    #[test]
+    fn min_max_filter_origins_match_scipy_even_window() {
+        let input = NdArray::new(vec![1., 2., 3., 4., 5.], vec![5]).unwrap();
+
+        let min_origin_zero =
+            minimum_filter_with_origins(&input, 2, &[0], BoundaryMode::Constant, 0.0).unwrap();
+        assert_eq!(min_origin_zero.data, vec![0., 1., 2., 3., 4.]);
+
+        let min_shifted =
+            minimum_filter_with_origins(&input, 2, &[-1], BoundaryMode::Constant, 0.0).unwrap();
+        assert_eq!(min_shifted.data, vec![1., 2., 3., 4., 0.]);
+
+        let max_origin_zero =
+            maximum_filter_with_origins(&input, 2, &[0], BoundaryMode::Constant, 0.0).unwrap();
+        assert_eq!(max_origin_zero.data, vec![1., 2., 3., 4., 5.]);
+
+        let max_shifted =
+            maximum_filter_with_origins(&input, 2, &[-1], BoundaryMode::Constant, 0.0).unwrap();
+        assert_eq!(max_shifted.data, vec![2., 3., 4., 5., 5.]);
+    }
+
+    #[test]
+    fn rank_filter_origin_validation_matches_scipy_bounds() {
+        let input = NdArray::new(vec![1., 2., 3., 4., 5.], vec![5]).unwrap();
+
+        assert!(rank_filter_with_origins(&input, 0, 2, &[-1], BoundaryMode::Reflect, 0.0).is_ok());
+        assert!(rank_filter_with_origins(&input, 0, 2, &[0], BoundaryMode::Reflect, 0.0).is_ok());
+        assert!(rank_filter_with_origins(&input, 0, 2, &[1], BoundaryMode::Reflect, 0.0).is_err());
+        assert!(rank_filter_with_origins(&input, 0, 2, &[-2], BoundaryMode::Reflect, 0.0).is_err());
+        assert!(
+            rank_filter_with_origins(&input, 0, 3, &[-1, 0], BoundaryMode::Reflect, 0.0).is_err()
+        );
     }
 
     #[test]
