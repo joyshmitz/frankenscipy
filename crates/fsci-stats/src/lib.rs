@@ -21149,6 +21149,31 @@ pub fn moment(data: &[f64], k: u32) -> f64 {
         / n
 }
 
+/// Compute the weighted k-th central moment of a data set.
+///
+/// Matches `scipy.stats.moment` with weights parameter.
+pub fn moment_weighted(data: &[f64], k: u32, weights: &[f64]) -> f64 {
+    if data.is_empty() || data.len() != weights.len() {
+        return f64::NAN;
+    }
+    if weights.iter().any(|&w| !w.is_finite() || w < 0.0) {
+        return f64::NAN;
+    }
+    let total_w: f64 = weights.iter().sum();
+    if total_w <= 0.0 {
+        return f64::NAN;
+    }
+    if k == 0 {
+        return 1.0;
+    }
+    let mean_val: f64 = data.iter().zip(weights).map(|(&x, &w)| w * x).sum::<f64>() / total_w;
+    data.iter()
+        .zip(weights)
+        .map(|(&x, &w)| w * (x - mean_val).powi(k as i32))
+        .sum::<f64>()
+        / total_w
+}
+
 /// Compute the n-th k-statistic (unbiased cumulant estimator).
 ///
 /// K-statistics are unbiased estimators of cumulants:
@@ -21854,6 +21879,34 @@ pub fn zscore(data: &[f64]) -> Vec<f64> {
     let Some((mean_val, std_val)) = mean_std_ddof(data, 0) else {
         return vec![f64::NAN; data.len()];
     };
+    if std_val == 0.0 {
+        return vec![f64::NAN; data.len()];
+    }
+    data.iter().map(|&x| (x - mean_val) / std_val).collect()
+}
+
+/// Compute weighted z-scores: (x - weighted_mean) / weighted_std.
+///
+/// Matches `scipy.stats.zscore` with weights parameter.
+pub fn zscore_weighted(data: &[f64], weights: &[f64]) -> Vec<f64> {
+    if data.is_empty() || data.len() != weights.len() {
+        return vec![f64::NAN; data.len()];
+    }
+    if weights.iter().any(|&w| !w.is_finite() || w < 0.0) {
+        return vec![f64::NAN; data.len()];
+    }
+    let total_w: f64 = weights.iter().sum();
+    if total_w <= 0.0 {
+        return vec![f64::NAN; data.len()];
+    }
+    let mean_val: f64 = data.iter().zip(weights).map(|(&x, &w)| w * x).sum::<f64>() / total_w;
+    let var: f64 = data
+        .iter()
+        .zip(weights)
+        .map(|(&x, &w)| w * (x - mean_val).powi(2))
+        .sum::<f64>()
+        / total_w;
+    let std_val = var.sqrt();
     if std_val == 0.0 {
         return vec![f64::NAN; data.len()];
     }
