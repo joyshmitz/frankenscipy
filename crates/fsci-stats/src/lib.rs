@@ -52599,7 +52599,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn f_oneway_matches_scipy_reference_values() {
         // f_oneway([1,2,3], [4,5,6], [7,8,9])
         // F = MSB/MSW where:
@@ -57869,5 +57868,67 @@ mod tests {
             (result2 - 2.0).abs() < 1e-10,
             "gstd([2,4,8]) got {result2}, expected 2.0"
         );
+    }
+
+    #[test]
+    fn tiecorrect_matches_scipy_reference_values() {
+        let no_ties = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let tc1 = tiecorrect(&no_ties);
+        assert!(
+            (tc1 - 1.0).abs() < 1e-12,
+            "tiecorrect(no ties) got {tc1}, expected 1.0"
+        );
+
+        let with_ties = vec![1.0, 2.5, 2.5, 4.0, 5.0];
+        let tc2 = tiecorrect(&with_ties);
+        assert!(
+            (tc2 - 0.95).abs() < 1e-12,
+            "tiecorrect([1,2.5,2.5,4,5]) got {tc2}, expected 0.95"
+        );
+
+        let more_ties = vec![2.0, 2.0, 2.0, 5.0, 5.0];
+        let tc3 = tiecorrect(&more_ties);
+        assert!(
+            (tc3 - 0.75).abs() < 1e-12,
+            "tiecorrect([2,2,2,5,5]) got {tc3}, expected 0.75"
+        );
+
+        let all_same = vec![3.0, 3.0, 3.0, 3.0, 3.0];
+        let tc4 = tiecorrect(&all_same);
+        assert!(
+            tc4.abs() < 1e-12,
+            "tiecorrect(all same) got {tc4}, expected 0.0"
+        );
+    }
+
+    #[test]
+    fn median_abs_deviation_matches_scipy_reference_values() {
+        let data1: Vec<f64> = vec![1.0, 1.0, 2.0, 2.0, 4.0, 6.0, 9.0];
+        let mad1 = median_abs_deviation(&data1, 1.0);
+        assert!(
+            (mad1 - 1.0).abs() < 1e-12,
+            "median_abs_deviation([1,1,2,2,4,6,9]) got {mad1}, expected 1.0"
+        );
+
+        let data2: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let mad2 = median_abs_deviation(&data2, 1.0);
+        assert!(
+            (mad2 - 1.0).abs() < 1e-12,
+            "median_abs_deviation([1,2,3,4,5]) got {mad2}, expected 1.0"
+        );
+    }
+
+    #[test]
+    fn moment_matches_scipy_reference_values() {
+        let data: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+
+        let m2 = moment(&data, 2);
+        assert!((m2 - 2.0).abs() < 1e-12, "moment(2) got {m2}, expected 2.0");
+
+        let m3 = moment(&data, 3);
+        assert!(m3.abs() < 1e-12, "moment(3) got {m3}, expected 0.0");
+
+        let m4 = moment(&data, 4);
+        assert!((m4 - 6.8).abs() < 1e-12, "moment(4) got {m4}, expected 6.8");
     }
 }
