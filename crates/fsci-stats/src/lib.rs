@@ -31757,6 +31757,31 @@ pub fn sokalsneath_distance(u: &[f64], v: &[f64]) -> f64 {
     if denom == 0.0 { 0.0 } else { r / denom }
 }
 
+/// Directed Hausdorff distance for 1D point sets.
+/// Returns the maximum of the minimum distances from u to v.
+pub fn directed_hausdorff_1d(u: &[f64], v: &[f64]) -> f64 {
+    if u.is_empty() || v.is_empty() {
+        return f64::NAN;
+    }
+    u.iter()
+        .map(|&ui| {
+            v.iter()
+                .map(|&vj| (ui - vj).abs())
+                .fold(f64::INFINITY, f64::min)
+        })
+        .fold(0.0f64, f64::max)
+}
+
+/// Hausdorff distance (symmetric) for 1D point sets.
+pub fn hausdorff_1d(u: &[f64], v: &[f64]) -> f64 {
+    let d_uv = directed_hausdorff_1d(u, v);
+    let d_vu = directed_hausdorff_1d(v, u);
+    if d_uv.is_nan() || d_vu.is_nan() {
+        return f64::NAN;
+    }
+    d_uv.max(d_vu)
+}
+
 /// Adjusted Rand Index for comparing cluster assignments.
 /// labels_true and labels_pred should be integer labels (encoded as f64).
 pub fn adjusted_rand_index(labels_true: &[f64], labels_pred: &[f64]) -> f64 {
