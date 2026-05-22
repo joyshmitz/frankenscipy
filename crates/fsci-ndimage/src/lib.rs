@@ -4604,6 +4604,68 @@ pub fn fourier_ellipsoid(input: &[Complex64], shape: &[usize], size: &[f64]) -> 
     output
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Generic Derivative Filters
+// ══════════════════════════════════════════════════════════════════════
+
+/// Generic gradient magnitude filter.
+///
+/// Matches `scipy.ndimage.generic_gradient_magnitude`. Computes gradient
+/// magnitude using a user-provided derivative function applied along each axis.
+///
+/// # Arguments
+/// * `input` - Input array
+/// * `derivative` - Function that computes derivative along a given axis
+///
+/// Returns sqrt(sum(derivative(input, axis)^2)) for each axis.
+pub fn generic_gradient_magnitude<F>(input: &NdArray, derivative: F) -> NdArray
+where
+    F: Fn(&NdArray, usize) -> NdArray,
+{
+    let ndim = input.shape.len();
+    let mut result = NdArray::new(vec![0.0; input.size()], input.shape.clone()).unwrap();
+
+    for axis in 0..ndim {
+        let deriv = derivative(input, axis);
+        for (r, &d) in result.data.iter_mut().zip(deriv.data.iter()) {
+            *r += d * d;
+        }
+    }
+
+    for r in &mut result.data {
+        *r = r.sqrt();
+    }
+
+    result
+}
+
+/// Generic Laplace filter.
+///
+/// Matches `scipy.ndimage.generic_laplace`. Computes Laplacian using a
+/// user-provided second derivative function applied along each axis.
+///
+/// # Arguments
+/// * `input` - Input array
+/// * `derivative2` - Function that computes second derivative along a given axis
+///
+/// Returns sum(derivative2(input, axis)) for each axis.
+pub fn generic_laplace<F>(input: &NdArray, derivative2: F) -> NdArray
+where
+    F: Fn(&NdArray, usize) -> NdArray,
+{
+    let ndim = input.shape.len();
+    let mut result = NdArray::new(vec![0.0; input.size()], input.shape.clone()).unwrap();
+
+    for axis in 0..ndim {
+        let deriv2 = derivative2(input, axis);
+        for (r, &d) in result.data.iter_mut().zip(deriv2.data.iter()) {
+            *r += d;
+        }
+    }
+
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
