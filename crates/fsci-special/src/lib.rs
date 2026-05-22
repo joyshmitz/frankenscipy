@@ -45,6 +45,8 @@ pub use convenience::{
     betaincinv,
     betaincinv_scalar,
     binary_cross_entropy,
+    boxcox,
+    boxcox_scalar,
     boxcox_transform,
     boxcox_transform_scalar,
     boxcox1p,

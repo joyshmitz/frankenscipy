@@ -2912,6 +2912,23 @@ pub fn exprel_scalar(x: f64) -> f64 {
 /// Box-Cox transformation: (x^λ - 1) / λ for λ ≠ 0, ln(x) for λ = 0.
 ///
 /// Matches `scipy.special.boxcox`.
+pub fn boxcox(
+    x_tensor: &SpecialTensor,
+    lam_tensor: &SpecialTensor,
+    mode: RuntimeMode,
+) -> SpecialResult {
+    map_real_binary("boxcox", x_tensor, lam_tensor, mode, |x, lam| {
+        Ok(boxcox_scalar(x, lam))
+    })
+}
+
+pub fn boxcox_scalar(x: f64, lam: f64) -> f64 {
+    boxcox_transform_scalar(x, lam)
+}
+
+/// Box-Cox transformation under the historical FrankenSciPy helper name.
+///
+/// Equivalent to [`boxcox`].
 pub fn boxcox_transform(
     x_tensor: &SpecialTensor,
     lam_tensor: &SpecialTensor,
@@ -2923,13 +2940,31 @@ pub fn boxcox_transform(
 }
 
 pub fn boxcox_transform_scalar(x: f64, lam: f64) -> f64 {
-    if x <= 0.0 {
+    if x.is_nan() || lam.is_nan() || x < 0.0 {
         return f64::NAN;
     }
-    if lam.abs() < 1e-15 {
+    if lam == f64::INFINITY {
+        if x < 1.0 {
+            return -0.0;
+        }
+        return f64::NAN;
+    }
+    if lam == f64::NEG_INFINITY {
+        if x > 1.0 {
+            return 0.0;
+        }
+        return f64::NAN;
+    }
+    if x == 0.0 {
+        if lam > 0.0 {
+            return -1.0 / lam;
+        }
+        return f64::NEG_INFINITY;
+    }
+    if lam == 0.0 {
         x.ln()
     } else {
-        (x.powf(lam) - 1.0) / lam
+        (lam * x.ln()).exp_m1() / lam
     }
 }
 
@@ -7221,6 +7256,35 @@ mod tests {
         let x1p = 0.75;
         let y1p = boxcox1p_scalar(x1p, lam);
         assert!((inv_boxcox1p_scalar(y1p, lam) - x1p).abs() < 1e-12);
+    }
+
+    #[test]
+    fn boxcox_alias_matches_scipy_edges() -> Result<(), String> {
+        assert!((boxcox_scalar(2.0, 0.0) - 2.0_f64.ln()).abs() < 1e-14);
+        assert_eq!(boxcox_scalar(0.0, 0.5), -2.0);
+        assert!(boxcox_scalar(0.0, 0.0).is_infinite());
+        assert!(boxcox_scalar(0.0, 0.0).is_sign_negative());
+        assert!(boxcox_scalar(-1.0, 0.5).is_nan());
+        assert_eq!(
+            boxcox_scalar(0.5, f64::INFINITY).to_bits(),
+            (-0.0_f64).to_bits()
+        );
+        assert!(boxcox_scalar(2.0, f64::INFINITY).is_nan());
+        assert_eq!(boxcox_scalar(2.0, f64::NEG_INFINITY), 0.0);
+
+        let transformed = boxcox(
+            &SpecialTensor::RealVec(vec![0.0, 2.0, 4.0]),
+            &SpecialTensor::RealScalar(0.5),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(transformed)?;
+        let expected = [0.0, 2.0, 4.0].map(|x| boxcox_transform_scalar(x, 0.5));
+        assert_eq!(values.len(), expected.len());
+        for (actual, expected) in values.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-14);
+        }
+        Ok(())
     }
 
     #[test]
