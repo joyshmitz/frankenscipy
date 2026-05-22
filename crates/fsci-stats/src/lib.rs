@@ -29908,6 +29908,46 @@ pub fn bootstrap_mean(data: &[f64], n_bootstrap: usize, confidence: f64, seed: u
     (boot_means[idx_lo], boot_means[idx_hi])
 }
 
+/// Bootstrap confidence interval for the standard deviation.
+///
+/// Uses percentile method for simplicity.
+///
+/// # Returns
+/// (lower, upper) bounds of the confidence interval.
+pub fn bootstrap_std(data: &[f64], n_bootstrap: usize, confidence: f64, seed: u64) -> (f64, f64) {
+    let n = data.len();
+    if n < 2 || n_bootstrap == 0 {
+        return (f64::NAN, f64::NAN);
+    }
+
+    let mut rng_state = seed;
+    let next_rng = |state: &mut u64| -> usize {
+        *state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+        ((*state >> 33) as usize) % n
+    };
+
+    let mut boot_stds = Vec::with_capacity(n_bootstrap);
+    let mut sample = vec![0.0; n];
+
+    for _ in 0..n_bootstrap {
+        for s in sample.iter_mut() {
+            *s = data[next_rng(&mut rng_state)];
+        }
+        let nf = n as f64;
+        let mean: f64 = sample.iter().sum::<f64>() / nf;
+        let var: f64 = sample.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / (nf - 1.0);
+        boot_stds.push(var.sqrt());
+    }
+
+    boot_stds.sort_by(|a, b| a.total_cmp(b));
+
+    let alpha = 1.0 - confidence;
+    let idx_lo = ((alpha / 2.0 * n_bootstrap as f64).floor() as usize).clamp(0, n_bootstrap - 1);
+    let idx_hi = (((1.0 - alpha / 2.0) * n_bootstrap as f64).ceil() as usize).clamp(0, n_bootstrap - 1);
+
+    (boot_stds[idx_lo], boot_stds[idx_hi])
+}
+
 /// Result of jackknife resampling.
 #[derive(Debug, Clone, PartialEq)]
 pub struct JackknifeResult {
