@@ -20523,6 +20523,35 @@ pub fn trimmed_mean_ci(
     (lower, upper)
 }
 
+/// Standard deviation of trimmed data.
+///
+/// Computes the standard deviation after trimming a proportion of elements
+/// from each end of the sorted data.
+///
+/// # Arguments
+/// * `data` — Input array
+/// * `proportiontocut` — Fraction to trim from each end (0.0 to 0.5)
+/// * `ddof` — Delta degrees of freedom (default: 1 for sample std)
+///
+/// # Returns
+/// Standard deviation of the trimmed data
+pub fn trimmed_std(data: &[f64], proportiontocut: f64, ddof: usize) -> f64 {
+    if data.is_empty() || data.iter().any(|v| v.is_nan()) {
+        return f64::NAN;
+    }
+
+    let trimmed = trimboth(data, proportiontocut);
+    if trimmed.len() <= ddof {
+        return f64::NAN;
+    }
+
+    let mean = trimmed.iter().sum::<f64>() / trimmed.len() as f64;
+    let variance: f64 = trimmed.iter().map(|x| (x - mean).powi(2)).sum::<f64>()
+        / (trimmed.len() - ddof) as f64;
+
+    variance.sqrt()
+}
+
 /// Trim a proportion of elements from both ends of a sorted array.
 ///
 /// Slices off the given proportion from **each** end of the sorted input array,
@@ -40055,6 +40084,32 @@ mod tests {
     fn trimmed_mean_ci_empty_returns_nan() {
         let (lower, upper) = trimmed_mean_ci(&[], 0.1, 0.95, 1000, 42);
         assert!(lower.is_nan() && upper.is_nan());
+    }
+
+    // ── trimmed_std tests ────────────────────────────────────────────
+
+    #[test]
+    fn trimmed_std_basic() {
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0, 100.0];
+        // With 0.2 trim, we trim 1 from each end: sorted [1,2,3,4,5,100] -> [2,3,4,5]
+        // mean = 3.5, var = ((2-3.5)^2 + (3-3.5)^2 + (4-3.5)^2 + (5-3.5)^2)/3 = 5/3
+        let result = trimmed_std(&data, 0.16667, 1); // ~1/6 to trim 1 from each side
+        assert!(result > 0.0, "trimmed_std should be positive");
+        assert!(result < 10.0, "trimmed_std should exclude outlier");
+    }
+
+    #[test]
+    fn trimmed_std_no_trim() {
+        let data = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let trimmed = trimmed_std(&data, 0.0, 1);
+        // Standard sample std of [1,2,3,4,5] = sqrt(10/4) = sqrt(2.5)
+        let expected = (2.5_f64).sqrt();
+        assert_close(trimmed, expected, 1e-10, "trimmed_std with no trim");
+    }
+
+    #[test]
+    fn trimmed_std_empty_returns_nan() {
+        assert!(trimmed_std(&[], 0.1, 1).is_nan());
     }
 
     #[test]
