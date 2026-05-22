@@ -31113,6 +31113,65 @@ pub fn quantile_loss(y_true: &[f64], y_pred: &[f64], tau: f64) -> f64 {
     pinball_loss(y_true, y_pred, tau)
 }
 
+/// Hinge loss for binary classification.
+/// y_true should be -1 or +1, y_pred is the decision function value.
+pub fn hinge_loss(y_true: &[f64], y_pred: &[f64]) -> f64 {
+    if y_true.len() != y_pred.len() || y_true.is_empty() {
+        return f64::NAN;
+    }
+    y_true
+        .iter()
+        .zip(y_pred.iter())
+        .map(|(&t, &p)| (1.0 - t * p).max(0.0))
+        .sum::<f64>()
+        / y_true.len() as f64
+}
+
+/// Squared hinge loss for binary classification.
+pub fn squared_hinge_loss(y_true: &[f64], y_pred: &[f64]) -> f64 {
+    if y_true.len() != y_pred.len() || y_true.is_empty() {
+        return f64::NAN;
+    }
+    y_true
+        .iter()
+        .zip(y_pred.iter())
+        .map(|(&t, &p)| (1.0 - t * p).max(0.0).powi(2))
+        .sum::<f64>()
+        / y_true.len() as f64
+}
+
+/// Log loss (binary cross-entropy) for probabilistic classification.
+/// y_true is 0 or 1, y_pred is the predicted probability.
+pub fn log_loss(y_true: &[f64], y_pred: &[f64]) -> f64 {
+    if y_true.len() != y_pred.len() || y_true.is_empty() {
+        return f64::NAN;
+    }
+    let eps = 1e-15;
+    -y_true
+        .iter()
+        .zip(y_pred.iter())
+        .map(|(&t, &p)| {
+            let p_clipped = p.clamp(eps, 1.0 - eps);
+            t * p_clipped.ln() + (1.0 - t) * (1.0 - p_clipped).ln()
+        })
+        .sum::<f64>()
+        / y_true.len() as f64
+}
+
+/// Brier score for probabilistic prediction accuracy.
+/// y_true is 0 or 1, y_pred is the predicted probability.
+pub fn brier_score(y_true: &[f64], y_pred: &[f64]) -> f64 {
+    if y_true.len() != y_pred.len() || y_true.is_empty() {
+        return f64::NAN;
+    }
+    y_true
+        .iter()
+        .zip(y_pred.iter())
+        .map(|(&t, &p)| (p - t).powi(2))
+        .sum::<f64>()
+        / y_true.len() as f64
+}
+
 /// Compute the log-likelihood for a normal distribution.
 pub fn norm_loglikelihood(data: &[f64], mu: f64, sigma: f64) -> f64 {
     let n = data.len() as f64;
