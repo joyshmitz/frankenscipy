@@ -17494,6 +17494,37 @@ pub fn corrcoef_weighted(x: &[f64], y: &[f64], weights: &[f64]) -> f64 {
     cov_xy / (var_x * var_y).sqrt()
 }
 
+/// Compute mean ignoring NaN values.
+///
+/// Matches `numpy.nanmean`.
+pub fn nanmean(data: &[f64]) -> f64 {
+    let valid: Vec<f64> = data.iter().copied().filter(|x| !x.is_nan()).collect();
+    if valid.is_empty() {
+        return f64::NAN;
+    }
+    valid.iter().sum::<f64>() / valid.len() as f64
+}
+
+/// Compute variance ignoring NaN values.
+///
+/// Matches `numpy.nanvar`.
+pub fn nanvar(data: &[f64]) -> f64 {
+    let valid: Vec<f64> = data.iter().copied().filter(|x| !x.is_nan()).collect();
+    if valid.len() < 2 {
+        return f64::NAN;
+    }
+    let n = valid.len() as f64;
+    let mean = valid.iter().sum::<f64>() / n;
+    valid.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / n
+}
+
+/// Compute standard deviation ignoring NaN values.
+///
+/// Matches `numpy.nanstd`.
+pub fn nanstd(data: &[f64]) -> f64 {
+    nanvar(data).sqrt()
+}
+
 /// Compute the weighted geometric mean.
 ///
 /// G_w = exp(Σ(w·ln(x)) / Σw)
