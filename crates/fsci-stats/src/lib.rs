@@ -27608,7 +27608,7 @@ pub fn barnard_exact_alternative(table: &[[usize; 2]; 2], alternative: &str) -> 
         let p = i as f64 / n_grid as f64;
 
         // Compute p-value for this nuisance parameter
-        let pval = barnard_pvalue_at_p(a as u64, b as u64, n1, n2, p, wald_stat, alternative);
+        let pval = barnard_pvalue_at_p(n1, n2, p, wald_stat, alternative);
 
         max_pvalue = max_pvalue.max(pval);
     }
@@ -27640,15 +27640,7 @@ fn barnard_wald_statistic(x1: u64, x2: u64, n1: u64, n2: u64) -> f64 {
     (p1 - p2) / se
 }
 
-fn barnard_pvalue_at_p(
-    a_obs: u64,
-    b_obs: u64,
-    n1: u64,
-    n2: u64,
-    p: f64,
-    observed_stat: f64,
-    alternative: &str,
-) -> f64 {
+fn barnard_pvalue_at_p(n1: u64, n2: u64, p: f64, observed_stat: f64, alternative: &str) -> f64 {
     let binom1 = Binomial::new(n1, p);
     let binom2 = Binomial::new(n2, p);
 
@@ -57987,59 +57979,59 @@ mod tests {
     }
 
     #[test]
-    fn barnard_exact_returns_valid_results() {
+    fn barnard_exact_matches_scipy_reference_values() {
         let table1 = [[10, 5], [3, 12]];
         let result1 = barnard_exact(&table1);
         assert!(
-            result1.statistic > 2.0 && result1.statistic < 3.0,
-            "barnard statistic got {}, expected ~2.5",
+            (result1.statistic - 2.579066441642642).abs() < 1e-6,
+            "barnard statistic got {}, expected 2.579",
             result1.statistic
         );
         assert!(
-            result1.pvalue > 0.0 && result1.pvalue < 0.05,
-            "barnard pvalue got {}, expected <0.05 (significant)",
+            (result1.pvalue - 0.011560486629605309).abs() < 1e-4,
+            "barnard pvalue got {}, expected 0.0116",
             result1.pvalue
         );
 
         let table2 = [[5, 1], [1, 5]];
         let result2 = barnard_exact(&table2);
         assert!(
-            result2.statistic > 1.5 && result2.statistic < 3.0,
-            "barnard statistic got {}, expected ~2.3",
+            (result2.statistic - 2.3094010767585034).abs() < 1e-6,
+            "barnard statistic got {}, expected 2.309",
             result2.statistic
         );
         assert!(
-            result2.pvalue > 0.0 && result2.pvalue < 0.1,
-            "barnard pvalue got {}, expected <0.1",
+            (result2.pvalue - 0.038574218750000035).abs() < 1e-4,
+            "barnard pvalue got {}, expected 0.0386",
             result2.pvalue
         );
     }
 
     #[test]
-    fn boschloo_exact_returns_valid_results() {
+    fn boschloo_exact_matches_scipy_reference_values() {
         let table1 = [[10, 5], [3, 12]];
         let result1 = boschloo_exact(&table1);
         assert!(
-            result1.statistic > 0.0 && result1.statistic < 0.1,
-            "boschloo statistic got {}, expected <0.1",
+            (result1.statistic - 0.012663843516838068).abs() < 1e-6,
+            "boschloo statistic got {}, expected 0.0127",
             result1.statistic
         );
         assert!(
-            result1.pvalue > 0.0 && result1.pvalue < 0.05,
-            "boschloo pvalue got {}, expected <0.05 (significant)",
+            (result1.pvalue - 0.011862866443205604).abs() < 1e-4,
+            "boschloo pvalue got {}, expected 0.0119",
             result1.pvalue
         );
 
         let table2 = [[5, 1], [1, 5]];
         let result2 = boschloo_exact(&table2);
         assert!(
-            result2.statistic > 0.0 && result2.statistic < 0.1,
-            "boschloo statistic got {}, expected <0.1",
+            (result2.statistic - 0.04004329004329004).abs() < 1e-6,
+            "boschloo statistic got {}, expected 0.0400",
             result2.statistic
         );
         assert!(
-            result2.pvalue > 0.0 && result2.pvalue < 0.1,
-            "boschloo pvalue got {}, expected <0.1",
+            (result2.pvalue - 0.03857421875000003).abs() < 1e-4,
+            "boschloo pvalue got {}, expected 0.0386",
             result2.pvalue
         );
     }
