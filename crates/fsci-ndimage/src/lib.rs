@@ -1594,6 +1594,36 @@ where
     generic_filter1d_with_origin(input, function, filter_size, axis, 0, mode, cval)
 }
 
+/// Apply a generic function along one signed axis with SciPy-style normalization.
+pub fn generic_filter1d_signed_axis<F>(
+    input: &NdArray,
+    function: F,
+    filter_size: usize,
+    axis: isize,
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError>
+where
+    F: Fn(&[f64]) -> f64,
+{
+    let axis = normalize_signed_axis(axis, input.ndim())?;
+    generic_filter1d(input, function, filter_size, axis, mode, cval)
+}
+
+/// Apply a generic function along SciPy's default `axis=-1`.
+pub fn generic_filter1d_default_axis<F>(
+    input: &NdArray,
+    function: F,
+    filter_size: usize,
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError>
+where
+    F: Fn(&[f64]) -> f64,
+{
+    generic_filter1d_signed_axis(input, function, filter_size, -1, mode, cval)
+}
+
 /// Apply a generic function along one axis with SciPy `origin` semantics.
 pub fn generic_filter1d_with_origin<F>(
     input: &NdArray,
@@ -8922,6 +8952,43 @@ mod tests {
                 .unwrap()
                 .data,
             vec![3.0, 6.0, 5.0, 9.0, 15.0, 11.0]
+        );
+    }
+
+    #[test]
+    fn generic_filter1d_signed_axis_matches_scipy_fixtures() {
+        let input = NdArray::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![2, 3]).unwrap();
+        let sum_window = |values: &[f64]| values.iter().sum::<f64>();
+
+        let default_axis =
+            generic_filter1d_default_axis(&input, sum_window, 3, BoundaryMode::Constant, 0.0)
+                .unwrap();
+        let last_axis =
+            generic_filter1d_signed_axis(&input, sum_window, 3, -1, BoundaryMode::Constant, 0.0)
+                .unwrap();
+        let first_axis =
+            generic_filter1d_signed_axis(&input, sum_window, 3, -2, BoundaryMode::Constant, 0.0)
+                .unwrap();
+
+        // scipy.ndimage.generic_filter1d(..., sliding_sum, 3, axis=-1, mode='constant', cval=0.0)
+        assert_eq!(default_axis.data, vec![3.0, 6.0, 5.0, 9.0, 15.0, 11.0]);
+        assert_eq!(last_axis.data, default_axis.data);
+        // scipy.ndimage.generic_filter1d(..., sliding_sum, 3, axis=-2, mode='constant', cval=0.0)
+        assert_eq!(first_axis.data, vec![5.0, 7.0, 9.0, 5.0, 7.0, 9.0]);
+    }
+
+    #[test]
+    fn generic_filter1d_signed_axis_rejects_out_of_range_axes() {
+        let input = NdArray::new(vec![1.0; 6], vec![2, 3]).unwrap();
+        let sum_window = |values: &[f64]| values.iter().sum::<f64>();
+
+        assert!(
+            generic_filter1d_signed_axis(&input, sum_window, 3, 2, BoundaryMode::Reflect, 0.0)
+                .is_err()
+        );
+        assert!(
+            generic_filter1d_signed_axis(&input, sum_window, 3, -3, BoundaryMode::Reflect, 0.0)
+                .is_err()
         );
     }
 
