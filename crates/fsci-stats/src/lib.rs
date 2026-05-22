@@ -3988,6 +3988,110 @@ impl ContinuousDistribution for NormInvGauss {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Relativistic Breit-Wigner Distribution
+// ══════════════════════════════════════════════════════════════════════
+
+/// Relativistic Breit-Wigner distribution.
+///
+/// Matches `scipy.stats.rel_breitwigner(rho)`.
+/// PDF: f(k) = k / ((1 - k²)² + ρ²) × normalization for k > 0.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RelBreitWigner {
+    pub rho: f64,
+}
+
+impl RelBreitWigner {
+    #[must_use]
+    pub fn new(rho: f64) -> Self {
+        assert!(rho > 0.0 && rho.is_finite(), "rho must be positive and finite, got {rho}");
+        Self { rho }
+    }
+
+    fn norm(&self) -> f64 {
+        (4.0 / self.rho) * (1.0 / self.rho).atan()
+    }
+}
+
+impl ContinuousDistribution for RelBreitWigner {
+    fn pdf(&self, k: f64) -> f64 {
+        if k <= 0.0 {
+            return 0.0;
+        }
+        let k2 = k * k;
+        let denom = (1.0 - k2).powi(2) + self.rho * self.rho;
+        k / denom / self.norm()
+    }
+
+    fn cdf(&self, k: f64) -> f64 {
+        if k <= 0.0 {
+            return 0.0;
+        }
+        simpson_integrate_adaptive(|t| self.pdf(t), 0.0, k, 64, 1e-10, 1e-14, 12)
+            .clamp(0.0, 1.0)
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return 0.0;
+        }
+        if q == 1.0 {
+            return f64::INFINITY;
+        }
+        let mut lo = 1e-10;
+        let mut hi = 10.0;
+        while self.cdf(hi) < q && hi < 1e10 {
+            hi *= 2.0;
+        }
+        for _ in 0..60 {
+            let mid = 0.5 * (lo + hi);
+            if self.cdf(mid) < q {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        0.5 * (lo + hi)
+    }
+
+    fn mean(&self) -> f64 {
+        f64::INFINITY
+    }
+
+    fn var(&self) -> f64 {
+        f64::INFINITY
+    }
+
+    fn fit(_data: &[f64]) -> Self {
+        Self { rho: f64::NAN }
+    }
+
+    fn try_fit(_data: &[f64]) -> Result<Self, FitError> {
+        Err(FitError::NotImplemented {
+            distribution: "RelBreitWigner".into(),
+        })
+    }
+
+    fn skewness(&self) -> f64 {
+        f64::NAN
+    }
+
+    fn kurtosis(&self) -> f64 {
+        f64::NAN
+    }
+
+    fn entropy(&self) -> f64 {
+        f64::NAN
+    }
+
+    fn mode(&self) -> f64 {
+        1.0
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Rayleigh Distribution
 // ══════════════════════════════════════════════════════════════════════
 
@@ -51814,6 +51918,19 @@ mod tests {
         assert!(gg.kurtosis().is_finite());
         assert!(gg.mode() >= 0.0 && gg.mode().is_finite());
         let q50 = gg.ppf(0.5);
+        assert!(q50 > 0.0 && q50.is_finite());
+    }
+
+    #[test]
+    fn test_rel_breit_wigner() {
+        let rbw = RelBreitWigner::new(0.5);
+        assert_eq!(rbw.pdf(0.0), 0.0);
+        assert!(rbw.pdf(1.0) > 0.0);
+        assert!(rbw.pdf(0.5) > 0.0);
+        assert_eq!(rbw.cdf(0.0), 0.0);
+        assert!(rbw.cdf(1.0) > 0.0 && rbw.cdf(1.0) < 1.0);
+        assert_eq!(rbw.mode(), 1.0);
+        let q50 = rbw.ppf(0.5);
         assert!(q50 > 0.0 && q50.is_finite());
     }
 
