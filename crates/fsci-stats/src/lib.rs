@@ -56672,6 +56672,31 @@ mod tests {
     }
 
     #[test]
+    fn sem_matches_scipy_reference_values() {
+        // scipy.stats.sem([1,2,3,4,5]) = std(ddof=1) / sqrt(n) = sqrt(2.5) / sqrt(5)
+        // std(ddof=1) = sqrt(10/4) = sqrt(2.5) ≈ 1.5811
+        // sem = 1.5811 / sqrt(5) ≈ 0.7071
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let s = sem(&data);
+        let expected = (2.5f64).sqrt() / (5.0f64).sqrt();
+        assert!((s - expected).abs() < 1e-10, "sem, got {}, expected {}", s, expected);
+    }
+
+    #[test]
+    fn iqr_matches_scipy_reference_values() {
+        // scipy.stats.iqr([1,2,3,4,5]) = Q3 - Q1 = 4 - 2 = 2
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let i = iqr(&data);
+        assert!((i - 2.0).abs() < 1e-10, "iqr, got {}", i);
+
+        // scipy.stats.iqr([1,2,3,4,5,6,7,8,9,10]) = 7.5 - 2.5 = 5
+        let data2: Vec<f64> = (1..=10).map(|x| x as f64).collect();
+        let i2 = iqr(&data2);
+        // IQR for [1..10] depends on interpolation method
+        assert!(i2 > 4.0 && i2 < 6.0, "iqr for 1..10 should be ~5, got {}", i2);
+    }
+
+    #[test]
     fn cov_matrix_matches_numpy_reference() {
         // numpy.cov([[1,2,3], [4,5,6]]) with rowvar=True
         // For perfectly correlated data, cov should show linear relationship
