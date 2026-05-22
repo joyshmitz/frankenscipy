@@ -31305,6 +31305,37 @@ pub fn accuracy_score(y_true: &[f64], y_pred: &[f64]) -> f64 {
     correct as f64 / y_true.len() as f64
 }
 
+/// F-beta score with configurable beta (weighting of recall vs precision).
+pub fn fbeta_score(y_true: &[f64], y_pred: &[f64], beta: f64) -> f64 {
+    let p = precision_score(y_true, y_pred);
+    let r = recall_score(y_true, y_pred);
+    let beta2 = beta * beta;
+    if p + r == 0.0 { 0.0 } else { (1.0 + beta2) * p * r / (beta2 * p + r) }
+}
+
+/// Specificity score (true negative rate) for binary classification.
+pub fn specificity_score(y_true: &[f64], y_pred: &[f64]) -> f64 {
+    if y_true.len() != y_pred.len() || y_true.is_empty() {
+        return f64::NAN;
+    }
+    let (mut tn, mut fp) = (0.0f64, 0.0f64);
+    for (&t, &p) in y_true.iter().zip(y_pred.iter()) {
+        let ti = t.round() as i32;
+        let pi = p.round() as i32;
+        if ti == 0 {
+            if pi == 0 { tn += 1.0; } else { fp += 1.0; }
+        }
+    }
+    if tn + fp == 0.0 { 0.0 } else { tn / (tn + fp) }
+}
+
+/// Balanced accuracy - average of recall and specificity.
+pub fn balanced_accuracy_score(y_true: &[f64], y_pred: &[f64]) -> f64 {
+    let sens = recall_score(y_true, y_pred);
+    let spec = specificity_score(y_true, y_pred);
+    (sens + spec) / 2.0
+}
+
 /// Compute the log-likelihood for a normal distribution.
 pub fn norm_loglikelihood(data: &[f64], mu: f64, sigma: f64) -> f64 {
     let n = data.len() as f64;
