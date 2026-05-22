@@ -55849,6 +55849,36 @@ mod tests {
     }
 
     #[test]
+    fn test_xlogy_zero_x() {
+        let result = xlogy(0.0, 5.0);
+        assert!((result - 0.0).abs() < 1e-10, "xlogy(0, y) should be 0, got {}", result);
+    }
+
+    #[test]
+    fn test_xlogy_normal() {
+        let result = xlogy(2.0, std::f64::consts::E);
+        assert!((result - 2.0).abs() < 1e-10, "xlogy(2, e) should be 2, got {}", result);
+    }
+
+    #[test]
+    fn test_xlog1py_zero_x() {
+        let result = xlog1py(0.0, 5.0);
+        assert!((result - 0.0).abs() < 1e-10, "xlog1py(0, y) should be 0, got {}", result);
+    }
+
+    #[test]
+    fn test_rel_entr_zero_x() {
+        let result = rel_entr(0.0, 1.0);
+        assert!((result - 0.0).abs() < 1e-10, "rel_entr(0, y) should be 0, got {}", result);
+    }
+
+    #[test]
+    fn test_rel_entr_zero_y() {
+        let result = rel_entr(1.0, 0.0);
+        assert!(result.is_infinite() && result > 0.0, "rel_entr(x>0, 0) should be inf, got {}", result);
+    }
+
+    #[test]
     fn test_hausdorff_1d_identical() {
         let u = vec![1.0, 2.0, 3.0];
         let v = vec![1.0, 2.0, 3.0];
