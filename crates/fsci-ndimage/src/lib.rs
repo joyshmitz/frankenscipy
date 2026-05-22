@@ -5,7 +5,7 @@
 //! Matches `scipy.ndimage` core operations:
 //! - Filters: uniform, gaussian, median, minimum, maximum, convolve, correlate
 //! - Morphology: binary_erosion, binary_dilation, binary_opening, binary_closing
-//! - Measurements: label, find_objects, sum, mean, variance, standard_deviation
+//! - Measurements: label, find_objects, value_indices, sum, mean, variance, standard_deviation
 //! - Interpolation: shift, rotate, zoom, map_coordinates
 //! - Distance transforms: distance_transform_edt
 
@@ -2205,6 +2205,48 @@ fn maximum_value_position(input: &NdArray, values: &[(f64, usize)]) -> (f64, Vec
 }
 
 pub type ExtremaResult = (Vec<f64>, Vec<f64>, Vec<Vec<usize>>, Vec<Vec<usize>>);
+pub type ValueIndices = std::collections::BTreeMap<i64, Vec<Vec<usize>>>;
+
+fn value_indices_integer_input_error() -> NdimageError {
+    NdimageError::InvalidArgument("arr must contain only integer values".to_string())
+}
+
+/// Indices of each distinct integer value in an array.
+///
+/// Matches `scipy.ndimage.value_indices`: keys are the distinct integer values
+/// and values are one coordinate vector per dimension covering all occurrences
+/// of the key. `ignore_value`, when supplied, is skipped.
+pub fn value_indices(
+    arr: &NdArray,
+    ignore_value: Option<i64>,
+) -> Result<ValueIndices, NdimageError> {
+    let mut indices = ValueIndices::new();
+
+    for (flat, &value) in arr.data.iter().enumerate() {
+        if !value.is_finite()
+            || value.fract() != 0.0
+            || value < i64::MIN as f64
+            || value > i64::MAX as f64
+        {
+            return Err(value_indices_integer_input_error());
+        }
+
+        let key = value as i64;
+        if ignore_value == Some(key) {
+            continue;
+        }
+
+        let coords = arr.unravel(flat);
+        let entry = indices
+            .entry(key)
+            .or_insert_with(|| vec![Vec::new(); arr.ndim()]);
+        for (axis_coords, coord) in entry.iter_mut().zip(coords) {
+            axis_coords.push(coord);
+        }
+    }
+
+    Ok(indices)
+}
 
 /// Sum of values in optionally labeled regions.
 ///
@@ -4916,6 +4958,38 @@ mod tests {
         assert_eq!(maxs, vec![10.0, 2.0, 5.0, 20.0]);
         assert_eq!(min_positions, vec![vec![3], vec![0], vec![2], vec![4]]);
         assert_eq!(max_positions, vec![vec![3], vec![1], vec![2], vec![4]]);
+    }
+
+    #[test]
+    fn value_indices_matches_scipy_fixtures() {
+        let one_dim = NdArray::new(vec![2.0, 1.0, 2.0, 3.0, 1.0], vec![5]).unwrap();
+        let one_dim_indices = value_indices(&one_dim, None).unwrap();
+        // scipy.ndimage.value_indices(np.array([2, 1, 2, 3, 1]))
+        assert_eq!(one_dim_indices.get(&1).unwrap(), &vec![vec![1, 4]]);
+        assert_eq!(one_dim_indices.get(&2).unwrap(), &vec![vec![0, 2]]);
+        assert_eq!(one_dim_indices.get(&3).unwrap(), &vec![vec![3]]);
+
+        let two_dim = NdArray::new(vec![1.0, 2.0, 1.0, 3.0, 2.0, 3.0], vec![2, 3])
+            .unwrap();
+        let two_dim_indices = value_indices(&two_dim, None).unwrap();
+        // scipy.ndimage.value_indices(np.array([[1, 2, 1], [3, 2, 3]]))
+        assert_eq!(two_dim_indices.get(&1).unwrap(), &vec![vec![0, 0], vec![0, 2]]);
+        assert_eq!(two_dim_indices.get(&2).unwrap(), &vec![vec![0, 1], vec![1, 1]]);
+        assert_eq!(two_dim_indices.get(&3).unwrap(), &vec![vec![1, 1], vec![0, 2]]);
+
+        let ignored = value_indices(&two_dim, Some(2)).unwrap();
+        // scipy.ndimage.value_indices(..., ignore_value=2)
+        assert!(!ignored.contains_key(&2));
+        assert_eq!(ignored.get(&1).unwrap(), &vec![vec![0, 0], vec![0, 2]]);
+        assert_eq!(ignored.get(&3).unwrap(), &vec![vec![1, 1], vec![0, 2]]);
+    }
+
+    #[test]
+    fn value_indices_rejects_non_integer_values() {
+        let arr = NdArray::new(vec![1.0, 2.5], vec![2]).unwrap();
+        let err = value_indices(&arr, None)
+            .expect_err("SciPy rejects non-integer value_indices inputs");
+        assert!(matches!(err, NdimageError::InvalidArgument(_)));
     }
 
     #[test]
