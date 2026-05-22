@@ -31738,6 +31738,25 @@ pub fn matching_distance(u: &[f64], v: &[f64]) -> f64 {
     mismatches as f64 / n as f64
 }
 
+/// Sokal-Sneath dissimilarity for binary data.
+pub fn sokalsneath_distance(u: &[f64], v: &[f64]) -> f64 {
+    if u.len() != v.len() || u.is_empty() {
+        return f64::NAN;
+    }
+    let (mut c_tt, mut c_tf, mut c_ft) = (0usize, 0usize, 0usize);
+    for (&a, &b) in u.iter().zip(v.iter()) {
+        match (a > 0.0, b > 0.0) {
+            (true, true) => c_tt += 1,
+            (true, false) => c_tf += 1,
+            (false, true) => c_ft += 1,
+            _ => {}
+        }
+    }
+    let r = 2.0 * (c_tf + c_ft) as f64;
+    let denom = c_tt as f64 + r;
+    if denom == 0.0 { 0.0 } else { r / denom }
+}
+
 /// Adjusted Rand Index for comparing cluster assignments.
 /// labels_true and labels_pred should be integer labels (encoded as f64).
 pub fn adjusted_rand_index(labels_true: &[f64], labels_pred: &[f64]) -> f64 {
