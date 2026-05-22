@@ -2487,6 +2487,48 @@ pub fn median(
         .collect())
 }
 
+/// Apply a reducer to optionally labeled regions.
+///
+/// Matches `scipy.ndimage.labeled_comprehension` for numeric outputs. Scalar
+/// SciPy results are returned as a one-element vector, while explicit `index`
+/// lists return one value per requested label. When `pass_positions` is true,
+/// the callback receives flat input positions for the selected values.
+pub fn labeled_comprehension<F>(
+    input: &NdArray,
+    labels: Option<&NdArray>,
+    index: Option<&[usize]>,
+    func: F,
+    default: f64,
+    pass_positions: bool,
+) -> Result<Vec<f64>, NdimageError>
+where
+    F: Fn(&[f64], Option<&[usize]>) -> f64,
+{
+    if labels.is_none() && index.is_some() {
+        return Err(NdimageError::InvalidArgument(
+            "index without defined labels".to_string(),
+        ));
+    }
+
+    let groups = measurement_label_value_positions(input, labels, index)?;
+    Ok(groups
+        .iter()
+        .map(|group| {
+            if index.is_some() && group.is_empty() {
+                default
+            } else {
+                let values: Vec<f64> = group.iter().map(|&(value, _)| value).collect();
+                if pass_positions {
+                    let positions: Vec<usize> = group.iter().map(|&(_, flat)| flat).collect();
+                    func(&values, Some(&positions))
+                } else {
+                    func(&values, None)
+                }
+            }
+        })
+        .collect())
+}
+
 /// Positions of minimum values in optionally labeled regions.
 ///
 /// Matches `scipy.ndimage.minimum_position`; scalar SciPy results are returned
@@ -4364,6 +4406,204 @@ pub fn array_histogram(input: &NdArray, bins: usize) -> (Vec<usize>, Vec<f64>) {
     (counts, edges)
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Fourier Domain Filters
+// ══════════════════════════════════════════════════════════════════════
+
+use fsci_fft::Complex64;
+use std::f64::consts::PI;
+
+/// Apply a Gaussian filter in the Fourier domain.
+///
+/// Matches `scipy.ndimage.fourier_gaussian`. The input is assumed to be
+/// the FFT of a real-valued image. Multiplies by exp(-0.5 * (omega * sigma)^2)
+/// where omega is the angular frequency.
+///
+/// # Arguments
+/// * `input` - Complex Fourier coefficients (row-major)
+/// * `shape` - Shape of the original spatial-domain array
+/// * `sigma` - Standard deviation of Gaussian (can be different per axis)
+pub fn fourier_gaussian(input: &[Complex64], shape: &[usize], sigma: &[f64]) -> Vec<Complex64> {
+    if shape.is_empty() || sigma.len() != shape.len() {
+        return input.to_vec();
+    }
+    let total: usize = shape.iter().product();
+    if input.len() != total {
+        return input.to_vec();
+    }
+
+    let mut output = input.to_vec();
+
+    for (idx, val) in output.iter_mut().enumerate() {
+        let mut filter_val = 1.0;
+        let mut remaining = idx;
+
+        for (d, &n) in shape.iter().enumerate().rev() {
+            let i = remaining % n;
+            remaining /= n;
+
+            let freq = if i <= n / 2 {
+                i as f64 / n as f64
+            } else {
+                (i as f64 - n as f64) / n as f64
+            };
+            let omega = 2.0 * PI * freq;
+            filter_val *= (-0.5 * (omega * sigma[d]).powi(2)).exp();
+        }
+
+        *val = (val.0 * filter_val, val.1 * filter_val);
+    }
+
+    output
+}
+
+/// Apply a uniform (box) filter in the Fourier domain.
+///
+/// Matches `scipy.ndimage.fourier_uniform`. Multiplies by sinc(omega * size / 2)
+/// where omega is the angular frequency.
+///
+/// # Arguments
+/// * `input` - Complex Fourier coefficients (row-major)
+/// * `shape` - Shape of the original spatial-domain array
+/// * `size` - Size of uniform filter (can be different per axis)
+pub fn fourier_uniform(input: &[Complex64], shape: &[usize], size: &[f64]) -> Vec<Complex64> {
+    if shape.is_empty() || size.len() != shape.len() {
+        return input.to_vec();
+    }
+    let total: usize = shape.iter().product();
+    if input.len() != total {
+        return input.to_vec();
+    }
+
+    let mut output = input.to_vec();
+
+    for (idx, val) in output.iter_mut().enumerate() {
+        let mut filter_val = 1.0;
+        let mut remaining = idx;
+
+        for (d, &n) in shape.iter().enumerate().rev() {
+            let i = remaining % n;
+            remaining /= n;
+
+            let freq = if i <= n / 2 {
+                i as f64 / n as f64
+            } else {
+                (i as f64 - n as f64) / n as f64
+            };
+
+            if freq.abs() < 1e-15 {
+                continue;
+            }
+            let x = PI * freq * size[d];
+            filter_val *= x.sin() / x;
+        }
+
+        *val = (val.0 * filter_val, val.1 * filter_val);
+    }
+
+    output
+}
+
+/// Apply a shift filter in the Fourier domain.
+///
+/// Matches `scipy.ndimage.fourier_shift`. Multiplies by exp(-2πi * freq * shift)
+/// to shift the image in spatial domain.
+///
+/// # Arguments
+/// * `input` - Complex Fourier coefficients (row-major)
+/// * `shape` - Shape of the original spatial-domain array
+/// * `shift` - Shift amount for each axis
+pub fn fourier_shift(input: &[Complex64], shape: &[usize], shift: &[f64]) -> Vec<Complex64> {
+    if shape.is_empty() || shift.len() != shape.len() {
+        return input.to_vec();
+    }
+    let total: usize = shape.iter().product();
+    if input.len() != total {
+        return input.to_vec();
+    }
+
+    let mut output = input.to_vec();
+
+    for (idx, val) in output.iter_mut().enumerate() {
+        let mut phase = 0.0;
+        let mut remaining = idx;
+
+        for (d, &n) in shape.iter().enumerate().rev() {
+            let i = remaining % n;
+            remaining /= n;
+
+            let freq = if i <= n / 2 {
+                i as f64 / n as f64
+            } else {
+                (i as f64 - n as f64) / n as f64
+            };
+            phase -= 2.0 * PI * freq * shift[d];
+        }
+
+        let (sin_p, cos_p) = phase.sin_cos();
+        *val = (val.0 * cos_p - val.1 * sin_p, val.0 * sin_p + val.1 * cos_p);
+    }
+
+    output
+}
+
+/// Apply an ellipsoid filter in the Fourier domain.
+///
+/// Matches `scipy.ndimage.fourier_ellipsoid`. Creates an ellipsoid
+/// low-pass filter in frequency space.
+///
+/// # Arguments
+/// * `input` - Complex Fourier coefficients (row-major)
+/// * `shape` - Shape of the original spatial-domain array
+/// * `size` - Size of ellipsoid axes
+pub fn fourier_ellipsoid(input: &[Complex64], shape: &[usize], size: &[f64]) -> Vec<Complex64> {
+    if shape.is_empty() || size.len() != shape.len() {
+        return input.to_vec();
+    }
+    let total: usize = shape.iter().product();
+    if input.len() != total {
+        return input.to_vec();
+    }
+
+    let ndim = shape.len();
+    let mut output = input.to_vec();
+
+    for (idx, val) in output.iter_mut().enumerate() {
+        let mut sum_sq = 0.0;
+        let mut remaining = idx;
+
+        for (d, &n) in shape.iter().enumerate().rev() {
+            let i = remaining % n;
+            remaining /= n;
+
+            let freq = if i <= n / 2 {
+                i as f64 / n as f64
+            } else {
+                (i as f64 - n as f64) / n as f64
+            };
+            let normalized = freq * size[d];
+            sum_sq += normalized * normalized;
+        }
+
+        let r = sum_sq.sqrt();
+        let filter_val = if r < 1e-15 {
+            1.0
+        } else if ndim == 1 {
+            (PI * r).sin() / (PI * r)
+        } else if ndim == 2 {
+            let pr = PI * r;
+            2.0 * pr.sin() / pr - 2.0 * (1.0 - pr.cos()) / (pr * pr)
+        } else {
+            let pr = PI * r;
+            (pr.sin() - pr * pr.cos()) * 3.0 / (pr * pr * pr)
+        };
+
+        *val = (val.0 * filter_val, val.1 * filter_val);
+    }
+
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5100,6 +5340,67 @@ mod tests {
         assert_eq!(maxs, vec![10.0, 2.0, 5.0, 20.0]);
         assert_eq!(min_positions, vec![vec![3], vec![0], vec![2], vec![4]]);
         assert_eq!(max_positions, vec![vec![3], vec![1], vec![2], vec![4]]);
+    }
+
+    #[test]
+    fn labeled_comprehension_matches_scipy_fixtures() {
+        let data = NdArray::new(vec![1.0, 2.0, 3.0, 4.0, 5.0], vec![5]).unwrap();
+        let labels = NdArray::new(vec![1.0, 1.0, 2.0, 2.0, 4.0], vec![5]).unwrap();
+        let index = [1, 2, 3, 4];
+
+        let mean_func = |values: &[f64], _: Option<&[usize]>| {
+            values.iter().sum::<f64>() / values.len() as f64
+        };
+
+        // scipy.ndimage.labeled_comprehension(data, labels, [1, 2, 3, 4], np.mean, float, -1)
+        assert_eq!(
+            labeled_comprehension(&data, Some(&labels), Some(&index), mean_func, -1.0, false)
+                .unwrap(),
+            vec![1.5, 3.5, -1.0, 5.0]
+        );
+        // scipy.ndimage.labeled_comprehension(data, labels, None, np.mean, float, -1)
+        assert_eq!(
+            labeled_comprehension(&data, Some(&labels), None, mean_func, -1.0, false).unwrap(),
+            vec![3.0]
+        );
+        // scipy.ndimage.labeled_comprehension(data, None, None, np.mean, float, -1)
+        assert_eq!(
+            labeled_comprehension(&data, None, None, mean_func, -1.0, false).unwrap(),
+            vec![3.0]
+        );
+    }
+
+    #[test]
+    fn labeled_comprehension_passes_positions_and_rejects_index_without_labels() {
+        let data = NdArray::new(vec![1.0, 2.0, 3.0, 4.0, 5.0], vec![5]).unwrap();
+        let labels = NdArray::new(vec![1.0, 1.0, 2.0, 2.0, 4.0], vec![5]).unwrap();
+        let index = [1, 2, 4];
+
+        // scipy equivalent: lambda vals, pos: vals.sum() + pos.sum()
+        let values_plus_positions = |values: &[f64], positions: Option<&[usize]>| {
+            values.iter().sum::<f64>()
+                + positions
+                    .unwrap()
+                    .iter()
+                    .map(|&position| position as f64)
+                    .sum::<f64>()
+        };
+        assert_eq!(
+            labeled_comprehension(
+                &data,
+                Some(&labels),
+                Some(&index),
+                values_plus_positions,
+                -1.0,
+                true
+            )
+            .unwrap(),
+            vec![4.0, 12.0, 9.0]
+        );
+
+        let err = labeled_comprehension(&data, None, Some(&index), values_plus_positions, -1.0, true)
+            .expect_err("SciPy rejects index without labels");
+        assert!(matches!(err, NdimageError::InvalidArgument(_)));
     }
 
     #[test]
