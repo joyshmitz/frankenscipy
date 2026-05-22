@@ -1210,7 +1210,51 @@ pub fn uniform_filter(
     mode: BoundaryMode,
     cval: f64,
 ) -> Result<NdArray, NdimageError> {
-    uniform_filter_with_origins(input, size, &[0], mode, cval)
+    let axes = (0..input.ndim()).collect::<Vec<_>>();
+    uniform_filter_usize_axes(input, size, &axes, mode, cval)
+}
+
+/// Uniform (box) filter over a SciPy-style signed axes subset.
+///
+/// `axes=[]` matches SciPy's empty-axes identity behavior.
+pub fn uniform_filter_axes(
+    input: &NdArray,
+    size: usize,
+    axes: &[isize],
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError> {
+    let axes = normalize_signed_axes(axes, input.ndim())?;
+    uniform_filter_usize_axes(input, size, &axes, mode, cval)
+}
+
+fn uniform_filter_usize_axes(
+    input: &NdArray,
+    size: usize,
+    axes: &[usize],
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError> {
+    if size == 0 {
+        return Err(NdimageError::InvalidArgument(
+            "filter size must be positive".to_string(),
+        ));
+    }
+    if axes.is_empty() {
+        return Ok(input.clone());
+    }
+
+    let mut current = input.clone();
+    let ndim = input.ndim();
+    for &axis in axes {
+        if axis >= ndim {
+            return Err(NdimageError::InvalidArgument(format!(
+                "axis {axis} out of range for {ndim}-dimensional input"
+            )));
+        }
+        current = uniform_filter1d_with_origin(&current, size, axis, mode, cval, 0)?;
+    }
+    Ok(current)
 }
 
 /// Uniform (box) filter with SciPy `origin` semantics.
@@ -6150,6 +6194,47 @@ mod tests {
         assert!(uniform_filter_with_origins(&input, 2, &[1], BoundaryMode::Reflect, 0.0).is_err());
         assert!(uniform_filter_with_origins(&input, 3, &[-2], BoundaryMode::Reflect, 0.0).is_err());
         assert!(uniform_filter_with_origins(&input, 3, &[2], BoundaryMode::Reflect, 0.0).is_err());
+    }
+
+    #[test]
+    fn uniform_filter_axes_matches_scipy_subset_fixtures() {
+        let input = NdArray::new(vec![1.0, 2.0, 4.0, 8.0, 16.0, 32.0], vec![2, 3]).unwrap();
+
+        // scipy.ndimage.uniform_filter(input, 2, mode='constant', cval=0.0, axes=(-1,))
+        let last_axis = [0.5, 1.5, 3.0, 4.0, 12.0, 24.0];
+        // scipy.ndimage.uniform_filter(input, 2, mode='constant', cval=0.0, axes=(-2,))
+        let first_axis = [0.5, 1.0, 2.0, 4.5, 9.0, 18.0];
+
+        let got_last = uniform_filter_axes(&input, 2, &[-1], BoundaryMode::Constant, 0.0).unwrap();
+        assert_close_or_nan(&got_last.data, &last_axis);
+
+        let got_first = uniform_filter_axes(&input, 2, &[-2], BoundaryMode::Constant, 0.0).unwrap();
+        assert_close_or_nan(&got_first.data, &first_axis);
+
+        assert_close_or_nan(
+            &uniform_filter_axes(&input, 2, &[-2, -1], BoundaryMode::Constant, 0.0)
+                .unwrap()
+                .data,
+            &uniform_filter(&input, 2, BoundaryMode::Constant, 0.0)
+                .unwrap()
+                .data,
+        );
+        assert_eq!(
+            uniform_filter_axes(&input, 2, &[], BoundaryMode::Constant, 0.0)
+                .unwrap()
+                .data,
+            input.data
+        );
+    }
+
+    #[test]
+    fn uniform_filter_axes_rejects_duplicate_and_out_of_range_axes() {
+        let input = NdArray::new(vec![1.0; 6], vec![2, 3]).unwrap();
+
+        assert!(uniform_filter_axes(&input, 2, &[1, -1], BoundaryMode::Reflect, 0.0).is_err());
+        assert!(uniform_filter_axes(&input, 2, &[2], BoundaryMode::Reflect, 0.0).is_err());
+        assert!(uniform_filter_axes(&input, 2, &[-3], BoundaryMode::Reflect, 0.0).is_err());
+        assert!(uniform_filter_axes(&input, 0, &[-1], BoundaryMode::Reflect, 0.0).is_err());
     }
 
     #[test]
