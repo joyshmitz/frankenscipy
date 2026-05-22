@@ -58616,4 +58616,27 @@ mod tests {
             stats_sum[1]
         );
     }
+
+    #[test]
+    fn expectile_matches_scipy_reference_values() {
+        let data: Vec<f64> = (1..=10).map(|x| x as f64).collect();
+
+        let e05 = expectile(&data, 0.5);
+        assert!(
+            (e05 - 5.5).abs() < 1e-10,
+            "expectile(alpha=0.5) got {e05}, expected 5.5"
+        );
+
+        let e025 = expectile(&data, 0.25);
+        assert!(
+            (e025 - 4.166666666666667).abs() < 1e-6,
+            "expectile(alpha=0.25) got {e025}, expected 4.17"
+        );
+
+        let e075 = expectile(&data, 0.75);
+        assert!(
+            (e075 - 6.833333333333333).abs() < 1e-6,
+            "expectile(alpha=0.75) got {e075}, expected 6.83"
+        );
+    }
 }
