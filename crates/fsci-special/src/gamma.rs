@@ -43,6 +43,14 @@ pub const GAMMA_DISPATCH_PLAN: &[DispatchPlan] = &[
         notes: "Keep +inf pole parity with SciPy and avoid direct exp(gammaln) overflow back-conversions.",
     },
     DispatchPlan {
+        function: "gammasgn",
+        steps: &[DispatchStep {
+            regime: KernelRegime::Reflection,
+            when: "real negative non-integers derive sign from reflection intervals",
+        }],
+        notes: "Matches scipy.special.gammasgn on the real axis, including signed-zero and pole NaN semantics.",
+    },
+    DispatchPlan {
         function: "loggamma",
         steps: &[
             DispatchStep {
@@ -169,6 +177,10 @@ pub fn gamma_with_audit(
 
 pub fn gammaln(x: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     gammaln_dispatch("gammaln", x, mode)
+}
+
+pub fn gammasgn(x: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real_input("gammasgn", x, mode, |value| gammasgn_scalar(value, mode))
 }
 
 pub fn loggamma(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
@@ -877,6 +889,50 @@ pub fn loggamma_scalar(x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
         });
     }
     gammaln_scalar(x, mode)
+}
+
+pub fn gammasgn_scalar(x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
+    if x.is_nan() || x == f64::NEG_INFINITY {
+        return Ok(f64::NAN);
+    }
+    if x == f64::INFINITY {
+        return Ok(1.0);
+    }
+    if is_negative_integer_pole(x) {
+        if matches!(mode, RuntimeMode::Hardened) {
+            record_special_trace(
+                "gammasgn",
+                mode,
+                "pole_input",
+                format!("input={x}"),
+                "fail_closed",
+                "gammasgn pole at negative integer",
+                false,
+            );
+            return Err(SpecialError {
+                function: "gammasgn",
+                kind: SpecialErrorKind::PoleInput,
+                mode,
+                detail: "gammasgn pole at negative integer",
+            });
+        }
+        return Ok(f64::NAN);
+    }
+    if x == 0.0 {
+        return Ok(if x.is_sign_negative() { -1.0 } else { 1.0 });
+    }
+    if x > 0.0 {
+        return Ok(1.0);
+    }
+
+    let sine = (PI * x).sin();
+    if sine.is_nan() {
+        Ok(f64::NAN)
+    } else if sine.is_sign_negative() {
+        Ok(-1.0)
+    } else {
+        Ok(1.0)
+    }
 }
 
 fn multigammaln_scalar(a: f64, d: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
@@ -2613,6 +2669,55 @@ mod tests {
             assert_eq!(actual, 0.0);
         }
         Ok(())
+    }
+
+    #[test]
+    fn gammasgn_matches_scipy_real_axis_intervals() -> Result<(), String> {
+        let cases = [
+            (-5.5, 1.0),
+            (-4.5, -1.0),
+            (-3.5, 1.0),
+            (-2.5, -1.0),
+            (-1.5, 1.0),
+            (-0.5, -1.0),
+            (-0.0, -1.0),
+            (0.0, 1.0),
+            (0.5, 1.0),
+            (1.0, 1.0),
+            (2.0, 1.0),
+            (f64::INFINITY, 1.0),
+        ];
+
+        for (x, expected) in cases {
+            let actual = get_scalar(gammasgn(&scalar(x), RuntimeMode::Strict))?;
+            assert_eq!(actual, expected, "gammasgn({x})");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn gammasgn_preserves_scipy_pole_and_nan_semantics() -> Result<(), String> {
+        for x in [-5.0, -4.0, -3.0, -2.0, -1.0, f64::NEG_INFINITY, f64::NAN] {
+            let actual = get_scalar(gammasgn(&scalar(x), RuntimeMode::Strict))?;
+            assert!(actual.is_nan(), "gammasgn({x}) should be NaN");
+        }
+
+        let err = gammasgn(&scalar(-2.0), RuntimeMode::Hardened).unwrap_err();
+        assert_eq!(err.kind, SpecialErrorKind::PoleInput);
+        Ok(())
+    }
+
+    #[test]
+    fn gammasgn_supports_real_vectors() -> Result<(), String> {
+        let input = SpecialTensor::RealVec(vec![-2.5, -0.0, 0.0, 3.0]);
+        let result = gammasgn(&input, RuntimeMode::Strict).map_err(|err| err.to_string())?;
+        match result {
+            SpecialTensor::RealVec(values) => {
+                assert_eq!(values, vec![-1.0, -1.0, 1.0, 1.0]);
+                Ok(())
+            }
+            other => Err(format!("expected real vector, got {other:?}")),
+        }
     }
 
     #[test]
