@@ -2083,6 +2083,21 @@ fn mean_of_values(values: &[f64]) -> f64 {
     }
 }
 
+fn median_of_values(values: &[f64]) -> f64 {
+    if values.is_empty() {
+        return f64::NAN;
+    }
+
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|a, b| a.total_cmp(b));
+    let mid = sorted.len() / 2;
+    if sorted.len().is_multiple_of(2) {
+        (sorted[mid - 1] + sorted[mid]) / 2.0
+    } else {
+        sorted[mid]
+    }
+}
+
 /// Sum of values in optionally labeled regions.
 ///
 /// Matches `scipy.ndimage.sum`; scalar SciPy results are returned as a
@@ -2250,6 +2265,75 @@ pub fn standard_deviation(
     Ok(variance(input, labels, index)?
         .into_iter()
         .map(|value| value.sqrt())
+        .collect())
+}
+
+/// Minimum of values in optionally labeled regions.
+///
+/// Matches `scipy.ndimage.minimum`; scalar SciPy results are returned as a
+/// one-element vector, while explicit `index` lists return one value per label.
+pub fn minimum(
+    input: &NdArray,
+    labels: Option<&NdArray>,
+    index: Option<&[usize]>,
+) -> Result<Vec<f64>, NdimageError> {
+    Ok(measurement_label_groups(input, labels, index)?
+        .iter()
+        .map(|values| {
+            if values.is_empty() {
+                0.0
+            } else {
+                values.iter().fold(f64::INFINITY, |acc, value| {
+                    if acc.is_nan() || value.is_nan() {
+                        f64::NAN
+                    } else {
+                        acc.min(*value)
+                    }
+                })
+            }
+        })
+        .collect())
+}
+
+/// Maximum of values in optionally labeled regions.
+///
+/// Matches `scipy.ndimage.maximum`; scalar SciPy results are returned as a
+/// one-element vector, while explicit `index` lists return one value per label.
+pub fn maximum(
+    input: &NdArray,
+    labels: Option<&NdArray>,
+    index: Option<&[usize]>,
+) -> Result<Vec<f64>, NdimageError> {
+    Ok(measurement_label_groups(input, labels, index)?
+        .iter()
+        .map(|values| {
+            if values.is_empty() {
+                0.0
+            } else {
+                values.iter().fold(f64::NEG_INFINITY, |acc, value| {
+                    if acc.is_nan() || value.is_nan() {
+                        f64::NAN
+                    } else {
+                        acc.max(*value)
+                    }
+                })
+            }
+        })
+        .collect())
+}
+
+/// Median of values in optionally labeled regions.
+///
+/// Matches `scipy.ndimage.median`; scalar SciPy results are returned as a
+/// one-element vector, while explicit `index` lists return one value per label.
+pub fn median(
+    input: &NdArray,
+    labels: Option<&NdArray>,
+    index: Option<&[usize]>,
+) -> Result<Vec<f64>, NdimageError> {
+    Ok(measurement_label_groups(input, labels, index)?
+        .iter()
+        .map(|values| median_of_values(values))
         .collect())
 }
 
@@ -4580,6 +4664,36 @@ mod tests {
         let err = mean(&data, Some(&labels), Some(&[1]))
             .expect_err("shape mismatch must be rejected");
         assert!(matches!(err, NdimageError::DimensionMismatch(_)));
+    }
+
+    #[test]
+    fn measurement_selector_wrappers_match_scipy_fixtures() {
+        let data = NdArray::new(vec![1.0, 2.0, 5.0, 10.0, 20.0], vec![5]).unwrap();
+        let labels = NdArray::new(vec![1.0, 1.0, 2.0, 0.0, 3.0], vec![5]).unwrap();
+        let index = [0, 1, 2, 3];
+
+        // scipy.ndimage.minimum(data, labels)
+        assert_eq!(minimum(&data, Some(&labels), None).unwrap(), vec![1.0]);
+        // scipy.ndimage.maximum(data, labels)
+        assert_eq!(maximum(&data, Some(&labels), None).unwrap(), vec![20.0]);
+        // scipy.ndimage.median(data, labels)
+        assert_eq!(median(&data, Some(&labels), None).unwrap(), vec![3.5]);
+
+        // scipy.ndimage.minimum(data, labels, [0, 1, 2, 3])
+        assert_eq!(
+            minimum(&data, Some(&labels), Some(&index)).unwrap(),
+            vec![10.0, 1.0, 5.0, 20.0]
+        );
+        // scipy.ndimage.maximum(data, labels, [0, 1, 2, 3])
+        assert_eq!(
+            maximum(&data, Some(&labels), Some(&index)).unwrap(),
+            vec![10.0, 2.0, 5.0, 20.0]
+        );
+        // scipy.ndimage.median(data, labels, [0, 1, 2, 3])
+        assert_eq!(
+            median(&data, Some(&labels), Some(&index)).unwrap(),
+            vec![10.0, 1.5, 5.0, 20.0]
+        );
     }
 
     #[test]
