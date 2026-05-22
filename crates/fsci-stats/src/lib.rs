@@ -31020,6 +31020,39 @@ pub fn symmetric_mape(y_true: &[f64], y_pred: &[f64]) -> f64 {
     100.0 * sum / n
 }
 
+/// Compute the maximum absolute error.
+///
+/// max_error = max(|y_true - y_pred|)
+///
+/// Returns the worst-case prediction error.
+pub fn max_error(y_true: &[f64], y_pred: &[f64]) -> f64 {
+    if y_true.len() != y_pred.len() || y_true.is_empty() {
+        return f64::NAN;
+    }
+    y_true
+        .iter()
+        .zip(y_pred.iter())
+        .map(|(&t, &p)| (t - p).abs())
+        .fold(0.0f64, |acc, e| acc.max(e))
+}
+
+/// Compute the mean bias error.
+///
+/// MBE = (1/n) * Σ (y_pred - y_true)
+///
+/// Positive values indicate overestimation, negative indicate underestimation.
+pub fn mean_bias_error(y_true: &[f64], y_pred: &[f64]) -> f64 {
+    if y_true.len() != y_pred.len() || y_true.is_empty() {
+        return f64::NAN;
+    }
+    y_true
+        .iter()
+        .zip(y_pred.iter())
+        .map(|(&t, &p)| p - t)
+        .sum::<f64>()
+        / y_true.len() as f64
+}
+
 /// Compute the log-likelihood for a normal distribution.
 pub fn norm_loglikelihood(data: &[f64], mu: f64, sigma: f64) -> f64 {
     let n = data.len() as f64;
