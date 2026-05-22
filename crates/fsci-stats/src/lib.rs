@@ -31944,6 +31944,60 @@ pub fn diff(data: &[f64]) -> Vec<f64> {
     data.windows(2).map(|w| w[1] - w[0]).collect()
 }
 
+/// Return the index of the minimum value in the array.
+///
+/// Returns None if the array is empty or all NaN.
+/// Matches `numpy.argmin`.
+pub fn argmin(data: &[f64]) -> Option<usize> {
+    if data.is_empty() {
+        return None;
+    }
+    data.iter()
+        .enumerate()
+        .filter(|(_, x)| !x.is_nan())
+        .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(i, _)| i)
+}
+
+/// Return the index of the maximum value in the array.
+///
+/// Returns None if the array is empty or all NaN.
+/// Matches `numpy.argmax`.
+pub fn argmax(data: &[f64]) -> Option<usize> {
+    if data.is_empty() {
+        return None;
+    }
+    data.iter()
+        .enumerate()
+        .filter(|(_, x)| !x.is_nan())
+        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(i, _)| i)
+}
+
+/// Return indices that would sort the array.
+///
+/// Matches `numpy.argsort`.
+pub fn argsort(data: &[f64]) -> Vec<usize> {
+    let mut indices: Vec<usize> = (0..data.len()).collect();
+    indices.sort_by(|&a, &b| {
+        data[a]
+            .partial_cmp(&data[b])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    indices
+}
+
+/// Return the indices of values that are not NaN.
+///
+/// Useful for filtering data while preserving indices.
+pub fn nonnan_indices(data: &[f64]) -> Vec<usize> {
+    data.iter()
+        .enumerate()
+        .filter(|(_, x)| !x.is_nan())
+        .map(|(i, _)| i)
+        .collect()
+}
+
 /// Compute a histogram of data values.
 ///
 /// Returns (counts, bin_edges).
