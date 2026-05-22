@@ -47410,6 +47410,18 @@ mod tests {
         );
     }
 
+    #[test]
+    fn friedmanchisquare_matches_scipy_reference_values() {
+        // scipy.stats.friedmanchisquare([1,2,3,4,5], [2,3,4,5,6], [3,4,5,6,7])
+        // FriedmanchisquareResult(statistic=10.0, pvalue=0.006737946999085467)
+        let a = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let b = vec![2.0, 3.0, 4.0, 5.0, 6.0];
+        let c = vec![3.0, 4.0, 5.0, 6.0, 7.0];
+        let result = friedmanchisquare(&[&a, &b, &c]);
+        assert!((result.statistic - 10.0).abs() < 1e-10, "friedman statistic, got {}", result.statistic);
+        assert!((result.pvalue - 0.006737946999085467).abs() < 1e-9, "friedman pvalue, got {}", result.pvalue);
+    }
+
     // ── Fligner test ─────────────────────────────────────────────────
 
     #[test]
