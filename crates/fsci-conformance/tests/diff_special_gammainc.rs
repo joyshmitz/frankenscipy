@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 //! Live SciPy differential coverage for the regularized
 //! incomplete-gamma family
-//! `scipy.special.gammainc/gammaincc/gammaincinv`.
+//! `scipy.special.gammainc/gammaincc/gammaincinv/gammainccinv`.
 //!
 //! Resolves [frankenscipy-5e55x]. These helpers are the backbone
 //! of ChiSquared, Gamma, Erlang, Pearson3, Maxwell, Chi,
@@ -20,7 +20,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use fsci_runtime::RuntimeMode;
 use fsci_special::types::SpecialTensor;
-use fsci_special::{gammainc, gammaincc, gammaincinv};
+use fsci_special::{gammainc, gammaincc, gammainccinv, gammaincinv};
 use serde::{Deserialize, Serialize};
 
 const PACKET_ID: &str = "FSCI-P2C-007";
@@ -102,6 +102,7 @@ fn fsci_eval(func: &str, a: f64, x: f64) -> Option<f64> {
         "gammainc" => gammainc(&pa, &px, RuntimeMode::Strict),
         "gammaincc" => gammaincc(&pa, &px, RuntimeMode::Strict),
         "gammaincinv" => gammaincinv(&pa, &px, RuntimeMode::Strict),
+        "gammainccinv" => gammainccinv(&pa, &px, RuntimeMode::Strict),
         _ => return None,
     };
     match result {
@@ -116,7 +117,7 @@ fn generate_query() -> OracleQuery {
     let as_ = [0.5_f64, 1.0, 2.0, 3.0, 5.0, 10.0, 25.0];
     // For gammainc/gammaincc the second argument is x ≥ 0.
     let xs = [0.001_f64, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 25.0, 50.0];
-    // For gammaincinv the second argument is q in (0, 1).
+    // For gamma inverse functions the second argument is q in (0, 1).
     let qs = [0.001_f64, 0.01, 0.1, 0.5, 0.9, 0.99, 0.999];
 
     let mut points = Vec::new();
@@ -132,12 +133,14 @@ fn generate_query() -> OracleQuery {
             }
         }
         for &q in &qs {
-            points.push(PointCase {
-                case_id: format!("gammaincinv_a{a}_q{q}"),
-                func: "gammaincinv".into(),
-                a,
-                x: q,
-            });
+            for func in ["gammaincinv", "gammainccinv"] {
+                points.push(PointCase {
+                    case_id: format!("{func}_a{a}_q{q}"),
+                    func: func.into(),
+                    a,
+                    x: q,
+                });
+            }
         }
     }
     OracleQuery { points }
@@ -157,7 +160,7 @@ def finite_or_none(v):
         return None
     return v if math.isfinite(v) else None
 
-q = json.load(sys.stdin)
+q = json.loads(sys.argv[1])
 points = []
 for case in q["points"]:
     cid = case["case_id"]
@@ -166,6 +169,7 @@ for case in q["points"]:
         if func == "gammainc":      value = special.gammainc(a, x)
         elif func == "gammaincc":   value = special.gammaincc(a, x)
         elif func == "gammaincinv": value = special.gammaincinv(a, x)
+        elif func == "gammainccinv": value = special.gammainccinv(a, x)
         else: value = None
         points.append({"case_id": cid, "value": finite_or_none(value)})
     except Exception:
@@ -175,8 +179,8 @@ print(json.dumps({"points": points}))
 
     let query_json = serde_json::to_string(query).expect("serialize gammainc family query");
     let mut child = match Command::new("python3")
-        .arg("-c")
-        .arg(script)
+        .arg("-")
+        .arg(&query_json)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -196,15 +200,15 @@ print(json.dumps({"points": points}))
         let stdin = child
             .stdin
             .as_mut()
-            .expect("open gammainc family oracle stdin");
-        if let Err(err) = stdin.write_all(query_json.as_bytes()) {
+            .expect("open gammainc family oracle script stdin");
+        if let Err(err) = stdin.write_all(script.as_bytes()) {
             let output = child.wait_with_output().expect("wait for failed oracle");
             let stderr = String::from_utf8_lossy(&output.stderr);
             assert!(
                 std::env::var(REQUIRE_SCIPY_ENV).is_err(),
-                "gammainc family oracle stdin write failed: {err}; stderr: {stderr}"
+                "gammainc family oracle script write failed: {err}; stderr: {stderr}"
             );
-            eprintln!("skipping gammainc family oracle: stdin write failed ({err})\n{stderr}");
+            eprintln!("skipping gammainc family oracle: script write failed ({err})\n{stderr}");
             return None;
         }
     }
@@ -259,7 +263,7 @@ fn diff_special_gammainc() {
 
             let pass = match case.func.as_str() {
                 "gammainc" | "gammaincc" => abs_diff <= GAMMAINC_TOL,
-                "gammaincinv" => {
+                "gammaincinv" | "gammainccinv" => {
                     let scale = scipy_v.abs().max(1.0);
                     abs_diff <= GAMMAINCINV_TOL_REL * scale
                 }
@@ -279,7 +283,7 @@ fn diff_special_gammainc() {
 
     let log = DiffLog {
         test_id: "diff_special_gammainc".into(),
-        category: "scipy.special.gammainc/gammaincc/gammaincinv".into(),
+        category: "scipy.special.gammainc/gammaincc/gammaincinv/gammainccinv".into(),
         case_count: diffs.len(),
         max_abs_diff: max_abs_overall,
         max_rel_diff: max_rel_overall,

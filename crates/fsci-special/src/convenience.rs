@@ -2537,6 +2537,34 @@ pub fn gammaincinv_scalar(a: f64, y: f64) -> f64 {
     x
 }
 
+/// Inverse of the complemented regularized incomplete gamma function.
+///
+/// Finds x such that Q(a, x) = y. Matches `scipy.special.gammainccinv`.
+pub fn gammainccinv(
+    a_tensor: &SpecialTensor,
+    y_tensor: &SpecialTensor,
+    mode: RuntimeMode,
+) -> SpecialResult {
+    map_real_binary("gammainccinv", a_tensor, y_tensor, mode, |a, y| {
+        Ok(gammainccinv_scalar(a, y))
+    })
+}
+
+/// Scalar helper for the inverse complemented regularized incomplete gamma function.
+pub fn gammainccinv_scalar(a: f64, y: f64) -> f64 {
+    if !(0.0..=1.0).contains(&y) {
+        return f64::NAN;
+    }
+    if y == 1.0 {
+        return 0.0;
+    }
+    if y == 0.0 {
+        return f64::INFINITY;
+    }
+
+    gammaincinv_scalar(a, 1.0 - y)
+}
+
 /// Evaluate the complementary error function erfc(x) = 1 - erf(x).
 ///
 /// Scalar convenience wrapper.
@@ -8390,6 +8418,60 @@ mod tests {
         assert!(values[2].is_nan());
         assert!(values[3].is_nan());
         Ok(())
+    }
+
+    #[test]
+    fn gammainccinv_tensor_dispatch_matches_scalar_path() -> Result<(), String> {
+        let scalar = gammainccinv(
+            &SpecialTensor::RealScalar(2.0),
+            &SpecialTensor::RealScalar(0.5),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let scalar_value = expect_real_scalar(scalar)?;
+        assert!((scalar_value - gammainccinv_scalar(2.0, 0.5)).abs() < 1e-12);
+
+        let vector = gammainccinv(
+            &SpecialTensor::RealVec(vec![1.0, 2.0, 3.0]),
+            &SpecialTensor::RealScalar(0.5),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        let expected = [1.0, 2.0, 3.0].map(|a| gammainccinv_scalar(a, 0.5));
+        assert_eq!(values.len(), expected.len());
+        for (actual, expected) in values.iter().zip(expected.iter()) {
+            assert!((actual - expected).abs() < 1e-12);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn gammainccinv_tensor_dispatch_preserves_boundary_behavior() -> Result<(), String> {
+        let vector = gammainccinv(
+            &SpecialTensor::RealScalar(2.0),
+            &SpecialTensor::RealVec(vec![1.0, 0.0, -0.5, f64::NAN]),
+            RuntimeMode::Strict,
+        )
+        .map_err(|err| err.to_string())?;
+        let values = expect_real_vec(vector)?;
+        assert_eq!(values[0], 0.0);
+        assert!(values[1].is_infinite());
+        assert!(values[2].is_nan());
+        assert!(values[3].is_nan());
+        Ok(())
+    }
+
+    #[test]
+    fn gammainccinv_scalar_inverts_complement() {
+        for &(a, q) in &[(0.5_f64, 0.25_f64), (2.0, 0.5), (5.0, 0.9), (10.0, 0.1)] {
+            let x = gammainccinv_scalar(a, q);
+            let actual = gammaincc_conv(a, x);
+            assert!(
+                (actual - q).abs() < 1e-10,
+                "gammainccinv_scalar({a}, {q}) = {x}, Q(a,x) = {actual}"
+            );
+        }
     }
 
     #[test]

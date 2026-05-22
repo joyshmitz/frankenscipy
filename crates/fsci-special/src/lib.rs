@@ -98,6 +98,8 @@ pub use convenience::{
     gamma_mod_squared,
     gammainc_conv,
     gammaincc_conv,
+    gammainccinv,
+    gammainccinv_scalar,
     gammaincinv,
     gammaincinv_scalar,
     gelu,
