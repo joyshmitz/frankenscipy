@@ -18972,6 +18972,61 @@ pub struct CorrelationResult {
     pub pvalue: f64,
 }
 
+/// Coefficient of determination (R²) for regression.
+///
+/// R² = 1 - SS_res / SS_tot, measures proportion of variance explained.
+///
+/// # Arguments
+/// * `y_true` — Actual values
+/// * `y_pred` — Predicted values
+pub fn r_squared(y_true: &[f64], y_pred: &[f64]) -> f64 {
+    if y_true.len() != y_pred.len() || y_true.len() < 2 {
+        return f64::NAN;
+    }
+
+    let n = y_true.len() as f64;
+    let y_mean = y_true.iter().sum::<f64>() / n;
+
+    let ss_tot: f64 = y_true.iter().map(|&y| (y - y_mean).powi(2)).sum();
+    let ss_res: f64 = y_true
+        .iter()
+        .zip(y_pred.iter())
+        .map(|(&t, &p)| (t - p).powi(2))
+        .sum();
+
+    if ss_tot == 0.0 {
+        return if ss_res == 0.0 { 1.0 } else { f64::NAN };
+    }
+
+    1.0 - ss_res / ss_tot
+}
+
+/// Adjusted R² for regression with multiple predictors.
+///
+/// Adjusts R² for the number of predictors to prevent overfitting bias.
+/// adj_R² = 1 - (1 - R²) * (n - 1) / (n - p - 1)
+///
+/// # Arguments
+/// * `y_true` — Actual values
+/// * `y_pred` — Predicted values
+/// * `n_predictors` — Number of predictors (not including intercept)
+pub fn adjusted_r_squared(y_true: &[f64], y_pred: &[f64], n_predictors: usize) -> f64 {
+    let r2 = r_squared(y_true, y_pred);
+    if !r2.is_finite() {
+        return f64::NAN;
+    }
+
+    let n = y_true.len();
+    if n <= n_predictors + 1 {
+        return f64::NAN;
+    }
+
+    let n_f = n as f64;
+    let p = n_predictors as f64;
+
+    1.0 - (1.0 - r2) * (n_f - 1.0) / (n_f - p - 1.0)
+}
+
 /// Result of Somers' D ordinal association test.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SomersDResult {
@@ -46629,6 +46684,41 @@ mod tests {
         let width1 = hi1 - lo1;
         let width2 = hi2 - lo2;
         assert!(width1 > width2, "smaller n should have wider CI");
+    }
+
+    // ── R-squared tests ──────────────────────────────────────────────
+
+    #[test]
+    fn r_squared_perfect_fit() {
+        let y_true = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let y_pred = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let r2 = r_squared(&y_true, &y_pred);
+        assert_close(r2, 1.0, 1e-10, "perfect fit R² = 1");
+    }
+
+    #[test]
+    fn r_squared_no_fit() {
+        let y_true = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let y_pred = [3.0, 3.0, 3.0, 3.0, 3.0]; // predicting mean
+        let r2 = r_squared(&y_true, &y_pred);
+        assert_close(r2, 0.0, 1e-10, "predicting mean R² = 0");
+    }
+
+    #[test]
+    fn r_squared_range() {
+        let y_true = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let y_pred = [1.1, 1.9, 3.2, 3.8, 5.1];
+        let r2 = r_squared(&y_true, &y_pred);
+        assert!(r2 >= 0.0 && r2 <= 1.0, "R² in [0,1]: {}", r2);
+    }
+
+    #[test]
+    fn adjusted_r_squared_less_than_r2() {
+        let y_true = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let y_pred = [1.1, 1.9, 3.2, 3.8, 5.1, 5.9, 7.2, 7.8, 9.1, 9.9];
+        let r2 = r_squared(&y_true, &y_pred);
+        let adj_r2 = adjusted_r_squared(&y_true, &y_pred, 3);
+        assert!(adj_r2 < r2, "adjusted R² should be less than R²");
     }
 
     #[test]
