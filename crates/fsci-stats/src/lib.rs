@@ -27038,6 +27038,107 @@ pub fn agresti_coull_ci(successes: usize, n: usize, confidence: f64) -> (f64, f6
     ((p_tilde - margin).max(0.0), (p_tilde + margin).min(1.0))
 }
 
+/// Result of a z-test.
+#[derive(Debug, Clone)]
+pub struct ZtestResult {
+    pub statistic: f64,
+    pub pvalue: f64,
+}
+
+/// One-sample z-test for a proportion.
+///
+/// Tests H₀: p = p₀ against H₁ based on alternative.
+///
+/// # Arguments
+/// * `successes` — Number of successes
+/// * `n` — Total number of trials
+/// * `p0` — Hypothesized proportion under null
+/// * `alternative` — "two-sided", "greater", or "less"
+pub fn proportions_ztest_1samp(
+    successes: usize,
+    n: usize,
+    p0: f64,
+    alternative: &str,
+) -> ZtestResult {
+    if n == 0 || p0 <= 0.0 || p0 >= 1.0 {
+        return ZtestResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+        };
+    }
+
+    let p_hat = successes as f64 / n as f64;
+    let se = (p0 * (1.0 - p0) / n as f64).sqrt();
+
+    if se == 0.0 {
+        return ZtestResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+        };
+    }
+
+    let z = (p_hat - p0) / se;
+
+    let pvalue = match alternative {
+        "greater" => 1.0 - standard_normal_cdf(z),
+        "less" => standard_normal_cdf(z),
+        _ => 2.0 * (1.0 - standard_normal_cdf(z.abs())),
+    };
+
+    ZtestResult {
+        statistic: z,
+        pvalue,
+    }
+}
+
+/// Two-sample z-test for comparing proportions.
+///
+/// Tests H₀: p₁ = p₂ using pooled proportion for standard error.
+///
+/// # Arguments
+/// * `successes1`, `n1` — Successes and trials in group 1
+/// * `successes2`, `n2` — Successes and trials in group 2
+/// * `alternative` — "two-sided", "greater", or "less"
+pub fn proportions_ztest(
+    successes1: usize,
+    n1: usize,
+    successes2: usize,
+    n2: usize,
+    alternative: &str,
+) -> ZtestResult {
+    if n1 == 0 || n2 == 0 {
+        return ZtestResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+        };
+    }
+
+    let p1 = successes1 as f64 / n1 as f64;
+    let p2 = successes2 as f64 / n2 as f64;
+    let p_pooled = (successes1 + successes2) as f64 / (n1 + n2) as f64;
+
+    if p_pooled == 0.0 || p_pooled == 1.0 {
+        return ZtestResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+        };
+    }
+
+    let se = (p_pooled * (1.0 - p_pooled) * (1.0 / n1 as f64 + 1.0 / n2 as f64)).sqrt();
+    let z = (p1 - p2) / se;
+
+    let pvalue = match alternative {
+        "greater" => 1.0 - standard_normal_cdf(z),
+        "less" => standard_normal_cdf(z),
+        _ => 2.0 * (1.0 - standard_normal_cdf(z.abs())),
+    };
+
+    ZtestResult {
+        statistic: z,
+        pvalue,
+    }
+}
+
 /// T-test from summary statistics (no raw data needed).
 ///
 /// Matches `scipy.stats.ttest_ind_from_stats(..., equal_var=...)`.
@@ -46388,6 +46489,53 @@ mod tests {
         let (lo, hi) = agresti_coull_ci(25, 100, 0.95);
         assert!(lo > 0.0 && lo < 0.25, "lower bound reasonable");
         assert!(hi > 0.25 && hi < 0.5, "upper bound reasonable");
+    }
+
+    // ── Proportions z-test tests ─────────────────────────────────────
+
+    #[test]
+    fn proportions_ztest_1samp_fair_coin() {
+        let result = proportions_ztest_1samp(50, 100, 0.5, "two-sided");
+        assert!(
+            result.pvalue > 0.9,
+            "fair coin should have high p-value: {}",
+            result.pvalue
+        );
+    }
+
+    #[test]
+    fn proportions_ztest_1samp_biased_coin() {
+        let result = proportions_ztest_1samp(70, 100, 0.5, "two-sided");
+        assert!(
+            result.pvalue < 0.01,
+            "biased coin should have low p-value: {}",
+            result.pvalue
+        );
+    }
+
+    #[test]
+    fn proportions_ztest_equal_groups() {
+        let result = proportions_ztest(50, 100, 50, 100, "two-sided");
+        assert!(
+            result.pvalue > 0.9,
+            "equal proportions should have high p-value: {}",
+            result.pvalue
+        );
+        assert!(
+            result.statistic.abs() < 0.1,
+            "z should be near 0: {}",
+            result.statistic
+        );
+    }
+
+    #[test]
+    fn proportions_ztest_different_groups() {
+        let result = proportions_ztest(70, 100, 30, 100, "two-sided");
+        assert!(
+            result.pvalue < 0.001,
+            "different proportions should have low p-value: {}",
+            result.pvalue
+        );
     }
 
     #[test]
