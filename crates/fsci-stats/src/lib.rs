@@ -26579,6 +26579,81 @@ pub fn glass_delta(treatment: &[f64], control: &[f64]) -> f64 {
     (mean_t - mean_c) / sd_c
 }
 
+/// Eta-squared: proportion of variance explained by grouping.
+///
+/// η² = SS_between / SS_total
+///
+/// Values range from 0 to 1. Commonly used effect size for ANOVA.
+pub fn eta_squared(groups: &[&[f64]]) -> f64 {
+    if groups.len() < 2 || groups.iter().any(|g| g.is_empty()) {
+        return f64::NAN;
+    }
+
+    let all: Vec<f64> = groups.iter().flat_map(|g| g.iter().copied()).collect();
+    let n = all.len() as f64;
+    let grand_mean = all.iter().sum::<f64>() / n;
+    let ss_total: f64 = all.iter().map(|&x| (x - grand_mean).powi(2)).sum();
+
+    let ss_between: f64 = groups
+        .iter()
+        .map(|g| {
+            let ng = g.len() as f64;
+            let gm = g.iter().sum::<f64>() / ng;
+            ng * (gm - grand_mean).powi(2)
+        })
+        .sum();
+
+    if ss_total == 0.0 {
+        return 0.0;
+    }
+
+    ss_between / ss_total
+}
+
+/// Omega-squared: bias-corrected proportion of variance explained.
+///
+/// ω² = (SS_between - df_between * MS_within) / (SS_total + MS_within)
+///
+/// Less biased than eta-squared, especially for small samples.
+pub fn omega_squared(groups: &[&[f64]]) -> f64 {
+    if groups.len() < 2 || groups.iter().any(|g| g.is_empty()) {
+        return f64::NAN;
+    }
+
+    let all: Vec<f64> = groups.iter().flat_map(|g| g.iter().copied()).collect();
+    let n = all.len() as f64;
+    let k = groups.len() as f64;
+    let grand_mean = all.iter().sum::<f64>() / n;
+    let ss_total: f64 = all.iter().map(|&x| (x - grand_mean).powi(2)).sum();
+
+    let ss_between: f64 = groups
+        .iter()
+        .map(|g| {
+            let ng = g.len() as f64;
+            let gm = g.iter().sum::<f64>() / ng;
+            ng * (gm - grand_mean).powi(2)
+        })
+        .sum();
+
+    let ss_within = ss_total - ss_between;
+    let df_between = k - 1.0;
+    let df_within = n - k;
+
+    if df_within <= 0.0 {
+        return f64::NAN;
+    }
+
+    let ms_within = ss_within / df_within;
+    let numerator = ss_between - df_between * ms_within;
+    let denominator = ss_total + ms_within;
+
+    if denominator == 0.0 {
+        return 0.0;
+    }
+
+    (numerator / denominator).max(0.0)
+}
+
 /// Cramér's V: association measure for contingency tables.
 ///
 /// V = sqrt(χ²/(n * min(r-1, c-1))), where χ² is the chi-squared statistic.
@@ -46074,6 +46149,40 @@ mod tests {
         // mean_treatment = 8, mean_control = 3, sd_control = sqrt(2.5) ≈ 1.58
         // delta ≈ (8-3)/1.58 ≈ 3.16
         assert!(delta > 2.0 && delta < 4.0, "glass_delta = {}", delta);
+    }
+
+    #[test]
+    fn eta_squared_different_means() {
+        let g1 = [1.0, 2.0, 3.0];
+        let g2 = [10.0, 11.0, 12.0];
+        let eta = eta_squared(&[&g1, &g2]);
+        assert!(eta > 0.9, "clearly separated groups should have high eta²: {}", eta);
+    }
+
+    #[test]
+    fn eta_squared_identical_groups() {
+        let g = [5.0, 6.0, 7.0, 8.0];
+        let eta = eta_squared(&[&g, &g]);
+        assert!((eta - 0.0).abs() < 1e-10, "identical groups have eta² = 0");
+    }
+
+    #[test]
+    fn eta_squared_range() {
+        let g1 = [1.0, 2.0, 3.0, 4.0];
+        let g2 = [2.0, 3.0, 4.0, 5.0];
+        let g3 = [3.0, 4.0, 5.0, 6.0];
+        let eta = eta_squared(&[&g1, &g2, &g3]);
+        assert!(eta >= 0.0 && eta <= 1.0, "eta² should be in [0,1]: {}", eta);
+    }
+
+    #[test]
+    fn omega_squared_less_than_eta() {
+        let g1 = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let g2 = [6.0, 7.0, 8.0, 9.0, 10.0];
+        let eta = eta_squared(&[&g1, &g2]);
+        let omega = omega_squared(&[&g1, &g2]);
+        assert!(omega <= eta, "omega² {} should be <= eta² {}", omega, eta);
+        assert!(omega >= 0.0, "omega² should be non-negative");
     }
 
     #[test]
