@@ -1662,10 +1662,7 @@ impl ContinuousDistribution for NoncentralChiSquared {
             return 0.0;
         }
 
-        let log_pdf = -(x + lam) / 2.0
-            + ((k / 4.0) - 0.5) * (x / lam).ln()
-            + iv_val.ln()
-            - LN_2;
+        let log_pdf = -(x + lam) / 2.0 + ((k / 4.0) - 0.5) * (x / lam).ln() + iv_val.ln() - LN_2;
 
         log_pdf.exp()
     }
@@ -2485,8 +2482,7 @@ impl ContinuousDistribution for NoncentralF {
             let d2 = self.dfd;
             let lam = self.nc;
 
-            2.0 * (d2 / d1).powi(2)
-                * ((d1 + lam).powi(2) + (d1 + 2.0 * lam) * (d2 - 2.0))
+            2.0 * (d2 / d1).powi(2) * ((d1 + lam).powi(2) + (d1 + 2.0 * lam) * (d2 - 2.0))
                 / ((d2 - 2.0).powi(2) * (d2 - 4.0))
         } else {
             f64::NAN
@@ -2895,7 +2891,10 @@ impl GenGamma {
     #[must_use]
     pub fn new(a: f64, c: f64) -> Self {
         assert!(a > 0.0, "a must be positive, got {a}");
-        assert!(c != 0.0 && c.is_finite(), "c must be non-zero and finite, got {c}");
+        assert!(
+            c != 0.0 && c.is_finite(),
+            "c must be non-zero and finite, got {c}"
+        );
         Self { a, c }
     }
 }
@@ -4002,7 +4001,10 @@ pub struct RelBreitWigner {
 impl RelBreitWigner {
     #[must_use]
     pub fn new(rho: f64) -> Self {
-        assert!(rho > 0.0 && rho.is_finite(), "rho must be positive and finite, got {rho}");
+        assert!(
+            rho > 0.0 && rho.is_finite(),
+            "rho must be positive and finite, got {rho}"
+        );
         Self { rho }
     }
 
@@ -4025,8 +4027,7 @@ impl ContinuousDistribution for RelBreitWigner {
         if k <= 0.0 {
             return 0.0;
         }
-        simpson_integrate_adaptive(|t| self.pdf(t), 0.0, k, 64, 1e-10, 1e-14, 12)
-            .clamp(0.0, 1.0)
+        simpson_integrate_adaptive(|t| self.pdf(t), 0.0, k, 64, 1e-10, 1e-14, 12).clamp(0.0, 1.0)
     }
 
     fn ppf(&self, q: f64) -> f64 {
@@ -5261,8 +5262,14 @@ pub struct Skellam {
 impl Skellam {
     #[must_use]
     pub fn new(mu1: f64, mu2: f64) -> Self {
-        assert!(mu1 >= 0.0 && mu1.is_finite(), "mu1 must be non-negative and finite");
-        assert!(mu2 >= 0.0 && mu2.is_finite(), "mu2 must be non-negative and finite");
+        assert!(
+            mu1 >= 0.0 && mu1.is_finite(),
+            "mu1 must be non-negative and finite"
+        );
+        assert!(
+            mu2 >= 0.0 && mu2.is_finite(),
+            "mu2 must be non-negative and finite"
+        );
         Self { mu1, mu2 }
     }
 
@@ -5272,17 +5279,9 @@ impl Skellam {
         }
         let exp_term = (-(self.mu1 + self.mu2)).exp();
         let ratio = if self.mu2 == 0.0 {
-            if k >= 0 {
-                f64::INFINITY
-            } else {
-                0.0
-            }
+            if k >= 0 { f64::INFINITY } else { 0.0 }
         } else if self.mu1 == 0.0 {
-            if k <= 0 {
-                f64::INFINITY
-            } else {
-                0.0
-            }
+            if k <= 0 { f64::INFINITY } else { 0.0 }
         } else {
             (self.mu1 / self.mu2).powf(k as f64 / 2.0)
         };
@@ -5297,8 +5296,7 @@ impl Skellam {
             if k < 0 {
                 return 0.0;
             }
-            return (-self.mu1).exp() * self.mu1.powi(k as i32)
-                / ln_gamma((k + 1) as f64).exp();
+            return (-self.mu1).exp() * self.mu1.powi(k as i32) / ln_gamma((k + 1) as f64).exp();
         }
         let bessel_arg = 2.0 * (self.mu1 * self.mu2).sqrt();
         let bessel_val = fsci_special::bessel::ive_scalar(k.unsigned_abs() as f64, bessel_arg)
@@ -5478,8 +5476,7 @@ impl DiscreteDistribution for BetaBinomial {
         let a = self.a;
         let b = self.b;
         let ab = a + b;
-        (ab + 2.0 * n) * (b - a) / (ab + 2.0)
-            * ((1.0 + ab) / (n * a * b * (ab + n))).sqrt()
+        (ab + 2.0 * n) * (b - a) / (ab + 2.0) * ((1.0 + ab) / (n * a * b * (ab + n))).sqrt()
     }
 
     fn kurtosis(&self) -> f64 {
@@ -5502,9 +5499,7 @@ impl DiscreteDistribution for BetaBinomial {
 
     fn mode(&self) -> f64 {
         if self.a > 1.0 && self.b > 1.0 {
-            ((self.n as f64 + self.a - 1.0) * (self.a - 1.0)
-                / (self.a + self.b - 2.0))
-            .floor()
+            ((self.n as f64 + self.a - 1.0) * (self.a - 1.0) / (self.a + self.b - 2.0)).floor()
         } else if self.a <= 1.0 && self.b > 1.0 {
             0.0
         } else if self.a > 1.0 && self.b <= 1.0 {
@@ -5880,8 +5875,8 @@ impl DiscreteDistribution for DiscreteLaplace {
     fn kurtosis(&self) -> f64 {
         let ea = (-self.a).exp();
         let var = 2.0 * ea / ((1.0 - ea) * (1.0 - ea));
-        let fourth_raw = ea * (1.0 + 4.0 * ea + ea * ea)
-            / ((1.0 - ea) * (1.0 - ea) * (1.0 - ea) * (1.0 - ea));
+        let fourth_raw =
+            ea * (1.0 + 4.0 * ea + ea * ea) / ((1.0 - ea) * (1.0 - ea) * (1.0 - ea) * (1.0 - ea));
         2.0 * fourth_raw / (var * var) - 3.0
     }
 
@@ -7742,7 +7737,6 @@ impl ContinuousDistribution for InverseGamma {
         self.a + ln_gamma(self.a) - (1.0 + self.a) * fsci_special::digamma_scalar(self.a)
     }
 
-
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
             return Err(FitError::InsufficientData {
@@ -7873,7 +7867,6 @@ impl ContinuousDistribution for InverseGaussian {
             10,
         )
     }
-
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
@@ -8034,7 +8027,6 @@ impl ContinuousDistribution for Pearson3 {
         alpha + ln_gamma(alpha) + (1.0 - alpha) * fsci_special::digamma_scalar(alpha) + scale.ln()
     }
 
-
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 3 {
             return Err(FitError::InsufficientData {
@@ -8165,7 +8157,6 @@ impl ContinuousDistribution for ExponNorm {
             12,
         )
     }
-
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
@@ -9153,7 +9144,6 @@ impl ContinuousDistribution for GenPareto {
         1.0 + self.c
     }
 
-
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
             return Err(FitError::InsufficientData {
@@ -9939,7 +9929,6 @@ impl ContinuousDistribution for Chi {
         }
     }
 
-
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
             return Err(FitError::InsufficientData {
@@ -10106,7 +10095,6 @@ impl ContinuousDistribution for Rice {
         )
     }
 
-
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
             return Err(FitError::InsufficientData {
@@ -10235,7 +10223,6 @@ impl ContinuousDistribution for Nakagami {
         // (frankenscipy-rt24d).
         ((self.nu - 0.5) / self.nu).sqrt()
     }
-
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
@@ -10435,7 +10422,6 @@ impl ContinuousDistribution for Fisk {
         }
     }
 
-
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
             return Err(FitError::InsufficientData {
@@ -10596,7 +10582,6 @@ impl ContinuousDistribution for Loguniform {
         // [a, b], so the mode is the lower endpoint a (frankenscipy-rt24d).
         self.a
     }
-
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
@@ -11154,7 +11139,6 @@ impl ContinuousDistribution for DoubleGamma {
         // for a ≤ 1 (where Gamma's pdf is monotone decreasing).
         if self.a > 1.0 { self.a - 1.0 } else { 0.0 }
     }
-
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
@@ -11823,7 +11807,6 @@ impl ContinuousDistribution for Erlang {
         k + ln_gamma(k) + (1.0 - k) * fsci_special::digamma_scalar(k) - self.rate.ln()
     }
 
-
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
             return Err(FitError::InsufficientData {
@@ -12082,7 +12065,6 @@ impl ContinuousDistribution for Bradford {
         mu4 / (var * var) - 3.0
     }
 
-
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
             return Err(FitError::InsufficientData {
@@ -12340,7 +12322,6 @@ impl ContinuousDistribution for Levy {
         0.5 * (1.0 + 3.0 * EULER_MASCHERONI + (16.0 * PI * self.scale * self.scale).ln())
     }
 
-
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
             return Err(FitError::InsufficientData {
@@ -12470,7 +12451,6 @@ impl ContinuousDistribution for LevyLeft {
         // reflection-invariant.
         0.5 * (1.0 + 3.0 * EULER_MASCHERONI + (16.0 * PI * self.scale * self.scale).ln())
     }
-
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
@@ -12959,7 +12939,6 @@ impl ContinuousDistribution for LogLaplace {
         mu4 / (var * var) - 3.0
     }
 
-
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
             return Err(FitError::InsufficientData {
@@ -13119,7 +13098,6 @@ impl ContinuousDistribution for Loglogistic {
         );
         mu4 / (var * var) - 3.0
     }
-
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
@@ -13523,7 +13501,6 @@ impl ContinuousDistribution for Gompertz {
         mu4 / (var * var) - 3.0
     }
 
-
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
             return Err(FitError::InsufficientData {
@@ -13756,7 +13733,6 @@ impl ContinuousDistribution for GenLogistic {
         let kappa4 = fsci_special::pentagamma(self.c) + fsci_special::pentagamma(1.0);
         kappa4 / (mu2 * mu2)
     }
-
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
@@ -15070,7 +15046,6 @@ impl ContinuousDistribution for TruncExpon {
         mu4 / (var * var) - 3.0
     }
 
-
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
             return Err(FitError::InsufficientData {
@@ -15562,7 +15537,6 @@ impl ContinuousDistribution for InvWeibull {
         mu4 / (var * var) - 3.0
     }
 
-
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
             return Err(FitError::InsufficientData {
@@ -15683,7 +15657,6 @@ impl ContinuousDistribution for GenNorm {
         let m4 = (ln_gamma(5.0 / b) - lg1).exp();
         m4 / (m2 * m2) - 3.0
     }
-
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
@@ -15841,7 +15814,6 @@ impl ContinuousDistribution for HalfGenNorm {
         mu4 / (var * var) - 3.0
     }
 
-
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
             return Err(FitError::InsufficientData {
@@ -15972,7 +15944,6 @@ impl ContinuousDistribution for LogGamma {
         let kappa2 = fsci_special::trigamma(self.c);
         fsci_special::pentagamma(self.c) / (kappa2 * kappa2)
     }
-
 
     fn try_fit(data: &[f64]) -> Result<Self, FitError> {
         if data.len() < 2 {
@@ -17393,7 +17364,12 @@ pub fn concordance_correlation(x: &[f64], y: &[f64]) -> f64 {
 
     let var_x: f64 = x.iter().map(|&xi| (xi - mean_x).powi(2)).sum::<f64>() / n;
     let var_y: f64 = y.iter().map(|&yi| (yi - mean_y).powi(2)).sum::<f64>() / n;
-    let cov_xy: f64 = x.iter().zip(y).map(|(&xi, &yi)| (xi - mean_x) * (yi - mean_y)).sum::<f64>() / n;
+    let cov_xy: f64 = x
+        .iter()
+        .zip(y)
+        .map(|(&xi, &yi)| (xi - mean_x) * (yi - mean_y))
+        .sum::<f64>()
+        / n;
 
     let mean_diff_sq = (mean_x - mean_y).powi(2);
     let denom = var_x + var_y + mean_diff_sq;
@@ -17582,7 +17558,13 @@ pub fn nanzscore(data: &[f64]) -> Vec<f64> {
     }
 
     data.iter()
-        .map(|&x| if x.is_nan() { f64::NAN } else { (x - mean) / std })
+        .map(|&x| {
+            if x.is_nan() {
+                f64::NAN
+            } else {
+                (x - mean) / std
+            }
+        })
         .collect()
 }
 
@@ -17931,8 +17913,10 @@ pub fn rayleightest(samples: &[f64]) -> (f64, f64) {
     let r_bar = ((sum_cos * sum_cos + sum_sin * sum_sin) / (nf * nf)).sqrt();
     let z = nf * r_bar * r_bar;
 
-    let pvalue = (-z).exp() * (1.0 + (2.0 * z - z * z) / (4.0 * nf)
-        - (24.0 * z - 132.0 * z * z + 76.0 * z * z * z - 9.0 * z * z * z * z) / (288.0 * nf * nf));
+    let pvalue = (-z).exp()
+        * (1.0 + (2.0 * z - z * z) / (4.0 * nf)
+            - (24.0 * z - 132.0 * z * z + 76.0 * z * z * z - 9.0 * z * z * z * z)
+                / (288.0 * nf * nf));
 
     (z, pvalue.clamp(0.0, 1.0))
 }
@@ -18091,7 +18075,8 @@ fn kuiper_pvalue(v_star: f64) -> f64 {
     let mut sum = 0.0;
     for k in 1..=100 {
         let kf = k as f64;
-        let term = (4.0 * kf * kf * v_star * v_star - 1.0) * (-2.0 * kf * kf * v_star * v_star).exp();
+        let term =
+            (4.0 * kf * kf * v_star * v_star - 1.0) * (-2.0 * kf * kf * v_star * v_star).exp();
         sum += 2.0 * term;
     }
     sum.clamp(0.0, 1.0)
@@ -18137,7 +18122,11 @@ pub fn rao_spacing_test(samples: &[f64]) -> (f64, f64) {
         spacings.push(spacing);
     }
 
-    let u: f64 = spacings.iter().map(|&s| (s - expected_spacing).abs()).sum::<f64>() / 2.0;
+    let u: f64 = spacings
+        .iter()
+        .map(|&s| (s - expected_spacing).abs())
+        .sum::<f64>()
+        / 2.0;
     let u_degrees = u * 180.0 / PI;
 
     let mean_u = (nf - 1.0) * (2.0 * PI / nf) * 0.5;
@@ -18839,11 +18828,7 @@ pub fn hellinger_distance(p: &[f64], q: &[f64]) -> f64 {
         return f64::NAN;
     }
 
-    let bc: f64 = p
-        .iter()
-        .zip(q)
-        .map(|(&pi, &qi)| (pi * qi).sqrt())
-        .sum();
+    let bc: f64 = p.iter().zip(q).map(|(&pi, &qi)| (pi * qi).sqrt()).sum();
 
     (1.0 - bc.min(1.0)).max(0.0).sqrt()
 }
@@ -18864,17 +18849,9 @@ pub fn bhattacharyya_distance(p: &[f64], q: &[f64]) -> f64 {
         return f64::NAN;
     }
 
-    let bc: f64 = p
-        .iter()
-        .zip(q)
-        .map(|(&pi, &qi)| (pi * qi).sqrt())
-        .sum();
+    let bc: f64 = p.iter().zip(q).map(|(&pi, &qi)| (pi * qi).sqrt()).sum();
 
-    if bc <= 0.0 {
-        f64::INFINITY
-    } else {
-        -bc.ln()
-    }
+    if bc <= 0.0 { f64::INFINITY } else { -bc.ln() }
 }
 
 /// Compute the Euclidean distance between two vectors.
@@ -18898,10 +18875,7 @@ pub fn sqeuclidean_distance(u: &[f64], v: &[f64]) -> f64 {
     if u.len() != v.len() || u.is_empty() {
         return f64::NAN;
     }
-    u.iter()
-        .zip(v)
-        .map(|(&ui, &vi)| (ui - vi).powi(2))
-        .sum()
+    u.iter().zip(v).map(|(&ui, &vi)| (ui - vi).powi(2)).sum()
 }
 
 /// Compute the cosine distance between two vectors.
@@ -18932,10 +18906,7 @@ pub fn cityblock_distance(u: &[f64], v: &[f64]) -> f64 {
     if u.len() != v.len() || u.is_empty() {
         return f64::NAN;
     }
-    u.iter()
-        .zip(v)
-        .map(|(&ui, &vi)| (ui - vi).abs())
-        .sum()
+    u.iter().zip(v).map(|(&ui, &vi)| (ui - vi).abs()).sum()
 }
 
 /// Compute the Chebyshev distance between two vectors.
@@ -18984,7 +18955,11 @@ pub fn canberra_distance(u: &[f64], v: &[f64]) -> f64 {
         .zip(v)
         .map(|(&ui, &vi)| {
             let denom = ui.abs() + vi.abs();
-            if denom == 0.0 { 0.0 } else { (ui - vi).abs() / denom }
+            if denom == 0.0 {
+                0.0
+            } else {
+                (ui - vi).abs() / denom
+            }
         })
         .sum()
 }
@@ -19257,7 +19232,8 @@ pub fn alexander_govern(groups: &[&[f64]]) -> TtestResult {
         let df = n_f - 1.0;
         let t_stat = z / (1.0 + (2.0 * (n_f - 1.8) * z * z) / (df * (n_f + 1.0))).sqrt();
         let v = df + t_stat * t_stat;
-        let c = ((a_values[i] * t_stat * t_stat).ln() - (v / df).ln()) / (a_values[i] - 1.0).max(1e-10);
+        let c =
+            ((a_values[i] * t_stat * t_stat).ln() - (v / df).ln()) / (a_values[i] - 1.0).max(1e-10);
         chi_sq += c;
     }
 
@@ -22049,10 +22025,7 @@ pub fn raw_moment(data: &[f64], k: u32) -> f64 {
         return 1.0;
     }
     let n = data.len() as f64;
-    data.iter()
-        .map(|&x| x.powi(k as i32))
-        .sum::<f64>()
-        / n
+    data.iter().map(|&x| x.powi(k as i32)).sum::<f64>() / n
 }
 
 /// Compute the k-th central moment E[(X - μ)^k].
@@ -22090,7 +22063,11 @@ pub fn standardized_moment(data: &[f64], k: u32) -> f64 {
     }
     let std = m2.sqrt();
 
-    let mk: f64 = data.iter().map(|&x| (x - mean_val).powi(k as i32)).sum::<f64>() / n;
+    let mk: f64 = data
+        .iter()
+        .map(|&x| (x - mean_val).powi(k as i32))
+        .sum::<f64>()
+        / n;
     mk / std.powi(k as i32)
 }
 
@@ -22868,7 +22845,11 @@ pub fn robust_zscore(data: &[f64], scale: bool) -> Vec<f64> {
         return vec![f64::NAN; data.len()];
     }
 
-    let scale_factor = if scale { iqr_val / 1.3489795003921634 } else { iqr_val };
+    let scale_factor = if scale {
+        iqr_val / 1.3489795003921634
+    } else {
+        iqr_val
+    };
 
     data.iter().map(|&x| (x - med) / scale_factor).collect()
 }
@@ -23005,7 +22986,12 @@ pub fn zmap_weighted(scores: &[f64], compare: &[f64], weights: &[f64]) -> Vec<f6
     if total_w <= 0.0 {
         return vec![f64::NAN; scores.len()];
     }
-    let mean: f64 = compare.iter().zip(weights).map(|(&x, &w)| w * x).sum::<f64>() / total_w;
+    let mean: f64 = compare
+        .iter()
+        .zip(weights)
+        .map(|(&x, &w)| w * x)
+        .sum::<f64>()
+        / total_w;
     let var: f64 = compare
         .iter()
         .zip(weights)
@@ -23271,8 +23257,8 @@ pub fn trimmed_std(data: &[f64], proportiontocut: f64, ddof: usize) -> f64 {
     }
 
     let mean = trimmed.iter().sum::<f64>() / trimmed.len() as f64;
-    let variance: f64 = trimmed.iter().map(|x| (x - mean).powi(2)).sum::<f64>()
-        / (trimmed.len() - ddof) as f64;
+    let variance: f64 =
+        trimmed.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (trimmed.len() - ddof) as f64;
 
     variance.sqrt()
 }
@@ -27820,8 +27806,13 @@ fn boschloo_pvalue_at_p(n1: u64, n2: u64, p: f64, observed_stat: f64, alternativ
             let d = n2 - c;
 
             // Fisher's p-value for this table
-            let fisher_p =
-                fisher_one_sided_pvalue(a as usize, b as usize, c as usize, d as usize, alternative);
+            let fisher_p = fisher_one_sided_pvalue(
+                a as usize,
+                b as usize,
+                c as usize,
+                d as usize,
+                alternative,
+            );
 
             // Is this table as or more extreme? (smaller Fisher p-value)
             if fisher_p <= observed_stat + 1e-14 {
@@ -28187,7 +28178,10 @@ pub fn mcnemar(table: &[[usize; 2]; 2], exact: bool, correction: bool) -> Mcnema
         };
 
         let pvalue = ChiSquared::new(1.0).sf(stat).clamp(0.0, 1.0);
-        McnemarResult { statistic: stat, pvalue }
+        McnemarResult {
+            statistic: stat,
+            pvalue,
+        }
     }
 }
 
@@ -28499,7 +28493,10 @@ where
     let count_extreme = match alternative {
         "greater" => null_dist.iter().filter(|&&s| s >= observed).count(),
         "less" => null_dist.iter().filter(|&&s| s <= observed).count(),
-        _ => null_dist.iter().filter(|&&s| s.abs() >= observed.abs()).count(),
+        _ => null_dist
+            .iter()
+            .filter(|&&s| s.abs() >= observed.abs())
+            .count(),
     };
 
     let pvalue = (count_extreme + 1) as f64 / (n_resamples + 1) as f64;
@@ -29533,7 +29530,11 @@ pub fn cronbachs_alpha(items: &[&[f64]]) -> f64 {
         .collect();
 
     let total_mean = totals.iter().sum::<f64>() / n as f64;
-    let total_variance: f64 = totals.iter().map(|&x| (x - total_mean).powi(2)).sum::<f64>() / n as f64;
+    let total_variance: f64 = totals
+        .iter()
+        .map(|&x| (x - total_mean).powi(2))
+        .sum::<f64>()
+        / n as f64;
 
     if total_variance == 0.0 {
         return f64::NAN;
@@ -30039,7 +30040,8 @@ pub fn bootstrap_std(data: &[f64], n_bootstrap: usize, confidence: f64, seed: u6
 
     let alpha = 1.0 - confidence;
     let idx_lo = ((alpha / 2.0 * n_bootstrap as f64).floor() as usize).clamp(0, n_bootstrap - 1);
-    let idx_hi = (((1.0 - alpha / 2.0) * n_bootstrap as f64).ceil() as usize).clamp(0, n_bootstrap - 1);
+    let idx_hi =
+        (((1.0 - alpha / 2.0) * n_bootstrap as f64).ceil() as usize).clamp(0, n_bootstrap - 1);
 
     (boot_stds[idx_lo], boot_stds[idx_hi])
 }
@@ -30184,7 +30186,9 @@ pub fn resample_n(data: &[f64], n_samples: usize, seed: u64) -> Vec<f64> {
         ((*state >> 33) as usize) % n
     };
 
-    (0..n_samples).map(|_| data[next_rng(&mut rng_state)]).collect()
+    (0..n_samples)
+        .map(|_| data[next_rng(&mut rng_state)])
+        .collect()
 }
 
 /// Generate permutation indices for a given size.
@@ -30884,7 +30888,11 @@ pub fn explained_variance_score(y_true: &[f64], y_pred: &[f64]) -> f64 {
 
     let residuals: Vec<f64> = y_true.iter().zip(y_pred).map(|(&t, &p)| t - p).collect();
     let mean_res = residuals.iter().sum::<f64>() / n;
-    let var_res: f64 = residuals.iter().map(|&x| (x - mean_res).powi(2)).sum::<f64>() / n;
+    let var_res: f64 = residuals
+        .iter()
+        .map(|&x| (x - mean_res).powi(2))
+        .sum::<f64>()
+        / n;
 
     if var_true == 0.0 {
         return if var_res == 0.0 { 1.0 } else { 0.0 };
@@ -30909,7 +30917,11 @@ pub fn symmetric_mape(y_true: &[f64], y_pred: &[f64]) -> f64 {
         .zip(y_pred.iter())
         .map(|(&t, &p)| {
             let denom = (t.abs() + p.abs()) / 2.0;
-            if denom == 0.0 { 0.0 } else { (t - p).abs() / denom }
+            if denom == 0.0 {
+                0.0
+            } else {
+                (t - p).abs() / denom
+            }
         })
         .sum();
     100.0 * sum / n
@@ -31079,7 +31091,11 @@ pub fn expected_calibration_error(y_true: &[f64], y_pred: &[f64], n_bins: usize)
 
     for b in 0..n_bins {
         let lo = b as f64 * bin_width;
-        let hi = if b == n_bins - 1 { 1.0 + 1e-10 } else { (b + 1) as f64 * bin_width };
+        let hi = if b == n_bins - 1 {
+            1.0 + 1e-10
+        } else {
+            (b + 1) as f64 * bin_width
+        };
 
         let (bin_sum_pred, bin_sum_true, bin_count) = y_pred
             .iter()
@@ -31108,7 +31124,11 @@ pub fn max_calibration_error(y_true: &[f64], y_pred: &[f64], n_bins: usize) -> f
 
     for b in 0..n_bins {
         let lo = b as f64 * bin_width;
-        let hi = if b == n_bins - 1 { 1.0 + 1e-10 } else { (b + 1) as f64 * bin_width };
+        let hi = if b == n_bins - 1 {
+            1.0 + 1e-10
+        } else {
+            (b + 1) as f64 * bin_width
+        };
 
         let (bin_sum_pred, bin_sum_true, bin_count) = y_pred
             .iter()
@@ -31160,7 +31180,11 @@ pub fn precision_score(y_true: &[f64], y_pred: &[f64]) -> f64 {
         let ti = t.round() as i32;
         let pi = p.round() as i32;
         if pi == 1 {
-            if ti == 1 { tp += 1.0; } else { fp += 1.0; }
+            if ti == 1 {
+                tp += 1.0;
+            } else {
+                fp += 1.0;
+            }
         }
     }
     if tp + fp == 0.0 { 0.0 } else { tp / (tp + fp) }
@@ -31176,17 +31200,29 @@ pub fn recall_score(y_true: &[f64], y_pred: &[f64]) -> f64 {
         let ti = t.round() as i32;
         let pi = p.round() as i32;
         if ti == 1 {
-            if pi == 1 { tp += 1.0; } else { fn_ += 1.0; }
+            if pi == 1 {
+                tp += 1.0;
+            } else {
+                fn_ += 1.0;
+            }
         }
     }
-    if tp + fn_ == 0.0 { 0.0 } else { tp / (tp + fn_) }
+    if tp + fn_ == 0.0 {
+        0.0
+    } else {
+        tp / (tp + fn_)
+    }
 }
 
 /// F1 score - harmonic mean of precision and recall.
 pub fn f1_score(y_true: &[f64], y_pred: &[f64]) -> f64 {
     let p = precision_score(y_true, y_pred);
     let r = recall_score(y_true, y_pred);
-    if p + r == 0.0 { 0.0 } else { 2.0 * p * r / (p + r) }
+    if p + r == 0.0 {
+        0.0
+    } else {
+        2.0 * p * r / (p + r)
+    }
 }
 
 /// Accuracy score for classification.
@@ -31194,7 +31230,9 @@ pub fn accuracy_score(y_true: &[f64], y_pred: &[f64]) -> f64 {
     if y_true.len() != y_pred.len() || y_true.is_empty() {
         return f64::NAN;
     }
-    let correct = y_true.iter().zip(y_pred.iter())
+    let correct = y_true
+        .iter()
+        .zip(y_pred.iter())
         .filter(|(t, p)| t.round() as i32 == p.round() as i32)
         .count();
     correct as f64 / y_true.len() as f64
@@ -31205,7 +31243,11 @@ pub fn fbeta_score(y_true: &[f64], y_pred: &[f64], beta: f64) -> f64 {
     let p = precision_score(y_true, y_pred);
     let r = recall_score(y_true, y_pred);
     let beta2 = beta * beta;
-    if p + r == 0.0 { 0.0 } else { (1.0 + beta2) * p * r / (beta2 * p + r) }
+    if p + r == 0.0 {
+        0.0
+    } else {
+        (1.0 + beta2) * p * r / (beta2 * p + r)
+    }
 }
 
 /// Specificity score (true negative rate) for binary classification.
@@ -31218,7 +31260,11 @@ pub fn specificity_score(y_true: &[f64], y_pred: &[f64]) -> f64 {
         let ti = t.round() as i32;
         let pi = p.round() as i32;
         if ti == 0 {
-            if pi == 0 { tn += 1.0; } else { fp += 1.0; }
+            if pi == 0 {
+                tn += 1.0;
+            } else {
+                fp += 1.0;
+            }
         }
     }
     if tn + fp == 0.0 { 0.0 } else { tn / (tn + fp) }
@@ -31318,7 +31364,10 @@ pub fn theil_t_index(data: &[f64]) -> f64 {
     if mean == 0.0 {
         return f64::NAN;
     }
-    data.iter().map(|&x| (x / mean) * (x / mean).ln()).sum::<f64>() / n
+    data.iter()
+        .map(|&x| (x / mean) * (x / mean).ln())
+        .sum::<f64>()
+        / n
 }
 
 /// Theil L index (mean log deviation).
@@ -31431,7 +31480,11 @@ pub fn braycurtis_distance(u: &[f64], v: &[f64]) -> f64 {
         return f64::NAN;
     }
     let num: f64 = u.iter().zip(v.iter()).map(|(&a, &b)| (a - b).abs()).sum();
-    let den: f64 = u.iter().zip(v.iter()).map(|(&a, &b)| a.abs() + b.abs()).sum();
+    let den: f64 = u
+        .iter()
+        .zip(v.iter())
+        .map(|(&a, &b)| a.abs() + b.abs())
+        .sum();
     if den == 0.0 { 0.0 } else { num / den }
 }
 
@@ -31461,7 +31514,11 @@ pub fn jaccard_distance(u: &[f64], v: &[f64]) -> f64 {
             }
         }
     }
-    if union == 0 { 0.0 } else { 1.0 - intersection as f64 / union as f64 }
+    if union == 0 {
+        0.0
+    } else {
+        1.0 - intersection as f64 / union as f64
+    }
 }
 
 /// Correlation distance - 1 minus Pearson correlation.
@@ -31513,7 +31570,11 @@ pub fn dice_distance(u: &[f64], v: &[f64]) -> f64 {
     }
 
     let denom = 2.0 * c_tt as f64 + c_tf as f64 + c_ft as f64;
-    if denom == 0.0 { 0.0 } else { (c_tf + c_ft) as f64 / denom }
+    if denom == 0.0 {
+        0.0
+    } else {
+        (c_tf + c_ft) as f64 / denom
+    }
 }
 
 /// Yule dissimilarity for binary data.
@@ -31560,7 +31621,11 @@ pub fn russellrao_distance(u: &[f64], v: &[f64]) -> f64 {
         return f64::NAN;
     }
     let n = u.len();
-    let c_tt = u.iter().zip(v.iter()).filter(|(a, b)| **a > 0.0 && **b > 0.0).count();
+    let c_tt = u
+        .iter()
+        .zip(v.iter())
+        .filter(|(a, b)| **a > 0.0 && **b > 0.0)
+        .count();
     (n - c_tt) as f64 / n as f64
 }
 
@@ -31609,7 +31674,9 @@ pub fn matching_distance(u: &[f64], v: &[f64]) -> f64 {
         return f64::NAN;
     }
     let n = u.len();
-    let mismatches = u.iter().zip(v.iter())
+    let mismatches = u
+        .iter()
+        .zip(v.iter())
         .filter(|(a, b)| (**a > 0.0) != (**b > 0.0))
         .count();
     mismatches as f64 / n as f64
@@ -31662,20 +31729,12 @@ pub fn hausdorff_1d(u: &[f64], v: &[f64]) -> f64 {
 /// Compute x*log(y) with proper handling of x=0.
 /// Returns 0 when x=0, regardless of y.
 pub fn xlogy(x: f64, y: f64) -> f64 {
-    if x == 0.0 {
-        0.0
-    } else {
-        x * y.ln()
-    }
+    if x == 0.0 { 0.0 } else { x * y.ln() }
 }
 
 /// Compute x*log1p(y) with proper handling of x=0.
 pub fn xlog1py(x: f64, y: f64) -> f64 {
-    if x == 0.0 {
-        0.0
-    } else {
-        x * (1.0 + y).ln()
-    }
+    if x == 0.0 { 0.0 } else { x * (1.0 + y).ln() }
 }
 
 /// Relative entropy (elementwise): x*log(x/y).
@@ -31753,7 +31812,9 @@ pub fn logsumexp_weighted(a: &[f64], b: &[f64]) -> f64 {
     if !max_a.is_finite() {
         return max_a;
     }
-    let sum = a.iter().zip(b.iter())
+    let sum = a
+        .iter()
+        .zip(b.iter())
         .map(|(&ai, &bi)| bi * (ai - max_a).exp())
         .sum::<f64>();
     max_a + sum.ln()
@@ -31767,7 +31828,8 @@ pub fn adjusted_rand_index(labels_true: &[f64], labels_pred: &[f64]) -> f64 {
     }
     let n = labels_true.len();
 
-    let mut contingency: std::collections::HashMap<(i64, i64), usize> = std::collections::HashMap::new();
+    let mut contingency: std::collections::HashMap<(i64, i64), usize> =
+        std::collections::HashMap::new();
     for (&t, &p) in labels_true.iter().zip(labels_pred.iter()) {
         let key = (t.round() as i64, p.round() as i64);
         *contingency.entry(key).or_insert(0) += 1;
@@ -31785,8 +31847,14 @@ pub fn adjusted_rand_index(labels_true: &[f64], labels_pred: &[f64]) -> f64 {
         *b_sums.entry(p).or_insert(0) += nij;
     }
 
-    let sum_comb_a: i64 = a_sums.values().map(|&a| if a >= 2 { (a * (a - 1) / 2) as i64 } else { 0 }).sum();
-    let sum_comb_b: i64 = b_sums.values().map(|&b| if b >= 2 { (b * (b - 1) / 2) as i64 } else { 0 }).sum();
+    let sum_comb_a: i64 = a_sums
+        .values()
+        .map(|&a| if a >= 2 { (a * (a - 1) / 2) as i64 } else { 0 })
+        .sum();
+    let sum_comb_b: i64 = b_sums
+        .values()
+        .map(|&b| if b >= 2 { (b * (b - 1) / 2) as i64 } else { 0 })
+        .sum();
 
     let comb_n = if n >= 2 { (n * (n - 1) / 2) as i64 } else { 0 };
     if comb_n == 0 {
@@ -31821,7 +31889,11 @@ pub fn rand_index(labels_true: &[f64], labels_pred: &[f64]) -> f64 {
             let same_true = labels_true[i].round() as i64 == labels_true[j].round() as i64;
             let same_pred = labels_pred[i].round() as i64 == labels_pred[j].round() as i64;
             if same_true == same_pred {
-                if same_true { a += 1; } else { b += 1; }
+                if same_true {
+                    a += 1;
+                } else {
+                    b += 1;
+                }
             }
         }
     }
@@ -31854,7 +31926,9 @@ pub fn silhouette_score_1d(data: &[f64], labels: &[f64]) -> f64 {
             std::collections::HashMap::new();
 
         for j in 0..n {
-            if i == j { continue; }
+            if i == j {
+                continue;
+            }
             let lj = labels[j].round() as i64;
             let dist = (data[i] - data[j]).abs();
 
@@ -31876,7 +31950,11 @@ pub fn silhouette_score_1d(data: &[f64], labels: &[f64]) -> f64 {
             .map(|dists| dists.iter().sum::<f64>() / dists.len() as f64)
             .fold(f64::INFINITY, f64::min);
 
-        let s = if a.max(b) == 0.0 { 0.0 } else { (b - a) / a.max(b) };
+        let s = if a.max(b) == 0.0 {
+            0.0
+        } else {
+            (b - a) / a.max(b)
+        };
         silhouettes.push(s);
     }
 
@@ -32890,11 +32968,7 @@ pub fn biweight_midcorrelation(x: &[f64], y: &[f64], c: f64) -> f64 {
     }
 
     let denom = (den_x * den_y).sqrt();
-    if denom == 0.0 {
-        f64::NAN
-    } else {
-        num / denom
-    }
+    if denom == 0.0 { f64::NAN } else { num / denom }
 }
 
 /// Compute the coefficient of variation (CV = std/mean).
@@ -33408,7 +33482,11 @@ pub fn rolling_var(data: &[f64], window: usize, ddof: usize) -> Vec<f64> {
 
     let first_window = &data[..window];
     let mean0: f64 = first_window.iter().sum::<f64>() / wf;
-    let var0: f64 = first_window.iter().map(|&x| (x - mean0).powi(2)).sum::<f64>() / denom;
+    let var0: f64 = first_window
+        .iter()
+        .map(|&x| (x - mean0).powi(2))
+        .sum::<f64>()
+        / denom;
     result.push(var0);
 
     let mut sum: f64 = first_window.iter().sum();
@@ -43651,14 +43729,25 @@ mod tests {
         let data: Vec<f64> = (1..=10).map(|x| x as f64).collect();
         let result = jarque_bera(&data);
         // Statistic should be positive and relatively small for uniform data
-        assert!(result.statistic > 0.0 && result.statistic < 2.0, "jarque_bera statistic in range, got {}", result.statistic);
+        assert!(
+            result.statistic > 0.0 && result.statistic < 2.0,
+            "jarque_bera statistic in range, got {}",
+            result.statistic
+        );
         // pvalue should indicate non-rejection (uniform is close to normal for small n)
-        assert!(result.pvalue > 0.3, "jarque_bera pvalue for uniform, got {}", result.pvalue);
+        assert!(
+            result.pvalue > 0.3,
+            "jarque_bera pvalue for uniform, got {}",
+            result.pvalue
+        );
 
         // Normal-like data should have statistic near 0
         let normal_like = vec![-2.0, -1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5, 2.0];
         let result2 = jarque_bera(&normal_like);
-        assert!(result2.pvalue > 0.5, "normal-like data should have high pvalue");
+        assert!(
+            result2.pvalue > 0.5,
+            "normal-like data should have high pvalue"
+        );
     }
 
     #[test]
@@ -43667,7 +43756,11 @@ mod tests {
         let data: Vec<f64> = (1..=30).map(|x| x as f64).collect();
         let result = normaltest(&data);
         // Uniform-ish data should fail normality test
-        assert!(result.pvalue < 0.5, "uniform data should fail normality, pvalue={}", result.pvalue);
+        assert!(
+            result.pvalue < 0.5,
+            "uniform data should fail normality, pvalue={}",
+            result.pvalue
+        );
     }
 
     #[test]
@@ -45118,12 +45211,7 @@ mod tests {
 
     #[test]
     fn cochrans_q_identical_columns() {
-        let data = vec![
-            vec![1, 1, 1],
-            vec![0, 0, 0],
-            vec![1, 1, 1],
-            vec![0, 0, 0],
-        ];
+        let data = vec![vec![1, 1, 1], vec![0, 0, 0], vec![1, 1, 1], vec![0, 0, 0]];
         let result = cochrans_q(&data);
         assert!(
             result.statistic.abs() < 1e-10 || result.statistic.is_nan(),
@@ -45301,10 +45389,7 @@ mod tests {
         let table = [[8, 2], [2, 8]];
         let result = barnard_exact(&table);
 
-        assert!(
-            result.statistic.abs() > 0.0,
-            "statistic should be non-zero"
-        );
+        assert!(result.statistic.abs() > 0.0, "statistic should be non-zero");
         assert!(
             result.pvalue < 0.05,
             "p-value {} should be significant",
@@ -47304,8 +47389,16 @@ mod tests {
         let b = vec![2.0, 3.0, 4.0, 5.0, 6.0];
         let c = vec![3.0, 4.0, 5.0, 6.0, 7.0];
         let result = friedmanchisquare(&[&a, &b, &c]);
-        assert!((result.statistic - 10.0).abs() < 1e-10, "friedman statistic, got {}", result.statistic);
-        assert!((result.pvalue - 0.006737946999085467).abs() < 1e-9, "friedman pvalue, got {}", result.pvalue);
+        assert!(
+            (result.statistic - 10.0).abs() < 1e-10,
+            "friedman statistic, got {}",
+            result.statistic
+        );
+        assert!(
+            (result.pvalue - 0.006737946999085467).abs() < 1e-9,
+            "friedman pvalue, got {}",
+            result.pvalue
+        );
     }
 
     // ── Fligner test ─────────────────────────────────────────────────
@@ -51155,7 +51248,12 @@ mod tests {
         let d = cohens_d(&g1, &g2);
         let g = hedges_g(&g1, &g2);
         // Hedges g should have smaller magnitude (bias correction)
-        assert!(g.abs() < d.abs(), "hedges_g {} should be smaller than cohens_d {}", g, d);
+        assert!(
+            g.abs() < d.abs(),
+            "hedges_g {} should be smaller than cohens_d {}",
+            g,
+            d
+        );
         // Same sign
         assert!(d.signum() == g.signum());
     }
@@ -51191,7 +51289,11 @@ mod tests {
         let g1 = [1.0, 2.0, 3.0];
         let g2 = [10.0, 11.0, 12.0];
         let eta = eta_squared(&[&g1, &g2]);
-        assert!(eta > 0.9, "clearly separated groups should have high eta²: {}", eta);
+        assert!(
+            eta > 0.9,
+            "clearly separated groups should have high eta²: {}",
+            eta
+        );
     }
 
     #[test]
@@ -52509,14 +52611,26 @@ mod tests {
         let g3 = vec![7.0, 8.0, 9.0];
         let groups: Vec<&[f64]> = vec![&g1, &g2, &g3];
         let res = f_oneway(&groups);
-        assert!((res.statistic - 27.0).abs() < 1e-10, "f_oneway statistic, got {}", res.statistic);
+        assert!(
+            (res.statistic - 27.0).abs() < 1e-10,
+            "f_oneway statistic, got {}",
+            res.statistic
+        );
         // pvalue for F(2,6) = 27 is very small
-        assert!(res.pvalue < 0.01, "f_oneway pvalue should be significant, got {}", res.pvalue);
+        assert!(
+            res.pvalue < 0.01,
+            "f_oneway pvalue should be significant, got {}",
+            res.pvalue
+        );
 
         // Same groups should give F=0
         let same: Vec<&[f64]> = vec![&g1, &g1, &g1];
         let res2 = f_oneway(&same);
-        assert!(res2.statistic.abs() < 1e-10 || res2.statistic.is_nan(), "f_oneway same groups F~0, got {}", res2.statistic);
+        assert!(
+            res2.statistic.abs() < 1e-10 || res2.statistic.is_nan(),
+            "f_oneway same groups F~0, got {}",
+            res2.statistic
+        );
     }
 
     #[test]
@@ -52556,15 +52670,24 @@ mod tests {
         let groups: Vec<&[f64]> = vec![&g1, &g2, &g3];
         let res = levene(&groups);
         // Verify basic properties: statistic should be non-negative and pvalue in [0,1]
-        assert!(res.statistic >= 0.0, "levene statistic should be non-negative");
-        assert!(res.pvalue >= 0.0 && res.pvalue <= 1.0, "levene pvalue in valid range");
+        assert!(
+            res.statistic >= 0.0,
+            "levene statistic should be non-negative"
+        );
+        assert!(
+            res.pvalue >= 0.0 && res.pvalue <= 1.0,
+            "levene pvalue in valid range"
+        );
 
         // Groups with very different variances should give high statistic and low pvalue
         let narrow = vec![4.9, 5.0, 5.1, 5.0, 5.05];
         let wide = vec![0.0, 2.5, 5.0, 7.5, 10.0];
         let diff_groups: Vec<&[f64]> = vec![&narrow, &wide];
         let res2 = levene(&diff_groups);
-        assert!(res2.statistic > res.statistic, "levene with different variances should have higher stat");
+        assert!(
+            res2.statistic > res.statistic,
+            "levene with different variances should have higher stat"
+        );
     }
 
     #[test]
@@ -52604,15 +52727,27 @@ mod tests {
         let groups: Vec<&[f64]> = vec![&g1, &g2, &g3];
         let res = bartlett(&groups);
         // Identical groups should have statistic = 0 and pvalue = 1
-        assert!(res.statistic.abs() < 1e-10 || res.statistic.is_nan(), "bartlett identical groups stat~0, got {}", res.statistic);
+        assert!(
+            res.statistic.abs() < 1e-10 || res.statistic.is_nan(),
+            "bartlett identical groups stat~0, got {}",
+            res.statistic
+        );
 
         // Groups with different variances should give higher statistic
         let narrow = vec![4.9, 5.0, 5.1, 5.0, 5.05];
         let wide = vec![0.0, 2.5, 5.0, 7.5, 10.0];
         let diff_groups: Vec<&[f64]> = vec![&narrow, &wide];
         let res2 = bartlett(&diff_groups);
-        assert!(res2.statistic > 1.0, "bartlett with different variances should have high stat, got {}", res2.statistic);
-        assert!(res2.pvalue < 0.5, "bartlett with different variances should have low pvalue, got {}", res2.pvalue);
+        assert!(
+            res2.statistic > 1.0,
+            "bartlett with different variances should have high stat, got {}",
+            res2.statistic
+        );
+        assert!(
+            res2.pvalue < 0.5,
+            "bartlett with different variances should have low pvalue, got {}",
+            res2.pvalue
+        );
     }
 
     #[test]
@@ -52651,15 +52786,25 @@ mod tests {
         let groups: Vec<&[f64]> = vec![&g1, &g2];
         let res = fligner(&groups);
         // Identical groups should have statistic near 0 and high pvalue
-        assert!(res.statistic >= 0.0, "fligner statistic should be non-negative");
-        assert!(res.pvalue >= 0.5, "fligner identical groups should have high pvalue, got {}", res.pvalue);
+        assert!(
+            res.statistic >= 0.0,
+            "fligner statistic should be non-negative"
+        );
+        assert!(
+            res.pvalue >= 0.5,
+            "fligner identical groups should have high pvalue, got {}",
+            res.pvalue
+        );
 
         // Groups with different variances should give higher statistic
         let narrow = vec![4.9, 5.0, 5.1, 5.0, 5.05];
         let wide = vec![0.0, 2.5, 5.0, 7.5, 10.0];
         let diff_groups: Vec<&[f64]> = vec![&narrow, &wide];
         let res2 = fligner(&diff_groups);
-        assert!(res2.pvalue < res.pvalue, "fligner with different variances should have lower pvalue");
+        assert!(
+            res2.pvalue < res.pvalue,
+            "fligner with different variances should have lower pvalue"
+        );
     }
 
     #[test]
@@ -52821,19 +52966,33 @@ mod tests {
         let x = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let y = vec![5.0, 6.0, 7.0, 8.0, 7.0];
         let res = spearmanr(&x, &y);
-        assert!((res.statistic - 0.8207826816681233).abs() < 1e-10, "spearmanr correlation, got {}", res.statistic);
-        assert!((res.pvalue - 0.08858700531354381).abs() < 1e-10, "spearmanr pvalue, got {}", res.pvalue);
+        assert!(
+            (res.statistic - 0.8207826816681233).abs() < 1e-10,
+            "spearmanr correlation, got {}",
+            res.statistic
+        );
+        assert!(
+            (res.pvalue - 0.08858700531354381).abs() < 1e-10,
+            "spearmanr pvalue, got {}",
+            res.pvalue
+        );
 
         // Perfect monotonic: scipy.stats.spearmanr([1,2,3,4,5], [2,4,6,8,10]) = (1.0, 0.0)
         let y2 = vec![2.0, 4.0, 6.0, 8.0, 10.0];
         let res2 = spearmanr(&x, &y2);
-        assert!((res2.statistic - 1.0).abs() < 1e-10, "perfect spearmanr correlation");
+        assert!(
+            (res2.statistic - 1.0).abs() < 1e-10,
+            "perfect spearmanr correlation"
+        );
         assert!(res2.pvalue < 1e-10, "perfect spearmanr pvalue should be ~0");
 
         // Anti-monotonic: scipy.stats.spearmanr([1,2,3,4,5], [5,4,3,2,1]) = (-1.0, 0.0)
         let y3 = vec![5.0, 4.0, 3.0, 2.0, 1.0];
         let res3 = spearmanr(&x, &y3);
-        assert!((res3.statistic - (-1.0)).abs() < 1e-10, "anti-monotonic spearmanr correlation");
+        assert!(
+            (res3.statistic - (-1.0)).abs() < 1e-10,
+            "anti-monotonic spearmanr correlation"
+        );
     }
 
     #[test]
@@ -52843,19 +53002,33 @@ mod tests {
         let x = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let y = vec![5.0, 6.0, 7.0, 8.0, 7.0];
         let res = kendalltau(&x, &y);
-        assert!((res.statistic - 0.7378647873726218).abs() < 1e-9, "kendalltau statistic, got {}", res.statistic);
+        assert!(
+            (res.statistic - 0.7378647873726218).abs() < 1e-9,
+            "kendalltau statistic, got {}",
+            res.statistic
+        );
         // pvalue should be in same ballpark (both indicate non-significance at 0.05)
-        assert!(res.pvalue > 0.05 && res.pvalue < 0.15, "kendalltau pvalue should be ~0.07, got {}", res.pvalue);
+        assert!(
+            res.pvalue > 0.05 && res.pvalue < 0.15,
+            "kendalltau pvalue should be ~0.07, got {}",
+            res.pvalue
+        );
 
         // Perfect concordant: scipy.stats.kendalltau([1,2,3,4,5], [2,4,6,8,10]) = (1.0, 0.016666666...)
         let y2 = vec![2.0, 4.0, 6.0, 8.0, 10.0];
         let res2 = kendalltau(&x, &y2);
-        assert!((res2.statistic - 1.0).abs() < 1e-10, "perfect kendalltau correlation");
+        assert!(
+            (res2.statistic - 1.0).abs() < 1e-10,
+            "perfect kendalltau correlation"
+        );
 
         // Perfect discordant: scipy.stats.kendalltau([1,2,3,4,5], [5,4,3,2,1]) = (-1.0, 0.016666666...)
         let y3 = vec![5.0, 4.0, 3.0, 2.0, 1.0];
         let res3 = kendalltau(&x, &y3);
-        assert!((res3.statistic - (-1.0)).abs() < 1e-10, "anti-concordant kendalltau correlation");
+        assert!(
+            (res3.statistic - (-1.0)).abs() < 1e-10,
+            "anti-concordant kendalltau correlation"
+        );
     }
 
     #[test]
@@ -52866,15 +53039,26 @@ mod tests {
         let y = vec![4.0, 5.0, 6.0];
         let res = mannwhitneyu(&x, &y);
         // Statistic should be 0 or 9 depending on which U is returned (U or n1*n2 - U)
-        assert!(res.statistic == 0.0 || res.statistic == 9.0, "mannwhitneyu statistic for disjoint sets, got {}", res.statistic);
+        assert!(
+            res.statistic == 0.0 || res.statistic == 9.0,
+            "mannwhitneyu statistic for disjoint sets, got {}",
+            res.statistic
+        );
         // pvalue should indicate significance (though exact value depends on method)
-        assert!(res.pvalue >= 0.0 && res.pvalue <= 1.0, "mannwhitneyu pvalue in valid range");
+        assert!(
+            res.pvalue >= 0.0 && res.pvalue <= 1.0,
+            "mannwhitneyu pvalue in valid range"
+        );
 
         // With overlapping data, statistic should be in middle range
         let x2 = vec![1.0, 2.0, 3.0, 4.0];
         let y2 = vec![3.0, 4.0, 5.0, 6.0];
         let res2 = mannwhitneyu(&x2, &y2);
-        assert!(res2.statistic >= 0.0 && res2.statistic <= 16.0, "mannwhitneyu overlapping in valid range, got {}", res2.statistic);
+        assert!(
+            res2.statistic >= 0.0 && res2.statistic <= 16.0,
+            "mannwhitneyu overlapping in valid range, got {}",
+            res2.statistic
+        );
     }
 
     #[test]
@@ -52883,12 +53067,20 @@ mod tests {
         let x = vec![1.0, 2.0, 3.0, 4.0];
         let y = vec![2.0, 3.0, 4.0, 5.0];
         let res = wilcoxon(&x, &y);
-        assert!(res.statistic >= 0.0 && res.statistic <= 10.0, "wilcoxon statistic in valid range, got {}", res.statistic);
+        assert!(
+            res.statistic >= 0.0 && res.statistic <= 10.0,
+            "wilcoxon statistic in valid range, got {}",
+            res.statistic
+        );
 
         // scipy.stats.wilcoxon([1,2,3,4,5], [1,2,3,4,5]) should give NaN or high pvalue (identical samples)
         let same = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let res2 = wilcoxon(&same, &same);
-        assert!(res2.pvalue.is_nan() || res2.pvalue >= 0.9, "wilcoxon identical should have high pvalue or NaN, got {}", res2.pvalue);
+        assert!(
+            res2.pvalue.is_nan() || res2.pvalue >= 0.9,
+            "wilcoxon identical should have high pvalue or NaN, got {}",
+            res2.pvalue
+        );
     }
 
     #[test]
@@ -52899,13 +53091,24 @@ mod tests {
         let g3 = vec![7.0, 8.0, 9.0];
         let groups: Vec<&[f64]> = vec![&g1, &g2, &g3];
         let res = kruskal(&groups);
-        assert!((res.statistic - 7.2).abs() < 1e-10, "kruskal statistic, got {}", res.statistic);
-        assert!((res.pvalue - 0.02732).abs() < 1e-4, "kruskal pvalue ~0.0273, got {}", res.pvalue);
+        assert!(
+            (res.statistic - 7.2).abs() < 1e-10,
+            "kruskal statistic, got {}",
+            res.statistic
+        );
+        assert!(
+            (res.pvalue - 0.02732).abs() < 1e-4,
+            "kruskal pvalue ~0.0273, got {}",
+            res.pvalue
+        );
 
         // Same groups should give statistic near 0
         let same_groups: Vec<&[f64]> = vec![&g1, &g1, &g1];
         let res2 = kruskal(&same_groups);
-        assert!(res2.statistic.abs() < 1e-10, "kruskal identical groups should have statistic ~0");
+        assert!(
+            res2.statistic.abs() < 1e-10,
+            "kruskal identical groups should have statistic ~0"
+        );
     }
 
     #[test]
@@ -52914,8 +53117,16 @@ mod tests {
         let x = vec![1.0, 2.0, 3.0];
         let y = vec![4.0, 5.0, 6.0];
         let res = ranksums(&x, &y);
-        assert!((res.statistic - (-1.9639610121239313)).abs() < 1e-9, "ranksums statistic, got {}", res.statistic);
-        assert!((res.pvalue - 0.049534958f64).abs() < 0.01, "ranksums pvalue ~0.05, got {}", res.pvalue);
+        assert!(
+            (res.statistic - (-1.9639610121239313)).abs() < 1e-9,
+            "ranksums statistic, got {}",
+            res.statistic
+        );
+        assert!(
+            (res.pvalue - 0.049534958f64).abs() < 0.01,
+            "ranksums pvalue ~0.05, got {}",
+            res.pvalue
+        );
     }
 
     #[test]
@@ -56032,14 +56243,22 @@ mod tests {
     #[test]
     fn test_logsumexp_single() {
         let result = logsumexp(&[5.0]);
-        assert!((result - 5.0).abs() < 1e-10, "logsumexp of single element should be that element, got {}", result);
+        assert!(
+            (result - 5.0).abs() < 1e-10,
+            "logsumexp of single element should be that element, got {}",
+            result
+        );
     }
 
     #[test]
     fn test_logsumexp_zeros() {
         let result = logsumexp(&[0.0, 0.0, 0.0]);
         let expected = (3.0f64).ln();
-        assert!((result - expected).abs() < 1e-10, "logsumexp([0,0,0]) should be ln(3), got {}", result);
+        assert!(
+            (result - expected).abs() < 1e-10,
+            "logsumexp([0,0,0]) should be ln(3), got {}",
+            result
+        );
     }
 
     #[test]
@@ -56048,26 +56267,41 @@ mod tests {
         let b = vec![1.0, 1.0, 1.0];
         let result = logsumexp_weighted(&a, &b);
         let expected = logsumexp(&a);
-        assert!((result - expected).abs() < 1e-10, "logsumexp_weighted with uniform weights should match logsumexp");
+        assert!(
+            (result - expected).abs() < 1e-10,
+            "logsumexp_weighted with uniform weights should match logsumexp"
+        );
     }
 
     #[test]
     fn test_logit_half() {
         let result = logit(0.5);
-        assert!(result.abs() < 1e-10, "logit(0.5) should be 0, got {}", result);
+        assert!(
+            result.abs() < 1e-10,
+            "logit(0.5) should be 0, got {}",
+            result
+        );
     }
 
     #[test]
     fn test_expit_zero() {
         let result = expit(0.0);
-        assert!((result - 0.5).abs() < 1e-10, "expit(0) should be 0.5, got {}", result);
+        assert!(
+            (result - 0.5).abs() < 1e-10,
+            "expit(0) should be 0.5, got {}",
+            result
+        );
     }
 
     #[test]
     fn test_logit_expit_inverse() {
         let p = 0.7;
         let result = expit(logit(p));
-        assert!((result - p).abs() < 1e-10, "expit(logit(p)) should be p, got {}", result);
+        assert!(
+            (result - p).abs() < 1e-10,
+            "expit(logit(p)) should be p, got {}",
+            result
+        );
     }
 
     #[test]
@@ -56075,7 +56309,11 @@ mod tests {
         let x = vec![1.0, 2.0, 3.0];
         let s = softmax(&x);
         let sum: f64 = s.iter().sum();
-        assert!((sum - 1.0).abs() < 1e-10, "softmax should sum to 1, got {}", sum);
+        assert!(
+            (sum - 1.0).abs() < 1e-10,
+            "softmax should sum to 1, got {}",
+            sum
+        );
     }
 
     #[test]
@@ -56083,7 +56321,11 @@ mod tests {
         let x = vec![1.0, 2.0, 3.0];
         let ls = log_softmax(&x);
         let sum: f64 = ls.iter().map(|&v| v.exp()).sum();
-        assert!((sum - 1.0).abs() < 1e-10, "exp(log_softmax) should sum to 1, got {}", sum);
+        assert!(
+            (sum - 1.0).abs() < 1e-10,
+            "exp(log_softmax) should sum to 1, got {}",
+            sum
+        );
     }
 
     #[test]
@@ -56098,9 +56340,18 @@ mod tests {
         // With large values (numerical stability test)
         let x2 = vec![1000.0, 1001.0, 1002.0];
         let s2 = softmax(&x2);
-        assert!((s2[0] - 0.09003057317038046).abs() < 1e-10, "softmax with large values [0]");
-        assert!((s2[1] - 0.24472847105479767).abs() < 1e-10, "softmax with large values [1]");
-        assert!((s2[2] - 0.6652409557748219).abs() < 1e-10, "softmax with large values [2]");
+        assert!(
+            (s2[0] - 0.09003057317038046).abs() < 1e-10,
+            "softmax with large values [0]"
+        );
+        assert!(
+            (s2[1] - 0.24472847105479767).abs() < 1e-10,
+            "softmax with large values [1]"
+        );
+        assert!(
+            (s2[2] - 0.6652409557748219).abs() < 1e-10,
+            "softmax with large values [2]"
+        );
     }
 
     #[test]
@@ -56108,14 +56359,23 @@ mod tests {
         // scipy.special.log_softmax([1, 2, 3]) = [-2.40760596, -1.40760596, -0.40760596]
         let x = vec![1.0, 2.0, 3.0];
         let ls = log_softmax(&x);
-        assert!((ls[0] - (-2.4076059644443806)).abs() < 1e-10, "log_softmax[0]");
-        assert!((ls[1] - (-1.4076059644443806)).abs() < 1e-10, "log_softmax[1]");
-        assert!((ls[2] - (-0.40760596444438063)).abs() < 1e-10, "log_softmax[2]");
+        assert!(
+            (ls[0] - (-2.4076059644443806)).abs() < 1e-10,
+            "log_softmax[0]"
+        );
+        assert!(
+            (ls[1] - (-1.4076059644443806)).abs() < 1e-10,
+            "log_softmax[1]"
+        );
+        assert!(
+            (ls[2] - (-0.40760596444438063)).abs() < 1e-10,
+            "log_softmax[2]"
+        );
 
         // log_softmax(x) = x - logsumexp(x), so each element differs from max by log ratio
         let x2 = vec![0.0, 0.0, 0.0];
         let ls2 = log_softmax(&x2);
-        let expected = -(3.0f64).ln();  // log(1/3) for uniform
+        let expected = -(3.0f64).ln(); // log(1/3) for uniform
         assert!((ls2[0] - expected).abs() < 1e-10, "uniform log_softmax");
         assert!((ls2[1] - expected).abs() < 1e-10, "uniform log_softmax");
         assert!((ls2[2] - expected).abs() < 1e-10, "uniform log_softmax");
@@ -56124,31 +56384,51 @@ mod tests {
     #[test]
     fn test_xlogy_zero_x() {
         let result = xlogy(0.0, 5.0);
-        assert!((result - 0.0).abs() < 1e-10, "xlogy(0, y) should be 0, got {}", result);
+        assert!(
+            (result - 0.0).abs() < 1e-10,
+            "xlogy(0, y) should be 0, got {}",
+            result
+        );
     }
 
     #[test]
     fn test_xlogy_normal() {
         let result = xlogy(2.0, std::f64::consts::E);
-        assert!((result - 2.0).abs() < 1e-10, "xlogy(2, e) should be 2, got {}", result);
+        assert!(
+            (result - 2.0).abs() < 1e-10,
+            "xlogy(2, e) should be 2, got {}",
+            result
+        );
     }
 
     #[test]
     fn test_xlog1py_zero_x() {
         let result = xlog1py(0.0, 5.0);
-        assert!((result - 0.0).abs() < 1e-10, "xlog1py(0, y) should be 0, got {}", result);
+        assert!(
+            (result - 0.0).abs() < 1e-10,
+            "xlog1py(0, y) should be 0, got {}",
+            result
+        );
     }
 
     #[test]
     fn test_rel_entr_zero_x() {
         let result = rel_entr(0.0, 1.0);
-        assert!((result - 0.0).abs() < 1e-10, "rel_entr(0, y) should be 0, got {}", result);
+        assert!(
+            (result - 0.0).abs() < 1e-10,
+            "rel_entr(0, y) should be 0, got {}",
+            result
+        );
     }
 
     #[test]
     fn test_rel_entr_zero_y() {
         let result = rel_entr(1.0, 0.0);
-        assert!(result.is_infinite() && result > 0.0, "rel_entr(x>0, 0) should be inf, got {}", result);
+        assert!(
+            result.is_infinite() && result > 0.0,
+            "rel_entr(x>0, 0) should be inf, got {}",
+            result
+        );
     }
 
     #[test]
@@ -56156,7 +56436,11 @@ mod tests {
         let u = vec![1.0, 2.0, 3.0];
         let v = vec![1.0, 2.0, 3.0];
         let d = hausdorff_1d(&u, &v);
-        assert!(d.abs() < 1e-10, "Hausdorff distance of identical point sets should be 0, got {}", d);
+        assert!(
+            d.abs() < 1e-10,
+            "Hausdorff distance of identical point sets should be 0, got {}",
+            d
+        );
     }
 
     #[test]
@@ -56164,7 +56448,11 @@ mod tests {
         let u = vec![0.0, 1.0, 2.0];
         let v = vec![1.0, 2.0, 3.0];
         let d = hausdorff_1d(&u, &v);
-        assert!((d - 1.0).abs() < 1e-10, "Hausdorff of shifted sets should be 1, got {}", d);
+        assert!(
+            (d - 1.0).abs() < 1e-10,
+            "Hausdorff of shifted sets should be 1, got {}",
+            d
+        );
     }
 
     #[test]
@@ -56181,7 +56469,11 @@ mod tests {
         let u = vec![1.0, 1.0, 0.0, 0.0];
         let v = vec![1.0, 1.0, 0.0, 0.0];
         let d = sokalsneath_distance(&u, &v);
-        assert!(d.abs() < 1e-10, "Sokal-Sneath distance of identical vectors should be 0, got {}", d);
+        assert!(
+            d.abs() < 1e-10,
+            "Sokal-Sneath distance of identical vectors should be 0, got {}",
+            d
+        );
     }
 
     #[test]
@@ -56189,7 +56481,11 @@ mod tests {
         let u = vec![1.0, 1.0, 1.0, 1.0];
         let v = vec![1.0, 1.0, 1.0, 1.0];
         let d = kulsinski_distance(&u, &v);
-        assert!(d >= 0.0 && d <= 1.0, "Kulsinski distance should be in [0,1], got {}", d);
+        assert!(
+            d >= 0.0 && d <= 1.0,
+            "Kulsinski distance should be in [0,1], got {}",
+            d
+        );
     }
 
     #[test]
@@ -56197,7 +56493,11 @@ mod tests {
         let u = vec![1.0, 0.0, 1.0, 0.0];
         let v = vec![1.0, 0.0, 1.0, 0.0];
         let d = matching_distance(&u, &v);
-        assert!(d.abs() < 1e-10, "Matching distance of identical vectors should be 0, got {}", d);
+        assert!(
+            d.abs() < 1e-10,
+            "Matching distance of identical vectors should be 0, got {}",
+            d
+        );
     }
 
     #[test]
@@ -56205,7 +56505,11 @@ mod tests {
         let u = vec![1.0, 1.0, 1.0, 1.0];
         let v = vec![1.0, 1.0, 1.0, 1.0];
         let d = russellrao_distance(&u, &v);
-        assert!(d.abs() < 1e-10, "Russell-Rao distance of all-positive identical vectors should be 0, got {}", d);
+        assert!(
+            d.abs() < 1e-10,
+            "Russell-Rao distance of all-positive identical vectors should be 0, got {}",
+            d
+        );
     }
 
     #[test]
@@ -56213,7 +56517,11 @@ mod tests {
         let u = vec![1.0, 0.0, 1.0, 0.0];
         let v = vec![1.0, 0.0, 1.0, 0.0];
         let d = rogerstanimoto_distance(&u, &v);
-        assert!(d.abs() < 1e-10, "Rogers-Tanimoto distance of identical vectors should be 0, got {}", d);
+        assert!(
+            d.abs() < 1e-10,
+            "Rogers-Tanimoto distance of identical vectors should be 0, got {}",
+            d
+        );
     }
 
     #[test]
@@ -56221,7 +56529,11 @@ mod tests {
         let u = vec![1.0, 0.0, 1.0, 0.0];
         let v = vec![1.0, 0.0, 1.0, 0.0];
         let d = yule_distance(&u, &v);
-        assert!(d.abs() < 1e-10, "Yule distance of identical vectors should be 0, got {}", d);
+        assert!(
+            d.abs() < 1e-10,
+            "Yule distance of identical vectors should be 0, got {}",
+            d
+        );
     }
 
     #[test]
@@ -56229,7 +56541,11 @@ mod tests {
         let u = vec![1.0, 0.0, 1.0, 0.0];
         let v = vec![1.0, 0.0, 1.0, 0.0];
         let d = sokalmichener_distance(&u, &v);
-        assert!(d.abs() < 1e-10, "Sokal-Michener distance of identical vectors should be 0, got {}", d);
+        assert!(
+            d.abs() < 1e-10,
+            "Sokal-Michener distance of identical vectors should be 0, got {}",
+            d
+        );
     }
 
     #[test]
@@ -56237,7 +56553,11 @@ mod tests {
         let u = vec![1.0, 1.0, 0.0, 0.0];
         let v = vec![0.0, 0.0, 1.0, 1.0];
         let d = sokalmichener_distance(&u, &v);
-        assert!(d >= 0.0 && d <= 1.0, "Sokal-Michener should be in [0,1], got {}", d);
+        assert!(
+            d >= 0.0 && d <= 1.0,
+            "Sokal-Michener should be in [0,1], got {}",
+            d
+        );
     }
 
     #[test]
@@ -56245,7 +56565,11 @@ mod tests {
         let u = vec![1.0, 2.0, 3.0, 4.0];
         let v = vec![1.0, 2.0, 3.0, 4.0];
         let d = correlation_distance(&u, &v);
-        assert!(d.abs() < 1e-10, "Correlation distance of identical vectors should be 0, got {}", d);
+        assert!(
+            d.abs() < 1e-10,
+            "Correlation distance of identical vectors should be 0, got {}",
+            d
+        );
     }
 
     #[test]
@@ -56253,7 +56577,11 @@ mod tests {
         let u = vec![1.0, 2.0, 3.0, 4.0];
         let v = vec![4.0, 3.0, 2.0, 1.0];
         let d = correlation_distance(&u, &v);
-        assert!((d - 2.0).abs() < 1e-10, "Perfectly anticorrelated should have distance 2, got {}", d);
+        assert!(
+            (d - 2.0).abs() < 1e-10,
+            "Perfectly anticorrelated should have distance 2, got {}",
+            d
+        );
     }
 
     #[test]
@@ -56261,7 +56589,11 @@ mod tests {
         let u = vec![1.0, 0.0, 1.0, 0.0];
         let v = vec![1.0, 0.0, 1.0, 0.0];
         let d = dice_distance(&u, &v);
-        assert!(d.abs() < 1e-10, "Dice distance of identical vectors should be 0, got {}", d);
+        assert!(
+            d.abs() < 1e-10,
+            "Dice distance of identical vectors should be 0, got {}",
+            d
+        );
     }
 
     #[test]
@@ -56269,21 +56601,33 @@ mod tests {
         let u = vec![1.0, 0.0, 0.0];
         let v = vec![0.0, 1.0, 0.0];
         let d = dice_distance(&u, &v);
-        assert!((d - 1.0).abs() < 1e-10, "Dice distance of disjoint sets should be 1, got {}", d);
+        assert!(
+            (d - 1.0).abs() < 1e-10,
+            "Dice distance of disjoint sets should be 1, got {}",
+            d
+        );
     }
 
     #[test]
     fn test_adjusted_rand_index_single_cluster() {
         let labels = vec![0.0, 0.0, 0.0, 0.0];
         let ari = adjusted_rand_index(&labels, &labels);
-        assert!((ari - 1.0).abs() < 1e-10, "ARI of identical single-cluster labels should be 1.0, got {}", ari);
+        assert!(
+            (ari - 1.0).abs() < 1e-10,
+            "ARI of identical single-cluster labels should be 1.0, got {}",
+            ari
+        );
     }
 
     #[test]
     fn test_rand_index_single_element() {
         let labels = vec![0.0];
         let ri = rand_index(&labels, &labels);
-        assert!((ri - 1.0).abs() < 1e-10, "RI of single element should be 1.0, got {}", ri);
+        assert!(
+            (ri - 1.0).abs() < 1e-10,
+            "RI of single element should be 1.0, got {}",
+            ri
+        );
     }
 
     #[test]
@@ -56291,7 +56635,11 @@ mod tests {
         let data = vec![1.0, 2.0, 3.0, 4.0];
         let labels = vec![0.0, 0.0, 0.0, 0.0];
         let s = silhouette_score_1d(&data, &labels);
-        assert!((s - 0.0).abs() < 1e-10, "Silhouette of single cluster should be 0, got {}", s);
+        assert!(
+            (s - 0.0).abs() < 1e-10,
+            "Silhouette of single cluster should be 0, got {}",
+            s
+        );
     }
 
     #[test]
@@ -56299,7 +56647,11 @@ mod tests {
         let y_true = vec![0.0, 0.0, 1.0, 1.0];
         let y_pred = vec![0.0, 0.0, 1.0, 1.0];
         let ece = expected_calibration_error(&y_true, &y_pred, 10);
-        assert!(ece < 1e-10, "ECE of perfectly calibrated predictions should be 0, got {}", ece);
+        assert!(
+            ece < 1e-10,
+            "ECE of perfectly calibrated predictions should be 0, got {}",
+            ece
+        );
     }
 
     #[test]
@@ -56307,7 +56659,11 @@ mod tests {
         let y_true = vec![0.0, 0.0, 1.0, 1.0];
         let y_pred = vec![0.0, 0.0, 1.0, 1.0];
         let mce = max_calibration_error(&y_true, &y_pred, 10);
-        assert!(mce < 1e-10, "MCE of perfectly calibrated predictions should be 0, got {}", mce);
+        assert!(
+            mce < 1e-10,
+            "MCE of perfectly calibrated predictions should be 0, got {}",
+            mce
+        );
     }
 
     #[test]
@@ -56315,7 +56671,11 @@ mod tests {
         let y_true = vec![0.0, 0.0, 1.0, 1.0];
         let y_pred = vec![0.1, 0.2, 0.8, 0.9];
         let ece = expected_calibration_error(&y_true, &y_pred, 5);
-        assert!(ece >= 0.0 && ece <= 1.0, "ECE should be in [0,1], got {}", ece);
+        assert!(
+            ece >= 0.0 && ece <= 1.0,
+            "ECE should be in [0,1], got {}",
+            ece
+        );
     }
 
     #[test]
@@ -56323,15 +56683,25 @@ mod tests {
         let data = vec![1.0, 1.0, 1.0, 1.0];
         let (pop, cum) = lorenz_curve(&data);
         assert_eq!(pop.len(), 5, "Lorenz curve should have n+1 points");
-        assert!((cum[4] - 1.0).abs() < 1e-10, "Final cumulative proportion should be 1.0");
-        assert!((pop[4] - 1.0).abs() < 1e-10, "Final population proportion should be 1.0");
+        assert!(
+            (cum[4] - 1.0).abs() < 1e-10,
+            "Final cumulative proportion should be 1.0"
+        );
+        assert!(
+            (pop[4] - 1.0).abs() < 1e-10,
+            "Final population proportion should be 1.0"
+        );
     }
 
     #[test]
     fn test_hoover_index_equal() {
         let data = vec![10.0, 10.0, 10.0, 10.0];
         let h = hoover_index(&data);
-        assert!(h.abs() < 1e-10, "Hoover index of equal distribution should be 0, got {}", h);
+        assert!(
+            h.abs() < 1e-10,
+            "Hoover index of equal distribution should be 0, got {}",
+            h
+        );
     }
 
     #[test]
@@ -56339,7 +56709,11 @@ mod tests {
         let y_true = vec![1.0, 1.0, 0.0, 0.0];
         let y_pred = vec![1.0, 1.0, 0.0, 0.0];
         let p = precision_score(&y_true, &y_pred);
-        assert!((p - 1.0).abs() < 1e-10, "Precision of perfect predictions should be 1.0, got {}", p);
+        assert!(
+            (p - 1.0).abs() < 1e-10,
+            "Precision of perfect predictions should be 1.0, got {}",
+            p
+        );
     }
 
     #[test]
@@ -56347,7 +56721,11 @@ mod tests {
         let y_true = vec![1.0, 1.0, 0.0, 0.0];
         let y_pred = vec![1.0, 1.0, 0.0, 0.0];
         let r = recall_score(&y_true, &y_pred);
-        assert!((r - 1.0).abs() < 1e-10, "Recall of perfect predictions should be 1.0, got {}", r);
+        assert!(
+            (r - 1.0).abs() < 1e-10,
+            "Recall of perfect predictions should be 1.0, got {}",
+            r
+        );
     }
 
     #[test]
@@ -56355,7 +56733,11 @@ mod tests {
         let y_true = vec![1.0, 1.0, 0.0, 0.0];
         let y_pred = vec![1.0, 1.0, 0.0, 0.0];
         let f1 = f1_score(&y_true, &y_pred);
-        assert!((f1 - 1.0).abs() < 1e-10, "F1 of perfect predictions should be 1.0, got {}", f1);
+        assert!(
+            (f1 - 1.0).abs() < 1e-10,
+            "F1 of perfect predictions should be 1.0, got {}",
+            f1
+        );
     }
 
     #[test]
@@ -56363,7 +56745,11 @@ mod tests {
         let y_true = vec![1.0, 1.0, 0.0, 0.0];
         let y_pred = vec![1.0, 1.0, 0.0, 0.0];
         let mcc = matthews_corrcoef(&y_true, &y_pred);
-        assert!((mcc - 1.0).abs() < 1e-10, "MCC of perfect predictions should be 1.0, got {}", mcc);
+        assert!(
+            (mcc - 1.0).abs() < 1e-10,
+            "MCC of perfect predictions should be 1.0, got {}",
+            mcc
+        );
     }
 
     #[test]
@@ -56371,7 +56757,11 @@ mod tests {
         let y_true = vec![1.0, 0.0, 1.0, 0.0];
         let y_pred = vec![1.0, 0.0, 1.0, 0.0];
         let acc = accuracy_score(&y_true, &y_pred);
-        assert!((acc - 1.0).abs() < 1e-10, "Accuracy of perfect predictions should be 1.0, got {}", acc);
+        assert!(
+            (acc - 1.0).abs() < 1e-10,
+            "Accuracy of perfect predictions should be 1.0, got {}",
+            acc
+        );
     }
 
     #[test]
@@ -56379,7 +56769,11 @@ mod tests {
         let y_true = vec![0.0, 0.0, 1.0, 1.0];
         let y_pred = vec![0.0, 0.0, 1.0, 1.0];
         let spec = specificity_score(&y_true, &y_pred);
-        assert!((spec - 1.0).abs() < 1e-10, "Specificity of perfect predictions should be 1.0, got {}", spec);
+        assert!(
+            (spec - 1.0).abs() < 1e-10,
+            "Specificity of perfect predictions should be 1.0, got {}",
+            spec
+        );
     }
 
     #[test]
@@ -56387,7 +56781,11 @@ mod tests {
         let y_true = vec![1.0, 1.0, 0.0, 0.0];
         let y_pred = vec![1.0, 1.0, 0.0, 0.0];
         let ba = balanced_accuracy_score(&y_true, &y_pred);
-        assert!((ba - 1.0).abs() < 1e-10, "Balanced accuracy of perfect predictions should be 1.0, got {}", ba);
+        assert!(
+            (ba - 1.0).abs() < 1e-10,
+            "Balanced accuracy of perfect predictions should be 1.0, got {}",
+            ba
+        );
     }
 
     #[test]
@@ -56408,7 +56806,11 @@ mod tests {
     fn test_find_valleys_basic() {
         let data = vec![1.0, 0.0, 1.0, 0.0, 1.0];
         let valleys = find_valleys(&data);
-        assert_eq!(valleys, vec![1, 3], "Should find valleys at indices 1 and 3");
+        assert_eq!(
+            valleys,
+            vec![1, 3],
+            "Should find valleys at indices 1 and 3"
+        );
     }
 
     #[test]
@@ -56426,7 +56828,11 @@ mod tests {
         let a = vec![0.0, 1.0, 0.0];
         let v = vec![1.0];
         let result = correlate_1d(&a, &v);
-        assert_eq!(result, vec![0.0, 1.0, 0.0], "Correlation with delta should return input");
+        assert_eq!(
+            result,
+            vec![0.0, 1.0, 0.0],
+            "Correlation with delta should return input"
+        );
     }
 
     #[test]
@@ -56434,14 +56840,22 @@ mod tests {
         let a = vec![1.0, 2.0, 1.0];
         let v = vec![1.0, 1.0];
         let result = convolve_1d(&a, &v);
-        assert_eq!(result.len(), 4, "Convolution result length should be n + m - 1");
+        assert_eq!(
+            result.len(),
+            4,
+            "Convolution result length should be n + m - 1"
+        );
     }
 
     #[test]
     fn test_gini_coefficient_perfect_equality() {
         let data = vec![100.0, 100.0, 100.0, 100.0];
         let g = gini_coefficient(&data);
-        assert!(g.abs() < 1e-10, "Gini of equal distribution should be 0, got {}", g);
+        assert!(
+            g.abs() < 1e-10,
+            "Gini of equal distribution should be 0, got {}",
+            g
+        );
     }
 
     #[test]
@@ -56449,28 +56863,44 @@ mod tests {
         let data = vec![0.0, 0.0, 0.0, 100.0];
         let g = gini_coefficient(&data);
         assert!(g >= 0.0 && g <= 1.0, "Gini should be in [0,1], got {}", g);
-        assert!(g > 0.7, "Highly unequal distribution should have high Gini, got {}", g);
+        assert!(
+            g > 0.7,
+            "Highly unequal distribution should have high Gini, got {}",
+            g
+        );
     }
 
     #[test]
     fn test_theil_t_index_equal() {
         let data = vec![10.0, 10.0, 10.0, 10.0];
         let t = theil_t_index(&data);
-        assert!(t.abs() < 1e-10, "Theil T of equal distribution should be 0, got {}", t);
+        assert!(
+            t.abs() < 1e-10,
+            "Theil T of equal distribution should be 0, got {}",
+            t
+        );
     }
 
     #[test]
     fn test_theil_l_index_equal() {
         let data = vec![10.0, 10.0, 10.0, 10.0];
         let t = theil_l_index(&data);
-        assert!(t.abs() < 1e-10, "Theil L of equal distribution should be 0, got {}", t);
+        assert!(
+            t.abs() < 1e-10,
+            "Theil L of equal distribution should be 0, got {}",
+            t
+        );
     }
 
     #[test]
     fn test_geometric_mean_squares() {
         let data = vec![4.0, 16.0];
         let g = geometric_mean(&data);
-        assert!((g - 8.0).abs() < 1e-10, "Geometric mean of [4, 16] should be 8, got {}", g);
+        assert!(
+            (g - 8.0).abs() < 1e-10,
+            "Geometric mean of [4, 16] should be 8, got {}",
+            g
+        );
     }
 
     #[test]
@@ -56478,7 +56908,12 @@ mod tests {
         let data = vec![2.0, 4.0];
         let h = harmonic_mean(&data);
         let expected = 2.0 / (0.5 + 0.25);
-        assert!((h - expected).abs() < 1e-10, "Harmonic mean of [2, 4] should be {}, got {}", expected, h);
+        assert!(
+            (h - expected).abs() < 1e-10,
+            "Harmonic mean of [2, 4] should be {}, got {}",
+            expected,
+            h
+        );
     }
 
     #[test]
@@ -56486,7 +56921,11 @@ mod tests {
         let data = vec![1.0, 2.0, 3.0];
         let m = power_mean(&data, 1.0);
         let expected = 2.0;
-        assert!((m - expected).abs() < 1e-10, "Power mean with p=1 should be arithmetic mean, got {}", m);
+        assert!(
+            (m - expected).abs() < 1e-10,
+            "Power mean with p=1 should be arithmetic mean, got {}",
+            m
+        );
     }
 
     #[test]
@@ -56514,16 +56953,38 @@ mod tests {
         let x = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let y = vec![2.0, 4.0, 6.0, 8.0, 10.0];
         let res = linregress(&x, &y);
-        assert!((res.slope - 2.0).abs() < 1e-10, "linregress slope, got {}", res.slope);
-        assert!((res.intercept - 0.0).abs() < 1e-10, "linregress intercept, got {}", res.intercept);
-        assert!((res.rvalue - 1.0).abs() < 1e-10, "linregress rvalue, got {}", res.rvalue);
-        assert!(res.pvalue < 1e-5, "linregress pvalue should be very small, got {}", res.pvalue);
+        assert!(
+            (res.slope - 2.0).abs() < 1e-10,
+            "linregress slope, got {}",
+            res.slope
+        );
+        assert!(
+            (res.intercept - 0.0).abs() < 1e-10,
+            "linregress intercept, got {}",
+            res.intercept
+        );
+        assert!(
+            (res.rvalue - 1.0).abs() < 1e-10,
+            "linregress rvalue, got {}",
+            res.rvalue
+        );
+        assert!(
+            res.pvalue < 1e-5,
+            "linregress pvalue should be very small, got {}",
+            res.pvalue
+        );
 
         // With offset: y = 2x + 1
         let y2 = vec![3.0, 5.0, 7.0, 9.0, 11.0];
         let res2 = linregress(&x, &y2);
-        assert!((res2.slope - 2.0).abs() < 1e-10, "linregress with offset slope");
-        assert!((res2.intercept - 1.0).abs() < 1e-10, "linregress with offset intercept");
+        assert!(
+            (res2.slope - 2.0).abs() < 1e-10,
+            "linregress with offset slope"
+        );
+        assert!(
+            (res2.intercept - 1.0).abs() < 1e-10,
+            "linregress with offset intercept"
+        );
     }
 
     #[test]
@@ -56532,14 +56993,28 @@ mod tests {
         // Mean = 3.0, so t-statistic should be 0 and pvalue = 1
         let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let res = ttest_1samp(&data, 3.0);
-        assert!(res.statistic.abs() < 1e-10, "ttest_1samp t-stat when mean=popmean, got {}", res.statistic);
-        assert!((res.pvalue - 1.0).abs() < 1e-10, "ttest_1samp pvalue when mean=popmean, got {}", res.pvalue);
+        assert!(
+            res.statistic.abs() < 1e-10,
+            "ttest_1samp t-stat when mean=popmean, got {}",
+            res.statistic
+        );
+        assert!(
+            (res.pvalue - 1.0).abs() < 1e-10,
+            "ttest_1samp pvalue when mean=popmean, got {}",
+            res.pvalue
+        );
 
         // scipy.stats.ttest_1samp([1,2,3,4,5], 0.0)
         // Mean = 3.0, popmean = 0, so should reject null
         let res2 = ttest_1samp(&data, 0.0);
-        assert!(res2.statistic > 0.0, "ttest_1samp t-stat should be positive when mean > popmean");
-        assert!(res2.pvalue < 0.05, "ttest_1samp should reject H0 when true mean != popmean");
+        assert!(
+            res2.statistic > 0.0,
+            "ttest_1samp t-stat should be positive when mean > popmean"
+        );
+        assert!(
+            res2.pvalue < 0.05,
+            "ttest_1samp should reject H0 when true mean != popmean"
+        );
     }
 
     #[test]
@@ -56549,12 +57024,18 @@ mod tests {
         let a = vec![1.0, 2.0, 3.0];
         let b = vec![4.0, 5.0, 6.0];
         let res = ttest_ind(&a, &b);
-        assert!(res.statistic < 0.0, "ttest_ind t-stat should be negative when a < b");
+        assert!(
+            res.statistic < 0.0,
+            "ttest_ind t-stat should be negative when a < b"
+        );
         assert!(res.pvalue < 0.05, "ttest_ind should detect difference");
 
         // Same groups should give t-stat = 0
         let res2 = ttest_ind(&a, &a);
-        assert!(res2.statistic.abs() < 1e-10, "ttest_ind identical groups t-stat = 0");
+        assert!(
+            res2.statistic.abs() < 1e-10,
+            "ttest_ind identical groups t-stat = 0"
+        );
     }
 
     #[test]
@@ -56565,7 +57046,12 @@ mod tests {
         let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let s = sem(&data);
         let expected = (2.5f64).sqrt() / (5.0f64).sqrt();
-        assert!((s - expected).abs() < 1e-10, "sem, got {}, expected {}", s, expected);
+        assert!(
+            (s - expected).abs() < 1e-10,
+            "sem, got {}, expected {}",
+            s,
+            expected
+        );
     }
 
     #[test]
@@ -56579,7 +57065,11 @@ mod tests {
         let data2: Vec<f64> = (1..=10).map(|x| x as f64).collect();
         let i2 = iqr(&data2);
         // IQR for [1..10] depends on interpolation method
-        assert!(i2 > 4.0 && i2 < 6.0, "iqr for 1..10 should be ~5, got {}", i2);
+        assert!(
+            i2 > 4.0 && i2 < 6.0,
+            "iqr for 1..10 should be ~5, got {}",
+            i2
+        );
     }
 
     #[test]
@@ -56587,7 +57077,11 @@ mod tests {
         // scipy.stats.skew([1,2,3,4,5]) = 0 (symmetric)
         let symmetric = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let s1 = skew(&symmetric);
-        assert!(s1.abs() < 1e-10, "symmetric data should have skew ~0, got {}", s1);
+        assert!(
+            s1.abs() < 1e-10,
+            "symmetric data should have skew ~0, got {}",
+            s1
+        );
 
         // scipy.stats.kurtosis([1,2,3,4,5]) should be negative (platykurtic vs normal)
         let k1 = kurtosis(&symmetric);
@@ -56595,9 +57089,15 @@ mod tests {
         assert!(k1 < 0.5, "uniform-like data has low kurtosis");
 
         // Skewed data: [1,1,1,2,2,3,4,5,6,7,8,9,10] - right-skewed
-        let right_skewed = vec![1.0, 1.0, 1.0, 2.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let right_skewed = vec![
+            1.0, 1.0, 1.0, 2.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0,
+        ];
         let s2 = skew(&right_skewed);
-        assert!(s2 > 0.0, "right-skewed data should have positive skew, got {}", s2);
+        assert!(
+            s2 > 0.0,
+            "right-skewed data should have positive skew, got {}",
+            s2
+        );
     }
 
     #[test]
@@ -56615,7 +57115,11 @@ mod tests {
 
         // No trimming
         let tm0 = trim_mean(&data, 0.0);
-        assert!((tm0 - 5.5).abs() < 1e-10, "trim_mean 0% = regular mean, got {}", tm0);
+        assert!(
+            (tm0 - 5.5).abs() < 1e-10,
+            "trim_mean 0% = regular mean, got {}",
+            tm0
+        );
     }
 
     #[test]
@@ -56638,7 +57142,11 @@ mod tests {
         let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let m2 = moment(&data, 2);
         // Variance of [1,2,3,4,5] = 2.0 (population variance)
-        assert!((m2 - 2.0).abs() < 1e-10, "2nd moment (variance), got {}", m2);
+        assert!(
+            (m2 - 2.0).abs() < 1e-10,
+            "2nd moment (variance), got {}",
+            m2
+        );
 
         // scipy.stats.moment([1,2,3,4,5], moment=1) = 0 (1st central moment is always 0)
         let m1 = moment(&data, 1);
@@ -56646,7 +57154,11 @@ mod tests {
 
         // scipy.stats.moment([1,2,3,4,5], moment=0) = 1
         let m0 = moment(&data, 0);
-        assert!((m0 - 1.0).abs() < 1e-10, "0th moment should be 1, got {}", m0);
+        assert!(
+            (m0 - 1.0).abs() < 1e-10,
+            "0th moment should be 1, got {}",
+            m0
+        );
     }
 
     #[test]
@@ -56659,7 +57171,7 @@ mod tests {
 
         // scipy.stats.hmean([1,2,3,4,5]) = 5 / (1/1 + 1/2 + 1/3 + 1/4 + 1/5)
         let hm = hmean(&data);
-        let expected_hm = 5.0 / (1.0 + 0.5 + 1.0/3.0 + 0.25 + 0.2);
+        let expected_hm = 5.0 / (1.0 + 0.5 + 1.0 / 3.0 + 0.25 + 0.2);
         assert!((hm - expected_hm).abs() < 1e-10, "hmean, got {}", hm);
     }
 
@@ -56671,7 +57183,11 @@ mod tests {
 
         // Mean of z-scores should be 0
         let z_mean: f64 = z.iter().sum::<f64>() / z.len() as f64;
-        assert!(z_mean.abs() < 1e-10, "zscore mean should be 0, got {}", z_mean);
+        assert!(
+            z_mean.abs() < 1e-10,
+            "zscore mean should be 0, got {}",
+            z_mean
+        );
 
         // Middle element (3) is at the mean, so zscore = 0
         assert!(z[2].abs() < 1e-10, "zscore of mean element should be 0");
@@ -56735,9 +57251,15 @@ mod tests {
         assert!(cov[0][0] > 0.0, "variance should be positive");
         assert!(cov[1][1] > 0.0, "variance should be positive");
         // Off-diagonal is covariance - should be positive for positively correlated data
-        assert!(cov[0][1] > 0.0, "positive covariance for positively correlated data");
+        assert!(
+            cov[0][1] > 0.0,
+            "positive covariance for positively correlated data"
+        );
         // Covariance matrix should be symmetric
-        assert!((cov[0][1] - cov[1][0]).abs() < 1e-10, "covariance matrix should be symmetric");
+        assert!(
+            (cov[0][1] - cov[1][0]).abs() < 1e-10,
+            "covariance matrix should be symmetric"
+        );
     }
 
     #[test]
@@ -56752,8 +57274,14 @@ mod tests {
         assert!((corr[0][0] - 1.0).abs() < 1e-10, "self-correlation is 1");
         assert!((corr[1][1] - 1.0).abs() < 1e-10, "self-correlation is 1");
         // Off-diagonal is 1 for perfect correlation
-        assert!((corr[0][1] - 1.0).abs() < 1e-10, "perfect positive correlation is 1");
-        assert!((corr[1][0] - 1.0).abs() < 1e-10, "correlation matrix is symmetric");
+        assert!(
+            (corr[0][1] - 1.0).abs() < 1e-10,
+            "perfect positive correlation is 1"
+        );
+        assert!(
+            (corr[1][0] - 1.0).abs() < 1e-10,
+            "correlation matrix is symmetric"
+        );
     }
 
     #[test]
@@ -56761,7 +57289,11 @@ mod tests {
         // numpy.percentile([1,2,3,4,5], 50) = 3.0 (median)
         let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let p50 = percentile(&data, 50.0);
-        assert!((p50 - 3.0).abs() < 1e-10, "percentile 50 (median), got {}", p50);
+        assert!(
+            (p50 - 3.0).abs() < 1e-10,
+            "percentile 50 (median), got {}",
+            p50
+        );
 
         // numpy.percentile([1,2,3,4,5], 0) = 1.0 (min)
         let p0 = percentile(&data, 0.0);
@@ -56769,7 +57301,11 @@ mod tests {
 
         // numpy.percentile([1,2,3,4,5], 100) = 5.0 (max)
         let p100 = percentile(&data, 100.0);
-        assert!((p100 - 5.0).abs() < 1e-10, "percentile 100 (max), got {}", p100);
+        assert!(
+            (p100 - 5.0).abs() < 1e-10,
+            "percentile 100 (max), got {}",
+            p100
+        );
 
         // numpy.percentile([1,2,3,4,5], 25) = 2.0
         let p25 = percentile(&data, 25.0);
@@ -56794,12 +57330,20 @@ mod tests {
         let weights = vec![1.0, 1.0, 1.0, 1.0];
         let wv = var_weighted(&data, &weights);
         // Population variance of [1,2,3,4] = 1.25
-        assert!((wv - 1.25).abs() < 1e-10, "var_weighted with uniform weights, got {}", wv);
+        assert!(
+            (wv - 1.25).abs() < 1e-10,
+            "var_weighted with uniform weights, got {}",
+            wv
+        );
 
         // Non-uniform weights
         let weights2 = vec![0.25, 0.25, 0.25, 0.25];
         let wv2 = var_weighted(&data, &weights2);
-        assert!((wv2 - 1.25).abs() < 1e-10, "var_weighted with scaled weights, got {}", wv2);
+        assert!(
+            (wv2 - 1.25).abs() < 1e-10,
+            "var_weighted with scaled weights, got {}",
+            wv2
+        );
     }
 
     #[test]
@@ -56808,7 +57352,11 @@ mod tests {
         let weights = vec![1.0, 1.0, 1.0, 1.0];
         let ws = std_weighted(&data, &weights);
         // sqrt(1.25) ≈ 1.118
-        assert!((ws - 1.25f64.sqrt()).abs() < 1e-10, "std_weighted with uniform weights, got {}", ws);
+        assert!(
+            (ws - 1.25f64.sqrt()).abs() < 1e-10,
+            "std_weighted with uniform weights, got {}",
+            ws
+        );
     }
 
     #[test]
@@ -56820,33 +57368,57 @@ mod tests {
         // scipy.stats.mode([1, 1, 2, 2, 3]) returns smallest mode when tied
         let data2 = vec![1.0, 1.0, 2.0, 2.0, 3.0];
         let m2 = mode(&data2);
-        assert!(m2 == 1.0 || m2 == 2.0, "mode of tied data should be one of the modes");
+        assert!(
+            m2 == 1.0 || m2 == 2.0,
+            "mode of tied data should be one of the modes"
+        );
 
         // Single element
         assert!((mode(&[5.0]) - 5.0).abs() < 1e-10, "mode of single element");
 
         // All same
         let data3 = vec![3.0, 3.0, 3.0];
-        assert!((mode(&data3) - 3.0).abs() < 1e-10, "mode of identical elements");
+        assert!(
+            (mode(&data3) - 3.0).abs() < 1e-10,
+            "mode of identical elements"
+        );
     }
 
     #[test]
     fn binomtest_matches_scipy_reference_values() {
         // scipy.stats.binomtest(5, 10, 0.5).pvalue = 1.0 (fair coin, 5 heads in 10)
         let p1 = binomtest(5, 10, 0.5);
-        assert!((p1 - 1.0).abs() < 1e-10, "binomtest(5, 10, 0.5) should be 1.0, got {}", p1);
+        assert!(
+            (p1 - 1.0).abs() < 1e-10,
+            "binomtest(5, 10, 0.5) should be 1.0, got {}",
+            p1
+        );
 
         // scipy.stats.binomtest(9, 10, 0.5).pvalue = 0.021484375 (9 heads unlikely for fair coin)
         let p2 = binomtest(9, 10, 0.5);
-        assert!((p2 - 0.021484375).abs() < 1e-9, "binomtest(9, 10, 0.5), got {}", p2);
+        assert!(
+            (p2 - 0.021484375).abs() < 1e-9,
+            "binomtest(9, 10, 0.5), got {}",
+            p2
+        );
 
         // scipy.stats.binomtest(0, 10, 0.5).pvalue = 0.001953125 (0 heads unlikely for fair coin)
         let p3 = binomtest(0, 10, 0.5);
-        assert!((p3 - 0.001953125).abs() < 1e-9, "binomtest(0, 10, 0.5), got {}", p3);
+        assert!(
+            (p3 - 0.001953125).abs() < 1e-9,
+            "binomtest(0, 10, 0.5), got {}",
+            p3
+        );
 
         // Edge cases
-        assert!((binomtest(0, 5, 0.0) - 1.0).abs() < 1e-10, "binomtest(0, 5, 0.0) = 1");
-        assert!((binomtest(5, 5, 1.0) - 1.0).abs() < 1e-10, "binomtest(5, 5, 1.0) = 1");
+        assert!(
+            (binomtest(0, 5, 0.0) - 1.0).abs() < 1e-10,
+            "binomtest(0, 5, 0.0) = 1"
+        );
+        assert!(
+            (binomtest(5, 5, 1.0) - 1.0).abs() < 1e-10,
+            "binomtest(5, 5, 1.0) = 1"
+        );
     }
 
     #[test]
@@ -56854,7 +57426,11 @@ mod tests {
         let u = vec![1.0, 2.0, 3.0];
         let v = vec![1.0, 2.0, 3.0];
         let d = braycurtis_distance(&u, &v);
-        assert!(d.abs() < 1e-10, "Bray-Curtis distance of identical vectors should be 0, got {}", d);
+        assert!(
+            d.abs() < 1e-10,
+            "Bray-Curtis distance of identical vectors should be 0, got {}",
+            d
+        );
     }
 
     #[test]
@@ -56862,7 +57438,11 @@ mod tests {
         let u = vec![1.0, 0.0, 0.0];
         let v = vec![0.0, 1.0, 0.0];
         let d = braycurtis_distance(&u, &v);
-        assert!(d >= 0.0 && d <= 1.0, "Bray-Curtis should be in [0,1], got {}", d);
+        assert!(
+            d >= 0.0 && d <= 1.0,
+            "Bray-Curtis should be in [0,1], got {}",
+            d
+        );
     }
 
     #[test]
@@ -56870,7 +57450,11 @@ mod tests {
         let u = vec![1.0, 2.0, 3.0];
         let v = vec![1.0, 2.0, 3.0];
         let d = hamming_distance(&u, &v);
-        assert!(d.abs() < 1e-10, "Hamming distance of identical vectors should be 0, got {}", d);
+        assert!(
+            d.abs() < 1e-10,
+            "Hamming distance of identical vectors should be 0, got {}",
+            d
+        );
     }
 
     #[test]
@@ -56878,7 +57462,11 @@ mod tests {
         let u = vec![1.0, 2.0, 3.0];
         let v = vec![4.0, 5.0, 6.0];
         let d = hamming_distance(&u, &v);
-        assert!((d - 1.0).abs() < 1e-10, "Hamming distance of completely different vectors should be 1, got {}", d);
+        assert!(
+            (d - 1.0).abs() < 1e-10,
+            "Hamming distance of completely different vectors should be 1, got {}",
+            d
+        );
     }
 
     #[test]
@@ -56886,7 +57474,11 @@ mod tests {
         let u = vec![1.0, 1.0, 0.0];
         let v = vec![1.0, 1.0, 0.0];
         let d = jaccard_distance(&u, &v);
-        assert!(d.abs() < 1e-10, "Jaccard distance of identical vectors should be 0, got {}", d);
+        assert!(
+            d.abs() < 1e-10,
+            "Jaccard distance of identical vectors should be 0, got {}",
+            d
+        );
     }
 
     #[test]
@@ -56894,7 +57486,11 @@ mod tests {
         let u = vec![1.0, 0.0, 0.0];
         let v = vec![0.0, 1.0, 0.0];
         let d = jaccard_distance(&u, &v);
-        assert!((d - 1.0).abs() < 1e-10, "Jaccard distance of disjoint sets should be 1, got {}", d);
+        assert!(
+            (d - 1.0).abs() < 1e-10,
+            "Jaccard distance of disjoint sets should be 1, got {}",
+            d
+        );
     }
 
     #[test]
@@ -56902,7 +57498,11 @@ mod tests {
         let y_true = vec![1.0, 2.0, 3.0];
         let y_pred = vec![1.0, 2.0, 3.0];
         let loss = huber_loss(&y_true, &y_pred, 1.0);
-        assert!(loss.abs() < 1e-10, "Huber loss with zero residual should be 0, got {}", loss);
+        assert!(
+            loss.abs() < 1e-10,
+            "Huber loss with zero residual should be 0, got {}",
+            loss
+        );
     }
 
     #[test]
@@ -56910,7 +57510,11 @@ mod tests {
         let y_true = vec![0.0];
         let y_pred = vec![0.5];
         let loss = huber_loss(&y_true, &y_pred, 1.0);
-        assert!((loss - 0.125).abs() < 1e-10, "Huber loss for |r|<delta is 0.5*r^2, expected 0.125, got {}", loss);
+        assert!(
+            (loss - 0.125).abs() < 1e-10,
+            "Huber loss for |r|<delta is 0.5*r^2, expected 0.125, got {}",
+            loss
+        );
     }
 
     #[test]
@@ -56918,7 +57522,11 @@ mod tests {
         let y_true = vec![1.0, 2.0];
         let y_pred = vec![1.0, 2.0];
         let loss = log_cosh_loss(&y_true, &y_pred);
-        assert!(loss.abs() < 1e-10, "Log-cosh loss with zero residual should be ~0, got {}", loss);
+        assert!(
+            loss.abs() < 1e-10,
+            "Log-cosh loss with zero residual should be ~0, got {}",
+            loss
+        );
     }
 
     #[test]
@@ -56926,7 +57534,11 @@ mod tests {
         let y_true = vec![1.0, 2.0];
         let y_pred = vec![0.0, 3.0];
         let loss = pinball_loss(&y_true, &y_pred, 0.5);
-        assert!((loss - 0.5).abs() < 1e-10, "Pinball loss at tau=0.5 expected 0.5, got {}", loss);
+        assert!(
+            (loss - 0.5).abs() < 1e-10,
+            "Pinball loss at tau=0.5 expected 0.5, got {}",
+            loss
+        );
     }
 
     #[test]
@@ -56934,7 +57546,11 @@ mod tests {
         let y_true = vec![1.0, -1.0, 1.0];
         let y_pred = vec![2.0, -2.0, 3.0];
         let loss = hinge_loss(&y_true, &y_pred);
-        assert!(loss.abs() < 1e-10, "Hinge loss with correct margin should be 0, got {}", loss);
+        assert!(
+            loss.abs() < 1e-10,
+            "Hinge loss with correct margin should be 0, got {}",
+            loss
+        );
     }
 
     #[test]
@@ -56942,14 +57558,22 @@ mod tests {
         let y_true = vec![1.0, 0.0, 1.0];
         let y_pred = vec![1.0, 0.0, 1.0];
         let score = brier_score(&y_true, &y_pred);
-        assert!(score.abs() < 1e-10, "Brier score with perfect prediction should be 0, got {}", score);
+        assert!(
+            score.abs() < 1e-10,
+            "Brier score with perfect prediction should be 0, got {}",
+            score
+        );
     }
 
     #[test]
     fn test_adjusted_rand_index_perfect_match() {
         let labels = vec![0.0, 0.0, 1.0, 1.0, 2.0, 2.0];
         let ari = adjusted_rand_index(&labels, &labels);
-        assert!((ari - 1.0).abs() < 1e-10, "ARI of identical labels should be 1.0, got {}", ari);
+        assert!(
+            (ari - 1.0).abs() < 1e-10,
+            "ARI of identical labels should be 1.0, got {}",
+            ari
+        );
     }
 
     #[test]
@@ -56957,14 +57581,22 @@ mod tests {
         let true_labels = vec![0.0, 0.0, 1.0, 1.0];
         let pred_labels = vec![0.0, 1.0, 0.0, 1.0];
         let ari = adjusted_rand_index(&true_labels, &pred_labels);
-        assert!(ari < 0.5, "ARI of uncorrelated labels should be low, got {}", ari);
+        assert!(
+            ari < 0.5,
+            "ARI of uncorrelated labels should be low, got {}",
+            ari
+        );
     }
 
     #[test]
     fn test_rand_index_perfect_match() {
         let labels = vec![0.0, 0.0, 1.0, 1.0];
         let ri = rand_index(&labels, &labels);
-        assert!((ri - 1.0).abs() < 1e-10, "RI of identical labels should be 1.0, got {}", ri);
+        assert!(
+            (ri - 1.0).abs() < 1e-10,
+            "RI of identical labels should be 1.0, got {}",
+            ri
+        );
     }
 
     #[test]
@@ -56980,7 +57612,11 @@ mod tests {
         let data = vec![0.0, 0.1, 10.0, 10.1];
         let labels = vec![0.0, 0.0, 1.0, 1.0];
         let s = silhouette_score_1d(&data, &labels);
-        assert!(s > 0.9, "Well-separated clusters should have high silhouette, got {}", s);
+        assert!(
+            s > 0.9,
+            "Well-separated clusters should have high silhouette, got {}",
+            s
+        );
     }
 
     #[test]
@@ -56988,7 +57624,11 @@ mod tests {
         let data = vec![0.0, 1.0, 2.0, 3.0];
         let labels = vec![0.0, 1.0, 0.0, 1.0];
         let s = silhouette_score_1d(&data, &labels);
-        assert!(s < 0.5, "Overlapping clusters should have low silhouette, got {}", s);
+        assert!(
+            s < 0.5,
+            "Overlapping clusters should have low silhouette, got {}",
+            s
+        );
     }
 
     #[test]
@@ -56997,7 +57637,11 @@ mod tests {
         let m0 = central_moment(&data, 0);
         assert!((m0 - 1.0).abs() < 1e-10, "0th central moment should be 1");
         let m1 = central_moment(&data, 1);
-        assert!(m1.abs() < 1e-10, "1st central moment should be ~0, got {}", m1);
+        assert!(
+            m1.abs() < 1e-10,
+            "1st central moment should be ~0, got {}",
+            m1
+        );
         let m2 = central_moment(&data, 2);
         assert!(m2 > 0.0, "2nd central moment (variance) should be positive");
     }
@@ -57006,43 +57650,72 @@ mod tests {
     fn entropy_matches_scipy_reference_values() {
         // scipy.stats.entropy([0.25, 0.25, 0.25, 0.25]) = ln(4) = 1.3862943611198906
         let uniform4 = entropy(&[0.25, 0.25, 0.25, 0.25], None);
-        assert!((uniform4 - 1.3862943611198906).abs() < 1e-12, "uniform 4 entropy");
+        assert!(
+            (uniform4 - 1.3862943611198906).abs() < 1e-12,
+            "uniform 4 entropy"
+        );
 
         // scipy.stats.entropy([0.5, 0.5]) = ln(2) = 0.6931471805599453
         let uniform2 = entropy(&[0.5, 0.5], None);
-        assert!((uniform2 - 0.6931471805599453).abs() < 1e-12, "uniform 2 entropy");
+        assert!(
+            (uniform2 - 0.6931471805599453).abs() < 1e-12,
+            "uniform 2 entropy"
+        );
 
         // scipy.stats.entropy([1.0, 0.0, 0.0]) = 0 (deterministic)
         let deterministic = entropy(&[1.0, 0.0, 0.0], None);
-        assert!(deterministic.abs() < 1e-12, "deterministic entropy should be 0");
+        assert!(
+            deterministic.abs() < 1e-12,
+            "deterministic entropy should be 0"
+        );
 
         // scipy.stats.entropy([0.25, 0.25, 0.25, 0.25], base=2) = 2.0 bits
         let uniform4_bits = entropy(&[0.25, 0.25, 0.25, 0.25], Some(2.0));
-        assert!((uniform4_bits - 2.0).abs() < 1e-12, "uniform 4 entropy in bits");
+        assert!(
+            (uniform4_bits - 2.0).abs() < 1e-12,
+            "uniform 4 entropy in bits"
+        );
 
         // Non-normalized input: scipy.stats.entropy([1, 1, 1, 1]) = ln(4)
         let unnorm = entropy(&[1.0, 1.0, 1.0, 1.0], None);
-        assert!((unnorm - 1.3862943611198906).abs() < 1e-12, "unnormalized uniform entropy");
+        assert!(
+            (unnorm - 1.3862943611198906).abs() < 1e-12,
+            "unnormalized uniform entropy"
+        );
     }
 
     #[test]
     fn kl_divergence_matches_scipy_reference_values() {
         // scipy.stats.entropy([0.5, 0.5], [0.5, 0.5]) = 0 (same distribution)
         let kl_same = kl_divergence(&[0.5, 0.5], &[0.5, 0.5], None);
-        assert!(kl_same.abs() < 1e-12, "KL divergence of identical distributions should be 0");
+        assert!(
+            kl_same.abs() < 1e-12,
+            "KL divergence of identical distributions should be 0"
+        );
 
         // scipy.stats.entropy([0.9, 0.1], [0.5, 0.5]) = 0.3680642072072096
         // D_KL([0.9,0.1] || [0.5,0.5]) = 0.9*ln(0.9/0.5) + 0.1*ln(0.1/0.5)
         let kl1 = kl_divergence(&[0.9, 0.1], &[0.5, 0.5], None);
-        assert!((kl1 - 0.3680642072072096).abs() < 1e-10, "KL divergence [0.9,0.1] vs uniform, got {}", kl1);
+        assert!(
+            (kl1 - 0.3680642072072096).abs() < 1e-10,
+            "KL divergence [0.9,0.1] vs uniform, got {}",
+            kl1
+        );
 
         // scipy.stats.entropy([0.5, 0.5], [0.9, 0.1]) = 0.5108256237659907
         // D_KL([0.5,0.5] || [0.9,0.1]) = 0.5*ln(0.5/0.9) + 0.5*ln(0.5/0.1)
         let kl2 = kl_divergence(&[0.5, 0.5], &[0.9, 0.1], None);
-        assert!((kl2 - 0.5108256237659907).abs() < 1e-10, "KL divergence uniform vs [0.9,0.1], got {}", kl2);
+        assert!(
+            (kl2 - 0.5108256237659907).abs() < 1e-10,
+            "KL divergence uniform vs [0.9,0.1], got {}",
+            kl2
+        );
 
         // KL divergence is asymmetric
-        assert!((kl1 - kl2).abs() > 0.1, "KL divergence should be asymmetric");
+        assert!(
+            (kl1 - kl2).abs() > 0.1,
+            "KL divergence should be asymmetric"
+        );
     }
 
     #[test]
@@ -57052,13 +57725,20 @@ mod tests {
 
         // scipy.special.rel_entr(0.9, 0.5) = 0.9 * ln(0.9/0.5) = 0.9 * ln(1.8) = 0.5290079984
         let r1 = rel_entr(0.9, 0.5);
-        assert!((r1 - 0.5290079984405946).abs() < 1e-10, "rel_entr(0.9, 0.5), got {}", r1);
+        assert!(
+            (r1 - 0.5290079984405946).abs() < 1e-10,
+            "rel_entr(0.9, 0.5), got {}",
+            r1
+        );
 
         // scipy.special.rel_entr(0, y) = 0 for y >= 0
         assert!(rel_entr(0.0, 0.5).abs() < 1e-12, "rel_entr(0, 0.5) = 0");
 
         // scipy.special.rel_entr(x, 0) = inf for x > 0
-        assert!(rel_entr(0.5, 0.0).is_infinite() && rel_entr(0.5, 0.0) > 0.0, "rel_entr(0.5, 0) = inf");
+        assert!(
+            rel_entr(0.5, 0.0).is_infinite() && rel_entr(0.5, 0.0) > 0.0,
+            "rel_entr(0.5, 0) = inf"
+        );
     }
 
     #[test]
@@ -57078,5 +57758,4 @@ mod tests {
         let xy2 = xlog1py(2.0, 3.0);
         assert!((xy2 - 2.772588722239781).abs() < 1e-12, "xlog1py(2, 3)");
     }
-
 }
