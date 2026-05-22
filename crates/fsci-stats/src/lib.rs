@@ -29447,6 +29447,75 @@ pub fn eta_squared(groups: &[&[f64]]) -> f64 {
     ss_between / ss_total
 }
 
+/// Correlation ratio (eta): measure of association between categorical X and continuous Y.
+///
+/// η = sqrt(η²) = sqrt(SS_between / SS_total)
+///
+/// Values range from 0 to 1. Can be interpreted similarly to a correlation
+/// coefficient but for the relationship between a categorical and continuous variable.
+pub fn correlation_ratio(groups: &[&[f64]]) -> f64 {
+    eta_squared(groups).sqrt()
+}
+
+/// Intraclass correlation coefficient (ICC) for one-way random effects.
+///
+/// ICC = (MS_between - MS_within) / (MS_between + (k-1) * MS_within)
+///
+/// where k is the average group size. Measures reliability/agreement
+/// when data are grouped.
+///
+/// # Arguments
+/// * `groups` - Groups of measurements (e.g., measurements by different raters)
+///
+/// # Returns
+/// ICC value in [-1/(k-1), 1]
+pub fn intraclass_correlation(groups: &[&[f64]]) -> f64 {
+    if groups.len() < 2 || groups.iter().any(|g| g.is_empty()) {
+        return f64::NAN;
+    }
+
+    let n_groups = groups.len();
+    let n_total: usize = groups.iter().map(|g| g.len()).sum();
+    let k = n_total as f64 / n_groups as f64;
+
+    let all: Vec<f64> = groups.iter().flat_map(|g| g.iter().copied()).collect();
+    let grand_mean = all.iter().sum::<f64>() / n_total as f64;
+
+    let ss_between: f64 = groups
+        .iter()
+        .map(|g| {
+            let ng = g.len() as f64;
+            let gm = g.iter().sum::<f64>() / ng;
+            ng * (gm - grand_mean).powi(2)
+        })
+        .sum();
+
+    let ss_within: f64 = groups
+        .iter()
+        .map(|g| {
+            let gm = g.iter().sum::<f64>() / g.len() as f64;
+            g.iter().map(|&x| (x - gm).powi(2)).sum::<f64>()
+        })
+        .sum();
+
+    let df_between = (n_groups - 1) as f64;
+    let df_within = (n_total - n_groups) as f64;
+
+    if df_between == 0.0 || df_within == 0.0 {
+        return f64::NAN;
+    }
+
+    let ms_between = ss_between / df_between;
+    let ms_within = ss_within / df_within;
+
+    let denom = ms_between + (k - 1.0) * ms_within;
+    if denom == 0.0 {
+        return f64::NAN;
+    }
+
+    (ms_between - ms_within) / denom
+}
+
 /// Omega-squared: bias-corrected proportion of variance explained.
 ///
 /// ω² = (SS_between - df_between * MS_within) / (SS_total + MS_within)
