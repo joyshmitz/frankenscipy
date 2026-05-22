@@ -2111,6 +2111,24 @@ pub fn morphological_gradient(
     morphological_gradient_with_origins(input, size, &[0], mode, cval)
 }
 
+/// Morphological gradient over a SciPy-style signed axes subset.
+pub fn morphological_gradient_axes(
+    input: &NdArray,
+    size: usize,
+    axes: &[isize],
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError> {
+    let max_img = grey_dilation_axes(input, size, axes, mode, cval)?;
+    let min_img = grey_erosion_axes(input, size, axes, mode, cval)?;
+
+    let mut result = NdArray::zeros(input.shape.clone());
+    for i in 0..result.data.len() {
+        result.data[i] = max_img.data[i] - min_img.data[i];
+    }
+    Ok(result)
+}
+
 /// Morphological gradient with SciPy `origin` semantics.
 pub fn morphological_gradient_with_origins(
     input: &NdArray,
@@ -10538,6 +10556,51 @@ mod tests {
         assert!(grey_closing_axes(&input, 2, &[2], BoundaryMode::Reflect, 0.0).is_err());
         assert!(grey_closing_axes(&input, 2, &[-3], BoundaryMode::Reflect, 0.0).is_err());
         assert!(grey_closing_axes(&input, 0, &[-1], BoundaryMode::Reflect, 0.0).is_err());
+    }
+
+    #[test]
+    fn morphological_gradient_axes_match_scipy_subset_fixtures() {
+        let input = NdArray::new(vec![4.0, 1.0, 7.0, 2.0, 9.0, 3.0], vec![2, 3]).unwrap();
+
+        // scipy.ndimage.morphological_gradient(input, size=2, mode='constant', cval=-10.0, axes=(-1,))
+        assert_eq!(
+            morphological_gradient_axes(&input, 2, &[-1], BoundaryMode::Constant, -10.0)
+                .unwrap()
+                .data,
+            vec![14.0, 6.0, 6.0, 19.0, 7.0, 0.0]
+        );
+        // scipy.ndimage.morphological_gradient(input, size=2, mode='constant', cval=-10.0, axes=(-2,))
+        assert_eq!(
+            morphological_gradient_axes(&input, 2, &[-2], BoundaryMode::Constant, -10.0)
+                .unwrap()
+                .data,
+            vec![14.0, 19.0, 17.0, 0.0, 8.0, 0.0]
+        );
+        // scipy.ndimage.morphological_gradient(input, size=2, mode='constant', cval=-10.0, axes=(-2, -1))
+        assert_eq!(
+            morphological_gradient_axes(&input, 2, &[-2, -1], BoundaryMode::Constant, -10.0)
+                .unwrap()
+                .data,
+            vec![19.0, 19.0, 17.0, 19.0, 8.0, 2.0]
+        );
+        assert_eq!(
+            morphological_gradient_axes(&input, 0, &[], BoundaryMode::Constant, -10.0)
+                .unwrap()
+                .data,
+            vec![0.0; 6]
+        );
+    }
+
+    #[test]
+    fn morphological_gradient_axes_rejects_duplicate_and_out_of_range_axes() {
+        let input = NdArray::new(vec![1.0; 6], vec![2, 3]).unwrap();
+
+        assert!(
+            morphological_gradient_axes(&input, 2, &[1, -1], BoundaryMode::Reflect, 0.0).is_err()
+        );
+        assert!(morphological_gradient_axes(&input, 2, &[2], BoundaryMode::Reflect, 0.0).is_err());
+        assert!(morphological_gradient_axes(&input, 2, &[-3], BoundaryMode::Reflect, 0.0).is_err());
+        assert!(morphological_gradient_axes(&input, 0, &[-1], BoundaryMode::Reflect, 0.0).is_err());
     }
 
     #[test]
