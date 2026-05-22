@@ -55623,6 +55623,28 @@ mod tests {
     }
 
     #[test]
+    fn test_adjusted_rand_index_single_cluster() {
+        let labels = vec![0.0, 0.0, 0.0, 0.0];
+        let ari = adjusted_rand_index(&labels, &labels);
+        assert!((ari - 1.0).abs() < 1e-10, "ARI of identical single-cluster labels should be 1.0, got {}", ari);
+    }
+
+    #[test]
+    fn test_rand_index_single_element() {
+        let labels = vec![0.0];
+        let ri = rand_index(&labels, &labels);
+        assert!((ri - 1.0).abs() < 1e-10, "RI of single element should be 1.0, got {}", ri);
+    }
+
+    #[test]
+    fn test_silhouette_score_1d_single_cluster() {
+        let data = vec![1.0, 2.0, 3.0, 4.0];
+        let labels = vec![0.0, 0.0, 0.0, 0.0];
+        let s = silhouette_score_1d(&data, &labels);
+        assert!((s - 0.0).abs() < 1e-10, "Silhouette of single cluster should be 0, got {}", s);
+    }
+
+    #[test]
     fn test_expected_calibration_error_perfect() {
         let y_true = vec![0.0, 0.0, 1.0, 1.0];
         let y_pred = vec![0.0, 0.0, 1.0, 1.0];
