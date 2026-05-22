@@ -25312,6 +25312,99 @@ pub fn chi2_contingency_with_lambda(
     }
 }
 
+/// Result of McNemar's test.
+#[derive(Debug, Clone)]
+pub struct McnemarResult {
+    pub statistic: f64,
+    pub pvalue: f64,
+}
+
+/// McNemar's test for paired nominal data.
+///
+/// Tests the null hypothesis that marginal proportions are equal in a 2x2
+/// contingency table with matched pairs.
+///
+/// Matches `scipy.stats.mcnemar(table, exact=False, correction=True)`.
+///
+/// # Arguments
+/// * `table` — 2x2 contingency table [[a, b], [c, d]]
+/// * `exact` — If true, use exact binomial test (for small samples)
+/// * `correction` — If true and exact=false, apply continuity correction
+///
+/// # Returns
+/// `McnemarResult` with test statistic and p-value
+pub fn mcnemar(table: &[[usize; 2]; 2], exact: bool, correction: bool) -> McnemarResult {
+    let b = table[0][1] as f64;
+    let c = table[1][0] as f64;
+
+    if exact {
+        let n = table[0][1] + table[1][0];
+        if n == 0 {
+            return McnemarResult {
+                statistic: f64::NAN,
+                pvalue: 1.0,
+            };
+        }
+        let k = table[0][1].min(table[1][0]);
+        let pvalue = binom_cdf_two_sided(k, n, 0.5);
+        McnemarResult {
+            statistic: k as f64,
+            pvalue,
+        }
+    } else {
+        if b + c == 0.0 {
+            return McnemarResult {
+                statistic: f64::NAN,
+                pvalue: 1.0,
+            };
+        }
+        let stat = if correction {
+            let diff = (b - c).abs() - 1.0;
+            if diff > 0.0 {
+                diff * diff / (b + c)
+            } else {
+                0.0
+            }
+        } else {
+            (b - c).powi(2) / (b + c)
+        };
+
+        let pvalue = ChiSquared::new(1.0).sf(stat).clamp(0.0, 1.0);
+        McnemarResult { statistic: stat, pvalue }
+    }
+}
+
+fn binom_cdf_two_sided(k: usize, n: usize, p: f64) -> f64 {
+    let observed_prob = binom_pmf(k, n, p);
+    let mut pvalue = 0.0;
+    for i in 0..=n {
+        let prob = binom_pmf(i, n, p);
+        if prob <= observed_prob + 1e-10 {
+            pvalue += prob;
+        }
+    }
+    pvalue.min(1.0)
+}
+
+fn binom_pmf(k: usize, n: usize, p: f64) -> f64 {
+    if k > n {
+        return 0.0;
+    }
+    let ln_coeff = ln_binom_coeff(n, k);
+    (ln_coeff + (k as f64) * p.ln() + ((n - k) as f64) * (1.0 - p).ln()).exp()
+}
+
+fn ln_binom_coeff(n: usize, k: usize) -> f64 {
+    if k > n {
+        return f64::NEG_INFINITY;
+    }
+    ln_factorial(n) - ln_factorial(k) - ln_factorial(n - k)
+}
+
+fn ln_factorial(n: usize) -> f64 {
+    (1..=n).map(|i| (i as f64).ln()).sum()
+}
+
 /// Power divergence statistic and test.
 ///
 /// Computes the power divergence statistic for testing whether observed
@@ -39646,6 +39739,64 @@ mod tests {
     fn chi2_contingency_empty_rejected() {
         let result = chi2_contingency(&[], true);
         assert!(result.statistic.is_nan());
+    }
+
+    // ── McNemar tests ────────────────────────────────────────────────
+
+    #[test]
+    fn mcnemar_asymptotic_with_correction() {
+        let table = [[59, 6], [16, 80]];
+        let result = mcnemar(&table, false, true);
+        let expected_stat = (((6.0 - 16.0) as f64).abs() - 1.0).powi(2) / (6.0 + 16.0);
+        assert!(
+            (result.statistic - expected_stat).abs() < 1e-10,
+            "statistic {} vs expected {}",
+            result.statistic,
+            expected_stat
+        );
+        assert!(
+            result.pvalue > 0.0 && result.pvalue < 1.0,
+            "pvalue should be in (0,1)"
+        );
+    }
+
+    #[test]
+    fn mcnemar_asymptotic_without_correction() {
+        let table = [[59, 6], [16, 80]];
+        let result = mcnemar(&table, false, false);
+        let expected_stat = (6.0 - 16.0_f64).powi(2) / (6.0 + 16.0);
+        assert!(
+            (result.statistic - expected_stat).abs() < 1e-10,
+            "statistic {} vs expected {}",
+            result.statistic,
+            expected_stat
+        );
+    }
+
+    #[test]
+    fn mcnemar_exact_binomial() {
+        let table = [[10, 2], [5, 15]];
+        let result = mcnemar(&table, true, false);
+        assert!(result.statistic.is_finite());
+        assert!(
+            result.pvalue >= 0.0 && result.pvalue <= 1.0,
+            "exact pvalue should be in [0,1]"
+        );
+    }
+
+    #[test]
+    fn mcnemar_symmetric_table() {
+        let table = [[50, 10], [10, 50]];
+        let result = mcnemar(&table, false, true);
+        assert!(
+            result.statistic < 0.001,
+            "symmetric b==c should have near-zero statistic"
+        );
+        assert!(
+            result.pvalue > 0.9,
+            "symmetric should have high pvalue, got {}",
+            result.pvalue
+        );
     }
 
     // ── Power divergence tests ───────────────────────────────────────
