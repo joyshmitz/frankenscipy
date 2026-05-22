@@ -58885,4 +58885,21 @@ mod tests {
             result.pvalue
         );
     }
+
+    #[test]
+    fn ttest_rel_matches_scipy_reference_values() {
+        let x = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let y = vec![1.2, 2.4, 2.8, 4.3, 5.8];
+        let result = ttest_rel(&x, &y, None).expect("ttest_rel should succeed");
+        assert!(
+            (result.statistic - (-1.860521018838126)).abs() < 1e-6,
+            "ttest_rel statistic got {}, expected -1.860521018838126",
+            result.statistic
+        );
+        assert!(
+            (result.pvalue - 0.1363182021143381).abs() < 1e-6,
+            "ttest_rel pvalue got {}, expected 0.1363182021143381",
+            result.pvalue
+        );
+    }
 }
