@@ -145,6 +145,40 @@ fn gaussian_filter_with_orders(
     Ok(current)
 }
 
+fn gaussian_filter_with_sigmas_and_orders(
+    input: &NdArray,
+    sigmas: &[f64],
+    orders: &[usize],
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError> {
+    if sigmas.len() != input.ndim() {
+        return Err(NdimageError::DimensionMismatch(format!(
+            "sigmas length {} != ndim {}",
+            sigmas.len(),
+            input.ndim()
+        )));
+    }
+    if orders.len() != input.ndim() {
+        return Err(NdimageError::DimensionMismatch(format!(
+            "orders length {} != ndim {}",
+            orders.len(),
+            input.ndim()
+        )));
+    }
+
+    let mut current = input.clone();
+    for (axis, (&sigma, &order)) in sigmas.iter().zip(orders).enumerate() {
+        if !sigma.is_finite() || sigma <= 0.0 {
+            return Err(NdimageError::InvalidArgument(
+                "sigmas must be finite and positive".to_string(),
+            ));
+        }
+        current = gaussian_filter1d_axis(&current, sigma, axis, order, mode, cval)?;
+    }
+    Ok(current)
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // N-D Array Helper
 // ══════════════════════════════════════════════════════════════════════
@@ -3586,6 +3620,70 @@ pub fn gaussian_gradient_magnitude(
     Ok(result)
 }
 
+/// Gaussian Laplace with per-axis sigma.
+///
+/// Matches `scipy.ndimage.gaussian_laplace` with `sigma` as a sequence.
+pub fn gaussian_laplace_multi_sigma(
+    input: &NdArray,
+    sigmas: &[f64],
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError> {
+    if input.size() == 0 {
+        return Err(NdimageError::EmptyInput);
+    }
+    let ndim = input.ndim();
+    if ndim == 0 {
+        return Ok(input.clone());
+    }
+
+    let mut result = NdArray::zeros(input.shape.clone());
+    for axis in 0..ndim {
+        let mut orders = vec![0usize; ndim];
+        orders[axis] = 2;
+        let deriv = gaussian_filter_with_sigmas_and_orders(input, sigmas, &orders, mode, cval)?;
+        for (r, d) in result.data.iter_mut().zip(&deriv.data) {
+            *r += d;
+        }
+    }
+    Ok(result)
+}
+
+/// Gaussian gradient magnitude with per-axis sigma.
+///
+/// Matches `scipy.ndimage.gaussian_gradient_magnitude` with `sigma` as a
+/// sequence.
+pub fn gaussian_gradient_magnitude_multi_sigma(
+    input: &NdArray,
+    sigmas: &[f64],
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError> {
+    if input.size() == 0 {
+        return Err(NdimageError::EmptyInput);
+    }
+    let ndim = input.ndim();
+    if ndim == 0 {
+        return Ok(input.clone());
+    }
+
+    let mut result = NdArray::zeros(input.shape.clone());
+    for axis in 0..ndim {
+        let mut orders = vec![0usize; ndim];
+        orders[axis] = 1;
+        let deriv = gaussian_filter_with_sigmas_and_orders(input, sigmas, &orders, mode, cval)?;
+        for (r, d) in result.data.iter_mut().zip(&deriv.data) {
+            *r += d * d;
+        }
+    }
+
+    for v in &mut result.data {
+        *v = v.sqrt();
+    }
+
+    Ok(result)
+}
+
 /// Grey-scale erosion (minimum filter equivalent for continuous values).
 ///
 /// Matches `scipy.ndimage.grey_erosion`.
@@ -6014,6 +6112,71 @@ mod tests {
         for (g, e) in got.data.iter().zip(&expect) {
             assert!((g - e).abs() < 1e-9, "ggm 2d mismatch: {g} vs {e}");
         }
+    }
+
+    #[test]
+    fn gaussian_laplace_multi_sigma_matches_scipy_2d() {
+        let input = NdArray::new((0..9).map(f64::from).collect(), vec![3, 3]).unwrap();
+        // scipy.ndimage.gaussian_laplace(x, [0.5, 1.0], mode='constant', cval=0.0)
+        let expect = [
+            2.29389434243,
+            1.34685752575,
+            0.0133545433527,
+            -1.82678093829,
+            -3.68371506163,
+            -3.35607665951,
+            -12.0083290131,
+            -17.2860226083,
+            -14.2888688122,
+        ];
+        let got =
+            gaussian_laplace_multi_sigma(&input, &[0.5, 1.0], BoundaryMode::Constant, 0.0).unwrap();
+        for (g, e) in got.data.iter().zip(&expect) {
+            assert!((g - e).abs() < 1e-9, "multi-sigma LoG mismatch: {g} vs {e}");
+        }
+    }
+
+    #[test]
+    fn gaussian_gradient_magnitude_multi_sigma_matches_scipy_2d() {
+        let input = NdArray::new((0..9).map(f64::from).collect(), vec![3, 3]).unwrap();
+        // scipy.ndimage.gaussian_gradient_magnitude(x, [0.5, 1.0], mode='constant', cval=0.0)
+        let expect = [
+            1.16894660475,
+            1.57719085948,
+            1.38107836024,
+            2.3287232643,
+            2.30689186193,
+            2.19521511285,
+            2.40740688973,
+            1.56643988725,
+            2.38627900594,
+        ];
+        let got = gaussian_gradient_magnitude_multi_sigma(
+            &input,
+            &[0.5, 1.0],
+            BoundaryMode::Constant,
+            0.0,
+        )
+        .unwrap();
+        for (g, e) in got.data.iter().zip(&expect) {
+            assert!((g - e).abs() < 1e-9, "multi-sigma GGM mismatch: {g} vs {e}");
+        }
+    }
+
+    #[test]
+    fn gaussian_derivative_multi_sigma_rejects_shape_and_sigma_errors() {
+        let input = NdArray::new((0..9).map(f64::from).collect(), vec![3, 3]).unwrap();
+
+        assert!(gaussian_laplace_multi_sigma(&input, &[1.0], BoundaryMode::Reflect, 0.0).is_err());
+        assert!(
+            gaussian_gradient_magnitude_multi_sigma(
+                &input,
+                &[1.0, 0.0],
+                BoundaryMode::Reflect,
+                0.0,
+            )
+            .is_err()
+        );
     }
 
     #[test]
