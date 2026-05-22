@@ -17494,6 +17494,78 @@ pub fn corrcoef_weighted(x: &[f64], y: &[f64], weights: &[f64]) -> f64 {
     cov_xy / (var_x * var_y).sqrt()
 }
 
+/// Compute the partial correlation between x and y, controlling for z.
+///
+/// The partial correlation measures the relationship between x and y
+/// after removing the linear effect of the control variable z.
+///
+/// r_xy.z = (r_xy - r_xz * r_yz) / sqrt((1 - r_xz²) * (1 - r_yz²))
+///
+/// # Arguments
+/// * `x` - First variable
+/// * `y` - Second variable
+/// * `z` - Control variable
+///
+/// # Returns
+/// Partial correlation coefficient in [-1, 1].
+pub fn partial_corr(x: &[f64], y: &[f64], z: &[f64]) -> f64 {
+    if x.len() != y.len() || x.len() != z.len() || x.len() < 3 {
+        return f64::NAN;
+    }
+
+    let r_xy = corrcoef(x, y);
+    let r_xz = corrcoef(x, z);
+    let r_yz = corrcoef(y, z);
+
+    if r_xy.is_nan() || r_xz.is_nan() || r_yz.is_nan() {
+        return f64::NAN;
+    }
+
+    let denom_x = 1.0 - r_xz * r_xz;
+    let denom_y = 1.0 - r_yz * r_yz;
+
+    if denom_x <= 0.0 || denom_y <= 0.0 {
+        return f64::NAN;
+    }
+
+    (r_xy - r_xz * r_yz) / (denom_x * denom_y).sqrt()
+}
+
+/// Compute the semi-partial (part) correlation of x and y, controlling for z in y only.
+///
+/// The semi-partial correlation measures the unique contribution of y to x,
+/// after removing the effect of z from y but not from x.
+///
+/// r_x(y.z) = (r_xy - r_xz * r_yz) / sqrt(1 - r_yz²)
+///
+/// # Arguments
+/// * `x` - Criterion variable
+/// * `y` - Predictor variable (effect of z removed)
+/// * `z` - Control variable
+///
+/// # Returns
+/// Semi-partial correlation coefficient.
+pub fn semi_partial_corr(x: &[f64], y: &[f64], z: &[f64]) -> f64 {
+    if x.len() != y.len() || x.len() != z.len() || x.len() < 3 {
+        return f64::NAN;
+    }
+
+    let r_xy = corrcoef(x, y);
+    let r_xz = corrcoef(x, z);
+    let r_yz = corrcoef(y, z);
+
+    if r_xy.is_nan() || r_xz.is_nan() || r_yz.is_nan() {
+        return f64::NAN;
+    }
+
+    let denom = 1.0 - r_yz * r_yz;
+    if denom <= 0.0 {
+        return f64::NAN;
+    }
+
+    (r_xy - r_xz * r_yz) / denom.sqrt()
+}
+
 /// Compute mean ignoring NaN values.
 ///
 /// Matches `numpy.nanmean`.
