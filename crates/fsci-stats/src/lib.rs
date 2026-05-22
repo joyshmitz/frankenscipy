@@ -26795,6 +26795,48 @@ pub fn cramers_v(observed: &[Vec<f64>]) -> f64 {
     (result.statistic / (n * min_dim as f64)).sqrt()
 }
 
+/// Cohen's kappa for inter-rater agreement.
+///
+/// Measures agreement between two raters beyond chance.
+/// κ = (p_o - p_e) / (1 - p_e)
+///
+/// # Arguments
+/// * `confusion_matrix` — Square confusion matrix from two raters
+///
+/// # Returns
+/// Kappa coefficient in range [-1, 1], where 1 = perfect agreement
+pub fn cohens_kappa(confusion_matrix: &[Vec<f64>]) -> f64 {
+    let k = confusion_matrix.len();
+    if k == 0 || confusion_matrix.iter().any(|row| row.len() != k) {
+        return f64::NAN;
+    }
+
+    let total: f64 = confusion_matrix.iter().flat_map(|r| r.iter()).sum();
+    if total == 0.0 {
+        return f64::NAN;
+    }
+
+    let p_o: f64 = (0..k).map(|i| confusion_matrix[i][i]).sum::<f64>() / total;
+
+    let row_sums: Vec<f64> = confusion_matrix.iter().map(|r| r.iter().sum()).collect();
+    let col_sums: Vec<f64> = (0..k)
+        .map(|j| confusion_matrix.iter().map(|r| r[j]).sum())
+        .collect();
+
+    let p_e: f64 = row_sums
+        .iter()
+        .zip(col_sums.iter())
+        .map(|(r, c)| r * c)
+        .sum::<f64>()
+        / (total * total);
+
+    if (1.0 - p_e).abs() < 1e-15 {
+        return if (p_o - 1.0).abs() < 1e-15 { 1.0 } else { 0.0 };
+    }
+
+    (p_o - p_e) / (1.0 - p_e)
+}
+
 /// Point-biserial correlation: correlation between binary and continuous variable.
 ///
 /// Equivalent to Pearson r when one variable is dichotomous.
@@ -46765,6 +46807,27 @@ mod tests {
         let r = 0.8;
         let d = r_to_d(r);
         assert!(d > 2.0, "r=0.8 should give large d: {}", d);
+    }
+
+    #[test]
+    fn cohens_kappa_perfect_agreement() {
+        let cm = vec![vec![10.0, 0.0], vec![0.0, 10.0]];
+        let kappa = cohens_kappa(&cm);
+        assert_close(kappa, 1.0, 1e-10, "perfect agreement κ = 1");
+    }
+
+    #[test]
+    fn cohens_kappa_no_agreement() {
+        let cm = vec![vec![0.0, 10.0], vec![10.0, 0.0]];
+        let kappa = cohens_kappa(&cm);
+        assert!(kappa < 0.0, "opposite agreement κ < 0: {}", kappa);
+    }
+
+    #[test]
+    fn cohens_kappa_chance_agreement() {
+        let cm = vec![vec![5.0, 5.0], vec![5.0, 5.0]];
+        let kappa = cohens_kappa(&cm);
+        assert_close(kappa, 0.0, 1e-10, "chance agreement κ = 0");
     }
 
     #[test]
