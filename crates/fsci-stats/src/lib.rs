@@ -31639,6 +31639,44 @@ pub fn dice_distance(u: &[f64], v: &[f64]) -> f64 {
     if denom == 0.0 { 0.0 } else { (c_tf + c_ft) as f64 / denom }
 }
 
+/// Yule dissimilarity for binary data.
+pub fn yule_distance(u: &[f64], v: &[f64]) -> f64 {
+    if u.len() != v.len() || u.is_empty() {
+        return f64::NAN;
+    }
+    let (mut c_tt, mut c_tf, mut c_ft, mut c_ff) = (0usize, 0usize, 0usize, 0usize);
+    for (&a, &b) in u.iter().zip(v.iter()) {
+        match (a > 0.0, b > 0.0) {
+            (true, true) => c_tt += 1,
+            (true, false) => c_tf += 1,
+            (false, true) => c_ft += 1,
+            (false, false) => c_ff += 1,
+        }
+    }
+    let r = (c_tf * c_ft) as f64;
+    let s = (c_tt * c_ff) as f64;
+    if r + s == 0.0 { 0.0 } else { 2.0 * r / (r + s) }
+}
+
+/// Sokal-Michener dissimilarity for binary data.
+pub fn sokalmichener_distance(u: &[f64], v: &[f64]) -> f64 {
+    if u.len() != v.len() || u.is_empty() {
+        return f64::NAN;
+    }
+    let (mut c_tt, mut c_tf, mut c_ft, mut c_ff) = (0usize, 0usize, 0usize, 0usize);
+    for (&a, &b) in u.iter().zip(v.iter()) {
+        match (a > 0.0, b > 0.0) {
+            (true, true) => c_tt += 1,
+            (true, false) => c_tf += 1,
+            (false, true) => c_ft += 1,
+            (false, false) => c_ff += 1,
+        }
+    }
+    let r = 2.0 * (c_tf + c_ft) as f64;
+    let s = (c_tt + c_ff) as f64;
+    if r + s == 0.0 { 0.0 } else { r / (r + s) }
+}
+
 /// Adjusted Rand Index for comparing cluster assignments.
 /// labels_true and labels_pred should be integer labels (encoded as f64).
 pub fn adjusted_rand_index(labels_true: &[f64], labels_pred: &[f64]) -> f64 {
