@@ -5245,6 +5245,115 @@ impl DiscreteDistribution for Poisson {
     }
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Skellam Distribution
+// ══════════════════════════════════════════════════════════════════════
+
+/// Skellam distribution: difference of two independent Poisson random variables.
+///
+/// Matches `scipy.stats.skellam(mu1, mu2)`.
+/// PMF: P(k) = exp(-(μ1+μ2)) * (μ1/μ2)^(k/2) * I_|k|(2*sqrt(μ1*μ2))
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Skellam {
+    pub mu1: f64,
+    pub mu2: f64,
+}
+
+impl Skellam {
+    #[must_use]
+    pub fn new(mu1: f64, mu2: f64) -> Self {
+        assert!(mu1 >= 0.0 && mu1.is_finite(), "mu1 must be non-negative and finite");
+        assert!(mu2 >= 0.0 && mu2.is_finite(), "mu2 must be non-negative and finite");
+        Self { mu1, mu2 }
+    }
+
+    pub fn pmf_signed(&self, k: i64) -> f64 {
+        if self.mu1 == 0.0 && self.mu2 == 0.0 {
+            return if k == 0 { 1.0 } else { 0.0 };
+        }
+        let exp_term = (-(self.mu1 + self.mu2)).exp();
+        let ratio = if self.mu2 == 0.0 {
+            if k >= 0 {
+                f64::INFINITY
+            } else {
+                0.0
+            }
+        } else if self.mu1 == 0.0 {
+            if k <= 0 {
+                f64::INFINITY
+            } else {
+                0.0
+            }
+        } else {
+            (self.mu1 / self.mu2).powf(k as f64 / 2.0)
+        };
+        if self.mu1 == 0.0 {
+            if k > 0 {
+                return 0.0;
+            }
+            return (-self.mu2).exp() * self.mu2.powi((-k) as i32)
+                / ln_gamma((-k + 1) as f64).exp();
+        }
+        if self.mu2 == 0.0 {
+            if k < 0 {
+                return 0.0;
+            }
+            return (-self.mu1).exp() * self.mu1.powi(k as i32)
+                / ln_gamma((k + 1) as f64).exp();
+        }
+        let bessel_arg = 2.0 * (self.mu1 * self.mu2).sqrt();
+        let bessel_val = fsci_special::bessel::ive_scalar(k.unsigned_abs() as f64, bessel_arg)
+            * bessel_arg.exp();
+        exp_term * ratio * bessel_val
+    }
+}
+
+impl DiscreteDistribution for Skellam {
+    fn pmf(&self, k: u64) -> f64 {
+        self.pmf_signed(k as i64)
+    }
+
+    fn cdf(&self, k: u64) -> f64 {
+        let mut sum = 0.0;
+        for i in 0..=k {
+            sum += self.pmf(i);
+        }
+        sum.min(1.0)
+    }
+
+    fn mean(&self) -> f64 {
+        self.mu1 - self.mu2
+    }
+
+    fn var(&self) -> f64 {
+        self.mu1 + self.mu2
+    }
+
+    fn skewness(&self) -> f64 {
+        let var = self.var();
+        if var == 0.0 {
+            return 0.0;
+        }
+        (self.mu1 - self.mu2) / var.powf(1.5)
+    }
+
+    fn kurtosis(&self) -> f64 {
+        let var = self.var();
+        if var == 0.0 {
+            return f64::NAN;
+        }
+        1.0 / var
+    }
+
+    fn mode(&self) -> f64 {
+        (self.mu1 - self.mu2).round()
+    }
+
+    fn entropy(&self) -> f64 {
+        f64::NAN
+    }
+}
+
 /// Binomial distribution: number of successes in n independent Bernoulli trials.
 ///
 /// Matches `scipy.stats.binom(n, p)`.
@@ -51932,6 +52041,24 @@ mod tests {
         assert_eq!(rbw.mode(), 1.0);
         let q50 = rbw.ppf(0.5);
         assert!(q50 > 0.0 && q50.is_finite());
+    }
+
+    #[test]
+    fn test_skellam() {
+        let sk = Skellam::new(5.0, 3.0);
+        let pmf0 = sk.pmf_signed(0);
+        assert!(pmf0 > 0.0 && pmf0 < 1.0);
+        let pmf1 = sk.pmf_signed(1);
+        assert!(pmf1 > 0.0);
+        let pmf_neg = sk.pmf_signed(-1);
+        assert!(pmf_neg > 0.0);
+        let mut total = 0.0;
+        for k in -20..=20 {
+            total += sk.pmf_signed(k);
+        }
+        assert!((total - 1.0).abs() < 0.01);
+        assert!((sk.mean() - 2.0).abs() < 1e-10);
+        assert!((sk.var() - 8.0).abs() < 1e-10);
     }
 
 }
