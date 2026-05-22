@@ -18537,6 +18537,46 @@ pub fn chisquare(f_obs: &[f64], f_exp: Option<&[f64]>) -> (f64, f64) {
     power_divergence(f_obs, f_exp, 1.0)
 }
 
+/// G-test (log-likelihood ratio test) for goodness of fit.
+///
+/// Tests whether observed frequencies differ significantly from expected.
+/// This is a convenience wrapper around `power_divergence` with lambda=0.
+///
+/// The G-test is an alternative to the chi-squared test that is sometimes
+/// preferred because of its better approximation in smaller samples.
+///
+/// Matches `scipy.stats.power_divergence(f_obs, f_exp, lambda_="log-likelihood")`.
+pub fn g_test(f_obs: &[f64], f_exp: Option<&[f64]>) -> (f64, f64) {
+    power_divergence(f_obs, f_exp, 0.0)
+}
+
+/// Freeman-Tukey test for goodness of fit.
+///
+/// A power divergence test with lambda=-0.5.
+///
+/// Matches `scipy.stats.power_divergence(f_obs, f_exp, lambda_="freeman-tukey")`.
+pub fn freeman_tukey_test(f_obs: &[f64], f_exp: Option<&[f64]>) -> (f64, f64) {
+    power_divergence(f_obs, f_exp, -0.5)
+}
+
+/// Modified log-likelihood ratio test (Cressie-Read).
+///
+/// A power divergence test with lambda=2/3.
+///
+/// Matches `scipy.stats.power_divergence(f_obs, f_exp, lambda_="mod-log-likelihood")`.
+pub fn mod_log_likelihood_test(f_obs: &[f64], f_exp: Option<&[f64]>) -> (f64, f64) {
+    power_divergence(f_obs, f_exp, 2.0 / 3.0)
+}
+
+/// Cressie-Read test for goodness of fit.
+///
+/// A power divergence test with lambda=2/3 (same as modified log-likelihood).
+///
+/// Matches `scipy.stats.power_divergence(f_obs, f_exp, lambda_="cressie-read")`.
+pub fn cressie_read_test(f_obs: &[f64], f_exp: Option<&[f64]>) -> (f64, f64) {
+    power_divergence(f_obs, f_exp, 2.0 / 3.0)
+}
+
 /// 1D Wasserstein distance (earth mover's distance) between two distributions.
 ///
 /// Computes the first Wasserstein distance between empirical distributions
