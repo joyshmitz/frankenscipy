@@ -12,8 +12,9 @@ use std::process::{Command, Stdio};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use fsci_ndimage::{
-    BoundaryMode, NdArray, binary_dilation, binary_erosion, gaussian_filter, laplace,
-    maximum_filter, median_filter, minimum_filter, prewitt, sobel, uniform_filter,
+    BoundaryMode, NdArray, binary_dilation, binary_dilation_axes, binary_erosion,
+    binary_erosion_axes, gaussian_filter, laplace, maximum_filter, median_filter, minimum_filter,
+    prewitt, sobel, uniform_filter,
 };
 use serde::{Deserialize, Serialize};
 
@@ -694,6 +695,7 @@ struct BinaryMorphCase {
     data: Vec<f64>,
     structure_size: usize,
     iterations: usize,
+    axes: Option<Vec<isize>>,
 }
 
 fn binary_morph_cases() -> Vec<BinaryMorphCase> {
@@ -719,6 +721,7 @@ fn binary_morph_cases() -> Vec<BinaryMorphCase> {
                     data: binary_data.clone(),
                     structure_size,
                     iterations,
+                    axes: None,
                 });
                 cases.push(BinaryMorphCase {
                     case_id: format!(
@@ -730,9 +733,44 @@ fn binary_morph_cases() -> Vec<BinaryMorphCase> {
                     data: binary_data,
                     structure_size,
                     iterations,
+                    axes: None,
                 });
             }
         }
+    }
+
+    #[rustfmt::skip]
+    let axes_data = vec![
+        2.0, 0.0, -1.0,
+        0.0, 3.0, 4.0,
+    ];
+    for axes in [vec![-1], vec![-2], vec![-2, -1], vec![]] {
+        let axes_label = if axes.is_empty() {
+            String::from("empty")
+        } else {
+            axes.iter()
+                .map(isize::to_string)
+                .collect::<Vec<_>>()
+                .join("_")
+        };
+        cases.push(BinaryMorphCase {
+            case_id: format!("binary_erosion_axes_{axes_label}_size_2_iter_1"),
+            op: String::from("binary_erosion"),
+            shape: [2, 3],
+            data: axes_data.clone(),
+            structure_size: 2,
+            iterations: 1,
+            axes: Some(axes.clone()),
+        });
+        cases.push(BinaryMorphCase {
+            case_id: format!("binary_dilation_axes_{axes_label}_size_2_iter_1"),
+            op: String::from("binary_dilation"),
+            shape: [2, 3],
+            data: axes_data.clone(),
+            structure_size: 2,
+            iterations: 1,
+            axes: Some(axes),
+        });
     }
 
     cases
@@ -741,8 +779,14 @@ fn binary_morph_cases() -> Vec<BinaryMorphCase> {
 fn rust_binary_morph_output(case: &BinaryMorphCase) -> Option<Vec<f64>> {
     let array = NdArray::new(case.data.clone(), case.shape.to_vec()).ok()?;
     let output = match case.op.as_str() {
-        "binary_erosion" => binary_erosion(&array, case.structure_size, case.iterations),
-        "binary_dilation" => binary_dilation(&array, case.structure_size, case.iterations),
+        "binary_erosion" => match case.axes.as_deref() {
+            Some(axes) => binary_erosion_axes(&array, case.structure_size, axes, case.iterations),
+            None => binary_erosion(&array, case.structure_size, case.iterations),
+        },
+        "binary_dilation" => match case.axes.as_deref() {
+            Some(axes) => binary_dilation_axes(&array, case.structure_size, axes, case.iterations),
+            None => binary_dilation(&array, case.structure_size, case.iterations),
+        },
         _ => return None,
     }
     .ok()?;
@@ -763,13 +807,24 @@ for case in cases:
     arr = np.array(case["data"], dtype=np.float64).reshape(case["shape"])
     arr_bool = arr.astype(bool)
     size = int(case["structure_size"])
-    structure = np.ones((size, size), dtype=bool)
     iterations = int(case["iterations"])
+    axes = case.get("axes")
+    if axes is None:
+        structure = np.ones((size, size), dtype=bool)
+        kwargs = {}
+    else:
+        axes = tuple(int(axis) for axis in axes)
+        structure = np.ones((size,) * len(axes), dtype=bool)
+        kwargs = {"axes": axes}
 
     if case["op"] == "binary_erosion":
-        values = ndimage.binary_erosion(arr_bool, structure=structure, iterations=iterations)
+        values = ndimage.binary_erosion(
+            arr_bool, structure=structure, iterations=iterations, **kwargs
+        )
     elif case["op"] == "binary_dilation":
-        values = ndimage.binary_dilation(arr_bool, structure=structure, iterations=iterations)
+        values = ndimage.binary_dilation(
+            arr_bool, structure=structure, iterations=iterations, **kwargs
+        )
     else:
         raise ValueError(f"unsupported op: {case['op']}")
     output.append({
@@ -828,7 +883,7 @@ fn scipy_binary_morph_oracle_or_skip(
 #[test]
 fn diff_004_ndimage_binary_morphology_live_scipy() {
     let cases = binary_morph_cases();
-    assert_eq!(cases.len(), 40, "binary morph diff case inventory changed");
+    assert_eq!(cases.len(), 48, "binary morph diff case inventory changed");
 
     let start = Instant::now();
     let Some(oracle_cases) =
@@ -855,7 +910,10 @@ fn diff_004_ndimage_binary_morphology_live_scipy() {
             op: case.op.clone(),
             shape: case.shape,
             mode: String::from("n/a"),
-            parameter: format!("size={},iter={}", case.structure_size, case.iterations),
+            parameter: format!(
+                "size={},iter={},axes={:?}",
+                case.structure_size, case.iterations, case.axes
+            ),
             max_abs_diff: diff,
             tolerance: TOL,
             pass: diff <= TOL,

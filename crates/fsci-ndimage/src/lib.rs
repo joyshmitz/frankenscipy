@@ -2838,6 +2838,108 @@ fn binary_dilation_once_with_origins(current: &NdArray, size: usize, origins: &[
     output
 }
 
+fn booleanized_binary(input: &NdArray) -> NdArray {
+    let mut output = NdArray::zeros(input.shape.clone());
+    for (out, &value) in output.data.iter_mut().zip(&input.data) {
+        *out = if value != 0.0 { 1.0 } else { 0.0 };
+    }
+    output
+}
+
+fn binary_erosion_once_axes(current: &NdArray, size: usize, axes: &[usize]) -> NdArray {
+    if axes.is_empty() {
+        return booleanized_binary(current);
+    }
+
+    let mut output = NdArray::zeros(current.shape.clone());
+    let offsets = vec![size as i64 / 2; axes.len()];
+    let kernel_shape = vec![size; axes.len()];
+    let kernel_total: usize = kernel_shape.iter().product();
+    let kernel_strides = compute_strides(&kernel_shape);
+
+    for flat_out in 0..current.size() {
+        let out_idx = current.unravel(flat_out);
+        let mut all_set = true;
+
+        for flat_k in 0..kernel_total {
+            let mut k_idx = vec![0usize; axes.len()];
+            let mut rem = flat_k;
+            for d in 0..axes.len() {
+                k_idx[d] = rem / kernel_strides[d];
+                rem %= kernel_strides[d];
+            }
+
+            let mut in_idx: Vec<i64> = out_idx.iter().map(|&idx| idx as i64).collect();
+            for (kernel_axis, &input_axis) in axes.iter().enumerate() {
+                in_idx[input_axis] =
+                    out_idx[input_axis] as i64 + k_idx[kernel_axis] as i64 - offsets[kernel_axis];
+            }
+
+            if current.get_boundary(&in_idx, BoundaryMode::Constant, 0.0) == 0.0 {
+                all_set = false;
+                break;
+            }
+        }
+
+        output.data[flat_out] = if all_set { 1.0 } else { 0.0 };
+    }
+
+    output
+}
+
+fn binary_dilation_once_axes(current: &NdArray, size: usize, axes: &[usize]) -> NdArray {
+    if axes.is_empty() {
+        return booleanized_binary(current);
+    }
+
+    let mut output = NdArray::zeros(current.shape.clone());
+    let offsets = vec![size as i64 / 2; axes.len()];
+    let kernel_shape = vec![size; axes.len()];
+    let kernel_total: usize = kernel_shape.iter().product();
+    let kernel_strides = compute_strides(&kernel_shape);
+
+    let mut kernel_deltas = Vec::with_capacity(kernel_total);
+    for flat_k in 0..kernel_total {
+        let mut k_idx = vec![0usize; axes.len()];
+        let mut rem = flat_k;
+        for d in 0..axes.len() {
+            k_idx[d] = rem / kernel_strides[d];
+            rem %= kernel_strides[d];
+        }
+        kernel_deltas.push(
+            k_idx
+                .iter()
+                .enumerate()
+                .map(|(kernel_axis, &coord)| coord as i64 - offsets[kernel_axis])
+                .collect::<Vec<_>>(),
+        );
+    }
+
+    for flat_in in 0..current.size() {
+        if current.data[flat_in] == 0.0 {
+            continue;
+        }
+        let idx = current.unravel(flat_in);
+        for delta in &kernel_deltas {
+            let mut out_idx = idx.clone();
+            let mut in_bounds = true;
+            for (kernel_axis, &input_axis) in axes.iter().enumerate() {
+                let coord = idx[input_axis] as i64 + delta[kernel_axis];
+                if coord < 0 || coord >= current.shape[input_axis] as i64 {
+                    in_bounds = false;
+                    break;
+                }
+                out_idx[input_axis] = coord as usize;
+            }
+            if in_bounds {
+                output.set(&out_idx, 1.0);
+            }
+        }
+    }
+
+    output
+}
+
 fn run_binary_iterations(
     input: &NdArray,
     size: usize,
@@ -2866,6 +2968,37 @@ fn run_binary_iterations(
     Ok(current)
 }
 
+fn run_binary_iterations_axes(
+    input: &NdArray,
+    size: usize,
+    axes: &[usize],
+    iterations: usize,
+    op: fn(&NdArray, usize, &[usize]) -> NdArray,
+) -> Result<NdArray, NdimageError> {
+    if input.size() == 0 {
+        return Err(NdimageError::EmptyInput);
+    }
+    let shape = vec![size; axes.len()];
+    normalize_filter_origins(axes.len(), &shape, &[0])?;
+    let mut current = input.clone();
+
+    if iterations == 0 {
+        loop {
+            let output = op(&current, size, axes);
+            if output.data == current.data {
+                return Ok(output);
+            }
+            current = output;
+        }
+    }
+
+    for _ in 0..iterations {
+        current = op(&current, size, axes);
+    }
+
+    Ok(current)
+}
+
 /// Binary erosion: output pixel is 1 only if all pixels in the structuring
 /// element neighborhood are 1.
 ///
@@ -2876,6 +3009,22 @@ pub fn binary_erosion(
     iterations: usize,
 ) -> Result<NdArray, NdimageError> {
     binary_erosion_with_origins(input, structure_size, &[0], iterations)
+}
+
+/// Binary erosion over a SciPy-style signed axes subset.
+pub fn binary_erosion_axes(
+    input: &NdArray,
+    structure_size: usize,
+    axes: &[isize],
+    iterations: usize,
+) -> Result<NdArray, NdimageError> {
+    let axes = normalize_signed_axes(axes, input.ndim())?;
+    let size = if structure_size == 0 {
+        3
+    } else {
+        structure_size
+    };
+    run_binary_iterations_axes(input, size, &axes, iterations, binary_erosion_once_axes)
 }
 
 /// Binary erosion with SciPy `origin` semantics.
@@ -2912,6 +3061,22 @@ pub fn binary_dilation(
     iterations: usize,
 ) -> Result<NdArray, NdimageError> {
     binary_dilation_with_origins(input, structure_size, &[0], iterations)
+}
+
+/// Binary dilation over a SciPy-style signed axes subset.
+pub fn binary_dilation_axes(
+    input: &NdArray,
+    structure_size: usize,
+    axes: &[isize],
+    iterations: usize,
+) -> Result<NdArray, NdimageError> {
+    let axes = normalize_signed_axes(axes, input.ndim())?;
+    let size = if structure_size == 0 {
+        3
+    } else {
+        structure_size
+    };
+    run_binary_iterations_axes(input, size, &axes, iterations, binary_dilation_once_axes)
 }
 
 /// Binary dilation with SciPy `origin` semantics.
@@ -8209,6 +8374,74 @@ mod tests {
         assert!(binary_dilation_with_origins(&input, 3, &[1], 1).is_ok());
         assert!(binary_opening_with_origins(&input, 3, &[-2], 1).is_err());
         assert!(binary_closing_with_origins(&input, 3, &[2], 1).is_err());
+    }
+
+    #[test]
+    fn binary_erosion_and_dilation_axes_match_scipy_subset_fixtures() {
+        #[rustfmt::skip]
+        let input = NdArray::new(vec![
+            1.0, 0.0, 1.0,
+            0.0, 1.0, 1.0,
+        ], vec![2, 3]).unwrap();
+
+        // scipy.ndimage.binary_erosion(input, np.ones((2,)), border_value=0, axes=(-1,))
+        assert_eq!(
+            binary_erosion_axes(&input, 2, &[-1], 1).unwrap().data,
+            vec![0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+        );
+        // scipy.ndimage.binary_erosion(input, np.ones((2,)), border_value=0, axes=(-2,))
+        assert_eq!(
+            binary_erosion_axes(&input, 2, &[-2], 1).unwrap().data,
+            vec![0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+        );
+        // scipy.ndimage.binary_erosion(input, np.ones((2, 2)), border_value=0, axes=(-2, -1))
+        assert_eq!(
+            binary_erosion_axes(&input, 2, &[-2, -1], 1).unwrap().data,
+            vec![0.0; 6]
+        );
+
+        // scipy.ndimage.binary_dilation(input, np.ones((2,)), border_value=0, axes=(-1,))
+        assert_eq!(
+            binary_dilation_axes(&input, 2, &[-1], 1).unwrap().data,
+            vec![1.0; 6]
+        );
+        // scipy.ndimage.binary_dilation(input, np.ones((2,)), border_value=0, axes=(-2,))
+        assert_eq!(
+            binary_dilation_axes(&input, 2, &[-2], 1).unwrap().data,
+            vec![1.0, 1.0, 1.0, 0.0, 1.0, 1.0]
+        );
+        // scipy.ndimage.binary_dilation(input, np.ones((2, 2)), border_value=0, axes=(-2, -1))
+        assert_eq!(
+            binary_dilation_axes(&input, 2, &[-2, -1], 1).unwrap().data,
+            vec![1.0; 6]
+        );
+
+        #[rustfmt::skip]
+        let non_bool = NdArray::new(vec![
+            2.0, 0.0, -1.0,
+            0.0, 3.0, 4.0,
+        ], vec![2, 3]).unwrap();
+        assert_eq!(
+            binary_erosion_axes(&non_bool, 2, &[], 1).unwrap().data,
+            vec![1.0, 0.0, 1.0, 0.0, 1.0, 1.0]
+        );
+        assert_eq!(
+            binary_dilation_axes(&non_bool, 2, &[], 1).unwrap().data,
+            vec![1.0, 0.0, 1.0, 0.0, 1.0, 1.0]
+        );
+    }
+
+    #[test]
+    fn binary_erosion_and_dilation_axes_reject_duplicate_and_out_of_range_axes() {
+        let input = NdArray::new(vec![1.0; 6], vec![2, 3]).unwrap();
+
+        assert!(binary_erosion_axes(&input, 2, &[1, -1], 1).is_err());
+        assert!(binary_erosion_axes(&input, 2, &[2], 1).is_err());
+        assert!(binary_erosion_axes(&input, 2, &[-3], 1).is_err());
+
+        assert!(binary_dilation_axes(&input, 2, &[1, -1], 1).is_err());
+        assert!(binary_dilation_axes(&input, 2, &[2], 1).is_err());
+        assert!(binary_dilation_axes(&input, 2, &[-3], 1).is_err());
     }
 
     #[test]
