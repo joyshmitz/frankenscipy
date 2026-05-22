@@ -31454,6 +31454,36 @@ pub fn hoover_index(data: &[f64]) -> f64 {
     data.iter().map(|&x| (x - mean).abs()).sum::<f64>() / (2.0 * total)
 }
 
+/// 1D cross-correlation (full mode).
+pub fn correlate_1d(a: &[f64], v: &[f64]) -> Vec<f64> {
+    if a.is_empty() || v.is_empty() {
+        return vec![];
+    }
+    let n = a.len();
+    let m = v.len();
+    let out_len = n + m - 1;
+    let mut result = vec![0.0; out_len];
+
+    for k in 0..out_len {
+        for j in 0..m {
+            let i = k as isize - (m - 1 - j) as isize;
+            if i >= 0 && (i as usize) < n {
+                result[k] += a[i as usize] * v[j];
+            }
+        }
+    }
+    result
+}
+
+/// 1D convolution (full mode).
+pub fn convolve_1d(a: &[f64], v: &[f64]) -> Vec<f64> {
+    if a.is_empty() || v.is_empty() {
+        return vec![];
+    }
+    let rev_v: Vec<f64> = v.iter().rev().copied().collect();
+    correlate_1d(a, &rev_v)
+}
+
 /// Compute the log-likelihood for a normal distribution.
 pub fn norm_loglikelihood(data: &[f64], mu: f64, sigma: f64) -> f64 {
     let n = data.len() as f64;
