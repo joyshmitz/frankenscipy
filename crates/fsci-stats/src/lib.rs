@@ -17581,6 +17581,62 @@ pub fn ttest_1samp_alternative(data: &[f64], popmean: f64, alternative: &str) ->
     }
 }
 
+/// One-sample t-test from summary statistics.
+///
+/// Matches `scipy.stats.ttest_1samp_from_stats(mean, std, nobs, popmean)`.
+///
+/// # Arguments
+/// * `mean` - Sample mean
+/// * `std` - Sample standard deviation
+/// * `nobs` - Number of observations
+/// * `popmean` - Expected population mean under H0
+/// * `alternative` - "two-sided" (default), "less", or "greater"
+pub fn ttest_1samp_from_stats(
+    mean: f64,
+    std: f64,
+    nobs: usize,
+    popmean: f64,
+    alternative: Option<&str>,
+) -> TtestResult {
+    let n = nobs as f64;
+    if nobs < 2 {
+        return TtestResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            df: n - 1.0,
+        };
+    }
+    let se = std / n.sqrt();
+    if se == 0.0 || !se.is_finite() {
+        let statistic = if (mean - popmean).abs() == 0.0 {
+            f64::NAN
+        } else {
+            (mean - popmean).signum() * f64::INFINITY
+        };
+        return TtestResult {
+            statistic,
+            pvalue: if statistic.is_nan() { f64::NAN } else { 0.0 },
+            df: n - 1.0,
+        };
+    }
+    let t = (mean - popmean) / se;
+    let df = n - 1.0;
+    let tdist = StudentT::new(df);
+
+    let alt = alternative.unwrap_or("two-sided");
+    let pvalue = match alt {
+        "less" => tdist.cdf(t),
+        "greater" => tdist.sf(t),
+        _ => 2.0 * tdist.sf(t.abs()),
+    };
+
+    TtestResult {
+        statistic: t,
+        pvalue,
+        df,
+    }
+}
+
 /// Independent two-sample t-test (equal variance assumed).
 ///
 /// Matches `scipy.stats.ttest_ind(a, b, equal_var=True)`.
@@ -52267,6 +52323,17 @@ mod tests {
         assert!((result.df - 2.0).abs() < 1e-10);
         let same = alexander_govern(&[g1, g1, g1]);
         assert!(same.pvalue > 0.5);
+    }
+
+    #[test]
+    fn test_ttest_1samp_from_stats() {
+        let result = ttest_1samp_from_stats(5.0, 2.0, 30, 4.5, None);
+        assert!(result.statistic.is_finite());
+        assert!(result.pvalue > 0.0 && result.pvalue < 1.0);
+        assert!((result.df - 29.0).abs() < 1e-10);
+        let exact = ttest_1samp_from_stats(5.0, 2.0, 30, 5.0, None);
+        assert!((exact.statistic).abs() < 1e-10);
+        assert!(exact.pvalue > 0.99);
     }
 
 }
