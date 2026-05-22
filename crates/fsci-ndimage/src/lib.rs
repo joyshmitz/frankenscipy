@@ -2643,6 +2643,17 @@ pub fn center_of_mass(
 // Distance Transform
 // ══════════════════════════════════════════════════════════════════════
 
+/// Distance metric for brute-force and chamfer distance transforms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DistanceMetric {
+    Euclidean,
+    Taxicab,
+    Chessboard,
+}
+
+const BF_NO_BACKGROUND_EUCLIDEAN: f64 = 1.340_780_792_994_259_6e154;
+const BF_NO_BACKGROUND_GRID: f64 = u32::MAX as f64;
+
 /// Euclidean distance transform for a binary image.
 ///
 /// For each foreground pixel (nonzero), computes the distance to the nearest
@@ -2704,6 +2715,137 @@ pub fn distance_transform_edt(
     }
 
     Ok(output)
+}
+
+/// Brute-force distance transform for a binary image.
+///
+/// Matches `scipy.ndimage.distance_transform_bf` for the distance-only case.
+/// Foreground values are nonzero; background values are zero.
+pub fn distance_transform_bf(
+    input: &NdArray,
+    metric: DistanceMetric,
+    sampling: Option<&[f64]>,
+) -> Result<NdArray, NdimageError> {
+    if input.size() == 0 {
+        return Err(NdimageError::EmptyInput);
+    }
+
+    let sampling = if metric == DistanceMetric::Euclidean {
+        Some(normalize_sampling(input.ndim(), sampling)?)
+    } else {
+        None
+    };
+    let backgrounds = background_coordinates(input);
+    let no_background = match metric {
+        DistanceMetric::Euclidean => BF_NO_BACKGROUND_EUCLIDEAN,
+        DistanceMetric::Taxicab | DistanceMetric::Chessboard => BF_NO_BACKGROUND_GRID,
+    };
+
+    Ok(distance_transform_by_metric(
+        input,
+        metric,
+        sampling.as_deref(),
+        &backgrounds,
+        no_background,
+    ))
+}
+
+/// Chamfer distance transform for a binary image.
+///
+/// Matches `scipy.ndimage.distance_transform_cdt` for the distance-only
+/// taxicab/chessboard metrics. The Euclidean metric is rejected because SciPy's
+/// CDT API only accepts chamfer metrics.
+pub fn distance_transform_cdt(
+    input: &NdArray,
+    metric: DistanceMetric,
+) -> Result<NdArray, NdimageError> {
+    if input.size() == 0 {
+        return Err(NdimageError::EmptyInput);
+    }
+    if metric == DistanceMetric::Euclidean {
+        return Err(NdimageError::InvalidArgument(
+            "distance_transform_cdt requires taxicab or chessboard metric".to_string(),
+        ));
+    }
+
+    let backgrounds = background_coordinates(input);
+    Ok(distance_transform_by_metric(
+        input,
+        metric,
+        None,
+        &backgrounds,
+        -1.0,
+    ))
+}
+
+fn background_coordinates(input: &NdArray) -> Vec<Vec<usize>> {
+    input
+        .data
+        .iter()
+        .enumerate()
+        .filter_map(|(flat, &value)| {
+            if value == 0.0 {
+                Some(input.unravel(flat))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn distance_transform_by_metric(
+    input: &NdArray,
+    metric: DistanceMetric,
+    sampling: Option<&[f64]>,
+    backgrounds: &[Vec<usize>],
+    no_background: f64,
+) -> NdArray {
+    let mut output = NdArray::zeros(input.shape.clone());
+    for (flat, &value) in input.data.iter().enumerate() {
+        if value == 0.0 {
+            output.data[flat] = 0.0;
+        } else if backgrounds.is_empty() {
+            output.data[flat] = no_background;
+        } else {
+            let coords = input.unravel(flat);
+            let min_distance = backgrounds
+                .iter()
+                .map(|background| metric_distance(&coords, background, metric, sampling))
+                .fold(f64::INFINITY, f64::min);
+            output.data[flat] = min_distance;
+        }
+    }
+    output
+}
+
+fn metric_distance(
+    coords: &[usize],
+    background: &[usize],
+    metric: DistanceMetric,
+    sampling: Option<&[f64]>,
+) -> f64 {
+    match metric {
+        DistanceMetric::Euclidean => coords
+            .iter()
+            .zip(background)
+            .zip(sampling.expect("euclidean distance requires sampling"))
+            .map(|((&coord, &background_coord), &scale)| {
+                let delta = (coord as f64 - background_coord as f64) * scale;
+                delta * delta
+            })
+            .sum::<f64>()
+            .sqrt(),
+        DistanceMetric::Taxicab => coords
+            .iter()
+            .zip(background)
+            .map(|(&coord, &background_coord)| coord.abs_diff(background_coord) as f64)
+            .sum(),
+        DistanceMetric::Chessboard => coords
+            .iter()
+            .zip(background)
+            .map(|(&coord, &background_coord)| coord.abs_diff(background_coord) as f64)
+            .fold(0.0, f64::max),
+    }
 }
 
 fn normalize_sampling(ndim: usize, sampling: Option<&[f64]>) -> Result<Vec<f64>, NdimageError> {
@@ -5155,6 +5297,93 @@ mod tests {
     fn distance_transform_edt_rejects_sampling_length_mismatch() {
         let input = NdArray::new(vec![0.0; 9], vec![3, 3]).unwrap();
         let err = distance_transform_edt(&input, Some(&[1.0, 2.0, 3.0])).unwrap_err();
+        assert!(matches!(err, NdimageError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn distance_transform_bf_matches_scipy_metric_fixtures() {
+        #[rustfmt::skip]
+        let data = vec![
+            0.0, 1.0, 1.0,
+            1.0, 1.0, 0.0,
+            1.0, 1.0, 1.0,
+        ];
+        let input = NdArray::new(data, vec![3, 3]).unwrap();
+
+        // scipy.ndimage.distance_transform_bf(input, metric='euclidean')
+        assert_close_or_nan(
+            &distance_transform_bf(&input, DistanceMetric::Euclidean, None)
+                .unwrap()
+                .data,
+            &[0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 2.0, 2.0f64.sqrt(), 1.0],
+        );
+        // scipy.ndimage.distance_transform_bf(input, metric='taxicab')
+        assert_eq!(
+            distance_transform_bf(&input, DistanceMetric::Taxicab, None)
+                .unwrap()
+                .data,
+            vec![0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 2.0, 2.0, 1.0]
+        );
+        // scipy.ndimage.distance_transform_bf(input, metric='chessboard')
+        assert_eq!(
+            distance_transform_bf(&input, DistanceMetric::Chessboard, None)
+                .unwrap()
+                .data,
+            vec![0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 2.0, 1.0, 1.0]
+        );
+    }
+
+    #[test]
+    fn distance_transform_cdt_matches_scipy_metric_fixtures() {
+        #[rustfmt::skip]
+        let data = vec![
+            0.0, 1.0, 1.0,
+            1.0, 1.0, 0.0,
+            1.0, 1.0, 1.0,
+        ];
+        let input = NdArray::new(data, vec![3, 3]).unwrap();
+
+        // scipy.ndimage.distance_transform_cdt(input, metric='taxicab')
+        assert_eq!(
+            distance_transform_cdt(&input, DistanceMetric::Taxicab)
+                .unwrap()
+                .data,
+            vec![0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 2.0, 2.0, 1.0]
+        );
+        // scipy.ndimage.distance_transform_cdt(input, metric='chessboard')
+        assert_eq!(
+            distance_transform_cdt(&input, DistanceMetric::Chessboard)
+                .unwrap()
+                .data,
+            vec![0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 2.0, 1.0, 1.0]
+        );
+    }
+
+    #[test]
+    fn distance_transform_bf_and_cdt_match_all_foreground_sentinels() {
+        let input = NdArray::new(vec![1.0; 4], vec![2, 2]).unwrap();
+
+        assert_eq!(
+            distance_transform_bf(&input, DistanceMetric::Euclidean, None)
+                .unwrap()
+                .data,
+            vec![BF_NO_BACKGROUND_EUCLIDEAN; 4]
+        );
+        assert_eq!(
+            distance_transform_bf(&input, DistanceMetric::Taxicab, None)
+                .unwrap()
+                .data,
+            vec![BF_NO_BACKGROUND_GRID; 4]
+        );
+        assert_eq!(
+            distance_transform_cdt(&input, DistanceMetric::Chessboard)
+                .unwrap()
+                .data,
+            vec![-1.0; 4]
+        );
+
+        let err = distance_transform_cdt(&input, DistanceMetric::Euclidean)
+            .expect_err("CDT rejects Euclidean metric");
         assert!(matches!(err, NdimageError::InvalidArgument(_)));
     }
 
