@@ -1178,6 +1178,22 @@ pub fn median_filter(
     mode: BoundaryMode,
     cval: f64,
 ) -> Result<NdArray, NdimageError> {
+    let origins = vec![0; input.ndim()];
+    median_filter_with_origins(input, size, &origins, mode, cval)
+}
+
+/// Median filter with SciPy `origin` semantics.
+///
+/// SciPy selects the element at rank `len / 2` from each sorted neighborhood,
+/// including even-sized neighborhoods; it does not average the two middle
+/// values.
+pub fn median_filter_with_origins(
+    input: &NdArray,
+    size: usize,
+    origins: &[i64],
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError> {
     if size == 0 {
         return Err(NdimageError::InvalidArgument(
             "filter size must be positive".to_string(),
@@ -1192,6 +1208,7 @@ pub fn median_filter(
     let offsets: Vec<i64> = vec![size as i64 / 2; ndim];
     let kernel_shape: Vec<usize> = vec![size; ndim];
     let kernel_total: usize = kernel_shape.iter().product();
+    let origins = normalize_filter_origins(ndim, &kernel_shape, origins)?;
 
     // Generate all offsets in kernel
     let kernel_strides = compute_strides(&kernel_shape);
@@ -1210,18 +1227,14 @@ pub fn median_filter(
 
             let mut in_idx = vec![0i64; ndim];
             for d in 0..ndim {
-                in_idx[d] = out_idx[d] as i64 + k_idx[d] as i64 - offsets[d];
+                in_idx[d] = out_idx[d] as i64 + k_idx[d] as i64 - offsets[d] - origins[d];
             }
             neighborhood.push(input.get_boundary(&in_idx, mode, cval));
         }
 
         neighborhood.sort_by(|a, b| a.total_cmp(b));
         let mid = neighborhood.len() / 2;
-        output.data[flat_out] = if neighborhood.len() % 2 == 0 {
-            (neighborhood[mid - 1] + neighborhood[mid]) / 2.0
-        } else {
-            neighborhood[mid]
-        };
+        output.data[flat_out] = neighborhood[mid];
     }
 
     Ok(output)
@@ -5733,6 +5746,30 @@ mod tests {
         let result = median_filter(&input, 3, BoundaryMode::Constant, 0.0).unwrap();
         // Median of 9 values where only 1 is 100 should be 0
         assert_eq!(result.data[4], 0.0);
+    }
+
+    #[test]
+    fn median_filter_even_size_matches_scipy_upper_rank() {
+        let input = NdArray::new(vec![1., 2., 3., 4., 5.], vec![5]).unwrap();
+
+        let centered = median_filter(&input, 2, BoundaryMode::Constant, 0.0).unwrap();
+        assert_eq!(centered.data, vec![1., 2., 3., 4., 5.]);
+
+        let shifted =
+            median_filter_with_origins(&input, 2, &[-1], BoundaryMode::Constant, 0.0).unwrap();
+        assert_eq!(shifted.data, vec![2., 3., 4., 5., 5.]);
+    }
+
+    #[test]
+    fn median_filter_origin_validation_matches_scipy_bounds() {
+        let input = NdArray::new(vec![1., 2., 3., 4., 5.], vec![5]).unwrap();
+
+        assert!(median_filter_with_origins(&input, 2, &[-1], BoundaryMode::Reflect, 0.0).is_ok());
+        assert!(median_filter_with_origins(&input, 2, &[0], BoundaryMode::Reflect, 0.0).is_ok());
+        assert!(median_filter_with_origins(&input, 2, &[1], BoundaryMode::Reflect, 0.0).is_err());
+        assert!(
+            median_filter_with_origins(&input, 3, &[-1, 0], BoundaryMode::Reflect, 0.0).is_err()
+        );
     }
 
     #[test]
