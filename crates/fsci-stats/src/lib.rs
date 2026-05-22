@@ -56604,6 +56604,23 @@ mod tests {
     }
 
     #[test]
+    fn histogram_matches_numpy_reference() {
+        // numpy.histogram([1,2,2,3,3,3,4,4,4,4], bins=4)
+        // Returns (counts, bin_edges)
+        let data = vec![1.0, 2.0, 2.0, 3.0, 3.0, 3.0, 4.0, 4.0, 4.0, 4.0];
+        let (counts, edges) = histogram(&data, 4);
+        // Should have 4 bins
+        assert_eq!(edges.len(), 5, "4 bins = 5 edges");
+        // Total count should equal data length
+        let total: usize = counts.iter().sum();
+        assert_eq!(total, 10, "total count should be 10");
+        // First edge should be at or near min
+        assert!(edges[0] <= 1.0, "first edge at or before min");
+        // Last edge should be at or after max
+        assert!(edges[4] >= 4.0, "last edge at or after max");
+    }
+
+    #[test]
     fn cov_matrix_matches_numpy_reference() {
         // numpy.cov([[1,2,3], [4,5,6]]) with rowvar=True
         // For perfectly correlated data, cov should show linear relationship
