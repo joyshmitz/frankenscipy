@@ -19967,6 +19967,41 @@ pub fn sem(data: &[f64]) -> f64 {
     (var / nf).sqrt()
 }
 
+/// Pooled variance from multiple groups.
+///
+/// s²_pooled = Σ(n_i - 1) * s²_i / Σ(n_i - 1)
+///
+/// Used when assuming homoscedasticity (equal variances).
+pub fn pooled_variance(groups: &[&[f64]]) -> f64 {
+    if groups.len() < 2 || groups.iter().any(|g| g.len() < 2) {
+        return f64::NAN;
+    }
+
+    let mut sum_ss = 0.0;
+    let mut sum_df = 0.0;
+
+    for group in groups {
+        let n = group.len() as f64;
+        let mean = group.iter().sum::<f64>() / n;
+        let ss: f64 = group.iter().map(|&x| (x - mean).powi(2)).sum();
+        sum_ss += ss;
+        sum_df += n - 1.0;
+    }
+
+    if sum_df <= 0.0 {
+        return f64::NAN;
+    }
+
+    sum_ss / sum_df
+}
+
+/// Pooled standard deviation from multiple groups.
+///
+/// Square root of pooled variance.
+pub fn pooled_std(groups: &[&[f64]]) -> f64 {
+    pooled_variance(groups).sqrt()
+}
+
 /// Credible interval result (statistic with low/high bounds).
 #[derive(Debug, Clone, PartialEq)]
 pub struct CredibleInterval {
@@ -50964,5 +50999,17 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_pooled_variance() {
+        let g1 = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let g2 = [6.0, 7.0, 8.0, 9.0, 10.0];
+        let pv = pooled_variance(&[&g1, &g2]);
+        assert!(pv > 0.0 && pv.is_finite());
+        let ps = pooled_std(&[&g1, &g2]);
+        assert!((ps - pv.sqrt()).abs() < 1e-12);
+        assert!(pooled_variance(&[&[1.0]]).is_nan());
+        assert!(pooled_variance(&[]).is_nan());
     }
 }
