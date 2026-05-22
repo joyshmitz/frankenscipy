@@ -58298,4 +58298,29 @@ mod tests {
             "dunnett: t2 vs control should not be significant"
         );
     }
+
+    #[test]
+    fn false_discovery_control_matches_scipy_reference_values() {
+        let pvalues: Vec<f64> = vec![0.001, 0.008, 0.039, 0.041, 0.042, 0.06, 0.074, 0.081, 0.15, 0.25];
+        let result = false_discovery_control(&pvalues, None).expect("FDR should succeed");
+        let expected: Vec<f64> = vec![
+            0.01, 0.04, 0.084, 0.084, 0.084, 0.1, 0.10125, 0.10125, 0.16666666666666666, 0.25,
+        ];
+        assert_eq!(result.len(), expected.len(), "FDR result length mismatch");
+        for (i, (got, exp)) in result.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (got - exp).abs() < 1e-10,
+                "FDR[{i}] got {got}, expected {exp}"
+            );
+        }
+    }
+
+    #[test]
+    fn bootstrap_mean_returns_valid_ci() {
+        let data: Vec<f64> = (1..=10).map(|x| x as f64).collect();
+        let (low, high) = bootstrap_mean(&data, 1000, 0.95, 42);
+        assert!(low < 5.5, "bootstrap CI low should be < mean, got {low}");
+        assert!(high > 5.5, "bootstrap CI high should be > mean, got {high}");
+        assert!(low > 0.0 && high < 11.0, "bootstrap CI should be within data range");
+    }
 }
