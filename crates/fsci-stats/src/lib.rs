@@ -17288,6 +17288,29 @@ pub fn gmean(data: &[f64]) -> f64 {
     (log_sum / n).exp()
 }
 
+/// Compute the weighted geometric mean.
+///
+/// G_w = exp(Σ(w·ln(x)) / Σw)
+///
+/// Like scipy.stats.gmean with weights parameter.
+pub fn gmean_weighted(data: &[f64], weights: &[f64]) -> f64 {
+    if data.is_empty() || data.len() != weights.len() {
+        return f64::NAN;
+    }
+    if data.iter().any(|&x| !x.is_finite() || x <= 0.0) {
+        return f64::NAN;
+    }
+    if weights.iter().any(|&w| !w.is_finite() || w < 0.0) {
+        return f64::NAN;
+    }
+    let total_w: f64 = weights.iter().sum();
+    if total_w == 0.0 {
+        return f64::NAN;
+    }
+    let weighted_log_sum: f64 = data.iter().zip(weights).map(|(&x, &w)| w * x.ln()).sum();
+    (weighted_log_sum / total_w).exp()
+}
+
 /// Compute the geometric standard deviation.
 ///
 /// The geometric standard deviation is defined as exp(std(log(data))).
@@ -52493,6 +52516,20 @@ mod tests {
         let with_zero = vec![0.0, 4.0];
         let h3 = hmean_weighted(&with_zero, &weights);
         assert_eq!(h3, 0.0);
+    }
+
+    #[test]
+    fn test_gmean_weighted() {
+        let data = vec![2.0, 8.0];
+        let weights = vec![1.0, 1.0];
+        let g = gmean_weighted(&data, &weights);
+        assert!((g - gmean(&data)).abs() < 1e-10);
+        let g_exact = gmean(&data);
+        assert!((g_exact - 4.0).abs() < 1e-10);
+        let unequal_w = vec![1.0, 3.0];
+        let g2 = gmean_weighted(&data, &unequal_w);
+        assert!(g2.is_finite());
+        assert!(g2 > g);
     }
 
 }
