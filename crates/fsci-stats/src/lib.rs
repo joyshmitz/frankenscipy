@@ -58440,4 +58440,53 @@ mod tests {
             result2.pvalue
         );
     }
+
+    #[test]
+    fn boxcox_matches_scipy_reference_values() {
+        let data: Vec<f64> = (1..=10).map(|x| x as f64).collect();
+
+        let result = boxcox(&data, None).expect("boxcox should succeed");
+        assert!(
+            (result.lmbda - 0.7219640406498328).abs() < 0.1,
+            "boxcox lambda got {}, expected ~0.72",
+            result.lmbda
+        );
+
+        let llf = boxcox_llf(result.lmbda, &data);
+        assert!(
+            llf.is_finite() && llf < 0.0,
+            "boxcox_llf should be finite negative, got {llf}"
+        );
+
+        let lam_opt = boxcox_normmax(&data, (-2.0, 2.0));
+        assert!(
+            lam_opt > 0.5 && lam_opt < 1.5,
+            "boxcox_normmax got {lam_opt}, expected ~0.9"
+        );
+    }
+
+    #[test]
+    fn yeojohnson_matches_scipy_reference_values() {
+        let data: Vec<f64> = vec![-2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0];
+
+        let transformed = yeojohnson(&data, 1.0);
+        assert_eq!(transformed.len(), data.len(), "yeojohnson length mismatch");
+        assert!(
+            (transformed[2] - 0.0).abs() < 1e-10,
+            "yeojohnson(0, lam=1) should be 0, got {}",
+            transformed[2]
+        );
+
+        let llf = yeojohnson_llf(1.0, &data);
+        assert!(
+            llf.is_finite(),
+            "yeojohnson_llf should be finite, got {llf}"
+        );
+
+        let lam_opt = yeojohnson_normmax(&data, (-2.0, 2.0));
+        assert!(
+            lam_opt > 0.5 && lam_opt < 1.5,
+            "yeojohnson_normmax got {lam_opt}, expected ~0.9"
+        );
+    }
 }
