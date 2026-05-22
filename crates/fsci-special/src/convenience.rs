@@ -2220,6 +2220,62 @@ pub fn sinc_squared(x: f64) -> f64 {
     s * s
 }
 
+/// Periodic sinc function (Dirichlet kernel).
+///
+/// diric(x, n) = sin(n*x/2) / (n * sin(x/2))
+///
+/// At x = 2πk (multiples of 2π), the limit is evaluated:
+/// - For n odd: diric(2πk, n) = 1
+/// - For n even: diric(2πk, n) = (-1)^k
+///
+/// Matches `scipy.special.diric(x, n)`.
+///
+/// # Arguments
+/// * `x` - Input value (radians)
+/// * `n` - Positive integer order (n >= 1)
+///
+/// # Examples
+/// ```
+/// use fsci_special::diric;
+/// assert!((diric(0.0, 5) - 1.0).abs() < 1e-15);
+/// assert!((diric(0.5, 5) - 0.767153947103405).abs() < 1e-12);
+/// ```
+pub fn diric(x: f64, n: i32) -> f64 {
+    if x.is_nan() || n < 1 {
+        return f64::NAN;
+    }
+
+    // n = 1 case: sin(x/2) / sin(x/2) = 1 always
+    if n == 1 {
+        return 1.0;
+    }
+
+    let n_f = n as f64;
+    let half_x = x / 2.0;
+
+    // Check if x is close to a multiple of 2π (where sin(x/2) ≈ 0)
+    // sin(x/2) = 0 when x/2 = kπ, i.e., x = 2kπ
+    let sin_half_x = half_x.sin();
+
+    if sin_half_x.abs() < 1e-14 {
+        // x ≈ 2kπ for some integer k
+        // Use L'Hôpital's rule: lim = n * cos(n*x/2) / cos(x/2)
+        // At x = 2kπ: cos(n*kπ) / cos(kπ) = (-1)^(nk) / (-1)^k = (-1)^((n-1)*k)
+        let k = (x / (2.0 * std::f64::consts::PI)).round() as i64;
+        if n % 2 == 1 {
+            // n odd: (-1)^((n-1)*k) = (-1)^(even*k) = 1
+            return 1.0;
+        } else {
+            // n even: (-1)^((n-1)*k) = (-1)^(odd*k) = (-1)^k
+            return if k % 2 == 0 { 1.0 } else { -1.0 };
+        }
+    }
+
+    // General case
+    let sin_n_half_x = (n_f * half_x).sin();
+    sin_n_half_x / (n_f * sin_half_x)
+}
+
 /// Inverse hyperbolic sine (sinh⁻¹): ln(x + √(x²+1)).
 ///
 /// Matches `numpy.arcsinh`.
@@ -8890,5 +8946,77 @@ mod tests {
         // undefined; we conservatively return NaN.
         assert!(struve(-1.5, 0.0).is_nan());
         assert!(struve(-2.0, 0.0).is_nan());
+    }
+
+    #[test]
+    fn diric_at_zero_is_one() {
+        // diric(0, n) = 1 for all n >= 1
+        for n in 1..=10 {
+            let val = diric(0.0, n);
+            assert!(
+                (val - 1.0).abs() < 1e-15,
+                "diric(0, {n}) = {val}, expected 1.0"
+            );
+        }
+    }
+
+    #[test]
+    fn diric_n_one_is_always_one() {
+        // diric(x, 1) = sin(x/2) / sin(x/2) = 1 for all x
+        for &x in &[0.0, 0.5, 1.0, 2.0, PI, 2.0 * PI, -1.0] {
+            let val = diric(x, 1);
+            assert!(
+                (val - 1.0).abs() < 1e-15,
+                "diric({x}, 1) = {val}, expected 1.0"
+            );
+        }
+    }
+
+    #[test]
+    fn diric_general_case_matches_scipy() {
+        // Values verified against scipy.special.diric
+        let cases = [
+            (0.1, 3, 0.9966694435186839),
+            (0.1, 4, 0.9937606691655042),
+            (0.5, 5, 0.7671539471034050),
+            (1.0, 3, 0.6935348705787598),
+            (1.0, 5, 0.2496621877283990),
+        ];
+        for (x, n, expected) in cases {
+            let val = diric(x, n);
+            assert!(
+                (val - expected).abs() < 1e-12,
+                "diric({x}, {n}) = {val}, expected {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn diric_at_multiples_of_two_pi() {
+        // At x = 2kπ:
+        // - n odd: result = 1
+        // - n even: result = (-1)^k
+        let two_pi = 2.0 * PI;
+
+        // x = 2π (k=1)
+        assert!((diric(two_pi, 3) - 1.0).abs() < 1e-14, "odd n at 2π");
+        assert!((diric(two_pi, 5) - 1.0).abs() < 1e-14, "odd n at 2π");
+        assert!((diric(two_pi, 4) - (-1.0)).abs() < 1e-14, "even n at 2π");
+        assert!((diric(two_pi, 6) - (-1.0)).abs() < 1e-14, "even n at 2π");
+
+        // x = 4π (k=2)
+        assert!((diric(4.0 * PI, 3) - 1.0).abs() < 1e-14, "odd n at 4π");
+        assert!((diric(4.0 * PI, 4) - 1.0).abs() < 1e-14, "even n at 4π, k=2");
+
+        // x = -2π (k=-1)
+        assert!((diric(-two_pi, 3) - 1.0).abs() < 1e-14, "odd n at -2π");
+        assert!((diric(-two_pi, 4) - (-1.0)).abs() < 1e-14, "even n at -2π");
+    }
+
+    #[test]
+    fn diric_propagates_nan_and_rejects_invalid_n() {
+        assert!(diric(f64::NAN, 5).is_nan());
+        assert!(diric(0.5, 0).is_nan()); // n < 1
+        assert!(diric(0.5, -1).is_nan()); // n < 1
     }
 }

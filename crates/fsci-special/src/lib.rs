@@ -65,6 +65,7 @@ pub use convenience::{
     debye,
     deg2rad,
     digamma_scalar,
+    diric,
     divmod,
     elu,
     entr,
