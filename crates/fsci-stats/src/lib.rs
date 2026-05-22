@@ -20994,6 +20994,37 @@ pub fn skew(data: &[f64]) -> f64 {
     skew_from_moments(nf, m2, m3)
 }
 
+/// Compute the weighted sample skewness.
+///
+/// Matches `scipy.stats.skew` with weights parameter.
+pub fn skew_weighted(data: &[f64], weights: &[f64]) -> f64 {
+    if data.len() < 3 || data.len() != weights.len() {
+        return f64::NAN;
+    }
+    if weights.iter().any(|&w| !w.is_finite() || w < 0.0) {
+        return f64::NAN;
+    }
+    let total_w: f64 = weights.iter().sum();
+    if total_w <= 0.0 {
+        return f64::NAN;
+    }
+    let mean_val: f64 = data.iter().zip(weights).map(|(&x, &w)| w * x).sum::<f64>() / total_w;
+    let mut m2 = 0.0;
+    let mut m3 = 0.0;
+    for (&x, &w) in data.iter().zip(weights) {
+        let d = x - mean_val;
+        let d2 = d * d;
+        m2 += w * d2;
+        m3 += w * d2 * d;
+    }
+    m2 /= total_w;
+    m3 /= total_w;
+    if m2 == 0.0 {
+        return 0.0;
+    }
+    m3 / m2.powf(1.5)
+}
+
 /// Compute the sample excess kurtosis (Fisher's definition, bias=True).
 ///
 /// Matches `scipy.stats.kurtosis(a, fisher=True, bias=True)`.
@@ -21014,6 +21045,37 @@ pub fn kurtosis(data: &[f64]) -> f64 {
         m4 += d2 * d2;
     }
     kurtosis_from_moments(nf, m2, m4)
+}
+
+/// Compute the weighted sample excess kurtosis.
+///
+/// Matches `scipy.stats.kurtosis` with weights parameter.
+pub fn kurtosis_weighted(data: &[f64], weights: &[f64]) -> f64 {
+    if data.len() < 4 || data.len() != weights.len() {
+        return f64::NAN;
+    }
+    if weights.iter().any(|&w| !w.is_finite() || w < 0.0) {
+        return f64::NAN;
+    }
+    let total_w: f64 = weights.iter().sum();
+    if total_w <= 0.0 {
+        return f64::NAN;
+    }
+    let mean_val: f64 = data.iter().zip(weights).map(|(&x, &w)| w * x).sum::<f64>() / total_w;
+    let mut m2 = 0.0;
+    let mut m4 = 0.0;
+    for (&x, &w) in data.iter().zip(weights) {
+        let d = x - mean_val;
+        let d2 = d * d;
+        m2 += w * d2;
+        m4 += w * d2 * d2;
+    }
+    m2 /= total_w;
+    m4 /= total_w;
+    if m2 == 0.0 {
+        return 0.0;
+    }
+    m4 / (m2 * m2) - 3.0
 }
 
 /// Compute the median absolute deviation (MAD).
