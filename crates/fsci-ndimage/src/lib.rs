@@ -1278,6 +1278,25 @@ pub fn morphological_gradient(
     Ok(result)
 }
 
+/// Morphological Laplace: dilation plus erosion minus twice the input.
+///
+/// Matches `scipy.ndimage.morphological_laplace`.
+pub fn morphological_laplace(
+    input: &NdArray,
+    size: usize,
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError> {
+    let max_img = maximum_filter(input, size, mode, cval)?;
+    let min_img = minimum_filter(input, size, mode, cval)?;
+
+    let mut result = NdArray::zeros(input.shape.clone());
+    for i in 0..result.data.len() {
+        result.data[i] = max_img.data[i] + min_img.data[i] - 2.0 * input.data[i];
+    }
+    Ok(result)
+}
+
 /// White top-hat: input minus morphological opening.
 ///
 /// Matches `scipy.ndimage.white_tophat`.
@@ -4983,6 +5002,44 @@ mod tests {
         // Center pixel: max-min = 1-0 = 1
         assert_eq!(result.data[4], 1.0);
         // Corner pixel: max-min = 0-0 = 0 (unless center is in neighborhood)
+    }
+
+    #[test]
+    fn morphological_laplace_matches_scipy_nearest_2d() {
+        #[rustfmt::skip]
+        let data = vec![
+            1.0, 2.0, 4.0,
+            0.0, 3.0, 5.0,
+            2.0, 1.0, 0.0,
+        ];
+        let input = NdArray::new(data, vec![3, 3]).unwrap();
+        let got = morphological_laplace(&input, 3, BoundaryMode::Nearest, 0.0).unwrap();
+        // scipy.ndimage.morphological_laplace(x, size=(3, 3), mode='nearest')
+        let expect = vec![1.0, 1.0, -1.0, 3.0, -1.0, -5.0, -1.0, 3.0, 5.0];
+        assert_eq!(got.data, expect);
+    }
+
+    #[test]
+    fn morphological_laplace_matches_scipy_constant_2d() {
+        #[rustfmt::skip]
+        let data = vec![
+            1.0, 2.0, 4.0,
+            0.0, 3.0, 5.0,
+            2.0, 1.0, 0.0,
+        ];
+        let input = NdArray::new(data, vec![3, 3]).unwrap();
+        let got = morphological_laplace(&input, 3, BoundaryMode::Constant, -2.0).unwrap();
+        // scipy.ndimage.morphological_laplace(x, size=(3, 3), mode='constant', cval=-2.0)
+        let expect = vec![-1.0, -1.0, -5.0, 1.0, -1.0, -7.0, -3.0, 1.0, 3.0];
+        assert_eq!(got.data, expect);
+    }
+
+    #[test]
+    fn morphological_laplace_rejects_zero_size() {
+        let input = NdArray::new(vec![0.0, 2.0, 1.0, 4.0, 3.0], vec![5]).unwrap();
+        let err = morphological_laplace(&input, 0, BoundaryMode::Reflect, 0.0)
+            .expect_err("zero-size footprint should be rejected");
+        assert!(matches!(err, NdimageError::InvalidArgument(_)));
     }
 
     #[test]
