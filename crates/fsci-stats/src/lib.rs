@@ -26752,6 +26752,31 @@ pub fn vargha_delaney_a(group1: &[f64], group2: &[f64]) -> f64 {
     (delta + 1.0) / 2.0
 }
 
+/// Convert Cohen's d to correlation coefficient r.
+///
+/// r = d / sqrt(d² + 4)
+///
+/// Assumes equal group sizes. For unequal sizes, use: r = d / sqrt(d² + (n1+n2)²/(n1*n2))
+pub fn d_to_r(d: f64) -> f64 {
+    d / (d * d + 4.0).sqrt()
+}
+
+/// Convert correlation coefficient r to Cohen's d.
+///
+/// d = 2r / sqrt(1 - r²)
+///
+/// Assumes equal group sizes.
+pub fn r_to_d(r: f64) -> f64 {
+    if r.abs() >= 1.0 {
+        return if r > 0.0 {
+            f64::INFINITY
+        } else {
+            f64::NEG_INFINITY
+        };
+    }
+    2.0 * r / (1.0 - r * r).sqrt()
+}
+
 /// Cramér's V: association measure for contingency tables.
 ///
 /// V = sqrt(χ²/(n * min(r-1, c-1))), where χ² is the chi-squared statistic.
@@ -46719,6 +46744,27 @@ mod tests {
         let r2 = r_squared(&y_true, &y_pred);
         let adj_r2 = adjusted_r_squared(&y_true, &y_pred, 3);
         assert!(adj_r2 < r2, "adjusted R² should be less than R²");
+    }
+
+    #[test]
+    fn d_to_r_roundtrip() {
+        for d in [-2.0, -0.5, 0.0, 0.5, 2.0] {
+            let r = d_to_r(d);
+            let d_back = r_to_d(r);
+            assert_close(d_back, d, 1e-10, &format!("roundtrip d={}", d));
+        }
+    }
+
+    #[test]
+    fn d_to_r_at_zero() {
+        assert_close(d_to_r(0.0), 0.0, 1e-10, "d=0 => r=0");
+    }
+
+    #[test]
+    fn r_to_d_large_effect() {
+        let r = 0.8;
+        let d = r_to_d(r);
+        assert!(d > 2.0, "r=0.8 should give large d: {}", d);
     }
 
     #[test]
