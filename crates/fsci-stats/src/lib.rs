@@ -55623,6 +55623,53 @@ mod tests {
     }
 
     #[test]
+    fn test_find_peaks_basic() {
+        let data = vec![0.0, 1.0, 0.0, 2.0, 0.0];
+        let peaks = find_peaks(&data);
+        assert_eq!(peaks, vec![1, 3], "Should find peaks at indices 1 and 3");
+    }
+
+    #[test]
+    fn test_find_peaks_no_peaks() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let peaks = find_peaks(&data);
+        assert!(peaks.is_empty(), "Monotonic data should have no peaks");
+    }
+
+    #[test]
+    fn test_find_valleys_basic() {
+        let data = vec![1.0, 0.0, 1.0, 0.0, 1.0];
+        let valleys = find_valleys(&data);
+        assert_eq!(valleys, vec![1, 3], "Should find valleys at indices 1 and 3");
+    }
+
+    #[test]
+    fn test_peak_prominences_basic() {
+        let data = vec![0.0, 1.0, 0.0, 2.0, 0.0];
+        let peaks = vec![1, 3];
+        let proms = peak_prominences(&data, &peaks);
+        assert_eq!(proms.len(), 2, "Should have 2 prominences");
+        assert!(proms[0] > 0.0, "First prominence should be positive");
+        assert!(proms[1] > 0.0, "Second prominence should be positive");
+    }
+
+    #[test]
+    fn test_correlate_1d_delta() {
+        let a = vec![0.0, 1.0, 0.0];
+        let v = vec![1.0];
+        let result = correlate_1d(&a, &v);
+        assert_eq!(result, vec![0.0, 1.0, 0.0], "Correlation with delta should return input");
+    }
+
+    #[test]
+    fn test_convolve_1d_symmetric() {
+        let a = vec![1.0, 2.0, 1.0];
+        let v = vec![1.0, 1.0];
+        let result = convolve_1d(&a, &v);
+        assert_eq!(result.len(), 4, "Convolution result length should be n + m - 1");
+    }
+
+    #[test]
     fn test_gini_coefficient_perfect_equality() {
         let data = vec![100.0, 100.0, 100.0, 100.0];
         let g = gini_coefficient(&data);
