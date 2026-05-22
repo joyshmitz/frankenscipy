@@ -5,10 +5,10 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
 pub use fsci_runtime::SyncSharedAuditLedger;
-use fsci_runtime::{casp_now_unix_ms, AuditAction, AuditEvent, AuditLedger, RuntimeMode};
+use fsci_runtime::{AuditAction, AuditEvent, AuditLedger, RuntimeMode, casp_now_unix_ms};
 
 use crate::plan::{
-    lookup_shared_plan, store_shared_plan, PlanFingerprint, PlanKey, PlanMetadata, PlanningStrategy,
+    PlanFingerprint, PlanKey, PlanMetadata, PlanningStrategy, lookup_shared_plan, store_shared_plan,
 };
 use crate::{Normalization, TransformKind};
 
@@ -1852,10 +1852,7 @@ fn complex_ln_gamma(z: Complex64) -> Complex64 {
         let sin_piz = complex_sin((pi * z.0, pi * z.1));
         let ln_sin = complex_ln(sin_piz);
         let refl = complex_ln_gamma((1.0 - z.0, -z.1));
-        (
-            pi.ln() - ln_sin.0 - refl.0,
-            -ln_sin.1 - refl.1,
-        )
+        (pi.ln() - ln_sin.0 - refl.0, -ln_sin.1 - refl.1)
     } else {
         let zs = (z.0 - 1.0, z.1);
         let mut sum: Complex64 = (C[0], 0.0);
@@ -2857,6 +2854,94 @@ pub fn ihfft_with_audit(
     ihfft_impl(input, n, options, Some(audit_ledger))
 }
 
+/// 2D Hermitian FFT.
+///
+/// Matches `scipy.fft.hfft2(x, s)` for flattened row-major input.
+pub fn hfft2(
+    input: &[Complex64],
+    shape: (usize, usize),
+    options: &FftOptions,
+) -> Result<Vec<f64>, FftError> {
+    let dims = [shape.0, shape.1];
+    hfft2_impl(input, &dims, options, None)
+}
+
+/// 2D Hermitian FFT with audit logging.
+pub fn hfft2_with_audit(
+    input: &[Complex64],
+    shape: (usize, usize),
+    options: &FftOptions,
+    audit_ledger: &SyncSharedAuditLedger,
+) -> Result<Vec<f64>, FftError> {
+    let dims = [shape.0, shape.1];
+    hfft2_impl(input, &dims, options, Some(audit_ledger))
+}
+
+/// 2D inverse Hermitian FFT.
+///
+/// Matches `scipy.fft.ihfft2(x, s)` for flattened row-major input.
+pub fn ihfft2(
+    input: &[f64],
+    shape: (usize, usize),
+    options: &FftOptions,
+) -> Result<Vec<Complex64>, FftError> {
+    let dims = [shape.0, shape.1];
+    ihfft2_impl(input, &dims, options, None)
+}
+
+/// 2D inverse Hermitian FFT with audit logging.
+pub fn ihfft2_with_audit(
+    input: &[f64],
+    shape: (usize, usize),
+    options: &FftOptions,
+    audit_ledger: &SyncSharedAuditLedger,
+) -> Result<Vec<Complex64>, FftError> {
+    let dims = [shape.0, shape.1];
+    ihfft2_impl(input, &dims, options, Some(audit_ledger))
+}
+
+/// N-dimensional Hermitian FFT.
+///
+/// Matches `scipy.fft.hfftn(x, s)` for flattened row-major input.
+pub fn hfftn(
+    input: &[Complex64],
+    shape: &[usize],
+    options: &FftOptions,
+) -> Result<Vec<f64>, FftError> {
+    hfftn_impl(input, shape, options, None)
+}
+
+/// N-dimensional Hermitian FFT with audit logging.
+pub fn hfftn_with_audit(
+    input: &[Complex64],
+    shape: &[usize],
+    options: &FftOptions,
+    audit_ledger: &SyncSharedAuditLedger,
+) -> Result<Vec<f64>, FftError> {
+    hfftn_impl(input, shape, options, Some(audit_ledger))
+}
+
+/// N-dimensional inverse Hermitian FFT.
+///
+/// Matches `scipy.fft.ihfftn(x, s)` for flattened row-major input.
+pub fn ihfftn(
+    input: &[f64],
+    shape: &[usize],
+    options: &FftOptions,
+) -> Result<Vec<Complex64>, FftError> {
+    ihfftn_impl(input, shape, options, None)
+}
+
+/// N-dimensional inverse Hermitian FFT with audit logging.
+pub fn ihfftn_with_audit(
+    input: &[f64],
+    shape: &[usize],
+    options: &FftOptions,
+    audit_ledger: &SyncSharedAuditLedger,
+) -> Result<Vec<Complex64>, FftError> {
+    ihfftn_impl(input, shape, options, Some(audit_ledger))
+}
+
 fn rfft2_impl(
     input: &[f64],
     shape: &[usize],
@@ -2933,18 +3018,66 @@ fn ihfft_impl(
     Ok(result)
 }
 
+fn hfft2_impl(
+    input: &[Complex64],
+    shape: &[usize],
+    options: &FftOptions,
+    audit_ledger: Option<&SyncSharedAuditLedger>,
+) -> Result<Vec<f64>, FftError> {
+    hfftn_impl(input, shape, options, audit_ledger)
+}
+
+fn ihfft2_impl(
+    input: &[f64],
+    shape: &[usize],
+    options: &FftOptions,
+    audit_ledger: Option<&SyncSharedAuditLedger>,
+) -> Result<Vec<Complex64>, FftError> {
+    ihfftn_impl(input, shape, options, audit_ledger)
+}
+
+fn hfftn_impl(
+    input: &[Complex64],
+    shape: &[usize],
+    options: &FftOptions,
+    audit_ledger: Option<&SyncSharedAuditLedger>,
+) -> Result<Vec<f64>, FftError> {
+    let conjugated: Vec<Complex64> = input.iter().copied().map(complex_conj).collect();
+    let mut result = irfftn_impl(&conjugated, shape, options, audit_ledger)?;
+    let scale = result.len() as f64;
+    for value in &mut result {
+        *value *= scale;
+    }
+    Ok(result)
+}
+
+fn ihfftn_impl(
+    input: &[f64],
+    shape: &[usize],
+    options: &FftOptions,
+    audit_ledger: Option<&SyncSharedAuditLedger>,
+) -> Result<Vec<Complex64>, FftError> {
+    let mut result = rfftn_impl(input, shape, options, audit_ledger)?;
+    let scale = 1.0 / input.len() as f64;
+    for value in &mut result {
+        value.0 *= scale;
+        value.1 *= -scale;
+    }
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use fsci_runtime::{AuditAction, RuntimeMode};
 
     use super::{
-        dct, dct_iv, dctn, dst_ii, dst_iii, estimate_fft_flops, fft, fft2, fft_with_audit, fftn,
-        hfft, idct, idctn, ifft, ifft2, irfft, irfft2, irfftn, is_fast_len, next_fast_len,
-        prev_fast_len, rfft, rfft2, rfft_with_audit, rfftn, sync_audit_ledger,
-        take_transform_traces, FftError, FftOptions, TransformKind, WorkerPolicy,
+        FftError, FftOptions, TransformKind, WorkerPolicy, dct, dct_iv, dctn, dst_ii, dst_iii,
+        estimate_fft_flops, fft, fft_with_audit, fft2, fftn, hfft, hfft2, hfftn, idct, idctn, ifft,
+        ifft2, ihfft2, ihfftn, irfft, irfft2, irfftn, is_fast_len, next_fast_len, prev_fast_len,
+        rfft, rfft_with_audit, rfft2, rfftn, sync_audit_ledger, take_transform_traces,
     };
-    use crate::plan::{clear_shared_plan_cache, shared_cache_test_lock};
     use crate::Normalization;
+    use crate::plan::{clear_shared_plan_cache, shared_cache_test_lock};
 
     fn assert_close(actual: f64, expected: f64, tol: f64) {
         assert!((actual - expected).abs() <= tol, "{actual} !~= {expected}");
@@ -3845,6 +3978,46 @@ mod tests {
             assert!(
                 (im1 - im2).abs() < 1e-9,
                 "im mismatch at {i}: {im1} vs {im2}"
+            );
+        }
+    }
+
+    #[test]
+    fn ihfftn_hfftn_roundtrip_3d() {
+        let opts = FftOptions::default();
+        let shape = [2usize, 3, 4];
+        let signal: Vec<f64> = (0..shape.iter().product::<usize>())
+            .map(|i| i as f64 - 5.0)
+            .collect();
+        let spectrum = ihfftn(&signal, &shape, &opts).expect("ihfftn");
+        assert_eq!(spectrum.len(), shape[0] * shape[1] * (shape[2] / 2 + 1));
+
+        let recovered = hfftn(&spectrum, &shape, &opts).expect("hfftn");
+        assert_eq!(recovered.len(), signal.len());
+        for (i, (&got, &want)) in recovered.iter().zip(signal.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-9,
+                "hfftn(ihfftn(x))[{i}] = {got}, expected {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn ihfft2_hfft2_roundtrip_2d() {
+        let opts = FftOptions::default();
+        let shape = (3usize, 4usize);
+        let signal: Vec<f64> = (0..shape.0 * shape.1)
+            .map(|i| (i as f64 * 0.5) - 2.0)
+            .collect();
+        let spectrum = ihfft2(&signal, shape, &opts).expect("ihfft2");
+        assert_eq!(spectrum.len(), shape.0 * (shape.1 / 2 + 1));
+
+        let recovered = hfft2(&spectrum, shape, &opts).expect("hfft2");
+        assert_eq!(recovered.len(), signal.len());
+        for (i, (&got, &want)) in recovered.iter().zip(signal.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-9,
+                "hfft2(ihfft2(x))[{i}] = {got}, expected {want}"
             );
         }
     }

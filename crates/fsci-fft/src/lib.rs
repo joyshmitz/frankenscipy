@@ -25,11 +25,12 @@ pub use transforms::{
     BackendKind, Complex64, FftError, FftOptions, SyncSharedAuditLedger, TransformTrace,
     WorkerPolicy, dct, dct_i, dct_iii, dct_iv, dctn, dst_i, dst_ii, dst_iii, dst_iv, dstn, fft,
     fft_with_audit, fft2, fft2_with_audit, fftn, fftn_with_audit, fht, fhtoffset, hfft,
-    hfft_with_audit, hilbert, idct, idctn, idstn, ifft, ifft_with_audit, ifft2, ifft2_with_audit,
-    ifftn, ifftn_with_audit, ifht, ihfft, ihfft_with_audit, irfft, irfft_with_audit, irfft2,
-    irfft2_with_audit, irfftn, irfftn_with_audit, next_fast_len, prev_fast_len, rfft,
-    rfft_with_audit, rfft2,
-    rfft2_with_audit, rfftn, rfftn_with_audit, sync_audit_ledger, take_transform_traces,
+    hfft_with_audit, hfft2, hfft2_with_audit, hfftn, hfftn_with_audit, hilbert, idct, idctn, idstn,
+    ifft, ifft_with_audit, ifft2, ifft2_with_audit, ifftn, ifftn_with_audit, ifht, ihfft,
+    ihfft_with_audit, ihfft2, ihfft2_with_audit, ihfftn, ihfftn_with_audit, irfft,
+    irfft_with_audit, irfft2, irfft2_with_audit, irfftn, irfftn_with_audit, next_fast_len,
+    prev_fast_len, rfft, rfft_with_audit, rfft2, rfft2_with_audit, rfftn, rfftn_with_audit,
+    sync_audit_ledger, take_transform_traces,
 };
 
 /// FFT normalization modes matching SciPy/PocketFFT conventions.
@@ -522,7 +523,13 @@ mod tests {
     fn fhtoffset_matches_scipy_reference() {
         // Reference values from scipy.fft.fhtoffset(dln, mu, initial, bias).
         for &(dln, mu, initial, bias, want) in &[
-            (0.5_f64, 0.0_f64, 0.0_f64, 0.0_f64, -0.157_875_391_166_816_93),
+            (
+                0.5_f64,
+                0.0_f64,
+                0.0_f64,
+                0.0_f64,
+                -0.157_875_391_166_816_93,
+            ),
             (0.1, 1.0, 0.0, 0.5, -0.003_149_364_650_484_187_8),
             (0.3, 0.5, 0.1, 0.2, 0.223_900_341_282_366_97),
             (0.05, 2.0, -1.0, 0.0, -1.010_002_184_090_538_4),
