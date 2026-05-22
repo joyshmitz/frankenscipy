@@ -57931,4 +57931,59 @@ mod tests {
         let m4 = moment(&data, 4);
         assert!((m4 - 6.8).abs() < 1e-12, "moment(4) got {m4}, expected 6.8");
     }
+
+    #[test]
+    fn wasserstein_distance_matches_scipy_reference_values() {
+        let u1: Vec<f64> = vec![0.0, 1.0, 2.0];
+        let v1: Vec<f64> = vec![1.0, 2.0, 3.0];
+        let w1 = wasserstein_distance(&u1, &v1);
+        assert!(
+            (w1 - 1.0).abs() < 1e-12,
+            "wasserstein_distance([0,1,2], [1,2,3]) got {w1}, expected 1.0"
+        );
+
+        let u2: Vec<f64> = vec![0.0, 0.0, 1.0, 1.0];
+        let v2: Vec<f64> = vec![0.0, 1.0, 1.0, 1.0];
+        let w2 = wasserstein_distance(&u2, &v2);
+        assert!(
+            (w2 - 0.25).abs() < 1e-12,
+            "wasserstein_distance([0,0,1,1], [0,1,1,1]) got {w2}, expected 0.25"
+        );
+
+        let same: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let w3 = wasserstein_distance(&same, &same);
+        assert!(
+            w3.abs() < 1e-12,
+            "wasserstein_distance(same, same) got {w3}, expected 0.0"
+        );
+    }
+
+    #[test]
+    fn energy_distance_matches_scipy_reference_values() {
+        let u1: Vec<f64> = vec![0.0, 1.0, 2.0];
+        let v1: Vec<f64> = vec![1.0, 2.0, 3.0];
+        let e1 = energy_distance(&u1, &v1);
+        assert!(
+            (e1 - 0.8164965809277261).abs() < 1e-10,
+            "energy_distance([0,1,2], [1,2,3]) got {e1}, expected 0.8164965809277261"
+        );
+
+        let u2: Vec<f64> = vec![0.0, 0.0, 1.0, 1.0];
+        let v2: Vec<f64> = vec![0.0, 1.0, 1.0, 1.0];
+        let e2 = energy_distance(&u2, &v2);
+        assert!(
+            (e2 - 0.3535533905932738).abs() < 1e-10,
+            "energy_distance([0,0,1,1], [0,1,1,1]) got {e2}, expected 0.3535533905932738"
+        );
+    }
+
+    #[test]
+    fn differential_entropy_vasicek_estimator() {
+        let samples: Vec<f64> = (1..=10).map(|x| x as f64).collect();
+        let de1 = differential_entropy(&samples, None, None);
+        assert!(
+            (de1 - 2.302585092994046).abs() < 1e-10,
+            "differential_entropy([1..10]) got {de1}, expected ~2.30"
+        );
+    }
 }
