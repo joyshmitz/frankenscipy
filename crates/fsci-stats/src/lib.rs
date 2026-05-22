@@ -3731,6 +3731,130 @@ impl ContinuousDistribution for Lomax {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Normal-Inverse Gaussian Distribution
+// ══════════════════════════════════════════════════════════════════════
+
+/// Normal-Inverse Gaussian distribution.
+///
+/// Matches `scipy.stats.norminvgauss(a, b)`.
+/// PDF: f(x) = (a/π) · K₁(a·√(1+x²)) · exp(b·x + γ) / √(1+x²)
+/// where γ = √(a² - b²).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NormInvGauss {
+    pub a: f64,
+    pub b: f64,
+}
+
+impl NormInvGauss {
+    #[must_use]
+    pub fn new(a: f64, b: f64) -> Self {
+        assert!(a > 0.0, "a must be positive, got {a}");
+        assert!(b.abs() < a, "|b| must be < a, got b={b}, a={a}");
+        Self { a, b }
+    }
+
+    fn gamma(&self) -> f64 {
+        (self.a * self.a - self.b * self.b).sqrt()
+    }
+}
+
+impl ContinuousDistribution for NormInvGauss {
+    fn pdf(&self, x: f64) -> f64 {
+        if !x.is_finite() {
+            return 0.0;
+        }
+        let a = self.a;
+        let b = self.b;
+        let gamma = self.gamma();
+        let q = (1.0 + x * x).sqrt();
+        let k1_arg = a * q;
+        let k1_val = fsci_special::bessel::k1_scalar(k1_arg);
+        (a / std::f64::consts::PI) * k1_val * (b * x + gamma).exp() / q
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x == f64::NEG_INFINITY {
+            return 0.0;
+        }
+        if x == f64::INFINITY {
+            return 1.0;
+        }
+        let lower = self.mean() - 20.0 * self.var().sqrt();
+        let upper = x.min(self.mean() + 50.0 * self.var().sqrt());
+        let lower = lower.max(-100.0);
+        simpson_integrate_adaptive(|t| self.pdf(t), lower, upper, 64, 1e-10, 1e-14, 12)
+            .clamp(0.0, 1.0)
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        if q == 1.0 {
+            return f64::INFINITY;
+        }
+        let mu = self.mean();
+        let sigma = self.var().sqrt();
+        let mut lo = mu - 10.0 * sigma;
+        let mut hi = mu + 10.0 * sigma;
+        for _ in 0..60 {
+            let mid = 0.5 * (lo + hi);
+            if self.cdf(mid) < q {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        0.5 * (lo + hi)
+    }
+
+    fn mean(&self) -> f64 {
+        self.b / self.gamma()
+    }
+
+    fn var(&self) -> f64 {
+        let gamma = self.gamma();
+        self.a * self.a / (gamma * gamma * gamma)
+    }
+
+    fn fit(_data: &[f64]) -> Self {
+        Self {
+            a: f64::NAN,
+            b: f64::NAN,
+        }
+    }
+
+    fn try_fit(_data: &[f64]) -> Result<Self, FitError> {
+        Err(FitError::NotImplemented {
+            distribution: "NormInvGauss".into(),
+        })
+    }
+
+    fn skewness(&self) -> f64 {
+        let gamma = self.gamma();
+        3.0 * self.b / (self.a * gamma.sqrt())
+    }
+
+    fn kurtosis(&self) -> f64 {
+        let gamma = self.gamma();
+        let a2 = self.a * self.a;
+        let b2 = self.b * self.b;
+        3.0 * (1.0 + 4.0 * b2 / a2) / gamma - 3.0
+    }
+
+    fn entropy(&self) -> f64 {
+        f64::NAN
+    }
+
+    fn mode(&self) -> f64 {
+        f64::NAN
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Rayleigh Distribution
 // ══════════════════════════════════════════════════════════════════════
 
@@ -51522,6 +51646,23 @@ mod tests {
         assert_eq!(ge.cdf(0.0), 0.0);
         assert!(ge.cdf(1.0) > 0.0 && ge.cdf(1.0) < 1.0);
         assert!(ge.cdf(10.0) > 0.99);
+    }
+
+    #[test]
+    fn test_norm_inv_gauss() {
+        let nig = NormInvGauss::new(1.5, 0.5);
+        assert!(nig.pdf(0.0) > 0.0);
+        assert!(nig.pdf(1.0) > 0.0);
+        assert!(nig.pdf(-1.0) > 0.0);
+        let cdf_0 = nig.cdf(0.0);
+        assert!(cdf_0 > 0.0 && cdf_0 < 1.0);
+        let mu = nig.mean();
+        assert!(mu.is_finite());
+        assert!(nig.var() > 0.0);
+        assert!(nig.skewness().is_finite());
+        assert!(nig.kurtosis().is_finite());
+        let med = nig.ppf(0.5);
+        assert!(med.is_finite());
     }
 
 }
