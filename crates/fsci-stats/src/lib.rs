@@ -56715,6 +56715,38 @@ mod tests {
     }
 
     #[test]
+    fn trim_mean_matches_scipy_reference() {
+        // scipy.stats.trim_mean([1,2,3,4,5,6,7,8,9,10], 0.1) trims 10% from each end
+        // Trims 1 element from each end -> mean of [2,3,4,5,6,7,8,9] = 5.5
+        let data: Vec<f64> = (1..=10).map(|x| x as f64).collect();
+        let tm = trim_mean(&data, 0.1);
+        assert!((tm - 5.5).abs() < 1e-10, "trim_mean 10%, got {}", tm);
+
+        // scipy.stats.trim_mean([1,2,3,4,5,6,7,8,9,10], 0.2) trims 20% from each end
+        // Trims 2 elements from each end -> mean of [3,4,5,6,7,8] = 5.5
+        let tm2 = trim_mean(&data, 0.2);
+        assert!((tm2 - 5.5).abs() < 1e-10, "trim_mean 20%, got {}", tm2);
+
+        // No trimming
+        let tm0 = trim_mean(&data, 0.0);
+        assert!((tm0 - 5.5).abs() < 1e-10, "trim_mean 0% = regular mean, got {}", tm0);
+    }
+
+    #[test]
+    fn winsorize_matches_scipy_reference() {
+        // scipy.stats.mstats.winsorize([1,2,3,4,5,6,7,8,9,10], limits=[0.1, 0.1])
+        // Replaces bottom 10% with next value, top 10% with previous value
+        let data: Vec<f64> = (1..=10).map(|x| x as f64).collect();
+        let w = winsorize(&data, (0.1, 0.1));
+        // First element should be replaced with 2nd smallest
+        assert!(w[0] >= 2.0, "winsorized first element should be >= 2");
+        // Last element should be replaced with 2nd largest
+        assert!(w[9] <= 9.0, "winsorized last element should be <= 9");
+        // Middle elements unchanged
+        assert!((w[4] - 5.0).abs() < 1e-10, "middle element unchanged");
+    }
+
+    #[test]
     fn cov_matrix_matches_numpy_reference() {
         // numpy.cov([[1,2,3], [4,5,6]]) with rowvar=True
         // For perfectly correlated data, cov should show linear relationship
