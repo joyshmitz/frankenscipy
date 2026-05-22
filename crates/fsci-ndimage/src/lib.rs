@@ -997,6 +997,32 @@ pub fn gaussian_filter(
     Ok(current)
 }
 
+/// One-dimensional Gaussian filter along a selected axis.
+///
+/// Matches `scipy.ndimage.gaussian_filter1d`.
+pub fn gaussian_filter1d(
+    input: &NdArray,
+    sigma: f64,
+    axis: usize,
+    order: usize,
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError> {
+    if !sigma.is_finite() || sigma <= 0.0 {
+        return Err(NdimageError::InvalidArgument(
+            "sigma must be positive".to_string(),
+        ));
+    }
+    if axis >= input.ndim() {
+        return Err(NdimageError::InvalidArgument(format!(
+            "axis {axis} out of range for {}-dimensional input",
+            input.ndim()
+        )));
+    }
+
+    gaussian_filter1d_axis(input, sigma, axis, order, mode, cval)
+}
+
 /// Median filter.
 ///
 /// Matches `scipy.ndimage.median_filter`.
@@ -3803,6 +3829,71 @@ mod tests {
         for (g, e) in got.iter().zip(&expect) {
             assert!((g - e).abs() < 1e-12, "order2 kernel mismatch: {g} vs {e}");
         }
+    }
+
+    #[test]
+    fn gaussian_filter1d_matches_scipy_axis0_reflect() {
+        let input = NdArray::new(vec![0., 1., 2., 3., 4., 5.], vec![2, 3]).unwrap();
+        // scipy.ndimage.gaussian_filter1d(x, 0.75, axis=0, mode='reflect')
+        let expect = [
+            0.747721512570,
+            1.747721512570,
+            2.747721512570,
+            2.252278487430,
+            3.252278487430,
+            4.252278487430,
+        ];
+        let got = gaussian_filter1d(&input, 0.75, 0, 0, BoundaryMode::Reflect, 0.0).unwrap();
+        for (g, e) in got.data.iter().zip(&expect) {
+            assert!((g - e).abs() < 1e-12, "axis0 gaussian_filter1d mismatch: {g} vs {e}");
+        }
+    }
+
+    #[test]
+    fn gaussian_filter1d_matches_scipy_axis1_reflect() {
+        let input = NdArray::new(vec![0., 1., 2., 3., 4., 5.], vec![2, 3]).unwrap();
+        // scipy.ndimage.gaussian_filter1d(x, 0.75, axis=1, mode='reflect')
+        let expect = [
+            0.264970010420,
+            1.000000000000,
+            1.735029989580,
+            3.264970010420,
+            4.000000000000,
+            4.735029989580,
+        ];
+        let got = gaussian_filter1d(&input, 0.75, 1, 0, BoundaryMode::Reflect, 0.0).unwrap();
+        for (g, e) in got.data.iter().zip(&expect) {
+            assert!((g - e).abs() < 1e-12, "axis1 gaussian_filter1d mismatch: {g} vs {e}");
+        }
+    }
+
+    #[test]
+    fn gaussian_filter1d_matches_scipy_order1_constant() {
+        let input = NdArray::new(vec![1., 2., 4., 7., 11.], vec![5]).unwrap();
+        // scipy.ndimage.gaussian_filter1d(x, 1.0, order=1, mode='constant', cval=-1.0)
+        let expect = [
+            1.378614160040,
+            1.749319394020,
+            2.289679776700,
+            1.343262185350,
+            -2.516640239040,
+        ];
+        let got = gaussian_filter1d(&input, 1.0, 0, 1, BoundaryMode::Constant, -1.0).unwrap();
+        for (g, e) in got.data.iter().zip(&expect) {
+            assert!((g - e).abs() < 1e-11, "order1 gaussian_filter1d mismatch: {g} vs {e}");
+        }
+    }
+
+    #[test]
+    fn gaussian_filter1d_rejects_invalid_axis_and_sigma() {
+        let input = NdArray::new(vec![0., 1., 2.], vec![3]).unwrap();
+        let axis_err = gaussian_filter1d(&input, 1.0, 1, 0, BoundaryMode::Reflect, 0.0)
+            .expect_err("axis outside ndim should be rejected");
+        assert!(matches!(axis_err, NdimageError::InvalidArgument(_)));
+
+        let sigma_err = gaussian_filter1d(&input, 0.0, 0, 0, BoundaryMode::Reflect, 0.0)
+            .expect_err("non-positive sigma should be rejected");
+        assert!(matches!(sigma_err, NdimageError::InvalidArgument(_)));
     }
 
     #[test]
