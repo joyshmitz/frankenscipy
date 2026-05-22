@@ -55675,6 +55675,38 @@ mod tests {
     }
 
     #[test]
+    fn test_correlation_distance_identical() {
+        let u = vec![1.0, 2.0, 3.0, 4.0];
+        let v = vec![1.0, 2.0, 3.0, 4.0];
+        let d = correlation_distance(&u, &v);
+        assert!(d.abs() < 1e-10, "Correlation distance of identical vectors should be 0, got {}", d);
+    }
+
+    #[test]
+    fn test_correlation_distance_perfectly_anticorrelated() {
+        let u = vec![1.0, 2.0, 3.0, 4.0];
+        let v = vec![4.0, 3.0, 2.0, 1.0];
+        let d = correlation_distance(&u, &v);
+        assert!((d - 2.0).abs() < 1e-10, "Perfectly anticorrelated should have distance 2, got {}", d);
+    }
+
+    #[test]
+    fn test_dice_distance_identical() {
+        let u = vec![1.0, 0.0, 1.0, 0.0];
+        let v = vec![1.0, 0.0, 1.0, 0.0];
+        let d = dice_distance(&u, &v);
+        assert!(d.abs() < 1e-10, "Dice distance of identical vectors should be 0, got {}", d);
+    }
+
+    #[test]
+    fn test_dice_distance_disjoint() {
+        let u = vec![1.0, 0.0, 0.0];
+        let v = vec![0.0, 1.0, 0.0];
+        let d = dice_distance(&u, &v);
+        assert!((d - 1.0).abs() < 1e-10, "Dice distance of disjoint sets should be 1, got {}", d);
+    }
+
+    #[test]
     fn test_adjusted_rand_index_single_cluster() {
         let labels = vec![0.0, 0.0, 0.0, 0.0];
         let ari = adjusted_rand_index(&labels, &labels);
