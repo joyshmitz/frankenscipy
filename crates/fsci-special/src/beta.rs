@@ -71,6 +71,9 @@ pub const BETA_DISPATCH_PLAN: &[DispatchPlan] = &[
     },
 ];
 
+const DISTRIBUTION_INVERSE_ITERS: usize = 160;
+const DISTRIBUTION_INVERSE_UPPER_SENTINEL: f64 = 1.0e100;
+
 pub fn beta(a: &SpecialTensor, b: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     beta_dispatch(a, b, mode)
 }
@@ -779,6 +782,65 @@ pub fn bdtri(k: f64, n: f64, y: f64) -> f64 {
     1.0 - btdtri(n - k, k + 1.0, y)
 }
 
+/// Inverse binomial CDF with respect to `k`.
+///
+/// Returns `k` such that `bdtr(k, n, p) = y`.
+/// Matches `scipy.special.bdtrik(y, n, p)` for the regular interior domain.
+#[must_use]
+pub fn bdtrik(y: f64, n: f64, p: f64) -> f64 {
+    if y.is_nan() || n.is_nan() || p.is_nan() {
+        return f64::NAN;
+    }
+    if n <= 0.0 || !(0.0..=1.0).contains(&y) || !(0.0..=1.0).contains(&p) {
+        return f64::NAN;
+    }
+    if p == 0.0 {
+        return f64::NAN;
+    }
+    if y == 0.0 {
+        return 0.0;
+    }
+    if y == 1.0 || p == 1.0 {
+        return n;
+    }
+
+    bisect_increasing(0.0, n, y, |k| bdtr(k, n, p))
+}
+
+/// Inverse binomial CDF with respect to `n`.
+///
+/// Returns `n` such that `bdtr(k, n, p) = y`.
+/// Matches `scipy.special.bdtrin(k, y, p)` for the regular interior domain.
+#[must_use]
+pub fn bdtrin(k: f64, y: f64, p: f64) -> f64 {
+    if k.is_nan() || y.is_nan() || p.is_nan() {
+        return f64::NAN;
+    }
+    if k < 0.0 || !(0.0..=1.0).contains(&y) || !(0.0..=1.0).contains(&p) {
+        return f64::NAN;
+    }
+    if p == 0.0 {
+        return f64::NAN;
+    }
+    if y == 0.0 {
+        return DISTRIBUTION_INVERSE_UPPER_SENTINEL;
+    }
+    if y == 1.0 || p == 1.0 {
+        return k;
+    }
+
+    let lo = k;
+    let mut hi = (k + 1.0).max(1.0);
+    while bdtr(k, hi, p) > y {
+        hi *= 2.0;
+        if hi >= DISTRIBUTION_INVERSE_UPPER_SENTINEL {
+            return DISTRIBUTION_INVERSE_UPPER_SENTINEL;
+        }
+    }
+
+    bisect_decreasing(lo, hi, y, |n| bdtr(k, n, p))
+}
+
 /// Negative binomial distribution CDF.
 ///
 /// Returns P(X <= k) where X is the number of failures before n successes
@@ -857,6 +919,107 @@ pub fn nbdtri(k: f64, n: f64, y: f64) -> f64 {
     // nbdtr(k, n, p) = betainc(n, k+1, p) = y
     // So p = btdtri(n, k+1, y)
     btdtri(n, k + 1.0, y)
+}
+
+/// Inverse negative-binomial CDF with respect to `k`.
+///
+/// Returns `k` such that `nbdtr(k, n, p) = y`.
+/// Matches `scipy.special.nbdtrik(y, n, p)` for the regular interior domain.
+#[must_use]
+pub fn nbdtrik(y: f64, n: f64, p: f64) -> f64 {
+    if y.is_nan() || n.is_nan() || p.is_nan() {
+        return f64::NAN;
+    }
+    if n <= 0.0 || !(0.0..=1.0).contains(&y) || !(0.0..=1.0).contains(&p) {
+        return f64::NAN;
+    }
+    if y == 0.0 || p == 0.0 {
+        return 0.0;
+    }
+    if y == 1.0 {
+        return f64::NAN;
+    }
+    if p == 1.0 {
+        return DISTRIBUTION_INVERSE_UPPER_SENTINEL;
+    }
+
+    let mut hi = 1.0;
+    while nbdtr(hi, n, p) < y {
+        hi *= 2.0;
+        if hi >= DISTRIBUTION_INVERSE_UPPER_SENTINEL {
+            return DISTRIBUTION_INVERSE_UPPER_SENTINEL;
+        }
+    }
+
+    bisect_increasing(0.0, hi, y, |k| nbdtr(k, n, p))
+}
+
+/// Inverse negative-binomial CDF with respect to `n`.
+///
+/// Returns `n` such that `nbdtr(k, n, p) = y`.
+/// Matches `scipy.special.nbdtrin(k, y, p)` for the regular interior domain.
+#[must_use]
+pub fn nbdtrin(k: f64, y: f64, p: f64) -> f64 {
+    if k.is_nan() || y.is_nan() || p.is_nan() {
+        return f64::NAN;
+    }
+    if k < 0.0 || !(0.0..=1.0).contains(&y) || !(0.0..=1.0).contains(&p) {
+        return f64::NAN;
+    }
+    if y == 0.0 {
+        return DISTRIBUTION_INVERSE_UPPER_SENTINEL;
+    }
+    if y == 1.0 {
+        return f64::NAN;
+    }
+    if p == 0.0 {
+        return 0.0;
+    }
+    if p == 1.0 {
+        return DISTRIBUTION_INVERSE_UPPER_SENTINEL;
+    }
+
+    let mut hi = 1.0;
+    while nbdtr(k, hi, p) > y {
+        hi *= 2.0;
+        if hi >= DISTRIBUTION_INVERSE_UPPER_SENTINEL {
+            return DISTRIBUTION_INVERSE_UPPER_SENTINEL;
+        }
+    }
+
+    bisect_decreasing(0.0, hi, y, |n| nbdtr(k, n, p))
+}
+
+fn bisect_increasing<F>(mut lo: f64, mut hi: f64, target: f64, f: F) -> f64
+where
+    F: Fn(f64) -> f64,
+{
+    for _ in 0..DISTRIBUTION_INVERSE_ITERS {
+        let mid = lo + (hi - lo) * 0.5;
+        let value = f(mid);
+        if !value.is_finite() || value < target {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    lo + (hi - lo) * 0.5
+}
+
+fn bisect_decreasing<F>(mut lo: f64, mut hi: f64, target: f64, f: F) -> f64
+where
+    F: Fn(f64) -> f64,
+{
+    for _ in 0..DISTRIBUTION_INVERSE_ITERS {
+        let mid = lo + (hi - lo) * 0.5;
+        let value = f(mid);
+        if !value.is_finite() || value > target {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    lo + (hi - lo) * 0.5
 }
 
 fn map_real_binary<F>(
@@ -1527,6 +1690,8 @@ fn gammaln_scalar(value: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
 mod tests {
     use super::*;
 
+    type DistributionInverseCase = (fn(f64, f64, f64) -> f64, f64, f64, f64, f64);
+
     #[test]
     fn betaincc_complements_betainc_and_preserves_endpoints() {
         for &(a, b, x) in &[
@@ -2126,6 +2291,37 @@ mod tests {
     }
 
     #[test]
+    fn binomial_inverse_shape_parameters_round_trip() {
+        let y = bdtr(4.5, 10.0, 0.5);
+        assert!((bdtrik(y, 10.0, 0.5) - 4.5).abs() < 1.0e-10);
+
+        let y = bdtr(5.0, 11.0, 0.5);
+        assert!((bdtrin(5.0, y, 0.5) - 11.0).abs() < 1.0e-9);
+
+        assert!(bdtrik(-0.1, 10.0, 0.5).is_nan());
+        assert!(bdtrin(5.0, 1.1, 0.5).is_nan());
+    }
+
+    #[test]
+    fn binomial_inverse_shape_parameters_match_scipy_reference_values() {
+        let cases: &[DistributionInverseCase] = &[
+            (bdtrik, 0.5, 10.0, 0.5, 4.5),
+            (bdtrik, 0.9, 10.0, 0.5, 6.517_443_355_854_331),
+            (bdtrik, 0.5, 5.0, 0.2, 0.385_541_504_319_304_9),
+            (bdtrin, 5.0, 0.5, 0.5, 10.999_999_999_998_705),
+            (bdtrin, 5.0, 0.9, 0.5, 7.507_360_823_906_628),
+            (bdtrin, 0.0, 0.000_976_562_5, 0.5, 10.000_000_000_015_802),
+        ];
+        for &(func, a, b, c, expected) in cases {
+            let actual = func(a, b, c);
+            assert!(
+                (actual - expected).abs() <= 2.0e-6 * expected.abs().max(1.0),
+                "binomial inverse reference mismatch: got {actual}, expected {expected}"
+            );
+        }
+    }
+
+    #[test]
     fn nbdtr_basic() {
         // nbdtr(0, 1, 0.5) = P(0 failures before 1 success) = p = 0.5
         let result = nbdtr(0.0, 1.0, 0.5);
@@ -2183,6 +2379,37 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn negative_binomial_inverse_shape_parameters_round_trip() {
+        let y = nbdtr(9.0, 10.0, 0.5);
+        assert!((nbdtrik(y, 10.0, 0.5) - 9.0).abs() < 1.0e-9);
+
+        let y = nbdtr(5.0, 6.0, 0.5);
+        assert!((nbdtrin(5.0, y, 0.5) - 6.0).abs() < 1.0e-9);
+
+        assert!(nbdtrik(1.0, 10.0, 0.5).is_nan());
+        assert!(nbdtrin(-1.0, 0.5, 0.5).is_nan());
+    }
+
+    #[test]
+    fn negative_binomial_inverse_shape_parameters_match_scipy_reference_values() {
+        let cases: &[DistributionInverseCase] = &[
+            (nbdtrik, 0.5, 10.0, 0.5, 9.000_000_000_001_473),
+            (nbdtrik, 0.9, 10.0, 0.5, 15.452_848_668_084_998),
+            (nbdtrik, 0.5, 5.0, 0.2, 18.017_180_776_964_413),
+            (nbdtrin, 5.0, 0.5, 0.5, 5.999_999_999_997_906),
+            (nbdtrin, 5.0, 0.9, 0.5, 2.507_360_823_906_642_7),
+            (nbdtrin, 0.0, 0.5, 0.5, 1.000_000_000_000_667_7),
+        ];
+        for &(func, a, b, c, expected) in cases {
+            let actual = func(a, b, c);
+            assert!(
+                (actual - expected).abs() <= 2.0e-6 * expected.abs().max(1.0),
+                "negative-binomial inverse reference mismatch: got {actual}, expected {expected}"
+            );
         }
     }
 
