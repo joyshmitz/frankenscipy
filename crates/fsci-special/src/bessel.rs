@@ -255,6 +255,22 @@ pub fn yv(v: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> SpecialRes
     bessel_dispatch("yv", v, z, mode, BesselKind::Yv)
 }
 
+/// Exponentially scaled Bessel function of the first kind.
+///
+/// Matches `scipy.special.jve(v, z)`, scaling complex-valued inputs by
+/// `exp(-abs(Im(z)))`. Real-valued inputs are unchanged.
+pub fn jve(v: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    bessel_dispatch("jve", v, z, mode, BesselKind::Jve)
+}
+
+/// Exponentially scaled Bessel function of the second kind.
+///
+/// Matches `scipy.special.yve(v, z)`, scaling complex-valued inputs by
+/// `exp(-abs(Im(z)))`. Real-valued inputs are unchanged.
+pub fn yve(v: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    bessel_dispatch("yve", v, z, mode, BesselKind::Yve)
+}
+
 /// Modified Bessel function of the first kind for real order v: I_v(z).
 ///
 /// I_v(z) = (z/2)^v Σ (z²/4)^k / (k! Γ(v+k+1))
@@ -432,6 +448,20 @@ pub fn hankel1(v: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> Speci
 /// Hankel function of the second kind: H2_v(z) = J_v(z) - i·Y_v(z).
 pub fn hankel2(v: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     hankel_dispatch("hankel2", v, z, mode, HankelKind::H2)
+}
+
+/// Exponentially scaled Hankel function of the first kind.
+///
+/// Matches `scipy.special.hankel1e(v, z) = hankel1(v, z) * exp(-i z)`.
+pub fn hankel1e(v: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    scaled_hankel_dispatch("hankel1e", v, z, mode, HankelKind::H1, HankelScale::First)
+}
+
+/// Exponentially scaled Hankel function of the second kind.
+///
+/// Matches `scipy.special.hankel2e(v, z) = hankel2(v, z) * exp(i z)`.
+pub fn hankel2e(v: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    scaled_hankel_dispatch("hankel2e", v, z, mode, HankelKind::H2, HankelScale::Second)
 }
 
 /// Wright's generalized Bessel function.
@@ -834,12 +864,14 @@ fn bessel_derivative_real_scalar(
             BesselKind::Yv => yv_scalar(shifted_order, value, mode),
             BesselKind::Iv => Ok(iv_scalar(shifted_order, value)),
             BesselKind::Kv => kv_scalar(shifted_order, value, mode),
-            BesselKind::Ive | BesselKind::Kve => Err(SpecialError {
-                function,
-                kind: SpecialErrorKind::NotYetImplemented,
-                mode,
-                detail: "scaled Bessel derivatives are not implemented",
-            }),
+            BesselKind::Jve | BesselKind::Yve | BesselKind::Ive | BesselKind::Kve => {
+                Err(SpecialError {
+                    function,
+                    kind: SpecialErrorKind::NotYetImplemented,
+                    mode,
+                    detail: "scaled Bessel derivatives are not implemented",
+                })
+            }
         },
     )
 }
@@ -3173,6 +3205,121 @@ fn hankel_dispatch(
     }
 }
 
+#[derive(Clone, Copy)]
+enum HankelScale {
+    First,
+    Second,
+}
+
+fn scaled_hankel_dispatch(
+    function: &'static str,
+    v: &SpecialTensor,
+    z: &SpecialTensor,
+    mode: RuntimeMode,
+    kind: HankelKind,
+    scale: HankelScale,
+) -> SpecialResult {
+    match (v, z) {
+        (SpecialTensor::RealScalar(order), SpecialTensor::RealScalar(x)) => {
+            hankel_real_scalar(function, *order, *x, mode, kind)
+                .map(|value| scale_hankel(value, Complex64::new(*x, 0.0), scale))
+                .map(SpecialTensor::ComplexScalar)
+        }
+        (SpecialTensor::RealVec(orders), SpecialTensor::RealScalar(x)) => orders
+            .iter()
+            .map(|&order| {
+                hankel_real_scalar(function, order, *x, mode, kind)
+                    .map(|value| scale_hankel(value, Complex64::new(*x, 0.0), scale))
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::ComplexVec),
+        (SpecialTensor::RealScalar(order), SpecialTensor::RealVec(xs)) => xs
+            .iter()
+            .map(|&x| {
+                hankel_real_scalar(function, *order, x, mode, kind)
+                    .map(|value| scale_hankel(value, Complex64::new(x, 0.0), scale))
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::ComplexVec),
+        (SpecialTensor::RealVec(orders), SpecialTensor::RealVec(xs)) => {
+            if orders.len() != xs.len() {
+                return Err(SpecialError {
+                    function,
+                    kind: SpecialErrorKind::DomainError,
+                    mode,
+                    detail: "vector inputs must have matching lengths",
+                });
+            }
+            orders
+                .iter()
+                .zip(xs.iter())
+                .map(|(&order, &x)| {
+                    hankel_real_scalar(function, order, x, mode, kind)
+                        .map(|value| scale_hankel(value, Complex64::new(x, 0.0), scale))
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map(SpecialTensor::ComplexVec)
+        }
+        (SpecialTensor::RealScalar(order), SpecialTensor::ComplexScalar(z_val)) => {
+            hankel_complex_scalar(function, *order, *z_val, mode, kind)
+                .map(|value| scale_hankel(value, *z_val, scale))
+                .map(SpecialTensor::ComplexScalar)
+        }
+        (SpecialTensor::RealScalar(order), SpecialTensor::ComplexVec(zs)) => zs
+            .iter()
+            .map(|&z_val| {
+                hankel_complex_scalar(function, *order, z_val, mode, kind)
+                    .map(|value| scale_hankel(value, z_val, scale))
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::ComplexVec),
+        (SpecialTensor::RealVec(orders), SpecialTensor::ComplexScalar(z_val)) => orders
+            .iter()
+            .map(|&order| {
+                hankel_complex_scalar(function, order, *z_val, mode, kind)
+                    .map(|value| scale_hankel(value, *z_val, scale))
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(SpecialTensor::ComplexVec),
+        (SpecialTensor::RealVec(orders), SpecialTensor::ComplexVec(zs)) => {
+            if orders.len() != zs.len() {
+                return Err(SpecialError {
+                    function,
+                    kind: SpecialErrorKind::DomainError,
+                    mode,
+                    detail: "vector inputs must have matching lengths",
+                });
+            }
+            orders
+                .iter()
+                .zip(zs.iter())
+                .map(|(&order, &z_val)| {
+                    hankel_complex_scalar(function, order, z_val, mode, kind)
+                        .map(|value| scale_hankel(value, z_val, scale))
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map(SpecialTensor::ComplexVec)
+        }
+        (SpecialTensor::ComplexScalar(_), _) | (SpecialTensor::ComplexVec(_), _) => {
+            not_yet_implemented(function, mode, "complex-valued order not supported")
+        }
+        (SpecialTensor::Empty, _) | (_, SpecialTensor::Empty) => Err(SpecialError {
+            function,
+            kind: SpecialErrorKind::DomainError,
+            mode,
+            detail: "empty tensor is not a valid special-function input",
+        }),
+    }
+}
+
+fn scale_hankel(value: Complex64, z: Complex64, scale: HankelScale) -> Complex64 {
+    let exponent = match scale {
+        HankelScale::First => Complex64::new(z.im, -z.re),
+        HankelScale::Second => Complex64::new(-z.im, z.re),
+    };
+    value * exponent.exp()
+}
+
 fn hankel_real_scalar(
     function: &'static str,
     order: f64,
@@ -3219,6 +3366,8 @@ fn hankel_complex_scalar(
 enum BesselKind {
     Jv,
     Yv,
+    Jve,
+    Yve,
     Iv,
     Kv,
     Ive,
@@ -3238,6 +3387,8 @@ fn bessel_dispatch(
             let result = match kind {
                 BesselKind::Jv => Ok(jv_scalar(*order, *x)),
                 BesselKind::Yv => yv_scalar(*order, *x, mode),
+                BesselKind::Jve => Ok(jv_scalar(*order, *x)),
+                BesselKind::Yve => yv_scalar(*order, *x, mode),
                 BesselKind::Iv => Ok(iv_scalar(*order, *x)),
                 BesselKind::Kv => kv_scalar(*order, *x, mode),
                 BesselKind::Ive => Ok(ive_scalar(*order, *x)),
@@ -3250,6 +3401,8 @@ fn bessel_dispatch(
             .map(|&order| match kind {
                 BesselKind::Jv => Ok(jv_scalar(order, *x)),
                 BesselKind::Yv => yv_scalar(order, *x, mode),
+                BesselKind::Jve => Ok(jv_scalar(order, *x)),
+                BesselKind::Yve => yv_scalar(order, *x, mode),
                 BesselKind::Iv => Ok(iv_scalar(order, *x)),
                 BesselKind::Kv => kv_scalar(order, *x, mode),
                 BesselKind::Ive => Ok(ive_scalar(order, *x)),
@@ -3262,6 +3415,8 @@ fn bessel_dispatch(
             .map(|&x| match kind {
                 BesselKind::Jv => Ok(jv_scalar(*order, x)),
                 BesselKind::Yv => yv_scalar(*order, x, mode),
+                BesselKind::Jve => Ok(jv_scalar(*order, x)),
+                BesselKind::Yve => yv_scalar(*order, x, mode),
                 BesselKind::Iv => Ok(iv_scalar(*order, x)),
                 BesselKind::Kv => kv_scalar(*order, x, mode),
                 BesselKind::Ive => Ok(ive_scalar(*order, x)),
@@ -3284,6 +3439,8 @@ fn bessel_dispatch(
                 .map(|(&order, &x)| match kind {
                     BesselKind::Jv => Ok(jv_scalar(order, x)),
                     BesselKind::Yv => yv_scalar(order, x, mode),
+                    BesselKind::Jve => Ok(jv_scalar(order, x)),
+                    BesselKind::Yve => yv_scalar(order, x, mode),
                     BesselKind::Iv => Ok(iv_scalar(order, x)),
                     BesselKind::Kv => kv_scalar(order, x, mode),
                     BesselKind::Ive => Ok(ive_scalar(order, x)),
@@ -3347,11 +3504,19 @@ fn bessel_complex_scalar(
     match kind {
         BesselKind::Jv => Ok(complex_jv_scalar(order, z)),
         BesselKind::Yv => complex_yv_scalar(order, z, mode),
+        BesselKind::Jve => Ok(scale_cylindrical_bessel(complex_jv_scalar(order, z), z)),
+        BesselKind::Yve => {
+            complex_yv_scalar(order, z, mode).map(|value| scale_cylindrical_bessel(value, z))
+        }
         BesselKind::Iv => Ok(complex_iv_scalar(order, z)),
         BesselKind::Kv => complex_kv_scalar(order, z, mode),
         BesselKind::Ive => Ok(complex_iv_scalar(order, z) * (-z.re.abs()).exp()),
         BesselKind::Kve => complex_kv_scalar(order, z, mode).map(|k| k * z.re.exp()),
     }
+}
+
+fn scale_cylindrical_bessel(value: Complex64, z: Complex64) -> Complex64 {
+    value * (-z.im.abs()).exp()
 }
 
 /// Riccati-Bessel function of the first kind, returning
@@ -4532,6 +4697,55 @@ mod tests {
         let c = complex_value(tensor_result(result)?)?;
         assert!(c.re.is_finite());
         assert!(c.im.is_finite());
+        Ok(())
+    }
+
+    #[test]
+    fn scaled_cylindrical_bessel_real_inputs_match_base() -> Result<(), String> {
+        let v = scalar(0.5);
+        let x = scalar(1.25);
+
+        let j_scaled = real_value(tensor_result(jve(&v, &x, RuntimeMode::Strict))?)?;
+        let j_base = real_value(tensor_result(jv(&v, &x, RuntimeMode::Strict))?)?;
+        let y_scaled = real_value(tensor_result(yve(&v, &x, RuntimeMode::Strict))?)?;
+        let y_base = real_value(tensor_result(yv(&v, &x, RuntimeMode::Strict))?)?;
+
+        assert!((j_scaled - j_base).abs() < 1e-14);
+        assert!((y_scaled - y_base).abs() < 1e-14);
+        Ok(())
+    }
+
+    #[test]
+    fn scaled_cylindrical_bessel_complex_inputs_apply_scipy_scale() -> Result<(), String> {
+        let v = scalar(0.5);
+        let z_value = Complex64::new(1.25, 0.5);
+        let z = SpecialTensor::ComplexScalar(z_value);
+        let scale = (-z_value.im.abs()).exp();
+
+        let j_scaled = complex_value(tensor_result(jve(&v, &z, RuntimeMode::Strict))?)?;
+        let j_base = complex_value(tensor_result(jv(&v, &z, RuntimeMode::Strict))?)?;
+        assert_complex_close(j_scaled, j_base * scale, 1e-12);
+
+        let y_scaled = complex_value(tensor_result(yve(&v, &z, RuntimeMode::Strict))?)?;
+        let y_base = complex_value(tensor_result(yv(&v, &z, RuntimeMode::Strict))?)?;
+        assert_complex_close(y_scaled, y_base * scale, 1e-12);
+        Ok(())
+    }
+
+    #[test]
+    fn scaled_hankel_real_inputs_apply_scipy_phase() -> Result<(), String> {
+        let v = scalar(1.0);
+        let x_value = 1.25;
+        let x = scalar(x_value);
+        let z = Complex64::new(x_value, 0.0);
+
+        let h1_scaled = complex_value(tensor_result(hankel1e(&v, &x, RuntimeMode::Strict))?)?;
+        let h1_base = complex_value(tensor_result(hankel1(&v, &x, RuntimeMode::Strict))?)?;
+        assert_complex_close(h1_scaled, h1_base * Complex64::new(0.0, -z.re).exp(), 1e-12);
+
+        let h2_scaled = complex_value(tensor_result(hankel2e(&v, &x, RuntimeMode::Strict))?)?;
+        let h2_base = complex_value(tensor_result(hankel2(&v, &x, RuntimeMode::Strict))?)?;
+        assert_complex_close(h2_scaled, h2_base * Complex64::new(0.0, z.re).exp(), 1e-12);
         Ok(())
     }
 
