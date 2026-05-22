@@ -58702,4 +58702,42 @@ mod tests {
             "rao_spacing pvalue should be in [0,1], got {pvalue}"
         );
     }
+
+    #[test]
+    fn concordance_correlation_matches_scipy_reference_values() {
+        // Lin's concordance correlation coefficient
+        let x = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let y = vec![1.1, 2.2, 2.9, 4.1, 5.0];
+        let result = concordance_correlation(&x, &y);
+        assert!(
+            (result - 0.9964047252182846).abs() < 1e-10,
+            "concordance_correlation got {result}, expected 0.9964047252182846"
+        );
+    }
+
+    #[test]
+    fn partial_corr_matches_scipy_reference_values() {
+        // Partial correlation: correlation between x and y controlling for z
+        let x = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let y = vec![2.0, 3.0, 5.0, 4.0, 6.0, 7.0];
+        let z = vec![1.5, 2.5, 2.8, 3.5, 4.5, 5.5];
+        let result = partial_corr(&x, &y, &z);
+        assert!(
+            (result - 0.3069821670966534).abs() < 1e-10,
+            "partial_corr got {result}, expected 0.3069821670966534"
+        );
+    }
+
+    #[test]
+    fn semi_partial_corr_matches_scipy_reference_values() {
+        // Semi-partial (part) correlation: correlation of x with y, controlling z from y only
+        let x = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let y = vec![2.0, 3.0, 5.0, 4.0, 6.0, 7.0];
+        let z = vec![1.5, 2.5, 2.8, 3.5, 4.5, 5.5];
+        let result = semi_partial_corr(&x, &y, &z);
+        assert!(
+            (result - 0.04505376932801801).abs() < 1e-10,
+            "semi_partial_corr got {result}, expected 0.04505376932801801"
+        );
+    }
 }
