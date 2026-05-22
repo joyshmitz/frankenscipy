@@ -55623,6 +55623,54 @@ mod tests {
     }
 
     #[test]
+    fn test_braycurtis_distance_identical() {
+        let u = vec![1.0, 2.0, 3.0];
+        let v = vec![1.0, 2.0, 3.0];
+        let d = braycurtis_distance(&u, &v);
+        assert!(d.abs() < 1e-10, "Bray-Curtis distance of identical vectors should be 0, got {}", d);
+    }
+
+    #[test]
+    fn test_braycurtis_distance_bounds() {
+        let u = vec![1.0, 0.0, 0.0];
+        let v = vec![0.0, 1.0, 0.0];
+        let d = braycurtis_distance(&u, &v);
+        assert!(d >= 0.0 && d <= 1.0, "Bray-Curtis should be in [0,1], got {}", d);
+    }
+
+    #[test]
+    fn test_hamming_distance_identical() {
+        let u = vec![1.0, 2.0, 3.0];
+        let v = vec![1.0, 2.0, 3.0];
+        let d = hamming_distance(&u, &v);
+        assert!(d.abs() < 1e-10, "Hamming distance of identical vectors should be 0, got {}", d);
+    }
+
+    #[test]
+    fn test_hamming_distance_completely_different() {
+        let u = vec![1.0, 2.0, 3.0];
+        let v = vec![4.0, 5.0, 6.0];
+        let d = hamming_distance(&u, &v);
+        assert!((d - 1.0).abs() < 1e-10, "Hamming distance of completely different vectors should be 1, got {}", d);
+    }
+
+    #[test]
+    fn test_jaccard_distance_identical() {
+        let u = vec![1.0, 1.0, 0.0];
+        let v = vec![1.0, 1.0, 0.0];
+        let d = jaccard_distance(&u, &v);
+        assert!(d.abs() < 1e-10, "Jaccard distance of identical vectors should be 0, got {}", d);
+    }
+
+    #[test]
+    fn test_jaccard_distance_disjoint() {
+        let u = vec![1.0, 0.0, 0.0];
+        let v = vec![0.0, 1.0, 0.0];
+        let d = jaccard_distance(&u, &v);
+        assert!((d - 1.0).abs() < 1e-10, "Jaccard distance of disjoint sets should be 1, got {}", d);
+    }
+
+    #[test]
     fn test_huber_loss_zero_residual() {
         let y_true = vec![1.0, 2.0, 3.0];
         let y_pred = vec![1.0, 2.0, 3.0];
