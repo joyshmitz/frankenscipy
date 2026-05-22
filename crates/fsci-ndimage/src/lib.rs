@@ -871,6 +871,22 @@ pub fn convolve(
     mode: BoundaryMode,
     cval: f64,
 ) -> Result<NdArray, NdimageError> {
+    let origins = vec![0; input.ndim()];
+    convolve_with_origins(input, weights, &origins, mode, cval)
+}
+
+/// N-dimensional convolution with SciPy `origin` semantics.
+///
+/// `origins` may contain one scalar origin applied to every axis, or one origin
+/// per input axis. Positive origins shift the convolution window toward higher
+/// input coordinates; negative origins shift it toward lower coordinates.
+pub fn convolve_with_origins(
+    input: &NdArray,
+    weights: &NdArray,
+    origins: &[i64],
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError> {
     if input.ndim() != weights.ndim() {
         return Err(NdimageError::DimensionMismatch(
             "input and weights must have same number of dimensions".to_string(),
@@ -881,10 +897,11 @@ pub fn convolve(
     }
 
     let ndim = input.ndim();
+    let origins = normalize_filter_origins(ndim, &weights.shape, origins)?;
     let mut output = NdArray::zeros(input.shape.clone());
 
     // Kernel center offsets
-    let offsets: Vec<i64> = weights.shape.iter().map(|&s| s as i64 / 2).collect();
+    let offsets: Vec<i64> = weights.shape.iter().map(|&s| (s as i64 - 1) / 2).collect();
 
     for flat_out in 0..input.size() {
         let out_idx = input.unravel(flat_out);
@@ -896,7 +913,7 @@ pub fn convolve(
             for d in 0..ndim {
                 // Convolution: flip the kernel (unlike correlation)
                 let k_flipped = weights.shape[d] as i64 - 1 - k_idx[d] as i64;
-                in_idx[d] = out_idx[d] as i64 + k_flipped - offsets[d];
+                in_idx[d] = out_idx[d] as i64 + k_flipped - offsets[d] + origins[d];
             }
             sum += weights.data[flat_k] * input.get_boundary(&in_idx, mode, cval);
         }
@@ -973,6 +990,22 @@ pub fn correlate(
     mode: BoundaryMode,
     cval: f64,
 ) -> Result<NdArray, NdimageError> {
+    let origins = vec![0; input.ndim()];
+    correlate_with_origins(input, weights, &origins, mode, cval)
+}
+
+/// N-dimensional correlation with SciPy `origin` semantics.
+///
+/// `origins` may contain one scalar origin applied to every axis, or one origin
+/// per input axis. Positive origins shift the correlation window toward lower
+/// input coordinates; negative origins shift it toward higher coordinates.
+pub fn correlate_with_origins(
+    input: &NdArray,
+    weights: &NdArray,
+    origins: &[i64],
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError> {
     if input.ndim() != weights.ndim() {
         return Err(NdimageError::DimensionMismatch(
             "input and weights must have same number of dimensions".to_string(),
@@ -983,6 +1016,7 @@ pub fn correlate(
     }
 
     let ndim = input.ndim();
+    let origins = normalize_filter_origins(ndim, &weights.shape, origins)?;
     let mut output = NdArray::zeros(input.shape.clone());
 
     let offsets: Vec<i64> = weights.shape.iter().map(|&s| s as i64 / 2).collect();
@@ -995,7 +1029,7 @@ pub fn correlate(
             let k_idx = weights.unravel(flat_k);
             let mut in_idx = vec![0i64; ndim];
             for d in 0..ndim {
-                in_idx[d] = out_idx[d] as i64 + k_idx[d] as i64 - offsets[d];
+                in_idx[d] = out_idx[d] as i64 + k_idx[d] as i64 - offsets[d] - origins[d];
             }
             sum += weights.data[flat_k] * input.get_boundary(&in_idx, mode, cval);
         }
@@ -3631,6 +3665,27 @@ fn validate_filter_origin(size: usize, origin: i64) -> Result<(), NdimageError> 
     Ok(())
 }
 
+fn normalize_filter_origins(
+    ndim: usize,
+    shape: &[usize],
+    origins: &[i64],
+) -> Result<Vec<i64>, NdimageError> {
+    let normalized = match origins.len() {
+        1 => vec![origins[0]; ndim],
+        len if len == ndim => origins.to_vec(),
+        _ => {
+            return Err(NdimageError::InvalidArgument(
+                "origin must be scalar or match input dimensionality".to_string(),
+            ));
+        }
+    };
+
+    for (&size, &origin) in shape.iter().zip(&normalized) {
+        validate_filter_origin(size, origin)?;
+    }
+    Ok(normalized)
+}
+
 /// Apply a maximum filter along a single axis.
 ///
 /// Matches `scipy.ndimage.maximum_filter1d`.
@@ -5201,6 +5256,55 @@ mod tests {
         for &v in &result.data {
             assert!((v - 5.0).abs() < 1e-10, "constant image changed: {v}");
         }
+    }
+
+    #[test]
+    fn convolve_and_correlate_origins_match_scipy_even_kernel() {
+        let input = NdArray::new((1..=6).map(f64::from).collect(), vec![2, 3]).unwrap();
+        let weights = NdArray::new(vec![1., 10., 100., 1000.], vec![2, 2]).unwrap();
+
+        let corr = correlate(&input, &weights, BoundaryMode::Constant, 0.0).unwrap();
+        assert_eq!(corr.data, vec![1000., 2100., 3200., 4010., 5421., 6532.]);
+
+        let conv = convolve(&input, &weights, BoundaryMode::Constant, 0.0).unwrap();
+        assert_eq!(conv.data, vec![1245., 2356., 3060., 4500., 5600., 6000.]);
+
+        let corr_shifted =
+            correlate_with_origins(&input, &weights, &[-1], BoundaryMode::Constant, 0.0).unwrap();
+        assert_eq!(corr_shifted.data, vec![5421., 6532., 603., 54., 65., 6.]);
+
+        let conv_shifted =
+            convolve_with_origins(&input, &weights, &[-1], BoundaryMode::Constant, 0.0).unwrap();
+        assert_eq!(conv_shifted.data, vec![1., 12., 23., 104., 1245., 2356.]);
+
+        let corr_axis_shifted =
+            correlate_with_origins(&input, &weights, &[0, -1], BoundaryMode::Constant, 0.0)
+                .unwrap();
+        assert_eq!(
+            corr_axis_shifted.data,
+            vec![2100., 3200., 300., 5421., 6532., 603.]
+        );
+    }
+
+    #[test]
+    fn convolve_and_correlate_origin_validation_matches_scipy_bounds() {
+        let input = NdArray::new((1..=6).map(f64::from).collect(), vec![2, 3]).unwrap();
+        let weights = NdArray::new(vec![1., 10., 100., 1000.], vec![2, 2]).unwrap();
+
+        assert!(convolve_with_origins(&input, &weights, &[1], BoundaryMode::Reflect, 0.0).is_err());
+        assert!(
+            correlate_with_origins(&input, &weights, &[1], BoundaryMode::Reflect, 0.0).is_err()
+        );
+        assert!(
+            convolve_with_origins(&input, &weights, &[-1, 0], BoundaryMode::Reflect, 0.0).is_ok()
+        );
+        assert!(
+            correlate_with_origins(&input, &weights, &[-1, 0], BoundaryMode::Reflect, 0.0).is_ok()
+        );
+        assert!(
+            convolve_with_origins(&input, &weights, &[-1, 0, 0], BoundaryMode::Reflect, 0.0)
+                .is_err()
+        );
     }
 
     #[test]
