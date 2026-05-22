@@ -22132,6 +22132,19 @@ pub fn percentile(data: &[f64], q: f64) -> f64 {
     quantile_sorted(&sorted, q_frac)
 }
 
+/// Compute the weighted percentile of data.
+///
+/// Uses linear interpolation between weighted data points.
+/// `q` should be in [0, 100].
+pub fn percentile_weighted(data: &[f64], q: f64, weights: &[f64]) -> f64 {
+    if q.is_nan() {
+        return f64::NAN;
+    }
+    let q_frac = (q / 100.0).clamp(0.0, 1.0);
+    let result = quantile_weighted(data, &[q_frac], weights);
+    result.first().copied().unwrap_or(f64::NAN)
+}
+
 /// Compute the percentile rank of a score relative to a list of scores.
 ///
 /// Returns the percentage of values in `data` that are less than or equal to
