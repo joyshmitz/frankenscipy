@@ -31415,6 +31415,45 @@ pub fn lorenz_curve(data: &[f64]) -> (Vec<f64>, Vec<f64>) {
     (pop, cum)
 }
 
+/// Theil T index - entropy-based inequality measure.
+pub fn theil_t_index(data: &[f64]) -> f64 {
+    if data.is_empty() || data.iter().any(|&x| x <= 0.0) {
+        return f64::NAN;
+    }
+    let n = data.len() as f64;
+    let mean = data.iter().sum::<f64>() / n;
+    if mean == 0.0 {
+        return f64::NAN;
+    }
+    data.iter().map(|&x| (x / mean) * (x / mean).ln()).sum::<f64>() / n
+}
+
+/// Theil L index (mean log deviation).
+pub fn theil_l_index(data: &[f64]) -> f64 {
+    if data.is_empty() || data.iter().any(|&x| x <= 0.0) {
+        return f64::NAN;
+    }
+    let n = data.len() as f64;
+    let mean = data.iter().sum::<f64>() / n;
+    if mean == 0.0 {
+        return f64::NAN;
+    }
+    data.iter().map(|&x| (mean / x).ln()).sum::<f64>() / n
+}
+
+/// Hoover index (Robin Hood index) - proportion that must be redistributed.
+pub fn hoover_index(data: &[f64]) -> f64 {
+    if data.is_empty() || data.iter().any(|&x| x < 0.0) {
+        return f64::NAN;
+    }
+    let total: f64 = data.iter().sum();
+    if total == 0.0 {
+        return 0.0;
+    }
+    let mean = total / data.len() as f64;
+    data.iter().map(|&x| (x - mean).abs()).sum::<f64>() / (2.0 * total)
+}
+
 /// Compute the log-likelihood for a normal distribution.
 pub fn norm_loglikelihood(data: &[f64], mu: f64, sigma: f64) -> f64 {
     let n = data.len() as f64;
