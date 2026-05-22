@@ -30998,6 +30998,28 @@ pub fn explained_variance_score(y_true: &[f64], y_pred: &[f64]) -> f64 {
     1.0 - var_res / var_true
 }
 
+/// Compute the symmetric mean absolute percentage error (SMAPE).
+///
+/// SMAPE = (100/n) * Σ |y_true - y_pred| / ((|y_true| + |y_pred|) / 2)
+///
+/// A symmetric version of MAPE that handles zero values better
+/// and is bounded between 0% and 200%.
+pub fn symmetric_mape(y_true: &[f64], y_pred: &[f64]) -> f64 {
+    if y_true.len() != y_pred.len() || y_true.is_empty() {
+        return f64::NAN;
+    }
+    let n = y_true.len() as f64;
+    let sum: f64 = y_true
+        .iter()
+        .zip(y_pred.iter())
+        .map(|(&t, &p)| {
+            let denom = (t.abs() + p.abs()) / 2.0;
+            if denom == 0.0 { 0.0 } else { (t - p).abs() / denom }
+        })
+        .sum();
+    100.0 * sum / n
+}
+
 /// Compute the log-likelihood for a normal distribution.
 pub fn norm_loglikelihood(data: &[f64], mu: f64, sigma: f64) -> f64 {
     let n = data.len() as f64;
