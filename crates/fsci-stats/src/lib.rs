@@ -55918,6 +55918,28 @@ mod tests {
     }
 
     #[test]
+    fn test_logsumexp_single() {
+        let result = logsumexp(&[5.0]);
+        assert!((result - 5.0).abs() < 1e-10, "logsumexp of single element should be that element, got {}", result);
+    }
+
+    #[test]
+    fn test_logsumexp_zeros() {
+        let result = logsumexp(&[0.0, 0.0, 0.0]);
+        let expected = (3.0f64).ln();
+        assert!((result - expected).abs() < 1e-10, "logsumexp([0,0,0]) should be ln(3), got {}", result);
+    }
+
+    #[test]
+    fn test_logsumexp_weighted_uniform() {
+        let a = vec![1.0, 2.0, 3.0];
+        let b = vec![1.0, 1.0, 1.0];
+        let result = logsumexp_weighted(&a, &b);
+        let expected = logsumexp(&a);
+        assert!((result - expected).abs() < 1e-10, "logsumexp_weighted with uniform weights should match logsumexp");
+    }
+
+    #[test]
     fn test_logit_half() {
         let result = logit(0.5);
         assert!(result.abs() < 1e-10, "logit(0.5) should be 0, got {}", result);
