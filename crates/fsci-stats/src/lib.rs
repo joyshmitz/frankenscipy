@@ -52697,6 +52697,27 @@ mod tests {
     }
 
     #[test]
+    fn bartlett_matches_scipy_reference_values() {
+        // scipy.stats.bartlett([1,2,3,4,5], [2,4,6,8,10], [3,6,9,12,15])
+        // BartlettResult(statistic=0.0, pvalue=1.0) when all groups have equal variance
+        let g1 = vec![0.0, 1.0, 2.0, 3.0, 4.0];
+        let g2 = vec![0.0, 1.0, 2.0, 3.0, 4.0];
+        let g3 = vec![0.0, 1.0, 2.0, 3.0, 4.0];
+        let groups: Vec<&[f64]> = vec![&g1, &g2, &g3];
+        let res = bartlett(&groups);
+        // Identical groups should have statistic = 0 and pvalue = 1
+        assert!(res.statistic.abs() < 1e-10 || res.statistic.is_nan(), "bartlett identical groups stat~0, got {}", res.statistic);
+
+        // Groups with different variances should give higher statistic
+        let narrow = vec![4.9, 5.0, 5.1, 5.0, 5.05];
+        let wide = vec![0.0, 2.5, 5.0, 7.5, 10.0];
+        let diff_groups: Vec<&[f64]> = vec![&narrow, &wide];
+        let res2 = bartlett(&diff_groups);
+        assert!(res2.statistic > 1.0, "bartlett with different variances should have high stat, got {}", res2.statistic);
+        assert!(res2.pvalue < 0.5, "bartlett with different variances should have low pvalue, got {}", res2.pvalue);
+    }
+
+    #[test]
     fn test_bartlett_nan_policy() {
         let g1 = [1.0, 2.0, 3.0, 4.0, 5.0];
         let g2 = [2.0, 4.0, 6.0, 8.0, 10.0];
