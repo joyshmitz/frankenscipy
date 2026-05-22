@@ -55623,6 +55623,46 @@ mod tests {
     }
 
     #[test]
+    fn test_expected_calibration_error_perfect() {
+        let y_true = vec![0.0, 0.0, 1.0, 1.0];
+        let y_pred = vec![0.0, 0.0, 1.0, 1.0];
+        let ece = expected_calibration_error(&y_true, &y_pred, 10);
+        assert!(ece < 1e-10, "ECE of perfectly calibrated predictions should be 0, got {}", ece);
+    }
+
+    #[test]
+    fn test_max_calibration_error_perfect() {
+        let y_true = vec![0.0, 0.0, 1.0, 1.0];
+        let y_pred = vec![0.0, 0.0, 1.0, 1.0];
+        let mce = max_calibration_error(&y_true, &y_pred, 10);
+        assert!(mce < 1e-10, "MCE of perfectly calibrated predictions should be 0, got {}", mce);
+    }
+
+    #[test]
+    fn test_expected_calibration_error_bounds() {
+        let y_true = vec![0.0, 0.0, 1.0, 1.0];
+        let y_pred = vec![0.1, 0.2, 0.8, 0.9];
+        let ece = expected_calibration_error(&y_true, &y_pred, 5);
+        assert!(ece >= 0.0 && ece <= 1.0, "ECE should be in [0,1], got {}", ece);
+    }
+
+    #[test]
+    fn test_lorenz_curve_uniform() {
+        let data = vec![1.0, 1.0, 1.0, 1.0];
+        let (pop, cum) = lorenz_curve(&data);
+        assert_eq!(pop.len(), 5, "Lorenz curve should have n+1 points");
+        assert!((cum[4] - 1.0).abs() < 1e-10, "Final cumulative proportion should be 1.0");
+        assert!((pop[4] - 1.0).abs() < 1e-10, "Final population proportion should be 1.0");
+    }
+
+    #[test]
+    fn test_hoover_index_equal() {
+        let data = vec![10.0, 10.0, 10.0, 10.0];
+        let h = hoover_index(&data);
+        assert!(h.abs() < 1e-10, "Hoover index of equal distribution should be 0, got {}", h);
+    }
+
+    #[test]
     fn test_precision_score_perfect() {
         let y_true = vec![1.0, 1.0, 0.0, 0.0];
         let y_pred = vec![1.0, 1.0, 0.0, 0.0];
