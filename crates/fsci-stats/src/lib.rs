@@ -17407,6 +17407,33 @@ pub fn pmean(data: &[f64], p: f64) -> f64 {
     (power_sum / n).powf(1.0 / p)
 }
 
+/// Compute the weighted power mean (generalized mean with weights).
+///
+/// Matches `scipy.stats.pmean` with weights parameter.
+pub fn pmean_weighted(data: &[f64], p: f64, weights: &[f64]) -> f64 {
+    if data.is_empty() || data.len() != weights.len() || !p.is_finite() {
+        return f64::NAN;
+    }
+    if data.iter().any(|&x| !x.is_finite()) || weights.iter().any(|&w| !w.is_finite() || w < 0.0) {
+        return f64::NAN;
+    }
+    if data.iter().any(|&x| x < 0.0) {
+        return f64::NAN;
+    }
+    let total_w: f64 = weights.iter().sum();
+    if total_w <= 0.0 {
+        return f64::NAN;
+    }
+    if p == 0.0 {
+        return gmean_weighted(data, weights);
+    }
+    if p < 0.0 && data.contains(&0.0) {
+        return 0.0;
+    }
+    let weighted_power_sum: f64 = data.iter().zip(weights).map(|(&x, &w)| w * x.powf(p)).sum();
+    (weighted_power_sum / total_w).powf(1.0 / p)
+}
+
 /// Circular mean for angular data.
 ///
 /// Matches `scipy.stats.circmean`.
