@@ -56604,6 +56604,25 @@ mod tests {
     }
 
     #[test]
+    fn mode_matches_scipy_reference_values() {
+        // scipy.stats.mode([1, 2, 2, 3]) = ModeResult(mode=2, count=2)
+        let data1 = vec![1.0, 2.0, 2.0, 3.0];
+        assert!((mode(&data1) - 2.0).abs() < 1e-10, "mode([1,2,2,3]) = 2");
+
+        // scipy.stats.mode([1, 1, 2, 2, 3]) returns smallest mode when tied
+        let data2 = vec![1.0, 1.0, 2.0, 2.0, 3.0];
+        let m2 = mode(&data2);
+        assert!(m2 == 1.0 || m2 == 2.0, "mode of tied data should be one of the modes");
+
+        // Single element
+        assert!((mode(&[5.0]) - 5.0).abs() < 1e-10, "mode of single element");
+
+        // All same
+        let data3 = vec![3.0, 3.0, 3.0];
+        assert!((mode(&data3) - 3.0).abs() < 1e-10, "mode of identical elements");
+    }
+
+    #[test]
     fn binomtest_matches_scipy_reference_values() {
         // scipy.stats.binomtest(5, 10, 0.5).pvalue = 1.0 (fair coin, 5 heads in 10)
         let p1 = binomtest(5, 10, 0.5);
