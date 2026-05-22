@@ -58801,4 +58801,58 @@ mod tests {
         );
     }
 
+    #[test]
+    fn accuracy_score_matches_scipy_reference_values() {
+        let y_true = vec![0.0, 1.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0];
+        let y_pred = vec![0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0];
+        let result = accuracy_score(&y_true, &y_pred);
+        assert!(
+            (result - 0.75).abs() < 1e-10,
+            "accuracy_score got {result}, expected 0.75"
+        );
+    }
+
+    #[test]
+    fn precision_score_matches_scipy_reference_values() {
+        let y_true = vec![0.0, 1.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0];
+        let y_pred = vec![0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0];
+        let result = precision_score(&y_true, &y_pred);
+        assert!(
+            (result - 0.75).abs() < 1e-10,
+            "precision_score got {result}, expected 0.75"
+        );
+    }
+
+    #[test]
+    fn recall_score_matches_scipy_reference_values() {
+        let y_true = vec![0.0, 1.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0];
+        let y_pred = vec![0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0];
+        let result = recall_score(&y_true, &y_pred);
+        assert!(
+            (result - 0.75).abs() < 1e-10,
+            "recall_score got {result}, expected 0.75"
+        );
+    }
+
+    #[test]
+    fn cohens_kappa_matches_scipy_reference_values() {
+        // Confusion matrix: [[tn=3, fp=1], [fn=1, tp=3]]
+        let cm = vec![vec![3.0, 1.0], vec![1.0, 3.0]];
+        let result = cohens_kappa(&cm);
+        assert!(
+            (result - 0.5).abs() < 1e-10,
+            "cohens_kappa got {result}, expected 0.5"
+        );
+    }
+
+    #[test]
+    fn cohens_d_matches_scipy_reference_values() {
+        let group1 = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let group2 = vec![2.0, 3.0, 4.0, 5.0, 6.0];
+        let result = cohens_d(&group1, &group2);
+        assert!(
+            (result - (-0.6324555320336759)).abs() < 1e-10,
+            "cohens_d got {result}, expected -0.6324555320336759"
+        );
+    }
 }
