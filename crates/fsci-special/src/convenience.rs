@@ -1978,7 +1978,10 @@ pub fn beip(x: f64) -> f64 {
 ///
 /// Matches `scipy.special.ker`.
 pub fn ker(x: f64) -> f64 {
-    if x <= 0.0 {
+    if x.is_nan() || x < 0.0 {
+        return f64::NAN;
+    }
+    if x == 0.0 {
         return f64::INFINITY;
     }
     // For small x, use the series representation:
@@ -2026,7 +2029,10 @@ pub fn ker(x: f64) -> f64 {
 ///
 /// Matches `scipy.special.kei`.
 pub fn kei(x: f64) -> f64 {
-    if x <= 0.0 {
+    if x.is_nan() || x < 0.0 {
+        return f64::NAN;
+    }
+    if x == 0.0 {
         return -std::f64::consts::PI / 4.0; // kei(0) = -π/4
     }
     // kei(x) = -(ln(x/2) + γ) * bei(x) - (π/4) * ber(x) + series_correction
@@ -2088,6 +2094,19 @@ pub fn keip(x: f64) -> f64 {
         return 0.0;
     }
     kelvin_positive_derivative(x, kei)
+}
+
+/// Combined Kelvin functions `(Be, Ke, Be', Ke')`.
+///
+/// Matches `scipy.special.kelvin`, where `Be = ber + i bei` and
+/// `Ke = ker + i kei`.
+pub fn kelvin(x: f64) -> (Complex64, Complex64, Complex64, Complex64) {
+    (
+        Complex64::new(ber(x), bei(x)),
+        Complex64::new(ker(x), kei(x)),
+        Complex64::new(berp(x), beip(x)),
+        Complex64::new(kerp(x), keip(x)),
+    )
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -5976,6 +5995,25 @@ mod tests {
         assert_eq!(keip(0.0), 0.0);
         assert!(kerp(-1.0).is_nan());
         assert!(keip(-1.0).is_nan());
+    }
+
+    #[test]
+    fn combined_kelvin_matches_component_reference_points() {
+        let (be, ke, bep, kep) = kelvin(1.0);
+        assert!((be.re - 0.984_381_781_213_087).abs() < 1.0e-12);
+        assert!((be.im - 0.249_566_040_036_659_72).abs() < 1.0e-12);
+        assert!((ke.re - 0.286_706_208_728_316_04).abs() < 1.0e-3);
+        assert!((ke.im - (-0.494_994_636_518_72)).abs() < 1.0e-3);
+        assert!((bep.re - (-0.062_445_752_179_030_96)).abs() < 1.0e-12);
+        assert!((bep.im - 0.497_396_511_468_097_27).abs() < 1.0e-12);
+        assert!((kep.re - (-0.694_603_891_100_690_8)).abs() < 1.0e-3);
+        assert!((kep.im - 0.352_369_913_336_170_5).abs() < 1.0e-3);
+
+        let (_be, ke_neg, _bep, kep_neg) = kelvin(-1.0);
+        assert!(ke_neg.re.is_nan());
+        assert!(ke_neg.im.is_nan());
+        assert!(kep_neg.re.is_nan());
+        assert!(kep_neg.im.is_nan());
     }
 
     #[test]

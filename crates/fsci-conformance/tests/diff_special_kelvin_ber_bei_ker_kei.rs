@@ -1,9 +1,10 @@
 #![forbid(unsafe_code)]
 //! Live scipy parity for fsci_special Kelvin functions.
 //!
-//! Resolves [frankenscipy-3iudm] and [frankenscipy-l02sw].
-//! Compares ber(x), bei(x), ker(x), kei(x), and their first derivatives
-//! against scipy.special equivalents across x ∈ [0.1, 6.0].
+//! Resolves [frankenscipy-3iudm], [frankenscipy-l02sw], and
+//! [frankenscipy-5qsqm]. Compares ber(x), bei(x), ker(x), kei(x),
+//! their first derivatives, and the combined kelvin(x) tuple against
+//! scipy.special equivalents across x ∈ [0.1, 6.0].
 //! ber/bei use direct alternating series and are accurate up to ~6.
 //! ker/kei use a series with harmonic-number correction terms; the
 //! oracle compares within rel tol 1e-3 to allow for moderate drift.
@@ -14,7 +15,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use fsci_special::{bei, beip, ber, berp, kei, keip, ker, kerp};
+use fsci_special::{bei, beip, ber, berp, kei, keip, kelvin, ker, kerp};
 use serde::{Deserialize, Serialize};
 
 const PACKET_ID: &str = "FSCI-P2C-007";
@@ -101,6 +102,22 @@ fn build_query() -> OracleQuery {
                 x,
             });
         }
+        for func in [
+            "kelvin_be_re",
+            "kelvin_be_im",
+            "kelvin_ke_re",
+            "kelvin_ke_im",
+            "kelvin_bep_re",
+            "kelvin_bep_im",
+            "kelvin_kep_re",
+            "kelvin_kep_im",
+        ] {
+            pts.push(CasePoint {
+                case_id: format!("{func}_x{x}"),
+                func: func.into(),
+                x,
+            });
+        }
     }
     OracleQuery { points: pts }
 }
@@ -123,6 +140,19 @@ for c in q["points"]:
         elif fn == "beip": v = float(special.beip(x))
         elif fn == "kerp": v = float(special.kerp(x))
         elif fn == "keip": v = float(special.keip(x))
+        elif fn.startswith("kelvin_"):
+            be, ke, bep, kep = special.kelvin(x)
+            values = {
+                "kelvin_be_re": be.real,
+                "kelvin_be_im": be.imag,
+                "kelvin_ke_re": ke.real,
+                "kelvin_ke_im": ke.imag,
+                "kelvin_bep_re": bep.real,
+                "kelvin_bep_im": bep.imag,
+                "kelvin_kep_re": kep.real,
+                "kelvin_kep_im": kep.imag,
+            }
+            v = float(values[fn])
         else: v = None
         if v is None or not math.isfinite(v):
             out.append({"case_id": cid, "value": None})
@@ -205,6 +235,14 @@ fn diff_special_kelvin_ber_bei_ker_kei() {
             "beip" => beip(c.x),
             "kerp" => kerp(c.x),
             "keip" => keip(c.x),
+            "kelvin_be_re" => kelvin(c.x).0.re,
+            "kelvin_be_im" => kelvin(c.x).0.im,
+            "kelvin_ke_re" => kelvin(c.x).1.re,
+            "kelvin_ke_im" => kelvin(c.x).1.im,
+            "kelvin_bep_re" => kelvin(c.x).2.re,
+            "kelvin_bep_im" => kelvin(c.x).2.im,
+            "kelvin_kep_re" => kelvin(c.x).3.re,
+            "kelvin_kep_im" => kelvin(c.x).3.im,
             _ => f64::NAN,
         };
 
@@ -212,8 +250,9 @@ fn diff_special_kelvin_ber_bei_ker_kei() {
         let denom = expected.abs().max(1.0e-300);
         let rel_diff = abs_d / denom;
         let tol = match c.func.as_str() {
-            "ber" | "bei" | "berp" | "beip" => REL_TOL_BER_BEI,
-            "kerp" | "keip" => REL_TOL_KER_DERIV,
+            "ber" | "bei" | "berp" | "beip" | "kelvin_be_re" | "kelvin_be_im" | "kelvin_bep_re"
+            | "kelvin_bep_im" => REL_TOL_BER_BEI,
+            "kerp" | "keip" | "kelvin_kep_re" | "kelvin_kep_im" => REL_TOL_KER_DERIV,
             _ => REL_TOL_KER_KEI,
         };
         let pass = rel_diff <= tol || abs_d <= ABS_TOL;
@@ -230,7 +269,7 @@ fn diff_special_kelvin_ber_bei_ker_kei() {
     let all_pass = diffs.iter().all(|d| d.pass);
     let log = DiffLog {
         test_id: "diff_special_kelvin_ber_bei_ker_kei".into(),
-        category: "scipy.special Kelvin functions and derivatives".into(),
+        category: "scipy.special Kelvin functions, derivatives, and combined tuple".into(),
         case_count: diffs.len(),
         pass: all_pass,
         timestamp_ms: timestamp_ms(),

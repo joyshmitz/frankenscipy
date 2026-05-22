@@ -133,6 +133,7 @@ pub use convenience::{
     jacobian_approx,
     kei,
     keip,
+    kelvin,
     ker,
     kerp,
     kl_div,
