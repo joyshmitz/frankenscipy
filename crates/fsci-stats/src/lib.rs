@@ -3225,6 +3225,100 @@ impl ContinuousDistribution for Lognormal {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Gibrat Distribution
+// ══════════════════════════════════════════════════════════════════════
+
+/// Gibrat continuous random variable.
+///
+/// Matches `scipy.stats.gibrat`. Special case of Lognormal with s=1.
+/// PDF: f(x) = exp(-0.5 * ln(x)^2) / (x * sqrt(2*pi)) for x > 0.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Gibrat;
+
+impl Gibrat {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+impl ContinuousDistribution for Gibrat {
+    fn pdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        let lnx = x.ln();
+        (-0.5 * lnx * lnx).exp() / (x * (2.0 * PI).sqrt())
+    }
+
+    fn cdf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 0.0;
+        }
+        standard_normal_cdf(x.ln())
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return 0.0;
+        }
+        if q == 1.0 {
+            return f64::INFINITY;
+        }
+        fsci_special::ndtri_scalar(q).exp()
+    }
+
+    fn mean(&self) -> f64 {
+        core::f64::consts::E.sqrt()
+    }
+
+    fn var(&self) -> f64 {
+        core::f64::consts::E * (core::f64::consts::E - 1.0)
+    }
+
+    fn fit(_data: &[f64]) -> Self {
+        Self
+    }
+
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        if data.is_empty() {
+            return Err(FitError::InsufficientData {
+                required: 1,
+                actual: 0,
+            });
+        }
+        if data.iter().any(|&x| !x.is_finite() || x <= 0.0) {
+            return Err(FitError::UnsupportedData(
+                "Gibrat requires positive finite samples".into(),
+            ));
+        }
+        Ok(Self)
+    }
+
+    fn entropy(&self) -> f64 {
+        0.5 + 0.5 * (2.0 * PI).ln()
+    }
+
+    fn skewness(&self) -> f64 {
+        (core::f64::consts::E + 2.0) * (core::f64::consts::E - 1.0).sqrt()
+    }
+
+    fn kurtosis(&self) -> f64 {
+        core::f64::consts::E.powi(4)
+            + 2.0 * core::f64::consts::E.powi(3)
+            + 3.0 * core::f64::consts::E.powi(2)
+            - 6.0
+    }
+
+    fn mode(&self) -> f64 {
+        (-1.0_f64).exp()
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Pareto Distribution
 // ══════════════════════════════════════════════════════════════════════
 
@@ -51295,5 +51389,16 @@ mod tests {
         assert!(dl.var() > 0.0);
         assert_eq!(dl.skewness(), 0.0);
         assert!((dl.pmf_signed(-5) - dl.pmf_signed(5)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_gibrat() {
+        let g = Gibrat::new();
+        assert!(g.pdf(1.0) > 0.0);
+        assert_eq!(g.pdf(-1.0), 0.0);
+        assert!((g.cdf(1.0) - 0.5).abs() < 1e-10);
+        assert!(g.mean() > 0.0 && g.mean().is_finite());
+        assert!(g.var() > 0.0);
+        assert!((g.ppf(0.5) - 1.0).abs() < 1e-10);
     }
 }
