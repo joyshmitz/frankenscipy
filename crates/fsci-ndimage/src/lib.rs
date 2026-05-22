@@ -4801,6 +4801,103 @@ where
     Ok(NdArray::new(result, out_shape).unwrap())
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Spline Filter Functions
+// ══════════════════════════════════════════════════════════════════════
+
+/// Compute spline filter coefficients for multi-dimensional data.
+///
+/// Matches `scipy.ndimage.spline_filter`. Computes the spline coefficients
+/// needed for B-spline interpolation of order `order`.
+///
+/// # Arguments
+/// * `input` - Input array
+/// * `order` - Spline order (0-5)
+/// * `mode` - Boundary handling mode (only Reflect and Nearest are supported)
+pub fn spline_filter(
+    input: &NdArray,
+    order: usize,
+    mode: BoundaryMode,
+) -> Result<NdArray, NdimageError> {
+    if order > 5 {
+        return Err(NdimageError::InvalidArgument(format!(
+            "spline order must be in 0..=5, got {order}"
+        )));
+    }
+    if !matches!(mode, BoundaryMode::Reflect | BoundaryMode::Nearest) {
+        return Err(NdimageError::InvalidArgument(
+            "spline_filter only supports Reflect and Nearest modes".to_string(),
+        ));
+    }
+
+    let spline = prefilter_spline_coefficients(input, order, mode)?;
+    Ok(spline.coeffs)
+}
+
+/// Compute spline filter coefficients along a single axis.
+///
+/// Matches `scipy.ndimage.spline_filter1d`. Computes spline coefficients
+/// along the specified axis, leaving other axes unchanged.
+///
+/// # Arguments
+/// * `input` - Input array
+/// * `order` - Spline order (0-5)
+/// * `axis` - Axis along which to filter
+/// * `mode` - Boundary handling mode (only Reflect and Nearest are supported)
+pub fn spline_filter1d(
+    input: &NdArray,
+    order: usize,
+    axis: usize,
+    mode: BoundaryMode,
+) -> Result<NdArray, NdimageError> {
+    if order > 5 {
+        return Err(NdimageError::InvalidArgument(format!(
+            "spline order must be in 0..=5, got {order}"
+        )));
+    }
+    if axis >= input.ndim() {
+        return Err(NdimageError::InvalidArgument(format!(
+            "axis {} out of bounds for input with {} dimensions",
+            axis,
+            input.ndim()
+        )));
+    }
+    if !matches!(mode, BoundaryMode::Reflect | BoundaryMode::Nearest) {
+        return Err(NdimageError::InvalidArgument(
+            "spline_filter1d only supports Reflect and Nearest modes".to_string(),
+        ));
+    }
+
+    if order <= 1 {
+        return Ok(input.clone());
+    }
+
+    let mut result = input.clone();
+    let axis_len = result.shape[axis];
+
+    let stride: usize = result.shape[axis + 1..].iter().product();
+    let outer: usize = result.shape[..axis].iter().product();
+
+    for outer_idx in 0..outer {
+        for inner_idx in 0..stride {
+            let mut line = Vec::with_capacity(axis_len);
+            for i in 0..axis_len {
+                let flat = outer_idx * axis_len * stride + i * stride + inner_idx;
+                line.push(result.data[flat]);
+            }
+
+            let coeffs = spline_coefficients_for_line(&line, order)?;
+
+            for (i, &c) in coeffs.iter().enumerate() {
+                let flat = outer_idx * axis_len * stride + i * stride + inner_idx;
+                result.data[flat] = c;
+            }
+        }
+    }
+
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
