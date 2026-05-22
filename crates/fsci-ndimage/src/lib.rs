@@ -2428,92 +2428,104 @@ pub fn binary_fill_holes_with_structure(
 /// Returns (labeled_array, num_features).
 /// Matches `scipy.ndimage.label`.
 pub fn label(input: &NdArray) -> Result<(NdArray, usize), NdimageError> {
+    let structure = generate_binary_structure(input.ndim(), 1);
+    label_with_structure(input, &structure)
+}
+
+fn validate_label_structure(input_ndim: usize, structure: &NdArray) -> Result<(), NdimageError> {
+    if input_ndim != structure.ndim() {
+        return Err(NdimageError::DimensionMismatch(
+            "input and structure must have same dimensions".to_string(),
+        ));
+    }
+    if structure.shape.iter().any(|&dim| dim != 3) {
+        return Err(NdimageError::InvalidArgument(
+            "structure dimensions must be equal to 3".to_string(),
+        ));
+    }
+
+    for flat in 0..structure.size() {
+        let idx = structure.unravel(flat);
+        let opposite_idx = idx
+            .iter()
+            .zip(&structure.shape)
+            .map(|(&coord, &dim)| dim - 1 - coord)
+            .collect::<Vec<_>>();
+        let opposite_flat = opposite_idx
+            .iter()
+            .zip(&structure.strides)
+            .map(|(coord, stride)| coord * stride)
+            .sum::<usize>();
+        if (structure.data[flat] != 0.0) != (structure.data[opposite_flat] != 0.0) {
+            return Err(NdimageError::InvalidArgument(
+                "structuring element is not symmetric".to_string(),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+/// Label connected components with an explicit structuring element.
+///
+/// Matches `scipy.ndimage.label` when `structure` is provided.
+pub fn label_with_structure(
+    input: &NdArray,
+    structure: &NdArray,
+) -> Result<(NdArray, usize), NdimageError> {
     if input.size() == 0 {
         return Err(NdimageError::EmptyInput);
     }
+    validate_label_structure(input.ndim(), structure)?;
+    let offsets = binary_structure_offsets(structure, &[0])?
+        .into_iter()
+        .filter(|offset| offset.iter().any(|&delta| delta != 0))
+        .collect::<Vec<_>>();
 
     let mut labels = NdArray::zeros(input.shape.clone());
     let mut current_label = 0usize;
     let ndim = input.ndim();
-
-    // Union-Find for merging labels
-    // parent[0] is unused (labels start at 1)
-    let mut parent: Vec<usize> = vec![0];
-
-    let find = |parent: &mut Vec<usize>, mut x: usize| -> usize {
-        while parent[x] != x {
-            parent[x] = parent[parent[x]]; // path compression
-            x = parent[x];
-        }
-        x
-    };
+    let mut queue = std::collections::VecDeque::new();
 
     for flat in 0..input.size() {
-        if input.data[flat] == 0.0 {
+        if input.data[flat] == 0.0 || labels.data[flat] != 0.0 {
             continue;
         }
 
-        let idx = input.unravel(flat);
-        let mut neighbor_labels = Vec::new();
+        current_label += 1;
+        labels.data[flat] = current_label as f64;
+        queue.push_back(flat);
 
-        // Check already-processed neighbors (those with lower flat index)
-        for d in 0..ndim {
-            if idx[d] > 0 {
-                let mut neighbor_idx = idx.clone();
-                neighbor_idx[d] -= 1;
-                let nflat: usize = neighbor_idx
+        while let Some(current_flat) = queue.pop_front() {
+            let idx = input.unravel(current_flat);
+            for offset in &offsets {
+                let mut neighbor_idx = Vec::with_capacity(ndim);
+                let mut in_bounds = true;
+                for axis in 0..ndim {
+                    let coord = idx[axis] as i64 + offset[axis];
+                    if coord < 0 || coord >= input.shape[axis] as i64 {
+                        in_bounds = false;
+                        break;
+                    }
+                    neighbor_idx.push(coord as usize);
+                }
+                if !in_bounds {
+                    continue;
+                }
+                let neighbor_flat = neighbor_idx
                     .iter()
-                    .zip(input.strides.iter())
-                    .map(|(i, s)| i * s)
-                    .sum();
-                let nl = labels.data[nflat] as usize;
-                if nl > 0 {
-                    neighbor_labels.push(nl);
-                }
-            }
-        }
-
-        if neighbor_labels.is_empty() {
-            current_label += 1;
-            parent.push(current_label); // parent[current_label] = current_label (self-root)
-            labels.data[flat] = current_label as f64;
-        } else {
-            // Find minimum root label
-            let mut min_root = usize::MAX;
-            for &nl in &neighbor_labels {
-                let root = find(&mut parent, nl);
-                min_root = min_root.min(root);
-            }
-            labels.data[flat] = min_root as f64;
-            // Union all neighbor labels
-            for &nl in &neighbor_labels {
-                let root = find(&mut parent, nl);
-                if root != min_root {
-                    parent[root] = min_root;
+                    .zip(&input.strides)
+                    .map(|(coord, stride)| coord * stride)
+                    .sum::<usize>();
+                if input.data[neighbor_flat] != 0.0 && labels.data[neighbor_flat] == 0.0 {
+                    labels.data[neighbor_flat] = current_label as f64;
+                    queue.push_back(neighbor_flat);
                 }
             }
         }
     }
 
-    // Second pass: resolve all labels to roots
-    let mut label_map = vec![0usize; current_label + 1];
-    let mut next_label = 0usize;
-    for lbl in 1..=current_label {
-        let root = find(&mut parent, lbl);
-        if label_map[root] == 0 {
-            next_label += 1;
-            label_map[root] = next_label;
-        }
-        label_map[lbl] = label_map[root];
-    }
-
-    for v in &mut labels.data {
-        if *v > 0.0 {
-            *v = label_map[*v as usize] as f64;
-        }
-    }
-
-    Ok((labels, next_label))
+    Ok((labels, current_label))
 }
 
 fn measurement_label_groups(
@@ -6671,6 +6683,43 @@ mod tests {
         // Bottom-right block should have label 2
         assert_eq!(labels.data[14], 2.0);
         assert_eq!(labels.data[15], 2.0);
+    }
+
+    #[test]
+    fn label_with_structure_controls_diagonal_connectivity() {
+        #[rustfmt::skip]
+        let data = vec![
+            1.0, 0.0,
+            0.0, 1.0,
+        ];
+        let input = NdArray::new(data, vec![2, 2]).unwrap();
+
+        // scipy.ndimage.label(x) uses cross connectivity, so diagonal
+        // foreground pixels are separate features.
+        let (default_labels, default_num) = label(&input).unwrap();
+        assert_eq!(default_num, 2);
+        assert_eq!(default_labels.data, vec![1.0, 0.0, 0.0, 2.0]);
+
+        // scipy.ndimage.label(x, structure=np.ones((3, 3))) connects them.
+        let full_structure = NdArray::new(vec![1.0; 9], vec![3, 3]).unwrap();
+        let (full_labels, full_num) = label_with_structure(&input, &full_structure).unwrap();
+        assert_eq!(full_num, 1);
+        assert_eq!(full_labels.data, vec![1.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn label_with_structure_validates_scipy_structure_contract() {
+        let input = NdArray::new(vec![1.0, 0.0, 1.0, 0.0], vec![2, 2]).unwrap();
+        let wrong_shape = NdArray::new(vec![1.0; 4], vec![2, 2]).unwrap();
+        assert!(label_with_structure(&input, &wrong_shape).is_err());
+
+        #[rustfmt::skip]
+        let nonsymmetric = NdArray::new(vec![
+            0.0, 1.0, 0.0,
+            0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0,
+        ], vec![3, 3]).unwrap();
+        assert!(label_with_structure(&input, &nonsymmetric).is_err());
     }
 
     #[test]
