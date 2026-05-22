@@ -55,6 +55,20 @@ pub const BETA_DISPATCH_PLAN: &[DispatchPlan] = &[
         ],
         notes: "Strict mode preserves SciPy endpoint behavior at x=0 and x=1.",
     },
+    DispatchPlan {
+        function: "betaincc",
+        steps: &[
+            DispatchStep {
+                regime: KernelRegime::Reflection,
+                when: "evaluate the complementary tail as I_(1-x)(b, a)",
+            },
+            DispatchStep {
+                regime: KernelRegime::ContinuedFraction,
+                when: "delegates to the stable betainc tail path after swapping parameters",
+            },
+        ],
+        notes: "Strict mode preserves SciPy endpoint behavior at x=0 and x=1.",
+    },
 ];
 
 pub fn beta(a: &SpecialTensor, b: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
@@ -254,6 +268,28 @@ fn betainc_dispatch(
             betainc_scalar(av, bv, xv, mode)
         }),
     }
+}
+
+pub fn betaincc(
+    a: &SpecialTensor,
+    b: &SpecialTensor,
+    x: &SpecialTensor,
+    mode: RuntimeMode,
+) -> SpecialResult {
+    map_real_ternary("betaincc", a, b, x, mode, |av, bv, xv| {
+        betaincc_scalar(av, bv, xv, mode)
+    })
+}
+
+pub fn betainccinv(
+    a: &SpecialTensor,
+    b: &SpecialTensor,
+    y: &SpecialTensor,
+    mode: RuntimeMode,
+) -> SpecialResult {
+    map_real_ternary("betainccinv", a, b, y, mode, |av, bv, yv| {
+        Ok(betainccinv_scalar(av, bv, yv))
+    })
 }
 
 /// Beta distribution CDF.
@@ -1240,6 +1276,104 @@ pub fn betainc_scalar(a: f64, b: f64, x: f64, mode: RuntimeMode) -> Result<f64, 
     }
 }
 
+pub fn betaincc_scalar(a: f64, b: f64, x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
+    if a.is_nan() || b.is_nan() || x.is_nan() {
+        return Ok(f64::NAN);
+    }
+    if !(0.0..=1.0).contains(&x) {
+        return match mode {
+            RuntimeMode::Strict => {
+                record_special_trace(
+                    "betaincc",
+                    mode,
+                    "domain_error",
+                    format!("a={a},b={b},x={x}"),
+                    "returned_nan",
+                    "strict domain fallback",
+                    false,
+                );
+                Ok(f64::NAN)
+            }
+            RuntimeMode::Hardened => {
+                record_special_trace(
+                    "betaincc",
+                    mode,
+                    "domain_error",
+                    format!("a={a},b={b},x={x}"),
+                    "fail_closed",
+                    "betaincc domain requires x in [0, 1]",
+                    false,
+                );
+                Err(SpecialError {
+                    function: "betaincc",
+                    kind: SpecialErrorKind::DomainError,
+                    mode,
+                    detail: "betaincc domain requires x in [0, 1]",
+                })
+            }
+        };
+    }
+    if x == 0.0 {
+        return Ok(1.0);
+    }
+    if x == 1.0 {
+        return Ok(0.0);
+    }
+    if a <= 0.0 || b <= 0.0 {
+        return match mode {
+            RuntimeMode::Strict => {
+                record_special_trace(
+                    "betaincc",
+                    mode,
+                    "domain_error",
+                    format!("a={a},b={b},x={x}"),
+                    "returned_nan",
+                    "strict domain fallback",
+                    false,
+                );
+                Ok(f64::NAN)
+            }
+            RuntimeMode::Hardened => {
+                record_special_trace(
+                    "betaincc",
+                    mode,
+                    "domain_error",
+                    format!("a={a},b={b},x={x}"),
+                    "fail_closed",
+                    "betaincc requires positive shape parameters",
+                    false,
+                );
+                Err(SpecialError {
+                    function: "betaincc",
+                    kind: SpecialErrorKind::DomainError,
+                    mode,
+                    detail: "betaincc requires positive shape parameters",
+                })
+            }
+        };
+    }
+
+    betainc_scalar(b, a, 1.0 - x, mode)
+}
+
+#[must_use]
+pub fn betainccinv_scalar(a: f64, b: f64, y: f64) -> f64 {
+    if a.is_nan() || b.is_nan() || y.is_nan() {
+        return f64::NAN;
+    }
+    if a <= 0.0 || b <= 0.0 || !(0.0..=1.0).contains(&y) {
+        return f64::NAN;
+    }
+    if y == 0.0 {
+        return 1.0;
+    }
+    if y == 1.0 {
+        return 0.0;
+    }
+
+    1.0 - crate::convenience::betaincinv_scalar(b, a, y)
+}
+
 fn betacf(a: f64, b: f64, x: f64) -> f64 {
     const MAX_ITERS: usize = 200;
     const EPS: f64 = 3.0e-14;
@@ -1392,6 +1526,76 @@ fn gammaln_scalar(value: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn betaincc_complements_betainc_and_preserves_endpoints() {
+        for &(a, b, x) in &[
+            (0.5_f64, 0.5, 0.2),
+            (2.0, 3.0, 0.25),
+            (5.0, 2.0, 0.75),
+            (10.0, 10.0, 0.5),
+        ] {
+            let lower = betainc_scalar(a, b, x, RuntimeMode::Strict).unwrap_or(f64::NAN);
+            let upper = betaincc_scalar(a, b, x, RuntimeMode::Strict).unwrap_or(f64::NAN);
+            assert!(
+                (lower + upper - 1.0).abs() < 1.0e-12,
+                "betainc + betaincc must sum to 1 for ({a}, {b}, {x})"
+            );
+        }
+
+        assert_eq!(
+            betaincc_scalar(2.0, 3.0, 0.0, RuntimeMode::Strict).unwrap_or(f64::NAN),
+            1.0
+        );
+        assert_eq!(
+            betaincc_scalar(2.0, 3.0, 1.0, RuntimeMode::Strict).unwrap_or(f64::NAN),
+            0.0
+        );
+        assert!(betaincc_scalar(2.0, 3.0, -0.1, RuntimeMode::Strict).is_ok_and(f64::is_nan));
+    }
+
+    #[test]
+    fn betainccinv_matches_scipy_reference_and_inverts_tail() {
+        let reference = betainccinv_scalar(2.0, 3.0, 0.25);
+        assert!(
+            (reference - 0.543_678_285_419_080_3).abs() < 1.0e-12,
+            "betainccinv(2, 3, 0.25) = {reference}"
+        );
+
+        for &y in &[0.001_f64, 0.01, 0.1, 0.5, 0.9, 0.99, 0.999] {
+            let x = betainccinv_scalar(2.0, 3.0, y);
+            let tail = betaincc_scalar(2.0, 3.0, x, RuntimeMode::Strict).unwrap_or(f64::NAN);
+            assert!(
+                (tail - y).abs() < 1.0e-9,
+                "betaincc(2, 3, betainccinv(..., {y})) = {tail}"
+            );
+        }
+
+        assert_eq!(betainccinv_scalar(2.0, 3.0, 0.0), 1.0);
+        assert_eq!(betainccinv_scalar(2.0, 3.0, 1.0), 0.0);
+        assert!(betainccinv_scalar(2.0, 3.0, -0.1).is_nan());
+        assert!(betainccinv_scalar(-1.0, 3.0, 0.5).is_nan());
+    }
+
+    #[test]
+    fn betaincc_tensor_dispatch_broadcasts_real_vectors() {
+        let result = betaincc(
+            &SpecialTensor::RealScalar(2.0),
+            &SpecialTensor::RealScalar(3.0),
+            &SpecialTensor::RealVec(vec![0.0, 0.25, 0.5, 1.0]),
+            RuntimeMode::Strict,
+        )
+        .expect("betaincc vector");
+        let values = match result {
+            SpecialTensor::RealVec(values) => values,
+            _ => Vec::new(),
+        };
+        assert_eq!(values.len(), 4);
+        assert_eq!(values[0], 1.0);
+        assert!((values[1] - 0.738_281_25).abs() < 1.0e-12);
+        assert!((values[2] - 0.312_5).abs() < 1.0e-12);
+        assert_eq!(values[3], 0.0);
+    }
 
     #[test]
     fn btdtr_closed_form_reference_values() {
