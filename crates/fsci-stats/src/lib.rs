@@ -58639,4 +58639,67 @@ mod tests {
             "expectile(alpha=0.75) got {e075}, expected 6.83"
         );
     }
+
+    #[test]
+    fn directional_stats_matches_scipy_reference_values() {
+        let vectors: Vec<[f64; 2]> = vec![[1.0, 0.0], [0.7, 0.7], [0.5, 0.9], [0.9, 0.4]];
+        let result = directional_stats(&vectors, true);
+        assert!(
+            (result.mean_direction[0] - 0.8423694694823984).abs() < 1e-6,
+            "mean_direction[0] got {}, expected 0.842",
+            result.mean_direction[0]
+        );
+        assert!(
+            (result.mean_direction[1] - 0.5389004331821812).abs() < 1e-6,
+            "mean_direction[1] got {}, expected 0.539",
+            result.mean_direction[1]
+        );
+        assert!(
+            (result.mean_resultant_length - 0.9219711105194408).abs() < 1e-6,
+            "mean_resultant_length got {}, expected 0.922",
+            result.mean_resultant_length
+        );
+    }
+
+    #[test]
+    fn vtest_returns_valid_results() {
+        let samples: Vec<f64> = vec![0.1, 0.2, 0.3, 0.15, 0.25];
+        let (statistic, pvalue) = vtest(&samples, 0.2);
+        assert!(
+            statistic.is_finite(),
+            "vtest statistic should be finite"
+        );
+        assert!(
+            pvalue >= 0.0 && pvalue <= 1.0,
+            "vtest pvalue should be in [0,1], got {pvalue}"
+        );
+    }
+
+    #[test]
+    fn kuipertest_returns_valid_results() {
+        let samples: Vec<f64> = vec![0.1, 0.3, 0.5, 0.7, 0.9];
+        let (statistic, pvalue) = kuipertest(&samples);
+        assert!(
+            statistic > 0.0,
+            "kuipertest statistic should be positive, got {statistic}"
+        );
+        assert!(
+            pvalue >= 0.0 && pvalue <= 1.0,
+            "kuipertest pvalue should be in [0,1], got {pvalue}"
+        );
+    }
+
+    #[test]
+    fn rao_spacing_test_returns_valid_results() {
+        let samples: Vec<f64> = vec![0.1, 0.3, 0.5, 0.7, 0.9, 1.1];
+        let (statistic, pvalue) = rao_spacing_test(&samples);
+        assert!(
+            statistic.is_finite(),
+            "rao_spacing statistic should be finite"
+        );
+        assert!(
+            pvalue >= 0.0 && pvalue <= 1.0,
+            "rao_spacing pvalue should be in [0,1], got {pvalue}"
+        );
+    }
 }
