@@ -1404,11 +1404,22 @@ pub fn generic_filter<F>(
 where
     F: Fn(&[f64]) -> f64,
 {
-    if size == 0 {
-        return Err(NdimageError::InvalidArgument(
-            "filter size must be positive".to_string(),
-        ));
-    }
+    generic_filter_with_origins(input, function, size, &[0], mode, cval)
+}
+
+/// Apply a generic function to each local neighborhood with SciPy `origin` semantics.
+pub fn generic_filter_with_origins<F>(
+    input: &NdArray,
+    function: F,
+    size: usize,
+    origins: &[i64],
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError>
+where
+    F: Fn(&[f64]) -> f64,
+{
+    filter_footprint_size(input.ndim(), size)?;
     if input.size() == 0 {
         return Err(NdimageError::EmptyInput);
     }
@@ -1419,6 +1430,7 @@ where
     let kernel_shape: Vec<usize> = vec![size; ndim];
     let kernel_total: usize = kernel_shape.iter().product();
     let kernel_strides = compute_strides(&kernel_shape);
+    let origins = normalize_filter_origins(ndim, &kernel_shape, origins)?;
 
     for flat_out in 0..input.size() {
         let out_idx = input.unravel(flat_out);
@@ -1434,7 +1446,7 @@ where
 
             let mut in_idx = vec![0i64; ndim];
             for d in 0..ndim {
-                in_idx[d] = out_idx[d] as i64 + k_idx[d] as i64 - offsets[d];
+                in_idx[d] = out_idx[d] as i64 + k_idx[d] as i64 - offsets[d] - origins[d];
             }
             neighborhood.push(input.get_boundary(&in_idx, mode, cval));
         }
@@ -1520,13 +1532,25 @@ pub fn percentile_filter(
     mode: BoundaryMode,
     cval: f64,
 ) -> Result<NdArray, NdimageError> {
+    percentile_filter_with_origins(input, percentile, size, &[0], mode, cval)
+}
+
+/// Percentile filter with SciPy `origin` semantics.
+pub fn percentile_filter_with_origins(
+    input: &NdArray,
+    percentile: f64,
+    size: usize,
+    origins: &[i64],
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError> {
     if !(0.0..=100.0).contains(&percentile) {
         return Err(NdimageError::InvalidArgument(
             "percentile must be in [0, 100]".to_string(),
         ));
     }
 
-    generic_filter(
+    generic_filter_with_origins(
         input,
         |neighborhood| {
             let mut sorted = neighborhood.to_vec();
@@ -1535,6 +1559,7 @@ pub fn percentile_filter(
             sorted[idx.min(sorted.len() - 1)]
         },
         size,
+        origins,
         mode,
         cval,
     )
@@ -7774,6 +7799,52 @@ mod tests {
     }
 
     #[test]
+    fn generic_filter_origin_matches_scipy_even_window() {
+        let input = NdArray::new(vec![1., 2., 3., 4., 5.], vec![5]).unwrap();
+        let weighted = |values: &[f64]| values[0] * 10.0 + values[1];
+
+        let origin_zero =
+            generic_filter_with_origins(&input, weighted, 2, &[0], BoundaryMode::Constant, 0.0)
+                .unwrap();
+        assert_eq!(origin_zero.data, vec![1., 12., 23., 34., 45.]);
+
+        let shifted =
+            generic_filter_with_origins(&input, weighted, 2, &[-1], BoundaryMode::Constant, 0.0)
+                .unwrap();
+        assert_eq!(shifted.data, vec![12., 23., 34., 45., 50.]);
+    }
+
+    #[test]
+    fn generic_filter_origin_validation_matches_scipy_bounds() {
+        let input = NdArray::new(vec![1., 2., 3., 4., 5.], vec![5]).unwrap();
+        let sum_window = |values: &[f64]| values.iter().sum::<f64>();
+
+        assert!(
+            generic_filter_with_origins(&input, sum_window, 2, &[-1], BoundaryMode::Reflect, 0.0)
+                .is_ok()
+        );
+        assert!(
+            generic_filter_with_origins(&input, sum_window, 2, &[0], BoundaryMode::Reflect, 0.0)
+                .is_ok()
+        );
+        assert!(
+            generic_filter_with_origins(&input, sum_window, 2, &[1], BoundaryMode::Reflect, 0.0)
+                .is_err()
+        );
+        assert!(
+            generic_filter_with_origins(
+                &input,
+                sum_window,
+                3,
+                &[-1, 0],
+                BoundaryMode::Reflect,
+                0.0
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn generic_filter1d_matches_scipy_axis_fixtures() {
         let one_dim = NdArray::new(vec![1.0, 2.0, 3.0, 4.0], vec![4]).unwrap();
         let sum_window = |values: &[f64]| values.iter().sum::<f64>();
@@ -7832,6 +7903,48 @@ mod tests {
         let result = percentile_filter(&input, 50.0, 3, BoundaryMode::Constant, 0.0).unwrap();
         // 50th percentile of [0, 1, 5] = 1.0
         assert_eq!(result.data[0], 1.0);
+    }
+
+    #[test]
+    fn percentile_filter_origin_matches_scipy_even_window() {
+        let input = NdArray::new(vec![1., 2., 3., 4., 5.], vec![5]).unwrap();
+
+        let median_origin_zero =
+            percentile_filter_with_origins(&input, 50.0, 2, &[0], BoundaryMode::Constant, 0.0)
+                .unwrap();
+        assert_eq!(median_origin_zero.data, vec![1., 2., 3., 4., 5.]);
+
+        let median_shifted =
+            percentile_filter_with_origins(&input, 50.0, 2, &[-1], BoundaryMode::Constant, 0.0)
+                .unwrap();
+        assert_eq!(median_shifted.data, vec![2., 3., 4., 5., 5.]);
+
+        let minimum_shifted =
+            percentile_filter_with_origins(&input, 0.0, 2, &[-1], BoundaryMode::Constant, 0.0)
+                .unwrap();
+        assert_eq!(minimum_shifted.data, vec![1., 2., 3., 4., 0.]);
+    }
+
+    #[test]
+    fn percentile_filter_origin_validation_matches_scipy_bounds() {
+        let input = NdArray::new(vec![1., 2., 3., 4., 5.], vec![5]).unwrap();
+
+        assert!(
+            percentile_filter_with_origins(&input, 50.0, 2, &[-1], BoundaryMode::Reflect, 0.0)
+                .is_ok()
+        );
+        assert!(
+            percentile_filter_with_origins(&input, 50.0, 2, &[0], BoundaryMode::Reflect, 0.0)
+                .is_ok()
+        );
+        assert!(
+            percentile_filter_with_origins(&input, 50.0, 2, &[1], BoundaryMode::Reflect, 0.0)
+                .is_err()
+        );
+        assert!(
+            percentile_filter_with_origins(&input, 50.0, 3, &[-1, 0], BoundaryMode::Reflect, 0.0)
+                .is_err()
+        );
     }
 
     #[test]
