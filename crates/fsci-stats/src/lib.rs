@@ -21301,6 +21301,36 @@ pub fn sem(data: &[f64]) -> f64 {
     (var / nf).sqrt()
 }
 
+/// Weighted standard error of the mean.
+///
+/// Uses Kish's effective sample size: n_eff = (Σw)² / Σ(w²)
+pub fn sem_weighted(data: &[f64], weights: &[f64]) -> f64 {
+    if data.len() < 2 || data.len() != weights.len() {
+        return f64::NAN;
+    }
+    if weights.iter().any(|&w| !w.is_finite() || w < 0.0) {
+        return f64::NAN;
+    }
+    let total_w: f64 = weights.iter().sum();
+    if total_w <= 0.0 {
+        return f64::NAN;
+    }
+    let sum_w2: f64 = weights.iter().map(|w| w * w).sum();
+    let n_eff = total_w * total_w / sum_w2;
+    if n_eff <= 1.0 {
+        return f64::NAN;
+    }
+    let mean_val: f64 = data.iter().zip(weights).map(|(&x, &w)| w * x).sum::<f64>() / total_w;
+    let weighted_var: f64 = data
+        .iter()
+        .zip(weights)
+        .map(|(&x, &w)| w * (x - mean_val).powi(2))
+        .sum::<f64>()
+        / total_w;
+    let corrected_var = weighted_var * n_eff / (n_eff - 1.0);
+    (corrected_var / n_eff).sqrt()
+}
+
 /// Pooled variance from multiple groups.
 ///
 /// s²_pooled = Σ(n_i - 1) * s²_i / Σ(n_i - 1)
@@ -21715,6 +21745,33 @@ pub fn variation(data: &[f64]) -> f64 {
         return f64::NAN;
     }
     let var: f64 = data.iter().map(|&x| (x - mean_val).powi(2)).sum::<f64>() / n;
+    var.sqrt() / mean_val
+}
+
+/// Weighted coefficient of variation (weighted std / weighted mean).
+///
+/// Matches `scipy.stats.variation` with weights parameter.
+pub fn variation_weighted(data: &[f64], weights: &[f64]) -> f64 {
+    if data.len() < 2 || data.len() != weights.len() {
+        return f64::NAN;
+    }
+    if weights.iter().any(|&w| !w.is_finite() || w < 0.0) {
+        return f64::NAN;
+    }
+    let total_w: f64 = weights.iter().sum();
+    if total_w <= 0.0 {
+        return f64::NAN;
+    }
+    let mean_val: f64 = data.iter().zip(weights).map(|(&x, &w)| w * x).sum::<f64>() / total_w;
+    if mean_val == 0.0 {
+        return f64::NAN;
+    }
+    let var: f64 = data
+        .iter()
+        .zip(weights)
+        .map(|(&x, &w)| w * (x - mean_val).powi(2))
+        .sum::<f64>()
+        / total_w;
     var.sqrt() / mean_val
 }
 
