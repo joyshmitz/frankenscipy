@@ -26654,6 +26654,49 @@ pub fn omega_squared(groups: &[&[f64]]) -> f64 {
     (numerator / denominator).max(0.0)
 }
 
+/// Cliff's delta: non-parametric effect size.
+///
+/// Measures the degree to which values in group1 tend to be larger than group2.
+/// δ = (# pairs where x > y - # pairs where x < y) / (n1 * n2)
+///
+/// Range is [-1, 1]. Values near ±1 indicate strong effects.
+pub fn cliff_delta(group1: &[f64], group2: &[f64]) -> f64 {
+    let n1 = group1.len();
+    let n2 = group2.len();
+    if n1 == 0 || n2 == 0 {
+        return f64::NAN;
+    }
+
+    let mut greater = 0i64;
+    let mut lesser = 0i64;
+
+    for &x in group1 {
+        for &y in group2 {
+            if x > y {
+                greater += 1;
+            } else if x < y {
+                lesser += 1;
+            }
+        }
+    }
+
+    (greater - lesser) as f64 / (n1 * n2) as f64
+}
+
+/// Vargha-Delaney A: probability of superiority.
+///
+/// A = P(X > Y) + 0.5 * P(X = Y)
+///
+/// A = 0.5 means no effect, A > 0.5 means group1 tends to be larger.
+/// Related to Cliff's delta: A = (δ + 1) / 2
+pub fn vargha_delaney_a(group1: &[f64], group2: &[f64]) -> f64 {
+    let delta = cliff_delta(group1, group2);
+    if delta.is_nan() {
+        return f64::NAN;
+    }
+    (delta + 1.0) / 2.0
+}
+
 /// Cramér's V: association measure for contingency tables.
 ///
 /// V = sqrt(χ²/(n * min(r-1, c-1))), where χ² is the chi-squared statistic.
@@ -46183,6 +46226,44 @@ mod tests {
         let omega = omega_squared(&[&g1, &g2]);
         assert!(omega <= eta, "omega² {} should be <= eta² {}", omega, eta);
         assert!(omega >= 0.0, "omega² should be non-negative");
+    }
+
+    #[test]
+    fn cliff_delta_complete_separation() {
+        let g1 = [10.0, 11.0, 12.0];
+        let g2 = [1.0, 2.0, 3.0];
+        let delta = cliff_delta(&g1, &g2);
+        assert_close(delta, 1.0, 1e-10, "complete separation δ = 1");
+    }
+
+    #[test]
+    fn cliff_delta_reversed_separation() {
+        let g1 = [1.0, 2.0, 3.0];
+        let g2 = [10.0, 11.0, 12.0];
+        let delta = cliff_delta(&g1, &g2);
+        assert_close(delta, -1.0, 1e-10, "reversed separation δ = -1");
+    }
+
+    #[test]
+    fn cliff_delta_no_effect() {
+        let g = [1.0, 2.0, 3.0, 4.0];
+        let delta = cliff_delta(&g, &g);
+        assert_close(delta, 0.0, 1e-10, "identical groups δ = 0");
+    }
+
+    #[test]
+    fn vargha_delaney_complete_superiority() {
+        let g1 = [10.0, 11.0, 12.0];
+        let g2 = [1.0, 2.0, 3.0];
+        let a = vargha_delaney_a(&g1, &g2);
+        assert_close(a, 1.0, 1e-10, "complete superiority A = 1");
+    }
+
+    #[test]
+    fn vargha_delaney_no_effect() {
+        let g = [1.0, 2.0, 3.0, 4.0];
+        let a = vargha_delaney_a(&g, &g);
+        assert_close(a, 0.5, 1e-10, "no effect A = 0.5");
     }
 
     #[test]
