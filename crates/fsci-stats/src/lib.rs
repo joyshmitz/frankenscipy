@@ -29780,6 +29780,81 @@ pub fn jackknife_var(data: &[f64]) -> JackknifeResult {
     })
 }
 
+/// Resample data with replacement (bootstrap sample).
+///
+/// Generates a random sample of the same size as the input by sampling
+/// with replacement. Commonly used in bootstrap resampling.
+///
+/// # Arguments
+/// * `data` - Input data
+/// * `seed` - Random seed for reproducibility
+///
+/// # Returns
+/// A new Vec with the resampled data.
+pub fn resample(data: &[f64], seed: u64) -> Vec<f64> {
+    if data.is_empty() {
+        return vec![];
+    }
+
+    let n = data.len();
+    let mut rng_state = seed;
+    let next_rng = |state: &mut u64| -> usize {
+        *state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+        ((*state >> 33) as usize) % n
+    };
+
+    (0..n).map(|_| data[next_rng(&mut rng_state)]).collect()
+}
+
+/// Resample data with replacement with a specified output size.
+///
+/// # Arguments
+/// * `data` - Input data
+/// * `n_samples` - Number of samples to generate
+/// * `seed` - Random seed for reproducibility
+///
+/// # Returns
+/// A new Vec with n_samples resampled values.
+pub fn resample_n(data: &[f64], n_samples: usize, seed: u64) -> Vec<f64> {
+    if data.is_empty() {
+        return vec![];
+    }
+
+    let n = data.len();
+    let mut rng_state = seed;
+    let next_rng = |state: &mut u64| -> usize {
+        *state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+        ((*state >> 33) as usize) % n
+    };
+
+    (0..n_samples).map(|_| data[next_rng(&mut rng_state)]).collect()
+}
+
+/// Generate permutation indices for a given size.
+///
+/// Returns a random permutation of indices [0, n).
+/// Useful for permutation tests.
+///
+/// # Arguments
+/// * `n` - Size of the permutation
+/// * `seed` - Random seed for reproducibility
+pub fn permutation_indices(n: usize, seed: u64) -> Vec<usize> {
+    if n == 0 {
+        return vec![];
+    }
+
+    let mut indices: Vec<usize> = (0..n).collect();
+    let mut rng_state = seed;
+
+    for i in (1..n).rev() {
+        rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
+        let j = ((rng_state >> 33) as usize) % (i + 1);
+        indices.swap(i, j);
+    }
+
+    indices
+}
+
 /// Wilson score confidence interval for a proportion.
 ///
 /// More accurate than the normal approximation, especially for small n or extreme p.
