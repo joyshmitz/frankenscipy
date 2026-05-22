@@ -29192,6 +29192,99 @@ pub fn bootstrap_mean(data: &[f64], n_bootstrap: usize, confidence: f64, seed: u
     (boot_means[idx_lo], boot_means[idx_hi])
 }
 
+/// Result of jackknife resampling.
+#[derive(Debug, Clone, PartialEq)]
+pub struct JackknifeResult {
+    /// The statistic computed on the full sample.
+    pub statistic: f64,
+    /// Bias estimate (jackknife estimate - original statistic).
+    pub bias: f64,
+    /// Standard error estimate.
+    pub se: f64,
+    /// Individual leave-one-out statistics.
+    pub replicates: Vec<f64>,
+}
+
+/// Jackknife resampling for bias and standard error estimation.
+///
+/// Computes leave-one-out statistics and estimates bias and standard error.
+/// This is a general-purpose jackknife that accepts any statistic function.
+///
+/// # Arguments
+/// * `data` - The sample data
+/// * `statistic` - Function that computes the statistic from a slice
+///
+/// # Returns
+/// `JackknifeResult` with bias, standard error, and replicates.
+pub fn jackknife<F>(data: &[f64], statistic: F) -> JackknifeResult
+where
+    F: Fn(&[f64]) -> f64,
+{
+    let n = data.len();
+    if n < 2 {
+        return JackknifeResult {
+            statistic: if n == 1 { statistic(data) } else { f64::NAN },
+            bias: f64::NAN,
+            se: f64::NAN,
+            replicates: vec![],
+        };
+    }
+
+    let nf = n as f64;
+    let original = statistic(data);
+
+    let replicates: Vec<f64> = (0..n)
+        .map(|i| {
+            let subset: Vec<f64> = data
+                .iter()
+                .enumerate()
+                .filter(|&(j, _)| j != i)
+                .map(|(_, &v)| v)
+                .collect();
+            statistic(&subset)
+        })
+        .collect();
+
+    let jack_mean: f64 = replicates.iter().sum::<f64>() / nf;
+    let bias = (nf - 1.0) * (jack_mean - original);
+
+    let variance: f64 = replicates
+        .iter()
+        .map(|&x| (x - jack_mean).powi(2))
+        .sum::<f64>()
+        * (nf - 1.0)
+        / nf;
+    let se = variance.sqrt();
+
+    JackknifeResult {
+        statistic: original,
+        bias,
+        se,
+        replicates,
+    }
+}
+
+/// Jackknife estimate of the mean with bias and standard error.
+///
+/// Convenience wrapper for `jackknife` with the mean statistic.
+pub fn jackknife_mean(data: &[f64]) -> JackknifeResult {
+    jackknife(data, |x| x.iter().sum::<f64>() / x.len() as f64)
+}
+
+/// Jackknife estimate of the variance with bias and standard error.
+///
+/// Convenience wrapper for `jackknife` with the variance statistic.
+pub fn jackknife_var(data: &[f64]) -> JackknifeResult {
+    jackknife(data, |x| {
+        let n = x.len() as f64;
+        if n < 2.0 {
+            return f64::NAN;
+        }
+        let m: f64 = x.iter().sum::<f64>() / n;
+        x.iter().map(|&v| (v - m).powi(2)).sum::<f64>() / (n - 1.0)
+    })
+}
+
 /// Wilson score confidence interval for a proportion.
 ///
 /// More accurate than the normal approximation, especially for small n or extreme p.
