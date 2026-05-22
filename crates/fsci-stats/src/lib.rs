@@ -20578,6 +20578,32 @@ pub fn trimmed_var(data: &[f64], proportiontocut: f64, ddof: usize) -> f64 {
     trimmed.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (trimmed.len() - ddof) as f64
 }
 
+/// Standard error of trimmed mean.
+///
+/// Computes the standard error of the mean after trimming a proportion
+/// of elements from each end of the sorted data.
+///
+/// # Arguments
+/// * `data` — Input array
+/// * `proportiontocut` — Fraction to trim from each end (0.0 to 0.5)
+/// * `ddof` — Delta degrees of freedom (default: 1)
+///
+/// # Returns
+/// Standard error of the trimmed mean: std / sqrt(n)
+pub fn trimmed_sem(data: &[f64], proportiontocut: f64, ddof: usize) -> f64 {
+    if data.is_empty() || data.iter().any(|v| v.is_nan()) {
+        return f64::NAN;
+    }
+
+    let trimmed = trimboth(data, proportiontocut);
+    if trimmed.len() <= ddof {
+        return f64::NAN;
+    }
+
+    let std = trimmed_std(data, proportiontocut, ddof);
+    std / (trimmed.len() as f64).sqrt()
+}
+
 /// Trim a proportion of elements from both ends of a sorted array.
 ///
 /// Slices off the given proportion from **each** end of the sorted input array,
@@ -40160,6 +40186,31 @@ mod tests {
     #[test]
     fn trimmed_var_empty_returns_nan() {
         assert!(trimmed_var(&[], 0.1, 1).is_nan());
+    }
+
+    // ── trimmed_sem tests ────────────────────────────────────────────
+
+    #[test]
+    fn trimmed_sem_basic() {
+        let data: Vec<f64> = (1..=100).map(|x| x as f64).collect();
+        let sem = trimmed_sem(&data, 0.1, 1);
+        let std = trimmed_std(&data, 0.1, 1);
+        let trimmed = trimboth(&data, 0.1);
+        let expected = std / (trimmed.len() as f64).sqrt();
+        assert_close(sem, expected, 1e-10, "trimmed_sem = std/sqrt(n)");
+    }
+
+    #[test]
+    fn trimmed_sem_smaller_than_std() {
+        let data: Vec<f64> = (1..=50).map(|x| x as f64).collect();
+        let sem = trimmed_sem(&data, 0.1, 1);
+        let std = trimmed_std(&data, 0.1, 1);
+        assert!(sem < std, "SEM should be smaller than std");
+    }
+
+    #[test]
+    fn trimmed_sem_empty_returns_nan() {
+        assert!(trimmed_sem(&[], 0.1, 1).is_nan());
     }
 
     #[test]
