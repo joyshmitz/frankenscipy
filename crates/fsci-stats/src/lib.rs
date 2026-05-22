@@ -5150,6 +5150,77 @@ impl DiscreteDistribution for Boltzmann {
     }
 }
 
+/// Discrete Laplace distribution.
+///
+/// Matches `scipy.stats.dlaplace(a)`.
+/// PMF: P(k) = tanh(a/2) * exp(-a * |k|)
+/// Support: all integers.
+///
+/// Note: The trait uses u64 for k, so pmf/cdf take non-negative k.
+/// Use `pmf_signed` for signed integer support.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DiscreteLaplace {
+    pub a: f64,
+}
+
+impl DiscreteLaplace {
+    #[must_use]
+    pub fn new(a: f64) -> Self {
+        assert!(a > 0.0, "a must be positive, got {a}");
+        Self { a }
+    }
+
+    pub fn pmf_signed(&self, k: i64) -> f64 {
+        (self.a / 2.0).tanh() * (-self.a * k.unsigned_abs() as f64).exp()
+    }
+}
+
+impl DiscreteDistribution for DiscreteLaplace {
+    fn pmf(&self, k: u64) -> f64 {
+        (self.a / 2.0).tanh() * (-self.a * k as f64).exp()
+    }
+
+    fn cdf(&self, k: u64) -> f64 {
+        let kf = k as f64;
+        let ea = (-self.a).exp();
+        let norm = (self.a / 2.0).tanh();
+        let sum_neg = ea / (1.0 - ea);
+        let sum_zero_to_k = (1.0 - (-self.a * (kf + 1.0)).exp()) / (1.0 - ea);
+        norm * (sum_neg + sum_zero_to_k)
+    }
+
+    fn mean(&self) -> f64 {
+        0.0
+    }
+
+    fn var(&self) -> f64 {
+        let ea = (-self.a).exp();
+        2.0 * ea / ((1.0 - ea) * (1.0 - ea))
+    }
+
+    fn skewness(&self) -> f64 {
+        0.0
+    }
+
+    fn kurtosis(&self) -> f64 {
+        let ea = (-self.a).exp();
+        let var = 2.0 * ea / ((1.0 - ea) * (1.0 - ea));
+        let fourth_raw = ea * (1.0 + 4.0 * ea + ea * ea)
+            / ((1.0 - ea) * (1.0 - ea) * (1.0 - ea) * (1.0 - ea));
+        2.0 * fourth_raw / (var * var) - 3.0
+    }
+
+    fn mode(&self) -> f64 {
+        0.0
+    }
+
+    fn entropy(&self) -> f64 {
+        let ea = (-self.a).exp();
+        let norm = (self.a / 2.0).tanh();
+        -norm.ln() + self.a * ea / (1.0 - ea)
+    }
+}
+
 /// Yule-Simon distribution.
 ///
 /// Matches `scipy.stats.yulesimon(alpha)`. Resolves [frankenscipy-1obtd].
@@ -51210,5 +51281,19 @@ mod tests {
         let m = bnb.mean();
         assert!(m > 0.0 && m.is_finite());
         assert!(bnb.var() > 0.0);
+    }
+
+    #[test]
+    fn test_discrete_laplace() {
+        let dl = DiscreteLaplace::new(1.0);
+        let mut total = dl.pmf(0);
+        for k in 1..100 {
+            total += 2.0 * dl.pmf(k);
+        }
+        assert!((total - 1.0).abs() < 0.001);
+        assert_eq!(dl.mean(), 0.0);
+        assert!(dl.var() > 0.0);
+        assert_eq!(dl.skewness(), 0.0);
+        assert!((dl.pmf_signed(-5) - dl.pmf_signed(5)).abs() < 1e-12);
     }
 }
