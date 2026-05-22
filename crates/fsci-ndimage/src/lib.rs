@@ -1561,25 +1561,32 @@ pub fn percentile_filter_with_origins(
     mode: BoundaryMode,
     cval: f64,
 ) -> Result<NdArray, NdimageError> {
-    if !(0.0..=100.0).contains(&percentile) {
+    if !percentile.is_finite() {
         return Err(NdimageError::InvalidArgument(
-            "percentile must be in [0, 100]".to_string(),
+            "invalid percentile".to_string(),
         ));
     }
 
-    generic_filter_with_origins(
-        input,
-        |neighborhood| {
-            let mut sorted = neighborhood.to_vec();
-            sorted.sort_by(|a, b| a.total_cmp(b));
-            let idx = (percentile / 100.0 * (sorted.len() - 1) as f64).round() as usize;
-            sorted[idx.min(sorted.len() - 1)]
-        },
-        size,
-        origins,
-        mode,
-        cval,
-    )
+    let mut normalized = percentile;
+    if normalized < 0.0 {
+        normalized += 100.0;
+    }
+    if !(0.0..=100.0).contains(&normalized) {
+        return Err(NdimageError::InvalidArgument(
+            "invalid percentile".to_string(),
+        ));
+    }
+
+    let filter_size = filter_footprint_size(input.ndim(), size)?;
+    let rank = if normalized == 100.0 {
+        filter_size - 1
+    } else {
+        (filter_size as f64 * normalized / 100.0).floor() as usize
+    };
+    let rank = isize::try_from(rank)
+        .map_err(|_| NdimageError::InvalidArgument("filter footprint is too large".to_string()))?;
+
+    rank_filter_with_origins(input, rank, size, origins, mode, cval)
 }
 
 /// Morphological gradient: dilation minus erosion.
@@ -7979,6 +7986,44 @@ mod tests {
             percentile_filter_with_origins(&input, 0.0, 2, &[-1], BoundaryMode::Constant, 0.0)
                 .unwrap();
         assert_eq!(minimum_shifted.data, vec![1., 2., 3., 4., 0.]);
+    }
+
+    #[test]
+    fn percentile_filter_uses_scipy_floor_rank_semantics() {
+        let input = NdArray::new(vec![10., 20., 30., 40., 50.], vec![5]).unwrap();
+
+        let low_quartile = percentile_filter(&input, 25.0, 3, BoundaryMode::Constant, 0.0).unwrap();
+        assert_eq!(low_quartile.data, vec![0., 10., 20., 30., 0.]);
+
+        let high_quartile =
+            percentile_filter(&input, 75.0, 3, BoundaryMode::Constant, 0.0).unwrap();
+        assert_eq!(high_quartile.data, vec![20., 30., 40., 50., 50.]);
+    }
+
+    #[test]
+    fn percentile_filter_negative_percentiles_match_scipy() {
+        let input = NdArray::new(vec![10., 20., 30., 40., 50.], vec![5]).unwrap();
+
+        let negative_quartile =
+            percentile_filter(&input, -25.0, 3, BoundaryMode::Constant, 0.0).unwrap();
+        assert_eq!(negative_quartile.data, vec![20., 30., 40., 50., 50.]);
+
+        let negative_median =
+            percentile_filter(&input, -50.0, 3, BoundaryMode::Constant, 0.0).unwrap();
+        assert_eq!(negative_median.data, vec![10., 20., 30., 40., 40.]);
+
+        let negative_min =
+            percentile_filter(&input, -100.0, 3, BoundaryMode::Constant, 0.0).unwrap();
+        assert_eq!(negative_min.data, vec![0., 10., 20., 30., 0.]);
+    }
+
+    #[test]
+    fn percentile_filter_rejects_invalid_percentiles() {
+        let input = NdArray::new(vec![10., 20., 30.], vec![3]).unwrap();
+
+        assert!(percentile_filter(&input, -101.0, 3, BoundaryMode::Reflect, 0.0).is_err());
+        assert!(percentile_filter(&input, 101.0, 3, BoundaryMode::Reflect, 0.0).is_err());
+        assert!(percentile_filter(&input, f64::NAN, 3, BoundaryMode::Reflect, 0.0).is_err());
     }
 
     #[test]
