@@ -56621,6 +56621,26 @@ mod tests {
     }
 
     #[test]
+    fn linregress_matches_scipy_reference_values() {
+        // scipy.stats.linregress([1,2,3,4,5], [2,4,6,8,10])
+        // Perfect linear relationship y = 2x
+        // LinregressResult(slope=2.0, intercept=0.0, rvalue=1.0, pvalue=0.0, stderr=0.0, intercept_stderr=0.0)
+        let x = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let y = vec![2.0, 4.0, 6.0, 8.0, 10.0];
+        let res = linregress(&x, &y);
+        assert!((res.slope - 2.0).abs() < 1e-10, "linregress slope, got {}", res.slope);
+        assert!((res.intercept - 0.0).abs() < 1e-10, "linregress intercept, got {}", res.intercept);
+        assert!((res.rvalue - 1.0).abs() < 1e-10, "linregress rvalue, got {}", res.rvalue);
+        assert!(res.pvalue < 1e-5, "linregress pvalue should be very small, got {}", res.pvalue);
+
+        // With offset: y = 2x + 1
+        let y2 = vec![3.0, 5.0, 7.0, 9.0, 11.0];
+        let res2 = linregress(&x, &y2);
+        assert!((res2.slope - 2.0).abs() < 1e-10, "linregress with offset slope");
+        assert!((res2.intercept - 1.0).abs() < 1e-10, "linregress with offset intercept");
+    }
+
+    #[test]
     fn cov_matrix_matches_numpy_reference() {
         // numpy.cov([[1,2,3], [4,5,6]]) with rowvar=True
         // For perfectly correlated data, cov should show linear relationship
