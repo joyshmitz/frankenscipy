@@ -26571,6 +26571,54 @@ pub fn rank_biserial(u_stat: f64, n1: usize, n2: usize) -> f64 {
     1.0 - 2.0 * u_stat / n
 }
 
+/// Yule's Q coefficient of association for 2x2 tables.
+///
+/// Q = (ad - bc) / (ad + bc) where the table is [[a, b], [c, d]].
+/// Ranges from -1 (perfect negative association) to +1 (perfect positive).
+///
+/// # Arguments
+/// * `table` — 2x2 contingency table [[a, b], [c, d]]
+///
+/// # Returns
+/// Q coefficient in range [-1, 1]
+pub fn yule_q(table: &[[f64; 2]; 2]) -> f64 {
+    let a = table[0][0];
+    let b = table[0][1];
+    let c = table[1][0];
+    let d = table[1][1];
+
+    let ad = a * d;
+    let bc = b * c;
+    let denom = ad + bc;
+
+    if denom.abs() < 1e-10 {
+        return f64::NAN;
+    }
+
+    (ad - bc) / denom
+}
+
+/// Yule's Y coefficient of association for 2x2 tables.
+///
+/// Y = (sqrt(ad) - sqrt(bc)) / (sqrt(ad) + sqrt(bc)).
+/// Mathematically related to Q: Q = 2Y / (1 + Y²).
+pub fn yule_y(table: &[[f64; 2]; 2]) -> f64 {
+    let a = table[0][0];
+    let b = table[0][1];
+    let c = table[1][0];
+    let d = table[1][1];
+
+    let sqrt_ad = (a * d).sqrt();
+    let sqrt_bc = (b * c).sqrt();
+    let denom = sqrt_ad + sqrt_bc;
+
+    if denom.abs() < 1e-10 {
+        return f64::NAN;
+    }
+
+    (sqrt_ad - sqrt_bc) / denom
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Additional Statistical Functions
 // ══════════════════════════════════════════════════════════════════════
@@ -36494,6 +36542,43 @@ mod tests {
         let default = spearmanr(&x, &y);
         let two_sided = spearmanr_alternative(&x, &y, "two-sided");
         assert!((default.pvalue - two_sided.pvalue).abs() < 1e-10);
+    }
+
+    // ── Yule Q/Y tests ─────────────────────────────────────────────
+
+    #[test]
+    fn yule_q_perfect_positive() {
+        let table = [[10.0, 0.0], [0.0, 10.0]];
+        let q = yule_q(&table);
+        assert_close(q, 1.0, 1e-10, "perfect positive Q");
+    }
+
+    #[test]
+    fn yule_q_perfect_negative() {
+        let table = [[0.0, 10.0], [10.0, 0.0]];
+        let q = yule_q(&table);
+        assert_close(q, -1.0, 1e-10, "perfect negative Q");
+    }
+
+    #[test]
+    fn yule_q_no_association() {
+        let table = [[10.0, 10.0], [10.0, 10.0]];
+        let q = yule_q(&table);
+        assert_close(q, 0.0, 1e-10, "no association Q = 0");
+    }
+
+    #[test]
+    fn yule_q_intermediate() {
+        let table = [[15.0, 5.0], [5.0, 15.0]];
+        let q = yule_q(&table);
+        assert!(q > 0.0 && q < 1.0, "intermediate Q: {}", q);
+    }
+
+    #[test]
+    fn yule_y_basic() {
+        let table = [[10.0, 0.0], [0.0, 10.0]];
+        let y = yule_y(&table);
+        assert_close(y, 1.0, 1e-10, "perfect positive Y");
     }
 
     // ── rankdata helper ───────────────────────────────────────────
