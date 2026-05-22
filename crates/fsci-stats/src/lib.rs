@@ -32016,6 +32016,51 @@ pub fn relative_risk_ci(table: &[[usize; 2]; 2], confidence: f64) -> (f64, f64, 
     (rr, lower, upper)
 }
 
+/// Compute the attributable risk (risk difference) from a 2x2 contingency table.
+///
+/// AR = P(disease|exposed) - P(disease|unexposed)
+///
+/// # Arguments
+/// * `table` - 2x2 contingency table [[exposed_case, exposed_nocase], [unexposed_case, unexposed_nocase]]
+///
+/// # Returns
+/// Attributable risk (can be negative if exposure is protective)
+pub fn attributable_risk(table: &[[usize; 2]; 2]) -> f64 {
+    let a = table[0][0] as f64;
+    let b = table[0][1] as f64;
+    let c = table[1][0] as f64;
+    let d = table[1][1] as f64;
+
+    let n1 = a + b;
+    let n0 = c + d;
+
+    if n1 == 0.0 || n0 == 0.0 {
+        return f64::NAN;
+    }
+
+    (a / n1) - (c / n0)
+}
+
+/// Compute the number needed to treat (NNT) from a 2x2 contingency table.
+///
+/// NNT = 1 / |AR| where AR is the attributable risk.
+///
+/// Represents the number of patients that need to be treated to
+/// prevent one additional adverse outcome (or cause one with treatment).
+///
+/// # Arguments
+/// * `table` - 2x2 contingency table
+///
+/// # Returns
+/// Number needed to treat (always positive)
+pub fn number_needed_to_treat(table: &[[usize; 2]; 2]) -> f64 {
+    let ar = attributable_risk(table);
+    if ar == 0.0 || ar.is_nan() {
+        return f64::INFINITY;
+    }
+    1.0 / ar.abs()
+}
+
 /// Compute the Phi coefficient from a 2x2 contingency table.
 ///
 /// φ = (ad - bc) / sqrt((a+b)(c+d)(a+c)(b+d))
