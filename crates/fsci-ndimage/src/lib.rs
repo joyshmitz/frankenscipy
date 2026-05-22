@@ -909,6 +909,65 @@ pub fn convolve(
     Ok(output)
 }
 
+fn weights_1d_kernel(input: &NdArray, weights: &[f64], axis: usize) -> Result<NdArray, NdimageError> {
+    if axis >= input.ndim() {
+        return Err(NdimageError::InvalidArgument(format!(
+            "axis {axis} out of range for {}-dimensional input",
+            input.ndim()
+        )));
+    }
+    if weights.is_empty() {
+        return Err(NdimageError::InvalidArgument(
+            "weights must not be empty".to_string(),
+        ));
+    }
+
+    let mut kernel_shape = vec![1usize; input.ndim()];
+    kernel_shape[axis] = weights.len();
+    NdArray::new(weights.to_vec(), kernel_shape)
+}
+
+/// One-dimensional convolution along a selected axis.
+///
+/// Matches `scipy.ndimage.convolve1d` for centered filters.
+pub fn convolve1d(
+    input: &NdArray,
+    weights: &[f64],
+    axis: usize,
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError> {
+    if axis >= input.ndim() {
+        return Err(NdimageError::InvalidArgument(format!(
+            "axis {axis} out of range for {}-dimensional input",
+            input.ndim()
+        )));
+    }
+    if weights.is_empty() {
+        return Err(NdimageError::InvalidArgument(
+            "weights must not be empty".to_string(),
+        ));
+    }
+    if input.size() == 0 {
+        return Err(NdimageError::EmptyInput);
+    }
+
+    let offset = (weights.len() as i64 - 1) / 2;
+    let mut output = NdArray::zeros(input.shape.clone());
+    for flat_out in 0..input.size() {
+        let out_idx = input.unravel(flat_out);
+        let mut in_idx: Vec<i64> = out_idx.iter().map(|&i| i as i64).collect();
+        let mut sum = 0.0;
+        for (k, &weight) in weights.iter().rev().enumerate() {
+            in_idx[axis] = out_idx[axis] as i64 + k as i64 - offset;
+            sum += weight * input.get_boundary(&in_idx, mode, cval);
+        }
+        output.data[flat_out] = sum;
+    }
+
+    Ok(output)
+}
+
 /// N-dimensional correlation with a given kernel.
 ///
 /// Matches `scipy.ndimage.correlate`.
@@ -949,6 +1008,20 @@ pub fn correlate(
     }
 
     Ok(output)
+}
+
+/// One-dimensional correlation along a selected axis.
+///
+/// Matches `scipy.ndimage.correlate1d` for centered filters.
+pub fn correlate1d(
+    input: &NdArray,
+    weights: &[f64],
+    axis: usize,
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError> {
+    let kernel = weights_1d_kernel(input, weights, axis)?;
+    correlate(input, &kernel, mode, cval)
 }
 
 /// Uniform (box) filter.
@@ -3755,6 +3828,56 @@ mod tests {
         for &v in &result.data {
             assert!((v - 5.0).abs() < 1e-10, "constant image changed: {v}");
         }
+    }
+
+    #[test]
+    fn correlate1d_matches_scipy_1d_constant() {
+        let input = NdArray::new(vec![1.0, 2.0, 4.0, 7.0], vec![4]).unwrap();
+        let got = correlate1d(&input, &[1.0, 2.0, -1.0], 0, BoundaryMode::Constant, 0.5)
+            .unwrap();
+        // scipy.ndimage.correlate1d(x, [1, 2, -1], mode='constant', cval=0.5)
+        let expect = vec![0.5, 1.0, 3.0, 17.5];
+        assert_eq!(got.data, expect);
+    }
+
+    #[test]
+    fn convolve1d_matches_scipy_1d_constant() {
+        let input = NdArray::new(vec![1.0, 2.0, 4.0, 7.0], vec![4]).unwrap();
+        let got = convolve1d(&input, &[1.0, 2.0, -1.0], 0, BoundaryMode::Constant, 0.5)
+            .unwrap();
+        // scipy.ndimage.convolve1d(x, [1, 2, -1], mode='constant', cval=0.5)
+        let expect = vec![3.5, 7.0, 13.0, 10.5];
+        assert_eq!(got.data, expect);
+    }
+
+    #[test]
+    fn convolve1d_and_correlate1d_match_scipy_axis_cases() {
+        let input = NdArray::new((0..6).map(f64::from).collect(), vec![2, 3]).unwrap();
+        let weights = [1.0, 0.5];
+
+        let corr_axis0 = correlate1d(&input, &weights, 0, BoundaryMode::Nearest, 0.0).unwrap();
+        assert_eq!(corr_axis0.data, vec![0.0, 1.5, 3.0, 1.5, 3.0, 4.5]);
+
+        let conv_axis0 = convolve1d(&input, &weights, 0, BoundaryMode::Nearest, 0.0).unwrap();
+        assert_eq!(conv_axis0.data, vec![3.0, 4.5, 6.0, 4.5, 6.0, 7.5]);
+
+        let corr_axis1 = correlate1d(&input, &weights, 1, BoundaryMode::Nearest, 0.0).unwrap();
+        assert_eq!(corr_axis1.data, vec![0.0, 0.5, 2.0, 4.5, 5.0, 6.5]);
+
+        let conv_axis1 = convolve1d(&input, &weights, 1, BoundaryMode::Nearest, 0.0).unwrap();
+        assert_eq!(conv_axis1.data, vec![1.0, 2.5, 3.0, 5.5, 7.0, 7.5]);
+    }
+
+    #[test]
+    fn convolve1d_rejects_invalid_axis_and_empty_weights() {
+        let input = NdArray::new(vec![1.0, 2.0, 4.0], vec![3]).unwrap();
+        let axis_err = convolve1d(&input, &[1.0], 1, BoundaryMode::Reflect, 0.0)
+            .expect_err("axis outside ndim should be rejected");
+        assert!(matches!(axis_err, NdimageError::InvalidArgument(_)));
+
+        let weights_err = correlate1d(&input, &[], 0, BoundaryMode::Reflect, 0.0)
+            .expect_err("empty weights should be rejected");
+        assert!(matches!(weights_err, NdimageError::InvalidArgument(_)));
     }
 
     #[test]
