@@ -2039,6 +2039,65 @@ pub fn label(input: &NdArray) -> Result<(NdArray, usize), NdimageError> {
     Ok((labels, next_label))
 }
 
+fn measurement_label_groups(
+    input: &NdArray,
+    labels: Option<&NdArray>,
+    index: Option<&[usize]>,
+) -> Result<Vec<Vec<f64>>, NdimageError> {
+    let Some(labels) = labels else {
+        return Ok(vec![input.data.clone()]);
+    };
+    if input.shape != labels.shape {
+        return Err(NdimageError::DimensionMismatch(format!(
+            "input shape {:?} != labels shape {:?}",
+            input.shape, labels.shape
+        )));
+    }
+
+    let mut groups = match index {
+        Some(index) => vec![Vec::new(); index.len()],
+        None => vec![Vec::new()],
+    };
+
+    for (&value, &label_value) in input.data.iter().zip(&labels.data) {
+        if let Some(index) = index {
+            if let Some(pos) = index
+                .iter()
+                .position(|&wanted_label| label_value == wanted_label as f64)
+            {
+                groups[pos].push(value);
+            }
+        } else if label_value != 0.0 {
+            groups[0].push(value);
+        }
+    }
+
+    Ok(groups)
+}
+
+fn mean_of_values(values: &[f64]) -> f64 {
+    if values.is_empty() {
+        f64::NAN
+    } else {
+        values.iter().sum::<f64>() / values.len() as f64
+    }
+}
+
+/// Sum of values in optionally labeled regions.
+///
+/// Matches `scipy.ndimage.sum`; scalar SciPy results are returned as a
+/// one-element vector, while explicit `index` lists return one value per label.
+pub fn sum(
+    input: &NdArray,
+    labels: Option<&NdArray>,
+    index: Option<&[usize]>,
+) -> Result<Vec<f64>, NdimageError> {
+    Ok(measurement_label_groups(input, labels, index)?
+        .iter()
+        .map(|values| values.iter().sum())
+        .collect())
+}
+
 /// Sum of values in labeled regions.
 ///
 /// Matches `scipy.ndimage.sum_labels`.
@@ -2061,6 +2120,21 @@ pub fn sum_labels(
         }
     }
     Ok(sums[1..].to_vec())
+}
+
+/// Mean of values in optionally labeled regions.
+///
+/// Matches `scipy.ndimage.mean`; scalar SciPy results are returned as a
+/// one-element vector, while explicit `index` lists return one value per label.
+pub fn mean(
+    input: &NdArray,
+    labels: Option<&NdArray>,
+    index: Option<&[usize]>,
+) -> Result<Vec<f64>, NdimageError> {
+    Ok(measurement_label_groups(input, labels, index)?
+        .iter()
+        .map(|values| mean_of_values(values))
+        .collect())
 }
 
 /// Mean of values in labeled regions.
@@ -2093,6 +2167,35 @@ pub fn mean_labels(
             } else {
                 // SciPy returns NaN for labels with no pixels
                 f64::NAN
+            }
+        })
+        .collect())
+}
+
+/// Variance of values in optionally labeled regions.
+///
+/// Matches `scipy.ndimage.variance`; scalar SciPy results are returned as a
+/// one-element vector, while explicit `index` lists return one value per label.
+pub fn variance(
+    input: &NdArray,
+    labels: Option<&NdArray>,
+    index: Option<&[usize]>,
+) -> Result<Vec<f64>, NdimageError> {
+    Ok(measurement_label_groups(input, labels, index)?
+        .iter()
+        .map(|values| {
+            let mean = mean_of_values(values);
+            if mean.is_nan() {
+                f64::NAN
+            } else {
+                values
+                    .iter()
+                    .map(|value| {
+                        let diff = *value - mean;
+                        diff * diff
+                    })
+                    .sum::<f64>()
+                    / values.len() as f64
             }
         })
         .collect())
@@ -2131,6 +2234,22 @@ pub fn variance_labels(
                 f64::NAN
             }
         })
+        .collect())
+}
+
+/// Standard deviation of values in optionally labeled regions.
+///
+/// Matches `scipy.ndimage.standard_deviation`; scalar SciPy results are
+/// returned as a one-element vector, while explicit `index` lists return one
+/// value per label.
+pub fn standard_deviation(
+    input: &NdArray,
+    labels: Option<&NdArray>,
+    index: Option<&[usize]>,
+) -> Result<Vec<f64>, NdimageError> {
+    Ok(variance(input, labels, index)?
+        .into_iter()
+        .map(|value| value.sqrt())
         .collect())
 }
 
@@ -3813,6 +3932,20 @@ pub fn array_histogram(input: &NdArray, bins: usize) -> (Vec<usize>, Vec<f64>) {
 mod tests {
     use super::*;
 
+    fn assert_close_or_nan(actual: &[f64], expected: &[f64]) {
+        assert_eq!(actual.len(), expected.len());
+        for (&actual_value, &expected_value) in actual.iter().zip(expected) {
+            if expected_value.is_nan() {
+                assert!(actual_value.is_nan(), "expected NaN, got {actual_value}");
+            } else {
+                assert!(
+                    (actual_value - expected_value).abs() < 1e-12,
+                    "expected {expected_value}, got {actual_value}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn uniform_filter_1d() {
         let input = NdArray::new(vec![0.0, 0.0, 1.0, 0.0, 0.0], vec![5]).unwrap();
@@ -4405,6 +4538,48 @@ mod tests {
         let labels = NdArray::new(vec![1.0, 1.0, 2.0, 2.0], vec![4]).unwrap();
         let sums = sum_labels(&data, &labels, 2).unwrap();
         assert_eq!(sums, vec![3.0, 7.0]);
+    }
+
+    #[test]
+    fn measurement_reduction_wrappers_match_scipy_fixtures() {
+        let data = NdArray::new(vec![1.0, 2.0, 5.0, 10.0, 20.0], vec![5]).unwrap();
+        let labels = NdArray::new(vec![1.0, 1.0, 2.0, 0.0, 3.0], vec![5]).unwrap();
+        let index = [0, 1, 2, 3, 4];
+
+        // scipy.ndimage.sum(data)
+        assert_eq!(sum(&data, None, None).unwrap(), vec![38.0]);
+        // scipy.ndimage.sum(data, labels)
+        assert_eq!(sum(&data, Some(&labels), None).unwrap(), vec![28.0]);
+        // scipy.ndimage.sum(data, labels, [0, 1, 2, 3, 4])
+        assert_eq!(
+            sum(&data, Some(&labels), Some(&index)).unwrap(),
+            vec![10.0, 3.0, 5.0, 20.0, 0.0]
+        );
+
+        // scipy.ndimage.mean(data, labels, [0, 1, 2, 3, 4])
+        assert_close_or_nan(
+            &mean(&data, Some(&labels), Some(&index)).unwrap(),
+            &[10.0, 1.5, 5.0, 20.0, f64::NAN],
+        );
+        // scipy.ndimage.variance(data, labels, [0, 1, 2, 3, 4])
+        assert_close_or_nan(
+            &variance(&data, Some(&labels), Some(&index)).unwrap(),
+            &[0.0, 0.25, 0.0, 0.0, f64::NAN],
+        );
+        // scipy.ndimage.standard_deviation(data, labels, [0, 1, 2, 3, 4])
+        assert_close_or_nan(
+            &standard_deviation(&data, Some(&labels), Some(&index)).unwrap(),
+            &[0.0, 0.5, 0.0, 0.0, f64::NAN],
+        );
+    }
+
+    #[test]
+    fn measurement_reduction_wrappers_reject_label_shape_mismatch() {
+        let data = NdArray::new(vec![1.0, 2.0, 3.0, 4.0], vec![4]).unwrap();
+        let labels = NdArray::new(vec![1.0, 1.0, 2.0, 2.0], vec![2, 2]).unwrap();
+        let err = mean(&data, Some(&labels), Some(&[1]))
+            .expect_err("shape mismatch must be rejected");
+        assert!(matches!(err, NdimageError::DimensionMismatch(_)));
     }
 
     #[test]
