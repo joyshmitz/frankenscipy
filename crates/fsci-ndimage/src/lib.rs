@@ -2295,9 +2295,64 @@ pub fn binary_closing_with_origins(
 ///
 /// Matches `scipy.ndimage.binary_fill_holes`.
 pub fn binary_fill_holes(input: &NdArray) -> Result<NdArray, NdimageError> {
+    let structure = generate_binary_structure(input.ndim(), 1);
+    binary_fill_holes_with_structure(input, &structure, &[0])
+}
+
+fn binary_structure_offsets(
+    structure: &NdArray,
+    origins: &[i64],
+) -> Result<Vec<Vec<i64>>, NdimageError> {
+    if structure.shape.contains(&0) {
+        return Err(NdimageError::InvalidArgument(
+            "structure dimensions must be positive".to_string(),
+        ));
+    }
+
+    let origins = normalize_filter_origins(structure.ndim(), &structure.shape, origins)?;
+    let centers = structure
+        .shape
+        .iter()
+        .map(|&size| size as i64 / 2)
+        .collect::<Vec<_>>();
+
+    let mut offsets = Vec::new();
+    for flat in 0..structure.size() {
+        if structure.data[flat] == 0.0 {
+            continue;
+        }
+        let idx = structure.unravel(flat);
+        offsets.push(
+            idx.iter()
+                .zip(centers.iter().zip(&origins))
+                .map(|(&coord, (&center, &origin))| coord as i64 - center - origin)
+                .collect::<Vec<_>>(),
+        );
+    }
+    Ok(offsets)
+}
+
+/// Binary fill holes with an explicit structuring element and origin.
+///
+/// Matches `scipy.ndimage.binary_fill_holes` when `structure` and `origin` are
+/// provided.
+pub fn binary_fill_holes_with_structure(
+    input: &NdArray,
+    structure: &NdArray,
+    origins: &[i64],
+) -> Result<NdArray, NdimageError> {
     if input.size() == 0 {
         return Err(NdimageError::EmptyInput);
     }
+    if input.ndim() != structure.ndim() {
+        return Err(NdimageError::DimensionMismatch(format!(
+            "input ndim {} != structure ndim {}",
+            input.ndim(),
+            structure.ndim()
+        )));
+    }
+
+    let offsets = binary_structure_offsets(structure, origins)?;
 
     // Flood-fill from edges with complement, then invert
     // Start with all 1s, set boundary-connected background pixels to 0
@@ -2326,23 +2381,28 @@ pub fn binary_fill_holes(input: &NdArray) -> Result<NdArray, NdimageError> {
     // BFS: spread background through connected 0-pixels
     while let Some(flat) = queue.pop_front() {
         let idx = input.unravel(flat);
-        // Check all face-connected neighbors
-        for d in 0..ndim {
-            for delta in [-1i64, 1] {
-                let ni = idx[d] as i64 + delta;
-                if ni >= 0 && ni < input.shape[d] as i64 {
-                    let mut neighbor_idx = idx.clone();
-                    neighbor_idx[d] = ni as usize;
-                    let nflat = neighbor_idx
-                        .iter()
-                        .zip(input.strides.iter())
-                        .map(|(i, s)| i * s)
-                        .sum::<usize>();
-                    if input.data[nflat] == 0.0 && filled.data[nflat] == 1.0 {
-                        filled.data[nflat] = 0.0;
-                        queue.push_back(nflat);
-                    }
+        for offset in &offsets {
+            let mut neighbor_idx = Vec::with_capacity(ndim);
+            let mut in_bounds = true;
+            for axis in 0..ndim {
+                let coord = idx[axis] as i64 + offset[axis];
+                if coord < 0 || coord >= input.shape[axis] as i64 {
+                    in_bounds = false;
+                    break;
                 }
+                neighbor_idx.push(coord as usize);
+            }
+            if !in_bounds {
+                continue;
+            }
+            let nflat = neighbor_idx
+                .iter()
+                .zip(input.strides.iter())
+                .map(|(i, s)| i * s)
+                .sum::<usize>();
+            if input.data[nflat] == 0.0 && filled.data[nflat] == 1.0 {
+                filled.data[nflat] = 0.0;
+                queue.push_back(nflat);
             }
         }
     }
@@ -8272,6 +8332,44 @@ mod tests {
         let input = NdArray::new(data, vec![3, 3]).unwrap();
         let result = binary_fill_holes(&input).unwrap();
         assert_eq!(result.data[4], 1.0); // hole should be filled
+    }
+
+    #[test]
+    fn binary_fill_holes_structure_controls_diagonal_connectivity() {
+        #[rustfmt::skip]
+        let data = vec![
+            0.0, 1.0, 1.0,
+            1.0, 0.0, 1.0,
+            1.0, 1.0, 1.0,
+        ];
+        let input = NdArray::new(data, vec![3, 3]).unwrap();
+
+        // scipy.ndimage.binary_fill_holes(x) fills the center because the
+        // default cross structure does not connect diagonal background.
+        assert_eq!(
+            binary_fill_holes(&input).unwrap().data,
+            vec![0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+        );
+
+        // scipy.ndimage.binary_fill_holes(x, structure=np.ones((3, 3))) leaves
+        // the center open because diagonal background reaches the border.
+        let full_structure = NdArray::new(vec![1.0; 9], vec![3, 3]).unwrap();
+        assert_eq!(
+            binary_fill_holes_with_structure(&input, &full_structure, &[0])
+                .unwrap()
+                .data,
+            vec![0.0, 1.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0]
+        );
+    }
+
+    #[test]
+    fn binary_fill_holes_structure_validates_shape_and_origin() {
+        let input = NdArray::new(vec![1.0, 0.0, 1.0], vec![3]).unwrap();
+        let structure_2d = NdArray::new(vec![1.0; 9], vec![3, 3]).unwrap();
+        assert!(binary_fill_holes_with_structure(&input, &structure_2d, &[0]).is_err());
+
+        let structure_1d = NdArray::new(vec![1.0, 1.0, 1.0], vec![3]).unwrap();
+        assert!(binary_fill_holes_with_structure(&input, &structure_1d, &[2]).is_err());
     }
 
     #[test]
