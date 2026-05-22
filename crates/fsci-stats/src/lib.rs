@@ -27586,37 +27586,29 @@ pub fn barnard_exact_alternative(table: &[[usize; 2]; 2], alternative: &str) -> 
     let c = table[1][0];
     let d = table[1][1];
 
-    let n1 = (a + b) as f64;
-    let n2 = (c + d) as f64;
+    let n1 = (a + c) as u64;
+    let n2 = (b + d) as u64;
 
-    if n1 == 0.0 || n2 == 0.0 {
+    if n1 == 0 || n2 == 0 {
         return BarnardExactResult {
             statistic: f64::NAN,
-            pvalue: f64::NAN,
+            pvalue: 1.0,
         };
     }
 
     // Wald statistic
-    let wald_stat = barnard_wald_statistic(a, b, c, d);
+    let wald_stat = barnard_wald_statistic(a as u64, b as u64, n1, n2);
 
     // Search over nuisance parameter p to find maximum p-value
     // Use grid search over [0, 1]
-    let n_grid = 101;
+    let n_grid = 1001;
     let mut max_pvalue = 0.0_f64;
 
-    for i in 1..n_grid {
+    for i in 0..=n_grid {
         let p = i as f64 / n_grid as f64;
 
         // Compute p-value for this nuisance parameter
-        let pval = barnard_pvalue_at_p(
-            a as u64,
-            b as u64,
-            c as u64,
-            d as u64,
-            p,
-            wald_stat,
-            alternative,
-        );
+        let pval = barnard_pvalue_at_p(a as u64, b as u64, n1, n2, p, wald_stat, alternative);
 
         max_pvalue = max_pvalue.max(pval);
     }
@@ -27627,20 +27619,20 @@ pub fn barnard_exact_alternative(table: &[[usize; 2]; 2], alternative: &str) -> 
     }
 }
 
-fn barnard_wald_statistic(a: usize, b: usize, c: usize, d: usize) -> f64 {
-    let n1 = (a + b) as f64;
-    let n2 = (c + d) as f64;
-    let n = n1 + n2;
+fn barnard_wald_statistic(x1: u64, x2: u64, n1: u64, n2: u64) -> f64 {
+    let n1f = n1 as f64;
+    let n2f = n2 as f64;
+    let n = n1f + n2f;
 
-    let p1 = a as f64 / n1;
-    let p2 = c as f64 / n2;
-    let p_pooled = (a + c) as f64 / n;
+    let p1 = x1 as f64 / n1f;
+    let p2 = x2 as f64 / n2f;
+    let p_pooled = (x1 + x2) as f64 / n;
 
     if p_pooled == 0.0 || p_pooled == 1.0 {
         return 0.0;
     }
 
-    let se = (p_pooled * (1.0 - p_pooled) * (1.0 / n1 + 1.0 / n2)).sqrt();
+    let se = (p_pooled * (1.0 - p_pooled) * (1.0 / n1f + 1.0 / n2f)).sqrt();
     if se == 0.0 {
         return 0.0;
     }
@@ -27651,27 +27643,21 @@ fn barnard_wald_statistic(a: usize, b: usize, c: usize, d: usize) -> f64 {
 fn barnard_pvalue_at_p(
     a_obs: u64,
     b_obs: u64,
-    c_obs: u64,
-    d_obs: u64,
+    n1: u64,
+    n2: u64,
     p: f64,
     observed_stat: f64,
     alternative: &str,
 ) -> f64 {
-    let n1 = a_obs + b_obs;
-    let n2 = c_obs + d_obs;
-
     let binom1 = Binomial::new(n1, p);
     let binom2 = Binomial::new(n2, p);
 
     let mut pvalue = 0.0;
 
     // Sum over all possible tables
-    for a in 0..=n1 {
-        let b = n1 - a;
-        for c in 0..=n2 {
-            let d = n2 - c;
-
-            let stat = barnard_wald_statistic(a as usize, b as usize, c as usize, d as usize);
+    for x1 in 0..=n1 {
+        for x2 in 0..=n2 {
+            let stat = barnard_wald_statistic(x1, x2, n1, n2);
 
             let is_extreme = match alternative {
                 "less" => stat <= observed_stat,
@@ -27680,7 +27666,7 @@ fn barnard_pvalue_at_p(
             };
 
             if is_extreme {
-                let prob = binom1.pmf(a) * binom2.pmf(c);
+                let prob = binom1.pmf(x1) * binom2.pmf(x2);
                 pvalue += prob;
             }
         }
@@ -27722,13 +27708,27 @@ pub fn boschloo_exact_alternative(
     table: &[[usize; 2]; 2],
     alternative: &str,
 ) -> BoschlooExactResult {
+    if alternative == "two-sided" {
+        let less = boschloo_exact_alternative(table, "less");
+        let greater = boschloo_exact_alternative(table, "greater");
+        let selected = if less.pvalue < greater.pvalue {
+            less
+        } else {
+            greater
+        };
+        return BoschlooExactResult {
+            statistic: selected.statistic,
+            pvalue: (2.0 * selected.pvalue).clamp(0.0, 1.0),
+        };
+    }
+
     let a = table[0][0];
     let b = table[0][1];
     let c = table[1][0];
     let d = table[1][1];
 
-    let n1 = (a + b) as u64;
-    let n2 = (c + d) as u64;
+    let n1 = (a + c) as u64;
+    let n2 = (b + d) as u64;
 
     if n1 == 0 || n2 == 0 {
         return BoschlooExactResult {
@@ -27760,18 +27760,18 @@ pub fn boschloo_exact_alternative(
 
 fn fisher_one_sided_pvalue(a: usize, b: usize, c: usize, d: usize, alternative: &str) -> f64 {
     let n = (a + b + c + d) as u64;
-    let row0 = (a + b) as u64;
-    let col0 = (a + c) as u64;
+    let successes = (a + b) as u64;
+    let col1 = (a + c) as u64;
 
     if n == 0 {
         return 1.0;
     }
 
-    let hyper = Hypergeometric::new(n, col0, row0);
+    let hyper = Hypergeometric::new(n, successes, col1);
     let observed_k = a as u64;
 
-    let k_min = row0.saturating_sub(n - col0);
-    let k_max = row0.min(col0);
+    let k_min = col1.saturating_sub(n - successes);
+    let k_max = col1.min(successes);
 
     match alternative {
         "less" => {
@@ -27783,12 +27783,9 @@ fn fisher_one_sided_pvalue(a: usize, b: usize, c: usize, d: usize, alternative: 
             (observed_k..=k_max).map(|k| hyper.pmf(k)).sum()
         }
         _ => {
-            // Two-sided: sum probabilities as or more extreme than observed
-            let p_observed = hyper.pmf(observed_k);
-            (k_min..=k_max)
-                .filter(|&k| hyper.pmf(k) <= p_observed + 1e-14)
-                .map(|k| hyper.pmf(k))
-                .sum()
+            let less: f64 = (k_min..=observed_k).map(|k| hyper.pmf(k)).sum();
+            let greater: f64 = (observed_k..=k_max).map(|k| hyper.pmf(k)).sum();
+            (2.0 * less.min(greater)).clamp(0.0, 1.0)
         }
     }
 }
@@ -45438,10 +45435,11 @@ mod tests {
 
     #[test]
     fn barnard_exact_empty_row() {
-        // Empty row should return NaN
+        // Empty success row matches SciPy: zero statistic and p-value 1.
         let table = [[0, 0], [5, 5]];
         let result = barnard_exact(&table);
-        assert!(result.pvalue.is_nan());
+        assert_eq!(result.statistic, 0.0);
+        assert_eq!(result.pvalue, 1.0);
     }
 
     // ── boschloo_exact tests ────────────────────────────────────────────
@@ -45487,7 +45485,8 @@ mod tests {
     fn boschloo_exact_empty_row() {
         let table = [[0, 0], [5, 5]];
         let result = boschloo_exact(&table);
-        assert!(result.pvalue.is_nan());
+        assert_eq!(result.statistic, 1.0);
+        assert_eq!(result.pvalue, 1.0);
     }
 
     // ── gstd tests ────────────────────────────────────────────────────
@@ -58042,6 +58041,71 @@ mod tests {
             result2.pvalue > 0.0 && result2.pvalue < 0.1,
             "boschloo pvalue got {}, expected <0.1",
             result2.pvalue
+        );
+    }
+
+    #[test]
+    fn pointbiserialr_matches_scipy_reference_values() {
+        let binary: Vec<f64> = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
+        let continuous: Vec<f64> = vec![1.5, 2.0, 1.8, 3.5, 3.8, 4.0, 3.2];
+        let result = pointbiserialr(&binary, &continuous);
+        assert!(
+            (result.statistic - 0.9607072530860509).abs() < 1e-10,
+            "pointbiserialr correlation got {}, expected 0.9607",
+            result.statistic
+        );
+        assert!(
+            (result.pvalue - 0.0005754813262680344).abs() < 1e-10,
+            "pointbiserialr pvalue got {}, expected 0.00058",
+            result.pvalue
+        );
+
+        let binary2: Vec<f64> = vec![0.0, 0.0, 1.0, 1.0];
+        let continuous2: Vec<f64> = vec![1.0, 1.5, 3.0, 3.5];
+        let result2 = pointbiserialr(&binary2, &continuous2);
+        assert!(
+            (result2.statistic - 0.9701425001453321).abs() < 1e-10,
+            "pointbiserialr2 correlation got {}, expected 0.9701",
+            result2.statistic
+        );
+    }
+
+    #[test]
+    fn g_test_matches_scipy_reference_values() {
+        let f_obs: Vec<f64> = vec![16.0, 18.0, 16.0, 14.0, 12.0, 12.0];
+        let (statistic, pvalue) = g_test(&f_obs, None);
+        assert!(
+            (statistic - 2.006573162632538).abs() < 1e-10,
+            "g_test statistic got {statistic}, expected 2.0066"
+        );
+        assert!(
+            (pvalue - 0.8482347677946377).abs() < 1e-10,
+            "g_test pvalue got {pvalue}, expected 0.8482"
+        );
+    }
+
+    #[test]
+    fn power_divergence_matches_scipy_reference_values() {
+        let f_obs: Vec<f64> = vec![16.0, 18.0, 16.0, 14.0, 12.0, 12.0];
+
+        let (stat1, pval1) = power_divergence(&f_obs, None, 1.0);
+        assert!(
+            (stat1 - 2.0).abs() < 1e-10,
+            "power_divergence(lambda=1) statistic got {stat1}, expected 2.0"
+        );
+        assert!(
+            (pval1 - 0.8491450360846096).abs() < 1e-10,
+            "power_divergence(lambda=1) pvalue got {pval1}, expected 0.8491"
+        );
+
+        let (stat2, pval2) = power_divergence(&f_obs, None, 2.0 / 3.0);
+        assert!(
+            (stat2 - 2.0008491259391623).abs() < 1e-10,
+            "power_divergence(lambda=2/3) statistic got {stat2}, expected 2.0008"
+        );
+        assert!(
+            (pval2 - 0.8490275307703765).abs() < 1e-10,
+            "power_divergence(lambda=2/3) pvalue got {pval2}, expected 0.8490"
         );
     }
 }
