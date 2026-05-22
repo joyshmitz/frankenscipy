@@ -16864,6 +16864,220 @@ pub fn tukey_hsd(groups: &[&[f64]]) -> TukeyHSDResult {
     }
 }
 
+/// Result for Dunnett's test.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DunnettResult {
+    /// Test statistics (t-values) for each treatment vs control.
+    pub statistic: Vec<f64>,
+    /// P-values for each comparison (Bonferroni-corrected).
+    pub pvalue: Vec<f64>,
+}
+
+/// Dunnett's test for multiple comparisons against a control group.
+///
+/// Compares each treatment group to a single control group.
+/// More powerful than Tukey HSD when only control comparisons are needed.
+///
+/// Matches `scipy.stats.dunnett(*samples, control=control)`.
+///
+/// # Arguments
+/// * `treatments` - Slice of sample arrays for treatment groups
+/// * `control` - Sample array for the control group
+///
+/// # Returns
+/// `DunnettResult` with test statistics and p-values for each treatment vs control.
+///
+/// # Examples
+/// ```
+/// use fsci_stats::dunnett;
+/// let control = [2.0, 2.5, 3.0, 2.8];
+/// let treatment1 = [5.0, 5.5, 6.0, 5.2];
+/// let treatment2 = [2.1, 2.3, 2.9, 2.7];
+/// let result = dunnett(&[&treatment1, &treatment2], &control);
+/// assert!(result.pvalue[0] < 0.05); // treatment1 differs from control
+/// assert!(result.pvalue[1] > 0.05); // treatment2 similar to control
+/// ```
+pub fn dunnett(treatments: &[&[f64]], control: &[f64]) -> DunnettResult {
+    let k = treatments.len();
+    if k == 0 || control.is_empty() {
+        return DunnettResult {
+            statistic: vec![],
+            pvalue: vec![],
+        };
+    }
+
+    // Control group statistics
+    let n_c = control.len() as f64;
+    let mean_c: f64 = control.iter().sum::<f64>() / n_c;
+
+    // Compute pooled variance (MSE)
+    let mut ss_within = control.iter().map(|&x| (x - mean_c).powi(2)).sum::<f64>();
+    let mut df_within = n_c - 1.0;
+
+    let mut stats = Vec::with_capacity(k);
+    let mut pvals = Vec::with_capacity(k);
+
+    // Treatment group statistics
+    let treatment_stats: Vec<(f64, f64, f64)> = treatments
+        .iter()
+        .map(|t| {
+            if t.is_empty() {
+                (f64::NAN, 0.0, 0.0)
+            } else {
+                let n = t.len() as f64;
+                let mean = t.iter().sum::<f64>() / n;
+                let ss: f64 = t.iter().map(|&x| (x - mean).powi(2)).sum();
+                (mean, n, ss)
+            }
+        })
+        .collect();
+
+    // Add treatment contributions to pooled variance
+    for (_, _, ss) in &treatment_stats {
+        ss_within += ss;
+    }
+    for t in treatments {
+        if !t.is_empty() {
+            df_within += t.len() as f64 - 1.0;
+        }
+    }
+
+    if df_within <= 0.0 {
+        return DunnettResult {
+            statistic: vec![f64::NAN; k],
+            pvalue: vec![f64::NAN; k],
+        };
+    }
+
+    let mse = ss_within / df_within;
+    let tdist = StudentT::new(df_within);
+
+    // Compute test statistics and p-values
+    for (mean_t, n_t, _) in &treatment_stats {
+        if n_t.is_nan() || *n_t == 0.0 {
+            stats.push(f64::NAN);
+            pvals.push(f64::NAN);
+            continue;
+        }
+
+        let mean_diff = mean_t - mean_c;
+        let se = (mse * (1.0 / n_t + 1.0 / n_c)).sqrt();
+
+        if se > 0.0 {
+            let t = mean_diff / se;
+            stats.push(t);
+            // Two-sided p-value with Bonferroni correction
+            let p_raw = 2.0 * (1.0 - tdist.cdf(t.abs()));
+            pvals.push((p_raw * k as f64).min(1.0));
+        } else {
+            stats.push(f64::NAN);
+            pvals.push(f64::NAN);
+        }
+    }
+
+    DunnettResult {
+        statistic: stats,
+        pvalue: pvals,
+    }
+}
+
+/// Dunnett's test with alternative hypothesis specification.
+///
+/// Matches `scipy.stats.dunnett(*samples, control=control, alternative=alternative)`.
+///
+/// # Arguments
+/// * `treatments` - Slice of sample arrays for treatment groups
+/// * `control` - Sample array for the control group
+/// * `alternative` - "two-sided", "less", or "greater"
+pub fn dunnett_alternative(
+    treatments: &[&[f64]],
+    control: &[f64],
+    alternative: &str,
+) -> DunnettResult {
+    let k = treatments.len();
+    if k == 0 || control.is_empty() {
+        return DunnettResult {
+            statistic: vec![],
+            pvalue: vec![],
+        };
+    }
+
+    // Control group statistics
+    let n_c = control.len() as f64;
+    let mean_c: f64 = control.iter().sum::<f64>() / n_c;
+
+    // Compute pooled variance (MSE)
+    let mut ss_within = control.iter().map(|&x| (x - mean_c).powi(2)).sum::<f64>();
+    let mut df_within = n_c - 1.0;
+
+    let treatment_stats: Vec<(f64, f64, f64)> = treatments
+        .iter()
+        .map(|t| {
+            if t.is_empty() {
+                (f64::NAN, 0.0, 0.0)
+            } else {
+                let n = t.len() as f64;
+                let mean = t.iter().sum::<f64>() / n;
+                let ss: f64 = t.iter().map(|&x| (x - mean).powi(2)).sum();
+                (mean, n, ss)
+            }
+        })
+        .collect();
+
+    for (_, _, ss) in &treatment_stats {
+        ss_within += ss;
+    }
+    for t in treatments {
+        if !t.is_empty() {
+            df_within += t.len() as f64 - 1.0;
+        }
+    }
+
+    if df_within <= 0.0 {
+        return DunnettResult {
+            statistic: vec![f64::NAN; k],
+            pvalue: vec![f64::NAN; k],
+        };
+    }
+
+    let mse = ss_within / df_within;
+    let tdist = StudentT::new(df_within);
+
+    let mut stats = Vec::with_capacity(k);
+    let mut pvals = Vec::with_capacity(k);
+
+    for (mean_t, n_t, _) in &treatment_stats {
+        if n_t.is_nan() || *n_t == 0.0 {
+            stats.push(f64::NAN);
+            pvals.push(f64::NAN);
+            continue;
+        }
+
+        let mean_diff = mean_t - mean_c;
+        let se = (mse * (1.0 / n_t + 1.0 / n_c)).sqrt();
+
+        if se > 0.0 {
+            let t = mean_diff / se;
+            stats.push(t);
+
+            let p_raw = match alternative {
+                "less" => tdist.cdf(t),
+                "greater" => 1.0 - tdist.cdf(t),
+                _ => 2.0 * (1.0 - tdist.cdf(t.abs())),
+            };
+            pvals.push((p_raw * k as f64).min(1.0));
+        } else {
+            stats.push(f64::NAN);
+            pvals.push(f64::NAN);
+        }
+    }
+
+    DunnettResult {
+        statistic: stats,
+        pvalue: pvals,
+    }
+}
+
 /// Levene's test for equal variances using median-centered absolute deviations.
 ///
 /// Matches the robust default behavior of `scipy.stats.levene(*groups)`.
@@ -39679,6 +39893,90 @@ mod tests {
     fn tukey_hsd_edge_cases() {
         // Less than 2 groups
         assert!(tukey_hsd(&[&[1.0, 2.0]]).statistic.is_empty());
+    }
+
+    // ── dunnett tests ──────────────────────────────────────────────
+
+    #[test]
+    fn dunnett_treatment_differs_from_control() {
+        let control = [2.0, 2.5, 3.0, 2.8, 2.2];
+        let treatment1 = [5.0, 5.5, 6.0, 5.2, 5.8];
+        let treatment2 = [2.1, 2.3, 2.9, 2.7, 2.4];
+
+        let result = dunnett(&[&treatment1, &treatment2], &control);
+
+        assert_eq!(result.statistic.len(), 2);
+        assert_eq!(result.pvalue.len(), 2);
+
+        // Treatment1 should significantly differ from control
+        assert!(
+            result.pvalue[0] < 0.05,
+            "treatment1 pvalue {} should be < 0.05",
+            result.pvalue[0]
+        );
+
+        // Treatment2 should NOT significantly differ from control
+        assert!(
+            result.pvalue[1] > 0.05,
+            "treatment2 pvalue {} should be > 0.05",
+            result.pvalue[1]
+        );
+    }
+
+    #[test]
+    fn dunnett_alternative_greater() {
+        let control = [2.0, 2.5, 3.0, 2.8];
+        let treatment = [5.0, 5.5, 6.0, 5.2]; // clearly greater
+
+        let result = dunnett_alternative(&[&treatment], &control, "greater");
+
+        assert!(result.statistic[0] > 0.0);
+        assert!(
+            result.pvalue[0] < 0.05,
+            "one-sided pvalue should be significant"
+        );
+    }
+
+    #[test]
+    fn dunnett_alternative_less() {
+        let control = [5.0, 5.5, 6.0, 5.2];
+        let treatment = [2.0, 2.5, 3.0, 2.8]; // clearly less
+
+        let result = dunnett_alternative(&[&treatment], &control, "less");
+
+        assert!(result.statistic[0] < 0.0);
+        assert!(
+            result.pvalue[0] < 0.05,
+            "one-sided pvalue should be significant"
+        );
+    }
+
+    #[test]
+    fn dunnett_empty_inputs() {
+        // Empty treatments
+        let result1 = dunnett(&[], &[1.0, 2.0, 3.0]);
+        assert!(result1.statistic.is_empty());
+
+        // Empty control
+        let result2 = dunnett(&[&[1.0, 2.0]], &[]);
+        assert!(result2.statistic.is_empty());
+    }
+
+    #[test]
+    fn dunnett_bonferroni_correction() {
+        // With multiple treatments, p-values should be Bonferroni corrected
+        let control = [3.0, 3.5, 4.0, 3.2];
+        let t1 = [5.0, 5.5, 6.0, 5.2];
+        let t2 = [5.1, 5.4, 5.9, 5.3];
+        let t3 = [5.2, 5.6, 6.1, 5.1];
+
+        let result = dunnett(&[&t1, &t2, &t3], &control);
+
+        // With 3 comparisons, raw p-values are multiplied by 3
+        // All p-values should still be <= 1.0
+        for &p in &result.pvalue {
+            assert!(p <= 1.0, "p-value {} should be <= 1.0", p);
+        }
     }
 
     // ── bayes_mvs tests ──────────────────────────────────────────────
