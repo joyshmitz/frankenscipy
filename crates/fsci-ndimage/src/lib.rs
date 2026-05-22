@@ -2113,6 +2113,42 @@ fn measurement_label_groups(
     Ok(groups)
 }
 
+fn measurement_label_value_positions(
+    input: &NdArray,
+    labels: Option<&NdArray>,
+    index: Option<&[usize]>,
+) -> Result<Vec<Vec<(f64, usize)>>, NdimageError> {
+    let Some(labels) = labels else {
+        return Ok(vec![input.data.iter().copied().zip(0..input.size()).collect()]);
+    };
+    if input.shape != labels.shape {
+        return Err(NdimageError::DimensionMismatch(format!(
+            "input shape {:?} != labels shape {:?}",
+            input.shape, labels.shape
+        )));
+    }
+
+    let mut groups = match index {
+        Some(index) => vec![Vec::new(); index.len()],
+        None => vec![Vec::new()],
+    };
+
+    for (flat, (&value, &label_value)) in input.data.iter().zip(&labels.data).enumerate() {
+        if let Some(index) = index {
+            if let Some(pos) = index
+                .iter()
+                .position(|&wanted_label| label_value == wanted_label as f64)
+            {
+                groups[pos].push((value, flat));
+            }
+        } else if label_value != 0.0 {
+            groups[0].push((value, flat));
+        }
+    }
+
+    Ok(groups)
+}
+
 fn mean_of_values(values: &[f64]) -> f64 {
     if values.is_empty() {
         f64::NAN
@@ -2135,6 +2171,40 @@ fn median_of_values(values: &[f64]) -> f64 {
         sorted[mid]
     }
 }
+
+fn minimum_value_position(input: &NdArray, values: &[(f64, usize)]) -> (f64, Vec<usize>) {
+    if values.is_empty() {
+        return (0.0, vec![0; input.ndim()]);
+    }
+
+    let (mut best_value, mut best_flat) = values[0];
+    for &(value, flat) in &values[1..] {
+        if value < best_value || value.is_nan() {
+            best_value = value;
+            best_flat = flat;
+        }
+    }
+
+    (best_value, input.unravel(best_flat))
+}
+
+fn maximum_value_position(input: &NdArray, values: &[(f64, usize)]) -> (f64, Vec<usize>) {
+    if values.is_empty() {
+        return (0.0, vec![0; input.ndim()]);
+    }
+
+    let (mut best_value, mut best_flat) = values[0];
+    for &(value, flat) in &values[1..] {
+        if value > best_value || value.is_nan() {
+            best_value = value;
+            best_flat = flat;
+        }
+    }
+
+    (best_value, input.unravel(best_flat))
+}
+
+pub type ExtremaResult = (Vec<f64>, Vec<f64>, Vec<Vec<usize>>, Vec<Vec<usize>>);
 
 /// Sum of values in optionally labeled regions.
 ///
@@ -2373,6 +2443,66 @@ pub fn median(
         .iter()
         .map(|values| median_of_values(values))
         .collect())
+}
+
+/// Positions of minimum values in optionally labeled regions.
+///
+/// Matches `scipy.ndimage.minimum_position`; scalar SciPy results are returned
+/// as a one-element vector of coordinates, while explicit `index` lists return
+/// one coordinate vector per label.
+pub fn minimum_position(
+    input: &NdArray,
+    labels: Option<&NdArray>,
+    index: Option<&[usize]>,
+) -> Result<Vec<Vec<usize>>, NdimageError> {
+    Ok(measurement_label_value_positions(input, labels, index)?
+        .iter()
+        .map(|values| minimum_value_position(input, values).1)
+        .collect())
+}
+
+/// Positions of maximum values in optionally labeled regions.
+///
+/// Matches `scipy.ndimage.maximum_position`; scalar SciPy results are returned
+/// as a one-element vector of coordinates, while explicit `index` lists return
+/// one coordinate vector per label.
+pub fn maximum_position(
+    input: &NdArray,
+    labels: Option<&NdArray>,
+    index: Option<&[usize]>,
+) -> Result<Vec<Vec<usize>>, NdimageError> {
+    Ok(measurement_label_value_positions(input, labels, index)?
+        .iter()
+        .map(|values| maximum_value_position(input, values).1)
+        .collect())
+}
+
+/// Minima, maxima, and their positions in optionally labeled regions.
+///
+/// Matches `scipy.ndimage.extrema`; scalar SciPy results are returned as
+/// one-element vectors, while explicit `index` lists return one value/position
+/// per label.
+pub fn extrema(
+    input: &NdArray,
+    labels: Option<&NdArray>,
+    index: Option<&[usize]>,
+) -> Result<ExtremaResult, NdimageError> {
+    let groups = measurement_label_value_positions(input, labels, index)?;
+    let mut minima = Vec::with_capacity(groups.len());
+    let mut maxima = Vec::with_capacity(groups.len());
+    let mut minimum_positions = Vec::with_capacity(groups.len());
+    let mut maximum_positions = Vec::with_capacity(groups.len());
+
+    for values in &groups {
+        let (minimum, minimum_position) = minimum_value_position(input, values);
+        let (maximum, maximum_position) = maximum_value_position(input, values);
+        minima.push(minimum);
+        maxima.push(maximum);
+        minimum_positions.push(minimum_position);
+        maximum_positions.push(maximum_position);
+    }
+
+    Ok((minima, maxima, minimum_positions, maximum_positions))
 }
 
 /// Standard deviation of values in labeled regions.
@@ -4760,6 +4890,32 @@ mod tests {
                 vec![0, 0, 0, 1],
             ]
         );
+    }
+
+    #[test]
+    fn extrema_and_position_wrappers_match_scipy_fixtures() {
+        let data = NdArray::new(vec![1.0, 2.0, 5.0, 10.0, 20.0], vec![5]).unwrap();
+        let labels = NdArray::new(vec![1.0, 1.0, 2.0, 0.0, 3.0], vec![5]).unwrap();
+        let index = [0, 1, 2, 3];
+
+        // scipy.ndimage.minimum_position(data, labels, [0, 1, 2, 3])
+        assert_eq!(
+            minimum_position(&data, Some(&labels), Some(&index)).unwrap(),
+            vec![vec![3], vec![0], vec![2], vec![4]]
+        );
+        // scipy.ndimage.maximum_position(data, labels, [0, 1, 2, 3])
+        assert_eq!(
+            maximum_position(&data, Some(&labels), Some(&index)).unwrap(),
+            vec![vec![3], vec![1], vec![2], vec![4]]
+        );
+
+        // scipy.ndimage.extrema(data, labels, [0, 1, 2, 3])
+        let (mins, maxs, min_positions, max_positions) =
+            extrema(&data, Some(&labels), Some(&index)).unwrap();
+        assert_eq!(mins, vec![10.0, 1.0, 5.0, 20.0]);
+        assert_eq!(maxs, vec![10.0, 2.0, 5.0, 20.0]);
+        assert_eq!(min_positions, vec![vec![3], vec![0], vec![2], vec![4]]);
+        assert_eq!(max_positions, vec![vec![3], vec![1], vec![2], vec![4]]);
     }
 
     #[test]
