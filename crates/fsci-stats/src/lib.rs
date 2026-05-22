@@ -56604,6 +56604,31 @@ mod tests {
     }
 
     #[test]
+    fn var_weighted_matches_numpy_reference() {
+        // numpy.average([1,2,3,4], weights=[1,1,1,1]) = 2.5, variance computed from this
+        // For uniform weights, weighted var should equal standard var
+        let data = vec![1.0, 2.0, 3.0, 4.0];
+        let weights = vec![1.0, 1.0, 1.0, 1.0];
+        let wv = var_weighted(&data, &weights);
+        // Population variance of [1,2,3,4] = 1.25
+        assert!((wv - 1.25).abs() < 1e-10, "var_weighted with uniform weights, got {}", wv);
+
+        // Non-uniform weights
+        let weights2 = vec![0.25, 0.25, 0.25, 0.25];
+        let wv2 = var_weighted(&data, &weights2);
+        assert!((wv2 - 1.25).abs() < 1e-10, "var_weighted with scaled weights, got {}", wv2);
+    }
+
+    #[test]
+    fn std_weighted_matches_numpy_reference() {
+        let data = vec![1.0, 2.0, 3.0, 4.0];
+        let weights = vec![1.0, 1.0, 1.0, 1.0];
+        let ws = std_weighted(&data, &weights);
+        // sqrt(1.25) ≈ 1.118
+        assert!((ws - 1.25f64.sqrt()).abs() < 1e-10, "std_weighted with uniform weights, got {}", ws);
+    }
+
+    #[test]
     fn mode_matches_scipy_reference_values() {
         // scipy.stats.mode([1, 2, 2, 3]) = ModeResult(mode=2, count=2)
         let data1 = vec![1.0, 2.0, 2.0, 3.0];
