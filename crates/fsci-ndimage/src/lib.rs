@@ -1768,6 +1768,61 @@ where
     generic_filter_with_origins(input, function, size, &[0], mode, cval)
 }
 
+/// Apply a generic function over a SciPy-style signed axes subset.
+///
+/// `axes=[]` matches SciPy's empty-axes identity behavior without invoking the
+/// callback.
+pub fn generic_filter_axes<F>(
+    input: &NdArray,
+    function: F,
+    size: usize,
+    axes: &[isize],
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError>
+where
+    F: Fn(&[f64]) -> f64,
+{
+    let axes = normalize_signed_axes(axes, input.ndim())?;
+    if axes.is_empty() {
+        return Ok(input.clone());
+    }
+
+    let kernel_total = filter_footprint_size(axes.len(), size)?;
+    if input.size() == 0 {
+        return Err(NdimageError::EmptyInput);
+    }
+
+    let mut output = NdArray::zeros(input.shape.clone());
+    let offsets: Vec<i64> = vec![size as i64 / 2; axes.len()];
+    let kernel_shape: Vec<usize> = vec![size; axes.len()];
+    let kernel_strides = compute_strides(&kernel_shape);
+
+    for flat_out in 0..input.size() {
+        let out_idx = input.unravel(flat_out);
+        let mut neighborhood = Vec::with_capacity(kernel_total);
+
+        for flat_k in 0..kernel_total {
+            let mut k_idx = vec![0usize; axes.len()];
+            let mut rem = flat_k;
+            for (d, slot) in k_idx.iter_mut().enumerate() {
+                *slot = rem / kernel_strides[d];
+                rem %= kernel_strides[d];
+            }
+
+            let mut in_idx: Vec<i64> = out_idx.iter().map(|&coord| coord as i64).collect();
+            for (d, &axis) in axes.iter().enumerate() {
+                in_idx[axis] += k_idx[d] as i64 - offsets[d];
+            }
+            neighborhood.push(input.get_boundary(&in_idx, mode, cval));
+        }
+
+        output.data[flat_out] = function(&neighborhood);
+    }
+
+    Ok(output)
+}
+
 /// Apply a generic function to each local neighborhood with SciPy `origin` semantics.
 pub fn generic_filter_with_origins<F>(
     input: &NdArray,
@@ -9810,6 +9865,82 @@ mod tests {
         .unwrap();
         assert_eq!(result.data[1], 5.0); // max of [1, 5, 3]
         assert_eq!(result.data[2], 5.0); // max of [5, 3, 2]
+    }
+
+    #[test]
+    fn generic_filter_axes_match_scipy_subset_fixtures() {
+        let input = NdArray::new(vec![4.0, 1.0, 7.0, 2.0, 9.0, 3.0], vec![2, 3]).unwrap();
+        let sum_window = |values: &[f64]| values.iter().sum::<f64>();
+
+        // scipy.ndimage.generic_filter(input, sum, 2, mode='constant', cval=-10.0, axes=(-1,))
+        assert_eq!(
+            generic_filter_axes(&input, sum_window, 2, &[-1], BoundaryMode::Constant, -10.0)
+                .unwrap()
+                .data,
+            vec![-6.0, 5.0, 8.0, -8.0, 11.0, 12.0]
+        );
+        // scipy.ndimage.generic_filter(input, sum, 2, mode='constant', cval=-10.0, axes=(-2,))
+        assert_eq!(
+            generic_filter_axes(&input, sum_window, 2, &[-2], BoundaryMode::Constant, -10.0)
+                .unwrap()
+                .data,
+            vec![-6.0, -9.0, -3.0, 6.0, 10.0, 10.0]
+        );
+        // scipy.ndimage.generic_filter(input, sum, 2, mode='constant', cval=-10.0, axes=(-2, -1))
+        assert_eq!(
+            generic_filter_axes(
+                &input,
+                sum_window,
+                2,
+                &[-2, -1],
+                BoundaryMode::Constant,
+                -10.0
+            )
+            .unwrap()
+            .data,
+            vec![-26.0, -15.0, -12.0, -14.0, 16.0, 20.0]
+        );
+    }
+
+    #[test]
+    fn generic_filter_axes_empty_axes_does_not_invoke_callback() {
+        let input = NdArray::new(vec![4.0, 1.0, 7.0, 2.0, 9.0, 3.0], vec![2, 3]).unwrap();
+        let calls = std::cell::Cell::new(0usize);
+        let result = generic_filter_axes(
+            &input,
+            |values| {
+                calls.set(calls.get() + 1);
+                values.iter().sum()
+            },
+            0,
+            &[],
+            BoundaryMode::Constant,
+            -10.0,
+        )
+        .unwrap();
+
+        assert_eq!(result.data, input.data);
+        assert_eq!(calls.get(), 0);
+    }
+
+    #[test]
+    fn generic_filter_axes_rejects_duplicate_and_out_of_range_axes() {
+        let input = NdArray::new(vec![1.0; 6], vec![2, 3]).unwrap();
+        let sum_window = |values: &[f64]| values.iter().sum::<f64>();
+
+        assert!(
+            generic_filter_axes(&input, sum_window, 2, &[1, -1], BoundaryMode::Reflect, 0.0)
+                .is_err()
+        );
+        assert!(
+            generic_filter_axes(&input, sum_window, 2, &[2], BoundaryMode::Reflect, 0.0).is_err()
+        );
+        assert!(
+            generic_filter_axes(&input, sum_window, 2, &[-3], BoundaryMode::Reflect, 0.0).is_err()
+        );
+        assert!(
+            generic_filter_axes(&input, sum_window, 0, &[-1], BoundaryMode::Reflect, 0.0).is_err()
+        );
     }
 
     #[test]
