@@ -1328,6 +1328,71 @@ where
     Ok(output)
 }
 
+/// Apply a generic function along one axis.
+///
+/// Matches the common `scipy.ndimage.generic_filter1d` sliding-window behavior
+/// for reducers that produce one output value per input position.
+pub fn generic_filter1d<F>(
+    input: &NdArray,
+    function: F,
+    filter_size: usize,
+    axis: usize,
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError>
+where
+    F: Fn(&[f64]) -> f64,
+{
+    if filter_size == 0 {
+        return Err(NdimageError::InvalidArgument(
+            "filter size must be positive".to_string(),
+        ));
+    }
+    if input.size() == 0 {
+        return Err(NdimageError::EmptyInput);
+    }
+    if axis >= input.ndim() {
+        return Err(NdimageError::InvalidArgument(
+            "axis out of bounds".to_string(),
+        ));
+    }
+
+    let mut output = NdArray::zeros(input.shape.clone());
+    let offset = filter_size as i64 / 2;
+    for flat_out in 0..input.size() {
+        let out_idx = input.unravel(flat_out);
+        let mut neighborhood = Vec::with_capacity(filter_size);
+
+        for k in 0..filter_size {
+            let mut in_idx: Vec<i64> = out_idx.iter().map(|&coord| coord as i64).collect();
+            in_idx[axis] += k as i64 - offset;
+            neighborhood.push(input.get_boundary(&in_idx, mode, cval));
+        }
+
+        output.data[flat_out] = function(&neighborhood);
+    }
+
+    Ok(output)
+}
+
+/// Apply a vectorized reducer to each local neighborhood.
+///
+/// Matches `scipy.ndimage.vectorized_filter` for scalar reducers over a
+/// uniform `size` footprint. The callback receives each neighborhood in the
+/// same flattened order as `generic_filter`.
+pub fn vectorized_filter<F>(
+    input: &NdArray,
+    function: F,
+    size: usize,
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError>
+where
+    F: Fn(&[f64]) -> f64,
+{
+    generic_filter(input, function, size, mode, cval)
+}
+
 /// Percentile filter: select the p-th percentile from each neighborhood.
 ///
 /// Matches `scipy.ndimage.percentile_filter`.
@@ -4666,6 +4731,76 @@ where
     result
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Geometric Transformation
+// ══════════════════════════════════════════════════════════════════════
+
+/// Apply a generic geometric transformation.
+///
+/// Matches `scipy.ndimage.geometric_transform`. Maps output coordinates
+/// through a user-provided function to find corresponding input coordinates,
+/// then interpolates the input at those coordinates.
+///
+/// # Arguments
+/// * `input` - Input array
+/// * `mapping` - Function that maps output coordinate to input coordinate
+/// * `output_shape` - Shape of output array (defaults to input shape)
+/// * `order` - Interpolation order (0-5)
+/// * `mode` - Boundary handling mode
+/// * `cval` - Constant value for 'constant' mode
+pub fn geometric_transform<F>(
+    input: &NdArray,
+    mapping: F,
+    output_shape: Option<Vec<usize>>,
+    order: usize,
+    mode: BoundaryMode,
+    cval: f64,
+) -> Result<NdArray, NdimageError>
+where
+    F: Fn(&[usize]) -> Vec<f64>,
+{
+    if order > 5 {
+        return Err(NdimageError::InvalidArgument(format!(
+            "spline order must be in 0..=5, got {order}"
+        )));
+    }
+
+    let out_shape = output_shape.unwrap_or_else(|| input.shape.clone());
+    if out_shape.is_empty() {
+        return Ok(NdArray::new(vec![], vec![]).unwrap());
+    }
+
+    let total_out: usize = out_shape.iter().product();
+
+    let spline = prefilter_spline_coefficients(input, order, mode)?;
+    let mut result = Vec::with_capacity(total_out);
+
+    for linear_idx in 0..total_out {
+        let mut out_coord = Vec::with_capacity(out_shape.len());
+        let mut remaining = linear_idx;
+        for &n in out_shape.iter().rev() {
+            out_coord.push(remaining % n);
+            remaining /= n;
+        }
+        out_coord.reverse();
+
+        let in_coords = mapping(&out_coord);
+
+        let val = sample_interpolated(
+            input,
+            &spline.coeffs,
+            &in_coords,
+            &spline.coord_offsets,
+            order,
+            mode,
+            cval,
+        );
+        result.push(val);
+    }
+
+    Ok(NdArray::new(result, out_shape).unwrap())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6370,6 +6505,61 @@ mod tests {
         .unwrap();
         assert_eq!(result.data[1], 5.0); // max of [1, 5, 3]
         assert_eq!(result.data[2], 5.0); // max of [5, 3, 2]
+    }
+
+    #[test]
+    fn generic_filter1d_matches_scipy_axis_fixtures() {
+        let one_dim = NdArray::new(vec![1.0, 2.0, 3.0, 4.0], vec![4]).unwrap();
+        let sum_window = |values: &[f64]| values.iter().sum::<f64>();
+
+        // scipy.ndimage.generic_filter1d(one_dim, sum3, 3, mode='constant', cval=0.0)
+        assert_eq!(
+            generic_filter1d(&one_dim, sum_window, 3, 0, BoundaryMode::Constant, 0.0)
+                .unwrap()
+                .data,
+            vec![3.0, 6.0, 9.0, 7.0]
+        );
+
+        let two_dim =
+            NdArray::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![2, 3]).unwrap();
+        // scipy.ndimage.generic_filter1d(two_dim, sum3, 3, axis=0, mode='constant', cval=0.0)
+        assert_eq!(
+            generic_filter1d(&two_dim, sum_window, 3, 0, BoundaryMode::Constant, 0.0)
+                .unwrap()
+                .data,
+            vec![5.0, 7.0, 9.0, 5.0, 7.0, 9.0]
+        );
+        // scipy.ndimage.generic_filter1d(two_dim, sum3, 3, axis=1, mode='constant', cval=0.0)
+        assert_eq!(
+            generic_filter1d(&two_dim, sum_window, 3, 1, BoundaryMode::Constant, 0.0)
+                .unwrap()
+                .data,
+            vec![3.0, 6.0, 5.0, 9.0, 15.0, 11.0]
+        );
+    }
+
+    #[test]
+    fn vectorized_filter_matches_scipy_size_fixtures() {
+        let one_dim = NdArray::new(vec![1.0, 2.0, 3.0, 4.0], vec![4]).unwrap();
+        let sum_window = |values: &[f64]| values.iter().sum::<f64>();
+
+        // scipy.ndimage.vectorized_filter(one_dim, np.sum, size=3, mode='constant', cval=0.0)
+        assert_eq!(
+            vectorized_filter(&one_dim, sum_window, 3, BoundaryMode::Constant, 0.0)
+                .unwrap()
+                .data,
+            vec![3.0, 6.0, 9.0, 7.0]
+        );
+
+        let two_dim =
+            NdArray::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![2, 3]).unwrap();
+        // scipy.ndimage.vectorized_filter(two_dim, np.sum, size=2, mode='constant', cval=0.0)
+        assert_eq!(
+            vectorized_filter(&two_dim, sum_window, 2, BoundaryMode::Constant, 0.0)
+                .unwrap()
+                .data,
+            vec![1.0, 3.0, 5.0, 5.0, 12.0, 16.0]
+        );
     }
 
     #[test]
