@@ -686,4 +686,44 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn erf_matches_scipy_reference_values() {
+        // scipy.special.erf([0.5, 1.0, 2.0])
+        let cases = [(0.5, 0.5204998778130465), (1.0, 0.8427007929497149), (2.0, 0.9953222650189527)];
+        for (x, expected) in cases {
+            let result = super::erf_scalar(x);
+            assert!((result - expected).abs() < 1e-10, "erf({x}) = {result}, expected {expected}");
+        }
+    }
+
+    #[test]
+    fn erfc_matches_scipy_reference_values() {
+        // scipy.special.erfc([0.5, 1.0, 2.0])
+        let cases = [(0.5, 0.4795001221869535), (1.0, 0.1572992070502851), (2.0, 0.004677734981047266)];
+        for (x, expected) in cases {
+            let result = super::erfc_scalar(x);
+            assert!((result - expected).abs() < 1e-10, "erfc({x}) = {result}, expected {expected}");
+        }
+    }
+
+    #[test]
+    fn erfinv_matches_scipy_reference_values() {
+        // scipy.special.erfinv([0.5, 0.8, 0.95])
+        let cases = [(0.5, 0.4769362762044699), (0.8, 0.9061938024368232), (0.95, 1.3859038243496775)];
+        for (y, expected) in cases {
+            let result = super::erfinv_scalar(y, RuntimeMode::Strict).unwrap();
+            assert!((result - expected).abs() < 1e-9, "erfinv({y}) = {result}, expected {expected}");
+        }
+    }
+
+    #[test]
+    fn erfcinv_matches_scipy_reference_values() {
+        // scipy.special.erfcinv([0.5, 1.0, 1.5])
+        let cases = [(0.5, 0.4769362762044699), (1.0, 0.0), (1.5, -0.4769362762044699)];
+        for (y, expected) in cases {
+            let result = real_value(tensor_result(super::erfcinv(&scalar(y), RuntimeMode::Strict)).unwrap()).unwrap();
+            assert!((result - expected).abs() < 1e-9, "erfcinv({y}) = {result}, expected {expected}");
+        }
+    }
 }
