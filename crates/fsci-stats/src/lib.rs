@@ -59702,4 +59702,49 @@ mod tests {
             result.pvalue
         );
     }
+
+    #[test]
+    fn boxcox_llf_matches_scipy_reference_values() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let result = boxcox_llf(1.0, &data);
+        assert!(
+            (result - (-10.551066001732949)).abs() < 1e-10,
+            "boxcox_llf(1.0) got {result}, expected -10.551066001732949"
+        );
+        let result2 = boxcox_llf(0.5, &data);
+        assert!(
+            (result2 - (-10.510709634378387)).abs() < 1e-10,
+            "boxcox_llf(0.5) got {result2}, expected -10.510709634378387"
+        );
+    }
+
+    #[test]
+    fn yeojohnson_llf_matches_scipy_reference_values() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let result = yeojohnson_llf(1.0, &data);
+        assert!(
+            (result - (-10.551066001732949)).abs() < 1e-10,
+            "yeojohnson_llf(1.0) got {result}, expected -10.551066001732949"
+        );
+    }
+
+    #[test]
+    fn anderson_ksamp_matches_scipy_reference_values() {
+        let groups = vec![
+            vec![1.0, 2.0, 3.0],
+            vec![4.0, 5.0, 6.0],
+            vec![7.0, 8.0, 9.0],
+        ];
+        let result = anderson_ksamp(&groups, None).expect("anderson_ksamp");
+        assert!(
+            (result.statistic - 3.9185227178173507).abs() < 1e-6,
+            "anderson_ksamp statistic got {}, expected 3.9185227178173507",
+            result.statistic
+        );
+        assert!(
+            (result.pvalue - 0.00587790178355656).abs() < 1e-6,
+            "anderson_ksamp pvalue got {}, expected 0.00587790178355656",
+            result.pvalue
+        );
+    }
 }
