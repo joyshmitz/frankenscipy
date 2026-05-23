@@ -5260,6 +5260,45 @@ mod tests {
         assert!(parsed[0].is_empty());
     }
 
+    #[test]
+    fn mmread_matches_scipy_reference_values() {
+        // scipy.io.mmread on a Matrix Market coordinate format file
+        // import scipy.io as spio; import io
+        // mm = "%%MatrixMarket matrix coordinate real general\n3 3 3\n1 1 1.0\n2 2 2.0\n3 3 3.0\n"
+        // spio.mmread(io.StringIO(mm)).toarray()
+        // -> array([[1., 0., 0.], [0., 2., 0.], [0., 0., 3.]])
+        let mm_content = "%%MatrixMarket matrix coordinate real general\n3 3 3\n1 1 1.0\n2 2 2.0\n3 3 3.0\n";
+        let result = mmread(mm_content).expect("mmread should succeed");
+        assert_eq!(result.rows, 3);
+        assert_eq!(result.cols, 3);
+        // Expanded to dense row-major: data[i*cols+j]
+        // (0,0)=1.0, (1,1)=2.0, (2,2)=3.0, all others 0.0
+        assert!((result.data[0] - 1.0).abs() < 1e-10, "data[0,0] = 1.0");
+        assert!((result.data[4] - 2.0).abs() < 1e-10, "data[1,1] = 2.0");
+        assert!((result.data[8] - 3.0).abs() < 1e-10, "data[2,2] = 3.0");
+        assert!((result.data[1] - 0.0).abs() < 1e-10, "off-diagonal is 0");
+    }
+
+    #[test]
+    fn mmwrite_matches_scipy_output_format() {
+        // scipy.io.mmwrite produces Matrix Market array format for dense matrices
+        // import scipy.io as spio; import io
+        // spio.mmwrite(io.StringIO(), [[1, 2], [3, 4]])
+        // Result format: header + "1\n2\n3\n4\n" (column-major)
+        let output = mmwrite(2, 2, &[1.0, 2.0, 3.0, 4.0]).expect("mmwrite should succeed");
+        assert!(output.contains("%%MatrixMarket matrix array real general"));
+        assert!(output.contains("2 2"));
+        // Verify roundtrip
+        let parsed = mmread(&output).expect("roundtrip should work");
+        assert_eq!(parsed.rows, 2);
+        assert_eq!(parsed.cols, 2);
+        let expected = [1.0, 2.0, 3.0, 4.0];
+        for (i, &want) in expected.iter().enumerate() {
+            let got = parsed.data[i];
+            assert!((got - want).abs() < 1e-10, "data[{i}] got {got}, expected {want}");
+        }
+    }
+
     fn idl_save_header() -> Vec<u8> {
         b"SR\x00\x04".to_vec()
     }
