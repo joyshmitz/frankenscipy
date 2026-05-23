@@ -5299,6 +5299,33 @@ mod tests {
         }
     }
 
+    #[test]
+    fn loadtxt_matches_scipy_reference_values() {
+        // np.loadtxt(StringIO("1 2\n3 4")) -> [[1, 2], [3, 4]]
+        let content = "1 2\n3 4\n";
+        let (rows, cols, data) = loadtxt(content).expect("loadtxt should succeed");
+        assert_eq!(rows, 2);
+        assert_eq!(cols, 2);
+        let expected = [1.0, 2.0, 3.0, 4.0];
+        for (i, (&got, &want)) in data.iter().zip(expected.iter()).enumerate() {
+            assert!((got - want).abs() < 1e-10, "data[{i}] got {got}, expected {want}");
+        }
+    }
+
+    #[test]
+    fn savetxt_matches_scipy_output_format() {
+        // np.savetxt produces space-delimited text by default
+        let output = savetxt(2, 2, &[1.0, 2.0, 3.0, 4.0], " ").expect("savetxt should succeed");
+        // Verify roundtrip
+        let (rows, cols, data) = loadtxt(&output).expect("roundtrip should work");
+        assert_eq!(rows, 2);
+        assert_eq!(cols, 2);
+        let expected = [1.0, 2.0, 3.0, 4.0];
+        for (i, (&got, &want)) in data.iter().zip(expected.iter()).enumerate() {
+            assert!((got - want).abs() < 1e-10, "data[{i}] got {got}, expected {want}");
+        }
+    }
+
     fn idl_save_header() -> Vec<u8> {
         b"SR\x00\x04".to_vec()
     }
