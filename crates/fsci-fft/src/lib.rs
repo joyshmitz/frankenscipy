@@ -631,4 +631,112 @@ mod tests {
         assert!(off1.is_finite());
         assert!(off2.is_finite());
     }
+
+    #[test]
+    fn fft_matches_scipy_reference_values() {
+        let input: Vec<Complex64> = vec![(1.0, 0.0), (2.0, 0.0), (3.0, 0.0), (4.0, 0.0)];
+        let opts = FftOptions::default();
+        let result = fft(&input, &opts).expect("fft should succeed");
+        // scipy.fft.fft([1,2,3,4]) = [10+0j, -2+2j, -2+0j, -2-2j]
+        let expected: Vec<Complex64> = vec![(10.0, 0.0), (-2.0, 2.0), (-2.0, 0.0), (-2.0, -2.0)];
+        for (i, (got, want)) in result.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (got.0 - want.0).abs() < 1e-9 && (got.1 - want.1).abs() < 1e-9,
+                "fft[{i}] = ({}, {}), want ({}, {})",
+                got.0, got.1, want.0, want.1
+            );
+        }
+    }
+
+    #[test]
+    fn ifft_matches_scipy_reference_values() {
+        let input: Vec<Complex64> = vec![(10.0, 0.0), (-2.0, 2.0), (-2.0, 0.0), (-2.0, -2.0)];
+        let opts = FftOptions::default();
+        let result = ifft(&input, &opts).expect("ifft should succeed");
+        // scipy.fft.ifft([10+0j, -2+2j, -2+0j, -2-2j]) = [1,2,3,4]
+        let expected: Vec<Complex64> = vec![(1.0, 0.0), (2.0, 0.0), (3.0, 0.0), (4.0, 0.0)];
+        for (i, (got, want)) in result.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (got.0 - want.0).abs() < 1e-9 && (got.1 - want.1).abs() < 1e-9,
+                "ifft[{i}] = ({}, {}), want ({}, {})",
+                got.0, got.1, want.0, want.1
+            );
+        }
+    }
+
+    #[test]
+    fn rfft_matches_scipy_reference_values() {
+        let input: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0];
+        let opts = FftOptions::default();
+        let result = rfft(&input, &opts).expect("rfft should succeed");
+        // scipy.fft.rfft([1,2,3,4]) = [10+0j, -2+2j, -2+0j]
+        let expected: Vec<Complex64> = vec![(10.0, 0.0), (-2.0, 2.0), (-2.0, 0.0)];
+        for (i, (got, want)) in result.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (got.0 - want.0).abs() < 1e-9 && (got.1 - want.1).abs() < 1e-9,
+                "rfft[{i}] = ({}, {}), want ({}, {})",
+                got.0, got.1, want.0, want.1
+            );
+        }
+    }
+
+    #[test]
+    fn irfft_matches_scipy_reference_values() {
+        let input: Vec<Complex64> = vec![(10.0, 0.0), (-2.0, 2.0), (-2.0, 0.0)];
+        let opts = FftOptions::default();
+        let result = irfft(&input, Some(4), &opts).expect("irfft should succeed");
+        // scipy.fft.irfft([10+0j, -2+2j, -2+0j]) = [1,2,3,4]
+        let expected: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0];
+        for (i, (got, want)) in result.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-9,
+                "irfft[{i}] = {got}, want {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn fftfreq_matches_scipy_reference_values() {
+        let result = fftfreq(8, 0.1).expect("fftfreq should succeed");
+        // scipy.fft.fftfreq(8, 0.1) = [0, 1.25, 2.5, 3.75, -5, -3.75, -2.5, -1.25]
+        let expected = vec![0.0, 1.25, 2.5, 3.75, -5.0, -3.75, -2.5, -1.25];
+        for (i, (&got, &want)) in result.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-9,
+                "fftfreq[{i}] = {got}, want {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn dct_matches_scipy_reference_values() {
+        let input: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0];
+        let opts = FftOptions::default();
+        let result = dct(&input, &opts).expect("dct should succeed");
+        // scipy.fft.dct([1,2,3,4], type=2) = [20, -6.308644..., 0, -0.448341...]
+        assert!(
+            (result[0] - 20.0).abs() < 1e-6,
+            "dct[0] = {}, want 20.0",
+            result[0]
+        );
+        assert!(
+            (result[1] - (-6.308644059797899)).abs() < 1e-6,
+            "dct[1] = {}, want -6.308644",
+            result[1]
+        );
+    }
+
+    #[test]
+    fn idct_dct_roundtrip_matches_scipy() {
+        let input: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0];
+        let opts = FftOptions::default();
+        let dct_result = dct(&input, &opts).expect("dct should succeed");
+        let idct_result = idct(&dct_result, &opts).expect("idct should succeed");
+        for (i, (&got, &want)) in idct_result.iter().zip(input.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-6,
+                "idct(dct(x))[{i}] = {got}, want {want}"
+            );
+        }
+    }
 }
