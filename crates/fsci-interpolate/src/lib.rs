@@ -6675,4 +6675,74 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn barycentric_interpolate_matches_scipy_reference_values() {
+        // scipy.interpolate.barycentric_interpolate([0,1,2,3], [1,4,2,5], [0.5,1.5,2.5])
+        // -> [3.75, 3.0, 2.25]
+        let xi = vec![0.0, 1.0, 2.0, 3.0];
+        let yi = vec![1.0, 4.0, 2.0, 5.0];
+        let x_new = vec![0.5, 1.5, 2.5];
+        let result = barycentric_interpolate(&xi, &yi, &x_new).expect("barycentric");
+        let expected = [3.75, 3.0, 2.25];
+        assert_eq!(result.len(), expected.len());
+        for (i, (&got, &want)) in result.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-10,
+                "barycentric[{i}] got {got}, expected {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn splev_matches_scipy_reference_values() {
+        // scipy.interpolate.splrep([0,1,2,3,4], [0,1,4,9,16], k=3, s=0)
+        // scipy.interpolate.splev([0.5,1.5,2.5,3.5], tck)
+        // -> [0.25, 2.25, 6.25, 12.25]
+        let x = vec![0.0, 1.0, 2.0, 3.0, 4.0];
+        let y = vec![0.0, 1.0, 4.0, 9.0, 16.0];
+        let tck = splrep(&x, &y, 3, 0.0).expect("splrep");
+        let x_new = vec![0.5, 1.5, 2.5, 3.5];
+        let result = splev(&x_new, &tck).expect("splev");
+        let expected = [0.25, 2.25, 6.25, 12.25];
+        assert_eq!(result.len(), expected.len());
+        for (i, (&got, &want)) in result.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-8,
+                "splev[{i}] got {got}, expected {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn polyint_matches_scipy_reference_values() {
+        // np.polyint([3, 2, 1]) -> [1, 1, 1, 0]
+        // integral of 3x^2 + 2x + 1 = x^3 + x^2 + x + C (where C=0)
+        let coeffs = [3.0, 2.0, 1.0];
+        let result = polyint(&coeffs, 1, 0.0);
+        let expected = [1.0, 1.0, 1.0, 0.0];
+        assert_eq!(result.len(), expected.len(), "polyint length mismatch");
+        for (i, (&got, &want)) in result.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-10,
+                "polyint[{i}] got {got}, expected {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn polysub_matches_scipy_reference_values() {
+        // np.polysub([1, 2, 3], [0, 1, 1]) -> [1, 1, 2]
+        let a = [1.0, 2.0, 3.0];
+        let b = [0.0, 1.0, 1.0];
+        let result = polysub(&a, &b);
+        let expected = [1.0, 1.0, 2.0];
+        assert_eq!(result.len(), expected.len(), "polysub length mismatch");
+        for (i, (&got, &want)) in result.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-10,
+                "polysub[{i}] got {got}, expected {want}"
+            );
+        }
+    }
 }
