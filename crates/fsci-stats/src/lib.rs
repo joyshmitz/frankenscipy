@@ -59404,4 +59404,24 @@ mod tests {
             "mean_bias_error got {result}, expected 0.04"
         );
     }
+
+    #[test]
+    fn trimmed_std_matches_scipy_reference_values() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let result = trimmed_std(&data, 0.1, 1);
+        assert!(
+            (result - 2.449489742783178).abs() < 1e-6,
+            "trimmed_std got {result}, expected 2.449489742783178"
+        );
+    }
+
+    #[test]
+    fn trimmed_var_matches_scipy_reference_values() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let result = trimmed_var(&data, 0.1, 1);
+        assert!(
+            (result - 6.0).abs() < 1e-6,
+            "trimmed_var got {result}, expected 6.0"
+        );
+    }
 }
