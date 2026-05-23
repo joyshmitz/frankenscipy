@@ -1475,4 +1475,57 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn block_diag_matches_scipy_reference_values() {
+        // scipy.sparse.block_diag([[[1]], [[2,3],[4,5]]]).toarray()
+        // -> [[1, 0, 0], [0, 2, 3], [0, 4, 5]]
+        let a = CooMatrix::from_triplets(
+            Shape2D::new(1, 1),
+            vec![1.0],
+            vec![0],
+            vec![0],
+            false,
+        )
+        .expect("coo_a")
+        .to_csr()
+        .expect("csr_a");
+        let b = CooMatrix::from_triplets(
+            Shape2D::new(2, 2),
+            vec![2.0, 3.0, 4.0, 5.0],
+            vec![0, 0, 1, 1],
+            vec![0, 1, 0, 1],
+            false,
+        )
+        .expect("coo_b")
+        .to_csr()
+        .expect("csr_b");
+        let result = block_diag(&[&a, &b]).expect("block_diag");
+        let dense = dense_from_csr(&result);
+        let expected = [[1.0, 0.0, 0.0], [0.0, 2.0, 3.0], [0.0, 4.0, 5.0]];
+        for (i, row) in dense.iter().enumerate() {
+            for (j, val) in row.iter().enumerate() {
+                assert!(
+                    (*val - expected[i][j]).abs() < 1e-10,
+                    "block_diag[{i}][{j}] got {val}, expected {}",
+                    expected[i][j]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn random_matches_scipy_density() {
+        // scipy.sparse.random(10, 10, density=0.3)
+        // Just verify shape and approximate density
+        let result = random(Shape2D::new(10, 10), 0.3, 42).expect("random");
+        assert_eq!(result.shape().rows, 10);
+        assert_eq!(result.shape().cols, 10);
+        // Density should be approximately 0.3 (30 non-zeros in 100 elements)
+        let actual_density = result.nnz() as f64 / 100.0;
+        assert!(
+            (actual_density - 0.3).abs() < 0.1,
+            "density got {actual_density}, expected ~0.3"
+        );
+    }
 }
