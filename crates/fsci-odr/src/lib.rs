@@ -1281,4 +1281,18 @@ mod tests {
         let err = ODR::new(data, unilinear(), vec![0.0]);
         assert!(err.is_err());
     }
+
+    #[test]
+    fn odr_linear_matches_scipy_reference_values() -> Result<(), OdrError> {
+        // scipy.odr with linear model on y = 2*x + noise
+        let x = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let y = vec![2.1, 3.9, 6.1, 7.9, 10.1];
+        let data = Data::new(x, y)?;
+        let mut odr = ODR::new(data, unilinear(), vec![1.0, 0.0])?;
+        let output = odr.run()?;
+        // scipy reference: beta = [2.00192, 0.01424]
+        assert_close(output.beta[0], 2.00192, 0.01);
+        assert_close(output.beta[1], 0.01424, 0.1);
+        Ok(())
+    }
 }
