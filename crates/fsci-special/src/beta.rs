@@ -2731,4 +2731,27 @@ mod tests {
         assert_eq!(err.kind, SpecialErrorKind::DomainError);
         assert_eq!(err.detail, "vector inputs must have matching lengths");
     }
+
+    #[test]
+    fn btdtr_matches_scipy_reference_values() {
+        // scipy.special.btdtr(2, 3, 0.5) - beta distribution CDF
+        // B(2,3) at x=0.5: I_0.5(2,3) = 0.6875
+        let result = btdtr(2.0, 3.0, 0.5);
+        assert!(
+            (result - 0.6875).abs() < 1e-10,
+            "btdtr(2,3,0.5) got {result}, expected 0.6875"
+        );
+    }
+
+    #[test]
+    fn bdtr_matches_scipy_reference_values() {
+        // scipy.special.bdtr(5, 10, 0.5) - binomial distribution CDF
+        // P(X <= 5) for X ~ Binom(10, 0.5)
+        let result = bdtr(5.0, 10.0, 0.5);
+        let expected = 0.623046875;
+        assert!(
+            (result - expected).abs() < 1e-10,
+            "bdtr(5,10,0.5) got {result}, expected {expected}"
+        );
+    }
 }
