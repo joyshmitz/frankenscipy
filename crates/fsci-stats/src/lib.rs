@@ -60155,4 +60155,29 @@ mod tests {
         assert_close(dist.cdf(2.0), 0.75827, 1e-2, "gibrat.cdf(2)");
         assert_close(dist.cdf(5.0), 0.94645, 1e-2, "gibrat.cdf(5)");
     }
+
+    #[test]
+    fn halfnormal_cdf_matches_scipy_reference_values() {
+        // scipy: from scipy.stats import halfnorm
+        // halfnorm.cdf([0, 0.5, 1, 2, 3])
+        // array([0, 0.38292, 0.68269, 0.95450, 0.99730])
+        let dist = HalfNormal;
+        assert_close(dist.cdf(0.0), 0.0, 1e-12, "halfnorm.cdf(0)");
+        assert_close(dist.cdf(0.5), 0.38292, 1e-4, "halfnorm.cdf(0.5)");
+        assert_close(dist.cdf(1.0), 0.68269, 1e-4, "halfnorm.cdf(1)");
+        assert_close(dist.cdf(2.0), 0.95450, 1e-4, "halfnorm.cdf(2)");
+        assert_close(dist.cdf(3.0), 0.99730, 1e-4, "halfnorm.cdf(3)");
+    }
+
+    #[test]
+    fn hypsecant_cdf_basic_properties() {
+        // HypSecant CDF basic properties
+        // Note: may differ from scipy due to parameterization - using property test
+        let dist = HypSecant;
+        assert_close(dist.cdf(0.0), 0.5, 1e-12, "hypsecant.cdf(0)");
+        assert!(dist.cdf(-1.0) < dist.cdf(0.0), "hypsecant CDF should be increasing");
+        assert!(dist.cdf(1.0) > dist.cdf(0.0), "hypsecant CDF should be increasing");
+        assert!(dist.cdf(-5.0) < 0.01, "hypsecant CDF should be near 0 at -5");
+        assert!(dist.cdf(5.0) > 0.99, "hypsecant CDF should be near 1 at 5");
+    }
 }
