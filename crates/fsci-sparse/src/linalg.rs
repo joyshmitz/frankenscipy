@@ -6282,6 +6282,31 @@ mod tests {
         }
         0.0
     }
+
+    #[test]
+    fn spsolve_matches_scipy_reference_values() {
+        // scipy.sparse.linalg.spsolve(A, b) where A = [[4, 1], [1, 3]], b = [1, 2]
+        use crate::{CooMatrix, Shape2D};
+        let a = CooMatrix::from_triplets(
+            Shape2D::new(2, 2),
+            vec![4.0, 1.0, 1.0, 3.0],
+            vec![0, 0, 1, 1],
+            vec![0, 1, 0, 1],
+            false,
+        )
+        .expect("coo from triplets")
+        .to_csr()
+        .expect("to csr");
+        let b = vec![1.0, 2.0];
+        let result = spsolve(&a, &b, SolveOptions::default()).expect("spsolve");
+        let expected = [0.09090909090909091, 0.6363636363636364];
+        for (i, (&got, &want)) in result.solution.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-10,
+                "x[{i}] got {got}, expected {want}"
+            );
+        }
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
