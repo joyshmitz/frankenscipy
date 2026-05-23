@@ -28,15 +28,17 @@ pub fn rfftfreq(n: usize, sample_spacing: f64) -> Result<Vec<f64>, FftError> {
 }
 
 /// Shift zero-frequency component to the center for 1D input.
+/// Matches scipy.fft.fftshift behavior.
 #[must_use]
 pub fn fftshift_1d<T: Clone>(input: &[T]) -> Vec<T> {
-    rotate_left_owned(input, input.len() / 2)
+    rotate_left_owned(input, input.len().div_ceil(2))
 }
 
 /// Inverse shift for [`fftshift_1d`] over 1D input.
+/// Matches scipy.fft.ifftshift behavior.
 #[must_use]
 pub fn ifftshift_1d<T: Clone>(input: &[T]) -> Vec<T> {
-    rotate_left_owned(input, input.len().div_ceil(2))
+    rotate_left_owned(input, input.len() / 2)
 }
 
 fn validate_frequency_args(n: usize, sample_spacing: f64) -> Result<(), FftError> {
@@ -440,7 +442,8 @@ mod tests {
     fn fftshift_and_ifftshift_roundtrip() {
         let data = vec![0, 1, 2, 3, 4];
         let shifted = fftshift_1d(&data);
-        assert_eq!(shifted, vec![2, 3, 4, 0, 1]);
+        // scipy.fft.fftshift([0,1,2,3,4]) = [3,4,0,1,2]
+        assert_eq!(shifted, vec![3, 4, 0, 1, 2]);
         assert_eq!(ifftshift_1d(&shifted), data);
     }
 

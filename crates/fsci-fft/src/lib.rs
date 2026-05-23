@@ -753,4 +753,32 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn fftshift_1d_odd_length_matches_scipy_reference_values() {
+        // scipy.fft.fftshift([0, 1, 2, 3, 4]) = [3, 4, 0, 1, 2]
+        let input: Vec<f64> = vec![0.0, 1.0, 2.0, 3.0, 4.0];
+        let result = fftshift_1d(&input);
+        let expected: [f64; 5] = [3.0, 4.0, 0.0, 1.0, 2.0];
+        for (i, (&got, &want)) in result.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-10,
+                "fftshift[{i}] = {got}, want {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn ifftshift_1d_matches_scipy_reference_values() {
+        // scipy.fft.ifftshift([3, 4, 0, 1, 2]) = [0, 1, 2, 3, 4]
+        let input: Vec<f64> = vec![3.0, 4.0, 0.0, 1.0, 2.0];
+        let result = ifftshift_1d(&input);
+        let expected: [f64; 5] = [0.0, 1.0, 2.0, 3.0, 4.0];
+        for (i, (&got, &want)) in result.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-10,
+                "ifftshift[{i}] = {got}, want {want}"
+            );
+        }
+    }
 }
