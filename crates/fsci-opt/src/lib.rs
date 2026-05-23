@@ -5304,4 +5304,62 @@ mod tests {
             "total cost got {total_cost}, expected 5.0"
         );
     }
+
+    #[test]
+    fn minimize_bfgs_rosenbrock_matches_scipy_reference() {
+        // scipy.optimize.minimize(rosen, [0, 0], method='BFGS')
+        // Expected: x ≈ [1, 1], fun ≈ 0
+        use crate::{minimize::minimize, OptimizeMethod};
+        let result = minimize(
+            |x| rosen(x),
+            &[0.0, 0.0],
+            MinimizeOptions {
+                method: Some(OptimizeMethod::Bfgs),
+                ..Default::default()
+            },
+        )
+        .expect("minimize BFGS should succeed");
+        assert!(result.success, "BFGS should converge");
+        assert!(
+            (result.x[0] - 1.0).abs() < 1e-4,
+            "x[0] got {}, expected ~1.0",
+            result.x[0]
+        );
+        assert!(
+            (result.x[1] - 1.0).abs() < 1e-4,
+            "x[1] got {}, expected ~1.0",
+            result.x[1]
+        );
+        let fun = result.fun.expect("fun should be Some");
+        assert!(fun < 1e-8, "fun got {fun}, expected ~0.0");
+    }
+
+    #[test]
+    fn minimize_nelder_mead_rosenbrock_matches_scipy_reference() {
+        // scipy.optimize.minimize(rosen, [0, 0], method='Nelder-Mead')
+        // Expected: x ≈ [1, 1], fun ≈ 0
+        use crate::{minimize::minimize, OptimizeMethod};
+        let result = minimize(
+            |x| rosen(x),
+            &[0.0, 0.0],
+            MinimizeOptions {
+                method: Some(OptimizeMethod::NelderMead),
+                ..Default::default()
+            },
+        )
+        .expect("minimize Nelder-Mead should succeed");
+        assert!(result.success, "Nelder-Mead should converge");
+        assert!(
+            (result.x[0] - 1.0).abs() < 1e-3,
+            "x[0] got {}, expected ~1.0",
+            result.x[0]
+        );
+        assert!(
+            (result.x[1] - 1.0).abs() < 1e-3,
+            "x[1] got {}, expected ~1.0",
+            result.x[1]
+        );
+        let fun = result.fun.expect("fun should be Some");
+        assert!(fun < 1e-6, "fun got {fun}, expected ~0.0");
+    }
 }
