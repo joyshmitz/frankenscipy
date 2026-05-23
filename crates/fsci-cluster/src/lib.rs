@@ -3284,4 +3284,57 @@ mod tests {
             assert_eq!(got, want, "fcluster[{i}] got {got}, expected {want}");
         }
     }
+
+    #[test]
+    fn adjusted_rand_score_matches_scipy_reference_values() {
+        // sklearn.metrics.adjusted_rand_score([0, 0, 1, 1], [0, 0, 1, 1])
+        // -> 1.0 (perfect agreement)
+        let true_labels = [0, 0, 1, 1];
+        let pred_labels = [0, 0, 1, 1];
+        let score =
+            adjusted_rand_score(&true_labels, &pred_labels).expect("adjusted_rand_score should succeed");
+        assert!(
+            (score - 1.0).abs() < 1e-10,
+            "adjusted_rand_score got {score}, expected 1.0"
+        );
+    }
+
+    #[test]
+    fn adjusted_rand_score_partial_agreement_matches_scipy_reference_values() {
+        // sklearn.metrics.adjusted_rand_score([0, 0, 1, 2], [0, 0, 1, 1])
+        // -> 0.5714285714285714
+        let true_labels = [0, 0, 1, 2];
+        let pred_labels = [0, 0, 1, 1];
+        let score =
+            adjusted_rand_score(&true_labels, &pred_labels).expect("adjusted_rand_score should succeed");
+        assert!(
+            (score - 0.5714285714285714).abs() < 1e-10,
+            "adjusted_rand_score got {score}, expected 0.5714285714285714"
+        );
+    }
+
+    #[test]
+    fn whiten_matches_scipy_reference_values() {
+        // scipy.cluster.vq.whiten([[1,2,3], [4,5,6], [7,8,9]])
+        // scipy uses: obs / obs.std(axis=0) where std uses ddof=0 (population std)
+        // whiten([1,4,7]) with std = sqrt(((1-4)^2 + (4-4)^2 + (7-4)^2)/3) = sqrt(6)
+        // -> [1/sqrt(6), 4/sqrt(6), 7/sqrt(6)] ≈ [0.408, 1.633, 2.858]
+        let data = vec![vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0], vec![7.0, 8.0, 9.0]];
+        let result = whiten(&data).expect("whiten should succeed");
+        // Check that all columns are scaled by same factor (uniformly scaled)
+        // scipy.cluster.vq.whiten uses population std (ddof=0)
+        let expected_std = 6.0_f64.sqrt(); // std of [1,4,7] with ddof=0
+        let expected_col0 = [1.0 / expected_std, 4.0 / expected_std, 7.0 / expected_std];
+        for (i, (got, &want)) in result
+            .iter()
+            .map(|r| r[0])
+            .zip(expected_col0.iter())
+            .enumerate()
+        {
+            assert!(
+                (got - want).abs() < 1e-10,
+                "row {i} col 0 got {got}, expected {want}"
+            );
+        }
+    }
 }
