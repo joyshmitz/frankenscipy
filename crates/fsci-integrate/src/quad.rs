@@ -4185,4 +4185,49 @@ mod tests {
             exact
         );
     }
+
+    #[test]
+    fn quad_matches_scipy_reference_values() {
+        // scipy.integrate.quad(lambda x: x**2, 0, 1) = 0.333...
+        let result = quad(|x| x * x, 0.0, 1.0, QuadOptions::default()).expect("quad");
+        assert!(
+            (result.integral - 0.3333333333333333).abs() < 1e-10,
+            "quad x^2 [0,1] got {}, expected 0.333...",
+            result.integral
+        );
+    }
+
+    #[test]
+    fn dblquad_matches_scipy_reference_values() {
+        // scipy.integrate.dblquad(lambda y, x: x*y, 0, 1, 0, 1) = 0.25
+        let result = dblquad_rect(|x, y| x * y, 0.0, 1.0, 0.0, 1.0, 101, 101);
+        assert!(
+            (result - 0.25).abs() < 1e-6,
+            "dblquad x*y got {result}, expected 0.25"
+        );
+    }
+
+    #[test]
+    fn trapezoid_matches_scipy_reference_values() {
+        // scipy.integrate.trapezoid([0,1,4,9,16], dx=1.0) = 22.0
+        let y = [0.0, 1.0, 4.0, 9.0, 16.0];
+        let result = trapezoid_uniform(&y, 1.0).expect("trapezoid");
+        assert!(
+            (result.integral - 22.0).abs() < 1e-10,
+            "trapezoid got {}, expected 22.0",
+            result.integral
+        );
+    }
+
+    #[test]
+    fn simpson_matches_scipy_reference_values() {
+        // scipy.integrate.simpson([0,1,4,9,16], dx=1.0) = 21.333...
+        let y = [0.0, 1.0, 4.0, 9.0, 16.0];
+        let result = simpson_uniform(&y, 1.0).expect("simpson");
+        assert!(
+            (result.integral - 21.333333333333332).abs() < 1e-10,
+            "simpson got {}, expected 21.333...",
+            result.integral
+        );
+    }
 }
