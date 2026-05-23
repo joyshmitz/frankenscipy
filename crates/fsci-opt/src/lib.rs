@@ -5512,4 +5512,44 @@ mod tests {
             "residual got {residual}, expected {expected_residual}"
         );
     }
+
+    #[test]
+    fn check_grad_matches_scipy_reference_values() {
+        // scipy.optimize.check_grad(lambda x: sum(x**2), lambda x: 2*x, [1.0, 2.0])
+        // -> 0.0 (gradient is exact)
+        let f = |x: &[f64]| -> f64 { x.iter().map(|&xi| xi * xi).sum() };
+        let grad = |x: &[f64]| -> Vec<f64> { x.iter().map(|&xi| 2.0 * xi).collect() };
+        let x0 = vec![1.0, 2.0];
+        let result = check_grad(f, grad, &x0).expect("check_grad");
+        assert!(
+            result < 1e-6,
+            "check_grad got {result}, expected ~0"
+        );
+    }
+
+    #[test]
+    fn linprog_matches_scipy_reference_values() {
+        // scipy.optimize.linprog(c=[-1, 4], A_ub=[[-3, 1], [1, 2]], b_ub=[6, 4])
+        // -> x=[4.0, 0.0], fun=-4.0
+        let c = vec![-1.0, 4.0];
+        let a_ub = vec![vec![-3.0, 1.0], vec![1.0, 2.0]];
+        let b_ub = vec![6.0, 4.0];
+        let result = linprog(&c, &a_ub, &b_ub, &[], &[], &[], None).expect("linprog");
+        assert_eq!(result.x.len(), 2);
+        assert!(
+            (result.x[0] - 4.0).abs() < 1e-6,
+            "x[0] got {}, expected 4.0",
+            result.x[0]
+        );
+        assert!(
+            (result.x[1] - 0.0).abs() < 1e-6,
+            "x[1] got {}, expected 0.0",
+            result.x[1]
+        );
+        assert!(
+            (result.fun - (-4.0)).abs() < 1e-6,
+            "fun got {}, expected -4.0",
+            result.fun
+        );
+    }
 }
