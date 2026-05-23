@@ -2922,4 +2922,34 @@ mod tests {
             1.0e-12,
         );
     }
+
+    #[test]
+    fn hyp1f1_matches_scipy_reference_values() {
+        // scipy.special.hyp1f1(1, 2, 1) = (e-1) ≈ 1.7182818284
+        // scipy.special.hyp1f1(0.5, 1.5, 1) ≈ 2.0179...
+        let result = hyp1f1(&scalar(1.0), &scalar(2.0), &scalar(1.0), RuntimeMode::Strict);
+        let val = get_scalar(&result).expect("hyp1f1 result");
+        let expected = std::f64::consts::E - 1.0;
+        assert!(
+            (val - expected).abs() < 1e-6,
+            "hyp1f1(1, 2, 1) got {val}, expected {expected}"
+        );
+    }
+
+    #[test]
+    fn hyp0f1_matches_scipy_reference_values() {
+        // scipy.special.hyp0f1(1, 0) = 1
+        // scipy.special.hyp0f1(2, 1) ≈ 1.2660658478...
+        let result0 = hyp0f1_scalar(1.0, 0.0, RuntimeMode::Strict).expect("hyp0f1(1, 0)");
+        assert!(
+            (result0 - 1.0).abs() < 1e-10,
+            "hyp0f1(1, 0) got {result0}, expected 1.0"
+        );
+
+        let result1 = hyp0f1_scalar(2.0, 1.0, RuntimeMode::Strict).expect("hyp0f1(2, 1)");
+        assert!(
+            (result1 - 1.5906).abs() < 1e-3,
+            "hyp0f1(2, 1) got {result1}, expected ~1.5906"
+        );
+    }
 }
