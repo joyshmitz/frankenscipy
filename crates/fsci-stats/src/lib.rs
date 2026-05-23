@@ -59372,4 +59372,36 @@ mod tests {
             "nanstd got {result}, expected 1.5811388300841898"
         );
     }
+
+    #[test]
+    fn harmonic_mean_matches_scipy_reference_values() {
+        let data = vec![1.0, 2.0, 4.0, 8.0];
+        let result = harmonic_mean(&data);
+        assert!(
+            (result - 2.1333333333333333).abs() < 1e-10,
+            "harmonic_mean got {result}, expected 2.1333333333333333"
+        );
+    }
+
+    #[test]
+    fn mean_squared_error_matches_scipy_reference_values() {
+        let y_true = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let y_pred = vec![1.1, 2.2, 2.8, 4.1, 5.0];
+        let result = mean_squared_error(&y_true, &y_pred);
+        assert!(
+            (result - 0.02).abs() < 1e-10,
+            "mean_squared_error got {result}, expected 0.02"
+        );
+    }
+
+    #[test]
+    fn mean_bias_error_matches_scipy_reference_values() {
+        let y_true = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let y_pred = vec![1.1, 2.2, 2.8, 4.1, 5.0];
+        let result = mean_bias_error(&y_true, &y_pred);
+        assert!(
+            (result - 0.04).abs() < 1e-10,
+            "mean_bias_error got {result}, expected 0.04"
+        );
+    }
 }
