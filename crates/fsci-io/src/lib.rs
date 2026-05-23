@@ -4266,6 +4266,37 @@ mod tests {
     }
 
     #[test]
+    fn savemat_loadmat_binary_matches_scipy_semantics() {
+        // Test that our MAT format roundtrip preserves values like scipy.io.savemat/loadmat
+        // scipy.io.loadmat returns arrays: {'x': [[1.0, 2.0, 3.0]], 'y': [[1, 2], [3, 4]]}
+        let arrays = vec![
+            MatArray {
+                name: "x".to_string(),
+                rows: 1,
+                cols: 3,
+                data: vec![1.0, 2.0, 3.0],
+            },
+            MatArray {
+                name: "y".to_string(),
+                rows: 2,
+                cols: 2,
+                data: vec![1.0, 2.0, 3.0, 4.0],
+            },
+        ];
+        let bytes = savemat(&arrays).expect("savemat should succeed");
+        let loaded = loadmat(&bytes).expect("loadmat should succeed");
+        assert_eq!(loaded.len(), 2);
+        let x = loaded.iter().find(|a| a.name == "x").expect("x should exist");
+        let y = loaded.iter().find(|a| a.name == "y").expect("y should exist");
+        assert_eq!(x.data, vec![1.0, 2.0, 3.0]);
+        assert_eq!(y.data, vec![1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(x.rows, 1);
+        assert_eq!(x.cols, 3);
+        assert_eq!(y.rows, 2);
+        assert_eq!(y.cols, 2);
+    }
+
+    #[test]
     fn savemat_binary_roundtrip_mat4_real_double() {
         let arrays = vec![
             MatArray {
