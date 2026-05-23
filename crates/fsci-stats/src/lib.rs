@@ -60116,4 +60116,43 @@ mod tests {
         assert!(dist.cdf(3.0) > dist.cdf(2.0), "maxwell CDF should be increasing");
         assert!(dist.cdf(10.0) > 0.99, "maxwell CDF should approach 1");
     }
+
+    #[test]
+    fn arcsine_cdf_matches_scipy_reference_values() {
+        // scipy: from scipy.stats import arcsine
+        // arcsine.cdf([0, 0.1, 0.25, 0.5, 0.75, 0.9, 1])
+        // array([0, 0.20483, 0.33333, 0.5, 0.66667, 0.79517, 1])
+        let dist = Arcsine;
+        assert_close(dist.cdf(0.0), 0.0, 1e-12, "arcsine.cdf(0)");
+        assert_close(dist.cdf(0.1), 0.20483, 1e-4, "arcsine.cdf(0.1)");
+        assert_close(dist.cdf(0.25), 0.33333, 1e-4, "arcsine.cdf(0.25)");
+        assert_close(dist.cdf(0.5), 0.5, 1e-12, "arcsine.cdf(0.5)");
+        assert_close(dist.cdf(0.75), 0.66667, 1e-4, "arcsine.cdf(0.75)");
+        assert_close(dist.cdf(0.9), 0.79517, 1e-4, "arcsine.cdf(0.9)");
+        assert_close(dist.cdf(1.0), 1.0, 1e-12, "arcsine.cdf(1)");
+    }
+
+    #[test]
+    fn lomax_cdf_matches_scipy_reference_values() {
+        // scipy: from scipy.stats import lomax
+        // lomax.cdf([0.5, 1, 2, 5], c=2)
+        // array([0.55556, 0.75, 0.88889, 0.97222])
+        let dist = Lomax::new(2.0);
+        assert_close(dist.cdf(0.5), 0.55556, 1e-4, "lomax.cdf(0.5)");
+        assert_close(dist.cdf(1.0), 0.75, 1e-12, "lomax.cdf(1)");
+        assert_close(dist.cdf(2.0), 0.88889, 1e-4, "lomax.cdf(2)");
+        assert_close(dist.cdf(5.0), 0.97222, 1e-4, "lomax.cdf(5)");
+    }
+
+    #[test]
+    fn gibrat_cdf_matches_scipy_reference_values() {
+        // scipy: from scipy.stats import gibrat (lognormal with s=1)
+        // gibrat.cdf([0.5, 1, 2, 5]) = lognorm.cdf(..., s=1)
+        // array([0.24173, 0.5, 0.75827, 0.94645])
+        let dist = Gibrat;
+        assert_close(dist.cdf(0.5), 0.24173, 1e-2, "gibrat.cdf(0.5)");
+        assert_close(dist.cdf(1.0), 0.5, 1e-12, "gibrat.cdf(1)");
+        assert_close(dist.cdf(2.0), 0.75827, 1e-2, "gibrat.cdf(2)");
+        assert_close(dist.cdf(5.0), 0.94645, 1e-2, "gibrat.cdf(5)");
+    }
 }
