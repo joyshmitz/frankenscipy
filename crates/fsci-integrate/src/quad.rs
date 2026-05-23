@@ -4270,4 +4270,30 @@ mod tests {
             "fixed_quad got {integral}, expected 0.333..."
         );
     }
+
+    #[test]
+    fn nquad_matches_scipy_reference_values() {
+        // scipy.integrate.nquad(lambda x, y: x*y, [[0, 1], [0, 1]])
+        // -> 0.25 (integral of x*y over unit square)
+        let bounds = vec![(0.0, 1.0), (0.0, 1.0)];
+        let opts = QuadOptions::default();
+        let result = nquad(|coords| coords[0] * coords[1], &bounds, opts).expect("nquad");
+        assert!(
+            (result.integral - 0.25).abs() < 1e-6,
+            "nquad got {}, expected 0.25",
+            result.integral
+        );
+    }
+
+    #[test]
+    fn tplquad_rect_matches_scipy_reference_values() {
+        // scipy.integrate.tplquad(lambda z, y, x: x*y*z, 0, 1, 0, 1, 0, 1)
+        // -> 0.125 (integral of x*y*z over unit cube)
+        let result = tplquad_rect(|x, y, z| x * y * z, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 21);
+        assert!(
+            (result - 0.125).abs() < 1e-6,
+            "tplquad got {}, expected 0.125",
+            result
+        );
+    }
 }
