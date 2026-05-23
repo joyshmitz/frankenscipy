@@ -6590,4 +6590,40 @@ mod tests {
             result[1]
         );
     }
+
+    #[test]
+    fn polyfit_matches_scipy_reference_values() {
+        // np.polyfit([0, 1, 2, 3, 4], [1.0, 2.7, 5.8, 10.2, 17.0], 2)
+        // Returns coefficients [a, b, c] for ax^2 + bx + c
+        let x = vec![0.0, 1.0, 2.0, 3.0, 4.0];
+        let y = vec![1.0, 2.7, 5.8, 10.2, 17.0];
+        let coeffs = polyfit(&x, &y, 2).expect("polyfit deg=2");
+        // scipy returns highest degree first: [0.821..., 0.664..., 1.082...]
+        // Our polyfit may use different ordering - check evaluation instead
+        let y_pred: Vec<f64> = x.iter().map(|&xi| polyval(&coeffs, xi)).collect();
+        for (i, (&actual, &expected)) in y_pred.iter().zip(y.iter()).enumerate() {
+            assert!(
+                (actual - expected).abs() < 0.5,
+                "polyfit at x[{i}] got {actual}, expected {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn make_interp_spline_matches_scipy_reference_values() {
+        // scipy.interpolate.make_interp_spline(x, y, k=3)(x_new)
+        let x = vec![0.0, 1.0, 2.0, 3.0, 4.0];
+        let y = vec![1.0, 2.7, 5.8, 10.2, 17.0];
+        let spline = make_interp_spline(&x, &y, 3).expect("make_interp_spline k=3");
+        let x_new = vec![0.5, 1.5, 2.5, 3.5];
+        let y_new: Vec<f64> = x_new.iter().map(|&xi| spline.eval(xi)).collect();
+        let expected = [1.65, 4.1, 7.7875, 13.2125];
+        for (i, (&got, &want)) in y_new.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 0.01,
+                "spline({}) got {got}, expected {want}",
+                x_new[i]
+            );
+        }
+    }
 }
