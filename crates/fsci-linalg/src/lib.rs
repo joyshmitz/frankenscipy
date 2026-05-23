@@ -12276,4 +12276,72 @@ mod proptest_tests {
         assert!(eigenvalues.is_empty());
         assert!(eigenvectors.unwrap().is_empty());
     }
+
+    #[test]
+    fn det_matches_scipy_reference_values() {
+        // scipy.linalg.det([[1, 2], [3, 4]]) = -2.0
+        let a = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        let result = det(&a, RuntimeMode::Strict, true).expect("det");
+        assert!(
+            (result - (-2.0)).abs() < 1e-10,
+            "det got {result}, expected -2.0"
+        );
+    }
+
+    #[test]
+    fn inv_matches_scipy_reference_values() {
+        // scipy.linalg.inv([[1, 2], [3, 4]]) = [[-2, 1], [1.5, -0.5]]
+        let a = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        let result = inv(&a, InvOptions::default()).expect("inv");
+        let inv_a = result.inverse;
+        assert!(
+            (inv_a[0][0] - (-2.0)).abs() < 1e-10,
+            "inv[0][0] got {}, expected -2.0",
+            inv_a[0][0]
+        );
+        assert!(
+            (inv_a[0][1] - 1.0).abs() < 1e-10,
+            "inv[0][1] got {}, expected 1.0",
+            inv_a[0][1]
+        );
+        assert!(
+            (inv_a[1][0] - 1.5).abs() < 1e-10,
+            "inv[1][0] got {}, expected 1.5",
+            inv_a[1][0]
+        );
+        assert!(
+            (inv_a[1][1] - (-0.5)).abs() < 1e-10,
+            "inv[1][1] got {}, expected -0.5",
+            inv_a[1][1]
+        );
+    }
+
+    #[test]
+    fn svdvals_matches_scipy_reference_values() {
+        // scipy.linalg.svdvals([[1, 2], [3, 4]]) ≈ [5.4649, 0.3659]
+        let a = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        let result = svdvals(&a, DecompOptions::default()).expect("svdvals");
+        assert!(
+            (result[0] - 5.464985704219043).abs() < 1e-10,
+            "svdvals[0] got {}, expected 5.464985704219043",
+            result[0]
+        );
+        assert!(
+            (result[1] - 0.3659661906262574).abs() < 1e-10,
+            "svdvals[1] got {}, expected 0.3659661906262574",
+            result[1]
+        );
+    }
+
+    #[test]
+    fn expm_matches_scipy_reference_values() {
+        // scipy.linalg.expm([[1, 2], [3, 4]])[0,0] ≈ 51.9689
+        let a = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        let result = expm(&a, DecompOptions::default()).expect("expm");
+        assert!(
+            (result[0][0] - 51.968956198707545).abs() < 1e-8,
+            "expm[0][0] got {}, expected 51.968956198707545",
+            result[0][0]
+        );
+    }
 }
