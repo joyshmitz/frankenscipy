@@ -4296,4 +4296,52 @@ mod tests {
             result
         );
     }
+
+    #[test]
+    fn newton_cotes_matches_scipy_reference_values() {
+        // scipy.integrate.newton_cotes(1) = trapezoidal rule weights [0.5, 0.5]
+        // scipy.integrate.newton_cotes(2) = Simpson's rule weights [1/6, 4/6, 1/6]
+        let trap = newton_cotes(1).expect("newton_cotes(1)");
+        assert_eq!(trap.len(), 2);
+        assert!(
+            (trap[0] - 0.5).abs() < 1e-10,
+            "trap[0] = {}, expected 0.5",
+            trap[0]
+        );
+        assert!(
+            (trap[1] - 0.5).abs() < 1e-10,
+            "trap[1] = {}, expected 0.5",
+            trap[1]
+        );
+
+        let simp = newton_cotes(2).expect("newton_cotes(2)");
+        assert_eq!(simp.len(), 3);
+        assert!(
+            (simp[0] - 1.0 / 6.0).abs() < 1e-10,
+            "simp[0] = {}, expected 1/6",
+            simp[0]
+        );
+        assert!(
+            (simp[1] - 4.0 / 6.0).abs() < 1e-10,
+            "simp[1] = {}, expected 4/6",
+            simp[1]
+        );
+        assert!(
+            (simp[2] - 1.0 / 6.0).abs() < 1e-10,
+            "simp[2] = {}, expected 1/6",
+            simp[2]
+        );
+    }
+
+    #[test]
+    fn romberg_matches_scipy_reference_values() {
+        // scipy.integrate.romberg(lambda x: x**2, 0, 1)
+        // -> 0.3333... (integral of x^2 from 0 to 1)
+        let result = romberg(|x| x * x, 0.0, 1.0, 1e-10, 10);
+        assert!(
+            (result.integral - 1.0 / 3.0).abs() < 1e-6,
+            "romberg got {}, expected 1/3",
+            result.integral
+        );
+    }
 }
