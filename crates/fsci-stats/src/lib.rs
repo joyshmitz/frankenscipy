@@ -59170,4 +59170,26 @@ mod tests {
             "sqeuclidean_distance got {result}, expected 0.1"
         );
     }
+
+    #[test]
+    fn explained_variance_score_matches_scipy_reference_values() {
+        let y_true = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let y_pred = vec![1.1, 2.2, 2.8, 4.1, 5.0];
+        let result = explained_variance_score(&y_true, &y_pred);
+        assert!(
+            (result - 0.9908).abs() < 1e-4,
+            "explained_variance_score got {result}, expected 0.9908"
+        );
+    }
+
+    #[test]
+    fn log_loss_matches_scipy_reference_values() {
+        let y_true = vec![1.0, 0.0, 1.0, 1.0, 0.0];
+        let y_pred = vec![0.9, 0.1, 0.8, 0.7, 0.3];
+        let result = log_loss(&y_true, &y_pred);
+        assert!(
+            (result - 0.22944289410146546).abs() < 1e-10,
+            "log_loss got {result}, expected 0.22944289410146546"
+        );
+    }
 }
