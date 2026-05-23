@@ -59791,4 +59791,58 @@ mod tests {
             result.kurtosis
         );
     }
+
+    #[test]
+    fn ks_2samp_matches_scipy_reference_values() {
+        // scipy: ks_2samp([1,2,3,4,5], [1,2,3,4,5])
+        let x = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let y = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let result = ks_2samp(&x, &y);
+        assert!(
+            result.statistic.abs() < 1e-10,
+            "ks_2samp statistic got {}, expected 0.0",
+            result.statistic
+        );
+        assert!(
+            (result.pvalue - 1.0).abs() < 1e-10,
+            "ks_2samp pvalue got {}, expected 1.0",
+            result.pvalue
+        );
+    }
+
+    #[test]
+    fn ks_2samp_shifted_matches_scipy_reference_values() {
+        // scipy: ks_2samp([1,2,3,4,5], [3,4,5,6,7])
+        let x = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let y = vec![3.0, 4.0, 5.0, 6.0, 7.0];
+        let result = ks_2samp(&x, &y);
+        assert!(
+            (result.statistic - 0.4).abs() < 1e-10,
+            "ks_2samp statistic got {}, expected 0.4",
+            result.statistic
+        );
+        assert!(
+            (result.pvalue - 0.873015873015873).abs() < 1e-10,
+            "ks_2samp pvalue got {}, expected 0.873015873015873",
+            result.pvalue
+        );
+    }
+
+    #[test]
+    fn cramervonmises_2samp_matches_scipy_reference_values() {
+        // scipy: cramervonmises_2samp([1,2,3,4,5], [1,2,3,4,5])
+        let x = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let y = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let result = cramervonmises_2samp(&x, &y);
+        assert!(
+            result.statistic.abs() < 1e-10,
+            "cramervonmises_2samp statistic got {}, expected 0.0",
+            result.statistic
+        );
+        assert!(
+            (result.pvalue - 1.0).abs() < 1e-10,
+            "cramervonmises_2samp pvalue got {}, expected 1.0",
+            result.pvalue
+        );
+    }
 }
