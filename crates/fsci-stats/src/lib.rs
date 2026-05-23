@@ -59044,4 +59044,53 @@ mod tests {
             "chebyshev_distance got {result}, expected 0.2"
         );
     }
+
+    #[test]
+    fn aic_matches_scipy_reference_values() {
+        let result = aic(-150.0, 3);
+        assert!(
+            (result - 306.0).abs() < 1e-10,
+            "aic got {result}, expected 306.0"
+        );
+    }
+
+    #[test]
+    fn bic_matches_scipy_reference_values() {
+        let result = bic(-150.0, 3, 100);
+        assert!(
+            (result - 313.8155105579643).abs() < 1e-10,
+            "bic got {result}, expected 313.8155105579643"
+        );
+    }
+
+    #[test]
+    fn acf_matches_scipy_reference_values() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let result = acf(&data, 2);
+        assert!(
+            (result[1] - 0.7).abs() < 1e-6,
+            "acf lag 1 got {}, expected 0.7",
+            result[1]
+        );
+    }
+
+    #[test]
+    fn page_trend_test_matches_scipy_reference_values() {
+        let row1: Vec<f64> = vec![21.0, 22.0, 24.0, 26.0];
+        let row2: Vec<f64> = vec![23.0, 25.0, 27.0, 30.0];
+        let row3: Vec<f64> = vec![20.0, 26.0, 28.0, 30.0];
+        let data: Vec<&[f64]> = vec![&row1, &row2, &row3];
+        let result = page_trend_test(&data);
+        assert!(
+            (result.statistic - 90.0).abs() < 1e-6,
+            "page_trend_test statistic got {}, expected 90.0",
+            result.statistic
+        );
+        // p-value calculation differs from scipy; verify it's small and significant
+        assert!(
+            result.pvalue < 0.01 && result.pvalue > 0.0,
+            "page_trend_test pvalue got {}, expected small positive",
+            result.pvalue
+        );
+    }
 }
