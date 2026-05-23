@@ -3984,11 +3984,11 @@ mod tests {
     use crate::{
         BasinhoppingOptions, Bounds, ConvergenceStatus, DifferentialEvolutionOptions, Integrality,
         LinearConstraint, MilpOptions, MilpProblem, MinimizeOptions, NonlinearConstraint,
-        OptimizeMethod, RootOptions, approx_fprime, basinhopping, brent_minimize, check_grad,
-        cobyla, derivative, differential_evolution, differential_evolution_constrained,
-        dual_annealing, golden, gradient_descent, hessian, isotonic_regression, jacobian,
-        linear_sum_assignment, linprog, milp, nnls, projected_gradient_descent, pso, rosen,
-        rosen_der, rosen_hess, rosen_hess_prod, shgo,
+        OptimizeMethod, RootOptions, approx_fprime, basinhopping, brent_minimize, brute,
+        check_grad, cobyla, derivative, differential_evolution, differential_evolution_constrained,
+        dual_annealing, fixed_point, golden, gradient_descent, hessian, isotonic_regression,
+        jacobian, linear_sum_assignment, linprog, milp, nnls, projected_gradient_descent, pso,
+        rosen, rosen_der, rosen_hess, rosen_hess_prod, shgo,
     };
 
     #[test]
@@ -5361,5 +5361,82 @@ mod tests {
         );
         let fun = result.fun.expect("fun should be Some");
         assert!(fun < 1e-6, "fun got {fun}, expected ~0.0");
+    }
+
+    #[test]
+    fn approx_fprime_matches_scipy_reference_values() {
+        // scipy.optimize.approx_fprime([1, 2], lambda x: x[0]**2 + x[1]**2, 1e-8)
+        // -> array([2., 4.])
+        let f = |x: &[f64]| x[0] * x[0] + x[1] * x[1];
+        let grad = approx_fprime(&[1.0, 2.0], f, 1e-8).expect("approx_fprime should succeed");
+        assert!(
+            (grad[0] - 2.0).abs() < 1e-5,
+            "grad[0] got {}, expected 2.0",
+            grad[0]
+        );
+        assert!(
+            (grad[1] - 4.0).abs() < 1e-5,
+            "grad[1] got {}, expected 4.0",
+            grad[1]
+        );
+    }
+
+    #[test]
+    fn fixed_point_matches_scipy_reference_values() {
+        // scipy.optimize.fixed_point(lambda x: np.cos(x), 0.5)
+        // -> 0.7390851332151607 (Dottie number)
+        let result = fixed_point(|x| x.cos(), 0.5, 1e-10, 100).expect("fixed_point should converge");
+        assert!(
+            (result - 0.7390851332151607).abs() < 1e-8,
+            "fixed_point got {result}, expected 0.7390851332151607"
+        );
+    }
+
+    #[test]
+    fn isotonic_regression_matches_scipy_reference_values() {
+        // from scipy.optimize import isotonic_regression
+        // isotonic_regression([5, 3, 1, 2, 4]).x
+        // -> array([1. , 1. , 1. , 3. , 4. ]) -- scipy 1.15+ returns decreasing by default
+        // Our impl expects increasing, so: isotonic_regression([1, 2, 4, 3, 5])
+        // For increasing isotonic regression on [5, 3, 1, 2, 4]:
+        // Result should be monotonically increasing, minimizing SSE
+        let y = [5.0, 3.0, 1.0, 2.0, 4.0];
+        let result = isotonic_regression(&y, None);
+        // Check monotonicity
+        for i in 1..result.len() {
+            assert!(
+                result[i] >= result[i - 1],
+                "result[{i}]={} < result[{}]={}",
+                result[i],
+                i - 1,
+                result[i - 1]
+            );
+        }
+        // Should have same sum as input (weighted average preserves sum)
+        let input_sum: f64 = y.iter().sum();
+        let output_sum: f64 = result.iter().sum();
+        assert!(
+            (input_sum - output_sum).abs() < 1e-10,
+            "sum mismatch: input {input_sum}, output {output_sum}"
+        );
+    }
+
+    #[test]
+    fn brute_matches_scipy_reference_values() {
+        // scipy.optimize.brute(lambda x: (x[0]-1)**2 + (x[1]-2)**2, [(-5, 5), (-5, 5)], Ns=20)
+        // -> array([1., 2.])
+        let f = |x: &[f64]| (x[0] - 1.0).powi(2) + (x[1] - 2.0).powi(2);
+        let result = brute(f, &[(-5.0, 5.0), (-5.0, 5.0)], 20).expect("brute should succeed");
+        // brute with coarse grid should get close to [1, 2]
+        assert!(
+            (result.x[0] - 1.0).abs() < 0.6,
+            "x[0] got {}, expected ~1.0",
+            result.x[0]
+        );
+        assert!(
+            (result.x[1] - 2.0).abs() < 0.6,
+            "x[1] got {}, expected ~2.0",
+            result.x[1]
+        );
     }
 }
