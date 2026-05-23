@@ -12523,4 +12523,80 @@ mod proptest_tests {
             }
         }
     }
+
+    #[test]
+    fn lstsq_matches_scipy_reference_values() {
+        // scipy.linalg.lstsq([[1, 1], [1, 2], [1, 3]], [1, 2, 2])
+        // Returns: x = [0.6666..., 0.5]
+        let a = vec![vec![1.0, 1.0], vec![1.0, 2.0], vec![1.0, 3.0]];
+        let b = vec![1.0, 2.0, 2.0];
+        let result = lstsq(&a, &b, LstsqOptions::default()).expect("lstsq");
+        // scipy reference: x ≈ [0.6667, 0.5]
+        assert!(
+            (result.x[0] - 0.6666666666666667).abs() < 1e-10,
+            "x[0] got {}, expected 0.6667",
+            result.x[0]
+        );
+        assert!(
+            (result.x[1] - 0.5).abs() < 1e-10,
+            "x[1] got {}, expected 0.5",
+            result.x[1]
+        );
+    }
+
+    #[test]
+    fn svd_matches_scipy_reference_values() {
+        // scipy.linalg.svd([[1, 2], [3, 4]])
+        // Returns U, s, Vh where s = [5.4649..., 0.3659...]
+        let a = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        let result = svd(&a, DecompOptions::default()).expect("svd");
+        // Check singular values
+        let expected_s = [5.464985704219043, 0.3659661906262574];
+        for (i, (&got, &want)) in result.s.iter().zip(expected_s.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-10,
+                "s[{i}] got {got}, expected {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn eigh_matches_scipy_reference_values() {
+        // scipy.linalg.eigh([[1, 2], [2, 4]]) - symmetric matrix
+        // eigenvalues: [0, 5]
+        let a = vec![vec![1.0, 2.0], vec![2.0, 4.0]];
+        let result = eigh(&a, DecompOptions::default()).expect("eigh");
+        let mut eigenvalues: Vec<f64> = result.eigenvalues.clone();
+        eigenvalues.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert!(
+            eigenvalues[0].abs() < 1e-10,
+            "smallest eigenvalue got {}, expected ~0",
+            eigenvalues[0]
+        );
+        assert!(
+            (eigenvalues[1] - 5.0).abs() < 1e-10,
+            "largest eigenvalue got {}, expected 5",
+            eigenvalues[1]
+        );
+    }
+
+    #[test]
+    fn solve_triangular_matches_scipy_reference_values() {
+        // scipy.linalg.solve_triangular([[3, 0], [1, 2]], [9, 8], lower=True)
+        // -> [3, 2.5]
+        let a = vec![vec![3.0, 0.0], vec![1.0, 2.0]];
+        let b = vec![9.0, 8.0];
+        let opts = TriangularSolveOptions {
+            lower: true,
+            ..Default::default()
+        };
+        let result = solve_triangular(&a, &b, opts).expect("solve_triangular");
+        let expected = [3.0, 2.5];
+        for (i, (&got, &want)) in result.x.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-10,
+                "x[{i}] got {got}, expected {want}"
+            );
+        }
+    }
 }
