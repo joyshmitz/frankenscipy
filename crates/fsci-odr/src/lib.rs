@@ -1327,4 +1327,37 @@ mod tests {
         assert!(output.beta[0].abs() < 0.2, "constant term should be near 0");
         Ok(())
     }
+
+    #[test]
+    fn odr_exponential_matches_scipy_reference_values() -> Result<(), OdrError> {
+        // scipy.odr with exponential model y = a * exp(b * x) + c
+        // Test data: y = 2 * exp(0.5 * x) + 0
+        let x: Vec<f64> = vec![0.0, 1.0, 2.0, 3.0, 4.0];
+        let y: Vec<f64> = x.iter().map(|&xi| 2.0 * (0.5_f64 * xi).exp()).collect();
+        let data = Data::new(x, y)?;
+        // Initial guess: amplitude=1, rate=1, offset=0
+        let odr = ODR::new(data, exponential(), vec![1.0, 1.0, 0.0])?;
+        let output = odr.run()?;
+        // Should fit: beta[0]=amplitude≈2, beta[1]=rate≈0.5, beta[2]=offset≈0
+        assert_close(output.beta[0], 2.0, 0.5);
+        assert_close(output.beta[1], 0.5, 0.3);
+        assert!(output.beta[2].abs() < 0.5, "offset should be near 0");
+        Ok(())
+    }
+
+    #[test]
+    fn odr_unilinear_matches_scipy_reference_values() -> Result<(), OdrError> {
+        // scipy.odr with unilinear model y = a * x + b
+        // Test data: y = 2x + 1
+        let x: Vec<f64> = vec![0.0, 1.0, 2.0, 3.0, 4.0];
+        let y: Vec<f64> = x.iter().map(|&xi| 2.0 * xi + 1.0).collect();
+        let data = Data::new(x, y)?;
+        // Initial guess: a=1, b=0
+        let odr = ODR::new(data, unilinear(), vec![1.0, 0.0])?;
+        let output = odr.run()?;
+        // Should fit: beta[0]=a≈2, beta[1]=b≈1
+        assert_close(output.beta[0], 2.0, 0.1);
+        assert_close(output.beta[1], 1.0, 0.1);
+        Ok(())
+    }
 }
