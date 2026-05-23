@@ -4337,4 +4337,45 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn factorial_matches_scipy_reference_values() {
+        // scipy.special.factorial(0) = 1.0
+        // scipy.special.factorial(5) = 120.0
+        // scipy.special.factorial(10) = 3628800.0
+        assert_eq!(factorial(0), 1.0, "0! should be 1");
+        assert_eq!(factorial(5), 120.0, "5! should be 120");
+        assert_eq!(factorial(10), 3628800.0, "10! should be 3628800");
+    }
+
+    #[test]
+    fn factorial2_matches_scipy_reference_values() {
+        // scipy.special.factorial2(5) = 5!! = 5*3*1 = 15
+        // scipy.special.factorial2(6) = 6!! = 6*4*2 = 48
+        // scipy.special.factorial2(0) = 1
+        assert_eq!(factorial2(0), 1.0, "0!! should be 1");
+        assert_eq!(factorial2(5), 15.0, "5!! should be 15");
+        assert_eq!(factorial2(6), 48.0, "6!! should be 48");
+    }
+
+    #[test]
+    fn binom_matches_scipy_reference_values() {
+        // scipy.special.binom(5, 2) = 10
+        // scipy.special.binom(10, 3) = 120
+        // scipy.special.binom(6, 0) = 1
+        assert!((binom(5.0, 2.0) - 10.0).abs() < 1e-10, "C(5,2) = {}, expected 10", binom(5.0, 2.0));
+        assert!((binom(10.0, 3.0) - 120.0).abs() < 1e-6, "C(10,3) = {}, expected 120", binom(10.0, 3.0));
+        assert!((binom(6.0, 0.0) - 1.0).abs() < 1e-10, "C(6,0) = {}, expected 1", binom(6.0, 0.0));
+    }
+
+    #[test]
+    fn gammainc_matches_scipy_reference_values() {
+        // scipy.special.gammainc(1, 1) = 1 - exp(-1) ≈ 0.6321205588
+        // scipy.special.gammainc(2, 1) ≈ 0.2642411177
+        let val1 = gammainc_scalar(1.0, 1.0, RuntimeMode::Strict).expect("gammainc(1, 1)");
+        assert!((val1 - 0.6321205588).abs() < 1e-6, "gammainc(1,1) = {}, expected 0.6321205588", val1);
+
+        let val2 = gammainc_scalar(2.0, 1.0, RuntimeMode::Strict).expect("gammainc(2, 1)");
+        assert!((val2 - 0.2642411177).abs() < 1e-6, "gammainc(2,1) = {}, expected 0.2642411177", val2);
+    }
 }
