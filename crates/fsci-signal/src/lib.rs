@@ -18088,4 +18088,18 @@ mod tests {
             assert!((reconstructed[i] - signal[i]).abs() < 1e-10, "deconvolve reconstruction failed at {i}");
         }
     }
+
+    #[test]
+    fn resample_matches_scipy_reference_values() {
+        // scipy.signal.resample([1, 2, 3, 4], 8)
+        // -> [1.0, 1.08578644, 2.0, 2.5, 3.0, 3.91421356, 4.0, 2.5]
+        let x = vec![1.0, 2.0, 3.0, 4.0];
+        let result = resample(&x, 8).expect("resample");
+        let expected = [1.0, 1.08578644, 2.0, 2.5, 3.0, 3.91421356, 4.0, 2.5];
+        assert_eq!(result.len(), 8, "resample output length");
+        for (i, (&got, &want)) in result.iter().zip(expected.iter()).enumerate() {
+            assert!((got - want).abs() < 1e-4, "resample[{i}] = {got}, expected {want}");
+        }
+    }
+
 }
