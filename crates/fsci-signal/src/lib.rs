@@ -17750,4 +17750,55 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn convolve_matches_scipy_reference_values() {
+        // scipy.signal.convolve([1,2,3], [0.5,1,0.5], mode='full')
+        let a = vec![1.0, 2.0, 3.0];
+        let b = vec![0.5, 1.0, 0.5];
+        let result = convolve(&a, &b, ConvolveMode::Full).expect("convolve");
+        let expected = [0.5, 2.0, 4.0, 4.0, 1.5];
+        assert_eq!(result.len(), expected.len());
+        for (i, val) in result.iter().enumerate() {
+            assert!(
+                (*val - expected[i]).abs() < 1e-10,
+                "convolve full[{i}] got {val}, expected {}",
+                expected[i]
+            );
+        }
+    }
+
+    #[test]
+    fn convolve_same_matches_scipy_reference_values() {
+        // scipy.signal.convolve([1,2,3], [0.5,1,0.5], mode='same')
+        let a = vec![1.0, 2.0, 3.0];
+        let b = vec![0.5, 1.0, 0.5];
+        let result = convolve(&a, &b, ConvolveMode::Same).expect("convolve same");
+        let expected = [2.0, 4.0, 4.0];
+        assert_eq!(result.len(), expected.len());
+        for (i, val) in result.iter().enumerate() {
+            assert!(
+                (*val - expected[i]).abs() < 1e-10,
+                "convolve same[{i}] got {val}, expected {}",
+                expected[i]
+            );
+        }
+    }
+
+    #[test]
+    fn correlate_matches_scipy_reference_values() {
+        // scipy.signal.correlate([1,2,3], [0.5,1,0.5], mode='full')
+        let a = vec![1.0, 2.0, 3.0];
+        let b = vec![0.5, 1.0, 0.5];
+        let result = correlate(&a, &b, ConvolveMode::Full).expect("correlate");
+        let expected = [0.5, 2.0, 4.0, 4.0, 1.5];
+        assert_eq!(result.len(), expected.len());
+        for (i, val) in result.iter().enumerate() {
+            assert!(
+                (*val - expected[i]).abs() < 1e-10,
+                "correlate full[{i}] got {val}, expected {}",
+                expected[i]
+            );
+        }
+    }
 }
