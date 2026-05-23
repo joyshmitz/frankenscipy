@@ -59192,4 +59192,41 @@ mod tests {
             "log_loss got {result}, expected 0.22944289410146546"
         );
     }
+
+    #[test]
+    fn skew_matches_scipy_reference_values() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let result = skew(&data);
+        assert!(
+            result.abs() < 1e-10,
+            "skew got {result}, expected 0.0"
+        );
+    }
+
+    #[test]
+    fn kurtosis_matches_scipy_reference_values() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let result = kurtosis(&data);
+        assert!(
+            (result - (-1.2242424242424244)).abs() < 1e-10,
+            "kurtosis got {result}, expected -1.2242424242424244"
+        );
+    }
+
+    #[test]
+    fn kurtosistest_matches_scipy_reference_values() {
+        // Need n >= 20 for kurtosistest
+        let data: Vec<f64> = (1..=20).map(|x| x as f64).collect();
+        let result = kurtosistest(&data, None, None).expect("kurtosistest should succeed");
+        assert!(
+            (result.statistic - (-1.7058104152122062)).abs() < 1e-6,
+            "kurtosistest statistic got {}, expected -1.7058104152122062",
+            result.statistic
+        );
+        assert!(
+            (result.pvalue - 0.08804338332528348).abs() < 1e-6,
+            "kurtosistest pvalue got {}, expected 0.08804338332528348",
+            result.pvalue
+        );
+    }
 }
