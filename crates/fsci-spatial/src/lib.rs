@@ -5938,4 +5938,30 @@ mod tests {
         });
         assert!(has_center, "should have vertex at center (0.5, 0.5)");
     }
+
+    #[test]
+    fn wminkowski_matches_scipy_reference_values() {
+        // scipy.spatial.distance.wminkowski([1, 2], [3, 4], p=2, w=[1, 1])
+        // -> sqrt((1-3)^2 + (2-4)^2) = sqrt(8) = 2.8284...
+        let result = wminkowski(&[1.0, 2.0], &[3.0, 4.0], 2.0, &[1.0, 1.0]);
+        assert!(
+            (result - 2.8284271247461903).abs() < 1e-10,
+            "wminkowski got {result}, expected 2.8284271247461903"
+        );
+    }
+
+    #[test]
+    fn is_valid_dm_matches_scipy_reference_values() {
+        // scipy.spatial.distance.is_valid_dm([[0, 1], [1, 0]]) -> True
+        let matrix = vec![vec![0.0, 1.0], vec![1.0, 0.0]];
+        assert!(is_valid_dm(&matrix, 1e-10), "symmetric distance matrix should be valid");
+    }
+
+    #[test]
+    fn num_obs_dm_matches_scipy_reference_values() {
+        // scipy.spatial.distance.num_obs_dm([[0, 1, 2], [1, 0, 1], [2, 1, 0]]) -> 3
+        let matrix = vec![vec![0.0, 1.0, 2.0], vec![1.0, 0.0, 1.0], vec![2.0, 1.0, 0.0]];
+        let n = num_obs_dm(&matrix);
+        assert_eq!(n, 3, "num_obs_dm should return 3");
+    }
 }
