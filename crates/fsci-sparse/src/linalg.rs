@@ -6377,6 +6377,99 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn gmres_matches_scipy_reference_values() {
+        // scipy.sparse.linalg.gmres(A, b) for non-symmetric matrix
+        // A = [[4, 1], [2, 3]], b = [1, 2]
+        // x = linalg.solve([[4, 1], [2, 3]], [1, 2]) -> [0.1, 0.6]
+        use crate::{CooMatrix, Shape2D};
+        let a = CooMatrix::from_triplets(
+            Shape2D::new(2, 2),
+            vec![4.0, 1.0, 2.0, 3.0],
+            vec![0, 0, 1, 1],
+            vec![0, 1, 0, 1],
+            false,
+        )
+        .expect("coo")
+        .to_csr()
+        .expect("csr");
+        let b = vec![1.0, 2.0];
+        let result = super::gmres(&a, &b, None, IterativeSolveOptions::default()).expect("gmres");
+        let expected = [0.1, 0.6];
+        for (i, (&got, &want)) in result.solution.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-6,
+                "gmres x[{i}] got {got}, expected {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn bicgstab_matches_scipy_reference_values() {
+        // scipy.sparse.linalg.bicgstab(A, b)
+        // A = [[4, 1], [2, 3]], b = [1, 2] -> same solution as gmres
+        use crate::{CooMatrix, Shape2D};
+        let a = CooMatrix::from_triplets(
+            Shape2D::new(2, 2),
+            vec![4.0, 1.0, 2.0, 3.0],
+            vec![0, 0, 1, 1],
+            vec![0, 1, 0, 1],
+            false,
+        )
+        .expect("coo")
+        .to_csr()
+        .expect("csr");
+        let b = vec![1.0, 2.0];
+        let result =
+            super::bicgstab(&a, &b, None, IterativeSolveOptions::default()).expect("bicgstab");
+        let expected = [0.1, 0.6];
+        for (i, (&got, &want)) in result.solution.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-6,
+                "bicgstab x[{i}] got {got}, expected {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn expm_matches_scipy_reference_values() {
+        // scipy.sparse.linalg.expm([[0, 1], [0, 0]])
+        // -> [[1, 1], [0, 1]] (nilpotent matrix: exp(A) = I + A)
+        use crate::{CooMatrix, Shape2D};
+        let a = CooMatrix::from_triplets(
+            Shape2D::new(2, 2),
+            vec![1.0],
+            vec![0],
+            vec![1],
+            false,
+        )
+        .expect("coo")
+        .to_csr()
+        .expect("csr");
+        let result = super::expm(&a, ExpmOptions::default()).expect("expm");
+        // Result should be [[1, 1], [0, 1]]
+        assert!(
+            (result[0][0] - 1.0).abs() < 1e-10,
+            "expm[0][0] got {}, expected 1.0",
+            result[0][0]
+        );
+        assert!(
+            (result[0][1] - 1.0).abs() < 1e-10,
+            "expm[0][1] got {}, expected 1.0",
+            result[0][1]
+        );
+        assert!(
+            result[1][0].abs() < 1e-10,
+            "expm[1][0] got {}, expected 0.0",
+            result[1][0]
+        );
+        assert!(
+            (result[1][1] - 1.0).abs() < 1e-10,
+            "expm[1][1] got {}, expected 1.0",
+            result[1][1]
+        );
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
