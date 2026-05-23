@@ -2816,4 +2816,34 @@ mod tests {
         let result = betainc_scalar(2.0, 3.0, 0.5, RuntimeMode::Strict).unwrap();
         assert!((result - 0.6875).abs() < 1e-10);
     }
+
+    #[test]
+    fn softmax_matches_scipy_reference_values() {
+        // scipy.special.softmax([1, 2, 3])
+        let result = softmax(&[1.0, 2.0, 3.0]);
+        let expected = [0.09003057317038046, 0.24472847105479764, 0.6652409557748218];
+        for (i, (got, want)) in result.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-10,
+                "softmax[{i}] got {got}, expected {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn log_softmax_matches_scipy_reference_values() {
+        // scipy.special.log_softmax([1, 2, 3])
+        let result = log_softmax(&[1.0, 2.0, 3.0]);
+        let expected = [
+            -2.4076059644443806,
+            -1.4076059644443804,
+            -0.4076059644443804,
+        ];
+        for (i, (got, want)) in result.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-10,
+                "log_softmax[{i}] got {got}, expected {want}"
+            );
+        }
+    }
 }
