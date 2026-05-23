@@ -59845,4 +59845,31 @@ mod tests {
             result.pvalue
         );
     }
+
+    #[test]
+    fn permutation_test_matches_scipy_reference_values() {
+        // scipy: permutation_test(([1,2,3], [4,5,6]), lambda x,y,axis: mean(x)-mean(y))
+        // statistic = -3.0, pvalue = 0.1 (exact)
+        let x = vec![1.0, 2.0, 3.0];
+        let y = vec![4.0, 5.0, 6.0];
+        let (statistic, pvalue) = permutation_test(
+            &x,
+            &y,
+            |a, b| {
+                let mean_a: f64 = a.iter().sum::<f64>() / a.len() as f64;
+                let mean_b: f64 = b.iter().sum::<f64>() / b.len() as f64;
+                mean_a - mean_b
+            },
+            10000,
+            42,
+        );
+        assert!(
+            (statistic - (-3.0)).abs() < 1e-10,
+            "permutation_test statistic got {statistic}, expected -3.0"
+        );
+        assert!(
+            (pvalue - 0.1).abs() < 0.02,
+            "permutation_test pvalue got {pvalue}, expected ~0.1"
+        );
+    }
 }
