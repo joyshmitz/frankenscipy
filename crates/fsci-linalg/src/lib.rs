@@ -12344,4 +12344,82 @@ mod proptest_tests {
             result[0][0]
         );
     }
+
+    #[test]
+    fn solve_matches_scipy_reference_values() {
+        // scipy.linalg.solve([[1, 2], [3, 4]], [5, 6]) = [-4, 4.5]
+        let a = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        let b = vec![5.0, 6.0];
+        let result = solve(&a, &b, SolveOptions::default()).expect("solve");
+        assert!(
+            (result.x[0] - (-4.0)).abs() < 1e-10,
+            "solve[0] got {}, expected -4.0",
+            result.x[0]
+        );
+        assert!(
+            (result.x[1] - 4.5).abs() < 1e-10,
+            "solve[1] got {}, expected 4.5",
+            result.x[1]
+        );
+    }
+
+    #[test]
+    fn cholesky_matches_scipy_reference_values() {
+        // scipy.linalg.cholesky([[4, 2], [2, 3]], lower=True)
+        let a = vec![vec![4.0, 2.0], vec![2.0, 3.0]];
+        let result = cholesky(&a, true, DecompOptions::default()).expect("cholesky");
+        assert!(
+            (result.factor[0][0] - 2.0).abs() < 1e-10,
+            "cholesky[0][0] got {}, expected 2.0",
+            result.factor[0][0]
+        );
+        assert!(
+            result.factor[0][1].abs() < 1e-10,
+            "cholesky[0][1] got {}, expected 0.0",
+            result.factor[0][1]
+        );
+        assert!(
+            (result.factor[1][0] - 1.0).abs() < 1e-10,
+            "cholesky[1][0] got {}, expected 1.0",
+            result.factor[1][0]
+        );
+        assert!(
+            (result.factor[1][1] - 1.4142135623730951).abs() < 1e-10,
+            "cholesky[1][1] got {}, expected 1.414...",
+            result.factor[1][1]
+        );
+    }
+
+    #[test]
+    fn norm_frobenius_matches_scipy_reference_values() {
+        // scipy.linalg.norm([[1, 2], [3, 4]], 'fro') = 5.477225575051661
+        let a = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        let result = norm(&a, NormKind::Fro, DecompOptions::default()).expect("norm fro");
+        assert!(
+            (result - 5.477225575051661).abs() < 1e-10,
+            "norm fro got {result}, expected 5.477225575051661"
+        );
+    }
+
+    #[test]
+    fn norm_1_matches_scipy_reference_values() {
+        // scipy.linalg.norm([[1, 2], [3, 4]], 1) = 6.0
+        let a = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        let result = norm(&a, NormKind::One, DecompOptions::default()).expect("norm 1");
+        assert!(
+            (result - 6.0).abs() < 1e-10,
+            "norm 1 got {result}, expected 6.0"
+        );
+    }
+
+    #[test]
+    fn norm_inf_matches_scipy_reference_values() {
+        // scipy.linalg.norm([[1, 2], [3, 4]], inf) = 7.0
+        let a = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        let result = norm(&a, NormKind::Inf, DecompOptions::default()).expect("norm inf");
+        assert!(
+            (result - 7.0).abs() < 1e-10,
+            "norm inf got {result}, expected 7.0"
+        );
+    }
 }
