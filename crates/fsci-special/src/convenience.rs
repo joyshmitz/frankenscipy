@@ -9950,4 +9950,53 @@ mod tests {
             assert!((result - expected).abs() < 1e-3, "struve({v}, {x}) = {result}, expected {expected}");
         }
     }
+
+    #[test]
+    fn sinc_matches_scipy_reference_values() {
+        // scipy.special.sinc(0.5) = 0.6366197723675814
+        use crate::SpecialTensor;
+        use fsci_runtime::RuntimeMode;
+        let x = SpecialTensor::RealScalar(0.5);
+        let result = super::sinc(&x, RuntimeMode::Strict).expect("sinc");
+        if let SpecialTensor::RealScalar(val) = result {
+            assert!((val - 0.6366197723675814).abs() < 1e-6, "sinc(0.5) = {val}, expected 0.6366197723675814");
+        } else {
+            panic!("sinc should return scalar");
+        }
+    }
+
+    #[test]
+    fn expit_matches_scipy_reference_values() {
+        // scipy.special.expit(0) = 0.5
+        use crate::SpecialTensor;
+        use fsci_runtime::RuntimeMode;
+        let x = SpecialTensor::RealScalar(0.0);
+        let result = super::expit(&x, RuntimeMode::Strict).expect("expit");
+        if let SpecialTensor::RealScalar(val) = result {
+            assert!((val - 0.5).abs() < 1e-10, "expit(0) = {val}, expected 0.5");
+        } else {
+            panic!("expit should return scalar");
+        }
+    }
+
+    #[test]
+    fn logit_matches_scipy_reference_values() {
+        // scipy.special.logit(0.5) = 0.0
+        use crate::SpecialTensor;
+        use fsci_runtime::RuntimeMode;
+        let p = SpecialTensor::RealScalar(0.5);
+        let result = super::logit(&p, RuntimeMode::Strict).expect("logit");
+        if let SpecialTensor::RealScalar(val) = result {
+            assert!(val.abs() < 1e-10, "logit(0.5) = {val}, expected 0.0");
+        } else {
+            panic!("logit should return scalar");
+        }
+    }
+
+    #[test]
+    fn kl_div_matches_scipy_reference_values() {
+        // scipy.special.kl_div(1, 2) = 0.3068528194400546
+        let result = super::kl_div(1.0, 2.0);
+        assert!((result - 0.3068528194400546).abs() < 1e-6, "kl_div(1, 2) = {result}, expected 0.3068528194400546");
+    }
 }
