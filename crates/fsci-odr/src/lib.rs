@@ -1295,4 +1295,36 @@ mod tests {
         assert_close(output.beta[1], 0.01424, 0.1);
         Ok(())
     }
+
+    #[test]
+    fn odr_quadratic_matches_scipy_reference_values() -> Result<(), OdrError> {
+        // scipy.odr with quadratic model on y = x^2 + noise
+        // Polynomial params are [c, b, a] for ax^2 + bx + c (Horner form)
+        let x = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let y = vec![1.1, 4.0, 9.1, 15.9, 25.0];
+        let data = Data::new(x, y)?;
+        // Initial guess: c=0, b=0, a=1
+        let mut odr = ODR::new(data, quadratic(), vec![0.0, 0.0, 1.0])?;
+        let output = odr.run()?;
+        // Expect quadratic coeff (beta[2]) ≈ 1
+        assert_close(output.beta[2], 1.0, 0.1);
+        Ok(())
+    }
+
+    #[test]
+    fn odr_polynomial_degree2_matches_scipy_reference_values() -> Result<(), OdrError> {
+        // scipy.odr with polynomial model
+        // Polynomial params are [c, b, a] for ax^2 + bx + c
+        let x = vec![0.0, 1.0, 2.0, 3.0, 4.0];
+        let y = vec![0.0, 1.0, 4.0, 9.0, 16.0]; // y = x^2
+        let data = Data::new(x, y)?;
+        // Initial guess: c=0, b=0, a=1
+        let mut odr = ODR::new(data, polynomial(2), vec![0.0, 0.0, 1.0])?;
+        let output = odr.run()?;
+        // Should fit x^2: beta[2]=1, beta[1]=0, beta[0]=0
+        assert_close(output.beta[2], 1.0, 0.1);
+        assert!(output.beta[1].abs() < 0.2, "linear term should be near 0");
+        assert!(output.beta[0].abs() < 0.2, "constant term should be near 0");
+        Ok(())
+    }
 }
