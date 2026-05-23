@@ -3173,4 +3173,98 @@ mod tests {
         let err = v_measure_score(&[0, 1], &[0]).expect_err("length mismatch should error");
         assert!(matches!(err, ClusterError::InvalidArgument(_)));
     }
+
+    #[test]
+    fn linkage_single_matches_scipy_reference_values() {
+        // scipy.cluster.hierarchy.linkage([[0,0],[1,0],[0,1],[4,4],[5,4],[4,5]], method='single')
+        let data = vec![
+            vec![0.0, 0.0],
+            vec![1.0, 0.0],
+            vec![0.0, 1.0],
+            vec![4.0, 4.0],
+            vec![5.0, 4.0],
+            vec![4.0, 5.0],
+        ];
+        let z = linkage(&data, LinkageMethod::Single).expect("linkage");
+        let expected = [
+            [0.0, 1.0, 1.0, 2.0],
+            [2.0, 6.0, 1.0, 3.0],
+            [3.0, 4.0, 1.0, 2.0],
+            [5.0, 8.0, 1.0, 3.0],
+            [7.0, 9.0, 5.0, 6.0],
+        ];
+        assert_eq!(z.len(), expected.len());
+        for (i, row) in z.iter().enumerate() {
+            for (j, val) in row.iter().enumerate() {
+                assert!(
+                    (*val - expected[i][j]).abs() < 1e-10,
+                    "linkage[{i}][{j}] got {val}, expected {}",
+                    expected[i][j]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn leaves_list_matches_scipy_reference_values() {
+        // scipy.cluster.hierarchy.leaves_list on single linkage result
+        let z = [
+            [0.0, 1.0, 1.0, 2.0],
+            [2.0, 6.0, 1.0, 3.0],
+            [3.0, 4.0, 1.0, 2.0],
+            [5.0, 8.0, 1.0, 3.0],
+            [7.0, 9.0, 5.0, 6.0],
+        ];
+        let leaves = leaves_list(&z);
+        let expected = [2, 0, 1, 5, 3, 4];
+        assert_eq!(leaves, expected);
+    }
+
+    #[test]
+    fn num_obs_linkage_matches_scipy_reference_values() {
+        // scipy.cluster.hierarchy.num_obs_linkage
+        let z = [
+            [0.0, 1.0, 1.0, 2.0],
+            [2.0, 6.0, 1.0, 3.0],
+            [3.0, 4.0, 1.0, 2.0],
+            [5.0, 8.0, 1.0, 3.0],
+            [7.0, 9.0, 5.0, 6.0],
+        ];
+        let n = num_obs_linkage(&z);
+        assert_eq!(n, 6);
+    }
+
+    #[test]
+    fn is_valid_linkage_matches_scipy_reference_values() {
+        // scipy.cluster.hierarchy.is_valid_linkage
+        let z = [
+            [0.0, 1.0, 1.0, 2.0],
+            [2.0, 6.0, 1.0, 3.0],
+            [3.0, 4.0, 1.0, 2.0],
+            [5.0, 8.0, 1.0, 3.0],
+            [7.0, 9.0, 5.0, 6.0],
+        ];
+        assert!(is_valid_linkage(&z));
+    }
+
+    #[test]
+    fn cophenet_matches_scipy_reference_values() {
+        // scipy.cluster.hierarchy.cophenet
+        let z = [
+            [0.0, 1.0, 1.0, 2.0],
+            [2.0, 6.0, 1.0, 3.0],
+            [3.0, 4.0, 1.0, 2.0],
+            [5.0, 8.0, 1.0, 3.0],
+            [7.0, 9.0, 5.0, 6.0],
+        ];
+        let cophenetic = cophenet(&z);
+        let expected = [1.0, 1.0, 5.0, 5.0, 5.0, 1.0];
+        for (i, val) in cophenetic.iter().take(6).enumerate() {
+            assert!(
+                (*val - expected[i]).abs() < 1e-10,
+                "cophenet[{i}] got {val}, expected {}",
+                expected[i]
+            );
+        }
+    }
 }
