@@ -3267,4 +3267,21 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn fcluster_matches_scipy_reference_values() {
+        // scipy.cluster.hierarchy.fcluster(Z, t=2, criterion='maxclust')
+        let z = [
+            [0.0, 1.0, 1.0, 2.0],
+            [2.0, 6.0, 1.0, 3.0],
+            [3.0, 4.0, 1.0, 2.0],
+            [5.0, 8.0, 1.0, 3.0],
+            [7.0, 9.0, 6.4031242374328485, 6.0],
+        ];
+        let labels = fcluster(&z, 2).expect("fcluster should succeed");
+        let expected = [1, 1, 1, 2, 2, 2];
+        for (i, (&got, &want)) in labels.iter().zip(expected.iter()).enumerate() {
+            assert_eq!(got, want, "fcluster[{i}] got {got}, expected {want}");
+        }
+    }
 }
