@@ -59643,4 +59643,37 @@ mod tests {
             result.pvalue
         );
     }
+
+    #[test]
+    fn lomax_entropy_matches_scipy_reference_values() {
+        // scipy.stats.lomax(2.5).entropy()
+        let dist = Lomax::new(2.5);
+        let result = dist.entropy();
+        assert!(
+            (result - 0.4837092681258448).abs() < 1e-10,
+            "lomax entropy got {result}, expected 0.4837092681258448"
+        );
+    }
+
+    #[test]
+    fn johnsonsu_entropy_matches_scipy_reference_values() {
+        // scipy.stats.johnsonsu(1.0, 2.0).entropy()
+        let dist = JohnsonSU::new(1.0, 2.0);
+        let result = dist.entropy();
+        assert!(
+            (result - 0.939500455172313).abs() < 1e-10,
+            "johnsonsu entropy got {result}, expected 0.939500455172313"
+        );
+    }
+
+    #[test]
+    fn burr12_entropy_matches_scipy_reference_values() {
+        // scipy.stats.burr12(2.0, 3.0).entropy()
+        let dist = Burr12::new(2.0, 3.0);
+        let result = dist.entropy();
+        assert!(
+            (result - 0.2915738641052754).abs() < 1e-8,
+            "burr12 entropy got {result}, expected 0.2915738641052754"
+        );
+    }
 }
