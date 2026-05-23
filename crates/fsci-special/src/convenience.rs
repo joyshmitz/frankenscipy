@@ -9863,4 +9863,91 @@ mod tests {
         assert!(diric(0.5, 0).is_nan()); // n < 1
         assert!(diric(0.5, -1).is_nan()); // n < 1
     }
+
+    #[test]
+    fn ndtr_matches_scipy_reference_values() {
+        // scipy.special.ndtr([-2.0, -1.0, 0.0, 1.0, 2.0])
+        let cases = [
+            (-2.0, 0.02275013194817921),
+            (-1.0, 0.15865525393145707),
+            (0.0, 0.5),
+            (1.0, 0.8413447460685429),
+            (2.0, 0.9772498680518208),
+        ];
+        for (x, expected) in cases {
+            let result = super::ndtr_scalar(x);
+            assert!((result - expected).abs() < 1e-10, "ndtr({x}) = {result}, expected {expected}");
+        }
+    }
+
+    #[test]
+    fn ndtri_matches_scipy_reference_values() {
+        // scipy.special.ndtri([0.1, 0.25, 0.5, 0.75, 0.9])
+        let cases = [
+            (0.1, -1.2815515655446004),
+            (0.25, -0.6744897501960817),
+            (0.5, 0.0),
+            (0.75, 0.6744897501960817),
+            (0.9, 1.2815515655446004),
+        ];
+        for (y, expected) in cases {
+            let result = super::ndtri_scalar(y);
+            assert!((result - expected).abs() < 1e-10, "ndtri({y}) = {result}, expected {expected}");
+        }
+    }
+
+    #[test]
+    fn fresnel_matches_scipy_reference_values() {
+        // scipy.special.fresnel([0.5, 1.0, 2.0])
+        let cases = [
+            (0.5, 0.06473243285999929, 0.4923442258714464),
+            (1.0, 0.4382591473903548, 0.7798934003768228),
+            (2.0, 0.34341567836369824, 0.4882534060753408),
+        ];
+        for (x, expected_s, expected_c) in cases {
+            let (s, c) = super::fresnel(x);
+            assert!((s - expected_s).abs() < 1e-6, "fresnel({x}).s = {s}, expected {expected_s}");
+            assert!((c - expected_c).abs() < 1e-6, "fresnel({x}).c = {c}, expected {expected_c}");
+        }
+    }
+
+    #[test]
+    fn sici_matches_scipy_reference_values() {
+        // scipy.special.sici([1.0, 2.0, 5.0])
+        let cases = [
+            (1.0, 0.9460830703671831, 0.33740392290096817),
+            (2.0, 1.6054129768026948, 0.42298082808405055),
+            (5.0, 1.5499312449446702, -0.19002974965664387),
+        ];
+        for (x, expected_si, expected_ci) in cases {
+            let (si, ci) = super::sici(x);
+            assert!((si - expected_si).abs() < 1e-6, "sici({x}).si = {si}, expected {expected_si}");
+            assert!((ci - expected_ci).abs() < 1e-6, "sici({x}).ci = {ci}, expected {expected_ci}");
+        }
+    }
+
+    #[test]
+    fn shichi_matches_scipy_reference_values() {
+        // scipy.special.shichi([0.5, 1.0, 2.0])
+        let cases = [
+            (0.5, 0.5069967498196671, -0.05277684495649361),
+            (1.0, 1.0572508753757285, 0.8378669409802082),
+            (2.0, 2.5015674311761847, 2.4529408862140567),
+        ];
+        for (x, expected_shi, expected_chi) in cases {
+            let (shi, chi) = super::shichi(x);
+            assert!((shi - expected_shi).abs() < 1e-6, "shichi({x}).shi = {shi}, expected {expected_shi}");
+            assert!((chi - expected_chi).abs() < 1e-3, "shichi({x}).chi = {chi}, expected {expected_chi}");
+        }
+    }
+
+    #[test]
+    fn struve_matches_scipy_reference_values() {
+        // scipy.special.struve([0, 1], [1.0, 2.0])
+        let cases = [(0.0, 1.0, 0.5686246925337326), (1.0, 2.0, 0.6459316510996011)];
+        for (v, x, expected) in cases {
+            let result = super::struve(v, x);
+            assert!((result - expected).abs() < 1e-3, "struve({v}, {x}) = {result}, expected {expected}");
+        }
+    }
 }
