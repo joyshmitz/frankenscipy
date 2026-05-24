@@ -3988,8 +3988,8 @@ mod tests {
         basinhopping, bracket, brent_minimize, brute, check_grad, cobyla, derivative,
         differential_evolution, differential_evolution_constrained, dual_annealing, fixed_point,
         golden, gradient_descent, hessian, isotonic_regression, jacobian, linear_sum_assignment,
-        linprog, milp, nnls, projected_gradient_descent, pso, rosen, rosen_der, rosen_hess,
-        rosen_hess_prod, shgo,
+        linprog, milp, minimize_scalar_bounded, nnls, projected_gradient_descent, pso, rosen,
+        rosen_der, rosen_hess, rosen_hess_prod, shgo,
     };
 
     #[test]
@@ -5312,7 +5312,7 @@ mod tests {
         // Expected: x ≈ [1, 1], fun ≈ 0
         use crate::{minimize::minimize, OptimizeMethod};
         let result = minimize(
-            |x| rosen(x),
+            rosen,
             &[0.0, 0.0],
             MinimizeOptions {
                 method: Some(OptimizeMethod::Bfgs),
@@ -5341,7 +5341,7 @@ mod tests {
         // Expected: x ≈ [1, 1], fun ≈ 0
         use crate::{minimize::minimize, OptimizeMethod};
         let result = minimize(
-            |x| rosen(x),
+            rosen,
             &[0.0, 0.0],
             MinimizeOptions {
                 method: Some(OptimizeMethod::NelderMead),
@@ -5599,5 +5599,46 @@ mod tests {
             "J[1][1] got {}, expected 1",
             result.df[1][1]
         );
+    }
+
+    #[test]
+    fn differential_evolution_rosenbrock_matches_scipy_reference() {
+        // scipy.optimize.differential_evolution(rosen, [(-5, 5), (-5, 5)], seed=42)
+        // finds minimum near (1, 1) with f(x) near 0
+        let result = differential_evolution(
+            rosen,
+            &[(-5.0, 5.0), (-5.0, 5.0)],
+            DifferentialEvolutionOptions::default(),
+        )
+        .expect("differential_evolution should succeed");
+
+        assert!(result.success, "differential_evolution should converge");
+        let fun = result.fun.expect("fun should be Some");
+        assert!(fun < 1e-6, "minimum value = {fun}, expected near 0");
+        assert!((result.x[0] - 1.0).abs() < 0.1, "x[0] = {}, expected near 1", result.x[0]);
+        assert!((result.x[1] - 1.0).abs() < 0.1, "x[1] = {}, expected near 1", result.x[1]);
+    }
+
+    #[test]
+    fn dual_annealing_rosenbrock_matches_scipy_reference() {
+        // scipy.optimize.dual_annealing(rosen, [(-5, 5), (-5, 5)], seed=42)
+        // finds minimum near (1, 1) with f(x) near 0
+        let result = dual_annealing(rosen, &[(-5.0, 5.0), (-5.0, 5.0)], 1000, 42)
+            .expect("dual_annealing should succeed");
+
+        assert!(result.success, "dual_annealing should converge");
+        let fun = result.fun.expect("fun should be Some");
+        assert!(fun < 1e-3, "minimum value = {fun}, expected near 0");
+        assert!((result.x[0] - 1.0).abs() < 0.1, "x[0] = {}, expected near 1", result.x[0]);
+        assert!((result.x[1] - 1.0).abs() < 0.1, "x[1] = {}, expected near 1", result.x[1]);
+    }
+
+    #[test]
+    fn minimize_scalar_bounded_matches_scipy_reference() {
+        // scipy.optimize.minimize_scalar(lambda x: (x-2)**2, bounds=(0, 4), method='bounded')
+        // finds minimum at x=2
+        let (xmin, fmin) = minimize_scalar_bounded(|x| (x - 2.0).powi(2), (0.0, 4.0), 1e-8, 500);
+        assert!((xmin - 2.0).abs() < 1e-6, "xmin = {xmin}, expected 2.0");
+        assert!(fmin.abs() < 1e-12, "fmin = {fmin}, expected 0.0");
     }
 }
