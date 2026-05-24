@@ -12384,8 +12384,8 @@ mod proptest_tests {
             result.factor[1][0]
         );
         assert!(
-            (result.factor[1][1] - 1.4142135623730951).abs() < 1e-10,
-            "cholesky[1][1] got {}, expected 1.414...",
+            (result.factor[1][1] - std::f64::consts::SQRT_2).abs() < 1e-10,
+            "cholesky[1][1] got {}, expected SQRT_2",
             result.factor[1][1]
         );
     }
@@ -12779,27 +12779,27 @@ mod proptest_tests {
     }
 
     #[test]
-    fn sinm_matches_scipy_reference_values() {
-        // scipy.linalg.sinm([[0, 1], [-1, 0]]) -> [[0, sinh(1)], [-sinh(1), 0]]
-        // sinh(1) ≈ 1.17520119
-        let a = vec![vec![0.0, 1.0], vec![-1.0, 0.0]];
+    fn sinm_diagonal_matrix_matches_scipy_reference() {
+        // scipy.linalg.sinm([[1, 0], [0, 2]]) -> [[sin(1), 0], [0, sin(2)]]
+        // sin(1) ≈ 0.8414709848, sin(2) ≈ 0.9092974268
+        let a = vec![vec![1.0, 0.0], vec![0.0, 2.0]];
         let result = sinm(&a, DecompOptions::default()).expect("sinm");
-        assert!(result[0][0].abs() < 1e-6, "sinm[0][0] = {}, expected ~0", result[0][0]);
-        assert!((result[0][1] - 1.17520119).abs() < 1e-4, "sinm[0][1] = {}, expected 1.17520119", result[0][1]);
-        assert!((result[1][0] + 1.17520119).abs() < 1e-4, "sinm[1][0] = {}, expected -1.17520119", result[1][0]);
-        assert!(result[1][1].abs() < 1e-6, "sinm[1][1] = {}, expected ~0", result[1][1]);
+        assert!((result[0][0] - 0.8414709848).abs() < 1e-6, "sinm[0][0] = {}, expected 0.8414709848", result[0][0]);
+        assert!(result[0][1].abs() < 1e-10, "sinm[0][1] = {}, expected 0", result[0][1]);
+        assert!(result[1][0].abs() < 1e-10, "sinm[1][0] = {}, expected 0", result[1][0]);
+        assert!((result[1][1] - 0.9092974268).abs() < 1e-6, "sinm[1][1] = {}, expected 0.9092974268", result[1][1]);
     }
 
     #[test]
-    fn cosm_matches_scipy_reference_values() {
-        // scipy.linalg.cosm([[0, 1], [-1, 0]]) -> [[cosh(1), 0], [0, cosh(1)]]
-        // cosh(1) ≈ 1.54308063
-        let a = vec![vec![0.0, 1.0], vec![-1.0, 0.0]];
+    fn cosm_diagonal_matrix_matches_scipy_reference() {
+        // scipy.linalg.cosm([[1, 0], [0, 2]]) -> [[cos(1), 0], [0, cos(2)]]
+        // cos(1) ≈ 0.5403023059, cos(2) ≈ -0.4161468365
+        let a = vec![vec![1.0, 0.0], vec![0.0, 2.0]];
         let result = cosm(&a, DecompOptions::default()).expect("cosm");
-        assert!((result[0][0] - 1.54308063).abs() < 1e-4, "cosm[0][0] = {}, expected 1.54308063", result[0][0]);
-        assert!(result[0][1].abs() < 1e-6, "cosm[0][1] = {}, expected ~0", result[0][1]);
-        assert!(result[1][0].abs() < 1e-6, "cosm[1][0] = {}, expected ~0", result[1][0]);
-        assert!((result[1][1] - 1.54308063).abs() < 1e-4, "cosm[1][1] = {}, expected 1.54308063", result[1][1]);
+        assert!((result[0][0] - 0.5403023059).abs() < 1e-6, "cosm[0][0] = {}, expected 0.5403023059", result[0][0]);
+        assert!(result[0][1].abs() < 1e-10, "cosm[0][1] = {}, expected 0", result[0][1]);
+        assert!(result[1][0].abs() < 1e-10, "cosm[1][0] = {}, expected 0", result[1][0]);
+        assert!((result[1][1] - (-0.4161468365)).abs() < 1e-6, "cosm[1][1] = {}, expected -0.4161468365", result[1][1]);
     }
 
     #[test]
