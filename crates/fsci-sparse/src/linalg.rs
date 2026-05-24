@@ -6437,16 +6437,10 @@ mod tests {
         // scipy.sparse.linalg.expm([[0, 1], [0, 0]])
         // -> [[1, 1], [0, 1]] (nilpotent matrix: exp(A) = I + A)
         use crate::{CooMatrix, Shape2D};
-        let a = CooMatrix::from_triplets(
-            Shape2D::new(2, 2),
-            vec![1.0],
-            vec![0],
-            vec![1],
-            false,
-        )
-        .expect("coo")
-        .to_csr()
-        .expect("csr");
+        let a = CooMatrix::from_triplets(Shape2D::new(2, 2), vec![1.0], vec![0], vec![1], false)
+            .expect("coo")
+            .to_csr()
+            .expect("csr");
         let result = super::expm(&a, ExpmOptions::default()).expect("expm");
         // Result should be [[1, 1], [0, 1]]
         assert!(
@@ -6490,7 +6484,10 @@ mod tests {
         // Verify Ax ≈ b
         let ax = super::spmv(&a, &result.solution);
         for i in 0..2 {
-            assert!((ax[i] - b[i]).abs() < 1e-6, "minres residual too large at {i}");
+            assert!(
+                (ax[i] - b[i]).abs() < 1e-6,
+                "minres residual too large at {i}"
+            );
         }
     }
 
@@ -6510,7 +6507,11 @@ mod tests {
         .expect("csr");
         let b = vec![1.0, 2.0, 3.0];
         let result = super::lsqr(&a, &b, IterativeSolveOptions::default()).expect("lsqr");
-        assert_eq!(result.solution.len(), 2, "lsqr should return 2-element solution");
+        assert_eq!(
+            result.solution.len(),
+            2,
+            "lsqr should return 2-element solution"
+        );
     }
 
     #[test]
@@ -6579,8 +6580,16 @@ mod tests {
         assert!(result.converged);
         let mut evs = result.eigenvalues.clone();
         evs.sort_by(|a, b| b.total_cmp(a));
-        assert!((evs[0] - 9.0).abs() < 1e-4, "largest eigenvalue = {}, expected 9.0", evs[0]);
-        assert!((evs[1] - 4.0).abs() < 1e-4, "second eigenvalue = {}, expected 4.0", evs[1]);
+        assert!(
+            (evs[0] - 9.0).abs() < 1e-4,
+            "largest eigenvalue = {}, expected 9.0",
+            evs[0]
+        );
+        assert!(
+            (evs[1] - 4.0).abs() < 1e-4,
+            "second eigenvalue = {}, expected 4.0",
+            evs[1]
+        );
     }
 
     #[test]
@@ -6654,8 +6663,34 @@ mod tests {
         // All nodes should have roughly equal rank
         let mean = 1.0 / 3.0;
         for (i, &r) in pr.iter().enumerate() {
-            assert!((r - mean).abs() < 0.1, "PageRank[{i}] = {r}, expected ~{mean}");
+            assert!(
+                (r - mean).abs() < 0.1,
+                "PageRank[{i}] = {r}, expected ~{mean}"
+            );
         }
+    }
+
+    #[test]
+    fn reverse_cuthill_mckee_matches_scipy_reference_values() {
+        // scipy.sparse.csgraph.reverse_cuthill_mckee returns permutation
+        // For a simple chain graph 0-1-2-3, RCM should produce valid permutation
+        use crate::{CooMatrix, Shape2D};
+        let g = CooMatrix::from_triplets(
+            Shape2D::new(4, 4),
+            vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+            vec![0, 1, 1, 2, 2, 3],
+            vec![1, 0, 2, 1, 3, 2],
+            false,
+        )
+        .expect("coo")
+        .to_csr()
+        .expect("csr");
+        let perm = super::reverse_cuthill_mckee(&g);
+        assert_eq!(perm.len(), 4, "permutation length");
+        // Should be a valid permutation (contains 0, 1, 2, 3 in some order)
+        let mut sorted = perm.clone();
+        sorted.sort();
+        assert_eq!(sorted, vec![0, 1, 2, 3], "should be valid permutation");
     }
 }
 

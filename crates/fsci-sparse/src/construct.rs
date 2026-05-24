@@ -1428,8 +1428,7 @@ mod tests {
     #[test]
     fn diags_matches_scipy_reference_values() {
         // scipy.sparse.diags([1,2,3], 0, shape=(3,3)).toarray()
-        let result =
-            diags(&[vec![1.0, 2.0, 3.0]], &[0], Some(Shape2D::new(3, 3))).expect("diags");
+        let result = diags(&[vec![1.0, 2.0, 3.0]], &[0], Some(Shape2D::new(3, 3))).expect("diags");
         let dense = dense_from_csr(&result);
         let expected = [[1.0, 0.0, 0.0], [0.0, 2.0, 0.0], [0.0, 0.0, 3.0]];
         for (i, row) in dense.iter().enumerate() {
@@ -1480,16 +1479,10 @@ mod tests {
     fn block_diag_matches_scipy_reference_values() {
         // scipy.sparse.block_diag([[[1]], [[2,3],[4,5]]]).toarray()
         // -> [[1, 0, 0], [0, 2, 3], [0, 4, 5]]
-        let a = CooMatrix::from_triplets(
-            Shape2D::new(1, 1),
-            vec![1.0],
-            vec![0],
-            vec![0],
-            false,
-        )
-        .expect("coo_a")
-        .to_csr()
-        .expect("csr_a");
+        let a = CooMatrix::from_triplets(Shape2D::new(1, 1), vec![1.0], vec![0], vec![0], false)
+            .expect("coo_a")
+            .to_csr()
+            .expect("csr_a");
         let b = CooMatrix::from_triplets(
             Shape2D::new(2, 2),
             vec![2.0, 3.0, 4.0, 5.0],
