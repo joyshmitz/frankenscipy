@@ -13721,8 +13721,7 @@ mod tests {
     fn vectorstrength_matches_scipy_reference() {
         // scipy.signal.vectorstrength([0.1,0.5,1.1,1.5,2.1,2.5], 1.0):
         // events cluster at two phases, mean vector angle ≈ 1.8853 rad.
-        let (strength, phase) =
-            vectorstrength(&[0.1, 0.5, 1.1, 1.5, 2.1, 2.5], 1.0);
+        let (strength, phase) = vectorstrength(&[0.1, 0.5, 1.1, 1.5, 2.1, 2.5], 1.0);
         assert!(
             (strength - 0.309_016_994_374_947_6).abs() < 1e-12,
             "strength = {strength}"
@@ -15255,7 +15254,11 @@ mod tests {
         check(
             "notch_b",
             &notch.b,
-            &[0.927_040_342_731_733_3, -1.311_033_025_558_219_7, 0.927_040_342_731_733_3],
+            &[
+                0.927_040_342_731_733_3,
+                -1.311_033_025_558_219_7,
+                0.927_040_342_731_733_3,
+            ],
         );
         check(
             "notch_a",
@@ -15276,7 +15279,11 @@ mod tests {
         check(
             "notch2_b",
             &notch2.b,
-            &[0.927_040_342_731_733_3, -1.763_335_517_647_015, 0.927_040_342_731_733_3],
+            &[
+                0.927_040_342_731_733_3,
+                -1.763_335_517_647_015,
+                0.927_040_342_731_733_3,
+            ],
         );
     }
 
@@ -15805,7 +15812,11 @@ mod tests {
         let t = [0.0, 0.05, 0.1, 0.2];
         for &(fc, bw, want) in &[
             (5.0_f64, 0.5_f64, [1.0, 0.0, -0.799_918_398, 0.409_432_905]),
-            (10.0, 0.3, [1.0, -0.922_776_332, 0.725_079_768, 0.276_403_253]),
+            (
+                10.0,
+                0.3,
+                [1.0, -0.922_776_332, 0.725_079_768, 0.276_403_253],
+            ),
             (1.0, 0.8, [1.0, 0.945_636_648, 0.790_732_379, 0.282_013_486]),
         ] {
             let y = gausspulse(&t, fc, bw);
@@ -17839,7 +17850,10 @@ mod tests {
         assert!((w[0] - w[4]).abs() < 1e-10, "kaiser should be symmetric");
         assert!((w[1] - w[3]).abs() < 1e-10, "kaiser should be symmetric");
         // Middle value should be largest
-        assert!(w[2] >= w[0] && w[2] >= w[1], "kaiser peak should be in middle");
+        assert!(
+            w[2] >= w[0] && w[2] >= w[1],
+            "kaiser peak should be in middle"
+        );
     }
 
     #[test]
@@ -18009,10 +18023,17 @@ mod tests {
         let v = vec![0.0, 1.0, 0.5];
         let result = correlate(&a, &v, ConvolveMode::Full).expect("correlate");
         // Just verify length and that it's the correlation (different from convolution)
-        assert_eq!(result.len(), 5, "correlate length should be len(a)+len(v)-1");
+        assert_eq!(
+            result.len(),
+            5,
+            "correlate length should be len(a)+len(v)-1"
+        );
         // Correlate at lag 0 (center): sum(a * v) = 1*0.5 + 2*1 + 3*0 = 2.5
         // But exact indices depend on implementation - just check it ran
-        assert!(result.iter().all(|&x| x.is_finite()), "all values should be finite");
+        assert!(
+            result.iter().all(|&x| x.is_finite()),
+            "all values should be finite"
+        );
     }
 
     #[test]
@@ -18057,8 +18078,16 @@ mod tests {
         let data = vec![1.0, 2.0, 3.0, 2.0, 1.0];
         let widths = vec![1.0, 2.0, 3.0];
         let result = cwt(&data, |m, a| ricker(m, a), &widths).expect("cwt");
-        assert_eq!(result.len(), widths.len(), "cwt row count should match widths");
-        assert_eq!(result[0].len(), data.len(), "cwt column count should match data");
+        assert_eq!(
+            result.len(),
+            widths.len(),
+            "cwt row count should match widths"
+        );
+        assert_eq!(
+            result[0].len(),
+            data.len(),
+            "cwt column count should match data"
+        );
     }
 
     #[test]
@@ -18077,7 +18106,8 @@ mod tests {
         let divisor = vec![1.0, 0.5];
         let (quotient, remainder) = deconvolve(&signal, &divisor).expect("deconvolve");
         // quotient * divisor + remainder should equal signal
-        let mut reconstructed = convolve(&quotient, &divisor, ConvolveMode::Full).expect("convolve");
+        let mut reconstructed =
+            convolve(&quotient, &divisor, ConvolveMode::Full).expect("convolve");
         for (i, r) in remainder.iter().enumerate() {
             if i < reconstructed.len() {
                 reconstructed[i] += r;
@@ -18085,7 +18115,10 @@ mod tests {
         }
         // First signal.len() elements should match
         for i in 0..signal.len() {
-            assert!((reconstructed[i] - signal[i]).abs() < 1e-10, "deconvolve reconstruction failed at {i}");
+            assert!(
+                (reconstructed[i] - signal[i]).abs() < 1e-10,
+                "deconvolve reconstruction failed at {i}"
+            );
         }
     }
 
@@ -18098,8 +18131,51 @@ mod tests {
         let expected = [1.0, 1.08578644, 2.0, 2.5, 3.0, 3.91421356, 4.0, 2.5];
         assert_eq!(result.len(), 8, "resample output length");
         for (i, (&got, &want)) in result.iter().zip(expected.iter()).enumerate() {
-            assert!((got - want).abs() < 1e-4, "resample[{i}] = {got}, expected {want}");
+            assert!(
+                (got - want).abs() < 1e-4,
+                "resample[{i}] = {got}, expected {want}"
+            );
         }
     }
 
+    #[test]
+    fn tukey_window_matches_scipy_reference() {
+        // scipy.signal.windows.tukey(5, 0.5)
+        // alpha=0 -> rectangular, alpha=1 -> hann
+        let result = tukey_window(5, 0.5);
+        assert_eq!(result.len(), 5);
+        assert!(
+            (result[2] - 1.0).abs() < 1e-10,
+            "tukey center should be 1.0"
+        );
+        assert!((result[0] - result[4]).abs() < 1e-10, "tukey symmetric");
+    }
+
+    #[test]
+    fn nuttall_window_matches_scipy_reference() {
+        // scipy.signal.windows.nuttall(5)
+        // -> [0.0, 0.22698, 1.0, 0.22698, 0.0] (approximate)
+        let result = nuttall_window(5);
+        assert_eq!(result.len(), 5);
+        assert!(
+            (result[2] - 1.0).abs() < 1e-10,
+            "nuttall center should be 1.0"
+        );
+        assert!((result[1] - result[3]).abs() < 1e-10, "nuttall symmetric");
+        assert!(result[0] < 0.001, "nuttall edges should be small");
+    }
+
+    #[test]
+    fn bohman_window_matches_scipy_reference() {
+        // scipy.signal.windows.bohman(5)
+        // -> [0.0, 0.31831, 1.0, 0.31831, 0.0] (approximate)
+        let result = bohman_window(5);
+        assert_eq!(result.len(), 5);
+        assert!(result[0].abs() < 1e-10, "bohman[0] should be 0");
+        assert!(
+            (result[2] - 1.0).abs() < 1e-10,
+            "bohman center should be 1.0"
+        );
+        assert!((result[1] - result[3]).abs() < 1e-10, "bohman symmetric");
+    }
 }
