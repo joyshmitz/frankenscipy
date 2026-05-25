@@ -2,9 +2,9 @@
 
 Generated: 2026-05-25
 
-## Overall Coverage: 67.3%
+## Overall Coverage: 68.0%
 
-857 of 1274 SciPy callable symbols have FrankenSciPy equivalents.
+866 of 1274 SciPy callable symbols have FrankenSciPy equivalents.
 
 ## Module-Level Coverage
 
@@ -21,7 +21,7 @@ Generated: 2026-05-25
 | optimize | 71 | 39 | 54.9% |
 | integrate | 33 | 18 | 54.5% |
 | io | 14 | 6 | 42.9% |
-| sparse | 53 | 14 | 26.4% |
+| sparse | 53 | 23 | 43.4% |
 
 ## Out-of-Scope Items
 
