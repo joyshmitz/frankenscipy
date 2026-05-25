@@ -126,6 +126,90 @@ pub use ops::{
     spmv_csc, spmv_csr, sub_coo, sub_csc, sub_csr, tril, triu,
 };
 
+pub trait SparseMatrix {
+    fn format(&self) -> SparseFormat;
+    fn shape(&self) -> Shape2D;
+    fn nnz(&self) -> usize;
+}
+
+impl SparseMatrix for CsrMatrix {
+    fn format(&self) -> SparseFormat { SparseFormat::Csr }
+    fn shape(&self) -> Shape2D { self.shape() }
+    fn nnz(&self) -> usize { self.nnz() }
+}
+
+impl SparseMatrix for CscMatrix {
+    fn format(&self) -> SparseFormat { SparseFormat::Csc }
+    fn shape(&self) -> Shape2D { self.shape() }
+    fn nnz(&self) -> usize { self.nnz() }
+}
+
+impl SparseMatrix for CooMatrix {
+    fn format(&self) -> SparseFormat { SparseFormat::Coo }
+    fn shape(&self) -> Shape2D { self.shape() }
+    fn nnz(&self) -> usize { self.nnz() }
+}
+
+impl SparseMatrix for BsrMatrix {
+    fn format(&self) -> SparseFormat { SparseFormat::Bsr }
+    fn shape(&self) -> Shape2D { self.shape() }
+    fn nnz(&self) -> usize { self.nnz() }
+}
+
+impl SparseMatrix for DiaMatrix {
+    fn format(&self) -> SparseFormat { SparseFormat::Dia }
+    fn shape(&self) -> Shape2D { self.shape() }
+    fn nnz(&self) -> usize { self.nnz() }
+}
+
+impl SparseMatrix for DokMatrix {
+    fn format(&self) -> SparseFormat { SparseFormat::Dok }
+    fn shape(&self) -> Shape2D { self.shape() }
+    fn nnz(&self) -> usize { self.nnz() }
+}
+
+impl SparseMatrix for LilMatrix {
+    fn format(&self) -> SparseFormat { SparseFormat::Lil }
+    fn shape(&self) -> Shape2D { self.shape() }
+    fn nnz(&self) -> usize { self.nnz() }
+}
+
+pub fn issparse<T: SparseMatrix>(_matrix: &T) -> bool {
+    true
+}
+
+pub fn isspmatrix<T: SparseMatrix>(_matrix: &T) -> bool {
+    true
+}
+
+pub fn isspmatrix_csr<T: SparseMatrix>(matrix: &T) -> bool {
+    matches!(matrix.format(), SparseFormat::Csr)
+}
+
+pub fn isspmatrix_csc<T: SparseMatrix>(matrix: &T) -> bool {
+    matches!(matrix.format(), SparseFormat::Csc)
+}
+
+pub fn isspmatrix_coo<T: SparseMatrix>(matrix: &T) -> bool {
+    matches!(matrix.format(), SparseFormat::Coo)
+}
+
+pub fn isspmatrix_bsr<T: SparseMatrix>(matrix: &T) -> bool {
+    matches!(matrix.format(), SparseFormat::Bsr)
+}
+
+pub fn isspmatrix_dia<T: SparseMatrix>(matrix: &T) -> bool {
+    matches!(matrix.format(), SparseFormat::Dia)
+}
+
+pub fn isspmatrix_dok<T: SparseMatrix>(matrix: &T) -> bool {
+    matches!(matrix.format(), SparseFormat::Dok)
+}
+
+pub fn isspmatrix_lil<T: SparseMatrix>(matrix: &T) -> bool {
+    matches!(matrix.format(), SparseFormat::Lil)
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -137,6 +221,36 @@ mod tests {
     use super::*;
 
     const PROPTEST_CASES: u32 = 512;
+
+    #[test]
+    fn issparse_and_isspmatrix_type_checks_work() {
+        let csr = CsrMatrix::from_components(
+            Shape2D::new(2, 2),
+            vec![1.0, 2.0],
+            vec![0, 1],
+            vec![0, 1, 2],
+            false,
+        ).unwrap();
+
+        assert!(issparse(&csr));
+        assert!(isspmatrix(&csr));
+        assert!(isspmatrix_csr(&csr));
+        assert!(!isspmatrix_csc(&csr));
+        assert!(!isspmatrix_coo(&csr));
+
+        let coo = CooMatrix::from_triplets(
+            Shape2D::new(2, 2),
+            vec![1.0, 2.0],
+            vec![0, 1],
+            vec![0, 1],
+            false,
+        ).unwrap();
+
+        assert!(issparse(&coo));
+        assert!(isspmatrix(&coo));
+        assert!(isspmatrix_coo(&coo));
+        assert!(!isspmatrix_csr(&coo));
+    }
     const LOG_SEED: u64 = 0xF5C1_004E;
     const EPS: f64 = 1e-12;
 
