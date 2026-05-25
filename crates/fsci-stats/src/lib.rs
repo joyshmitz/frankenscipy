@@ -60417,6 +60417,33 @@ mod tests {
     }
 
     #[test]
+    fn maxwell_pdf_cdf_matches_scipy_reference_values() {
+        // scipy.stats.maxwell(loc=0, scale=1).pdf(1) = 0.483941449038287
+        // scipy.stats.maxwell(loc=0, scale=1).cdf(1) = 0.198748043098799
+        let dist = Maxwell::new(1.0);
+        assert_close(dist.pdf(1.0), 0.483941449038287, 1e-12, "maxwell.pdf(1)");
+        assert_close(dist.cdf(1.0), 0.198748043098799, 1e-12, "maxwell.cdf(1)");
+    }
+
+    #[test]
+    fn levy_pdf_cdf_matches_scipy_reference_values() {
+        // scipy.stats.levy(loc=0, scale=1).pdf(1) = 0.241970724519143
+        // scipy.stats.levy(loc=0, scale=1).cdf(1) = 0.317310507862914
+        let dist = Levy::new(0.0, 1.0);
+        assert_close(dist.pdf(1.0), 0.241970724519143, 1e-12, "levy.pdf(1)");
+        assert_close(dist.cdf(1.0), 0.317310507862914, 1e-10, "levy.cdf(1)");
+    }
+
+    #[test]
+    fn nakagami_pdf_cdf_matches_scipy_reference_values() {
+        // scipy.stats.nakagami(nu=1, loc=0, scale=1).pdf(0.5) = 0.778800783071405
+        // scipy.stats.nakagami(nu=1, loc=0, scale=1).cdf(0.5) = 0.221199216928595
+        let dist = Nakagami::new(1.0);
+        assert_close(dist.pdf(0.5), 0.778800783071405, 1e-10, "nakagami.pdf(0.5)");
+        assert_close(dist.cdf(0.5), 0.221199216928595, 1e-10, "nakagami.cdf(0.5)");
+    }
+
+    #[test]
     fn arcsine_cdf_matches_scipy_reference_values() {
         // scipy: from scipy.stats import arcsine
         // arcsine.cdf([0, 0.1, 0.25, 0.5, 0.75, 0.9, 1])
