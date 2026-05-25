@@ -659,6 +659,7 @@ dependencies = [
  "fsci-special",
  "fsci-stats",
  "ftui",
+ "proptest",
  "serde",
  "serde_json",
  "tempfile",
