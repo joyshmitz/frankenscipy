@@ -11324,6 +11324,68 @@ mod proptest_tests {
         }
     }
 
+    #[test]
+    fn solve_sylvester_matches_scipy_reference() {
+        // scipy.linalg.solve_sylvester(A, B, Q) where AX + XB = Q
+        // A = [[1, 2], [0, 3]], B = [[4, 1], [0, 5]], Q = [[5, 3], [0, 8]]
+        // scipy returns X = [[1, 0], [0, 1]]
+        let a = vec![vec![1.0, 2.0], vec![0.0, 3.0]];
+        let b = vec![vec![4.0, 1.0], vec![0.0, 5.0]];
+        let q = vec![vec![5.0, 3.0], vec![0.0, 8.0]];
+        let x = solve_sylvester(&a, &b, &q, DecompOptions::default()).expect("sylvester");
+        assert!(
+            (x[0][0] - 1.0).abs() < 1e-10,
+            "X[0,0]={} vs scipy 1.0",
+            x[0][0]
+        );
+        assert!(
+            (x[0][1] - 0.0).abs() < 1e-10,
+            "X[0,1]={} vs scipy 0.0",
+            x[0][1]
+        );
+        assert!(
+            (x[1][0] - 0.0).abs() < 1e-10,
+            "X[1,0]={} vs scipy 0.0",
+            x[1][0]
+        );
+        assert!(
+            (x[1][1] - 1.0).abs() < 1e-10,
+            "X[1,1]={} vs scipy 1.0",
+            x[1][1]
+        );
+    }
+
+    #[test]
+    fn solve_continuous_lyapunov_matches_scipy_reference() {
+        // scipy.linalg.solve_continuous_lyapunov(A, Q) where AX + XA^H = Q
+        // A = [[1, 2], [3, 4]], Q = [[5, 6], [6, 7]]
+        // scipy returns X = [[-0.1, 1.3], [1.3, -0.1]]
+        let a = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        let q = vec![vec![5.0, 6.0], vec![6.0, 7.0]];
+        let x =
+            solve_continuous_lyapunov(&a, &q, DecompOptions::default()).expect("lyapunov scipy");
+        assert!(
+            (x[0][0] - (-0.1)).abs() < 1e-10,
+            "X[0,0]={} vs scipy -0.1",
+            x[0][0]
+        );
+        assert!(
+            (x[0][1] - 1.3).abs() < 1e-10,
+            "X[0,1]={} vs scipy 1.3",
+            x[0][1]
+        );
+        assert!(
+            (x[1][0] - 1.3).abs() < 1e-10,
+            "X[1,0]={} vs scipy 1.3",
+            x[1][0]
+        );
+        assert!(
+            (x[1][1] - (-0.1)).abs() < 1e-10,
+            "X[1,1]={} vs scipy -0.1",
+            x[1][1]
+        );
+    }
+
     // ── Discrete Lyapunov tests ──────────────────────────────────────
 
     #[test]
