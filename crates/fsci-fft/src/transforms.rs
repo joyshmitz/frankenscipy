@@ -140,6 +140,55 @@ fn get_or_compute_twiddles(n: usize, inverse: bool) -> TwiddleTable {
     table
 }
 
+type BluesteinKey = (usize, bool);
+#[derive(Clone)]
+struct BluesteinPlan {
+    chirp: Vec<Complex64>,
+    b_fft: Vec<Complex64>,
+    m: usize,
+}
+static BLUESTEIN_CACHE: OnceLock<RwLock<HashMap<BluesteinKey, BluesteinPlan>>> = OnceLock::new();
+
+fn get_bluestein_cache() -> &'static RwLock<HashMap<BluesteinKey, BluesteinPlan>> {
+    BLUESTEIN_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+fn get_or_compute_bluestein_plan(n: usize, inverse: bool) -> BluesteinPlan {
+    let cache = get_bluestein_cache();
+    let key = (n, inverse);
+
+    if let Ok(guard) = cache.read() {
+        if let Some(plan) = guard.get(&key) {
+            return plan.clone();
+        }
+    }
+
+    let m = (2 * n - 1).next_power_of_two();
+    let sign = if inverse { 1.0 } else { -1.0 };
+
+    let mut chirp = Vec::with_capacity(n);
+    for k in 0..n {
+        let angle = sign * PI * (k as f64).powi(2) / (n as f64);
+        chirp.push((angle.cos(), angle.sin()));
+    }
+
+    let mut b = vec![(0.0, 0.0); m];
+    b[0] = complex_conj(chirp[0]);
+    for k in 1..n {
+        b[k] = complex_conj(chirp[k]);
+        b[m - k] = complex_conj(chirp[k]);
+    }
+    cooley_tukey_radix2_inplace(&mut b, false);
+
+    let plan = BluesteinPlan { chirp, b_fft: b, m };
+
+    if let Ok(mut guard) = cache.write() {
+        guard.insert(key, plan.clone());
+    }
+
+    plan
+}
+
 /// Radix-2 Cooley-Tukey FFT for power-of-2 lengths.
 /// Iterative (bottom-up) implementation with cached twiddle factors.
 fn cooley_tukey_radix2_inplace(data: &mut [Complex64], inverse: bool) {
@@ -182,48 +231,28 @@ fn cooley_tukey_radix2_inplace(data: &mut [Complex64], inverse: bool) {
 /// Bluestein's algorithm for arbitrary-length FFT.
 /// Converts an n-point DFT into a circular convolution of length m (power of 2 >= 2n-1),
 /// then uses radix-2 FFT on the padded data.
+/// Uses cached chirp and pre-FFT'd b sequence for repeated transforms of the same size.
 fn bluestein_fft(input: &[Complex64], inverse: bool) -> Vec<Complex64> {
     let n = input.len();
-    // Find smallest power of 2 >= 2n - 1
-    let m = (2 * n - 1).next_power_of_two();
+    let plan = get_or_compute_bluestein_plan(n, inverse);
+    let m = plan.m;
 
-    let sign = if inverse { 1.0 } else { -1.0 };
-
-    // Chirp sequence: w[k] = exp(sign * i * π * k² / n)
-    let mut chirp = Vec::with_capacity(n);
-    for k in 0..n {
-        let angle = sign * PI * (k as f64).powi(2) / (n as f64);
-        chirp.push((angle.cos(), angle.sin()));
-    }
-
-    // Sequence a: input[k] * chirp[k], zero-padded to length m
     let mut a = vec![(0.0, 0.0); m];
     for k in 0..n {
-        a[k] = complex_mul(input[k], chirp[k]);
+        a[k] = complex_mul(input[k], plan.chirp[k]);
     }
 
-    // Sequence b: conj(chirp[k]) for k=0..n-1, wrapped for circular convolution
-    let mut b = vec![(0.0, 0.0); m];
-    b[0] = complex_conj(chirp[0]);
-    for k in 1..n {
-        b[k] = complex_conj(chirp[k]);
-        b[m - k] = complex_conj(chirp[k]);
-    }
-
-    // Convolution via FFT: C = IFFT(FFT(a) * FFT(b))
     cooley_tukey_radix2_inplace(&mut a, false);
-    cooley_tukey_radix2_inplace(&mut b, false);
     for i in 0..m {
-        a[i] = complex_mul(a[i], b[i]);
+        a[i] = complex_mul(a[i], plan.b_fft[i]);
     }
     cooley_tukey_radix2_inplace(&mut a, true);
 
-    // Extract result: output[k] = chirp[k] * a[k] / m
     let inv_m = 1.0 / m as f64;
     let mut output = Vec::with_capacity(n);
     for k in 0..n {
         let val = complex_scale(a[k], inv_m);
-        output.push(complex_mul(chirp[k], val));
+        output.push(complex_mul(plan.chirp[k], val));
     }
 
     output
