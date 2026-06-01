@@ -1,0 +1,3 @@
+lu_factor  median_per_call_ms=84.277
+lu_solve   median_per_call_ms=102.348
+solve      median_per_call_ms=100.755
