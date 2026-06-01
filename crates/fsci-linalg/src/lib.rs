@@ -950,7 +950,6 @@ fn fast_rcond_from_lu(lu: &LU<f64, Dyn, Dyn>, a_norm: f64, n: usize) -> f64 {
     let mut inv_a_norm = 0.0;
 
     for _ in 0..5 {
-        let x_old = x.clone();
         // 1. Solve Aᵀ w = sign(x)
         let sign_x = x.map(|val| if val >= 0.0 { 1.0 } else { -1.0 });
         let w = match solve_lu_transpose(lu, &sign_x) {
@@ -966,6 +965,11 @@ fn fast_rcond_from_lu(lu: &LU<f64, Dyn, Dyn>, a_norm: f64, n: usize) -> f64 {
         };
 
         let new_norm = x_new.lp_norm(1);
+        let direction_delta = x_new
+            .iter()
+            .zip(x.iter())
+            .map(|(&new, &old)| (new - old).abs())
+            .sum::<f64>();
         if (new_norm - inv_a_norm).abs() <= 1e-10 * new_norm {
             inv_a_norm = new_norm;
             break;
@@ -974,7 +978,7 @@ fn fast_rcond_from_lu(lu: &LU<f64, Dyn, Dyn>, a_norm: f64, n: usize) -> f64 {
         x = x_new;
 
         // Check if we are oscillating or converged in direction
-        if (x.clone() - x_old).lp_norm(1) <= f64::EPSILON * x.lp_norm(1) {
+        if direction_delta <= f64::EPSILON * new_norm {
             break;
         }
     }
