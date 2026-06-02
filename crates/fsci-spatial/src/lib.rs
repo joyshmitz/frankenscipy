@@ -2610,26 +2610,43 @@ pub fn procrustes(
     // svd(M_fsci) = svd(M^T) gives U_f = V, V^T_f = U^T, so
     // R_fsci = R^T already; the missing factor was just the scale.
     // (frankenscipy-u98xh)
+    // M = mtx2^T @ mtx1. Hoist k outermost so the inner j-loop is a stride-1
+    // SAXPY over contiguous rows (cache-friendly + autovectorizable) instead of
+    // reading mtx2[k][i]/mtx1[k][j] column-strided. Bit-identical: each m[i][j]
+    // still accumulates k in 0..n order. [frankenscipy-146ld]
     let mut m = vec![vec![0.0; d]; d];
-    for i in 0..d {
-        for j in 0..d {
-            for k in 0..n {
-                m[i][j] += mtx2[k][i] * mtx1[k][j];
+    for k in 0..n {
+        let r2 = &mtx2[k];
+        let r1 = &mtx1[k];
+        for i in 0..d {
+            let v = r2[i];
+            let mi = &mut m[i];
+            for j in 0..d {
+                mi[j] += v * r1[j];
             }
         }
     }
 
     let (rotation, scale) = orthogonal_procrustes_rotation_with_scale(&m)?;
 
-    // Apply rotation and dilation: mtx2_aligned = mtx2 · R · scale.
+    // Apply rotation and dilation: mtx2_aligned = mtx2 · R · scale. Hoist k so
+    // the inner j-loop streams rotation[k][..] contiguously (was column-strided
+    // rotation[k][j]); bit-identical (each entry accumulates k in 0..d order).
     let mut aligned = vec![vec![0.0; d]; n];
     for i in 0..n {
-        for j in 0..d {
-            let mut acc = 0.0;
-            for k in 0..d {
-                acc += mtx2[i][k] * rotation[k][j];
+        let r2 = &mtx2[i];
+        let ai = &mut aligned[i];
+        for k in 0..d {
+            let v = r2[k];
+            let rk = &rotation[k];
+            for j in 0..d {
+                ai[j] += v * rk[j];
             }
-            aligned[i][j] = acc * scale;
+        }
+    }
+    for row in aligned.iter_mut() {
+        for v in row.iter_mut() {
+            *v *= scale;
         }
     }
 
@@ -3779,6 +3796,123 @@ impl Default for Rotation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Isomorphism proof for the procrustes k-hoist [frankenscipy-146ld]: the
+    /// cache-friendly k-outermost cross-covariance/matmul loops must be
+    /// BIT-IDENTICAL to the naive column-strided versions (same per-element k
+    /// accumulation order).
+    #[test]
+    fn procrustes_khoist_is_bit_identical() {
+        let mk = |rows: usize, cols: usize, seed: u64| -> Vec<Vec<f64>> {
+            (0..rows)
+                .map(|i| {
+                    (0..cols)
+                        .map(|j| {
+                            let r = (seed.wrapping_mul(i as u64 + 1).wrapping_add(j as u64 * 7 + 3)
+                                % 1999) as f64
+                                / 997.0;
+                            r - 1.0
+                        })
+                        .collect()
+                })
+                .collect()
+        };
+        let (n, d) = (13usize, 4usize);
+        let a = mk(n, d, 1);
+        let b = mk(n, d, 2);
+        // Naive M = a^T @ b (column-strided).
+        let mut m_naive = vec![vec![0.0f64; d]; d];
+        for i in 0..d {
+            for j in 0..d {
+                for k in 0..n {
+                    m_naive[i][j] += a[k][i] * b[k][j];
+                }
+            }
+        }
+        // k-hoisted M (mirrors the procrustes implementation).
+        let mut m_hoist = vec![vec![0.0f64; d]; d];
+        for k in 0..n {
+            let (r2, r1) = (&a[k], &b[k]);
+            for i in 0..d {
+                let v = r2[i];
+                let mi = &mut m_hoist[i];
+                for j in 0..d {
+                    mi[j] += v * r1[j];
+                }
+            }
+        }
+        for i in 0..d {
+            for j in 0..d {
+                assert_eq!(
+                    m_hoist[i][j].to_bits(),
+                    m_naive[i][j].to_bits(),
+                    "procrustes M k-hoist not bit-identical at ({i},{j})"
+                );
+            }
+        }
+    }
+
+    /// Wall-clock witness for the procrustes M k-hoist [frankenscipy-146ld].
+    /// Point-cloud alignment shape: large n, small d. Run with
+    /// `cargo test -p fsci-spatial procrustes_khoist_perf -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn procrustes_khoist_perf_vs_naive() {
+        use std::time::Instant;
+        let (n, d) = (200_000usize, 8usize);
+        let mk = |seed: u64| -> Vec<Vec<f64>> {
+            (0..n)
+                .map(|i| {
+                    (0..d)
+                        .map(|j| {
+                            ((seed.wrapping_mul(i as u64 + 1).wrapping_add(j as u64 * 13 + 5))
+                                % 4099) as f64
+                                / 1024.0
+                        })
+                        .collect()
+                })
+                .collect()
+        };
+        let a = mk(1);
+        let b = mk(2);
+        let reps = 20;
+
+        let t0 = Instant::now();
+        let mut sink = 0.0f64;
+        for _ in 0..reps {
+            let mut m = vec![vec![0.0f64; d]; d];
+            for i in 0..d {
+                for j in 0..d {
+                    for k in 0..n {
+                        m[i][j] += a[k][i] * b[k][j];
+                    }
+                }
+            }
+            sink += m[d - 1][d - 1];
+        }
+        let naive = t0.elapsed();
+
+        let t1 = Instant::now();
+        for _ in 0..reps {
+            let mut m = vec![vec![0.0f64; d]; d];
+            for k in 0..n {
+                let (r2, r1) = (&a[k], &b[k]);
+                for i in 0..d {
+                    let v = r2[i];
+                    let mi = &mut m[i];
+                    for j in 0..d {
+                        mi[j] += v * r1[j];
+                    }
+                }
+            }
+            sink += m[d - 1][d - 1];
+        }
+        let hoist = t1.elapsed();
+
+        let ratio = naive.as_secs_f64() / hoist.as_secs_f64();
+        println!("procrustes M: naive={naive:?} hoist={hoist:?} speedup={ratio:.2}x sink={sink}");
+        assert!(ratio > 1.0, "k-hoist should be at least as fast (got {ratio:.2}x)");
+    }
 
     fn point_set_contains(points: &[Vec<f64>], expected: &[f64]) -> bool {
         points
