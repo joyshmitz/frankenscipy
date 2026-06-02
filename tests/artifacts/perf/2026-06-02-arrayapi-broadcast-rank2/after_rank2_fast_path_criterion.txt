@@ -1,0 +1,21 @@
+frankenscipy-hip0w
+One lever: add a rank-2 fast path in CoreArrayBackend::broadcast_to for already-shaped, scalar-2d, row-vector, and column-vector broadcasts.
+
+After command:
+RCH_FORCE_REMOTE=1 CARGO_TARGET_DIR=/data/tmp/cargo-target-frankenscipy-olivesnow-arrayapi RUSTFLAGS='-C force-frame-pointers=yes' rch exec -- cargo bench -p fsci-arrayapi --bench arrayapi_bench -- arrayapi_broadcast/promote_and_broadcast/10000 --warm-up-time 1 --measurement-time 2 --sample-size 10
+
+After worker:
+vmi1156319
+
+After:
+arrayapi_broadcast/promote_and_broadcast/10000: [740.18 us 752.40 us 765.78 us]
+
+Delta:
+mean 925.90 us -> 752.40 us
+absolute delta -173.50 us
+relative delta -18.7%
+
+Score:
+Impact 2.0 x Confidence 3.0 / Effort 1.0 = 6.0
+Keep threshold: >= 2.0
+Decision: keep

@@ -1,0 +1,26 @@
+frankenscipy-hip0w
+[perf] fsci-arrayapi rank-2 singleton broadcast uses generic coordinate loop
+
+Fresh profile command:
+RCH_FORCE_REMOTE=1 CARGO_TARGET_DIR=/data/tmp/cargo-target-frankenscipy-olivesnow-arrayapi RUSTFLAGS='-C force-frame-pointers=yes' rch exec -- cargo bench -p fsci-arrayapi --bench arrayapi_bench -- --warm-up-time 1 --measurement-time 2 --sample-size 10
+
+Profile worker:
+vmi1149989
+
+Top rows:
+arrayapi_broadcast/promote_and_broadcast/10000: [214.25 us 232.06 us 249.45 us]
+arrayapi_dtype_cast/astype_float32_to_complex128/10000: [70.973 us 71.549 us 72.324 us]
+arrayapi_indexing/getitem_basic/10000: [35.514 us 37.277 us 39.473 us]
+arrayapi_creation/full_Complex128/10000: [4.9814 us 5.4790 us 5.8987 us]
+
+Target selection:
+The dominant arrayapi row is promote_and_broadcast at size 10000. The benchmark broadcasts rank-2 operands with singleton axes, which enters CoreArrayBackend::broadcast_to and pays the generic per-output coordinate-vector path.
+
+Focused baseline command:
+RCH_FORCE_REMOTE=1 CARGO_TARGET_DIR=/data/tmp/cargo-target-frankenscipy-olivesnow-arrayapi RUSTFLAGS='-C force-frame-pointers=yes' rch exec -- cargo bench -p fsci-arrayapi --bench arrayapi_bench -- arrayapi_broadcast/promote_and_broadcast/10000 --warm-up-time 1 --measurement-time 2 --sample-size 10
+
+Focused baseline worker:
+vmi1156319
+
+Focused baseline:
+arrayapi_broadcast/promote_and_broadcast/10000: [908.55 us 925.90 us 943.12 us]

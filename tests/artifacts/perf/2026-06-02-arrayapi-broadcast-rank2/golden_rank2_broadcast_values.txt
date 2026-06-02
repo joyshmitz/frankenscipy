@@ -1,0 +1,18 @@
+rank2 column vector [3,1] -> [3,2]
+input: [F64(1.0), F64(2.0), F64(3.0)]
+output: [F64(1.0), F64(1.0), F64(2.0), F64(2.0), F64(3.0), F64(3.0)]
+
+rank2 row vector [1,2] -> [3,2]
+input: [F64(10.0), F64(20.0)]
+output: [F64(10.0), F64(20.0), F64(10.0), F64(20.0), F64(10.0), F64(20.0)]
+
+rank2 scalar [1,1] -> [2,3]
+input: [F64(7.0)]
+output: [F64(7.0), F64(7.0), F64(7.0), F64(7.0), F64(7.0), F64(7.0)]
+
+isomorphism proof:
+- Shape validation and broadcast compatibility checks are unchanged for all non-rank-2 or non-singleton-axis cases because the helper returns None and the generic path runs.
+- For matching [rows, cols], the output values are a clone of the existing row-major values, matching the generic path.
+- For [1,1], [1,cols], and [rows,1], the output order is the same row-major order produced by the generic coordinate walk.
+- dtype, shape, and MemoryOrder metadata are copied exactly as before.
+- ScalarValue values are copied; no floating-point arithmetic, rounding, tolerance, tie-breaking, sorting, hashing, or RNG behavior is introduced.
