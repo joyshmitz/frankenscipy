@@ -3865,12 +3865,19 @@ pub fn eig_banded(
         None
     } else {
         let tri_evecs = tri_evecs.unwrap();
-        // Multiply Q * tri_evecs
+        // Multiply Q * tri_evecs. Hoist k to the middle (ikj) so the inner
+        // j-loop streams tri_evecs[k][..] contiguously instead of reading
+        // tri_evecs[k][j] column-strided. Bit-identical: each
+        // result_evecs[i][j] still accumulates k in 0..n order. [perf]
         let mut result_evecs = vec![vec![0.0; n]; n];
         for i in 0..n {
-            for j in 0..n {
-                for k in 0..n {
-                    result_evecs[i][j] += q_accum[i][k] * tri_evecs[k][j];
+            let qi = &q_accum[i];
+            let ri = &mut result_evecs[i];
+            for k in 0..n {
+                let qik = qi[k];
+                let tk = &tri_evecs[k];
+                for j in 0..n {
+                    ri[j] += qik * tk[j];
                 }
             }
         }
@@ -7614,6 +7621,62 @@ mod tests {
                         "matmul ikj not bit-identical at ({i},{j}), m={m} ka={ka} n={n}"
                     );
                 }
+            }
+        }
+    }
+
+    /// Isomorphism proof for the eig_banded Q*tri_evecs ikj reorder [perf]:
+    /// the cache-friendly ikj order must be BIT-IDENTICAL to the naive ijk
+    /// triple loop used for the eigenvector back-transform.
+    #[test]
+    fn eig_banded_qmul_ikj_is_bit_identical() {
+        let mk = |seed: u64| -> Vec<Vec<f64>> {
+            let n = 23usize;
+            (0..n)
+                .map(|i| {
+                    (0..n)
+                        .map(|j| {
+                            ((seed.wrapping_mul(i as u64 + 3).wrapping_add(j as u64 * 11 + 2))
+                                % 1997) as f64
+                                / 983.0
+                                - 1.0
+                        })
+                        .collect()
+                })
+                .collect()
+        };
+        let q = mk(7);
+        let tri = mk(9);
+        let n = q.len();
+        // Reference: naive ijk.
+        let mut expected = vec![vec![0.0f64; n]; n];
+        for i in 0..n {
+            for j in 0..n {
+                for k in 0..n {
+                    expected[i][j] += q[i][k] * tri[k][j];
+                }
+            }
+        }
+        // ikj (mirrors eig_banded's back-transform).
+        let mut got = vec![vec![0.0f64; n]; n];
+        for i in 0..n {
+            let qi = &q[i];
+            let ri = &mut got[i];
+            for k in 0..n {
+                let qik = qi[k];
+                let tk = &tri[k];
+                for j in 0..n {
+                    ri[j] += qik * tk[j];
+                }
+            }
+        }
+        for i in 0..n {
+            for j in 0..n {
+                assert_eq!(
+                    got[i][j].to_bits(),
+                    expected[i][j].to_bits(),
+                    "eig_banded Q-mul ikj not bit-identical at ({i},{j})"
+                );
             }
         }
     }
