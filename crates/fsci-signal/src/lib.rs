@@ -271,9 +271,11 @@ pub fn savgol_coeffs(
 
 /// Apply a Savitzky-Golay filter to a signal.
 ///
-/// Matches `scipy.signal.savgol_filter(x, window_length, polyorder)`.
-///
-/// Uses 'nearest' mode for boundary handling (repeats edge values).
+/// Matches `scipy.signal.savgol_filter(x, window_length, polyorder)` with the
+/// default `mode='interp'`: interior samples are filtered with the centered
+/// Savitzky-Golay coefficients, and the first/last `window_length / 2` samples
+/// are replaced by evaluating a degree-`polyorder` polynomial fit to the first
+/// (respectively last) `window_length` samples — exactly as SciPy does.
 pub fn savgol_filter(
     x: &[f64],
     window_length: usize,
@@ -294,19 +296,65 @@ pub fn savgol_filter(
     let half = window_length / 2;
     let n = x.len();
 
-    let mut result = Vec::with_capacity(n);
-    for i in 0..n {
+    // Interior: centered correlation with the SG coefficients. Out-of-range
+    // taps contribute nothing here because the boundary regions are overwritten
+    // by the polynomial edge fit below (matching SciPy's `mode='interp'`).
+    let mut result = vec![0.0; n];
+    for (i, slot) in result.iter_mut().enumerate() {
         let mut val = 0.0;
         for (j, &c) in coeffs.iter().enumerate() {
             let idx = i as i64 + j as i64 - half as i64;
-            // Nearest-mode boundary: clamp to [0, n-1]
-            let clamped = idx.clamp(0, n as i64 - 1) as usize;
-            val += c * x[clamped];
+            if idx >= 0 && idx < n as i64 {
+                val += c * x[idx as usize];
+            }
         }
-        result.push(val);
+        *slot = val;
+    }
+
+    // Edge handling: replace the first and last `half` samples with values from
+    // a degree-`polyorder` least-squares polynomial fit over the boundary
+    // window, evaluated at the sample positions (SciPy's `_fit_edges_polyfit`).
+    if half > 0 {
+        let positions: Vec<f64> = (0..window_length).map(|k| k as f64).collect();
+
+        let left = polyfit(&positions, &x[0..window_length], polyorder)?;
+        for (i, slot) in result.iter_mut().take(half).enumerate() {
+            *slot = poly_eval(&left, i as f64);
+        }
+
+        let right = polyfit(&positions, &x[n - window_length..n], polyorder)?;
+        for i in (window_length - half)..window_length {
+            result[n - window_length + i] = poly_eval(&right, i as f64);
+        }
     }
 
     Ok(result)
+}
+
+/// Least-squares polynomial fit of `degree` to `(xs, ys)` via the normal
+/// equations, returning coefficients in ascending power order.
+fn polyfit(xs: &[f64], ys: &[f64], degree: usize) -> Result<Vec<f64>, SignalError> {
+    let m = degree + 1;
+    let mut ata = vec![vec![0.0; m]; m];
+    let mut atb = vec![0.0; m];
+    for (&xv, &yv) in xs.iter().zip(ys.iter()) {
+        let mut powers = vec![1.0; m];
+        for k in 1..m {
+            powers[k] = powers[k - 1] * xv;
+        }
+        for r in 0..m {
+            for c in 0..m {
+                ata[r][c] += powers[r] * powers[c];
+            }
+            atb[r] += powers[r] * yv;
+        }
+    }
+    solve_symmetric_positive(&ata, &atb)
+}
+
+/// Evaluate a polynomial (ascending power order) at `x` via Horner's method.
+fn poly_eval(coeffs: &[f64], x: f64) -> f64 {
+    coeffs.iter().rev().fold(0.0, |acc, &c| acc * x + c)
 }
 
 /// Solve a small SPD system via Gaussian elimination with partial pivoting.
@@ -10240,6 +10288,35 @@ mod tests {
     }
 
     #[test]
+    fn savgol_filter_interp_edges_match_scipy() {
+        // scipy.signal.savgol_filter([1,2,3,4,5], 3, 1) -> [1,2,3,4,5] exactly
+        // (default mode='interp'). The old 'nearest' clamping distorted the
+        // edges to ~1.333 and ~4.667.
+        let x = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let filtered = savgol_filter(&x, 3, 1).expect("filter");
+        for (i, (&got, &want)) in filtered.iter().zip(x.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-10,
+                "filtered[{i}] = {got}, expected {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn savgol_filter_preserves_linear_including_edges() {
+        // With mode='interp', a polynomial of degree <= polyorder is reproduced
+        // exactly everywhere, edges included (unlike 'nearest').
+        let x: Vec<f64> = (0..20).map(|i| 2.0 * i as f64 - 3.0).collect();
+        let filtered = savgol_filter(&x, 5, 2).expect("filter");
+        for (i, (&got, &want)) in filtered.iter().zip(x.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-8,
+                "filtered[{i}] = {got}, expected {want}"
+            );
+        }
+    }
+
+    #[test]
     fn savgol_filter_smooths_noise() {
         // Noisy signal should be smoothed
         let mut x: Vec<f64> = (0..50).map(|i| (i as f64 * 0.1).sin()).collect();
@@ -17907,20 +17984,12 @@ mod tests {
 
     #[test]
     fn savgol_filter_matches_scipy_reference_values() {
-        // scipy.signal.savgol_filter([1,2,3,4,5,6,7,8], 5, 2, mode='nearest')
-        // fsci-signal uses 'nearest' mode by default
+        // scipy.signal.savgol_filter([1,2,3,4,5,6,7,8], 5, 2) with the default
+        // mode='interp'. The input is a perfect linear ramp and polyorder=2, so
+        // the polynomial edge fit reproduces it exactly across the whole array.
         let x = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
         let result = savgol_filter(&x, 5, 2).expect("savgol_filter");
-        let expected = [
-            1.1714285714285706,
-            1.914285714285713,
-            2.9999999999999982,
-            3.999999999999998,
-            4.999999999999997,
-            5.9999999999999964,
-            7.085714285714282,
-            7.828571428571424,
-        ];
+        let expected = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
         assert_eq!(result.len(), expected.len());
         for (i, (&got, &want)) in result.iter().zip(expected.iter()).enumerate() {
             assert!(
