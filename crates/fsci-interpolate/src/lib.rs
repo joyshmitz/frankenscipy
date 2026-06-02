@@ -1158,13 +1158,13 @@ impl BSpline {
             t.insert(0, t[0]);
             t.push(t[t.len() - 1]);
             k += 1;
+            // After inserting the two knots above and incrementing k, the
+            // produced `new_c` has exactly `t.len() - k - 1 == n + 1` entries,
+            // so the B-spline invariant holds without any padding.
             let mut new_c = vec![0.0; n + 1];
             for i in 0..n {
                 let denom = t[i + k + 1] - t[i + 1];
                 new_c[i + 1] = new_c[i] + c[i] * denom / k as f64;
-            }
-            while new_c.len() + k + 1 < t.len() {
-                new_c.push(new_c[new_c.len() - 1]);
             }
             c = new_c;
         }
@@ -5009,6 +5009,34 @@ mod tests {
         assert_eq!(anti.degree(), 2);
         assert_eq!(anti.eval(0.0), 0.0);
         assert_eq!(anti.eval(1.0), 1.0);
+    }
+
+    #[test]
+    fn bspline_antiderivative_then_derivative_round_trips() {
+        // d/dx of the antiderivative must recover the original spline exactly,
+        // and the antiderivative must satisfy the knot invariant without any
+        // coefficient padding.
+        let t = vec![0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 3.0, 3.0];
+        let c = vec![1.0, -2.0, 3.0, 0.5, -1.5];
+        let k = 2;
+        let spl = BSpline::new(t.clone(), c.clone(), k).unwrap();
+
+        let anti = spl.antiderivative(1).unwrap();
+        assert_eq!(anti.t.len(), anti.c.len() + anti.k + 1, "invariant after anti");
+
+        let back = anti.derivative(1).unwrap();
+        assert_eq!(back.k, k);
+        assert_eq!(back.t.len(), t.len());
+        assert_eq!(back.c.len(), c.len());
+        for (i, (&got, &want)) in back.c.iter().zip(c.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-12,
+                "coeff[{i}] = {got}, expected {want}"
+            );
+        }
+        for (i, (&got, &want)) in back.t.iter().zip(t.iter()).enumerate() {
+            assert!((got - want).abs() < 1e-12, "knot[{i}] = {got}, expected {want}");
+        }
     }
 
     #[test]
