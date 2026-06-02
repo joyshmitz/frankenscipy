@@ -18150,7 +18150,7 @@ mod tests {
         // scipy.signal.cwt with ricker wavelet produces widths.len() x data.len() output
         let data = vec![1.0, 2.0, 3.0, 2.0, 1.0];
         let widths = vec![1.0, 2.0, 3.0];
-        let result = cwt(&data, |m, a| ricker(m, a), &widths).expect("cwt");
+        let result = cwt(&data, ricker, &widths).expect("cwt");
         assert_eq!(
             result.len(),
             widths.len(),
@@ -18268,11 +18268,15 @@ mod tests {
         // Middle values should be close to the input frequency
         let mid_start = 20;
         let mid_end = 80;
-        for i in mid_start..mid_end {
+        for (i, &ri) in result
+            .iter()
+            .enumerate()
+            .take(mid_end)
+            .skip(mid_start)
+        {
             assert!(
-                (result[i] - freq).abs() < 1.0,
-                "instantaneous_frequency[{i}] = {}, expected ~{freq}",
-                result[i]
+                (ri - freq).abs() < 1.0,
+                "instantaneous_frequency[{i}] = {ri}, expected ~{freq}"
             );
         }
     }
