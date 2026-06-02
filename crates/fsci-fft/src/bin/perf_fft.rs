@@ -9,7 +9,7 @@
 //! ```
 //!
 //! Usage: `perf_fft <mode> <n> <repeats>`
-//!   mode    = polymul | rfft | golden | rfft-golden
+//!   mode    = polymul | rfft | irfft | golden | rfft-golden | irfft-golden
 //!   n       = input length for timed modes
 //!   repeats = timed iterations
 
@@ -18,7 +18,7 @@ use std::hint::black_box;
 use std::path::Path;
 use std::time::Instant;
 
-use fsci_fft::{FftOptions, polynomial_multiply_fft, rfft};
+use fsci_fft::{FftOptions, irfft, polynomial_multiply_fft, rfft};
 
 fn make_polynomial_input(n: usize) -> Vec<f64> {
     (0..n)
@@ -76,6 +76,28 @@ fn rfft_golden_text() -> String {
     output
 }
 
+fn irfft_golden_text() -> String {
+    let opts = FftOptions::default();
+    let mut output = String::new();
+    for &n in &[16usize, 64, 256, 1024] {
+        let input = make_real_input(n);
+        let spectrum = rfft(&input, &opts).expect("rfft");
+        let recovered = irfft(&spectrum, Some(n), &opts).expect("irfft");
+        write!(
+            &mut output,
+            "mode=irfft n={n} spectrum_len={} len={} ",
+            spectrum.len(),
+            recovered.len()
+        )
+        .expect("write irfft header");
+        for value in &recovered {
+            write!(&mut output, "{:016x} ", value.to_bits()).expect("write irfft bits");
+        }
+        output.push('\n');
+    }
+    output
+}
+
 fn write_or_print_golden(output: String, path: Option<&str>) {
     if let Some(path) = path {
         let path = Path::new(path);
@@ -102,8 +124,12 @@ fn main() {
         write_or_print_golden(rfft_golden_text(), args.get(2).map(String::as_str));
         return;
     }
+    if mode == "irfft-golden" {
+        write_or_print_golden(irfft_golden_text(), args.get(2).map(String::as_str));
+        return;
+    }
 
-    if mode != "polymul" && mode != "rfft" {
+    if mode != "polymul" && mode != "rfft" && mode != "irfft" {
         eprintln!("unknown mode: {mode}");
         std::process::exit(2);
     }
@@ -122,7 +148,7 @@ fn main() {
             checksum += product.iter().sum::<f64>();
             black_box(&product);
         }
-    } else {
+    } else if mode == "rfft" {
         let input = make_real_input(n);
         for _ in 0..repeats {
             let spectrum = rfft(black_box(&input), black_box(&opts)).expect("rfft");
@@ -131,6 +157,15 @@ fn main() {
                 .map(|&(real, imag)| real + imag)
                 .sum::<f64>();
             black_box(&spectrum);
+        }
+    } else {
+        let input = make_real_input(n);
+        let spectrum = rfft(&input, &opts).expect("rfft");
+        for _ in 0..repeats {
+            let recovered =
+                irfft(black_box(&spectrum), black_box(Some(n)), black_box(&opts)).expect("irfft");
+            checksum += recovered.iter().sum::<f64>();
+            black_box(&recovered);
         }
     }
     let elapsed = t0.elapsed();
