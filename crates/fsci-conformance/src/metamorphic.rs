@@ -734,4 +734,38 @@ mod tests {
             }
         }
     }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // ODR METAMORPHIC RELATIONS
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    mod odr_relations {
+        use super::*;
+        use fsci_odr::odr;
+
+        proptest! {
+            // ODR is an iterative solver; fewer cases keep wall-time reasonable.
+            #![proptest_config(ProptestConfig::with_cases(64))]
+
+            /// MR-ODR-1: noise-free linear data y = a*x + b has zero orthogonal
+            /// distance to the line (a, b), so ODR must recover (a, b) exactly.
+            #[test]
+            fn mr_odr_recovers_exact_line(a in -5.0f64..5.0, b in -5.0f64..5.0) {
+                let x: Vec<f64> = (0..12).map(|i| i as f64 * 0.5 - 2.0).collect();
+                let y: Vec<f64> = x.iter().map(|xi| a * xi + b).collect();
+                let fcn = |beta: &[f64], x: &[f64]| -> Vec<f64> {
+                    x.iter().map(|xi| beta[0] * xi + beta[1]).collect()
+                };
+                let out = odr(fcn, vec![1.0, 0.0], y, x).expect("odr should run");
+                prop_assert!(
+                    (out.beta[0] - a).abs() < 1e-5 * (a.abs() + 1.0),
+                    "ODR slope: got {}, want {a}", out.beta[0]
+                );
+                prop_assert!(
+                    (out.beta[1] - b).abs() < 1e-5 * (b.abs() + 1.0),
+                    "ODR intercept: got {}, want {b}", out.beta[1]
+                );
+            }
+        }
+    }
 }
