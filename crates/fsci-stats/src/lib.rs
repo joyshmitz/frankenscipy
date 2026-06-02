@@ -57099,6 +57099,54 @@ mod tests {
     }
 
     #[test]
+    fn continuous_moments_match_scipy() {
+        // mean()/var() must match scipy (catches wrong closed-form moment
+        // formulas — e.g. RelBreitWigner previously returned INFINITY).
+        fn check_mom<D: ContinuousDistribution>(name: &str, d: &D, mean: f64, var: f64) {
+            let m = d.mean();
+            assert!(
+                (m - mean).abs() <= 2e-3 * (mean.abs() + 1.0),
+                "{name} mean = {m}, expected {mean}"
+            );
+            let v = d.var();
+            assert!(
+                (v - var).abs() <= 2e-3 * (var.abs() + 1.0),
+                "{name} var = {v}, expected {var}"
+            );
+        }
+        check_mom("FoldedNormal", &FoldedNormal::new(1.5), 1.55861, 0.82072);
+        check_mom("SkewNorm", &SkewNorm::new(4.0), 0.77406, 0.40083);
+        check_mom("ExponNorm", &ExponNorm::new(1.5), 1.5, 3.25);
+        check_mom("PowerNorm", &PowerNorm::new(2.0), -0.56419, 0.68169);
+        check_mom("JohnsonSU", &JohnsonSU::new(1.0, 2.0), -0.59048, 0.42339);
+        check_mom("JohnsonSB", &JohnsonSB::new(1.0, 2.0), 0.38402, 0.01262);
+        check_mom("LogGamma", &LogGamma::new(2.0), 0.42278, 0.64493);
+        check_mom("Gompertz", &Gompertz::new(1.5), 0.44826, 0.11349);
+        check_mom("ExponWeibull", &ExponWeibull::new(2.0, 1.5), 1.2368, 0.37911);
+        check_mom("GenGamma", &GenGamma::new(2.0, 1.5), 1.50458, 0.51441);
+        check_mom("NoncentralChiSquared", &NoncentralChiSquared::new(4.0, 3.0), 7.0, 20.0);
+        check_mom("NormInvGauss", &NormInvGauss::new(2.0, 0.7), 0.37363, 0.60827);
+        check_mom("Bradford", &Bradford::new(2.0), 0.41024, 0.0817);
+        check_mom("FatigueLife", &FatigueLife::new(1.5), 2.125, 8.57812);
+        check_mom("GenLogistic", &GenLogistic::new(2.0), 1.0, 2.28987);
+        check_mom("GenNorm", &GenNorm::new(1.5), 0.0, 0.73849);
+        check_mom("Gumbel", &Gumbel::new(0.0, 1.0), 0.57722, 1.64493);
+        check_mom("HalfGenNorm", &HalfGenNorm::new(1.5), 0.65945, 0.30361);
+        check_mom("Logistic", &Logistic::new(0.0, 1.0), 0.0, 3.28987);
+        check_mom("Nakagami", &Nakagami::new(2.0), 0.93999, 0.11643);
+        check_mom("RDist", &RDist::new(3.0), 0.0, 0.25);
+        check_mom("Rayleigh", &Rayleigh::new(1.0), 1.25331, 0.4292);
+        check_mom("Rice", &Rice::new(1.0), 1.54857, 0.60192);
+        check_mom("Arcsine", &Arcsine, 0.5, 0.125);
+        check_mom("Semicircular", &Semicircular, 0.0, 0.25);
+        check_mom("HypSecant", &HypSecant, 0.0, 2.4674);
+        check_mom("Moyal", &Moyal, 1.27036, 4.9348);
+        check_mom("Anglit", &Anglit, 0.0, 0.11685);
+        check_mom("Gamma", &GammaDist::new(2.0, 1.0), 2.0, 2.0);
+        check_mom("Beta", &BetaDist::new(2.0, 3.0), 0.4, 0.04);
+    }
+
+    #[test]
     fn rel_breit_wigner_matches_scipy() {
         // scipy.stats.rel_breitwigner reference values (rho=0.5 and rho=1.0).
         let d = RelBreitWigner::new(0.5);
