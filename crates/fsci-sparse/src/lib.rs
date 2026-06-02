@@ -20,21 +20,33 @@ pub use formats::{
     SparseSliceSpec,
 };
 
-pub type csr_matrix = CsrMatrix;
-pub type csc_matrix = CscMatrix;
-pub type coo_matrix = CooMatrix;
-pub type bsr_matrix = BsrMatrix;
-pub type dia_matrix = DiaMatrix;
-pub type dok_matrix = DokMatrix;
-pub type lil_matrix = LilMatrix;
+// SciPy-compatible lowercase type aliases (e.g. `csr_matrix` mirrors
+// `scipy.sparse.csr_matrix`). The names are intentionally non-CamelCase for API
+// parity; scope `non_camel_case_types` to this module — applied to the whole
+// group with one attribute — and re-export so the public paths
+// (`fsci_sparse::csr_matrix`, ...) are unchanged. This lets dependent crates'
+// `clippy --all-targets -D warnings` gates pass. [frankenscipy-6946y]
+#[allow(non_camel_case_types)]
+mod scipy_aliases {
+    use super::{BsrMatrix, CooMatrix, CscMatrix, CsrMatrix, DiaMatrix, DokMatrix, LilMatrix};
 
-pub type csr_array = CsrMatrix;
-pub type csc_array = CscMatrix;
-pub type coo_array = CooMatrix;
-pub type bsr_array = BsrMatrix;
-pub type dia_array = DiaMatrix;
-pub type dok_array = DokMatrix;
-pub type lil_array = LilMatrix;
+    pub type csr_matrix = CsrMatrix;
+    pub type csc_matrix = CscMatrix;
+    pub type coo_matrix = CooMatrix;
+    pub type bsr_matrix = BsrMatrix;
+    pub type dia_matrix = DiaMatrix;
+    pub type dok_matrix = DokMatrix;
+    pub type lil_matrix = LilMatrix;
+
+    pub type csr_array = CsrMatrix;
+    pub type csc_array = CscMatrix;
+    pub type coo_array = CooMatrix;
+    pub type bsr_array = BsrMatrix;
+    pub type dia_array = DiaMatrix;
+    pub type dok_array = DokMatrix;
+    pub type lil_array = LilMatrix;
+}
+pub use scipy_aliases::*;
 pub use linalg::{
     CaspIterativeDecision,
     CaspIterativeSolveOptions,
