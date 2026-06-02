@@ -24,8 +24,8 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use fsci_linalg::{
-    lu_factor, lu_solve, solve, solve_triangular, DecompOptions, SolveOptions,
-    TriangularSolveOptions,
+    DecompOptions, SolveOptions, TriangularSolveOptions, lu_factor, lu_solve, solve,
+    solve_triangular,
 };
 use nalgebra::{DMatrix, DVector};
 

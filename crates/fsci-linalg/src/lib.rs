@@ -7495,10 +7495,19 @@ pub fn matmul(a: &[Vec<f64>], b: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, LinalgErr
         });
     }
     let mut c = vec![vec![0.0; n]; m];
+    // ikj loop order: the inner j-loop is a stride-1 SAXPY over contiguous rows
+    // (c[i][..] += a[i][k] * b[k][..]), which is cache-friendly and
+    // autovectorizes, unlike the column-strided naive ijk inner loop. This is
+    // bit-identical to ijk: each c[i][j] still accumulates k in 0..ka order
+    // because k is the outer loop relative to j. [frankenscipy-vx65u]
     for i in 0..m {
-        for j in 0..n {
-            for k in 0..ka {
-                c[i][j] += a[i][k] * b[k][j];
+        let ci = &mut c[i];
+        let ai = &a[i];
+        for k in 0..ka {
+            let aik = ai[k];
+            let bk = &b[k];
+            for j in 0..n {
+                ci[j] += aik * bk[j];
             }
         }
     }
@@ -7557,6 +7566,94 @@ pub fn vnorm(v: &[f64]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Isomorphism proof for the matmul ikj reorder [frankenscipy-vx65u]: the
+    /// cache-friendly ikj order must be BIT-IDENTICAL to the naive ijk triple
+    /// loop (each output element accumulates k in 0..ka order in both).
+    #[test]
+    fn matmul_ikj_is_bit_identical_to_naive_ijk() {
+        // Deterministic pseudo-random non-square matrices.
+        let make_matrix = |rows: usize, cols: usize, seed: u64| -> Vec<Vec<f64>> {
+            (0..rows)
+                .map(|i| {
+                    (0..cols)
+                        .map(|j| {
+                            let r = (seed
+                                .wrapping_mul(i as u64 + 1)
+                                .wrapping_add(j as u64 * 7 + 1)
+                                % 2003) as f64
+                                / 991.0;
+                            r - 1.0
+                        })
+                        .collect()
+                })
+                .collect()
+        };
+        for &(m, ka, n, seed) in &[
+            (7usize, 5usize, 9usize, 1u64),
+            (16, 16, 16, 2),
+            (3, 11, 4, 3),
+        ] {
+            let a = make_matrix(m, ka, seed);
+            let b = make_matrix(ka, n, seed.wrapping_add(100));
+            // Reference: naive ijk.
+            let mut expected = vec![vec![0.0f64; n]; m];
+            for i in 0..m {
+                for j in 0..n {
+                    for k in 0..ka {
+                        expected[i][j] += a[i][k] * b[k][j];
+                    }
+                }
+            }
+            let got = matmul(&a, &b).expect("matmul");
+            for i in 0..m {
+                for j in 0..n {
+                    assert_eq!(
+                        got[i][j].to_bits(),
+                        expected[i][j].to_bits(),
+                        "matmul ikj not bit-identical at ({i},{j}), m={m} ka={ka} n={n}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Perf comparison for the matmul ikj reorder [frankenscipy-vx65u]. Run with
+    /// `cargo test -p fsci-linalg --release matmul_ikj_perf -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "perf measurement; run explicitly in --release"]
+    fn matmul_ikj_perf_vs_naive_ijk() {
+        let n = 768usize;
+        let a: Vec<Vec<f64>> = (0..n)
+            .map(|i| (0..n).map(|j| ((i * 31 + j * 17) % 97) as f64 * 0.01).collect())
+            .collect();
+        let b: Vec<Vec<f64>> = (0..n)
+            .map(|i| (0..n).map(|j| ((i * 13 + j * 7) % 89) as f64 * 0.01).collect())
+            .collect();
+
+        let t_naive = std::time::Instant::now();
+        let mut naive = vec![vec![0.0f64; n]; n];
+        for i in 0..n {
+            for j in 0..n {
+                for k in 0..n {
+                    naive[i][j] += a[i][k] * b[k][j];
+                }
+            }
+        }
+        let naive_ns = t_naive.elapsed().as_secs_f64();
+        std::hint::black_box(&naive);
+
+        let t_ikj = std::time::Instant::now();
+        let ikj = matmul(&a, &b).expect("matmul");
+        let ikj_ns = t_ikj.elapsed().as_secs_f64();
+        std::hint::black_box(&ikj);
+
+        let speedup = naive_ns / ikj_ns;
+        println!(
+            "matmul {n}x{n}: naive_ijk={naive_ns:.4}s ikj={ikj_ns:.4}s speedup={speedup:.2}x"
+        );
+        assert!(speedup > 1.0, "ikj should be faster: {speedup:.2}x");
+    }
 
     fn assert_close_slice(actual: &[f64], expected: &[f64], atol: f64, rtol: f64) {
         assert_eq!(actual.len(), expected.len());
@@ -9618,10 +9715,26 @@ mod tests {
     /// across diagonal, SPD, and triangular fixtures (frankenscipy-uvrcc).
     #[test]
     fn qz_q_and_z_are_orthogonal() {
-        let diag_a = vec![vec![3.0, 0.0, 0.0], vec![0.0, 5.0, 0.0], vec![0.0, 0.0, 1.0]];
-        let diag_b = vec![vec![2.0, 0.0, 0.0], vec![0.0, 4.0, 0.0], vec![0.0, 0.0, 3.0]];
-        let spd_a = vec![vec![6.0, 1.0, 2.0], vec![1.0, 5.0, 1.0], vec![2.0, 1.0, 7.0]];
-        let spd_b = vec![vec![3.0, 1.0, 0.0], vec![1.0, 4.0, 1.0], vec![0.0, 1.0, 5.0]];
+        let diag_a = vec![
+            vec![3.0, 0.0, 0.0],
+            vec![0.0, 5.0, 0.0],
+            vec![0.0, 0.0, 1.0],
+        ];
+        let diag_b = vec![
+            vec![2.0, 0.0, 0.0],
+            vec![0.0, 4.0, 0.0],
+            vec![0.0, 0.0, 3.0],
+        ];
+        let spd_a = vec![
+            vec![6.0, 1.0, 2.0],
+            vec![1.0, 5.0, 1.0],
+            vec![2.0, 1.0, 7.0],
+        ];
+        let spd_b = vec![
+            vec![3.0, 1.0, 0.0],
+            vec![1.0, 4.0, 1.0],
+            vec![0.0, 1.0, 5.0],
+        ];
         let gen_a = vec![vec![4.0, 2.0], vec![1.0, 3.0]];
         let gen_b = vec![vec![2.0, 0.0], vec![0.5, 1.5]];
         let fixtures = [(&gen_a, &gen_b), (&diag_a, &diag_b), (&spd_a, &spd_b)];
@@ -12779,12 +12892,13 @@ mod proptest_tests {
         let m = result.z[0][0] * result.z[0][0] + result.z[0][1] * result.z[0][1];
         assert!((m - 1.0).abs() < 1e-10, "Z row 0 norm should be 1");
         // A = Z @ T @ Z.T
-        let ztz00 =
-            result.z[0][0] * result.t[0][0] + result.z[0][1] * result.t[1][0];
-        let ztz01 =
-            result.z[0][0] * result.t[0][1] + result.z[0][1] * result.t[1][1];
+        let ztz00 = result.z[0][0] * result.t[0][0] + result.z[0][1] * result.t[1][0];
+        let ztz01 = result.z[0][0] * result.t[0][1] + result.z[0][1] * result.t[1][1];
         let a_rec00 = ztz00 * result.z[0][0] + ztz01 * result.z[1][0];
-        assert!((a_rec00 - a[0][0]).abs() < 1e-10, "Schur reconstruction [0][0]");
+        assert!(
+            (a_rec00 - a[0][0]).abs() < 1e-10,
+            "Schur reconstruction [0][0]"
+        );
     }
 
     #[test]
@@ -12873,8 +12987,16 @@ mod proptest_tests {
         let a = vec![vec![1.0, 2.0], vec![2.0, 4.0]];
         let mut result = eigvalsh(&a, DecompOptions::default()).expect("eigvalsh");
         result.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        assert!(result[0].abs() < 1e-10, "eigvalsh[0] got {}, expected 0.0", result[0]);
-        assert!((result[1] - 5.0).abs() < 1e-10, "eigvalsh[1] got {}, expected 5.0", result[1]);
+        assert!(
+            result[0].abs() < 1e-10,
+            "eigvalsh[0] got {}, expected 0.0",
+            result[0]
+        );
+        assert!(
+            (result[1] - 5.0).abs() < 1e-10,
+            "eigvalsh[1] got {}, expected 5.0",
+            result[1]
+        );
     }
 
     #[test]
@@ -12883,8 +13005,16 @@ mod proptest_tests {
         let a = vec![vec![3.0, 0.0], vec![0.0, 4.0]];
         let mut result = svdvals(&a, DecompOptions::default()).expect("svdvals");
         result.sort_by(|a, b| b.partial_cmp(a).unwrap());
-        assert!((result[0] - 4.0).abs() < 1e-10, "svdvals[0] got {}, expected 4.0", result[0]);
-        assert!((result[1] - 3.0).abs() < 1e-10, "svdvals[1] got {}, expected 3.0", result[1]);
+        assert!(
+            (result[0] - 4.0).abs() < 1e-10,
+            "svdvals[0] got {}, expected 4.0",
+            result[0]
+        );
+        assert!(
+            (result[1] - 3.0).abs() < 1e-10,
+            "svdvals[1] got {}, expected 3.0",
+            result[1]
+        );
     }
 
     #[test]
@@ -12894,7 +13024,10 @@ mod proptest_tests {
         let result = lu(&a, DecompOptions::default()).expect("lu");
         // U diagonal elements product gives determinant magnitude
         let u_diag_product = result.u[0][0] * result.u[1][1];
-        assert!(u_diag_product.abs() > 1e-10, "U diagonal product should be non-zero");
+        assert!(
+            u_diag_product.abs() > 1e-10,
+            "U diagonal product should be non-zero"
+        );
     }
 
     #[test]
@@ -12903,10 +13036,26 @@ mod proptest_tests {
         // sin(1) ≈ 0.8414709848, sin(2) ≈ 0.9092974268
         let a = vec![vec![1.0, 0.0], vec![0.0, 2.0]];
         let result = sinm(&a, DecompOptions::default()).expect("sinm");
-        assert!((result[0][0] - 0.8414709848).abs() < 1e-6, "sinm[0][0] = {}, expected 0.8414709848", result[0][0]);
-        assert!(result[0][1].abs() < 1e-10, "sinm[0][1] = {}, expected 0", result[0][1]);
-        assert!(result[1][0].abs() < 1e-10, "sinm[1][0] = {}, expected 0", result[1][0]);
-        assert!((result[1][1] - 0.9092974268).abs() < 1e-6, "sinm[1][1] = {}, expected 0.9092974268", result[1][1]);
+        assert!(
+            (result[0][0] - 0.8414709848).abs() < 1e-6,
+            "sinm[0][0] = {}, expected 0.8414709848",
+            result[0][0]
+        );
+        assert!(
+            result[0][1].abs() < 1e-10,
+            "sinm[0][1] = {}, expected 0",
+            result[0][1]
+        );
+        assert!(
+            result[1][0].abs() < 1e-10,
+            "sinm[1][0] = {}, expected 0",
+            result[1][0]
+        );
+        assert!(
+            (result[1][1] - 0.9092974268).abs() < 1e-6,
+            "sinm[1][1] = {}, expected 0.9092974268",
+            result[1][1]
+        );
     }
 
     #[test]
@@ -12915,10 +13064,26 @@ mod proptest_tests {
         // cos(1) ≈ 0.5403023059, cos(2) ≈ -0.4161468365
         let a = vec![vec![1.0, 0.0], vec![0.0, 2.0]];
         let result = cosm(&a, DecompOptions::default()).expect("cosm");
-        assert!((result[0][0] - 0.5403023059).abs() < 1e-6, "cosm[0][0] = {}, expected 0.5403023059", result[0][0]);
-        assert!(result[0][1].abs() < 1e-10, "cosm[0][1] = {}, expected 0", result[0][1]);
-        assert!(result[1][0].abs() < 1e-10, "cosm[1][0] = {}, expected 0", result[1][0]);
-        assert!((result[1][1] - (-0.4161468365)).abs() < 1e-6, "cosm[1][1] = {}, expected -0.4161468365", result[1][1]);
+        assert!(
+            (result[0][0] - 0.5403023059).abs() < 1e-6,
+            "cosm[0][0] = {}, expected 0.5403023059",
+            result[0][0]
+        );
+        assert!(
+            result[0][1].abs() < 1e-10,
+            "cosm[0][1] = {}, expected 0",
+            result[0][1]
+        );
+        assert!(
+            result[1][0].abs() < 1e-10,
+            "cosm[1][0] = {}, expected 0",
+            result[1][0]
+        );
+        assert!(
+            (result[1][1] - (-0.4161468365)).abs() < 1e-6,
+            "cosm[1][1] = {}, expected -0.4161468365",
+            result[1][1]
+        );
     }
 
     #[test]
@@ -12926,10 +13091,26 @@ mod proptest_tests {
         // scipy.linalg.signm([[1, 0], [0, -1]]) -> [[1, 0], [0, -1]]
         let a = vec![vec![1.0, 0.0], vec![0.0, -1.0]];
         let result = signm(&a, DecompOptions::default()).expect("signm");
-        assert!((result[0][0] - 1.0).abs() < 1e-10, "signm[0][0] = {}, expected 1.0", result[0][0]);
-        assert!(result[0][1].abs() < 1e-10, "signm[0][1] = {}, expected 0.0", result[0][1]);
-        assert!(result[1][0].abs() < 1e-10, "signm[1][0] = {}, expected 0.0", result[1][0]);
-        assert!((result[1][1] + 1.0).abs() < 1e-10, "signm[1][1] = {}, expected -1.0", result[1][1]);
+        assert!(
+            (result[0][0] - 1.0).abs() < 1e-10,
+            "signm[0][0] = {}, expected 1.0",
+            result[0][0]
+        );
+        assert!(
+            result[0][1].abs() < 1e-10,
+            "signm[0][1] = {}, expected 0.0",
+            result[0][1]
+        );
+        assert!(
+            result[1][0].abs() < 1e-10,
+            "signm[1][0] = {}, expected 0.0",
+            result[1][0]
+        );
+        assert!(
+            (result[1][1] + 1.0).abs() < 1e-10,
+            "signm[1][1] = {}, expected -1.0",
+            result[1][1]
+        );
     }
 
     #[test]
@@ -12941,9 +13122,20 @@ mod proptest_tests {
         // Verify U is orthogonal: U^T * U ≈ I
         let ut_u_00 = result.u[0][0] * result.u[0][0] + result.u[1][0] * result.u[1][0];
         let ut_u_11 = result.u[0][1] * result.u[0][1] + result.u[1][1] * result.u[1][1];
-        assert!((ut_u_00 - 1.0).abs() < 1e-6, "U^T*U[0][0] = {}, expected 1.0", ut_u_00);
-        assert!((ut_u_11 - 1.0).abs() < 1e-6, "U^T*U[1][1] = {}, expected 1.0", ut_u_11);
+        assert!(
+            (ut_u_00 - 1.0).abs() < 1e-6,
+            "U^T*U[0][0] = {}, expected 1.0",
+            ut_u_00
+        );
+        assert!(
+            (ut_u_11 - 1.0).abs() < 1e-6,
+            "U^T*U[1][1] = {}, expected 1.0",
+            ut_u_11
+        );
         // P should be symmetric positive
-        assert!((result.p[0][1] - result.p[1][0]).abs() < 1e-6, "P should be symmetric");
+        assert!(
+            (result.p[0][1] - result.p[1][0]).abs() < 1e-6,
+            "P should be symmetric"
+        );
     }
 }
