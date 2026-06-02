@@ -9,7 +9,7 @@
 //! ```
 //!
 //! Usage: `perf_fft <mode> <n> <repeats>`
-//!   mode    = polymul | rfft | irfft | golden | rfft-golden | irfft-golden
+//!   mode    = polymul | rfft | irfft | golden | rfft-golden | irfft-golden | fft2-golden
 //!   n       = input length for timed modes
 //!   repeats = timed iterations
 
@@ -18,7 +18,7 @@ use std::hint::black_box;
 use std::path::Path;
 use std::time::Instant;
 
-use fsci_fft::{FftOptions, irfft, polynomial_multiply_fft, rfft};
+use fsci_fft::{FftOptions, fft2, irfft, polynomial_multiply_fft, rfft};
 
 fn make_polynomial_input(n: usize) -> Vec<f64> {
     (0..n)
@@ -35,6 +35,13 @@ fn make_real_input(n: usize) -> Vec<f64> {
             let t = i as f64 / n as f64;
             (2.0 * std::f64::consts::PI * t).sin()
         })
+        .collect()
+}
+
+fn make_complex_input(n: usize) -> Vec<(f64, f64)> {
+    make_real_input(n)
+        .into_iter()
+        .map(|value| (value, 0.0))
         .collect()
 }
 
@@ -98,6 +105,32 @@ fn irfft_golden_text() -> String {
     output
 }
 
+fn fft2_golden_text() -> String {
+    let opts = FftOptions::default();
+    let mut output = String::new();
+    for &(rows, cols) in &[(8usize, 8usize), (16, 16), (32, 32)] {
+        let input = make_complex_input(rows * cols);
+        let spectrum = fft2(&input, (rows, cols), &opts).expect("fft2");
+        write!(
+            &mut output,
+            "mode=fft2 shape={rows}x{cols} len={} ",
+            spectrum.len()
+        )
+        .expect("write fft2 header");
+        for &(real, imag) in &spectrum {
+            write!(
+                &mut output,
+                "{:016x}:{:016x} ",
+                real.to_bits(),
+                imag.to_bits(),
+            )
+            .expect("write fft2 bits");
+        }
+        output.push('\n');
+    }
+    output
+}
+
 fn write_or_print_golden(output: String, path: Option<&str>) {
     if let Some(path) = path {
         let path = Path::new(path);
@@ -126,6 +159,10 @@ fn main() {
     }
     if mode == "irfft-golden" {
         write_or_print_golden(irfft_golden_text(), args.get(2).map(String::as_str));
+        return;
+    }
+    if mode == "fft2-golden" {
+        write_or_print_golden(fft2_golden_text(), args.get(2).map(String::as_str));
         return;
     }
 

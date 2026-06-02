@@ -1,0 +1,26 @@
+Diff in /data/projects/frankenscipy/crates/fsci-fft/src/transforms.rs:2310:
+     let block = axis_len * stride;
+     let cooley_tukey_axis_plan =
+         if backend.kind() == BackendKind::CooleyTukey && axis_len.is_power_of_two() {
+[31m-            Some((get_or_compute_twiddles(axis_len, inverse), bit_reverse_swaps(axis_len)))
+[m[32m+            Some((
+[m[32m+                get_or_compute_twiddles(axis_len, inverse),
+[m[32m+                bit_reverse_swaps(axis_len),
+[m[32m+            ))
+[m         } else {
+             None
+         };
+Diff in /data/projects/frankenscipy/crates/fsci-fft/src/transforms.rs:2323:
+                 *slot = data[outer_base + index * stride + offset];
+             }
+             if let Some((twiddles, bit_reverse_swaps)) = &cooley_tukey_axis_plan {
+[31m-                cooley_tukey_radix2_inplace_with_plan(
+[m[31m-                    axis_scratch,
+[m[31m-                    twiddles,
+[m[31m-                    bit_reverse_swaps,
+[m[31m-                );
+[m[32m+                cooley_tukey_radix2_inplace_with_plan(axis_scratch, twiddles, bit_reverse_swaps);
+[m             } else {
+                 backend.transform_1d_inplace(axis_scratch, inverse);
+             }
+CARGO_FMT_CHECK_FSCI_FFT_EXIT:1

@@ -192,7 +192,14 @@ fn get_or_compute_bluestein_plan(n: usize, inverse: bool) -> BluesteinPlan {
 fn cooley_tukey_radix2_inplace(data: &mut [Complex64], inverse: bool) {
     let n = data.len();
     debug_assert!(n.is_power_of_two());
+    let twiddles = get_or_compute_twiddles(n, inverse);
+    cooley_tukey_radix2_inplace_with_twiddles(data, &twiddles);
+}
 
+fn cooley_tukey_radix2_inplace_with_twiddles(data: &mut [Complex64], twiddles: &[Complex64]) {
+    let n = data.len();
+    debug_assert!(n.is_power_of_two());
+    debug_assert!(twiddles.len() >= n);
     // Bit-reversal permutation
     let log_n = n.trailing_zeros() as usize;
     for i in 0..n {
@@ -201,8 +208,6 @@ fn cooley_tukey_radix2_inplace(data: &mut [Complex64], inverse: bool) {
             data.swap(i, j);
         }
     }
-
-    let twiddles = get_or_compute_twiddles(n, inverse);
 
     let mut stage_len = 2;
     while stage_len <= n {
@@ -224,6 +229,52 @@ fn cooley_tukey_radix2_inplace(data: &mut [Complex64], inverse: bool) {
         }
         stage_len *= 2;
     }
+}
+
+fn cooley_tukey_radix2_inplace_with_plan(
+    data: &mut [Complex64],
+    twiddles: &[Complex64],
+    bit_reverse_swaps: &[(usize, usize)],
+) {
+    let n = data.len();
+    debug_assert!(n.is_power_of_two());
+    debug_assert!(twiddles.len() >= n);
+    for &(i, j) in bit_reverse_swaps {
+        data.swap(i, j);
+    }
+
+    let mut stage_len = 2;
+    while stage_len <= n {
+        let half = stage_len / 2;
+        let stride = n / stage_len;
+
+        let mut base = 0;
+        while base < n {
+            for k in 0..half {
+                let even_idx = base + k;
+                let odd_idx = base + k + half;
+                let twiddle = twiddles[k * stride];
+                let odd_val = complex_mul(data[odd_idx], twiddle);
+                let even_val = data[even_idx];
+                data[even_idx] = complex_add(even_val, odd_val);
+                data[odd_idx] = complex_sub(even_val, odd_val);
+            }
+            base += stage_len;
+        }
+        stage_len *= 2;
+    }
+}
+
+fn bit_reverse_swaps(n: usize) -> Vec<(usize, usize)> {
+    let log_n = n.trailing_zeros() as usize;
+    let mut swaps = Vec::with_capacity(n / 2);
+    for i in 0..n {
+        let j = bit_reverse(i, log_n);
+        if i < j {
+            swaps.push((i, j));
+        }
+    }
+    swaps
 }
 
 /// Bluestein's algorithm for arbitrary-length FFT.
@@ -2257,6 +2308,15 @@ fn apply_axis_transform(
     let stride = shape[axis + 1..].iter().product::<usize>().max(1);
     let repeats = shape[..axis].iter().product::<usize>().max(1);
     let block = axis_len * stride;
+    let cooley_tukey_axis_plan =
+        if backend.kind() == BackendKind::CooleyTukey && axis_len.is_power_of_two() {
+            Some((
+                get_or_compute_twiddles(axis_len, inverse),
+                bit_reverse_swaps(axis_len),
+            ))
+        } else {
+            None
+        };
 
     let axis_scratch = &mut scratch[..axis_len];
     for outer in 0..repeats {
@@ -2265,7 +2325,11 @@ fn apply_axis_transform(
             for (index, slot) in axis_scratch.iter_mut().enumerate() {
                 *slot = data[outer_base + index * stride + offset];
             }
-            backend.transform_1d_inplace(axis_scratch, inverse);
+            if let Some((twiddles, bit_reverse_swaps)) = &cooley_tukey_axis_plan {
+                cooley_tukey_radix2_inplace_with_plan(axis_scratch, twiddles, bit_reverse_swaps);
+            } else {
+                backend.transform_1d_inplace(axis_scratch, inverse);
+            }
             for (index, &value) in axis_scratch.iter().enumerate() {
                 data[outer_base + index * stride + offset] = value;
             }

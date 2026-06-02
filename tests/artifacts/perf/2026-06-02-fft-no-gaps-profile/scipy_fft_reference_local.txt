@@ -1,0 +1,5 @@
+scipy_fft_262144 median_ms=4.474655 min_ms=4.199393 max_ms=6.436706 repeats=41
+scipy_rfft_262144 median_ms=1.366531 min_ms=1.343378 max_ms=2.395893 repeats=41
+scipy_fft2_512x512 median_ms=2.496414 min_ms=2.384692 max_ms=4.349909 repeats=41
+SCIPY_FFT_REFERENCE_LOCAL_EXIT:0
+SCIPY_FFT_REFERENCE_LOCAL_CMD_EXIT:0
