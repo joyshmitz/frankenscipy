@@ -6,7 +6,7 @@ use fsci_runtime::{
     PolicyDecision, RuntimeMode, SolverAction, SolverEvidenceEntry, SolverPortfolio,
     StructuralEvidence, casp_now_unix_ms,
 };
-use std::borrow::Cow;
+use std::{borrow::Cow, fmt};
 
 type EigenDecomposition = (Vec<f64>, Option<Vec<Vec<f64>>>);
 
@@ -432,7 +432,7 @@ pub struct LuResult {
 }
 
 /// Compact LU factorization for use with `lu_solve`.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct LuFactorResult {
     /// The internal nalgebra LU object.
     lu_internal: LU<f64, Dyn, Dyn>,
@@ -440,6 +440,18 @@ pub struct LuFactorResult {
     n: usize,
     /// 1-norm of the original matrix.
     a_norm_1: f64,
+    /// Cached reciprocal-condition estimate for repeated `lu_solve` calls.
+    rcond_estimate: f64,
+}
+
+impl fmt::Debug for LuFactorResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LuFactorResult")
+            .field("lu_internal", &self.lu_internal)
+            .field("n", &self.n)
+            .field("a_norm_1", &self.a_norm_1)
+            .finish()
+    }
 }
 
 /// Result of QR decomposition.
@@ -2654,6 +2666,7 @@ pub fn lu_factor(a: &[Vec<f64>], options: DecompOptions) -> Result<LuFactorResul
     let matrix = dmatrix_from_rows(a)?;
     let a_norm_1 = matrix_norm1(&matrix);
     let lu_decomp: LU<f64, Dyn, Dyn> = matrix.lu();
+    let rcond_estimate = fast_rcond_from_lu(&lu_decomp, a_norm_1, rows);
 
     emit_trace(LinalgTrace {
         operation: "lu_factor",
@@ -2668,6 +2681,7 @@ pub fn lu_factor(a: &[Vec<f64>], options: DecompOptions) -> Result<LuFactorResul
         lu_internal: lu_decomp,
         n: rows,
         a_norm_1,
+        rcond_estimate,
     })
 }
 
@@ -2688,7 +2702,7 @@ pub fn lu_solve(lu_factor: &LuFactorResult, b: &[f64]) -> Result<SolveResult, Li
         .solve(&rhs)
         .ok_or(LinalgError::SingularMatrix)?;
 
-    let rcond = fast_rcond_from_lu(&lu_factor.lu_internal, lu_factor.a_norm_1, lu_factor.n);
+    let rcond = lu_factor.rcond_estimate;
 
     emit_trace(LinalgTrace {
         operation: "lu_solve",
@@ -8801,6 +8815,28 @@ mod tests {
         let factor = lu_factor(&a, DecompOptions::default()).expect("lu_factor works");
         let result = lu_solve(&factor, &b).expect("lu_solve works");
         assert_close_slice(&result.x, &[0.0, 2.5], 1e-12, 1e-12);
+    }
+
+    #[test]
+    fn lu_factor_caches_rcond_without_debug_observability() {
+        let a = vec![vec![1.0, 0.0], vec![0.0, 1e-14]];
+        let b = vec![1.0, 1e-14];
+        let factor = lu_factor(&a, DecompOptions::default()).expect("lu_factor works");
+        let recomputed = fast_rcond_from_lu(&factor.lu_internal, factor.a_norm_1, factor.n);
+
+        assert_eq!(factor.rcond_estimate.to_bits(), recomputed.to_bits());
+
+        let result = lu_solve(&factor, &b).expect("lu_solve works");
+        assert_eq!(result.warning, rcond_warning(recomputed));
+        assert!(matches!(
+            result.warning,
+            Some(LinalgWarning::IllConditioned { .. })
+        ));
+
+        let debug = format!("{factor:?}");
+        assert!(debug.contains("LuFactorResult"));
+        assert!(debug.contains("a_norm_1"));
+        assert!(!debug.contains("rcond_estimate"));
     }
 
     #[test]

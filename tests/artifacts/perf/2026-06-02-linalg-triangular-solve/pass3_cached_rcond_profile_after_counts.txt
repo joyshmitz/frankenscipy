@@ -1,0 +1,11 @@
+total_sample_blocks=30
+attached_sample_blocks=13
+unattached_after_process_exit=17
+fast_rcond_from_lu=0
+lu_solve_or_nalgebra_lu_solve=13
+lower_triangular_solve_frames=8
+upper_triangular_solve_frames=5
+rhs_from_column_slice=0
+solution_collect_frames=0
+checksum_sum_frames=1
+perf_solve_main_frames=13

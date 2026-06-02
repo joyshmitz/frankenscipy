@@ -1,0 +1,1 @@
+mode=lu_solve_cached n=1000 repeats=200 seed=42 checksum=-1.968966e2

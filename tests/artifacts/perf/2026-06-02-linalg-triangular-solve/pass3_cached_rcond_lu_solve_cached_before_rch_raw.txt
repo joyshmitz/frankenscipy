@@ -1,0 +1,1 @@
+{"mode":"lu_solve_cached","n":1000,"repeats":200,"total_ms":3528.488,"per_call_ms":17.6424,"checksum":-1.968966e2}
