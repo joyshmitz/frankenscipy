@@ -664,4 +664,74 @@ mod tests {
             }
         }
     }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // OPTIMIZE METAMORPHIC RELATIONS
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    mod optimize_relations {
+        use super::*;
+        use fsci_opt::{
+            MinimizeOptions, MinimizeScalarOptions, RootOptions, brentq, minimize, minimize_scalar,
+        };
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(PROPTEST_CASES))]
+
+            /// MR-OPT-1: brentq finds a root, i.e. f(root) ≈ 0. The function
+            /// x^3 + x - t is strictly increasing, so it has exactly one real
+            /// root that the bracket [-100, 100] always straddles for |t|<=1e5.
+            #[test]
+            fn mr_brentq_root_is_zero(t in -1.0e5f64..1.0e5) {
+                let f = |x: f64| x * x * x + x - t;
+                let r = brentq(f, (-100.0, 100.0), RootOptions::default())
+                    .expect("brentq should converge");
+                prop_assert!(r.converged, "brentq did not converge for t={t}");
+                prop_assert!(
+                    f(r.root).abs() < 1e-6,
+                    "brentq root not a zero: f({})={}, t={t}",
+                    r.root, f(r.root)
+                );
+            }
+
+            /// MR-OPT-2: minimizing the convex quadratic sum (x_i - c_i)^2
+            /// recovers the center c (unique global minimum) with f(min) ≈ 0.
+            #[test]
+            fn mr_minimize_quadratic_recovers_center(
+                c in proptest::collection::vec(-5.0f64..5.0, 2..=4)
+            ) {
+                let center = c.clone();
+                let f = move |x: &[f64]| -> f64 {
+                    x.iter().zip(&center).map(|(xi, ci)| (xi - ci) * (xi - ci)).sum()
+                };
+                let x0 = vec![0.0; c.len()];
+                let res = minimize(f, &x0, MinimizeOptions::default())
+                    .expect("minimize should succeed");
+                let max_err = res.x.iter().zip(&c)
+                    .map(|(xi, ci)| (xi - ci).abs())
+                    .fold(0.0, f64::max);
+                prop_assert!(
+                    max_err < 1e-3,
+                    "minimize did not recover center: x={:?}, c={:?}",
+                    res.x, c
+                );
+                if let Some(fval) = res.fun {
+                    prop_assert!(fval < 1e-6, "minimum value not ~0: {fval}");
+                }
+            }
+
+            /// MR-OPT-3: minimize_scalar of (x - c)^2 recovers c.
+            #[test]
+            fn mr_minimize_scalar_recovers_center(c in -1.0e3f64..1.0e3) {
+                let f = move |x: f64| (x - c) * (x - c);
+                let res = minimize_scalar(f, MinimizeScalarOptions::default())
+                    .expect("minimize_scalar should succeed");
+                prop_assert!(
+                    (res.x - c).abs() < 1e-4 * (c.abs() + 1.0),
+                    "minimize_scalar did not recover c: x={}, c={c}",
+                    res.x
+                );
+            }
+        }
+    }
 }
