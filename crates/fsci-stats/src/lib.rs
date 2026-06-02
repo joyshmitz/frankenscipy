@@ -35203,6 +35203,17 @@ pub fn kendall_distance(rank1: &[usize], rank2: &[usize]) -> usize {
 }
 
 #[cfg(test)]
+// Legacy test-only lint backlog (reference-value literals, range assertions,
+// helper signatures) scoped here so `clippy --all-targets` passes the perf gate
+// without rewriting golden test data (frankenscipy-symv0).
+#[allow(
+    clippy::approx_constant,
+    clippy::manual_range_contains,
+    clippy::type_complexity,
+    clippy::unnecessary_cast,
+    clippy::useless_vec,
+    clippy::excessive_precision
+)]
 mod tests {
     use super::*;
 
