@@ -268,6 +268,7 @@ fn real_fft_specialized(input: &[f64], backend: &dyn FftBackend) -> Vec<Complex6
 
     // FFT of half-length complex sequence
     let z = backend.transform_1d_unscaled(&packed, false);
+    let twiddles = get_or_compute_twiddles(n, false);
 
     // Unpack: X[k] = (Z[k] + conj(Z[N/2-k]))/2 - i*exp(-2πik/N)*(Z[k] - conj(Z[N/2-k]))/2
     let mut result = Vec::with_capacity(half + 1);
@@ -284,8 +285,7 @@ fn real_fft_specialized(input: &[f64], backend: &dyn FftBackend) -> Vec<Complex6
         let odd = (0.5 * (zk.0 - zn_k_conj.0), 0.5 * (zk.1 - zn_k_conj.1));
 
         // Twiddle: exp(-2πik/N)
-        let angle = -2.0 * PI * k as f64 / n as f64;
-        let twiddle = (angle.cos(), angle.sin());
+        let twiddle = twiddles[k];
         let odd_tw = complex_mul(odd, twiddle);
 
         // Multiply by -i: (a, b) -> (b, -a)

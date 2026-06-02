@@ -1,0 +1,142 @@
+//! Profiling-only harness for FFT hot paths.
+//!
+//! NOT a product binary. It exists so RCH, hyperfine, and sha256 checks can
+//! attach to a tight deterministic FFT scenario. Build under `release-perf`:
+//!
+//! ```bash
+//! RUSTFLAGS="-C force-frame-pointers=yes" \
+//!   cargo build -p fsci-fft --profile release-perf --bin perf_fft
+//! ```
+//!
+//! Usage: `perf_fft <mode> <n> <repeats>`
+//!   mode    = polymul | rfft | golden | rfft-golden
+//!   n       = input length for timed modes
+//!   repeats = timed iterations
+
+use std::fmt::Write as _;
+use std::hint::black_box;
+use std::path::Path;
+use std::time::Instant;
+
+use fsci_fft::{FftOptions, polynomial_multiply_fft, rfft};
+
+fn make_polynomial_input(n: usize) -> Vec<f64> {
+    (0..n)
+        .map(|i| {
+            let t = i as f64 / n as f64;
+            (3.0 * t).sin() - 0.5 * (5.0 * t).cos()
+        })
+        .collect()
+}
+
+fn make_real_input(n: usize) -> Vec<f64> {
+    (0..n)
+        .map(|i| {
+            let t = i as f64 / n as f64;
+            (2.0 * std::f64::consts::PI * t).sin()
+        })
+        .collect()
+}
+
+fn polymul_golden_text() -> String {
+    let opts = FftOptions::default();
+    let mut output = String::new();
+    for &n in &[16usize, 64, 256, 1024] {
+        let lhs = make_polynomial_input(n);
+        let rhs = make_polynomial_input(n);
+        let product = polynomial_multiply_fft(&lhs, &rhs, &opts).expect("polynomial_multiply_fft");
+        write!(&mut output, "mode=polymul n={n} len={} ", product.len())
+            .expect("write polymul header");
+        for value in &product {
+            write!(&mut output, "{:016x} ", value.to_bits()).expect("write polymul bits");
+        }
+        output.push('\n');
+    }
+    output
+}
+
+fn rfft_golden_text() -> String {
+    let opts = FftOptions::default();
+    let mut output = String::new();
+    for &n in &[16usize, 64, 256, 1024] {
+        let input = make_real_input(n);
+        let spectrum = rfft(&input, &opts).expect("rfft");
+        write!(&mut output, "mode=rfft n={n} len={} ", spectrum.len()).expect("write rfft header");
+        for &(real, imag) in &spectrum {
+            write!(
+                &mut output,
+                "{:016x}:{:016x} ",
+                real.to_bits(),
+                imag.to_bits(),
+            )
+            .expect("write rfft bits");
+        }
+        output.push('\n');
+    }
+    output
+}
+
+fn write_or_print_golden(output: String, path: Option<&str>) {
+    if let Some(path) = path {
+        let path = Path::new(path);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("create golden artifact parent");
+        }
+        std::fs::write(path, output).expect("write golden artifact");
+    } else {
+        print!("{output}");
+    }
+}
+
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    let mode = args.get(1).map(String::as_str).unwrap_or("polymul");
+    let n: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(1024);
+    let repeats: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(20);
+
+    if mode == "golden" {
+        write_or_print_golden(polymul_golden_text(), args.get(2).map(String::as_str));
+        return;
+    }
+    if mode == "rfft-golden" {
+        write_or_print_golden(rfft_golden_text(), args.get(2).map(String::as_str));
+        return;
+    }
+
+    if mode != "polymul" && mode != "rfft" {
+        eprintln!("unknown mode: {mode}");
+        std::process::exit(2);
+    }
+
+    let opts = FftOptions::default();
+
+    let t0 = Instant::now();
+    let mut checksum = 0.0_f64;
+    if mode == "polymul" {
+        let lhs = make_polynomial_input(n);
+        let rhs = make_polynomial_input(n);
+        for _ in 0..repeats {
+            let product =
+                polynomial_multiply_fft(black_box(&lhs), black_box(&rhs), black_box(&opts))
+                    .expect("polynomial_multiply_fft");
+            checksum += product.iter().sum::<f64>();
+            black_box(&product);
+        }
+    } else {
+        let input = make_real_input(n);
+        for _ in 0..repeats {
+            let spectrum = rfft(black_box(&input), black_box(&opts)).expect("rfft");
+            checksum += spectrum
+                .iter()
+                .map(|&(real, imag)| real + imag)
+                .sum::<f64>();
+            black_box(&spectrum);
+        }
+    }
+    let elapsed = t0.elapsed();
+    let total_ms = elapsed.as_secs_f64() * 1e3;
+    let per_call_ms = total_ms / repeats as f64;
+    println!(
+        "{{\"mode\":\"{mode}\",\"n\":{n},\"repeats\":{repeats},\"total_ms\":{total_ms:.3},\"per_call_ms\":{per_call_ms:.6},\"checksum\":{checksum:.12e}}}",
+    );
+}
