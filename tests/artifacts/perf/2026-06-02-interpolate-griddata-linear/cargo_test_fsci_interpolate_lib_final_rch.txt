@@ -1,0 +1,275 @@
+[RCH] local (no admissible workers: insufficient_slots=7,hard_preflight=1)
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.45
+   Compiling unicode-ident v1.0.24
+   Compiling autocfg v1.5.0
+   Compiling libc v0.2.185
+   Compiling shlex v1.3.0
+   Compiling find-msvc-tools v0.1.9
+   Compiling serde_core v1.0.228
+   Compiling zmij v1.0.21
+   Compiling serde v1.0.228
+   Compiling zerocopy v0.8.48
+   Compiling serde_json v1.0.149
+   Compiling crossbeam-utils v0.8.21
+   Compiling paste v1.0.15
+   Compiling getrandom v0.3.4
+   Compiling getrandom v0.4.2
+   Compiling rustix v1.1.4
+   Compiling thiserror v2.0.18
+   Compiling rayon-core v1.13.0
+   Compiling cc v1.2.60
+   Compiling num-traits v0.2.19
+   Compiling matrixmultiply v0.3.10
+   Compiling crossbeam-epoch v0.9.18
+   Compiling crossbeam-deque v0.8.6
+   Compiling syn v2.0.117
+   Compiling blake3 v1.8.4
+   Compiling alloca v0.4.0
+   Compiling num-complex v0.4.6
+   Compiling approx v0.5.1
+   Compiling num-integer v0.1.46
+   Compiling plotters v0.3.7
+   Compiling wait-timeout v0.2.1
+   Compiling page_size v0.6.0
+   Compiling rand_core v0.9.5
+   Compiling num-rational v0.4.2
+   Compiling rayon v1.12.0
+   Compiling rand v0.9.4
+   Compiling rand_xorshift v0.4.0
+   Compiling simba v0.9.1
+   Compiling tempfile v3.27.0
+   Compiling rusty-fork v0.3.1
+   Compiling serde_derive v1.0.228
+   Compiling zerocopy-derive v0.8.48
+   Compiling nalgebra-macros v0.3.0
+   Compiling thiserror-impl v2.0.18
+   Compiling nalgebra v0.34.2
+   Compiling fsci-runtime v0.1.0 (/data/projects/frankenscipy/crates/fsci-runtime)
+   Compiling tinytemplate v1.2.1
+   Compiling fsci-fft v0.1.0 (/data/projects/frankenscipy/crates/fsci-fft)
+   Compiling half v2.7.1
+   Compiling ppv-lite86 v0.2.21
+   Compiling ciborium-ll v0.2.2
+   Compiling rand_chacha v0.9.0
+   Compiling ciborium v0.2.2
+   Compiling proptest v1.11.0
+   Compiling criterion v0.8.2
+   Compiling fsci-linalg v0.1.0 (/data/projects/frankenscipy/crates/fsci-linalg)
+   Compiling fsci-sparse v0.1.0 (/data/projects/frankenscipy/crates/fsci-sparse)
+warning: type `csr_matrix` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:23:10
+   |
+23 | pub type csr_matrix = CsrMatrix;
+   |          ^^^^^^^^^^ help: convert the identifier to upper camel case: `CsrMatrix`
+   |
+   = note: `#[warn(non_camel_case_types)]` (part of `#[warn(nonstandard_style)]`) on by default
+
+warning: type `csc_matrix` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:24:10
+   |
+24 | pub type csc_matrix = CscMatrix;
+   |          ^^^^^^^^^^ help: convert the identifier to upper camel case: `CscMatrix`
+
+warning: type `coo_matrix` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:25:10
+   |
+25 | pub type coo_matrix = CooMatrix;
+   |          ^^^^^^^^^^ help: convert the identifier to upper camel case: `CooMatrix`
+
+warning: type `bsr_matrix` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:26:10
+   |
+26 | pub type bsr_matrix = BsrMatrix;
+   |          ^^^^^^^^^^ help: convert the identifier to upper camel case: `BsrMatrix`
+
+warning: type `dia_matrix` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:27:10
+   |
+27 | pub type dia_matrix = DiaMatrix;
+   |          ^^^^^^^^^^ help: convert the identifier to upper camel case: `DiaMatrix`
+
+warning: type `dok_matrix` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:28:10
+   |
+28 | pub type dok_matrix = DokMatrix;
+   |          ^^^^^^^^^^ help: convert the identifier to upper camel case: `DokMatrix`
+
+warning: type `lil_matrix` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:29:10
+   |
+29 | pub type lil_matrix = LilMatrix;
+   |          ^^^^^^^^^^ help: convert the identifier to upper camel case: `LilMatrix`
+
+warning: type `csr_array` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:31:10
+   |
+31 | pub type csr_array = CsrMatrix;
+   |          ^^^^^^^^^ help: convert the identifier to upper camel case: `CsrArray`
+
+warning: type `csc_array` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:32:10
+   |
+32 | pub type csc_array = CscMatrix;
+   |          ^^^^^^^^^ help: convert the identifier to upper camel case: `CscArray`
+
+warning: type `coo_array` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:33:10
+   |
+33 | pub type coo_array = CooMatrix;
+   |          ^^^^^^^^^ help: convert the identifier to upper camel case: `CooArray`
+
+warning: type `bsr_array` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:34:10
+   |
+34 | pub type bsr_array = BsrMatrix;
+   |          ^^^^^^^^^ help: convert the identifier to upper camel case: `BsrArray`
+
+warning: type `dia_array` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:35:10
+   |
+35 | pub type dia_array = DiaMatrix;
+   |          ^^^^^^^^^ help: convert the identifier to upper camel case: `DiaArray`
+
+warning: type `dok_array` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:36:10
+   |
+36 | pub type dok_array = DokMatrix;
+   |          ^^^^^^^^^ help: convert the identifier to upper camel case: `DokArray`
+
+warning: type `lil_array` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:37:10
+   |
+37 | pub type lil_array = LilMatrix;
+   |          ^^^^^^^^^ help: convert the identifier to upper camel case: `LilArray`
+
+   Compiling fsci-spatial v0.1.0 (/data/projects/frankenscipy/crates/fsci-spatial)
+warning: `fsci-sparse` (lib) generated 14 warnings
+   Compiling fsci-interpolate v0.1.0 (/data/projects/frankenscipy/crates/fsci-interpolate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.85s
+     Running unittests src/lib.rs (/data/tmp/cargo-target/debug/deps/fsci_interpolate-741415ee4b097b1f)
+
+running 120 tests
+test tests::akima1d_interpolate_matches_scipy_reference_values ... ok
+test tests::akima1d_interpolate_metamorphic_dense_in_data_range ... ok
+test tests::akima1d_interpolate_passes_through_nodes ... ok
+test tests::akima1d_interpolate_rejects_unsorted_x ... ok
+test tests::akima_eval_non_finite_query_returns_nan ... ok
+test tests::akima_rejects_nan_in_x_coordinates ... ok
+test tests::barycentric_eval_nan_input_returns_nan ... ok
+test tests::barycentric_interpolate_matches_scipy_reference_values ... ok
+test tests::barycentric_interpolate_passes_through_nodes ... ok
+test tests::barycentric_interpolate_recovers_polynomial_exactly ... ok
+test tests::barycentric_interpolate_rejects_mismatched_lengths ... ok
+test tests::barycentric_eval_many_works ... ok
+test tests::barycentric_interpolator_is_exact_at_nodes ... ok
+test tests::barycentric_interpolator_matches_quadratic ... ok
+test tests::barycentric_interpolator_rejects_duplicate_nodes ... ok
+test tests::bspline_antiderivative ... ok
+test tests::bspline_antiderivative_then_derivative_round_trips ... ok
+test tests::bspline_basic ... ok
+test tests::clough_tocher_exact_at_data_points ... ok
+test tests::clough_tocher_fill_value_outside_hull ... ok
+test tests::clough_tocher_matches_vertex_gradients_at_interior_sites ... ok
+test tests::clough_tocher_preserves_affine_surfaces ... ok
+test tests::clough_tocher_rejects_invalid_inputs ... ok
+test tests::clough_tocher_rescale_handles_different_coordinate_scales ... ok
+test tests::cubic_hermite_metamorphic_recovers_polynomial_with_correct_slopes ... ok
+test tests::cubic_hermite_passes_through_nodes ... ok
+test tests::cubic_hermite_rejects_mismatched_dydx_length ... ok
+test tests::cubic_hermite_rejects_unsorted_x ... ok
+test tests::cubic_spline_periodic_matches_endpoints_and_derivative ... ok
+test tests::cubic_spline_periodic_rejects_mismatched_endpoints ... ok
+test tests::interp1d_linear_matches_scipy_reference_values ... ok
+test tests::interp1d_linear_midpoint_reference_values ... ok
+test tests::interp1d_linear_out_of_bounds_returns_nan ... ok
+test tests::interp1d_rejects_infinity_in_x_coordinates ... ok
+test tests::interp1d_rejects_nan_in_x_coordinates ... ok
+test tests::interpolated_univariate_spline_derivative_and_integral_work ... ok
+test tests::interp1d_linear_exact_at_nodes ... ok
+test tests::interpolated_univariate_spline_matches_exact_knots ... ok
+test tests::interpolated_univariate_spline_matches_zero_smoothing_univariate ... ok
+test tests::krogh_eval_non_finite_query_returns_nan ... ok
+test tests::krogh_interpolate_matches_scipy_reference_values ... ok
+test tests::krogh_interpolate_metamorphic_passes_through_nodes ... ok
+test tests::krogh_interpolate_recovers_polynomial_exactly ... ok
+test tests::krogh_interpolate_rejects_duplicate_knots ... ok
+test tests::lagrange_matches_scipy_reference_values ... ok
+test tests::lagrange_recovers_known_polynomials ... ok
+test tests::linear_interp_at_knots ... ok
+test tests::linear_interp_midpoints ... ok
+test tests::linear_nd_interpolator_rejects_malformed_point_dimensions ... ok
+test tests::make_interp_spline_matches_scipy_reference_values ... ok
+test tests::make_lsq_spline_rejects_too_short_knots_without_panic ... ok
+test tests::nearest_interp ... ok
+test tests::pchip_eval_non_finite_query_returns_nan ... ok
+test tests::pchip_interpolate_matches_scipy_reference_values ... ok
+test tests::pchip_interpolate_metamorphic_monotone_preservation ... ok
+test tests::pchip_interpolate_metamorphic_passes_through_nodes ... ok
+test tests::pchip_interpolate_rejects_unsorted_x ... ok
+test tests::pchip_rejects_nan_in_x_coordinates ... ok
+test tests::polyadd_matches_scipy_reference_values ... ok
+test tests::polyder_matches_scipy_reference_values ... ok
+test tests::polyfit_matches_scipy_reference_values ... ok
+test tests::polyfromroots_closed_form_examples ... ok
+test tests::polyfromroots_matches_scipy_reference_values ... ok
+test tests::polyfromroots_metamorphic_recovers_root_at_polyval ... ok
+test tests::polyint_matches_scipy_reference_values ... ok
+test tests::polymul_matches_scipy_reference_values ... ok
+test tests::polysub_matches_scipy_reference_values ... ok
+test tests::polyval_matches_scipy_reference_values ... ok
+test tests::rbf_2d ... ok
+test tests::rbf_empty_rejected ... ok
+test tests::rbf_eval_many ... ok
+test tests::rbf_exact_at_data_points ... ok
+test tests::rbf_multiquadric_kernel ... ok
+test tests::rbf_query_dimension_mismatch_returns_nan ... ok
+test tests::rbf_rejects_mixed_point_dimensions ... ok
+test tests::rbf_rejects_non_finite_epsilon ... ok
+test tests::rbf_rejects_non_finite_points ... ok
+test tests::rbf_rejects_non_finite_values ... ok
+test tests::rbf_smooth_between_points ... ok
+test tests::rect_bivariate_spline_bilinear ... ok
+test tests::rect_bivariate_spline_eval_grid ... ok
+test tests::rbf_rejects_excessive_point_count ... ok
+test tests::rect_bivariate_spline_linear_plane ... ok
+test tests::rect_bivariate_spline_uses_scipy_x_major_z_shape ... ok
+test tests::rect_bivariate_spline_integral ... ok
+test tests::rect_bivariate_spline_quadratic_surface ... ok
+test tests::regular_grid_nearest_returns_closest ... ok
+test tests::rect_bivariate_spline_rejects_non_monotonic_x ... ok
+test tests::rect_bivariate_spline_too_few_points ... ok
+test tests::regular_grid_cubic_2d_smooth ... ok
+test tests::regular_grid_pchip_fill_and_extrapolate_match_scipy ... ok
+test tests::regular_grid_cubic_requires_4_points ... ok
+test tests::regular_grid_pchip_requires_4_points ... ok
+test tests::regular_grid_pchip_matches_scipy_reference_values ... ok
+test tests::regular_grid_quintic_requires_6_points ... ok
+test tests::regular_grid_rejects_infinity_in_points ... ok
+test tests::regular_grid_rejects_nan_in_points ... ok
+test tests::regular_grid_rejects_nan_in_second_axis ... ok
+test tests::regular_grid_rejects_neg_infinity_in_points ... ok
+test tests::rect_bivariate_spline_rejects_mismatched_dimensions ... ok
+test tests::regular_grid_extrapolates_when_fill_value_none ... ok
+test tests::splantider_matches_scipy_and_accepts_padded_tck ... ok
+test tests::regular_grid_out_of_bounds_fill_value_and_error ... ok
+test tests::splder_matches_scipy_and_accepts_padded_tck ... ok
+test tests::smooth_bivariate_spline_scattered_bilinear_surface ... ok
+test tests::regular_grid_cubic_1d_smooth ... ok
+test tests::smooth_bivariate_spline_builds_piecewise_surface ... ok
+test tests::regular_grid_nearest_nan_query_returns_nan ... ok
+test tests::splev_matches_scipy_reference_values ... ok
+test tests::splev_rejects_derivative_order_above_degree ... ok
+test tests::smooth_bivariate_spline_rejects_invalid_weights ... ok
+test tests::splev_second_derivative_matches_scipy_reference_tck ... ok
+test tests::spline_calculus_rejects_degenerate_tck ... ok
+test tests::regular_grid_linear_3d_trilinear ... ok
+test tests::sproot_rejects_non_cubic ... ok
+test tests::splint_matches_scipy_on_padded_tck ... ok
+test tests::univariate_spline_interpolates_when_s_zero ... ok
+test tests::regular_grid_linear_2d_bilinear ... ok
+test tests::univariate_spline_smoothing_reduces_residual_variation ... ok
+test tests::sproot_matches_scipy_on_cubic_bspline ... ok
+
+test result: ok. 120 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

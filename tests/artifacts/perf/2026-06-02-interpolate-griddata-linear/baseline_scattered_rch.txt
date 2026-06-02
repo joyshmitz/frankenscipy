@@ -1,0 +1,142 @@
+[RCH] local (no admissible workers: insufficient_slots=6,active_project_exclusion=1)
+   Compiling bytemuck v1.25.0
+   Compiling thiserror v2.0.18
+   Compiling serde_json v1.0.149
+   Compiling blake3 v1.8.4
+   Compiling nalgebra-macros v0.3.0
+   Compiling thiserror-impl v2.0.18
+   Compiling tempfile v3.27.0
+   Compiling half v2.7.1
+   Compiling safe_arch v0.7.4
+   Compiling rusty-fork v0.3.1
+   Compiling ciborium-ll v0.2.2
+   Compiling proptest v1.11.0
+   Compiling ciborium v0.2.2
+   Compiling wide v0.7.33
+   Compiling fsci-runtime v0.1.0 (/data/projects/frankenscipy/crates/fsci-runtime)
+   Compiling tinytemplate v1.2.1
+   Compiling criterion v0.8.2
+   Compiling fsci-fft v0.1.0 (/data/projects/frankenscipy/crates/fsci-fft)
+   Compiling simba v0.9.1
+   Compiling nalgebra v0.34.2
+   Compiling fsci-linalg v0.1.0 (/data/projects/frankenscipy/crates/fsci-linalg)
+   Compiling fsci-sparse v0.1.0 (/data/projects/frankenscipy/crates/fsci-sparse)
+warning: type `csr_matrix` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:23:10
+   |
+23 | pub type csr_matrix = CsrMatrix;
+   |          ^^^^^^^^^^ help: convert the identifier to upper camel case: `CsrMatrix`
+   |
+   = note: `#[warn(non_camel_case_types)]` (part of `#[warn(nonstandard_style)]`) on by default
+
+warning: type `csc_matrix` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:24:10
+   |
+24 | pub type csc_matrix = CscMatrix;
+   |          ^^^^^^^^^^ help: convert the identifier to upper camel case: `CscMatrix`
+
+warning: type `coo_matrix` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:25:10
+   |
+25 | pub type coo_matrix = CooMatrix;
+   |          ^^^^^^^^^^ help: convert the identifier to upper camel case: `CooMatrix`
+
+warning: type `bsr_matrix` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:26:10
+   |
+26 | pub type bsr_matrix = BsrMatrix;
+   |          ^^^^^^^^^^ help: convert the identifier to upper camel case: `BsrMatrix`
+
+warning: type `dia_matrix` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:27:10
+   |
+27 | pub type dia_matrix = DiaMatrix;
+   |          ^^^^^^^^^^ help: convert the identifier to upper camel case: `DiaMatrix`
+
+warning: type `dok_matrix` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:28:10
+   |
+28 | pub type dok_matrix = DokMatrix;
+   |          ^^^^^^^^^^ help: convert the identifier to upper camel case: `DokMatrix`
+
+warning: type `lil_matrix` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:29:10
+   |
+29 | pub type lil_matrix = LilMatrix;
+   |          ^^^^^^^^^^ help: convert the identifier to upper camel case: `LilMatrix`
+
+warning: type `csr_array` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:31:10
+   |
+31 | pub type csr_array = CsrMatrix;
+   |          ^^^^^^^^^ help: convert the identifier to upper camel case: `CsrArray`
+
+warning: type `csc_array` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:32:10
+   |
+32 | pub type csc_array = CscMatrix;
+   |          ^^^^^^^^^ help: convert the identifier to upper camel case: `CscArray`
+
+warning: type `coo_array` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:33:10
+   |
+33 | pub type coo_array = CooMatrix;
+   |          ^^^^^^^^^ help: convert the identifier to upper camel case: `CooArray`
+
+warning: type `bsr_array` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:34:10
+   |
+34 | pub type bsr_array = BsrMatrix;
+   |          ^^^^^^^^^ help: convert the identifier to upper camel case: `BsrArray`
+
+warning: type `dia_array` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:35:10
+   |
+35 | pub type dia_array = DiaMatrix;
+   |          ^^^^^^^^^ help: convert the identifier to upper camel case: `DiaArray`
+
+warning: type `dok_array` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:36:10
+   |
+36 | pub type dok_array = DokMatrix;
+   |          ^^^^^^^^^ help: convert the identifier to upper camel case: `DokArray`
+
+warning: type `lil_array` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:37:10
+   |
+37 | pub type lil_array = LilMatrix;
+   |          ^^^^^^^^^ help: convert the identifier to upper camel case: `LilArray`
+
+   Compiling fsci-spatial v0.1.0 (/data/projects/frankenscipy/crates/fsci-spatial)
+   Compiling fsci-interpolate v0.1.0 (/data/projects/frankenscipy/crates/fsci-interpolate)
+warning: `fsci-sparse` (lib) generated 14 warnings
+    Finished `bench` profile [optimized] target(s) in 14.48s
+     Running benches/interpolate_bench.rs (/data/tmp/cargo-target/release/deps/interpolate_bench-35b4972c7db125e8)
+Gnuplot not found, using plotters backend
+Benchmarking scattered_2d/linear_nd_eval_many/576x1024
+Benchmarking scattered_2d/linear_nd_eval_many/576x1024: Warming up for 1.0000 s
+Benchmarking scattered_2d/linear_nd_eval_many/576x1024: Collecting 10 samples in estimated 3.0812 s (715 iterations)
+Benchmarking scattered_2d/linear_nd_eval_many/576x1024: Analyzing
+scattered_2d/linear_nd_eval_many/576x1024
+                        time:   [4.1881 ms 4.2368 ms 4.2648 ms]
+                        change: [−61.293% −59.840% −58.571%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Benchmarking scattered_2d/clough_tocher_eval_many/576x1024
+Benchmarking scattered_2d/clough_tocher_eval_many/576x1024: Warming up for 1.0000 s
+Benchmarking scattered_2d/clough_tocher_eval_many/576x1024: Collecting 10 samples in estimated 3.1882 s (715 iterations)
+Benchmarking scattered_2d/clough_tocher_eval_many/576x1024: Analyzing
+scattered_2d/clough_tocher_eval_many/576x1024
+                        time:   [4.2971 ms 4.3761 ms 4.4614 ms]
+                        change: [−61.159% −59.677% −58.321%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Benchmarking scattered_2d/griddata_linear/576x1024
+Benchmarking scattered_2d/griddata_linear/576x1024: Warming up for 1.0000 s
+Benchmarking scattered_2d/griddata_linear/576x1024: Collecting 10 samples in estimated 3.1902 s (495 iterations)
+Benchmarking scattered_2d/griddata_linear/576x1024: Analyzing
+scattered_2d/griddata_linear/576x1024
+                        time:   [6.2458 ms 6.3520 ms 6.4702 ms]
+                        change: [−56.964% −55.923% −54.857%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+

@@ -2040,6 +2040,54 @@ pub struct Delaunay2D {
     pub points: Vec<(f64, f64)>,
     pub simplices: Vec<(usize, usize, usize)>,
     pub neighbors: Vec<[Option<usize>; 3]>,
+    simplex_bounds: Vec<SimplexBounds>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SimplexBounds {
+    min_x: f64,
+    max_x: f64,
+    min_y: f64,
+    max_y: f64,
+    margin_x: f64,
+    margin_y: f64,
+}
+
+impl SimplexBounds {
+    fn for_simplex(points: &[(f64, f64)], (a, b, c): (usize, usize, usize)) -> Self {
+        let (ax, ay) = points[a];
+        let (bx, by) = points[b];
+        let (cx, cy) = points[c];
+        let min_x = ax.min(bx).min(cx);
+        let max_x = ax.max(bx).max(cx);
+        let min_y = ay.min(by).min(cy);
+        let max_y = ay.max(by).max(cy);
+        let scale_x = max_x
+            .abs()
+            .max(min_x.abs())
+            .max((max_x - min_x).abs())
+            .max(1.0);
+        let scale_y = max_y
+            .abs()
+            .max(min_y.abs())
+            .max((max_y - min_y).abs())
+            .max(1.0);
+        Self {
+            min_x,
+            max_x,
+            min_y,
+            max_y,
+            margin_x: 1e-9 * scale_x,
+            margin_y: 1e-9 * scale_y,
+        }
+    }
+
+    fn may_contain(self, query: (f64, f64)) -> bool {
+        !(query.0 < self.min_x - self.margin_x
+            || query.0 > self.max_x + self.margin_x
+            || query.1 < self.min_y - self.margin_y
+            || query.1 > self.max_y + self.margin_y)
+    }
 }
 
 impl Delaunay2D {
@@ -2109,15 +2157,23 @@ impl Delaunay2D {
             .filter(|&(a, b, c)| a < n && b < n && c < n)
             .map(|triangle| orient_triangle_ccw(points, triangle))
             .collect::<Vec<_>>();
+        let simplex_bounds = simplices
+            .iter()
+            .map(|&simplex| SimplexBounds::for_simplex(points, simplex))
+            .collect();
         let neighbors = compute_simplex_neighbors(&simplices);
         Ok(Self {
             points: points.to_vec(),
             simplices,
             neighbors,
+            simplex_bounds,
         })
     }
     pub fn find_simplex(&self, query: (f64, f64)) -> Option<(usize, f64, f64, f64)> {
         for (idx, &(a, b, c)) in self.simplices.iter().enumerate() {
+            if !self.simplex_bounds[idx].may_contain(query) {
+                continue;
+            }
             let (l1, l2, l3) = barycentric(self.points[a], self.points[b], self.points[c], query);
             if l1 >= -1e-10 && l2 >= -1e-10 && l3 >= -1e-10 {
                 return Some((idx, l1, l2, l3));
