@@ -10,7 +10,7 @@
 //! ```
 //!
 //! Usage: `perf_solve <mode> <n> <repeats> [seed]`
-//!   mode    = solve | lu_factor | lu_solve   (which stage to exercise)
+//!   mode    = solve | lu_factor | lu_solve | solve_triangular
 //!   n       = matrix dimension
 //!   repeats = number of timed iterations
 //!
@@ -22,7 +22,10 @@
 use std::hint::black_box;
 use std::time::Instant;
 
-use fsci_linalg::{lu_factor, lu_solve, solve, DecompOptions, SolveOptions};
+use fsci_linalg::{
+    lu_factor, lu_solve, solve, solve_triangular, DecompOptions, SolveOptions,
+    TriangularSolveOptions,
+};
 
 /// Deterministic diagonally-dominant matrix; no RNG crate so the workload is
 /// byte-for-byte reproducible across runs/hosts.
@@ -37,17 +40,17 @@ fn make_matrix(n: usize, seed: u64) -> Vec<Vec<f64>> {
         ((z ^ (z >> 31)) as f64) / (u64::MAX as f64) - 0.5
     };
     let mut a = vec![vec![0.0; n]; n];
-    for i in 0..n {
+    for (i, row) in a.iter_mut().enumerate() {
         let mut rowsum = 0.0;
-        for j in 0..n {
+        for (j, cell) in row.iter_mut().enumerate() {
             let v = next();
-            a[i][j] = v;
+            *cell = v;
             if i != j {
                 rowsum += v.abs();
             }
         }
         // Force diagonal dominance for a well-conditioned system.
-        a[i][i] = rowsum + 1.0;
+        row[i] = rowsum + 1.0;
     }
     a
 }
@@ -62,6 +65,24 @@ fn make_rhs(n: usize, seed: u64) -> Vec<f64> {
         .collect()
 }
 
+fn make_upper_triangular(n: usize) -> Vec<Vec<f64>> {
+    let mut a = vec![vec![0.0; n]; n];
+    for (i, row) in a.iter_mut().enumerate() {
+        for (j, cell) in row.iter_mut().enumerate().skip(i) {
+            *cell = if i == j {
+                (n as f64) * 2.0
+            } else {
+                1.0 / ((i as f64 - j as f64).abs() + 1.0)
+            };
+        }
+    }
+    a
+}
+
+fn make_linear_rhs(n: usize) -> Vec<f64> {
+    (0..n).map(|i| (i + 1) as f64).collect()
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let mode = args.get(1).map(String::as_str).unwrap_or("solve");
@@ -69,8 +90,11 @@ fn main() {
     let repeats: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(1);
     let seed: u64 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(42);
 
-    let a = make_matrix(n, seed);
-    let b = make_rhs(n, seed);
+    let (a, b) = if mode == "solve_triangular" {
+        (make_upper_triangular(n), make_linear_rhs(n))
+    } else {
+        (make_matrix(n, seed), make_rhs(n, seed))
+    };
 
     let t0 = Instant::now();
     let mut checksum = 0.0_f64;
@@ -91,6 +115,15 @@ fn main() {
                 let f = lu_factor(&a, DecompOptions::default()).unwrap();
                 let r = lu_solve(black_box(&f), black_box(&b)).unwrap();
                 checksum += r.x.iter().sum::<f64>();
+            }
+            "solve_triangular" => {
+                let r = solve_triangular(
+                    black_box(&a),
+                    black_box(&b),
+                    TriangularSolveOptions::default(),
+                )
+                .unwrap();
+                checksum += r.x.iter().sum::<f64>() + r.backward_error.unwrap_or(0.0);
             }
             other => {
                 eprintln!("unknown mode: {other}");
