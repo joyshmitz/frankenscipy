@@ -56967,6 +56967,42 @@ mod tests {
     }
 
     #[test]
+    fn discrete_pmfs_sum_to_one() {
+        // Discrete analog of the pdf-normalization guard: each pmf must sum to
+        // ~1 over its support. Upper bounds validated against scipy.
+        fn sum_pmf<D: DiscreteDistribution>(d: &D, n: u64) -> f64 {
+            (0..=n).map(|k| d.pmf(k)).sum()
+        }
+        let check = |name: &str, s: f64| {
+            assert!((s - 1.0).abs() < 1e-5, "{name} pmf sum = {s}, expected 1");
+        };
+        check("Poisson", sum_pmf(&Poisson::new(3.0), 60));
+        check("Binomial", sum_pmf(&Binomial::new(20, 0.3), 20));
+        check("BetaBinomial", sum_pmf(&BetaBinomial::new(20, 2.0, 3.0), 20));
+        check("Bernoulli", sum_pmf(&Bernoulli::new(0.4), 1));
+        check("Boltzmann", sum_pmf(&Boltzmann::new(0.5, 10), 10));
+        check("Planck", sum_pmf(&Planck::new(0.5), 300));
+        check("Geometric", sum_pmf(&Geometric::new(0.3), 200));
+        check("NegBinomial", sum_pmf(&NegBinomial::new(5.0, 0.4), 300));
+        check("Hypergeometric", sum_pmf(&Hypergeometric::new(40, 15, 12), 15));
+        check("NegHypergeometric", sum_pmf(&NegHypergeometric::new(20, 7, 3), 20));
+        check("LogSeries", sum_pmf(&LogSeries::new(0.6), 400));
+        check("Zipfian", sum_pmf(&Zipfian::new(2.0, 20), 20));
+        check(
+            "BetaNegativeBinomial",
+            sum_pmf(&BetaNegativeBinomial::new(5, 3.0, 4.0), 2000),
+        );
+        // Signed-support distributions use pmf_signed.
+        let skellam = Skellam::new(5.0, 3.0);
+        check("Skellam", (-40..=60).map(|k| skellam.pmf_signed(k)).sum());
+        let dlaplace = DiscreteLaplace::new(0.7);
+        check(
+            "DiscreteLaplace",
+            (-200..=200).map(|k| dlaplace.pmf_signed(k)).sum(),
+        );
+    }
+
+    #[test]
     fn rel_breit_wigner_matches_scipy() {
         // scipy.stats.rel_breitwigner reference values (rho=0.5 and rho=1.0).
         let d = RelBreitWigner::new(0.5);
