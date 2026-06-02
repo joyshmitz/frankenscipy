@@ -1,0 +1,1275 @@
+  [2m2026-06-02T12:51:24.929333Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mSelected worker: vmi1149989 at ubuntu@212.90.121.76 (0 slots remaining after reservation, speed 50.0)[0m
+    [2;3mat[0m rch/src/hook.rs:514 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:51:25.230819Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mStarting remote compilation pipeline for frankenscipy (hash: 15389f52d4cb0012)[0m
+    [2;3mat[0m rch/src/hook.rs:5987 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:51:25.230858Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mPrepared dependency sync manifest for 20 roots[0m
+    [2;3mat[0m rch/src/hook.rs:6009 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:51:27.051529Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mSyncing project to worker vmi1149989...[0m
+    [2;3mat[0m rch/src/hook.rs:6039 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:51:27.051582Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy -> /data/projects/frankenscipy on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:51:31.032077Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 3980ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:51:31.032150Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-arrayapi -> /data/projects/frankenscipy/crates/fsci-arrayapi on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:51:32.878248Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1846ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:51:32.878333Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-cluster -> /data/projects/frankenscipy/crates/fsci-cluster on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:51:34.736272Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1857ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:51:34.736346Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-conformance -> /data/projects/frankenscipy/crates/fsci-conformance on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:51:38.100109Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 3363ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:51:38.100199Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-constants -> /data/projects/frankenscipy/crates/fsci-constants on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:51:39.994109Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1893ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:51:39.994184Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-datasets -> /data/projects/frankenscipy/crates/fsci-datasets on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:51:41.816509Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1822ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:51:41.816594Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-fft -> /data/projects/frankenscipy/crates/fsci-fft on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:51:43.681677Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1865ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:51:43.681794Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-integrate -> /data/projects/frankenscipy/crates/fsci-integrate on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:51:45.504288Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1822ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:51:45.504368Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-interpolate -> /data/projects/frankenscipy/crates/fsci-interpolate on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:51:47.341717Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1837ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:51:47.341878Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-io -> /data/projects/frankenscipy/crates/fsci-io on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:51:49.169915Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1828ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:51:49.170010Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-linalg -> /data/projects/frankenscipy/crates/fsci-linalg on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:51:51.177379Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 2007ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:51:51.177465Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-ndimage -> /data/projects/frankenscipy/crates/fsci-ndimage on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:51:53.098648Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1921ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:51:53.098736Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-odr -> /data/projects/frankenscipy/crates/fsci-odr on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:51:55.025364Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1926ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:51:55.025444Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-opt -> /data/projects/frankenscipy/crates/fsci-opt on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:51:56.892137Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1866ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:51:56.892217Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-runtime -> /data/projects/frankenscipy/crates/fsci-runtime on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:51:58.696396Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1804ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:51:58.696483Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-signal -> /data/projects/frankenscipy/crates/fsci-signal on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:52:00.519931Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1823ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:52:00.520022Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-sparse -> /data/projects/frankenscipy/crates/fsci-sparse on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:52:02.481664Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1961ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:52:02.481739Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-spatial -> /data/projects/frankenscipy/crates/fsci-spatial on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:52:04.330160Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1848ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:52:04.330257Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-special -> /data/projects/frankenscipy/crates/fsci-special on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:52:06.209149Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1878ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:52:06.209240Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-stats -> /data/projects/frankenscipy/crates/fsci-stats on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:52:08.005476Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1796ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:52:08.005516Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mSync complete: 26008 files, 933238 bytes in 40943ms[0m
+    [2;3mat[0m rch/src/hook.rs:6202 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:52:30.454608Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mExecuting command remotely: cargo test -p fsci-special --lib --locked[0m
+    [2;3mat[0m rch/src/hook.rs:6240 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:52:30.454661Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mRewriting CARGO_TARGET_DIR for remote execution (worker-scoped path): /data/tmp/cargo-target-frankenscipy-olivesnow-special-test-final2 -> /data/projects/frankenscipy/.rch-target-vmi1149989-job-29869223945701583-1780404687051523453-0[0m
+    [2;3mat[0m rch/src/transfer.rs:712 [2;3mon[0m ThreadId(1)
+
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded alloca v0.4.0
+  Downloaded approx v0.5.1
+  Downloaded autocfg v1.5.0
+  Downloaded anstyle v1.0.14
+  Downloaded cast v0.3.0
+  Downloaded bytemuck v1.25.0
+  Downloaded arrayref v0.3.9
+  Downloaded ciborium-ll v0.2.2
+  Downloaded clap_lex v1.1.0
+  Downloaded cfg-if v1.0.4
+  Downloaded ciborium-io v0.2.2
+  Downloaded cpufeatures v0.3.0
+  Downloaded equivalent v1.0.2
+  Downloaded same-file v1.0.6
+  Downloaded rawpointer v0.2.1
+  Downloaded page_size v0.6.0
+  Downloaded itoa v1.0.18
+  Downloaded anes v0.1.6
+  Downloaded find-msvc-tools v0.1.9
+  Downloaded crossbeam-deque v0.8.6
+  Downloaded nalgebra-macros v0.3.0
+  Downloaded plotters-svg v0.3.7
+  Downloaded either v1.15.0
+  Downloaded walkdir v2.5.0
+  Downloaded shlex v1.3.0
+  Downloaded crossbeam-epoch v0.9.18
+  Downloaded paste v1.0.15
+  Downloaded plotters-backend v0.3.7
+  Downloaded num-complex v0.4.6
+  Downloaded arrayvec v0.7.6
+  Downloaded oorandom v11.1.5
+  Downloaded num-rational v0.4.2
+  Downloaded num-integer v0.1.46
+  Downloaded criterion-plot v0.8.2
+  Downloaded crossbeam-utils v0.8.21
+  Downloaded zmij v1.0.21
+  Downloaded unicode-ident v1.0.24
+  Downloaded half v2.7.1
+  Downloaded simba v0.9.1
+  Downloaded serde_derive v1.0.228
+  Downloaded quote v1.0.45
+  Downloaded num-traits v0.2.19
+  Downloaded matrixmultiply v0.3.10
+  Downloaded serde_core v1.0.228
+  Downloaded rayon-core v1.13.0
+  Downloaded proc-macro2 v1.0.106
+  Downloaded constant_time_eq v0.4.2
+  Downloaded clap v4.6.1
+  Downloaded ciborium v0.2.2
+  Downloaded cc v1.2.60
+  Downloaded safe_arch v0.7.4
+  Downloaded serde v1.0.228
+  Downloaded zerocopy-derive v0.8.48
+  Downloaded wide v0.7.33
+  Downloaded typenum v1.20.0
+  Downloaded memchr v2.8.0
+  Downloaded criterion v0.8.2
+  Downloaded num-bigint v0.4.6
+  Downloaded itertools v0.13.0
+  Downloaded glam v0.15.2
+  Downloaded serde_json v1.0.149
+  Downloaded glam v0.20.5
+  Downloaded glam v0.18.0
+  Downloaded blake3 v1.8.4
+  Downloaded regex v1.12.3
+  Downloaded rayon v1.12.0
+  Downloaded plotters v0.3.7
+  Downloaded glam v0.21.3
+  Downloaded zerocopy v0.8.48
+  Downloaded syn v2.0.117
+  Downloaded glam v0.22.0
+  Downloaded glam v0.24.2
+  Downloaded nalgebra v0.34.2
+  Downloaded regex-syntax v0.8.10
+  Downloaded glam v0.25.0
+  Downloaded glam v0.27.0
+  Downloaded glam v0.23.0
+  Downloaded hashbrown v0.17.0
+  Downloaded glam v0.28.0
+  Downloaded glam v0.19.0
+  Downloaded glam v0.16.0
+  Downloaded glam v0.29.3
+  Downloaded clap_builder v4.6.0
+  Downloaded aho-corasick v1.1.4
+  Downloaded glam v0.17.3
+  Downloaded regex-automata v0.4.14
+  Downloaded glam v0.14.0
+  Downloaded indexmap v2.14.0
+  Downloaded glam v0.30.10
+  Downloaded glam v0.31.1
+  Downloaded libc v0.2.185
+  Downloaded glam v0.32.1
+  Downloaded tinytemplate v1.2.1
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.45
+   Compiling unicode-ident v1.0.24
+   Compiling autocfg v1.5.0
+   Compiling shlex v1.3.0
+   Compiling find-msvc-tools v0.1.9
+   Compiling serde_core v1.0.228
+   Compiling cfg-if v1.0.4
+   Compiling serde v1.0.228
+   Compiling zmij v1.0.21
+   Compiling equivalent v1.0.2
+   Compiling serde_json v1.0.149
+   Compiling cc v1.2.60
+   Compiling hashbrown v0.17.0
+   Compiling crossbeam-utils v0.8.21
+   Compiling itoa v1.0.18
+   Compiling memchr v2.8.0
+   Compiling zerocopy v0.8.48
+   Compiling num-traits v0.2.19
+   Compiling paste v1.0.15
+   Compiling bytemuck v1.25.0
+   Compiling matrixmultiply v0.3.10
+   Compiling cpufeatures v0.3.0
+   Compiling safe_arch v0.7.4
+   Compiling indexmap v2.14.0
+   Compiling crossbeam-epoch v0.9.18
+   Compiling syn v2.0.117
+   Compiling arrayvec v0.7.6
+   Compiling arrayref v0.3.9
+   Compiling rayon-core v1.13.0
+   Compiling either v1.15.0
+   Compiling libc v0.2.185
+   Compiling constant_time_eq v0.4.2
+   Compiling crossbeam-deque v0.8.6
+   Compiling wide v0.7.33
+   Compiling regex-syntax v0.8.10
+   Compiling approx v0.5.1
+   Compiling num-complex v0.4.6
+   Compiling num-integer v0.1.46
+   Compiling ciborium-io v0.2.2
+   Compiling clap_lex v1.1.0
+   Compiling rawpointer v0.2.1
+   Compiling blake3 v1.8.4
+   Compiling alloca v0.4.0
+   Compiling anstyle v1.0.14
+   Compiling plotters-backend v0.3.7
+   Compiling num-rational v0.4.2
+   Compiling clap_builder v4.6.0
+   Compiling plotters-svg v0.3.7
+   Compiling itertools v0.13.0
+   Compiling same-file v1.0.6
+   Compiling simba v0.9.1
+   Compiling regex-automata v0.4.14
+   Compiling cast v0.3.0
+   Compiling typenum v1.20.0
+   Compiling page_size v0.6.0
+   Compiling rayon v1.12.0
+   Compiling walkdir v2.5.0
+   Compiling plotters v0.3.7
+   Compiling anes v0.1.6
+   Compiling clap v4.6.1
+   Compiling criterion-plot v0.8.2
+   Compiling oorandom v11.1.5
+   Compiling serde_derive v1.0.228
+   Compiling zerocopy-derive v0.8.48
+   Compiling nalgebra-macros v0.3.0
+   Compiling regex v1.12.3
+   Compiling nalgebra v0.34.2
+   Compiling fsci-runtime v0.1.0 (/data/projects/frankenscipy/crates/fsci-runtime)
+   Compiling tinytemplate v1.2.1
+   Compiling fsci-fft v0.1.0 (/data/projects/frankenscipy/crates/fsci-fft)
+   Compiling half v2.7.1
+   Compiling ciborium-ll v0.2.2
+   Compiling ciborium v0.2.2
+   Compiling criterion v0.8.2
+   Compiling fsci-linalg v0.1.0 (/data/projects/frankenscipy/crates/fsci-linalg)
+   Compiling fsci-special v0.1.0 (/data/projects/frankenscipy/crates/fsci-special)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 23.58s
+     Running unittests src/lib.rs (.rch-target-vmi1149989-job-29869223945701583-1780404687051523453-0/debug/deps/fsci_special-6fa7c3bb82ad7596)
+
+running 937 tests
+test airy::tests::ai_zeros_first_five_match_known_values ... ok
+test airy::tests::ai_convenience_function ... ok
+test airy::tests::ai_and_bi_support_complex_inputs ... ok
+test airy::tests::ai_zeros_matches_scipy_reference_values ... ok
+test airy::tests::ai_zeros_metamorphic_strictly_decreasing ... ok
+test airy::tests::airy_at_zero ... ok
+test airy::tests::ai_zeros_metamorphic_zero_value ... ok
+test airy::tests::airy_complex_real_axis_matches_real_path ... ok
+test airy::tests::airy_complex_vector_preserves_conjugation_symmetry ... ok
+test airy::tests::airy_empty_input_error ... ok
+test airy::tests::airy_large_positive ... ok
+test airy::tests::airy_metamorphic_wronskian_identity ... ok
+test airy::tests::airy_vector_input ... ok
+test airy::tests::airye_complex_negative_real_uses_principal_complex_scale ... ok
+test airy::tests::airye_matches_scipy_reference_values ... ok
+test airy::tests::airy_matches_scipy_reference_values ... ok
+test airy::tests::airy_large_negative ... ok
+test airy::tests::airy_positive_small ... ok
+test airy::tests::airy_negative ... ok
+test airy::tests::airy_nan_passthrough ... ok
+test airy::tests::airy_complex_zero_matches_known_constants ... ok
+test airy::tests::bi_convenience_function ... ok
+test airy::tests::airy_positive_infinity ... ok
+test airy::tests::bi_zeros_matches_scipy_reference_values ... ok
+test airy::tests::bi_zeros_first_three_match_known_values ... ok
+test airy::tests::bi_zeros_metamorphic_zero_value ... ok
+test bessel::tests::complex_bessel_derivative_zero_order_matches_base_functions ... ok
+test bessel::tests::complex_bessel_derivative_broadcasts_complex_vectors ... ok
+test bessel::tests::complex_bessel_derivative_reduces_to_real_axis_values ... ok
+test bessel::tests::bessel_zeros_metamorphic_pi_separation_for_large_k ... ok
+test bessel::tests::complex_bessel_negative_integer_orders_stay_finite ... ok
+test bessel::tests::complex_bessel_vector_broadcast ... ok
+test bessel::tests::bessel_zeros_metamorphic_interlace_relation ... ok
+test bessel::tests::complex_hankel_derivative_reduces_to_real_axis_values ... ok
+test audit::tests::record_after_poison_still_lands_in_ledger ... ok
+test airy::tests::airye_negative_real_matches_scipy_nan_ai_scaling ... ok
+test bessel::tests::complex_hankel_derivative_zero_order_matches_base_hankel ... ok
+test airy::tests::airye_positive_large_stays_scaled ... ok
+test bessel::tests::complex_hankel_tensor_interface_matches_jv_plus_minus_i_yv ... ok
+test bessel::tests::complex_iv_real_matches_real_iv ... ok
+test bessel::tests::complex_hankel_derivatives_broadcast_vectors ... ok
+test bessel::tests::complex_jv_pure_imaginary ... ok
+test bessel::tests::complex_spherical_in_reduces_to_real ... ok
+test bessel::tests::complex_spherical_jn_at_zero ... ok
+test bessel::tests::complex_spherical_jn_reduces_to_real ... ok
+test bessel::tests::complex_spherical_in_small_z_large_n_matches_real ... ok
+test bessel::tests::complex_spherical_jn_small_z_large_n_matches_real ... ok
+test bessel::tests::complex_spherical_kn_reduces_to_real ... ok
+test bessel::tests::complex_jv_real_matches_real_jv ... ok
+test bessel::tests::complex_spherical_jn_tensor_interface ... ok
+test bessel::tests::hankel_broadcasts_real_vector_inputs_to_complex_vec ... ok
+test bessel::tests::complex_yv_tensor_interface ... ok
+test bessel::tests::complex_spherical_yn_at_zero_is_negative_inf ... ok
+test bessel::tests::complex_kv_tensor_interface ... ok
+test bessel::tests::hankel_derivatives_return_complex_conjugate_parts ... ok
+test bessel::tests::hankel_tensor_interface_returns_full_complex_parts ... ok
+test bessel::tests::derivative_helpers_broadcast_vectors ... ok
+test bessel::tests::i0_matches_scipy_reference_values ... ok
+test bessel::tests::i0e_matches_scipy_reference ... ok
+test bessel::tests::i1e_matches_scipy_reference ... ok
+test bessel::tests::jn_small_x_large_n_matches_series ... ok
+test bessel::tests::jn_zeros_first_three_of_j0_match_known ... ok
+test bessel::tests::jn_zeros_first_two_of_j1_match_known ... ok
+test bessel::tests::derivative_bessel_zeros_match_scipy_reference_points ... ok
+test bessel::tests::i1_matches_scipy_reference_values ... ok
+test bessel::tests::jn_zeros_large_n_first_zero_matches_olver ... ok
+test bessel::tests::jn_zeros_metamorphic_strictly_increasing ... ok
+test bessel::tests::jv_matches_scipy_reference_values ... ok
+test bessel::tests::ive_kve_definition_matches_scaling ... ok
+test bessel::tests::jvp_zero_order_matches_jv ... ok
+test bessel::tests::jn_zeros_metamorphic_zero_value ... ok
+test bessel::tests::k0_k1_kn_negative_x_is_nan ... ok
+test bessel::tests::iv_matches_scipy_reference_points ... ok
+test bessel::tests::jvp_first_and_second_derivatives_match_recurrences ... ok
+test bessel::tests::j1_matches_scipy_reference_values ... ok
+test bessel::tests::j0_y0_small_arguments_match_scipy_reference_points ... ok
+test bessel::tests::ivp_and_kvp_first_derivatives_match_order_zero_identities ... ok
+test bessel::tests::k0_k1_kn_at_zero_is_infinity ... ok
+test bessel::tests::jn_zeros_large_order_match_scipy_first_five ... ok
+test bessel::tests::k0e_matches_scipy_reference ... ok
+test bessel::tests::k0_matches_scipy_reference ... ok
+test bessel::tests::k1e_matches_scipy_reference ... ok
+test bessel::tests::k1_matches_scipy_reference ... ok
+test bessel::tests::riccati_metamorphic_pythagorean_at_k_zero ... ok
+test bessel::tests::riccati_yn_zero_order_matches_scipy_convention ... ok
+test bessel::tests::riccati_yn_matches_scipy ... ok
+test bessel::tests::log_wright_bessel_matches_existing_log_domain_series ... ok
+test bessel::tests::spherical_in_negative_x_parity ... ok
+test bessel::tests::scaled_hankel_real_inputs_apply_scipy_phase ... ok
+test bessel::tests::log_wright_bessel_zero_and_exponential_boundaries ... ok
+test bessel::tests::riccati_jn_zero_order_is_sin_cos ... ok
+test bessel::tests::scaled_cylindrical_bessel_complex_inputs_apply_scipy_scale ... ok
+test bessel::tests::spherical_in_small_x_large_n_matches_series ... ok
+test bessel::tests::riccati_jn_metamorphic_recurrence_consistency ... ok
+test bessel::tests::scaled_cylindrical_bessel_real_inputs_match_base ... ok
+test bessel::tests::wright_bessel_matches_large_a_scipy_reference_values ... ok
+test bessel::tests::kn_matches_scipy_reference ... ok
+test bessel::tests::wright_bessel_rejects_negative_domain_in_hardened_mode ... ok
+test bessel::tests::wright_bessel_zero_matches_rgamma_boundary ... ok
+test bessel::tests::y0_y1_zeros_wrappers_match_scipy_reference_points ... ok
+test bessel::tests::y1_matches_scipy_reference_values ... ok
+test bessel::tests::spherical_jn_recurrence_threshold_continuity ... ok
+test bessel::tests::spherical_jn_small_x_large_n_matches_series ... ok
+test bessel::tests::yn_zeros_first_three_of_y0_match_known ... ok
+test bessel::tests::yv_matches_scipy_reference_values ... ok
+test bessel::tests::yn_zeros_metamorphic_strictly_increasing ... ok
+test bessel::tests::yn_zeros_metamorphic_zero_value ... ok
+test bessel::tests::yn_zeros_large_order_match_scipy_first_five ... ok
+test bessel::tests::yvp_first_derivative_matches_y0_identity ... ok
+test beta::tests::beta_mixed_real_complex_vectors_preserve_symmetry ... ok
+test beta::tests::beta_real_scalar_complex_vector_broadcasts ... ok
+test beta::tests::beta_vector_mismatch_returns_domain_error ... ok
+test beta::tests::betaincc_complements_betainc_and_preserves_endpoints ... ok
+test bessel::tests::yn_zeros_large_n_first_zero_matches_olver ... ok
+test beta::tests::bdtr_bdtrc_complement ... ok
+test beta::tests::betainccinv_matches_scipy_reference_and_inverts_tail ... ok
+test beta::tests::bdtr_matches_scipy_reference_values ... ok
+test bessel::tests::yvp_hardened_rejects_negative_real_argument ... ok
+test beta::tests::betaincc_tensor_dispatch_broadcasts_real_vectors ... ok
+test beta::tests::betaln_mixed_vector_mismatch_returns_domain_error ... ok
+test beta::tests::bdtri_inverse ... ok
+test beta::tests::binomial_inverse_shape_parameters_round_trip ... ok
+test beta::tests::betaln_complex_scalar_real_vector_broadcasts ... ok
+test beta::tests::bdtr_basic ... ok
+test beta::tests::btdtr_swap_symmetry_identity ... ok
+test beta::tests::btdtr_closed_form_reference_values ... ok
+test beta::tests::btdtria_edges_match_scipy ... ok
+test beta::tests::btdtrib_edges_match_scipy ... ok
+test beta::tests::btdtrc_complement ... ok
+test beta::tests::betaln_complex_vector_mismatch_returns_domain_error ... ok
+test beta::tests::btdtria_reference_values ... ok
+test beta::tests::btdtrib_reference_values ... ok
+test beta::tests::binomial_inverse_shape_parameters_match_scipy_reference_values ... ok
+test beta::tests::btdtr_matches_scipy_reference_values ... ok
+test beta::tests::complex_beta_mixed_real_complex ... ok
+test beta::tests::complex_beta_with_imaginary_parts ... ok
+test beta::tests::complex_beta_real_inputs_match_real_path ... ok
+test beta::tests::complex_betainc_endpoints ... ok
+test beta::tests::complex_betainc_real_inputs_match_real ... ok
+test beta::tests::complex_betainc_with_complex_args ... ok
+test beta::tests::complex_betaln_real_inputs_match_real_path ... ok
+test beta::tests::complex_betaln_vector ... ok
+test beta::tests::complex_betaln_with_imaginary_parts ... ok
+test beta::tests::fdtr_dfn_equals_dfd_median_at_x_one ... ok
+test beta::tests::btdtrib_inverse ... ok
+test beta::tests::btdtria_inverse ... ok
+test beta::tests::fdtr_matches_scipy_reference_values ... ok
+test beta::tests::fdtrc_complement ... ok
+test beta::tests::fdtri_matches_scipy_reference_values ... ok
+test beta::tests::nbdtr_basic ... ok
+test beta::tests::stdtr_basic ... ok
+test beta::tests::negative_binomial_inverse_shape_parameters_round_trip ... ok
+test beta::tests::stdtr_matches_scipy_reference_values ... ok
+test beta::tests::stdtr_symmetry ... ok
+test beta::tests::stdtrc_complement ... ok
+test beta::tests::fdtr_metamorphic_boundary_zero_and_monotone ... ok
+test beta::tests::fdtridfd_scipy_sentinels ... ok
+test beta::tests::fdtridfd_reference_values ... ok
+test beta::tests::stdtridf_scipy_sentinels ... ok
+test beta::tests::nbdtr_nbdtrc_complement ... ok
+test beta::tests::negative_binomial_inverse_shape_parameters_match_scipy_reference_values ... ok
+test beta::tests::fdtri_roundtrip_recovers_x ... ok
+test beta::tests::stdtridf_reference_values ... ok
+test beta::tests::stdtrit_endpoints ... ok
+test beta::tests::nbdtri_inverse ... ok
+test beta::tests::stdtrit_matches_scipy_reference_values ... ok
+test convenience::tests::betaincinv_tensor_dispatch_matches_scalar_path ... ok
+test convenience::tests::betaincinv_tensor_dispatch_preserves_boundary_and_broadcast_behavior ... ok
+test convenience::tests::binary_cross_entropy_basic ... ok
+test convenience::tests::boxcox_scalar_helpers_cover_lambda_zero_and_roundtrip ... ok
+test convenience::tests::boxcox_tensor_dispatch_matches_scalar_path ... ok
+test convenience::tests::cauchit_basic ... ok
+test convenience::tests::binary_cross_entropy_tensor_dispatch_matches_scalar_path ... ok
+test convenience::tests::cauchit_inv_basic ... ok
+test convenience::tests::boxcox_tensor_dispatch_preserves_domain_nan_and_inverse_roundtrip ... ok
+test convenience::tests::cauchit_inverse_relationship ... ok
+test convenience::tests::binary_cross_entropy_tensor_dispatch_preserves_domain_behavior ... ok
+test convenience::tests::cauchit_tensor_dispatch_matches_scalar_path ... ok
+test beta::tests::stdtrit_inverse ... ok
+test convenience::tests::cauchit_inv_tensor_dispatch_matches_scalar_path ... ok
+test convenience::tests::cauchit_tensor_roundtrip_preserves_values ... ok
+test convenience::tests::cbrt_basic ... ok
+test convenience::tests::celu_basic ... ok
+test convenience::tests::boxcox_alias_matches_scipy_edges ... ok
+test convenience::tests::clip_basic ... ok
+test convenience::tests::cloglog_basic ... ok
+test convenience::tests::cloglog_inv_basic ... ok
+test convenience::tests::combined_kelvin_matches_component_reference_points ... ok
+test convenience::tests::cosm1_scalar_edge_cases ... ok
+test convenience::tests::cosm1_scalar_matches_naive_at_moderate_x ... ok
+test convenience::tests::cosm1_scalar_metamorphic_preserves_near_zero_quadratic ... ok
+test convenience::tests::cospi_basic ... ok
+test convenience::tests::cosm1_supports_real_tensor_dispatch ... ok
+test convenience::tests::deg2rad_rad2deg ... ok
+test convenience::tests::dawsn_tensor_dispatch_matches_scalar_path ... ok
+test convenience::tests::degree_trig_exact_values ... ok
+test convenience::tests::degree_trig_general ... ok
+test convenience::tests::dawsn_tensor_dispatch_preserves_odd_symmetry ... ok
+test convenience::tests::diric_at_multiples_of_two_pi ... ok
+test convenience::tests::diric_at_zero_is_one ... ok
+test convenience::tests::diric_general_case_matches_scipy ... ok
+test convenience::tests::diric_n_one_is_always_one ... ok
+test convenience::tests::diric_propagates_nan_and_rejects_invalid_n ... ok
+test convenience::tests::divmod_basic ... ok
+test convenience::tests::elu_basic ... ok
+test convenience::tests::erfcx_large_x_uses_stable_asymptotic_path ... ok
+test convenience::tests::erfcx_tensor_dispatch_matches_scalar_path ... ok
+test convenience::tests::erfi_tensor_dispatch_preserves_odd_symmetry ... ok
+test convenience::tests::erfi_tensor_dispatch_matches_scalar_path ... ok
+test convenience::tests::exp_log_functions ... ok
+test convenience::tests::expi_scalar_matches_scipy_reference_points ... ok
+test convenience::tests::expit_logit_metamorphic_roundtrip ... ok
+test convenience::tests::expit_matches_scipy_reference_values ... ok
+test convenience::tests::expm1_basic ... ok
+test convenience::tests::exprel_near_zero_series_stays_stable ... ok
+test convenience::tests::fabs_basic ... ok
+test convenience::tests::fdiff_basic ... ok
+test convenience::tests::fix_basic ... ok
+test convenience::tests::floor_ceil_trunc ... ok
+test convenience::tests::fmax_fmin_basic ... ok
+test convenience::tests::exprel_tensor_dispatch_matches_scalar_path ... ok
+test convenience::tests::frexp_basic ... ok
+test convenience::tests::gammainccinv_scalar_inverts_complement ... ok
+test beta::tests::stdtridf_inverse ... ok
+test convenience::tests::gammainccinv_tensor_dispatch_matches_scalar_path ... ok
+test convenience::tests::cloglog_inverse_relationship ... ok
+test convenience::tests::gammainccinv_tensor_dispatch_preserves_boundary_behavior ... ok
+test convenience::tests::gammaincinv_tensor_dispatch_preserves_boundary_behavior ... ok
+test convenience::tests::gammaincinv_tensor_dispatch_matches_scalar_path ... ok
+test convenience::tests::float_classification ... ok
+test convenience::tests::fresnel_matches_scipy_reference_values ... ok
+test convenience::tests::copysign_basic ... ok
+test convenience::tests::hard_sigmoid_basic ... ok
+test convenience::tests::hard_swish_basic ... ok
+test convenience::tests::hard_swish_tensor_dispatch_matches_scalar_path ... ok
+test convenience::tests::hard_tanh_basic ... ok
+test convenience::tests::gelu_basic ... ok
+test convenience::tests::hard_tanh_tensor_dispatch_matches_scalar_path ... ok
+test convenience::tests::hard_tanh_tensor_dispatch_preserves_nan_and_bounds ... ok
+test convenience::tests::hard_sigmoid_tensor_dispatch_preserves_nan_and_bounds ... ok
+test convenience::tests::hardshrink_tensor_dispatch_preserves_nan_and_boundary_behavior ... ok
+test convenience::tests::heaviside_basic ... ok
+test convenience::tests::huber_basic ... ok
+test convenience::tests::huber_tensor_dispatch_matches_scalar_path ... ok
+test convenience::tests::hard_sigmoid_tensor_dispatch_matches_scalar_path ... ok
+test convenience::tests::hypot_basic ... ok
+test convenience::tests::hard_swish_tensor_dispatch_preserves_nan_and_clipping_behavior ... ok
+test convenience::tests::hardshrink_basic ... ok
+test convenience::tests::kelvin_functions_match_scipy_reference_points ... ok
+test convenience::tests::kl_div_matches_scipy_reference_values ... ok
+test convenience::tests::kolmogi_endpoints ... ok
+test convenience::tests::hardshrink_tensor_dispatch_matches_scalar_path ... ok
+test convenience::tests::huber_and_pseudo_huber_tensor_dispatch_preserve_domain_behavior ... ok
+test convenience::tests::kolmogi_inverse ... ok
+test convenience::tests::kolmogi_matches_scipy_reference ... ok
+test convenience::tests::kelvin_derivatives_match_scipy_reference_points ... ok
+test convenience::tests::ldexp_basic ... ok
+test convenience::tests::kolmogorov_tensor_dispatch_is_monotone ... ok
+test convenience::tests::leaky_relu_basic ... ok
+test convenience::tests::kolmogorov_basic ... ok
+test convenience::tests::log1mexp_basic ... ok
+test convenience::tests::kolmogi_tensor_dispatch_round_trips ... ok
+test convenience::tests::log1mexp_tensor_dispatch_matches_scalar_path ... ok
+test convenience::tests::log1mexp_tensor_dispatch_preserves_domain_edges ... ok
+test convenience::tests::log1p_basic ... ok
+test convenience::tests::log1pexp_basic ... ok
+test convenience::tests::log1pexp_tensor_dispatch_matches_scalar_path ... ok
+test convenience::tests::log1pexp_tensor_dispatch_preserves_tail_stability ... ok
+test convenience::tests::log1pmx_at_zero_is_exact_zero ... ok
+test convenience::tests::log1pmx_metamorphic_beats_naive_near_zero ... ok
+test convenience::tests::log1pmx_metamorphic_matches_naive_at_moderate_x ... ok
+test convenience::tests::log1pmx_metamorphic_signs ... ok
+test convenience::tests::log1pmx_propagates_nan_and_domain_error ... ok
+test convenience::tests::log_cosh_basic ... ok
+test convenience::tests::log_cosh_tensor_dispatch_matches_scalar_path ... ok
+test convenience::tests::log_expit_scalar_basic ... ok
+test convenience::tests::log_cosh_tensor_dispatch_preserves_large_tail_and_nan ... ok
+test convenience::tests::log_expit_supports_real_tensor_dispatch ... ok
+test convenience::tests::log_ndtr_tensor_dispatch_matches_scalar_path ... ok
+test convenience::tests::log_ndtr_tensor_dispatch_preserves_extreme_negative_tails ... ok
+test convenience::tests::logaddexp_basic ... ok
+test convenience::tests::logit_matches_scipy_reference_values ... ok
+test convenience::tests::loglog_basic ... ok
+test convenience::tests::loglog_inv_basic ... ok
+test convenience::tests::loglog_inverse_relationship ... ok
+test convenience::tests::logsumexp_axis_2d_rejects_non_broadcastable_weights ... ok
+test convenience::tests::logsumexp_with_weights_matches_scipy_contract_point ... ok
+test convenience::tests::logsumexp_axis_2d_with_broadcast_weights_matches_scipy_contract_point ... ok
+test convenience::tests::logsigmoid_basic ... ok
+test convenience::tests::maximum_minimum_basic ... ok
+test convenience::tests::logaddexp2_basic ... ok
+test convenience::tests::logsigmoid_tensor_dispatch_matches_scalar_path ... ok
+test convenience::tests::logsigmoid_tensor_dispatch_preserves_extreme_tails_and_nan ... ok
+test convenience::tests::mish_basic ... ok
+test convenience::tests::mish_tensor_dispatch_matches_scalar_path ... ok
+test convenience::tests::mish_tensor_dispatch_preserves_negative_lobe_and_nan ... ok
+test convenience::tests::modstruve_at_zero_handles_v_minus_one ... ok
+test convenience::tests::modf_basic ... ok
+test convenience::tests::logsumexp_axis_2d_matches_scipy_axis_zero_contract_point ... ok
+test convenience::tests::nan_to_num_basic ... ok
+test convenience::tests::ndtr_matches_scipy_reference_values ... ok
+test convenience::tests::ndtr_ndtri_tensor_dispatch_round_trip ... ok
+test convenience::tests::ndtri_exp_scalar_preserves_log_probability_boundaries ... ok
+test convenience::tests::ndtri_exp_tensor_dispatch_matches_scipy_contract_points ... ok
+test convenience::tests::ndtri_matches_scipy_reference_values ... ok
+test convenience::tests::ndtri_tensor_dispatch_preserves_endpoints ... ok
+test convenience::tests::negentropy_basic ... ok
+test convenience::tests::negentropy_tensor_dispatch_matches_scalar_path ... ok
+test convenience::tests::negentropy_tensor_dispatch_preserves_domain_behavior ... ok
+test convenience::tests::nextafter_basic ... ok
+test convenience::tests::nrdtrimn_matches_scipy_contract_points ... ok
+test convenience::tests::nrdtrimn_rejects_invalid_inputs_like_scipy ... ok
+test convenience::tests::nrdtrisd_matches_scipy_contract_points ... ok
+test convenience::tests::nrdtrisd_recovers_std ... ok
+test convenience::tests::nrdtrisd_rejects_invalid_inputs_like_scipy ... ok
+test convenience::tests::owens_t_closed_form_reference_values ... ok
+test convenience::tests::owens_t_symmetry_and_antisymmetry_identities ... ok
+test convenience::tests::nrdtrimn_recovers_mean ... ok
+test convenience::tests::owens_t_tensor_dispatch_handles_zero_and_nan_inputs ... ok
+test convenience::tests::owens_t_tensor_dispatch_matches_scalar_path ... ok
+test convenience::tests::pentagamma_matches_scipy_polygamma_three ... ok
+test convenience::tests::positive_negative_parts ... ok
+test convenience::tests::power_basic ... ok
+test convenience::tests::owens_t_tensor_dispatch_preserves_even_h_and_odd_a_symmetry ... ok
+test convenience::tests::powm1_scalar_edge_cases ... ok
+test convenience::tests::powm1_scalar_matches_naive_at_large_y_log_x ... ok
+test convenience::tests::powm1_scalar_metamorphic_beats_naive_near_one ... ok
+test convenience::tests::reciprocal_basic ... ok
+test convenience::tests::relu_basic ... ok
+test convenience::tests::pseudo_huber_tensor_dispatch_matches_scalar_path ... ok
+test convenience::tests::powm1_supports_real_tensor_dispatch ... ok
+test convenience::tests::relu_tensor_dispatch_matches_scalar_path ... ok
+test convenience::tests::relu_tensor_dispatch_preserves_nan ... ok
+test convenience::tests::radian_basic ... ok
+test convenience::tests::pseudo_huber_basic ... ok
+test convenience::tests::rint_basic ... ok
+test convenience::tests::round_basic ... ok
+test convenience::tests::selu_basic ... ok
+test convenience::tests::shichi_matches_scipy_reference_values ... ok
+test convenience::tests::sici_matches_scipy_reference_values ... ok
+test convenience::tests::sign_basic ... ok
+test convenience::tests::signbit_basic ... ok
+test convenience::tests::silu_basic ... ok
+test convenience::tests::silu_tensor_dispatch_matches_scalar_path ... ok
+test convenience::tests::silu_tensor_dispatch_preserves_nan_and_swish_reduction ... ok
+test convenience::tests::sinc_matches_scipy_reference_values ... ok
+test convenience::tests::softplus_basic ... ok
+test convenience::tests::softmax_matches_scipy_reference_points ... ok
+test convenience::tests::sinpi_basic ... ok
+test convenience::tests::softplus_tensor_dispatch_matches_scalar_path ... ok
+test convenience::tests::softshrink_basic ... ok
+test convenience::tests::softplus_tensor_dispatch_preserves_tail_stability ... ok
+test convenience::tests::softshrink_tensor_dispatch_matches_scalar_path ... ok
+test convenience::tests::softshrink_tensor_dispatch_preserves_nan_and_threshold_behavior ... ok
+test convenience::tests::softsign_basic ... ok
+test convenience::tests::softsign_tensor_dispatch_matches_scalar_path ... ok
+test convenience::tests::smirnov_basic ... ok
+test convenience::tests::spacing_basic ... ok
+test convenience::tests::stirling2_scalar_matches_scipy_contract_points ... ok
+test convenience::tests::smirnov_matches_scipy_at_small_n ... ok
+test convenience::tests::smirnovi_inverse ... ok
+test convenience::tests::stirling2_tensor_dispatch_broadcasts_scalar_k ... ok
+test convenience::tests::spence_tensor_dispatch_matches_scalar_path ... ok
+test convenience::tests::softsign_tensor_dispatch_preserves_odd_symmetry_and_nan ... ok
+test convenience::tests::spence_matches_scipy_reference_points ... ok
+test convenience::tests::struve_matches_scipy_reference_values ... ok
+test convenience::tests::swish_basic ... ok
+test convenience::tests::spence_tensor_dispatch_handles_reflection_branch ... ok
+test convenience::tests::swish_beta_one_equals_silu ... ok
+test convenience::tests::square_basic ... ok
+test convenience::tests::swish_beta_zero_is_x_over_two ... ok
+test convenience::tests::stirling2_tensor_dispatch_rejects_non_integer_inputs ... ok
+test convenience::tests::struve_at_zero_handles_v_minus_one ... ok
+test convenience::tests::tanhshrink_tensor_dispatch_matches_scalar_path ... ok
+test convenience::tests::tanhshrink_tensor_dispatch_preserves_odd_symmetry ... ok
+test convenience::tests::tanpi_matches_sinpi_over_cospi_for_regular_points ... ok
+test convenience::tests::struve_integral_scalars_propagate_nonfinite_inputs ... ok
+test convenience::tests::tanhshrink_basic ... ok
+test convenience::tests::swish_joint_sign_flip_negates ... ok
+test convenience::tests::tanpi_half_integers_are_infinite ... ok
+test convenience::tests::tanpi_integer_arguments_are_exact_zero ... ok
+test convenience::tests::tanpi_quarter_integers_match_unit_value ... ok
+test convenience::tests::tetragamma_matches_scipy_polygamma_two_negative_x ... ok
+test convenience::tests::struve_integral_scalars_match_scipy_reference_values ... ok
+test convenience::tests::tklmbda_at_origin_is_half_for_all_lambda ... ok
+test convenience::tests::threshold_tensor_dispatch_preserves_nan_and_boundaries ... ok
+test convenience::tests::threshold_basic ... ok
+test convenience::tests::threshold_tensor_dispatch_matches_scalar_path ... ok
+test convenience::tests::tanpi_propagates_nan_and_infinity ... ok
+test convenience::tests::tklmbda_lambda_zero_matches_logistic ... ok
+test convenience::tests::voigt_profile_matches_scipy_contract_points ... ok
+test convenience::tests::tklmbda_lambda_one_uniform_image ... ok
+test convenience::tests::voigt_profile_real_gamma_zero_is_gaussian ... ok
+test convenience::tests::voigt_profile_real_gamma_zero_rejects_nonpositive_sigma ... ok
+test convenience::tests::wofz_real_at_zero_is_one_zero ... ok
+test convenience::tests::tklmbda_propagates_nan ... ok
+test convenience::tests::wofz_real_metamorphic_real_part_is_gaussian ... ok
+test convenience::tests::wofz_complex_matches_scipy_contract_points ... ok
+test convenience::tests::wofz_real_propagates_nan ... ok
+test convenience::tests::wrightomega_complex_does_not_alias_two_pi_periods ... ok
+test convenience::tests::wofz_complex_vector_preserves_shape_and_conjugation ... ok
+test convenience::tests::wofz_real_tensor_returns_complex_scipy_contract_point ... ok
+test convenience::tests::wofz_real_metamorphic_imag_relates_to_dawson ... ok
+test convenience::tests::wofz_real_metamorphic_odd_imag ... ok
+test convenience::tests::tklmbda_metamorphic_complement_symmetry ... ok
+test convenience::tests::wrightomega_negative_tail_matches_exponential_limit ... ok
+test convenience::tests::wrightomega_complex_identity_principal_branch ... ok
+test convenience::tests::wrightomega_complex_large_real_part_stays_finite ... ok
+test convenience::tests::wrightomega_complex_real_axis_reduces_to_scalar_path ... ok
+test convenience::tests::wrightomega_tensor_dispatch_matches_scalar_path ... ok
+test convenience::tests::wrightomega_complex_vector_preserves_shape_and_conjugation ... ok
+test elliptic::tests::complex_sqrt_preserves_signed_zero_branch_on_negative_real_axis ... ok
+test elliptic::tests::ellipe_at_half ... ok
+test elliptic::tests::ellipe_at_one ... ok
+test elliptic::tests::ellipe_at_zero ... ok
+test elliptic::tests::ellipe_complex_reference_value ... ok
+test elliptic::tests::ellipe_matches_scipy_reference_values ... ok
+test elliptic::tests::ellipeinc_at_pi_half_equals_complete ... ok
+test elliptic::tests::ellipeinc_complex_reference_value ... ok
+test elliptic::tests::ellipeinc_supports_pairwise_vector_inputs ... ok
+test elliptic::tests::ellipj_at_zero ... ok
+test convenience::tests::xlogx_basic ... ok
+test elliptic::tests::ellipj_m_one_is_hyp ... ok
+test elliptic::tests::ellipj_m_zero_is_trig ... ok
+test elliptic::tests::ellipj_matches_scipy_reference_values ... ok
+test elliptic::tests::ellipj_nan_passthrough ... ok
+test convenience::tests::xlogx_tensor_dispatch_matches_scalar_path ... ok
+test elliptic::tests::ellipj_zero_matches_scipy_reference_values ... ok
+test elliptic::tests::ellipk_at_one_is_infinity ... ok
+test elliptic::tests::ellipk_at_zero ... ok
+test elliptic::tests::ellipk_at_half ... ok
+test elliptic::tests::ellipk_complex_reference_value ... ok
+test elliptic::tests::ellipk_ellipe_legendre_relation ... ok
+test elliptic::tests::ellipk_matches_scipy_reference_values ... ok
+test elliptic::tests::ellipk_vector_input ... ok
+test convenience::tests::xlogx_tensor_dispatch_preserves_domain_behavior ... ok
+test elliptic::tests::ellipkinc_at_pi_half_equals_complete ... ok
+test elliptic::tests::ellipkinc_at_zero_phi ... ok
+test beta::tests::fdtridfd_inverse ... ok
+test elliptic::tests::ellipkinc_broadcasts_scalar_phi_over_m_vector ... ok
+test elliptic::tests::ellipkinc_broadcasts_vector_phi_over_scalar_m ... ok
+test elliptic::tests::ellipkinc_rejects_mismatched_vector_lengths ... ok
+test elliptic::tests::ellipkm1_basic ... ok
+test elliptic::tests::ellipkm1_complex_real_axis_reduces_to_real_kernel ... ok
+test elliptic::tests::ellipkm1_complex_matches_ellipk_of_complement ... ok
+test elliptic::tests::ellipkinc_complex_broadcasts_scalar_phi_over_vector_m ... ok
+test elliptic::tests::ellipkm1_consistency_with_ellipk ... ok
+test elliptic::tests::ellipkm1_complex_broadcasts_vector_inputs ... ok
+test elliptic::tests::elliprc_x_equals_y_is_one_over_sqrt_x ... ok
+test elliptic::tests::elliprc_x_greater_than_y_uses_acosh_branch ... ok
+test elliptic::tests::elliprc_negative_x_or_nan_returns_nan ... ok
+test elliptic::tests::ellipkinc_complex_reference_value ... ok
+test elliptic::tests::elliprc_x_zero_y_positive_is_pi_over_2_sqrt_y ... ok
+test elliptic::tests::elliprd_diagonal_is_x_to_minus_three_halves ... ok
+test elliptic::tests::elliprc_negative_y_uses_cauchy_pv ... ok
+test elliptic::tests::elliprd_matches_scipy_reference_values ... ok
+test elliptic::tests::elliprd_negative_or_nan_returns_nan ... ok
+test elliptic::tests::elliprd_scipy_reference_value ... ok
+test elliptic::tests::elliprf_matches_scipy_reference_values ... ok
+test elliptic::tests::elliprf_negative_or_nan_returns_nan ... ok
+test elliptic::tests::elliprf_scipy_reference_value ... ok
+test elliptic::tests::elliprf_symmetric_in_arguments ... ok
+test elliptic::tests::elliprf_diagonal_is_one_over_sqrt_x ... ok
+test elliptic::tests::elliprf_zero_argument_with_equal_others ... ok
+test elliptic::tests::elliprg_diagonal_is_sqrt_x ... ok
+test elliptic::tests::elliprg_zero_one_one_is_pi_over_four ... ok
+test elliptic::tests::elliprg_matches_scipy_reference_values ... ok
+test elliptic::tests::elliprj_diagonal_is_x_pow_neg_three_halves ... ok
+test elliptic::tests::elliprj_input_contract ... ok
+test elliptic::tests::elliprj_matches_scipy_reference_values ... ok
+test elliptic::tests::elliprj_p_equals_z_matches_elliprd ... ok
+test elliptic::tests::elliprg_symmetric_in_all_three_arguments ... ok
+test elliptic::tests::elliprj_homogeneity_scaling_law ... ok
+test elliptic::tests::elliprd_symmetric_in_first_two_args ... ok
+test elliptic::tests::elliprj_scipy_reference_value ... ok
+test elliptic::tests::elliprg_negative_or_nan_returns_nan ... ok
+test elliptic::tests::elliprc_matches_scipy_reference_values ... ok
+test elliptic::tests::ellipj_dn_identity ... ok
+test elliptic::tests::exp1_complex_negative_real_signed_zero_selects_lower_branch ... ok
+test elliptic::tests::exp1_complex_negative_real_uses_principal_branch ... ok
+test elliptic::tests::elliptic_complex_real_axis_reduces_to_real_kernels ... ok
+test elliptic::tests::elliprg_two_zeros_is_half_sqrt_remaining ... ok
+test elliptic::tests::ellipj_pythagorean_identity ... ok
+test elliptic::tests::elliprj_symmetric_in_xyz ... ok
+test elliptic::tests::exp1_complex_positive_real_axis_reduces_to_real_kernel ... ok
+test elliptic::tests::exp1_domain_error_hardened ... ok
+test elliptic::tests::exp1_complex_vector_preserves_shape_and_conjugation ... ok
+test elliptic::tests::exp1_known_value ... ok
+test elliptic::tests::exp1_real_zero_is_positive_infinity ... ok
+test elliptic::tests::expi_at_zero_is_neg_inf ... ok
+test elliptic::tests::exp1_large_z ... ok
+test elliptic::tests::expi_complex_imaginary_axis_matches_sici_identity ... ok
+test elliptic::tests::expi_complex_real_axis_reduces_to_real_kernel ... ok
+test elliptic::tests::expi_known_value ... ok
+test elliptic::tests::expn_known_values ... ok
+test elliptic::tests::expn_large_x ... ok
+test elliptic::tests::expn_special_cases ... ok
+test elliptic::tests::hardened_ellipk_rejects_singular_endpoint ... ok
+test elliptic::tests::hardened_ellipkinc_rejects_unit_parameter ... ok
+test elliptic::tests::expn_matches_scipy_reference_values ... ok
+test elliptic::tests::lambertw_at_e ... ok
+test elliptic::tests::incomplete_elliptic_m_zero_preserves_quadrature_bits ... ok
+test elliptic::tests::lambertw_at_neg_inv_e ... ok
+test elliptic::tests::expn_recurrence ... ok
+test elliptic::tests::lambertw_at_positive_infinity ... ok
+test elliptic::tests::lambertw_complex_negative_real_uses_principal_branch ... ok
+test elliptic::tests::lambertw_complex_identity_principal_branch ... ok
+test elliptic::tests::lambertw_at_zero ... ok
+test elliptic::tests::lambertw_domain_error_hardened ... ok
+test elliptic::tests::lambertw_complex_vector_preserves_shape_and_conjugation ... ok
+test elliptic::tests::lambertw_complex_real_axis_reduces_to_real_kernel ... ok
+test elliptic::tests::expi_complex_vector_preserves_shape_and_conjugation ... ok
+test elliptic::tests::lambertw_identity ... ok
+test elliptic::tests::lambertw_vector_input ... ok
+test error::tests::complex_erfcinv_real_axis_reduces_to_scalar_path ... ok
+test error::tests::complex_erfcinv_preserves_conjugation_over_vectors ... ok
+test error::tests::complex_erfinv_real_axis_reduces_to_scalar_path ... ok
+test error::tests::complex_erfinv_roundtrips_complex_erf_principal_branch ... ok
+test error::tests::complex_sqrt_preserves_signed_zero_branch_on_negative_real_axis ... ok
+test error::tests::erf_matches_scipy_reference_values ... ok
+test error::tests::erf_metamorphic_complementary_identity ... ok
+test error::tests::erf_metamorphic_odd_symmetry ... ok
+test error::tests::erfc_matches_scipy_reference_values ... ok
+test error::tests::erfcinv_matches_scipy_reference_values ... ok
+test error::tests::erfinv_matches_scipy_reference_values ... ok
+test gamma::tests::binom_endpoints_return_one ... ok
+test gamma::tests::binom_matches_scipy_reference_values ... ok
+test gamma::tests::binom_metamorphic_symmetry_x_minus_y ... ok
+test gamma::tests::binom_y_greater_than_x_returns_zero ... ok
+test gamma::tests::binom_real_y_greater_than_x_uses_gamma_formula ... ok
+test gamma::tests::binom_metamorphic_matches_comb_for_integer_arguments ... ok
+test gamma::tests::chdtr_basic ... ok
+test gamma::tests::chdtr_chdtrc_complement ... ok
+test gamma::tests::binom_negative_or_nan_propagates ... ok
+test gamma::tests::chdtriv_edges_match_scipy ... ok
+test gamma::tests::chdtri_inverse ... ok
+test gamma::tests::binom_real_arguments_match_gamma_definition ... ok
+test gamma::tests::complex_a_gammainc_reduces_to_real_path_for_real_x ... ok
+test gamma::tests::chdtriv_reference_values ... ok
+test gamma::tests::complex_digamma_near_real_poles_stays_finite ... ok
+test gamma::tests::complex_digamma_negative_real ... ok
+test gamma::tests::comb_perm_match_scipy_reference_points ... ok
+test gamma::tests::complex_digamma_returns_nan_at_real_poles ... ok
+test gamma::tests::complex_digamma_pure_imaginary ... ok
+test gamma::tests::complex_gamma_real_inputs_match_real_path ... ok
+test gamma::tests::complex_digamma_vector_input ... ok
+test gamma::tests::complex_digamma_real_axis_matches_real_digamma ... ok
+test gamma::tests::complex_gamma_with_imaginary_part ... ok
+test gamma::tests::complex_a_gammainc_p_plus_q_equals_one ... ok
+test gamma::tests::complex_gammainc_at_z_zero ... ok
+test gamma::tests::complex_gammainc_domain_error_for_nonpositive_a ... ok
+test gamma::tests::complex_gammainc_reduces_to_real_for_real_z ... ok
+test gamma::tests::complex_gammaincc_at_z_zero ... ok
+test gamma::tests::complex_gammainc_p_plus_q_equals_one ... ok
+test gamma::tests::complex_gammainc_tensor_interface ... ok
+test gamma::tests::complex_gammaincc_reduces_to_real_for_real_z ... ok
+test gamma::tests::complex_gammaln_near_real_poles_stays_finite ... ok
+test gamma::tests::chdtriv_inverse ... ok
+test gamma::tests::complex_gammaln_real_inputs_match_real_path ... ok
+test gamma::tests::complex_gammaln_returns_nan_at_real_poles ... ok
+test gamma::tests::complex_trigamma_real_axis_matches_real_trigamma ... ok
+test gamma::tests::complex_a_gammainc_parameter_vector_mismatch_is_shape_error ... ok
+test gamma::tests::complex_gammaln_with_imaginary_part ... ok
+test gamma::tests::complex_polygamma_order_two_matches_real ... ok
+test gamma::tests::complex_a_gammainc_parameter_vector_broadcasts_real_x ... ok
+test gamma::tests::complex_rgamma_real_inputs_match_real_path ... ok
+test gamma::tests::complex_rgamma_returns_zero_at_negative_integer_poles ... ok
+test gamma::tests::digamma_matches_scipy_reference_points ... ok
+test gamma::tests::complex_rgamma_vector_preserves_shape ... ok
+test gamma::tests::factorial2_matches_scipy_reference_values ... ok
+test gamma::tests::factorial2_negative ... ok
+test gamma::tests::factorial2_large ... ok
+test gamma::tests::factorial2_large_odd_gamma_path ... ok
+test gamma::tests::factorial2_small_even ... ok
+test gamma::tests::factorial2_small_odd ... ok
+test gamma::tests::factorial_matches_scipy_reference_values ... ok
+test gamma::tests::digamma_metamorphic_recurrence ... ok
+test gamma::tests::factorialk_known_value_n_10_k_3 ... ok
+test gamma::tests::factorialk_metamorphic_k_one_matches_factorial ... ok
+test gamma::tests::factorialk_metamorphic_k_two_matches_factorial2 ... ok
+test gamma::tests::factorialk_metamorphic_recurrence ... ok
+test gamma::tests::factorialk_zero_and_negative_conventions ... ok
+test gamma::tests::gamma_large_finite_boundary_matches_scipy ... ok
+test gamma::tests::gamma_metamorphic_factorial_identity ... ok
+test convenience::tests::clausen_matches_reference_after_truncation_fix ... ok
+test gamma::tests::gamma_metamorphic_reflection_formula ... ok
+test gamma::tests::gammainc_a_equals_one_matches_exponential_cdf ... ok
+test gamma::tests::gamma_with_audit_emits_failclosed_on_hardened_pole ... ok
+test gamma::tests::gammainc_a_equals_two_matches_closed_form ... ok
+test gamma::tests::gammainc_at_x_zero_is_zero ... ok
+test gamma::tests::gammainc_matches_scipy_reference_values ... ok
+test gamma::tests::gammainc_plus_gammaincc_equals_one ... ok
+test gamma::tests::gammaln_matches_scipy_reference_points ... ok
+test gamma::tests::gammasgn_matches_scipy_real_axis_intervals ... ok
+test gamma::tests::gammasgn_preserves_scipy_pole_and_nan_semantics ... ok
+test gamma::tests::gammasgn_supports_real_vectors ... ok
+test gamma::tests::gdtr_closed_form_reference_values ... ok
+test gamma::tests::gdtria_gdtrib_domain_error_returns_nan ... ok
+test gamma::tests::gdtrc_complement ... ok
+test gamma::tests::gdtrix_matches_scipy_nonpositive_rates ... ok
+test gamma::tests::gdtrix_reference_values ... ok
+test gamma::tests::loggamma_complex_inputs_use_principal_branch ... ok
+test gamma::tests::gdtria_roundtrip_recovers_rate ... ok
+test gamma::tests::multigammaln_matches_scipy_reference_values ... ok
+test gamma::tests::loggamma_real_inputs_preserve_scipy_branch_cut ... ok
+test gamma::tests::multigammaln_preserves_scipy_edge_cases ... ok
+test gamma::tests::pdtr_basic ... ok
+test gamma::tests::multigammaln_supports_real_vectors ... ok
+test gamma::tests::pdtr_pdtrc_complement ... ok
+test gamma::tests::multigammaln_reduces_to_gammaln_for_dimension_one ... ok
+test gamma::tests::pdtri_chdtri_match_scipy_at_extreme_p ... ok
+test gamma::tests::multigammaln_rejects_non_integer_dimension ... ok
+test gamma::tests::multigammaln_rejects_inputs_below_threshold ... ok
+test gamma::tests::pdtrik_edges_match_scipy ... ok
+test gamma::tests::polygamma_order_four_satisfies_recurrence_off_negative_axis ... ok
+test gamma::tests::polygamma_higher_orders_hardened_reject_poles ... ok
+test gamma::tests::gdtrib_roundtrip_recovers_shape ... ok
+test gamma::tests::polygamma_higher_orders_support_real_vectors ... ok
+test gamma::tests::pdtrik_reference_values ... ok
+test gamma::tests::polygamma_order_three_matches_known_value_at_one ... ok
+test gamma::tests::polygamma_order_two_matches_tetragamma_scalar ... ok
+test gamma::tests::polygamma_order_two_hardened_rejects_poles ... ok
+test gamma::tests::psi_alias_matches_digamma_dispatch ... ok
+test gamma::tests::pdtrik_inverse ... ok
+test gamma::tests::rgamma_returns_zero_at_negative_integer_poles ... ok
+test gamma::tests::trigamma_metamorphic_recurrence ... ok
+test gamma::tests::polygamma_order_two_supports_real_vectors ... ok
+test gamma::tests::zetac_pole ... ok
+test gamma::tests::zeta_matches_scipy_reference_points ... ok
+test gamma::tests::zetac_small_s ... ok
+test hyper::tests::hyp0f1_complex_parameter_pole_errors_hardened ... ok
+test gamma::tests::zetac_consistency ... ok
+test gamma::tests::zetac_critical_strip_matches_scipy ... ok
+test gamma::tests::pdtri_inverse ... ok
+test hyper::tests::hyp0f1_complex_parameter_preserves_parameter_conjugation_symmetry ... ok
+test hyper::tests::hyp0f1_complex_parameter_zero_z_is_one ... ok
+test hyper::tests::hyp0f1_complex_real_parameter_matches_real_path ... ok
+test hyper::tests::hyp0f1_hardened_errors_when_lower_parameter_near_pole ... ok
+test hyper::tests::hyp1f1_a_equals_b_is_exp ... ok
+test hyper::tests::hyp0f1_matches_scipy_reference_values ... ok
+test hyper::tests::hyp1f1_b_zero_errors_hardened ... ok
+test hyper::tests::hyp1f1_b_zero_returns_nan_strict ... ok
+test gamma::tests::zetac_large_s ... ok
+test hyper::tests::hyp0f1_parameter_vector_broadcast_matches_scalar_evaluations ... ok
+test hyper::tests::hyp1f1_complex_matches_exp_identity ... ok
+test hyper::tests::hyp1f1_complex_parameter_pole_errors_hardened ... ok
+test hyper::tests::hyp1f1_complex_parameter_vector_matches_exp_identity ... ok
+test hyper::tests::hyp1f1_complex_vector_preserves_conjugation_symmetry ... ok
+test hyper::tests::hyp1f1_complex_parameters_match_exp_identity ... ok
+test hyper::tests::hyp1f1_known_value ... ok
+test hyper::tests::hyp1f1_large_negative_z_kummer ... ok
+test hyper::tests::hyp1f1_large_positive_unconverged_errors_hardened ... ok
+test hyper::tests::hyp1f1_large_positive_unconverged_returns_nan_strict ... ok
+test hyper::tests::hyp1f1_matches_scipy_reference_values ... ok
+test hyper::tests::hyp1f1_complex_real_parameters_match_real_path ... ok
+test hyper::tests::hyp1f1_parameter_vector_mismatch_is_shape_error ... ok
+test hyper::tests::hyp1f1_negative_z ... ok
+test hyper::tests::hyp1f1_parameter_vectors_broadcast_with_scalar_z ... ok
+test hyper::tests::hyp1f1_vectorized ... ok
+test hyper::tests::hyp1f1_zero_a_is_one ... ok
+test hyper::tests::hyp1f1_zero_z_is_one ... ok
+test hyper::tests::hyp2f1_a_zero_is_one ... ok
+test hyper::tests::hyp2f1_at_z_one_gauss_sum ... ok
+test hyper::tests::hyp2f1_c_zero_returns_nan_strict ... ok
+test hyper::tests::hyp2f1_complex_matches_inverse_linear_identity_inside_unit_disk ... ok
+test hyper::tests::hyp2f1_complex_outside_unit_disk_errors_in_hardened_mode ... ok
+test hyper::tests::hyp2f1_complex_parameter_linear_identity_holds ... ok
+test hyper::tests::hyp2f1_complex_parameter_pole_errors_hardened ... ok
+test hyper::tests::hyp2f1_complex_parameter_vector_matches_linear_identity ... ok
+test hyper::tests::hyp2f1_complex_real_parameters_match_real_path ... ok
+test hyper::tests::hyp2f1_complex_vector_preserves_conjugation_symmetry ... ok
+test hyper::tests::hyp2f1_hardened_z_greater_than_one_unsupported_errors ... ok
+test hyper::tests::hyp2f1_does_not_return_nan_inside_unit_disk ... ok
+test hyper::tests::hyp2f1_known_geometric ... ok
+test hyper::tests::hyp2f1_negative_a_polynomial ... ok
+test hyper::tests::hyp2f1_matches_scipy_across_unit_disk ... ok
+test hyper::tests::hyp2f1_negative_z ... ok
+test hyper::tests::hyp2f1_strict_z_greater_than_one_branch_cut_returns_infinity ... ok
+test hyper::tests::hyp2f1_terminating_polynomial_allows_z_outside_unit_disk ... ok
+test hyper::tests::hyp2f1_parameter_vectors_broadcast_with_scalar_z ... ok
+test hyper::tests::hyp2f1_zero_z_is_one ... ok
+test hyper::tests::hyp2f1_z_greater_than_one_identity_matches_scipy_sample ... ok
+test hyper::tests::hyper_casp_guards_hyp0f1_lower_parameter_near_pole ... ok
+test hyper::tests::hyper_casp_guards_lower_parameter_near_pole ... ok
+test hyper::tests::hyper_casp_selects_asymptotic_for_large_hyp0f1_argument ... ok
+test hyper::tests::hyper_casp_hardened_rejects_nonfinite_inputs ... ok
+test hyper::tests::hyper_casp_selects_direct_series_for_moderate_hyp0f1 ... ok
+test hyper::tests::hyper_casp_selects_direct_series_for_hyp2f1_inside_unit_disk ... ok
+test hyper::tests::hyper_casp_selects_direct_series_for_moderate_hyp1f1 ... ok
+test hyper::tests::hyper_casp_selects_gauss_sum_at_unit_argument ... ok
+test hyper::tests::hyper_casp_selects_identity_for_z_greater_than_one_reduction ... ok
+test hyper::tests::hyper_casp_selects_kummer_for_large_negative_hyp1f1 ... ok
+test hyper::tests::hyper_casp_selects_pfaff_for_negative_outside_unit_disk ... ok
+test hyper::tests::hyper_casp_selects_real_branch_cut_for_generic_z_greater_than_one ... ok
+test hyper::tests::hyperu_preserves_scipy_real_domain_edges ... ok
+test orthopoly::tests::chebyt_t0_is_one ... ok
+test orthopoly::tests::chebyt_cos_identity ... ok
+test orthopoly::tests::chebyu_u0_is_one ... ok
+test orthopoly::tests::assoc_laguerre_routes_through_eval_genlaguerre ... ok
+test hyper::tests::hyper_casp_selects_terminating_polynomial_for_hyp2f1 ... ok
+test hyper::tests::hyperu_nonpositive_integer_a_uses_laguerre_polynomial ... ok
+test orthopoly::tests::chebyu_u1_is_2x ... ok
+test orthopoly::tests::chebyt_t1_is_x ... ok
+test orthopoly::tests::chebyu_u2 ... ok
+test orthopoly::tests::eval_chebyc_matches_closed_form_low_degree ... ok
+test orthopoly::tests::eval_chebys_matches_closed_form_low_degree ... ok
+test orthopoly::tests::eval_chebyt_matches_scipy_reference_values ... ok
+test orthopoly::tests::eval_chebyu_matches_scipy_reference_values ... ok
+test orthopoly::tests::eval_gegenbauer_matches_scipy_reference_values ... ok
+test orthopoly::tests::eval_hermite_matches_scipy_reference_values ... ok
+test orthopoly::tests::eval_jacobi_matches_scipy_reference_values ... ok
+test orthopoly::tests::eval_legendre_matches_scipy_reference_values ... ok
+test orthopoly::tests::eval_sh_jacobi_routes_through_jacobi_at_2x_minus_1 ... ok
+test orthopoly::tests::gegenbauer_c0_is_one ... ok
+test orthopoly::tests::gegenbauer_c0_nonfinite_inputs_match_scipy ... ok
+test hyper::tests::hyperu_vector_dispatch_broadcasts_real_inputs ... ok
+test orthopoly::tests::gegenbauer_c2 ... ok
+test orthopoly::tests::gegenbauer_half_is_legendre ... ok
+test orthopoly::tests::eval_laguerre_matches_scipy_reference_values ... ok
+test orthopoly::tests::gegenbauer_three_term_recurrence_holds ... ok
+test orthopoly::tests::genlaguerre_alpha0_is_laguerre ... ok
+test orthopoly::tests::gegenbauer_c1_is_2ax ... ok
+test orthopoly::tests::genlaguerre_l1_alpha ... ok
+test orthopoly::tests::hermite_h0_is_one ... ok
+test orthopoly::tests::hermite_h1_is_2x ... ok
+test orthopoly::tests::hermite_h2 ... ok
+test orthopoly::tests::hermite_h3 ... ok
+test hyper::tests::hyperu_matches_scipy_reference_points ... ok
+test orthopoly::tests::hermite_three_term_recurrence_holds ... ok
+test orthopoly::tests::hermitenorm_he0_is_one ... ok
+test orthopoly::tests::hermitenorm_he1_is_x ... ok
+test orthopoly::tests::chebyt_t2 ... ok
+test orthopoly::tests::hermitenorm_he2 ... ok
+test orthopoly::tests::jacobi_is_legendre_when_ab_zero ... ok
+test orthopoly::tests::jacobi_p0_ignores_nonfinite_parameters_like_scipy ... ok
+test orthopoly::tests::jacobi_p1 ... ok
+test orthopoly::tests::laguerre_degree_zero_nonfinite_inputs_match_scipy ... ok
+test orthopoly::tests::laguerre_l0_is_one ... ok
+test orthopoly::tests::laguerre_l1 ... ok
+test orthopoly::tests::laguerre_l2 ... ok
+test orthopoly::tests::legendre_at_one ... ok
+test orthopoly::tests::legendre_p0_ignores_nonfinite_input_like_scipy ... ok
+test orthopoly::tests::legendre_p0_is_one ... ok
+test orthopoly::tests::legendre_p1_is_x ... ok
+test orthopoly::tests::legendre_p2 ... ok
+test orthopoly::tests::legendre_p3 ... ok
+test orthopoly::tests::legendre_symmetry ... ok
+test orthopoly::tests::legendre_three_term_recurrence_holds ... ok
+test orthopoly::tests::lpmn_first_row_matches_lpn ... ok
+test orthopoly::tests::lpmn_metamorphic_matches_lpmv_pointwise ... ok
+test orthopoly::tests::lpmn_propagates_nan_for_non_finite_x ... ok
+test orthopoly::tests::lpmv_at_endpoints ... ok
+test orthopoly::tests::lpmv_known_values ... ok
+test orthopoly::tests::lpmv_m0_equals_legendre ... ok
+test orthopoly::tests::lpmv_m_exceeds_l_is_zero ... ok
+test orthopoly::tests::lpmv_negative_m_relation ... ok
+test orthopoly::tests::lpn_derivative_endpoint_closed_form ... ok
+test orthopoly::tests::lpmv_p00_ignores_nonfinite_input_like_scipy ... ok
+test orthopoly::tests::lpn_first_kind_known_values_at_half ... ok
+test orthopoly::tests::jacobi_p0_is_one ... ok
+test orthopoly::tests::lpn_metamorphic_parity ... ok
+test orthopoly::tests::lpn_metamorphic_endpoint_values ... ok
+test orthopoly::tests::lpn_non_finite_x_propagates_nan ... ok
+test orthopoly::tests::lpn_value_matches_eval_legendre ... ok
+test orthopoly::tests::lpn_zero_order_returns_singletons ... ok
+test orthopoly::tests::lqmn_below_diagonal_matches_scipy_derivative_convention ... ok
+test orthopoly::tests::lqmn_first_row_matches_lqn ... ok
+test orthopoly::tests::lqmn_metamorphic_dlmf_recurrence ... ok
+test orthopoly::tests::lqmn_outside_unit_interval_returns_nan ... ok
+test orthopoly::tests::lqn_derivative_recurrence_consistency ... ok
+test orthopoly::tests::lqn_metamorphic_origin_zero_for_even_indices ... ok
+test orthopoly::tests::lqn_metamorphic_parity ... ok
+test orthopoly::tests::lqn_outside_unit_interval_returns_nan ... ok
+test orthopoly::tests::lqn_q1_relation_to_q0 ... ok
+test orthopoly::tests::lqn_zero_order_q0_is_atanh ... ok
+test orthopoly::tests::roots_cheby_scaled_weights_match_scipy ... ok
+test orthopoly::tests::roots_chebyc_basic_dimensions_and_range ... ok
+test orthopoly::tests::roots_chebyc_metamorphic_scales_chebyt_by_two ... ok
+test orthopoly::tests::roots_chebyc_n_zero_returns_empty ... ok
+test orthopoly::tests::roots_chebyc_weight_sum_equals_two_pi ... ok
+test orthopoly::tests::roots_chebys_basic_dimensions_and_range ... ok
+test orthopoly::tests::roots_chebys_metamorphic_scales_chebyu_by_two ... ok
+test orthopoly::tests::roots_chebyt_match_closed_form_and_uniform_weights ... ok
+test orthopoly::tests::roots_chebyu_match_closed_form ... ok
+test orthopoly::tests::roots_gegenbauer_invalid_alpha_returns_nan_rule ... ok
+test orthopoly::tests::roots_genlaguerre_invalid_alpha_returns_nan_rule ... ok
+test orthopoly::tests::roots_gegenbauer_symmetric_and_weight_sum ... ok
+test orthopoly::tests::roots_gegenbauer_alpha_half_matches_legendre ... ok
+test orthopoly::tests::roots_genlaguerre_positive_nodes_and_weight_sum ... ok
+test orthopoly::tests::roots_hermite_are_symmetric_and_weight_sum_is_sqrt_pi ... ok
+test orthopoly::tests::roots_genlaguerre_alpha0_matches_laguerre ... ok
+test orthopoly::tests::roots_jacobi_half_half_has_expected_weight_sum_and_symmetry ... ok
+test orthopoly::tests::roots_hermite_integrates_even_moments ... ok
+test orthopoly::tests::roots_jacobi_invalid_parameters_return_nan_rule ... ok
+test orthopoly::tests::roots_laguerre_integrates_low_degree_polynomials ... ok
+test orthopoly::tests::roots_legendre_matches_scipy_reference_values ... ok
+test orthopoly::tests::roots_sh_chebyt_in_unit_interval_with_uniform_weights ... ok
+test orthopoly::tests::roots_jacobi_matches_legendre_when_alpha_beta_zero ... ok
+test orthopoly::tests::roots_sh_chebyu_in_unit_interval ... ok
+test orthopoly::tests::roots_legendre_weights_sum_to_two_and_are_symmetric ... ok
+test orthopoly::tests::roots_sh_legendre_in_unit_interval ... ok
+test orthopoly::tests::roots_laguerre_are_positive_and_weight_sum_is_one ... ok
+test orthopoly::tests::roots_sh_n_zero_returns_empty ... ok
+test orthopoly::tests::roots_sh_legendre_metamorphic_node_relation ... ok
+test orthopoly::tests::sh_chebyt_at_endpoints ... ok
+test orthopoly::tests::sh_chebyu_at_midpoint ... ok
+test orthopoly::tests::roots_legendre_integrates_polynomials_exactly_through_degree_two_n_minus_one ... ok
+test orthopoly::tests::roots_sh_jacobi_matches_shifted_jacobi_relation ... ok
+test orthopoly::tests::sh_legendre_at_endpoints ... ok
+test orthopoly::tests::roots_sh_legendre_metamorphic_weight_sum_is_one ... ok
+test orthopoly::tests::sh_legendre_midpoint ... ok
+test orthopoly::tests::sph_harm_y00_is_constant ... ok
+test orthopoly::tests::sph_harm_y_input_independent_cases_allow_nonfinite_angles ... ok
+test orthopoly::tests::sph_harm_y_m_exceeds_l ... ok
+test orthopoly::tests::sph_harm_y_negative_order_matches_scipy ... ok
+test orthopoly::tests::sph_harm_y_y00_matches_scipy_constant ... ok
+test tests::bernoulli_known_values ... ok
+test orthopoly::tests::sph_harm_y_uses_scipy_complex_angle_convention ... ok
+test tests::beta_inverse_endpoints_and_invalid_inputs ... ok
+test tests::betainc_matches_scipy_reference_values ... ok
+test tests::beta_distribution_cdf_and_inverse_roundtrip ... ok
+test tests::cbrt_matches_scipy_reference_values ... ok
+test tests::bessel_reference_points_and_structured_logs ... ok
+test tests::bessel_subset_wrappers_execute_required_surface ... ok
+test tests::beta_overflow_path_diverges_by_runtime_mode ... ok
+test tests::betaln_matches_scipy_reference_values ... ok
+test tests::comb_basic ... ok
+test tests::betaln_and_betainc_domain_policy_diverge_by_runtime_mode ... ok
+test tests::comb_edge_cases ... ok
+test tests::complex_vector_erf_preserves_shape_and_odd_symmetry ... ok
+test tests::comb_large ... ok
+test tests::digamma_matches_scipy_reference_values ... ok
+test tests::dispatch_plans_cover_packet_boundaries ... ok
+test tests::erf_infinity_regression ... ok
+test tests::erf_matches_scipy_reference_values ... ok
+test tests::erfc_matches_scipy_reference_values ... ok
+test tests::erfcinv_tiny_argument_remains_finite_and_accurate ... ok
+test tests::erfcinv_domain_policy_diverges_by_runtime_mode ... ok
+test tests::erfinv_tail_contract_points ... ok
+test tests::euler_known_values ... ok
+test tests::factorial_large_values ... ok
+test tests::complex_erf_erfc_support_known_values_and_identities ... ok
+test tests::f_distribution_cdf_and_inverse_roundtrip ... ok
+test tests::gamma_distribution_exponential_special_case ... ok
+test tests::f_distribution_endpoints ... ok
+test tests::factorial_small_values ... ok
+test tests::gamma_distribution_cdf_and_inverse_roundtrip ... ok
+test tests::error_function_unit_matrix_and_structured_logs ... ok
+test orthopoly::tests::scipy_root_aliases_delegate_to_long_names ... ok
+test tests::gamma_inverse_endpoints_and_invalid_inputs ... ok
+test tests::gammainc_scalar_matches_scipy_reference_values ... ok
+test tests::gamma_inverse_parameters_roundtrip ... ok
+test tests::gammaincc_scalar_matches_scipy_reference_values ... ok
+test tests::hardened_mode_rejects_domain_violations ... ok
+test tests::gamma_beta_unit_matrix_and_structured_logs ... ok
+test tests::hurwitz_zeta_known_value ... ok
+test tests::gammainc_domain_policy_diverges_by_runtime_mode ... ok
+test tests::hurwitz_zeta_matches_scipy_at_small_s ... ok
+test tests::hurwitz_zeta_reduces_to_riemann ... ok
+test tests::hyp0f1_at_zero ... ok
+test tests::hyp0f1_negative_z ... ok
+test tests::hurwitz_zeta_nan_inputs ... ok
+test tests::gammaln_scalar_matches_scipy_reference_values ... ok
+test tests::hurwitz_zeta_pole ... ok
+test tests::hyp0f1_small_positive ... ok
+test tests::i0_i1_negative_argument ... ok
+test tests::iv_at_zero ... ok
+test tests::hyp0f1_hardened_pole ... ok
+test tests::kl_div_invalid_inputs_are_infinite ... ok
+test tests::hyp0f1_pole ... ok
+test tests::i0_matches_scipy_reference ... ok
+test tests::kl_div_nan_inputs_propagate ... ok
+test tests::i1_matches_scipy_reference ... ok
+test tests::kv_at_zero_is_inf ... ok
+test tests::iv_half_order ... ok
+test tests::jv_half_order ... ok
+test tests::jv_integer_order_matches_jn ... ok
+test tests::kl_div_matches_rel_entr_offset ... ok
+test tests::log_softmax_matches_scipy_reference_values ... ok
+test tests::ndtr_ndtri_roundtrip ... ok
+test tests::kv_half_order_formula ... ok
+test tests::ndtr_scalar_matches_scipy_reference_values ... ok
+test tests::ndtri_domain_and_endpoints ... ok
+test tests::ndtri_scalar_matches_scipy_reference_values ... ok
+test tests::kv_positive_z ... ok
+test tests::kv_integer_order_positive_and_finite ... ok
+test tests::iv_large_argument_regression ... ok
+test tests::ndtr_contract_points ... ok
+test tests::previously_pending_families_now_implemented ... ok
+test tests::perm_basic ... ok
+test tests::perm_relation_to_comb ... ok
+test tests::perm_edge_cases ... ok
+test tests::riemann_zeta_matches_scipy_at_small_s ... ok
+test tests::scalar_kernels_follow_primary_contract_points ... ok
+test tests::shichi_negative ... ok
+test tests::shichi_small_positive ... ok
+test tests::shichi_zero ... ok
+test tests::sici_large ... ok
+test tests::sici_negative ... ok
+test tests::sici_small_positive ... ok
+test tests::sici_zero ... ok
+test tests::softmax_matches_scipy_reference_values ... ok
+test tests::root_namespace_exports_orthopoly_extras ... ok
+test tests::spherical_bessel_complex_real_axis_matches_real_outputs ... ok
+test tests::spherical_bessel_complex_vector_preserves_conjugation ... ok
+test tests::spherical_bessel_complex_zero_order_closed_forms ... ok
+test tests::spherical_bessel_negative_order_rejected_in_hardened ... ok
+test tests::spherical_in_at_zero ... ok
+test tests::spherical_in_i0_is_sinh_over_x ... ok
+test tests::spherical_jn_at_zero ... ok
+test tests::spherical_jn_j1_formula ... ok
+test tests::spherical_jn_j0_is_sinc ... ok
+test tests::spherical_kn_at_zero_is_inf ... ok
+test tests::spherical_jn_recurrence ... ok
+test tests::spherical_kn_k0_uses_scipy_normalization ... ok
+test tests::spherical_kn_k1_formula ... ok
+test tests::spherical_yn_at_zero_is_neg_inf ... ok
+test tests::spherical_yn_y0_is_neg_cos_over_x ... ok
+test orthopoly::tests::sph_harm_normalization ... ok
+test tests::yv_finite_at_non_integer_orders_above_one ... ok
+test tests::yv_negative_z_strict_returns_nan ... ok
+test tests::yv_positive_z ... ok
+test tests::zeta_at_zero ... ok
+test tests::zeta_known_values ... ok
+test tests::zeta_matches_scipy_reference_values ... ok
+test tests::zeta_nan_passthrough ... ok
+test tests::property_bessel_envelope_large_x_grid ... ok
+test tests::zeta_negative_even_integers ... ok
+test tests::zeta_pole_at_one ... ok
+test tests::property_erf_plus_erfc_identity_over_grid ... ok
+test tests::property_gamma_recurrence_and_beta_symmetry ... ok
+test tests::property_erfcinv_erfc_roundtrip_grid ... ok
+test tests::property_inverse_composition_and_gamma_complement ... ok
+test tests::property_jn_three_term_recurrence_grid ... ok
+test tests::trace_log_captures_domain_policy_events_as_json_lines ... ok
+test tests::unit_domain_boundary_matrix_strict_vs_hardened ... ok
+test tests::unit_vector_broadcast_and_shape_edge_cases ... ok
+
+test result: ok. 937 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+  [2m2026-06-02T12:52:55.941466Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mRemote command finished: exit=0 in 25486ms[0m
+    [2;3mat[0m rch/src/hook.rs:6364 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:52:55.941780Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mRetrieving build artifacts...[0m
+    [2;3mat[0m rch/src/hook.rs:6413 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:52:55.941800Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mRetrieving artifacts from /data/projects/frankenscipy on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:2072 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:52:57.874168Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mArtifacts retrieved in 1932ms (1 files, 2852 bytes)[0m
+    [2;3mat[0m rch/src/transfer.rs:2111 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T12:52:57.874210Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mArtifacts retrieved: 1 files, 2852 bytes in 1932ms[0m
+    [2;3mat[0m rch/src/hook.rs:6446 [2;3mon[0m ThreadId(1)
+
+[RCH] remote vmi1149989 (92.9s)
+
+RCH_TEST_EXIT:0

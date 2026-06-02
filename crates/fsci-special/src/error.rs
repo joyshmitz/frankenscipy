@@ -168,7 +168,13 @@ pub fn erf_scalar(x: f64) -> f64 {
     if x.is_infinite() {
         return x.signum();
     }
-    erf_complex_scalar(Complex64::from_real(x)).re
+    if x < 0.0 {
+        return -erf_scalar(-x);
+    }
+    if x.abs() <= 4.0 || x < 1.0 {
+        return erf_series_real(x);
+    }
+    1.0 - erfc_asymptotic_real(x)
 }
 
 fn erf_complex_scalar(z: Complex64) -> Complex64 {
@@ -196,7 +202,13 @@ pub fn erfc_scalar(x: f64) -> f64 {
     if x.is_infinite() {
         return if x.is_sign_positive() { 0.0 } else { 2.0 };
     }
-    erfc_complex_scalar(Complex64::from_real(x)).re
+    if x < 0.0 {
+        return 2.0 - erfc_scalar(-x);
+    }
+    if x.abs() <= 4.0 || x < 1.0 {
+        return 1.0 - erf_series_real(x);
+    }
+    erfc_asymptotic_real(x)
 }
 
 fn erfc_complex_scalar(z: Complex64) -> Complex64 {
@@ -235,6 +247,24 @@ fn erf_complex_series(z: Complex64) -> Complex64 {
     sum * TWO_INV_SQRT_PI
 }
 
+fn erf_series_real(x: f64) -> f64 {
+    let x2 = x * x;
+    let mut term = x;
+    let mut sum = term;
+
+    for n in 0..80 {
+        let numer = -x2 * ((2 * n + 1) as f64);
+        let denom = ((n + 1) * (2 * n + 3)) as f64;
+        term = term * numer / denom;
+        sum += term;
+        if n >= 4 && term.abs() <= 1.0e-16 * sum.abs().max(1.0) {
+            break;
+        }
+    }
+
+    sum * TWO_INV_SQRT_PI
+}
+
 fn erfc_complex_asymptotic(z: Complex64) -> Complex64 {
     let z2 = z * z;
     let mut term = Complex64::from_real(1.0);
@@ -260,6 +290,38 @@ fn erfc_complex_asymptotic(z: Complex64) -> Complex64 {
     }
 
     ((-z2).exp() * sum / z) / PI.sqrt()
+}
+
+fn erfc_asymptotic_real(x: f64) -> f64 {
+    let x2 = x * x;
+    let mut term = 1.0_f64;
+    let mut sum = term;
+
+    let mut last_term_abs = term.abs();
+    for n in 0..60 {
+        let factor = -((2 * n + 1) as f64);
+        let denom = x2 * 2.0;
+        let next_term = complex_real_div(term * factor, denom);
+        let next_term_abs = next_term.abs();
+
+        if next_term_abs > last_term_abs {
+            break;
+        }
+
+        term = next_term;
+        last_term_abs = next_term_abs;
+        sum += term;
+
+        if n >= 4 && term.abs() <= 1.0e-16 * sum.abs().max(1.0) {
+            break;
+        }
+    }
+
+    complex_real_div((-x2).exp() * sum, x) / PI.sqrt()
+}
+
+fn complex_real_div(lhs: f64, rhs: f64) -> f64 {
+    (lhs * rhs) / (rhs * rhs)
 }
 
 pub fn erfinv_scalar(y: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
@@ -690,40 +752,70 @@ mod tests {
     #[test]
     fn erf_matches_scipy_reference_values() {
         // scipy.special.erf([0.5, 1.0, 2.0])
-        let cases = [(0.5, 0.5204998778130465), (1.0, 0.8427007929497149), (2.0, 0.9953222650189527)];
+        let cases = [
+            (0.5, 0.5204998778130465),
+            (1.0, 0.8427007929497149),
+            (2.0, 0.9953222650189527),
+        ];
         for (x, expected) in cases {
             let result = super::erf_scalar(x);
-            assert!((result - expected).abs() < 1e-10, "erf({x}) = {result}, expected {expected}");
+            assert!(
+                (result - expected).abs() < 1e-10,
+                "erf({x}) = {result}, expected {expected}"
+            );
         }
     }
 
     #[test]
     fn erfc_matches_scipy_reference_values() {
         // scipy.special.erfc([0.5, 1.0, 2.0])
-        let cases = [(0.5, 0.4795001221869535), (1.0, 0.1572992070502851), (2.0, 0.004677734981047266)];
+        let cases = [
+            (0.5, 0.4795001221869535),
+            (1.0, 0.1572992070502851),
+            (2.0, 0.004677734981047266),
+        ];
         for (x, expected) in cases {
             let result = super::erfc_scalar(x);
-            assert!((result - expected).abs() < 1e-10, "erfc({x}) = {result}, expected {expected}");
+            assert!(
+                (result - expected).abs() < 1e-10,
+                "erfc({x}) = {result}, expected {expected}"
+            );
         }
     }
 
     #[test]
     fn erfinv_matches_scipy_reference_values() {
         // scipy.special.erfinv([0.5, 0.8, 0.95])
-        let cases = [(0.5, 0.4769362762044699), (0.8, 0.9061938024368232), (0.95, 1.3859038243496775)];
+        let cases = [
+            (0.5, 0.4769362762044699),
+            (0.8, 0.9061938024368232),
+            (0.95, 1.3859038243496775),
+        ];
         for (y, expected) in cases {
             let result = super::erfinv_scalar(y, RuntimeMode::Strict).unwrap();
-            assert!((result - expected).abs() < 1e-9, "erfinv({y}) = {result}, expected {expected}");
+            assert!(
+                (result - expected).abs() < 1e-9,
+                "erfinv({y}) = {result}, expected {expected}"
+            );
         }
     }
 
     #[test]
     fn erfcinv_matches_scipy_reference_values() {
         // scipy.special.erfcinv([0.5, 1.0, 1.5])
-        let cases = [(0.5, 0.4769362762044699), (1.0, 0.0), (1.5, -0.4769362762044699)];
+        let cases = [
+            (0.5, 0.4769362762044699),
+            (1.0, 0.0),
+            (1.5, -0.4769362762044699),
+        ];
         for (y, expected) in cases {
-            let result = real_value(tensor_result(super::erfcinv(&scalar(y), RuntimeMode::Strict)).unwrap()).unwrap();
-            assert!((result - expected).abs() < 1e-9, "erfcinv({y}) = {result}, expected {expected}");
+            let result =
+                real_value(tensor_result(super::erfcinv(&scalar(y), RuntimeMode::Strict)).unwrap())
+                    .unwrap();
+            assert!(
+                (result - expected).abs() < 1e-9,
+                "erfcinv({y}) = {result}, expected {expected}"
+            );
         }
     }
 }
