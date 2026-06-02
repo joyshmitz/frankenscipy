@@ -56918,6 +56918,38 @@ mod tests {
     }
 
     #[test]
+    fn at_risk_continuous_pdfs_integrate_to_one() {
+        // Regression guard for the RelBreitWigner-class normalization bug: each
+        // pdf must integrate to ~1 over its support. Integration ranges were
+        // validated against scipy (each gives 1.0 there).
+        fn integ<D: ContinuousDistribution>(d: &D, lo: f64, hi: f64) -> f64 {
+            simpson_integrate_adaptive(|x| d.pdf(x), lo, hi, 2048, 1e-12, 1e-14, 24)
+        }
+        let check = |name: &str, integral: f64| {
+            assert!(
+                (integral - 1.0).abs() < 1e-2,
+                "{name} pdf integral = {integral}, expected 1"
+            );
+        };
+        check("FoldedNormal", integ(&FoldedNormal::new(1.5), 0.0, 50.0));
+        check("SkewNorm", integ(&SkewNorm::new(4.0), -50.0, 50.0));
+        check("ExponNorm", integ(&ExponNorm::new(1.5), -50.0, 200.0));
+        check("PowerNorm", integ(&PowerNorm::new(2.0), -50.0, 50.0));
+        check("JohnsonSU", integ(&JohnsonSU::new(1.0, 2.0), -200.0, 200.0));
+        check("JohnsonSB", integ(&JohnsonSB::new(1.0, 2.0), 0.0, 1.0));
+        check("LogGamma", integ(&LogGamma::new(2.0), -50.0, 50.0));
+        check("Gompertz", integ(&Gompertz::new(1.5), 0.0, 50.0));
+        check("ExponWeibull", integ(&ExponWeibull::new(2.0, 1.5), 0.0, 60.0));
+        check("GenGamma", integ(&GenGamma::new(2.0, 1.5), 0.0, 60.0));
+        check(
+            "NoncentralChiSquared",
+            integ(&NoncentralChiSquared::new(4.0, 3.0), 0.0, 120.0),
+        );
+        check("NormInvGauss", integ(&NormInvGauss::new(2.0, 0.7), -60.0, 60.0));
+        check("RelBreitWigner", integ(&RelBreitWigner::new(0.5), 0.0, 400.0));
+    }
+
+    #[test]
     fn rel_breit_wigner_matches_scipy() {
         // scipy.stats.rel_breitwigner reference values (rho=0.5 and rho=1.0).
         let d = RelBreitWigner::new(0.5);
