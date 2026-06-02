@@ -90,6 +90,32 @@ fn main() {
     let repeats: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(1);
     let seed: u64 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(42);
 
+    // Bit-exact golden capture for isomorphism proofs. Prints the raw f64 bit
+    // pattern of every solution element across a fixed set of (n, seed) pairs,
+    // for both the non-transposed (borrowed) and transposed (owned) solve
+    // paths. Any change that alters numerics flips the sha256 of this output.
+    if mode == "golden" {
+        for &gn in &[3usize, 8, 17, 32, 64, 100] {
+            for &gseed in &[1u64, 42, 12345] {
+                let ga = make_matrix(gn, gseed);
+                let gb = make_rhs(gn, gseed);
+                for transposed in [false, true] {
+                    let opts = SolveOptions {
+                        transposed,
+                        ..SolveOptions::default()
+                    };
+                    let r = solve(&ga, &gb, opts).unwrap();
+                    print!("n={gn} seed={gseed} t={} ", transposed as u8);
+                    for v in &r.x {
+                        print!("{:016x} ", v.to_bits());
+                    }
+                    println!("be={:016x}", r.backward_error.unwrap_or(0.0).to_bits());
+                }
+            }
+        }
+        return;
+    }
+
     let (a, b) = if mode == "solve_triangular" {
         (make_upper_triangular(n), make_linear_rhs(n))
     } else {

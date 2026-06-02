@@ -1558,10 +1558,14 @@ fn solve_with_portfolio_internal(
         return result;
     }
 
-    let effective_a = if options.transposed {
-        transpose(a)
+    // Borrow the input when it is already in the orientation we need; only the
+    // transposed path requires an owned copy. Previously this always deep-cloned
+    // the Vec<Vec<f64>> (~8 MB/solve at n=1000), driving allocation + page-fault
+    // cost. The matrix is read-only downstream, so borrowing is behavior-identical.
+    let effective_a: Cow<[Vec<f64>]> = if options.transposed {
+        Cow::Owned(transpose(a))
     } else {
-        a.to_vec()
+        Cow::Borrowed(a)
     };
     let effective_assumption =
         normalize_assumption_for_effective_matrix(options.assume_a, options.transposed);
