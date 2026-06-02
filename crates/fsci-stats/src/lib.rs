@@ -4387,14 +4387,73 @@ impl ContinuousDistribution for RelBreitWigner {
         m2 - mean * mean
     }
 
-    fn fit(_data: &[f64]) -> Self {
-        Self { rho: f64::NAN }
+    fn fit(data: &[f64]) -> Self {
+        Self::try_fit(data).unwrap_or(Self { rho: f64::NAN })
     }
 
-    fn try_fit(_data: &[f64]) -> Result<Self, FitError> {
-        Err(FitError::NotImplemented {
-            distribution: "RelBreitWigner",
-        })
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        // Maximum-likelihood fit (scale=1) of the single shape parameter rho
+        // via multi-start Nelder-Mead over ln(rho); matches
+        // scipy.stats.rel_breitwigner.fit(.., floc=0, fscale=1). Uses only the
+        // (cheap, closed-form) pdf — no cdf/ppf integration.
+        if data.len() < 2 {
+            return Err(FitError::InsufficientData {
+                required: 2,
+                actual: data.len(),
+            });
+        }
+        for &x in data {
+            if !x.is_finite() {
+                return Err(FitError::UnsupportedData(format!(
+                    "RelBreitWigner data contains non-finite value: {x}"
+                )));
+            }
+            if x < 0.0 {
+                return Err(FitError::UnsupportedData(format!(
+                    "RelBreitWigner support is [0, ∞); got {x}"
+                )));
+            }
+        }
+        let owned: Vec<f64> = data.to_vec();
+        let nll = |p: &[f64]| -> f64 {
+            let rho = p[0].exp();
+            if !rho.is_finite() || rho <= 0.0 {
+                return f64::INFINITY;
+            }
+            let dist = RelBreitWigner { rho };
+            let mut total = 0.0;
+            for &x in &owned {
+                let d = dist.pdf(x);
+                if !(d > 0.0) || !d.is_finite() {
+                    return f64::INFINITY;
+                }
+                total -= d.ln();
+            }
+            total
+        };
+        let mut best: Option<(f64, f64)> = None;
+        for &start in &[0.3_f64, 1.0, 3.0] {
+            let x0 = [start.ln()];
+            let opts = fsci_opt::MinimizeOptions {
+                maxiter: Some(1000),
+                maxfev: Some(2000),
+                tol: Some(1e-10),
+                ..Default::default()
+            };
+            if let Ok(res) = fsci_opt::nelder_mead(&nll, &x0, opts)
+                && let Some(f) = res.fun
+                && f.is_finite()
+                && best.as_ref().is_none_or(|(bf, _)| f < *bf)
+            {
+                best = Some((f, res.x[0].exp()));
+            }
+        }
+        match best {
+            Some((_, rho)) if rho > 0.0 && rho.is_finite() => Ok(Self { rho }),
+            _ => Err(FitError::NonConvergent(
+                "RelBreitWigner MLE failed to converge".to_owned(),
+            )),
+        }
     }
 
     fn skewness(&self) -> f64 {
@@ -54727,6 +54786,48 @@ mod tests {
         // Sanity: parameters land in scipy's neighbourhood.
         assert!(fitted.dfd > 2.0 && fitted.dfd < 40.0, "dfd={}", fitted.dfd);
         assert!(fitted.nc >= 0.0 && fitted.nc < 15.0, "nc={}", fitted.nc);
+    }
+
+    #[test]
+    fn rel_breit_wigner_fit_recovers_and_is_optimal() {
+        // 40 samples from scipy rel_breitwigner.rvs(rho=0.5, seed=7).
+        // scipy.stats.rel_breitwigner.fit(data, floc=0, fscale=1) -> rho=0.456.
+        let data = [
+            0.6172, 1.0286, 0.7842, 0.244, 0.3187, 0.9613, 0.0059, 0.8536, 0.8149, 0.4743, 0.3215,
+            0.2974, 0.274, 0.4537, 0.507, 0.5509, 2.7814, 0.8083, 0.6144, 2.0811, 0.2338, 0.1761,
+            0.6053, 0.049, 0.0398, 0.5162, 0.4727, 1.102, 0.6211, 0.5156, 0.5001, 0.2666, 0.0132,
+            0.21, 0.6843, 0.2186, 0.3847, 0.0042, 0.8691, 0.1699,
+        ];
+        let fitted = RelBreitWigner::try_fit(&data).expect("fit");
+        // 1-parameter and identifiable: recovers scipy's rho.
+        assert!(
+            (fitted.rho - 0.456).abs() < 0.02,
+            "RelBreitWigner rho recovery: got {}",
+            fitted.rho
+        );
+        // Likelihood-optimality: at least as good as scipy's reported optimum.
+        let nll = |d: &RelBreitWigner| -> f64 {
+            -data.iter().map(|&x| d.pdf(x).max(1e-300).ln()).sum::<f64>()
+        };
+        let scipy = RelBreitWigner::new(0.456);
+        assert!(
+            nll(&fitted) <= nll(&scipy) + 1e-4,
+            "RelBreitWigner MLE not optimal: ours={}, scipy={}",
+            nll(&fitted),
+            nll(&scipy)
+        );
+    }
+
+    #[test]
+    fn rel_breit_wigner_fit_rejects_invalid_input() {
+        assert!(matches!(
+            RelBreitWigner::try_fit(&[0.5]).expect_err("n=1"),
+            FitError::InsufficientData { .. }
+        ));
+        assert!(matches!(
+            RelBreitWigner::try_fit(&[0.5, -1.0, 0.7]).expect_err("negative"),
+            FitError::UnsupportedData(_)
+        ));
     }
 
     #[test]
