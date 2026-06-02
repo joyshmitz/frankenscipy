@@ -1485,12 +1485,25 @@ fn make_smoothing_spline_impl(
     let n = x.len();
     let mut ata = vec![vec![0.0; n]; n];
     let mut aty = vec![0.0; n];
+    // A B-spline basis has local support: eval_basis_all returns a length-n
+    // vector with only ~k+1 nonzero entries, so the dense n^2 inner double-loop
+    // wastes O(n^3) on terms that contribute nothing. Restrict to the nonzero
+    // indices. This is BIT-IDENTICAL: a skipped term is basis[j]*basis[l] (or
+    // basis[j]*y[i]) with a zero factor, hence +/-0.0, and `v + (+/-0.0) == v`
+    // for every f64 v — so the accumulators are unchanged bit-for-bit, and the
+    // i-major accumulation order is preserved. [perf]
+    let mut nz: Vec<usize> = Vec::with_capacity(k + 1);
     for i in 0..n {
         let basis = eval_basis_all(&t, x[i], k, n);
-        for j in 0..n {
-            aty[j] += basis[j] * y[i];
-            for l in 0..n {
-                ata[j][l] += basis[j] * basis[l];
+        nz.clear();
+        nz.extend((0..n).filter(|&idx| basis[idx] != 0.0));
+        let yi = y[i];
+        for &j in &nz {
+            let bj = basis[j];
+            aty[j] += bj * yi;
+            let row = &mut ata[j];
+            for &l in &nz {
+                row[l] += bj * basis[l];
             }
         }
     }
@@ -5035,6 +5048,122 @@ fn smooth_bivariate_solve_coefficients(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Isomorphism proof for the smoothing-spline normal-equations
+    /// sparse-support optimization [perf]: assembling A^T A / A^T y over only
+    /// the nonzero B-spline basis indices must be BIT-IDENTICAL to the dense
+    /// n^2 double-loop, because skipped terms have a zero factor (+/-0.0) and
+    /// `v + (+/-0.0) == v` for every f64.
+    #[test]
+    fn smoothing_spline_sparse_assembly_is_bit_identical() {
+        let k = 3usize;
+        let x: Vec<f64> = (0..40).map(|i| i as f64 * 0.37 - 2.0).collect();
+        let y: Vec<f64> = (0..40)
+            .map(|i| (i as f64 * 0.5).sin() * 3.0 - 1.7 * (i as f64).cos())
+            .collect();
+        let t = interpolation_knots(&x, k);
+        let n = x.len();
+
+        // Dense reference.
+        let mut ata_dense = vec![vec![0.0f64; n]; n];
+        let mut aty_dense = vec![0.0f64; n];
+        for i in 0..n {
+            let basis = eval_basis_all(&t, x[i], k, n);
+            for j in 0..n {
+                aty_dense[j] += basis[j] * y[i];
+                for l in 0..n {
+                    ata_dense[j][l] += basis[j] * basis[l];
+                }
+            }
+        }
+
+        // Sparse-support version (mirrors make_smoothing_spline_impl).
+        let mut ata = vec![vec![0.0f64; n]; n];
+        let mut aty = vec![0.0f64; n];
+        let mut nz: Vec<usize> = Vec::with_capacity(k + 1);
+        for i in 0..n {
+            let basis = eval_basis_all(&t, x[i], k, n);
+            nz.clear();
+            nz.extend((0..n).filter(|&idx| basis[idx] != 0.0));
+            let yi = y[i];
+            for &j in &nz {
+                let bj = basis[j];
+                aty[j] += bj * yi;
+                let row = &mut ata[j];
+                for &l in &nz {
+                    row[l] += bj * basis[l];
+                }
+            }
+        }
+
+        for j in 0..n {
+            assert_eq!(
+                aty[j].to_bits(),
+                aty_dense[j].to_bits(),
+                "A^T y mismatch at {j}"
+            );
+            for l in 0..n {
+                assert_eq!(
+                    ata[j][l].to_bits(),
+                    ata_dense[j][l].to_bits(),
+                    "A^T A mismatch at ({j},{l})"
+                );
+            }
+        }
+    }
+
+    /// Wall-clock witness for the sparse-support assembly [perf]. Run with
+    /// `cargo test -p fsci-interpolate smoothing_spline_sparse_perf -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn smoothing_spline_sparse_perf_vs_dense() {
+        use std::time::Instant;
+        let k = 3usize;
+        let n = 1200usize;
+        let x: Vec<f64> = (0..n).map(|i| i as f64 * 0.013).collect();
+        let y: Vec<f64> = (0..n).map(|i| (i as f64 * 0.05).sin()).collect();
+        let t = interpolation_knots(&x, k);
+
+        let t0 = Instant::now();
+        let mut sink = 0.0f64;
+        {
+            let mut ata = vec![vec![0.0f64; n]; n];
+            for i in 0..n {
+                let basis = eval_basis_all(&t, x[i], k, n);
+                for j in 0..n {
+                    for l in 0..n {
+                        ata[j][l] += basis[j] * basis[l];
+                    }
+                }
+            }
+            sink += ata[n / 2][n / 2];
+        }
+        let dense = t0.elapsed();
+
+        let t1 = Instant::now();
+        {
+            let mut ata = vec![vec![0.0f64; n]; n];
+            let mut nz: Vec<usize> = Vec::with_capacity(k + 1);
+            for i in 0..n {
+                let basis = eval_basis_all(&t, x[i], k, n);
+                nz.clear();
+                nz.extend((0..n).filter(|&idx| basis[idx] != 0.0));
+                for &j in &nz {
+                    let bj = basis[j];
+                    let row = &mut ata[j];
+                    for &l in &nz {
+                        row[l] += bj * basis[l];
+                    }
+                }
+            }
+            sink += ata[n / 2][n / 2];
+        }
+        let sparse = t1.elapsed();
+
+        let ratio = dense.as_secs_f64() / sparse.as_secs_f64();
+        println!("smoothing-spline A^TA: dense={dense:?} sparse={sparse:?} speedup={ratio:.2}x sink={sink}");
+        assert!(ratio > 1.0, "sparse assembly should be faster (got {ratio:.2}x)");
+    }
 
     #[test]
     fn linear_interp_at_knots() {
