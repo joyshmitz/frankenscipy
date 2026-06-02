@@ -871,4 +871,65 @@ mod tests {
             }
         }
     }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // LINALG SVD/EIG METAMORPHIC RELATIONS (extends linalg_relations)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    mod linalg_svd_eig_relations {
+        use super::*;
+        use fsci_linalg::{DecompOptions, eig, svd};
+
+        fn make_diag_dominant(n: usize, seed: u64) -> Vec<Vec<f64>> {
+            let mut a = vec![vec![0.0; n]; n];
+            for i in 0..n {
+                for j in 0..n {
+                    let r = ((seed.wrapping_mul(i as u64 + 1).wrapping_add(j as u64)) % 1000)
+                        as f64
+                        / 1000.0;
+                    a[i][j] = if i == j { (n as f64) * 2.0 + r } else { r - 0.5 };
+                }
+            }
+            a
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(PROPTEST_CASES))]
+
+            /// MR-LINALG-5: SVD reconstructs the matrix, U @ diag(s) @ V^T ≈ A.
+            #[test]
+            fn mr_svd_reconstructs(n in 2usize..=8, seed in 0u64..1000) {
+                let a = make_diag_dominant(n, seed);
+                let res = svd(&a, DecompOptions::default()).expect("svd failed");
+                let mut max_diff = 0.0f64;
+                for i in 0..n {
+                    for j in 0..n {
+                        let recon: f64 = (0..res.s.len())
+                            .map(|k| res.u[i][k] * res.s[k] * res.vt[k][j])
+                            .sum();
+                        max_diff = max_diff.max((recon - a[i][j]).abs());
+                    }
+                }
+                prop_assert!(
+                    max_diff < LOOSE_TOL * (2.0 * n as f64 + 1.0),
+                    "U diag(s) Vt != A: max_diff={max_diff}, n={n}"
+                );
+            }
+
+            /// MR-LINALG-6: sum of eigenvalues equals the trace (layout-free;
+            /// complex eigenvalues come in conjugate pairs so the real parts sum
+            /// to the trace).
+            #[test]
+            fn mr_eig_trace_identity(n in 2usize..=8, seed in 0u64..1000) {
+                let a = make_diag_dominant(n, seed);
+                let trace: f64 = (0..n).map(|i| a[i][i]).sum();
+                let res = eig(&a, DecompOptions::default()).expect("eig failed");
+                let eig_sum: f64 = res.eigenvalues_re.iter().sum();
+                prop_assert!(
+                    (eig_sum - trace).abs() < LOOSE_TOL * (trace.abs() + 1.0),
+                    "sum(eigenvalues) != trace: {eig_sum} vs {trace}, n={n}"
+                );
+            }
+        }
+    }
 }
