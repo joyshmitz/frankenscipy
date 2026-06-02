@@ -603,10 +603,7 @@ impl ArrayApiBackend for CoreArrayBackend {
 
     fn astype(&self, array: &Self::Array, dtype: DType) -> ArrayApiResult<Self::Array> {
         let resolved_dtype = self.resolve_supported_dtype(Some(dtype))?;
-        let mut values = Vec::with_capacity(array.values.len());
-        for value in &array.values {
-            values.push(cast_scalar_to_dtype(*value, resolved_dtype)?);
-        }
+        let values = cast_values_to_dtype(&array.values, array.dtype, resolved_dtype)?;
         Ok(CoreArray {
             shape: array.shape.clone(),
             dtype: resolved_dtype,
@@ -792,6 +789,34 @@ fn filled_values(
 ) -> ArrayApiResult<Vec<ScalarValue>> {
     let fill = cast_scalar_to_dtype(fill_value, dtype)?;
     Ok(vec![fill; size])
+}
+
+fn cast_values_to_dtype(
+    values: &[ScalarValue],
+    source_dtype: DType,
+    target_dtype: DType,
+) -> ArrayApiResult<Vec<ScalarValue>> {
+    match (source_dtype, target_dtype) {
+        (DType::Float32 | DType::Float64, DType::Complex128) => {
+            let mut out = Vec::with_capacity(values.len());
+            for value in values {
+                match *value {
+                    ScalarValue::F64(re) => {
+                        out.push(ScalarValue::ComplexF64 { re, im: 0.0 });
+                    }
+                    other => out.push(cast_scalar_to_dtype(other, target_dtype)?),
+                }
+            }
+            Ok(out)
+        }
+        _ => {
+            let mut out = Vec::with_capacity(values.len());
+            for value in values {
+                out.push(cast_scalar_to_dtype(*value, target_dtype)?);
+            }
+            Ok(out)
+        }
+    }
 }
 
 fn scalar_to_f64(value: ScalarValue) -> ArrayApiResult<f64> {
