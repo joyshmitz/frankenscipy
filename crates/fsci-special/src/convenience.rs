@@ -9879,7 +9879,10 @@ mod tests {
         ];
         for (x, expected) in cases {
             let result = super::ndtr_scalar(x);
-            assert!((result - expected).abs() < 1e-10, "ndtr({x}) = {result}, expected {expected}");
+            assert!(
+                (result - expected).abs() < 1e-10,
+                "ndtr({x}) = {result}, expected {expected}"
+            );
         }
     }
 
@@ -9895,7 +9898,10 @@ mod tests {
         ];
         for (y, expected) in cases {
             let result = super::ndtri_scalar(y);
-            assert!((result - expected).abs() < 1e-10, "ndtri({y}) = {result}, expected {expected}");
+            assert!(
+                (result - expected).abs() < 1e-10,
+                "ndtri({y}) = {result}, expected {expected}"
+            );
         }
     }
 
@@ -9909,8 +9915,14 @@ mod tests {
         ];
         for (x, expected_s, expected_c) in cases {
             let (s, c) = super::fresnel(x);
-            assert!((s - expected_s).abs() < 1e-6, "fresnel({x}).s = {s}, expected {expected_s}");
-            assert!((c - expected_c).abs() < 1e-6, "fresnel({x}).c = {c}, expected {expected_c}");
+            assert!(
+                (s - expected_s).abs() < 1e-6,
+                "fresnel({x}).s = {s}, expected {expected_s}"
+            );
+            assert!(
+                (c - expected_c).abs() < 1e-6,
+                "fresnel({x}).c = {c}, expected {expected_c}"
+            );
         }
     }
 
@@ -9919,13 +9931,19 @@ mod tests {
         // scipy.special.sici([1.0, 2.0, 5.0])
         let cases = [
             (1.0, 0.9460830703671831, 0.33740392290096817),
-            (2.0, 1.6054129768026948, 0.42298082808405055),
+            (2.0, 1.6054129768026948, 0.422_980_828_084_050_6),
             (5.0, 1.5499312449446702, -0.19002974965664387),
         ];
         for (x, expected_si, expected_ci) in cases {
             let (si, ci) = super::sici(x);
-            assert!((si - expected_si).abs() < 1e-6, "sici({x}).si = {si}, expected {expected_si}");
-            assert!((ci - expected_ci).abs() < 1e-6, "sici({x}).ci = {ci}, expected {expected_ci}");
+            assert!(
+                (si - expected_si).abs() < 1e-6,
+                "sici({x}).si = {si}, expected {expected_si}"
+            );
+            assert!(
+                (ci - expected_ci).abs() < 1e-6,
+                "sici({x}).ci = {ci}, expected {expected_ci}"
+            );
         }
     }
 
@@ -9939,18 +9957,30 @@ mod tests {
         ];
         for (x, expected_shi, expected_chi) in cases {
             let (shi, chi) = super::shichi(x);
-            assert!((shi - expected_shi).abs() < 1e-6, "shichi({x}).shi = {shi}, expected {expected_shi}");
-            assert!((chi - expected_chi).abs() < 1e-3, "shichi({x}).chi = {chi}, expected {expected_chi}");
+            assert!(
+                (shi - expected_shi).abs() < 1e-6,
+                "shichi({x}).shi = {shi}, expected {expected_shi}"
+            );
+            assert!(
+                (chi - expected_chi).abs() < 1e-3,
+                "shichi({x}).chi = {chi}, expected {expected_chi}"
+            );
         }
     }
 
     #[test]
     fn struve_matches_scipy_reference_values() {
         // scipy.special.struve([0, 1], [1.0, 2.0])
-        let cases = [(0.0, 1.0, 0.5686246925337326), (1.0, 2.0, 0.6459316510996011)];
+        let cases = [
+            (0.0, 1.0, 0.5686246925337326),
+            (1.0, 2.0, 0.645_931_651_099_601),
+        ];
         for (v, x, expected) in cases {
             let result = super::struve(v, x);
-            assert!((result - expected).abs() < 1e-3, "struve({v}, {x}) = {result}, expected {expected}");
+            assert!(
+                (result - expected).abs() < 1e-3,
+                "struve({v}, {x}) = {result}, expected {expected}"
+            );
         }
     }
 
@@ -9962,7 +9992,10 @@ mod tests {
         let x = SpecialTensor::RealScalar(0.5);
         let result = super::sinc(&x, RuntimeMode::Strict).expect("sinc");
         if let SpecialTensor::RealScalar(val) = result {
-            assert!((val - 0.6366197723675814).abs() < 1e-6, "sinc(0.5) = {val}, expected 0.6366197723675814");
+            assert!(
+                (val - std::f64::consts::FRAC_2_PI).abs() < 1e-6,
+                "sinc(0.5) = {val}, expected 0.6366197723675814"
+            );
         } else {
             panic!("sinc should return scalar");
         }
@@ -10000,6 +10033,9 @@ mod tests {
     fn kl_div_matches_scipy_reference_values() {
         // scipy.special.kl_div(1, 2) = 0.3068528194400546
         let result = super::kl_div(1.0, 2.0);
-        assert!((result - 0.3068528194400546).abs() < 1e-6, "kl_div(1, 2) = {result}, expected 0.3068528194400546");
+        assert!(
+            (result - 0.3068528194400546).abs() < 1e-6,
+            "kl_div(1, 2) = {result}, expected 0.3068528194400546"
+        );
     }
 }

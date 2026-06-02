@@ -2857,12 +2857,13 @@ mod tests {
             0.0,
             -0.12078223763524526,
             0.0,
-            0.6931471805599453,
+            std::f64::consts::LN_2,
             1.791759469228055,
             3.1780538303479458,
         ];
         for (i, (&x, &want)) in inputs.iter().zip(expected.iter()).enumerate() {
-            let got = gammaln_scalar(x, RuntimeMode::Strict).expect("gammaln_scalar should succeed");
+            let got =
+                gammaln_scalar(x, RuntimeMode::Strict).expect("gammaln_scalar should succeed");
             assert!(
                 (got - want).abs() < 1e-10,
                 "gammaln({x}) got {got}, expected {want} at index {i}"
@@ -2882,8 +2883,8 @@ mod tests {
             0.6826894921370859,
         ];
         for (i, ((a, x), &want)) in inputs.iter().zip(expected.iter()).enumerate() {
-            let got =
-                gammainc_scalar(*a, *x, RuntimeMode::Strict).expect("gammainc_scalar should succeed");
+            let got = gammainc_scalar(*a, *x, RuntimeMode::Strict)
+                .expect("gammainc_scalar should succeed");
             assert!(
                 (got - want).abs() < 1e-10,
                 "gammainc({a}, {x}) got {got}, expected {want} at index {i}"
@@ -2903,8 +2904,8 @@ mod tests {
             0.31731050786291115,
         ];
         for (i, ((a, x), &want)) in inputs.iter().zip(expected.iter()).enumerate() {
-            let got =
-                gammaincc_scalar(*a, *x, RuntimeMode::Strict).expect("gammaincc_scalar should succeed");
+            let got = gammaincc_scalar(*a, *x, RuntimeMode::Strict)
+                .expect("gammaincc_scalar should succeed");
             assert!(
                 (got - want).abs() < 1e-10,
                 "gammaincc({a}, {x}) got {got}, expected {want} at index {i}"
@@ -2979,5 +2980,4 @@ mod tests {
             );
         }
     }
-
 }
