@@ -4314,19 +4314,25 @@ impl RelBreitWigner {
         Self { rho }
     }
 
-    fn norm(&self) -> f64 {
-        (4.0 / self.rho) * (1.0 / self.rho).atan()
+    /// Normalizing constant `k` from SciPy's `rel_breitwigner` definition:
+    /// k = 2*sqrt(2)*rho^2*sqrt(rho^2+1) / (pi*sqrt(rho^2 + rho*sqrt(rho^2+1))).
+    fn k_const(&self) -> f64 {
+        let r2 = self.rho * self.rho;
+        let s = (r2 + 1.0).sqrt();
+        2.0 * std::f64::consts::SQRT_2 * r2 * s / (PI * (r2 + self.rho * s).sqrt())
     }
 }
 
 impl ContinuousDistribution for RelBreitWigner {
-    fn pdf(&self, k: f64) -> f64 {
-        if k <= 0.0 {
+    fn pdf(&self, x: f64) -> f64 {
+        if x < 0.0 {
             return 0.0;
         }
-        let k2 = k * k;
-        let denom = (1.0 - k2).powi(2) + self.rho * self.rho;
-        k / denom / self.norm()
+        // SciPy: f(x, rho) = k / ((x^2 - rho^2)^2 + rho^2). The resonance peak
+        // is at x = rho (not a fixed x = 1).
+        let r2 = self.rho * self.rho;
+        let d = x * x - r2;
+        self.k_const() / (d * d + r2)
     }
 
     fn cdf(&self, k: f64) -> f64 {
@@ -4363,11 +4369,22 @@ impl ContinuousDistribution for RelBreitWigner {
     }
 
     fn mean(&self) -> f64 {
-        f64::INFINITY
+        // E[X] = ∫₀^∞ x f(x) dx. The pdf decays as k/x^4, so x·f ~ k/x^3 and
+        // the tail beyond b contributes ≈ k/(2 b^2); add it analytically since
+        // truncating the heavy tail otherwise converges slowly.
+        let b = (200.0 * self.rho).max(200.0);
+        let body = simpson_integrate_adaptive(|x| x * self.pdf(x), 0.0, b, 256, 1e-12, 1e-14, 20);
+        body + self.k_const() / (2.0 * b * b)
     }
 
     fn var(&self) -> f64 {
-        f64::INFINITY
+        // Var = E[X^2] - E[X]^2. x^2·f ~ k/x^2, so the tail beyond b is ≈ k/b.
+        let mean = self.mean();
+        let b = (200.0 * self.rho).max(200.0);
+        let m2_body =
+            simpson_integrate_adaptive(|x| x * x * self.pdf(x), 0.0, b, 256, 1e-12, 1e-14, 20);
+        let m2 = m2_body + self.k_const() / b;
+        m2 - mean * mean
     }
 
     fn fit(_data: &[f64]) -> Self {
@@ -4393,7 +4410,8 @@ impl ContinuousDistribution for RelBreitWigner {
     }
 
     fn mode(&self) -> f64 {
-        1.0
+        // The denominator (x^2 - rho^2)^2 + rho^2 is minimized at x = rho.
+        self.rho
     }
 }
 
@@ -56787,14 +56805,46 @@ mod tests {
     #[test]
     fn test_rel_breit_wigner() {
         let rbw = RelBreitWigner::new(0.5);
-        assert_eq!(rbw.pdf(0.0), 0.0);
+        // pdf(0) is finite and positive (matches scipy), the peak is at x=rho.
+        assert!(rbw.pdf(0.0) > 0.0);
         assert!(rbw.pdf(1.0) > 0.0);
         assert!(rbw.pdf(0.5) > 0.0);
         assert_eq!(rbw.cdf(0.0), 0.0);
         assert!(rbw.cdf(1.0) > 0.0 && rbw.cdf(1.0) < 1.0);
-        assert_eq!(rbw.mode(), 1.0);
+        assert!((rbw.mode() - 0.5).abs() < 1e-12, "mode should be rho");
         let q50 = rbw.ppf(0.5);
         assert!(q50 > 0.0 && q50.is_finite());
+    }
+
+    #[test]
+    fn rel_breit_wigner_matches_scipy() {
+        // scipy.stats.rel_breitwigner reference values (rho=0.5 and rho=1.0).
+        let d = RelBreitWigner::new(0.5);
+        for (x, want) in [
+            (0.0, 0.895285),
+            (0.5, 1.119106),
+            (1.0, 0.344340),
+            (1.5, 0.065830),
+            (2.0, 0.019548),
+        ] {
+            assert!(
+                (d.pdf(x) - want).abs() < 1e-5,
+                "pdf({x}) = {}, scipy {want}",
+                d.pdf(x)
+            );
+        }
+        // pdf integrates to 1 (it was mis-normalized before).
+        let integral =
+            simpson_integrate_adaptive(|x| d.pdf(x), 0.0, 400.0, 512, 1e-12, 1e-14, 24);
+        assert!((integral - 1.0).abs() < 1e-3, "pdf integral = {integral}");
+        // Finite mean/var match scipy (were wrongly INFINITY before).
+        assert!((d.mean() - 0.569190).abs() < 1e-3, "mean = {}", d.mean());
+        assert!((d.var() - 0.235040).abs() < 1e-3, "var = {}", d.var());
+
+        let d1 = RelBreitWigner::new(1.0);
+        assert!((d1.pdf(1.0) - 0.819450).abs() < 1e-5, "pdf(1.0;1.0) = {}", d1.pdf(1.0));
+        assert!((d1.mean() - 0.965391).abs() < 1e-3, "mean(1.0) = {}", d1.mean());
+        assert!((d1.var() - 0.482233).abs() < 1e-3, "var(1.0) = {}", d1.var());
     }
 
     #[test]
