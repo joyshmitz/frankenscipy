@@ -3170,10 +3170,73 @@ impl ContinuousDistribution for GenGamma {
         }
     }
 
-    fn try_fit(_data: &[f64]) -> Result<Self, FitError> {
-        Err(FitError::NotImplemented {
-            distribution: "GenGamma",
-        })
+    fn try_fit(data: &[f64]) -> Result<Self, FitError> {
+        // Maximum-likelihood fit (standardized GenGamma, loc=0/scale=1) via
+        // multi-start Nelder-Mead over (ln a, c); matches
+        // scipy.stats.gengamma.fit(.., floc=0, fscale=1). The 2-parameter
+        // moment system is ill-conditioned, so fit by likelihood instead.
+        if data.len() < 2 {
+            return Err(FitError::InsufficientData {
+                required: 2,
+                actual: data.len(),
+            });
+        }
+        for &x in data {
+            if !x.is_finite() {
+                return Err(FitError::UnsupportedData(format!(
+                    "GenGamma data contains non-finite value: {x}"
+                )));
+            }
+            if x <= 0.0 {
+                return Err(FitError::UnsupportedData(format!(
+                    "GenGamma support is (0, ∞); got {x}"
+                )));
+            }
+        }
+        let owned: Vec<f64> = data.to_vec();
+        let nll = |p: &[f64]| -> f64 {
+            let a = p[0].exp();
+            let c = p[1];
+            if !a.is_finite() || !c.is_finite() || c.abs() < 1e-8 {
+                return f64::INFINITY;
+            }
+            let dist = GenGamma { a, c };
+            let mut total = 0.0;
+            for &x in &owned {
+                let d = dist.pdf(x);
+                if !(d > 0.0) || !d.is_finite() {
+                    return f64::INFINITY;
+                }
+                total -= d.ln();
+            }
+            total
+        };
+        let starts = [[1.0_f64, 1.0], [2.0, 1.5], [0.5, 0.8]];
+        let mut best: Option<(f64, [f64; 2])> = None;
+        for s in &starts {
+            let x0 = [s[0].ln(), s[1]];
+            let opts = fsci_opt::MinimizeOptions {
+                maxiter: Some(2000),
+                maxfev: Some(4000),
+                tol: Some(1e-9),
+                ..Default::default()
+            };
+            if let Ok(res) = fsci_opt::nelder_mead(&nll, &x0, opts)
+                && let Some(f) = res.fun
+                && f.is_finite()
+                && best.as_ref().is_none_or(|(bf, _)| f < *bf)
+            {
+                best = Some((f, [res.x[0].exp(), res.x[1]]));
+            }
+        }
+        match best {
+            Some((_, p)) if p[0] > 0.0 && p[1].abs() > 1e-8 && p.iter().all(|v| v.is_finite()) => {
+                Ok(Self { a: p[0], c: p[1] })
+            }
+            _ => Err(FitError::NonConvergent(
+                "GenGamma MLE failed to converge".to_owned(),
+            )),
+        }
     }
 
     fn skewness(&self) -> f64 {
@@ -54646,6 +54709,42 @@ mod tests {
         // Sanity: parameters land in scipy's neighbourhood.
         assert!(fitted.dfd > 2.0 && fitted.dfd < 40.0, "dfd={}", fitted.dfd);
         assert!(fitted.nc >= 0.0 && fitted.nc < 15.0, "nc={}", fitted.nc);
+    }
+
+    #[test]
+    fn gen_gamma_fit_is_at_least_as_good_as_scipy() {
+        // 40 samples from scipy gengamma.rvs(a=2, c=1.5, seed=99).
+        // scipy.stats.gengamma.fit(data, floc=0, fscale=1) -> (1.9839, 1.542).
+        let data = [
+            1.4662, 1.4426, 0.4197, 1.093, 0.7484, 1.9384, 2.1288, 1.6543, 0.8408, 1.6966, 1.9784,
+            1.9365, 1.7616, 0.8506, 1.538, 2.1923, 1.372, 3.1895, 0.4962, 2.0189, 1.1278, 0.9152,
+            1.6261, 1.1378, 2.0859, 1.0923, 1.4139, 1.7743, 1.202, 1.0151, 0.3565, 0.9591, 2.726,
+            1.4728, 0.5724, 0.8462, 3.2725, 2.2045, 1.7951, 0.6421,
+        ];
+        let fitted = GenGamma::try_fit(&data).expect("fit");
+        let nll = |d: &GenGamma| -> f64 {
+            -data.iter().map(|&x| d.pdf(x).max(1e-300).ln()).sum::<f64>()
+        };
+        let scipy = GenGamma::new(1.9839, 1.542);
+        assert!(
+            nll(&fitted) <= nll(&scipy) + 1e-3,
+            "GenGamma MLE not optimal: ours NLL={}, scipy-params NLL={}",
+            nll(&fitted),
+            nll(&scipy)
+        );
+        assert!(fitted.a > 0.0 && fitted.c > 0.0, "a={}, c={}", fitted.a, fitted.c);
+    }
+
+    #[test]
+    fn gen_gamma_fit_rejects_invalid_input() {
+        assert!(matches!(
+            GenGamma::try_fit(&[1.0]).expect_err("n=1"),
+            FitError::InsufficientData { .. }
+        ));
+        assert!(matches!(
+            GenGamma::try_fit(&[1.0, -2.0, 3.0]).expect_err("nonpositive"),
+            FitError::UnsupportedData(_)
+        ));
     }
 
     #[test]
