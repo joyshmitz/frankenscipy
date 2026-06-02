@@ -65,6 +65,17 @@ impl FormatConvertible for CsrMatrix {
     }
 
     fn to_csc(&self) -> SparseResult<CscMatrix> {
+        if can_direct_transpose_compressed(
+            self.canonical_meta().sorted_indices,
+            self.canonical_meta().deduplicated,
+            self.shape().rows,
+            self.shape().cols,
+            self.nnz(),
+            self.indptr(),
+            self.indices(),
+        ) {
+            return csr_to_csc_direct(self);
+        }
         self.to_coo()?.to_csc()
     }
 
@@ -85,6 +96,17 @@ impl FormatConvertible for CsrMatrix {
 
 impl FormatConvertible for CscMatrix {
     fn to_csr(&self) -> SparseResult<CsrMatrix> {
+        if can_direct_transpose_compressed(
+            self.canonical_meta().sorted_indices,
+            self.canonical_meta().deduplicated,
+            self.shape().cols,
+            self.shape().rows,
+            self.nnz(),
+            self.indptr(),
+            self.indices(),
+        ) {
+            return csc_to_csr_direct(self);
+        }
         self.to_coo()?.to_csr()
     }
 
@@ -595,6 +617,102 @@ fn ensure_same_shape(lhs: Shape2D, rhs: Shape2D) -> SparseResult<()> {
     Ok(())
 }
 
+fn can_direct_transpose_compressed(
+    sorted_indices: bool,
+    deduplicated: bool,
+    major_len: usize,
+    minor_len: usize,
+    nnz: usize,
+    indptr: &[usize],
+    indices: &[usize],
+) -> bool {
+    sorted_indices
+        && deduplicated
+        && indices.len() == nnz
+        && indptr.len() == major_len + 1
+        && indptr.first() == Some(&0)
+        && indptr.last() == Some(&nnz)
+        && indptr.windows(2).all(|window| window[0] <= window[1])
+        && compressed_segments_are_strictly_sorted(minor_len, indptr, indices)
+}
+
+fn compressed_segments_are_strictly_sorted(
+    minor_len: usize,
+    indptr: &[usize],
+    indices: &[usize],
+) -> bool {
+    for window in indptr.windows(2) {
+        let start = window[0];
+        let end = window[1];
+        let Some(segment) = indices.get(start..end) else {
+            return false;
+        };
+        for &idx in segment {
+            if idx >= minor_len {
+                return false;
+            }
+        }
+        if segment.windows(2).any(|pair| pair[0] >= pair[1]) {
+            return false;
+        }
+    }
+    true
+}
+
+fn csr_to_csc_direct(csr: &CsrMatrix) -> SparseResult<CscMatrix> {
+    let shape = csr.shape();
+    let nnz = csr.nnz();
+    let mut indptr = vec![0usize; shape.cols + 1];
+    for &col in csr.indices() {
+        indptr[col + 1] += 1;
+    }
+    for col in 0..shape.cols {
+        indptr[col + 1] += indptr[col];
+    }
+
+    let mut next = indptr.clone();
+    let mut data = vec![0.0; nnz];
+    let mut indices = vec![0usize; nnz];
+    for row in 0..shape.rows {
+        for idx in csr.indptr()[row]..csr.indptr()[row + 1] {
+            let col = csr.indices()[idx];
+            let out_idx = next[col];
+            indices[out_idx] = row;
+            data[out_idx] = csr.data()[idx];
+            next[col] += 1;
+        }
+    }
+
+    CscMatrix::from_components(shape, data, indices, indptr, true)
+}
+
+fn csc_to_csr_direct(csc: &CscMatrix) -> SparseResult<CsrMatrix> {
+    let shape = csc.shape();
+    let nnz = csc.nnz();
+    let mut indptr = vec![0usize; shape.rows + 1];
+    for &row in csc.indices() {
+        indptr[row + 1] += 1;
+    }
+    for row in 0..shape.rows {
+        indptr[row + 1] += indptr[row];
+    }
+
+    let mut next = indptr.clone();
+    let mut data = vec![0.0; nnz];
+    let mut indices = vec![0usize; nnz];
+    for col in 0..shape.cols {
+        for idx in csc.indptr()[col]..csc.indptr()[col + 1] {
+            let row = csc.indices()[idx];
+            let out_idx = next[row];
+            indices[out_idx] = col;
+            data[out_idx] = csc.data()[idx];
+            next[row] += 1;
+        }
+    }
+
+    CsrMatrix::from_components(shape, data, indices, indptr, true)
+}
+
 fn canonical_triplets(coo: &CooMatrix) -> Vec<(usize, usize, f64)> {
     let mut triplets: Vec<(usize, usize, f64)> = coo
         .row_indices()
@@ -731,6 +849,72 @@ mod tests {
         out
     }
 
+    fn snapshot_csr(label: &str, matrix: &CsrMatrix) -> String {
+        let meta = matrix.canonical_meta();
+        let indptr = matrix
+            .indptr()
+            .iter()
+            .map(usize::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        let indices = matrix
+            .indices()
+            .iter()
+            .map(usize::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        let data = matrix
+            .data()
+            .iter()
+            .map(|value| format!("{:016x}", value.to_bits()))
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(
+            "FSCI_SPARSE_CONVERSION_GOLDEN {label} csr shape={}x{} nnz={} sorted={} deduplicated={} indptr=[{}] indices=[{}] data=[{}]",
+            matrix.shape().rows,
+            matrix.shape().cols,
+            matrix.nnz(),
+            meta.sorted_indices,
+            meta.deduplicated,
+            indptr,
+            indices,
+            data
+        )
+    }
+
+    fn snapshot_csc(label: &str, matrix: &CscMatrix) -> String {
+        let meta = matrix.canonical_meta();
+        let indptr = matrix
+            .indptr()
+            .iter()
+            .map(usize::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        let indices = matrix
+            .indices()
+            .iter()
+            .map(usize::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        let data = matrix
+            .data()
+            .iter()
+            .map(|value| format!("{:016x}", value.to_bits()))
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(
+            "FSCI_SPARSE_CONVERSION_GOLDEN {label} csc shape={}x{} nnz={} sorted={} deduplicated={} indptr=[{}] indices=[{}] data=[{}]",
+            matrix.shape().rows,
+            matrix.shape().cols,
+            matrix.nnz(),
+            meta.sorted_indices,
+            meta.deduplicated,
+            indptr,
+            indices,
+            data
+        )
+    }
+
     #[test]
     fn tril_default_keeps_diagonal_and_below() {
         // /testing-conformance-harnesses for [frankenscipy-y9m6n]:
@@ -806,6 +990,69 @@ mod tests {
         assert_eq!(sum.data(), &[1.0, 3.0, 2.0, 6.0]);
         assert!(sum.canonical_meta().sorted_indices);
         assert!(sum.canonical_meta().deduplicated);
+    }
+
+    #[test]
+    fn conversion_golden_snapshot() {
+        let canonical = CooMatrix::from_triplets(
+            Shape2D::new(4, 5),
+            vec![1.0, -0.0, 2.5, -3.25, 8.0, 13.0],
+            vec![0, 0, 1, 2, 3, 3],
+            vec![1, 4, 3, 0, 2, 4],
+            false,
+        )
+        .expect("canonical coo")
+        .to_csr()
+        .expect("canonical csr");
+        let canonical_csc = canonical.to_csc().expect("canonical csr->csc");
+        println!("{}", snapshot_csc("canonical-csr-to-csc", &canonical_csc));
+        println!(
+            "{}",
+            snapshot_csr(
+                "canonical-csr-to-csc-to-csr",
+                &canonical_csc.to_csr().expect("canonical csc->csr"),
+            )
+        );
+
+        let duplicate_csr = CsrMatrix::from_components(
+            Shape2D::new(2, 3),
+            vec![1.0, 2.0, 4.0, 5.0],
+            vec![1, 1, 2, 0],
+            vec![0, 3, 4],
+            false,
+        )
+        .expect("duplicate csr");
+        println!(
+            "{}",
+            snapshot_csc(
+                "duplicate-csr-to-csc",
+                &duplicate_csr.to_csc().expect("duplicate csc")
+            )
+        );
+
+        let unsorted_csc = CscMatrix::from_components(
+            Shape2D::new(3, 2),
+            vec![7.0, -1.0, 2.0, 11.0],
+            vec![2, 0, 0, 1],
+            vec![0, 2, 4],
+            false,
+        )
+        .expect("unsorted csc");
+        println!(
+            "{}",
+            snapshot_csr(
+                "unsorted-csc-to-csr",
+                &unsorted_csc.to_csr().expect("unsorted csr")
+            )
+        );
+
+        let empty =
+            CsrMatrix::from_components(Shape2D::new(3, 4), vec![], vec![], vec![0; 4], true)
+                .expect("empty csr");
+        println!(
+            "{}",
+            snapshot_csc("empty-csr-to-csc", &empty.to_csc().expect("empty csc"))
+        );
     }
 
     #[test]

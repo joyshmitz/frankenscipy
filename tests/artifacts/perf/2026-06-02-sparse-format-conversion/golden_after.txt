@@ -1,0 +1,5 @@
+FSCI_SPARSE_CONVERSION_GOLDEN canonical-csr-to-csc csc shape=4x5 nnz=6 sorted=true deduplicated=true indptr=[0,1,2,3,4,6] indices=[2,0,3,1,0,3] data=[c00a000000000000,3ff0000000000000,4020000000000000,4004000000000000,8000000000000000,402a000000000000]
+FSCI_SPARSE_CONVERSION_GOLDEN canonical-csr-to-csc-to-csr csr shape=4x5 nnz=6 sorted=true deduplicated=true indptr=[0,2,3,4,6] indices=[1,4,3,0,2,4] data=[3ff0000000000000,8000000000000000,4004000000000000,c00a000000000000,4020000000000000,402a000000000000]
+FSCI_SPARSE_CONVERSION_GOLDEN duplicate-csr-to-csc csc shape=2x3 nnz=3 sorted=true deduplicated=true indptr=[0,1,2,3] indices=[1,0,0] data=[4014000000000000,4008000000000000,4010000000000000]
+FSCI_SPARSE_CONVERSION_GOLDEN unsorted-csc-to-csr csr shape=3x2 nnz=4 sorted=true deduplicated=true indptr=[0,2,3,4] indices=[0,1,1,0] data=[bff0000000000000,4000000000000000,4026000000000000,401c000000000000]
+FSCI_SPARSE_CONVERSION_GOLDEN empty-csr-to-csc csc shape=3x4 nnz=0 sorted=true deduplicated=true indptr=[0,0,0,0,0] indices=[] data=[]
