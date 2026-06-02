@@ -360,11 +360,17 @@ pub fn spmv_coo(matrix: &CooMatrix, vector: &[f64]) -> SparseResult<Vec<f64>> {
 
 pub fn add_csr(lhs: &CsrMatrix, rhs: &CsrMatrix) -> SparseResult<CsrMatrix> {
     ensure_same_shape(lhs.shape(), rhs.shape())?;
+    if can_combine_csr_rows_directly(lhs, rhs) {
+        return combine_csr_rows_directly(lhs, rhs, 1.0);
+    }
     combine_coo(lhs.to_coo()?, rhs.to_coo()?, 1.0)?.to_csr()
 }
 
 pub fn sub_csr(lhs: &CsrMatrix, rhs: &CsrMatrix) -> SparseResult<CsrMatrix> {
     ensure_same_shape(lhs.shape(), rhs.shape())?;
+    if can_combine_csr_rows_directly(lhs, rhs) {
+        return combine_csr_rows_directly(lhs, rhs, -1.0);
+    }
     combine_coo(lhs.to_coo()?, rhs.to_coo()?, -1.0)?.to_csr()
 }
 
@@ -506,6 +512,78 @@ fn combine_coo(lhs: CooMatrix, rhs: CooMatrix, rhs_scale: f64) -> SparseResult<C
         }
     }
     CooMatrix::from_triplets(shape, data, rows, cols, false)
+}
+
+fn can_combine_csr_rows_directly(lhs: &CsrMatrix, rhs: &CsrMatrix) -> bool {
+    let lhs_meta = lhs.canonical_meta();
+    let rhs_meta = rhs.canonical_meta();
+    lhs_meta.sorted_indices
+        && lhs_meta.deduplicated
+        && rhs_meta.sorted_indices
+        && rhs_meta.deduplicated
+}
+
+fn combine_csr_rows_directly(
+    lhs: &CsrMatrix,
+    rhs: &CsrMatrix,
+    rhs_scale: f64,
+) -> SparseResult<CsrMatrix> {
+    let shape = lhs.shape();
+    let mut data = Vec::with_capacity(lhs.nnz() + rhs.nnz());
+    let mut indices = Vec::with_capacity(lhs.nnz() + rhs.nnz());
+    let mut indptr = Vec::with_capacity(shape.rows + 1);
+    indptr.push(0);
+
+    for row in 0..shape.rows {
+        let mut lhs_idx = lhs.indptr()[row];
+        let lhs_end = lhs.indptr()[row + 1];
+        let mut rhs_idx = rhs.indptr()[row];
+        let rhs_end = rhs.indptr()[row + 1];
+
+        while lhs_idx < lhs_end && rhs_idx < rhs_end {
+            let lhs_col = lhs.indices()[lhs_idx];
+            let rhs_col = rhs.indices()[rhs_idx];
+            if lhs_col < rhs_col {
+                let value = 0.0 + lhs.data()[lhs_idx];
+                push_nonzero_csr_entry(&mut data, &mut indices, lhs_col, value);
+                lhs_idx += 1;
+            } else if rhs_col < lhs_col {
+                let value = 0.0 + rhs_scale * rhs.data()[rhs_idx];
+                push_nonzero_csr_entry(&mut data, &mut indices, rhs_col, value);
+                rhs_idx += 1;
+            } else {
+                let mut value = 0.0;
+                value += lhs.data()[lhs_idx];
+                value += rhs_scale * rhs.data()[rhs_idx];
+                push_nonzero_csr_entry(&mut data, &mut indices, lhs_col, value);
+                lhs_idx += 1;
+                rhs_idx += 1;
+            }
+        }
+
+        while lhs_idx < lhs_end {
+            let value = 0.0 + lhs.data()[lhs_idx];
+            push_nonzero_csr_entry(&mut data, &mut indices, lhs.indices()[lhs_idx], value);
+            lhs_idx += 1;
+        }
+
+        while rhs_idx < rhs_end {
+            let value = 0.0 + rhs_scale * rhs.data()[rhs_idx];
+            push_nonzero_csr_entry(&mut data, &mut indices, rhs.indices()[rhs_idx], value);
+            rhs_idx += 1;
+        }
+
+        indptr.push(data.len());
+    }
+
+    CsrMatrix::from_components(shape, data, indices, indptr, false)
+}
+
+fn push_nonzero_csr_entry(data: &mut Vec<f64>, indices: &mut Vec<usize>, col: usize, value: f64) {
+    if value != 0.0 {
+        indices.push(col);
+        data.push(value);
+    }
 }
 
 fn ensure_same_shape(lhs: Shape2D, rhs: Shape2D) -> SparseResult<()> {
@@ -686,12 +764,48 @@ mod tests {
             .to_coo()
             .expect("trait to_coo");
 
-        assert_eq!(via_method.nnz(), 1, "inherent should drop the explicit zero");
+        assert_eq!(
+            via_method.nnz(),
+            1,
+            "inherent should drop the explicit zero"
+        );
         assert_eq!(
             via_trait.nnz(),
             via_method.nnz(),
             "trait-object path must match the inherent method (no materialized zeros)"
         );
+    }
+
+    #[test]
+    fn add_csr_direct_canonical_merge_preserves_sorted_rows_and_zero_elision() {
+        let lhs = CooMatrix::from_triplets(
+            Shape2D::new(3, 4),
+            vec![1.0, 2.0, -4.0, 5.0],
+            vec![0, 1, 1, 2],
+            vec![1, 0, 3, 2],
+            false,
+        )
+        .expect("lhs")
+        .to_csr()
+        .expect("lhs csr");
+        let rhs = CooMatrix::from_triplets(
+            Shape2D::new(3, 4),
+            vec![3.0, 4.0, -5.0, 6.0],
+            vec![0, 1, 2, 2],
+            vec![2, 3, 2, 3],
+            false,
+        )
+        .expect("rhs")
+        .to_csr()
+        .expect("rhs csr");
+
+        let sum = add_csr(&lhs, &rhs).expect("sum");
+
+        assert_eq!(sum.indptr(), &[0, 2, 3, 4]);
+        assert_eq!(sum.indices(), &[1, 2, 0, 3]);
+        assert_eq!(sum.data(), &[1.0, 3.0, 2.0, 6.0]);
+        assert!(sum.canonical_meta().sorted_indices);
+        assert!(sum.canonical_meta().deduplicated);
     }
 
     #[test]

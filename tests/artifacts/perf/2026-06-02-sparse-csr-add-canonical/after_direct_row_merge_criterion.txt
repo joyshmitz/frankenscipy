@@ -1,0 +1,24 @@
+frankenscipy-6w1mf
+One lever: for canonical sorted+deduplicated CSR inputs, merge row-local sorted column streams directly into CSR components; keep the existing COO/BTreeMap path as fallback for noncanonical inputs.
+
+After command:
+RCH_FORCE_REMOTE=1 CARGO_TARGET_DIR=/data/tmp/cargo-target-frankenscipy-olivesnow-sparse RUSTFLAGS='-C force-frame-pointers=yes' rch exec -- cargo bench -p fsci-sparse --bench sparse_bench -- sparse_arithmetic/10000x10000_d0_add/10000 --warm-up-time 1 --measurement-time 2 --sample-size 10
+
+After worker:
+vmi1293453
+
+After:
+sparse_arithmetic/10000x10000_d0_add/10000: [1.6588 ms 1.6915 ms 1.7301 ms]
+
+Delta:
+focused mean 37.795 ms -> 1.6915 ms
+absolute delta -36.1035 ms
+relative delta -95.5%
+
+Worker note:
+The focused baseline and after re-benchmark ran on different RCH workers. The reduction is large enough that the keep decision is still high-confidence, but this is recorded explicitly rather than treated as same-worker proof.
+
+Score:
+Impact 3.0 x Confidence 2.5 / Effort 1.0 = 7.5
+Keep threshold: >= 2.0
+Decision: keep

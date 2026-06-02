@@ -1,0 +1,27 @@
+frankenscipy-6w1mf
+[perf] fsci-sparse add_csr canonical rows detour through COO BTreeMap
+
+Fresh profile command:
+RCH_FORCE_REMOTE=1 CARGO_TARGET_DIR=/data/tmp/cargo-target-frankenscipy-olivesnow-sparse RUSTFLAGS='-C force-frame-pointers=yes' rch exec -- cargo bench -p fsci-sparse --bench sparse_bench -- --warm-up-time 1 --measurement-time 2 --sample-size 10
+
+Profile worker:
+vmi1153651
+
+Top rows:
+sparse_arithmetic/10000x10000_d0_add/10000: [56.618 ms 59.649 ms 65.621 ms]
+sparse_format_conversion/10000x10000_d0_csr_to_csc/10000: [13.329 ms 14.512 ms 16.650 ms]
+sparse_format_conversion/10000x10000_d0_csc_to_csr/10000: [12.584 ms 13.196 ms 14.294 ms]
+sparse_csr_construction/10000x10000_d0/10000: [5.8725 ms 6.2596 ms 7.2505 ms]
+sparse_diags/tridiag/10000: [3.8134 ms 4.9075 ms 6.1332 ms]
+
+Target selection:
+The dominant fsci-sparse row is add_csr at the 10000x10000 sparse case. Code inspection found that add_csr converts both CSR matrices to COO, accumulates all entries in a BTreeMap keyed by (row, col), and converts the combined COO back to CSR.
+
+Focused baseline command:
+RCH_FORCE_REMOTE=1 CARGO_TARGET_DIR=/data/tmp/cargo-target-frankenscipy-olivesnow-sparse RUSTFLAGS='-C force-frame-pointers=yes' rch exec -- cargo bench -p fsci-sparse --bench sparse_bench -- sparse_arithmetic/10000x10000_d0_add/10000 --warm-up-time 1 --measurement-time 2 --sample-size 10
+
+Focused baseline worker:
+vmi1227854
+
+Focused baseline:
+sparse_arithmetic/10000x10000_d0_add/10000: [33.951 ms 37.795 ms 39.996 ms]
