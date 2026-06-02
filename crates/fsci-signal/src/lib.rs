@@ -7169,21 +7169,25 @@ pub fn remez(
     let mut ata = vec![vec![0.0; n_coeffs]; n_coeffs];
     let mut atd = vec![0.0; n_coeffs];
     let two_pi = 2.0 * std::f64::consts::PI;
+    let mut cos_basis = vec![0.0; n_coeffs];
 
     for i in 0..ng {
         let f = freq_grid[i];
         let w = weight_grid[i]; // WLS weight: minimize Σ w_i * (H(f_i) - D(f_i))²
         let d = desired_grid[i];
+        for (j, basis) in cos_basis.iter_mut().enumerate() {
+            *basis = (two_pi * j as f64 * f).cos();
+        }
 
         for j in 0..n_coeffs {
-            let cj = (two_pi * j as f64 * f).cos();
+            let cj = cos_basis[j];
             atd[j] += w * cj * d;
             let (head, tail) = ata.split_at_mut(j + 1);
             let ata_j = &mut head[j];
             ata_j[j] += w * cj * cj;
             for (offset, ata_row) in tail.iter_mut().enumerate() {
                 let k = j + 1 + offset;
-                let ck = (two_pi * k as f64 * f).cos();
+                let ck = cos_basis[k];
                 let value = w * cj * ck;
                 ata_row[j] += value;
                 ata_j[k] += value;
