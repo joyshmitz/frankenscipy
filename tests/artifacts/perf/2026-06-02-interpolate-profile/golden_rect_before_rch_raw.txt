@@ -1,0 +1,140 @@
+  [2m2026-06-02T16:49:02.480532Z[0m [33m WARN[0m [1;33mrch::hook[0m[33m: [33mexec called with non-compilation command: sh -lc 'cargo run -p fsci-interpolate --bin perf_interpolate --locked -- golden > tests/artifacts/perf/2026-06-02-interpolate-profile/golden_rect_before.txt && sha256sum tests/artifacts/perf/2026-06-02-interpolate-profile/golden_rect_before.txt > tests/artifacts/perf/2026-06-02-interpolate-profile/golden_rect_before.sha256'[0m
+    [2;3mat[0m rch/src/hook.rs:402 [2;3mon[0m ThreadId(1)
+
+   Compiling proc-macro2 v1.0.106
+   Compiling autocfg v1.5.0
+   Compiling quote v1.0.45
+   Compiling unicode-ident v1.0.24
+   Compiling serde_core v1.0.228
+   Compiling find-msvc-tools v0.1.9
+   Compiling shlex v1.3.0
+   Compiling zmij v1.0.21
+   Compiling paste v1.0.15
+   Compiling equivalent v1.0.2
+   Compiling serde v1.0.228
+   Compiling bytemuck v1.25.0
+   Compiling hashbrown v0.17.0
+   Compiling serde_json v1.0.149
+   Compiling cfg-if v1.0.4
+   Compiling constant_time_eq v0.4.2
+   Compiling memchr v2.8.0
+   Compiling itoa v1.0.18
+   Compiling arrayvec v0.7.6
+   Compiling arrayref v0.3.9
+   Compiling cpufeatures v0.3.0
+   Compiling rawpointer v0.2.1
+   Compiling typenum v1.20.0
+   Compiling thiserror v2.0.18
+   Compiling cc v1.2.60
+   Compiling safe_arch v0.7.4
+   Compiling num-traits v0.2.19
+   Compiling matrixmultiply v0.3.10
+   Compiling wide v0.7.33
+   Compiling indexmap v2.14.0
+   Compiling syn v2.0.117
+   Compiling blake3 v1.8.4
+   Compiling approx v0.5.1
+   Compiling num-integer v0.1.46
+   Compiling num-complex v0.4.6
+   Compiling num-rational v0.4.2
+   Compiling simba v0.9.1
+   Compiling serde_derive v1.0.228
+   Compiling nalgebra-macros v0.3.0
+   Compiling thiserror-impl v2.0.18
+   Compiling nalgebra v0.34.2
+   Compiling fsci-runtime v0.1.0 (/data/projects/frankenscipy/crates/fsci-runtime)
+   Compiling fsci-fft v0.1.0 (/data/projects/frankenscipy/crates/fsci-fft)
+   Compiling fsci-linalg v0.1.0 (/data/projects/frankenscipy/crates/fsci-linalg)
+   Compiling fsci-sparse v0.1.0 (/data/projects/frankenscipy/crates/fsci-sparse)
+warning: type `csr_matrix` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:23:10
+   |
+23 | pub type csr_matrix = CsrMatrix;
+   |          ^^^^^^^^^^ help: convert the identifier to upper camel case: `CsrMatrix`
+   |
+   = note: `#[warn(non_camel_case_types)]` (part of `#[warn(nonstandard_style)]`) on by default
+
+warning: type `csc_matrix` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:24:10
+   |
+24 | pub type csc_matrix = CscMatrix;
+   |          ^^^^^^^^^^ help: convert the identifier to upper camel case: `CscMatrix`
+
+warning: type `coo_matrix` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:25:10
+   |
+25 | pub type coo_matrix = CooMatrix;
+   |          ^^^^^^^^^^ help: convert the identifier to upper camel case: `CooMatrix`
+
+warning: type `bsr_matrix` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:26:10
+   |
+26 | pub type bsr_matrix = BsrMatrix;
+   |          ^^^^^^^^^^ help: convert the identifier to upper camel case: `BsrMatrix`
+
+warning: type `dia_matrix` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:27:10
+   |
+27 | pub type dia_matrix = DiaMatrix;
+   |          ^^^^^^^^^^ help: convert the identifier to upper camel case: `DiaMatrix`
+
+warning: type `dok_matrix` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:28:10
+   |
+28 | pub type dok_matrix = DokMatrix;
+   |          ^^^^^^^^^^ help: convert the identifier to upper camel case: `DokMatrix`
+
+warning: type `lil_matrix` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:29:10
+   |
+29 | pub type lil_matrix = LilMatrix;
+   |          ^^^^^^^^^^ help: convert the identifier to upper camel case: `LilMatrix`
+
+warning: type `csr_array` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:31:10
+   |
+31 | pub type csr_array = CsrMatrix;
+   |          ^^^^^^^^^ help: convert the identifier to upper camel case: `CsrArray`
+
+warning: type `csc_array` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:32:10
+   |
+32 | pub type csc_array = CscMatrix;
+   |          ^^^^^^^^^ help: convert the identifier to upper camel case: `CscArray`
+
+warning: type `coo_array` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:33:10
+   |
+33 | pub type coo_array = CooMatrix;
+   |          ^^^^^^^^^ help: convert the identifier to upper camel case: `CooArray`
+
+warning: type `bsr_array` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:34:10
+   |
+34 | pub type bsr_array = BsrMatrix;
+   |          ^^^^^^^^^ help: convert the identifier to upper camel case: `BsrArray`
+
+warning: type `dia_array` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:35:10
+   |
+35 | pub type dia_array = DiaMatrix;
+   |          ^^^^^^^^^ help: convert the identifier to upper camel case: `DiaArray`
+
+warning: type `dok_array` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:36:10
+   |
+36 | pub type dok_array = DokMatrix;
+   |          ^^^^^^^^^ help: convert the identifier to upper camel case: `DokArray`
+
+warning: type `lil_array` should have an upper camel case name
+  --> crates/fsci-sparse/src/lib.rs:37:10
+   |
+37 | pub type lil_array = LilMatrix;
+   |          ^^^^^^^^^ help: convert the identifier to upper camel case: `LilArray`
+
+   Compiling fsci-spatial v0.1.0 (/data/projects/frankenscipy/crates/fsci-spatial)
+   Compiling fsci-interpolate v0.1.0 (/data/projects/frankenscipy/crates/fsci-interpolate)
+warning: `fsci-sparse` (lib) generated 14 warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 9.74s
+     Running `/data/tmp/cargo-target/debug/perf_interpolate golden`
+RCH_INTERPOLATE_GOLDEN_BEFORE_EXIT:0

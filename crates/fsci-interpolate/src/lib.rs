@@ -1034,33 +1034,7 @@ impl BSpline {
     }
 
     pub fn eval_into(&self, x: f64, d: &mut [f64]) -> f64 {
-        let n = self.c.len();
-        let k = self.k;
-        let t = &self.t;
-        if !self.extrapolate && (x < t[k] || x > t[n]) {
-            return f64::NAN;
-        }
-        let mu = self.find_span(x);
-        for (j, value) in d.iter_mut().enumerate().take(k + 1) {
-            let idx = mu.wrapping_sub(k) + j;
-            *value = if idx < n { self.c[idx] } else { 0.0 };
-        }
-        for r in 1..=k {
-            for j in (r..=k).rev() {
-                let left = mu.wrapping_sub(k) + j;
-                let right = left + k + 1 - r;
-                if right < t.len() {
-                    let denom = t[right] - t[left];
-                    if denom > 0.0 {
-                        let alpha = (x - t[left]) / denom;
-                        d[j] = (1.0 - alpha) * d[j - 1] + alpha * d[j];
-                    } else {
-                        d[j] = d[j - 1];
-                    }
-                }
-            }
-        }
-        d[k]
+        Self::eval_parts(&self.t, &self.c, self.k, self.extrapolate, x, d)
     }
 
     pub fn eval_many(&self, xs: &[f64]) -> Vec<f64> {
@@ -1087,15 +1061,34 @@ impl BSpline {
     }
 
     fn eval_into_with_span(&self, x: f64, mu: usize, d: &mut [f64]) -> f64 {
-        let n = self.c.len();
-        let k = self.k;
-        let t = &self.t;
-        if !self.extrapolate && (x < t[k] || x > t[n]) {
+        Self::eval_parts_with_span(&self.t, &self.c, self.k, self.extrapolate, x, mu, d)
+    }
+
+    fn eval_parts(t: &[f64], c: &[f64], k: usize, extrapolate: bool, x: f64, d: &mut [f64]) -> f64 {
+        let n = c.len();
+        if !extrapolate && (x < t[k] || x > t[n]) {
+            return f64::NAN;
+        }
+        let mu = Self::find_span_parts(t, c, k, x);
+        Self::eval_parts_with_span(t, c, k, extrapolate, x, mu, d)
+    }
+
+    fn eval_parts_with_span(
+        t: &[f64],
+        c: &[f64],
+        k: usize,
+        extrapolate: bool,
+        x: f64,
+        mu: usize,
+        d: &mut [f64],
+    ) -> f64 {
+        let n = c.len();
+        if !extrapolate && (x < t[k] || x > t[n]) {
             return f64::NAN;
         }
         for (j, value) in d.iter_mut().enumerate().take(k + 1) {
             let idx = mu.wrapping_sub(k) + j;
-            *value = if idx < n { self.c[idx] } else { 0.0 };
+            *value = if idx < n { c[idx] } else { 0.0 };
         }
         for r in 1..=k {
             for j in (r..=k).rev() {
@@ -1176,10 +1169,8 @@ impl BSpline {
         Ok(anti.eval(b) - anti.eval(a))
     }
 
-    fn find_span(&self, x: f64) -> usize {
-        let n = self.c.len();
-        let k = self.k;
-        let t = &self.t;
+    fn find_span_parts(t: &[f64], c: &[f64], k: usize, x: f64) -> usize {
+        let n = c.len();
         if x <= t[k] {
             return k;
         }
@@ -4237,9 +4228,45 @@ impl RectBivariateSpline {
     ///
     /// Returns values at all combinations of xi and yi, shape `(len(xi), len(yi))`.
     pub fn eval_grid(&self, xi: &[f64], yi: &[f64]) -> Vec<Vec<f64>> {
-        xi.iter()
-            .map(|&xv| yi.iter().map(|&yv| self.eval(xv, yv)).collect())
-            .collect()
+        let mut result = Vec::with_capacity(xi.len());
+        let ny = self.coeffs.len();
+        let mut intermediate = vec![0.0; ny];
+        let mut x_scratch = vec![0.0; self.kx + 1];
+        let mut y_scratch = vec![0.0; self.ky + 1];
+
+        for &xv in xi {
+            if !xv.is_finite() {
+                result.push(vec![f64::NAN; yi.len()]);
+                continue;
+            }
+
+            let xi_clamped = xv.clamp(self.x_bounds.0, self.x_bounds.1);
+            for (slot, row) in intermediate.iter_mut().zip(&self.coeffs) {
+                *slot =
+                    BSpline::eval_parts(&self.tx, row, self.kx, true, xi_clamped, &mut x_scratch);
+            }
+
+            result.push(
+                yi.iter()
+                    .map(|&yv| {
+                        if !yv.is_finite() {
+                            return f64::NAN;
+                        }
+                        let yi_clamped = yv.clamp(self.y_bounds.0, self.y_bounds.1);
+                        BSpline::eval_parts(
+                            &self.ty,
+                            &intermediate,
+                            self.ky,
+                            true,
+                            yi_clamped,
+                            &mut y_scratch,
+                        )
+                    })
+                    .collect(),
+            );
+        }
+
+        result
     }
 
     /// Evaluate the partial derivative d^(dx+dy)f / dx^dx dy^dy.
@@ -5022,7 +5049,11 @@ mod tests {
         let spl = BSpline::new(t.clone(), c.clone(), k).unwrap();
 
         let anti = spl.antiderivative(1).unwrap();
-        assert_eq!(anti.t.len(), anti.c.len() + anti.k + 1, "invariant after anti");
+        assert_eq!(
+            anti.t.len(),
+            anti.c.len() + anti.k + 1,
+            "invariant after anti"
+        );
 
         let back = anti.derivative(1).unwrap();
         assert_eq!(back.k, k);
@@ -5035,7 +5066,10 @@ mod tests {
             );
         }
         for (i, (&got, &want)) in back.t.iter().zip(t.iter()).enumerate() {
-            assert!((got - want).abs() < 1e-12, "knot[{i}] = {got}, expected {want}");
+            assert!(
+                (got - want).abs() < 1e-12,
+                "knot[{i}] = {got}, expected {want}"
+            );
         }
     }
 
@@ -6338,9 +6372,12 @@ mod tests {
         // erroring or extrapolating linearly.
         let x = vec![0.0_f64, 1.0, 2.0];
         let y = vec![0.0_f64, 1.0, 4.0];
-        let result =
-            interp1d_linear(&x, &y, &[-0.5, 0.5, 2.5]).expect("interp1d_linear");
-        assert!(result[0].is_nan(), "x=-0.5 should be NaN, got {}", result[0]);
+        let result = interp1d_linear(&x, &y, &[-0.5, 0.5, 2.5]).expect("interp1d_linear");
+        assert!(
+            result[0].is_nan(),
+            "x=-0.5 should be NaN, got {}",
+            result[0]
+        );
         assert!(
             (result[1] - 0.5).abs() < 1e-12,
             "x=0.5 should be 0.5, got {}",
@@ -6445,9 +6482,7 @@ mod tests {
             16.0 / 3.0,
             16.0 / 3.0,
         ];
-        let expected_t = [
-            0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 3.0, 3.0, 3.0,
-        ];
+        let expected_t = [0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 3.0, 3.0, 3.0];
         // The padded (SciPy-shaped) tck must not panic — this is the bug fix.
         for tck in &quadratic_bspline_tcks() {
             let (at, ac, ak) = splantider(tck).unwrap();
@@ -6539,7 +6574,11 @@ mod tests {
 
     #[test]
     fn sproot_rejects_non_cubic() {
-        let tck = (vec![0.0, 0.0, 0.0, 1.0, 2.0, 2.0, 2.0], vec![1.0, -1.0, 1.0], 2);
+        let tck = (
+            vec![0.0, 0.0, 0.0, 1.0, 2.0, 2.0, 2.0],
+            vec![1.0, -1.0, 1.0],
+            2,
+        );
         assert!(sproot(&tck).is_err());
     }
 
@@ -6643,7 +6682,7 @@ mod tests {
         let x = vec![0.0, 1.0, 2.0, 3.0, 4.0];
         let y = vec![1.0, 2.7, 5.8, 10.2, 17.0];
         let spline = make_interp_spline(&x, &y, 3).expect("make_interp_spline k=3");
-        let x_new = vec![0.5, 1.5, 2.5, 3.5];
+        let x_new = [0.5, 1.5, 2.5, 3.5];
         let y_new: Vec<f64> = x_new.iter().map(|&xi| spline.eval(xi)).collect();
         let expected = [1.65, 4.1, 7.7875, 13.2125];
         for (i, (&got, &want)) in y_new.iter().zip(expected.iter()).enumerate() {
@@ -6799,7 +6838,10 @@ mod tests {
         // Leading coefficient should be 1, evaluate at roots should give 0
         for &r in &roots {
             let val = polyval(&coeffs, r);
-            assert!(val.abs() < 1e-10, "polyfromroots(root={r}) = {val}, expected 0");
+            assert!(
+                val.abs() < 1e-10,
+                "polyfromroots(root={r}) = {val}, expected 0"
+            );
         }
     }
 
@@ -6808,6 +6850,9 @@ mod tests {
         // np.polyval([2, 3, 1], 2) = 2*4 + 3*2 + 1 = 15
         let coeffs = [2.0, 3.0, 1.0];
         let result = polyval(&coeffs, 2.0);
-        assert!((result - 15.0).abs() < 1e-10, "polyval got {result}, expected 15");
+        assert!(
+            (result - 15.0).abs() < 1e-10,
+            "polyval got {result}, expected 15"
+        );
     }
 }
