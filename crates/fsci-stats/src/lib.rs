@@ -23287,27 +23287,24 @@ pub fn percentileofscore(data: &[f64], score: f64, kind: Option<&str>) -> f64 {
     let kind = kind.unwrap_or("rank");
     let n = data.len() as f64;
 
-    let n_less = data.iter().filter(|&&x| x < score).count() as f64;
-    let n_equal = data
-        .iter()
-        .filter(|&&x| (x - score).abs() < f64::EPSILON)
-        .count() as f64;
-
-    // scipy convention:
-    //   left  = count(< score)            = n_less
-    //   right = count(<= score)            = n_less + n_equal
+    // scipy uses exact comparisons; equality is implied by right - left.
+    // A tolerance-based equality check double-counts near-but-unequal values
+    // (e.g. 0.3 vs 0.1+0.2), which can push `right` above n.
+    //   left  = count(< score)
+    //   right = count(<= score)
     //   plus1 = 1 if score is in data (left < right) else 0
     //   rank  = (left + right + plus1) * 50 / n
     //   weak  = right * 100 / n            (% values <= score)
     //   strict= left * 100 / n             (% values < score)
     //   mean  = (left + right) * 50 / n    (avg of weak and strict)
-    let plus1: f64 = if n_equal > 0.0 { 1.0 } else { 0.0 };
-    let right = n_less + n_equal;
+    let left = data.iter().filter(|&&x| x < score).count() as f64;
+    let right = data.iter().filter(|&&x| x <= score).count() as f64;
+    let plus1: f64 = if left < right { 1.0 } else { 0.0 };
     match kind {
-        "rank" => (n_less + right + plus1) * 50.0 / n,
+        "rank" => (left + right + plus1) * 50.0 / n,
         "weak" => right * 100.0 / n,
-        "strict" => n_less * 100.0 / n,
-        "mean" => (n_less + right) * 50.0 / n,
+        "strict" => left * 100.0 / n,
+        "mean" => (left + right) * 50.0 / n,
         _ => f64::NAN,
     }
 }
@@ -45771,6 +45768,21 @@ mod tests {
         let data = vec![10.0, 20.0, 30.0];
         let result = percentileofscore(&data, 50.0, Some("strict"));
         assert!((result - 100.0).abs() < 1e-10, "above all: {}", result);
+    }
+
+    #[test]
+    fn percentileofscore_no_double_count_near_equal() {
+        // 0.1 + 0.2 != 0.3 but they are within f64::EPSILON. A tolerance-based
+        // equality check would count 0.3 as both "< score" and "== score",
+        // pushing right above n. scipy uses exact comparisons.
+        let score = 0.1 + 0.2; // 0.30000000000000004
+        let data = vec![0.3, score];
+        // 0.3 < score (strict): 1/2 = 50%
+        assert!((percentileofscore(&data, score, Some("strict")) - 50.0).abs() < 1e-10);
+        // values <= score (weak): both -> 2/2 = 100%
+        assert!((percentileofscore(&data, score, Some("weak")) - 100.0).abs() < 1e-10);
+        // rank: left=1, right=2, plus1=1 -> (1+2+1)*50/2 = 100
+        assert!((percentileofscore(&data, score, None) - 100.0).abs() < 1e-10);
     }
 
     // ── percentile tests ─────────────────────────────────────────────
