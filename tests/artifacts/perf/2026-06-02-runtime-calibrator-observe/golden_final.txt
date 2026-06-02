@@ -1,0 +1,1 @@
+CALIBRATOR_GOLDEN total=200 len=200 empirical=3fdfae147ae147ae fallback=true alpha=3fa999999999999a

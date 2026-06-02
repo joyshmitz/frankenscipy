@@ -1,0 +1,12 @@
+  [2m2026-06-02T11:11:51.871121Z[0m [33m WARN[0m [1;33mrch::hook[0m[33m: [33mProject path normalization failed for /data/tmp/frankenscipy-c9j5d-baseline-1780398703: input resolves outside canonical root (input: /data/tmp/frankenscipy-c9j5d-baseline-1780398703, detail: resolved=/data/tmp/frankenscipy-c9j5d-baseline-1780398703 root=/data/projects)[0m
+    [2;3mat[0m rch/src/hook.rs:2880 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T11:11:51.871533Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mSelected worker: vmi1149989 at ubuntu@212.90.121.76 (2 slots remaining after reservation, speed 50.0)[0m
+    [2;3mat[0m rch/src/hook.rs:514 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-02T11:11:51.922984Z[0m [33m WARN[0m [1;33mrch::hook[0m[33m: [33mRemote execution failed: Project path normalization failed for /data/tmp/frankenscipy-c9j5d-baseline-1780398703: input resolves outside canonical root (input: /data/tmp/frankenscipy-c9j5d-baseline-1780398703, detail: resolved=/data/tmp/frankenscipy-c9j5d-baseline-1780398703 root=/data/projects), running locally[0m
+    [2;3mat[0m rch/src/hook.rs:658 [2;3mon[0m ThreadId(1)
+
+[RCH] local (remote execution failed)
+error: cannot update the lock file /data/tmp/frankenscipy-c9j5d-baseline-1780398703/Cargo.lock because --locked was passed to prevent this
+help: to generate the lock file without accessing the network, remove the --locked flag and use --offline instead.

@@ -252,47 +252,47 @@
     Checking linux-raw-sys v0.12.1
     Checking bitflags v2.11.1
     Checking indexmap v2.14.0
-ecking linux-raw-sys v0.12.1
-    Checking regex-syntax v0.8.10
+    Checking memchr v2.8.0
     Checking crossbeam-deque v0.8.6
-    Checking anstyle v1.0.14
-    Checking ciborium-io v0.2.2
     Checking fastrand v2.4.1
-    Checking plotters-backend v0.3.7
-    Checking rand_core v0.9.5
     Checking clap_lex v1.1.0
+   Compiling blake3 v1.8.4
+   Compiling alloca v0.4.0
+    Checking anstyle v1.0.14
+    Checking plotters-backend v0.3.7
     Checking once_cell v1.21.4
-    Checking plotters-svg v0.3.7
+   Compiling syn v2.0.117
+    Checking ciborium-io v0.2.2
+    Checking rand_core v0.9.5
     Checking clap_builder v4.6.0
     Checking wait-timeout v0.2.1
     Checking itertools v0.13.0
-    Checking bit-vec v0.8.0
-    Checking arrayvec v0.7.6
-   Compiling blake3 v1.8.4
-   Compiling alloca v0.4.0
     Checking constant_time_eq v0.4.2
+    Checking plotters-svg v0.3.7
+    Checking regex-automata v0.4.14
     Checking same-file v1.0.6
     Checking arrayref v0.3.9
+    Checking arrayvec v0.7.6
+    Checking fnv v1.0.7
     Checking quick-error v1.2.3
     Checking cpufeatures v0.3.0
+    Checking bit-vec v0.8.0
     Checking cast v0.3.0
-    Checking fnv v1.0.7
+    Checking plotters v0.3.7
+    Checking bit-set v0.8.0
     Checking walkdir v2.5.0
     Checking rayon v1.12.0
-    Checking bit-set v0.8.0
-    Checking regex-automata v0.4.14
-    Checking plotters v0.3.7
     Checking rand v0.9.4
-    Checking tempfile v3.27.0
     Checking rand_xorshift v0.4.0
     Checking page_size v0.6.0
-    Checking anes v0.1.6
     Checking oorandom v11.1.5
+    Checking anes v0.1.6
+    Checking tempfile v3.27.0
     Checking unarray v0.1.4
     Checking rusty-fork v0.3.1
+    Checking regex v1.12.3
     Checking criterion-plot v0.8.2
     Checking clap v4.6.1
-    Checking regex v1.12.3
    Compiling zerocopy-derive v0.8.48
    Compiling serde_derive v1.0.228
     Checking tinytemplate v1.2.1
@@ -304,31 +304,33 @@ ecking linux-raw-sys v0.12.1
     Checking ciborium v0.2.2
     Checking proptest v1.11.0
     Checking criterion v0.8.2
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 23.96s
-  [2m2026-06-02T13:35:43.664992Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mRemote command finished: exit=0 in 25662ms[0m
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 32.55s
+  [2m2026-06-02T13:37:09.671397Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mRemote command finished: exit=0 in 34800ms[0m
     [2;3mat[0m rch/src/hook.rs:6364 [2;3mon[0m ThreadId(1)
 
-  [2m2026-06-02T13:35:43.665268Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mRetrieving build artifacts...[0m
+  [2m2026-06-02T13:37:09.671735Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mRetrieving build artifacts...[0m
     [2;3mat[0m rch/src/hook.rs:6413 [2;3mon[0m ThreadId(1)
 
-  [2m2026-06-02T13:35:43.665291Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mRetrieving artifacts from /data/projects/frankenscipy on vmi1149989[0m
+  [2m2026-06-02T13:37:09.671767Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mRetrieving artifacts from /data/projects/frankenscipy on vmi1227854[0m
     [2;3mat[0m rch/src/transfer.rs:2072 [2;3mon[0m ThreadId(1)
 
-  [2m2026-06-02T13:35:45.608354Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mArtifacts retrieved in 1943ms (1 files, 2752 bytes)[0m
+  [2m2026-06-02T13:37:11.871163Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mArtifacts retrieved in 2199ms (1 files, 2752 bytes)[0m
     [2;3mat[0m rch/src/transfer.rs:2111 [2;3mon[0m ThreadId(1)
 
-  [2m2026-06-02T13:35:45.608387Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mArtifacts retrieved: 1 files, 2752 bytes in 1943ms[0m
+  [2m2026-06-02T13:37:11.871196Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mArtifacts retrieved: 1 files, 2752 bytes in 2199ms[0m
     [2;3mat[0m rch/src/hook.rs:6446 [2;3mon[0m ThreadId(1)
 
-  [2m2026-06-02T13:35:45.608516Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mRetrieving artifacts from /data/projects/frankenscipy/.rch-target-vmi1149989-job-29869223945701704-1780407251335799832-0 on vmi1149989[0m
+  [2m2026-06-02T13:37:11.871301Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mRetrieving artifacts from /data/projects/frankenscipy/.rch-target-vmi1227854-job-29869223945701709-1780407312197544615-0 on vmi1227854[0m
     [2;3mat[0m rch/src/transfer.rs:2072 [2;3mon[0m ThreadId(1)
 
-  [2m2026-06-02T13:35:51.737103Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mArtifacts retrieved in 6128ms (971 files, 15539 bytes)[0m
+  [2m2026-06-02T13:37:22.199588Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mArtifacts retrieved in 10328ms (972 files, 15558 bytes)[0m
     [2;3mat[0m rch/src/transfer.rs:2111 [2;3mon[0m ThreadId(1)
 
-  [2m2026-06-02T13:35:51.737141Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mCustom CARGO_TARGET_DIR artifacts retrieved: 971 files, 15539 bytes in 6128ms[0m
+  [2m2026-06-02T13:37:22.199627Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mCustom CARGO_TARGET_DIR artifacts retrieved: 972 files, 15558 bytes in 10328ms[0m
     [2;3mat[0m rch/src/hook.rs:6570 [2;3mon[0m ThreadId(1)
 
-[RCH] remote vmi1149989 (102.6s)
+[RCH] remote vmi1227854 (132.8s)
+102.6s)
 
 RCH_CLIPPY_EXIT:0
+CLIPPY_EXIT:0

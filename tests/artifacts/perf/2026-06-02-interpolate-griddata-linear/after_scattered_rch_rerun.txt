@@ -1,0 +1,79 @@
+[RCH] local (no admissible workers: insufficient_slots=6,hard_preflight=1,active_project_exclusion=1)
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.45
+   Compiling unicode-ident v1.0.24
+   Compiling cfg-if v1.0.4
+   Compiling autocfg v1.5.0
+   Compiling serde_core v1.0.228
+   Compiling libc v0.2.185
+   Compiling serde v1.0.228
+   Compiling zmij v1.0.21
+   Compiling memchr v2.8.0
+   Compiling itoa v1.0.18
+   Compiling zerocopy v0.8.48
+   Compiling getrandom v0.3.4
+   Compiling crossbeam-utils v0.8.21
+   Compiling getrandom v0.4.2
+   Compiling rustix v1.1.4
+   Compiling regex-syntax v0.8.10
+   Compiling bitflags v2.11.1
+   Compiling rayon-core v1.13.0
+   Compiling either v1.15.0
+   Compiling linux-raw-sys v0.12.1
+   Compiling ciborium-io v0.2.2
+   Compiling once_cell v1.21.4
+   Compiling fastrand v2.4.1
+   Compiling clap_lex v1.1.0
+   Compiling anstyle v1.0.14
+   Compiling plotters-backend v0.3.7
+   Compiling bit-vec v0.8.0
+   Compiling same-file v1.0.6
+   Compiling fnv v1.0.7
+   Compiling quick-error v1.2.3
+   Compiling cast v0.3.0
+   Compiling oorandom v11.1.5
+   Compiling unarray v0.1.4
+   Compiling anes v0.1.6
+   Compiling walkdir v2.5.0
+   Compiling itertools v0.13.0
+   Compiling clap_builder v4.6.0
+   Compiling bit-set v0.8.0
+   Compiling plotters-svg v0.3.7
+   Compiling crossbeam-epoch v0.9.18
+   Compiling syn v2.0.117
+   Compiling crossbeam-deque v0.8.6
+   Compiling wait-timeout v0.2.1
+   Compiling rand_core v0.9.5
+   Compiling rand_xorshift v0.4.0
+   Compiling rand v0.9.4
+   Compiling rayon v1.12.0
+   Compiling regex-automata v0.4.14
+   Compiling tempfile v3.27.0
+   Compiling rusty-fork v0.3.1
+   Compiling clap v4.6.1
+   Compiling serde_derive v1.0.228
+   Compiling zerocopy-derive v0.8.48
+   Compiling regex v1.12.3
+   Compiling half v2.7.1
+   Compiling rand_chacha v0.9.0
+error[E0463]: can't find crate for `ppv_lite86`
+  --> /home/ubuntu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rand_chacha-0.9.0/src/guts.rs:12:5
+   |
+12 | use ppv_lite86::{dispatch, dispatch_light128};
+   |     ^^^^^^^^^^ can't find crate
+
+For more information about this error, try `rustc --explain E0463`.
+error: could not compile `rand_chacha` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error[E0514]: found crate `zerocopy` compiled by an incompatible version of rustc
+ --> /home/ubuntu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/half-2.7.1/src/bfloat/convert.rs:2:5
+  |
+2 | use zerocopy::transmute;
+  |     ^^^^^^^^
+  |
+  = note: the following crate versions were found:
+          crate `zerocopy` compiled by rustc 1.95.0-nightly (7f99507f5 2026-02-19): /data/tmp/cargo-target/release/deps/libzerocopy-87e2a0fff4f9a403.rmeta
+  = help: please recompile that crate using this compiler (rustc 1.98.0-nightly (14210df0e 2026-05-31)) (consider running `cargo clean` first)
+
+For more information about this error, try `rustc --explain E0514`.
+error: could not compile `half` (lib) due to 1 previous error
