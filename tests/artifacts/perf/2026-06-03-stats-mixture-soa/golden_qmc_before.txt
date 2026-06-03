@@ -1,0 +1,5 @@
+case=qmc_discrepancy_512x2 len=1024
+centered=3eef42483d6e0000
+mixture=3eef147788540000
+l2_star=3f67c5072f2a347c
+wraparound=3ee455e9ae6c0000
