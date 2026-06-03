@@ -1,0 +1,3 @@
+test tests::matmul_microkernel_golden_digest ... ok
+test tests::matmul_microkernel_is_bit_identical_to_flat_ikj ... ok
+test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 344 filtered out; finished in [elapsed]
