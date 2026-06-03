@@ -851,6 +851,29 @@ fn select_hyp0f1_branch(problem: HyperCaspProblem) -> HyperCaspDecision {
 
 fn select_hyp1f1_branch(problem: HyperCaspProblem) -> HyperCaspDecision {
     if problem.z < -20.0 {
+        // A nonpositive-integer a makes 1F1 a finite polynomial; the direct
+        // series is exact and cheap, whereas Kummer would map it onto a
+        // non-terminating inner series that overruns the 500-term cap.
+        if is_nonpositive_integer(problem.a) {
+            return hyper_casp_decision(
+                HypergeometricBranch::DirectSeries,
+                problem,
+                500,
+                HYP1F1_DIRECT_CHAIN,
+                "nonpositive-integer a terminates 1F1; direct series is exact",
+            );
+        }
+        // Past -threshold the Kummer inner series (argument -z) itself overruns
+        // the 500-term cap, so use the DLMF 13.7.2 z -> -∞ asymptotic instead.
+        if problem.z < -HYP1F1_LARGE_Z_THRESHOLD {
+            return hyper_casp_decision(
+                HypergeometricBranch::AsymptoticExpansion,
+                problem,
+                500,
+                HYP1F1_ASYMPTOTIC_CHAIN,
+                "large negative z uses the DLMF 13.7.2 asymptotic expansion",
+            );
+        }
         return hyper_casp_decision(
             HypergeometricBranch::KummerTransform,
             problem,
@@ -1314,7 +1337,13 @@ fn hyp1f1_scalar(a: f64, b: f64, z: f64, mode: RuntimeMode) -> Result<f64, Speci
             Ok(z.exp() * inner)
         }
         HypergeometricBranch::DirectSeries => hyp1f1_series(a, b, z, mode),
-        HypergeometricBranch::AsymptoticExpansion => hyp1f1_asymptotic(a, b, z),
+        HypergeometricBranch::AsymptoticExpansion => {
+            if z > 0.0 {
+                hyp1f1_asymptotic(a, b, z)
+            } else {
+                hyp1f1_asymptotic_negative(a, b, z)
+            }
+        }
         HypergeometricBranch::ParameterGuard => {
             guarded_hypergeometric_parameter("hyp1f1", mode, decision.reason)
         }
@@ -1412,6 +1441,76 @@ fn hyp1f1_asymptotic(a: f64, b: f64, z: f64) -> Result<f64, SpecialError> {
     // Match SciPy's e^z overflow boundary.
     if z > LN_F64_MAX {
         return Ok(sign * series.signum() * f64::INFINITY);
+    }
+    Ok(sign * ln_pref.exp() * series)
+}
+
+/// Large negative-z asymptotic for 1F1 (DLMF 13.7.2 as z → -∞).
+///
+/// Generically the algebraic term dominates (the e^z companion is
+/// exponentially small for z → -∞ and below f64 relative precision):
+///
+///   M(a,b,z) ~ Γ(b)/Γ(b-a) · (-z)^{-a} · Σ_{s≥0} (a)_s (a-b+1)_s / (s! (-z)^s).
+///
+/// When b - a is a nonpositive integer that term vanishes (1/Γ(b-a) = 0) and the
+/// otherwise-subdominant exponential term is the whole answer (a - b = k is then
+/// a nonnegative integer, so z^k is real):
+///
+///   M(a,b,z) ~ Γ(b)/Γ(a) · e^z · z^{a-b} · Σ_{s≥0} (b-a)_s (1-a)_s / (s! z^s).
+///
+/// Both branches build the prefactor in log space. (a is guaranteed non-(nonpos
+/// integer) here — the polynomial case is routed to the direct series upstream.)
+fn hyp1f1_asymptotic_negative(a: f64, b: f64, z: f64) -> Result<f64, SpecialError> {
+    let neg_z = -z; // > 0
+    let b_minus_a = b - a;
+
+    if is_nonpositive_integer(b_minus_a) {
+        // Exponential term; a - b = k is a nonnegative integer.
+        let k = (a - b).round();
+        let (ln_gb, sign_b) = ln_gamma_with_sign(b);
+        let (ln_ga, sign_a) = ln_gamma_with_sign(a);
+        let z_pow_sign = if (k as i64).rem_euclid(2) == 0 { 1.0 } else { -1.0 };
+        let sign = sign_a * sign_b * z_pow_sign;
+        let ln_pref = ln_gb - ln_ga + z + k * neg_z.ln();
+        let mut series = 1.0_f64;
+        let mut term = 1.0_f64;
+        let mut prev_abs = 1.0_f64;
+        for s in 0..1024 {
+            let sf = s as f64;
+            term *= (b_minus_a + sf) * (1.0 - a + sf) / ((sf + 1.0) * z);
+            let abs_term = term.abs();
+            if abs_term > prev_abs {
+                break;
+            }
+            series += term;
+            prev_abs = abs_term;
+            if abs_term <= f64::EPSILON * series.abs() {
+                break;
+            }
+        }
+        return Ok(sign * ln_pref.exp() * series);
+    }
+
+    // Algebraic term Γ(b)/Γ(b-a) (-z)^{-a} Σ (a)_s (a-b+1)_s / (s! (-z)^s).
+    let (ln_gb, sign_b) = ln_gamma_with_sign(b);
+    let (ln_gba, sign_ba) = ln_gamma_with_sign(b_minus_a);
+    let sign = sign_b * sign_ba;
+    let ln_pref = ln_gb - ln_gba - a * neg_z.ln();
+    let mut series = 1.0_f64;
+    let mut term = 1.0_f64;
+    let mut prev_abs = 1.0_f64;
+    for s in 0..1024 {
+        let sf = s as f64;
+        term *= (a + sf) * (a - b + 1.0 + sf) / ((sf + 1.0) * neg_z);
+        let abs_term = term.abs();
+        if abs_term > prev_abs {
+            break;
+        }
+        series += term;
+        prev_abs = abs_term;
+        if abs_term <= f64::EPSILON * series.abs() {
+            break;
+        }
     }
     Ok(sign * ln_pref.exp() * series)
 }
@@ -3452,6 +3551,28 @@ mod tests {
         // SciPy overflows e^z to +inf for z past ln(f64::MAX) ≈ 709.78; match it.
         let inf = hyp1f1(&scalar(1.0), &scalar(2.0), &scalar(710.0), RuntimeMode::Strict);
         assert_eq!(get_scalar(&inf), Some(f64::INFINITY));
+    }
+
+    #[test]
+    #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy/mpmath
+    fn hyp1f1_large_negative_z_matches_scipy() {
+        // z < -200 exercises the DLMF 13.7.2 z -> -∞ asymptotic (frankenscipy-k8kkf):
+        // the Kummer inner series returned NaN for z ≲ -440. The last two cases
+        // (b-a a nonpositive integer) take the exponential branch. scipy 1.17.1.
+        let cases = [
+            (2.0, 3.0, -500.0, 8.000000000000001e-06),
+            (0.5, 1.5, -650.0, 0.03476067989503808),
+            (1.0, 3.0, -460.0, 0.004338374291115312),
+            (2.5, 4.0, -1000.0, 2.1382704062592586e-07),
+            (5.0, 3.0, -500.0, 1.4606094091460309e-213),
+            (4.0, 2.0, -460.0, 5.837316424310934e-196),
+        ];
+        for (a, b, z, expected) in cases {
+            let r = hyp1f1(&scalar(a), &scalar(b), &scalar(z), RuntimeMode::Strict);
+            let v = get_scalar(&r).expect("finite hyp1f1");
+            let rel = ((v - expected) / expected).abs();
+            assert!(rel < 1e-12, "hyp1f1({a},{b},{z}) = {v:e}, scipy {expected:e}, rel={rel:e}");
+        }
     }
 
     #[test]
