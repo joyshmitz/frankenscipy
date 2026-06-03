@@ -1,0 +1,9 @@
+ubs crates/fsci-linalg/src/lib.rs
+
+Exit: 0
+Critical findings introduced by this change: 0
+
+Notes:
+The raw UBS output reports existing contextual warnings in the large linalg
+file, including pre-existing unwrap/expect sites and unreachable paths outside
+the changed SIMD GEMM hunk.

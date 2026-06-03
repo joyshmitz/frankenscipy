@@ -1,3 +1,4 @@
+#![feature(portable_simd)]
 #![forbid(unsafe_code)]
 
 pub use fsci_runtime::SyncSharedAuditLedger;
@@ -6,7 +7,7 @@ use fsci_runtime::{
     PolicyDecision, RuntimeMode, SolverAction, SolverEvidenceEntry, SolverPortfolio,
     StructuralEvidence, casp_now_unix_ms,
 };
-use std::{borrow::Cow, fmt};
+use std::{borrow::Cow, fmt, simd::Simd};
 
 type EigenDecomposition = (Vec<f64>, Option<Vec<Vec<f64>>>);
 
@@ -7731,55 +7732,30 @@ fn matmul_flat_workspace(
                     let a1_base = (i0 + 1) * ka;
                     let a2_base = (i0 + 2) * ka;
                     let a3_base = (i0 + 3) * ka;
-                    let mut acc = [[0.0f64; NR]; MR];
+                    let mut acc = [Simd::<f64, NR>::splat(0.0); MR];
                     for k in 0..ka {
                         let a0 = a_flat[a0_base + k];
                         let a1 = a_flat[a1_base + k];
                         let a2 = a_flat[a2_base + k];
                         let a3 = a_flat[a3_base + k];
                         let b_base = k * n + j0;
-                        let b0 = b_flat[b_base];
-                        let b1 = b_flat[b_base + 1];
-                        let b2 = b_flat[b_base + 2];
-                        let b3 = b_flat[b_base + 3];
-                        let b4 = b_flat[b_base + 4];
-                        let b5 = b_flat[b_base + 5];
-                        let b6 = b_flat[b_base + 6];
-                        let b7 = b_flat[b_base + 7];
-                        acc[0][0] += a0 * b0;
-                        acc[0][1] += a0 * b1;
-                        acc[0][2] += a0 * b2;
-                        acc[0][3] += a0 * b3;
-                        acc[0][4] += a0 * b4;
-                        acc[0][5] += a0 * b5;
-                        acc[0][6] += a0 * b6;
-                        acc[0][7] += a0 * b7;
-                        acc[1][0] += a1 * b0;
-                        acc[1][1] += a1 * b1;
-                        acc[1][2] += a1 * b2;
-                        acc[1][3] += a1 * b3;
-                        acc[1][4] += a1 * b4;
-                        acc[1][5] += a1 * b5;
-                        acc[1][6] += a1 * b6;
-                        acc[1][7] += a1 * b7;
-                        acc[2][0] += a2 * b0;
-                        acc[2][1] += a2 * b1;
-                        acc[2][2] += a2 * b2;
-                        acc[2][3] += a2 * b3;
-                        acc[2][4] += a2 * b4;
-                        acc[2][5] += a2 * b5;
-                        acc[2][6] += a2 * b6;
-                        acc[2][7] += a2 * b7;
-                        acc[3][0] += a3 * b0;
-                        acc[3][1] += a3 * b1;
-                        acc[3][2] += a3 * b2;
-                        acc[3][3] += a3 * b3;
-                        acc[3][4] += a3 * b4;
-                        acc[3][5] += a3 * b5;
-                        acc[3][6] += a3 * b6;
-                        acc[3][7] += a3 * b7;
+                        let b_vec = Simd::from_array([
+                            b_flat[b_base],
+                            b_flat[b_base + 1],
+                            b_flat[b_base + 2],
+                            b_flat[b_base + 3],
+                            b_flat[b_base + 4],
+                            b_flat[b_base + 5],
+                            b_flat[b_base + 6],
+                            b_flat[b_base + 7],
+                        ]);
+                        acc[0] += Simd::splat(a0) * b_vec;
+                        acc[1] += Simd::splat(a1) * b_vec;
+                        acc[2] += Simd::splat(a2) * b_vec;
+                        acc[3] += Simd::splat(a3) * b_vec;
                     }
                     for (di, acc_row) in acc.iter().enumerate().take(MR) {
+                        let acc_row = acc_row.to_array();
                         let c_base = (i0 + di) * n + j0;
                         c_flat[c_base] = acc_row[0];
                         c_flat[c_base + 1] = acc_row[1];
