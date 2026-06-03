@@ -279,13 +279,57 @@ impl QmcEngine for SobolSampler {
     }
 }
 
+const SOBOL_DIRECTION_TABLES: [[u64; 64]; 2] = [sobol_direction_table(0), sobol_direction_table(1)];
+
+const fn sobol_direction_table(dimension: usize) -> [u64; 64] {
+    let mut table = [0u64; 64];
+    let mut bit = 0usize;
+    while bit < 64 {
+        table[bit] = sobol_direction_const(dimension, bit);
+        bit += 1;
+    }
+    table
+}
+
+const fn sobol_direction_const(dimension: usize, bit: usize) -> u64 {
+    let mut direction = 1u64 << 63;
+    if dimension == 0 {
+        return direction >> bit;
+    }
+
+    let mut n = 0usize;
+    while n < bit {
+        direction ^= direction >> 1;
+        n += 1;
+    }
+    direction
+}
+
 fn sobol_bits(index: u64, dimension: usize) -> u64 {
+    if let Some(directions) = SOBOL_DIRECTION_TABLES.get(dimension) {
+        return sobol_bits_from_directions(index, directions);
+    }
+
     let mut gray = index ^ (index >> 1);
     let mut bit = 0usize;
     let mut value = 0u64;
     while gray != 0 {
         if gray & 1 == 1 {
             value ^= sobol_direction(dimension, bit);
+        }
+        gray >>= 1;
+        bit += 1;
+    }
+    value
+}
+
+fn sobol_bits_from_directions(index: u64, directions: &[u64; 64]) -> u64 {
+    let mut gray = index ^ (index >> 1);
+    let mut bit = 0usize;
+    let mut value = 0u64;
+    while gray != 0 {
+        if gray & 1 == 1 {
+            value ^= directions[bit];
         }
         gray >>= 1;
         bit += 1;
@@ -1363,6 +1407,39 @@ mod tests {
             assert!((sample[i * 2] - x).abs() < 1e-15, "x[{i}]");
             assert!((sample[i * 2 + 1] - y).abs() < 1e-15, "y[{i}]");
         }
+    }
+
+    #[test]
+    fn sobol_cached_direction_bits_match_recurrence() {
+        let indices = [0, 1, 2, 3, 4, 31, 32, 4_095, 4_096, 1_000_003, u64::MAX - 2];
+        for dimension in 0..2 {
+            for index in indices {
+                let mut gray = index ^ (index >> 1);
+                let mut bit = 0usize;
+                let mut expected = 0u64;
+                while gray != 0 {
+                    if gray & 1 == 1 {
+                        expected ^= sobol_direction(dimension, bit);
+                    }
+                    gray >>= 1;
+                    bit += 1;
+                }
+                assert_eq!(sobol_bits(index, dimension), expected);
+            }
+        }
+
+        let mut shifted = SobolSampler::with_digital_shift(2, 99).unwrap();
+        shifted.skip(4_095);
+        let sample = shifted.sample(8);
+        let mut expected = Vec::with_capacity(sample.len());
+        for idx in 4_095..4_103 {
+            for dim in 0..2 {
+                expected.push(bits_to_unit(
+                    sobol_bits(idx, dim) ^ splitmix64(99 + dim as u64),
+                ));
+            }
+        }
+        assert_eq!(sample, expected);
     }
 
     #[test]

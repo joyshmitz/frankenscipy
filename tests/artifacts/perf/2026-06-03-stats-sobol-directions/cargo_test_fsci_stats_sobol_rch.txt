@@ -1,0 +1,211 @@
+[RCH] local (no admissible workers: insufficient_slots=6,active_project_exclusion=1)
+   Compiling libc v0.2.185
+   Compiling num-traits v0.2.19
+   Compiling cc v1.2.60
+   Compiling serde_json v1.0.149
+   Compiling getrandom v0.4.2
+   Compiling paste v1.0.15
+   Compiling bytemuck v1.25.0
+   Compiling matrixmultiply v0.3.10
+   Compiling rawpointer v0.2.1
+   Compiling typenum v1.20.0
+   Compiling chacha20 v0.10.0
+   Compiling nalgebra-macros v0.3.0
+   Compiling safe_arch v0.7.4
+   Compiling wide v0.7.33
+   Compiling blake3 v1.8.4
+   Compiling alloca v0.4.0
+   Compiling num-integer v0.1.46
+   Compiling num-complex v0.4.6
+   Compiling approx v0.5.1
+   Compiling plotters v0.3.7
+   Compiling getrandom v0.3.4
+   Compiling wait-timeout v0.2.1
+   Compiling page_size v0.6.0
+   Compiling tinytemplate v1.2.1
+   Compiling rand v0.10.1
+   Compiling tempfile v3.27.0
+   Compiling rand_core v0.9.5
+   Compiling num-rational v0.4.2
+   Compiling rand v0.9.4
+   Compiling rand_xorshift v0.4.0
+   Compiling rand_chacha v0.9.0
+   Compiling rusty-fork v0.3.1
+   Compiling simba v0.9.1
+   Compiling proptest v1.11.0
+   Compiling criterion v0.8.2
+   Compiling fsci-runtime v0.1.0 (/data/projects/frankenscipy/crates/fsci-runtime)
+   Compiling fsci-fft v0.1.0 (/data/projects/frankenscipy/crates/fsci-fft)
+   Compiling fsci-opt v0.1.0 (/data/projects/frankenscipy/crates/fsci-opt)
+   Compiling nalgebra v0.34.2
+   Compiling fsci-linalg v0.1.0 (/data/projects/frankenscipy/crates/fsci-linalg)
+   Compiling fsci-special v0.1.0 (/data/projects/frankenscipy/crates/fsci-special)
+   Compiling fsci-stats v0.1.0 (/data/projects/frankenscipy/crates/fsci-stats)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 17.63s
+     Running unittests src/lib.rs (/data/tmp/cargo-target/debug/deps/fsci_stats-0022ef2b7c8e5eec)
+
+running 6 tests
+test qmc::tests::qmc_engine_trait_dispatches_halton_and_sobol ... ok
+test qmc::tests::sobol_cached_direction_bits_match_recurrence ... ok
+test qmc::tests::sobol_construct_rejects_unsupported_dimensions ... ok
+test qmc::tests::sobol_digital_shift_is_reproducible_and_bounded ... ok
+test qmc::tests::sobol_metamorphic_skip_equivalent_to_consume ... ok
+test qmc::tests::sobol_sample_first_2d_canonical ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 1695 filtered out; finished in 0.00s
+
+     Running unittests src/bin/perf_stats.rs (/data/tmp/cargo-target/debug/deps/perf_stats-82691534799efbe9)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/test_argus.rs (/data/tmp/cargo-target/debug/deps/test_argus-8bb41ef1b8187e72)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/test_bayes.rs (/data/tmp/cargo-target/debug/deps/test_bayes-c8255d649c362110)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/test_bootstrap.rs (/data/tmp/cargo-target/debug/deps/test_bootstrap-5e708c9124897485)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/test_cb.rs (/data/tmp/cargo-target/debug/deps/test_cb-8b7e8b522c2601ec)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/test_cf.rs (/data/tmp/cargo-target/debug/deps/test_cf-a394cee6f2463c07)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/test_clausen.rs (/data/tmp/cargo-target/debug/deps/test_clausen-e95b084f4b8dfcd5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/test_cvm.rs (/data/tmp/cargo-target/debug/deps/test_cvm-97178f59b88eaa79)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/test_cvm_trace.rs (/data/tmp/cargo-target/debug/deps/test_cvm_trace-e675be5bc14cbd81)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/test_fligner.rs (/data/tmp/cargo-target/debug/deps/test_fligner-8ce2965792f4c3b5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/test_geom.rs (/data/tmp/cargo-target/debug/deps/test_geom-a34b5b461d5eac99)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/test_hyp2f1.rs (/data/tmp/cargo-target/debug/deps/test_hyp2f1-42610b6e74d14e3b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/test_hyper_kurt.rs (/data/tmp/cargo-target/debug/deps/test_hyper_kurt-f931e51bae028e59)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/test_kv.rs (/data/tmp/cargo-target/debug/deps/test_kv-df3ea627cacad590)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/test_la.rs (/data/tmp/cargo-target/debug/deps/test_la-7562892da05b1a43)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/test_nan.rs (/data/tmp/cargo-target/debug/deps/test_nan-ee9d8bebcb94adfc)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/test_nct.rs (/data/tmp/cargo-target/debug/deps/test_nct-6816fc33b9d00bb7)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/test_pdtri.rs (/data/tmp/cargo-target/debug/deps/test_pdtri-2f82ddd5e3ae62bd)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/test_pearson.rs (/data/tmp/cargo-target/debug/deps/test_pearson-b922dabb1491d718)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/test_proc.rs (/data/tmp/cargo-target/debug/deps/test_proc-ff3d2fc8ab480077)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/test_proc_pointer.rs (/data/tmp/cargo-target/debug/deps/test_proc_pointer-d91522a3cd9b42b5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/test_smirnov.rs (/data/tmp/cargo-target/debug/deps/test_smirnov-19d2e188cfe4f88b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/test_winsorize.rs (/data/tmp/cargo-target/debug/deps/test_winsorize-bc51b67e7df4c49b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/test_yv.rs (/data/tmp/cargo-target/debug/deps/test_yv-311ae3e1676b066d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/test_zeta.rs (/data/tmp/cargo-target/debug/deps/test_zeta-d1726a382111da11)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/metamorphic_tests.rs (/data/tmp/cargo-target/debug/deps/metamorphic_tests-0497378a5ca03173)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 60 filtered out; finished in 0.00s

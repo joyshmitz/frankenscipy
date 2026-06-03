@@ -5,6 +5,7 @@
 //!   `perf_stats psd <repeats>`
 //!   `perf_stats qmc-golden [path]`
 //!   `perf_stats halton4-golden [path]`
+//!   `perf_stats sobol2-golden [path]`
 
 use std::fmt::Write as _;
 use std::hint::black_box;
@@ -12,8 +13,8 @@ use std::path::Path;
 use std::time::Instant;
 
 use fsci_stats::{
-    HaltonSampler, centered_discrepancy, l2_star_discrepancy, mixture_discrepancy, psd_welch,
-    wraparound_discrepancy,
+    HaltonSampler, SobolSampler, centered_discrepancy, l2_star_discrepancy, mixture_discrepancy,
+    psd_welch, wraparound_discrepancy,
 };
 
 fn deterministic_data(n: usize) -> Vec<f64> {
@@ -71,6 +72,19 @@ fn halton4_golden_text() -> String {
     output
 }
 
+fn sobol2_golden_text() -> String {
+    let mut sampler = SobolSampler::new(2).expect("valid Sobol dimension");
+    let sample = sampler.sample(4096);
+    let mut output = String::new();
+    writeln!(output, "case=sobol_2d_4096 len={}", sample.len()).expect("write sobol header");
+    output.push_str("sample=");
+    for value in &sample {
+        write!(output, "{:016x},", value.to_bits()).expect("write sobol bits");
+    }
+    output.push('\n');
+    output
+}
+
 fn write_or_print(output: String, path: Option<&str>) {
     if let Some(path) = path {
         let path = Path::new(path);
@@ -110,6 +124,7 @@ fn main() {
         "golden" => write_or_print(golden_text(), args.get(2).map(String::as_str)),
         "qmc-golden" => write_or_print(qmc_golden_text(), args.get(2).map(String::as_str)),
         "halton4-golden" => write_or_print(halton4_golden_text(), args.get(2).map(String::as_str)),
+        "sobol2-golden" => write_or_print(sobol2_golden_text(), args.get(2).map(String::as_str)),
         "psd" => {
             let repeats = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(10);
             timed_psd(repeats);
