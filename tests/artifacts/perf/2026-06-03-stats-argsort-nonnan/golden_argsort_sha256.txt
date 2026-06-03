@@ -1,0 +1,2 @@
+0a5fa6391a2e9e64825488fc3ca4d991535a281f552e06ce1ca9813188a5ea31  tests/artifacts/perf/2026-06-03-stats-argsort-nonnan/golden_argsort_before.txt
+0a5fa6391a2e9e64825488fc3ca4d991535a281f552e06ce1ca9813188a5ea31  tests/artifacts/perf/2026-06-03-stats-argsort-nonnan/golden_argsort_after_fmt.txt

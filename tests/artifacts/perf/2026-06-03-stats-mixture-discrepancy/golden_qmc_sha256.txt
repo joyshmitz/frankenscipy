@@ -1,0 +1,2 @@
+1fb5885cc35367f57b0e818e165a28f87cbb0b9a43fdc7ba4728a6778af44daf  tests/artifacts/perf/2026-06-03-stats-mixture-discrepancy/golden_qmc_before.txt
+1fb5885cc35367f57b0e818e165a28f87cbb0b9a43fdc7ba4728a6778af44daf  tests/artifacts/perf/2026-06-03-stats-mixture-discrepancy/golden_qmc_after.txt

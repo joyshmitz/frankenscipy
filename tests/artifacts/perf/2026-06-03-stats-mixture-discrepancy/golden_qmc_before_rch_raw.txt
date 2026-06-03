@@ -1,0 +1,27 @@
+[RCH] local (no admissible workers: critical_pressure=1,insufficient_slots=5,hard_preflight=1,active_project_exclusion=1)
+   Compiling num-traits v0.2.19
+   Compiling serde_core v1.0.228
+   Compiling serde v1.0.228
+   Compiling paste v1.0.15
+   Compiling matrixmultiply v0.3.10
+   Compiling libc v0.2.185
+   Compiling getrandom v0.4.2
+   Compiling syn v2.0.117
+   Compiling num-complex v0.4.6
+   Compiling approx v0.5.1
+   Compiling num-integer v0.1.46
+   Compiling num-rational v0.4.2
+   Compiling simba v0.9.1
+   Compiling rand v0.10.1
+   Compiling serde_json v1.0.149
+   Compiling serde_derive v1.0.228
+   Compiling nalgebra-macros v0.3.0
+   Compiling fsci-runtime v0.1.0 (/data/projects/frankenscipy/crates/fsci-runtime)
+   Compiling nalgebra v0.34.2
+   Compiling fsci-fft v0.1.0 (/data/projects/frankenscipy/crates/fsci-fft)
+   Compiling fsci-opt v0.1.0 (/data/projects/frankenscipy/crates/fsci-opt)
+   Compiling fsci-linalg v0.1.0 (/data/projects/frankenscipy/crates/fsci-linalg)
+   Compiling fsci-special v0.1.0 (/data/projects/frankenscipy/crates/fsci-special)
+   Compiling fsci-stats v0.1.0 (/data/projects/frankenscipy/crates/fsci-stats)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 8.82s
+     Running `/data/tmp/cargo-target/debug/perf_stats qmc-golden tests/artifacts/perf/2026-06-03-stats-mixture-discrepancy/golden_qmc_before.txt`
