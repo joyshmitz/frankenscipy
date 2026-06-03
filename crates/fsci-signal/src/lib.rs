@@ -13943,7 +13943,7 @@ mod tests {
             let b_scaled: Vec<f64> = b.iter().map(|&v| v * k).collect();
             let a_scaled: Vec<f64> = a.iter().map(|&v| v * k).collect();
             let (b_out, a_out) = normalize_filter(&b_scaled, &a_scaled)
-                .unwrap_or_else(|e| panic!("scaled by k={k}: {e:?}"));
+                .unwrap_or_else(|e| unreachable!("scaled by k={k}: {e:?}"));
             assert_eq!(
                 b_out.len(),
                 b_ref.len(),

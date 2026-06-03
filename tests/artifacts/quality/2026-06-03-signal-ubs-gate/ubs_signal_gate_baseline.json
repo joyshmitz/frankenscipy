@@ -1,0 +1,27 @@
+{
+  "project": "/data/projects/frankenscipy",
+  "timestamp": "2026-06-03T10:13:28Z",
+  "scanners": [
+    {
+      "language": "rust",
+      "project": "/data/projects/frankenscipy",
+      "files": 1,
+      "critical": 0,
+      "warning": 2072,
+      "info": 760,
+      "timestamp": "2026-06-03T10:13:28Z"
+    }
+  ],
+  "totals": {
+    "critical": 0,
+    "warning": 2072,
+    "info": 760,
+    "files": 1
+  },
+  "generated_at": "2026-06-03T10:13:28Z",
+  "git": {
+    "repository": "https://github.com/Dicklesworthstone/frankenscipy",
+    "commit": "07bd7726fbd68e8aef8bb4b8c2efb62cc5971104",
+    "blob_base": "https://github.com/Dicklesworthstone/frankenscipy/blob/07bd7726fbd68e8aef8bb4b8c2efb62cc5971104"
+  }
+}
