@@ -12,14 +12,14 @@ Same-worker focused RCH Criterion on `vmi1156319`:
 | row | before median | after median | ratio |
 | --- | ---: | ---: | ---: |
 | `matmul/512x512` | `100.62 ms` | `103.54 ms` | `0.97x` |
-| `matmul/768x768` | `713.35 ms` | `140.39 ms` | `5.08x` |
-| `matmul/1024x1024` | `1.1256 s` | `368.29 ms` | `3.06x` |
+| `matmul/768x768` | `713.35 ms` | `537.60 ms` | `1.33x` |
+| `matmul/1024x1024` | `1.1256 s` | `982.93 ms` | `1.15x` |
 
 The optimized path remains gated at `m >= 1024`, `k >= 1024`, and `n >= 1024`,
 so `1024x1024` is the production keep row. The `512` and `768` rows are included
 as bench-context rows; they do not enter the production gate.
 
-Score: `6.0 = impact 4 * confidence 4.5 / effort 3`.
+Score: `2.25 = impact 1.5 * confidence 3 / effort 2`.
 
 ## Isomorphism proof
 
@@ -45,9 +45,9 @@ Score: `6.0 = impact 4 * confidence 4.5 / effort 3`.
 ## Reprofile
 
 RCH linalg reprofile on `vmi1153651` still ranks `matmul/1024x1024` first at
-median `886.06 ms`, followed by `matmul/768x768` at `562.54 ms`,
-`baseline_solve/1000x1000` at `252.64 ms`, `lstsq/512x256` at `138.41 ms`,
-and `pinv/512x256` at `111.11 ms`.
+median `899.37 ms`, followed by `matmul/768x768` at `638.31 ms`,
+`baseline_solve/1000x1000` at `343.72 ms`, `lstsq/512x256` at `157.74 ms`,
+and `pinv/512x256` at `120.06 ms`.
 
 Next target: a deeper GEMM primitive again, likely a recursive/cache-oblivious
 or packed-A/B panel algorithm with stricter same-worker paired measurement.

@@ -9,7 +9,7 @@ vmi1153651
 Top rows by median:
 matmul/1024x1024        899.37 ms
 matmul/768x768          638.31 ms
-baseline_solve/1000x1000 252.64 ms
+baseline_solve/1000x1000 343.72 ms
 lstsq/512x256           157.74 ms
 pinv/512x256            120.06 ms
 
