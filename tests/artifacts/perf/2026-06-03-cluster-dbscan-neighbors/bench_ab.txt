@@ -1,0 +1,13 @@
+    Finished `release-perf` profile [optimized + debuginfo] target(s) in 2.49s
+=== identical checksums (base vs opt) ===
+{"mode":"dbscan","n":2000,"d":16,"k":12,"repeats":3,"total_ms":53.599,"per_call_ms":17.866426,"checksum":3.898800000000e4}
+{"mode":"dbscan-base","n":2000,"d":16,"k":12,"repeats":3,"total_ms":105.618,"per_call_ms":35.206043,"checksum":3.898800000000e4}
+=== A/B sweep ===
+cfg=2000 16 12 5
+    1.99 ± 0.14 times faster than /data/tmp/cargo-target/release-perf/perf_cluster dbscan-base 2000 16 12 5
+cfg=2000 32 12 5
+    3.42 ± 0.22 times faster than /data/tmp/cargo-target/release-perf/perf_cluster dbscan-base 2000 32 12 5
+cfg=3000 32 16 3
+    3.73 ± 0.16 times faster than /data/tmp/cargo-target/release-perf/perf_cluster dbscan-base 3000 32 16 3
+cfg=3000 64 16 3
+    7.95 ± 0.31 times faster than /data/tmp/cargo-target/release-perf/perf_cluster dbscan-base 3000 64 16 3

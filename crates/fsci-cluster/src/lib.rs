@@ -1078,7 +1078,7 @@ pub fn dbscan(
     if n == 0 {
         return Err(ClusterError::EmptyData);
     }
-    validate_feature_dimensions(data, "dbscan")?;
+    let d = validate_feature_dimensions(data, "dbscan")?;
     if !eps.is_finite() || eps <= 0.0 {
         return Err(ClusterError::InvalidArgument(
             "eps must be finite and positive".to_string(),
@@ -1101,10 +1101,21 @@ pub fn dbscan(
     let mut core_samples = Vec::new();
     let mut cluster_id = 0i64;
 
-    // Find neighbors for each point
+    // The neighbor scan is O(n²) and re-walks every point, so pack the ragged
+    // rows into one contiguous n×d buffer once (kills the per-point heap-pointer
+    // chase + cache miss; same lever as the assignment path). Then bound each
+    // squared distance by `eps2` with partial-distance early abandonment: a pair
+    // is a neighbor iff its full distance is `≤ eps2`, and `sq_dist_within` bails
+    // out the instant the running sum *exceeds* `eps2` while summing any genuine
+    // neighbor (full distance `≤ eps2`) to completion — so the `≤ eps2`
+    // membership test is bit-identical to the unbounded `sq_dist`. In density
+    // clustering most pairs are non-neighbors and abandon after a few dimensions.
+    let flat = flatten_points(data, d);
+    let row = |idx: usize| -> &[f64] { &flat[idx * d..idx * d + d] };
     let neighbors = |idx: usize| -> Vec<usize> {
+        let pi = row(idx);
         (0..n)
-            .filter(|&j| sq_dist(&data[idx], &data[j]) <= eps2)
+            .filter(|&j| sq_dist_within(pi, row(j), eps2) <= eps2)
             .collect()
     };
 
@@ -1218,6 +1229,17 @@ fn sq_dist_within(a: &[f64], b: &[f64], bound: f64) -> f64 {
         }
     }
     acc
+}
+
+/// Pack a ragged observation list into one contiguous `n × d` row-major buffer.
+/// Same rationale as [`flatten_centroids`]: an `O(n²)` neighbor scan re-walks
+/// every row, so streaming a contiguous buffer beats chasing `n` heap pointers.
+fn flatten_points(data: &[Vec<f64>], d: usize) -> Vec<f64> {
+    let mut flat = Vec::with_capacity(data.len() * d);
+    for point in data {
+        flat.extend_from_slice(&point[..d]);
+    }
+    flat
 }
 
 /// Pack a ragged centroid list into one contiguous `k × d` row-major buffer.

@@ -23,7 +23,7 @@ use std::hint::black_box;
 use std::path::Path;
 use std::time::Instant;
 
-use fsci_cluster::{kmeans, vq};
+use fsci_cluster::{dbscan, kmeans, vq};
 
 /// Reference (non-abandoning) squared Euclidean distance, mirroring the library's
 /// pre-optimization `sq_dist`. Used only by the `vq-base` mode so this harness
@@ -33,6 +33,62 @@ fn sq_dist_ref(a: &[f64], b: &[f64]) -> f64 {
         .zip(b.iter())
         .map(|(&ai, &bi)| (ai - bi) * (ai - bi))
         .sum()
+}
+
+/// Reference DBSCAN with the pre-optimization naive neighbor scan (scattered
+/// `Vec<Vec<f64>>` rows, full unbounded `sq_dist`). Mirrors the library algorithm
+/// exactly except for the contiguous-buffer + `eps2`-abandonment lever, so the
+/// `dbscan-base` mode can A/B that single lever within one binary. Returns
+/// `(n_clusters, labels, n_cores)`.
+fn dbscan_baseline(data: &[Vec<f64>], eps: f64, min_samples: usize) -> (i64, Vec<i64>, usize) {
+    let n = data.len();
+    let eps2 = eps * eps;
+    let mut labels = vec![-1i64; n];
+    let mut visited = vec![false; n];
+    let mut core_samples: Vec<usize> = Vec::new();
+    let mut cluster_id = 0i64;
+
+    let neighbors = |idx: usize| -> Vec<usize> {
+        (0..n)
+            .filter(|&j| sq_dist_ref(&data[idx], &data[j]) <= eps2)
+            .collect()
+    };
+
+    for i in 0..n {
+        if visited[i] {
+            continue;
+        }
+        visited[i] = true;
+        let nbrs = neighbors(i);
+        if nbrs.len() < min_samples {
+            continue;
+        }
+        core_samples.push(i);
+        labels[i] = cluster_id;
+        let mut queue: std::collections::VecDeque<usize> = nbrs.into();
+        while let Some(j) = queue.pop_front() {
+            if labels[j] == -1 {
+                labels[j] = cluster_id;
+            }
+            if visited[j] {
+                continue;
+            }
+            visited[j] = true;
+            let j_nbrs = neighbors(j);
+            if j_nbrs.len() >= min_samples {
+                core_samples.push(j);
+                for &nb in &j_nbrs {
+                    if labels[nb] == -1 {
+                        queue.push_back(nb);
+                    }
+                }
+            }
+        }
+        cluster_id += 1;
+    }
+    core_samples.sort_unstable();
+    core_samples.dedup();
+    (cluster_id, labels, core_samples.len())
 }
 
 /// Reference nearest-centroid assignment with full distance evaluation.
@@ -114,6 +170,24 @@ fn golden_text() -> String {
             write!(&mut output, "{label} ").expect("write kmeans labels");
         }
         output.push('\n');
+
+        // DBSCAN: eps chosen near the intra-cluster jitter radius so the scan
+        // exercises both neighbor hits and (mostly) misses.
+        let result = dbscan(&data, 3.0, 4).expect("dbscan");
+        write!(
+            &mut output,
+            "mode=dbscan n={n} d={d} k={k} n_clusters={} cores={} ",
+            result.n_clusters,
+            result.core_sample_indices.len()
+        )
+        .expect("write dbscan header");
+        for &label in &result.labels {
+            write!(&mut output, "{label} ").expect("write dbscan labels");
+        }
+        for &idx in &result.core_sample_indices {
+            write!(&mut output, "c{idx} ").expect("write dbscan cores");
+        }
+        output.push('\n');
     }
     output
 }
@@ -167,6 +241,21 @@ fn main() {
             let result = kmeans(black_box(&data), k, 50, 0x1234_5678).expect("kmeans");
             checksum += result.inertia + result.labels.iter().sum::<usize>() as f64;
             black_box(&result.labels);
+        }
+    } else if mode == "dbscan" {
+        for _ in 0..repeats {
+            let result = dbscan(black_box(&data), 3.0, 4).expect("dbscan");
+            checksum += result.n_clusters as f64
+                + result.labels.iter().map(|&l| l as f64).sum::<f64>()
+                + result.core_sample_indices.len() as f64;
+            black_box(&result.labels);
+        }
+    } else if mode == "dbscan-base" {
+        for _ in 0..repeats {
+            let (n_clusters, labels, n_cores) = dbscan_baseline(black_box(&data), 3.0, 4);
+            checksum +=
+                n_clusters as f64 + labels.iter().map(|&l| l as f64).sum::<f64>() + n_cores as f64;
+            black_box(&labels);
         }
     } else {
         eprintln!("unknown mode: {mode}");
