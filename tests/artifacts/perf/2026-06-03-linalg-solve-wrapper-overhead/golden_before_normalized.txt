@@ -1,0 +1,108 @@
+running 74 tests
+test proptest_tests::solve_circulant_shift ... ok
+test proptest_tests::solve_continuous_are_carex_2x2_residual ... ok
+test proptest_tests::cho_solve_matches_scipy_reference_values ... ok
+test proptest_tests::solve_circulant_rejects_singular_with_nonzero_rhs ... ok
+test proptest_tests::lu_solve_matches_scipy_reference_values ... ok
+test proptest_tests::solve_continuous_lyapunov_basic ... ok
+test proptest_tests::solve_circulant_identity ... ok
+test proptest_tests::solve_continuous_are_carex_1x1 ... ok
+test proptest_tests::solve_continuous_are_rejects_non_square_a ... ok
+test proptest_tests::solve_circulant_accepts_singular_with_compatible_rhs ... ok
+test proptest_tests::roundtrip_solve ... ok
+test proptest_tests::solve_discrete_lyapunov_perf_vs_kronecker ... ignored, perf measurement; run explicitly in --release
+test proptest_tests::solve_discrete_are_rejects_dimension_mismatch ... ok
+test proptest_tests::solve_discrete_lyapunov_rejects_non_square ... ok
+test proptest_tests::solve_continuous_lyapunov_matches_scipy_reference ... ok
+test proptest_tests::solve_discrete_lyapunov_diagonal ... ok
+test proptest_tests::solve_discrete_lyapunov_stable ... ok
+test proptest_tests::solve_discrete_lyapunov_unit_eigenvalue_errors ... ok
+test proptest_tests::solve_sylvester_complex_eigenvalues_2x2_block ... ok
+test proptest_tests::solve_sylvester_diagonal ... ok
+test proptest_tests::solve_sylvester_general ... ok
+test proptest_tests::solve_discrete_are_darex_1x1 ... ok
+test proptest_tests::solve_sylvester_3x3 ... ok
+test proptest_tests::solve_discrete_are_darex_2x2_residual ... ok
+test proptest_tests::solve_matches_scipy_reference_values ... ok
+test proptest_tests::solve_continuous_lyapunov_non_symmetric_a ... ok
+test proptest_tests::solve_discrete_lyapunov_complex_eigenvalues_2x2_block ... ok
+test proptest_tests::solve_continuous_are_3x3_residual ... ok
+test proptest_tests::solve_sylvester_perf_vs_kronecker ... ignored, perf measurement; run explicitly in --release
+test proptest_tests::solve_sylvester_matches_scipy_reference ... ok
+test proptest_tests::solve_toeplitz_rejects_shape_mismatch ... ok
+test proptest_tests::test_solve_with_casp_transposed_upper_triangular ... ok
+test proptest_tests::solve_sylvester_rejects_non_square ... ok
+test proptest_tests::solve_sylvester_singular_system_errors ... ok
+test proptest_tests::solve_toeplitz_symmetric_identity ... ok
+test proptest_tests::solve_toeplitz_ignores_row_zero_entry ... ok
+test proptest_tests::solve_triangular_matches_scipy_reference_values ... ok
+test proptest_tests::solve_toeplitz_matches_scipy_doc_example ... ok
+test proptest_tests::solve_triangular_matches_solve_for_triangular_input ... ok
+test proptest_tests::test_solve_transposed_upper_triangular ... ok
+test tests::cho_solve_banded_empty ... ok
+test tests::solve_banded_pentadiagonal ... ok
+test tests::solve_diagonal_fast_path ... ok
+test tests::lu_solve_incompatible_shapes ... ok
+test tests::cho_solve_banded_tridiagonal ... ok
+test tests::cho_factor_and_solve ... ok
+test tests::lu_factor_and_solve_roundtrip ... ok
+test tests::solve_general_backward_error_is_small ... ok
+test tests::cho_solve_banded_diagonal ... ok
+test tests::solve_general_happy_path ... ok
+test tests::solve_3x3_general_system ... ok
+test tests::solve_banded_matches_dense ... ok
+test tests::solve_policy_rejects_incompatible_assumption_before_casp ... ok
+test tests::solve_qr_matches_lu ... ok
+test tests::solve_svd_fallback_matches_lu ... ok
+test tests::solve_svd_fallback_rejects_rank_deficient_square_systems ... ok
+test tests::solve_large_100x100_system ... ok
+test tests::solve_svd_fallback_warns_on_ill_conditioned_but_full_rank_systems ... ok
+test tests::solve_symmetric_positive_definite_assumption ... ok
+test tests::solve_triangular_lower_path ... ok
+test tests::solve_triangular_lower_transposed ... ok
+test tests::solve_triangular_unit_diagonal ... ok
+test tests::solve_with_audit_records_fail_closed_on_condition_too_high ... ok
+test tests::solve_with_audit_records_fail_closed_on_non_square ... ok
+test tests::solve_triangular_upper_non_transposed ... ok
+test tests::solve_upper_triangular_fast_path ... ok
+test tests::solve_with_audit_records_fail_closed_on_non_finite_input ... ok
+test tests::solve_with_audit_records_fail_closed_on_incompatible_shapes ... ok
+test tests::solve_with_audit_records_casp_decision ... ok
+test tests::solve_with_audit_records_policy_rejection ... ok
+test tests::solve_with_casp_well_conditioned_uses_lu ... ok
+test tests::solveh_banded_diagonal ... ok
+test tests::solveh_banded_empty ... ok
+test tests::solveh_banded_tridiagonal ... ok
+test result: ok. 72 passed; 0 failed; 2 ignored; 0 measured; 273 filtered out; finished in 0.02s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 10 tests
+test adv_non_square_solve ... ok
+test adv_singular_solve ... ok
+test meta_solve_linearity ... ok
+test diff_solve_triangular_lower_3x3 ... ok
+test diff_solve_banded_tridiag ... ok
+test diff_solve_triangular_upper_3x3 ... ok
+test meta_solve_roundtrip ... ok
+test diff_solve_3x3 ... ok
+test diff_solve_2x2 ... ok
+test diff_solve_inv_consistency ... ok
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 0.01s
+running 10 tests
+test mr_lu_factor_solve_roundtrip_residual ... ok
+test mr_solve_continuous_lyapunov_shape_and_finite ... ok
+test mr_cho_factor_solve_small_residual ... ok
+test mr_solve_linearity ... ok
+test mr_solve_residual_ill_conditioned ... ok
+test mr_solve_triangular_identity_returns_rhs ... ok
+test mr_solve_residual_check_on_random_spd ... ok
+test mr_solve_residual_small_dense ... ok
+test mr_solve_with_identity_returns_rhs ... ok
+test mr_lu_factor_solve_matches_solve ... ok
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 49 filtered out; finished in 0.01s
+test test_solve_triangular_transpose_backward_error ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s

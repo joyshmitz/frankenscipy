@@ -1,0 +1,4 @@
+matmul/256x256          time:   [3.8532 ms 4.0600 ms 4.2857 ms]
+matmul/512x512          time:   [31.857 ms 32.956 ms 34.376 ms]
+matmul/768x768          time:   [111.25 ms 123.64 ms 135.08 ms]
+matmul/1024x1024        time:   [302.71 ms 321.49 ms 340.21 ms]
