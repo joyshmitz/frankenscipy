@@ -1,0 +1,9 @@
+Benchmarking time_series/psd_welch/4096_w128_o64
+Benchmarking time_series/psd_welch/4096_w128_o64: Warming up for 1.0000 s
+Benchmarking time_series/psd_welch/4096_w128_o64: Collecting 10 samples in estimated 2.0328 s (2090 iterations)
+--
+time_series/psd_welch/4096_w128_o64
+                        time:   [971.65 µs 995.07 µs 1.0215 ms]
+
+--
+[RCH] remote vmi1156319 (148.9s)

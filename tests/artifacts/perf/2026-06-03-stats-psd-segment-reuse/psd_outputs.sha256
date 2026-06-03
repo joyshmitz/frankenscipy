@@ -1,0 +1,12 @@
+577adbbfe9e974fc6ac2f044b28964486c898dcfcd094cc964bc3b7c2a5ec277  tests/artifacts/perf/2026-06-03-stats-psd-segment-reuse/CONCLUSION.md
+d3a637394bdadbdfa6e2deab0200dd6870101d25dcc36d800e78a4cc324ef950  tests/artifacts/perf/2026-06-03-stats-psd-segment-reuse/after_psd_welch_rch.txt
+01e13f9159d4a9382c5ed1735277b15c50d635d10711169ea38fe81d0e8c1758  tests/artifacts/perf/2026-06-03-stats-psd-segment-reuse/after_psd_welch_summary.txt
+b660369a2b54e1bd40486ba37b49f1a8db3a38fe6506c1b1e73f393589ccd54b  tests/artifacts/perf/2026-06-03-stats-psd-segment-reuse/baseline_psd_welch_rch.txt
+5b695f8b45f165ee99218433b8eb8779f62f619187221ddc954a933613b41a35  tests/artifacts/perf/2026-06-03-stats-psd-segment-reuse/baseline_psd_welch_summary.txt
+9bc71f53a9b35233b1f180543bea01d7de7da0566228a8686bd9c591390adcbd  tests/artifacts/perf/2026-06-03-stats-psd-segment-reuse/golden_after.sha256
+85048a3c06ab045815cbeb238fee9e1e07a05c27ceed3c3782ec0fd5ea97c6b1  tests/artifacts/perf/2026-06-03-stats-psd-segment-reuse/golden_after.txt
+d6440bcec8d010bbe9d009705cb90a96eb04ef5ac0c10a4f987469a586d99451  tests/artifacts/perf/2026-06-03-stats-psd-segment-reuse/golden_after_stdout_rch_raw.txt
+15321471f1b9a25e683ad86387cf065fe056d542ac38b729e3ba3e091abac5e0  tests/artifacts/perf/2026-06-03-stats-psd-segment-reuse/golden_before.sha256
+85048a3c06ab045815cbeb238fee9e1e07a05c27ceed3c3782ec0fd5ea97c6b1  tests/artifacts/perf/2026-06-03-stats-psd-segment-reuse/golden_before.txt
+3041915c8a6417741681a34311c26c7a3f0e63bf8dc3a02a716c25ccebe5dbfe  tests/artifacts/perf/2026-06-03-stats-psd-segment-reuse/golden_before_stdout_rch_raw.txt
+3be28c2284750c5881bd281836114314ef78b2bebdc5d85fa09b26bbbac500b2  tests/artifacts/perf/2026-06-03-stats-psd-segment-reuse/golden_cmp.txt
