@@ -1428,11 +1428,31 @@ pub fn hyperu_scalar(a: f64, b: f64, x: f64, mode: RuntimeMode) -> Result<f64, S
         return hyperu_integer_b_recurrence(a, b, x, mode);
     }
 
+    if b.round() <= -1.0 {
+        // b a negative integer: the Kummer transform
+        //   U(a, b, x) = x^{1-b} U(a-b+1, 2-b, x)
+        // maps to b' = 2-b >= 3 (positive integer). The shifted first argument
+        // a' = a-b+1 is either positive (positive-a integral) or negative
+        // non-integer (handled by the b'>=1 downward recurrence above), so the
+        // recursive call resolves in one level without re-entering this branch
+        // — frankenscipy-4yh8z.
+        let inner = hyperu_scalar(a - b + 1.0, 2.0 - b, x, mode)?;
+        let value = x.powf(1.0 - b) * inner;
+        if value.is_finite() {
+            return Ok(value);
+        }
+        return unsupported_hypergeometric_branch(
+            "hyperu",
+            mode,
+            "negative-integer-b hyperu Kummer transform produced a non-finite value",
+        );
+    }
+
+    // b == 0 stays NaN/error to match scipy.special.hyperu.
     unsupported_hypergeometric_branch(
         "hyperu",
         mode,
-        "hyperu currently requires a > 0, nonpositive integer a, noninteger b, \
-         or positive-integer b with negative a",
+        "hyperu with b = 0 and negative non-integer a is not finite-valued",
     )
 }
 
@@ -2645,6 +2665,34 @@ mod tests {
         for (a, b, x) in [(-0.5, 0.0, 2.0), (-1.5, 0.0, 2.0)] {
             let v = hyperu_scalar(a, b, x, RuntimeMode::Strict).unwrap_or(f64::NAN);
             assert!(v.is_nan(), "hyperu({a}, {b}, {x}) = {v}, expected NaN");
+        }
+    }
+
+    // Golden parity for U(a, b, x) with a < 0 non-integer and b a NEGATIVE
+    // integer, x > 0 — frankenscipy-4yh8z. Solved by the Kummer transform
+    // U(a,b,x) = x^{1-b} U(a-b+1, 2-b, x) feeding the positive-integer-b path.
+    // Golden values from scipy 1.17.1 (sp.hyperu).
+    #[test]
+    #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy 1.17.1
+    fn hyperu_negative_integer_b_negative_a_matches_scipy() {
+        let cases: [(f64, f64, f64, f64); 9] = [
+            (-0.5, -1.0, 2.0, 1.846201538916142),
+            (-0.5, -2.0, 3.0, 2.323217629163707),
+            (-1.5, -1.0, 2.0, 4.0606905588693),
+            (-0.5, -3.0, 4.0, 2.718776736157855),
+            (-2.5, -2.0, 5.0, 73.26510445153117),
+            (-3.5, -1.0, 2.0, -7.845165460691863),
+            (-0.75, -2.0, 1.5, 2.658320426135889),
+            (-0.25, -1.0, 1.0, 1.2635630857188185),
+            (-1.5, -3.0, 3.0, 13.282084015814732),
+        ];
+        for (a, b, x, expected) in cases {
+            let actual = hyperu_scalar(a, b, x, RuntimeMode::Strict).unwrap_or(f64::NAN);
+            let scale = expected.abs().max(1.0);
+            assert!(
+                (actual - expected).abs() <= 5.0e-7 * scale,
+                "hyperu({a}, {b}, {x}) = {actual}, expected {expected}"
+            );
         }
     }
 
