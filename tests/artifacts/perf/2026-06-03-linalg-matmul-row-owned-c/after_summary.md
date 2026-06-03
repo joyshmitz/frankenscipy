@@ -14,10 +14,10 @@ Criterion rows:
 
 | row | lower | median | upper |
 | --- | ---: | ---: | ---: |
-| `matmul/256x256` | `6.4989 ms` | `7.0916 ms` | `8.3126 ms` |
-| `matmul/512x512` | `57.414 ms` | `62.075 ms` | `67.338 ms` |
-| `matmul/768x768` | `140.10 ms` | `145.65 ms` | `157.05 ms` |
-| `matmul/1024x1024` | `355.84 ms` | `417.98 ms` | `481.61 ms` |
+| `matmul/256x256` | `11.426 ms` | `12.023 ms` | `12.750 ms` |
+| `matmul/512x512` | `99.291 ms` | `116.66 ms` | `145.15 ms` |
+| `matmul/768x768` | `770.97 ms` | `819.74 ms` | `865.48 ms` |
+| `matmul/1024x1024` | `866.79 ms` | `889.14 ms` | `911.89 ms` |
 
 Decision:
 Rejected. The saved after run does not show a keepable win against the pass

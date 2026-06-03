@@ -20,10 +20,10 @@ RCH after run selected `vmi1153651`:
 
 | row | after median |
 | --- | ---: |
-| `matmul/256x256` | `7.0916 ms` |
-| `matmul/512x512` | `62.075 ms` |
-| `matmul/768x768` | `145.65 ms` |
-| `matmul/1024x1024` | `417.98 ms` |
+| `matmul/256x256` | `12.023 ms` |
+| `matmul/512x512` | `116.66 ms` |
+| `matmul/768x768` | `819.74 ms` |
+| `matmul/1024x1024` | `889.14 ms` |
 
 The after run does not provide a keepable win. Score: rejected below `2.0`.
 
