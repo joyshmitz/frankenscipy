@@ -1,0 +1,13 @@
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 34 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 59 filtered out; finished in 0.00s
+test result: ok. 4 passed; 0 failed; 2 ignored; 0 measured; 344 filtered out; finished in 0.00s
+test tests::matmul_flat_workspace_is_bit_identical_to_naive_ijk ... ok
+test tests::matmul_ikj_is_bit_identical_to_naive_ijk ... ok
+test tests::matmul_ikj_perf_vs_naive_ijk ... ignored, perf measurement; run explicitly in --release
+test tests::matmul_microkernel_golden_digest ... ok
+test tests::matmul_microkernel_is_bit_identical_to_flat_ikj ... ok
+test tests::matmul_microkernel_perf_vs_flat_ikj ... ignored, perf measurement; run explicitly in --release
