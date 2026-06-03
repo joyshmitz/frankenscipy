@@ -1445,6 +1445,14 @@ fn kv_scalar(v: f64, z: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
     // K_v is symmetric: K_{-v}(z) = K_v(z)
     let v_abs = v.abs();
 
+    // Large z: the integral representation has tiny magnitude (e.g. K_0(100) ≈
+    // 5e-45) which defeats adaptive_simpson's absolute tolerance, so use the
+    // DLMF 10.40.2 asymptotic. Valid once z is large relative to v² — gate on
+    // z ≥ max(30, v²/2), inside the region where it is machine-accurate.
+    if z >= 30.0 && z >= 0.5 * v_abs * v_abs {
+        return Ok(kv_asymptotic(v_abs, z));
+    }
+
     // For non-integer v: use integral representation K_v(z) = ∫ exp(-z cosh t) cosh(vt) dt
     // This avoids the I_{-v} formula which has numerical issues for non-integer negative orders.
     if v_abs.fract() != 0.0 {
@@ -1477,6 +1485,34 @@ fn kv_integer_zero(z: f64) -> f64 {
 
 fn kv_integer_one(z: f64) -> f64 {
     kv_integral(1.0, z)
+}
+
+/// Large-z asymptotic for K_v(z) (DLMF 10.40.2):
+///   K_v(z) ~ sqrt(π/(2z)) e^{-z} Σ_k a_k(v)/z^k,
+///   a_0 = 1,  a_k = a_{k-1}(4v² - (2k-1)²)/(8k).
+/// Unlike the J_v expansion the coefficients are all-positive. The series is
+/// asymptotic (divergent); sum to its smallest term. Replaces the integral at
+/// large z, where the integral's tiny magnitude (≈ e^{-z}) defeated the
+/// adaptive-Simpson absolute tolerance and gave 12-39% errors. frankenscipy-c66a3.
+fn kv_asymptotic(v: f64, z: f64) -> f64 {
+    let mu = 4.0 * v * v;
+    let mut term = 1.0_f64; // a_k / z^k, a_0 = 1
+    let mut prev_abs = 1.0_f64;
+    let mut sum = 1.0_f64;
+    for k in 1..64 {
+        let kf = k as f64;
+        term *= (mu - (2.0 * kf - 1.0).powi(2)) / (8.0 * kf * z);
+        let abs_term = term.abs();
+        if abs_term > prev_abs {
+            break; // asymptotic series past its smallest term — truncate
+        }
+        sum += term;
+        prev_abs = abs_term;
+        if abs_term <= f64::EPSILON {
+            break;
+        }
+    }
+    (PI / (2.0 * z)).sqrt() * (-z).exp() * sum
 }
 
 fn kv_integral(v: f64, z: f64) -> f64 {
@@ -4051,6 +4087,35 @@ mod tests {
                 .unwrap();
             assert!(((jval - jref) / jref).abs() < 1e-10, "jv({v},{z})={jval:e} vs {jref:e}");
             assert!(((yval - yref) / yref).abs() < 1e-10, "yv({v},{z})={yval:e} vs {yref:e}");
+        }
+    }
+
+    #[test]
+    #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy/mpmath
+    fn kv_kve_large_z_matches_scipy() {
+        // Large-z K_v via the DLMF 10.40.2 asymptotic (frankenscipy-c66a3): the
+        // integral path was 12-39% off (its tiny magnitude defeated the
+        // absolute-tolerance adaptive Simpson). Integer and non-integer order.
+        let rv = |r: SpecialResult| match r {
+            Ok(SpecialTensor::RealScalar(v)) => v,
+            _ => f64::NAN,
+        };
+        let s = SpecialTensor::RealScalar;
+        let m = RuntimeMode::Strict;
+        let cases = [
+            (0.0, 100.0, 4.656628229175903e-45, 0.1251756216591266),
+            (1.0, 100.0, 4.67985373563691e-45, 0.12579995047957854),
+            (3.0, 200.0, 1.253501761543211e-88, 0.0905777084721066),
+            (5.0, 500.0, 4.093284751762465e-219, 0.05745302623029479),
+            (2.5, 200.0, 1.2449350429724718e-88, 0.08995867963539583),
+            (0.5, 50.0, 3.418620095457075e-23, 0.1772453850905516),
+            (10.5, 400.0, 1.376812560442129e-175, 0.07188985052835141),
+        ];
+        for (v, z, kref, keref) in cases {
+            let kval = rv(kv(&s(v), &s(z), m));
+            let keval = rv(kve(&s(v), &s(z), m));
+            assert!(((kval - kref) / kref).abs() < 1e-10, "kv({v},{z})={kval:e} vs {kref:e}");
+            assert!(((keval - keref) / keref).abs() < 1e-10, "kve({v},{z})={keval:e} vs {keref:e}");
         }
     }
 
