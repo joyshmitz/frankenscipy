@@ -44,17 +44,16 @@ Golden before and after:
 
 `1fb5885cc35367f57b0e818e165a28f87cbb0b9a43fdc7ba4728a6778af44daf`
 
-The after-golden RCH job completed after the rejection commit; extracting the
-late stdout shows the QMC golden output matched byte-for-byte. The source was
-still restored because the focused RCH benchmark regressed.
+The after-golden RCH job produced the same QMC block byte-for-byte. The source
+was still restored because the focused RCH benchmark regressed.
 
 ## Benchmark Gate
 
 Focused RCH after:
 
-- `qmc_discrepancy/l2_star/512x2`: `[298.00 us, 303.88 us, 309.91 us]` on `vmi1227854`.
+- `qmc_discrepancy/l2_star/512x2`: `[470.18 us, 482.77 us, 496.97 us]` on `vmi1153651`.
 
-Median comparison: `228.55 us -> 303.88 us`, a regression.
+Median comparison: `228.55 us -> 482.77 us`, a regression.
 
 Score: `0.0` because performance impact was negative.
 
