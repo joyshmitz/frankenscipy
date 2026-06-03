@@ -1078,6 +1078,21 @@ fn condition_diagnostics_with_assumption(
     a: &[Vec<f64>],
     assumption: Option<MatrixAssumption>,
 ) -> Result<ConditionDiagnosticsWork, LinalgError> {
+    condition_diagnostics_with_assumption_mode(a, assumption, true)
+}
+
+fn condition_diagnostics_for_solve(
+    a: &[Vec<f64>],
+    assumption: Option<MatrixAssumption>,
+) -> Result<ConditionDiagnosticsWork, LinalgError> {
+    condition_diagnostics_with_assumption_mode(a, assumption, false)
+}
+
+fn condition_diagnostics_with_assumption_mode(
+    a: &[Vec<f64>],
+    assumption: Option<MatrixAssumption>,
+    evaluate_positive_definite: bool,
+) -> Result<ConditionDiagnosticsWork, LinalgError> {
     let (rows, cols) = matrix_shape(a)?;
     let tol = structure_tolerance(a);
 
@@ -1097,7 +1112,7 @@ fn condition_diagnostics_with_assumption(
         )
     ) || issymmetric(a, tol, tol)?;
     let positive_definite = assumption == Some(MatrixAssumption::PositiveDefinite)
-        || (symmetric && is_positive_definite(a));
+        || (evaluate_positive_definite && symmetric && is_positive_definite(a));
     let bandwidth = bandwidth_with_tolerance(a, tol);
     let banded = rows > 0
         && cols > 0
@@ -1583,7 +1598,7 @@ fn solve_with_portfolio_internal(
         normalize_assumption_for_effective_matrix(options.assume_a, options.transposed);
     let metadata_incompatibility_score =
         assumption_incompatibility_score(&effective_a, effective_assumption)?;
-    let diagnostics = condition_diagnostics_with_assumption(&effective_a, effective_assumption)?;
+    let diagnostics = condition_diagnostics_for_solve(&effective_a, effective_assumption)?;
     let ConditionDiagnosticsWork {
         report,
         mut matrix_cache,
@@ -1799,7 +1814,7 @@ pub fn solve_with_audit(
         normalize_assumption_for_effective_matrix(options.assume_a, options.transposed);
     let metadata_incompatibility_score =
         assumption_incompatibility_score(&effective_a, effective_assumption)?;
-    let diagnostics = condition_diagnostics_with_assumption(&effective_a, effective_assumption)?;
+    let diagnostics = condition_diagnostics_for_solve(&effective_a, effective_assumption)?;
     let ConditionDiagnosticsWork {
         report,
         mut matrix_cache,
@@ -11822,7 +11837,7 @@ mod proptest_tests {
         let a = vec![vec![0.0, -1.0], vec![1.0, 0.0]]; // eigenvalues ±i
         let b = vec![vec![3.0, -2.0], vec![1.0, 4.0]]; // complex pair too
         // Pick X, derive Q = A X + X B so the residual has a known target.
-        let x_true = vec![vec![1.0, 2.0], vec![-1.0, 0.5]];
+        let x_true = [vec![1.0, 2.0], vec![-1.0, 0.5]];
         let n = 2;
         let mut q = vec![vec![0.0; n]; n];
         for i in 0..n {

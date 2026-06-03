@@ -1,0 +1,306 @@
+  [2m2026-06-03T13:43:45.201561Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mSelected worker: vmi1149989 at ubuntu@212.90.121.76 (2 slots remaining after reservation, speed 50.0)[0m
+    [2;3mat[0m rch/src/hook.rs:514 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:43:45.655330Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mStarting remote compilation pipeline for frankenscipy (hash: d67e3a62937a4e7a)[0m
+    [2;3mat[0m rch/src/hook.rs:5987 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:43:45.655371Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mPrepared dependency sync manifest for 20 roots[0m
+    [2;3mat[0m rch/src/hook.rs:6009 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:43:47.573223Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mSyncing project to worker vmi1149989...[0m
+    [2;3mat[0m rch/src/hook.rs:6039 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:43:47.573277Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy -> /data/projects/frankenscipy on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:43:51.748001Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 4174ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:43:51.748063Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-arrayapi -> /data/projects/frankenscipy/crates/fsci-arrayapi on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:43:53.591335Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1843ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:43:53.591420Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-cluster -> /data/projects/frankenscipy/crates/fsci-cluster on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:43:55.500517Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1909ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:43:55.500580Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-conformance -> /data/projects/frankenscipy/crates/fsci-conformance on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:43:58.849889Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 3349ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:43:58.849959Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-constants -> /data/projects/frankenscipy/crates/fsci-constants on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:44:00.665015Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1815ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:44:00.665127Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-datasets -> /data/projects/frankenscipy/crates/fsci-datasets on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:44:02.581842Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1916ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:44:02.581920Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-fft -> /data/projects/frankenscipy/crates/fsci-fft on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:44:04.497026Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1915ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:44:04.497078Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-integrate -> /data/projects/frankenscipy/crates/fsci-integrate on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:44:06.304722Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1807ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:44:06.304849Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-interpolate -> /data/projects/frankenscipy/crates/fsci-interpolate on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:44:08.155141Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1850ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:44:08.155210Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-io -> /data/projects/frankenscipy/crates/fsci-io on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:44:10.005854Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1850ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:44:10.005915Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-linalg -> /data/projects/frankenscipy/crates/fsci-linalg on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:44:11.811141Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1805ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:44:11.811227Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-ndimage -> /data/projects/frankenscipy/crates/fsci-ndimage on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:44:13.682156Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1870ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:44:13.682221Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-odr -> /data/projects/frankenscipy/crates/fsci-odr on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:44:15.474799Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1792ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:44:15.474868Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-opt -> /data/projects/frankenscipy/crates/fsci-opt on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:44:17.315156Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1840ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:44:17.315220Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-runtime -> /data/projects/frankenscipy/crates/fsci-runtime on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:44:19.191095Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1875ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:44:19.191166Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-signal -> /data/projects/frankenscipy/crates/fsci-signal on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:44:21.017025Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1825ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:44:21.017096Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-sparse -> /data/projects/frankenscipy/crates/fsci-sparse on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:44:22.847120Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1830ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:44:22.847196Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-spatial -> /data/projects/frankenscipy/crates/fsci-spatial on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:44:24.673444Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1826ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:44:24.673508Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-special -> /data/projects/frankenscipy/crates/fsci-special on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:44:26.494785Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1821ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:44:26.494856Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-stats -> /data/projects/frankenscipy/crates/fsci-stats on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:44:28.426199Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1931ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:44:28.426239Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mSync complete: 26034 files, 933938 bytes in 40843ms[0m
+    [2;3mat[0m rch/src/hook.rs:6202 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:44:50.898940Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mExecuting command remotely: cargo run -p fsci-linalg --release --locked --bin perf_solve -- golden[0m
+    [2;3mat[0m rch/src/hook.rs:6240 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:44:50.898982Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mRewriting CARGO_TARGET_DIR for remote execution (worker-scoped path): /data/tmp/cargo-target -> /data/projects/frankenscipy/.rch-target-vmi1149989-job-29869223945706071-1780494227573215800-0[0m
+    [2;3mat[0m rch/src/transfer.rs:712 [2;3mon[0m ThreadId(1)
+
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded bytemuck v1.25.0
+  Downloaded paste v1.0.15
+  Downloaded cfg-if v1.0.4
+  Downloaded equivalent v1.0.2
+  Downloaded quote v1.0.45
+  Downloaded autocfg v1.5.0
+  Downloaded nalgebra-macros v0.3.0
+  Downloaded cpufeatures v0.3.0
+  Downloaded zmij v1.0.21
+  Downloaded rawpointer v0.2.1
+  Downloaded constant_time_eq v0.4.2
+  Downloaded num-traits v0.2.19
+  Downloaded itoa v1.0.18
+  Downloaded arrayref v0.3.9
+  Downloaded approx v0.5.1
+  Downloaded shlex v1.3.0
+  Downloaded arrayvec v0.7.6
+  Downloaded num-integer v0.1.46
+  Downloaded find-msvc-tools v0.1.9
+  Downloaded num-rational v0.4.2
+  Downloaded unicode-ident v1.0.24
+  Downloaded serde_derive v1.0.228
+  Downloaded simba v0.9.1
+  Downloaded typenum v1.20.0
+  Downloaded wide v0.7.33
+  Downloaded serde v1.0.228
+  Downloaded memchr v2.8.0
+  Downloaded cc v1.2.60
+  Downloaded safe_arch v0.7.4
+  Downloaded matrixmultiply v0.3.10
+  Downloaded serde_json v1.0.149
+  Downloaded glam v0.19.0
+  Downloaded glam v0.18.0
+  Downloaded hashbrown v0.17.0
+  Downloaded glam v0.20.5
+  Downloaded blake3 v1.8.4
+  Downloaded glam v0.14.0
+  Downloaded syn v2.0.117
+  Downloaded glam v0.23.0
+  Downloaded glam v0.22.0
+  Downloaded glam v0.24.2
+  Downloaded glam v0.21.3
+  Downloaded glam v0.25.0
+  Downloaded glam v0.17.3
+  Downloaded glam v0.27.0
+  Downloaded nalgebra v0.34.2
+  Downloaded glam v0.16.0
+  Downloaded glam v0.15.2
+  Downloaded glam v0.28.0
+  Downloaded num-bigint v0.4.6
+  Downloaded proc-macro2 v1.0.106
+  Downloaded num-complex v0.4.6
+  Downloaded serde_core v1.0.228
+  Downloaded glam v0.29.3
+  Downloaded indexmap v2.14.0
+  Downloaded glam v0.30.10
+  Downloaded glam v0.32.1
+  Downloaded glam v0.31.1
+   Compiling autocfg v1.5.0
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.45
+   Compiling unicode-ident v1.0.24
+   Compiling find-msvc-tools v0.1.9
+   Compiling serde_core v1.0.228
+   Compiling shlex v1.3.0
+   Compiling zmij v1.0.21
+   Compiling serde v1.0.228
+   Compiling serde_json v1.0.149
+   Compiling hashbrown v0.17.0
+   Compiling equivalent v1.0.2
+   Compiling cc v1.2.60
+   Compiling paste v1.0.15
+   Compiling bytemuck v1.25.0
+   Compiling cpufeatures v0.3.0
+   Compiling memchr v2.8.0
+   Compiling num-traits v0.2.19
+   Compiling matrixmultiply v0.3.10
+   Compiling arrayvec v0.7.6
+   Compiling safe_arch v0.7.4
+   Compiling arrayref v0.3.9
+   Compiling constant_time_eq v0.4.2
+   Compiling itoa v1.0.18
+   Compiling cfg-if v1.0.4
+   Compiling wide v0.7.33
+   Compiling indexmap v2.14.0
+   Compiling syn v2.0.117
+   Compiling rawpointer v0.2.1
+   Compiling typenum v1.20.0
+   Compiling num-integer v0.1.46
+   Compiling num-complex v0.4.6
+   Compiling approx v0.5.1
+   Compiling num-rational v0.4.2
+   Compiling blake3 v1.8.4
+   Compiling simba v0.9.1
+   Compiling serde_derive v1.0.228
+   Compiling nalgebra-macros v0.3.0
+   Compiling nalgebra v0.34.2
+   Compiling fsci-runtime v0.1.0 (/data/projects/frankenscipy/crates/fsci-runtime)
+   Compiling fsci-fft v0.1.0 (/data/projects/frankenscipy/crates/fsci-fft)
+   Compiling fsci-linalg v0.1.0 (/data/projects/frankenscipy/crates/fsci-linalg)
+    Finished `release` profile [optimized] target(s) in 33.38s
+     Running `.rch-target-vmi1149989-job-29869223945706071-1780494227573215800-0/release/perf_solve golden`
+n=3 seed=1 t=0 bfd0a3af07c3b4df 3f834321be378350 bfbe7cca0c34053e be=3c8c3715a36e1b5d
+n=3 seed=1 t=1 bfcfd6a436d5747a 3fa835a014ad9916 bfc3597e98e1fbb7 be=3c7c796921f0d37d
+n=3 seed=42 t=0 bfd863913d2e2f88 bfd4097fe3e65755 3f92cbea2cee053d be=3c80699f43e8fa5d
+n=3 seed=42 t=1 bfd98b99eb59b9e4 bfd1b94b9cd20ed6 bfbf29af9362fbd0 be=3c885e4d28bbe5c1
+n=3 seed=12345 t=0 bfca743acd18988a bfd2cec3a0b05b39 bfb8d1f013a3cbf1 be=0000000000000000
+n=3 seed=12345 t=1 bfc0b141be91a7e0 bfd3af632687f490 bfcca837b326ca04 be=3c8607cfb2fa10ed
+n=8 seed=1 t=0 bfc5510e172d4561 3fa0e6120c94911e bfaede635dd60bf8 bf9e13a889dbec02 bfbf50910bb410fc 3fa756e450fc7afb 3fa10bfc63310702 bfb4e42741c505b0 be=3c85feef64ae6750
+n=8 seed=1 t=1 bfc69d3f01eb5280 3fa44953308f804c bfa8ba99e827b86b bfa2ad8ab31f8c92 bfbfeb4703543d83 3fa3907eb68a7d7b 3f778cdc22308b36 bfaaac0780702424 be=3c8720a8bc388faf
+n=8 seed=42 t=0 bfc658457cdfbf56 bfc771f740a88480 bfa41d1baa333824 bf98e534ae18171a bfaf44704625b13c bfc434aa7f208be4 bfb8a451ecded31c bfa20030c749da3c be=3c7c630941deb360
+n=8 seed=42 t=1 bfc26edd1a143830 bfc8ebe70869c6d5 bf9ade83932b0361 bfbba140d2900abf bfaee99b1f0c6d32 bfbb4a6e98fe6250 bfbb1a4ba46bfd5c bfb37d66d5cc99ba be=3c8327e626eae830
+n=8 seed=12345 t=0 bfbfb9d500d3d512 bfb35be492918f58 bfb000d2bdb70c51 bfa484795d95f796 bfc462f20c7cbc93 3f6b5e0079bb52d4 bfb051c396505d86 bfc435ff8201117a be=3c80d72e31502716
+n=8 seed=12345 t=1 bfbf0bfdc559460e bfbb24768fda5e9b bfb9188507046fff bfab8ce94bb7d2bd bfc748bdb98c59d6 bf9db6a8db05e101 bf85778ba936ce0a bfbaf16ff26eb260 be=3c8c5792566b4461
+n=17 seed=1 t=0 bfb8a9da1fafe140 3f64c580a1d4d553 bf8d992dfeb746cc bf9c2a6ab7c08585 bfa4037f2e2c317b 3f806920c3941fc1 bf81eec69b251983 bfa97170e4cc3913 bfb7e06976981982 bfbb05bd4cf37773 bfa36296024c1e4d bfb80cb79548bf6b bf97a19303cd22c5 bfbd54fe6f48260b bfa1919ced4278aa bfb23f790ecccd35 bf9c0b9b81f363e8 be=3c8d93eac103473f
+n=17 seed=1 t=1 bfbfa12ab9d7b258 bf988539b94393ed bf7d12edab4a8c26 bf801054fcce7863 bfa9ee33a48409ea 3f7a45794541c770 bf9f360f74b5f2bf bf82170413e783c3 bfb473c394592f82 bfb960ce7bdd040a bfab4affb4127811 bfb698f3f601ae62 bf82e7db91014025 bfbc424c7d8528bc bfb07526c595b6a5 bfaadd24687188d7 bf7019d8eb1e7b38 be=3c7e0c76529274d5
+n=17 seed=42 t=0 bfbd511221d684cb bfb082d41692f835 bf9a4002051886f2 bfa4a6439c39b0bb bfa312039c74911c bfabcbb1d556a49a bfad5b4b8e41126f bfa2a7b677a933ca bfa7344cbe56b3ec bfb29b916ddfabc4 bf980f5e10421168 bfb75c8e360bb473 bf888cf65f006aec bfb51ae9149f4176 bf73fbb91f65d707 bf54618d26edfd97 bf7b7e04ad07db54 be=3c8f3a224fddf8a0
+n=17 seed=42 t=1 bfb330e29abc9e45 bfb30d328a00fb28 bf856511873c68a9 bfa60048e770eaa4 bf9c648bd3666190 bfaeaf4d54061e4d bfa95b307d8fbe8e bfa5bc8bacfcd2f6 bfa82da388cbea2a bfb5ab763542fb6c 3f836a073bce8404 bfbf9fa561058af8 bf728bea9b52317b bfb4943a6bad32ff bf6dca136e507c50 bf8de22c7489c9aa bf74790b84506543 be=3c82c1833703a297
+n=17 seed=12345 t=0 bfa7dd6661ace520 bfb5288c9ea87f35 bf98782c25d878bc bfaa42c24d7a8c6c bfb9f2f8a846cff0 bf74ea9ea68f069e bf5e68dc7e9c668e bfb784d007e5d165 bfa5dccd428795cb bfb9e1a90d585c99 bf965893f783f194 bfad77d91ec85e79 bfba1c3d211093e4 bf77efdbcf0b0451 bf5032bbc889235f bfa885863bd08258 3f7f0c6ef26910d4 be=3c9518821565e4ad
+n=17 seed=12345 t=1 bfa4e307209318dc bfb0ca18e045683d bfa1b7051c86cc4b bf8b14b84b2d5283 bfbe9e935841a9ef bf886405ad5e14d0 bf7d98dda7539ddb bfb81062000f7aea bfa21e3ca524a955 bfbe4c3de04de055 bf954b3a5b7f2d78 bfb0f0206572d054 bfb2cc2a55d87a89 bfa057ab767aa2b5 bf84f3ea92078ae2 bf9e4ac72eaad75c bf4a55ce1caaecd9 be=3c93cbae54767697
+n=32 seed=1 t=0 bfab54f444a526fa 3f3fa9e71019d008 bf90be65a4cf721e 3f21f5f2cfbfa38e bfa3da8915cd3f52 bf8304e5078754bb bf6ed3a2960bd0c4 bf953a29c0912001 bfb32938c0a3ab44 bfaaed9c3d030ab1 bf935efe45a9a3f6 bfaaa114271a8b24 bf81c45d8cac6616 bfa986a67fd3b3cd bf9e6f54e1eba096 bf952f44cac2abfa bf7a319ec71a8b21 bfa7ca6eac937c52 bf67f26078e40eef bfa88ec02dbd2424 bf774c3104dcb6fb bfa02994cf9fbf25 bfa7a027fa52b93d bfaa91e9912ac319 bf96e4f69e34d331 3f5f8d9537c2d728 bfa8d7ce0c63010d bf99ac4e1563de9a bf8fb42b98cfe174 3f3b1800e8959092 bfa1721061ad65ae bfaded6d97d1d414 be=3c8ca84e7797d45e
+n=32 seed=1 t=1 bfacf029a6c5f163 bf61bb0c0b506434 bf87cf7ea1dd9b28 3f7353dd6fe5ea59 bf9f0f5e281ad64c bf812abe3b88cc68 bf9001b702818d1d bf9347ae729efcc7 bfb076b202ad0a6c bfb10c79a2e0c57b bf995151d24e43b5 bfaf99e51ba16262 bf5c88239a50d09c bfa91e90763d7e47 bfa487a1dbe730cc bf883a8abb8a6a07 bf51e9a49c96159a bfa610c44d3c89a0 bf8b9fbb0f04f9bd bfa6ee55e17f6f28 bf8c77de1c3b6c1c bf936ba6ee28a3e6 bfa711598014033b bfaebbfba6ad0d8e bf97aec756d5c936 3f788262ac138391 bf9e199a82d0c92c bf8f21fc610ff4b0 bf8c8f947ef38a67 bf6fd57ffccf9cb7 bfa21f111ec8b939 bfafab06dca6ed93 be=3c8c6c4a64c77ebd
+n=32 seed=42 t=0 bfaa865a86f80777 bfa5e206818056ac 3f7db7d332516d34 bf97653d30921141 bf88cd85ce159f0d bfa3494907f81aa8 bf9a79266f00f165 bf83717b83c46b0c bf91154248a154b3 bfa8499ef4487252 bf7afd615fde8770 bfaae449ef1b29a7 bf8fbbda69f51884 bfa5e5fa6d17b3ce bf2b4d83828ba15d bf8d43a223041bc0 bf9b14f0e638e14a bf9020eb1c0b3f67 bfabeb8de85f91ef bf932850af9cb229 bf972283a5ae98f5 bfb099cc226e5ae6 bfa429adfba4b7cd bfaccdd62fecfbb0 bfa14ef53fb4f413 bfac99d6f8706a5a bf9fb6f1f38727c5 bf9d28abff2255f1 bfa079def8d3a438 bfad087c399fd33c bf85cf1361f55677 3f0dbe5e44f4bf85 be=3c91169e95ab9c5d
+n=32 seed=42 t=1 bfadce1c7325148c bfa703dc1180010f bf8aec846be0145a bf946898e90dd380 bf9075fed192843a bf9e8638b68126fa bfa3402d3073c514 bf9675e3aa951b4f bf9db4fcc60f2b45 bfad3eea91e48039 bf505ff1f73a75b2 bfaeaa681460b84a bf7ced414005dfe4 bfaeeffa2a35ee66 bf701eba7eb0ce93 bf83f21ed775df01 bf87327202306d11 bf90b3bbcff77752 bfab9668ee03750f bf90caef63a29d50 bfa133696cc32406 bfa7424386f47dc4 bf998a97834400c3 bfa7c06b3346e723 bf9e20c952b2bfa8 bfa9db28b81e72a8 bf9996972b71d471 bf9ad18e1885fea7 bfa2d3256c2de5ff bfa7d3bb79a6e5fa bf87d5d6a143af94 3f6a103ff4dcc1db be=3c8eada5b7607974
+n=32 seed=12345 t=0 bf9cd5653e354caf bfad5bed78b922e3 bf7fcdffebc35f05 bf825c0276312e4d bfb143fc6aa764bf 3f5b6040cde50c14 3f58e752ea1c7d1c bf9b9aaf4ed49037 bfa041802e90ed41 bfa54e23cb96506d bf8b904c877fd328 bfa26aedfae256fa bfa5d163e5ca7799 bf9014322f83c808 bf7fd695383ea09f bf833fb62ad4c638 bf7ce89cfadb0f28 bf95406049893ea1 bfa5c794512738f8 bfaf2a5e9bfe0365 bf9e5b1f62b59dcb bf75b0525c50a291 bfa48f024e7de5cf bf80e83f4974f40e bfa3b48158516dd2 bf6be9a1c9da5bc2 bfa6b14b67abe80a bf9430e3f05fa0d3 bf7ebb9ad165cd0a bf97d1d1759bd6fd bf9a4b9a7f734b84 bfa09eb3ed347771 be=3c8b00271804dc83
+n=32 seed=12345 t=1 bf96a976cf532224 bfa651143b1c6146 bf892164c2d3cff0 bf919a618faad76b bfac7c182e2b2874 3f5ee7e16b46d83e bf6f8c9f6d156526 bfa663208ad89756 bf97d064b8b5feca bfa156023e4e5055 bf50b8bb6449e90c bfa2f7c081f81607 bfa8a6f790650955 bf9718ff5b484100 bf7bd327670204ae bf95a4a00fd6bc0e bf8459c3f25279a3 bf941a7d097fb4f4 bfac03903ce6e071 bfa4b6bd34084ec8 bf8cef8be6d3eba5 3f6688a3297e6c6a bfa8ed277025ea85 bf6e2347c1252bd3 bfaa58efaba69eb9 bf5b79a520adf5dd bfa31d866bb3fb39 bfa0c5b93b45b5d9 bf75993990b34055 bf9f1229ec6a6890 bf95e0d18067b8f7 bf9987384aeeb5d2 be=3c920f881748efae
+n=64 seed=1 t=0 bf98ca13e3bf8806 bf662001bfcb81ba bf85bf60735b929c bf63e2c1d10b129d bf99245b028cba51 3f5f72273115ce37 bf64015832706c50 bf7db8fb503f0248 bf9e84943f38baee bf9ac06ebacd15de bf903654c2ea08a6 bf9bb49283424aba bf38191f9fe591fe bfa17933171c14f2 bf92161e79b71108 bf8ccbded2b6e0d8 bf74f6a0c8c9e02f bf95631d4bb2203c bf695a20a100cf4d bf97f7289f83eef3 bf3fbd1c55df3cba bf8b718628de7bae bf9a3468c0475815 bf993943b7e40d5d bf8d0eaef1692b40 bf719470ed3f00fa bf91c1f6378e315f bf8453fa98a7ad6d bf5c069d887672ff bf5fcc0f346cd52f bf90ed6f16fd2560 bf9e25407ee703af bf8093d633f80924 bf88ad32245436e1 bf910b240d0a8e4a bf6e8ae6697fcc6b bf9743d89d181ff9 bf9af045720339a5 bf95ffdcfc80a0c8 bf6d338dc15d8c79 bf8123634e80ef55 bf8dbe7a9c5790c6 bf9beedfd0f188b1 bf83d5eda63bbfea bf88a67260f93784 bf9f7bd7e5109dfe bf58252f835a0c55 bf63b82172d48a21 bf95abca85d32f9b bf90a1cbe481b32f bf9c555bfac3beb7 bf80a7dbe9246e4f bf823eaf06ebab76 bf984b0fc92ae58e bf83a2b3f012bdca bf8db90a207f47a0 bf7e46d94bc809e4 bf70f7a7b1dbd4a2 bf9704d09eb57526 bf819fff09c9615d bf8f47a1ea13706b bf898f6b6f471630 bf828cedc789fff0 bf8a92d6176712e7 be=3c8cfdd8ee4b43ae
+n=64 seed=1 t=1 bf97517c04505ea6 3f6146cdb03158fc bf83493bc0442780 bf6dae5a6e67b812 bf917a77b0d959b9 3f5168922d19f249 bf3ab2b885583739 bf80c5aa5e8c04ec bf9f71b6820bf4e1 bfa02bdfa1917a12 bf880d7b292096b7 bf9969809acfc2da bf473cafb265a88c bf9ab88a90dddd05 bf916e858ba18526 bf8a6f1db6c2c3da 3f5005969aef6b7f bf98258df6c77ace bf7b108b8ab58f00 bf99bcf64023b8ff bf642bfae8925f6a bf7fe0a79d516b74 bf995ef0f63646fd bf9cb5cd6a36934c bf8a16a23602c049 bf68cdd8beea8256 bf9129e68a3b5521 bf8307b6bd9b1c06 bf85ea95885a07ef 3f5c9b7ce06b32a7 bf8d28635ecdeeb0 bf9ec1d8dcc47255 bf73db4ec4e8291a bf915a1859d504eb bf971d2b92fae8f5 bf616fdccd1ce0ec bf9471701fd8ee64 bf9b40abe41f6004 bf93c2d6331da24e bf7c96b56889dc59 bf8117f167cc7f3d bf92ae2509002643 bf9ec2f106841f2f bf81fdcb95271154 bf8a44f712b43e62 bf9b325f40e8622c bf78b1412d40213c 3f5cdeb41b1bd563 bf959ff1a4333f82 bf92bcafc73c586e bf9f7579bf11294e bf81cd81503321b5 bf7816671d940815 bf98e0f9681d910e bf7dfc4940d38426 bf8ca07da8d46555 bf72462de7da5bc7 bf41b93d199f3b7c bf971e9339f42053 bf8908a06cadc1db bf90a4ca1944d369 bf8d01420be42851 bf7ddee5234ecc76 bf888e81b507e09c be=3c9254e30335e398
+n=64 seed=42 t=0 bf9b5f59774eafa4 bf942f858b6c28b6 bf525fdf71171599 bf7cd6a996a48d49 bf8badb5444cff0a bf92f5094bc771b7 bf8d48458152392f bf87cc4f65cbb1f2 bf9103a58a028233 bf9797248d01779e bf7317343fa887bd bf9cdc396dd779e4 bf7c10138cdee1c1 bf9ac30f73edaa28 bf6c070305e28338 bf6d3d8e18c2f221 bf8800603339ca1a bf7624eff943c588 bf9e009cf1c01a98 bf82b75b151c572d bf8c502e1810d1ac bf9761a503cf340b bf9584a1e919732a bf93c3822240c72a bf865938be84613e bf97fd9290e8827d bf90321694b584c3 bf90ce34d949a0b4 bf8b068b2737802e bf927aa2d69ec427 bf7b086d76bb1fe0 bf72a0e1325c6f9f bf76f1ea959a073b bf938a3bd95d9e77 bf1a4798e36fd7fa bf865b581acbaf14 bf764aba781b01e9 bf60d909c061a035 bf92971915c7d134 bf93a441bb58f189 bf7256cc97a52eca bf9a81ab4498436c bf9edfd8d3fe1498 bf9aa97665e5b2ef bf84e48466e8335b bf86af953e456854 bf884d95a8619d24 bf872f5b74967e56 bf98b6f28e9fbeef bf8b7d40623c965c bf9eaf02b4444d9b bf8d764bdf4aed2b bf9ac6684fd3c105 bf841ca157c353b9 bf95bfe07be94c13 bf9d1677e8778e33 bf7b73d218639daf bf9a10e4da0d179d bf9a44082cd7198d bf867d57cb89e109 bf9a3b67b681ce55 bf94d058d67fe98e bf94e3ce07f1caaf bf83d443ca6d8129 be=3c87a33fe4c47ba5
+n=64 seed=42 t=1 bf9c0ac2f7d88ddd bf9535840405f079 3f4968f89e1cc1e1 bf89449bff094cca bf85133bfa41f7c1 bf938b7ccfc8b94f bf8ea597c16bd55a bf9530a723aa7149 bf8f52f2f254775c bf958fbec48fccb2 bf64b60e914ab5cc bf986ad019492e8b bf4c5cf8d1f9b5fd bf9764acd6aa61d3 3f3367e04fa31b91 bf2e3a80892dc1f5 bf80724eec494e3c bf79690a007175e7 bfa00540e6e57adc bf88e3190b8ef8be bf94832c165a388b bf9a93b16ca1ca54 bf933abc3f5d3dfd bf93edfad08cb0ef bf8ee7d1d4271228 bf9b21f41ced4d41 bf8ad976b2f0ef9d bf8b469497c373a1 bf913ed8e2bbef14 bf94f0f4210a24cb bf81e713c4f1200b 3f4f0ef71224ffdd bf80b65fafc30441 bf919458db9d0859 bf83b127c4d49c53 bf8d4e98437cfd96 bf6406a175c47891 bf744db7423829d0 bf915e1d9f1fbd74 bf90018305cb01ff bf814bb752362819 bf990c7175d22758 bf9d12cc8f656f75 bf987ea833510b3b bf7b6294848b4cec bf8d74b7b75df5f6 bf813ba900fd4e06 bf8b13e591d9c6cd bf9957a181afee01 bf8f5a20f9cdf4af bf9bfc05467fdc84 bf896d20b38e9562 bf98aee77ad6bef0 bf86f7c1b25768e7 bf93d80f7ff52054 bf9919645cfd9135 bf695fd5970a42b3 bf97230c2fcbdb19 bf99b960fa77b761 bf8cd2373c515f33 bf9e5ab4f46c156c bf9514ccb692d747 bf97c9f240f6cfcf bf890256506ac11e be=3c92a96a8352605b
+n=64 seed=12345 t=0 bf928a413551b15a bf967f2bc4937b80 bf816bb05996534c 3f5d31e1e069b094 bfa007fcbce24d55 bf67a93d8a02132d bf4d6f4bb21c9f72 bf989783785a4683 bf8bcc4a539ceeb1 bfa0d2aa9e7ec354 bf7d964e32c03fc3 bf9c049ff44c8d06 bf98137cbc34fa29 bf8a97efe3b86799 bf6eef4cc1b9572a bf81b6eda41fdb70 bf71a92d10dadf5c bf787536e0f45335 bf975f8ec6dc3e2e bf94bb25b2db9255 bf79ab5d3566e7d5 bf7d6f935efc740c bf97263cf0e5d36e bf6e6bc4a7e7ffa7 bf97abfde834c64a 3ee9fc3626f0d794 bf9557770901455a bf8813848dceae0d bf340b4a31a14ef1 bf906c4f58ed6f48 bf8b6b9a9683a254 bf900ae51b040b03 bf94eeb1fca1087d 3f44b42af112a0f5 bf7f194bd86ea1ad bf80f323a2e789c1 bf771dc88e63b0cf bf8f744a58f64396 bf87a02f3f7ca63e bf78898bcf572224 bf81b1b15444bfe9 bf6803c526607359 bf7ccea63d9a21a0 bf92899cd71858e4 bf847d6df00098cf bf99d010fa0cf7d4 bf69030e449b58fa bf91fbc24089b5b8 bf8b8f780f55efc8 bf9068f40f9fadcd bf7e2b4de4e5a5a8 bf6fb179cb83809c bf8219b33ece2939 bf7b0c8f74f1f75a bf972fc9c390c88c bf95bed857c60179 bf9f4a2fe71a5a42 bf8a48784afc2da0 bf91ecc5f17dd0a8 bf8bc22b60c84312 bf9c0e45d5d05cc7 bf9a1b99ffd35dc2 bf8263ee3102ce23 bf9d47829b3be1ff be=3c8f59ad5b885432
+n=64 seed=12345 t=1 bf7bce6d11d960df bf96c395d40f0b10 bf69492b41bd532c bf72e96509dc0a15 bf9ac08e494cce99 3f604d13bbc734f6 bf257c7aa8d833fd bf9ac80d66592ed3 bf8e98407a3f96ac bf9b8b40fb85a3e8 bf673ffa9635dc56 bf99e1b194ce77a7 bf9a6af136f93210 bf9123368905fab2 bf6ade8057d33cbb bf811f735d65cdb4 bf38819461949a20 bf7ea797ce953c7f bf9c26ed7fa51793 bf90bda12224163a bf83415daaa21022 bf65e8b0cb17cd2d bf98f73283c9f1d6 3f62b423a7965264 bf98d3f9bd3f096c bf4b6e6a162137a4 bf962b6acdc70f2c bf90c525f67fa00e 3f651a7720c0cdb0 bf8677771a047f52 bf8e3790eed3819f bf8d6dc9a9c2fdfa bf968987568ea832 bf4d048102f05891 bf80141b7a68817e bf869f2b1991bb07 bf3e5471ea05b667 bf9014a1aef6a8ae bf896de8d6cbe695 bf6bcc3959a43f10 bf81a5be41768896 bf6b01e61aaf0c94 bf7b169cffaacd51 bf928ede4e12524b bf8a53fee871b0f2 bf9d5d8b8ed9ad21 bf80c525f3c86fcb bf8ef1b17dea383a bf9171fae9a583ed bf9024f45c75ffcd bf86a15f6c2c700f bf7403c10b743c7f bf835d02df76a5eb bf81723cfab3bf4d bf9ab452bfe3a901 bf94f8493c4730b2 bf9c4362907f5d0f bf8c3825dde4a845 bf90098999ab1538 bf85ee061f1a057f bf9be6c441582ffe bf9af6599cd8f244 bf7ae4e81d3e9ade bf9bbef38bf92af9 be=3c8e8987aabaa1be
+n=100 seed=1 t=0 bf8cb13462713e10 bf656222349179a4 bf7fcd688698ea17 bf65b383e86fad6b bf852661fbea22c2 bf58d50a76817ce0 bf60c11f22158697 bf744ee0b5741d83 bf9448567ea328e9 bf92d3bb08b4e4cc bf83543ae2ce7073 bf92898dda66dee7 bf0f9099049f1ccd bf9355be3eef08fa bf8213bb77393879 bf8100d914acddfa bf620c80641910df bf8a8ef6143ee22e bf68be0467f83d36 bf8f7489619667d3 bf488123eed24d35 bf794aca83cf7725 bf902416eb0d4ab7 bf9029d6ba83d0fe bf8294d5488f2a20 bf54e476998c85a3 bf88c98b880ef626 bf60dc864589a04c bf692cdf832fbd86 bf3170719c90a29f bf88111d0bab47be bf925723b4738869 bf6be65a6d0d764c bf83626b03577a87 bf8c9b7e42107575 bf558b64e99b3089 bf915716d32d8a42 bf933bfabd184db4 bf88c9425f783da2 bf713de400e008d8 bf7575b98fc0977f bf851a73076e7624 bf93f538fd7d384b bf7f91401cbc0138 bf7a47f7fdb24460 bf91c6b208c922c2 bf70c88eebecf864 bf50755447be78d1 bf902bf0be12dd5e bf886356404a2f70 bf91712ef4fae349 bf714f6a48da02db bf7cd53b102faa28 bf926cc27e65f287 bf7332c7e8c8f1d2 bf86bea7aab89c47 bf5a152e9219bc11 bf60a76de7f54d07 bf8628a785c8c262 bf71bc5cd895c6ea bf8d9e691f49624e bf822fc26e3a1122 bf7633eedf85534a bf8337d692274bfa bf8ee9e762c456bf bf6e5c3e67dd2f46 bf4bdfcd652649e0 bf90b536e50e5165 bf944f2db1a970b4 bf89b1a156183551 bf841404f24c127d bf819b57c4d0a2ea bf921f40f6bd09e6 bf82f83facb67f7d bf7c7202fbea069c bf883ca423481735 bf8478c31864efa2 bf92f0c8b44d34e1 bf80ccedba43630c bf65d0d983ee22ff bf1f16ff93dfc70b bf7f6fa4d9cf0b07 bf930c086af6999d bf73cd300442cf0a bf8dc3a6ebb91dad bf8ca50b05908d52 bf8c13a4a4a04ff8 bf83d5bc46f0a0bf bf93bd958e8355c8 bf870efd6c52ab2e bf4a37549be8a3c8 bf64560764f311e0 bf874f52b5d06805 bf927acf4ce3613d bf7c0c223715cf5c 3f507047ed30b82e bf6ce6d5c4eb5add bf92f2f642428dc9 bf91b3f87a7ce2f5 bf8872d1eed58f4f be=3c9110324936ecb9
+n=100 seed=1 t=1 bf8e275e0bb1d887 bf59fb017596224b bf7ee5bbdb84513f bf6fa5198d48b454 bf84171a5c927a10 bf3483a25d317bda bf43f96337def4a1 bf75fd80cb8ecd4a bf90b56f6143a9ce bf92781692421e71 bf802b1e43f6ed8f bf93a15119da4e42 3f2c7d3b83521f69 bf90067e382e55e4 bf8872bb92812f8f bf7ebb807979ba60 3f25dd60c15a97a2 bf83e315b79a9f02 bf64ba97291d7fc2 bf92718d9de7d6df bf5c231d9cedef94 bf7d51916dfc2bed bf90cce6ec8efac9 bf9492e311136a3d bf80f56f7bba11f3 bf571519532895f3 bf8aac3f07134859 bf49cb24d490b4cb bf62e319232e26a7 bf62e1e020a33376 bf885e6dc8744abd bf92e94ec0b517ad bf69fbd7e655d59e bf835ec61084dcde bf89bc7e74ffadf5 bf60cd2c1520bd51 bf905c71f7d33911 bf934f43f78fcb9d bf8704093b63f4a9 bf746d8ae12b5df1 bf77c8f50d6f47db bf848abc946cfa25 bf968206ad7b7f96 bf80045f5d613132 bf84414fe7bf54f9 bf9212b40b584419 bf67ed4a2b8b0019 bf5279e98552a1b1 bf90120637f812be bf8a2421a62f6f46 bf9235c46219d741 bf71dff4879d37cb bf72b57ef3c04c7b bf8eb3a21dcecb1c bf71bb51ecb05e39 bf82dedff9a344bf bf6af9ecfb632ba0 bf66de4d98794e32 bf8b0a0c8b0fe8ae bf6ae619db723408 bf8d1902e371b7ec bf85714573bb6d2f bf791fd915c76cf3 bf88f4d35ee8922c bf87521476dcf638 bf73655e24b2d74e 3f22ff85322be2e1 bf9060c3793df103 bf90d9be462ac727 bf83f1a310259429 bf808fee2e45b923 bf7b3a736f0ce8b3 bf9199b00bbe1ada bf88e3a87c261af6 bf7468d650b8e71b bf8bcf611d04af61 bf83bf8b6b6a303c bf9224df4d04f914 bf7939417922e414 bf5034e4a9b20c94 bf645713d7577ddf bf818874c3d6463a bf9250552c45d33b bf820adb45580182 bf8f46fcb10d3837 bf8df6a345f0f382 bf8ed9dbb78d0d11 bf83168df1c6dd64 bf93f42bdebfc949 bf88365b9f3464b7 bf524fcf2ba5fc3f 3f17ccf5af69fa1f bf849099b5b33e00 bf91a1b453cd5b9c bf788be7bc461416 bf40ac6168f71338 bf691f19f58d2707 bf9460cad86e48c6 bf9382f4389b89e7 bf8a788b07a37b86 be=3c8d2316816e51de
+n=100 seed=42 t=0 bf911d7ea84e27ed bf8ea880e491edc1 3f57c74000446caf bf8066b2abd30b1a bf81c4c4c291a19e bf89496942e3a87f bf85bfb891dfdec2 bf7e37ff3353b148 bf87c20380c406ed bf8c308b08b764a3 3f4727df7ff3323f bf93d611d2307bb0 bf46642e9d4928b5 bf92f6aced9b397c bf4eb3ca2266a6f1 3f500fe45fdcc2db bf7f229bf28b6a44 bf65ae94bbbbe1b8 bf924d8eef13bb20 bf806c54956447ba bf84c33ff2513bc8 bf91d40a36039678 bf8dbfce8ef4a651 bf89eb456dee6780 bf80bb52903a7a58 bf93489b7d73a72a bf885da93e575be6 bf8c269c3e9e6cce bf8cea6712d2b215 bf8af7493369ef42 bf5075451466b8c5 bf5240709cd2b235 bf7e432184fe81e3 bf877eb529e8b923 bf689b760f0d6de5 bf7edff5b8aefb28 bf776efb590209c4 bf58d44267f897c4 bf85ac61cf09ee3c bf8118c9077a36c9 bf63cf4ab0f52165 bf92080288fd34a5 bf8e4d89dcc7dd4d bf92e90cab8d19ca bf788b13b5c2bc91 bf81a29b9f8e25f1 bf79f7f7bf49f983 bf8346d192b8f7c0 bf8fdf8f25dda67d bf84bbfff984fee9 bf940aed32dc1f6a bf8061b5adff1d9f bf8b8daa2af7bbdf bf8008505bc7115c bf87c04cd76a7fb7 bf92d0eaa24b11c2 bf604ec856423f41 bf92b57de8c085a3 bf92dffeffb3fe1f bf7cd2c88502f031 bf9180c6a58da70b bf9117cd132bd5f9 bf90a0e227708bb5 bf7b384454ae0228 bf80f1c81e58f3da bf72c8818ac6d3c4 bf878cd2948b2edb bf84c5bc8a434aa7 bf7123389f904338 bf8ac31daa7c95a7 bf905e86db9d07a7 bf594cb3781e0672 bf843b0e72cbce56 bf866a825f8395b6 bf8e6cfa83235a32 bf93289abe00ab6f bf7da0fa2e591062 bf729e2ee577f456 bf4bdaaaf7b08b75 bf81d5dd81b8ef80 bf574c0b4830c364 bf8b63494f3065d8 bf648562327be663 bf86e374f2b395c6 bf7a7fd6de22adbb 3f226cd0d7cbdfed bf841e3476a5f889 bf6be81826ee33cc bf87859db7833ee7 bf8569a1f0535f93 bf7bcbf1a8730315 bf9087177c6a23dc bf89f5374ccf171a bf9382b13c327797 bf8a8183b0cbb025 bf8a7c70ccb2c0d0 bf8a90636fcb8d82 bf7e4802150a3bb7 bf916042a3b94be8 bf772b86e0673654 be=3c9096c9fbcb02ea
+n=100 seed=42 t=1 bf908dd2ad985785 bf91d650bd440d5d bf62edd22b37bfd8 bf812e1574692f8b bf800185dbc2fb82 bf8453e8022c06f6 bf83267cbba48972 bf75697fa6c7cb8e bf83cb4f9cf1c27d bf8945cc9d697360 bf6749f9b7a666de bf92ea1330719854 bf57169cb243cd11 bf928b7e6eb96ed1 3f317a9f12c892da bf51df986d789012 bf809ecae01ef770 bf755b12b1513e25 bf920f78174affa6 bf805fc53b5a073c bf8771352d35be93 bf8fc8472915076f bf8eef2c0dd33c56 bf8bcbb162eacfbd bf8226ee9f76b9e5 bf906ac3bb35b592 bf893fc860ff6fcb bf876fdd3eb30fea bf877ff692751e7f bf9130450bc2c52c bf43f242fb4cbd8f 3f3853e6f68a17ae bf73c7e146836674 bf8827a45dbed771 bf6b4a8b2eb3bb78 bf7c6bae9a14e8bb bf70bff42a5281ac bf4b5c8d77c84732 bf84527fb249141c bf84a9e8ef662654 bf6e511d087b22a6 bf92220b2fd3f63b bf8c38989a0ecbf3 bf949e421d277e9f bf7192adef8fc9b7 bf839438e2e3d013 bf7de51e3fe8daeb bf80723f15b83bb9 bf90f671979fe0d3 bf7e4f7aa4054269 bf95c5352e381050 bf831bc33bcb13c3 bf859dcf6b310a56 bf83d3590b12b233 bf907882ccaddc6b bf92bf3b288ea60b bf00d545aefcbc45 bf94d27823312299 bf931e744ca2a98d bf89281bc9f72e27 bf8e5c8bc1e9a914 bf8f89507762b1af bf91ce50b1f60002 bf80d91588cf512e bf82cfa7180f222c bf726f1f7873ca6f bf851afb764a69ae bf8cf8e2b1f15072 bf66d473b5c94eac bf82bdaf1b1e00ff bf8ec50f93906e24 3f490aab55531fa0 bf8a0e8b4dae37f9 bf7c04c21d17e0e7 bf90448295f24b90 bf91d1d2258ed53d bf7f04e885013124 bf6c70cc24592912 bf595a0665cb1227 bf812622859b9216 bf71f64042e5cda8 bf8e72a5bcdbb48b bf5c9f1274d004a2 bf8bc87c12ffa683 bf7bb73828d26dc4 bf43cca41218d8f6 bf88390d850025d7 bf777e1da0a9308e bf8779140de91096 bf89321848ab717c bf77387bd0e14d09 bf8bd0a522ea7728 bf8ce035ba95728f bf90f1cab8cf79fa bf8378efcfd12fe7 bf89d75b816c1263 bf8b7c3efdb8a333 bf7fd8309a86dfcf bf90bfeae0ffd116 bf81d812e1db6e88 be=3c8e17cc1084dc67
+n=100 seed=12345 t=0 bf85befd558e5a37 bf8dd24a91210e46 bf57e246b090dabf bf676df800b181e6 bf90292229f32854 3f338b59f78a6096 bf7297d21e3adfdf bf92432e976efc92 bf83cb12b182f379 bf91238edfb97f88 bf358d5e9a0a8e0a bf8babd0cf92b712 bf9119349b049e79 bf812110a1c49144 bf702acce6b11367 bf7b45d249ce2d8a bf518c32843309a9 bf759b97b24acf67 bf90619513db9124 bf8e50b63c3690d5 bf77b24791d937c8 bf19fb3a938df9b5 bf8f5eb3acd5a6f1 bf53c4d258618c61 bf9084eb74dd9b82 bf50a047f2abbda3 bf89f6663eb2ec9f bf87e06e08e5e4ec bf1efa8a630c9f1f bf7e5acaa0624e95 bf818f8087bb10ae bf84ae4f5bc60f45 bf89b3c72b256a4b bf5cf94e79e160ac bf5ffdc7623b50d8 bf7f5cda47b4f403 bf52a0f8a92c4ccb bf860b8bc1baabbb bf85dfc62cc993d0 bf6ba93dd0c1fcab bf6a8db213fcb333 bf26c5179c65d2d2 bf6853c20292d31e bf88304e45eb9334 bf81054aa2ad7cd3 bf933a971cf69f2d bf47b571975399e2 bf85f2619023b40d bf8727ded6d13c58 bf8757abec0ec6c7 bf7ad772e7818cf2 bf702cad787fa27b bf70d26c29ef6975 bf797c455a9bb604 bf8de1c3cc20dd3a bf8e8076dcf383af bf8dcadfafbf2ddd bf86ccebd649ff52 bf911ffe664b26d8 bf7902541dbe9367 bf8c18118e63524b bf931f63aca0e7f2 bf79c4e75658934b bf93cad79e8ae870 bf80be6e43680995 bf8f70abdf5a838a bf7b1d3f5df8001a bf86bf71efd5c33e bf7f18b222cdd1b9 bee7ee5852d78368 bf8b2fa0b53a36d6 bf9063ec1a0cb461 bf73d2ab447bbf16 bf8223d4f19d5568 bf9409804f8c7a4a bf946911d829bc61 bf798f677df2fcf5 bf9124fd125dbcaf bf73b038b35b08c7 bf8d09be8ab42e80 bf895bca9c39df06 bf91e113b97fb1e6 bf82fda31b6de859 bf836d3a7d66de74 bf7ee12f60de0103 bf79d23d89803760 bf907e05afc2f317 bf7ea3a63d530128 bf8de496606436b5 bf732ab4d367afaf bf81566079969aef bf86fcd9ca980b8f bf747950693630ed bf896d72ce5d10bc bf7f170726bbe52d bf92cbf96239d5f3 bf8114c0806c0c85 bf6d3a0f9c6d05e0 bf6e560134d999b8 bf8d1c9ea67a50db be=3c8b90d05c4e4cd2
+n=100 seed=12345 t=1 bf8007598d3b5864 bf8a3ef344ad3791 bf5b1ba1ed1af324 bf671a12cec3ca9d bf93170e950ab577 bf485c0f25f9ae38 3f272a53b8e02121 bf91e0b81b2ea031 bf810887ba0e8c4a bf91d67fb5672e8e bf6484c50bed5df1 bf91cee284b93f56 bf911376865b300c bf7bdda674fe6cea bf579fd449280edd bf8171c532138169 bf7494c310125695 bf7a87abb2001813 bf900d69f86538cb bf8afb554c95bc04 bf7bbda24ab0255b bf594dc427c4468c bf893d9db1f98239 bf643d96a4b452af bf92001eb1dbd899 bf104f9f0a7ddaa8 bf88a9da3d5fce3a bf83ea453d566b03 bf55bbddb64ae124 bf7732777d25a067 bf8147a083be33c9 bf832211d9d7a029 bf8e70398f58fb9f bf5de6b2b0e6a02c bf7a3e7cf1e430fd bf81c42ac1a463af bf5ce3e6e04c2cb8 bf848683a2aeeb6f bf7e7e6c30a6665e bf6d691b87e9d1d3 bf79c485cdcf1eeb bf64e31f2dc79b30 bf7191d8e3af890e bf8200c2dd15cdbe bf76d4dcfa88d96c bf940315891736d8 bf6ee95388511d15 bf8a20095415cf41 bf87d759dbce2b86 bf86b00176e07820 bf804192d95a5594 bf6b2125358211e2 bf716f883773a5c5 bf7224e19377ca79 bf8f5a87ed09af6b bf8759c774131828 bf8a5d00a3bae954 bf8300eb42b8d97d bf8a271ab58464e9 bf807131af5224a5 bf90b5fe9954fa6b bf91df182656ace3 bf7d1fb08bce89ef bf93673b607064c8 bf850f7bec642d70 bf8f28750cd91e4a bf7abd5f69d11e55 bf8a63fe1ce90961 bf7d466dd2a31e70 bf6395eab4b3d1e2 bf8cbe9b86ed6e61 bf8b085f46b02227 bf701a11a4cc2673 bf7c0eec571de2bf bf9631344563d621 bf957d2ce143311a bf83551590c47e94 bf8ee333847adfa9 bf7ae769d4dd0225 bf830c8be3b7cc9c bf8ae7cc75b783f8 bf90e2d7e1c10800 bf8230caed744fac bf76fc3afdd0eabb bf7cf3fab3563d88 bf8005b32154061c bf90c6035e7bb4e6 bf7d38f5aba42402 bf9152f952839ccb bf7c0e210b74e853 bf85ae6eed039f0a bf8abb7c8b9f8423 bf716c10b21d84a5 bf8a0b7a00d92a1f bf7ac46fea928030 bf92da22af9eb0d6 bf802f56abbc6f97 bf7316f8ef2dcbf2 bf703126d359227a bf8f621dec17dea6 be=3c9027e0f3f59eb7
+  [2m2026-06-03T13:45:25.989667Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mRemote command finished: exit=0 in 35090ms[0m
+    [2;3mat[0m rch/src/hook.rs:6364 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:45:25.989982Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mRetrieving build artifacts...[0m
+    [2;3mat[0m rch/src/hook.rs:6413 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:45:25.990013Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mRetrieving artifacts from /data/projects/frankenscipy on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:2072 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:45:27.925182Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mArtifacts retrieved in 1935ms (1 files, 2752 bytes)[0m
+    [2;3mat[0m rch/src/transfer.rs:2111 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:45:27.925208Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mArtifacts retrieved: 1 files, 2752 bytes in 1935ms[0m
+    [2;3mat[0m rch/src/hook.rs:6446 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:45:27.925315Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mRetrieving artifacts from /data/projects/frankenscipy/.rch-target-vmi1149989-job-29869223945706071-1780494227573215800-0 on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:2072 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:45:33.889444Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mArtifacts retrieved in 5964ms (542 files, 600388 bytes)[0m
+    [2;3mat[0m rch/src/transfer.rs:2111 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-03T13:45:33.889467Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mCustom CARGO_TARGET_DIR artifacts retrieved: 542 files, 600388 bytes in 5964ms[0m
+    [2;3mat[0m rch/src/hook.rs:6570 [2;3mon[0m ThreadId(1)
+
+[RCH] remote vmi1149989 (108.7s)

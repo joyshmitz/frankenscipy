@@ -1,0 +1,155 @@
+  [2m2026-06-03T13:39:03.058022Z[0m [33m WARN[0m [1;33mrch::hook[0m[33m: [33mexec called with non-compilation command: bash -lc 'cargo test -p fsci-linalg --release --locked solve_matches_scipy_reference_values -- --nocapture && cargo test -p fsci-linalg --release --locked lu_solve_matches_scipy_reference_values -- --nocapture'[0m
+    [2;3mat[0m rch/src/hook.rs:402 [2;3mon[0m ThreadId(1)
+
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.45
+   Compiling unicode-ident v1.0.24
+   Compiling cfg-if v1.0.4
+   Compiling autocfg v1.5.0
+   Compiling find-msvc-tools v0.1.9
+   Compiling shlex v1.3.0
+   Compiling zerocopy v0.8.48
+   Compiling zmij v1.0.21
+   Compiling equivalent v1.0.2
+   Compiling hashbrown v0.17.0
+   Compiling libc v0.2.185
+   Compiling serde_json v1.0.149
+   Compiling memchr v2.8.0
+   Compiling itoa v1.0.18
+   Compiling paste v1.0.15
+   Compiling bytemuck v1.25.0
+   Compiling arrayref v0.3.9
+   Compiling cpufeatures v0.3.0
+   Compiling arrayvec v0.7.6
+   Compiling constant_time_eq v0.4.2
+   Compiling rawpointer v0.2.1
+   Compiling typenum v1.20.0
+   Compiling rayon v1.12.0
+   Compiling cc v1.2.60
+   Compiling safe_arch v0.7.4
+   Compiling num-traits v0.2.19
+   Compiling matrixmultiply v0.3.10
+   Compiling wide v0.7.33
+   Compiling indexmap v2.14.0
+   Compiling syn v2.0.117
+   Compiling getrandom v0.3.4
+   Compiling getrandom v0.4.2
+   Compiling wait-timeout v0.2.1
+   Compiling page_size v0.6.0
+   Compiling blake3 v1.8.4
+   Compiling alloca v0.4.0
+   Compiling tempfile v3.27.0
+   Compiling rand_core v0.9.5
+   Compiling approx v0.5.1
+   Compiling num-integer v0.1.46
+   Compiling num-complex v0.4.6
+   Compiling plotters v0.3.7
+   Compiling rand_xorshift v0.4.0
+   Compiling rand v0.9.4
+   Compiling rusty-fork v0.3.1
+   Compiling num-rational v0.4.2
+   Compiling simba v0.9.1
+   Compiling serde_derive v1.0.228
+   Compiling zerocopy-derive v0.8.48
+   Compiling nalgebra-macros v0.3.0
+   Compiling serde v1.0.228
+   Compiling fsci-runtime v0.1.0 (/data/projects/frankenscipy/crates/fsci-runtime)
+   Compiling tinytemplate v1.2.1
+   Compiling nalgebra v0.34.2
+   Compiling fsci-fft v0.1.0 (/data/projects/frankenscipy/crates/fsci-fft)
+   Compiling half v2.7.1
+   Compiling ppv-lite86 v0.2.21
+   Compiling ciborium-ll v0.2.2
+   Compiling rand_chacha v0.9.0
+   Compiling ciborium v0.2.2
+   Compiling proptest v1.11.0
+   Compiling criterion v0.8.2
+   Compiling fsci-linalg v0.1.0 (/data/projects/frankenscipy/crates/fsci-linalg)
+    Finished `release` profile [optimized] target(s) in 15.25s
+     Running unittests src/lib.rs (/data/tmp/cargo-target/release/deps/fsci_linalg-c77e6f7433863ced)
+
+running 3 tests
+test proptest_tests::cho_solve_matches_scipy_reference_values ... ok
+test proptest_tests::lu_solve_matches_scipy_reference_values ... ok
+test proptest_tests::solve_matches_scipy_reference_values ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 344 filtered out; finished in 0.00s
+
+     Running unittests src/bin/perf_solve.rs (/data/tmp/cargo-target/release/deps/perf_solve-7cc4c00076885377)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/differential_linalg.rs (/data/tmp/cargo-target/release/deps/differential_linalg-736ffcb3070acbd8)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 34 filtered out; finished in 0.00s
+
+     Running tests/metamorphic_tests.rs (/data/tmp/cargo-target/release/deps/metamorphic_tests-cea4b76fc180ab58)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 59 filtered out; finished in 0.00s
+
+     Running tests/repro_tri_be.rs (/data/tmp/cargo-target/release/deps/repro_tri_be-afca536b6527b460)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+     Running tests/test_nan_eig.rs (/data/tmp/cargo-target/release/deps/test_nan_eig-e3961c31a5986d2f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/test_nan_svd.rs (/data/tmp/cargo-target/release/deps/test_nan_svd-3a9f0695978c5485)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+    Finished `release` profile [optimized] target(s) in 0.10s
+     Running unittests src/lib.rs (/data/tmp/cargo-target/release/deps/fsci_linalg-c77e6f7433863ced)
+
+running 1 test
+test proptest_tests::lu_solve_matches_scipy_reference_values ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 346 filtered out; finished in 0.00s
+
+     Running unittests src/bin/perf_solve.rs (/data/tmp/cargo-target/release/deps/perf_solve-7cc4c00076885377)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/differential_linalg.rs (/data/tmp/cargo-target/release/deps/differential_linalg-736ffcb3070acbd8)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 34 filtered out; finished in 0.00s
+
+     Running tests/metamorphic_tests.rs (/data/tmp/cargo-target/release/deps/metamorphic_tests-cea4b76fc180ab58)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 59 filtered out; finished in 0.00s
+
+     Running tests/repro_tri_be.rs (/data/tmp/cargo-target/release/deps/repro_tri_be-afca536b6527b460)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/test_nan_eig.rs (/data/tmp/cargo-target/release/deps/test_nan_eig-e3961c31a5986d2f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/test_nan_svd.rs (/data/tmp/cargo-target/release/deps/test_nan_svd-3a9f0695978c5485)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
