@@ -1894,12 +1894,30 @@ fn hyp2f1_complex_parameters(
         return hyp2f1_series_complex(a, b, c, z, mode);
     }
 
+    // Pfaff transformation 2F1(a,b;c;z) = (1-z)^{-a} 2F1(a, c-b; c; z/(z-1)).
+    // The mapped argument w = z/(z-1) satisfies |w| < 1 exactly when Re(z) < 1/2,
+    // so this extends the convergent complex series across the entire left
+    // half-plane Re(z) < 1/2 (including |z| >= 1). (1-z)^{-a} uses the principal
+    // branch, matching the standard analytic continuation. Re(z) >= 1/2 outside
+    // the unit disk still needs the z -> 1/z connection formula — that remains a
+    // documented gap (frankenscipy-f69ch).
+    if z.re < 0.5 {
+        let one = Complex64::from_real(1.0);
+        let factor = (one - z).powc(-a);
+        let w = z / (z - one);
+        let inner = hyp2f1_series_complex(a, c - b, c, w, mode)?;
+        let value = factor * inner;
+        if value.is_finite() {
+            return Ok(value);
+        }
+    }
+
     if mode == RuntimeMode::Hardened {
         return Err(SpecialError {
             function: "hyp2f1",
             kind: SpecialErrorKind::DomainError,
             mode,
-            detail: "complex-valued hyp2f1 currently requires |z| < 1 for stable evaluation",
+            detail: "complex-valued hyp2f1 outside |z| < 1 currently requires Re(z) < 1/2",
         });
     }
 
@@ -3114,5 +3132,53 @@ mod tests {
             (result1 - 1.5906).abs() < 1e-3,
             "hyp0f1(2, 1) got {result1}, expected ~1.5906"
         );
+    }
+
+    // Complex 2F1 analytic continuation to |z| >= 1 for Re(z) < 1/2 via the
+    // Pfaff transform — frankenscipy-f69ch (the Re(z) >= 1/2 half is a separate
+    // gap). scipy has no complex hyp2f1 ufunc; golden values are mpmath 1.4.1
+    // (mp.dps=25), which is the standard high-precision reference.
+    #[test]
+    #[allow(clippy::excessive_precision)] // golden constants verbatim from mpmath
+    fn hyp2f1_complex_pfaff_continuation_matches_mpmath() {
+        // (a, b, c, (z_re, z_im), (val_re, val_im))
+        let cases: [(f64, f64, f64, (f64, f64), (f64, f64)); 6] = [
+            (0.5, 0.5, 1.5, (-1.0, 1.0), (0.862231298085739, 0.08130072049794629)),
+            (0.5, 1.0, 2.0, (-2.0, 0.5), (0.7284461294343433, 0.038269144396779094)),
+            (0.3, 0.7, 1.2, (-1.0, -1.0), (0.8593620385670224, -0.07934104644643247)),
+            (1.0, 0.5, 1.5, (0.2, 1.5), (0.7910171811374038, 0.3217213255606514)),
+            (0.5, 0.5, 2.0, (-3.0, 2.0), (0.7860012327422344, 0.0725236459589195)),
+            (1.5, 0.5, 2.5, (-0.5, 3.0), (0.6267035512763195, 0.280313155049662)),
+        ];
+        for (a, b, c, (zr, zi), (vr, vi)) in cases {
+            let result = hyp2f1(
+                &complex(a, 0.0),
+                &complex(b, 0.0),
+                &complex(c, 0.0),
+                &complex(zr, zi),
+                RuntimeMode::Strict,
+            );
+            let got = get_complex_scalar(&result)
+                .unwrap_or_else(|| Complex64::new(f64::NAN, f64::NAN));
+            let expected = Complex64::new(vr, vi);
+            let err = (got - expected).abs();
+            let scale = expected.abs().max(1.0);
+            assert!(
+                err <= 1e-12 * scale,
+                "hyp2f1({a},{b};{c};{zr}+{zi}i) = {got:?}, mpmath = {expected:?}, err={err:e}"
+            );
+        }
+
+        // Re(z) >= 1/2 outside the unit disk still fails closed (NaN) — the
+        // documented frankenscipy-f69ch gap; assert no spurious value.
+        let beyond = hyp2f1(
+            &complex(0.5, 0.0),
+            &complex(0.5, 0.0),
+            &complex(1.5, 0.0),
+            &complex(2.0, 1.0),
+            RuntimeMode::Strict,
+        );
+        let v = get_complex_scalar(&beyond).unwrap_or_else(|| Complex64::new(f64::NAN, f64::NAN));
+        assert!(!v.is_finite(), "expected NaN for Re(z)>=1/2 outside disk, got {v:?}");
     }
 }
