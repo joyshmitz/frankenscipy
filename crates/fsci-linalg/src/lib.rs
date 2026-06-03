@@ -7623,7 +7623,7 @@ pub fn matmul(a: &[Vec<f64>], b: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, LinalgErr
     // fast-math), so each c[i][j] has the same FP bit pattern. Ragged edges
     // (mr<MR or nr<NR) fall back to the same monotonic-k scalar reduction.
     const MR: usize = 4;
-    const NR: usize = 4;
+    const NR: usize = 8;
     let mut i0 = 0;
     while i0 < m {
         let mr = (m - i0).min(MR);
@@ -7642,22 +7642,42 @@ pub fn matmul(a: &[Vec<f64>], b: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, LinalgErr
                     let b1 = bk[j0 + 1];
                     let b2 = bk[j0 + 2];
                     let b3 = bk[j0 + 3];
+                    let b4 = bk[j0 + 4];
+                    let b5 = bk[j0 + 5];
+                    let b6 = bk[j0 + 6];
+                    let b7 = bk[j0 + 7];
                     acc[0][0] += a0 * b0;
                     acc[0][1] += a0 * b1;
                     acc[0][2] += a0 * b2;
                     acc[0][3] += a0 * b3;
+                    acc[0][4] += a0 * b4;
+                    acc[0][5] += a0 * b5;
+                    acc[0][6] += a0 * b6;
+                    acc[0][7] += a0 * b7;
                     acc[1][0] += a1 * b0;
                     acc[1][1] += a1 * b1;
                     acc[1][2] += a1 * b2;
                     acc[1][3] += a1 * b3;
+                    acc[1][4] += a1 * b4;
+                    acc[1][5] += a1 * b5;
+                    acc[1][6] += a1 * b6;
+                    acc[1][7] += a1 * b7;
                     acc[2][0] += a2 * b0;
                     acc[2][1] += a2 * b1;
                     acc[2][2] += a2 * b2;
                     acc[2][3] += a2 * b3;
+                    acc[2][4] += a2 * b4;
+                    acc[2][5] += a2 * b5;
+                    acc[2][6] += a2 * b6;
+                    acc[2][7] += a2 * b7;
                     acc[3][0] += a3 * b0;
                     acc[3][1] += a3 * b1;
                     acc[3][2] += a3 * b2;
                     acc[3][3] += a3 * b3;
+                    acc[3][4] += a3 * b4;
+                    acc[3][5] += a3 * b5;
+                    acc[3][6] += a3 * b6;
+                    acc[3][7] += a3 * b7;
                 }
                 for di in 0..MR {
                     let ci = &mut c[i0 + di];
@@ -7665,6 +7685,10 @@ pub fn matmul(a: &[Vec<f64>], b: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, LinalgErr
                     ci[j0 + 1] = acc[di][1];
                     ci[j0 + 2] = acc[di][2];
                     ci[j0 + 3] = acc[di][3];
+                    ci[j0 + 4] = acc[di][4];
+                    ci[j0 + 5] = acc[di][5];
+                    ci[j0 + 6] = acc[di][6];
+                    ci[j0 + 7] = acc[di][7];
                 }
             } else {
                 for di in 0..mr {

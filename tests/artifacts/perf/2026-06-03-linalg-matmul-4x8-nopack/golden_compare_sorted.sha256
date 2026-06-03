@@ -1,0 +1,2 @@
+96f3c62cd9ae70c54af3deac9a4cb0a52725ae5969bcef5831b9d1c62d361803  tests/artifacts/perf/2026-06-03-linalg-matmul-4x8-nopack/golden_before_normalized.sorted.txt
+96f3c62cd9ae70c54af3deac9a4cb0a52725ae5969bcef5831b9d1c62d361803  tests/artifacts/perf/2026-06-03-linalg-matmul-4x8-nopack/golden_after_normalized.sorted.txt
