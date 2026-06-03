@@ -82,16 +82,9 @@ pub fn kmeans(
     for iter in 0..max_iter {
         // Assignment step
         let mut new_inertia = 0.0;
+        let centroids_flat = flatten_centroids(&centroids, d);
         for (i, point) in data.iter().enumerate() {
-            let mut min_dist = f64::INFINITY;
-            let mut best_c = 0;
-            for (c, centroid) in centroids.iter().enumerate() {
-                let dist = sq_dist(point, centroid);
-                if dist < min_dist {
-                    min_dist = dist;
-                    best_c = c;
-                }
-            }
+            let (best_c, min_dist) = nearest_centroid(point, &centroids_flat, k, d);
             labels[i] = best_c;
             new_inertia += min_dist;
         }
@@ -158,7 +151,7 @@ fn kmeans_plusplus_init(data: &[Vec<f64>], k: usize, seed: u64) -> Vec<Vec<f64>>
         let mut dists = vec![f64::INFINITY; n];
         for (i, point) in data.iter().enumerate() {
             for c in &centroids {
-                let d = sq_dist(point, c);
+                let d = sq_dist_within(point, c, dists[i]);
                 dists[i] = dists[i].min(d);
             }
         }
@@ -232,18 +225,10 @@ pub fn mini_batch_kmeans(
         }
 
         // Assignment
+        let centroids_flat = flatten_centroids(&centroids, d);
         let mut batch_labels = Vec::with_capacity(batch);
         for &idx in &batch_indices {
-            let point = &data[idx];
-            let mut min_dist = f64::INFINITY;
-            let mut best_c = 0;
-            for (c, centroid) in centroids.iter().enumerate() {
-                let dist = sq_dist(point, centroid);
-                if dist < min_dist {
-                    min_dist = dist;
-                    best_c = c;
-                }
-            }
+            let (best_c, _) = nearest_centroid(&data[idx], &centroids_flat, k, d);
             batch_labels.push(best_c);
         }
 
@@ -261,16 +246,9 @@ pub fn mini_batch_kmeans(
     // Final assignment
     let mut labels = vec![0usize; n];
     let mut inertia = 0.0;
+    let centroids_flat = flatten_centroids(&centroids, d);
     for (i, point) in data.iter().enumerate() {
-        let mut min_dist = f64::INFINITY;
-        let mut best_c = 0;
-        for (c, centroid) in centroids.iter().enumerate() {
-            let dist = sq_dist(point, centroid);
-            if dist < min_dist {
-                min_dist = dist;
-                best_c = c;
-            }
-        }
+        let (best_c, min_dist) = nearest_centroid(point, &centroids_flat, k, d);
         labels[i] = best_c;
         inertia += min_dist;
     }
@@ -324,16 +302,10 @@ pub fn vq(
     // so we only sqrt the winning min_sq once per data point instead
     // of once per (point, centroid) pair. Monotone-equivalent for
     // nearest-neighbor selection.
+    let k = centroids.len();
+    let centroids_flat = flatten_centroids(centroids, d);
     for point in data {
-        let mut min_sq = f64::INFINITY;
-        let mut best_c = 0;
-        for (c, centroid) in centroids.iter().enumerate() {
-            let sd = sq_dist(point, centroid);
-            if sd < min_sq {
-                min_sq = sd;
-                best_c = c;
-            }
-        }
+        let (best_c, min_sq) = nearest_centroid(point, &centroids_flat, k, d);
         labels.push(best_c);
         dists.push(min_sq.sqrt());
     }
@@ -1214,6 +1186,100 @@ fn sq_dist(a: &[f64], b: &[f64]) -> f64 {
         .zip(b.iter())
         .map(|(&ai, &bi)| (ai - bi) * (ai - bi))
         .sum()
+}
+
+/// Leading dimensions probed to seed a tight incumbent bound before the full
+/// nearest-centroid scan. A handful of coordinates is enough to identify a
+/// likely-nearest centroid in well-separated data, after which partial-distance
+/// abandonment rejects the rest cheaply. Purely a performance knob — it never
+/// changes which centroid is ultimately selected.
+const PREFILTER_DIMS: usize = 8;
+
+/// Squared Euclidean distance with partial-distance early abandonment.
+///
+/// Accumulates `Σ (aᵢ − bᵢ)²` in ascending index order and bails out the moment
+/// the running sum *exceeds* `bound`, returning that partial sum (`> bound`).
+/// Every term is a square and therefore non-negative, so the running sum is
+/// monotone: once it passes `bound` the full distance can only be larger. A pair
+/// whose full distance equals `bound` is summed to completion and returned
+/// exactly, so callers can break ties deterministically. The winning centroid is
+/// never abandoned (its partial sums stay `≤` the incumbent), so the stored
+/// minimum is always a fully-summed distance — labels and inertia are
+/// bit-identical to the unbounded path. See
+/// `tests/artifacts/perf/2026-06-03-cluster-vq-assign/` for the sha256 proof.
+#[inline]
+fn sq_dist_within(a: &[f64], b: &[f64], bound: f64) -> f64 {
+    let mut acc = 0.0;
+    for (&ai, &bi) in a.iter().zip(b.iter()) {
+        let diff = ai - bi;
+        acc += diff * diff;
+        if acc > bound {
+            return acc;
+        }
+    }
+    acc
+}
+
+/// Pack a ragged centroid list into one contiguous `k × d` row-major buffer.
+///
+/// The assignment loops compare every observation against every centroid, so the
+/// centroid set is re-walked `n` times. As `Vec<Vec<f64>>` the `k` rows are
+/// scattered across the heap and each comparison pays a pointer load plus a cache
+/// miss; flattening them once per assignment pass (`O(k·d)`, amortized over `n`
+/// observations) lets the inner scan stream sequentially and prefetch cleanly.
+fn flatten_centroids(centroids: &[Vec<f64>], d: usize) -> Vec<f64> {
+    let mut flat = Vec::with_capacity(centroids.len() * d);
+    for centroid in centroids {
+        flat.extend_from_slice(&centroid[..d]);
+    }
+    flat
+}
+
+/// Exact nearest-centroid search over a contiguous `k × d` centroid buffer:
+/// returns `(index, squared_distance)` where `index` is the *lowest* index
+/// attaining the minimum squared distance.
+///
+/// Identical in result to a plain `argmin` over [`sq_dist`] — same minimum value
+/// (a full sequential sum) and same lowest-index tie-breaking — but cheap on two
+/// axes the naive scan is not:
+///
+/// 1. Centroids live in one contiguous buffer (see [`flatten_centroids`]), so the
+///    `c = 0..k` scan streams sequentially instead of chasing `k` heap pointers.
+/// 2. A [`PREFILTER_DIMS`]-coordinate probe picks a likely-nearest centroid whose
+///    *full* distance seeds a tight incumbent bound, so partial-distance
+///    abandonment (strict-`>`, via [`sq_dist_within`]) rejects most centroids
+///    after a few dimensions from the very first comparison. Ties are summed in
+///    full and broken by lowest index (`sd == min_sq && c < best_c`), so the
+///    result is independent of the seed and bit-identical to the naive argmin.
+#[inline]
+fn nearest_centroid(point: &[f64], centroids_flat: &[f64], k: usize, d: usize) -> (usize, f64) {
+    let probe = d.min(PREFILTER_DIMS);
+    let mut seed = 0usize;
+    let mut seed_partial = f64::INFINITY;
+    for c in 0..k {
+        let row = &centroids_flat[c * d..c * d + probe];
+        let mut acc = 0.0;
+        for (&pj, &cj) in point[..probe].iter().zip(row.iter()) {
+            let diff = pj - cj;
+            acc += diff * diff;
+        }
+        if acc < seed_partial {
+            seed_partial = acc;
+            seed = c;
+        }
+    }
+
+    let mut best_c = seed;
+    let mut min_sq = sq_dist(point, &centroids_flat[seed * d..seed * d + d]);
+    for c in 0..k {
+        let row = &centroids_flat[c * d..c * d + d];
+        let sd = sq_dist_within(point, row, min_sq);
+        if sd < min_sq || (sd == min_sq && c < best_c) {
+            min_sq = sd;
+            best_c = c;
+        }
+    }
+    (best_c, min_sq)
 }
 
 fn dense_labels(labels: &[usize]) -> (Vec<usize>, usize) {
