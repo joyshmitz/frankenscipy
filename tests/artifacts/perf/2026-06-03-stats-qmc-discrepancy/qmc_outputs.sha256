@@ -1,4 +1,4 @@
-88407f5600aea450f2dd28b52fdc8eb8d6e540b7c3641260647ac7536dfb875a  tests/artifacts/perf/2026-06-03-stats-qmc-discrepancy/CONCLUSION.md
+f9ba43c615c6de864175bb7778e7b1f043cd1f5fb5050b90666d80e75fbe3a0d  tests/artifacts/perf/2026-06-03-stats-qmc-discrepancy/CONCLUSION.md
 36d8f511c764370debfaf9c9e7d5d768b6c84196b64ec13aaecbb7a0a4717985  tests/artifacts/perf/2026-06-03-stats-qmc-discrepancy/after_qmc_discrepancy_rch.txt
 42dee4c4aae3e71d6e0ac9f137bc937e2774b7a8dce2d3b1c13e38e7fa47347a  tests/artifacts/perf/2026-06-03-stats-qmc-discrepancy/after_qmc_discrepancy_summary.txt
 097d37d38b60b671e9ec435e6ef7c39e8e16a963782c76ef496c10bcf74394c6  tests/artifacts/perf/2026-06-03-stats-qmc-discrepancy/baseline_qmc_discrepancy_rch.txt
@@ -17,7 +17,7 @@ fd049b414b77f1cf442616e3be451d59e966e50f3e20c976b095364523452a00  tests/artifact
 2b3250a62e0aa66978715b2ee0dc3254b0fb804724edfa1ce2d0ce58a0e7c1fc  tests/artifacts/perf/2026-06-03-stats-qmc-discrepancy/golden_before_stdout_rch_raw.txt
 3be28c2284750c5881bd281836114314ef78b2bebdc5d85fa09b26bbbac500b2  tests/artifacts/perf/2026-06-03-stats-qmc-discrepancy/golden_cmp.txt
 0bb5107fc60f30d28fbd21748839ff38c997d68902b4d9112b777796193ebcb5  tests/artifacts/perf/2026-06-03-stats-qmc-discrepancy/golden_qmc.sha256
-218b31282e899ce6482140b3d98befd65c9d6a6b1f256ffc1d530814c81cee3b  tests/artifacts/perf/2026-06-03-stats-qmc-discrepancy/reprofile_after_qmc_broad_rch.txt
+ff37a74bc05ecd3b49365a0dea90bff61b66310c7583dafd41412da96cdab2f7  tests/artifacts/perf/2026-06-03-stats-qmc-discrepancy/reprofile_after_qmc_broad_rch.txt
 8da94b50ffa34b38f113d992c33bbbac6f39cc983727529b810c594c87793dfa  tests/artifacts/perf/2026-06-03-stats-qmc-discrepancy/test_qmc_rch.txt
 acb57074e2426e7ca72baee14c0192a96722bbc14617cd2d9fedd8e59f6f9e10  tests/artifacts/perf/2026-06-03-stats-qmc-discrepancy/ubs_qmc.txt
 f9a0130d5ae9ca515958933ec8cffc70952efec39c542ef66592106086b2b0d4  tests/artifacts/perf/2026-06-03-stats-qmc-discrepancy/ubs_stats_qmc_changed.txt
