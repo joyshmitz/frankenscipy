@@ -1,0 +1,24 @@
+  [2m2026-06-03T21:38:19.266121Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mExecuting command remotely: cargo test -p fsci-linalg --release --locked lstsq -- --nocapture[0m
+running 6 tests
+test proptest_tests::lstsq_matches_scipy_reference_values ... ok
+test tests::lstsq_exact_system ... ok
+test tests::lstsq_overdetermined_system ... ok
+test tests::lstsq_underdetermined_system ... ok
+test tests::lstsq_rank_deficient ... ok
+test proptest_tests::lstsq_residual_minimality ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 344 filtered out; finished in <time>
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in <time>
+running 3 tests
+test meta_lstsq_recovery ... ok
+test diff_lstsq_overdetermined ... ok
+test diff_lstsq_exact ... ok
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 31 filtered out; finished in <time>
+test mr_lstsq_satisfies_normal_equations ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 58 filtered out; finished in <time>
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in <time>
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in <time>
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in <time>

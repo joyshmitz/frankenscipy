@@ -1,0 +1,23 @@
+running 0 tests
+running 0 tests
+running 0 tests
+running 0 tests
+running 3 tests
+running 6 tests
+test diff_lstsq_exact ... ok
+test diff_lstsq_overdetermined ... ok
+test meta_lstsq_recovery ... ok
+test mr_lstsq_satisfies_normal_equations ... ok
+test proptest_tests::lstsq_matches_scipy_reference_values ... ok
+test proptest_tests::lstsq_residual_minimality ... ok
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in <time>
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in <time>
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in <time>
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in <time>
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 58 filtered out; finished in <time>
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 31 filtered out; finished in <time>
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 344 filtered out; finished in <time>
+test tests::lstsq_exact_system ... ok
+test tests::lstsq_overdetermined_system ... ok
+test tests::lstsq_rank_deficient ... ok
+test tests::lstsq_underdetermined_system ... ok

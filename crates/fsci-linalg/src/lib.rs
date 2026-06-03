@@ -2292,8 +2292,12 @@ pub fn lstsq_with_casp(
             } else {
                 safe_svd(matrix.clone(), true, true)?
             };
-            let pinv = pseudo_inverse_from_svd(&svd, threshold)?;
-            let x_svd = pinv * rhs.clone();
+            let x_svd = if rows == cols {
+                let pinv = pseudo_inverse_from_svd(&svd, threshold)?;
+                pinv * rhs.clone()
+            } else {
+                least_squares_solution_from_svd(&svd, threshold, &rhs)?
+            };
             let rank = svd
                 .singular_values
                 .iter()
@@ -5615,6 +5619,44 @@ fn pseudo_inverse_from_svd(
         }
     }
     Ok(v_t.transpose() * sigma_pinv * u.transpose())
+}
+
+fn least_squares_solution_from_svd(
+    svd: &SVD<f64, Dyn, Dyn>,
+    threshold: f64,
+    rhs: &DVector<f64>,
+) -> Result<DVector<f64>, LinalgError> {
+    let u = svd.u.as_ref().ok_or(LinalgError::UnsupportedAssumption)?;
+    let v_t = svd.v_t.as_ref().ok_or(LinalgError::UnsupportedAssumption)?;
+    let p = svd.singular_values.len();
+    if u.ncols() != p || v_t.nrows() != p || rhs.len() != u.nrows() {
+        return Err(LinalgError::UnsupportedAssumption);
+    }
+
+    let mut sigma_u_rhs = DVector::zeros(p);
+    for (i, s) in svd.singular_values.iter().enumerate() {
+        let mut projected = 0.0;
+        for row in 0..u.nrows() {
+            projected += u[(row, i)] * rhs[row];
+        }
+        sigma_u_rhs[i] = if s.is_nan() {
+            projected * f64::NAN
+        } else if *s > threshold {
+            projected / *s
+        } else {
+            0.0
+        };
+    }
+
+    let mut x = DVector::zeros(v_t.ncols());
+    for col in 0..v_t.ncols() {
+        let mut value = 0.0;
+        for i in 0..p {
+            value += v_t[(i, col)] * sigma_u_rhs[i];
+        }
+        x[col] = value;
+    }
+    Ok(x)
 }
 
 // ══════════════════════════════════════════════════════════════════════
