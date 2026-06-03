@@ -87,4 +87,3 @@ Production `crates/fsci-stats/src/lib.rs` is restored to HEAD.
 - RCH `cargo check -p fsci-stats --all-targets`: exit 0.
 - RCH `cargo clippy -p fsci-stats --all-targets -- -D warnings`: exit 0.
 - RCH `cargo test -p fsci-stats psd_welch -- --nocapture`: exit 0.
-- `ubs crates/fsci-stats/src/lib.rs`: exit 0.
