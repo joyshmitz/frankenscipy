@@ -867,6 +867,51 @@ fn bessel_derivative_real_scalar(
     kind: BesselKind,
     rule: DerivativeRule,
 ) -> Result<f64, SpecialError> {
+    // Exponentially-scaled kinds differentiate the product `B_v(x)·e^{σx}` via the Leibniz
+    // rule, reusing the unscaled per-order recurrence and the closed-form derivatives of the
+    // scaling factor:
+    //
+    //   d^n/dx^n [B_v(x)·e^{σx}] = e^{σx} · Σ_{j=0}^n C(n,j) · σ^{n-j} · B_v^{(j)}(x)
+    //
+    // Each `B_v^{(j)}` reuses `bessel_derivative_sum`, so it is bit-identical to the unscaled
+    // derivative path (`jvp`/`yvp`/`ivp`/`kvp`); the scaling is layered on top in closed form.
+    // Genuinely-unsupported domains stay fail-closed because the base kernel (e.g. `K_v` for
+    // `x ≤ 0`) propagates its own error.
+    if let Some((base_kind, base_rule, sigma)) = scaled_real_derivative_params(kind, x) {
+        let mut binom = 1.0;
+        let mut sum = 0.0;
+        for j in 0..=derivative_order {
+            let unscaled = bessel_derivative_sum(
+                function,
+                order,
+                x,
+                j,
+                mode,
+                base_rule,
+                |shifted_order, value| match base_kind {
+                    BesselKind::Jv => Ok(jv_scalar(shifted_order, value)),
+                    BesselKind::Yv => yv_scalar(shifted_order, value, mode),
+                    BesselKind::Iv => Ok(iv_scalar(shifted_order, value)),
+                    BesselKind::Kv => kv_scalar(shifted_order, value, mode),
+                    // Unreachable: `scaled_real_derivative_params` only yields unscaled kinds.
+                    BesselKind::Jve | BesselKind::Yve | BesselKind::Ive | BesselKind::Kve => {
+                        Err(SpecialError {
+                            function,
+                            kind: SpecialErrorKind::NotYetImplemented,
+                            mode,
+                            detail: "scaled base kind has no unscaled recurrence",
+                        })
+                    }
+                },
+            )?;
+            sum += binom * sigma.powi((derivative_order - j) as i32) * unscaled;
+            if j < derivative_order {
+                binom *= (derivative_order - j) as f64 / (j + 1) as f64;
+            }
+        }
+        return Ok((sigma * x).exp() * sum);
+    }
+
     bessel_derivative_sum(
         function,
         order,
@@ -880,6 +925,7 @@ fn bessel_derivative_real_scalar(
             BesselKind::Iv => Ok(iv_scalar(shifted_order, value)),
             BesselKind::Kv => kv_scalar(shifted_order, value, mode),
             BesselKind::Jve | BesselKind::Yve | BesselKind::Ive | BesselKind::Kve => {
+                // Intercepted above; kept as a defensive fail-closed arm.
                 Err(SpecialError {
                     function,
                     kind: SpecialErrorKind::NotYetImplemented,
@@ -889,6 +935,29 @@ fn bessel_derivative_real_scalar(
             }
         },
     )
+}
+
+/// For an exponentially-scaled real Bessel kind, return the unscaled base kind, its
+/// derivative recurrence rule, and the scale exponent `σ` such that the scaling factor
+/// on the real axis is `e^{σ·x}`. Returns `None` for unscaled kinds.
+///
+/// On the real axis `J_v`/`Y_v` are scaled by `e^{-|Im z|} = 1`, so their scaled
+/// derivative coincides with the unscaled one (`σ = 0`). `ive(v, x) = I_v(x)·e^{-|x|}`
+/// gives `σ = -sign(x)`, and `kve(v, x) = K_v(x)·e^{x}` (defined for `x > 0`) gives `σ = +1`.
+fn scaled_real_derivative_params(
+    kind: BesselKind,
+    x: f64,
+) -> Option<(BesselKind, DerivativeRule, f64)> {
+    match kind {
+        BesselKind::Jve => Some((BesselKind::Jv, DerivativeRule::Alternating, 0.0)),
+        BesselKind::Yve => Some((BesselKind::Yv, DerivativeRule::Alternating, 0.0)),
+        BesselKind::Ive => {
+            let sigma = if x < 0.0 { 1.0 } else { -1.0 };
+            Some((BesselKind::Iv, DerivativeRule::Positive, sigma))
+        }
+        BesselKind::Kve => Some((BesselKind::Kv, DerivativeRule::NegativeByOrder, 1.0)),
+        BesselKind::Jv | BesselKind::Yv | BesselKind::Iv | BesselKind::Kv => None,
+    }
 }
 
 fn bessel_derivative_complex_scalar(
@@ -3402,7 +3471,7 @@ fn hankel_complex_scalar(
     })
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum BesselKind {
     Jv,
     Yv,
@@ -5701,6 +5770,99 @@ mod tests {
         assert!(
             (kve_val - kv_val * x.exp()).abs() < 1e-10,
             "kve definition mismatch"
+        );
+    }
+
+    #[test]
+    fn scaled_bessel_derivatives_match_scipy_reference_values() {
+        // Reference: d^n/dx^n of the exponentially-scaled Bessel functions, built in
+        // SciPy 1.17.1 from the Leibniz rule over scipy.special.{ivp,kvp,jvp,yvp}:
+        //   d^n/dx^n[B_v(x)·e^{σx}] = e^{σx}·Σ_j C(n,j)·σ^{n-j}·B_v^{(j)}(x)
+        // (Jve/Yve use σ=0 on the real axis, so they coincide with jvp/yvp.)
+        use super::{BesselKind, DerivativeRule};
+        let cases = [
+            (BesselKind::Ive, 2.0, 3.0, 0, 0.111_782_545_296_958_19),
+            (BesselKind::Ive, 2.0, 3.0, 1, 0.010_522_471_135_703_922),
+            (BesselKind::Ive, 2.0, 3.0, 2, -0.012_132_149_839_202_676),
+            (BesselKind::Ive, 2.0, 3.0, 3, 0.009_946_205_192_563_019),
+            (BesselKind::Kve, 2.0, 3.0, 0, 1.235_470_584_796_376_5),
+            (BesselKind::Kve, 2.0, 3.0, 1, -0.394_739_951_863_328_16),
+            (BesselKind::Kve, 2.0, 3.0, 2, 0.303_021_646_180_523_35),
+            (BesselKind::Kve, 2.0, 3.0, 3, -0.349_183_748_124_313),
+            (BesselKind::Kve, 1.5, 0.75, 1, -4.824_008_363_721_784),
+            (BesselKind::Kve, 1.5, 0.75, 2, 14.793_625_648_746_8),
+            (BesselKind::Kve, 1.5, 0.75, 3, -66.464_115_233_500_12),
+            (BesselKind::Jve, 2.0, 3.0, 1, 0.014_998_118_135_342_325),
+            (BesselKind::Jve, 2.0, 3.0, 2, -0.275_050_073_037_275_9),
+            (BesselKind::Jve, 2.0, 3.0, 3, -0.059_009_512_776_879_72),
+            (BesselKind::Yve, 2.0, 3.0, 1, 0.431_608_020_448_415_95),
+            (BesselKind::Yve, 2.0, 3.0, 2, -0.054_758_010_435_625_39),
+            (BesselKind::Yve, 2.0, 3.0, 3, -0.126_047_074_206_702_77),
+        ];
+        for (kind, v, x, n, expected) in cases {
+            let val = super::bessel_derivative_real_scalar(
+                "scaled_deriv",
+                v,
+                x,
+                n,
+                RuntimeMode::Strict,
+                kind,
+                DerivativeRule::Positive,
+            )
+            .expect("scaled Bessel derivative should evaluate");
+            assert!(
+                (val - expected).abs() <= 1e-9 * (1.0 + expected.abs()),
+                "{kind:?} deriv n={n} at v={v}, x={x}: got {val}, expected {expected}"
+            );
+        }
+
+        // Jve/Yve on the real axis must equal the unscaled jvp/yvp derivative exactly.
+        for (scaled, base) in [
+            (BesselKind::Jve, BesselKind::Jv),
+            (BesselKind::Yve, BesselKind::Yv),
+        ] {
+            for n in 0..=3 {
+                let s = super::bessel_derivative_real_scalar(
+                    "scaled",
+                    2.0,
+                    3.0,
+                    n,
+                    RuntimeMode::Strict,
+                    scaled,
+                    DerivativeRule::Alternating,
+                )
+                .unwrap();
+                let u = super::bessel_derivative_real_scalar(
+                    "unscaled",
+                    2.0,
+                    3.0,
+                    n,
+                    RuntimeMode::Strict,
+                    base,
+                    DerivativeRule::Alternating,
+                )
+                .unwrap();
+                assert_eq!(
+                    s.to_bits(),
+                    u.to_bits(),
+                    "{scaled:?} must be bit-identical to {base:?} on the real axis (n={n})"
+                );
+            }
+        }
+
+        // Genuinely-unsupported domains stay fail-closed in Hardened mode (K_v requires x > 0).
+        assert!(
+            super::bessel_derivative_real_scalar(
+                "kve",
+                2.0,
+                -1.0,
+                1,
+                RuntimeMode::Hardened,
+                BesselKind::Kve,
+                DerivativeRule::NegativeByOrder,
+            )
+            .is_err(),
+            "kve derivative at x<0 must remain fail-closed"
         );
     }
 
