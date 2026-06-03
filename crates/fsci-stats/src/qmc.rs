@@ -96,6 +96,10 @@ impl HaltonSampler {
     /// row-major order: `out[i * d + j]` is the j-th coordinate of the i-th
     /// sample.
     pub fn sample(&mut self, n: usize) -> Vec<f64> {
+        if self.primes.as_slice() == [2, 3, 5, 7] {
+            return self.sample_4d(n);
+        }
+
         let d = self.primes.len();
         let mut out = Vec::with_capacity(n.saturating_mul(d));
         for _ in 0..n {
@@ -103,6 +107,19 @@ impl HaltonSampler {
             for &prime in &self.primes {
                 out.push(radical_inverse(idx, prime));
             }
+            self.next_index = self.next_index.saturating_add(1);
+        }
+        out
+    }
+
+    fn sample_4d(&mut self, n: usize) -> Vec<f64> {
+        let mut out = Vec::with_capacity(n.saturating_mul(4));
+        for _ in 0..n {
+            let idx = self.next_index;
+            out.push(radical_inverse_const::<2>(idx));
+            out.push(radical_inverse_const::<3>(idx));
+            out.push(radical_inverse_const::<5>(idx));
+            out.push(radical_inverse_const::<7>(idx));
             self.next_index = self.next_index.saturating_add(1);
         }
         out
@@ -142,6 +159,20 @@ fn radical_inverse(mut index: u64, prime: u64) -> f64 {
         let digit = index % prime;
         result += digit as f64 * f;
         index /= prime;
+        f *= inv_prime;
+    }
+    result
+}
+
+#[inline]
+fn radical_inverse_const<const PRIME: u64>(mut index: u64) -> f64 {
+    let inv_prime = 1.0_f64 / PRIME as f64;
+    let mut f = inv_prime;
+    let mut result = 0.0_f64;
+    while index > 0 {
+        let digit = index % PRIME;
+        result += digit as f64 * f;
+        index /= PRIME;
         f *= inv_prime;
     }
     result
@@ -1256,6 +1287,47 @@ mod tests {
         assert_eq!(h.next_index(), 0);
         let _ = h.sample(3);
         assert_eq!(h.next_index(), 3);
+    }
+
+    #[test]
+    fn halton_4d_specialization_matches_generic_reference_bits() {
+        fn reference(start: u64, n: usize) -> (Vec<f64>, u64) {
+            let mut out = Vec::with_capacity(n * 4);
+            let mut idx = start;
+            for _ in 0..n {
+                out.push(radical_inverse(idx, 2));
+                out.push(radical_inverse(idx, 3));
+                out.push(radical_inverse(idx, 5));
+                out.push(radical_inverse(idx, 7));
+                idx = idx.saturating_add(1);
+            }
+            (out, idx)
+        }
+
+        for start in [0, 1, 4_095, 4_096, 1_000_003, u64::MAX - 2] {
+            let mut h = HaltonSampler::new(4).unwrap();
+            h.next_index = start;
+            let got = h.sample(5);
+            let got_next = h.next_index();
+            let (expected, expected_next) = reference(start, 5);
+
+            assert_eq!(
+                got_next, expected_next,
+                "next_index mismatch at start={start}"
+            );
+            assert_eq!(
+                got.len(),
+                expected.len(),
+                "length mismatch at start={start}"
+            );
+            for (i, (actual, expected)) in got.iter().zip(expected.iter()).enumerate() {
+                assert_eq!(
+                    actual.to_bits(),
+                    expected.to_bits(),
+                    "4D Halton specialization changed bits at start={start}, value={i}"
+                );
+            }
+        }
     }
 
     #[test]

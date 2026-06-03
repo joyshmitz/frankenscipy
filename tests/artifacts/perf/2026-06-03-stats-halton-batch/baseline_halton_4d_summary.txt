@@ -1,0 +1,5 @@
+command=rch exec -- cargo bench -p fsci-stats --bench stats_bench --locked -- qmc_sampling/halton_4d/4096 --warm-up-time 1 --measurement-time 2 --sample-size 10 --noplot
+worker=vmi1227854
+baseline_qmc_sampling_halton_4d_4096=[238.55 us, 243.66 us, 248.22 us]
+median=243.66 us
+exit=0

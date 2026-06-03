@@ -4,6 +4,7 @@
 //!   `perf_stats golden [path]`
 //!   `perf_stats psd <repeats>`
 //!   `perf_stats qmc-golden [path]`
+//!   `perf_stats halton4-golden [path]`
 
 use std::fmt::Write as _;
 use std::hint::black_box;
@@ -57,6 +58,19 @@ fn qmc_golden_text() -> String {
     output
 }
 
+fn halton4_golden_text() -> String {
+    let mut sampler = HaltonSampler::new(4).expect("valid Halton dimension");
+    let sample = sampler.sample(4096);
+    let mut output = String::new();
+    writeln!(output, "case=halton_4d_4096 len={}", sample.len()).expect("write halton header");
+    output.push_str("sample=");
+    for value in &sample {
+        write!(output, "{:016x},", value.to_bits()).expect("write halton bits");
+    }
+    output.push('\n');
+    output
+}
+
 fn write_or_print(output: String, path: Option<&str>) {
     if let Some(path) = path {
         let path = Path::new(path);
@@ -95,6 +109,7 @@ fn main() {
     match mode {
         "golden" => write_or_print(golden_text(), args.get(2).map(String::as_str)),
         "qmc-golden" => write_or_print(qmc_golden_text(), args.get(2).map(String::as_str)),
+        "halton4-golden" => write_or_print(halton4_golden_text(), args.get(2).map(String::as_str)),
         "psd" => {
             let repeats = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(10);
             timed_psd(repeats);

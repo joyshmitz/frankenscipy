@@ -1,0 +1,29 @@
+  [2m2026-06-03T05:40:44.737570Z[0m [33m WARN[0m [1;33mrch::hook[0m[33m: [33mexec called with non-compilation command: sh -lc 'cargo run -p fsci-stats --bin perf_stats -- halton4-golden | sha256sum'[0m
+    [2;3mat[0m rch/src/hook.rs:402 [2;3mon[0m ThreadId(1)
+
+   Compiling num-traits v0.2.19
+   Compiling shlex v1.3.0
+   Compiling find-msvc-tools v0.1.9
+   Compiling serde_core v1.0.228
+   Compiling serde v1.0.228
+   Compiling zmij v1.0.21
+   Compiling matrixmultiply v0.3.10
+   Compiling nalgebra-macros v0.3.0
+   Compiling cc v1.2.60
+   Compiling approx v0.5.1
+   Compiling num-integer v0.1.46
+   Compiling num-complex v0.4.6
+   Compiling blake3 v1.8.4
+   Compiling num-rational v0.4.2
+   Compiling simba v0.9.1
+   Compiling serde_json v1.0.149
+   Compiling fsci-runtime v0.1.0 (/data/projects/frankenscipy/crates/fsci-runtime)
+   Compiling fsci-fft v0.1.0 (/data/projects/frankenscipy/crates/fsci-fft)
+   Compiling fsci-opt v0.1.0 (/data/projects/frankenscipy/crates/fsci-opt)
+   Compiling nalgebra v0.34.2
+   Compiling fsci-linalg v0.1.0 (/data/projects/frankenscipy/crates/fsci-linalg)
+   Compiling fsci-special v0.1.0 (/data/projects/frankenscipy/crates/fsci-special)
+   Compiling fsci-stats v0.1.0 (/data/projects/frankenscipy/crates/fsci-stats)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 8.49s
+     Running `/data/tmp/cargo-target/debug/perf_stats halton4-golden`
+b8483708b0ed4f5becc8f7a11560adb063b7926c98fabf54fe8c95bfff4f2a44  -
