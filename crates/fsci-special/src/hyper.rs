@@ -1912,16 +1912,64 @@ fn hyp2f1_complex_parameters(
         }
     }
 
+    // z -> 1/z connection (DLMF 15.8.2) reaches the right half-plane Re(z) >= 1/2
+    // outside the disk. It needs a - b non-integer (else Γ(b-a)/Γ(a-b) hit poles
+    // and a logarithmic limit form is required), and the principal (-z)^{-a} is
+    // the correct analytic branch only off the real axis — on real z > 1 the
+    // real-scalar path already applies. Closes the bulk of frankenscipy-f69ch.
+    let ab = a - b;
+    let ab_is_integer = ab.im.abs() < 1.0e-12 && (ab.re - ab.re.round()).abs() < 1.0e-12;
+    if z.im != 0.0 && !ab_is_integer {
+        let value = hyp2f1_inv_z_connection(a, b, c, z, mode)?;
+        if value.is_finite() {
+            return Ok(value);
+        }
+    }
+
     if mode == RuntimeMode::Hardened {
         return Err(SpecialError {
             function: "hyp2f1",
             kind: SpecialErrorKind::DomainError,
             mode,
-            detail: "complex-valued hyp2f1 outside |z| < 1 currently requires Re(z) < 1/2",
+            detail: "complex-valued hyp2f1 outside |z| < 1 with Re(z) >= 1/2 \
+                     currently requires a - b non-integer",
         });
     }
 
     Ok(complex_nan())
+}
+
+/// Linear z -> 1/z connection for 2F1 outside the unit disk (DLMF 15.8.2),
+/// valid for a - b not an integer:
+///   2F1(a,b;c;z) = w1 (-z)^{-a} 2F1(a, a-c+1; a-b+1; 1/z)
+///                + w2 (-z)^{-b} 2F1(b, b-c+1; b-a+1; 1/z),
+/// with w1 = Γ(c)Γ(b-a)/(Γ(b)Γ(c-a)), w2 = Γ(c)Γ(a-b)/(Γ(a)Γ(c-b)).
+fn hyp2f1_inv_z_connection(
+    a: Complex64,
+    b: Complex64,
+    c: Complex64,
+    z: Complex64,
+    mode: RuntimeMode,
+) -> Result<Complex64, SpecialError> {
+    use crate::gamma::complex_gammaln;
+
+    let one = Complex64::from_real(1.0);
+    let neg_z = -z;
+    let inv_z = z.recip();
+
+    let w1 = (complex_gammaln(c) + complex_gammaln(b - a)
+        - complex_gammaln(b)
+        - complex_gammaln(c - a))
+    .exp();
+    let w2 = (complex_gammaln(c) + complex_gammaln(a - b)
+        - complex_gammaln(a)
+        - complex_gammaln(c - b))
+    .exp();
+
+    let term1 = w1 * neg_z.powc(-a) * hyp2f1_series_complex(a, a - c + one, a - b + one, inv_z, mode)?;
+    let term2 = w2 * neg_z.powc(-b) * hyp2f1_series_complex(b, b - c + one, b - a + one, inv_z, mode)?;
+
+    Ok(term1 + term2)
 }
 
 fn hyp2f1_series_complex(
@@ -3179,6 +3227,41 @@ mod tests {
             RuntimeMode::Strict,
         );
         let v = get_complex_scalar(&beyond).unwrap_or_else(|| Complex64::new(f64::NAN, f64::NAN));
-        assert!(!v.is_finite(), "expected NaN for Re(z)>=1/2 outside disk, got {v:?}");
+        // a == b (a-b = 0, integer) is the degenerate log-form case — still NaN.
+        assert!(!v.is_finite(), "expected NaN for degenerate a==b, Re(z)>=1/2, got {v:?}");
+    }
+
+    // Complex 2F1 in the right half-plane Re(z) >= 1/2, |z| >= 1, via the
+    // z -> 1/z connection formula (a-b non-integer) — frankenscipy-f69ch.
+    // Golden values from mpmath 1.4.1 (mp.dps=25); scipy has no complex hyp2f1.
+    #[test]
+    #[allow(clippy::excessive_precision)] // golden constants verbatim from mpmath
+    fn hyp2f1_complex_inv_z_continuation_matches_mpmath() {
+        let cases: [(f64, f64, f64, (f64, f64), (f64, f64)); 6] = [
+            (0.5, 0.3, 1.2, (2.0, 1.0), (0.9903704668763302, 0.32750091263584863)),
+            (1.0, 0.4, 1.5, (2.5, 2.0), (0.6561515879441171, 0.5286478314518919)),
+            (0.7, 0.2, 1.1, (5.0, -3.0), (0.7697473975684688, -0.32616546130854634)),
+            (0.5, 0.25, 1.0, (1.5, 0.5), (1.0741936293080392, 0.30149211979729423)),
+            (0.9, 0.3, 2.0, (2.0, 0.1), (1.147235558288442, 0.489377889798951)),
+            (0.4, 0.7, 1.3, (4.0, -1.0), (0.6477257675533721, -0.6024687066512131)),
+        ];
+        for (a, b, c, (zr, zi), (vr, vi)) in cases {
+            let result = hyp2f1(
+                &complex(a, 0.0),
+                &complex(b, 0.0),
+                &complex(c, 0.0),
+                &complex(zr, zi),
+                RuntimeMode::Strict,
+            );
+            let got = get_complex_scalar(&result)
+                .unwrap_or_else(|| Complex64::new(f64::NAN, f64::NAN));
+            let expected = Complex64::new(vr, vi);
+            let err = (got - expected).abs();
+            let scale = expected.abs().max(1.0);
+            assert!(
+                err <= 1e-11 * scale,
+                "hyp2f1({a},{b};{c};{zr}+{zi}i) = {got:?}, mpmath = {expected:?}, err={err:e}"
+            );
+        }
     }
 }
