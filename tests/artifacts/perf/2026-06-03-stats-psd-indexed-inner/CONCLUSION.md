@@ -59,6 +59,25 @@ Median comparison: `549.72 us -> 662.35 us`, a regression.
 
 Score: `0.0` because performance impact was negative.
 
+## Post-Restoration Reprofile
+
+After restoring production source, a crate-scoped RCH full stats reprofile was
+captured in:
+
+`tests/artifacts/perf/2026-06-03-stats-psd-indexed-inner/reprofile_stats_after_psd_indexed_inner_rch.txt`
+
+Visible rows:
+
+- `qmc_discrepancy/centered/512x2`: `[579.12 us, 662.75 us, 755.55 us]`
+- `qmc_discrepancy/mixture/512x2`: `[813.37 us, 972.55 us, 1.1774 ms]`
+- `qmc_discrepancy/l2_star/512x2`: `[709.98 us, 875.78 us, 1.0701 ms]`
+- `qmc_discrepancy/wraparound/512x2`: `[749.98 us, 989.83 us, 1.2644 ms]`
+- `time_series/psd_welch/4096_w128_o64`: `[657.60 us, 740.93 us, 852.79 us]`
+
+Next profile-backed target: QMC 2D discrepancy remains the hottest visible
+stats family, with `wraparound` and `mixture` at the top of this post-restore
+profile.
+
 ## Restoration And Validation
 
 Production `crates/fsci-stats/src/lib.rs` is restored to HEAD.
@@ -68,3 +87,4 @@ Production `crates/fsci-stats/src/lib.rs` is restored to HEAD.
 - RCH `cargo check -p fsci-stats --all-targets`: exit 0.
 - RCH `cargo clippy -p fsci-stats --all-targets -- -D warnings`: exit 0.
 - RCH `cargo test -p fsci-stats psd_welch -- --nocapture`: exit 0.
+- `ubs crates/fsci-stats/src/lib.rs`: exit 0.
