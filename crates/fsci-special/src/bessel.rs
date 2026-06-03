@@ -1330,9 +1330,15 @@ fn iv_scalar(v: f64, z: f64) -> f64 {
     if v < 0.0 && v.fract() == 0.0 {
         return iv_scalar(v.abs(), z);
     }
-    // I_{-v}(z) = I_v(z) + (2/pi) * sin(v*pi) * K_v(z)
-    // But for real-only iv_scalar, we usually follow scipy.special.iv behavior.
-    // scipy.special.iv(-v, z) for non-integer v and z > 0 returns same as formula.
+    // Negative non-integer order: the power-series term Γ(v+k+1) passes through
+    // ln(v+k+1) for v+k+1 <= 0 (any v <= -1), producing NaN. SciPy instead uses
+    // the reflection identity I_{-p}(z) = I_p(z) + (2/π) sin(pπ) K_p(z) with p=|v|.
+    // K_v is symmetric (K_p = K_{|v|}); for z < 0 the result is complex, matching
+    // the NaN returned by the power-series branch below.
+    if v < 0.0 && v.fract() != 0.0 && z > 0.0 {
+        let p = -v;
+        return iv_scalar(p, z) + (2.0 / PI) * (p * PI).sin() * kv_integral(p, z);
+    }
 
     if az > 50.0 {
         return iv_asymptotic(v, az);
@@ -5785,6 +5791,13 @@ mod tests {
             (BesselKind::Ive, 2.0, 3.0, 1, 0.010_522_471_135_703_922),
             (BesselKind::Ive, 2.0, 3.0, 2, -0.012_132_149_839_202_676),
             (BesselKind::Ive, 2.0, 3.0, 3, 0.009_946_205_192_563_019),
+            // Half-integer order: the n>=2 derivative recurrence shifts the order to
+            // v-2 = -1.5 (< -1), which previously returned NaN via the I_v power series
+            // (frankenscipy-bt1kb). Now resolved through the I_{-p} reflection identity.
+            (BesselKind::Ive, 0.5, 1.5, 0, 0.309_517_616_825_399_3),
+            (BesselKind::Ive, 0.5, 1.5, 1, -0.070_737_756_722_038_79),
+            (BesselKind::Ive, 0.5, 1.5, 2, 0.016_679_786_355_770_481),
+            (BesselKind::Ive, 0.5, 1.5, 3, 0.055_089_243_968_660_56),
             (BesselKind::Kve, 2.0, 3.0, 0, 1.235_470_584_796_376_5),
             (BesselKind::Kve, 2.0, 3.0, 1, -0.394_739_951_863_328_16),
             (BesselKind::Kve, 2.0, 3.0, 2, 0.303_021_646_180_523_35),
@@ -5864,6 +5877,32 @@ mod tests {
             .is_err(),
             "kve derivative at x<0 must remain fail-closed"
         );
+    }
+
+    #[test]
+    fn iv_negative_noninteger_order_matches_scipy_via_reflection() {
+        // scipy.special.iv(v, z) for negative non-integer v <= -1, where the I_v power
+        // series would pass ln(v+k+1) through a non-positive argument and yield NaN.
+        // Reflection identity: I_{-p}(z) = I_p(z) + (2/π) sin(pπ) K_p(z), p = |v|.
+        let cases = [
+            (-0.5, 0.75, 1.192_814_667_397_816_8),
+            (-0.5, 1.5, 1.532_524_329_376_575_3),
+            (-0.5, 3.0, 4.637_757_757_861_504),
+            (-1.5, 0.75, -0.832_804_570_140_508_8),
+            (-1.5, 1.5, 0.365_478_834_152_426_9),
+            (-1.5, 3.0, 3.068_903_650_787_099_9),
+            (-2.5, 0.75, 4.524_032_947_959_852),
+            (-2.5, 1.5, 0.801_566_661_071_721_9),
+            (-2.5, 3.0, 1.568_854_107_074_402_9),
+        ];
+        for (v, z, expected) in cases {
+            let val = super::iv_scalar(v, z);
+            assert!(val.is_finite(), "iv({v}, {z}) must be finite, got {val}");
+            assert!(
+                (val - expected).abs() <= 1e-12 * (1.0 + expected.abs()),
+                "iv({v}, {z}) = {val}, expected {expected}"
+            );
+        }
     }
 
     #[test]
