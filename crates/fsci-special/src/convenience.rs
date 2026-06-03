@@ -1249,21 +1249,34 @@ fn modstruve_series(v: f64, x: f64) -> f64 {
 
 /// Struve asymptotic expansion for large x.
 fn struve_asymptotic(v: f64, x: f64) -> f64 {
-    // H_v(x) ≈ Y_v(x) + (1/π) Σ Γ(k+1/2) / (Γ(v+1/2-k) (x/2)^{2k-v+1})
-    // For large x, approximate using the leading asymptotic behavior
-    // H_0(x) ≈ Y_0(x) + 2/(πx) for large x
-    let pix = std::f64::consts::PI * x;
-
-    // Simple asymptotic: good for v=0
-    if (v - 0.0).abs() < 0.5 {
-        // H_0(x) ≈ Y_0(x) + 2/(πx)
-        // Y_0(x) ≈ sqrt(2/(πx)) sin(x - π/4)
-        let y0_approx = (2.0 / pix).sqrt() * (x - std::f64::consts::FRAC_PI_4).sin();
-        return y0_approx + 2.0 / pix;
+    // DLMF 11.6.1: H_v(x) = Y_v(x) + (1/π) Σ_{k≥0} Γ(k+1/2)/Γ(v+1/2-k) (x/2)^{v-2k-1}.
+    // Y_v from the Bessel routine (accurate large-x asymptotic); the correction
+    // series is asymptotic (divergent) — sum to its smallest term. The previous
+    // code kept only the leading term for v≈0 (≈0.17% error) and fell back to the
+    // power series for v≠0, which catastrophically cancels at large x (struve(1,50)
+    // was -3531 vs 0.58; struve(1,200) was -5.7e83 vs 0.65). frankenscipy-3z6wd.
+    let yv = crate::bessel::yv_scalar(v, x, RuntimeMode::Strict).unwrap_or(f64::NAN);
+    let half_x = 0.5 * x;
+    // k = 0 term: Γ(1/2)/Γ(v+1/2) (x/2)^{v-1}.
+    let mut term = gamma_fn(0.5) / gamma_fn(v + 0.5) * half_x.powf(v - 1.0);
+    let mut sum = term;
+    let mut prev_abs = term.abs();
+    let two_over_x_sq = (2.0 / x) * (2.0 / x);
+    for k in 0..200 {
+        let kf = k as f64;
+        // term_{k+1} = term_k (k+1/2)(v-1/2-k)(2/x)².
+        term *= (kf + 0.5) * (v - 0.5 - kf) * two_over_x_sq;
+        let abs_term = term.abs();
+        if abs_term > prev_abs {
+            break; // past the smallest term of the asymptotic series
+        }
+        sum += term;
+        prev_abs = abs_term;
+        if abs_term <= 1.0e-18 * sum.abs() {
+            break;
+        }
     }
-
-    // Fall back to series for other orders
-    struve_series(v, x)
+    yv + sum / PI
 }
 
 /// Simple gamma function for use in Struve computation.
@@ -5735,6 +5748,32 @@ pub fn binary_cross_entropy_scalar(p: f64, q: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy/mpmath
+    fn struve_large_x_matches_scipy() {
+        // frankenscipy-3z6wd: large-x H_v via DLMF 11.6.1 (Y_v + correction
+        // series). v≠0 was catastrophically wrong (struve(1,200) gave -5.7e83
+        // vs 0.65); v=0 was 0.17% off. scipy.special.struve 1.17.1.
+        let cases = [
+            (0.0, 35.0, 0.06397238222066917),
+            (0.0, 50.0, -0.08533767482611902),
+            (0.0, 200.0, -0.05108275594755782),
+            (1.0, 35.0, 0.7646509379741863),
+            (1.0, 50.0, 0.5800784479454417),
+            (1.0, 200.0, 0.6519375112490656),
+            (2.0, 100.0, 21.30386405267446),
+            (0.5, 80.0, 0.0990534330000826),
+            (3.0, 150.0, 955.1431304112394),
+        ];
+        for (v, x, expected) in cases {
+            let got = struve(v, x);
+            let rel = ((got - expected) / expected).abs();
+            // ~1e-10 floor at moderate x is inherited from the Y_v asymptotic;
+            // still a vast improvement over the prior catastrophic blow-up.
+            assert!(rel < 1e-9, "struve({v},{x}) = {got:e}, scipy {expected:e}, rel={rel:e}");
+        }
+    }
 
     #[test]
     fn pentagamma_matches_scipy_polygamma_three() {

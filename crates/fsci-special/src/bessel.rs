@@ -1311,7 +1311,7 @@ fn jv_asymptotic(v: f64, z: f64) -> f64 {
 }
 
 /// Y_v(z) for real order v.
-fn yv_scalar(v: f64, z: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
+pub(crate) fn yv_scalar(v: f64, z: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
     if v.is_nan() || z.is_nan() {
         return Ok(f64::NAN);
     }
