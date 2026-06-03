@@ -21,7 +21,10 @@ pub use qmc::{
     mixture_discrepancy, scale as qmc_scale, update_centered_discrepancy, wraparound_discrepancy,
 };
 
-use std::f64::consts::{FRAC_1_SQRT_2, LN_2, PI};
+use std::{
+    f64::consts::{FRAC_1_SQRT_2, LN_2, PI},
+    sync::OnceLock,
+};
 
 use fsci_runtime::RuntimeMode;
 use rand::{Rng, RngExt, SeedableRng, rngs::StdRng, seq::SliceRandom};
@@ -34355,6 +34358,45 @@ pub fn cumfreq(data: &[f64], bins: usize) -> (Vec<f64>, Vec<f64>) {
     (cum, edges)
 }
 
+const WELCH_CACHED_WINDOW_SIZE: usize = 128;
+
+struct WelchPlan {
+    win: Vec<f64>,
+    twiddles: Vec<(f64, f64)>,
+}
+
+impl WelchPlan {
+    fn new(window_size: usize) -> Self {
+        let win: Vec<f64> = (0..window_size)
+            .map(|i| {
+                if window_size == 1 {
+                    1.0
+                } else {
+                    0.5 * (1.0 - (2.0 * PI * i as f64 / (window_size - 1) as f64).cos())
+                }
+            })
+            .collect();
+
+        let n_freq = window_size / 2 + 1;
+        let two_pi = 2.0 * PI;
+        let twiddles: Vec<(f64, f64)> = (0..n_freq)
+            .flat_map(|k| {
+                (0..window_size).map(move |n| {
+                    let angle = two_pi * k as f64 * n as f64 / window_size as f64;
+                    (angle.cos(), angle.sin())
+                })
+            })
+            .collect();
+
+        Self { win, twiddles }
+    }
+}
+
+fn cached_welch_plan_128() -> &'static WelchPlan {
+    static PLAN: OnceLock<WelchPlan> = OnceLock::new();
+    PLAN.get_or_init(|| WelchPlan::new(WELCH_CACHED_WINDOW_SIZE))
+}
+
 /// Compute the power spectral density using Welch's method.
 ///
 /// Simple wrapper around periodogram concepts.
@@ -34368,27 +34410,14 @@ pub fn psd_welch(data: &[f64], window_size: usize, overlap: usize, fs: f64) -> V
     let n_freq = window_size / 2 + 1;
     let mut psd = vec![0.0; n_freq];
     let mut n_segments = 0;
-
-    let win: Vec<f64> = (0..window_size)
-        .map(|i| {
-            if window_size == 1 {
-                1.0
-            } else {
-                0.5 * (1.0
-                    - (2.0 * std::f64::consts::PI * i as f64 / (window_size - 1) as f64).cos())
-            }
-        })
-        .collect();
-
-    let two_pi = 2.0 * std::f64::consts::PI;
-    let twiddles: Vec<(f64, f64)> = (0..n_freq)
-        .flat_map(|k| {
-            (0..window_size).map(move |n| {
-                let angle = two_pi * k as f64 * n as f64 / window_size as f64;
-                (angle.cos(), angle.sin())
-            })
-        })
-        .collect();
+    let owned_plan: WelchPlan;
+    let (win, twiddles): (&[f64], &[(f64, f64)]) = if window_size == WELCH_CACHED_WINDOW_SIZE {
+        let plan = cached_welch_plan_128();
+        (plan.win.as_slice(), plan.twiddles.as_slice())
+    } else {
+        owned_plan = WelchPlan::new(window_size);
+        (owned_plan.win.as_slice(), owned_plan.twiddles.as_slice())
+    };
 
     let mut start = 0;
     while start + window_size <= data.len() {

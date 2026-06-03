@@ -1,0 +1,6 @@
+368:Benchmarking time_series/psd_welch/4096_w128_o64
+369:Benchmarking time_series/psd_welch/4096_w128_o64: Warming up for 1.0000 s
+370:Benchmarking time_series/psd_welch/4096_w128_o64: Collecting 10 samples in estimated 2.0169 s (2255 iterations)
+371:Benchmarking time_series/psd_welch/4096_w128_o64: Analyzing
+372:time_series/psd_welch/4096_w128_o64
+373:                        time:   [744.01 µs 764.89 µs 800.63 µs]
