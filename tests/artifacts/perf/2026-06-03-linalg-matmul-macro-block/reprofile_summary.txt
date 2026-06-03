@@ -1,0 +1,19 @@
+RCH linalg reprofile after frankenscipy-8l8r1.20 macro-block GEMM.
+
+Command:
+cargo bench -p fsci-linalg --bench linalg_bench --locked -- '(^solve/|^solve_triangular/|^solve_banded/|^inv/|^det/|^lstsq/|^pinv/|^matmul/|^baseline_solve/1000x1000$)' --warm-up-time 1 --measurement-time 3 --sample-size 10 --noplot
+
+Remote worker:
+vmi1153651
+
+Top rows by median:
+matmul/1024x1024        899.37 ms
+matmul/768x768          638.31 ms
+baseline_solve/1000x1000 252.64 ms
+lstsq/512x256           157.74 ms
+pinv/512x256            120.06 ms
+
+Conclusion:
+The shifted profile still ranks large GEMM first. The next profile-backed
+optimization target remains a deeper GEMM primitive, not another unprofiled
+micro-tweak.

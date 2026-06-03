@@ -7716,92 +7716,98 @@ fn matmul_flat_workspace(
 
     const MR: usize = 4;
     const NR: usize = 8;
-    let mut j0 = 0;
-    while j0 < n {
-        let nr = (n - j0).min(NR);
-        let mut i0 = 0;
-        while i0 < m {
-            let mr = (m - i0).min(MR);
-            if mr == MR && nr == NR {
-                let a0_base = i0 * ka;
-                let a1_base = (i0 + 1) * ka;
-                let a2_base = (i0 + 2) * ka;
-                let a3_base = (i0 + 3) * ka;
-                let mut acc = [[0.0f64; NR]; MR];
-                for k in 0..ka {
-                    let a0 = a_flat[a0_base + k];
-                    let a1 = a_flat[a1_base + k];
-                    let a2 = a_flat[a2_base + k];
-                    let a3 = a_flat[a3_base + k];
-                    let b_base = k * n + j0;
-                    let b0 = b_flat[b_base];
-                    let b1 = b_flat[b_base + 1];
-                    let b2 = b_flat[b_base + 2];
-                    let b3 = b_flat[b_base + 3];
-                    let b4 = b_flat[b_base + 4];
-                    let b5 = b_flat[b_base + 5];
-                    let b6 = b_flat[b_base + 6];
-                    let b7 = b_flat[b_base + 7];
-                    acc[0][0] += a0 * b0;
-                    acc[0][1] += a0 * b1;
-                    acc[0][2] += a0 * b2;
-                    acc[0][3] += a0 * b3;
-                    acc[0][4] += a0 * b4;
-                    acc[0][5] += a0 * b5;
-                    acc[0][6] += a0 * b6;
-                    acc[0][7] += a0 * b7;
-                    acc[1][0] += a1 * b0;
-                    acc[1][1] += a1 * b1;
-                    acc[1][2] += a1 * b2;
-                    acc[1][3] += a1 * b3;
-                    acc[1][4] += a1 * b4;
-                    acc[1][5] += a1 * b5;
-                    acc[1][6] += a1 * b6;
-                    acc[1][7] += a1 * b7;
-                    acc[2][0] += a2 * b0;
-                    acc[2][1] += a2 * b1;
-                    acc[2][2] += a2 * b2;
-                    acc[2][3] += a2 * b3;
-                    acc[2][4] += a2 * b4;
-                    acc[2][5] += a2 * b5;
-                    acc[2][6] += a2 * b6;
-                    acc[2][7] += a2 * b7;
-                    acc[3][0] += a3 * b0;
-                    acc[3][1] += a3 * b1;
-                    acc[3][2] += a3 * b2;
-                    acc[3][3] += a3 * b3;
-                    acc[3][4] += a3 * b4;
-                    acc[3][5] += a3 * b5;
-                    acc[3][6] += a3 * b6;
-                    acc[3][7] += a3 * b7;
-                }
-                for (di, acc_row) in acc.iter().enumerate().take(MR) {
-                    let c_base = (i0 + di) * n + j0;
-                    c_flat[c_base] = acc_row[0];
-                    c_flat[c_base + 1] = acc_row[1];
-                    c_flat[c_base + 2] = acc_row[2];
-                    c_flat[c_base + 3] = acc_row[3];
-                    c_flat[c_base + 4] = acc_row[4];
-                    c_flat[c_base + 5] = acc_row[5];
-                    c_flat[c_base + 6] = acc_row[6];
-                    c_flat[c_base + 7] = acc_row[7];
-                }
-            } else {
-                for di in 0..mr {
-                    let a_base = (i0 + di) * ka;
-                    let c_base = (i0 + di) * n + j0;
-                    for dj in 0..nr {
-                        let mut s = 0.0;
-                        for k in 0..ka {
-                            s += a_flat[a_base + k] * b_flat[k * n + j0 + dj];
+    const RB: usize = 64;
+    let mut ib = 0;
+    while ib < m {
+        let i_limit = (ib + RB).min(m);
+        let mut j0 = 0;
+        while j0 < n {
+            let nr = (n - j0).min(NR);
+            let mut i0 = ib;
+            while i0 < i_limit {
+                let mr = (i_limit - i0).min(MR);
+                if mr == MR && nr == NR {
+                    let a0_base = i0 * ka;
+                    let a1_base = (i0 + 1) * ka;
+                    let a2_base = (i0 + 2) * ka;
+                    let a3_base = (i0 + 3) * ka;
+                    let mut acc = [[0.0f64; NR]; MR];
+                    for k in 0..ka {
+                        let a0 = a_flat[a0_base + k];
+                        let a1 = a_flat[a1_base + k];
+                        let a2 = a_flat[a2_base + k];
+                        let a3 = a_flat[a3_base + k];
+                        let b_base = k * n + j0;
+                        let b0 = b_flat[b_base];
+                        let b1 = b_flat[b_base + 1];
+                        let b2 = b_flat[b_base + 2];
+                        let b3 = b_flat[b_base + 3];
+                        let b4 = b_flat[b_base + 4];
+                        let b5 = b_flat[b_base + 5];
+                        let b6 = b_flat[b_base + 6];
+                        let b7 = b_flat[b_base + 7];
+                        acc[0][0] += a0 * b0;
+                        acc[0][1] += a0 * b1;
+                        acc[0][2] += a0 * b2;
+                        acc[0][3] += a0 * b3;
+                        acc[0][4] += a0 * b4;
+                        acc[0][5] += a0 * b5;
+                        acc[0][6] += a0 * b6;
+                        acc[0][7] += a0 * b7;
+                        acc[1][0] += a1 * b0;
+                        acc[1][1] += a1 * b1;
+                        acc[1][2] += a1 * b2;
+                        acc[1][3] += a1 * b3;
+                        acc[1][4] += a1 * b4;
+                        acc[1][5] += a1 * b5;
+                        acc[1][6] += a1 * b6;
+                        acc[1][7] += a1 * b7;
+                        acc[2][0] += a2 * b0;
+                        acc[2][1] += a2 * b1;
+                        acc[2][2] += a2 * b2;
+                        acc[2][3] += a2 * b3;
+                        acc[2][4] += a2 * b4;
+                        acc[2][5] += a2 * b5;
+                        acc[2][6] += a2 * b6;
+                        acc[2][7] += a2 * b7;
+                        acc[3][0] += a3 * b0;
+                        acc[3][1] += a3 * b1;
+                        acc[3][2] += a3 * b2;
+                        acc[3][3] += a3 * b3;
+                        acc[3][4] += a3 * b4;
+                        acc[3][5] += a3 * b5;
+                        acc[3][6] += a3 * b6;
+                        acc[3][7] += a3 * b7;
+                    }
+                    for (di, acc_row) in acc.iter().enumerate().take(MR) {
+                        let c_base = (i0 + di) * n + j0;
+                        c_flat[c_base] = acc_row[0];
+                        c_flat[c_base + 1] = acc_row[1];
+                        c_flat[c_base + 2] = acc_row[2];
+                        c_flat[c_base + 3] = acc_row[3];
+                        c_flat[c_base + 4] = acc_row[4];
+                        c_flat[c_base + 5] = acc_row[5];
+                        c_flat[c_base + 6] = acc_row[6];
+                        c_flat[c_base + 7] = acc_row[7];
+                    }
+                } else {
+                    for di in 0..mr {
+                        let a_base = (i0 + di) * ka;
+                        let c_base = (i0 + di) * n + j0;
+                        for dj in 0..nr {
+                            let mut s = 0.0;
+                            for k in 0..ka {
+                                s += a_flat[a_base + k] * b_flat[k * n + j0 + dj];
+                            }
+                            c_flat[c_base + dj] = s;
                         }
-                        c_flat[c_base + dj] = s;
                     }
                 }
+                i0 += MR;
             }
-            i0 += MR;
+            j0 += NR;
         }
-        j0 += NR;
+        ib += RB;
     }
 
     let mut c = Vec::with_capacity(m);
