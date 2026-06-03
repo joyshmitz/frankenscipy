@@ -248,6 +248,10 @@ impl SobolSampler {
     }
 
     pub fn sample(&mut self, n: usize) -> Vec<f64> {
+        if self.dimension == 2 {
+            return self.sample_2d(n);
+        }
+
         let mut out = Vec::with_capacity(n.saturating_mul(self.dimension));
         for _ in 0..n {
             let idx = self.next_index;
@@ -257,6 +261,31 @@ impl SobolSampler {
             }
             self.next_index = self.next_index.saturating_add(1);
         }
+        out
+    }
+
+    fn sample_2d(&mut self, n: usize) -> Vec<f64> {
+        let mut out = Vec::with_capacity(n.saturating_mul(2));
+        let mut idx = self.next_index;
+        let mut bits0 = sobol_bits(idx, 0);
+        let mut bits1 = sobol_bits(idx, 1);
+        let shift0 = self.digital_shift[0];
+        let shift1 = self.digital_shift[1];
+
+        for _ in 0..n {
+            out.push(bits_to_unit(bits0 ^ shift0));
+            out.push(bits_to_unit(bits1 ^ shift1));
+
+            let next_idx = idx.saturating_add(1);
+            if next_idx != idx {
+                let bit = next_idx.trailing_zeros() as usize;
+                bits0 ^= SOBOL_DIRECTION_TABLES[0][bit];
+                bits1 ^= SOBOL_DIRECTION_TABLES[1][bit];
+            }
+            idx = next_idx;
+        }
+
+        self.next_index = idx;
         out
     }
 }
@@ -1440,6 +1469,30 @@ mod tests {
             }
         }
         assert_eq!(sample, expected);
+    }
+
+    #[test]
+    fn sobol_2d_incremental_matches_direct_bits() {
+        for (start, n) in [(0_u64, 16_usize), (1, 16), (4_095, 17), (u64::MAX - 2, 5)] {
+            let shift0 = splitmix64(0x5eed_u64);
+            let shift1 = splitmix64(0x5eed_u64.wrapping_add(1));
+            let shifts = [shift0, shift1];
+            let mut sampler = SobolSampler::with_shift_words(2, vec![shift0, shift1]).unwrap();
+            sampler.skip(start);
+
+            let sample = sampler.sample(n);
+            let mut expected = Vec::with_capacity(n.saturating_mul(2));
+            let mut idx = start;
+            for _ in 0..n {
+                for (dimension, &shift) in shifts.iter().enumerate() {
+                    expected.push(bits_to_unit(sobol_bits(idx, dimension) ^ shift));
+                }
+                idx = idx.saturating_add(1);
+            }
+
+            assert_eq!(sample, expected);
+            assert_eq!(sampler.next_index(), idx);
+        }
     }
 
     #[test]
