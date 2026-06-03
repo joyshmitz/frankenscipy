@@ -1562,8 +1562,23 @@ where
         ));
     }
 
-    let _n = data.len();
+    let na = data.len();
     let mut result = Vec::with_capacity(widths.len());
+
+    // Resolves [frankenscipy-zq5xy]: the input `data` is identical across
+    // every width, so its zero-padded forward FFT depends only on the FFT
+    // length. Cache `fft(data_padded)` keyed by `fft_len` and reuse it
+    // across widths instead of recomputing it once per scale. Each cache
+    // hit removes one length-`fft_len` forward transform and one padded-
+    // input allocation; for the 2048×32 ricker bench all 32 scales share
+    // `fft_len = 4096`, so 31 redundant data FFTs are eliminated.
+    //
+    // Behavior is bit-identical to `convolve(data, &wavelet, Same)`: the
+    // FFT/direct dispatch threshold, the padded-input bytes (hence
+    // `fft(data_padded)`), the pointwise-multiply order, the inverse
+    // transform, and the `Same` slice are all reproduced exactly.
+    let opts = fsci_fft::FftOptions::default();
+    let mut data_fft_cache: Vec<(usize, Vec<fsci_fft::Complex64>)> = Vec::new();
 
     for &width in widths {
         if width <= 0.0 || !width.is_finite() {
@@ -1575,9 +1590,49 @@ where
         let wavelet_len = (10.0 * width).ceil() as usize;
         let wavelet_len = wavelet_len.max(1);
         let wavelet = wavelet_fn(wavelet_len, width);
+        let nb = wavelet.len();
 
-        // Convolve data with wavelet (mode = same)
-        let conv = convolve(data, &wavelet, ConvolveMode::Same)?;
+        // Mirror `convolve(data, &wavelet, Same)` exactly, but reuse the
+        // cached forward FFT of `data` on the FFT path.
+        let conv = if !wavelet.is_empty() && na.saturating_mul(nb) > 1000 {
+            let full_len = na + nb - 1;
+            let fft_len = full_len.next_power_of_two();
+
+            let fa_index = match data_fft_cache.iter().position(|(len, _)| *len == fft_len) {
+                Some(idx) => idx,
+                None => {
+                    let mut a_padded: Vec<fsci_fft::Complex64> =
+                        data.iter().map(|&v| (v, 0.0)).collect();
+                    a_padded.resize(fft_len, (0.0, 0.0));
+                    let fa = fsci_fft::fft(&a_padded, &opts)
+                        .map_err(|e| SignalError::InvalidArgument(format!("{e}")))?;
+                    data_fft_cache.push((fft_len, fa));
+                    data_fft_cache.len() - 1
+                }
+            };
+            let fa = &data_fft_cache[fa_index].1;
+
+            let mut b_padded: Vec<fsci_fft::Complex64> =
+                wavelet.iter().map(|&v| (v, 0.0)).collect();
+            b_padded.resize(fft_len, (0.0, 0.0));
+            let fb = fsci_fft::fft(&b_padded, &opts)
+                .map_err(|e| SignalError::InvalidArgument(format!("{e}")))?;
+
+            let fc: Vec<fsci_fft::Complex64> = fa
+                .iter()
+                .zip(fb.iter())
+                .map(|(&(ar, ai), &(br, bi))| (ar * br - ai * bi, ar * bi + ai * br))
+                .collect();
+
+            let conv_full = fsci_fft::ifft(&fc, &opts)
+                .map_err(|e| SignalError::InvalidArgument(format!("{e}")))?;
+
+            let full: Vec<f64> = conv_full.iter().take(full_len).map(|&(re, _)| re).collect();
+            let start = (nb - 1) / 2;
+            full[start..start + na].to_vec()
+        } else {
+            convolve(data, &wavelet, ConvolveMode::Same)?
+        };
         result.push(conv);
     }
 
@@ -18268,12 +18323,7 @@ mod tests {
         // Middle values should be close to the input frequency
         let mid_start = 20;
         let mid_end = 80;
-        for (i, &ri) in result
-            .iter()
-            .enumerate()
-            .take(mid_end)
-            .skip(mid_start)
-        {
+        for (i, &ri) in result.iter().enumerate().take(mid_end).skip(mid_start) {
             assert!(
                 (ri - freq).abs() < 1.0,
                 "instantaneous_frequency[{i}] = {ri}, expected ~{freq}"

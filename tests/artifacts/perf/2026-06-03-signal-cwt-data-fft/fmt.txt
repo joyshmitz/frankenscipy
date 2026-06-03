@@ -1,0 +1,27 @@
+Diff in /data/projects/frankenscipy/crates/fsci-signal/src/bin/perf_signal.rs:25:
+     let widths: Vec<f64> = (1..=32).map(|w| w as f64).collect();
+     let coeffs = cwt(&x, ricker, &widths).expect("cwt golden should solve");
+ 
+[31m-    println!("case=cwt_ricker_2048x32 rows={} cols={}", coeffs.len(), x.len());
+[m[32m+    println!(
+[m[32m+        "case=cwt_ricker_2048x32 rows={} cols={}",
+[m[32m+        coeffs.len(),
+[m[32m+        x.len()
+[m[32m+    );
+[m     for (row, scale) in coeffs.iter().enumerate() {
+         for (col, value) in scale.iter().enumerate() {
+             println!("{row:02} {col:04} {value:.17e}");
+Diff in /data/projects/frankenscipy/crates/fsci-signal/src/lib.rs:18323:
+         // Middle values should be close to the input frequency
+         let mid_start = 20;
+         let mid_end = 80;
+[31m-        for (i, &ri) in result
+[m[31m-            .iter()
+[m[31m-            .enumerate()
+[m[31m-            .take(mid_end)
+[m[31m-            .skip(mid_start)
+[m[31m-        {
+[m[32m+        for (i, &ri) in result.iter().enumerate().take(mid_end).skip(mid_start) {
+[m             assert!(
+                 (ri - freq).abs() < 1.0,
+                 "instantaneous_frequency[{i}] = {ri}, expected ~{freq}"
