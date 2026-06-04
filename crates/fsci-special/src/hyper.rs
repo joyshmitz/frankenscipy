@@ -1968,6 +1968,22 @@ fn hyp1f1_complex_parameters(
         return Ok(Complex64::from_real(1.0));
     }
 
+    // For large |z| the convergent Maclaurin series cancels catastrophically
+    // (its largest partial term is ~e^|z| while the result can be far smaller),
+    // giving errors up to ~1e69 by |z|~100. Switch to the large-|z| asymptotic
+    // expansion, which is summed to optimal truncation and so stays accurate
+    // across the whole plane — including the Stokes band near arg z = ±π/2 that
+    // a two-term truncation gets wrong. Below |z|~24 the series is still the
+    // better choice; in the overlap (|z|>=18) prefer the asymptotic only when
+    // its self-estimated remainder is already negligible.
+    let absz = z.abs();
+    if absz >= 18.0 {
+        let (aval, aest) = hyp1f1_asymptotic_complex(a, b, z);
+        if aval.is_finite() && (absz >= 24.0 || aest < 1.0e-12) {
+            return Ok(aval);
+        }
+    }
+
     hyp1f1_series_complex(a, b, z, mode)
 }
 
@@ -2007,6 +2023,75 @@ fn hyp1f1_series_complex(
     }
 
     Ok(sum)
+}
+
+/// Large-|z| asymptotic expansion of M(a,b,z) for complex parameters
+/// (A&S 13.5.1 / DLMF 13.7.2):
+///
+/// ```text
+///   M(a,b,z) ~ Γ(b)/Γ(b−a) (−z)^{−a} Σ_n (a)_n (1+a−b)_n / n! (−z)^{−n}
+///            + Γ(b)/Γ(a) e^z z^{a−b}   Σ_n (b−a)_n (1−a)_n / n! z^{−n}
+/// ```
+///
+/// Each block is a divergent asymptotic series summed to its optimal (smallest
+/// term) truncation; carrying the full superasymptotic sum — not just two
+/// terms — is what keeps the result accurate through the anti-Stokes band near
+/// arg z = ±π/2. The principal branch of `(−z)^{−a}` encodes the e^{±iπa}
+/// Stokes sign automatically, so no explicit half-plane sign switch is needed.
+///
+/// Returns the value together with a relative-error estimate (the leading
+/// optimally-truncated remainder, inflated by any cancellation between the two
+/// blocks), so the caller can defer to the convergent series when |z| is not
+/// yet large compared with the parameters.
+fn hyp1f1_asymptotic_complex(a: Complex64, b: Complex64, z: Complex64) -> (Complex64, f64) {
+    let one = Complex64::from_real(1.0);
+    let neg_z = -z;
+    let gamma_b = crate::gamma::complex_gammaln(b).exp();
+
+    // Subdominant (algebraic) block.
+    let (s1, min1) = asymptotic_block_sum(a, one + a - b, neg_z.recip());
+    let coef1 = gamma_b * complex_recip_gamma(b - a) * neg_z.powc(-a);
+    let term1 = coef1 * s1;
+
+    // Dominant (exponential) block.
+    let (s2, min2) = asymptotic_block_sum(b - a, one - a, z.recip());
+    let coef2 = gamma_b * complex_recip_gamma(a) * z.exp() * z.powc(a - b);
+    let term2 = coef2 * s2;
+
+    let result = term1 + term2;
+    let abs_err = coef1.abs() * min1 + coef2.abs() * min2;
+    let est_rel = abs_err / (result.abs() + f64::MIN_POSITIVE);
+    (result, est_rel)
+}
+
+/// Sum a divergent asymptotic series Σ_n (pa)_n (pb)_n / n! · w^n by term
+/// recurrence, stopping at the smallest term (optimal truncation). Returns the
+/// partial sum and the magnitude of the last term retained, which estimates the
+/// leading remainder of that block.
+fn asymptotic_block_sum(pa: Complex64, pb: Complex64, w: Complex64) -> (Complex64, f64) {
+    const NMAX: usize = 120;
+    let mut sum = Complex64::from_real(1.0);
+    let mut term = Complex64::from_real(1.0);
+    let mut prev_mag = 1.0;
+    let mut min_mag = 1.0;
+    for n in 1..NMAX {
+        let k = (n - 1) as f64;
+        let factor = (pa + Complex64::from_real(k))
+            * (pb + Complex64::from_real(k))
+            * Complex64::from_real(1.0 / n as f64);
+        term = term * factor * w;
+        if !term.is_finite() {
+            break;
+        }
+        let mag = term.abs();
+        if mag > prev_mag && n > 2 {
+            break;
+        }
+        prev_mag = mag;
+        min_mag = mag;
+        sum = sum + term;
+    }
+    (sum, min_mag)
 }
 
 /// Scalar 2F1(a, b; c; z) via series summation and transformations.
@@ -3045,6 +3130,36 @@ mod tests {
         let values = get_complex_vec(&r).unwrap_or(&[]);
         assert_eq!(values.len(), 2);
         assert_complex_close(values[1], values[0].conj(), 1.0e-10);
+    }
+
+    #[test]
+    #[allow(clippy::type_complexity)]
+    fn hyp1f1_complex_large_z_matches_mpmath() {
+        // Golden values from mpmath.hyp1f1 (dps=30). These cover the regime
+        // where the convergent Maclaurin series cancels catastrophically:
+        // the negative-real-axis case used to return ~1e69, and the
+        // arg z = ±pi/2 anti-Stokes band used to fail at rel ~1.8.
+        let cases: &[((f64, f64), (f64, f64), (f64, f64), f64, f64)] = &[
+            ((1.0, 0.5), (2.0, -0.3), (-99.0, 14.0), -0.011969417454155048, -0.007406056247135601),
+            ((0.5, 0.0), (1.5, 0.0), (0.0, 60.0), 0.07842759028142188, 0.08885735047389137),
+            ((0.5, 0.0), (1.5, 0.0), (-40.0, 40.0), 0.10886111845882578, 0.04509175168074972),
+            ((1.2, 0.0), (3.4, 0.0), (0.0, -80.0), -0.004023506086242592, -0.013660756513785781),
+            ((1.0, 1.0), (3.0, 0.5), (50.0, 30.0), 3.9816355065269386e18, 1.1345975153736888e18),
+            ((0.5, 0.0), (10.0, 0.0), (-70.0, 20.0), 0.335215644799161, 0.04195012139845268),
+            ((2.0, 0.0), (5.0, 0.0), (80.0, 0.0), 2.4997729898337908e30, 0.0),
+        ];
+        for &(a, b, z, re, im) in cases {
+            let a = Complex64::new(a.0, a.1);
+            let b = Complex64::new(b.0, b.1);
+            let z = Complex64::new(z.0, z.1);
+            let got = hyp1f1_complex_parameters(a, b, z, RuntimeMode::Strict).unwrap();
+            let want = Complex64::new(re, im);
+            let rel = (got - want).abs() / (want.abs() + 1.0e-300);
+            assert!(
+                rel < 1.0e-9,
+                "hyp1f1({a:?},{b:?},{z:?}) = {got:?}, want {want:?}, rel={rel:.3e}"
+            );
+        }
     }
 
     #[test]
