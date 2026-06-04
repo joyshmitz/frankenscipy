@@ -575,8 +575,9 @@ fn combine_csr_rows_directly(lhs: &CsrMatrix, rhs: &CsrMatrix, rhs_scale: f64) -
     let rp = rhs.indptr();
 
     // GraphBLAS-style symbolic/numeric split: each row pair is independent, so
-    // large merges are chunked into local buffers and then concatenated in row
-    // order. The row-local merge keeps the original scalar operation order.
+    // large merges count row output first, prefix-sum exact offsets, and then
+    // fill disjoint row ranges. The row-local fill keeps the original scalar
+    // operation order.
     let nthreads = parallel_chunk_count(rows, lhs.nnz() + rhs.nnz());
     let (data, indices, indptr, canonical) = if nthreads <= 1 {
         combine_rows_serial(li, ld, lp, ri, rd, rp, rhs_scale, rows)
@@ -587,6 +588,129 @@ fn combine_csr_rows_directly(lhs: &CsrMatrix, rhs: &CsrMatrix, rhs_scale: f64) -
     let mut result = CsrMatrix::from_components_unchecked(shape, data, indices, indptr);
     result.canonical = canonical;
     result
+}
+
+#[inline]
+#[allow(clippy::too_many_arguments)]
+fn count_canonical_row(
+    li: &[usize],
+    ld: &[f64],
+    mut l: usize,
+    l1: usize,
+    ri: &[usize],
+    rd: &[f64],
+    mut r: usize,
+    r1: usize,
+    rhs_scale: f64,
+    sorted: &mut bool,
+    dedup: &mut bool,
+) -> usize {
+    let mut count = 0usize;
+    let mut last: Option<usize> = None;
+    macro_rules! emit {
+        ($col:expr, $val:expr) => {{
+            let value = $val;
+            if value != 0.0 {
+                if let Some(prev) = last {
+                    if $col < prev {
+                        *sorted = false;
+                    }
+                    if $col == prev {
+                        *dedup = false;
+                    }
+                }
+                last = Some($col);
+                count += 1;
+            }
+        }};
+    }
+
+    while l < l1 && r < r1 {
+        let lc = li[l];
+        let rc = ri[r];
+        if lc < rc {
+            emit!(lc, 0.0 + ld[l]);
+            l += 1;
+        } else if rc < lc {
+            emit!(rc, 0.0 + rhs_scale * rd[r]);
+            r += 1;
+        } else {
+            let mut value = 0.0;
+            value += ld[l];
+            value += rhs_scale * rd[r];
+            emit!(lc, value);
+            l += 1;
+            r += 1;
+        }
+    }
+    while l < l1 {
+        emit!(li[l], 0.0 + ld[l]);
+        l += 1;
+    }
+    while r < r1 {
+        emit!(ri[r], 0.0 + rhs_scale * rd[r]);
+        r += 1;
+    }
+
+    count
+}
+
+#[inline]
+#[allow(clippy::too_many_arguments)]
+fn fill_canonical_row(
+    li: &[usize],
+    ld: &[f64],
+    mut l: usize,
+    l1: usize,
+    ri: &[usize],
+    rd: &[f64],
+    mut r: usize,
+    r1: usize,
+    rhs_scale: f64,
+    out_idx: &mut [usize],
+    out_val: &mut [f64],
+) {
+    let mut pos = 0usize;
+    macro_rules! emit {
+        ($col:expr, $val:expr) => {{
+            let value = $val;
+            if value != 0.0 {
+                out_idx[pos] = $col;
+                out_val[pos] = value;
+                pos += 1;
+            }
+        }};
+    }
+
+    while l < l1 && r < r1 {
+        let lc = li[l];
+        let rc = ri[r];
+        if lc < rc {
+            emit!(lc, 0.0 + ld[l]);
+            l += 1;
+        } else if rc < lc {
+            emit!(rc, 0.0 + rhs_scale * rd[r]);
+            r += 1;
+        } else {
+            let mut value = 0.0;
+            value += ld[l];
+            value += rhs_scale * rd[r];
+            emit!(lc, value);
+            l += 1;
+            r += 1;
+        }
+    }
+    while l < l1 {
+        emit!(li[l], 0.0 + ld[l]);
+        l += 1;
+    }
+    while r < r1 {
+        emit!(ri[r], 0.0 + rhs_scale * rd[r]);
+        r += 1;
+    }
+
+    debug_assert_eq!(pos, out_idx.len());
+    debug_assert_eq!(pos, out_val.len());
 }
 
 #[inline]
@@ -718,66 +842,93 @@ fn combine_rows_parallel(
         .map(|thread| (thread * chunk, ((thread + 1) * chunk).min(rows)))
         .filter(|(start, end)| start < end)
         .collect();
-    let per_chunk_cap = (ld.len() + rd.len()) / ranges.len().max(1) + 16;
 
-    type ChunkOut = (Vec<usize>, Vec<f64>, Vec<usize>, bool, bool);
-    let chunks: Vec<ChunkOut> = std::thread::scope(|scope| {
-        let handles: Vec<_> = ranges
-            .iter()
-            .map(|&(row_start, row_end)| {
-                scope.spawn(move || {
-                    let mut idx = Vec::with_capacity(per_chunk_cap);
-                    let mut val = Vec::with_capacity(per_chunk_cap);
-                    let mut counts = Vec::with_capacity(row_end - row_start);
-                    let mut sorted = true;
-                    let mut dedup = true;
-                    for row in row_start..row_end {
-                        let before = val.len();
-                        merge_canonical_row(
-                            li,
-                            ld,
-                            lp[row],
-                            lp[row + 1],
-                            ri,
-                            rd,
-                            rp[row],
-                            rp[row + 1],
-                            rhs_scale,
-                            &mut idx,
-                            &mut val,
-                            &mut sorted,
-                            &mut dedup,
-                        );
-                        counts.push(val.len() - before);
-                    }
-                    (idx, val, counts, sorted, dedup)
-                })
-            })
-            .collect();
+    let mut counts = vec![0usize; rows];
+    let count_flags: Vec<(bool, bool)> = std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(ranges.len());
+        let mut counts_tail = counts.as_mut_slice();
+        for &(row_start, row_end) in &ranges {
+            let len = row_end - row_start;
+            let (chunk_counts, remaining) = counts_tail.split_at_mut(len);
+            counts_tail = remaining;
+            handles.push(scope.spawn(move || {
+                let mut sorted = true;
+                let mut dedup = true;
+                for (offset, count) in chunk_counts.iter_mut().enumerate() {
+                    let row = row_start + offset;
+                    *count = count_canonical_row(
+                        li,
+                        ld,
+                        lp[row],
+                        lp[row + 1],
+                        ri,
+                        rd,
+                        rp[row],
+                        rp[row + 1],
+                        rhs_scale,
+                        &mut sorted,
+                        &mut dedup,
+                    );
+                }
+                (sorted, dedup)
+            }));
+        }
         handles
             .into_iter()
-            .map(|handle| handle.join().expect("csr add chunk panicked"))
+            .map(|handle| handle.join().expect("csr add count chunk panicked"))
             .collect()
     });
 
-    let total = chunks.iter().map(|(_, values, _, _, _)| values.len()).sum();
-    let mut data = Vec::with_capacity(total);
-    let mut indices = Vec::with_capacity(total);
+    let total = counts.iter().sum();
+    let mut data = vec![0.0; total];
+    let mut indices = vec![0usize; total];
     let mut indptr = Vec::with_capacity(rows + 1);
-    let mut sorted = true;
-    let mut dedup = true;
     indptr.push(0);
-    let mut acc = 0usize;
-    for (idx, val, counts, chunk_sorted, chunk_dedup) in &chunks {
-        for &count in counts {
-            acc += count;
-            indptr.push(acc);
-        }
-        indices.extend_from_slice(idx);
-        data.extend_from_slice(val);
-        sorted &= *chunk_sorted;
-        dedup &= *chunk_dedup;
+    for count in counts {
+        indptr.push(indptr.last().copied().expect("indptr seed") + count);
     }
+
+    let indptr_ref = indptr.as_slice();
+    std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(ranges.len());
+        let mut idx_tail = indices.as_mut_slice();
+        let mut data_tail = data.as_mut_slice();
+        for &(row_start, row_end) in &ranges {
+            let start = indptr_ref[row_start];
+            let end = indptr_ref[row_end];
+            let len = end - start;
+            let (idx_chunk, remaining_idx) = idx_tail.split_at_mut(len);
+            idx_tail = remaining_idx;
+            let (data_chunk, remaining_data) = data_tail.split_at_mut(len);
+            data_tail = remaining_data;
+            handles.push(scope.spawn(move || {
+                for row in row_start..row_end {
+                    let local_start = indptr_ref[row] - start;
+                    let local_end = indptr_ref[row + 1] - start;
+                    fill_canonical_row(
+                        li,
+                        ld,
+                        lp[row],
+                        lp[row + 1],
+                        ri,
+                        rd,
+                        rp[row],
+                        rp[row + 1],
+                        rhs_scale,
+                        &mut idx_chunk[local_start..local_end],
+                        &mut data_chunk[local_start..local_end],
+                    );
+                }
+            }));
+        }
+        for handle in handles {
+            handle.join().expect("csr add fill chunk panicked");
+        }
+    });
+
+    let sorted = count_flags.iter().all(|(chunk_sorted, _)| *chunk_sorted);
+    let dedup = count_flags.iter().all(|(_, chunk_dedup)| *chunk_dedup);
+
     (
         data,
         indices,

@@ -180,7 +180,7 @@ fn bench_diags(c: &mut Criterion) {
 
 fn bench_spmm(c: &mut Criterion) {
     let mut group = c.benchmark_group("sparse_spmm");
-    for &(n, density) in &[(500usize, 0.02f64), (1_000, 0.01)] {
+    for &(n, density) in &[(500usize, 0.02f64), (1_000, 0.01), (2_000, 0.01)] {
         let a = make_random_csr(n, density);
         let b = random(Shape2D::new(n, n), density, SEED ^ 0x1234)
             .expect("b coo")

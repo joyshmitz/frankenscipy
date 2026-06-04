@@ -3285,27 +3285,68 @@ pub fn spmv(a: &CsrMatrix, x: &[f64]) -> Vec<f64> {
 pub fn spmm(a: &CsrMatrix, b: &CsrMatrix) -> CsrMatrix {
     let m = a.shape().rows;
     let n = b.shape().cols;
+    let b_rows = b.shape().rows;
 
-    let mut cols = Vec::new();
-    let mut vals = Vec::new();
-    let mut indptr = Vec::with_capacity(m + 1);
-    let mut sorted_indices = true;
-    indptr.push(0);
+    // Each output row is an independent Gustavson merge, so for large products
+    // the rows are fanned out across a thread pool. Every worker owns a private
+    // dense accumulator and emits its rows into chunk-local buffers; the driver
+    // concatenates them in row order. Output is byte-identical to the serial
+    // sweep: a row's columns/values depend only on that row, the reverse
+    // first-seen emit order is per-row, and `sorted_indices` is an associative
+    // AND across rows.
+    // Estimated multiply-adds: nnz(A) times the average nonzeros per B row. This
+    // tracks SpGEMM work far better than nnz(A) alone, since output fill grows
+    // superlinearly with size; only products heavy enough to amortise thread
+    // spawn are fanned out.
+    let avg_b_row = (b.nnz() as u64) / (b_rows.max(1) as u64);
+    let work = (a.nnz() as u64).saturating_mul(avg_b_row);
+    let nthreads = spmm_chunk_count(m, work);
+    let (cols, vals, indptr, sorted_indices) = if nthreads <= 1 {
+        let (cols, vals, counts, sorted) = spmm_row_chunk(a, b, n, b_rows, 0, m, a.nnz());
+        let mut indptr = Vec::with_capacity(m + 1);
+        indptr.push(0);
+        let mut acc = 0usize;
+        for &count in &counts {
+            acc += count;
+            indptr.push(acc);
+        }
+        (cols, vals, indptr, sorted)
+    } else {
+        spmm_rows_parallel(a, b, n, b_rows, m, nthreads)
+    };
 
-    // Gustavson SpGEMM with a dense accumulator (the SPA — sparse accumulator)
-    // reused across rows and cleared only at the columns it touched. This
-    // replaces the per-row `HashMap` (hash cost + a fresh allocation every row)
-    // with O(1) array reads. The accumulation order is unchanged — each product
-    // `a_ik * b_kj` is added into `acc[j]` in the exact encounter order the
-    // HashMap used — so the emitted values are bit-identical. `seen` marks which
-    // columns are live so the reverse-first-seen emit order (SciPy parity) and
-    // the touched-only reset are both preserved.
+    let mut result = CsrMatrix::from_components_unchecked(Shape2D::new(m, n), vals, cols, indptr);
+    result.canonical.sorted_indices = sorted_indices;
+    result.canonical.deduplicated = true;
+    result
+}
+
+/// Gustavson SpGEMM over rows `[row_start, row_end)`, returning the emitted
+/// columns, values, per-row nnz counts, and whether every emitted row stayed
+/// strictly column-sorted. A dense accumulator (`acc` + `seen`, length `n`) is
+/// reused across the chunk's rows and cleared only at touched columns. Each
+/// product `a_ik * b_kj` is summed into `acc[j]` in encounter order and rows are
+/// emitted in reverse first-seen column order (SciPy CSR-matmul parity).
+fn spmm_row_chunk(
+    a: &CsrMatrix,
+    b: &CsrMatrix,
+    n: usize,
+    b_rows: usize,
+    row_start: usize,
+    row_end: usize,
+    cap_hint: usize,
+) -> (Vec<usize>, Vec<f64>, Vec<usize>, bool) {
     let mut acc = vec![0.0f64; n];
     let mut seen = vec![false; n];
     let mut column_order: Vec<usize> = Vec::new();
+    let mut cols = Vec::with_capacity(cap_hint);
+    let mut vals = Vec::with_capacity(cap_hint);
+    let mut counts = Vec::with_capacity(row_end - row_start);
+    let mut sorted_indices = true;
 
-    for i in 0..m {
+    for i in row_start..row_end {
         column_order.clear();
+        let before = cols.len();
         let a_start = a.indptr()[i];
         let a_end = a.indptr()[i + 1];
 
@@ -3313,7 +3354,7 @@ pub fn spmm(a: &CsrMatrix, b: &CsrMatrix) -> CsrMatrix {
             let k = a.indices()[a_idx];
             let a_ik = a.data()[a_idx];
 
-            if k < b.shape().rows {
+            if k < b_rows {
                 let b_start = b.indptr()[k];
                 let b_end = b.indptr()[k + 1];
                 for b_idx in b_start..b_end {
@@ -3333,7 +3374,6 @@ pub fn spmm(a: &CsrMatrix, b: &CsrMatrix) -> CsrMatrix {
         let mut prev_col = None;
         for &j in column_order.iter().rev() {
             let v = acc[j];
-            // Reset this column so the accumulator is clean for the next row.
             seen[j] = false;
             acc[j] = 0.0;
             if v.abs() > 0.0 {
@@ -3345,13 +3385,70 @@ pub fn spmm(a: &CsrMatrix, b: &CsrMatrix) -> CsrMatrix {
                 vals.push(v);
             }
         }
-        indptr.push(cols.len());
+        counts.push(cols.len() - before);
     }
 
-    let mut result = CsrMatrix::from_components_unchecked(Shape2D::new(m, n), vals, cols, indptr);
-    result.canonical.sorted_indices = sorted_indices;
-    result.canonical.deduplicated = true;
-    result
+    (cols, vals, counts, sorted_indices)
+}
+
+fn spmm_rows_parallel(
+    a: &CsrMatrix,
+    b: &CsrMatrix,
+    n: usize,
+    b_rows: usize,
+    m: usize,
+    nthreads: usize,
+) -> (Vec<usize>, Vec<f64>, Vec<usize>, bool) {
+    let chunk = m.div_ceil(nthreads);
+    let ranges: Vec<(usize, usize)> = (0..nthreads)
+        .map(|thread| (thread * chunk, ((thread + 1) * chunk).min(m)))
+        .filter(|(start, end)| start < end)
+        .collect();
+    let cap_hint = a.nnz() / ranges.len().max(1) + 16;
+
+    type ChunkOut = (Vec<usize>, Vec<f64>, Vec<usize>, bool);
+    let chunks: Vec<ChunkOut> = std::thread::scope(|scope| {
+        let handles: Vec<_> = ranges
+            .iter()
+            .map(|&(row_start, row_end)| {
+                scope.spawn(move || spmm_row_chunk(a, b, n, b_rows, row_start, row_end, cap_hint))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("spmm chunk panicked"))
+            .collect()
+    });
+
+    let total = chunks.iter().map(|(c, _, _, _)| c.len()).sum();
+    let mut cols = Vec::with_capacity(total);
+    let mut vals = Vec::with_capacity(total);
+    let mut indptr = Vec::with_capacity(m + 1);
+    indptr.push(0);
+    let mut sorted_indices = true;
+    let mut acc = 0usize;
+    for (chunk_cols, chunk_vals, counts, chunk_sorted) in &chunks {
+        for &count in counts {
+            acc += count;
+            indptr.push(acc);
+        }
+        cols.extend_from_slice(chunk_cols);
+        vals.extend_from_slice(chunk_vals);
+        sorted_indices &= *chunk_sorted;
+    }
+    (cols, vals, indptr, sorted_indices)
+}
+
+/// Worker count for an SpGEMM, or 1 to stay serial. Only products with enough
+/// rows and estimated multiply-adds to amortise thread spawn are fanned out.
+fn spmm_chunk_count(rows: usize, work: u64) -> usize {
+    if work < 300_000 || rows < 512 {
+        return 1;
+    }
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    cores.min(16).min(rows / 128).max(1)
 }
 
 /// Compute one-norm estimate for a sparse matrix.
@@ -4143,6 +4240,40 @@ mod tests {
     use super::*;
     use crate::formats::{CooMatrix, Shape2D};
     use crate::ops::FormatConvertible;
+
+    #[test]
+    fn spmm_parallel_matches_serial_byte_for_byte() {
+        // Isomorphism proof for the threaded SpGEMM: the chunked/parallel driver
+        // must produce identical cols/vals/indptr/metadata as the single-chunk
+        // serial sweep, for any worker count including uneven row splits.
+        let n = 800;
+        let a = crate::random(Shape2D::new(n, n), 0.02, 0x5A1A_D00D)
+            .expect("a")
+            .to_csr()
+            .expect("a csr");
+        let b = crate::random(Shape2D::new(n, n), 0.02, 0x5A1A_D00D ^ 0x99)
+            .expect("b")
+            .to_csr()
+            .expect("b csr");
+        let b_rows = b.shape().rows;
+
+        let (scols, svals, scounts, ssorted) = spmm_row_chunk(&a, &b, n, b_rows, 0, n, a.nnz());
+        let mut sindptr = vec![0usize];
+        let mut acc = 0usize;
+        for &c in &scounts {
+            acc += c;
+            sindptr.push(acc);
+        }
+
+        for &threads in &[2usize, 3, 7, 8, 16] {
+            let (pcols, pvals, pindptr, psorted) =
+                spmm_rows_parallel(&a, &b, n, b_rows, n, threads);
+            assert_eq!(pcols, scols, "cols mismatch threads={threads}");
+            assert_eq!(pvals, svals, "vals mismatch threads={threads}");
+            assert_eq!(pindptr, sindptr, "indptr mismatch threads={threads}");
+            assert_eq!(psorted, ssorted, "sorted flag mismatch threads={threads}");
+        }
+    }
 
     /// Deterministic dump of an spmm product for golden-SHA proof. Run with
     /// `--ignored --nocapture` and pipe to `sha256sum`.

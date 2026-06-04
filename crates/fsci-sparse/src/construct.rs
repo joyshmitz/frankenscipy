@@ -105,15 +105,20 @@ pub fn diags(
         .ok_or_else(|| SparseError::IndexOverflow {
             message: "diagonal entry count overflows usize".to_string(),
         })?;
+    let mut diagonal_order: Vec<(isize, &[f64])> = diagonals
+        .iter()
+        .zip(offsets.iter().copied())
+        .map(|(diag, offset)| (offset, diag.as_slice()))
+        .collect();
+    diagonal_order.sort_unstable_by_key(|&(offset, _)| offset);
+
     let mut data = Vec::with_capacity(capacity);
     let mut indices = Vec::with_capacity(capacity);
     let mut indptr = Vec::with_capacity(shape.rows + 1);
-    let mut row_entries = Vec::with_capacity(offsets.len());
     indptr.push(0);
 
     for row in 0..shape.rows {
-        row_entries.clear();
-        for (diag, &offset) in diagonals.iter().zip(offsets.iter()) {
+        for &(offset, diag) in &diagonal_order {
             let entry = if offset >= 0 {
                 let col = row + offset as usize;
                 if col < shape.cols && row < diag.len() {
@@ -128,13 +133,9 @@ pub fn diags(
                     .map(|k| (k, diag[k]))
             };
             if let Some((col, value)) = entry {
-                row_entries.push((col, value));
+                indices.push(col);
+                data.push(value);
             }
-        }
-        row_entries.sort_unstable_by_key(|&(col, _)| col);
-        for &(col, value) in &row_entries {
-            indices.push(col);
-            data.push(value);
         }
         indptr.push(data.len());
     }
