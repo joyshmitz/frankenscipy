@@ -1206,14 +1206,34 @@ fn jv_scalar(v: f64, z: f64) -> f64 {
     }
 
     let az = z.abs();
+    let av = v.abs();
 
-    // Power series: J_v(z) = (z/2)^v Σ (-z²/4)^k / (k! Γ(v+k+1))
-    if az < 20.0 + v.abs() {
+    // Power series: J_v(z) = (z/2)^v Σ (-z²/4)^k / (k! Γ(v+k+1)). The series'
+    // largest term is ~e^z while |J_v| ~ z^{-1/2}, so it loses ~0.43·z digits to
+    // cancellation in the oscillatory region z > v — catastrophic for large z
+    // (jv(30.5,50) via the old z < 20+|v| cutoff gave 1.48 vs scipy -0.0084).
+    // Restrict it to where cancellation is mild: z ≤ |v| (pre-turning-point,
+    // terms decay monotonically) or small z (< 20, ≲9 digits lost).
+    if az <= av || az < 20.0 {
         return jv_series(v, z);
     }
 
-    // Asymptotic: J_v(z) ≈ sqrt(2/(πz)) cos(z - vπ/2 - π/4) for large z
-    jv_asymptotic(v, az)
+    // Oscillatory region z > max(|v|, 20). The DLMF 10.17.3 asymptotic only
+    // converges for z > v² (its term ratio is ~v²/(2z)); in the transition band
+    // |v| < z ≤ v² it diverges and returned ~1-relative garbage (jv(10.5,50) was
+    // 0.0296 vs scipy -0.0848). There z > |v|, so J_v is reached by a stable
+    // Miller backward recurrence from a small base order; negative order is
+    // mapped via J_{-p} = cos(pπ)J_p − sin(pπ)Y_p with Y_p from the (stable)
+    // upward recurrence. frankenscipy-goaov.
+    if av < 1.0 || az > av * av {
+        return jv_asymptotic(v, az);
+    }
+    let jav = jv_miller(av, az);
+    if v > 0.0 {
+        jav
+    } else {
+        (av * PI).cos() * jav - (av * PI).sin() * yv_upward(av, az)
+    }
 }
 
 /// Power series for J_v(z).
@@ -1308,6 +1328,110 @@ fn jv_asymptotic(v: f64, z: f64) -> f64 {
     }
     let omega = z - v * PI / 2.0 - PI / 4.0;
     (FRAC_2_PI / z).sqrt() * (omega.cos() * p - omega.sin() * q)
+}
+
+/// Shared P, Q sums for the DLMF 10.17.3/10.17.4 large-z Bessel asymptotics.
+/// Valid only when z is large relative to the order (z ≳ v²); the series is
+/// divergent and summed to its smallest term.
+fn bessel_asymptotic_pq(v: f64, z: f64) -> (f64, f64) {
+    let mu = 4.0 * v * v;
+    let mut term = 1.0_f64;
+    let mut prev_abs = 1.0_f64;
+    let mut p = 1.0_f64;
+    let mut q = 0.0_f64;
+    for k in 1..64 {
+        let kf = k as f64;
+        term *= (mu - (2.0 * kf - 1.0).powi(2)) / (8.0 * kf * z);
+        let abs_term = term.abs();
+        if abs_term > prev_abs {
+            break;
+        }
+        if k % 2 == 0 {
+            let sign = if (k / 2) % 2 == 0 { 1.0 } else { -1.0 };
+            p += sign * term;
+        } else {
+            let sign = if ((k - 1) / 2) % 2 == 0 { 1.0 } else { -1.0 };
+            q += sign * term;
+        }
+        prev_abs = abs_term;
+        if abs_term <= f64::EPSILON {
+            break;
+        }
+    }
+    (p, q)
+}
+
+/// Y_v(z) large-z asymptotic (DLMF 10.17.4), companion to [`jv_asymptotic`].
+/// Only valid for z ≳ v²; used here for the small base orders of the recurrence.
+fn yv_asymptotic(v: f64, z: f64) -> f64 {
+    let (p, q) = bessel_asymptotic_pq(v, z);
+    let omega = z - v * PI / 2.0 - PI / 4.0;
+    (FRAC_2_PI / z).sqrt() * (omega.sin() * p + omega.cos() * q)
+}
+
+/// J_v(z) by Miller's backward recurrence, for non-integer order av ≥ 1 with
+/// av < z (the oscillatory transition band v < z ≤ v² where the plain large-z
+/// asymptotic diverges). J is the recessive solution as order increases, so the
+/// downward recurrence J_{ν−1} = (2ν/z)J_ν − J_{ν+1} is stable; the unnormalized
+/// run is rescaled by the accurate small-order asymptotic value (whichever base
+/// order has the larger magnitude, to avoid normalizing through a J zero).
+fn jv_miller(av: f64, z: f64) -> f64 {
+    let frac = av - av.floor();
+    let n = (av - frac).round() as usize;
+    let m_start = n + z as usize + 50;
+    let mut jp1 = 0.0_f64;
+    let mut jc = 1e-300_f64;
+    let mut order = frac + m_start as f64;
+    let mut j_at_n = 0.0_f64;
+    let mut j_at_0 = 0.0_f64;
+    let mut j_at_1 = 0.0_f64;
+    let mut m = m_start as isize;
+    while m >= 0 {
+        let mu = m as usize;
+        if mu == n {
+            j_at_n = jc;
+        }
+        if m == 0 {
+            j_at_0 = jc;
+        }
+        if m == 1 {
+            j_at_1 = jc;
+        }
+        let jm1 = (2.0 * order / z) * jc - jp1;
+        jp1 = jc;
+        jc = jm1;
+        order -= 1.0;
+        m -= 1;
+    }
+    let t0 = jv_asymptotic(frac, z);
+    let t1 = jv_asymptotic(frac + 1.0, z);
+    let scale = if j_at_0.abs() >= j_at_1.abs() {
+        t0 / j_at_0
+    } else {
+        t1 / j_at_1
+    };
+    j_at_n * scale
+}
+
+/// Y_v(z) by upward recurrence for non-integer order av ≥ 1 with av < z. Y is
+/// the dominant solution as order increases, so the upward recurrence
+/// Y_{ν+1} = (2ν/z)Y_ν − Y_{ν−1} is stable; the base orders use [`yv_asymptotic`].
+fn yv_upward(av: f64, z: f64) -> f64 {
+    let frac = av - av.floor();
+    let n = (av - frac).round() as usize;
+    if n == 0 {
+        return yv_asymptotic(frac, z);
+    }
+    let mut ym1 = yv_asymptotic(frac, z);
+    let mut ym = yv_asymptotic(frac + 1.0, z);
+    let mut order = frac + 1.0;
+    for _ in 0..(n - 1) {
+        let next = (2.0 * order / z) * ym - ym1;
+        ym1 = ym;
+        ym = next;
+        order += 1.0;
+    }
+    ym
 }
 
 /// Y_v(z) for real order v.
@@ -4077,6 +4201,34 @@ pub fn jn_zeros(n: u32, k: usize) -> Vec<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy
+    fn jv_yv_oscillatory_large_order_matches_scipy() {
+        // frankenscipy-goaov: in the oscillatory band |v| < z ≤ v² the DLMF
+        // 10.17.3 large-z asymptotic diverges (term ratio ~v²/(2z)>1), so
+        // jv(10.5,50) was 0.0296 vs scipy -0.0848 and yv was 43% off. Stable
+        // recurrences (Miller backward for J, upward for the dominant Y) now
+        // track scipy. (v, z, jv, yv) from scipy.special 1.17.1.
+        let cases: [(f64, f64, f64, f64); 10] = [
+            (10.5, 50.0, -0.08484972094355323, 0.07630487814534202),
+            (20.5, 50.0, -0.08905749444593426, 0.07762984235393049),
+            (10.5, 80.0, 0.07504844558951558, 0.04893610385008825),
+            (30.5, 80.0, 0.08105179077034935, -0.045144937097620484),
+            (50.5, 150.0, -0.06698277098437858, 0.004528086280292741),
+            (100.5, 300.0, 0.014234331967893813, 0.04527228395681286),
+            (10.25, 50.0, -0.10540198817035573, 0.043568700883024794),
+            (15.75, 80.0, 0.07816700781318475, -0.044791887989034496),
+            (-10.5, 50.0, -0.07630487814534202, -0.08484972094355323),
+            (-20.5, 80.0, 0.052184524915355836, 0.07422369444265345),
+        ];
+        for (v, z, jref, yref) in cases {
+            let j = jv_scalar(v, z);
+            let y = yv_scalar(v, z, RuntimeMode::Strict).unwrap();
+            assert!((j - jref).abs() <= 1e-9 * jref.abs().max(1e-3), "jv({v},{z}) = {j}, scipy {jref}");
+            assert!((y - yref).abs() <= 1e-9 * yref.abs().max(1e-3), "yv({v},{z}) = {y}, scipy {yref}");
+        }
+    }
 
     #[test]
     #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy
