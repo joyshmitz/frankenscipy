@@ -940,12 +940,15 @@ pub fn sici(x: f64) -> (f64, f64) {
 
     let ax = x.abs();
 
-    // Series converges for all x, but asymptotic is faster for large x
-    // Use series for x < 20 where it converges quickly with good accuracy
-    let (si, ci) = if ax < 20.0 {
+    // The power series cancels catastrophically as x grows and the classical
+    // asymptotic bottoms out at its optimal-truncation floor (~1e-9 near x≈20),
+    // so above a small threshold evaluate Si/Ci from the complex exponential
+    // integral E₁(ix) via a modified-Lentz continued fraction, which stays
+    // machine-accurate. frankenscipy-dyni8.
+    let (si, ci) = if ax < 6.0 {
         sici_series(ax)
     } else {
-        sici_asymptotic(ax)
+        sici_cf(ax)
     };
 
     // Si(-x) = -Si(x), Ci(-x) = Ci(x) + i*π (we ignore imaginary part for real x > 0)
@@ -991,52 +994,45 @@ fn sici_series(x: f64) -> (f64, f64) {
     (si, ci)
 }
 
-/// Asymptotic expansion for Si and Ci (large arguments).
-fn sici_asymptotic(x: f64) -> (f64, f64) {
-    // For large x:
-    // Si(x) ≈ π/2 - f(x)cos(x) - g(x)sin(x)
-    // Ci(x) ≈ f(x)sin(x) - g(x)cos(x)
-    // where f(x) = (1/x)[1 - 2!/x² + 4!/x⁴ - ...] (alternating factorials)
-    //       g(x) = (1/x²)[1 - 3!/x² + 5!/x⁴ - ...]
+/// Si(x) and Ci(x) for x ≥ 6 via the complex exponential integral:
+/// E₁(ix) = -Ci(x) + i(Si(x) - π/2) for x > 0, so Ci(x) = -Re E₁(ix) and
+/// Si(x) = π/2 + Im E₁(ix). E₁ is evaluated with the modified-Lentz continued
+/// fraction (Numerical Recipes §6.3) on the imaginary axis — machine-accurate
+/// where the power series cancels and the real asymptotic stalls.
+fn sici_cf(x: f64) -> (f64, f64) {
+    const EPS: f64 = 1e-16;
+    const FPMIN: f64 = 1e-300;
+    const MAXIT: usize = 400;
 
-    let x_inv = 1.0 / x;
-    let x2_inv = x_inv * x_inv;
-
-    let (sin_x, cos_x) = x.sin_cos();
-    let half_pi = std::f64::consts::FRAC_PI_2;
-
-    // Compute the auxiliary functions f and g via their series
-    let mut f_aux = 0.0;
-    let mut g_aux = 0.0;
-    let mut term_f = 1.0;
-    let mut term_g = 1.0;
-
-    for n in 0..10 {
-        f_aux += term_f;
-        g_aux += term_g;
-
-        // term_f(n+1) = -term_f(n) * (2n+2)(2n+1) / x²
-        // term_g(n+1) = -term_g(n) * (2n+3)(2n+2) / x²
-        let nf = n as f64;
-        term_f *= -(2.0 * nf + 2.0) * (2.0 * nf + 1.0) * x2_inv;
-        term_g *= -(2.0 * nf + 3.0) * (2.0 * nf + 2.0) * x2_inv;
-
-        if term_f.abs() < 1e-15 && term_g.abs() < 1e-15 {
+    let one = Complex64::from_real(1.0);
+    let tiny = Complex64::from_real(FPMIN);
+    let z = Complex64::new(0.0, x);
+    let mut b = z + one;
+    let mut c = Complex64::from_real(1.0 / FPMIN);
+    let mut d = b.recip();
+    let mut h = d;
+    for i in 1..=MAXIT {
+        let a = Complex64::from_real(-((i * i) as f64)); // -i·(nm1+i), nm1=0
+        b = b + Complex64::from_real(2.0);
+        let mut den = a * d + b;
+        if den.re == 0.0 && den.im == 0.0 {
+            den = tiny;
+        }
+        d = den.recip();
+        c = b + a / c;
+        if c.re == 0.0 && c.im == 0.0 {
+            c = tiny;
+        }
+        let del = c * d;
+        h = h * del;
+        if (del - one).abs() <= EPS {
             break;
         }
-        if term_f.abs() > 1e8 || term_g.abs() > 1e8 {
-            break; // Asymptotic series diverging
-        }
     }
-
-    let f_val = f_aux * x_inv;
-    let g_val = g_aux * x2_inv;
-
-    let si = half_pi - f_val * cos_x - g_val * sin_x;
-    let ci = f_val * sin_x - g_val * cos_x;
-
-    (si, ci)
+    let e1 = h * (-z).exp();
+    (std::f64::consts::FRAC_PI_2 + e1.im, -e1.re)
 }
+
 
 /// Hyperbolic sine integral Shi(x) and hyperbolic cosine integral Chi(x).
 ///
@@ -5797,6 +5793,29 @@ pub fn binary_cross_entropy_scalar(p: f64, q: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy
+    fn sici_matches_scipy() {
+        // frankenscipy-dyni8: x≥6 now uses the complex-E₁ continued fraction
+        // (was ~1e-9 off near x=20 from the asymptotic floor). scipy 1.17.1.
+        let cases = [
+            (1.0, 0.9460830703671831, 0.33740392290096816),
+            (5.0, 1.549931244944674, -0.1900297496566439),
+            (6.0, 1.4246875512805066, -0.06805724389324713),
+            (10.0, 1.658347594218874, -0.04545643300445537),
+            (20.0, 1.5482417010434397, 0.044419820845353314),
+            (50.0, 1.551617072485936, -0.005628386324116305),
+            (200.0, 1.5683823393394698, -0.004378446093027826),
+            (1000.0, 1.5702331219687713, 0.0008263155110906821),
+            (-20.0, -1.5482417010434397, 0.044419820845353314),
+        ];
+        for (x, si_ref, ci_ref) in cases {
+            let (si, ci) = sici(x);
+            assert!((si - si_ref).abs() < 1e-12, "Si({x}) = {si}, scipy {si_ref}");
+            assert!((ci - ci_ref).abs() < 1e-12, "Ci({x}) = {ci}, scipy {ci_ref}");
+        }
+    }
 
     #[test]
     #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy
