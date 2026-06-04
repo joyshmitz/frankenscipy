@@ -181,7 +181,7 @@ pub fn erf_scalar(x: f64) -> f64 {
     1.0 - erfc_cf_real(x)
 }
 
-fn erf_complex_scalar(z: Complex64) -> Complex64 {
+pub(crate) fn erf_complex_scalar(z: Complex64) -> Complex64 {
     if z.re < 0.0 {
         return -erf_complex_scalar(-z);
     }

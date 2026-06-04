@@ -3258,7 +3258,20 @@ pub fn erfcinv_conv(y: f64) -> f64 {
 ///
 /// Avoids overflow for large x. Matches `scipy.special.erfcx`.
 pub fn erfcx(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real("erfcx", x_tensor, mode, |x| Ok(erfcx_scalar(x)))
+    map_real_or_complex(
+        "erfcx",
+        x_tensor,
+        mode,
+        |x| Ok(erfcx_scalar(x)),
+        |z| erfcx_complex_scalar(z, mode),
+    )
+}
+
+/// Scaled complementary error function for complex argument:
+/// erfcx(z) = e^{z²} erfc(z) = w(iz), the Faddeeva function. frankenscipy-rkwu4.
+fn erfcx_complex_scalar(z: Complex64, mode: RuntimeMode) -> Result<Complex64, SpecialError> {
+    // i·z = (-Im(z)) + i·Re(z).
+    wofz_scalar(Complex64::new(-z.im, z.re), mode)
 }
 
 pub fn erfcx_scalar(x: f64) -> f64 {
@@ -3305,11 +3318,26 @@ fn erfi_impl(x: f64) -> f64 {
 }
 
 pub fn erfi(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real("erfi", x_tensor, mode, |x| Ok(erfi_scalar(x)))
+    map_real_or_complex(
+        "erfi",
+        x_tensor,
+        mode,
+        |x| Ok(erfi_scalar(x)),
+        |z| Ok(erfi_complex_scalar(z)),
+    )
 }
 
 pub fn erfi_scalar(x: f64) -> f64 {
     erfi_impl(x)
+}
+
+/// Imaginary error function for complex argument: erfi(z) = -i·erf(iz).
+/// frankenscipy-rkwu4.
+fn erfi_complex_scalar(z: Complex64) -> Complex64 {
+    // erf(iz) with iz = (-Im(z)) + i·Re(z); then multiply by -i.
+    let e = crate::error::erf_complex_scalar(Complex64::new(-z.im, z.re));
+    // -i·(e.re + i·e.im) = e.im - i·e.re.
+    Complex64::new(e.im, -e.re)
 }
 
 /// Owen's T function: T(h, a) = (1/2π) ∫₀ᵃ exp(-h²(1+t²)/2) / (1+t²) dt.
@@ -3575,11 +3603,28 @@ pub fn log_ndtr_scalar(x: f64) -> f64 {
 ///
 /// Matches `scipy.special.dawsn` (scalar convenience).
 pub fn dawsn(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real("dawsn", x_tensor, mode, |x| Ok(dawsn_scalar(x)))
+    map_real_or_complex(
+        "dawsn",
+        x_tensor,
+        mode,
+        |x| Ok(dawsn_scalar(x)),
+        |z| dawsn_complex_scalar(z, mode),
+    )
 }
 
 pub fn dawsn_scalar(x: f64) -> f64 {
     dawsn_impl(x)
+}
+
+/// Dawson's integral for complex argument. From w(z) = e^{-z²}(1 + erf(iz)) and
+/// erf(iz) = i·erfi(z) = i·(2/√π)·D(z):
+///   D(z) = -i·(√π/2)·(w(z) − e^{-z²}). frankenscipy-rkwu4.
+fn dawsn_complex_scalar(z: Complex64, mode: RuntimeMode) -> Result<Complex64, SpecialError> {
+    let w = wofz_scalar(z, mode)?;
+    let diff = w - (-(z * z)).exp();
+    let sq = PI.sqrt() / 2.0;
+    // -i·(√π/2)·diff = (√π/2)·(diff.im − i·diff.re).
+    Ok(Complex64::new(diff.im * sq, -diff.re * sq))
 }
 
 /// Compute the Struve function H_v(x) (scalar convenience).
@@ -6078,6 +6123,44 @@ pub fn binary_cross_entropy_scalar(p: f64, q: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy
+    #[allow(clippy::type_complexity)] // flat (re,im,3×complex) golden rows
+    fn complex_erfcx_erfi_dawsn_match_scipy() {
+        // frankenscipy-rkwu4: erfcx/erfi/dawsn were real-only (map_real fails
+        // closed on complex input) while scipy evaluates them for complex z.
+        // Added via identities to the clean Faddeeva/erf siblings:
+        //   erfcx(z)=w(iz), erfi(z)=-i erf(iz), dawsn(z)=-i(√π/2)(w(z)-e^{-z²}).
+        // (re, im, erfcx.re, erfcx.im, erfi.re, erfi.im, dawsn.re, dawsn.im) — scipy 1.17.1.
+        let cases: [(f64, f64, f64, f64, f64, f64, f64, f64); 5] = [
+            (0.5, 1.0, 0.35490033286757783, -0.3428717191311008, 0.18797346722338337, 0.9507097283189572, 1.6914496078608425, 0.666961949487037),
+            (2.0, 3.0, 0.09271076642644344, -0.1283169622282617, -1.1546724379290491e-05, 0.9989632788568172, -70.5023377945093, 110.8743213409972),
+            (-1.0, 4.0, -0.03628154550758465, -0.1358395562946222, -3.79403296908907e-08, 1.0000000150962953, -2866261.1123123285, -421526.9848770045),
+            (0.1, 8.0, 0.0009029126289383003, -0.07107654514487582, 1.1326489048167856e-29, 1.0, 5.468442077084464e27, -1.597440107434527e26),
+            (5.0, -2.0, 0.0964981126066414, 0.037351653156368785, 101670558.35825253, -96103547.82551727, 0.08683899411315939, 0.036019520041904195),
+        ];
+        let cscalar = |re: f64, im: f64| SpecialTensor::ComplexScalar(Complex64::new(re, im));
+        let getc = |r: SpecialResult| match r {
+            Ok(SpecialTensor::ComplexScalar(v)) => v,
+            _ => Complex64::new(f64::NAN, f64::NAN),
+        };
+        for (re, im, cxr, cxi, fir, fii, dwr, dwi) in cases {
+            let z = cscalar(re, im);
+            let cx = getc(erfcx(&z, RuntimeMode::Strict));
+            let fi = getc(erfi(&z, RuntimeMode::Strict));
+            let dw = getc(dawsn(&z, RuntimeMode::Strict));
+            for (got, wr, wi, name) in [
+                (cx, cxr, cxi, "erfcx"),
+                (fi, fir, fii, "erfi"),
+                (dw, dwr, dwi, "dawsn"),
+            ] {
+                let denom = wr.hypot(wi).max(1e-12);
+                let err = (got.re - wr).hypot(got.im - wi) / denom;
+                assert!(err <= 1e-9, "{name}({re}{im:+}i) = {got:?}, scipy ({wr},{wi}), rel {err:e}");
+            }
+        }
+    }
 
     #[test]
     #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy
