@@ -741,28 +741,44 @@ fn fresnel_asymptotic(x: f64) -> (f64, f64) {
     // Asymptotic: S(x) ≈ 1/2 - f(x)cos(πx²/2) - g(x)sin(πx²/2)
     //             C(x) ≈ 1/2 + f(x)sin(πx²/2) - g(x)cos(πx²/2)
 
+    // A&S 7.3.27/7.3.28 auxiliary functions (the previous coefficients were
+    // wrong — (2n)(2n-1) instead of (4m-1)(4m-3) for f, (2n+1)(2n) instead of
+    // (4m+1)(4m-1) for g — and g was scaled by πx² instead of π²x³, leaving
+    // C off ~1e-3 at large x). frankenscipy-2fpck.
+    //   f(x) = 1/(πx)  Σ_m (-1)^m (4m-1)!! / (πx²)^{2m}
+    //   g(x) = 1/(π²x³) Σ_m (-1)^m (4m+1)!! / (πx²)^{2m}
     let pix = std::f64::consts::PI * x;
-    let pix2 = pix * x;
+    let pix2 = pix * x; // π x²
     let half_pix2 = std::f64::consts::FRAC_PI_2 * x * x;
+    let inv_sq = 1.0 / (pix2 * pix2); // 1/(πx²)²
 
     let mut f_term = 1.0;
     let mut g_term = 1.0;
     let mut f = f_term;
     let mut g = g_term;
+    let mut f_prev = 1.0;
+    let mut g_prev = 1.0;
 
-    for n in 1..20 {
-        let nf = n as f64;
-        f_term *= -(2.0 * nf) * (2.0 * nf - 1.0) / (pix2 * pix2);
-        g_term *= -(2.0 * nf + 1.0) * (2.0 * nf) / (pix2 * pix2);
+    for m in 1..40 {
+        let mf = m as f64;
+        // (4m-1)!!/(4m-5)!! = (4m-1)(4m-3);  (4m+1)!!/(4m-3)!! = (4m+1)(4m-1).
+        f_term *= -(4.0 * mf - 1.0) * (4.0 * mf - 3.0) * inv_sq;
+        g_term *= -(4.0 * mf + 1.0) * (4.0 * mf - 1.0) * inv_sq;
+        // Asymptotic series: stop once a term stops shrinking.
+        if f_term.abs() > f_prev && g_term.abs() > g_prev {
+            break;
+        }
         f += f_term;
         g += g_term;
-        if f_term.abs() < 1e-16 && g_term.abs() < 1e-16 {
+        f_prev = f_term.abs();
+        g_prev = g_term.abs();
+        if f_term.abs() < 1e-18 && g_term.abs() < 1e-18 {
             break;
         }
     }
 
-    f /= pix;
-    g /= pix2;
+    f /= pix; // 1/(πx)
+    g /= pix2 * pix; // 1/(π²x³)
 
     let sin_t = half_pix2.sin();
     let cos_t = half_pix2.cos();
@@ -5753,22 +5769,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn probe_more_large_arg() {
-        for (v, x) in [(0.0, 10.0), (0.0, 30.0), (1.0, 30.0), (1.0, 50.0)] {
-            println!("PROBE modstruve({v},{x}) = {:e}", modstruve_scalar(v, x));
-        }
-        for x in [3.0, 10.0, 50.0, 200.0] {
+    #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy
+    fn fresnel_large_x_matches_scipy() {
+        // frankenscipy-2fpck: corrected A&S 7.3.27/28 auxiliary-function series.
+        // The cosine integral C was ~1e-3 off at large x. scipy.special.fresnel.
+        let cases = [
+            (6.0, 0.4469607612369303, 0.4995314678555011),
+            (7.0, 0.49970478945344676, 0.5454670925469698),
+            (10.0, 0.46816997858488224, 0.49989869420551575),
+            (50.0, 0.49363380258593875, 0.49999918943072796),
+            (200.0, 0.49840845056938343, 0.49999998733485207),
+            (1000.0, 0.4996816901138163, 0.4999999998986788),
+            (-50.0, -0.49363380258593875, -0.49999918943072796),
+        ];
+        for (x, sref, cref) in cases {
             let (s, c) = fresnel(x);
-            println!("PROBE fresnel({x}) S={s:e} C={c:e}");
-        }
-        let airy_at = |x: f64| {
-            let r = crate::airy::airy(&SpecialTensor::RealScalar(x), RuntimeMode::Strict).unwrap();
-            let g = |t: &SpecialTensor| match t { SpecialTensor::RealScalar(v) => *v, _ => f64::NAN };
-            (g(&r[0]), g(&r[1]), g(&r[2]), g(&r[3]))
-        };
-        for x in [10.0, 30.0, -10.0, -30.0, 100.0] {
-            let (ai, aip, bi, bip) = airy_at(x);
-            println!("PROBE airy({x}) Ai={ai:e} Aip={aip:e} Bi={bi:e} Bip={bip:e}");
+            assert!((s - sref).abs() < 1e-12, "fresnel({x}).S = {s}, scipy {sref}");
+            assert!((c - cref).abs() < 1e-12, "fresnel({x}).C = {c}, scipy {cref}");
         }
     }
 
