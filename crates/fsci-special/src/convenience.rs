@@ -838,8 +838,9 @@ fn dawsn_impl(x: f64) -> f64 {
     let sign = x.signum();
     let ax = x.abs();
 
-    // For small x, use Taylor series: D(x) ≈ x - 2x³/3 + 4x⁵/15 - ...
-    if ax < 0.2 {
+    // For very small x, the Taylor series D(x) ≈ x - 2x³/3 + 4x⁵/15 - ... is
+    // exact to machine precision; Rybicki covers everything above it.
+    if ax < 0.025 {
         let x2 = ax * ax;
         let result = ax
             * (1.0 - 2.0 * x2 / 3.0 + 4.0 * x2 * x2 / 15.0 - 8.0 * x2 * x2 * x2 / 105.0
@@ -847,9 +848,10 @@ fn dawsn_impl(x: f64) -> f64 {
         return sign * result;
     }
 
-    // Rybicki's algorithm: D(x) ≈ (1/√π) Σ exp(-(x - n*h)²) for suitable h
-    // Using the Cephes-style polynomial approximation approach instead
-    if ax < 3.9 {
+    // Mid-range via Rybicki's method (machine-accurate); large x via the
+    // asymptotic series. The previous fixed-step Simpson quadrature was only
+    // ~1e-7. frankenscipy-p43m1.
+    if ax < 6.25 {
         return sign * dawsn_mid(ax);
     }
 
@@ -857,26 +859,33 @@ fn dawsn_impl(x: f64) -> f64 {
     sign * dawsn_asymptotic(ax)
 }
 
-/// Dawson function for moderate arguments via numerical integration.
+/// Dawson function for moderate |x| via Rybicki's method (Numerical Recipes
+/// §6.10): D(x) = (1/√π) Σ_{n odd} e^{-(x-nh)²}/n, evaluated with the standard
+/// folded summation around the nearest even node n₀. Machine-accurate for
+/// 0.025 ≤ x < 6.25 (the Rybicki truncation error is ~exp(-(π/2H)²), negligible
+/// at H = 0.25), replacing the ~1e-7 fixed-step Simpson quadrature.
 fn dawsn_mid(x: f64) -> f64 {
-    // Use composite Simpson's rule for ∫₀ˣ exp(t²-x²) dt
-    let n = 200;
-    let h = x / n as f64;
-    let x2 = x * x;
+    const H: f64 = 0.25;
+    const NMAX: usize = 58;
 
+    let n0 = 2 * (0.5 * x / H + 0.5) as i64;
+    let xp = x - n0 as f64 * H;
+    let mut e1 = (2.0 * xp * H).exp();
+    let e2 = e1 * e1;
+    let mut d1 = (n0 + 1) as f64;
+    let mut d2 = d1 - 2.0;
     let mut sum = 0.0;
-    for i in 0..=n {
-        let t = i as f64 * h;
-        let w = if i == 0 || i == n {
-            1.0
-        } else if i % 2 == 1 {
-            4.0
-        } else {
-            2.0
-        };
-        sum += w * (t * t - x2).exp();
+
+    for i in 1..=NMAX {
+        let arg = (2 * i - 1) as f64 * H;
+        let c = (-arg * arg).exp();
+        sum += c * (e1 / d1 + 1.0 / (d2 * e1));
+        d1 += 2.0;
+        d2 -= 2.0;
+        e1 *= e2;
     }
-    sum * h / 3.0
+
+    (-xp * xp).exp() * sum / std::f64::consts::PI.sqrt()
 }
 
 /// Dawson function asymptotic expansion for large arguments.
@@ -885,10 +894,16 @@ fn dawsn_asymptotic(x: f64) -> f64 {
     let inv_2x2 = 0.5 / x2;
     let mut term = 1.0;
     let mut sum = 1.0;
+    let mut prev_abs = 1.0;
 
-    for n in 1..20 {
+    for n in 1..60 {
         term *= (2 * n - 1) as f64 * inv_2x2;
+        // Divergent asymptotic series — stop at the smallest term.
+        if term.abs() > prev_abs {
+            break;
+        }
         sum += term;
+        prev_abs = term.abs();
         if term.abs() < 1e-16 * sum.abs() {
             break;
         }
@@ -5767,6 +5782,34 @@ pub fn binary_cross_entropy_scalar(p: f64, q: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy
+    fn dawsn_matches_scipy() {
+        // frankenscipy-p43m1: Rybicki mid-range replaces ~1e-7 Simpson; the
+        // asymptotic gained optimal truncation. scipy.special.dawsn 1.17.1.
+        let cases = [
+            (0.03, 0.02998200647833413),
+            (0.5, 0.4244363835020223),
+            (1.0, 0.5380795069127684),
+            (2.0, 0.301340388923792),
+            (3.0, 0.17827103061055827),
+            (3.9, 0.13292729108108925),
+            (5.0, 0.10213407442427686),
+            (6.25, 0.08106609406101171),
+            (10.0, 0.05025384718759854),
+            (30.0, 0.016675941401059196),
+            (-3.0, -0.17827103061055827),
+        ];
+        for (x, expected) in cases {
+            let got = dawsn_scalar(x);
+            let rel = ((got - expected) / expected).abs();
+            assert!(rel < 1e-13, "dawsn({x}) = {got}, scipy {expected}, rel={rel:e}");
+        }
+        // Propagation check: Im wofz(3+0i) = (2/√π) dawsn(3).
+        let w = wofz_scalar(Complex64::new(3.0, 0.0), RuntimeMode::Strict).unwrap();
+        assert!((w.im - 0.20115731703760037).abs() < 1e-13, "wofz(3).im = {}", w.im);
+    }
 
     #[test]
     #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy
