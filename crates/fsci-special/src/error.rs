@@ -185,18 +185,25 @@ fn erf_complex_scalar(z: Complex64) -> Complex64 {
     if z.re < 0.0 {
         return -erf_complex_scalar(-z);
     }
-    // Threshold lowered from 4.5 to 4.0, mirroring the erfc fix
-    // in this commit. The Maclaurin series for erf has 80-term
-    // limit and at z ≈ 4.5 the alternating-sign partial sum
-    // suffers cancellation that produces ~1e-12 jitter, breaking
-    // monotonicity downstream (caught by [frankenscipy-evspb] —
-    // PowerLognorm.cdf snapped to 1.0 at z ≈ 4.7 from over-rounded
-    // erf, then dropped to 0.93 at z ≈ 4.9 once the asymptotic
-    // path kicked in).
-    if z.abs() <= 4.0 || z.re < 1.0 {
+    // Use the Maclaurin series only for small |z| (≤ 4; the 80-term sum stays
+    // above the cancellation regime there — the threshold also avoids the
+    // ~1e-12 jitter near z ≈ 4.5 that broke CDF monotonicity in
+    // [frankenscipy-evspb]). The previous `|| z.re < 1.0` clause routed every
+    // small-real-part argument to the series regardless of |Im|, but for large
+    // imaginary part the series peaks past term 80 and cancels (max term
+    // ~e^{|z|²}): erf(0.1+10i) was 97% off, erf(0.5-20i) ~100%. For |z| > 4 use
+    // the Faddeeva relation erfc(z) = e^{-z²} w(iz): w (wofz) is accurate across
+    // the whole upper half plane (iz has Im = Re(z) ≥ 0 after the reflection
+    // above), with no asymptotic-floor gap near |z| ≈ 4. frankenscipy-foy2t.
+    if z.abs() <= 4.0 {
         return erf_complex_series(z);
     }
-    Complex64::from_real(1.0) - erfc_complex_asymptotic(z)
+    // i·z = (-Im(z)) + i·Re(z); after the Re<0 reflection Re(z) ≥ 0 so iz is in
+    // wofz's native upper half plane.
+    let iz = Complex64::new(-z.im, z.re);
+    let w = crate::convenience::wofz_scalar(iz, RuntimeMode::Strict)
+        .unwrap_or(Complex64::new(f64::NAN, f64::NAN));
+    Complex64::from_real(1.0) - (-(z * z)).exp() * w
 }
 
 pub fn erfc_scalar(x: f64) -> f64 {
@@ -274,10 +281,16 @@ fn erfc_complex_scalar(z: Complex64) -> Complex64 {
     // deep tail. 4.0 is the tightest split that keeps the
     // asymptotic series above its precision floor (~3e-6 at
     // z=3.5) while still catching the cancellation regime.
-    if z.abs() <= 4.0 || z.re < 1.0 {
+    // See erf_complex_scalar: gate the series on |z| only (the old `|| z.re<1.0`
+    // sent large-imaginary-part arguments to the truncating/cancelling series),
+    // and use the Faddeeva relation erfc(z) = e^{-z²} w(iz) for |z| > 4.
+    if z.abs() <= 4.0 {
         return Complex64::from_real(1.0) - erf_complex_series(z);
     }
-    erfc_complex_asymptotic(z)
+    let iz = Complex64::new(-z.im, z.re);
+    let w = crate::convenience::wofz_scalar(iz, RuntimeMode::Strict)
+        .unwrap_or(Complex64::new(f64::NAN, f64::NAN));
+    (-(z * z)).exp() * w
 }
 
 fn erf_complex_series(z: Complex64) -> Complex64 {
@@ -316,6 +329,9 @@ fn erf_series_real(x: f64) -> f64 {
     sum * TWO_INV_SQRT_PI
 }
 
+// Superseded by the Faddeeva (wofz) relation in erf/erfc_complex_scalar, which
+// has no asymptotic-floor gap near |z| ≈ 4. Kept as a reference implementation.
+#[allow(dead_code)]
 fn erfc_complex_asymptotic(z: Complex64) -> Complex64 {
     let z2 = z * z;
     let mut term = Complex64::from_real(1.0);
@@ -629,6 +645,31 @@ fn inv_norm_cdf_scalar(p: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy
+    fn erf_complex_large_imaginary_matches_scipy() {
+        // frankenscipy-foy2t: the `|| z.re < 1.0` series gate sent small-real /
+        // large-imaginary arguments to the 80-term Maclaurin series, which
+        // truncates before convergence and cancels (max term ~e^{|z|²}):
+        // erf(0.1+10i) was 97% off, erf(0.5-20i) ~100%. The Faddeeva relation
+        // erfc(z)=e^{-z²}w(iz) for |z|>4 fixes it. (re, im, erf.re, erf.im) from
+        // scipy.special.erf 1.17.1.
+        let cases: [(f64, f64, f64, f64); 6] = [
+            (0.1, 10.0, 1.3784606413850375e42, -6.140976128501518e41),
+            (0.5, 10.0, -5.9398727494098764e41, -1.0260784858252674e42),
+            (0.1, -8.0, 4.387388758811265e26, 7.240275368450693e24),
+            (-8.0, 8.0, -1.0498517541570318, 0.0011870025535653562),
+            (1.0, 4.0, 456592.30438094615, 52731.820367670356),
+            (0.5, -20.0, 1.036185736591006e172, -4.946816335504394e171),
+        ];
+        for (re, im, wr, wi) in cases {
+            let g = erf_complex_scalar(Complex64::new(re, im));
+            let denom = wr.hypot(wi);
+            let err = (g.re - wr).hypot(g.im - wi) / denom;
+            assert!(err <= 1e-9, "erf({re}{im:+}i) = {g:?}, scipy ({wr}, {wi}), rel {err:e}");
+        }
+    }
 
     #[test]
     #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy
