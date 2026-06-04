@@ -2020,12 +2020,49 @@ pub fn beip(x: f64) -> f64 {
 /// Kelvin function ker(x): real part of K_0(x * sqrt(j)).
 ///
 /// Matches `scipy.special.ker`.
+/// (ker(x), kei(x)) for large x from the Kelvin identity
+/// ker(x) + i·kei(x) = K₀(x e^{iπ/4}), evaluated with the complex DLMF 10.40.2
+/// asymptotic K₀(z) ~ √(π/(2z)) e^{-z} Σ_k a_k/z^k, a₀ = 1,
+/// a_k = a_{k-1}·(-(2k-1)²)/(8k) (the ν=0 coefficients). Summed to its smallest
+/// term (asymptotic/divergent). This avoids the catastrophic cancellation of the
+/// log/harmonic series, which loses ~x√2/ln(10) digits at large x.
+fn kelvin_ker_kei_asymptotic(x: f64) -> (f64, f64) {
+    use std::f64::consts::{FRAC_1_SQRT_2, PI};
+    let z = Complex64::new(x * FRAC_1_SQRT_2, x * FRAC_1_SQRT_2); // x e^{iπ/4}
+    let mut term = Complex64::from_real(1.0);
+    let mut sum = term;
+    let mut prev_abs = 1.0;
+    for k in 1..60 {
+        let kf = k as f64;
+        let coef = -(2.0 * kf - 1.0).powi(2) / (8.0 * kf);
+        term = term * Complex64::from_real(coef) / z;
+        let a = term.abs();
+        if a > prev_abs {
+            break; // past the smallest term of the asymptotic series
+        }
+        sum = sum + term;
+        prev_abs = a;
+        if a < 1e-18 {
+            break;
+        }
+    }
+    let pref = Complex64::from_real((PI / 2.0).sqrt()) * z.powc(Complex64::from_real(-0.5));
+    let k0 = pref * (-z).exp() * sum;
+    (k0.re, k0.im)
+}
+
 pub fn ker(x: f64) -> f64 {
     if x.is_nan() || x < 0.0 {
         return f64::NAN;
     }
     if x == 0.0 {
         return f64::INFINITY;
+    }
+    // Large x: the log/harmonic series below cancels catastrophically (ber/bei
+    // grow like e^{x/√2} while ker decays like e^{-x/√2}), so use the complex
+    // K₀ asymptotic. frankenscipy-rhilt.
+    if x >= 11.0 {
+        return kelvin_ker_kei_asymptotic(x).0;
     }
     // For small x, use the series representation:
     // ker(x) = -(ln(x/2) + γ) * ber(x) + (π/4) * bei(x) + Σ h(k) terms
@@ -2077,6 +2114,9 @@ pub fn kei(x: f64) -> f64 {
     }
     if x == 0.0 {
         return -std::f64::consts::PI / 4.0; // kei(0) = -π/4
+    }
+    if x >= 11.0 {
+        return kelvin_ker_kei_asymptotic(x).1;
     }
     // kei(x) = -(ln(x/2) + γ) * bei(x) - (π/4) * ber(x) + series_correction
 
@@ -5793,6 +5833,29 @@ pub fn binary_cross_entropy_scalar(p: f64, q: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy
+    fn ker_kei_large_x_matches_scipy() {
+        // frankenscipy-rhilt: large x uses K₀(x e^{iπ/4}) asymptotic; the
+        // log/harmonic series was ~3% off at x=20. scipy.special.ker/kei 1.17.1.
+        let cases = [
+            (11.0, -4.7791933610698554e-05, -0.00014953707794845456),
+            (12.0, -6.307713705210742e-05, -3.899959497124564e-05),
+            (15.0, -1.514347207267156e-08, 7.962894398377203e-06),
+            (20.0, -7.715233109860963e-08, -1.8589415111194396e-07),
+            (50.0, -2.9150770893968664e-17, 7.25581322036562e-17),
+        ];
+        for (x, ker_ref, kei_ref) in cases {
+            let kr = ker(x);
+            let ki = kei(x);
+            assert!(((kr - ker_ref) / ker_ref).abs() < 1e-9, "ker({x}) = {kr:e}, scipy {ker_ref:e}");
+            assert!(((ki - kei_ref) / kei_ref).abs() < 1e-9, "kei({x}) = {ki:e}, scipy {kei_ref:e}");
+        }
+        // Continuity / small-x series path stays correct.
+        assert!((ker(5.0) - (-0.011511727199492405)).abs() < 1e-12);
+        assert!((kei(5.0) - 0.011187586509870114).abs() < 1e-12);
+    }
 
     #[test]
     #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy
