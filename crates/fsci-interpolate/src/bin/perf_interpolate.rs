@@ -1,6 +1,8 @@
-use std::process::ExitCode;
+use std::{fmt::Write as _, fs, process::ExitCode};
 
-use fsci_interpolate::{GriddataMethod, RectBivariateSpline, griddata};
+use fsci_interpolate::{
+    GriddataMethod, RectBivariateSpline, RegularGridInterpolator, RegularGridMethod, griddata,
+};
 
 fn grid_1d(n: usize) -> Vec<f64> {
     (0..n).map(|i| i as f64 / (n - 1) as f64).collect()
@@ -53,6 +55,30 @@ fn queries_2d(n: usize) -> Vec<Vec<f64>> {
         .collect()
 }
 
+fn regular_grid_values(points: &[Vec<f64>]) -> Vec<f64> {
+    let nx = points[0].len();
+    let ny = points[1].len();
+    let nz = points[2].len();
+    let mut values = Vec::with_capacity(nx * ny * nz);
+    for &x in &points[0] {
+        for &y in &points[1] {
+            for &z in &points[2] {
+                values.push((x * 5.0).sin() + (y * 3.0).cos() + z * z);
+            }
+        }
+    }
+    values
+}
+
+fn write_or_print(path: Option<&str>, contents: &str) -> Result<(), String> {
+    if let Some(path) = path {
+        fs::write(path, contents).map_err(|err| format!("failed to write {path}: {err}"))
+    } else {
+        print!("{contents}");
+        Ok(())
+    }
+}
+
 fn print_rect_eval_grid_golden() -> Result<(), String> {
     let (x, y, z) = rect_grid(32);
     let spline = RectBivariateSpline::new(&x, &y, &z, 3, 3)
@@ -71,6 +97,35 @@ fn print_rect_eval_grid_golden() -> Result<(), String> {
     Ok(())
 }
 
+fn print_regular_grid_linear_golden(path: Option<&str>) -> Result<(), String> {
+    let points = vec![grid_1d(32), grid_1d(32), grid_1d(16)];
+    let values = regular_grid_values(&points);
+    let queries = queries_2d(4096)
+        .into_iter()
+        .map(|q| vec![q[0], q[1], (q[0] * 0.7 + q[1] * 0.3).fract()])
+        .collect::<Vec<_>>();
+    let interpolator =
+        RegularGridInterpolator::new(points, values, RegularGridMethod::Linear, false, None)
+            .map_err(|err| format!("failed to construct regular-grid interpolator: {err}"))?;
+    let values = interpolator
+        .eval_many(&queries)
+        .map_err(|err| format!("failed to evaluate regular-grid linear: {err}"))?;
+
+    let mut out = String::new();
+    writeln!(&mut out, "fsci-interpolate regular_grid_linear golden v1")
+        .map_err(|err| err.to_string())?;
+    writeln!(
+        &mut out,
+        "grid=32x32x16 queries=4096 method=linear order=query-input bits=f64"
+    )
+    .map_err(|err| err.to_string())?;
+    for (i, value) in values.iter().enumerate() {
+        writeln!(&mut out, "{i:04} {:016x}", value.to_bits()).map_err(|err| err.to_string())?;
+    }
+
+    write_or_print(path, &out)
+}
+
 fn print_griddata_linear_golden() -> Result<(), String> {
     let (points, values) = points_2d(24);
     let queries = queries_2d(1024);
@@ -86,11 +141,24 @@ fn print_griddata_linear_golden() -> Result<(), String> {
 }
 
 fn main() -> ExitCode {
-    let mode = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "golden".to_string());
+    let mut args = std::env::args().skip(1);
+    let mode = args.next().unwrap_or_else(|| "golden".to_string());
+    let output_path = args.next();
+    if args.next().is_some() {
+        eprintln!(
+            "usage: perf_interpolate [golden|griddata-linear|regular-grid-linear] [output-path]"
+        );
+        return ExitCode::from(2);
+    }
     match mode.as_str() {
         "griddata-linear" => match print_griddata_linear_golden() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("{err}");
+                ExitCode::FAILURE
+            }
+        },
+        "regular-grid-linear" => match print_regular_grid_linear_golden(output_path.as_deref()) {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {
                 eprintln!("{err}");
@@ -105,7 +173,9 @@ fn main() -> ExitCode {
             }
         },
         _ => {
-            eprintln!("usage: perf_interpolate [golden|griddata-linear]");
+            eprintln!(
+                "usage: perf_interpolate [golden|griddata-linear|regular-grid-linear] [output-path]"
+            );
             ExitCode::from(2)
         }
     }

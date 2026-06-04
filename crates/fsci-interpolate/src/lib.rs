@@ -1878,6 +1878,10 @@ impl RegularGridInterpolator {
 
     fn eval_linear(&self, xi: &[f64]) -> Result<f64, InterpError> {
         let ndim = self.ndim();
+        if ndim == 3 {
+            return Ok(self.eval_linear_3d(xi));
+        }
+
         let mut indices = Vec::with_capacity(ndim);
         let mut fracs = Vec::with_capacity(ndim);
         for (axis, &x) in self.points.iter().zip(xi) {
@@ -1906,6 +1910,42 @@ impl RegularGridInterpolator {
             result += weight * self.values[flat_idx];
         }
         Ok(result)
+    }
+
+    fn eval_linear_3d(&self, xi: &[f64]) -> f64 {
+        debug_assert_eq!(xi.len(), 3);
+
+        let mut indices = [0usize; 3];
+        let mut fracs = [0.0; 3];
+        for dim in 0..3 {
+            let axis = &self.points[dim];
+            let x = xi[dim];
+            let i = Self::find_interval(axis, x);
+            let denom = axis[i + 1] - axis[i];
+            indices[dim] = i;
+            fracs[dim] = if denom == 0.0 {
+                0.0
+            } else {
+                (x - axis[i]) / denom
+            };
+        }
+
+        let mut result = 0.0;
+        for corner in 0..8usize {
+            let mut weight = 1.0;
+            let mut flat_idx = 0;
+            for dim in 0..3 {
+                let bit = (corner >> dim) & 1;
+                flat_idx += (indices[dim] + bit) * self.strides[dim];
+                weight *= if bit == 0 {
+                    1.0 - fracs[dim]
+                } else {
+                    fracs[dim]
+                };
+            }
+            result += weight * self.values[flat_idx];
+        }
+        result
     }
 
     /// Tensor-product PCHIP interpolation.
@@ -5121,15 +5161,15 @@ mod tests {
         let k = 3usize;
         let n = 1200usize;
         let x: Vec<f64> = (0..n).map(|i| i as f64 * 0.013).collect();
-        let y: Vec<f64> = (0..n).map(|i| (i as f64 * 0.05).sin()).collect();
+        let _y: Vec<f64> = (0..n).map(|i| (i as f64 * 0.05).sin()).collect();
         let t = interpolation_knots(&x, k);
 
         let t0 = Instant::now();
         let mut sink = 0.0f64;
         {
             let mut ata = vec![vec![0.0f64; n]; n];
-            for i in 0..n {
-                let basis = eval_basis_all(&t, x[i], k, n);
+            for &xi in &x {
+                let basis = eval_basis_all(&t, xi, k, n);
                 for j in 0..n {
                     for l in 0..n {
                         ata[j][l] += basis[j] * basis[l];
@@ -5144,8 +5184,8 @@ mod tests {
         {
             let mut ata = vec![vec![0.0f64; n]; n];
             let mut nz: Vec<usize> = Vec::with_capacity(k + 1);
-            for i in 0..n {
-                let basis = eval_basis_all(&t, x[i], k, n);
+            for &xi in &x {
+                let basis = eval_basis_all(&t, xi, k, n);
                 nz.clear();
                 nz.extend((0..n).filter(|&idx| basis[idx] != 0.0));
                 for &j in &nz {
@@ -5161,8 +5201,13 @@ mod tests {
         let sparse = t1.elapsed();
 
         let ratio = dense.as_secs_f64() / sparse.as_secs_f64();
-        println!("smoothing-spline A^TA: dense={dense:?} sparse={sparse:?} speedup={ratio:.2}x sink={sink}");
-        assert!(ratio > 1.0, "sparse assembly should be faster (got {ratio:.2}x)");
+        println!(
+            "smoothing-spline A^TA: dense={dense:?} sparse={sparse:?} speedup={ratio:.2}x sink={sink}"
+        );
+        assert!(
+            ratio > 1.0,
+            "sparse assembly should be faster (got {ratio:.2}x)"
+        );
     }
 
     #[test]
