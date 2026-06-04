@@ -1,0 +1,44 @@
+Diff in /data/projects/frankenscipy/crates/fsci-sparse/benches/sparse_bench.rs:1:
+ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+ use fsci_sparse::{
+[31m-    CscMatrix, CsrMatrix, FormatConvertible, Shape2D, add_csr, diags, eye, random, scale_csr,
+[m[31m-    spmm, spmv_csr,
+[m[32m+    CscMatrix, CsrMatrix, FormatConvertible, Shape2D, add_csr, diags, eye, random, scale_csr, spmm,
+[m[32m+    spmv_csr,
+[m };
+ use std::hint::black_box;
+ 
+Diff in /data/projects/frankenscipy/crates/fsci-sparse/src/linalg.rs:4149:
+     #[test]
+     #[ignore]
+     fn dump_spmm_payload_for_golden_sha() {
+[31m-        let cases = [(500usize, 0.02f64, 0xBEEF_CAFE_u64), (1000, 0.01, 0xBEEF_CAFE)];
+[m[32m+        let cases = [
+[m[32m+            (500usize, 0.02f64, 0xBEEF_CAFE_u64),
+[m[32m+            (1000, 0.01, 0xBEEF_CAFE),
+[m[32m+        ];
+[m         let mut s = String::new();
+         for (n, density, seed) in cases {
+             let a = crate::random(Shape2D::new(n, n), density, seed)
+Diff in /data/projects/frankenscipy/crates/fsci-sparse/src/linalg.rs:4156:
+[31m-                .expect("a").to_csr().expect("a csr");
+[m[32m+                .expect("a")
+[m[32m+                .to_csr()
+[m[32m+                .expect("a csr");
+[m             let b = crate::random(Shape2D::new(n, n), density, seed ^ 0x1234)
+[31m-                .expect("b").to_csr().expect("b csr");
+[m[32m+                .expect("b")
+[m[32m+                .to_csr()
+[m[32m+                .expect("b csr");
+[m             let c = spmm(&a, &b);
+             s.push_str(&format!(
+                 "n={} nnz={} sorted={} dedup={}\n",
+Diff in /data/projects/frankenscipy/crates/fsci-sparse/src/linalg.rs:4162:
+[31m-                n, c.nnz(), c.canonical_meta().sorted_indices, c.canonical_meta().deduplicated
+[m[32m+                n,
+[m[32m+                c.nnz(),
+[m[32m+                c.canonical_meta().sorted_indices,
+[m[32m+                c.canonical_meta().deduplicated
+[m             ));
+             for &p in c.indptr() {
+                 s.push_str(&format!("p{p}\n"));

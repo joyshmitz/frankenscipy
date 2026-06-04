@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 
 use fsci_linalg::{DecompOptions, LinalgError, expm as dense_expm};
 use fsci_runtime::RuntimeMode;
@@ -3292,11 +3292,20 @@ pub fn spmm(a: &CsrMatrix, b: &CsrMatrix) -> CsrMatrix {
     let mut sorted_indices = true;
     indptr.push(0);
 
+    // Gustavson SpGEMM with a dense accumulator (the SPA — sparse accumulator)
+    // reused across rows and cleared only at the columns it touched. This
+    // replaces the per-row `HashMap` (hash cost + a fresh allocation every row)
+    // with O(1) array reads. The accumulation order is unchanged — each product
+    // `a_ik * b_kj` is added into `acc[j]` in the exact encounter order the
+    // HashMap used — so the emitted values are bit-identical. `seen` marks which
+    // columns are live so the reverse-first-seen emit order (SciPy parity) and
+    // the touched-only reset are both preserved.
+    let mut acc = vec![0.0f64; n];
+    let mut seen = vec![false; n];
+    let mut column_order: Vec<usize> = Vec::new();
+
     for i in 0..m {
-        // SciPy's CSR matmul kernel emits columns in reverse first-seen order
-        // within each row; do not sort the accumulator if we want parity.
-        let mut row_acc = HashMap::new();
-        let mut column_order = Vec::new();
+        column_order.clear();
         let a_start = a.indptr()[i];
         let a_end = a.indptr()[i + 1];
 
@@ -3310,10 +3319,11 @@ pub fn spmm(a: &CsrMatrix, b: &CsrMatrix) -> CsrMatrix {
                 for b_idx in b_start..b_end {
                     let j = b.indices()[b_idx];
                     let b_kj = b.data()[b_idx];
-                    if let Some(value) = row_acc.get_mut(&j) {
-                        *value += a_ik * b_kj;
+                    if seen[j] {
+                        acc[j] += a_ik * b_kj;
                     } else {
-                        row_acc.insert(j, a_ik * b_kj);
+                        seen[j] = true;
+                        acc[j] = a_ik * b_kj;
                         column_order.push(j);
                     }
                 }
@@ -3322,7 +3332,10 @@ pub fn spmm(a: &CsrMatrix, b: &CsrMatrix) -> CsrMatrix {
 
         let mut prev_col = None;
         for &j in column_order.iter().rev() {
-            let v = row_acc[&j];
+            let v = acc[j];
+            // Reset this column so the accumulator is clean for the next row.
+            seen[j] = false;
+            acc[j] = 0.0;
             if v.abs() > 0.0 {
                 if let Some(prev) = prev_col {
                     sorted_indices &= prev < j;
@@ -4130,6 +4143,43 @@ mod tests {
     use super::*;
     use crate::formats::{CooMatrix, Shape2D};
     use crate::ops::FormatConvertible;
+
+    /// Deterministic dump of an spmm product for golden-SHA proof. Run with
+    /// `--ignored --nocapture` and pipe to `sha256sum`.
+    #[test]
+    #[ignore]
+    fn dump_spmm_payload_for_golden_sha() {
+        let cases = [
+            (500usize, 0.02f64, 0xBEEF_CAFE_u64),
+            (1000, 0.01, 0xBEEF_CAFE),
+        ];
+        let mut s = String::new();
+        for (n, density, seed) in cases {
+            let a = crate::random(Shape2D::new(n, n), density, seed)
+                .expect("a")
+                .to_csr()
+                .expect("a csr");
+            let b = crate::random(Shape2D::new(n, n), density, seed ^ 0x1234)
+                .expect("b")
+                .to_csr()
+                .expect("b csr");
+            let c = spmm(&a, &b);
+            s.push_str(&format!(
+                "n={} nnz={} sorted={} dedup={}\n",
+                n,
+                c.nnz(),
+                c.canonical_meta().sorted_indices,
+                c.canonical_meta().deduplicated
+            ));
+            for &p in c.indptr() {
+                s.push_str(&format!("p{p}\n"));
+            }
+            for (&col, v) in c.indices().iter().zip(c.data()) {
+                s.push_str(&format!("{col}:{:0>16x}\n", v.to_bits()));
+            }
+        }
+        print!("{s}");
+    }
 
     #[test]
     fn solve_options_default_matches_contract() {

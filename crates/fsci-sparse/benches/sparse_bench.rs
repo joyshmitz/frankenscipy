@@ -1,6 +1,6 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_sparse::{
-    CscMatrix, CsrMatrix, FormatConvertible, Shape2D, add_csr, diags, eye, random, scale_csr,
+    CscMatrix, CsrMatrix, FormatConvertible, Shape2D, add_csr, diags, eye, random, scale_csr, spmm,
     spmv_csr,
 };
 use std::hint::black_box;
@@ -178,6 +178,25 @@ fn bench_diags(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_spmm(c: &mut Criterion) {
+    let mut group = c.benchmark_group("sparse_spmm");
+    for &(n, density) in &[(500usize, 0.02f64), (1_000, 0.01)] {
+        let a = make_random_csr(n, density);
+        let b = random(Shape2D::new(n, n), density, SEED ^ 0x1234)
+            .expect("b coo")
+            .to_csr()
+            .expect("b csr");
+        let label = format!("{n}x{n}_d{}", (density * 100.0) as u32);
+        group.bench_with_input(BenchmarkId::new(label, n), &(a, b), |bi, (a, b)| {
+            bi.iter(|| {
+                let prod = spmm(black_box(a), black_box(b));
+                black_box(prod.nnz());
+            });
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_csr_construction,
@@ -185,6 +204,7 @@ criterion_group!(
     bench_format_conversion,
     bench_arithmetic,
     bench_eye,
-    bench_diags
+    bench_diags,
+    bench_spmm
 );
 criterion_main!(benches);
