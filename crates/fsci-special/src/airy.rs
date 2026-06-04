@@ -800,11 +800,12 @@ mod tests {
         // corrections sign-flipped, leaving a ~ζ⁻² residual in BOTH Ai'/Bi'
         // (~6e-5 at x=-15, ~7e-6 at x=-30). After the fix the oscillatory
         // derivatives track scipy to <1e-6 across the moderate-|x| band.
-        // Cases here all fall in the oscillatory ASYMPTOTIC branch (|x| ≥ 12);
-        // the [-12, 4) Maclaurin-series branch has its own ~2e-4 edge residual
-        // near x=-10 tracked separately.
+        // x=-10 exercises the [-12, 4) Maclaurin-series branch (accurate to
+        // ~2e-9); x ≤ -15 exercise the oscillatory ASYMPTOTIC branch where the
+        // N-series sign fix applies.
         // (x, Ai_scipy, Ai'_scipy, Bi_scipy, Bi'_scipy) from scipy.special.airy 1.17.1.
         let cases = [
+            (-10.0, 0.040241238486441955, 0.9962650441327905, -0.3146798296438388, 0.11941411339990535),
             (-15.0, 0.27821749087082903, 0.2723742043086415, -0.06912659453100992, 1.076429753084375),
             (-20.0, -0.17640612707798434, 0.8928628567364726, -0.20013930932265164, -0.7914290338395351),
             (-25.0, 0.16352657883043045, 0.9623788513876933, -0.1921468156903773, 0.8157197157546104),
