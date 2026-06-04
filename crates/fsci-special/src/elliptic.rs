@@ -1879,6 +1879,9 @@ mod tests {
 
     #[test]
     #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy
+    // φ test inputs 1.5707/1.5707963 are deliberate angles near (but not equal
+    // to) π/2 with their own scipy reference values — not FRAC_PI_2.
+    #[allow(clippy::approx_constant)]
     fn ellipkinc_ellipeinc_match_scipy() {
         // frankenscipy-o65r0: Carlson R_F/R_D replace fixed Gauss-Legendre, which
         // was 0.9% off at the m→1, φ→π/2 corner. scipy.special 1.17.1.
