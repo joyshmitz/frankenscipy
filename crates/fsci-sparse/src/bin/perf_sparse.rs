@@ -12,7 +12,7 @@ use std::hint::black_box;
 use std::path::Path;
 use std::time::Instant;
 
-use fsci_sparse::{CooMatrix, CsrMatrix, FormatConvertible, Shape2D, add_csr, random};
+use fsci_sparse::{CooMatrix, CsrMatrix, FormatConvertible, Shape2D, add_csr, diags, random};
 
 const SEED: u64 = 0xBEEF_CAFE;
 
@@ -94,6 +94,40 @@ fn add_csr_golden_text() -> String {
     output
 }
 
+fn diags_golden_text() -> String {
+    let mut output = String::new();
+
+    let small = diags(
+        &[
+            vec![-1.0, -1.0, -1.0, -1.0, -1.0],
+            vec![2.0; 6],
+            vec![-1.0, -1.0, -1.0, -1.0, -1.0],
+        ],
+        &[-1, 0, 1],
+        Some(Shape2D::new(6, 6)),
+    )
+    .expect("small tridiag");
+    write_csr(&mut output, "diags-tridiag-6", &small);
+
+    let rectangular = diags(
+        &[vec![0.0, 3.0, -2.0], vec![4.0, 0.0]],
+        &[1, -2],
+        Some(Shape2D::new(4, 5)),
+    )
+    .expect("rectangular explicit-zero diags");
+    write_csr(&mut output, "diags-rect-explicit-zero", &rectangular);
+
+    let n = 10_000usize;
+    let sub = vec![-1.0; n - 1];
+    let main = vec![2.0; n];
+    let sup = vec![-1.0; n - 1];
+    let large =
+        diags(&[sub, main, sup], &[-1, 0, 1], Some(Shape2D::new(n, n))).expect("large tridiag");
+    write_csr(&mut output, "diags-tridiag-10000", &large);
+
+    output
+}
+
 fn write_or_print_golden(output: String, path: Option<&str>) {
     if let Some(path) = path {
         let path = Path::new(path);
@@ -111,6 +145,10 @@ fn main() {
     let mode = args.get(1).map(String::as_str).unwrap_or("add-csr");
     if mode == "add-csr-golden" {
         write_or_print_golden(add_csr_golden_text(), args.get(2).map(String::as_str));
+        return;
+    }
+    if mode == "diags-golden" {
+        write_or_print_golden(diags_golden_text(), args.get(2).map(String::as_str));
         return;
     }
     if mode != "add-csr" {
