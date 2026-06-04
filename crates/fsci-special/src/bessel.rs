@@ -4251,6 +4251,31 @@ mod tests {
 
     #[test]
     #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy
+    fn wofz_near_real_axis_matches_scipy() {
+        // frankenscipy-wsv5b: the upper-half-plane contour integral has a pole at
+        // t=Re(z) that fixed-step Simpson misses for small Im (h≈0.03), so
+        // wofz(0.5+0.001i) was ~10× off, error growing as Im→0 across |Im|≲0.15.
+        // For |z|<4 use the exact relation w(z)=e^{-z²}erfc(-iz) (pole-free erf
+        // series). (re, im, w.re, w.im) from scipy.special.wofz 1.17.1.
+        let cases: [(f64, f64, f64, f64); 7] = [
+            (0.001, 0.001, 0.9988716223354106, 0.001126380671599899),
+            (0.5, 0.001, 0.7781517183125487, 0.47814717512158444),
+            (1.0, 0.005, 0.3682999758137983, 0.6034919113460572),
+            (2.0, 0.02, 0.022898797594497745, 0.33851256446284966),
+            (0.5, -0.05, 0.8122678146281099, 0.519958322379095),
+            (3.0, 0.0005, 0.00016269164507317786, 0.20115693817442962),
+            (-2.0, 0.01, 0.020620065445569127, -0.3392813705802114),
+        ];
+        for (re, im, wr, wi) in cases {
+            let w = crate::convenience::wofz_scalar(Complex64::new(re, im), RuntimeMode::Strict)
+                .unwrap();
+            let err = (w.re - wr).hypot(w.im - wi) / wr.hypot(wi);
+            assert!(err <= 1e-9, "wofz({re}{im:+}i) = {w:?}, scipy ({wr},{wi}), rel {err:e}");
+        }
+    }
+
+    #[test]
+    #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy
     fn jv_yv_turning_point_and_recessive_matches_scipy() {
         // frankenscipy-87poa: for z ≤ |v| the old power-series cutoff (z < 20+|v|)
         // ran the ascending series deep into its cancellation region — jv(30.5,50)

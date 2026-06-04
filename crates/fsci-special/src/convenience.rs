@@ -3854,6 +3854,19 @@ pub fn wofz_scalar(z: Complex64, mode: RuntimeMode) -> Result<Complex64, Special
         return Ok(Complex64::from_real(2.0) * (-(z * z)).exp() - reflected);
     }
 
+    // Upper half plane (im > 0). Near the real axis the contour integral below
+    // has a pole at t = Re(z) that sits within a single Simpson step (h ≈ 0.03),
+    // so fixed-step quadrature misses it — wofz(0.5+0.001i) was ~10× off, with
+    // error growing as im → 0 across |im| ≲ 0.15. For |z| < 4 use the exact
+    // Faddeeva relation w(z) = e^{-z²} erfc(-iz); erfc(-iz) = 1 − erf(-iz) goes
+    // through the pole-free erf Maclaurin series there (|-iz| = |z| < 4, so no
+    // recursion back into wofz). frankenscipy-wsv5b.
+    if z.abs() < 4.0 {
+        // -i·z = Im(z) − i·Re(z).
+        let erf_val = crate::error::erf_complex_scalar(Complex64::new(z.im, -z.re));
+        return Ok((-(z * z)).exp() * (Complex64::from_real(1.0) - erf_val));
+    }
+
     if z.abs() >= 8.0 {
         return Ok(wofz_asymptotic_upper_half_plane(z));
     }
