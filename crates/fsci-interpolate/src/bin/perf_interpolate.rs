@@ -70,6 +70,20 @@ fn regular_grid_values(points: &[Vec<f64>]) -> Vec<f64> {
     values
 }
 
+fn regular_grid_queries(n: usize) -> Vec<Vec<f64>> {
+    queries_2d(n)
+        .into_iter()
+        .map(|q| vec![q[0], q[1], (q[0] * 0.7 + q[1] * 0.3).fract()])
+        .collect()
+}
+
+fn regular_grid_case() -> (Vec<Vec<f64>>, Vec<f64>, Vec<Vec<f64>>) {
+    let points = vec![grid_1d(32), grid_1d(32), grid_1d(16)];
+    let values = regular_grid_values(&points);
+    let queries = regular_grid_queries(4096);
+    (points, values, queries)
+}
+
 fn write_or_print(path: Option<&str>, contents: &str) -> Result<(), String> {
     if let Some(path) = path {
         fs::write(path, contents).map_err(|err| format!("failed to write {path}: {err}"))
@@ -98,12 +112,7 @@ fn print_rect_eval_grid_golden() -> Result<(), String> {
 }
 
 fn print_regular_grid_linear_golden(path: Option<&str>) -> Result<(), String> {
-    let points = vec![grid_1d(32), grid_1d(32), grid_1d(16)];
-    let values = regular_grid_values(&points);
-    let queries = queries_2d(4096)
-        .into_iter()
-        .map(|q| vec![q[0], q[1], (q[0] * 0.7 + q[1] * 0.3).fract()])
-        .collect::<Vec<_>>();
+    let (points, values, queries) = regular_grid_case();
     let interpolator =
         RegularGridInterpolator::new(points, values, RegularGridMethod::Linear, false, None)
             .map_err(|err| format!("failed to construct regular-grid interpolator: {err}"))?;
@@ -117,6 +126,30 @@ fn print_regular_grid_linear_golden(path: Option<&str>) -> Result<(), String> {
     writeln!(
         &mut out,
         "grid=32x32x16 queries=4096 method=linear order=query-input bits=f64"
+    )
+    .map_err(|err| err.to_string())?;
+    for (i, value) in values.iter().enumerate() {
+        writeln!(&mut out, "{i:04} {:016x}", value.to_bits()).map_err(|err| err.to_string())?;
+    }
+
+    write_or_print(path, &out)
+}
+
+fn print_regular_grid_nearest_golden(path: Option<&str>) -> Result<(), String> {
+    let (points, values, queries) = regular_grid_case();
+    let interpolator =
+        RegularGridInterpolator::new(points, values, RegularGridMethod::Nearest, false, None)
+            .map_err(|err| format!("failed to construct regular-grid interpolator: {err}"))?;
+    let values = interpolator
+        .eval_many(&queries)
+        .map_err(|err| format!("failed to evaluate regular-grid nearest: {err}"))?;
+
+    let mut out = String::new();
+    writeln!(&mut out, "fsci-interpolate regular_grid_nearest golden v1")
+        .map_err(|err| err.to_string())?;
+    writeln!(
+        &mut out,
+        "grid=32x32x16 queries=4096 method=nearest order=query-input bits=f64"
     )
     .map_err(|err| err.to_string())?;
     for (i, value) in values.iter().enumerate() {
@@ -146,7 +179,7 @@ fn main() -> ExitCode {
     let output_path = args.next();
     if args.next().is_some() {
         eprintln!(
-            "usage: perf_interpolate [golden|griddata-linear|regular-grid-linear] [output-path]"
+            "usage: perf_interpolate [golden|griddata-linear|regular-grid-linear|regular-grid-nearest] [output-path]"
         );
         return ExitCode::from(2);
     }
@@ -165,6 +198,13 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        "regular-grid-nearest" => match print_regular_grid_nearest_golden(output_path.as_deref()) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("{err}");
+                ExitCode::FAILURE
+            }
+        },
         "golden" => match print_rect_eval_grid_golden() {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {
@@ -174,7 +214,7 @@ fn main() -> ExitCode {
         },
         _ => {
             eprintln!(
-                "usage: perf_interpolate [golden|griddata-linear|regular-grid-linear] [output-path]"
+                "usage: perf_interpolate [golden|griddata-linear|regular-grid-linear|regular-grid-nearest] [output-path]"
             );
             ExitCode::from(2)
         }

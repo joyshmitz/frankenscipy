@@ -1845,6 +1845,10 @@ impl RegularGridInterpolator {
     }
 
     pub fn eval_many(&self, xi: &[Vec<f64>]) -> Result<Vec<f64>, InterpError> {
+        if self.method == RegularGridMethod::Nearest && self.ndim() == 3 {
+            return self.eval_many_nearest_3d(xi);
+        }
+
         xi.iter().map(|x| self.eval(x)).collect()
     }
 
@@ -1863,6 +1867,10 @@ impl RegularGridInterpolator {
     }
 
     fn eval_nearest(&self, xi: &[f64]) -> f64 {
+        if self.ndim() == 3 {
+            return self.eval_nearest_3d(xi);
+        }
+
         let mut flat_idx = 0;
         for ((axis, &x), &stride) in self.points.iter().zip(xi).zip(&self.strides) {
             let i = Self::find_interval(axis, x);
@@ -1872,6 +1880,62 @@ impl RegularGridInterpolator {
                 i
             };
             flat_idx += nearest * stride;
+        }
+        self.values[flat_idx]
+    }
+
+    fn eval_many_nearest_3d(&self, xi: &[Vec<f64>]) -> Result<Vec<f64>, InterpError> {
+        let mut results = Vec::with_capacity(xi.len());
+        for point in xi {
+            if point.len() != 3 {
+                return Err(InterpError::InvalidArgument {
+                    detail: format!("expected 3D, got {}D", point.len()),
+                });
+            }
+            if point.iter().any(|x| x.is_nan()) {
+                results.push(f64::NAN);
+                continue;
+            }
+
+            let mut out_of_bounds = false;
+            for (dim, &x) in point.iter().enumerate() {
+                let axis = &self.points[dim];
+                if x < axis[0] || x > axis[axis.len() - 1] {
+                    if self.bounds_error {
+                        return Err(InterpError::OutOfBounds {
+                            value: format!(
+                                "dim {dim}: {x} outside [{}, {}]",
+                                axis[0],
+                                axis[axis.len() - 1]
+                            ),
+                        });
+                    }
+                    out_of_bounds = true;
+                }
+            }
+            if out_of_bounds && let Some(fill) = self.fill_value {
+                results.push(fill);
+                continue;
+            }
+
+            results.push(self.eval_nearest_3d(point));
+        }
+        Ok(results)
+    }
+
+    fn eval_nearest_3d(&self, xi: &[f64]) -> f64 {
+        debug_assert_eq!(xi.len(), 3);
+
+        let mut flat_idx = 0;
+        for (dim, &x) in xi.iter().enumerate().take(3) {
+            let axis = &self.points[dim];
+            let i = Self::find_interval(axis, x);
+            let nearest = if i + 1 < axis.len() && (x - axis[i]).abs() > (axis[i + 1] - x).abs() {
+                i + 1
+            } else {
+                i
+            };
+            flat_idx += nearest * self.strides[dim];
         }
         self.values[flat_idx]
     }
