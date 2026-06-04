@@ -1378,7 +1378,13 @@ fn iv_scalar(v: f64, z: f64) -> f64 {
         return iv_scalar(p, z) + (2.0 / PI) * (p * PI).sin() * kp;
     }
 
-    if az > 50.0 {
+    // The large-ARGUMENT asymptotic I_v(z) ~ e^z/√(2πz)·Σ(4v²-…)/(8z)^k is only
+    // valid (and convergent under optimal truncation) when z is large relative
+    // to the order: its term ratio ~ v²/(2z), so for z ≲ v² the series diverges
+    // and produced huge NEGATIVE garbage (iv(50,100) was -8.3e44 vs scipy
+    // 4.8e36). Require z > v² so the asymptotic is firmly in its valid regime;
+    // otherwise fall through to the (everywhere-valid) ascending power series.
+    if az > 50.0 && az > v * v {
         return iv_asymptotic(v, az);
     }
 
@@ -1390,7 +1396,10 @@ fn iv_scalar(v: f64, z: f64) -> f64 {
     let mut sum = 0.0;
     let mut log_term = log_first;
 
-    for k in 0..200 {
+    // The summand peaks near k ≈ (√(v²+z²) − v)/2, which reaches a few hundred
+    // for large order with z ≲ v² (iv(100,500) peaks at ~305 terms); cap well
+    // past that so the tail is captured before the relative-convergence break.
+    for k in 0..1000 {
         let term = log_term.exp();
         sum += term;
 
@@ -4068,6 +4077,33 @@ pub fn jn_zeros(n: u32, k: usize) -> Vec<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy
+    fn iv_large_order_power_series_matches_scipy() {
+        // frankenscipy-4icoi: the large-argument asymptotic (valid only for
+        // z >> v²) was used whenever z>50, so for large order its 4v²/(8z) series
+        // diverged into huge NEGATIVE garbage (iv(50,100) was -8.3e44 vs scipy
+        // 4.8e36; iv must be positive). Gating it to z>v² and routing the rest
+        // through the ascending power series fixes it. (v, z, scipy iv).
+        let cases: [(f64, f64, f64); 7] = [
+            (50.0, 100.0, 4.821958085594079e36),
+            (100.0, 100.0, 4.641534941616278e21),
+            (100.0, 500.0, 1.1637732868603707e211),
+            (20.0, 200.0, 7.49106766376834e84),
+            (75.0, 100.0, 1.8288935933501197e30),
+            (50.0, 200.0, 4.003924798366755e82),
+            (30.0, 80.0, 9.1987338426633e30),
+        ];
+        for (v, z, want) in cases {
+            let got = iv_scalar(v, z);
+            assert!(got > 0.0, "iv({v},{z}) = {got} must be positive");
+            assert!(
+                (got - want).abs() <= 1e-10 * want.abs(),
+                "iv({v},{z}) = {got:e}, scipy {want:e}"
+            );
+        }
+    }
 
     #[test]
     #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy/mpmath
