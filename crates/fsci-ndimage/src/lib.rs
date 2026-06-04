@@ -1568,6 +1568,105 @@ pub fn median_filter_with_origins(
 /// Minimum filter.
 ///
 /// Matches `scipy.ndimage.minimum_filter`.
+/// Separable minimum/maximum filter over a `size^ndim` rectangular footprint.
+///
+/// A min/max over a rectangle equals the per-axis sequential min/max, so the
+/// O(N * size^ndim * log) full-footprint sort-and-select rank filter collapses
+/// to ndim O(N) sliding-window passes (a monotonic deque, O(1) amortized per
+/// output, independent of `size`). Comparisons use `total_cmp` — the same total
+/// order the rank filter sorts by — and every neighbourhood value comes from
+/// `get_boundary`, so the result is bit-for-bit identical to the rank filter,
+/// including NaN and signed-zero handling.
+fn separable_minmax_filter(
+    input: &NdArray,
+    size: usize,
+    origins: &[i64],
+    mode: BoundaryMode,
+    cval: f64,
+    is_max: bool,
+) -> Result<NdArray, NdimageError> {
+    filter_footprint_size(input.ndim(), size)?;
+    if input.size() == 0 {
+        return Err(NdimageError::EmptyInput);
+    }
+    let ndim = input.ndim();
+    // Validate origins against the kernel footprint [size; ndim], exactly as the
+    // full-footprint rank filter does, so out-of-range origins are rejected
+    // identically.
+    let kernel_shape: Vec<usize> = vec![size; ndim];
+    let origins = normalize_filter_origins(ndim, &kernel_shape, origins)?;
+    let mut cur = input.clone();
+    for (d, &origin) in origins.iter().enumerate() {
+        cur = minmax_filter_along_axis(&cur, d, size, origin, mode, cval, is_max);
+    }
+    Ok(cur)
+}
+
+/// One axis of a sliding-window min/max via a monotonic deque of (coord, value).
+fn minmax_filter_along_axis(
+    arr: &NdArray,
+    axis: usize,
+    size: usize,
+    origin: i64,
+    mode: BoundaryMode,
+    cval: f64,
+    is_max: bool,
+) -> NdArray {
+    use std::cmp::Ordering;
+    use std::collections::VecDeque;
+
+    let n = arr.shape[axis] as i64;
+    let stride = arr.strides[axis];
+    let size_i = size as i64;
+    let lo = size_i / 2 + origin; // window left extent relative to the output
+    let mut out = NdArray::zeros(arr.shape.clone());
+    let total = arr.size();
+
+    for flat in 0..total {
+        let idx = arr.unravel(flat);
+        if idx[axis] != 0 {
+            continue; // visit each line along `axis` exactly once, from its head
+        }
+        let base = flat;
+        let mut full: Vec<i64> = idx.iter().map(|&x| x as i64).collect();
+
+        let mut deque: VecDeque<(i64, f64)> = VecDeque::new();
+        let mut next_p = -lo; // smallest neighbourhood coordinate needed
+        for i in 0..n {
+            let right = i - lo + size_i - 1; // window right edge (input coord)
+            while next_p <= right {
+                full[axis] = next_p;
+                let val = arr.get_boundary(&full, mode, cval);
+                while let Some(&(_, back)) = deque.back() {
+                    let ord = back.total_cmp(&val);
+                    let evict = if is_max {
+                        ord != Ordering::Greater
+                    } else {
+                        ord != Ordering::Less
+                    };
+                    if evict {
+                        deque.pop_back();
+                    } else {
+                        break;
+                    }
+                }
+                deque.push_back((next_p, val));
+                next_p += 1;
+            }
+            let left = i - lo;
+            while let Some(&(p, _)) = deque.front() {
+                if p < left {
+                    deque.pop_front();
+                } else {
+                    break;
+                }
+            }
+            out.data[base + (i as usize) * stride] = deque.front().unwrap().1;
+        }
+    }
+    out
+}
+
 pub fn minimum_filter(
     input: &NdArray,
     size: usize,
@@ -1599,7 +1698,7 @@ pub fn minimum_filter_with_origins(
     mode: BoundaryMode,
     cval: f64,
 ) -> Result<NdArray, NdimageError> {
-    rank_filter_index_with_origins(input, size, origins, mode, cval, 0)
+    separable_minmax_filter(input, size, origins, mode, cval, false)
 }
 
 /// Maximum filter.
@@ -1640,8 +1739,7 @@ pub fn maximum_filter_with_origins(
     mode: BoundaryMode,
     cval: f64,
 ) -> Result<NdArray, NdimageError> {
-    let kernel_total = filter_footprint_size(input.ndim(), size)?;
-    rank_filter_index_with_origins(input, size, origins, mode, cval, kernel_total - 1)
+    separable_minmax_filter(input, size, origins, mode, cval, true)
 }
 
 /// Rank filter: select the element at `rank` from each sorted neighborhood.
@@ -8157,6 +8255,83 @@ mod tests {
         assert!(rank_filter_axes(&input, 0, 2, &[2], BoundaryMode::Reflect, 0.0).is_err());
         assert!(rank_filter_axes(&input, 0, 2, &[-3], BoundaryMode::Reflect, 0.0).is_err());
         assert!(rank_filter_axes(&input, 0, 0, &[-1], BoundaryMode::Reflect, 0.0).is_err());
+    }
+
+    #[test]
+    fn separable_minmax_matches_rank_filter_byte_for_byte() {
+        // Isomorphism proof: the separable sliding-window min/max must be
+        // bit-identical to the full-footprint sort-and-select rank filter, over
+        // 1D/2D/3D shapes, all boundary modes, even/odd sizes, origins, and
+        // inputs containing NaN and signed zeros (which exercise total_cmp).
+        let mut state: u64 = 0xfeed_face_cafe_b00b;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            state
+        };
+        let modes = [
+            BoundaryMode::Reflect,
+            BoundaryMode::Constant,
+            BoundaryMode::Nearest,
+            BoundaryMode::Wrap,
+        ];
+        let shapes: &[Vec<usize>] = &[vec![17], vec![6, 7], vec![4, 5, 3]];
+        for shape in shapes {
+            let total: usize = shape.iter().product();
+            let data: Vec<f64> = (0..total)
+                .map(|i| {
+                    let r = next();
+                    match r % 17 {
+                        0 => f64::NAN,
+                        1 => -0.0,
+                        2 => 0.0,
+                        _ => ((r >> 20) % 1000) as f64 - 500.0,
+                    }
+                    .max(if i == 0 { f64::NEG_INFINITY } else { -1e18 })
+                })
+                .collect();
+            let input = NdArray::new(data, shape.clone()).unwrap();
+            for &mode in &modes {
+                for &size in &[2usize, 3, 4, 5] {
+                    let origin_lo = -((size / 2) as i64);
+                    let origin_hi = (size as i64 - 1) / 2;
+                    for &origin in &[origin_lo, 0, origin_hi] {
+                        let kernel_total = size.pow(shape.len() as u32);
+                        for (is_max, rank) in [(false, 0usize), (true, kernel_total - 1)] {
+                            let reference = rank_filter_index_with_origins(
+                                &input,
+                                size,
+                                &[origin],
+                                mode,
+                                7.5,
+                                rank,
+                            );
+                            let fast =
+                                separable_minmax_filter(&input, size, &[origin], mode, 7.5, is_max);
+                            match (reference, fast) {
+                                (Ok(reference), Ok(fast)) => {
+                                    assert_eq!(fast.shape, reference.shape);
+                                    for (a, b) in fast.data.iter().zip(reference.data.iter()) {
+                                        assert_eq!(
+                                            a.to_bits(),
+                                            b.to_bits(),
+                                            "shape={shape:?} mode={mode:?} size={size} origin={origin} is_max={is_max}"
+                                        );
+                                    }
+                                }
+                                (Err(_), Err(_)) => {}
+                                (r, f) => panic!(
+                                    "accept/reject parity: shape={shape:?} size={size} origin={origin} ref_ok={} fast_ok={}",
+                                    r.is_ok(),
+                                    f.is_ok()
+                                ),
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]
