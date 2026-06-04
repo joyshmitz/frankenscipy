@@ -1105,7 +1105,30 @@ fn hyp0f1_complex_scalar(
         return Ok(Complex64::from_real(1.0));
     }
 
+    // The ascending 0F1 series has its largest term at n ≈ √|z| with magnitude
+    // ~e^{2√|z|}, while on the oscillatory (J-type) directions — z negative or
+    // large |Im z| — the result is exponentially smaller, so the series cancels
+    // catastrophically (rel ~2 by |z|=400, ~1e69 by |z|=10^4). For real b route
+    // through the Bessel link 0F1(;b;z) = Γ(b) z^{(1−b)/2} I_{b−1}(2√z), using
+    // the now-exact complex modified Bessel I (real order), which carries no
+    // cancellation. scipy's hyp0f1 ufunc accepts only real b, matching this gate.
+    if b.im == 0.0 && z.abs() >= 20.0 {
+        return Ok(hyp0f1_via_bessel_i(b.re, z));
+    }
+
     hyp0f1_series_complex(b, z, mode)
+}
+
+/// 0F1(;b;z) = Γ(b) z^{(1−b)/2} I_{b−1}(2√z) for real b, used at large |z|
+/// where the ascending series cancels. Accurate across the whole z-plane
+/// (~1e-14 vs mpmath) because complex_iv_scalar is exact for all arguments.
+fn hyp0f1_via_bessel_i(b: f64, z: Complex64) -> Complex64 {
+    let sqrt_z = z.powf(0.5);
+    let arg = sqrt_z * 2.0;
+    let i_bessel = crate::bessel::complex_iv_scalar(b - 1.0, arg);
+    let gamma_b = crate::gamma::complex_gammaln(Complex64::from_real(b)).exp();
+    let power = z.powc(Complex64::from_real((1.0 - b) * 0.5));
+    gamma_b * power * i_bessel
 }
 
 fn hyp0f1_series_complex(
@@ -3130,6 +3153,37 @@ mod tests {
         let values = get_complex_vec(&r).unwrap_or(&[]);
         assert_eq!(values.len(), 2);
         assert_complex_close(values[1], values[0].conj(), 1.0e-10);
+    }
+
+    #[test]
+    #[allow(clippy::type_complexity)]
+    fn hyp0f1_complex_large_z_matches_mpmath() {
+        // Golden values from mpmath.hyp0f1 (dps=30) on the oscillatory (J-type)
+        // directions where the ascending series cancels catastrophically: the
+        // negative-real cases used to return rel ~2.4 (z=-400) to ~1e69
+        // (z=-10000). scipy.hyp0f1 accepts real b + complex z.
+        let cases: &[(f64, (f64, f64), f64, f64)] = &[
+            (2.0, (-400.0, 0.0), 0.00630191590187925, 0.0),
+            (1.5, (0.0, -900.0), -1.5462761722273576e16, 1.5930749561190496e16),
+            (2.5, (-2500.0, 300.0), -0.05794675493376355, 0.013103138447106267),
+            (0.5, (-10000.0, 0.0), 0.48718767500700594, 0.0),
+            (3.0, (-625.0, 625.0), -159626.04856509008, 867341.6324720286),
+            (1.0, (-50.0, 50.0), -43.843811768703894, 42.19916419322264),
+        ];
+        for &(b, z, re, im) in cases {
+            let got = hyp0f1_complex_scalar(
+                Complex64::from_real(b),
+                Complex64::new(z.0, z.1),
+                RuntimeMode::Strict,
+            )
+            .unwrap();
+            let want = Complex64::new(re, im);
+            let rel = (got - want).abs() / (want.abs() + 1e-300);
+            assert!(
+                rel < 1.0e-9,
+                "hyp0f1({b},{z:?}) = {got:?}, want {want:?}, rel={rel:.3e}"
+            );
+        }
     }
 
     #[test]
