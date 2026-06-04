@@ -3257,6 +3257,60 @@ fn negative_integer_order(v: f64) -> Option<u32> {
     Some((-v) as u32)
 }
 
+/// J_v(z) large-|z| Hankel asymptotic (DLMF 10.17.3): √(2/πz)[cos ω·P − sin ω·Q],
+/// ω = z − vπ/2 − π/4. The plain form is on its branch cut at the negative real
+/// axis, so reflect Re(z) < 0 via the connection J_v(z) = e^{±ivπ}J_v(−z) (upper
+/// sign for Im(z) ≥ 0) onto the accurate Re(z) ≥ 0 side. frankenscipy-oisri.
+fn complex_jv_asymptotic(v: f64, z: Complex64) -> Complex64 {
+    if z.re < 0.0 {
+        let s = (v * PI).sin();
+        let factor = if z.im >= 0.0 {
+            Complex64::new((v * PI).cos(), s)
+        } else {
+            Complex64::new((v * PI).cos(), -s)
+        };
+        return factor * complex_jv_asymptotic(v, Complex64::new(-z.re, -z.im));
+    }
+    let mu = 4.0 * v * v;
+    let z_inv = z.recip();
+    let mut term = Complex64::new(1.0, 0.0);
+    let mut p = term;
+    let mut q = Complex64::new(0.0, 0.0);
+    let mut prev = 1.0_f64;
+    for k in 1..60 {
+        let kf = k as f64;
+        term = term * Complex64::new((mu - (2.0 * kf - 1.0).powi(2)) / (8.0 * kf), 0.0) * z_inv;
+        let at = term.abs();
+        if at > prev {
+            break;
+        }
+        if k % 2 == 0 {
+            let s = if (k / 2) % 2 == 0 { 1.0 } else { -1.0 };
+            p = p + term * Complex64::new(s, 0.0);
+        } else {
+            let s = if ((k - 1) / 2) % 2 == 0 { 1.0 } else { -1.0 };
+            q = q + term * Complex64::new(s, 0.0);
+        }
+        prev = at;
+    }
+    let omega = z - Complex64::new(v * PI / 2.0 + PI / 4.0, 0.0);
+    let pref = (Complex64::new(2.0 / PI, 0.0) * z_inv).powf(0.5);
+    pref * (omega.cos() * p - omega.sin() * q)
+}
+
+/// I_v(z) for large |z| via I_v(z) = e^{−iπv/2}J_v(iz) (e^{3iπv/2}J_v(iz) for
+/// arg z > π/2), routing through the everywhere-accurate jv asymptotic so the
+/// Stokes line on the imaginary axis is dodged (iz rotates it to the real axis).
+fn complex_iv_asymptotic(v: f64, z: Complex64) -> Complex64 {
+    let iz = Complex64::new(-z.im, z.re);
+    let jiz = complex_jv_asymptotic(v, iz);
+    if z.arg() <= PI / 2.0 {
+        Complex64::new((v * PI / 2.0).cos(), -(v * PI / 2.0).sin()) * jiz
+    } else {
+        Complex64::new((3.0 * v * PI / 2.0).cos(), (3.0 * v * PI / 2.0).sin()) * jiz
+    }
+}
+
 fn complex_jv_scalar(v: f64, z: Complex64) -> Complex64 {
     if !z.is_finite() || v.is_nan() {
         return Complex64::new(f64::NAN, f64::NAN);
@@ -3275,6 +3329,13 @@ fn complex_jv_scalar(v: f64, z: Complex64) -> Complex64 {
         } else {
             Complex64::new(f64::INFINITY, 0.0)
         };
+    }
+
+    // Large |z|: the 200-term power series truncates and cancels (max term
+    // ~e^{|z|}); use the asymptotic where it converges (|z| > v²). The power
+    // series covers the rest. frankenscipy-oisri.
+    if z.abs() > 15.0_f64.max(v * v) {
+        return complex_jv_asymptotic(v, z);
     }
 
     let half_z = z / 2.0;
@@ -3320,6 +3381,12 @@ fn complex_iv_scalar(v: f64, z: Complex64) -> Complex64 {
         } else {
             Complex64::new(f64::INFINITY, 0.0)
         };
+    }
+
+    // Large |z|: power series cancels; route through the jv asymptotic.
+    // frankenscipy-oisri.
+    if z.abs() > 15.0_f64.max(v * v) {
+        return complex_iv_asymptotic(v, z);
     }
 
     let half_z = z / 2.0;
@@ -3529,6 +3596,14 @@ fn complex_kv_scalar(v: f64, z: Complex64, _mode: RuntimeMode) -> Result<Complex
 
     if z.re == 0.0 && z.im == 0.0 {
         return Ok(Complex64::new(f64::INFINITY, 0.0));
+    }
+
+    // Large |z|: the non-integer K_v = π/2·(I_{-v}−I_v)/sin(vπ) form cancels
+    // catastrophically (both I's ~ e^z, their difference is the recessive
+    // ~e^{-z}); use the direct K asymptotic instead (valid for any v).
+    // frankenscipy-oisri.
+    if z.re >= 0.0 && z.abs() > 15.0_f64.max(v * v) {
+        return Ok(complex_kv_asymptotic(v, z));
     }
 
     // For non-integer v: K_v = π/2 * (I_{-v} - I_v) / sin(vπ)
@@ -4376,6 +4451,37 @@ pub fn jn_zeros(n: u32, k: usize) -> Vec<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy
+    #[allow(clippy::type_complexity)] // flat (v,re,im,J,I,K,Y) golden rows
+    fn complex_bessel_noninteger_large_z_matches_scipy() {
+        // frankenscipy-oisri: complex_jv/iv used a 200-term power series for all
+        // z that truncates+cancels for |z|≳30; the non-integer kv = π/2(I_{-v}−I_v)
+        // /sin(vπ) form cancelled further (both I~e^z). Added the Hankel J
+        // asymptotic (with the Re<0 reflection), I via J(iz), and the direct K
+        // asymptotic. (v, re, im, J.re,J.im, I.re,I.im, K.re,K.im, Y.re,Y.im) — scipy 1.17.1.
+        let cases: [(f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64); 5] = [
+            (0.5, 20.0, 5.0, 12.466521336498948, 3.8267134139998005, 7006986.415091062, -42048916.84546594, 2.2684059886175998e-10, 5.21771888934066e-10, -3.8273250606136826, 12.465507499599681),
+            (2.5, -15.0, 25.0, 4820258766.728313, -670823000.802485, -121420.56920674515, 194474.00807032152, 381453.9682146355, -610958.115067951, 670823000.802485, 4820258766.728313),
+            (3.5, 40.0, -10.0, -1109.4573598197273, 720.8276509954086, -1.119458545990043e16, 5954167327505190.0, -7.091076212196013e-19, -6.373437988023484e-19, 720.8276552862686, 1109.4573558385662),
+            (0.5, 3.0, 80.0, -1.4455656554351904e33, -2.0033277552023882e33, -0.6900384488490181, -0.5742502926122344, 0.004254020290227443, 0.005526238447046366, 2.0033277552023882e33, -1.4455656554351904e33),
+            (2.5, 50.0, 3.0, 0.19792798151697677, -1.1086923774604178, -2.7126068652301323e20, 4.59770369446714e19, -3.6026674628426933e-23, -3.9101945736867964e-24, 1.1141728356305414, 0.19661157971907242),
+        ];
+        for (v, re, im, jr, ji, ir, ii, kr, ki, yr, yi) in cases {
+            let z = Complex64::new(re, im);
+            let checks = [
+                (complex_jv_scalar(v, z), jr, ji, "jv"),
+                (complex_iv_scalar(v, z), ir, ii, "iv"),
+                (complex_kv_scalar(v, z, RuntimeMode::Strict).unwrap(), kr, ki, "kv"),
+                (complex_yv_scalar(v, z, RuntimeMode::Strict).unwrap(), yr, yi, "yv"),
+            ];
+            for (got, wr, wi, name) in checks {
+                let err = (got.re - wr).hypot(got.im - wi) / wr.hypot(wi);
+                assert!(err <= 1e-7, "{name}({v},{re}{im:+}i) = {got:?}, scipy ({wr},{wi}), rel {err:e}");
+            }
+        }
+    }
 
     #[test]
     #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy
