@@ -3406,35 +3406,118 @@ fn complex_yn_integer(n: u32, z: Complex64) -> Complex64 {
     y_curr
 }
 
-/// Complex Y_0(z) via series with logarithmic term.
-fn complex_y0_series(z: Complex64) -> Complex64 {
-    // Y_0(z) = (2/π)[J_0(z)(ln(z/2) + γ) + series...]
-    // Simplified: use limiting form for small |z| and asymptotic for large
-    let j0 = complex_jv_scalar(0.0, z);
-    let half_z = z / 2.0;
-    let ln_half_z = half_z.ln();
-    let euler_gamma = 0.577_215_664_901_532_9_f64;
+const BESSEL_EULER_GAMMA: f64 = 0.577_215_664_901_532_9;
+/// Crossover |z| between the ascending log series and the large-z asymptotic for
+/// the integer-order complex K_v/Y_v. Below it the series converges without much
+/// cancellation; above it the I/J terms cancel to the recessive value and the
+/// asymptotic takes over.
+const COMPLEX_KY_ASYMP: f64 = 11.0;
 
-    // Leading term: (2/π) * J_0(z) * (ln(z/2) + γ)
-    let frac_2_pi = Complex64::new(FRAC_2_PI, 0.0);
-    let gamma_c = Complex64::new(euler_gamma, 0.0);
-
-    frac_2_pi * j0 * (ln_half_z + gamma_c)
+/// K_v(z) large-|z| asymptotic √(π/2z)·e^{-z}·Σ a_k/z^k, a_k=a_{k-1}(4v²−(2k−1)²)/(8k).
+fn complex_kv_asymptotic(v: f64, z: Complex64) -> Complex64 {
+    let mu = 4.0 * v * v;
+    let z_inv = z.recip();
+    let mut a = Complex64::new(1.0, 0.0);
+    let mut sum = a;
+    let mut zpow = z_inv;
+    let mut prev = 1.0_f64;
+    for k in 1..40 {
+        let kf = k as f64;
+        a = a * Complex64::new((mu - (2.0 * kf - 1.0).powi(2)) / (8.0 * kf), 0.0);
+        let term = a * zpow;
+        let at = term.abs();
+        if at > prev {
+            break;
+        }
+        sum = sum + term;
+        prev = at;
+        zpow = zpow * z_inv;
+    }
+    let pref = (Complex64::new(PI / 2.0, 0.0) * z_inv).powf(0.5);
+    pref * Complex64::new(-z.re, -z.im).exp() * sum
 }
 
-/// Complex Y_1(z) via series with logarithmic term.
-fn complex_y1_series(z: Complex64) -> Complex64 {
-    let j1 = complex_jv_scalar(1.0, z);
-    let half_z = z / 2.0;
-    let ln_half_z = half_z.ln();
-    let euler_gamma = 0.577_215_664_901_532_9_f64;
-
-    let frac_2_pi = Complex64::new(FRAC_2_PI, 0.0);
-    let gamma_c = Complex64::new(euler_gamma, 0.0);
+/// Y_v(z) large-|z| asymptotic √(2/πz)·[P·sin ω + Q·cos ω], ω=z−vπ/2−π/4
+/// (DLMF 10.17.4), with the same a_k as the J asymptotic.
+fn complex_yv_asymptotic(v: f64, z: Complex64) -> Complex64 {
+    let mu = 4.0 * v * v;
     let z_inv = z.recip();
+    let mut term = Complex64::new(1.0, 0.0);
+    let mut p = term;
+    let mut q = Complex64::new(0.0, 0.0);
+    let mut prev = 1.0_f64;
+    for k in 1..60 {
+        let kf = k as f64;
+        term = term * Complex64::new((mu - (2.0 * kf - 1.0).powi(2)) / (8.0 * kf), 0.0) * z_inv;
+        let at = term.abs();
+        if at > prev {
+            break;
+        }
+        if k % 2 == 0 {
+            let s = if (k / 2) % 2 == 0 { 1.0 } else { -1.0 };
+            p = p + term * Complex64::new(s, 0.0);
+        } else {
+            let s = if ((k - 1) / 2) % 2 == 0 { 1.0 } else { -1.0 };
+            q = q + term * Complex64::new(s, 0.0);
+        }
+        prev = at;
+    }
+    let omega = z - Complex64::new(v * PI / 2.0 + PI / 4.0, 0.0);
+    let pref = (Complex64::new(2.0 / PI, 0.0) * z_inv).powf(0.5);
+    pref * (omega.sin() * p + omega.cos() * q)
+}
 
-    // Y_1(z) ≈ (2/π) * J_1(z) * (ln(z/2) + γ) - 2/(πz)
-    frac_2_pi * j1 * (ln_half_z + gamma_c) - frac_2_pi * z_inv
+/// Complex Y_0(z) — DLMF 10.8.1 ascending series for |z| < 11, asymptotic above.
+fn complex_y0_series(z: Complex64) -> Complex64 {
+    if z.abs() >= COMPLEX_KY_ASYMP {
+        return complex_yv_asymptotic(0.0, z);
+    }
+    // Y_0 = (2/π)[(ln(z/2)+γ)J_0(z) − Σ_{k≥1} H_k (−z²/4)^k/(k!)²].
+    let j0 = complex_jv_scalar(0.0, z);
+    let neg_z2_4 = Complex64::new(-1.0, 0.0) * z * z / 4.0;
+    let mut t = Complex64::new(1.0, 0.0);
+    let mut s = Complex64::new(0.0, 0.0);
+    let mut h = 0.0_f64;
+    for k in 1..200 {
+        let kf = k as f64;
+        t = t * neg_z2_4 / (kf * kf);
+        h += 1.0 / kf;
+        let term = t * Complex64::new(h, 0.0);
+        s = s + term;
+        if k > 3 && term.abs() < 1e-17 * s.abs().max(1e-300) {
+            break;
+        }
+    }
+    let log_term = (z / 2.0).ln() + Complex64::new(BESSEL_EULER_GAMMA, 0.0);
+    Complex64::new(FRAC_2_PI, 0.0) * (log_term * j0 - s)
+}
+
+/// Complex Y_1(z) — DLMF 10.8.1 ascending series for |z| < 11, asymptotic above.
+fn complex_y1_series(z: Complex64) -> Complex64 {
+    if z.abs() >= COMPLEX_KY_ASYMP {
+        return complex_yv_asymptotic(1.0, z);
+    }
+    // Y_1 = (2/π)(ln(z/2)+γ)J_1(z) − 2/(πz)
+    //       − (1/π)(z/2) Σ_{k≥0} (H_k+H_{k+1})(−z²/4)^k/(k!(k+1)!).
+    let j1 = complex_jv_scalar(1.0, z);
+    let neg_z2_4 = Complex64::new(-1.0, 0.0) * z * z / 4.0;
+    let mut t = Complex64::new(1.0, 0.0);
+    let mut s = Complex64::new(0.0, 0.0);
+    let mut hk = 0.0_f64;
+    for k in 0..200 {
+        let kf = k as f64;
+        let hk1 = hk + 1.0 / (kf + 1.0);
+        let term = t * Complex64::new(hk + hk1, 0.0);
+        s = s + term;
+        if k > 3 && term.abs() < 1e-17 * s.abs().max(1e-300) {
+            break;
+        }
+        t = t * neg_z2_4 / ((kf + 1.0) * (kf + 2.0));
+        hk = hk1;
+    }
+    let log_term = (z / 2.0).ln() + Complex64::new(BESSEL_EULER_GAMMA, 0.0);
+    Complex64::new(FRAC_2_PI, 0.0) * log_term * j1 - Complex64::new(FRAC_2_PI, 0.0) * z.recip()
+        - Complex64::new(1.0 / PI, 0.0) * (z / 2.0) * s
 }
 
 /// Complex K_v(z) for real order v.
@@ -3463,26 +3546,19 @@ fn complex_kv_scalar(v: f64, z: Complex64, _mode: RuntimeMode) -> Result<Complex
     Ok(complex_kn_integer(n, z))
 }
 
-/// Complex K_n(z) for integer order via recurrence.
+/// Complex K_n(z) for integer order: accurate K_0/K_1 (DLMF 10.31.2 series for
+/// |z| < 11, asymptotic above), then the upward recurrence
+/// K_{n+1} = K_{n-1} + (2n/z)K_n, which is stable (K grows with order).
 fn complex_kn_integer(n: u32, z: Complex64) -> Complex64 {
-    let neg_z = Complex64::new(-z.re, -z.im);
-    let emz = neg_z.exp();
     let z_inv = z.recip();
-    let scale = Complex64::new(PI / 2.0, 0.0);
-
-    // K_0(z) ≈ -ln(z/2) - γ + O(z²) for small z; π*exp(-z)/(2z) asymptotic
-    // Use asymptotic form for simplicity
-    let mut k_prev = scale * emz * z_inv; // K_0 asymptotic
+    let mut k_prev = complex_k0(z);
     if n == 0 {
         return k_prev;
     }
-
-    let one = Complex64::new(1.0, 0.0);
-    let mut k_curr = scale * emz * z_inv * (one + z_inv); // K_1 asymptotic
+    let mut k_curr = complex_k1(z);
     if n == 1 {
         return k_curr;
     }
-
     for k in 1..n {
         let coeff = Complex64::new(2.0 * k as f64, 0.0) * z_inv;
         let next = k_prev + coeff * k_curr;
@@ -3490,6 +3566,58 @@ fn complex_kn_integer(n: u32, z: Complex64) -> Complex64 {
         k_curr = next;
     }
     k_curr
+}
+
+/// Complex K_0(z) — DLMF 10.31.2 ascending series for |z| < 11, asymptotic above.
+fn complex_k0(z: Complex64) -> Complex64 {
+    if z.abs() >= COMPLEX_KY_ASYMP {
+        return complex_kv_asymptotic(0.0, z);
+    }
+    // K_0 = −(ln(z/2)+γ)I_0(z) + Σ_{k≥1} H_k (z²/4)^k/(k!)².
+    let i0 = complex_iv_scalar(0.0, z);
+    let z2_4 = z * z / 4.0;
+    let mut t = Complex64::new(1.0, 0.0);
+    let mut s = Complex64::new(0.0, 0.0);
+    let mut h = 0.0_f64;
+    for k in 1..200 {
+        let kf = k as f64;
+        t = t * z2_4 / (kf * kf);
+        h += 1.0 / kf;
+        let term = t * Complex64::new(h, 0.0);
+        s = s + term;
+        if k > 3 && term.abs() < 1e-17 * s.abs().max(1e-300) {
+            break;
+        }
+    }
+    let log_term = (z / 2.0).ln() + Complex64::new(BESSEL_EULER_GAMMA, 0.0);
+    Complex64::new(-1.0, 0.0) * log_term * i0 + s
+}
+
+/// Complex K_1(z) — DLMF 10.31.2 ascending series for |z| < 11, asymptotic above.
+fn complex_k1(z: Complex64) -> Complex64 {
+    if z.abs() >= COMPLEX_KY_ASYMP {
+        return complex_kv_asymptotic(1.0, z);
+    }
+    // K_1 = (ln(z/2)+γ)I_1(z) + 1/z
+    //       − (1/2)(z/2) Σ_{k≥0} (H_k+H_{k+1})(z²/4)^k/(k!(k+1)!).
+    let i1 = complex_iv_scalar(1.0, z);
+    let z2_4 = z * z / 4.0;
+    let mut t = Complex64::new(1.0, 0.0);
+    let mut s = Complex64::new(0.0, 0.0);
+    let mut hk = 0.0_f64;
+    for k in 0..200 {
+        let kf = k as f64;
+        let hk1 = hk + 1.0 / (kf + 1.0);
+        let term = t * Complex64::new(hk + hk1, 0.0);
+        s = s + term;
+        if k > 3 && term.abs() < 1e-17 * s.abs().max(1e-300) {
+            break;
+        }
+        t = t * z2_4 / ((kf + 1.0) * (kf + 2.0));
+        hk = hk1;
+    }
+    let log_term = (z / 2.0).ln() + Complex64::new(BESSEL_EULER_GAMMA, 0.0);
+    log_term * i1 + z.recip() - Complex64::new(0.5, 0.0) * (z / 2.0) * s
 }
 
 fn hankel_dispatch(
@@ -4248,6 +4376,38 @@ pub fn jn_zeros(n: u32, k: usize) -> Vec<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy
+    #[allow(clippy::type_complexity)] // flat (v,re,im,K.re,K.im,Y.re,Y.im) golden rows
+    fn complex_kv_yv_integer_order_matches_scipy() {
+        // frankenscipy-wan3w: integer-order complex K_n/Y_n used crude
+        // placeholders — complex_y0/y1_series dropped the entire harmonic series,
+        // complex_kn_integer used only the leading asymptotic — so they were
+        // wrong even at small |z| (kv(2,1.9+0.6i) ~22% off). Rebuilt from DLMF
+        // 10.8.1 / 10.31.2 ascending series (|z|<11) and the large-z asymptotics,
+        // with the stable upward recurrence for n≥2.
+        // (v, re, im, K.re, K.im, Y.re, Y.im) from scipy.special 1.17.1.
+        let cases: [(u32, f64, f64, f64, f64, f64, f64); 8] = [
+            (0, 2.0, 1.0, 0.037987722915986476, -0.10171357546139093, 0.800451120409994, 0.07563855028639382),
+            (1, 1.5, 2.5, -0.17583976180149624, -0.005975889337860949, -0.6409702450434701, 2.4512074350972797),
+            (2, 3.0, 1.0, 0.015275965061514699, -0.05547174952705652, -0.1433635707870101, 0.4576996364039667),
+            (2, 0.5, 4.0, 0.18495000454282312, 0.38087077161509364, -3.137626774336867, -5.632589456759534),
+            (5, 8.0, 3.0, -0.000460035945850506, 0.00023640292674529355, 1.4290304684892552, 0.9410036389912462),
+            (0, 15.0, 5.0, 4.129869836775042e-08, 8.634770156118545e-08, 14.529566891182334, -3.4121917632978587),
+            (1, 5.0, 30.0, 0.001172778369302158, 0.0009898467040185962, -157028907008.00497, -747235851320.0383),
+            (3, 2.0, -3.0, -0.06909578637591238, -0.1727382937957655, -1.0614832363273328, 0.8158048933143148),
+        ];
+        for (v, re, im, kr, ki, yr, yi) in cases {
+            let z = Complex64::new(re, im);
+            let k = complex_kv_scalar(v as f64, z, RuntimeMode::Strict).unwrap();
+            let y = complex_yv_scalar(v as f64, z, RuntimeMode::Strict).unwrap();
+            let ke = (k.re - kr).hypot(k.im - ki) / kr.hypot(ki);
+            let ye = (y.re - yr).hypot(y.im - yi) / yr.hypot(yi);
+            assert!(ke <= 1e-7, "kv({v},{re}{im:+}i) = {k:?}, scipy ({kr},{ki}), rel {ke:e}");
+            assert!(ye <= 1e-7, "yv({v},{re}{im:+}i) = {y:?}, scipy ({yr},{yi}), rel {ye:e}");
+        }
+    }
 
     #[test]
     #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy
