@@ -3330,8 +3330,32 @@ pub fn owens_t_scalar(h: f64, a: f64) -> f64 {
     if a == 0.0 {
         return 0.0;
     }
+    // T(h,a) is even in h and odd in a; reduce to h ≥ 0, a ≥ 0 and restore
+    // the sign of a afterwards.
+    let sign = if a < 0.0 { -1.0 } else { 1.0 };
+    sign * owens_t_core(h.abs(), a.abs())
+}
+
+/// Owen's T for h ≥ 0, a ≥ 0.
+fn owens_t_core(h: f64, a: f64) -> f64 {
+    if a == 0.0 {
+        return 0.0;
+    }
     if h == 0.0 {
         return a.atan() / (2.0 * std::f64::consts::PI);
+    }
+    if a > 1.0 {
+        // The 10-point Gauss-Legendre rule below is only accurate over a short
+        // interval; for a > 1 the integrand on [0, a] is sharply peaked near
+        // t = 0 and 10 nodes miss it (owens_t(1,100) was 36% off). Owen's
+        // reflection maps a > 1 to 1/a < 1:
+        //   T(h,a) = ½Φ(−h) + ½Φ(−ah) − Φ(−h)Φ(−ah) − T(ah, 1/a).
+        // The constant is written via the complementary CDF Φ(−x) so it stays
+        // accurate when Φ(h), Φ(ah) ≈ 1 (the ½[Φ(h)+Φ(ah)]−Φ(h)Φ(ah) form lost
+        // ~0.7% to cancellation at owens_t(8,3)).
+        let qh = ndtr_scalar(-h);
+        let qah = ndtr_scalar(-a * h);
+        return 0.5 * qh + 0.5 * qah - qh * qah - owens_t_core(a * h, 1.0 / a);
     }
 
     // Numerical integration via Gauss-Legendre (10-point)
@@ -6054,6 +6078,41 @@ pub fn binary_cross_entropy_scalar(p: f64, q: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy
+    fn owens_t_large_a_reflection_matches_scipy() {
+        // frankenscipy-yyx6e family: the fixed 10-point Gauss-Legendre rule on
+        // [0,a] missed the t=0-peaked integrand for a>1 (owens_t(1,100) was 36%
+        // off) and lost ~0.7% to cancellation in the reflection constant at
+        // large h (owens_t(8,3)). Owen's reflection to 1/a<1 with the stable
+        // Φ(−x) constant now tracks scipy 1.17.1. (h, a, scipy).
+        let cases: [(f64, f64, f64); 15] = [
+            (0.5, 2.0, 0.1415806036539784),
+            (3.0, 0.5, 0.0006051213785851948),
+            (5.0, 1.0, 1.4332574485503542e-07),
+            (8.0, 3.0, 3.1104802871359146e-16),
+            (1.0, 100.0, 0.07932762696572854),
+            (0.1, 0.99, 0.12341502312505477),
+            (0.3, 5.0, 0.18887156345661174),
+            (2.0, 1.5, 0.011365119947351746),
+            (6.0, 2.0, 4.932938225188509e-10),
+            (0.0, 10.0, 0.2341372412847232),
+            (4.0, 0.25, 1.1219796518154963e-05),
+            (10.0, 0.5, 3.8099247740170695e-24),
+            (0.5, -3.0, -0.15108404307601844),
+            (-2.0, 4.0, 0.011375065974089606),
+            (1.5, 1.0, 0.031171999563740185),
+        ];
+        for (h, a, want) in cases {
+            let got = owens_t_scalar(h, a);
+            // relative 1e-7 with a tiny absolute floor: the largest-h cases sit
+            // at ~1e-24 where the GL rule's ~1e-9 relative floor is absolutely
+            // negligible.
+            let tol = 1e-7 * want.abs() + 1e-15;
+            assert!((got - want).abs() <= tol, "owens_t({h},{a}) = {got}, scipy {want}");
+        }
+    }
 
     #[test]
     #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy
