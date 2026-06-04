@@ -2953,20 +2953,34 @@ pub fn betaincinv_scalar(a: f64, b: f64, y: f64) -> f64 {
         return f64::NAN;
     }
 
+    // Symmetry I_x(a,b) = 1 - I_{1-x}(b,a): solve the smaller tail so the small-y
+    // seed and the dominant-term inverse stay well-conditioned at both ends.
+    // frankenscipy-dmkvd.
+    if y > 0.5 {
+        return 1.0 - betaincinv_scalar(b, a, 1.0 - y);
+    }
+
     let mode = fsci_runtime::RuntimeMode::Strict;
     let ln_beta = crate::betaln_scalar(a, b, mode).unwrap_or(f64::NAN);
 
-    // Initial guess: use mean of Beta distribution as starting point
-    let mut x = a / (a + b);
+    // Small-y seed: I_x(a,b) ~ x^a / (a·B(a,b)) ⟹ x ~ (y·a·B(a,b))^{1/a}.
+    // The old x = a/(a+b) (the mean) is far from the root in the tail, which the
+    // bracketed Newton could not reach before the (formerly absolute) tolerance
+    // tripped.
+    let mut x = (y * a * ln_beta.exp()).powf(1.0 / a);
+    if !(x > 0.0 && x < 1.0) {
+        x = a / (a + b);
+    }
 
     // Bracketed Newton with bisection fallback
     let mut lo = 0.0_f64;
     let mut hi = 1.0_f64;
 
-    for _ in 0..100 {
+    for _ in 0..120 {
         let val = betainc_conv(a, b, x);
         let err = val - y;
-        if err.abs() < 1e-15 {
+        // Relative tolerance: 1e-15 absolute is ~100% relative when y is tiny.
+        if err.abs() <= 1e-15 * y.max(1e-300) {
             break;
         }
 
@@ -3122,7 +3136,8 @@ pub fn gammainccinv_scalar(a: f64, y: f64) -> f64 {
     // Q(a,x) = y. Routing through gammaincinv(a, 1-y) computes P = 1-Q near 1,
     // so the small Q resolves to only ~1e-6 (and 1-y rounds to 1 for tiny y).
     // Instead refine on Q directly with Newton. frankenscipy-lj6b2.
-    let ln_gamma_a = crate::gammaln_scalar(a, fsci_runtime::RuntimeMode::Strict).unwrap_or(f64::NAN);
+    let ln_gamma_a =
+        crate::gammaln_scalar(a, fsci_runtime::RuntimeMode::Strict).unwrap_or(f64::NAN);
     let mut x = if 1.0 - y < 1.0 {
         gammaincinv_scalar(a, 1.0 - y)
     } else {
@@ -6010,6 +6025,26 @@ mod tests {
 
     #[test]
     #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy
+    fn betaincinv_tail_matches_scipy() {
+        // frankenscipy-dmkvd: relative-tolerance Newton + small-y seed + symmetry.
+        // The absolute-tol / mean-seed form was 2.5x wrong at y=1e-15. scipy 1.17.1.
+        let cases = [
+            (2.0, 3.0, 1e-12, 4.082484015750327e-07),
+            (0.5, 0.5, 1e-15, 2.46740110027234e-30),
+            (1000.0, 2.0, 1e-10, 0.9740225210945375),
+            (2.0, 1000.0, 0.9999999, 0.018928819114004375),
+            (2.0, 3.0, 0.5, 0.3857275681323895),
+            (5.0, 500.0, 0.02, 0.003042242102338533),
+            (0.5, 0.5, 0.99, 0.9997532801828658),
+        ];
+        for (a, b, y, expected) in cases {
+            let got = betaincinv_scalar(a, b, y);
+            assert!(((got - expected) / expected).abs() < 1e-11, "betaincinv({a},{b},{y}) = {got}, scipy {expected}");
+        }
+    }
+
+    #[test]
+    #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy
     fn gammaincinv_inverses_match_scipy() {
         // frankenscipy-lj6b2: relative-tolerance Newton (gammaincinv) and Q-Newton
         // (gammainccinv) replace the absolute-tol / P-near-1 forms. scipy 1.17.1.
@@ -6022,7 +6057,10 @@ mod tests {
         ];
         for (a, y, expected) in p_cases {
             let got = gammaincinv_scalar(a, y);
-            assert!(((got - expected) / expected).abs() < 1e-11, "gammaincinv({a},{y}) = {got}, scipy {expected}");
+            assert!(
+                ((got - expected) / expected).abs() < 1e-11,
+                "gammaincinv({a},{y}) = {got}, scipy {expected}"
+            );
         }
         let q_cases = [
             (2.0, 1e-10, 26.33398160553087),
@@ -6033,7 +6071,10 @@ mod tests {
         ];
         for (a, y, expected) in q_cases {
             let got = gammainccinv_scalar(a, y);
-            assert!(((got - expected) / expected).abs() < 1e-11, "gammainccinv({a},{y}) = {got}, scipy {expected}");
+            assert!(
+                ((got - expected) / expected).abs() < 1e-11,
+                "gammainccinv({a},{y}) = {got}, scipy {expected}"
+            );
         }
     }
 
