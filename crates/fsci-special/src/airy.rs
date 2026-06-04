@@ -665,9 +665,9 @@ fn airy_asymptotic(x: f64, _mode: RuntimeMode) -> Result<AiryResult, SpecialErro
         // Sign on the N·sin term: with the standard DLMF 9.7.10
         // convention plus fsci's positive-u_k/v_k coefficients, the
         // Wronskian Ai(−x)·Bi'(−x) − Ai'(−x)·Bi(−x) collapses to 1/π
-        // at leading order. The 4-term L/M/N/O truncation envelopes
-        // the residual at ~5e-3 in the oscillatory regime; tracked
-        // under [frankenscipy-yz8s7] for a future 8-term expansion.
+        // at leading order. N's |v_{2k}| corrections carry a net + sign
+        // (see oscillatory_coefficients); the oscillatory derivatives now
+        // track scipy to <1e-6 over the moderate-|x| band [frankenscipy-yz8s7].
         let bip = prefactor * abs_x.sqrt() * (n * sin_phase + o * cos_phase);
 
         Ok(AiryResult { ai, aip, bi, bip })
@@ -725,7 +725,14 @@ fn oscillatory_coefficients(zeta: f64) -> (f64, f64, f64, f64) {
     let v3 = 95095.0 / 2239488.0;
     let v4 = 40_415_375.0 / 644_972_544.0;
 
-    let n = 1.0 - v2 * iz2 + v4 * iz2 * iz2;
+    // Derivative even-series N = Σ_k (-1)^k v_{2k}/ζ^{2k}. Because the DLMF
+    // v_k are intrinsically negative for k≥1 (v_k = -(6k+1)/(6k-1)·u_k), the
+    // (-1)^k and that intrinsic sign combine so the |v_{2k}| corrections enter
+    // with a NET POSITIVE sign: N = 1 + |v2|/ζ² + |v4|/ζ⁴. The previous
+    // 1 − |v2|/ζ² left a +2|v2|/ζ² ≈ ζ⁻² residual in Ai'(−x)/Bi'(−x) (~6e-5 at
+    // x=−15, ~7e-6 at x=−30) while Ai/Bi were ~1e-10. Fixing the sign drops the
+    // derivative residual to <1e-7. frankenscipy-yz8s7.
+    let n = 1.0 + v2 * iz2 + v4 * iz2 * iz2;
     let o = v1 * iz - v3 * iz * iz2;
 
     (l, m, n, o)
@@ -789,19 +796,30 @@ mod tests {
     #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy
     fn airy_negative_x_derivatives_match_scipy() {
         // frankenscipy-gby5z: Ai'(-x) had a sign error (~7e-4 off); Bi' was fine.
-        // (x, Ai'_scipy, Bi'_scipy) from scipy.special.airy 1.17.1.
+        // frankenscipy-yz8s7: the derivative even-series N had the |v2|/|v4|
+        // corrections sign-flipped, leaving a ~ζ⁻² residual in BOTH Ai'/Bi'
+        // (~6e-5 at x=-15, ~7e-6 at x=-30). After the fix the oscillatory
+        // derivatives track scipy to <1e-6 across the moderate-|x| band.
+        // Cases here all fall in the oscillatory ASYMPTOTIC branch (|x| ≥ 12);
+        // the [-12, 4) Maclaurin-series branch has its own ~2e-4 edge residual
+        // near x=-10 tracked separately.
+        // (x, Ai_scipy, Ai'_scipy, Bi_scipy, Bi'_scipy) from scipy.special.airy 1.17.1.
         let cases = [
-            (-10.0, 0.9962650441327905, 0.11941411339990535),
-            (-30.0, 1.2286206026374895, -0.4836947258276702),
-            (-100.0, -0.24229703166065122, 1.7675948932340515),
-            (-300.0, 2.250225513837954, 0.6706520228542355),
+            (-15.0, 0.27821749087082903, 0.2723742043086415, -0.06912659453100992, 1.076429753084375),
+            (-20.0, -0.17640612707798434, 0.8928628567364726, -0.20013930932265164, -0.7914290338395351),
+            (-25.0, 0.16352657883043045, 0.9623788513876933, -0.1921468156903773, 0.8157197157546104),
+            (-30.0, -0.08796818845684005, 1.2286206026374895, -0.2244469422005671, -0.4836947258276702),
+            (-100.0, 0.17675339323955203, -0.24229703166065122, 0.024273887680166775, 1.7675948932340515),
         ];
-        for (x, aip_ref, bip_ref) in cases {
+        for (x, ai_ref, aip_ref, bi_ref, bip_ref) in cases {
             let r = airy_scalar(x, RuntimeMode::Strict).unwrap();
-            // 4-term oscillatory truncation floor (~1e-5 near x=-30, tighter for
-            // larger |x|); the prior Ai' sign bug was ~7e-4.
-            assert!((r.aip - aip_ref).abs() < 1e-4, "Ai'({x}) = {}, scipy {aip_ref}", r.aip);
-            assert!((r.bip - bip_ref).abs() < 1e-4, "Bi'({x}) = {}, scipy {bip_ref}", r.bip);
+            // relative tolerance: the oscillatory series now resolves the
+            // derivatives to <1e-6 (was ~6e-5 with the flipped N sign, ~7e-4
+            // before the gby5z Ai' sign fix).
+            assert!((r.ai - ai_ref).abs() <= 2e-6 *ai_ref.abs().max(1e-3), "Ai({x}) = {}, scipy {ai_ref}", r.ai);
+            assert!((r.aip - aip_ref).abs() <= 2e-6 *aip_ref.abs().max(1e-3), "Ai'({x}) = {}, scipy {aip_ref}", r.aip);
+            assert!((r.bi - bi_ref).abs() <= 2e-6 *bi_ref.abs().max(1e-3), "Bi({x}) = {}, scipy {bi_ref}", r.bi);
+            assert!((r.bip - bip_ref).abs() <= 2e-6 *bip_ref.abs().max(1e-3), "Bi'({x}) = {}, scipy {bip_ref}", r.bip);
         }
     }
 
