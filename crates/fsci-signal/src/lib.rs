@@ -7762,6 +7762,14 @@ pub fn medfilt(data: &[f64], kernel_size: usize) -> Result<Vec<f64>, SignalError
         return Ok(vec![]);
     }
 
+    // For large kernels the per-window O(k) selection (O(n*k) total) is replaced
+    // by a sliding two-ordered-multiset median (O(n*log k)). Both return the
+    // rank-(k/2) element by total_cmp, so the output is bit-identical; the naive
+    // path stays faster for small kernels.
+    if kernel_size >= MEDFILT_SLIDING_THRESHOLD {
+        return Ok(medfilt_sliding(data, kernel_size));
+    }
+
     let half = kernel_size / 2;
     let n = data.len();
     let mut result = Vec::with_capacity(n);
@@ -7785,6 +7793,141 @@ pub fn medfilt(data: &[f64], kernel_size: usize) -> Result<Vec<f64>, SignalError
     }
 
     Ok(result)
+}
+
+const MEDFILT_SLIDING_THRESHOLD: usize = 64;
+
+/// `total_cmp`-ordered f64 wrapper so f64 can key a `BTreeMap` multiset with the
+/// exact ordering `medfilt`'s `select_nth_unstable_by` uses.
+#[derive(Clone, Copy, PartialEq)]
+struct OrderedF64(f64);
+impl Eq for OrderedF64 {}
+impl PartialOrd for OrderedF64 {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for OrderedF64 {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.total_cmp(&other.0)
+    }
+}
+
+/// Streaming median over a sliding window, split into two ordered multisets:
+/// `lower` holds the smallest `ceil(total/2)` values (its maximum is the median),
+/// `upper` the rest, with `max(lower) <= min(upper)` maintained. Insert/remove
+/// are O(log k). The median equals the rank-`k/2` element (odd `k`), identical to
+/// `select_nth_unstable_by(k/2)`.
+struct SlidingMedian {
+    lower: std::collections::BTreeMap<OrderedF64, usize>,
+    upper: std::collections::BTreeMap<OrderedF64, usize>,
+    lower_size: usize,
+    upper_size: usize,
+}
+
+impl SlidingMedian {
+    fn new() -> Self {
+        Self {
+            lower: std::collections::BTreeMap::new(),
+            upper: std::collections::BTreeMap::new(),
+            lower_size: 0,
+            upper_size: 0,
+        }
+    }
+
+    fn lower_max(&self) -> OrderedF64 {
+        *self.lower.keys().next_back().expect("lower non-empty")
+    }
+
+    fn upper_min(&self) -> OrderedF64 {
+        *self.upper.keys().next().expect("upper non-empty")
+    }
+
+    fn bag_insert(bag: &mut std::collections::BTreeMap<OrderedF64, usize>, key: OrderedF64) {
+        *bag.entry(key).or_insert(0) += 1;
+    }
+
+    fn bag_remove(bag: &mut std::collections::BTreeMap<OrderedF64, usize>, key: OrderedF64) {
+        if let Some(count) = bag.get_mut(&key) {
+            *count -= 1;
+            if *count == 0 {
+                bag.remove(&key);
+            }
+        }
+    }
+
+    fn insert(&mut self, x: f64) {
+        let key = OrderedF64(x);
+        if self.lower_size == 0 || key <= self.lower_max() {
+            Self::bag_insert(&mut self.lower, key);
+            self.lower_size += 1;
+        } else {
+            Self::bag_insert(&mut self.upper, key);
+            self.upper_size += 1;
+        }
+        self.rebalance();
+    }
+
+    fn remove(&mut self, x: f64) {
+        // Any copy of the value works — the median depends only on the union, and
+        // rebalance restores the size invariant.
+        let key = OrderedF64(x);
+        if self.lower.contains_key(&key) {
+            Self::bag_remove(&mut self.lower, key);
+            self.lower_size -= 1;
+        } else {
+            Self::bag_remove(&mut self.upper, key);
+            self.upper_size -= 1;
+        }
+        self.rebalance();
+    }
+
+    fn rebalance(&mut self) {
+        let target = (self.lower_size + self.upper_size).div_ceil(2);
+        while self.lower_size > target {
+            let m = self.lower_max();
+            Self::bag_remove(&mut self.lower, m);
+            self.lower_size -= 1;
+            Self::bag_insert(&mut self.upper, m);
+            self.upper_size += 1;
+        }
+        while self.lower_size < target {
+            let m = self.upper_min();
+            Self::bag_remove(&mut self.upper, m);
+            self.upper_size -= 1;
+            Self::bag_insert(&mut self.lower, m);
+            self.lower_size += 1;
+        }
+    }
+
+    fn median(&self) -> f64 {
+        self.lower_max().0
+    }
+}
+
+fn medfilt_sliding(data: &[f64], kernel_size: usize) -> Vec<f64> {
+    let n = data.len();
+    let half = (kernel_size / 2) as i64;
+    let at = |idx: i64| -> f64 {
+        if idx >= 0 && idx < n as i64 {
+            data[idx as usize]
+        } else {
+            0.0
+        }
+    };
+
+    let mut window = SlidingMedian::new();
+    for p in -half..=half {
+        window.insert(at(p));
+    }
+    let mut result = Vec::with_capacity(n);
+    result.push(window.median());
+    for i in 1..n as i64 {
+        window.remove(at(i - 1 - half));
+        window.insert(at(i + half));
+        result.push(window.median());
+    }
+    result
 }
 
 /// Apply a 1-D adaptive Wiener filter.
@@ -14077,6 +14220,66 @@ mod tests {
     }
 
     // ── Medfilt tests ──────────────────────────────────────────────
+
+    #[test]
+    fn medfilt_sliding_matches_naive_loop() {
+        // Isomorphism proof for the sliding-median path: it must be bit-identical
+        // to the per-window select_nth reference across kernel sizes (including
+        // the dispatch threshold), input lengths, and tie densities (the
+        // multiset-straddle case), plus signed zeros.
+        fn naive(data: &[f64], k: usize) -> Vec<f64> {
+            let n = data.len();
+            let half = k / 2;
+            let mut out = Vec::with_capacity(n);
+            let mut win = vec![0.0; k];
+            for i in 0..n {
+                for (j, v) in win.iter_mut().enumerate() {
+                    let idx = i as i64 + j as i64 - half as i64;
+                    *v = if idx >= 0 && idx < n as i64 {
+                        data[idx as usize]
+                    } else {
+                        0.0
+                    };
+                }
+                let (_, &mut m, _) = win.select_nth_unstable_by(half, |a, b| a.total_cmp(b));
+                out.push(m);
+            }
+            out
+        }
+        let mut state: u64 = 0x1357_9bdf_2468_ace0;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            state
+        };
+        for &n in &[1usize, 50, 400, 1000] {
+            for &tie_mod in &[0u64, 2, 4, 30] {
+                let data: Vec<f64> = (0..n)
+                    .map(|_| {
+                        let r = next();
+                        match r % 41 {
+                            0 => -0.0,
+                            1 => 0.0,
+                            _ if tie_mod == 0 => (r >> 20) as f64 / (1u64 << 30) as f64,
+                            _ => (r % tie_mod) as f64,
+                        }
+                    })
+                    .collect();
+                for &k in &[1usize, 3, 63, 65, 101, 257] {
+                    if k > 2 * n + 1 {
+                        continue;
+                    }
+                    let fast = medfilt_sliding(&data, k);
+                    let slow = naive(&data, k);
+                    assert_eq!(fast.len(), slow.len());
+                    for (a, b) in fast.iter().zip(slow.iter()) {
+                        assert_eq!(a.to_bits(), b.to_bits(), "n={n} k={k} tie_mod={tie_mod}");
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn medfilt_removes_impulse_noise() {
