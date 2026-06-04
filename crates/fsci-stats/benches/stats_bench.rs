@@ -1,7 +1,8 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_stats::{
-    HaltonSampler, SobolSampler, acf, argsort, centered_discrepancy, ecdf, histogram, kendalltau,
-    l2_star_discrepancy, mannkendall, mixture_discrepancy, pacf, psd_welch, wraparound_discrepancy,
+    HaltonSampler, SobolSampler, SomersDInput, acf, argsort, centered_discrepancy, ecdf, histogram,
+    kendalltau, l2_star_discrepancy, mannkendall, mixture_discrepancy, pacf, psd_welch, somersd,
+    wraparound_discrepancy,
 };
 
 fn deterministic_data(n: usize) -> Vec<f64> {
@@ -93,12 +94,27 @@ fn bench_rank_correlation(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_somersd(c: &mut Criterion) {
+    let mut group = c.benchmark_group("somersd");
+    // Distinct ranks -> an n x n contingency table, the worst case for the
+    // per-cell quadrant re-summation (O((R*C)^2)).
+    for &n in &[64usize, 128] {
+        let x: Vec<f64> = (0..n).map(|i| i as f64).collect();
+        let y: Vec<f64> = (0..n).map(|i| ((i * 7 + 3) % n) as f64).collect();
+        group.bench_function(BenchmarkId::new("rankings", n), |b| {
+            b.iter(|| somersd(SomersDInput::Rankings(&x, &y), None))
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_qmc_discrepancy,
     bench_qmc_sampling,
     bench_ordering_and_bins,
     bench_time_series,
-    bench_rank_correlation
+    bench_rank_correlation,
+    bench_somersd
 );
 criterion_main!(benches);

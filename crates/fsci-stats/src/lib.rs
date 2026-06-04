@@ -28048,6 +28048,53 @@ fn somers_dij(table: &[Vec<f64>], i: usize, j: usize) -> f64 {
     lower_left + upper_right
 }
 
+/// True when every table cell is a finite non-negative integer and the grand
+/// total stays below 2^53, so all quadrant prefix sums are exact integers and the
+/// O(R*C) prefix-sum path is bit-identical to the per-cell quadrant re-summation.
+fn somers_table_is_exact_counts(table: &[Vec<f64>], total: f64) -> bool {
+    total < 9_007_199_254_740_992.0
+        && table
+            .iter()
+            .flatten()
+            .all(|&v| v.is_finite() && v >= 0.0 && v.fract() == 0.0)
+}
+
+/// O(R*C) concordant (P), discordant (Q), and variance-term accumulation via a
+/// 2D prefix sum. The per-cell `somers_aij`/`somers_dij` re-sum two table
+/// quadrants from scratch — O((R*C)^2) overall; the prefix sum yields each
+/// quadrant total in O(1). For exact integer counts the quadrant totals (and the
+/// row-major accumulation order) are identical, so P/Q/a_term are bit-for-bit
+/// unchanged.
+fn somers_pqa_prefix(table: &[Vec<f64>]) -> (f64, f64, f64) {
+    let r = table.len();
+    let c = table[0].len();
+    let mut pre = vec![vec![0.0f64; c + 1]; r + 1];
+    for i in 0..r {
+        for j in 0..c {
+            pre[i + 1][j + 1] = table[i][j] + pre[i][j + 1] + pre[i + 1][j] - pre[i][j];
+        }
+    }
+    let total = pre[r][c];
+    let mut p = 0.0;
+    let mut q = 0.0;
+    let mut a_term = 0.0;
+    for i in 0..r {
+        for j in 0..c {
+            let cell = table[i][j];
+            let upper_left = pre[i][j];
+            let lower_right = total - pre[i + 1][c] - pre[r][j + 1] + pre[i + 1][j + 1];
+            let aij = upper_left + lower_right;
+            let lower_left = pre[r][j] - pre[i + 1][j];
+            let upper_right = pre[i][c] - pre[i][j + 1];
+            let dij = lower_left + upper_right;
+            p += cell * aij;
+            q += cell * dij;
+            a_term += cell * (aij - dij).powi(2);
+        }
+    }
+    (p, q, a_term)
+}
+
 /// Somers' D ordinal association test.
 ///
 /// Matches the core behavior of `scipy.stats.somersd`.
@@ -28080,18 +28127,29 @@ pub fn somersd(
         })
         .sum();
 
-    let mut p = 0.0;
-    let mut q = 0.0;
-    let mut a_term = 0.0;
-    for (i, row) in table.iter().enumerate() {
-        for (j, &cell) in row.iter().enumerate() {
-            let aij = somers_aij(&table, i, j);
-            let dij = somers_dij(&table, i, j);
-            p += cell * aij;
-            q += cell * dij;
-            a_term += cell * (aij - dij).powi(2);
+    // P (concordant), Q (discordant), and the variance term accumulate in
+    // row-major order. The per-cell somers_aij/somers_dij re-sum two quadrants
+    // each — O((R*C)^2). For exact integer counts (always for the rankings path)
+    // a 2D prefix sum gives every quadrant total in O(1) with bit-identical
+    // integer values, collapsing the pass to O(R*C); non-integer tables keep the
+    // exact original summation order.
+    let (p, q, a_term) = if somers_table_is_exact_counts(&table, total) {
+        somers_pqa_prefix(&table)
+    } else {
+        let mut p = 0.0;
+        let mut q = 0.0;
+        let mut a_term = 0.0;
+        for (i, row) in table.iter().enumerate() {
+            for (j, &cell) in row.iter().enumerate() {
+                let aij = somers_aij(&table, i, j);
+                let dij = somers_dij(&table, i, j);
+                p += cell * aij;
+                q += cell * dij;
+                a_term += cell * (aij - dij).powi(2);
+            }
         }
-    }
+        (p, q, a_term)
+    };
 
     let statistic = (p - q) / (total_sq - sri2);
     let s = a_term - (p - q).powi(2) / total;
@@ -53826,6 +53884,44 @@ mod tests {
             (res3.statistic - (-1.0)).abs() < 1e-10,
             "anti-monotonic spearmanr correlation"
         );
+    }
+
+    #[test]
+    fn somers_prefix_pqa_matches_direct_quadrant_sums() {
+        // Isomorphism proof for the O(R*C) Somers' D prefix-sum path: the
+        // (P, Q, a_term) triple must be bit-for-bit identical to the per-cell
+        // quadrant re-summation, across table shapes and integer count
+        // magnitudes. Identical triple => identical statistic/p-value.
+        let mut state: u64 = 0xabcd_1234_5678_9f0e;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            state >> 33
+        };
+        for &(r, c) in &[(2usize, 2usize), (5, 7), (16, 16), (64, 48), (100, 100)] {
+            for &cap in &[2u64, 5, 1000] {
+                let table: Vec<Vec<f64>> = (0..r)
+                    .map(|_| (0..c).map(|_| (next() % cap) as f64).collect())
+                    .collect();
+                let (p_fast, q_fast, a_fast) = somers_pqa_prefix(&table);
+                let mut p_dir = 0.0;
+                let mut q_dir = 0.0;
+                let mut a_dir = 0.0;
+                for (i, row) in table.iter().enumerate() {
+                    for (j, &cell) in row.iter().enumerate() {
+                        let aij = somers_aij(&table, i, j);
+                        let dij = somers_dij(&table, i, j);
+                        p_dir += cell * aij;
+                        q_dir += cell * dij;
+                        a_dir += cell * (aij - dij).powi(2);
+                    }
+                }
+                assert_eq!(p_fast.to_bits(), p_dir.to_bits(), "P r={r} c={c} cap={cap}");
+                assert_eq!(q_fast.to_bits(), q_dir.to_bits(), "Q r={r} c={c} cap={cap}");
+                assert_eq!(a_fast.to_bits(), a_dir.to_bits(), "a r={r} c={c} cap={cap}");
+            }
+        }
     }
 
     #[test]
