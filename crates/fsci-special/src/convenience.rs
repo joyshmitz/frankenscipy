@@ -5753,6 +5753,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn probe_more_large_arg() {
+        for (v, x) in [(0.0, 10.0), (0.0, 30.0), (1.0, 30.0), (1.0, 50.0)] {
+            println!("PROBE modstruve({v},{x}) = {:e}", modstruve_scalar(v, x));
+        }
+        for x in [3.0, 10.0, 50.0, 200.0] {
+            let (s, c) = fresnel(x);
+            println!("PROBE fresnel({x}) S={s:e} C={c:e}");
+        }
+        let airy_at = |x: f64| {
+            let r = crate::airy::airy(&SpecialTensor::RealScalar(x), RuntimeMode::Strict).unwrap();
+            let g = |t: &SpecialTensor| match t { SpecialTensor::RealScalar(v) => *v, _ => f64::NAN };
+            (g(&r[0]), g(&r[1]), g(&r[2]), g(&r[3]))
+        };
+        for x in [10.0, 30.0, -10.0, -30.0, 100.0] {
+            let (ai, aip, bi, bip) = airy_at(x);
+            println!("PROBE airy({x}) Ai={ai:e} Aip={aip:e} Bi={bi:e} Bip={bip:e}");
+        }
+    }
+
+    #[test]
     #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy/mpmath
     fn erfi_large_x_matches_scipy() {
         // frankenscipy-sxr71: erfi(x)=(2/√π)e^{x²}D(x) replaces the double-
