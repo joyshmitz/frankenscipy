@@ -1934,19 +1934,7 @@ pub fn berp(x: f64) -> f64 {
     if x == 0.0 {
         return 0.0;
     }
-
-    let x2 = x * x / 4.0;
-    let mut term = 1.0;
-    let mut sum = 0.0;
-    for k in 1..50 {
-        term *= -x2 * x2 / ((2 * k - 1) as f64 * (2 * k) as f64).powi(2);
-        let derivative_term = term * (4 * k) as f64 / x;
-        sum += derivative_term;
-        if derivative_term.abs() < sum.abs().max(1.0) * 1e-16 {
-            break;
-        }
-    }
-    sum
+    kelvin_derivatives(x).0
 }
 
 /// Kelvin function bei(x): imaginary part of J_0(x * sqrt(j)).
@@ -2002,19 +1990,7 @@ pub fn beip(x: f64) -> f64 {
     if x == 0.0 {
         return 0.0;
     }
-
-    let x2 = x * x / 4.0;
-    let mut term = x2;
-    let mut sum = 2.0 * term / x;
-    for k in 1..50 {
-        term *= -x2 * x2 / ((2 * k) as f64 * (2 * k + 1) as f64).powi(2);
-        let derivative_term = term * (4 * k + 2) as f64 / x;
-        sum += derivative_term;
-        if derivative_term.abs() < sum.abs().max(1.0) * 1e-16 {
-            break;
-        }
-    }
-    sum
+    kelvin_derivatives(x).1
 }
 
 /// Kelvin function ker(x): real part of K_0(x * sqrt(j)).
@@ -2049,6 +2025,122 @@ fn kelvin_ker_kei_asymptotic(x: f64) -> (f64, f64) {
     let pref = Complex64::from_real((PI / 2.0).sqrt()) * z.powc(Complex64::from_real(-0.5));
     let k0 = pref * (-z).exp() * sum;
     (k0.re, k0.im)
+}
+
+/// I₁(z) for complex z via the ascending series Σ_{k≥0} (z/2)^{2k+1}/(k!(k+1)!).
+fn complex_i1_series(z: Complex64) -> Complex64 {
+    let half = z * Complex64::from_real(0.5);
+    let h2 = half * half;
+    let mut term = half; // k = 0
+    let mut sum = Complex64::from_real(0.0);
+    for k in 0..120u32 {
+        sum = sum + term;
+        let kf = k as f64;
+        term = term * h2 / Complex64::from_real((kf + 1.0) * (kf + 2.0));
+        if term.abs() < 1e-20 * sum.abs() {
+            break;
+        }
+    }
+    sum
+}
+
+/// I₁(z) via the large-|z| asymptotic e^z/√(2πz) Σ_k (-1)^k a_k/z^k (ν=1).
+fn complex_i1_asymptotic(z: Complex64) -> Complex64 {
+    let mu = 4.0;
+    let mut term = Complex64::from_real(1.0);
+    let mut sum = term;
+    let mut prev = 1.0;
+    for k in 1..80u32 {
+        let kf = k as f64;
+        let coef = -(mu - (2.0 * kf - 1.0).powi(2)) / (8.0 * kf);
+        term = term * Complex64::from_real(coef) / z;
+        let a = term.abs();
+        if a > prev {
+            break;
+        }
+        sum = sum + term;
+        prev = a;
+        if a < 1e-18 {
+            break;
+        }
+    }
+    let inv_sqrt_2pi = (2.0 * std::f64::consts::PI).sqrt().recip();
+    z.exp() * z.powc(Complex64::from_real(-0.5)) * Complex64::from_real(inv_sqrt_2pi) * sum
+}
+
+/// K₁(z) via the DLMF 10.40.2 asymptotic √(π/(2z)) e^{-z} Σ_k a_k/z^k (ν=1, the
+/// all-positive coefficients (4-(2k-1)²)/(8k)).
+fn complex_k1_asymptotic(z: Complex64) -> Complex64 {
+    let mu = 4.0;
+    let mut term = Complex64::from_real(1.0);
+    let mut sum = term;
+    let mut prev = 1.0;
+    for k in 1..80u32 {
+        let kf = k as f64;
+        let coef = (mu - (2.0 * kf - 1.0).powi(2)) / (8.0 * kf);
+        term = term * Complex64::from_real(coef) / z;
+        let a = term.abs();
+        if a > prev {
+            break;
+        }
+        sum = sum + term;
+        prev = a;
+        if a < 1e-18 {
+            break;
+        }
+    }
+    let pref = Complex64::from_real((std::f64::consts::PI / 2.0).sqrt())
+        * z.powc(Complex64::from_real(-0.5));
+    pref * (-z).exp() * sum
+}
+
+/// K₁(z) via the DLMF 10.31.1 logarithmic series (n = 1):
+/// K₁(z) = 1/z + ln(z/2) I₁(z) - (z/4) Σ_k (ψ(k+1)+ψ(k+2)) (z²/4)^k/(k!(k+1)!).
+fn complex_k1_series(z: Complex64) -> Complex64 {
+    const EULER: f64 = 0.577_215_664_901_532_9;
+    let i1 = complex_i1_series(z);
+    let half = z * Complex64::from_real(0.5);
+    let h2 = half * half;
+    let mut sum = Complex64::from_real(0.0);
+    let mut tk = Complex64::from_real(1.0); // (z²/4)^k/(k!(k+1)!), k = 0
+    let mut h_k = 0.0; // H_k
+    let mut h_k1 = 1.0; // H_{k+1}
+    for k in 0..120u32 {
+        let coef = -2.0 * EULER + h_k + h_k1; // ψ(k+1)+ψ(k+2)
+        sum = sum + tk * Complex64::from_real(coef);
+        let kf = k as f64;
+        tk = tk * h2 / Complex64::from_real((kf + 1.0) * (kf + 2.0));
+        h_k += 1.0 / (kf + 1.0);
+        h_k1 += 1.0 / (kf + 2.0);
+        if tk.abs() < 1e-20 * sum.abs().max(1e-300) {
+            break;
+        }
+    }
+    z.recip() + half.ln() * i1 - (z * Complex64::from_real(0.25)) * sum
+}
+
+/// (ber'(x), bei'(x), ker'(x), kei'(x)) from the analytic Kelvin-derivative
+/// identities ber'+i·bei' = e^{iπ/4} I₁(z) and ker'+i·kei' = -e^{iπ/4} K₁(z),
+/// z = x e^{iπ/4}. I₁/K₁ use complex series (small x) and asymptotics (large x).
+/// Replaces the finite-difference / cancelling direct-series forms that were
+/// ~1e-8..4e-6 off scipy. frankenscipy-l3kwr.
+fn kelvin_derivatives(x: f64) -> (f64, f64, f64, f64) {
+    use std::f64::consts::FRAC_1_SQRT_2;
+    let rot = Complex64::new(FRAC_1_SQRT_2, FRAC_1_SQRT_2); // e^{iπ/4}
+    let z = Complex64::new(x * FRAC_1_SQRT_2, x * FRAC_1_SQRT_2);
+    let i1 = if x < 20.0 {
+        complex_i1_series(z)
+    } else {
+        complex_i1_asymptotic(z)
+    };
+    let k1 = if x < 11.0 {
+        complex_k1_series(z)
+    } else {
+        complex_k1_asymptotic(z)
+    };
+    let bb = rot * i1; // ber' + i·bei'
+    let kk = -(rot * k1); // ker' + i·kei'
+    (bb.re, bb.im, kk.re, kk.im)
 }
 
 pub fn ker(x: f64) -> f64 {
@@ -2141,15 +2233,6 @@ pub fn kei(x: f64) -> f64 {
     -(ln_x2 + gamma_em) * bei_x - (std::f64::consts::PI / 4.0) * ber_x - correction
 }
 
-fn kelvin_positive_derivative(x: f64, kernel: fn(f64) -> f64) -> f64 {
-    let h = 1.0e-5 * x.abs().max(1.0);
-    if x - h <= 0.0 {
-        (-3.0 * kernel(x) + 4.0 * kernel(x + h) - kernel(x + 2.0 * h)) / (2.0 * h)
-    } else {
-        (kernel(x + h) - kernel(x - h)) / (2.0 * h)
-    }
-}
-
 /// Kelvin function derivative ker'(x).
 ///
 /// Matches `scipy.special.kerp` on the real domain.
@@ -2163,7 +2246,7 @@ pub fn kerp(x: f64) -> f64 {
     if x == 0.0 {
         return f64::NEG_INFINITY;
     }
-    kelvin_positive_derivative(x, ker)
+    kelvin_derivatives(x).2
 }
 
 /// Kelvin function derivative kei'(x).
@@ -2176,7 +2259,7 @@ pub fn keip(x: f64) -> f64 {
     if x == 0.0 {
         return 0.0;
     }
-    kelvin_positive_derivative(x, kei)
+    kelvin_derivatives(x).3
 }
 
 /// Combined Kelvin functions `(Be, Ke, Be', Ke')`.
@@ -5833,6 +5916,29 @@ pub fn binary_cross_entropy_scalar(p: f64, q: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy
+    fn kelvin_derivatives_match_scipy() {
+        // frankenscipy-l3kwr: analytic ber'/bei'/ker'/kei' via complex I₁/K₁
+        // replace finite-difference / cancelling-series forms (~1e-8..4e-6 off).
+        let cases = [
+            (1.0, -0.06244575217903096, 0.49739651146809727, -0.6946038911006908, 0.3523699133361705),
+            (5.0, -3.8453394732621544, -4.354140514843111, 0.017193403828394, -0.0008199865436310269),
+            (10.0, 51.19525834615495, 135.3093016566432, -0.00031559693447617284, 0.0001409138375599196),
+            (11.0, -94.21185202497774, 264.11937428720506, -6.99034409619794e-05, 0.00014625254023259207),
+            (15.0, 91.05533316965173, -4087.755236845389, 5.644678075956919e-06, -5.882222803057011e-06),
+            (20.0, -48803.19784717074, 111855.02522349692, -7.501859210700294e-08, 1.906242756745313e-07),
+            (50.0, -46498923792943.57, -118164845285863.83, 7.221202712795484e-17, -3.141565492509411e-17),
+        ];
+        for (x, berp_ref, beip_ref, kerp_ref, keip_ref) in cases {
+            assert!((berp(x) - berp_ref).abs() <= 1e-7 * berp_ref.abs().max(1e-6), "berp({x})={}", berp(x));
+            assert!((beip(x) - beip_ref).abs() <= 1e-7 * beip_ref.abs().max(1e-6), "beip({x})={}", beip(x));
+            assert!((kerp(x) - kerp_ref).abs() <= 1e-7 * kerp_ref.abs().max(1e-12), "kerp({x})={}", kerp(x));
+            assert!((keip(x) - keip_ref).abs() <= 1e-7 * keip_ref.abs().max(1e-12), "keip({x})={}", keip(x));
+        }
+    }
+
 
     #[test]
     #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy
