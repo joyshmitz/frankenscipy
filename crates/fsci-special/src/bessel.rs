@@ -3443,7 +3443,7 @@ fn complex_jv_scalar(v: f64, z: Complex64) -> Complex64 {
 
 /// Complex I_v(z) via power series.
 /// I_v(z) = (z/2)^v Σ_{k=0}^∞ (z²/4)^k / (k! Γ(v+k+1))
-fn complex_iv_scalar(v: f64, z: Complex64) -> Complex64 {
+pub(crate) fn complex_iv_scalar(v: f64, z: Complex64) -> Complex64 {
     if !z.is_finite() || v.is_nan() {
         return Complex64::new(f64::NAN, f64::NAN);
     }
@@ -3727,7 +3727,7 @@ fn complex_y1_series(z: Complex64) -> Complex64 {
 
 /// Complex K_v(z) for real order v.
 /// K_v = π/2 * (I_{-v} - I_v) / sin(vπ) for non-integer v.
-fn complex_kv_scalar(v: f64, z: Complex64, _mode: RuntimeMode) -> Result<Complex64, SpecialError> {
+pub(crate) fn complex_kv_scalar(v: f64, z: Complex64, _mode: RuntimeMode) -> Result<Complex64, SpecialError> {
     if v.is_nan() || !z.is_finite() {
         return Ok(Complex64::new(f64::NAN, f64::NAN));
     }

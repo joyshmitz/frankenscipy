@@ -432,7 +432,40 @@ fn airy_complex_scalar(z: Complex64, mode: RuntimeMode) -> Result<ComplexAiryRes
         return Ok(ComplexAiryResult::nan());
     }
 
+    // Central sector |arg z| < π/3 at large |z|: Ai decays like e^{-(2/3)z^{3/2}}
+    // and the Taylor series cancels catastrophically (Ai(12+0.5i) was ~1e8 off).
+    // The modified-Bessel forms (DLMF 9.6.1/9.6.4) have no cancellation, using
+    // the now-exact complex K_{1/3}/I_{1/3}. frankenscipy-a33tq.
+    if z.re > 0.0 && z.im.abs() < z.re * 3.0_f64.sqrt() && z.abs() > 6.0 {
+        return Ok(airy_central_via_bessel(z, mode));
+    }
+
     airy_series_complex(z, mode)
+}
+
+/// Airy functions in the central sector |arg z| < π/3 via modified Bessel
+/// functions of order ±1/3, ±2/3 (DLMF 9.6.1, 9.6.4), with ζ = (2/3)z^{3/2}:
+///   Ai(z)  = (1/π)√(z/3) K_{1/3}(ζ)      Ai'(z) = -(z/(π√3)) K_{2/3}(ζ)
+///   Bi(z)  = √(z/3)(I_{-1/3}+I_{1/3})(ζ) Bi'(z) = (z/√3)(I_{-2/3}+I_{2/3})(ζ)
+fn airy_central_via_bessel(z: Complex64, mode: RuntimeMode) -> ComplexAiryResult {
+    use crate::bessel::{complex_iv_scalar, complex_kv_scalar};
+    let zeta = z * z.powf(0.5) * (2.0 / 3.0);
+    let sqrt_z3 = (z / 3.0).powf(0.5);
+    let inv_pi = Complex64::new(1.0 / PI, 0.0);
+    let sqrt3 = 3.0_f64.sqrt();
+    let nan = Complex64::new(f64::NAN, f64::NAN);
+    let k13 = complex_kv_scalar(1.0 / 3.0, zeta, mode).unwrap_or(nan);
+    let k23 = complex_kv_scalar(2.0 / 3.0, zeta, mode).unwrap_or(nan);
+    let i_m13 = complex_iv_scalar(-1.0 / 3.0, zeta);
+    let i_p13 = complex_iv_scalar(1.0 / 3.0, zeta);
+    let i_m23 = complex_iv_scalar(-2.0 / 3.0, zeta);
+    let i_p23 = complex_iv_scalar(2.0 / 3.0, zeta);
+    ComplexAiryResult {
+        ai: inv_pi * sqrt_z3 * k13,
+        aip: Complex64::new(-1.0 / (PI * sqrt3), 0.0) * z * k23,
+        bi: sqrt_z3 * (i_m13 + i_p13),
+        bip: Complex64::new(1.0 / sqrt3, 0.0) * z * (i_m23 + i_p23),
+    }
 }
 
 fn airye_complex_scalar(
@@ -791,6 +824,37 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy
+    #[allow(clippy::type_complexity)] // flat (re,im,Ai,Aip,Bi,Bip) golden rows
+    fn airy_complex_central_sector_matches_scipy() {
+        // frankenscipy-a33tq: in the central sector |arg z| < π/3 Ai decays like
+        // e^{-(2/3)z^{3/2}} and the Taylor series cancels catastrophically for
+        // large |z| (Ai(12+0.5i) was ~1e8 off). The modified-Bessel forms
+        // (DLMF 9.6.1/9.6.4) using the now-exact complex K_{1/3}/I_{1/3} have no
+        // cancellation. (re, im, Ai, Aip, Bi, Bip) — scipy.special.airy 1.17.1.
+        let cases: [(f64, f64, f64, f64, f64, f64, f64, f64, f64, f64); 6] = [
+            (12.0, 0.5, -2.4223414693430455e-14, -1.3974098701294474e-13, 7.446112193272591e-14, 4.887737803938679e-13, -48652067274.85256, 320162243852.3775, -190933928219.77063, 1098999083686.9447),
+            (8.0, 3.0, -7.058972727591042e-08, -7.317318108006393e-08, 1.6747620674528355e-07, 2.4855341234540196e-07, -297016.0531185522, 445697.65842547565, -1083279.7789608021, 1111317.9040240769),
+            (30.0, 10.0, 3.618458953201419e-48, 2.9257065097289863e-47, 6.168937330418648e-48, -1.658694314234755e-46, -3.630631225831182e43, -9.593640196678464e44, 6.653289658499513e44, -5.3508198540913276e45),
+            (50.0, -20.0, -2.660839071359235e-98, -4.7566497749799595e-98, 2.577817445862617e-97, 3.060871618150333e-97, -2.5643518267413724e95, 3.042772476044945e95, -1.423970279550298e96, 2.54760527821912e96),
+            (15.0, 15.0, -1.5242800743788593e-12, 1.2389854126760803e-12, 8.6723805670531e-12, -2.6084397373508288e-12, -16857882233.977169, -5027056464.473259, -62690727994.078316, -51203923689.169716),
+            (100.0, 5.0, 4.7695734721577605e-291, 1.206674397092088e-291, -4.7421090640946345e-290, -1.326494655264371e-290, 3.113408464869102e288, -8.709662650827697e287, 3.135381989425959e289, -7.931711005106893e288),
+        ];
+        for (re, im, ar, ai, apr, api, br, bi, bpr, bpi) in cases {
+            let r = airy_complex_scalar(Complex64::new(re, im), RuntimeMode::Strict).unwrap();
+            for (got, wr, wi, name) in [
+                (r.ai, ar, ai, "Ai"),
+                (r.aip, apr, api, "Aip"),
+                (r.bi, br, bi, "Bi"),
+                (r.bip, bpr, bpi, "Bip"),
+            ] {
+                let err = (got.re - wr).hypot(got.im - wi) / wr.hypot(wi);
+                assert!(err <= 1e-7, "{name}({re}{im:+}i) = {got:?}, scipy ({wr},{wi}), rel {err:e}");
+            }
+        }
+    }
 
     #[test]
     #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy
