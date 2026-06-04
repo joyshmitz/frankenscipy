@@ -1,7 +1,7 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_stats::{
     HaltonSampler, SobolSampler, acf, argsort, centered_discrepancy, ecdf, histogram, kendalltau,
-    l2_star_discrepancy, mixture_discrepancy, pacf, psd_welch, wraparound_discrepancy,
+    l2_star_discrepancy, mannkendall, mixture_discrepancy, pacf, psd_welch, wraparound_discrepancy,
 };
 
 fn deterministic_data(n: usize) -> Vec<f64> {
@@ -85,6 +85,9 @@ fn bench_rank_correlation(c: &mut Criterion) {
             .collect();
         group.bench_function(BenchmarkId::new("kendalltau", n), |b| {
             b.iter(|| kendalltau(&x, &y))
+        });
+        group.bench_function(BenchmarkId::new("mannkendall", n), |b| {
+            b.iter(|| mannkendall(&x))
         });
     }
     group.finish();

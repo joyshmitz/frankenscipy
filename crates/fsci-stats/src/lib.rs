@@ -34616,16 +34616,28 @@ pub fn mannkendall(data: &[f64]) -> (f64, f64, i32) {
         return (f64::NAN, f64::NAN, 0);
     }
 
-    let mut s: i64 = 0;
-    for i in 0..n {
-        for j in i + 1..n {
-            if data[j] > data[i] {
-                s += 1;
-            } else if data[j] < data[i] {
-                s -= 1;
+    // Mann-Kendall S = #{i<j: data[j]>data[i]} - #{i<j: data[j]<data[i]}
+    //               = tot - tied_pairs - 2*inversions   (for non-NaN data),
+    // so the O(n^2) sign sum collapses to two O(n log n) merge-sort passes.
+    // S is an exact integer either way, so tau/p-value/trend are unchanged.
+    // NaN inputs keep the original loop (NaN pairs contribute 0, which the
+    // tie/inversion identity does not model), as do small n.
+    let s: i64 = if n >= 256 && !data.iter().any(|v| v.is_nan()) {
+        let tot = (n * (n - 1) / 2) as i64;
+        tot - kendall_tie_pairs(data) - 2 * kendall_strict_inversions(data)
+    } else {
+        let mut s: i64 = 0;
+        for i in 0..n {
+            for j in i + 1..n {
+                if data[j] > data[i] {
+                    s += 1;
+                } else if data[j] < data[i] {
+                    s -= 1;
+                }
             }
         }
-    }
+        s
+    };
 
     // Kendall's tau
     let pairs = (n * (n - 1) / 2) as f64;
@@ -53814,6 +53826,49 @@ mod tests {
             (res3.statistic - (-1.0)).abs() < 1e-10,
             "anti-monotonic spearmanr correlation"
         );
+    }
+
+    #[test]
+    fn mannkendall_inversion_s_matches_naive_loop() {
+        // Isomorphism proof for the O(n log n) Mann-Kendall S: the
+        // tot - tied - 2*inversions identity must equal the O(n^2) sign sum
+        // across sizes that trip the dispatch threshold and a range of tie
+        // densities (continuous through heavily tied). Equal S => identical
+        // tau/p-value/trend.
+        let mut state: u64 = 0x0fee_1dad_dead_beef;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (state >> 11) as f64 / (1u64 << 53) as f64
+        };
+        for &n in &[256usize, 257, 512, 1000, 2048] {
+            for &tie_mod in &[0u64, 2, 3, 7, 50] {
+                let data: Vec<f64> = (0..n)
+                    .map(|_| {
+                        let v = next();
+                        if tie_mod == 0 {
+                            v
+                        } else {
+                            (v * tie_mod as f64).floor()
+                        }
+                    })
+                    .collect();
+                let tot = (n * (n - 1) / 2) as i64;
+                let fast = tot - kendall_tie_pairs(&data) - 2 * kendall_strict_inversions(&data);
+                let mut naive: i64 = 0;
+                for i in 0..n {
+                    for j in i + 1..n {
+                        if data[j] > data[i] {
+                            naive += 1;
+                        } else if data[j] < data[i] {
+                            naive -= 1;
+                        }
+                    }
+                }
+                assert_eq!(fast, naive, "S mismatch n={n} tie_mod={tie_mod}");
+            }
+        }
     }
 
     #[test]
