@@ -1823,7 +1823,10 @@ impl RegularGridInterpolator {
         // relative tolerance of the ideal linspace position; the eval-time
         // correction loop still reads the stored coordinates, so this only
         // affects speed, never which interval is selected.
-        let uniform_axes = points.iter().map(|axis| detect_uniform_axis(axis)).collect();
+        let uniform_axes = points
+            .iter()
+            .map(|axis| detect_uniform_axis(axis))
+            .collect();
 
         // For spline methods, we don't precompute coefficients since that would be
         // expensive and may not be needed. Coefficients are computed on-the-fly
@@ -2259,6 +2262,99 @@ pub struct Delaunay2D {
     pub simplices: Vec<(usize, usize, usize)>,
     pub neighbors: Vec<[Option<usize>; 3]>,
     simplex_bounds: Vec<SimplexBounds>,
+    grid: Option<SimplexGrid>,
+}
+
+/// Uniform-grid spatial index over the (margin-padded) simplex bounding boxes.
+///
+/// `find_simplex` would otherwise scan every simplex per query (O(simplices) per
+/// point). Each simplex is bucketed into every cell its padded bbox overlaps, so
+/// a query's cell holds a superset of all simplices that could contain it. The
+/// scan then visits only that cell's candidates, in ascending simplex-index
+/// order — bit-identical to the full linear scan (same selection rule, same
+/// first match), but ~O(1) candidates per query for well-distributed data.
+#[derive(Debug, Clone)]
+struct SimplexGrid {
+    min_x: f64,
+    min_y: f64,
+    max_x: f64,
+    max_y: f64,
+    inv_w: f64,
+    inv_h: f64,
+    nx: usize,
+    ny: usize,
+    cells: Vec<Vec<usize>>,
+}
+
+impl SimplexGrid {
+    fn build(bounds: &[SimplexBounds]) -> Option<Self> {
+        if bounds.is_empty() {
+            return None;
+        }
+        let mut min_x = f64::INFINITY;
+        let mut min_y = f64::INFINITY;
+        let mut max_x = f64::NEG_INFINITY;
+        let mut max_y = f64::NEG_INFINITY;
+        for b in bounds {
+            min_x = min_x.min(b.min_x - b.margin_x);
+            min_y = min_y.min(b.min_y - b.margin_y);
+            max_x = max_x.max(b.max_x + b.margin_x);
+            max_y = max_y.max(b.max_y + b.margin_y);
+        }
+        if !(min_x.is_finite() && min_y.is_finite() && max_x.is_finite() && max_y.is_finite()) {
+            return None;
+        }
+        let side = ((bounds.len() as f64).sqrt().round() as usize).clamp(1, 1024);
+        let nx = side;
+        let ny = side;
+        let span_x = (max_x - min_x).max(f64::MIN_POSITIVE);
+        let span_y = (max_y - min_y).max(f64::MIN_POSITIVE);
+        let inv_w = nx as f64 / span_x;
+        let inv_h = ny as f64 / span_y;
+        let cell = |x: f64, y: f64| -> (usize, usize) {
+            let cx = (((x - min_x) * inv_w).floor() as i64).clamp(0, nx as i64 - 1) as usize;
+            let cy = (((y - min_y) * inv_h).floor() as i64).clamp(0, ny as i64 - 1) as usize;
+            (cx, cy)
+        };
+        let mut cells: Vec<Vec<usize>> = vec![Vec::new(); nx * ny];
+        for (i, b) in bounds.iter().enumerate() {
+            let (cx0, cy0) = cell(b.min_x - b.margin_x, b.min_y - b.margin_y);
+            let (cx1, cy1) = cell(b.max_x + b.margin_x, b.max_y + b.margin_y);
+            for cy in cy0..=cy1 {
+                for cx in cx0..=cx1 {
+                    cells[cy * nx + cx].push(i);
+                }
+            }
+        }
+        Some(Self {
+            min_x,
+            min_y,
+            max_x,
+            max_y,
+            inv_w,
+            inv_h,
+            nx,
+            ny,
+            cells,
+        })
+    }
+
+    /// Candidate simplices for `query`, or `None` if it lies outside the grid
+    /// (no padded bbox can contain it — the caller falls back to a full scan).
+    fn candidates(&self, query: (f64, f64)) -> Option<&[usize]> {
+        if query.0 < self.min_x
+            || query.0 > self.max_x
+            || query.1 < self.min_y
+            || query.1 > self.max_y
+        {
+            return None;
+        }
+        let cx = (((query.0 - self.min_x) * self.inv_w).floor() as i64).clamp(0, self.nx as i64 - 1)
+            as usize;
+        let cy = (((query.1 - self.min_y) * self.inv_h).floor() as i64).clamp(0, self.ny as i64 - 1)
+            as usize;
+        Some(&self.cells[cy * self.nx + cx])
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2375,19 +2471,45 @@ impl Delaunay2D {
             .filter(|&(a, b, c)| a < n && b < n && c < n)
             .map(|triangle| orient_triangle_ccw(points, triangle))
             .collect::<Vec<_>>();
-        let simplex_bounds = simplices
+        let simplex_bounds: Vec<SimplexBounds> = simplices
             .iter()
             .map(|&simplex| SimplexBounds::for_simplex(points, simplex))
             .collect();
         let neighbors = compute_simplex_neighbors(&simplices);
+        let grid = SimplexGrid::build(&simplex_bounds);
         Ok(Self {
             points: points.to_vec(),
             simplices,
             neighbors,
             simplex_bounds,
+            grid,
         })
     }
     pub fn find_simplex(&self, query: (f64, f64)) -> Option<(usize, f64, f64, f64)> {
+        // The grid restricts the candidate set to one cell while preserving the
+        // ascending-index "first match" rule, so the result is bit-identical to
+        // the full linear scan. Out-of-grid queries (no padded bbox can contain
+        // them) fall back to the linear scan to stay identical at the edges.
+        match self.grid.as_ref().and_then(|g| g.candidates(query)) {
+            Some(candidates) => {
+                for &idx in candidates {
+                    if !self.simplex_bounds[idx].may_contain(query) {
+                        continue;
+                    }
+                    let (a, b, c) = self.simplices[idx];
+                    let (l1, l2, l3) =
+                        barycentric(self.points[a], self.points[b], self.points[c], query);
+                    if l1 >= -1e-10 && l2 >= -1e-10 && l3 >= -1e-10 {
+                        return Some((idx, l1, l2, l3));
+                    }
+                }
+                None
+            }
+            None => self.find_simplex_linear(query),
+        }
+    }
+
+    fn find_simplex_linear(&self, query: (f64, f64)) -> Option<(usize, f64, f64, f64)> {
         for (idx, &(a, b, c)) in self.simplices.iter().enumerate() {
             if !self.simplex_bounds[idx].may_contain(query) {
                 continue;
@@ -5254,6 +5376,65 @@ fn smooth_bivariate_solve_coefficients(
 mod tests {
     use super::*;
 
+    #[test]
+    fn delaunay_grid_find_simplex_matches_linear_scan() {
+        // Isomorphism proof for the simplex-grid index: grid find_simplex must be
+        // bit-identical to the full linear scan (same simplex index and the same
+        // barycentric coordinates) for every query, including points on edges,
+        // vertices, outside the hull, and on the grid boundary.
+        let mut state: u64 = 0xc0ff_ee00_1234_5678;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (state >> 11) as f64 / (1u64 << 53) as f64
+        };
+        for &npts in &[8usize, 30, 120, 400] {
+            let pts: Vec<(f64, f64)> = (0..npts).map(|_| (next() * 10.0, next() * 7.0)).collect();
+            let tri = match Delaunay2D::new(&pts) {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            assert!(tri.grid.is_some(), "grid should build for npts={npts}");
+            // Dense query grid spanning beyond the hull, plus exact vertices and
+            // edge midpoints (the multi-simplex / tolerance-band cases).
+            let mut queries: Vec<(f64, f64)> = Vec::new();
+            for qy in 0..40 {
+                for qx in 0..40 {
+                    queries.push((-1.0 + qx as f64 * 0.3, -1.0 + qy as f64 * 0.22));
+                }
+            }
+            for &(x, y) in &pts {
+                queries.push((x, y));
+            }
+            for &(a, b, c) in &tri.simplices {
+                let mid = |i: usize, j: usize| {
+                    (
+                        (tri.points[i].0 + tri.points[j].0) * 0.5,
+                        (tri.points[i].1 + tri.points[j].1) * 0.5,
+                    )
+                };
+                queries.push(mid(a, b));
+                queries.push(mid(b, c));
+                queries.push(mid(c, a));
+            }
+            for &q in &queries {
+                let fast = tri.find_simplex(q);
+                let slow = tri.find_simplex_linear(q);
+                match (fast, slow) {
+                    (Some((fi, fa, fb, fc)), Some((si, sa, sb, sc))) => {
+                        assert_eq!(fi, si, "npts={npts} q={q:?}: simplex index");
+                        assert_eq!(fa.to_bits(), sa.to_bits(), "npts={npts} q={q:?}: l1");
+                        assert_eq!(fb.to_bits(), sb.to_bits(), "npts={npts} q={q:?}: l2");
+                        assert_eq!(fc.to_bits(), sc.to_bits(), "npts={npts} q={q:?}: l3");
+                    }
+                    (None, None) => {}
+                    (f, s) => panic!("npts={npts} q={q:?}: match disagreement {f:?} vs {s:?}"),
+                }
+            }
+        }
+    }
+
     /// Isomorphism proof for the smoothing-spline normal-equations
     /// sparse-support optimization [perf]: assembling A^T A / A^T y over only
     /// the nonzero B-spline basis indices must be BIT-IDENTICAL to the dense
@@ -5993,10 +6174,7 @@ mod tests {
             for &x in &probes {
                 let fast = RegularGridInterpolator::find_interval_uniform(meta, axis, x);
                 let slow = RegularGridInterpolator::find_interval(axis, x);
-                assert_eq!(
-                    fast, slow,
-                    "axis n={n} x={x}: fast={fast} slow={slow}"
-                );
+                assert_eq!(fast, slow, "axis n={n} x={x}: fast={fast} slow={slow}");
             }
         }
 
