@@ -128,6 +128,46 @@ fn diags_golden_text() -> String {
     output
 }
 
+fn coo_csr_golden_text() -> String {
+    let mut output = String::new();
+
+    let duplicate = CooMatrix::from_triplets(
+        Shape2D::new(4, 5),
+        vec![7.0, 1.5, 0.0, -2.0, 3.25, -7.0, 2.0],
+        vec![3, 0, 2, 0, 2, 3, 0],
+        vec![1, 4, 2, 1, 2, 1, 1],
+        false,
+    )
+    .expect("duplicate coo");
+    write_csr(
+        &mut output,
+        "coo-csr-unsorted-duplicates",
+        &duplicate.to_csr().expect("duplicate csr"),
+    );
+
+    let rectangular = CooMatrix::from_triplets(
+        Shape2D::new(3, 6),
+        vec![0.0, -4.0, 9.0, 1.25, -1.25, 5.5],
+        vec![2, 1, 0, 1, 1, 2],
+        vec![5, 2, 0, 4, 4, 1],
+        false,
+    )
+    .expect("rectangular coo");
+    write_csr(
+        &mut output,
+        "coo-csr-rect-explicit-zero",
+        &rectangular.to_csr().expect("rectangular csr"),
+    );
+
+    let seeded = random(Shape2D::new(32, 32), 0.08, SEED)
+        .expect("seeded coo")
+        .to_csr()
+        .expect("seeded csr");
+    write_csr(&mut output, "coo-csr-seeded-32", &seeded);
+
+    output
+}
+
 fn write_or_print_golden(output: String, path: Option<&str>) {
     if let Some(path) = path {
         let path = Path::new(path);
@@ -149,6 +189,10 @@ fn main() {
     }
     if mode == "diags-golden" {
         write_or_print_golden(diags_golden_text(), args.get(2).map(String::as_str));
+        return;
+    }
+    if mode == "coo-csr-golden" {
+        write_or_print_golden(coo_csr_golden_text(), args.get(2).map(String::as_str));
         return;
     }
     if mode != "add-csr" {

@@ -41,8 +41,7 @@ impl ConversionLogEntry {
 
 impl FormatConvertible for CooMatrix {
     fn to_csr(&self) -> SparseResult<CsrMatrix> {
-        let mut triplets = canonical_triplets(self);
-        triplets.sort_unstable_by_key(|(r, c, _)| (*r, *c));
+        let triplets = canonical_triplets(self);
         let (data, indices, indptr) = compress_triplets(self.shape(), &triplets, false);
         CsrMatrix::from_components(self.shape(), data, indices, indptr, true)
     }
