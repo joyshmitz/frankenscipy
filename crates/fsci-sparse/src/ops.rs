@@ -757,7 +757,12 @@ fn csr_to_csc_direct(csr: &CsrMatrix) -> SparseResult<CscMatrix> {
         }
     }
 
-    CscMatrix::from_components(shape, data, indices, indptr, true)
+    let mut result = CscMatrix::from_components_unchecked(shape, data, indices, indptr);
+    result.canonical = CanonicalMeta {
+        sorted_indices: true,
+        deduplicated: true,
+    };
+    Ok(result)
 }
 
 fn csc_to_csr_direct(csc: &CscMatrix) -> SparseResult<CsrMatrix> {
@@ -784,7 +789,12 @@ fn csc_to_csr_direct(csc: &CscMatrix) -> SparseResult<CsrMatrix> {
         }
     }
 
-    CsrMatrix::from_components(shape, data, indices, indptr, true)
+    let mut result = CsrMatrix::from_components_unchecked(shape, data, indices, indptr);
+    result.canonical = CanonicalMeta {
+        sorted_indices: true,
+        deduplicated: true,
+    };
+    Ok(result)
 }
 
 fn canonical_triplets(coo: &CooMatrix) -> Vec<(usize, usize, f64)> {
