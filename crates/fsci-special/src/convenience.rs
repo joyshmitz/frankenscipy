@@ -2481,7 +2481,17 @@ pub fn tetragamma(x: f64) -> f64 {
     let inv_x = 1.0 / val;
     let inv_x2 = inv_x * inv_x;
     let inv_x3 = inv_x2 * inv_x;
-    result += -inv_x2 - inv_x3 - inv_x2 * inv_x2 / 2.0 + inv_x2 * inv_x2 * inv_x2 / 6.0;
+    let inv_x4 = inv_x2 * inv_x2;
+    let inv_x6 = inv_x4 * inv_x2;
+    let inv_x8 = inv_x6 * inv_x2;
+    let inv_x10 = inv_x8 * inv_x2;
+    let inv_x12 = inv_x10 * inv_x2;
+    // ψ''(x) ~ -1/x² - 1/x³ - 1/(2x⁴) + 1/(6x⁶) - 1/(6x⁸) + 3/(10x¹⁰) - 5/(6x¹²),
+    // extended through the B₁₀ term (was truncated at x⁶, ~6e-9 residual at the
+    // shift point). frankenscipy-luxsz.
+    result += -inv_x2 - inv_x3 - inv_x4 / 2.0 + inv_x6 / 6.0 - inv_x8 / 6.0
+        + 3.0 * inv_x10 / 10.0
+        - 5.0 * inv_x12 / 6.0;
 
     result
 }

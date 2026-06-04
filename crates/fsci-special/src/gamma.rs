@@ -1411,7 +1411,13 @@ fn digamma_core(x: f64) -> f64 {
 
     let inv = 1.0 / shifted;
     let inv2 = inv * inv;
-    acc + shifted.ln() - 0.5 * inv - inv2 * (1.0 / 12.0 - inv2 * (1.0 / 120.0 - inv2 / 252.0))
+    // Bernoulli asymptotic extended through the B₁₀ term (was truncated at B₆,
+    // leaving ~2.5e-10 at the shift point). frankenscipy-luxsz.
+    acc + shifted.ln()
+        - 0.5 * inv
+        - inv2
+            * (1.0 / 12.0
+                - inv2 * (1.0 / 120.0 - inv2 * (1.0 / 252.0 - inv2 * (1.0 / 240.0 - inv2 / 132.0))))
 }
 
 fn trigamma_core(x: f64) -> f64 {
@@ -1445,7 +1451,11 @@ fn trigamma_core(x: f64) -> f64 {
     let inv3 = inv2 * inv;
     let inv5 = inv3 * inv2;
     let inv7 = inv5 * inv2;
-    acc + inv + 0.5 * inv2 + inv3 / 6.0 - inv5 / 30.0 + inv7 / 42.0
+    let inv9 = inv7 * inv2;
+    let inv11 = inv9 * inv2;
+    // Extended through the B₁₀ term (was truncated at B₆). frankenscipy-luxsz.
+    acc + inv + 0.5 * inv2 + inv3 / 6.0 - inv5 / 30.0 + inv7 / 42.0 - inv9 / 30.0
+        + 5.0 * inv11 / 66.0
 }
 
 fn polygamma_higher_core(order: usize, x: f64) -> f64 {
@@ -2215,9 +2225,14 @@ pub fn complex_digamma_scalar(z: Complex64) -> Complex64 {
     let inv2 = inv * inv;
     let inv4 = inv2 * inv2;
     let inv6 = inv4 * inv2;
+    let inv8 = inv6 * inv2;
+    let inv10 = inv8 * inv2;
 
+    // Extended through the B₁₀ term to match the real path (luxsz).
     let result = shifted.ln() - inv * 0.5 - inv2 * (1.0 / 12.0) + inv4 * (1.0 / 120.0)
-        - inv6 * (1.0 / 252.0);
+        - inv6 * (1.0 / 252.0)
+        + inv8 * (1.0 / 240.0)
+        - inv10 * (1.0 / 132.0);
 
     acc + result
 }
@@ -2253,8 +2268,12 @@ fn complex_trigamma_scalar(z: Complex64) -> Complex64 {
     let inv3 = inv2 * inv;
     let inv5 = inv3 * inv2;
     let inv7 = inv5 * inv2;
+    let inv9 = inv7 * inv2;
+    let inv11 = inv9 * inv2;
 
-    let result = inv + inv2 * 0.5 + inv3 / 6.0 - inv5 / 30.0 + inv7 / 42.0;
+    // Extended through the B₁₀ term to match the real path (luxsz).
+    let result = inv + inv2 * 0.5 + inv3 / 6.0 - inv5 / 30.0 + inv7 / 42.0 - inv9 / 30.0
+        + inv11 * (5.0 / 66.0);
 
     acc + result
 }
@@ -2633,6 +2652,40 @@ fn complex_parameter_gammaincc_cf(a: Complex64, z: Complex64) -> Result<Complex6
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy
+    fn digamma_polygamma_extended_asymptotic() {
+        // frankenscipy-luxsz: digamma/trigamma/tetragamma asymptotics extended
+        // through the B₁₀ term (were ~1e-9 off at the shift point). scipy 1.17.1.
+        let m = RuntimeMode::Strict;
+        let s = |v: f64| SpecialTensor::RealScalar(v);
+        let g = |r: SpecialResult| match r {
+            Ok(SpecialTensor::RealScalar(v)) => v,
+            _ => f64::NAN,
+        };
+        let dig = [
+            (0.5, -1.9635100260214235),
+            (1.5, 0.03648997397857652),
+            (-0.5, 0.03648997397857651),
+            (2.5, 0.7031566406452432),
+            (-10.5, 2.3982391295357814),
+        ];
+        for (x, expected) in dig {
+            let got = g(digamma(&s(x), m));
+            assert!((got - expected).abs() <= 1e-11 * expected.abs().max(1e-3), "digamma({x}) = {got}, scipy {expected}");
+        }
+        let tri = [(1.5, 0.9348022005446793), (2.5, 0.4903577561002348)];
+        for (x, expected) in tri {
+            let got = g(polygamma(1, &s(x), m));
+            assert!(((got - expected) / expected).abs() < 1e-11, "polygamma(1,{x}) = {got}, scipy {expected}");
+        }
+        let tetra = [(1.5, -0.8287966442343201), (2.5, -0.23620405164172736)];
+        for (x, expected) in tetra {
+            let got = g(polygamma(2, &s(x), m));
+            assert!(((got - expected) / expected).abs() < 1e-10, "polygamma(2,{x}) = {got}, scipy {expected}");
+        }
+    }
 
     fn scalar(value: f64) -> SpecialTensor {
         SpecialTensor::RealScalar(value)
