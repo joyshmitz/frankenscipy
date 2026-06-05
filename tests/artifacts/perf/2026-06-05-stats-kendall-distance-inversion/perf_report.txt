@@ -1,0 +1,37 @@
+perf: fsci-stats kendall_distance — O(n^2) all-pairs sign loop -> O(n log n) merge-sort inversion count
+======================================================================================================
+
+Target : crates/fsci-stats/src/lib.rs :: kendall_distance(rank1, rank2) -> usize.
+Lever  : kendall_distance counts discordant pairs: pairs (i,j) where rank1 and rank2 order the two
+         items oppositely and neither ranking ties them. The original enumerated all O(n^2) pairs
+         with a sign comparison. That discordant count is EXACTLY the number of strict
+         rank2-inversions taken in the (rank1, rank2)-lexicographic order — the same identity
+         `kendall_pair_counts_knight` already uses for kendalltau: lexsorting puts rank1-ties
+         adjacent and rank2-sorted (so they never invert -> excludes rank1-ties), and a *strict*
+         inversion excludes rank2-ties. Reusing the existing `kendall_strict_inversions` merge-sort
+         (Knight 1966) drops the work to O(n log n). Same family as kendalltau/mannkendall/somersd.
+
+Isomorphism proof (byte-identical integer count)
+------------------------------------------------
+- The function returns an exact integer pair count; the merge-sort returns the same integer, so the
+  result is bit-for-bit identical for every input (no float reassociation involved at all).
+- Empirically: 0 mismatches / 210 cases across n in {2,3,8,17,64,257,1000} x tie densities m in
+  {n, n/2, 8, 3, 1} (mostly-distinct through all-equal) x 6 seeds, comparing the library to a
+  VERBATIM copy of the original O(n^2) loop.
+- In-tree test `kendall_distance_inversion_matches_naive_loop` re-checks fast == naive across
+  n in {2,3,9,64,257,500} x m in {n, n/2, 5, 2}.
+- Golden payload sha256 (per-config discordant counts):
+    416d4971357e932510c6888839870cc7a3dc8e40aa7e53053083340afcc836f8  golden_payload.txt
+
+Timing (same-process A/B, release, mean of 3; mostly-distinct rankings = O(n^2) worst case)
+------------------------------------------------------------------------------------------
+  n= 4000  old= 25.6-37.5 ms  new=0.38-0.90 ms  ratio= 42-67x
+  n= 8000  old= 65-559   ms  new=0.91-3.33 ms  ratio= 71-168x
+  n=16000  old=267-540   ms  new=1.87-3.30 ms  ratio=142-163x
+  (two runs under different machine load; ratio grows with n as expected for O(n^2) -> O(n log n).)
+
+Score: Impact 4 x Confidence 5 / Effort 1 = 20  (>> 2.0)
+
+Tests: cargo test -p fsci-stats --lib kendall_distance => 1 passed. fmt + clippy clean.
+
+Reproduce: cargo run --release -p fsci-stats --bin perf_kendall_distance

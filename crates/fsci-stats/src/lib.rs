@@ -35088,19 +35088,27 @@ pub fn acf(data: &[f64], max_lag: usize) -> Vec<f64> {
     // re-subtracting mean inside every lag's inner sum. Drops
     // ~N·(max_lag+1) redundant subtractions (the autocorrelation pass
     // in fsci-signal got this fix already; mirroring the pattern here).
-    let centered: Vec<f64> = data.iter().map(|&v| v - mean).collect();
-    let var: f64 = centered.iter().map(|&v| v * v).sum();
+    let mut centered = Vec::with_capacity(n);
+    let mut var = 0.0_f64;
+    for &value in data {
+        let centered_value = value - mean;
+        var += centered_value * centered_value;
+        centered.push(centered_value);
+    }
 
     if var == 0.0 {
         return vec![1.0; max_lag + 1];
     }
 
-    (0..=max_lag.min(n - 1))
-        .map(|lag| {
-            let sum: f64 = (0..n - lag).map(|i| centered[i] * centered[i + lag]).sum();
-            sum / var
-        })
-        .collect()
+    let max_lag = max_lag.min(n - 1);
+    let mut result = Vec::with_capacity(max_lag + 1);
+    let lag0_numerator = var;
+    result.push(lag0_numerator / var);
+    for lag in 1..=max_lag {
+        let sum: f64 = (0..n - lag).map(|i| centered[i] * centered[i + lag]).sum();
+        result.push(sum / var);
+    }
+    result
 }
 
 /// Compute the partial autocorrelation function.
@@ -35695,20 +35703,25 @@ pub fn spearman_footrule(rank1: &[usize], rank2: &[usize]) -> f64 {
 /// Compute the Kendall distance (number of discordant pairs) between two rankings.
 pub fn kendall_distance(rank1: &[usize], rank2: &[usize]) -> usize {
     let n = rank1.len();
-    if n != rank2.len() {
+    if n != rank2.len() || n < 2 {
         return 0;
     }
-    let mut count = 0;
-    for i in 0..n {
-        for j in i + 1..n {
-            let a = (rank1[i] as i64 - rank1[j] as i64).signum();
-            let b = (rank2[i] as i64 - rank2[j] as i64).signum();
-            if a != b && a != 0 && b != 0 {
-                count += 1;
-            }
-        }
-    }
-    count
+    // A discordant pair is one where rank1 and rank2 order the two items oppositely
+    // and neither ranking ties them. That count is exactly the number of strict
+    // rank2-inversions taken in the (rank1, rank2)-lexicographic order (same identity
+    // `kendall_pair_counts_knight` uses): rank1-ties become adjacent and rank2-sorted
+    // so they never invert, and a *strict* inversion excludes rank2-ties. This replaces
+    // the original O(n^2) all-pairs sign comparison with an O(n log n) merge-sort
+    // inversion count. The result is an exact integer, so it is bit-for-bit identical
+    // to the pair loop for every input.
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by(|&a, &b| {
+        rank1[a]
+            .cmp(&rank1[b])
+            .then_with(|| rank2[a].cmp(&rank2[b]))
+    });
+    let rank2_in_rank1_order: Vec<f64> = order.iter().map(|&i| rank2[i] as f64).collect();
+    kendall_strict_inversions(&rank2_in_rank1_order) as usize
 }
 
 #[cfg(test)]
@@ -54422,6 +54435,39 @@ mod tests {
                     }
                 }
                 assert_eq!(fast, naive, "S mismatch n={n} tie_mod={tie_mod}");
+            }
+        }
+    }
+
+    #[test]
+    fn kendall_distance_inversion_matches_naive_loop() {
+        // Isomorphism proof for the O(n log n) kendall_distance: the lexsort +
+        // strict-inversion discordant count must equal the original O(n^2)
+        // all-pairs sign-comparison loop, exactly, across sizes and tie
+        // densities (mostly-distinct through heavily tied rankings).
+        let mut state: u64 = 0xdead_c0de_1234_5678;
+        let mut next = |m: usize| {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (state >> 11) as usize % m.max(1)
+        };
+        for &n in &[2usize, 3, 9, 64, 257, 500] {
+            for &m in &[n.max(2), n / 2 + 1, 5, 2] {
+                let r1: Vec<usize> = (0..n).map(|_| next(m)).collect();
+                let r2: Vec<usize> = (0..n).map(|_| next(m)).collect();
+                let fast = kendall_distance(&r1, &r2);
+                let mut naive = 0usize;
+                for i in 0..n {
+                    for j in i + 1..n {
+                        let a = (r1[i] as i64 - r1[j] as i64).signum();
+                        let b = (r2[i] as i64 - r2[j] as i64).signum();
+                        if a != b && a != 0 && b != 0 {
+                            naive += 1;
+                        }
+                    }
+                }
+                assert_eq!(fast, naive, "kendall_distance mismatch n={n} m={m}");
             }
         }
     }
