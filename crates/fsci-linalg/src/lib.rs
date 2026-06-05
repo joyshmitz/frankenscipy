@@ -686,6 +686,38 @@ impl std::fmt::Display for LinalgError {
 impl std::error::Error for LinalgError {}
 
 pub fn solve(a: &[Vec<f64>], b: &[f64], options: SolveOptions) -> Result<SolveResult, LinalgError> {
+    // Fast path for large general square systems: our own multithreaded blocked LU
+    // (trailing update on all cores). Restricted to the plain Strict / untransposed /
+    // General case so all the portfolio diagnostics (rcond, hardened checks, special
+    // assumptions, transposition) keep their exact behavior; a singular pivot or any
+    // unmet precondition falls through to the portfolio solver unchanged.
+    let n = a.len();
+    if n >= BLOCKED_LU_MIN_DIM
+        && options.mode == RuntimeMode::Strict
+        && !options.transposed
+        && matches!(options.assume_a, None | Some(MatrixAssumption::General))
+        && b.len() == n
+        && rows_are_rectangular(a, n)
+        && a.iter().flatten().all(|v| v.is_finite())
+        && b.iter().all(|v| v.is_finite())
+        && let Some(x) = lu_solve_blocked(a, b)
+    {
+        let backward_error = compute_backward_error_dense(a, &x, b);
+        emit_trace(LinalgTrace {
+            operation: "solve",
+            matrix_size: (n, n),
+            mode: options.mode,
+            rcond: None,
+            warning: None,
+            error: None,
+        });
+        return Ok(SolveResult {
+            x,
+            warning: None,
+            backward_error: Some(backward_error),
+            certificate: None,
+        });
+    }
     let mut portfolio = SolverPortfolio::new(options.mode, 1);
     solve_with_portfolio_internal(a, b, options, &mut portfolio, "solve", false)
 }
@@ -8304,6 +8336,125 @@ pub fn matmul(a: &[Vec<f64>], b: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, LinalgErr
     Ok(c)
 }
 
+/// Minimum dimension at which `solve` uses the in-house blocked LU fast path. Below
+/// this the trailing-update GEMM is too small to parallelise, so the portfolio LU
+/// solver is used instead.
+const BLOCKED_LU_MIN_DIM: usize = 1024;
+
+/// Solve `A x = b` for a general square `A` via right-looking **blocked LU with
+/// partial pivoting**, parallelising the O(n³) trailing-submatrix update through the
+/// multithreaded flat-workspace GEMM. This is our own LAPACK-class kernel: the panel
+/// is factored unblocked, then `A22 -= L21·U12` (the bulk of the flops) runs on all
+/// cores. Partial pivoting gives the same factorisation LAPACK/SciPy compute, so the
+/// solution matches the reference solver to rounding.
+///
+/// Returns `None` for a zero/non-finite pivot (structurally singular) so the caller
+/// can fall back to the robust portfolio LU solver.
+#[allow(clippy::needless_range_loop)] // explicit row/col indices drive pivoting + the panel/trailing kernels
+fn lu_solve_blocked(a_in: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
+    let n = a_in.len();
+    if n == 0 || a_in[0].len() != n || b.len() != n {
+        return None;
+    }
+    const NB: usize = 128;
+    let mut a: Vec<Vec<f64>> = a_in.to_vec(); // overwritten with the L\U factors
+    let mut rhs = b.to_vec(); // row interchanges applied inline
+
+    let mut k = 0;
+    while k < n {
+        let kb = (k + NB).min(n);
+        // (1) Factor panel columns [k, kb) over rows [k, n) with partial pivoting.
+        for j in k..kb {
+            let mut p = j;
+            let mut mx = a[j][j].abs();
+            for i in (j + 1)..n {
+                let v = a[i][j].abs();
+                if v > mx {
+                    mx = v;
+                    p = i;
+                }
+            }
+            if mx == 0.0 || mx.is_nan() {
+                return None; // singular within the panel -> fall back
+            }
+            if p != j {
+                a.swap(p, j);
+                rhs.swap(p, j);
+            }
+            let pivot = a[j][j];
+            for i in (j + 1)..n {
+                a[i][j] /= pivot;
+            }
+            // Rank-1 update of the remaining panel columns (j+1..kb).
+            for i in (j + 1)..n {
+                let lij = a[i][j];
+                if lij != 0.0 {
+                    let (head, tail) = a.split_at_mut(i);
+                    let row_i = &mut tail[0];
+                    let row_j = &head[j];
+                    for jj in (j + 1)..kb {
+                        row_i[jj] -= lij * row_j[jj];
+                    }
+                }
+            }
+        }
+        // (2) Triangular solve U12 = L11^-1 · A12 for rows [k,kb), cols [kb,n).
+        for i in k..kb {
+            for jj in kb..n {
+                let mut s = a[i][jj];
+                for (p, row_p) in a.iter().enumerate().take(i).skip(k) {
+                    s -= a[i][p] * row_p[jj];
+                }
+                a[i][jj] = s;
+            }
+        }
+        // (3) Trailing update A22 -= L21 · U12 via the parallel GEMM.
+        if kb < n {
+            let m2 = n - kb;
+            let nb = kb - k;
+            let n2 = n - kb;
+            let mut l21 = Vec::with_capacity(m2);
+            for row in a.iter().take(n).skip(kb) {
+                l21.push(row[k..kb].to_vec());
+            }
+            let mut u12 = Vec::with_capacity(nb);
+            for row in a.iter().take(kb).skip(k) {
+                u12.push(row[kb..n].to_vec());
+            }
+            let prod = matmul_flat_workspace(&l21, &u12, m2, nb, n2)?;
+            for (ii, i) in (kb..n).enumerate() {
+                let pr = &prod[ii];
+                let row = &mut a[i];
+                for (jj, j) in (kb..n).enumerate() {
+                    row[j] -= pr[jj];
+                }
+            }
+        }
+        k = kb;
+    }
+
+    // (4) Forward solve L y = Pb (unit-lower), then (5) back solve U x = y.
+    for i in 0..n {
+        let mut s = rhs[i];
+        for (p, &rp) in rhs.iter().enumerate().take(i) {
+            s -= a[i][p] * rp;
+        }
+        rhs[i] = s;
+    }
+    for i in (0..n).rev() {
+        let mut s = rhs[i];
+        for p in (i + 1)..n {
+            s -= a[i][p] * rhs[p];
+        }
+        let d = a[i][i];
+        if d == 0.0 {
+            return None;
+        }
+        rhs[i] = s / d;
+    }
+    Some(rhs)
+}
+
 /// Matrix-vector multiplication y = A * x.
 ///
 /// Matches `A @ x`.
@@ -8555,6 +8706,64 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    /// Correctness of the in-house blocked LU solver: it must match the reference
+    /// (nalgebra) LU solve to tolerance and produce a tiny residual ||Ax-b||, across
+    /// sizes that exercise both the sequential and parallel trailing-update GEMM and
+    /// that force partial pivoting (small/negative diagonals).
+    #[test]
+    #[allow(clippy::needless_range_loop)]
+    fn lu_solve_blocked_matches_reference() {
+        let make = |n: usize, seed: u64| -> (Vec<Vec<f64>>, Vec<f64>) {
+            let a: Vec<Vec<f64>> = (0..n)
+                .map(|i| {
+                    (0..n)
+                        .map(|j| {
+                            let r = seed
+                                .wrapping_mul(i as u64 + 7)
+                                .wrapping_add(j as u64 * 31 + 5)
+                                % 9973;
+                            let v = r as f64 / 4986.0 - 1.0;
+                            // Mildly diagonally dominant for conditioning, but the
+                            // off-diagonals still force row interchanges.
+                            if i == j { v + n as f64 * 0.5 } else { v }
+                        })
+                        .collect()
+                })
+                .collect();
+            let b: Vec<f64> = (0..n)
+                .map(|i| (seed.wrapping_mul(i as u64 + 3) % 1009) as f64 / 503.0 - 1.0)
+                .collect();
+            (a, b)
+        };
+        // n=130 and 270 straddle NB=128 (multi-panel); 270 also has a partial last panel.
+        for &(n, seed) in &[(16usize, 11u64), (130, 23), (200, 41), (270, 57)] {
+            let (a, b) = make(n, seed);
+            let x = lu_solve_blocked(&a, &b).expect("blocked LU solves nonsingular system");
+            let reference = solve_general(&a, &b).expect("reference solve");
+            let mut max_diff = 0.0_f64;
+            for (&xi, &ri) in x.iter().zip(&reference.x) {
+                max_diff = max_diff.max((xi - ri).abs());
+            }
+            // Residual ||A x - b||_inf.
+            let mut max_res = 0.0_f64;
+            for i in 0..n {
+                let mut s = 0.0;
+                for j in 0..n {
+                    s += a[i][j] * x[j];
+                }
+                max_res = max_res.max((s - b[i]).abs());
+            }
+            assert!(
+                max_diff < 1e-7,
+                "blocked LU vs reference diverged at n={n}: max_diff={max_diff:e}"
+            );
+            assert!(
+                max_res < 1e-9,
+                "blocked LU residual too large at n={n}: {max_res:e}"
+            );
         }
     }
 

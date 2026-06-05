@@ -1,0 +1,6 @@
+# perf_solve_probe, 64-core rch worker
+BEFORE (nalgebra single-threaded LU):
+solve n=1024: 129.6 ms ; solve n=2048: 5065.7 ms
+AFTER (in-house parallel blocked LU):
+solve n=1024:  89.7 ms ; solve n=2048:  436.0 ms
+matmul n=1024 ~38 ms ; matmul n=2048 ~155 ms (parallel GEMM, for reference)
