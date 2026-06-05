@@ -3202,9 +3202,56 @@ impl RbfInterpolator {
     }
 
     /// Evaluate at multiple query points.
+    ///
+    /// Each query is an independent O(n_centers) sum, so for large
+    /// `queries × centers` the work is split across threads; the per-query value is
+    /// the same pure `eval` regardless of the owning core, so the result is
+    /// bit-identical to the sequential map.
     pub fn eval_many(&self, queries: &[Vec<f64>]) -> Vec<f64> {
-        queries.iter().map(|q| self.eval(q)).collect()
+        par_query_map(queries, self.points.len(), |q| self.eval(q))
     }
+}
+
+/// Map `f` over `queries`, splitting the work across threads when
+/// `queries.len() * work_per_query` is large enough to amortise thread spawn. `f` is
+/// a pure per-query function, so the parallel result is bit-identical to the
+/// sequential `queries.iter().map(f).collect()` (order preserved by concatenating
+/// contiguous chunks). Used by the per-query batch evaluators.
+fn par_query_map<T, F>(queries: &[T], work_per_query: usize, f: F) -> Vec<f64>
+where
+    T: Sync,
+    F: Fn(&T) -> f64 + Sync,
+{
+    let m = queries.len();
+    let work = (m as u64).saturating_mul(work_per_query.max(1) as u64);
+    if work < 1 << 18 || m < 4 {
+        return queries.iter().map(&f).collect();
+    }
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let nthreads = cores.min(m / 2).max(1);
+    if nthreads <= 1 {
+        return queries.iter().map(&f).collect();
+    }
+    let chunk = m.div_ceil(nthreads);
+    let f = &f;
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..nthreads)
+            .filter_map(|t| {
+                let i0 = t * chunk;
+                if i0 >= m {
+                    return None;
+                }
+                let i1 = (i0 + chunk).min(m);
+                Some(scope.spawn(move || queries[i0..i1].iter().map(f).collect::<Vec<f64>>()))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().expect("interpolate worker panicked"))
+            .collect()
+    })
 }
 
 fn rbf_eval(kernel: RbfKernel, r: f64, epsilon: f64) -> f64 {
@@ -5402,6 +5449,50 @@ fn smooth_bivariate_solve_coefficients(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Parallel `RbfInterpolator::eval_many` must be BIT-IDENTICAL to the sequential
+    /// per-query map (each query is an independent pure `eval`). Uses a size above the
+    /// parallel gate so the threaded path runs.
+    #[test]
+    fn rbf_eval_many_parallel_is_bit_identical() {
+        let points: Vec<Vec<f64>> = (0..200)
+            .map(|i| {
+                vec![
+                    (i as f64 * 0.07).sin(),
+                    (i as f64 * 0.11).cos(),
+                    i as f64 * 0.001,
+                ]
+            })
+            .collect();
+        let values: Vec<f64> = (0..200).map(|i| (i as f64 * 0.05).sin() * 2.0).collect();
+        for kernel in [
+            RbfKernel::Multiquadric,
+            RbfKernel::InverseMultiquadric,
+            RbfKernel::ThinPlateSpline,
+        ] {
+            let rbf = RbfInterpolator::new(&points, &values, kernel, 1.3).expect("rbf");
+            // 2000 queries * 200 centers = 400k >= the 2^18 gate -> parallel path.
+            let queries: Vec<Vec<f64>> = (0..2000)
+                .map(|i| {
+                    vec![
+                        i as f64 * 0.003 - 3.0,
+                        i as f64 * 0.002 - 2.0,
+                        i as f64 * 0.0005,
+                    ]
+                })
+                .collect();
+            let got = rbf.eval_many(&queries);
+            let want: Vec<f64> = queries.iter().map(|q| rbf.eval(q)).collect();
+            assert_eq!(got.len(), want.len());
+            for (k, (&g, &w)) in got.iter().zip(&want).enumerate() {
+                assert_eq!(
+                    g.to_bits(),
+                    w.to_bits(),
+                    "rbf eval_many mismatch at {k} {kernel:?}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn delaunay_grid_find_simplex_matches_linear_scan() {
