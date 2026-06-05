@@ -571,11 +571,62 @@ pub fn cdist_metric(
         }
     }
 
-    let result: Vec<Vec<f64>> = xa
-        .iter()
-        .map(|a| xb.iter().map(|b| metric_distance(a, b, metric)).collect())
-        .collect();
+    // Each output row (all distances from xa[i] to xb) is an independent reduction
+    // over the same pure `metric_distance`, so rows can be computed on different cores
+    // with a bit-identical result — only the owning thread changes. Split the rows of
+    // xa across threads when the matrix is large enough to amortise spawn.
+    let na = xa.len();
+    let nb = xb.len();
+    let nthreads = cdist_thread_count(na, nb, dim);
+    let result: Vec<Vec<f64>> = if nthreads <= 1 {
+        xa.iter()
+            .map(|a| xb.iter().map(|b| metric_distance(a, b, metric)).collect())
+            .collect()
+    } else {
+        let chunk = na.div_ceil(nthreads);
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..nthreads)
+                .filter_map(|t| {
+                    let i0 = t * chunk;
+                    if i0 >= na {
+                        return None;
+                    }
+                    let i1 = (i0 + chunk).min(na);
+                    Some(scope.spawn(move || {
+                        xa[i0..i1]
+                            .iter()
+                            .map(|a| {
+                                xb.iter()
+                                    .map(|b| metric_distance(a, b, metric))
+                                    .collect::<Vec<f64>>()
+                            })
+                            .collect::<Vec<Vec<f64>>>()
+                    }))
+                })
+                .collect();
+            handles
+                .into_iter()
+                .flat_map(|h| h.join().expect("cdist worker panicked"))
+                .collect()
+        })
+    };
     Ok(result)
+}
+
+/// Worker count for a parallel `cdist`: 1 (sequential) unless the distance matrix
+/// carries enough total work (`na·nb·dim`) to amortise thread spawn, then scale with
+/// cores, capped so each thread owns at least a couple of output rows.
+fn cdist_thread_count(na: usize, nb: usize, dim: usize) -> usize {
+    let work = (na as u64)
+        .saturating_mul(nb as u64)
+        .saturating_mul(dim.max(1) as u64);
+    if work < 1 << 18 || na < 4 {
+        return 1;
+    }
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    cores.min(na / 2).max(1)
 }
 
 /// Compute the full Euclidean distance matrix between two point sets.
@@ -3997,6 +4048,47 @@ impl Default for Rotation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The multithreaded `cdist_metric` must be BIT-IDENTICAL to the sequential
+    /// row-by-row computation: each output row is an independent reduction over the
+    /// same pure `metric_distance`, so only the owning thread changes. Uses a size
+    /// above the parallel gate so the threaded path actually runs.
+    #[test]
+    fn cdist_metric_parallel_is_bit_identical() {
+        let grid = |n: usize, dim: usize, seed: f64| -> Vec<Vec<f64>> {
+            (0..n)
+                .map(|i| {
+                    (0..dim)
+                        .map(|j| (i as f64 * 0.013 + j as f64 * 0.07 + seed).sin() + 0.5)
+                        .collect()
+                })
+                .collect()
+        };
+        for &metric in &[
+            DistanceMetric::Euclidean,
+            DistanceMetric::Cityblock,
+            DistanceMetric::Chebyshev,
+        ] {
+            // na=600, nb=600, dim=2 => work 720k >= the 2^18 gate -> parallel path.
+            let xa = grid(600, 2, 0.3);
+            let xb = grid(600, 2, 1.1);
+            let got = cdist_metric(&xa, &xb, metric).expect("parallel cdist");
+            let want: Vec<Vec<f64>> = xa
+                .iter()
+                .map(|a| xb.iter().map(|b| metric_distance(a, b, metric)).collect())
+                .collect();
+            assert_eq!(got.len(), want.len());
+            for (i, (gr, wr)) in got.iter().zip(&want).enumerate() {
+                for (j, (&g, &w)) in gr.iter().zip(wr).enumerate() {
+                    assert_eq!(
+                        g.to_bits(),
+                        w.to_bits(),
+                        "cdist mismatch at ({i},{j}) {metric:?}"
+                    );
+                }
+            }
+        }
+    }
 
     /// Isomorphism proof for the procrustes k-hoist [frankenscipy-146ld]: the
     /// cache-friendly k-outermost cross-covariance/matmul loops must be
