@@ -1248,19 +1248,14 @@ pub fn betaln_scalar(a: f64, b: f64, mode: RuntimeMode) -> Result<f64, SpecialEr
             detail: "betaln principal domain requires positive parameters",
         });
     }
-    if a <= 0.0 || b <= 0.0 {
-        record_special_trace(
-            "betaln",
-            mode,
-            "domain_error",
-            format!("a={a},b={b}"),
-            "returned_nan",
-            "strict domain fallback",
-            false,
-        );
-        return Ok(f64::NAN);
-    }
-
+    // `betaln(a,b) = ln|B(a,b)| = gammaln(a) + gammaln(b) - gammaln(a+b)` is valid
+    // for ALL real a, b, not just positives: SciPy returns finite values for
+    // negative non-integer arguments (e.g. betaln(-2.5, 3.0) = 0.0645) and the
+    // pole limits (+/-inf) elsewhere. `gammaln_scalar(_, Strict)` returns the
+    // reflection-formula value for negative non-integers and +inf at nonpositive-
+    // integer poles, so the sum reproduces SciPy across the real line. (Only the
+    // rare both-nonpositive-integer pole-cancellation, e.g. betaln(-3, 2), is left
+    // as NaN; SciPy resolves it via a finite gamma-ratio, see frankenscipy notes.)
     let lg_a = gammaln_scalar(a, RuntimeMode::Strict)?;
     let lg_b = gammaln_scalar(b, RuntimeMode::Strict)?;
     let lg_ab = gammaln_scalar(a + b, RuntimeMode::Strict)?;
@@ -2740,6 +2735,37 @@ mod tests {
         assert!(
             (result - 0.6875).abs() < 1e-10,
             "btdtr(2,3,0.5) got {result}, expected 0.6875"
+        );
+    }
+
+    #[test]
+    fn betaln_negative_args_match_scipy() {
+        // scipy.special.betaln returns finite values for negative non-integer
+        // arguments (= gammaln(a)+gammaln(b)-gammaln(a+b)); we previously
+        // fail-closed to NaN for any nonpositive parameter.
+        let cases = [
+            (-2.5, 3.0, 0.06453852113757116_f64),
+            (2.0, -3.5, -2.169053700369523),
+            (-4.3, -1.2, 3.814037380330781),
+            (0.3, -0.7, 1.2337463436314935),
+            (-1.5, 2.5, 1.1447298858494004),
+            (5.0, -4.5, -0.2073951943460706),
+        ];
+        for (a, b, want) in cases {
+            let got = betaln_scalar(a, b, RuntimeMode::Strict).unwrap();
+            assert!(
+                (got - want).abs() <= 1e-12 * want.abs().max(1.0),
+                "betaln({a},{b}) got {got}, want {want}"
+            );
+        }
+        // Pole limits also match SciPy: a+b a nonpositive integer => -inf.
+        assert_eq!(
+            betaln_scalar(-0.5, 0.5, RuntimeMode::Strict).unwrap(),
+            f64::NEG_INFINITY
+        );
+        assert_eq!(
+            betaln_scalar(-2.5, -2.5, RuntimeMode::Strict).unwrap(),
+            f64::NEG_INFINITY
         );
     }
 

@@ -496,12 +496,16 @@ mod tests {
     fn betaln_and_betainc_domain_policy_diverge_by_runtime_mode() {
         let _guard = trace_test_guard();
         let _ = take_special_traces();
-        let neg = SpecialTensor::RealScalar(-1.0);
+        // -1.5 is a negative NON-integer: a valid betaln input that SciPy
+        // evaluates finitely (= gammaln(-1.5)+gammaln(1)-gammaln(-0.5)).
+        let neg = SpecialTensor::RealScalar(-1.5);
         let pos = SpecialTensor::RealScalar(1.0);
         let x_bad = SpecialTensor::RealScalar(2.0);
 
-        let strict_betaln = betaln(&neg, &pos, RuntimeMode::Strict).expect("strict returns NaN");
-        assert_real_scalar_nan(strict_betaln);
+        // Strict now COMPUTES the value (matches scipy.special.betaln(-1.5, 1.0));
+        // Hardened still conservatively fail-closes on a nonpositive parameter.
+        let strict_betaln = betaln(&neg, &pos, RuntimeMode::Strict).expect("strict computes value");
+        assert_real_scalar_close(strict_betaln, -0.4054651081081643, 1e-12);
         let hardened_betaln =
             betaln(&neg, &pos, RuntimeMode::Hardened).expect_err("hardened rejects");
         assert_eq!(hardened_betaln.kind, SpecialErrorKind::DomainError);
@@ -514,11 +518,6 @@ mod tests {
         assert_eq!(hardened_betainc.kind, SpecialErrorKind::DomainError);
 
         let traces = take_special_traces();
-        assert!(traces.iter().any(|entry| {
-            entry.function == "betaln"
-                && entry.category == "domain_error"
-                && entry.action_taken == "returned_nan"
-        }));
         assert!(traces.iter().any(|entry| {
             entry.function == "betaln"
                 && entry.category == "domain_error"
