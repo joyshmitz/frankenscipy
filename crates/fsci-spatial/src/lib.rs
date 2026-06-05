@@ -3288,14 +3288,29 @@ pub fn k_nearest_neighbors(data: &[Vec<f64>], k: usize) -> (Vec<Vec<usize>>, Vec
     let mut all_indices = Vec::with_capacity(n);
     let mut all_distances = Vec::with_capacity(n);
 
+    // Composite order (distance, then ascending index). Because the candidates
+    // are produced in ascending `j`, a stable sort by distance breaks ties by
+    // ascending index — exactly what this total order reproduces.
+    let by_dist_then_idx =
+        |a: &(usize, f64), b: &(usize, f64)| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0));
+
     for i in 0..n {
         let mut dists: Vec<(usize, f64)> = (0..n)
             .filter(|&j| j != i)
             .map(|j| (j, euclidean(&data[i], &data[j])))
             .collect();
-        dists.sort_by(|a, b| a.1.total_cmp(&b.1));
 
+        // Only the k smallest are needed, so partition in O(m) and sort just
+        // those instead of fully sorting all m = n-1 distances (O(m log m)).
+        // Byte-identical to the full sort: the composite key is a strict total
+        // order (indices are unique), so the selected-and-sorted prefix matches
+        // the stable-by-distance prefix element-for-element.
         let k_actual = k.min(dists.len());
+        if k_actual < dists.len() {
+            dists.select_nth_unstable_by(k_actual, by_dist_then_idx);
+        }
+        dists[..k_actual].sort_by(by_dist_then_idx);
+
         all_indices.push(dists[..k_actual].iter().map(|&(idx, _)| idx).collect());
         all_distances.push(dists[..k_actual].iter().map(|&(_, d)| d).collect());
     }

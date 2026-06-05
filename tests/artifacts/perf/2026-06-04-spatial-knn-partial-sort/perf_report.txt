@@ -1,0 +1,38 @@
+perf: fsci-spatial k_nearest_neighbors — full sort O(n log n)/query -> partial select O(n)/query
+================================================================================================
+
+Target : crates/fsci-spatial/src/lib.rs :: k_nearest_neighbors.
+Lever  : Per query point the code computed all m = n-1 distances and FULLY sorted them
+         (O(m log m)) just to take the k smallest. Partition with select_nth_unstable_by on a
+         composite (distance, index) key in O(m), then sort only the k-element prefix
+         (O(k log k)). Removes the per-query log factor that dominates for small d / large n.
+
+Isomorphism proof (byte-identical indices + distances)
+------------------------------------------------------
+- The candidates are generated in ascending j (0..n filtered), so the original STABLE sort by
+  distance breaks ties by ascending index. The composite key (distance via total_cmp, then
+  index) is a STRICT total order that reproduces exactly that ordering — and since indices are
+  unique there are no residual ties.
+- select_nth_unstable_by(k_actual, key) places the k_actual smallest-by-key elements in the
+  prefix [0, k_actual); sorting that prefix by the same key yields the identical first-k that
+  the full stable sort produced. Distances are the same `euclidean` values (unchanged), so both
+  the index vectors and the distance vectors match bit-for-bit.
+- Empirically: 0 mismatches / 2500 knn results across 500 datasets, n in [2,201], d in [1,4],
+  k in {1,3,7,20,1000}, including coarse integer grids with heavy ties / coincident points.
+  Indices compared exactly, distances via .to_bits().
+- Golden payload sha256 (per-trial FNV digest of the k=5 neighbour indices):
+    6bd2211266f3004821cb2c7b714e70ccbef9f9a3a28b52b034b9bdddeb4eb567  golden_payload.txt
+
+Timing (same-process A/B, release, mean of 3; uniform 2-D, k=5, growing n)
+--------------------------------------------------------------------------
+  n= 2000 k=5  fullsort=106.579 ms   partial= 27.095 ms   ratio= 3.9x
+  n= 6000 k=5  fullsort=  1.114 s    partial=236.562 ms   ratio= 4.7x
+  n=12000 k=5  fullsort=  4.210 s    partial=929.550 ms   ratio= 4.5x
+
+Score: Impact 3 x Confidence 5 / Effort 1 = 15  (>> 2.0)
+
+Tests: cargo test -p fsci-spatial --lib neighbor => 7 passed. clippy (fsci-spatial) + fmt clean.
+
+Also explored this session (NOT shipped): a uniform-grid acceleration of nearest_neighbors /
+proximity_cliques — rejected (expanding-ring grid is high-effort for a test-only utility; and the
+proximity_cliques grid regressed, see 2026-06-04-cluster-kmeanspp-incremental report).
