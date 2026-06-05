@@ -7,6 +7,7 @@
 //!   `perf_stats halton4-golden [path]`
 //!   `perf_stats sobol2-golden [path]`
 //!   `perf_stats rand-index-golden [path]`
+//!   `perf_stats acf-golden [path]`
 
 use std::fmt::Write as _;
 use std::hint::black_box;
@@ -14,8 +15,8 @@ use std::path::Path;
 use std::time::Instant;
 
 use fsci_stats::{
-    HaltonSampler, SobolSampler, centered_discrepancy, l2_star_discrepancy, mixture_discrepancy,
-    psd_welch, rand_index, wraparound_discrepancy,
+    HaltonSampler, SobolSampler, acf, centered_discrepancy, l2_star_discrepancy,
+    mixture_discrepancy, pacf, psd_welch, rand_index, wraparound_discrepancy,
 };
 
 fn deterministic_data(n: usize) -> Vec<f64> {
@@ -122,6 +123,39 @@ fn rand_index_golden_text() -> String {
     output
 }
 
+fn write_series_bits(output: &mut String, name: &str, values: &[f64]) {
+    writeln!(output, "case={name} len={}", values.len()).expect("write series header");
+    for value in values {
+        write!(output, "{:016x},", value.to_bits()).expect("write series bits");
+    }
+    output.push('\n');
+}
+
+fn acf_golden_text() -> String {
+    let mut output = String::new();
+
+    let data = deterministic_data(4096);
+    write_series_bits(&mut output, "acf_deterministic_4096_lag64", &acf(&data, 64));
+    write_series_bits(
+        &mut output,
+        "pacf_deterministic_4096_lag64",
+        &pacf(&data, 64),
+    );
+
+    let constant = [3.0; 8];
+    write_series_bits(&mut output, "acf_constant_8_lag5", &acf(&constant, 5));
+    write_series_bits(&mut output, "pacf_constant_8_lag5", &pacf(&constant, 5));
+
+    let nonfinite_var = [1.0e308, -1.0e308, 1.0e308, -1.0e308];
+    write_series_bits(
+        &mut output,
+        "acf_nonfinite_variance_4_lag3",
+        &acf(&nonfinite_var, 3),
+    );
+
+    output
+}
+
 fn write_or_print(output: String, path: Option<&str>) {
     if let Some(path) = path {
         let path = Path::new(path);
@@ -164,6 +198,9 @@ fn main() {
         "sobol2-golden" => write_or_print(sobol2_golden_text(), args.get(2).map(String::as_str)),
         "rand-index-golden" => {
             write_or_print(rand_index_golden_text(), args.get(2).map(String::as_str));
+        }
+        "acf-golden" => {
+            write_or_print(acf_golden_text(), args.get(2).map(String::as_str));
         }
         "psd" => {
             let repeats = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(10);
