@@ -80,11 +80,14 @@ pub fn kmeans(
     let mut inertia = f64::INFINITY;
 
     for iter in 0..max_iter {
-        // Assignment step
-        let mut new_inertia = 0.0;
+        // Assignment step: each point's nearest centroid is independent, so compute
+        // (label, min_dist) in parallel. The inertia is then summed SEQUENTIALLY in
+        // point order so its floating-point reduction — and therefore the convergence
+        // check and iteration count — stay bit-identical to the serial version.
         let centroids_flat = flatten_centroids(&centroids, d);
-        for (i, point) in data.iter().enumerate() {
-            let (best_c, min_dist) = nearest_centroid(point, &centroids_flat, k, d);
+        let assignments = assign_points(data, &centroids_flat, k, d);
+        let mut new_inertia = 0.0;
+        for (i, &(best_c, min_dist)) in assignments.iter().enumerate() {
             labels[i] = best_c;
             new_inertia += min_dist;
         }
@@ -1393,6 +1396,61 @@ fn flatten_centroids(centroids: &[Vec<f64>], d: usize) -> Vec<f64> {
 ///    full and broken by lowest index (`sd == min_sq && c < best_c`), so the
 ///    result is independent of the seed and bit-identical to the naive argmin.
 #[inline]
+// Assign every point to its nearest centroid, returning the label and squared
+// distance per point. For large n*k*d the points are split across threads; each pair
+// comes from the same pure `nearest_centroid`, so the per-point result is
+// bit-identical and order is preserved (the caller sums inertia sequentially).
+fn assign_points(
+    data: &[Vec<f64>],
+    centroids_flat: &[f64],
+    k: usize,
+    d: usize,
+) -> Vec<(usize, f64)> {
+    let n = data.len();
+    let work = (n as u64)
+        .saturating_mul(k as u64)
+        .saturating_mul(d.max(1) as u64);
+    // High gate: nearest_centroid is only ~k·d cheap multiply-adds per point, so only
+    // parallelise when the total assignment work clearly amortises thread spawn.
+    let nthreads = if work < 1 << 21 || n < 64 {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n / 32)
+            .max(1)
+    };
+    if nthreads <= 1 {
+        return data
+            .iter()
+            .map(|p| nearest_centroid(p, centroids_flat, k, d))
+            .collect();
+    }
+    let chunk = n.div_ceil(nthreads);
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..nthreads)
+            .filter_map(|t| {
+                let i0 = t * chunk;
+                if i0 >= n {
+                    return None;
+                }
+                let i1 = (i0 + chunk).min(n);
+                Some(scope.spawn(move || {
+                    data[i0..i1]
+                        .iter()
+                        .map(|p| nearest_centroid(p, centroids_flat, k, d))
+                        .collect::<Vec<(usize, f64)>>()
+                }))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().expect("kmeans assign worker panicked"))
+            .collect()
+    })
+}
+
 fn nearest_centroid(point: &[f64], centroids_flat: &[f64], k: usize, d: usize) -> (usize, f64) {
     let probe = d.min(PREFILTER_DIMS);
     let mut seed = 0usize;
