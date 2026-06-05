@@ -860,6 +860,32 @@ pub fn solve_banded_with_audit(
 }
 
 pub fn inv(a: &[Vec<f64>], options: InvOptions) -> Result<InvResult, LinalgError> {
+    // Fast path for large general square matrices: factor once with the in-house
+    // parallel blocked LU, then solve A X = I over the identity columns on all cores.
+    // Restricted to the plain Strict / General case; a singular pivot or any unmet
+    // precondition falls through to the portfolio inverse (diagnostics preserved).
+    let n = a.len();
+    if n >= BLOCKED_LU_MIN_DIM
+        && options.mode == RuntimeMode::Strict
+        && matches!(options.assume_a, None | Some(MatrixAssumption::General))
+        && rows_are_rectangular(a, n)
+        && a.iter().flatten().all(|v| v.is_finite())
+        && let Some(inverse) = inv_blocked(a)
+    {
+        emit_trace(LinalgTrace {
+            operation: "inv",
+            matrix_size: (n, n),
+            mode: options.mode,
+            rcond: None,
+            warning: None,
+            error: None,
+        });
+        return Ok(InvResult {
+            inverse,
+            warning: None,
+            certificate: None,
+        });
+    }
     let mut portfolio = SolverPortfolio::new(options.mode, 1);
     inv_with_casp(a, options, &mut portfolio)
 }
@@ -8341,24 +8367,24 @@ pub fn matmul(a: &[Vec<f64>], b: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, LinalgErr
 /// solver is used instead.
 const BLOCKED_LU_MIN_DIM: usize = 1024;
 
-/// Solve `A x = b` for a general square `A` via right-looking **blocked LU with
-/// partial pivoting**, parallelising the O(n³) trailing-submatrix update through the
-/// multithreaded flat-workspace GEMM. This is our own LAPACK-class kernel: the panel
-/// is factored unblocked, then `A22 -= L21·U12` (the bulk of the flops) runs on all
-/// cores. Partial pivoting gives the same factorisation LAPACK/SciPy compute, so the
-/// solution matches the reference solver to rounding.
-///
-/// Returns `None` for a zero/non-finite pivot (structurally singular) so the caller
-/// can fall back to the robust portfolio LU solver.
+/// Right-looking **blocked LU factorisation with partial pivoting** — our own
+/// LAPACK-class kernel. Each panel (width NB) is factored unblocked, then the O(n³)
+/// trailing-submatrix update `A22 -= L21·U12` (the bulk of the flops) runs on all
+/// cores via the multithreaded flat-workspace GEMM. Returns the combined `L\U`
+/// factors and the row permutation (`perm[i]` = original row index now at position
+/// `i`), or `None` on a zero/non-finite pivot so callers can fall back to the
+/// portfolio solver. Partial pivoting reproduces the LAPACK/SciPy factorisation, so
+/// downstream solves match the reference to rounding.
 #[allow(clippy::needless_range_loop)] // explicit row/col indices drive pivoting + the panel/trailing kernels
-fn lu_solve_blocked(a_in: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
+fn lu_factor_blocked(a_in: &[Vec<f64>]) -> Option<(Vec<Vec<f64>>, Vec<usize>)> {
     let n = a_in.len();
-    if n == 0 || a_in[0].len() != n || b.len() != n {
+    if n == 0 || a_in[0].len() != n {
         return None;
     }
     const NB: usize = 128;
     let mut a: Vec<Vec<f64>> = a_in.to_vec(); // overwritten with the L\U factors
-    let mut rhs = b.to_vec(); // row interchanges applied inline
+    // perm[i] = original row index now sitting at position i (apply to a RHS as Pb[i]=b[perm[i]]).
+    let mut perm: Vec<usize> = (0..n).collect();
 
     let mut k = 0;
     while k < n {
@@ -8379,7 +8405,7 @@ fn lu_solve_blocked(a_in: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
             }
             if p != j {
                 a.swap(p, j);
-                rhs.swap(p, j);
+                perm.swap(p, j);
             }
             let pivot = a[j][j];
             for i in (j + 1)..n {
@@ -8432,27 +8458,116 @@ fn lu_solve_blocked(a_in: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
         }
         k = kb;
     }
+    Some((a, perm))
+}
 
-    // (4) Forward solve L y = Pb (unit-lower), then (5) back solve U x = y.
+/// Forward/back substitution against precomputed `factors` (combined unit-lower L and
+/// upper U) given the row permutation `perm`, solving `A x = rhs`. `y` is the permuted
+/// RHS `Pb` on entry and is overwritten with the solution.
+#[allow(clippy::needless_range_loop)]
+fn lu_subst_factored(factors: &[Vec<f64>], mut y: Vec<f64>) -> Option<Vec<f64>> {
+    let n = factors.len();
     for i in 0..n {
-        let mut s = rhs[i];
-        for (p, &rp) in rhs.iter().enumerate().take(i) {
-            s -= a[i][p] * rp;
+        let mut s = y[i];
+        for p in 0..i {
+            s -= factors[i][p] * y[p];
         }
-        rhs[i] = s;
+        y[i] = s; // L unit diagonal
     }
     for i in (0..n).rev() {
-        let mut s = rhs[i];
+        let mut s = y[i];
         for p in (i + 1)..n {
-            s -= a[i][p] * rhs[p];
+            s -= factors[i][p] * y[p];
         }
-        let d = a[i][i];
+        let d = factors[i][i];
         if d == 0.0 {
             return None;
         }
-        rhs[i] = s / d;
+        y[i] = s / d;
     }
-    Some(rhs)
+    Some(y)
+}
+
+fn lu_solve_blocked(a_in: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
+    if b.len() != a_in.len() {
+        return None;
+    }
+    let (factors, perm) = lu_factor_blocked(a_in)?;
+    let pb: Vec<f64> = perm.iter().map(|&orig| b[orig]).collect();
+    lu_subst_factored(&factors, pb)
+}
+
+/// Invert a general square `A` by factoring once with the parallel blocked LU and
+/// solving `A X = I` over the identity columns in parallel (each column an independent
+/// forward/back substitution). Returns `None` on singular/edge cases.
+fn inv_blocked(a_in: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
+    let n = a_in.len();
+    if n == 0 || a_in[0].len() != n {
+        return None;
+    }
+    let (factors, perm) = lu_factor_blocked(a_in)?;
+    // For identity column j, the permuted RHS Pe_j has a single 1 at the position i
+    // where perm[i] == j. Solve A x = e_j -> column j of A^-1.
+    let solve_col = |j: usize| -> Option<Vec<f64>> {
+        let mut y = vec![0.0; n];
+        for i in 0..n {
+            if perm[i] == j {
+                y[i] = 1.0;
+                break;
+            }
+        }
+        lu_subst_factored(&factors, y)
+    };
+
+    let nthreads = matmul_thread_count(n, n, n);
+    let cols: Vec<Vec<f64>> = if nthreads <= 1 {
+        (0..n).map(solve_col).collect::<Option<Vec<_>>>()?
+    } else {
+        let chunk = n.div_ceil(nthreads);
+        let factors_ref = &factors;
+        let perm_ref = &perm;
+        let chunks: Vec<Option<Vec<Vec<f64>>>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..nthreads)
+                .filter_map(|t| {
+                    let c0 = t * chunk;
+                    if c0 >= n {
+                        return None;
+                    }
+                    let c1 = (c0 + chunk).min(n);
+                    Some(scope.spawn(move || {
+                        (c0..c1)
+                            .map(|j| {
+                                let mut y = vec![0.0; n];
+                                for i in 0..n {
+                                    if perm_ref[i] == j {
+                                        y[i] = 1.0;
+                                        break;
+                                    }
+                                }
+                                lu_subst_factored(factors_ref, y)
+                            })
+                            .collect::<Option<Vec<_>>>()
+                    }))
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        let mut cols = Vec::with_capacity(n);
+        for c in chunks {
+            cols.extend(c?);
+        }
+        cols
+    };
+
+    // cols[j] is column j of the inverse; assemble row-major X[i][j].
+    let mut x = vec![vec![0.0; n]; n];
+    for j in 0..n {
+        let col = &cols[j];
+        for i in 0..n {
+            x[i][j] = col[i];
+        }
+    }
+    Some(x)
 }
 
 /// Matrix-vector multiplication y = A * x.
@@ -8713,6 +8828,56 @@ mod tests {
     /// (nalgebra) LU solve to tolerance and produce a tiny residual ||Ax-b||, across
     /// sizes that exercise both the sequential and parallel trailing-update GEMM and
     /// that force partial pivoting (small/negative diagonals).
+    #[test]
+    #[allow(clippy::needless_range_loop)]
+    fn inv_blocked_matches_reference() {
+        let make = |n: usize, seed: u64| -> Vec<Vec<f64>> {
+            (0..n)
+                .map(|i| {
+                    (0..n)
+                        .map(|j| {
+                            let r = seed
+                                .wrapping_mul(i as u64 + 7)
+                                .wrapping_add(j as u64 * 31 + 5)
+                                % 9973;
+                            let v = r as f64 / 4986.0 - 1.0;
+                            if i == j { v + n as f64 * 0.5 } else { v }
+                        })
+                        .collect()
+                })
+                .collect()
+        };
+        for &(n, seed) in &[(16usize, 11u64), (130, 23), (270, 57)] {
+            let a = make(n, seed);
+            let got = inv_blocked(&a).expect("blocked inverse");
+            let reference = inv(&a, InvOptions::default()).expect("reference inverse");
+            // Match the reference inverse to tolerance.
+            let mut max_diff = 0.0_f64;
+            for i in 0..n {
+                for j in 0..n {
+                    max_diff = max_diff.max((got[i][j] - reference.inverse[i][j]).abs());
+                }
+            }
+            // A · A^-1 ≈ I residual.
+            let mut max_res = 0.0_f64;
+            for i in 0..n {
+                for j in 0..n {
+                    let mut s = 0.0;
+                    for k in 0..n {
+                        s += a[i][k] * got[k][j];
+                    }
+                    let target = if i == j { 1.0 } else { 0.0 };
+                    max_res = max_res.max((s - target).abs());
+                }
+            }
+            assert!(
+                max_diff < 1e-7,
+                "blocked inv vs reference diverged n={n}: {max_diff:e}"
+            );
+            assert!(max_res < 1e-9, "A·A^-1 - I too large n={n}: {max_res:e}");
+        }
+    }
+
     #[test]
     #[allow(clippy::needless_range_loop)]
     fn lu_solve_blocked_matches_reference() {
