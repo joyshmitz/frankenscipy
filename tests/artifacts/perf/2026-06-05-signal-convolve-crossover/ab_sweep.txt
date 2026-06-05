@@ -1,0 +1,8 @@
+# perf_convolve same-process A/B (Full), convolve shipped vs old forced-FFT (fftconvolve)
+n=  40 (na*nb=   1600): convolve=   0.417us  forced-fft=   4.257us  speedup=10.22x  exact_vs_direct=true  max_abs=0e0
+n=  64 (na*nb=   4096): convolve=   0.757us  forced-fft=   4.056us  speedup= 5.36x  exact_vs_direct=true  max_abs=0e0
+n= 100 (na*nb=  10000): convolve=   1.686us  forced-fft=  10.320us  speedup= 6.12x  exact_vs_direct=true  max_abs=0e0
+n= 160 (na*nb=  25600): convolve=   6.277us  forced-fft=  16.926us  speedup= 2.70x  exact_vs_direct=true  max_abs=0e0
+n= 256 (na*nb=  65536): convolve=  18.106us  forced-fft=  16.831us  speedup= 0.93x  exact_vs_direct=true  max_abs=0e0
+n= 384 (na*nb= 147456): convolve=  30.933us  forced-fft=  34.131us  speedup= 1.10x  exact_vs_direct=true  max_abs=0e0
+n= 512 (na*nb= 262144): convolve=  33.664us  forced-fft=  27.881us  speedup= 0.83x  exact_vs_direct=false max_abs=3.98e-13

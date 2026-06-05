@@ -632,6 +632,22 @@ pub enum ConvolveMode {
     Valid,
 }
 
+/// Cost-model crossover for 1D FFT convolution: FFT only wins once the direct
+/// `O(na·nb)` work dominates the FFT work `L·log2(L)` (L = next_pow2(na+nb-1)).
+///
+/// The old `na·nb > 1000` switched to FFT far too early; FFT's large constant
+/// (three length-L transforms) means the direct loop is faster — and bit-for-bit
+/// identical — until `na·nb` reaches ~1.5e5. Constant 20 matches the measured
+/// break-even (direct ≈ 0.3 ns/op vs FFT ≈ 6 ns per `L·log2(L)` unit), the same
+/// calibration used by `polymul` and `correlate2d`.
+fn fft_conv_is_faster(na: usize, nb: usize) -> bool {
+    let full = na + nb - 1;
+    let l = (full.next_power_of_two() as u64).max(2);
+    let direct_ops = (na as u64) * (nb as u64);
+    let fft_ops = l * (l.ilog2() as u64);
+    direct_ops > 20 * fft_ops
+}
+
 /// Direct (time-domain) convolution.
 ///
 /// Matches `scipy.signal.convolve(a, b, mode)`.
@@ -645,8 +661,11 @@ pub fn convolve(a: &[f64], b: &[f64], mode: ConvolveMode) -> Result<Vec<f64>, Si
     let na = a.len();
     let nb = b.len();
 
-    // Automatic dispatch to FFT for large inputs (SciPy 'auto' method)
-    if na.saturating_mul(nb) > 1000 {
+    // Automatic dispatch to FFT for large inputs (SciPy 'auto' method), gated by a
+    // cost model rather than the old `na·nb > 1000` (which switched to FFT far too
+    // early — FFT's constant means the direct loop is faster, AND byte-identical,
+    // until na·nb dominates the FFT work).
+    if fft_conv_is_faster(na, nb) {
         return fftconvolve(a, b, mode);
     }
 
