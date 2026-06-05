@@ -1,0 +1,42 @@
+perf: fsci-cluster hierarchical linkage — naive O(n^3) pair-rescan -> O(n^2) nearest-neighbour array
+====================================================================================================
+
+Target : crates/fsci-cluster/src/lib.rs :: linkage + linkage_from_distances (shared agglomerative core).
+Lever  : The agglomeration rescanned every active pair O(active^2) each of the n-1 steps to find the
+         closest pair — O(n^3) total. Replace with a nearest-neighbour array: keep each active
+         cluster's nearest active successor (nn[i], d_nn[i]); the closest pair is then the smallest-i
+         minimiser of d_nn in O(active). After a merge only the invalidated entries are refreshed —
+         clusters whose nearest neighbour was just merged recompute (O(active) each), everyone else
+         just tests the new cluster as a strictly-closer candidate. New helpers agglomerate_nnarray +
+         agglo_nearest; both linkage (Single/Complete/Average/Ward/Weighted) and linkage_from_distances
+         (all 7 methods) now call the shared core. Centroid/Median in linkage() still route to
+         linkage_fast (the heap path) as before.
+
+Isomorphism proof (byte-identical)
+----------------------------------
+- The global minimum each step — and its smallest-i / smallest-j tie-break — is identical to the
+  pairwise scan: agglo_nearest scans ascending j with strict `<` (smallest-j minimiser), and the
+  step picks the smallest-i minimiser of d_nn. So the merge SEQUENCE is identical.
+- Every emitted distance is the same Lance-Williams update with the same operands and min_d
+  (= d_nn[mi] = inter_dist[mi][mj]); nothing is re-associated. The recorded [mi, mj, dist, size]
+  rows are therefore bit-for-bit identical.
+- Non-monotone methods (centroid/median, which can produce inversions) are fine: the only NEW
+  distances each step involve the new cluster, and those are the only candidates considered for
+  nn refresh.
+- Empirically: 0 mismatches / 7200 linkage matrices across 600 random datasets x 7 methods x both
+  entry points (linkage + linkage_from_distances), coarse integer grids (heavy ties/inversions)
+  and fine coordinates, n in [3,42], dim in [1,4]. Every cell compared via .to_bits() vs a verbatim
+  copy of the original O(n^3) loop.
+- Golden payload sha256 (per-trial FNV digest of the Ward linkage matrix):
+    53e2b7aac89985305c99440bb7f7c091f80fc0c1c8ae2baaaedde36fbef77c5e  golden_payload.txt
+
+Timing (same-process A/B, release, mean of 3; clustered 2-D data, Ward)
+-----------------------------------------------------------------------
+  n=200   naive=  3.987 ms   nnarray= 1.831 ms   ratio= 2.2x
+  n=400   naive= 25.460 ms   nnarray= 8.006 ms   ratio= 3.2x
+  n=800   naive=173.666 ms   nnarray=35.036 ms   ratio= 5.0x
+(ratio grows ~ n, as expected for O(n^3) -> O(n^2).)
+
+Score: Impact 4 x Confidence 5 / Effort 2 = 10  (>> 2.0)
+
+Tests: cargo test -p fsci-cluster => 99 + 54 passed. clippy + fmt clean.

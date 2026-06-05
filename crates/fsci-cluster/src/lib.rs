@@ -630,6 +630,141 @@ fn linkage_fast(n: usize, initial_d: &[Vec<f64>], method: LinkageMethod) -> Vec<
 /// merged at distance dist, producing a cluster with count observations.
 ///
 /// Matches `scipy.cluster.hierarchy.linkage`.
+/// Nearest active successor (smallest `j > i`, both active, minimum distance)
+/// of cluster `i`, scanning the same ascending-`j` strict-`<` order the naive
+/// pairwise scan uses, so ties resolve to the same `j`.
+fn agglo_nearest(inter_dist: &[Vec<f64>], active: &[bool], i: usize, total: usize) -> (usize, f64) {
+    let mut best_j = i;
+    let mut best_d = f64::INFINITY;
+    for j in (i + 1)..total {
+        if active[j] && inter_dist[i][j] < best_d {
+            best_d = inter_dist[i][j];
+            best_j = j;
+        }
+    }
+    (best_j, best_d)
+}
+
+/// Agglomerative clustering core shared by `linkage` and `linkage_from_distances`.
+///
+/// Byte-identical to the naive O(n^3) "rescan every pair each step" loop, but
+/// O(n^2) typical: a nearest-neighbour array keeps each active cluster's nearest
+/// active successor, so the closest pair is found in O(active) instead of
+/// O(active^2). Because the global minimum (and its smallest-`i`/smallest-`j`
+/// tie-break) is identical each step, the merge sequence — and every
+/// Lance-Williams distance, computed with the exact same operands — matches the
+/// pairwise scan element-for-element.
+fn agglomerate_nnarray(
+    n: usize,
+    mut inter_dist: Vec<Vec<f64>>,
+    method: LinkageMethod,
+) -> Vec<[f64; 4]> {
+    let total = 2 * n - 1;
+    let mut active = vec![false; total];
+    active[..n].fill(true);
+    let mut cluster_size = vec![1usize; total];
+    let mut nn = vec![0usize; total];
+    let mut d_nn = vec![f64::INFINITY; total];
+    for i in 0..n {
+        let (j, d) = agglo_nearest(&inter_dist, &active, i, total);
+        nn[i] = j;
+        d_nn[i] = d;
+    }
+
+    let mut result = Vec::with_capacity(n - 1);
+    for step in 0..n - 1 {
+        let new_id = n + step;
+
+        // Closest active pair = smallest active i with minimal d_nn[i]; its
+        // recorded neighbour nn[i] is the smallest-index minimiser j > i.
+        let mut min_d = f64::INFINITY;
+        let mut mi = 0;
+        for i in 0..new_id {
+            if active[i] && d_nn[i] < min_d {
+                min_d = d_nn[i];
+                mi = i;
+            }
+        }
+        let mj = nn[mi];
+
+        let new_size = cluster_size[mi] + cluster_size[mj];
+        result.push([mi as f64, mj as f64, min_d, new_size as f64]);
+
+        active[mi] = false;
+        active[mj] = false;
+        active[new_id] = true;
+        cluster_size[new_id] = new_size;
+
+        // Distances from the new cluster to every remaining active cluster.
+        for k in 0..new_id {
+            if !active[k] {
+                continue;
+            }
+            let d_ki = inter_dist[k][mi];
+            let d_kj = inter_dist[k][mj];
+            let new_dist = match method {
+                LinkageMethod::Single => d_ki.min(d_kj),
+                LinkageMethod::Complete => d_ki.max(d_kj),
+                LinkageMethod::Average => {
+                    let ni = cluster_size[mi] as f64;
+                    let nj = cluster_size[mj] as f64;
+                    (ni * d_ki + nj * d_kj) / (ni + nj)
+                }
+                LinkageMethod::Ward => {
+                    let ni = cluster_size[mi] as f64;
+                    let nj = cluster_size[mj] as f64;
+                    let nk = cluster_size[k] as f64;
+                    let nt = ni + nj + nk;
+                    (((nk + ni) * d_ki * d_ki + (nk + nj) * d_kj * d_kj - nk * min_d * min_d) / nt)
+                        .max(0.0)
+                        .sqrt()
+                }
+                LinkageMethod::Weighted => 0.5 * (d_ki + d_kj),
+                LinkageMethod::Centroid => {
+                    let ni = cluster_size[mi] as f64;
+                    let nj = cluster_size[mj] as f64;
+                    let nt = ni + nj;
+                    let alpha_i = ni / nt;
+                    let alpha_j = nj / nt;
+                    let beta = -(ni * nj) / (nt * nt);
+                    (alpha_i * d_ki * d_ki + alpha_j * d_kj * d_kj + beta * min_d * min_d)
+                        .max(0.0)
+                        .sqrt()
+                }
+                LinkageMethod::Median => (0.5 * d_ki * d_ki + 0.5 * d_kj * d_kj
+                    - 0.25 * min_d * min_d)
+                    .max(0.0)
+                    .sqrt(),
+            };
+            inter_dist[k][new_id] = new_dist;
+            inter_dist[new_id][k] = new_dist;
+        }
+
+        // The new cluster is the largest active id, so it has no successor yet.
+        d_nn[new_id] = f64::INFINITY;
+        nn[new_id] = new_id;
+
+        // Refresh nearest neighbours: clusters that pointed at a merged cluster
+        // recompute from scratch; the rest only need to test the new cluster as
+        // a (strictly closer) candidate, matching the scan's smallest-j tie-break.
+        for k in 0..new_id {
+            if !active[k] {
+                continue;
+            }
+            if nn[k] == mi || nn[k] == mj {
+                let (j, d) = agglo_nearest(&inter_dist, &active, k, total);
+                nn[k] = j;
+                d_nn[k] = d;
+            } else if inter_dist[k][new_id] < d_nn[k] {
+                d_nn[k] = inter_dist[k][new_id];
+                nn[k] = new_id;
+            }
+        }
+    }
+
+    result
+}
+
 pub fn linkage(data: &[Vec<f64>], method: LinkageMethod) -> Result<Vec<[f64; 4]>, ClusterError> {
     let n = data.len();
     if n < 2 {
@@ -664,99 +799,15 @@ pub fn linkage(data: &[Vec<f64>], method: LinkageMethod) -> Result<Vec<[f64; 4]>
         return Ok(linkage_fast(n, &dist_mat, method));
     }
 
-    // Active cluster tracking
-    let mut active = vec![true; 2 * n - 1];
-    let mut cluster_size = vec![1usize; 2 * n - 1];
-    let mut result = Vec::with_capacity(n - 1);
-
-    // Extend dist_mat to handle new clusters
+    // Extend dist_mat to handle new clusters, then run the shared O(n^2)
+    // nearest-neighbour-array agglomeration (byte-identical to the old scan).
     let total = 2 * n - 1;
     let mut inter_dist = vec![vec![f64::INFINITY; total]; total];
     for i in 0..n {
-        for j in 0..n {
-            inter_dist[i][j] = dist_mat[i][j];
-        }
+        inter_dist[i][..n].copy_from_slice(&dist_mat[i][..n]);
     }
 
-    for step in 0..n - 1 {
-        let new_id = n + step;
-
-        // Find closest pair of active clusters
-        let mut min_d = f64::INFINITY;
-        let mut mi = 0;
-        let mut mj = 0;
-        for i in 0..new_id {
-            if !active[i] {
-                continue;
-            }
-            for j in i + 1..new_id {
-                if !active[j] {
-                    continue;
-                }
-                if inter_dist[i][j] < min_d {
-                    min_d = inter_dist[i][j];
-                    mi = i;
-                    mj = j;
-                }
-            }
-        }
-
-        let new_size = cluster_size[mi] + cluster_size[mj];
-        result.push([mi as f64, mj as f64, min_d, new_size as f64]);
-
-        active[mi] = false;
-        active[mj] = false;
-        active[new_id] = true;
-        cluster_size[new_id] = new_size;
-
-        // Update distances from new cluster to all remaining active clusters
-        for k in 0..new_id {
-            if !active[k] || k == new_id {
-                continue;
-            }
-            let d_ki = inter_dist[k][mi];
-            let d_kj = inter_dist[k][mj];
-            let new_dist = match method {
-                LinkageMethod::Single => d_ki.min(d_kj),
-                LinkageMethod::Complete => d_ki.max(d_kj),
-                LinkageMethod::Average => {
-                    let ni = cluster_size[mi] as f64;
-                    let nj = cluster_size[mj] as f64;
-                    (ni * d_ki + nj * d_kj) / (ni + nj)
-                }
-                LinkageMethod::Ward => {
-                    let ni = cluster_size[mi] as f64;
-                    let nj = cluster_size[mj] as f64;
-                    let nk = cluster_size[k] as f64;
-                    let nt = ni + nj + nk;
-                    (((nk + ni) * d_ki * d_ki + (nk + nj) * d_kj * d_kj - nk * min_d * min_d) / nt)
-                        .max(0.0)
-                        .sqrt()
-                }
-                // br-7kxr: Lance-Williams update for the additional methods.
-                LinkageMethod::Weighted => 0.5 * (d_ki + d_kj),
-                LinkageMethod::Centroid => {
-                    let ni = cluster_size[mi] as f64;
-                    let nj = cluster_size[mj] as f64;
-                    let nt = ni + nj;
-                    let alpha_i = ni / nt;
-                    let alpha_j = nj / nt;
-                    let beta = -(ni * nj) / (nt * nt);
-                    (alpha_i * d_ki * d_ki + alpha_j * d_kj * d_kj + beta * min_d * min_d)
-                        .max(0.0)
-                        .sqrt()
-                }
-                LinkageMethod::Median => (0.5 * d_ki * d_ki + 0.5 * d_kj * d_kj
-                    - 0.25 * min_d * min_d)
-                    .max(0.0)
-                    .sqrt(),
-            };
-            inter_dist[k][new_id] = new_dist;
-            inter_dist[new_id][k] = new_dist;
-        }
-    }
-
-    Ok(result)
+    Ok(agglomerate_nnarray(n, inter_dist, method))
 }
 
 /// Cut a linkage tree to form flat clusters.
@@ -1964,95 +2015,15 @@ pub fn linkage_from_distances(
         }
     }
 
-    // Convert to "data" format for linkage
-    // Use the distance matrix directly in the agglomerative algorithm
+    // Run the shared O(n^2) nearest-neighbour-array agglomeration over the
+    // distance matrix (byte-identical to the old pairwise-scan loop).
     let total = 2 * n - 1;
-    let mut active = vec![true; total];
-    let mut cluster_size = vec![1usize; total];
     let mut inter_dist = vec![vec![f64::INFINITY; total]; total];
-
     for i in 0..n {
-        for j in 0..n {
-            inter_dist[i][j] = dist[i][j];
-        }
+        inter_dist[i][..n].copy_from_slice(&dist[i][..n]);
     }
 
-    let mut result = Vec::with_capacity(n - 1);
-
-    for step in 0..n - 1 {
-        let new_id = n + step;
-
-        let mut min_d = f64::INFINITY;
-        let mut mi = 0;
-        let mut mj = 0;
-        for i in 0..new_id {
-            if !active[i] {
-                continue;
-            }
-            for j in i + 1..new_id {
-                if active[j] && inter_dist[i][j] < min_d {
-                    min_d = inter_dist[i][j];
-                    mi = i;
-                    mj = j;
-                }
-            }
-        }
-
-        let new_size = cluster_size[mi] + cluster_size[mj];
-        result.push([mi as f64, mj as f64, min_d, new_size as f64]);
-
-        active[mi] = false;
-        active[mj] = false;
-        active[new_id] = true;
-        cluster_size[new_id] = new_size;
-
-        for k in 0..new_id {
-            if !active[k] || k == new_id {
-                continue;
-            }
-            let d_ki = inter_dist[k][mi];
-            let d_kj = inter_dist[k][mj];
-            let new_dist = match method {
-                LinkageMethod::Single => d_ki.min(d_kj),
-                LinkageMethod::Complete => d_ki.max(d_kj),
-                LinkageMethod::Average => {
-                    let ni = cluster_size[mi] as f64;
-                    let nj = cluster_size[mj] as f64;
-                    (ni * d_ki + nj * d_kj) / (ni + nj)
-                }
-                LinkageMethod::Ward => {
-                    let ni = cluster_size[mi] as f64;
-                    let nj = cluster_size[mj] as f64;
-                    let nk = cluster_size[k] as f64;
-                    let nt = ni + nj + nk;
-                    (((nk + ni) * d_ki * d_ki + (nk + nj) * d_kj * d_kj - nk * min_d * min_d) / nt)
-                        .max(0.0)
-                        .sqrt()
-                }
-                // br-7kxr: Lance-Williams update for the additional methods.
-                LinkageMethod::Weighted => 0.5 * (d_ki + d_kj),
-                LinkageMethod::Centroid => {
-                    let ni = cluster_size[mi] as f64;
-                    let nj = cluster_size[mj] as f64;
-                    let nt = ni + nj;
-                    let alpha_i = ni / nt;
-                    let alpha_j = nj / nt;
-                    let beta = -(ni * nj) / (nt * nt);
-                    (alpha_i * d_ki * d_ki + alpha_j * d_kj * d_kj + beta * min_d * min_d)
-                        .max(0.0)
-                        .sqrt()
-                }
-                LinkageMethod::Median => (0.5 * d_ki * d_ki + 0.5 * d_kj * d_kj
-                    - 0.25 * min_d * min_d)
-                    .max(0.0)
-                    .sqrt(),
-            };
-            inter_dist[k][new_id] = new_dist;
-            inter_dist[new_id][k] = new_dist;
-        }
-    }
-
-    Ok(result)
+    Ok(agglomerate_nnarray(n, inter_dist, method))
 }
 
 /// Maximal cliques in a proximity graph (for small graphs).
