@@ -1,0 +1,32 @@
+frankenscipy-79ttn Theil slope in-place median setup lever
+
+Decision: KEPT as a narrow setup lever; this does not complete the O(n log n) slope-selection bead.
+
+Lever:
+- Reuse the existing O(n^2) slope buffer for the final Theil slope median.
+- `median(data)` still copies for public callers.
+- `median_in_place(buf)` is used internally by `theil_sen` and after the CI rank selections in `theilslopes`.
+
+Behavior proof:
+- Same slope multiset and rank definitions.
+- Same x/y pair filtering and tie behavior.
+- Same CI order-statistic path.
+- Same intercept formula.
+- Golden SHA-256 before/after: 18d932a97e4167cf5fdcadd0f0c6f0bd63a399ffc9ab3c38031012a370e1d47c
+- cmp_exit: 0
+
+Benchmark evidence:
+- Hyperfine command: cargo run --release -p fsci-stats --bin perf_theilslopes --locked
+- Before: 1.422 s +/- 0.024 s
+- After: 1.306 s +/- 0.107 s
+- Same-process A/B after-run old full-sort oracle vs optimized implementation:
+  - n=1000: 16.475 ms -> 3.071 ms, ratio 5.4x
+  - n=2000: 72.155 ms -> 13.723 ms, ratio 5.3x
+  - n=3000: 178.307 ms -> 38.996 ms, ratio 4.6x
+
+Score:
+- 2.0 = impact 1 * confidence 4 / effort 2
+
+Next pass:
+- Keep `count_slopes_le` test scaffolding separate.
+- Wire no randomized or interval-selection path until count, min-greater-than, and final interval enumeration each have exact brute-force tests.

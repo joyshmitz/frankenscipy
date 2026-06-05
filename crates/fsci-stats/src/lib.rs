@@ -31402,18 +31402,23 @@ pub fn yeojohnson_llf(lmb: f64, data: &[f64]) -> f64 {
 
 /// Compute the median of a dataset.
 pub fn median(data: &[f64]) -> f64 {
-    if data.is_empty() {
+    let mut buf = data.to_vec();
+    median_in_place(&mut buf)
+}
+
+fn median_in_place(buf: &mut [f64]) -> f64 {
+    let n = buf.len();
+    if n == 0 {
         return f64::NAN;
     }
-    let mut buf = data.to_vec();
-    let n = buf.len();
+
     // Partial selection (O(n)) of the one or two central ranks, byte-identical
     // to indexing a full total_cmp sort.
     if n.is_multiple_of(2) {
-        let (lo, hi) = select_ranks(&mut buf, n / 2 - 1, n / 2);
+        let (lo, hi) = select_ranks(buf, n / 2 - 1, n / 2);
         (lo + hi) / 2.0
     } else {
-        select_ranks(&mut buf, n / 2, n / 2).0
+        select_ranks(buf, n / 2, n / 2).0
     }
 }
 
@@ -35485,7 +35490,7 @@ pub fn theil_sen(x: &[f64], y: &[f64]) -> (f64, f64) {
         return (0.0, median(y));
     }
 
-    let slope = median(&slopes);
+    let slope = median_in_place(&mut slopes);
     // Intercept: median of y_i - slope * x_i
     let intercepts: Vec<f64> = x
         .iter()
@@ -35560,14 +35565,6 @@ pub fn theilslopes(x: &[f64], y: &[f64], alpha: f64) -> TheilslopesResult {
         };
     }
 
-    // `medslope` (via `median`, a partial select) and `medinter` are independent
-    // of the slope ordering, so they are computed directly on the build-order
-    // `slopes`.
-    let medslope = median(&slopes);
-
-    // Intercept using 'separate' method: median(y) - slope * median(x)
-    let medinter = median(y) - medslope * median(x);
-
     // Confidence interval using Sen (1968) equation 2.6
     let alpha_adj = if alpha > 0.5 { 1.0 - alpha } else { alpha };
     let z = Normal::new(0.0, 1.0).ppf(alpha_adj / 2.0);
@@ -35612,6 +35609,14 @@ pub fn theilslopes(x: &[f64], y: &[f64], alpha: f64) -> TheilslopesResult {
     } else {
         f64::NAN
     };
+
+    // The slope median depends only on the slope multiset, so compute it in
+    // place after the CI selections have consumed the original build-order
+    // buffer. This avoids an extra O(n^2) clone for Theil-Sen inputs.
+    let medslope = median_in_place(&mut slopes);
+
+    // Intercept using 'separate' method: median(y) - slope * median(x)
+    let medinter = median(y) - medslope * median(x);
 
     TheilslopesResult {
         slope: medslope,
