@@ -1962,6 +1962,21 @@ fn filter_by_distance(peaks: &[usize], heights: &[f64], min_dist: usize) -> Vec<
 ///
 /// Returns (prominences, left_bases, right_bases).
 pub fn peak_prominences(x: &[f64], peaks: &[usize]) -> (Vec<f64>, Vec<usize>, Vec<usize>) {
+    // The per-peak outward scan is O(peaks · N) in the worst case (e.g. peaks of
+    // monotonically increasing height each scan to the array boundary). For a
+    // large workload, switch to the O(N log N + peaks) sparse-table form, which
+    // is byte-identical (proven in `peak_prominences_rmq`). Tiny workloads keep
+    // the direct scan to avoid the table-build overhead.
+    if x.len() >= 256 && peaks.len() >= 32 && x.iter().all(|v| !v.is_nan()) {
+        peak_prominences_rmq(x, peaks)
+    } else {
+        peak_prominences_naive(x, peaks)
+    }
+}
+
+/// Reference outward-scan prominence: for each peak, walk left and right until a
+/// sample taller than the peak is found, tracking the running minimum.
+fn peak_prominences_naive(x: &[f64], peaks: &[usize]) -> (Vec<f64>, Vec<usize>, Vec<usize>) {
     let mut prominences = Vec::with_capacity(peaks.len());
     let mut left_bases = Vec::with_capacity(peaks.len());
     let mut right_bases = Vec::with_capacity(peaks.len());
@@ -2008,6 +2023,145 @@ pub fn peak_prominences(x: &[f64], peaks: &[usize]) -> (Vec<f64>, Vec<usize>, Ve
     }
 
     (prominences, left_bases, right_bases)
+}
+
+/// O(N log N + peaks) prominences via nearest-taller-sample bounds and
+/// range-minimum sparse tables. Byte-identical to `peak_prominences_naive`:
+///
+///  * The left scan stops at the nearest index `j < pk` with `x[j] > x[pk]`
+///    (strict), so its search window is `(nge_left[pk], pk)`; likewise the right
+///    window is `(pk, nge_right[pk])`. Monotonic stacks give both in O(N).
+///  * Within a window the scan keeps the running-min position. Walking *left*,
+///    ties resolve to the position closest to the peak = the LARGEST index of
+///    the window minimum; walking *right*, to the SMALLEST index. Two sparse
+///    tables (one tie rule each) answer these argmin queries in O(1).
+///  * `left_base`/`left_min` only move off the peak when the window minimum is
+///    STRICTLY below `x[pk]` (matching the `< left_min` guard from `peak_val`);
+///    every windowed sample is `<= x[pk]`, so the only excluded case is an
+///    all-equal window, handled explicitly.
+fn peak_prominences_rmq(x: &[f64], peaks: &[usize]) -> (Vec<f64>, Vec<usize>, Vec<usize>) {
+    let n = x.len();
+
+    // Nearest strictly-taller sample to the left / right of each index.
+    let mut nge_left = vec![-1i64; n];
+    let mut nge_right = vec![n as i64; n];
+    let mut stack: Vec<usize> = Vec::new();
+    for i in 0..n {
+        while let Some(&top) = stack.last() {
+            if x[top] > x[i] {
+                break;
+            }
+            stack.pop();
+        }
+        nge_left[i] = stack.last().map_or(-1, |&t| t as i64);
+        stack.push(i);
+    }
+    stack.clear();
+    for i in (0..n).rev() {
+        while let Some(&top) = stack.last() {
+            if x[top] > x[i] {
+                break;
+            }
+            stack.pop();
+        }
+        nge_right[i] = stack.last().map_or(n as i64, |&t| t as i64);
+        stack.push(i);
+    }
+
+    // Sparse tables of (min value, tie-broken argmin index). `prefer_larger`
+    // selects the largest index among equal minima (left scan), else smallest.
+    let build = |prefer_larger: bool| -> Vec<Vec<(f64, usize)>> {
+        let levels = if n <= 1 {
+            1
+        } else {
+            (usize::BITS - (n - 1).leading_zeros()) as usize + 1
+        };
+        let mut table: Vec<Vec<(f64, usize)>> = vec![vec![(f64::INFINITY, 0); n]; levels];
+        for i in 0..n {
+            table[0][i] = (x[i], i);
+        }
+        for k in 1..levels {
+            let span = 1usize << k;
+            let half = 1usize << (k - 1);
+            for i in 0..=n.saturating_sub(span) {
+                let a = table[k - 1][i];
+                let b = table[k - 1][i + half];
+                table[k][i] = merge_argmin(a, b, prefer_larger);
+            }
+        }
+        table
+    };
+    let table_left = build(true);
+    let table_right = build(false);
+
+    let query =
+        |table: &[Vec<(f64, usize)>], lo: usize, hi: usize, prefer_larger: bool| -> (f64, usize) {
+            // Inclusive range [lo, hi]; caller guarantees lo <= hi < n.
+            let len = hi - lo + 1;
+            let k = (usize::BITS - 1 - len.leading_zeros()) as usize;
+            let a = table[k][lo];
+            let b = table[k][hi + 1 - (1 << k)];
+            merge_argmin(a, b, prefer_larger)
+        };
+
+    let mut prominences = Vec::with_capacity(peaks.len());
+    let mut left_bases = Vec::with_capacity(peaks.len());
+    let mut right_bases = Vec::with_capacity(peaks.len());
+
+    for &pk in peaks {
+        if pk >= n {
+            prominences.push(0.0);
+            left_bases.push(pk);
+            right_bases.push(pk);
+            continue;
+        }
+        let peak_val = x[pk];
+
+        // Left window: indices (nge_left[pk], pk) = [nge_left+1, pk-1].
+        let mut left_min = peak_val;
+        let mut left_base = pk;
+        let lo = (nge_left[pk] + 1) as usize;
+        if lo < pk {
+            let (m, idx) = query(&table_left, lo, pk - 1, true);
+            if m < peak_val {
+                left_min = m;
+                left_base = idx;
+            }
+        }
+
+        // Right window: indices (pk, nge_right[pk]) = [pk+1, nge_right-1].
+        let mut right_min = peak_val;
+        let mut right_base = pk;
+        let hi = (nge_right[pk] - 1) as usize;
+        if pk < hi {
+            let (m, idx) = query(&table_right, pk + 1, hi, false);
+            if m < peak_val {
+                right_min = m;
+                right_base = idx;
+            }
+        }
+
+        prominences.push(peak_val - left_min.max(right_min));
+        left_bases.push(left_base);
+        right_bases.push(right_base);
+    }
+
+    (prominences, left_bases, right_bases)
+}
+
+/// Combine two (value, index) candidates by minimum value using IEEE `<` (so
+/// `-0.0` and `+0.0` are equal, exactly like the reference scan's `< left_min`
+/// guard). On equal values keep the larger index when `prefer_larger`, else the
+/// smaller, and carry that index's own value bits. Inputs are NaN-free (gated).
+fn merge_argmin(a: (f64, usize), b: (f64, usize), prefer_larger: bool) -> (f64, usize) {
+    if a.0 < b.0 {
+        a
+    } else if b.0 < a.0 || (prefer_larger && b.1 > a.1) || (!prefer_larger && b.1 < a.1) {
+        // b is strictly smaller, or values tie and the tie rule prefers b's index.
+        b
+    } else {
+        a
+    }
 }
 
 /// Compute peak widths at a given relative height.

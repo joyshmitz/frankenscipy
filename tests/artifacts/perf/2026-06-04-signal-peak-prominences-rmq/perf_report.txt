@@ -1,0 +1,46 @@
+perf: fsci-signal peak_prominences — O(peaks·N) outward scan -> O(N log N + peaks) RMQ
+=======================================================================================
+
+Target : crates/fsci-signal/src/lib.rs :: peak_prominences
+Lever  : The per-peak outward scan walks left/right until a taller sample is found — O(peaks·N)
+         worst case (peaks of monotonically increasing height each scan to the array boundary;
+         scipy.signal.peak_prominences has the same complexity). Replace with:
+           * nearest strictly-taller sample to each side via two monotonic stacks (O(N)) — these
+             are exactly the scan's stop points, so they bound each peak's search window;
+           * two range-minimum sparse tables giving the windowed argmin in O(1), one per tie rule.
+         New helpers: peak_prominences_rmq + merge_argmin; the original scan is retained as
+         peak_prominences_naive and used below the fast-path gate.
+
+Scope / gating
+--------------
+Fast path only when x.len() >= 256 && peaks.len() >= 32 && x is NaN-free (so the O(N log N)
+table build amortizes and the IEEE `<` semantics are well-defined). Small / NaN workloads keep
+the direct scan. Both paths are exact, so the dispatch never changes results.
+
+Isomorphism proof (byte-identical)
+----------------------------------
+- Left scan stops at the nearest j<pk with x[j] > x[pk] (strict), so its window is
+  (nge_left[pk], pk); right window is (pk, nge_right[pk]). Monotonic stacks reproduce both.
+- Within a window, walking left resolves min-value ties to the index CLOSEST to the peak = the
+  LARGEST index; walking right = the SMALLEST. merge_argmin encodes each rule and uses IEEE `<`
+  (so -0.0 and +0.0 tie exactly like the scan's `< left_min` guard), carrying the chosen index's
+  own value bits.
+- left_base/left_min only move off the peak when the window minimum is STRICTLY below x[pk]
+  (every windowed sample is <= x[pk]; the all-equal window is handled by that strict check).
+- Empirically: 0 mismatches / 88511 peak-results across 400 randomized trials — alphabets for
+  heavy ties/plateaus, fine-grained values, signed zeros, the adversarial increasing-height
+  sawtooth — plus boundary (0, n-1) and out-of-bounds peak indices. Prominences compared via
+  .to_bits(), left/right bases compared exactly, vs a verbatim copy of the original scan.
+- Golden payload sha256 (per-trial FNV digest of prominences+bases):
+    f5a88a9460aa39160e2be320bb46a882454f49a47aa45d5e9f9ca50a444bec73  golden_payload.txt
+
+Timing (same-process A/B, release, mean of 3; increasing-height teeth, all peaks scan to bound)
+-----------------------------------------------------------------------------------------------
+  n= 4096  peaks= 2047   naive=  3.332 ms   rmq= 1.433 ms   ratio=  2.3x
+  n=16384  peaks= 8191   naive= 52.947 ms   rmq= 6.988 ms   ratio=  7.6x
+  n=65536  peaks=32767   naive=847.579 ms   rmq=32.043 ms   ratio= 26.5x
+(ratio grows ~ N/log N, as expected for O(P·N) -> O(N log N).)
+
+Score: Impact 4 x Confidence 5 / Effort 2 = 10  (>> 2.0)
+
+Tests: cargo test -p fsci-signal --lib peak => 24 passed. clippy + fmt clean.
