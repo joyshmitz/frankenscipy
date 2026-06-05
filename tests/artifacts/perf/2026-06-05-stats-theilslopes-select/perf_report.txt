@@ -1,0 +1,40 @@
+perf: fsci-stats theilslopes — full sort of all slopes -> select_nth for the 2 CI ranks, O(n^2 log n) -> O(n^2)
+==============================================================================================================
+
+Target : crates/fsci-stats/src/lib.rs :: theilslopes.
+Lever  : theilslopes built all M = n(n-1)/2 pairwise slopes then FULLY SORTED them
+         (`slopes.sort_by(...)`, O(M log M) = O(n^2 log n)) only to read three order statistics:
+         the median (already taken via `median()`, itself a partial select) and the two CI bounds
+         `slopes[rl-1]` / `slopes[ru]`. The median and the CI ranks rl, ru are all independent of
+         the slope ordering, so they are computed first; the two CI elements are then extracted with
+         `select_nth_unstable_by` (O(M) each), dropping the sort entirely: O(n^2 log n) -> O(n^2).
+         (The O(n^2) slope materialization itself remains — eliminating it is the larger
+         randomized-slope-selection swing tracked by bead frankenscipy-79ttn; this is the log-factor.)
+
+Parity (numerically EXACT; only benign +0.0/-0.0 sign on zero bounds)
+--------------------------------------------------------------------
+- For every distinct value, `select_nth(k)` yields the same f64 as `sorted[k]`. The single possible
+  difference is the IEEE SIGN of a *zero-valued* CI bound when ties land on rank rl-1 or ru: the old
+  STABLE `partial_cmp` sort kept +0.0/-0.0 in build order, while select_nth (unstable) may pick the
+  other zero. +0.0 == -0.0 numerically, has no downstream effect, and SciPy's np.sort does not
+  guarantee it either.
+- Empirically (perf_theilslopes bin vs a VERBATIM full-sort copy): 0 NUMERIC mismatches / 720 fields
+  across n in {2,3,8,33,120} x tie densities grid in {0,4,12} x alpha in {0.95,0.90,0.99} x 4 seeds;
+  the only bit-differences were 20 +0.0/-0.0-sign-only cases (all numerically equal).
+- In-tree test `theilslopes_select_matches_full_sort_reference` checks slope/low/high numeric
+  equality vs a full-sort reference across sizes and tie densities. All 9 existing theil* tests
+  (incl. theilslopes_matches_scipy, theilslopes_confidence_interval) pass unchanged.
+- Golden payload sha256 (per-config slope/low/high bits):
+    18d932a97e4167cf5fdcadd0f0c6f0bd63a399ffc9ab3c38031012a370e1d47c  golden_payload.txt
+
+Timing (same-process A/B, release, mean of 3)
+---------------------------------------------
+  n=1000  old= 22.917 ms  new=10.129 ms  ratio= 2.3x
+  n=2000  old=110.008 ms  new=44.433 ms  ratio= 2.5x
+  n=3000  old=269.258 ms  new=104.325 ms ratio= 2.6x
+  (the log M factor on the M = n(n-1)/2 slopes; the residual O(n^2) is the slope build itself.)
+
+Score: Impact 3 x Confidence 4 / Effort 1 = 12  (>= 2.0; numerically exact, ±0.0-sign tolerance)
+
+Tests: cargo test -p fsci-stats --lib theil => 10 passed. fmt + clippy clean.
+Reproduce: cargo run --release -p fsci-stats --bin perf_theilslopes

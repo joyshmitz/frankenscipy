@@ -35568,7 +35568,9 @@ pub fn theilslopes(x: &[f64], y: &[f64], alpha: f64) -> TheilslopesResult {
         };
     }
 
-    slopes.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    // `medslope` (via `median`, a partial select) and `medinter` are independent
+    // of the slope ordering, so they are computed directly on the build-order
+    // `slopes`.
     let medslope = median(&slopes);
 
     // Intercept using 'separate' method: median(y) - slope * median(x)
@@ -35600,13 +35602,21 @@ pub fn theilslopes(x: &[f64], y: &[f64], alpha: f64) -> TheilslopesResult {
     let ru = ((nt - z * sigma) / 2.0).round() as usize;
     let rl = ((nt + z * sigma) / 2.0).round() as usize;
 
+    // The CI reads only the two order statistics slopes[rl-1] and slopes[ru], so
+    // partition to those exact ranks with `select_nth_unstable_by` (O(n^2))
+    // instead of fully sorting all O(n^2) slopes (O(n^2 log n)). For every
+    // distinct value `select_nth(k)` yields the same f64 as `sorted[k]`; the only
+    // possible difference is the IEEE sign of a *zero-valued* bound when ties land
+    // on the rank (the original stable sort kept ±0.0 in build order), which is
+    // numerically identical (+0.0 == -0.0) and not guaranteed by SciPy either.
+    let cmp = |a: &f64, b: &f64| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal);
     let low_slope = if rl > 0 && rl <= slopes.len() {
-        slopes[rl - 1]
+        *slopes.select_nth_unstable_by(rl - 1, cmp).1
     } else {
         f64::NAN
     };
     let high_slope = if ru < slopes.len() {
-        slopes[ru]
+        *slopes.select_nth_unstable_by(ru, cmp).1
     } else {
         f64::NAN
     };
@@ -47590,6 +47600,86 @@ mod tests {
             result.low_slope,
             result.high_slope
         );
+    }
+
+    #[test]
+    fn theilslopes_select_matches_full_sort_reference() {
+        // The select_nth CI extraction must equal a full-sort reference
+        // numerically across sizes and tie densities (the +0.0/-0.0 sign of a
+        // zero-valued bound is the only permitted bit-difference, since the old
+        // stable sort kept zeros in build order — numerically identical).
+        fn full_sort_ci(x: &[f64], y: &[f64], alpha: f64) -> (f64, f64, f64) {
+            let n = x.len();
+            let mut slopes: Vec<f64> = Vec::new();
+            for i in 0..n {
+                for j in (i + 1)..n {
+                    let dx = x[i] - x[j];
+                    if dx.abs() > 1e-15 {
+                        slopes.push((y[i] - y[j]) / dx);
+                    }
+                }
+            }
+            if slopes.is_empty() {
+                return (0.0, f64::NAN, f64::NAN);
+            }
+            slopes.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let medslope = median(&slopes);
+            let alpha_adj = if alpha > 0.5 { 1.0 - alpha } else { alpha };
+            let z = Normal::new(0.0, 1.0).ppf(alpha_adj / 2.0);
+            let x_reps = find_repeats(x);
+            let y_reps = find_repeats(y);
+            let nt = slopes.len() as f64;
+            let ny = n as f64;
+            let mut sigsq = ny * (ny - 1.0) * (2.0 * ny + 5.0) / 18.0;
+            for &k in &x_reps.counts {
+                let kf = k as f64;
+                sigsq -= kf * (kf - 1.0) * (2.0 * kf + 5.0) / 18.0;
+            }
+            for &k in &y_reps.counts {
+                let kf = k as f64;
+                sigsq -= kf * (kf - 1.0) * (2.0 * kf + 5.0) / 18.0;
+            }
+            let sigma = sigsq.sqrt();
+            let ru = ((nt - z * sigma) / 2.0).round() as usize;
+            let rl = ((nt + z * sigma) / 2.0).round() as usize;
+            let low = if rl > 0 && rl <= slopes.len() {
+                slopes[rl - 1]
+            } else {
+                f64::NAN
+            };
+            let high = if ru < slopes.len() {
+                slopes[ru]
+            } else {
+                f64::NAN
+            };
+            (medslope, low, high)
+        }
+        let mut state: u64 = 0xc0ffee_1234_5678;
+        let mut next = |g: u64| {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let v = (state >> 11) as f64 / (1u64 << 53) as f64;
+            if g == 0 {
+                v * 50.0
+            } else {
+                (v * g as f64).floor()
+            }
+        };
+        for &n in &[2usize, 3, 12, 60] {
+            for &grid in &[0u64, 4, 10] {
+                for &alpha in &[0.95f64, 0.9] {
+                    let x: Vec<f64> = (0..n).map(|_| next(grid)).collect();
+                    let y: Vec<f64> = (0..n).map(|_| next(grid)).collect();
+                    let r = theilslopes(&x, &y, alpha);
+                    let (ms, lo, hi) = full_sort_ci(&x, &y, alpha);
+                    let num_eq = |a: f64, b: f64| a == b || (a.is_nan() && b.is_nan());
+                    assert!(num_eq(r.slope, ms), "slope n={n} grid={grid}");
+                    assert!(num_eq(r.low_slope, lo), "low n={n} grid={grid}");
+                    assert!(num_eq(r.high_slope, hi), "high n={n} grid={grid}");
+                }
+            }
+        }
     }
 
     #[test]
