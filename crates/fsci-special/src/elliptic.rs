@@ -396,7 +396,13 @@ fn ellipkinc_scalar(phi: f64, m: f64, mode: RuntimeMode) -> Result<f64, SpecialE
     if phi.is_nan() || m.is_nan() {
         return Ok(f64::NAN);
     }
-    if !(0.0..=1.0).contains(&m) {
+    if m > 1.0 {
+        return domain_error("ellipkinc", mode, "m must be in [0, 1]");
+    }
+    // m < 0 is valid (scipy.special.ellipkinc accepts it): the Carlson R_F form
+    // F = sinφ·R_F(cos²φ, 1-m·sin²φ, 1) stays well-defined (1-m·sin²φ > 0) and the
+    // periodicity term uses K(m<0), now supported. Hardened stays conservative.
+    if m < 0.0 && mode == RuntimeMode::Hardened {
         return domain_error("ellipkinc", mode, "m must be in [0, 1]");
     }
     if m >= 1.0 && mode == RuntimeMode::Hardened {
@@ -550,7 +556,13 @@ fn ellipeinc_scalar(phi: f64, m: f64, mode: RuntimeMode) -> Result<f64, SpecialE
     if phi.is_nan() || m.is_nan() {
         return Ok(f64::NAN);
     }
-    if !(0.0..=1.0).contains(&m) {
+    if m > 1.0 {
+        return domain_error("ellipeinc", mode, "m must be in [0, 1]");
+    }
+    // m < 0 is valid (scipy.special.ellipeinc accepts it): the Carlson form
+    // E = R_F - (m/3)·sin³φ·R_D(cos²φ, 1-m·sin²φ, 1) stays well-defined and the
+    // periodicity term uses E(m<0), now supported. Hardened stays conservative.
+    if m < 0.0 && mode == RuntimeMode::Hardened {
         return domain_error("ellipeinc", mode, "m must be in [0, 1]");
     }
     if phi == 0.0 {
@@ -3277,6 +3289,33 @@ mod tests {
         for (m, expected) in ellipe_cases {
             let got = ellipe_scalar(m, RuntimeMode::Strict).expect("ellipe(neg m)");
             assert_close(got, expected, 1e-12, &format!("ellipe({m})"));
+        }
+    }
+
+    #[test]
+    fn ellipkinc_ellipeinc_negative_m_match_scipy() {
+        // Incomplete elliptic integrals accept negative m in scipy; we previously
+        // fail-closed. The Carlson forms already handle m<0; the periodicity term
+        // uses the now-supported K(m<0)/E(m<0). Includes phi>π/2 (periodicity).
+        let kinc = [
+            (0.7, -0.5, 0.6763102040712793_f64),
+            (1.2, -2.0, 0.9540256933864918),
+            (2.5, -3.0, 1.5990904596280129),
+            (0.7, -8.0, 0.5142051636884055),
+        ];
+        for (phi, m, expected) in kinc {
+            let got = ellipkinc_scalar(phi, m, RuntimeMode::Strict).expect("ellipkinc(neg m)");
+            assert_close(got, expected, 1e-11, &format!("ellipkinc({phi},{m})"));
+        }
+        let einc = [
+            (0.7, -0.5, 0.7251349471673342_f64),
+            (1.2, -2.0, 1.551875519436463),
+            (2.5, -3.0, 4.095897935543082),
+            (0.7, -8.0, 1.0069768195814057),
+        ];
+        for (phi, m, expected) in einc {
+            let got = ellipeinc_scalar(phi, m, RuntimeMode::Strict).expect("ellipeinc(neg m)");
+            assert_close(got, expected, 1e-11, &format!("ellipeinc({phi},{m})"));
         }
     }
 
