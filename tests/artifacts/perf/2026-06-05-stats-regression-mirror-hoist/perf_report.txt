@@ -1,0 +1,37 @@
+perf: fsci-stats multiple_regression — hoist symmetric mirror out of the sample loop + reuse buffer
+===================================================================================================
+
+Target : crates/fsci-stats/src/lib.rs :: multiple_regression (the X^T X / X^T y normal-equations build).
+Lever  : The build accumulated the upper triangle of X^T X but ALSO mirrored each entry to the
+         lower triangle INSIDE the per-sample loop (`xtx[k][j] = xtx[j][k]` for every sample) —
+         O(n·p²) redundant, cache-scattered writes (the mirror target lives in a different matrix
+         row than the accumulator). It also allocated a fresh `row` Vec per sample. Fix: accumulate
+         the upper triangle only, reuse one row buffer, and mirror to the lower triangle ONCE after
+         the loop. Different lever from the recent partial-select work (redundant-work / cache
+         elimination, not selection).
+
+Isomorphism proof (byte-identical)
+----------------------------------
+- The accumulation operands and order are unchanged: xtx[j][k] += row[j]*row[k] over samples i=0..n,
+  j<=k, in the same order; xty[j] += row[j]*y[i] identical. Removing the in-loop mirror changes
+  nothing about the final upper-triangle values (the lower triangle is never READ during
+  accumulation), and the single post-loop mirror copies those exact values. Reusing the row buffer
+  (`row[1..].copy_from_slice(&x[i][..p])`, row[0] stays 1.0) produces the same row[j] values as the
+  old `[1.0] ++ x[i]`. So X^T X and X^T y are bit-for-bit identical => beta, residuals, r², and
+  std_errors (all downstream of solve_regression_system) are byte-identical.
+- Empirically: 0 mismatches / 2000 random regression problems (n in [2,81], p in [1,12]); the full
+  X^T X and X^T y matrices compared via .to_bits() between a verbatim copy of the original build and
+  the new build.
+- Golden payload sha256 (per-trial digest of the full library output: coeffs+residuals+r²+std_errors):
+    3088a347a6c7354c784bec8839b8def1940b76dac6871d16755acb18fac952d5  golden_payload.txt
+
+Timing (same-process A/B, release, mean of 3; X^T X / X^T y build, all-ones design)
+-----------------------------------------------------------------------------------
+  n=200000 p=24  old=146.474 ms  new= 59.351 ms  ratio= 2.5x
+  n=100000 p=48  old=290.559 ms  new=110.885 ms  ratio= 2.6x
+  n= 50000 p=80  old=388.912 ms  new=165.771 ms  ratio= 2.3x
+
+Score: Impact 3 x Confidence 5 / Effort 1 = 15  (>> 2.0)
+
+clippy + fmt clean. (No multiple_regression-specific unit tests exist; the build byte-identity vs a
+verbatim original is the proof.)

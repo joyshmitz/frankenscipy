@@ -35094,18 +35094,26 @@ pub fn multiple_regression(x: &[Vec<f64>], y: &[f64]) -> (Vec<f64>, Vec<f64>, f6
     let mut xtx = vec![vec![0.0; p1]; p1];
     let mut xty = vec![0.0; p1];
 
+    // Accumulate only the upper triangle of XtX (symmetric), reusing one row
+    // buffer instead of allocating per sample, and mirror to the lower triangle
+    // ONCE after the loop. Previously the mirror ran inside the n-loop, doing
+    // O(n·p²) redundant scattered writes; the final XtX/Xty (and hence beta,
+    // residuals, everything downstream) are byte-identical — the accumulation
+    // order and operands are unchanged.
+    let mut row = vec![1.0; p1]; // row[0] is the intercept, stays 1.0
     for i in 0..n {
-        let mut row = vec![1.0]; // intercept
-        row.extend_from_slice(&x[i]);
-
+        row[1..].copy_from_slice(&x[i][..p]);
         for j in 0..p1 {
             xty[j] += row[j] * y[i];
             for k in j..p1 {
                 xtx[j][k] += row[j] * row[k];
-                if k != j {
-                    xtx[k][j] = xtx[j][k];
-                }
             }
+        }
+    }
+    #[allow(clippy::needless_range_loop)]
+    for j in 0..p1 {
+        for k in (j + 1)..p1 {
+            xtx[k][j] = xtx[j][k];
         }
     }
 
