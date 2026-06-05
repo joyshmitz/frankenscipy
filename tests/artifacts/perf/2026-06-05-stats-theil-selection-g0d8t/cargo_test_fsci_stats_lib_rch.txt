@@ -1,0 +1,2169 @@
+  [2m2026-06-05T16:39:59.812157Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mSelected worker: ts1 at ubuntu@192.168.1.107 (18 slots remaining after reservation, speed 50.0)[0m
+    [2;3mat[0m rch/src/hook.rs:514 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:00.111861Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mStarting remote compilation pipeline for frankenscipy (hash: 89a6ab7f74c7b48d)[0m
+    [2;3mat[0m rch/src/hook.rs:5987 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:00.111911Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mPrepared dependency sync manifest for 20 roots[0m
+    [2;3mat[0m rch/src/hook.rs:6009 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:00.799862Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mSyncing project to worker ts1...[0m
+    [2;3mat[0m rch/src/hook.rs:6039 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:00.799927Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy -> /data/projects/frankenscipy on ts1[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:01.347972Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 548ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:01.348045Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-arrayapi -> /data/projects/frankenscipy/crates/fsci-arrayapi on ts1[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:01.582297Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 234ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:01.582414Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-cluster -> /data/projects/frankenscipy/crates/fsci-cluster on ts1[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:01.806663Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 224ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:01.806790Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-conformance -> /data/projects/frankenscipy/crates/fsci-conformance on ts1[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:02.323035Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 516ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:02.323106Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-constants -> /data/projects/frankenscipy/crates/fsci-constants on ts1[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:02.549961Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 226ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:02.550043Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-datasets -> /data/projects/frankenscipy/crates/fsci-datasets on ts1[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:02.790025Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 239ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:02.790099Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-fft -> /data/projects/frankenscipy/crates/fsci-fft on ts1[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:03.006789Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 216ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:03.006924Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-integrate -> /data/projects/frankenscipy/crates/fsci-integrate on ts1[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:03.222607Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 215ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:03.222680Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-interpolate -> /data/projects/frankenscipy/crates/fsci-interpolate on ts1[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:03.451003Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 228ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:03.451075Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-io -> /data/projects/frankenscipy/crates/fsci-io on ts1[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:03.676226Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 225ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:03.676313Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-linalg -> /data/projects/frankenscipy/crates/fsci-linalg on ts1[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:03.900488Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 224ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:03.900576Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-ndimage -> /data/projects/frankenscipy/crates/fsci-ndimage on ts1[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:04.121477Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 220ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:04.121550Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-odr -> /data/projects/frankenscipy/crates/fsci-odr on ts1[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:04.349828Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 228ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:04.349936Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-opt -> /data/projects/frankenscipy/crates/fsci-opt on ts1[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:04.573665Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 223ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:04.573747Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-runtime -> /data/projects/frankenscipy/crates/fsci-runtime on ts1[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:04.801792Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 228ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:04.801865Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-signal -> /data/projects/frankenscipy/crates/fsci-signal on ts1[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:05.038359Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 236ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:05.038454Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-sparse -> /data/projects/frankenscipy/crates/fsci-sparse on ts1[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:05.265659Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 227ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:05.265773Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-spatial -> /data/projects/frankenscipy/crates/fsci-spatial on ts1[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:05.485310Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 219ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:05.485416Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-special -> /data/projects/frankenscipy/crates/fsci-special on ts1[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:05.706539Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 221ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:05.706619Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-stats -> /data/projects/frankenscipy/crates/fsci-stats on ts1[0m
+    [2;3mat[0m rch/src/transfer.rs:1400 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:05.934780Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 228ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1469 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:05.934824Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mSync complete: 26110 files, 935196 bytes in 5125ms[0m
+    [2;3mat[0m rch/src/hook.rs:6202 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:09.180771Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mExecuting command remotely: cargo test -p fsci-stats --lib --locked -- --nocapture[0m
+    [2;3mat[0m rch/src/hook.rs:6240 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-05T16:40:09.180826Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mRewriting CARGO_TARGET_DIR for remote execution (worker-scoped path): /data/tmp/cargo-target -> /data/projects/frankenscipy/.rch-target-ts1-job-29872254800109336-1780677600799854036-0[0m
+    [2;3mat[0m rch/src/transfer.rs:712 [2;3mon[0m ThreadId(1)
+
+Warning: Identity file /home/ubuntu/.ssh/id_rsa not accessible: No such file or directory.
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded alloca v0.4.0
+  Downloaded arrayref v0.3.9
+  Downloaded bit-set v0.8.0
+  Downloaded approx v0.5.1
+  Downloaded cast v0.3.0
+  Downloaded cfg-if v1.0.4
+  Downloaded ciborium-ll v0.2.2
+  Downloaded ciborium-io v0.2.2
+  Downloaded anes v0.1.6
+  Downloaded arrayvec v0.7.6
+  Downloaded autocfg v1.5.0
+  Downloaded clap_lex v1.1.0
+  Downloaded anstyle v1.0.14
+  Downloaded errno v0.3.14
+  Downloaded constant_time_eq v0.4.2
+  Downloaded fastrand v2.4.1
+  Downloaded find-msvc-tools v0.1.9
+  Downloaded bit-vec v0.8.0
+  Downloaded ciborium v0.2.2
+  Downloaded bitflags v2.11.1
+  Downloaded chacha20 v0.10.0
+  Downloaded bytemuck v1.25.0
+  Downloaded rawpointer v0.2.1
+  Downloaded tempfile v3.27.0
+  Downloaded plotters-svg v0.3.7
+  Downloaded clap v4.6.1
+  Downloaded rand_core v0.10.1
+  Downloaded rand_core v0.9.5
+  Downloaded same-file v1.0.6
+  Downloaded num-rational v0.4.2
+  Downloaded quote v1.0.45
+  Downloaded num-complex v0.4.6
+  Downloaded quick-error v1.2.3
+  Downloaded plotters-backend v0.3.7
+  Downloaded ppv-lite86 v0.2.21
+  Downloaded fnv v1.0.7
+  Downloaded rand_xorshift v0.4.0
+  Downloaded crossbeam-deque v0.8.6
+  Downloaded rand_chacha v0.9.0
+  Downloaded equivalent v1.0.2
+  Downloaded page_size v0.6.0
+  Downloaded num-integer v0.1.46
+  Downloaded itoa v1.0.18
+  Downloaded cpufeatures v0.3.0
+  Downloaded unarray v0.1.4
+  Downloaded nalgebra-macros v0.3.0
+  Downloaded cc v1.2.60
+  Downloaded half v2.7.1
+  Downloaded proc-macro2 v1.0.106
+  Downloaded either v1.15.0
+  Downloaded once_cell v1.21.4
+  Downloaded wait-timeout v0.2.1
+  Downloaded getrandom v0.3.4
+  Downloaded getrandom v0.4.2
+  Downloaded oorandom v11.1.5
+  Downloaded rusty-fork v0.3.1
+  Downloaded paste v1.0.15
+  Downloaded criterion-plot v0.8.2
+  Downloaded shlex v1.3.0
+  Downloaded matrixmultiply v0.3.10
+  Downloaded walkdir v2.5.0
+  Downloaded zmij v1.0.21
+  Downloaded crossbeam-epoch v0.9.18
+  Downloaded crossbeam-utils v0.8.21
+  Downloaded rayon-core v1.13.0
+  Downloaded tinytemplate v1.2.1
+  Downloaded serde v1.0.228
+  Downloaded num-traits v0.2.19
+  Downloaded safe_arch v0.7.4
+  Downloaded serde_core v1.0.228
+  Downloaded typenum v1.20.0
+  Downloaded memchr v2.8.0
+  Downloaded simba v0.9.1
+  Downloaded unicode-ident v1.0.24
+  Downloaded serde_derive v1.0.228
+  Downloaded rand v0.10.1
+  Downloaded indexmap v2.14.0
+  Downloaded aho-corasick v1.1.4
+  Downloaded num-bigint v0.4.6
+  Downloaded blake3 v1.8.4
+  Downloaded clap_builder v4.6.0
+  Downloaded rand v0.9.4
+  Downloaded glam v0.14.0
+  Downloaded criterion v0.8.2
+  Downloaded glam v0.15.2
+  Downloaded glam v0.16.0
+  Downloaded hashbrown v0.17.0
+  Downloaded itertools v0.13.0
+  Downloaded regex v1.12.3
+  Downloaded wide v0.7.33
+  Downloaded zerocopy-derive v0.8.48
+  Downloaded glam v0.17.3
+  Downloaded glam v0.18.0
+  Downloaded glam v0.19.0
+  Downloaded rayon v1.12.0
+  Downloaded serde_json v1.0.149
+  Downloaded glam v0.20.5
+  Downloaded plotters v0.3.7
+  Downloaded proptest v1.11.0
+  Downloaded glam v0.21.3
+  Downloaded zerocopy v0.8.48
+  Downloaded syn v2.0.117
+  Downloaded glam v0.23.0
+  Downloaded glam v0.22.0
+  Downloaded glam v0.24.2
+  Downloaded regex-syntax v0.8.10
+  Downloaded glam v0.25.0
+  Downloaded rustix v1.1.4
+  Downloaded nalgebra v0.34.2
+  Downloaded glam v0.27.0
+  Downloaded glam v0.28.0
+  Downloaded glam v0.29.3
+  Downloaded regex-automata v0.4.14
+  Downloaded glam v0.30.10
+  Downloaded glam v0.32.1
+  Downloaded glam v0.31.1
+  Downloaded libc v0.2.185
+  Downloaded linux-raw-sys v0.12.1
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.45
+   Compiling unicode-ident v1.0.24
+   Compiling cfg-if v1.0.4
+   Compiling autocfg v1.5.0
+   Compiling libc v0.2.185
+   Compiling find-msvc-tools v0.1.9
+   Compiling shlex v1.3.0
+   Compiling serde_core v1.0.228
+   Compiling serde v1.0.228
+   Compiling zmij v1.0.21
+   Compiling serde_json v1.0.149
+   Compiling zerocopy v0.8.48
+   Compiling hashbrown v0.17.0
+   Compiling equivalent v1.0.2
+   Compiling itoa v1.0.18
+   Compiling cpufeatures v0.3.0
+   Compiling memchr v2.8.0
+   Compiling rand_core v0.10.1
+   Compiling getrandom v0.3.4
+   Compiling getrandom v0.4.2
+   Compiling crossbeam-utils v0.8.21
+   Compiling arrayref v0.3.9
+   Compiling bytemuck v1.25.0
+   Compiling paste v1.0.15
+   Compiling arrayvec v0.7.6
+   Compiling constant_time_eq v0.4.2
+   Compiling rustix v1.1.4
+   Compiling regex-syntax v0.8.10
+   Compiling rayon-core v1.13.0
+   Compiling bitflags v2.11.1
+   Compiling linux-raw-sys v0.12.1
+   Compiling rawpointer v0.2.1
+   Compiling either v1.15.0
+   Compiling ciborium-io v0.2.2
+   Compiling anstyle v1.0.14
+   Compiling clap_lex v1.1.0
+   Compiling typenum v1.20.0
+   Compiling plotters-backend v0.3.7
+   Compiling fastrand v2.4.1
+   Compiling once_cell v1.21.4
+   Compiling fnv v1.0.7
+   Compiling quick-error v1.2.3
+   Compiling bit-vec v0.8.0
+   Compiling same-file v1.0.6
+   Compiling cast v0.3.0
+   Compiling anes v0.1.6
+   Compiling oorandom v11.1.5
+   Compiling unarray v0.1.4
+   Compiling cc v1.2.60
+   Compiling num-traits v0.2.19
+   Compiling matrixmultiply v0.3.10
+   Compiling chacha20 v0.10.0
+   Compiling safe_arch v0.7.4
+   Compiling plotters-svg v0.3.7
+   Compiling walkdir v2.5.0
+   Compiling itertools v0.13.0
+   Compiling clap_builder v4.6.0
+   Compiling bit-set v0.8.0
+   Compiling indexmap v2.14.0
+   Compiling wide v0.7.33
+   Compiling crossbeam-epoch v0.9.18
+   Compiling syn v2.0.117
+   Compiling blake3 v1.8.4
+   Compiling crossbeam-deque v0.8.6
+   Compiling alloca v0.4.0
+   Compiling approx v0.5.1
+   Compiling num-complex v0.4.6
+   Compiling num-integer v0.1.46
+   Compiling plotters v0.3.7
+   Compiling wait-timeout v0.2.1
+   Compiling page_size v0.6.0
+   Compiling rand_core v0.9.5
+   Compiling rand v0.10.1
+   Compiling num-rational v0.4.2
+   Compiling rand_xorshift v0.4.0
+   Compiling rand v0.9.4
+   Compiling rayon v1.12.0
+   Compiling criterion-plot v0.8.2
+   Compiling regex-automata v0.4.14
+   Compiling simba v0.9.1
+   Compiling tempfile v3.27.0
+   Compiling clap v4.6.1
+   Compiling rusty-fork v0.3.1
+   Compiling regex v1.12.3
+   Compiling serde_derive v1.0.228
+   Compiling zerocopy-derive v0.8.48
+   Compiling nalgebra-macros v0.3.0
+   Compiling nalgebra v0.34.2
+   Compiling fsci-runtime v0.1.0 (/data/projects/frankenscipy/crates/fsci-runtime)
+   Compiling tinytemplate v1.2.1
+   Compiling fsci-fft v0.1.0 (/data/projects/frankenscipy/crates/fsci-fft)
+   Compiling fsci-opt v0.1.0 (/data/projects/frankenscipy/crates/fsci-opt)
+   Compiling half v2.7.1
+   Compiling ppv-lite86 v0.2.21
+   Compiling ciborium-ll v0.2.2
+   Compiling rand_chacha v0.9.0
+   Compiling ciborium v0.2.2
+   Compiling proptest v1.11.0
+   Compiling criterion v0.8.2
+   Compiling fsci-linalg v0.1.0 (/data/projects/frankenscipy/crates/fsci-linalg)
+   Compiling fsci-special v0.1.0 (/data/projects/frankenscipy/crates/fsci-special)
+   Compiling fsci-stats v0.1.0 (/data/projects/frankenscipy/crates/fsci-stats)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 23.68s
+     Running unittests src/lib.rs (.rch-target-ts1-job-29872254800109336-1780677600799854036-0/debug/deps/fsci_stats-0022ef2b7c8e5eec)
+
+running 1719 tests
+
+thread '<unnamed>' (163557) panicked at crates/fsci-stats/src/audit.rs:89:17:
+poison the ledger on purpose
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test qmc::tests::discrepancy_empty_sample_is_leading_constant ... ok
+test qmc::tests::discrepancy_lhs_is_lower_than_random_offset_1d ... ok
+test qmc::tests::discrepancy_rejects_misshaped_sample ... ok
+test qmc::tests::discrepancy_metamorphic_halton_beats_uniform_grid_2d ... ok
+test qmc::tests::discrepancy_rejects_zero_dimension ... ok
+test qmc::tests::geometric_discrepancy_validates_inputs ... ok
+test qmc::tests::discrepancy_rejects_out_of_range_value ... ok
+test qmc::tests::geometric_discrepancy_matches_scipy_halton_2d ... ok
+test audit::tests::record_after_poison_still_lands_in_ledger ... ok
+test qmc::tests::halton_construct_rejects_zero_dimension ... ok
+test qmc::tests::halton_construct_rejects_excess_dimension ... ok
+test qmc::tests::halton_4d_specialization_matches_generic_reference_bits ... ok
+test qmc::tests::halton_dimension_query ... ok
+test qmc::tests::halton_index_advances_with_each_sample ... ok
+test qmc::tests::halton_metamorphic_reset_replays_prefix ... ok
+test qmc::tests::halton_sample_first_2d_canonical ... ok
+test qmc::tests::halton_metamorphic_low_discrepancy_beats_uniform ... ok
+test qmc::tests::l2_star_empty_sample_is_sqrt_one_third_to_d ... ok
+test qmc::tests::halton_sample_in_unit_hypercube ... ok
+test qmc::tests::halton_metamorphic_skip_equivalent_to_consume ... ok
+test qmc::tests::l2_star_metamorphic_single_corner_point ... ok
+test qmc::tests::l2_star_rejects_invalid_inputs ... ok
+test qmc::tests::lhs_construct_rejects_zero_dimension ... ok
+test qmc::tests::l2_star_metamorphic_halton_beats_corner_clustered_2d ... ok
+test qmc::tests::lhs_metamorphic_one_per_stratum_centered ... ok
+test qmc::tests::lhs_metamorphic_distinct_seeds_diverge ... ok
+test qmc::tests::lhs_metamorphic_seed_reproducibility ... ok
+test qmc::tests::lhs_randomized_in_unit_hypercube ... ok
+test qmc::tests::lhs_randomized_one_per_stratum_invariant ... ok
+test qmc::tests::lhs_zero_samples_returns_empty_design ... ok
+test qmc::tests::mixture_empty_sample_is_leading_constant ... ok
+test qmc::tests::mixture_metamorphic_single_point_at_center ... ok
+test qmc::tests::mixture_metamorphic_halton_beats_aligned_2d ... ok
+test qmc::tests::mixture_rejects_invalid_inputs ... ok
+test qmc::tests::poisson_disk_rejects_invalid_radius ... ok
+test qmc::tests::qmc_engine_trait_dispatches_halton_and_sobol ... ok
+test qmc::tests::scale_metamorphic_inverse_recovers_unit ... ok
+test qmc::tests::poisson_disk_samples_are_separated_and_reproducible ... ok
+test qmc::tests::scale_identity_with_unit_bounds ... ok
+test qmc::tests::scale_preserves_scipy_nan_propagation ... ok
+test qmc::tests::scale_rejects_coordinates_outside_unit_hypercube ... ok
+test qmc::tests::scale_rejects_mismatched_bounds ... ok
+test qmc::tests::scale_rejects_inverted_bounds ... ok
+test qmc::tests::scale_zero_width_bound_is_collapsed_dimension ... ok
+test qmc::tests::sobol_2d_incremental_matches_direct_bits ... ok
+test qmc::tests::sobol_cached_direction_bits_match_recurrence ... ok
+test qmc::tests::sobol_construct_rejects_unsupported_dimensions ... ok
+test qmc::tests::sobol_digital_shift_is_reproducible_and_bounded ... ok
+test qmc::tests::sobol_metamorphic_skip_equivalent_to_consume ... ok
+test qmc::tests::sobol_multidim_matches_scipy_unscrambled_reference ... ok
+test qmc::tests::sobol_sample_first_2d_canonical ... ok
+test qmc::tests::update_centered_disc_matches_scipy ... ok
+test qmc::tests::update_centered_disc_rejects_dimension_mismatch ... ok
+test qmc::tests::update_centered_disc_singleton_starts_from_empty ... ok
+test qmc::tests::wraparound_empty_sample_is_negative_leading_constant ... ok
+test qmc::tests::wraparound_metamorphic_invariant_under_cyclic_shift ... ok
+test qmc::tests::wraparound_metamorphic_single_point_closed_form ... ok
+test tests::accuracy_score_matches_scipy_reference_values ... ok
+test qmc::tests::wraparound_metamorphic_halton_beats_aligned_points ... ok
+test tests::acf_matches_scipy_reference_values ... ok
+test tests::acf_centered_form_matches_naive_recompute ... ok
+test qmc::tests::wraparound_rejects_invalid_inputs ... ok
+test tests::adjusted_r_squared_less_than_r2 ... ok
+test tests::adjusted_r_squared_matches_scipy_reference_values ... ok
+test tests::agresti_coull_reasonable_bounds ... ok
+test tests::aic_matches_scipy_reference_values ... ok
+test tests::alexander_govern_matches_scipy_reference_values ... ok
+test tests::alexandergovern_identical_groups_statistic_is_zero ... ok
+test tests::alexandergovern_too_few_groups_returns_nan ... ok
+test tests::alexandergovern_two_balanced_groups_match_closed_form ... ok
+test tests::alexandergovern_well_separated_groups_have_low_pvalue ... ok
+test tests::alpha_mean_var_are_infinite ... ok
+test tests::alpha_pdf_cdf_match_scipy_reference_values ... ok
+test tests::alpha_ppf_roundtrip_matches_quantiles ... ok
+test tests::alpha_skewness_and_kurtosis_are_nan_for_all_a ... ok
+test tests::anderson_ksamp_matches_scipy_reference_values ... ok
+test tests::anderson_matches_scipy_reference_values ... ok
+test tests::anderson_ksamp_rejects_invalid_input ... ok
+test tests::anderson_ksamp_continuous_caps_high_pvalue_like_scipy ... ok
+test tests::anderson_ksamp_midrank_matches_scipy_oracle ... ok
+test tests::anderson_nonnormal_data ... ok
+test tests::anderson_returns_valid_results ... ok
+test tests::anderson_significance_levels ... ok
+test tests::anderson_unsupported_dist ... ok
+test tests::anglit_higher_moments_match_scipy ... ok
+test tests::anglit_mean_and_variance_match_closed_form ... ok
+test tests::anderson_normal_data ... ok
+test tests::anglit_pdf_cdf_match_closed_form ... ok
+test tests::anglit_ppf_inverts_cdf_on_grid ... ok
+test tests::ansari_empty_returns_nan ... ok
+test tests::ansari_handles_ties_with_reasonable_pvalue ... ok
+test tests::ansari_matches_scipy_reference_values ... ok
+test tests::ansari_same_samples_match_scipy_oracle ... ok
+test tests::ansari_scale_difference_pushes_pvalue_down ... ok
+test tests::arcsine_cdf_known_values ... ok
+test tests::arcsine_cdf_matches_scipy_reference_values ... ok
+test tests::arcsine_higher_moments_match_scipy ... ok
+test tests::arcsine_mean_var ... ok
+test tests::arcsine_pdf_at_half ... ok
+test tests::arcsine_ppf_roundtrip ... ok
+test tests::arcsine_pdf_boundaries ... ok
+test tests::balanced_accuracy_score_matches_scipy_reference_values ... ok
+test tests::bartlett_detects_different_variances ... ok
+test tests::bartlett_equal_variance_groups ... ok
+test tests::bayes_mvs_edge_cases ... ok
+test tests::bayes_mvs_basic ... ok
+test tests::bayes_mvs_interval_coverage ... ok
+test tests::bayes_mvs_matches_scipy_jeffreys_posterior ... ok
+test tests::arcsine_pdf_boundaries_match_scipy ... ok
+test tests::bartlett_matches_scipy_reference_values ... ok
+test tests::bernoulli_basic ... ok
+test tests::bernoulli_cdf ... ok
+test tests::beta_cdf_matches_scipy_reference_values ... ok
+test tests::beta_dist_cdf_bounds ... ok
+test tests::beta_dist_mean_var ... ok
+test tests::bayes_mvs_variance_positive ... ok
+test tests::beta_dist_pdf_support ... ok
+test tests::beta_dist_symmetry ... ok
+test tests::beta_entropy_matches_scipy_reference_values ... ok
+test tests::beta_dist_uniform_special_case ... ok
+test tests::betaprime_truncexpon_truncpareto_entropy_match_scipy ... ok
+test tests::bhattacharyya_distance_matches_scipy_reference_values ... ok
+test tests::bic_matches_scipy_reference_values ... ok
+test tests::beta_one_one_is_uniform_zero_one ... ok
+test tests::beta_pdf_boundaries_match_scipy ... ok
+test tests::binned_statistic_matches_scipy_reference_values ... ok
+test tests::binomial_cdf_at_n ... ok
+test tests::binomial_known_value ... ok
+test tests::binomial_mean_var ... ok
+test tests::betaprime_ppf_matches_scipy_reference_values ... ok
+test tests::binomial_p0_all_at_zero ... ok
+test tests::betaprime_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::betaprime_is_beta_under_x_over_one_plus_x ... ok
+test tests::binomial_p1_all_at_n ... ok
+test tests::binomial_pmf_sums_to_one ... ok
+test tests::binomtest_all_successes ... ok
+test tests::binomtest_edge_cases ... ok
+test tests::binomtest_biased_coin ... ok
+test tests::binomtest_matches_scipy_reference_values ... ok
+test tests::binomtest_fair_coin ... ok
+test tests::boltzmann_geometric_limit ... ok
+test tests::boltzmann_pmf_cdf_match_scipy ... ok
+test tests::boltzmann_pmf_sums_to_one ... ok
+test tests::boltzmann_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::boltzmann_yulesimon_planck_zipfian_modes ... ok
+test tests::bonferroni_correction ... ok
+test tests::bootstrap_mean_edge_cases ... ok
+test tests::bootstrap_ci_contains_mean ... ok
+test tests::bootstrap_mean_small_sample ... ok
+test tests::bootstrap_mean_returns_valid_ci ... ok
+test tests::bootstrap_mean_skewed_data ... ok
+test tests::boxcox_normmax_negative_data ... ok
+test tests::bootstrap_mean_bca_contains_true_mean ... ok
+test tests::bradford_fit_rejects_mean_at_uniform_limit ... ok
+test tests::bradford_fit_rejects_out_of_interval_data ... ok
+test tests::bradford_fit_recovers_synthetic_shape ... ok
+test tests::bradford_fit_rejects_too_few_samples ... ok
+test tests::bradford_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::boxcox_normmax_matches_internal ... ok
+test tests::braycurtis_distance_matches_scipy_reference_values ... ok
+test tests::brier_score_matches_scipy_reference_values ... ok
+test tests::bradford_fit_metamorphic_idempotence_on_population_mean ... ok
+test tests::brunnermunzel_fully_separated_samples_match_scipy_shape ... ok
+test tests::brunnermunzel_identical_constant_samples_match_scipy_shape ... ok
+test tests::boxcox_optimal_lambda ... ok
+test tests::brunnermunzel_matches_scipy_reference_values ... ok
+test tests::boxcox_llf_negative_data ... ok
+test tests::brunnermunzel_tied_samples_match_scipy_oracle ... ok
+test tests::burr12_pdf_boundary_matches_scipy ... ok
+test tests::burr12_ppf_matches_scipy_reference_values ... ok
+test tests::burr12_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::burr12_skewness_and_kurtosis_nan_at_boundary ... ok
+test tests::boxcox_negative_data_rejected ... ok
+test tests::burr12_variance_matches_scipy_reference_values ... ok
+test tests::boxcox_llf_optimal_is_max ... ok
+test tests::burr12_variance_returns_nan_at_boundary_or_below ... ok
+test tests::burr3_inverse_relation_with_burr12 ... ok
+test tests::burr3_mean_var_match_scipy ... ok
+test tests::burr3_pdf_cdf_match_scipy ... ok
+test tests::burr3_ppf_inverts_cdf ... ok
+test tests::burr3_ppf_matches_scipy_anchor ... ok
+test tests::burr3_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::boxcox_llf_matches_scipy_reference_values ... ok
+test tests::boxcox_matches_scipy_reference_values ... ok
+test tests::cauchy_halfcauchy_levy_levyleft_erlang_entropy_match_scipy ... ok
+test tests::betaprime_skewness_and_kurtosis_nan_at_boundary ... ok
+test tests::bradford_closed_form_anchors ... ok
+test tests::cauchy_mean_is_nan ... ok
+test tests::cauchy_cdf_matches_scipy_reference_values ... ok
+test tests::cauchy_pdf_at_loc ... ok
+test tests::boxcox_lambda_1_is_linear ... ok
+test tests::cauchy_ppf_roundtrip ... ok
+test tests::boxcox_lambda_0_is_log ... ok
+test tests::cauchy_sf_preserves_deep_tail_precision ... ok
+test tests::chatterjeexi_edge_cases ... ok
+test tests::burr3_skewness_and_kurtosis_nan_at_boundary ... ok
+test tests::chatterjeexi_functional_relationship ... ok
+test tests::chi2_contingency_2x2_dependent ... ok
+test tests::chi2_contingency_2x2_known ... ok
+test tests::chi2_contingency_2x2_uncorrected_matches_scipy_reference ... ok
+test tests::chi2_contingency_3x3 ... ok
+test tests::boxcox_llf_empty ... ok
+test tests::chi2_contingency_empty_rejected ... ok
+test tests::chi2_contingency_expected_frequencies ... ok
+test tests::chi2_contingency_matches_scipy_reference_values ... ok
+test tests::chi2_contingency_yates_matches_scipy_reference_values ... ok
+test tests::chi2_mean_var ... ok
+test tests::chi2_pdf_positive_only ... ok
+test tests::chi2_ppf_via_trait ... ok
+test tests::chi_df1_is_half_normal ... ok
+test tests::chi_dist_cdf ... ok
+test tests::chi_entropy_matches_scipy_reference_values ... ok
+test tests::chi_fit_e_x_sq_equals_df ... ok
+test tests::chi_fit_rejects_too_few_samples ... ok
+test tests::chi_fit_rejects_zero_data ... ok
+test tests::chi_fit_rejects_negative_observation ... ok
+test tests::chi_squared_df2_is_exponential_scale_2 ... ok
+test tests::chi_squared_entropy_matches_scipy_reference_values ... ok
+test tests::chisquare_matches_scipy_reference_values ... ok
+test tests::chisquare_perfect_fit_returns_zero_stat_and_unit_p ... ok
+test tests::chisquare_pinned_reference_value ... ok
+test tests::chisquare_skewed ... ok
+test tests::chisquare_uniform ... ok
+test tests::circmean_matches_scipy_reference_values ... ok
+test tests::circstd_matches_scipy_reference_values ... ok
+test tests::circular_stats_metamorphic_known_distributions ... ok
+test tests::circvar_matches_scipy_reference_values ... ok
+test tests::boxcox_normmax_empty ... ok
+test tests::canberra_distance_matches_scipy_reference_values ... ok
+test tests::cauchy_cdf_at_loc ... ok
+test tests::boxcox_normmax_custom_bracket ... ok
+test tests::boxcox_llf_lambda0 ... ok
+test tests::boxcox_llf_lambda1 ... ok
+test tests::cauchy_cdf_known ... ok
+test tests::burr12_entropy_matches_scipy_reference_values ... ok
+test tests::barnard_exact_alternative_less ... ok
+test tests::chatterjeexi_monotonic ... ok
+test tests::chebyshev_distance_matches_scipy_reference_values ... ok
+test tests::cityblock_distance_matches_scipy_reference_values ... ok
+test tests::cliff_delta_complete_separation ... ok
+test tests::cliff_delta_no_effect ... ok
+test tests::cliff_delta_reversed_separation ... ok
+test tests::clopper_pearson_edge_cases ... ok
+test tests::cochrans_q_basic ... ok
+test tests::chi2_cdf_at_zero ... ok
+test tests::cochrans_q_different_columns ... ok
+test tests::cochrans_q_empty ... ok
+test tests::clopper_pearson_contains_true ... ok
+test tests::cochrans_q_identical_columns ... ok
+test tests::chi2_cdf_known ... ok
+test tests::cohens_d_different_means ... ok
+test tests::cohens_d_identical_groups ... ok
+test tests::cohens_d_matches_scipy_reference_values ... ok
+test tests::cohens_kappa_chance_agreement ... ok
+test tests::cohens_kappa_matches_scipy_reference_values ... ok
+test tests::cohens_kappa_no_agreement ... ok
+test tests::cohens_kappa_perfect_agreement ... ok
+test tests::chi2_cdf_matches_scipy_reference_values ... ok
+test tests::correlation_distance_matches_scipy_reference_values ... ok
+test tests::chatterjeexi_independent_low ... ok
+test tests::cosine_distance_matches_scipy_reference_values ... ok
+test tests::cosine_higher_moments_match_scipy ... ok
+test tests::combine_pvalues_fisher_matches_closed_form ... ok
+test tests::cosine_mean_and_variance_match_closed_form ... ok
+test tests::cosine_pdf_cdf_match_closed_form ... ok
+test tests::cosine_ppf_inverts_cdf_on_grid ... ok
+test tests::combine_pvalues_mudholkar_george_basic ... ok
+test tests::count_slopes_le_matches_brute_for_non_razor_decimal_inputs ... ok
+test tests::count_tied_groups_matches_scipy ... ok
+test tests::barnard_exact_alternative_greater ... ok
+test tests::cramers_v_matches_scipy_reference_values ... ok
+test tests::combine_pvalues_mudholkar_george_boundary_cases ... ok
+test tests::cramervonmises_2samp_identical_samples_have_unit_pvalue ... ok
+test tests::cramervonmises_too_few_returns_nan ... ok
+test tests::crystal_ball_divergent_moments_match_scipy_shape ... ok
+test tests::crystal_ball_moments_match_scipy_reference_values ... ok
+test tests::crystal_ball_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::combine_pvalues_pearson_matches_scipy_reference ... ok
+test tests::crystal_ball_skewness_and_kurtosis_nan_at_boundary ... ok
+test tests::combine_pvalues_stouffer_matches_scipy_reference_values ... ok
+test tests::cumprod_closed_form_and_last_equals_product ... ok
+test tests::combine_pvalues_stouffer_supports_weights ... ok
+test tests::cumsum_closed_form_and_last_equals_total ... ok
+test tests::d_to_r_at_zero ... ok
+test tests::d_to_r_roundtrip ... ok
+test tests::describe_basic ... ok
+test tests::describe_matches_scipy_reference_values ... ok
+test tests::describe_right_skewed_data_has_positive_skewness ... ok
+test tests::describe_single_element ... ok
+test tests::combine_pvalues_tippett_matches_scipy_reference_values ... ok
+test tests::describe_skewness_and_kurtosis_match_scipy_reference ... ok
+test tests::combine_pvalues_tippett_uses_smallest_pvalue ... ok
+test tests::cramervonmises_2samp_asymptotic_rejects_shifted_samples ... ok
+test tests::concordance_correlation_matches_scipy_reference_values ... ok
+test tests::count_slopes_le_matches_brute_when_x_ties_or_small_gaps_force_fallback ... ok
+test tests::cramervonmises_2samp_matches_scipy_oracle ... ok
+test tests::chi_fit_synthetic_recovery ... ok
+test tests::cramervonmises_uniform_reference_matches_scipy_oracle ... ok
+test tests::corr_matrix_matches_numpy_reference ... ok
+test tests::continuous_simple_modes_match_pdf_argmax ... ok
+test tests::corrcoef_matches_scipy_reference_values ... ok
+test tests::correlation_ci_contains_true ... ok
+test tests::combine_pvalues_fisher_matches_scipy_reference_values ... ok
+test tests::cosine_try_fit_rejects_out_of_support ... ok
+test tests::cov_matrix_matches_numpy_reference ... ok
+test tests::dist_entropy_cauchy ... ok
+test tests::diff_basic_and_inverse_with_cumsum ... ok
+test tests::dist_entropy_default_returns_nan ... ok
+test tests::differential_entropy_insufficient_data ... ok
+test tests::discrete_sf_complement ... ok
+test tests::dist_entropy_exponential ... ok
+test tests::dist_entropy_gamma ... ok
+test tests::differential_entropy_uniform ... ok
+test tests::dist_entropy_gumbel ... ok
+test tests::differential_entropy_vasicek_estimator ... ok
+test tests::dist_entropy_laplace ... ok
+test tests::differential_entropy_with_base ... ok
+test tests::dist_entropy_logistic ... ok
+test tests::dist_entropy_lognormal ... ok
+test tests::differential_entropy_with_window ... ok
+test tests::dist_entropy_normal ... ok
+test tests::dist_entropy_uniform ... ok
+test tests::directional_stats_empty ... ok
+test tests::dist_entropy_weibull ... ok
+test tests::directional_stats_matches_scipy_reference_values ... ok
+test tests::dist_interval_full ... ok
+test tests::directional_stats_normalize ... ok
+test tests::dist_interval_invalid ... ok
+test tests::dist_interval_normal ... ok
+test tests::dist_interval_symmetric ... ok
+test tests::dist_interval_uniform ... ok
+test tests::dist_interval_zero ... ok
+test tests::dist_kurtosis_beta ... ok
+test tests::dist_kurtosis_chi2 ... ok
+test tests::dist_kurtosis_exponential ... ok
+test tests::dist_kurtosis_gamma ... ok
+test tests::dist_kurtosis_gumbel ... ok
+test tests::dist_kurtosis_laplace ... ok
+test tests::dist_kurtosis_logistic ... ok
+test tests::dist_kurtosis_normal ... ok
+test tests::dist_kurtosis_studentt ... ok
+test tests::dist_kurtosis_uniform ... ok
+test tests::dist_median_cauchy ... ok
+test tests::dist_median_exponential ... ok
+test tests::dist_median_laplace ... ok
+test tests::dist_median_normal ... ok
+test tests::dist_median_uniform ... ok
+test tests::dist_mode_cauchy ... ok
+test tests::dist_mode_default_nan ... ok
+test tests::dist_mode_exponential ... ok
+test tests::dist_mode_gamma ... ok
+test tests::dist_mode_gumbel ... ok
+test tests::dist_mode_laplace ... ok
+test tests::dist_mode_logistic ... ok
+test tests::dist_mode_normal ... ok
+test tests::dist_skewness_beta ... ok
+test tests::dist_skewness_chi2 ... ok
+test tests::dist_skewness_exponential ... ok
+test tests::dist_skewness_gamma ... ok
+test tests::dist_skewness_gumbel ... ok
+test tests::dist_skewness_logistic ... ok
+test tests::dist_skewness_lognormal ... ok
+test tests::directional_stats_opposite_directions ... ok
+test tests::dist_skewness_studentt ... ok
+test tests::correlation_ci_wider_for_small_n ... ok
+test tests::dist_skewness_symmetric ... ok
+test tests::directional_stats_uniform_direction ... ok
+test tests::doublegamma_boundary_behavior_and_moments_match_contract ... ok
+test tests::doublegamma_fit_metamorphic_var_identity ... ok
+test tests::doublegamma_fit_rejects_too_few_samples ... ok
+test tests::doublegamma_fit_rejects_zero_data ... ok
+test tests::doublegamma_pdf_cdf_match_scipy_reference_values ... ok
+test tests::argsort_keyed_matches_stable_partial_cmp ... ok
+test tests::doublegamma_ppf_roundtrip_matches_scipy_reference_values ... ok
+test tests::doublegamma_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::doubleweibull_ppf_matches_scipy_reference_values ... ok
+test tests::doubleweibull_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::dunnett_alternative_greater ... ok
+test tests::dunnett_alternative_less ... ok
+test tests::dunnett_empty_inputs ... ok
+test tests::ecdf_matches_scipy_reference ... ok
+test tests::dirichlet_mean_sums_to_one ... ok
+test tests::energy_distance_cross_set_pair_sum_matches_naive ... ok
+test tests::dirichlet_pdf_at_mean ... ok
+test tests::dirichlet_pdf_invalid_x ... ok
+test tests::cramervonmises_pvalue_matches_scipy_across_n ... ok
+test tests::energy_distance_different ... ok
+test tests::energy_distance_empty ... ok
+test tests::energy_distance_identical ... ok
+test tests::energy_distance_matches_scipy_reference_values ... ok
+test tests::energy_distance_nan_input_returns_nan ... ok
+test tests::energy_distance_within_set_pair_sum_matches_naive ... ok
+test tests::entropy_base2 ... ok
+test tests::entropy_deterministic ... ok
+test tests::entropy_matches_scipy_reference_points ... ok
+test tests::entropy_matches_scipy_reference_values ... ok
+test tests::entropy_uniform ... ok
+test tests::epps_singleton_2samp_matches_scipy_reference_values ... ok
+test tests::epps_singleton_invalid_t_is_rejected ... ok
+test tests::epps_singleton_discrete_samples_match_scipy_oracle ... ok
+test tests::epps_singleton_nearby_samples_match_scipy_oracle ... ok
+test tests::epps_singleton_small_sample_returns_nan ... ok
+test tests::epps_singleton_same_samples_match_scipy_oracle ... ok
+test tests::erlang_chi_skew_kurt_match_scipy ... ok
+test tests::erlang_fit_metamorphic_mean_var_consistency ... ok
+test tests::dirichlet_symmetric_equal_mean ... ok
+test tests::discrete_bernoulli_entropy ... ok
+test tests::erlang_fit_rejects_constant_data ... ok
+test tests::erlang_fit_rejects_negative_observation ... ok
+test tests::erlang_fit_rejects_too_few_samples ... ok
+test tests::eta_squared_different_means ... ok
+test tests::erlang_k1_is_exponential ... ok
+test tests::eta_squared_identical_groups ... ok
+test tests::eta_squared_range ... ok
+test tests::euclidean_distance_matches_scipy_reference_values ... ok
+test tests::excess_kurtosis_matches_scipy_reference_values ... ok
+test tests::expectile_empty ... ok
+test tests::expectile_half_equals_mean ... ok
+test tests::expectile_high_alpha ... ok
+test tests::expectile_invalid_alpha ... ok
+test tests::expectile_low_alpha ... ok
+test tests::expectile_matches_scipy_reference_values ... ok
+test tests::explained_variance_score_matches_scipy_reference_values ... ok
+test tests::expnorm_fit_rejects_non_positive_mean ... ok
+test tests::expnorm_fit_rejects_too_few_samples ... ok
+test tests::dirichlet_rvs_sum_to_one ... ok
+test tests::exponential_cdf_known ... ok
+test tests::exponential_cdf_matches_scipy_reference_values ... ok
+test tests::exponential_from_scale ... ok
+test tests::exponential_mean_var ... ok
+test tests::cramervonmises_2samp_matches_scipy_reference_values ... ok
+test tests::discrete_bernoulli_mode ... ok
+test tests::discrete_binomial_skewness_kurtosis ... ok
+test tests::exponential_memoryless_property ... ok
+test tests::exponential_pdf_at_zero ... ok
+test tests::exponential_pdf_negative ... ok
+test tests::exponential_ppf ... ok
+test tests::exponential_sf_plus_cdf ... ok
+test tests::exponnorm_mean_and_variance_match_closed_form ... ok
+test tests::exponnorm_pdf_cdf_match_scipy_reference_values ... ok
+test tests::exponnorm_skew_kurt_match_scipy ... ok
+test tests::exponpow_b1_is_gompertz_c1 ... ok
+test tests::exponpow_pdf_boundary_matches_scipy ... ok
+test tests::exponpow_pdf_cdf_match_scipy ... ok
+test tests::exponpow_ppf_inverts_cdf ... ok
+test tests::exponweib_pdf_boundary_matches_scipy ... ok
+test tests::exponnorm_ppf_roundtrip_matches_scipy_reference_values ... ok
+test tests::f_cdf_basic_properties ... ok
+test tests::f_dist_cdf_at_zero ... ok
+test tests::f_dist_cdf_monotone ... ok
+test tests::f_dist_mean ... ok
+test tests::f_dist_pdf_positive_only ... ok
+test tests::f_dist_ppf_via_trait ... ok
+test tests::f_dist_sf_plus_cdf ... ok
+test tests::f_dist_skew_kurt_match_scipy ... ok
+test tests::f_distribution_entropy_matches_scipy_reference_values ... ok
+test tests::f_oneway_constant_different_groups ... ok
+test tests::f_oneway_constant_identical_groups ... ok
+test tests::f_one_v_cdf_is_studentt_squared ... ok
+test tests::f_oneway_different_means ... ok
+test tests::f_oneway_matches_scipy_reference_values ... ok
+test tests::f_oneway_same_means ... ok
+test tests::f_oneway_too_few_groups ... ok
+test tests::false_discovery_control_bh_matches_existing_helper ... ok
+test tests::false_discovery_control_by_is_more_conservative ... ok
+test tests::false_discovery_control_matches_scipy_reference_values ... ok
+test tests::fatigue_life_cdf_strictly_increasing ... ok
+test tests::fatigue_life_closed_form_anchors ... ok
+test tests::fatiguelife_mean_var_match_closed_form ... ok
+test tests::fatiguelife_pdf_cdf_match_scipy_reference_values ... ok
+test tests::fatigue_life_ppf_cdf_roundtrip ... ok
+test tests::fatiguelife_ppf_roundtrip_matches_quantiles ... ok
+test tests::fatiguelife_skew_kurt_match_scipy ... ok
+test tests::discrete_geometric_stats ... ok
+test tests::fdr_bh_correction ... ok
+test tests::find_repeats_all_same ... ok
+test tests::find_repeats_basic ... ok
+test tests::find_repeats_empty ... ok
+test tests::find_repeats_ignores_nan ... ok
+test tests::find_repeats_negative_values ... ok
+test tests::find_repeats_no_repeats ... ok
+test tests::fisher_exact_dependent_table ... ok
+test tests::fisher_exact_independent_table ... ok
+test tests::fisher_exact_known_value ... ok
+test tests::fisher_exact_zero_cell ... ok
+test tests::fisher_exact_matches_scipy_reference_values ... ok
+test tests::fisher_z_at_zero ... ok
+test tests::fisher_z_inverse_roundtrip ... ok
+test tests::fisher_z_positive ... ok
+test tests::fisk_cdf_ppf ... ok
+test tests::fisk_fit_metamorphic_mean_recovery ... ok
+test tests::fisk_fit_rejects_mean_at_or_below_one ... ok
+test tests::fisk_fit_rejects_negative_observation ... ok
+test tests::fisk_fit_rejects_too_few_samples ... ok
+test tests::fisk_loglogistic_loglaplace_genhalflogistic_bradford_entropy_match_scipy ... ok
+test tests::fisk_pdf_boundary_matches_scipy ... ok
+test tests::fisk_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::fisk_skewness_and_kurtosis_nan_at_boundary ... ok
+test tests::fit_error_maps_to_structured_stats_error ... ok
+test tests::fisk_fit_synthetic_recovery ... ok
+test tests::fast_rank_selection_falls_back_for_unproven_inputs ... ok
+test tests::discrete_negbinomial_stats ... ok
+test tests::doublegamma_fit_recovers_synthetic_shape ... ok
+test tests::barnard_exact_significant_difference ... ok
+test tests::boschloo_exact_empty_row ... ok
+test tests::fit_only_stats_try_fit_rejects_bad_samples ... ok
+test tests::five_distributions_have_closed_form_entropy ... ok
+test tests::discrete_poisson_skewness_kurtosis ... ok
+test tests::discrete_hypergeometric_stats ... ok
+test tests::argus_extreme_chi_values_remain_well_behaved ... ok
+test tests::fligner_equal_variance ... ok
+test tests::fligner_equal_variances ... ok
+test tests::gamma_dist_exponential_special_case ... ok
+test tests::gamma_dist_mean_var ... ok
+test tests::gamma_dist_pdf_positive_only ... ok
+test tests::gamma_entropy_matches_scipy_reference_values ... ok
+test tests::gamma_ppf_via_trait ... ok
+test tests::gaussian_kde_peak_at_data ... ok
+test tests::gaussian_kde_with_bandwidth ... ok
+test tests::gen_extreme_cdf_at_zero_is_exp_neg_one_all_branches ... ok
+test tests::gen_extreme_endpoint_cdf_per_branch ... ok
+test tests::fligner_insufficient_data ... ok
+test tests::gen_extreme_gumbel_case ... ok
+test tests::gen_extreme_gumbel_moments_match_closed_form ... ok
+test tests::erlang_fit_recovers_synthetic_shape ... ok
+test tests::gen_extreme_pdf_cdf_closed_form_reference_values ... ok
+test tests::fligner_matches_scipy_reference_values ... ok
+test tests::gen_extreme_ppf_cdf_roundtrip_all_branches ... ok
+test tests::gen_extreme_skew_kurt_match_scipy ... ok
+test tests::gen_gamma_fit_rejects_invalid_input ... ok
+test tests::fligner_three_groups ... ok
+test tests::fligner_unequal_variances ... ok
+test tests::discrete_logseries_mode ... ok
+test tests::gen_logistic_moments_match_scipy_reference_values ... ok
+test tests::fligner_unequal_variance ... ok
+test tests::gen_logistic_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::gen_pareto_bounded_right_endpoint_for_negative_c ... ok
+test tests::gen_pareto_exponential_limit_moments ... ok
+test tests::gen_pareto_pdf_cdf ... ok
+test tests::gen_pareto_pdf_cdf_at_zero_universal ... ok
+test tests::frechet_r_moments_match_scipy_reference_values ... ok
+test tests::gen_pareto_pdf_cdf_closed_form_reference_values ... ok
+test tests::gen_pareto_ppf_cdf_roundtrip_all_branches ... ok
+test tests::frechet_r_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::generalized_exponential_fit_rejects_invalid_input ... ok
+test tests::genextreme_c0_is_gumbel ... ok
+test tests::friedmanchisquare_identical_groups ... ok
+test tests::genlogistic_fit_metamorphic_recovers_mean ... ok
+test tests::genlogistic_fit_rejects_non_finite_observation ... ok
+test tests::genlogistic_fit_rejects_too_few_samples ... ok
+test tests::friedmanchisquare_matches_scipy_reference_values ... ok
+test tests::gaussian_kde_integrates_to_one ... ok
+test tests::genlogistic_loggamma_entropy_match_scipy ... ok
+test tests::gennorm_fit_metamorphic_var_recovery ... ok
+test tests::gennorm_fit_rejects_too_few_samples ... ok
+test tests::gennorm_fit_rejects_zero_data ... ok
+test tests::gennorm_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::genlogistic_fit_synthetic_recovery ... ok
+test tests::genpareto_entropy_matches_scipy_reference_values ... ok
+test tests::genpareto_fit_metamorphic_mean_inverts_c ... ok
+test tests::genpareto_fit_rejects_negative_observation ... ok
+test tests::genpareto_fit_rejects_too_few_samples ... ok
+test tests::genpareto_fit_rejects_zero_data ... ok
+test tests::fit_gap_moment_and_circular_families_validate_support_and_shapes ... ok
+test tests::genpareto_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::genpareto_skewness_and_kurtosis_nan_at_boundary ... ok
+test tests::geometric_cdf_known ... ok
+test tests::geometric_mean_matches_scipy_reference_values ... ok
+test tests::geometric_mean_var ... ok
+test tests::geometric_pmf_at_zero ... ok
+test tests::genpareto_fit_synthetic_recovery ... ok
+test tests::geometric_pmf_sums_near_one ... ok
+test tests::gibrat_cdf_matches_scipy_reference_values ... ok
+test tests::gamma_cdf_matches_scipy_reference_values ... ok
+test tests::discrete_pmfs_sum_to_one ... ok
+test tests::gilbrat_dweibull_dgamma_gennorm_entropy_match_scipy ... ok
+test tests::gilbrat_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::four_distributions_have_closed_form_skewness ... ok
+test tests::gilbrat_is_lognormal_unit_unit ... ok
+test tests::friedmanchisquare_different_groups ... ok
+test tests::gstd_negative_returns_nan ... ok
+test tests::fourteen_more_continuous_modes_match_pdf_argmax ... ok
+test tests::gini_coefficient_matches_scipy_reference_values ... ok
+test tests::frechet_r_matches_weibull_max ... ok
+test tests::glass_delta_basic ... ok
+test tests::g_test_matches_scipy_reference_values ... ok
+test tests::glass_delta_uses_control_sd ... ok
+test tests::gmean_hmean_match_scipy_reference ... ok
+test tests::gmean_matches_scipy_reference_points ... ok
+test tests::gompertz_entropy_matches_scipy_reference_values ... ok
+test tests::gstd_single_element_returns_nan ... ok
+test tests::gen_half_logistic_moments_match_scipy_reference_values ... ok
+test tests::gompertz_fit_metamorphic_mean_recovery ... ok
+test tests::gumbel_cdf_ppf_roundtrip ... ok
+test tests::gumbel_and_gumbel_left_are_mirrors ... ok
+test tests::gompertz_fit_rejects_negative_observation ... ok
+test tests::gumbel_left_kurtosis_is_constant_12_over_5 ... ok
+test tests::gompertz_fit_rejects_too_few_samples ... ok
+test tests::gumbel_left_mean_and_variance ... ok
+test tests::gumbel_left_pdf_cdf_match_scipy_reference_values ... ok
+test tests::gumbel_left_ppf_roundtrip_matches_quantiles ... ok
+test tests::gumbel_left_sf_preserves_right_tail_precision ... ok
+test tests::gumbel_mean_and_variance ... ok
+test tests::gumbel_r_cdf_matches_scipy_reference_values ... ok
+test tests::gumbel_sf_preserves_right_tail_precision ... ok
+test tests::gompertz_fit_synthetic_recovery ... ok
+test tests::gzscore_invalid_inputs_match_scipy_shape ... ok
+test tests::gzscore_matches_scipy_reference_values ... ok
+test tests::half_cauchy_mean_var_match_scipy_infinity ... ok
+test tests::half_cauchy_pdf_cdf_ppf_roundtrip ... ok
+test tests::half_cauchy_sf_preserves_far_tail_via_arctan_reciprocal ... ok
+test tests::half_gennorm_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::half_logistic_mean_var_match_closed_form ... ok
+test tests::half_logistic_pdf_cdf_ppf_roundtrip ... ok
+test tests::half_normal_pdf_cdf ... ok
+test tests::half_normal_sf_preserves_deep_tail_via_erfc ... ok
+test tests::half_normal_skew_kurt_match_scipy ... ok
+test tests::half_normal_squared_is_chi_squared_df1 ... ok
+test tests::halfcauchy_entropy_matches_scipy ... ok
+test tests::halfgennorm_fit_metamorphic_mean_recovery ... ok
+test tests::halfgennorm_fit_rejects_negative_observation ... ok
+test tests::halfgennorm_fit_rejects_too_few_samples ... ok
+test tests::halfgennorm_mean_var_match_closed_form ... ok
+test tests::barnard_exact_empty_row ... ok
+test tests::halfgennorm_pdf_cdf_match_scipy_reference_values ... ok
+test tests::gen_gamma_fit_is_at_least_as_good_as_scipy ... ok
+test tests::halfgennorm_ppf_roundtrip_matches_quantiles ... ok
+test tests::halflogistic_entropy_matches_scipy ... ok
+test tests::halflogistic_is_folded_logistic ... ok
+test tests::halfnormal_cdf_matches_scipy_reference_values ... ok
+test tests::hamming_distance_matches_scipy_reference_values ... ok
+test tests::harmonic_mean_matches_scipy_reference_values ... ok
+test tests::hdmedian_matches_scipy ... ok
+test tests::hdquantiles_matches_scipy ... ok
+test tests::gompertz_moments_match_scipy_reference_values ... ok
+test tests::hdquantiles_sd_default_prob_matches_scipy ... ok
+test tests::hdquantiles_sd_small_n ... ok
+test tests::hdquantiles_sd_matches_scipy ... ok
+test tests::hedges_g_corrects_cohens_d ... ok
+
+thread 'tests::hypsecant_fit_panics_on_bad_data_consistent_with_try_fit' (164262) panicked at crates/fsci-stats/src/lib.rs:256:25:
+Box<dyn Any>
+
+thread 'tests::hypsecant_fit_panics_on_bad_data_consistent_with_try_fit' (164262) panicked at crates/fsci-stats/src/lib.rs:256:25:
+Box<dyn Any>
+test tests::gstd_basic ... ok
+test tests::hedges_g_identical_groups ... ok
+test tests::hellinger_distance_matches_scipy_reference_values ... ok
+test tests::histogram_bin_edges_returns_valid_edges ... ok
+test tests::histogram_matches_numpy_reference ... ok
+test tests::histogram_matches_scipy_reference_values ... ok
+test tests::hmean_matches_scipy_reference_values ... ok
+test tests::hmean_zero_and_infinity_match_scipy ... ok
+test tests::half_logistic_skew_kurt_match_scipy ... ok
+test tests::holm_correction ... ok
+test tests::hypergeometric_known_value ... ok
+test tests::hypergeometric_kurtosis_matches_scipy ... ok
+test tests::hypergeometric_mean ... ok
+test tests::hypergeometric_out_of_range ... ok
+test tests::hypergeometric_pmf_sums_to_one ... ok
+test tests::hypsecant_cdf_basic_properties ... ok
+test tests::hypsecant_higher_moments_match_scipy ... ok
+test tests::hypothesis_tests_match_scipy ... ok
+test tests::hypsecant_fit_panics_on_bad_data_consistent_with_try_fit ... ok
+test tests::hypsecant_mean_and_variance_match_closed_form ... ok
+test tests::hypsecant_pdf_cdf_match_scipy_reference_values ... ok
+test tests::hypsecant_ppf_roundtrip_matches_scipy_reference_values ... ok
+test tests::gen_half_logistic_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::idealfourths_ignores_nan ... ok
+test tests::gstd_constant ... ok
+test tests::gstd_empty_returns_nan ... ok
+test tests::gstd_matches_scipy_reference_values ... ok
+test tests::gompertz_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::invgamma_skew_kurt_match_scipy ... ok
+test tests::idealfourths_matches_scipy ... ok
+test tests::idealfourths_small_n ... ok
+test tests::invgauss_fit_mu_equals_sample_mean ... ok
+test tests::invgauss_fit_rejects_non_positive ... ok
+test tests::implemented_distribution_moments_return_typed_values ... ok
+test tests::invgauss_fit_rejects_too_few_samples ... ok
+test tests::gamma_dist_chi2_special_case ... ok
+test tests::invgauss_skew_kurt_match_scipy_law ... ok
+test tests::invweibull_fit_metamorphic_mean_recovery ... ok
+test tests::invweibull_fit_rejects_mean_at_or_below_one ... ok
+test tests::invweibull_fit_rejects_negative_observation ... ok
+test tests::invweibull_fit_rejects_too_few_samples ... ok
+test tests::invweibull_powerlaw_weibullmax_loguniform_entropy_match_scipy ... ok
+test tests::invweibull_ppf_matches_scipy_reference_values ... ok
+test tests::folded_normal_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::inverse_gamma_fit_recovers_unit_scale_shape_from_mean ... ok
+test tests::invweibull_fit_synthetic_recovery ... ok
+test tests::inverse_gamma_fit_rejects_non_positive_or_non_finite_data ... ok
+test tests::inverse_gamma_fit_rejects_too_few_samples ... ok
+test tests::inverse_gamma_pdf_cdf ... ok
+test tests::invweibull_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::invweibull_skewness_and_kurtosis_nan_at_boundary ... ok
+test tests::invweibull_variance_matches_scipy_reference_values ... ok
+test tests::invweibull_variance_returns_nan_at_boundary_or_below ... ok
+test tests::iqr_basic ... ok
+test tests::iqr_matches_scipy_reference_values ... ok
+test tests::iqr_range_matches_scipy_reference_values ... ok
+test tests::irwinhall_moments_match_scipy ... ok
+test tests::irwinhall_n1_is_uniform ... ok
+test tests::irwinhall_cdf_clamps_for_large_n ... ok
+test tests::hdquantiles_small_n ... ok
+test tests::irwinhall_n2_is_triangular ... ok
+test tests::inverse_gaussian_pdf_cdf ... ok
+test tests::irwinhall_pdf_cdf_match_scipy ... ok
+test tests::jackknife_mean_matches_scipy_reference_values ... ok
+test tests::jarque_bera_constant_data_returns_nan ... ok
+test tests::jarque_bera_matches_scipy_reference_values ... ok
+test tests::jarque_bera_rejects_skewed_data ... ok
+test tests::jarque_bera_too_few_returns_nan ... ok
+test tests::jarque_bera_tracks_formula ... ok
+test tests::jensenshannon_distance_matches_scipy_reference_values ... ok
+test tests::johnsonsb_pdf_cdf_match_scipy_reference_values ... ok
+test tests::johnsonsb_ppf_roundtrip_matches_scipy_reference_values ... ok
+test tests::johnsonsu_mean_and_variance_match_scipy_reference_values ... ok
+test tests::johnsonsu_pdf_cdf_match_scipy_reference_values ... ok
+test tests::johnsonsu_ppf_roundtrip_matches_scipy_reference_values ... ok
+test tests::johnsonsu_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::kappa3_a1_matches_lomax_c1 ... ok
+test tests::kappa3_pdf_cdf_match_scipy ... ok
+test tests::kappa3_ppf_inverts_cdf ... ok
+test tests::kappa3_ppf_matches_scipy_anchor ... ok
+test tests::generalized_exponential_fit_is_at_least_as_good_as_scipy ... ok
+test tests::kappa4_reductions_match_existing_distributions ... ok
+test tests::kappa4_support_and_divergent_moments_behave ... ok
+test tests::kendalltau_constant_input_is_undefined ... ok
+test tests::kendalltau_matches_scipy_reference_values ... ok
+test tests::kendalltau_perfect_concordance ... ok
+test tests::kendalltau_perfect_discordance ... ok
+test tests::kendalltau_optimized_loop_matches_naive_on_mixed_sample ... ok
+test tests::kendalltau_uncorrelated ... ok
+test tests::kl_divergence_matches_scipy_reference_values ... ok
+test tests::kruskal_all_identical_returns_nan_like_scipy ... ok
+test tests::kruskal_different_groups ... ok
+test tests::kruskal_matches_scipy_reference_values ... ok
+test tests::kendalltau_pvalue_significant ... ok
+test tests::ks_1samp_empty_returns_nan ... ok
+test tests::kruskal_same_groups ... ok
+test tests::ks_1samp_matches_scipy_asymptotic_reference_values ... ok
+test tests::ks_1samp_perfect_fit ... ok
+test tests::ks_2samp_empty_returns_nan ... ok
+test tests::invgamma_entropy_matches_scipy_reference_values ... ok
+test tests::ks_1samp_normal_data_from_normal_cdf ... ok
+test tests::ks_2samp_exact_equal_size_matches_scipy_reference ... ok
+test tests::ks_1samp_uniform_data_from_normal_cdf ... ok
+test tests::ks_2samp_exact_unequal_size_matches_scipy_reference ... ok
+test tests::ks_2samp_matches_scipy_reference_values ... ok
+test tests::ks_2samp_shifted_matches_scipy_reference_values ... ok
+test tests::kstat_edge_cases ... ok
+test tests::kstat_kurtosis ... ok
+test tests::johnsonsu_entropy_matches_scipy_reference_values ... ok
+test tests::kstat_mean ... ok
+test tests::kstat_skewness ... ok
+test tests::kstat_variance ... ok
+test tests::ks_2samp_different_distributions ... ok
+test tests::kstatvar_variance_of_mean ... ok
+test tests::ks_2samp_same_distribution ... ok
+test tests::kstest_returns_valid_results ... ok
+test tests::johnsonsb_mean_and_variance_match_scipy_reference_values ... ok
+test tests::kstwobign_dual_series_agree_on_overlap ... ok
+test tests::kstest_dispatches_to_one_sample ... ok
+test tests::interval_enumeration_matches_full_sort_for_open_closed_bounds ... ok
+test tests::kstwobign_mean_matches_closed_form ... ok
+test tests::kstwobign_pdf_cdf_match_scipy ... ok
+test tests::fit_gap_quantile_families_recover_synthetic_shapes ... ok
+test tests::kstest_dispatches_to_two_sample ... ok
+test tests::kstwobign_ppf_inverts_cdf ... ok
+test tests::kuipertest_returns_valid_results ... ok
+test tests::kurtosis_heavy_tails ... ok
+test tests::kurtosis_matches_scipy_reference_values ... ok
+test tests::kurtosis_normal_like ... ok
+test tests::kurtosistest_alternative ... ok
+test tests::kurtosistest_heavy_tails ... ok
+test tests::kurtosistest_matches_scipy_reference_values ... ok
+test tests::kurtosistest_nan_policy ... ok
+test tests::invgamma_fit_metamorphic_mean_inverts_a ... ok
+test tests::invgamma_fit_rejects_non_positive ... ok
+test tests::kurtosistest_returns_finite ... ok
+test tests::kappa3_mean_var_match_scipy ... ok
+test tests::irwinhall_entropy_matches_scipy_reference_values ... ok
+test tests::invgamma_fit_rejects_too_few_samples ... ok
+test tests::kurtosistest_returns_valid_results ... ok
+test tests::levy_fit_rejects_non_positive_observation ... ok
+test tests::kurtosistest_too_small_sample ... ok
+test tests::levy_fit_rejects_too_few_samples ... ok
+test tests::laplace_asymmetric_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::levy_left_moments_are_divergent ... ok
+test tests::laplace_cdf_at_loc ... ok
+test tests::levy_left_pdf_cdf_match_scipy_reference_values ... ok
+test tests::laplace_cdf_matches_scipy_reference_values ... ok
+test tests::levy_left_ppf_roundtrip_matches_reference_values ... ok
+test tests::levy_pdf_cdf_matches_scipy_reference_values ... ok
+test tests::laplace_is_symmetric_around_loc ... ok
+test tests::levyleft_fit_harmonic_mean_identity ... ok
+test tests::levyleft_fit_metamorphic_mirror_of_levy ... ok
+test tests::laplace_mean_var ... ok
+test tests::levyleft_fit_rejects_non_negative_observation ... ok
+test tests::laplace_pdf_at_loc ... ok
+test tests::levyleft_fit_rejects_too_few_samples ... ok
+test tests::laplace_ppf_roundtrip ... ok
+test tests::laplace_sf_plus_cdf ... ok
+test tests::linregress_ci_contains_true_slope ... ok
+test tests::laplace_sf_preserves_right_tail_precision ... ok
+test tests::linregress_ci_too_few_points ... ok
+test tests::linregress_ci_narrower_with_larger_sample ... ok
+test tests::linregress_constant_x ... ok
+test tests::levene_detects_different_variances ... ok
+test tests::linregress_matches_scipy_reference_values ... ok
+test tests::linregress_negative_slope ... ok
+test tests::levene_equal_variance_groups ... ok
+test tests::linregress_perfect_line ... ok
+test tests::linregress_too_few_points ... ok
+test tests::levene_matches_scipy_reference_values ... ok
+test tests::linregress_with_noise ... ok
+test tests::lmoment_edge_cases ... ok
+test tests::levy_closed_form_anchors ... ok
+test tests::lmoment_l2 ... ok
+test tests::lmoment_mean ... ok
+test tests::log_laplace_variance_matches_scipy_reference_values ... ok
+test tests::lmoment_symmetric_l3 ... ok
+test tests::levy_fit_metamorphic_harmonic_mean_identity ... ok
+test tests::log_laplace_variance_is_infinite_when_second_moment_diverges ... ok
+test tests::log_softmax_matches_scipy_special_reference ... ok
+test tests::loggamma_fit_metamorphic_mean_recovery ... ok
+test tests::log_loss_matches_scipy_reference_values ... ok
+test tests::loggamma_fit_rejects_non_finite_observation ... ok
+test tests::loggamma_mean_var_match_closed_form ... ok
+test tests::loggamma_pdf_cdf_match_scipy_reference_values ... ok
+test tests::johnsonsb_entropy_matches_scipy_reference_values ... ok
+test tests::loggamma_ppf_roundtrip_matches_quantiles ... ok
+test tests::loggamma_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::halfgennorm_fit_recovers_synthetic_shape ... ok
+test tests::logistic_cdf_matches_expit_form ... ok
+test tests::logistic_cdf_matches_scipy_reference_values ... ok
+test tests::logistic_cdf_ppf_roundtrip ... ok
+test tests::logistic_sf_preserves_right_tail_precision ... ok
+test tests::logistic_pareto_lomax_try_fit_returns_real_fit_not_not_implemented ... ok
+test tests::loglaplace_fit_metamorphic_inverse_invariance ... ok
+test tests::loggamma_fit_rejects_too_few_samples ... ok
+test tests::loglaplace_fit_rejects_all_unit_observations ... ok
+test tests::kappa3_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::loglaplace_fit_rejects_non_finite_observations ... ok
+test tests::loglaplace_fit_rejects_non_positive_observations ... ok
+test tests::loglaplace_fit_rejects_too_few_observations ... ok
+test tests::loglaplace_fit_recovers_synthetic_shape ... ok
+test tests::loglaplace_fit_metamorphic_kolmogorov_smirnov_under_5pct ... ok
+test tests::loglaplace_pdf_boundary_matches_scipy ... ok
+test tests::loglaplace_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::loglaplace_skewness_and_kurtosis_nan_at_boundary ... ok
+test tests::loglogistic_cdf_ppf_roundtrip_recovers_x ... ok
+test tests::loglogistic_mean_finite_only_for_c_above_one ... ok
+test tests::loglogistic_pdf_cdf_match_closed_form ... ok
+test tests::loglogistic_skewness_and_kurtosis_match_fisk ... ok
+test tests::loglogistic_skewness_and_kurtosis_nan_at_boundary ... ok
+test tests::loglogistic_try_fit_rejects_invalid_data ... ok
+test tests::lognormal_and_fatiguelife_cdf_deep_tail_precision ... ok
+test tests::lognormal_pdf_positive_only ... ok
+test tests::lognormal_cdf_at_scale ... ok
+test tests::lognormal_cdf_bounds ... ok
+test tests::logseries_cdf_converges_to_one_in_tail ... ok
+test tests::logseries_mean_matches_closed_form ... ok
+test tests::logseries_pmf_at_p_half_matches_closed_form ... ok
+test tests::logseries_pmf_cdf_match_scipy_reference_values ... ok
+test tests::logseries_mean_var_and_mass_match_closed_form ... ok
+test tests::logseries_ppf_matches_scipy_reference_values ... ok
+test tests::logseries_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::logseries_var_is_positive ... ok
+test tests::loguniform_cdf_ppf ... ok
+test tests::loguniform_fit_metamorphic_no_observation_outside_support ... ok
+test tests::levy_fit_recovers_synthetic_scale ... ok
+test tests::loguniform_fit_recovers_range ... ok
+test tests::loguniform_fit_rejects_constant_data ... ok
+test tests::loguniform_fit_rejects_non_positive ... ok
+test tests::loguniform_fit_rejects_too_few_samples ... ok
+test tests::lomax_cdf_matches_scipy_reference_values ... ok
+test tests::lomax_closed_form_entropy ... ok
+test tests::lomax_entropy_matches_scipy_reference_values ... ok
+test tests::lomax_is_pareto_shifted_by_one ... ok
+test tests::lomax_mean_and_variance_match_closed_form ... ok
+test tests::lomax_pdf_cdf_match_scipy_reference_values ... ok
+test tests::lomax_ppf_roundtrip_matches_scipy_reference_values ... ok
+test tests::lognormal_cdf_matches_scipy_reference_values ... ok
+test tests::lomax_sf_preserves_right_tail_precision ... ok
+test tests::lognormal_logistic_laplace_triangular_entropy_match_scipy ... ok
+test tests::lognormal_mean ... ok
+test tests::mannwhitneyu_alternative_one_sided ... ok
+test tests::mannwhitneyu_alternative_rejects_nan_inputs ... ok
+test tests::mannwhitneyu_alternative_two_sided_matches ... ok
+test tests::mannwhitneyu_matches_scipy_reference_values ... ok
+test tests::loguniform_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::mannwhitneyu_same_distribution ... ok
+test tests::mannwhitneyu_too_few ... ok
+test tests::mannwhitneyu_shifted ... ok
+test tests::matthews_corrcoef_matches_scipy_reference_values ... ok
+test tests::maxwell_cdf_and_mean_variance ... ok
+test tests::maxwell_cdf_basic_properties ... ok
+test tests::maxwell_pdf_cdf_matches_scipy_reference_values ... ok
+test tests::maxwell_skew_kurt_match_scipy ... ok
+test tests::maxwell_is_scaled_chi_df3 ... ok
+test tests::maxwell_support_and_mode ... ok
+test tests::mcnemar_asymptotic_with_correction ... ok
+test tests::mcnemar_asymptotic_without_correction ... ok
+test tests::mcnemar_exact_binomial ... ok
+test tests::mcnemar_symmetric_table ... ok
+test tests::mean_absolute_error_matches_scipy_reference_values ... ok
+test tests::mean_absolute_percentage_error_matches_scipy_reference_values ... ok
+test tests::mean_bias_error_matches_scipy_reference_values ... ok
+test tests::mean_squared_error_matches_scipy_reference_values ... ok
+test tests::medcouple_matches_scipy_reference_values ... ok
+test tests::median_abs_deviation_matches_scipy_reference_values ... ok
+test tests::median_absolute_error_matches_scipy_reference_values ... ok
+test tests::median_cihs_larger_sample ... ok
+test tests::median_cihs_matches_scipy ... ok
+test tests::median_cihs_small_n ... ok
+test tests::median_matches_scipy_reference ... ok
+test tests::median_test_different_medians ... ok
+test tests::invgamma_fit_synthetic_recovery ... ok
+test tests::median_test_matches_scipy_reference_values ... ok
+test tests::median_test_same_median ... ok
+test tests::mielke_moments_are_infinite_when_they_do_not_exist ... ok
+test tests::mielke_moments_match_scipy_reference_values ... ok
+test tests::mielke_pdf_boundary_matches_scipy ... ok
+test tests::mielke_skewness_and_kurtosis_nan_at_boundary ... ok
+test tests::mielke_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::minkowski_distance_matches_scipy_reference_values ... ok
+test tests::mode_all_unique ... ok
+test tests::lomax_skew_kurt_match_scipy ... ok
+test tests::mode_basic ... ok
+test tests::kstwobign_var_skew_kurt_match_scipy ... ok
+test tests::mode_full_basic ... ok
+test tests::mode_full_empty ... ok
+test tests::mode_full_ignores_nan ... ok
+test tests::mode_full_matches_scipy_reference_values ... ok
+test tests::mode_full_single_element ... ok
+test tests::mode_full_smallest_when_tied ... ok
+test tests::mode_matches_scipy_reference_values ... ok
+test tests::moment_first ... ok
+test tests::moment_matches_scipy_reference ... ok
+test tests::moment_matches_scipy_reference_values ... ok
+test tests::moment_second_is_variance ... ok
+test tests::moment_zeroth ... ok
+test tests::monte_carlo_test_empty_data ... ok
+test tests::mood_different_scale ... ok
+test tests::mood_equal_scale ... ok
+test tests::mood_matches_scipy_reference_values ... ok
+test tests::mood_nan_input_returns_nan ... ok
+test tests::mood_small_samples_match_scipy_oracle ... ok
+test tests::monte_carlo_test_extreme_value ... ok
+test tests::monte_carlo_test_basic ... ok
+test tests::moyal_laplace_asymmetric_entropy_match_scipy ... ok
+test tests::mquantiles_type5 ... ok
+test tests::msign_matches_scipy ... ok
+test tests::moyal_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::multiple_testing_wrappers_reject_invalid_input ... ok
+test tests::mquantiles_empty ... ok
+test tests::mquantiles_matches_scipy ... ok
+test tests::multiscale_graphcorr_rejects_invalid_input ... ok
+test tests::multiscale_graphcorr_mgc_map_is_full_scale ... ok
+test tests::multiscale_graphcorr_row_ranks_keep_duplicate_diagonal_zero ... ok
+test tests::multivariate_normal_logpdf_matches_scipy_reference ... ok
+test tests::multivariate_normal_pdf_matches_scipy_reference ... ok
+test tests::multivariate_normal_rejects_invalid_covariance ... ok
+test tests::multiscale_graphcorr_min_scale_excludes_self_pairs ... ok
+test tests::mvn_1d_matches_normal ... ok
+test tests::multiscale_graphcorr_tracks_perfect_linear_relationship ... ok
+test tests::mvn_logpdf_consistent ... ok
+test tests::mvn_peak_at_mean ... ok
+test tests::nakagami_entropy_matches_scipy_reference_values ... ok
+test tests::nakagami_fit_metamorphic_omega_invariant_ratio ... ok
+test tests::nakagami_fit_rejects_negative_observation ... ok
+test tests::nakagami_fit_rejects_too_few_samples ... ok
+test tests::nakagami_pdf_cdf ... ok
+test tests::nakagami_pdf_cdf_matches_scipy_reference_values ... ok
+test tests::nakagami_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::nanmax_matches_scipy_reference_values ... ok
+test tests::nanmean_matches_scipy_reference_values ... ok
+test tests::multiscale_graphcorr_constant_input_collapses_to_zero ... ok
+test tests::nanmedian_matches_scipy_reference_values ... ok
+test tests::nanmin_matches_scipy_reference_values ... ok
+test tests::nanprod_matches_scipy_reference_values ... ok
+test tests::nanstd_matches_scipy_reference_values ... ok
+test tests::nansum_matches_scipy_reference_values ... ok
+test tests::ncf_cdf_increases_with_x ... ok
+test tests::ncf_mean ... ok
+test tests::min_slope_gt_matches_full_sort_for_exact_and_nextafter_thresholds ... ok
+test tests::ncx2_cdf_increases_with_x ... ok
+test tests::ncx2_mean_var ... ok
+test tests::ncx2_pdf_nonnegative ... ok
+test tests::ncx2_reduces_to_chi2_when_nc_zero ... ok
+test tests::negbinomial_mean_var ... ok
+test tests::negbinomial_pmf_at_p_one_limit ... ok
+test tests::nine_distributions_now_have_closed_form_mode ... ok
+test tests::nine_more_distributions_now_have_try_fit_overrides ... ok
+test tests::negbinomial_pmf_sums_near_one ... ok
+test tests::noncentral_chi_squared_fit_inverts_moments ... ok
+test tests::noncentral_chi2_cdf_basic_properties ... ok
+test tests::noncentral_chi_squared_fit_rejects_negative_and_short ... ok
+test tests::noncentral_f_fit_rejects_invalid_input ... ok
+test tests::noncentral_f_cdf_basic_properties ... ok
+test tests::ncf_reduces_to_f_when_nc_zero ... ok
+test tests::noncentralt_cdf_reduces_to_central ... ok
+test tests::noncentralt_mean_positive_nc ... ok
+test tests::johnsonsb_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::noncentralt_skewness_kurtosis_match_scipy ... ok
+test tests::multiscale_graphcorr_independent_data_low_correlation ... ok
+test tests::norm_inv_gauss_fit_rejects_invalid_input ... ok
+test tests::norm_inv_gauss_fit_round_trips_moments ... ok
+test tests::normal_cdf_deep_tail_precision_via_standard_normal_cdf ... ok
+test tests::normal_cdf_known_values ... ok
+test tests::normal_cdf_matches_scipy_reference_values ... ok
+test tests::normal_alternative_pvalue_handles_infinite_statistics ... ok
+test tests::normal_pdf_at_mean ... ok
+test tests::ncx2_ppf_inverts_cdf ... ok
+test tests::normal_ppf_known_values ... ok
+test tests::normal_cdf_at_zero ... ok
+test tests::normal_shifted ... ok
+test tests::normal_standardization_holds_in_deep_tail ... ok
+test tests::normaltest_matches_scipy_reference_values ... ok
+test tests::normaltest_normal_data ... ok
+test tests::normaltest_skewed_data ... ok
+test tests::normaltest_too_few ... ok
+test tests::loggamma_fit_synthetic_recovery ... ok
+test tests::obrientransform_basic ... ok
+test tests::obrientransform_insufficient_data ... ok
+test tests::obrientransform_mean_transforms_to_negative ... ok
+test tests::obrientransform_single_group ... ok
+test tests::omega_squared_less_than_eta ... ok
+test tests::page_trend_test_empty ... ok
+test tests::normal_log_methods_remain_finite_in_extreme_tails ... ok
+test tests::normal_mean_var ... ok
+test tests::noncentralt_pdf_positive ... ok
+test tests::normal_ppf_extremes ... ok
+test tests::page_trend_test_increasing ... ok
+test tests::page_trend_test_matches_scipy_reference_values ... ok
+test tests::normal_ppf_matches_scipy_reference_values ... ok
+test tests::page_trend_test_no_trend ... ok
+test tests::page_trend_test_single_condition ... ok
+test tests::parameterless_fit_anglit_cosine_moyal ... ok
+test tests::parameterless_fit_gilbrat ... ok
+test tests::page_trend_test_returns_valid_results ... ok
+test tests::parameterless_fit_rejects_empty_or_nonfinite ... ok
+test tests::parameterless_fit_rejects_out_of_support_data ... ok
+test tests::ncf_ppf_inverts_cdf ... ok
+test tests::parameterless_fit_returns_singleton_for_well_formed_data ... ok
+test tests::pareto_cdf_matches_scipy_reference_values ... ok
+test tests::parameterless_fit_panics_on_bad_data_for_six_more_distributions ... ok
+test tests::pareto_cdf_ppf_roundtrip ... ok
+test tests::pareto_kurtosis_matches_scipy ... ok
+test tests::pareto_lomax_rayleigh_maxwell_genpareto_genextreme_entropy_match_scipy ... ok
+test tests::pareto_lomax_skewness_and_kurtosis_nan_at_boundary ... ok
+
+thread 'tests::parameterless_fit_panics_on_bad_data_for_six_more_distributions' (164652) panicked at crates/fsci-stats/src/lib.rs:256:25:
+Box<dyn Any>
+
+thread 'tests::parameterless_fit_panics_on_bad_data_for_six_more_distributions' (164652) panicked at crates/fsci-stats/src/lib.rs:256:25:
+Box<dyn Any>
+
+thread 'tests::parameterless_fit_panics_on_bad_data_for_six_more_distributions' (164652) panicked at crates/fsci-stats/src/lib.rs:256:25:
+Box<dyn Any>
+
+thread 'tests::parameterless_fit_panics_on_bad_data_for_six_more_distributions' (164652) panicked at crates/fsci-stats/src/lib.rs:256:25:
+Box<dyn Any>
+
+thread 'tests::parameterless_fit_panics_on_bad_data_for_six_more_distributions' (164652) panicked at crates/fsci-stats/src/lib.rs:256:25:
+Box<dyn Any>
+
+thread 'tests::parameterless_fit_panics_on_bad_data_for_six_more_distributions' (164652) panicked at crates/fsci-stats/src/lib.rs:256:25:
+Box<dyn Any>
+
+thread 'tests::parameterless_fit_panics_on_bad_data_for_six_more_distributions' (164652) panicked at crates/fsci-stats/src/lib.rs:256:25:
+Box<dyn Any>
+
+thread 'tests::parameterless_fit_panics_on_bad_data_for_six_more_distributions' (164652) panicked at crates/fsci-stats/src/lib.rs:256:25:
+Box<dyn Any>
+
+thread 'tests::parameterless_fit_panics_on_bad_data_for_six_more_distributions' (164652) panicked at crates/fsci-stats/src/lib.rs:256:25:
+Box<dyn Any>
+
+thread 'tests::parameterless_fit_panics_on_bad_data_for_six_more_distributions' (164652) panicked at crates/fsci-stats/src/lib.rs:256:25:
+Box<dyn Any>
+
+thread 'tests::parameterless_fit_panics_on_bad_data_for_six_more_distributions' (164652) panicked at crates/fsci-stats/src/lib.rs:256:25:
+Box<dyn Any>
+
+thread 'tests::parameterless_fit_panics_on_bad_data_for_six_more_distributions' (164652) panicked at crates/fsci-stats/src/lib.rs:256:25:
+Box<dyn Any>
+test tests::pareto_sf_preserves_right_tail_precision ... ok
+test tests::pareto_support_mean_and_variance ... ok
+test tests::partial_corr_matches_scipy_reference_values ... ok
+test tests::pearson3_entropy_matches_scipy_reference_values ... ok
+test tests::pearson3_fit_metamorphic_scale_invariance ... ok
+test tests::pearson3_fit_metamorphic_sign_invariance_under_negation ... ok
+test tests::pearson3_fit_rejects_constant_data ... ok
+test tests::pearson3_fit_rejects_too_few_samples ... ok
+test tests::pearson3_fit_zero_skew_for_symmetric_data ... ok
+test tests::pearson3_negative_skew_pdf_cdf_match_scipy_reference_values ... ok
+test tests::pearson3_positive_skew_pdf_cdf_match_scipy_reference_values ... ok
+test tests::pearson3_skew_kurt_match_scipy ... ok
+test tests::pearson3_ppf_roundtrip_matches_scipy_reference_values ... ok
+test tests::pearson3_zero_skew_matches_standard_normal ... ok
+test tests::normal_sf ... ok
+test tests::multiscale_graphcorr_permutation_pvalue_is_bounded ... ok
+test tests::argus_moments_match_scipy_reference_values ... ok
+test tests::pearsonr_alternative_boundary_matches_scipy ... ok
+test tests::pearsonr_matches_scipy_reference_values ... ok
+test tests::pearsonr_perfect_negative ... ok
+test tests::pearsonr_perfect_positive ... ok
+test tests::percentileofscore_above_all ... ok
+test tests::pearsonr_too_few_points ... ok
+test tests::percentileofscore_below_all ... ok
+test tests::pearsonr_uncorrelated ... ok
+test tests::percentileofscore_empty ... ok
+test tests::percentile_empty ... ok
+test tests::percentileofscore_matches_scipy_reference_values ... ok
+test tests::percentile_interpolation ... ok
+test tests::percentileofscore_mean ... ok
+test tests::percentileofscore_no_double_count_near_equal ... ok
+test tests::percentileofscore_rank ... ok
+test tests::percentileofscore_strict ... ok
+test tests::percentileofscore_weak ... ok
+test tests::planck_is_boltzmann_limit ... ok
+test tests::planck_moments_match_scipy ... ok
+test tests::planck_pmf_cdf_match_scipy ... ok
+test tests::planck_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::plotting_positions_matches_scipy ... ok
+test tests::pmean_matches_scipy_reference_values ... ok
+test tests::pmean_metamorphic_p1_is_arithmetic_p_minus_1_is_harmonic ... ok
+test tests::pmean_rejects_negative_samples_before_zero_shortcut ... ok
+test tests::percentile_matches_numpy_reference ... ok
+test tests::multivariate_normal_rvs_tracks_mean ... ok
+test tests::pointbiserialr_matches_scipy_reference_values ... ok
+test tests::percentile_matches_scipy_reference_values ... ok
+test tests::poisson_implements_discrete_trait ... ok
+test tests::poisson_cdf_monotone ... ok
+test tests::poisson_mean_var ... ok
+test tests::poisson_means_test_rejects_invalid_input ... ok
+test tests::poisson_means_test_matches_scipy_reference_example ... ok
+test tests::poisson_means_test_returns_unit_pvalue_when_lambda_hat2_is_nonpositive ... ok
+test tests::poisson_pmf_known ... ok
+test tests::poisson_means_test_respects_one_sided_alternatives ... ok
+test tests::poisson_pmf_sums_near_one ... ok
+test tests::power_divergence_custom_expected ... ok
+z_a=-7.050471581183732, Φ(z_a)=0.0000000000008915621537072931, cdf(0.000867)=8.915621537072931e-13
+z_b=-6.357901268248668, Φ(z_b)=0.00000000010226442687028194, cdf(0.001733)=1.0226442687028194e-10
+test tests::power_divergence_gtest ... ok
+test tests::power_divergence_matches_scipy_reference_values ... ok
+test tests::power_divergence_pearson_skewed ... ok
+test tests::power_divergence_pearson_uniform ... ok
+test tests::power_divergence_unequal_totals_rejected ... ok
+test tests::power_law_cdf_ppf ... ok
+test tests::power_mean_matches_scipy_reference_values ... ok
+test tests::powerlaw_skew_kurt_match_scipy ... ok
+test tests::poisson_means_test_supports_nonzero_diff ... ok
+test tests::powerlognorm_cdf_monotone_in_small_x_tail ... ok
+test tests::powerlognorm_c1_matches_lognormal ... ok
+test tests::powerlognorm_pdf_cdf_match_scipy ... ok
+test tests::powerlognorm_ppf_matches_scipy_anchor ... ok
+test tests::powerlognorm_ppf_inverts_cdf ... ok
+test tests::powernorm_pdf_cdf_match_scipy_reference_values ... ok
+test tests::powernorm_ppf_roundtrip_matches_scipy_reference_values ... ok
+test tests::ppf_bisection_non_bracketing_cdf_returns_bounded_value ... ok
+test tests::precision_score_matches_scipy_reference_values ... ok
+test tests::probplot_quantiles_match_filliben_reference_probabilities ... ok
+test tests::probplot_quantiles_preserve_normal_symmetry_for_odd_sample_size ... ok
+test tests::proportions_ztest_1samp_biased_coin ... ok
+test tests::proportions_ztest_1samp_fair_coin ... ok
+test tests::proportions_ztest_different_groups ... ok
+test tests::proportions_ztest_equal_groups ... ok
+test tests::percentile_median ... ok
+test tests::quantile_matches_numpy_reference ... ok
+test tests::quantile_matches_scipy_reference_values ... ok
+test tests::exponpow_mean_var_match_scipy ... ok
+test tests::quantile_test_25th_percentile ... ok
+test tests::quantile_test_edge_cases ... ok
+test tests::noncentralt_cdf_at_zero_equals_phi_minus_nc ... ok
+test tests::quantile_test_median_exact ... ok
+test tests::percentile_min_max ... ok
+test tests::quantile_test_median_reject ... ok
+test tests::rankdata_dense_min_max_match_scipy_reference ... ok
+test tests::rankdata_matches_scipy_reference_values ... ok
+test tests::r_squared_no_fit ... ok
+test tests::r_squared_perfect_fit ... ok
+test tests::r_squared_range ... ok
+test tests::rankdata_metamorphic_monotone_transform_invariants ... ok
+test tests::rankdata_nan_and_invalid_method_match_scipy_shape ... ok
+test tests::r_to_d_large_effect ... ok
+test tests::rankdata_no_ties ... ok
+test tests::nakagami_fit_recovers_synthetic_shape ... ok
+test tests::rankdata_ordinal_matches_scipy_reference ... ok
+test tests::rankdata_with_ties ... ok
+test tests::ranksums_matches_scipy_reference_values ... ok
+test tests::ranksums_same_distribution ... ok
+test tests::ranksums_shifted ... ok
+test tests::rao_spacing_test_returns_valid_results ... ok
+test tests::rayleigh_cdf_matches_scipy_reference_values ... ok
+test tests::rayleigh_mean_and_variance ... ok
+test tests::rayleigh_mode_and_roundtrip ... ok
+test tests::rayleigh_is_scaled_chi_df2 ... ok
+test tests::rayleigh_sf_preserves_right_tail_precision ... ok
+test tests::rayleigh_skew_kurt_match_scipy ... ok
+test tests::rdist_c2_is_uniform_neg1_pos1 ... ok
+test tests::rdist_c3_is_semicircular ... ok
+test tests::rdist_entropy_matches_scipy_reference_values ... ok
+test tests::rdist_kurtosis_matches_closed_form ... ok
+test tests::rdist_pdf_cdf_match_scipy ... ok
+test tests::rdist_var_matches_one_over_c_plus_1 ... ok
+test tests::recall_score_matches_scipy_reference_values ... ok
+test tests::rdist_is_shifted_symmetric_beta ... ok
+test tests::recipinvgauss_mean_var_match_scipy ... ok
+test tests::recipinvgauss_is_one_over_inverse_gaussian ... ok
+test tests::recipinvgauss_pdf_cdf_match_scipy ... ok
+test tests::recipinvgauss_cdf_clamps_for_large_mu ... ok
+test tests::rel_breit_wigner_fit_rejects_invalid_input ... ok
+test tests::rel_entr_matches_scipy_special ... ok
+test tests::relfreq_cumfreq_return_valid_results ... ok
+test tests::rice_fit_rejects_low_e_x_sq ... ok
+test tests::rice_fit_pinned_synthetic_value ... ok
+test tests::rice_pdf_positive ... ok
+test tests::rv_discrete_basic ... ok
+test tests::permutation_test_matches_scipy_reference_values ... ok
+test tests::rice_fit_metamorphic_e_x_sq_inverts_b ... ok
+test tests::rv_discrete_cdf ... ok
+test tests::rel_breit_wigner_fit_recovers_and_is_optimal ... ok
+test tests::rv_discrete_normalizes ... ok
+test tests::rv_discrete_ppf ... ok
+test tests::rand_index_dense_path_fallback_domains_match_pair_loop ... ok
+test tests::randint_mean_var_and_negative_support_match_scipy_reference_values ... ok
+test tests::randint_pmf_cdf_match_scipy_reference_values ... ok
+test tests::rvs_exponential_positive ... ok
+test tests::randint_ppf_matches_scipy_reference_values ... ok
+test tests::sem_basic ... ok
+test tests::sem_matches_scipy_reference_values ... ok
+test tests::semi_partial_corr_matches_scipy_reference_values ... ok
+test tests::semicircular_higher_moments_match_scipy ... ok
+test tests::shapiro_constant_data ... ok
+test tests::shapiro_exponential_data ... ok
+test tests::shapiro_matches_scipy_canonical_sample ... ok
+test tests::shapiro_matches_scipy_reference_values ... ok
+test tests::shapiro_normal_data ... ok
+test tests::shapiro_too_few ... ok
+test tests::siegelslopes_edge_cases ... ok
+test tests::rice_fit_rejects_negative_observation ... ok
+test tests::siegelslopes_linear ... ok
+test tests::rice_fit_rejects_too_few_samples ... ok
+test tests::rv_discrete_mean_var ... ok
+test tests::siegelslopes_matches_scipy ... ok
+test tests::sigmaclip_asymmetric ... ok
+test tests::sigmaclip_handles_nan ... ok
+test tests::sigmaclip_matches_scipy_reference_values ... ok
+test tests::sigmaclip_no_outliers ... ok
+test tests::sigmaclip_empty_input ... ok
+test tests::sigmaclip_removes_outlier ... ok
+test tests::rice_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::sign_test_no_difference ... ok
+test tests::skew_kurtosis_match_scipy_reference ... ok
+test tests::skew_kurtosis_match_scipy_reference_points ... ok
+test tests::skew_matches_scipy_reference_values ... ok
+test tests::skew_symmetric ... ok
+test tests::rvs_uniform_bounds ... ok
+test tests::skewcauchy_at_zero_reduces_to_cauchy ... ok
+test tests::scoreatpercentile_array_percentiles_match_scipy_reference ... ok
+test tests::scoreatpercentile_limit_and_interpolation_match_scipy_reference ... ok
+test tests::skewcauchy_cdf_matches_scipy ... ok
+test tests::skewcauchy_pdf_matches_scipy ... ok
+test tests::scoreatpercentile_empty_and_invalid_inputs_match_shape ... ok
+test tests::skewnorm_at_zero_reduces_to_normal ... ok
+test tests::skewcauchy_ppf_inverts_cdf ... ok
+test tests::siegelslopes_robust_to_outliers ... ok
+test tests::skewcauchy_wrapcauchy_entropy_match_scipy ... ok
+test tests::skewnorm_cdf_clamps_for_large_a ... ok
+test tests::skewnorm_moments_match_scipy ... ok
+test tests::sigmaclip_symmetric_bounds ... ok
+test tests::skewtest_matches_scipy_reference_values ... ok
+test tests::skewtest_invalid_options_rejected ... ok
+test tests::recipinvgauss_ppf_inverts_cdf ... ok
+test tests::skewnorm_reflection_identity ... ok
+test tests::skewtest_nan_policy_variants_match_scipy_shape ... ok
+test tests::spearmanr_alternative_sum_rule ... ok
+test tests::softmax_matches_scipy_special_reference ... ok
+test tests::spearmanr_alternative_two_sided_matches ... ok
+test tests::somersd_matches_rankings_for_perfect_ordering ... ok
+test tests::somersd_matches_scipy_table_example ... ok
+test tests::spearmanr_monotonic ... ok
+test tests::spearmanr_too_few ... ok
+test tests::somersd_rejects_invalid_input ... ok
+test tests::spearmanr_with_ties ... ok
+test tests::spearmanr_anti_monotonic ... ok
+test tests::sqeuclidean_distance_matches_scipy_reference_values ... ok
+test tests::standard_normal_cdf_deep_tail_precision ... ok
+test tests::spearmanr_matches_scipy_reference_values ... ok
+test tests::student_t_cdf_at_zero ... ok
+test tests::std_weighted_matches_numpy_reference ... ok
+test tests::student_t_cdf_known ... ok
+test tests::student_t_df1_no_variance ... ok
+test tests::student_t_mean_var ... ok
+test tests::student_t_pdf_symmetric ... ok
+test tests::noncentralt_cdf_monotonic ... ok
+test tests::student_t_ppf_via_trait ... ok
+test tests::studentt_entropy_matches_scipy_reference_values ... ok
+test tests::studentt_pdf_cdf_match_scipy_reference_points ... ok
+test tests::t_cdf_matches_scipy_reference_values ... ok
+test tests::test_accuracy_score_perfect ... ok
+test tests::test_adjusted_rand_index_different ... ok
+test tests::test_adjusted_rand_index_perfect_match ... ok
+test tests::skewnorm_pdf_cdf_match_scipy ... ok
+test tests::skew_right_skewed ... ok
+test tests::kendall_distance_inversion_matches_naive_loop ... ok
+test tests::test_ansari_small_samples ... ok
+test tests::test_adjusted_rand_index_single_cluster ... ok
+test tests::test_balanced_accuracy_perfect ... ok
+test tests::test_bartlett_nan_policy ... ok
+test tests::test_betabinomial ... ok
+test tests::expon_weibull_moments_match_scipy_reference_values ... ok
+test tests::test_braycurtis_distance_bounds ... ok
+test tests::test_braycurtis_distance_identical ... ok
+test tests::test_brier_score_perfect ... ok
+test tests::test_central_moment_basic ... ok
+test tests::test_convolve_1d_symmetric ... ok
+test tests::test_chi2_contingency_with_lambda ... ok
+test tests::test_correlation_distance_identical ... ok
+test tests::test_correlation_distance_perfectly_anticorrelated ... ok
+test tests::test_betanegativebinomial ... ok
+test tests::test_directed_hausdorff_1d_asymmetric ... ok
+test tests::test_brunnermunzel_alternative ... ok
+test tests::test_expected_calibration_error_bounds ... ok
+test tests::test_correlate_1d_delta ... ok
+test tests::test_expected_calibration_error_perfect ... ok
+test tests::test_expit_zero ... ok
+test tests::test_dice_distance_disjoint ... ok
+test tests::test_f1_score_perfect ... ok
+test tests::test_dice_distance_identical ... ok
+test tests::test_f_oneway_nan_policy ... ok
+test tests::test_find_peaks_basic ... ok
+test tests::test_discrete_laplace ... ok
+test tests::test_find_peaks_no_peaks ... ok
+test tests::test_find_valleys_basic ... ok
+test tests::test_fit_beta_matches_moments ... ok
+test tests::test_fit_cauchy_recovers_quartiles ... ok
+test tests::rvs_normal_sample_mean ... ok
+test tests::test_fit_chi_squared ... ok
+test tests::test_fit_empty_data_returns_nan ... ok
+test tests::test_fit_exponential ... ok
+test tests::test_fit_f_distribution_matches_moments ... ok
+test tests::test_fit_fail_closed_for_invalid_samples ... ok
+test tests::test_fit_gamma ... ok
+test tests::test_fit_gumbel_left_recovers_quantile_grid ... ok
+test tests::test_fit_gumbel_recovers_quantile_grid ... ok
+test tests::test_fit_handles_constant_support ... ok
+test tests::test_fit_laplace ... ok
+test tests::test_alexander_govern ... ok
+test tests::test_fit_logistic ... ok
+test tests::test_fit_lognormal ... ok
+test tests::test_ansari_alternative ... ok
+test tests::test_fit_maxwell ... ok
+test tests::test_fit_normal ... ok
+test tests::test_ansari_different_scale ... ok
+test tests::test_fit_pareto ... ok
+test tests::skewnorm_ppf_inverts_cdf ... ok
+test tests::noncentralt_matches_scipy_anchor_values ... ok
+test tests::test_fit_power_law_closed_form ... ok
+test tests::test_ansari_equal_scale ... ok
+test tests::test_fit_rayleigh ... ok
+test tests::test_fit_student_t_fail_closed_for_invalid_samples ... ok
+test tests::test_generic_fit_dispatches_to_distribution_fit ... ok
+test tests::test_fit_triangular_rejects_zero_width_samples ... ok
+test tests::test_fit_uniform ... ok
+test tests::test_fit_weibull_lomax_triangular_reject_non_finite ... ok
+test tests::test_fligner_nan_policy ... ok
+test tests::test_gen_gamma ... ok
+test tests::test_generalized_exponential ... ok
+test tests::test_hoover_index_equal ... ok
+test tests::test_huber_loss_small_residual ... ok
+test tests::test_huber_loss_zero_residual ... ok
+test tests::test_isf_equals_ppf_one_minus_q ... ok
+test tests::test_isf_is_inverse_of_sf ... ok
+test tests::count_slopes_le_matches_brute_for_distinct_x_random_thresholds ... ok
+test tests::test_isf_uniform ... ok
+test tests::test_jaccard_distance_disjoint ... ok
+test tests::test_jaccard_distance_identical ... ok
+test tests::test_kendalltau_alternative_edge_cases ... ok
+test tests::test_kendalltau_alternative ... ok
+test tests::test_kruskal_nan_policy ... ok
+test tests::test_ks_2samp_alternative ... ok
+test tests::test_ks_2samp_alternative_edge_cases ... ok
+test tests::test_kulsinski_distance_identical ... ok
+test tests::test_levene_nan_policy ... ok
+test tests::test_log_cosh_loss_zero ... ok
+test tests::test_log_softmax_exp_sums_to_one ... ok
+test tests::test_logit_expit_inverse ... ok
+test tests::test_logit_half ... ok
+test tests::test_logsumexp_single ... ok
+test tests::test_logsumexp_weighted_uniform ... ok
+test tests::test_logsumexp_zeros ... ok
+test tests::test_lorenz_curve_uniform ... ok
+test tests::test_matching_distance_identical ... ok
+test tests::test_matthews_corrcoef_perfect ... ok
+test tests::continuous_moments_match_scipy ... ok
+test tests::test_max_calibration_error_perfect ... ok
+test tests::test_mood_alternative ... ok
+test tests::test_neff ... ok
+test tests::test_neg_hypergeometric ... ok
+test tests::test_peak_prominences_basic ... ok
+test tests::test_geometric_mean_squares ... ok
+test tests::test_pearsonr_alternative ... ok
+test tests::test_gibrat ... ok
+test tests::test_peak_to_peak ... ok
+test tests::test_pearsonr_alternative_edge_cases ... ok
+test tests::test_pinball_loss_tau_half ... ok
+test tests::test_gini_coefficient_bounds ... ok
+test tests::test_pooled_variance ... ok
+test tests::test_power_mean_arithmetic ... ok
+test tests::test_gini_coefficient_perfect_equality ... ok
+test tests::test_precision_score_perfect ... ok
+test tests::test_rand_index_bounds ... ok
+test tests::test_rand_index_perfect_match ... ok
+test tests::test_gmean_weighted ... ok
+test tests::test_hamming_distance_completely_different ... ok
+test tests::test_ranksums_alternative ... ok
+test tests::test_hamming_distance_identical ... ok
+test tests::test_ranksums_alternative_edge_cases ... ok
+test tests::test_rayleightest ... ok
+test tests::test_harmonic_mean_reciprocals ... ok
+test tests::test_hausdorff_1d_identical ... ok
+test tests::test_rel_entr_zero_x ... ok
+test tests::test_rel_entr_zero_y ... ok
+test tests::test_hausdorff_1d_shifted ... ok
+test tests::test_russellrao_distance_identical ... ok
+test tests::test_hinge_loss_correct_predictions ... ok
+test tests::test_rel_breit_wigner ... ok
+test tests::test_silhouette_score_1d_perfect_clusters ... ok
+test tests::test_hmean_weighted ... ok
+test tests::test_silhouette_score_1d_single_cluster ... ok
+test tests::test_recall_score_perfect ... ok
+test tests::test_rand_index_single_element ... ok
+test tests::test_rogerstanimoto_distance_identical ... ok
+test tests::boschloo_exact_alternative_greater ... ok
+test tests::test_silhouette_score_1d_overlapping ... ok
+test tests::test_skellam ... ok
+test tests::test_softmax_sums_to_one ... ok
+test tests::test_sokalmichener_distance_bounds ... ok
+test tests::test_sokalmichener_distance_identical ... ok
+test tests::test_sokalsneath_distance_identical ... ok
+test tests::test_specificity_score_perfect ... ok
+test tests::test_theil_l_index_equal ... ok
+test tests::test_theil_t_index_equal ... ok
+test tests::test_try_fit_default_returns_not_implemented ... ok
+test tests::test_try_fit_exponential_rejects_negative ... ok
+test tests::test_try_fit_laplace_detects_degenerate ... ok
+test tests::test_try_fit_normal_matches_fit ... ok
+test tests::test_try_fit_power_law_rejects_out_of_support_samples ... ok
+test tests::test_try_fit_rejects_empty_data ... ok
+test tests::test_try_fit_rejects_nonfinite ... ok
+test tests::test_ttest_1samp_from_stats ... ok
+test tests::test_try_fit_with_audit_emits_on_rejection ... ok
+test tests::test_xlog1py_zero_x ... ok
+test tests::test_xlogy_normal ... ok
+test tests::test_xlogy_zero_x ... ok
+test tests::test_yule_distance_identical ... ok
+test tests::theil_l_index_matches_scipy_reference_values ... ok
+test tests::theil_sen_matches_scipy_reference_values ... ok
+test tests::theilslopes_edge_cases ... ok
+test tests::theilslopes_invariant_under_x_y_pair_permutation ... ok
+test tests::theilslopes_linear ... ok
+test tests::theilslopes_confidence_interval ... ok
+test tests::theilslopes_matches_scipy ... ok
+test tests::theilslopes_with_x_ties_skips_zero_dx_pairs ... ok
+test tests::three_more_distributions_have_closed_form_mode ... ok
+test tests::tiecorrect_all_tied ... ok
+test tests::tiecorrect_matches_scipy_reference_values ... ok
+test tests::tiecorrect_multiple_tie_groups ... ok
+test tests::tiecorrect_no_ties ... ok
+test tests::tmax_all_filtered ... ok
+test tests::tmax_basic ... ok
+test tests::tmean_basic ... ok
+test tests::tiecorrect_with_ties ... ok
+test tests::tmean_exclusive_limits ... ok
+test tests::recipinvgauss_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::gennorm_fit_synthetic_recovery_unit_variance ... ok
+test tests::tmin_all_filtered ... ok
+test tests::trapezoid_ppf_cdf_roundtrip ... ok
+test tests::tmin_basic ... ok
+test tests::trait_log_methods_default_to_probability_logs ... ok
+test tests::trait_sf_plus_cdf_equals_one ... ok
+test tests::tmin_tmax_match_scipy_reference_values ... ok
+test tests::trait_std_is_sqrt_var ... ok
+test tests::trapezoid_entropy_matches_scipy_reference_values ... ok
+test tests::trapezoid_metamorphic_endpoint_invariants_and_pdf_integrates ... ok
+test tests::trapezoid_pdf_at_flat_top_boundaries_equals_height ... ok
+test tests::tiecorrect_empty_and_single ... ok
+test tests::tmean_empty_result ... ok
+test tests::tmean_matches_scipy_reference_values ... ok
+test tests::trim1_both ... ok
+test tests::trim1_empty ... ok
+test tests::trim1_full_trim ... ok
+test tests::trim1_left ... ok
+test tests::trim1_right ... ok
+test tests::trapezoid_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::trim_mean_empty ... ok
+test tests::trapezoid_triangular_limit_matches_triangular_closed_form ... ok
+test tests::trim_mean_matches_scipy_reference ... ok
+test tests::trapezoid_uniform_limit_matches_uniform_closed_form ... ok
+test tests::trim_mean_with_outliers ... ok
+test tests::triangular_cdf_bounds ... ok
+test tests::trim_mean_zero_trim ... ok
+test tests::trimboth_basic ... ok
+test tests::triangular_mean_var ... ok
+test tests::triangular_mode_equals_right ... ok
+test tests::trimboth_empty ... ok
+test tests::trimboth_high_proportion ... ok
+test tests::trimboth_matches_scipy_reference_values ... ok
+test tests::triangular_pdf_at_mode ... ok
+test tests::triangular_ppf_roundtrip ... ok
+test tests::trimboth_unsorted_input ... ok
+test tests::triangular_skew_kurt_match_scipy ... ok
+test tests::trimmed_mean_ci_empty_returns_nan ... ok
+test tests::trimboth_zero_trim ... ok
+test tests::trimmed_sem_empty_returns_nan ... ok
+test tests::trimmed_sem_basic ... ok
+test tests::trimmed_sem_smaller_than_std ... ok
+test tests::trimmed_std_basic ... ok
+test tests::trimmed_std_empty_returns_nan ... ok
+test tests::trimmed_std_matches_scipy_reference_values ... ok
+test tests::trimmed_std_no_trim ... ok
+test tests::trimmed_var_basic ... ok
+test tests::trimmed_var_empty_returns_nan ... ok
+test tests::trimmed_var_equals_std_squared ... ok
+test tests::trimmed_var_matches_scipy_reference_values ... ok
+test tests::trunc_normal_within_bounds ... ok
+test tests::truncexpon_fit_metamorphic_no_observation_above_b ... ok
+test tests::truncexpon_fit_recovers_max_as_boundary ... ok
+test tests::truncexpon_fit_rejects_negative_observations ... ok
+test tests::truncexpon_fit_rejects_too_few_samples ... ok
+test tests::truncexpon_ppf_matches_scipy_reference_values ... ok
+test tests::truncexpon_fit_metamorphic_synthetic_recovery ... ok
+
+thread 'tests::truncpareto_rejects_invalid_args' (165120) panicked at crates/fsci-stats/src/lib.rs:15288:9:
+b must be finite and nonzero
+
+thread 'tests::truncpareto_rejects_invalid_args' (165120) panicked at crates/fsci-stats/src/lib.rs:15289:9:
+c must be > 1 and finite
+
+thread 'tests::truncpareto_rejects_invalid_args' (165120) panicked at crates/fsci-stats/src/lib.rs:15289:9:
+c must be > 1 and finite
+
+thread 'tests::truncpareto_rejects_invalid_args' (165120) panicked at crates/fsci-stats/src/lib.rs:15288:9:
+b must be finite and nonzero
+test tests::truncexpon_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::truncnormal_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::truncpareto_large_c_limit_is_pareto ... ok
+test tests::truncpareto_ppf_inverts_cdf ... ok
+test tests::truncpareto_pdf_cdf_ppf_match_scipy ... ok
+
+thread 'tests::truncweibull_min_rejects_invalid_args' (165127) panicked at crates/fsci-stats/src/lib.rs:14825:9:
+c must be positive and finite
+
+thread 'tests::truncweibull_min_rejects_invalid_args' (165127) panicked at crates/fsci-stats/src/lib.rs:14825:9:
+c must be positive and finite
+
+thread 'tests::truncweibull_min_rejects_invalid_args' (165127) panicked at crates/fsci-stats/src/lib.rs:14826:9:
+a must be ≥ 0 and finite
+
+thread 'tests::truncweibull_min_rejects_invalid_args' (165127) panicked at crates/fsci-stats/src/lib.rs:14827:9:
+b must be > a and finite
+
+thread 'tests::truncweibull_min_rejects_invalid_args' (165127) panicked at crates/fsci-stats/src/lib.rs:14827:9:
+b must be > a and finite
+test tests::truncpareto_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::truncpareto_rejects_invalid_args ... ok
+test tests::truncweibull_min_handles_extreme_c_a_underflow ... ok
+test tests::truncweibull_min_mean_var_match_scipy ... ok
+test tests::truncweibull_min_ppf_inverts_cdf ... ok
+test tests::truncweibull_min_rejects_invalid_args ... ok
+test tests::truncweibull_min_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::try_fit_beta_prime_rejects_nonpositive_data ... ok
+test tests::try_fit_folded_normal_negative_data_rejected ... ok
+test tests::powerlognorm_mean_var_match_scipy ... ok
+test tests::truncweibull_min_large_b_limit_is_weibull ... ok
+test tests::truncweibull_min_pdf_cdf_match_scipy ... ok
+test tests::try_fit_irwin_hall_rejects_unsupported_data ... ok
+test tests::powerlognorm_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::try_fit_laplace_asymmetric_symmetric_case ... ok
+test tests::try_fit_weibull_max_rejects_positive_support ... ok
+test tests::tsem_basic ... ok
+test tests::tsem_insufficient_data ... ok
+test tests::tsem_matches_scipy_reference_values ... ok
+test tests::tstd_basic ... ok
+test tests::tstd_ddof_zero ... ok
+test tests::tstd_matches_scipy_reference_values ... ok
+test tests::ttest_1samp_alternative_less ... ok
+test tests::ttest_1samp_alternative_two_sided_default ... ok
+test tests::ttest_1samp_matches_scipy_reference_values ... ok
+test tests::ttest_1samp_shifted_mean ... ok
+test tests::ttest_1samp_single_element_returns_nan ... ok
+test tests::ttest_1samp_zero_mean ... ok
+test tests::ttest_ind_alternative_one_sided ... ok
+test tests::ttest_ind_alternative_rejects_nan_inputs ... ok
+test tests::ttest_ind_different_distributions ... ok
+test tests::ttest_ind_from_stats_equal_var_matches_scipy_reference ... ok
+test tests::ttest_ind_from_stats_welch_matches_scipy_reference ... ok
+test tests::ttest_ind_matches_scipy_reference_values ... ok
+test tests::try_fit_no_longer_returns_not_implemented_for_seven_distributions ... ok
+test tests::ttest_ind_welch_different_variances ... ok
+test tests::ttest_ind_single_element_returns_nan ... ok
+test tests::ttest_rel_matches_scipy_reference_values ... ok
+test tests::ttest_rel_rejects_invalid_alternative ... ok
+test tests::ttest_rel_no_difference ... ok
+test tests::ttest_1samp_alternative_greater_positive_shift ... ok
+test tests::ttest_rel_significant_shift ... ok
+test tests::ttest_rel_respects_one_sided_alternatives ... ok
+test tests::ttest_rel_unequal_lengths ... ok
+test tests::powernorm_mean_and_variance_match_scipy_reference_values ... ok
+test tests::exponpow_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::theilslopes_select_matches_full_sort_reference ... ok
+test tests::ttest_ind_alternative_two_sided_default ... ok
+test tests::tukey_hsd_edge_cases ... ok
+test tests::try_fit_double_weibull_recovers_shape ... ok
+test tests::ttest_ind_same_distribution ... ok
+test tests::tukey_hsd_same_means ... ok
+test tests::try_fit_laplace_asymmetric_recovers_kappa_from_mean ... ok
+test tests::tukey_lambda_cdf_ppf_roundtrip_matches_quantiles ... ok
+test tests::tukey_lambda_kurtosis_returns_nan_when_undefined ... ok
+test tests::try_fit_weibull_max_recovers_shape ... ok
+test tests::tukey_lambda_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::tukey_lambda_variance_matches_scipy_reference_values ... ok
+test tests::tvar_basic ... ok
+test tests::tukey_lambda_pdf_matches_previous_numerical_reference_values ... ok
+test tests::tvar_exclusive_limits ... ok
+test tests::tvar_matches_scipy_reference_values ... ok
+test tests::uniform_cdf ... ok
+test tests::tvar_insufficient_data ... ok
+test tests::uniform_cdf_matches_scipy_reference_values ... ok
+test tests::uniform_exponential_entropy_match_scipy ... ok
+test tests::uniform_mean_var ... ok
+test tests::uniform_pdf ... ok
+test tests::unsupported_distribution_moments_return_typed_errors ... ok
+test tests::var_weighted_matches_numpy_reference ... ok
+test tests::vargha_delaney_complete_superiority ... ok
+test tests::variation_basic ... ok
+test tests::variation_matches_scipy_reference ... ok
+test tests::variation_matches_scipy_reference_values ... ok
+test tests::tukey_lambda_variance_returns_nan_when_undefined ... ok
+test tests::vonmises_circular_variance ... ok
+test tests::vonmises_peak_at_mu ... ok
+test tests::vonmises_skewness_and_kurtosis_are_nan ... ok
+test tests::vargha_delaney_no_effect ... ok
+test tests::vonmises_truncnormal_entropy_match_scipy ... ok
+test tests::vtest_returns_valid_results ... ok
+test tests::wald_alias_pdf_cdf_match_scipy ... ok
+test tests::try_fit_frechet_r_recovers_shape ... ok
+test tests::vonmises_pdf_integrates_to_one ... ok
+test tests::wald_fit_propagates_through_inverse_gaussian_alias ... ok
+test tests::wasserstein_metamorphic_non_negativity ... ok
+test tests::vonmises_is_periodic ... ok
+test tests::wasserstein_distance_matches_scipy_reference_values ... ok
+test tests::wasserstein_identical ... ok
+test tests::wasserstein_empty ... ok
+test tests::wasserstein_nan_input_returns_nan ... ok
+test tests::wasserstein_metamorphic_translation_invariance ... ok
+test tests::weibull_cdf_basic_properties ... ok
+test tests::weibull_max_inverts_weibull_min ... ok
+test tests::weibull_max_ppf_matches_scipy_anchor ... ok
+test tests::weibull_max_skew_kurt_match_scipy ... ok
+test tests::wasserstein_metamorphic_scale_homogeneity ... ok
+test tests::weibull_pdf_positive_only ... ok
+test tests::wasserstein_metamorphic_symmetry ... ok
+test tests::weibull_sf_plus_cdf ... ok
+test tests::weighted_mean_constant_data_is_that_constant ... ok
+test tests::wasserstein_shifted ... ok
+test tests::weibull_c1_is_exponential ... ok
+test tests::weighted_mean_reference_value ... ok
+test tests::weighted_mean_var_invariant_under_weight_scaling ... ok
+test tests::weighted_mean_uniform_weights_matches_arithmetic_mean ... ok
+test tests::vonmises_pdf_and_cdf_match_scipy_reference ... ok
+test tests::weighted_mean_var_reject_invalid_inputs ... ok
+test tests::weighted_var_uniform_weights_matches_population_variance ... ok
+test tests::weibull_exponential_special_case ... ok
+test tests::weibull_max_pdf_cdf_match_scipy ... ok
+test tests::weibull_ppf_roundtrip ... ok
+test tests::weightedtau_different_lengths ... ok
+test tests::weighted_helpers_reject_shape_mismatch ... ok
+test tests::weightedtau_matches_scipy_reference_values ... ok
+test tests::weightedtau_returns_valid_results ... ok
+test tests::weightedtau_too_short ... ok
+test tests::wilcoxon_alternative_one_sided ... ok
+test tests::wilcoxon_matches_scipy_reference_values ... ok
+test tests::weightedtau_partial ... ok
+test tests::wilcoxon_alternative_two_sided_matches ... ok
+test tests::wilcoxon_no_difference ... ok
+test tests::wilcoxon_small_samples_remain_supported ... ok
+test tests::wilson_ci_extreme_proportion ... ok
+test tests::wilcoxon_systematic_shift ... ok
+test tests::winsorize_overlapping_windows_match_scipy_shape ... ok
+test tests::wilson_ci_half_proportion ... ok
+test tests::weibull_entropy_matches_scipy_reference_values ... ok
+test tests::wrapcauchy_cdf_endpoints_and_uniform_limit ... ok
+test tests::yeojohnson_inv_roundtrip_recovers_x ... ok
+test tests::yeojohnson_llf_empty ... ok
+test tests::try_fit_beta_prime_recovers_shape_via_transformation ... ok
+test tests::xlogy_xlog1py_match_scipy_special ... ok
+test tests::yeojohnson_llf_matches_scipy_reference_values ... ok
+test tests::yeojohnson_closed_form_reference_values ... ok
+test tests::yeojohnson_normmax_empty ... ok
+test tests::yeojohnson_llf_optimal_is_max ... ok
+test tests::yeojohnson_normmax_positive_data ... ok
+test tests::yule_q_intermediate ... ok
+test tests::yule_q_perfect_negative ... ok
+test tests::yule_q_no_association ... ok
+test tests::yule_q_perfect_positive ... ok
+test tests::yule_y_basic ... ok
+test tests::yulesimon_moments_match_scipy ... ok
+test tests::yulesimon_pmf_cdf_match_scipy ... ok
+test tests::weightedtau_perfect_agreement ... ok
+test tests::yulesimon_skewness_and_kurtosis_infinite_at_boundary ... ok
+test tests::weightedtau_perfect_disagreement ... ok
+test tests::winsorize_matches_scipy_reference ... ok
+test tests::yeojohnson_matches_scipy_reference_values ... ok
+test tests::yeojohnson_normmax_negative_data ... ok
+test tests::yulesimon_pmf_telescopes_cdf ... ok
+test tests::winsorize_out_of_range_limits_fail_closed ... ok
+test tests::rel_breit_wigner_matches_scipy ... ok
+test tests::zipfian_mean_matches_scipy ... ok
+test tests::zmap_ddof_matches_scipy_reference_values ... ok
+test tests::zipfian_pmf_cdf_match_scipy ... ok
+test tests::zipfian_pmf_normalised ... ok
+test tests::zmap_matches_scipy_reference_values ... ok
+test tests::zscore_constant ... ok
+test tests::zscore_zmap_gzscore_metamorphic_affine_invariants ... ok
+test tests::zipfian_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::wrapcauchy_pdf_integrates_to_one ... ok
+test tests::yulesimon_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::zmap_matches_scipy_constant_compare_shape ... ok
+test tests::zipf_pmf_sums ... ok
+test tests::zscore_matches_scipy_reference ... ok
+test tests::zscore_basic ... ok
+test tests::barnard_exact_matches_scipy_reference_values ... ok
+test tests::try_fit_irwin_hall_recovers_n_via_variance_match ... ok
+test tests::tukey_lambda_pdf_trapezoid_integrates_to_one ... ok
+test tests::trimmed_mean_ci_wider_at_lower_confidence ... ok
+test tests::trimmed_mean_ci_contains_point_estimate ... ok
+test tests::barnard_exact_no_difference ... ok
+test tests::expnorm_fit_recovers_synthetic_shape ... ok
+test tests::expnorm_fit_metamorphic_var_relation ... ok
+test tests::boschloo_exact_no_difference ... ok
+test tests::boschloo_exact_significant_difference ... ok
+test tests::test_fit_student_t_recovers_quantile_grid ... ok
+test tests::try_fit_folded_normal_recovers_c_via_mean_match ... ok
+test tests::tukey_lambda_entropy_matches_scipy_reference_values ... ok
+test tests::exponweib_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::invgauss_fit_metamorphic_synthetic_recovery ... ok
+test tests::theil_fast_paths_match_materialized_reference_for_clean_inputs ... ok
+test tests::powernorm_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::kendall_knight_matches_naive_on_large_inputs ... ok
+test tests::noncentralt_ppf_matches_scipy_anchor_values ... ok
+test tests::fit_only_stats_distributions_expose_typed_try_fit ... ok
+test tests::mannkendall_inversion_s_matches_naive_loop ... ok
+test tests::dunnett_bonferroni_correction ... ok
+test tests::dunnett_returns_valid_results ... ok
+test tests::argus_entropy_matches_scipy_reference_values ... ok
+test tests::rand_index_contingency_matches_pair_loop ... ok
+test tests::rank_selection_matches_materialized_for_random_distinct_finite_inputs ... ok
+test tests::dunnett_matches_scipy_reference ... ok
+test tests::boschloo_exact_matches_scipy_reference_values ... ok
+test tests::dunnett_treatment_differs_from_control ... ok
+test tests::discrete_distributions_entropy_match_scipy ... ok
+test tests::noncentral_f_fit_is_at_least_as_good_as_scipy ... ok
+test tests::tukey_hsd_different_means ... ok
+test tests::rice_entropy_matches_scipy_reference_values ... ok
+test tests::noncentral_chi_squared_fit_synthetic_recovery ... ok
+test tests::powernorm_powerlognorm_johnsonsu_exponpow_exponweibull_entropy_match_scipy ... ok
+test tests::kappa4_entropy_matches_scipy_reference_values ... ok
+test tests::closed_form_variances_stay_nonnegative_for_valid_parameters ... ok
+test tests::tukey_hsd_matches_scipy_reference ... ok
+test tests::fatiguelife_skewnorm_foldednormal_foldedcauchy_entropy_match_scipy ... ok
+test tests::argus_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::tukey_hsd_returns_valid_results ... ok
+test tests::somers_prefix_pqa_matches_direct_quadrant_sums ... ok
+test tests::kappa4_general_case_matches_scipy_reference ... ok
+test tests::studentized_range_sf_matches_scipy_reference ... ok
+test tests::kstwobign_twm_kappa3_crystalball_entropy_match_scipy ... ok
+test tests::continuous_cdfs_match_scipy_quantiles ... ok
+test tests::kappa4_skewness_and_kurtosis_match_scipy_reference_values ... ok
+test tests::tukey_hsd_three_groups ... ok
+test tests::burr_mielke_recipinvgauss_alpha_entropy_match_scipy ... ok
+test tests::noncentralt_invgauss_exponnorm_entropy_match_scipy ... ok
+test tests::at_risk_continuous_pdfs_integrate_to_one has been running for over 60 seconds
+test tests::continuous_ppfs_match_scipy_quantiles has been running for over 60 seconds
+test tests::test_norm_inv_gauss has been running for over 60 seconds
+test tests::test_norm_inv_gauss ... ok
+test tests::continuous_ppfs_match_scipy_quantiles ... ok
+  [2m2026-06-05T17:10:09.245137Z[0m [33m WARN[0m [1;33mrch::hook[0m[33m: [33mRemote execution failed on ts1 with SSH timeout; refusing local fallback: SSH command timed out after 1800s[0m
+    [2;3mat[0m rch/src/hook.rs:649 [2;3mon[0m ThreadId(1)
+
+[RCH] remote ts1 failed [RCH-E104] SSH command timed out (no local fallback)

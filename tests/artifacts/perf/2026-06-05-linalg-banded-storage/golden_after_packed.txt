@@ -1,0 +1,11 @@
+fsci-linalg solve_banded golden v1
+case n=4 kl=1 ku=1 seed=0 len=4 x_digest=851d53151cb82f35 x0=3fc6af175e52e445 xlast=3fe010bec4d53b58 berr=0000000000000000
+case n=16 kl=1 ku=1 seed=0.3 len=16 x_digest=405de776236a016d x0=3fd4864ad698a1b7 xlast=bf9b83df0595a3e4 berr=3c709fc1104350f7
+case n=64 kl=1 ku=1 seed=1.1 len=64 x_digest=1af06cf55a12d2e9 x0=3fe254ef8bccd357 xlast=bfbfd9e5aeb42470 berr=3c70ebf2f94d11fe
+case n=50 kl=2 ku=2 seed=0.7 len=50 x_digest=f3228a0905ade829 x0=3fd703b593569366 xlast=3fbf039d31e2f445 berr=3c755aff56c4b579
+case n=100 kl=2 ku=2 seed=2 len=100 x_digest=b298fd21043cb267 x0=3fdb0f691e38b168 xlast=3fd81b0dc73b8e8b berr=3c6745b462d17d70
+case n=40 kl=1 ku=2 seed=0.9 len=40 x_digest=b63dcd6e791cee19 x0=3fdd21161b1ddf95 xlast=3fd23f149d99c13f berr=3c6f52adbacfedee
+case n=80 kl=3 ku=1 seed=1.7 len=80 x_digest=f86d6d0b198a4912 x0=3fdd8db7a0eb37ad xlast=bfacc3aa14bab51d berr=3c6ccb3a63cd4f77
+case n=33 kl=0 ku=3 seed=0.2 len=33 x_digest=58ac164e66e1e701 x0=3fcd4bdc361110bb xlast=bfb3e42d0c178b93 berr=3c63b4ca36e000dc
+case n=29 kl=3 ku=0 seed=1.3 len=29 x_digest=6efe334be2704542 x0=3fdf4490689d21b2 xlast=bfc701b567ebc292 berr=3c6637110008cae7
+case n=7 kl=2 ku=4 seed=0.5 len=7 x_digest=3e620ef0e19bba70 x0=3fcf0eef13f09653 xlast=3fcf7ed2f264881f berr=3c76b9f70bbfe7b2
