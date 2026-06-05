@@ -4037,6 +4037,12 @@ pub fn medfilt1(x: &[f64], kernel_size: usize) -> Vec<f64> {
     if x.is_empty() || kernel_size == 0 {
         return x.to_vec();
     }
+    // For large kernels the per-window O(k log k) sort dominates; a sliding
+    // ordered-multiset median is O(n log k) and bit-identical (see
+    // `medfilt1_sliding`). Small kernels keep the naive sort (lower constants).
+    if kernel_size >= MEDFILT1_SLIDING_THRESHOLD {
+        return medfilt1_sliding(x, kernel_size);
+    }
     let half = kernel_size / 2;
     let n = x.len();
 
@@ -4049,6 +4055,37 @@ pub fn medfilt1(x: &[f64], kernel_size: usize) -> Vec<f64> {
             window[window.len() / 2]
         })
         .collect()
+}
+
+const MEDFILT1_SLIDING_THRESHOLD: usize = 32;
+
+/// Sliding `medfilt1`: like `order_filter_sliding`, the 1-D window is clipped
+/// (not zero-padded) at the borders, so it grows then shrinks; `medfilt1` takes
+/// `window[window.len() / 2]`, i.e. the rank `len/2` element of the CURRENT
+/// (clipped) window — so the requested rank is re-pointed every step as the
+/// window size changes. Bit-identical to sorting each window and indexing.
+fn medfilt1_sliding(x: &[f64], kernel_size: usize) -> Vec<f64> {
+    let n = x.len();
+    let half = kernel_size / 2;
+    let mut window = SlidingRankWindow::new(0);
+    let mut cur_start = 0usize;
+    let mut cur_end = 0usize;
+    let mut result = Vec::with_capacity(n);
+    for i in 0..n {
+        let start = i.saturating_sub(half);
+        let end = (i + half + 1).min(n);
+        while cur_start < start {
+            window.remove(x[cur_start]);
+            cur_start += 1;
+        }
+        while cur_end < end {
+            window.insert(x[cur_end]);
+            cur_end += 1;
+        }
+        window.set_rank((cur_end - cur_start) / 2);
+        result.push(window.value());
+    }
+    result
 }
 
 /// Apply exponential smoothing to a signal.
@@ -8068,6 +8105,14 @@ impl SlidingRankWindow {
 
     fn value(&self) -> f64 {
         self.lower_max().0
+    }
+
+    /// Re-point the desired rank (used when the clipped window size — and hence
+    /// the requested `len/2` median index — changes at the borders) and restore
+    /// the size invariant so `value()` reads the new rank element.
+    fn set_rank(&mut self, rank: usize) {
+        self.rank = rank;
+        self.rebalance();
     }
 }
 
@@ -14525,6 +14570,60 @@ mod tests {
                         continue;
                     }
                     let fast = medfilt_sliding(&data, k);
+                    let slow = naive(&data, k);
+                    assert_eq!(fast.len(), slow.len());
+                    for (a, b) in fast.iter().zip(slow.iter()) {
+                        assert_eq!(a.to_bits(), b.to_bits(), "n={n} k={k} tie_mod={tie_mod}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn medfilt1_sliding_matches_naive_sort() {
+        // The sliding medfilt1 must reproduce the per-window-sort filter exactly,
+        // including the clipped (not zero-padded) borders where the window size —
+        // and hence the len/2 median index — changes, across kernels straddling
+        // the dispatch threshold, even/odd kernels, and tie densities.
+        fn naive(x: &[f64], k: usize) -> Vec<f64> {
+            if x.is_empty() || k == 0 {
+                return x.to_vec();
+            }
+            let half = k / 2;
+            let n = x.len();
+            (0..n)
+                .map(|i| {
+                    let start = i.saturating_sub(half);
+                    let end = (i + half + 1).min(n);
+                    let mut w: Vec<f64> = x[start..end].to_vec();
+                    w.sort_by(|a, b| a.total_cmp(b));
+                    w[w.len() / 2]
+                })
+                .collect()
+        }
+        let mut state: u64 = 0x2bad_f00d_1234_5678;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            state
+        };
+        for &n in &[1usize, 2, 40, 300] {
+            for &tie_mod in &[0u64, 2, 5, 30] {
+                let data: Vec<f64> = (0..n)
+                    .map(|_| {
+                        let r = next();
+                        match r % 41 {
+                            0 => -0.0,
+                            1 => 0.0,
+                            _ if tie_mod == 0 => (r >> 20) as f64 / (1u64 << 30) as f64,
+                            _ => (r % tie_mod) as f64,
+                        }
+                    })
+                    .collect();
+                for &k in &[1usize, 2, 31, 32, 33, 64, 65, 129] {
+                    let fast = medfilt1(&data, k);
                     let slow = naive(&data, k);
                     assert_eq!(fast.len(), slow.len());
                     for (a, b) in fast.iter().zip(slow.iter()) {

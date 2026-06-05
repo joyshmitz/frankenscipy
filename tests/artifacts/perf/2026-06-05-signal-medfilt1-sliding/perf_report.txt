@@ -1,0 +1,39 @@
+perf: fsci-signal medfilt1 — per-window sort -> sliding ordered-multiset median, O(n*k log k) -> O(n log k)
+=========================================================================================================
+
+Target : crates/fsci-signal/src/lib.rs :: medfilt1 (1-D moving median, clipped borders).
+Lever  : medfilt1 sorted a fresh length-k window for every output sample (O(n*k log k)). Route large
+         kernels through the existing `SlidingRankWindow` (two total_cmp-ordered BTreeMap multisets,
+         O(log k)/step) — the same structure already used by `medfilt`/`order_filter`. medfilt1's one
+         twist vs order_filter: it takes `window[window.len()/2]`, i.e. the rank `len/2` element of
+         the CURRENT clipped window, and that length changes at the borders — so a new `set_rank`
+         method re-points the desired rank each step before reading `value()`. Reuses the proven
+         clipped monotone-[start,end) driver. Sibling of the shipped medfilt (9c69bd13) / order_filter
+         (3044f053) sliding wins.
+
+Isomorphism proof (byte-identical)
+----------------------------------
+- For a clipped window of size m, `set_rank(m/2)` keeps `lower` at min(m/2+1, m) elements, so
+  `lower_max()` is sorted index min(m/2, m-1) = m/2 = `window[window.len()/2]` — exactly the naive
+  result. Removal takes any copy of the leaving value; `rebalance` restores the invariant (handles
+  the multiset straddle). OrderedF64 = total_cmp so NaN / signed-zero order matches the naive sort.
+- Empirically: 0 mismatches / 486 cases across n in {1,2,8,33,100,512} x kernels
+  {1,2,3,8,32,33,64,65,129} (straddling the threshold 32, even AND odd) x tie densities
+  grid in {0(continuous),2,5} x 3 seeds, comparing the library to a VERBATIM copy of the original
+  per-window-sort medfilt1 via to_bits.
+- In-tree test `medfilt1_sliding_matches_naive_sort` re-checks across tie densities incl. signed
+  zeros and the dispatch boundary.
+- Golden payload sha256 (per-config xor of output bits):
+    6a577b87ffea978432f2cb3c0226cd895e02bf75fd43a96b9a5c6791cbcace8d  golden_payload.txt
+
+Timing (same-process A/B, release, mean of 5; n=8192 continuous)
+----------------------------------------------------------------
+  k= 65  old= 9.138 ms  new=2.637 ms  ratio=  3.5x
+  k=257  old=42.984 ms  new=3.023 ms  ratio= 14.2x
+  k=513  old=87.289 ms  new=3.113 ms  ratio= 28.0x
+  (ratio grows with k; small kernels (< 32) keep the naive sort, no regression.)
+
+Score: Impact 4 x Confidence 5 / Effort 1 = 20  (>> 2.0)
+
+Tests: cargo test -p fsci-signal --lib medfilt1_sliding => 1 passed. fmt + clippy clean.
+Reproduce: cargo run --release -p fsci-signal --bin perf_medfilt1
