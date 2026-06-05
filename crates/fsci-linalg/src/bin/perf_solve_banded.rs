@@ -13,6 +13,7 @@ use fsci_linalg::{SolveOptions, solve_banded};
 /// Build the (kl+ku+1)×n banded storage `ab` (scipy convention
 /// `ab[ku + i - j][j] = A[i][j]`) for a deterministic, diagonally dominant
 /// banded matrix, plus a deterministic RHS.
+#[allow(clippy::needless_range_loop)] // explicit (i,j) -> LAPACK band-row indexing
 fn make_case(n: usize, kl: usize, ku: usize, seed: f64) -> (Vec<Vec<f64>>, Vec<f64>) {
     let rows = kl + ku + 1;
     let mut ab = vec![vec![0.0_f64; n]; rows];
@@ -81,10 +82,10 @@ fn golden_text() -> String {
 fn main() {
     let output = golden_text();
     if let Some(path) = std::env::args().nth(1) {
-        if let Some(parent) = std::path::Path::new(&path).parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent).expect("create golden artifact parent");
-            }
+        if let Some(parent) = std::path::Path::new(&path).parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent).expect("create golden artifact parent");
         }
         std::fs::write(path, output).expect("write golden artifact");
     } else {
