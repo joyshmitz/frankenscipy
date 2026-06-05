@@ -1,0 +1,37 @@
+perf: fsci-interpolate polyfit — hoist A^T A mirror out of sample loop + reuse xpow buffer
+==========================================================================================
+
+Target : crates/fsci-interpolate/src/lib.rs :: polyfit (the A^T A / A^T b normal-equations build).
+Lever  : The build accumulated the upper triangle of A^T A but mirrored each entry to the lower
+         triangle INSIDE the per-sample loop (`ata[k][j] = ata[j][k]` for every sample) — O(n·ncols²)
+         redundant, cache-scattered writes — and allocated a fresh `xpow` Vec per sample. Fix:
+         accumulate the upper triangle only, reuse one xpow buffer, mirror once after the loop.
+
+Isomorphism proof (byte-identical)
+----------------------------------
+- The upper-triangle accumulation operands/order are unchanged (ata[j][k] += xpow[j]*xpow[k] over
+  samples i=0..n, j<=k); the lower triangle is never READ during accumulation, so removing the
+  in-loop mirror changes nothing, and the single post-loop mirror copies the same finished values
+  the per-sample assignment left behind. xpow[0] is x^0=1 and is never overwritten, so the reused
+  buffer yields identical xpow[j] = x[i]^j. So A^T A and A^T b — and hence the fitted coefficients
+  (downstream of solve_normal) — are bit-for-bit identical.
+- Empirically: 0 mismatches / 3000 random problems (deg in [1,14], n in [deg+1, deg+60], |x|<=1);
+  the full A^T A and A^T b compared via .to_bits() between a verbatim original build and the new
+  build. A polyfit() end-to-end call per trial feeds the golden digest.
+- Golden payload sha256 (per-trial digest of the fitted coefficient vector):
+    dc7067fadd5efcb524b0a73e8067ad491470b02643dbeabe169de62c351b0c57  golden_payload.txt
+
+Timing (same-process A/B, release, mean of 3; A^T A build, all-ones design)
+---------------------------------------------------------------------------
+  n=200000 deg=23  old= 84.230 ms  new= 42.291 ms  ratio= 2.0x
+  n=100000 deg=47  old=185.489 ms  new= 79.595 ms  ratio= 2.3x
+  n= 60000 deg=79  old=295.295 ms  new=136.949 ms  ratio= 2.2x
+
+Score: Impact 3 x Confidence 5 / Effort 1 = 15  (>> 2.0)
+
+Tests: cargo test -p fsci-interpolate --lib polyfit => 1 passed. clippy + fmt clean.
+
+Sibling: multiple_regression (894dad37), ridge_regression (622dd0d6).
+NOTE: a jtj_matrix (LM curve-fit J^T J) mirror-hoist was also trialed and REJECTED — it measured
+only 1.6-1.7x (no per-sample allocation to remove, and the small n×n Gram is cache-resident), below
+the Score>=2.0 bar, so it was reverted and NOT shipped.

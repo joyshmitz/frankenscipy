@@ -3873,21 +3873,30 @@ pub fn polyfit(x: &[f64], y: &[f64], deg: usize) -> Result<Vec<f64>, InterpError
     let mut ata = vec![vec![0.0; ncols]; ncols];
     let mut atb = vec![0.0; ncols];
 
+    // Accumulate only the upper triangle of A^T A, reuse one xpow buffer instead
+    // of allocating per sample, and mirror to the lower triangle ONCE after the
+    // loop. The previous in-loop mirror (`ata[k][j] = ata[j][k]` per sample) did
+    // O(n·ncols²) cache-scattered writes. Byte-identical: the upper-triangle
+    // accumulation order/operands are unchanged, xpow[0] stays 1.0 so the reused
+    // buffer yields identical xpow[j] = x[i]^j, and the final mirror copies the
+    // same finished values the per-sample assignment left behind.
+    let mut xpow = vec![1.0; ncols]; // xpow[0] is x^0 = 1, never overwritten
     for i in 0..n {
-        let mut xpow = vec![1.0; ncols];
         for j in 1..ncols {
             xpow[j] = xpow[j - 1] * x[i];
         }
-        // xpow[j] = x[i]^j
 
         for j in 0..ncols {
             atb[j] += xpow[j] * y[i];
             for k in j..ncols {
                 ata[j][k] += xpow[j] * xpow[k];
-                if k != j {
-                    ata[k][j] = ata[j][k];
-                }
             }
+        }
+    }
+    #[allow(clippy::needless_range_loop)]
+    for j in 0..ncols {
+        for k in (j + 1)..ncols {
+            ata[k][j] = ata[j][k];
         }
     }
 
