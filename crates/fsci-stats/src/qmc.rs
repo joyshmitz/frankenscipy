@@ -105,7 +105,7 @@ impl HaltonSampler {
         for _ in 0..n {
             let idx = self.next_index;
             for &prime in &self.primes {
-                out.push(radical_inverse(idx, prime));
+                out.push(radical_inverse_fast(idx, prime));
             }
             self.next_index = self.next_index.saturating_add(1);
         }
@@ -176,6 +176,51 @@ fn radical_inverse_const<const PRIME: u64>(mut index: u64) -> f64 {
         f *= inv_prime;
     }
     result
+}
+
+/// Dispatch a bundled Halton prime to its `radical_inverse_const` specialisation
+/// so the per-digit `% prime` / `/ prime` become compile-time division
+/// strength-reduction (multiply-by-magic) instead of full runtime `div`
+/// instructions. Byte-identical: `radical_inverse_const::<P>` is the exact same
+/// float computation as `radical_inverse(index, P)`. Primes are the 32 entries of
+/// HALTON_PRIMES; the wildcard keeps the runtime path as a safety net.
+#[inline]
+fn radical_inverse_fast(index: u64, prime: u64) -> f64 {
+    match prime {
+        2 => radical_inverse_const::<2>(index),
+        3 => radical_inverse_const::<3>(index),
+        5 => radical_inverse_const::<5>(index),
+        7 => radical_inverse_const::<7>(index),
+        11 => radical_inverse_const::<11>(index),
+        13 => radical_inverse_const::<13>(index),
+        17 => radical_inverse_const::<17>(index),
+        19 => radical_inverse_const::<19>(index),
+        23 => radical_inverse_const::<23>(index),
+        29 => radical_inverse_const::<29>(index),
+        31 => radical_inverse_const::<31>(index),
+        37 => radical_inverse_const::<37>(index),
+        41 => radical_inverse_const::<41>(index),
+        43 => radical_inverse_const::<43>(index),
+        47 => radical_inverse_const::<47>(index),
+        53 => radical_inverse_const::<53>(index),
+        59 => radical_inverse_const::<59>(index),
+        61 => radical_inverse_const::<61>(index),
+        67 => radical_inverse_const::<67>(index),
+        71 => radical_inverse_const::<71>(index),
+        73 => radical_inverse_const::<73>(index),
+        79 => radical_inverse_const::<79>(index),
+        83 => radical_inverse_const::<83>(index),
+        89 => radical_inverse_const::<89>(index),
+        97 => radical_inverse_const::<97>(index),
+        101 => radical_inverse_const::<101>(index),
+        103 => radical_inverse_const::<103>(index),
+        107 => radical_inverse_const::<107>(index),
+        109 => radical_inverse_const::<109>(index),
+        113 => radical_inverse_const::<113>(index),
+        127 => radical_inverse_const::<127>(index),
+        131 => radical_inverse_const::<131>(index),
+        other => radical_inverse(index, other),
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
