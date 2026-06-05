@@ -1,0 +1,33 @@
+perf: fsci-cluster fowlkes_mallows_score — O(n^2) pair loop -> O(n + k^2) contingency table
+============================================================================================
+
+Target   : crates/fsci-cluster/src/lib.rs :: fowlkes_mallows_score
+Lever    : Replace the all-pairs O(n^2) double loop (tp/fp/fn counting) with pair
+           counts read off the true-vs-pred contingency table. With C(m)=m(m-1)/2:
+             tp       = sum over table cells of C(cell)   (pairs together in both)
+             tp + fp  = sum over column sums of C(col)     (pairs sharing pred cluster)
+             tp + fn  = sum over row sums of C(row)         (pairs sharing true cluster)
+           Same lever family as rand_index / adjusted_rand / NMI already in-tree.
+
+Isomorphism proof
+-----------------
+- Pair counts are exact integers; partial sums stay < 2^53, so the f64 sums are exact
+  and order-independent — identical to the u64 pair loop. precision, recall, sqrt all
+  derived from identical integers => byte-identical f64.
+- Empirically verified: 240 randomized cases (n in {1,2,7,31,64,257,1000,4096} x
+  (kt,kp) in {(2,2),(3,5),(7,11),(1,4),(50,50)} x 6 reps). old_fm (verbatim original),
+  new_fm (table form), AND the real library fowlkes_mallows_score all agree bit-for-bit.
+  mismatches = 0.
+- Golden payload sha256 (old vs new bits): see golden_payload.sha256
+    7f9c1dc52f840a78dea7845810632f22e51fdf510cad73dd661a1cffe8cb734f  golden_payload.txt
+  golden_payload_with_lib.txt (real lib included) has the identical sha256.
+
+Timing (same-process A/B, release, mean of 5 runs)
+--------------------------------------------------
+  n= 2000   old=  1.600 ms   new=  5.207 us   ratio=  307x
+  n= 8000   old= 28.213 ms   new= 20.186 us   ratio= 1398x
+  n=20000   old=188.750 ms   new= 60.466 us   ratio= 3122x
+
+Score: Impact 5 x Confidence 5 / Effort 1 = 25  (>> 2.0 threshold)
+
+Tests: cargo test -p fsci-cluster => 54 passed; 0 failed. clippy clean, fmt clean.

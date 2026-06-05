@@ -1752,38 +1752,33 @@ pub fn fowlkes_mallows_score(
         return Ok(1.0);
     }
 
-    // Count pairs
-    let mut tp = 0u64; // true positive pairs (same class, same cluster)
-    let mut fp = 0u64; // false positive (diff class, same cluster)
-    let mut fn_ = 0u64; // false negative (same class, diff cluster)
+    // Pair counts derived from the true-vs-pred contingency table in O(n + k^2)
+    // instead of enumerating all O(n^2) pairs. With C(m) = m(m-1)/2:
+    //   tp        = sum over table cells of C(cell)   (pairs together in both)
+    //   tp + fp   = sum over column sums of C(col)     (pairs sharing a predicted cluster)
+    //   tp + fn_  = sum over row sums of C(row)        (pairs sharing a true cluster)
+    // These are exact integer counts (sums stay < 2^53), so precision, recall, and the
+    // index are byte-identical to the pair loop.
+    let contingency = contingency_table(labels_true, labels_pred, "fowlkes_mallows_score")?;
+    let k2 = contingency.first().map_or(0, Vec::len);
+    let row_sums: Vec<usize> = contingency.iter().map(|r| r.iter().sum()).collect();
+    let col_sums: Vec<usize> = (0..k2)
+        .map(|j| contingency.iter().map(|r| r[j]).sum())
+        .collect();
 
-    for i in 0..n {
-        for j in i + 1..n {
-            let same_true = labels_true[i] == labels_true[j];
-            let same_pred = labels_pred[i] == labels_pred[j];
-            match (same_true, same_pred) {
-                (true, true) => tp += 1,
-                (false, true) => fp += 1,
-                (true, false) => fn_ += 1,
-                _ => {}
-            }
-        }
-    }
-
-    if tp == 0 {
+    let tp: f64 = contingency
+        .iter()
+        .flat_map(|r| r.iter())
+        .map(|&v| comb2_usize(v))
+        .sum();
+    if tp == 0.0 {
         return Ok(0.0);
     }
+    let tp_fp: f64 = col_sums.iter().map(|&v| comb2_usize(v)).sum();
+    let tp_fn: f64 = row_sums.iter().map(|&v| comb2_usize(v)).sum();
 
-    let precision = if tp + fp > 0 {
-        tp as f64 / (tp + fp) as f64
-    } else {
-        0.0
-    };
-    let recall = if tp + fn_ > 0 {
-        tp as f64 / (tp + fn_) as f64
-    } else {
-        0.0
-    };
+    let precision = if tp_fp > 0.0 { tp / tp_fp } else { 0.0 };
+    let recall = if tp_fn > 0.0 { tp / tp_fn } else { 0.0 };
     Ok((precision * recall).sqrt())
 }
 
