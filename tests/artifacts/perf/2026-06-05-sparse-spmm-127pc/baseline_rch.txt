@@ -1,0 +1,12 @@
+Command:
+RCH_FORCE_REMOTE=1 rch exec -- cargo bench -p fsci-sparse --bench sparse_bench --locked -- sparse_spmm/2000x2000_d1/2000 --warm-up-time 1 --measurement-time 5 --sample-size 30 --noplot
+
+Worker: ts2
+
+Note: the first shell capture used tee without stderr redirection, so this file
+records the terminal-visible RCH Criterion result from that baseline run.
+
+sparse_spmm/2000x2000_d1/2000
+time: [13.333 ms 13.405 ms 13.481 ms]
+
+[RCH] remote ts2

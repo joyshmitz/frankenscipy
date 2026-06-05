@@ -3454,40 +3454,30 @@ fn spmm_rows_parallel(
     nthreads: usize,
 ) -> (Vec<usize>, Vec<f64>, Vec<usize>, bool) {
     let ranges = spmm_work_balanced_ranges(a, b, b_rows, m, nthreads);
+    spmm_rows_parallel_exact(a, b, n, b_rows, m, &ranges)
+}
 
-    let count_chunks: Vec<Vec<usize>> = std::thread::scope(|scope| {
-        let handles: Vec<_> = ranges
-            .iter()
-            .map(|&(row_start, row_end)| {
-                scope.spawn(move || spmm_row_counts_chunk(a, b, n, b_rows, row_start, row_end))
-            })
-            .collect();
-        handles
-            .into_iter()
-            .map(|handle| handle.join().expect("spmm symbolic chunk panicked"))
-            .collect()
-    });
-
-    let mut indptr = Vec::with_capacity(m + 1);
-    let mut chunk_caps = Vec::with_capacity(count_chunks.len());
-    indptr.push(0);
-    let mut acc = 0usize;
-    for counts in &count_chunks {
-        let before = acc;
-        for &count in counts {
-            acc += count;
-            indptr.push(acc);
-        }
-        chunk_caps.push(acc - before);
-    }
-
+fn spmm_rows_parallel_exact(
+    a: &CsrMatrix,
+    b: &CsrMatrix,
+    n: usize,
+    b_rows: usize,
+    m: usize,
+    ranges: &[(usize, usize)],
+) -> (Vec<usize>, Vec<f64>, Vec<usize>, bool) {
     type ChunkOut = (Vec<usize>, Vec<f64>, Vec<usize>, bool);
     let chunks: Vec<ChunkOut> = std::thread::scope(|scope| {
         let handles: Vec<_> = ranges
             .iter()
-            .zip(&chunk_caps)
-            .map(|(&(row_start, row_end), &cap_hint)| {
-                scope.spawn(move || spmm_row_chunk(a, b, n, b_rows, row_start, row_end, cap_hint))
+            .map(|&(row_start, row_end)| {
+                scope.spawn(move || {
+                    let counts = spmm_row_counts_chunk(a, b, n, b_rows, row_start, row_end);
+                    let cap_hint = counts.iter().sum();
+                    let (cols, vals, numeric_counts, sorted) =
+                        spmm_row_chunk(a, b, n, b_rows, row_start, row_end, cap_hint);
+                    debug_assert_eq!(numeric_counts, counts);
+                    (cols, vals, counts, sorted)
+                })
             })
             .collect();
         handles
@@ -3496,18 +3486,26 @@ fn spmm_rows_parallel(
             .collect()
     });
 
+    let mut indptr = Vec::with_capacity(m + 1);
+    indptr.push(0);
+    let mut acc = 0usize;
+    for (_, _, counts, _) in &chunks {
+        for &count in counts {
+            acc += count;
+            indptr.push(acc);
+        }
+    }
+
     let total = indptr[m];
     let mut cols = Vec::with_capacity(total);
     let mut vals = Vec::with_capacity(total);
     let mut sorted_indices = true;
-    for ((chunk_cols, chunk_vals, counts, chunk_sorted), expected_counts) in
-        chunks.iter().zip(&count_chunks)
-    {
-        debug_assert_eq!(counts, expected_counts);
+    for (chunk_cols, chunk_vals, _, chunk_sorted) in &chunks {
         cols.extend_from_slice(chunk_cols);
         vals.extend_from_slice(chunk_vals);
         sorted_indices &= *chunk_sorted;
     }
+
     (cols, vals, indptr, sorted_indices)
 }
 
