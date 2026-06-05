@@ -2296,6 +2296,86 @@ fn transform_nd_unscaled(
     data
 }
 
+/// Threads to use for one parallel axis pass. `work` is the element count touched.
+/// Each parallel phase spawns real OS threads, so splitting only pays off on large
+/// passes; below ~1M elements the strided-copy / transform work is cheaper done
+/// sequentially (spinning up 64 threads for microseconds of work regressed small
+/// nd FFTs). We also keep >=64K elements per thread so thread count tracks work.
+fn nd_axis_thread_count(lanes: usize, axis_len: usize) -> usize {
+    const MIN_TOTAL_WORK: usize = 1 << 20; // 1,048,576 elements
+    const MIN_WORK_PER_THREAD: usize = 1 << 16; // 65,536 elements
+    let work = lanes.saturating_mul(axis_len);
+    if lanes < 64 || work < MIN_TOTAL_WORK {
+        return 1;
+    }
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let by_work = (work / MIN_WORK_PER_THREAD).max(1);
+    cores.min(by_work).min(lanes).max(1)
+}
+
+/// Axis-0 transform via transpose. Axis 0 has `repeats == 1`, so its `stride`
+/// independent lanes are strided through the whole array and cannot be split into
+/// disjoint contiguous slices in place. We transpose those lanes into a contiguous
+/// scratch buffer (one lane per `axis_len` run), transform each lane, and transpose
+/// back. Every phase is parallel over disjoint output regions:
+///   * gather+transform: thread owns offsets [o0, o0+k) -> contiguous transposed lanes
+///   * scatter: thread owns indices [i0, i0+m) -> contiguous `data` rows of `stride`
+/// Byte-identical to the sequential strided walk: each lane's 1D FFT sees the same
+/// inputs in the same order, and gather/scatter are pure permutations.
+fn apply_axis0_transpose_transform(
+    data: &mut [Complex64],
+    axis_len: usize,
+    stride: usize,
+    nthreads: usize,
+    twiddles: &TwiddleTable,
+    bit_reverse_swaps: &[(usize, usize)],
+) {
+    let mut transposed = vec![(0.0, 0.0); axis_len * stride];
+
+    // Parallel gather + transform fused: lane `offset` is transposed[offset*axis_len..]
+    let offsets_per_thread = stride.div_ceil(nthreads);
+    let gather_chunk = offsets_per_thread * axis_len;
+    {
+        let data_ref: &[Complex64] = data;
+        std::thread::scope(|scope| {
+            for (chunk_idx, chunk) in transposed.chunks_mut(gather_chunk).enumerate() {
+                let o_start = chunk_idx * offsets_per_thread;
+                scope.spawn(move || {
+                    for (off_local, lane) in chunk.chunks_mut(axis_len).enumerate() {
+                        let offset = o_start + off_local;
+                        for (index, slot) in lane.iter_mut().enumerate() {
+                            *slot = data_ref[index * stride + offset];
+                        }
+                        cooley_tukey_radix2_inplace_with_plan(lane, twiddles, bit_reverse_swaps);
+                    }
+                });
+            }
+        });
+    }
+
+    // Parallel scatter: row `index` is data[index*stride..(index+1)*stride]
+    let indices_per_thread = axis_len.div_ceil(nthreads);
+    let scatter_chunk = indices_per_thread * stride;
+    {
+        let transposed_ref: &[Complex64] = &transposed;
+        std::thread::scope(|scope| {
+            for (chunk_idx, chunk) in data.chunks_mut(scatter_chunk).enumerate() {
+                let i_start = chunk_idx * indices_per_thread;
+                scope.spawn(move || {
+                    for (idx_local, row) in chunk.chunks_mut(stride).enumerate() {
+                        let index = i_start + idx_local;
+                        for (offset, slot) in row.iter_mut().enumerate() {
+                            *slot = transposed_ref[offset * axis_len + index];
+                        }
+                    }
+                });
+            }
+        });
+    }
+}
+
 fn apply_axis_transform(
     backend: &dyn FftBackend,
     data: &mut [Complex64],
@@ -2317,6 +2397,67 @@ fn apply_axis_transform(
         } else {
             None
         };
+
+    // Axis 0 (repeats == 1) can only be parallelized via the transpose path, which
+    // costs two extra array passes; only take it when it will actually run threaded,
+    // otherwise the direct strided loop below is cheaper.
+    if axis == 0
+        && repeats == 1
+        && let Some((twiddles, bit_reverse_swaps)) = &cooley_tukey_axis_plan
+    {
+        let nthreads = nd_axis_thread_count(stride, axis_len);
+        if nthreads > 1 {
+            apply_axis0_transpose_transform(
+                data,
+                axis_len,
+                stride,
+                nthreads,
+                twiddles,
+                bit_reverse_swaps,
+            );
+            return;
+        }
+    }
+
+    // Axis > 0: each outer block is a disjoint contiguous `block`-element slice whose
+    // lanes are independent, so split whole blocks across threads (each with its own
+    // scratch) and transform in place. Byte-identical to the sequential (outer, offset)
+    // walk because each lane's read/transform/write set is unchanged.
+    let nthreads = nd_axis_thread_count(repeats.saturating_mul(stride), axis_len);
+    if repeats >= 2 && nthreads > 1 {
+        let backend_kind = backend.kind();
+        let plan = &cooley_tukey_axis_plan;
+        let blocks_per_thread = repeats.div_ceil(nthreads);
+        let chunk_len = blocks_per_thread * block;
+        std::thread::scope(|scope| {
+            for chunk in data.chunks_mut(chunk_len) {
+                scope.spawn(move || {
+                    let backend = resolve_backend(backend_kind);
+                    let mut local = vec![(0.0, 0.0); axis_len];
+                    for block_slice in chunk.chunks_mut(block) {
+                        for offset in 0..stride {
+                            for (index, slot) in local.iter_mut().enumerate() {
+                                *slot = block_slice[index * stride + offset];
+                            }
+                            if let Some((twiddles, bit_reverse_swaps)) = plan {
+                                cooley_tukey_radix2_inplace_with_plan(
+                                    &mut local,
+                                    twiddles,
+                                    bit_reverse_swaps,
+                                );
+                            } else {
+                                backend.transform_1d_inplace(&mut local, inverse);
+                            }
+                            for (index, &value) in local.iter().enumerate() {
+                                block_slice[index * stride + offset] = value;
+                            }
+                        }
+                    }
+                });
+            }
+        });
+        return;
+    }
 
     let axis_scratch = &mut scratch[..axis_len];
     for outer in 0..repeats {

@@ -1,0 +1,5 @@
+# Pre-change (pure-sequential HEAD) golden for `perf_fft nd-golden`.
+# Byte-identical to nd_golden_after_parallel.txt (same content, same sha256):
+#   sha256 = 1e1cab2a6d719cb752e4776a840c48d848acfdb0df3bccb4a21e415a59d345a5
+# Captured by git-stashing the parallel change, rebuilding, re-running nd-golden.
+# Full dump preserved in nd_golden_after_parallel.txt; identical, so not duplicated.
