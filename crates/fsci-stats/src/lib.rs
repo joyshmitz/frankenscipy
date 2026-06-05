@@ -25022,23 +25022,68 @@ fn validate_graphcorr_observations(name: &str, data: &[Vec<f64>]) -> Result<(), 
 
 fn pairwise_euclidean_distance_matrix(data: &[Vec<f64>]) -> Vec<Vec<f64>> {
     let n = data.len();
-    let mut distances = vec![vec![0.0; n]; n];
-    for i in 0..n {
-        for j in (i + 1)..n {
-            let distance = data[i]
-                .iter()
-                .zip(data[j].iter())
-                .map(|(left, right)| {
-                    let delta = left - right;
-                    delta * delta
-                })
-                .sum::<f64>()
-                .sqrt();
-            distances[i][j] = distance;
-            distances[j][i] = distance;
-        }
+    if n == 0 {
+        return Vec::new();
     }
-    distances
+    // Each output row i is `[dist(i, 0), .., dist(i, n-1)]`, an independent reduction.
+    // dist(i, j) == dist(j, i) bit-for-bit ((a-b)^2 == (b-a)^2 in IEEE754 and the
+    // diagonal is sqrt(0)=0), so computing the full matrix row-by-row is byte-identical
+    // to the upper-triangle-and-mirror version while making every row disjoint. For
+    // large n*n*d the rows are split across threads.
+    let d = data[0].len();
+    let row = |i: usize| -> Vec<f64> {
+        (0..n)
+            .map(|j| {
+                if i == j {
+                    0.0
+                } else {
+                    data[i]
+                        .iter()
+                        .zip(data[j].iter())
+                        .map(|(left, right)| {
+                            let delta = left - right;
+                            delta * delta
+                        })
+                        .sum::<f64>()
+                        .sqrt()
+                }
+            })
+            .collect()
+    };
+
+    let work = (n as u64)
+        .saturating_mul(n as u64)
+        .saturating_mul(d.max(1) as u64);
+    let nthreads = if work < 1 << 18 || n < 8 {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n / 2)
+            .max(1)
+    };
+    if nthreads <= 1 {
+        return (0..n).map(row).collect();
+    }
+    let chunk = n.div_ceil(nthreads);
+    let row = &row;
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..nthreads)
+            .filter_map(|t| {
+                let i0 = t * chunk;
+                if i0 >= n {
+                    return None;
+                }
+                let i1 = (i0 + chunk).min(n);
+                Some(scope.spawn(move || (i0..i1).map(row).collect::<Vec<Vec<f64>>>()))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().expect("distance-matrix worker panicked"))
+            .collect()
+    })
 }
 
 fn double_center_distance_matrix(distances: &[Vec<f64>]) -> Vec<Vec<f64>> {
@@ -47810,6 +47855,88 @@ mod tests {
         assert!(chatterjeexi(&[1.0, 2.0], &[1.0]).statistic.is_nan());
         // Too short
         assert!(chatterjeexi(&[1.0], &[1.0]).statistic.is_nan());
+    }
+
+    #[test]
+    #[ignore = "timing only; run with --ignored --nocapture --release"]
+    fn pairwise_distance_matrix_parallel_speedup() {
+        let n = 2000usize;
+        let d = 16usize;
+        let data: Vec<Vec<f64>> = (0..n)
+            .map(|i| (0..d).map(|j| (i as f64 * 0.013 + j as f64 * 0.7).sin()).collect())
+            .collect();
+        let seq_ref = |data: &[Vec<f64>]| -> Vec<Vec<f64>> {
+            let n = data.len();
+            let mut m = vec![vec![0.0; n]; n];
+            for i in 0..n {
+                for j in (i + 1)..n {
+                    let dist = data[i]
+                        .iter()
+                        .zip(data[j].iter())
+                        .map(|(l, r)| {
+                            let x = l - r;
+                            x * x
+                        })
+                        .sum::<f64>()
+                        .sqrt();
+                    m[i][j] = dist;
+                    m[j][i] = dist;
+                }
+            }
+            m
+        };
+        let t0 = std::time::Instant::now();
+        let par = pairwise_euclidean_distance_matrix(&data);
+        let tp = t0.elapsed().as_secs_f64() * 1e3;
+        let t1 = std::time::Instant::now();
+        let seq = seq_ref(&data);
+        let ts = t1.elapsed().as_secs_f64() * 1e3;
+        assert_eq!(par.len(), seq.len());
+        println!(
+            "pairwise n={n} d={d}: seq={ts:.3}ms par={tp:.3}ms speedup={:.2}x",
+            ts / tp
+        );
+    }
+
+    #[test]
+    fn pairwise_distance_matrix_parallel_is_bit_identical() {
+        // n=300, d=8 => n*n*d = 720k >= the 2^18 gate -> the threaded path runs.
+        let data: Vec<Vec<f64>> = (0..300)
+            .map(|i| {
+                (0..8)
+                    .map(|j| (i as f64 * 0.013 + j as f64 * 0.7).sin())
+                    .collect()
+            })
+            .collect();
+        let got = pairwise_euclidean_distance_matrix(&data);
+        // Verbatim sequential upper-triangle-and-mirror reference.
+        let n = data.len();
+        let mut want = vec![vec![0.0; n]; n];
+        for i in 0..n {
+            for j in (i + 1)..n {
+                let dist = data[i]
+                    .iter()
+                    .zip(data[j].iter())
+                    .map(|(l, r)| {
+                        let d = l - r;
+                        d * d
+                    })
+                    .sum::<f64>()
+                    .sqrt();
+                want[i][j] = dist;
+                want[j][i] = dist;
+            }
+        }
+        assert_eq!(got.len(), n);
+        for i in 0..n {
+            for j in 0..n {
+                assert_eq!(
+                    got[i][j].to_bits(),
+                    want[i][j].to_bits(),
+                    "pairwise distance mismatch at ({i},{j})"
+                );
+            }
+        }
     }
 
     #[test]
