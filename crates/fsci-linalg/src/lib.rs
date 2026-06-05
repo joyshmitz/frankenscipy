@@ -399,6 +399,12 @@ pub struct PinvResult {
     pub certificate: Option<SolveCertificate>,
 }
 
+struct LowRankPinvResult {
+    pseudo_inverse: Vec<Vec<f64>>,
+    rank: usize,
+    rcond_estimate: f64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ConditionReport {
     pub matrix_shape: (usize, usize),
@@ -2488,6 +2494,49 @@ pub fn pinv_with_casp(
             pseudo_inverse: vec![vec![0.0; rows]; cols],
             rank: 0,
             certificate: None,
+        });
+    }
+
+    if let Some(fast) = pinv_low_rank_tall(a, rows, cols, atol, rtol) {
+        let (_, posterior, expected_losses, _) = portfolio.select_action(fast.rcond_estimate, None);
+        let action = SolverAction::SVDFallback;
+
+        let certificate = SolveCertificate {
+            action,
+            matrix_shape: (rows, cols),
+            rcond_estimate: fast.rcond_estimate,
+            structural_evidence: StructuralEvidence::General,
+            posterior: posterior.to_vec(),
+            expected_losses: expected_losses.to_vec(),
+            chosen_expected_loss: expected_losses[action.index()],
+            fallback_active: false,
+        };
+
+        emit_trace(LinalgTrace {
+            operation: "pinv_with_casp",
+            matrix_size: (rows, cols),
+            mode: options.mode,
+            rcond: Some(fast.rcond_estimate),
+            warning: None,
+            error: None,
+        });
+
+        portfolio.record_evidence(SolverEvidenceEntry {
+            component: "pinv_with_casp",
+            matrix_shape: (rows, cols),
+            rcond_estimate: fast.rcond_estimate,
+            chosen_action: action,
+            posterior: posterior.to_vec(),
+            expected_losses: expected_losses.to_vec(),
+            chosen_expected_loss: expected_losses[action.index()],
+            fallback_active: false,
+            backward_error: None,
+        });
+
+        return Ok(PinvResult {
+            pseudo_inverse: fast.pseudo_inverse,
+            rank: fast.rank,
+            certificate: Some(certificate),
         });
     }
 
@@ -6006,6 +6055,228 @@ fn least_squares_solution_from_svd(
     Ok(x)
 }
 
+const LOW_RANK_PINV_MIN_COLS: usize = 512;
+const LOW_RANK_PINV_MAX_RANK: usize = 16;
+const LOW_RANK_PINV_BASIS_REL_TOL: f64 = 1e-8;
+const LOW_RANK_PINV_RECON_REL_TOL: f64 = 1e-8;
+
+struct LowRankTallFactor {
+    basis: Vec<Vec<f64>>,
+    coefficients: Vec<Vec<f64>>,
+}
+
+fn low_rank_tall_factor(
+    a: &[Vec<f64>],
+    rows: usize,
+    cols: usize,
+    max_rank: usize,
+) -> Option<LowRankTallFactor> {
+    let mut max_col_norm_sq = 0.0_f64;
+    for col in 0..cols {
+        let mut norm_sq = 0.0_f64;
+        for row in a.iter().take(rows) {
+            let value = row[col];
+            if !value.is_finite() {
+                return None;
+            }
+            norm_sq += value * value;
+        }
+        max_col_norm_sq = max_col_norm_sq.max(norm_sq);
+    }
+    let max_col_norm = max_col_norm_sq.sqrt();
+    if max_col_norm == 0.0 {
+        return Some(LowRankTallFactor {
+            basis: Vec::new(),
+            coefficients: Vec::new(),
+        });
+    }
+
+    let basis_tol = LOW_RANK_PINV_BASIS_REL_TOL * max_col_norm;
+    let mut basis: Vec<Vec<f64>> = Vec::new();
+    let mut work = vec![0.0_f64; rows];
+    for col in 0..cols {
+        for (row_idx, row) in a.iter().enumerate().take(rows) {
+            work[row_idx] = row[col];
+        }
+        for _ in 0..2 {
+            for vector in &basis {
+                let mut projection = 0.0_f64;
+                for row in 0..rows {
+                    projection += vector[row] * work[row];
+                }
+                if projection != 0.0 {
+                    for row in 0..rows {
+                        work[row] -= projection * vector[row];
+                    }
+                }
+            }
+        }
+        let norm = work.iter().map(|value| value * value).sum::<f64>().sqrt();
+        if norm > basis_tol {
+            if basis.len() == max_rank {
+                return None;
+            }
+            let inv_norm = 1.0 / norm;
+            basis.push(work.iter().map(|value| value * inv_norm).collect());
+        }
+    }
+
+    let rank = basis.len();
+    let mut coefficients = vec![vec![0.0_f64; cols]; rank];
+    for col in 0..cols {
+        for (basis_idx, vector) in basis.iter().enumerate() {
+            let mut coefficient = 0.0_f64;
+            for row in 0..rows {
+                coefficient += vector[row] * a[row][col];
+            }
+            coefficients[basis_idx][col] = coefficient;
+        }
+    }
+
+    let recon_tol = LOW_RANK_PINV_RECON_REL_TOL * max_col_norm;
+    for col in 0..cols {
+        let mut residual_sq = 0.0_f64;
+        for row in 0..rows {
+            let mut reconstructed = 0.0_f64;
+            for basis_idx in 0..rank {
+                reconstructed += basis[basis_idx][row] * coefficients[basis_idx][col];
+            }
+            let residual = a[row][col] - reconstructed;
+            residual_sq += residual * residual;
+        }
+        if residual_sq.sqrt() > recon_tol {
+            return None;
+        }
+    }
+
+    Some(LowRankTallFactor {
+        basis,
+        coefficients,
+    })
+}
+
+fn pinv_low_rank_tall(
+    a: &[Vec<f64>],
+    rows: usize,
+    cols: usize,
+    atol: f64,
+    rtol: f64,
+) -> Option<LowRankPinvResult> {
+    pinv_low_rank_tall_with_limits(a, rows, cols, atol, rtol, LOW_RANK_PINV_MIN_COLS)
+}
+
+fn pinv_low_rank_tall_with_limits(
+    a: &[Vec<f64>],
+    rows: usize,
+    cols: usize,
+    atol: f64,
+    rtol: f64,
+    min_cols: usize,
+) -> Option<LowRankPinvResult> {
+    if rows < cols.saturating_mul(2) || cols < min_cols || !rows_are_rectangular(a, cols) {
+        return None;
+    }
+
+    let factor = low_rank_tall_factor(a, rows, cols, LOW_RANK_PINV_MAX_RANK)?;
+    let basis_rank = factor.basis.len();
+    if basis_rank == 0 {
+        return Some(LowRankPinvResult {
+            pseudo_inverse: vec![vec![0.0; rows]; cols],
+            rank: 0,
+            rcond_estimate: 0.0,
+        });
+    }
+    if basis_rank >= cols {
+        return None;
+    }
+
+    let mut compact = Vec::with_capacity(basis_rank * cols);
+    for row in &factor.coefficients {
+        compact.extend_from_slice(row);
+    }
+    let compact_matrix = DMatrix::from_row_slice(basis_rank, cols, &compact);
+    let compact_svd = safe_svd(compact_matrix, true, true).ok()?;
+    let u = compact_svd.u.as_ref()?;
+    let v_t = compact_svd.v_t.as_ref()?;
+    let singular_values: Vec<f64> = compact_svd.singular_values.iter().copied().collect();
+    let max_s = singular_values.iter().copied().fold(0.0_f64, |acc, value| {
+        if acc.is_nan() || value.is_nan() {
+            f64::NAN
+        } else {
+            acc.max(value)
+        }
+    });
+    if !max_s.is_finite() {
+        return None;
+    }
+    if max_s == 0.0 {
+        return Some(LowRankPinvResult {
+            pseudo_inverse: vec![vec![0.0; rows]; cols],
+            rank: 0,
+            rcond_estimate: 0.0,
+        });
+    }
+
+    let threshold = atol + rtol * max_s;
+    let rank = singular_values
+        .iter()
+        .filter(|singular| **singular > threshold)
+        .count();
+    if rank == 0 || rank >= cols {
+        return None;
+    }
+
+    let boundary_gap = singular_values
+        .get(rank)
+        .map(|next| singular_values[rank - 1] - *next)
+        .unwrap_or(singular_values[rank - 1]);
+    if boundary_gap.abs() <= threshold.max(max_s * 1e-12) {
+        return None;
+    }
+
+    let mut compact_pinv_to_basis = vec![vec![0.0_f64; basis_rank]; cols];
+    for singular_idx in 0..rank {
+        let singular = singular_values[singular_idx];
+        if singular <= 0.0 || !singular.is_finite() {
+            return None;
+        }
+        let inv_singular = 1.0 / singular;
+        for col in 0..cols {
+            let scaled_right = v_t[(singular_idx, col)] * inv_singular;
+            if scaled_right != 0.0 {
+                for (basis_idx, dst) in compact_pinv_to_basis[col].iter_mut().enumerate() {
+                    *dst += scaled_right * u[(basis_idx, singular_idx)];
+                }
+            }
+        }
+    }
+
+    let mut pseudo_inverse = vec![vec![0.0_f64; rows]; cols];
+    for col in 0..cols {
+        for (row, dst) in pseudo_inverse[col].iter_mut().enumerate() {
+            let mut value = 0.0_f64;
+            for (basis_coeff, basis_vector) in
+                compact_pinv_to_basis[col].iter().zip(factor.basis.iter())
+            {
+                value += *basis_coeff * basis_vector[row];
+            }
+            *dst = value;
+        }
+    }
+
+    let rcond_estimate = if rank < cols {
+        0.0
+    } else {
+        singular_values[rank - 1] / max_s
+    };
+
+    Some(LowRankPinvResult {
+        pseudo_inverse,
+        rank,
+        rcond_estimate,
+    })
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Matrix Equation Solvers
 // ══════════════════════════════════════════════════════════════════════
@@ -8987,8 +9258,10 @@ mod tests {
             let a = spd(n, seed);
             let b: Vec<f64> = (0..n).map(|i| (i as f64 * 0.01).cos()).collect();
             let x = cholesky_solve_blocked(&a, &b).expect("blocked Cholesky solves SPD");
-            let mut opts = SolveOptions::default();
-            opts.assume_a = Some(MatrixAssumption::PositiveDefinite);
+            let opts = SolveOptions {
+                assume_a: Some(MatrixAssumption::PositiveDefinite),
+                ..SolveOptions::default()
+            };
             let reference = solve(&a, &b, opts).expect("reference SPD solve");
             let mut max_diff = 0.0_f64;
             for (&xi, &ri) in x.iter().zip(&reference.x) {
@@ -10344,6 +10617,115 @@ mod tests {
                 assert!(v.abs() < 1e-14, "pinv of zero should be zero");
             }
         }
+    }
+
+    fn low_rank_trig_matrix(rows: usize, cols: usize) -> Vec<Vec<f64>> {
+        (0..rows)
+            .map(|i| {
+                (0..cols)
+                    .map(|j| (i as f64 * 0.013 + j as f64 * 0.007 + 0.3).sin() + 0.5)
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn pinv_low_rank_tall_matches_svd_reference() {
+        let rows = 32;
+        let cols = 16;
+        let a = low_rank_trig_matrix(rows, cols);
+        let reference = pinv(&a, PinvOptions::default()).expect("reference pinv");
+        let rtol = (rows.max(cols) as f64) * f64::EPSILON;
+        let fast =
+            pinv_low_rank_tall_with_limits(&a, rows, cols, 0.0, rtol, 1).expect("low-rank path");
+
+        assert_eq!(fast.rank, reference.rank);
+        assert_eq!(fast.rcond_estimate, 0.0);
+        assert_close_matrix(&fast.pseudo_inverse, &reference.pseudo_inverse, 1e-7, 1e-7);
+    }
+
+    #[test]
+    fn pinv_low_rank_tall_golden_payload() {
+        let rows = 32;
+        let cols = 16;
+        let a = low_rank_trig_matrix(rows, cols);
+        let reference = pinv(&a, PinvOptions::default()).expect("reference pinv");
+        let rtol = (rows.max(cols) as f64) * f64::EPSILON;
+        let fast =
+            pinv_low_rank_tall_with_limits(&a, rows, cols, 0.0, rtol, 1).expect("low-rank path");
+        assert_eq!(fast.rank, reference.rank);
+        assert_close_matrix(&fast.pseudo_inverse, &reference.pseudo_inverse, 1e-7, 1e-7);
+
+        let mut max_abs_diff = 0.0_f64;
+        for (fast_row, reference_row) in fast
+            .pseudo_inverse
+            .iter()
+            .zip(reference.pseudo_inverse.iter())
+        {
+            for (fast_value, reference_value) in fast_row.iter().zip(reference_row.iter()) {
+                max_abs_diff = max_abs_diff.max((fast_value - reference_value).abs());
+            }
+        }
+
+        let public_rows = 1024;
+        let public_cols = 512;
+        let public_a = low_rank_trig_matrix(public_rows, public_cols);
+        let public = pinv(&public_a, PinvOptions::default()).expect("public low-rank pinv");
+        let certificate = public.certificate.as_ref().expect("certificate");
+        assert_eq!(public.rank, 3);
+        assert_eq!(certificate.action, SolverAction::SVDFallback);
+        assert_eq!(certificate.matrix_shape, (public_rows, public_cols));
+        assert_eq!(certificate.rcond_estimate, 0.0);
+        assert!(!certificate.fallback_active);
+
+        println!("PINV_LOW_RANK_TALL_GOLDEN_BEGIN");
+        println!("reference_shape={rows}x{cols}");
+        println!("reference_rank={}", reference.rank);
+        println!("fast_rank={}", fast.rank);
+        println!("max_abs_diff={max_abs_diff:.17e}");
+        for (row, col) in [(0, 0), (1, 7), (5, 11), (15, 31)] {
+            println!(
+                "reference_entry[{row},{col}]={:.17e}",
+                reference.pseudo_inverse[row][col]
+            );
+            println!(
+                "fast_entry[{row},{col}]={:.17e}",
+                fast.pseudo_inverse[row][col]
+            );
+        }
+        println!("public_shape={public_rows}x{public_cols}");
+        println!("public_rank={}", public.rank);
+        println!("certificate_action={:?}", certificate.action);
+        println!("certificate_rcond={:.17e}", certificate.rcond_estimate);
+        println!(
+            "certificate_fallback_active={}",
+            certificate.fallback_active
+        );
+        for (row, col) in [(0, 0), (1, 17), (127, 511), (511, 1023)] {
+            println!(
+                "public_entry[{row},{col}]={:.17e}",
+                public.pseudo_inverse[row][col]
+            );
+        }
+        println!("PINV_LOW_RANK_TALL_GOLDEN_END");
+    }
+
+    #[test]
+    fn pinv_low_rank_tall_rejects_full_rank_tall_matrix() {
+        let rows = 40;
+        let cols = 20;
+        let mut a = vec![vec![0.0; cols]; rows];
+        for (i, row) in a.iter_mut().enumerate() {
+            for (j, cell) in row.iter_mut().enumerate() {
+                *cell = if i == j {
+                    10.0 + j as f64
+                } else {
+                    1.0 / ((i as f64 - j as f64).abs() + 1.0)
+                };
+            }
+        }
+        let rtol = (rows.max(cols) as f64) * f64::EPSILON;
+        assert!(pinv_low_rank_tall_with_limits(&a, rows, cols, 0.0, rtol, 1).is_none());
     }
 
     #[test]

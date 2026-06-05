@@ -1,4 +1,4 @@
-# fsci-linalg lstsq/pinv QR target: profile gate and proof rejection
+# fsci-linalg lstsq/pinv QR target: profile gate, rejections, and pinv keep
 
 ## Bead
 
@@ -76,8 +76,36 @@ fast path:
 The Gram/eigen path also had a cross-worker raw capture on `ts2` that regressed
 to `24657.3 ms` for `lstsq 3000x1500` and `24948.1 ms` for `pinv 3000x1500`.
 
-Rejected source for both trials was removed. `frankenscipy-jvcdf` remains open
-for the deeper primitive: in-house blocked Householder bidiagonalization with
-compact block reflectors and GEMM-backed trailing updates, followed by a
+Rejected source for both trials was removed.
+
+## Accepted Partial Keep
+
+Artifact: `keep_low_rank_tall_pinv.md`
+
+The profile matrix family is structurally low-rank. A deterministic rank-
+revealing tall factorization now routes large low-rank `pinv` inputs through a
+compact SVD:
+
+| trial | worker | `lstsq 2000x1000` | `pinv 2000x1000` | `lstsq 3000x1500` | `pinv 3000x1500` | decision |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| same-worker baseline | `ts2` | `3598.4 ms` | `3793.3 ms` | `21041.5 ms` | `20887.2 ms` | current |
+| low-rank tall `pinv` | `ts2` | `3598.1 ms` | `79.1 ms` | `20834.3 ms` | `218.0 ms` | keep, `pinv` `95.81x` at 3000x1500 |
+
+Golden payload SHA-256:
+
+```text
+3f67147c7d93c71f778f47d57205c75c28cb0062c30130be28797b17360dde97
+```
+
+Score: `8.3 = Impact 5 * Confidence 5 / Effort 3`.
+
+Default `lstsq` is not routed through this low-rank shortcut because its public
+result includes singular values and threshold behavior that still require the
+deeper SVD-class primitive.
+
+## Remaining Primitive
+
+The remaining no-gaps target is in-house blocked Householder bidiagonalization
+with compact block reflectors and GEMM-backed trailing updates, followed by a
 bidiagonal SVD solver/reconstruction path. The next attempt should not form dense
 Gram products and should not compose large nalgebra QR calls.

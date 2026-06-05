@@ -17,8 +17,8 @@ fn spd(n: usize, s: f64) -> Vec<Vec<f64>> {
     for i in 0..n {
         for j in 0..n {
             let mut t = 0.0;
-            for k in 0..n {
-                t += mm[k][i] * mm[k][j];
+            for row in mm.iter().take(n) {
+                t += row[i] * row[j];
             }
             a[i][j] = t + if i == j { n as f64 } else { 0.0 };
         }
@@ -46,8 +46,10 @@ fn main() {
     for n in [1024usize, 2048] {
         let a = spd(n, 0.7);
         let b: Vec<f64> = (0..n).map(|i| (i as f64 * 0.01).cos()).collect();
-        let mut o = SolveOptions::default();
-        o.assume_a = Some(MatrixAssumption::PositiveDefinite);
+        let o = SolveOptions {
+            assume_a: Some(MatrixAssumption::PositiveDefinite),
+            ..SolveOptions::default()
+        };
         t(&format!("spd-solve n={n}"), || {
             black_box(solve(&a, &b, o).unwrap());
         });
