@@ -1557,9 +1557,8 @@ pub fn median_filter_with_origins(
             neighborhood.push(input.get_boundary(&in_idx, mode, cval));
         }
 
-        neighborhood.sort_by(|a, b| a.total_cmp(b)); // TEMP sort
         let mid = neighborhood.len() / 2;
-        output.data[flat_out] = neighborhood[mid];
+        output.data[flat_out] = select_total_rank(&mut neighborhood, mid);
     }
 
     Ok(output)
@@ -1875,6 +1874,12 @@ fn filter_footprint_size(ndim: usize, size: usize) -> Result<usize, NdimageError
     })
 }
 
+fn select_total_rank(neighborhood: &mut [f64], rank: usize) -> f64 {
+    let rank = rank.min(neighborhood.len() - 1);
+    let (_, selected, _) = neighborhood.select_nth_unstable_by(rank, |a, b| a.total_cmp(b));
+    *selected
+}
+
 fn rank_filter_index_with_origins(
     input: &NdArray,
     size: usize,
@@ -1915,8 +1920,7 @@ fn rank_filter_index_with_origins(
             neighborhood.push(input.get_boundary(&in_idx, mode, cval));
         }
 
-        neighborhood.sort_by(|a, b| a.total_cmp(b)); // TEMP sort
-        output.data[flat_out] = neighborhood[rank.min(neighborhood.len() - 1)];
+        output.data[flat_out] = select_total_rank(&mut neighborhood, rank);
     }
 
     Ok(output)
@@ -1992,8 +1996,7 @@ fn rank_filter_index_usize_axes_with_origins(
             neighborhood.push(input.get_boundary(&in_idx, mode, cval));
         }
 
-        neighborhood.sort_by(|a, b| a.total_cmp(b)); // TEMP sort
-        output.data[flat_out] = neighborhood[rank.min(neighborhood.len() - 1)];
+        output.data[flat_out] = select_total_rank(&mut neighborhood, rank);
     }
 
     Ok(output)

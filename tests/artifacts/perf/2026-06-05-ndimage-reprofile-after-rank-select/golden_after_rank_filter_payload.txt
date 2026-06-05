@@ -1,0 +1,7 @@
+fsci-ndimage rank-filter golden v1
+median_all_reflect_size7 shape=[34, 29] len=986 digest=ad3d6e777ccbe8a8 first=0000000000000000 mid=0000000000000000 last=8000000000000000
+median_all_constant_size15 shape=[34, 29] len=986 digest=7acef3288e4a8b08 first=fff8000000000041 mid=c029000000000000 last=fff8000000000041
+rank_all_reflect_size7_rank12 shape=[34, 29] len=986 digest=ba79ee777ccbe8a8 first=c017800000000000 mid=c01b000000000000 last=c020400000000000
+rank_all_constant_size15_rank56 shape=[34, 29] len=986 digest=3e1dae777ccbe8a8 first=c033000000000000 mid=c033000000000000 last=c033000000000000
+median_axis_last_wrap_size9 shape=[34, 29] len=986 digest=486d6e777ccbe8a8 first=0000000000000000 mid=3fc0000000000000 last=0000000000000000
+rank_axis_first_nearest_size9_rank3 shape=[34, 29] len=986 digest=9bb1ae777ccbe8a8 first=8000000000000000 mid=0000000000000000 last=0000000000000000
