@@ -1,4 +1,4 @@
-# fsci-linalg lstsq/pinv QR target: profile gate, rejections, and pinv keep
+# fsci-linalg lstsq/pinv QR target: profile gate, rejections, and low-rank keeps
 
 ## Bead
 
@@ -103,9 +103,31 @@ Default `lstsq` is not routed through this low-rank shortcut because its public
 result includes singular values and threshold behavior that still require the
 deeper SVD-class primitive.
 
+## Second Accepted Keep
+
+Artifact: `keep_low_rank_tall_lstsq.md`
+
+The same reconstruction-certified low-rank tall factorization now also routes
+default `lstsq`, but only where compact SVD can publish the nonzero singular
+spectrum plus zero-padded trailing singular values.
+
+| trial | worker | `lstsq 2000x1000` | `pinv 2000x1000` | `lstsq 3000x1500` | `pinv 3000x1500` | decision |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| current baseline after pinv keep | `ts2` | `3563.8 ms` | `76.3 ms` | `20620.4 ms` | `223.1 ms` | current |
+| low-rank tall `lstsq` | `ts2` | `66.3 ms` | `80.1 ms` | `162.7 ms` | `200.6 ms` | keep, `lstsq` `126.74x` at 3000x1500 |
+
+Golden payload SHA-256:
+
+```text
+1235ac7505789813866fa04ed2611a86399973b40cc54da464f3e83e2d688c82
+```
+
+Score: `8.3 = Impact 5 * Confidence 5 / Effort 3`.
+
 ## Remaining Primitive
 
 The remaining no-gaps target is in-house blocked Householder bidiagonalization
-with compact block reflectors and GEMM-backed trailing updates, followed by a
-bidiagonal SVD solver/reconstruction path. The next attempt should not form dense
-Gram products and should not compose large nalgebra QR calls.
+with compact block reflectors and GEMM-backed trailing updates for general
+full-rank rectangular SVD work, followed by a bidiagonal SVD solver/
+reconstruction path. The next attempt should not form dense Gram products and
+should not compose large nalgebra QR calls.

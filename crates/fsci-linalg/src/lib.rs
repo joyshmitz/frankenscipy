@@ -399,6 +399,13 @@ pub struct PinvResult {
     pub certificate: Option<SolveCertificate>,
 }
 
+struct LowRankLstsqResult {
+    x: Vec<f64>,
+    rank: usize,
+    singular_values: Vec<f64>,
+    rcond_estimate: f64,
+}
+
 struct LowRankPinvResult {
     pseudo_inverse: Vec<Vec<f64>>,
     rank: usize,
@@ -2331,6 +2338,53 @@ pub fn lstsq_with_casp(
         });
     }
 
+    let cond = options.cond.unwrap_or(f64::EPSILON);
+    if let Some(fast) = lstsq_low_rank_tall(a, b, rows, cols, cond, LOW_RANK_PINV_MIN_COLS) {
+        let (selected_action, posterior, expected_losses, _) =
+            portfolio.select_action(fast.rcond_estimate, None);
+        let action = SolverAction::SVDFallback;
+
+        let certificate = SolveCertificate {
+            action,
+            matrix_shape: (rows, cols),
+            rcond_estimate: fast.rcond_estimate,
+            structural_evidence: StructuralEvidence::General,
+            posterior: posterior.to_vec(),
+            expected_losses: expected_losses.to_vec(),
+            chosen_expected_loss: expected_losses[action.index()],
+            fallback_active: action != selected_action,
+        };
+
+        emit_trace(LinalgTrace {
+            operation: "lstsq_with_casp",
+            matrix_size: (rows, cols),
+            mode: options.mode,
+            rcond: Some(fast.rcond_estimate),
+            warning: None,
+            error: None,
+        });
+
+        portfolio.record_evidence(SolverEvidenceEntry {
+            component: "lstsq_with_casp",
+            matrix_shape: (rows, cols),
+            rcond_estimate: fast.rcond_estimate,
+            chosen_action: action,
+            posterior: posterior.to_vec(),
+            expected_losses: expected_losses.to_vec(),
+            chosen_expected_loss: expected_losses[action.index()],
+            fallback_active: action != selected_action,
+            backward_error: None,
+        });
+
+        return Ok(LstsqResult {
+            x: fast.x,
+            residuals: Vec::new(),
+            rank: fast.rank,
+            singular_values: fast.singular_values,
+            certificate: Some(certificate),
+        });
+    }
+
     let matrix = dmatrix_from_rows(a)?;
     let rhs = DVector::from_column_slice(b);
 
@@ -2363,7 +2417,6 @@ pub fn lstsq_with_casp(
     });
     let rcond_estimate = if max_s > 0.0 { min_s / max_s } else { 0.0 };
 
-    let cond = options.cond.unwrap_or(f64::EPSILON);
     let threshold = cond * max_s;
     let rank = singular_values.iter().filter(|s| **s > threshold).count();
     let full_rank = rank == rows.min(cols);
@@ -6274,6 +6327,129 @@ fn pinv_low_rank_tall_with_limits(
         pseudo_inverse,
         rank,
         rcond_estimate,
+    })
+}
+
+fn lstsq_low_rank_tall(
+    a: &[Vec<f64>],
+    b: &[f64],
+    rows: usize,
+    cols: usize,
+    cond: f64,
+    min_cols: usize,
+) -> Option<LowRankLstsqResult> {
+    if rows < cols.saturating_mul(2)
+        || cols < min_cols
+        || b.len() != rows
+        || cond < 0.0
+        || !cond.is_finite()
+        || !rows_are_rectangular(a, cols)
+        || b.iter().any(|value| !value.is_finite())
+    {
+        return None;
+    }
+
+    let factor = low_rank_tall_factor(a, rows, cols, LOW_RANK_PINV_MAX_RANK)?;
+    let basis_rank = factor.basis.len();
+    if basis_rank == 0 {
+        return Some(LowRankLstsqResult {
+            x: vec![0.0; cols],
+            rank: 0,
+            singular_values: vec![0.0; cols],
+            rcond_estimate: 0.0,
+        });
+    }
+    if basis_rank >= cols {
+        return None;
+    }
+
+    let mut compact = Vec::with_capacity(basis_rank * cols);
+    for row in &factor.coefficients {
+        compact.extend_from_slice(row);
+    }
+    let compact_matrix = DMatrix::from_row_slice(basis_rank, cols, &compact);
+    let compact_svd = safe_svd(compact_matrix, true, true).ok()?;
+    let u = compact_svd.u.as_ref()?;
+    let v_t = compact_svd.v_t.as_ref()?;
+    let compact_singular_values: Vec<f64> = compact_svd.singular_values.iter().copied().collect();
+    let max_s = compact_singular_values
+        .iter()
+        .copied()
+        .fold(0.0_f64, |acc, value| {
+            if acc.is_nan() || value.is_nan() {
+                f64::NAN
+            } else {
+                acc.max(value)
+            }
+        });
+    if !max_s.is_finite() {
+        return None;
+    }
+    if max_s == 0.0 {
+        return Some(LowRankLstsqResult {
+            x: vec![0.0; cols],
+            rank: 0,
+            singular_values: vec![0.0; cols],
+            rcond_estimate: 0.0,
+        });
+    }
+
+    let threshold = cond * max_s;
+    let rank = compact_singular_values
+        .iter()
+        .filter(|singular| **singular > threshold)
+        .count();
+    if rank == 0 || rank >= cols {
+        return None;
+    }
+
+    let boundary_gap = compact_singular_values
+        .get(rank)
+        .map(|next| compact_singular_values[rank - 1] - *next)
+        .unwrap_or(compact_singular_values[rank - 1]);
+    if boundary_gap.abs() <= threshold.max(max_s * 1e-12) {
+        return None;
+    }
+
+    let mut q_t_b = vec![0.0_f64; basis_rank];
+    for (basis_idx, vector) in factor.basis.iter().enumerate() {
+        let mut projection = 0.0_f64;
+        for row in 0..rows {
+            projection += vector[row] * b[row];
+        }
+        q_t_b[basis_idx] = projection;
+    }
+
+    let mut sigma_u_rhs = vec![0.0_f64; rank];
+    for singular_idx in 0..rank {
+        let singular = compact_singular_values[singular_idx];
+        if singular <= 0.0 || !singular.is_finite() {
+            return None;
+        }
+        let mut projected = 0.0_f64;
+        for basis_idx in 0..basis_rank {
+            projected += u[(basis_idx, singular_idx)] * q_t_b[basis_idx];
+        }
+        sigma_u_rhs[singular_idx] = projected / singular;
+    }
+
+    let mut x = vec![0.0_f64; cols];
+    for col in 0..cols {
+        let mut value = 0.0_f64;
+        for singular_idx in 0..rank {
+            value += v_t[(singular_idx, col)] * sigma_u_rhs[singular_idx];
+        }
+        x[col] = value;
+    }
+
+    let mut singular_values = compact_singular_values;
+    singular_values.resize(cols, 0.0);
+
+    Some(LowRankLstsqResult {
+        x,
+        rank,
+        singular_values,
+        rcond_estimate: 0.0,
     })
 }
 
@@ -10627,6 +10803,154 @@ mod tests {
                     .collect()
             })
             .collect()
+    }
+
+    fn low_rank_rhs(rows: usize) -> Vec<f64> {
+        (0..rows)
+            .map(|i| (i as f64 * 0.017 + 0.2).cos() - 0.25)
+            .collect()
+    }
+
+    #[test]
+    fn lstsq_low_rank_tall_matches_svd_reference() {
+        let rows = 32;
+        let cols = 16;
+        let a = low_rank_trig_matrix(rows, cols);
+        let b = low_rank_rhs(rows);
+        let reference = lstsq(&a, &b, LstsqOptions::default()).expect("reference lstsq");
+        let fast =
+            lstsq_low_rank_tall(&a, &b, rows, cols, f64::EPSILON, 1).expect("low-rank lstsq");
+
+        assert_eq!(fast.rank, reference.rank);
+        assert_close_slice(&fast.x, &reference.x, 1e-7, 1e-7);
+        assert_close_slice(
+            &fast.singular_values,
+            &reference.singular_values,
+            1e-7,
+            1e-7,
+        );
+    }
+
+    #[test]
+    fn lstsq_low_rank_tall_public_route_has_expected_certificate() {
+        let rows = 1024;
+        let cols = 512;
+        let a = low_rank_trig_matrix(rows, cols);
+        let b = low_rank_rhs(rows);
+        let result = lstsq(&a, &b, LstsqOptions::default()).expect("public lstsq");
+        let certificate = result.certificate.as_ref().expect("certificate");
+
+        assert_eq!(result.rank, 3);
+        assert_eq!(result.singular_values.len(), cols);
+        assert!(result.singular_values[0] >= result.singular_values[1]);
+        assert!(result.singular_values[1] >= result.singular_values[2]);
+        assert!(result.singular_values[2] > 0.0);
+        assert!(
+            result.singular_values[3..]
+                .iter()
+                .all(|value| *value == 0.0)
+        );
+        assert!(result.residuals.is_empty());
+        assert_eq!(certificate.action, SolverAction::SVDFallback);
+        assert_eq!(certificate.matrix_shape, (rows, cols));
+        assert_eq!(certificate.rcond_estimate, 0.0);
+    }
+
+    #[test]
+    fn lstsq_low_rank_tall_golden_payload() {
+        let rows = 32;
+        let cols = 16;
+        let a = low_rank_trig_matrix(rows, cols);
+        let b = low_rank_rhs(rows);
+        let reference = lstsq(&a, &b, LstsqOptions::default()).expect("reference lstsq");
+        let fast =
+            lstsq_low_rank_tall(&a, &b, rows, cols, f64::EPSILON, 1).expect("low-rank lstsq");
+
+        assert_eq!(fast.rank, reference.rank);
+        assert_close_slice(&fast.x, &reference.x, 1e-7, 1e-7);
+        assert_close_slice(
+            &fast.singular_values,
+            &reference.singular_values,
+            1e-7,
+            1e-7,
+        );
+
+        let mut max_x_abs_diff = 0.0_f64;
+        for (&fast_value, &reference_value) in fast.x.iter().zip(reference.x.iter()) {
+            max_x_abs_diff = max_x_abs_diff.max((fast_value - reference_value).abs());
+        }
+        let mut max_s_abs_diff = 0.0_f64;
+        for (&fast_value, &reference_value) in fast
+            .singular_values
+            .iter()
+            .zip(reference.singular_values.iter())
+        {
+            max_s_abs_diff = max_s_abs_diff.max((fast_value - reference_value).abs());
+        }
+
+        let public_rows = 1024;
+        let public_cols = 512;
+        let public_a = low_rank_trig_matrix(public_rows, public_cols);
+        let public_b = low_rank_rhs(public_rows);
+        let public =
+            lstsq(&public_a, &public_b, LstsqOptions::default()).expect("public low-rank lstsq");
+        let certificate = public.certificate.as_ref().expect("certificate");
+        assert_eq!(public.rank, 3);
+        assert_eq!(public.singular_values.len(), public_cols);
+        assert_eq!(certificate.action, SolverAction::SVDFallback);
+        assert_eq!(certificate.matrix_shape, (public_rows, public_cols));
+        assert_eq!(certificate.rcond_estimate, 0.0);
+
+        println!("LSTSQ_LOW_RANK_TALL_GOLDEN_BEGIN");
+        println!("reference_shape={rows}x{cols}");
+        println!("reference_rank={}", reference.rank);
+        println!("fast_rank={}", fast.rank);
+        println!("max_x_abs_diff={max_x_abs_diff:.17e}");
+        println!("max_s_abs_diff={max_s_abs_diff:.17e}");
+        for idx in [0, 1, 7, 15] {
+            println!("reference_x[{idx}]={:.17e}", reference.x[idx]);
+            println!("fast_x[{idx}]={:.17e}", fast.x[idx]);
+        }
+        for idx in [0, 1, 2, 3, 15] {
+            println!(
+                "reference_singular[{idx}]={:.17e}",
+                reference.singular_values[idx]
+            );
+            println!("fast_singular[{idx}]={:.17e}", fast.singular_values[idx]);
+        }
+        println!("public_shape={public_rows}x{public_cols}");
+        println!("public_rank={}", public.rank);
+        println!("public_singular_len={}", public.singular_values.len());
+        println!("certificate_action={:?}", certificate.action);
+        println!("certificate_rcond={:.17e}", certificate.rcond_estimate);
+        for idx in [0, 1, 17, 511] {
+            println!("public_x[{idx}]={:.17e}", public.x[idx]);
+        }
+        for idx in [0, 1, 2, 3, 511] {
+            println!(
+                "public_singular[{idx}]={:.17e}",
+                public.singular_values[idx]
+            );
+        }
+        println!("LSTSQ_LOW_RANK_TALL_GOLDEN_END");
+    }
+
+    #[test]
+    fn lstsq_low_rank_tall_rejects_full_rank_tall_matrix() {
+        let rows = 40;
+        let cols = 20;
+        let mut a = vec![vec![0.0; cols]; rows];
+        for (i, row) in a.iter_mut().enumerate() {
+            for (j, cell) in row.iter_mut().enumerate() {
+                *cell = if i == j {
+                    3.0 + j as f64
+                } else {
+                    0.5 / ((i as f64 - j as f64).abs() + 1.0)
+                };
+            }
+        }
+        let b = low_rank_rhs(rows);
+        assert!(lstsq_low_rank_tall(&a, &b, rows, cols, f64::EPSILON, 1).is_none());
     }
 
     #[test]
