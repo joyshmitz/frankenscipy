@@ -24777,21 +24777,87 @@ fn compute_mgc_map(
     rank_y: &[Vec<usize>],
     n: usize,
 ) -> Vec<Vec<f64>> {
-    let mut mgc_map = vec![vec![0.0; n]; n];
+    // O(n^2) via 2D prefix sums instead of O(n^4).
+    //
+    // `local_correlation(k, l)` sums, over every off-diagonal pair (i, j) with
+    // rank_x[i][j] < k AND rank_y[i][j] < l, the products cx*cy, cx*cx, cy*cy and a
+    // count. A pair with ranks (a, b) is therefore included in EVERY scale (k, l)
+    // with k > a and l > b. Scatter each pair's contribution into bucket (a, b) of
+    // four accumulator grids, then take a 2D inclusive prefix sum: the prefix value
+    // at (k-1, l-1) is exactly the sum over all a <= k-1, b <= l-1, i.e. a < k, b < l.
+    //
+    // Float note: within a bucket the products are summed in the original (i, j)
+    // row-major order, so each bucket equals the original code's partial sum exactly;
+    // only the cross-bucket recombination order differs, giving tolerance-parity
+    // (no inclusion-exclusion subtraction — two cumulative passes keep it stable).
+    let mut sum_xy = vec![vec![0.0_f64; n]; n];
+    let mut sum_xx = vec![vec![0.0_f64; n]; n];
+    let mut sum_yy = vec![vec![0.0_f64; n]; n];
+    let mut count = vec![vec![0.0_f64; n]; n];
 
+    for i in 0..n {
+        for j in 0..n {
+            if i == j {
+                continue;
+            }
+            let a = rank_x[i][j];
+            let b = rank_y[i][j];
+            let cx = centered_x[i][j];
+            let cy = centered_y[i][j];
+            sum_xy[a][b] += cx * cy;
+            sum_xx[a][b] += cx * cx;
+            sum_yy[a][b] += cy * cy;
+            count[a][b] += 1.0;
+        }
+    }
+
+    prefix_sum_2d_inclusive(&mut sum_xy);
+    prefix_sum_2d_inclusive(&mut sum_xx);
+    prefix_sum_2d_inclusive(&mut sum_yy);
+    prefix_sum_2d_inclusive(&mut count);
+
+    let mut mgc_map = vec![vec![0.0; n]; n];
     for k in 1..=n {
         for l in 1..=n {
-            mgc_map[k - 1][l - 1] =
-                local_correlation(centered_x, centered_y, rank_x, rank_y, k, l, n);
+            let s_xy = sum_xy[k - 1][l - 1];
+            let s_xx = sum_xx[k - 1][l - 1];
+            let s_yy = sum_yy[k - 1][l - 1];
+            let cnt = count[k - 1][l - 1];
+            if cnt < 1.0 || s_xx <= f64::EPSILON || s_yy <= f64::EPSILON {
+                continue;
+            }
+            let corr = s_xy / (s_xx.sqrt() * s_yy.sqrt());
+            mgc_map[k - 1][l - 1] = corr.clamp(-1.0, 1.0).max(0.0);
         }
     }
 
     mgc_map
 }
 
-/// Compute local correlation at scale (k, l).
+/// In-place 2D inclusive prefix sum: on return `grid[k][l] == sum of the original
+/// `grid[a][b]` over all `a <= k`, `b <= l`. Two cumulative passes (along columns,
+/// then along rows) — no subtraction, so it is numerically stable.
+fn prefix_sum_2d_inclusive(grid: &mut [Vec<f64>]) {
+    let n = grid.len();
+    for row in grid.iter_mut() {
+        for l in 1..n {
+            row[l] += row[l - 1];
+        }
+    }
+    for k in 1..n {
+        let (head, tail) = grid.split_at_mut(k);
+        let prev = &head[k - 1];
+        for (cur, &p) in tail[0].iter_mut().zip(prev.iter()) {
+            *cur += p;
+        }
+    }
+}
+
+/// Reference O(n^2)-per-scale local correlation at scale (k, l), kept as the
+/// isomorphism oracle for the O(n^2) prefix-sum `compute_mgc_map`. Test-only.
 /// Uses only pairs (i, j) where j is within k-nearest neighbors of i in X
 /// AND i is within l-nearest neighbors of j in Y (or vice versa for symmetry).
+#[cfg(test)]
 fn local_correlation(
     centered_x: &[Vec<f64>],
     centered_y: &[Vec<f64>],
@@ -47936,6 +48002,56 @@ mod tests {
                     "pairwise distance mismatch at ({i},{j})"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn multiscale_graphcorr_mgc_map_matches_on4_reference() {
+        // Isomorphism oracle: the O(n^2) prefix-sum compute_mgc_map must match the
+        // direct O(n^4) per-scale local_correlation map to tolerance on every cell.
+        for &n in &[12usize, 37, 64] {
+            let x: Vec<Vec<f64>> = (0..n)
+                .map(|i| {
+                    vec![
+                        (i as f64 * 0.31).sin(),
+                        (i as f64 * 0.07 + 1.3).cos(),
+                        ((i * i) as f64 * 0.013).sin(),
+                    ]
+                })
+                .collect();
+            let y: Vec<Vec<f64>> = (0..n)
+                .map(|i| {
+                    vec![
+                        (i as f64 * 0.19 + 0.5).cos(),
+                        (i as f64 * 0.23).sin(),
+                    ]
+                })
+                .collect();
+            let dist_x = pairwise_euclidean_distance_matrix(&x);
+            let dist_y = pairwise_euclidean_distance_matrix(&y);
+            let rank_x = compute_row_ranks(&dist_x);
+            let rank_y = compute_row_ranks(&dist_y);
+            let cx = double_center_distance_matrix(&dist_x);
+            let cy = double_center_distance_matrix(&dist_y);
+
+            let fast = compute_mgc_map(&cx, &cy, &rank_x, &rank_y, n);
+            let mut reference = vec![vec![0.0; n]; n];
+            for k in 1..=n {
+                for l in 1..=n {
+                    reference[k - 1][l - 1] =
+                        local_correlation(&cx, &cy, &rank_x, &rank_y, k, l, n);
+                }
+            }
+            let mut max_abs = 0.0_f64;
+            for k in 0..n {
+                for l in 0..n {
+                    max_abs = max_abs.max((fast[k][l] - reference[k][l]).abs());
+                }
+            }
+            assert!(
+                max_abs < 1e-12,
+                "n={n}: prefix-sum mgc_map deviates from O(n^4) reference by {max_abs:e}"
+            );
         }
     }
 
