@@ -841,33 +841,44 @@ pub fn fcluster(z: &[[f64; 4]], max_clusters: usize) -> Result<Vec<usize>, Clust
         return Ok((1..=n).collect());
     }
 
-    // Each leaf is its own cluster initially
-    let mut cluster_of = vec![0usize; 2 * n - 1];
-    for (i, cluster) in cluster_of.iter_mut().enumerate().take(n) {
-        *cluster = i;
+    // Union-find over the 2n-1 dendrogram nodes. Each set's label is the minimum
+    // original-leaf index it contains — exactly what the previous code's
+    // min-propagation produced — so the final renumbering is byte-identical, but
+    // agglomeration is O(n·α(n)) instead of relabeling every node on each of the
+    // up-to-n merges (the old O(n²) `for v in cluster_of` rescan).
+    let total = 2 * n - 1;
+    let mut parent: Vec<usize> = (0..total).collect();
+    let mut min_leaf: Vec<usize> = (0..total)
+        .map(|i| if i < n { i } else { usize::MAX })
+        .collect();
+    fn find(parent: &mut [usize], mut x: usize) -> usize {
+        while parent[x] != x {
+            parent[x] = parent[parent[x]]; // path halving
+            x = parent[x];
+        }
+        x
     }
 
     // Process merges in order, stopping when we have max_clusters
     let n_merges = n - max_clusters;
     for (step, row) in z.iter().enumerate().take(n_merges) {
         let new_id = n + step;
-        let ci = row[0] as usize;
-        let cj = row[1] as usize;
-        // Assign the new cluster label to both merged clusters
-        let label = cluster_of[ci].min(cluster_of[cj]);
-        // Propagate labels
-        let old_ci = cluster_of[ci];
-        let old_cj = cluster_of[cj];
-        for v in cluster_of.iter_mut().take(new_id + 1) {
-            if *v == old_ci || *v == old_cj {
-                *v = label;
-            }
-        }
-        cluster_of[new_id] = label;
+        let ci = find(&mut parent, row[0] as usize);
+        let cj = find(&mut parent, row[1] as usize);
+        // Root the merged set at the new node, carrying the minimum leaf index.
+        let label = min_leaf[ci].min(min_leaf[cj]).min(min_leaf[new_id]);
+        parent[ci] = new_id;
+        parent[cj] = new_id;
+        min_leaf[new_id] = label;
     }
 
     // Renumber labels to be contiguous 1..k
-    let leaf_labels: Vec<usize> = cluster_of[..n].to_vec();
+    let leaf_labels: Vec<usize> = (0..n)
+        .map(|i| {
+            let r = find(&mut parent, i);
+            min_leaf[r]
+        })
+        .collect();
     let mut unique: Vec<usize> = leaf_labels.clone();
     unique.sort_unstable();
     unique.dedup();
@@ -2846,6 +2857,66 @@ mod tests {
         assert_eq!(labels[0], labels[1]);
         assert_eq!(labels[2], labels[3]);
         assert_ne!(labels[0], labels[2]);
+    }
+
+    #[test]
+    fn fcluster_unionfind_matches_relabel_reference() {
+        // The union-find maxclust cut must reproduce the original O(n^2)
+        // per-merge relabel exactly (same partition, same min-leaf labels, same
+        // 1..k renumbering) across linkage methods, sizes, and cut counts.
+        fn relabel(z: &[[f64; 4]], max_clusters: usize) -> Vec<usize> {
+            let n = z.len() + 1;
+            if max_clusters >= n || max_clusters == 0 {
+                return (1..=n).collect();
+            }
+            let mut cluster_of = vec![0usize; 2 * n - 1];
+            for (i, c) in cluster_of.iter_mut().enumerate().take(n) {
+                *c = i;
+            }
+            for (step, row) in z.iter().enumerate().take(n - max_clusters) {
+                let new_id = n + step;
+                let (ci, cj) = (row[0] as usize, row[1] as usize);
+                let label = cluster_of[ci].min(cluster_of[cj]);
+                let (oi, oj) = (cluster_of[ci], cluster_of[cj]);
+                for v in cluster_of.iter_mut().take(new_id + 1) {
+                    if *v == oi || *v == oj {
+                        *v = label;
+                    }
+                }
+                cluster_of[new_id] = label;
+            }
+            let leaf: Vec<usize> = cluster_of[..n].to_vec();
+            let mut u = leaf.clone();
+            u.sort_unstable();
+            u.dedup();
+            leaf.iter()
+                .map(|&l| u.binary_search(&l).unwrap() + 1)
+                .collect()
+        }
+        let mut state: u64 = 0x9e37_79b9_7f4a_7c15;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (state >> 11) as f64 / (1u64 << 53) as f64 * 10.0
+        };
+        let methods = [
+            LinkageMethod::Single,
+            LinkageMethod::Complete,
+            LinkageMethod::Average,
+            LinkageMethod::Ward,
+            LinkageMethod::Centroid,
+            LinkageMethod::Median,
+        ];
+        for &n in &[2usize, 5, 30, 90] {
+            for &m in &methods {
+                let data: Vec<Vec<f64>> = (0..n).map(|_| vec![next(), next()]).collect();
+                let Ok(z) = linkage(&data, m) else { continue };
+                for k in 1..=n {
+                    assert_eq!(fcluster(&z, k).unwrap(), relabel(&z, k), "n={n} k={k}");
+                }
+            }
+        }
     }
 
     #[test]

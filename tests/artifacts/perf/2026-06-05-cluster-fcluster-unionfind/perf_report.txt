@@ -1,0 +1,36 @@
+perf: fsci-cluster fcluster (maxclust) — O(n^2) per-merge relabel -> union-find, O(n·α(n))
+==========================================================================================
+
+Target : crates/fsci-cluster/src/lib.rs :: fcluster (criterion='maxclust').
+Lever  : Cutting the dendrogram to k clusters processed up to (n-k) merges, and EACH merge
+         rescanned `cluster_of` (length up to 2n-1) to relabel both merged groups -> O(n^2),
+         worst at small k (few clusters = many merges). Replaced with a union-find over the
+         2n-1 nodes that tracks, per set, the MINIMUM original-leaf index it contains — which is
+         exactly the label the old min-propagation produced. Each merge is two finds + a union;
+         total O(n·α(n)). Path-halving finds.
+
+Isomorphism proof (identical labels)
+------------------------------------
+- The old code labeled each cluster with the minimum leaf index among its members (labels start
+  as leaf indices and only ever propagate to the min), then renumbered the leaf labels to 1..k by
+  sorted-unique rank. The union-find carries `min_leaf[root] = min over the set`, so each leaf's
+  label = min leaf of its cluster — the same value — and the identical renumbering follows.
+- Empirically: 0 mismatches / 180 cases across n in {2,3,8,33,120} x all 6 linkage methods
+  (Single/Complete/Average/Ward/Centroid/Median) x cut counts k in {1,2,3,5,n/2+1,n}, comparing
+  the library to a VERBATIM copy of the original O(n^2) relabel.
+- In-tree test `fcluster_unionfind_matches_relabel_reference` re-checks every k in 1..=n across
+  methods and sizes. Existing fcluster tests: 6 passed.
+- Golden payload sha256 (per-config label-sum checksums):
+    5c7495fea93ce4397e239fe3fea1ea5e59dc1f70374677e6cab0e59cd3ddb3e2  golden_payload.txt
+
+Timing (same-process A/B, release, mean of 10; k=2 = O(n^2) worst case)
+----------------------------------------------------------------------
+  n=1000 k=2  old= 1.298 ms  new= 36.318 us  ratio=  35.7x
+  n=2000 k=2  old= 5.152 ms  new= 73.617 us  ratio=  70.0x
+  n=4000 k=2  old=19.469 ms  new=150.580 us  ratio= 129.3x
+  (ratio grows ~linearly with n, as expected for O(n^2) -> O(n·α(n)).)
+
+Score: Impact 3 x Confidence 5 / Effort 1 = 15  (>> 2.0)
+
+Tests: cargo test -p fsci-cluster --lib fcluster => 7 passed. fmt + clippy clean.
+Reproduce: cargo run --release -p fsci-cluster --bin perf_fcluster
