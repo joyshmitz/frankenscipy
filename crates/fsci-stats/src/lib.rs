@@ -27128,8 +27128,46 @@ impl GaussianKde {
     }
 
     /// Evaluate the KDE at multiple points.
+    ///
+    /// Each query point is an independent O(n) sum over the dataset, so for large
+    /// `points × dataset` the work is split across threads; the per-point value is
+    /// the same pure `evaluate` regardless of the owning core, so the result is
+    /// bit-identical to the sequential map (order preserved by concatenating chunks).
     pub fn evaluate_many(&self, points: &[f64]) -> Vec<f64> {
-        points.iter().map(|&x| self.evaluate(x)).collect()
+        let m = points.len();
+        let work = (m as u64).saturating_mul(self.dataset.len() as u64);
+        if work < 1 << 18 || m < 4 {
+            return points.iter().map(|&x| self.evaluate(x)).collect();
+        }
+        let cores = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1);
+        let nthreads = cores.min(m / 2).max(1);
+        if nthreads <= 1 {
+            return points.iter().map(|&x| self.evaluate(x)).collect();
+        }
+        let chunk = m.div_ceil(nthreads);
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..nthreads)
+                .filter_map(|t| {
+                    let i0 = t * chunk;
+                    if i0 >= m {
+                        return None;
+                    }
+                    let i1 = (i0 + chunk).min(m);
+                    Some(scope.spawn(move || {
+                        points[i0..i1]
+                            .iter()
+                            .map(|&x| self.evaluate(x))
+                            .collect::<Vec<f64>>()
+                    }))
+                })
+                .collect();
+            handles
+                .into_iter()
+                .flat_map(|h| h.join().expect("kde worker panicked"))
+                .collect()
+        })
     }
 
     /// Return the bandwidth.
@@ -45813,6 +45851,29 @@ mod tests {
     }
 
     // ── GaussianKde tests ──────────────────────────────────────────
+
+    /// Parallel `evaluate_many` must be BIT-IDENTICAL to the sequential per-point map
+    /// (each point is an independent pure `evaluate`). Uses a size above the parallel
+    /// gate so the threaded path runs.
+    #[test]
+    fn gaussian_kde_evaluate_many_parallel_is_bit_identical() {
+        let data: Vec<f64> = (0..400)
+            .map(|i| (i as f64 * 0.031).sin() * 3.0 + 1.0)
+            .collect();
+        let kde = GaussianKde::new(&data);
+        // 2000 points * 400 data = 800k >= the 2^18 gate -> parallel path.
+        let points: Vec<f64> = (0..2000).map(|i| i as f64 * 0.005 - 5.0).collect();
+        let got = kde.evaluate_many(&points);
+        let want: Vec<f64> = points.iter().map(|&x| kde.evaluate(x)).collect();
+        assert_eq!(got.len(), want.len());
+        for (k, (&g, &w)) in got.iter().zip(&want).enumerate() {
+            assert_eq!(
+                g.to_bits(),
+                w.to_bits(),
+                "kde evaluate_many mismatch at {k}"
+            );
+        }
+    }
 
     #[test]
     fn gaussian_kde_peak_at_data() {
