@@ -1,0 +1,44 @@
+perf: fsci-stats SobolSampler::sample — from-scratch O(64²)/sample -> incremental Gray-code O(1)/sample
+======================================================================================================
+
+Target : crates/fsci-stats/src/qmc.rs :: SobolSampler::sample (the general, non-d=2 path).
+Lever  : The general path recomputed sobol_bits(idx, dim) from scratch for every (sample, dim):
+         a ~64-iteration Gray-code loop, and for dim>=1 each direction word is itself recomputed by
+         sobol_direction (an O(bit) XOR-shift) per call — so O(64²) per emitted point in the worst
+         case. The d=2 fast path already used the incremental Gray-code recurrence; generalise it to
+         any dimension: carry a running `bits[dim]` and flip exactly ONE direction word per step.
+         (Different primitive from the recent Gram-build hoists: an incremental state machine, not
+         a loop reorder.)
+
+Scope note
+----------
+The constructor caps Sobol at dimensions 1..=2 ("in this QMC surface"), and d=2 routes to
+sample_2d, so today the changed path is exercised only for d=1. The generalisation is nonetheless
+correct and efficient for any dimension, and the d=1 sequence speeds up 7-16x now.
+
+Isomorphism proof (byte-identical points)
+-----------------------------------------
+- The direction words sobol_bits uses for dimension `dim` are exactly SOBOL_DIRECTION_TABLES[dim.min(1)]
+  (dim 0 has its own table; every dim>=1 shares the same words because sobol_direction ignores the
+  dimension for dim>=1). gray(idx+1) differs from gray(idx) in exactly the trailing_zeros(idx+1)-th
+  bit, so carrying `bits[dim] ^= table[that_bit]` keeps bits[dim] == sobol_bits(idx, dim) at every
+  step (XOR is associative/commutative). bits_to_unit of identical u64 is identical f64; the digital
+  shift is XORed at emit time exactly as before.
+- Empirically: 0 mismatches / 20 sample blocks across d in {1,2} x several (a,b) start/continuation
+  sequences (including a 5000-point block), comparing the library output to a verbatim copy of the
+  original from-scratch path via .to_bits().
+- Golden payload sha256 (per-config digest of the emitted points):
+    0eb34a71d007d5920e4b79de3c4a4a83d800796f8e8677f4434b47bb90964bca  golden_payload.txt
+
+Timing (same-process A/B, release, mean of 3; d=1)
+--------------------------------------------------
+  d=1 n= 500000  old= 23.001 ms  new=  1.425 ms  ratio= 16.1x
+  d=1 n=2000000  old= 94.288 ms  new=  5.963 ms  ratio= 15.8x
+  d=1 n=8000000  old=390.873 ms  new= 54.117 ms  ratio=  7.2x  (memory-bandwidth bound at this size)
+
+Score: Impact 3 x Confidence 5 / Effort 1 = 15  (>> 2.0)
+
+Tests: cargo test -p fsci-stats --lib sobol => 7 passed; --lib qmc => 57 passed. clippy + fmt clean.
+
+NOTE: lifting the dimension cap (scipy supports thousands of dims) needs proper per-dimension
+direction numbers (Joe-Kuo tables) — a separate parity task, not this perf change.

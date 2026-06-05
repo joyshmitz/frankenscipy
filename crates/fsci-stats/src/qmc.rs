@@ -252,15 +252,38 @@ impl SobolSampler {
             return self.sample_2d(n);
         }
 
-        let mut out = Vec::with_capacity(n.saturating_mul(self.dimension));
+        // Incremental Gray-code recurrence (as in sample_2d), generalised to any
+        // dimension. Instead of recomputing sobol_bits(idx, dim) from scratch for
+        // every (sample, dim) — an O(64²) Gray-loop-times-sobol_direction cost
+        // since sobol_direction itself recomputes the direction number per call —
+        // carry a running `bits[dim]` and flip a single direction word per step.
+        // Byte-identical: the direction words sobol_bits uses for dimension `dim`
+        // are exactly SOBOL_DIRECTION_TABLES[dim.min(1)] (dim 0 has its own table;
+        // every dim>=1 shares the same directions), and gray(idx+1) differs from
+        // gray(idx) in exactly the `trailing_zeros(idx+1)`-th bit, so the carried
+        // value equals sobol_bits(idx, dim) bit-for-bit at every step.
+        let d = self.dimension;
+        let dir = |dim: usize| -> &'static [u64; 64] { &SOBOL_DIRECTION_TABLES[dim.min(1)] };
+        let mut out = Vec::with_capacity(n.saturating_mul(d));
+        let mut idx = self.next_index;
+        let mut bits: Vec<u64> = (0..d).map(|dim| sobol_bits(idx, dim)).collect();
+        // `dim` indexes bits / digital_shift / the per-dim direction table in
+        // lockstep, so a range loop reads clearest.
+        #[allow(clippy::needless_range_loop)]
         for _ in 0..n {
-            let idx = self.next_index;
-            for dim in 0..self.dimension {
-                let bits = sobol_bits(idx, dim) ^ self.digital_shift[dim];
-                out.push(bits_to_unit(bits));
+            for dim in 0..d {
+                out.push(bits_to_unit(bits[dim] ^ self.digital_shift[dim]));
             }
-            self.next_index = self.next_index.saturating_add(1);
+            let next_idx = idx.saturating_add(1);
+            if next_idx != idx {
+                let bit = next_idx.trailing_zeros() as usize;
+                for dim in 0..d {
+                    bits[dim] ^= dir(dim)[bit];
+                }
+            }
+            idx = next_idx;
         }
+        self.next_index = idx;
         out
     }
 
