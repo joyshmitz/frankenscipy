@@ -1,0 +1,37 @@
+perf: fsci-ndimage taxicab distance transform — brute-force O(F·B) -> separable chamfer O(N·ndim)
+=================================================================================================
+
+Target : crates/fsci-ndimage/src/lib.rs :: distance_transform_by_metric (Taxicab metric),
+         shared by distance_transform_cdt(taxicab) AND distance_transform_bf(taxicab).
+Lever  : City-block (L1) is an additive separable metric (Σ_axis |Δ_axis|). Replace the
+         O(foreground · background) scan with a separable two-pass chamfer: per axis, a 1-D
+         forward/backward min(d, neighbor + 1) sweep. New helper cityblock_distance_transform.
+
+Scope / gating
+--------------
+Fast path only when metric == Taxicab && background nonempty. The no-background sentinel and
+the chessboard metric (L∞ = max over axes; max-coupled, NOT additively separable) keep the
+brute-force path. Euclidean is unaffected (its own Felzenszwalb fast path, commit c7b5ddc0).
+
+Isomorphism proof (byte-identical f64)
+--------------------------------------
+- The two-pass 1-D sweep computes min_j (f[j] + |i-j|) exactly (forward = min over j<=i,
+  backward = min over j>=i); composing axes yields min over background of Σ |Δ| exactly.
+- All values are exact integers, so the result is byte-identical to the brute-force integer
+  sum-and-min regardless of order.
+- Empirically: 0 mismatches / 7248 cells across shapes {24},{10,10},{16,24},{5,7,9},{1,19},
+  {4,4,4} × fg densities {20,40,60,80}%, comparing BOTH distance_transform_cdt and
+  distance_transform_bf vs a verbatim L1 brute force via .to_bits().
+- Golden payload sha256 (per-case FNV digest of full library output):
+    173bc46d81d17f11bce9c8118c3927f61cfb342761d6e8bda8e4f29745ae3841  golden_payload.txt
+
+Timing (same-process A/B, release, mean of 3; square 2-D, 50% fg, via cdt)
+--------------------------------------------------------------------------
+  N= 4096 (64x64)    brute= 17.737 ms   sep=263.214 us   ratio=  67.4x
+  N=16384 (128x128)  brute=277.742 ms   sep=  1.164 ms   ratio= 238.5x
+  N=36864 (192x192)  brute=  1.392 s    sep=  2.604 ms   ratio= 534.7x
+
+Score: Impact 4 x Confidence 5 / Effort 1 = 20  (>> 2.0)
+
+Tests: cargo test -p fsci-ndimage --lib distance_transform => 18 passed (incl. cdt/bf scipy
+fixtures + sentinels). clippy + fmt clean.

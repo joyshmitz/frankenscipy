@@ -4453,6 +4453,55 @@ fn background_coordinates(input: &NdArray) -> Vec<Vec<usize>> {
         .collect()
 }
 
+/// Exact city-block (taxicab / L1) distance transform via separable two-pass
+/// chamfer sweeps, O(N · ndim). Returns a flat row-major buffer of L1 distances
+/// to the nearest background pixel (`value == 0.0`).
+///
+/// L1 is an additive separable metric (`Σ_axis |Δ_axis|`), so the per-axis 1-D
+/// transform is the classic forward/backward `min(d, neighbor + 1)` sweep and
+/// the axis passes compose exactly. All values are exact integers, so the
+/// result is byte-identical to the brute-force `min over background of Σ |Δ|`.
+fn cityblock_distance_transform(input: &NdArray) -> Vec<f64> {
+    let n = input.data.len();
+    let mut f: Vec<f64> = input
+        .data
+        .iter()
+        .map(|&v| if v == 0.0 { 0.0 } else { f64::INFINITY })
+        .collect();
+
+    // `axis` indexes shape/strides in lockstep, so a range loop reads clearest.
+    #[allow(clippy::needless_range_loop)]
+    for axis in 0..input.ndim() {
+        let len = input.shape[axis];
+        if len <= 1 {
+            continue;
+        }
+        let stride = input.strides[axis];
+        for base in 0..n {
+            if !(base / stride).is_multiple_of(len) {
+                continue; // only flat indices with axis-coordinate 0 start a line
+            }
+            // Forward sweep: best reachable from the left.
+            for t in 1..len {
+                let cand = f[base + (t - 1) * stride] + 1.0;
+                let cur = base + t * stride;
+                if cand < f[cur] {
+                    f[cur] = cand;
+                }
+            }
+            // Backward sweep: best reachable from the right.
+            for t in (0..len - 1).rev() {
+                let cand = f[base + (t + 1) * stride] + 1.0;
+                let cur = base + t * stride;
+                if cand < f[cur] {
+                    f[cur] = cand;
+                }
+            }
+        }
+    }
+    f
+}
+
 fn distance_transform_by_metric(
     input: &NdArray,
     metric: DistanceMetric,
@@ -4460,6 +4509,19 @@ fn distance_transform_by_metric(
     backgrounds: &[Vec<usize>],
     no_background: f64,
 ) -> NdArray {
+    // Fast path: city-block is exactly separable (see cityblock_distance_transform),
+    // replacing the O(foreground · background) scan with O(N · ndim). The
+    // no-background sentinel and the (max-coupled, non-separable) chessboard
+    // metric keep the brute-force path below.
+    if metric == DistanceMetric::Taxicab && !backgrounds.is_empty() {
+        let dt = cityblock_distance_transform(input);
+        let mut output = NdArray::zeros(input.shape.clone());
+        for (flat, &value) in input.data.iter().enumerate() {
+            output.data[flat] = if value == 0.0 { 0.0 } else { dt[flat] };
+        }
+        return output;
+    }
+
     let mut output = NdArray::zeros(input.shape.clone());
     for (flat, &value) in input.data.iter().enumerate() {
         if value == 0.0 {
