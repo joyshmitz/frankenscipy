@@ -9211,6 +9211,25 @@ pub struct StftResult {
 /// * `window` — Window type to use (default: "hann").
 /// * `nperseg` — Length of each segment (default: 256).
 /// * `noverlap` — Overlap between segments (default: nperseg/2).
+// Worker count for the parallel STFT frame loop: 1 (sequential) unless there are
+// enough frames carrying enough total FFT work to amortise thread spawn (each frame
+// is an O(nperseg log nperseg) rfft), then scale with cores capped at frame_count/2.
+fn stft_frame_thread_count(frame_count: usize, nperseg: usize) -> usize {
+    // FFT flops per frame ~ nperseg*log2(nperseg); only parallelise when the total
+    // clearly amortises thread spawn (cheap small-nperseg STFTs run faster serial).
+    let logn = (nperseg.max(2) as u64).ilog2() as u64;
+    let flops = (frame_count as u64)
+        .saturating_mul(nperseg as u64)
+        .saturating_mul(logn);
+    if flops < 1 << 24 || frame_count < 16 {
+        return 1;
+    }
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    cores.min(frame_count / 4).max(1)
+}
+
 pub fn stft(
     x: &[f64],
     fs: f64,
@@ -9247,27 +9266,67 @@ pub fn stft(
     let step = nperseg - noverlap;
     let win_coeffs = get_window(window.unwrap_or("hann"), nperseg)?;
     let n_freqs = nperseg / 2 + 1;
-    let opts = fsci_fft::FftOptions::default();
 
-    let mut zxx = Vec::new();
-    let mut times = Vec::new();
-    let mut start = 0;
-
-    while start + nperseg <= x.len() {
-        // Window the segment.
+    // Each frame (window + rfft over a disjoint segment) is independent and expensive,
+    // so for many frames the work is split across threads. Every frame runs the same
+    // deterministic window+rfft, so the result is bit-identical to the sequential loop;
+    // the first FFT error (if any) is returned in frame order.
+    let frame_count = (x.len() - nperseg) / step + 1;
+    let compute_frame = |f: usize| -> Result<(Vec<fsci_fft::Complex64>, f64), SignalError> {
+        let start = f * step;
         let windowed: Vec<f64> = x[start..start + nperseg]
             .iter()
             .zip(&win_coeffs)
             .map(|(&xi, &wi)| xi * wi)
             .collect();
-
-        // Compute rfft.
+        let opts = fsci_fft::FftOptions::default();
         let spectrum = fsci_fft::rfft(&windowed, &opts)
             .map_err(|e| SignalError::InvalidArgument(format!("FFT failed: {e}")))?;
+        Ok((
+            spectrum[..n_freqs].to_vec(),
+            (start as f64 + (nperseg - 1) as f64 / 2.0) / fs,
+        ))
+    };
 
-        zxx.push(spectrum[..n_freqs].to_vec());
-        times.push((start as f64 + (nperseg - 1) as f64 / 2.0) / fs);
-        start += step;
+    let frames: Vec<(Vec<fsci_fft::Complex64>, f64)> = {
+        let nthreads = stft_frame_thread_count(frame_count, nperseg);
+        if nthreads <= 1 {
+            (0..frame_count)
+                .map(&compute_frame)
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            let chunk = frame_count.div_ceil(nthreads);
+            let cf = &compute_frame;
+            type FrameChunk = Result<Vec<(Vec<fsci_fft::Complex64>, f64)>, SignalError>;
+            let chunk_results: Vec<FrameChunk> = std::thread::scope(|scope| {
+                let handles: Vec<_> = (0..nthreads)
+                    .filter_map(|t| {
+                        let f0 = t * chunk;
+                        if f0 >= frame_count {
+                            return None;
+                        }
+                        let f1 = (f0 + chunk).min(frame_count);
+                        Some(scope.spawn(move || (f0..f1).map(cf).collect::<Result<Vec<_>, _>>()))
+                    })
+                    .collect();
+                handles
+                    .into_iter()
+                    .map(|h| h.join().expect("stft worker panicked"))
+                    .collect()
+            });
+            let mut frames = Vec::with_capacity(frame_count);
+            for cr in chunk_results {
+                frames.extend(cr?);
+            }
+            frames
+        }
+    };
+
+    let mut zxx = Vec::with_capacity(frame_count);
+    let mut times = Vec::with_capacity(frame_count);
+    for (spec, time) in frames {
+        zxx.push(spec);
+        times.push(time);
     }
 
     let freq_step = fs / nperseg as f64;
@@ -15174,6 +15233,46 @@ mod tests {
                 reconstructed[i],
                 x[i]
             );
+        }
+    }
+
+    #[test]
+    fn stft_parallel_is_bit_identical() {
+        // Large enough to cross the parallel gate (flops = frames*nperseg*log2 >= 2^24):
+        // ~4000 frames of nperseg=512 -> ~18M flops -> the threaded frame loop runs.
+        let nperseg = 512usize;
+        let noverlap = 128usize;
+        let step = nperseg - noverlap;
+        let frames = 4200usize;
+        let n = (frames - 1) * step + nperseg;
+        let x: Vec<f64> = (0..n)
+            .map(|i| (i as f64 * 0.01).sin() + 0.3 * (i as f64 * 0.047).cos())
+            .collect();
+        let par = stft(&x, 1000.0, Some("hann"), Some(nperseg), Some(noverlap)).expect("stft");
+
+        // Verbatim sequential reference (same window via get_window).
+        let win = get_window("hann", nperseg).expect("window");
+        let n_freqs = nperseg / 2 + 1;
+        let opts = fsci_fft::FftOptions::default();
+        let mut seq: Vec<Vec<(f64, f64)>> = Vec::new();
+        let mut start = 0;
+        while start + nperseg <= x.len() {
+            let windowed: Vec<f64> = x[start..start + nperseg]
+                .iter()
+                .zip(&win)
+                .map(|(&xi, &wi)| xi * wi)
+                .collect();
+            let spectrum = fsci_fft::rfft(&windowed, &opts).expect("rfft");
+            seq.push(spectrum[..n_freqs].to_vec());
+            start += step;
+        }
+
+        assert_eq!(par.zxx.len(), seq.len());
+        for (t, (pr, sr)) in par.zxx.iter().zip(&seq).enumerate() {
+            for (f, (&(pre, pim), &(sre, sim))) in pr.iter().zip(sr).enumerate() {
+                assert_eq!(pre.to_bits(), sre.to_bits(), "stft re mismatch t={t} f={f}");
+                assert_eq!(pim.to_bits(), sim.to_bits(), "stft im mismatch t={t} f={f}");
+            }
         }
     }
 
