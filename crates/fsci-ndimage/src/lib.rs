@@ -1538,30 +1538,127 @@ pub fn median_filter_with_origins(
     // Generate all offsets in kernel
     let kernel_strides = compute_strides(&kernel_shape);
 
-    for flat_out in 0..input.size() {
-        let out_idx = input.unravel(flat_out);
-        let mut neighborhood = Vec::with_capacity(kernel_total);
-
-        for flat_k in 0..kernel_total {
-            let mut k_idx = vec![0usize; ndim];
-            let mut rem = flat_k;
-            for d in 0..ndim {
-                k_idx[d] = rem / kernel_strides[d];
-                rem %= kernel_strides[d];
-            }
-
-            let mut in_idx = vec![0i64; ndim];
-            for d in 0..ndim {
-                in_idx[d] = out_idx[d] as i64 + k_idx[d] as i64 - offsets[d] - origins[d];
-            }
-            neighborhood.push(input.get_boundary(&in_idx, mode, cval));
-        }
-
-        let mid = neighborhood.len() / 2;
-        output.data[flat_out] = select_total_rank(&mut neighborhood, mid);
-    }
+    fill_rank_filter(
+        &mut output,
+        input,
+        ndim,
+        kernel_total,
+        &kernel_strides,
+        &offsets,
+        &origins,
+        mode,
+        cval,
+        kernel_total / 2,
+    );
 
     Ok(output)
+}
+
+/// Compute one output pixel of a rank/median filter: gather the `kernel_total`
+/// neighbourhood values (with the same boundary/origin handling) and return the
+/// `rank`-th order statistic via `select_total_rank`. Pure read over `input`.
+#[allow(clippy::too_many_arguments)]
+fn rank_filter_pixel(
+    flat_out: usize,
+    input: &NdArray,
+    ndim: usize,
+    kernel_total: usize,
+    kernel_strides: &[usize],
+    offsets: &[i64],
+    origins: &[i64],
+    mode: BoundaryMode,
+    cval: f64,
+    rank: usize,
+) -> f64 {
+    let out_idx = input.unravel(flat_out);
+    let mut neighborhood = Vec::with_capacity(kernel_total);
+    for flat_k in 0..kernel_total {
+        let mut k_idx = vec![0usize; ndim];
+        let mut rem = flat_k;
+        for d in 0..ndim {
+            k_idx[d] = rem / kernel_strides[d];
+            rem %= kernel_strides[d];
+        }
+        let mut in_idx = vec![0i64; ndim];
+        for d in 0..ndim {
+            in_idx[d] = out_idx[d] as i64 + k_idx[d] as i64 - offsets[d] - origins[d];
+        }
+        neighborhood.push(input.get_boundary(&in_idx, mode, cval));
+    }
+    select_total_rank(&mut neighborhood, rank)
+}
+
+/// Worker count for a parallel rank/median filter: 1 (sequential) unless the total
+/// gather+select work (`pixels * kernel_total`) is large enough to amortise spawn.
+fn ndimage_filter_thread_count(pixels: usize, kernel_total: usize) -> usize {
+    let work = (pixels as u64).saturating_mul(kernel_total as u64);
+    if work < 1 << 18 || pixels < 4 {
+        return 1;
+    }
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    cores.min(pixels / 2).max(1)
+}
+
+/// Fill `output` with a rank/median filter, distributing the independent output
+/// pixels across threads. Each `output.data[flat_out]` depends only on a read-only
+/// neighbourhood of `input`, so the parallel result is bit-identical to the
+/// sequential pixel-by-pixel loop; only the owning core changes.
+#[allow(clippy::too_many_arguments)]
+fn fill_rank_filter(
+    output: &mut NdArray,
+    input: &NdArray,
+    ndim: usize,
+    kernel_total: usize,
+    kernel_strides: &[usize],
+    offsets: &[i64],
+    origins: &[i64],
+    mode: BoundaryMode,
+    cval: f64,
+    rank: usize,
+) {
+    let n = input.size();
+    let nthreads = ndimage_filter_thread_count(n, kernel_total);
+    if nthreads <= 1 {
+        for (flat_out, slot) in output.data.iter_mut().enumerate() {
+            *slot = rank_filter_pixel(
+                flat_out,
+                input,
+                ndim,
+                kernel_total,
+                kernel_strides,
+                offsets,
+                origins,
+                mode,
+                cval,
+                rank,
+            );
+        }
+        return;
+    }
+    let chunk = n.div_ceil(nthreads);
+    std::thread::scope(|scope| {
+        for (t, out_chunk) in output.data.chunks_mut(chunk).enumerate() {
+            let start = t * chunk;
+            scope.spawn(move || {
+                for (li, slot) in out_chunk.iter_mut().enumerate() {
+                    *slot = rank_filter_pixel(
+                        start + li,
+                        input,
+                        ndim,
+                        kernel_total,
+                        kernel_strides,
+                        offsets,
+                        origins,
+                        mode,
+                        cval,
+                        rank,
+                    );
+                }
+            });
+        }
+    });
 }
 
 /// Minimum filter.
@@ -1901,27 +1998,18 @@ fn rank_filter_index_with_origins(
     let kernel_strides = compute_strides(&kernel_shape);
     let origins = normalize_filter_origins(ndim, &kernel_shape, origins)?;
 
-    for flat_out in 0..input.size() {
-        let out_idx = input.unravel(flat_out);
-        let mut neighborhood = Vec::with_capacity(kernel_total);
-
-        for flat_k in 0..kernel_total {
-            let mut k_idx = vec![0usize; ndim];
-            let mut rem = flat_k;
-            for d in 0..ndim {
-                k_idx[d] = rem / kernel_strides[d];
-                rem %= kernel_strides[d];
-            }
-
-            let mut in_idx = vec![0i64; ndim];
-            for d in 0..ndim {
-                in_idx[d] = out_idx[d] as i64 + k_idx[d] as i64 - offsets[d] - origins[d];
-            }
-            neighborhood.push(input.get_boundary(&in_idx, mode, cval));
-        }
-
-        output.data[flat_out] = select_total_rank(&mut neighborhood, rank);
-    }
+    fill_rank_filter(
+        &mut output,
+        input,
+        ndim,
+        kernel_total,
+        &kernel_strides,
+        &offsets,
+        &origins,
+        mode,
+        cval,
+        rank,
+    );
 
     Ok(output)
 }
