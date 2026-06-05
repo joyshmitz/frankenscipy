@@ -6005,6 +6005,182 @@ fn safe_svd(
     )
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+struct HouseholderReflector {
+    start: usize,
+    values: Vec<f64>,
+    tau: f64,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+struct BidiagonalReduction {
+    rows: usize,
+    cols: usize,
+    diagonal: Vec<f64>,
+    superdiagonal: Vec<f64>,
+    bidiagonal: DMatrix<f64>,
+    left_reflectors: Vec<HouseholderReflector>,
+    right_reflectors: Vec<HouseholderReflector>,
+}
+
+#[allow(dead_code)]
+impl BidiagonalReduction {
+    fn left_product_transpose(&self) -> DMatrix<f64> {
+        let mut q_t = DMatrix::<f64>::identity(self.rows, self.rows);
+        for reflector in &self.left_reflectors {
+            apply_householder_left(&mut q_t, reflector, 0);
+        }
+        q_t
+    }
+
+    fn right_product(&self) -> DMatrix<f64> {
+        let mut v = DMatrix::<f64>::identity(self.cols, self.cols);
+        for reflector in &self.right_reflectors {
+            apply_householder_right(&mut v, reflector, 0);
+        }
+        v
+    }
+}
+
+fn make_householder_reflector(start: usize, values: Vec<f64>) -> HouseholderReflector {
+    let norm = values.iter().map(|value| value * value).sum::<f64>().sqrt();
+    if norm == 0.0 {
+        return HouseholderReflector {
+            start,
+            values,
+            tau: 0.0,
+        };
+    }
+
+    let first = values[0];
+    let beta = if first.is_sign_negative() {
+        norm
+    } else {
+        -norm
+    };
+    let mut reflector_values = values;
+    reflector_values[0] -= beta;
+    let norm_sq = reflector_values
+        .iter()
+        .map(|value| value * value)
+        .sum::<f64>();
+    let tau = if norm_sq == 0.0 { 0.0 } else { 2.0 / norm_sq };
+
+    HouseholderReflector {
+        start,
+        values: reflector_values,
+        tau,
+    }
+}
+
+fn apply_householder_left(
+    matrix: &mut DMatrix<f64>,
+    reflector: &HouseholderReflector,
+    col_start: usize,
+) {
+    if reflector.tau == 0.0 || reflector.values.is_empty() {
+        return;
+    }
+
+    for col in col_start..matrix.ncols() {
+        let mut dot = 0.0;
+        for (offset, value) in reflector.values.iter().enumerate() {
+            dot += value * matrix[(reflector.start + offset, col)];
+        }
+        let scale = reflector.tau * dot;
+        if scale != 0.0 {
+            for (offset, value) in reflector.values.iter().enumerate() {
+                matrix[(reflector.start + offset, col)] -= scale * value;
+            }
+        }
+    }
+}
+
+fn apply_householder_right(
+    matrix: &mut DMatrix<f64>,
+    reflector: &HouseholderReflector,
+    row_start: usize,
+) {
+    if reflector.tau == 0.0 || reflector.values.is_empty() {
+        return;
+    }
+
+    for row in row_start..matrix.nrows() {
+        let mut dot = 0.0;
+        for (offset, value) in reflector.values.iter().enumerate() {
+            dot += matrix[(row, reflector.start + offset)] * value;
+        }
+        let scale = reflector.tau * dot;
+        if scale != 0.0 {
+            for (offset, value) in reflector.values.iter().enumerate() {
+                matrix[(row, reflector.start + offset)] -= scale * value;
+            }
+        }
+    }
+}
+
+#[allow(dead_code)]
+fn golub_kahan_bidiagonal_reduction(
+    matrix: &DMatrix<f64>,
+) -> Result<BidiagonalReduction, LinalgError> {
+    let rows = matrix.nrows();
+    let cols = matrix.ncols();
+    if rows < cols {
+        return Err(LinalgError::UnsupportedAssumption);
+    }
+    if matrix.iter().any(|value| !value.is_finite()) {
+        return Err(LinalgError::NonFiniteInput);
+    }
+
+    let mut work = matrix.clone();
+    let mut left_reflectors = Vec::with_capacity(cols);
+    let mut right_reflectors = Vec::with_capacity(cols.saturating_sub(1));
+
+    for step in 0..cols {
+        let column_values = (step..rows).map(|row| work[(row, step)]).collect();
+        let left_reflector = make_householder_reflector(step, column_values);
+        apply_householder_left(&mut work, &left_reflector, step);
+        for row in step + 1..rows {
+            work[(row, step)] = 0.0;
+        }
+        left_reflectors.push(left_reflector);
+
+        if step + 1 < cols {
+            let row_values = (step + 1..cols).map(|col| work[(step, col)]).collect();
+            let right_reflector = make_householder_reflector(step + 1, row_values);
+            apply_householder_right(&mut work, &right_reflector, step);
+            for col in step + 2..cols {
+                work[(step, col)] = 0.0;
+            }
+            right_reflectors.push(right_reflector);
+        }
+    }
+
+    let diagonal = (0..cols).map(|idx| work[(idx, idx)]).collect();
+    let superdiagonal = (0..cols.saturating_sub(1))
+        .map(|idx| work[(idx, idx + 1)])
+        .collect();
+    let mut bidiagonal = DMatrix::<f64>::zeros(rows, cols);
+    for idx in 0..cols {
+        bidiagonal[(idx, idx)] = work[(idx, idx)];
+        if idx + 1 < cols {
+            bidiagonal[(idx, idx + 1)] = work[(idx, idx + 1)];
+        }
+    }
+
+    Ok(BidiagonalReduction {
+        rows,
+        cols,
+        diagonal,
+        superdiagonal,
+        bidiagonal,
+        left_reflectors,
+        right_reflectors,
+    })
+}
+
 fn dmatrix_from_rows(rows: &[Vec<f64>]) -> Result<DMatrix<f64>, LinalgError> {
     let (m, n) = matrix_shape(rows)?;
     let mut data = Vec::with_capacity(m * n);
@@ -10795,6 +10971,89 @@ mod tests {
         }
     }
 
+    #[test]
+    fn bidiagonal_reduction_reconstructs_tall_matrix() {
+        let a = vec![
+            vec![4.0, 1.0, -0.5],
+            vec![1.5, 3.5, 0.75],
+            vec![0.25, -1.0, 2.5],
+            vec![2.0, 0.5, 1.25],
+            vec![-0.5, 1.75, 0.25],
+        ];
+        let matrix = dmatrix_from_rows(&a).expect("matrix");
+        let reduction = golub_kahan_bidiagonal_reduction(&matrix).expect("bidiagonal reduction");
+
+        assert_eq!(reduction.rows, 5);
+        assert_eq!(reduction.cols, 3);
+        assert_eq!(reduction.diagonal.len(), 3);
+        assert_eq!(reduction.superdiagonal.len(), 2);
+
+        for row in 0..reduction.rows {
+            for col in 0..reduction.cols {
+                let allowed = row == col || row + 1 == col;
+                if !allowed {
+                    assert!(
+                        reduction.bidiagonal[(row, col)].abs() < 1e-10,
+                        "bidiagonal fill at ({row}, {col}) = {}",
+                        reduction.bidiagonal[(row, col)]
+                    );
+                }
+            }
+        }
+
+        let q_t = reduction.left_product_transpose();
+        let v = reduction.right_product();
+        let reconstructed =
+            q_t.clone().transpose() * reduction.bidiagonal.clone() * v.clone().transpose();
+        for row in 0..matrix.nrows() {
+            for col in 0..matrix.ncols() {
+                assert!(
+                    (reconstructed[(row, col)] - matrix[(row, col)]).abs() < 1e-10,
+                    "reconstruction drift at ({row}, {col}): {} vs {}",
+                    reconstructed[(row, col)],
+                    matrix[(row, col)]
+                );
+            }
+        }
+
+        let q_identity = &q_t * q_t.clone().transpose();
+        for row in 0..q_identity.nrows() {
+            for col in 0..q_identity.ncols() {
+                let expected = if row == col { 1.0 } else { 0.0 };
+                assert!(
+                    (q_identity[(row, col)] - expected).abs() < 1e-10,
+                    "left reflector product lost orthogonality at ({row}, {col})"
+                );
+            }
+        }
+
+        let v_identity = v.clone().transpose() * &v;
+        for row in 0..v_identity.nrows() {
+            for col in 0..v_identity.ncols() {
+                let expected = if row == col { 1.0 } else { 0.0 };
+                assert!(
+                    (v_identity[(row, col)] - expected).abs() < 1e-10,
+                    "right reflector product lost orthogonality at ({row}, {col})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn bidiagonal_reduction_rejects_wide_and_nonfinite_inputs() {
+        let wide = DMatrix::from_row_slice(2, 3, &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+        assert_eq!(
+            golub_kahan_bidiagonal_reduction(&wide).unwrap_err(),
+            LinalgError::UnsupportedAssumption
+        );
+
+        let nonfinite = DMatrix::from_row_slice(3, 2, &[1.0, 2.0, f64::NAN, 4.0, 5.0, 6.0]);
+        assert_eq!(
+            golub_kahan_bidiagonal_reduction(&nonfinite).unwrap_err(),
+            LinalgError::NonFiniteInput
+        );
+    }
+
     fn low_rank_trig_matrix(rows: usize, cols: usize) -> Vec<Vec<f64>> {
         (0..rows)
             .map(|i| {
@@ -11032,6 +11291,43 @@ mod tests {
             );
         }
         println!("PINV_LOW_RANK_TALL_GOLDEN_END");
+    }
+
+    #[test]
+    fn pinv_full_rank_rectangular_golden_payload() {
+        let rows = 64;
+        let cols = 32;
+        let mut a = vec![vec![0.0; cols]; rows];
+        for (row_idx, row) in a.iter_mut().enumerate() {
+            for (col_idx, cell) in row.iter_mut().enumerate() {
+                *cell = if row_idx == col_idx {
+                    10.0 + col_idx as f64
+                } else {
+                    1.0 / ((row_idx as f64 - col_idx as f64).abs() + 1.0)
+                };
+            }
+        }
+
+        let result = pinv(&a, PinvOptions::default()).expect("full-rank pinv");
+        let certificate = result.certificate.as_ref().expect("certificate");
+        assert_eq!(result.rank, cols);
+        assert_eq!(result.pseudo_inverse.len(), cols);
+        assert_eq!(result.pseudo_inverse[0].len(), rows);
+        assert_eq!(certificate.action, SolverAction::SVDFallback);
+        assert_eq!(certificate.matrix_shape, (rows, cols));
+
+        println!("PINV_FULL_RANK_RECTANGULAR_GOLDEN_BEGIN");
+        println!("shape={rows}x{cols}");
+        println!("rank={}", result.rank);
+        println!("certificate_action={:?}", certificate.action);
+        println!("certificate_rcond={:.17e}", certificate.rcond_estimate);
+        for (row, col) in [(0, 0), (1, 7), (5, 11), (17, 31), (31, 63)] {
+            println!(
+                "entry[{row},{col}]={:.17e}",
+                result.pseudo_inverse[row][col]
+            );
+        }
+        println!("PINV_FULL_RANK_RECTANGULAR_GOLDEN_END");
     }
 
     #[test]
@@ -11533,6 +11829,133 @@ mod tests {
     }
 
     // ── SVD tests ───────────────────────────────────────────────────
+
+    fn bidiag_deterministic_matrix(rows: usize, cols: usize) -> DMatrix<f64> {
+        DMatrix::from_fn(rows, cols, |row, col| {
+            let diagonal_bias = if row == col { 6.0 + col as f64 } else { 0.0 };
+            let low_rank_part = ((row + 1) as f64 * 0.071).sin() + ((col + 3) as f64 * 0.113).cos();
+            let coupling = ((row + 2) * (col + 5)) as f64 / 97.0;
+            diagonal_bias + low_rank_part + coupling
+        })
+    }
+
+    fn max_abs_dmatrix_diff(actual: &DMatrix<f64>, expected: &DMatrix<f64>) -> f64 {
+        assert_eq!(actual.nrows(), expected.nrows());
+        assert_eq!(actual.ncols(), expected.ncols());
+        let mut max_abs = 0.0_f64;
+        for row in 0..actual.nrows() {
+            for col in 0..actual.ncols() {
+                max_abs = max_abs.max((actual[(row, col)] - expected[(row, col)]).abs());
+            }
+        }
+        max_abs
+    }
+
+    fn dmatrix_orthogonality_error(matrix: &DMatrix<f64>) -> f64 {
+        let gram = matrix * matrix.transpose();
+        let identity = DMatrix::<f64>::identity(matrix.nrows(), matrix.ncols());
+        max_abs_dmatrix_diff(&gram, &identity)
+    }
+
+    fn assert_upper_bidiagonal(reduction: &BidiagonalReduction, tolerance: f64) {
+        for row in 0..reduction.rows {
+            for col in 0..reduction.cols {
+                let value = reduction.bidiagonal[(row, col)];
+                if row == col {
+                    assert_eq!(value.to_bits(), reduction.diagonal[row].to_bits());
+                } else if col == row + 1 {
+                    assert_eq!(value.to_bits(), reduction.superdiagonal[row].to_bits());
+                } else {
+                    assert!(
+                        value.abs() <= tolerance,
+                        "B[{row},{col}] should be zero, got {value:.17e}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bidiag_golub_kahan_reconstructs_tall_full_rank_matrix() {
+        let original = bidiag_deterministic_matrix(8, 5);
+        let reduction = golub_kahan_bidiagonal_reduction(&original).expect("bidiagonal reduction");
+        assert_eq!(reduction.diagonal.len(), 5);
+        assert_eq!(reduction.superdiagonal.len(), 4);
+        assert_eq!(reduction.left_reflectors.len(), 5);
+        assert_eq!(reduction.right_reflectors.len(), 4);
+        assert_upper_bidiagonal(&reduction, 0.0);
+
+        let q_t = reduction.left_product_transpose();
+        let v = reduction.right_product();
+        let reconstructed = q_t.clone().transpose() * &reduction.bidiagonal * v.clone().transpose();
+        let reconstruction_error = max_abs_dmatrix_diff(&reconstructed, &original);
+        let q_error = dmatrix_orthogonality_error(&q_t);
+        let v_error = dmatrix_orthogonality_error(&v);
+
+        assert!(
+            reconstruction_error < 1e-10,
+            "reconstruction error {reconstruction_error:.17e}"
+        );
+        assert!(q_error < 1e-12, "Q orthogonality error {q_error:.17e}");
+        assert!(v_error < 1e-12, "V orthogonality error {v_error:.17e}");
+    }
+
+    #[test]
+    fn bidiag_golub_kahan_zero_matrix_keeps_zero_bidiagonal() {
+        let original = DMatrix::<f64>::zeros(6, 4);
+        let reduction = golub_kahan_bidiagonal_reduction(&original).expect("bidiagonal reduction");
+        assert_eq!(reduction.diagonal, vec![0.0; 4]);
+        assert_eq!(reduction.superdiagonal, vec![0.0; 3]);
+        assert!(reduction.left_reflectors.iter().all(|refl| refl.tau == 0.0));
+        assert!(
+            reduction
+                .right_reflectors
+                .iter()
+                .all(|refl| refl.tau == 0.0)
+        );
+
+        let q_t = reduction.left_product_transpose();
+        let v = reduction.right_product();
+        let reconstructed = q_t.clone().transpose() * &reduction.bidiagonal * v.clone().transpose();
+        assert_eq!(max_abs_dmatrix_diff(&reconstructed, &original), 0.0);
+        assert_eq!(dmatrix_orthogonality_error(&q_t), 0.0);
+        assert_eq!(dmatrix_orthogonality_error(&v), 0.0);
+    }
+
+    #[test]
+    fn bidiag_golub_kahan_rejects_wide_matrix() {
+        let original = bidiag_deterministic_matrix(3, 5);
+        let err =
+            golub_kahan_bidiagonal_reduction(&original).expect_err("wide matrices are unsupported");
+        assert_eq!(err, LinalgError::UnsupportedAssumption);
+    }
+
+    #[test]
+    fn bidiag_golub_kahan_golden_payload() {
+        let original = bidiag_deterministic_matrix(7, 4);
+        let reduction = golub_kahan_bidiagonal_reduction(&original).expect("bidiagonal reduction");
+        let q_t = reduction.left_product_transpose();
+        let v = reduction.right_product();
+        let reconstructed = q_t.clone().transpose() * &reduction.bidiagonal * v.clone().transpose();
+        let reconstruction_error = max_abs_dmatrix_diff(&reconstructed, &original);
+        let q_error = dmatrix_orthogonality_error(&q_t);
+        let v_error = dmatrix_orthogonality_error(&v);
+
+        println!("BIDIAG_GOLUB_KAHAN_GOLDEN_BEGIN");
+        println!("shape={}x{}", reduction.rows, reduction.cols);
+        println!("left_reflectors={}", reduction.left_reflectors.len());
+        println!("right_reflectors={}", reduction.right_reflectors.len());
+        println!("reconstruction_error={reconstruction_error:.17e}");
+        println!("q_orthogonality_error={q_error:.17e}");
+        println!("v_orthogonality_error={v_error:.17e}");
+        for idx in 0..reduction.diagonal.len() {
+            println!("diagonal[{idx}]={:.17e}", reduction.diagonal[idx]);
+        }
+        for idx in 0..reduction.superdiagonal.len() {
+            println!("superdiagonal[{idx}]={:.17e}", reduction.superdiagonal[idx]);
+        }
+        println!("BIDIAG_GOLUB_KAHAN_GOLDEN_END");
+    }
 
     #[test]
     #[allow(clippy::needless_range_loop)]

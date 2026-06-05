@@ -1,0 +1,15 @@
+BIDIAG_GOLUB_KAHAN_GOLDEN_BEGIN
+shape=7x4
+left_reflectors=4
+right_reflectors=3
+reconstruction_error=7.10542735760100186e-15
+q_orthogonality_error=1.10873533584960339e-15
+v_orthogonality_error=4.44089209850062616e-16
+diagonal[0]=-8.06842964314689937e0
+diagonal[1]=1.13237583668664463e1
+diagonal[2]=7.98100708818544025e0
+diagonal[3]=7.85388190004063436e0
+superdiagonal[0]=7.10893537252693797e0
+superdiagonal[1]=1.14644729027822256e0
+superdiagonal[2]=1.14661672399073744e0
+BIDIAG_GOLUB_KAHAN_GOLDEN_END

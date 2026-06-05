@@ -2322,6 +2322,7 @@ fn nd_axis_thread_count(lanes: usize, axis_len: usize) -> usize {
 /// back. Every phase is parallel over disjoint output regions:
 ///   * gather+transform: thread owns offsets [o0, o0+k) -> contiguous transposed lanes
 ///   * scatter: thread owns indices [i0, i0+m) -> contiguous `data` rows of `stride`
+///
 /// Byte-identical to the sequential strided walk: each lane's 1D FFT sees the same
 /// inputs in the same order, and gather/scatter are pure permutations.
 fn apply_axis0_transpose_transform(
