@@ -146,21 +146,31 @@ fn kmeans_plusplus_init(data: &[Vec<f64>], k: usize, seed: u64) -> Vec<Vec<f64>>
     let idx = (next_rng(&mut rng) * n as f64) as usize % n;
     centroids.push(data[idx].clone());
 
+    // `dists[i]` is the squared distance from point i to its NEAREST chosen
+    // centroid. The previous code rebuilt it from scratch over every chosen
+    // centroid on each of the k-1 picks — O(n·k²). Instead carry it across picks
+    // and fold in only the newest centroid (O(n·k) total). `min` is independent
+    // of fold order and `sq_dist_within`'s early-abandon never changes the min
+    // value, so `dists` — and therefore every selection (same RNG sequence) — is
+    // byte-identical to the rebuild.
+    let mut dists = vec![f64::INFINITY; n];
+    for (i, point) in data.iter().enumerate() {
+        let d = sq_dist_within(point, &centroids[0], dists[i]);
+        dists[i] = dists[i].min(d);
+    }
+
     // Remaining centroids: probability proportional to D²
     for _ in 1..k {
-        let mut dists = vec![f64::INFINITY; n];
-        for (i, point) in data.iter().enumerate() {
-            for c in &centroids {
-                let d = sq_dist_within(point, c, dists[i]);
-                dists[i] = dists[i].min(d);
-            }
-        }
-
         let total: f64 = dists.iter().sum();
         if total <= 0.0 {
             // All points are at existing centroids; pick randomly
             let idx = (next_rng(&mut rng) * n as f64) as usize % n;
             centroids.push(data[idx].clone());
+            let new_c = data[idx].clone();
+            for (i, point) in data.iter().enumerate() {
+                let d = sq_dist_within(point, &new_c, dists[i]);
+                dists[i] = dists[i].min(d);
+            }
             continue;
         }
 
@@ -175,6 +185,12 @@ fn kmeans_plusplus_init(data: &[Vec<f64>], k: usize, seed: u64) -> Vec<Vec<f64>>
             }
         }
         centroids.push(data[chosen].clone());
+        // Fold the new centroid into the running nearest-centroid distances.
+        let new_c = data[chosen].clone();
+        for (i, point) in data.iter().enumerate() {
+            let d = sq_dist_within(point, &new_c, dists[i]);
+            dists[i] = dists[i].min(d);
+        }
     }
 
     centroids

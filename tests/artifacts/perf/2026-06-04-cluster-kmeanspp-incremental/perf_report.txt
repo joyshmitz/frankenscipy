@@ -1,0 +1,40 @@
+perf: fsci-cluster kmeans++ init — O(n*k^2) rebuild -> O(n*k) incremental nearest-distance
+============================================================================================
+
+Target : crates/fsci-cluster/src/lib.rs :: kmeans_plusplus_init (used by kmeans).
+Lever  : k-means++ picks each new centroid with probability ∝ D(point)^2, where D(point) is the
+         distance to the NEAREST already-chosen centroid. The old code rebuilt the whole
+         `dists` array from scratch over every chosen centroid on each of the k-1 picks ->
+         O(n*k^2). Carry `dists` across picks and fold in ONLY the newest centroid each step
+         (dists[i] = min(dists[i], sq_dist(point_i, new_centroid))) -> O(n*k).
+
+Isomorphism proof (byte-identical kmeans: centroids + labels + inertia)
+----------------------------------------------------------------------
+- `dists[i]` is min over chosen centroids of sq_dist(point_i, centroid). `min` is independent of
+  fold order, and `sq_dist_within`'s early-abandon never alters the min VALUE (the nearest
+  centroid is always summed to completion), so the carried `dists` equals the rebuilt `dists`
+  bit-for-bit at every pick.
+- The RNG sequence is unchanged (one draw per pick, same branch structure incl. the total<=0
+  random-pick path, which now also folds its centroid in), so every selected centroid index is
+  identical -> identical init -> identical Lloyd iterations.
+- Empirically: 0 mismatches / 400 kmeans runs across random datasets, n in [50,449], d in [1,5],
+  k in [1, min(n,40)], including coarse integer grids with duplicate points (exercising the
+  total<=0 branch). Centroids + labels compared via .to_bits(), inertia via .to_bits(), vs a
+  verbatim O(n*k^2)-init reference.
+- Golden payload sha256 (per-run FNV digest of all centroid coordinates):
+    8bcd4a36def48961dfacdf8f3c36acd4f99e86ba53a8efed7b928d5d06d71d6e  golden_payload.txt
+
+Timing (same-process A/B, release, mean of 3; uniform 2-D, 3 Lloyd iters — init dominates)
+------------------------------------------------------------------------------------------
+  n=4000 k=128   old= 63.177 ms   new=  8.035 ms   ratio=  7.9x
+  n=4000 k=256   old=233.018 ms   new= 12.854 ms   ratio= 18.1x
+  n=8000 k=256   old=475.668 ms   new= 28.074 ms   ratio= 16.9x
+(ratio grows ~ k, as expected for O(n*k^2) -> O(n*k).)
+
+Score: Impact 4 x Confidence 5 / Effort 1 = 20  (>> 2.0)
+
+Tests: cargo test -p fsci-cluster => 99 passed. clippy + fmt clean.
+
+Note: a uniform-grid acceleration of proximity_cliques was also trialed this session and REJECTED
+(it regressed: tractable cliques need sparse graphs where near-empty grid cells cost more than the
+naive's cheap distance-rejects). Not shipped.
