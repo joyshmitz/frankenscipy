@@ -24746,10 +24746,14 @@ pub fn multiscale_graphcorr(
 /// Diagonal (self-distance = 0) gets rank 0.
 fn compute_row_ranks(distances: &[Vec<f64>]) -> Vec<Vec<usize>> {
     let n = distances.len();
-    let mut ranks = vec![vec![0usize; n]; n];
-
-    for i in 0..n {
-        // Get indices sorted by distance (excluding self)
+    if n == 0 {
+        return Vec::new();
+    }
+    // Row i's ranks depend only on distances[i], and the sort key
+    // (total_cmp on distance, then ascending index) is a total order, so each row's
+    // output is deterministic. Rows are independent, so producing them in parallel is
+    // byte-identical to the sequential loop. The self entry (i,i) stays rank 0.
+    let row = |i: usize| -> Vec<usize> {
         let mut indexed: Vec<(usize, f64)> = distances[i]
             .iter()
             .enumerate()
@@ -24757,15 +24761,46 @@ fn compute_row_ranks(distances: &[Vec<f64>]) -> Vec<Vec<usize>> {
             .map(|(j, &d)| (j, d))
             .collect();
         indexed.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
-
-        // Self-distance is always rank 0, even when duplicate observations
-        // create additional zero distances in the same row.
-        ranks[i][i] = 0;
+        let mut row_ranks = vec![0usize; n];
         for (rank, (j, _)) in indexed.iter().enumerate() {
-            ranks[i][*j] = rank + 1;
+            row_ranks[*j] = rank + 1;
         }
+        row_ranks
+    };
+
+    // Sorting is O(n log n) per row, O(n^2 log n) total; split rows across threads when
+    // the matrix is large enough to amortize spawn overhead.
+    let work = (n as u64).saturating_mul(n as u64);
+    let nthreads = if work < 1 << 18 || n < 8 {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n / 2)
+            .max(1)
+    };
+    if nthreads <= 1 {
+        return (0..n).map(row).collect();
     }
-    ranks
+    let chunk = n.div_ceil(nthreads);
+    let row = &row;
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..nthreads)
+            .filter_map(|t| {
+                let i0 = t * chunk;
+                if i0 >= n {
+                    return None;
+                }
+                let i1 = (i0 + chunk).min(n);
+                Some(scope.spawn(move || (i0..i1).map(row).collect::<Vec<Vec<usize>>>()))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().expect("row-ranks worker panicked"))
+            .collect()
+    })
 }
 
 /// Compute the MGC map of local correlations at each scale (k, l).
@@ -24790,65 +24825,114 @@ fn compute_mgc_map(
     // row-major order, so each bucket equals the original code's partial sum exactly;
     // only the cross-bucket recombination order differs, giving tolerance-parity
     // (no inclusion-exclusion subtraction — two cumulative passes keep it stable).
-    let mut sum_xy = vec![vec![0.0_f64; n]; n];
-    let mut sum_xx = vec![vec![0.0_f64; n]; n];
-    let mut sum_yy = vec![vec![0.0_f64; n]; n];
-    let mut count = vec![vec![0.0_f64; n]; n];
+    // Flat contiguous n*n accumulators (one allocation each, row-major `a*n + b`)
+    // instead of four Vec<Vec<f64>> grids: the prefix sums and map build become
+    // cache-friendly contiguous sweeps with no per-row heap indirection. The
+    // arithmetic and its order are unchanged, so the result is bit-identical to the
+    // Vec<Vec> formulation.
+    // Co-accessed accumulators packed AoS into one contiguous `n*n` array of
+    // [sum_xy, sum_xx, sum_yy, count]. Each pair touches a single cache line for all
+    // four sums (instead of four separate 50MB arrays -> 4x the cache misses on the
+    // random scatter), and the prefix sum is a single componentwise pass instead of
+    // four. Arithmetic and order are unchanged -> bit-identical to the SoA formulation.
+    let mut acc = vec![[0.0_f64; 4]; n * n];
 
     for i in 0..n {
+        let rx = &rank_x[i];
+        let ry = &rank_y[i];
+        let cx_row = &centered_x[i];
+        let cy_row = &centered_y[i];
         for j in 0..n {
             if i == j {
                 continue;
             }
-            let a = rank_x[i][j];
-            let b = rank_y[i][j];
-            let cx = centered_x[i][j];
-            let cy = centered_y[i][j];
-            sum_xy[a][b] += cx * cy;
-            sum_xx[a][b] += cx * cx;
-            sum_yy[a][b] += cy * cy;
-            count[a][b] += 1.0;
+            let idx = rx[j] * n + ry[j];
+            let cx = cx_row[j];
+            let cy = cy_row[j];
+            let cell = &mut acc[idx];
+            cell[0] += cx * cy;
+            cell[1] += cx * cx;
+            cell[2] += cy * cy;
+            cell[3] += 1.0;
         }
     }
 
-    prefix_sum_2d_inclusive(&mut sum_xy);
-    prefix_sum_2d_inclusive(&mut sum_xx);
-    prefix_sum_2d_inclusive(&mut sum_yy);
-    prefix_sum_2d_inclusive(&mut count);
+    prefix_sum_2d_inclusive_aos(&mut acc, n);
 
-    let mut mgc_map = vec![vec![0.0; n]; n];
-    for k in 1..=n {
-        for l in 1..=n {
-            let s_xy = sum_xy[k - 1][l - 1];
-            let s_xx = sum_xx[k - 1][l - 1];
-            let s_yy = sum_yy[k - 1][l - 1];
-            let cnt = count[k - 1][l - 1];
-            if cnt < 1.0 || s_xx <= f64::EPSILON || s_yy <= f64::EPSILON {
-                continue;
-            }
-            let corr = s_xy / (s_xx.sqrt() * s_yy.sqrt());
-            mgc_map[k - 1][l - 1] = corr.clamp(-1.0, 1.0).max(0.0);
-        }
+    // Map cell (k-1, l-1) = corr from the prefix value at (k-1, l-1). Every cell is
+    // independent (two sqrt + a divide), so build rows in parallel for large n —
+    // bit-identical to the sequential build.
+    let build_row = |k: usize| -> Vec<f64> {
+        let base = k * n;
+        (0..n)
+            .map(|l| {
+                let [s_xy, s_xx, s_yy, cnt] = acc[base + l];
+                if cnt < 1.0 || s_xx <= f64::EPSILON || s_yy <= f64::EPSILON {
+                    0.0
+                } else {
+                    let corr = s_xy / (s_xx.sqrt() * s_yy.sqrt());
+                    corr.clamp(-1.0, 1.0).max(0.0)
+                }
+            })
+            .collect()
+    };
+
+    let work = (n as u64).saturating_mul(n as u64);
+    let nthreads = if work < 1 << 18 || n < 8 {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n / 2)
+            .max(1)
+    };
+    if nthreads <= 1 {
+        return (0..n).map(build_row).collect();
     }
-
-    mgc_map
+    let chunk = n.div_ceil(nthreads);
+    let build_row = &build_row;
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..nthreads)
+            .filter_map(|t| {
+                let k0 = t * chunk;
+                if k0 >= n {
+                    return None;
+                }
+                let k1 = (k0 + chunk).min(n);
+                Some(scope.spawn(move || (k0..k1).map(build_row).collect::<Vec<Vec<f64>>>()))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().expect("mgc-map build worker panicked"))
+            .collect()
+    })
 }
 
-/// In-place 2D inclusive prefix sum: on return `grid[k][l] == sum of the original
-/// `grid[a][b]` over all `a <= k`, `b <= l`. Two cumulative passes (along columns,
-/// then along rows) — no subtraction, so it is numerically stable.
-fn prefix_sum_2d_inclusive(grid: &mut [Vec<f64>]) {
-    let n = grid.len();
-    for row in grid.iter_mut() {
+/// In-place 2D inclusive prefix sum over a flat row-major `n*n` grid of 4-vectors:
+/// on return `grid[k*n + l]` holds the componentwise sum of the original cells over
+/// all `a <= k`, `b <= l`. Two cumulative passes (along each row, then down the rows),
+/// componentwise — no subtraction, so it is numerically stable.
+fn prefix_sum_2d_inclusive_aos(grid: &mut [[f64; 4]], n: usize) {
+    for k in 0..n {
+        let base = k * n;
         for l in 1..n {
-            row[l] += row[l - 1];
+            let prev = grid[base + l - 1];
+            let cur = &mut grid[base + l];
+            for c in 0..4 {
+                cur[c] += prev[c];
+            }
         }
     }
     for k in 1..n {
-        let (head, tail) = grid.split_at_mut(k);
-        let prev = &head[k - 1];
-        for (cur, &p) in tail[0].iter_mut().zip(prev.iter()) {
-            *cur += p;
+        let (head, tail) = grid.split_at_mut(k * n);
+        let prev = &head[(k - 1) * n..k * n];
+        let cur = &mut tail[0..n];
+        for (c, p) in cur.iter_mut().zip(prev.iter()) {
+            for t in 0..4 {
+                c[t] += p[t];
+            }
         }
     }
 }
@@ -25173,13 +25257,47 @@ fn double_center_distance_matrix(distances: &[Vec<f64>]) -> Vec<Vec<f64>> {
     }
     let total_mean = row_means.iter().sum::<f64>() / n as f64;
 
-    let mut centered = vec![vec![0.0; n]; n];
-    for i in 0..n {
-        for j in 0..n {
-            centered[i][j] = distances[i][j] - row_means[i] - column_means[j] + total_mean;
-        }
+    // Means are kept sequential (column_means is an order-sensitive reduction). The
+    // centering write `centered[i][j] = d[i][j] - row_mean[i] - col_mean[j] + total` is
+    // per-row independent, so build rows in parallel for large n — byte-identical.
+    let row = |i: usize| -> Vec<f64> {
+        let di = &distances[i];
+        let ri = row_means[i];
+        (0..n)
+            .map(|j| di[j] - ri - column_means[j] + total_mean)
+            .collect()
+    };
+    let work = (n as u64).saturating_mul(n as u64);
+    let nthreads = if work < 1 << 18 || n < 8 {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n / 2)
+            .max(1)
+    };
+    if nthreads <= 1 {
+        return (0..n).map(row).collect();
     }
-    centered
+    let chunk = n.div_ceil(nthreads);
+    let row = &row;
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..nthreads)
+            .filter_map(|t| {
+                let i0 = t * chunk;
+                if i0 >= n {
+                    return None;
+                }
+                let i1 = (i0 + chunk).min(n);
+                Some(scope.spawn(move || (i0..i1).map(row).collect::<Vec<Vec<f64>>>()))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().expect("double-center worker panicked"))
+            .collect()
+    })
 }
 
 /// Compute ranks using max method (number of values <= this value)
