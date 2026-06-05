@@ -192,3 +192,5 @@ crates/fsci-special/src/bin/
 claude-upgrade-progress.json
 /test_simplex
 /test_zscore
+*.mcp.json
+*.pmp_run.out
