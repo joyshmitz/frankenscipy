@@ -1,0 +1,11 @@
+fsci-fft DCT-II via N/2-point real FFT (Makhoul reorder)
+Correctness: max abs err vs naive O(n^2) DCT-II = 2.685e-12 (parity tol 1e-9).
+Tests: fsci-fft 144 pass; diff_fft_dct_dst + diff_fft_dctn_dstn conformance pass; clippy clean.
+Stable min-of-3 same-session A/B (old 2N complex FFT -> new N/2 real FFT):
+  n=512  : 14.96us -> 10.02us = 1.49x
+  n=1000 : 58.66us -> 25.88us = 2.27x
+  n=2048 : 63.66us -> 39.68us = 1.60x
+  n=4096 :141.77us -> 80.27us = 1.77x
+  n=10000:886.74us ->270.63us = 3.28x
+  n=16384:1132us   ->342.18us = 3.31x
+Win grows with N (FFT-dominated); small/mid pow2 lower (tuned radix-2 2N already fast).

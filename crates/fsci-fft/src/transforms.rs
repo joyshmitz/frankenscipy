@@ -1076,25 +1076,47 @@ pub fn dct(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError> {
 
     let n = input.len();
 
-    // Compute DCT-II via FFT of a mirrored 2N-length sequence
-    let mut extended = vec![(0.0, 0.0); 2 * n];
-    for i in 0..n {
-        extended[i] = (input[i], 0.0);
-    }
-    for i in 0..n {
-        extended[2 * n - 1 - i] = (input[i], 0.0);
+    // DCT-II via a single N-point FFT (Makhoul): the even-indexed samples go
+    // forward and the odd-indexed samples come back in reverse, so the FFT of
+    // that permutation is the DCT after a twiddle. This is ~2x cheaper than the
+    // naive 2N-point complex FFT of the mirror-symmetric extension (which both
+    // doubles the transform length and feeds it redundant data).
+    //   v[j] = x[2j]          (2j < N)
+    //   v[j] = x[2(N-j)-1]    (2j ≥ N)
+    //   X[k] = 2·Re(exp(-iπk/2N) · V[k]),  V = FFT_N(v)
+    let mut v = vec![0.0f64; n];
+    for (j, slot) in v.iter_mut().enumerate() {
+        let src = if 2 * j < n { 2 * j } else { 2 * (n - j) - 1 };
+        *slot = input[src];
     }
 
     let backend = resolve_backend(options.backend);
-    let spectrum = backend.transform_1d_unscaled(&extended, false);
-
-    // Extract DCT coefficients: X[k] = Re(spectrum[k] * exp(-i*π*k/(2N)))
+    // `v` is real, so for even N use the real-input FFT (an N/2-point complex
+    // transform) and recover the upper half by Hermitian symmetry
+    // V[N-k] = conj(V[k]); odd N falls back to a full N-point complex FFT.
+    // Extract DCT coefficients: X[k] = 2·Re(V[k] · exp(-iπk/(2N))).
     let mut result = Vec::with_capacity(n);
-    for (k, &sk) in spectrum.iter().enumerate().take(n) {
+    let extract = |k: usize, vk: Complex64| {
         let angle = -PI * k as f64 / (2.0 * n as f64);
         let twiddle = (angle.cos(), angle.sin());
-        let val = complex_mul(sk, twiddle);
-        result.push(val.0); // take real part
+        2.0 * complex_mul(vk, twiddle).0
+    };
+    if n.is_multiple_of(2) {
+        let half = real_fft_specialized(&v, backend); // V[0..=N/2]
+        for k in 0..n {
+            let vk = if k <= n / 2 {
+                half[k]
+            } else {
+                complex_conj(half[n - k])
+            };
+            result.push(extract(k, vk));
+        }
+    } else {
+        let complex_v: Vec<Complex64> = v.iter().map(|&x| (x, 0.0)).collect();
+        let spectrum = backend.transform_1d_unscaled(&complex_v, false);
+        for (k, &vk) in spectrum.iter().enumerate().take(n) {
+            result.push(extract(k, vk));
+        }
     }
     // br-yjas slice 2 (DCT-II): scipy normalization. Ortho scales all
     // entries by 1/sqrt(2N) plus an extra 1/sqrt(2) on the FIRST entry.
