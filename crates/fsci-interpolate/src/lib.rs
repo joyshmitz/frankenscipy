@@ -1524,7 +1524,8 @@ pub fn make_lsq_spline(x: &[f64], y: &[f64], t: &[f64], k: usize) -> Result<BSpl
             *s = 0.0;
         }
     }
-    let c = solve_dense_system(&mut ata, &mut aty)?;
+    // A^T A of B-splines is banded with half-width k (B_j and B_l overlap iff |j-l| <= k).
+    let c = solve_banded(&mut ata, &mut aty, k)?;
     BSpline::new(t.to_vec(), c, k)
 }
 
@@ -1555,26 +1556,53 @@ fn make_smoothing_spline_impl(
     let n = x.len();
     let mut ata = vec![vec![0.0; n]; n];
     let mut aty = vec![0.0; n];
-    // A B-spline basis has local support: eval_basis_all returns a length-n
-    // vector with only ~k+1 nonzero entries, so the dense n^2 inner double-loop
-    // wastes O(n^3) on terms that contribute nothing. Restrict to the nonzero
-    // indices. This is BIT-IDENTICAL: a skipped term is basis[j]*basis[l] (or
-    // basis[j]*y[i]) with a zero factor, hence +/-0.0, and `v + (+/-0.0) == v`
-    // for every f64 v — so the accumulators are unchanged bit-for-bit, and the
-    // i-major accumulation order is preserved. [perf]
+    // O(n*k^2) sparse normal-equations assembly: locate the knot span containing each
+    // x[i] (bspline_find_interval, O(log n)), evaluate just the k+1 active basis values
+    // with the exact windowed Cox-de Boor recursion into a REUSED scratch buffer (no
+    // per-sample length-n alloc, no O(n) scan), then scatter over the nonzero window
+    // indices. BIT-IDENTICAL to the previous dense build: the windowed de Boor produces
+    // the same basis values, and `nz` is exactly the same nonzero set in the same
+    // ascending order, so every accumulator bit is preserved (skipped terms are 0). [perf]
+    let mut scratch = vec![0.0_f64; n];
     let mut nz: Vec<usize> = Vec::with_capacity(k + 1);
     for i in 0..n {
-        let basis = eval_basis_all(&t, x[i], k, n);
+        let Some(mu) = bspline_find_interval(&t, x[i], n) else {
+            continue;
+        };
+        scratch[mu] = 1.0;
+        for p in 1..=k {
+            let start = mu.saturating_sub(p);
+            for idx in start..=mu {
+                let mut val = 0.0;
+                if idx + p < t.len() {
+                    let denom_left = t[idx + p] - t[idx];
+                    if denom_left > 0.0 {
+                        val += (x[i] - t[idx]) / denom_left * scratch[idx];
+                    }
+                }
+                if idx + p + 1 < t.len() && idx + 1 < n {
+                    let denom_right = t[idx + p + 1] - t[idx + 1];
+                    if denom_right > 0.0 {
+                        val += (t[idx + p + 1] - x[i]) / denom_right * scratch[idx + 1];
+                    }
+                }
+                scratch[idx] = val;
+            }
+        }
+        let lo = mu.saturating_sub(k);
         nz.clear();
-        nz.extend((0..n).filter(|&idx| basis[idx] != 0.0));
+        nz.extend((lo..=mu).filter(|&idx| scratch[idx] != 0.0));
         let yi = y[i];
         for &j in &nz {
-            let bj = basis[j];
+            let bj = scratch[j];
             aty[j] += bj * yi;
             let row = &mut ata[j];
             for &l in &nz {
-                row[l] += bj * basis[l];
+                row[l] += bj * scratch[l];
             }
+        }
+        for s in scratch[lo..=mu].iter_mut() {
+            *s = 0.0;
         }
     }
 
@@ -1605,7 +1633,9 @@ fn make_smoothing_spline_impl(
         }
     }
 
-    let c = solve_dense_system(&mut ata, &mut aty)?;
+    // A^T A has B-spline bandwidth k; the smoothing penalty adds the second off-diagonal,
+    // so the system is banded with half-width max(k, 2).
+    let c = solve_banded(&mut ata, &mut aty, k.max(2))?;
     BSpline::new(t, c, k)
 }
 
@@ -1761,6 +1791,75 @@ fn solve_dense_system(a: &mut [Vec<f64>], b: &mut [f64]) -> Result<Vec<f64>, Int
     for i in (0..n).rev() {
         let mut s = b[i];
         for j in i + 1..n {
+            let aij = a[i][j];
+            if aij != 0.0 {
+                s -= aij * x[j];
+            }
+        }
+        x[i] = s / a[i][i];
+    }
+    Ok(x)
+}
+
+/// Partial-pivoting Gaussian elimination for a matrix whose nonzeros are confined to a
+/// band of half-width `bw` (`a[i][j] == 0` for `|i-j| > bw`), e.g. a B-spline A^T A.
+/// Bit-identical to `solve_dense_system`: with partial pivoting the L factor keeps lower
+/// bandwidth `bw` and U gains upper bandwidth `2*bw`, so every entry the dense solve
+/// touches outside `[col, col+bw]` rows / `[col, col+2*bw]` columns is exactly 0 and its
+/// update is a no-op — restricting the loops to that window changes nothing but turns the
+/// O(n^2)-scan solve into O(n*bw^2). The pivot search is bounded the same way (entries
+/// below the band are 0, so they never win the max). Validated by the perf digest A/Bs.
+fn solve_banded(a: &mut [Vec<f64>], b: &mut [f64], bw: usize) -> Result<Vec<f64>, InterpError> {
+    let n = b.len();
+    if n == 0 || a.len() != n {
+        return Err(InterpError::InvalidArgument {
+            detail: "empty or mismatched system".to_string(),
+        });
+    }
+    for col in 0..n {
+        let row_hi = (col + bw + 1).min(n); // rows below the band are 0 in column `col`
+        let mut max_row = col;
+        let mut max_val = a[col][col].abs();
+        for (off, a_row) in a[(col + 1)..row_hi].iter().enumerate() {
+            let v = a_row[col].abs();
+            if v > max_val {
+                max_val = v;
+                max_row = col + 1 + off;
+            }
+        }
+        if max_val < 1e-14 {
+            return Err(InterpError::InvalidArgument {
+                detail: "singular matrix".to_string(),
+            });
+        }
+        if max_row != col {
+            a.swap(col, max_row);
+            b.swap(col, max_row);
+        }
+        let col_hi = (col + 2 * bw + 1).min(n); // U fill stays within upper bandwidth 2*bw
+        let pivot_diag = a[col][col];
+        for row in (col + 1)..row_hi {
+            if a[row][col] == 0.0 {
+                continue;
+            }
+            let factor = a[row][col] / pivot_diag;
+            let (head, tail) = a.split_at_mut(row);
+            let pivot = &head[col];
+            let target = &mut tail[0];
+            for j in col..col_hi {
+                let pval = pivot[j];
+                if pval != 0.0 {
+                    target[j] -= factor * pval;
+                }
+            }
+            b[row] -= factor * b[col];
+        }
+    }
+    let mut x = vec![0.0; n];
+    for i in (0..n).rev() {
+        let mut s = b[i];
+        let j_hi = (i + 2 * bw + 1).min(n);
+        for j in (i + 1)..j_hi {
             let aij = a[i][j];
             if aij != 0.0 {
                 s -= aij * x[j];
