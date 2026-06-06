@@ -5085,20 +5085,27 @@ pub fn zoom(
     let spline = prefilter_spline_coefficients(input, order, mode)?;
     let mut output = NdArray::zeros(new_shape.clone());
 
-    for flat in 0..output.size() {
-        let out_idx = output.unravel(flat);
+    // Each output pixel is an independent interpolation of the (read-only) spline
+    // coefficients, so the flat output index can be filled in parallel — bit-identical
+    // to the sequential loop (unravel_with_shape matches NdArray::unravel exactly).
+    let out_shape = output.shape.clone();
+    let in_shape = input.shape.clone();
+    let ndim = out_shape.len();
+    let kernel_work = (order + 1).saturating_pow(ndim as u32);
+    fill_pixels_parallel(&mut output, kernel_work, |flat, _scratch| {
+        let out_idx = unravel_with_shape(flat, &out_shape);
         let coords: Vec<f64> = out_idx
             .iter()
             .enumerate()
             .map(|(axis, &o)| {
-                if output.shape[axis] <= 1 || input.shape[axis] <= 1 {
+                if out_shape[axis] <= 1 || in_shape[axis] <= 1 {
                     0.0
                 } else {
-                    o as f64 * (input.shape[axis] - 1) as f64 / (output.shape[axis] - 1) as f64
+                    o as f64 * (in_shape[axis] - 1) as f64 / (out_shape[axis] - 1) as f64
                 }
             })
             .collect();
-        output.data[flat] = sample_interpolated(
+        sample_interpolated(
             input,
             &spline.coeffs,
             &coords,
@@ -5106,8 +5113,8 @@ pub fn zoom(
             order,
             mode,
             cval,
-        );
-    }
+        )
+    });
 
     Ok(output)
 }
@@ -5184,26 +5191,25 @@ pub fn rotate(
     let cy_out = (out_rows as f64 - 1.0) / 2.0;
     let cx_out = (out_cols as f64 - 1.0) / 2.0;
 
-    for r in 0..out_rows {
-        for c in 0..out_cols {
-            // Map output to input (inverse rotation)
-            let dy = r as f64 - cy_out;
-            let dx = c as f64 - cx_out;
-            let src_y = cy_in + cos_a * dy + sin_a * dx;
-            let src_x = cx_in - sin_a * dy + cos_a * dx;
-
-            let value = sample_interpolated(
-                input,
-                &spline.coeffs,
-                &[src_y, src_x],
-                &spline.coord_offsets,
-                order,
-                mode,
-                cval,
-            );
-            output.set(&[r, c], value);
-        }
-    }
+    // Each output pixel is an independent interpolation; fill the row-major flat index
+    // `flat = r*out_cols + c` in parallel — bit-identical to the sequential (r, c) loop.
+    let _ = out_rows;
+    let kernel_work = (order + 1) * (order + 1);
+    fill_pixels_parallel(&mut output, kernel_work, |flat, _scratch| {
+        let dy = (flat / out_cols) as f64 - cy_out;
+        let dx = (flat % out_cols) as f64 - cx_out;
+        let src_y = cy_in + cos_a * dy + sin_a * dx;
+        let src_x = cx_in - sin_a * dy + cos_a * dx;
+        sample_interpolated(
+            input,
+            &spline.coeffs,
+            &[src_y, src_x],
+            &spline.coord_offsets,
+            order,
+            mode,
+            cval,
+        )
+    });
 
     Ok(output)
 }
@@ -5575,10 +5581,11 @@ pub fn map_coordinates(
     }
 
     let spline = prefilter_spline_coefficients(input, order, mode)?;
-    let mut result = Vec::with_capacity(npts);
-    for p in 0..npts {
+    // Each query point is an independent interpolation of the read-only spline
+    // coefficients; fill the disjoint output indices in parallel — bit-identical.
+    let point = |p: usize| -> f64 {
         let coords: Vec<f64> = coordinates.iter().map(|c| c[p]).collect();
-        result.push(sample_interpolated(
+        sample_interpolated(
             input,
             &spline.coeffs,
             &coords,
@@ -5586,9 +5593,26 @@ pub fn map_coordinates(
             order,
             mode,
             cval,
-        ));
+        )
+    };
+    let kernel_work = (order + 1).saturating_pow(ndim as u32);
+    let nthreads = ndimage_filter_thread_count(npts, kernel_work);
+    if nthreads <= 1 {
+        return Ok((0..npts).map(point).collect());
     }
-
+    let mut result = vec![0.0_f64; npts];
+    let chunk = npts.div_ceil(nthreads);
+    let point = &point;
+    std::thread::scope(|scope| {
+        for (t, out_chunk) in result.chunks_mut(chunk).enumerate() {
+            let start = t * chunk;
+            scope.spawn(move || {
+                for (li, slot) in out_chunk.iter_mut().enumerate() {
+                    *slot = point(start + li);
+                }
+            });
+        }
+    });
     Ok(result)
 }
 
@@ -6257,22 +6281,27 @@ pub fn affine_transform(
     let spline = prefilter_spline_coefficients(input, order, mode)?;
     let mut output = NdArray::zeros(input.shape.clone());
 
-    for r in 0..rows {
-        for c in 0..cols {
-            let src_r = matrix[0][0] * r as f64 + matrix[0][1] * c as f64 + matrix[0][2];
-            let src_c = matrix[1][0] * r as f64 + matrix[1][1] * c as f64 + matrix[1][2];
-            let value = sample_interpolated(
-                input,
-                &spline.coeffs,
-                &[src_r, src_c],
-                &spline.coord_offsets,
-                order,
-                mode,
-                cval,
-            );
-            output.set(&[r, c], value);
-        }
-    }
+    // Each output pixel maps to one independent interpolation of the (read-only) spline
+    // coefficients, so the row-major flat index `flat = r*cols + c` can be filled in
+    // parallel — bit-identical to the sequential (r, c) loop.
+    let _ = rows;
+    let matrix = *matrix;
+    let kernel_work = (order + 1) * (order + 1);
+    fill_pixels_parallel(&mut output, kernel_work, |flat, _scratch| {
+        let r = (flat / cols) as f64;
+        let c = (flat % cols) as f64;
+        let src_r = matrix[0][0] * r + matrix[0][1] * c + matrix[0][2];
+        let src_c = matrix[1][0] * r + matrix[1][1] * c + matrix[1][2];
+        sample_interpolated(
+            input,
+            &spline.coeffs,
+            &[src_r, src_c],
+            &spline.coord_offsets,
+            order,
+            mode,
+            cval,
+        )
+    });
 
     Ok(output)
 }
