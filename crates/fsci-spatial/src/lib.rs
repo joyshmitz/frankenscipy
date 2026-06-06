@@ -3612,38 +3612,100 @@ pub fn medoid(points: &[Vec<f64>]) -> Option<usize> {
         return None;
     }
 
-    let mut best = 0;
-    let mut best_total = f64::INFINITY;
-
-    for i in 0..n {
-        let total: f64 = (0..n)
+    // Each point's total distance to all others is an independent O(n·d) reduction; the
+    // argmin scan uses a strict `<` (first/lowest index wins ties). Compute the totals in
+    // parallel into index order, then run the identical serial argmin — byte-identical
+    // (each total still sums in the same j order, and the tie-break is unchanged).
+    let dim = points[0].len();
+    let total_at = |i: usize| -> f64 {
+        (0..n)
             .filter(|&j| j != i)
             .map(|j| euclidean(&points[i], &points[j]))
-            .sum();
+            .sum()
+    };
+    let nthreads = cdist_thread_count(n, n, dim);
+    let totals: Vec<f64> = if nthreads <= 1 {
+        (0..n).map(&total_at).collect()
+    } else {
+        let chunk = n.div_ceil(nthreads);
+        let total_at = &total_at;
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..nthreads)
+                .filter_map(|t| {
+                    let i0 = t * chunk;
+                    if i0 >= n {
+                        return None;
+                    }
+                    let i1 = (i0 + chunk).min(n);
+                    Some(scope.spawn(move || (i0..i1).map(total_at).collect::<Vec<f64>>()))
+                })
+                .collect();
+            handles
+                .into_iter()
+                .flat_map(|h| h.join().expect("medoid worker panicked"))
+                .collect()
+        })
+    };
+
+    let mut best = 0;
+    let mut best_total = f64::INFINITY;
+    for (i, &total) in totals.iter().enumerate() {
         if total < best_total {
             best_total = total;
             best = i;
         }
     }
-
     Some(best)
 }
 
 /// Compute the diameter of a point set (maximum pairwise distance).
 pub fn diameter(points: &[Vec<f64>]) -> f64 {
     let n = points.len();
-    let mut max_d = 0.0f64;
-    for i in 0..n {
+    // Upper-triangle max-of-pairwise-distances. The combine rule (NaN if any operand is
+    // NaN, else max) is commutative and associative, so a parallel row-split reduction
+    // yields the identical scalar — NaN iff any pairwise distance is NaN, else the max.
+    let dim = if n > 0 { points[0].len() } else { 0 };
+    let row_max = |i: usize| -> f64 {
+        let mut m = 0.0f64;
         for j in i + 1..n {
             let d = euclidean(&points[i], &points[j]);
-            max_d = if max_d.is_nan() || d.is_nan() {
+            m = if m.is_nan() || d.is_nan() {
                 f64::NAN
             } else {
-                max_d.max(d)
+                m.max(d)
             };
         }
+        m
+    };
+    let combine = |a: f64, b: f64| -> f64 {
+        if a.is_nan() || b.is_nan() {
+            f64::NAN
+        } else {
+            a.max(b)
+        }
+    };
+    let nthreads = cdist_thread_count(n, n, dim);
+    if nthreads <= 1 {
+        return (0..n).map(row_max).fold(0.0f64, combine);
     }
-    max_d
+    let chunk = n.div_ceil(nthreads);
+    let row_max = &row_max;
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..nthreads)
+            .filter_map(|t| {
+                let i0 = t * chunk;
+                if i0 >= n {
+                    return None;
+                }
+                let i1 = (i0 + chunk).min(n);
+                Some(scope.spawn(move || (i0..i1).map(row_max).fold(0.0f64, combine)))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().expect("diameter worker panicked"))
+            .fold(0.0f64, combine)
+    })
 }
 
 /// Compute the spread (average distance from centroid) of a point set.
