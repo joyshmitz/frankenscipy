@@ -6205,19 +6205,48 @@ fn apply_householder_right(
     reflector: &HouseholderReflector,
     row_start: usize,
 ) {
+    let mut dot_workspace = vec![0.0_f64; matrix.nrows()];
+    apply_householder_right_with_workspace(matrix, reflector, row_start, &mut dot_workspace);
+}
+
+fn apply_householder_right_with_workspace(
+    matrix: &mut DMatrix<f64>,
+    reflector: &HouseholderReflector,
+    row_start: usize,
+    dot_workspace: &mut [f64],
+) {
     if reflector.tau == 0.0 || reflector.values.is_empty() {
         return;
     }
+    let rows = matrix.nrows();
+    if row_start >= rows {
+        return;
+    }
+    debug_assert!(dot_workspace.len() >= rows);
 
-    for row in row_start..matrix.nrows() {
-        let mut dot = 0.0;
-        for (offset, value) in reflector.values.iter().enumerate() {
-            dot += matrix[(row, reflector.start + offset)] * value;
+    for dot in &mut dot_workspace[row_start..rows] {
+        *dot = 0.0;
+    }
+
+    // DMatrix is column-major. This preserves each row's summation order while
+    // streaming down contiguous columns instead of striding across rows.
+    for (offset, value) in reflector.values.iter().enumerate() {
+        let col = reflector.start + offset;
+        for row in row_start..rows {
+            dot_workspace[row] += matrix[(row, col)] * value;
         }
-        let scale = reflector.tau * dot;
-        if scale != 0.0 {
-            for (offset, value) in reflector.values.iter().enumerate() {
-                matrix[(row, reflector.start + offset)] -= scale * value;
+    }
+
+    for scale in &mut dot_workspace[row_start..rows] {
+        *scale *= reflector.tau;
+    }
+
+    for (offset, value) in reflector.values.iter().enumerate() {
+        let col = reflector.start + offset;
+        for row in row_start..rows {
+            let scale = dot_workspace[row];
+            if scale != 0.0 {
+                matrix[(row, col)] -= scale * value;
             }
         }
     }
@@ -6562,6 +6591,7 @@ fn golub_kahan_bidiagonal_reduction(
     let mut work = matrix.clone();
     let mut left_reflectors = Vec::with_capacity(cols);
     let mut right_reflectors = Vec::with_capacity(cols.saturating_sub(1));
+    let mut right_dot_workspace = vec![0.0_f64; rows];
 
     for step in 0..cols {
         let column_values = (step..rows).map(|row| work[(row, step)]).collect();
@@ -6575,7 +6605,12 @@ fn golub_kahan_bidiagonal_reduction(
         if step + 1 < cols {
             let row_values = (step + 1..cols).map(|col| work[(step, col)]).collect();
             let right_reflector = make_householder_reflector(step + 1, row_values);
-            apply_householder_right(&mut work, &right_reflector, step);
+            apply_householder_right_with_workspace(
+                &mut work,
+                &right_reflector,
+                step,
+                &mut right_dot_workspace,
+            );
             for col in step + 2..cols {
                 work[(step, col)] = 0.0;
             }
@@ -12330,6 +12365,189 @@ mod tests {
         }
     }
 
+    fn apply_householder_right_rowwise_reference(
+        matrix: &mut DMatrix<f64>,
+        reflector: &HouseholderReflector,
+        row_start: usize,
+    ) {
+        if reflector.tau == 0.0 || reflector.values.is_empty() {
+            return;
+        }
+
+        for row in row_start..matrix.nrows() {
+            let mut dot = 0.0;
+            for (offset, value) in reflector.values.iter().enumerate() {
+                dot += matrix[(row, reflector.start + offset)] * value;
+            }
+            let scale = reflector.tau * dot;
+            if scale != 0.0 {
+                for (offset, value) in reflector.values.iter().enumerate() {
+                    matrix[(row, reflector.start + offset)] -= scale * value;
+                }
+            }
+        }
+    }
+
+    fn golub_kahan_bidiagonal_reduction_rowwise_reference(
+        matrix: &DMatrix<f64>,
+    ) -> Result<BidiagonalReduction, LinalgError> {
+        let rows = matrix.nrows();
+        let cols = matrix.ncols();
+        if rows < cols {
+            return Err(LinalgError::UnsupportedAssumption);
+        }
+        if matrix.iter().any(|value| !value.is_finite()) {
+            return Err(LinalgError::NonFiniteInput);
+        }
+
+        let mut work = matrix.clone();
+        let mut left_reflectors = Vec::with_capacity(cols);
+        let mut right_reflectors = Vec::with_capacity(cols.saturating_sub(1));
+
+        for step in 0..cols {
+            let column_values = (step..rows).map(|row| work[(row, step)]).collect();
+            let left_reflector = make_householder_reflector(step, column_values);
+            apply_householder_left(&mut work, &left_reflector, step);
+            for row in step + 1..rows {
+                work[(row, step)] = 0.0;
+            }
+            left_reflectors.push(left_reflector);
+
+            if step + 1 < cols {
+                let row_values = (step + 1..cols).map(|col| work[(step, col)]).collect();
+                let right_reflector = make_householder_reflector(step + 1, row_values);
+                apply_householder_right_rowwise_reference(&mut work, &right_reflector, step);
+                for col in step + 2..cols {
+                    work[(step, col)] = 0.0;
+                }
+                right_reflectors.push(right_reflector);
+            }
+        }
+
+        let diagonal = (0..cols).map(|idx| work[(idx, idx)]).collect();
+        let superdiagonal = (0..cols.saturating_sub(1))
+            .map(|idx| work[(idx, idx + 1)])
+            .collect();
+        let mut bidiagonal = DMatrix::<f64>::zeros(rows, cols);
+        for idx in 0..cols {
+            bidiagonal[(idx, idx)] = work[(idx, idx)];
+            if idx + 1 < cols {
+                bidiagonal[(idx, idx + 1)] = work[(idx, idx + 1)];
+            }
+        }
+
+        Ok(BidiagonalReduction {
+            rows,
+            cols,
+            diagonal,
+            superdiagonal,
+            bidiagonal,
+            left_reflectors,
+            right_reflectors,
+        })
+    }
+
+    fn assert_reflectors_bit_identical(
+        left: &[HouseholderReflector],
+        right: &[HouseholderReflector],
+        label: &str,
+    ) {
+        assert_eq!(left.len(), right.len(), "{label} reflector count");
+        for (idx, (left_reflector, right_reflector)) in left.iter().zip(right.iter()).enumerate() {
+            assert_eq!(
+                left_reflector.start, right_reflector.start,
+                "{label} reflector {idx} start"
+            );
+            assert_eq!(
+                left_reflector.tau.to_bits(),
+                right_reflector.tau.to_bits(),
+                "{label} reflector {idx} tau"
+            );
+            assert_eq!(
+                left_reflector.values.len(),
+                right_reflector.values.len(),
+                "{label} reflector {idx} value count"
+            );
+            for (value_idx, (left_value, right_value)) in left_reflector
+                .values
+                .iter()
+                .zip(right_reflector.values.iter())
+                .enumerate()
+            {
+                assert_eq!(
+                    left_value.to_bits(),
+                    right_value.to_bits(),
+                    "{label} reflector {idx} value {value_idx}"
+                );
+            }
+        }
+    }
+
+    fn assert_reductions_bit_identical(left: &BidiagonalReduction, right: &BidiagonalReduction) {
+        assert_eq!(left.rows, right.rows);
+        assert_eq!(left.cols, right.cols);
+        for (idx, (left_value, right_value)) in
+            left.diagonal.iter().zip(right.diagonal.iter()).enumerate()
+        {
+            assert_eq!(
+                left_value.to_bits(),
+                right_value.to_bits(),
+                "diagonal {idx}"
+            );
+        }
+        for (idx, (left_value, right_value)) in left
+            .superdiagonal
+            .iter()
+            .zip(right.superdiagonal.iter())
+            .enumerate()
+        {
+            assert_eq!(
+                left_value.to_bits(),
+                right_value.to_bits(),
+                "superdiagonal {idx}"
+            );
+        }
+        for row in 0..left.rows {
+            for col in 0..left.cols {
+                assert_eq!(
+                    left.bidiagonal[(row, col)].to_bits(),
+                    right.bidiagonal[(row, col)].to_bits(),
+                    "bidiagonal {row},{col}"
+                );
+            }
+        }
+        assert_reflectors_bit_identical(&left.left_reflectors, &right.left_reflectors, "left");
+        assert_reflectors_bit_identical(&left.right_reflectors, &right.right_reflectors, "right");
+    }
+
+    fn bidiag_reduction_digest(reduction: &BidiagonalReduction) -> u64 {
+        const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+        const FNV_PRIME: u64 = 0x100000001b3;
+
+        let mut digest = FNV_OFFSET;
+        for value in reduction
+            .diagonal
+            .iter()
+            .chain(reduction.superdiagonal.iter())
+            .chain(
+                reduction
+                    .left_reflectors
+                    .iter()
+                    .map(|reflector| &reflector.tau),
+            )
+            .chain(
+                reduction
+                    .right_reflectors
+                    .iter()
+                    .map(|reflector| &reflector.tau),
+            )
+        {
+            digest ^= value.to_bits();
+            digest = digest.wrapping_mul(FNV_PRIME);
+        }
+        digest
+    }
+
     #[test]
     fn bidiag_golub_kahan_reconstructs_tall_full_rank_matrix() {
         let original = bidiag_deterministic_matrix(8, 5);
@@ -12410,6 +12628,69 @@ mod tests {
             println!("superdiagonal[{idx}]={:.17e}", reduction.superdiagonal[idx]);
         }
         println!("BIDIAG_GOLUB_KAHAN_GOLDEN_END");
+    }
+
+    #[test]
+    fn bidiag_right_workspace_matches_rowwise_reference_bits() {
+        let original = bidiag_deterministic_matrix(32, 16);
+        let rowwise = golub_kahan_bidiagonal_reduction_rowwise_reference(&original)
+            .expect("rowwise reference reduction");
+        let workspace = golub_kahan_bidiagonal_reduction(&original).expect("workspace reduction");
+        assert_reductions_bit_identical(&rowwise, &workspace);
+    }
+
+    #[test]
+    #[ignore = "perf probe: run with rch and --release before/after bidiagonal reduction levers"]
+    fn bidiag_large_reduction_perf_probe() {
+        let original = bidiag_deterministic_matrix(1024, 512);
+        let started_at = std::time::Instant::now();
+        let reduction = golub_kahan_bidiagonal_reduction(std::hint::black_box(&original))
+            .expect("bidiagonal reduction");
+        let elapsed = started_at.elapsed();
+        assert_eq!(reduction.rows, 1024);
+        assert_eq!(reduction.cols, 512);
+        assert_eq!(reduction.diagonal.len(), 512);
+        assert_eq!(reduction.superdiagonal.len(), 511);
+        assert_upper_bidiagonal(&reduction, 0.0);
+
+        println!("BIDIAG_LARGE_REDUCTION_PERF_BEGIN");
+        println!("shape={}x{}", reduction.rows, reduction.cols);
+        println!("elapsed_ms={:.6}", elapsed.as_secs_f64() * 1_000.0);
+        println!("digest={:#018x}", bidiag_reduction_digest(&reduction));
+        println!("first_diagonal={:.17e}", reduction.diagonal[0]);
+        println!("last_diagonal={:.17e}", reduction.diagonal[511]);
+        println!("BIDIAG_LARGE_REDUCTION_PERF_END");
+    }
+
+    #[test]
+    #[ignore = "perf probe: run with rch and --release for rowwise vs workspace reducer timing"]
+    fn bidiag_right_workspace_perf_probe() {
+        let original = bidiag_deterministic_matrix(1024, 512);
+
+        let started_at = std::time::Instant::now();
+        let rowwise =
+            golub_kahan_bidiagonal_reduction_rowwise_reference(std::hint::black_box(&original))
+                .expect("rowwise reference reduction");
+        let rowwise_ms = started_at.elapsed().as_secs_f64() * 1_000.0;
+
+        let started_at = std::time::Instant::now();
+        let workspace = golub_kahan_bidiagonal_reduction(std::hint::black_box(&original))
+            .expect("workspace reduction");
+        let workspace_ms = started_at.elapsed().as_secs_f64() * 1_000.0;
+
+        assert_reductions_bit_identical(&rowwise, &workspace);
+
+        println!("BIDIAG_RIGHT_WORKSPACE_PERF_BEGIN");
+        println!("shape={}x{}", workspace.rows, workspace.cols);
+        println!("rowwise_ms={rowwise_ms:.6}");
+        println!("workspace_ms={workspace_ms:.6}");
+        println!("rowwise_digest={:#018x}", bidiag_reduction_digest(&rowwise));
+        println!(
+            "workspace_digest={:#018x}",
+            bidiag_reduction_digest(&workspace)
+        );
+        println!("speedup={:.6}", rowwise_ms / workspace_ms);
+        println!("BIDIAG_RIGHT_WORKSPACE_PERF_END");
     }
 
     #[test]
