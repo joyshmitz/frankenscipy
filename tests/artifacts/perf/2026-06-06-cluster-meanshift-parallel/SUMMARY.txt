@@ -1,0 +1,7 @@
+fsci-cluster mean_shift: parallel per-center updates within each iteration
+Each center reads only its own old position + immutable data => independent; updated parallel into own slots; shifted flag is order-independent OR.
+Byte-identical: center coords + labels digest match serial (ee1f4791).
+Tests: 3 mean_shift unit tests pass; clippy clean (pre-existing perf_kmeans warning only).
+Gate n^2*d>=1<<22 (threads re-spawned per iteration); serial path keeps small n regression-free.
+Min-of-3 A/B (serial -> parallel):
+  n=500 d=4: 1.11x (serial)  n=1200 d=6: 4.82x  n=2000 d=8: 12.50x

@@ -1989,43 +1989,81 @@ pub fn mean_shift(
     // Start each point as its own center candidate
     let mut centers: Vec<Vec<f64>> = data.to_vec();
 
-    for _ in 0..max_iter {
-        let mut shifted = false;
-        for center in &mut centers {
-            let mut new_center = vec![0.0; d];
-            let mut total_weight = 0.0;
-
-            for point in data {
-                let dist2: f64 = center
-                    .iter()
-                    .zip(point.iter())
-                    .map(|(&a, &b)| (a - b).powi(2))
-                    .sum();
-                let weight = (-dist2 / (2.0 * bw2)).exp();
-                total_weight += weight;
-                for (j, &pj) in point.iter().enumerate() {
-                    new_center[j] += weight * pj;
-                }
-            }
-
-            if total_weight > 0.0 {
-                for v in &mut new_center {
-                    *v /= total_weight;
-                }
-            }
-
-            let shift: f64 = center
+    // Each center's update reads only its own old position and the immutable
+    // `data` (never the other centers), so within an iteration the updates are
+    // independent — compute them in parallel across the centers, byte-identical
+    // (same per-center Gaussian-weighted mean in the same float order, written to
+    // its own slot; the `shifted` flag is an order-independent OR).
+    let update_center = |center: &[f64]| -> (Vec<f64>, bool) {
+        let mut new_center = vec![0.0; d];
+        let mut total_weight = 0.0;
+        for point in data {
+            let dist2: f64 = center
                 .iter()
-                .zip(new_center.iter())
+                .zip(point.iter())
                 .map(|(&a, &b)| (a - b).powi(2))
-                .sum::<f64>()
-                .sqrt();
-
-            if shift > 1e-6 {
-                shifted = true;
+                .sum();
+            let weight = (-dist2 / (2.0 * bw2)).exp();
+            total_weight += weight;
+            for (j, &pj) in point.iter().enumerate() {
+                new_center[j] += weight * pj;
             }
-            *center = new_center;
         }
+        if total_weight > 0.0 {
+            for v in &mut new_center {
+                *v /= total_weight;
+            }
+        }
+        let shift: f64 = center
+            .iter()
+            .zip(new_center.iter())
+            .map(|(&a, &b)| (a - b).powi(2))
+            .sum::<f64>()
+            .sqrt();
+        (new_center, shift > 1e-6)
+    };
+
+    // Threads are re-spawned every iteration (up to max_iter times), so the
+    // per-iteration O(n²·d) work must be large to amortize that; gate high.
+    let nthreads = if n.saturating_mul(n).saturating_mul(d) < (1 << 22) || n < 2 {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(|c| c.get())
+            .unwrap_or(1)
+            .min(n)
+    };
+
+    for _ in 0..max_iter {
+        let shifted = if nthreads <= 1 {
+            let mut sh = false;
+            for center in &mut centers {
+                let (nc, s) = update_center(center);
+                sh |= s;
+                *center = nc;
+            }
+            sh
+        } else {
+            let chunk = n.div_ceil(nthreads);
+            let update_center = &update_center;
+            std::thread::scope(|scope| {
+                let handles: Vec<_> = centers
+                    .chunks_mut(chunk)
+                    .map(|slab| {
+                        scope.spawn(move || {
+                            let mut sh = false;
+                            for center in slab.iter_mut() {
+                                let (nc, s) = update_center(center);
+                                sh |= s;
+                                *center = nc;
+                            }
+                            sh
+                        })
+                    })
+                    .collect();
+                handles.into_iter().fold(false, |acc, h| acc | h.join().unwrap())
+            })
+        };
 
         if !shifted {
             break;
