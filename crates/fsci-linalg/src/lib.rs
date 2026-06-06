@@ -6026,6 +6026,26 @@ struct BidiagonalReduction {
 }
 
 #[allow(dead_code)]
+#[derive(Debug, Clone)]
+struct BidiagonalSvd {
+    singular_values: Vec<f64>,
+    u: DMatrix<f64>,
+    v_t: DMatrix<f64>,
+    sweeps: usize,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+struct SymmetricJacobiEigen {
+    eigenvalues: Vec<f64>,
+    eigenvectors: DMatrix<f64>,
+    sweeps: usize,
+}
+
+const BIDIAG_JACOBI_TOLERANCE: f64 = 1e-14;
+const BIDIAG_JACOBI_MAX_SWEEPS: usize = 128;
+
+#[allow(dead_code)]
 impl BidiagonalReduction {
     fn left_product_transpose(&self) -> DMatrix<f64> {
         let mut q_t = DMatrix::<f64>::identity(self.rows, self.rows);
@@ -6041,6 +6061,18 @@ impl BidiagonalReduction {
             apply_householder_right(&mut v, reflector, 0);
         }
         v
+    }
+}
+
+#[allow(dead_code)]
+impl BidiagonalSvd {
+    fn sigma_matrix(&self) -> DMatrix<f64> {
+        let mut sigma =
+            DMatrix::<f64>::zeros(self.singular_values.len(), self.singular_values.len());
+        for (idx, value) in self.singular_values.iter().enumerate() {
+            sigma[(idx, idx)] = *value;
+        }
+        sigma
     }
 }
 
@@ -6119,6 +6151,272 @@ fn apply_householder_right(
             }
         }
     }
+}
+
+fn symmetric_offdiagonal_max(matrix: &DMatrix<f64>) -> f64 {
+    let mut max_abs = 0.0_f64;
+    for row in 0..matrix.nrows() {
+        for col in row + 1..matrix.ncols() {
+            max_abs = max_abs.max(matrix[(row, col)].abs());
+        }
+    }
+    max_abs
+}
+
+fn symmetric_diagonal_scale(matrix: &DMatrix<f64>) -> f64 {
+    let mut scale = 1.0_f64;
+    for idx in 0..matrix.nrows() {
+        scale = scale.max(matrix[(idx, idx)].abs());
+    }
+    scale
+}
+
+fn symmetric_jacobi_eigen(mut matrix: DMatrix<f64>) -> Result<SymmetricJacobiEigen, LinalgError> {
+    let n = matrix.nrows();
+    if n != matrix.ncols() {
+        return Err(LinalgError::ExpectedSquareMatrix);
+    }
+    if matrix.iter().any(|value| !value.is_finite()) {
+        return Err(LinalgError::NonFiniteInput);
+    }
+
+    let mut eigenvectors = DMatrix::<f64>::identity(n, n);
+    if n <= 1 {
+        return Ok(SymmetricJacobiEigen {
+            eigenvalues: (0..n).map(|idx| matrix[(idx, idx)]).collect(),
+            eigenvectors,
+            sweeps: 0,
+        });
+    }
+
+    for sweep in 0..BIDIAG_JACOBI_MAX_SWEEPS {
+        let scale = symmetric_diagonal_scale(&matrix);
+        if symmetric_offdiagonal_max(&matrix) <= BIDIAG_JACOBI_TOLERANCE * scale {
+            return Ok(SymmetricJacobiEigen {
+                eigenvalues: (0..n).map(|idx| matrix[(idx, idx)]).collect(),
+                eigenvectors,
+                sweeps: sweep,
+            });
+        }
+
+        for p in 0..n {
+            for q in p + 1..n {
+                let app = matrix[(p, p)];
+                let aqq = matrix[(q, q)];
+                let apq = matrix[(p, q)];
+                let pair_scale = app.abs().max(aqq.abs()).max(1.0);
+                if apq.abs() <= BIDIAG_JACOBI_TOLERANCE * pair_scale {
+                    continue;
+                }
+
+                let tau = (aqq - app) / (2.0 * apq);
+                let t_sign = if tau.is_sign_negative() { -1.0 } else { 1.0 };
+                let t = t_sign / (tau.abs() + (1.0 + tau * tau).sqrt());
+                let c = 1.0 / (1.0 + t * t).sqrt();
+                let s = t * c;
+
+                for k in 0..n {
+                    if k != p && k != q {
+                        let akp = matrix[(k, p)];
+                        let akq = matrix[(k, q)];
+                        let new_kp = c * akp - s * akq;
+                        let new_kq = s * akp + c * akq;
+                        matrix[(k, p)] = new_kp;
+                        matrix[(p, k)] = new_kp;
+                        matrix[(k, q)] = new_kq;
+                        matrix[(q, k)] = new_kq;
+                    }
+                }
+
+                matrix[(p, p)] = c * c * app - 2.0 * s * c * apq + s * s * aqq;
+                matrix[(q, q)] = s * s * app + 2.0 * s * c * apq + c * c * aqq;
+                matrix[(p, q)] = 0.0;
+                matrix[(q, p)] = 0.0;
+
+                for k in 0..n {
+                    let vkp = eigenvectors[(k, p)];
+                    let vkq = eigenvectors[(k, q)];
+                    eigenvectors[(k, p)] = c * vkp - s * vkq;
+                    eigenvectors[(k, q)] = s * vkp + c * vkq;
+                }
+            }
+        }
+    }
+
+    let scale = symmetric_diagonal_scale(&matrix);
+    if symmetric_offdiagonal_max(&matrix) <= BIDIAG_JACOBI_TOLERANCE * scale * 16.0 {
+        return Ok(SymmetricJacobiEigen {
+            eigenvalues: (0..n).map(|idx| matrix[(idx, idx)]).collect(),
+            eigenvectors,
+            sweeps: BIDIAG_JACOBI_MAX_SWEEPS,
+        });
+    }
+
+    Err(LinalgError::ConvergenceFailure {
+        detail: format!(
+            "bidiagonal SVD Jacobi solver did not converge within {BIDIAG_JACOBI_MAX_SWEEPS} sweeps"
+        ),
+    })
+}
+
+fn canonicalize_slice_sign(values: &mut [f64]) {
+    if let Some(pivot) = values
+        .iter()
+        .copied()
+        .find(|value| value.abs() > BIDIAG_JACOBI_TOLERANCE)
+        && pivot.is_sign_negative()
+    {
+        for value in values {
+            *value = -*value;
+        }
+    }
+}
+
+fn fill_deterministic_left_vector(u: &mut DMatrix<f64>, column: usize) -> Result<(), LinalgError> {
+    let rows = u.nrows();
+    for basis_idx in 0..rows {
+        let mut candidate = vec![0.0_f64; rows];
+        candidate[basis_idx] = 1.0;
+        for prev in 0..column {
+            let mut projection = 0.0;
+            for row in 0..rows {
+                projection += candidate[row] * u[(row, prev)];
+            }
+            if projection != 0.0 {
+                for row in 0..rows {
+                    candidate[row] -= projection * u[(row, prev)];
+                }
+            }
+        }
+        let norm = candidate
+            .iter()
+            .map(|value| value * value)
+            .sum::<f64>()
+            .sqrt();
+        if norm > BIDIAG_JACOBI_TOLERANCE {
+            for row in 0..rows {
+                u[(row, column)] = candidate[row] / norm;
+            }
+            return Ok(());
+        }
+    }
+
+    Err(LinalgError::ConvergenceFailure {
+        detail: "could not build deterministic null left singular vector".into(),
+    })
+}
+
+#[allow(dead_code)]
+fn deterministic_bidiagonal_svd_from_reduction(
+    reduction: &BidiagonalReduction,
+) -> Result<BidiagonalSvd, LinalgError> {
+    deterministic_bidiagonal_svd(
+        reduction.rows,
+        &reduction.diagonal,
+        &reduction.superdiagonal,
+    )
+}
+
+#[allow(dead_code)]
+fn deterministic_bidiagonal_svd(
+    rows: usize,
+    diagonal: &[f64],
+    superdiagonal: &[f64],
+) -> Result<BidiagonalSvd, LinalgError> {
+    let cols = diagonal.len();
+    if rows < cols {
+        return Err(LinalgError::UnsupportedAssumption);
+    }
+    if superdiagonal.len() != cols.saturating_sub(1) {
+        return Err(LinalgError::InvalidArgument {
+            detail: format!(
+                "upper bidiagonal expected {} superdiagonal entries, got {}",
+                cols.saturating_sub(1),
+                superdiagonal.len()
+            ),
+        });
+    }
+    if diagonal
+        .iter()
+        .chain(superdiagonal.iter())
+        .any(|value| !value.is_finite())
+    {
+        return Err(LinalgError::NonFiniteInput);
+    }
+    if cols == 0 {
+        return Ok(BidiagonalSvd {
+            singular_values: Vec::new(),
+            u: DMatrix::<f64>::zeros(rows, 0),
+            v_t: DMatrix::<f64>::zeros(0, 0),
+            sweeps: 0,
+        });
+    }
+
+    let mut gram = DMatrix::<f64>::zeros(cols, cols);
+    for idx in 0..cols {
+        let mut value = diagonal[idx] * diagonal[idx];
+        if idx > 0 {
+            value += superdiagonal[idx - 1] * superdiagonal[idx - 1];
+        }
+        gram[(idx, idx)] = value;
+        if idx + 1 < cols {
+            let offdiag = diagonal[idx] * superdiagonal[idx];
+            gram[(idx, idx + 1)] = offdiag;
+            gram[(idx + 1, idx)] = offdiag;
+        }
+    }
+
+    let eigen = symmetric_jacobi_eigen(gram)?;
+    let mut order: Vec<usize> = (0..cols).collect();
+    order.sort_by(|left, right| {
+        let left_value = eigen.eigenvalues[*left].max(0.0);
+        let right_value = eigen.eigenvalues[*right].max(0.0);
+        right_value
+            .total_cmp(&left_value)
+            .then_with(|| left.cmp(right))
+    });
+
+    let mut singular_values = Vec::with_capacity(cols);
+    let mut u = DMatrix::<f64>::zeros(rows, cols);
+    let mut v_t = DMatrix::<f64>::zeros(cols, cols);
+
+    for (out_col, eigen_col) in order.into_iter().enumerate() {
+        let eigenvalue = eigen.eigenvalues[eigen_col];
+        if eigenvalue < -BIDIAG_JACOBI_TOLERANCE {
+            return Err(LinalgError::ConvergenceFailure {
+                detail: format!("bidiagonal SVD produced negative eigenvalue {eigenvalue:.17e}"),
+            });
+        }
+        let singular_value = eigenvalue.max(0.0).sqrt();
+        singular_values.push(singular_value);
+
+        let mut v_col: Vec<f64> = (0..cols)
+            .map(|row| eigen.eigenvectors[(row, eigen_col)])
+            .collect();
+        canonicalize_slice_sign(&mut v_col);
+        for row in 0..cols {
+            v_t[(out_col, row)] = v_col[row];
+        }
+
+        if singular_value > BIDIAG_JACOBI_TOLERANCE {
+            for row in 0..cols {
+                let mut value = diagonal[row] * v_col[row];
+                if row + 1 < cols {
+                    value += superdiagonal[row] * v_col[row + 1];
+                }
+                u[(row, out_col)] = value / singular_value;
+            }
+        } else {
+            fill_deterministic_left_vector(&mut u, out_col)?;
+        }
+    }
+
+    Ok(BidiagonalSvd {
+        singular_values,
+        u,
+        v_t,
+        sweeps: eigen.sweeps,
+    })
 }
 
 #[allow(dead_code)]
@@ -11857,6 +12155,36 @@ mod tests {
         max_abs_dmatrix_diff(&gram, &identity)
     }
 
+    fn dmatrix_column_orthogonality_error(matrix: &DMatrix<f64>) -> f64 {
+        let gram = matrix.transpose() * matrix;
+        let identity = DMatrix::<f64>::identity(matrix.ncols(), matrix.ncols());
+        max_abs_dmatrix_diff(&gram, &identity)
+    }
+
+    fn bidiagonal_matrix_from_parts(
+        rows: usize,
+        diagonal: &[f64],
+        superdiagonal: &[f64],
+    ) -> DMatrix<f64> {
+        let mut matrix = DMatrix::<f64>::zeros(rows, diagonal.len());
+        for idx in 0..diagonal.len() {
+            matrix[(idx, idx)] = diagonal[idx];
+            if idx + 1 < diagonal.len() {
+                matrix[(idx, idx + 1)] = superdiagonal[idx];
+            }
+        }
+        matrix
+    }
+
+    fn assert_nonincreasing(values: &[f64]) {
+        for pair in values.windows(2) {
+            assert!(
+                pair[0] >= pair[1],
+                "singular values must be nonincreasing: {values:?}"
+            );
+        }
+    }
+
     fn assert_upper_bidiagonal(reduction: &BidiagonalReduction, tolerance: f64) {
         for row in 0..reduction.rows {
             for col in 0..reduction.cols {
@@ -11955,6 +12283,125 @@ mod tests {
             println!("superdiagonal[{idx}]={:.17e}", reduction.superdiagonal[idx]);
         }
         println!("BIDIAG_GOLUB_KAHAN_GOLDEN_END");
+    }
+
+    #[test]
+    fn bidiag_svd_diagonal_values_descend_and_reconstruct() {
+        let diagonal = [3.0, -4.0, 0.5];
+        let superdiagonal = [0.0, 0.0];
+        let svd =
+            deterministic_bidiagonal_svd(3, &diagonal, &superdiagonal).expect("bidiagonal SVD");
+        assert_nonincreasing(&svd.singular_values);
+        assert_eq!(svd.singular_values[0].to_bits(), 4.0_f64.to_bits());
+        assert_eq!(svd.singular_values[1].to_bits(), 3.0_f64.to_bits());
+        assert_eq!(svd.singular_values[2].to_bits(), 0.5_f64.to_bits());
+
+        let expected = bidiagonal_matrix_from_parts(3, &diagonal, &superdiagonal);
+        let reconstructed = &svd.u * svd.sigma_matrix() * &svd.v_t;
+        assert!(
+            max_abs_dmatrix_diff(&reconstructed, &expected) < 1e-12,
+            "diagonal bidiagonal SVD must reconstruct"
+        );
+        assert!(
+            dmatrix_column_orthogonality_error(&svd.u) < 1e-12,
+            "compact U columns must be orthonormal"
+        );
+        assert!(
+            dmatrix_orthogonality_error(&svd.v_t) < 1e-12,
+            "Vt rows must be orthonormal"
+        );
+    }
+
+    #[test]
+    fn bidiag_svd_clustered_values_are_deterministic() {
+        let diagonal = [1.0, 1.0 + 1e-12, 1.0 - 1e-12, 0.125];
+        let superdiagonal = [1e-14, -2e-14, 0.0];
+        let first = deterministic_bidiagonal_svd(4, &diagonal, &superdiagonal)
+            .expect("first bidiagonal SVD");
+        let second = deterministic_bidiagonal_svd(4, &diagonal, &superdiagonal)
+            .expect("second bidiagonal SVD");
+        assert_nonincreasing(&first.singular_values);
+
+        for idx in 0..first.singular_values.len() {
+            assert_eq!(
+                first.singular_values[idx].to_bits(),
+                second.singular_values[idx].to_bits()
+            );
+        }
+        for row in 0..first.v_t.nrows() {
+            for col in 0..first.v_t.ncols() {
+                assert_eq!(
+                    first.v_t[(row, col)].to_bits(),
+                    second.v_t[(row, col)].to_bits()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn bidiag_svd_rank_threshold_boundaries_remain_nonnegative() {
+        let diagonal = [5.0, 1e-15, 0.0];
+        let superdiagonal = [0.0, 0.0];
+        let svd = deterministic_bidiagonal_svd(5, &diagonal, &superdiagonal)
+            .expect("rank-boundary bidiagonal SVD");
+        assert_nonincreasing(&svd.singular_values);
+        assert!(svd.singular_values.iter().all(|value| *value >= 0.0));
+        assert_eq!(svd.singular_values[0].to_bits(), 5.0_f64.to_bits());
+        assert_eq!(svd.singular_values[2].to_bits(), 0.0_f64.to_bits());
+
+        let expected = bidiagonal_matrix_from_parts(5, &diagonal, &superdiagonal);
+        let reconstructed = &svd.u * svd.sigma_matrix() * &svd.v_t;
+        assert!(
+            max_abs_dmatrix_diff(&reconstructed, &expected) <= 1e-14,
+            "rank-boundary reconstruction must stay under the SVD cutoff"
+        );
+    }
+
+    #[test]
+    fn bidiag_svd_reconstructs_golub_kahan_bidiagonal() {
+        let original = bidiag_deterministic_matrix(8, 5);
+        let reduction = golub_kahan_bidiagonal_reduction(&original).expect("bidiagonal reduction");
+        let svd = deterministic_bidiagonal_svd_from_reduction(&reduction)
+            .expect("deterministic bidiagonal SVD");
+        assert_nonincreasing(&svd.singular_values);
+
+        let reconstructed = &svd.u * svd.sigma_matrix() * &svd.v_t;
+        let reconstruction_error = max_abs_dmatrix_diff(&reconstructed, &reduction.bidiagonal);
+        let u_error = dmatrix_column_orthogonality_error(&svd.u);
+        let v_error = dmatrix_orthogonality_error(&svd.v_t);
+
+        assert!(
+            reconstruction_error < 1e-10,
+            "bidiagonal SVD reconstruction error {reconstruction_error:.17e}"
+        );
+        assert!(
+            u_error < 1e-12,
+            "compact U orthogonality error {u_error:.17e}"
+        );
+        assert!(v_error < 1e-12, "Vt orthogonality error {v_error:.17e}");
+    }
+
+    #[test]
+    fn bidiag_svd_golden_payload() {
+        let original = bidiag_deterministic_matrix(7, 4);
+        let reduction = golub_kahan_bidiagonal_reduction(&original).expect("bidiagonal reduction");
+        let svd = deterministic_bidiagonal_svd_from_reduction(&reduction)
+            .expect("deterministic bidiagonal SVD");
+        let reconstructed = &svd.u * svd.sigma_matrix() * &svd.v_t;
+        let reconstruction_error = max_abs_dmatrix_diff(&reconstructed, &reduction.bidiagonal);
+        let u_error = dmatrix_column_orthogonality_error(&svd.u);
+        let v_error = dmatrix_orthogonality_error(&svd.v_t);
+
+        println!("BIDIAG_SVD_GOLDEN_BEGIN");
+        println!("shape={}x{}", reduction.rows, reduction.cols);
+        println!("jacobi_sweeps={}", svd.sweeps);
+        println!("reconstruction_error={reconstruction_error:.17e}");
+        println!("u_column_orthogonality_error={u_error:.17e}");
+        println!("v_orthogonality_error={v_error:.17e}");
+        for idx in 0..svd.singular_values.len() {
+            println!("singular[{idx}]={:.17e}", svd.singular_values[idx]);
+        }
+        println!("BIDIAG_SVD_GOLDEN_END");
     }
 
     #[test]

@@ -1,0 +1,11 @@
+BIDIAG_SVD_GOLDEN_BEGIN
+shape=7x4
+jacobi_sweeps=4
+reconstruction_error=7.10542735760100186e-15
+u_column_orthogonality_error=4.44089209850062616e-16
+v_orthogonality_error=6.66133814775093924e-16
+singular[0]=1.42729956856374152e1
+singular[1]=8.54591244670228178e0
+singular[2]=7.42642247299642033e0
+singular[3]=6.32220315986258630e0
+BIDIAG_SVD_GOLDEN_END
