@@ -29638,8 +29638,8 @@ pub fn monte_carlo_test<R, S>(
     alternative: &str,
 ) -> MonteCarloTestResult
 where
-    R: Fn(u64) -> Vec<f64>,
-    S: Fn(&[f64]) -> f64,
+    R: Fn(u64) -> Vec<f64> + Sync,
+    S: Fn(&[f64]) -> f64 + Sync,
 {
     if data.is_empty() || n_resamples == 0 {
         return MonteCarloTestResult {
@@ -29650,14 +29650,48 @@ where
     }
 
     let observed = statistic(data);
-    let mut null_dist = Vec::with_capacity(n_resamples);
-    let mut rng = seed;
 
+    // The RNG chain only produces per-resample seeds (cheap, sequential); the
+    // resamples themselves — rvs(seed) then statistic(...) — are independent.
+    // Generate the seed chain in order, then evaluate the null distribution in
+    // parallel into ordered slots: byte-identical to the serial loop (same seeds,
+    // same per-seed statistic, same null_dist order, order-independent count).
+    let mut seeds = Vec::with_capacity(n_resamples);
+    let mut rng = seed;
     for _ in 0..n_resamples {
         rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
-        let sample = rvs(rng);
-        null_dist.push(statistic(&sample));
+        seeds.push(rng);
     }
+    let resample = |s: u64| -> f64 { statistic(&rvs(s)) };
+
+    let work = n_resamples.saturating_mul(data.len());
+    let nthreads = if work < (1 << 14) || n_resamples < 2 {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(|c| c.get())
+            .unwrap_or(1)
+            .min(n_resamples)
+    };
+    let null_dist: Vec<f64> = if nthreads <= 1 {
+        seeds.iter().map(|&s| resample(s)).collect()
+    } else {
+        let mut out = vec![0.0; n_resamples];
+        let chunk = n_resamples.div_ceil(nthreads);
+        let resample = &resample;
+        let seeds = &seeds;
+        std::thread::scope(|scope| {
+            for (t, slots) in out.chunks_mut(chunk).enumerate() {
+                let base = t * chunk;
+                scope.spawn(move || {
+                    for (i, o) in slots.iter_mut().enumerate() {
+                        *o = resample(seeds[base + i]);
+                    }
+                });
+            }
+        });
+        out
+    };
 
     let count_extreme = match alternative {
         "greater" => null_dist.iter().filter(|&&s| s >= observed).count(),

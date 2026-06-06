@@ -1,0 +1,18 @@
+n_resamples=   100 stat=-6.772275492399e-3 pvalue=1.000000000000e0 null_digest=02039b27ee3d94d6
+n_resamples=  1000 stat=-6.772275492399e-3 pvalue=1.000000000000e0 null_digest=6be938f74b7dfc67
+n_resamples=  5000 stat=-6.772275492399e-3 pvalue=1.000000000000e0 null_digest=08410669f3863102
+n_resamples=  2000    5.208ms/call (acc=5.000000)
+n_resamples= 10000   11.985ms/call (acc=5.000000)
+n_resamples= 40000   33.387ms/call (acc=5.000000)
+n_resamples=   100 stat=-6.772275492399e-3 pvalue=1.000000000000e0 null_digest=02039b27ee3d94d6
+n_resamples=  1000 stat=-6.772275492399e-3 pvalue=1.000000000000e0 null_digest=6be938f74b7dfc67
+n_resamples=  5000 stat=-6.772275492399e-3 pvalue=1.000000000000e0 null_digest=08410669f3863102
+n_resamples=  2000    4.238ms/call (acc=5.000000)
+n_resamples= 10000   10.522ms/call (acc=5.000000)
+n_resamples= 40000   41.078ms/call (acc=5.000000)
+n_resamples=   100 stat=-6.772275492399e-3 pvalue=1.000000000000e0 null_digest=02039b27ee3d94d6
+n_resamples=  1000 stat=-6.772275492399e-3 pvalue=1.000000000000e0 null_digest=6be938f74b7dfc67
+n_resamples=  5000 stat=-6.772275492399e-3 pvalue=1.000000000000e0 null_digest=08410669f3863102
+n_resamples=  2000    6.392ms/call (acc=5.000000)
+n_resamples= 10000   18.772ms/call (acc=5.000000)
+n_resamples= 40000   49.139ms/call (acc=5.000000)

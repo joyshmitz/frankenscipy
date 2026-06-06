@@ -1,0 +1,7 @@
+fsci-stats monte_carlo_test parallel across resamples
+Byte-identical: null_distribution FNV digest + pvalue match serial (sha256 of digest lines equal).
+Pre-exec note: test at_risk_continuous_pdfs_integrate_to_one fails on BOTH baseline and this change (pre-existing, unrelated PDF-quadrature test; panic lib.rs:59290). monte_carlo tests pass; clippy clean for changed code.
+Min-of-3 A/B (serial -> parallel):
+  n_resamples=2000 : 33178us -> 4238us  = 7.83x
+  n_resamples=10000: 165201us -> 10522us = 15.70x
+  n_resamples=40000: 668842us -> 33387us = 20.03x
