@@ -6317,6 +6317,114 @@ fn apply_bidiag_fused_rank_k_update(
     Ok(())
 }
 
+#[allow(dead_code)]
+#[allow(clippy::too_many_arguments)]
+fn apply_bidiag_fused_rank_k_update_tiled4(
+    matrix: &mut DMatrix<f64>,
+    row_start: usize,
+    col_start: usize,
+    k_count: usize,
+    v_by_k_row: &[f64],
+    y_by_col_k: &[f64],
+    x_by_k_row: &[f64],
+    u_by_col_k: &[f64],
+) -> Result<(), LinalgError> {
+    let rows = matrix.nrows();
+    let cols = matrix.ncols();
+    if row_start > rows || col_start > cols {
+        return Err(LinalgError::IncompatibleShapes {
+            a_shape: (rows, cols),
+            b_len: row_start.max(col_start),
+        });
+    }
+    let row_count = rows - row_start;
+    let col_count = cols - col_start;
+    let row_panel_len = k_count
+        .checked_mul(row_count)
+        .ok_or(LinalgError::UnsupportedAssumption)?;
+    let col_panel_len = col_count
+        .checked_mul(k_count)
+        .ok_or(LinalgError::UnsupportedAssumption)?;
+    if v_by_k_row.len() != row_panel_len
+        || x_by_k_row.len() != row_panel_len
+        || y_by_col_k.len() != col_panel_len
+        || u_by_col_k.len() != col_panel_len
+    {
+        return Err(LinalgError::IncompatibleShapes {
+            a_shape: (row_panel_len, col_panel_len),
+            b_len: v_by_k_row
+                .len()
+                .max(x_by_k_row.len())
+                .max(y_by_col_k.len())
+                .max(u_by_col_k.len()),
+        });
+    }
+    if k_count == 0 || row_count == 0 || col_count == 0 {
+        return Ok(());
+    }
+
+    let mut col_rel = 0;
+    while col_rel + 3 < col_count {
+        let col0 = col_start + col_rel;
+        let col1 = col0 + 1;
+        let col2 = col0 + 2;
+        let col3 = col0 + 3;
+        let col_base0 = col_rel * k_count;
+        let col_base1 = col_base0 + k_count;
+        let col_base2 = col_base1 + k_count;
+        let col_base3 = col_base2 + k_count;
+
+        for row_rel in 0..row_count {
+            let row = row_start + row_rel;
+            let mut value0 = matrix[(row, col0)];
+            let mut value1 = matrix[(row, col1)];
+            let mut value2 = matrix[(row, col2)];
+            let mut value3 = matrix[(row, col3)];
+
+            for k in 0..k_count {
+                let row_panel_idx = k * row_count + row_rel;
+                let v_value = v_by_k_row[row_panel_idx];
+                let x_value = x_by_k_row[row_panel_idx];
+
+                value0 -= v_value * y_by_col_k[col_base0 + k];
+                value0 -= x_value * u_by_col_k[col_base0 + k];
+                value1 -= v_value * y_by_col_k[col_base1 + k];
+                value1 -= x_value * u_by_col_k[col_base1 + k];
+                value2 -= v_value * y_by_col_k[col_base2 + k];
+                value2 -= x_value * u_by_col_k[col_base2 + k];
+                value3 -= v_value * y_by_col_k[col_base3 + k];
+                value3 -= x_value * u_by_col_k[col_base3 + k];
+            }
+
+            matrix[(row, col0)] = value0;
+            matrix[(row, col1)] = value1;
+            matrix[(row, col2)] = value2;
+            matrix[(row, col3)] = value3;
+        }
+
+        col_rel += 4;
+    }
+
+    while col_rel < col_count {
+        let col = col_start + col_rel;
+        let col_panel_base = col_rel * k_count;
+        for row_rel in 0..row_count {
+            let row = row_start + row_rel;
+            let mut value = matrix[(row, col)];
+            for k in 0..k_count {
+                let row_panel_idx = k * row_count + row_rel;
+                let col_panel_idx = col_panel_base + k;
+                value -= v_by_k_row[row_panel_idx] * y_by_col_k[col_panel_idx];
+                value -= x_by_k_row[row_panel_idx] * u_by_col_k[col_panel_idx];
+            }
+            matrix[(row, col)] = value;
+        }
+        col_rel += 1;
+    }
+
+    Ok(())
+}
+
 fn symmetric_offdiagonal_max(matrix: &DMatrix<f64>) -> f64 {
     let mut max_abs = 0.0_f64;
     for row in 0..matrix.nrows() {
@@ -12787,6 +12895,116 @@ mod tests {
         println!("fused_digest={:#018x}", dmatrix_bits_digest(&fused));
         println!("speedup={:.6}", reference_ms / fused_ms);
         println!("BIDIAG_FUSED_RANK_K_UPDATE_PERF_END");
+    }
+
+    #[test]
+    fn bidiag_tiled_rank_k_update_matches_fused_bits() {
+        for (rows, cols, row_start, col_start, k_count) in [
+            (6, 7, 0, 0, 1),
+            (17, 21, 2, 3, 3),
+            (65, 67, 1, 1, 16),
+            (130, 99, 6, 5, 17),
+        ] {
+            let original = bidiag_deterministic_matrix(rows, cols);
+            let row_count = rows - row_start;
+            let col_count = cols - col_start;
+            let (v_by_k_row, y_by_col_k, x_by_k_row, u_by_col_k) =
+                bidiag_update_panels(row_count, col_count, k_count);
+
+            let mut fused = original.clone();
+            apply_bidiag_fused_rank_k_update(
+                &mut fused,
+                row_start,
+                col_start,
+                k_count,
+                &v_by_k_row,
+                &y_by_col_k,
+                &x_by_k_row,
+                &u_by_col_k,
+            )
+            .expect("fused update");
+
+            let mut tiled = original;
+            apply_bidiag_fused_rank_k_update_tiled4(
+                &mut tiled,
+                row_start,
+                col_start,
+                k_count,
+                &v_by_k_row,
+                &y_by_col_k,
+                &x_by_k_row,
+                &u_by_col_k,
+            )
+            .expect("tiled update");
+
+            for row in 0..rows {
+                for col in 0..cols {
+                    assert_eq!(
+                        fused[(row, col)].to_bits(),
+                        tiled[(row, col)].to_bits(),
+                        "shape={rows}x{cols} start={row_start},{col_start} k={k_count} cell={row},{col}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "perf probe: run with rch and --release for fused vs tiled far update timing"]
+    fn bidiag_tiled_rank_k_update_perf_probe() {
+        let rows = 1024;
+        let cols = 512;
+        let row_start = 16;
+        let col_start = 16;
+        let k_count = 16;
+        let row_count = rows - row_start;
+        let col_count = cols - col_start;
+        let original = bidiag_deterministic_matrix(rows, cols);
+        let (v_by_k_row, y_by_col_k, x_by_k_row, u_by_col_k) =
+            bidiag_update_panels(row_count, col_count, k_count);
+
+        let mut fused = original.clone();
+        let started_at = std::time::Instant::now();
+        apply_bidiag_fused_rank_k_update(
+            &mut fused,
+            row_start,
+            col_start,
+            k_count,
+            &v_by_k_row,
+            &y_by_col_k,
+            &x_by_k_row,
+            &u_by_col_k,
+        )
+        .expect("fused update");
+        let fused_ms = started_at.elapsed().as_secs_f64() * 1_000.0;
+
+        let mut tiled = original;
+        let started_at = std::time::Instant::now();
+        apply_bidiag_fused_rank_k_update_tiled4(
+            &mut tiled,
+            row_start,
+            col_start,
+            k_count,
+            &v_by_k_row,
+            &y_by_col_k,
+            &x_by_k_row,
+            &u_by_col_k,
+        )
+        .expect("tiled update");
+        let tiled_ms = started_at.elapsed().as_secs_f64() * 1_000.0;
+
+        assert_eq!(dmatrix_bits_digest(&fused), dmatrix_bits_digest(&tiled));
+
+        println!("BIDIAG_TILED_RANK_K_UPDATE_PERF_BEGIN");
+        println!("shape={rows}x{cols}");
+        println!("panel_start={row_start},{col_start}");
+        println!("k_count={k_count}");
+        println!("fused_ms={fused_ms:.6}");
+        println!("tiled_ms={tiled_ms:.6}");
+        println!("fused_digest={:#018x}", dmatrix_bits_digest(&fused));
+        println!("tiled_digest={:#018x}", dmatrix_bits_digest(&tiled));
+        println!("speedup={:.6}", fused_ms / tiled_ms);
+        println!("BIDIAG_TILED_RANK_K_UPDATE_PERF_END");
     }
 
     #[test]
