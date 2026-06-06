@@ -2322,13 +2322,14 @@ pub fn gap_statistic(data: &[Vec<f64>], max_k: usize, n_ref: usize, seed: u64) -
             .map(|r| r.inertia.max(1e-30).ln())
             .unwrap_or(0.0);
 
-        // Average over reference datasets
-        let mut ref_log_wks = Vec::with_capacity(n_ref);
-        for r in 0..n_ref {
+        // Average over reference datasets. Each reference uses a seed derived
+        // directly from (r, k) — fully independent, no RNG chaining — and runs an
+        // expensive kmeans, so the references are computed in parallel into
+        // ordered slots, then summed SEQUENTIALLY in r order (byte-identical:
+        // same per-r dispersion, same float summation order).
+        let one_ref = |r: usize| -> f64 {
             let ref_seed = seed.wrapping_add(1000 * r as u64 + k as u64);
             let mut rng = ref_seed;
-
-            // Generate uniform reference data
             let ref_data: Vec<Vec<f64>> = (0..n)
                 .map(|_| {
                     (0..d)
@@ -2340,11 +2341,37 @@ pub fn gap_statistic(data: &[Vec<f64>], max_k: usize, n_ref: usize, seed: u64) -
                         .collect()
                 })
                 .collect();
+            kmeans(&ref_data, k, 30, ref_seed)
+                .map(|res| res.inertia.max(1e-30).ln())
+                .unwrap_or(0.0)
+        };
 
-            let ref_result = kmeans(&ref_data, k, 30, ref_seed);
-            let ref_wk = ref_result.map(|r| r.inertia.max(1e-30).ln()).unwrap_or(0.0);
-            ref_log_wks.push(ref_wk);
-        }
+        let nthreads = if n_ref < 2 {
+            1
+        } else {
+            std::thread::available_parallelism()
+                .map(|c| c.get())
+                .unwrap_or(1)
+                .min(n_ref)
+        };
+        let ref_log_wks: Vec<f64> = if nthreads <= 1 {
+            (0..n_ref).map(one_ref).collect()
+        } else {
+            let mut out = vec![0.0; n_ref];
+            let chunk = n_ref.div_ceil(nthreads);
+            let one_ref = &one_ref;
+            std::thread::scope(|scope| {
+                for (t, slot) in out.chunks_mut(chunk).enumerate() {
+                    let base = t * chunk;
+                    scope.spawn(move || {
+                        for (i, o) in slot.iter_mut().enumerate() {
+                            *o = one_ref(base + i);
+                        }
+                    });
+                }
+            });
+            out
+        };
 
         let mean_ref = ref_log_wks.iter().sum::<f64>() / n_ref as f64;
         gaps.push(mean_ref - log_wk);

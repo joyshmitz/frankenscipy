@@ -1,0 +1,6 @@
+fsci-cluster gap_statistic: parallel reference clusterings
+Each reference's seed = seed+1000*r+k (independent, no chaining) + full kmeans; computed parallel into ordered slots, dispersions summed SEQUENTIALLY in r order.
+Byte-identical: gap-vector bits match serial (digest 08f3f49b).
+Tests: 2 gap unit tests + metamorphic_cluster_gap_elbow conformance pass; clippy clean (warning is pre-existing perf_kmeans bin).
+Min-of-3 A/B (serial -> parallel):
+  n=300 d=4 max_k=5 n_ref=20: 2.80x   n=500 d=6 max_k=6 n_ref=40: 6.33x
