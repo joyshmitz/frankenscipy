@@ -6053,6 +6053,7 @@ struct SymmetricJacobiEigen {
 
 const BIDIAG_JACOBI_TOLERANCE: f64 = 1e-14;
 const BIDIAG_JACOBI_MAX_SWEEPS: usize = 128;
+const BIDIAG_SYMMETRIC_EIGEN_MIN_DIM: usize = 32;
 
 #[allow(dead_code)]
 impl BidiagonalReduction {
@@ -6548,6 +6549,10 @@ fn deterministic_bidiagonal_svd(
         });
     }
 
+    if cols >= BIDIAG_SYMMETRIC_EIGEN_MIN_DIM {
+        return deterministic_bidiagonal_svd_symmetric_eigen(rows, diagonal, superdiagonal);
+    }
+
     let mut gram = DMatrix::<f64>::zeros(cols, cols);
     for idx in 0..cols {
         let mut value = diagonal[idx] * diagonal[idx];
@@ -6612,6 +6617,79 @@ fn deterministic_bidiagonal_svd(
         u,
         v_t,
         sweeps: eigen.sweeps,
+    })
+}
+
+fn deterministic_bidiagonal_svd_symmetric_eigen(
+    rows: usize,
+    diagonal: &[f64],
+    superdiagonal: &[f64],
+) -> Result<BidiagonalSvd, LinalgError> {
+    let cols = diagonal.len();
+    let mut gram = DMatrix::<f64>::zeros(cols, cols);
+    for idx in 0..cols {
+        let mut value = diagonal[idx] * diagonal[idx];
+        if idx > 0 {
+            value += superdiagonal[idx - 1] * superdiagonal[idx - 1];
+        }
+        gram[(idx, idx)] = value;
+        if idx + 1 < cols {
+            let offdiag = diagonal[idx] * superdiagonal[idx];
+            gram[(idx, idx + 1)] = offdiag;
+            gram[(idx + 1, idx)] = offdiag;
+        }
+    }
+
+    let eigen = gram.symmetric_eigen();
+    let mut order: Vec<usize> = (0..cols).collect();
+    order.sort_by(|left, right| {
+        let left_value = eigen.eigenvalues[*left].max(0.0);
+        let right_value = eigen.eigenvalues[*right].max(0.0);
+        right_value
+            .total_cmp(&left_value)
+            .then_with(|| left.cmp(right))
+    });
+
+    let mut singular_values = Vec::with_capacity(cols);
+    let mut u = DMatrix::<f64>::zeros(rows, cols);
+    let mut v_t = DMatrix::<f64>::zeros(cols, cols);
+
+    for (out_col, eigen_col) in order.into_iter().enumerate() {
+        let eigenvalue = eigen.eigenvalues[eigen_col];
+        if eigenvalue < -BIDIAG_JACOBI_TOLERANCE {
+            return Err(LinalgError::ConvergenceFailure {
+                detail: format!("bidiagonal SVD produced negative eigenvalue {eigenvalue:.17e}"),
+            });
+        }
+        let singular_value = eigenvalue.max(0.0).sqrt();
+        singular_values.push(singular_value);
+
+        let mut v_col: Vec<f64> = (0..cols)
+            .map(|row| eigen.eigenvectors[(row, eigen_col)])
+            .collect();
+        canonicalize_slice_sign(&mut v_col);
+        for row in 0..cols {
+            v_t[(out_col, row)] = v_col[row];
+        }
+
+        if singular_value > BIDIAG_JACOBI_TOLERANCE {
+            for row in 0..cols {
+                let mut value = diagonal[row] * v_col[row];
+                if row + 1 < cols {
+                    value += superdiagonal[row] * v_col[row + 1];
+                }
+                u[(row, out_col)] = value / singular_value;
+            }
+        } else {
+            fill_deterministic_left_vector(&mut u, out_col)?;
+        }
+    }
+
+    Ok(BidiagonalSvd {
+        singular_values,
+        u,
+        v_t,
+        sweeps: 0,
     })
 }
 
@@ -12683,6 +12761,98 @@ mod tests {
         digest
     }
 
+    fn bidiag_svd_bits_digest(svd: &BidiagonalSvd) -> u64 {
+        const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+        const FNV_PRIME: u64 = 0x100000001b3;
+
+        let mut digest = FNV_OFFSET;
+        for value in svd
+            .singular_values
+            .iter()
+            .chain(svd.u.iter())
+            .chain(svd.v_t.iter())
+        {
+            digest ^= value.to_bits();
+            digest = digest.wrapping_mul(FNV_PRIME);
+        }
+        digest
+    }
+
+    fn deterministic_bidiagonal_svd_jacobi_reference(
+        rows: usize,
+        diagonal: &[f64],
+        superdiagonal: &[f64],
+    ) -> Result<BidiagonalSvd, LinalgError> {
+        let cols = diagonal.len();
+        let mut gram = DMatrix::<f64>::zeros(cols, cols);
+        for idx in 0..cols {
+            let mut value = diagonal[idx] * diagonal[idx];
+            if idx > 0 {
+                value += superdiagonal[idx - 1] * superdiagonal[idx - 1];
+            }
+            gram[(idx, idx)] = value;
+            if idx + 1 < cols {
+                let offdiag = diagonal[idx] * superdiagonal[idx];
+                gram[(idx, idx + 1)] = offdiag;
+                gram[(idx + 1, idx)] = offdiag;
+            }
+        }
+
+        let eigen = symmetric_jacobi_eigen(gram)?;
+        let mut order: Vec<usize> = (0..cols).collect();
+        order.sort_by(|left, right| {
+            let left_value = eigen.eigenvalues[*left].max(0.0);
+            let right_value = eigen.eigenvalues[*right].max(0.0);
+            right_value
+                .total_cmp(&left_value)
+                .then_with(|| left.cmp(right))
+        });
+
+        let mut singular_values = Vec::with_capacity(cols);
+        let mut u = DMatrix::<f64>::zeros(rows, cols);
+        let mut v_t = DMatrix::<f64>::zeros(cols, cols);
+
+        for (out_col, eigen_col) in order.into_iter().enumerate() {
+            let eigenvalue = eigen.eigenvalues[eigen_col];
+            if eigenvalue < -BIDIAG_JACOBI_TOLERANCE {
+                return Err(LinalgError::ConvergenceFailure {
+                    detail: format!(
+                        "bidiagonal SVD produced negative eigenvalue {eigenvalue:.17e}"
+                    ),
+                });
+            }
+            let singular_value = eigenvalue.max(0.0).sqrt();
+            singular_values.push(singular_value);
+
+            let mut v_col: Vec<f64> = (0..cols)
+                .map(|row| eigen.eigenvectors[(row, eigen_col)])
+                .collect();
+            canonicalize_slice_sign(&mut v_col);
+            for row in 0..cols {
+                v_t[(out_col, row)] = v_col[row];
+            }
+
+            if singular_value > BIDIAG_JACOBI_TOLERANCE {
+                for row in 0..cols {
+                    let mut value = diagonal[row] * v_col[row];
+                    if row + 1 < cols {
+                        value += superdiagonal[row] * v_col[row + 1];
+                    }
+                    u[(row, out_col)] = value / singular_value;
+                }
+            } else {
+                fill_deterministic_left_vector(&mut u, out_col)?;
+            }
+        }
+
+        Ok(BidiagonalSvd {
+            singular_values,
+            u,
+            v_t,
+            sweeps: eigen.sweeps,
+        })
+    }
+
     fn bidiag_update_panels(
         row_count: usize,
         col_count: usize,
@@ -13086,6 +13256,104 @@ mod tests {
             "compact U orthogonality error {u_error:.17e}"
         );
         assert!(v_error < 1e-12, "Vt orthogonality error {v_error:.17e}");
+    }
+
+    #[test]
+    fn bidiag_svd_symmetric_eigen_route_reconstructs_medium_panel() {
+        let original = bidiag_deterministic_matrix(80, 40);
+        let reduction = golub_kahan_bidiagonal_reduction(&original).expect("bidiagonal reduction");
+        let svd = deterministic_bidiagonal_svd_from_reduction(&reduction)
+            .expect("symmetric-eigen bidiagonal SVD");
+        assert_eq!(
+            svd.sweeps, 0,
+            "medium panel should use the large-route backend"
+        );
+        assert_nonincreasing(&svd.singular_values);
+
+        let reconstructed = &svd.u * svd.sigma_matrix() * &svd.v_t;
+        let reconstruction_error = max_abs_dmatrix_diff(&reconstructed, &reduction.bidiagonal);
+        let u_error = dmatrix_column_orthogonality_error(&svd.u);
+        let v_error = dmatrix_orthogonality_error(&svd.v_t);
+
+        assert!(
+            reconstruction_error < 1e-8,
+            "symmetric-eigen reconstruction error {reconstruction_error:.17e}"
+        );
+        assert!(
+            u_error < 1e-10,
+            "symmetric-eigen compact U orthogonality error {u_error:.17e}"
+        );
+        assert!(
+            v_error < 1e-10,
+            "symmetric-eigen Vt orthogonality error {v_error:.17e}"
+        );
+    }
+
+    #[test]
+    #[ignore = "perf probe: run with rch and --release for large private bidiagonal SVD backend timing"]
+    fn bidiag_svd_symmetric_eigen_route_perf_probe() {
+        let original = bidiag_deterministic_matrix(1024, 512);
+        let reduction = golub_kahan_bidiagonal_reduction(std::hint::black_box(&original))
+            .expect("bidiagonal reduction");
+
+        let started_at = std::time::Instant::now();
+        let jacobi_reference = deterministic_bidiagonal_svd_jacobi_reference(
+            reduction.rows,
+            &reduction.diagonal,
+            &reduction.superdiagonal,
+        )
+        .expect("jacobi reference bidiagonal SVD");
+        let jacobi_ms = started_at.elapsed().as_secs_f64() * 1_000.0;
+
+        let started_at = std::time::Instant::now();
+        let svd = deterministic_bidiagonal_svd_from_reduction(std::hint::black_box(&reduction))
+            .expect("symmetric-eigen bidiagonal SVD");
+        let route_ms = started_at.elapsed().as_secs_f64() * 1_000.0;
+
+        let reconstructed = &svd.u * svd.sigma_matrix() * &svd.v_t;
+        let reconstruction_error = max_abs_dmatrix_diff(&reconstructed, &reduction.bidiagonal);
+        let u_error = dmatrix_column_orthogonality_error(&svd.u);
+        let v_error = dmatrix_orthogonality_error(&svd.v_t);
+        assert_nonincreasing(&svd.singular_values);
+        for idx in 0..svd.singular_values.len() {
+            let expected = jacobi_reference.singular_values[idx];
+            let actual = svd.singular_values[idx];
+            assert!(
+                (actual - expected).abs() <= 1e-8_f64.max(expected.abs() * 1e-12),
+                "singular value {idx} drifted: route={actual:.17e} jacobi={expected:.17e}"
+            );
+        }
+        assert!(
+            reconstruction_error < 1e-7,
+            "large symmetric-eigen reconstruction error {reconstruction_error:.17e}"
+        );
+        assert!(
+            u_error < 1e-9,
+            "large symmetric-eigen compact U orthogonality error {u_error:.17e}"
+        );
+        assert!(
+            v_error < 1e-9,
+            "large symmetric-eigen Vt orthogonality error {v_error:.17e}"
+        );
+
+        println!("BIDIAG_SYMMETRIC_EIGEN_ROUTE_PERF_BEGIN");
+        println!("shape={}x{}", reduction.rows, reduction.cols);
+        println!(
+            "reduction_digest={:#018x}",
+            bidiag_reduction_digest(&reduction)
+        );
+        println!("jacobi_reference_ms={jacobi_ms:.6}");
+        println!("symmetric_eigen_route_ms={route_ms:.6}");
+        println!("speedup={:.6}", jacobi_ms / route_ms);
+        println!("reconstruction_error={reconstruction_error:.17e}");
+        println!("u_column_orthogonality_error={u_error:.17e}");
+        println!("vt_orthogonality_error={v_error:.17e}");
+        println!(
+            "jacobi_reference_digest={:#018x}",
+            bidiag_svd_bits_digest(&jacobi_reference)
+        );
+        println!("svd_digest={:#018x}", bidiag_svd_bits_digest(&svd));
+        println!("BIDIAG_SYMMETRIC_EIGEN_ROUTE_PERF_END");
     }
 
     #[test]

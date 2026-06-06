@@ -967,10 +967,11 @@ pub fn convolve_axes(
     let offsets: Vec<i64> = weights.shape.iter().map(|&s| (s as i64 - 1) / 2).collect();
     let mut output = NdArray::zeros(input.shape.clone());
 
-    for flat_out in 0..input.size() {
+    // Independent per-output weighted sum over the axes-mapped flipped kernel.
+    let kernel_work = weights.size().max(1);
+    fill_pixels_parallel(&mut output, kernel_work, |flat_out, _scratch| {
         let out_idx = input.unravel(flat_out);
         let mut sum = 0.0;
-
         for flat_k in 0..weights.size() {
             let k_idx = weights.unravel(flat_k);
             let mut in_idx: Vec<i64> = out_idx.iter().map(|&idx| idx as i64).collect();
@@ -981,9 +982,8 @@ pub fn convolve_axes(
             }
             sum += weights.data[flat_k] * input.get_boundary(&in_idx, mode, cval);
         }
-
-        output.data[flat_out] = sum;
-    }
+        sum
+    });
 
     Ok(output)
 }
@@ -1016,13 +1016,16 @@ pub fn convolve_with_origins(
     // Kernel center offsets
     let offsets: Vec<i64> = weights.shape.iter().map(|&s| (s as i64 - 1) / 2).collect();
 
-    for flat_out in 0..input.size() {
+    // Each output pixel is an independent weighted sum over the flipped kernel
+    // footprint; distribute output pixels across threads. Byte-identical: same
+    // weights summed in the same flat_k order into the same flat_out slot.
+    let kernel_work = weights.size().max(1);
+    fill_pixels_parallel(&mut output, kernel_work, |flat_out, _scratch| {
         let out_idx = input.unravel(flat_out);
+        let mut in_idx = vec![0i64; ndim];
         let mut sum = 0.0;
-
         for flat_k in 0..weights.size() {
             let k_idx = weights.unravel(flat_k);
-            let mut in_idx = vec![0i64; ndim];
             for d in 0..ndim {
                 // Convolution: flip the kernel (unlike correlation)
                 let k_flipped = weights.shape[d] as i64 - 1 - k_idx[d] as i64;
@@ -1030,9 +1033,8 @@ pub fn convolve_with_origins(
             }
             sum += weights.data[flat_k] * input.get_boundary(&in_idx, mode, cval);
         }
-
-        output.data[flat_out] = sum;
-    }
+        sum
+    });
 
     Ok(output)
 }
@@ -1102,7 +1104,8 @@ pub fn convolve1d_with_origin(
 
     let offset = (weights.len() as i64 - 1) / 2;
     let mut output = NdArray::zeros(input.shape.clone());
-    for flat_out in 0..input.size() {
+    // Independent per-output 1D weighted sum (flipped weights) along `axis`.
+    fill_pixels_parallel(&mut output, weights.len().max(1), |flat_out, _scratch| {
         let out_idx = input.unravel(flat_out);
         let mut in_idx: Vec<i64> = out_idx.iter().map(|&i| i as i64).collect();
         let mut sum = 0.0;
@@ -1110,8 +1113,8 @@ pub fn convolve1d_with_origin(
             in_idx[axis] = out_idx[axis] as i64 + k as i64 - offset + origin;
             sum += weight * input.get_boundary(&in_idx, mode, cval);
         }
-        output.data[flat_out] = sum;
-    }
+        sum
+    });
 
     Ok(output)
 }
@@ -1144,10 +1147,11 @@ pub fn correlate_axes(
     let offsets: Vec<i64> = weights.shape.iter().map(|&s| s as i64 / 2).collect();
     let mut output = NdArray::zeros(input.shape.clone());
 
-    for flat_out in 0..input.size() {
+    // Independent per-output weighted sum over the axes-mapped kernel footprint.
+    let kernel_work = weights.size().max(1);
+    fill_pixels_parallel(&mut output, kernel_work, |flat_out, _scratch| {
         let out_idx = input.unravel(flat_out);
         let mut sum = 0.0;
-
         for flat_k in 0..weights.size() {
             let k_idx = weights.unravel(flat_k);
             let mut in_idx: Vec<i64> = out_idx.iter().map(|&idx| idx as i64).collect();
@@ -1158,9 +1162,8 @@ pub fn correlate_axes(
             }
             sum += weights.data[flat_k] * input.get_boundary(&in_idx, mode, cval);
         }
-
-        output.data[flat_out] = sum;
-    }
+        sum
+    });
 
     Ok(output)
 }
