@@ -1,0 +1,7 @@
+fsci-fft DST-II/DST-III via N/2 real FFT (DCT identity)
+Identity: DST-II(x)[k]=DCT-II((-1)^n x)[N-1-k]; DST-III(X)[n]=2N(-1)^n idct(reverse(X))[n].
+Correctness: dst_iii(dst_ii(x))/2N roundtrip err 9.99e-16 (parity tol 1e-9).
+Tests: fsci-fft 144 pass; diff_fft_dct_dst + diff_fft_dctn_dstn conformance pass; clippy clean.
+Min-of-3 A/B (old 4N complex -> new N/2 real):
+  dst_ii : 512:1.93x 1000:3.63x 2048:3.86x 4096:2.56x 10000:5.85x 16384:3.25x
+  dst_iii: 512:2.95x 1000:4.88x 2048:3.48x 4096:4.06x 10000:5.35x 16384:4.45x

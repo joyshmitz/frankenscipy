@@ -1418,29 +1418,25 @@ pub fn dst_ii(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError>
     validate_finite_real(input, options)?;
 
     let n = input.len();
-    // DST-II via FFT of length 4N.
-    // X[k] = sum_{n=0}^{N-1} x[n] * sin(pi*(2n+1)*(k+1)/(2N))
-    let m = 4 * n;
-    let mut extended = vec![(0.0, 0.0); m];
-    for i in 0..n {
-        extended[2 * i + 1] = (input[i], 0.0);
-        extended[m - 2 * i - 1] = (-input[i], 0.0);
-    }
-
-    let backend = resolve_backend(options.backend);
-    let spectrum = backend.transform_1d_unscaled(&extended, false);
-
-    let mut result = Vec::with_capacity(n);
-    for k in 0..n {
-        // Imaginary part of bin k+1 corresponds to -2 * sum_{n=0}^{N-1} x[n] * sin(...)
-        // Scale by -1.0 to get 2 * sum.
-        result.push(-spectrum[k + 1].1);
-    }
+    // DST-II is a sign-modulated, index-reversed DCT-II:
+    //   cos(π(N-j)(2n+1)/2N) = (-1)^n · sin(πj(2n+1)/2N)   (j = k+1)
+    // ⇒ DST-II(x)[k] = DCT-II(y)[N-1-k] with y[n] = (-1)^n·x[n].
+    // Route through the fast N/2-point real-FFT `dct` (Backward = the raw 2·sum
+    // form) instead of the old 4N-point complex FFT, then reverse.
+    let y: Vec<f64> = input
+        .iter()
+        .enumerate()
+        .map(|(idx, &x)| if idx % 2 == 0 { x } else { -x })
+        .collect();
+    let mut backward = options.clone();
+    backward.normalization = Normalization::Backward;
+    let mut result = dct(&y, &backward)?;
+    result.reverse();
+    let nf = n as f64;
     // br-yjas slice 2 (DST-II): scipy normalization. Ortho scales all
     // entries by 1/sqrt(2N) plus an extra 1/sqrt(2) on the LAST entry
     // (scipy DST-II convention; mirror of DCT-II's first-entry adj).
     // Forward applies a uniform 1/(2N).
-    let nf = n as f64;
     match options.normalization {
         Normalization::Backward => {}
         Normalization::Ortho => {
@@ -1478,27 +1474,30 @@ pub fn dst_iii(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError
     // br-mhnr: DST-III normalization. Backward is the raw 2*sum result;
     // forward divides by 2N; ortho pre-scales x[N-1] by sqrt(2) (the lone
     // unpaired term in scipy's ortho formula) then applies 1/sqrt(2N).
-    let compute_backward = |src: &[f64]| -> Vec<f64> {
-        let m = 4 * n;
-        let mut extended = vec![(0.0, 0.0); m];
-        for k in 0..n - 1 {
-            extended[k + 1] = (0.0, -src[k]);
-            extended[m - k - 1] = (0.0, src[k]);
-        }
-        let last_val = src[n - 1] * 0.5;
-        extended[n] = (0.0, -last_val);
-        extended[m - n] = (0.0, last_val);
-
-        let backend = resolve_backend(options.backend);
-        let time_domain = backend.transform_1d_unscaled(&extended, true);
-
-        (0..n).map(|i| time_domain[2 * i + 1].0).collect()
+    //
+    // DST-III inverts DST-II, so it is the transpose of the forward identity
+    // (DST-II(x)[k] = DCT-II((-1)^n·x)[N-1-k]):
+    //   DST-III(X)[n] = 2N·(-1)^n·idct(reverse(X))[n]   (Backward = 2N·x form).
+    // Routes through the fast N/2-point real-FFT `idct` instead of the old
+    // 4N-point complex inverse FFT.
+    let compute_backward = |src: &[f64]| -> Result<Vec<f64>, FftError> {
+        let mut rev = src.to_vec();
+        rev.reverse();
+        let mut bo = options.clone();
+        bo.normalization = Normalization::Backward;
+        let y = idct(&rev, &bo)?;
+        let two_n = 2.0 * nf;
+        Ok(y
+            .iter()
+            .enumerate()
+            .map(|(idx, &val)| if idx % 2 == 0 { two_n } else { -two_n } * val)
+            .collect())
     };
 
     match options.normalization {
-        Normalization::Backward => Ok(compute_backward(input)),
+        Normalization::Backward => compute_backward(input),
         Normalization::Forward => {
-            let mut result = compute_backward(input);
+            let mut result = compute_backward(input)?;
             let s = 1.0 / (2.0 * nf);
             for v in result.iter_mut() {
                 *v *= s;
@@ -1508,7 +1507,7 @@ pub fn dst_iii(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError
         Normalization::Ortho => {
             let mut adjusted = input.to_vec();
             adjusted[n - 1] *= 2.0_f64.sqrt();
-            let mut result = compute_backward(&adjusted);
+            let mut result = compute_backward(&adjusted)?;
             let s = 1.0 / (2.0 * nf).sqrt();
             for v in result.iter_mut() {
                 *v *= s;
