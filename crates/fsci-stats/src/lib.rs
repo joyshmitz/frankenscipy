@@ -31093,28 +31093,16 @@ pub fn bootstrap_ci<F>(
     seed: u64,
 ) -> (f64, f64)
 where
-    F: Fn(&[f64]) -> f64,
+    F: Fn(&[f64]) -> f64 + Sync,
 {
     let n = data.len();
     if n == 0 || n_bootstrap == 0 {
         return (f64::NAN, f64::NAN);
     }
 
-    let mut rng_state = seed;
-    let next_rng = |state: &mut u64| -> usize {
-        *state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
-        ((*state >> 33) as usize) % n
-    };
-
-    let mut boot_stats = Vec::with_capacity(n_bootstrap);
-    let mut sample = vec![0.0; n];
-
-    for _ in 0..n_bootstrap {
-        for s in sample.iter_mut() {
-            *s = data[next_rng(&mut rng_state)];
-        }
-        boot_stats.push(stat_fn(&sample));
-    }
+    // Same jump-able LCG resampling as bootstrap_mean/std: evaluate the bootstrap
+    // statistics in parallel (byte-identical, chunk-boundary RNG via LCG jump).
+    let mut boot_stats = bootstrap_statistics(data, n_bootstrap, seed, stat_fn);
 
     boot_stats.sort_by(|a, b| a.total_cmp(b));
 
