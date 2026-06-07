@@ -6211,6 +6211,8 @@ struct SymmetricJacobiEigen {
 const BIDIAG_JACOBI_TOLERANCE: f64 = 1e-14;
 const BIDIAG_JACOBI_MAX_SWEEPS: usize = 128;
 const BIDIAG_SYMMETRIC_EIGEN_MIN_DIM: usize = 32;
+const BIDIAG_TRIDIAGONAL_QR_MIN_DIM: usize = 128;
+const BIDIAG_TRIDIAGONAL_QR_MAX_ITERS_PER_DIM: usize = 64;
 const PUBLIC_BIDIAG_SVD_MIN_COLS: usize = 64;
 const PUBLIC_BIDIAG_RANK_GAP_REL_TOL: f64 = 64.0 * f64::EPSILON;
 const PUBLIC_BIDIAG_RECON_REL_TOL: f64 = 1e-8;
@@ -6689,6 +6691,205 @@ fn canonicalize_svd_factor_signs(u: &mut DMatrix<f64>, v_t: &mut DMatrix<f64>) {
     }
 }
 
+fn symmetric_tridiagonal_wilkinson_shift(tmm: f64, tnn: f64, tmn: f64) -> f64 {
+    let tmn_sq = tmn * tmn;
+    if tmn_sq == 0.0 {
+        return tnn;
+    }
+
+    let delta = 0.5 * (tmm - tnn);
+    tnn - tmn_sq / (delta + delta.signum() * (delta * delta + tmn_sq).sqrt())
+}
+
+fn symmetric_tridiagonal_cancel_y(x: f64, y: f64) -> Option<(f64, f64, f64)> {
+    if y == 0.0 {
+        return None;
+    }
+    let norm = x.hypot(y);
+    if norm == 0.0 {
+        return None;
+    }
+    let sign = if x.is_sign_negative() { -1.0 } else { 1.0 };
+    let c = x.abs() / norm;
+    let s = -y / (sign * norm);
+    Some((c, s, sign * norm))
+}
+
+fn rotate_eigenvector_columns(matrix: &mut DMatrix<f64>, col: usize, c: f64, s: f64) {
+    for row in 0..matrix.nrows() {
+        let left = matrix[(row, col)];
+        let right = matrix[(row, col + 1)];
+        matrix[(row, col)] = c * left - s * right;
+        matrix[(row, col + 1)] = s * left + c * right;
+    }
+}
+
+fn diagonalize_tridiagonal_two_by_two(
+    diagonal: &mut [f64],
+    offdiagonal: &mut [f64],
+    eigenvectors: &mut DMatrix<f64>,
+    start: usize,
+) {
+    let off = offdiagonal[start];
+    if off == 0.0 {
+        return;
+    }
+
+    let left = diagonal[start];
+    let right = diagonal[start + 1];
+    let tau = (right - left) / (2.0 * off);
+    let tangent = if tau == 0.0 {
+        1.0
+    } else {
+        tau.signum() / (tau.abs() + (1.0 + tau * tau).sqrt())
+    };
+    let c = 1.0 / (1.0 + tangent * tangent).sqrt();
+    let s = tangent * c;
+
+    diagonal[start] = left - tangent * off;
+    diagonal[start + 1] = right + tangent * off;
+    offdiagonal[start] = 0.0;
+    rotate_eigenvector_columns(eigenvectors, start, c, s);
+}
+
+fn delimit_symmetric_tridiagonal_subproblem(
+    diagonal: &[f64],
+    offdiagonal: &mut [f64],
+    end: usize,
+    tolerance: f64,
+) -> (usize, usize) {
+    let mut sub_end = end;
+    while sub_end > 0 {
+        let prev = sub_end - 1;
+        let scale = diagonal[sub_end].abs() + diagonal[prev].abs();
+        if offdiagonal[prev].abs() > tolerance * scale {
+            break;
+        }
+        offdiagonal[prev] = 0.0;
+        sub_end -= 1;
+    }
+
+    if sub_end == 0 {
+        return (0, 0);
+    }
+
+    let mut sub_start = sub_end - 1;
+    while sub_start > 0 {
+        let prev = sub_start - 1;
+        let scale = diagonal[sub_start].abs() + diagonal[prev].abs();
+        if offdiagonal[prev] == 0.0 || offdiagonal[prev].abs() <= tolerance * scale {
+            offdiagonal[prev] = 0.0;
+            break;
+        }
+        sub_start -= 1;
+    }
+
+    (sub_start, sub_end)
+}
+
+fn symmetric_tridiagonal_qr_eigen(
+    diagonal: &[f64],
+    offdiagonal: &[f64],
+) -> Option<SymmetricJacobiEigen> {
+    let size = diagonal.len();
+    if offdiagonal.len() != size.saturating_sub(1) {
+        return None;
+    }
+    if size == 0 {
+        return Some(SymmetricJacobiEigen {
+            eigenvalues: Vec::new(),
+            eigenvectors: DMatrix::<f64>::zeros(0, 0),
+            sweeps: 0,
+        });
+    }
+
+    let scale = diagonal
+        .iter()
+        .chain(offdiagonal.iter())
+        .copied()
+        .map(f64::abs)
+        .fold(0.0_f64, f64::max);
+    if scale == 0.0 {
+        return Some(SymmetricJacobiEigen {
+            eigenvalues: vec![0.0; size],
+            eigenvectors: DMatrix::<f64>::identity(size, size),
+            sweeps: 0,
+        });
+    }
+
+    let mut diag: Vec<f64> = diagonal.iter().map(|value| *value / scale).collect();
+    let mut off: Vec<f64> = offdiagonal.iter().map(|value| *value / scale).collect();
+    let mut eigenvectors = DMatrix::<f64>::identity(size, size);
+    let tolerance = f64::EPSILON;
+    let max_iterations = BIDIAG_TRIDIAGONAL_QR_MAX_ITERS_PER_DIM * size;
+    let (mut start, mut end) =
+        delimit_symmetric_tridiagonal_subproblem(&diag, &mut off, size - 1, tolerance);
+    let mut iterations = 0_usize;
+
+    while end != start {
+        let subdim = end - start + 1;
+        if subdim > 2 {
+            let tail_prev = end - 1;
+            let shift =
+                symmetric_tridiagonal_wilkinson_shift(diag[tail_prev], diag[end], off[tail_prev]);
+            let mut x = diag[start] - shift;
+            let mut y = off[start];
+
+            for idx in start..end {
+                let Some((c, s, norm)) = symmetric_tridiagonal_cancel_y(x, y) else {
+                    break;
+                };
+                if idx > start {
+                    off[idx - 1] = norm;
+                }
+
+                let left = diag[idx];
+                let right = diag[idx + 1];
+                let bridge = off[idx];
+                let cc = c * c;
+                let ss = s * s;
+                let cs = c * s;
+
+                diag[idx] = cc * left + ss * right - 2.0 * cs * bridge;
+                diag[idx + 1] = ss * left + cc * right + 2.0 * cs * bridge;
+                off[idx] = cs * (left - right) + (cc - ss) * bridge;
+
+                if idx + 1 < end {
+                    x = off[idx];
+                    y = -s * off[idx + 1];
+                    off[idx + 1] *= c;
+                }
+
+                rotate_eigenvector_columns(&mut eigenvectors, idx, c, s);
+            }
+
+            if off[tail_prev].abs() <= tolerance * (diag[tail_prev].abs() + diag[end].abs()) {
+                off[tail_prev] = 0.0;
+                end -= 1;
+            }
+        } else {
+            diagonalize_tridiagonal_two_by_two(&mut diag, &mut off, &mut eigenvectors, start);
+            end -= 1;
+        }
+
+        (start, end) = delimit_symmetric_tridiagonal_subproblem(&diag, &mut off, end, tolerance);
+        iterations += 1;
+        if iterations > max_iterations {
+            return None;
+        }
+    }
+
+    for value in &mut diag {
+        *value *= scale;
+    }
+
+    Some(SymmetricJacobiEigen {
+        eigenvalues: diag,
+        eigenvectors,
+        sweeps: iterations,
+    })
+}
+
 fn fill_deterministic_left_vector(u: &mut DMatrix<f64>, column: usize) -> Result<(), LinalgError> {
     let rows = u.nrows();
     for basis_idx in 0..rows {
@@ -6846,21 +7047,40 @@ fn deterministic_bidiagonal_svd_symmetric_eigen(
     superdiagonal: &[f64],
 ) -> Result<BidiagonalSvd, LinalgError> {
     let cols = diagonal.len();
-    let mut gram = DMatrix::<f64>::zeros(cols, cols);
+    let mut gram_diagonal = vec![0.0_f64; cols];
+    let mut gram_offdiagonal = vec![0.0_f64; cols.saturating_sub(1)];
     for idx in 0..cols {
         let mut value = diagonal[idx] * diagonal[idx];
         if idx > 0 {
             value += superdiagonal[idx - 1] * superdiagonal[idx - 1];
         }
-        gram[(idx, idx)] = value;
+        gram_diagonal[idx] = value;
         if idx + 1 < cols {
-            let offdiag = diagonal[idx] * superdiagonal[idx];
-            gram[(idx, idx + 1)] = offdiag;
-            gram[(idx + 1, idx)] = offdiag;
+            gram_offdiagonal[idx] = diagonal[idx] * superdiagonal[idx];
         }
     }
 
-    let eigen = gram.symmetric_eigen();
+    let eigen = if cols >= BIDIAG_TRIDIAGONAL_QR_MIN_DIM
+        && let Some(eigen) = symmetric_tridiagonal_qr_eigen(&gram_diagonal, &gram_offdiagonal)
+    {
+        eigen
+    } else {
+        let mut gram = DMatrix::<f64>::zeros(cols, cols);
+        for idx in 0..cols {
+            gram[(idx, idx)] = gram_diagonal[idx];
+            if idx + 1 < cols {
+                let offdiag = gram_offdiagonal[idx];
+                gram[(idx, idx + 1)] = offdiag;
+                gram[(idx + 1, idx)] = offdiag;
+            }
+        }
+        let eigen = gram.symmetric_eigen();
+        SymmetricJacobiEigen {
+            eigenvalues: eigen.eigenvalues.iter().copied().collect(),
+            eigenvectors: eigen.eigenvectors,
+            sweeps: 0,
+        }
+    };
     let mut order: Vec<usize> = (0..cols).collect();
     order.sort_by(|left, right| {
         let left_value = eigen.eigenvalues[*left].max(0.0);
@@ -6909,7 +7129,7 @@ fn deterministic_bidiagonal_svd_symmetric_eigen(
         singular_values,
         u,
         v_t,
-        sweeps: 0,
+        sweeps: eigen.sweeps,
     })
 }
 
@@ -13596,6 +13816,57 @@ mod tests {
     }
 
     #[test]
+    fn tridiagonal_qr_eigen_reconstructs_bidiag_gram() {
+        let cols = BIDIAG_TRIDIAGONAL_QR_MIN_DIM;
+        let diagonal: Vec<f64> = (0..cols)
+            .map(|idx| 200.0 - idx as f64 * 0.25 + ((idx * 17 + 5) % 13) as f64 * 1e-3)
+            .collect();
+        let superdiagonal: Vec<f64> = (0..cols - 1)
+            .map(|idx| {
+                let sign = if idx % 2 == 0 { 1.0 } else { -1.0 };
+                sign * (0.5 + ((idx * 19 + 3) % 17) as f64 * 1e-3)
+            })
+            .collect();
+
+        let mut gram_diagonal = vec![0.0_f64; cols];
+        let mut gram_offdiagonal = vec![0.0_f64; cols - 1];
+        let mut gram = DMatrix::<f64>::zeros(cols, cols);
+        for idx in 0..cols {
+            let mut value = diagonal[idx] * diagonal[idx];
+            if idx > 0 {
+                value += superdiagonal[idx - 1] * superdiagonal[idx - 1];
+            }
+            gram_diagonal[idx] = value;
+            gram[(idx, idx)] = value;
+            if idx + 1 < cols {
+                let offdiag = diagonal[idx] * superdiagonal[idx];
+                gram_offdiagonal[idx] = offdiag;
+                gram[(idx, idx + 1)] = offdiag;
+                gram[(idx + 1, idx)] = offdiag;
+            }
+        }
+
+        let eigen = symmetric_tridiagonal_qr_eigen(&gram_diagonal, &gram_offdiagonal)
+            .expect("tridiagonal QR eigen");
+        let mut lambda = DMatrix::<f64>::zeros(cols, cols);
+        for idx in 0..cols {
+            lambda[(idx, idx)] = eigen.eigenvalues[idx];
+        }
+        let reconstructed = &eigen.eigenvectors * lambda * eigen.eigenvectors.transpose();
+        let reconstruction_error = max_abs_dmatrix_diff(&reconstructed, &gram);
+        let orthogonality_error = dmatrix_orthogonality_error(&eigen.eigenvectors);
+
+        assert!(
+            reconstruction_error <= 1e-9 * dmatrix_max_abs_value(&gram).max(1.0),
+            "tridiagonal QR reconstruction error {reconstruction_error:.17e}"
+        );
+        assert!(
+            orthogonality_error <= 1e-10,
+            "tridiagonal QR orthogonality error {orthogonality_error:.17e}"
+        );
+    }
+
+    #[test]
     #[ignore = "perf probe: run with rch and --release for large private bidiagonal SVD backend timing"]
     fn bidiag_svd_symmetric_eigen_route_perf_probe() {
         let original = bidiag_deterministic_matrix(1024, 512);
@@ -13650,6 +13921,7 @@ mod tests {
         );
         println!("jacobi_reference_ms={jacobi_ms:.6}");
         println!("symmetric_eigen_route_ms={route_ms:.6}");
+        println!("backend_sweeps={}", svd.sweeps);
         println!("speedup={:.6}", jacobi_ms / route_ms);
         println!("reconstruction_error={reconstruction_error:.17e}");
         println!("u_column_orthogonality_error={u_error:.17e}");
@@ -14100,6 +14372,112 @@ mod tests {
         assert!(
             reconstruction_error <= 1e-8 * dmatrix_max_abs_value(&original).max(1.0),
             "public route reconstruction error {reconstruction_error:.17e}"
+        );
+    }
+
+    #[test]
+    #[ignore = "proof probe: 1024x512 route must be run explicitly under RCH release"]
+    fn public_bidiag_svd_tridiagonal_qr_backend_is_deterministic() {
+        let original = bidiag_deterministic_matrix(1024, 512);
+        let first = public_bidiag_thin_svd_candidate(&original).expect("first QR backend route");
+        let second = public_bidiag_thin_svd_candidate(&original).expect("second QR backend route");
+
+        assert!(
+            first.jacobi_sweeps > 0,
+            "1024x512 public candidate must use the tridiagonal QR backend"
+        );
+        assert_eq!(
+            thin_svd_bits_digest(&first),
+            thin_svd_bits_digest(&second),
+            "tridiagonal QR backend must be bit-deterministic for fixed input"
+        );
+        assert_eq!(first.singular_values.len(), original.ncols());
+        assert_nonincreasing(&first.singular_values);
+
+        let reconstructed = &first.u * first.sigma_matrix() * &first.v_t;
+        let reconstruction_error = max_abs_dmatrix_diff(&reconstructed, &original);
+        let u_error = dmatrix_column_orthogonality_error(&first.u);
+        let v_error = dmatrix_orthogonality_error(&first.v_t);
+        assert!(
+            reconstruction_error <= 1e-8 * dmatrix_max_abs_value(&original).max(1.0),
+            "tridiagonal QR public-candidate reconstruction error {reconstruction_error:.17e}"
+        );
+        assert!(
+            u_error <= 1e-9,
+            "tridiagonal QR public-candidate U orthogonality error {u_error:.17e}"
+        );
+        assert!(
+            v_error <= 1e-9,
+            "tridiagonal QR public-candidate Vt orthogonality error {v_error:.17e}"
+        );
+    }
+
+    #[test]
+    #[ignore = "proof probe: 1024x512 route must be run explicitly under RCH release"]
+    fn public_bidiag_svd_tridiagonal_qr_backend_matches_safe_svd_reference() {
+        let original = bidiag_deterministic_matrix(1024, 512);
+        let rows = original.nrows();
+        let cols = original.ncols();
+        let matrix_rows = rows_from_dmatrix(&original);
+        let rhs_values: Vec<f64> = (0..rows)
+            .map(|idx| ((idx * 31 + 11) % 47) as f64 - 19.0)
+            .collect();
+        let rhs = DVector::from_column_slice(&rhs_values);
+
+        let thin = public_bidiag_thin_svd_candidate(&original).expect("QR backend candidate");
+        assert!(
+            thin.jacobi_sweeps > 0,
+            "1024x512 public candidate must use the tridiagonal QR backend"
+        );
+        let (max_s, _) =
+            public_bidiag_svd_stats(&thin.singular_values).expect("finite singular spectrum");
+        let lstsq_threshold = f64::EPSILON * max_s;
+        assert!(public_bidiag_svd_accepts(&original, &thin, lstsq_threshold));
+
+        let reference_svd = safe_svd(original.clone(), true, true).expect("reference SVD");
+        let reference_x = least_squares_solution_from_svd(&reference_svd, lstsq_threshold, &rhs)
+            .expect("reference lstsq");
+        let reference_pinv = pseudo_inverse_from_svd(
+            &reference_svd,
+            public_bidiag_default_threshold(rows, cols, max_s),
+        )
+        .expect("reference pinv");
+
+        let routed_svd =
+            svd(&matrix_rows, DecompOptions::default()).expect("tridiagonal QR public svd");
+        let routed_lstsq =
+            lstsq(&matrix_rows, &rhs_values, LstsqOptions::default()).expect("routed lstsq");
+        let routed_pinv = pinv(&matrix_rows, PinvOptions::default()).expect("routed pinv");
+
+        assert_eq!(routed_lstsq.rank, cols);
+        assert_eq!(routed_pinv.rank, cols);
+        assert_close_slice(
+            &routed_svd.s,
+            reference_svd.singular_values.as_slice(),
+            1e-6,
+            1e-6,
+        );
+        assert_close_slice(&routed_lstsq.x, reference_x.as_slice(), 1e-6, 1e-6);
+        assert_close_matrix(
+            &routed_pinv.pseudo_inverse,
+            &rows_from_dmatrix(&reference_pinv),
+            1e-6,
+            1e-6,
+        );
+
+        let u = dmatrix_from_rows(&routed_svd.u).expect("routed U");
+        let vt = dmatrix_from_rows(&routed_svd.vt).expect("routed Vt");
+        let routed_thin = DeterministicThinSvd {
+            singular_values: routed_svd.s,
+            u,
+            v_t: vt,
+            jacobi_sweeps: thin.jacobi_sweeps,
+        };
+        let reconstructed = &routed_thin.u * routed_thin.sigma_matrix() * &routed_thin.v_t;
+        let reconstruction_error = max_abs_dmatrix_diff(&reconstructed, &original);
+        assert!(
+            reconstruction_error <= 1e-8 * dmatrix_max_abs_value(&original).max(1.0),
+            "tridiagonal QR public route reconstruction error {reconstruction_error:.17e}"
         );
     }
 
