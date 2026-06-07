@@ -32735,17 +32735,35 @@ pub fn find_valleys(data: &[f64]) -> Vec<usize> {
 /// Compute prominences of peaks.
 /// Returns prominence values for each peak index provided.
 pub fn peak_prominences(data: &[f64], peaks: &[usize]) -> Vec<f64> {
+    // The base of each peak is max(min(data[..p]), min(data[p+1..])). The naive
+    // form re-scans the whole array for every peak — O(n·k). Precompute the
+    // running minima once: prefix_min[i] = min(data[..i]), suffix_min[i] =
+    // min(data[i..]); then each peak is an O(1) lookup, for O(n+k) overall. The
+    // minimum of a set is independent of accumulation order (f64::min is
+    // commutative/associative over the float set, NaN-skipping included), so the
+    // looked-up values are bit-identical to the per-peak folds.
+    let n = data.len();
+    if peaks.is_empty() {
+        return Vec::new();
+    }
+    let mut prefix_min = vec![f64::INFINITY; n + 1]; // prefix_min[i] = min(data[..i])
+    for i in 0..n {
+        prefix_min[i + 1] = prefix_min[i].min(data[i]);
+    }
+    let mut suffix_min = vec![f64::INFINITY; n + 1]; // suffix_min[i] = min(data[i..])
+    for i in (0..n).rev() {
+        suffix_min[i] = data[i].min(suffix_min[i + 1]);
+    }
     peaks
         .iter()
         .map(|&p| {
-            if p >= data.len() {
+            if p >= n {
                 return f64::NAN;
             }
-            let peak_val = data[p];
-            let left_min = data[..p].iter().copied().fold(f64::INFINITY, f64::min);
-            let right_min = data[p + 1..].iter().copied().fold(f64::INFINITY, f64::min);
+            let left_min = prefix_min[p];
+            let right_min = suffix_min[p + 1];
             let base = left_min.max(right_min);
-            peak_val - base
+            data[p] - base
         })
         .collect()
 }
