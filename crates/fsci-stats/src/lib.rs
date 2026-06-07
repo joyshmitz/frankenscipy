@@ -32683,15 +32683,52 @@ pub fn correlate_1d(a: &[f64], v: &[f64]) -> Vec<f64> {
     let out_len = n + m - 1;
     let mut result = vec![0.0; out_len];
 
-    for (k, output) in result.iter_mut().enumerate() {
+    // Each output index k is an independent multiply-accumulate over the kernel,
+    // so the outputs fan out across threads in contiguous chunks (one spawn-set).
+    // Each output keeps its own j=0..m summation order, so the values are
+    // bit-identical to the serial loop.
+    let fill = |k: usize, output: &mut f64| {
         for (j, &kernel) in v.iter().enumerate() {
             let i = k as isize - (m - 1 - j) as isize;
             if i >= 0 && (i as usize) < n {
                 *output += a[i as usize] * kernel;
             }
         }
+    };
+    let nthreads = correlate_1d_thread_count(out_len, m);
+    if nthreads <= 1 {
+        for (k, output) in result.iter_mut().enumerate() {
+            fill(k, output);
+        }
+    } else {
+        let chunk = out_len.div_ceil(nthreads);
+        let fill = &fill;
+        std::thread::scope(|scope| {
+            for (ci, out_block) in result.chunks_mut(chunk).enumerate() {
+                let base = ci * chunk;
+                scope.spawn(move || {
+                    for (lk, output) in out_block.iter_mut().enumerate() {
+                        fill(base + lk, output);
+                    }
+                });
+            }
+        });
     }
     result
+}
+
+/// Worker count for `correlate_1d`/`convolve_1d`, or 1 to stay serial. Total work
+/// ~ out_len·m multiply-adds; only large convolutions amortise thread spawn.
+fn correlate_1d_thread_count(out_len: usize, m: usize) -> usize {
+    let work = (out_len as u64).saturating_mul(m as u64);
+    if work < 1 << 20 || out_len < 8 {
+        return 1;
+    }
+    std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(out_len)
+        .max(1)
 }
 
 /// 1D convolution (full mode).
