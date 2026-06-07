@@ -23169,6 +23169,40 @@ fn binomial_ppf(binom: &Binomial, q: f64) -> u64 {
 ///
 /// Matches `scipy.stats.mstats.hdquantiles(data, prob)`.
 /// Uses beta distribution weights for robust quantile estimation.
+/// Evaluate `beta.cdf` at each `x` in `xs`, distributing the (expensive
+/// incomplete-beta) evaluations across threads in contiguous chunks for large
+/// `xs`. Each value is computed identically and written to its own slot in input
+/// order, so the result is bit-identical to `xs.iter().map(|&v| beta.cdf(v))`.
+fn par_beta_cdf(beta: &BetaDist, xs: &[f64]) -> Vec<f64> {
+    let m = xs.len();
+    // The incomplete beta is far costlier than a single transcendental, so even a
+    // few thousand evaluations amortise thread spawn.
+    let nthreads = if m < 2048 {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(m)
+            .max(1)
+    };
+    if nthreads <= 1 {
+        return xs.iter().map(|&v| beta.cdf(v)).collect();
+    }
+    let chunk = m.div_ceil(nthreads);
+    let mut out = vec![0.0f64; m];
+    std::thread::scope(|scope| {
+        for (block, xblock) in out.chunks_mut(chunk).zip(xs.chunks(chunk)) {
+            scope.spawn(move || {
+                for (slot, &x) in block.iter_mut().zip(xblock.iter()) {
+                    *slot = beta.cdf(x);
+                }
+            });
+        }
+    });
+    out
+}
+
 pub fn hdquantiles(data: &[f64], prob: &[f64]) -> Vec<f64> {
     let mut sorted: Vec<f64> = data.iter().copied().filter(|v| !v.is_nan()).collect();
     sorted.sort_by(|a, b| a.total_cmp(b));
@@ -23188,9 +23222,15 @@ pub fn hdquantiles(data: &[f64], prob: &[f64]) -> Vec<f64> {
             let a = (nf + 1.0) * p;
             let b = (nf + 1.0) * (1.0 - p);
             let beta = BetaDist::new(a, b);
+            // The k-loop reads beta.cdf at (k+1)/n and k/n, so consecutive k share
+            // a breakpoint; evaluate each of the n+1 distinct breakpoints' CDF once
+            // (halving the incomplete-beta calls), in parallel for large n. The cdf
+            // values and the left-to-right weighted sum are unchanged -> identical.
+            let breakpoints: Vec<f64> = (0..=n).map(|j| j as f64 / nf).collect();
+            let cdfs = par_beta_cdf(&beta, &breakpoints);
             let mut hd_sum = 0.0;
             for (k, &val) in sorted.iter().enumerate() {
-                let w = beta.cdf((k + 1) as f64 / nf) - beta.cdf(k as f64 / nf);
+                let w = cdfs[k + 1] - cdfs[k];
                 hd_sum += w * val;
             }
             hd_sum
@@ -23230,7 +23270,7 @@ pub fn hdquantiles_sd(data: &[f64], prob: &[f64]) -> Vec<f64> {
             let beta = BetaDist::new(a, b);
 
             let vv: Vec<f64> = (0..n).map(|i| i as f64 / nm1f).collect();
-            let beta_cdf: Vec<f64> = vv.iter().map(|&v| beta.cdf(v)).collect();
+            let beta_cdf = par_beta_cdf(&beta, &vv);
             let w: Vec<f64> = (0..nm1).map(|i| beta_cdf[i + 1] - beta_cdf[i]).collect();
 
             let mut mx = vec![0.0; n];
