@@ -91,6 +91,9 @@ fn main() {
             let sv = SphericalVoronoi::new(black_box(&pts), [0.0, 0.0, 0.0], 1.0).unwrap();
             acc ^= sv.vertices.len() as u64;
         }
-        println!("n={n:>4}  {:>10.3?}/build  (nverts_acc={acc})", t0.elapsed() / reps);
+        println!(
+            "n={n:>4}  {:>10.3?}/build  (nverts_acc={acc})",
+            t0.elapsed() / reps
+        );
     }
 }

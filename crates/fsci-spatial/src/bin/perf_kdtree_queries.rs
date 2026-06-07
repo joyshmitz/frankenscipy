@@ -17,7 +17,9 @@ fn points(n: usize, d: usize, seed: u64) -> Vec<Vec<f64>> {
         .map(|_| {
             (0..d)
                 .map(|_| {
-                    s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    s = s
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
                     (s >> 11) as f64 / (1u64 << 53) as f64
                 })
                 .collect()
@@ -33,9 +35,11 @@ fn digest_pairs(pairs: &[(usize, usize)]) -> u64 {
 }
 
 fn digest_ball(res: &[Vec<usize>]) -> u64 {
-    res.iter().flat_map(|v| v.iter()).fold(1469598103934665603u64, |h, &x| {
-        (h ^ x as u64).wrapping_mul(1099511628211)
-    })
+    res.iter()
+        .flat_map(|v| v.iter())
+        .fold(1469598103934665603u64, |h, &x| {
+            (h ^ x as u64).wrapping_mul(1099511628211)
+        })
 }
 
 fn main() {
@@ -70,11 +74,24 @@ fn main() {
                 for _ in 0..reps {
                     acc = acc.wrapping_add($body);
                 }
-                println!("n={n:>6} {:<12} {:>9.3?}/call (acc={acc})", $name, t0.elapsed() / reps);
+                println!(
+                    "n={n:>6} {:<12} {:>9.3?}/call (acc={acc})",
+                    $name,
+                    t0.elapsed() / reps
+                );
             }};
         }
-        time!("count_neigh", black_box(&a).count_neighbors(black_box(&b), r).unwrap());
-        time!("ball_tree", black_box(&a).query_ball_tree(black_box(&b), r).unwrap().len());
+        time!(
+            "count_neigh",
+            black_box(&a).count_neighbors(black_box(&b), r).unwrap()
+        );
+        time!(
+            "ball_tree",
+            black_box(&a)
+                .query_ball_tree(black_box(&b), r)
+                .unwrap()
+                .len()
+        );
         time!("query_pairs", black_box(&a).query_pairs(r).unwrap().len());
     }
 }

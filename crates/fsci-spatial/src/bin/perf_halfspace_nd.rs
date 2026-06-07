@@ -101,6 +101,9 @@ fn main() {
             let h = HalfspaceIntersection::from_nd(black_box(&hs), interior).unwrap();
             acc ^= h.intersections.len() as u64;
         }
-        println!("m={m:>4} ndim={ndim}  {:>10.3?}/build  (nverts_acc={acc})", t0.elapsed() / reps);
+        println!(
+            "m={m:>4} ndim={ndim}  {:>10.3?}/build  (nverts_acc={acc})",
+            t0.elapsed() / reps
+        );
     }
 }
