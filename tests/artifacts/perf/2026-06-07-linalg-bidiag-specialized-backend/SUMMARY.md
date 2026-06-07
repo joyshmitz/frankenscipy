@@ -46,6 +46,19 @@ Focused helper proof passed on RCH:
 test tests::tridiagonal_qr_eigen_reconstructs_bidiag_gram ... ok
 ```
 
+Explicit public-route proof passed on RCH `vmi1149989`:
+
+```text
+test tests::public_bidiag_svd_tridiagonal_qr_backend_is_deterministic ... ok
+test tests::public_bidiag_svd_tridiagonal_qr_backend_matches_safe_svd_reference ... ok
+```
+
+Those proof probes assert that the `1024x512` public candidate reports a
+nonzero tridiagonal-QR backend sweep count, is bit-deterministic on repeated
+fixed input, preserves nonincreasing singular ordering, stays within
+reconstruction/orthogonality bounds, and matches the safe SVD reference for
+rank, singular values, `lstsq`, and `pinv` at the public tolerance envelope.
+
 Large backend proof/perf probe passed on the same worker as the baseline:
 
 ```text
