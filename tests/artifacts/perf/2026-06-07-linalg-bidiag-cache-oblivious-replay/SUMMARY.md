@@ -57,3 +57,27 @@ different communication-avoiding path: either packed compact-WY/block reflector
 replay with one GEMM-shaped application per panel, or a two-stage tiled
 bidiagonal reducer that amortizes far trailing updates with reusable safe-Rust
 panel buffers.
+
+## Addendum: Transposed Right-Replay Layout Trial
+
+An additional no-ship probe tried replaying right Householder reflectors over
+`Vt^T` with the existing left-Householder kernel, then transposing back. For each
+original row, the direct-right replay dot/update offset order was preserved.
+
+Proof:
+
+- RCH `ts1` bit proof passed:
+  `thin_bidiag_transposed_right_replay_matches_direct_right_bits`
+- Public SVD/lstsq/pinv SHA stayed
+  `1cdd3658c6caef8dec9fc58fa7e12b8d5c90151e2f93df91ffe2fcf862c16225`
+- Replay digest stayed `0x8f521a39638fb520`
+
+Rebench on RCH `ts1`:
+
+```text
+baseline replay_ms=250.248466
+after    replay_ms=278.751183
+```
+
+Decision: rejected. The transpose cost and layout churn outweighed locality
+improvement; source was restored.
