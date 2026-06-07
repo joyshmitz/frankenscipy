@@ -35765,12 +35765,47 @@ pub fn acf(data: &[f64], max_lag: usize) -> Vec<f64> {
         return vec![1.0; max_lag + 1];
     }
 
-    (0..=max_lag.min(n - 1))
-        .map(|lag| {
-            let sum: f64 = (0..n - lag).map(|i| centered[i] * centered[i + lag]).sum();
-            sum / var
-        })
-        .collect()
+    let last_lag = max_lag.min(n - 1);
+    // Each lag's autocovariance is an independent O(n) dot of the centered series
+    // against its shifted self, so the lags fan out across threads in contiguous
+    // chunks (one spawn-set). Each lag's inner sum stays sequential (same order),
+    // so the per-lag values are bit-identical to the serial map.
+    let acf_lag = |lag: usize| -> f64 {
+        let sum: f64 = (0..n - lag).map(|i| centered[i] * centered[i + lag]).sum();
+        sum / var
+    };
+    let nthreads = acf_thread_count(n, last_lag + 1);
+    if nthreads <= 1 {
+        return (0..=last_lag).map(acf_lag).collect();
+    }
+    let mut result = vec![0.0; last_lag + 1];
+    let chunk = (last_lag + 1).div_ceil(nthreads);
+    let acf_lag = &acf_lag;
+    std::thread::scope(|scope| {
+        for (ci, out_chunk) in result.chunks_mut(chunk).enumerate() {
+            let base = ci * chunk;
+            scope.spawn(move || {
+                for (li, slot) in out_chunk.iter_mut().enumerate() {
+                    *slot = acf_lag(base + li);
+                }
+            });
+        }
+    });
+    result
+}
+
+/// Worker count for `acf`, or 1 to stay serial. Total work ~ n·lags multiply-adds;
+/// only large series with enough lags to split amortise thread spawn.
+fn acf_thread_count(n: usize, lags: usize) -> usize {
+    let work = (n as u64).saturating_mul(lags as u64);
+    if work < 1 << 20 || lags < 4 {
+        return 1;
+    }
+    std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(lags)
+        .max(1)
 }
 
 /// Compute the partial autocorrelation function.
