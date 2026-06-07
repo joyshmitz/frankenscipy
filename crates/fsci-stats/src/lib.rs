@@ -27301,20 +27301,22 @@ pub fn anderson(data: &[f64], dist: &str) -> AndersonResult {
     let norm = Normal::standard();
 
     // A² = -n - (1/n) * sum_{i=1}^{n} (2i-1) * [ln(F(Y_i)) + ln(1 - F(Y_{n+1-i}))]
+    //
+    // The serial form evaluates the (erf-based) normal CDF twice per i — once at
+    // Y_i and once at Y_{n+1-i} — so over the whole loop it computes the CDF at
+    // every sorted point TWICE. Evaluate each point's clamped CDF logs once
+    // (ln F and ln(1-F)) into a per-point table, in parallel for large n, then do
+    // the weighted sum serially in i order, reading the forward log of i and the
+    // upper-tail log of n-1-i. The per-point values and the left-to-right
+    // summation order are unchanged => the statistic is bit-identical (the
+    // duplicate CDF evaluations are the only work removed).
+    let table = anderson_norm_cdf_log_table(&sorted, mean_val, std_val, &norm);
     let mut s = 0.0;
     for i in 0..n {
-        let z = (sorted[i] - mean_val) / std_val;
-        let f_z = ContinuousDistribution::cdf(&norm, z);
-        // Clamp to avoid ln(0)
-        let f_z = f_z.clamp(1e-15, 1.0 - 1e-15);
-
-        let z_rev = (sorted[n - 1 - i] - mean_val) / std_val;
-        let f_z_rev = ContinuousDistribution::cdf(&norm, z_rev);
-        let f_z_rev = f_z_rev.clamp(1e-15, 1.0 - 1e-15);
-
-        s += (2.0 * (i + 1) as f64 - 1.0) * (f_z.ln() + (1.0 - f_z_rev).ln());
+        let (ln_f, _) = table[i];
+        let (_, ln_1m_rev) = table[n - 1 - i];
+        s += (2.0 * (i + 1) as f64 - 1.0) * (ln_f + ln_1m_rev);
     }
-
     let a2 = -nf - s / nf;
 
     AndersonResult {
@@ -27322,6 +27324,53 @@ pub fn anderson(data: &[f64], dist: &str) -> AndersonResult {
         critical_values: anderson_critical_values_norm(nf),
         significance_level: [15.0, 10.0, 5.0, 2.5, 1.0],
     }
+}
+
+/// Per-point clamped-CDF log table for the Anderson-Darling A² sum against the
+/// standard normal. Entry `k` is `(ln F(Y_k), ln(1 - F(Y_k)))` where `F` is the
+/// erf-based standard-normal CDF clamped to `[1e-15, 1-1e-15]`. The serial A²
+/// loop reads `F(Y_i)` and `F(Y_{n+1-i})` per `i`, so over the whole loop it
+/// evaluates the CDF at every sorted point TWICE; computing the table once
+/// halves the (expensive transcendental) CDF/`ln` work. Each entry is an
+/// independent compute written to its own slot in input order, so the table is
+/// bit-identical to the serial per-point evaluation — the caller then sums in
+/// the exact original `i` order.
+fn anderson_norm_cdf_log_table(
+    sorted: &[f64],
+    mean_val: f64,
+    std_val: f64,
+    norm: &Normal,
+) -> Vec<(f64, f64)> {
+    let n = sorted.len();
+    let entry = |&y: &f64| -> (f64, f64) {
+        let z = (y - mean_val) / std_val;
+        let f = ContinuousDistribution::cdf(norm, z).clamp(1e-15, 1.0 - 1e-15);
+        (f.ln(), (1.0 - f).ln())
+    };
+    let nthreads = if n < 2048 {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n)
+            .max(1)
+    };
+    if nthreads <= 1 {
+        return sorted.iter().map(entry).collect();
+    }
+    let chunk = n.div_ceil(nthreads);
+    let mut table = vec![(0.0f64, 0.0f64); n];
+    std::thread::scope(|scope| {
+        for (block, yblock) in table.chunks_mut(chunk).zip(sorted.chunks(chunk)) {
+            scope.spawn(move || {
+                for (slot, y) in block.iter_mut().zip(yblock.iter()) {
+                    *slot = entry(y);
+                }
+            });
+        }
+    });
+    table
 }
 
 /// Critical values for Anderson-Darling test with normal distribution at
