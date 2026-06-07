@@ -31732,41 +31732,81 @@ pub fn ttest_ind_from_stats(
 /// Yeo-Johnson power transformation.
 ///
 /// Matches `scipy.stats.yeojohnson`.
+/// Apply a pure per-element transform, distributing the elements across threads
+/// in contiguous chunks when the total transcendental work amortises thread
+/// spawn. Chunks are concatenated in input order with each element computed
+/// identically, so the result is bit-identical to the serial `iter().map()`.
+fn par_elementwise<F>(xs: &[f64], work_per_elem: usize, f: F) -> Vec<f64>
+where
+    F: Fn(f64) -> f64 + Sync,
+{
+    let n = xs.len();
+    let work = (n as u64).saturating_mul(work_per_elem.max(1) as u64);
+    // High threshold: a fast transcendental map only amortises the per-chunk
+    // allocation + concatenation copy + thread spawn once the array is large
+    // (measured crossover ~0.7M elements for powf); smaller arrays stay serial.
+    let nthreads = if work < 1 << 25 || n < 8 {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n / 2)
+            .max(1)
+    };
+    if nthreads <= 1 {
+        return xs.iter().map(|&x| f(x)).collect();
+    }
+    let chunk = n.div_ceil(nthreads);
+    let f = &f;
+    let parts: Vec<Vec<f64>> = std::thread::scope(|scope| {
+        xs.chunks(chunk)
+            .map(|c| scope.spawn(move || c.iter().map(|&x| f(x)).collect::<Vec<f64>>()))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("par_elementwise chunk panicked"))
+            .collect()
+    });
+    let mut out = Vec::with_capacity(n);
+    for p in parts {
+        out.extend(p);
+    }
+    out
+}
+
 pub fn yeojohnson(x: &[f64], lam: f64) -> Vec<f64> {
-    x.iter()
-        .map(|&xi| {
-            if xi >= 0.0 {
-                if lam.abs() < 1e-15 {
-                    (xi + 1.0).ln()
-                } else {
-                    ((xi + 1.0).powf(lam) - 1.0) / lam
-                }
-            } else if (lam - 2.0).abs() < 1e-15 {
-                -((-xi + 1.0).ln())
+    // Each element is an independent `powf`/`ln` (transcendental, compute-bound),
+    // so the elements fan out across threads — bit-identical to the serial map.
+    par_elementwise(x, 50, |xi| {
+        if xi >= 0.0 {
+            if lam.abs() < 1e-15 {
+                (xi + 1.0).ln()
             } else {
-                -((-xi + 1.0).powf(2.0 - lam) - 1.0) / (2.0 - lam)
+                ((xi + 1.0).powf(lam) - 1.0) / lam
             }
-        })
-        .collect()
+        } else if (lam - 2.0).abs() < 1e-15 {
+            -((-xi + 1.0).ln())
+        } else {
+            -((-xi + 1.0).powf(2.0 - lam) - 1.0) / (2.0 - lam)
+        }
+    })
 }
 
 /// Inverse Yeo-Johnson transformation.
 pub fn yeojohnson_inv(y: &[f64], lam: f64) -> Vec<f64> {
-    y.iter()
-        .map(|&yi| {
-            if yi >= 0.0 {
-                if lam.abs() < 1e-15 {
-                    yi.exp() - 1.0
-                } else {
-                    (lam * yi + 1.0).powf(1.0 / lam) - 1.0
-                }
-            } else if (lam - 2.0).abs() < 1e-15 {
-                1.0 - (-yi).exp()
+    par_elementwise(y, 50, |yi| {
+        if yi >= 0.0 {
+            if lam.abs() < 1e-15 {
+                yi.exp() - 1.0
             } else {
-                1.0 - ((2.0 - lam) * (-yi) + 1.0).powf(1.0 / (2.0 - lam))
+                (lam * yi + 1.0).powf(1.0 / lam) - 1.0
             }
-        })
-        .collect()
+        } else if (lam - 2.0).abs() < 1e-15 {
+            1.0 - (-yi).exp()
+        } else {
+            1.0 - ((2.0 - lam) * (-yi) + 1.0).powf(1.0 / (2.0 - lam))
+        }
+    })
 }
 
 /// Find optimal Yeo-Johnson transformation parameter lambda.
