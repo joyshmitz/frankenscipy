@@ -1,0 +1,3 @@
+Superseded capture note: this first attempt redirected only stdout while RCH
+emitted the ignored-test payload on stderr, so the authoritative raw capture is
+`golden_before_rch_raw_2.txt`.
