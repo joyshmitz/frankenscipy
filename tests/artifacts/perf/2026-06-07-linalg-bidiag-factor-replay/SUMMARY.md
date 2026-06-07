@@ -1,65 +1,57 @@
-# Bidiag Factor Replay Workspace Rejection
+# Bidiag Factor Replay Workspace Reuse Rejection
 
 Bead: `frankenscipy-8l8r1.44`
 
 ## Target
 
-Profile-backed follow-up after acceptance-certificate and diagonal-output
-micro-levers failed.
+Fresh RCH baseline for the deeper public bidiagonal SVD route after the
+acceptance-certificate rejection:
 
-Fresh evidence:
-
-- Public route baseline on `ts1`: `lstsq=74.970714 ms`, `pinv=77.441517 ms`
-- Stage probe on `ts1`: `thin_bidiag_factor_replay` `replay_ms=250.248466`
-- Focused factor replay baseline on `vmi1149989`: `replay_ms=300.625236`
-- Public golden payload baseline passed on `ts1`
+- `BIDIAG_LARGE_REDUCTION_PERF`: `282.843880 ms` on `vmi1149989`
+- `THIN_BIDIAG_FACTOR_REPLAY`: dense reference `601.401509 ms`, reflector replay
+  `300.625236 ms`, speedup `2.000502x` on `vmi1149989`
+- Public SVD/lstsq/pinv golden payload passed on `ts1`
 
 ## Lever Tried
 
-Reuse one `right_dot_workspace` while replaying right Householder reflectors in
-`deterministic_thin_svd_from_reduction_parts`, replacing the per-reflector
-allocation inside `apply_householder_right`.
+Reuse one right-Householder dot workspace while replaying right reflectors during
+thin factor assembly. The old path allocated a fresh workspace in
+`apply_householder_right` for every right reflector; the trial called
+`apply_householder_right_with_workspace` with one persistent buffer.
 
-This preserved reflector order, row/column traversal, floating-point operations,
-singular-value ordering, public behavior, and RNG absence. It only changed
-workspace allocation lifetime.
+This preserved the reflector order, dot-product order, update order, singular
+values, sign canonicalization, rank threshold behavior, error behavior, and RNG
+absence.
 
 ## Proof
 
-RCH focused replay proof passed:
+RCH `vmi1149989`:
 
-```text
-command: RCH_FORCE_REMOTE=1 rch exec -- cargo test -p fsci-linalg --release --lib --locked thin_bidiag_reflector_replay_matches_dense_product_reference -- --nocapture
-worker: ts1
-result: ok
-```
+- `thin_bidiag_reflector_replay_matches_dense_product_reference`: passed
 
-After-run digest stayed identical:
+RCH `ts1` public golden:
 
-```text
-reduction_digest=0x90cdd3f8f71ed2c1
-reference_digest=0x22223a463752097f
-replay_digest=0x8f521a39638fb520
-```
+- `public_svd_lstsq_pinv_golden_payload`: passed
 
 ## Rebench
 
-Same-worker comparison against the prior `ts1` stage probe:
+The decisive same-binary A/B probe compared the allocating reference against the
+reused-workspace replay path on `vmi1149989`:
 
-```text
-baseline replay_ms=250.248466
-after    replay_ms=251.184854
-```
+- allocating reference: `296.836556 ms`
+- reused workspace: `298.891629 ms`
+- speedup: `0.993124x`
+- digest: `0x8f521a39638fb520 == 0x8f521a39638fb520`
 
-The lever did not improve the target and slightly regressed the focused replay
-probe.
+The probe proved bit identity but showed a small regression, so the change does
+not clear the keep gate.
 
 ## Decision
 
-Rejected. Source restored; `git diff -- crates/fsci-linalg/src/lib.rs` is empty.
+Rejected. Source was restored; no production code from this trial remains.
 
 Score: `0.0`.
 
-Next primitive should move past replay allocation lifetime and attack the actual
-reflector application work: cache-oblivious/block reflector replay or two-stage
-communication-avoiding bidiagonalization with explicit public golden proof.
+Next primitive: stop allocator-only replay levers. Continue deeper with a true
+two-stage communication-avoiding bidiagonal reducer or a packed panel path that
+amortizes reflector formation and far-trailing updates across a full panel.
