@@ -27673,14 +27673,14 @@ fn find_optimal_boxcox_lambda(data: &[f64]) -> f64 {
     let n = data.len() as f64;
     let log_geometric_mean: f64 = data.iter().map(|&x| x.ln()).sum::<f64>() / n;
 
-    let mut best_lambda = 0.0;
-    let mut best_ll = f64::NEG_INFINITY;
-
-    // Search lambda in [-2, 2] with resolution 0.01.
-    let steps = 400;
-    for i in 0..=steps {
+    // Search lambda in [-2, 2] with resolution 0.01. Each grid point's
+    // log-likelihood is an independent O(n) powf map + variance, so the points
+    // fan out across threads; var<=0 maps to -inf (the serial `continue`). The
+    // argmax then keeps the FIRST point achieving the running max (lowest index
+    // on ties), bit-identical to the serial `if ll > best_ll` scan.
+    let steps = 400usize;
+    let log_likelihood = |i: usize| -> f64 {
         let lambda = -2.0 + 4.0 * i as f64 / steps as f64;
-
         let transformed: Vec<f64> = data
             .iter()
             .map(|&x| {
@@ -27691,25 +27691,62 @@ fn find_optimal_boxcox_lambda(data: &[f64]) -> f64 {
                 }
             })
             .collect();
-
         let mean = transformed.iter().sum::<f64>() / n;
         let var = transformed.iter().map(|&y| (y - mean).powi(2)).sum::<f64>() / n;
-
         if var <= 0.0 {
-            continue;
+            return f64::NEG_INFINITY;
         }
-
         // Log-likelihood (up to constants):
         // -n/2 * ln(var) + (lambda - 1) * sum(ln(x))
-        let ll = -n / 2.0 * var.ln() + (lambda - 1.0) * log_geometric_mean * n;
+        -n / 2.0 * var.ln() + (lambda - 1.0) * log_geometric_mean * n
+    };
 
+    let mut lls = vec![f64::NEG_INFINITY; steps + 1];
+    let nthreads = boxcox_grid_thread_count(data.len(), steps + 1);
+    if nthreads <= 1 {
+        for (i, slot) in lls.iter_mut().enumerate() {
+            *slot = log_likelihood(i);
+        }
+    } else {
+        let chunk = (steps + 1).div_ceil(nthreads);
+        let log_likelihood = &log_likelihood;
+        std::thread::scope(|scope| {
+            for (ci, block) in lls.chunks_mut(chunk).enumerate() {
+                let base = ci * chunk;
+                scope.spawn(move || {
+                    for (li, slot) in block.iter_mut().enumerate() {
+                        *slot = log_likelihood(base + li);
+                    }
+                });
+            }
+        });
+    }
+
+    // First index achieving the maximum ll (matches the serial strict-`>` scan).
+    let mut best_lambda = 0.0;
+    let mut best_ll = f64::NEG_INFINITY;
+    for (i, &ll) in lls.iter().enumerate() {
         if ll > best_ll {
             best_ll = ll;
-            best_lambda = lambda;
+            best_lambda = -2.0 + 4.0 * i as f64 / steps as f64;
         }
     }
 
     best_lambda
+}
+
+/// Worker count for the Box-Cox lambda grid, or 1 to stay serial. Each grid point
+/// costs an O(n) powf map; only large data amortise thread spawn.
+fn boxcox_grid_thread_count(n: usize, points: usize) -> usize {
+    let work = (n as u64).saturating_mul(points as u64);
+    if work < 1 << 18 || points < 4 {
+        return 1;
+    }
+    std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(points)
+        .max(1)
 }
 
 /// Find optimal Box-Cox transformation parameter lambda.
