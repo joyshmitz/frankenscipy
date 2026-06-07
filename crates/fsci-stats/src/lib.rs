@@ -27735,6 +27735,46 @@ fn find_optimal_boxcox_lambda(data: &[f64]) -> f64 {
     best_lambda
 }
 
+/// Index of the FIRST grid point achieving the maximum `score(i)`, with the
+/// scores computed in parallel across `points` independent grid points (each an
+/// O(n) evaluation). Bit-identical to a serial `if score > best` strict-`>` scan:
+/// the scores are deterministic per index and the argmax keeps the lowest index
+/// on ties.
+fn grid_argmax<F>(n: usize, points: usize, score: F) -> usize
+where
+    F: Fn(usize) -> f64 + Sync,
+{
+    let mut scores = vec![f64::NEG_INFINITY; points];
+    let nthreads = boxcox_grid_thread_count(n, points);
+    if nthreads <= 1 {
+        for (i, slot) in scores.iter_mut().enumerate() {
+            *slot = score(i);
+        }
+    } else {
+        let chunk = points.div_ceil(nthreads);
+        let score = &score;
+        std::thread::scope(|scope| {
+            for (ci, block) in scores.chunks_mut(chunk).enumerate() {
+                let base = ci * chunk;
+                scope.spawn(move || {
+                    for (li, slot) in block.iter_mut().enumerate() {
+                        *slot = score(base + li);
+                    }
+                });
+            }
+        });
+    }
+    let mut best_i = 0;
+    let mut best = f64::NEG_INFINITY;
+    for (i, &s) in scores.iter().enumerate() {
+        if s > best {
+            best = s;
+            best_i = i;
+        }
+    }
+    best_i
+}
+
 /// Worker count for the Box-Cox lambda grid, or 1 to stay serial. Each grid point
 /// costs an O(n) powf map; only large data amortise thread spawn.
 fn boxcox_grid_thread_count(n: usize, points: usize) -> usize {
@@ -27772,13 +27812,12 @@ pub fn boxcox_normmax(data: &[f64], brack: (f64, f64)) -> f64 {
     let nf = n as f64;
     let log_sum: f64 = data.iter().map(|&x| x.ln()).sum();
 
-    let mut best_lambda = lo;
-    let mut best_ll = f64::NEG_INFINITY;
-
-    let steps = 400;
-    for i in 0..=steps {
+    // 401-point grid; each point's log-likelihood is an independent O(n) powf map
+    // + variance, so compute them in parallel and take the first grid index at the
+    // maximum (bit-identical to the serial strict-`>` scan).
+    let steps = 400usize;
+    let best_i = grid_argmax(n, steps + 1, |i| {
         let lambda = lo + (hi - lo) * i as f64 / steps as f64;
-
         let transformed: Vec<f64> = data
             .iter()
             .map(|&x| {
@@ -27789,23 +27828,15 @@ pub fn boxcox_normmax(data: &[f64], brack: (f64, f64)) -> f64 {
                 }
             })
             .collect();
-
         let mean = transformed.iter().sum::<f64>() / nf;
         let var = transformed.iter().map(|&y| (y - mean).powi(2)).sum::<f64>() / nf;
-
         if var <= 0.0 {
-            continue;
+            return f64::NEG_INFINITY;
         }
+        -nf / 2.0 * var.ln() + (lambda - 1.0) * log_sum
+    });
 
-        let ll = -nf / 2.0 * var.ln() + (lambda - 1.0) * log_sum;
-
-        if ll > best_ll {
-            best_ll = ll;
-            best_lambda = lambda;
-        }
-    }
-
-    best_lambda
+    lo + (hi - lo) * best_i as f64 / steps as f64
 }
 
 /// Box-Cox log-likelihood function.
@@ -31868,30 +31899,23 @@ pub fn yeojohnson_normmax(data: &[f64], brack: (f64, f64)) -> f64 {
         .map(|&x| x.signum() * (x.abs() + 1.0).ln())
         .sum();
 
-    let mut best_lambda = lo;
-    let mut best_ll = f64::NEG_INFINITY;
-
-    let steps = 400;
-    for i in 0..=steps {
+    // 401-point grid; each point's log-likelihood is an independent O(n)
+    // transform + variance, computed in parallel; first grid index at the maximum
+    // (bit-identical to the serial strict-`>` scan). The inner yeojohnson stays
+    // serial at these sizes, so there is no nested fan-out.
+    let steps = 400usize;
+    let best_i = grid_argmax(n, steps + 1, |i| {
         let lam = lo + (hi - lo) * i as f64 / steps as f64;
         let transformed = yeojohnson(data, lam);
-
         let mean = transformed.iter().sum::<f64>() / nf;
         let var = transformed.iter().map(|&y| (y - mean).powi(2)).sum::<f64>() / nf;
-
         if var <= 0.0 {
-            continue;
+            return f64::NEG_INFINITY;
         }
+        -nf / 2.0 * var.ln() + (lam - 1.0) * log_term
+    });
 
-        let ll = -nf / 2.0 * var.ln() + (lam - 1.0) * log_term;
-
-        if ll > best_ll {
-            best_ll = ll;
-            best_lambda = lam;
-        }
-    }
-
-    best_lambda
+    lo + (hi - lo) * best_i as f64 / steps as f64
 }
 
 /// Yeo-Johnson log-likelihood function.
