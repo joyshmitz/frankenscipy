@@ -6214,6 +6214,9 @@ const BIDIAG_SYMMETRIC_EIGEN_MIN_DIM: usize = 32;
 const PUBLIC_BIDIAG_SVD_MIN_COLS: usize = 64;
 const PUBLIC_BIDIAG_RANK_GAP_REL_TOL: f64 = 64.0 * f64::EPSILON;
 const PUBLIC_BIDIAG_RECON_REL_TOL: f64 = 1e-8;
+const THIN_BIDIAG_LEFT_REPLAY_MIN_PAR_COLS: usize = 128;
+const THIN_BIDIAG_LEFT_REPLAY_MIN_COLS_PER_WORKER: usize = 32;
+const THIN_BIDIAG_LEFT_REPLAY_MAX_WORKERS: usize = 8;
 
 #[allow(dead_code)]
 impl BidiagonalReduction {
@@ -6356,6 +6359,63 @@ fn apply_householder_left(
         if scale != 0.0 {
             for (offset, value) in reflector.values.iter().enumerate() {
                 matrix[(reflector.start + offset, col)] -= scale * value;
+            }
+        }
+    }
+}
+
+#[allow(dead_code)]
+fn apply_left_reflectors_column_chunks(
+    matrix: &mut DMatrix<f64>,
+    reflectors: &[HouseholderReflector],
+    worker_count: usize,
+) {
+    let rows = matrix.nrows();
+    let cols = matrix.ncols();
+    let usable_workers = worker_count
+        .min(THIN_BIDIAG_LEFT_REPLAY_MAX_WORKERS)
+        .min(cols / THIN_BIDIAG_LEFT_REPLAY_MIN_COLS_PER_WORKER);
+    if rows == 0 || cols == 0 || usable_workers <= 1 || cols < THIN_BIDIAG_LEFT_REPLAY_MIN_PAR_COLS
+    {
+        for reflector in reflectors.iter().rev() {
+            apply_householder_left(matrix, reflector, 0);
+        }
+        return;
+    }
+
+    let cols_per_worker = cols.div_ceil(usable_workers);
+    let chunk_len = rows * cols_per_worker;
+    std::thread::scope(|scope| {
+        for chunk in matrix.as_mut_slice().chunks_mut(chunk_len) {
+            let chunk_cols = chunk.len() / rows;
+            scope.spawn(move || {
+                apply_left_reflectors_to_column_chunk(chunk, rows, chunk_cols, reflectors);
+            });
+        }
+    });
+}
+
+fn apply_left_reflectors_to_column_chunk(
+    chunk: &mut [f64],
+    rows: usize,
+    cols: usize,
+    reflectors: &[HouseholderReflector],
+) {
+    for reflector in reflectors.iter().rev() {
+        if reflector.tau == 0.0 || reflector.values.is_empty() {
+            continue;
+        }
+        for col in 0..cols {
+            let col_base = col * rows;
+            let mut dot = 0.0;
+            for (offset, value) in reflector.values.iter().enumerate() {
+                dot += value * chunk[col_base + reflector.start + offset];
+            }
+            let scale = reflector.tau * dot;
+            if scale != 0.0 {
+                for (offset, value) in reflector.values.iter().enumerate() {
+                    chunk[col_base + reflector.start + offset] -= scale * value;
+                }
             }
         }
     }
@@ -6894,9 +6954,8 @@ fn deterministic_thin_svd_from_reduction_parts(
     bidiagonal_svd: BidiagonalSvd,
 ) -> Result<DeterministicThinSvd, LinalgError> {
     let mut u = bidiagonal_svd.u;
-    for reflector in reduction.left_reflectors.iter().rev() {
-        apply_householder_left(&mut u, reflector, 0);
-    }
+    let worker_count = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
+    apply_left_reflectors_column_chunks(&mut u, &reduction.left_reflectors, worker_count);
 
     let mut v_t = bidiagonal_svd.v_t;
     for reflector in reduction.right_reflectors.iter().rev() {
@@ -13681,6 +13740,104 @@ mod tests {
         }
     }
 
+    fn deterministic_thin_svd_from_reduction_parts_serial_left_reference(
+        reduction: &BidiagonalReduction,
+        bidiagonal_svd: BidiagonalSvd,
+    ) -> DeterministicThinSvd {
+        let mut u = bidiagonal_svd.u;
+        for reflector in reduction.left_reflectors.iter().rev() {
+            apply_householder_left(&mut u, reflector, 0);
+        }
+
+        let mut v_t = bidiagonal_svd.v_t;
+        for reflector in reduction.right_reflectors.iter().rev() {
+            apply_householder_right(&mut v_t, reflector, 0);
+        }
+
+        canonicalize_svd_factor_signs(&mut u, &mut v_t);
+
+        DeterministicThinSvd {
+            singular_values: bidiagonal_svd.singular_values,
+            u,
+            v_t,
+            jacobi_sweeps: bidiagonal_svd.sweeps,
+        }
+    }
+
+    fn deterministic_thin_svd_from_reduction_parts_forced_parallel_left(
+        reduction: &BidiagonalReduction,
+        bidiagonal_svd: BidiagonalSvd,
+        worker_count: usize,
+    ) -> DeterministicThinSvd {
+        let mut u = bidiagonal_svd.u;
+        apply_left_reflectors_column_chunks(&mut u, &reduction.left_reflectors, worker_count);
+
+        let mut v_t = bidiagonal_svd.v_t;
+        for reflector in reduction.right_reflectors.iter().rev() {
+            apply_householder_right(&mut v_t, reflector, 0);
+        }
+
+        canonicalize_svd_factor_signs(&mut u, &mut v_t);
+
+        DeterministicThinSvd {
+            singular_values: bidiagonal_svd.singular_values,
+            u,
+            v_t,
+            jacobi_sweeps: bidiagonal_svd.sweeps,
+        }
+    }
+
+    #[test]
+    fn thin_bidiag_parallel_left_replay_matches_serial_bits() {
+        for (rows, cols) in [(256, 160), (384, 192)] {
+            let original = bidiag_deterministic_matrix(rows, cols);
+            let reduction =
+                golub_kahan_bidiagonal_reduction(&original).expect("bidiagonal reduction");
+            let bidiagonal_svd =
+                deterministic_bidiagonal_svd_from_reduction(&reduction).expect("bidiagonal SVD");
+            let serial = deterministic_thin_svd_from_reduction_parts_serial_left_reference(
+                &reduction,
+                bidiagonal_svd.clone(),
+            );
+            let parallel = deterministic_thin_svd_from_reduction_parts_forced_parallel_left(
+                &reduction,
+                bidiagonal_svd,
+                4,
+            );
+
+            assert_eq!(
+                thin_svd_bits_digest(&serial),
+                thin_svd_bits_digest(&parallel),
+                "thin-SVD digest drifted for shape {rows}x{cols}"
+            );
+            for idx in 0..serial.singular_values.len() {
+                assert_eq!(
+                    serial.singular_values[idx].to_bits(),
+                    parallel.singular_values[idx].to_bits(),
+                    "singular value {idx} changed for shape {rows}x{cols}"
+                );
+            }
+            for row in 0..serial.u.nrows() {
+                for col in 0..serial.u.ncols() {
+                    assert_eq!(
+                        serial.u[(row, col)].to_bits(),
+                        parallel.u[(row, col)].to_bits(),
+                        "U bit drift at ({row}, {col}) for shape {rows}x{cols}"
+                    );
+                }
+            }
+            for row in 0..serial.v_t.nrows() {
+                for col in 0..serial.v_t.ncols() {
+                    assert_eq!(
+                        serial.v_t[(row, col)].to_bits(),
+                        parallel.v_t[(row, col)].to_bits(),
+                        "Vt bit drift at ({row}, {col}) for shape {rows}x{cols}"
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn thin_bidiag_reflector_replay_matches_dense_product_reference() {
         for (rows, cols) in [(9, 5), (17, 8), (64, 32)] {
@@ -13785,6 +13942,52 @@ mod tests {
         );
         println!("replay_digest={:#018x}", thin_svd_bits_digest(&replay));
         println!("THIN_BIDIAG_FACTOR_REPLAY_PERF_END");
+    }
+
+    #[test]
+    #[ignore = "perf probe: run with rch and --release for serial vs parallel left replay"]
+    fn thin_bidiag_parallel_left_replay_perf_probe() {
+        let original = bidiag_deterministic_matrix(1024, 512);
+        let reduction = golub_kahan_bidiagonal_reduction(std::hint::black_box(&original))
+            .expect("bidiagonal reduction");
+        let bidiagonal_svd =
+            deterministic_bidiagonal_svd_from_reduction(&reduction).expect("bidiagonal SVD");
+        let worker_count =
+            std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
+
+        let started_at = std::time::Instant::now();
+        let serial = deterministic_thin_svd_from_reduction_parts_serial_left_reference(
+            std::hint::black_box(&reduction),
+            std::hint::black_box(bidiagonal_svd.clone()),
+        );
+        let serial_ms = started_at.elapsed().as_secs_f64() * 1_000.0;
+
+        let started_at = std::time::Instant::now();
+        let parallel = deterministic_thin_svd_from_reduction_parts(
+            std::hint::black_box(&reduction),
+            std::hint::black_box(bidiagonal_svd),
+        )
+        .expect("parallel left-replay thin SVD");
+        let parallel_ms = started_at.elapsed().as_secs_f64() * 1_000.0;
+
+        assert_eq!(
+            thin_svd_bits_digest(&serial),
+            thin_svd_bits_digest(&parallel),
+            "parallel left replay must preserve exact serial digest"
+        );
+
+        println!("THIN_BIDIAG_PARALLEL_LEFT_REPLAY_PERF_BEGIN");
+        println!("shape={}x{}", reduction.rows, reduction.cols);
+        println!("worker_count={worker_count}");
+        println!(
+            "reduction_digest={:#018x}",
+            bidiag_reduction_digest(&reduction)
+        );
+        println!("serial_ms={serial_ms:.6}");
+        println!("parallel_ms={parallel_ms:.6}");
+        println!("speedup={:.6}", serial_ms / parallel_ms);
+        println!("digest={:#018x}", thin_svd_bits_digest(&parallel));
+        println!("THIN_BIDIAG_PARALLEL_LEFT_REPLAY_PERF_END");
     }
 
     #[test]
