@@ -34299,6 +34299,96 @@ pub fn mad(data: &[f64], scale: f64) -> f64 {
     median(&abs_devs) / scale
 }
 
+/// O(n log n) medcouple via implicit sorted-matrix median selection.
+///
+/// The naive medcouple materializes every kernel value
+/// `h(a,b) = (a + b - 2·med)/(a - b)` for `a >= med >= b` (≈ n²/4 of them) and
+/// takes their median — O(n² log n) time and O(n²) space. But h is non-decreasing
+/// in both arguments (∂h/∂a = 2(med-b)/(a-b)² ≥ 0, ∂h/∂b = 2(a-med)/(a-b)² ≥ 0),
+/// so the kernel forms a matrix sorted ascending along both axes (a Young
+/// tableau), and every entry lies in [-1, 1]. The median order statistic is then
+/// found by bisection on value with an O(r + c) saddleback "count entries ≤ v"
+/// per step — nothing is materialized — giving O(n log n) overall (post-sort work
+/// is ~constant·n). Tolerance-parity with the naive median: the selected value
+/// agrees to ~1e-16, and medcouple's behaviour is tolerance-checked.
+///
+/// Returns `None` (deferring to the exact naive path) whenever the median band
+/// could hide pairs the naive drops via its `|a-b| > 1e-15` filter — i.e. when
+/// more than one input value lies within 1e-15 of `med` — or for small `n`. This
+/// keeps behaviour exact in every degenerate / near-tied case.
+fn medcouple_sorted_matrix(sorted: &[f64], med: f64) -> Option<f64> {
+    let n = sorted.len();
+    if n < 256 {
+        return None;
+    }
+    // The naive omits straddling pairs with |a-b| <= 1e-15. Such a pair needs
+    // both endpoints within 1e-15 of med; if at most one value is that close the
+    // only zero-gap pair is the shared-median self-pair (excluded below exactly),
+    // so the fast path reproduces the naive multiset.
+    if sorted.iter().filter(|&&v| (v - med).abs() <= 1e-15).count() > 1 {
+        return None;
+    }
+
+    let left = &sorted[..sorted.partition_point(|&v| v <= med)]; // b values (<= med)
+    let right = &sorted[sorted.partition_point(|&v| v < med)..]; // a values (>= med)
+    let cn = left.len();
+    let r = right.len();
+    if cn == 0 || r == 0 {
+        return Some(0.0);
+    }
+    // `shared` ⇔ med is itself a data value: then right[0] == med == left[cn-1],
+    // and the (row 0, col cn-1) corner is the excluded self-pair. Row 0 (a==med)
+    // is then all -1 except that corner; col cn-1 (b==med) is all +1 except it.
+    let shared = right[0] == med && left[cn - 1] == med;
+    let total: i64 = (r as i64) * (cn as i64) - i64::from(shared);
+    if total <= 0 {
+        return Some(0.0);
+    }
+
+    let kernel = |a: f64, b: f64| (a + b - 2.0 * med) / (a - b);
+    // Valid entries <= v, in O(r + cn) using monotonicity along both axes.
+    let count_le = |v: f64| -> i64 {
+        let mut count: i64 = 0;
+        let r_start = if shared {
+            // Row 0 is the median row: cols 0..cn-1 are all -1, corner excluded.
+            if v >= -1.0 {
+                count += cn as i64 - 1;
+            }
+            1
+        } else {
+            0
+        };
+        let mut c_ptr = cn; // #leading cols with kernel <= v (non-increasing in row)
+        for &a in &right[r_start..] {
+            while c_ptr > 0 && kernel(a, left[c_ptr - 1]) > v {
+                c_ptr -= 1;
+            }
+            count += c_ptr as i64;
+        }
+        count
+    };
+    // Smallest kernel value v with count_le(v) >= k+1 == the k-th (0-indexed)
+    // order statistic, bisected over the kernel's [-1, 1] range.
+    let select = |k: i64| -> f64 {
+        let (mut lo, mut hi) = (-1.0_f64, 1.0_f64);
+        for _ in 0..60 {
+            let mid = (lo + hi) * 0.5;
+            if count_le(mid) >= k + 1 {
+                hi = mid;
+            } else {
+                lo = mid;
+            }
+        }
+        hi
+    };
+
+    Some(if total % 2 == 1 {
+        select(total / 2)
+    } else {
+        (select(total / 2 - 1) + select(total / 2)) / 2.0
+    })
+}
+
 /// Compute the medcouple (robust measure of skewness).
 ///
 /// The medcouple is defined as the median of:
@@ -34325,6 +34415,11 @@ pub fn medcouple(data: &[f64]) -> f64 {
     } else {
         sorted[n / 2]
     };
+
+    // Fast path: O(n log n) implicit sorted-matrix median (tolerance-parity).
+    if let Some(mc) = medcouple_sorted_matrix(&sorted, med) {
+        return mc;
+    }
 
     let mut h_values = Vec::new();
 
