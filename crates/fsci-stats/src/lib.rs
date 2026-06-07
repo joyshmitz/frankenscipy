@@ -34562,19 +34562,84 @@ pub fn cov_matrix(data: &[Vec<f64>]) -> Vec<Vec<f64>> {
         *m /= n as f64;
     }
 
-    // Compute covariance
-    let mut cov = vec![vec![0.0; d]; d];
-    for row in data {
-        for i in 0..d {
-            for j in i..d {
-                cov[i][j] += (row[i] - means[i]) * (row[j] - means[j]);
+    // Small d: the textbook rank-1-update accumulation (bit-identical reference).
+    if d < 48 {
+        let mut cov = vec![vec![0.0; d]; d];
+        for row in data {
+            for i in 0..d {
+                for j in i..d {
+                    cov[i][j] += (row[i] - means[i]) * (row[j] - means[j]);
+                }
             }
         }
+        #[allow(clippy::needless_range_loop)]
+        for i in 0..d {
+            for j in i..d {
+                cov[i][j] /= (n - 1) as f64;
+                cov[j][i] = cov[i][j];
+            }
+        }
+        return cov;
     }
-    #[allow(clippy::needless_range_loop)]
-    for i in 0..d {
+
+    // Larger d: the rank-1-update form above scatter-writes the whole d×d matrix
+    // once per observation, so for d big enough to spill cache it is memory-bound.
+    // cov[i][j] = sum_obs (data[obs][i]-mean_i)*(data[obs][j]-mean_j) is exactly a
+    // dot product of two centered variable-series over observations in the SAME
+    // order, so transposing the centered data into contiguous per-variable series
+    // turns each entry into a streamed dot (cache-friendly, auto-vectorisable) and
+    // makes the output rows independent — they fan out across threads. The values
+    // and summation order are unchanged, so the result is bit-identical.
+    let mut xt = vec![vec![0.0f64; n]; d];
+    for (obs, row) in data.iter().enumerate() {
+        for v in 0..d {
+            xt[v][obs] = row[v] - means[v];
+        }
+    }
+    let denom = (n - 1) as f64;
+    let mut cov = vec![vec![0.0f64; d]; d];
+    let fill_row = |i: usize, out: &mut [f64]| {
+        let xi = &xt[i];
         for j in i..d {
-            cov[i][j] /= (n - 1) as f64;
+            let xj = &xt[j];
+            let mut s = 0.0f64;
+            for obs in 0..n {
+                s += xi[obs] * xj[obs];
+            }
+            out[j] = s / denom;
+        }
+    };
+    let work = (d as u64).saturating_mul(d as u64).saturating_mul(n as u64);
+    let nthreads = if work < 1 << 22 {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(d)
+            .max(1)
+    };
+    if nthreads <= 1 {
+        for (i, row) in cov.iter_mut().enumerate() {
+            fill_row(i, row);
+        }
+    } else {
+        let chunk = d.div_ceil(nthreads);
+        let fill_row = &fill_row;
+        std::thread::scope(|scope| {
+            for (ci, rows) in cov.chunks_mut(chunk).enumerate() {
+                let base = ci * chunk;
+                scope.spawn(move || {
+                    for (lr, row) in rows.iter_mut().enumerate() {
+                        fill_row(base + lr, row);
+                    }
+                });
+            }
+        });
+    }
+    // Mirror the upper triangle (O(d²)).
+    for i in 0..d {
+        for j in (i + 1)..d {
             cov[j][i] = cov[i][j];
         }
     }
