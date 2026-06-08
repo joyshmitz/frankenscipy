@@ -1,0 +1,90 @@
+{
+  "api_version": "1.0",
+  "timestamp": 1780910715,
+  "command": "workers probe",
+  "success": true,
+  "data": {
+    "results": [
+      {
+        "id": "vmi1149989",
+        "host": "212.90.121.76",
+        "status": "connection_failed",
+        "error": "RCH-E100\n\n  × SSH connection failed for ubuntu@212.90.121.76: Failed to connect to\n  │ ubuntu@212.90.121.76\n  help: SSH Troubleshooting:\n        1. Verify host/user/key in workers.toml.\n        2. Try a manual connection with verbose logs:\n        ssh -vvv -i \"/home/ubuntu/.ssh/contabo_vps_ed25519\"\n        ubuntu@212.90.121.76\n        \n        Run 'rch doctor' for comprehensive SSH diagnostics.\n",
+        "error_code": "RCH-E100"
+      },
+      {
+        "id": "vmi1152480",
+        "host": "109.205.181.92",
+        "status": "connection_failed",
+        "error": "RCH-E100\n\n  × SSH connection failed for ubuntu@109.205.181.92: Failed to connect to\n  │ ubuntu@109.205.181.92\n  help: SSH Troubleshooting:\n        1. Verify host/user/key in workers.toml.\n        2. Try a manual connection with verbose logs:\n        ssh -vvv -i \"/home/ubuntu/.ssh/contabo_vps_ed25519\"\n        ubuntu@109.205.181.92\n        \n        Run 'rch doctor' for comprehensive SSH diagnostics.\n",
+        "error_code": "RCH-E100"
+      },
+      {
+        "id": "vmi1153651",
+        "host": "38.242.134.66",
+        "status": "ok",
+        "latency_ms": 969
+      },
+      {
+        "id": "vmi1227854",
+        "host": "109.123.245.77",
+        "status": "connection_failed",
+        "error": "RCH-E100\n\n  × SSH connection failed for ubuntu@109.123.245.77: Failed to connect to\n  │ ubuntu@109.123.245.77\n  help: SSH Troubleshooting:\n        1. Verify host/user/key in workers.toml.\n        2. Try a manual connection with verbose logs:\n        ssh -vvv -i \"/home/ubuntu/.ssh/contabo_vps_ed25519\"\n        ubuntu@109.123.245.77\n        \n        Run 'rch doctor' for comprehensive SSH diagnostics.\n",
+        "error_code": "RCH-E100"
+      },
+      {
+        "id": "vmi1156319",
+        "host": "178.18.254.243",
+        "status": "ok",
+        "latency_ms": 784
+      },
+      {
+        "id": "vmi1264463",
+        "host": "38.242.209.154",
+        "status": "connection_failed",
+        "error": "RCH-E100\n\n  × SSH connection failed for ubuntu@38.242.209.154: Failed to connect to\n  │ ubuntu@38.242.209.154\n  help: SSH Troubleshooting:\n        1. Verify host/user/key in workers.toml.\n        2. Try a manual connection with verbose logs:\n        ssh -vvv -i \"/home/ubuntu/.ssh/contabo_vps_ed25519\"\n        ubuntu@38.242.209.154\n        \n        Run 'rch doctor' for comprehensive SSH diagnostics.\n",
+        "error_code": "RCH-E100"
+      },
+      {
+        "id": "vmi1293453",
+        "host": "149.102.137.103",
+        "status": "connection_failed",
+        "error": "RCH-E100\n\n  × SSH connection failed for ubuntu@149.102.137.103: Failed to connect to\n  │ ubuntu@149.102.137.103\n  help: SSH Troubleshooting:\n        1. Verify host/user/key in workers.toml.\n        2. Try a manual connection with verbose logs:\n        ssh -vvv -i \"/home/ubuntu/.ssh/contabo_vps_ed25519\"\n        ubuntu@149.102.137.103\n        \n        Run 'rch doctor' for comprehensive SSH diagnostics.\n",
+        "error_code": "RCH-E100"
+      },
+      {
+        "id": "vmi1167313",
+        "host": "154.12.232.219",
+        "status": "ok",
+        "latency_ms": 258
+      },
+      {
+        "id": "ts2",
+        "host": "192.168.1.124",
+        "status": "ok",
+        "latency_ms": 182
+      },
+      {
+        "id": "yto",
+        "host": "37.187.75.150",
+        "status": "ok",
+        "latency_ms": 297
+      },
+      {
+        "id": "fmd",
+        "host": "51.222.245.56",
+        "status": "ok",
+        "latency_ms": 144
+      }
+    ],
+    "summary": {
+      "total": 11,
+      "healthy": 6,
+      "unhealthy": 0,
+      "failed": 5,
+      "by_error_code": {
+        "RCH-E100": 5
+      }
+    }
+  }
+}

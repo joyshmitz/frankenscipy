@@ -1,0 +1,134 @@
+[RCH] local (no admissible workers: critical_pressure=2,insufficient_slots=3,hard_preflight=3,active_project_exclusion=1)
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.45
+   Compiling autocfg v1.5.0
+   Compiling cfg-if v1.0.4
+   Compiling libc v0.2.185
+   Compiling shlex v1.3.0
+   Compiling find-msvc-tools v0.1.9
+   Compiling getrandom v0.3.4
+   Compiling serde_core v1.0.228
+   Compiling zerocopy v0.8.48
+   Compiling serde v1.0.228
+   Compiling crossbeam-utils v0.8.21
+   Compiling zmij v1.0.21
+   Compiling equivalent v1.0.2
+   Compiling hashbrown v0.17.0
+   Compiling serde_json v1.0.149
+   Compiling memchr v2.8.0
+   Compiling itoa v1.0.18
+   Compiling rustix v1.1.4
+   Compiling rayon-core v1.13.0
+   Compiling bitflags v2.11.1
+   Compiling paste v1.0.15
+   Compiling regex-syntax v0.8.10
+   Compiling bytemuck v1.25.0
+   Compiling linux-raw-sys v0.12.1
+   Compiling either v1.15.0
+   Compiling cpufeatures v0.3.0
+   Compiling arrayref v0.3.9
+   Compiling fastrand v2.4.1
+   Compiling plotters-backend v0.3.7
+   Compiling clap_lex v1.1.0
+   Compiling constant_time_eq v0.4.2
+   Compiling once_cell v1.21.4
+   Compiling anstyle v1.0.14
+   Compiling ciborium-io v0.2.2
+   Compiling arrayvec v0.7.6
+   Compiling quick-error v1.2.3
+   Compiling rawpointer v0.2.1
+   Compiling cast v0.3.0
+   Compiling fnv v1.0.7
+   Compiling bit-vec v0.8.0
+   Compiling same-file v1.0.6
+   Compiling anes v0.1.6
+   Compiling oorandom v11.1.5
+   Compiling unarray v0.1.4
+   Compiling typenum v1.20.0
+   Compiling cc v1.2.60
+   Compiling walkdir v2.5.0
+   Compiling num-traits v0.2.19
+   Compiling matrixmultiply v0.3.10
+   Compiling bit-set v0.8.0
+   Compiling clap_builder v4.6.0
+   Compiling safe_arch v0.7.4
+   Compiling itertools v0.13.0
+   Compiling plotters-svg v0.3.7
+   Compiling wide v0.7.33
+   Compiling crossbeam-epoch v0.9.18
+   Compiling indexmap v2.14.0
+   Compiling syn v2.0.117
+   Compiling crossbeam-deque v0.8.6
+   Compiling blake3 v1.8.4
+   Compiling alloca v0.4.0
+   Compiling approx v0.5.1
+   Compiling num-integer v0.1.46
+   Compiling num-complex v0.4.6
+   Compiling plotters v0.3.7
+   Compiling wait-timeout v0.2.1
+   Compiling page_size v0.6.0
+   Compiling rand_core v0.9.5
+   Compiling num-rational v0.4.2
+   Compiling rand v0.9.4
+   Compiling rand_xorshift v0.4.0
+   Compiling rayon v1.12.0
+   Compiling criterion-plot v0.8.2
+   Compiling regex-automata v0.4.14
+   Compiling tempfile v3.27.0
+   Compiling simba v0.9.1
+   Compiling rusty-fork v0.3.1
+   Compiling clap v4.6.1
+   Compiling zerocopy-derive v0.8.48
+   Compiling serde_derive v1.0.228
+   Compiling nalgebra-macros v0.3.0
+   Compiling regex v1.12.3
+   Compiling fsci-runtime v0.1.0 (/data/projects/frankenscipy/crates/fsci-runtime)
+   Compiling tinytemplate v1.2.1
+   Compiling nalgebra v0.34.2
+   Compiling fsci-fft v0.1.0 (/data/projects/frankenscipy/crates/fsci-fft)
+   Compiling half v2.7.1
+   Compiling ppv-lite86 v0.2.21
+   Compiling ciborium-ll v0.2.2
+   Compiling rand_chacha v0.9.0
+   Compiling ciborium v0.2.2
+   Compiling proptest v1.11.0
+   Compiling criterion v0.8.2
+   Compiling fsci-linalg v0.1.0 (/data/projects/frankenscipy/crates/fsci-linalg)
+    Finished `release` profile [optimized] target(s) in 20.23s
+     Running unittests src/lib.rs (/data/tmp/cargo-target/release/deps/fsci_linalg-c4287c5201a86d5d)
+
+running 1 test
+PUBLIC_SVD_LSTSQ_PINV_GOLDEN_BEGIN
+shape=10x5
+svd_u_shape=10x5
+svd_vt_shape=5x5
+lstsq_rank=5
+pinv_rank=5
+svd_singular[0]=1.81671343615557355e1
+svd_singular[1]=9.59539296539429820e0
+svd_singular[2]=8.49054013337995883e0
+svd_singular[3]=7.40669626898662159e0
+svd_singular[4]=6.31690393103745684e0
+svd_u[0,0]=-2.42806099324348712e-1
+svd_u[3,2]=6.51018396550654632e-1
+svd_u[9,4]=-4.03485250720425001e-2
+svd_vt[0,0]=-3.52304363324795422e-1
+svd_vt[2,3]=6.46736939737380667e-1
+svd_vt[4,1]=4.05404036288105285e-1
+lstsq_x[0]=-7.70342249514460287e-1
+lstsq_x[1]=1.18172950915377184e0
+lstsq_x[2]=-2.32460073618305008e-1
+lstsq_x[3]=1.22132142955469813e0
+lstsq_x[4]=8.32574457527161388e-2
+pinv[0,0]=1.38783677851206211e-1
+pinv[1,7]=8.54144106029376335e-3
+pinv[4,9]=3.25863801033340981e-3
+PUBLIC_SVD_LSTSQ_PINV_GOLDEN_END
+test tests::public_svd_lstsq_pinv_golden_payload ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 396 filtered out; finished in 0.00s
+
