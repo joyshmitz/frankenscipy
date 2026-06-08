@@ -10031,17 +10031,84 @@ fn matmul_flat_compute_rows(
 ) {
     const MR: usize = 4;
     const NR: usize = 8;
+    const NC: usize = NR * 2;
     const RB: usize = 64;
     let mut ib = row_start;
     while ib < row_end {
         let i_limit = (ib + RB).min(row_end);
         let mut j0 = 0;
         while j0 < n {
-            let nr = (n - j0).min(NR);
+            let nr = if n - j0 >= NC { NC } else { (n - j0).min(NR) };
             let mut i0 = ib;
             while i0 < i_limit {
                 let mr = (i_limit - i0).min(MR);
-                if mr == MR && nr == NR {
+                if mr == MR && nr == NC {
+                    let a0_base = i0 * ka;
+                    let a1_base = (i0 + 1) * ka;
+                    let a2_base = (i0 + 2) * ka;
+                    let a3_base = (i0 + 3) * ka;
+                    let mut acc0 = [Simd::<f64, NR>::splat(0.0); MR];
+                    let mut acc1 = [Simd::<f64, NR>::splat(0.0); MR];
+                    let packed_panel0_base = (j0 / NR) * ka * NR;
+                    let packed_panel1_base = packed_panel0_base + ka * NR;
+                    for k in 0..ka {
+                        let a0 = a_flat[a0_base + k];
+                        let a1 = a_flat[a1_base + k];
+                        let a2 = a_flat[a2_base + k];
+                        let a3 = a_flat[a3_base + k];
+                        let b0_base = packed_panel0_base + k * NR;
+                        let b1_base = packed_panel1_base + k * NR;
+                        let b0_vec = Simd::from_array([
+                            packed_b[b0_base],
+                            packed_b[b0_base + 1],
+                            packed_b[b0_base + 2],
+                            packed_b[b0_base + 3],
+                            packed_b[b0_base + 4],
+                            packed_b[b0_base + 5],
+                            packed_b[b0_base + 6],
+                            packed_b[b0_base + 7],
+                        ]);
+                        let b1_vec = Simd::from_array([
+                            packed_b[b1_base],
+                            packed_b[b1_base + 1],
+                            packed_b[b1_base + 2],
+                            packed_b[b1_base + 3],
+                            packed_b[b1_base + 4],
+                            packed_b[b1_base + 5],
+                            packed_b[b1_base + 6],
+                            packed_b[b1_base + 7],
+                        ]);
+                        acc0[0] += Simd::splat(a0) * b0_vec;
+                        acc1[0] += Simd::splat(a0) * b1_vec;
+                        acc0[1] += Simd::splat(a1) * b0_vec;
+                        acc1[1] += Simd::splat(a1) * b1_vec;
+                        acc0[2] += Simd::splat(a2) * b0_vec;
+                        acc1[2] += Simd::splat(a2) * b1_vec;
+                        acc0[3] += Simd::splat(a3) * b0_vec;
+                        acc1[3] += Simd::splat(a3) * b1_vec;
+                    }
+                    for di in 0..MR {
+                        let acc0_row = acc0[di].to_array();
+                        let acc1_row = acc1[di].to_array();
+                        let c_base = (i0 + di - row_start) * n + j0;
+                        out[c_base] = acc0_row[0];
+                        out[c_base + 1] = acc0_row[1];
+                        out[c_base + 2] = acc0_row[2];
+                        out[c_base + 3] = acc0_row[3];
+                        out[c_base + 4] = acc0_row[4];
+                        out[c_base + 5] = acc0_row[5];
+                        out[c_base + 6] = acc0_row[6];
+                        out[c_base + 7] = acc0_row[7];
+                        out[c_base + 8] = acc1_row[0];
+                        out[c_base + 9] = acc1_row[1];
+                        out[c_base + 10] = acc1_row[2];
+                        out[c_base + 11] = acc1_row[3];
+                        out[c_base + 12] = acc1_row[4];
+                        out[c_base + 13] = acc1_row[5];
+                        out[c_base + 14] = acc1_row[6];
+                        out[c_base + 15] = acc1_row[7];
+                    }
+                } else if mr == MR && nr == NR {
                     let a0_base = i0 * ka;
                     let a1_base = (i0 + 1) * ka;
                     let a2_base = (i0 + 2) * ka;
@@ -10096,7 +10163,7 @@ fn matmul_flat_compute_rows(
                 }
                 i0 += MR;
             }
-            j0 += NR;
+            j0 += nr;
         }
         ib += RB;
     }
