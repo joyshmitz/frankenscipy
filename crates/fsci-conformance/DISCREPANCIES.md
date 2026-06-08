@@ -105,27 +105,46 @@ at the bottom for re-evaluation.
 - **Review date:** 2026-04-25
 - **Related beads:** frankenscipy-r8ug, frankenscipy-ljmg
 
-## DISC-NN — fsci-signal firwin2 / remez coefficient divergence
+## DISC-008 — fsci-signal remez least-squares approximation (not Parks-McClellan)
 
-- **Reference:** scipy.signal.firwin2 (frequency-sampling +
-  inverse-FFT + windowing) and scipy.signal.remez (Parks-McClellan
-  exchange).
-- **Our impl:** fsci_signal::firwin2 / remez follow the same
-  algorithm families but reach slightly different numerical results —
-  observed max coefficient diff ~0.05 on canonical lowpass / bandpass
-  designs.
-- **Impact:** P2C-011 fixture cases for firwin2 and remez use
-  `atol = 0.06, rtol = 0.05` per br-7jrx rather than the tight
-  1e-10/1e-9 used for firwin and firls. The qualitative response
-  shape (passband/stopband transitions, ripple) is preserved within
-  usable filter-design margins.
-- **Resolution:** ACCEPTED — tightening requires matching scipy's
-  windowing-application order in firwin2 and Remez exchange
-  numerical refinement details; out of scope for the parity slice.
-- **Tests affected:** P2C-011 firwin2_lp_11_freqsamp,
-  firwin2_bp_15_3band, remez_lp_11_passband_0p2_stopband_0p3,
+- **Reference:** scipy.signal.remez (Parks-McClellan / Remez exchange,
+  equiripple minimax).
+- **Our impl:** fsci_signal::remez is documented in-source as a
+  "Simplified Remez: use frequency-sampling method as approximation" —
+  it solves a *weighted least-squares* fit on the cosine basis, NOT the
+  minimax exchange. Least-squares ≠ minimax, so the coefficients differ
+  from scipy by ~0.02–0.05 on canonical lowpass / bandpass designs
+  (verified vs scipy 1.17.1: remez_lp_11 maxdiff 1.9e-2, remez_bp_15
+  maxdiff 4.5e-2).
+- **Impact:** P2C-011 fixture cases for remez use `atol = 0.06,
+  rtol = 0.05` per br-7jrx. The qualitative response shape is preserved
+  but the equiripple property is not.
+- **Resolution:** ACCEPTED for now — a faithful fix requires replacing
+  the least-squares solve with the actual Parks-McClellan exchange
+  (the equiripple optimum is unique, so a correct port will match scipy
+  to high precision). Tracked as a follow-up.
+- **Tests affected:** P2C-011 remez_lp_11_passband_0p2_stopband_0p3,
   remez_bp_15_3band.
-- **Review date:** 2026-04-25
+- **Review date:** 2026-06-08
+- **Related beads:** frankenscipy-7jrx
+
+## DISC-008a — fsci-signal firwin2 (RESOLVED 2026-06-08)
+
+- **Reference:** scipy.signal.firwin2 (frequency-sampling + inverse-FFT
+  + windowing).
+- **History:** firwin2 previously diverged ~0.05 (under-sampled grid,
+  circular shift instead of a linear-phase ramp, spurious DC
+  normalization). That was fixed (phase-ramp shift + proper
+  `1 + 2^⌈log2(numtaps)⌉` grid + symmetric design window).
+- **Resolution:** RESOLVED — fsci_signal::firwin2 now matches scipy
+  1.17.1 to machine precision on the P2C-011 fixture cases
+  (firwin2_lp_11 maxdiff 2.0e-17, firwin2_bp_15 maxdiff 9.0e-17). The
+  P2C-011 firwin2 fixture tolerances were tightened from
+  `atol/rtol = 0.06/0.05` back to `1e-9/1e-9` to re-arm the gate against
+  regression. The 1e-9 unit test `firwin2_matches_scipy_reference`
+  (51-tap LP, 33-tap BP) already locks the algorithm.
+- **Tests affected:** P2C-011 firwin2_lp_11_freqsamp, firwin2_bp_15_3band.
+- **Review date:** 2026-06-08
 - **Related beads:** frankenscipy-7jrx
 
 ## Stale / needs re-review

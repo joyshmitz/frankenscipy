@@ -1543,8 +1543,8 @@
           8.735313648855714e-18,
           0.0031181655064062026
         ],
-        "atol": 0.06,
-        "rtol": 0.05,
+        "atol": 1e-09,
+        "rtol": 1e-09,
         "contract_ref": "fsci_signal::firwin2"
       }
     },
@@ -1592,8 +1592,8 @@
           0.0015827479748047606,
           0.0
         ],
-        "atol": 0.06,
-        "rtol": 0.05,
+        "atol": 1e-09,
+        "rtol": 1e-09,
         "contract_ref": "fsci_signal::firwin2"
       }
     },
