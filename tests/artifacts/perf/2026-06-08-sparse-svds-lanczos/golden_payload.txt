@@ -1,0 +1,14 @@
+# svds: power-iteration-on-AᵀA -> shared Lanczos/Arnoldi Krylov on AᵀA.
+# Rectangular sparse, planted well-separated singular values (100,88,76,...).
+# Both methods return identical top-k singular values (tolerance-parity);
+# residuals ||A v - σ u|| are machine-level for both.
+#                       time      top3                              max_resid
+# NEW (Lanczos):
+m=2200  n=2000  k=6   1.543ms   [100.000160,87.999995,76.000048]  4.34e-19
+m=8200  n=8000  k=6   6.278ms   [100.000058,88.000156,76.000101]  7.15e-18
+m=20200 n=20000 k=8  14.751ms   [100.000135,88.000032,76.000007]  2.78e-17
+# BASELINE (power iteration):
+m=2200  n=2000  k=6   5.287ms   [100.000160,87.999995,76.000048]  2.78e-17
+m=8200  n=8000  k=6  18.265ms   [100.000058,88.000156,76.000101]  1.39e-17
+m=20200 n=20000 k=8  66.472ms   [100.000135,88.000032,76.000007]  3.47e-18
+# speedup: 3.43x / 2.91x / 4.51x ; singular values identical between methods.

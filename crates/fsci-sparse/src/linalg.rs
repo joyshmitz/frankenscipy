@@ -7636,7 +7636,7 @@ pub fn eigsh(a: &CsrMatrix, k: usize, options: EigsOptions) -> SparseResult<Eigs
     // (pathologically-clustered spectra would need implicit restarts, as in
     // ARPACK — reported honestly via `converged = false` rather than looping).
     let m = (2 * k + 1).max(20).min(n);
-    let mut result = krylov_arnoldi_eigs(a, k, &options, m);
+    let mut result = krylov_arnoldi_eigs(|v| csr_matvec(a, v), n, k, &options, m);
     let (converged, resid_matvec) = eigsh_residual_check(a, &result, options.tol.max(1e-8));
     result.nmatvec += resid_matvec;
     result.converged = converged;
@@ -7693,7 +7693,7 @@ pub fn eigs(a: &CsrMatrix, k: usize, options: EigsOptions) -> SparseResult<EigsR
 
     // Krylov subspace dimension (larger than k for better convergence).
     let m = (2 * k + 1).min(n);
-    Ok(krylov_arnoldi_eigs(a, k, &options, m))
+    Ok(krylov_arnoldi_eigs(|v| csr_matvec(a, v), n, k, &options, m))
 }
 
 /// Shared Arnoldi/Lanczos Krylov eigensolver used by both [`eigs`] (general) and
@@ -7702,8 +7702,13 @@ pub fn eigs(a: &CsrMatrix, k: usize, options: EigsOptions) -> SparseResult<EigsR
 /// Ritz values from the projected upper-Hessenberg matrix `H` (tridiagonal, with
 /// real Ritz values, when `A` is symmetric), and back-transforms the top-`k`-by-
 /// magnitude Ritz vectors into the original space. O(m) matvecs total.
-fn krylov_arnoldi_eigs(a: &CsrMatrix, k: usize, options: &EigsOptions, m: usize) -> EigsResult {
-    let n = a.shape().rows;
+fn krylov_arnoldi_eigs<F: Fn(&[f64]) -> Vec<f64>>(
+    op: F,
+    n: usize,
+    k: usize,
+    options: &EigsOptions,
+    m: usize,
+) -> EigsResult {
     let mut total_matvec = 0;
 
     // Arnoldi iteration: build orthonormal basis V and upper Hessenberg H
@@ -7721,8 +7726,8 @@ fn krylov_arnoldi_eigs(a: &CsrMatrix, k: usize, options: &EigsOptions, m: usize)
 
     let mut actual_m = 0usize;
     for j in 0..m {
-        // w = A * v_j
-        let mut w = csr_matvec(a, &v[j]);
+        // w = op(v_j)  (A·v for eigs/eigsh; AᵀA·v for svds)
+        let mut w = op(&v[j]);
         total_matvec += 1;
 
         // Modified Gram-Schmidt orthogonalization
@@ -7953,98 +7958,39 @@ pub fn svds(a: &CsrMatrix, k: usize, options: EigsOptions) -> SparseResult<SvdsR
     }
     let options = normalize_eigs_options(options);
 
-    // Cache A in CSC once so every per-iteration Aᵀ·w is a byte-identical parallel
-    // column-gather (`csc_matvec`), amortized across the k·max_iter power steps.
+    // Cache A in CSC once so the operator Aᵀ·w is a byte-identical parallel
+    // column-gather (`csc_matvec`), reused across all Krylov steps.
     let a_csc = a.to_csc()?;
 
-    // Compute eigenvalues of A^T A via power iteration
-    // A^T A is n×n symmetric positive semidefinite
+    // The top-k singular values of A are the square roots of the top-k eigenvalues
+    // of the n×n SPSD matrix AᵀA, with right singular vectors = its eigenvectors.
+    // Build the k largest eigenpairs of AᵀA with the shared Lanczos/Arnoldi Krylov
+    // solver (operator v ↦ Aᵀ(A v)) — O(m) operator applications versus the
+    // previous power-iteration-with-deflation's O(k·max_iter). For a well-separated
+    // spectrum a single subspace of max(2k+1, 20) resolves the extremes.
+    let ncv = (2 * k + 1).max(20).min(n);
+    let ata_op = |v: &[f64]| csc_matvec(&a_csc, &csr_matvec(a, v));
+    let eig = krylov_arnoldi_eigs(ata_op, n, k, &options, ncv);
+
     let mut singular_values = Vec::with_capacity(k);
     let mut v_vecs: Vec<Vec<f64>> = Vec::with_capacity(k);
     let mut u_vecs: Vec<Vec<f64>> = Vec::with_capacity(k);
 
-    for _eig_idx in 0..k {
-        // Power iteration for largest eigenvalue of A^T A
-        // Use LCG-seeded random initialization (same rationale as eigsh br-oyy7:
-        // uniform initial vectors can be orthogonal to dominant eigenvectors
-        // on structured matrices).
-        let mut v = vec![0.0f64; n];
-        let mut rng_state: u64 = 0x9e3779b97f4a7c15;
-        for vi in v.iter_mut() {
-            rng_state = rng_state
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
-            let u = ((rng_state >> 11) as f64) / (1u64 << 53) as f64;
-            *vi = u - 0.5;
-        }
-        let v_norm = vec_norm(&v);
-        if v_norm > 0.0 {
-            for vi in &mut v {
-                *vi /= v_norm;
-            }
-        }
-
-        let mut sigma_sq = 0.0;
-        let mut converged = false;
-
-        for iter in 0..options.max_iter {
-            // w = A * v
-            let w = csr_matvec(a, &v);
-            // v_new = A^T * w = A^T A v
-            let mut v_new = csc_matvec(&a_csc, &w);
-
-            // Deflate: orthogonalize against previous eigenvectors
-            for prev in &v_vecs {
-                let proj = dot_product(&v_new, prev);
-                for (vni, pi) in v_new.iter_mut().zip(prev.iter()) {
-                    *vni -= proj * pi;
-                }
-            }
-
-            // Rayleigh quotient: σ² = v^T (A^T A v)
-            let new_sigma_sq = dot_product(&v, &v_new);
-            let v_new_norm = vec_norm(&v_new);
-            if v_new_norm < f64::EPSILON * 1e6 {
-                sigma_sq = new_sigma_sq;
-                converged = true;
-                break;
-            }
-
-            for vi in &mut v_new {
-                *vi /= v_new_norm;
-            }
-
-            // Skip convergence check on first iteration
-            if iter > 0
-                && (new_sigma_sq - sigma_sq).abs() < options.tol * new_sigma_sq.abs().max(1.0)
-            {
-                converged = true;
-                sigma_sq = new_sigma_sq;
-                v = v_new;
-                break;
-            }
-
-            sigma_sq = new_sigma_sq;
-            v = v_new;
-        }
-
-        let sigma = sigma_sq.abs().sqrt();
+    for (eigenvalue, v) in eig.eigenvalues.iter().zip(eig.eigenvectors.iter()) {
+        // Eigenvalues of AᵀA are non-negative; clamp tiny negatives from rounding.
+        let sigma = eigenvalue.max(0.0).sqrt();
         singular_values.push(sigma);
         v_vecs.push(v.clone());
 
-        // Compute left singular vector: u = A v / sigma
+        // Left singular vector: u = A v / σ.
         if sigma > f64::EPSILON * 1e6 {
-            let mut u = csr_matvec(a, &v);
+            let mut u = csr_matvec(a, v);
             for ui in &mut u {
                 *ui /= sigma;
             }
             u_vecs.push(u);
         } else {
             u_vecs.push(vec![0.0; m]);
-        }
-
-        if !converged {
-            break;
         }
     }
 
