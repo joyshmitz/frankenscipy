@@ -1860,6 +1860,112 @@ fn read_idl_string_data(reader: &mut IdlReader<'_>, context: &str) -> Result<Vec
 ///
 /// Like `numpy.loadtxt`.
 pub fn loadtxt(content: &str) -> Result<(usize, usize, Vec<f64>), IoError> {
+    // Parsing `split_whitespace().parse::<f64>()` for every field dominates loadtxt on
+    // large numeric files. Each data line maps to its own contiguous output row with no
+    // cross-line state (the only shared value is `cols`, fixed by the first data row), so
+    // the lines parse independently. We split the line list into contiguous chunks, parse
+    // each on its own core into a local buffer, and concatenate the buffers in chunk order
+    // — byte-identical to the serial loop (same deterministic f64 parse, same row order,
+    // same `cols`). Any malformed input (parse error or column mismatch) falls back to the
+    // exact serial loop so the returned error — message and order — is unchanged.
+    let lines: Vec<&str> = content.lines().collect();
+
+    // `cols` is set by the first non-comment line, exactly as the serial loop does.
+    let mut cols = 0usize;
+    let mut have_data = false;
+    for line in &lines {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with('%') {
+            continue;
+        }
+        cols = trimmed.split_whitespace().count();
+        have_data = true;
+        break;
+    }
+    if !have_data {
+        return Ok((0, 0, Vec::new()));
+    }
+
+    let nthreads = if lines.len() < 4096 {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(lines.len() / 2048)
+            .max(1)
+    };
+    if nthreads <= 1 {
+        return loadtxt_serial(content);
+    }
+
+    // Parse one contiguous chunk of lines into (data_rows, values), or signal that the
+    // input is malformed (so the caller replays the serial path for the exact error).
+    let parse_chunk = |chunk: &[&str]| -> Option<(usize, Vec<f64>)> {
+        let mut local = Vec::new();
+        let mut r = 0usize;
+        for line in chunk {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with('%') {
+                continue;
+            }
+            let mut count = 0usize;
+            for s in trimmed.split_whitespace() {
+                match s.parse::<f64>() {
+                    Ok(v) => local.push(v),
+                    Err(_) => return None,
+                }
+                count += 1;
+            }
+            if count != cols {
+                return None;
+            }
+            r += 1;
+        }
+        Some((r, local))
+    };
+
+    let chunk = lines.len().div_ceil(nthreads);
+    let parse_chunk = &parse_chunk;
+    let lines_ref = &lines;
+    let chunk_results: Vec<Option<(usize, Vec<f64>)>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..nthreads)
+            .filter_map(|t| {
+                let i0 = t * chunk;
+                if i0 >= lines_ref.len() {
+                    return None;
+                }
+                let i1 = (i0 + chunk).min(lines_ref.len());
+                Some(scope.spawn(move || parse_chunk(&lines_ref[i0..i1])))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().expect("loadtxt worker panicked"))
+            .collect()
+    });
+
+    if chunk_results.iter().any(Option::is_none) {
+        // Malformed input — replay the serial loop to reproduce the exact error.
+        return loadtxt_serial(content);
+    }
+
+    let mut rows = 0usize;
+    let total: usize = chunk_results
+        .iter()
+        .map(|c| c.as_ref().map_or(0, |(_, v)| v.len()))
+        .sum();
+    let mut data = Vec::with_capacity(total);
+    for c in chunk_results {
+        let (r, v) = c.expect("none handled above");
+        rows += r;
+        data.extend_from_slice(&v);
+    }
+    Ok((rows, cols, data))
+}
+
+/// Exact serial loadtxt — the byte-identical reference and the malformed-input fallback.
+fn loadtxt_serial(content: &str) -> Result<(usize, usize, Vec<f64>), IoError> {
     let mut data = Vec::new();
     let mut cols = 0usize;
     let mut rows = 0usize;

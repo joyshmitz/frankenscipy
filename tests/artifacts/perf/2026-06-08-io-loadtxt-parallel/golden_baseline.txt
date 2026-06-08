@@ -1,0 +1,4 @@
+GOLDEN (serial == parallel, bit-identical parsed data):
+req=(100x5) rows=100 cols=5 data_xor_bits=ce6022f13851dae2
+req=(5000x8) rows=5000 cols=8 data_xor_bits=73b58002977bfaba
+req=(20000x3) rows=20000 cols=3 data_xor_bits=43f8da462520568f
