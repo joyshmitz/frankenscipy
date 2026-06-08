@@ -362,28 +362,28 @@ fn gammainc_dispatch(
                 gammaincc_scalar(*a_val, *x_val, mode).map(SpecialTensor::RealScalar)
             }
         }
-        (SpecialTensor::RealVec(a_vec), SpecialTensor::RealScalar(x_val)) => a_vec
-            .iter()
-            .map(|&a_val| {
+        (SpecialTensor::RealVec(a_vec), SpecialTensor::RealScalar(x_val)) => {
+            let x_val = *x_val;
+            par_map_indices(a_vec.len(), |i| {
                 if lower {
-                    gammainc_scalar(a_val, *x_val, mode)
+                    gammainc_scalar(a_vec[i], x_val, mode)
                 } else {
-                    gammaincc_scalar(a_val, *x_val, mode)
+                    gammaincc_scalar(a_vec[i], x_val, mode)
                 }
             })
-            .collect::<Result<Vec<_>, _>>()
-            .map(SpecialTensor::RealVec),
-        (SpecialTensor::RealScalar(a_val), SpecialTensor::RealVec(x_vec)) => x_vec
-            .iter()
-            .map(|&x_val| {
+            .map(SpecialTensor::RealVec)
+        }
+        (SpecialTensor::RealScalar(a_val), SpecialTensor::RealVec(x_vec)) => {
+            let a_val = *a_val;
+            par_map_indices(x_vec.len(), |i| {
                 if lower {
-                    gammainc_scalar(*a_val, x_val, mode)
+                    gammainc_scalar(a_val, x_vec[i], mode)
                 } else {
-                    gammaincc_scalar(*a_val, x_val, mode)
+                    gammaincc_scalar(a_val, x_vec[i], mode)
                 }
             })
-            .collect::<Result<Vec<_>, _>>()
-            .map(SpecialTensor::RealVec),
+            .map(SpecialTensor::RealVec)
+        }
         (SpecialTensor::RealVec(a_vec), SpecialTensor::RealVec(x_vec)) => {
             if a_vec.len() != x_vec.len() {
                 return Err(SpecialError {
@@ -393,18 +393,14 @@ fn gammainc_dispatch(
                     detail: "vector inputs must have matching lengths",
                 });
             }
-            a_vec
-                .iter()
-                .zip(x_vec.iter())
-                .map(|(&a_val, &x_val)| {
-                    if lower {
-                        gammainc_scalar(a_val, x_val, mode)
-                    } else {
-                        gammaincc_scalar(a_val, x_val, mode)
-                    }
-                })
-                .collect::<Result<Vec<_>, _>>()
-                .map(SpecialTensor::RealVec)
+            par_map_indices(a_vec.len(), |i| {
+                if lower {
+                    gammainc_scalar(a_vec[i], x_vec[i], mode)
+                } else {
+                    gammaincc_scalar(a_vec[i], x_vec[i], mode)
+                }
+            })
+            .map(SpecialTensor::RealVec)
         }
         // Real a, complex x cases
         (SpecialTensor::RealScalar(a_val), SpecialTensor::ComplexScalar(x_val)) => {
