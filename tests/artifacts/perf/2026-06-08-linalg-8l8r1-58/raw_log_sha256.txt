@@ -1,0 +1,3 @@
+0c3c43dfd719cef5caeb6425c0b58d39077f6bfe8daea9eaeabe2b3f388b4a89  tests/artifacts/perf/2026-06-08-linalg-8l8r1-58/baseline_bidiag_large_reduction_perf_probe_rch.txt
+f1b1a9a073a4dad1b98e087b5ee7eb84fbe3cfede7d75cc7666c14c328782abc  tests/artifacts/perf/2026-06-08-linalg-8l8r1-58/baseline_public_bidiag_svd_route_perf_probe_rch.txt
+624317f66c02da390e11819badcc352121f075b889d09c181baa845cc485fd30  tests/artifacts/perf/2026-06-08-linalg-8l8r1-58/public_svd_lstsq_pinv_golden_payload_rch.txt

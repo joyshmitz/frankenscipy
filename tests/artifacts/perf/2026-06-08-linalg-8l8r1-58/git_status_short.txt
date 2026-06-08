@@ -1,0 +1,25 @@
+ M .beads/issues.jsonl
+ M crates/fsci-conformance/fixtures/artifacts/FSCI-P2C-015/differential/parity_report.raptorq.json
+?? tests/artifacts/perf/2026-06-07-linalg-bidiag-specialized-backend/proof_public_tridiagonal_qr_route_rch.txt
+?? tests/artifacts/perf/2026-06-07-linalg-bidiag-specialized-backend/proof_tridiagonal_qr_route_rch.txt
+?? tests/artifacts/perf/2026-06-07-linalg-bidiag-specialized-backend/ubs_linalg_tridiagonal_qr.txt
+?? tests/artifacts/perf/2026-06-07-linalg-eigh-tridiag-vectors/baseline_hyperfine_repro_rch.txt
+?? tests/artifacts/perf/2026-06-07-linalg-qxuhx-block-reflector/ab_parallel_left_replay_rch.txt
+?? tests/artifacts/perf/2026-06-07-linalg-qxuhx-block-reflector/after_factor_replay_rch.txt
+?? tests/artifacts/perf/2026-06-07-linalg-qxuhx-block-reflector/check_fsci_linalg_rch.txt
+?? tests/artifacts/perf/2026-06-07-linalg-qxuhx-block-reflector/clippy_fsci_linalg_no_deps_rch.txt
+?? tests/artifacts/perf/2026-06-07-linalg-qxuhx-block-reflector/clippy_fsci_linalg_rch.txt
+?? tests/artifacts/perf/2026-06-07-linalg-qxuhx-block-reflector/proof_parallel_left_bits_rch.txt
+?? tests/artifacts/perf/2026-06-07-linalg-qxuhx-block-reflector/proof_public_golden_rch.txt
+?? tests/artifacts/perf/2026-06-07-linalg-qxuhx-block-reflector/ubs_linalg_parallel_left.txt
+?? tests/artifacts/perf/2026-06-07-spatial-halfspace-nd/clippy_fsci_spatial_rch.txt
+?? tests/artifacts/perf/2026-06-07-spatial-halfspace-nd/fmt_fsci_spatial_check_local.txt
+?? tests/artifacts/perf/2026-06-08-linalg-8l8r1-58/
+?? tests/artifacts/perf/2026-06-08-linalg-gk-micropanel/
+?? tests/artifacts/perf/2026-06-08-linalg-reprofile-after-eigh-vectors/
+?? tests/artifacts/perf/2026-06-08-linalg-svd-core-followup/phase_split_extract.txt
+?? tests/artifacts/perf/2026-06-08-linalg-svd-core-followup/public_bidiag_svd_route_perf_probe_rch.txt
+?? tests/artifacts/perf/2026-06-08-linalg-svd-core-followup/state_and_baseline_extract.txt
+?? tests/artifacts/perf/2026-06-08-linalg-svd-core-followup/thin_bidiag_factor_replay_perf_probe_fmd_retry_rch.txt
+?? tests/artifacts/perf/2026-06-08-linalg-svd-core-followup/thin_bidiag_factor_replay_perf_probe_rch.txt
+?? tests/artifacts/perf/2026-06-08-linalg-tsqr-svd-route/
