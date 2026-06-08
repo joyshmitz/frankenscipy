@@ -1206,6 +1206,91 @@ pub fn gammaincc_scalar(a: f64, x: f64, mode: RuntimeMode) -> Result<f64, Specia
 /// Domain: `a > 0`, `x >= 0`. Returns `NaN` for invalid `a`/`x`, `0.0` at
 /// `x = 0` (`Q = 1`), and `-inf` at `x = +inf` (`Q = 0`).
 #[must_use]
+/// Natural log of the regularized lower incomplete gamma function `P(a, x)`.
+///
+/// `ln P(a, x)` stays finite deep in the left tail where `P` itself underflows
+/// to 0 (so `gammainc_scalar(a, x).ln()` would be `-inf`). In the
+/// lower-dominant region (`x < a + 1`) `P = prefactor * sum`, where
+/// `prefactor = exp(-x + a*ln x - lnΓ(a))` underflows but the series `sum`
+/// (starting at `1/a`) is `O(1)`; computing
+/// `ln P = (-x + a*ln x - lnΓ(a)) + ln(sum)` keeps full precision. In the
+/// upper-dominant region (`x >= a + 1`) `P` is `O(1)`, so it is formed as
+/// `1 - Q` (Q from the continued fraction) and `ln P = ln1p(-Q)`. Matches
+/// `gammainc_scalar(a, x).ln()` wherever the latter is representable.
+///
+/// Domain: `a > 0`, `x >= 0`. Returns `NaN` for invalid `a`/`x`, `-inf` at
+/// `x = 0` (`P = 0`), and `0.0` at `x = +inf` (`P = 1`).
+#[must_use]
+pub fn log_gammainc_scalar(a: f64, x: f64) -> f64 {
+    if a.is_nan() || x.is_nan() {
+        return f64::NAN;
+    }
+    if !a.is_finite() || a <= 0.0 || x < 0.0 {
+        return f64::NAN;
+    }
+    if x == 0.0 {
+        return f64::NEG_INFINITY;
+    }
+    if x.is_infinite() {
+        return 0.0;
+    }
+
+    const EPS: f64 = 1.0e-14;
+    const MAX_ITERS: usize = 200;
+    const FPMIN: f64 = 1.0e-300;
+
+    let lg = match gammaln_scalar(a, RuntimeMode::Strict) {
+        Ok(v) => v,
+        Err(_) => return f64::NAN,
+    };
+    let log_prefactor = -x + a * x.ln() - lg;
+
+    if x < a + 1.0 {
+        // Lower-tail series. `sum` is O(1/a), so the log form stays finite even
+        // when P = prefactor * sum underflows to 0 in the left tail.
+        let mut ap = a;
+        let mut term = 1.0 / a;
+        let mut sum = term;
+        for _ in 0..MAX_ITERS {
+            ap += 1.0;
+            term *= x / ap;
+            sum += term;
+            if term.abs() <= sum.abs() * EPS {
+                break;
+            }
+        }
+        log_prefactor + sum.ln()
+    } else {
+        // Upper-dominant region: P is O(1); form Q via the continued fraction
+        // and return ln(1 - Q) = ln1p(-Q).
+        let mut b = x + 1.0 - a;
+        let mut c = 1.0 / FPMIN;
+        let mut d = 1.0 / b;
+        let mut h = d;
+        for i in 1..=MAX_ITERS {
+            let i_f = i as f64;
+            let an = -i_f * (i_f - a);
+            b += 2.0;
+            d = an * d + b;
+            if d.abs() < FPMIN {
+                d = FPMIN;
+            }
+            c = b + an / c;
+            if c.abs() < FPMIN {
+                c = FPMIN;
+            }
+            d = 1.0 / d;
+            let delta = d * c;
+            h *= delta;
+            if (delta - 1.0).abs() <= EPS {
+                break;
+            }
+        }
+        let q = (log_prefactor.exp() * h).clamp(0.0, 1.0);
+        (-q).ln_1p()
+    }
+}
+
 pub fn log_gammaincc_scalar(a: f64, x: f64) -> f64 {
     if a.is_nan() || x.is_nan() {
         return f64::NAN;
@@ -2772,6 +2857,58 @@ fn complex_parameter_gammaincc_cf(a: Complex64, z: Complex64) -> Result<Complex6
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn log_gammainc_matches_gammainc_where_representable() {
+        // exp(log P) == P wherever P is representable (gammainc_scalar is the
+        // scipy-validated reference). Covers both branches (x<a+1 and x>=a+1).
+        let cases = [
+            (2.0, 1.0),
+            (2.0, 5.0),
+            (0.5, 0.3),
+            (5.0, 3.0),
+            (5.0, 12.0),
+            (10.0, 8.0),
+            (3.0, 0.5),
+        ];
+        for (a, x) in cases {
+            let p = gammainc_scalar(a, x, RuntimeMode::Strict).unwrap();
+            let lp = log_gammainc_scalar(a, x);
+            assert!(p > 0.0, "precondition: P representable for ({a},{x})");
+            let rel = (lp - p.ln()).abs() / p.ln().abs().max(1.0);
+            assert!(rel <= 1e-12, "log_gammainc({a},{x})={lp} vs ln(P)={}", p.ln());
+        }
+    }
+
+    #[test]
+    fn log_gammainc_finite_in_underflowed_left_tail() {
+        // Deep left tail: P underflows to 0 (needs ln P < ~-745) but log P must
+        // stay finite and track a*ln x - lnΓ(a+1) for tiny x.
+        for (a, x) in [(10.0, 1e-35), (5.0, 1e-160), (20.0, 1e-20)] {
+            assert_eq!(
+                gammainc_scalar(a, x, RuntimeMode::Strict).unwrap(),
+                0.0,
+                "precondition: P underflows for ({a},{x})"
+            );
+            let lp = log_gammainc_scalar(a, x);
+            assert!(lp.is_finite() && lp < -100.0, "log P({a},{x})={lp} not finite");
+            // P ≈ x^a / Γ(a+1) ⇒ ln P ≈ a·ln x − lnΓ(a+1).
+            let asymp = a * x.ln() - gammaln_scalar(a + 1.0, RuntimeMode::Strict).unwrap();
+            assert!(
+                (lp - asymp).abs() / asymp.abs() < 1e-2,
+                "log P({a},{x})={lp} vs asymptotic {asymp}"
+            );
+        }
+    }
+
+    #[test]
+    fn log_gammainc_edge_cases() {
+        assert_eq!(log_gammainc_scalar(2.0, 0.0), f64::NEG_INFINITY); // P(a,0)=0
+        assert_eq!(log_gammainc_scalar(2.0, f64::INFINITY), 0.0); // P(a,inf)=1
+        assert!(log_gammainc_scalar(-1.0, 2.0).is_nan());
+        assert!(log_gammainc_scalar(2.0, f64::NAN).is_nan());
+        assert!(log_gammainc_scalar(0.0, 2.0).is_nan());
+    }
 
     #[test]
     fn log_gammaincc_matches_gammaincc_where_representable() {
