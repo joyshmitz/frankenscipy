@@ -8552,6 +8552,32 @@ impl ContinuousDistribution for Pearson3 {
         }
     }
 
+    fn sf(&self, x: f64) -> f64 {
+        // Survival mirrors the gamma-tail cdf branches but uses the
+        // complementary regularized gamma so the far tail stays accurate
+        // instead of collapsing under 1−cdf. frankenscipy-w3f6m
+        const NORMAL_TRANSITION: f64 = 1.6e-5;
+        let skew = self.skew;
+        if skew.abs() < NORMAL_TRANSITION {
+            return 0.5 * fsci_special::erfc_scalar(x * FRAC_1_SQRT_2);
+        }
+        let beta = 2.0 / skew;
+        let alpha = beta * beta;
+        let zeta = -beta;
+        let transx = beta * (x - zeta);
+        if skew > 0.0 {
+            if transx <= 0.0 {
+                1.0
+            } else {
+                upper_regularized_gamma(alpha, transx)
+            }
+        } else if transx <= 0.0 {
+            0.0
+        } else {
+            lower_regularized_gamma(alpha, transx)
+        }
+    }
+
     fn ppf(&self, q: f64) -> f64 {
         const NORMAL_TRANSITION: f64 = 1.6e-5;
         if !(0.0..=1.0).contains(&q) {
@@ -8840,6 +8866,12 @@ impl ContinuousDistribution for PowerNorm {
 
     fn cdf(&self, x: f64) -> f64 {
         -self.log_sf(x).exp_m1()
+    }
+
+    fn sf(&self, x: f64) -> f64 {
+        // cdf = −expm1(log_sf), so sf = exp(log_sf) directly — keeps the right
+        // tail accurate where the default 1−cdf collapses to 0. frankenscipy-w3f6m
+        self.log_sf(x).exp()
     }
 
     fn ppf(&self, q: f64) -> f64 {
@@ -9174,6 +9206,13 @@ impl ContinuousDistribution for JohnsonSU {
 
     fn cdf(&self, x: f64) -> f64 {
         standard_normal_cdf(self.a + self.b * x.asinh())
+    }
+
+    fn sf(&self, x: f64) -> f64 {
+        // sf = Φ(−(a+b·asinh x)) = ½·erfc((a+b·asinh x)/√2); direct so the right
+        // tail does not collapse like the default 1−cdf. frankenscipy-w3f6m
+        let z = self.a + self.b * x.asinh();
+        0.5 * fsci_special::erfc_scalar(z * FRAC_1_SQRT_2)
     }
 
     fn ppf(&self, q: f64) -> f64 {
@@ -9847,6 +9886,18 @@ impl ContinuousDistribution for PowerLaw {
         } else {
             x.powf(self.a)
         }
+    }
+
+    fn sf(&self, x: f64) -> f64 {
+        // sf = 1 − x^a = −expm1(a·ln x) on (0,1); stable near the upper edge
+        // x→1 where the literal 1 − x^a underflows. frankenscipy-w3f6m
+        if x <= 0.0 {
+            return 1.0;
+        }
+        if x >= 1.0 {
+            return 0.0;
+        }
+        -(self.a * x.ln()).exp_m1()
     }
 
     fn ppf(&self, q: f64) -> f64 {
@@ -11629,6 +11680,17 @@ impl ContinuousDistribution for DoubleWeibull {
         }
     }
 
+    fn sf(&self, x: f64) -> f64 {
+        // x≥0: sf = ½·exp(−x^c) directly (the default 1−cdf collapses in the
+        // right tail); x<0: 1 − ½·exp(−(−x)^c) by symmetry. frankenscipy-w3f6m
+        let c = self.c;
+        if x < 0.0 {
+            1.0 - 0.5 * (-(-x).powf(c)).exp()
+        } else {
+            0.5 * (-x.powf(c)).exp()
+        }
+    }
+
     fn ppf(&self, q: f64) -> f64 {
         if !(0.0..=1.0).contains(&q) {
             return f64::NAN;
@@ -11894,6 +11956,13 @@ impl ContinuousDistribution for SkewNorm {
         // outside [0, 1] — clamp to match scipy's np.clip(cdf, 0, 1).
         // Resolves [frankenscipy-r7dbb] (fuzz finding eb2vm).
         let raw = standard_normal_cdf(x) - 2.0 * fsci_special::owens_t_scalar(x, self.a);
+        raw.clamp(0.0, 1.0)
+    }
+
+    fn sf(&self, x: f64) -> f64 {
+        // sf = 1 − [Φ(x) − 2T(x,a)] = Φ(−x) + 2T(x,a); both terms vanish directly
+        // in the right tail instead of the default 1−cdf collapsing. frankenscipy-w3f6m
+        let raw = standard_normal_cdf(-x) + 2.0 * fsci_special::owens_t_scalar(x, self.a);
         raw.clamp(0.0, 1.0)
     }
 
@@ -16942,6 +17011,17 @@ impl ContinuousDistribution for LaplaceAsymmetric {
         }
     }
 
+    fn sf(&self, x: f64) -> f64 {
+        // x≥0: sf = exp(−xκ)/(1+κ²) directly — the exponential tail no longer
+        // collapses under 1−cdf; x<0: 1 − κ²/(1+κ²)·exp(x/κ). frankenscipy-w3f6m
+        let k = self.kappa;
+        if x >= 0.0 {
+            (-x * k).exp() / (1.0 + k * k)
+        } else {
+            1.0 - k * k / (1.0 + k * k) * (x / k).exp()
+        }
+    }
+
     fn mean(&self) -> f64 {
         1.0 / self.kappa - self.kappa
     }
@@ -17074,6 +17154,20 @@ impl ContinuousDistribution for Kappa3 {
         // above 1. Caught by [frankenscipy-4397j] fuzz at
         // (a=19, x≈66) → 1.0 + 2e-16.
         (x * (a + xa).powf(-1.0 / a)).clamp(0.0, 1.0)
+    }
+
+    fn sf(&self, x: f64) -> f64 {
+        // cdf = x·(a+x^a)^{-1/a} ≡ (1+a·x^{-a})^{-1/a}, so
+        // sf = 1 − (1+a·x^{-a})^{-1/a} = −expm1(−(1/a)·ln1p(a·x^{-a})) — stable in
+        // the right tail where the default 1−cdf collapses. frankenscipy-w3f6m
+        if x <= 0.0 {
+            return 1.0;
+        }
+        if !x.is_finite() {
+            return 0.0;
+        }
+        let a = self.a;
+        -(-(1.0 / a) * (a * x.powf(-a)).ln_1p()).exp_m1()
     }
 
     fn ppf(&self, q: f64) -> f64 {
@@ -38378,6 +38472,62 @@ mod tests {
         tail!(HalfGenNorm::new(1.5), 20.0, 1e-30); // Q(2/3, 20^1.5)
         tail!(LogGamma::new(2.0), 5.0, 1e-30); // Q(2, e^5) ≈ 2e-63
         tail!(BetaPrime::new(2.0, 3.0), 1e6, 1e-15); // I_{1e-6}(3,2) ≈ 4e-18
+    }
+
+    #[test]
+    fn sf_overrides_batch4_consistent_with_one_minus_cdf() {
+        // Each new sf() must equal 1 − cdf wherever cdf is not pinned at 1
+        // (frankenscipy-w3f6m).
+        macro_rules! chk {
+            ($d:expr, $xs:expr) => {{
+                let d = $d;
+                for &x in $xs {
+                    let s = d.sf(x);
+                    let oc = 1.0 - d.cdf(x);
+                    assert!(
+                        (s - oc).abs() <= 1e-11 * oc.abs().max(1e-11) + 1e-13,
+                        "{}: sf({x})={s} vs 1-cdf={oc}",
+                        stringify!($d)
+                    );
+                }
+            }};
+        }
+        chk!(JohnsonSU::new(0.5, 1.5), &[-2.0, 0.5, 3.0]);
+        chk!(Pearson3::new(0.8), &[-1.0, 0.5, 2.0]);
+        chk!(Pearson3::new(-0.8), &[-2.0, -0.5, 1.0]);
+        chk!(PowerNorm::new(2.0), &[-1.0, 0.5, 2.0]);
+        chk!(PowerLognorm::new(2.0, 1.0), &[0.3, 1.0, 3.0]);
+        chk!(PowerLaw::new(2.5), &[0.2, 0.5, 0.9]);
+        chk!(SkewNorm::new(3.0), &[-1.5, 0.5, 2.0]);
+        chk!(Kappa3::new(2.0), &[0.5, 1.0, 3.0]);
+        chk!(LaplaceAsymmetric::new(1.5), &[-2.0, 0.5, 2.0]);
+        chk!(DoubleWeibull::new(2.0), &[-1.5, 0.5, 2.0]);
+    }
+
+    #[test]
+    fn sf_overrides_batch4_tail_does_not_collapse() {
+        // Deep in the tail the default 1 − cdf returns 0; closed-form sf stays
+        // positive and at the right magnitude (frankenscipy-w3f6m).
+        macro_rules! tail {
+            ($d:expr, $x:expr, $upper:expr) => {{
+                let s = ($d).sf($x);
+                assert!(
+                    s > 0.0 && s < $upper,
+                    "{}: tail sf({})={s} (collapsed or too large)",
+                    stringify!($d),
+                    $x
+                );
+            }};
+        }
+        tail!(JohnsonSU::new(0.5, 1.5), 1e7, 1e-30); // Φ(−(0.5+1.5·asinh 1e7))
+        tail!(Pearson3::new(0.8), 40.0, 1e-12); // Q(6.25, β(x−ζ)) deep tail
+        tail!(PowerNorm::new(2.0), 9.0, 1e-15); // exp(log_sf(9)) ≈ 2Φ(−9) tiny
+        tail!(PowerLognorm::new(2.0, 1.0), 1e6, 1e-12); // Φ(−ln x)^2
+        tail!(PowerLaw::new(2.5), 0.999_999_999, 1e-8); // 1−x^2.5 near 1
+        tail!(SkewNorm::new(3.0), 10.0, 1e-20); // Φ(−10)+2T(10,3)
+        tail!(Kappa3::new(2.0), 1e8, 1e-14); // (1/2)·2·x^-2 ≈ x^-2 = 1e-16
+        tail!(LaplaceAsymmetric::new(1.5), 60.0, 1e-30); // e^-90/(1+2.25)
+        tail!(DoubleWeibull::new(2.0), 9.0, 1e-30); // ½ e^-81
     }
 
     // ── Exponential distribution ────────────────────────────────────
