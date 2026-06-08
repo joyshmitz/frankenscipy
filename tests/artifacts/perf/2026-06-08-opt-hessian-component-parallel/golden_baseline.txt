@@ -1,0 +1,9 @@
+GOLDEN (serial baseline == parallel NEW; bit-identical):
+===GOLDEN_PAYLOAD_BEGIN===
+n=4 ddf_xor_bits=db5d13c07d7531a4 nfev=161 nit=5 success=true status=Converged
+n=12 ddf_xor_bits=15e1344f3b48a201 nfev=1445 nit=6 success=true status=Converged
+n=30 ddf_xor_bits=377d7eee32fbefb2 nfev=9097 nit=6 success=true status=Converged
+===GOLDEN_PAYLOAD_END===
+n=40   179.333ms/call (acc=-194.842740)
+n=70      1.680s/call (acc=-349.200717)
+n=100      8.129s/call (acc=-501.943844)

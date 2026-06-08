@@ -3321,7 +3321,7 @@ where
 /// returns a symmetric Hessian matrix.
 pub fn hessian<F>(f: F, x: &[f64], options: DifferentiateOptions) -> Result<HessianResult, OptError>
 where
-    F: Fn(&[f64]) -> f64,
+    F: Fn(&[f64]) -> f64 + Sync,
 {
     validate_differentiate_input(x)?;
     let order = validate_differentiate_options(options)?;
@@ -3335,18 +3335,67 @@ where
     let mut nit = 0;
     let mut nfev = 1;
 
-    for row in 0..n {
-        for column in row..n {
-            let result = adaptive_hessian_component(&f, x, f0, row, column, options, order)?;
-            ddf[row][column] = result.df;
-            ddf[column][row] = result.df;
-            error[row][column] = result.error;
-            error[column][row] = result.error;
-            success &= result.success;
-            status = merge_differentiate_status(status, result.status);
-            nit = nit.max(result.nit);
-            nfev += result.nfev;
-        }
+    // Each upper-triangle entry (row, column) is an independent adaptive
+    // finite-difference / Richardson estimate that only reads `f`, `x`, `f0` — no
+    // shared mutable state — so the components run on disjoint cores. The results
+    // are then folded back in the original (row, column) order, so every reduction
+    // is order-preserving: `ddf`/`error` writes land in disjoint cells, `nfev` is an
+    // exact integer sum, `nit`/`success`/`status` are max / AND / precedence-merge
+    // (all commutative). The result is therefore bit-identical to the sequential
+    // double loop, and an error is propagated from the first failing pair in the
+    // same order the serial code would have hit it.
+    let pairs: Vec<(usize, usize)> = (0..n)
+        .flat_map(|row| (row..n).map(move |column| (row, column)))
+        .collect();
+    let compute = |&(row, column): &(usize, usize)| -> Result<DerivativeResult, OptError> {
+        adaptive_hessian_component(&f, x, f0, row, column, options, order)
+    };
+
+    let nthreads = if pairs.len() < 16 {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(pairs.len() / 2)
+            .max(1)
+    };
+    let results: Vec<Result<DerivativeResult, OptError>> = if nthreads <= 1 {
+        pairs.iter().map(compute).collect()
+    } else {
+        let chunk = pairs.len().div_ceil(nthreads);
+        let compute = &compute;
+        let pairs_ref = &pairs;
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..nthreads)
+                .filter_map(|t| {
+                    let i0 = t * chunk;
+                    if i0 >= pairs_ref.len() {
+                        return None;
+                    }
+                    let i1 = (i0 + chunk).min(pairs_ref.len());
+                    Some(scope.spawn(move || {
+                        pairs_ref[i0..i1].iter().map(compute).collect::<Vec<_>>()
+                    }))
+                })
+                .collect();
+            handles
+                .into_iter()
+                .flat_map(|h| h.join().expect("hessian worker panicked"))
+                .collect()
+        })
+    };
+
+    for (&(row, column), res) in pairs.iter().zip(results) {
+        let result = res?;
+        ddf[row][column] = result.df;
+        ddf[column][row] = result.df;
+        error[row][column] = result.error;
+        error[column][row] = result.error;
+        success &= result.success;
+        status = merge_differentiate_status(status, result.status);
+        nit = nit.max(result.nit);
+        nfev += result.nfev;
     }
 
     Ok(HessianResult {
