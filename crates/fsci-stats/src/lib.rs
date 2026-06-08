@@ -28936,19 +28936,54 @@ pub fn barnard_exact_alternative(table: &[[usize; 2]; 2], alternative: &str) -> 
     // Wald statistic
     let wald_stat = barnard_wald_statistic(a as u64, b as u64, n1, n2);
 
-    // Search over nuisance parameter p to find maximum p-value
-    // Use grid search over [0, 1]
-    let n_grid = 1001;
-    let mut max_pvalue = 0.0_f64;
-
-    for i in 0..=n_grid {
+    // Search over nuisance parameter p to find maximum p-value (grid over [0,1]).
+    // Each grid point's p-value is an independent O(n1·n2) computation and the
+    // result is their MAX, which is order-independent (a selection, not a sum), so
+    // splitting the grid across threads and combining per-chunk maxima is
+    // byte-identical to the sequential scan. Compute-bound -> scales with cores.
+    let n_grid = 1001usize;
+    let n_points = n_grid + 1; // i in 0..=n_grid
+    let pval_at = |i: usize| -> f64 {
         let p = i as f64 / n_grid as f64;
-
-        // Compute p-value for this nuisance parameter
-        let pval = barnard_pvalue_at_p(n1, n2, p, wald_stat, alternative);
-
-        max_pvalue = max_pvalue.max(pval);
-    }
+        barnard_pvalue_at_p(n1, n2, p, wald_stat, alternative)
+    };
+    let work = (n_points as u64) * n1.max(1) * n2.max(1);
+    let nthreads = if work < (1 << 16) || n_points < 8 {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(|c| c.get())
+            .unwrap_or(1)
+            .min(n_points)
+            .max(1)
+    };
+    let max_pvalue = if nthreads <= 1 {
+        (0..=n_grid).map(pval_at).fold(0.0_f64, f64::max)
+    } else {
+        let chunk = n_points.div_ceil(nthreads);
+        let pa = &pval_at;
+        let maxes: Vec<f64> = std::thread::scope(|scope| {
+            let mut handles = Vec::new();
+            let mut start = 0usize;
+            while start < n_points {
+                let lo = start;
+                let hi = (start + chunk).min(n_points);
+                handles.push(scope.spawn(move || {
+                    let mut m = 0.0_f64;
+                    for i in lo..hi {
+                        m = m.max(pa(i));
+                    }
+                    m
+                }));
+                start = hi;
+            }
+            handles
+                .into_iter()
+                .map(|h| h.join().expect("barnard grid worker panicked"))
+                .collect()
+        });
+        maxes.into_iter().fold(0.0_f64, f64::max)
+    };
 
     BarnardExactResult {
         statistic: wald_stat,
@@ -29069,17 +29104,54 @@ pub fn boschloo_exact_alternative(
     // Compute Fisher's one-sided p-value for observed table
     let observed_fisher_p = fisher_one_sided_pvalue(a, b, c, d, alternative);
 
-    // Search over nuisance parameter p to find maximum p-value
-    let n_grid = 101;
-    let mut max_pvalue = 0.0_f64;
-
-    for i in 1..n_grid {
+    // Search over nuisance parameter p to find maximum p-value. Each grid point's
+    // p-value (a Fisher-statistic sum over all O(n1·n2) tables) is independent and
+    // the result is their MAX (order-independent), so the grid splits across
+    // threads with per-chunk maxima combined — byte-identical to the sequential
+    // scan. Compute-heavy (hypergeometric sums) -> scales with cores.
+    let n_grid = 101usize;
+    let pval_at = |i: usize| -> f64 {
         let p = i as f64 / n_grid as f64;
-
-        // Compute p-value for this nuisance parameter
-        let pval = boschloo_pvalue_at_p(n1, n2, p, observed_fisher_p, alternative);
-        max_pvalue = max_pvalue.max(pval);
-    }
+        boschloo_pvalue_at_p(n1, n2, p, observed_fisher_p, alternative)
+    };
+    let work = (n_grid as u64) * n1.max(1) * n2.max(1);
+    let nthreads = if work < (1 << 14) || n_grid < 8 {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(|c| c.get())
+            .unwrap_or(1)
+            .min(n_grid - 1)
+            .max(1)
+    };
+    let max_pvalue = if nthreads <= 1 {
+        (1..n_grid).map(pval_at).fold(0.0_f64, f64::max)
+    } else {
+        let count = n_grid - 1; // i in 1..n_grid
+        let chunk = count.div_ceil(nthreads);
+        let pa = &pval_at;
+        let maxes: Vec<f64> = std::thread::scope(|scope| {
+            let mut handles = Vec::new();
+            let mut start = 1usize;
+            while start < n_grid {
+                let lo = start;
+                let hi = (start + chunk).min(n_grid);
+                handles.push(scope.spawn(move || {
+                    let mut m = 0.0_f64;
+                    for i in lo..hi {
+                        m = m.max(pa(i));
+                    }
+                    m
+                }));
+                start = hi;
+            }
+            handles
+                .into_iter()
+                .map(|h| h.join().expect("boschloo grid worker panicked"))
+                .collect()
+        });
+        maxes.into_iter().fold(0.0_f64, f64::max)
+    };
 
     BoschlooExactResult {
         statistic: observed_fisher_p,

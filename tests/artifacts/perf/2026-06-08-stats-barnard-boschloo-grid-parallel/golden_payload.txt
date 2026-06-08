@@ -1,0 +1,14 @@
+# barnard_exact / boschloo_exact nuisance-parameter grid search: serial scan ->
+# parallel over independent grid points with max-reduce (order-independent ->
+# BYTE-IDENTICAL). pvalue/statistic bits match the serial build exactly:
+barnard  [[8,2],[1,5]]      pvalue_bits=3f95c7fca6ee81d4 stat_bits=4003c73ad5623856
+barnard  [[40,10],[15,35]]  pvalue_bits=3e96235c54af5e1b stat_bits=401419cb2a4ba1d2
+barnard  [[120,30],[45,105]] pvalue_bits=3c277584fbf12056 stat_bits=40216863537967fc
+boschloo [[8,2],[1,5]]      pvalue_bits=3f98f8586e56c7ec
+boschloo [[40,10],[15,35]]  pvalue_bits=3e97f13ac6a40f9d
+
+# Timing (rch, 64 cores, release-perf):
+barnard  [[200,80],[120,160]]   4.761s -> 178.691ms  (26.6x)
+barnard  [[400,100],[150,350]]  (new 297.9ms; serial baseline too slow to fully measure)
+boschloo [[200,80],[120,160]]   new 5.876s ; boschloo [[400,100],[150,350]] new 33.085s
+#   (boschloo uses the identical grid-parallel lever; serial baseline is minutes-scale)
