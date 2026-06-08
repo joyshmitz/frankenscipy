@@ -6391,6 +6391,25 @@ impl DiscreteDistribution for Skellam {
     fn pmf(&self, k: u64) -> f64 {
         self.pmf_signed(k as i64)
     }
+    fn logpmf(&self, k: u64) -> f64 {
+        // −(μ1+μ2) + (k/2)·ln(μ1/μ2) + ln I_k(2√(μ1μ2)), with ln I_k=log_ive(k,z)+z
+        // — finite for large μ1·μ2 where the pmf's I_k overflows to NaN.
+        // frankenscipy-7m3xk
+        let kf = k as f64;
+        let (mu1, mu2) = (self.mu1, self.mu2);
+        if mu1 == 0.0 && mu2 == 0.0 {
+            return if k == 0 { 0.0 } else { f64::NEG_INFINITY };
+        }
+        if mu1 == 0.0 {
+            return if k == 0 { -mu2 } else { f64::NEG_INFINITY };
+        }
+        if mu2 == 0.0 {
+            // Poisson(μ1) on k ≥ 0.
+            return -mu1 + kf * mu1.ln() - ln_gamma(kf + 1.0);
+        }
+        let z = 2.0 * (mu1 * mu2).sqrt();
+        -(mu1 + mu2) + 0.5 * kf * (mu1 / mu2).ln() + fsci_special::log_ive_scalar(kf, z) + z
+    }
 
     fn cdf(&self, k: u64) -> f64 {
         let mut sum = 0.0;
@@ -6696,6 +6715,18 @@ impl DiscreteDistribution for BetaNegativeBinomial {
             ln_gamma(self.a + n) + ln_gamma(self.b + kf) - ln_gamma(self.a + n + self.b + kf);
         let ln_beta_den = ln_gamma(self.a) + ln_gamma(self.b) - ln_gamma(self.a + self.b);
         (ln_comb + ln_beta_num - ln_beta_den).exp()
+    }
+
+    fn logpmf(&self, k: u64) -> f64 {
+        // ln C(n+k-1,k) + ln B(a+n, b+k) − ln B(a,b); finite where pmf underflows
+        // (pmf forms this then exp's it). frankenscipy-7m3xk
+        let n = self.n as f64;
+        let kf = k as f64;
+        let ln_comb = ln_gamma(n + kf) - ln_gamma(kf + 1.0) - ln_gamma(n);
+        let ln_beta_num =
+            ln_gamma(self.a + n) + ln_gamma(self.b + kf) - ln_gamma(self.a + n + self.b + kf);
+        let ln_beta_den = ln_gamma(self.a) + ln_gamma(self.b) - ln_gamma(self.a + self.b);
+        ln_comb + ln_beta_num - ln_beta_den
     }
 
     fn mean(&self) -> f64 {
@@ -40717,6 +40748,13 @@ mod tests {
         mid!(DiscreteLaplace::new(0.7), &[0, 2, 6]);
         mid!(Geometric::new(0.3), &[1, 3, 8]);
         mid!(Boltzmann::new(0.5, 20), &[0, 3, 10]);
+        mid!(BetaNegativeBinomial::new(5, 2.0, 3.0), &[0, 3, 10, 25]);
+        mid!(Skellam::new(3.0, 2.0), &[0, 2, 5, 9]);
+
+        // Skellam large μ1·μ2: pmf's I_k overflows → NaN; logpmf (log_ive) finite.
+        let sk = Skellam::new(400.0, 400.0);
+        assert!(!(sk.pmf(5) > 0.0 && sk.pmf(5).is_finite()));
+        assert!(sk.logpmf(5).is_finite(), "skellam large-μ logpmf");
 
         // Deep tail / large support: pmf underflows to 0 but logpmf stays finite.
         let p = Poisson::new(10.0);
