@@ -2036,6 +2036,118 @@ pub fn savetxt(rows: usize, cols: usize, data: &[f64], delimiter: &str) -> Resul
 pub type CsvResult = Result<(Option<Vec<String>>, Vec<Vec<f64>>), IoError>;
 
 pub fn read_csv(content: &str, delimiter: char, has_header: bool) -> CsvResult {
+    // Field parsing (`split(delimiter).trim().parse::<f64>()`) dominates read_csv on large
+    // files. Each data row is an independent `Vec<f64>` with no cross-row state beyond the
+    // fixed column count, so the rows parse on disjoint cores and concatenate in order —
+    // byte-identical to the serial loop (same deterministic f64 parse, same row order).
+    // Any anomaly (empty-with-header, header/row column mismatch, parse error) replays the
+    // verbatim serial loop so the returned header/data and every Err are unchanged.
+    let lines: Vec<&str> = content.lines().collect();
+
+    let header: Option<Vec<String>> = if has_header {
+        match lines.first() {
+            Some(h) => Some(h.split(delimiter).map(|s| s.trim().to_string()).collect()),
+            None => return read_csv_serial(content, delimiter, has_header),
+        }
+    } else {
+        None
+    };
+    let header_cols = header.as_ref().map(std::vec::Vec::len);
+    let data_start = usize::from(has_header);
+
+    // Column count is fixed by the first non-comment data row, exactly as the serial loop.
+    let mut expected_cols = None;
+    for line in &lines[data_start..] {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        expected_cols = Some(trimmed.split(delimiter).count());
+        break;
+    }
+    let expected_cols = match expected_cols {
+        Some(c) => c,
+        None => return Ok((header, Vec::new())),
+    };
+    // The serial loop reports the header/first-row mismatch specifically; defer to it.
+    if let Some(hc) = header_cols
+        && hc != expected_cols
+    {
+        return read_csv_serial(content, delimiter, has_header);
+    }
+
+    let data_lines = &lines[data_start..];
+    let nthreads = if data_lines.len() < 4096 {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(data_lines.len() / 2048)
+            .max(1)
+    };
+    if nthreads <= 1 {
+        return read_csv_serial(content, delimiter, has_header);
+    }
+
+    let parse_chunk = |chunk: &[&str]| -> Option<Vec<Vec<f64>>> {
+        let mut out = Vec::new();
+        for line in chunk {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            let mut row = Vec::new();
+            for s in trimmed.split(delimiter) {
+                match s.trim().parse::<f64>() {
+                    Ok(v) => row.push(v),
+                    Err(_) => return None,
+                }
+            }
+            if row.len() != expected_cols {
+                return None;
+            }
+            out.push(row);
+        }
+        Some(out)
+    };
+
+    let chunk = data_lines.len().div_ceil(nthreads);
+    let parse_chunk = &parse_chunk;
+    let chunk_results: Vec<Option<Vec<Vec<f64>>>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..nthreads)
+            .filter_map(|t| {
+                let i0 = t * chunk;
+                if i0 >= data_lines.len() {
+                    return None;
+                }
+                let i1 = (i0 + chunk).min(data_lines.len());
+                Some(scope.spawn(move || parse_chunk(&data_lines[i0..i1])))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().expect("read_csv worker panicked"))
+            .collect()
+    });
+
+    if chunk_results.iter().any(Option::is_none) {
+        return read_csv_serial(content, delimiter, has_header);
+    }
+
+    let total: usize = chunk_results
+        .iter()
+        .map(|c| c.as_ref().map_or(0, Vec::len))
+        .sum();
+    let mut data = Vec::with_capacity(total);
+    for c in chunk_results {
+        data.extend(c.expect("none handled above"));
+    }
+    Ok((header, data))
+}
+
+/// Exact serial read_csv — the byte-identical reference and the malformed-input fallback.
+fn read_csv_serial(content: &str, delimiter: char, has_header: bool) -> CsvResult {
     let mut lines = content.lines();
     let header = if has_header {
         Some(
