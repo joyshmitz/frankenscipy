@@ -3050,21 +3050,16 @@ fn j0_core(x: f64) -> f64 {
         // J_0(0) = 1 exactly; keep the analytic value at the origin.
         return 1.0;
     }
-    if ax < 8.0 {
+    // Series ↔ asymptotic crossover at x = 14: below it the power series keeps
+    // ≳11 digits (only ~0.43·x lost to cancellation) and beats the
+    // Numerical-Recipes fit; above it the fit is more accurate. Raising the old
+    // x = 8 cutoff cut the ~3e-11 floor in [8,14) to ~1e-12 (frankenscipy-63a7n).
+    // The raw optimal-truncation Hankel asymptotic is NOT used here — at x≈8 its
+    // smallest term is ~1e-9, worse than the minimax-fitted NR coefficients.
+    if ax < 14.0 {
         j0_series_small(ax)
     } else {
-        let z = 8.0 / ax;
-        let y = z * z;
-        let xx = ax - PI / 4.0;
-        let p = 1.0
-            + y * (-0.001_098_628_627
-                + y * (0.000_027_345_104_07
-                    + y * (-0.000_002_073_370_639 + y * 0.000_000_209_388_721_1)));
-        let q = -0.015_624_999_95
-            + y * (0.000_143_048_876_5
-                + y * (-0.000_006_911_147_651
-                    + y * (0.000_000_762_109_516_1 + y * (-0.000_000_093_494_515_2))));
-        (FRAC_2_PI / ax).sqrt() * (xx.cos() * p - z * xx.sin() * q)
+        jv_asymptotic(0.0, ax)
     }
 }
 
@@ -3092,45 +3087,22 @@ fn j1_core(x: f64) -> f64 {
     }
 
     let ax = x.abs();
-    let ans = if ax < 8.0 {
-        // High-precision power series (machine accuracy), matching the small-x
-        // treatment of j0/y0. The previous Numerical-Recipes rational
-        // approximation here was only ~1e-7/1e-8 accurate (frankenscipy-…).
+    let ans = if ax < 14.0 {
+        // Power series: machine-precision small-x (frankenscipy-92qwh) extended to
+        // x<14 (≳11 digits, beats the NR fit there); x≥14 uses the NR fit.
         j1_series_small(ax)
     } else {
-        let z = 8.0 / ax;
-        let y = z * z;
-        let xx = ax - 3.0 * PI / 4.0;
-        let p = 1.0
-            + y * (0.001_831_05
-                + y * (-0.000_035_163_964_96
-                    + y * (0.000_002_457_520_174 + y * (-0.000_000_240_337_019))));
-        let q = 0.046_874_999_95
-            + y * (-0.000_200_269_087_3
-                + y * (0.000_008_449_199_096
-                    + y * (-0.000_000_882_289_87 + y * 0.000_000_105_787_412)));
-        (FRAC_2_PI / ax).sqrt() * (xx.cos() * p - z * xx.sin() * q)
+        jv_asymptotic(1.0, ax)
     };
 
     if x < 0.0 { -ans } else { ans }
 }
 
 fn y0_core_positive(x: f64) -> f64 {
-    if x < 8.0 {
+    if x < 14.0 {
         y0_series_small(x)
     } else {
-        let z = 8.0 / x;
-        let y = z * z;
-        let xx = x - PI / 4.0;
-        let p = 1.0
-            + y * (-0.001_098_628_627
-                + y * (0.000_027_345_104_07
-                    + y * (-0.000_002_073_370_639 + y * 0.000_000_209_388_721_1)));
-        let q = -0.015_624_999_95
-            + y * (0.000_143_048_876_5
-                + y * (-0.000_006_911_147_651
-                    + y * (0.000_000_762_109_516_1 + y * (-0.000_000_093_494_515_2))));
-        (FRAC_2_PI / x).sqrt() * (xx.sin() * p + z * xx.cos() * q)
+        yv_asymptotic(0.0, x)
     }
 }
 
@@ -3199,23 +3171,11 @@ fn y1_series_small(x: f64) -> f64 {
 }
 
 fn y1_core_positive(x: f64) -> f64 {
-    if x < 8.0 {
-        // High-precision power series (DLMF 10.8.1), replacing the ~1e-7
-        // Numerical-Recipes rational approximation.
+    if x < 14.0 {
+        // Power series (DLMF 10.8.1) for x<14 (≳11 digits); x≥14 uses the NR fit.
         y1_series_small(x)
     } else {
-        let z = 8.0 / x;
-        let y = z * z;
-        let xx = x - 3.0 * PI / 4.0;
-        let p = 1.0
-            + y * (0.001_831_05
-                + y * (-0.000_035_163_964_96
-                    + y * (0.000_002_457_520_174 + y * (-0.000_000_240_337_019))));
-        let q = 0.046_874_999_95
-            + y * (-0.000_200_269_087_3
-                + y * (0.000_008_449_199_096
-                    + y * (-0.000_000_882_289_87 + y * 0.000_000_105_787_412)));
-        (FRAC_2_PI / x).sqrt() * (xx.sin() * p + z * xx.cos() * q)
+        yv_asymptotic(1.0, x)
     }
 }
 
