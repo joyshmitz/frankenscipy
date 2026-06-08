@@ -1298,6 +1298,72 @@ impl NoncentralT {
         (sum * h / 3.0).max(0.0)
     }
 
+    /// log-PDF via a peak-centered (Laplace) Simpson quadrature in log-space.
+    ///
+    /// The log-integrand `g(s) = log_pdf_S(ν,s) + ln s − ½(x·s−μ)² − ½ln(2π)`
+    /// is strictly concave; its peak is the positive root of
+    /// `(ν+x²)s² − xμ·s − ν = 0`. For large |x| the peak sits at `s* ∝ 1/x`,
+    /// which the fixed `[0, s_max]` grid in `nct_pdf_integrate` cannot resolve
+    /// (so the pdf collapses to 0). Centering the grid on `s*` with width set by
+    /// the local curvature resolves the peak for any x, and the log-space
+    /// (logsumexp) accumulation stays finite where the linear integral
+    /// underflows. frankenscipy-7m3xk
+    fn nct_logpdf_integrate(&self, x: f64) -> f64 {
+        if x.is_nan() || self.nc.is_nan() || self.df.is_nan() {
+            return f64::NAN;
+        }
+        if !x.is_finite() {
+            return f64::NEG_INFINITY;
+        }
+        if self.nc.abs() < 1e-10 {
+            return StudentT::new(self.df).logpdf(x);
+        }
+        let nu = self.df;
+        let mu = self.nc;
+        // Peak s* = root of (ν+x²)s² − xμ·s − ν = 0 (the +√ root is positive).
+        let aa = nu + x * x;
+        let disc = (x * mu * x * mu + 4.0 * aa * nu).sqrt();
+        let s_star = (x * mu + disc) / (2.0 * aa);
+        // −g''(s*) = ν/s*² + ν + x²; width is one curvature std.
+        let width = 1.0 / (nu / (s_star * s_star) + nu + x * x).sqrt();
+        let lo = (s_star - 10.0 * width).max(1.0e-12);
+        let hi = s_star + 10.0 * width;
+        let steps = 1024usize;
+        let h = (hi - lo) / steps as f64;
+        let log_phi_const = -0.5 * (2.0 * PI).ln();
+        let g = |s: f64| -> f64 {
+            if s <= 0.0 {
+                return f64::NEG_INFINITY;
+            }
+            let arg = x * s - mu;
+            Self::log_pdf_s(nu, s) + s.ln() + log_phi_const - 0.5 * arg * arg
+        };
+        let mut max = f64::NEG_INFINITY;
+        let mut terms: Vec<f64> = Vec::with_capacity(steps + 1);
+        for i in 0..=steps {
+            let s = lo + i as f64 * h;
+            let coef: f64 = if i == 0 || i == steps {
+                1.0
+            } else if i % 2 == 1 {
+                4.0
+            } else {
+                2.0
+            };
+            let t = coef.ln() + g(s);
+            if t.is_finite() {
+                if t > max {
+                    max = t;
+                }
+                terms.push(t);
+            }
+        }
+        if !max.is_finite() {
+            return f64::NEG_INFINITY;
+        }
+        let lse = max + terms.iter().map(|&t| (t - max).exp()).sum::<f64>().ln();
+        (h / 3.0).ln() + lse
+    }
+
     /// Survival function via the same chi-scaled quadrature.
     ///
     /// sf(t) = 1 − F(t) = ∫_0^∞ (1 − Φ(t·s − μ)) · pdf_S(s) ds
@@ -1348,6 +1414,10 @@ impl NoncentralT {
 impl ContinuousDistribution for NoncentralT {
     fn pdf(&self, x: f64) -> f64 {
         self.nct_pdf_integrate(x)
+    }
+
+    fn logpdf(&self, x: f64) -> f64 {
+        self.nct_logpdf_integrate(x)
     }
 
     fn cdf(&self, x: f64) -> f64 {
@@ -40907,6 +40977,21 @@ mod tests {
         mid!(VonMises::new(2.0, 0.0), &[-1.0, 0.0, 1.5]);
         mid!(RecipInvGauss::new(1.0), &[0.3, 1.0, 3.0]);
         mid!(NormInvGauss::new(1.5, 0.5), &[-2.0, 0.0, 2.0, 5.0]);
+        mid!(NoncentralT::new(10.0, 2.0), &[-2.0, 0.0, 1.0, 3.0, 6.0]);
+
+        // NoncentralT: nc=0 matches central StudentT logpdf.
+        let nct0 = NoncentralT::new(8.0, 0.0);
+        let st = StudentT::new(8.0);
+        for &x in &[-2.0, 0.5, 3.0] {
+            assert!((nct0.logpdf(x) - st.logpdf(x)).abs() <= 1e-10);
+        }
+        // Far tail: peak-centered quadrature stays finite and follows the
+        // power-law slope −(ν+1); the fixed-grid pdf has collapsed to 0 there.
+        let nct = NoncentralT::new(10.0, 2.0);
+        let (lp1, lp2) = (nct.logpdf(1.0e6), nct.logpdf(2.0e6));
+        assert!(lp1.is_finite() && lp2.is_finite() && lp1 < -100.0);
+        let slope = (lp2 - lp1) / (2.0e6f64.ln() - 1.0e6f64.ln());
+        assert!((slope - -(10.0 + 1.0)).abs() < 0.2, "nct tail slope {slope} vs −11");
 
         // VonMises large κ: pdf's I₀(κ) overflows → pdf NaN/inf; logpdf finite.
         let vm = VonMises::new(800.0, 0.0);
