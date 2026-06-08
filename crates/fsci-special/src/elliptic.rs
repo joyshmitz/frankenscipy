@@ -1099,7 +1099,7 @@ fn map_real_or_complex_binary<F, G>(
 ) -> SpecialResult
 where
     F: Fn(f64, f64) -> Result<f64, SpecialError> + Sync,
-    G: Fn(Complex64, Complex64) -> Result<Complex64, SpecialError>,
+    G: Fn(Complex64, Complex64) -> Result<Complex64, SpecialError> + Sync,
 {
     match (lhs, rhs) {
         (SpecialTensor::Empty, _) | (_, SpecialTensor::Empty) => {
@@ -1140,27 +1140,21 @@ where
         (SpecialTensor::ComplexScalar(left), SpecialTensor::ComplexScalar(right)) => {
             complex_kernel(*left, *right).map(SpecialTensor::ComplexScalar)
         }
-        (SpecialTensor::ComplexVec(left), SpecialTensor::ComplexScalar(right)) => left
-            .iter()
-            .copied()
-            .map(|value| complex_kernel(value, *right))
-            .collect::<Result<Vec<_>, _>>()
-            .map(SpecialTensor::ComplexVec),
-        (SpecialTensor::ComplexScalar(left), SpecialTensor::ComplexVec(right)) => right
-            .iter()
-            .copied()
-            .map(|value| complex_kernel(*left, value))
-            .collect::<Result<Vec<_>, _>>()
-            .map(SpecialTensor::ComplexVec),
+        (SpecialTensor::ComplexVec(left), SpecialTensor::ComplexScalar(right)) => {
+            let right = *right;
+            par_map_indices(left.len(), |i| complex_kernel(left[i], right))
+                .map(SpecialTensor::ComplexVec)
+        }
+        (SpecialTensor::ComplexScalar(left), SpecialTensor::ComplexVec(right)) => {
+            let left = *left;
+            par_map_indices(right.len(), |i| complex_kernel(left, right[i]))
+                .map(SpecialTensor::ComplexVec)
+        }
         (SpecialTensor::ComplexVec(left), SpecialTensor::ComplexVec(right)) => {
             if left.len() != right.len() {
                 return vector_length_error(function, mode);
             }
-            left.iter()
-                .copied()
-                .zip(right.iter().copied())
-                .map(|(left_value, right_value)| complex_kernel(left_value, right_value))
-                .collect::<Result<Vec<_>, _>>()
+            par_map_indices(left.len(), |i| complex_kernel(left[i], right[i]))
                 .map(SpecialTensor::ComplexVec)
         }
         (SpecialTensor::RealScalar(left), SpecialTensor::ComplexScalar(right)) => {
@@ -1169,55 +1163,47 @@ where
         (SpecialTensor::ComplexScalar(left), SpecialTensor::RealScalar(right)) => {
             complex_kernel(*left, Complex64::from_real(*right)).map(SpecialTensor::ComplexScalar)
         }
-        (SpecialTensor::RealVec(left), SpecialTensor::ComplexScalar(right)) => left
-            .iter()
-            .copied()
-            .map(|value| complex_kernel(Complex64::from_real(value), *right))
-            .collect::<Result<Vec<_>, _>>()
-            .map(SpecialTensor::ComplexVec),
-        (SpecialTensor::ComplexScalar(left), SpecialTensor::RealVec(right)) => right
-            .iter()
-            .copied()
-            .map(|value| complex_kernel(*left, Complex64::from_real(value)))
-            .collect::<Result<Vec<_>, _>>()
-            .map(SpecialTensor::ComplexVec),
-        (SpecialTensor::RealScalar(left), SpecialTensor::ComplexVec(right)) => right
-            .iter()
-            .copied()
-            .map(|value| complex_kernel(Complex64::from_real(*left), value))
-            .collect::<Result<Vec<_>, _>>()
-            .map(SpecialTensor::ComplexVec),
-        (SpecialTensor::ComplexVec(left), SpecialTensor::RealScalar(right)) => left
-            .iter()
-            .copied()
-            .map(|value| complex_kernel(value, Complex64::from_real(*right)))
-            .collect::<Result<Vec<_>, _>>()
-            .map(SpecialTensor::ComplexVec),
+        (SpecialTensor::RealVec(left), SpecialTensor::ComplexScalar(right)) => {
+            let right = *right;
+            par_map_indices(left.len(), |i| {
+                complex_kernel(Complex64::from_real(left[i]), right)
+            })
+            .map(SpecialTensor::ComplexVec)
+        }
+        (SpecialTensor::ComplexScalar(left), SpecialTensor::RealVec(right)) => {
+            let left = *left;
+            par_map_indices(right.len(), |i| {
+                complex_kernel(left, Complex64::from_real(right[i]))
+            })
+            .map(SpecialTensor::ComplexVec)
+        }
+        (SpecialTensor::RealScalar(left), SpecialTensor::ComplexVec(right)) => {
+            let left = Complex64::from_real(*left);
+            par_map_indices(right.len(), |i| complex_kernel(left, right[i]))
+                .map(SpecialTensor::ComplexVec)
+        }
+        (SpecialTensor::ComplexVec(left), SpecialTensor::RealScalar(right)) => {
+            let right = Complex64::from_real(*right);
+            par_map_indices(left.len(), |i| complex_kernel(left[i], right))
+                .map(SpecialTensor::ComplexVec)
+        }
         (SpecialTensor::RealVec(left), SpecialTensor::ComplexVec(right)) => {
             if left.len() != right.len() {
                 return vector_length_error(function, mode);
             }
-            left.iter()
-                .copied()
-                .zip(right.iter().copied())
-                .map(|(left_value, right_value)| {
-                    complex_kernel(Complex64::from_real(left_value), right_value)
-                })
-                .collect::<Result<Vec<_>, _>>()
-                .map(SpecialTensor::ComplexVec)
+            par_map_indices(left.len(), |i| {
+                complex_kernel(Complex64::from_real(left[i]), right[i])
+            })
+            .map(SpecialTensor::ComplexVec)
         }
         (SpecialTensor::ComplexVec(left), SpecialTensor::RealVec(right)) => {
             if left.len() != right.len() {
                 return vector_length_error(function, mode);
             }
-            left.iter()
-                .copied()
-                .zip(right.iter().copied())
-                .map(|(left_value, right_value)| {
-                    complex_kernel(left_value, Complex64::from_real(right_value))
-                })
-                .collect::<Result<Vec<_>, _>>()
-                .map(SpecialTensor::ComplexVec)
+            par_map_indices(left.len(), |i| {
+                complex_kernel(left[i], Complex64::from_real(right[i]))
+            })
+            .map(SpecialTensor::ComplexVec)
         }
     }
 }

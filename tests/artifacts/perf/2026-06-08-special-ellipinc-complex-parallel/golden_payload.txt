@@ -1,0 +1,6 @@
+===GOLDEN_PAYLOAD_BEGIN===
+n=100 ellipkinc(len=100,xor=d66c7541234890d4) ellipeinc(len=100,xor=e6342e3f74adfa03)
+n=5000 ellipkinc(len=5000,xor=9a5a75b89cde019c) ellipeinc(len=5000,xor=b05e872b9d58fbc2)
+n=50000 ellipkinc(len=50000,xor=1372b1c0a03ea31e) ellipeinc(len=50000,xor=1023190921811841)
+===GOLDEN_PAYLOAD_END===
+timing acc: ellipkinc 300k=322d0aecf65c8f17  ellipeinc 300k=24bda3e201bdb153
