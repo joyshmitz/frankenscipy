@@ -1,0 +1,4 @@
+COMMAND: cargo fmt -p fsci-linalg --check
+START_UTC: 2026-06-08T04:07:19Z
+END_UTC: 2026-06-08T04:07:19Z
+EXIT_STATUS: 0
