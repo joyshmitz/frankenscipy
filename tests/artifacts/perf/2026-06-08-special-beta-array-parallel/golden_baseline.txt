@@ -1,0 +1,5 @@
+GOLDEN (serial == parallel, bit-identical):
+n=100 betainc xor=e3af7f242be4f7ac beta xor=7d22fa80924083c3
+n=5000 betainc xor=1de0fae8f11d3a15 beta xor=62d2279237750c5f
+n=50000 betainc xor=b6df97cb56286e63 beta xor=2b2d0521bb80fc47
+timing acc (serial==parallel): betainc 300k=f1ef90f45b3767eb 600k=64462edf3621f099
