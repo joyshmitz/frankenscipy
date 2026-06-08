@@ -7244,6 +7244,7 @@ fn deterministic_thin_svd(matrix: &DMatrix<f64>) -> Result<DeterministicThinSvd,
     deterministic_thin_svd_from_reduction(&reduction)
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone)]
 struct TsqrFactor {
     rows: usize,
@@ -7252,6 +7253,7 @@ struct TsqrFactor {
     nodes: Vec<TsqrNode>,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone)]
 enum TsqrNode {
     Leaf {
@@ -7268,6 +7270,7 @@ enum TsqrNode {
     },
 }
 
+#[cfg(test)]
 impl TsqrNode {
     fn r(&self) -> &DMatrix<f64> {
         match self {
@@ -7277,9 +7280,10 @@ impl TsqrNode {
 }
 
 fn public_tall_thin_svd_candidate(matrix: &DMatrix<f64>) -> Option<DeterministicThinSvd> {
-    public_tsqr_thin_svd_candidate(matrix).or_else(|| public_bidiag_thin_svd_candidate(matrix))
+    public_bidiag_thin_svd_candidate(matrix)
 }
 
+#[cfg(test)]
 fn householder_qr_factor(
     matrix: &DMatrix<f64>,
 ) -> Option<(Vec<HouseholderReflector>, DMatrix<f64>)> {
@@ -7314,6 +7318,7 @@ fn householder_qr_factor(
     Some((reflectors, r))
 }
 
+#[cfg(test)]
 fn apply_q_from_reflectors(
     row_count: usize,
     cols: usize,
@@ -7336,6 +7341,7 @@ fn apply_q_from_reflectors(
     Some(work)
 }
 
+#[cfg(test)]
 fn tsqr_block_ranges(rows: usize, cols: usize) -> Option<Vec<(usize, usize)>> {
     if rows < cols.saturating_mul(2) || cols == 0 {
         return None;
@@ -7361,6 +7367,7 @@ fn tsqr_block_ranges(rows: usize, cols: usize) -> Option<Vec<(usize, usize)>> {
     }
 }
 
+#[cfg(test)]
 fn tsqr_factor(matrix: &DMatrix<f64>) -> Option<TsqrFactor> {
     let rows = matrix.nrows();
     let cols = matrix.ncols();
@@ -7425,6 +7432,7 @@ fn tsqr_factor(matrix: &DMatrix<f64>) -> Option<TsqrFactor> {
     })
 }
 
+#[cfg(test)]
 fn replay_tsqr_node(
     factor: &TsqrFactor,
     node_idx: usize,
@@ -7462,6 +7470,7 @@ fn replay_tsqr_node(
     }
 }
 
+#[cfg(test)]
 fn tsqr_apply_q_to_root_svd_u(factor: &TsqrFactor, root_u: &DMatrix<f64>) -> Option<DMatrix<f64>> {
     if root_u.nrows() != factor.cols || root_u.ncols() != factor.cols {
         return None;
@@ -7471,6 +7480,7 @@ fn tsqr_apply_q_to_root_svd_u(factor: &TsqrFactor, root_u: &DMatrix<f64>) -> Opt
     Some(u)
 }
 
+#[cfg(test)]
 fn public_tsqr_thin_svd_candidate(matrix: &DMatrix<f64>) -> Option<DeterministicThinSvd> {
     let factor = tsqr_factor(matrix)?;
     let root_svd = deterministic_thin_svd(factor.nodes[factor.root].r()).ok()?;
@@ -14977,6 +14987,49 @@ mod tests {
             v_error <= 1e-9,
             "block TSQR Vt orthogonality error {v_error:.17e}"
         );
+    }
+
+    #[test]
+    #[ignore = "perf probe: run with rch and --release for private TSQR vs bidiag SVD candidate"]
+    fn block_tsqr_vs_bidiag_svd_candidate_perf_probe() {
+        let original = bidiag_deterministic_matrix(512, 256);
+        let rows = original.nrows();
+        let cols = original.ncols();
+
+        let bidiag_start = std::time::Instant::now();
+        let bidiag =
+            public_bidiag_thin_svd_candidate(std::hint::black_box(&original)).expect("bidiag");
+        let bidiag_candidate_ms = bidiag_start.elapsed().as_secs_f64() * 1e3;
+
+        let tsqr_start = std::time::Instant::now();
+        let tsqr = public_tsqr_thin_svd_candidate(std::hint::black_box(&original)).expect("tsqr");
+        let tsqr_candidate_ms = tsqr_start.elapsed().as_secs_f64() * 1e3;
+
+        let (max_s, _) =
+            public_bidiag_svd_stats(&tsqr.singular_values).expect("finite singular spectrum");
+        let threshold = public_bidiag_default_threshold(rows, cols, max_s);
+        assert!(public_bidiag_svd_accepts(&original, &bidiag, threshold));
+        assert!(public_bidiag_svd_accepts(&original, &tsqr, threshold));
+        assert_close_slice(&tsqr.singular_values, &bidiag.singular_values, 1e-6, 1e-6);
+
+        let bidiag_reconstructed = &bidiag.u * bidiag.sigma_matrix() * &bidiag.v_t;
+        let tsqr_reconstructed = &tsqr.u * tsqr.sigma_matrix() * &tsqr.v_t;
+        let bidiag_reconstruction_error = max_abs_dmatrix_diff(&bidiag_reconstructed, &original);
+        let tsqr_reconstruction_error = max_abs_dmatrix_diff(&tsqr_reconstructed, &original);
+
+        println!("BLOCK_TSQR_VS_BIDIAG_SVD_CANDIDATE_PERF_BEGIN");
+        println!("shape={rows}x{cols}");
+        println!("bidiag_candidate_ms={bidiag_candidate_ms:.6}");
+        println!("tsqr_candidate_ms={tsqr_candidate_ms:.6}");
+        println!(
+            "candidate_speedup={:.6}",
+            bidiag_candidate_ms / tsqr_candidate_ms
+        );
+        println!("bidiag_digest=0x{:016x}", thin_svd_bits_digest(&bidiag));
+        println!("tsqr_digest=0x{:016x}", thin_svd_bits_digest(&tsqr));
+        println!("bidiag_reconstruction_error={bidiag_reconstruction_error:.17e}");
+        println!("tsqr_reconstruction_error={tsqr_reconstruction_error:.17e}");
+        println!("BLOCK_TSQR_VS_BIDIAG_SVD_CANDIDATE_PERF_END");
     }
 
     #[test]
