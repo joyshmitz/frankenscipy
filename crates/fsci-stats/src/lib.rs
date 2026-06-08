@@ -34980,18 +34980,81 @@ pub fn cross_cov(x: &[Vec<f64>], y: &[Vec<f64>]) -> Vec<Vec<f64>> {
         *m /= n as f64;
     }
 
-    let mut cov = vec![vec![0.0; dy]; dx];
-    for i in 0..n {
-        for j in 0..dx {
-            for k in 0..dy {
-                cov[j][k] += (x[i][j] - means_x[j]) * (y[i][k] - means_y[k]);
+    let denom = (n - 1) as f64;
+
+    // Small problems: the textbook per-observation scatter (bit-identical reference).
+    let work = (dx as u64)
+        .saturating_mul(dy as u64)
+        .saturating_mul(n as u64);
+    if work < 1 << 22 {
+        let mut cov = vec![vec![0.0; dy]; dx];
+        for i in 0..n {
+            for j in 0..dx {
+                for k in 0..dy {
+                    cov[j][k] += (x[i][j] - means_x[j]) * (y[i][k] - means_y[k]);
+                }
             }
         }
-    }
-    for row in &mut cov {
-        for v in row.iter_mut() {
-            *v /= (n - 1) as f64;
+        for row in &mut cov {
+            for v in row.iter_mut() {
+                *v /= denom;
+            }
         }
+        return cov;
+    }
+
+    // Larger problems: cov[j][k] = sum_obs (x[obs][j]-mean_x_j)*(y[obs][k]-mean_y_k) is a
+    // dot product of two centered series over observations in the SAME order. Transpose the
+    // centered data into contiguous per-variable series so each entry is a streamed dot
+    // (cache-friendly, auto-vectorisable), making the output rows independent so they fan
+    // out across threads. The terms and summation order are unchanged ⇒ bit-identical to
+    // the scatter above.
+    let mut xt = vec![vec![0.0f64; n]; dx];
+    let mut yt = vec![vec![0.0f64; n]; dy];
+    for i in 0..n {
+        let xr = &x[i];
+        let yr = &y[i];
+        for j in 0..dx {
+            xt[j][i] = xr[j] - means_x[j];
+        }
+        for k in 0..dy {
+            yt[k][i] = yr[k] - means_y[k];
+        }
+    }
+    let mut cov = vec![vec![0.0f64; dy]; dx];
+    let fill_row = |j: usize, out: &mut [f64]| {
+        let xj = &xt[j];
+        for (k, slot) in out.iter_mut().enumerate() {
+            let yk = &yt[k];
+            let mut s = 0.0f64;
+            for obs in 0..n {
+                s += xj[obs] * yk[obs];
+            }
+            *slot = s / denom;
+        }
+    };
+    let nthreads = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(dx)
+        .max(1);
+    if nthreads <= 1 {
+        for (j, row) in cov.iter_mut().enumerate() {
+            fill_row(j, row);
+        }
+    } else {
+        let chunk = dx.div_ceil(nthreads);
+        let fill_row = &fill_row;
+        std::thread::scope(|scope| {
+            for (ci, rows) in cov.chunks_mut(chunk).enumerate() {
+                let base = ci * chunk;
+                scope.spawn(move || {
+                    for (lr, row) in rows.iter_mut().enumerate() {
+                        fill_row(base + lr, row);
+                    }
+                });
+            }
+        });
     }
 
     cov

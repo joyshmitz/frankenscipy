@@ -1,0 +1,4 @@
+GOLDEN (serial scatter == transpose+parallel, bit-identical):
+n=50 dx=6 dy=4 shape=(6,4) xor_bits=5d8a47cd42f2623b
+n=200 dx=80 dy=64 shape=(80,64) xor_bits=195f6164545cf667
+n=500 dx=120 dy=90 shape=(120,90) xor_bits=3684d37030f9b75d
