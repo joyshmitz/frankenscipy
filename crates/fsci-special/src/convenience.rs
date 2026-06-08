@@ -1616,6 +1616,51 @@ fn comb_f64(n: u64, k: u64) -> f64 {
 // Helpers
 // ══════════════════════════════════════════════════════════════════════
 
+/// Evaluate `f(0..n)` into a `Vec<f64>`, parallel over index chunks for large `n`.
+/// Convenience-module kernels (ndtr/ndtri normal CDF/quantile, spence, kolmogorov, the ML
+/// activations, ...) are non-trivial per element and each index writes its own slot, so
+/// chunking across cores and concatenating in index order is bit-identical to
+/// `(0..n).map(f).collect()` — including returning the first failing index's error in order.
+fn par_map_indices<H>(n: usize, f: H) -> Result<Vec<f64>, SpecialError>
+where
+    H: Fn(usize) -> Result<f64, SpecialError> + Sync,
+{
+    let nthreads = if n < 256 {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n / 128)
+            .max(1)
+    };
+    if nthreads <= 1 {
+        return (0..n).map(&f).collect();
+    }
+    let chunk = n.div_ceil(nthreads);
+    let f = &f;
+    let chunk_results: Vec<Result<Vec<f64>, SpecialError>> = std::thread::scope(|scope| {
+        (0..nthreads)
+            .filter_map(|t| {
+                let i0 = t * chunk;
+                if i0 >= n {
+                    return None;
+                }
+                let i1 = (i0 + chunk).min(n);
+                Some(scope.spawn(move || (i0..i1).map(f).collect::<Result<Vec<f64>, _>>()))
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("convenience array worker panicked"))
+            .collect()
+    });
+    let mut out = Vec::with_capacity(n);
+    for cr in chunk_results {
+        out.extend(cr?);
+    }
+    Ok(out)
+}
+
 fn map_real<F>(
     function: &'static str,
     input: &SpecialTensor,
@@ -1623,16 +1668,13 @@ fn map_real<F>(
     kernel: F,
 ) -> SpecialResult
 where
-    F: Fn(f64) -> Result<f64, SpecialError>,
+    F: Fn(f64) -> Result<f64, SpecialError> + Sync,
 {
     match input {
         SpecialTensor::RealScalar(x) => kernel(*x).map(SpecialTensor::RealScalar),
-        SpecialTensor::RealVec(values) => values
-            .iter()
-            .copied()
-            .map(kernel)
-            .collect::<Result<Vec<_>, _>>()
-            .map(SpecialTensor::RealVec),
+        SpecialTensor::RealVec(values) => {
+            par_map_indices(values.len(), |i| kernel(values[i])).map(SpecialTensor::RealVec)
+        }
         _ => {
             record_special_trace(
                 function,

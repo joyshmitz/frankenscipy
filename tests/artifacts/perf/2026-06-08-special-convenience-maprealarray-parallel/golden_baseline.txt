@@ -1,0 +1,5 @@
+GOLDEN (serial == parallel, bit-identical):
+n=100 ndtr=8bfb07c9c46b5271 ndtri=2e686b7119b5bdae
+n=5000 ndtr=f90abcdccfe51dec ndtri=158d14cb8905e1eb
+n=50000 ndtr=e7918ab1b53ec289 ndtri=5515e7e68d558524
+timing acc (serial==parallel): ndtr 4M=59874b0ec7cd990e ndtri 2M=5978a5a4dee5586a
