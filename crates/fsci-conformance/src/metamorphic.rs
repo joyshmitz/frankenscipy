@@ -724,7 +724,8 @@ mod tests {
             #[test]
             fn mr_minimize_scalar_recovers_center(c in -1.0e3f64..1.0e3) {
                 let f = move |x: f64| (x - c) * (x - c);
-                let res = minimize_scalar(f, MinimizeScalarOptions::default())
+                // |c| <= 1e3, so this bracket contains the minimum for every case.
+                let res = minimize_scalar(f, (-1.0e4, 1.0e4), MinimizeScalarOptions::default())
                     .expect("minimize_scalar should succeed");
                 prop_assert!(
                     (res.x - c).abs() < 1e-4 * (c.abs() + 1.0),

@@ -11,7 +11,6 @@
 //!   * closure receives exactly size^ndim values
 //! Plus edge-case errors: size = 0, empty input.
 
-use std::cell::RefCell;
 use std::fs;
 use std::path::PathBuf;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -141,11 +140,14 @@ fn diff_ndimage_generic_filter() {
     // === Closure receives exactly size^ndim values per call ===
     {
         let expected_len = size * size; // 2D → size² values per neighborhood
-        let observed_lengths = RefCell::new(Vec::new());
+        // generic_filter runs the closure in parallel across output cells, so the
+        // collector must be Sync; Mutex<Vec> works because these checks (count +
+        // all-equal) are order-independent.
+        let observed_lengths = std::sync::Mutex::new(Vec::<usize>::new());
         let g = generic_filter(
             &arr,
             |w| {
-                observed_lengths.borrow_mut().push(w.len());
+                observed_lengths.lock().unwrap().push(w.len());
                 w.iter().sum::<f64>()
             },
             size,
@@ -154,23 +156,20 @@ fn diff_ndimage_generic_filter() {
         )
         .expect("generic capture");
         // Filter visits every output cell once
-        let calls_eq_size = observed_lengths.borrow().len() == arr.size();
-        let all_lengths_correct = observed_lengths.borrow().iter().all(|&l| l == expected_len);
+        let observed = observed_lengths.lock().unwrap();
+        let calls_eq_size = observed.len() == arr.size();
+        let all_lengths_correct = observed.iter().all(|&l| l == expected_len);
         check(
             "closure_called_per_output_cell",
             calls_eq_size,
-            format!(
-                "calls={} expected={}",
-                observed_lengths.borrow().len(),
-                arr.size()
-            ),
+            format!("calls={} expected={}", observed.len(), arr.size()),
         );
         check(
             "closure_neighborhood_length_correct",
             all_lengths_correct,
             format!(
                 "expected={expected_len} actual={:?}",
-                &observed_lengths.borrow()[..5.min(observed_lengths.borrow().len())]
+                &observed[..5.min(observed.len())]
             ),
         );
         // sanity check the output is well-formed

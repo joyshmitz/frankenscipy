@@ -154,7 +154,9 @@ fn run_decode_proof(payload: &[u8]) -> DecodeProofResult {
     // Add all repair symbols with their equations
     let decoder = InactivationDecoder::new(k, SYMBOL_SIZE, seed);
     for sym in &repair_emitted {
-        let (cols, coefs) = decoder.repair_equation(sym.esi);
+        let (cols, coefs) = decoder
+            .repair_equation(sym.esi)
+            .expect("repair_equation should succeed for emitted repair symbol");
         received.push(ReceivedSymbol::repair(
             sym.esi,
             cols,
@@ -255,7 +257,9 @@ fn recover_payload_with_sidecar(
         let esi = k as u32 + offset as u32;
         let payload = hex_decode(payload_hex)
             .ok_or_else(|| format!("repair symbol {offset} payload not valid hex"))?;
-        let (cols, coefs) = decoder.repair_equation(esi);
+        let (cols, coefs) = decoder
+            .repair_equation(esi)
+            .map_err(|e| format!("repair_equation failed for esi {esi}: {e:?}"))?;
         received.push(ReceivedSymbol::repair(esi, cols, coefs, payload));
     }
 

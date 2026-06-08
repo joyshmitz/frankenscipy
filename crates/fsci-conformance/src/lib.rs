@@ -10469,7 +10469,9 @@ fn recover_payload_with_sidecar(
     for (offset, payload_hex) in sidecar.repair_symbol_payloads_hex.iter().enumerate() {
         let esi = k as u32 + offset as u32;
         let payload = hex_decode(payload_hex)?;
-        let (cols, coefs) = decoder.repair_equation(esi);
+        let (cols, coefs) = decoder.repair_equation(esi).map_err(|e| {
+            HarnessError::RaptorQ(format!("repair_equation failed for esi {esi}: {e:?}"))
+        })?;
         received.push(ReceivedSymbol::repair(esi, cols, coefs, payload));
     }
 
