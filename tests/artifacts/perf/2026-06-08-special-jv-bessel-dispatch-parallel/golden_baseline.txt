@@ -1,0 +1,5 @@
+GOLDEN (serial == parallel, bit-identical):
+n=100 jv=e047bd4356bc9aac kv=61bfbdfbe450e3cc
+n=5000 jv=4e57121f5e0c4051 kv=1d1bb7af14f82212
+n=50000 jv=01a9bcef59522bbe kv=9e28968498630f4a
+timing acc (serial==parallel): jv 500k=16129554d2fefa7d kv 100k=1036f70118c61d43

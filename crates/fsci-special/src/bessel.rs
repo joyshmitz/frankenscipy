@@ -4183,49 +4183,34 @@ fn bessel_dispatch(
     mode: RuntimeMode,
     kind: BesselKind,
 ) -> SpecialResult {
+    // Per-element real-order Bessel kernel (J_v/Y_v/I_v/K_v + scaled). Pure function of
+    // (order, x) given the fixed `kind`/`mode`, so the array arms below fan out across cores
+    // bit-identically via par_map_indices.
+    let eval = |order: f64, x: f64| -> Result<f64, SpecialError> {
+        match kind {
+            BesselKind::Jv => Ok(jv_scalar(order, x)),
+            BesselKind::Yv => yv_scalar(order, x, mode),
+            BesselKind::Jve => Ok(jv_scalar(order, x)),
+            BesselKind::Yve => yv_scalar(order, x, mode),
+            BesselKind::Iv => Ok(iv_scalar(order, x)),
+            BesselKind::Kv => kv_scalar(order, x, mode),
+            BesselKind::Ive => Ok(ive_scalar(order, x)),
+            BesselKind::Kve => Ok(kve_scalar(order, x)),
+        }
+    };
     match (v, z) {
         // Real-real: delegate to existing real scalars
         (SpecialTensor::RealScalar(order), SpecialTensor::RealScalar(x)) => {
-            let result = match kind {
-                BesselKind::Jv => Ok(jv_scalar(*order, *x)),
-                BesselKind::Yv => yv_scalar(*order, *x, mode),
-                BesselKind::Jve => Ok(jv_scalar(*order, *x)),
-                BesselKind::Yve => yv_scalar(*order, *x, mode),
-                BesselKind::Iv => Ok(iv_scalar(*order, *x)),
-                BesselKind::Kv => kv_scalar(*order, *x, mode),
-                BesselKind::Ive => Ok(ive_scalar(*order, *x)),
-                BesselKind::Kve => Ok(kve_scalar(*order, *x)),
-            };
-            result.map(SpecialTensor::RealScalar)
+            eval(*order, *x).map(SpecialTensor::RealScalar)
         }
-        (SpecialTensor::RealVec(orders), SpecialTensor::RealScalar(x)) => orders
-            .iter()
-            .map(|&order| match kind {
-                BesselKind::Jv => Ok(jv_scalar(order, *x)),
-                BesselKind::Yv => yv_scalar(order, *x, mode),
-                BesselKind::Jve => Ok(jv_scalar(order, *x)),
-                BesselKind::Yve => yv_scalar(order, *x, mode),
-                BesselKind::Iv => Ok(iv_scalar(order, *x)),
-                BesselKind::Kv => kv_scalar(order, *x, mode),
-                BesselKind::Ive => Ok(ive_scalar(order, *x)),
-                BesselKind::Kve => Ok(kve_scalar(order, *x)),
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .map(SpecialTensor::RealVec),
-        (SpecialTensor::RealScalar(order), SpecialTensor::RealVec(xs)) => xs
-            .iter()
-            .map(|&x| match kind {
-                BesselKind::Jv => Ok(jv_scalar(*order, x)),
-                BesselKind::Yv => yv_scalar(*order, x, mode),
-                BesselKind::Jve => Ok(jv_scalar(*order, x)),
-                BesselKind::Yve => yv_scalar(*order, x, mode),
-                BesselKind::Iv => Ok(iv_scalar(*order, x)),
-                BesselKind::Kv => kv_scalar(*order, x, mode),
-                BesselKind::Ive => Ok(ive_scalar(*order, x)),
-                BesselKind::Kve => Ok(kve_scalar(*order, x)),
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .map(SpecialTensor::RealVec),
+        (SpecialTensor::RealVec(orders), SpecialTensor::RealScalar(x)) => {
+            let x = *x;
+            par_map_indices(orders.len(), |i| eval(orders[i], x)).map(SpecialTensor::RealVec)
+        }
+        (SpecialTensor::RealScalar(order), SpecialTensor::RealVec(xs)) => {
+            let order = *order;
+            par_map_indices(xs.len(), |i| eval(order, xs[i])).map(SpecialTensor::RealVec)
+        }
         (SpecialTensor::RealVec(orders), SpecialTensor::RealVec(xs)) => {
             if orders.len() != xs.len() {
                 return Err(SpecialError {
@@ -4235,21 +4220,7 @@ fn bessel_dispatch(
                     detail: "vector inputs must have matching lengths",
                 });
             }
-            orders
-                .iter()
-                .zip(xs.iter())
-                .map(|(&order, &x)| match kind {
-                    BesselKind::Jv => Ok(jv_scalar(order, x)),
-                    BesselKind::Yv => yv_scalar(order, x, mode),
-                    BesselKind::Jve => Ok(jv_scalar(order, x)),
-                    BesselKind::Yve => yv_scalar(order, x, mode),
-                    BesselKind::Iv => Ok(iv_scalar(order, x)),
-                    BesselKind::Kv => kv_scalar(order, x, mode),
-                    BesselKind::Ive => Ok(ive_scalar(order, x)),
-                    BesselKind::Kve => Ok(kve_scalar(order, x)),
-                })
-                .collect::<Result<Vec<_>, _>>()
-                .map(SpecialTensor::RealVec)
+            par_map_indices(orders.len(), |i| eval(orders[i], xs[i])).map(SpecialTensor::RealVec)
         }
         // Real order, complex z
         (SpecialTensor::RealScalar(order), SpecialTensor::ComplexScalar(z_val)) => {
