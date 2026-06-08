@@ -1,0 +1,5 @@
+GOLDEN (serial == parallel, bit-identical):
+n=100 jn=37c81b7a478212a1 wright_bessel=7ad6adc6b0cf3e6e
+n=5000 jn=27f7244a713810ca wright_bessel=85774ed057c43e0c
+n=50000 jn=929ccd9941826c2f wright_bessel=35649479dfe1ac04
+timing acc (serial==parallel): jn 2M=37b846bb88af0d72 wright_bessel 500k=850a43d543f8897d

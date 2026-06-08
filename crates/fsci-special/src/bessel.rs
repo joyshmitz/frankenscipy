@@ -2692,6 +2692,51 @@ where
     }
 }
 
+/// Evaluate `f(0..n)` into a `Vec<f64>`, parallel over index chunks for large `n`.
+/// Bessel binary/ternary kernels (jn/yn recurrences, wright_bessel series) are expensive
+/// per element and each index writes its own slot, so chunking across cores and
+/// concatenating in index order is bit-identical to `(0..n).map(f).collect()` — including
+/// returning the first failing index's error in index order.
+fn par_map_indices<H>(n: usize, f: H) -> Result<Vec<f64>, SpecialError>
+where
+    H: Fn(usize) -> Result<f64, SpecialError> + Sync,
+{
+    let nthreads = if n < 256 {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n / 128)
+            .max(1)
+    };
+    if nthreads <= 1 {
+        return (0..n).map(&f).collect();
+    }
+    let chunk = n.div_ceil(nthreads);
+    let f = &f;
+    let chunk_results: Vec<Result<Vec<f64>, SpecialError>> = std::thread::scope(|scope| {
+        (0..nthreads)
+            .filter_map(|t| {
+                let i0 = t * chunk;
+                if i0 >= n {
+                    return None;
+                }
+                let i1 = (i0 + chunk).min(n);
+                Some(scope.spawn(move || (i0..i1).map(f).collect::<Result<Vec<f64>, _>>()))
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("bessel binary/ternary array worker panicked"))
+            .collect()
+    });
+    let mut out = Vec::with_capacity(n);
+    for cr in chunk_results {
+        out.extend(cr?);
+    }
+    Ok(out)
+}
+
 fn map_real_ternary<F>(
     function: &'static str,
     a: &SpecialTensor,
@@ -2701,7 +2746,7 @@ fn map_real_ternary<F>(
     kernel: F,
 ) -> SpecialResult
 where
-    F: Fn(f64, f64, f64) -> Result<f64, SpecialError>,
+    F: Fn(f64, f64, f64) -> Result<f64, SpecialError> + Sync,
 {
     match (a, b, c) {
         (
@@ -2713,32 +2758,26 @@ where
             SpecialTensor::RealVec(av),
             SpecialTensor::RealScalar(bv),
             SpecialTensor::RealScalar(cv),
-        ) => av
-            .iter()
-            .copied()
-            .map(|lhs| kernel(lhs, *bv, *cv))
-            .collect::<Result<Vec<_>, _>>()
-            .map(SpecialTensor::RealVec),
+        ) => {
+            let (bv, cv) = (*bv, *cv);
+            par_map_indices(av.len(), |i| kernel(av[i], bv, cv)).map(SpecialTensor::RealVec)
+        }
         (
             SpecialTensor::RealScalar(av),
             SpecialTensor::RealVec(bv),
             SpecialTensor::RealScalar(cv),
-        ) => bv
-            .iter()
-            .copied()
-            .map(|rhs| kernel(*av, rhs, *cv))
-            .collect::<Result<Vec<_>, _>>()
-            .map(SpecialTensor::RealVec),
+        ) => {
+            let (av, cv) = (*av, *cv);
+            par_map_indices(bv.len(), |i| kernel(av, bv[i], cv)).map(SpecialTensor::RealVec)
+        }
         (
             SpecialTensor::RealScalar(av),
             SpecialTensor::RealScalar(bv),
             SpecialTensor::RealVec(cv),
-        ) => cv
-            .iter()
-            .copied()
-            .map(|xv| kernel(*av, *bv, xv))
-            .collect::<Result<Vec<_>, _>>()
-            .map(SpecialTensor::RealVec),
+        ) => {
+            let (av, bv) = (*av, *bv);
+            par_map_indices(cv.len(), |i| kernel(av, bv, cv[i])).map(SpecialTensor::RealVec)
+        }
         (SpecialTensor::ComplexScalar(_), _, _)
         | (SpecialTensor::ComplexVec(_), _, _)
         | (_, SpecialTensor::ComplexScalar(_), _)
@@ -2775,24 +2814,20 @@ fn map_real_binary<F>(
     kernel: F,
 ) -> SpecialResult
 where
-    F: Fn(f64, f64) -> Result<f64, SpecialError>,
+    F: Fn(f64, f64) -> Result<f64, SpecialError> + Sync,
 {
     match (lhs, rhs) {
         (SpecialTensor::RealScalar(left), SpecialTensor::RealScalar(right)) => {
             kernel(*left, *right).map(SpecialTensor::RealScalar)
         }
-        (SpecialTensor::RealVec(left), SpecialTensor::RealScalar(right)) => left
-            .iter()
-            .copied()
-            .map(|value| kernel(value, *right))
-            .collect::<Result<Vec<_>, _>>()
-            .map(SpecialTensor::RealVec),
-        (SpecialTensor::RealScalar(left), SpecialTensor::RealVec(right)) => right
-            .iter()
-            .copied()
-            .map(|value| kernel(*left, value))
-            .collect::<Result<Vec<_>, _>>()
-            .map(SpecialTensor::RealVec),
+        (SpecialTensor::RealVec(left), SpecialTensor::RealScalar(right)) => {
+            let right = *right;
+            par_map_indices(left.len(), |i| kernel(left[i], right)).map(SpecialTensor::RealVec)
+        }
+        (SpecialTensor::RealScalar(left), SpecialTensor::RealVec(right)) => {
+            let left = *left;
+            par_map_indices(right.len(), |i| kernel(left, right[i])).map(SpecialTensor::RealVec)
+        }
         (SpecialTensor::RealVec(left), SpecialTensor::RealVec(right)) => {
             if left.len() != right.len() {
                 record_special_trace(
@@ -2811,12 +2846,7 @@ where
                     detail: "vector inputs must have matching lengths",
                 });
             }
-            left.iter()
-                .copied()
-                .zip(right.iter().copied())
-                .map(|(l, r)| kernel(l, r))
-                .collect::<Result<Vec<_>, _>>()
-                .map(SpecialTensor::RealVec)
+            par_map_indices(left.len(), |i| kernel(left[i], right[i])).map(SpecialTensor::RealVec)
         }
         (SpecialTensor::ComplexScalar(_), _)
         | (SpecialTensor::ComplexVec(_), _)
