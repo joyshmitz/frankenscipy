@@ -1558,6 +1558,14 @@ impl ContinuousDistribution for ChiSquared {
         lower_regularized_gamma(0.5 * self.df, 0.5 * x)
     }
 
+    fn logcdf(&self, x: f64) -> f64 {
+        // log P(k/2, x/2); finite in the left tail where P underflows. frankenscipy-s14mf
+        if x <= 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        fsci_special::log_gammainc_scalar(0.5 * self.df, 0.5 * x)
+    }
+
     fn sf(&self, x: f64) -> f64 {
         if x <= 0.0 {
             return 1.0;
@@ -3141,6 +3149,14 @@ impl ContinuousDistribution for GammaDist {
             return 0.0;
         }
         lower_regularized_gamma(self.a, x / self.scale)
+    }
+
+    fn logcdf(&self, x: f64) -> f64 {
+        // log P(a, x/scale); finite in the left tail where P underflows to 0. frankenscipy-s14mf
+        if x <= 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        fsci_special::log_gammainc_scalar(self.a, x / self.scale)
     }
 
     fn sf(&self, x: f64) -> f64 {
@@ -8323,6 +8339,14 @@ impl ContinuousDistribution for InverseGamma {
         lower_regularized_gamma(self.a, 1.0 / x)
     }
 
+    fn logsf(&self, x: f64) -> f64 {
+        // log P(a, 1/x); finite in the right tail where P underflows to 0. frankenscipy-s14mf
+        if x <= 0.0 {
+            return 0.0;
+        }
+        fsci_special::log_gammainc_scalar(self.a, 1.0 / x)
+    }
+
     fn ppf(&self, q: f64) -> f64 {
         if !(0.0..=1.0).contains(&q) {
             return f64::NAN;
@@ -10682,6 +10706,14 @@ impl ContinuousDistribution for Chi {
         lower_regularized_gamma(self.df / 2.0, x * x / 2.0)
     }
 
+    fn logcdf(&self, x: f64) -> f64 {
+        // log P(k/2, x²/2); finite in the left tail where P underflows. frankenscipy-s14mf
+        if x <= 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        fsci_special::log_gammainc_scalar(self.df / 2.0, x * x / 2.0)
+    }
+
     fn sf(&self, x: f64) -> f64 {
         // Closed-form survival Q(k/2, x²/2) — avoids the default 1−cdf collapsing
         // to 0 in the right tail (chi.sf(10,4) scipy 9.8e-21). frankenscipy-8y248
@@ -11010,6 +11042,14 @@ impl ContinuousDistribution for Nakagami {
             return 0.0;
         }
         lower_regularized_gamma(self.nu, self.nu * x * x)
+    }
+
+    fn logcdf(&self, x: f64) -> f64 {
+        // log P(nu, nu·x²); finite in the left tail where P underflows. frankenscipy-s14mf
+        if x <= 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        fsci_special::log_gammainc_scalar(self.nu, self.nu * x * x)
     }
 
     fn sf(&self, x: f64) -> f64 {
@@ -12667,6 +12707,14 @@ impl ContinuousDistribution for Erlang {
             return 0.0;
         }
         lower_regularized_gamma(self.k as f64, self.rate * x)
+    }
+
+    fn logcdf(&self, x: f64) -> f64 {
+        // log P(k, rate·x); finite in the left tail where P underflows. frankenscipy-s14mf
+        if x <= 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        fsci_special::log_gammainc_scalar(self.k as f64, self.rate * x)
     }
 
     fn sf(&self, x: f64) -> f64 {
@@ -38951,6 +38999,52 @@ mod tests {
         ext!(Maxwell::new(1.0), 45.0); // Q(1.5, ~1012)
         ext!(LogGamma::new(2.0), 7.0); // Q(2, e^7≈1097)
         ext!(HalfGenNorm::new(1.0), 800.0); // Q(1, 800)
+    }
+
+    #[test]
+    fn gamma_family_logcdf_logsf_consistent_and_finite() {
+        // logcdf == ln(cdf) and logsf == ln(sf) where representable; finite where
+        // the lower-gamma P underflows to 0 (frankenscipy-s14mf).
+        macro_rules! mid_cdf {
+            ($d:expr, $xs:expr) => {{
+                let d = $d;
+                for &x in $xs {
+                    let lc = d.logcdf(x);
+                    let r = d.cdf(x).ln();
+                    assert!(
+                        (lc - r).abs() <= 1e-9 * r.abs().max(1.0),
+                        "{}: logcdf({x})={lc} vs ln(cdf)={r}",
+                        stringify!($d)
+                    );
+                }
+            }};
+        }
+        mid_cdf!(GammaDist::new(2.0, 1.0), &[0.5, 2.0, 6.0]);
+        mid_cdf!(ChiSquared::new(4.0), &[1.0, 4.0, 12.0]);
+        mid_cdf!(Chi::new(4.0), &[0.5, 2.0, 5.0]);
+        mid_cdf!(Nakagami::new(2.0), &[0.3, 1.0, 2.5]);
+        mid_cdf!(Erlang::new(3, 1.0), &[1.0, 4.0, 10.0]);
+        // InverseGamma logsf == ln(sf).
+        let ig = InverseGamma::new(2.0);
+        for &x in &[0.5, 1.0, 3.0] {
+            assert!((ig.logsf(x) - ig.sf(x).ln()).abs() <= 1e-9);
+        }
+
+        // Underflowed left tail: cdf == 0 but logcdf finite.
+        macro_rules! ext_cdf {
+            ($d:expr, $x:expr) => {{
+                let d = $d;
+                assert_eq!(d.cdf($x), 0.0, "precondition: cdf underflowed at {}", $x);
+                let lc = d.logcdf($x);
+                assert!(lc.is_finite() && lc < -300.0, "{}: logcdf={lc}", stringify!($d));
+            }};
+        }
+        ext_cdf!(GammaDist::new(50.0, 1.0), 1e-15); // P(50, 1e-15) → 0
+        ext_cdf!(ChiSquared::new(40.0), 1e-30); // P(20, 5e-31) → 0
+        // InverseGamma right tail: sf == 0 but logsf finite.
+        let ig2 = InverseGamma::new(50.0);
+        assert_eq!(ig2.sf(1e15), 0.0);
+        assert!(ig2.logsf(1e15).is_finite() && ig2.logsf(1e15) < -300.0);
     }
 
     // ── Exponential distribution ────────────────────────────────────
