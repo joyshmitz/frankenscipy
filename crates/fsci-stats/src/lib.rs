@@ -1261,6 +1261,52 @@ impl NoncentralT {
         }
         (sum * h / 3.0).max(0.0)
     }
+
+    /// Survival function via the same chi-scaled quadrature.
+    ///
+    /// sf(t) = 1 − F(t) = ∫_0^∞ (1 − Φ(t·s − μ)) · pdf_S(s) ds
+    ///                  = ∫_0^∞ Φ(μ − t·s) · pdf_S(s) ds,
+    /// using ∫ pdf_S = 1. Computing the integrand from `Normal::sf` (a closed
+    /// erfc form) keeps full precision in the right tail, where the default
+    /// `1 − cdf` collapses to 0 (nct(10,0).sf(150) scipy 2.13e-18 vs 0).
+    fn nct_sf_integrate(&self, t: f64) -> f64 {
+        if t.is_nan() || self.nc.is_nan() || self.df.is_nan() {
+            return f64::NAN;
+        }
+        if t.is_infinite() {
+            return if t > 0.0 { 0.0 } else { 1.0 };
+        }
+        if self.nc.abs() < 1e-10 {
+            return StudentT::new(self.df).sf(t);
+        }
+
+        let nu = self.df;
+        let mu = self.nc;
+        let norm = Normal::new(0.0, 1.0);
+
+        let s_max = Self::cdf_pdf_s_max(nu);
+        let steps = 2000usize; // even number of panels for Simpson's rule
+        let h = s_max / steps as f64;
+
+        let integrand = |s: f64| -> f64 {
+            if s <= 0.0 {
+                return 0.0;
+            }
+            let log_d = Self::log_pdf_s(nu, s);
+            if log_d < -700.0 {
+                return 0.0;
+            }
+            log_d.exp() * norm.sf(t * s - mu)
+        };
+
+        let mut sum = integrand(0.0) + integrand(s_max);
+        for i in 1..steps {
+            let s = i as f64 * h;
+            let coef = if i % 2 == 0 { 2.0 } else { 4.0 };
+            sum += coef * integrand(s);
+        }
+        (sum * h / 3.0).clamp(0.0, 1.0)
+    }
 }
 
 impl ContinuousDistribution for NoncentralT {
@@ -1270,6 +1316,10 @@ impl ContinuousDistribution for NoncentralT {
 
     fn cdf(&self, x: f64) -> f64 {
         self.nct_cdf_integrate(x)
+    }
+
+    fn sf(&self, x: f64) -> f64 {
+        self.nct_sf_integrate(x)
     }
 
     fn ppf(&self, q: f64) -> f64 {
@@ -3779,6 +3829,16 @@ impl ContinuousDistribution for Lognormal {
         standard_normal_cdf(z)
     }
 
+    fn sf(&self, x: f64) -> f64 {
+        // Survival Φ(−z) = ½·erfc(z/√2) directly — the default 1−cdf returned 0
+        // in the deep right tail (lognorm.sf(1e4,1) scipy 1.6e-20). frankenscipy-8y248
+        if x <= 0.0 {
+            return 1.0;
+        }
+        let z = (x / self.scale).ln() / self.s;
+        0.5 * fsci_special::erfc_scalar(z * FRAC_1_SQRT_2)
+    }
+
     fn ppf(&self, q: f64) -> f64 {
         if !(0.0..=1.0).contains(&q) {
             return f64::NAN;
@@ -5197,6 +5257,15 @@ impl ContinuousDistribution for Maxwell {
                     * (x / self.scale)
                     * (-(x * x) / (2.0 * self.scale * self.scale)).exp()
         }
+    }
+
+    fn sf(&self, x: f64) -> f64 {
+        // Maxwell cdf = P(3/2, x²/(2σ²)); survival = Q(3/2, x²/(2σ²)) directly,
+        // avoiding the default 1−cdf collapse in the tail. frankenscipy-8y248
+        if x <= 0.0 {
+            return 1.0;
+        }
+        upper_regularized_gamma(1.5, x * x / (2.0 * self.scale * self.scale))
     }
 
     fn ppf(&self, q: f64) -> f64 {
@@ -9376,6 +9445,22 @@ impl ContinuousDistribution for GenExtreme {
         }
     }
 
+    fn sf(&self, x: f64) -> f64 {
+        // Survival = 1 − exp(−τ) = −expm1(−τ), computed directly so the right
+        // tail (τ→0, cdf→1) doesn't collapse to 0 (genextreme(0).sf(40) scipy
+        // 4.2e-18). frankenscipy-8y248
+        let c = self.c;
+        if c.abs() < 1e-15 {
+            -((-(-x).exp()).exp_m1())
+        } else {
+            let t = 1.0 + c * x;
+            if t <= 0.0 {
+                return if c > 0.0 { 1.0 } else { 0.0 };
+            }
+            -((-t.powf(-1.0 / c)).exp_m1())
+        }
+    }
+
     fn ppf(&self, q: f64) -> f64 {
         if !(0.0..=1.0).contains(&q) {
             return f64::NAN;
@@ -10364,6 +10449,15 @@ impl ContinuousDistribution for Chi {
         lower_regularized_gamma(self.df / 2.0, x * x / 2.0)
     }
 
+    fn sf(&self, x: f64) -> f64 {
+        // Closed-form survival Q(k/2, x²/2) — avoids the default 1−cdf collapsing
+        // to 0 in the right tail (chi.sf(10,4) scipy 9.8e-21). frankenscipy-8y248
+        if x <= 0.0 {
+            return 1.0;
+        }
+        upper_regularized_gamma(self.df / 2.0, x * x / 2.0)
+    }
+
     fn ppf(&self, q: f64) -> f64 {
         if !(0.0..=1.0).contains(&q) {
             return f64::NAN;
@@ -10675,6 +10769,14 @@ impl ContinuousDistribution for Nakagami {
             return 0.0;
         }
         lower_regularized_gamma(self.nu, self.nu * x * x)
+    }
+
+    fn sf(&self, x: f64) -> f64 {
+        // Closed-form survival Q(nu, nu·x²). frankenscipy-8y248
+        if x <= 0.0 {
+            return 1.0;
+        }
+        upper_regularized_gamma(self.nu, self.nu * x * x)
     }
 
     fn mean(&self) -> f64 {
@@ -12259,6 +12361,14 @@ impl ContinuousDistribution for Erlang {
             return 0.0;
         }
         lower_regularized_gamma(self.k as f64, self.rate * x)
+    }
+
+    fn sf(&self, x: f64) -> f64 {
+        // Closed-form survival Q(k, rate·x). frankenscipy-8y248
+        if x <= 0.0 {
+            return 1.0;
+        }
+        upper_regularized_gamma(self.k as f64, self.rate * x)
     }
 
     fn ppf(&self, q: f64) -> f64 {
@@ -13965,6 +14075,15 @@ impl ContinuousDistribution for Gompertz {
             return 0.0;
         }
         1.0 - (-self.c * (x.exp() - 1.0)).exp()
+    }
+
+    fn sf(&self, x: f64) -> f64 {
+        // Closed-form survival exp(−c(eˣ−1)) — the default 1−cdf returned 0 in
+        // the tail (gompertz.sf(5,1) scipy 9.5e-65). frankenscipy-8y248
+        if x <= 0.0 {
+            return 1.0;
+        }
+        (-self.c * (x.exp() - 1.0)).exp()
     }
 
     fn mean(&self) -> f64 {
@@ -34474,6 +34593,17 @@ impl ContinuousDistribution for FoldedNormal {
         standard_normal_cdf(x - self.c) + standard_normal_cdf(x + self.c) - 1.0
     }
 
+    fn sf(&self, x: f64) -> f64 {
+        // Survival = sf_norm(x−c)+sf_norm(x+c) = ½erfc((x−c)/√2)+½erfc((x+c)/√2),
+        // direct so the tail doesn't collapse (foldnorm.sf(15,1) scipy 7.8e-45).
+        // frankenscipy-8y248
+        if x <= 0.0 {
+            return 1.0;
+        }
+        0.5 * fsci_special::erfc_scalar((x - self.c) * FRAC_1_SQRT_2)
+            + 0.5 * fsci_special::erfc_scalar((x + self.c) * FRAC_1_SQRT_2)
+    }
+
     fn mean(&self) -> f64 {
         // E[|X|] where X ~ N(c, 1)
         let c = self.c;
@@ -37875,6 +38005,49 @@ mod tests {
         let nct = NoncentralT::new(7.0, 1.5);
         let phi = Normal::standard().cdf(-1.5);
         assert!((nct.cdf(0.0) - phi).abs() < 1e-12);
+    }
+
+    #[test]
+    fn noncentralt_sf_consistent_with_cdf_midrange() {
+        // Where cdf is not near 1, the direct sf integral must agree with
+        // 1 - cdf to quadrature precision (frankenscipy-8y248).
+        let cases = [
+            (5.0, 0.5, 0.5),
+            (5.0, 0.5, 1.5),
+            (10.0, 1.0, 1.0),
+            (15.0, -2.5, 1.5),
+            (20.0, 2.0, 2.0),
+        ];
+        for (df, nc, x) in cases {
+            let d = NoncentralT::new(df, nc);
+            assert!(
+                (d.sf(x) - (1.0 - d.cdf(x))).abs() < 1e-9,
+                "nct({df},{nc}).sf({x})={} vs 1-cdf={}",
+                d.sf(x),
+                1.0 - d.cdf(x)
+            );
+        }
+    }
+
+    #[test]
+    fn noncentralt_sf_tail_does_not_collapse() {
+        // The default 1-cdf returned exactly 0 here; the direct erfc-based
+        // integral must keep a positive, finite tail value (frankenscipy-8y248).
+        // nc=0 routes to the closed-form central-t sf; scipy nct(10,0).sf(150)
+        // = 2.13e-18.
+        let central = NoncentralT::new(10.0, 0.0);
+        let s = central.sf(150.0);
+        assert!(s > 0.0 && s < 1e-15, "central tail sf collapsed: {s}");
+        assert!(
+            (s - StudentT::new(10.0).sf(150.0)).abs() < 1e-30,
+            "nc=0 sf must match central StudentT sf"
+        );
+        // Noncentral tail stays positive and below the 1-cdf machine floor.
+        let nc = NoncentralT::new(10.0, 2.0);
+        let s2 = nc.sf(150.0);
+        assert!(s2 > 0.0 && s2 < 1e-12, "noncentral tail sf collapsed: {s2}");
+        // Monotone decreasing into the tail.
+        assert!(nc.sf(20.0) > nc.sf(50.0) && nc.sf(50.0) > s2);
     }
 
     // ── Exponential distribution ────────────────────────────────────
