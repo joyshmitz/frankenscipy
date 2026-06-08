@@ -1279,6 +1279,52 @@ pub fn hyp2f1(
     hyp2f1_dispatch("hyp2f1", a, b, c, z, mode)
 }
 
+/// Evaluate `f(0..n)` into a `Vec<T>`, parallel over index chunks for large `n`.
+/// Hypergeometric kernels (2F1/1F1 series, up to thousands of terms) are very expensive per
+/// element and each index writes its own slot, so chunking across cores and concatenating in
+/// index order is bit-identical to `(0..n).map(f).collect()` — including returning the first
+/// failing index's error in index order. Generic over the output type (f64 or Complex64).
+fn par_map_indices<T, H>(n: usize, f: H) -> Result<Vec<T>, SpecialError>
+where
+    T: Send,
+    H: Fn(usize) -> Result<T, SpecialError> + Sync,
+{
+    let nthreads = if n < 64 {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n / 32)
+            .max(1)
+    };
+    if nthreads <= 1 {
+        return (0..n).map(&f).collect();
+    }
+    let chunk = n.div_ceil(nthreads);
+    let f = &f;
+    let chunk_results: Vec<Result<Vec<T>, SpecialError>> = std::thread::scope(|scope| {
+        (0..nthreads)
+            .filter_map(|t| {
+                let i0 = t * chunk;
+                if i0 >= n {
+                    return None;
+                }
+                let i1 = (i0 + chunk).min(n);
+                Some(scope.spawn(move || (i0..i1).map(f).collect::<Result<Vec<T>, _>>()))
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("hypergeometric array worker panicked"))
+            .collect()
+    });
+    let mut out = Vec::with_capacity(n);
+    for cr in chunk_results {
+        out.extend(cr?);
+    }
+    Ok(out)
+}
+
 fn hyp2f1_dispatch(
     function: &'static str,
     a: &SpecialTensor,
@@ -1330,27 +1376,26 @@ fn hyp2f1_dispatch(
             Ok(SpecialTensor::RealScalar(result))
         }
     } else {
-        // At least one vector
+        // At least one vector: each output index is an independent broadcast evaluation
+        // (reads inputs at index i, no cross-index state), so fan them across cores.
         if is_complex {
-            let mut results = Vec::with_capacity(out_len);
-            for i in 0..out_len {
+            par_map_indices(out_len, |i| {
                 let a_c = tensor_get_complex(a, i, a_len)?;
                 let b_c = tensor_get_complex(b, i, b_len)?;
                 let c_c = tensor_get_complex(c, i, c_len)?;
                 let z_c = tensor_get_complex(z, i, z_len)?;
-                results.push(hyp2f1_complex_parameters(a_c, b_c, c_c, z_c, mode)?);
-            }
-            Ok(SpecialTensor::ComplexVec(results))
+                hyp2f1_complex_parameters(a_c, b_c, c_c, z_c, mode)
+            })
+            .map(SpecialTensor::ComplexVec)
         } else {
-            let mut results = Vec::with_capacity(out_len);
-            for i in 0..out_len {
+            par_map_indices(out_len, |i| {
                 let a_r = tensor_get_real(a, i, a_len)?;
                 let b_r = tensor_get_real(b, i, b_len)?;
                 let c_r = tensor_get_real(c, i, c_len)?;
                 let z_r = tensor_get_real(z, i, z_len)?;
-                results.push(hyp2f1_scalar(a_r, b_r, c_r, z_r, mode)?);
-            }
-            Ok(SpecialTensor::RealVec(results))
+                hyp2f1_scalar(a_r, b_r, c_r, z_r, mode)
+            })
+            .map(SpecialTensor::RealVec)
         }
     }
 }
