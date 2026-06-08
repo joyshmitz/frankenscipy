@@ -118,18 +118,20 @@ fn map_complex_binary<F>(
     kernel: F,
 ) -> SpecialResult
 where
-    F: Fn(Complex64, Complex64) -> Complex64,
+    F: Fn(Complex64, Complex64) -> Complex64 + Sync,
 {
     match (a, b) {
         (SpecialTensor::ComplexScalar(lhs), SpecialTensor::ComplexScalar(rhs)) => {
             Ok(SpecialTensor::ComplexScalar(kernel(*lhs, *rhs)))
         }
-        (SpecialTensor::ComplexVec(lhs), SpecialTensor::ComplexScalar(rhs)) => Ok(
-            SpecialTensor::ComplexVec(lhs.iter().map(|value| kernel(*value, *rhs)).collect()),
-        ),
-        (SpecialTensor::ComplexScalar(lhs), SpecialTensor::ComplexVec(rhs)) => Ok(
-            SpecialTensor::ComplexVec(rhs.iter().map(|value| kernel(*lhs, *value)).collect()),
-        ),
+        (SpecialTensor::ComplexVec(lhs), SpecialTensor::ComplexScalar(rhs)) => {
+            let rhs = *rhs;
+            par_map_indices(lhs.len(), |i| Ok(kernel(lhs[i], rhs))).map(SpecialTensor::ComplexVec)
+        }
+        (SpecialTensor::ComplexScalar(lhs), SpecialTensor::ComplexVec(rhs)) => {
+            let lhs = *lhs;
+            par_map_indices(rhs.len(), |i| Ok(kernel(lhs, rhs[i]))).map(SpecialTensor::ComplexVec)
+        }
         (SpecialTensor::ComplexVec(lhs), SpecialTensor::ComplexVec(rhs)) => {
             if lhs.len() != rhs.len() {
                 return Err(SpecialError {
@@ -139,12 +141,8 @@ where
                     detail: "vector inputs must have matching lengths",
                 });
             }
-            Ok(SpecialTensor::ComplexVec(
-                lhs.iter()
-                    .zip(rhs.iter())
-                    .map(|(left, right)| kernel(*left, *right))
-                    .collect(),
-            ))
+            par_map_indices(lhs.len(), |i| Ok(kernel(lhs[i], rhs[i])))
+                .map(SpecialTensor::ComplexVec)
         }
         (SpecialTensor::RealScalar(lhs), SpecialTensor::ComplexScalar(rhs)) => Ok(
             SpecialTensor::ComplexScalar(kernel(Complex64::from_real(*lhs), *rhs)),
@@ -153,32 +151,22 @@ where
             SpecialTensor::ComplexScalar(kernel(*lhs, Complex64::from_real(*rhs))),
         ),
         (SpecialTensor::RealVec(lhs), SpecialTensor::ComplexScalar(rhs)) => {
-            Ok(SpecialTensor::ComplexVec(
-                lhs.iter()
-                    .map(|value| kernel(Complex64::from_real(*value), *rhs))
-                    .collect(),
-            ))
+            let rhs = *rhs;
+            par_map_indices(lhs.len(), |i| Ok(kernel(Complex64::from_real(lhs[i]), rhs)))
+                .map(SpecialTensor::ComplexVec)
         }
         (SpecialTensor::ComplexScalar(lhs), SpecialTensor::RealVec(rhs)) => {
-            Ok(SpecialTensor::ComplexVec(
-                rhs.iter()
-                    .map(|value| kernel(*lhs, Complex64::from_real(*value)))
-                    .collect(),
-            ))
+            let lhs = *lhs;
+            par_map_indices(rhs.len(), |i| Ok(kernel(lhs, Complex64::from_real(rhs[i]))))
+                .map(SpecialTensor::ComplexVec)
         }
         (SpecialTensor::RealScalar(lhs), SpecialTensor::ComplexVec(rhs)) => {
-            Ok(SpecialTensor::ComplexVec(
-                rhs.iter()
-                    .map(|value| kernel(Complex64::from_real(*lhs), *value))
-                    .collect(),
-            ))
+            let lhs = Complex64::from_real(*lhs);
+            par_map_indices(rhs.len(), |i| Ok(kernel(lhs, rhs[i]))).map(SpecialTensor::ComplexVec)
         }
         (SpecialTensor::ComplexVec(lhs), SpecialTensor::RealScalar(rhs)) => {
-            Ok(SpecialTensor::ComplexVec(
-                lhs.iter()
-                    .map(|value| kernel(*value, Complex64::from_real(*rhs)))
-                    .collect(),
-            ))
+            let rhs = Complex64::from_real(*rhs);
+            par_map_indices(lhs.len(), |i| Ok(kernel(lhs[i], rhs))).map(SpecialTensor::ComplexVec)
         }
         (SpecialTensor::RealVec(lhs), SpecialTensor::ComplexVec(rhs)) => {
             if lhs.len() != rhs.len() {
@@ -189,12 +177,10 @@ where
                     detail: "vector inputs must have matching lengths",
                 });
             }
-            Ok(SpecialTensor::ComplexVec(
-                lhs.iter()
-                    .zip(rhs.iter())
-                    .map(|(left, right)| kernel(Complex64::from_real(*left), *right))
-                    .collect(),
-            ))
+            par_map_indices(lhs.len(), |i| {
+                Ok(kernel(Complex64::from_real(lhs[i]), rhs[i]))
+            })
+            .map(SpecialTensor::ComplexVec)
         }
         (SpecialTensor::ComplexVec(lhs), SpecialTensor::RealVec(rhs)) => {
             if lhs.len() != rhs.len() {
@@ -205,12 +191,10 @@ where
                     detail: "vector inputs must have matching lengths",
                 });
             }
-            Ok(SpecialTensor::ComplexVec(
-                lhs.iter()
-                    .zip(rhs.iter())
-                    .map(|(left, right)| kernel(*left, Complex64::from_real(*right)))
-                    .collect(),
-            ))
+            par_map_indices(lhs.len(), |i| {
+                Ok(kernel(lhs[i], Complex64::from_real(rhs[i])))
+            })
+            .map(SpecialTensor::ComplexVec)
         }
         _ => Err(SpecialError {
             function,
@@ -1027,9 +1011,10 @@ where
 /// and each index writes its own slot, so chunking across cores and concatenating in
 /// index order is bit-identical to `(0..n).map(f).collect()` — including returning the
 /// first failing index's error in index order. Used by the array arms below.
-fn par_map_indices<G>(n: usize, f: G) -> Result<Vec<f64>, SpecialError>
+fn par_map_indices<T, G>(n: usize, f: G) -> Result<Vec<T>, SpecialError>
 where
-    G: Fn(usize) -> Result<f64, SpecialError> + Sync,
+    T: Send,
+    G: Fn(usize) -> Result<T, SpecialError> + Sync,
 {
     let nthreads = if n < 256 {
         1
@@ -1045,7 +1030,7 @@ where
     }
     let chunk = n.div_ceil(nthreads);
     let f = &f;
-    let chunk_results: Vec<Result<Vec<f64>, SpecialError>> = std::thread::scope(|scope| {
+    let chunk_results: Vec<Result<Vec<T>, SpecialError>> = std::thread::scope(|scope| {
         (0..nthreads)
             .filter_map(|t| {
                 let i0 = t * chunk;
@@ -1053,7 +1038,7 @@ where
                     return None;
                 }
                 let i1 = (i0 + chunk).min(n);
-                Some(scope.spawn(move || (i0..i1).map(f).collect::<Result<Vec<f64>, _>>()))
+                Some(scope.spawn(move || (i0..i1).map(f).collect::<Result<Vec<T>, _>>()))
             })
             .collect::<Vec<_>>()
             .into_iter()

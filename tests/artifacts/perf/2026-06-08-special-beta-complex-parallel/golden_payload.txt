@@ -1,0 +1,6 @@
+===GOLDEN_PAYLOAD_BEGIN===
+n=100 beta(len=100,xor=214d3c2994c73fea) betaln(len=100,xor=b4086d8407d83da0)
+n=5000 beta(len=5000,xor=88b847ee7ec1be78) betaln(len=5000,xor=e09255e0a956c84c)
+n=50000 beta(len=50000,xor=1d6a695a45c388a4) betaln(len=50000,xor=c5983ad07db5a53d)
+===GOLDEN_PAYLOAD_END===
+timing acc: beta 500k=23a0e811045ed513  betaln 500k=eafb4859602342e3
