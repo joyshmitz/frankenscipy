@@ -1,0 +1,10 @@
+# Aᵀ·x via cached CSC column-gather vs serial CSR scatter (csr_matvec_transpose).
+# Kernel A/B byte-identical (identical=true); CSC stores each column in
+# increasing-row order = serial scatter accumulation order.
+m=  60000 n=  40000 nnz=  360000 identical=true csr_scatter=775µs   csc_parallel=2.93ms ratio=0.3x (serial gate)
+m= 200000 n= 150000 nnz= 1500000 identical=true csr_scatter=4.037ms csc_parallel=3.309ms ratio=1.2x
+m= 400000 n= 300000 nnz= 3600000 identical=true csr_scatter=8.774ms csc_parallel=3.727ms ratio=2.4x
+
+# End-to-end (lib lsqr + svds, bidiagonalization: A and Aᵀ each iteration)
+lsqr m=200000 n=150000 nnz=1.8M  489.5ms -> 322.9ms  (1.52x)
+svds n=120000 nnz=1.15M          303.6ms -> 210.2ms  (1.44x)

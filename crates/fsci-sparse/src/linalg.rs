@@ -2588,12 +2588,17 @@ pub fn lsqr(
         });
     }
 
+    // Cache A in CSC once so every per-iteration Aᵀ·u is a byte-identical parallel
+    // column-gather (`csc_matvec`) instead of a serial scatter; the O(nnz)
+    // conversion amortizes across the bidiagonalization iterations.
+    let a_csc = a.to_csc()?;
+
     // Initialize: β₁u₁ = b
     let mut beta = b_norm;
     let mut u: Vec<f64> = b.iter().map(|bi| bi / beta).collect();
 
     // α₁v₁ = A^T u₁
-    let atb = csr_matvec_transpose(a, &u);
+    let atb = csc_matvec(&a_csc, &u);
     let mut alpha = vec_norm(&atb);
     let mut v: Vec<f64> = if alpha > 0.0 {
         atb.iter().map(|ai| ai / alpha).collect()
@@ -2622,7 +2627,7 @@ pub fn lsqr(
         }
 
         // v = A^T*u - beta*v
-        let atu = csr_matvec_transpose(a, &u);
+        let atu = csc_matvec(&a_csc, &u);
         for i in 0..n {
             v[i] = atu[i] - beta * v[i];
         }
@@ -2907,6 +2912,10 @@ fn is_row_diagonally_dominant(a: &CsrMatrix, tol: f64) -> bool {
 }
 
 /// CSR matrix-transpose-vector product: result = A^T * x
+/// Serial reference for `Aᵀ·x` (scatter form). Superseded in production by the
+/// parallel CSC column-gather [`csc_matvec`]; retained as the byte-identity
+/// reference used by tests.
+#[cfg(test)]
 fn csr_matvec_transpose(a: &CsrMatrix, x: &[f64]) -> Vec<f64> {
     let shape = a.shape();
     let indptr = a.indptr();
@@ -2918,6 +2927,62 @@ fn csr_matvec_transpose(a: &CsrMatrix, x: &[f64]) -> Vec<f64> {
             result[indices[idx]] += data[idx] * x[i];
         }
     }
+    result
+}
+
+/// `Aᵀ·x` evaluated from a CSC of `A` as an independent per-column gather.
+///
+/// Byte-identical to [`csr_matvec_transpose`]: a CSC stores each column's entries
+/// in increasing-row order, which is exactly the order the serial CSR scatter
+/// accumulates `result[col]`, so the gather sums the same terms in the same
+/// order. Each output column is independent, so the gather parallelizes across
+/// row chunks (work-scaled, gated above ~256K nnz). Build the CSC ONCE and reuse
+/// it across a solver's iterations to amortize the O(nnz) conversion — this is
+/// the transpose companion to the parallel forward `csr_matvec`.
+fn csc_matvec(csc: &CscMatrix, x: &[f64]) -> Vec<f64> {
+    let n = csc.shape().cols;
+    let indptr = csc.indptr();
+    let indices = csc.indices();
+    let data = csc.data();
+    let nnz = data.len();
+    let nthreads = if nnz < 1 << 18 || n < 256 {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(|c| c.get())
+            .unwrap_or(1)
+            .min(nnz >> 17)
+            .max(1)
+    };
+
+    let mut result = vec![0.0; n];
+    if nthreads <= 1 {
+        for c in 0..n {
+            let mut s = 0.0;
+            for idx in indptr[c]..indptr[c + 1] {
+                s += data[idx] * x[indices[idx]];
+            }
+            result[c] = s;
+        }
+        return result;
+    }
+
+    let chunk = n.div_ceil(nthreads);
+    std::thread::scope(|scope| {
+        for (t, slot) in result.chunks_mut(chunk).enumerate() {
+            let base = t * chunk;
+            scope.spawn(move || {
+                for (r, out) in slot.iter_mut().enumerate() {
+                    let c = base + r;
+                    let mut s = 0.0;
+                    for idx in indptr[c]..indptr[c + 1] {
+                        s += data[idx] * x[indices[idx]];
+                    }
+                    *out = s;
+                }
+            });
+        }
+    });
     result
 }
 
@@ -7928,6 +7993,10 @@ pub fn svds(a: &CsrMatrix, k: usize, options: EigsOptions) -> SparseResult<SvdsR
     }
     let options = normalize_eigs_options(options);
 
+    // Cache A in CSC once so every per-iteration Aᵀ·w is a byte-identical parallel
+    // column-gather (`csc_matvec`), amortized across the k·max_iter power steps.
+    let a_csc = a.to_csc()?;
+
     // Compute eigenvalues of A^T A via power iteration
     // A^T A is n×n symmetric positive semidefinite
     let mut singular_values = Vec::with_capacity(k);
@@ -7962,7 +8031,7 @@ pub fn svds(a: &CsrMatrix, k: usize, options: EigsOptions) -> SparseResult<SvdsR
             // w = A * v
             let w = csr_matvec(a, &v);
             // v_new = A^T * w = A^T A v
-            let mut v_new = csr_matvec_transpose(a, &w);
+            let mut v_new = csc_matvec(&a_csc, &w);
 
             // Deflate: orthogonalize against previous eigenvectors
             for prev in &v_vecs {
