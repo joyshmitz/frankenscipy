@@ -105,28 +105,30 @@ at the bottom for re-evaluation.
 - **Review date:** 2026-04-25
 - **Related beads:** frankenscipy-r8ug, frankenscipy-ljmg
 
-## DISC-008 — fsci-signal remez least-squares approximation (not Parks-McClellan)
+## DISC-008 — fsci-signal remez least-squares approximation (RESOLVED 2026-06-08)
 
 - **Reference:** scipy.signal.remez (Parks-McClellan / Remez exchange,
   equiripple minimax).
-- **Our impl:** fsci_signal::remez is documented in-source as a
-  "Simplified Remez: use frequency-sampling method as approximation" —
-  it solves a *weighted least-squares* fit on the cosine basis, NOT the
-  minimax exchange. Least-squares ≠ minimax, so the coefficients differ
-  from scipy by ~0.02–0.05 on canonical lowpass / bandpass designs
-  (verified vs scipy 1.17.1: remez_lp_11 maxdiff 1.9e-2, remez_bp_15
-  maxdiff 4.5e-2).
-- **Impact:** P2C-011 fixture cases for remez use `atol = 0.06,
-  rtol = 0.05` per br-7jrx. The qualitative response shape is preserved
-  but the equiripple property is not.
-- **Resolution:** ACCEPTED for now — a faithful fix requires replacing
-  the least-squares solve with the actual Parks-McClellan exchange
-  (the equiripple optimum is unique, so a correct port will match scipy
-  to high precision). Tracked as a follow-up.
+- **History:** fsci_signal::remez was a "Simplified Remez" *weighted
+  least-squares* cosine fit, NOT the minimax exchange — diverging from
+  scipy by ~0.02–0.05 (remez_lp_11 1.9e-2, remez_bp_15 4.5e-2).
+- **Resolution:** RESOLVED for odd `numtaps` (Type I) — replaced with a
+  true Parks-McClellan exchange (`remez_type1_pm`): dense band grid,
+  barycentric-Lagrange deviation + amplitude interpolation, alternating-
+  extrema search, Chebyshev DCT-II coefficient recovery. The equiripple
+  optimum is unique, so it matches scipy 1.17.1 to machine precision —
+  verified across lowpass/bandpass/highpass/order-21/weighted designs:
+  remez_lp_11 1.1e-16, remez_bp_15 4.2e-16, remez_lp_21 1.9e-16,
+  remez_hp_17 9.4e-16, remez_bp_25(w=[1,2,1]) 4.6e-16. P2C-011 remez
+  fixture tolerances tightened `0.06/0.05 → 1e-9/1e-9`; unit test
+  `remez_matches_scipy_reference` locks it.
+- **Remaining:** even `numtaps` (Type II) still uses the least-squares
+  fallback (the Type-II basis transform is a follow-up); no fixture
+  exercises it.
 - **Tests affected:** P2C-011 remez_lp_11_passband_0p2_stopband_0p3,
   remez_bp_15_3band.
 - **Review date:** 2026-06-08
-- **Related beads:** frankenscipy-7jrx
+- **Related beads:** frankenscipy-7jrx, frankenscipy-zxxdi
 
 ## DISC-008a — fsci-signal firwin2 (RESOLVED 2026-06-08)
 

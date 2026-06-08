@@ -7686,8 +7686,14 @@ pub fn remez(
         ));
     }
 
-    // Simplified Remez: use frequency-sampling method as approximation
-    // (Full Parks-McClellan is very complex; this provides a reasonable approximation)
+    // Odd numtaps: true Parks-McClellan (Type I equiripple, matches scipy to
+    // ~1e-6 since the minimax optimum is unique). Even numtaps (Type II) still
+    // uses the least-squares approximation below — tracked as a follow-up.
+    if numtaps % 2 == 1 {
+        return remez_type1_pm(numtaps, bands, desired, &weights);
+    }
+
+    // Least-squares fallback (even numtaps): frequency-sampling approximation.
     let n = numtaps;
     let m = n / 2; // number of cosine coefficients for type I (odd length)
 
@@ -7764,6 +7770,247 @@ pub fn remez(
         }
     }
 
+    Ok(h)
+}
+
+/// Parks-McClellan (Remez exchange) for a Type-I (odd `numtaps`, symmetric)
+/// linear-phase FIR filter — the true equiripple/minimax design, matching
+/// `scipy.signal.remez` (the minimax optimum is unique, so a correct exchange
+/// converges to scipy's coefficients to ~1e-6). Approximates the desired
+/// piecewise-constant gain on the band grid; transition bands are unconstrained.
+fn remez_type1_pm(
+    numtaps: usize,
+    bands: &[f64],
+    desired: &[f64],
+    weights: &[f64],
+) -> Result<Vec<f64>, SignalError> {
+    use std::f64::consts::PI;
+    let nbands = bands.len() / 2;
+    let m = (numtaps - 1) / 2;
+    let nfcns = m + 1; // # cosine basis functions / unknown coefficients
+    let nz = nfcns + 1; // # extremal frequencies (alternations)
+
+    // Dense frequency grid over the bands (scipy grid_density = 16).
+    let grid_density = 16usize;
+    let delf = 0.5 / (grid_density as f64 * nfcns as f64);
+    let mut gridf: Vec<f64> = Vec::new();
+    let mut gdes: Vec<f64> = Vec::new();
+    let mut gwt: Vec<f64> = Vec::new();
+    let mut band_bounds: Vec<(usize, usize)> = Vec::new();
+    for b in 0..nbands {
+        let lo = bands[2 * b];
+        let hi = bands[2 * b + 1];
+        if hi < lo {
+            return Err(SignalError::InvalidArgument(
+                "band edges must be ascending".to_string(),
+            ));
+        }
+        let npts = (((hi - lo) / delf).floor() as usize).max(1) + 1;
+        let start = gridf.len();
+        for j in 0..npts {
+            let f = if j == npts - 1 {
+                hi
+            } else {
+                lo + j as f64 * delf
+            };
+            gridf.push(f);
+            gdes.push(desired[b]);
+            gwt.push(weights[b]);
+        }
+        band_bounds.push((start, gridf.len() - 1));
+    }
+    let ngrid = gridf.len();
+    if ngrid < nz {
+        return Err(SignalError::InvalidArgument(
+            "too few grid points for remez".to_string(),
+        ));
+    }
+    let x: Vec<f64> = gridf.iter().map(|&f| (2.0 * PI * f).cos()).collect();
+
+    // Initial extremal set: evenly spaced grid indices.
+    let mut iext: Vec<usize> = (0..nz).map(|k| k * (ngrid - 1) / (nz - 1)).collect();
+
+    let mut dev = 0.0_f64;
+    let mut y = vec![0.0_f64; nfcns];
+    let mut adp = vec![0.0_f64; nfcns];
+    let mut xe = vec![0.0_f64; nz];
+
+    // Compute (dev, y, adp) for the current `iext`; returns the eval data via the
+    // closure-free out-params. Defined inline below per iteration.
+    for _iter in 0..64 {
+        for k in 0..nz {
+            xe[k] = x[iext[k]];
+        }
+        let mut ad = vec![0.0_f64; nz];
+        for k in 0..nz {
+            let mut p = 1.0;
+            for j in 0..nz {
+                if j != k {
+                    p *= xe[k] - xe[j];
+                }
+            }
+            ad[k] = 1.0 / p;
+        }
+        let mut dnum = 0.0;
+        let mut dden = 0.0;
+        for k in 0..nz {
+            dnum += ad[k] * gdes[iext[k]];
+            let s = if k % 2 == 0 { 1.0 } else { -1.0 };
+            dden += s * ad[k] / gwt[iext[k]];
+        }
+        dev = dnum / dden;
+        for k in 0..nfcns {
+            let s = if k % 2 == 0 { 1.0 } else { -1.0 };
+            y[k] = gdes[iext[k]] - s * dev / gwt[iext[k]];
+        }
+        for k in 0..nfcns {
+            let mut p = 1.0;
+            for j in 0..nfcns {
+                if j != k {
+                    p *= xe[k] - xe[j];
+                }
+            }
+            adp[k] = 1.0 / p;
+        }
+        let eval_a = |xq: f64| -> f64 {
+            let mut num = 0.0;
+            let mut den = 0.0;
+            for k in 0..nfcns {
+                let d = xq - xe[k];
+                if d.abs() < 1e-13 {
+                    return y[k];
+                }
+                let t = adp[k] / d;
+                num += t * y[k];
+                den += t;
+            }
+            num / den
+        };
+        let err: Vec<f64> = (0..ngrid)
+            .map(|i| gwt[i] * (eval_a(x[i]) - gdes[i]))
+            .collect();
+
+        // Candidate extrema: band edges + interior local maxima of |err|.
+        let mut cand: Vec<usize> = Vec::new();
+        for &(s, e) in &band_bounds {
+            cand.push(s);
+            for i in (s + 1)..e {
+                let a = err[i] - err[i - 1];
+                let b2 = err[i + 1] - err[i];
+                if (a > 0.0 && b2 <= 0.0) || (a < 0.0 && b2 >= 0.0) {
+                    cand.push(i);
+                }
+            }
+            if e != s {
+                cand.push(e);
+            }
+        }
+        // Collapse same-sign consecutive candidates, keeping the larger |err|.
+        let mut alt: Vec<usize> = Vec::new();
+        for &ci in &cand {
+            if let Some(&last) = alt.last() {
+                if (err[ci] >= 0.0) == (err[last] >= 0.0) {
+                    if err[ci].abs() > err[last].abs() {
+                        *alt.last_mut().unwrap() = ci;
+                    }
+                    continue;
+                }
+            }
+            alt.push(ci);
+        }
+        // Trim to nz alternations by dropping the smaller-|err| endpoint.
+        while alt.len() > nz {
+            if err[alt[0]].abs() <= err[*alt.last().unwrap()].abs() {
+                alt.remove(0);
+            } else {
+                alt.pop();
+            }
+        }
+        if alt.len() != nz {
+            break; // could not form nz alternations; keep current iext
+        }
+        let maxerr = alt.iter().map(|&i| err[i].abs()).fold(0.0_f64, f64::max);
+        let changed = alt != iext;
+        iext = alt;
+        if !changed || (maxerr - dev.abs()).abs() <= 1e-12 * maxerr.max(1e-30) {
+            break;
+        }
+    }
+
+    // Recompute interpolation data for the final extremal set.
+    for k in 0..nz {
+        xe[k] = x[iext[k]];
+    }
+    let mut ad = vec![0.0_f64; nz];
+    for k in 0..nz {
+        let mut p = 1.0;
+        for j in 0..nz {
+            if j != k {
+                p *= xe[k] - xe[j];
+            }
+        }
+        ad[k] = 1.0 / p;
+    }
+    let mut dnum = 0.0;
+    let mut dden = 0.0;
+    for k in 0..nz {
+        dnum += ad[k] * gdes[iext[k]];
+        let s = if k % 2 == 0 { 1.0 } else { -1.0 };
+        dden += s * ad[k] / gwt[iext[k]];
+    }
+    dev = dnum / dden;
+    for k in 0..nfcns {
+        let s = if k % 2 == 0 { 1.0 } else { -1.0 };
+        y[k] = gdes[iext[k]] - s * dev / gwt[iext[k]];
+    }
+    for k in 0..nfcns {
+        let mut p = 1.0;
+        for j in 0..nfcns {
+            if j != k {
+                p *= xe[k] - xe[j];
+            }
+        }
+        adp[k] = 1.0 / p;
+    }
+    let eval_a = |xq: f64| -> f64 {
+        let mut num = 0.0;
+        let mut den = 0.0;
+        for k in 0..nfcns {
+            let d = xq - xe[k];
+            if d.abs() < 1e-13 {
+                return y[k];
+            }
+            let t = adp[k] / d;
+            num += t * y[k];
+            den += t;
+        }
+        num / den
+    };
+
+    // Recover cosine coefficients a_k via a Chebyshev DCT-II. A(x) is a degree-M
+    // polynomial in x = cos(2π f); sampling at Chebyshev nodes and inverting gives
+    // the exact T_k (= cos 2πkf) coefficients a_k.
+    let nn = nfcns;
+    let samp: Vec<f64> = (0..nn)
+        .map(|j| eval_a((PI * (j as f64 + 0.5) / nn as f64).cos()))
+        .collect();
+    let mut a = vec![0.0_f64; nfcns];
+    for (k, ak) in a.iter_mut().enumerate() {
+        let mut s = 0.0;
+        for (j, &sj) in samp.iter().enumerate() {
+            s += sj * (PI * k as f64 * (j as f64 + 0.5) / nn as f64).cos();
+        }
+        *ak = 2.0 / nn as f64 * s;
+    }
+    a[0] *= 0.5;
+
+    // Symmetric impulse response: h[m] = a_0, h[m±k] = a_k/2.
+    let mut h = vec![0.0_f64; numtaps];
+    h[m] = a[0];
+    for k in 1..nfcns {
+        h[m - k] = a[k] / 2.0;
+        h[m + k] = a[k] / 2.0;
+    }
     Ok(h)
 }
 
@@ -17406,6 +17653,68 @@ mod tests {
         // Sum of coefficients should approximate passband gain (1.0)
         let sum: f64 = h.iter().sum();
         assert!(sum > 0.5 && sum < 1.5, "filter sum = {sum}, expected ~1.0");
+    }
+
+    #[test]
+    fn remez_matches_scipy_reference() {
+        // True Parks-McClellan equiripple — matches scipy.signal.remez to
+        // machine precision (the minimax optimum is unique). frankenscipy-zxxdi.
+        let lp = remez(11, &[0.0, 0.2, 0.3, 0.5], &[1.0, 0.0], None).unwrap();
+        let lp_want = [
+            0.05372035912417292,
+            -4.61214414692147e-05,
+            -0.09157551252765038,
+            -6.7107264123562e-05,
+            0.31313220746845083,
+            0.49991992278419434,
+            0.31313220746845083,
+            -6.7107264123562e-05,
+            -0.09157551252765038,
+            -4.61214414692147e-05,
+            0.05372035912417292,
+        ];
+        for (got, want) in lp.iter().zip(lp_want.iter()) {
+            assert!((got - want).abs() < 1e-9, "remez lp {got} != {want}");
+        }
+
+        // Bandpass + per-band weights [1,2,1].
+        let bp = remez(
+            25,
+            &[0.0, 0.1, 0.2, 0.35, 0.4, 0.5],
+            &[0.0, 1.0, 0.0],
+            Some(&[1.0, 2.0, 1.0]),
+        )
+        .unwrap();
+        let bp_want = [
+            0.012060197241103647,
+            0.04917749494274411,
+            -0.007947334066976923,
+            0.004452003914280255,
+            -0.03892881686970368,
+            -0.06476079736891961,
+            0.05399001261854428,
+            0.024180050124328233,
+            0.06969629437057305,
+            0.07480203046973387,
+            -0.2969463360118628,
+            -0.05746490861257541,
+            0.4161519654366445,
+            -0.05746490861257541,
+            -0.2969463360118628,
+            0.07480203046973387,
+            0.06969629437057305,
+            0.024180050124328233,
+            0.05399001261854428,
+            -0.06476079736891961,
+            -0.03892881686970368,
+            0.004452003914280255,
+            -0.007947334066976923,
+            0.04917749494274411,
+            0.012060197241103647,
+        ];
+        for (got, want) in bp.iter().zip(bp_want.iter()) {
+            assert!((got - want).abs() < 1e-9, "remez bp {got} != {want}");
+        }
     }
 
     // ── LTI/DLTI system tests ───────────────────────────────────────
