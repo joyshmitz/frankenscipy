@@ -255,7 +255,8 @@ pub use gamma::{
     GAMMA_DISPATCH_PLAN, binom, chdtr, chdtrc, chdtri, chdtriv, comb, digamma, factorial,
     factorial2, factorialk, gamma, gamma_with_audit, gammainc, gammainc_scalar, gammaincc,
     gammaincc_scalar, gammaln, gammaln_scalar, gammasgn, gammasgn_scalar, gdtr, gdtrc, gdtria,
-    gdtrib, gdtrix, loggamma, loggamma_scalar, multigammaln, pdtr, pdtrc, pdtri, pdtrik, perm,
+    gdtrib, gdtrix, log_gammaincc_scalar, loggamma, loggamma_scalar, multigammaln, pdtr, pdtrc,
+    pdtri, pdtrik, perm,
     polygamma, psi, rgamma, zeta, zetac,
 };
 pub use hyper::{

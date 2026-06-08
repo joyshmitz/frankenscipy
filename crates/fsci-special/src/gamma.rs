@@ -1191,6 +1191,90 @@ pub fn gammaincc_scalar(a: f64, x: f64, mode: RuntimeMode) -> Result<f64, Specia
     Ok(q)
 }
 
+/// Natural log of the regularized upper incomplete gamma function `Q(a, x)`.
+///
+/// `ln Q(a, x)` stays finite deep in the right tail where `Q` itself
+/// underflows to 0 (so `gammaincc_scalar(a, x).ln()` would be `-inf`). In the
+/// upper-tail region (`x >= a + 1`) `Q = prefactor * h`, where
+/// `prefactor = exp(-x + a*ln x - lnΓ(a))` underflows but the Lentz continued
+/// fraction `h` is `O(1)`; computing
+/// `ln Q = (-x + a*ln x - lnΓ(a)) + ln(h)` keeps full precision. In the
+/// lower-dominant region (`x < a + 1`) `Q` is `O(1)`, so it is evaluated
+/// directly and logged. Matches `gammaincc_scalar(a, x).ln()` wherever the
+/// latter is representable.
+///
+/// Domain: `a > 0`, `x >= 0`. Returns `NaN` for invalid `a`/`x`, `0.0` at
+/// `x = 0` (`Q = 1`), and `-inf` at `x = +inf` (`Q = 0`).
+#[must_use]
+pub fn log_gammaincc_scalar(a: f64, x: f64) -> f64 {
+    if a.is_nan() || x.is_nan() {
+        return f64::NAN;
+    }
+    if !a.is_finite() || a <= 0.0 || x < 0.0 {
+        return f64::NAN;
+    }
+    if x == 0.0 {
+        return 0.0;
+    }
+    if x.is_infinite() {
+        return f64::NEG_INFINITY;
+    }
+
+    const EPS: f64 = 1.0e-14;
+    const MAX_ITERS: usize = 200;
+    const FPMIN: f64 = 1.0e-300;
+
+    let lg = match gammaln_scalar(a, RuntimeMode::Strict) {
+        Ok(v) => v,
+        Err(_) => return f64::NAN,
+    };
+    let log_prefactor = -x + a * x.ln() - lg;
+
+    if x >= a + 1.0 {
+        // Upper-tail continued fraction (Lentz). `h` is O(1), so the log form
+        // stays finite even when Q = prefactor * h underflows to 0.
+        let mut b = x + 1.0 - a;
+        let mut c = 1.0 / FPMIN;
+        let mut d = 1.0 / b;
+        let mut h = d;
+        for i in 1..=MAX_ITERS {
+            let i_f = i as f64;
+            let an = -i_f * (i_f - a);
+            b += 2.0;
+            d = an * d + b;
+            if d.abs() < FPMIN {
+                d = FPMIN;
+            }
+            c = b + an / c;
+            if c.abs() < FPMIN {
+                c = FPMIN;
+            }
+            d = 1.0 / d;
+            let delta = d * c;
+            h *= delta;
+            if (delta - 1.0).abs() <= EPS {
+                break;
+            }
+        }
+        log_prefactor + h.ln()
+    } else {
+        // Lower-dominant region: Q is O(1); evaluate the series for P then log Q.
+        let mut ap = a;
+        let mut term = 1.0 / a;
+        let mut sum = term;
+        for _ in 0..MAX_ITERS {
+            ap += 1.0;
+            term *= x / ap;
+            sum += term;
+            if term.abs() <= sum.abs() * EPS {
+                break;
+            }
+        }
+        let p = (log_prefactor.exp() * sum).clamp(0.0, 1.0);
+        (1.0 - p).ln()
+    }
+}
+
 fn validate_incomplete_gamma_domain(
     function: &'static str,
     a: f64,
@@ -2688,6 +2772,57 @@ fn complex_parameter_gammaincc_cf(a: Complex64, z: Complex64) -> Result<Complex6
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn log_gammaincc_matches_gammaincc_where_representable() {
+        // exp(log Q) == Q wherever Q is representable (gammaincc_scalar is the
+        // scipy-validated reference). Covers both branches (x<a+1 and x>=a+1).
+        let cases = [
+            (2.0, 1.0),
+            (2.0, 5.0),
+            (0.5, 0.3),
+            (5.0, 3.0),
+            (5.0, 12.0),
+            (10.0, 25.0),
+            (1.5, 40.0),
+        ];
+        for (a, x) in cases {
+            let q = gammaincc_scalar(a, x, RuntimeMode::Strict).unwrap();
+            let lq = log_gammaincc_scalar(a, x);
+            assert!(q > 0.0, "precondition: Q representable for ({a},{x})");
+            let rel = (lq - q.ln()).abs() / q.ln().abs().max(1.0);
+            assert!(rel <= 1e-12, "log_gammaincc({a},{x})={lq} vs ln(Q)={}", q.ln());
+        }
+    }
+
+    #[test]
+    fn log_gammaincc_finite_in_underflowed_tail() {
+        // Deep right tail: Q underflows to exactly 0 (needs log Q < ~-745) but
+        // log Q must stay finite and track -x + (a-1)ln x - lnΓ(a).
+        for (a, x) in [(2.0, 800.0), (3.0, 900.0), (0.5, 770.0)] {
+            assert_eq!(
+                gammaincc_scalar(a, x, RuntimeMode::Strict).unwrap(),
+                0.0,
+                "precondition: Q underflows for ({a},{x})"
+            );
+            let lq = log_gammaincc_scalar(a, x);
+            assert!(lq.is_finite() && lq < -700.0, "log Q({a},{x})={lq} not finite");
+            let asymp = -x + (a - 1.0) * x.ln() - gammaln_scalar(a, RuntimeMode::Strict).unwrap();
+            assert!(
+                (lq - asymp).abs() / asymp.abs() < 1e-3,
+                "log Q({a},{x})={lq} vs asymptotic {asymp}"
+            );
+        }
+    }
+
+    #[test]
+    fn log_gammaincc_edge_cases() {
+        assert_eq!(log_gammaincc_scalar(2.0, 0.0), 0.0); // Q(a,0)=1
+        assert_eq!(log_gammaincc_scalar(2.0, f64::INFINITY), f64::NEG_INFINITY);
+        assert!(log_gammaincc_scalar(-1.0, 2.0).is_nan());
+        assert!(log_gammaincc_scalar(2.0, f64::NAN).is_nan());
+        assert!(log_gammaincc_scalar(0.0, 2.0).is_nan());
+    }
 
     #[test]
     #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy
