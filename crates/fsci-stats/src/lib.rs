@@ -2757,6 +2757,44 @@ impl ContinuousDistribution for NoncentralF {
         sum
     }
 
+    fn logpdf(&self, x: f64) -> f64 {
+        // logsumexp over the Poisson(λ/2)-weighted F-mixture:
+        //   log f = logsumexp_j [ (−λ/2 + j·ln(λ/2) − lnΓ(j+1)) + F(d1+2j, d2).logpdf(x) ]
+        // Finite deep in the tail where the summed pdf underflows to 0. frankenscipy-7m3xk
+        if x <= 0.0 || x.is_nan() {
+            return if x.is_nan() { f64::NAN } else { f64::NEG_INFINITY };
+        }
+        if self.nc == 0.0 {
+            return FDistribution::new(self.dfn, self.dfd).logpdf(x);
+        }
+        let d1 = self.dfn;
+        let d2 = self.dfd;
+        let half_lam = self.nc / 2.0;
+        let ln_half_lam = half_lam.ln();
+        let mut terms: Vec<f64> = Vec::new();
+        let mut max = f64::NEG_INFINITY;
+        for j in 0..400usize {
+            let jf = j as f64;
+            let log_pois = -half_lam + jf * ln_half_lam - ln_gamma(jf + 1.0);
+            let term = log_pois + FDistribution::new(d1 + 2.0 * jf, d2).logpdf(x);
+            if term.is_finite() {
+                terms.push(term);
+                if term > max {
+                    max = term;
+                }
+            }
+            // Past the Poisson peak, stop once the term is negligible vs the max.
+            if jf > half_lam && term < max - 60.0 {
+                break;
+            }
+        }
+        if !max.is_finite() {
+            return f64::NEG_INFINITY;
+        }
+        let s: f64 = terms.iter().map(|&t| (t - max).exp()).sum();
+        max + s.ln()
+    }
+
     fn cdf(&self, x: f64) -> f64 {
         if x <= 0.0 {
             return 0.0;
@@ -40628,6 +40666,33 @@ mod tests {
         assert!(lp.is_finite() && lp < -100.0, "rice tail logpdf={lp}");
         assert!(!(d.pdf(400.0) > 0.0 && d.pdf(400.0).is_finite()), "pdf should be unreliable here");
         assert_eq!(d.logpdf(-1.0), f64::NEG_INFINITY);
+    }
+
+    #[test]
+    fn noncentral_f_logpdf_consistent_and_finite() {
+        // logpdf == ln(pdf) in the bulk (logsumexp over the Poisson-weighted
+        // F-mixture); nc=0 matches central F; finite where the summed pdf
+        // underflows to 0. frankenscipy-7m3xk
+        let d = NoncentralF::new(5.0, 10.0, 3.0);
+        for &x in &[0.3, 1.0, 3.0, 8.0] {
+            let lp = d.logpdf(x);
+            let p = d.pdf(x);
+            assert!(p > 0.0 && (lp - p.ln()).abs() <= 1e-7, "logpdf({x})={lp} vs ln(pdf)={}", p.ln());
+        }
+        // nc → central F.
+        let nz = NoncentralF::new(5.0, 10.0, 0.0);
+        let cz = FDistribution::new(5.0, 10.0);
+        for &x in &[0.5, 2.0, 6.0] {
+            assert!((nz.logpdf(x) - cz.logpdf(x)).abs() <= 1e-12);
+        }
+        // Power-law tail: representable at 1e12 (logpdf still matches ln(pdf)).
+        let big = NoncentralF::new(5.0, 10.0, 3.0);
+        let p12 = big.pdf(1.0e12);
+        assert!(p12 > 0.0 && (big.logpdf(1.0e12) - p12.ln()).abs() <= 1e-7);
+        // Far enough that the power-law pdf underflows to 0; logpdf stays finite.
+        assert_eq!(big.pdf(1.0e60), 0.0);
+        let lp = big.logpdf(1.0e60);
+        assert!(lp.is_finite() && lp < -100.0, "ncf deep-tail logpdf={lp}");
     }
 
     // ── Exponential distribution ────────────────────────────────────
