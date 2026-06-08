@@ -1,0 +1,7 @@
+RCH worker: ovh-a
+Command: RCH_REQUIRE_REMOTE=1 rch exec -- cargo check -p fsci-linalg --lib --locked
+Result: pass
+
+Checking fsci-linalg v0.1.0 (/data/projects/frankenscipy/crates/fsci-linalg)
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 8.27s
+Remote command finished: exit=0 in 8972ms

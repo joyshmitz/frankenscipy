@@ -1,0 +1,24 @@
+RCH worker: vmi1293453
+Command: RCH_REQUIRE_REMOTE=1 rch exec -- cargo test -p fsci-linalg --release --lib --locked public_bidiag_svd_route_perf_probe -- --ignored --nocapture
+Result: pass
+
+PUBLIC_BIDIAG_SVD_ROUTE_PERF_BEGIN
+shape=512x256
+reference_lstsq_ms=146.213048
+routed_lstsq_ms=68.415404
+lstsq_speedup=2.137136
+reference_pinv_ms=150.138787
+previous_route_pinv_ms=71.252799
+routed_pinv_ms=13.160669
+pinv_speedup=11.408142
+pinv_speedup_vs_previous_route=5.414071
+lstsq_rank=256
+pinv_rank=256
+lstsq_max_abs_diff=1.07647224467655178e-12
+pinv_max_abs_diff=5.77285398303817310e-13
+previous_route_pinv_max_abs_diff=2.28428387316625958e-14
+routed_vs_previous_route_pinv_max_abs_diff=5.76128337745340779e-13
+PUBLIC_BIDIAG_SVD_ROUTE_PERF_END
+
+test tests::public_bidiag_svd_route_perf_probe ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 401 filtered out

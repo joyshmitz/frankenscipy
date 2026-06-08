@@ -412,6 +412,12 @@ struct LowRankPinvResult {
     rcond_estimate: f64,
 }
 
+struct FullRankTallPinvResult {
+    pseudo_inverse: Vec<Vec<f64>>,
+    rank: usize,
+    rcond_estimate: f64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ConditionReport {
     pub matrix_shape: (usize, usize),
@@ -2655,6 +2661,51 @@ pub fn pinv_with_casp(
     }
 
     let matrix = dmatrix_from_rows(a)?;
+    if options.mode == RuntimeMode::Strict
+        && let Some(fast) = pinv_full_rank_tall_cholesky(&matrix, atol, rtol)
+    {
+        let (_, posterior, expected_losses, _) = portfolio.select_action(fast.rcond_estimate, None);
+        let action = SolverAction::SVDFallback;
+
+        let certificate = SolveCertificate {
+            action,
+            matrix_shape: (rows, cols),
+            rcond_estimate: fast.rcond_estimate,
+            structural_evidence: StructuralEvidence::General,
+            posterior: posterior.to_vec(),
+            expected_losses: expected_losses.to_vec(),
+            chosen_expected_loss: expected_losses[action.index()],
+            fallback_active: false,
+        };
+
+        emit_trace(LinalgTrace {
+            operation: "pinv_with_casp",
+            matrix_size: (rows, cols),
+            mode: options.mode,
+            rcond: Some(fast.rcond_estimate),
+            warning: None,
+            error: None,
+        });
+
+        portfolio.record_evidence(SolverEvidenceEntry {
+            component: "pinv_with_casp",
+            matrix_shape: (rows, cols),
+            rcond_estimate: fast.rcond_estimate,
+            chosen_action: action,
+            posterior: posterior.to_vec(),
+            expected_losses: expected_losses.to_vec(),
+            chosen_expected_loss: expected_losses[action.index()],
+            fallback_active: false,
+            backward_error: None,
+        });
+
+        return Ok(PinvResult {
+            pseudo_inverse: fast.pseudo_inverse,
+            rank: fast.rank,
+            certificate: Some(certificate),
+        });
+    }
+
     if let Some(thin_svd) = public_tall_thin_svd_candidate(&matrix)
         && let Some((max_s, min_s)) = public_bidiag_svd_stats(&thin_svd.singular_values)
     {
@@ -7859,10 +7910,80 @@ const LOW_RANK_PINV_MIN_COLS: usize = 512;
 const LOW_RANK_PINV_MAX_RANK: usize = 16;
 const LOW_RANK_PINV_BASIS_REL_TOL: f64 = 1e-8;
 const LOW_RANK_PINV_RECON_REL_TOL: f64 = 1e-8;
+const FULL_RANK_TALL_PINV_MIN_COLS: usize = 128;
+const FULL_RANK_TALL_PINV_RIGHT_INVERSE_REL_TOL: f64 = 1e-8;
 
 struct LowRankTallFactor {
     basis: Vec<Vec<f64>>,
     coefficients: Vec<Vec<f64>>,
+}
+
+fn pinv_full_rank_tall_cholesky(
+    matrix: &DMatrix<f64>,
+    atol: f64,
+    rtol: f64,
+) -> Option<FullRankTallPinvResult> {
+    pinv_full_rank_tall_cholesky_with_min_cols(matrix, atol, rtol, FULL_RANK_TALL_PINV_MIN_COLS)
+}
+
+fn pinv_full_rank_tall_cholesky_with_min_cols(
+    matrix: &DMatrix<f64>,
+    atol: f64,
+    rtol: f64,
+    min_cols: usize,
+) -> Option<FullRankTallPinvResult> {
+    let rows = matrix.nrows();
+    let cols = matrix.ncols();
+    let default_rtol = (rows.max(cols) as f64) * f64::EPSILON;
+    if rows < cols.saturating_mul(2)
+        || cols < min_cols
+        || atol != 0.0
+        || rtol > default_rtol
+        || matrix.iter().any(|value| !value.is_finite())
+    {
+        return None;
+    }
+
+    let a_t = matrix.transpose();
+    let gram = &a_t * matrix;
+    let mut max_diag = 0.0_f64;
+    let mut min_diag = f64::MAX;
+    for idx in 0..cols {
+        let diag = gram[(idx, idx)];
+        if diag <= 0.0 || !diag.is_finite() {
+            return None;
+        }
+        max_diag = max_diag.max(diag);
+        min_diag = min_diag.min(diag);
+    }
+    if max_diag <= 0.0 || min_diag <= 0.0 {
+        return None;
+    }
+
+    let chol = Cholesky::new(gram)?;
+    let pinv = chol.solve(&a_t);
+    if pinv.iter().any(|value| !value.is_finite()) {
+        return None;
+    }
+
+    let right_inverse = &pinv * matrix;
+    let mut max_error = 0.0_f64;
+    for row in 0..cols {
+        for col in 0..cols {
+            let target = if row == col { 1.0 } else { 0.0 };
+            max_error = max_error.max((right_inverse[(row, col)] - target).abs());
+        }
+    }
+    let tolerance = FULL_RANK_TALL_PINV_RIGHT_INVERSE_REL_TOL * (cols as f64).sqrt();
+    if max_error > tolerance {
+        return None;
+    }
+
+    Some(FullRankTallPinvResult {
+        pseudo_inverse: rows_from_dmatrix(&pinv),
+        rank: cols,
+        rcond_estimate: (min_diag / max_diag).sqrt(),
+    })
 }
 
 fn low_rank_tall_factor(
@@ -13069,6 +13190,59 @@ mod tests {
     }
 
     #[test]
+    fn pinv_full_rank_tall_cholesky_matches_svd_reference() {
+        let rows = 18;
+        let cols = 9;
+        let mut data = Vec::with_capacity(rows * cols);
+        for row in 0..rows {
+            for col in 0..cols {
+                let diagonal = if row == col { 8.0 + col as f64 } else { 0.0 };
+                let smooth = ((row * 17 + col * 29 + 5) % 41) as f64 / 97.0;
+                data.push(diagonal + smooth);
+            }
+        }
+        let matrix = DMatrix::from_row_slice(rows, cols, &data);
+        let rtol = (rows.max(cols) as f64) * f64::EPSILON;
+        let fast = pinv_full_rank_tall_cholesky_with_min_cols(&matrix, 0.0, rtol, 1)
+            .expect("full-rank Cholesky pinv route");
+
+        let svd = safe_svd(matrix.clone(), true, true).expect("reference SVD");
+        let max_s = svd.singular_values.iter().copied().fold(0.0_f64, f64::max);
+        let threshold = public_bidiag_default_threshold(rows, cols, max_s);
+        let reference = pseudo_inverse_from_svd(&svd, threshold).expect("reference pinv");
+
+        assert_eq!(fast.rank, cols);
+        assert_close_matrix(
+            &fast.pseudo_inverse,
+            &rows_from_dmatrix(&reference),
+            1e-7,
+            1e-7,
+        );
+    }
+
+    #[test]
+    fn pinv_full_rank_tall_cholesky_rejects_rank_deficient_matrix() {
+        let rows = 18;
+        let cols = 9;
+        let mut data = Vec::with_capacity(rows * cols);
+        for row in 0..rows {
+            for col in 0..cols {
+                let source_col = if col == cols - 1 { 0 } else { col };
+                let diagonal = if row == source_col {
+                    8.0 + source_col as f64
+                } else {
+                    0.0
+                };
+                let smooth = ((row * 17 + source_col * 29 + 5) % 41) as f64 / 97.0;
+                data.push(diagonal + smooth);
+            }
+        }
+        let matrix = DMatrix::from_row_slice(rows, cols, &data);
+        let rtol = (rows.max(cols) as f64) * f64::EPSILON;
+        assert!(pinv_full_rank_tall_cholesky_with_min_cols(&matrix, 0.0, rtol, 1).is_none());
+    }
+
+    #[test]
     fn rcond_threshold_boundary() {
         // Well-conditioned: rcond > 1e-12 -> no warning
         let a = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
@@ -15290,6 +15464,22 @@ mod tests {
             .expect("reference pinv");
         let reference_pinv_ms = reference_pinv_start.elapsed().as_secs_f64() * 1e3;
 
+        let previous_route_pinv_start = std::time::Instant::now();
+        let previous_route_svd =
+            public_tall_thin_svd_candidate(std::hint::black_box(&original)).expect("public SVD");
+        let (previous_route_max_s, _) =
+            public_bidiag_svd_stats(&previous_route_svd.singular_values)
+                .expect("finite singular spectrum");
+        let previous_route_threshold =
+            public_bidiag_default_threshold(rows, cols, previous_route_max_s);
+        assert!(public_bidiag_svd_accepts(
+            &original,
+            &previous_route_svd,
+            previous_route_threshold
+        ));
+        let previous_route_pinv = previous_route_svd.pseudo_inverse(previous_route_threshold);
+        let previous_route_pinv_ms = previous_route_pinv_start.elapsed().as_secs_f64() * 1e3;
+
         let routed_pinv_start = std::time::Instant::now();
         let routed_pinv =
             pinv(std::hint::black_box(&matrix_rows), PinvOptions::default()).expect("routed pinv");
@@ -15303,6 +15493,12 @@ mod tests {
             &dmatrix_from_rows(&routed_pinv.pseudo_inverse).expect("routed pinv matrix"),
             &reference_pinv,
         );
+        let previous_route_pinv_max_abs_diff =
+            max_abs_dmatrix_diff(&previous_route_pinv, &reference_pinv);
+        let routed_vs_previous_route_pinv_max_abs_diff = max_abs_dmatrix_diff(
+            &dmatrix_from_rows(&routed_pinv.pseudo_inverse).expect("routed pinv matrix"),
+            &previous_route_pinv,
+        );
 
         println!("PUBLIC_BIDIAG_SVD_ROUTE_PERF_BEGIN");
         println!("shape={rows}x{cols}");
@@ -15310,18 +15506,29 @@ mod tests {
         println!("routed_lstsq_ms={routed_lstsq_ms:.6}");
         println!("lstsq_speedup={:.6}", reference_lstsq_ms / routed_lstsq_ms);
         println!("reference_pinv_ms={reference_pinv_ms:.6}");
+        println!("previous_route_pinv_ms={previous_route_pinv_ms:.6}");
         println!("routed_pinv_ms={routed_pinv_ms:.6}");
         println!("pinv_speedup={:.6}", reference_pinv_ms / routed_pinv_ms);
+        println!(
+            "pinv_speedup_vs_previous_route={:.6}",
+            previous_route_pinv_ms / routed_pinv_ms
+        );
         println!("lstsq_rank={}", routed_lstsq.rank);
         println!("pinv_rank={}", routed_pinv.rank);
         println!("lstsq_max_abs_diff={lstsq_max_abs_diff:.17e}");
         println!("pinv_max_abs_diff={pinv_max_abs_diff:.17e}");
+        println!("previous_route_pinv_max_abs_diff={previous_route_pinv_max_abs_diff:.17e}");
+        println!(
+            "routed_vs_previous_route_pinv_max_abs_diff={routed_vs_previous_route_pinv_max_abs_diff:.17e}"
+        );
         println!("PUBLIC_BIDIAG_SVD_ROUTE_PERF_END");
 
         assert_eq!(routed_lstsq.rank, cols);
         assert_eq!(routed_pinv.rank, cols);
         assert!(lstsq_max_abs_diff <= 1e-7);
         assert!(pinv_max_abs_diff <= 1e-7);
+        assert!(previous_route_pinv_max_abs_diff <= 1e-7);
+        assert!(routed_vs_previous_route_pinv_max_abs_diff <= 1e-7);
     }
 
     #[test]
