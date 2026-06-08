@@ -8456,6 +8456,20 @@ impl ContinuousDistribution for InverseGaussian {
         t1 + t2
     }
 
+    fn sf(&self, x: f64) -> f64 {
+        // sf = Φ(−(√x/μ − 1/√x)) − e^{2/μ}·Φ(−(√x/μ + 1/√x)); evaluating the
+        // small upper-normal tail directly avoids the t1→1 rounding the default
+        // 1−cdf suffers deep in the right tail. frankenscipy-w3f6m
+        if x <= 0.0 {
+            return 1.0;
+        }
+        let mu = self.mu;
+        let sqrt_x = x.sqrt();
+        let t1 = standard_normal_cdf(-(sqrt_x / mu - 1.0 / sqrt_x));
+        let t2 = (2.0 / mu).exp() * standard_normal_cdf(-(sqrt_x / mu + 1.0 / sqrt_x));
+        (t1 - t2).max(0.0)
+    }
+
     fn mean(&self) -> f64 {
         self.mu
     }
@@ -12978,6 +12992,15 @@ impl ContinuousDistribution for Gilbrat {
         } else {
             standard_normal_cdf(x.ln())
         }
+    }
+
+    fn sf(&self, x: f64) -> f64 {
+        // sf = Φ(−ln x) = ½·erfc(ln x/√2); direct so the right tail does not
+        // collapse like the default 1−cdf. frankenscipy-w3f6m
+        if x <= 0.0 {
+            return 1.0;
+        }
+        0.5 * fsci_special::erfc_scalar(x.ln() * FRAC_1_SQRT_2)
     }
 
     fn ppf(&self, q: f64) -> f64 {
@@ -38650,6 +38673,30 @@ mod tests {
         tail!(FrechetR::new(2.0), -1e-8, 1e-15); // ≈ 1e-16
         tail!(GeneralizedExponential::new(1.0, 0.5, 0.8), 40.0, 1e-15); // e^{exponent}
         tail!(DoubleGamma::new(1.5), 60.0, 1e-20); // ½·Q(1.5, 60)
+    }
+
+    #[test]
+    fn sf_overrides_batch6_consistent_and_tail() {
+        // Gilbrat (Gibrat alias) and InverseGaussian: sf == 1 − cdf mid-range,
+        // and a positive tail value where 1 − cdf collapses (frankenscipy-w3f6m).
+        for &x in &[0.3, 1.0, 3.0] {
+            let g = Gilbrat;
+            assert!((g.sf(x) - (1.0 - g.cdf(x))).abs() <= 1e-12);
+        }
+        for &x in &[0.5, 1.0, 2.5] {
+            let d = InverseGaussian::new(1.0);
+            let oc = 1.0 - d.cdf(x);
+            assert!(
+                (d.sf(x) - oc).abs() <= 1e-11 * oc.abs().max(1e-11) + 1e-13,
+                "invgauss sf({x})={} vs 1-cdf={oc}",
+                d.sf(x)
+            );
+        }
+        // Tail: default 1 − cdf returns 0; closed forms stay positive.
+        let gt = Gilbrat.sf(1e8); // Φ(−ln 1e8)=Φ(−18.4)
+        assert!(gt > 0.0 && gt < 1e-30, "gilbrat tail {gt}");
+        let it = InverseGaussian::new(1.0).sf(80.0); // ≈ 3e-20
+        assert!(it > 0.0 && it < 1e-17, "invgauss tail {it}");
     }
 
     // ── Exponential distribution ────────────────────────────────────
