@@ -11618,6 +11618,14 @@ impl ContinuousDistribution for Nakagami {
         lower_regularized_gamma(self.nu, self.nu * x * x)
     }
 
+    fn ppf(&self, q: f64) -> f64 {
+        // x = sqrt(gammaincinv(nu, q)/nu); direct inverse vs bisection. frankenscipy-ld94y
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        (fsci_special::gammaincinv_scalar(self.nu, q) / self.nu).sqrt()
+    }
+
     fn logcdf(&self, x: f64) -> f64 {
         // log P(nu, nu·x²); finite in the left tail where P underflows. frankenscipy-s14mf
         if x <= 0.0 {
@@ -14995,6 +15003,14 @@ impl ContinuousDistribution for Mielke {
         xk / (1.0 + x.powf(self.s)).powf(self.k / self.s)
     }
 
+    fn ppf(&self, q: f64) -> f64 {
+        // cdf=(1+x^{-s})^{-k/s} ⇒ x=(q^{-s/k}−1)^{-1/s}; closed-form inverse. frankenscipy-ld94y
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        (q.powf(-self.s / self.k) - 1.0).powf(-1.0 / self.s)
+    }
+
     fn sf(&self, x: f64) -> f64 {
         // cdf = x^k/(1+x^s)^{k/s} ≡ (1+x^{-s})^{-k/s}, so
         // sf = 1 − (1+x^{-s})^{-k/s} = −expm1(−(k/s)·ln1p(x^{-s})) — stable in
@@ -15291,6 +15307,14 @@ impl ContinuousDistribution for Gompertz {
             return 0.0;
         }
         1.0 - (-self.c * (x.exp() - 1.0)).exp()
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        // Closed-form inverse x = ln(1 − ln(1−q)/c); direct vs bisection. frankenscipy-ld94y
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        (1.0 - (-q).ln_1p() / self.c).ln()
     }
 
     fn sf(&self, x: f64) -> f64 {
@@ -17047,6 +17071,14 @@ impl ContinuousDistribution for GenHalfLogistic {
         1.0 - 2.0 * t / (1.0 + t)
     }
 
+    fn ppf(&self, q: f64) -> f64 {
+        // t=(1−q)/(1+q), x=(1 − t^c)/c; closed-form inverse vs bisection. frankenscipy-ld94y
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        (1.0 - ((1.0 - q) / (1.0 + q)).powf(self.c)) / self.c
+    }
+
     fn sf(&self, x: f64) -> f64 {
         // sf = 2t/(1+t), t=(1−c·x)^{1/c}; direct form keeps precision near the
         // upper support limit 1/c where 1−cdf collapses. frankenscipy-w3f6m
@@ -17562,6 +17594,19 @@ impl ContinuousDistribution for GenNorm {
             0.5 + 0.5 * p
         } else {
             0.5 - 0.5 * p
+        }
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        // |x|^β = gammaincinv(1/β, |2q−1|), sign from q≷½; direct inverse. frankenscipy-ld94y
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        let b = self.beta;
+        if q >= 0.5 {
+            fsci_special::gammaincinv_scalar(1.0 / b, 2.0 * q - 1.0).powf(1.0 / b)
+        } else {
+            -fsci_special::gammaincinv_scalar(1.0 / b, 1.0 - 2.0 * q).powf(1.0 / b)
         }
     }
 
@@ -18137,6 +18182,20 @@ impl ContinuousDistribution for LaplaceAsymmetric {
         } else {
             // CDF = κ² / (1+κ²) * exp(x/κ)
             k * k / (1.0 + k * k) * (x / k).exp()
+        }
+    }
+
+    fn ppf(&self, q: f64) -> f64 {
+        // Piecewise closed-form inverse; split at cdf(0)=κ²/(1+κ²). frankenscipy-ld94y
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        let k = self.kappa;
+        let split = k * k / (1.0 + k * k);
+        if q <= split {
+            k * (q * (1.0 + k * k) / (k * k)).ln()
+        } else {
+            -((1.0 - q) * (1.0 + k * k)).ln() / k
         }
     }
 
@@ -40380,6 +40439,33 @@ mod tests {
         tail!(PowerNorm::new(2.0), 40.0); // ≈ −½·40²
         tail!(ExponNorm::new(1.5), 1200.0); // exp-tail underflows (exp_arg < −745)
         tail!(Alpha::new(1.5), 1e-8); // z=a−1/x → −1e8 → −½·1e16
+    }
+
+    #[test]
+    fn ppf_closed_form_inverts_cdf() {
+        // Closed-form / inverse-special ppf must invert cdf: cdf(ppf(q)) == q
+        // (frankenscipy-ld94y).
+        macro_rules! inv {
+            ($d:expr) => {{
+                let d = $d;
+                for &q in &[0.05, 0.25, 0.5, 0.75, 0.95] {
+                    let x = d.ppf(q);
+                    let back = d.cdf(x);
+                    assert!(
+                        (back - q).abs() <= 1e-7,
+                        "{}: cdf(ppf({q})={x})={back}",
+                        stringify!($d)
+                    );
+                }
+                assert!(d.ppf(-0.1).is_nan() && d.ppf(1.1).is_nan());
+            }};
+        }
+        inv!(Gompertz::new(1.0));
+        inv!(Nakagami::new(2.0));
+        inv!(GenNorm::new(1.5));
+        inv!(LaplaceAsymmetric::new(1.5));
+        inv!(GenHalfLogistic::new(0.5));
+        inv!(Mielke::new(3.0, 2.0));
     }
 
     // ── Exponential distribution ────────────────────────────────────
