@@ -1,0 +1,6 @@
+===GOLDEN_PAYLOAD_BEGIN===
+ndim=2 len=40 m=1000 out_xor_bits=89216ecadcfba55e n_out=1000
+ndim=3 len=24 m=5000 out_xor_bits=bff3b70b4aee2ccb n_out=5000
+===GOLDEN_PAYLOAD_END===
+ndim=3 len=30 m=200000    79.712ms/call (acc=32.726741)
+ndim=4 len=16 m=200000   446.707ms/call (acc=8.998254)

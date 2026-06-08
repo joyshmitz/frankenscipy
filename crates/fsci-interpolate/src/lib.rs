@@ -2107,7 +2107,21 @@ impl RegularGridInterpolator {
             return self.eval_many_nearest_3d(xi);
         }
 
-        xi.iter().map(|x| self.eval(x)).collect()
+        // Each query is an independent `eval` (read-only lookup + interpolation over the
+        // shared grid, no mutable state), so for a large batch the queries run on disjoint
+        // cores and the per-query value is the same pure `eval` regardless of owning core.
+        // par_query_try_map concatenates contiguous chunks in order and returns the first
+        // erroring chunk's error in query order, so the result is bit-identical to the
+        // sequential `xi.iter().map(|x| self.eval(x)).collect()`.
+        let ndim = self.ndim().max(1);
+        let work_per_query = match self.method {
+            RegularGridMethod::Nearest => ndim,
+            RegularGridMethod::Linear => 1usize << ndim.min(16),
+            RegularGridMethod::Pchip => ndim * 16,
+            RegularGridMethod::Cubic => ndim * 64,
+            RegularGridMethod::Quintic => ndim * 128,
+        };
+        par_query_try_map(xi, work_per_query, |x| self.eval(x))
     }
 
     fn find_interval(axis: &[f64], x: f64) -> usize {
