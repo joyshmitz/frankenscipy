@@ -374,25 +374,23 @@ fn hyp1f1_dispatch(
             Ok(SpecialTensor::RealScalar(result))
         }
     } else {
-        // At least one vector
+        // At least one vector: each output index is an independent broadcast evaluation.
         if is_complex {
-            let mut results = Vec::with_capacity(out_len);
-            for i in 0..out_len {
+            par_map_indices(out_len, |i| {
                 let a_c = tensor_get_complex(a, i, a_len)?;
                 let b_c = tensor_get_complex(b, i, b_len)?;
                 let z_c = tensor_get_complex(z, i, z_len)?;
-                results.push(hyp1f1_complex_parameters(a_c, b_c, z_c, mode)?);
-            }
-            Ok(SpecialTensor::ComplexVec(results))
+                hyp1f1_complex_parameters(a_c, b_c, z_c, mode)
+            })
+            .map(SpecialTensor::ComplexVec)
         } else {
-            let mut results = Vec::with_capacity(out_len);
-            for i in 0..out_len {
+            par_map_indices(out_len, |i| {
                 let a_r = tensor_get_real(a, i, a_len)?;
                 let b_r = tensor_get_real(b, i, b_len)?;
                 let z_r = tensor_get_real(z, i, z_len)?;
-                results.push(hyp1f1_scalar(a_r, b_r, z_r, mode)?);
-            }
-            Ok(SpecialTensor::RealVec(results))
+                hyp1f1_scalar(a_r, b_r, z_r, mode)
+            })
+            .map(SpecialTensor::RealVec)
         }
     }
 }
@@ -433,14 +431,13 @@ fn hyperu_dispatch(
         return hyperu_scalar(a_r, b_r, x_r, mode).map(SpecialTensor::RealScalar);
     }
 
-    let mut results = Vec::with_capacity(out_len);
-    for i in 0..out_len {
+    par_map_indices(out_len, |i| {
         let a_r = tensor_get_real_for(function, a, i, a_len, mode)?;
         let b_r = tensor_get_real_for(function, b, i, b_len, mode)?;
         let x_r = tensor_get_real_for(function, x, i, x_len, mode)?;
-        results.push(hyperu_scalar(a_r, b_r, x_r, mode)?);
-    }
-    Ok(SpecialTensor::RealVec(results))
+        hyperu_scalar(a_r, b_r, x_r, mode)
+    })
+    .map(SpecialTensor::RealVec)
 }
 
 // Helper functions for broadcast dispatch
