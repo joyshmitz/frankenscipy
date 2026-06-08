@@ -1751,9 +1751,17 @@ fn solve_dense_system(a: &mut [Vec<f64>], b: &mut [f64]) -> Result<Vec<f64>, Int
     for col in 0..n {
         let mut max_row = col;
         let mut max_val = a[col][col].abs();
+        // Count trailing rows that actually need elimination in this column. For a dense
+        // matrix this is ~all of them; for a banded/sparse one (e.g. a B-spline A^T A) it
+        // is only the bandwidth -- used below to keep banded systems on the serial path.
+        let mut nnz_below = 0usize;
         for (row, a_row) in a.iter().enumerate().skip(col + 1) {
-            if a_row[col].abs() > max_val {
-                max_val = a_row[col].abs();
+            let v = a_row[col];
+            if v != 0.0 {
+                nnz_below += 1;
+            }
+            if v.abs() > max_val {
+                max_val = v.abs();
                 max_row = row;
             }
         }
@@ -1773,22 +1781,56 @@ fn solve_dense_system(a: &mut [Vec<f64>], b: &mut [f64]) -> Result<Vec<f64>, Int
         // the pivot ensures `factor` is finite) but only touches the actual non-zeros, so a
         // banded matrix (e.g. a B-spline A^T A) is solved in ~O(n * bandwidth) work instead
         // of O(n^3). split_at_mut borrows the pivot row in place (no per-row clone).
-        let pivot_diag = a[col][col];
-        for row in col + 1..n {
-            if a[row][col] == 0.0 {
-                continue;
+        //
+        // The trailing-row eliminations are mutually independent (row `r` only writes its
+        // own `a[r][col..]` and `b[r]`, reading the already-fixed pivot row), so for a large
+        // DENSE trailing block they run on disjoint cores with a bit-identical result -- the
+        // per-row arithmetic and its column order are unchanged; only the owning thread
+        // differs. Banded/sparse systems (small `nnz_below`) keep the serial path so they
+        // never pay thread-spawn for a handful of nonzero rows.
+        let width = n - col;
+        let parallel = nnz_below >= 8
+            && width >= 64
+            && (nnz_below as u64).saturating_mul(width as u64) >= (1 << 15);
+        let (head, tail) = a.split_at_mut(col + 1);
+        let pivot = &head[col];
+        let pivot_diag = pivot[col];
+        let (b_head, b_tail) = b.split_at_mut(col + 1);
+        let b_col = b_head[col];
+        let eliminate = |target: &mut Vec<f64>, bt: &mut f64| {
+            let av = target[col];
+            if av == 0.0 {
+                return;
             }
-            let factor = a[row][col] / pivot_diag;
-            let (head, tail) = a.split_at_mut(row);
-            let pivot = &head[col];
-            let target = &mut tail[0];
+            let factor = av / pivot_diag;
             for j in col..n {
                 let pval = pivot[j];
                 if pval != 0.0 {
                     target[j] -= factor * pval;
                 }
             }
-            b[row] -= factor * b[col];
+            *bt -= factor * b_col;
+        };
+        if !parallel {
+            for (target, bt) in tail.iter_mut().zip(b_tail.iter_mut()) {
+                eliminate(target, bt);
+            }
+        } else {
+            let cores = std::thread::available_parallelism()
+                .map(std::num::NonZero::get)
+                .unwrap_or(1);
+            let nthreads = cores.min(tail.len() / 2).max(1);
+            let chunk = tail.len().div_ceil(nthreads);
+            let eliminate = &eliminate;
+            std::thread::scope(|scope| {
+                for (a_chunk, b_chunk) in tail.chunks_mut(chunk).zip(b_tail.chunks_mut(chunk)) {
+                    scope.spawn(move || {
+                        for (target, bt) in a_chunk.iter_mut().zip(b_chunk.iter_mut()) {
+                            eliminate(target, bt);
+                        }
+                    });
+                }
+            });
         }
     }
     let mut x = vec![0.0; n];
