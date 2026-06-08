@@ -1,0 +1,5 @@
+GOLDEN (serial == parallel, bit-identical):
+n=100 sph_jn=3e9d426915ab36a5 sph_yn=bd9ec95db90648d9
+n=5000 sph_jn=8b4273b852650bcb sph_yn=ace185993056713f
+n=50000 sph_jn=09a76eb9741d0763 sph_yn=09760480e0e05392
+timing acc (serial==parallel): sph_jn 1M=1345ce45fd631c4a sph_yn 1M=5f34f7f016ff7d8d

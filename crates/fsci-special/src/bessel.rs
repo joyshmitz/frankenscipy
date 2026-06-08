@@ -1851,37 +1851,29 @@ fn spherical_bessel_dispatch(
     mode: RuntimeMode,
     kind: SphericalKind,
 ) -> SpecialResult {
+    // Per-element real spherical Bessel kernel; pure in (order, x) given fixed kind/mode,
+    // so the real array arms below fan out across cores bit-identically via par_map_indices.
+    let eval = |order: f64, x: f64| -> Result<f64, SpecialError> {
+        match kind {
+            SphericalKind::Jn => spherical_jn_scalar(order, x, mode),
+            SphericalKind::Yn => spherical_yn_scalar(order, x, mode),
+            SphericalKind::In => spherical_in_scalar(order, x, mode),
+            SphericalKind::Kn => spherical_kn_scalar(order, x, mode),
+        }
+    };
     match (n, z) {
         // Real-real cases - use existing scalar implementations
         (SpecialTensor::RealScalar(order), SpecialTensor::RealScalar(x)) => {
-            let result = match kind {
-                SphericalKind::Jn => spherical_jn_scalar(*order, *x, mode),
-                SphericalKind::Yn => spherical_yn_scalar(*order, *x, mode),
-                SphericalKind::In => spherical_in_scalar(*order, *x, mode),
-                SphericalKind::Kn => spherical_kn_scalar(*order, *x, mode),
-            };
-            result.map(SpecialTensor::RealScalar)
+            eval(*order, *x).map(SpecialTensor::RealScalar)
         }
-        (SpecialTensor::RealVec(orders), SpecialTensor::RealScalar(x)) => orders
-            .iter()
-            .map(|&order| match kind {
-                SphericalKind::Jn => spherical_jn_scalar(order, *x, mode),
-                SphericalKind::Yn => spherical_yn_scalar(order, *x, mode),
-                SphericalKind::In => spherical_in_scalar(order, *x, mode),
-                SphericalKind::Kn => spherical_kn_scalar(order, *x, mode),
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .map(SpecialTensor::RealVec),
-        (SpecialTensor::RealScalar(order), SpecialTensor::RealVec(xs)) => xs
-            .iter()
-            .map(|&x| match kind {
-                SphericalKind::Jn => spherical_jn_scalar(*order, x, mode),
-                SphericalKind::Yn => spherical_yn_scalar(*order, x, mode),
-                SphericalKind::In => spherical_in_scalar(*order, x, mode),
-                SphericalKind::Kn => spherical_kn_scalar(*order, x, mode),
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .map(SpecialTensor::RealVec),
+        (SpecialTensor::RealVec(orders), SpecialTensor::RealScalar(x)) => {
+            let x = *x;
+            par_map_indices(orders.len(), |i| eval(orders[i], x)).map(SpecialTensor::RealVec)
+        }
+        (SpecialTensor::RealScalar(order), SpecialTensor::RealVec(xs)) => {
+            let order = *order;
+            par_map_indices(xs.len(), |i| eval(order, xs[i])).map(SpecialTensor::RealVec)
+        }
         (SpecialTensor::RealVec(orders), SpecialTensor::RealVec(xs)) => {
             if orders.len() != xs.len() {
                 return Err(SpecialError {
@@ -1891,17 +1883,7 @@ fn spherical_bessel_dispatch(
                     detail: "vector inputs must have matching lengths",
                 });
             }
-            orders
-                .iter()
-                .zip(xs.iter())
-                .map(|(&order, &x)| match kind {
-                    SphericalKind::Jn => spherical_jn_scalar(order, x, mode),
-                    SphericalKind::Yn => spherical_yn_scalar(order, x, mode),
-                    SphericalKind::In => spherical_in_scalar(order, x, mode),
-                    SphericalKind::Kn => spherical_kn_scalar(order, x, mode),
-                })
-                .collect::<Result<Vec<_>, _>>()
-                .map(SpecialTensor::RealVec)
+            par_map_indices(orders.len(), |i| eval(orders[i], xs[i])).map(SpecialTensor::RealVec)
         }
         // Real n, complex z - use complex implementations
         (SpecialTensor::RealScalar(order), SpecialTensor::ComplexScalar(z_val)) => {
