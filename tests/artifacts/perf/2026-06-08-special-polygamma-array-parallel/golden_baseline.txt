@@ -1,0 +1,5 @@
+GOLDEN (serial == parallel, bit-identical):
+n=100 polygamma5=e81d4790b5314f43 rgamma=245db3f74313944c
+n=5000 polygamma5=668adf29e28be6dd rgamma=41569423053d98da
+n=50000 polygamma5=febf0c24541a1785 rgamma=257eca53ce159e84
+timing acc (serial==parallel): polygamma5 1M=28db5cf7e0471fba rgamma 4M=0120f3ed128e33ef

@@ -587,27 +587,23 @@ fn polygamma_dispatch(
             };
             result.map(SpecialTensor::RealScalar)
         }
-        SpecialTensor::RealVec(values) => {
-            let results: Result<Vec<f64>, SpecialError> = match n {
-                0 => values.iter().map(|&x| digamma_scalar(x, mode)).collect(),
-                1 => values.iter().map(|&x| trigamma_scalar(x, mode)).collect(),
-                2 => values.iter().map(|&x| tetragamma_scalar(x, mode)).collect(),
-                _ => values
-                    .iter()
-                    .map(|&x| polygamma_higher_scalar(n, x, mode))
-                    .collect(),
-            };
-            results.map(SpecialTensor::RealVec)
-        }
+        SpecialTensor::RealVec(values) => par_map_indices(values.len(), |i| {
+            let x = values[i];
+            match n {
+                0 => digamma_scalar(x, mode),
+                1 => trigamma_scalar(x, mode),
+                2 => tetragamma_scalar(x, mode),
+                _ => polygamma_higher_scalar(n, x, mode),
+            }
+        })
+        .map(SpecialTensor::RealVec),
         SpecialTensor::ComplexScalar(z_val) => Ok(SpecialTensor::ComplexScalar(
             complex_polygamma_scalar(n, *z_val),
         )),
-        SpecialTensor::ComplexVec(values) => Ok(SpecialTensor::ComplexVec(
-            values
-                .iter()
-                .map(|&z_val| complex_polygamma_scalar(n, z_val))
-                .collect(),
-        )),
+        SpecialTensor::ComplexVec(values) => {
+            par_map_indices(values.len(), |i| Ok(complex_polygamma_scalar(n, values[i])))
+                .map(SpecialTensor::ComplexVec)
+        }
         SpecialTensor::Empty => Err(SpecialError {
             function,
             kind: SpecialErrorKind::DomainError,
@@ -620,12 +616,10 @@ fn polygamma_dispatch(
 pub fn rgamma(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     match z {
         SpecialTensor::RealScalar(x) => rgamma_scalar(*x, mode).map(SpecialTensor::RealScalar),
-        SpecialTensor::RealVec(values) => values
-            .iter()
-            .copied()
-            .map(|x| rgamma_scalar(x, mode))
-            .collect::<Result<Vec<_>, _>>()
-            .map(SpecialTensor::RealVec),
+        SpecialTensor::RealVec(values) => {
+            par_map_indices(values.len(), |i| rgamma_scalar(values[i], mode))
+                .map(SpecialTensor::RealVec)
+        }
         SpecialTensor::ComplexScalar(z_val) => {
             Ok(SpecialTensor::ComplexScalar(complex_rgamma_scalar(*z_val)))
         }
