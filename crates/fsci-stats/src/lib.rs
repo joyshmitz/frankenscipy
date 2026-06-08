@@ -3862,6 +3862,16 @@ impl ContinuousDistribution for Lognormal {
         0.5 * fsci_special::erfc_scalar(z * FRAC_1_SQRT_2)
     }
 
+    fn logsf(&self, x: f64) -> f64 {
+        // log sf = log Φ(−z), z = ln(x/scale)/s; log_ndtr stays finite in the
+        // ultra-extreme tail where ln(sf) would be −inf. frankenscipy-czegj
+        if x <= 0.0 {
+            return 0.0;
+        }
+        let z = (x / self.scale).ln() / self.s;
+        fsci_special::log_ndtr_scalar(-z)
+    }
+
     fn ppf(&self, q: f64) -> f64 {
         if !(0.0..=1.0).contains(&q) {
             return f64::NAN;
@@ -3988,6 +3998,14 @@ impl ContinuousDistribution for Gibrat {
             return 1.0;
         }
         0.5 * fsci_special::erfc_scalar(x.ln() * FRAC_1_SQRT_2)
+    }
+
+    fn logsf(&self, x: f64) -> f64 {
+        // log sf = log Φ(−ln x); finite in the ultra-extreme tail. frankenscipy-czegj
+        if x <= 0.0 {
+            return 0.0;
+        }
+        fsci_special::log_ndtr_scalar(-x.ln())
     }
 
     fn ppf(&self, q: f64) -> f64 {
@@ -9280,6 +9298,11 @@ impl ContinuousDistribution for JohnsonSU {
         0.5 * fsci_special::erfc_scalar(z * FRAC_1_SQRT_2)
     }
 
+    fn logsf(&self, x: f64) -> f64 {
+        // log sf = log Φ(−(a+b·asinh x)); finite in the ultra-extreme tail. frankenscipy-czegj
+        fsci_special::log_ndtr_scalar(-(self.a + self.b * x.asinh()))
+    }
+
     fn ppf(&self, q: f64) -> f64 {
         if !(0.0..=1.0).contains(&q) {
             return f64::NAN;
@@ -9795,6 +9818,24 @@ impl ContinuousDistribution for GenPareto {
         }
     }
 
+    fn logsf(&self, x: f64) -> f64 {
+        // log sf = −(1/c)·ln(1+c·x), or −x for c→0; finite in the ultra-extreme
+        // tail where ln(sf) would be −inf. frankenscipy-czegj
+        if x < 0.0 {
+            return 0.0;
+        }
+        let c = self.c;
+        if c.abs() < 1e-15 {
+            -x
+        } else {
+            let t = 1.0 + c * x;
+            if t <= 0.0 {
+                return if c > 0.0 { f64::NEG_INFINITY } else { 0.0 };
+            }
+            -(1.0 / c) * t.ln()
+        }
+    }
+
     fn ppf(&self, q: f64) -> f64 {
         if !(0.0..=1.0).contains(&q) {
             return f64::NAN;
@@ -10188,6 +10229,14 @@ impl ContinuousDistribution for HalfLogistic {
         2.0 * e / (1.0 + e)
     }
 
+    fn logsf(&self, x: f64) -> f64 {
+        // log sf = ln 2 − x − ln1p(e^{-x}); finite for arbitrarily large x. frankenscipy-czegj
+        if x <= 0.0 {
+            return 0.0;
+        }
+        std::f64::consts::LN_2 - x - (-x).exp().ln_1p()
+    }
+
     fn ppf(&self, q: f64) -> f64 {
         if !(0.0..=1.0).contains(&q) {
             return f64::NAN;
@@ -10396,6 +10445,16 @@ impl ContinuousDistribution for FatigueLife {
         let root_x = x.sqrt();
         let z = (root_x - 1.0 / root_x) / self.c;
         0.5 * fsci_special::erfc_scalar(z * FRAC_1_SQRT_2)
+    }
+
+    fn logsf(&self, x: f64) -> f64 {
+        // log sf = log Φ(−z), z = (√x − 1/√x)/c; finite deep tail. frankenscipy-czegj
+        if x <= 0.0 {
+            return 0.0;
+        }
+        let root_x = x.sqrt();
+        let z = (root_x - 1.0 / root_x) / self.c;
+        fsci_special::log_ndtr_scalar(-z)
     }
 
     fn ppf(&self, q: f64) -> f64 {
@@ -11125,6 +11184,14 @@ impl ContinuousDistribution for Fisk {
             return 1.0;
         }
         1.0 / (1.0 + x.powf(self.c))
+    }
+
+    fn logsf(&self, x: f64) -> f64 {
+        // log sf = −ln(1 + x^c) = −ln1p(x^c); finite power-law tail. frankenscipy-czegj
+        if x <= 0.0 {
+            return 0.0;
+        }
+        -x.powf(self.c).ln_1p()
     }
 
     fn ppf(&self, q: f64) -> f64 {
@@ -13003,6 +13070,14 @@ impl ContinuousDistribution for Gilbrat {
         0.5 * fsci_special::erfc_scalar(x.ln() * FRAC_1_SQRT_2)
     }
 
+    fn logsf(&self, x: f64) -> f64 {
+        // log sf = log Φ(−ln x); finite in the ultra-extreme tail. frankenscipy-czegj
+        if x <= 0.0 {
+            return 0.0;
+        }
+        fsci_special::log_ndtr_scalar(-x.ln())
+    }
+
     fn ppf(&self, q: f64) -> f64 {
         if !(0.0..=1.0).contains(&q) {
             return f64::NAN;
@@ -13581,6 +13656,14 @@ impl ContinuousDistribution for Burr12 {
         (1.0 + x.powf(self.c)).powf(-self.d)
     }
 
+    fn logsf(&self, x: f64) -> f64 {
+        // log sf = −d·ln1p(x^c); finite power-law tail. frankenscipy-czegj
+        if x <= 0.0 {
+            return 0.0;
+        }
+        -self.d * x.powf(self.c).ln_1p()
+    }
+
     fn ppf(&self, q: f64) -> f64 {
         if !(0.0..=1.0).contains(&q) {
             return f64::NAN;
@@ -13917,6 +14000,14 @@ impl ContinuousDistribution for Loglogistic {
             return 1.0;
         }
         1.0 / (1.0 + x.powf(self.c))
+    }
+
+    fn logsf(&self, x: f64) -> f64 {
+        // log sf = −ln1p(x^c); finite power-law tail. frankenscipy-czegj
+        if x <= 0.0 {
+            return 0.0;
+        }
+        -x.powf(self.c).ln_1p()
     }
 
     fn ppf(&self, q: f64) -> f64 {
@@ -38697,6 +38788,56 @@ mod tests {
         assert!(gt > 0.0 && gt < 1e-30, "gilbrat tail {gt}");
         let it = InverseGaussian::new(1.0).sf(80.0); // ≈ 3e-20
         assert!(it > 0.0 && it < 1e-17, "invgauss tail {it}");
+    }
+
+    #[test]
+    fn logsf_overrides_consistent_and_finite_in_extreme_tail() {
+        // logsf == ln(sf) where sf is representable; and stays finite & negative
+        // deep in the tail where sf underflows to 0 (frankenscipy-czegj).
+        macro_rules! mid {
+            ($d:expr, $xs:expr) => {{
+                let d = $d;
+                for &x in $xs {
+                    let ls = d.logsf(x);
+                    let ref_ = d.sf(x).ln();
+                    assert!(
+                        (ls - ref_).abs() <= 1e-9 * ref_.abs().max(1.0),
+                        "{}: logsf({x})={ls} vs ln(sf)={ref_}",
+                        stringify!($d)
+                    );
+                }
+            }};
+        }
+        mid!(GenPareto::new(0.25), &[0.5, 2.0, 8.0]);
+        mid!(HalfLogistic, &[0.5, 2.0, 8.0]);
+        mid!(Fisk::new(3.0), &[0.5, 2.0, 8.0]);
+        mid!(Loglogistic::new(3.0), &[0.5, 2.0, 8.0]);
+        mid!(Burr12::new(2.0, 1.5), &[0.5, 2.0, 8.0]);
+        mid!(Lognormal::new(1.0, 1.0), &[0.5, 2.0, 8.0]);
+        mid!(Gibrat, &[0.5, 2.0, 8.0]);
+        mid!(Gilbrat, &[0.5, 2.0, 8.0]);
+        mid!(JohnsonSU::new(0.5, 1.5), &[-1.0, 0.5, 4.0]);
+        mid!(FatigueLife::new(0.5), &[0.5, 2.0, 8.0]);
+
+        // Extreme tail: ln(sf) would be -inf (sf underflowed); logsf must be finite.
+        macro_rules! ext {
+            ($d:expr, $x:expr) => {{
+                let d = $d;
+                assert_eq!(d.sf($x), 0.0, "precondition: sf underflowed at {}", $x);
+                let ls = d.logsf($x);
+                assert!(
+                    ls.is_finite() && ls < -300.0,
+                    "{}: logsf({})={ls} not finite/large-negative",
+                    stringify!($d),
+                    $x
+                );
+            }};
+        }
+        ext!(GenPareto::new(0.0), 1000.0); // -x = -1000
+        ext!(HalfLogistic, 1000.0); // ≈ -1000
+        ext!(Gibrat, 1e120); // logΦ(-ln 1e120)
+        ext!(Lognormal::new(1.0, 1.0), 1e150);
+        ext!(JohnsonSU::new(0.5, 1.5), 1e260);
     }
 
     // ── Exponential distribution ────────────────────────────────────
