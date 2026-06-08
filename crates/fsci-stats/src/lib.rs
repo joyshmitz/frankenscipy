@@ -6094,12 +6094,11 @@ impl Poisson {
 
     /// Cumulative distribution function.
     pub fn cdf(&self, k: u64) -> f64 {
-        // Direct summation: P(X <= k) = sum_{i=0}^{k} pmf(i)
-        let mut sum = 0.0;
-        for i in 0..=k {
-            sum += self.pmf(i);
-        }
-        sum.min(1.0) // clamp for numerical safety
+        // Closed form P(X <= k) = Q(k+1, mu) (regularized upper incomplete
+        // gamma), matching scipy's pdtr. O(1) vs the old O(k) pmf summation,
+        // and accurate for large k where the running sum accumulates error.
+        // frankenscipy-7kq9d
+        upper_regularized_gamma(k as f64 + 1.0, self.mu)
     }
 
     /// Mean of the distribution.
@@ -6366,6 +6365,14 @@ impl DiscreteDistribution for Binomial {
         ln_pmf.exp()
     }
 
+    fn cdf(&self, k: u64) -> f64 {
+        // Closed form P(X<=k) = I_{1-p}(n-k, k+1), matching scipy's bdtr. O(1)
+        // vs the old O(k) pmf summation. frankenscipy-7kq9d
+        if k >= self.n {
+            return 1.0;
+        }
+        regularized_incomplete_beta((self.n - k) as f64, k as f64 + 1.0, 1.0 - self.p)
+    }
     fn sf(&self, k: u64) -> f64 {
         // P(X>k) = I_p(k+1, n-k); direct so the right tail does not collapse
         // like the default 1-cdf. frankenscipy-r4933
@@ -7176,6 +7183,11 @@ impl DiscreteDistribution for NegBinomial {
         ln_pmf.exp()
     }
 
+    fn cdf(&self, k: u64) -> f64 {
+        // Closed form P(X<=k) = I_p(n, k+1), matching scipy's nbdtr. O(1) vs the
+        // old O(k) pmf summation. frankenscipy-7kq9d
+        regularized_incomplete_beta(self.n, k as f64 + 1.0, self.p)
+    }
     fn sf(&self, k: u64) -> f64 {
         // P(X>k) = I_{1-p}(k+1, n); direct so the right tail does not collapse
         // like the default 1-cdf. frankenscipy-r4933
@@ -40019,6 +40031,33 @@ mod tests {
         cc!(Poisson::new(10.0), &[2, 8, 10, 15, 25]);
         cc!(Binomial::new(20, 0.3), &[1, 5, 10, 15]);
         cc!(NegBinomial::new(5.0, 0.5), &[1, 5, 10, 20]);
+
+        // Closed-form cdf must match an independent pmf-sum reference in the bulk
+        // (the O(k)→O(1) swap is faithful). frankenscipy-7kq9d
+        let pmf_sum_cdf = |pmf: &dyn Fn(u64) -> f64, k: u64| -> f64 {
+            (0..=k).map(pmf).sum::<f64>().min(1.0)
+        };
+        {
+            let d = Poisson::new(10.0);
+            for k in [0u64, 3, 8, 12, 20] {
+                let r = pmf_sum_cdf(&|i| d.pmf(i), k);
+                assert!((d.cdf(k) - r).abs() <= 1e-9, "poisson cdf({k})={} vs {r}", d.cdf(k));
+            }
+        }
+        {
+            let d = Binomial::new(20, 0.3);
+            for k in [0u64, 3, 6, 10, 19, 20] {
+                let r = pmf_sum_cdf(&|i| d.pmf(i), k);
+                assert!((d.cdf(k) - r).abs() <= 1e-9, "binom cdf({k})={} vs {r}", d.cdf(k));
+            }
+        }
+        {
+            let d = NegBinomial::new(5.0, 0.5);
+            for k in [0u64, 3, 8, 15, 30] {
+                let r = pmf_sum_cdf(&|i| d.pmf(i), k);
+                assert!((d.cdf(k) - r).abs() <= 1e-9, "nbinom cdf({k})={} vs {r}", d.cdf(k));
+            }
+        }
 
         // Deep right tail: the closed-form sf stays accurate (≈3e-181) where the
         // default 1-cdf has lost all precision (cdf rounds to ~1), and logsf is
