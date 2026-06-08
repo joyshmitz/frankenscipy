@@ -2388,7 +2388,7 @@ pub fn lstsq_with_casp(
     let matrix = dmatrix_from_rows(a)?;
     let rhs = DVector::from_column_slice(b);
 
-    if let Some(thin_svd) = public_bidiag_thin_svd_candidate(&matrix)
+    if let Some(thin_svd) = public_tall_thin_svd_candidate(&matrix)
         && let Some((max_s, min_s)) = public_bidiag_svd_stats(&thin_svd.singular_values)
     {
         let threshold = cond * max_s;
@@ -2655,7 +2655,7 @@ pub fn pinv_with_casp(
     }
 
     let matrix = dmatrix_from_rows(a)?;
-    if let Some(thin_svd) = public_bidiag_thin_svd_candidate(&matrix)
+    if let Some(thin_svd) = public_tall_thin_svd_candidate(&matrix)
         && let Some((max_s, min_s)) = public_bidiag_svd_stats(&thin_svd.singular_values)
     {
         let threshold = atol + rtol * max_s;
@@ -3287,7 +3287,7 @@ pub fn svd(a: &[Vec<f64>], options: DecompOptions) -> Result<SvdResult, LinalgEr
     }
 
     let matrix = dmatrix_from_rows(a)?;
-    if let Some(thin_svd) = public_bidiag_thin_svd_candidate(&matrix)
+    if let Some(thin_svd) = public_tall_thin_svd_candidate(&matrix)
         && let Some((max_s, _)) = public_bidiag_svd_stats(&thin_svd.singular_values)
     {
         let threshold = public_bidiag_default_threshold(rows, cols, max_s);
@@ -3354,7 +3354,7 @@ pub fn svdvals(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<f64>, Linal
     }
 
     let matrix = dmatrix_from_rows(a)?;
-    if let Some(thin_svd) = public_bidiag_thin_svd_candidate(&matrix)
+    if let Some(thin_svd) = public_tall_thin_svd_candidate(&matrix)
         && let Some((max_s, _)) = public_bidiag_svd_stats(&thin_svd.singular_values)
     {
         let threshold = public_bidiag_default_threshold(rows, cols, max_s);
@@ -7242,6 +7242,252 @@ fn deterministic_thin_svd_from_reduction_parts(
 fn deterministic_thin_svd(matrix: &DMatrix<f64>) -> Result<DeterministicThinSvd, LinalgError> {
     let reduction = golub_kahan_bidiagonal_reduction(matrix)?;
     deterministic_thin_svd_from_reduction(&reduction)
+}
+
+#[derive(Debug, Clone)]
+struct TsqrFactor {
+    rows: usize,
+    cols: usize,
+    root: usize,
+    nodes: Vec<TsqrNode>,
+}
+
+#[derive(Debug, Clone)]
+enum TsqrNode {
+    Leaf {
+        row_start: usize,
+        row_end: usize,
+        reflectors: Vec<HouseholderReflector>,
+        r: DMatrix<f64>,
+    },
+    Internal {
+        left: usize,
+        right: usize,
+        reflectors: Vec<HouseholderReflector>,
+        r: DMatrix<f64>,
+    },
+}
+
+impl TsqrNode {
+    fn r(&self) -> &DMatrix<f64> {
+        match self {
+            Self::Leaf { r, .. } | Self::Internal { r, .. } => r,
+        }
+    }
+}
+
+fn public_tall_thin_svd_candidate(matrix: &DMatrix<f64>) -> Option<DeterministicThinSvd> {
+    public_tsqr_thin_svd_candidate(matrix).or_else(|| public_bidiag_thin_svd_candidate(matrix))
+}
+
+fn householder_qr_factor(
+    matrix: &DMatrix<f64>,
+) -> Option<(Vec<HouseholderReflector>, DMatrix<f64>)> {
+    let rows = matrix.nrows();
+    let cols = matrix.ncols();
+    if rows < cols || cols == 0 || matrix.iter().any(|value| !value.is_finite()) {
+        return None;
+    }
+
+    let mut work = matrix.clone();
+    let mut reflectors = Vec::with_capacity(cols);
+    for step in 0..cols {
+        let column_values = (step..rows).map(|row| work[(row, step)]).collect();
+        let reflector = make_householder_reflector(step, column_values);
+        apply_householder_left(&mut work, &reflector, step);
+        for row in step + 1..rows {
+            work[(row, step)] = 0.0;
+        }
+        reflectors.push(reflector);
+    }
+
+    let mut r = DMatrix::<f64>::zeros(cols, cols);
+    for row in 0..cols {
+        for col in row..cols {
+            r[(row, col)] = work[(row, col)];
+        }
+    }
+    if (0..cols).any(|idx| !r[(idx, idx)].is_finite() || r[(idx, idx)].abs() <= f64::EPSILON) {
+        return None;
+    }
+
+    Some((reflectors, r))
+}
+
+fn apply_q_from_reflectors(
+    row_count: usize,
+    cols: usize,
+    reflectors: &[HouseholderReflector],
+    input: &DMatrix<f64>,
+) -> Option<DMatrix<f64>> {
+    if input.nrows() != cols || input.ncols() != cols || row_count < cols {
+        return None;
+    }
+
+    let mut work = DMatrix::<f64>::zeros(row_count, cols);
+    for row in 0..cols {
+        for col in 0..cols {
+            work[(row, col)] = input[(row, col)];
+        }
+    }
+    for reflector in reflectors.iter().rev() {
+        apply_householder_left(&mut work, reflector, 0);
+    }
+    Some(work)
+}
+
+fn tsqr_block_ranges(rows: usize, cols: usize) -> Option<Vec<(usize, usize)>> {
+    if rows < cols.saturating_mul(2) || cols == 0 {
+        return None;
+    }
+    let block_rows = cols;
+    let mut ranges = Vec::new();
+    let mut row_start = 0;
+    while row_start < rows {
+        let mut row_end = (row_start + block_rows).min(rows);
+        if rows - row_end > 0 && rows - row_end < cols {
+            row_end = rows;
+        }
+        if row_end - row_start < cols {
+            return None;
+        }
+        ranges.push((row_start, row_end));
+        row_start = row_end;
+    }
+    if ranges.len() >= 2 {
+        Some(ranges)
+    } else {
+        None
+    }
+}
+
+fn tsqr_factor(matrix: &DMatrix<f64>) -> Option<TsqrFactor> {
+    let rows = matrix.nrows();
+    let cols = matrix.ncols();
+    if cols < PUBLIC_BIDIAG_SVD_MIN_COLS || matrix.iter().any(|value| !value.is_finite()) {
+        return None;
+    }
+
+    let mut nodes = Vec::new();
+    let mut level = Vec::new();
+    for (row_start, row_end) in tsqr_block_ranges(rows, cols)? {
+        let block = matrix.rows(row_start, row_end - row_start).into_owned();
+        let (reflectors, r) = householder_qr_factor(&block)?;
+        let node_idx = nodes.len();
+        nodes.push(TsqrNode::Leaf {
+            row_start,
+            row_end,
+            reflectors,
+            r,
+        });
+        level.push(node_idx);
+    }
+
+    while level.len() > 1 {
+        let mut next = Vec::with_capacity(level.len().div_ceil(2));
+        let mut idx = 0;
+        while idx < level.len() {
+            if idx + 1 == level.len() {
+                next.push(level[idx]);
+                idx += 1;
+                continue;
+            }
+
+            let left = level[idx];
+            let right = level[idx + 1];
+            let mut stacked = DMatrix::<f64>::zeros(cols * 2, cols);
+            for row in 0..cols {
+                for col in 0..cols {
+                    stacked[(row, col)] = nodes[left].r()[(row, col)];
+                    stacked[(cols + row, col)] = nodes[right].r()[(row, col)];
+                }
+            }
+
+            let (reflectors, r) = householder_qr_factor(&stacked)?;
+            let node_idx = nodes.len();
+            nodes.push(TsqrNode::Internal {
+                left,
+                right,
+                reflectors,
+                r,
+            });
+            next.push(node_idx);
+            idx += 2;
+        }
+        level = next;
+    }
+
+    Some(TsqrFactor {
+        rows,
+        cols,
+        root: level[0],
+        nodes,
+    })
+}
+
+fn replay_tsqr_node(
+    factor: &TsqrFactor,
+    node_idx: usize,
+    input: &DMatrix<f64>,
+    output: &mut DMatrix<f64>,
+) -> Option<()> {
+    match &factor.nodes[node_idx] {
+        TsqrNode::Leaf {
+            row_start,
+            row_end,
+            reflectors,
+            ..
+        } => {
+            let leaf_u =
+                apply_q_from_reflectors(row_end - row_start, factor.cols, reflectors, input)?;
+            for local_row in 0..leaf_u.nrows() {
+                for col in 0..factor.cols {
+                    output[(row_start + local_row, col)] = leaf_u[(local_row, col)];
+                }
+            }
+            Some(())
+        }
+        TsqrNode::Internal {
+            left,
+            right,
+            reflectors,
+            ..
+        } => {
+            let stacked = apply_q_from_reflectors(factor.cols * 2, factor.cols, reflectors, input)?;
+            let left_input = stacked.rows(0, factor.cols).into_owned();
+            let right_input = stacked.rows(factor.cols, factor.cols).into_owned();
+            replay_tsqr_node(factor, *left, &left_input, output)?;
+            replay_tsqr_node(factor, *right, &right_input, output)
+        }
+    }
+}
+
+fn tsqr_apply_q_to_root_svd_u(factor: &TsqrFactor, root_u: &DMatrix<f64>) -> Option<DMatrix<f64>> {
+    if root_u.nrows() != factor.cols || root_u.ncols() != factor.cols {
+        return None;
+    }
+    let mut u = DMatrix::<f64>::zeros(factor.rows, factor.cols);
+    replay_tsqr_node(factor, factor.root, root_u, &mut u)?;
+    Some(u)
+}
+
+fn public_tsqr_thin_svd_candidate(matrix: &DMatrix<f64>) -> Option<DeterministicThinSvd> {
+    let factor = tsqr_factor(matrix)?;
+    let root_svd = deterministic_thin_svd(factor.nodes[factor.root].r()).ok()?;
+    if root_svd.u.nrows() != factor.cols || root_svd.u.ncols() != factor.cols {
+        return None;
+    }
+
+    let mut u = tsqr_apply_q_to_root_svd_u(&factor, &root_svd.u)?;
+    let mut v_t = root_svd.v_t;
+    canonicalize_svd_factor_signs(&mut u, &mut v_t);
+
+    Some(DeterministicThinSvd {
+        singular_values: root_svd.singular_values,
+        u,
+        v_t,
+        jacobi_sweeps: root_svd.jacobi_sweeps,
+    })
 }
 
 fn public_bidiag_thin_svd_candidate(matrix: &DMatrix<f64>) -> Option<DeterministicThinSvd> {
@@ -14684,6 +14930,53 @@ mod tests {
             DMatrix::<f64>::from_fn(rows, cols, |row, col| if row == col { 1.0 } else { 0.0 });
         let thin = public_bidiag_thin_svd_candidate(&matrix).expect("candidate");
         assert!(!public_bidiag_svd_accepts(&matrix, &thin, f64::EPSILON));
+    }
+
+    #[test]
+    fn block_tsqr_tall_svd_candidate_matches_safe_svd_reference() {
+        let original = bidiag_deterministic_matrix(256, 128);
+        let rows = original.nrows();
+        let cols = original.ncols();
+
+        let first = public_tsqr_thin_svd_candidate(&original).expect("block TSQR candidate");
+        let second =
+            public_tsqr_thin_svd_candidate(&original).expect("repeat block TSQR candidate");
+        assert_eq!(
+            thin_svd_bits_digest(&first),
+            thin_svd_bits_digest(&second),
+            "block TSQR candidate must be bit-deterministic for fixed input"
+        );
+        assert_nonincreasing(&first.singular_values);
+
+        let (max_s, _) =
+            public_bidiag_svd_stats(&first.singular_values).expect("finite singular spectrum");
+        let threshold = public_bidiag_default_threshold(rows, cols, max_s);
+        assert!(public_bidiag_svd_accepts(&original, &first, threshold));
+
+        let reference_svd = safe_svd(original.clone(), true, true).expect("reference SVD");
+        assert_close_slice(
+            &first.singular_values,
+            reference_svd.singular_values.as_slice(),
+            1e-6,
+            1e-6,
+        );
+
+        let reconstructed = &first.u * first.sigma_matrix() * &first.v_t;
+        let reconstruction_error = max_abs_dmatrix_diff(&reconstructed, &original);
+        let u_error = dmatrix_column_orthogonality_error(&first.u);
+        let v_error = dmatrix_orthogonality_error(&first.v_t);
+        assert!(
+            reconstruction_error <= 1e-8 * dmatrix_max_abs_value(&original).max(1.0),
+            "block TSQR reconstruction error {reconstruction_error:.17e}"
+        );
+        assert!(
+            u_error <= 1e-9,
+            "block TSQR U orthogonality error {u_error:.17e}"
+        );
+        assert!(
+            v_error <= 1e-9,
+            "block TSQR Vt orthogonality error {v_error:.17e}"
+        );
     }
 
     #[test]
