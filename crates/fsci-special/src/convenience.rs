@@ -1139,7 +1139,7 @@ pub fn struve(v: f64, x: f64) -> f64 {
         // than guessing.
         return f64::NAN;
     }
-    if x.abs() > 30.0 && v.abs() < x.abs() / 2.0 {
+    if x.abs() > 18.0 && v.abs() < x.abs() / 2.0 {
         return struve_asymptotic(v, x);
     }
     struve_series(v, x)
@@ -6607,6 +6607,12 @@ mod tests {
             (2.0, 100.0, 21.30386405267446),
             (0.5, 80.0, 0.0990534330000826),
             (3.0, 150.0, 955.1431304112394),
+            // Moderate-x band x ∈ [18, 30] that the old x>30 cutoff routed to the
+            // catastrophically-cancelling series (struve(0,30) was ~1e-3 rel off).
+            // frankenscipy-…: cutoff lowered to 18.
+            (0.0, 20.0, 0.09439369808132349),
+            (1.0, 25.0, 0.5388036213269298),
+            (0.0, 30.0, -0.09609842155416415),
         ];
         for (v, x, expected) in cases {
             let got = struve(v, x);
