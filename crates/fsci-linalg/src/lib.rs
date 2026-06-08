@@ -6586,6 +6586,106 @@ fn apply_bidiag_fused_rank_k_update(
     Ok(())
 }
 
+fn apply_bidiag_fused_step(
+    matrix: &mut DMatrix<f64>,
+    left_reflector: &HouseholderReflector,
+    step: usize,
+    left_scale_workspace: &mut [f64],
+    right_dot_workspace: &mut [f64],
+) -> HouseholderReflector {
+    let rows = matrix.nrows();
+    let cols = matrix.ncols();
+    debug_assert!(step + 1 < cols);
+    debug_assert!(left_scale_workspace.len() >= cols - step);
+    debug_assert!(right_dot_workspace.len() >= rows);
+
+    let left_values = left_reflector.values.as_slice();
+    let left_start = left_reflector.start;
+    let data = matrix.as_mut_slice();
+
+    if left_reflector.tau == 0.0 || left_values.is_empty() {
+        for scale in &mut left_scale_workspace[..cols - step] {
+            *scale = 0.0;
+        }
+    } else {
+        for col in step..cols {
+            let col_base = col * rows;
+            let mut dot = 0.0;
+            for (offset, value) in left_values.iter().enumerate() {
+                dot += value * data[col_base + left_start + offset];
+            }
+            left_scale_workspace[col - step] = left_reflector.tau * dot;
+        }
+
+        let first_left_value = left_values[0];
+        for col in step..cols {
+            let scale = left_scale_workspace[col - step];
+            if scale != 0.0 {
+                data[col * rows + step] -= scale * first_left_value;
+            }
+        }
+    }
+
+    let row_values = (step + 1..cols)
+        .map(|col| data[col * rows + step])
+        .collect();
+    let right_reflector = make_householder_reflector(step + 1, row_values);
+
+    for dot in &mut right_dot_workspace[step..rows] {
+        *dot = 0.0;
+    }
+
+    let right_values = right_reflector.values.as_slice();
+    if !right_values.is_empty() {
+        for col in step + 1..cols {
+            let col_base = col * rows;
+            let right_value = right_values[col - (step + 1)];
+            let left_scale = left_scale_workspace[col - step];
+            for (left_offset, left_value) in left_values.iter().enumerate().skip(1) {
+                let row = left_start + left_offset;
+                if left_scale != 0.0 {
+                    data[col_base + row] -= left_scale * left_value;
+                }
+                right_dot_workspace[row] += data[col_base + row] * right_value;
+            }
+        }
+
+        let mut row_dot = 0.0;
+        for (offset, value) in right_values.iter().enumerate() {
+            row_dot += data[(right_reflector.start + offset) * rows + step] * value;
+        }
+        right_dot_workspace[step] = row_dot;
+    }
+
+    let current_col_base = step * rows;
+    for row in step + 1..rows {
+        data[current_col_base + row] = 0.0;
+    }
+
+    if right_reflector.tau != 0.0 && !right_values.is_empty() {
+        for scale in &mut right_dot_workspace[step..rows] {
+            *scale *= right_reflector.tau;
+        }
+
+        for (offset, value) in right_values.iter().enumerate() {
+            let col = right_reflector.start + offset;
+            let col_base = col * rows;
+            for row in step..rows {
+                let scale = right_dot_workspace[row];
+                if scale != 0.0 {
+                    data[col_base + row] -= scale * value;
+                }
+            }
+        }
+    }
+
+    for col in step + 2..cols {
+        data[col * rows + step] = 0.0;
+    }
+
+    right_reflector
+}
+
 fn symmetric_offdiagonal_max(matrix: &DMatrix<f64>) -> f64 {
     let mut max_abs = 0.0_f64;
     for row in 0..matrix.nrows() {
@@ -7604,29 +7704,28 @@ fn golub_kahan_bidiagonal_reduction(
     let mut left_reflectors = Vec::with_capacity(cols);
     let mut right_reflectors = Vec::with_capacity(cols.saturating_sub(1));
     let mut right_dot_workspace = vec![0.0_f64; rows];
+    let mut left_scale_workspace = vec![0.0_f64; cols];
 
     for step in 0..cols {
         let column_values = (step..rows).map(|row| work[(row, step)]).collect();
         let left_reflector = make_householder_reflector(step, column_values);
-        apply_householder_left(&mut work, &left_reflector, step);
-        for row in step + 1..rows {
-            work[(row, step)] = 0.0;
-        }
-        left_reflectors.push(left_reflector);
 
         if step + 1 < cols {
-            let row_values = (step + 1..cols).map(|col| work[(step, col)]).collect();
-            let right_reflector = make_householder_reflector(step + 1, row_values);
-            apply_householder_right_with_workspace(
+            let right_reflector = apply_bidiag_fused_step(
                 &mut work,
-                &right_reflector,
+                &left_reflector,
                 step,
+                &mut left_scale_workspace,
                 &mut right_dot_workspace,
             );
-            for col in step + 2..cols {
-                work[(step, col)] = 0.0;
-            }
+            left_reflectors.push(left_reflector);
             right_reflectors.push(right_reflector);
+        } else {
+            apply_householder_left(&mut work, &left_reflector, step);
+            for row in step + 1..rows {
+                work[(row, step)] = 0.0;
+            }
+            left_reflectors.push(left_reflector);
         }
     }
 
@@ -13608,6 +13707,71 @@ mod tests {
         })
     }
 
+    fn golub_kahan_bidiagonal_reduction_workspace_reference(
+        matrix: &DMatrix<f64>,
+    ) -> Result<BidiagonalReduction, LinalgError> {
+        let rows = matrix.nrows();
+        let cols = matrix.ncols();
+        if rows < cols {
+            return Err(LinalgError::UnsupportedAssumption);
+        }
+        if matrix.iter().any(|value| !value.is_finite()) {
+            return Err(LinalgError::NonFiniteInput);
+        }
+
+        let mut work = matrix.clone();
+        let mut left_reflectors = Vec::with_capacity(cols);
+        let mut right_reflectors = Vec::with_capacity(cols.saturating_sub(1));
+        let mut right_dot_workspace = vec![0.0_f64; rows];
+
+        for step in 0..cols {
+            let column_values = (step..rows).map(|row| work[(row, step)]).collect();
+            let left_reflector = make_householder_reflector(step, column_values);
+            apply_householder_left(&mut work, &left_reflector, step);
+            for row in step + 1..rows {
+                work[(row, step)] = 0.0;
+            }
+            left_reflectors.push(left_reflector);
+
+            if step + 1 < cols {
+                let row_values = (step + 1..cols).map(|col| work[(step, col)]).collect();
+                let right_reflector = make_householder_reflector(step + 1, row_values);
+                apply_householder_right_with_workspace(
+                    &mut work,
+                    &right_reflector,
+                    step,
+                    &mut right_dot_workspace,
+                );
+                for col in step + 2..cols {
+                    work[(step, col)] = 0.0;
+                }
+                right_reflectors.push(right_reflector);
+            }
+        }
+
+        let diagonal = (0..cols).map(|idx| work[(idx, idx)]).collect();
+        let superdiagonal = (0..cols.saturating_sub(1))
+            .map(|idx| work[(idx, idx + 1)])
+            .collect();
+        let mut bidiagonal = DMatrix::<f64>::zeros(rows, cols);
+        for idx in 0..cols {
+            bidiagonal[(idx, idx)] = work[(idx, idx)];
+            if idx + 1 < cols {
+                bidiagonal[(idx, idx + 1)] = work[(idx, idx + 1)];
+            }
+        }
+
+        Ok(BidiagonalReduction {
+            rows,
+            cols,
+            diagonal,
+            superdiagonal,
+            bidiagonal,
+            left_reflectors,
+            right_reflectors,
+        })
+    }
+
     fn assert_reflectors_bit_identical(
         left: &[HouseholderReflector],
         right: &[HouseholderReflector],
@@ -14086,6 +14250,17 @@ mod tests {
     }
 
     #[test]
+    fn bidiag_fused_step_matches_workspace_reference_bits() {
+        for (rows, cols) in [(32, 16), (128, 64)] {
+            let original = bidiag_deterministic_matrix(rows, cols);
+            let reference = golub_kahan_bidiagonal_reduction_workspace_reference(&original)
+                .expect("workspace reference reduction");
+            let fused = golub_kahan_bidiagonal_reduction(&original).expect("fused-step reduction");
+            assert_reductions_bit_identical(&reference, &fused);
+        }
+    }
+
+    #[test]
     #[ignore = "perf probe: run with rch and --release before/after bidiagonal reduction levers"]
     fn bidiag_large_reduction_perf_probe() {
         let original = bidiag_deterministic_matrix(1024, 512);
@@ -14106,6 +14281,40 @@ mod tests {
         println!("first_diagonal={:.17e}", reduction.diagonal[0]);
         println!("last_diagonal={:.17e}", reduction.diagonal[511]);
         println!("BIDIAG_LARGE_REDUCTION_PERF_END");
+    }
+
+    #[test]
+    #[ignore = "perf probe: run with rch and --release for old workspace vs fused-step timing"]
+    fn bidiag_fused_step_reduction_perf_probe() {
+        let original = bidiag_deterministic_matrix(1024, 512);
+
+        let started_at = std::time::Instant::now();
+        let reference =
+            golub_kahan_bidiagonal_reduction_workspace_reference(std::hint::black_box(&original))
+                .expect("workspace reference reduction");
+        let reference_ms = started_at.elapsed().as_secs_f64() * 1_000.0;
+
+        let started_at = std::time::Instant::now();
+        let fused = golub_kahan_bidiagonal_reduction(std::hint::black_box(&original))
+            .expect("fused-step reduction");
+        let fused_ms = started_at.elapsed().as_secs_f64() * 1_000.0;
+
+        assert_reductions_bit_identical(&reference, &fused);
+
+        println!("BIDIAG_FUSED_STEP_REDUCTION_PERF_BEGIN");
+        println!("shape={}x{}", fused.rows, fused.cols);
+        println!("workspace_reference_ms={reference_ms:.6}");
+        println!("fused_step_ms={fused_ms:.6}");
+        println!(
+            "workspace_reference_digest={:#018x}",
+            bidiag_reduction_digest(&reference)
+        );
+        println!(
+            "fused_step_digest={:#018x}",
+            bidiag_reduction_digest(&fused)
+        );
+        println!("speedup={:.6}", reference_ms / fused_ms);
+        println!("BIDIAG_FUSED_STEP_REDUCTION_PERF_END");
     }
 
     #[test]
