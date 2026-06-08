@@ -1782,6 +1782,32 @@ impl ContinuousDistribution for NoncentralChiSquared {
         log_pdf.exp()
     }
 
+    fn logpdf(&self, x: f64) -> f64 {
+        // Pure log-space form: ln I_ν(z) = ln(ive(ν,z)) + z (z≥0), avoiding the
+        // I_ν overflow that makes pdf() collapse to 0 for large λx. Finite deep
+        // in the tail where the density underflows. frankenscipy-7m3xk
+        if x < 0.0 || x.is_nan() {
+            return if x.is_nan() { f64::NAN } else { f64::NEG_INFINITY };
+        }
+        if self.nc == 0.0 {
+            return ChiSquared::new(self.df).logpdf(x);
+        }
+        if x == 0.0 {
+            return if self.df >= 2.0 { f64::NEG_INFINITY } else { f64::INFINITY };
+        }
+        let k = self.df;
+        let lam = self.nc;
+        let nu = k / 2.0 - 1.0;
+        let sqrt_lam_x = (lam * x).sqrt();
+        // ln I_ν(z) = log_ive(ν, z) + z; stays finite for all z (vs the pdf's
+        // I_ν = ive·e^z which overflows for z > 709).
+        let log_iv = fsci_special::log_ive_scalar(nu, sqrt_lam_x) + sqrt_lam_x;
+        if !log_iv.is_finite() {
+            return f64::NEG_INFINITY;
+        }
+        -(x + lam) / 2.0 + ((k / 4.0) - 0.5) * (x / lam).ln() + log_iv - LN_2
+    }
+
     fn cdf(&self, x: f64) -> f64 {
         if x <= 0.0 {
             return 0.0;
@@ -40550,6 +40576,30 @@ mod tests {
         let b = Binomial::new(2000, 0.01);
         assert_eq!(b.pmf(1500), 0.0);
         assert!(b.logpmf(1500).is_finite() && b.logpmf(1500) < -300.0);
+    }
+
+    #[test]
+    fn noncentral_chi2_logpdf_consistent_and_finite() {
+        // logpdf == ln(pdf) in the bulk; nc=0 matches central chi²; finite deep
+        // in the tail where pdf() overflows I_ν and collapses to 0. frankenscipy-7m3xk
+        let d = NoncentralChiSquared::new(4.0, 2.0);
+        for &x in &[0.5, 2.0, 6.0, 12.0] {
+            let lp = d.logpdf(x);
+            let p = d.pdf(x);
+            assert!(p > 0.0 && (lp - p.ln()).abs() <= 1e-7, "logpdf({x})={lp} vs ln(pdf)={}", p.ln());
+        }
+        // nc → central chi².
+        let nz = NoncentralChiSquared::new(5.0, 0.0);
+        let cz = ChiSquared::new(5.0);
+        for &x in &[1.0, 4.0, 10.0] {
+            assert!((nz.logpdf(x) - cz.logpdf(x)).abs() <= 1e-12);
+        }
+        // Overflow band: z=√(λx)>709 makes pdf's I_ν=ive·e^z overflow → pdf=0,
+        // but the log-space form (ive valid here) stays finite & large-negative.
+        let big = NoncentralChiSquared::new(4.0, 100.0);
+        assert_eq!(big.pdf(6000.0), 0.0); // z≈775 → e^z overflows in pdf
+        let lp = big.logpdf(6000.0);
+        assert!(lp.is_finite() && lp < -300.0, "overflow-band logpdf={lp}");
     }
 
     // ── Exponential distribution ────────────────────────────────────
