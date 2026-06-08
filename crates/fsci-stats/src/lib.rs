@@ -6591,6 +6591,21 @@ impl DiscreteDistribution for BetaBinomial {
         (ln_comb + ln_beta_num - ln_beta_den).exp()
     }
 
+    fn logpmf(&self, k: u64) -> f64 {
+        // ln C(n,k) + ln B(k+a, n−k+b) − ln B(a,b); finite where pmf underflows
+        // (the pmf already forms this then exp's it). frankenscipy-7m3xk
+        if k > self.n {
+            return f64::NEG_INFINITY;
+        }
+        let ln_comb = ln_gamma(self.n as f64 + 1.0)
+            - ln_gamma(k as f64 + 1.0)
+            - ln_gamma((self.n - k) as f64 + 1.0);
+        let ln_beta_num = ln_gamma(k as f64 + self.a) + ln_gamma((self.n - k) as f64 + self.b)
+            - ln_gamma(self.n as f64 + self.a + self.b);
+        let ln_beta_den = ln_gamma(self.a) + ln_gamma(self.b) - ln_gamma(self.a + self.b);
+        ln_comb + ln_beta_num - ln_beta_den
+    }
+
     fn mean(&self) -> f64 {
         self.n as f64 * self.a / (self.a + self.b)
     }
@@ -6858,6 +6873,14 @@ impl DiscreteDistribution for Boltzmann {
         (-(-self.lambda).exp_m1()) * (-self.lambda * kf).exp() / self.z()
     }
 
+    fn logpmf(&self, k: u64) -> f64 {
+        // ln(1 − e^{−λ}) − λk − ln(z); finite where pmf underflows. frankenscipy-7m3xk
+        if k >= self.n as u64 {
+            return f64::NEG_INFINITY;
+        }
+        (-(-self.lambda).exp_m1()).ln() - self.lambda * k as f64 - self.z().ln()
+    }
+
     fn cdf(&self, k: u64) -> f64 {
         if k >= self.n as u64 {
             return 1.0;
@@ -6988,6 +7011,11 @@ impl DiscreteDistribution for DiscreteLaplace {
         (self.a / 2.0).tanh() * (-self.a * k as f64).exp()
     }
 
+    fn logpmf(&self, k: u64) -> f64 {
+        // ln(tanh(a/2)) − a·k; finite where pmf underflows. frankenscipy-7m3xk
+        (self.a / 2.0).tanh().ln() - self.a * k as f64
+    }
+
     fn cdf(&self, k: u64) -> f64 {
         let kf = k as f64;
         let ea = (-self.a).exp();
@@ -7071,6 +7099,14 @@ impl DiscreteDistribution for YuleSimon {
         let kf = k as f64;
         // α · B(k, α + 1) = α · exp(ln B(k, α + 1))
         self.alpha * self.ln_beta_k(kf).exp()
+    }
+
+    fn logpmf(&self, k: u64) -> f64 {
+        // ln(α) + ln B(k, α+1); finite power-law tail. frankenscipy-7m3xk
+        if k == 0 {
+            return f64::NEG_INFINITY;
+        }
+        self.alpha.ln() + self.ln_beta_k(k as f64)
     }
 
     fn cdf(&self, k: u64) -> f64 {
@@ -7191,6 +7227,11 @@ impl DiscreteDistribution for Planck {
         (-(-self.lambda).exp_m1()) * (-self.lambda * kf).exp()
     }
 
+    fn logpmf(&self, k: u64) -> f64 {
+        // ln(1 − e^{−λ}) − λk; finite where pmf underflows. frankenscipy-7m3xk
+        (-(-self.lambda).exp_m1()).ln() - self.lambda * k as f64
+    }
+
     fn cdf(&self, k: u64) -> f64 {
         let kp1 = (k + 1) as f64;
         // 1 − e^(−λ(k+1))
@@ -7241,6 +7282,14 @@ impl DiscreteDistribution for Geometric {
             return 0.0;
         }
         self.p * (1.0 - self.p).powi((k - 1) as i32)
+    }
+
+    fn logpmf(&self, k: u64) -> f64 {
+        // ln(p) + (k−1)·ln(1−p); finite where pmf underflows. frankenscipy-7m3xk
+        if k == 0 {
+            return f64::NEG_INFINITY;
+        }
+        self.p.ln() + (k - 1) as f64 * (1.0 - self.p).ln()
     }
 
     fn cdf(&self, k: u64) -> f64 {
@@ -7676,6 +7725,14 @@ impl DiscreteDistribution for LogSeries {
             return 0.0;
         }
         self.p.powf(k as f64) / (k as f64 * self.norm())
+    }
+
+    fn logpmf(&self, k: u64) -> f64 {
+        // k·ln(p) − ln(k) − ln(norm); finite where pmf underflows. frankenscipy-7m3xk
+        if k == 0 {
+            return f64::NEG_INFINITY;
+        }
+        k as f64 * self.p.ln() - (k as f64).ln() - self.norm().ln()
     }
 
     fn cdf(&self, k: u64) -> f64 {
@@ -40653,6 +40710,13 @@ mod tests {
         mid!(Binomial::new(20, 0.3), &[0, 5, 10, 20]);
         mid!(NegBinomial::new(5.0, 0.5), &[0, 5, 15, 30]);
         mid!(Bernoulli::new(0.3), &[0, 1]);
+        mid!(BetaBinomial::new(20, 2.0, 3.0), &[0, 5, 10, 20]);
+        mid!(YuleSimon::new(2.0), &[1, 3, 10]);
+        mid!(LogSeries::new(0.6), &[1, 3, 8]);
+        mid!(Planck::new(0.5), &[0, 3, 10]);
+        mid!(DiscreteLaplace::new(0.7), &[0, 2, 6]);
+        mid!(Geometric::new(0.3), &[1, 3, 8]);
+        mid!(Boltzmann::new(0.5, 20), &[0, 3, 10]);
 
         // Deep tail / large support: pmf underflows to 0 but logpmf stays finite.
         let p = Poisson::new(10.0);
