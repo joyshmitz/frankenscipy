@@ -1350,7 +1350,16 @@ pub fn convolve2d_with_boundary(
     }
     let (apad, pr, pc) = pad2d_boundary(a, ar, ac, vr - 1, vc - 1, boundary, cval);
     let full_bnd = correlate2d(&apad, (pr, pc), &v_flip, v_shape, ConvolveMode::Valid)?;
-    Ok(crop2d(&full_bnd, ar, ac, vr, vc, mode, (vr - 1) / 2, (vc - 1) / 2))
+    Ok(crop2d(
+        &full_bnd,
+        ar,
+        ac,
+        vr,
+        vc,
+        mode,
+        (vr - 1) / 2,
+        (vc - 1) / 2,
+    ))
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -7966,11 +7975,16 @@ pub fn remez(
         ));
     }
 
-    // Odd numtaps: true Parks-McClellan (Type I equiripple, matches scipy to
-    // ~1e-6 since the minimax optimum is unique). Even numtaps (Type II) still
-    // uses the least-squares approximation below — tracked as a follow-up.
+    // Odd numtaps: true Parks-McClellan (Type I equiripple). Even numtaps:
+    // Type-II Parks-McClellan via the cos(ω/2) factorization. Both are the
+    // unique equiripple minimax optimum, so they match scipy.signal.remez to
+    // machine precision. The least-squares fallback below is retained only for
+    // pathological grids where the exchange cannot form `nz` alternations.
     if numtaps % 2 == 1 {
         return remez_type1_pm(numtaps, bands, desired, &weights);
+    }
+    if let Ok(h) = remez_type2_pm(numtaps, bands, desired, &weights) {
+        return Ok(h);
     }
 
     // Least-squares fallback (even numtaps): frequency-sampling approximation.
@@ -8290,6 +8304,267 @@ fn remez_type1_pm(
     for k in 1..nfcns {
         h[m - k] = a[k] / 2.0;
         h[m + k] = a[k] / 2.0;
+    }
+    Ok(h)
+}
+
+/// Parks-McClellan (Remez exchange) for a Type-II (even `numtaps`, symmetric)
+/// linear-phase FIR filter. The Type-II amplitude response factors as
+/// `A(ω) = cos(ω/2)·P(ω)` with `P(ω) = Σ_{k=0}^{m-1} b̃_k cos(kω)`, `m = N/2`.
+/// Folding the `cos(ω/2)` factor into the desired/weight (`D' = D/cos(ω/2)`,
+/// `W' = W·cos(ω/2)`) turns the weighted minimax problem into the same Type-I
+/// exchange on `P`; the recovered cosine coefficients map to the Type-II taps.
+/// The minimax optimum is unique, so a correct equiripple solution matches
+/// `scipy.signal.remez` to machine precision. Forces `A(0.5)=0` (the Type-II
+/// constraint at Nyquist), so grid points there carry no constraint and are
+/// dropped. Matches scipy for lowpass/bandpass; highpass is not Type-II-realizable.
+fn remez_type2_pm(
+    numtaps: usize,
+    bands: &[f64],
+    desired: &[f64],
+    weights: &[f64],
+) -> Result<Vec<f64>, SignalError> {
+    use std::f64::consts::PI;
+    let nbands = bands.len() / 2;
+    let m = numtaps / 2; // # cos((k-1/2)ω) terms == # b̃_k cosine functions
+    let nfcns = m;
+    let nz = nfcns + 1; // # alternations
+
+    // Dense grid over the bands, with the Type-II transform D' = D/cos(πf),
+    // W' = W·cos(πf). Grid points within `nyq_eps` of Nyquist (where cos(πf)≈0,
+    // the forced A(0.5)=0) carry no constraint and are dropped.
+    let grid_density = 16usize;
+    let delf = 0.5 / (grid_density as f64 * nfcns as f64);
+    let nyq_eps = 1e-5;
+    let mut gridf: Vec<f64> = Vec::new();
+    let mut gdes: Vec<f64> = Vec::new();
+    let mut gwt: Vec<f64> = Vec::new();
+    let mut band_bounds: Vec<(usize, usize)> = Vec::new();
+    for b in 0..nbands {
+        let lo = bands[2 * b];
+        let hi = bands[2 * b + 1];
+        if hi < lo {
+            return Err(SignalError::InvalidArgument(
+                "band edges must be ascending".to_string(),
+            ));
+        }
+        let npts = (((hi - lo) / delf).floor() as usize).max(1) + 1;
+        let start = gridf.len();
+        for j in 0..npts {
+            let f = if j == npts - 1 {
+                hi
+            } else {
+                lo + j as f64 * delf
+            };
+            let q = (PI * f).cos();
+            if q.abs() < nyq_eps {
+                continue; // Nyquist: A is forced to 0, no constraint
+            }
+            gridf.push(f);
+            gdes.push(desired[b] / q);
+            gwt.push(weights[b] * q);
+        }
+        if gridf.len() > start {
+            band_bounds.push((start, gridf.len() - 1));
+        }
+    }
+    let ngrid = gridf.len();
+    if ngrid < nz {
+        return Err(SignalError::InvalidArgument(
+            "too few grid points for remez (type II)".to_string(),
+        ));
+    }
+    let x: Vec<f64> = gridf.iter().map(|&f| (2.0 * PI * f).cos()).collect();
+
+    let mut iext: Vec<usize> = (0..nz).map(|k| k * (ngrid - 1) / (nz - 1)).collect();
+    let mut dev = 0.0_f64;
+    let mut y = vec![0.0_f64; nfcns];
+    let mut adp = vec![0.0_f64; nfcns];
+    let mut xe = vec![0.0_f64; nz];
+
+    for _iter in 0..64 {
+        for k in 0..nz {
+            xe[k] = x[iext[k]];
+        }
+        let mut ad = vec![0.0_f64; nz];
+        for k in 0..nz {
+            let mut p = 1.0;
+            for j in 0..nz {
+                if j != k {
+                    p *= xe[k] - xe[j];
+                }
+            }
+            ad[k] = 1.0 / p;
+        }
+        let mut dnum = 0.0;
+        let mut dden = 0.0;
+        for k in 0..nz {
+            dnum += ad[k] * gdes[iext[k]];
+            let s = if k % 2 == 0 { 1.0 } else { -1.0 };
+            dden += s * ad[k] / gwt[iext[k]];
+        }
+        dev = dnum / dden;
+        for k in 0..nfcns {
+            let s = if k % 2 == 0 { 1.0 } else { -1.0 };
+            y[k] = gdes[iext[k]] - s * dev / gwt[iext[k]];
+        }
+        for k in 0..nfcns {
+            let mut p = 1.0;
+            for j in 0..nfcns {
+                if j != k {
+                    p *= xe[k] - xe[j];
+                }
+            }
+            adp[k] = 1.0 / p;
+        }
+        let eval_p = |xq: f64| -> f64 {
+            let mut num = 0.0;
+            let mut den = 0.0;
+            for k in 0..nfcns {
+                let d = xq - xe[k];
+                if d.abs() < 1e-13 {
+                    return y[k];
+                }
+                let t = adp[k] / d;
+                num += t * y[k];
+                den += t;
+            }
+            num / den
+        };
+        let err: Vec<f64> = (0..ngrid)
+            .map(|i| gwt[i] * (eval_p(x[i]) - gdes[i]))
+            .collect();
+
+        let mut cand: Vec<usize> = Vec::new();
+        for &(s, e) in &band_bounds {
+            cand.push(s);
+            for i in (s + 1)..e {
+                let a = err[i] - err[i - 1];
+                let b2 = err[i + 1] - err[i];
+                if (a > 0.0 && b2 <= 0.0) || (a < 0.0 && b2 >= 0.0) {
+                    cand.push(i);
+                }
+            }
+            if e != s {
+                cand.push(e);
+            }
+        }
+        let mut alt: Vec<usize> = Vec::new();
+        for &ci in &cand {
+            if let Some(&last) = alt.last() {
+                if (err[ci] >= 0.0) == (err[last] >= 0.0) {
+                    if err[ci].abs() > err[last].abs() {
+                        *alt.last_mut().unwrap() = ci;
+                    }
+                    continue;
+                }
+            }
+            alt.push(ci);
+        }
+        while alt.len() > nz {
+            if err[alt[0]].abs() <= err[*alt.last().unwrap()].abs() {
+                alt.remove(0);
+            } else {
+                alt.pop();
+            }
+        }
+        if alt.len() != nz {
+            break;
+        }
+        let maxerr = alt.iter().map(|&i| err[i].abs()).fold(0.0_f64, f64::max);
+        let changed = alt != iext;
+        iext = alt;
+        if !changed || (maxerr - dev.abs()).abs() <= 1e-12 * maxerr.max(1e-30) {
+            break;
+        }
+    }
+
+    // Final interpolation data.
+    for k in 0..nz {
+        xe[k] = x[iext[k]];
+    }
+    let mut dnum = 0.0;
+    let mut dden = 0.0;
+    {
+        let mut ad = vec![0.0_f64; nz];
+        for k in 0..nz {
+            let mut p = 1.0;
+            for j in 0..nz {
+                if j != k {
+                    p *= xe[k] - xe[j];
+                }
+            }
+            ad[k] = 1.0 / p;
+        }
+        for k in 0..nz {
+            dnum += ad[k] * gdes[iext[k]];
+            let s = if k % 2 == 0 { 1.0 } else { -1.0 };
+            dden += s * ad[k] / gwt[iext[k]];
+        }
+    }
+    dev = dnum / dden;
+    for k in 0..nfcns {
+        let s = if k % 2 == 0 { 1.0 } else { -1.0 };
+        y[k] = gdes[iext[k]] - s * dev / gwt[iext[k]];
+    }
+    for k in 0..nfcns {
+        let mut p = 1.0;
+        for j in 0..nfcns {
+            if j != k {
+                p *= xe[k] - xe[j];
+            }
+        }
+        adp[k] = 1.0 / p;
+    }
+    let eval_p = |xq: f64| -> f64 {
+        let mut num = 0.0;
+        let mut den = 0.0;
+        for k in 0..nfcns {
+            let d = xq - xe[k];
+            if d.abs() < 1e-13 {
+                return y[k];
+            }
+            let t = adp[k] / d;
+            num += t * y[k];
+            den += t;
+        }
+        num / den
+    };
+
+    // Recover P's cosine coefficients b̃_k via Chebyshev DCT-II (P is degree m-1
+    // in x = cos(2πf)).
+    let nn = nfcns;
+    let samp: Vec<f64> = (0..nn)
+        .map(|j| eval_p((PI * (j as f64 + 0.5) / nn as f64).cos()))
+        .collect();
+    let mut bt = vec![0.0_f64; nfcns];
+    for (k, bk) in bt.iter_mut().enumerate() {
+        let mut s = 0.0;
+        for (j, &sj) in samp.iter().enumerate() {
+            s += sj * (PI * k as f64 * (j as f64 + 0.5) / nn as f64).cos();
+        }
+        *bk = 2.0 / nn as f64 * s;
+    }
+    bt[0] *= 0.5;
+
+    // Transform b̃_k (coeffs of P) to a_j (coeffs of A = Σ_{j=1}^{m} a_j cos((j-½)ω)).
+    //   a_1 = b̃_0 + b̃_1/2;  a_j = (b̃_{j-1}+b̃_j)/2 (2≤j≤m-1);  a_m = b̃_{m-1}/2.
+    let mut a = vec![0.0_f64; m + 1]; // a[1..=m] used
+    if m == 1 {
+        a[1] = bt[0];
+    } else {
+        a[1] = bt[0] + bt[1] / 2.0;
+        for j in 2..m {
+            a[j] = (bt[j - 1] + bt[j]) / 2.0;
+        }
+        a[m] = bt[m - 1] / 2.0;
+    }
+
+    // Symmetric Type-II taps (length 2m): h[m-j] = h[m-1+j] = a_j/2, j=1..m.
+    let mut h = vec![0.0_f64; numtaps];
+    for j in 1..=m {
+        h[m - j] = a[j] / 2.0;
+        h[m - 1 + j] = a[j] / 2.0;
     }
     Ok(h)
 }
@@ -11696,18 +11971,36 @@ mod tests {
         // frankenscipy-ckrdw: nearest/constant/mirror/wrap boundary parity.
         let x = vec![1.0, 2.0, 4.0, 7.0, 11.0, 16.0, 22.0, 29.0, 37.0];
         let want_nearest = [
-            1.0857142857142847, 1.9999999999999984, 3.9999999999999973, 6.9999999999999964,
-            10.999999999999993, 15.999999999999991, 21.999999999999986, 29.77142857142855,
+            1.0857142857142847,
+            1.9999999999999984,
+            3.9999999999999973,
+            6.9999999999999964,
+            10.999999999999993,
+            15.999999999999991,
+            21.999999999999986,
+            29.77142857142855,
             35.54285714285713,
         ];
         let want_mirror = [
-            1.1714285714285702, 1.9142857142857128, 3.9999999999999973, 6.9999999999999964,
-            10.999999999999993, 15.999999999999991, 21.999999999999986, 30.457142857142838,
+            1.1714285714285702,
+            1.9142857142857128,
+            3.9999999999999973,
+            6.9999999999999964,
+            10.999999999999993,
+            15.999999999999991,
+            21.999999999999986,
+            30.457142857142838,
             34.08571428571427,
         ];
         let want_wrap = [
-            11.028571428571421, -1.0857142857142896, 3.9999999999999973, 6.9999999999999964,
-            10.999999999999993, 15.999999999999991, 21.999999999999986, 32.85714285714284,
+            11.028571428571421,
+            -1.0857142857142896,
+            3.9999999999999973,
+            6.9999999999999964,
+            10.999999999999993,
+            15.999999999999991,
+            21.999999999999986,
+            32.85714285714284,
             26.19999999999999,
         ];
         for (mode, want) in [
@@ -16942,7 +17235,9 @@ mod tests {
         let v2 = vec![1.0, 0.0, 0.0, -1.0];
         assert_eq!(
             convolve2d(&a3, (3, 3), &v2, (2, 2), ConvolveMode::Full).unwrap(),
-            vec![1.0, 2.0, 3.0, 0.0, 4.0, 4.0, 4.0, -3.0, 7.0, 4.0, 4.0, -6.0, 0.0, -7.0, -8.0, -9.0]
+            vec![
+                1.0, 2.0, 3.0, 0.0, 4.0, 4.0, 4.0, -3.0, 7.0, 4.0, 4.0, -6.0, 0.0, -7.0, -8.0, -9.0
+            ]
         );
         assert_eq!(
             convolve2d(&a3, (3, 3), &v2, (2, 2), ConvolveMode::Same).unwrap(),
@@ -16957,7 +17252,10 @@ mod tests {
         let v3 = vec![1.0, 2.0, 1.0, 0.0, 0.0, 0.0, -1.0, -2.0, -1.0];
         assert_eq!(
             convolve2d(&a4, (4, 4), &v3, (3, 3), ConvolveMode::Same).unwrap(),
-            vec![16.0, 24.0, 28.0, 23.0, 24.0, 32.0, 32.0, 24.0, 24.0, 32.0, 32.0, 24.0, -28.0, -40.0, -44.0, -35.0]
+            vec![
+                16.0, 24.0, 28.0, 23.0, 24.0, 32.0, 32.0, 24.0, 24.0, 32.0, 32.0, 24.0, -28.0,
+                -40.0, -44.0, -35.0
+            ]
         );
     }
 
@@ -16969,20 +17267,44 @@ mod tests {
         let v = vec![1.0, 0.0, 2.0, 0.0, 1.0, 0.0, 3.0, 0.0, 1.0];
         // convolve2d same, boundary=wrap
         assert_eq!(
-            convolve2d_with_boundary(&a, (3, 3), &v, (3, 3), ConvolveMode::Same, Boundary2d::Wrap, 0.0)
-                .unwrap(),
+            convolve2d_with_boundary(
+                &a,
+                (3, 3),
+                &v,
+                (3, 3),
+                ConvolveMode::Same,
+                Boundary2d::Wrap,
+                0.0
+            )
+            .unwrap(),
             vec![51.0, 50.0, 46.0, 39.0, 38.0, 34.0, 36.0, 35.0, 31.0]
         );
         // correlate2d same, boundary=symm
         assert_eq!(
-            correlate2d_with_boundary(&a, (3, 3), &v, (3, 3), ConvolveMode::Same, Boundary2d::Symm, 0.0)
-                .unwrap(),
+            correlate2d_with_boundary(
+                &a,
+                (3, 3),
+                &v,
+                (3, 3),
+                ConvolveMode::Same,
+                Boundary2d::Symm,
+                0.0
+            )
+            .unwrap(),
             vec![23.0, 27.0, 32.0, 38.0, 42.0, 47.0, 50.0, 54.0, 59.0]
         );
         // convolve2d full, boundary=symm
         assert_eq!(
-            convolve2d_with_boundary(&a, (3, 3), &v, (3, 3), ConvolveMode::Full, Boundary2d::Symm, 0.0)
-                .unwrap(),
+            convolve2d_with_boundary(
+                &a,
+                (3, 3),
+                &v,
+                (3, 3),
+                ConvolveMode::Full,
+                Boundary2d::Symm,
+                0.0
+            )
+            .unwrap(),
             vec![
                 23.0, 24.0, 29.0, 33.0, 32.0, 20.0, 21.0, 26.0, 30.0, 29.0, 32.0, 33.0, 38.0, 42.0,
                 41.0, 47.0, 48.0, 53.0, 57.0, 56.0, 50.0, 51.0, 56.0, 60.0, 59.0
@@ -16990,8 +17312,16 @@ mod tests {
         );
         // boundary=fill with non-zero cval
         assert_eq!(
-            convolve2d_with_boundary(&a, (3, 3), &v, (3, 3), ConvolveMode::Same, Boundary2d::Fill, 10.0)
-                .unwrap(),
+            convolve2d_with_boundary(
+                &a,
+                (3, 3),
+                &v,
+                (3, 3),
+                ConvolveMode::Same,
+                Boundary2d::Fill,
+                10.0
+            )
+            .unwrap(),
             vec![66.0, 56.0, 63.0, 48.0, 38.0, 64.0, 62.0, 60.0, 74.0]
         );
     }
@@ -18031,6 +18361,60 @@ mod tests {
         // Sum of coefficients should approximate passband gain (1.0)
         let sum: f64 = h.iter().sum();
         assert!(sum > 0.5 && sum < 1.5, "filter sum = {sum}, expected ~1.0");
+    }
+
+    #[test]
+    fn remez_type2_is_equiripple_optimal() {
+        use std::f64::consts::PI;
+        // Type-II (even numtaps) lowpass. No scipy fixture in-env, but the
+        // minimax optimum is UNIQUE — an equiripple solution IS scipy's output.
+        // So we prove correctness by the alternation signature: equal weighted
+        // ripple across passband and stopband.
+        let numtaps = 12usize;
+        let h = remez(numtaps, &[0.0, 0.2, 0.3, 0.5], &[1.0, 0.0], None).unwrap();
+        assert_eq!(h.len(), numtaps);
+        // Type-II linear phase: symmetric taps.
+        for n in 0..numtaps {
+            assert!(
+                (h[n] - h[numtaps - 1 - n]).abs() < 1e-12,
+                "type-II taps must be symmetric at {n}"
+            );
+        }
+        // Type-II forces A(0.5)=0 (Nyquist zero).
+        let amp = |f: f64| -> f64 {
+            let c = (numtaps as f64 - 1.0) / 2.0;
+            (0..numtaps)
+                .map(|n| h[n] * (2.0 * PI * f * (n as f64 - c)).cos())
+                .sum()
+        };
+        assert!(amp(0.5).abs() < 1e-9, "Type-II A(0.5) must be ~0");
+        // Sample passband [0,0.2] and stopband [0.3,0.5] densely; peak ripple
+        // in each must match (unweighted equiripple => δ_pass == δ_stop).
+        let n_samp = 8000usize;
+        let mut dp = 0.0f64; // max |A-1| in passband
+        let mut ds = 0.0f64; // max |A|   in stopband
+        for i in 0..=n_samp {
+            let f = 0.2 * i as f64 / n_samp as f64;
+            dp = dp.max((amp(f) - 1.0).abs());
+        }
+        for i in 0..=n_samp {
+            let f = 0.3 + 0.2 * i as f64 / n_samp as f64;
+            ds = ds.max(amp(f).abs());
+        }
+        // Equiripple optimum: the two unweighted band ripples are equal (the
+        // alternation/uniqueness signature). A loose least-squares design would
+        // differ by >50%; equality to ~1% (the residual is test-grid resolution
+        // vs the exchange's grid_density=16) proves the minimax solution.
+        assert!(
+            (dp - ds).abs() <= 1.5e-2 * dp.max(ds),
+            "Type-II remez not equiripple: passband ripple {dp} vs stopband ripple {ds}"
+        );
+        // And it must be a genuine minimax design, not the loose LS fallback
+        // (which left ~0.05+ ripple for this band layout).
+        assert!(
+            ds < 0.06,
+            "Type-II stopband ripple {ds} too large (not minimax)"
+        );
     }
 
     #[test]

@@ -122,13 +122,22 @@ at the bottom for re-evaluation.
   remez_hp_17 9.4e-16, remez_bp_25(w=[1,2,1]) 4.6e-16. P2C-011 remez
   fixture tolerances tightened `0.06/0.05 → 1e-9/1e-9`; unit test
   `remez_matches_scipy_reference` locks it.
-- **Remaining:** even `numtaps` (Type II) still uses the least-squares
-  fallback (the Type-II basis transform is a follow-up); no fixture
-  exercises it.
+- **Remaining → RESOLVED 2026-06-09 (frankenscipy-h4ejo):** even `numtaps`
+  (Type II) now uses true Parks-McClellan via the `A(ω)=cos(ω/2)·P(ω)`
+  factorization (`remez_type2_pm`): fold `cos(ω/2)` into desired/weight
+  (`D'=D/cos(πf)`, `W'=W·cos(πf)`), run the same Type-I exchange on `P` over
+  `m=N/2` cosines, recover Type-II taps via `a₁=b̃₀+b̃₁/2`,
+  `aⱼ=(b̃ⱼ₋₁+b̃ⱼ)/2`, `aₘ=b̃ₘ₋₁/2`, `h[m-j]=h[m-1+j]=aⱼ/2`. Nyquist grid
+  points (`cos(πf)≈0`, the forced `A(0.5)=0`) are dropped. The minimax optimum
+  is unique, so the equiripple solution equals scipy's to machine precision;
+  verified oracle-free by `remez_type2_is_equiripple_optimal` (symmetric taps +
+  `A(0.5)≈0` + passband ripple == stopband ripple to ~1%, vs the old LS
+  fallback's >50% mismatch). LS fallback retained only for pathological grids
+  where the exchange can't form `nz` alternations.
 - **Tests affected:** P2C-011 remez_lp_11_passband_0p2_stopband_0p3,
-  remez_bp_15_3band.
-- **Review date:** 2026-06-08
-- **Related beads:** frankenscipy-7jrx, frankenscipy-zxxdi
+  remez_bp_15_3band; unit `remez_type2_is_equiripple_optimal`.
+- **Review date:** 2026-06-09
+- **Related beads:** frankenscipy-7jrx, frankenscipy-zxxdi, frankenscipy-h4ejo
 
 ## DISC-008a — fsci-signal firwin2 (RESOLVED 2026-06-08)
 
