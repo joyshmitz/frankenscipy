@@ -6529,10 +6529,28 @@ impl DiscreteDistribution for Poisson {
         Poisson::var(self)
     }
     fn entropy(&self) -> f64 {
-        0.5 * (2.0 * PI * std::f64::consts::E * self.mu).ln()
-            - 1.0 / (12.0 * self.mu)
-            - 1.0 / (24.0 * self.mu * self.mu)
-            - 19.0 / (360.0 * self.mu * self.mu * self.mu)
+        let mu = self.mu;
+        // The Sterling-type asymptotic series below is only valid for large μ
+        // (it diverges for small μ — ~20% high at μ=0.7, 250% at μ=0.3). For
+        // μ < 1000 sum the pmf directly, which matches scipy.stats.poisson to
+        // machine precision; keep the (now-accurate) asymptotic beyond that to
+        // avoid an ever-growing summation.
+        if mu < 1000.0 {
+            let kmax = (mu + 12.0 * mu.sqrt() + 12.0).ceil() as u64;
+            let mut h = 0.0_f64;
+            for k in 0..=kmax {
+                let p = self.pmf(k);
+                if p > 0.0 {
+                    h -= p * p.ln();
+                }
+            }
+            h
+        } else {
+            0.5 * (2.0 * PI * std::f64::consts::E * mu).ln()
+                - 1.0 / (12.0 * mu)
+                - 1.0 / (24.0 * mu * mu)
+                - 19.0 / (360.0 * mu * mu * mu)
+        }
     }
     fn skewness(&self) -> f64 {
         1.0 / self.mu.sqrt()
@@ -64036,6 +64054,28 @@ mod tests {
         assert!(mu > 0.0 && mu.is_finite());
         assert!(nhg.var() > 0.0);
         assert!((nhg.cdf(0) - nhg.pmf(0)).abs() < 1e-14);
+    }
+
+    #[test]
+    fn poisson_entropy_matches_scipy_small_mu() {
+        // Regression: the large-μ asymptotic series was used for all μ and is
+        // wildly wrong for small μ (poisson(0.7) gave 0.883 vs scipy 1.105).
+        // Golden values from scipy.stats.poisson(mu).entropy().
+        let cases: &[(f64, f64)] = &[
+            (0.3, 0.691_143_961_24),
+            (0.7, 1.104_597_195_6),
+            (1.0, 1.304_842_238_9),
+            (3.0, 1.931_470_197_0),
+            (10.0, 2.561_409_938_8),
+            (50.0, 3.373_266_258_9),
+        ];
+        for &(mu, golden) in cases {
+            let h = Poisson::new(mu).entropy();
+            assert!(
+                (h - golden).abs() < 1e-7,
+                "poisson({mu}).entropy() = {h}, scipy {golden}"
+            );
+        }
     }
 
     #[test]
