@@ -426,6 +426,13 @@ struct FullRankTallLstsqResult {
     rcond_estimate: f64,
 }
 
+struct FullRowRankWideLstsqResult {
+    x: Vec<f64>,
+    rank: usize,
+    singular_values: Vec<f64>,
+    rcond_estimate: f64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ConditionReport {
     pub matrix_shape: (usize, usize),
@@ -2444,6 +2451,54 @@ pub fn lstsq_with_casp(
         return Ok(LstsqResult {
             x: fast.x,
             residuals: fast.residuals,
+            rank: fast.rank,
+            singular_values: fast.singular_values,
+            certificate: Some(certificate),
+        });
+    }
+
+    if options.mode == RuntimeMode::Strict
+        && let Some(fast) = lstsq_min_norm_wide_cholesky(&matrix, &rhs)
+    {
+        let (selected_action, posterior, expected_losses, _) =
+            portfolio.select_action(fast.rcond_estimate, None);
+        let action = SolverAction::SVDFallback;
+
+        let certificate = SolveCertificate {
+            action,
+            matrix_shape: (rows, cols),
+            rcond_estimate: fast.rcond_estimate,
+            structural_evidence: StructuralEvidence::General,
+            posterior: posterior.to_vec(),
+            expected_losses: expected_losses.to_vec(),
+            chosen_expected_loss: expected_losses[action.index()],
+            fallback_active: action != selected_action,
+        };
+
+        emit_trace(LinalgTrace {
+            operation: "lstsq_with_casp",
+            matrix_size: (rows, cols),
+            mode: options.mode,
+            rcond: Some(fast.rcond_estimate),
+            warning: None,
+            error: None,
+        });
+
+        portfolio.record_evidence(SolverEvidenceEntry {
+            component: "lstsq_with_casp",
+            matrix_shape: (rows, cols),
+            rcond_estimate: fast.rcond_estimate,
+            chosen_action: action,
+            posterior: posterior.to_vec(),
+            expected_losses: expected_losses.to_vec(),
+            chosen_expected_loss: expected_losses[action.index()],
+            fallback_active: action != selected_action,
+            backward_error: None,
+        });
+
+        return Ok(LstsqResult {
+            x: fast.x,
+            residuals: Vec::new(),
             rank: fast.rank,
             singular_values: fast.singular_values,
             certificate: Some(certificate),
@@ -8162,6 +8217,106 @@ fn lstsq_full_rank_tall_cholesky(
         x: x.iter().copied().collect(),
         residuals,
         rank: cols,
+        singular_values,
+        rcond_estimate,
+    })
+}
+
+/// Solve-only minimum-norm least-squares route for a full-row-rank wide matrix
+/// (`rows < cols`) via the small `rows×rows` Gram `A Aᵀ` and one step of
+/// iterative refinement. The mirror image of [`lstsq_full_rank_tall_cholesky`]:
+/// the underdetermined system `A x = b` is consistent for full row rank, and
+/// its minimum-norm solution is `x = Aᵀ (A Aᵀ)⁻¹ b`. Forming `A Aᵀ` squares the
+/// condition number, so one refinement step against the original `A` recovers
+/// the κ(A)² → κ(A) accuracy (Björck), with the refinement correction doubling
+/// as the fail-closed acceptance certificate. Returns `None` (falling back to
+/// the public full-SVD route) on any conditioning/finiteness uncertainty.
+fn lstsq_min_norm_wide_cholesky(
+    matrix: &DMatrix<f64>,
+    rhs: &DVector<f64>,
+) -> Option<FullRowRankWideLstsqResult> {
+    let rows = matrix.nrows();
+    let cols = matrix.ncols();
+    // Wide mirror of the tall guard: the small dimension is `rows`, and we
+    // require the matrix to be comfortably wide (`cols >= 2*rows`).
+    if cols < rows.saturating_mul(2)
+        || rows < FULL_RANK_TALL_PINV_MIN_COLS
+        || rhs.len() != rows
+        || matrix.iter().any(|value| !value.is_finite())
+        || rhs.iter().any(|value| !value.is_finite())
+    {
+        return None;
+    }
+
+    let a_t = matrix.transpose();
+    let gram = matrix * &a_t;
+    for idx in 0..rows {
+        let diag = gram[(idx, idx)];
+        if diag <= 0.0 || !diag.is_finite() {
+            return None;
+        }
+    }
+
+    // σ(A) == sqrt of the eigenvalues of A Aᵀ. The spectrum also supplies the
+    // cheap conditioning sanity floor.
+    let eigen = gram.clone().symmetric_eigen();
+    let mut max_eig = 0.0_f64;
+    let mut min_eig = f64::MAX;
+    for &lambda in eigen.eigenvalues.iter() {
+        if !lambda.is_finite() || lambda <= 0.0 {
+            return None;
+        }
+        max_eig = max_eig.max(lambda);
+        min_eig = min_eig.min(lambda);
+    }
+    if max_eig <= 0.0 || min_eig <= 0.0 {
+        return None;
+    }
+    let rcond_estimate = (min_eig / max_eig).sqrt();
+    if rcond_estimate < FULL_RANK_TALL_LSTSQ_MIN_RCOND {
+        return None;
+    }
+    let mut singular_values: Vec<f64> = eigen
+        .eigenvalues
+        .iter()
+        .map(|lambda| lambda.sqrt())
+        .collect();
+    if singular_values.iter().any(|value| !value.is_finite()) {
+        return None;
+    }
+    singular_values.sort_unstable_by(|a, b| b.total_cmp(a));
+
+    // Minimum-norm solution: solve (A Aᵀ) y = b, then x = Aᵀ y. Keeping x in the
+    // row space preserves minimum norm. One refinement step against the
+    // original A drives the consistent residual b - A x to zero.
+    let chol = Cholesky::new(gram.clone())?;
+    let y = chol.solve(rhs);
+    let mut x = &a_t * &y;
+    if x.iter().any(|value| !value.is_finite()) {
+        return None;
+    }
+    let primal_residual = rhs - matrix * &x;
+    let dy = chol.solve(&primal_residual);
+    let dx = &a_t * &dy;
+    if dx.iter().any(|value| !value.is_finite()) {
+        return None;
+    }
+    x += &dx;
+    if x.iter().any(|value| !value.is_finite()) {
+        return None;
+    }
+
+    // Convergence certificate: a large refinement correction means the squared
+    // Gram solve was not accurate enough — fall back to the SVD route.
+    let x_norm = x.dot(&x).sqrt();
+    let dx_norm = dx.dot(&dx).sqrt();
+    if dx_norm > FULL_RANK_TALL_LSTSQ_REFINE_REL_TOL * x_norm.max(1.0) {
+        return None;
+    }
+
+    Some(FullRowRankWideLstsqResult {
+        x: x.iter().copied().collect(),
+        rank: rows,
         singular_values,
         rcond_estimate,
     })
@@ -15710,6 +15865,65 @@ mod tests {
         assert!(pinv_max_abs_diff <= 1e-7);
         assert!(previous_route_pinv_max_abs_diff <= 1e-7);
         assert!(routed_vs_previous_route_pinv_max_abs_diff <= 1e-7);
+    }
+
+    #[test]
+    #[ignore = "perf probe: run with rch and --release for public min-norm wide lstsq routing"]
+    fn public_wide_min_norm_lstsq_route_perf_probe() {
+        let original = bidiag_deterministic_matrix(256, 512);
+        let rows = original.nrows();
+        let cols = original.ncols();
+        let matrix_rows = rows_from_dmatrix(&original);
+        let rhs_values: Vec<f64> = (0..rows)
+            .map(|idx| ((idx * 29 + 3) % 43) as f64 - 17.0)
+            .collect();
+        let rhs = DVector::from_column_slice(&rhs_values);
+
+        let reference_start = std::time::Instant::now();
+        let reference_svd =
+            safe_svd(std::hint::black_box(original.clone()), true, true).expect("reference SVD");
+        let reference_max_s = reference_svd
+            .singular_values
+            .iter()
+            .copied()
+            .fold(0.0_f64, f64::max);
+        let reference_threshold = f64::EPSILON * reference_max_s;
+        let reference_x =
+            least_squares_solution_from_svd(&reference_svd, reference_threshold, &rhs)
+                .expect("reference min-norm lstsq");
+        let reference_ms = reference_start.elapsed().as_secs_f64() * 1e3;
+
+        let routed_start = std::time::Instant::now();
+        let routed = lstsq(
+            std::hint::black_box(&matrix_rows),
+            std::hint::black_box(&rhs_values),
+            LstsqOptions::default(),
+        )
+        .expect("routed lstsq");
+        let routed_ms = routed_start.elapsed().as_secs_f64() * 1e3;
+
+        let mut max_abs_diff = 0.0_f64;
+        for (&actual, &expected) in routed.x.iter().zip(reference_x.iter()) {
+            max_abs_diff = max_abs_diff.max((actual - expected).abs());
+        }
+        // Both solutions must be the minimum-norm solution: compare norms.
+        let routed_norm = routed.x.iter().map(|v| v * v).sum::<f64>().sqrt();
+        let reference_norm = reference_x.iter().map(|v| v * v).sum::<f64>().sqrt();
+
+        println!("PUBLIC_WIDE_MIN_NORM_LSTSQ_ROUTE_PERF_BEGIN");
+        println!("shape={rows}x{cols}");
+        println!("reference_lstsq_ms={reference_ms:.6}");
+        println!("routed_lstsq_ms={routed_ms:.6}");
+        println!("lstsq_speedup={:.6}", reference_ms / routed_ms);
+        println!("lstsq_rank={}", routed.rank);
+        println!("lstsq_max_abs_diff={max_abs_diff:.17e}");
+        println!("routed_solution_norm={routed_norm:.17e}");
+        println!("reference_solution_norm={reference_norm:.17e}");
+        println!("PUBLIC_WIDE_MIN_NORM_LSTSQ_ROUTE_PERF_END");
+
+        assert_eq!(routed.rank, rows);
+        assert!(max_abs_diff <= 1e-7);
+        assert!((routed_norm - reference_norm).abs() <= 1e-7 * reference_norm.max(1.0));
     }
 
     #[test]

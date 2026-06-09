@@ -1,0 +1,10 @@
+PUBLIC_WIDE_MIN_NORM_LSTSQ_ROUTE_PERF_BEGIN
+shape=256x512
+reference_lstsq_ms=175.885797
+routed_lstsq_ms=19.156216
+lstsq_speedup=9.181657
+lstsq_rank=256
+lstsq_max_abs_diff=3.38840067115597776e-13
+routed_solution_norm=5.21900052307169471e0
+reference_solution_norm=5.21900052307145756e0
+PUBLIC_WIDE_MIN_NORM_LSTSQ_ROUTE_PERF_END
