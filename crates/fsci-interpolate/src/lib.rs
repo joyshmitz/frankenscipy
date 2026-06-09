@@ -1965,8 +1965,17 @@ impl NearestNDInterpolator {
 pub enum GriddataMethod {
     Nearest,
     Linear,
+    /// Cubic C¹ interpolation (2-D only), matching SciPy's `method='cubic'`
+    /// which uses the Clough-Tocher scheme. Like SciPy, only 2-D scattered
+    /// points are supported for cubic.
+    Cubic,
 }
 
+/// Interpolate scattered data on arbitrary points.
+///
+/// Matches `scipy.interpolate.griddata(points, values, xi, method)`.
+/// `Nearest` and `Linear` accept N-D points; `Cubic` (Clough-Tocher) is 2-D only
+/// (as in SciPy).
 pub fn griddata(
     points: &[Vec<f64>],
     values: &[f64],
@@ -1976,6 +1985,7 @@ pub fn griddata(
     match method {
         GriddataMethod::Nearest => NearestNDInterpolator::new(points, values)?.eval_many(xi),
         GriddataMethod::Linear => LinearNDInterpolator::new(points, values)?.eval_many(xi),
+        GriddataMethod::Cubic => CloughTocher2DInterpolator::new(points, values)?.eval_many(xi),
     }
 }
 
@@ -6338,6 +6348,54 @@ mod tests {
         let values = vec![0.0, 1.0, 2.0];
         let err = LinearNDInterpolator::new(&points, &values).expect_err("malformed point");
         assert!(matches!(err, InterpError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn griddata_cubic_delegates_to_clough_tocher_and_interpolates() {
+        // griddata(method='cubic') must use the Clough-Tocher scheme (SciPy
+        // parity) — i.e. produce results identical to CloughTocher2DInterpolator,
+        // and pass exactly through the data points (C¹ interpolation).
+        let points = vec![
+            vec![0.0, 0.0],
+            vec![1.0, 0.0],
+            vec![0.0, 1.0],
+            vec![1.0, 1.0],
+            vec![0.5, 0.5],
+            vec![0.3, 0.7],
+        ];
+        let values = points
+            .iter()
+            .map(|p| 1.0 + 2.0 * p[0] - 0.5 * p[1] + p[0] * p[1])
+            .collect::<Vec<_>>();
+        let xi = vec![vec![0.25, 0.25], vec![0.6, 0.4], vec![0.4, 0.6]];
+
+        let via_griddata = griddata(&points, &values, &xi, GriddataMethod::Cubic).unwrap();
+        let via_ct = CloughTocher2DInterpolator::new(&points, &values)
+            .unwrap()
+            .eval_many(&xi)
+            .unwrap();
+        assert_eq!(
+            via_griddata, via_ct,
+            "griddata cubic must delegate bit-for-bit to CloughTocher2DInterpolator"
+        );
+
+        // Interpolation: exact at the data points.
+        let at_data = griddata(&points, &values, &points, GriddataMethod::Cubic).unwrap();
+        for (got, &want) in at_data.iter().zip(values.iter()) {
+            assert!(
+                (got - want).abs() < 1e-9,
+                "griddata cubic not exact at data point: {got} vs {want}"
+            );
+        }
+
+        // Cubic is 2-D only (like SciPy): a 3-D query set must error, not silently
+        // produce wrong output.
+        let p3: Vec<Vec<f64>> = vec![vec![0.0, 0.0, 0.0], vec![1.0, 0.0, 0.0], vec![0.0, 1.0, 0.0]];
+        let v3 = vec![0.0, 1.0, 2.0];
+        assert!(
+            griddata(&p3, &v3, &[vec![0.5, 0.5, 0.0]], GriddataMethod::Cubic).is_err(),
+            "griddata cubic must reject non-2-D points"
+        );
     }
 
     #[test]
