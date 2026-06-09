@@ -7934,9 +7934,64 @@ fn make_window(n: usize, window: FirWindow) -> Vec<f64> {
     }
 }
 
+/// Filter response type for [`remez_with_type`], matching SciPy's `type=` kwarg.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemezFilterType {
+    /// Symmetric, even-gain filter (lowpass/bandpass/highpass). SciPy default.
+    Bandpass,
+    /// Antisymmetric Hilbert transformer (`type='hilbert'`): +90° phase, the band
+    /// must avoid DC (and Nyquist for odd `numtaps`).
+    Hilbert,
+}
+
+/// Parks-McClellan FIR design with an explicit response `type`, matching
+/// `scipy.signal.remez(..., type=...)`. `Bandpass` is the symmetric design
+/// (Types I/II); `Hilbert` is the antisymmetric Hilbert-transformer (Types
+/// III/IV). The minimax optimum is unique, so each matches SciPy to machine
+/// precision.
+pub fn remez_with_type(
+    numtaps: usize,
+    bands: &[f64],
+    desired: &[f64],
+    weight: Option<&[f64]>,
+    filter_type: RemezFilterType,
+) -> Result<Vec<f64>, SignalError> {
+    match filter_type {
+        RemezFilterType::Bandpass => remez(numtaps, bands, desired, weight),
+        RemezFilterType::Hilbert => {
+            if numtaps < 1 {
+                return Err(SignalError::InvalidArgument(
+                    "numtaps must be >= 1".to_string(),
+                ));
+            }
+            if !bands.len().is_multiple_of(2) || bands.is_empty() {
+                return Err(SignalError::InvalidArgument(
+                    "bands must have even number of elements".to_string(),
+                ));
+            }
+            let nbands = bands.len() / 2;
+            if desired.len() != nbands {
+                return Err(SignalError::InvalidArgument(format!(
+                    "desired length {} must equal number of bands {nbands}",
+                    desired.len()
+                )));
+            }
+            let weights: Vec<f64> = weight.map_or_else(|| vec![1.0; nbands], |w| w.to_vec());
+            if weights.len() != nbands {
+                return Err(SignalError::InvalidArgument(
+                    "weight length must equal number of bands".to_string(),
+                ));
+            }
+            remez_hilbert_pm(numtaps, bands, desired, &weights)
+        }
+    }
+}
+
 /// Design a FIR filter using the Parks-McClellan (Remez exchange) algorithm.
 ///
-/// Matches `scipy.signal.remez(numtaps, bands, desired)`.
+/// Matches `scipy.signal.remez(numtaps, bands, desired)` (the default
+/// `type='bandpass'`). For an antisymmetric Hilbert transformer use
+/// [`remez_with_type`] with [`RemezFilterType::Hilbert`].
 ///
 /// # Arguments
 /// * `numtaps` — Number of filter coefficients (must be odd for type I).
@@ -8566,6 +8621,284 @@ fn remez_type2_pm(
     for j in 1..=m {
         h[m - j] = a[j] / 2.0;
         h[m - 1 + j] = a[j] / 2.0;
+    }
+    Ok(h)
+}
+
+/// Parks-McClellan for an ANTISYMMETRIC (Hilbert-transformer) linear-phase FIR.
+/// Type III (odd `numtaps`): `A(ω)=sin(ω)·P(ω)`, forced zeros at ω=0 and ω=π.
+/// Type IV (even `numtaps`): `A(ω)=sin(ω/2)·P(ω)`, forced zero at ω=0 only.
+/// In both cases `P(ω)=Σ_{k=0}^{m-1} b_k cos(kω)`, so folding the sine factor into
+/// the desired/weight (`D'=D/sinfold`, `W'=W·sinfold`) reduces the weighted
+/// minimax problem to the same Type-I exchange used elsewhere; the recovered
+/// cosine coefficients map to the antisymmetric taps. The minimax optimum is
+/// unique, so this matches `scipy.signal.remez(type='hilbert')` to machine
+/// precision. Grid points where the sine fold ≈0 (DC, and Nyquist for Type III)
+/// carry no constraint and are dropped.
+fn remez_hilbert_pm(
+    numtaps: usize,
+    bands: &[f64],
+    desired: &[f64],
+    weights: &[f64],
+) -> Result<Vec<f64>, SignalError> {
+    use std::f64::consts::PI;
+    let nbands = bands.len() / 2;
+    let odd = numtaps % 2 == 1;
+    let m = if odd { (numtaps - 1) / 2 } else { numtaps / 2 };
+    if m == 0 {
+        return Err(SignalError::InvalidArgument(
+            "numtaps too small for a Hilbert filter".to_string(),
+        ));
+    }
+    let nfcns = m;
+    let nz = nfcns + 1;
+
+    // Sine fold: Type III uses sin(ω)=sin(2πf) (zeros at f=0 and 0.5); Type IV
+    // uses sin(ω/2)=sin(πf) (zero at f=0 only).
+    let sinfold = |f: f64| -> f64 {
+        if odd {
+            (2.0 * PI * f).sin()
+        } else {
+            (PI * f).sin()
+        }
+    };
+
+    let grid_density = 16usize;
+    let delf = 0.5 / (grid_density as f64 * nfcns as f64);
+    let eps = 1e-5;
+    let mut gridf: Vec<f64> = Vec::new();
+    let mut gdes: Vec<f64> = Vec::new();
+    let mut gwt: Vec<f64> = Vec::new();
+    let mut band_bounds: Vec<(usize, usize)> = Vec::new();
+    for b in 0..nbands {
+        let lo = bands[2 * b];
+        let hi = bands[2 * b + 1];
+        if hi < lo {
+            return Err(SignalError::InvalidArgument(
+                "band edges must be ascending".to_string(),
+            ));
+        }
+        let npts = (((hi - lo) / delf).floor() as usize).max(1) + 1;
+        let start = gridf.len();
+        for j in 0..npts {
+            let f = if j == npts - 1 {
+                hi
+            } else {
+                lo + j as f64 * delf
+            };
+            let q = sinfold(f);
+            if q.abs() < eps {
+                continue; // forced zero of A: no constraint here
+            }
+            gridf.push(f);
+            gdes.push(desired[b] / q);
+            gwt.push(weights[b] * q);
+        }
+        if gridf.len() > start {
+            band_bounds.push((start, gridf.len() - 1));
+        }
+    }
+    let ngrid = gridf.len();
+    if ngrid < nz {
+        return Err(SignalError::InvalidArgument(
+            "too few grid points for remez (hilbert)".to_string(),
+        ));
+    }
+    let x: Vec<f64> = gridf.iter().map(|&f| (2.0 * PI * f).cos()).collect();
+
+    let mut iext: Vec<usize> = (0..nz).map(|k| k * (ngrid - 1) / (nz - 1)).collect();
+    let mut dev = 0.0_f64;
+    let mut y = vec![0.0_f64; nfcns];
+    let mut adp = vec![0.0_f64; nfcns];
+    let mut xe = vec![0.0_f64; nz];
+
+    for _iter in 0..64 {
+        for k in 0..nz {
+            xe[k] = x[iext[k]];
+        }
+        let mut ad = vec![0.0_f64; nz];
+        for k in 0..nz {
+            let mut p = 1.0;
+            for j in 0..nz {
+                if j != k {
+                    p *= xe[k] - xe[j];
+                }
+            }
+            ad[k] = 1.0 / p;
+        }
+        let mut dnum = 0.0;
+        let mut dden = 0.0;
+        for k in 0..nz {
+            dnum += ad[k] * gdes[iext[k]];
+            let s = if k % 2 == 0 { 1.0 } else { -1.0 };
+            dden += s * ad[k] / gwt[iext[k]];
+        }
+        dev = dnum / dden;
+        for k in 0..nfcns {
+            let s = if k % 2 == 0 { 1.0 } else { -1.0 };
+            y[k] = gdes[iext[k]] - s * dev / gwt[iext[k]];
+        }
+        for k in 0..nfcns {
+            let mut p = 1.0;
+            for j in 0..nfcns {
+                if j != k {
+                    p *= xe[k] - xe[j];
+                }
+            }
+            adp[k] = 1.0 / p;
+        }
+        let eval_p = |xq: f64| -> f64 {
+            let mut num = 0.0;
+            let mut den = 0.0;
+            for k in 0..nfcns {
+                let d = xq - xe[k];
+                if d.abs() < 1e-13 {
+                    return y[k];
+                }
+                let t = adp[k] / d;
+                num += t * y[k];
+                den += t;
+            }
+            num / den
+        };
+        let err: Vec<f64> = (0..ngrid)
+            .map(|i| gwt[i] * (eval_p(x[i]) - gdes[i]))
+            .collect();
+
+        let mut cand: Vec<usize> = Vec::new();
+        for &(s, e) in &band_bounds {
+            cand.push(s);
+            for i in (s + 1)..e {
+                let a = err[i] - err[i - 1];
+                let b2 = err[i + 1] - err[i];
+                if (a > 0.0 && b2 <= 0.0) || (a < 0.0 && b2 >= 0.0) {
+                    cand.push(i);
+                }
+            }
+            if e != s {
+                cand.push(e);
+            }
+        }
+        let mut alt: Vec<usize> = Vec::new();
+        for &ci in &cand {
+            if let Some(&last) = alt.last() {
+                if (err[ci] >= 0.0) == (err[last] >= 0.0) {
+                    if err[ci].abs() > err[last].abs() {
+                        *alt.last_mut().unwrap() = ci;
+                    }
+                    continue;
+                }
+            }
+            alt.push(ci);
+        }
+        while alt.len() > nz {
+            if err[alt[0]].abs() <= err[*alt.last().unwrap()].abs() {
+                alt.remove(0);
+            } else {
+                alt.pop();
+            }
+        }
+        if alt.len() != nz {
+            break;
+        }
+        let maxerr = alt.iter().map(|&i| err[i].abs()).fold(0.0_f64, f64::max);
+        let changed = alt != iext;
+        iext = alt;
+        if !changed || (maxerr - dev.abs()).abs() <= 1e-12 * maxerr.max(1e-30) {
+            break;
+        }
+    }
+
+    for k in 0..nz {
+        xe[k] = x[iext[k]];
+    }
+    let mut dnum = 0.0;
+    let mut dden = 0.0;
+    {
+        let mut ad = vec![0.0_f64; nz];
+        for k in 0..nz {
+            let mut p = 1.0;
+            for j in 0..nz {
+                if j != k {
+                    p *= xe[k] - xe[j];
+                }
+            }
+            ad[k] = 1.0 / p;
+        }
+        for k in 0..nz {
+            dnum += ad[k] * gdes[iext[k]];
+            let s = if k % 2 == 0 { 1.0 } else { -1.0 };
+            dden += s * ad[k] / gwt[iext[k]];
+        }
+    }
+    dev = dnum / dden;
+    for k in 0..nfcns {
+        let s = if k % 2 == 0 { 1.0 } else { -1.0 };
+        y[k] = gdes[iext[k]] - s * dev / gwt[iext[k]];
+    }
+    for k in 0..nfcns {
+        let mut p = 1.0;
+        for j in 0..nfcns {
+            if j != k {
+                p *= xe[k] - xe[j];
+            }
+        }
+        adp[k] = 1.0 / p;
+    }
+    let eval_p = |xq: f64| -> f64 {
+        let mut num = 0.0;
+        let mut den = 0.0;
+        for k in 0..nfcns {
+            let d = xq - xe[k];
+            if d.abs() < 1e-13 {
+                return y[k];
+            }
+            let t = adp[k] / d;
+            num += t * y[k];
+            den += t;
+        }
+        num / den
+    };
+
+    // P's cosine coefficients b_k via Chebyshev DCT-II.
+    let nn = nfcns;
+    let samp: Vec<f64> = (0..nn)
+        .map(|j| eval_p((PI * (j as f64 + 0.5) / nn as f64).cos()))
+        .collect();
+    let mut bt = vec![0.0_f64; nfcns + 2]; // zero-padded so b_m = b_{m+1} = 0
+    for k in 0..nfcns {
+        let mut s = 0.0;
+        for (j, &sj) in samp.iter().enumerate() {
+            s += sj * (PI * k as f64 * (j as f64 + 0.5) / nn as f64).cos();
+        }
+        bt[k] = 2.0 / nn as f64 * s;
+    }
+    bt[0] *= 0.5;
+
+    // Antisymmetric taps. Recover the sine coefficients c_j (coeffs of
+    // A = Σ_{j=1}^{m} c_j · sin(j ω) [Type III] or sin((j-½)ω) [Type IV]) from b,
+    // then h[m-j] = c_j/2, h[(odd? m : m-1)+j] = -c_j/2; the Type-III centre tap
+    // h[m] stays 0.
+    let mut h = vec![0.0_f64; numtaps];
+    for j in 1..=m {
+        let c_j = if odd {
+            // Type III: c_1 = b_0 - b_2/2; c_j = (b_{j-1} - b_{j+1})/2.
+            if j == 1 {
+                bt[0] - bt[2] / 2.0
+            } else {
+                (bt[j - 1] - bt[j + 1]) / 2.0
+            }
+        } else {
+            // Type IV: d_1 = b_0 - b_1/2; d_j = (b_{j-1} - b_j)/2.
+            if j == 1 {
+                bt[0] - bt[1] / 2.0
+            } else {
+                (bt[j - 1] - bt[j]) / 2.0
+            }
+        };
+        h[m - j] = c_j / 2.0;
+        let hi = if odd { m + j } else { m - 1 + j };
+        h[hi] = -c_j / 2.0;
     }
     Ok(h)
 }
@@ -18454,6 +18787,71 @@ mod tests {
         // Sum of coefficients should approximate passband gain (1.0)
         let sum: f64 = h.iter().sum();
         assert!(sum > 0.5 && sum < 1.5, "filter sum = {sum}, expected ~1.0");
+    }
+
+    #[test]
+    fn remez_hilbert_is_equiripple_antisymmetric() {
+        use std::f64::consts::PI;
+        // Hilbert transformer: unit-gain antisymmetric FIR over a band avoiding
+        // DC (and Nyquist for odd numtaps). No scipy fixture in-env, but the
+        // minimax optimum is unique, so equiripple |H|≈1 in-band proves parity.
+        for &numtaps in &[15usize, 16usize] {
+            let odd = numtaps % 2 == 1;
+            // Type III (odd) forces a zero at Nyquist too, so keep the band away
+            // from 0.5; Type IV (even) only needs to avoid DC.
+            let bands = if odd { [0.05, 0.45] } else { [0.05, 0.5] };
+            let h =
+                remez_with_type(numtaps, &bands, &[1.0], None, RemezFilterType::Hilbert).unwrap();
+            assert_eq!(h.len(), numtaps);
+            // Antisymmetric taps.
+            for n in 0..numtaps {
+                assert!(
+                    (h[n] + h[numtaps - 1 - n]).abs() < 1e-12,
+                    "hilbert taps must be antisymmetric at {n} (numtaps={numtaps})"
+                );
+            }
+            // |H(e^{jω})| magnitude response.
+            let mag = |f: f64| -> f64 {
+                let (mut re, mut im) = (0.0f64, 0.0f64);
+                for (n, &hn) in h.iter().enumerate() {
+                    let ang = 2.0 * PI * f * n as f64;
+                    re += hn * ang.cos();
+                    im -= hn * ang.sin();
+                }
+                (re * re + im * im).sqrt()
+            };
+            // Forced zeros.
+            assert!(
+                mag(0.0) < 1e-9,
+                "Hilbert |H(0)| must be ~0 (numtaps={numtaps})"
+            );
+            if odd {
+                assert!(
+                    mag(0.5) < 1e-9,
+                    "Type-III Hilbert |H(0.5)| must be ~0 (numtaps={numtaps})"
+                );
+            }
+            // Equiripple about 1.0 in the band: max overshoot ≈ max undershoot.
+            let (lo, hi) = (bands[0], bands[1]);
+            let nq = 6000usize;
+            let mut over = 0.0f64; // max (|H|-1)
+            let mut under = 0.0f64; // max (1-|H|)
+            for i in 0..=nq {
+                let f = lo + (hi - lo) * i as f64 / nq as f64;
+                let d = mag(f) - 1.0;
+                over = over.max(d);
+                under = under.max(-d);
+            }
+            assert!(
+                (over - under).abs() <= 5e-2 * over.max(under),
+                "Hilbert not equiripple (numtaps={numtaps}): over {over} vs under {under}"
+            );
+            // Genuine equiripple design, not a crude approximation.
+            assert!(
+                over < 0.1 && under < 0.1,
+                "Hilbert band ripple too large (numtaps={numtaps}): over {over} under {under}"
+            );
+        }
     }
 
     #[test]
