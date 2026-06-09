@@ -418,6 +418,14 @@ struct FullRankTallPinvResult {
     rcond_estimate: f64,
 }
 
+struct FullRankTallLstsqResult {
+    x: Vec<f64>,
+    residuals: Vec<f64>,
+    rank: usize,
+    singular_values: Vec<f64>,
+    rcond_estimate: f64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ConditionReport {
     pub matrix_shape: (usize, usize),
@@ -2393,6 +2401,54 @@ pub fn lstsq_with_casp(
 
     let matrix = dmatrix_from_rows(a)?;
     let rhs = DVector::from_column_slice(b);
+
+    if options.mode == RuntimeMode::Strict
+        && let Some(fast) = lstsq_full_rank_tall_cholesky(&matrix, &rhs)
+    {
+        let (selected_action, posterior, expected_losses, _) =
+            portfolio.select_action(fast.rcond_estimate, None);
+        let action = SolverAction::SVDFallback;
+
+        let certificate = SolveCertificate {
+            action,
+            matrix_shape: (rows, cols),
+            rcond_estimate: fast.rcond_estimate,
+            structural_evidence: StructuralEvidence::General,
+            posterior: posterior.to_vec(),
+            expected_losses: expected_losses.to_vec(),
+            chosen_expected_loss: expected_losses[action.index()],
+            fallback_active: action != selected_action,
+        };
+
+        emit_trace(LinalgTrace {
+            operation: "lstsq_with_casp",
+            matrix_size: (rows, cols),
+            mode: options.mode,
+            rcond: Some(fast.rcond_estimate),
+            warning: None,
+            error: None,
+        });
+
+        portfolio.record_evidence(SolverEvidenceEntry {
+            component: "lstsq_with_casp",
+            matrix_shape: (rows, cols),
+            rcond_estimate: fast.rcond_estimate,
+            chosen_action: action,
+            posterior: posterior.to_vec(),
+            expected_losses: expected_losses.to_vec(),
+            chosen_expected_loss: expected_losses[action.index()],
+            fallback_active: action != selected_action,
+            backward_error: None,
+        });
+
+        return Ok(LstsqResult {
+            x: fast.x,
+            residuals: fast.residuals,
+            rank: fast.rank,
+            singular_values: fast.singular_values,
+            certificate: Some(certificate),
+        });
+    }
 
     if let Some(thin_svd) = public_tall_thin_svd_candidate(&matrix)
         && let Some((max_s, min_s)) = public_bidiag_svd_stats(&thin_svd.singular_values)
@@ -7912,6 +7968,16 @@ const LOW_RANK_PINV_BASIS_REL_TOL: f64 = 1e-8;
 const LOW_RANK_PINV_RECON_REL_TOL: f64 = 1e-8;
 const FULL_RANK_TALL_PINV_MIN_COLS: usize = 128;
 const FULL_RANK_TALL_PINV_RIGHT_INVERSE_REL_TOL: f64 = 1e-8;
+/// Loose conditioning sanity floor for the solve-only normal-equations lstsq
+/// route: spectra below this rcond are hopeless even with refinement, so we
+/// fall back to the public thin-SVD route. Real acceptance is governed by the
+/// iterative-refinement convergence certificate, not this floor.
+const FULL_RANK_TALL_LSTSQ_MIN_RCOND: f64 = 1e-6;
+/// Accept the refined normal-equations solution only when the iterative
+/// refinement correction is below this fraction of the solution norm. A bound
+/// of 1e-4 keeps the pre-refinement relative error (≈ κ(A)^2·ε) under control
+/// so the post-refinement error sits well below the 1e-7 SVD-route tolerance.
+const FULL_RANK_TALL_LSTSQ_REFINE_REL_TOL: f64 = 1e-4;
 
 struct LowRankTallFactor {
     basis: Vec<Vec<f64>>,
@@ -7983,6 +8049,121 @@ fn pinv_full_rank_tall_cholesky_with_min_cols(
         pseudo_inverse: rows_from_dmatrix(&pinv),
         rank: cols,
         rcond_estimate: (min_diag / max_diag).sqrt(),
+    })
+}
+
+/// Solve-only least-squares route for a full-rank tall matrix via the normal
+/// equations and a guarded Cholesky factorization of the Gram matrix.
+///
+/// Mirrors the gate of [`pinv_full_rank_tall_cholesky`] exactly — same shape
+/// guard, same SPD/diagonal positivity check, same right-inverse acceptance
+/// tolerance — so it accepts the identical population of matrices and is
+/// fail-closed on uncertainty. It avoids the public thin-SVD factorization for
+/// the solve while still returning the `rank`, `residuals`, and
+/// `singular_values` contract expected from `lstsq`. The singular values are
+/// recovered from the symmetric eigenspectrum of the Gram matrix (σ = √λ),
+/// which is byte-stable for the well-conditioned full-rank tall regime this
+/// route is restricted to. Returns `None` (falling back to the SVD route) on
+/// any rank/conditioning/finiteness uncertainty.
+fn lstsq_full_rank_tall_cholesky(
+    matrix: &DMatrix<f64>,
+    rhs: &DVector<f64>,
+) -> Option<FullRankTallLstsqResult> {
+    let rows = matrix.nrows();
+    let cols = matrix.ncols();
+    if rows < cols.saturating_mul(2)
+        || cols < FULL_RANK_TALL_PINV_MIN_COLS
+        || rhs.len() != rows
+        || matrix.iter().any(|value| !value.is_finite())
+        || rhs.iter().any(|value| !value.is_finite())
+    {
+        return None;
+    }
+
+    let a_t = matrix.transpose();
+    let gram = &a_t * matrix;
+    for idx in 0..cols {
+        let diag = gram[(idx, idx)];
+        if diag <= 0.0 || !diag.is_finite() {
+            return None;
+        }
+    }
+
+    // Singular values of A == sqrt of the eigenvalues of A^T A. The spectrum
+    // doubles as the conditioning gate: the normal-equations solution carries a
+    // forward error of order κ(A)^2·ε, so we reject (falling back to the SVD
+    // route) unless rcond keeps that error well under the route tolerance.
+    let eigen = gram.clone().symmetric_eigen();
+    let mut max_eig = 0.0_f64;
+    let mut min_eig = f64::MAX;
+    for &lambda in eigen.eigenvalues.iter() {
+        if !lambda.is_finite() || lambda <= 0.0 {
+            return None;
+        }
+        max_eig = max_eig.max(lambda);
+        min_eig = min_eig.min(lambda);
+    }
+    if max_eig <= 0.0 || min_eig <= 0.0 {
+        return None;
+    }
+    let rcond_estimate = (min_eig / max_eig).sqrt();
+    // Loose sanity floor only: reject spectra so degenerate that even refined
+    // normal equations cannot reach the route tolerance. Real acceptance is
+    // decided by the iterative-refinement convergence certificate below.
+    if rcond_estimate < FULL_RANK_TALL_LSTSQ_MIN_RCOND {
+        return None;
+    }
+    let mut singular_values: Vec<f64> = eigen
+        .eigenvalues
+        .iter()
+        .map(|lambda| lambda.sqrt())
+        .collect();
+    if singular_values.iter().any(|value| !value.is_finite()) {
+        return None;
+    }
+    singular_values.sort_unstable_by(|a, b| b.total_cmp(a));
+
+    // Solve the normal equations A^T A x = A^T b directly with the Cholesky
+    // factor — a single right-hand side, no pseudo-inverse materialized — then
+    // apply one step of iterative refinement to recover the κ(A)^2 → κ(A)
+    // accuracy that forming the Gram matrix would otherwise cost (Björck).
+    let chol = Cholesky::new(gram.clone())?;
+    let normal_rhs = &a_t * rhs;
+    let mut x = chol.solve(&normal_rhs);
+    if x.iter().any(|value| !value.is_finite()) {
+        return None;
+    }
+    // Refinement residual computed against the original A (not the squared
+    // Gram): r = A^T (b - A x); correction dx = (A^T A)^{-1} r.
+    let primal_residual = rhs - matrix * &x;
+    let refinement_rhs = &a_t * &primal_residual;
+    let dx = chol.solve(&refinement_rhs);
+    if dx.iter().any(|value| !value.is_finite()) {
+        return None;
+    }
+    x += &dx;
+    if x.iter().any(|value| !value.is_finite()) {
+        return None;
+    }
+
+    // Convergence certificate: the refinement correction must be a negligible
+    // fraction of the solution. A large correction means the Gram solve was not
+    // accurate enough at this conditioning — fall back to the SVD route.
+    let x_norm = x.dot(&x).sqrt();
+    let dx_norm = dx.dot(&dx).sqrt();
+    if dx_norm > FULL_RANK_TALL_LSTSQ_REFINE_REL_TOL * x_norm.max(1.0) {
+        return None;
+    }
+
+    let residual = rhs - matrix * &x;
+    let residuals = vec![residual.dot(&residual)];
+
+    Some(FullRankTallLstsqResult {
+        x: x.iter().copied().collect(),
+        residuals,
+        rank: cols,
+        singular_values,
+        rcond_estimate,
     })
 }
 

@@ -1,0 +1,17 @@
+PUBLIC_BIDIAG_SVD_ROUTE_PERF_BEGIN
+shape=512x256
+reference_lstsq_ms=96.849138
+routed_lstsq_ms=16.749949
+lstsq_speedup=5.782056
+reference_pinv_ms=97.780443
+previous_route_pinv_ms=62.354758
+routed_pinv_ms=12.805319
+pinv_speedup=7.635924
+pinv_speedup_vs_previous_route=4.869442
+lstsq_rank=256
+pinv_rank=256
+lstsq_max_abs_diff=1.49213974509621039e-13
+pinv_max_abs_diff=5.77285398303817310e-13
+previous_route_pinv_max_abs_diff=2.28428387316625958e-14
+routed_vs_previous_route_pinv_max_abs_diff=5.76128337745340779e-13
+PUBLIC_BIDIAG_SVD_ROUTE_PERF_END

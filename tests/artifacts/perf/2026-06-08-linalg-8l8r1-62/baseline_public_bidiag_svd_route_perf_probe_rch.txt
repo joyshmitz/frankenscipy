@@ -1,0 +1,23 @@
+PUBLIC_BIDIAG_SVD_ROUTE_PERF_BEGIN
+shape=512x256
+reference_lstsq_ms=85.668199
+routed_lstsq_ms=47.772198
+lstsq_speedup=1.793265
+reference_pinv_ms=86.619044
+previous_route_pinv_ms=47.208340
+routed_pinv_ms=11.949289
+pinv_speedup=7.248887
+pinv_speedup_vs_previous_route=3.950724
+lstsq_rank=256
+pinv_rank=256
+lstsq_max_abs_diff=1.07647224467655178e-12
+pinv_max_abs_diff=5.77285398303817310e-13
+previous_route_pinv_max_abs_diff=2.28428387316625958e-14
+routed_vs_previous_route_pinv_max_abs_diff=5.76128337745340779e-13
+PUBLIC_BIDIAG_SVD_ROUTE_PERF_END
+
+# Pre-edit baseline: lstsq full-rank tall 512x256 still routed through the
+# public thin-SVD candidate (routed_lstsq_ms=47.77). pinv already uses its
+# Cholesky route (routed_pinv_ms=11.95, commit fd34c4f2 / bead 8l8r1.61).
+# Captured on the rch fleet immediately before adding the solve-only lstsq
+# Cholesky route.
