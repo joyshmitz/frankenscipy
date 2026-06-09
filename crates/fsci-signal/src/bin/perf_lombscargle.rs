@@ -62,6 +62,9 @@ fn main() {
             acc += p[p.len() / 2];
         }
         let dt = t0.elapsed();
-        println!("n={n:>5} m={m:>5}  {:>10.3?}/call  (acc={acc:.6})", dt / reps);
+        println!(
+            "n={n:>5} m={m:>5}  {:>10.3?}/call  (acc={acc:.6})",
+            dt / reps
+        );
     }
 }

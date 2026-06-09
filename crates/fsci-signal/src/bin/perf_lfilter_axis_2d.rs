@@ -14,7 +14,9 @@ use std::time::Instant;
 use fsci_signal::lfilter_axis_2d;
 
 fn lcg(s: &mut u64) -> f64 {
-    *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    *s = s
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
     (*s >> 11) as f64 / (1u64 << 53) as f64 * 2.0 - 1.0
 }
 
@@ -61,7 +63,10 @@ fn main() {
                 let y = lfilter_axis_2d(&b, &a, black_box(&x), ax).unwrap();
                 acc += y[r / 2][c / 2];
             }
-            println!("r={r} c={c} ax={ax}  {:>10.3?}/call (acc={acc:.6})", t0.elapsed() / reps);
+            println!(
+                "r={r} c={c} ax={ax}  {:>10.3?}/call (acc={acc:.6})",
+                t0.elapsed() / reps
+            );
         }
     }
 }

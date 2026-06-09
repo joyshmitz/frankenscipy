@@ -39,7 +39,11 @@ fn main() {
         let a: Vec<f64> = (0..ar * ac).map(|_| g.unit() * 2.0 - 1.0).collect();
         let v: Vec<f64> = (0..vr * vc).map(|_| g.unit() * 2.0 - 1.0).collect();
         let out = correlate2d(&a, (ar, ac), &v, (vr, vc), ConvolveMode::Full).unwrap();
-        println!("ar={ar} ac={ac} vr={vr} vc={vc} len={} hash={:016x}", out.len(), fnv(&out));
+        println!(
+            "ar={ar} ac={ac} vr={vr} vc={vc} len={} hash={:016x}",
+            out.len(),
+            fnv(&out)
+        );
     }
     println!("===GOLDEN_PAYLOAD_END===");
 
@@ -56,7 +60,14 @@ fn main() {
         let t0 = Instant::now();
         let mut acc = 0.0;
         for _ in 0..reps {
-            let out = correlate2d(black_box(&a), (ar, ac), black_box(&v), (vr, vc), ConvolveMode::Same).unwrap();
+            let out = correlate2d(
+                black_box(&a),
+                (ar, ac),
+                black_box(&v),
+                (vr, vc),
+                ConvolveMode::Same,
+            )
+            .unwrap();
             acc += out[0];
         }
         println!(

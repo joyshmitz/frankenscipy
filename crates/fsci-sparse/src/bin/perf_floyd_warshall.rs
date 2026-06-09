@@ -13,7 +13,9 @@ use std::time::Instant;
 use fsci_sparse::{CooMatrix, FormatConvertible, Shape2D, floyd_warshall};
 
 fn lcg(s: &mut u64) -> u64 {
-    *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    *s = s
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
     *s
 }
 

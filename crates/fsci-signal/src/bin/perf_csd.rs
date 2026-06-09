@@ -45,7 +45,11 @@ fn main() {
     for &(n, nps) in &cases {
         let (x, y) = signals(n);
         let r = csd(&x, &y, 1.0, Some("hann"), Some(nps), None).expect("csd");
-        println!("n={n} nperseg={nps} nfreq={} csd={:016x}", r.csd.len(), digest(&r.csd));
+        println!(
+            "n={n} nperseg={nps} nfreq={} csd={:016x}",
+            r.csd.len(),
+            digest(&r.csd)
+        );
     }
     println!("===GOLDEN_PAYLOAD_END===");
 
@@ -55,11 +59,21 @@ fn main() {
         let t0 = Instant::now();
         let mut acc = 0.0;
         for _ in 0..reps {
-            let r = csd(black_box(&x), black_box(&y), 1.0, Some("hann"), Some(nps), None)
-                .expect("csd");
+            let r = csd(
+                black_box(&x),
+                black_box(&y),
+                1.0,
+                Some("hann"),
+                Some(nps),
+                None,
+            )
+            .expect("csd");
             acc += r.csd[r.csd.len() / 2].0;
         }
         let dt = t0.elapsed();
-        println!("n={n:>8} nperseg={nps:>5}  {:>10.3?}/call  (acc={acc:.6})", dt / reps);
+        println!(
+            "n={n:>8} nperseg={nps:>5}  {:>10.3?}/call  (acc={acc:.6})",
+            dt / reps
+        );
     }
 }

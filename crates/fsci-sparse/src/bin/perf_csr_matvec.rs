@@ -84,7 +84,10 @@ fn main() {
         // Byte-identity
         let ser = serial(&a, &x);
         let par = parallel(&a, &x);
-        let identical = ser.iter().zip(&par).all(|(a, b)| a.to_bits() == b.to_bits());
+        let identical = ser
+            .iter()
+            .zip(&par)
+            .all(|(a, b)| a.to_bits() == b.to_bits());
 
         let reps = 200;
         let _ = parallel(&a, &x);
@@ -121,8 +124,20 @@ fn end_to_end() {
             .to_csr()
             .unwrap();
         let t0 = Instant::now();
-        let r = eigsh(&a, 2, EigsOptions { tol: 1e-8, max_iter: 80 });
+        let r = eigsh(
+            &a,
+            2,
+            EigsOptions {
+                tol: 1e-8,
+                max_iter: 80,
+            },
+        );
         let dt = t0.elapsed();
-        println!("eigsh n={n} nnz={} -> {:?} in {:?}", a.data().len(), r.is_ok(), dt);
+        println!(
+            "eigsh n={n} nnz={} -> {:?} in {:?}",
+            a.data().len(),
+            r.is_ok(),
+            dt
+        );
     }
 }

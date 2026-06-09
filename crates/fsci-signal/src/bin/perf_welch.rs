@@ -58,6 +58,9 @@ fn main() {
             acc += r.psd[r.psd.len() / 2];
         }
         let dt = t0.elapsed();
-        println!("n={n:>8} nperseg={nps:>5}  {:>10.3?}/call  (acc={acc:.6})", dt / reps);
+        println!(
+            "n={n:>8} nperseg={nps:>5}  {:>10.3?}/call  (acc={acc:.6})",
+            dt / reps
+        );
     }
 }

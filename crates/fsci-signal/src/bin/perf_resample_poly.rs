@@ -28,13 +28,21 @@ fn digest(values: &[f64]) -> u64 {
 
 fn main() {
     // (signal length, up, down)
-    let cases = [(200_000usize, 3usize, 2usize), (400_000, 5, 4), (300_000, 7, 3)];
+    let cases = [
+        (200_000usize, 3usize, 2usize),
+        (400_000, 5, 4),
+        (300_000, 7, 3),
+    ];
 
     println!("===GOLDEN_PAYLOAD_BEGIN===");
     for &(n, up, down) in &cases {
         let x = signal(n);
         let y = resample_poly(&x, up, down).unwrap();
-        println!("n={n} up={up} down={down} len={} digest={:016x}", y.len(), digest(&y));
+        println!(
+            "n={n} up={up} down={down} len={} digest={:016x}",
+            y.len(),
+            digest(&y)
+        );
     }
     println!("===GOLDEN_PAYLOAD_END===");
 
@@ -48,6 +56,9 @@ fn main() {
             acc += y[y.len() / 2];
         }
         let dt = t0.elapsed();
-        println!("n={n:>7} up={up} down={down}  {:>10.3?}/call  (acc={acc:.6})", dt / reps);
+        println!(
+            "n={n:>7} up={up} down={down}  {:>10.3?}/call  (acc={acc:.6})",
+            dt / reps
+        );
     }
 }

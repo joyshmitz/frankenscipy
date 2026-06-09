@@ -31,7 +31,11 @@ fn rect_separated(m: usize, n: usize, seed: u64) -> CsrMatrix {
     let mut cols = Vec::new();
     let mut data = Vec::new();
     for i in 0..n {
-        let diag = if i < 12 { 100.0 - 12.0 * i as f64 } else { g.unit() };
+        let diag = if i < 12 {
+            100.0 - 12.0 * i as f64
+        } else {
+            g.unit()
+        };
         rows.push(i);
         cols.push(i);
         data.push(diag);
@@ -73,7 +77,11 @@ fn sv_residual(a: &CsrMatrix, sigma: f64, u: &[f64], v: &[f64]) -> f64 {
 }
 
 fn main() {
-    for &(m, n, k) in &[(2200usize, 2000usize, 6usize), (8200, 8000, 6), (20200, 20000, 8)] {
+    for &(m, n, k) in &[
+        (2200usize, 2000usize, 6usize),
+        (8200, 8000, 6),
+        (20200, 20000, 8),
+    ] {
         let a = rect_separated(m, n, 0xABCD ^ n as u64);
         let t0 = Instant::now();
         let r = svds(&a, k, EigsOptions::default()).expect("svds");

@@ -58,7 +58,9 @@ fn csc_gather(csc: &CscMatrix, x: &[f64], nthreads: usize) -> Vec<f64> {
 }
 
 fn main() {
-    let cores = std::thread::available_parallelism().map(|c| c.get()).unwrap_or(1);
+    let cores = std::thread::available_parallelism()
+        .map(|c| c.get())
+        .unwrap_or(1);
     println!("cores={cores}");
     for &(m, n, density) in &[
         (60_000usize, 40_000usize, 0.00015f64),
@@ -80,7 +82,11 @@ fn main() {
 
         let ser = csr_t(&a, &x);
         let par = csc_gather(&csc, &x, cores);
-        let identical = ser.len() == par.len() && ser.iter().zip(&par).all(|(a, b)| a.to_bits() == b.to_bits());
+        let identical = ser.len() == par.len()
+            && ser
+                .iter()
+                .zip(&par)
+                .all(|(a, b)| a.to_bits() == b.to_bits());
 
         let reps = 200;
         let t0 = Instant::now();
@@ -121,17 +127,36 @@ fn end_to_end() {
             s = s.wrapping_mul(6364136223846793005).wrapping_add(1);
             *bi = (s >> 11) as f64 / (1u64 << 53) as f64;
         }
-        let opt = IterativeSolveOptions { max_iter: Some(60), ..Default::default() };
+        let opt = IterativeSolveOptions {
+            max_iter: Some(60),
+            ..Default::default()
+        };
         let t0 = Instant::now();
         let r = lsqr(&a, &b, opt);
-        println!("lsqr  m={m} n={n} nnz={nnz} ok={} in {:?}", r.is_ok(), t0.elapsed());
+        println!(
+            "lsqr  m={m} n={n} nnz={nnz} ok={} in {:?}",
+            r.is_ok(),
+            t0.elapsed()
+        );
 
         let sq = random(Shape2D::new(120_000, 120_000), 0.00008, 0xBEEF)
             .unwrap()
             .to_csr()
             .unwrap();
         let t1 = Instant::now();
-        let rs = svds(&sq, 2, EigsOptions { tol: 1e-7, max_iter: 60 });
-        println!("svds  n=120000 nnz={} ok={} in {:?}", sq.data().len(), rs.is_ok(), t1.elapsed());
+        let rs = svds(
+            &sq,
+            2,
+            EigsOptions {
+                tol: 1e-7,
+                max_iter: 60,
+            },
+        );
+        println!(
+            "svds  n=120000 nnz={} ok={} in {:?}",
+            sq.data().len(),
+            rs.is_ok(),
+            t1.elapsed()
+        );
     }
 }
