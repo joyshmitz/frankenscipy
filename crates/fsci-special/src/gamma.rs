@@ -2358,32 +2358,45 @@ pub fn complex_gammaln(z: Complex64) -> Complex64 {
     }
 
     if z.re < 0.5 {
-        // Reflection formula: Γ(z) = π / (sin(πz) Γ(1-z))
-        // ln Γ(z) = ln(π) - ln(sin(πz)) - ln Γ(1-z)
-        let pi_z = Complex64::new(PI * z.re, PI * z.im);
-        let sin_pi_z = complex_sin(pi_z);
-        let ln_sin = sin_pi_z.ln();
-        let one_minus_z = Complex64::new(1.0 - z.re, -z.im);
-        let ln_gamma_1mz = complex_gammaln(one_minus_z);
-        Complex64::new(PI.ln(), 0.0) - ln_sin - ln_gamma_1mz
-    } else {
-        let z_shifted = Complex64::new(z.re - 1.0, z.im);
-        let mut x = Complex64::new(LANCZOS_COEFFS[0], 0.0);
-        for (i, &coeff) in LANCZOS_COEFFS.iter().enumerate().skip(1) {
-            let denom = Complex64::new(z_shifted.re + i as f64, z_shifted.im);
-            x = x + Complex64::new(coeff, 0.0) / denom;
+        // Upward recurrence loggamma(z) = loggamma(z+1) - log(z), shifting until the
+        // Lanczos region (Re >= 0.5) and accumulating PRINCIPAL logs. Summing principal
+        // logs lets the imaginary part track the analytic continuation — scipy.special
+        // .loggamma, whose Im winds by 2π per unit of negative Re(z) — rather than the
+        // single-valued principal log of Γ(z) the old reflection (ln(π)-ln(sin πz)-lnΓ(1-z))
+        // produced. gamma/rgamma compose this via exp(±loggamma), so the 2πi winding is
+        // invisible to them; only loggamma's own value changes. (frankenscipy-4roim)
+        let mut acc = Complex64::new(0.0, 0.0);
+        let mut w = z;
+        while w.re < 0.5 {
+            acc = acc + w.ln();
+            w = Complex64::new(w.re + 1.0, w.im);
         }
-        let t = Complex64::new(z_shifted.re + LANCZOS_G + 0.5, z_shifted.im);
-        // ln Γ(z) = 0.5 ln(2π) + (z - 0.5) ln(t) - t + ln(x)
-        let half_ln_2pi = 0.5 * (2.0 * PI).ln();
-        let z_minus_half = Complex64::new(z_shifted.re + 0.5, z_shifted.im);
-        let ln_t = t.ln();
-        let term1 = Complex64::new(half_ln_2pi, 0.0);
-        let term2 = z_minus_half * ln_t;
-        let term3 = Complex64::new(-t.re, -t.im);
-        let term4 = x.ln();
-        term1 + term2 + term3 + term4
+        complex_gammaln_lanczos(w) - acc
+    } else {
+        complex_gammaln_lanczos(z)
     }
+}
+
+/// Lanczos series for ln Γ(z) on the right half-plane (Re(z) >= 0.5). Returns the value
+/// with the principal-branch imaginary part; callers needing the analytically-continued
+/// branch for Re(z) < 0.5 reach it via the recurrence in [`complex_gammaln`].
+fn complex_gammaln_lanczos(z: Complex64) -> Complex64 {
+    let z_shifted = Complex64::new(z.re - 1.0, z.im);
+    let mut x = Complex64::new(LANCZOS_COEFFS[0], 0.0);
+    for (i, &coeff) in LANCZOS_COEFFS.iter().enumerate().skip(1) {
+        let denom = Complex64::new(z_shifted.re + i as f64, z_shifted.im);
+        x = x + Complex64::new(coeff, 0.0) / denom;
+    }
+    let t = Complex64::new(z_shifted.re + LANCZOS_G + 0.5, z_shifted.im);
+    // ln Γ(z) = 0.5 ln(2π) + (z - 0.5) ln(t) - t + ln(x)
+    let half_ln_2pi = 0.5 * (2.0 * PI).ln();
+    let z_minus_half = Complex64::new(z_shifted.re + 0.5, z_shifted.im);
+    let ln_t = t.ln();
+    let term1 = Complex64::new(half_ln_2pi, 0.0);
+    let term2 = z_minus_half * ln_t;
+    let term3 = Complex64::new(-t.re, -t.im);
+    let term4 = x.ln();
+    term1 + term2 + term3 + term4
 }
 
 /// Complex sine function.
@@ -4211,6 +4224,32 @@ mod tests {
         ))?;
         assert!(near_upper.im < 0.0);
         assert!(near_lower.im > 0.0);
+        Ok(())
+    }
+
+    #[test]
+    #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy
+    fn complex_loggamma_winding_matches_scipy() -> Result<(), String> {
+        // frankenscipy-4roim: scipy.special.loggamma is the ANALYTIC CONTINUATION, whose
+        // imaginary part winds by 2π per unit of negative Re(z) — NOT the single-valued
+        // principal log of Γ(z). The old reflection branch produced the principal log and
+        // was off by 2π·k for Re(z) < -1. (z_re, z_im, loggamma.re, loggamma.im) — scipy 1.17.1.
+        let cases: [(f64, f64, f64, f64); 6] = [
+            (-3.0, -1.0, -2.9535082922958997e+00, 9.7264182812369118e+00),
+            (-3.0, 1.0, -2.9535082922958997e+00, -9.7264182812369118e+00),
+            (-1.5, 2.0, -3.8624060873955779e+00, -4.6226094074869755e+00),
+            (-5.0, -0.5, -4.4536008937628253e+00, 1.6425019297069067e+01),
+            (-2.5, -0.2, -2.3526740571631932e-01, 9.2040025415435665e+00),
+            (-4.5, -3.0, -1.0694354276574462e+01, 1.0712660703414734e+01),
+        ];
+        for (zr, zi, lr, li) in cases {
+            let c = get_complex_scalar(loggamma(&complex_scalar(zr, zi), RuntimeMode::Strict))?;
+            let rel = (c.re - lr).hypot(c.im - li) / lr.hypot(li);
+            assert!(
+                rel <= 1e-12,
+                "loggamma({zr}{zi:+}i) = {c:?}, scipy ({lr},{li}), rel {rel:e}"
+            );
+        }
         Ok(())
     }
 
