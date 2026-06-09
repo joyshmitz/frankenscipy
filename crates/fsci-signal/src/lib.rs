@@ -7394,6 +7394,12 @@ pub fn periodogram(
     }
     let n = x.len();
 
+    // scipy.signal.periodogram defaults to detrend='constant': subtract the
+    // input's mean before windowing (without a window only the DC bin is
+    // affected, but a window leaks a nonzero mean into neighbouring bins).
+    let mean = x.iter().sum::<f64>() / n as f64;
+    let detrended: Vec<f64> = x.iter().map(|&xi| xi - mean).collect();
+
     // Apply window
     let windowed: Vec<f64> = match window {
         Some(w) => {
@@ -7403,9 +7409,13 @@ pub fn periodogram(
                     w.len()
                 )));
             }
-            x.iter().zip(w.iter()).map(|(&xi, &wi)| xi * wi).collect()
+            detrended
+                .iter()
+                .zip(w.iter())
+                .map(|(&xi, &wi)| xi * wi)
+                .collect()
         }
-        None => x.to_vec(),
+        None => detrended,
     };
 
     // Window power for normalization
@@ -18714,6 +18724,26 @@ mod tests {
                 rh.psd[k]
             );
         }
+    }
+
+    #[test]
+    fn periodogram_constant_detrend_removes_dc() {
+        // Regression: scipy.signal.periodogram defaults to detrend='constant',
+        // so a signal with a DC offset must have an ~zero DC bin. (The prior
+        // impl skipped detrending, leaving psd[0] ≈ 8e-4 vs scipy ≈ 0.)
+        let n = 64;
+        let fs = 8.0;
+        let tp = 2.0 * std::f64::consts::PI;
+        let x: Vec<f64> = (0..n)
+            .map(|i| {
+                let t = i as f64 / fs;
+                (tp * 1.0 * t).sin() + 0.5 * (tp * 2.5 * t).cos() + 3.0 // DC offset
+            })
+            .collect();
+        let r = periodogram(&x, fs, None).unwrap();
+        assert!(r.psd[0] < 1e-12, "DC bin should vanish after detrend: {}", r.psd[0]);
+        assert!((r.psd[8] - 4.0).abs() < 1e-9, "psd[8]={}", r.psd[8]);
+        assert!((r.psd[20] - 1.0).abs() < 1e-9, "psd[20]={}", r.psd[20]);
     }
 
     #[test]
