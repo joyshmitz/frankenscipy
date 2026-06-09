@@ -1,8 +1,8 @@
 #![forbid(unsafe_code)]
 //! Live SciPy differential coverage for `scipy.signal.sosfiltfilt`.
 //!
-//! Resolves [frankenscipy-o4zoh]. fsci uses padlen = 6 * n_sections,
-//! matching scipy's default. 1e-9 abs.
+//! Resolves [frankenscipy-o4zoh]. fsci uses scipy's default pad length
+//! padlen = 3*(2*n_sections+1 - min(#b2==0, #a2==0)). 1e-9 abs.
 
 use std::collections::HashMap;
 use std::fs;

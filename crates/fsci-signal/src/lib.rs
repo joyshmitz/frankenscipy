@@ -6244,9 +6244,15 @@ pub fn sosfiltfilt(sos: &[SosSection], x: &[f64]) -> Result<Vec<f64>, SignalErro
         ));
     }
 
-    // Determine padding length (matches SciPy's default: 3 * (ntaps - 1))
-    // For SOS, ntaps = 2 * n_sections + 1. So 3 * (2 * n_sections) = 6 * n_sections.
-    let padlen = (6 * sos.len()).min(n - 1);
+    // Determine padding length, matching scipy.signal.sosfiltfilt:
+    //   ntaps = 2*n_sections + 1 - min(#sections with b2==0, #sections with a2==0)
+    //   padlen = 3 * ntaps
+    // (the prior 6*n_sections used ntaps = 2*n_sections, dropping the +1, which
+    // left the filtered edges off by up to ~0.5 vs scipy.)
+    let zeros_b2 = sos.iter().filter(|s| s[2] == 0.0).count();
+    let zeros_a2 = sos.iter().filter(|s| s[5] == 0.0).count();
+    let ntaps = 2 * sos.len() + 1 - zeros_b2.min(zeros_a2);
+    let padlen = (3 * ntaps).min(n - 1);
 
     // 1. Pad signal with mirrored values:
     // [2*x[0]-x[padlen], ..., 2*x[0]-x[1], x[0], ..., x[n-1], 2*x[n-1]-x[n-2], ..., 2*x[n-1]-x[n-padlen-1]]
@@ -6329,6 +6335,13 @@ pub fn sosfilt_zi(sos: &[SosSection]) -> Result<Vec<[f64; 2]>, SignalError> {
 
     let mut zi = Vec::with_capacity(sos.len());
 
+    // scipy.signal.sosfilt_zi: each section's per-section steady-state
+    // `lfilter_zi` is scaled by the cumulative DC gain of all PRECEDING
+    // sections, then `scale` is multiplied by this section's DC gain. (The
+    // prior code omitted that running scale, so every section after the first
+    // had the wrong initial conditions, leaving sosfiltfilt edges off by ~0.08.)
+    let mut scale = 1.0_f64;
+
     for section in sos {
         let a0 = section[3];
         if a0.abs() < 1e-30 {
@@ -6342,10 +6355,8 @@ pub fn sosfilt_zi(sos: &[SosSection]) -> Result<Vec<[f64; 2]>, SignalError> {
         let a1 = section[4] / a0;
         let a2 = section[5] / a0;
 
-        // For steady-state with input=1, output=gain of section at DC:
-        // gain = (b0+b1+b2) / (1+a1+a2)
-        // Initial conditions satisfy: d1 = b1 - a1*gain + d2, d2 = b2 - a2*gain
-        // Solving: d2 = b2 - a2*gain, d1 = (b1 - a1*gain) + d2
+        // Steady-state with input=1: gain = (b0+b1+b2)/(1+a1+a2);
+        // d2 = b2 - a2*gain, d1 = (b1 - a1*gain) + d2 (this section's lfilter_zi).
         let dc_denom = 1.0 + a1 + a2;
         if dc_denom.abs() < 1e-30 {
             zi.push([0.0, 0.0]);
@@ -6354,7 +6365,8 @@ pub fn sosfilt_zi(sos: &[SosSection]) -> Result<Vec<[f64; 2]>, SignalError> {
         let gain = (b0 + b1 + b2) / dc_denom;
         let d2 = b2 - a2 * gain;
         let d1 = b1 - a1 * gain + d2;
-        zi.push([d1, d2]);
+        zi.push([scale * d1, scale * d2]);
+        scale *= gain;
     }
 
     Ok(zi)
@@ -15153,6 +15165,44 @@ mod tests {
                 "section {i} zi should be finite",
             );
         }
+    }
+
+    #[test]
+    fn sosfilt_zi_and_sosfiltfilt_match_scipy() {
+        // Regression: sosfilt_zi must scale each section's initial conditions by
+        // the cumulative DC gain of the preceding sections, and sosfiltfilt's
+        // pad length is 3*(2*n_sections+1) — both were wrong, leaving the
+        // filtered edges off by up to ~0.5 vs scipy. Goldens from butter(4,0.2).
+        let sos: Vec<SosSection> = vec![
+            [
+                0.004824343357716228,
+                0.009648686715432456,
+                0.004824343357716228,
+                1.0,
+                -1.0485995763626117,
+                0.2961403575616696,
+            ],
+            [1.0, 2.0, 1.0, 1.0, -1.3209134308194264, 0.6327387928852766],
+        ];
+        let zi = sosfilt_zi(&sos).expect("sosfilt_zi");
+        let zi_ref = [
+            [0.073_131_997_158_746_33, -0.018_261_675_197_028_267],
+            [0.922_043_659_483_537_7, -0.554_782_452_368_814_2],
+        ];
+        for (z, r) in zi.iter().zip(zi_ref.iter()) {
+            assert!((z[0] - r[0]).abs() < 1e-12 && (z[1] - r[1]).abs() < 1e-12);
+        }
+        let x: Vec<f64> = (0..40)
+            .map(|i| {
+                let t = i as f64 * 0.1;
+                (2.0 * std::f64::consts::PI * t).sin() + 0.4 * (8.0 * t).cos() + 0.05 * t
+            })
+            .collect();
+        let y = sosfiltfilt(&sos, &x).expect("sosfiltfilt");
+        // scipy.signal.sosfiltfilt edge + endpoint values (zero-phase).
+        assert!((y[0] - 0.411_861_627_967_496).abs() < 1e-9, "y[0]={}", y[0]);
+        assert!((y[1] - 0.478_766_072_128_180_2).abs() < 1e-9, "y[1]={}", y[1]);
+        assert!((y[39] - (-0.025_264_896_683_001_06)).abs() < 1e-9, "y[39]={}", y[39]);
     }
 
     #[test]
