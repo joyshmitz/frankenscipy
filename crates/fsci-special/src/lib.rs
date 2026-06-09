@@ -334,9 +334,10 @@ mod tests {
         assert!((eval_chebyc(3, 1.5) - (1.5_f64.powi(3) - 3.0 * 1.5)).abs() < 1e-12);
         assert!((eval_chebys(3, 1.5) - (1.5_f64.powi(3) - 2.0 * 1.5)).abs() < 1e-12);
 
+        // eval_sh_jacobi divides the standard Jacobi value by C(2n+p−1, n);
+        // golden from scipy.special.eval_sh_jacobi(4, 0.5, 1.25, 0.3).
         let shifted = eval_sh_jacobi(4, 0.5, 1.25, 0.3);
-        let via = eval_jacobi(4, -0.75, 0.25, -0.4);
-        assert!((shifted - via).abs() < 1e-12);
+        assert!((shifted - (-0.006_993_939_393_939_394)).abs() < 1e-12);
 
         let (shifted_nodes, shifted_weights) = roots_sh_jacobi(3, 0.5, 1.25);
         let (jacobi_nodes, jacobi_weights) = roots_jacobi(3, -0.75, 0.25);

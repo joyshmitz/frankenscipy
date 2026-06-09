@@ -635,17 +635,21 @@ pub fn eval_sh_chebyu(n: u32, x: f64) -> f64 {
 
 /// Evaluate the shifted Jacobi polynomial G_n^{(p, q)}(x) on [0, 1].
 ///
-/// Matches `scipy.special.eval_sh_jacobi(n, p, q, x)`. The relation to the
-/// standard Jacobi polynomial is
-///   G_n^{(p, q)}(x) = (n! / (n + p − 1)!_falling) · P_n^{(p − q, q − 1)}(2x − 1)
-/// at the level scipy returns (a normalized form). Without a hypergeometric
-/// inverse-falling-factorial helper we route through the well-tested
-/// eval_jacobi path with parameters (p − q, q − 1) at argument 2x − 1; for
-/// integer (p, q) the leading-coefficient normalization differs from
-/// scipy's by a known constant, so callers comparing absolute values
-/// should bias-correct via the leading falling factorial.
+/// Matches `scipy.special.eval_sh_jacobi(n, p, q, x)`, the shifted Jacobi
+/// polynomial `G_n^{(p, q)}(x) = P_n^{(p − q, q − 1)}(2x − 1) / C(2n + p − 1, n)`.
+/// The standard Jacobi value is computed by the well-tested `eval_jacobi`; the
+/// binomial `C(2n + p − 1, n)` (a real-upper-index falling factorial over n!)
+/// is the normalization scipy divides by — previously omitted, which left the
+/// result off by that factor (up to ~3.8e6 at n = 12).
 pub fn eval_sh_jacobi(n: u32, p: f64, q: f64, x: f64) -> f64 {
-    eval_jacobi(n, p - q, q - 1.0, 2.0 * x - 1.0)
+    // C(2n + p − 1, n) = Π_{j=0}^{n−1} (2n + p − 1 − j) / (j + 1), exact for
+    // integer n and real upper index.
+    let a = 2.0 * f64::from(n) + p - 1.0;
+    let mut norm = 1.0_f64;
+    for j in 0..n {
+        norm *= (a - f64::from(j)) / (f64::from(j) + 1.0);
+    }
+    eval_jacobi(n, p - q, q - 1.0, 2.0 * x - 1.0) / norm
 }
 
 /// Compute Gauss-Legendre quadrature nodes and weights on [-1, 1].
@@ -2968,22 +2972,21 @@ mod tests {
     }
 
     #[test]
-    fn eval_sh_jacobi_routes_through_jacobi_at_2x_minus_1() {
-        // /testing-conformance-harnesses: eval_sh_jacobi(n, p, q, x)
-        // routes through eval_jacobi(n, p−q, q−1, 2x−1) by construction.
-        // Pin the routing identity across multiple (n, p, q, x).
-        for &(n, p, q, x) in &[
-            (3_u32, 5.0_f64, 2.0, 0.3),
-            (4, 4.0, 3.0, 0.5),
-            (5, 6.5, 1.5, 0.75),
-            (0, 3.0, 1.0, 0.1),
-            (1, 4.0, 2.0, 0.9),
+    fn eval_sh_jacobi_matches_scipy() {
+        // eval_sh_jacobi(n, p, q, x) = P_n^{(p−q, q−1)}(2x−1) / C(2n+p−1, n).
+        // The normalization (previously omitted) is what scipy divides by.
+        // Golden values from scipy.special.eval_sh_jacobi (SciPy 1.17.1).
+        for &(n, p, q, x, golden) in &[
+            (3_u32, 5.0_f64, 2.0, 0.3, 0.005_666_666_666_666_663),
+            (4, 4.0, 3.0, 0.5, 0.001_893_939_393_939_394),
+            (5, 6.5, 1.5, 0.75, 0.000_590_244_822_145_379_2),
+            (0, 3.0, 1.0, 0.1, 1.0),
+            (1, 4.0, 2.0, 0.9, 0.5),
         ] {
             let direct = eval_sh_jacobi(n, p, q, x);
-            let via = eval_jacobi(n, p - q, q - 1.0, 2.0 * x - 1.0);
             assert!(
-                (direct - via).abs() < 1e-12,
-                "eval_sh_jacobi({n}, {p}, {q}, {x}) = {direct} via eval_jacobi = {via}"
+                (direct - golden).abs() <= 1e-12 + 1e-10 * golden.abs(),
+                "eval_sh_jacobi({n}, {p}, {q}, {x}) = {direct} vs scipy {golden}"
             );
         }
     }
