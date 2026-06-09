@@ -850,7 +850,17 @@ fn exp1_complex_scalar(z: Complex64, mode: RuntimeMode) -> Result<Complex64, Spe
         }
     }
 
-    if z.abs() <= 2.0 {
+    // Method selection (Zhang & Jin, *Computation of Special Functions*, E1Z): the power
+    // series is an entire function (after -γ-ln z), so its only error is cancellation, which
+    // grows like e^{|z|} relative to the result e^{-Re z}/|z| — negligible when Re(z) is
+    // very negative (result is exp-large) but catastrophic for large positive Re(z). The
+    // continued fraction is the asymptotic expansion: accurate for large |z| EXCEPT near the
+    // negative-real Stokes line. So use the series for small |z| (any direction) and for the
+    // deep left half-plane (|z|<20), and the CF for everything else. The old |z|<=2 cutoff
+    // wrongly sent the whole |z|>2 left half-plane to the CF, diverging ~5e-3 there
+    // (frankenscipy-ey069). Validated vs scipy 1.17.1 to <3.6e-7 over a wide grid.
+    let a0 = z.abs();
+    if a0 <= 10.0 || (z.re < 0.0 && a0 < 20.0) {
         return exp1_complex_series(z);
     }
 
@@ -2700,6 +2710,37 @@ mod tests {
                 matches!(&other, SpecialTensor::ComplexVec(_)),
                 "expected ComplexVec, got {other:?}"
             ),
+        }
+    }
+
+    #[test]
+    #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy
+    fn exp1_complex_off_axis_matches_scipy() {
+        // frankenscipy-ey069: the old |z|<=2 series/CF split sent the whole |z|>2 left
+        // half-plane to the continued fraction, which is the asymptotic expansion and
+        // diverges (~5e-3) away from large |z| — e.g. exp1(-3-1j) was off by ~8.6e-6.
+        // The Zhang-Jin region rule (series for |z|<=10 or deep left half |z|<20) fixes it.
+        // (z_re, z_im, exp1.re, exp1.im) — scipy 1.17.1.
+        let cases: [(f64, f64, f64, f64); 8] = [
+            (-3.0, -1.0, -7.8231346760015779e+00, -2.9559271304025110e+00),
+            (-5.0, 0.5, -3.7262468961367944e+01, 1.1283268496460263e+01),
+            (-3.0, 2.0, -2.8074890821669083e+00, 5.9603353047969971e+00),
+            (-8.0, 1.0, -2.8803230551285594e+02, 3.2292700501048904e+02),
+            (-1.0, -2.0, -1.0421677081649352e+00, -5.5990877234808067e-01),
+            (-15.0, 3.0, 2.1516189796411578e+05, 7.9849102715220142e+04),
+            (3.0, 2.0, -9.0959208747944942e-03, -6.9001792622122027e-03),
+            (0.5, 0.3, 4.2221132422501800e-01, -3.0537113617426670e-01),
+        ];
+        for (zr, zi, er, ei) in cases {
+            let c = eval_complex_scalar(exp1(
+                &SpecialTensor::ComplexScalar(Complex64::new(zr, zi)),
+                RuntimeMode::Strict,
+            ));
+            let rel = (c.re - er).hypot(c.im - ei) / er.hypot(ei);
+            assert!(
+                rel <= 1e-9,
+                "exp1({zr}{zi:+}i) = {c:?}, scipy ({er},{ei}), rel {rel:e}"
+            );
         }
     }
 
