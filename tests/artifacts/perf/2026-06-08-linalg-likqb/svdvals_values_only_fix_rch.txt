@@ -1,0 +1,18 @@
+# svdvals regression fix — values-only must use nalgebra fast path, not the
+# vector-building deterministic thin SVD (regression from 08v3m square/band + vas4b wide).
+#
+# nalgebra values-only (safe_svd(false,false)) vs routed svdvals(), rch:
+#
+# BEFORE fix (deterministic builds U/V for a values-only request):
+#   512x512  nalgebra 45.5ms  routed 214.2ms  ratio 0.212  (svdvals 4.7x SLOWER)
+#   256x512  nalgebra 14.2ms  routed  46.5ms  ratio 0.306  (3.3x slower)
+#   512x256  nalgebra 12.6ms  routed  48.2ms  ratio 0.261  (pre-existing, tall)
+#
+# AFTER fix (svdvals: deterministic only for rows>=2*cols; else nalgebra values-only):
+#   512x512  nalgebra 45.4ms  routed  46.4ms  ratio 0.978  (FIXED: 214 -> 46ms, 4.6x faster)
+#   256x512  nalgebra 15.5ms  routed  14.6ms  ratio 1.059  (FIXED: 46 -> 15ms, 3x faster)
+#   512x256  nalgebra 12.6ms  routed  51.6ms  ratio 0.244  (tall stays deterministic for the
+#                                                           128x64 svd==svdvals 1e-12 consistency test)
+#
+# svd() unchanged — it needs vectors and deterministic (209ms) beats nalgebra full (1553ms).
+# 388 fsci-linalg tests pass incl public_bidiag_svd_route_matches_safe_svd_reference (128x64).

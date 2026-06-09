@@ -3578,7 +3578,14 @@ pub fn svdvals(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<f64>, Linal
     }
 
     let matrix = dmatrix_from_rows(a)?;
-    if let Some(thin_svd) = public_square_or_tall_thin_svd_candidate(&matrix)
+    // svdvals needs only the singular VALUES. nalgebra's values-only SVD skips
+    // the (very expensive) vector accumulation and is far faster than running
+    // our deterministic thin SVD (which builds U/V) — so route values-only
+    // requests straight to it. The deterministic thin SVD is reserved for the
+    // `rows >= 2*cols` regime where svd()/svdvals already agree byte-for-byte
+    // (it keeps the public_bidiag route consistency test exact); everything else
+    // (square, band, wide) uses the fast nalgebra values-only path.
+    if let Some(thin_svd) = public_tall_thin_svd_candidate(&matrix)
         && let Some((max_s, _)) = public_bidiag_svd_stats(&thin_svd.singular_values)
     {
         let threshold = public_bidiag_default_threshold(rows, cols, max_s);
@@ -3594,18 +3601,6 @@ pub fn svdvals(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<f64>, Linal
 
             return Ok(thin_svd.singular_values);
         }
-    }
-
-    if let Some((_, s, _)) = public_wide_svd_via_transpose(&matrix) {
-        emit_trace(LinalgTrace {
-            operation: "svdvals",
-            matrix_size: (rows, cols),
-            mode: options.mode,
-            rcond: None,
-            warning: None,
-            error: None,
-        });
-        return Ok(s);
     }
 
     let svd_decomp = safe_svd(matrix, false, false)?;
@@ -16105,6 +16100,33 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "perf probe: svdvals deterministic (vectors) vs nalgebra values-only"]
+    fn svdvals_deterministic_vs_nalgebra_values_only_probe() {
+        for (m, n) in [(512usize, 512usize), (256, 512), (512, 256)] {
+            let original = bidiag_deterministic_matrix(m, n);
+            let matrix_rows = rows_from_dmatrix(&original);
+
+            // nalgebra values-only (the pre-08v3m svdvals fallback).
+            let na_start = std::time::Instant::now();
+            let na = safe_svd(std::hint::black_box(original.clone()), false, false)
+                .expect("nalgebra values");
+            let _na_s: Vec<f64> = na.singular_values.iter().copied().collect();
+            let na_ms = na_start.elapsed().as_secs_f64() * 1e3;
+
+            // Current routed svdvals (deterministic thin SVD, builds vectors).
+            let routed_start = std::time::Instant::now();
+            let _routed = svdvals(std::hint::black_box(&matrix_rows), DecompOptions::default())
+                .expect("routed svdvals");
+            let routed_ms = routed_start.elapsed().as_secs_f64() * 1e3;
+
+            println!(
+                "SVDVALS_PROBE shape={m}x{n} nalgebra_values_only_ms={na_ms:.3} routed_svdvals_ms={routed_ms:.3} ratio={:.3}",
+                na_ms / routed_ms
+            );
+        }
+    }
+
+    #[test]
     #[ignore = "perf probe: run with rch and --release for public wide svd routing"]
     fn public_wide_svd_route_perf_probe() {
         let original = bidiag_deterministic_matrix(256, 512);
@@ -16201,7 +16223,10 @@ mod tests {
 
         assert!(recon_err <= 1e-7 * dmatrix_max_abs_value(&original).max(1.0));
         assert!(s_diff <= 1e-7 * previous_s.first().copied().unwrap_or(1.0).max(1.0));
-        assert!(svdvals_diff <= 1e-12 * routed.s.first().copied().unwrap_or(1.0).max(1.0));
+        // svd() uses the deterministic thin SVD here; svdvals() uses nalgebra's
+        // fast values-only path for square inputs — both within tolerance of the
+        // true spectrum, so they agree to ~1e-7 (not bit-for-bit).
+        assert!(svdvals_diff <= 1e-7 * routed.s.first().copied().unwrap_or(1.0).max(1.0));
     }
 
     #[test]
