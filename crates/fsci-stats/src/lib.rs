@@ -10530,9 +10530,17 @@ impl ContinuousDistribution for JohnsonSB {
 
 /// Generalized Extreme Value (GEV) distribution.
 ///
-/// Matches `scipy.stats.genextreme`.
+/// Uses the standard extreme-value-theory shape convention ξ = `c`: the pdf is
+/// built around `(1 + c·x)`, so positive `c` is the heavy-tailed Fréchet case.
+///
+/// **SciPy uses the opposite sign for its shape parameter**, so
+/// `GenExtreme::new(c)` equals `scipy.stats.genextreme(-c)` — to reproduce a
+/// SciPy `genextreme(c)` result, construct `GenExtreme::new(-c)` (the
+/// conformance harness in `diff_stats_genextreme.rs` flips the sign for exactly
+/// this reason). pdf/cdf/ppf/sf and all moments are internally consistent under
+/// this convention.
 pub struct GenExtreme {
-    pub c: f64, // shape parameter
+    pub c: f64, // shape parameter ξ (NOTE: negated relative to SciPy's `c`)
 }
 
 impl GenExtreme {
