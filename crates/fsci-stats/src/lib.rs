@@ -775,6 +775,67 @@ fn simpson_integrate(f: impl Fn(f64) -> f64, a: f64, b: f64, n: usize) -> f64 {
     sum * h / 3.0
 }
 
+/// Double-exponential (tanh-sinh) quadrature on a finite interval `[a, b]`.
+///
+/// Unlike composite Simpson, the change of variables
+/// `x = (a+b)/2 + (b-a)/2 · tanh((π/2)·sinh(t))` samples only the **open**
+/// interval `(a, b)` and assigns doubly-exponentially small weights as
+/// `t → ±∞`. This makes the rule converge geometrically even when the
+/// integrand has *integrable* endpoint singularities — e.g. the `1/√(x(1−x))`
+/// blow-ups of the Arcsine pdf, where Simpson samples `f(a)=f(b)=+∞` and
+/// returns `inf` (per frankenscipy-p2olp). Endpoint terms whose weight·value
+/// is non-finite (weight underflowed to 0 against an `inf` sample) contribute
+/// 0, which is the correct limit for an integrable singularity.
+///
+/// Currently consumed only by the pdf-normalization regression guards; gated to
+/// the test build to avoid shipping dead code until a production caller needs it.
+#[cfg(test)]
+fn tanh_sinh_integrate(f: impl Fn(f64) -> f64, a: f64, b: f64) -> f64 {
+    if !(a < b) {
+        return 0.0;
+    }
+    let c = 0.5 * (b - a);
+    let d = 0.5 * (a + b);
+    let half_pi = std::f64::consts::FRAC_PI_2;
+    // One abscissa/weight contribution at parameter t.
+    let term = |t: f64| -> f64 {
+        let s = t.sinh();
+        let arg = half_pi * s;
+        let x = d + c * arg.tanh();
+        let ch = arg.cosh();
+        let w = c * half_pi * t.cosh() / (ch * ch);
+        let v = w * f(x);
+        if v.is_finite() { v } else { 0.0 }
+    };
+    // Beyond |t| ≈ 3.5 the weights are ~1e-15 of the peak, so truncating there
+    // loses nothing at double precision.
+    let t_max = 3.5;
+    let level_sum = |h: f64| -> f64 {
+        let mut sum = term(0.0);
+        let mut k = 1;
+        loop {
+            let t = k as f64 * h;
+            if t > t_max {
+                break;
+            }
+            sum += term(t) + term(-t);
+            k += 1;
+        }
+        sum * h
+    };
+    let mut h = 0.5;
+    let mut prev = level_sum(h);
+    for _ in 0..12 {
+        h *= 0.5;
+        let curr = level_sum(h);
+        if (curr - prev).abs() <= 1e-13 + 1e-12 * curr.abs() {
+            return curr;
+        }
+        prev = curr;
+    }
+    prev
+}
+
 fn simpson_integrate_adaptive(
     f: impl Fn(f64) -> f64,
     a: f64,
@@ -63427,6 +63488,32 @@ mod tests {
     }
 
     #[test]
+    fn tanh_sinh_handles_endpoint_singularities() {
+        // Arcsine pdf 1/(π√(x(1−x))) is +inf at x=0,1 (parity with scipy) yet
+        // integrates to exactly 1 — Simpson returns inf, tanh-sinh must not.
+        // Both endpoints singular; tanh-sinh converges geometrically to ~1e-8
+        // here (vs Simpson's +inf) — orders of magnitude tighter than the 1e-2
+        // a normalization guard needs.
+        let arcsine = tanh_sinh_integrate(|x| Arcsine.pdf(x), 0.0, 1.0);
+        assert!(
+            (arcsine - 1.0).abs() < 1e-6,
+            "Arcsine pdf integral via tanh-sinh = {arcsine}, expected 1"
+        );
+        // ∫₀¹ 1/√x dx = 2 (one-sided integrable singularity).
+        let inv_sqrt = tanh_sinh_integrate(|x| 1.0 / x.sqrt(), 0.0, 1.0);
+        assert!(
+            (inv_sqrt - 2.0).abs() < 1e-6,
+            "∫₀¹ x^-1/2 via tanh-sinh = {inv_sqrt}, expected 2"
+        );
+        // Smooth integrand must stay correct: ∫₀^π sin x dx = 2.
+        let smooth = tanh_sinh_integrate(|x| x.sin(), 0.0, std::f64::consts::PI);
+        assert!(
+            (smooth - 2.0).abs() < 1e-12,
+            "∫₀^π sin via tanh-sinh = {smooth}, expected 2"
+        );
+    }
+
+    #[test]
     fn at_risk_continuous_pdfs_integrate_to_one() {
         // Regression guard for the RelBreitWigner-class normalization bug: each
         // pdf must integrate to ~1 over its support. Integration ranges were
@@ -63477,7 +63564,11 @@ mod tests {
         check("RDist", integ(&RDist::new(3.0), -1.0, 1.0));
         check("Rayleigh", integ(&Rayleigh::new(1.0), 0.0, 40.0));
         check("Rice", integ(&Rice::new(1.0), 0.0, 40.0));
-        check("Arcsine", integ(&Arcsine, 0.0, 1.0));
+        // Arcsine's pdf diverges as 1/√(x(1−x)) at both endpoints (scipy's
+        // arcsine.pdf(0/1) is +inf too — parity), so composite Simpson samples
+        // f(0)=f(1)=inf and yields inf. tanh-sinh only samples the open
+        // interval and handles the integrable singularity (frankenscipy-p2olp).
+        check("Arcsine", tanh_sinh_integrate(|x| Arcsine.pdf(x), 0.0, 1.0));
         check("Semicircular", integ(&Semicircular, -1.0, 1.0));
         check("HypSecant", integ(&HypSecant, -60.0, 60.0));
         check("Moyal", integ(&Moyal, -30.0, 200.0));
