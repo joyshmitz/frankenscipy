@@ -53,7 +53,14 @@ pub struct AiryResult {
 }
 
 const AIRY_NEGATIVE_SERIES_LOWER_BOUND: f64 = -12.0;
-const AIRY_SERIES_UPPER_BOUND: f64 = 4.0;
+// Upper bound for the convergent Maclaurin series on the positive axis. The positive-x
+// asymptotic expansion's error on the recessive Ai/Ai' floors at the optimal-truncation
+// level ~e^{-2ζ} (ζ=(2/3)x^{3/2}): ~2.3e-5 at x=4, only reaching <1e-7 around x≈5.3. The
+// Maclaurin series, by contrast, loses only ~0.87ζ digits to cancellation there (rel ~2e-8
+// at x=6). So the series is the more accurate method throughout [4,6); raising the bound
+// from 4.0 to 6.0 closes the ~1e-5 transition-band gap vs scipy (frankenscipy-airy-band)
+// and aligns with the complex path's |z|>6 cancellation-free Bessel threshold.
+const AIRY_SERIES_UPPER_BOUND: f64 = 6.0;
 
 /// Result of the complex Airy function evaluation: (Ai, Ai', Bi, Bi').
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -984,6 +991,32 @@ mod tests {
             assert!((r.aip - aip_ref).abs() <= 2e-6 *aip_ref.abs().max(1e-3), "Ai'({x}) = {}, scipy {aip_ref}", r.aip);
             assert!((r.bi - bi_ref).abs() <= 2e-6 *bi_ref.abs().max(1e-3), "Bi({x}) = {}, scipy {bi_ref}", r.bi);
             assert!((r.bip - bip_ref).abs() <= 2e-6 *bip_ref.abs().max(1e-3), "Bi'({x}) = {}, scipy {bip_ref}", r.bip);
+        }
+    }
+
+    #[test]
+    #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy
+    fn airy_positive_x_transition_band_matches_scipy() {
+        // frankenscipy-airy-band: the positive-x asymptotic expansion floors at ~e^{-2ζ} on
+        // the recessive Ai/Ai' (~2.3e-5 at x=4), so the old series→asymptotic switch at x=4
+        // left a ~1e-5 gap vs scipy across [4,6) that the Wronskian-identity test could not
+        // catch (normalize_airy_wronskian enforces it). Raising the series bound to 6.0 makes
+        // this band use the convergent Maclaurin series. (x, Ai, Ai', Bi, Bi') scipy 1.17.1.
+        let cases = [
+            (4.0, 9.5156385120480239e-04, -1.9586409502041799e-03, 8.3847071408468125e+01, 1.6192668350461341e+02),
+            (4.5, 3.3025032351430934e-04, -7.1786656755750973e-04, 2.2758808183559970e+02, 4.6913507732796637e+02),
+            (5.0, 1.0834442813607433e-04, -2.4741389086846232e-04, 6.5779204417117126e+02, 1.4358190802179822e+03),
+            (5.5, 3.3685311908599812e-05, -8.0463391305565131e-05, 2.0165800386595311e+03, 4.6325537331390415e+03),
+            (5.9, 1.2747094509184485e-05, -3.1481297117112759e-05, 5.1442181542808012e+03, 1.2266577761776951e+04),
+            (7.0, 7.4921288639971570e-07, -2.0081508947387894e-06, 8.0327790709430265e+04, 2.0955267087397128e+05),
+            (10.0, 1.1047532552898654e-10, -3.5206336767389118e-10, 4.5564115354822654e+08, 1.4292361344828701e+09),
+        ];
+        for (x, ai_ref, aip_ref, bi_ref, bip_ref) in cases {
+            let r = airy_scalar(x, RuntimeMode::Strict).unwrap();
+            assert!((r.ai - ai_ref).abs() <= 1e-6 * ai_ref.abs(), "Ai({x}) = {}, scipy {ai_ref}", r.ai);
+            assert!((r.aip - aip_ref).abs() <= 1e-6 * aip_ref.abs(), "Ai'({x}) = {}, scipy {aip_ref}", r.aip);
+            assert!((r.bi - bi_ref).abs() <= 1e-6 * bi_ref.abs(), "Bi({x}) = {}, scipy {bi_ref}", r.bi);
+            assert!((r.bip - bip_ref).abs() <= 1e-6 * bip_ref.abs(), "Bi'({x}) = {}, scipy {bip_ref}", r.bip);
         }
     }
 
