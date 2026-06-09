@@ -7942,6 +7942,9 @@ pub enum RemezFilterType {
     /// Antisymmetric Hilbert transformer (`type='hilbert'`): +90° phase, the band
     /// must avoid DC (and Nyquist for odd `numtaps`).
     Hilbert,
+    /// Antisymmetric differentiator (`type='differentiator'`): response ∝
+    /// frequency with a 1/f (relative-error) weight. Band must avoid DC.
+    Differentiator,
 }
 
 /// Parks-McClellan FIR design with an explicit response `type`, matching
@@ -7956,35 +7959,36 @@ pub fn remez_with_type(
     weight: Option<&[f64]>,
     filter_type: RemezFilterType,
 ) -> Result<Vec<f64>, SignalError> {
-    match filter_type {
-        RemezFilterType::Bandpass => remez(numtaps, bands, desired, weight),
-        RemezFilterType::Hilbert => {
-            if numtaps < 1 {
-                return Err(SignalError::InvalidArgument(
-                    "numtaps must be >= 1".to_string(),
-                ));
-            }
-            if !bands.len().is_multiple_of(2) || bands.is_empty() {
-                return Err(SignalError::InvalidArgument(
-                    "bands must have even number of elements".to_string(),
-                ));
-            }
-            let nbands = bands.len() / 2;
-            if desired.len() != nbands {
-                return Err(SignalError::InvalidArgument(format!(
-                    "desired length {} must equal number of bands {nbands}",
-                    desired.len()
-                )));
-            }
-            let weights: Vec<f64> = weight.map_or_else(|| vec![1.0; nbands], |w| w.to_vec());
-            if weights.len() != nbands {
-                return Err(SignalError::InvalidArgument(
-                    "weight length must equal number of bands".to_string(),
-                ));
-            }
-            remez_hilbert_pm(numtaps, bands, desired, &weights)
-        }
+    let differentiator = match filter_type {
+        RemezFilterType::Bandpass => return remez(numtaps, bands, desired, weight),
+        RemezFilterType::Hilbert => false,
+        RemezFilterType::Differentiator => true,
+    };
+    // Antisymmetric (Hilbert / differentiator) path.
+    if numtaps < 1 {
+        return Err(SignalError::InvalidArgument(
+            "numtaps must be >= 1".to_string(),
+        ));
     }
+    if !bands.len().is_multiple_of(2) || bands.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "bands must have even number of elements".to_string(),
+        ));
+    }
+    let nbands = bands.len() / 2;
+    if desired.len() != nbands {
+        return Err(SignalError::InvalidArgument(format!(
+            "desired length {} must equal number of bands {nbands}",
+            desired.len()
+        )));
+    }
+    let weights: Vec<f64> = weight.map_or_else(|| vec![1.0; nbands], |w| w.to_vec());
+    if weights.len() != nbands {
+        return Err(SignalError::InvalidArgument(
+            "weight length must equal number of bands".to_string(),
+        ));
+    }
+    remez_hilbert_pm(numtaps, bands, desired, &weights, differentiator)
 }
 
 /// Design a FIR filter using the Parks-McClellan (Remez exchange) algorithm.
@@ -8640,6 +8644,7 @@ fn remez_hilbert_pm(
     bands: &[f64],
     desired: &[f64],
     weights: &[f64],
+    differentiator: bool,
 ) -> Result<Vec<f64>, SignalError> {
     use std::f64::consts::PI;
     let nbands = bands.len() / 2;
@@ -8690,9 +8695,18 @@ fn remez_hilbert_pm(
             if q.abs() < eps {
                 continue; // forced zero of A: no constraint here
             }
+            // Hilbert: D(f)=desired, W(f)=weight. Differentiator (canonical
+            // McClellan-Parks-Rabiner convention): D(f)=desired·f (response ∝
+            // frequency), W(f)=weight/f (constant RELATIVE error). f≈0 is already
+            // dropped above as the forced DC zero, so W=weight/f never blows up.
+            let (d_eff, w_eff) = if differentiator {
+                (desired[b] * f, weights[b] / f)
+            } else {
+                (desired[b], weights[b])
+            };
             gridf.push(f);
-            gdes.push(desired[b] / q);
-            gwt.push(weights[b] * q);
+            gdes.push(d_eff / q);
+            gwt.push(w_eff * q);
         }
         if gridf.len() > start {
             band_bounds.push((start, gridf.len() - 1));
@@ -18787,6 +18801,66 @@ mod tests {
         // Sum of coefficients should approximate passband gain (1.0)
         let sum: f64 = h.iter().sum();
         assert!(sum > 0.5 && sum < 1.5, "filter sum = {sum}, expected ~1.0");
+    }
+
+    #[test]
+    fn remez_differentiator_response_proportional_to_frequency() {
+        use std::f64::consts::PI;
+        // Differentiator: antisymmetric FIR with response A(f) ∝ f and a 1/f
+        // (relative-error) weight — the canonical McClellan-Parks-Rabiner
+        // convention scipy ports. Unique minimax => equiripple relative error
+        // proves it. No in-env scipy oracle, so we verify the defining
+        // properties: antisymmetric, A(f)/f ≈ desired, equiripple relative error.
+        for &numtaps in &[15usize, 16usize] {
+            let odd = numtaps % 2 == 1;
+            let bands = if odd { [0.0, 0.45] } else { [0.0, 0.5] };
+            let h = remez_with_type(
+                numtaps,
+                &bands,
+                &[1.0],
+                None,
+                RemezFilterType::Differentiator,
+            )
+            .unwrap();
+            assert_eq!(h.len(), numtaps);
+            for n in 0..numtaps {
+                assert!(
+                    (h[n] + h[numtaps - 1 - n]).abs() < 1e-12,
+                    "differentiator taps must be antisymmetric at {n} (numtaps={numtaps})"
+                );
+            }
+            let mag = |f: f64| -> f64 {
+                let (mut re, mut im) = (0.0f64, 0.0f64);
+                for (n, &hn) in h.iter().enumerate() {
+                    let ang = 2.0 * PI * f * n as f64;
+                    re += hn * ang.cos();
+                    im -= hn * ang.sin();
+                }
+                (re * re + im * im).sqrt()
+            };
+            // Response proportional to frequency: |H(f)|/f ≈ 1, equiripple.
+            // Sample away from DC (relative error is noisy as f→0) up to the band
+            // edge (just inside Nyquist for the odd/Type-III forced zero).
+            let hi = bands[1] - if odd { 0.0 } else { 1e-9 };
+            let (lo, top) = (0.05, (hi - 0.02).max(0.1));
+            let nq = 6000usize;
+            let mut over = 0.0f64;
+            let mut under = 0.0f64;
+            for i in 0..=nq {
+                let f = lo + (top - lo) * i as f64 / nq as f64;
+                let rel = mag(f) / f - 1.0; // desired = 1
+                over = over.max(rel);
+                under = under.max(-rel);
+            }
+            assert!(
+                over < 0.1 && under < 0.1,
+                "differentiator |H|/f deviates too much (numtaps={numtaps}): over {over} under {under}"
+            );
+            assert!(
+                (over - under).abs() <= 0.15 * over.max(under),
+                "differentiator relative error not equiripple (numtaps={numtaps}): over {over} under {under}"
+            );
+        }
     }
 
     #[test]
