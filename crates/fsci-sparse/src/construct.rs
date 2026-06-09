@@ -9,10 +9,9 @@ use crate::ops::{FormatConvertible, add_csr};
 pub fn eye(size: usize) -> SparseResult<CsrMatrix> {
     let shape = Shape2D::new(size, size);
     let data = vec![1.0; size];
-    let rows: Vec<usize> = (0..size).collect();
-    let cols = rows.clone();
-    let coo = CooMatrix::from_triplets(shape, data, rows, cols, false)?;
-    coo.to_csr()
+    let indices: Vec<usize> = (0..size).collect();
+    let indptr: Vec<usize> = (0..=size).collect();
+    CsrMatrix::from_components(shape, data, indices, indptr, true)
 }
 
 /// Construct a square sparse identity matrix.
