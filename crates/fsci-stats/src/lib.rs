@@ -209,10 +209,34 @@ pub trait ContinuousDistribution {
         }
         ppf_bisection(|x| self.cdf(x), q, self.mean(), self.std())
     }
-    /// Inverse survival function: ppf(1 - q).
-    /// Also known as the quantile function of the survival distribution.
+    /// Inverse survival function: the `x` such that `sf(x) = q`.
+    ///
+    /// Mathematically `isf(q) = ppf(1 - q)`, but `1 - q` underflows to
+    /// exactly `1.0` once `q` drops below machine epsilon (~1.1e-16), so the
+    /// naive route returns `+inf` for every distribution in the deep right
+    /// tail (per frankenscipy isf-tail audit: `norm.isf(1e-30)` gave `inf`
+    /// vs SciPy's `~11.46`). When `1 - q` is exactly representable we keep the
+    /// historical `ppf(1 - q)` route bit-for-bit; otherwise we invert the
+    /// precision-preserving survival function `sf(x) = q` directly.
     fn isf(&self, q: f64) -> f64 {
-        self.ppf(1.0 - q)
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return f64::INFINITY;
+        }
+        if q == 1.0 {
+            return f64::NEG_INFINITY;
+        }
+        let p = 1.0 - q;
+        if p < 1.0 {
+            // 1 - q is representable: identical to the historical behaviour.
+            return self.ppf(p);
+        }
+        // Deep right tail: 1 - q rounds to 1.0, so ppf(1 - q) loses all
+        // precision. Invert sf(x) = q on the (overridden, accurate) survival
+        // function instead.
+        isf_bisection(|x| self.sf(x), q, self.mean(), self.std())
     }
     /// Mean of the distribution.
     fn mean(&self) -> f64;
@@ -602,6 +626,64 @@ fn ppf_bisection(cdf: impl Fn(f64) -> f64, q: f64, mean: f64, std: f64) -> f64 {
             return mid;
         }
         if cdf(mid) < q {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    0.5 * (lo + hi)
+}
+
+/// Generic inverse survival function via bisection: find `x` with `sf(x) = q`.
+///
+/// Mirror of [`ppf_bisection`] for the *decreasing* survival function. Used by
+/// the default `isf` only in the deep right tail where `1 - q` underflows to
+/// `1.0` and the `ppf(1 - q)` route would lose all precision. The bracket
+/// expansion tolerates heavy tails (many doublings) while keeping `hi` finite.
+fn isf_bisection(sf: impl Fn(f64) -> f64, q: f64, mean: f64, std: f64) -> f64 {
+    let half_width = if std.is_finite() && std > 0.0 {
+        10.0 * std
+    } else {
+        100.0
+    };
+    let center = if mean.is_finite() { mean } else { 0.0 };
+    let mut lo = center - half_width;
+    let mut hi = center + half_width;
+
+    // Expand hi rightward until sf(hi) <= q (sf decreasing -> deep tail).
+    let mut step = half_width.max(1.0);
+    for _ in 0..1100 {
+        if sf(hi) <= q {
+            break;
+        }
+        let next = hi + step;
+        if !next.is_finite() {
+            break;
+        }
+        hi = next;
+        step *= 2.0;
+    }
+    // Expand lo leftward until sf(lo) >= q (usually already true at the start).
+    step = half_width.max(1.0);
+    for _ in 0..1100 {
+        if sf(lo) >= q {
+            break;
+        }
+        let next = lo - step;
+        if !next.is_finite() {
+            break;
+        }
+        lo = next;
+        step *= 2.0;
+    }
+
+    for _ in 0..200 {
+        let mid = 0.5 * (lo + hi);
+        if (hi - lo).abs() < 1e-12 * mid.abs().max(1.0) {
+            return mid;
+        }
+        if sf(mid) > q {
+            // mid lies too far left (survival probability too high).
             lo = mid;
         } else {
             hi = mid;
@@ -47125,6 +47207,46 @@ mod tests {
             fitted.left.is_nan() && fitted.mode.is_nan() && fitted.right.is_nan(),
             "Triangular::fit must fail closed on zero-width samples, got {fitted:?}"
         );
+    }
+
+    #[test]
+    fn isf_deep_right_tail_matches_scipy() {
+        // Regression for the isf-tail audit: `1 - q` underflows to exactly 1.0
+        // once q < ~1.1e-16, so the historical `ppf(1 - q)` route returned +inf
+        // for every distribution in the deep right tail. The default isf now
+        // inverts sf(x) = q directly there. Golden values from
+        // scipy.stats.<dist>.isf(q) (SciPy 1.17.1).
+        let cases: &[(&str, f64, f64, f64)] = &[
+            // (label, our isf, q, scipy golden)
+            ("norm_1e-30", Normal::new(0.0, 1.0).isf(1e-30), 1e-30, 1.1464024688442578e1),
+            ("norm_1e-100", Normal::new(0.0, 1.0).isf(1e-100), 1e-100, 2.1273453560964981e1),
+            ("expon_1e-100", Exponential::new(1.0).isf(1e-100), 1e-100, 2.3025850929935905e2),
+            ("t5_1e-100", StudentT::new(5.0).isf(1e-100), 1e-100, 1.5683925590997631e20),
+            ("chi2_4_1e-30", ChiSquared::new(4.0).isf(1e-30), 1e-30, 1.4677366344602950e2),
+            ("gamma2_1e-100", GammaDist::new(2.0, 1.0).isf(1e-100), 1e-100, 2.3572541016191974e2),
+            ("cauchy_1e-100", Cauchy::new(0.0, 1.0).isf(1e-100), 1e-100, 3.1830988618377588e99),
+            ("rayleigh_1e-30", Rayleigh::new(1.0).isf(1e-30), 1e-30, 1.1753940002386489e1),
+            ("weibull_1e-100", Weibull::new(1.5, 1.0).isf(1e-100), 1e-100, 3.7567341186477364e1),
+        ];
+        for &(label, ours, _q, golden) in cases {
+            assert!(ours.is_finite(), "{label}: isf must be finite in the deep tail, got {ours}");
+            let rel = (ours - golden).abs() / golden.abs();
+            assert!(rel < 1e-9, "{label}: isf {ours} vs scipy {golden} (rel {rel:.3e})");
+        }
+    }
+
+    #[test]
+    fn isf_common_range_unchanged_from_ppf() {
+        // For q where 1 - q is representable, isf must remain byte-identical to
+        // the historical ppf(1 - q) route (no regression on tested cases).
+        let n = Normal::new(0.0, 1.0);
+        for &q in &[1e-6, 1e-3, 0.1, 0.5, 0.9, 0.999, 0.999_999] {
+            assert_eq!(n.isf(q).to_bits(), n.ppf(1.0 - q).to_bits(), "norm isf({q})");
+        }
+        let g = GammaDist::new(2.0, 1.0);
+        for &q in &[1e-4, 1e-2, 0.25, 0.75, 0.99] {
+            assert_eq!(g.isf(q).to_bits(), g.ppf(1.0 - q).to_bits(), "gamma isf({q})");
+        }
     }
 
     #[test]
