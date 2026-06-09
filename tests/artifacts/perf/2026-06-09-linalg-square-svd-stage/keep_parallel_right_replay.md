@@ -86,4 +86,4 @@ bidiagonal_svd_ms=51.810
 back_transform_v_ms=26.628
 ```
 
-The next no-gaps primitive should attack the Golub-Kahan reduction or bidiagonal SVD backend with a fundamentally different communication-avoiding/cache-blocked kernel, not another right-replay micro-lever.
+The post-keep broad `route_perf_probe` reprofile on `ovh-a` passed all 9 public route probes and still points at square `svd()` as the largest absolute SVD-family route (`PUBLIC_SQUARE_SVD_ROUTE_PERF routed_ms=257.567465` in the broad multi-probe run; a repeated isolated square probe on `vmi1227854` reported `routed_ms=231.031053`). The next no-gaps primitive should attack the Golub-Kahan reduction or bidiagonal SVD backend with a fundamentally different communication-avoiding/cache-blocked kernel, not another right-replay micro-lever.
