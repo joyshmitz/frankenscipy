@@ -1541,8 +1541,22 @@ fn interpolation_knots(x: &[f64], k: usize) -> Vec<f64> {
     for _ in 0..=k {
         t.push(x[0]);
     }
-    for i in 0..num_interior {
-        t.push(x[i + 1 + (k - 1) / 2]);
+    // Match scipy.interpolate._bsplines._not_a_knot. For odd degree the interior knots are
+    // the data sites x[k2 + i]; for even degree they are the Greville midpoints
+    // (x[j] + x[j+1])/2 with the outermost omitted, a la not-a-knot. The odd branch is
+    // bit-identical to the previous `x[i + 1 + (k-1)/2]` (since 1 + (k-1)/2 == (k+1)/2 for
+    // odd k), so only even-degree splines change.
+    if k % 2 == 1 {
+        let k2 = (k + 1) / 2;
+        for i in 0..num_interior {
+            t.push(x[k2 + i]);
+        }
+    } else {
+        let k2 = k / 2;
+        for i in 0..num_interior {
+            let j = k2 + i;
+            t.push((x[j] + x[j + 1]) / 2.0);
+        }
     }
     for _ in 0..=k {
         t.push(x[n - 1]);
