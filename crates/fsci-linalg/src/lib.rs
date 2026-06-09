@@ -11143,10 +11143,16 @@ pub fn eye(n: usize, m: usize) -> Vec<Vec<f64>> {
 /// Matrix-matrix multiplication C = A * B.
 ///
 /// Matches `numpy.matmul` / `A @ B`.
-const MATMUL_FLAT_WORKSPACE_MIN_DIM: usize = 1024;
+const MATMUL_FLAT_WORKSPACE_MIN_DIM: usize = 512;
 
 fn rows_are_rectangular(rows: &[Vec<f64>], width: usize) -> bool {
     rows.iter().all(|row| row.len() == width)
+}
+
+fn matmul_flat_workspace_candidate_dims(m: usize, ka: usize, n: usize) -> bool {
+    m >= MATMUL_FLAT_WORKSPACE_MIN_DIM
+        && ka >= MATMUL_FLAT_WORKSPACE_MIN_DIM
+        && n >= MATMUL_FLAT_WORKSPACE_MIN_DIM
 }
 
 /// Compute output rows `[row_start, row_end)` of the flat-workspace GEMM into
@@ -11400,9 +11406,7 @@ pub fn matmul(a: &[Vec<f64>], b: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, LinalgErr
             b_len: kb,
         });
     }
-    if m >= MATMUL_FLAT_WORKSPACE_MIN_DIM
-        && ka >= MATMUL_FLAT_WORKSPACE_MIN_DIM
-        && n >= MATMUL_FLAT_WORKSPACE_MIN_DIM
+    if matmul_flat_workspace_candidate_dims(m, ka, n)
         && rows_are_rectangular(a, ka)
         && rows_are_rectangular(b, n)
         && let Some(c) = matmul_flat_workspace(a, b, m, ka, n)
@@ -12013,12 +12017,14 @@ mod tests {
     }
 
     /// Isomorphism proof for the deep flat-workspace GEMM primitive
-    /// [frankenscipy-8l8r1.19]: direct helper exercise keeps the public dispatch
-    /// gate at 1024 while proving full tiles and ragged edges are bit-identical
-    /// to naive ijk accumulation.
+    /// [frankenscipy-8l8r1.19]: direct helper exercise proves full tiles and
+    /// ragged edges are bit-identical to naive ijk accumulation. The medium
+    /// public dispatch gate is covered by `matmul_medium_flat_workspace_route_golden_digest`.
     #[test]
     fn matmul_flat_workspace_is_bit_identical_to_naive_ijk() {
-        assert_eq!(MATMUL_FLAT_WORKSPACE_MIN_DIM, 1024);
+        assert_eq!(MATMUL_FLAT_WORKSPACE_MIN_DIM, 512);
+        assert!(!matmul_flat_workspace_candidate_dims(256, 256, 256));
+        assert!(matmul_flat_workspace_candidate_dims(512, 512, 512));
 
         let make_matrix = |rows: usize, cols: usize, seed: u64| -> Vec<Vec<f64>> {
             (0..rows)
@@ -12064,6 +12070,55 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Golden-output proof for the medium public GEMM route [frankenscipy-8l8r1.72].
+    /// The 512x512 case now crosses the flat-workspace dispatch gate. The helper
+    /// and public path are both k-monotonic, so this freezes route selection and
+    /// every output bit without introducing a default-test runtime cost.
+    #[test]
+    #[ignore = "large medium-GEMM route proof; run explicitly in --release"]
+    fn matmul_medium_flat_workspace_route_golden_digest() {
+        let n = MATMUL_FLAT_WORKSPACE_MIN_DIM;
+        let a: Vec<Vec<f64>> = (0..n)
+            .map(|i| {
+                (0..n)
+                    .map(|j| ((i * 31 + j * 17) % 97) as f64 * 0.01)
+                    .collect()
+            })
+            .collect();
+        let b: Vec<Vec<f64>> = (0..n)
+            .map(|i| {
+                (0..n)
+                    .map(|j| ((i * 13 + j * 7) % 89) as f64 * 0.01)
+                    .collect()
+            })
+            .collect();
+
+        let public = matmul(&a, &b).expect("public matmul");
+        let direct = matmul_flat_workspace(&a, &b, n, n, n).expect("flat workspace dimensions fit");
+
+        let mut digest: u64 = 0xcbf2_9ce4_8422_2325;
+        for (row_idx, (public_row, direct_row)) in public.iter().zip(direct.iter()).enumerate() {
+            for (col_idx, (&actual, &expected)) in
+                public_row.iter().zip(direct_row.iter()).enumerate()
+            {
+                assert_eq!(
+                    actual.to_bits(),
+                    expected.to_bits(),
+                    "medium flat-workspace route drifted at ({row_idx},{col_idx})"
+                );
+                for byte in actual.to_bits().to_le_bytes() {
+                    digest ^= byte as u64;
+                    digest = digest.wrapping_mul(0x0000_0100_0000_01b3);
+                }
+            }
+        }
+        println!("matmul_medium_flat_route_golden_digest={digest:#018x}");
+        assert_eq!(
+            digest, 0x5fd3_7bf0_53d5_4fb0,
+            "medium flat-workspace route golden digest changed (got {digest:#018x})"
+        );
     }
 
     /// Correctness of the in-house blocked LU solver: it must match the reference

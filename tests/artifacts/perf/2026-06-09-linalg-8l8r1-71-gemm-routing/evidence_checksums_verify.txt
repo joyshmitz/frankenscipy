@@ -1,0 +1,12 @@
+tests/artifacts/perf/2026-06-09-linalg-8l8r1-71-gemm-routing/after_matmul_criterion_rch.txt: OK
+tests/artifacts/perf/2026-06-09-linalg-8l8r1-71-gemm-routing/baseline_matmul_criterion_ovh_a_rch.txt: OK
+tests/artifacts/perf/2026-06-09-linalg-8l8r1-71-gemm-routing/baseline_matmul_criterion_rch.txt: OK
+tests/artifacts/perf/2026-06-09-linalg-8l8r1-71-gemm-routing/check_fsci_linalg_rch.txt: OK
+tests/artifacts/perf/2026-06-09-linalg-8l8r1-71-gemm-routing/clippy_fsci_linalg_rch.txt: OK
+tests/artifacts/perf/2026-06-09-linalg-8l8r1-71-gemm-routing/evidence.md: OK
+tests/artifacts/perf/2026-06-09-linalg-8l8r1-71-gemm-routing/fmt_fsci_linalg_check.txt: OK
+tests/artifacts/perf/2026-06-09-linalg-8l8r1-71-gemm-routing/proof_matmul_unit_rch.txt: OK
+tests/artifacts/perf/2026-06-09-linalg-8l8r1-71-gemm-routing/proof_medium_route_digest_first_rch.txt: OK
+tests/artifacts/perf/2026-06-09-linalg-8l8r1-71-gemm-routing/proof_medium_route_digest_rch.txt: OK
+tests/artifacts/perf/2026-06-09-linalg-8l8r1-71-gemm-routing/ubs_linalg_matmul_route.txt: OK
+tests/artifacts/perf/2026-06-09-linalg-mifdz-eigh-two-stage/post_keep_linalg_bench_reprofile_rch.txt: OK

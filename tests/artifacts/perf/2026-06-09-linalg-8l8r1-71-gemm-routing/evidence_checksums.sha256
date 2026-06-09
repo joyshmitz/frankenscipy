@@ -1,0 +1,12 @@
+d8e4fa7bafda9f3cb20e3c7dfbcf4af03e29de8d31b7af8cfbeb3c5cd2d11dba  tests/artifacts/perf/2026-06-09-linalg-8l8r1-71-gemm-routing/after_matmul_criterion_rch.txt
+521983d702af4c9e16faec7026c8c31b30dd5b1d52f7fa0f26e75362390edd50  tests/artifacts/perf/2026-06-09-linalg-8l8r1-71-gemm-routing/baseline_matmul_criterion_ovh_a_rch.txt
+b4a3a3e1598bd2e6045d269229b08f0aeb9f5aca3e987d4cc25f72003f6a8095  tests/artifacts/perf/2026-06-09-linalg-8l8r1-71-gemm-routing/baseline_matmul_criterion_rch.txt
+b813eeb5253966fc2c26d2bb57d0ac1403f1a6b03970e96a2591c3d6d88aef51  tests/artifacts/perf/2026-06-09-linalg-8l8r1-71-gemm-routing/check_fsci_linalg_rch.txt
+c04474ac4977e50ff028942180ff0243c99e9ddbb2147ce6275e7ade647cbe46  tests/artifacts/perf/2026-06-09-linalg-8l8r1-71-gemm-routing/clippy_fsci_linalg_rch.txt
+f964b7da0b34b77d08db82bb834398963441aecfd3c8c4136a17c4987dc313d6  tests/artifacts/perf/2026-06-09-linalg-8l8r1-71-gemm-routing/evidence.md
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  tests/artifacts/perf/2026-06-09-linalg-8l8r1-71-gemm-routing/fmt_fsci_linalg_check.txt
+2631aeaea3f9b239af44bd91fb923424b888e8b48edc059ee5290240fd53b1cb  tests/artifacts/perf/2026-06-09-linalg-8l8r1-71-gemm-routing/proof_matmul_unit_rch.txt
+5da8233ae4e4e76fb35f64024d03534207cde3cd5ccbe6cb40e95086440d1f5c  tests/artifacts/perf/2026-06-09-linalg-8l8r1-71-gemm-routing/proof_medium_route_digest_first_rch.txt
+f75db599dbb3b6745ae42350d688320cb77eb9d1dd6b2561c404e398aa148fe1  tests/artifacts/perf/2026-06-09-linalg-8l8r1-71-gemm-routing/proof_medium_route_digest_rch.txt
+c60f7ed945ec29cbb42c7f9b6d3eb58deaa0a279b2398abe3e31d1c1145ff655  tests/artifacts/perf/2026-06-09-linalg-8l8r1-71-gemm-routing/ubs_linalg_matmul_route.txt
+337569510f90619f4e2b2bf3cac6eb4f767c6c8049401c43294ed1b3bd321951  tests/artifacts/perf/2026-06-09-linalg-mifdz-eigh-two-stage/post_keep_linalg_bench_reprofile_rch.txt
