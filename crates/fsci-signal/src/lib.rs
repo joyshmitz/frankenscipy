@@ -8584,9 +8584,9 @@ pub fn firls(
     desired: &[f64],
     weight: Option<&[f64]>,
 ) -> Result<Vec<f64>, SignalError> {
-    if numtaps < 1 || numtaps.is_multiple_of(2) {
+    if numtaps < 1 {
         return Err(SignalError::InvalidArgument(
-            "numtaps must be odd and >= 1".to_string(),
+            "numtaps must be >= 1".to_string(),
         ));
     }
     if !bands.len().is_multiple_of(2) || bands.is_empty() {
@@ -8604,6 +8604,12 @@ pub fn firls(
 
     let nbands = bands.len() / 2;
     let weights: Vec<f64> = weight.map_or_else(|| vec![1.0; nbands], |w| w.to_vec());
+
+    // Even numtaps: Type-II linear-phase least-squares (the unique LS minimizer,
+    // matching scipy.signal.firls). Odd numtaps falls through to Type-I below.
+    if numtaps.is_multiple_of(2) {
+        return firls_type2(numtaps, bands, desired, &weights);
+    }
 
     let m = (numtaps - 1) / 2;
     let n_coeffs = m + 1;
@@ -8697,6 +8703,92 @@ pub fn firls(
         h[m + k] = a_coeffs[k] / 2.0;
     }
 
+    Ok(h)
+}
+
+/// Least-squares linear-phase FIR for a Type-II (even `numtaps`, symmetric)
+/// filter. The amplitude is `A(ω) = Σ_{k=1}^{m} a_k cos(ω(k-½))`, `m = N/2`, and
+/// the weighted least-squares objective `Σ_bands W ∫ (A-D)² df` is quadratic in
+/// `a`, so its unique minimizer solves the normal equations `Q a = b` with
+/// closed-form band integrals:
+///   `Q[i,j] = Σ W·½·[I(i-j) + I(i+j-1)]`,  `b[i] = Σ W·∫ D(f)cos(2πf(i-½)) df`,
+/// where `I(c) = ∫_band cos(2πfc) df`. (The `(i-½)±(j-½)` product-to-sum
+/// frequencies are the integers `i-j` and `i+j-1`.) The LS minimizer is unique,
+/// so this matches `scipy.signal.firls` for even `numtaps`. Taps recovered via
+/// `h[m-k] = h[m-1+k] = a_k/2`.
+fn firls_type2(
+    numtaps: usize,
+    bands: &[f64],
+    desired: &[f64],
+    weights: &[f64],
+) -> Result<Vec<f64>, SignalError> {
+    use std::f64::consts::PI;
+    let nbands = bands.len() / 2;
+    let m = numtaps / 2; // # cos((k-½)ω) coefficients, k = 1..=m
+
+    // I(c) = ∫_{lo}^{hi} cos(2π c f) df.
+    let integrate_cos = |c: f64, lo: f64, hi: f64| -> f64 {
+        if c.abs() < 1e-15 {
+            hi - lo
+        } else {
+            let pc = 2.0 * PI * c;
+            ((pc * hi).sin() - (pc * lo).sin()) / pc
+        }
+    };
+
+    let mut q = vec![vec![0.0_f64; m]; m];
+    let mut b_vec = vec![0.0_f64; m];
+
+    for band in 0..nbands {
+        let f_lo = bands[2 * band] / 2.0; // [0,1] Nyquist -> [0,0.5]
+        let f_hi = bands[2 * band + 1] / 2.0;
+        let d_lo = desired[2 * band];
+        let d_hi = desired[2 * band + 1];
+        let w = weights[band];
+        let df = f_hi - f_lo;
+        if df <= 0.0 {
+            continue;
+        }
+        let slope = (d_hi - d_lo) / df;
+
+        for i in 1..=m {
+            let ci = i as f64 - 0.5; // half-integer basis frequency
+            // b[i] = w ∫ (d_lo + slope*(f-f_lo)) cos(2π ci f) df  (ci never 0)
+            let pc = 2.0 * PI * ci;
+            let sin_hi = (pc * f_hi).sin();
+            let sin_lo = (pc * f_lo).sin();
+            let cos_hi = (pc * f_hi).cos();
+            let cos_lo = (pc * f_lo).cos();
+            let int_cos = (sin_hi - sin_lo) / pc;
+            // ∫ (f-f_lo) cos(2π ci f) df = df*sin_hi/pc + (cos_hi - cos_lo)/pc²
+            let int_ramp = df * sin_hi / pc + (cos_hi - cos_lo) / (pc * pc);
+            b_vec[i - 1] += w * (d_lo * int_cos + slope * int_ramp);
+
+            for j in i..=m {
+                // Q[i,j] = w·½·[I(i-j) + I(i+j-1)]
+                let qij = w
+                    * 0.5
+                    * (integrate_cos((i as f64) - (j as f64), f_lo, f_hi)
+                        + integrate_cos((i as f64) + (j as f64) - 1.0, f_lo, f_hi));
+                q[i - 1][j - 1] += qij;
+            }
+        }
+    }
+    // Mirror the upper triangle.
+    for i in 0..m {
+        for j in 0..i {
+            q[i][j] = q[j][i];
+        }
+    }
+
+    let a_coeffs = solve_symmetric(&q, &b_vec)?;
+
+    // Type-II symmetric taps (length 2m): h[m-k] = h[m-1+k] = a_k/2, k=1..=m.
+    let mut h = vec![0.0_f64; numtaps];
+    for k in 1..=m {
+        h[m - k] = a_coeffs[k - 1] / 2.0;
+        h[m - 1 + k] = a_coeffs[k - 1] / 2.0;
+    }
     Ok(h)
 }
 
@@ -18361,6 +18453,63 @@ mod tests {
         // Sum of coefficients should approximate passband gain (1.0)
         let sum: f64 = h.iter().sum();
         assert!(sum > 0.5 && sum < 1.5, "filter sum = {sum}, expected ~1.0");
+    }
+
+    #[test]
+    fn firls_type2_is_least_squares_optimal() {
+        use std::f64::consts::PI;
+        // Type-II (even numtaps) least-squares lowpass. No scipy fixture in-env,
+        // but the weighted-LS minimizer is UNIQUE, so verifying the optimality
+        // condition ∫_bands W·(A-D)·cos(2πf(k-½)) df = 0 for every basis index k
+        // proves it equals scipy.signal.firls. The condition is evaluated by
+        // numerical quadrature on the ACTUAL designed response — independent of
+        // the closed-form normal-equation integrals used to build it.
+        let numtaps = 12usize;
+        let m = numtaps / 2;
+        let bands = [0.0, 0.4, 0.5, 1.0]; // Nyquist-normalized; passband 1, stop 0
+        let desired = [1.0, 1.0, 0.0, 0.0];
+        let h = firls(numtaps, &bands, &desired, None).unwrap();
+        assert_eq!(h.len(), numtaps);
+        for n in 0..numtaps {
+            assert!(
+                (h[n] - h[numtaps - 1 - n]).abs() < 1e-12,
+                "type-II firls taps must be symmetric at {n}"
+            );
+        }
+        // Zero-phase amplitude A(f) = Σ h[n] cos(2πf(n-(N-1)/2)).
+        let c = (numtaps as f64 - 1.0) / 2.0;
+        let amp = |f: f64| -> f64 {
+            (0..numtaps)
+                .map(|n| h[n] * (2.0 * PI * f * (n as f64 - c)).cos())
+                .sum()
+        };
+        // Desired (in [0,0.5] normalized) and per-band weight (all 1 here).
+        let d_of = |f: f64| -> Option<f64> {
+            if f <= 0.2 {
+                Some(1.0)
+            } else if f >= 0.25 {
+                Some(0.0)
+            } else {
+                None // transition band: unconstrained
+            }
+        };
+        // Optimality residual for each basis frequency (k-½), via dense quadrature.
+        let nq = 200_000usize;
+        for k in 1..=m {
+            let ck = k as f64 - 0.5;
+            let mut integral = 0.0f64;
+            for i in 0..nq {
+                let f = 0.5 * (i as f64 + 0.5) / nq as f64; // midpoint over [0,0.5]
+                if let Some(d) = d_of(f) {
+                    integral += (amp(f) - d) * (2.0 * PI * f * ck).cos();
+                }
+            }
+            integral *= 0.5 / nq as f64;
+            assert!(
+                integral.abs() < 1e-4,
+                "firls Type-II not LS-optimal: ∂/∂a_{k} residual = {integral}"
+            );
+        }
     }
 
     #[test]
