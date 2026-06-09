@@ -6862,21 +6862,18 @@ impl DiscreteDistribution for BetaBinomial {
     }
 
     fn kurtosis(&self) -> f64 {
-        let n = self.n as f64;
-        let a = self.a;
-        let b = self.b;
-        let ab = a + b;
-        let ab1 = ab + 1.0;
-        let ab2 = ab + 2.0;
-        let ab3 = ab + 3.0;
-        let abn = ab + n;
-        let num = (ab1 * ab * ab * (ab * (ab1 + 3.0 * n) + n * (n - 1.0) * 6.0))
-            / (n * a * b * abn)
-            + ab * ab * (ab1 - 6.0) / (a * b)
-            + 3.0 * ab * ab * (1.0 - 2.0 * ab) / (n * a * b)
-            - 18.0 * ab * ab / (a * b * abn);
-        let den = ab2 * ab3;
-        num / den - 3.0
+        // Excess (Fisher) kurtosis. The hand-rolled closed form was wrong
+        // (betabinom(20,2,3) gave -0.824 vs scipy -0.657); compute the 4th
+        // central moment exactly from the finite (n+1)-term pmf instead, which
+        // matches scipy.stats.betabinom to machine precision.
+        let mu = self.mean();
+        let var = self.var();
+        let mut m4 = 0.0_f64;
+        for k in 0..=self.n {
+            let d = k as f64 - mu;
+            m4 += self.pmf(k) * d * d * d * d;
+        }
+        m4 / (var * var) - 3.0
     }
 
     fn mode(&self) -> f64 {
@@ -64039,6 +64036,25 @@ mod tests {
         assert!(mu > 0.0 && mu.is_finite());
         assert!(nhg.var() > 0.0);
         assert!((nhg.cdf(0) - nhg.pmf(0)).abs() < 1e-14);
+    }
+
+    #[test]
+    fn betabinom_excess_kurtosis_matches_scipy() {
+        // Regression: the closed-form kurtosis was wrong; the pmf-based moment
+        // sum matches scipy.stats.betabinom(n,a,b).stats('k') (golden values).
+        let cases: &[(u64, f64, f64, f64)] = &[
+            (20, 2.0, 3.0, -0.657_142_857_142_857_2),
+            (10, 0.5, 0.5, -1.509_090_909_090_909),
+            (30, 5.0, 2.0, -0.127_063_063_063_063_1),
+            (15, 1.5, 4.0, -0.087_434_242_021_645_8),
+        ];
+        for &(n, a, b, golden) in cases {
+            let k = BetaBinomial::new(n, a, b).kurtosis();
+            assert!(
+                (k - golden).abs() < 1e-9,
+                "betabinom({n},{a},{b}).kurtosis() = {k}, scipy {golden}"
+            );
+        }
     }
 
     #[test]
