@@ -2,8 +2,8 @@ use std::time::Duration;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use fsci_linalg::{
-    InvOptions, LstsqOptions, PinvOptions, SolveOptions, TriangularSolveOptions, det, inv, lstsq,
-    matmul, pinv, solve, solve_banded, solve_triangular,
+    DecompOptions, InvOptions, LstsqOptions, PinvOptions, SolveOptions, TriangularSolveOptions,
+    det, eigh, inv, lstsq, matmul, pinv, solve, solve_banded, solve_triangular,
 };
 use fsci_runtime::RuntimeMode;
 
@@ -12,6 +12,7 @@ use fsci_runtime::RuntimeMode;
 const SIZES: &[usize] = &[4, 16, 64, 256];
 const BASELINE_SIZES: &[usize] = &[100, 500, 1000, 2000, 4000];
 const MATMUL_SIZES: &[usize] = &[256, 512, 768, 1024];
+const EIGH_SIZES: &[usize] = &[256, 512];
 
 /// Diagonally-dominant matrix: guaranteed non-singular, well-conditioned.
 fn make_diag_dominant(n: usize) -> Vec<Vec<f64>> {
@@ -87,6 +88,22 @@ fn make_matmul_matrix(rows: usize, cols: usize, seed: usize) -> Vec<Vec<f64>> {
                 .collect()
         })
         .collect()
+}
+
+fn make_symmetric_eigh_matrix(n: usize) -> Vec<Vec<f64>> {
+    let mut a = vec![vec![0.0; n]; n];
+    for i in 0..n {
+        for j in 0..=i {
+            let value = if i == j {
+                (n as f64) * 3.0 + (i as f64) * 0.01
+            } else {
+                1.0 / ((i - j + 1) as f64)
+            };
+            a[i][j] = value;
+            a[j][i] = value;
+        }
+    }
+    a
 }
 
 // ── solve ──────────────────────────────────────────────────────────────────────
@@ -203,6 +220,21 @@ fn bench_matmul(c: &mut Criterion) {
     group.finish();
 }
 
+// ── eigh ──────────────────────────────────────────────────────────────────────
+
+fn bench_eigh_dense(c: &mut Criterion) {
+    let mut group = c.benchmark_group("eigh_dense");
+    group.sample_size(10);
+    group.measurement_time(Duration::from_secs(5));
+    for &n in EIGH_SIZES {
+        let a = make_symmetric_eigh_matrix(n);
+        group.bench_function(format!("{n}x{n}"), |bencher| {
+            bencher.iter(|| eigh(std::hint::black_box(&a), DecompOptions::default()).unwrap());
+        });
+    }
+    group.finish();
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // BASELINE BENCHMARKS - Per SPEC §17, capture p50/p95/p99 at standard sizes
 // Run with: cargo bench --bench linalg_bench -- baseline
@@ -269,7 +301,8 @@ criterion_group!(
     bench_det,
     bench_lstsq,
     bench_pinv,
-    bench_matmul
+    bench_matmul,
+    bench_eigh_dense
 );
 
 criterion_group!(
