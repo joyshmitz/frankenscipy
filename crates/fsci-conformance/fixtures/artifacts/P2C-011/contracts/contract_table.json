@@ -331,6 +331,38 @@
       }
     },
     {
+      "function_name": "fsci_signal::savgol_filter (mode=constant)",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-08
+      }
+    },
+    {
+      "function_name": "fsci_signal::savgol_filter (mode=mirror)",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-08
+      }
+    },
+    {
+      "function_name": "fsci_signal::savgol_filter (mode=wrap)",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-08
+      }
+    },
+    {
+      "function_name": "fsci_signal::savgol_filter (scipy default mode=interp)",
+      "tolerance_policy": {
+        "comparison_mode": "allclose",
+        "default_atol": 1e-10,
+        "default_rtol": 1e-08
+      }
+    },
+    {
       "function_name": "fsci_signal::taylor",
       "scipy_equivalent": "scipy.signal.windows.taylor",
       "tolerance_policy": {
