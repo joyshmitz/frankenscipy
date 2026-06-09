@@ -538,17 +538,18 @@ fn ellipkinc_scalar_phi_over_m_vec(phi: f64, m_values: &[f64], mode: RuntimeMode
     }
 
     // Carlson form per m (machine-accurate near m→1). frankenscipy-o65r0.
-    let values = m_values
-        .iter()
-        .copied()
-        .map(|m| {
-            if m == 0.0 {
-                0.5 * phi * GAUSS_LEGENDRE_15_WEIGHT_SUM
-            } else {
-                ellipkinc_carlson(phi, m, mode)
-            }
+    // Each m is an independent, expensive iterative R_F evaluation written to its own
+    // output slot; chunking across cores and concatenating in index order is bit-identical
+    // to the serial `m_values.iter().map(..).collect()` (par_map_indices gates n<256 to the
+    // sequential path). The kernel reads no shared mutable state, so the result is unchanged.
+    let values = par_map_indices(m_values.len(), |i| {
+        let m = m_values[i];
+        Ok(if m == 0.0 {
+            0.5 * phi * GAUSS_LEGENDRE_15_WEIGHT_SUM
+        } else {
+            ellipkinc_carlson(phi, m, mode)
         })
-        .collect::<Vec<_>>();
+    })?;
     Ok(SpecialTensor::RealVec(values))
 }
 

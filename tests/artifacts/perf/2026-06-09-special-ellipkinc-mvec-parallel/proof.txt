@@ -1,0 +1,24 @@
+[perf] Parallelize ellipkinc scalar-phi-over-m-vector Carlson fast path (frankenscipy-xtknd)
+Crate: fsci-special  File: crates/fsci-special/src/elliptic.rs (ellipkinc_scalar_phi_over_m_vec)
+Worker: rch remote vmi1227854   Profile: release-perf
+
+LEVER: the scalar-phi-over-m-vector fast path mapped the iterative Carlson R_F kernel
+(ellipkinc_carlson) over m_values with a serial .map().collect::<Vec<_>>(). Replaced with
+the crate-local par_map_indices, which fans index chunks across cores and concatenates in
+index order (gates n<256 -> sequential). Each m is an independent expensive scalar eval to
+its own output slot; the kernel reads no shared mutable state => bit-identical to serial.
+
+ISOMORPHISM / BYTE-IDENTITY (same-process golden xor of output bits, unchanged across builds):
+  n=100    ellipkinc xor=3cd4ebdc93e8de11   (serial == parallel)
+  n=5000   ellipkinc xor=cbb3753b539285ac   (serial == parallel)
+  n=50000  ellipkinc xor=8dd9facad80408b0   (serial == parallel)
+  timing-acc n=1e6 c06444af0434b318, n=2e6 a7359da1ac6c447d  (serial == parallel)
+
+TIMING (same worker, same-process A/B across the edit):
+  n=1,000,000:  serial 155.768 ms/call -> parallel 14.727 ms/call  = 10.58x  (repeat 14.487 ms)
+  n=2,000,000:  serial 302.079 ms/call -> parallel 21.283 ms/call  = 14.19x  (repeat 22.092 ms)
+  Score = 10.58 (min observed) >> 2.0
+
+TESTS: cargo test -p fsci-special --lib elliptic => 102 passed; 0 failed
+  (incl. incomplete_elliptic_m_zero_preserves_quadrature_bits byte guard)
+CLIPPY: cargo clippy -p fsci-special --no-deps => clean (pre-existing gamma must_use warning only)
