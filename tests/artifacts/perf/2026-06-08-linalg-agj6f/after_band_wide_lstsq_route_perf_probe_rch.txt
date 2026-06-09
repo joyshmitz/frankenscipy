@@ -1,0 +1,10 @@
+PUBLIC_BAND_WIDE_LSTSQ_ROUTE_PERF_BEGIN
+shape=256x320
+reference_lstsq_ms=117.641408
+routed_lstsq_ms=29.972350
+lstsq_speedup=3.924998
+lstsq_rank=256
+lstsq_max_abs_diff=1.79362167479490964e-13
+routed_solution_norm=5.22035601626306356e0
+reference_solution_norm=5.22035601626307244e0
+PUBLIC_BAND_WIDE_LSTSQ_ROUTE_PERF_END

@@ -8101,7 +8101,11 @@ fn pinv_full_rank_tall_cholesky_with_min_cols(
     let rows = matrix.nrows();
     let cols = matrix.ncols();
     let default_rtol = (rows.max(cols) as f64) * f64::EPSILON;
-    if rows < cols.saturating_mul(2)
+    // Any strictly-tall full-column-rank matrix qualifies (not just rows>=2*cols);
+    // the thin-SVD candidate is itself 2x-gated, so the 1<rows/cols<2 band would
+    // otherwise fall to the full SVD. The right-inverse acceptance check below
+    // measures achieved accuracy and rejects (→ SVD fallback) on uncertainty.
+    if rows <= cols
         || cols < min_cols
         || atol != 0.0
         || rtol > default_rtol
@@ -8370,9 +8374,12 @@ fn lstsq_min_norm_wide_cholesky(
 ) -> Option<FullRowRankWideLstsqResult> {
     let rows = matrix.nrows();
     let cols = matrix.ncols();
-    // Wide mirror of the tall guard: the small dimension is `rows`, and we
-    // require the matrix to be comfortably wide (`cols >= 2*rows`).
-    if cols < rows.saturating_mul(2)
+    // Wide mirror of the tall guard: the small dimension is `rows`. Any
+    // strictly-wide full-row-rank matrix qualifies (not just cols>=2*rows); the
+    // 1<cols/rows<2 band would otherwise fall to the full SVD. The
+    // refinement-convergence gate below guarantees accuracy and falls back to
+    // SVD on uncertainty.
+    if cols <= rows
         || rows < FULL_RANK_TALL_PINV_MIN_COLS
         || rhs.len() != rows
         || matrix.iter().any(|value| !value.is_finite())
@@ -16122,6 +16129,108 @@ mod tests {
 
         assert_eq!(routed.rank, cols);
         assert!(max_abs_diff <= 1e-7);
+    }
+
+    #[test]
+    #[ignore = "perf probe: run with rch and --release for the 1<ratio<2 tall pinv band"]
+    fn public_band_tall_pinv_route_perf_probe() {
+        let original = bidiag_deterministic_matrix(320, 256);
+        let rows = original.nrows();
+        let cols = original.ncols();
+        let matrix_rows = rows_from_dmatrix(&original);
+
+        let reference_start = std::time::Instant::now();
+        let reference_svd =
+            safe_svd(std::hint::black_box(original.clone()), true, true).expect("reference SVD");
+        let reference_max_s = reference_svd
+            .singular_values
+            .iter()
+            .copied()
+            .fold(0.0_f64, f64::max);
+        let reference_threshold = public_bidiag_default_threshold(rows, cols, reference_max_s);
+        let reference_pinv =
+            pseudo_inverse_from_svd(&reference_svd, reference_threshold).expect("reference pinv");
+        let reference_ms = reference_start.elapsed().as_secs_f64() * 1e3;
+
+        let routed_start = std::time::Instant::now();
+        let routed =
+            pinv(std::hint::black_box(&matrix_rows), PinvOptions::default()).expect("routed pinv");
+        let routed_ms = routed_start.elapsed().as_secs_f64() * 1e3;
+
+        let pinv_max_abs_diff = max_abs_dmatrix_diff(
+            &dmatrix_from_rows(&routed.pseudo_inverse).expect("routed pinv matrix"),
+            &reference_pinv,
+        );
+
+        println!("PUBLIC_BAND_TALL_PINV_ROUTE_PERF_BEGIN");
+        println!("shape={rows}x{cols}");
+        println!("reference_pinv_ms={reference_ms:.6}");
+        println!("routed_pinv_ms={routed_ms:.6}");
+        println!("pinv_speedup={:.6}", reference_ms / routed_ms);
+        println!("pinv_rank={}", routed.rank);
+        println!("pinv_max_abs_diff={pinv_max_abs_diff:.17e}");
+        println!("PUBLIC_BAND_TALL_PINV_ROUTE_PERF_END");
+
+        assert_eq!(routed.rank, cols);
+        assert!(pinv_max_abs_diff <= 1e-7);
+    }
+
+    #[test]
+    #[ignore = "perf probe: run with rch and --release for the 1<ratio<2 wide lstsq band"]
+    fn public_band_wide_lstsq_route_perf_probe() {
+        let original = bidiag_deterministic_matrix(256, 320);
+        let rows = original.nrows();
+        let cols = original.ncols();
+        let matrix_rows = rows_from_dmatrix(&original);
+        let rhs_values: Vec<f64> = (0..rows)
+            .map(|idx| ((idx * 29 + 3) % 43) as f64 - 17.0)
+            .collect();
+        let rhs = DVector::from_column_slice(&rhs_values);
+
+        let reference_start = std::time::Instant::now();
+        let reference_svd =
+            safe_svd(std::hint::black_box(original.clone()), true, true).expect("reference SVD");
+        let reference_max_s = reference_svd
+            .singular_values
+            .iter()
+            .copied()
+            .fold(0.0_f64, f64::max);
+        let reference_threshold = f64::EPSILON * reference_max_s;
+        let reference_x =
+            least_squares_solution_from_svd(&reference_svd, reference_threshold, &rhs)
+                .expect("reference min-norm lstsq");
+        let reference_ms = reference_start.elapsed().as_secs_f64() * 1e3;
+
+        let routed_start = std::time::Instant::now();
+        let routed = lstsq(
+            std::hint::black_box(&matrix_rows),
+            std::hint::black_box(&rhs_values),
+            LstsqOptions::default(),
+        )
+        .expect("routed lstsq");
+        let routed_ms = routed_start.elapsed().as_secs_f64() * 1e3;
+
+        let mut max_abs_diff = 0.0_f64;
+        for (&actual, &expected) in routed.x.iter().zip(reference_x.iter()) {
+            max_abs_diff = max_abs_diff.max((actual - expected).abs());
+        }
+        let routed_norm = routed.x.iter().map(|v| v * v).sum::<f64>().sqrt();
+        let reference_norm = reference_x.iter().map(|v| v * v).sum::<f64>().sqrt();
+
+        println!("PUBLIC_BAND_WIDE_LSTSQ_ROUTE_PERF_BEGIN");
+        println!("shape={rows}x{cols}");
+        println!("reference_lstsq_ms={reference_ms:.6}");
+        println!("routed_lstsq_ms={routed_ms:.6}");
+        println!("lstsq_speedup={:.6}", reference_ms / routed_ms);
+        println!("lstsq_rank={}", routed.rank);
+        println!("lstsq_max_abs_diff={max_abs_diff:.17e}");
+        println!("routed_solution_norm={routed_norm:.17e}");
+        println!("reference_solution_norm={reference_norm:.17e}");
+        println!("PUBLIC_BAND_WIDE_LSTSQ_ROUTE_PERF_END");
+
+        assert_eq!(routed.rank, rows);
+        assert!(max_abs_diff <= 1e-7);
+        assert!((routed_norm - reference_norm).abs() <= 1e-7 * reference_norm.max(1.0));
     }
 
     #[test]

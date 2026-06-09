@@ -1,0 +1,7 @@
+PUBLIC_BAND_TALL_PINV_ROUTE_PERF_BEGIN
+reference_pinv_ms=81.422282
+routed_pinv_ms=7.971328
+pinv_speedup=10.214394
+pinv_rank=256
+pinv_max_abs_diff=8.44949110678783200e-14
+PUBLIC_BAND_TALL_PINV_ROUTE_PERF_END
