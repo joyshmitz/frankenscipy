@@ -1,0 +1,4 @@
+681cae15d8ef65e8758b82d24d3700b756c8e0bac4f17b34a0ab9d24336a19a5  tests/artifacts/perf/2026-06-09-linalg-8l8r1-75/baseline_eigh_dense_criterion_rch.txt
+be36b0121dac47a3fd54ba6b9cc7b05fbbc53a7c08bdd645c4a082f31224c740  tests/artifacts/perf/2026-06-09-linalg-8l8r1-75/baseline_eigh_public_golden_rch.txt
+92c3f22508e23c0d0fc10dd877925b6ca1f1359cc257b77a3a07efee958bd04f  tests/artifacts/perf/2026-06-09-linalg-8l8r1-75/after_sbr_candidate_probe_rch.txt
+1b9afab35d94ee438f1f2a4aebcf7649b35e57bda71fab10a250c03d92df419f  tests/artifacts/perf/2026-06-09-linalg-8l8r1-75/reject_scalar_sbr_candidate.md
