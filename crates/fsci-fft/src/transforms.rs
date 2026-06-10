@@ -3520,8 +3520,20 @@ fn hfft_impl(
         }
     });
     let conjugated: Vec<Complex64> = input.iter().copied().map(complex_conj).collect();
-    let mut result = irfft_impl(&conjugated, Some(out_len), options, audit_ledger)?;
-    let scale = out_len as f64;
+    // hfft is a FORWARD transform: scipy normalizes it like fft (backward → 1,
+    // ortho → 1/√n, forward → 1/n). Run the inner irfft with BACKWARD
+    // normalization (which yields R/n for the unscaled real transform R), then
+    // apply the hfft scale — otherwise the inner irfft applies the inverse
+    // normalization AND the outer `*out_len` double-counts it (ortho was off by
+    // n, forward by n²).
+    let backward = options.clone().with_normalization(Normalization::Backward);
+    let mut result = irfft_impl(&conjugated, Some(out_len), &backward, audit_ledger)?;
+    let nf = out_len as f64;
+    let scale = match options.normalization {
+        Normalization::Backward => nf,
+        Normalization::Ortho => nf.sqrt(),
+        Normalization::Forward => 1.0,
+    };
     for v in &mut result {
         *v *= scale;
     }
@@ -3543,8 +3555,19 @@ fn ihfft_impl(
     let copy_len = input.len().min(in_len);
     padded[..copy_len].copy_from_slice(&input[..copy_len]);
 
-    let mut result = rfft_impl(&padded, options, audit_ledger)?;
-    let scale = 1.0 / in_len as f64;
+    // ihfft is an INVERSE transform: scipy normalizes it like ifft (backward →
+    // 1/n, ortho → 1/√n, forward → 1). Run the inner rfft with BACKWARD
+    // normalization (unscaled spectrum S), then apply the ihfft scale —
+    // otherwise the inner rfft applies the forward normalization AND the outer
+    // `1/in_len` double-counts it (ortho was off by 1/n, forward by 1/n²).
+    let backward = options.clone().with_normalization(Normalization::Backward);
+    let mut result = rfft_impl(&padded, &backward, audit_ledger)?;
+    let nf = in_len as f64;
+    let scale = match options.normalization {
+        Normalization::Backward => 1.0 / nf,
+        Normalization::Ortho => 1.0 / nf.sqrt(),
+        Normalization::Forward => 1.0,
+    };
     for c in &mut result {
         c.0 *= scale;
         c.1 *= -scale;
@@ -3578,8 +3601,18 @@ fn hfftn_impl(
     audit_ledger: Option<&SyncSharedAuditLedger>,
 ) -> Result<Vec<f64>, FftError> {
     let conjugated: Vec<Complex64> = input.iter().copied().map(complex_conj).collect();
-    let mut result = irfftn_impl(&conjugated, shape, options, audit_ledger)?;
-    let scale = result.len() as f64;
+    // Forward transform: normalize like fftn (backward → 1, ortho → 1/√N,
+    // forward → 1/N) where N = total real output size. Run the inner irfftn with
+    // BACKWARD normalization and apply the hfft scale here, so the inner
+    // normalization is not double-counted (see hfft_impl).
+    let backward = options.clone().with_normalization(Normalization::Backward);
+    let mut result = irfftn_impl(&conjugated, shape, &backward, audit_ledger)?;
+    let nf = result.len() as f64;
+    let scale = match options.normalization {
+        Normalization::Backward => nf,
+        Normalization::Ortho => nf.sqrt(),
+        Normalization::Forward => 1.0,
+    };
     for value in &mut result {
         *value *= scale;
     }
@@ -3592,8 +3625,18 @@ fn ihfftn_impl(
     options: &FftOptions,
     audit_ledger: Option<&SyncSharedAuditLedger>,
 ) -> Result<Vec<Complex64>, FftError> {
-    let mut result = rfftn_impl(input, shape, options, audit_ledger)?;
-    let scale = 1.0 / input.len() as f64;
+    // Inverse transform: normalize like ifftn (backward → 1/N, ortho → 1/√N,
+    // forward → 1). Run the inner rfftn with BACKWARD normalization and apply
+    // the ihfft scale here, so the inner normalization is not double-counted
+    // (see ihfft_impl).
+    let backward = options.clone().with_normalization(Normalization::Backward);
+    let mut result = rfftn_impl(input, shape, &backward, audit_ledger)?;
+    let nf = input.len() as f64;
+    let scale = match options.normalization {
+        Normalization::Backward => 1.0 / nf,
+        Normalization::Ortho => 1.0 / nf.sqrt(),
+        Normalization::Forward => 1.0,
+    };
     for value in &mut result {
         value.0 *= scale;
         value.1 *= -scale;
@@ -3606,12 +3649,71 @@ mod tests {
     use fsci_runtime::{AuditAction, RuntimeMode};
 
     use super::{
-        FftError, FftOptions, TransformKind, WorkerPolicy, dct, dct_iv, dctn,
+        Complex64, FftError, FftOptions, TransformKind, WorkerPolicy, dct, dct_iv,
+        dctn,
         dst_ii, dst_iii, dstn, estimate_fft_flops, fft, fft_with_audit, fft2, fftn, hfft, hfft2,
-        hfftn, idct, idctn, idstn, ifft, ifft2, ifftn, ihfft2, ihfftn, irfft, irfft2, irfftn,
+        hfftn, idct, idctn, idstn, ifft, ifft2, ifftn, ihfft, ihfft2, ihfftn, irfft, irfft2, irfftn,
         is_fast_len, next_fast_len, prev_fast_len, rfft, rfft_with_audit, rfft2, rfftn,
         sync_audit_ledger, take_transform_traces,
     };
+
+    #[test]
+    fn hfft_ihfft_match_scipy_all_norms() {
+        // Regression: hfft/ihfft passed the user's `norm` to the inner irfft/rfft
+        // AND applied their own scaling, double-counting normalization — so
+        // ortho was off by n (hfft) / 1/n (ihfft) and forward by n² / 1/n². Only
+        // the default backward norm was correct. Reference values from
+        // scipy.fft.hfft / scipy.fft.ihfft 1.17.1.
+        let opt = |n| FftOptions::default().with_normalization(n);
+
+        // hfft of a 3-point spectrum → default n = 2*(3-1) = 4 real outputs.
+        let spec: Vec<Complex64> = vec![(2.0, 0.0), (1.0, -1.0), (0.5, 0.0)];
+        let hfft_expected = [
+            (Normalization::Backward, [4.5, -0.5, 0.5, 3.5]),
+            (Normalization::Ortho, [2.25, -0.25, 0.25, 1.75]),
+            (Normalization::Forward, [1.125, -0.125, 0.125, 0.875]),
+        ];
+        for (norm, expected) in hfft_expected {
+            let got = hfft(&spec, None, &opt(norm)).expect("hfft");
+            assert_eq!(got.len(), 4);
+            for (g, e) in got.iter().zip(expected.iter()) {
+                assert!((g - e).abs() < 1e-12, "hfft {norm:?}: got {g}, want {e}");
+            }
+        }
+
+        // ihfft of a 4-point real signal → 3-point Hermitian half-spectrum.
+        let sig = [1.0, 2.0, 3.0, 4.0];
+        let ihfft_expected = [
+            (Normalization::Backward, [(2.5, 0.0), (-0.5, -0.5), (-0.5, 0.0)]),
+            (Normalization::Ortho, [(5.0, 0.0), (-1.0, -1.0), (-1.0, 0.0)]),
+            (Normalization::Forward, [(10.0, 0.0), (-2.0, -2.0), (-2.0, 0.0)]),
+        ];
+        for (norm, expected) in ihfft_expected {
+            let got = ihfft(&sig, None, &opt(norm)).expect("ihfft");
+            assert_eq!(got.len(), 3);
+            for (g, e) in got.iter().zip(expected.iter()) {
+                assert!(
+                    (g.0 - e.0).abs() < 1e-12 && (g.1 - e.1).abs() < 1e-12,
+                    "ihfft {norm:?}: got {g:?}, want {e:?}"
+                );
+            }
+        }
+
+        // N-D inverse (ihfft2) is also clean across norms: the ortho/forward
+        // result equals the backward result scaled by √N / N (the relationship
+        // the double-count violated). N = 12 for a 3×4 grid.
+        let sig2: Vec<f64> = (0..12)
+            .map(|k| (0.5 * k as f64).cos() + 0.2 * k as f64 + 0.9)
+            .collect();
+        let back = ihfft2(&sig2, (3, 4), &opt(Normalization::Backward)).expect("ihfft2 b");
+        let ortho = ihfft2(&sig2, (3, 4), &opt(Normalization::Ortho)).expect("ihfft2 o");
+        let fwd = ihfft2(&sig2, (3, 4), &opt(Normalization::Forward)).expect("ihfft2 f");
+        let n = 12.0_f64;
+        for ((b, o), f) in back.iter().zip(ortho.iter()).zip(fwd.iter()) {
+            assert!((o.0 - b.0 * n.sqrt()).abs() < 1e-10 && (o.1 - b.1 * n.sqrt()).abs() < 1e-10);
+            assert!((f.0 - b.0 * n).abs() < 1e-10 && (f.1 - b.1 * n).abs() < 1e-10);
+        }
+    }
 
     #[test]
     fn idstn_dstn_round_trip_all_norms() {
