@@ -1,0 +1,87 @@
+
+Worker Capabilities
+-------------------
+
+Local Capabilities
+    ✓ Rust : rustc 1.98.0-nightly (f20a92ec0 2026-06-07)
+    ✓ Bun  : 1.3.14
+    ✓ Node : v24.14.0
+    ✓ npm  : 11.9.0
+
+  ● vmi1149989 root@212.90.121.76
+    ✓ Rust : 1.97.0-nightly
+    ⚠ Bun  : unknown
+    ✓ Node : 20.19.4
+    ✓ npm  : 9.2.0
+    ✓ Refresh : live refresh
+
+  ● vmi1152480 root@109.205.181.92
+    ✓ Rust : 1.97.0-nightly
+    ⚠ Bun  : unknown
+    ✓ Node : 20.19.4
+    ✓ npm  : 9.2.0
+    ✓ Refresh : live refresh
+
+  ● vmi1264463 root@38.242.209.154
+    ✓ Rust : 1.95.0-nightly
+    ⚠ Bun  : unknown
+    ✓ Node : 20.19.4
+    ✓ npm  : 9.2.0
+    ✓ Refresh : live refresh
+
+  ● vmi1293453 root@149.102.137.103
+    ✓ Rust : 1.97.0-nightly
+    ⚠ Bun  : unknown
+    ✓ Node : 20.19.4
+    ✓ npm  : 9.2.0
+    ✓ Refresh : live refresh
+
+  ● ovh-b ubuntu@37.187.75.150
+    ✓ Rust : 1.97.0-nightly
+    ✓ Bun  : 1.3.5
+    ✓ Node : 25.2.1
+    ✓ npm  : 11.6.2
+    ✓ Refresh : live refresh
+
+  ● ovh-a ubuntu@51.222.245.56
+    ✓ Rust : 1.97.0-nightly
+    ✓ Bun  : 1.3.3
+    ✓ Node : 25.2.0
+    ✓ npm  : 11.6.2
+    ✓ Refresh : live refresh
+
+  ● vmi1167313 root@154.12.232.219
+    ✓ Rust : 1.97.0-nightly
+    ✓ Bun  : 1.3.10
+    ✓ Node : 20.19.4
+    ✓ npm  : 9.2.0
+    ✓ Refresh : live refresh
+
+  ● vmi1227854 root@109.123.245.77
+    ✓ Rust : 1.97.0-nightly
+    ⚠ Bun  : unknown
+    ✓ Node : 20.19.4
+    ✓ npm  : 9.2.0
+    ✓ Refresh : live refresh
+
+  ● vmi1156319 root@178.18.254.243
+    ✓ Rust : 1.97.0-nightly
+    ⚠ Bun  : unknown
+    ✓ Node : 20.19.4
+    ✓ npm  : 9.2.0
+    ✓ Refresh : live refresh
+
+  ● vmi1153651 root@38.242.134.66
+    ✓ Rust : 1.97.0-nightly
+    ⚠ Bun  : unknown
+    ✓ Node : 20.19.4
+    ✓ npm  : 9.2.0
+    ✓ Refresh : live refresh
+
+
+Warnings
+--------
+  ⚠ Rust version mismatch vs local rustc 1.98.0-nightly (f20a92ec0 2026-06-07): vmi1149989 (1.97.0-nightly), vmi1152480 (1.97.0-nightly), vmi1264463 (1.95.0-nightly), vmi1293453 (1.97.0-nightly), ovh-b (1.97.0-nightly), ovh-a (1.97.0-nightly), vmi1167313 (1.97.0-nightly), vmi1227854 (1.97.0-nightly), vmi1156319 (1.97.0-nightly), vmi1153651 (1.97.0-nightly)
+  ⚠ Workers missing Bun runtime (local: 1.3.14): vmi1149989, vmi1152480, vmi1264463, vmi1293453, vmi1227854, vmi1156319, vmi1153651
+  ⚠ Node major version mismatch vs local v24.14.0: vmi1149989 (20.19.4), vmi1152480 (20.19.4), vmi1264463 (20.19.4), vmi1293453 (20.19.4), ovh-b (25.2.1), ovh-a (25.2.0), vmi1167313 (20.19.4), vmi1227854 (20.19.4), vmi1156319 (20.19.4), vmi1153651 (20.19.4)
+  ⚠ npm major version mismatch vs local 11.9.0: vmi1149989 (9.2.0), vmi1152480 (9.2.0), vmi1264463 (9.2.0), vmi1293453 (9.2.0), vmi1167313 (9.2.0), vmi1227854 (9.2.0), vmi1156319 (9.2.0), vmi1153651 (9.2.0)

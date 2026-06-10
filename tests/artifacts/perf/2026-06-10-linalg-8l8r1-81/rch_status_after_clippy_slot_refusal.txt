@@ -1,0 +1,67 @@
+
+RCH Status
+----------
+
+  Daemon : Running (PID 2427499)
+  Uptime : 41h 42m
+  Version : 1.0.41
+  Posture : degraded (Some workers unhealthy, partial remote capability)
+  Workers : 2/10 healthy, 8/70 slots available
+  Builds : 100 total, 81% success rate
+  Tests : 52058 total, 76% pass rate, avg 39s
+  Hook : Installed
+  Saved : 2h 58m saved (2.0x speedup, 75 builds)
+           2h 58m today, 2h 58m this week
+
+
+Issues
+------
+  ● [warning] Worker 'vmi1149989' has stale/missing pressure telemetry (telemetry_unavailable)
+    Fix: telemetry ingest is daemon-driven; wait for next poll (~poll-interval) or run `rch daemon restart` to force a fresh poll cycle
+  ● [warning] Worker 'vmi1152480' has stale/missing pressure telemetry (telemetry_unavailable)
+    Fix: telemetry ingest is daemon-driven; wait for next poll (~poll-interval) or run `rch daemon restart` to force a fresh poll cycle
+  ● [warning] Worker 'vmi1264463' has stale/missing pressure telemetry (telemetry_unavailable)
+    Fix: telemetry ingest is daemon-driven; wait for next poll (~poll-interval) or run `rch daemon restart` to force a fresh poll cycle
+  ● [warning] Worker 'vmi1293453' has stale/missing pressure telemetry (telemetry_unavailable)
+    Fix: telemetry ingest is daemon-driven; wait for next poll (~poll-interval) or run `rch daemon restart` to force a fresh poll cycle
+  ● [warning] Worker 'ovh-b' has stale/missing pressure telemetry (telemetry_unavailable)
+    Fix: telemetry ingest is daemon-driven; wait for next poll (~poll-interval) or run `rch daemon restart` to force a fresh poll cycle
+  ● [error] Worker 'ovh-a' in critical pressure state (disk_ratio_below_critical)
+    Fix: rch workers capabilities --refresh (inspect pressure metrics and ballast policy)
+  ● [warning] Worker 'vmi1167313' has stale/missing pressure telemetry (telemetry_unavailable)
+    Fix: telemetry ingest is daemon-driven; wait for next poll (~poll-interval) or run `rch daemon restart` to force a fresh poll cycle
+  ● [warning] Worker 'vmi1156319' has stale/missing pressure telemetry (telemetry_unavailable)
+    Fix: telemetry ingest is daemon-driven; wait for next poll (~poll-interval) or run `rch daemon restart` to force a fresh poll cycle
+  ● [warning] Worker 'vmi1153651' has stale/missing pressure telemetry (telemetry_unavailable)
+    Fix: telemetry ingest is daemon-driven; wait for next poll (~poll-interval) or run `rch daemon restart` to force a fresh poll cycle
+  ● [info] 1 recent cancellation(s) completed cleanly with deterministic cleanup.
+    Fix: No action required. Use `rch status --json` to inspect cancellation metadata if debugging build interruptions.
+
+
+Repo Convergence
+----------------
+  State : ready (0 ready, 0 drifting, 0 failed, 0 stale)
+
+
+Remediation
+-----------
+  ! Worker vmi1149989 storage telemetry stale or missing [vmi1149989]
+    Fix: wait for next telemetry poll, or run `rch daemon restart` to force a fresh poll cycle
+  ! Worker vmi1152480 storage telemetry stale or missing [vmi1152480]
+    Fix: wait for next telemetry poll, or run `rch daemon restart` to force a fresh poll cycle
+  ! Worker vmi1264463 storage telemetry stale or missing [vmi1264463]
+    Fix: wait for next telemetry poll, or run `rch daemon restart` to force a fresh poll cycle
+  ! Worker vmi1293453 storage telemetry stale or missing [vmi1293453]
+    Fix: wait for next telemetry poll, or run `rch daemon restart` to force a fresh poll cycle
+  ! Worker ovh-b storage telemetry stale or missing [ovh-b]
+    Fix: wait for next telemetry poll, or run `rch daemon restart` to force a fresh poll cycle
+  !! Worker ovh-a under critical storage pressure (42.1 GB free) [ovh-a]
+    Fix: ssh ubuntu@51.222.245.56 'df -h / /tmp && du -sh /tmp/rch-* /tmp/rch_target_* /data/projects/*/target* 2>/dev/null'
+  ! Worker vmi1167313 storage telemetry stale or missing [vmi1167313]
+    Fix: wait for next telemetry poll, or run `rch daemon restart` to force a fresh poll cycle
+  ! Worker vmi1156319 storage telemetry stale or missing [vmi1156319]
+    Fix: wait for next telemetry poll, or run `rch daemon restart` to force a fresh poll cycle
+  ! Worker vmi1153651 storage telemetry stale or missing [vmi1153651]
+    Fix: wait for next telemetry poll, or run `rch daemon restart` to force a fresh poll cycle
+  ! Operating at reduced capacity: 2/10 workers healthy
+    Fix: rch workers probe --all
