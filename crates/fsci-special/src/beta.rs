@@ -591,6 +591,15 @@ pub fn stdtrit(v: f64, p: f64) -> f64 {
         return 0.0;
     }
 
+    // v == 1 is the standard Cauchy distribution, whose quantile is
+    // tan(π(p − 1/2)) = −cos(πp)/sin(πp). Evaluating it directly keeps full
+    // precision in the tails, where the general inverse-beta path below loses
+    // ~1e-6 (e.g. stdtrit(1, 1e-6) was off by 2.8e-6 vs scipy).
+    if v == 1.0 {
+        let pi_p = std::f64::consts::PI * p;
+        return -pi_p.cos() / pi_p.sin();
+    }
+
     // Use the inverse beta to find z = v/(v+t²)
     // For p > 0.5: z = btdtri(v/2, 1/2, 2*(1-p))
     // For p < 0.5: z = btdtri(v/2, 1/2, 2*p)
@@ -1764,6 +1773,21 @@ fn gammaln_scalar(value: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stdtrit_v1_is_exact_cauchy_in_the_tails() {
+        // v == 1 is the standard Cauchy. Verify via the independent round-trip
+        // through the Cauchy CDF F(t) = 1/2 + atan(t)/π, which must recover p.
+        // Regression: the general inverse-beta path lost ~3e-6 at p = 1e-6.
+        for &p in &[1e-8_f64, 1e-6, 1e-3, 0.01, 0.1, 0.25, 0.75, 0.9, 0.99, 0.999_999] {
+            let t = stdtrit(1.0, p);
+            let cdf = 0.5 + t.atan() / std::f64::consts::PI;
+            assert!(
+                (cdf - p).abs() < 1e-12,
+                "stdtrit(1, {p}) = {t}: CDF round-trip {cdf} != {p}"
+            );
+        }
+    }
 
     type DistributionInverseCase = (fn(f64, f64, f64) -> f64, f64, f64, f64, f64);
 
