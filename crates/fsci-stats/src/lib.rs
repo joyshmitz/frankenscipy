@@ -13349,6 +13349,29 @@ impl SkewNorm {
     fn delta(&self) -> f64 {
         self.a / (1.0 + self.a * self.a).sqrt()
     }
+
+    /// Left-tail cdf for a > 0 by direct quadrature of the pdf, avoiding the
+    /// catastrophic Φ(x) − 2·T(x,a) cancellation. The integrand
+    /// 2·φ(t)·Φ(a·t) ∝ exp(−(1+a²)t²/2) is sharply peaked at the upper limit
+    /// t = x, so a window of ~30 e-foldings below x captures the whole mass;
+    /// beyond the f64 range the pdf underflows to 0 and the integral is 0 (as
+    /// scipy returns). frankenscipy-qg05t
+    fn left_tail_cdf_quadrature(&self, x: f64) -> f64 {
+        let a = self.a;
+        let c = 1.0 + a * a;
+        let width = (30.0 / (c * x.abs())).clamp(0.05, 40.0);
+        let lo = x - width;
+        simpson_integrate_adaptive(
+            |t| 2.0 * standard_normal_pdf(t) * standard_normal_cdf(a * t),
+            lo,
+            x,
+            512,
+            1.0e-10,
+            0.0,
+            16,
+        )
+        .clamp(0.0, 1.0)
+    }
 }
 
 impl ContinuousDistribution for SkewNorm {
@@ -13368,8 +13391,18 @@ impl ContinuousDistribution for SkewNorm {
         // owens_t can lose precision and the result drifts slightly
         // outside [0, 1] — clamp to match scipy's np.clip(cdf, 0, 1).
         // Resolves [frankenscipy-r7dbb] (fuzz finding eb2vm).
-        let raw = standard_normal_cdf(x) - 2.0 * fsci_special::owens_t_scalar(x, self.a);
-        raw.clamp(0.0, 1.0)
+        let cdf = (standard_normal_cdf(x) - 2.0 * fsci_special::owens_t_scalar(x, self.a))
+            .clamp(0.0, 1.0);
+        // In the LEFT tail with a > 0, Φ(x) and 2·T(x,a) are both tiny and nearly
+        // equal, so their difference loses every significant digit — cdf(-8)
+        // drifted ~200 orders of magnitude (8e-30 vs the true ~4e-241). scipy hits
+        // the same wall and falls back to integrating the pdf when
+        // `cdf < 1e-6 and a > 0` (skewnorm._cdf). Mirror that: recompute by direct
+        // quadrature of 2·φ(t)·Φ(a·t), which has no cancellation. frankenscipy-qg05t
+        if self.a > 0.0 && x < 0.0 && cdf < 1.0e-6 {
+            return self.left_tail_cdf_quadrature(x);
+        }
+        cdf
     }
 
     fn sf(&self, x: f64) -> f64 {
@@ -44875,6 +44908,32 @@ mod tests {
                 &format!("SkewNorm({a}).cdf({x})"),
             );
         }
+    }
+
+    #[test]
+    fn skewnorm_left_tail_cdf_matches_scipy() {
+        // Regression (frankenscipy-qg05t): for a > 0 the left-tail cdf via
+        // Φ(x) − 2·T(x,a) cancels catastrophically — cdf(-8) was ~8e-30 vs the
+        // true ~4e-241 (200+ orders off). The pdf-quadrature fallback (mirroring
+        // scipy.stats.skewnorm's own `cdf<1e-6 & a>0` branch) restores it. Both
+        // libraries are quadrature-limited here, so compare with a relative
+        // tolerance; values from scipy.stats.skewnorm 1.17.1.
+        let cases: &[(f64, f64, f64)] = &[
+            (0.5, -4.0, 1.126_688_057_257_066_8e-6),
+            (1.0, -6.0, 9.733_551_814_821_875e-19),
+            (2.0, -8.0, 1.603_960_665_285_063_6e-73),
+            (4.0, -8.0, 4.043_632_862_450_817e-241),
+        ];
+        for &(a, x, want) in cases {
+            let got = SkewNorm::new(a).cdf(x);
+            let rel = (got - want).abs() / want.abs();
+            assert!(
+                rel < 1e-3,
+                "SkewNorm({a}).cdf({x}) = {got:e}, scipy {want:e} (relerr {rel:e})"
+            );
+        }
+        // Beyond the f64 range the cdf underflows to exactly 0, as scipy returns.
+        assert_eq!(SkewNorm::new(4.0).cdf(-15.0), 0.0);
     }
 
     #[test]
