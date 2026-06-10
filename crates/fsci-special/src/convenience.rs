@@ -10377,6 +10377,48 @@ mod tests {
     }
 
     #[test]
+    fn wrightomega_complex_matches_scipy_reference_points() {
+        // Regression: the complex Newton iteration on w + Log(w) = z converged to
+        // a non-principal sheet for moderate |z| (the equation has infinitely
+        // many roots), so values were wrong by O(1) — wrightomega(-1.5+2i) gave
+        // -2.85-0.74i instead of scipy's -0.046+0.229i (maxrel ~3). Now evaluated
+        // as ω(z) = W_{K(z)}(e^z) with the unwinding number K. These reference
+        // values are scipy.special.wrightomega(z) (1.17.1); they pin the branch,
+        // which the W·e^W = z identity tests cannot. Points span the principal
+        // strip, |Im z| > π (K ≠ 0), and both deep tails.
+        let cases: &[(f64, f64, f64, f64)] = &[
+            (0.5, 0.3, 0.759_982_991_983_232_2, 0.130_255_991_959_168_8),
+            (-1.5, 2.0, -0.046_466_392_009_842_42, 0.229_077_725_545_113_66),
+            (2.0, -2.5, 1.281_057_065_675_128_1, -1.603_332_445_813_598_5),
+            (0.2, 4.0, -0.605_890_980_974_417, 2.155_140_393_085_120_7),
+            (0.0, 1.5, 0.392_558_477_115_177_44, 0.549_512_694_868_214_6),
+            (-10.0, 4.0, -12.530_965_197_408_364, 0.932_702_135_820_647),
+            (-3.0, -1.0, 0.027_759_347_673_495_516, -0.039_677_501_694_402_574),
+            (0.7, -0.6, 0.831_572_721_398_247_9, -0.277_699_309_499_649_2),
+            (-8.0, 8.5, -10.486_305_311_771_067, 5.868_626_712_161_074),
+            (5.0, -12.0, 2.603_767_504_361_378, -10.668_583_366_963_013),
+        ];
+        for &(re, im, wre, wim) in cases {
+            let got = wrightomega(
+                &SpecialTensor::ComplexScalar(Complex64::new(re, im)),
+                RuntimeMode::Strict,
+            )
+            .expect("wrightomega complex");
+            let SpecialTensor::ComplexScalar(c) = got else {
+                panic!("wrightomega({re}+{im}i) did not return a complex scalar");
+            };
+            let denom = wre.hypot(wim).max(1.0);
+            let err = (c.re - wre).hypot(c.im - wim) / denom;
+            assert!(
+                err < 1e-12,
+                "wrightomega({re}+{im}i) = {}+{}i, scipy {wre}+{wim}i (relerr {err:e})",
+                c.re,
+                c.im
+            );
+        }
+    }
+
+    #[test]
     fn powm1_scalar_matches_naive_at_large_y_log_x() {
         // Where y * ln(x) is large, both formulations agree.
         for &x in &[2.0, 10.0, 100.0] {
