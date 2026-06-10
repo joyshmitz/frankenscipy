@@ -3801,9 +3801,13 @@ pub fn log_ndtr(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
 pub fn log_ndtr_scalar(x: f64) -> f64 {
     // log(Φ(x)) where Φ is the standard normal CDF.
     if x >= -1.0 {
-        // Φ ∈ [~0.16, 1]: log is well-conditioned directly.
-        let t = ndtr_scalar(x);
-        return if t > 0.0 { t.ln() } else { 0.0 };
+        // Φ(x) = 1 − Φ(−x). For large positive x, Φ(x) rounds to exactly 1.0,
+        // so the naive ln(Φ(x)) collapses to 0 even though log Φ(x) ≈ −Φ(−x) is
+        // a tiny negative number (e.g. log_ndtr(15) ≈ −3.67e-51, not 0). Use
+        // log1p(−Φ(−x)): Φ(−x) is the accurate tail value and log1p keeps the
+        // result down to the denormal range — matches scipy.special.log_ndtr to
+        // ~2e-16 across x ∈ [−1, 40]. frankenscipy-08o4z
+        return (-ndtr_scalar(-x)).ln_1p();
     }
     if x > -8.0 {
         // Moderate left tail: log(½·erfc(-x/√2)) — accurate via erfc, avoiding
@@ -6568,6 +6572,14 @@ mod tests {
             (-2.0, -3.7831843336820317),
             (-1.0, -1.8410216450092634),
             (3.0, -0.0013508099647481925),
+            // Large positive x: log Φ(x) ≈ −Φ(−x) is a tiny negative number.
+            // The prior ln(Φ(x)) collapsed to 0 once Φ(x) rounded to 1.0
+            // (x ≳ 9), so powernorm/lognorm left tails underflowed.
+            (6.0, -9.86587645524372e-10),
+            (10.0, -7.61985302416047e-24),
+            (15.0, -3.6709661993126986e-51),
+            (20.0, -2.7536241186061556e-89),
+            (30.0, -4.906713927147908e-198),
         ];
         for (x, expected) in cases {
             let got = log_ndtr_scalar(x);
