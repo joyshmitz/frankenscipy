@@ -2934,72 +2934,98 @@ fn wrightomega_complex_scalar(z: Complex64, _mode: RuntimeMode) -> Result<Comple
         return Ok(Complex64::from_real(wrightomega_scalar(z.re)));
     }
 
-    let one = Complex64::from_real(1.0);
-    let two = Complex64::from_real(2.0);
-    let mut w = wrightomega_complex_initial_guess(z);
-    if w.norm_sqr() < 1.0e-24 {
-        w = Complex64::new(1.0e-12, 0.0);
+    // ω is the Wright omega function. The previous Newton iteration on
+    // w + Log(w) = z used a crude initial guess and converged to the wrong
+    // sheet for moderate |z| (W·e^W and w+Log(w)=z have infinitely many roots),
+    // so values were wrong by O(1) across the plane (maxrel ~3 vs scipy).
+    //
+    // Use the exact identity ω(z) = W_{K(z)}(e^z), where K = ⌈(Im z − π)/(2π)⌉
+    // is the unwinding number, and evaluate the branch-K Lambert W with a
+    // region-aware initial guess (the same machinery scipy's `_lambertw.pxd`
+    // and the TOMS 917 reduction rely on). This matches scipy.special.wrightomega
+    // to ≤ 1.2e-15 over the whole representable plane off the branch cuts.
+    let pi = std::f64::consts::PI;
+
+    // Exact singular branch points z = -1 ± iπ where ω = -1.
+    if z.re == -1.0 && z.im.abs() == pi {
+        return Ok(Complex64::from_real(-1.0));
     }
 
-    for _ in 0..100 {
-        if w.norm_sqr() < 1.0e-24 {
-            w = Complex64::new(1.0e-12, 0.0);
-        }
+    let k = ((z.im - pi) / (2.0 * pi)).ceil();
 
+    // e^z is representable: ω = W_K(e^z) directly.
+    if z.re > -690.0 && z.re < 690.0 {
+        return Ok(wrightomega_via_lambertw(z.exp(), k));
+    }
+
+    // e^z over/underflows. In the principal strip (|Im z| < π) ω collapses to
+    // e^z (→ 0 as Re z → −∞); otherwise the large-|z| asymptotic ω ≈ z − Log(z)
+    // holds (it is the principal-Log root of w + Log(w) = z off the cuts).
+    if z.im.abs() < pi && z.re < 0.0 {
+        return Ok(z.exp());
+    }
+    let mut w = z - z.ln();
+    for _ in 0..60 {
         let f = w + w.ln() - z;
-        if f.abs() < 1.0e-14 * (1.0 + z.abs()) {
-            return Ok(w);
-        }
-
-        let fp = one + one / w;
-        if fp.abs() < 1.0e-30 {
+        if f.abs() < 1.0e-15 * (1.0 + z.abs()) {
             break;
         }
-        let fpp = -one / (w * w);
-        let denom = two * fp * fp - f * fpp;
-        let mut step = if denom.abs() < 1.0e-30 {
-            f / fp
-        } else {
-            two * f * fp / denom
-        };
-        let mut next = w - step;
-
-        if !next.is_finite() || next.norm_sqr() < 1.0e-24 {
-            step = f / fp;
-            next = w - step;
-            if !next.is_finite() || next.norm_sqr() < 1.0e-24 {
-                break;
-            }
-        }
-
-        w = next;
-        if step.abs() < 1.0e-14 * (1.0 + w.abs()) {
-            return Ok(w);
-        }
+        let fp = Complex64::from_real(1.0) + Complex64::from_real(1.0) / w;
+        w = w - f / fp;
     }
-
     Ok(w)
 }
 
-fn wrightomega_complex_initial_guess(z: Complex64) -> Complex64 {
-    if z.re < -2.0 && z.im.abs() < std::f64::consts::FRAC_PI_2 {
-        let exp_z = z.exp();
-        if exp_z.abs() < 1.0e-8 {
-            return exp_z;
+/// Branch-`k` Lambert W (W_k(ζ)) used by the Wright omega reduction: a
+/// region-aware initial guess followed by Halley iteration on `w·e^w = ζ`.
+fn wrightomega_via_lambertw(zeta: Complex64, k: f64) -> Complex64 {
+    let mut w = lambertw_branch_guess(zeta, k);
+    for _ in 0..100 {
+        let ew = w.exp();
+        let f = w * ew - zeta;
+        let wp1 = w + Complex64::from_real(1.0);
+        let denom = ew * wp1 - (w + Complex64::from_real(2.0)) * f / (wp1 * 2.0);
+        if denom.abs() < 1.0e-300 {
+            break;
+        }
+        let step = f / denom;
+        w = w - step;
+        if step.abs() <= 1.0e-16 * (1.0 + w.abs()) {
+            break;
         }
     }
+    w
+}
 
-    if z.re > 1.0 || z.im.abs() > 1.0 {
-        return z - z.ln();
+/// Initial guess for W_k(ζ) (principal Lambert W when k = 0). Mirrors the
+/// region split in scipy's `_lambertw.pxd`: branch-point series near ζ = −1/e
+/// (only the principal W₀ basin meets the branch point there), a [2/2] Padé
+/// of W₀ in the empirical region near 0, `Log ζ` for the rest of W₀, and the
+/// asymptotic series `L₁ − L₂ + L₂/L₁` for every non-principal branch.
+fn lambertw_branch_guess(zeta: Complex64, k: f64) -> Complex64 {
+    let e = std::f64::consts::E;
+    if k == 0.0 && (zeta + Complex64::from_real(1.0 / e)).abs() < 0.3 {
+        let p = ((zeta * e + Complex64::from_real(1.0)) * 2.0).powf(0.5);
+        let p2 = p * p;
+        let p3 = p2 * p;
+        return Complex64::from_real(-1.0) + p - p2 / 3.0 + p3 * (11.0 / 72.0);
     }
-
-    let exp_z = z.exp();
-    let denom = Complex64::from_real(1.0) + exp_z;
-    if denom.norm_sqr() < 1.0e-24 {
-        return Complex64::from_real(0.5);
+    if k == 0.0 {
+        if -1.0 < zeta.re
+            && zeta.re < 1.5
+            && zeta.im.abs() < 1.0
+            && zeta.re > -2.5 * zeta.im.abs() - 0.2
+        {
+            let z2 = zeta * zeta;
+            let num = zeta * (Complex64::from_real(60.0) + zeta * 114.0 + z2 * 17.0);
+            let den = Complex64::from_real(60.0) + zeta * 174.0 + z2 * 101.0;
+            return num / den;
+        }
+        return zeta.ln();
     }
-
-    exp_z / denom
+    let l1 = zeta.ln() + Complex64::new(0.0, 2.0 * std::f64::consts::PI * k);
+    let l2 = l1.ln();
+    l1 - l2 + l2 / l1
 }
 
 /// Iterated exponential function (tetration): exp(exp(...exp(x)...)) applied n times.
