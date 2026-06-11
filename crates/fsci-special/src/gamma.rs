@@ -2189,6 +2189,57 @@ pub fn chndtrix(p: f64, df: f64, nc: f64) -> f64 {
     0.5 * (lo + hi)
 }
 
+/// Bisect for `v ∈ [a, b]` with `f(v) = target`, where `f` is monotone on
+/// `[a, b]` (direction auto-detected). If `target` is outside the range spanned
+/// by `f(a)..f(b)`, the nearer bound is returned (the unsolvable-tail clamp).
+fn invert_monotone(f: impl Fn(f64) -> f64, target: f64, a: f64, b: f64) -> f64 {
+    let (fa, fb) = (f(a), f(b));
+    if target <= fa.min(fb) {
+        return if fa <= fb { a } else { b };
+    }
+    if target >= fa.max(fb) {
+        return if fa >= fb { a } else { b };
+    }
+    let increasing = fb >= fa;
+    let (mut lo, mut hi) = (a, b);
+    for _ in 0..200 {
+        let mid = 0.5 * (lo + hi);
+        if (f(mid) < target) == increasing {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    0.5 * (lo + hi)
+}
+
+/// Inverse of [`chndtr`] in the degrees of freedom `df`.
+///
+/// Returns `df` such that `chndtr(x, df, nc) = p`, matching
+/// `scipy.special.chndtridf(x, p, nc)`. The CDF is monotone (decreasing) in
+/// `df`, so the root is found by bisection. `p ∉ (0, 1)` (or NaN) → NaN.
+#[must_use]
+pub fn chndtridf(x: f64, p: f64, nc: f64) -> f64 {
+    if x.is_nan() || p.is_nan() || nc.is_nan() || p <= 0.0 || p >= 1.0 {
+        return f64::NAN;
+    }
+    invert_monotone(|df| chndtr(x, df, nc), p, 1e-6, 1e10)
+}
+
+/// Inverse of [`chndtr`] in the non-centrality `nc`.
+///
+/// Returns `nc` such that `chndtr(x, df, nc) = p`, matching
+/// `scipy.special.chndtrinc(x, df, p)`. The CDF is monotone (decreasing) in
+/// `nc ≥ 0`; if `p` exceeds the central value `chndtr(x, df, 0)` the result
+/// clamps toward 0 (as scipy does). `p ∉ (0, 1)` (or NaN) → NaN.
+#[must_use]
+pub fn chndtrinc(x: f64, df: f64, p: f64) -> f64 {
+    if x.is_nan() || df.is_nan() || p.is_nan() || p <= 0.0 || p >= 1.0 {
+        return f64::NAN;
+    }
+    invert_monotone(|nc| chndtr(x, df, nc), p, 0.0, 1e8)
+}
+
 /// Inverse complemented chi-squared distribution.
 ///
 /// Returns x such that P(X > x) = p where X follows a chi-squared
@@ -4067,6 +4118,21 @@ mod tests {
         assert_eq!(chndtrix(0.0, 3.0, 2.0), 0.0);
         assert!(chndtrix(1.0, 3.0, 2.0).is_infinite());
         assert!(chndtrix(1.5, 3.0, 2.0).is_nan());
+    }
+
+    #[test]
+    fn chndtridf_chndtrinc_invert_chndtr_matching_scipy() {
+        // frankenscipy: golden from scipy.special.chndtridf / chndtrinc 1.17.1.
+        // Roundtrip (x=8, df=5, nc=3 → p) recovers df=5 / nc=3.
+        let p = chndtr(8.0, 5.0, 3.0);
+        assert!((chndtridf(8.0, p, 3.0) - 5.0).abs() < 1e-7, "chndtridf roundtrip");
+        assert!((chndtrinc(8.0, 5.0, p) - 3.0).abs() < 1e-7, "chndtrinc roundtrip");
+        // Direct golden values.
+        assert!((chndtridf(20.0, 0.3, 4.0) - 20.43935171067603).abs() < 1e-7, "chndtridf direct");
+        assert!((chndtrinc(20.0, 6.0, 0.7) - 10.847570357455123).abs() < 1e-7, "chndtrinc direct");
+        // p ∉ (0,1) → NaN.
+        assert!(chndtridf(8.0, 0.0, 3.0).is_nan());
+        assert!(chndtrinc(8.0, 5.0, 1.0).is_nan());
     }
 
     #[test]
