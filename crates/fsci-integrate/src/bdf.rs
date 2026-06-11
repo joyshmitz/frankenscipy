@@ -2,29 +2,106 @@
 
 //! Backward Differentiation Formula (BDF) solver for stiff ODEs.
 //!
-//! KNOWN LIMITATION (frankenscipy-3y5p9): despite the order-1..5 coefficient
-//! tables (`BDF_GAMMA`, `BDF_ERROR_CONST`) and the `d[k]` difference array, this
-//! solver currently runs at a FIXED order 1 (implicit Euler) — `self.order` is
-//! initialised to 1 and never advanced, and the predictor/corrector only use
-//! `d[0]`/`d[1]`. As a result it takes ~40x more steps than
-//! `scipy.integrate.solve_ivp(method='BDF')` on stiff problems (e.g. van der Pol
-//! μ=10 over [0,20]: 27092 steps vs scipy's 641) and accumulates extra phase
-//! error. The error control (`error_norm <= 1`) still keeps each accepted step
-//! within tolerance, so results are correct but inefficient. `SolverKind::Radau`
-//! is also routed here, so it is presently a BDF alias rather than a Radau IIA
-//! method. Closing the gap requires a genuine variable-order (1-5) controller
-//! with the Nordsieck/backward-difference predictor — tracked in the bead.
+//! Genuine variable-order (1-5) BDF with adaptive step size, a faithful port of
+//! `scipy.integrate.solve_ivp(method='BDF')` (`scipy/integrate/_ivp/bdf.py`):
+//! predictor from the backward-difference array `D`, modified-Newton corrector on
+//! `(I − c·J)` with a lazily-refreshed finite-difference Jacobian, and combined
+//! error/step/order control via `change_D`. Order and step are reconsidered after
+//! `n_equal_steps >= order + 1` accepted steps by comparing the local error at
+//! orders `k-1`, `k`, `k+1` (frankenscipy-3y5p9). `SolverKind::Radau` is still
+//! routed here as a BDF alias pending a true Radau IIA method.
 
 use crate::solver::{OdeSolverState, StepFailure, StepOutcome};
 use crate::validation::{ToleranceValue, validate_first_step, validate_max_step, validate_tol};
 use fsci_runtime::RuntimeMode;
 use nalgebra::{DMatrix, DVector, Dyn, LU};
 
-/// BDF coefficients (gamma) for orders 1 through 5.
-const BDF_GAMMA: [f64; 5] = [1.0, 2.0 / 3.0, 6.0 / 11.0, 12.0 / 25.0, 60.0 / 137.0];
+/// Maximum BDF order.
+const MAX_ORDER: usize = 5;
+/// Maximum Newton iterations per step (scipy `NEWTON_MAXITER`).
+const NEWTON_MAXITER: usize = 4;
+/// Minimum step-size reduction factor on rejection.
+const MIN_FACTOR: f64 = 0.2;
+/// Maximum step-size growth factor on acceptance.
+const MAX_FACTOR: f64 = 10.0;
 
-/// Error constant for each BDF order (1 through 5).
-const BDF_ERROR_CONST: [f64; 5] = [0.5, 2.0 / 9.0, 3.0 / 22.0, 12.0 / 125.0, 10.0 / 137.0];
+/// Empirical `kappa` constants (scipy `_bdf.py`), indices 0..=5.
+const KAPPA: [f64; 6] = [0.0, -0.1850, -1.0 / 9.0, -0.0823, -0.0415, 0.0];
+/// `gamma[i] = Σ_{k=1}^{i} 1/k`, `gamma[0] = 0`.
+const GAMMA_C: [f64; 6] = [0.0, 1.0, 1.5, 11.0 / 6.0, 25.0 / 12.0, 137.0 / 60.0];
+/// `alpha[i] = (1 - kappa[i]) * gamma[i]` — the BDF leading coefficient.
+const ALPHA_C: [f64; 6] = [
+    (1.0 - KAPPA[0]) * GAMMA_C[0],
+    (1.0 - KAPPA[1]) * GAMMA_C[1],
+    (1.0 - KAPPA[2]) * GAMMA_C[2],
+    (1.0 - KAPPA[3]) * GAMMA_C[3],
+    (1.0 - KAPPA[4]) * GAMMA_C[4],
+    (1.0 - KAPPA[5]) * GAMMA_C[5],
+];
+/// `error_const[i] = kappa[i]*gamma[i] + 1/(i+1)` — local error coefficient.
+const ERR_C: [f64; 6] = [
+    KAPPA[0] * GAMMA_C[0] + 1.0,
+    KAPPA[1] * GAMMA_C[1] + 1.0 / 2.0,
+    KAPPA[2] * GAMMA_C[2] + 1.0 / 3.0,
+    KAPPA[3] * GAMMA_C[3] + 1.0 / 4.0,
+    KAPPA[4] * GAMMA_C[4] + 1.0 / 5.0,
+    KAPPA[5] * GAMMA_C[5] + 1.0 / 6.0,
+];
+
+/// RMS norm `sqrt(mean(x²))` (scipy `norm`).
+fn rms_norm(x: &[f64]) -> f64 {
+    if x.is_empty() {
+        return 0.0;
+    }
+    let s: f64 = x.iter().map(|&v| v * v).sum();
+    (s / x.len() as f64).sqrt()
+}
+
+/// scipy `compute_R(order, factor)` — the `(order+1)×(order+1)` step-change
+/// matrix whose columns are cumulative products down the rows.
+fn compute_r(order: usize, factor: f64) -> DMatrix<f64> {
+    let m = order + 1;
+    let mut mat = DMatrix::<f64>::zeros(m, m);
+    // Row 0 is all ones.
+    for j in 0..m {
+        mat[(0, j)] = 1.0;
+    }
+    // M[i,j] = (i - 1 - factor*j)/i for i,j >= 1; column 0 (j=0) stays 0.
+    for i in 1..m {
+        for j in 1..m {
+            mat[(i, j)] = ((i as f64) - 1.0 - factor * (j as f64)) / (i as f64);
+        }
+    }
+    // Cumulative product down each column (axis 0).
+    for j in 0..m {
+        for i in 1..m {
+            mat[(i, j)] *= mat[(i - 1, j)];
+        }
+    }
+    mat
+}
+
+/// scipy `change_D(D, order, factor)` — rescale the difference array `d[0..=order]`
+/// in place when the step size changes by `factor`.
+fn change_d(d: &mut [Vec<f64>], order: usize, factor: f64, n: usize) {
+    let r = compute_r(order, factor);
+    let u = compute_r(order, 1.0);
+    let ru = &r * &u; // (order+1)×(order+1)
+    let m = order + 1;
+    // new D[i] = Σ_k (RU.T)[i,k] * D[k] = Σ_k RU[k,i] * D[k].
+    let mut new_d = vec![vec![0.0; n]; m];
+    for i in 0..m {
+        for k in 0..m {
+            let w = ru[(k, i)];
+            if w != 0.0 {
+                for col in 0..n {
+                    new_d[i][col] += w * d[k][col];
+                }
+            }
+        }
+    }
+    d[..m].clone_from_slice(&new_d[..m]);
+}
 
 /// Configuration for the BDF solver.
 #[derive(Debug, Clone)]
@@ -52,8 +129,9 @@ pub struct BdfSolver {
     rtol: f64,
     atol: Vec<f64>,
     order: usize,
-    #[allow(dead_code)]
     max_order: usize,
+    /// Consecutive accepted steps at the current order/step (scipy `n_equal_steps`).
+    n_equal_steps: usize,
     state: OdeSolverState,
     nfev: usize,
     njev: usize,
@@ -67,22 +145,14 @@ pub struct BdfSolver {
     d: Vec<Vec<f64>>,
 
     // Newton solver state
-    pub(crate) current_jac: Option<DMatrix<f64>>,
-    pub(crate) lu: Option<LU<f64, Dyn, Dyn>>,
-    pub(crate) h_abs_last: Option<f64>,
-    jacobian_age: usize,
+    current_jac: Option<DMatrix<f64>>,
+    lu: Option<LU<f64, Dyn, Dyn>>,
+    /// The value of `c = h/alpha[order]` for which `lu` was factorized.
+    lu_c: Option<f64>,
 
     // Previous step values for interpolation
     t_old: Option<f64>,
     y_old: Option<Vec<f64>>,
-}
-
-struct NewtonStep<'a> {
-    t_new: f64,
-    h_used: f64,
-    gamma: f64,
-    y_prev: &'a [f64],
-    y_predict: &'a [f64],
 }
 
 impl BdfSolver {
@@ -141,8 +211,8 @@ impl BdfSolver {
         let y0 = config.y0.to_vec();
         let f0 = fun(config.t0, &y0);
 
-        // Initialize Nordsieck array: d[0] = y, d[1] = h*f
-        let mut d = vec![vec![0.0; n]; 2];
+        // Backward-difference array D[0..=MAX_ORDER+2]: D[0] = y, D[1] = h*f, rest 0.
+        let mut d = vec![vec![0.0; n]; MAX_ORDER + 3];
         d[0] = y0.clone();
         for (j, d1j) in d[1].iter_mut().enumerate() {
             *d1j = h * f0[j];
@@ -159,7 +229,8 @@ impl BdfSolver {
             rtol: config.rtol,
             atol: atol_vec,
             order: 1,
-            max_order: config.max_order.min(5),
+            max_order: config.max_order.min(MAX_ORDER),
+            n_equal_steps: 0,
             state: OdeSolverState::Running,
             nfev: 1,
             njev: 0,
@@ -170,8 +241,7 @@ impl BdfSolver {
             d,
             current_jac: None,
             lu: None,
-            h_abs_last: None,
-            jacobian_age: 0,
+            lu_c: None,
             t_old: None,
             y_old: None,
         })
@@ -247,143 +317,280 @@ impl BdfSolver {
         self.bdf_step_impl(fun)
     }
 
+    // Index-aligned array arithmetic over the difference array reads cleaner with
+    // explicit `j`/`k` indices than with zipped iterators here.
+    #[allow(clippy::needless_range_loop)]
     fn bdf_step_impl<F>(&mut self, fun: &mut F) -> Result<StepOutcome, StepFailure>
     where
         F: FnMut(f64, &[f64]) -> Vec<f64>,
     {
-        let max_retries = 10;
+        // Faithful variable-order (1-5) BDF (scipy `_bdf.py::_step_impl`):
+        // predictor from the backward-difference array D, modified-Newton corrector
+        // on (I − c·J) with a lazy Jacobian, error/step/order control via change_D.
+        let n = self.n;
+        let newton_tol = (10.0 * f64::EPSILON / self.rtol).max(0.03_f64.min(self.rtol.sqrt()));
 
-        let f_curr = self.f.clone();
+        let spacing = if self.direction > 0.0 {
+            self.t.next_up() - self.t
+        } else {
+            self.t - self.t.next_down()
+        };
+        let min_step = 10.0 * spacing.abs();
 
-        let gamma = BDF_GAMMA[self.order - 1];
-        let error_const = BDF_ERROR_CONST[self.order - 1];
+        let mut h_abs = self.h.abs();
+        if h_abs > self.max_step {
+            let factor = self.max_step / h_abs;
+            h_abs = self.max_step;
+            change_d(&mut self.d, self.order, factor, n);
+            self.n_equal_steps = 0;
+            self.lu = None;
+        } else if h_abs < min_step {
+            let factor = min_step / h_abs;
+            h_abs = min_step;
+            change_d(&mut self.d, self.order, factor, n);
+            self.n_equal_steps = 0;
+            self.lu = None;
+        }
 
-        for _ in 0..max_retries {
-            let t_new = self.t + self.h;
+        let mut order = self.order;
+        let mut t_new;
+        let mut y_new = vec![0.0; n];
+        let mut d_corr = vec![0.0; n];
+        let mut scale = vec![0.0; n];
+        let mut n_iter = 1usize;
+        let mut reached_bound;
 
-            let past_bound = if self.direction > 0.0 {
-                t_new >= self.t_bound
-            } else {
-                t_new <= self.t_bound
-            };
+        loop {
+            if h_abs < min_step {
+                self.state = OdeSolverState::Failed;
+                return Err(StepFailure::StepSizeTooSmall);
+            }
+            let mut h = h_abs * self.direction;
+            t_new = self.t + h;
+            reached_bound = self.direction * (t_new - self.t_bound) > 0.0;
+            if reached_bound {
+                t_new = self.t_bound;
+                let factor = (t_new - self.t).abs() / h_abs;
+                change_d(&mut self.d, order, factor, n);
+                self.n_equal_steps = 0;
+                self.lu = None;
+            }
+            h = t_new - self.t;
+            h_abs = h.abs();
 
-            let (t_new, h_used) = if past_bound {
-                (self.t_bound, self.t_bound - self.t)
-            } else {
-                (t_new, self.h)
-            };
+            // Predictor and history terms.
+            let mut y_predict = vec![0.0; n];
+            for dk in self.d.iter().take(order + 1) {
+                for (yp, &dkj) in y_predict.iter_mut().zip(dk.iter()) {
+                    *yp += dkj;
+                }
+            }
+            for j in 0..n {
+                scale[j] = self.atol[j] + self.rtol * y_predict[j].abs();
+            }
+            let inv_alpha = 1.0 / ALPHA_C[order];
+            let mut psi = vec![0.0; n];
+            for k in 1..=order {
+                let g = GAMMA_C[k] * inv_alpha;
+                for (p, &dkj) in psi.iter_mut().zip(self.d[k].iter()) {
+                    *p += g * dkj;
+                }
+            }
+            let c = h * inv_alpha;
 
-            // Predict: explicit Euler
-            let y_predict: Vec<f64> = self
-                .y
-                .iter()
-                .zip(f_curr.iter())
-                .map(|(yi, fi)| yi + h_used * fi)
-                .collect();
-            let y_prev = self.y.clone();
-
-            let mut y_new = y_predict.clone();
-            let mut f_new = fun(t_new, &y_new);
-            self.nfev += 1;
-            let step = NewtonStep {
-                t_new,
-                h_used,
-                gamma,
-                y_prev: &y_prev,
-                y_predict: &y_predict,
-            };
-            let converged = self.solve_newton_system(fun, &step, &mut y_new, &mut f_new)?;
+            // Modified-Newton with lazy Jacobian refresh.
+            let mut converged = false;
+            let mut jac_recomputed = false;
+            loop {
+                if self.current_jac.is_none() {
+                    let f_pred = fun(t_new, &y_predict);
+                    self.nfev += 1;
+                    let jac = self.compute_jacobian(fun, t_new, &y_predict, &f_pred);
+                    self.current_jac = Some(jac);
+                    self.lu = None;
+                    jac_recomputed = true;
+                }
+                if self.lu.is_none() || self.lu_c != Some(c) {
+                    let jac = self.current_jac.as_ref().expect("jacobian present");
+                    let system = DMatrix::<f64>::identity(n, n) - jac.scale(c);
+                    self.lu = Some(system.lu());
+                    self.lu_c = Some(c);
+                    self.nlu += 1;
+                }
+                match self.newton_bdf(fun, t_new, &y_predict, c, &psi, &scale, newton_tol) {
+                    Some((iters, y_sol, d_sol)) => {
+                        converged = true;
+                        n_iter = iters;
+                        y_new = y_sol;
+                        d_corr = d_sol;
+                        break;
+                    }
+                    None => {
+                        if jac_recomputed {
+                            break; // Jacobian already fresh — give up, shrink step.
+                        }
+                        self.current_jac = None; // force recompute next pass.
+                    }
+                }
+            }
 
             if !converged {
-                self.h *= 0.5;
-                if self.h.abs() < 1e-14 {
-                    self.state = OdeSolverState::Failed;
-                    return Err(StepFailure::StepSizeTooSmall);
-                }
+                let factor = 0.5;
+                h_abs *= factor;
+                change_d(&mut self.d, order, factor, n);
+                self.n_equal_steps = 0;
+                self.lu = None;
                 continue;
             }
 
-            // Error estimation
-            let mut error_norm = 0.0;
-            for j in 0..self.n {
-                let err = error_const * (y_new[j] - y_predict[j]);
-                let scale = self.atol[j]
-                    + self.rtol * {
-                        let a = y_new[j].abs();
-                        let b = self.y[j].abs();
-                        if a.is_nan() || b.is_nan() {
-                            f64::NAN
-                        } else {
-                            a.max(b)
-                        }
-                    };
-                error_norm += (err / scale) * (err / scale);
+            let safety = 0.9 * (2.0 * NEWTON_MAXITER as f64 + 1.0)
+                / (2.0 * NEWTON_MAXITER as f64 + n_iter as f64);
+            for j in 0..n {
+                scale[j] = self.atol[j] + self.rtol * y_new[j].abs();
             }
-            error_norm = (error_norm / self.n as f64).sqrt();
+            let error: Vec<f64> = (0..n)
+                .map(|j| ERR_C[order] * d_corr[j] / scale[j])
+                .collect();
+            let error_norm = rms_norm(&error);
 
-            if error_norm.is_nan() || error_norm > 1.0 {
-                let factor = if error_norm.is_nan() {
-                    0.5
-                } else {
-                    (0.5_f64).max(0.9 / error_norm.powf(1.0 / (self.order as f64 + 1.0)))
-                };
-                self.h *= factor;
-                if self.h.abs() < 1e-14 {
-                    self.state = OdeSolverState::Failed;
-                    return Err(StepFailure::StepSizeTooSmall);
-                }
-                continue;
-            }
-
-            // Step accepted
-            self.t_old = Some(self.t);
-            self.y_old = Some(self.y.clone());
-            self.f_old = Some(self.f.clone());
-
-            self.f = f_new.clone();
-
-            self.d[0] = y_new.clone();
-            for (d1, &fj) in self.d[1].iter_mut().zip(f_new.iter()) {
-                *d1 = h_used * fj;
-            }
-
-            self.t = t_new;
-            self.y = y_new;
-            self.jacobian_age = self.jacobian_age.saturating_add(1);
-
-            let factor =
-                (1.5_f64).min(0.9 / error_norm.max(1e-10).powf(1.0 / (self.order as f64 + 1.0)));
-            self.h = (factor * h_used.abs()).min(self.max_step) * self.direction;
-
-            let state = if past_bound {
-                self.state = OdeSolverState::Finished;
-                OdeSolverState::Finished
+            if error_norm > 1.0 {
+                let factor = MIN_FACTOR.max(safety * error_norm.powf(-1.0 / (order as f64 + 1.0)));
+                h_abs *= factor;
+                change_d(&mut self.d, order, factor, n);
+                self.n_equal_steps = 0;
+                self.lu = None;
             } else {
-                OdeSolverState::Running
-            };
+                // Step accepted.
+                self.t_old = Some(self.t);
+                self.y_old = Some(self.y.clone());
+                self.f_old = Some(self.f.clone());
 
-            return Ok(StepOutcome {
-                message: None,
-                state,
-            });
+                self.n_equal_steps += 1;
+                self.t = t_new;
+                self.y = y_new.clone();
+                self.h = h_abs * self.direction;
+                self.f = fun(t_new, &y_new);
+                self.nfev += 1;
+
+                // Update the difference array.
+                for j in 0..n {
+                    self.d[order + 2][j] = d_corr[j] - self.d[order + 1][j];
+                    self.d[order + 1][j] = d_corr[j];
+                }
+                for i in (0..=order).rev() {
+                    for j in 0..n {
+                        self.d[i][j] += self.d[i + 1][j];
+                    }
+                }
+
+                // Order/step selection once enough equal steps have accumulated.
+                if self.n_equal_steps > order {
+                    let safety_sel = safety;
+                    let err_m = if order > 1 {
+                        let e: Vec<f64> = (0..n)
+                            .map(|j| ERR_C[order - 1] * self.d[order][j] / scale[j])
+                            .collect();
+                        rms_norm(&e)
+                    } else {
+                        f64::INFINITY
+                    };
+                    let err_p = if order < self.max_order {
+                        let e: Vec<f64> = (0..n)
+                            .map(|j| ERR_C[order + 1] * self.d[order + 2][j] / scale[j])
+                            .collect();
+                        rms_norm(&e)
+                    } else {
+                        f64::INFINITY
+                    };
+                    let norms = [err_m, error_norm, err_p];
+                    let mut best = 0usize;
+                    let mut best_factor = f64::NEG_INFINITY;
+                    for (idx, &en) in norms.iter().enumerate() {
+                        // factor = en^(-1/(order-1+idx+1)) = en^(-1/(order+idx)).
+                        let exp = -1.0 / (order as f64 + idx as f64);
+                        let fac = if en == 0.0 {
+                            f64::INFINITY
+                        } else {
+                            en.powf(exp)
+                        };
+                        if fac > best_factor {
+                            best_factor = fac;
+                            best = idx;
+                        }
+                    }
+                    order = (order as isize + best as isize - 1) as usize;
+                    self.order = order;
+                    let factor = MAX_FACTOR.min(safety_sel * best_factor);
+                    self.h = (h_abs * factor) * self.direction;
+                    change_d(&mut self.d, order, factor, n);
+                    self.n_equal_steps = 0;
+                    self.lu = None;
+                }
+
+                let state = if reached_bound {
+                    self.state = OdeSolverState::Finished;
+                    OdeSolverState::Finished
+                } else {
+                    OdeSolverState::Running
+                };
+                return Ok(StepOutcome {
+                    message: None,
+                    state,
+                });
+            }
         }
-
-        self.state = OdeSolverState::Failed;
-        Err(StepFailure::ConvergenceFailure)
     }
 
-    fn should_refresh_jacobian(&self, h_abs: f64) -> bool {
-        let Some(previous_h_abs) = self.h_abs_last else {
-            return true;
-        };
-        if self.current_jac.is_none() || self.lu.is_none() {
-            return true;
+    /// Modified-Newton corrector for the BDF system at the current order
+    /// (scipy `solve_bdf_system`). Solves `(I − c·J) Δ = c·f − ψ − d`, accumulating
+    /// the correction `d`. Returns `Some((n_iter, y, d))` on convergence.
+    #[allow(clippy::too_many_arguments)]
+    fn newton_bdf<F>(
+        &mut self,
+        fun: &mut F,
+        t_new: f64,
+        y_predict: &[f64],
+        c: f64,
+        psi: &[f64],
+        scale: &[f64],
+        tol: f64,
+    ) -> Option<(usize, Vec<f64>, Vec<f64>)>
+    where
+        F: FnMut(f64, &[f64]) -> Vec<f64>,
+    {
+        let n = self.n;
+        let mut d = vec![0.0; n];
+        let mut y = y_predict.to_vec();
+        let mut dy_norm_old: Option<f64> = None;
+        let lu = self.lu.as_ref()?;
+        for k in 0..NEWTON_MAXITER {
+            let f = fun(t_new, &y);
+            self.nfev += 1;
+            if !f.iter().all(|v| v.is_finite()) {
+                return None;
+            }
+            let rhs = DVector::from_iterator(n, (0..n).map(|j| c * f[j] - psi[j] - d[j]));
+            let dy = lu.solve(&rhs)?;
+            let dy_norm = rms_norm(&(0..n).map(|j| dy[j] / scale[j]).collect::<Vec<_>>());
+
+            let rate = dy_norm_old.map(|old| if old > 0.0 { dy_norm / old } else { 0.0 });
+            if let Some(r) = rate
+                && (r >= 1.0 || r.powi((NEWTON_MAXITER - k) as i32) / (1.0 - r) * dy_norm > tol)
+            {
+                return None;
+            }
+
+            for j in 0..n {
+                y[j] += dy[j];
+                d[j] += dy[j];
+            }
+
+            if dy_norm == 0.0 || rate.is_some_and(|r| r / (1.0 - r) * dy_norm < tol) {
+                return Some((k + 1, y, d));
+            }
+            dy_norm_old = Some(dy_norm);
         }
-        if previous_h_abs == 0.0 {
-            return true;
-        }
-        let ratio = h_abs / previous_h_abs;
-        !((1.0 / 1.2)..=1.2).contains(&ratio) || self.jacobian_age >= 5
+        None
     }
 
     fn compute_jacobian<F>(&mut self, fun: &mut F, t: f64, y: &[f64], f0: &[f64]) -> DMatrix<f64>
@@ -407,83 +614,6 @@ impl BdfSolver {
 
         self.njev += 1;
         jac
-    }
-
-    fn refresh_linearization<F>(
-        &mut self,
-        fun: &mut F,
-        t: f64,
-        y: &[f64],
-        f: &[f64],
-        gamma_h: f64,
-        h_abs: f64,
-    ) where
-        F: FnMut(f64, &[f64]) -> Vec<f64>,
-    {
-        let jac = self.compute_jacobian(fun, t, y, f);
-        let system = DMatrix::<f64>::identity(self.n, self.n) - jac.scale(gamma_h);
-        self.current_jac = Some(jac);
-        self.lu = Some(system.lu());
-        self.h_abs_last = Some(h_abs);
-        self.jacobian_age = 0;
-        self.nlu += 1;
-    }
-
-    fn solve_newton_system<F>(
-        &mut self,
-        fun: &mut F,
-        step: &NewtonStep<'_>,
-        y_new: &mut [f64],
-        f_new: &mut Vec<f64>,
-    ) -> Result<bool, StepFailure>
-    where
-        F: FnMut(f64, &[f64]) -> Vec<f64>,
-    {
-        let h_abs = step.h_used.abs();
-        let gamma_h = step.gamma * step.h_used;
-        let mut force_refresh = self.should_refresh_jacobian(h_abs);
-
-        for refresh_attempt in 0..2 {
-            if force_refresh || refresh_attempt > 0 {
-                self.refresh_linearization(fun, step.t_new, y_new, f_new, gamma_h, h_abs);
-                force_refresh = false;
-            }
-
-            for _ in 0..8 {
-                let residual =
-                    DVector::from_iterator(
-                        self.n,
-                        y_new.iter().zip(step.y_prev.iter()).zip(f_new.iter()).map(
-                            |((&y_curr, &y_base), &f_curr)| -(y_curr - y_base - gamma_h * f_curr),
-                        ),
-                    );
-                let Some(delta) = self.lu.as_ref().and_then(|lu| lu.solve(&residual)) else {
-                    return Err(StepFailure::SolverError);
-                };
-
-                let mut max_delta = 0.0_f64;
-                for j in 0..self.n {
-                    let dy = delta[j];
-                    y_new[j] += dy;
-                    let scale = self.atol[j]
-                        + self.rtol * step.y_predict[j].abs().max(y_new[j].abs()).max(1e-10);
-                    max_delta = max_delta.max(dy.abs() / scale);
-                }
-
-                if !y_new.iter().all(|value| value.is_finite()) {
-                    return Err(StepFailure::NonFiniteState);
-                }
-
-                *f_new = fun(step.t_new, y_new);
-                self.nfev += 1;
-
-                if max_delta < 1.0 {
-                    return Ok(true);
-                }
-            }
-        }
-
-        Ok(false)
     }
 }
 

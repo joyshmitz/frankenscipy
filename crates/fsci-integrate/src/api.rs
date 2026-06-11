@@ -864,8 +864,8 @@ where
             let solver = RkSolver::new(fun, config)?;
             solve_ivp_core(fun, solver, &resolved_options)
         }
-        // NOTE (frankenscipy-3y5p9): Radau is currently a BDF alias, and the BDF
-        // solver runs at fixed order 1 — see crates/fsci-integrate/src/bdf.rs.
+        // NOTE (frankenscipy-3y5p9): Radau is currently a BDF alias (true Radau IIA
+        // pending); the BDF solver is genuine variable-order 1-5 — see bdf.rs.
         SolverKind::Radau | SolverKind::Bdf => {
             let config = BdfSolverConfig {
                 t0,
@@ -1543,8 +1543,12 @@ mod tests {
         .expect("solve_ivp BDF should succeed for stiff problem");
 
         assert!(result.success);
-        // exp(-50 * t): t=0 -> 1.0, t=0.5 -> 1.93e-11, t=1.0 -> 1.93e-22
-        // BDF solver has numerical limits - verify exponential decay is correct order of magnitude
+        // True exp(-50 t): t=0.5 -> 1.93e-11, t=1.0 -> 1.93e-22. Once the solution
+        // decays below atol=1e-6 the error control no longer tracks it, so the
+        // tail just drifts within ~atol — scipy BDF here returns y(0.5)=3.48e-8,
+        // y(1.0)=-1.99e-9. Match scipy's behaviour: the tail must stay within the
+        // absolute tolerance, not pinned to the true (untracked) value. (The old
+        // <1e-10 bound over-fit the previous fixed-order-1 solver; frankenscipy-3y5p9.)
         assert!(
             (result.y[0][0] - 1.0).abs() < 1e-6,
             "y[0] = {}",
@@ -1552,12 +1556,12 @@ mod tests {
         );
         assert!(
             result.y[1][0].abs() < 1e-6,
-            "y[0.5] should be near zero: {}",
+            "y[0.5] should be within atol of zero: {}",
             result.y[1][0]
         );
         assert!(
-            result.y[2][0].abs() < 1e-10,
-            "y[1.0] should be near zero: {}",
+            result.y[2][0].abs() < 1e-6,
+            "y[1.0] should be within atol of zero: {}",
             result.y[2][0]
         );
     }
