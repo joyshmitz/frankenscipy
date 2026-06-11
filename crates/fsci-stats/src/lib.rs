@@ -23460,6 +23460,41 @@ fn wilcoxon_exact_pvalue(t_plus: f64, t_minus: f64, n: usize, alternative: &str)
     }
 }
 
+/// scipy's exact-permutation signed-rank p-value, used by `method='auto'` when
+/// the absolute differences have ties or zeros were dropped and the total
+/// sample size is small (n<=13). scipy switches from the integer-rank exact
+/// distribution to `stats.permutation_test(permutation_type='samples')`, which
+/// enumerates the 2^m sign assignments of the m non-zero average ranks and
+/// forms the exact null distribution of T+ (since 2^13 < 9999 default resamples
+/// → deterministic). The two-sided p is `2*min(P(T+<=obs), P(T+>=obs))` with no
+/// +1 small-sample adjustment (exact enumeration). scipy's `gamma=100*eps*obs`
+/// tolerance is far below the 0.5 spacing of average ranks, so we work in
+/// exact doubled-rank integer space where it never changes a count.
+/// frankenscipy-qghyr
+fn wilcoxon_permutation_pvalue(ranks: &[f64], t_plus: f64, alternative: &str) -> f64 {
+    // counts[s] = number of rank subsets whose doubled-rank sum equals s.
+    let doubled: Vec<usize> = ranks.iter().map(|r| (r * 2.0).round() as usize).collect();
+    let total: usize = doubled.iter().sum();
+    let mut counts = vec![0u64; total + 1];
+    counts[0] = 1;
+    for &w in &doubled {
+        for s in (0..=total - w).rev() {
+            counts[s + w] += counts[s];
+        }
+    }
+    let n_perm = (1u64 << ranks.len()) as f64; // 2^m sign assignments
+    let obs2 = ((t_plus * 2.0).round() as usize).min(total);
+    let le: u64 = counts[..=obs2].iter().sum(); // P(T+ <= obs)
+    let ge: u64 = counts[obs2..].iter().sum(); // P(T+ >= obs)
+    let less_p = le as f64 / n_perm;
+    let greater_p = ge as f64 / n_perm;
+    match alternative {
+        "less" => less_p,
+        "greater" => greater_p,
+        _ => (2.0 * less_p.min(greater_p)).min(1.0),
+    }
+}
+
 pub fn wilcoxon(x: &[f64], y: &[f64]) -> TtestResult {
     if x.len() != y.len() || x.iter().any(|v| v.is_nan()) || y.iter().any(|v| v.is_nan()) {
         return TtestResult {
@@ -23518,6 +23553,18 @@ pub fn wilcoxon(x: &[f64], y: &[f64]) -> TtestResult {
         let (stat, pvalue) = wilcoxon_exact_pvalue(t_plus, t_minus, nr, "two-sided");
         return TtestResult {
             statistic: stat,
+            pvalue,
+            df: f64::NAN,
+        };
+    }
+
+    // scipy `method='auto'` switches the exact path to an exact permutation test
+    // when there are ties or dropped zeros and the total sample size is <=13
+    // (2^13 < 9999 default resamples → deterministic). frankenscipy-qghyr
+    if x.len() <= 13 {
+        let pvalue = wilcoxon_permutation_pvalue(&ranks, t_plus, "two-sided");
+        return TtestResult {
+            statistic: t_plus.min(t_minus),
             pvalue,
             df: f64::NAN,
         };
@@ -23626,6 +23673,22 @@ pub fn wilcoxon_alternative(x: &[f64], y: &[f64], alternative: &str) -> TtestRes
     };
     if no_zeros && no_ties && nr <= 1000 {
         let (stat, pvalue) = wilcoxon_exact_pvalue(t_plus, t_minus, nr, alternative);
+        return TtestResult {
+            statistic: stat,
+            pvalue,
+            df: f64::NAN,
+        };
+    }
+
+    // Exact permutation test for ties/zeros with small n (see `wilcoxon`).
+    // frankenscipy-qghyr
+    if x.len() <= 13 {
+        let pvalue = wilcoxon_permutation_pvalue(&ranks, t_plus, alternative);
+        let stat = if alternative == "two-sided" {
+            t_plus.min(t_minus)
+        } else {
+            t_plus
+        };
         return TtestResult {
             statistic: stat,
             pvalue,
@@ -60644,6 +60707,43 @@ mod tests {
         let pmf = wilcoxon_signed_rank_pmf(8);
         let total: f64 = pmf.iter().sum();
         assert!((total - 1.0).abs() < 1e-12, "pmf sums to 1: {total}");
+    }
+
+    #[test]
+    fn wilcoxon_ties_or_zeros_uses_exact_permutation() {
+        // Regression (frankenscipy-qghyr): with ties OR dropped zeros and n<=13,
+        // scipy's method='auto' uses an exact permutation test (enumerate 2^m sign
+        // flips of the average ranks), NOT the normal approximation. Golden values
+        // from scipy.stats.wilcoxon(method='auto', correction=False) 1.17.1.
+        let zero = vec![0.0; 7];
+
+        // Case A: ties (5,5) + a zero, n=7.
+        let a = vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 5.0];
+        let ra = wilcoxon(&a, &zero);
+        assert!((ra.statistic - 0.0).abs() < 1e-12, "A stat = {}", ra.statistic);
+        assert!((ra.pvalue - 0.03125).abs() < 1e-12, "A two-sided p = {}", ra.pvalue);
+        let a_gt = wilcoxon_alternative(&a, &zero, "greater");
+        assert!((a_gt.pvalue - 0.015625).abs() < 1e-12, "A greater p = {}", a_gt.pvalue);
+        let a_lt = wilcoxon_alternative(&a, &zero, "less");
+        assert!((a_lt.pvalue - 1.0).abs() < 1e-12, "A less p = {}", a_lt.pvalue);
+
+        // Case B: zeros only (no ties), n=6.
+        let b = vec![0.0, 0.0, -1.0, 2.0, -3.0, 4.0];
+        let rb = wilcoxon(&b, &vec![0.0; 6]);
+        assert!((rb.statistic - 4.0).abs() < 1e-12, "B stat = {}", rb.statistic);
+        assert!((rb.pvalue - 0.875).abs() < 1e-12, "B two-sided p = {}", rb.pvalue);
+        let b_gt = wilcoxon_alternative(&b, &vec![0.0; 6], "greater");
+        assert!((b_gt.pvalue - 0.4375).abs() < 1e-12, "B greater p = {}", b_gt.pvalue);
+
+        // Case C: ties only (no zeros), n=8.
+        let c = vec![1.0, -1.0, 2.0, 2.0, -3.0, 3.0, 4.0, -4.0];
+        let rc = wilcoxon(&c, &vec![0.0; 8]);
+        assert!((rc.statistic - 14.5).abs() < 1e-12, "C stat = {}", rc.statistic);
+        assert!((rc.pvalue - 0.703125).abs() < 1e-12, "C two-sided p = {}", rc.pvalue);
+        let c_lt = wilcoxon_alternative(&c, &vec![0.0; 8], "less");
+        assert!((c_lt.pvalue - 0.6953125).abs() < 1e-12, "C less p = {}", c_lt.pvalue);
+        let c_gt = wilcoxon_alternative(&c, &vec![0.0; 8], "greater");
+        assert!((c_gt.pvalue - 0.3515625).abs() < 1e-12, "C greater p = {}", c_gt.pvalue);
     }
 
     #[test]
