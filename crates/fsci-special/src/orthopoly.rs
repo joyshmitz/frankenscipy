@@ -23,7 +23,7 @@
 
 use std::f64::consts::PI;
 
-use crate::bessel::spherical_jn_scalar;
+use crate::bessel::{jv_scalar, spherical_jn_scalar};
 use fsci_runtime::RuntimeMode;
 
 
@@ -916,6 +916,84 @@ pub fn mathieu_sem(m: u32, q: f64, x: f64) -> (f64, f64) {
         derivative += bi * k * (k * xr).cos();
     }
     (value, derivative)
+}
+
+/// Bessel `J_n(u)` and its derivative `J_n'(u) = (J_{n-1}(u) − J_{n+1}(u))/2`.
+fn bessel_j_and_deriv(n: u32, u: f64) -> (f64, f64) {
+    let j = jv_scalar(f64::from(n), u);
+    let deriv = if n == 0 {
+        -jv_scalar(1.0, u)
+    } else {
+        0.5 * (jv_scalar(f64::from(n) - 1.0, u) - jv_scalar(f64::from(n) + 1.0, u))
+    };
+    (j, deriv)
+}
+
+/// `J_a(u1) J_b(u2)` and its `z`-derivative, with `u1 = √q e^{-z}`,
+/// `u2 = √q e^{z}` (so `du1/dz = -u1`, `du2/dz = u2`).
+fn bessel_product(a: u32, b: u32, u1: f64, u2: f64) -> (f64, f64) {
+    let (ja, ja_p) = bessel_j_and_deriv(a, u1);
+    let (jb, jb_p) = bessel_j_and_deriv(b, u2);
+    (ja * jb, -u1 * ja_p * jb + u2 * ja * jb_p)
+}
+
+/// Modified (radial) Mathieu function of the first kind and its `z`-derivative,
+/// from the Bessel-product series with the angular Fourier coefficients.
+/// `even` selects `Mc` (cosine/`ce` coefficients) vs `Ms` (sine/`se`).
+fn mathieu_mod1(m: u32, q: f64, z: f64, even: bool) -> (f64, f64) {
+    let (coeffs, _) = mathieu_fourier(m, q, even);
+    let sq = q.sqrt();
+    let u1 = sq * (-z).exp();
+    let u2 = sq * z.exp();
+    let mut value = 0.0_f64;
+    let mut deriv = 0.0_f64;
+    for (i, &ci) in coeffs.iter().enumerate() {
+        let iu = i as u32;
+        let alt = if i % 2 == 0 { 1.0 } else { -1.0 };
+        let (p, d) = if even {
+            if m % 2 == 0 {
+                // Mc_{2n}: Σ (-1)^i A_i J_i(u1) J_i(u2)
+                bessel_product(iu, iu, u1, u2)
+            } else {
+                // Mc_{2n+1}: Σ (-1)^i A_i [J_i J_{i+1} + J_{i+1} J_i]
+                let (p1, d1) = bessel_product(iu, iu + 1, u1, u2);
+                let (p2, d2) = bessel_product(iu + 1, iu, u1, u2);
+                (p1 + p2, d1 + d2)
+            }
+        } else if m % 2 == 1 {
+            // Ms_{2n+1}: Σ (-1)^i B_i [J_i J_{i+1} − J_{i+1} J_i]
+            let (p1, d1) = bessel_product(iu, iu + 1, u1, u2);
+            let (p2, d2) = bessel_product(iu + 1, iu, u1, u2);
+            (p1 - p2, d1 - d2)
+        } else {
+            // Ms_{2n+2}: Σ (-1)^i B_i [J_i J_{i+2} − J_{i+2} J_i]
+            let (p1, d1) = bessel_product(iu, iu + 2, u1, u2);
+            let (p2, d2) = bessel_product(iu + 2, iu, u1, u2);
+            (p1 - p2, d1 - d2)
+        };
+        value += alt * ci * p;
+        deriv += alt * ci * d;
+    }
+    // Series-sign factor (-1)^n from the m = 2n / 2n+1 / 2n+2 parameterization,
+    // divided by the leading angular coefficient.
+    let n_index = if even { m / 2 } else { (m - 1) / 2 };
+    let sign = if n_index % 2 == 0 { 1.0 } else { -1.0 };
+    let scale = sign / coeffs[0];
+    (value * scale, deriv * scale)
+}
+
+/// Even modified Mathieu function of the first kind `Mc1_m(x, q)` and its
+/// derivative w.r.t. `x`, matching `scipy.special.mathieu_modcem1(m, q, x)`.
+#[must_use]
+pub fn mathieu_modcem1(m: u32, q: f64, x: f64) -> (f64, f64) {
+    mathieu_mod1(m, q, x, true)
+}
+
+/// Odd modified Mathieu function of the first kind `Ms1_m(x, q)` (`m ≥ 1`) and
+/// its derivative w.r.t. `x`, matching `scipy.special.mathieu_modsem1(m, q, x)`.
+#[must_use]
+pub fn mathieu_modsem1(m: u32, q: f64, x: f64) -> (f64, f64) {
+    mathieu_mod1(m, q, x, false)
 }
 
 /// Characteristic value of a spheroidal wave function of order `m`, `n` (`n ≥ m`)
@@ -2669,6 +2747,25 @@ mod tests {
         c(obl_cv(0, 4, 8.0), -2.7990336507689504, "obl(0,4,8)");
         // n < m is undefined -> NaN, as SciPy does.
         assert!(pro_cv(3, 1, 2.0).is_nan(), "pro n<m -> NaN");
+    }
+
+    #[test]
+    fn mathieu_mod1_match_scipy() {
+        // frankenscipy: golden (value, derivative) from scipy.special.mathieu_modcem1 /
+        // mathieu_modsem1 (1.17.1).
+        let c = |got: (f64, f64), want: (f64, f64), msg: &str| {
+            assert!((got.0 - want.0).abs() < 1e-9, "{msg} value: got {} want {}", got.0, want.0);
+            assert!((got.1 - want.1).abs() < 1e-9, "{msg} deriv: got {} want {}", got.1, want.1);
+        };
+        c(mathieu_modcem1(0, 5.0, 1.0), (0.024144064633139083, 2.03208182190974), "modcem1(0,5,1)");
+        c(mathieu_modcem1(1, 2.0, 0.8), (0.21245270237182737, -1.329777625044168), "modcem1(1,2,.8)");
+        c(mathieu_modcem1(2, 5.0, 1.2), (-0.20381071990853145, 1.6697575783227967), "modcem1(2,5,1.2)");
+        c(mathieu_modcem1(3, 10.0, 0.5), (0.1830202349061459, -1.5534178465951263), "modcem1(3,10,.5)");
+        c(mathieu_modcem1(4, 5.0, 0.8), (0.40727697154630377, 0.1479917173082351), "modcem1(4,5,.8)");
+        c(mathieu_modsem1(1, 5.0, 1.0), (-0.30984611185156535, 0.29087720606156564), "modsem1(1,5,1)");
+        c(mathieu_modsem1(2, 5.0, 1.2), (-0.26281891612299607, 1.111022300400359), "modsem1(2,5,1.2)");
+        c(mathieu_modsem1(3, 10.0, 0.5), (0.3426517831198076, -0.7748887304796102), "modsem1(3,10,.5)");
+        c(mathieu_modsem1(4, 5.0, 0.8), (0.3957103341885613, 0.23662248116583467), "modsem1(4,5,.8)");
     }
 
     #[test]

@@ -1124,7 +1124,7 @@ fn hankel_derivative_complex_scalar(
 }
 
 /// J_v(z) for real order v via power series.
-fn jv_scalar(v: f64, z: f64) -> f64 {
+pub(crate) fn jv_scalar(v: f64, z: f64) -> f64 {
     if z.is_nan() || v.is_nan() {
         return f64::NAN;
     }
