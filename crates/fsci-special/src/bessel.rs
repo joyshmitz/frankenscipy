@@ -1908,7 +1908,7 @@ fn spherical_bessel_complex_scalar(
     })
 }
 
-fn spherical_jn_scalar(order: f64, x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
+pub(crate) fn spherical_jn_scalar(order: f64, x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
     if order.is_nan() || x.is_nan() {
         return Ok(f64::NAN);
     }

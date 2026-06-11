@@ -23,6 +23,9 @@
 
 use std::f64::consts::PI;
 
+use crate::bessel::spherical_jn_scalar;
+use fsci_runtime::RuntimeMode;
+
 
 /// Evaluate the Legendre polynomial P_n(x) of degree n at point x.
 ///
@@ -1099,6 +1102,81 @@ pub fn pro_ang1(m: u32, n: u32, c: f64, x: f64) -> (f64, f64) {
 #[must_use]
 pub fn obl_ang1(m: u32, n: u32, c: f64, x: f64) -> (f64, f64) {
     spheroidal_ang1(m, n, c, x, false)
+}
+
+/// Spherical Bessel function of the first kind `j_l(z)` (scalar).
+fn sph_jn(l: u32, z: f64) -> f64 {
+    spherical_jn_scalar(f64::from(l), z, RuntimeMode::Strict).unwrap_or(f64::NAN)
+}
+
+/// Derivative `j_l'(z)` via `j_l'(z) = j_{l-1}(z) − (l+1)/z · j_l(z)`, with
+/// `j_0'(z) = −j_1(z)`.
+fn sph_jn_deriv(l: u32, z: f64) -> f64 {
+    if l == 0 {
+        -sph_jn(1, z)
+    } else {
+        sph_jn(l - 1, z) - f64::from(l + 1) / z * sph_jn(l, z)
+    }
+}
+
+/// Spheroidal radial function of the first kind and its derivative w.r.t. `x`.
+///
+/// `R_mn^{(1)}(c, x) = (1 + s/x²)^{m/2} · Σ_k φ_k w_k d_k j_{m+r_k}(c x) /
+/// Σ_k w_k d_k`, where `s = −1` (prolate, `x > 1`) or `s = +1` (oblate, `x > 0`),
+/// `w_k = (2m+r_k)!/r_k!`, `φ_k = (−1)^{(r_k+m−n)/2}`, `r_k = (n−m mod 2) + 2k`,
+/// `d_k` the Flammer angular coefficients, and `j_l` the spherical Bessel
+/// function of the first kind (Flammer / DLMF 30.9).
+fn spheroidal_rad1(m: u32, n: u32, c: f64, x: f64, prolate: bool) -> (f64, f64) {
+    if n < m {
+        return (f64::NAN, f64::NAN);
+    }
+    let (d, parity) = spheroidal_coefficients(m, n, c, prolate);
+    let s = if prolate { -1.0 } else { 1.0 };
+    let z = c * x;
+    // w_k = (2m+r_k)!/r_k! = Π_{j=1}^{2m} (r_k + j); φ_k = (−1)^{(r_k+m−n)/2}.
+    let mut series = 0.0_f64;
+    let mut series_deriv = 0.0_f64;
+    let mut norm = 0.0_f64;
+    for (k, &dk) in d.iter().enumerate() {
+        let r = parity + 2 * k as u32;
+        let l = m + r;
+        let mut w = 1.0_f64;
+        for j in 1..=2 * m {
+            w *= f64::from(r + j);
+        }
+        // φ_k = (−1)^{(l−n)/2}; l−n is even, but can be negative, so use i64.
+        let exponent = (i64::from(l) - i64::from(n)) / 2;
+        let phase = if exponent.rem_euclid(2) == 0 { 1.0 } else { -1.0 };
+        let wd = w * dk;
+        norm += wd;
+        series += phase * wd * sph_jn(l, z);
+        series_deriv += phase * wd * c * sph_jn_deriv(l, z);
+    }
+    let t = series / norm;
+    let t_deriv = series_deriv / norm;
+    let pref = (1.0 + s / (x * x)).powf(f64::from(m) / 2.0);
+    let pref_deriv = if m == 0 {
+        0.0
+    } else {
+        -f64::from(m) * s / (x * x * x) * (1.0 + s / (x * x)).powf(f64::from(m) / 2.0 - 1.0)
+    };
+    (pref * t, pref_deriv * t + pref * t_deriv)
+}
+
+/// Prolate spheroidal radial function of the first kind `R_mn^{(1)}(c, x)` and
+/// its derivative w.r.t. `x`, matching `scipy.special.pro_rad1(m, n, c, x)`
+/// (`n ≥ m`, `x > 1`).
+#[must_use]
+pub fn pro_rad1(m: u32, n: u32, c: f64, x: f64) -> (f64, f64) {
+    spheroidal_rad1(m, n, c, x, true)
+}
+
+/// Oblate spheroidal radial function of the first kind `R_mn^{(1)}(c, x)` and
+/// its derivative w.r.t. `x`, matching `scipy.special.obl_rad1(m, n, c, x)`
+/// (`n ≥ m`, `x > 0`).
+#[must_use]
+pub fn obl_rad1(m: u32, n: u32, c: f64, x: f64) -> (f64, f64) {
+    spheroidal_rad1(m, n, c, x, false)
 }
 
 /// Evaluate the shifted Legendre polynomial P_n*(x) = P_n(2x - 1).
@@ -2463,6 +2541,25 @@ mod tests {
             ],
             "all(4,-0.6,2)",
         );
+    }
+
+    #[test]
+    fn spheroidal_rad1_match_scipy() {
+        // frankenscipy: golden (value, derivative) from scipy.special.pro_rad1 / obl_rad1 (1.17.1).
+        let c = |got: (f64, f64), want: (f64, f64), msg: &str| {
+            assert!((got.0 - want.0).abs() < 1e-8, "{msg} value: got {} want {}", got.0, want.0);
+            assert!((got.1 - want.1).abs() < 1e-8, "{msg} deriv: got {} want {}", got.1, want.1);
+        };
+        c(pro_rad1(0, 1, 1.0, 1.5), (0.4138205450234367, 0.14462549507897315), "pro(0,1,1,1.5)");
+        c(pro_rad1(1, 2, 2.0, 1.3), (0.20800143088699186, 0.38525174496351966), "pro(1,2,2,1.3)");
+        c(pro_rad1(0, 2, 3.0, 1.4), (0.3427807385468018, -0.2848804090728431), "pro(0,2,3,1.4)");
+        c(pro_rad1(2, 3, 2.0, 1.6), (0.12304660475662652, 0.2341694344697482), "pro(2,3,2,1.6)");
+        c(pro_rad1(0, 3, 5.0, 2.5), (0.08751848334486662, -0.041034086997124256), "pro(0,3,5,2.5)");
+        c(obl_rad1(0, 1, 1.0, 0.5), (0.15622885398178357, 0.29654103600390647), "obl(0,1,1,0.5)");
+        c(obl_rad1(1, 2, 2.0, 0.8), (0.19179313880509874, 0.2380821457479905), "obl(1,2,2,0.8)");
+        c(obl_rad1(2, 5, 3.0, 1.0), (0.03647796691020278, 0.09888356007741966), "obl(2,5,3,1.0)");
+        let (nv, nd) = pro_rad1(3, 1, 2.0, 1.5);
+        assert!(nv.is_nan() && nd.is_nan(), "pro_rad1 n<m -> NaN");
     }
 
     #[test]
