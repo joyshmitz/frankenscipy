@@ -6803,6 +6803,16 @@ struct HouseholderReflector {
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
+struct CompactWyPanel {
+    active_start: usize,
+    row_count: usize,
+    reflector_count: usize,
+    v_by_k_row: Vec<f64>,
+    t_row_major: Vec<f64>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
 struct BidiagonalReduction {
     rows: usize,
     cols: usize,
@@ -7193,6 +7203,200 @@ fn apply_householder_right_with_workspace(
             }
         }
     }
+}
+
+#[allow(dead_code)]
+fn compact_wy_panel_from_reflectors(
+    active_start: usize,
+    row_count: usize,
+    reflectors: &[HouseholderReflector],
+) -> Result<CompactWyPanel, LinalgError> {
+    if row_count == 0 && !reflectors.is_empty() {
+        return Err(LinalgError::InvalidArgument {
+            detail: "compact-WY panel requires rows for non-empty reflectors".to_string(),
+        });
+    }
+    let reflector_count = reflectors.len();
+    let mut v_by_k_row = vec![0.0_f64; reflector_count * row_count];
+
+    for (k_idx, reflector) in reflectors.iter().enumerate() {
+        if reflector.start < active_start {
+            return Err(LinalgError::InvalidArgument {
+                detail: "reflector starts before active panel".to_string(),
+            });
+        }
+        let offset = reflector.start - active_start;
+        if offset + reflector.values.len() > row_count {
+            return Err(LinalgError::IncompatibleShapes {
+                a_shape: (row_count, reflector_count),
+                b_len: offset + reflector.values.len(),
+            });
+        }
+        let base = k_idx * row_count + offset;
+        for (value_idx, value) in reflector.values.iter().enumerate() {
+            v_by_k_row[base + value_idx] = *value;
+        }
+    }
+
+    let mut t_row_major = vec![0.0_f64; reflector_count * reflector_count];
+    for j in 0..reflector_count {
+        let tau = reflectors[j].tau;
+        if tau == 0.0 {
+            continue;
+        }
+
+        for i in 0..j {
+            let mut dot = 0.0;
+            let left_base = i * row_count;
+            let right_base = j * row_count;
+            for row in 0..row_count {
+                dot += v_by_k_row[left_base + row] * v_by_k_row[right_base + row];
+            }
+            t_row_major[i * reflector_count + j] = -tau * dot;
+        }
+
+        let mut transformed = vec![0.0_f64; j];
+        for row in 0..j {
+            let mut value = 0.0;
+            for col in 0..j {
+                value += t_row_major[row * reflector_count + col]
+                    * t_row_major[col * reflector_count + j];
+            }
+            transformed[row] = value;
+        }
+        for row in 0..j {
+            t_row_major[row * reflector_count + j] = transformed[row];
+        }
+        t_row_major[j * reflector_count + j] = tau;
+    }
+
+    Ok(CompactWyPanel {
+        active_start,
+        row_count,
+        reflector_count,
+        v_by_k_row,
+        t_row_major,
+    })
+}
+
+#[allow(dead_code)]
+fn apply_compact_wy_symmetric_update(
+    matrix: &mut DMatrix<f64>,
+    panel: &CompactWyPanel,
+) -> Result<(), LinalgError> {
+    let n = matrix.nrows();
+    if n != matrix.ncols() {
+        return Err(LinalgError::ExpectedSquareMatrix);
+    }
+    if panel.active_start > n || panel.active_start + panel.row_count > n {
+        return Err(LinalgError::IncompatibleShapes {
+            a_shape: (n, n),
+            b_len: panel.active_start + panel.row_count,
+        });
+    }
+
+    let row_count = panel.row_count;
+    let k_count = panel.reflector_count;
+    if k_count == 0 || row_count == 0 {
+        return Ok(());
+    }
+    if panel.v_by_k_row.len() != k_count * row_count || panel.t_row_major.len() != k_count * k_count
+    {
+        return Err(LinalgError::IncompatibleShapes {
+            a_shape: (row_count, k_count),
+            b_len: panel.v_by_k_row.len().max(panel.t_row_major.len()),
+        });
+    }
+
+    let active_start = panel.active_start;
+    let mut av_by_k_row = vec![0.0_f64; k_count * row_count];
+    {
+        let data = matrix.as_slice();
+        for k_idx in 0..k_count {
+            let av_base = k_idx * row_count;
+            let v_base = k_idx * row_count;
+            for col_rel in 0..row_count {
+                let v_value = panel.v_by_k_row[v_base + col_rel];
+                if v_value == 0.0 {
+                    continue;
+                }
+                let col_base = (active_start + col_rel) * n + active_start;
+                for row_rel in 0..row_count {
+                    av_by_k_row[av_base + row_rel] += data[col_base + row_rel] * v_value;
+                }
+            }
+        }
+    }
+
+    let mut w_by_k_row = vec![0.0_f64; k_count * row_count];
+    for out_k in 0..k_count {
+        let out_base = out_k * row_count;
+        for in_k in 0..k_count {
+            let coeff = panel.t_row_major[in_k * k_count + out_k];
+            if coeff == 0.0 {
+                continue;
+            }
+            let in_base = in_k * row_count;
+            for row in 0..row_count {
+                w_by_k_row[out_base + row] += av_by_k_row[in_base + row] * coeff;
+            }
+        }
+    }
+
+    let mut vt_w = vec![0.0_f64; k_count * k_count];
+    for left_k in 0..k_count {
+        let left_base = left_k * row_count;
+        for right_k in 0..k_count {
+            let right_base = right_k * row_count;
+            let mut dot = 0.0;
+            for row in 0..row_count {
+                dot += panel.v_by_k_row[left_base + row] * w_by_k_row[right_base + row];
+            }
+            vt_w[left_k * k_count + right_k] = dot;
+        }
+    }
+
+    let mut correction = vec![0.0_f64; k_count * k_count];
+    for row_k in 0..k_count {
+        for col_k in 0..k_count {
+            let mut value = 0.0;
+            for inner_k in 0..k_count {
+                value +=
+                    panel.t_row_major[inner_k * k_count + row_k] * vt_w[inner_k * k_count + col_k];
+            }
+            correction[row_k * k_count + col_k] = 0.5 * value;
+        }
+    }
+
+    for out_k in 0..k_count {
+        let out_base = out_k * row_count;
+        for in_k in 0..k_count {
+            let coeff = correction[in_k * k_count + out_k];
+            if coeff == 0.0 {
+                continue;
+            }
+            let v_base = in_k * row_count;
+            for row in 0..row_count {
+                w_by_k_row[out_base + row] -= panel.v_by_k_row[v_base + row] * coeff;
+            }
+        }
+    }
+
+    let data = matrix.as_mut_slice();
+    for col_rel in 0..row_count {
+        let col_base = (active_start + col_rel) * n + active_start;
+        for row_rel in 0..row_count {
+            let mut delta = 0.0;
+            for k_idx in 0..k_count {
+                let base = k_idx * row_count;
+                delta += panel.v_by_k_row[base + row_rel] * w_by_k_row[base + col_rel];
+                delta += w_by_k_row[base + row_rel] * panel.v_by_k_row[base + col_rel];
+            }
+            data[col_base + row_rel] -= delta;
+        }
+    }
+
+    Ok(())
 }
 
 #[allow(dead_code)]
@@ -15302,6 +15506,161 @@ mod tests {
         }
 
         (v_by_k_row, y_by_col_k, x_by_k_row, u_by_col_k)
+    }
+
+    fn compact_wy_symmetric_matrix(n: usize) -> DMatrix<f64> {
+        DMatrix::from_fn(n, n, |row, col| {
+            let lo = row.min(col);
+            let hi = row.max(col);
+            if lo == hi {
+                (n as f64) * 2.0 + (lo as f64) * 0.03125
+            } else {
+                let span = (hi - lo + 1) as f64;
+                ((lo + 3) as f64 * 0.017).sin() / span + ((hi + 5) as f64 * 0.013).cos() * 0.0078125
+            }
+        })
+    }
+
+    fn compact_wy_panel_reflectors(
+        n: usize,
+        active_start: usize,
+        k_count: usize,
+    ) -> Vec<HouseholderReflector> {
+        (0..k_count)
+            .map(|k_idx| {
+                let start = active_start + k_idx;
+                let values = (start..n)
+                    .map(|row| {
+                        let seed = (row + 1) as f64 * (k_idx + 3) as f64;
+                        0.25 + seed.sin() * 0.03125 + seed.cos() * 0.015625
+                    })
+                    .collect();
+                make_householder_reflector(start, values)
+            })
+            .collect()
+    }
+
+    fn apply_scalar_symmetric_reflector_replay(
+        matrix: &mut DMatrix<f64>,
+        reflectors: &[HouseholderReflector],
+        active_start: usize,
+    ) {
+        let mut workspace = vec![0.0_f64; matrix.nrows()];
+        for reflector in reflectors {
+            apply_householder_left(matrix, reflector, active_start);
+            apply_householder_right_with_workspace(matrix, reflector, active_start, &mut workspace);
+        }
+    }
+
+    fn symmetric_matrix_drift(matrix: &DMatrix<f64>) -> f64 {
+        let mut max_abs = 0.0_f64;
+        for row in 0..matrix.nrows() {
+            for col in row + 1..matrix.ncols() {
+                max_abs = max_abs.max((matrix[(row, col)] - matrix[(col, row)]).abs());
+            }
+        }
+        max_abs
+    }
+
+    #[test]
+    fn compact_wy_symmetric_update_matches_scalar_replay() {
+        for (n, active_start, k_count) in [(12usize, 2usize, 2usize), (33, 4, 5), (65, 8, 8)] {
+            let original = compact_wy_symmetric_matrix(n);
+            let reflectors = compact_wy_panel_reflectors(n, active_start, k_count);
+            let panel =
+                compact_wy_panel_from_reflectors(active_start, n - active_start, &reflectors)
+                    .expect("compact-WY panel");
+
+            let mut reference = original.clone();
+            apply_scalar_symmetric_reflector_replay(&mut reference, &reflectors, active_start);
+
+            let mut compact = original;
+            apply_compact_wy_symmetric_update(&mut compact, &panel).expect("compact-WY update");
+
+            let max_abs = max_abs_dmatrix_diff(&compact, &reference);
+            let scale = dmatrix_max_abs_value(&reference).max(1.0);
+            let symmetry_drift = symmetric_matrix_drift(&compact);
+            assert!(
+                max_abs <= 1e-10 * scale * (k_count as f64).sqrt(),
+                "compact-WY update drift {max_abs:.17e} for n={n}, start={active_start}, k={k_count}"
+            );
+            assert!(
+                symmetry_drift <= 1e-10 * scale,
+                "compact-WY symmetry drift {symmetry_drift:.17e}"
+            );
+            println!(
+                "compact_wy_digest n={n} start={active_start} k={k_count} digest={:#018x}",
+                dmatrix_bits_digest(&compact)
+            );
+        }
+    }
+
+    #[test]
+    fn compact_wy_panel_rejects_invalid_shapes() {
+        let reflectors = compact_wy_panel_reflectors(8, 2, 2);
+        let err = compact_wy_panel_from_reflectors(3, 5, &reflectors)
+            .expect_err("reflector before active start rejected");
+        assert!(matches!(err, LinalgError::InvalidArgument { .. }));
+
+        let err = compact_wy_panel_from_reflectors(2, 1, &reflectors)
+            .expect_err("short row count rejected");
+        assert!(matches!(err, LinalgError::IncompatibleShapes { .. }));
+
+        let panel =
+            compact_wy_panel_from_reflectors(2, 6, &reflectors).expect("valid compact-WY panel");
+        let mut rectangular = DMatrix::<f64>::zeros(3, 4);
+        let err = apply_compact_wy_symmetric_update(&mut rectangular, &panel)
+            .expect_err("rectangular matrix rejected");
+        assert!(matches!(err, LinalgError::ExpectedSquareMatrix));
+    }
+
+    #[test]
+    #[ignore = "perf probe: run with rch and --release for compact-WY vs scalar symmetric panel update"]
+    fn compact_wy_symmetric_update_perf_probe() {
+        for n in [256usize, 512] {
+            let active_start = 32;
+            let k_count = 8;
+            let original = compact_wy_symmetric_matrix(n);
+            let reflectors = compact_wy_panel_reflectors(n, active_start, k_count);
+            let panel =
+                compact_wy_panel_from_reflectors(active_start, n - active_start, &reflectors)
+                    .expect("compact-WY panel");
+
+            let mut reference = original.clone();
+            let started_at = std::time::Instant::now();
+            apply_scalar_symmetric_reflector_replay(&mut reference, &reflectors, active_start);
+            let scalar_ms = started_at.elapsed().as_secs_f64() * 1_000.0;
+
+            let mut compact = original;
+            let started_at = std::time::Instant::now();
+            apply_compact_wy_symmetric_update(&mut compact, &panel).expect("compact-WY update");
+            let compact_ms = started_at.elapsed().as_secs_f64() * 1_000.0;
+
+            let max_abs = max_abs_dmatrix_diff(&compact, &reference);
+            let scale = dmatrix_max_abs_value(&reference).max(1.0);
+            let symmetry_drift = symmetric_matrix_drift(&compact);
+            assert!(
+                max_abs <= 1e-9 * scale,
+                "compact-WY update drift {max_abs:.17e} for n={n}"
+            );
+            assert!(
+                symmetry_drift <= 1e-9 * scale,
+                "compact-WY symmetry drift {symmetry_drift:.17e} for n={n}"
+            );
+
+            println!("COMPACT_WY_SYMMETRIC_UPDATE_PERF_BEGIN");
+            println!("shape={n}x{n}");
+            println!("active_start={active_start}");
+            println!("k_count={k_count}");
+            println!("scalar_replay_ms={scalar_ms:.6}");
+            println!("compact_wy_ms={compact_ms:.6}");
+            println!("speedup={:.6}", scalar_ms / compact_ms);
+            println!("max_abs_diff={max_abs:.17e}");
+            println!("symmetry_drift={symmetry_drift:.17e}");
+            println!("reference_digest={:#018x}", dmatrix_bits_digest(&reference));
+            println!("compact_digest={:#018x}", dmatrix_bits_digest(&compact));
+            println!("COMPACT_WY_SYMMETRIC_UPDATE_PERF_END");
+        }
     }
 
     #[allow(clippy::too_many_arguments)]

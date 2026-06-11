@@ -1,0 +1,794 @@
+  [2m2026-06-11T15:26:48.227311Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mSelected worker: vmi1227854 at root@109.123.245.77 (6 slots remaining after reservation, speed 50.0)[0m
+    [2;3mat[0m rch/src/hook.rs:514 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:26:48.685072Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mStarting remote compilation pipeline for frankenscipy (hash: d2200aa47ec6b64b)[0m
+    [2;3mat[0m rch/src/hook.rs:5994 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:26:48.685129Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mPrepared dependency sync manifest for 20 roots[0m
+    [2;3mat[0m rch/src/hook.rs:6016 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:26:50.858790Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mSyncing project to worker vmi1227854...[0m
+    [2;3mat[0m rch/src/hook.rs:6046 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:26:50.859197Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy -> /data/projects/frankenscipy on vmi1227854[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:26:55.231852Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 4372ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:26:55.231980Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-arrayapi -> /data/projects/frankenscipy/crates/fsci-arrayapi on vmi1227854[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:26:57.362629Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 2130ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:26:57.362777Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-cluster -> /data/projects/frankenscipy/crates/fsci-cluster on vmi1227854[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:26:59.289887Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1927ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:26:59.290017Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-conformance -> /data/projects/frankenscipy/crates/fsci-conformance on vmi1227854[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:27:02.814899Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 3524ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:27:02.815032Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-constants -> /data/projects/frankenscipy/crates/fsci-constants on vmi1227854[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:27:04.741884Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1926ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:27:04.742021Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-datasets -> /data/projects/frankenscipy/crates/fsci-datasets on vmi1227854[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:27:06.686902Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1944ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:27:06.687060Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-fft -> /data/projects/frankenscipy/crates/fsci-fft on vmi1227854[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:27:08.837031Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 2149ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:27:08.837167Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-integrate -> /data/projects/frankenscipy/crates/fsci-integrate on vmi1227854[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:27:10.819532Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1982ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:27:10.819664Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-interpolate -> /data/projects/frankenscipy/crates/fsci-interpolate on vmi1227854[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:27:12.988882Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 2169ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:27:12.989023Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-io -> /data/projects/frankenscipy/crates/fsci-io on vmi1227854[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:27:14.977876Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1988ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:27:14.978014Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-linalg -> /data/projects/frankenscipy/crates/fsci-linalg on vmi1227854[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:27:17.109834Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 2131ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:27:17.109970Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-ndimage -> /data/projects/frankenscipy/crates/fsci-ndimage on vmi1227854[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:27:19.113856Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 2003ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:27:19.113989Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-odr -> /data/projects/frankenscipy/crates/fsci-odr on vmi1227854[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:27:21.061569Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1947ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:27:21.061699Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-opt -> /data/projects/frankenscipy/crates/fsci-opt on vmi1227854[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:27:23.120598Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 2058ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:27:23.120724Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-runtime -> /data/projects/frankenscipy/crates/fsci-runtime on vmi1227854[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:27:25.105654Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1984ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:27:25.105805Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-signal -> /data/projects/frankenscipy/crates/fsci-signal on vmi1227854[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:27:26.999877Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1894ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:27:27.000009Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-sparse -> /data/projects/frankenscipy/crates/fsci-sparse on vmi1227854[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:27:28.872574Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1872ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:27:28.872741Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-spatial -> /data/projects/frankenscipy/crates/fsci-spatial on vmi1227854[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:27:30.685629Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1812ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:27:30.685777Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-special -> /data/projects/frankenscipy/crates/fsci-special on vmi1227854[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:27:32.548696Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1862ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:27:32.548864Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-stats -> /data/projects/frankenscipy/crates/fsci-stats on vmi1227854[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:27:34.418324Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1869ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:27:34.418363Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mSync complete: 26592 files, 1225376 bytes in 43543ms[0m
+    [2;3mat[0m rch/src/hook.rs:6209 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:28:03.293247Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mExecuting command remotely: env 'CARGO_BUILD_JOBS=1' cargo test -j 1 -p fsci-linalg --lib --locked -- --list[0m
+    [2;3mat[0m rch/src/hook.rs:6252 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:28:03.293301Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mRewriting CARGO_TARGET_DIR for remote execution (worker-scoped path): /data/tmp/cargo-target -> /data/projects/frankenscipy/.rch-target-vmi1227854-job-29879662679166356-1781191610858782674-0[0m
+    [2;3mat[0m rch/src/transfer.rs:712 [2;3mon[0m ThreadId(1)
+
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded alloca v0.4.0
+  Downloaded crossbeam-deque v0.8.6
+  Downloaded aho-corasick v1.1.4
+  Downloaded cpufeatures v0.3.0
+  Downloaded bytemuck v1.25.0
+  Downloaded bit-set v0.8.0
+  Downloaded ciborium v0.2.2
+  Downloaded clap v4.6.1
+  Downloaded cfg-if v1.0.4
+  Downloaded anes v0.1.6
+  Downloaded criterion-plot v0.8.2
+  Downloaded tempfile v3.27.0
+  Downloaded zmij v1.0.21
+  Downloaded arrayref v0.3.9
+  Downloaded cc v1.2.60
+  Downloaded crossbeam-utils v0.8.21
+  Downloaded clap_builder v4.6.0
+  Downloaded bit-vec v0.8.0
+  Downloaded cast v0.3.0
+  Downloaded wait-timeout v0.2.1
+  Downloaded matrixmultiply v0.3.10
+  Downloaded simba v0.9.1
+  Downloaded walkdir v2.5.0
+  Downloaded clap_lex v1.1.0
+  Downloaded num-integer v0.1.46
+  Downloaded once_cell v1.21.4
+  Downloaded constant_time_eq v0.4.2
+  Downloaded memchr v2.8.0
+  Downloaded unarray v0.1.4
+  Downloaded zerocopy-derive v0.8.48
+  Downloaded quick-error v1.2.3
+  Downloaded serde_json v1.0.149
+  Downloaded oorandom v11.1.5
+  Downloaded tinytemplate v1.2.1
+  Downloaded rayon-core v1.13.0
+  Downloaded unicode-ident v1.0.24
+  Downloaded page_size v0.6.0
+  Downloaded shlex v1.3.0
+  Downloaded serde_core v1.0.228
+  Downloaded rusty-fork v0.3.1
+  Downloaded itoa v1.0.18
+  Downloaded typenum v1.20.0
+  Downloaded same-file v1.0.6
+  Downloaded wide v0.7.33
+  Downloaded ciborium-io v0.2.2
+  Downloaded glam v0.18.0
+  Downloaded nalgebra-macros v0.3.0
+  Downloaded num-complex v0.4.6
+  Downloaded num-traits v0.2.19
+  Downloaded proc-macro2 v1.0.106
+  Downloaded quote v1.0.45
+  Downloaded rand_xorshift v0.4.0
+  Downloaded rawpointer v0.2.1
+  Downloaded regex v1.12.3
+  Downloaded serde_derive v1.0.228
+  Downloaded anstyle v1.0.14
+  Downloaded ciborium-ll v0.2.2
+  Downloaded equivalent v1.0.2
+  Downloaded errno v0.3.14
+  Downloaded find-msvc-tools v0.1.9
+  Downloaded crossbeam-epoch v0.9.18
+  Downloaded rand_core v0.9.5
+  Downloaded safe_arch v0.7.4
+  Downloaded num-rational v0.4.2
+  Downloaded bitflags v2.11.1
+  Downloaded syn v2.0.117
+  Downloaded num-bigint v0.4.6
+  Downloaded plotters-svg v0.3.7
+  Downloaded zerocopy v0.8.48
+  Downloaded arrayvec v0.7.6
+  Downloaded ppv-lite86 v0.2.21
+  Downloaded rand_chacha v0.9.0
+  Downloaded either v1.15.0
+  Downloaded paste v1.0.15
+  Downloaded glam v0.14.0
+  Downloaded approx v0.5.1
+  Downloaded half v2.7.1
+  Downloaded plotters-backend v0.3.7
+  Downloaded fnv v1.0.7
+  Downloaded fastrand v2.4.1
+  Downloaded serde v1.0.228
+  Downloaded glam v0.22.0
+  Downloaded autocfg v1.5.0
+  Downloaded rand v0.9.4
+  Downloaded getrandom v0.3.4
+  Downloaded glam v0.24.2
+  Downloaded criterion v0.8.2
+  Downloaded indexmap v2.14.0
+  Downloaded itertools v0.13.0
+  Downloaded plotters v0.3.7
+  Downloaded glam v0.17.3
+  Downloaded glam v0.19.0
+  Downloaded rayon v1.12.0
+  Downloaded glam v0.15.2
+  Downloaded glam v0.23.0
+  Downloaded glam v0.16.0
+  Downloaded proptest v1.11.0
+  Downloaded rustix v1.1.4
+  Downloaded blake3 v1.8.4
+  Downloaded glam v0.20.5
+  Downloaded hashbrown v0.17.0
+  Downloaded glam v0.21.3
+  Downloaded nalgebra v0.34.2
+  Downloaded glam v0.27.0
+  Downloaded glam v0.29.3
+  Downloaded regex-syntax v0.8.10
+  Downloaded glam v0.25.0
+  Downloaded glam v0.28.0
+  Downloaded regex-automata v0.4.14
+  Downloaded glam v0.31.1
+  Downloaded libc v0.2.185
+  Downloaded glam v0.30.10
+  Downloaded glam v0.32.1
+  Downloaded linux-raw-sys v0.12.1
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.45
+   Compiling syn v2.0.117
+   Compiling autocfg v1.5.0
+   Compiling cfg-if v1.0.4
+   Compiling libc v0.2.185
+   Compiling num-traits v0.2.19
+   Compiling find-msvc-tools v0.1.9
+   Compiling shlex v1.3.0
+   Compiling cc v1.2.60
+   Compiling getrandom v0.3.4
+   Compiling zerocopy v0.8.48
+   Compiling serde_core v1.0.228
+   Compiling zerocopy-derive v0.8.48
+   Compiling zmij v1.0.21
+   Compiling crossbeam-utils v0.8.21
+   Compiling serde v1.0.228
+   Compiling serde_derive v1.0.228
+   Compiling hashbrown v0.17.0
+   Compiling serde_json v1.0.149
+   Compiling equivalent v1.0.2
+   Compiling indexmap v2.14.0
+   Compiling memchr v2.8.0
+   Compiling rustix v1.1.4
+   Compiling itoa v1.0.18
+   Compiling crossbeam-epoch v0.9.18
+   Compiling rand_core v0.9.5
+   Compiling blake3 v1.8.4
+   Compiling either v1.15.0
+   Compiling regex-syntax v0.8.10
+   Compiling linux-raw-sys v0.12.1
+   Compiling rayon-core v1.13.0
+   Compiling bitflags v2.11.1
+   Compiling bytemuck v1.25.0
+   Compiling paste v1.0.15
+   Compiling safe_arch v0.7.4
+   Compiling crossbeam-deque v0.8.6
+   Compiling half v2.7.1
+   Compiling alloca v0.4.0
+   Compiling matrixmultiply v0.3.10
+   Compiling arrayref v0.3.9
+   Compiling arrayvec v0.7.6
+   Compiling once_cell v1.21.4
+   Compiling plotters-backend v0.3.7
+   Compiling fastrand v2.4.1
+   Compiling clap_lex v1.1.0
+   Compiling anstyle v1.0.14
+   Compiling ciborium-io v0.2.2
+   Compiling constant_time_eq v0.4.2
+   Compiling cpufeatures v0.3.0
+   Compiling ciborium-ll v0.2.2
+   Compiling clap_builder v4.6.0
+   Compiling tempfile v3.27.0
+   Compiling plotters-svg v0.3.7
+   Compiling wide v0.7.33
+   Compiling regex-automata v0.4.14
+   Compiling itertools v0.13.0
+   Compiling ppv-lite86 v0.2.21
+   Compiling num-complex v0.4.6
+   Compiling num-integer v0.1.46
+   Compiling approx v0.5.1
+   Compiling wait-timeout v0.2.1
+   Compiling fnv v1.0.7
+   Compiling quick-error v1.2.3
+   Compiling rawpointer v0.2.1
+   Compiling cast v0.3.0
+   Compiling bit-vec v0.8.0
+   Compiling same-file v1.0.6
+   Compiling walkdir v2.5.0
+   Compiling bit-set v0.8.0
+   Compiling criterion-plot v0.8.2
+   Compiling rusty-fork v0.3.1
+   Compiling simba v0.9.1
+   Compiling num-rational v0.4.2
+   Compiling rand_chacha v0.9.0
+   Compiling regex v1.12.3
+   Compiling rayon v1.12.0
+   Compiling plotters v0.3.7
+   Compiling clap v4.6.1
+   Compiling ciborium v0.2.2
+   Compiling fsci-runtime v0.1.0 (/data/projects/frankenscipy/crates/fsci-runtime)
+   Compiling rand v0.9.4
+   Compiling rand_xorshift v0.4.0
+   Compiling tinytemplate v1.2.1
+   Compiling page_size v0.6.0
+   Compiling nalgebra-macros v0.3.0
+   Compiling oorandom v11.1.5
+   Compiling unarray v0.1.4
+   Compiling anes v0.1.6
+   Compiling typenum v1.20.0
+   Compiling nalgebra v0.34.2
+   Compiling criterion v0.8.2
+   Compiling proptest v1.11.0
+   Compiling fsci-fft v0.1.0 (/data/projects/frankenscipy/crates/fsci-fft)
+   Compiling fsci-linalg v0.1.0 (/data/projects/frankenscipy/crates/fsci-linalg)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 18s
+     Running unittests src/lib.rs (.rch-target-vmi1227854-job-29879662679166356-1781191610858782674-0/debug/deps/fsci_linalg-cdf90e578aba58fd)
+proptest_tests::cho_solve_matches_scipy_reference_values: test
+proptest_tests::cholesky_matches_scipy_reference_values: test
+proptest_tests::cosm_diagonal_matrix_matches_scipy_reference: test
+proptest_tests::det_inverse_consistency: test
+proptest_tests::det_matches_scipy_reference_values: test
+proptest_tests::det_product_property: test
+proptest_tests::eig_banded_diagonal: test
+proptest_tests::eig_banded_eigvals_only: test
+proptest_tests::eig_banded_empty: test
+proptest_tests::eig_banded_tridiagonal: test
+proptest_tests::eigh_matches_scipy_reference_values: test
+proptest_tests::eigh_tridiagonal_2x2: test
+proptest_tests::eigh_tridiagonal_diagonal_matrix: test
+proptest_tests::eigh_tridiagonal_eigenvalues_only: test
+proptest_tests::eigh_tridiagonal_empty: test
+proptest_tests::eigh_tridiagonal_invalid_e_length: test
+proptest_tests::eigh_tridiagonal_zero_diagonal_pair_spectrum_eigenvectors_residual: test
+proptest_tests::eigvals_matches_scipy_reference_values: test
+proptest_tests::eigvalsh_symmetric_matrix_matches_scipy_reference: test
+proptest_tests::expm_matches_scipy_reference_values: test
+proptest_tests::fractional_matrix_power_integer: test
+proptest_tests::fractional_matrix_power_sqrt: test
+proptest_tests::funm_exp_matches_expm: test
+proptest_tests::funm_rejects_non_square: test
+proptest_tests::hessenberg_matches_scipy_reference_values: test
+proptest_tests::hyperbolic_matrix_functions_match_scalar_diagonal: test
+proptest_tests::inv_matches_scipy_reference_values: test
+proptest_tests::inverse_roundtrip: test
+proptest_tests::is_orthogonal_rejects_ragged_or_non_finite: test
+proptest_tests::is_positive_definite_rejects_non_finite_entries: test
+proptest_tests::ishermitian_false_for_real_asymmetric_matrix: test
+proptest_tests::ishermitian_matches_symmetric_for_real_matrix: test
+proptest_tests::issymmetric_false_for_asymmetric: test
+proptest_tests::issymmetric_non_square: test
+proptest_tests::issymmetric_rejects_non_finite_entries: test
+proptest_tests::issymmetric_true_for_symmetric: test
+proptest_tests::issymmetric_with_tolerance: test
+proptest_tests::khatri_rao_basic: test
+proptest_tests::khatri_rao_mismatched_cols: test
+proptest_tests::ldl_1x1: test
+proptest_tests::ldl_3x3: test
+proptest_tests::ldl_empty_matrix: test
+proptest_tests::ldl_hardened_rejects_asymmetric: test
+proptest_tests::ldl_identity: test
+proptest_tests::ldl_matches_scipy_reference_values: test
+proptest_tests::ldl_non_square_rejected: test
+proptest_tests::ldl_positive_definite: test
+proptest_tests::ldl_symmetric_indefinite: test
+proptest_tests::logm_matches_scipy_reference_values: test
+proptest_tests::lstsq_matches_scipy_reference_values: test
+proptest_tests::lstsq_residual_minimality: test
+proptest_tests::lu_matches_scipy_reference_values: test
+proptest_tests::lu_solve_matches_scipy_reference_values: test
+proptest_tests::lu_triangular_factors_match_scipy_convention: test
+proptest_tests::mat_allclose_handles_nan_and_infinity_explicitly: test
+proptest_tests::mat_norm_1_rejects_ragged_or_non_finite: test
+proptest_tests::matrix_power_negative_one_is_inverse: test
+proptest_tests::matrix_power_negative_two: test
+proptest_tests::matrix_power_one_returns_original: test
+proptest_tests::matrix_power_rejects_non_square: test
+proptest_tests::matrix_power_two_matches_multiply: test
+proptest_tests::matrix_power_zero_returns_identity: test
+proptest_tests::matrix_rank_explicit_tolerance_changes_result: test
+proptest_tests::norm_1_matches_scipy_reference_values: test
+proptest_tests::norm_frobenius_matches_scipy_reference_values: test
+proptest_tests::norm_inf_matches_scipy_reference_values: test
+proptest_tests::pinv_matches_scipy_reference_values: test
+proptest_tests::pinv_rank_bounded: test
+proptest_tests::polar_matches_scipy_reference_values: test
+proptest_tests::qr_matches_scipy_reference_values: test
+proptest_tests::rcond_is_bounded: test
+proptest_tests::roundtrip_solve: test
+proptest_tests::schur_matches_scipy_reference_values: test
+proptest_tests::signm_identity: test
+proptest_tests::signm_matches_scipy_reference_values: test
+proptest_tests::signm_negative_identity: test
+proptest_tests::sinm_diagonal_matrix_matches_scipy_reference: test
+proptest_tests::solve_circulant_accepts_singular_with_compatible_rhs: test
+proptest_tests::solve_circulant_identity: test
+proptest_tests::solve_circulant_rejects_singular_with_nonzero_rhs: test
+proptest_tests::solve_circulant_shift: test
+proptest_tests::solve_continuous_are_3x3_residual: test
+proptest_tests::solve_continuous_are_carex_1x1: test
+proptest_tests::solve_continuous_are_carex_2x2_residual: test
+proptest_tests::solve_continuous_are_rejects_non_square_a: test
+proptest_tests::solve_continuous_lyapunov_basic: test
+proptest_tests::solve_continuous_lyapunov_matches_scipy_reference: test
+proptest_tests::solve_continuous_lyapunov_non_symmetric_a: test
+proptest_tests::solve_discrete_are_darex_1x1: test
+proptest_tests::solve_discrete_are_darex_2x2_residual: test
+proptest_tests::solve_discrete_are_rejects_dimension_mismatch: test
+proptest_tests::solve_discrete_lyapunov_complex_eigenvalues_2x2_block: test
+proptest_tests::solve_discrete_lyapunov_diagonal: test
+proptest_tests::solve_discrete_lyapunov_perf_vs_kronecker: test
+proptest_tests::solve_discrete_lyapunov_rejects_non_square: test
+proptest_tests::solve_discrete_lyapunov_stable: test
+proptest_tests::solve_discrete_lyapunov_unit_eigenvalue_errors: test
+proptest_tests::solve_matches_scipy_reference_values: test
+proptest_tests::solve_sylvester_3x3: test
+proptest_tests::solve_sylvester_complex_eigenvalues_2x2_block: test
+proptest_tests::solve_sylvester_diagonal: test
+proptest_tests::solve_sylvester_general: test
+proptest_tests::solve_sylvester_matches_scipy_reference: test
+proptest_tests::solve_sylvester_perf_vs_kronecker: test
+proptest_tests::solve_sylvester_rejects_non_square: test
+proptest_tests::solve_sylvester_singular_system_errors: test
+proptest_tests::solve_toeplitz_ignores_row_zero_entry: test
+proptest_tests::solve_toeplitz_matches_scipy_doc_example: test
+proptest_tests::solve_toeplitz_rejects_shape_mismatch: test
+proptest_tests::solve_toeplitz_symmetric_identity: test
+proptest_tests::solve_triangular_matches_scipy_reference_values: test
+proptest_tests::solve_triangular_matches_solve_for_triangular_input: test
+proptest_tests::sqrtm_3x3_spd: test
+proptest_tests::sqrtm_diagonal: test
+proptest_tests::sqrtm_identity: test
+proptest_tests::sqrtm_matches_scipy_reference_values: test
+proptest_tests::sqrtm_negative_eigenvalue_returns_nan: test
+proptest_tests::sqrtm_rejects_non_square: test
+proptest_tests::sqrtm_squared_equals_original: test
+proptest_tests::svd_matches_scipy_reference_values: test
+proptest_tests::svdvals_diagonal_matrix_matches_scipy_reference: test
+proptest_tests::svdvals_matches_scipy_reference_values: test
+proptest_tests::test_solve_transposed_upper_triangular: test
+proptest_tests::test_solve_with_casp_transposed_upper_triangular: test
+proptest_tests::trig_matrix_functions_match_scalar_diagonal: test
+proptest_tests::trig_matrix_functions_reject_non_square: test
+proptest_tests::trig_matrix_functions_satisfy_commuting_identity: test
+tests::audit_records_after_poisoned_ledger: test
+tests::backward_error_nonfinite_is_infinite: test
+tests::bandwidth_diagonal: test
+tests::bidiag_fused_rank_k_update_matches_scalar_reference_bits: test
+tests::bidiag_fused_rank_k_update_perf_probe: test
+tests::bidiag_fused_step_matches_workspace_reference_bits: test
+tests::bidiag_fused_step_reduction_perf_probe: test
+tests::bidiag_golub_kahan_golden_payload: test
+tests::bidiag_golub_kahan_reconstructs_tall_full_rank_matrix: test
+tests::bidiag_golub_kahan_rejects_wide_matrix: test
+tests::bidiag_golub_kahan_zero_matrix_keeps_zero_bidiagonal: test
+tests::bidiag_large_reduction_perf_probe: test
+tests::bidiag_right_workspace_matches_rowwise_reference_bits: test
+tests::bidiag_right_workspace_perf_probe: test
+tests::bidiag_svd_clustered_values_are_deterministic: test
+tests::bidiag_svd_diagonal_values_descend_and_reconstruct: test
+tests::bidiag_svd_golden_payload: test
+tests::bidiag_svd_rank_threshold_boundaries_remain_nonnegative: test
+tests::bidiag_svd_reconstructs_golub_kahan_bidiagonal: test
+tests::bidiag_svd_symmetric_eigen_route_perf_probe: test
+tests::bidiag_svd_symmetric_eigen_route_reconstructs_medium_panel: test
+tests::bidiagonal_reduction_reconstructs_tall_matrix: test
+tests::bidiagonal_reduction_rejects_wide_and_nonfinite_inputs: test
+tests::block_diag_basic: test
+tests::block_diag_empty: test
+tests::block_tsqr_tall_svd_candidate_matches_safe_svd_reference: test
+tests::block_tsqr_vs_bidiag_svd_candidate_perf_probe: test
+tests::casp_certificate_populated_for_core_entrypoints: test
+tests::casp_selects_diagonal_fast_path: test
+tests::casp_selects_lu_for_well_conditioned: test
+tests::casp_selects_qr_for_moderate_condition: test
+tests::casp_selects_svd_for_ill_conditioned: test
+tests::casp_selects_triangular_fast_path: test
+tests::cho_factor_and_solve: test
+tests::cho_solve_banded_diagonal: test
+tests::cho_solve_banded_empty: test
+tests::cho_solve_banded_tridiagonal: test
+tests::cholesky_identity: test
+tests::cholesky_lower_factor_reconstructs_a: test
+tests::cholesky_not_positive_definite: test
+tests::cholesky_solve_blocked_matches_reference: test
+tests::cholesky_upper_factor: test
+tests::circulant_basic_matches_scipy_first_column_convention: test
+tests::compact_wy_panel_rejects_invalid_shapes: test
+tests::compact_wy_symmetric_update_matches_scalar_replay: test
+tests::compact_wy_symmetric_update_perf_probe: test
+tests::companion_polynomial: test
+tests::companion_too_few_coeffs: test
+tests::condition_diagnostics_general_matrix_has_no_special_structure: test
+tests::condition_diagnostics_hilbert_reports_ill_conditioning: test
+tests::condition_diagnostics_identity_reports_diagonal_spd: test
+tests::condition_diagnostics_rectangular_matrix_is_conservative: test
+tests::condition_diagnostics_triangular_reports_fast_path_shape: test
+tests::convolution_matrix_full: test
+tests::det_empty_matrix_is_one: test
+tests::det_identity_is_one: test
+tests::det_singular_is_zero: test
+tests::det_with_audit_records_fail_closed_on_non_finite_input: test
+tests::det_with_audit_records_mode_decision: test
+tests::determinant_matches_known_result: test
+tests::deterministic_thin_svd_stage_breakdown_probe: test
+tests::dft_matrix_unitary: test
+tests::dmatrix_from_rows_with_norm1_matches_matrix_norm1: test
+tests::eig_banded_qmul_ikj_is_bit_identical: test
+tests::eig_complex_eigenvectors_satisfy_av_eq_lambda_v: test
+tests::eig_eigenvectors_satisfy_av_eq_lambda_v: test
+tests::eig_empty_matrix: test
+tests::eig_general_eigenvalues: test
+tests::eig_real_eigenvalues_symmetric: test
+tests::eigh_av_equals_v_lambda: test
+tests::eigh_eigenvectors_orthogonal: test
+tests::eigh_identity_eigenvalues: test
+tests::eigh_index_sort_matches_materialized_pair_sort_bits: test
+tests::eigh_symmetric_eigenvalues_ascending: test
+tests::eigvals_matches_eig: test
+tests::eigvalsh_matches_eigh: test
+tests::error_condition_too_high_hardened: test
+tests::error_convergence_failure_display: test
+tests::error_expected_square_matrix: test
+tests::error_incompatible_shapes: test
+tests::error_invalid_argument_display: test
+tests::error_invalid_band_shape: test
+tests::error_not_supported_display: test
+tests::error_ragged_matrix: test
+tests::error_resource_exhausted_display: test
+tests::error_singular_matrix: test
+tests::expm_diagonal: test
+tests::expm_empty: test
+tests::expm_identity: test
+tests::expm_nilpotent: test
+tests::expm_non_square_error: test
+tests::expm_rotation: test
+tests::expm_scalar: test
+tests::fast_rcond_diagonal_nan_returns_zero: test
+tests::fast_rcond_from_lu_ill_conditioned: test
+tests::fast_rcond_from_lu_well_conditioned: test
+tests::fast_rcond_triangular_matches_exact_lower_2x2_inverse_norm: test
+tests::fast_rcond_triangular_matches_exact_upper_2x2_inverse_norm: test
+tests::fast_rcond_triangular_nan_returns_zero: test
+tests::fiedler_basic: test
+tests::fiedler_companion_edge_cases: test
+tests::fiedler_companion_non_monic_rescales: test
+tests::fiedler_companion_pentadiagonal: test
+tests::hadamard_4: test
+tests::hadamard_non_power_of_2_rejected: test
+tests::hankel_metamorphic_constant_on_antidiagonals: test
+tests::hankel_single_arg_pads_with_zeros: test
+tests::hankel_two_arg_matches_scipy_docs_example: test
+tests::hardened_mode_forces_finite_checks: test
+tests::helmert_default_excludes_first_row_per_scipy: test
+tests::helmert_full_first_row_is_uniform: test
+tests::helmert_full_rows_are_pairwise_orthogonal: test
+tests::helmert_full_rows_have_unit_norm: test
+tests::hessenberg_a_equals_qhqt: test
+tests::hessenberg_empty_matrix: test
+tests::hessenberg_h_is_upper_hessenberg: test
+tests::hessenberg_q_is_orthogonal: test
+tests::hilbert_3x3: test
+tests::inv_blocked_matches_reference: test
+tests::inv_empty_matrix: test
+tests::inv_general_single_lu_matches_column_by_column: test
+tests::inv_identity_matrix: test
+tests::inv_ill_conditioned_emits_warning: test
+tests::inv_metamorphic_double_inverse_recovers_original: test
+tests::inv_singular_matrix_error: test
+tests::inverse_matches_known_result: test
+tests::invhilbert_times_hilbert_is_identity: test
+tests::is_diagonal_rejects_nan_off_diagonal: test
+tests::is_lower_triangular_rejects_nan_above_diagonal: test
+tests::is_upper_triangular_rejects_nan_below_diagonal: test
+tests::kron_2x2: test
+tests::kron_metamorphic_2x2_full_matrix_pinned: test
+tests::kron_metamorphic_identity_is_identity: test
+tests::kron_metamorphic_shape_is_product_of_dims: test
+tests::kron_metamorphic_trace_equals_product_of_traces: test
+tests::leslie_matrix: test
+tests::linalg_trace_serializes_to_json: test
+tests::logm_3x3_spd: test
+tests::logm_diagonal_is_log_of_diagonal: test
+tests::logm_identity_is_zero: test
+tests::logm_inverse_of_expm: test
+tests::logm_rejects_non_square: test
+tests::logm_upper_triangular_distinct_diagonal_matches_closed_form: test
+tests::logm_upper_triangular_repeated_diagonal_uses_jordan_limit: test
+tests::lstsq_exact_system: test
+tests::lstsq_low_rank_tall_golden_payload: test
+tests::lstsq_low_rank_tall_matches_svd_reference: test
+tests::lstsq_low_rank_tall_public_route_has_expected_certificate: test
+tests::lstsq_low_rank_tall_rejects_full_rank_tall_matrix: test
+tests::lstsq_overdetermined_system: test
+tests::lstsq_rank_deficient: test
+tests::lstsq_underdetermined_system: test
+tests::lu_decomposition_a_equals_plu: test
+tests::lu_empty_matrix: test
+tests::lu_factor_and_solve_roundtrip: test
+tests::lu_factor_caches_rcond_without_debug_observability: test
+tests::lu_l_is_unit_lower_triangular: test
+tests::lu_solve_blocked_matches_reference: test
+tests::lu_solve_incompatible_shapes: test
+tests::lu_u_is_upper_triangular: test
+tests::matmul_flat_compute_rows_row_split_is_bit_identical: test
+tests::matmul_flat_workspace_is_bit_identical_to_naive_ijk: test
+tests::matmul_ikj_is_bit_identical_to_naive_ijk: test
+tests::matmul_ikj_perf_vs_naive_ijk: test
+tests::matmul_medium_flat_workspace_route_golden_digest: test
+tests::matmul_microkernel_golden_digest: test
+tests::matmul_microkernel_is_bit_identical_to_flat_ikj: test
+tests::matmul_microkernel_perf_vs_flat_ikj: test
+tests::matrix_fingerprint_is_deterministic: test
+tests::matrix_fingerprint_truncates_large_input: test
+tests::matrix_rank_full_rank: test
+tests::matrix_rank_rank_deficient: test
+tests::matrix_rank_rectangular: test
+tests::matrix_rank_zero_matrix: test
+tests::norm_frobenius_identity: test
+tests::norm_inf_norm: test
+tests::norm_one_norm: test
+tests::norm_spectral_diagonal: test
+tests::null_space_full_rank: test
+tests::null_space_rank_deficient: test
+tests::ordqz_empty_matrix: test
+tests::ordqz_inside_unit_circle_moves_stable_ratio_first: test
+tests::ordqz_left_half_plane_moves_negative_ratio_first: test
+tests::ordqz_shape_mismatch_rejected: test
+tests::orth_full_rank: test
+tests::orth_rank_deficient: test
+tests::pascal_lower_triangular: test
+tests::pascal_symmetric: test
+tests::pinv_full_rank_rectangular_golden_payload: test
+tests::pinv_full_rank_square_lu_route_matches_svd_and_inv: test
+tests::pinv_full_rank_tall_cholesky_matches_svd_reference: test
+tests::pinv_full_rank_tall_cholesky_rejects_rank_deficient_matrix: test
+tests::pinv_involution_pinv_of_pinv_recovers_a: test
+tests::pinv_low_rank_tall_golden_payload: test
+tests::pinv_low_rank_tall_matches_svd_reference: test
+tests::pinv_low_rank_tall_rejects_full_rank_tall_matrix: test
+tests::pinv_moore_penrose_condition: test
+tests::pinv_moore_penrose_conditions_2_3_4: test
+tests::pinv_negative_thresholds_are_rejected: test
+tests::pinv_rank_deficient: test
+tests::pinv_rectangular_and_rank: test
+tests::pinv_square_nonsingular_matches_inv: test
+tests::pinv_zero_matrix: test
+tests::polar_identity: test
+tests::polar_p_is_symmetric_positive: test
+tests::polar_reconstruction: test
+tests::public_band_tall_lstsq_route_perf_probe: test
+tests::public_band_tall_pinv_route_perf_probe: test
+tests::public_band_wide_lstsq_route_perf_probe: test
+tests::public_bidiag_scaled_reconstruction_matches_dense_acceptance_reference: test
+tests::public_bidiag_svd_route_matches_safe_svd_reference: test
+tests::public_bidiag_svd_route_perf_probe: test
+tests::public_bidiag_svd_route_rejects_clustered_spectrum: test
+tests::public_bidiag_svd_tridiagonal_qr_backend_is_deterministic: test
+tests::public_bidiag_svd_tridiagonal_qr_backend_matches_safe_svd_reference: test
+tests::public_eigvalsh_values_only_perf_probe: test
+tests::public_square_pinv_route_perf_probe: test
+tests::public_square_svd_route_perf_probe: test
+tests::public_svd_lstsq_pinv_golden_payload: test
+tests::public_wide_min_norm_lstsq_route_perf_probe: test
+tests::public_wide_svd_route_perf_probe: test
+tests::qr_decomposition_a_equals_qr: test
+tests::qr_delete_rejects_out_of_bounds_row: test
+tests::qr_delete_removes_requested_row: test
+tests::qr_empty_matrix: test
+tests::qr_insert_inserts_requested_row: test
+tests::qr_insert_rejects_wrong_row_width: test
+tests::qr_multiply_applies_q_factor: test
+tests::qr_multiply_rejects_shape_mismatch: test
+tests::qr_q_is_orthogonal: test
+tests::qr_update_applies_rank_one_update: test
+tests::qr_update_rejects_wrong_update_vector_width: test
+tests::qz_empty_matrix: test
+tests::qz_generalized_relation_holds: test
+tests::qz_q_and_z_are_orthogonal: test
+tests::qz_singular_b_rejected: test
+tests::qz_with_identity_b_matches_schur_contract: test
+tests::randomized_rcond_estimate_well_conditioned: test
+tests::rcond_threshold_boundary: test
+tests::schur_a_equals_ztzt: test
+tests::schur_empty_matrix: test
+tests::schur_t_is_quasi_upper_triangular: test
+tests::schur_z_is_orthogonal: test
+tests::solve_3x3_general_system: test
+tests::solve_banded_matches_dense: test
+tests::solve_banded_pentadiagonal: test
+tests::solve_diagonal_fast_path: test
+tests::solve_general_backward_error_is_small: test
+tests::solve_general_happy_path: test
+tests::solve_large_100x100_system: test
+tests::solve_policy_rejects_incompatible_assumption_before_casp: test
+tests::solve_qr_matches_lu: test
+tests::solve_svd_fallback_matches_lu: test
+tests::solve_svd_fallback_rejects_rank_deficient_square_systems: test
+tests::solve_svd_fallback_warns_on_ill_conditioned_but_full_rank_systems: test
+tests::solve_symmetric_positive_definite_assumption: test
+tests::solve_triangular_lower_path: test
+tests::solve_triangular_lower_transposed: test
+tests::solve_triangular_unit_diagonal: test
+tests::solve_triangular_upper_non_transposed: test
+tests::solve_upper_triangular_fast_path: test
+tests::solve_with_audit_records_casp_decision: test
+tests::solve_with_audit_records_fail_closed_on_condition_too_high: test
+tests::solve_with_audit_records_fail_closed_on_incompatible_shapes: test
+tests::solve_with_audit_records_fail_closed_on_non_finite_input: test
+tests::solve_with_audit_records_fail_closed_on_non_square: test
+tests::solve_with_audit_records_policy_rejection: test
+tests::solve_with_casp_well_conditioned_uses_lu: test
+tests::solveh_banded_diagonal: test
+tests::solveh_banded_empty: test
+tests::solveh_banded_tridiagonal: test
+tests::structural_checks_reject_ragged_input: test
+tests::subspace_angles_identical: test
+tests::subspace_angles_orthogonal: test
+tests::svd_decomposition_a_equals_usv: test
+tests::svd_empty_matrix: test
+tests::svd_singular_values_non_negative_and_descending: test
+tests::svdvals_deterministic_vs_nalgebra_values_only_probe: test
+tests::svdvals_matches_svd: test
+tests::thin_bidiag_factor_replay_perf_probe: test
+tests::thin_bidiag_parallel_left_replay_matches_serial_bits: test
+tests::thin_bidiag_parallel_left_replay_perf_probe: test
+tests::thin_bidiag_parallel_right_replay_matches_serial_bits: test
+tests::thin_bidiag_reflector_replay_matches_dense_product_reference: test
+tests::thin_bidiag_svd_golden_payload: test
+tests::thin_bidiag_svd_is_bit_deterministic_for_fixed_input: test
+tests::thin_bidiag_svd_lstsq_and_pinv_match_public_routes: test
+tests::thin_bidiag_svd_reconstructs_original_tall_matrix: test
+tests::toeplitz_asymmetric: test
+tests::toeplitz_ignores_row_zero_keeps_constant_diagonal: test
+tests::toeplitz_symmetric: test
+tests::tri_basic: test
+tests::tridiagonal_qr_eigen_reconstructs_bidiag_gram: test
+tests::tril_triu_roundtrip: test
+
+421 tests, 0 benchmarks
+  [2m2026-06-11T15:29:23.340405Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mRemote command finished: exit=0 in 80047ms[0m
+    [2;3mat[0m rch/src/hook.rs:6376 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:29:23.340768Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mRetrieving build artifacts...[0m
+    [2;3mat[0m rch/src/hook.rs:6425 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:29:23.340794Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mRetrieving artifacts from /data/projects/frankenscipy on vmi1227854[0m
+    [2;3mat[0m rch/src/transfer.rs:2106 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:29:25.343600Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mArtifacts retrieved in 2002ms (1 files, 2327 bytes)[0m
+    [2;3mat[0m rch/src/transfer.rs:2145 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-11T15:29:25.343669Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mArtifacts retrieved: 1 files, 2327 bytes in 2002ms[0m
+    [2;3mat[0m rch/src/hook.rs:6458 [2;3mon[0m ThreadId(1)
+
+[RCH] remote vmi1227854 (157.1s)
