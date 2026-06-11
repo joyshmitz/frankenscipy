@@ -2093,6 +2093,66 @@ pub fn chdtrc(v: f64, x: f64) -> f64 {
     gammaincc_scalar(v / 2.0, x / 2.0, RuntimeMode::Strict).unwrap_or(f64::NAN)
 }
 
+/// Non-central chi-squared cumulative distribution function.
+///
+/// Matches `scipy.special.chndtr(x, df, nc)`: the CDF at `x` of a non-central
+/// chi-squared variable with `df` degrees of freedom and non-centrality `nc`.
+///
+/// Computed as the Poisson(nc/2)-weighted mixture of central chi-squared CDFs
+///
+/// ```text
+///   chndtr(x, df, nc) = Σ_{j≥0} e^{−λ} λ^j / j! · chdtr(df + 2j, x),  λ = nc/2
+/// ```
+///
+/// The sum is accumulated outward from the Poisson mode `j₀ = ⌊λ⌋` (whose
+/// weight is formed in log space) so that large `nc` neither underflows the
+/// leading `e^{−λ}` factor nor loses precision.
+#[must_use]
+pub fn chndtr(x: f64, df: f64, nc: f64) -> f64 {
+    if x.is_nan() || df.is_nan() || nc.is_nan() {
+        return f64::NAN;
+    }
+    if x <= 0.0 {
+        return 0.0;
+    }
+    if nc <= 0.0 {
+        return chdtr(df, x);
+    }
+    let lam = nc / 2.0;
+    let j0 = lam.floor();
+    // Poisson weight at the mode j0, formed in log space to avoid underflow.
+    let logw0 = -lam + j0 * lam.ln()
+        - gammaln_scalar(j0 + 1.0, RuntimeMode::Strict).unwrap_or(f64::NAN);
+    let w0 = logw0.exp();
+
+    let mut total = 0.0_f64;
+    // Upward from the mode.
+    let mut w = w0;
+    let mut j = j0;
+    let mut steps = 0;
+    while steps < 100_000 {
+        total += w * chdtr(df + 2.0 * j, x);
+        j += 1.0;
+        w *= lam / j;
+        if w < 1e-300 || (w < 1e-17 * total.max(1e-300) && j > lam) {
+            break;
+        }
+        steps += 1;
+    }
+    // Downward from the mode.
+    w = w0;
+    j = j0;
+    while j > 0.0 {
+        w *= j / lam;
+        j -= 1.0;
+        total += w * chdtr(df + 2.0 * j, x);
+        if w < 1e-17 * total.max(1e-300) {
+            break;
+        }
+    }
+    total.clamp(0.0, 1.0)
+}
+
 /// Inverse complemented chi-squared distribution.
 ///
 /// Returns x such that P(X > x) = p where X follows a chi-squared
@@ -3932,6 +3992,28 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn chndtr_matches_scipy_reference_values() {
+        // frankenscipy: non-central chi-squared CDF was missing. Golden values
+        // from scipy.special.chndtr(x, df, nc) 1.17.1.
+        let cases = [
+            (5.0_f64, 3.0, 2.0, 0.5934051800831555_f64),
+            (10.0, 5.0, 8.0, 0.3648789027994557),
+            (1.0, 2.0, 0.0, 0.3934693402873665), // nc=0 → central chi2
+            (50.0, 10.0, 40.0, 0.528710534217772), // large nc (mode-centered sum)
+            (2.0, 4.0, 100.0, 2.0596217576094693e-19), // deep left tail
+        ];
+        for (x, df, nc, want) in cases {
+            let got = chndtr(x, df, nc);
+            assert!(
+                (got - want).abs() <= 1e-10 * want.abs().max(1e-12),
+                "chndtr({x},{df},{nc}) = {got}, expected {want}"
+            );
+        }
+        // x ≤ 0 → 0.
+        assert_eq!(chndtr(0.0, 5.0, 2.0), 0.0);
     }
 
     #[test]
