@@ -28621,6 +28621,402 @@ pub fn anderson_ksamp(
 /// The CDF function maps x -> P(X <= x) for the reference distribution.
 ///
 /// Matches `scipy.stats.ks_1samp(data, cdf_func)`.
+// Scaling constants for the exact KS distribution (powers of two are exact in
+// f64): _EP128 = 2^128, _EM128 = 2^-128. frankenscipy-ksk1u
+const KS_EP128: f64 = 3.402823669209385e38; // 2^128
+const KS_EM128: f64 = 2.938735877055719e-39; // 2^-128
+
+/// x · 2^exp without intermediate overflow (matches numpy.ldexp).
+fn ks_ldexp(mut x: f64, mut exp: i32) -> f64 {
+    while exp > 1000 {
+        x *= 2f64.powi(1000);
+        exp -= 1000;
+    }
+    while exp < -1000 {
+        x *= 2f64.powi(-1000);
+        exp += 1000;
+    }
+    x * 2f64.powi(exp)
+}
+
+fn ks_matmul(a: &[Vec<f64>], b: &[Vec<f64>], m: usize) -> Vec<Vec<f64>> {
+    let mut c = vec![vec![0.0f64; m]; m];
+    for i in 0..m {
+        for l in 0..m {
+            let ail = a[i][l];
+            if ail == 0.0 {
+                continue;
+            }
+            let bl = &b[l];
+            let ci = &mut c[i];
+            for j in 0..m {
+                ci[j] += ail * bl[j];
+            }
+        }
+    }
+    c
+}
+
+/// Exact CDF P(D_n ≤ d) via the Durbin matrix (Marsaglia-Tsang-Wang). Port of
+/// scipy.stats `_kolmogn_DMTW`. frankenscipy-ksk1u
+fn kolmogn_dmtw(n: usize, d: f64) -> f64 {
+    if d >= 1.0 {
+        return 1.0;
+    }
+    let nf = n as f64;
+    let nd = nf * d;
+    if nd <= 0.5 {
+        return 0.0;
+    }
+    let k = nd.ceil() as usize;
+    let h = k as f64 - nd;
+    let m = 2 * k - 1;
+
+    let mut v = vec![0.0f64; m];
+    let mut w = vec![0.0f64; m];
+    for jj in 1..=m {
+        v[jj - 1] = 1.0 - h.powi(jj as i32);
+    }
+    let mut fac = 1.0f64;
+    for jj in 1..=m {
+        w[jj - 1] = fac;
+        fac /= jj as f64;
+        v[jj - 1] *= fac;
+    }
+    let tt = (2.0 * h - 1.0).max(0.0).powi(m as i32) - 2.0 * h.powi(m as i32);
+    v[m - 1] = (1.0 + tt) * fac;
+
+    let mut hmat = vec![vec![0.0f64; m]; m];
+    for i in 1..m {
+        for t in 0..(m - i + 1) {
+            hmat[i - 1 + t][i] = w[t];
+        }
+    }
+    for i in 0..m {
+        hmat[i][0] = v[i];
+    }
+    for j in 0..m {
+        hmat[m - 1][j] = v[m - 1 - j];
+    }
+
+    let mut hpwr = vec![vec![0.0f64; m]; m];
+    for i in 0..m {
+        hpwr[i][i] = 1.0;
+    }
+    let mut hh = hmat;
+    let mut nn = n;
+    let mut expnt: i32 = 0;
+    let mut hexpnt: i32 = 0;
+    while nn > 0 {
+        if nn % 2 == 1 {
+            hpwr = ks_matmul(&hpwr, &hh, m);
+            expnt += hexpnt;
+        }
+        hh = ks_matmul(&hh, &hh, m);
+        hexpnt *= 2;
+        if hh[k - 1][k - 1].abs() > KS_EP128 {
+            for row in hh.iter_mut() {
+                for x in row.iter_mut() {
+                    *x /= KS_EP128;
+                }
+            }
+            hexpnt += 128;
+        }
+        nn /= 2;
+    }
+    let mut p = hpwr[k - 1][k - 1];
+    for i in 1..=n {
+        p = i as f64 * p / nf;
+        if p.abs() < KS_EM128 {
+            p *= KS_EP128;
+            expnt -= 128;
+        }
+    }
+    if expnt != 0 {
+        p = ks_ldexp(p, expnt);
+    }
+    p.clamp(0.0, 1.0)
+}
+
+fn pomeranz_j1j2(i: usize, n: usize, ll: i64, ceilf: i64, roundf: i64) -> (i64, i64) {
+    let (j1, j2): (i64, i64);
+    let n = n as i64;
+    if i == 0 {
+        j1 = -ll - ceilf - 1;
+        j2 = ll + ceilf - 1;
+    } else {
+        let ip1 = (i + 1) as i64;
+        let ip1div2 = ip1 / 2;
+        let ip1mod2 = ip1 % 2;
+        if ip1mod2 == 0 {
+            if ip1div2 == n + 1 {
+                j1 = n - ll - ceilf - 1;
+                j2 = n + ll + ceilf - 1;
+            } else {
+                j1 = ip1div2 - 1 - ll - roundf - 1;
+                j2 = ip1div2 + ll - 1 + ceilf - 1;
+            }
+        } else {
+            j1 = ip1div2 - 1 - ll - 1;
+            j2 = ip1div2 + ll + roundf - 1;
+        }
+    }
+    ((j1 + 2).max(0), j2.min(n))
+}
+
+/// Exact CDF P(D_n ≤ x) via the Pomeranz recursion. Port of scipy.stats
+/// `_kolmogn_Pomeranz`. frankenscipy-ksk1u
+fn kolmogn_pomeranz(n: usize, x: f64) -> f64 {
+    let nf = n as f64;
+    let t = nf * x;
+    let ll = t.floor() as i64;
+    let f = t - ll as f64;
+    let g = f.min(1.0 - f);
+    let ceilf = if f > 0.0 { 1i64 } else { 0 };
+    let roundf = if f > 0.5 { 1i64 } else { 0 };
+    let npwrs = (2 * (ll + 1)) as usize;
+    let mut gpower = vec![0.0f64; npwrs];
+    let mut twogpower = vec![0.0f64; npwrs];
+    let mut onem2gpower = vec![0.0f64; npwrs];
+    gpower[0] = 1.0;
+    twogpower[0] = 1.0;
+    onem2gpower[0] = 1.0;
+    let g_over_n = g / nf;
+    let two_g_over_n = 2.0 * g / nf;
+    let one_minus_two_g_over_n = (1.0 - 2.0 * g) / nf;
+    for mm in 1..npwrs {
+        gpower[mm] = gpower[mm - 1] * g_over_n / mm as f64;
+        twogpower[mm] = twogpower[mm - 1] * two_g_over_n / mm as f64;
+        onem2gpower[mm] = onem2gpower[mm - 1] * one_minus_two_g_over_n / mm as f64;
+    }
+    let mut v0 = vec![0.0f64; npwrs];
+    let mut v1 = vec![0.0f64; npwrs];
+    v1[0] = 1.0;
+    let mut v0s: i64 = 0;
+    let mut v1s: i64 = 0;
+    let mut expnt: i32 = 0;
+    let (mut j1, _) = pomeranz_j1j2(0, n, ll, ceilf, roundf);
+    for i in 1..(2 * n + 2) {
+        let k1 = j1;
+        std::mem::swap(&mut v0, &mut v1);
+        std::mem::swap(&mut v0s, &mut v1s);
+        for val in v1.iter_mut() {
+            *val = 0.0;
+        }
+        let (nj1, nj2) = pomeranz_j1j2(i, n, ll, ceilf, roundf);
+        j1 = nj1;
+        let pwrs: &[f64] = if i == 1 || i == 2 * n + 1 {
+            &gpower
+        } else if i % 2 == 1 {
+            &twogpower
+        } else {
+            &onem2gpower
+        };
+        let ln2 = nj2 - k1 + 1;
+        if ln2 > 0 {
+            let start = (k1 - v0s) as usize;
+            let a = &v0[start..start + ln2 as usize];
+            let b = &pwrs[..ln2 as usize];
+            let conv_start = (nj1 - k1) as usize;
+            let conv_len = (nj2 - nj1 + 1) as usize;
+            for idx in 0..conv_len {
+                let cpos = conv_start + idx;
+                let lo = if cpos >= b.len() { cpos - (b.len() - 1) } else { 0 };
+                let hi = cpos.min(a.len() - 1);
+                let mut s = 0.0;
+                let mut p = lo;
+                while p <= hi {
+                    s += a[p] * b[cpos - p];
+                    p += 1;
+                }
+                v1[idx] = s;
+            }
+            let mx = v1.iter().cloned().fold(0.0f64, f64::max);
+            if mx > 0.0 && mx < KS_EM128 {
+                for val in v1.iter_mut() {
+                    *val *= KS_EP128;
+                }
+                expnt -= 128;
+            }
+            v1s = v0s + nj1 - k1;
+        }
+    }
+    let mut ans = v1[(n as i64 - v1s) as usize];
+    for mm in 1..=n {
+        if ans.abs() > KS_EP128 {
+            ans *= KS_EM128;
+            expnt += 128;
+        }
+        ans *= mm as f64;
+    }
+    if expnt != 0 {
+        ans = ks_ldexp(ans, expnt);
+    }
+    ans.clamp(0.0, 1.0)
+}
+
+/// Exact SF P(D_n ≥ x) for the two-sided one-sample KS statistic, matching
+/// scipy.stats `_kolmogn(n, x, cdf=False)` (kstwo.sf). Returns `None` only for
+/// the n>140 Pelz-Good body, where the caller uses the asymptotic series.
+/// frankenscipy-ksk1u
+fn kolmogn_sf(n: usize, x: f64) -> Option<f64> {
+    if x >= 1.0 {
+        return Some(0.0);
+    }
+    if x <= 0.0 {
+        return Some(1.0);
+    }
+    let nf = n as f64;
+    let t = nf * x;
+    if t <= 1.0 {
+        // Ruben-Gambino, 1/2n ≤ x ≤ 1/n.
+        if t <= 0.5 {
+            return Some(1.0);
+        }
+        let cdf = if n <= 140 {
+            let mut p = 1.0;
+            for i in 1..=n {
+                p *= (i as f64 / nf) * (2.0 * t - 1.0);
+            }
+            p
+        } else {
+            let rn = 1.0 / nf;
+            let log_nfac = nf.ln() / 2.0 - nf + (2.0 * std::f64::consts::PI).ln() / 2.0
+                + rn * ks_stirling_poly(rn / nf);
+            (log_nfac + nf * (2.0 * t - 1.0).ln()).exp()
+        };
+        return Some((1.0 - cdf).clamp(0.0, 1.0));
+    }
+    if t >= nf - 1.0 {
+        return Some((2.0 * (1.0 - x).powi(n as i32)).clamp(0.0, 1.0));
+    }
+    if x >= 0.5 {
+        return Some((2.0 * fsci_special::smirnov(n as i32, x)).clamp(0.0, 1.0));
+    }
+    let nxsq = t * x;
+    if n <= 140 {
+        if nxsq <= 0.754693 {
+            return Some((1.0 - kolmogn_dmtw(n, x)).clamp(0.0, 1.0));
+        }
+        if nxsq <= 4.0 {
+            return Some((1.0 - kolmogn_pomeranz(n, x)).clamp(0.0, 1.0));
+        }
+        return Some((2.0 * fsci_special::smirnov(n as i32, x)).clamp(0.0, 1.0));
+    }
+    // n > 140.
+    if nxsq >= 2.2 {
+        return Some((2.0 * fsci_special::smirnov(n as i32, x)).clamp(0.0, 1.0));
+    }
+    if n <= 100_000 && nf * x.powf(1.5) <= 1.4 {
+        return Some((1.0 - kolmogn_dmtw(n, x)).clamp(0.0, 1.0));
+    }
+    Some((1.0 - kolmogn_pelzgood_cdf(n, x)).clamp(0.0, 1.0))
+}
+
+/// Pelz-Good theta-function approximation to the CDF P(D_n ≤ x). Port of
+/// scipy.stats `_kolmogn_PelzGood(n, x, cdf=True)`. frankenscipy-ksk1u
+fn kolmogn_pelzgood_cdf(n: usize, x: f64) -> f64 {
+    if x <= 0.0 {
+        return 0.0;
+    }
+    if x >= 1.0 {
+        return 1.0;
+    }
+    let nf = n as f64;
+    let pi = std::f64::consts::PI;
+    let pi2 = pi * pi;
+    let pi4 = pi2 * pi2;
+    let pi6 = pi4 * pi2;
+    let z = nf.sqrt() * x;
+    let zsq = z * z;
+    let z3 = z * zsq;
+    let z4 = zsq * zsq;
+    let z6 = z4 * zsq;
+
+    let qlog = -pi2 / 8.0 / zsq;
+    if qlog < -708.0 {
+        return 0.0;
+    }
+    let q0 = qlog.exp();
+
+    let k1a = -zsq;
+    let k1b = pi2 / 4.0;
+    let k2a = 6.0 * z6 + 2.0 * z4;
+    let k2b = (2.0 * z4 - 5.0 * zsq) * pi2 / 4.0;
+    let k2c = pi4 * (1.0 - 2.0 * zsq) / 16.0;
+    let k3d = pi6 * (5.0 - 30.0 * zsq) / 64.0;
+    let k3c = pi4 * (-60.0 * zsq + 212.0 * z4) / 16.0;
+    let k3b = pi2 * (135.0 * z4 - 96.0 * z6) / 4.0;
+    let k3a = -30.0 * z6 - 90.0 * z.powi(8);
+
+    let maxk = (16.0 * z / pi).ceil() as i64;
+    let mut k = [0.0f64; 4];
+    let mut kk = maxk;
+    while kk >= 1 {
+        let m = (2 * kk - 1) as f64;
+        let msq = m * m;
+        let m4 = msq * msq;
+        let m6 = m4 * msq;
+        let qpower = q0.powi((8 * kk) as i32);
+        let coeffs = [
+            1.0,
+            k1a + k1b * msq,
+            k2a + k2b * msq + k2c * m4,
+            k3a + k3b * msq + k3c * m4 + k3d * m6,
+        ];
+        for i in 0..4 {
+            k[i] = k[i] * qpower + coeffs[i];
+        }
+        kk -= 1;
+    }
+    let sqrt2pi = (2.0 * pi).sqrt();
+    let denom = [z, 6.0 * z4, 72.0 * z.powi(7), 6480.0 * z.powi(10)];
+    for i in 0..4 {
+        k[i] = k[i] * q0 * sqrt2pi / denom[i];
+    }
+
+    let q = (-pi2 / 2.0 / zsq).exp();
+    let sqrt3z = 3.0f64.sqrt() * z;
+    let mut k2extra = 0.0;
+    let mut k3extra = 0.0;
+    let mut kk = maxk;
+    while kk >= 1 {
+        let ks = kk as f64;
+        let ksq = ks * ks;
+        let qpw = q.powi((kk * kk) as i32);
+        k2extra += ksq * qpw;
+        let kspi = pi * ks;
+        k3extra += (sqrt3z + kspi) * (sqrt3z - kspi) * ksq * qpw;
+        kk -= 1;
+    }
+    k[2] += k2extra * pi2 * sqrt2pi / (-36.0 * z3);
+    k[3] += k3extra * pi2 * sqrt2pi / (216.0 * z6);
+
+    for i in 0..4 {
+        k[i] /= nf.powf(i as f64 / 2.0);
+    }
+    k[0] + k[1] + k[2] + k[3]
+}
+
+/// Stirling-series correction polynomial for log(n!/n^n) (scipy coeffs).
+fn ks_stirling_poly(z: f64) -> f64 {
+    const C: [f64; 8] = [
+        -2.955065359477124183e-2,
+        6.4102564102564102564e-3,
+        -1.9175269175269175269e-3,
+        8.4175084175084175084e-4,
+        -5.952380952380952381e-4,
+        7.9365079365079365079e-4,
+        -2.7777777777777777778e-3,
+        8.3333333333333333333e-2,
+    ];
+    let mut acc = 0.0;
+    for &c in &C {
+        acc = acc * z + c;
+    }
+    acc
+}
+
 pub fn ks_1samp(data: &[f64], cdf_func: impl Fn(f64) -> f64) -> GoodnessOfFitResult {
     let n = data.len();
     if n == 0 || data.iter().any(|v| v.is_nan()) {
@@ -28647,7 +29043,14 @@ pub fn ks_1samp(data: &[f64], cdf_func: impl Fn(f64) -> f64) -> GoodnessOfFitRes
         };
     }
 
-    let pvalue = kolmogorov_pvalue(d_stat, nf);
+    // scipy's two-sided ks_1samp uses the EXACT KS distribution for n ≤ 10000
+    // (method='auto'); only the n>140 Pelz-Good body falls back to the
+    // asymptotic Kolmogorov series. frankenscipy-ksk1u
+    let pvalue = if !d_stat.is_nan() && n <= 10_000 {
+        kolmogn_sf(n, d_stat).unwrap_or_else(|| kolmogorov_pvalue(d_stat, nf))
+    } else {
+        kolmogorov_pvalue(d_stat, nf)
+    };
 
     GoodnessOfFitResult {
         statistic: d_stat,
@@ -50069,7 +50472,10 @@ mod tests {
     }
 
     #[test]
-    fn ks_1samp_matches_scipy_asymptotic_reference_values() {
+    fn ks_1samp_matches_scipy_exact_reference_values() {
+        // frankenscipy-ksk1u: scipy's ks_1samp uses the EXACT KS distribution
+        // (method='auto') for n <= 10000, not the asymptotic series. Golden
+        // values from scipy.stats.ks_1samp 1.17.1.
         let uniform_samples: Vec<f64> = (0..100).map(|i| (i as f64 + 0.5) / 100.0).collect();
         let uniform = ks_1samp(&uniform_samples, |x| x.clamp(0.0, 1.0));
         assert_close(
@@ -50078,18 +50484,20 @@ mod tests {
             1.0e-15,
             "ks_1samp uniform statistic",
         );
-        assert_close(uniform.pvalue, 1.0, 1.0e-15, "ks_1samp uniform pvalue");
+        assert_close(uniform.pvalue, 1.0, 1.0e-12, "ks_1samp uniform pvalue");
 
+        // Pomeranz regime (n=50): scipy exact p = 0.00103876659196811.
         let skewed_samples: Vec<f64> = (0..50).map(|i| (i as f64 / 50.0).powi(2)).collect();
         let skewed = ks_1samp(&skewed_samples, |x| x.clamp(0.0, 1.0));
         assert_close(skewed.statistic, 0.27, 1.0e-15, "ks_1samp skewed statistic");
         assert_close(
             skewed.pvalue,
-            0.001_364_656_105_079_237,
-            1.0e-15,
+            0.00103876659196811,
+            1.0e-10,
             "ks_1samp skewed pvalue",
         );
 
+        // Small sample (n=8): scipy exact p = 0.9444463674524446 (was 0.9738 asymp).
         let normalish = [-1.2, -0.7, -0.2, 0.0, 0.1, 0.4, 0.9, 1.3];
         let normal = Normal::standard();
         let normalish_result = ks_1samp(&normalish, |x| ContinuousDistribution::cdf(&normal, x));
@@ -50101,10 +50509,15 @@ mod tests {
         );
         assert_close(
             normalish_result.pvalue,
-            0.973_828_230_896_588_7,
-            1.0e-15,
+            0.9444463674524446,
+            1.0e-10,
             "ks_1samp normal pvalue",
         );
+
+        // n=5 example: D=0.25 → scipy exact 0.8446 (asymptotic would give 0.9135).
+        let five = [0.1, 0.3, 0.5, 0.55, 0.9];
+        let r5 = ks_1samp(&five, |x| x.clamp(0.0, 1.0));
+        assert_close(r5.pvalue, 0.8446, 1.0e-4, "ks_1samp n=5 exact");
     }
 
     #[test]
