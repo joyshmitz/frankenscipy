@@ -2299,6 +2299,61 @@ pub fn sph_harm_y(n: u32, m: i32, theta: f64, phi: f64) -> Complex64 {
     sph_harm(m, n, phi, theta)
 }
 
+/// Maps a column index `k ∈ [0, 2m]` of the `*_all` tables to the signed order,
+/// following SciPy's wraparound `0, 1, …, m, −m, …, −1`.
+fn legendre_all_order(k: u32, m: u32) -> i32 {
+    if k <= m {
+        k as i32
+    } else {
+        k as i32 - (2 * m + 1) as i32
+    }
+}
+
+/// All associated Legendre polynomials up to degree `n` and order `m`, as an
+/// `(n+1) × (2m+1)` table; entry `[j][k]` is the degree-`j`, order-`k′`
+/// polynomial where `k′` follows SciPy's order wraparound `0,1,…,m,−m,…,−1`.
+///
+/// Matches `scipy.special.assoc_legendre_p_all(n, m, z)` (default `branch_cut=2`,
+/// `norm=False`, `diff_n=0`).
+#[must_use]
+pub fn assoc_legendre_p_all(n: u32, m: u32, z: f64) -> Vec<Vec<f64>> {
+    (0..=n)
+        .map(|j| {
+            (0..=2 * m)
+                .map(|k| assoc_legendre_p(j, legendre_all_order(k, m), z, false))
+                .collect()
+        })
+        .collect()
+}
+
+/// All spherical Legendre polynomials up to degree `n` and order `m`, as an
+/// `(n+1) × (2m+1)` table, matching `scipy.special.sph_legendre_p_all(n, m,
+/// theta)` (`diff_n=0`). Order columns follow the wraparound `0,1,…,m,−m,…,−1`.
+#[must_use]
+pub fn sph_legendre_p_all(n: u32, m: u32, theta: f64) -> Vec<Vec<f64>> {
+    (0..=n)
+        .map(|j| {
+            (0..=2 * m)
+                .map(|k| sph_legendre_p(j, legendre_all_order(k, m), theta))
+                .collect()
+        })
+        .collect()
+}
+
+/// All spherical harmonics up to degree `n` and order `m`, as an `(n+1) × (2m+1)`
+/// table, matching `scipy.special.sph_harm_y_all(n, m, theta, phi)` (`diff_n=0`).
+/// Order columns follow the wraparound `0,1,…,m,−m,…,−1`.
+#[must_use]
+pub fn sph_harm_y_all(n: u32, m: u32, theta: f64, phi: f64) -> Vec<Vec<Complex64>> {
+    (0..=n)
+        .map(|j| {
+            (0..=2 * m)
+                .map(|k| sph_harm_y(j, legendre_all_order(k, m), theta, phi))
+                .collect()
+        })
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // Polynomial coefficient constructors
 //
@@ -2962,6 +3017,47 @@ mod tests {
         // q = 0 reduces to a_m(0) = b_m(0) = m^2.
         c(mathieu_a(4, 0.0), 16.0, "a(4,0)");
         c(mathieu_b(3, 0.0), 9.0, "b(3,0)");
+    }
+
+    #[test]
+    fn legendre_and_sph_harm_all_match_scipy() {
+        // frankenscipy: golden tables from scipy.special.assoc_legendre_p_all /
+        // sph_legendre_p_all / sph_harm_y_all (1.17.1), order columns 0,1,..,m,-m,..,-1.
+        let a = assoc_legendre_p_all(2, 1, 0.4);
+        let want_a = [
+            [1.0, 0.0, 0.0],
+            [0.4, -0.916515138991168, 0.458257569495584],
+            [-0.25999999999999995, -1.0998181667894018, 0.1833030277982336],
+        ];
+        assert_eq!(a.len(), 3);
+        for (row, w) in a.iter().zip(want_a.iter()) {
+            assert_eq!(row.len(), 3);
+            for (g, e) in row.iter().zip(w.iter()) {
+                assert!((g - e).abs() < 1e-12, "assoc_all: got {g}, want {e}");
+            }
+        }
+        let s = sph_legendre_p_all(2, 1, 0.7);
+        let want_s = [
+            [0.28209479177387814, 0.0, 0.0],
+            [0.3737038139165246, -0.22257344192657688, 0.22257344192657688],
+            [0.23810508748746873, -0.3806538080852601, 0.3806538080852601],
+        ];
+        for (row, w) in s.iter().zip(want_s.iter()) {
+            for (g, e) in row.iter().zip(w.iter()) {
+                assert!((g - e).abs() < 1e-12, "sph_leg_all: got {g}, want {e}");
+            }
+        }
+        // sph_harm_y_all row j=1 (degree 1) for (n=2,m=1,theta=0.7,phi=0.5).
+        let y = sph_harm_y_all(2, 1, 0.7, 0.5);
+        assert_eq!(y.len(), 3);
+        let want_y1 = [
+            (0.3737038139165246, 0.0),
+            (-0.19532657137468346, -0.10670739227464042),
+            (0.19532657137468346, -0.10670739227464042),
+        ];
+        for (g, (re, im)) in y[1].iter().zip(want_y1.iter()) {
+            assert!((g.re - re).abs() < 1e-12 && (g.im - im).abs() < 1e-12, "sph_harm_all");
+        }
     }
 
     #[test]
