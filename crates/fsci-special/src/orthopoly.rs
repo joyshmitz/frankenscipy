@@ -1014,10 +1014,10 @@ fn tridiagonal_eigenvector_nonsym(sub: &[f64], diag: &[f64], sup: &[f64], lambda
 /// the harmonic for index `k` being `P_{m + (n−m mod 2) + 2k}^m`.
 ///
 /// The `d_r` are the eigenvector of the non-symmetric DLMF 30.8 recurrence for
-/// the eigenvalue `λ` (found from its symmetrized form), scaled so the angular
-/// function reduces to the associated Legendre `P_n^m` at `x = 0` (its value for
-/// `n − m` even, its derivative for `n − m` odd) — SciPy's Flammer convention.
-fn spheroidal_coefficients(m: u32, n: u32, c: f64, prolate: bool) -> (Vec<f64>, u32) {
+/// the given characteristic value `cv`, scaled so the angular function reduces to
+/// the associated Legendre `P_n^m` at `x = 0` (its value for `n − m` even, its
+/// derivative for `n − m` odd) — SciPy's Flammer convention.
+fn spheroidal_coefficients(m: u32, n: u32, c: f64, prolate: bool, cv: f64) -> (Vec<f64>, u32) {
     let cc = if prolate { c * c } else { -c * c };
     let mf = f64::from(m);
     let parity = (n - m) % 2;
@@ -1040,11 +1040,7 @@ fn spheroidal_coefficients(m: u32, n: u32, c: f64, prolate: bool) -> (Vec<f64>, 
     let diag: Vec<f64> = (0..dim).map(|k| b_coef(r_of(k))).collect();
     let sub: Vec<f64> = (0..dim).map(|k| c_coef(r_of(k))).collect();
     let sup: Vec<f64> = (0..dim).map(|k| a_coef(r_of(k))).collect();
-    let sym_off: Vec<f64> = (0..dim - 1)
-        .map(|k| (a_coef(r_of(k)) * c_coef(r_of(k + 1))).sqrt())
-        .collect();
-    let lambda = symmetric_tridiagonal_eigenvalues(&diag, &sym_off)[(n - m) as usize / 2];
-    let mut d = tridiagonal_eigenvector_nonsym(&sub, &diag, &sup, lambda);
+    let mut d = tridiagonal_eigenvector_nonsym(&sub, &diag, &sup, cv);
 
     // Flammer normalization: scale so the function (n−m even) or its derivative
     // (n−m odd) matches the associated Legendre P_n^m at x = 0.
@@ -1072,12 +1068,13 @@ fn spheroidal_coefficients(m: u32, n: u32, c: f64, prolate: bool) -> (Vec<f64>, 
 }
 
 /// Spheroidal angular function of the first kind and its derivative at `x`
-/// (`|x| < 1`); `prolate` selects prolate vs oblate.
-fn spheroidal_ang1(m: u32, n: u32, c: f64, x: f64, prolate: bool) -> (f64, f64) {
+/// (`|x| < 1`), given the characteristic value `cv`; `prolate` selects prolate
+/// vs oblate.
+fn spheroidal_ang1(m: u32, n: u32, c: f64, x: f64, prolate: bool, cv: f64) -> (f64, f64) {
     if n < m {
         return (f64::NAN, f64::NAN);
     }
-    let (d, parity) = spheroidal_coefficients(m, n, c, prolate);
+    let (d, parity) = spheroidal_coefficients(m, n, c, prolate, cv);
     let mut value = 0.0_f64;
     let mut derivative = 0.0_f64;
     for (k, &dk) in d.iter().enumerate() {
@@ -1093,7 +1090,21 @@ fn spheroidal_ang1(m: u32, n: u32, c: f64, x: f64, prolate: bool) -> (f64, f64) 
 /// (`n ≥ m`, `|x| < 1`).
 #[must_use]
 pub fn pro_ang1(m: u32, n: u32, c: f64, x: f64) -> (f64, f64) {
-    spheroidal_ang1(m, n, c, x, true)
+    spheroidal_ang1(m, n, c, x, true, spheroidal_cv(m, n, c, true))
+}
+
+/// As [`pro_ang1`] but with a precomputed characteristic value `cv` (from
+/// [`pro_cv`]), matching `scipy.special.pro_ang1_cv(m, n, c, cv, x)`.
+#[must_use]
+pub fn pro_ang1_cv(m: u32, n: u32, c: f64, cv: f64, x: f64) -> (f64, f64) {
+    spheroidal_ang1(m, n, c, x, true, cv)
+}
+
+/// As [`obl_ang1`] but with a precomputed characteristic value `cv` (from
+/// [`obl_cv`]), matching `scipy.special.obl_ang1_cv(m, n, c, cv, x)`.
+#[must_use]
+pub fn obl_ang1_cv(m: u32, n: u32, c: f64, cv: f64, x: f64) -> (f64, f64) {
+    spheroidal_ang1(m, n, c, x, false, cv)
 }
 
 /// Oblate spheroidal angular function of the first kind `S_mn^{(1)}(c, x)` and
@@ -1101,7 +1112,7 @@ pub fn pro_ang1(m: u32, n: u32, c: f64, x: f64) -> (f64, f64) {
 /// (`n ≥ m`, `|x| < 1`).
 #[must_use]
 pub fn obl_ang1(m: u32, n: u32, c: f64, x: f64) -> (f64, f64) {
-    spheroidal_ang1(m, n, c, x, false)
+    spheroidal_ang1(m, n, c, x, false, spheroidal_cv(m, n, c, false))
 }
 
 /// Spherical Bessel function of the first kind `j_l(z)` (scalar).
@@ -1126,11 +1137,11 @@ fn sph_jn_deriv(l: u32, z: f64) -> f64 {
 /// `w_k = (2m+r_k)!/r_k!`, `φ_k = (−1)^{(r_k+m−n)/2}`, `r_k = (n−m mod 2) + 2k`,
 /// `d_k` the Flammer angular coefficients, and `j_l` the spherical Bessel
 /// function of the first kind (Flammer / DLMF 30.9).
-fn spheroidal_rad1(m: u32, n: u32, c: f64, x: f64, prolate: bool) -> (f64, f64) {
+fn spheroidal_rad1(m: u32, n: u32, c: f64, x: f64, prolate: bool, cv: f64) -> (f64, f64) {
     if n < m {
         return (f64::NAN, f64::NAN);
     }
-    let (d, parity) = spheroidal_coefficients(m, n, c, prolate);
+    let (d, parity) = spheroidal_coefficients(m, n, c, prolate, cv);
     let s = if prolate { -1.0 } else { 1.0 };
     let z = c * x;
     // w_k = (2m+r_k)!/r_k! = Π_{j=1}^{2m} (r_k + j); φ_k = (−1)^{(r_k+m−n)/2}.
@@ -1168,7 +1179,14 @@ fn spheroidal_rad1(m: u32, n: u32, c: f64, x: f64, prolate: bool) -> (f64, f64) 
 /// (`n ≥ m`, `x > 1`).
 #[must_use]
 pub fn pro_rad1(m: u32, n: u32, c: f64, x: f64) -> (f64, f64) {
-    spheroidal_rad1(m, n, c, x, true)
+    spheroidal_rad1(m, n, c, x, true, spheroidal_cv(m, n, c, true))
+}
+
+/// As [`pro_rad1`] but with a precomputed characteristic value `cv` (from
+/// [`pro_cv`]), matching `scipy.special.pro_rad1_cv(m, n, c, cv, x)`.
+#[must_use]
+pub fn pro_rad1_cv(m: u32, n: u32, c: f64, cv: f64, x: f64) -> (f64, f64) {
+    spheroidal_rad1(m, n, c, x, true, cv)
 }
 
 /// Oblate spheroidal radial function of the first kind `R_mn^{(1)}(c, x)` and
@@ -1176,7 +1194,28 @@ pub fn pro_rad1(m: u32, n: u32, c: f64, x: f64) -> (f64, f64) {
 /// (`n ≥ m`, `x > 0`).
 #[must_use]
 pub fn obl_rad1(m: u32, n: u32, c: f64, x: f64) -> (f64, f64) {
-    spheroidal_rad1(m, n, c, x, false)
+    spheroidal_rad1(m, n, c, x, false, spheroidal_cv(m, n, c, false))
+}
+
+/// As [`obl_rad1`] but with a precomputed characteristic value `cv` (from
+/// [`obl_cv`]), matching `scipy.special.obl_rad1_cv(m, n, c, cv, x)`.
+#[must_use]
+pub fn obl_rad1_cv(m: u32, n: u32, c: f64, cv: f64, x: f64) -> (f64, f64) {
+    spheroidal_rad1(m, n, c, x, false, cv)
+}
+
+/// Characteristic values of the prolate spheroidal wave functions for modes
+/// `(m, m), (m, m+1), …, (m, n)`, matching `scipy.special.pro_cv_seq(m, n, c)`.
+#[must_use]
+pub fn pro_cv_seq(m: u32, n: u32, c: f64) -> Vec<f64> {
+    (m..=n).map(|nn| pro_cv(m, nn, c)).collect()
+}
+
+/// Characteristic values of the oblate spheroidal wave functions for modes
+/// `(m, m), (m, m+1), …, (m, n)`, matching `scipy.special.obl_cv_seq(m, n, c)`.
+#[must_use]
+pub fn obl_cv_seq(m: u32, n: u32, c: f64) -> Vec<f64> {
+    (m..=n).map(|nn| obl_cv(m, nn, c)).collect()
 }
 
 /// Evaluate the shifted Legendre polynomial P_n*(x) = P_n(2x - 1).
@@ -2541,6 +2580,37 @@ mod tests {
             ],
             "all(4,-0.6,2)",
         );
+    }
+
+    #[test]
+    fn spheroidal_cv_seq_and_cv_variants_match_scipy() {
+        // frankenscipy: golden from scipy.special.pro_cv_seq / obl_cv_seq (1.17.1).
+        let seq_close = |got: &[f64], want: &[f64], msg: &str| {
+            assert_eq!(got.len(), want.len(), "{msg}: len");
+            for (g, w) in got.iter().zip(want.iter()) {
+                assert!((g - w).abs() < 1e-9, "{msg}: got {g}, want {w}");
+            }
+        };
+        seq_close(
+            &pro_cv_seq(0, 3, 2.0),
+            &[1.127734064849933, 4.287128543955809, 8.225713001105891, 14.100203876205317],
+            "pro_cv_seq(0,3,2)",
+        );
+        seq_close(
+            &obl_cv_seq(1, 4, 2.0),
+            &[1.1185533907435148, 4.222747333357612, 10.163245057199756, 18.09765523018453],
+            "obl_cv_seq(1,4,2)",
+        );
+        // The _cv variants must reproduce the base functions when fed the matching cv.
+        let pair_eq = |a: (f64, f64), b: (f64, f64), msg: &str| {
+            assert!((a.0 - b.0).abs() < 1e-12 && (a.1 - b.1).abs() < 1e-12, "{msg}");
+        };
+        let cv = pro_cv(1, 2, 2.0);
+        pair_eq(pro_ang1_cv(1, 2, 2.0, cv, 0.3), pro_ang1(1, 2, 2.0, 0.3), "pro_ang1_cv");
+        pair_eq(pro_rad1_cv(1, 2, 2.0, cv, 1.3), pro_rad1(1, 2, 2.0, 1.3), "pro_rad1_cv");
+        let ocv = obl_cv(2, 5, 3.0);
+        pair_eq(obl_ang1_cv(2, 5, 3.0, ocv, 0.2), obl_ang1(2, 5, 3.0, 0.2), "obl_ang1_cv");
+        pair_eq(obl_rad1_cv(2, 5, 3.0, ocv, 1.0), obl_rad1(2, 5, 3.0, 1.0), "obl_rad1_cv");
     }
 
     #[test]
