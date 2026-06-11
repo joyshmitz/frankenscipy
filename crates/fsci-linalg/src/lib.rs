@@ -4228,10 +4228,8 @@ pub fn eig(a: &[Vec<f64>], options: DecompOptions) -> Result<EigResult, LinalgEr
                     vim[r] /= nrm;
                 }
             }
-            for r in 0..rows {
-                eigvec_cols[bc][r] = vre[r];
-                eigvec_cols[bc + 1][r] = vim[r];
-            }
+            eigvec_cols[bc][..rows].copy_from_slice(&vre[..rows]);
+            eigvec_cols[bc + 1][..rows].copy_from_slice(&vim[..rows]);
             continue;
         }
         let lambda = t_mat[(block_col, block_col)];
@@ -5552,7 +5550,11 @@ pub fn sqrtm(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<Vec<f64>>, Li
                         sum -= sqrt_t[(i, k)] * sqrt_t[(k, j)];
                     }
                     let denom = si + sj;
-                    sqrt_t[(i, j)] = if denom.abs() > 1e-15 { sum / denom } else { 0.0 };
+                    sqrt_t[(i, j)] = if denom.abs() > 1e-15 {
+                        sum / denom
+                    } else {
+                        0.0
+                    };
                 }
             }
             &q * sqrt_t * q.transpose()
@@ -5700,9 +5702,8 @@ pub fn signm(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<Vec<f64>>, Li
     if n == 0 {
         return Ok(Vec::new());
     }
-    let is_symmetric = (0..n).all(|i| {
-        (0..n).all(|j| (m[(i, j)] - m[(j, i)]).abs() < 1e-12 * m[(i, j)].abs().max(1.0))
-    });
+    let is_symmetric = (0..n)
+        .all(|i| (0..n).all(|j| (m[(i, j)] - m[(j, i)]).abs() < 1e-12 * m[(i, j)].abs().max(1.0)));
     if is_symmetric {
         return funm(a, |x| if x >= 0.0 { 1.0 } else { -1.0 }, options);
     }
@@ -11522,7 +11523,7 @@ fn matmul_flat_compute_rows(
 ) {
     const MR: usize = 4;
     const NR: usize = 8;
-    const NC: usize = NR * 2;
+    const NC: usize = NR * 3;
     const RB: usize = 64;
     let mut ib = row_start;
     while ib < row_end {
@@ -11540,8 +11541,10 @@ fn matmul_flat_compute_rows(
                     let a3_base = (i0 + 3) * ka;
                     let mut acc0 = [Simd::<f64, NR>::splat(0.0); MR];
                     let mut acc1 = [Simd::<f64, NR>::splat(0.0); MR];
+                    let mut acc2 = [Simd::<f64, NR>::splat(0.0); MR];
                     let packed_panel0_base = (j0 / NR) * ka * NR;
                     let packed_panel1_base = packed_panel0_base + ka * NR;
+                    let packed_panel2_base = packed_panel1_base + ka * NR;
                     for k in 0..ka {
                         let a0 = a_flat[a0_base + k];
                         let a1 = a_flat[a1_base + k];
@@ -11549,6 +11552,7 @@ fn matmul_flat_compute_rows(
                         let a3 = a_flat[a3_base + k];
                         let b0_base = packed_panel0_base + k * NR;
                         let b1_base = packed_panel1_base + k * NR;
+                        let b2_base = packed_panel2_base + k * NR;
                         let b0_vec = Simd::from_array([
                             packed_b[b0_base],
                             packed_b[b0_base + 1],
@@ -11569,18 +11573,33 @@ fn matmul_flat_compute_rows(
                             packed_b[b1_base + 6],
                             packed_b[b1_base + 7],
                         ]);
+                        let b2_vec = Simd::from_array([
+                            packed_b[b2_base],
+                            packed_b[b2_base + 1],
+                            packed_b[b2_base + 2],
+                            packed_b[b2_base + 3],
+                            packed_b[b2_base + 4],
+                            packed_b[b2_base + 5],
+                            packed_b[b2_base + 6],
+                            packed_b[b2_base + 7],
+                        ]);
                         acc0[0] += Simd::splat(a0) * b0_vec;
                         acc1[0] += Simd::splat(a0) * b1_vec;
+                        acc2[0] += Simd::splat(a0) * b2_vec;
                         acc0[1] += Simd::splat(a1) * b0_vec;
                         acc1[1] += Simd::splat(a1) * b1_vec;
+                        acc2[1] += Simd::splat(a1) * b2_vec;
                         acc0[2] += Simd::splat(a2) * b0_vec;
                         acc1[2] += Simd::splat(a2) * b1_vec;
+                        acc2[2] += Simd::splat(a2) * b2_vec;
                         acc0[3] += Simd::splat(a3) * b0_vec;
                         acc1[3] += Simd::splat(a3) * b1_vec;
+                        acc2[3] += Simd::splat(a3) * b2_vec;
                     }
                     for di in 0..MR {
                         let acc0_row = acc0[di].to_array();
                         let acc1_row = acc1[di].to_array();
+                        let acc2_row = acc2[di].to_array();
                         let c_base = (i0 + di - row_start) * n + j0;
                         out[c_base] = acc0_row[0];
                         out[c_base + 1] = acc0_row[1];
@@ -11598,6 +11617,14 @@ fn matmul_flat_compute_rows(
                         out[c_base + 13] = acc1_row[5];
                         out[c_base + 14] = acc1_row[6];
                         out[c_base + 15] = acc1_row[7];
+                        out[c_base + 16] = acc2_row[0];
+                        out[c_base + 17] = acc2_row[1];
+                        out[c_base + 18] = acc2_row[2];
+                        out[c_base + 19] = acc2_row[3];
+                        out[c_base + 20] = acc2_row[4];
+                        out[c_base + 21] = acc2_row[5];
+                        out[c_base + 22] = acc2_row[6];
+                        out[c_base + 23] = acc2_row[7];
                     }
                 } else if mr == MR && nr == NR {
                     let a0_base = i0 * ka;
