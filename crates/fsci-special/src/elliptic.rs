@@ -1629,7 +1629,9 @@ pub fn elliprc(x: f64, y: f64) -> f64 {
         return f64::NAN;
     }
     if y == 0.0 {
-        return f64::INFINITY;
+        // scipy.special.elliprc treats y = 0 as outside the domain and returns
+        // NaN (not +∞), even though the defining integral diverges there.
+        return f64::NAN;
     }
     if y < 0.0 {
         // Cauchy principal value (Carlson 1995, eq. 2.13):
@@ -3099,8 +3101,9 @@ mod tests {
         assert!(elliprc(-1.0, 1.0).is_nan());
         assert!(elliprc(f64::NAN, 1.0).is_nan());
         assert!(elliprc(1.0, f64::NAN).is_nan());
-        // y=0 → +∞.
-        assert!(elliprc(1.0, 0.0).is_infinite());
+        // y=0 is outside scipy.special.elliprc's domain → NaN (frankenscipy-rmrmx).
+        assert!(elliprc(1.0, 0.0).is_nan());
+        assert!(elliprc(0.0, 0.0).is_nan());
     }
 
     #[test]
