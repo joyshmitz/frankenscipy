@@ -3479,12 +3479,12 @@ pub fn dice(u: &[bool], v: &[bool]) -> f64 {
         }
     }
 
-    let ntt = ctf + cft;
-    if ntt + 2 * ctt == 0 {
-        0.0
-    } else {
-        ntt as f64 / (ntt + 2 * ctt) as f64
-    }
+    // scipy.spatial.distance.dice computes (ctf+cft)/(ctf+cft+2*ctt); for two
+    // entirely-false vectors that is 0/0 = NaN (scipy emits a divide warning and
+    // returns nan). The previous guard returned 0.0 there, an undocumented
+    // divergence — drop it so the degenerate case matches scipy's NaN.
+    let ntt = (ctf + cft) as f64;
+    ntt / (ntt + 2.0 * ctt as f64)
 }
 
 /// Kulsinski dissimilarity for boolean vectors.
@@ -3568,12 +3568,12 @@ pub fn sokalsneath(u: &[bool], v: &[bool]) -> f64 {
         }
     }
 
-    let r = 2 * (ctf + cft);
-    if r + ctt == 0 {
-        0.0
-    } else {
-        r as f64 / (r + ctt) as f64
-    }
+    // scipy.spatial.distance.sokalsneath raises ValueError ("not defined for
+    // vectors that are entirely false") for the all-false case, which is 2R/(2R+ctt)
+    // = 0/0. Our f64 signature can't raise; return NaN (the f64 "undefined" signal)
+    // instead of the previous, silently-wrong 0.0.
+    let r = (2 * (ctf + cft)) as f64;
+    r / (r + ctt as f64)
 }
 
 /// Matching dissimilarity for boolean vectors.
@@ -4433,6 +4433,27 @@ impl Default for Rotation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dice_sokalsneath_all_false_match_scipy_nan() {
+        // Regression (frankenscipy-wwsdx): the all-false 0/0 case was guarded to
+        // 0.0, an undocumented divergence. scipy.spatial.distance.dice returns NaN
+        // there and sokalsneath raises "not defined for vectors that are entirely
+        // false" — so NaN is the f64 "undefined" signal for both. Normal inputs are
+        // unchanged.
+        let af = [false, false, false, false];
+        assert!(dice(&af, &af).is_nan(), "dice(all-false) must be NaN like scipy");
+        assert!(
+            sokalsneath(&af, &af).is_nan(),
+            "sokalsneath(all-false) must be NaN (scipy raises)"
+        );
+
+        // Non-degenerate inputs still match scipy.spatial.distance 1.17.1 exactly.
+        let u = [true, false, true, true, false, true, false, false];
+        let v = [true, true, false, true, false, false, true, false];
+        assert!((dice(&u, &v) - 0.5).abs() < 1e-12);
+        assert!((sokalsneath(&u, &v) - 0.8).abs() < 1e-12);
+    }
 
     /// The multithreaded `pdist` must be BIT-IDENTICAL to the sequential condensed
     /// i<j push order; pair-balanced row boundaries must tile the output exactly.

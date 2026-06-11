@@ -61,8 +61,10 @@ fn mr_distance_symmetric() {
             for j in 0..pts.len() {
                 let dab = metric_distance(&pts[i], &pts[j], metric);
                 let dba = metric_distance(&pts[j], &pts[i], metric);
+                // Correlation/Cosine are undefined (NaN — as in scipy) for the
+                // zero-variance constant vector; "both NaN" is still symmetric.
                 assert!(
-                    close(dab, dba),
+                    close(dab, dba) || (dab.is_nan() && dba.is_nan()),
                     "MR1 {metric:?} d({i},{j})={dab} d({j},{i})={dba}"
                 );
             }
@@ -81,7 +83,16 @@ fn mr_distance_self_zero() {
     for &metric in ALL_METRICS {
         for (i, p) in pts.iter().enumerate() {
             let d = metric_distance(p, p, metric);
-            assert!(close(d, 0.0), "MR2 {metric:?} d({i},{i}) = {d}, expected 0");
+            // d(x,x)=0 holds only where the metric is defined. Correlation needs
+            // non-zero variance and Cosine a non-zero norm; for the constant /
+            // zero vectors in `sample_points` they are NaN — exactly as
+            // scipy.spatial.distance returns — so accept NaN for those two.
+            let undefined_here = d.is_nan()
+                && matches!(metric, DistanceMetric::Correlation | DistanceMetric::Cosine);
+            assert!(
+                close(d, 0.0) || undefined_here,
+                "MR2 {metric:?} d({i},{i}) = {d}, expected 0"
+            );
         }
     }
 }
