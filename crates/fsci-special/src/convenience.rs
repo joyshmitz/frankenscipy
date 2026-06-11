@@ -1313,6 +1313,93 @@ pub fn iti0k0(x: f64) -> (f64, f64) {
     (ti, tk)
 }
 
+/// Integrals of the Bessel functions `J₀` and `Y₀` from 0 to `x`.
+///
+/// Returns `(∫₀ˣ J₀(t) dt, ∫₀ˣ Y₀(t) dt)`, matching `scipy.special.itj0y0`.
+///
+/// For `x ≤ 20` the integrals come from the (alternating) Maclaurin series:
+/// `∫J₀ = Σ_m (−1)ᵐ x·(x²/4)ᵐ/((m!)²·(2m+1))` and
+/// `∫Y₀ = (2/π)[(ln(x/2)+γ)·∫J₀ − Σ(−1)ᵐ tₘ/(2m+1)² − Σ_{m≥1}(−1)ᵐ tₘ·Hₘ/(2m+1)]`.
+/// Beyond `x = 20` (where the alternating series cancels) it switches to the
+/// Zhang-Jin oscillatory asymptotic. For `x < 0` the `J₀` integral is odd (so it
+/// negates) and `∫Y₀` is NaN (`Y₀` is undefined there), matching scipy.
+#[must_use]
+pub fn itj0y0(x: f64) -> (f64, f64) {
+    if x.is_nan() {
+        return (f64::NAN, f64::NAN);
+    }
+    if x == 0.0 {
+        return (0.0, 0.0);
+    }
+    if x < 0.0 {
+        return (-itj0y0(-x).0, f64::NAN);
+    }
+    const EL: f64 = 0.577_215_664_901_532_9;
+    let pi = std::f64::consts::PI;
+
+    if x <= 20.0 {
+        let x24 = x * x / 4.0;
+        let mut term = x;
+        let mut tj = 0.0_f64;
+        let mut s2 = 0.0_f64;
+        let mut s3 = 0.0_f64;
+        let mut h = 0.0_f64;
+        let mut m = 0usize;
+        let mut sign = 1.0_f64;
+        loop {
+            let d = (2 * m + 1) as f64;
+            tj += sign * term / d;
+            s2 += sign * term / (d * d);
+            if m >= 1 {
+                h += 1.0 / m as f64;
+                s3 += sign * term * h / d;
+            }
+            m += 1;
+            sign = -sign;
+            term *= x24 / (m * m) as f64;
+            if (term.abs() / ((2 * m + 1) as f64) < 1e-20 * tj.abs().max(1.0)
+                && (m as f64) > 2.0 * x)
+                || m > 3000
+            {
+                break;
+            }
+        }
+        let ty = (2.0 / pi) * (((x / 2.0).ln() + EL) * tj - s2 - s3);
+        (tj, ty)
+    } else {
+        // Zhang-Jin oscillatory asymptotic.
+        let mut a = [0.0_f64; 19];
+        let (mut a0, mut a1) = (1.0_f64, 5.0 / 8.0);
+        a[1] = a1;
+        for k in 1..=16 {
+            let kf = k as f64;
+            let af = (1.5 * (kf + 0.5) * (kf + 5.0 / 6.0) * a1
+                - 0.5 * (kf + 0.5) * (kf + 0.5) * (kf - 0.5) * a0)
+                / (kf + 1.0);
+            a[k + 1] = af;
+            a0 = a1;
+            a1 = af;
+        }
+        let mut bf = 1.0_f64;
+        let mut r = 1.0_f64;
+        for k in 1..=8 {
+            r = -r / (x * x);
+            bf += a[2 * k] * r;
+        }
+        let mut bg = a[1] / x;
+        r = 1.0 / x;
+        for k in 1..=8 {
+            r = -r / (x * x);
+            bg += a[2 * k + 1] * r;
+        }
+        let xp = x + 0.25 * pi;
+        let rc = (2.0 / (pi * x)).sqrt();
+        let tj = 1.0 - rc * (bf * xp.cos() + bg * xp.sin());
+        let ty = rc * (bg * xp.cos() - bf * xp.sin());
+        (tj, ty)
+    }
+}
+
 /// Integral of H_0(t) / t from x to infinity.
 ///
 /// Matches `scipy.special.it2struve0`. The identity
@@ -11490,6 +11577,30 @@ mod tests {
             (result - 0.3068528194400546).abs() < 1e-6,
             "kl_div(1, 2) = {result}, expected 0.3068528194400546"
         );
+    }
+
+    #[test]
+    fn itj0y0_matches_scipy_reference_values() {
+        // frankenscipy: integrals of J0/Y0 were missing. Golden (tj, ty) from
+        // scipy.special.itj0y0 1.17.1.
+        let cases = [
+            (0.5_f64, 0.4896805066460451_f64, -0.5617954559146403_f64),
+            (1.0, 0.9197304100897596, -0.637069376607422),
+            (2.0, 1.4257702931970198, -0.28219285008510336),
+            (5.0, 0.7153119177847658, 0.19971938762233765),
+            (10.0, 1.067011303956721, 0.24129031832273223),
+            (18.0, 0.8133057265998527, 0.01845775812398467), // near series tail
+            (25.0, 0.8710149211549791, -0.09360792735177541), // x>20 → asymptotic
+        ];
+        for (x, tj, ty) in cases {
+            let (gj, gy) = super::itj0y0(x);
+            assert!((gj - tj).abs() <= 1e-8 * tj.abs().max(1.0), "itj0y0({x}).0 = {gj}, want {tj}");
+            assert!((gy - ty).abs() <= 1e-8 * ty.abs().max(1.0), "itj0y0({x}).1 = {gy}, want {ty}");
+        }
+        // x < 0: J0 integral odd, Y0 integral NaN. x = 0 → (0, 0).
+        let (nj, ny) = super::itj0y0(-2.0);
+        assert!((nj + 1.4257702931970198).abs() < 1e-9 && ny.is_nan());
+        assert_eq!(super::itj0y0(0.0), (0.0, 0.0));
     }
 
     #[test]
