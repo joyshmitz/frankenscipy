@@ -7400,6 +7400,256 @@ fn apply_compact_wy_symmetric_update(
 }
 
 #[allow(dead_code)]
+#[derive(Debug, Clone)]
+struct SymmetricFullToBandReduction {
+    bandwidth: usize,
+    reduced: DMatrix<f64>,
+    reflectors: Vec<HouseholderReflector>,
+}
+
+#[allow(dead_code)]
+fn validate_symmetric_full_to_band_inputs(
+    matrix: &DMatrix<f64>,
+    bandwidth: usize,
+) -> Result<(), LinalgError> {
+    if matrix.nrows() != matrix.ncols() {
+        return Err(LinalgError::ExpectedSquareMatrix);
+    }
+    if matrix.iter().any(|value| !value.is_finite()) {
+        return Err(LinalgError::NonFiniteInput);
+    }
+    if bandwidth == 0 {
+        return Err(LinalgError::InvalidArgument {
+            detail: "symmetric full-to-band replay requires nonzero bandwidth".to_string(),
+        });
+    }
+    Ok(())
+}
+
+#[allow(dead_code)]
+fn validate_symmetric_full_to_band_reflector(
+    n: usize,
+    bandwidth: usize,
+    reflector: &HouseholderReflector,
+) -> Result<usize, LinalgError> {
+    if reflector.start < bandwidth || reflector.start >= n {
+        return Err(LinalgError::InvalidArgument {
+            detail: "symmetric full-to-band reflector start is outside the active band".to_string(),
+        });
+    }
+    if reflector.start + reflector.values.len() != n {
+        return Err(LinalgError::IncompatibleShapes {
+            a_shape: (n, n),
+            b_len: reflector.start + reflector.values.len(),
+        });
+    }
+    Ok(reflector.start - bandwidth)
+}
+
+#[allow(dead_code)]
+fn apply_householder_left_col_range(
+    matrix: &mut DMatrix<f64>,
+    reflector: &HouseholderReflector,
+    col_start: usize,
+    col_end: usize,
+) {
+    if reflector.tau == 0.0 || reflector.values.is_empty() {
+        return;
+    }
+    let rows = matrix.nrows();
+    let cols = matrix.ncols();
+    let start = reflector.start;
+    let data = matrix.as_mut_slice();
+    for col in col_start..col_end.min(cols) {
+        let col_base = col * rows;
+        let mut dot = 0.0;
+        for (offset, value) in reflector.values.iter().enumerate() {
+            dot += value * data[col_base + start + offset];
+        }
+        let scale = reflector.tau * dot;
+        if scale != 0.0 {
+            for (offset, value) in reflector.values.iter().enumerate() {
+                data[col_base + start + offset] -= scale * value;
+            }
+        }
+    }
+}
+
+#[allow(dead_code)]
+fn apply_householder_right_row_range(
+    matrix: &mut DMatrix<f64>,
+    reflector: &HouseholderReflector,
+    row_start: usize,
+    row_end: usize,
+    dot_workspace: &mut [f64],
+) {
+    if reflector.tau == 0.0 || reflector.values.is_empty() {
+        return;
+    }
+    let rows = matrix.nrows();
+    let row_end = row_end.min(rows);
+    if row_start >= row_end {
+        return;
+    }
+    debug_assert!(dot_workspace.len() >= rows);
+    let start = reflector.start;
+    let data = matrix.as_mut_slice();
+
+    for dot in &mut dot_workspace[row_start..row_end] {
+        *dot = 0.0;
+    }
+
+    for (offset, value) in reflector.values.iter().enumerate() {
+        let col = start + offset;
+        let col_base = col * rows;
+        for row in row_start..row_end {
+            dot_workspace[row] += data[col_base + row] * value;
+        }
+    }
+
+    for scale in &mut dot_workspace[row_start..row_end] {
+        *scale *= reflector.tau;
+    }
+
+    for (offset, value) in reflector.values.iter().enumerate() {
+        let col = start + offset;
+        let col_base = col * rows;
+        for row in row_start..row_end {
+            let scale = dot_workspace[row];
+            if scale != 0.0 {
+                data[col_base + row] -= scale * value;
+            }
+        }
+    }
+}
+
+#[allow(dead_code)]
+fn apply_symmetric_scalar_similarity(
+    matrix: &mut DMatrix<f64>,
+    reflector: &HouseholderReflector,
+    workspace: &mut [f64],
+) {
+    apply_householder_left_col_range(matrix, reflector, 0, matrix.ncols());
+    apply_householder_right_row_range(matrix, reflector, 0, matrix.nrows(), workspace);
+}
+
+#[allow(dead_code)]
+fn apply_symmetric_scalar_cross_block(
+    matrix: &mut DMatrix<f64>,
+    reflector: &HouseholderReflector,
+    active_start: usize,
+    workspace: &mut [f64],
+) {
+    apply_householder_left_col_range(matrix, reflector, 0, active_start);
+    apply_householder_right_row_range(matrix, reflector, 0, active_start, workspace);
+}
+
+#[allow(dead_code)]
+fn zero_symmetric_full_to_band_column(
+    matrix: &mut DMatrix<f64>,
+    bandwidth: usize,
+    reflector: &HouseholderReflector,
+) -> Result<(), LinalgError> {
+    let n = matrix.nrows();
+    let col = validate_symmetric_full_to_band_reflector(n, bandwidth, reflector)?;
+    for row in reflector.start + 1..n {
+        matrix[(row, col)] = 0.0;
+        matrix[(col, row)] = 0.0;
+    }
+    Ok(())
+}
+
+#[allow(dead_code)]
+fn deterministic_symmetric_full_to_band_reflectors(
+    matrix: &DMatrix<f64>,
+    bandwidth: usize,
+) -> Result<SymmetricFullToBandReduction, LinalgError> {
+    validate_symmetric_full_to_band_inputs(matrix, bandwidth)?;
+    let n = matrix.nrows();
+    let mut work = matrix.clone();
+    let mut reflectors = Vec::new();
+    let mut workspace = vec![0.0_f64; n];
+
+    for col in 0..n {
+        let start = col + bandwidth;
+        if start + 1 >= n {
+            break;
+        }
+        let values = (start..n).map(|row| work[(row, col)]).collect();
+        let reflector = make_householder_reflector(start, values);
+        apply_symmetric_scalar_similarity(&mut work, &reflector, &mut workspace);
+        zero_symmetric_full_to_band_column(&mut work, bandwidth, &reflector)?;
+        reflectors.push(reflector);
+    }
+
+    Ok(SymmetricFullToBandReduction {
+        bandwidth,
+        reduced: work,
+        reflectors,
+    })
+}
+
+#[allow(dead_code)]
+fn replay_symmetric_full_to_band_scalar(
+    matrix: &mut DMatrix<f64>,
+    bandwidth: usize,
+    reflectors: &[HouseholderReflector],
+) -> Result<(), LinalgError> {
+    validate_symmetric_full_to_band_inputs(matrix, bandwidth)?;
+    let n = matrix.nrows();
+    let mut workspace = vec![0.0_f64; n];
+    for reflector in reflectors {
+        validate_symmetric_full_to_band_reflector(n, bandwidth, reflector)?;
+        apply_symmetric_scalar_similarity(matrix, reflector, &mut workspace);
+        zero_symmetric_full_to_band_column(matrix, bandwidth, reflector)?;
+    }
+    Ok(())
+}
+
+#[allow(dead_code)]
+fn replay_symmetric_full_to_band_compact_wy(
+    matrix: &mut DMatrix<f64>,
+    bandwidth: usize,
+    reflectors: &[HouseholderReflector],
+    panel_width: usize,
+) -> Result<(), LinalgError> {
+    validate_symmetric_full_to_band_inputs(matrix, bandwidth)?;
+    if panel_width == 0 {
+        return Err(LinalgError::InvalidArgument {
+            detail: "compact-WY full-to-band replay requires nonzero panel width".to_string(),
+        });
+    }
+
+    let n = matrix.nrows();
+    let mut workspace = vec![0.0_f64; n];
+    for panel_reflectors in reflectors.chunks(panel_width) {
+        let Some(first_reflector) = panel_reflectors.first() else {
+            continue;
+        };
+        let active_start = first_reflector.start;
+        for reflector in panel_reflectors {
+            validate_symmetric_full_to_band_reflector(n, bandwidth, reflector)?;
+            if reflector.start < active_start {
+                return Err(LinalgError::InvalidArgument {
+                    detail: "compact-WY full-to-band reflectors must be ordered by start"
+                        .to_string(),
+                });
+            }
+            apply_symmetric_scalar_cross_block(matrix, reflector, active_start, &mut workspace);
+        }
+
+        let panel =
+            compact_wy_panel_from_reflectors(active_start, n - active_start, panel_reflectors)?;
+        apply_compact_wy_symmetric_update(matrix, &panel)?;
+        for reflector in panel_reflectors {
+            zero_symmetric_full_to_band_column(matrix, bandwidth, reflector)?;
+        }
+    }
+
+    Ok(())
+}
+
+#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
 fn apply_bidiag_fused_rank_k_update(
     matrix: &mut DMatrix<f64>,
@@ -15540,6 +15790,31 @@ mod tests {
             .collect()
     }
 
+    fn assert_symmetric_full_to_band_zeros(matrix: &DMatrix<f64>, bandwidth: usize, label: &str) {
+        for row in 0..matrix.nrows() {
+            for col in 0..matrix.ncols() {
+                if row.abs_diff(col) > bandwidth {
+                    assert_eq!(
+                        matrix[(row, col)].to_bits(),
+                        0.0_f64.to_bits(),
+                        "{label} outside-band entry ({row},{col}) should be exactly zero"
+                    );
+                }
+            }
+        }
+    }
+
+    fn symmetric_full_to_band_q_transpose(
+        n: usize,
+        reflectors: &[HouseholderReflector],
+    ) -> DMatrix<f64> {
+        let mut q_t = DMatrix::<f64>::identity(n, n);
+        for reflector in reflectors {
+            apply_householder_left(&mut q_t, reflector, 0);
+        }
+        q_t
+    }
+
     fn apply_scalar_symmetric_reflector_replay(
         matrix: &mut DMatrix<f64>,
         reflectors: &[HouseholderReflector],
@@ -15593,6 +15868,99 @@ mod tests {
                 dmatrix_bits_digest(&compact)
             );
         }
+    }
+
+    #[test]
+    fn compact_wy_full_to_band_replay_matches_scalar_replay() {
+        for (n, bandwidth, panel_width) in [(18usize, 1usize, 3usize), (37, 2, 4), (64, 4, 6)] {
+            let original = compact_wy_symmetric_matrix(n);
+            let reduction = deterministic_symmetric_full_to_band_reflectors(&original, bandwidth)
+                .expect("deterministic full-to-band reduction");
+            assert_eq!(reduction.bandwidth, bandwidth);
+            assert!(!reduction.reflectors.is_empty());
+
+            let mut scalar = original.clone();
+            replay_symmetric_full_to_band_scalar(&mut scalar, bandwidth, &reduction.reflectors)
+                .expect("scalar full-to-band replay");
+            let scale = dmatrix_max_abs_value(&reduction.reduced).max(1.0);
+            let scalar_reduction_drift = max_abs_dmatrix_diff(&scalar, &reduction.reduced);
+            assert!(
+                scalar_reduction_drift <= 1e-11 * scale * n as f64,
+                "scalar replay drift {scalar_reduction_drift:.17e} for n={n}, bandwidth={bandwidth}"
+            );
+            assert_symmetric_full_to_band_zeros(&scalar, bandwidth, "scalar replay");
+
+            let mut compact = original.clone();
+            replay_symmetric_full_to_band_compact_wy(
+                &mut compact,
+                bandwidth,
+                &reduction.reflectors,
+                panel_width,
+            )
+            .expect("compact-WY full-to-band replay");
+            let compact_scalar_drift = max_abs_dmatrix_diff(&compact, &scalar);
+            assert!(
+                compact_scalar_drift <= 1e-9 * scale * (n as f64).sqrt(),
+                "compact-WY full-to-band drift {compact_scalar_drift:.17e} for n={n}, bandwidth={bandwidth}, panel_width={panel_width}"
+            );
+            assert_symmetric_full_to_band_zeros(&compact, bandwidth, "compact-WY replay");
+
+            let q_t = symmetric_full_to_band_q_transpose(n, &reduction.reflectors);
+            let projected = (&q_t * &original) * q_t.transpose();
+            let q_residual = max_abs_dmatrix_diff(&projected, &scalar);
+            let q_orthogonality = dmatrix_orthogonality_error(&q_t);
+            assert!(
+                q_residual <= 1e-9 * scale * n as f64,
+                "Q reconstruction residual {q_residual:.17e} for n={n}, bandwidth={bandwidth}"
+            );
+            assert!(
+                q_orthogonality <= 1e-10 * n as f64,
+                "Q orthogonality error {q_orthogonality:.17e} for n={n}, bandwidth={bandwidth}"
+            );
+
+            println!(
+                "full_to_band_replay_digest n={n} bandwidth={bandwidth} panel_width={panel_width} scalar={:#018x} compact={:#018x} q_orthogonality={q_orthogonality:.17e}",
+                dmatrix_bits_digest(&scalar),
+                dmatrix_bits_digest(&compact)
+            );
+        }
+    }
+
+    #[test]
+    fn compact_wy_full_to_band_replay_rejects_invalid_shapes() {
+        let rectangular = DMatrix::<f64>::zeros(4, 3);
+        let err = deterministic_symmetric_full_to_band_reflectors(&rectangular, 1)
+            .expect_err("rectangular input rejected");
+        assert!(matches!(err, LinalgError::ExpectedSquareMatrix));
+
+        let original = compact_wy_symmetric_matrix(12);
+        let reduction = deterministic_symmetric_full_to_band_reflectors(&original, 1)
+            .expect("deterministic reduction");
+
+        let mut scalar = original.clone();
+        let err = replay_symmetric_full_to_band_scalar(&mut scalar, 0, &reduction.reflectors)
+            .expect_err("zero bandwidth rejected");
+        assert!(matches!(err, LinalgError::InvalidArgument { .. }));
+
+        let mut malformed_reflectors = reduction.reflectors.clone();
+        malformed_reflectors[0].values.pop();
+        let mut scalar = original.clone();
+        let err = replay_symmetric_full_to_band_scalar(&mut scalar, 1, &malformed_reflectors)
+            .expect_err("short reflector rejected");
+        assert!(matches!(err, LinalgError::IncompatibleShapes { .. }));
+
+        let mut compact = original.clone();
+        let err =
+            replay_symmetric_full_to_band_compact_wy(&mut compact, 1, &reduction.reflectors, 0)
+                .expect_err("zero panel width rejected");
+        assert!(matches!(err, LinalgError::InvalidArgument { .. }));
+
+        let mut out_of_order = reduction.reflectors.clone();
+        out_of_order.swap(0, 1);
+        let mut compact = original;
+        let err = replay_symmetric_full_to_band_compact_wy(&mut compact, 1, &out_of_order, 4)
+            .expect_err("out-of-order compact-WY panel rejected");
+        assert!(matches!(err, LinalgError::InvalidArgument { .. }));
     }
 
     #[test]
@@ -15660,6 +16028,80 @@ mod tests {
             println!("reference_digest={:#018x}", dmatrix_bits_digest(&reference));
             println!("compact_digest={:#018x}", dmatrix_bits_digest(&compact));
             println!("COMPACT_WY_SYMMETRIC_UPDATE_PERF_END");
+        }
+    }
+
+    #[test]
+    #[ignore = "perf probe: run with rch and --release for scalar vs compact-WY full-to-band replay"]
+    fn compact_wy_full_to_band_replay_perf_probe() {
+        for n in [256usize, 512] {
+            let bandwidth = 32;
+            let panel_width = 8;
+            let original = compact_wy_symmetric_matrix(n);
+            let reduction = deterministic_symmetric_full_to_band_reflectors(&original, bandwidth)
+                .expect("deterministic full-to-band reduction");
+
+            let mut scalar = original.clone();
+            let started_at = std::time::Instant::now();
+            replay_symmetric_full_to_band_scalar(
+                std::hint::black_box(&mut scalar),
+                bandwidth,
+                &reduction.reflectors,
+            )
+            .expect("scalar full-to-band replay");
+            let scalar_ms = started_at.elapsed().as_secs_f64() * 1_000.0;
+
+            let mut compact = original.clone();
+            let started_at = std::time::Instant::now();
+            replay_symmetric_full_to_band_compact_wy(
+                std::hint::black_box(&mut compact),
+                bandwidth,
+                &reduction.reflectors,
+                panel_width,
+            )
+            .expect("compact-WY full-to-band replay");
+            let compact_ms = started_at.elapsed().as_secs_f64() * 1_000.0;
+
+            let max_abs = max_abs_dmatrix_diff(&compact, &scalar);
+            let scale = dmatrix_max_abs_value(&scalar).max(1.0);
+            assert!(
+                max_abs <= 1e-8 * scale * n as f64,
+                "compact-WY full-to-band replay drift {max_abs:.17e} for n={n}"
+            );
+            assert_symmetric_full_to_band_zeros(&scalar, bandwidth, "scalar replay perf probe");
+            assert_symmetric_full_to_band_zeros(&compact, bandwidth, "compact-WY perf probe");
+
+            let rows: Vec<Vec<f64>> = (0..n)
+                .map(|row| (0..n).map(|col| original[(row, col)]).collect())
+                .collect();
+            let started_at = std::time::Instant::now();
+            let public_eigh = eigh(
+                std::hint::black_box(&rows),
+                DecompOptions {
+                    mode: RuntimeMode::Strict,
+                    check_finite: false,
+                },
+            )
+            .expect("public eigh side-probe");
+            let public_eigh_ms = started_at.elapsed().as_secs_f64() * 1_000.0;
+
+            println!("FULL_TO_BAND_COMPACT_WY_REPLAY_PERF_BEGIN");
+            println!("shape={n}x{n}");
+            println!("bandwidth={bandwidth}");
+            println!("panel_width={panel_width}");
+            println!("reflector_count={}", reduction.reflectors.len());
+            println!("scalar_full_replay_ms={scalar_ms:.6}");
+            println!("compact_wy_panel_replay_ms={compact_ms:.6}");
+            println!("speedup={:.6}", scalar_ms / compact_ms);
+            println!("max_abs_diff={max_abs:.17e}");
+            println!("scalar_digest={:#018x}", dmatrix_bits_digest(&scalar));
+            println!("compact_digest={:#018x}", dmatrix_bits_digest(&compact));
+            println!("public_eigh_side_probe_ms={public_eigh_ms:.6}");
+            println!(
+                "public_eigh_eigenvalue_count={}",
+                public_eigh.eigenvalues.len()
+            );
+            println!("FULL_TO_BAND_COMPACT_WY_REPLAY_PERF_END");
         }
     }
 
