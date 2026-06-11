@@ -23223,6 +23223,67 @@ fn ansari_exact_pvalue(stat: f64, n: usize, total: usize, alternative: &str) -> 
 ///
 /// Non-parametric test: H0: distributions of x and y are equal.
 /// Uses normal approximation for p-value (valid for n > 20).
+/// Exact null distribution of the Mann-Whitney U statistic for sample sizes
+/// (a, b): `counts[u]` = number of combined arrangements with U == u, for
+/// u = 0..=a*b. The distribution is symmetric and depends only on the multiset
+/// {a, b}, so the caller passes a = min(n1, n2). Recurrence (Mann-Whitney 1947):
+/// f(i, j; U) = f(i-1, j; U-j) + f(i, j-1; U), built column-by-column in f64.
+fn mwu_exact_counts(a: usize, b: usize) -> Vec<f64> {
+    let mut prev: Vec<Vec<f64>> = vec![Vec::new(); a + 1]; // f(i, j-1)
+    for j in 0..=b {
+        let mut cur: Vec<Vec<f64>> = vec![Vec::new(); a + 1];
+        for i in 0..=a {
+            let arr = if i == 0 || j == 0 {
+                let mut base = vec![0.0; i * j + 1];
+                base[0] = 1.0;
+                base
+            } else {
+                let mut acc = vec![0.0; i * j + 1];
+                for (u, &c) in cur[i - 1].iter().enumerate() {
+                    if c != 0.0 {
+                        acc[u + j] += c; // shift f(i-1, j) up by j
+                    }
+                }
+                for (u, &c) in prev[i].iter().enumerate() {
+                    if c != 0.0 {
+                        acc[u] += c; // f(i, j-1)
+                    }
+                }
+                acc
+            };
+            cur[i] = arr;
+        }
+        prev = cur;
+    }
+    std::mem::take(&mut prev[a])
+}
+
+/// scipy's exact Mann-Whitney p-value (`method='exact'`, used when there are no
+/// ties and at least one sample is small): from the exact U distribution,
+/// `less` → P(U ≤ U1), `greater` → P(U ≥ U1), two-sided → 2·min(cdf, sf) clipped.
+/// U1 is the statistic for the first sample. frankenscipy-vwmup
+fn mwu_exact_pvalue(u1: f64, n1: usize, n2: usize, alternative: &str) -> f64 {
+    let counts = mwu_exact_counts(n1.min(n2), n1.max(n2));
+    let total: f64 = counts.iter().sum();
+    let ui = (u1.round() as usize).min(counts.len() - 1);
+    let cdf: f64 = counts[..=ui].iter().sum::<f64>() / total; // P(U <= U1)
+    let sf: f64 = counts[ui..].iter().sum::<f64>() / total; // P(U >= U1)
+    match alternative {
+        "less" => cdf,
+        "greater" => sf,
+        _ => (2.0 * cdf.min(sf)).min(1.0),
+    }
+}
+
+/// scipy `method='auto'` uses the exact Mann-Whitney null distribution when
+/// there are no ties and the smaller sample has ≤ 8 observations. We additionally
+/// cap n1·n2 so the O((n1·n2)²) count DP stays cheap; beyond the cap (only
+/// reachable for a tiny sample paired with a very large one) the asymptotic
+/// approximation is already excellent. frankenscipy-vwmup
+fn mwu_use_exact(n1: usize, n2: usize, no_ties: bool) -> bool {
+    no_ties && n1.min(n2) <= 8 && n1 * n2 <= 20_000
+}
+
 pub fn mannwhitneyu(x: &[f64], y: &[f64]) -> TtestResult {
     if x.len() < 2 || y.len() < 2 || x.iter().any(|v| v.is_nan()) || y.iter().any(|v| v.is_nan()) {
         return TtestResult {
@@ -23286,6 +23347,17 @@ pub fn mannwhitneyu(x: &[f64], y: &[f64]) -> TtestResult {
         i = j;
     }
 
+    // scipy returns the U statistic for the first sample (U1), not min(U1, U2).
+    // For an untied small sample it uses the exact null distribution instead of
+    // the normal approximation. frankenscipy-vwmup
+    if mwu_use_exact(n1, n2, tie_correction == 0.0) {
+        return TtestResult {
+            statistic: u1,
+            pvalue: mwu_exact_pvalue(u1, n1, n2, "two-sided"),
+            df: f64::NAN,
+        };
+    }
+
     let variance_no_ties = n1f * n2f * (n + 1.0) / 12.0;
     let variance = if n > 1.0 {
         variance_no_ties - n1f * n2f * tie_correction / (12.0 * n * (n - 1.0))
@@ -23296,7 +23368,7 @@ pub fn mannwhitneyu(x: &[f64], y: &[f64]) -> TtestResult {
 
     if sigma == 0.0 {
         return TtestResult {
-            statistic: u,
+            statistic: u1,
             pvalue: 1.0,
             df: f64::NAN,
         };
@@ -23312,7 +23384,7 @@ pub fn mannwhitneyu(x: &[f64], y: &[f64]) -> TtestResult {
     let pvalue = (2.0 * (1.0 - normal.cdf(z))).clamp(0.0, 1.0);
 
     TtestResult {
-        statistic: u,
+        statistic: u1,
         pvalue,
         df: f64::NAN,
     }
@@ -23379,6 +23451,16 @@ pub fn mannwhitneyu_alternative(x: &[f64], y: &[f64], alternative: &str) -> Ttes
         }
         i = j;
     }
+    // Exact null distribution for an untied small sample (scipy method='auto').
+    // The reported statistic is always U1 (for x). frankenscipy-vwmup
+    if mwu_use_exact(n1, n2, tie_correction == 0.0) {
+        return TtestResult {
+            statistic: u1,
+            pvalue: mwu_exact_pvalue(u1, n1, n2, alternative),
+            df: f64::NAN,
+        };
+    }
+
     let variance_no_ties = n1f * n2f * (n + 1.0) / 12.0;
     let variance = if n > 1.0 {
         variance_no_ties - n1f * n2f * tie_correction / (12.0 * n * (n - 1.0))
@@ -23395,27 +23477,23 @@ pub fn mannwhitneyu_alternative(x: &[f64], y: &[f64], alternative: &str) -> Ttes
         };
     }
 
+    // scipy's asymptotic p-value is always SF with a -0.5 continuity correction,
+    // choosing U = U1 for 'greater', U2 for 'less', and max(U1,U2) two-sided.
     let normal = Normal::standard();
-    let (u, pvalue) = match alternative {
-        "less" => {
-            let z = (u1 - mu) / sigma;
-            (u1, normal.cdf(z))
-        }
-        "greater" => {
-            let z = (u1 - mu) / sigma;
-            (u1, normal.sf(z))
-        }
+    let pvalue = match alternative {
+        "less" => normal.sf((u2 - mu - 0.5) / sigma),
+        "greater" => normal.sf((u1 - mu - 0.5) / sigma),
         _ => {
-            // br-nknp: two-sided with continuity correction.
-            let u = u1.min(u2);
-            let abs_diff = (u - mu).abs();
+            // br-nknp: two-sided with continuity correction (z from min(U1, U2)).
+            let abs_diff = (u1.min(u2) - mu).abs();
             let z = (abs_diff - 0.5).max(0.0) / sigma;
-            (u, (2.0 * (1.0 - normal.cdf(z))).clamp(0.0, 1.0))
+            (2.0 * (1.0 - normal.cdf(z))).clamp(0.0, 1.0)
         }
     };
 
+    // scipy reports U1 (statistic for x) for every alternative.
     TtestResult {
-        statistic: u,
+        statistic: u1,
         pvalue,
         df: f64::NAN,
     }
@@ -49884,6 +49962,54 @@ mod tests {
             "x < y should not be significant for 'greater': {}",
             greater.pvalue
         );
+    }
+
+    #[test]
+    fn mannwhitneyu_exact_and_continuity_match_scipy() {
+        // frankenscipy-vwmup. Golden values from scipy.stats.mannwhitneyu
+        // (method='auto', use_continuity=True) 1.17.1.
+        // Small, untied samples → exact U distribution; statistic is U1 (for x).
+        let x = [1.0, 2.0, 3.0, 4.0];
+        let y = [5.0, 6.0, 7.0, 8.0];
+        let r = mannwhitneyu(&x, &y);
+        assert_eq!(r.statistic, 0.0);
+        assert!((r.pvalue - 0.02857142857142857).abs() < 1e-12, "two-sided {}", r.pvalue);
+        let less = mannwhitneyu_alternative(&x, &y, "less");
+        assert!((less.pvalue - 0.014285714285714285).abs() < 1e-12, "less {}", less.pvalue);
+        let greater = mannwhitneyu_alternative(&x, &y, "greater");
+        assert!((greater.pvalue - 1.0).abs() < 1e-12, "greater {}", greater.pvalue);
+
+        // scipy's two-sided statistic is U1 (for x), not min(U1, U2): x all larger.
+        let r2 = mannwhitneyu(&y, &x);
+        assert_eq!(r2.statistic, 16.0);
+        assert!((r2.pvalue - 0.02857142857142857).abs() < 1e-12);
+
+        // Larger, untied samples (both > 8) → asymptotic with continuity correction.
+        // Disjoint integer ranges → no ties; a > b throughout.
+        let a: Vec<f64> = (0..10).map(|i| 20.0 + i as f64).collect();
+        let b: Vec<f64> = (0..10).map(|i| i as f64).collect();
+        let gr = mannwhitneyu_alternative(&a, &b, "greater");
+        let ls = mannwhitneyu_alternative(&a, &b, "less");
+        let sp = scipy_mwu_ref(&a, &b);
+        assert!((gr.pvalue - sp.0).abs() < 1e-9, "asym greater {} vs {}", gr.pvalue, sp.0);
+        assert!((ls.pvalue - sp.1).abs() < 1e-9, "asym less {} vs {}", ls.pvalue, sp.1);
+    }
+
+    // Reference asymptotic MWU (continuity-corrected) computed the scipy way, for
+    // the regression above — independent re-derivation, not the impl under test.
+    fn scipy_mwu_ref(x: &[f64], y: &[f64]) -> (f64, f64) {
+        let (n1, n2) = (x.len() as f64, y.len() as f64);
+        let mut u1 = 0.0;
+        for &xi in x {
+            for &yj in y {
+                if xi > yj { u1 += 1.0; } else if xi == yj { u1 += 0.5; }
+            }
+        }
+        let u2 = n1 * n2 - u1;
+        let mu = n1 * n2 / 2.0;
+        let sigma = (n1 * n2 * (n1 + n2 + 1.0) / 12.0).sqrt();
+        let nd = Normal::standard();
+        (nd.sf((u1 - mu - 0.5) / sigma), nd.sf((u2 - mu - 0.5) / sigma))
     }
 
     #[test]
