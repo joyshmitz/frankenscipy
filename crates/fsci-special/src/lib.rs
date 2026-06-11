@@ -21,7 +21,7 @@ pub use audit::{
 pub use bessel::{
     BESSEL_DISPATCH_PLAN, h1vp, h2vp, hankel1, hankel1e, hankel2, hankel2e, i0, i0_scalar, i0e,
     i0e_scalar, i1, i1_scalar, i1e, i1e_scalar, iv, ive, ive_scalar, ivp, j0, j1, jn, jn_zeros,
-    log_ive_scalar,
+    jnjnp_zeros, jnyn_zeros, log_ive_scalar,
     jnp_zeros, jv, jve, jvp, k0, k0_scalar, k0e, k0e_scalar, k1, k1_scalar, k1e, k1e_scalar, kn,
     kn_scalar, kv, kve, kve_scalar, kvp, log_wright_bessel, riccati_jn, riccati_yn, spherical_in,
     spherical_jn, spherical_kn, spherical_yn, wright_bessel, y0, y0_zeros, y1, y1_zeros, y1p_zeros,

@@ -4567,9 +4567,104 @@ pub fn jn_zeros(n: u32, k: usize) -> Vec<f64> {
     out
 }
 
+/// First `nt` zeros of `J_n`, `J_n'`, `Y_n`, and `Y_n'` for a fixed integer
+/// order `n`, returned as `(jn, jnp, yn, ynp)`.
+///
+/// Matches `scipy.special.jnyn_zeros(n, nt)` — simply the four single-function
+/// zero finders evaluated for the same order.
+#[must_use]
+pub fn jnyn_zeros(n: u32, nt: usize) -> (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>) {
+    (
+        jn_zeros(n, nt),
+        jnp_zeros(n, nt),
+        yn_zeros(n, nt),
+        ynp_zeros(n, nt),
+    )
+}
+
+/// First `nt` zeros of the integer-order Bessel functions `J_n` and `J_n'`
+/// across all orders, sorted by magnitude.
+///
+/// Matches `scipy.special.jnjnp_zeros(nt)`, returning `(zo, n, m, t)`:
+/// `zo` are the sorted zero values, `n` the order, `m` the 1-based serial number
+/// of that zero within its `(order, function)`, and `t = 0` for a zero of `J_n`
+/// or `t = 1` for a zero of `J_n'`. The `x = 0` zero of `J_0'` is included first
+/// as `(0.0, n=0, m=0, t=1)`.
+#[must_use]
+pub fn jnjnp_zeros(nt: usize) -> (Vec<f64>, Vec<i32>, Vec<i32>, Vec<i32>) {
+    if nt == 0 {
+        return (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    }
+    // (magnitude, order n, serial m, type t). Generate a superset large enough
+    // to contain the `nt` smallest: zeros increase with both order and serial,
+    // so orders `0..=nt+2` with `nt+2` zeros each more than cover them.
+    let mut cands: Vec<(f64, i32, i32, i32)> = Vec::new();
+    cands.push((0.0, 0, 0, 1)); // J_0'(0) = 0
+    let per = nt + 2;
+    let n_max = nt as u32 + 2;
+    for n in 0..=n_max {
+        for (i, &x) in jn_zeros(n, per).iter().enumerate() {
+            cands.push((x, n as i32, (i + 1) as i32, 0));
+        }
+        // J_0' ≡ -J_1, so its zeros are exactly the J_1 zeros; reuse them so the
+        // coincident magnitudes tie bit-for-bit and the `t` tie-break orders the
+        // J_n zero (t=0) before the J_n' zero (t=1), as SciPy does.
+        let jp = if n == 0 {
+            jn_zeros(1, per)
+        } else {
+            jnp_zeros(n, per)
+        };
+        for (i, &x) in jp.iter().enumerate() {
+            cands.push((x, n as i32, (i + 1) as i32, 1));
+        }
+    }
+    cands.sort_by(|a, b| {
+        a.0.partial_cmp(&b.0)
+            .expect("Bessel zeros are finite")
+            .then(a.3.cmp(&b.3))
+    });
+    cands.truncate(nt);
+    let zo = cands.iter().map(|c| c.0).collect();
+    let n = cands.iter().map(|c| c.1).collect();
+    let m = cands.iter().map(|c| c.2).collect();
+    let t = cands.iter().map(|c| c.3).collect();
+    (zo, n, m, t)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn jnyn_and_jnjnp_zeros_match_scipy() {
+        // frankenscipy: golden from scipy.special.jnyn_zeros / jnjnp_zeros (1.17.1).
+        let (jn, jnp, yn, ynp) = jnyn_zeros(2, 3);
+        let close = |a: &[f64], b: &[f64], msg: &str| {
+            assert_eq!(a.len(), b.len(), "{msg}: len");
+            for (g, w) in a.iter().zip(b.iter()) {
+                assert!((g - w).abs() < 1e-8, "{msg}: got {g}, want {w}");
+            }
+        };
+        close(&jn, &[5.1356223018, 8.4172441404, 11.6198411721], "jnyn jn");
+        close(&jnp, &[3.0542369282, 6.7061331942, 9.9694678231], "jnyn jnp");
+        close(&yn, &[3.3842417671, 6.7938075133, 10.0234779794], "jnyn yn");
+        close(&ynp, &[5.0025829314, 8.3507247014, 11.5741954652], "jnyn ynp");
+
+        let (zo, n, m, t) = jnjnp_zeros(8);
+        close(
+            &zo,
+            &[
+                0.0, 1.8411837813, 2.4048255577, 3.0542369282, 3.8317059702, 3.8317059702,
+                4.2011889412, 5.1356223018,
+            ],
+            "jnjnp zo",
+        );
+        assert_eq!(n, vec![0, 1, 0, 2, 1, 0, 3, 2], "jnjnp n");
+        assert_eq!(m, vec![0, 1, 1, 1, 1, 1, 1, 1], "jnjnp m");
+        assert_eq!(t, vec![1, 1, 0, 1, 0, 1, 1, 0], "jnjnp t");
+
+        assert!(jnjnp_zeros(0).0.is_empty(), "nt=0 -> empty");
+    }
 
     #[test]
     fn log_ive_matches_ive_in_overlap_and_finite_beyond() {
