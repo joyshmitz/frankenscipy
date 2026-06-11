@@ -592,6 +592,82 @@ pub fn ncfdtr(dfn: f64, dfd: f64, nc: f64, f: f64) -> f64 {
 ///
 /// Matches `scipy.special.stdtr(v, t)`.
 #[must_use]
+/// Non-central Student's t cumulative distribution function.
+///
+/// Matches `scipy.special.nctdtr(df, nc, t)`: the CDF at `t` of a non-central
+/// t variable with `df` degrees of freedom and non-centrality `nc`.
+///
+/// Uses Lenth's (1989, AS 243) series. For `t ≥ 0`,
+///
+/// ```text
+///   P(T ≤ t) = Φ(−δ) + ½ Σ_{j≥0} [ p_j·I_x(j+½, df/2) + q_j·I_x(j+1, df/2) ],
+///   x = t²/(t²+df),  λ = δ²/2,
+///   p_j = e^{−λ} λ^j / j!,  q_j = (δ/√2)·e^{−λ} λ^j / Γ(j+3/2)
+/// ```
+///
+/// with `nctdtr(df, nc, t) = 1 − nctdtr(df, −nc, −t)` for `t < 0`. The series is
+/// summed outward from the Poisson mode `j₀=⌊λ⌋` (mode weights formed in log
+/// space, with `q`'s sign carried separately) so large `nc` stays stable.
+#[must_use]
+pub fn nctdtr(df: f64, nc: f64, t: f64) -> f64 {
+    if df.is_nan() || nc.is_nan() || t.is_nan() {
+        return f64::NAN;
+    }
+    if df <= 0.0 {
+        return f64::NAN;
+    }
+    if t < 0.0 {
+        return 1.0 - nctdtr(df, -nc, -t);
+    }
+    let phi = crate::convenience::ndtr_scalar(-nc);
+    if t == 0.0 {
+        return phi;
+    }
+    let x = t * t / (t * t + df);
+    let half_df = 0.5 * df;
+    let lam = 0.5 * nc * nc;
+    if lam == 0.0 {
+        return phi + 0.5 * btdtr(0.5, half_df, x);
+    }
+
+    let j0 = lam.floor();
+    let lg = |z: f64| gammaln_scalar(z, RuntimeMode::Strict).unwrap_or(f64::NAN);
+    let p0 = (-lam + j0 * lam.ln() - lg(j0 + 1.0)).exp();
+    let q_sign = if nc >= 0.0 { 1.0 } else { -1.0 };
+    let q0 = q_sign
+        * ((nc.abs() / std::f64::consts::SQRT_2).ln() - lam + j0 * lam.ln() - lg(j0 + 1.5)).exp();
+
+    let mut s = 0.0_f64;
+    // Upward from the mode.
+    let (mut p, mut q, mut j) = (p0, q0, j0);
+    let mut steps = 0;
+    while steps < 100_000 {
+        s += p * btdtr(j + 0.5, half_df, x) + q * btdtr(j + 1.0, half_df, x);
+        j += 1.0;
+        p *= lam / j;
+        q *= lam / (j + 0.5);
+        let m = p.abs().max(q.abs());
+        if (p.abs() < 1e-300 && q.abs() < 1e-300) || (m < 1e-17 * s.abs().max(1e-300) && j > lam) {
+            break;
+        }
+        steps += 1;
+    }
+    // Downward from the mode.
+    p = p0;
+    q = q0;
+    j = j0;
+    while j > 0.0 {
+        p *= j / lam;
+        q *= (j + 0.5) / lam;
+        j -= 1.0;
+        s += p * btdtr(j + 0.5, half_df, x) + q * btdtr(j + 1.0, half_df, x);
+        if p.abs().max(q.abs()) < 1e-17 * s.abs().max(1e-300) {
+            break;
+        }
+    }
+    (phi + 0.5 * s).clamp(0.0, 1.0)
+}
+
 pub fn stdtr(v: f64, t: f64) -> f64 {
     if v.is_nan() || t.is_nan() {
         return f64::NAN;
@@ -3154,6 +3230,26 @@ mod tests {
             result0.abs() < 1e-10,
             "fdtr(5, 10, 0) got {result0}, expected 0"
         );
+    }
+
+    #[test]
+    fn nctdtr_matches_scipy_reference_values() {
+        // frankenscipy: non-central t CDF was missing. Golden values from
+        // scipy.special.nctdtr(df, nc, t) 1.17.1.
+        let cases = [
+            (10.0_f64, 2.0, 1.5, 0.3047854473760421_f64),
+            (5.0, 0.0, 1.0, 0.8183912661754386),    // nc=0 → central t
+            (20.0, -3.0, -2.0, 0.8358989270421169), // negative nc and t (reflection)
+            (8.0, 5.0, 4.0, 0.21027058165197615),
+            (15.0, 1.0, 0.0, 0.15865525393145707), // t=0 → Phi(-nc)
+        ];
+        for (df, nc, t, want) in cases {
+            let got = nctdtr(df, nc, t);
+            assert!(
+                (got - want).abs() <= 1e-10 * want.abs().max(1e-12),
+                "nctdtr({df},{nc},{t}) = {got}, expected {want}"
+            );
+        }
     }
 
     #[test]

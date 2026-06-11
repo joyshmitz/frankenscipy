@@ -32,7 +32,7 @@ pub use beta::{
     betaincc, betaincc_scalar, betainccinv, betainccinv_scalar, betaln, betaln_scalar,
     log_betainc_scalar, btdtr,
     btdtrc, btdtri, btdtria, btdtrib, fdtr, fdtrc, fdtri, fdtridfd, ncfdtr, nbdtr, nbdtrc, nbdtri, nbdtrik,
-    nbdtrin, stdtr, stdtrc, stdtridf, stdtrit,
+    nbdtrin, nctdtr, stdtr, stdtrc, stdtridf, stdtrit,
 };
 pub use convenience::{
     CONVENIENCE_DISPATCH_PLAN,
