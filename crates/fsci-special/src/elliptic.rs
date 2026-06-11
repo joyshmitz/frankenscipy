@@ -1886,14 +1886,35 @@ pub fn elliprj(x: f64, y: f64, z: f64, p: f64) -> f64 {
     if x < 0.0 || y < 0.0 || z < 0.0 {
         return f64::NAN;
     }
-    if p <= 0.0 {
-        // p ≤ 0 is the Cauchy-PV branch — deferred for now.
+    // p == 0 is a genuine pole (RC(·, 0) = ∞ enters with unit weight); scipy
+    // returns NaN there, so keep failing closed only on the exact zero.
+    if p == 0.0 {
         return f64::NAN;
     }
     let zero_count = (x == 0.0) as usize + (y == 0.0) as usize + (z == 0.0) as usize;
     if zero_count >= 2 {
         // RJ diverges when two of (x, y, z) are zero.
         return f64::INFINITY;
+    }
+    if p < 0.0 {
+        // Cauchy principal value for p < 0 (Carlson 1995, eq. 2.20; Boost's
+        // ellint_rj reduction). Sort x ≤ y ≤ z so y is the middle argument,
+        // then express the PV through a positive-p RJ plus RF and RC:
+        //   q   = −p,  pmy = (z − y)(y − x)/(y + q),  pn = pmy + y  (> 0)
+        //   RJ  = [ pmy·RJ(x, y, z, pn) − 3·RF(x, y, z)
+        //           + 3·√(xyz / (xz + pn·q))·RC(xz + pn·q, pn·q) ] / (y + q)
+        // Every recursive argument is non-negative, so the positive-p branch
+        // and RC's diagonal handle the corners (e.g. a single zero argument).
+        let mut xs = [x, y, z];
+        xs.sort_by(|a, b| a.total_cmp(b));
+        let [xt, yt, zt] = xs;
+        let q = -p;
+        let pmy = (zt - yt) * (yt - xt) / (yt + q);
+        let pn = pmy + yt;
+        let rc_arg = xt * zt + pn * q;
+        let value = pmy * elliprj(xt, yt, zt, pn) - 3.0 * elliprf(xt, yt, zt)
+            + 3.0 * (xt * yt * zt / rc_arg).sqrt() * elliprc(rc_arg, pn * q);
+        return value / (yt + q);
     }
 
     let mut xn = x;
@@ -3343,9 +3364,10 @@ mod tests {
         assert!(elliprj(1.0, 1.0, -1.0, 1.0).is_nan());
         assert!(elliprj(f64::NAN, 1.0, 1.0, 1.0).is_nan());
         assert!(elliprj(1.0, 1.0, 1.0, f64::NAN).is_nan());
-        // p ≤ 0 is the Cauchy-PV path, currently deferred → NaN.
+        // p == 0 is a genuine pole → NaN; p < 0 is the finite Cauchy-PV branch
+        // (frankenscipy-vrikc), matching scipy.special.elliprj(1,1,1,-1).
         assert!(elliprj(1.0, 1.0, 1.0, 0.0).is_nan());
-        assert!(elliprj(1.0, 1.0, 1.0, -1.0).is_nan());
+        assert!((elliprj(1.0, 1.0, 1.0, -1.0) - -0.5651621397896541).abs() < 1e-6);
         // Two zeros among (x, y, z) → divergence.
         assert!(elliprj(0.0, 0.0, 1.0, 1.0).is_infinite());
     }
@@ -3524,5 +3546,21 @@ mod tests {
         // scipy.special.elliprj(0, 1, 2, 3) ≈ 0.7768862377858233
         let rj = elliprj(0.0, 1.0, 2.0, 3.0);
         assert_close(rj, 0.7768862377858233, 1e-6, "elliprj(0, 1, 2, 3)");
+    }
+
+    #[test]
+    fn elliprj_negative_p_cauchy_principal_value() {
+        // frankenscipy-vrikc: p < 0 is the Cauchy-PV branch. scipy.special 1.17.1
+        // computes a finite value; fsci previously failed closed to NaN.
+        assert_close(elliprj(1.0, 2.0, 3.0, -1.0), -0.0932404524386764, 1e-6, "rj(1,2,3,-1)");
+        assert_close(elliprj(0.5, 1.0, 2.0, -0.5), -0.16068487318451444, 1e-6, "rj(.5,1,2,-.5)");
+        assert_close(elliprj(2.0, 3.0, 4.0, -1.0), 0.05098889152113835, 1e-6, "rj(2,3,4,-1)");
+        assert_close(elliprj(0.1, 0.5, 1.0, -0.3), -1.9602030387320362, 1e-6, "rj(.1,.5,1,-.3)");
+        // a single zero argument resolves through RC's diagonal / positive branch
+        assert_close(elliprj(0.0, 2.0, 3.0, -1.0), -0.8732889802533521, 1e-6, "rj(0,2,3,-1)");
+        assert_close(elliprj(1.0, 0.0, 3.0, -1.0), -1.3022045412166559, 1e-6, "rj(1,0,3,-1)");
+        // p == 0 is a genuine pole (scipy → NaN); two zeros diverge (→ inf)
+        assert!(elliprj(1.0, 2.0, 3.0, 0.0).is_nan(), "rj(1,2,3,0) is NaN");
+        assert!(elliprj(0.0, 0.0, 3.0, -1.0).is_infinite(), "rj(0,0,3,-1) is inf");
     }
 }
