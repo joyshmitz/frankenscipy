@@ -281,7 +281,7 @@ pub use gamma::{
 pub use hyper::{
     HYPER_DISPATCH_PLAN, HyperCaspDecision, HyperCaspProblem, HypergeometricBranch,
     HypergeometricFunction, hyp0f1, hyp0f1_scalar, hyp1f1, hyp2f1, hyperu, hyperu_scalar, pbdv,
-    pbvv, select_hypergeometric_branch,
+    pbvv, pbwa, select_hypergeometric_branch,
 };
 pub use orthopoly::{
     assoc_laguerre, c_roots, cg_roots, chebyc, chebys, chebyt, chebyu, eval_chebyc, eval_chebys,

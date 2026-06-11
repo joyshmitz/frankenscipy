@@ -2724,9 +2724,100 @@ pub fn pbvv(v: f64, x: f64) -> (f64, f64) {
     (val, 0.5 * x * val - (v + 1.0) * val_next)
 }
 
+/// Even (`odd = false`) or odd (`odd = true`) real series solution `y(a,x)` of
+/// the W equation `y'' + (x²/4 − a) y = 0`, returning `(y, y')`. The power-series
+/// coefficients obey `c_{k+2} = [a c_k − c_{k-2}/4] / ((k+2)(k+1))`, with
+/// `c_0 = 1` (even) or `c_1 = 1` (odd).
+fn pbwa_series(a: f64, x: f64, odd: bool) -> (f64, f64) {
+    let mut k: u32 = u32::from(odd);
+    let mut c_prev = 0.0_f64; // c_{k-2}
+    let mut c_cur = 1.0_f64; // c_k
+    let mut value = 0.0_f64;
+    let mut deriv = 0.0_f64;
+    let mut small = 0_u32;
+    loop {
+        let xk = x.powi(k as i32);
+        let term = c_cur * xk;
+        value += term;
+        if k > 0 {
+            deriv += c_cur * f64::from(k) * x.powi(k as i32 - 1);
+        }
+        // Break only after several consecutive negligible terms, so interspersed
+        // zero coefficients (e.g. at a = 0) don't truncate the series early.
+        if term.abs() < 1e-18 * value.abs().max(1e-300) {
+            small += 1;
+        } else {
+            small = 0;
+        }
+        if (small >= 4 && k > 8) || k > 400 {
+            break;
+        }
+        let kf = f64::from(k);
+        let c_next = (a * c_cur - c_prev / 4.0) / ((kf + 2.0) * (kf + 1.0));
+        c_prev = c_cur;
+        c_cur = c_next;
+        k += 2;
+    }
+    (value, deriv)
+}
+
+/// `|Γ(re + i·im)|` via the complex log-gamma.
+fn gamma_modulus(re: f64, im: f64) -> f64 {
+    crate::gamma::complex_gammaln(Complex64::new(re, im)).re.exp()
+}
+
+/// Parabolic cylinder function `W(a, x)` and its derivative `W'(a, x)`.
+///
+/// Matches `scipy.special.pbwa(a, x)`: `W` is the real oscillatory solution of
+/// `y'' + (x²/4 − a) y = 0` (DLMF 12.14). Built from the even/odd real series
+/// solutions `y1, y2` as
+/// `W(a,x) = 2^{-3/4} [ √(G1/G3) y1(a,x) − √2 √(G3/G1) y2(a,x) ]`, with
+/// `G1 = |Γ(1/4 + i a/2)|`, `G3 = |Γ(3/4 + i a/2)|`. As in SciPy's specfun, the
+/// series is only used on `|a| ≤ 5` and `|x| ≤ 5`; outside that box (or for NaN
+/// input) the result is `(NaN, NaN)`.
+#[must_use]
+pub fn pbwa(a: f64, x: f64) -> (f64, f64) {
+    if a.is_nan() || x.is_nan() || a.abs() > 5.0 || x.abs() > 5.0 {
+        return (f64::NAN, f64::NAN);
+    }
+    let g1 = gamma_modulus(0.25, 0.5 * a);
+    let g3 = gamma_modulus(0.75, 0.5 * a);
+    let c1 = (g1 / g3).sqrt();
+    let c2 = std::f64::consts::SQRT_2 * (g3 / g1).sqrt();
+    let (y1, y1p) = pbwa_series(a, x, false);
+    let (y2, y2p) = pbwa_series(a, x, true);
+    let norm = 2.0_f64.powf(-0.75);
+    (norm * (c1 * y1 - c2 * y2), norm * (c1 * y1p - c2 * y2p))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pbwa_matches_scipy() {
+        // frankenscipy: golden (W(a,x), W'(a,x)) from scipy.special.pbwa 1.17.1.
+        let cases: [(f64, f64, f64, f64); 9] = [
+            (0.5, 1.0, 0.4741398571843593, -0.2901243886913028),
+            (-1.0, 2.0, -0.8154061429933596, -0.0302152919418744),
+            (2.0, -1.5, 4.694801517501277, -6.029609368221677),
+            (0.0, 1.0, 0.5187721608509099, -0.5429782941059688),
+            (0.0, 0.0, 1.0227656721132548, -0.4888705337234198),
+            (1.5, 3.0, 0.03635670897657804, -0.06749366832284123),
+            (-2.5, 2.0, -0.40442082618648795, 1.1683083221462975),
+            (5.0, 5.0, 0.0001157734643199625, -0.0003091359491631884),
+            (3.0, -4.0, 126.56917021960442, -46.1168922724931),
+        ];
+        for (a, x, wv, wvp) in cases {
+            let (w, wp) = pbwa(a, x);
+            let tol = |t: f64| 1e-7 * t.abs().max(1.0);
+            assert!((w - wv).abs() < tol(wv), "pbwa({a},{x}) W: got {w}, want {wv}");
+            assert!((wp - wvp).abs() < tol(wvp), "pbwa({a},{x}) W': got {wp}, want {wvp}");
+        }
+        // Outside SciPy's |a| <= 5, |x| <= 5 domain the result is NaN.
+        assert!(pbwa(0.0, 5.1).0.is_nan(), "pbwa |x|>5 -> NaN");
+        assert!(pbwa(6.0, 1.0).0.is_nan(), "pbwa |a|>5 -> NaN");
+    }
 
     #[test]
     fn pbvv_matches_scipy() {
