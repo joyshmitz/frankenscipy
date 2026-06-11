@@ -3956,11 +3956,14 @@ pub fn lambertw_scalar(x: f64) -> f64 {
     w
 }
 
-/// Zeta function for real s > 1 (convenience alias).
+/// Riemann zeta function ζ(s) for any real `s`, matching `scipy.special.zeta`.
+///
+/// scipy returns the analytic continuation over the whole real line — the pole
+/// `ζ(1) = +∞`, `ζ(0) = -1/2`, the negative-`s` reflection (e.g. `ζ(-1) = -1/12`)
+/// and the critical strip `0 < s < 1` (e.g. `ζ(1/2) ≈ -1.4603`). The underlying
+/// `gamma::zeta` already implements all of these; this wrapper previously failed
+/// closed to NaN for every `s ≤ 1`, diverging from scipy. frankenscipy.
 pub fn zeta_scalar(s: f64) -> f64 {
-    if s <= 1.0 {
-        return f64::NAN;
-    }
     if s == f64::INFINITY {
         return 1.0;
     }
@@ -11224,5 +11227,33 @@ mod tests {
             (result - 0.3068528194400546).abs() < 1e-6,
             "kl_div(1, 2) = {result}, expected 0.3068528194400546"
         );
+    }
+
+    #[test]
+    fn zeta_scalar_analytic_continuation_matches_scipy() {
+        // frankenscipy-j3ks9: zeta_scalar failed closed to NaN for s <= 1, but
+        // scipy.special.zeta is the analytic continuation over the whole real
+        // line. Golden values from scipy.special.zeta 1.17.1.
+        let cases = [
+            (-5.0, -0.003968253968253968),
+            (-2.5, 0.008516928777850334),
+            (-1.0, -0.08333333333333333), // ζ(-1) = -1/12
+            (-0.5, -0.2078862249773546),
+            (0.0, -0.5), // ζ(0) = -1/2
+            (0.5, -1.4603545088095868),
+            (2.0, 1.6449340668482264), // π²/6
+            (10.0, 1.0009945751278182),
+        ];
+        for (s, want) in cases {
+            let got = super::zeta_scalar(s);
+            assert!(
+                (got - want).abs() < 1e-10 * want.abs().max(1.0),
+                "zeta({s}) = {got}, expected {want}"
+            );
+        }
+        // Pole at s = 1 → +∞; trivial zero at even negative s ≈ 0.
+        assert!(super::zeta_scalar(1.0).is_infinite(), "ζ(1) is the pole");
+        assert!(super::zeta_scalar(-10.0).abs() < 1e-12, "ζ(-10) is a trivial zero");
+        assert!((super::zeta_scalar(f64::INFINITY) - 1.0).abs() < 1e-15, "ζ(∞) = 1");
     }
 }
