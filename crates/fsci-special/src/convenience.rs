@@ -2658,21 +2658,53 @@ pub fn digamma_scalar(x: f64) -> f64 {
 ///
 /// Matches `scipy.special.poch`.
 pub fn poch(x: f64, n: f64) -> f64 {
+    // poch(x, n) = (x)_n = Γ(x+n)/Γ(x). Matching scipy.special.poch requires
+    // handling the Γ poles at non-positive integers, which the plain
+    // gammaln/gammasgn ratio collapses to NaN:
+    //   * numerator-only pole (x+n a non-positive integer, x not)  → +inf;
+    //   * denominator-only pole (x a non-positive integer, x+n not) → 0;
+    //   * both poles (⟺ n integer): the exact finite limit, computed as the
+    //     signed (reciprocal) rising product — e.g. poch(-2,-2)=1/12,
+    //     poch(-5,3)=-60 — which the gammaln ratio (∞/∞) cannot give.
+    // scipy returns +∞ (never −∞) at every single-pole divergence; the
+    // pole-cases are resolved before the integer product so the sign of the
+    // product's zero factor can't flip +inf to −inf. frankenscipy-7o3a2
     if n == 0.0 {
         return 1.0;
     }
-    if n == n.floor() && n > 0.0 && n <= 20.0 {
-        let ni = n as usize;
-        let mut result = 1.0;
-        for k in 0..ni {
-            result *= x + k as f64;
-        }
-        return result;
-    }
-    // poch(x,n) = Γ(x+n)/Γ(x) is SIGNED; gammaln gives ln|·|, so restore the sign
-    // from the gamma factors (scipy.special.poch(-4.3, 0.5) = -2.938, not +2.938).
-    // For x>0 both signs are +1, so positive arguments are unchanged.
     let xn = x + n;
+    let x_pole = x <= 0.0 && x == x.floor();
+    let xn_pole = xn <= 0.0 && xn == xn.floor();
+    if xn_pole && !x_pole {
+        return f64::INFINITY; // numerator Γ pole, finite denominator
+    }
+    if x_pole && !xn_pole {
+        return 0.0; // denominator Γ pole, finite numerator
+    }
+    if n == n.floor() {
+        // Integer n: exact signed (reciprocal) product. Correct through the
+        // both-pole finite limit and the ordinary case alike. The loop is
+        // bounded — single-pole cases returned above, and the both-pole case
+        // forces |n| ≤ |x|; the cap guards pathological large n (necessarily
+        // neither-pole there, where the smooth Γ path below stays accurate).
+        let ni = n as i64;
+        if ni.abs() <= 4096 {
+            let mut r = 1.0_f64;
+            if ni > 0 {
+                for i in 0..ni {
+                    r *= x + i as f64;
+                }
+                return r;
+            }
+            for i in ni..0 {
+                r *= x + i as f64;
+            }
+            return 1.0 / r;
+        }
+    }
+    // Smooth signed Γ-ratio (neither argument hits a pole here). gammaln gives
+    // ln|·|, so restore the sign from the gamma factors — scipy.special
+    // .poch(-4.3, 0.5) = -2.938, not +2.938. For x>0 both signs are +1.
     let mode = fsci_runtime::RuntimeMode::Strict;
     let log_result = crate::gammaln_scalar(xn, mode).unwrap_or(f64::NAN)
         - crate::gammaln_scalar(x, mode).unwrap_or(f64::NAN);
@@ -11216,6 +11248,39 @@ mod tests {
                 (got - want).abs() <= 1e-11 * want.abs().max(1.0),
                 "poch({x},{n}) got {got}, want {want}"
             );
+        }
+    }
+
+    #[test]
+    fn poch_gamma_pole_ratios_match_scipy() {
+        // frankenscipy-7o3a2: poch hits Γ poles at non-positive integers. scipy
+        // resolves them; the plain gammaln/gammasgn ratio returned NaN. Golden
+        // values from scipy.special.poch 1.17.1.
+        // Both arguments hit a pole (integer n) → finite limit:
+        let finite = [
+            (-2.0, -2.0, 0.08333333333333333_f64), // 1/12
+            (-2.0, -1.0, -0.3333333333333333),
+            (-3.0, -2.0, 0.05),
+            (0.0, -1.0, -1.0),
+            (-4.0, -3.0, -0.0047619047619047615),
+            (-2.0, 2.0, 2.0),
+            (-5.0, 3.0, -60.0),
+            (0.0, 2.0, 0.0),
+        ];
+        for (x, n, want) in finite {
+            let got = super::poch(x, n);
+            assert!(
+                (got - want).abs() <= 1e-12 * want.abs().max(1.0),
+                "poch({x},{n}) got {got}, want {want}"
+            );
+        }
+        // Numerator-only pole (x+n a non-positive integer, x not) → +inf:
+        for (x, n) in [(-3.5, 0.5), (-3.5, -0.5), (-0.5, -0.5), (1.0, -2.0), (-2.5, -1.5), (-4.5, -3.5)] {
+            assert!(super::poch(x, n) == f64::INFINITY, "poch({x},{n}) should be +inf");
+        }
+        // Denominator-only pole (x a non-positive integer, x+n not) → 0:
+        for (x, n) in [(-2.0, 0.5), (-2.0, 3.5), (-3.0, 0.25)] {
+            assert_eq!(super::poch(x, n), 0.0, "poch({x},{n}) should be 0");
         }
     }
 
