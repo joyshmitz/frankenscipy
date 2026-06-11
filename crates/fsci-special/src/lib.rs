@@ -107,6 +107,7 @@ pub use convenience::{
     fmax,
     fmin,
     fresnel,
+    fresnel_complex,
     fresnel_zeros,
     fresnelc_zeros,
     fresnels_zeros,

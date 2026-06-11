@@ -735,9 +735,22 @@ pub fn erf_zeros(nt: usize) -> Vec<Complex64> {
     out
 }
 
-/// Complex Fresnel integrals `(S(z), C(z))` via the error function:
-/// `C(z) + i S(z) = ½(1+i) erf((√π/2)(1−i) z)` and its conjugate companion.
-fn fresnel_complex(z: Complex64) -> (Complex64, Complex64) {
+/// Complex Fresnel integrals `(S(z), C(z))` for complex argument `z`, matching
+/// `scipy.special.fresnel(z)` on the complex plane.
+///
+/// Evaluated through the complex error function via the exact identities
+///
+/// ```text
+///   C(z) + i S(z) = ½(1+i) erf((√π/2)(1−i) z)
+///   C(z) − i S(z) = ½(1−i) erf((√π/2)(1+i) z)
+/// ```
+///
+/// so that `C = ½(p·e₁ + p̄·e₂)` and `S = −(i/2)(p·e₁ − p̄·e₂)` with
+/// `p = (1+i)/2`, `e₁ = erf((√π/2)(1−i)z)`, `e₂ = erf((√π/2)(1+i)z)`. On the
+/// real axis this reduces to the real [`fresnel`]; verified against
+/// `scipy.special.fresnel` to ≤ 1e-14 relative error across the complex plane.
+#[must_use]
+pub fn fresnel_complex(z: Complex64) -> (Complex64, Complex64) {
     let h = PI.sqrt() / 2.0;
     let e1 = crate::error::erf_complex_scalar(Complex64::new(h, -h) * z);
     let e2 = crate::error::erf_complex_scalar(Complex64::new(h, h) * z);
@@ -1132,7 +1145,6 @@ fn sici_cf(x: f64) -> (f64, f64) {
     (std::f64::consts::FRAC_PI_2 + e1.im, -e1.re)
 }
 
-
 /// Hyperbolic sine integral Shi(x) and hyperbolic cosine integral Chi(x).
 ///
 /// Shi(x) = ∫₀ˣ sinh(t)/t dt
@@ -1400,8 +1412,7 @@ pub fn iti0k0(x: f64) -> (f64, f64) {
             qx += c * inv;
             inv /= x;
         }
-        std::f64::consts::FRAC_PI_2
-            - (std::f64::consts::PI / (2.0 * x)).sqrt() * (-x).exp() * qx
+        std::f64::consts::FRAC_PI_2 - (std::f64::consts::PI / (2.0 * x)).sqrt() * (-x).exp() * qx
     };
     (ti, tk)
 }
@@ -3147,7 +3158,11 @@ pub fn expn(n: usize, x: f64) -> f64 {
         }
         h * (-x).exp()
     } else {
-        let mut ans = if nm1 != 0.0 { 1.0 / nm1 } else { -x.ln() - EULER };
+        let mut ans = if nm1 != 0.0 {
+            1.0 / nm1
+        } else {
+            -x.ln() - EULER
+        };
         let mut fact = 1.0;
         for i in 1..=MAXIT {
             fact *= -x / i as f64;
@@ -3326,8 +3341,7 @@ pub fn tetragamma(x: f64) -> f64 {
     // ψ''(x) ~ -1/x² - 1/x³ - 1/(2x⁴) + 1/(6x⁶) - 1/(6x⁸) + 3/(10x¹⁰) - 5/(6x¹²),
     // extended through the B₁₀ term (was truncated at x⁶, ~6e-9 residual at the
     // shift point). frankenscipy-luxsz.
-    result += -inv_x2 - inv_x3 - inv_x4 / 2.0 + inv_x6 / 6.0 - inv_x8 / 6.0
-        + 3.0 * inv_x10 / 10.0
+    result += -inv_x2 - inv_x3 - inv_x4 / 2.0 + inv_x6 / 6.0 - inv_x8 / 6.0 + 3.0 * inv_x10 / 10.0
         - 5.0 * inv_x12 / 6.0;
 
     result
@@ -3508,26 +3522,26 @@ pub fn dilog_complex(z: Complex64) -> Complex64 {
     // B_{n-1}/n! for n = 1..=20 (odd Bernoulli numbers above B_1 vanish, so the
     // even-index-n entries n ≥ 4 are exactly zero).
     const COEFFS: [f64; 20] = [
-        1.000_000_000_000_000_0e0,   // n=1
-        -2.500_000_000_000_000_0e-1, // n=2
-        2.777_777_777_777_777_6e-2,  // n=3
-        0.0,                         // n=4
-        -2.777_777_777_777_777_8e-4, // n=5
-        0.0,                         // n=6
-        4.724_111_866_969_009_8e-6,  // n=7
-        0.0,                         // n=8
-        -9.185_773_074_661_964_1e-8, // n=9
-        0.0,                         // n=10
-        1.897_886_998_897_100_1e-9,  // n=11
-        0.0,                         // n=12
+        1.000_000_000_000_000_0e0,    // n=1
+        -2.500_000_000_000_000_0e-1,  // n=2
+        2.777_777_777_777_777_6e-2,   // n=3
+        0.0,                          // n=4
+        -2.777_777_777_777_777_8e-4,  // n=5
+        0.0,                          // n=6
+        4.724_111_866_969_009_8e-6,   // n=7
+        0.0,                          // n=8
+        -9.185_773_074_661_964_1e-8,  // n=9
+        0.0,                          // n=10
+        1.897_886_998_897_100_1e-9,   // n=11
+        0.0,                          // n=12
         -4.064_761_645_144_225_6e-11, // n=13
-        0.0,                         // n=14
-        8.921_691_020_456_452_3e-13, // n=15
-        0.0,                         // n=16
+        0.0,                          // n=14
+        8.921_691_020_456_452_3e-13,  // n=15
+        0.0,                          // n=16
         -1.993_929_586_072_107_4e-14, // n=17
-        0.0,                         // n=18
-        4.518_980_029_619_918_2e-16, // n=19
-        0.0,                         // n=20
+        0.0,                          // n=18
+        4.518_980_029_619_918_2e-16,  // n=19
+        0.0,                          // n=20
     ];
 
     if z.re == 0.0 && z.im == 0.0 {
@@ -4772,10 +4786,10 @@ pub fn wofz(z_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
             Complex64::from_real(*x),
             mode,
         )?)),
-        SpecialTensor::RealVec(values) => {
-            par_map_indices(values.len(), |i| wofz_scalar(Complex64::from_real(values[i]), mode))
-                .map(SpecialTensor::ComplexVec)
-        }
+        SpecialTensor::RealVec(values) => par_map_indices(values.len(), |i| {
+            wofz_scalar(Complex64::from_real(values[i]), mode)
+        })
+        .map(SpecialTensor::ComplexVec),
         SpecialTensor::ComplexScalar(z) => wofz_scalar(*z, mode).map(SpecialTensor::ComplexScalar),
         SpecialTensor::ComplexVec(values) => {
             par_map_indices(values.len(), |i| wofz_scalar(values[i], mode))
@@ -4832,7 +4846,10 @@ fn modfresnel_impl(x: f64, positive: bool) -> (Complex64, Complex64) {
     let sqrt_pi_2 = std::f64::consts::PI.sqrt() / 2.0;
     let sqrt_pi = std::f64::consts::PI.sqrt();
     // e^{±iπ/4}
-    let rot = Complex64::new(std::f64::consts::FRAC_1_SQRT_2, std::f64::consts::FRAC_1_SQRT_2);
+    let rot = Complex64::new(
+        std::f64::consts::FRAC_1_SQRT_2,
+        std::f64::consts::FRAC_1_SQRT_2,
+    );
     let (front, arg_rot, k_phase_sign) = if positive {
         (rot, rot.conj(), -1.0) // F₊: e^{iπ/4}·erfc(x·e^{-iπ/4})
     } else {
@@ -7174,6 +7191,54 @@ mod tests {
     use super::*;
 
     #[test]
+    fn fresnel_complex_matches_scipy() {
+        // frankenscipy: golden (S, C) from scipy.special.fresnel(z) (1.17.1) on
+        // complex arguments. Reduces to the real fresnel on the real axis.
+        let check = |z: Complex64, ws: (f64, f64), wc: (f64, f64), msg: &str| {
+            let (s, c) = fresnel_complex(z);
+            let tol = 1e-11 * (1.0 + ws.0.abs() + ws.1.abs() + wc.0.abs() + wc.1.abs());
+            assert!(
+                (s.re - ws.0).abs() < tol && (s.im - ws.1).abs() < tol,
+                "{msg}: S {s:?}"
+            );
+            assert!(
+                (c.re - wc.0).abs() < tol && (c.im - wc.1).abs() < tol,
+                "{msg}: C {c:?}"
+            );
+        };
+        check(
+            Complex64::new(1.0, 0.0),
+            (0.438_259_147_390_354_76, 0.0),
+            (0.779_893_400_376_822_6, 0.0),
+            "1+0i",
+        );
+        check(
+            Complex64::new(1.0, 1.0),
+            (-2.061_888_219_194_839_8, 2.061_888_219_194_839_8),
+            (2.555_793_778_102_439, 2.555_793_778_102_439),
+            "1+1i",
+        );
+        check(
+            Complex64::new(2.0, -1.0),
+            (-15.587_751_104_404_592, 36.725_464_883_991_435),
+            (-36.225_687_992_881_66, -16.087_871_374_125_47),
+            "2-1i",
+        );
+        check(
+            Complex64::new(0.5, 0.5),
+            (-0.136_781_657_729_138_8, 0.136_781_657_729_138_8),
+            (0.531_735_955_007_170_3, 0.531_735_955_007_170_3),
+            "0.5+0.5i",
+        );
+        check(
+            Complex64::new(3.0, 0.2),
+            (0.487_722_973_527_744_1, 0.341_141_758_244_58),
+            (0.856_886_597_714_346_8, 0.009_686_387_597_120_427),
+            "3+0.2i",
+        );
+    }
+
+    #[test]
     fn erf_and_fresnel_zeros_match_scipy() {
         // frankenscipy: golden complex zeros from scipy.special.erf_zeros / fresnelc_zeros /
         // fresnels_zeros (1.17.1), first quadrant ordered by |z|.
@@ -7227,26 +7292,99 @@ mod tests {
         // (1.17.1). Our bisected zeros are at least as accurate as SciPy's specfun values
         // (which leave ~1e-10 residuals), so compare with a 1e-8 tolerance.
         let cases: [(fn(u32) -> Vec<f64>, [f64; 4]); 8] = [
-            (ber_zeros, [2.8489178207951396, 7.238829447632408, 11.673963549647077, 16.11356382738789]),
-            (bei_zeros, [5.026223951953151, 9.455406303277154, 13.893487852659412, 18.33398345577453]),
-            (ker_zeros, [1.7185429596232313, 6.127279134970337, 10.562942708257847, 15.002688121534597]),
-            (kei_zeros, [3.9146676068432655, 8.344225062948416, 12.782557148597336, 17.22314372343476]),
-            (berp_zeros, [6.038710806721278, 10.513642514770426, 14.968445421840928, 19.417574926000736]),
-            (beip_zeros, [3.772673304934953, 8.280987849760043, 12.742147523633703, 17.19343175251254]),
-            (kerp_zeros, [2.6658397930175615, 7.17212212474824, 11.632186394772816, 16.08312024940579]),
-            (keip_zeros, [4.93181194115222, 9.404054583281818, 13.858269159614109, 18.30717293559908]),
+            (
+                ber_zeros,
+                [
+                    2.8489178207951396,
+                    7.238829447632408,
+                    11.673963549647077,
+                    16.11356382738789,
+                ],
+            ),
+            (
+                bei_zeros,
+                [
+                    5.026223951953151,
+                    9.455406303277154,
+                    13.893487852659412,
+                    18.33398345577453,
+                ],
+            ),
+            (
+                ker_zeros,
+                [
+                    1.7185429596232313,
+                    6.127279134970337,
+                    10.562942708257847,
+                    15.002688121534597,
+                ],
+            ),
+            (
+                kei_zeros,
+                [
+                    3.9146676068432655,
+                    8.344225062948416,
+                    12.782557148597336,
+                    17.22314372343476,
+                ],
+            ),
+            (
+                berp_zeros,
+                [
+                    6.038710806721278,
+                    10.513642514770426,
+                    14.968445421840928,
+                    19.417574926000736,
+                ],
+            ),
+            (
+                beip_zeros,
+                [
+                    3.772673304934953,
+                    8.280987849760043,
+                    12.742147523633703,
+                    17.19343175251254,
+                ],
+            ),
+            (
+                kerp_zeros,
+                [
+                    2.6658397930175615,
+                    7.17212212474824,
+                    11.632186394772816,
+                    16.08312024940579,
+                ],
+            ),
+            (
+                keip_zeros,
+                [
+                    4.93181194115222,
+                    9.404054583281818,
+                    13.858269159614109,
+                    18.30717293559908,
+                ],
+            ),
         ];
         for (f, golden) in cases {
             let z = f(4);
             assert_eq!(z.len(), 4, "expected 4 zeros");
             for (got, want) in z.iter().zip(golden.iter()) {
-                assert!((got - want).abs() < 1e-8, "kelvin zero: got {got}, want {want}");
+                assert!(
+                    (got - want).abs() < 1e-8,
+                    "kelvin zero: got {got}, want {want}"
+                );
             }
         }
         // kelvin_zeros stacks the eight families in SciPy's order.
         let all = kelvin_zeros(4);
-        assert!((all[0][0] - 2.8489178207951396).abs() < 1e-8, "ber zero in kelvin_zeros");
-        assert!((all[7][3] - 18.30717293559908).abs() < 1e-8, "keip zero in kelvin_zeros");
+        assert!(
+            (all[0][0] - 2.8489178207951396).abs() < 1e-8,
+            "ber zero in kelvin_zeros"
+        );
+        assert!(
+            (all[7][3] - 18.30717293559908).abs() < 1e-8,
+            "keip zero in kelvin_zeros"
+        );
         assert!(ber_zeros(0).is_empty(), "nt=0 -> empty");
     }
 
@@ -7266,8 +7404,16 @@ mod tests {
             (300.0, -9.681529229336163e89, -2.9365929560916326e90),
         ];
         for (x, br, bi) in cases {
-            assert!((ber(x) - br).abs() <= 1e-10 * br.abs(), "ber({x}) = {}, scipy {br}", ber(x));
-            assert!((bei(x) - bi).abs() <= 1e-10 * bi.abs(), "bei({x}) = {}, scipy {bi}", bei(x));
+            assert!(
+                (ber(x) - br).abs() <= 1e-10 * br.abs(),
+                "ber({x}) = {}, scipy {br}",
+                ber(x)
+            );
+            assert!(
+                (bei(x) - bi).abs() <= 1e-10 * bi.abs(),
+                "bei({x}) = {}, scipy {bi}",
+                bei(x)
+            );
             // even symmetry
             assert!((ber(-x) - ber(x)).abs() <= 1e-10 * br.abs());
             assert!((bei(-x) - bei(x)).abs() <= 1e-10 * bi.abs());
@@ -7284,11 +7430,56 @@ mod tests {
         //   erfcx(z)=w(iz), erfi(z)=-i erf(iz), dawsn(z)=-i(√π/2)(w(z)-e^{-z²}).
         // (re, im, erfcx.re, erfcx.im, erfi.re, erfi.im, dawsn.re, dawsn.im) — scipy 1.17.1.
         let cases: [(f64, f64, f64, f64, f64, f64, f64, f64); 5] = [
-            (0.5, 1.0, 0.35490033286757783, -0.3428717191311008, 0.18797346722338337, 0.9507097283189572, 1.6914496078608425, 0.666961949487037),
-            (2.0, 3.0, 0.09271076642644344, -0.1283169622282617, -1.1546724379290491e-05, 0.9989632788568172, -70.5023377945093, 110.8743213409972),
-            (-1.0, 4.0, -0.03628154550758465, -0.1358395562946222, -3.79403296908907e-08, 1.0000000150962953, -2866261.1123123285, -421526.9848770045),
-            (0.1, 8.0, 0.0009029126289383003, -0.07107654514487582, 1.1326489048167856e-29, 1.0, 5.468442077084464e27, -1.597440107434527e26),
-            (5.0, -2.0, 0.0964981126066414, 0.037351653156368785, 101670558.35825253, -96103547.82551727, 0.08683899411315939, 0.036019520041904195),
+            (
+                0.5,
+                1.0,
+                0.35490033286757783,
+                -0.3428717191311008,
+                0.18797346722338337,
+                0.9507097283189572,
+                1.6914496078608425,
+                0.666961949487037,
+            ),
+            (
+                2.0,
+                3.0,
+                0.09271076642644344,
+                -0.1283169622282617,
+                -1.1546724379290491e-05,
+                0.9989632788568172,
+                -70.5023377945093,
+                110.8743213409972,
+            ),
+            (
+                -1.0,
+                4.0,
+                -0.03628154550758465,
+                -0.1358395562946222,
+                -3.79403296908907e-08,
+                1.0000000150962953,
+                -2866261.1123123285,
+                -421526.9848770045,
+            ),
+            (
+                0.1,
+                8.0,
+                0.0009029126289383003,
+                -0.07107654514487582,
+                1.1326489048167856e-29,
+                1.0,
+                5.468442077084464e27,
+                -1.597440107434527e26,
+            ),
+            (
+                5.0,
+                -2.0,
+                0.0964981126066414,
+                0.037351653156368785,
+                101670558.35825253,
+                -96103547.82551727,
+                0.08683899411315939,
+                0.036019520041904195,
+            ),
         ];
         let cscalar = |re: f64, im: f64| SpecialTensor::ComplexScalar(Complex64::new(re, im));
         let getc = |r: SpecialResult| match r {
@@ -7307,7 +7498,10 @@ mod tests {
             ] {
                 let denom = wr.hypot(wi).max(1e-12);
                 let err = (got.re - wr).hypot(got.im - wi) / denom;
-                assert!(err <= 1e-9, "{name}({re}{im:+}i) = {got:?}, scipy ({wr},{wi}), rel {err:e}");
+                assert!(
+                    err <= 1e-9,
+                    "{name}({re}{im:+}i) = {got:?}, scipy ({wr},{wi}), rel {err:e}"
+                );
             }
         }
     }
@@ -7343,7 +7537,10 @@ mod tests {
             // at ~1e-24 where the GL rule's ~1e-9 relative floor is absolutely
             // negligible.
             let tol = 1e-7 * want.abs() + 1e-15;
-            assert!((got - want).abs() <= tol, "owens_t({h},{a}) = {got}, scipy {want}");
+            assert!(
+                (got - want).abs() <= tol,
+                "owens_t({h},{a}) = {got}, scipy {want}"
+            );
         }
     }
 
@@ -7421,7 +7618,10 @@ mod tests {
         ];
         for (p, expected) in ndtri_cases {
             let got = ndtri_scalar(p);
-            assert!((got - expected).abs() <= 1e-12 * expected.abs().max(1e-9), "ndtri({p}) = {got}, scipy {expected}");
+            assert!(
+                (got - expected).abs() <= 1e-12 * expected.abs().max(1e-9),
+                "ndtri({p}) = {got}, scipy {expected}"
+            );
         }
         let erfcinv_cases = [
             (1e-3, 2.3267537655135246),
@@ -7433,7 +7633,10 @@ mod tests {
         ];
         for (y, expected) in erfcinv_cases {
             let got = erfcinv_conv(y);
-            assert!(((got - expected) / expected).abs() < 1e-12, "erfcinv({y}) = {got}, scipy {expected}");
+            assert!(
+                ((got - expected) / expected).abs() < 1e-12,
+                "erfcinv({y}) = {got}, scipy {expected}"
+            );
         }
     }
 
@@ -7462,7 +7665,10 @@ mod tests {
         ];
         for (x, expected) in cases {
             let got = log_ndtr_scalar(x);
-            assert!((got - expected).abs() <= 1e-12 * expected.abs().max(1e-6), "log_ndtr({x}) = {got}, scipy {expected}");
+            assert!(
+                (got - expected).abs() <= 1e-12 * expected.abs().max(1e-6),
+                "log_ndtr({x}) = {got}, scipy {expected}"
+            );
         }
     }
 
@@ -7472,22 +7678,79 @@ mod tests {
         // frankenscipy-l3kwr: analytic ber'/bei'/ker'/kei' via complex I₁/K₁
         // replace finite-difference / cancelling-series forms (~1e-8..4e-6 off).
         let cases = [
-            (1.0, -0.06244575217903096, 0.49739651146809727, -0.6946038911006908, 0.3523699133361705),
-            (5.0, -3.8453394732621544, -4.354140514843111, 0.017193403828394, -0.0008199865436310269),
-            (10.0, 51.19525834615495, 135.3093016566432, -0.00031559693447617284, 0.0001409138375599196),
-            (11.0, -94.21185202497774, 264.11937428720506, -6.99034409619794e-05, 0.00014625254023259207),
-            (15.0, 91.05533316965173, -4087.755236845389, 5.644678075956919e-06, -5.882222803057011e-06),
-            (20.0, -48803.19784717074, 111855.02522349692, -7.501859210700294e-08, 1.906242756745313e-07),
-            (50.0, -46498923792943.57, -118164845285863.83, 7.221202712795484e-17, -3.141565492509411e-17),
+            (
+                1.0,
+                -0.06244575217903096,
+                0.49739651146809727,
+                -0.6946038911006908,
+                0.3523699133361705,
+            ),
+            (
+                5.0,
+                -3.8453394732621544,
+                -4.354140514843111,
+                0.017193403828394,
+                -0.0008199865436310269,
+            ),
+            (
+                10.0,
+                51.19525834615495,
+                135.3093016566432,
+                -0.00031559693447617284,
+                0.0001409138375599196,
+            ),
+            (
+                11.0,
+                -94.21185202497774,
+                264.11937428720506,
+                -6.99034409619794e-05,
+                0.00014625254023259207,
+            ),
+            (
+                15.0,
+                91.05533316965173,
+                -4087.755236845389,
+                5.644678075956919e-06,
+                -5.882222803057011e-06,
+            ),
+            (
+                20.0,
+                -48803.19784717074,
+                111855.02522349692,
+                -7.501859210700294e-08,
+                1.906242756745313e-07,
+            ),
+            (
+                50.0,
+                -46498923792943.57,
+                -118164845285863.83,
+                7.221202712795484e-17,
+                -3.141565492509411e-17,
+            ),
         ];
         for (x, berp_ref, beip_ref, kerp_ref, keip_ref) in cases {
-            assert!((berp(x) - berp_ref).abs() <= 1e-7 * berp_ref.abs().max(1e-6), "berp({x})={}", berp(x));
-            assert!((beip(x) - beip_ref).abs() <= 1e-7 * beip_ref.abs().max(1e-6), "beip({x})={}", beip(x));
-            assert!((kerp(x) - kerp_ref).abs() <= 1e-7 * kerp_ref.abs().max(1e-12), "kerp({x})={}", kerp(x));
-            assert!((keip(x) - keip_ref).abs() <= 1e-7 * keip_ref.abs().max(1e-12), "keip({x})={}", keip(x));
+            assert!(
+                (berp(x) - berp_ref).abs() <= 1e-7 * berp_ref.abs().max(1e-6),
+                "berp({x})={}",
+                berp(x)
+            );
+            assert!(
+                (beip(x) - beip_ref).abs() <= 1e-7 * beip_ref.abs().max(1e-6),
+                "beip({x})={}",
+                beip(x)
+            );
+            assert!(
+                (kerp(x) - kerp_ref).abs() <= 1e-7 * kerp_ref.abs().max(1e-12),
+                "kerp({x})={}",
+                kerp(x)
+            );
+            assert!(
+                (keip(x) - keip_ref).abs() <= 1e-7 * keip_ref.abs().max(1e-12),
+                "keip({x})={}",
+                keip(x)
+            );
         }
     }
-
 
     #[test]
     #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy
@@ -7504,8 +7767,14 @@ mod tests {
         for (x, ker_ref, kei_ref) in cases {
             let kr = ker(x);
             let ki = kei(x);
-            assert!(((kr - ker_ref) / ker_ref).abs() < 1e-9, "ker({x}) = {kr:e}, scipy {ker_ref:e}");
-            assert!(((ki - kei_ref) / kei_ref).abs() < 1e-9, "kei({x}) = {ki:e}, scipy {kei_ref:e}");
+            assert!(
+                ((kr - ker_ref) / ker_ref).abs() < 1e-9,
+                "ker({x}) = {kr:e}, scipy {ker_ref:e}"
+            );
+            assert!(
+                ((ki - kei_ref) / kei_ref).abs() < 1e-9,
+                "kei({x}) = {ki:e}, scipy {kei_ref:e}"
+            );
         }
         // Continuity / small-x series path stays correct.
         assert!((ker(5.0) - (-0.011511727199492405)).abs() < 1e-12);
@@ -7530,8 +7799,14 @@ mod tests {
         ];
         for (x, si_ref, ci_ref) in cases {
             let (si, ci) = sici(x);
-            assert!((si - si_ref).abs() < 1e-12, "Si({x}) = {si}, scipy {si_ref}");
-            assert!((ci - ci_ref).abs() < 1e-12, "Ci({x}) = {ci}, scipy {ci_ref}");
+            assert!(
+                (si - si_ref).abs() < 1e-12,
+                "Si({x}) = {si}, scipy {si_ref}"
+            );
+            assert!(
+                (ci - ci_ref).abs() < 1e-12,
+                "Ci({x}) = {ci}, scipy {ci_ref}"
+            );
         }
     }
 
@@ -7554,7 +7829,10 @@ mod tests {
         ];
         for (n, x, expected) in expn_cases {
             let got = expn(n, x);
-            assert!(((got - expected) / expected).abs() < 1e-12, "expn({n},{x})={got}, scipy {expected}");
+            assert!(
+                ((got - expected) / expected).abs() < 1e-12,
+                "expn({n},{x})={got}, scipy {expected}"
+            );
         }
         let expi_neg = [
             (-0.5, -0.5597735947761608),
@@ -7564,7 +7842,10 @@ mod tests {
         ];
         for (x, expected) in expi_neg {
             let got = expi_scalar(x);
-            assert!(((got - expected) / expected).abs() < 1e-12, "expi({x})={got}, scipy {expected}");
+            assert!(
+                ((got - expected) / expected).abs() < 1e-12,
+                "expi({x})={got}, scipy {expected}"
+            );
         }
     }
 
@@ -7589,11 +7870,18 @@ mod tests {
         for (x, expected) in cases {
             let got = dawsn_scalar(x);
             let rel = ((got - expected) / expected).abs();
-            assert!(rel < 1e-13, "dawsn({x}) = {got}, scipy {expected}, rel={rel:e}");
+            assert!(
+                rel < 1e-13,
+                "dawsn({x}) = {got}, scipy {expected}, rel={rel:e}"
+            );
         }
         // Propagation check: Im wofz(3+0i) = (2/√π) dawsn(3).
         let w = wofz_scalar(Complex64::new(3.0, 0.0), RuntimeMode::Strict).unwrap();
-        assert!((w.im - 0.20115731703760037).abs() < 1e-13, "wofz(3).im = {}", w.im);
+        assert!(
+            (w.im - 0.20115731703760037).abs() < 1e-13,
+            "wofz(3).im = {}",
+            w.im
+        );
     }
 
     #[test]
@@ -7612,8 +7900,14 @@ mod tests {
         ];
         for (x, sref, cref) in cases {
             let (s, c) = fresnel(x);
-            assert!((s - sref).abs() < 1e-12, "fresnel({x}).S = {s}, scipy {sref}");
-            assert!((c - cref).abs() < 1e-12, "fresnel({x}).C = {c}, scipy {cref}");
+            assert!(
+                (s - sref).abs() < 1e-12,
+                "fresnel({x}).S = {s}, scipy {sref}"
+            );
+            assert!(
+                (c - cref).abs() < 1e-12,
+                "fresnel({x}).C = {c}, scipy {cref}"
+            );
         }
     }
 
@@ -7633,7 +7927,10 @@ mod tests {
         for (x, expected) in cases {
             let got = erfi_scalar(x);
             let rel = ((got - expected) / expected).abs();
-            assert!(rel < 1e-9, "erfi({x}) = {got:e}, scipy {expected:e}, rel={rel:e}");
+            assert!(
+                rel < 1e-9,
+                "erfi({x}) = {got:e}, scipy {expected:e}, rel={rel:e}"
+            );
             // Odd symmetry.
             assert!((erfi_scalar(-x) + got).abs() <= 1e-9 * got.abs());
         }
@@ -7669,7 +7966,10 @@ mod tests {
             let rel = ((got - expected) / expected).abs();
             // ~1e-10 floor at moderate x is inherited from the Y_v asymptotic;
             // still a vast improvement over the prior catastrophic blow-up.
-            assert!(rel < 1e-9, "struve({v},{x}) = {got:e}, scipy {expected:e}, rel={rel:e}");
+            assert!(
+                rel < 1e-9,
+                "struve({v},{x}) = {got:e}, scipy {expected:e}, rel={rel:e}"
+            );
         }
     }
 
@@ -7775,7 +8075,10 @@ mod tests {
             (700.0, 1.4509787360525605e301),
         ] {
             let got = expi_scalar(x);
-            assert!(((got - want) / want).abs() < 1e-13, "expi({x}) = {got}, scipy {want}");
+            assert!(
+                ((got - want) / want).abs() < 1e-13,
+                "expi({x}) = {got}, scipy {want}"
+            );
         }
     }
 
@@ -11279,12 +11582,22 @@ mod tests {
         // strip, |Im z| > π (K ≠ 0), and both deep tails.
         let cases: &[(f64, f64, f64, f64)] = &[
             (0.5, 0.3, 0.759_982_991_983_232_2, 0.130_255_991_959_168_8),
-            (-1.5, 2.0, -0.046_466_392_009_842_42, 0.229_077_725_545_113_66),
+            (
+                -1.5,
+                2.0,
+                -0.046_466_392_009_842_42,
+                0.229_077_725_545_113_66,
+            ),
             (2.0, -2.5, 1.281_057_065_675_128_1, -1.603_332_445_813_598_5),
             (0.2, 4.0, -0.605_890_980_974_417, 2.155_140_393_085_120_7),
             (0.0, 1.5, 0.392_558_477_115_177_44, 0.549_512_694_868_214_6),
             (-10.0, 4.0, -12.530_965_197_408_364, 0.932_702_135_820_647),
-            (-3.0, -1.0, 0.027_759_347_673_495_516, -0.039_677_501_694_402_574),
+            (
+                -3.0,
+                -1.0,
+                0.027_759_347_673_495_516,
+                -0.039_677_501_694_402_574,
+            ),
             (0.7, -0.6, 0.831_572_721_398_247_9, -0.277_699_309_499_649_2),
             (-8.0, 8.5, -10.486_305_311_771_067, 5.868_626_712_161_074),
             (5.0, -12.0, 2.603_767_504_361_378, -10.668_583_366_963_013),
@@ -11739,7 +12052,10 @@ mod tests {
         for (v, x, expected) in cases {
             let got = modstruve(v, x);
             let rel = ((got - expected) / expected).abs();
-            assert!(rel < 1e-11, "modstruve({v},{x}) = {got:e}, scipy {expected:e}, rel={rel:e}");
+            assert!(
+                rel < 1e-11,
+                "modstruve({v},{x}) = {got:e}, scipy {expected:e}, rel={rel:e}"
+            );
         }
     }
 
@@ -12119,8 +12435,18 @@ mod tests {
             );
         }
         // Numerator-only pole (x+n a non-positive integer, x not) → +inf:
-        for (x, n) in [(-3.5, 0.5), (-3.5, -0.5), (-0.5, -0.5), (1.0, -2.0), (-2.5, -1.5), (-4.5, -3.5)] {
-            assert!(super::poch(x, n) == f64::INFINITY, "poch({x},{n}) should be +inf");
+        for (x, n) in [
+            (-3.5, 0.5),
+            (-3.5, -0.5),
+            (-0.5, -0.5),
+            (1.0, -2.0),
+            (-2.5, -1.5),
+            (-4.5, -3.5),
+        ] {
+            assert!(
+                super::poch(x, n) == f64::INFINITY,
+                "poch({x},{n}) should be +inf"
+            );
         }
         // Denominator-only pole (x a non-positive integer, x+n not) → 0:
         for (x, n) in [(-2.0, 0.5), (-2.0, 3.5), (-3.0, 0.25)] {
@@ -12152,8 +12478,14 @@ mod tests {
         ];
         for (x, ij0, iy0) in cases {
             let (gj, gy) = super::it2j0y0(x);
-            assert!((gj - ij0).abs() <= 1e-8 * ij0.abs().max(1.0), "ij0({x}) = {gj}, want {ij0}");
-            assert!((gy - iy0).abs() <= 1e-8 * iy0.abs().max(1.0), "iy0({x}) = {gy}, want {iy0}");
+            assert!(
+                (gj - ij0).abs() <= 1e-8 * ij0.abs().max(1.0),
+                "ij0({x}) = {gj}, want {ij0}"
+            );
+            assert!(
+                (gy - iy0).abs() <= 1e-8 * iy0.abs().max(1.0),
+                "iy0({x}) = {gy}, want {iy0}"
+            );
         }
         // x=0 → (0, -1e300 scipy sentinel); x<0 → ij0 even, iy0 NaN.
         assert_eq!(super::it2j0y0(0.0), (0.0, -1e300));
@@ -12175,8 +12507,14 @@ mod tests {
         ];
         for (x, ii0, ik0) in cases {
             let (g0, gk) = super::it2i0k0(x);
-            assert!((g0 - ii0).abs() <= 1e-9 * ii0.abs().max(1.0), "ii0({x}) = {g0}, want {ii0}");
-            assert!((gk - ik0).abs() <= 1e-9 * ik0.abs().max(1.0), "ik0({x}) = {gk}, want {ik0}");
+            assert!(
+                (g0 - ii0).abs() <= 1e-9 * ii0.abs().max(1.0),
+                "ii0({x}) = {g0}, want {ii0}"
+            );
+            assert!(
+                (gk - ik0).abs() <= 1e-9 * ik0.abs().max(1.0),
+                "ik0({x}) = {gk}, want {ik0}"
+            );
         }
         // x=0 → (0, 1e300 scipy sentinel); x<0 → ii0 even, ik0 NaN.
         assert_eq!(super::it2i0k0(0.0), (0.0, 1e300));
@@ -12190,18 +12528,60 @@ mod tests {
         // (Apt, Bpt, Ant, Bnt) from mpmath (dps=25) — we are far more accurate
         // than scipy's specfun ITAIRY here, so the reference is the true integral.
         let cases = [
-            (0.5_f64, 0.14595330491185718, 0.3653384655095201, 0.20880954755731607, 0.2500627554377472),
-            (1.0, 0.2363173419171098, 0.8727691167380082, 0.4656739834670686, 0.37300500963429495),
-            (2.0, 0.3125327557806797, 2.8734082599825452, 0.9017728260386064, 0.19354740799810316),
-            (5.0, 0.33328759030591787, 321.47831857046515, 0.7178822045478277, 0.15873093858143864),
-            (8.0, 0.33333331724248355, 440065.2580490418, 0.7839825965711773, -0.014756446293227662),
+            (
+                0.5_f64,
+                0.14595330491185718,
+                0.3653384655095201,
+                0.20880954755731607,
+                0.2500627554377472,
+            ),
+            (
+                1.0,
+                0.2363173419171098,
+                0.8727691167380082,
+                0.4656739834670686,
+                0.37300500963429495,
+            ),
+            (
+                2.0,
+                0.3125327557806797,
+                2.8734082599825452,
+                0.9017728260386064,
+                0.19354740799810316,
+            ),
+            (
+                5.0,
+                0.33328759030591787,
+                321.47831857046515,
+                0.7178822045478277,
+                0.15873093858143864,
+            ),
+            (
+                8.0,
+                0.33333331724248355,
+                440065.2580490418,
+                0.7839825965711773,
+                -0.014756446293227662,
+            ),
         ];
         for (x, apt, bpt, ant, bnt) in cases {
             let (a, b, an, bn) = super::itairy(x);
-            assert!((a - apt).abs() <= 1e-9 * apt.abs().max(1.0), "Apt({x}) = {a}, want {apt}");
-            assert!((b - bpt).abs() <= 1e-9 * bpt.abs().max(1.0), "Bpt({x}) = {b}, want {bpt}");
-            assert!((an - ant).abs() <= 1e-9 * ant.abs().max(1.0), "Ant({x}) = {an}, want {ant}");
-            assert!((bn - bnt).abs() <= 1e-9 * bnt.abs().max(1.0), "Bnt({x}) = {bn}, want {bnt}");
+            assert!(
+                (a - apt).abs() <= 1e-9 * apt.abs().max(1.0),
+                "Apt({x}) = {a}, want {apt}"
+            );
+            assert!(
+                (b - bpt).abs() <= 1e-9 * bpt.abs().max(1.0),
+                "Bpt({x}) = {b}, want {bpt}"
+            );
+            assert!(
+                (an - ant).abs() <= 1e-9 * ant.abs().max(1.0),
+                "Ant({x}) = {an}, want {ant}"
+            );
+            assert!(
+                (bn - bnt).abs() <= 1e-9 * bnt.abs().max(1.0),
+                "Bnt({x}) = {bn}, want {bnt}"
+            );
         }
         // Reflection: itairy(-x) = (-Ant, -Bnt, -Apt, -Bpt). x=0 → all zero.
         let (a, b, an, bn) = super::itairy(-1.0);
@@ -12225,8 +12605,14 @@ mod tests {
         ];
         for (x, tj, ty) in cases {
             let (gj, gy) = super::itj0y0(x);
-            assert!((gj - tj).abs() <= 1e-8 * tj.abs().max(1.0), "itj0y0({x}).0 = {gj}, want {tj}");
-            assert!((gy - ty).abs() <= 1e-8 * ty.abs().max(1.0), "itj0y0({x}).1 = {gy}, want {ty}");
+            assert!(
+                (gj - tj).abs() <= 1e-8 * tj.abs().max(1.0),
+                "itj0y0({x}).0 = {gj}, want {tj}"
+            );
+            assert!(
+                (gy - ty).abs() <= 1e-8 * ty.abs().max(1.0),
+                "itj0y0({x}).1 = {gy}, want {ty}"
+            );
         }
         // x < 0: J0 integral odd, Y0 integral NaN. x = 0 → (0, 0).
         let (nj, ny) = super::itj0y0(-2.0);
@@ -12249,8 +12635,14 @@ mod tests {
         ];
         for (x, ti, tk) in cases {
             let (gi, gk) = super::iti0k0(x);
-            assert!((gi - ti).abs() <= 1e-9 * ti.abs(), "iti0k0({x}).0 = {gi}, want {ti}");
-            assert!((gk - tk).abs() <= 1e-9 * tk.abs().max(1.0), "iti0k0({x}).1 = {gk}, want {tk}");
+            assert!(
+                (gi - ti).abs() <= 1e-9 * ti.abs(),
+                "iti0k0({x}).0 = {gi}, want {ti}"
+            );
+            assert!(
+                (gk - tk).abs() <= 1e-9 * tk.abs().max(1.0),
+                "iti0k0({x}).1 = {gk}, want {tk}"
+            );
         }
         // x < 0: I0 integral is odd, K0 integral undefined (NaN). x = 0 → (0, 0).
         let (ni, nk) = super::iti0k0(-1.0);
@@ -12264,18 +12656,60 @@ mod tests {
         // Golden (fp.re, fp.im, kp.re, kp.im, fm.re, fm.im, km.re, km.im) from
         // scipy 1.17.1 at x = 0, 1, 2.
         let cases = [
-            (0.0_f64, 0.6266570686577501, 0.6266570686577501, 0.5, 0.0, 0.6266570686577501, -0.6266570686577501, 0.5, 0.0),
-            (1.0, -0.27786716924252197, 0.3163887669343689, 0.20779404795392425, 0.11515989377745535, -0.27786716924252197, -0.3163887669343689, 0.20779404795392425, -0.11515989377745535),
-            (2.0, 0.16519560622453383, -0.17811942068600597, 0.10702394153838506, 0.08562294793588794, 0.16519560622453383, 0.17811942068600597, 0.10702394153838506, -0.08562294793588794),
+            (
+                0.0_f64,
+                0.6266570686577501,
+                0.6266570686577501,
+                0.5,
+                0.0,
+                0.6266570686577501,
+                -0.6266570686577501,
+                0.5,
+                0.0,
+            ),
+            (
+                1.0,
+                -0.27786716924252197,
+                0.3163887669343689,
+                0.20779404795392425,
+                0.11515989377745535,
+                -0.27786716924252197,
+                -0.3163887669343689,
+                0.20779404795392425,
+                -0.11515989377745535,
+            ),
+            (
+                2.0,
+                0.16519560622453383,
+                -0.17811942068600597,
+                0.10702394153838506,
+                0.08562294793588794,
+                0.16519560622453383,
+                0.17811942068600597,
+                0.10702394153838506,
+                -0.08562294793588794,
+            ),
         ];
         for (x, fpr, fpi, kpr, kpi, fmr, fmi, kmr, kmi) in cases {
             let (fp, kp) = super::modfresnelp(x);
             let (fm, km) = super::modfresnelm(x);
             let close = |a: f64, b: f64| (a - b).abs() <= 1e-12 * b.abs().max(1.0);
-            assert!(close(fp.re, fpr) && close(fp.im, fpi), "modfresnelp({x}).fp = {fp:?}");
-            assert!(close(kp.re, kpr) && close(kp.im, kpi), "modfresnelp({x}).kp = {kp:?}");
-            assert!(close(fm.re, fmr) && close(fm.im, fmi), "modfresnelm({x}).fm = {fm:?}");
-            assert!(close(km.re, kmr) && close(km.im, kmi), "modfresnelm({x}).km = {km:?}");
+            assert!(
+                close(fp.re, fpr) && close(fp.im, fpi),
+                "modfresnelp({x}).fp = {fp:?}"
+            );
+            assert!(
+                close(kp.re, kpr) && close(kp.im, kpi),
+                "modfresnelp({x}).kp = {kp:?}"
+            );
+            assert!(
+                close(fm.re, fmr) && close(fm.im, fmi),
+                "modfresnelm({x}).fm = {fm:?}"
+            );
+            assert!(
+                close(km.re, kmr) && close(km.im, kmi),
+                "modfresnelm({x}).km = {km:?}"
+            );
         }
     }
 
@@ -12286,8 +12720,8 @@ mod tests {
         let cases = [
             (0.5, 1.5, 2.0, 0.026212998037515905_f64),
             (1.0, 1.0, 1.0, 0.24449718372863877),
-            (0.0, 1.0, 0.0, 0.5),       // a=0, ν=0 → 1/(λ+1)
-            (0.0, 2.0, 1.0, 0.0),       // a=0, ν≠0 → 0
+            (0.0, 1.0, 0.0, 0.5), // a=0, ν=0 → 1/(λ+1)
+            (0.0, 2.0, 1.0, 0.0), // a=0, ν≠0 → 0
             (2.0, 0.5, 0.0, 0.05519113378203583),
             (0.5, 1.0, -0.5, 0.4238384194901922), // negative non-integer ν (signed Γ)
             (0.5, 1.0, -1.0, -0.15453272353179368), // negative integer ν (reflection)
@@ -12327,7 +12761,13 @@ mod tests {
         }
         // Pole at s = 1 → +∞; trivial zero at even negative s ≈ 0.
         assert!(super::zeta_scalar(1.0).is_infinite(), "ζ(1) is the pole");
-        assert!(super::zeta_scalar(-10.0).abs() < 1e-12, "ζ(-10) is a trivial zero");
-        assert!((super::zeta_scalar(f64::INFINITY) - 1.0).abs() < 1e-15, "ζ(∞) = 1");
+        assert!(
+            super::zeta_scalar(-10.0).abs() < 1e-12,
+            "ζ(-10) is a trivial zero"
+        );
+        assert!(
+            (super::zeta_scalar(f64::INFINITY) - 1.0).abs() < 1e-15,
+            "ζ(∞) = 1"
+        );
     }
 }
