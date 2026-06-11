@@ -2686,9 +2686,69 @@ pub fn pbdv(v: f64, x: f64) -> (f64, f64) {
     (d, 0.5 * x * d - d_next)
 }
 
+/// Parabolic cylinder function `V_v(x)` (Whittaker's second solution).
+///
+/// `V` grows like `√(2/π) x^v e^{x²/4}` for `x → +∞` (and grows on the negative
+/// side too), so the Kummer `M` representation carries no relative cancellation
+/// anywhere: `V_v(x) = 2^{v/2} e^{-x²/4} [ p(v) M(-v/2,1/2,x²/2)
+/// + q(v) x M((1-v)/2,3/2,x²/2) ]`, with
+/// `p(v) = -2^{-v} sin(πv/2)/Γ(1+v/2)` and
+/// `q(v) = 2^{-v} √2 cos(πv/2)/Γ((1+v)/2)`. These come from expanding the
+/// connection `V_v(x) = [Γ(-v)/π][D_v(-x) - cos(πv) D_v(x)]` via the Gamma
+/// duplication/reflection formulas, which removes the integer-`v` singularities
+/// (the `sin`/`cos`·`rgamma` products stay finite).
+fn parabolic_cylinder_v(v: f64, x: f64) -> f64 {
+    use std::f64::consts::{PI, SQRT_2};
+    let z = x * x / 2.0;
+    let two_neg_v = 2.0_f64.powf(-v);
+    let p = -two_neg_v
+        * (PI * v / 2.0).sin()
+        * crate::gamma::rgamma_scalar(1.0 + v / 2.0, RuntimeMode::Strict).unwrap_or(f64::NAN);
+    let q = two_neg_v
+        * SQRT_2
+        * (PI * v / 2.0).cos()
+        * crate::gamma::rgamma_scalar((1.0 + v) / 2.0, RuntimeMode::Strict).unwrap_or(f64::NAN);
+    let m1 = hyp1f1_scalar(-v / 2.0, 0.5, z, RuntimeMode::Strict).unwrap_or(f64::NAN);
+    let m2 = hyp1f1_scalar((1.0 - v) / 2.0, 1.5, z, RuntimeMode::Strict).unwrap_or(f64::NAN);
+    2.0_f64.powf(v / 2.0) * (-x * x / 4.0).exp() * (p * m1 + q * x * m2)
+}
+
+/// Parabolic cylinder function `V_v(x)` and its derivative `V_v'(x)`.
+///
+/// Matches `scipy.special.pbvv(v, x)`, returning `(V_v(x), V_v'(x))`. The
+/// derivative uses the recurrence `V_v'(x) = (x/2) V_v(x) - (v+1) V_{v+1}(x)`.
+#[must_use]
+pub fn pbvv(v: f64, x: f64) -> (f64, f64) {
+    let val = parabolic_cylinder_v(v, x);
+    let val_next = parabolic_cylinder_v(v + 1.0, x);
+    (val, 0.5 * x * val - (v + 1.0) * val_next)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pbvv_matches_scipy() {
+        // frankenscipy: golden (V_v(x), V_v'(x)) from scipy.special.pbvv 1.17.1.
+        let cases: [(f64, f64, f64, f64); 9] = [
+            (2.0, 1.5, -0.391973472015926, 0.47350858249675554),
+            (0.5, 2.0, 1.0211331167712545, 0.7053421708237448),
+            (0.0, 1.0, 0.7425384707031272, 0.6532348203020515),
+            (1.0, 2.0, 0.6072332992384175, 0.7808209018000191),
+            (-0.5, 2.0, 1.7264752875949998, 1.2159087292093724),
+            (3.0, -1.0, -0.07676214762543987, 0.4738709540140875),
+            (2.5, 3.0, 0.28351951761600325, 0.4759240564607866),
+            (0.0, 0.0, 0.0, 0.7978845608028654),
+            (1.5, -2.5, 0.5868282497491932, 0.352912506406418),
+        ];
+        for (v, x, wv, wvp) in cases {
+            let (val, vp) = pbvv(v, x);
+            let tol = |w: f64| 1e-6 * w.abs().max(1.0);
+            assert!((val - wv).abs() < tol(wv), "pbvv({v},{x}) V: got {val}, want {wv}");
+            assert!((vp - wvp).abs() < tol(wvp), "pbvv({v},{x}) V': got {vp}, want {wvp}");
+        }
+    }
 
     #[test]
     fn pbdv_matches_scipy() {
