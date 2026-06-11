@@ -1907,8 +1907,8 @@ pub fn binom(n: f64, k: f64) -> f64 {
         }
     } else {
         // Signed beta form, finite except at a genuine denominator pole.
-        let b = crate::beta::beta_scalar(1.0 + n - k, 1.0 + k, RuntimeMode::Strict)
-            .unwrap_or(f64::NAN);
+        let b =
+            crate::beta::beta_scalar(1.0 + n - k, 1.0 + k, RuntimeMode::Strict).unwrap_or(f64::NAN);
         1.0 / (n + 1.0) / b
     }
 }
@@ -2013,10 +2013,11 @@ pub fn pdtri(k: f64, p: f64) -> f64 {
         return 0.0;
     }
 
-    // Use gammaincinv: we need m such that gammaincc(k+1, m) = p
-    // This is the same as gammainc(k+1, m) = 1 - p
-    // So m = gammaincinv(k+1, 1-p)
-    gammaincinv(k + 1.0, 1.0 - p)
+    // pdtri(k, p): m such that gammaincc(k+1, m) = p, i.e. m = gammainccinv(k+1, p).
+    // Invert the *complemented* incomplete gamma directly rather than via
+    // gammaincinv(k+1, 1 − p): forming `1 − p` loses tail precision for small p,
+    // while the complemented inverse keeps it exact (matches scipy to ~1e-15).
+    crate::convenience::gammainccinv_scalar(k + 1.0, p)
 }
 
 /// Inverse of Poisson CDF with respect to event count k.
@@ -2121,8 +2122,8 @@ pub fn chndtr(x: f64, df: f64, nc: f64) -> f64 {
     let lam = nc / 2.0;
     let j0 = lam.floor();
     // Poisson weight at the mode j0, formed in log space to avoid underflow.
-    let logw0 = -lam + j0 * lam.ln()
-        - gammaln_scalar(j0 + 1.0, RuntimeMode::Strict).unwrap_or(f64::NAN);
+    let logw0 =
+        -lam + j0 * lam.ln() - gammaln_scalar(j0 + 1.0, RuntimeMode::Strict).unwrap_or(f64::NAN);
     let w0 = logw0.exp();
 
     let mut total = 0.0_f64;
@@ -2260,9 +2261,12 @@ pub fn chdtri(v: f64, p: f64) -> f64 {
     if p == 1.0 {
         return 0.0;
     }
-    // chdtri(v, p) finds x such that gammaincc(v/2, x/2) = p.
-    // So x/2 = gammaincinv(v/2, 1-p), thus x = 2 * gammaincinv(v/2, 1-p).
-    2.0 * gammaincinv(v / 2.0, 1.0 - p)
+    // chdtri(v, p) finds x such that gammaincc(v/2, x/2) = p, i.e.
+    // x = 2 * gammainccinv(v/2, p). Invert the *complemented* incomplete gamma
+    // directly rather than via gammaincinv(v/2, 1 − p): forming `1 − p` loses
+    // all tail precision for small p (e.g. p = 1e-8 was ~6e-9 off), whereas the
+    // complemented inverse keeps the small p exact (matches scipy to ~1e-15).
+    2.0 * crate::convenience::gammainccinv_scalar(v / 2.0, p)
 }
 
 /// Inverse chi-squared distribution CDF with respect to degrees of freedom.
@@ -3097,7 +3101,11 @@ mod tests {
             let lp = log_gammainc_scalar(a, x);
             assert!(p > 0.0, "precondition: P representable for ({a},{x})");
             let rel = (lp - p.ln()).abs() / p.ln().abs().max(1.0);
-            assert!(rel <= 1e-12, "log_gammainc({a},{x})={lp} vs ln(P)={}", p.ln());
+            assert!(
+                rel <= 1e-12,
+                "log_gammainc({a},{x})={lp} vs ln(P)={}",
+                p.ln()
+            );
         }
     }
 
@@ -3112,7 +3120,10 @@ mod tests {
                 "precondition: P underflows for ({a},{x})"
             );
             let lp = log_gammainc_scalar(a, x);
-            assert!(lp.is_finite() && lp < -100.0, "log P({a},{x})={lp} not finite");
+            assert!(
+                lp.is_finite() && lp < -100.0,
+                "log P({a},{x})={lp} not finite"
+            );
             // P ≈ x^a / Γ(a+1) ⇒ ln P ≈ a·ln x − lnΓ(a+1).
             let asymp = a * x.ln() - gammaln_scalar(a + 1.0, RuntimeMode::Strict).unwrap();
             assert!(
@@ -3149,7 +3160,11 @@ mod tests {
             let lq = log_gammaincc_scalar(a, x);
             assert!(q > 0.0, "precondition: Q representable for ({a},{x})");
             let rel = (lq - q.ln()).abs() / q.ln().abs().max(1.0);
-            assert!(rel <= 1e-12, "log_gammaincc({a},{x})={lq} vs ln(Q)={}", q.ln());
+            assert!(
+                rel <= 1e-12,
+                "log_gammaincc({a},{x})={lq} vs ln(Q)={}",
+                q.ln()
+            );
         }
     }
 
@@ -3164,7 +3179,10 @@ mod tests {
                 "precondition: Q underflows for ({a},{x})"
             );
             let lq = log_gammaincc_scalar(a, x);
-            assert!(lq.is_finite() && lq < -700.0, "log Q({a},{x})={lq} not finite");
+            assert!(
+                lq.is_finite() && lq < -700.0,
+                "log Q({a},{x})={lq} not finite"
+            );
             let asymp = -x + (a - 1.0) * x.ln() - gammaln_scalar(a, RuntimeMode::Strict).unwrap();
             assert!(
                 (lq - asymp).abs() / asymp.abs() < 1e-3,
@@ -3202,17 +3220,26 @@ mod tests {
         ];
         for (x, expected) in dig {
             let got = g(digamma(&s(x), m));
-            assert!((got - expected).abs() <= 1e-11 * expected.abs().max(1e-3), "digamma({x}) = {got}, scipy {expected}");
+            assert!(
+                (got - expected).abs() <= 1e-11 * expected.abs().max(1e-3),
+                "digamma({x}) = {got}, scipy {expected}"
+            );
         }
         let tri = [(1.5, 0.9348022005446793), (2.5, 0.4903577561002348)];
         for (x, expected) in tri {
             let got = g(polygamma(1, &s(x), m));
-            assert!(((got - expected) / expected).abs() < 1e-11, "polygamma(1,{x}) = {got}, scipy {expected}");
+            assert!(
+                ((got - expected) / expected).abs() < 1e-11,
+                "polygamma(1,{x}) = {got}, scipy {expected}"
+            );
         }
         let tetra = [(1.5, -0.8287966442343201), (2.5, -0.23620405164172736)];
         for (x, expected) in tetra {
             let got = g(polygamma(2, &s(x), m));
-            assert!(((got - expected) / expected).abs() < 1e-10, "polygamma(2,{x}) = {got}, scipy {expected}");
+            assert!(
+                ((got - expected) / expected).abs() < 1e-10,
+                "polygamma(2,{x}) = {got}, scipy {expected}"
+            );
         }
     }
 
@@ -3245,7 +3272,10 @@ mod tests {
             Ok(SpecialTensor::RealScalar(v)) => v,
             other => panic!("{other:?}"),
         };
-        assert!(d0.is_infinite() && d0.is_sign_negative(), "digamma(0) = {d0}");
+        assert!(
+            d0.is_infinite() && d0.is_sign_negative(),
+            "digamma(0) = {d0}"
+        );
         let dm1 = match polygamma(0, &SpecialTensor::RealScalar(-1.0), mode) {
             Ok(SpecialTensor::RealScalar(v)) => v,
             other => panic!("{other:?}"),
@@ -3851,6 +3881,36 @@ mod tests {
                 "chdtri({v}, {p}) = {got}, expected {expected}"
             );
         }
+
+        // Small-p (deep upper tail) regression: chdtri/pdtri must invert the
+        // *complemented* incomplete gamma directly. The former `1 − p` route lost
+        // tail precision (chdtri(1, 1e-8) was ~6e-9 off); these lock the fix at a
+        // tight tolerance against scipy 1.17.1.
+        let chdtri_tail: [(f64, f64, f64); 4] = [
+            (1.0, 1e-8, 32.841253361236788),
+            (5.0, 1e-8, 45.794587123084568),
+            (30.0, 1e-8, 95.328831531183496),
+            (2.0, 1e-6, 27.631021115928547),
+        ];
+        for (v, p, expected) in chdtri_tail {
+            let got = chdtri(v, p);
+            assert!(
+                (got - expected).abs() < 1e-12 * expected.abs(),
+                "chdtri({v}, {p}) = {got}, expected {expected}"
+            );
+        }
+        let pdtri_tail: [(f64, f64, f64); 3] = [
+            (0.0, 1e-8, 18.420680743952364),
+            (3.0, 1e-8, 26.584739102269619),
+            (10.0, 1e-6, 34.427884340361182),
+        ];
+        for (k, p, expected) in pdtri_tail {
+            let got = pdtri(k, p);
+            assert!(
+                (got - expected).abs() < 1e-12 * expected.abs(),
+                "pdtri({k}, {p}) = {got}, expected {expected}"
+            );
+        }
     }
 
     #[test]
@@ -4113,7 +4173,10 @@ mod tests {
         ];
         for (p, df, nc, want) in cases {
             let got = chndtrix(p, df, nc);
-            assert!((got - want).abs() <= 1e-9 * want.abs(), "chndtrix({p},{df},{nc}) = {got}, want {want}");
+            assert!(
+                (got - want).abs() <= 1e-9 * want.abs(),
+                "chndtrix({p},{df},{nc}) = {got}, want {want}"
+            );
         }
         assert_eq!(chndtrix(0.0, 3.0, 2.0), 0.0);
         assert!(chndtrix(1.0, 3.0, 2.0).is_infinite());
@@ -4125,11 +4188,23 @@ mod tests {
         // frankenscipy: golden from scipy.special.chndtridf / chndtrinc 1.17.1.
         // Roundtrip (x=8, df=5, nc=3 → p) recovers df=5 / nc=3.
         let p = chndtr(8.0, 5.0, 3.0);
-        assert!((chndtridf(8.0, p, 3.0) - 5.0).abs() < 1e-7, "chndtridf roundtrip");
-        assert!((chndtrinc(8.0, 5.0, p) - 3.0).abs() < 1e-7, "chndtrinc roundtrip");
+        assert!(
+            (chndtridf(8.0, p, 3.0) - 5.0).abs() < 1e-7,
+            "chndtridf roundtrip"
+        );
+        assert!(
+            (chndtrinc(8.0, 5.0, p) - 3.0).abs() < 1e-7,
+            "chndtrinc roundtrip"
+        );
         // Direct golden values.
-        assert!((chndtridf(20.0, 0.3, 4.0) - 20.43935171067603).abs() < 1e-7, "chndtridf direct");
-        assert!((chndtrinc(20.0, 6.0, 0.7) - 10.847570357455123).abs() < 1e-7, "chndtrinc direct");
+        assert!(
+            (chndtridf(20.0, 0.3, 4.0) - 20.43935171067603).abs() < 1e-7,
+            "chndtridf direct"
+        );
+        assert!(
+            (chndtrinc(20.0, 6.0, 0.7) - 10.847570357455123).abs() < 1e-7,
+            "chndtrinc direct"
+        );
         // p ∉ (0,1) → NaN.
         assert!(chndtridf(8.0, 0.0, 3.0).is_nan());
         assert!(chndtrinc(8.0, 5.0, 1.0).is_nan());
@@ -4774,7 +4849,7 @@ mod tests {
             (2.5, 5.0, 0.01171875),
             (2.5, 7.0, 0.00244140625),
             (-0.5, 1.0, -0.5),
-            (2.0, -1.0, 0.0),  // negative integer k → 0
+            (2.0, -1.0, 0.0), // negative integer k → 0
         ];
         for (n, k, want) in cases {
             let got = binom(n, k);
@@ -4793,7 +4868,11 @@ mod tests {
         assert_eq!(binom(2.5, 0.0), 1.0);
         // Non-integer k=n routes through the beta form; scipy.special.binom(2.5,2.5)
         // = 0.9999999999999998 (NOT exactly 1.0 — matching scipy is the point).
-        assert!((binom(2.5, 2.5) - 1.0).abs() < 1e-12, "binom(2.5,2.5) = {}", binom(2.5, 2.5));
+        assert!(
+            (binom(2.5, 2.5) - 1.0).abs() < 1e-12,
+            "binom(2.5,2.5) = {}",
+            binom(2.5, 2.5)
+        );
     }
 
     #[test]
