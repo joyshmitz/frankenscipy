@@ -3,6 +3,7 @@
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::linesearch::{WolfeParams, line_search_wolfe2};
 use crate::types::{
     Bound, ConvergenceStatus, MinimizeOptions, OptError, OptimizeMethod, OptimizeResult,
     OptimizeTraceEntry,
@@ -443,32 +444,82 @@ where
         if dot(&direction, &grad) >= 0.0 {
             direction = scale_vector(&grad, -1.0);
         }
-        let search = match armijo_backtracking(&mut objective, &x, f, &grad, &direction) {
-            Ok(Some(value)) => value,
-            Ok(None) => {
-                let result = OptimizeResult {
-                    x: x.clone(),
-                    fun: Some(f),
-                    success: false,
-                    status: ConvergenceStatus::PrecisionLoss,
-                    message: String::from("line search failed to find a sufficient decrease"),
-                    nfev: objective.nfev,
-                    njev,
-                    nhev: 0,
-                    nit,
-                    jac: Some(grad.clone()),
-                    hess_inv: None,
-                    maxcv: None,
-                };
-                log_completion(
-                    OptimizeMethod::ConjugateGradient,
-                    options,
-                    iteration,
-                    &result,
-                );
-                return Ok(result);
+        // Strong-Wolfe line search: nonlinear CG needs the curvature condition to
+        // keep generating descent directions; Armijo-only steps stall the
+        // Polak-Ribière recurrence (e.g. Rosenbrock). scipy's CG uses the same.
+        let wolfe_search = {
+            let eps = options.gradient_eps;
+            let counter = std::cell::Cell::new(0usize);
+            let f_closure = |xv: &[f64]| {
+                counter.set(counter.get() + 1);
+                (fun)(xv)
+            };
+            let g_closure = |xv: &[f64]| {
+                let mut g = vec![0.0; xv.len()];
+                let mut xp = xv.to_vec();
+                for i in 0..xv.len() {
+                    let step = eps * (1.0 + xv[i].abs());
+                    let orig = xp[i];
+                    xp[i] = orig + step;
+                    counter.set(counter.get() + 1);
+                    let fp = (fun)(&xp);
+                    xp[i] = orig - step;
+                    counter.set(counter.get() + 1);
+                    let fm = (fun)(&xp);
+                    xp[i] = orig;
+                    g[i] = (fp - fm) / (2.0 * step);
+                }
+                g
+            };
+            let res = line_search_wolfe2(
+                &f_closure,
+                &g_closure,
+                &x,
+                &direction,
+                f,
+                &grad,
+                WolfeParams::default(),
+            );
+            if let Ok(ls) = res {
+                objective.nfev += counter.get();
+                Some(LineSearchStep {
+                    x: add_scaled(&x, &direction, ls.alpha),
+                    f: ls.f_at_alpha,
+                    alpha: ls.alpha,
+                })
+            } else {
+                None
             }
-            Err(err) => return Ok(result_from_error(&x, nit, objective.nfev, njev, err)),
+        };
+        let search = match wolfe_search {
+            Some(value) => value,
+            None => match armijo_backtracking(&mut objective, &x, f, &grad, &direction) {
+                Ok(Some(value)) => value,
+                Ok(None) => {
+                    let result = OptimizeResult {
+                        x: x.clone(),
+                        fun: Some(f),
+                        success: false,
+                        status: ConvergenceStatus::PrecisionLoss,
+                        message: String::from("line search failed to find a sufficient decrease"),
+                        nfev: objective.nfev,
+                        njev,
+                        nhev: 0,
+                        nit,
+                        jac: Some(grad.clone()),
+                        hess_inv: None,
+                        maxcv: None,
+                    };
+                    log_completion(
+                        OptimizeMethod::ConjugateGradient,
+                        options,
+                        iteration,
+                        &result,
+                    );
+                    return Ok(result);
+                }
+                Err(err) => return Ok(result_from_error(&x, nit, objective.nfev, njev, err)),
+            },
         };
 
         let next_grad = match finite_diff_gradient(&mut objective, &search.x, options.gradient_eps)
@@ -1148,6 +1199,85 @@ where
                 Err(err) => return Ok(result_from_error(&x, nit, objective.nfev, njev, err)),
             }
             continue;
+        }
+
+        // Strong-Wolfe line search for the unconstrained case. The curvature
+        // condition |g(x+αd)·d| ≤ c2·|g·d| guarantees s·y > 0, so every L-BFGS
+        // correction pair is valid; with Armijo-only steps the limited-memory
+        // model degrades to steepest descent and stalls (e.g. Rosenbrock from a
+        // hard start). scipy's L-BFGS-B uses an equivalent dcsrch line search.
+        if bounds.is_none() {
+            let eps = options.gradient_eps;
+            let counter = std::cell::Cell::new(0usize);
+            let f_closure = |xv: &[f64]| {
+                counter.set(counter.get() + 1);
+                (fun)(xv)
+            };
+            let g_closure = |xv: &[f64]| {
+                let mut g = vec![0.0; xv.len()];
+                let mut xp = xv.to_vec();
+                for i in 0..xv.len() {
+                    let step = eps * (1.0 + xv[i].abs());
+                    let orig = xp[i];
+                    xp[i] = orig + step;
+                    counter.set(counter.get() + 1);
+                    let fp = (fun)(&xp);
+                    xp[i] = orig - step;
+                    counter.set(counter.get() + 1);
+                    let fm = (fun)(&xp);
+                    xp[i] = orig;
+                    g[i] = (fp - fm) / (2.0 * step);
+                }
+                g
+            };
+            let wolfe = line_search_wolfe2(
+                &f_closure,
+                &g_closure,
+                &x,
+                &direction,
+                f,
+                &grad,
+                WolfeParams::default(),
+            );
+            if let Ok(ls) = wolfe {
+                objective.nfev += counter.get();
+                let new_x = add_scaled(&x, &direction, ls.alpha);
+                let s = sub_vectors(&new_x, &x);
+                x = new_x;
+                f = ls.f_at_alpha;
+                let new_grad = match finite_diff_gradient(&mut objective, &x, eps) {
+                    Ok(g) => {
+                        njev += 1;
+                        g
+                    }
+                    Err(err) => return Ok(result_from_error(&x, nit, objective.nfev, njev, err)),
+                };
+                let y = sub_vectors(&new_grad, &grad);
+                let sy = dot(&s, &y);
+                if sy > 1e-10 {
+                    push_lbfgs_history(
+                        &mut s_history,
+                        &mut y_history,
+                        &mut rho_history,
+                        s,
+                        y,
+                        sy,
+                        m,
+                    );
+                }
+                grad = new_grad;
+                log_iteration(
+                    OptimizeMethod::LBfgsB,
+                    options,
+                    iteration,
+                    f,
+                    grad_norm,
+                    ls.alpha,
+                    objective.nfev,
+                );
+                continue;
+            }
+            // Wolfe search failed → fall through to the projected Armijo fallback.
         }
 
         // Armijo backtracking with bound projection
@@ -5019,6 +5149,29 @@ mod tests {
             "x={:?}",
             result.x
         );
+    }
+
+    #[test]
+    fn lbfgsb_and_cg_converge_on_hard_rosenbrock_start() {
+        // Standard hard Rosenbrock start [-1.2, 1.0]. Before the strong-Wolfe
+        // line search both L-BFGS-B and CG stalled (Armijo-only steps gave invalid
+        // curvature pairs / lost conjugacy), ending far from the [1,1] minimum.
+        for method in [OptimizeMethod::LBfgsB, OptimizeMethod::ConjugateGradient] {
+            let options = MinimizeOptions {
+                method: Some(method),
+                tol: Some(1e-6),
+                maxiter: Some(2000),
+                maxfev: Some(50_000),
+                ..MinimizeOptions::default()
+            };
+            let r = minimize(rosenbrock, &[-1.2, 1.0], options).expect("minimize");
+            assert!(r.success, "{method:?} should converge: {}", r.message);
+            assert!(
+                (r.x[0] - 1.0).abs() < 1e-3 && (r.x[1] - 1.0).abs() < 1e-3,
+                "{method:?} x={:?}",
+                r.x
+            );
+        }
     }
 
     // ── Newton-CG tests ─────────────────────────────────────────────
