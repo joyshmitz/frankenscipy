@@ -1211,7 +1211,49 @@ fn gamma_sign(x: f64) -> f64 {
     }
 }
 
+/// scipy/cephes `beta` at a nonpositive-integer argument when the OTHER argument
+/// is strictly positive. The straight `Γ(a)Γ(b)/Γ(a+b)` route gives `inf − inf`
+/// in the log domain (→ NaN) and the gamma-sign product picks the wrong side of
+/// the pole, so handle these directly:
+///   * positive integer `m` with the pole at `-k` (`k ≥ m`): the Γ(b) and Γ(a+b)
+///     poles cancel, leaving the finite rational `B(m,−k) = (−1)^m (m−1)!(k−m)!/k!`
+///     (computed as `(−1)^m (m−1)! / (k·(k−1)···(k−m+1))` to avoid factorial
+///     overflow);
+///   * otherwise `+inf` (scipy's one-signed value at the simple pole).
+/// Returns `None` when neither arg is a nonpositive integer paired with a strictly
+/// positive other arg (the both-nonpositive-integer cases are cephes-specific and
+/// asymmetric — e.g. `beta(-2,-1)=-inf` but `beta(-1,-2)=+inf` — so we leave the
+/// existing path to handle them rather than guess).
+fn beta_nonpos_integer_special(a: f64, b: f64) -> Option<f64> {
+    let is_nonpos_int = |x: f64| x <= 0.0 && x.is_finite() && x.fract() == 0.0;
+    let (pole, other) = if is_nonpos_int(a) && b > 0.0 {
+        (a, b)
+    } else if is_nonpos_int(b) && a > 0.0 {
+        (b, a)
+    } else {
+        return None;
+    };
+    let k = (-pole) as i64; // nonnegative integer magnitude of the pole
+    if other.fract() == 0.0 {
+        let m = other as i64; // positive integer
+        if m >= 1 && m <= k {
+            let mut val = if m % 2 == 0 { 1.0 } else { -1.0 };
+            for i in 1..m {
+                val *= i as f64; // (m-1)!
+            }
+            for j in 0..m {
+                val /= (k - j) as f64; // k·(k-1)···(k-m+1)
+            }
+            return Some(val);
+        }
+    }
+    Some(f64::INFINITY)
+}
+
 fn beta_scalar(a: f64, b: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
+    if let Some(v) = beta_nonpos_integer_special(a, b) {
+        return Ok(v);
+    }
     // Symmetry beta(a,b)=beta(b,a)
     let (a, b) = if a < b { (b, a) } else { (a, b) };
 
@@ -1287,6 +1329,16 @@ pub fn betaln_scalar(a: f64, b: f64, mode: RuntimeMode) -> Result<f64, SpecialEr
             kind: SpecialErrorKind::DomainError,
             mode,
             detail: "betaln principal domain requires positive parameters",
+        });
+    }
+    // Nonpositive-integer argument with a positive partner: the gammaln sum below
+    // is inf − inf = NaN, so use the closed-form beta value and take its log.
+    // frankenscipy-dwd3d
+    if let Some(v) = beta_nonpos_integer_special(a, b) {
+        return Ok(if v.is_infinite() {
+            f64::INFINITY
+        } else {
+            v.abs().ln()
         });
     }
     // `betaln(a,b) = ln|B(a,b)| = gammaln(a) + gammaln(b) - gammaln(a+b)` is valid
@@ -2950,6 +3002,46 @@ mod tests {
                 "beta({a},{b}) got {got}, want {want}"
             );
         }
+    }
+
+    #[test]
+    fn beta_nonpositive_integer_args_match_scipy() {
+        // Regression (frankenscipy-dwd3d): for a nonpositive-integer argument with
+        // a positive partner the Γ poles either cancel to a finite rational
+        // (fsci previously got NaN from inf−inf) or give scipy's +inf (fsci
+        // previously got −inf from the wrong gamma-sign side). Values from
+        // scipy.special.beta / betaln 1.17.1.
+        let beta_cases = [
+            (2.0_f64, -1.0_f64, f64::INFINITY),
+            (-1.0, 2.0, f64::INFINITY),
+            (3.0, -2.0, f64::INFINITY),
+            (0.5, -1.0, f64::INFINITY),
+            (0.0, 2.0, f64::INFINITY),
+            (2.0, -2.0, 0.5),
+            (2.0, -3.0, 1.0 / 6.0),
+            (3.0, -3.0, -1.0 / 3.0),
+            (1.0, -1.0, -1.0),
+            (1.0, -4.0, -0.25),
+        ];
+        for (a, b, want) in beta_cases {
+            let got = beta_scalar(a, b, RuntimeMode::Strict).unwrap();
+            if want.is_infinite() {
+                assert!(
+                    got.is_infinite() && got.is_sign_positive(),
+                    "beta({a},{b}) = {got}, want +inf"
+                );
+            } else {
+                assert!(
+                    (got - want).abs() <= 1e-12 * want.abs().max(1.0),
+                    "beta({a},{b}) = {got}, want {want}"
+                );
+            }
+        }
+        // betaln tracks ln|beta|: betaln(2,-2)=ln(0.5), betaln(2,-1)=+inf.
+        assert!(
+            (betaln_scalar(2.0, -2.0, RuntimeMode::Strict).unwrap() - (0.5_f64).ln()).abs() < 1e-12
+        );
+        assert!(betaln_scalar(2.0, -1.0, RuntimeMode::Strict).unwrap().is_infinite());
     }
 
     #[test]

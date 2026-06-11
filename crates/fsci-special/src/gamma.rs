@@ -845,6 +845,13 @@ pub fn gammaln_scalar(x: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
         }
     }
 
+    // Γ(1) = Γ(2) = 1, so ln Γ = 0 exactly; the Lanczos series returns a ~1e-16
+    // residual at x = 1. scipy.special.gammaln returns exactly 0 here, and this
+    // also makes betaln(1,1)/beta(1,1) exact. frankenscipy-dwd3d
+    if x == 1.0 || x == 2.0 {
+        return Ok(0.0);
+    }
+
     let output = if x >= 0.5 {
         if x < 100.0 {
             lngamma_lanczos(x)
