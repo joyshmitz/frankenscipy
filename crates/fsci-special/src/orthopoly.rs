@@ -970,6 +970,137 @@ pub fn obl_cv(m: u32, n: u32, c: f64) -> f64 {
     spheroidal_cv(m, n, c, false)
 }
 
+/// Associated Legendre `P_l^m(x)` in the spheroidal (no Condon–Shortley phase)
+/// convention: `(−1)^m · lpmv(m, l, x)`.
+fn assoc_legendre_no_cs(m: u32, l: u32, x: f64) -> f64 {
+    let sign = if m % 2 == 0 { 1.0 } else { -1.0 };
+    sign * lpmv(m as i32, l, x)
+}
+
+/// Derivative w.r.t. `x` of [`assoc_legendre_no_cs`] for `|x| < 1`, via
+/// `dP_l^m/dx = [l x P_l^m − (l+m) P_{l-1}^m] / (x²−1)`.
+fn assoc_legendre_no_cs_deriv(m: u32, l: u32, x: f64) -> f64 {
+    if l == 0 {
+        return 0.0;
+    }
+    let sign = if m % 2 == 0 { 1.0 } else { -1.0 };
+    let (lf, mf) = (f64::from(l), f64::from(m));
+    sign * (lf * x * lpmv(m as i32, l, x) - (lf + mf) * lpmv(m as i32, l - 1, x)) / (x * x - 1.0)
+}
+
+/// Unit eigenvector of a (possibly non-symmetric) tridiagonal matrix with
+/// sub-diagonal `sub`, diagonal `diag`, super-diagonal `sup` for the known
+/// eigenvalue `lambda`, by inverse iteration.
+fn tridiagonal_eigenvector_nonsym(sub: &[f64], diag: &[f64], sup: &[f64], lambda: f64) -> Vec<f64> {
+    let n = diag.len();
+    let mu = lambda + (lambda.abs() + 1.0) * 1e-11;
+    let shifted: Vec<f64> = diag.iter().map(|d| d - mu).collect();
+    let mut x = vec![1.0_f64; n];
+    for _ in 0..4 {
+        let y = thomas_solve(sub, &shifted, sup, &x);
+        let norm = y.iter().map(|v| v * v).sum::<f64>().sqrt();
+        for (xi, yi) in x.iter_mut().zip(y.iter()) {
+            *xi = yi / norm;
+        }
+    }
+    x
+}
+
+/// Flammer-normalized expansion coefficients `d_r` of the spheroidal angular
+/// function of order `m`, `n` and parameter `c` (`prolate` selects `±c²`), with
+/// the harmonic for index `k` being `P_{m + (n−m mod 2) + 2k}^m`.
+///
+/// The `d_r` are the eigenvector of the non-symmetric DLMF 30.8 recurrence for
+/// the eigenvalue `λ` (found from its symmetrized form), scaled so the angular
+/// function reduces to the associated Legendre `P_n^m` at `x = 0` (its value for
+/// `n − m` even, its derivative for `n − m` odd) — SciPy's Flammer convention.
+fn spheroidal_coefficients(m: u32, n: u32, c: f64, prolate: bool) -> (Vec<f64>, u32) {
+    let cc = if prolate { c * c } else { -c * c };
+    let mf = f64::from(m);
+    let parity = (n - m) % 2;
+    let dim = (n - m) as usize / 2 + 2 * c.abs().ceil() as usize + 50;
+    let r_of = |k: usize| (parity as usize + 2 * k) as f64;
+    let a_coef = |r: f64| {
+        (2.0 * mf + r + 2.0) * (2.0 * mf + r + 1.0)
+            / ((2.0 * mf + 2.0 * r + 3.0) * (2.0 * mf + 2.0 * r + 5.0))
+            * cc
+    };
+    let b_coef = |r: f64| {
+        (mf + r) * (mf + r + 1.0)
+            + (2.0 * (mf + r) * (mf + r + 1.0) - 2.0 * mf * mf - 1.0)
+                / ((2.0 * mf + 2.0 * r - 1.0) * (2.0 * mf + 2.0 * r + 3.0))
+                * cc
+    };
+    let c_coef = |r: f64| {
+        r * (r - 1.0) / ((2.0 * mf + 2.0 * r - 3.0) * (2.0 * mf + 2.0 * r - 1.0)) * cc
+    };
+    let diag: Vec<f64> = (0..dim).map(|k| b_coef(r_of(k))).collect();
+    let sub: Vec<f64> = (0..dim).map(|k| c_coef(r_of(k))).collect();
+    let sup: Vec<f64> = (0..dim).map(|k| a_coef(r_of(k))).collect();
+    let sym_off: Vec<f64> = (0..dim - 1)
+        .map(|k| (a_coef(r_of(k)) * c_coef(r_of(k + 1))).sqrt())
+        .collect();
+    let lambda = symmetric_tridiagonal_eigenvalues(&diag, &sym_off)[(n - m) as usize / 2];
+    let mut d = tridiagonal_eigenvector_nonsym(&sub, &diag, &sup, lambda);
+
+    // Flammer normalization: scale so the function (n−m even) or its derivative
+    // (n−m odd) matches the associated Legendre P_n^m at x = 0.
+    let degree = |k: usize| m + parity + 2 * k as u32;
+    let (raw, target) = if parity == 0 {
+        (
+            (0..dim)
+                .map(|k| d[k] * assoc_legendre_no_cs(m, degree(k), 0.0))
+                .sum::<f64>(),
+            assoc_legendre_no_cs(m, n, 0.0),
+        )
+    } else {
+        (
+            (0..dim)
+                .map(|k| d[k] * assoc_legendre_no_cs_deriv(m, degree(k), 0.0))
+                .sum::<f64>(),
+            assoc_legendre_no_cs_deriv(m, n, 0.0),
+        )
+    };
+    let kappa = target / raw;
+    for value in &mut d {
+        *value *= kappa;
+    }
+    (d, parity)
+}
+
+/// Spheroidal angular function of the first kind and its derivative at `x`
+/// (`|x| < 1`); `prolate` selects prolate vs oblate.
+fn spheroidal_ang1(m: u32, n: u32, c: f64, x: f64, prolate: bool) -> (f64, f64) {
+    if n < m {
+        return (f64::NAN, f64::NAN);
+    }
+    let (d, parity) = spheroidal_coefficients(m, n, c, prolate);
+    let mut value = 0.0_f64;
+    let mut derivative = 0.0_f64;
+    for (k, &dk) in d.iter().enumerate() {
+        let l = m + parity + 2 * k as u32;
+        value += dk * assoc_legendre_no_cs(m, l, x);
+        derivative += dk * assoc_legendre_no_cs_deriv(m, l, x);
+    }
+    (value, derivative)
+}
+
+/// Prolate spheroidal angular function of the first kind `S_mn^{(1)}(c, x)` and
+/// its derivative w.r.t. `x`, matching `scipy.special.pro_ang1(m, n, c, x)`
+/// (`n ≥ m`, `|x| < 1`).
+#[must_use]
+pub fn pro_ang1(m: u32, n: u32, c: f64, x: f64) -> (f64, f64) {
+    spheroidal_ang1(m, n, c, x, true)
+}
+
+/// Oblate spheroidal angular function of the first kind `S_mn^{(1)}(c, x)` and
+/// its derivative w.r.t. `x`, matching `scipy.special.obl_ang1(m, n, c, x)`
+/// (`n ≥ m`, `|x| < 1`).
+#[must_use]
+pub fn obl_ang1(m: u32, n: u32, c: f64, x: f64) -> (f64, f64) {
+    spheroidal_ang1(m, n, c, x, false)
+}
+
 /// Evaluate the shifted Legendre polynomial P_n*(x) = P_n(2x - 1).
 ///
 /// The shifted Legendre polynomials are orthogonal on [0, 1] instead of [-1, 1].
@@ -2332,6 +2463,25 @@ mod tests {
             ],
             "all(4,-0.6,2)",
         );
+    }
+
+    #[test]
+    fn spheroidal_ang1_match_scipy() {
+        // frankenscipy: golden (value, derivative) from scipy.special.pro_ang1 / obl_ang1 (1.17.1).
+        let c = |got: (f64, f64), want: (f64, f64), msg: &str| {
+            assert!((got.0 - want.0).abs() < 1e-8, "{msg} value: got {} want {}", got.0, want.0);
+            assert!((got.1 - want.1).abs() < 1e-8, "{msg} deriv: got {} want {}", got.1, want.1);
+        };
+        c(pro_ang1(0, 1, 1.0, 0.5), (0.4877531776005848, 0.9269534809430655), "pro(0,1,1,.5)");
+        c(pro_ang1(1, 2, 2.0, 0.3), (0.8374625906386085, 2.37627584419033), "pro(1,2,2,.3)");
+        c(pro_ang1(0, 2, 3.0, 0.4), (-0.0913823901653181, 1.854929773816917), "pro(0,2,3,.4)");
+        c(pro_ang1(2, 3, 2.0, 0.6), (5.325478515120345, -2.511554419239202), "pro(2,3,2,.6)");
+        c(pro_ang1(0, 3, 5.0, -0.7), (-0.21455871795642947, 2.0630078366395237), "pro(0,3,5,-.7)");
+        c(obl_ang1(0, 1, 1.0, 0.5), (0.5127556415606529, 1.0769923985071272), "obl(0,1,1,.5)");
+        c(obl_ang1(1, 2, 2.0, 0.3), (0.8816684962327807, 2.803968096264711), "obl(1,2,2,.3)");
+        c(obl_ang1(2, 5, 3.0, 0.2), (-9.117409468924578, -32.01395997554938), "obl(2,5,3,.2)");
+        let (nan_v, nan_d) = pro_ang1(3, 1, 2.0, 0.5);
+        assert!(nan_v.is_nan() && nan_d.is_nan(), "pro_ang1 n<m -> NaN");
     }
 
     #[test]
