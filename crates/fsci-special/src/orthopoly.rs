@@ -610,6 +610,32 @@ pub fn eval_gegenbauer(n: u32, alpha: f64, x: f64) -> f64 {
     c_curr
 }
 
+/// Legendre polynomial of the first kind `P_n(z)` together with its derivatives
+/// up to order `diff_n`.
+///
+/// Returns `[P_n(z), P_n'(z), …, P_n^(diff_n)(z)]` (length `diff_n + 1`),
+/// matching `scipy.special.legendre_p(n, z, diff_n=diff_n)`. The `m`-th
+/// derivative uses the exact, everywhere-stable Gegenbauer identity
+/// `P_n^(m)(z) = (2m−1)!! · C_{n−m}^{m+1/2}(z)` (zero for `m > n`), so it is
+/// valid for all `z`, including `|z| = 1` where the ODE recurrence is singular.
+/// SciPy only implements `diff_n ∈ {0, 1, 2}`; this accepts any order.
+#[must_use]
+pub fn legendre_p(n: u32, z: f64, diff_n: usize) -> Vec<f64> {
+    let mut out = Vec::with_capacity(diff_n + 1);
+    let mut double_factorial = 1.0_f64; // (2m−1)!! accumulated across m
+    for m in 0..=diff_n {
+        if m > 0 {
+            double_factorial *= (2 * m - 1) as f64;
+        }
+        if (m as u32) > n {
+            out.push(0.0);
+        } else {
+            out.push(double_factorial * eval_gegenbauer(n - m as u32, m as f64 + 0.5, z));
+        }
+    }
+    out
+}
+
 /// Evaluate the shifted Legendre polynomial P_n*(x) = P_n(2x - 1).
 ///
 /// The shifted Legendre polynomials are orthogonal on [0, 1] instead of [-1, 1].
@@ -1918,6 +1944,26 @@ mod tests {
             &[7.875, 0.0, -5.906_25, 0.0, 0.492_187_5],
             "jacobi(4,0.5,0.5)",
         );
+    }
+
+    #[test]
+    fn legendre_p_matches_scipy() {
+        // frankenscipy: golden from scipy.special.legendre_p(n, z, diff_n=...) (1.17.1).
+        let close = |got: &[f64], want: &[f64], msg: &str| {
+            assert_eq!(got.len(), want.len(), "{msg}: len");
+            for (g, w) in got.iter().zip(want.iter()) {
+                assert!((g - w).abs() < 1e-10, "{msg}: got {g}, want {w}");
+            }
+        };
+        // value only
+        close(&legendre_p(3, 0.4, 0), &[-0.44], "P_3(0.4)");
+        // value + first + second derivative
+        close(&legendre_p(5, 0.3, 2), &[0.34538625, -0.16856249999999984, -11.4975], "P_5(0.3) d2");
+        close(&legendre_p(2, 1.0, 2), &[1.0, 3.0, 3.0], "P_2(1) d2");
+        close(&legendre_p(6, -1.0, 2), &[1.0, -21.0, 210.0], "P_6(-1) d2");
+        // diff_n exceeding the degree -> trailing zero derivatives
+        close(&legendre_p(0, 0.5, 2), &[1.0, 0.0, 0.0], "P_0(0.5) d2");
+        close(&legendre_p(1, 0.5, 2), &[0.5, 1.0, 0.0], "P_1(0.5) d2");
     }
 
     #[test]
