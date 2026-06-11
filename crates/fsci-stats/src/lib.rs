@@ -2000,13 +2000,21 @@ impl ContinuousDistribution for NoncentralChiSquared {
         // I_ν overflow that makes pdf() collapse to 0 for large λx. Finite deep
         // in the tail where the density underflows. frankenscipy-7m3xk
         if x < 0.0 || x.is_nan() {
-            return if x.is_nan() { f64::NAN } else { f64::NEG_INFINITY };
+            return if x.is_nan() {
+                f64::NAN
+            } else {
+                f64::NEG_INFINITY
+            };
         }
         if self.nc == 0.0 {
             return ChiSquared::new(self.df).logpdf(x);
         }
         if x == 0.0 {
-            return if self.df >= 2.0 { f64::NEG_INFINITY } else { f64::INFINITY };
+            return if self.df >= 2.0 {
+                f64::NEG_INFINITY
+            } else {
+                f64::INFINITY
+            };
         }
         let k = self.df;
         let lam = self.nc;
@@ -2975,7 +2983,11 @@ impl ContinuousDistribution for NoncentralF {
         //   log f = logsumexp_j [ (−λ/2 + j·ln(λ/2) − lnΓ(j+1)) + F(d1+2j, d2).logpdf(x) ]
         // Finite deep in the tail where the summed pdf underflows to 0. frankenscipy-7m3xk
         if x <= 0.0 || x.is_nan() {
-            return if x.is_nan() { f64::NAN } else { f64::NEG_INFINITY };
+            return if x.is_nan() {
+                f64::NAN
+            } else {
+                f64::NEG_INFINITY
+            };
         }
         if self.nc == 0.0 {
             return FDistribution::new(self.dfn, self.dfd).logpdf(x);
@@ -8654,8 +8666,17 @@ impl ContinuousDistribution for Cauchy {
     }
 
     fn cdf(&self, x: f64) -> f64 {
-        let z = (x - self.loc) / self.scale;
-        0.5 + z.atan() / PI
+        // Closed-form symmetric to sf(): for x < loc the naive 0.5 + atan(z)/π
+        // cancels (cdf → 0 as 0.5 + (−≈0.5)), losing all tail precision — ~2e-4
+        // relative error by x ≈ loc − 1e12·scale, ~13% by 1e15·scale. The arctan
+        // reciprocal identity gives the exact left tail cdf = atan(scale/(loc−x))/π
+        // (loc − x > 0), matching scipy bit-for-bit. x ≥ loc keeps the direct form.
+        let dz = x - self.loc;
+        if dz < 0.0 {
+            (self.scale / (self.loc - x)).atan() / PI
+        } else {
+            0.5 + (dz / self.scale).atan() / PI
+        }
     }
 
     fn sf(&self, x: f64) -> f64 {
@@ -17687,8 +17708,7 @@ impl ContinuousDistribution for GenHalfLogistic {
             return f64::NEG_INFINITY;
         }
         let base = 1.0 - self.c * x;
-        2.0_f64.ln() + (1.0 / self.c - 1.0) * base.ln()
-            - 2.0 * (1.0 + base.powf(1.0 / self.c)).ln()
+        2.0_f64.ln() + (1.0 / self.c - 1.0) * base.ln() - 2.0 * (1.0 + base.powf(1.0 / self.c)).ln()
     }
 
     fn cdf(&self, x: f64) -> f64 {
@@ -28821,7 +28841,11 @@ fn kolmogn_pomeranz(n: usize, x: f64) -> f64 {
             let conv_len = (nj2 - nj1 + 1) as usize;
             for idx in 0..conv_len {
                 let cpos = conv_start + idx;
-                let lo = if cpos >= b.len() { cpos - (b.len() - 1) } else { 0 };
+                let lo = if cpos >= b.len() {
+                    cpos - (b.len() - 1)
+                } else {
+                    0
+                };
                 let hi = cpos.min(a.len() - 1);
                 let mut s = 0.0;
                 let mut p = lo;
@@ -28881,7 +28905,8 @@ fn kolmogn_sf(n: usize, x: f64) -> Option<f64> {
             p
         } else {
             let rn = 1.0 / nf;
-            let log_nfac = nf.ln() / 2.0 - nf + (2.0 * std::f64::consts::PI).ln() / 2.0
+            let log_nfac = nf.ln() / 2.0 - nf
+                + (2.0 * std::f64::consts::PI).ln() / 2.0
                 + rn * ks_stirling_poly(rn / nf);
             (log_nfac + nf * (2.0 * t - 1.0).ln()).exp()
         };
@@ -39349,7 +39374,9 @@ fn augmented_normal_equations(x: &[Vec<f64>], y: &[f64], p: usize) -> (Vec<Vec<f
         sy
     };
 
-    let work = (p1 as u64).saturating_mul(p1 as u64).saturating_mul(n as u64);
+    let work = (p1 as u64)
+        .saturating_mul(p1 as u64)
+        .saturating_mul(n as u64);
     let nthreads = if work < 1 << 22 {
         1
     } else {
@@ -39367,15 +39394,12 @@ fn augmented_normal_equations(x: &[Vec<f64>], y: &[f64], p: usize) -> (Vec<Vec<f
         let chunk = p1.div_ceil(nthreads);
         let fill = &fill;
         std::thread::scope(|scope| {
-            for (ci, (xtx_rows, xty_slice)) in xtx
-                .chunks_mut(chunk)
-                .zip(xty.chunks_mut(chunk))
-                .enumerate()
+            for (ci, (xtx_rows, xty_slice)) in
+                xtx.chunks_mut(chunk).zip(xty.chunks_mut(chunk)).enumerate()
             {
                 let base = ci * chunk;
                 scope.spawn(move || {
-                    for (lj, (row, yj)) in
-                        xtx_rows.iter_mut().zip(xty_slice.iter_mut()).enumerate()
+                    for (lj, (row, yj)) in xtx_rows.iter_mut().zip(xty_slice.iter_mut()).enumerate()
                     {
                         *yj = fill(base + lj, row);
                     }
@@ -41300,7 +41324,11 @@ mod tests {
                 let d = $d;
                 assert_eq!(d.cdf($x), 0.0, "precondition: cdf underflowed at {}", $x);
                 let lc = d.logcdf($x);
-                assert!(lc.is_finite() && lc < -300.0, "{}: logcdf={lc}", stringify!($d));
+                assert!(
+                    lc.is_finite() && lc < -300.0,
+                    "{}: logcdf={lc}",
+                    stringify!($d)
+                );
             }};
         }
         ext_cdf!(GammaDist::new(50.0, 1.0), 1e-15); // P(50, 1e-15) → 0
@@ -41402,28 +41430,39 @@ mod tests {
 
         // Closed-form cdf must match an independent pmf-sum reference in the bulk
         // (the O(k)→O(1) swap is faithful). frankenscipy-7kq9d
-        let pmf_sum_cdf = |pmf: &dyn Fn(u64) -> f64, k: u64| -> f64 {
-            (0..=k).map(pmf).sum::<f64>().min(1.0)
-        };
+        let pmf_sum_cdf =
+            |pmf: &dyn Fn(u64) -> f64, k: u64| -> f64 { (0..=k).map(pmf).sum::<f64>().min(1.0) };
         {
             let d = Poisson::new(10.0);
             for k in [0u64, 3, 8, 12, 20] {
                 let r = pmf_sum_cdf(&|i| d.pmf(i), k);
-                assert!((d.cdf(k) - r).abs() <= 1e-9, "poisson cdf({k})={} vs {r}", d.cdf(k));
+                assert!(
+                    (d.cdf(k) - r).abs() <= 1e-9,
+                    "poisson cdf({k})={} vs {r}",
+                    d.cdf(k)
+                );
             }
         }
         {
             let d = Binomial::new(20, 0.3);
             for k in [0u64, 3, 6, 10, 19, 20] {
                 let r = pmf_sum_cdf(&|i| d.pmf(i), k);
-                assert!((d.cdf(k) - r).abs() <= 1e-9, "binom cdf({k})={} vs {r}", d.cdf(k));
+                assert!(
+                    (d.cdf(k) - r).abs() <= 1e-9,
+                    "binom cdf({k})={} vs {r}",
+                    d.cdf(k)
+                );
             }
         }
         {
             let d = NegBinomial::new(5.0, 0.5);
             for k in [0u64, 3, 8, 15, 30] {
                 let r = pmf_sum_cdf(&|i| d.pmf(i), k);
-                assert!((d.cdf(k) - r).abs() <= 1e-9, "nbinom cdf({k})={} vs {r}", d.cdf(k));
+                assert!(
+                    (d.cdf(k) - r).abs() <= 1e-9,
+                    "nbinom cdf({k})={} vs {r}",
+                    d.cdf(k)
+                );
             }
         }
 
@@ -41432,7 +41471,10 @@ mod tests {
         // finite and large-negative.
         let p = Poisson::new(10.0);
         let s = p.sf(200);
-        assert!(s > 0.0 && s < 1e-100, "closed sf accurate in deep tail: {s}");
+        assert!(
+            s > 0.0 && s < 1e-100,
+            "closed sf accurate in deep tail: {s}"
+        );
         assert!(p.logsf(200).is_finite() && p.logsf(200) < -300.0);
         assert!(1.0 - p.cdf(200) < 1e-15, "default 1-cdf collapsed");
     }
@@ -41512,7 +41554,11 @@ mod tests {
                 let d = $d;
                 assert_eq!(d.pdf($x), 0.0, "precondition: pdf underflowed at {}", $x);
                 let lp = d.logpdf($x);
-                assert!(lp.is_finite() && lp < -300.0, "{}: logpdf={lp}", stringify!($d));
+                assert!(
+                    lp.is_finite() && lp < -300.0,
+                    "{}: logpdf={lp}",
+                    stringify!($d)
+                );
             }};
         }
         tail!(Exponential::new(1.5), 1000.0); // −1.5·1000
@@ -41558,7 +41604,11 @@ mod tests {
                 let d = $d;
                 assert_eq!(d.pdf($x), 0.0, "precondition: pdf underflowed at {}", $x);
                 let lp = d.logpdf($x);
-                assert!(lp.is_finite() && lp < -300.0, "{}: logpdf={lp}", stringify!($d));
+                assert!(
+                    lp.is_finite() && lp < -300.0,
+                    "{}: logpdf={lp}",
+                    stringify!($d)
+                );
             }};
         }
         tail!(HalfNormal, 40.0); // −x²/2 = −800
@@ -41613,10 +41663,30 @@ mod tests {
         // form ½·Q(1/β,|x|^β) is exact, and logcdf now stays finite. Reference
         // values from scipy.stats.gennorm 1.17.1.
         let cases: &[(f64, f64, f64, f64)] = &[
-            (1.5, -30.0, 2.924_238_171_735_146_7e-73, -167.015_677_795_913_2),
-            (1.5, -10.0, 2.134_498_974_764_425_3e-15, -33.780_544_448_011_426),
-            (2.5, -10.0, 3.282_333_937_652_431_5e-140, -321.173_358_283_456_2),
-            (1.0, -50.0, 9.643_749_239_819_591e-23, -50.693_147_180_559_95),
+            (
+                1.5,
+                -30.0,
+                2.924_238_171_735_146_7e-73,
+                -167.015_677_795_913_2,
+            ),
+            (
+                1.5,
+                -10.0,
+                2.134_498_974_764_425_3e-15,
+                -33.780_544_448_011_426,
+            ),
+            (
+                2.5,
+                -10.0,
+                3.282_333_937_652_431_5e-140,
+                -321.173_358_283_456_2,
+            ),
+            (
+                1.0,
+                -50.0,
+                9.643_749_239_819_591e-23,
+                -50.693_147_180_559_95,
+            ),
         ];
         for &(beta, x, want_cdf, want_logcdf) in cases {
             let d = GenNorm::new(beta);
@@ -41671,7 +41741,11 @@ mod tests {
                 let d = $d;
                 assert_eq!(d.pdf($x), 0.0, "precondition: pdf underflowed at {}", $x);
                 let lp = d.logpdf($x);
-                assert!(lp.is_finite() && lp < -300.0, "{}: logpdf={lp}", stringify!($d));
+                assert!(
+                    lp.is_finite() && lp < -300.0,
+                    "{}: logpdf={lp}",
+                    stringify!($d)
+                );
             }};
         }
         tail!(GenGamma::new(2.0, 1.5), 200.0); // −x^1.5 = −2828
@@ -41716,7 +41790,11 @@ mod tests {
                 let d = $d;
                 assert_eq!(d.pdf($x), 0.0, "precondition: pdf underflowed at {}", $x);
                 let lp = d.logpdf($x);
-                assert!(lp.is_finite() && lp < -300.0, "{}: logpdf={lp}", stringify!($d));
+                assert!(
+                    lp.is_finite() && lp < -300.0,
+                    "{}: logpdf={lp}",
+                    stringify!($d)
+                );
             }};
         }
         tail!(Gibrat, 1e30); // −½·(ln x)² ≈ −2386
@@ -41765,7 +41843,11 @@ mod tests {
                 let d = $d;
                 assert_eq!(d.pdf($x), 0.0, "precondition: pdf underflowed at {}", $x);
                 let lp = d.logpdf($x);
-                assert!(lp.is_finite() && lp < -300.0, "{}: logpdf={lp}", stringify!($d));
+                assert!(
+                    lp.is_finite() && lp < -300.0,
+                    "{}: logpdf={lp}",
+                    stringify!($d)
+                );
             }};
         }
         tail!(HypSecant, 800.0); // −|x| ≈ −800
@@ -41807,7 +41889,11 @@ mod tests {
                 let d = $d;
                 assert_eq!(d.pdf($x), 0.0, "precondition: pdf underflowed at {}", $x);
                 let lp = d.logpdf($x);
-                assert!(lp.is_finite() && lp < -300.0, "{}: logpdf={lp}", stringify!($d));
+                assert!(
+                    lp.is_finite() && lp < -300.0,
+                    "{}: logpdf={lp}",
+                    stringify!($d)
+                );
             }};
         }
         tail!(PowerNorm::new(2.0), 40.0); // ≈ −½·40²
@@ -41902,7 +41988,11 @@ mod tests {
         for &x in &[0.5, 2.0, 6.0, 12.0] {
             let lp = d.logpdf(x);
             let p = d.pdf(x);
-            assert!(p > 0.0 && (lp - p.ln()).abs() <= 1e-7, "logpdf({x})={lp} vs ln(pdf)={}", p.ln());
+            assert!(
+                p > 0.0 && (lp - p.ln()).abs() <= 1e-7,
+                "logpdf({x})={lp} vs ln(pdf)={}",
+                p.ln()
+            );
         }
         // nc → central chi².
         let nz = NoncentralChiSquared::new(5.0, 0.0);
@@ -41926,12 +42016,19 @@ mod tests {
         for &x in &[0.5, 1.0, 3.0, 8.0] {
             let lp = d.logpdf(x);
             let p = d.pdf(x);
-            assert!(p > 0.0 && (lp - p.ln()).abs() <= 1e-7, "logpdf({x})={lp} vs ln(pdf)={}", p.ln());
+            assert!(
+                p > 0.0 && (lp - p.ln()).abs() <= 1e-7,
+                "logpdf({x})={lp} vs ln(pdf)={}",
+                p.ln()
+            );
         }
         // Tail: b·x = 800 > 709 → pdf's I₀ overflows (pdf NaN/0), logpdf finite.
         let lp = d.logpdf(400.0);
         assert!(lp.is_finite() && lp < -100.0, "rice tail logpdf={lp}");
-        assert!(!(d.pdf(400.0) > 0.0 && d.pdf(400.0).is_finite()), "pdf should be unreliable here");
+        assert!(
+            !(d.pdf(400.0) > 0.0 && d.pdf(400.0).is_finite()),
+            "pdf should be unreliable here"
+        );
         assert_eq!(d.logpdf(-1.0), f64::NEG_INFINITY);
     }
 
@@ -41944,7 +42041,11 @@ mod tests {
         for &x in &[0.3, 1.0, 3.0, 8.0] {
             let lp = d.logpdf(x);
             let p = d.pdf(x);
-            assert!(p > 0.0 && (lp - p.ln()).abs() <= 1e-7, "logpdf({x})={lp} vs ln(pdf)={}", p.ln());
+            assert!(
+                p > 0.0 && (lp - p.ln()).abs() <= 1e-7,
+                "logpdf({x})={lp} vs ln(pdf)={}",
+                p.ln()
+            );
         }
         // nc → central F.
         let nz = NoncentralF::new(5.0, 10.0, 0.0);
@@ -42001,7 +42102,10 @@ mod tests {
         let (lp1, lp2) = (nct.logpdf(1.0e6), nct.logpdf(2.0e6));
         assert!(lp1.is_finite() && lp2.is_finite() && lp1 < -100.0);
         let slope = (lp2 - lp1) / (2.0e6f64.ln() - 1.0e6f64.ln());
-        assert!((slope - -(10.0 + 1.0)).abs() < 0.2, "nct tail slope {slope} vs −11");
+        assert!(
+            (slope - -(10.0 + 1.0)).abs() < 0.2,
+            "nct tail slope {slope} vs −11"
+        );
 
         // VonMises large κ: pdf's I₀(κ) overflows → pdf NaN/inf; logpdf finite.
         let vm = VonMises::new(800.0, 0.0);
@@ -42233,7 +42337,10 @@ mod tests {
         for (dfn, dfd, x, expected) in cases {
             let got = FDistribution::new(dfn, dfd).sf(x);
             let rel = ((got - expected) / expected).abs();
-            assert!(rel < 1e-6, "F({dfn},{dfd}).sf({x}) = {got:e}, scipy {expected:e}, rel={rel:e}");
+            assert!(
+                rel < 1e-6,
+                "F({dfn},{dfd}).sf({x}) = {got:e}, scipy {expected:e}, rel={rel:e}"
+            );
         }
     }
 
@@ -42267,7 +42374,10 @@ mod tests {
         for (a, b, x, expected) in cases {
             let got = BetaDist::new(a, b).sf(x);
             let rel = ((got - expected) / expected).abs();
-            assert!(rel < 1e-12, "Beta({a},{b}).sf({x}) = {got:e}, scipy {expected:e}, rel={rel:e}");
+            assert!(
+                rel < 1e-12,
+                "Beta({a},{b}).sf({x}) = {got:e}, scipy {expected:e}, rel={rel:e}"
+            );
         }
     }
 
@@ -42284,7 +42394,10 @@ mod tests {
         for (a, c, x, expected) in cases {
             let got = GenGamma::new(a, c).sf(x);
             let rel = ((got - expected) / expected).abs();
-            assert!(rel < 1e-12, "GenGamma({a},{c}).sf({x}) = {got:e}, scipy {expected:e}, rel={rel:e}");
+            assert!(
+                rel < 1e-12,
+                "GenGamma({a},{c}).sf({x}) = {got:e}, scipy {expected:e}, rel={rel:e}"
+            );
         }
     }
 
@@ -44553,6 +44666,35 @@ mod tests {
         );
         // sf + cdf = 1 near the centre.
         for &x in &[-2.0_f64, 0.0, 1.0, 5.0] {
+            assert_close(c.sf(x) + c.cdf(x), 1.0, 1e-12, "Cauchy sf + cdf = 1");
+        }
+    }
+
+    #[test]
+    fn cauchy_cdf_preserves_deep_left_tail_precision() {
+        // Symmetric counterpart to cauchy_sf_preserves_deep_tail_precision: the
+        // naive cdf = 0.5 + atan(z)/π cancels in the deep LEFT tail (0.5 + (−≈0.5))
+        // — ~2e-4 relative error by x = −1e12, ~13% by −1e15. The closed form
+        // arctan(scale/(loc−x))/π matches scipy bit-for-bit. logcdf inherits it.
+        let c = Cauchy::new(0.0, 1.0);
+        for &x in &[-1.0e10_f64, -1.0e12, -1.0e14, -1.0e15] {
+            let actual = c.cdf(x);
+            let expected = (1.0_f64 / (-x)).atan() / PI; // scipy-exact left tail
+            assert!(actual > 0.0, "Cauchy.cdf({x}) must be > 0, got {actual}");
+            let rel = (actual - expected).abs() / expected.abs();
+            assert!(
+                rel < 1e-12,
+                "Cauchy cdf deep left tail x={x}: got {actual}, expected {expected} (rel={rel})"
+            );
+            // logcdf must inherit the stable cdf (no -inf / lost precision).
+            let rel_log = (c.logcdf(x) - expected.ln()).abs() / expected.ln().abs();
+            assert!(
+                rel_log < 1e-12,
+                "Cauchy logcdf deep left tail x={x}: rel={rel_log}"
+            );
+        }
+        // Unchanged on x ≥ loc and consistency at the centre.
+        for &x in &[0.0_f64, 1.0, 5.0, 100.0] {
             assert_close(c.sf(x) + c.cdf(x), 1.0, 1e-12, "Cauchy sf + cdf = 1");
         }
     }
@@ -48244,20 +48386,71 @@ mod tests {
         // scipy.stats.<dist>.isf(q) (SciPy 1.17.1).
         let cases: &[(&str, f64, f64, f64)] = &[
             // (label, our isf, q, scipy golden)
-            ("norm_1e-30", Normal::new(0.0, 1.0).isf(1e-30), 1e-30, 1.1464024688442578e1),
-            ("norm_1e-100", Normal::new(0.0, 1.0).isf(1e-100), 1e-100, 2.1273453560964981e1),
-            ("expon_1e-100", Exponential::new(1.0).isf(1e-100), 1e-100, 2.3025850929935905e2),
-            ("t5_1e-100", StudentT::new(5.0).isf(1e-100), 1e-100, 1.5683925590997631e20),
-            ("chi2_4_1e-30", ChiSquared::new(4.0).isf(1e-30), 1e-30, 1.4677366344602950e2),
-            ("gamma2_1e-100", GammaDist::new(2.0, 1.0).isf(1e-100), 1e-100, 2.3572541016191974e2),
-            ("cauchy_1e-100", Cauchy::new(0.0, 1.0).isf(1e-100), 1e-100, 3.1830988618377588e99),
-            ("rayleigh_1e-30", Rayleigh::new(1.0).isf(1e-30), 1e-30, 1.1753940002386489e1),
-            ("weibull_1e-100", Weibull::new(1.5, 1.0).isf(1e-100), 1e-100, 3.7567341186477364e1),
+            (
+                "norm_1e-30",
+                Normal::new(0.0, 1.0).isf(1e-30),
+                1e-30,
+                1.1464024688442578e1,
+            ),
+            (
+                "norm_1e-100",
+                Normal::new(0.0, 1.0).isf(1e-100),
+                1e-100,
+                2.1273453560964981e1,
+            ),
+            (
+                "expon_1e-100",
+                Exponential::new(1.0).isf(1e-100),
+                1e-100,
+                2.3025850929935905e2,
+            ),
+            (
+                "t5_1e-100",
+                StudentT::new(5.0).isf(1e-100),
+                1e-100,
+                1.5683925590997631e20,
+            ),
+            (
+                "chi2_4_1e-30",
+                ChiSquared::new(4.0).isf(1e-30),
+                1e-30,
+                1.4677366344602950e2,
+            ),
+            (
+                "gamma2_1e-100",
+                GammaDist::new(2.0, 1.0).isf(1e-100),
+                1e-100,
+                2.3572541016191974e2,
+            ),
+            (
+                "cauchy_1e-100",
+                Cauchy::new(0.0, 1.0).isf(1e-100),
+                1e-100,
+                3.1830988618377588e99,
+            ),
+            (
+                "rayleigh_1e-30",
+                Rayleigh::new(1.0).isf(1e-30),
+                1e-30,
+                1.1753940002386489e1,
+            ),
+            (
+                "weibull_1e-100",
+                Weibull::new(1.5, 1.0).isf(1e-100),
+                1e-100,
+                3.7567341186477364e1,
+            ),
         ];
         for &(label, ours, _q, golden) in cases {
-            assert!(ours.is_finite(), "{label}: isf must be finite in the deep tail, got {ours}");
+            assert!(
+                ours.is_finite(),
+                "{label}: isf must be finite in the deep tail, got {ours}"
+            );
             let rel = (ours - golden).abs() / golden.abs();
-            assert!(rel < 1e-9, "{label}: isf {ours} vs scipy {golden} (rel {rel:.3e})");
+            assert!(
+                rel < 1e-9,
+                "{label}: isf {ours} vs scipy {golden} (rel {rel:.3e})"
+            );
         }
     }
 
@@ -48267,11 +48460,19 @@ mod tests {
         // the historical ppf(1 - q) route (no regression on tested cases).
         let n = Normal::new(0.0, 1.0);
         for &q in &[1e-6, 1e-3, 0.1, 0.5, 0.9, 0.999, 0.999_999] {
-            assert_eq!(n.isf(q).to_bits(), n.ppf(1.0 - q).to_bits(), "norm isf({q})");
+            assert_eq!(
+                n.isf(q).to_bits(),
+                n.ppf(1.0 - q).to_bits(),
+                "norm isf({q})"
+            );
         }
         let g = GammaDist::new(2.0, 1.0);
         for &q in &[1e-4, 1e-2, 0.25, 0.75, 0.99] {
-            assert_eq!(g.isf(q).to_bits(), g.ppf(1.0 - q).to_bits(), "gamma isf({q})");
+            assert_eq!(
+                g.isf(q).to_bits(),
+                g.ppf(1.0 - q).to_bits(),
+                "gamma isf({q})"
+            );
         }
     }
 
@@ -50376,11 +50577,23 @@ mod tests {
         let y = [5.0, 6.0, 7.0, 8.0];
         let r = mannwhitneyu(&x, &y);
         assert_eq!(r.statistic, 0.0);
-        assert!((r.pvalue - 0.02857142857142857).abs() < 1e-12, "two-sided {}", r.pvalue);
+        assert!(
+            (r.pvalue - 0.02857142857142857).abs() < 1e-12,
+            "two-sided {}",
+            r.pvalue
+        );
         let less = mannwhitneyu_alternative(&x, &y, "less");
-        assert!((less.pvalue - 0.014285714285714285).abs() < 1e-12, "less {}", less.pvalue);
+        assert!(
+            (less.pvalue - 0.014285714285714285).abs() < 1e-12,
+            "less {}",
+            less.pvalue
+        );
         let greater = mannwhitneyu_alternative(&x, &y, "greater");
-        assert!((greater.pvalue - 1.0).abs() < 1e-12, "greater {}", greater.pvalue);
+        assert!(
+            (greater.pvalue - 1.0).abs() < 1e-12,
+            "greater {}",
+            greater.pvalue
+        );
 
         // scipy's two-sided statistic is U1 (for x), not min(U1, U2): x all larger.
         let r2 = mannwhitneyu(&y, &x);
@@ -50394,8 +50607,18 @@ mod tests {
         let gr = mannwhitneyu_alternative(&a, &b, "greater");
         let ls = mannwhitneyu_alternative(&a, &b, "less");
         let sp = scipy_mwu_ref(&a, &b);
-        assert!((gr.pvalue - sp.0).abs() < 1e-9, "asym greater {} vs {}", gr.pvalue, sp.0);
-        assert!((ls.pvalue - sp.1).abs() < 1e-9, "asym less {} vs {}", ls.pvalue, sp.1);
+        assert!(
+            (gr.pvalue - sp.0).abs() < 1e-9,
+            "asym greater {} vs {}",
+            gr.pvalue,
+            sp.0
+        );
+        assert!(
+            (ls.pvalue - sp.1).abs() < 1e-9,
+            "asym less {} vs {}",
+            ls.pvalue,
+            sp.1
+        );
     }
 
     // Reference asymptotic MWU (continuity-corrected) computed the scipy way, for
@@ -50405,14 +50628,21 @@ mod tests {
         let mut u1 = 0.0;
         for &xi in x {
             for &yj in y {
-                if xi > yj { u1 += 1.0; } else if xi == yj { u1 += 0.5; }
+                if xi > yj {
+                    u1 += 1.0;
+                } else if xi == yj {
+                    u1 += 0.5;
+                }
             }
         }
         let u2 = n1 * n2 - u1;
         let mu = n1 * n2 / 2.0;
         let sigma = (n1 * n2 * (n1 + n2 + 1.0) / 12.0).sqrt();
         let nd = Normal::standard();
-        (nd.sf((u1 - mu - 0.5) / sigma), nd.sf((u2 - mu - 0.5) / sigma))
+        (
+            nd.sf((u1 - mu - 0.5) / sigma),
+            nd.sf((u2 - mu - 0.5) / sigma),
+        )
     }
 
     #[test]
@@ -53291,7 +53521,9 @@ mod tests {
         // to float tolerance across distinct values, x-ties, y-ties, and both rankings.
         let mut s = 0x1234_5678_9abc_def0u64;
         let mut rng = || {
-            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             (s >> 11) as f64 / (1u64 << 53) as f64
         };
         for &n in &[2usize, 3, 7, 40, 200] {
@@ -53434,7 +53666,11 @@ mod tests {
         let n = 2000usize;
         let d = 16usize;
         let data: Vec<Vec<f64>> = (0..n)
-            .map(|i| (0..d).map(|j| (i as f64 * 0.013 + j as f64 * 0.7).sin()).collect())
+            .map(|i| {
+                (0..d)
+                    .map(|j| (i as f64 * 0.013 + j as f64 * 0.7).sin())
+                    .collect()
+            })
             .collect();
         let seq_ref = |data: &[Vec<f64>]| -> Vec<Vec<f64>> {
             let n = data.len();
@@ -53525,12 +53761,7 @@ mod tests {
                 })
                 .collect();
             let y: Vec<Vec<f64>> = (0..n)
-                .map(|i| {
-                    vec![
-                        (i as f64 * 0.19 + 0.5).cos(),
-                        (i as f64 * 0.23).sin(),
-                    ]
-                })
+                .map(|i| vec![(i as f64 * 0.19 + 0.5).cos(), (i as f64 * 0.23).sin()])
                 .collect();
             let dist_x = pairwise_euclidean_distance_matrix(&x);
             let dist_y = pairwise_euclidean_distance_matrix(&y);
@@ -60351,7 +60582,12 @@ mod tests {
         let ties_y = [1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0, 5.0];
         let r = kendalltau(&ties_x, &ties_y);
         assert_close(r.statistic, 0.857_321_409_974_112_4, 1e-12, "ties tau");
-        assert_close(r.pvalue, 0.006_153_264_693_374_078, 1e-9, "ties p (tie-corrected)");
+        assert_close(
+            r.pvalue,
+            0.006_153_264_693_374_078,
+            1e-9,
+            "ties p (tie-corrected)",
+        );
 
         let hx = [1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0, 3.0, 3.0];
         let hy = [1.0, 1.0, 2.0, 2.0, 2.0, 3.0, 3.0, 3.0, 3.0, 4.0];
@@ -60362,7 +60598,12 @@ mod tests {
         let lx: Vec<f64> = (0..30).map(|i| (i as f64 * 0.37).sin()).collect();
         let ly: Vec<f64> = (0..30).map(|i| (i as f64 * 0.29).cos()).collect();
         let r = kendalltau(&lx, &ly);
-        assert_close(r.pvalue, 8.428_296_862_924_907e-5, 1e-9, "n=30 untied exact p");
+        assert_close(
+            r.pvalue,
+            8.428_296_862_924_907e-5,
+            1e-9,
+            "n=30 untied exact p",
+        );
     }
 
     #[test]
@@ -61235,12 +61476,28 @@ mod tests {
         let x = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
         let y = [1.3, 1.5, 3.8, 2.9, 6.4, 4.1, 9.2, 7.3];
         let r = wilcoxon(&x, &y);
-        assert!((r.statistic - 17.0).abs() < 1e-12, "two-sided stat = {}", r.statistic);
-        assert!((r.pvalue - 0.9453125).abs() < 1e-10, "two-sided p = {}", r.pvalue);
+        assert!(
+            (r.statistic - 17.0).abs() < 1e-12,
+            "two-sided stat = {}",
+            r.statistic
+        );
+        assert!(
+            (r.pvalue - 0.9453125).abs() < 1e-10,
+            "two-sided p = {}",
+            r.pvalue
+        );
         let less = wilcoxon_alternative(&x, &y, "less");
-        assert!((less.pvalue - 0.47265625).abs() < 1e-10, "less p = {}", less.pvalue);
+        assert!(
+            (less.pvalue - 0.47265625).abs() < 1e-10,
+            "less p = {}",
+            less.pvalue
+        );
         let greater = wilcoxon_alternative(&x, &y, "greater");
-        assert!((greater.pvalue - 0.578125).abs() < 1e-10, "greater p = {}", greater.pvalue);
+        assert!(
+            (greater.pvalue - 0.578125).abs() < 1e-10,
+            "greater p = {}",
+            greater.pvalue
+        );
 
         // The pmf is a proper distribution (sums to 1) and symmetric.
         let pmf = wilcoxon_signed_rank_pmf(8);
@@ -61259,30 +61516,74 @@ mod tests {
         // Case A: ties (5,5) + a zero, n=7.
         let a = vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 5.0];
         let ra = wilcoxon(&a, &zero);
-        assert!((ra.statistic - 0.0).abs() < 1e-12, "A stat = {}", ra.statistic);
-        assert!((ra.pvalue - 0.03125).abs() < 1e-12, "A two-sided p = {}", ra.pvalue);
+        assert!(
+            (ra.statistic - 0.0).abs() < 1e-12,
+            "A stat = {}",
+            ra.statistic
+        );
+        assert!(
+            (ra.pvalue - 0.03125).abs() < 1e-12,
+            "A two-sided p = {}",
+            ra.pvalue
+        );
         let a_gt = wilcoxon_alternative(&a, &zero, "greater");
-        assert!((a_gt.pvalue - 0.015625).abs() < 1e-12, "A greater p = {}", a_gt.pvalue);
+        assert!(
+            (a_gt.pvalue - 0.015625).abs() < 1e-12,
+            "A greater p = {}",
+            a_gt.pvalue
+        );
         let a_lt = wilcoxon_alternative(&a, &zero, "less");
-        assert!((a_lt.pvalue - 1.0).abs() < 1e-12, "A less p = {}", a_lt.pvalue);
+        assert!(
+            (a_lt.pvalue - 1.0).abs() < 1e-12,
+            "A less p = {}",
+            a_lt.pvalue
+        );
 
         // Case B: zeros only (no ties), n=6.
         let b = vec![0.0, 0.0, -1.0, 2.0, -3.0, 4.0];
         let rb = wilcoxon(&b, &vec![0.0; 6]);
-        assert!((rb.statistic - 4.0).abs() < 1e-12, "B stat = {}", rb.statistic);
-        assert!((rb.pvalue - 0.875).abs() < 1e-12, "B two-sided p = {}", rb.pvalue);
+        assert!(
+            (rb.statistic - 4.0).abs() < 1e-12,
+            "B stat = {}",
+            rb.statistic
+        );
+        assert!(
+            (rb.pvalue - 0.875).abs() < 1e-12,
+            "B two-sided p = {}",
+            rb.pvalue
+        );
         let b_gt = wilcoxon_alternative(&b, &vec![0.0; 6], "greater");
-        assert!((b_gt.pvalue - 0.4375).abs() < 1e-12, "B greater p = {}", b_gt.pvalue);
+        assert!(
+            (b_gt.pvalue - 0.4375).abs() < 1e-12,
+            "B greater p = {}",
+            b_gt.pvalue
+        );
 
         // Case C: ties only (no zeros), n=8.
         let c = vec![1.0, -1.0, 2.0, 2.0, -3.0, 3.0, 4.0, -4.0];
         let rc = wilcoxon(&c, &vec![0.0; 8]);
-        assert!((rc.statistic - 14.5).abs() < 1e-12, "C stat = {}", rc.statistic);
-        assert!((rc.pvalue - 0.703125).abs() < 1e-12, "C two-sided p = {}", rc.pvalue);
+        assert!(
+            (rc.statistic - 14.5).abs() < 1e-12,
+            "C stat = {}",
+            rc.statistic
+        );
+        assert!(
+            (rc.pvalue - 0.703125).abs() < 1e-12,
+            "C two-sided p = {}",
+            rc.pvalue
+        );
         let c_lt = wilcoxon_alternative(&c, &vec![0.0; 8], "less");
-        assert!((c_lt.pvalue - 0.6953125).abs() < 1e-12, "C less p = {}", c_lt.pvalue);
+        assert!(
+            (c_lt.pvalue - 0.6953125).abs() < 1e-12,
+            "C less p = {}",
+            c_lt.pvalue
+        );
         let c_gt = wilcoxon_alternative(&c, &vec![0.0; 8], "greater");
-        assert!((c_gt.pvalue - 0.3515625).abs() < 1e-12, "C greater p = {}", c_gt.pvalue);
+        assert!(
+            (c_gt.pvalue - 0.3515625).abs() < 1e-12,
+            "C greater p = {}",
+            c_gt.pvalue
+        );
     }
 
     #[test]
