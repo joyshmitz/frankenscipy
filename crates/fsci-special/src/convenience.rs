@@ -1400,6 +1400,69 @@ pub fn itj0y0(x: f64) -> (f64, f64) {
     }
 }
 
+/// Integrals of the Airy functions from 0 to `x`, matching `scipy.special.itairy`.
+///
+/// Returns `(Apt, Bpt, Ant, Bnt)` where
+/// `Apt = ∫₀ˣ Ai(t) dt`, `Bpt = ∫₀ˣ Bi(t) dt`,
+/// `Ant = ∫₀ˣ Ai(−t) dt`, `Bnt = ∫₀ˣ Bi(−t) dt`.
+///
+/// Evaluated by integrating the Airy Maclaurin series `Ai = c₁f − c₂g`,
+/// `Bi = √3(c₁f + c₂g)` term-by-term, where `∫f = Σ_k a_k x^{3k+1}/(3k+1)!`,
+/// `∫g = Σ_k b_k x^{3k+2}/(3k+2)!` (and the sign-alternated versions give the
+/// negative-axis integrals). `c₁ = Ai(0)`, `c₂ = −Ai'(0)`. For `x < 0` the
+/// integrals reflect: `itairy(−x) = (−Ant, −Bnt, −Apt, −Bpt)`.
+///
+/// This is accurate to ≈1e-9 (often full f64) for `|x| ≲ 10` — far more accurate
+/// than scipy's specfun ITAIRY, which carries ~1e-5 error already by `x = 5`.
+/// The cancellation in `Apt/Ant/Bnt` (which tend to finite limits while `f, g`
+/// grow) erodes precision for larger `|x|`, as it does in scipy.
+#[must_use]
+pub fn itairy(x: f64) -> (f64, f64, f64, f64) {
+    if x.is_nan() {
+        return (f64::NAN, f64::NAN, f64::NAN, f64::NAN);
+    }
+    if x == 0.0 {
+        return (0.0, 0.0, 0.0, 0.0);
+    }
+    if x < 0.0 {
+        let (apt, bpt, ant, bnt) = itairy(-x);
+        return (-ant, -bnt, -apt, -bpt);
+    }
+    const C1: f64 = 0.355_028_053_887_817_2; // Ai(0)
+    const C2: f64 = 0.258_819_403_792_806_8; // -Ai'(0)
+    let sq3 = 3.0_f64.sqrt();
+    let x3 = x * x * x;
+
+    let (mut f, mut fa, mut g, mut ga) = (0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64);
+    let mut tf = x; // ∫f term, k=0
+    let mut tg = x * x / 2.0; // ∫g term, k=0
+    let mut k = 0usize;
+    let mut sign = 1.0_f64;
+    loop {
+        f += tf;
+        fa += sign * tf;
+        g += tg;
+        ga += sign * tg;
+        let kf = k as f64;
+        tf *= (3.0 * kf + 1.0) * x3 / ((3.0 * kf + 2.0) * (3.0 * kf + 3.0) * (3.0 * kf + 4.0));
+        tg *= (3.0 * kf + 2.0) * x3 / ((3.0 * kf + 3.0) * (3.0 * kf + 4.0) * (3.0 * kf + 5.0));
+        k += 1;
+        sign = -sign;
+        if (tf.abs() < 1e-20 * f.abs().max(1.0)
+            && tg.abs() < 1e-20 * g.abs().max(1.0)
+            && (k as f64) > 2.0 * x)
+            || k > 400
+        {
+            break;
+        }
+    }
+    let apt = C1 * f - C2 * g;
+    let bpt = sq3 * (C1 * f + C2 * g);
+    let ant = C1 * fa + C2 * ga;
+    let bnt = sq3 * (C1 * fa - C2 * ga);
+    (apt, bpt, ant, bnt)
+}
+
 /// Integral of H_0(t) / t from x to infinity.
 ///
 /// Matches `scipy.special.it2struve0`. The identity
@@ -11577,6 +11640,32 @@ mod tests {
             (result - 0.3068528194400546).abs() < 1e-6,
             "kl_div(1, 2) = {result}, expected 0.3068528194400546"
         );
+    }
+
+    #[test]
+    fn itairy_matches_reference_values() {
+        // frankenscipy: integrals of Airy functions were missing. Golden
+        // (Apt, Bpt, Ant, Bnt) from mpmath (dps=25) — we are far more accurate
+        // than scipy's specfun ITAIRY here, so the reference is the true integral.
+        let cases = [
+            (0.5_f64, 0.14595330491185718, 0.3653384655095201, 0.20880954755731607, 0.2500627554377472),
+            (1.0, 0.2363173419171098, 0.8727691167380082, 0.4656739834670686, 0.37300500963429495),
+            (2.0, 0.3125327557806797, 2.8734082599825452, 0.9017728260386064, 0.19354740799810316),
+            (5.0, 0.33328759030591787, 321.47831857046515, 0.7178822045478277, 0.15873093858143864),
+            (8.0, 0.33333331724248355, 440065.2580490418, 0.7839825965711773, -0.014756446293227662),
+        ];
+        for (x, apt, bpt, ant, bnt) in cases {
+            let (a, b, an, bn) = super::itairy(x);
+            assert!((a - apt).abs() <= 1e-9 * apt.abs().max(1.0), "Apt({x}) = {a}, want {apt}");
+            assert!((b - bpt).abs() <= 1e-9 * bpt.abs().max(1.0), "Bpt({x}) = {b}, want {bpt}");
+            assert!((an - ant).abs() <= 1e-9 * ant.abs().max(1.0), "Ant({x}) = {an}, want {ant}");
+            assert!((bn - bnt).abs() <= 1e-9 * bnt.abs().max(1.0), "Bnt({x}) = {bn}, want {bnt}");
+        }
+        // Reflection: itairy(-x) = (-Ant, -Bnt, -Apt, -Bpt). x=0 → all zero.
+        let (a, b, an, bn) = super::itairy(-1.0);
+        assert!((a + 0.4656739834670686).abs() < 1e-9 && (b + 0.37300500963429495).abs() < 1e-9);
+        assert!((an + 0.2363173419171098).abs() < 1e-9 && (bn + 0.8727691167380082).abs() < 1e-9);
+        assert_eq!(super::itairy(0.0), (0.0, 0.0, 0.0, 0.0));
     }
 
     #[test]
