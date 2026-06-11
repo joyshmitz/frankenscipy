@@ -2,8 +2,18 @@
 
 //! Backward Differentiation Formula (BDF) solver for stiff ODEs.
 //!
-//! Implements a variable-order (1-5) BDF method with adaptive step size control.
-//! Matches `scipy.integrate.solve_ivp(method='BDF')`.
+//! KNOWN LIMITATION (frankenscipy-3y5p9): despite the order-1..5 coefficient
+//! tables (`BDF_GAMMA`, `BDF_ERROR_CONST`) and the `d[k]` difference array, this
+//! solver currently runs at a FIXED order 1 (implicit Euler) — `self.order` is
+//! initialised to 1 and never advanced, and the predictor/corrector only use
+//! `d[0]`/`d[1]`. As a result it takes ~40x more steps than
+//! `scipy.integrate.solve_ivp(method='BDF')` on stiff problems (e.g. van der Pol
+//! μ=10 over [0,20]: 27092 steps vs scipy's 641) and accumulates extra phase
+//! error. The error control (`error_norm <= 1`) still keeps each accepted step
+//! within tolerance, so results are correct but inefficient. `SolverKind::Radau`
+//! is also routed here, so it is presently a BDF alias rather than a Radau IIA
+//! method. Closing the gap requires a genuine variable-order (1-5) controller
+//! with the Nordsieck/backward-difference predictor — tracked in the bead.
 
 use crate::solver::{OdeSolverState, StepFailure, StepOutcome};
 use crate::validation::{ToleranceValue, validate_first_step, validate_max_step, validate_tol};

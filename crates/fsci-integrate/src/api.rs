@@ -864,6 +864,8 @@ where
             let solver = RkSolver::new(fun, config)?;
             solve_ivp_core(fun, solver, &resolved_options)
         }
+        // NOTE (frankenscipy-3y5p9): Radau is currently a BDF alias, and the BDF
+        // solver runs at fixed order 1 — see crates/fsci-integrate/src/bdf.rs.
         SolverKind::Radau | SolverKind::Bdf => {
             let config = BdfSolverConfig {
                 t0,
