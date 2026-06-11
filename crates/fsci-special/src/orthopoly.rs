@@ -1647,6 +1647,69 @@ pub fn laguerre(n: u32) -> Vec<f64> {
     }))
 }
 
+/// Generalized (associated) Laguerre polynomial `L_n^α` coefficients, highest
+/// degree first.
+///
+/// Matches `scipy.special.genlaguerre(n, alpha).c`. Recurrence
+/// `(k+1)L_{k+1}^α = (2k+1+α−x)L_k^α − (k+α)L_{k-1}^α`, with `L_0^α = 1`,
+/// `L_1^α = 1 + α − x`. (Mirrors [`eval_genlaguerre`].)
+#[must_use]
+pub fn genlaguerre(n: u32, alpha: f64) -> Vec<f64> {
+    to_descending(recurrence_coeffs(n, vec![1.0], vec![1.0 + alpha, -1.0], |k| {
+        let kf = k as f64;
+        (
+            -1.0 / (kf + 1.0),
+            (2.0 * kf + 1.0 + alpha) / (kf + 1.0),
+            -(kf + alpha) / (kf + 1.0),
+        )
+    }))
+}
+
+/// Gegenbauer (ultraspherical) polynomial `C_n^α` coefficients, highest degree
+/// first.
+///
+/// Matches `scipy.special.gegenbauer(n, alpha).c`. Recurrence
+/// `(k+1)C_{k+1}^α = 2(k+α)x C_k^α − (k+2α−1)C_{k-1}^α`, with `C_0^α = 1`,
+/// `C_1^α = 2αx`. (Mirrors [`eval_gegenbauer`]; `α = 0` yields the zero
+/// polynomial for `n ≥ 1`, as SciPy does.)
+#[must_use]
+pub fn gegenbauer(n: u32, alpha: f64) -> Vec<f64> {
+    to_descending(recurrence_coeffs(n, vec![1.0], vec![0.0, 2.0 * alpha], |k| {
+        let kf = k as f64;
+        (
+            2.0 * (kf + alpha) / (kf + 1.0),
+            0.0,
+            -(kf + 2.0 * alpha - 1.0) / (kf + 1.0),
+        )
+    }))
+}
+
+/// Jacobi polynomial `P_n^{α,β}` coefficients, highest degree first.
+///
+/// Matches `scipy.special.jacobi(n, alpha, beta).c`. Uses the DLMF 18.9.2
+/// three-term recurrence (mirroring [`eval_jacobi`]), with `P_0 = 1`,
+/// `P_1 = ½[(α−β) + (α+β+2)x]`. Where the recurrence's leading factor
+/// degenerates (`|a1| ≤ 1e-30`, e.g. `α+β` near `−(k+1)`/`−2k`), the step
+/// collapses to the zero polynomial, matching the scalar evaluator.
+#[must_use]
+pub fn jacobi(n: u32, alpha: f64, beta: f64) -> Vec<f64> {
+    let p1 = vec![0.5 * (alpha - beta), 0.5 * (alpha + beta + 2.0)];
+    to_descending(recurrence_coeffs(n, vec![1.0], p1, |k| {
+        let kf = k as f64;
+        let ab = alpha + beta;
+        let two_k_ab = 2.0 * kf + ab;
+        let a1 = 2.0 * (kf + 1.0) * (kf + ab + 1.0) * two_k_ab;
+        let a2 = (two_k_ab + 1.0) * (alpha * alpha - beta * beta);
+        let a3 = two_k_ab * (two_k_ab + 1.0) * (two_k_ab + 2.0);
+        let a4 = 2.0 * (kf + alpha) * (kf + beta) * (two_k_ab + 2.0);
+        if a1.abs() > 1e-30 {
+            (a3 / a1, a2 / a1, -a4 / a1)
+        } else {
+            (0.0, 0.0, 0.0)
+        }
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1719,6 +1782,46 @@ mod tests {
                 1.0,
             ],
             "laguerre5",
+        );
+    }
+
+    #[test]
+    fn parameterized_polynomial_coeffs_match_scipy() {
+        // frankenscipy: golden from scipy.special.{genlaguerre,gegenbauer,jacobi}(n, ...).c
+        // (1.17.1), highest-degree-first.
+        assert_coeffs(
+            &genlaguerre(3, 0.5),
+            &[-0.166_666_666_666_666_66, 1.75, -4.375, 2.1875],
+            "genlaguerre(3,0.5)",
+        );
+        assert_coeffs(
+            &genlaguerre(4, 1.5),
+            &[
+                0.041_666_666_666_666_664,
+                -0.916_666_666_666_666_7,
+                6.1875,
+                -14.4375,
+                9.023_437_5,
+            ],
+            "genlaguerre(4,1.5)",
+        );
+        assert_coeffs(&gegenbauer(3, 2.0), &[32.0, 0.0, -12.0, 0.0], "gegenbauer(3,2.0)");
+        assert_coeffs(
+            &gegenbauer(4, 0.5),
+            &[4.375, 0.0, -3.75, 0.0, 0.375],
+            "gegenbauer(4,0.5)",
+        );
+        // α = 0 degenerates to the zero polynomial (length n+1), as SciPy does.
+        assert_coeffs(&gegenbauer(3, 0.0), &[0.0, 0.0, 0.0, 0.0], "gegenbauer(3,0.0)");
+        assert_coeffs(
+            &jacobi(3, 1.0, 2.0),
+            &[10.5, -3.5, -3.5, 0.5],
+            "jacobi(3,1.0,2.0)",
+        );
+        assert_coeffs(
+            &jacobi(4, 0.5, 0.5),
+            &[7.875, 0.0, -5.906_25, 0.0, 0.492_187_5],
+            "jacobi(4,0.5,0.5)",
         );
     }
 
