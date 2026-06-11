@@ -1,0 +1,4 @@
+0cac539d34fd8087e74fc732994f74269b4e4f2ddcb15d1cb7cf038166f67631  tests/artifacts/perf/2026-06-11-linalg-8l8r1-84/baseline_contract.md
+1358109b5d2cc23731862ae9f7419ffe617203b3e8074eee3e6e21deded8da0e  tests/artifacts/perf/2026-06-11-linalg-8l8r1-84/baseline_matmul_criterion_rch.txt
+4177a7518d87049fa4d884b9e8fb9680a72995d499dda4482670a22e41f5e0d6  tests/artifacts/perf/2026-06-11-linalg-8l8r1-84/reject_duplicate_row_owned_output.md
+b01219811d788866a9930397e41c9620332a5e577e13cdad762cf651c9ad3262  tests/artifacts/perf/2026-06-11-linalg-8l8r1-84/reprofile_eigh_dense_rch.txt
