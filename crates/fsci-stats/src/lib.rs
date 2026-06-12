@@ -3102,8 +3102,15 @@ impl ContinuousDistribution for NoncentralF {
 
         for j in 0..150 {
             let d1_j = d1 + 2.0 * j as f64;
-            let f_pdf = FDistribution::new(d1_j, d2).pdf(x);
-            sum += poisson_term * f_pdf;
+            // F = (X1/d1)/(X2/d2); the Poisson-mixture component k has
+            // X1 ~ χ²(d1+2k) but the F numerator divisor stays d1, so the
+            // component is c_k·G with G ~ F(d1+2k, d2) and c_k = (d1+2k)/d1,
+            // giving pdf_k(x) = (1/c_k)·F_pdf(x/c_k). The old code dropped this
+            // rescaling (used F_pdf(x)), giving a valid but wrong-shaped
+            // density. frankenscipy-t9cj2
+            let ck = d1_j / d1;
+            let f_pdf = FDistribution::new(d1_j, d2).pdf(x / ck);
+            sum += poisson_term * f_pdf / ck;
 
             poisson_term *= half_lam / (j + 1) as f64;
             if poisson_term < 1e-20 && j > 10 {
@@ -3137,7 +3144,11 @@ impl ContinuousDistribution for NoncentralF {
         for j in 0..400usize {
             let jf = j as f64;
             let log_pois = -half_lam + jf * ln_half_lam - ln_gamma(jf + 1.0);
-            let term = log_pois + FDistribution::new(d1 + 2.0 * jf, d2).logpdf(x);
+            // Component k is c_k·G, G ~ F(d1+2k, d2), c_k = (d1+2k)/d1, so
+            // log pdf_k = log_pois − ln c_k + F_logpdf(x/c_k). frankenscipy-t9cj2
+            let ck = (d1 + 2.0 * jf) / d1;
+            let term =
+                log_pois - ck.ln() + FDistribution::new(d1 + 2.0 * jf, d2).logpdf(x / ck);
             if term.is_finite() {
                 terms.push(term);
                 if term > max {
@@ -3177,7 +3188,10 @@ impl ContinuousDistribution for NoncentralF {
 
         for j in 0..150 {
             let d1_j = d1 + 2.0 * j as f64;
-            let f_cdf = FDistribution::new(d1_j, d2).cdf(x);
+            // Same c_k = (d1+2k)/d1 rescaling as the pdf: P(F ≤ x | k) =
+            // P(c_k·G ≤ x) = F_cdf(x/c_k). frankenscipy-t9cj2
+            let ck = d1_j / d1;
+            let f_cdf = FDistribution::new(d1_j, d2).cdf(x / ck);
             sum += poisson_term * f_cdf;
 
             poisson_term *= half_lam / (j + 1) as f64;
@@ -3229,12 +3243,29 @@ impl ContinuousDistribution for NoncentralF {
     }
 
     fn entropy(&self) -> f64 {
-        // BLOCKED on the NoncentralF pdf bug (frankenscipy-t9cj2): the pdf
-        // integrates to 1 and matches mean/var, but its SHAPE differs from
-        // scipy (pdf(0.5)=0.694 vs 0.352), so −∫ pdf·ln pdf gives 1.009 vs
-        // scipy 1.532. Leave NaN until the pdf is fixed; skew/kurt above use the
-        // exact closed-form moments and are correct. frankenscipy-1mlrz
-        f64::NAN
+        // No closed form; h = −∫ pdf·ln pdf dx numerically (now that the pdf is
+        // correct, frankenscipy-t9cj2). Heavy-tailed, so take the upper bound
+        // from a far quantile; the pdf is a Poisson-series so keep the grid
+        // modest. Matches scipy ~1e-7. frankenscipy-1mlrz
+        let hi = self.ppf(1.0 - 1e-10);
+        if !hi.is_finite() || hi <= 0.0 {
+            return f64::NAN;
+        }
+        simpson_integrate_adaptive(
+            |x| {
+                if x <= 0.0 {
+                    return 0.0;
+                }
+                let p = self.pdf(x);
+                if p > 0.0 { -p * p.ln() } else { 0.0 }
+            },
+            1e-12,
+            hi,
+            2_048,
+            1e-10,
+            1e-12,
+            10,
+        )
     }
 
     fn fit(_data: &[f64]) -> Self {
