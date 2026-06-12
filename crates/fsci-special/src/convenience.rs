@@ -5578,23 +5578,76 @@ pub fn smirnovi(n: i32, p: f64) -> f64 {
 ///
 /// Matches `scipy.special.cosdg(x)`.
 #[must_use]
+// --- Cephes degree-trig support (sindg.c / tandg.c) ---
+// scipy.special.{sindg,cosdg,tandg,cotdg} are the Cephes routines: reduce the
+// angle in DEGREES (mod 360, then to an octant + small residual mod 45°) before
+// converting that small residual to radians, so the polynomial argument stays
+// tiny. A naive (x·π/180).cos() instead carries the full argument-reduction
+// error (hundreds of ULP, and catastrophic near zero crossings). frankenscipy-3pzf7
+const DEGTRIG_PI180: f64 = 1.745_329_251_994_329_576_92e-2; // π/180
+const DEGTRIG_LOSSTH: f64 = 1.0e14;
+#[allow(clippy::excessive_precision)]
+const DEGTRIG_SINCOF: [f64; 6] = [
+    1.589_623_015_722_184_479_52e-10,
+    -2.505_074_776_285_035_401_35e-8,
+    2.755_731_362_138_567_735_49e-6,
+    -1.984_126_982_958_953_846_58e-4,
+    8.333_333_333_322_118_588_62e-3,
+    -1.666_666_666_666_663_072_95e-1,
+];
+#[allow(clippy::excessive_precision)]
+const DEGTRIG_COSCOF: [f64; 6] = [
+    -1.135_853_652_138_768_173_00e-11,
+    2.087_570_084_197_473_167_78e-9,
+    -2.755_731_417_929_673_881_12e-7,
+    2.480_158_728_885_170_453_48e-5,
+    -1.388_888_888_887_305_641_16e-3,
+    4.166_666_666_666_659_292_18e-2,
+];
+
+#[inline]
+fn degtrig_polevl(x: f64, coef: &[f64]) -> f64 {
+    let mut acc = coef[0];
+    for &c in &coef[1..] {
+        acc = acc * x + c;
+    }
+    acc
+}
+
 pub fn cosdg(x: f64) -> f64 {
     if x.is_nan() {
         return f64::NAN;
     }
-    // Convert degrees to radians and compute cosine
-    // Handle exact values for common angles
-    let x_mod = x.rem_euclid(360.0);
-    if x_mod == 0.0 || x_mod == 360.0 {
-        return 1.0;
-    }
-    if x_mod == 90.0 || x_mod == 270.0 {
+    let mut sign = 1.0_f64;
+    let mut x = x.abs(); // cos is even
+    if x > DEGTRIG_LOSSTH {
         return 0.0;
     }
-    if x_mod == 180.0 {
-        return -1.0;
+    let mut y = (x / 45.0).floor();
+    let mut z = (y / 16.0).floor();
+    z = y - 16.0 * z;
+    let mut j = z as i64;
+    if j & 1 != 0 {
+        j += 1;
+        y += 1.0;
     }
-    (x * std::f64::consts::PI / 180.0).cos()
+    j &= 7;
+    if j > 3 {
+        j -= 4;
+        sign = -sign;
+    }
+    if j > 1 {
+        sign = -sign;
+    }
+    z = x - y * 45.0;
+    z *= DEGTRIG_PI180;
+    let zz = z * z;
+    y = if j == 1 || j == 2 {
+        z + z * (zz * degtrig_polevl(zz, &DEGTRIG_SINCOF))
+    } else {
+        1.0 - 0.5 * zz + zz * zz * degtrig_polevl(zz, &DEGTRIG_COSCOF)
+    };
+    if sign < 0.0 { -y } else { y }
 }
 
 /// Sine of angle given in degrees.
@@ -5605,18 +5658,37 @@ pub fn sindg(x: f64) -> f64 {
     if x.is_nan() {
         return f64::NAN;
     }
-    // Handle exact values for common angles
-    let x_mod = x.rem_euclid(360.0);
-    if x_mod == 0.0 || x_mod == 180.0 || x_mod == 360.0 {
+    let mut sign = 1.0_f64;
+    let mut x = x;
+    if x < 0.0 {
+        x = -x;
+        sign = -1.0;
+    }
+    if x > DEGTRIG_LOSSTH {
         return 0.0;
     }
-    if x_mod == 90.0 {
-        return 1.0;
+    let mut y = (x / 45.0).floor();
+    let mut z = (y / 16.0).floor();
+    z = y - 16.0 * z;
+    let mut j = z as i64;
+    if j & 1 != 0 {
+        j += 1;
+        y += 1.0;
     }
-    if x_mod == 270.0 {
-        return -1.0;
+    j &= 7;
+    if j > 3 {
+        sign = -sign;
+        j -= 4;
     }
-    (x * std::f64::consts::PI / 180.0).sin()
+    z = x - y * 45.0;
+    z *= DEGTRIG_PI180;
+    let zz = z * z;
+    y = if j == 1 || j == 2 {
+        1.0 - 0.5 * zz + zz * zz * degtrig_polevl(zz, &DEGTRIG_COSCOF)
+    } else {
+        z + z * (zz * degtrig_polevl(zz, &DEGTRIG_SINCOF))
+    };
+    if sign < 0.0 { -y } else { y }
 }
 
 /// Tangent of angle given in degrees.
