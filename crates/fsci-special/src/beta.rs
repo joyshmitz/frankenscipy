@@ -328,7 +328,12 @@ pub fn btdtri(a: f64, b: f64, y: f64) -> f64 {
         return 1.0;
     }
 
-    invert_monotone_unit_interval(|x| btdtr(a, b, x), y)
+    // btdtr(a, b, x) == betainc(a, b, x), so the inverse is exactly betaincinv.
+    // The dedicated inverse carries a small-x asymptotic seed
+    // (x ~ (y·a·B(a,b))^{1/a}) + relative-tolerance Newton, which resolves the
+    // deep a<1 tail (e.g. y=1e-8) instead of stalling at the ~1e-16 floor that
+    // the generic bisection bottomed out on. frankenscipy-8urrz.
+    crate::convenience::betaincinv_scalar(a, b, y)
 }
 
 /// Inverse beta distribution CDF with respect to shape parameter `a`.
@@ -1943,30 +1948,6 @@ fn betacf(a: f64, b: f64, x: f64) -> f64 {
     }
 
     h
-}
-
-fn invert_monotone_unit_interval(cdf: impl Fn(f64) -> f64, target: f64) -> f64 {
-    let mut lo = 0.0;
-    let mut hi = 1.0;
-
-    for _ in 0..100 {
-        let mid = lo + (hi - lo) * 0.5;
-        let value = cdf(mid);
-        if !value.is_finite() {
-            hi = mid;
-            continue;
-        }
-        if value < target {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-        if (hi - lo) < f64::EPSILON * 2.0 {
-            break;
-        }
-    }
-
-    lo + (hi - lo) * 0.5
 }
 
 fn invert_monotone_positive(cdf: impl Fn(f64) -> f64, target: f64, increasing: bool) -> f64 {
