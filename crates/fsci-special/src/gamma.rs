@@ -2448,6 +2448,29 @@ pub fn zeta(s: f64) -> f64 {
     if s == 0.0 {
         return -0.5; // ζ(0) = -1/2
     }
+    if s.abs() < 1.0e-3 {
+        // Near s=0 the reflection formula multiplies a tiny sin(πs/2) by ζ(1−s),
+        // which blows up near its pole at 1 — catastrophic cancellation whose
+        // relative error grows like 1/|s| (≈3e-8 at s=−1e-9). Use the Taylor
+        // series ζ(s) = Σ ζ^(n)(0)/n! · sⁿ instead; 8 terms give full f64
+        // precision for |s| < 1e-3. frankenscipy.
+        #[allow(clippy::excessive_precision)]
+        const ZETA_TAYLOR_0: [f64; 8] = [
+            -0.5,
+            -0.918_938_533_204_672_741_780_329_7,
+            -1.003_178_227_954_292_425_605_05,
+            -1.000_785_194_477_042_407_960_177,
+            -0.999_879_299_500_571_164_957_800_8,
+            -1.000_001_940_896_320_456_037_8,
+            -1.000_001_301_146_013_959_624_312,
+            -0.999_999_831_384_173_610_779_930_2,
+        ];
+        let mut acc = ZETA_TAYLOR_0[7];
+        for &c in ZETA_TAYLOR_0[..7].iter().rev() {
+            acc = acc * s + c;
+        }
+        return acc;
+    }
     if s > 1.0 {
         zeta_positive(s)
     } else if s < 0.0 {
