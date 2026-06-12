@@ -21095,7 +21095,10 @@ pub fn circmean(data: &[f64]) -> f64 {
     }
     let sin_sum: f64 = data.iter().map(|&x| x.sin()).sum();
     let cos_sum: f64 = data.iter().map(|&x| x.cos()).sum();
-    sin_sum.atan2(cos_sum)
+    // scipy.stats.circmean wraps into the default range [0, 2π); atan2 alone
+    // returns [-π, π], which is 2π too low for a negative mean angle.
+    // frankenscipy-87q5w
+    sin_sum.atan2(cos_sum).rem_euclid(2.0 * PI)
 }
 
 /// Circular variance for angular data.
@@ -21135,7 +21138,8 @@ pub fn circmean_weighted(data: &[f64], weights: &[f64]) -> f64 {
     }
     let sin_sum: f64 = data.iter().zip(weights).map(|(&x, &w)| w * x.sin()).sum();
     let cos_sum: f64 = data.iter().zip(weights).map(|(&x, &w)| w * x.cos()).sum();
-    sin_sum.atan2(cos_sum)
+    // Wrap into scipy's default [0, 2π) range (see circmean). frankenscipy-87q5w
+    sin_sum.atan2(cos_sum).rem_euclid(2.0 * PI)
 }
 
 /// Weighted circular variance for angular data.
