@@ -1073,14 +1073,38 @@ where
         let dx = match solve_dense(&jac, &neg_fx) {
             Some(d) => d,
             None => {
-                return Ok(MultivariateRootResult {
-                    x,
-                    fun: fx,
-                    converged: false,
-                    message: "fsolve: singular Jacobian".to_string(),
-                    iterations: iteration,
-                    function_calls: nfev,
-                });
+                // Rank-deficient/singular Jacobian (e.g. a start where two columns
+                // coincide). Fall back to a Levenberg-Marquardt damped Gauss-Newton
+                // step (JᵀJ + λI) dx = -Jᵀ F: well-posed for λ>0 and a descent
+                // direction for ½‖F‖², so the line search below still makes progress.
+                // scipy's hybr (MINPACK dogleg) is likewise robust to rank deficiency.
+                let mut jtj = vec![vec![0.0; n]; n];
+                let mut jtf = vec![0.0; n];
+                for i in 0..n {
+                    for j in 0..n {
+                        jtj[i][j] = (0..n).map(|k| jac[k][i] * jac[k][j]).sum();
+                    }
+                    jtf[i] = (0..n).map(|k| jac[k][i] * fx[k]).sum();
+                }
+                let trace: f64 = (0..n).map(|i| jtj[i][i]).sum();
+                let lambda = (1.0e-3 * trace / n as f64).max(1.0e-12);
+                for (i, row) in jtj.iter_mut().enumerate() {
+                    row[i] += lambda;
+                }
+                let rhs: Vec<f64> = jtf.iter().map(|v| -v).collect();
+                match solve_dense(&jtj, &rhs) {
+                    Some(d) => d,
+                    None => {
+                        return Ok(MultivariateRootResult {
+                            x,
+                            fun: fx,
+                            converged: false,
+                            message: "fsolve: singular Jacobian".to_string(),
+                            iterations: iteration,
+                            function_calls: nfev,
+                        });
+                    }
+                }
             }
         };
 
@@ -2605,6 +2629,30 @@ mod tests {
         assert!(dispatched.converged);
         assert!((direct.x[0] - dispatched.x[0]).abs() < 1e-10);
         assert!((direct.x[1] - dispatched.x[1]).abs() < 1e-10);
+    }
+
+    #[test]
+    fn root_hybr_handles_singular_start_jacobian() {
+        // x0+x1+x2=3, x0²+x1²-x2=1, x0·x1·x2=1; root at [1,1,1]. At the start
+        // [1.5,1.5,0.5] the Jacobian has two identical columns (exactly singular).
+        // Plain Newton gave up here ("singular Jacobian"); the LM-damped fallback
+        // escapes, matching scipy's hybr.
+        let f = |x: &[f64]| {
+            vec![
+                x[0] + x[1] + x[2] - 3.0,
+                x[0] * x[0] + x[1] * x[1] - x[2] - 1.0,
+                x[0] * x[1] * x[2] - 1.0,
+            ]
+        };
+        let r = root(f, &[1.5, 1.5, 0.5], MultivariateRootOptions::default()).expect("root");
+        assert!(
+            r.converged,
+            "hybr should converge from a singular start: {}",
+            r.message
+        );
+        for (i, &v) in r.x.iter().enumerate() {
+            assert!((v - 1.0).abs() < 1e-6, "x[{i}]={v}, expected 1");
+        }
     }
 
     #[test]
