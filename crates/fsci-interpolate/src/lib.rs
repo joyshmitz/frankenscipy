@@ -1013,22 +1013,27 @@ pub struct BSpline {
 }
 
 impl BSpline {
-    pub fn new(t: Vec<f64>, c: Vec<f64>, k: usize) -> Result<Self, InterpError> {
-        if c.len() <= k {
+    pub fn new(t: Vec<f64>, mut c: Vec<f64>, k: usize) -> Result<Self, InterpError> {
+        // A degree-k spline on knots `t` has exactly `t.len() - k - 1` B-spline
+        // coefficients. scipy's tck convention pads `c` with k+1 trailing zeros to
+        // length `len(t)`; accept that (and any padding) by truncating to the real
+        // coefficient count, so a scipy-style tck round-trips through our consumers.
+        if t.len() < k + 2 {
+            return Err(InterpError::InvalidArgument {
+                detail: format!("knot length {} must be >= k+2={}", t.len(), k + 2),
+            });
+        }
+        let expected_coeffs = t.len() - k - 1;
+        if c.len() < expected_coeffs {
             return Err(InterpError::InvalidArgument {
                 detail: format!(
-                    "number of coefficients ({}) must be > degree ({})",
+                    "number of coefficients ({}) must be >= t.len()-k-1={}",
                     c.len(),
-                    k
+                    expected_coeffs
                 ),
             });
         }
-        let expected_knots = c.len() + k + 1;
-        if t.len() != expected_knots {
-            return Err(InterpError::InvalidArgument {
-                detail: format!("knot length {} != c.len()+k+1={}", t.len(), expected_knots),
-            });
-        }
+        c.truncate(expected_coeffs);
         if t.windows(2).any(|w| w[1] < w[0]) {
             return Err(InterpError::InvalidArgument {
                 detail: "knots must be non-decreasing".to_string(),
@@ -1547,7 +1552,7 @@ fn interpolation_knots(x: &[f64], k: usize) -> Vec<f64> {
     // bit-identical to the previous `x[i + 1 + (k-1)/2]` (since 1 + (k-1)/2 == (k+1)/2 for
     // odd k), so only even-degree splines change.
     if k % 2 == 1 {
-        let k2 = (k + 1) / 2;
+        let k2 = k.div_ceil(2);
         for i in 0..num_interior {
             t.push(x[k2 + i]);
         }
@@ -3592,7 +3597,10 @@ where
                 }
                 let i1 = (i0 + chunk).min(m);
                 Some(scope.spawn(move || {
-                    queries[i0..i1].iter().map(f).collect::<Result<Vec<f64>, E>>()
+                    queries[i0..i1]
+                        .iter()
+                        .map(f)
+                        .collect::<Result<Vec<f64>, E>>()
                 }))
             })
             .collect();
@@ -3860,7 +3868,11 @@ pub fn splrep(
     // For s=0 (interpolating), use make_interp_spline
     if s <= 0.0 {
         let bspl = make_interp_spline(x, y, k)?;
-        return Ok((bspl.knots().to_vec(), bspl.coeffs().to_vec(), k));
+        return Ok((
+            bspl.knots().to_vec(),
+            pad_tck_coeffs(bspl.knots(), bspl.coeffs()),
+            k,
+        ));
     }
 
     // For s > 0 (smoothing), use make_lsq_spline with automatic knots
@@ -3884,7 +3896,19 @@ pub fn splrep(
     }
 
     let bspl = make_lsq_spline(x, y, &knots, k)?;
-    Ok((bspl.knots().to_vec(), bspl.coeffs().to_vec(), k))
+    Ok((
+        bspl.knots().to_vec(),
+        pad_tck_coeffs(bspl.knots(), bspl.coeffs()),
+        k,
+    ))
+}
+
+/// Pad B-spline coefficients to `len(t)` with trailing zeros, matching scipy's
+/// FITPACK tck convention (`len(c) == len(t)`; the last k+1 entries are zero).
+fn pad_tck_coeffs(t: &[f64], c: &[f64]) -> Vec<f64> {
+    let mut out = c.to_vec();
+    out.resize(t.len(), 0.0);
+    out
 }
 
 /// Evaluate a spline at given points.
@@ -6133,8 +6157,7 @@ mod tests {
         fn brute(t: &[f64], x: f64, k: usize, n: usize) -> Option<usize> {
             (0..n).find(|&i| {
                 i + 1 < t.len()
-                    && ((t[i] <= x && x < t[i + 1])
-                        || (x == t[i + 1] && i + 1 == t.len() - k - 1))
+                    && ((t[i] <= x && x < t[i + 1]) || (x == t[i + 1] && i + 1 == t.len() - k - 1))
             })
         }
         let knot_sets: Vec<(Vec<f64>, usize)> = vec![
@@ -6404,7 +6427,11 @@ mod tests {
 
         // Cubic is 2-D only (like SciPy): a 3-D query set must error, not silently
         // produce wrong output.
-        let p3: Vec<Vec<f64>> = vec![vec![0.0, 0.0, 0.0], vec![1.0, 0.0, 0.0], vec![0.0, 1.0, 0.0]];
+        let p3: Vec<Vec<f64>> = vec![
+            vec![0.0, 0.0, 0.0],
+            vec![1.0, 0.0, 0.0],
+            vec![0.0, 1.0, 0.0],
+        ];
         let v3 = vec![0.0, 1.0, 2.0];
         assert!(
             griddata(&p3, &v3, &[vec![0.5, 0.5, 0.0]], GriddataMethod::Cubic).is_err(),
@@ -7763,6 +7790,32 @@ mod tests {
                     "splint({a}, {b}) = {got}, expected {want}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn splrep_returns_scipy_padded_tck() {
+        // scipy.interpolate.splrep returns the coefficient array padded to len(t)
+        // with k+1 trailing zeros (len(c) == len(t)); fsci previously returned the
+        // unpadded len(t)-k-1 array, so the tck was not interchangeable with scipy
+        // (scipy's splder broadcasting failed on it).
+        let xs: Vec<f64> = (0..9).map(|i| i as f64 * 0.5).collect();
+        let ys: Vec<f64> = xs.iter().map(|&x| (0.7 * x).sin() + 0.2 * x).collect();
+        let (t, c, k) = splrep(&xs, &ys, 3, 0.0).expect("splrep");
+        assert_eq!(k, 3);
+        assert_eq!(
+            c.len(),
+            t.len(),
+            "len(c) must equal len(t) (scipy convention)"
+        );
+        // The last k+1 coefficients are the zero padding.
+        for &v in &c[t.len() - (k + 1)..] {
+            assert_eq!(v, 0.0, "trailing padding must be zero");
+        }
+        // The spline still interpolates the data (padding ignored on evaluation).
+        let ev = splev(&xs, &(t, c, k)).expect("splev");
+        for (yi, ei) in ys.iter().zip(ev.iter()) {
+            assert!((yi - ei).abs() < 1e-9, "splev({yi}) = {ei}");
         }
     }
 
