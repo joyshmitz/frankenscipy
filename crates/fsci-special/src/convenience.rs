@@ -4505,10 +4505,14 @@ pub fn inv_boxcox(
 }
 
 pub fn inv_boxcox_scalar(y: f64, lam: f64) -> f64 {
-    if lam.abs() < 1e-15 {
+    if lam == 0.0 {
         y.exp()
     } else {
-        (lam * y + 1.0).powf(1.0 / lam)
+        // scipy.special.inv_boxcox: exp(log1p(λy)/λ). This returns NaN when the
+        // base λy+1 < 0, matching scipy — the old (λy+1).powf(1/λ) instead
+        // returned a real power for integer 1/λ (e.g. inv_boxcox(5,-0.5) gave
+        // 0.444 vs scipy NaN). frankenscipy-9ns59
+        ((lam * y).ln_1p() / lam).exp()
     }
 }
 
@@ -4543,7 +4547,14 @@ pub fn inv_boxcox1p(
 }
 
 pub fn inv_boxcox1p_scalar(y: f64, lam: f64) -> f64 {
-    inv_boxcox_scalar(y, lam) - 1.0
+    // scipy.special.inv_boxcox1p: expm1(log1p(λy)/λ) (expm1(y) at λ=0). Keeps
+    // precision near y=0 and yields NaN for negative base like inv_boxcox.
+    // frankenscipy-9ns59
+    if lam == 0.0 {
+        y.exp_m1()
+    } else {
+        ((lam * y).ln_1p() / lam).exp_m1()
+    }
 }
 
 /// Log of the standard normal CDF.
