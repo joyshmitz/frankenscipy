@@ -13,7 +13,9 @@ use std::time::Instant;
 use fsci_stats::peak_prominences;
 
 fn lcg(s: &mut u64) -> f64 {
-    *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    *s = s
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
     (*s >> 11) as f64 / (1u64 << 53) as f64
 }
 
@@ -28,8 +30,9 @@ fn peak_idx(n: usize, k: usize) -> Vec<usize> {
 }
 
 fn digest(v: &[f64]) -> u64 {
-    v.iter()
-        .fold(1469598103934665603u64, |h, &x| (h ^ x.to_bits()).wrapping_mul(1099511628211))
+    v.iter().fold(1469598103934665603u64, |h, &x| {
+        (h ^ x.to_bits()).wrapping_mul(1099511628211)
+    })
 }
 
 fn main() {
@@ -37,7 +40,10 @@ fn main() {
     for &(n, k) in &[(100usize, 10usize), (1000, 200), (5000, 5000), (20000, 1)] {
         let d = signal(n, 7);
         let pk = peak_idx(n, k);
-        println!("n={n} k={k} digest={:016x}", digest(&peak_prominences(&d, &pk)));
+        println!(
+            "n={n} k={k} digest={:016x}",
+            digest(&peak_prominences(&d, &pk))
+        );
     }
     println!("===GOLDEN_PAYLOAD_END===");
 
@@ -52,6 +58,9 @@ fn main() {
             let pr = peak_prominences(black_box(&d), black_box(&pk));
             acc += pr[pr.len() / 2];
         }
-        println!("n={n} k={k}  {:>10.3?}/call (acc={acc:.6})", t0.elapsed() / reps);
+        println!(
+            "n={n} k={k}  {:>10.3?}/call (acc={acc:.6})",
+            t0.elapsed() / reps
+        );
     }
 }

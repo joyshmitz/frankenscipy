@@ -13,13 +13,13 @@ use fsci_stats::weightedtau;
 fn data(n: usize) -> (Vec<f64>, Vec<f64>) {
     let mut s = 0x9e3779b97f4a7c15u64;
     let mut rng = || {
-        s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        s = s
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         (s >> 11) as f64 / (1u64 << 53) as f64
     };
     let x: Vec<f64> = (0..n).map(|_| rng() * 100.0).collect();
-    let y: Vec<f64> = (0..n)
-        .map(|i| 0.7 * x[i] + rng() * 30.0)
-        .collect();
+    let y: Vec<f64> = (0..n).map(|i| 0.7 * x[i] + rng() * 30.0).collect();
     (x, y)
 }
 

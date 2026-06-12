@@ -15,7 +15,17 @@ use fsci_stats::multivariate_normal_rvs;
 fn cov_spd(d: usize) -> Vec<Vec<f64>> {
     // Diagonally-dominant SPD matrix.
     (0..d)
-        .map(|i| (0..d).map(|j| if i == j { d as f64 + 1.0 } else { 1.0 / (1.0 + (i + j) as f64) }).collect())
+        .map(|i| {
+            (0..d)
+                .map(|j| {
+                    if i == j {
+                        d as f64 + 1.0
+                    } else {
+                        1.0 / (1.0 + (i + j) as f64)
+                    }
+                })
+                .collect()
+        })
         .collect()
 }
 
@@ -32,7 +42,10 @@ fn main() {
         let cov = cov_spd(d);
         for seed in [42u64, 12345] {
             let s = multivariate_normal_rvs(&mean, &cov, ns, seed);
-            println!("d={d:>3} ns={ns:>5} seed={seed:<6} digest={:016x}", digest(&s));
+            println!(
+                "d={d:>3} ns={ns:>5} seed={seed:<6} digest={:016x}",
+                digest(&s)
+            );
         }
     }
     println!("===GOLDEN_PAYLOAD_END===");
@@ -48,6 +61,9 @@ fn main() {
             let s = multivariate_normal_rvs(black_box(&mean), &cov, ns, 1);
             acc += s[ns / 2][0];
         }
-        println!("d={d:>3} ns={ns:>6} {:>10.3?}/call (acc={acc:.6})", t0.elapsed() / reps);
+        println!(
+            "d={d:>3} ns={ns:>6} {:>10.3?}/call (acc={acc:.6})",
+            t0.elapsed() / reps
+        );
     }
 }

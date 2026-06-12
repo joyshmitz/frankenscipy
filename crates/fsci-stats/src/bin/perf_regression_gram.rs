@@ -16,25 +16,36 @@ use std::time::Instant;
 use fsci_stats::{multiple_regression, ridge_regression};
 
 fn lcg(s: &mut u64) -> f64 {
-    *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    *s = s
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
     (*s >> 11) as f64 / (1u64 << 53) as f64 * 2.0 - 1.0
 }
 
 fn dataset(n: usize, p: usize, seed: u64) -> (Vec<Vec<f64>>, Vec<f64>) {
     let mut s = seed;
-    let x: Vec<Vec<f64>> = (0..n).map(|_| (0..p).map(|_| lcg(&mut s)).collect()).collect();
+    let x: Vec<Vec<f64>> = (0..n)
+        .map(|_| (0..p).map(|_| lcg(&mut s)).collect())
+        .collect();
     let y: Vec<f64> = (0..n).map(|_| lcg(&mut s)).collect();
     (x, y)
 }
 
 fn digest(v: &[f64]) -> u64 {
-    v.iter()
-        .fold(1469598103934665603u64, |h, &x| (h ^ x.to_bits()).wrapping_mul(1099511628211))
+    v.iter().fold(1469598103934665603u64, |h, &x| {
+        (h ^ x.to_bits()).wrapping_mul(1099511628211)
+    })
 }
 
 fn main() {
     println!("===GOLDEN_PAYLOAD_BEGIN===");
-    for &(n, p) in &[(200usize, 16usize), (200, 47), (300, 48), (400, 120), (500, 256)] {
+    for &(n, p) in &[
+        (200usize, 16usize),
+        (200, 47),
+        (300, 48),
+        (400, 120),
+        (500, 256),
+    ] {
         let (x, y) = dataset(n, p, 7);
         let (beta, _res, r2, se) = multiple_regression(&x, &y);
         let rb = ridge_regression(&x, &y, 0.5);
@@ -58,13 +69,19 @@ fn main() {
             let (beta, _, _, _) = multiple_regression(black_box(&x), black_box(&y));
             acc += beta[p / 2];
         }
-        println!("mreg  n={n} p={p}  {:>10.3?}/call (acc={acc:.6})", t0.elapsed() / reps);
+        println!(
+            "mreg  n={n} p={p}  {:>10.3?}/call (acc={acc:.6})",
+            t0.elapsed() / reps
+        );
         let t1 = Instant::now();
         let mut acc2 = 0.0;
         for _ in 0..reps {
             let rb = ridge_regression(black_box(&x), black_box(&y), 0.5);
             acc2 += rb[p / 2];
         }
-        println!("ridge n={n} p={p}  {:>10.3?}/call (acc={acc2:.6})", t1.elapsed() / reps);
+        println!(
+            "ridge n={n} p={p}  {:>10.3?}/call (acc={acc2:.6})",
+            t1.elapsed() / reps
+        );
     }
 }

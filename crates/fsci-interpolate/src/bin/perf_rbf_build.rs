@@ -7,7 +7,9 @@ use std::time::Instant;
 use fsci_interpolate::{RbfInterpolator, RbfKernel};
 
 fn lcg(s: &mut u64) -> f64 {
-    *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    *s = s
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
     (*s >> 11) as f64 / (1u64 << 53) as f64
 }
 
@@ -25,8 +27,8 @@ fn main() {
         let t0 = Instant::now();
         let mut acc = 0.0f64;
         for _ in 0..reps {
-            let rbf = RbfInterpolator::new(&points, &values, RbfKernel::Gaussian, 1.0)
-                .expect("rbf new");
+            let rbf =
+                RbfInterpolator::new(&points, &values, RbfKernel::Gaussian, 1.0).expect("rbf new");
             acc += rbf.eval(&points[0]);
         }
         let per = t0.elapsed() / reps;

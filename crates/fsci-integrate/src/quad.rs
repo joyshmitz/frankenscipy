@@ -3041,7 +3041,9 @@ where
         sum / n_points as f64 * volume
     };
 
-    let work = n_estimates.saturating_mul(n_points).saturating_mul(d.max(1));
+    let work = n_estimates
+        .saturating_mul(n_points)
+        .saturating_mul(d.max(1));
     let nthreads = if work < (1 << 16) || n_estimates < 2 {
         1
     } else {

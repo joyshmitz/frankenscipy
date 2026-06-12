@@ -15,7 +15,9 @@ use std::time::Instant;
 use fsci_stats::{hdquantiles, hdquantiles_sd};
 
 fn lcg(s: &mut u64) -> f64 {
-    *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    *s = s
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
     (*s >> 11) as f64 / (1u64 << 53) as f64
 }
 fn data(n: usize, seed: u64) -> Vec<f64> {
@@ -23,8 +25,9 @@ fn data(n: usize, seed: u64) -> Vec<f64> {
     (0..n).map(|_| lcg(&mut s) * 100.0).collect()
 }
 fn digest(v: &[f64]) -> u64 {
-    v.iter()
-        .fold(1469598103934665603u64, |h, &x| (h ^ x.to_bits()).wrapping_mul(1099511628211))
+    v.iter().fold(1469598103934665603u64, |h, &x| {
+        (h ^ x.to_bits()).wrapping_mul(1099511628211)
+    })
 }
 
 fn main() {
@@ -50,12 +53,18 @@ fn main() {
         for _ in 0..reps {
             acc += hdquantiles(black_box(&d), &probs)[2];
         }
-        println!("hdq   n={n}  {:>10.3?}/call (acc={acc:.6})", t0.elapsed() / reps);
+        println!(
+            "hdq   n={n}  {:>10.3?}/call (acc={acc:.6})",
+            t0.elapsed() / reps
+        );
         let t1 = Instant::now();
         let mut acc2 = 0.0;
         for _ in 0..reps {
             acc2 += hdquantiles_sd(black_box(&d), &probs)[2];
         }
-        println!("hdqsd n={n}  {:>10.3?}/call (acc={acc2:.6})", t1.elapsed() / reps);
+        println!(
+            "hdqsd n={n}  {:>10.3?}/call (acc={acc2:.6})",
+            t1.elapsed() / reps
+        );
     }
 }

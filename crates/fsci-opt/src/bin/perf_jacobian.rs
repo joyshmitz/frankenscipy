@@ -8,7 +8,7 @@
 use std::hint::black_box;
 use std::time::Instant;
 
-use fsci_opt::{jacobian, DifferentiateOptions};
+use fsci_opt::{DifferentiateOptions, jacobian};
 
 // A vector-valued map whose every evaluation is O(n^2) (each output couples all
 // inputs), so each finite-difference partial is non-trivial and per-component
@@ -30,7 +30,9 @@ fn point(n: usize, seed: u64) -> Vec<f64> {
     let mut s = seed;
     (0..n)
         .map(|_| {
-            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             ((s >> 11) as f64 / (1u64 << 53) as f64) * 2.0 - 1.0
         })
         .collect()
@@ -63,7 +65,9 @@ fn main() {
         let t0 = Instant::now();
         let mut acc = 0.0;
         for _ in 0..reps {
-            acc += jacobian(black_box(vecfun), black_box(&x), opts).expect("jacobian").df[0][0];
+            acc += jacobian(black_box(vecfun), black_box(&x), opts)
+                .expect("jacobian")
+                .df[0][0];
         }
         println!("n={n}  {:>10.3?}/call (acc={acc:.6})", t0.elapsed() / reps);
     }

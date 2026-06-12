@@ -58,7 +58,11 @@ fn old_qmc_quad<F: Fn(&[f64]) -> f64>(
     let n_est_f = n_estimates as f64;
     let mean = estimates.iter().sum::<f64>() / n_est_f;
     let se = if n_estimates > 1 {
-        let var = estimates.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>() / (n_est_f - 1.0);
+        let var = estimates
+            .iter()
+            .map(|v| (v - mean) * (v - mean))
+            .sum::<f64>()
+            / (n_est_f - 1.0);
         (var / n_est_f).sqrt()
     } else {
         0.0

@@ -17,7 +17,12 @@ fn main() {
         [[120, 30], [45, 105]],
     ] {
         let b = barnard_exact(&t);
-        println!("barnard {:?} pvalue_bits={:016x} stat_bits={:016x}", t, b.pvalue.to_bits(), b.statistic.to_bits());
+        println!(
+            "barnard {:?} pvalue_bits={:016x} stat_bits={:016x}",
+            t,
+            b.pvalue.to_bits(),
+            b.statistic.to_bits()
+        );
     }
     for t in [[[8usize, 2], [1, 5]], [[40, 10], [15, 35]]] {
         let b = boschloo_exact(&t);
@@ -34,7 +39,11 @@ fn main() {
         for _ in 0..reps {
             acc += barnard_exact(black_box(&t)).pvalue;
         }
-        println!("barnard n1n2~{:?}  {:>10.3?}/call (acc={acc:.6})", t, t0.elapsed() / reps);
+        println!(
+            "barnard n1n2~{:?}  {:>10.3?}/call (acc={acc:.6})",
+            t,
+            t0.elapsed() / reps
+        );
     }
     for t in [[[200usize, 80], [120, 160]], [[400, 100], [150, 350]]] {
         let reps = 5;
@@ -44,6 +53,10 @@ fn main() {
         for _ in 0..reps {
             acc += boschloo_exact(black_box(&t)).pvalue;
         }
-        println!("boschloo n1n2~{:?}  {:>10.3?}/call (acc={acc:.6})", t, t0.elapsed() / reps);
+        println!(
+            "boschloo n1n2~{:?}  {:>10.3?}/call (acc={acc:.6})",
+            t,
+            t0.elapsed() / reps
+        );
     }
 }

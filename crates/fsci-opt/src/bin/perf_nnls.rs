@@ -55,9 +55,7 @@ fn main() {
     for &(m, n, seed) in &[(20usize, 8usize, 1u64), (60, 20, 2), (200, 40, 3)] {
         let (a, b) = problem(m, n, seed);
         let (x, res) = nnls(&a, &b).expect("nnls");
-        let xbits: u64 = x.iter().fold(0u64, |h, &v| {
-            h.rotate_left(7) ^ v.to_bits()
-        });
+        let xbits: u64 = x.iter().fold(0u64, |h, &v| h.rotate_left(7) ^ v.to_bits());
         println!(
             "m={m} n={n} seed={seed} xhash={xbits:016x} res={:.17e} resbits={:016x}",
             res,
@@ -75,6 +73,9 @@ fn main() {
         for _ in 0..reps {
             acc += nnls(black_box(&a), black_box(&b)).unwrap().1;
         }
-        println!("m={m} n={n}  {:>10.3?}/call (acc={acc:.6})", t0.elapsed() / reps);
+        println!(
+            "m={m} n={n}  {:>10.3?}/call (acc={acc:.6})",
+            t0.elapsed() / reps
+        );
     }
 }

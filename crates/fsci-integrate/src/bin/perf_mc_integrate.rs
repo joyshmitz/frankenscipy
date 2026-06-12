@@ -15,7 +15,9 @@ use fsci_integrate::monte_carlo_integrate;
 fn main() {
     // A non-trivial integrand so the parallel win is visible.
     let f = |x: &[f64]| -> f64 {
-        x.iter().map(|&v| (3.0 * v).sin().powi(2) * (1.7 * v).cos()).sum::<f64>()
+        x.iter()
+            .map(|&v| (3.0 * v).sin().powi(2) * (1.7 * v).cos())
+            .sum::<f64>()
     };
     let bounds3 = [(0.0, 1.0), (-1.0, 2.0), (0.5, 1.5)];
 
@@ -23,7 +25,11 @@ fn main() {
     for &ns in &[100usize, 1000, 10000] {
         for seed in [42u64, 12345] {
             let (est, se) = monte_carlo_integrate(f, &bounds3, ns, seed);
-            println!("ns={ns:>6} seed={seed:<6} est_bits={:016x} se_bits={:016x}", est.to_bits(), se.to_bits());
+            println!(
+                "ns={ns:>6} seed={seed:<6} est_bits={:016x} se_bits={:016x}",
+                est.to_bits(),
+                se.to_bits()
+            );
         }
     }
     println!("===GOLDEN_PAYLOAD_END===");
@@ -37,6 +43,9 @@ fn main() {
             let (est, _) = monte_carlo_integrate(f, black_box(&bounds3), ns, 1);
             acc += est;
         }
-        println!("ns={ns:>7} {:>10.3?}/call (acc={acc:.6})", t0.elapsed() / reps);
+        println!(
+            "ns={ns:>7} {:>10.3?}/call (acc={acc:.6})",
+            t0.elapsed() / reps
+        );
     }
 }

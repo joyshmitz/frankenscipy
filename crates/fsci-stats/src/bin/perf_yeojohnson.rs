@@ -13,7 +13,9 @@ use std::time::Instant;
 use fsci_stats::{yeojohnson, yeojohnson_inv};
 
 fn lcg(s: &mut u64) -> f64 {
-    *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    *s = s
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
     (*s >> 11) as f64 / (1u64 << 53) as f64 * 6.0 - 3.0
 }
 
@@ -23,8 +25,9 @@ fn data(n: usize, seed: u64) -> Vec<f64> {
 }
 
 fn digest(v: &[f64]) -> u64 {
-    v.iter()
-        .fold(1469598103934665603u64, |h, &x| (h ^ x.to_bits()).wrapping_mul(1099511628211))
+    v.iter().fold(1469598103934665603u64, |h, &x| {
+        (h ^ x.to_bits()).wrapping_mul(1099511628211)
+    })
 }
 
 fn main() {
@@ -34,7 +37,11 @@ fn main() {
         for &lam in &[0.5f64, 0.0, 2.0, 1.3] {
             let f = yeojohnson(&d, lam);
             let inv = yeojohnson_inv(&f, lam);
-            println!("n={n} lam={lam} fwd={:016x} inv={:016x}", digest(&f), digest(&inv));
+            println!(
+                "n={n} lam={lam} fwd={:016x} inv={:016x}",
+                digest(&f),
+                digest(&inv)
+            );
         }
     }
     println!("===GOLDEN_PAYLOAD_END===");

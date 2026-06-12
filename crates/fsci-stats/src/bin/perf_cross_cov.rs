@@ -10,7 +10,9 @@ use std::time::Instant;
 use fsci_stats::cross_cov;
 
 fn lcg(s: &mut u64) -> f64 {
-    *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    *s = s
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
     (*s >> 11) as f64 / (1u64 << 53) as f64
 }
 
@@ -56,6 +58,9 @@ fn main() {
         for _ in 0..reps {
             acc += cross_cov(black_box(&x), black_box(&y))[0][0];
         }
-        println!("n={n} dx={dx} dy={dy}  {:>10.3?}/call (acc={acc:.6})", t0.elapsed() / reps);
+        println!(
+            "n={n} dx={dx} dy={dy}  {:>10.3?}/call (acc={acc:.6})",
+            t0.elapsed() / reps
+        );
     }
 }

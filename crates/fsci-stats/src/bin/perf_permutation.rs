@@ -11,7 +11,9 @@ use std::time::Instant;
 use fsci_stats::permutation_test;
 
 fn lcg(s: &mut u64) -> f64 {
-    *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    *s = s
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
     (*s >> 11) as f64 / (1u64 << 53) as f64
 }
 fn data(nx: usize, ny: usize, seed: u64) -> (Vec<f64>, Vec<f64>) {
@@ -55,6 +57,9 @@ fn main() {
         for _ in 0..reps {
             acc += permutation_test(black_box(&x), black_box(&y), trimmed_mean_diff, np, 99).1;
         }
-        println!("nx={nx} ny={ny} np={np}  {:>10.3?}/call (acc={acc:.6})", t0.elapsed() / reps);
+        println!(
+            "nx={nx} ny={ny} np={np}  {:>10.3?}/call (acc={acc:.6})",
+            t0.elapsed() / reps
+        );
     }
 }

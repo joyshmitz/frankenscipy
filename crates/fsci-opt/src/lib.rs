@@ -3333,18 +3333,19 @@ where
         let compute = &compute;
         let pairs_ref = &pairs;
         std::thread::scope(|scope| {
-            let handles: Vec<_> = (0..nthreads)
-                .filter_map(|t| {
-                    let i0 = t * chunk;
-                    if i0 >= pairs_ref.len() {
-                        return None;
-                    }
-                    let i1 = (i0 + chunk).min(pairs_ref.len());
-                    Some(scope.spawn(move || {
-                        pairs_ref[i0..i1].iter().map(compute).collect::<Vec<_>>()
-                    }))
-                })
-                .collect();
+            let handles: Vec<_> =
+                (0..nthreads)
+                    .filter_map(|t| {
+                        let i0 = t * chunk;
+                        if i0 >= pairs_ref.len() {
+                            return None;
+                        }
+                        let i1 = (i0 + chunk).min(pairs_ref.len());
+                        Some(scope.spawn(move || {
+                            pairs_ref[i0..i1].iter().map(compute).collect::<Vec<_>>()
+                        }))
+                    })
+                    .collect();
             handles
                 .into_iter()
                 .flat_map(|h| h.join().expect("jacobian worker panicked"))
@@ -3424,18 +3425,19 @@ where
         let compute = &compute;
         let pairs_ref = &pairs;
         std::thread::scope(|scope| {
-            let handles: Vec<_> = (0..nthreads)
-                .filter_map(|t| {
-                    let i0 = t * chunk;
-                    if i0 >= pairs_ref.len() {
-                        return None;
-                    }
-                    let i1 = (i0 + chunk).min(pairs_ref.len());
-                    Some(scope.spawn(move || {
-                        pairs_ref[i0..i1].iter().map(compute).collect::<Vec<_>>()
-                    }))
-                })
-                .collect();
+            let handles: Vec<_> =
+                (0..nthreads)
+                    .filter_map(|t| {
+                        let i0 = t * chunk;
+                        if i0 >= pairs_ref.len() {
+                            return None;
+                        }
+                        let i1 = (i0 + chunk).min(pairs_ref.len());
+                        Some(scope.spawn(move || {
+                            pairs_ref[i0..i1].iter().map(compute).collect::<Vec<_>>()
+                        }))
+                    })
+                    .collect();
             handles
                 .into_iter()
                 .flat_map(|h| h.join().expect("hessian worker panicked"))

@@ -14,7 +14,9 @@ use std::time::Instant;
 use fsci_stats::boxcox;
 
 fn lcg(s: &mut u64) -> f64 {
-    *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    *s = s
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
     (*s >> 11) as f64 / (1u64 << 53) as f64
 }
 
@@ -25,8 +27,9 @@ fn data(n: usize, seed: u64) -> Vec<f64> {
 }
 
 fn digest(v: &[f64]) -> u64 {
-    v.iter()
-        .fold(1469598103934665603u64, |h, &x| (h ^ x.to_bits()).wrapping_mul(1099511628211))
+    v.iter().fold(1469598103934665603u64, |h, &x| {
+        (h ^ x.to_bits()).wrapping_mul(1099511628211)
+    })
 }
 
 fn main() {
@@ -34,7 +37,11 @@ fn main() {
     for &n in &[20usize, 600, 5000, 50000] {
         let d = data(n, 7);
         let r = boxcox(&d, None).unwrap();
-        println!("n={n} lmbda={:.17e} digest={:016x}", r.lmbda, digest(&r.data));
+        println!(
+            "n={n} lmbda={:.17e} digest={:016x}",
+            r.lmbda,
+            digest(&r.data)
+        );
     }
     println!("===GOLDEN_PAYLOAD_END===");
 

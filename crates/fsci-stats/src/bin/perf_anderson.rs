@@ -14,7 +14,9 @@ use std::time::Instant;
 use fsci_stats::anderson;
 
 fn lcg(s: &mut u64) -> f64 {
-    *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    *s = s
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
     (*s >> 11) as f64 / (1u64 << 53) as f64
 }
 // roughly-normal data via central-limit of 6 uniforms

@@ -15,7 +15,9 @@ use std::time::Instant;
 use fsci_stats::cov_matrix;
 
 fn lcg(s: &mut u64) -> f64 {
-    *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    *s = s
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
     (*s >> 11) as f64 / (1u64 << 53) as f64
 }
 
@@ -39,7 +41,13 @@ fn digest(c: &[Vec<f64>]) -> u64 {
 
 fn main() {
     println!("===GOLDEN_PAYLOAD_BEGIN===");
-    for &(n, d) in &[(200usize, 16usize), (200, 47), (200, 48), (300, 128), (256, 300)] {
+    for &(n, d) in &[
+        (200usize, 16usize),
+        (200, 47),
+        (200, 48),
+        (300, 128),
+        (256, 300),
+    ] {
         let x = data(n, d, 7);
         println!("n={n} d={d} digest={:016x}", digest(&cov_matrix(&x)));
     }
@@ -55,6 +63,9 @@ fn main() {
             let c = cov_matrix(black_box(&x));
             acc += c[d / 2][d / 3];
         }
-        println!("n={n} d={d}  {:>10.3?}/call (acc={acc:.6})", t0.elapsed() / reps);
+        println!(
+            "n={n} d={d}  {:>10.3?}/call (acc={acc:.6})",
+            t0.elapsed() / reps
+        );
     }
 }

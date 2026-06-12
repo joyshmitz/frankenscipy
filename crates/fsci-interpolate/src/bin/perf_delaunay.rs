@@ -10,13 +10,17 @@ use std::time::Instant;
 use fsci_interpolate::Delaunay2D;
 
 fn lcg(s: &mut u64) -> f64 {
-    *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    *s = s
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
     (*s >> 11) as f64 / (1u64 << 53) as f64
 }
 
 fn random_pts(n: usize, seed: u64) -> Vec<(f64, f64)> {
     let mut s = seed;
-    (0..n).map(|_| (lcg(&mut s) * 1000.0, lcg(&mut s) * 1000.0)).collect()
+    (0..n)
+        .map(|_| (lcg(&mut s) * 1000.0, lcg(&mut s) * 1000.0))
+        .collect()
 }
 
 // Clustered: many tight clusters -> large Bowyer-Watson cavities (|bad| big) so the
@@ -67,9 +71,15 @@ fn main() {
         let t0 = Instant::now();
         let mut acc = 0usize;
         for _ in 0..reps {
-            acc += Delaunay2D::new(black_box(&r)).expect("d").find_simplex((1.0, 1.0)).map_or(0, |t| t.0);
+            acc += Delaunay2D::new(black_box(&r))
+                .expect("d")
+                .find_simplex((1.0, 1.0))
+                .map_or(0, |t| t.0);
         }
-        println!("RANDOM    n={n}  {:>10.3?}/build (acc={acc})", t0.elapsed() / reps);
+        println!(
+            "RANDOM    n={n}  {:>10.3?}/build (acc={acc})",
+            t0.elapsed() / reps
+        );
     }
     for &n in &[2000usize, 4000] {
         let c = clustered_pts(n, 7);
@@ -77,8 +87,14 @@ fn main() {
         let t0 = Instant::now();
         let mut acc = 0usize;
         for _ in 0..reps {
-            acc += Delaunay2D::new(black_box(&c)).expect("d").find_simplex((1.0, 1.0)).map_or(0, |t| t.0);
+            acc += Delaunay2D::new(black_box(&c))
+                .expect("d")
+                .find_simplex((1.0, 1.0))
+                .map_or(0, |t| t.0);
         }
-        println!("CLUSTERED n={n}  {:>10.3?}/build (acc={acc})", t0.elapsed() / reps);
+        println!(
+            "CLUSTERED n={n}  {:>10.3?}/build (acc={acc})",
+            t0.elapsed() / reps
+        );
     }
 }

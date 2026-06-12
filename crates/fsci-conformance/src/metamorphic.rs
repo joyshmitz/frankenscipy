@@ -786,7 +786,11 @@ mod tests {
                     let r = ((seed.wrapping_mul(i as u64 + 1).wrapping_add(j as u64)) % 1000)
                         as f64
                         / 1000.0;
-                    a[i][j] = if i == j { (n as f64) * 2.0 + r } else { r - 0.5 };
+                    a[i][j] = if i == j {
+                        (n as f64) * 2.0 + r
+                    } else {
+                        r - 0.5
+                    };
                 }
             }
             a
@@ -888,7 +892,11 @@ mod tests {
                     let r = ((seed.wrapping_mul(i as u64 + 1).wrapping_add(j as u64)) % 1000)
                         as f64
                         / 1000.0;
-                    a[i][j] = if i == j { (n as f64) * 2.0 + r } else { r - 0.5 };
+                    a[i][j] = if i == j {
+                        (n as f64) * 2.0 + r
+                    } else {
+                        r - 0.5
+                    };
                 }
             }
             a

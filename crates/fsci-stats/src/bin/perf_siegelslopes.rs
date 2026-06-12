@@ -9,13 +9,18 @@ use std::time::Instant;
 use fsci_stats::siegelslopes;
 
 fn lcg(s: &mut u64) -> f64 {
-    *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    *s = s
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
     (*s >> 11) as f64 / (1u64 << 53) as f64
 }
 fn data(n: usize, seed: u64) -> (Vec<f64>, Vec<f64>) {
     let mut s = seed;
     let x: Vec<f64> = (0..n).map(|i| i as f64 + lcg(&mut s)).collect();
-    let y: Vec<f64> = x.iter().map(|&xi| 2.5 * xi - 1.3 + (lcg(&mut s) - 0.5) * 50.0).collect();
+    let y: Vec<f64> = x
+        .iter()
+        .map(|&xi| 2.5 * xi - 1.3 + (lcg(&mut s) - 0.5) * 50.0)
+        .collect();
     (x, y)
 }
 
@@ -24,7 +29,11 @@ fn main() {
     for &n in &[50usize, 500, 2000] {
         let (x, y) = data(n, 1);
         let r = siegelslopes(&x, &y);
-        println!("n={n} slope_bits={:016x} intercept_bits={:016x}", r.slope.to_bits(), r.intercept.to_bits());
+        println!(
+            "n={n} slope_bits={:016x} intercept_bits={:016x}",
+            r.slope.to_bits(),
+            r.intercept.to_bits()
+        );
     }
     println!("===GOLDEN_PAYLOAD_END===");
 

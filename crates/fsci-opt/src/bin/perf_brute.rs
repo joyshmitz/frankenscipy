@@ -50,6 +50,9 @@ fn main() {
             acc += r.fun.unwrap();
         }
         let pts = ns.pow(ndim as u32);
-        println!("ndim={ndim} ns={ns} pts={pts}  {:>10.3?}/call (acc={acc:.6})", t0.elapsed() / reps);
+        println!(
+            "ndim={ndim} ns={ns} pts={pts}  {:>10.3?}/call (acc={acc:.6})",
+            t0.elapsed() / reps
+        );
     }
 }

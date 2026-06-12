@@ -12,7 +12,9 @@ use std::time::Instant;
 use fsci_ndimage::{BoundaryMode, NdArray, correlate};
 
 fn lcg(s: &mut u64) -> f64 {
-    *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    *s = s
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
     (*s >> 11) as f64 / (1u64 << 53) as f64
 }
 
@@ -57,6 +59,9 @@ fn main() {
             let out = correlate(black_box(&input), &weights, BoundaryMode::Reflect, 0.0).unwrap();
             acc += out.data[out.data.len() / 2];
         }
-        println!("img={img:?} ker={ker:?}  {:>10.3?}/call (acc={acc:.6})", t0.elapsed() / reps);
+        println!(
+            "img={img:?} ker={ker:?}  {:>10.3?}/call (acc={acc:.6})",
+            t0.elapsed() / reps
+        );
     }
 }

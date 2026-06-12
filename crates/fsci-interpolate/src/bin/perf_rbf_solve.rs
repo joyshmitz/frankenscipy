@@ -11,7 +11,9 @@ use std::time::Instant;
 use fsci_interpolate::{RbfInterpolator, RbfKernel};
 
 fn lcg(s: &mut u64) -> f64 {
-    *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    *s = s
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
     (*s >> 11) as f64 / (1u64 << 53) as f64
 }
 fn dataset(n: usize, dim: usize, seed: u64) -> (Vec<Vec<f64>>, Vec<f64>) {
@@ -35,7 +37,9 @@ fn main() {
         // eval at fixed deterministic queries -> bits depend on every solved weight.
         let mut acc = 0u64;
         for q in 0..8 {
-            let query: Vec<f64> = (0..dim).map(|d| (q * 7 + d * 3) as f64 % 10.0 + 0.5).collect();
+            let query: Vec<f64> = (0..dim)
+                .map(|d| (q * 7 + d * 3) as f64 % 10.0 + 0.5)
+                .collect();
             acc ^= rbf.eval(&query).to_bits().rotate_left(q as u32);
         }
         println!("n={n} dim={dim} eval_xor_bits={acc:016x}");
@@ -53,6 +57,9 @@ fn main() {
                 .expect("rbf new");
             acc += rbf.eval(&vec![1.5; dim]);
         }
-        println!("n={n} dim={dim}  {:>10.3?}/call (acc={acc:.6})", t0.elapsed() / reps);
+        println!(
+            "n={n} dim={dim}  {:>10.3?}/call (acc={acc:.6})",
+            t0.elapsed() / reps
+        );
     }
 }

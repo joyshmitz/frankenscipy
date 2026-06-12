@@ -39,7 +39,11 @@ fn main() {
         let img = image(n);
         let sf = spline_filter(&img, order, mode).unwrap();
         let aff = affine_transform(&img, &matrix, order, mode, 0.0).unwrap();
-        println!("n={n} spline_filter={:016x} affine={:016x}", digest(&sf.data), digest(&aff.data));
+        println!(
+            "n={n} spline_filter={:016x} affine={:016x}",
+            digest(&sf.data),
+            digest(&aff.data)
+        );
     }
     println!("===GOLDEN_PAYLOAD_END===");
 
@@ -53,10 +57,22 @@ fn main() {
                 for _ in 0..reps {
                     acc += $body;
                 }
-                println!("n={n:>5} {:<14} {:>9.3?}/call (acc={acc:.3})", $name, t0.elapsed() / reps);
+                println!(
+                    "n={n:>5} {:<14} {:>9.3?}/call (acc={acc:.3})",
+                    $name,
+                    t0.elapsed() / reps
+                );
             }};
         }
-        time!("spline_filter", spline_filter(black_box(&img), order, mode).unwrap().data[0]);
-        time!("affine", affine_transform(black_box(&img), &matrix, order, mode, 0.0).unwrap().data[0]);
+        time!(
+            "spline_filter",
+            spline_filter(black_box(&img), order, mode).unwrap().data[0]
+        );
+        time!(
+            "affine",
+            affine_transform(black_box(&img), &matrix, order, mode, 0.0)
+                .unwrap()
+                .data[0]
+        );
     }
 }

@@ -27,7 +27,9 @@ fn clamped_knots(x0: f64, xn: f64, ncoeff: usize, k: usize) -> Vec<f64> {
 fn problem(m: usize, ncoeff: usize, k: usize) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
     let x0 = 0.0;
     let xn = m as f64;
-    let x: Vec<f64> = (0..m).map(|i| x0 + (xn - x0) * i as f64 / (m - 1) as f64).collect();
+    let x: Vec<f64> = (0..m)
+        .map(|i| x0 + (xn - x0) * i as f64 / (m - 1) as f64)
+        .collect();
     let y: Vec<f64> = x
         .iter()
         .map(|&t| (0.013 * t).sin() + 0.5 * (0.4 + 0.07 * t).cos())
@@ -43,7 +45,11 @@ fn digest(values: &[f64]) -> u64 {
 }
 
 fn main() {
-    let cases = [(1500usize, 200usize, 3usize), (3000, 400, 3), (5000, 600, 3)];
+    let cases = [
+        (1500usize, 200usize, 3usize),
+        (3000, 400, 3),
+        (5000, 600, 3),
+    ];
 
     // ---- bit-identity payload (compare across the stashed pre-lever build) ----
     println!("===GOLDEN_PAYLOAD_BEGIN===");

@@ -13,7 +13,9 @@ use std::time::Instant;
 use fsci_stats::{boxcox_normmax, yeojohnson_normmax};
 
 fn lcg(s: &mut u64) -> f64 {
-    *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    *s = s
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
     (*s >> 11) as f64 / (1u64 << 53) as f64
 }
 
@@ -46,12 +48,18 @@ fn main() {
         for _ in 0..reps {
             acc += boxcox_normmax(black_box(&dp), (-2.0, 2.0));
         }
-        println!("boxcox n={n}  {:>10.3?}/call (acc={acc:.6})", t0.elapsed() / reps);
+        println!(
+            "boxcox n={n}  {:>10.3?}/call (acc={acc:.6})",
+            t0.elapsed() / reps
+        );
         let t1 = Instant::now();
         let mut acc2 = 0.0;
         for _ in 0..reps {
             acc2 += yeojohnson_normmax(black_box(&ds), (-2.0, 2.0));
         }
-        println!("yeojohnson n={n}  {:>10.3?}/call (acc={acc2:.6})", t1.elapsed() / reps);
+        println!(
+            "yeojohnson n={n}  {:>10.3?}/call (acc={acc2:.6})",
+            t1.elapsed() / reps
+        );
     }
 }

@@ -10,7 +10,9 @@ use std::time::Instant;
 use fsci_interpolate::{RegularGridInterpolator, RegularGridMethod};
 
 fn lcg(s: &mut u64) -> f64 {
-    *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    *s = s
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
     (*s >> 11) as f64 / (1u64 << 53) as f64
 }
 
@@ -42,7 +44,10 @@ fn main() {
         for (i, &v) in out.iter().enumerate() {
             acc ^= v.to_bits().rotate_left((i % 64) as u32);
         }
-        println!("ndim={ndim} len={len} m={m} out_xor_bits={acc:016x} n_out={}", out.len());
+        println!(
+            "ndim={ndim} len={len} m={m} out_xor_bits={acc:016x} n_out={}",
+            out.len()
+        );
     }
     println!("===GOLDEN_PAYLOAD_END===");
 
@@ -56,6 +61,9 @@ fn main() {
         for _ in 0..reps {
             acc += interp.eval_many(black_box(&qs)).expect("eval_many")[0];
         }
-        println!("ndim={ndim} len={len} m={m}  {:>10.3?}/call (acc={acc:.6})", t0.elapsed() / reps);
+        println!(
+            "ndim={ndim} len={len} m={m}  {:>10.3?}/call (acc={acc:.6})",
+            t0.elapsed() / reps
+        );
     }
 }

@@ -6349,7 +6349,11 @@ fn execute_savgol_filter(case: &SignalCase) -> SignalObserved {
         Some("wrap") => fsci_signal::SavgolMode::Wrap,
         Some(other) => return SignalObserved::Error(format!("unknown savgol mode: {other}")),
     };
-    let cval = case.args.get(4).and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+    let cval = case
+        .args
+        .get(4)
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.0);
     match fsci_signal::savgol_filter_mode(&x, window_length, polyorder, mode, cval) {
         Ok(result) => SignalObserved::Array(result),
         Err(e) => SignalObserved::Error(format!("{e:?}")),

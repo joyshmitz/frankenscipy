@@ -12,20 +12,29 @@ use std::time::Instant;
 use fsci_interpolate::{CloughTocher2DInterpolator, LinearNDInterpolator, NearestNDInterpolator};
 
 fn lcg(s: &mut u64) -> f64 {
-    *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    *s = s
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
     (*s >> 11) as f64 / (1u64 << 53) as f64
 }
 
 fn dataset(n: usize, seed: u64) -> (Vec<Vec<f64>>, Vec<f64>) {
     let mut s = seed;
-    let pts: Vec<Vec<f64>> = (0..n).map(|_| vec![lcg(&mut s) * 10.0, lcg(&mut s) * 10.0]).collect();
-    let vals: Vec<f64> = pts.iter().map(|p| (0.3 * p[0]).sin() + (0.2 * p[1]).cos()).collect();
+    let pts: Vec<Vec<f64>> = (0..n)
+        .map(|_| vec![lcg(&mut s) * 10.0, lcg(&mut s) * 10.0])
+        .collect();
+    let vals: Vec<f64> = pts
+        .iter()
+        .map(|p| (0.3 * p[0]).sin() + (0.2 * p[1]).cos())
+        .collect();
     (pts, vals)
 }
 
 fn queries(m: usize, seed: u64) -> Vec<Vec<f64>> {
     let mut s = seed;
-    (0..m).map(|_| vec![lcg(&mut s) * 10.0, lcg(&mut s) * 10.0]).collect()
+    (0..m)
+        .map(|_| vec![lcg(&mut s) * 10.0, lcg(&mut s) * 10.0])
+        .collect()
 }
 
 fn digest(values: &[f64]) -> u64 {
@@ -47,7 +56,12 @@ fn main() {
         let l = lin.eval_many(&q).unwrap();
         let c = clo.eval_many(&q).unwrap();
         let nr = near.eval_many(&q).unwrap();
-        println!("m={m} linear={:016x} clough={:016x} nearest={:016x}", digest(&l), digest(&c), digest(&nr));
+        println!(
+            "m={m} linear={:016x} clough={:016x} nearest={:016x}",
+            digest(&l),
+            digest(&c),
+            digest(&nr)
+        );
     }
     println!("===GOLDEN_PAYLOAD_END===");
 
@@ -62,7 +76,11 @@ fn main() {
                     let r = $obj.eval_many(black_box(&q)).unwrap();
                     acc += r[r.len() / 2];
                 }
-                println!("m={m:>7} {:<8} {:>9.3?}/call (acc={acc:.3})", $name, t0.elapsed() / reps);
+                println!(
+                    "m={m:>7} {:<8} {:>9.3?}/call (acc={acc:.3})",
+                    $name,
+                    t0.elapsed() / reps
+                );
             }};
         }
         time!("linear", lin);

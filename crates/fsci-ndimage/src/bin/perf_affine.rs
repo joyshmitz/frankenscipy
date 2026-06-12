@@ -70,12 +70,34 @@ fn main() {
                 for _ in 0..reps {
                     acc += $body;
                 }
-                println!("n={n:>4} {:<10} {:>9.3?}/call (acc={acc:.3})", $name, t0.elapsed() / reps);
+                println!(
+                    "n={n:>4} {:<10} {:>9.3?}/call (acc={acc:.3})",
+                    $name,
+                    t0.elapsed() / reps
+                );
             }};
         }
-        time!("affine", affine_transform(black_box(&img), &matrix, order, mode, 0.0).unwrap().data[0]);
-        time!("rotate", rotate(black_box(&img), 27.0, false, order, mode, 0.0).unwrap().data[0]);
-        time!("zoom", zoom(black_box(&img), &[1.7, 1.7], order, mode, 0.0).unwrap().data[0]);
-        time!("mapcoord", map_coordinates(black_box(&img), &coords, order, mode, 0.0).unwrap()[0]);
+        time!(
+            "affine",
+            affine_transform(black_box(&img), &matrix, order, mode, 0.0)
+                .unwrap()
+                .data[0]
+        );
+        time!(
+            "rotate",
+            rotate(black_box(&img), 27.0, false, order, mode, 0.0)
+                .unwrap()
+                .data[0]
+        );
+        time!(
+            "zoom",
+            zoom(black_box(&img), &[1.7, 1.7], order, mode, 0.0)
+                .unwrap()
+                .data[0]
+        );
+        time!(
+            "mapcoord",
+            map_coordinates(black_box(&img), &coords, order, mode, 0.0).unwrap()[0]
+        );
     }
 }

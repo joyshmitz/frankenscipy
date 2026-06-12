@@ -12,7 +12,9 @@ use std::time::Instant;
 use fsci_stats::{bootstrap_mean, bootstrap_std};
 
 fn lcg(s: &mut u64) -> f64 {
-    *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    *s = s
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
     (*s >> 11) as f64 / (1u64 << 53) as f64
 }
 
@@ -28,7 +30,10 @@ fn main() {
             let (slo, shi) = bootstrap_std(&data, nb, 0.95, seed);
             println!(
                 "nb={nb:>6} seed={seed:<6} mean_bits={:016x},{:016x} std_bits={:016x},{:016x}",
-                lo.to_bits(), hi.to_bits(), slo.to_bits(), shi.to_bits()
+                lo.to_bits(),
+                hi.to_bits(),
+                slo.to_bits(),
+                shi.to_bits()
             );
         }
     }
@@ -45,7 +50,11 @@ fn main() {
                     let (lo, _) = $f(&data, nb, 0.95, 1);
                     acc += lo;
                 }
-                println!("{:<14} nb={nb:>6} {:>10.3?}/call (acc={acc:.6})", $name, t0.elapsed() / reps);
+                println!(
+                    "{:<14} nb={nb:>6} {:>10.3?}/call (acc={acc:.6})",
+                    $name,
+                    t0.elapsed() / reps
+                );
             }};
         }
         time!("bootstrap_mean", bootstrap_mean);

@@ -13,7 +13,9 @@ use std::time::Instant;
 use fsci_interpolate::krogh_interpolate;
 
 fn lcg(s: &mut u64) -> f64 {
-    *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    *s = s
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
     (*s >> 11) as f64 / (1u64 << 53) as f64
 }
 
@@ -30,8 +32,9 @@ fn queries(m: usize, seed: u64) -> Vec<f64> {
 }
 
 fn digest(v: &[f64]) -> u64 {
-    v.iter()
-        .fold(1469598103934665603u64, |h, &x| (h ^ x.to_bits()).wrapping_mul(1099511628211))
+    v.iter().fold(1469598103934665603u64, |h, &x| {
+        (h ^ x.to_bits()).wrapping_mul(1099511628211)
+    })
 }
 
 fn main() {
@@ -55,6 +58,9 @@ fn main() {
             let out = krogh_interpolate(&xi, &yi, black_box(&xq)).unwrap();
             acc += out[out.len() / 2];
         }
-        println!("n={n} m={m}  {:>10.3?}/call (acc={acc:.6})", t0.elapsed() / reps);
+        println!(
+            "n={n} m={m}  {:>10.3?}/call (acc={acc:.6})",
+            t0.elapsed() / reps
+        );
     }
 }
