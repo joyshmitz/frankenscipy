@@ -25,12 +25,16 @@ Artifact: `proof_eig_banded_packed_chase_rch.txt`
 
 The focused proof failed before a release perf gate:
 
-- First fixture reached the digest print:
+- RCH worker: `ovh-a`
+- Fixture digests before failure:
   - `n=12`, bandwidth 3
   - candidate digest `0x0fdd1b7319713d23`
   - dense digest `0xa20d0fb9eab56afb`
-- Next fixture failed with:
-  - `ConvergenceFailure { detail: "packed band chase exceeded workspace by 1.46634703131796051e-2" }`
+  - `n=33`, bandwidth 5
+  - candidate digest `0xda9c2057303b2fb4`
+  - dense digest `0x25e568fa547219a2`
+- Retained proof failure:
+  - `ConvergenceFailure { detail: "packed band chase exceeded workspace by 4.81685870336027183e-11" }`
 
 This proves the adjacent-rotation formulation does not preserve the fixed band
 envelope. Increasing the workspace width is not an acceptable fix because it
