@@ -4530,7 +4530,20 @@ pub fn boxcox1p(
 }
 
 pub fn boxcox1p_scalar(x: f64, lam: f64) -> f64 {
-    boxcox_transform_scalar(1.0 + x, lam)
+    // scipy.special.boxcox1p uses log1p(x) so small |x| keeps full precision:
+    // forming 1.0 + x explicitly (the old boxcox_transform(1.0 + x, λ)) loses
+    // ~4 digits when |x| << 1 — boxcox1p(1e-12, λ) gave 1.0000889e-12 vs 1e-12.
+    // The unified expm1(λ·log1p(x))/λ form also reproduces scipy's λ=±inf
+    // sentinels and the x < -1 → NaN domain via IEEE arithmetic. frankenscipy-frqrf
+    if x.is_nan() || lam.is_nan() {
+        return f64::NAN;
+    }
+    let lgx = x.ln_1p(); // ln(1 + x); NaN for x < -1, -inf at x = -1
+    if lam == 0.0 {
+        lgx
+    } else {
+        (lam * lgx).exp_m1() / lam
+    }
 }
 
 /// Inverse Box-Cox transformation with offset.
