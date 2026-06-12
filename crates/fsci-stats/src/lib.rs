@@ -7089,6 +7089,25 @@ impl DiscreteDistribution for Skellam {
         sum.min(1.0)
     }
 
+    fn sf(&self, k: u64) -> f64 {
+        // P(X > k) summed directly over the right tail. The default 1−cdf
+        // cancels once cdf → 1: skellam(20,15).sf(50) was 3.458e-13 vs the
+        // mpmath truth 3.405e-13. Sum pmf_signed from k+1 up to the same window
+        // top the cdf uses (mean + 12σ + 40). frankenscipy-rc379
+        let mean = self.mu1 - self.mu2;
+        let std = (self.mu1 + self.mu2).sqrt();
+        let hi = (mean + 12.0 * std + 40.0).ceil() as i64;
+        let k_i = k.min(i64::MAX as u64) as i64;
+        if k_i >= hi {
+            return 0.0;
+        }
+        let mut sum = 0.0;
+        for j in (k_i + 1)..=hi {
+            sum += self.pmf_signed(j);
+        }
+        sum.clamp(0.0, 1.0)
+    }
+
     fn mean(&self) -> f64 {
         self.mu1 - self.mu2
     }
