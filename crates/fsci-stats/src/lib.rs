@@ -1868,6 +1868,36 @@ impl ContinuousDistribution for ChiSquared {
         x
     }
 
+    fn isf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return f64::INFINITY;
+        }
+        if q == 1.0 {
+            return 0.0;
+        }
+        // scipy.stats.chi2.isf via gammainccinv(k/2, q) (upper-tail inverse),
+        // well-conditioned for small q; the trait-default ppf(1-q) route lost
+        // precision in the right tail (isf(1e-12) ~1.7e-5 off). frankenscipy-d2gag
+        let mut x = 2.0 * fsci_special::gammainccinv_scalar(0.5 * self.df, q);
+        if x <= 0.0 || !x.is_finite() || (self.sf(x) - q).abs() > 0.1 {
+            return isf_bisection(|v| self.sf(v), q, self.mean(), self.std());
+        }
+        for _ in 0..8 {
+            let err = self.sf(x) - q;
+            if err.abs() < 1e-14 {
+                break;
+            }
+            let dx = self.pdf(x);
+            if dx > 1e-30 {
+                x = (x + err / dx).max(0.0);
+            }
+        }
+        x
+    }
+
     fn mean(&self) -> f64 {
         self.df
     }
@@ -2331,7 +2361,9 @@ impl Exponential {
         if q == 1.0 {
             return f64::INFINITY;
         }
-        -(1.0 - q).ln() / self.lambda
+        // ln(1 - q) via ln_1p(-q) keeps full precision for small q; the naive
+        // (1.0 - q).ln() cancels (ppf(1e-12) gave 9.99978e-13 vs scipy 1e-12).
+        -(-q).ln_1p() / self.lambda
     }
 }
 
@@ -3648,6 +3680,38 @@ impl ContinuousDistribution for GammaDist {
         x
     }
 
+    fn isf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return f64::INFINITY;
+        }
+        if q == 1.0 {
+            return 0.0;
+        }
+        // scipy.stats.gamma.isf delegates to gammainccinv (upper-tail inverse),
+        // which is well-conditioned for small q. The trait-default isf routes
+        // ppf(1-q) → gammaincinv near 1, losing precision in the right tail
+        // (isf(1e-12) was ~1.7e-5 off scipy). frankenscipy-d2gag
+        let mut x = self.scale * fsci_special::gammainccinv_scalar(self.a, q);
+        if x <= 0.0 || !x.is_finite() || (self.sf(x) - q).abs() > 0.1 {
+            return isf_bisection(|v| self.sf(v), q, self.mean(), self.std());
+        }
+        for _ in 0..8 {
+            let err = self.sf(x) - q;
+            if err.abs() < 1e-14 {
+                break;
+            }
+            let dx = self.pdf(x);
+            if dx > 1e-30 {
+                // sf is decreasing: d(sf)/dx = -pdf, so x -= err / (-pdf).
+                x = (x + err / dx).max(0.0);
+            }
+        }
+        x
+    }
+
     fn mean(&self) -> f64 {
         self.a * self.scale
     }
@@ -3985,7 +4049,8 @@ impl Weibull {
         if q == 1.0 {
             return f64::INFINITY;
         }
-        self.scale * (-(1.0 - q).ln()).powf(1.0 / self.c)
+        // ln(1 - q) via ln_1p(-q) avoids cancellation for small q.
+        self.scale * (-(-q).ln_1p()).powf(1.0 / self.c)
     }
 }
 
@@ -5379,7 +5444,9 @@ impl ContinuousDistribution for Rayleigh {
         if q == 1.0 {
             return f64::INFINITY;
         }
-        self.scale * (-2.0 * (1.0 - q).ln()).sqrt()
+        // ln(1 - q) via ln_1p(-q) keeps precision for small q (ppf(1e-12) was
+        // ~1.1e-5 off scipy with the naive (1.0 - q).ln()).
+        self.scale * (-2.0 * (-q).ln_1p()).sqrt()
     }
 
     fn mean(&self) -> f64 {
@@ -8725,7 +8792,44 @@ impl ContinuousDistribution for Cauchy {
         if q == 1.0 {
             return f64::INFINITY;
         }
-        self.loc + self.scale * (PI * (q - 0.5)).tan()
+        if q == 0.5 {
+            return self.loc;
+        }
+        // tan(π·(q−0.5)) is ill-conditioned near q→0/1 (argument near ±π/2):
+        // a ~1e-16 error in the argument blows up through tan's diverging
+        // derivative (ppf(1e-12) was 1.4e-5 off scipy). The reciprocal-tangent
+        // identity tan(π·(q−0.5)) = ∓1/tan(π·min(q,1−q)) keeps the small angle
+        // well-conditioned, matching scipy.stats.cauchy.ppf bit-for-bit.
+        let z = if q < 0.5 {
+            -1.0 / (PI * q).tan()
+        } else {
+            1.0 / (PI * (1.0 - q)).tan()
+        };
+        self.loc + self.scale * z
+    }
+
+    fn isf(&self, q: f64) -> f64 {
+        if !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return f64::INFINITY;
+        }
+        if q == 1.0 {
+            return f64::NEG_INFINITY;
+        }
+        if q == 0.5 {
+            return self.loc;
+        }
+        // isf(q) = ppf(1-q); computing 1-q first cancels for small q. Use the
+        // reciprocal-tangent identity directly on q so the deep right tail
+        // stays accurate (isf(1e-12) was 2.2e-5 off via the trait default).
+        let z = if q < 0.5 {
+            1.0 / (PI * q).tan()
+        } else {
+            -1.0 / (PI * (1.0 - q)).tan()
+        };
+        self.loc + self.scale * z
     }
 
     fn mean(&self) -> f64 {
@@ -15973,11 +16077,15 @@ impl ContinuousDistribution for Gompertz {
     }
 
     fn ppf(&self, q: f64) -> f64 {
-        // Closed-form inverse x = ln(1 − ln(1−q)/c); direct vs bisection. frankenscipy-ld94y
+        // Closed-form inverse x = ln(1 − ln(1−q)/c). frankenscipy-ld94y
         if !(0.0..=1.0).contains(&q) {
             return f64::NAN;
         }
-        (1.0 - (-q).ln_1p() / self.c).ln()
+        // Let a = -ln(1-q)/c (≥0, small for small q). x = ln(1+a) via ln_1p
+        // keeps full precision; the outer (1.0 - ...).ln() cancelled
+        // (ppf(1e-12) was 1.3e-4 off scipy). Matches scipy.stats.gompertz.ppf.
+        let a = -(-q).ln_1p() / self.c;
+        a.ln_1p()
     }
 
     fn sf(&self, x: f64) -> f64 {
@@ -48486,13 +48594,21 @@ mod tests {
                 "norm isf({q})"
             );
         }
+        // Gamma isf delegates to gammainccinv (matching scipy.stats.gamma.isf),
+        // which is NOT byte-identical to ppf(1-q) — scipy itself differs here by
+        // ~1e-14 (ppf uses gammaincinv, isf uses gammainccinv). Assert parity
+        // against scipy golden isf values instead of the old self-consistency.
         let g = GammaDist::new(2.0, 1.0);
-        for &q in &[1e-4, 1e-2, 0.25, 0.75, 0.99] {
-            assert_eq!(
-                g.isf(q).to_bits(),
-                g.ppf(1.0 - q).to_bits(),
-                "gamma isf({q})"
-            );
+        let gamma_isf_golden = [
+            (1e-4, 11.756371222495419),
+            (1e-2, 6.638352067993813),
+            (0.25, 2.6926345288896956),
+            (0.75, 0.961278763114777),
+            (0.99, 0.148554740253266),
+        ];
+        for &(q, golden) in &gamma_isf_golden {
+            let rel = (g.isf(q) - golden).abs() / golden.abs();
+            assert!(rel < 1e-9, "gamma isf({q}) = {} vs scipy {golden} (rel {rel:.3e})", g.isf(q));
         }
     }
 
