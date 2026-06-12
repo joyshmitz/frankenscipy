@@ -5415,7 +5415,23 @@ impl ContinuousDistribution for RelBreitWigner {
         if k <= 0.0 {
             return 0.0;
         }
-        simpson_integrate_adaptive(|t| self.pdf(t), 0.0, k, 64, 1e-10, 1e-14, 12).clamp(0.0, 1.0)
+        // Closed form: the pdf k_c/((x²−ρ²)²+ρ²) is rational. Factor the quartic
+        // as (x²−2αx+β)(x²+2αx+β), β=ρ√(ρ²+1), α=√((β+ρ²)/2), γ=√((β−ρ²)/2);
+        // then F(x)=k_c·[−ln(Q/R)/(8αβ) + (atan((x−α)/γ)+atan((x+α)/γ))/(4βγ)],
+        // Q=x²−2αx+β, R=x²+2αx+β. Replaces the adaptive Simpson over the sharply
+        // peaked pdf (~3e-7 off for small ρ); now ~1e-14 vs scipy.
+        // frankenscipy-hh2zz
+        let rho = self.rho;
+        let r2 = rho * rho;
+        let beta = rho * (r2 + 1.0).sqrt();
+        let alpha = ((beta + r2) / 2.0).sqrt();
+        let gamma = ((beta - r2) / 2.0).sqrt();
+        let x = k;
+        let q = (x - alpha).mul_add(x - alpha, beta - alpha * alpha); // x²−2αx+β
+        let r = (x + alpha).mul_add(x + alpha, beta - alpha * alpha); // x²+2αx+β
+        let val = -(q / r).ln() / (8.0 * alpha * beta)
+            + (((x - alpha) / gamma).atan() + ((x + alpha) / gamma).atan()) / (4.0 * beta * gamma);
+        (self.k_const() * val).clamp(0.0, 1.0)
     }
 
     fn ppf(&self, q: f64) -> f64 {
