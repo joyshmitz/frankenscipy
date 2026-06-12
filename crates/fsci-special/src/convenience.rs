@@ -2685,6 +2685,14 @@ pub fn beip(x: f64) -> f64 {
 /// Kelvin function ker(x): real part of K_0(x * sqrt(j)).
 ///
 /// Matches `scipy.special.ker`.
+/// Crossover where the Kelvin K-functions switch from the ascending log/harmonic
+/// series to the K₀/K₁ asymptotic. The series cancels ~ε·e^{x√2} (ber/bei grow
+/// while ker/kei decay) and the dominant-solution asymptotic floors at ~e^{-2x};
+/// the two cross near x≈10, so 10 minimizes the worst-case error (at 11 the
+/// series region [10,11] was ~1e-8 off scipy/mpmath vs the asymptotic's ~2e-9).
+/// frankenscipy.
+const KELVIN_ASYMP_X: f64 = 10.0;
+
 /// (ker(x), kei(x)) for large x from the Kelvin identity
 /// ker(x) + i·kei(x) = K₀(x e^{iπ/4}), evaluated with the complex DLMF 10.40.2
 /// asymptotic K₀(z) ~ √(π/(2z)) e^{-z} Σ_k a_k/z^k, a₀ = 1,
@@ -2822,7 +2830,7 @@ fn kelvin_derivatives(x: f64) -> (f64, f64, f64, f64) {
     } else {
         complex_i1_asymptotic(z)
     };
-    let k1 = if x < 11.0 {
+    let k1 = if x < KELVIN_ASYMP_X {
         complex_k1_series(z)
     } else {
         complex_k1_asymptotic(z)
@@ -2842,7 +2850,7 @@ pub fn ker(x: f64) -> f64 {
     // Large x: the log/harmonic series below cancels catastrophically (ber/bei
     // grow like e^{x/√2} while ker decays like e^{-x/√2}), so use the complex
     // K₀ asymptotic. frankenscipy-rhilt.
-    if x >= 11.0 {
+    if x >= KELVIN_ASYMP_X {
         return kelvin_ker_kei_asymptotic(x).0;
     }
     // For small x, use the series representation:
@@ -2896,7 +2904,7 @@ pub fn kei(x: f64) -> f64 {
     if x == 0.0 {
         return -std::f64::consts::PI / 4.0; // kei(0) = -π/4
     }
-    if x >= 11.0 {
+    if x >= KELVIN_ASYMP_X {
         return kelvin_ker_kei_asymptotic(x).1;
     }
     // kei(x) = -(ln(x/2) + γ) * bei(x) - (π/4) * ber(x) + series_correction
