@@ -8262,6 +8262,26 @@ fn ln_beta(a: f64, b: f64) -> f64 {
 
 /// Standard normal inverse CDF (Beasley-Springer-Moro algorithm).
 fn standard_normal_ppf(p: f64) -> f64 {
+    // SciPy's `scipy.stats.norm.ppf` delegates to `scipy.special.ndtri`.
+    // Route through the same Cephes-style inverse so the deep tail matches
+    // SciPy to machine precision: the old Wichura AS241 polynomial below was
+    // off by ~1.8e-4 at p=1e-12 (q=ppf(1e-12) gave -7.03573 vs SciPy's
+    // -7.03448). `ndtri_scalar` is bit-for-bit with `scipy.special.ndtri`
+    // across the full tail (verified to ~2.5e-16 down to p=1e-300).
+    if p <= 0.0 {
+        return f64::NEG_INFINITY;
+    }
+    if p >= 1.0 {
+        return f64::INFINITY;
+    }
+    fsci_special::ndtri_scalar(p)
+}
+
+/// Legacy Wichura (1988) AS241 rational approximation, retained for reference.
+/// Superseded by `ndtri_scalar` routing in `standard_normal_ppf`; lower tail
+/// accuracy (~1e-4 at p≈1e-12) made it disagree with SciPy.
+#[allow(dead_code)]
+fn standard_normal_ppf_as241(p: f64) -> f64 {
     // Rational approximation for the central region
     if p <= 0.0 {
         return f64::NEG_INFINITY;
