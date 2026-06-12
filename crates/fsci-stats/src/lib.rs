@@ -17178,10 +17178,12 @@ impl RecipInvGauss {
     /// k-th raw moment via adaptive Simpson on a wide x window. The
     /// gaussian-like exp(−(1 − μx)²/(2 x μ²)) decay handles the tail.
     fn recip_inv_gauss_raw_moment(&self, k: u32) -> f64 {
-        // Bulk lives around x ≈ 1/μ; scale the upper bound with μ to
-        // cover heavy-tail cases (μ large pushes both bulk and tail
-        // out).
-        let upper = (40.0_f64).max(40.0 * self.mu);
+        // Bulk lives around x ≈ 1/μ; the tail decays like x^{−1/2}·e^{−x/2}
+        // (independent of μ), so the integrand x^k·pdf has its mass pushed out
+        // by ~2k for higher moments. Scale the upper bound with BOTH μ (bulk)
+        // and k (tail): the old fixed 40 truncated m3/m4, leaving skew/kurt
+        // ~1e-5 short of scipy (k=4 error 8.9e-6 → ~5e-15). frankenscipy-xa0m5
+        let upper = (40.0 + 20.0 * f64::from(k)).max(40.0 * self.mu);
         simpson_integrate_adaptive(
             |x| {
                 if x <= 0.0 {
