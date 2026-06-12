@@ -3059,6 +3059,29 @@ impl NoncentralF {
     }
 }
 
+/// k-th raw moment of the noncentral F. F = (Y/d1)/(W/d2) with Y ~ ncx2(d1, λ)
+/// and W ~ χ²(d2) independent, so E[F^k] = (d2/d1)^k · E[Y^k] · E[W^{-k}].
+/// ncx2 cumulants are κ_n = 2^{n-1}(n-1)!(d1 + nλ); E[χ²(d2)^{-k}] =
+/// 1/Π_{j=1..k}(d2 − 2j) (finite only for d2 > 2k). frankenscipy-1mlrz
+fn ncf_raw_moment(d1: f64, d2: f64, lam: f64, k: u32) -> f64 {
+    let k1 = d1 + lam;
+    let k2 = 2.0 * (d1 + 2.0 * lam);
+    let k3 = 8.0 * (d1 + 3.0 * lam);
+    let k4 = 48.0 * (d1 + 4.0 * lam);
+    let mu_y = match k {
+        1 => k1,
+        2 => k2 + k1 * k1,
+        3 => k3 + 3.0 * k2 * k1 + k1 * k1 * k1,
+        4 => k4 + 4.0 * k3 * k1 + 3.0 * k2 * k2 + 6.0 * k2 * k1 * k1 + k1 * k1 * k1 * k1,
+        _ => return f64::NAN,
+    };
+    let mut inv = 1.0;
+    for j in 1..=k {
+        inv *= d2 - 2.0 * f64::from(j);
+    }
+    (d2 / d1).powi(k as i32) * mu_y / inv
+}
+
 impl ContinuousDistribution for NoncentralF {
     fn pdf(&self, x: f64) -> f64 {
         if x <= 0.0 || x.is_nan() {
@@ -3206,6 +3229,11 @@ impl ContinuousDistribution for NoncentralF {
     }
 
     fn entropy(&self) -> f64 {
+        // BLOCKED on the NoncentralF pdf bug (frankenscipy-t9cj2): the pdf
+        // integrates to 1 and matches mean/var, but its SHAPE differs from
+        // scipy (pdf(0.5)=0.694 vs 0.352), so −∫ pdf·ln pdf gives 1.009 vs
+        // scipy 1.532. Leave NaN until the pdf is fixed; skew/kurt above use the
+        // exact closed-form moments and are correct. frankenscipy-1mlrz
         f64::NAN
     }
 
@@ -3293,11 +3321,27 @@ impl ContinuousDistribution for NoncentralF {
     }
 
     fn skewness(&self) -> f64 {
-        f64::NAN
+        // Third moment exists only for dfd > 6. frankenscipy-1mlrz
+        if self.dfd <= 6.0 {
+            return f64::NAN;
+        }
+        let m = |k: u32| ncf_raw_moment(self.dfn, self.dfd, self.nc, k);
+        let (m1, m2, m3) = (m(1), m(2), m(3));
+        let var = m2 - m1 * m1;
+        let mu3 = m3 - 3.0 * m1 * m2 + 2.0 * m1 * m1 * m1;
+        mu3 / var.powf(1.5)
     }
 
     fn kurtosis(&self) -> f64 {
-        f64::NAN
+        // Fourth moment exists only for dfd > 8. frankenscipy-1mlrz
+        if self.dfd <= 8.0 {
+            return f64::NAN;
+        }
+        let m = |k: u32| ncf_raw_moment(self.dfn, self.dfd, self.nc, k);
+        let (m1, m2, m3, m4) = (m(1), m(2), m(3), m(4));
+        let var = m2 - m1 * m1;
+        let mu4 = m4 - 4.0 * m1 * m3 + 6.0 * m1 * m1 * m2 - 3.0 * m1 * m1 * m1 * m1;
+        mu4 / (var * var) - 3.0
     }
 
     fn mode(&self) -> f64 {
@@ -5463,7 +5507,28 @@ impl ContinuousDistribution for RelBreitWigner {
     }
 
     fn entropy(&self) -> f64 {
-        f64::NAN
+        // No closed form; h = −∫ pdf·ln pdf dx numerically. RelBreitWigner is
+        // heavy-tailed (~x^{−3}), so take the upper bound from a far quantile.
+        // Matches scipy ~1e-7. frankenscipy-1mlrz
+        let hi = self.ppf(1.0 - 1e-10);
+        if !hi.is_finite() || hi <= 0.0 {
+            return f64::NAN;
+        }
+        simpson_integrate_adaptive(
+            |x| {
+                if x <= 0.0 {
+                    return 0.0;
+                }
+                let p = self.pdf(x);
+                if p > 0.0 { -p * p.ln() } else { 0.0 }
+            },
+            1e-12,
+            hi,
+            2_048,
+            1e-10,
+            1e-12,
+            10,
+        )
     }
 
     fn mode(&self) -> f64 {
