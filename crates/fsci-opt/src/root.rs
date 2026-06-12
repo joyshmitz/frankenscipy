@@ -1570,19 +1570,14 @@ where
         x_hist.push(x.clone());
         f_hist.push(fx.clone());
 
-        // Compute the Anderson mixing coefficients
+        // Compute the Anderson mixing step (displacement from the current x).
         let mk = x_hist.len();
-        if mk == 1 {
-            // Simple fixed-point step: x_{k+1} = x_k + beta * f(x_k)
-            for i in 0..n {
-                x[i] += beta * fx[i];
-            }
+        let step: Vec<f64> = if mk == 1 {
+            // Simple fixed-point step: x + beta * f(x).
+            (0..n).map(|i| beta * fx[i]).collect()
         } else {
-            // Build the residual difference matrix ΔF
-            // ΔF_j = f_{k-mk+j+1} - f_{k-mk+j} for j = 0..mk-1
+            // Build the residual difference matrix ΔF_j = f_{j+1} - f_j.
             let num_cols = mk - 1;
-
-            // Compute residual differences
             let mut delta_f: Vec<Vec<f64>> = Vec::with_capacity(num_cols);
             for j in 0..num_cols {
                 let df: Vec<f64> = f_hist[j + 1]
@@ -1593,11 +1588,10 @@ where
                 delta_f.push(df);
             }
 
-            // Solve least squares: min ||ΔF * γ - f_k||²
-            // Using normal equations: (ΔF^T ΔF) γ = ΔF^T f_k
+            // Normal equations (ΔFᵀΔF) γ = ΔFᵀ f_k with Tikhonov (w0) regularization,
+            // so an ill-conditioned ΔFᵀΔF cannot produce huge, divergent γ.
             let mut ata = vec![vec![0.0; num_cols]; num_cols];
             let mut atb = vec![0.0; num_cols];
-
             for i in 0..num_cols {
                 for j in 0..num_cols {
                     ata[i][j] = delta_f[i]
@@ -1608,28 +1602,37 @@ where
                 }
                 atb[i] = delta_f[i].iter().zip(fx.iter()).map(|(a, b)| a * b).sum();
             }
-
-            // Solve the small linear system using simple Gaussian elimination
+            const W0: f64 = 0.01;
+            let max_diag = (0..num_cols).map(|i| ata[i][i]).fold(0.0_f64, f64::max);
+            let reg = W0 * W0 * max_diag.max(1.0e-30);
+            for (i, row) in ata.iter_mut().enumerate() {
+                row[i] += reg;
+            }
             let gamma = solve_small_system(&ata, &atb);
 
-            // Compute mixed iterate:
-            // x_{k+1} = x_k + beta*f_k - sum_j gamma_j * (Δx_j + beta*Δf_j)
-            let mut x_new = x.clone();
-            for i in 0..n {
-                x_new[i] += beta * fx[i];
+            // step = beta*f_k - Σ_j γ_j (Δx_j + beta·Δf_j).
+            let mut step = vec![0.0; n];
+            for (i, s) in step.iter_mut().enumerate() {
+                *s = beta * fx[i];
             }
-
             for j in 0..num_cols {
-                for i in 0..n {
+                for (i, s) in step.iter_mut().enumerate() {
                     let dx_ji = x_hist[j + 1][i] - x_hist[j][i];
                     let df_ji = delta_f[j][i];
-                    x_new[i] -= gamma[j] * (dx_ji + beta * df_ji);
+                    *s -= gamma[j] * (dx_ji + beta * df_ji);
                 }
             }
+            step
+        };
 
-            x = x_new;
+        // Apply the (w0-regularized) Anderson step. A backtracking line search is
+        // deliberately NOT used here: Anderson must take its steps to accumulate the
+        // residual history that the least-squares mixing relies on to correct the
+        // search direction, so the w0 regularization (not a line search) is what
+        // tames the previously-divergent, ill-conditioned coefficients.
+        for (xi, si) in x.iter_mut().zip(step.iter()) {
+            *xi += si;
         }
-
         fx = evaluate_multivariate_root(&func, &x, n, "anderson")?;
         nfev += 1;
     }
@@ -2815,6 +2818,27 @@ mod tests {
             "x={}, y={} should be equal",
             result.x[0],
             result.x[1]
+        );
+    }
+
+    #[test]
+    fn anderson_does_not_diverge_on_ill_conditioned_system() {
+        // x²+y²=4, x·y=1 → root [1.93185, 0.51764]. Without Tikhonov (w0)
+        // regularization of the least-squares mixing, the coefficients blew up and
+        // the iteration diverged to ~[-2.7e5, -5.9e4]. The w0 term keeps it finite
+        // and convergent.
+        let f = |x: &[f64]| vec![x[0] * x[0] + x[1] * x[1] - 4.0, x[0] * x[1] - 1.0];
+        let result = anderson(f, &[2.0, 0.5], 1e-6, 500, 5, 1.0).expect("anderson");
+        assert!(
+            result.converged,
+            "anderson should converge: {}",
+            result.message
+        );
+        assert!(
+            (result.x[0] - 1.931_851_652_578).abs() < 1e-4
+                && (result.x[1] - 0.517_638_090_205).abs() < 1e-4,
+            "anderson x={:?}, expected ~[1.93185, 0.51764]",
+            result.x
         );
     }
 
