@@ -2578,6 +2578,21 @@ impl GeneralizedExponential {
         assert!(c > 0.0, "c must be positive, got {c}");
         Self { a, b, c }
     }
+
+    /// Raw moment E[Xᵏ] = ∫₀^∞ xᵏ f(x) dx by adaptive quadrature. The pdf decays
+    /// at rate a+b in the tail, so a window of ~50 e-foldings captures it.
+    fn raw_moment(&self, k: u32) -> f64 {
+        let w = (50.0 / (self.a + self.b)).clamp(5.0, 1.0e4);
+        simpson_integrate_adaptive(
+            |x| x.powi(k as i32) * self.pdf(x),
+            0.0,
+            w,
+            256,
+            1e-12,
+            1e-15,
+            18,
+        )
+    }
 }
 
 impl ContinuousDistribution for GeneralizedExponential {
@@ -2651,11 +2666,12 @@ impl ContinuousDistribution for GeneralizedExponential {
     }
 
     fn mean(&self) -> f64 {
-        f64::NAN
+        self.raw_moment(1)
     }
 
     fn var(&self) -> f64 {
-        f64::NAN
+        let m1 = self.raw_moment(1);
+        self.raw_moment(2) - m1 * m1
     }
 
     fn fit(_data: &[f64]) -> Self {
@@ -2751,15 +2767,42 @@ impl ContinuousDistribution for GeneralizedExponential {
     }
 
     fn entropy(&self) -> f64 {
-        f64::NAN
+        // h = −∫ f ln f over [0, ∞); no closed form (scipy genexpon integrates
+        // too). Use logpdf for the −f·ln f integrand so it stays valid in the tail.
+        let w = (50.0 / (self.a + self.b)).clamp(5.0, 1.0e4);
+        simpson_integrate_adaptive(
+            |x| {
+                let f = self.pdf(x);
+                if f > 0.0 { -f * self.logpdf(x) } else { 0.0 }
+            },
+            0.0,
+            w,
+            256,
+            1e-12,
+            1e-15,
+            18,
+        )
     }
 
     fn skewness(&self) -> f64 {
-        f64::NAN
+        // μ₃/μ₂^{3/2} from the raw moments about the mean.
+        let m1 = self.raw_moment(1);
+        let m2 = self.raw_moment(2);
+        let m3 = self.raw_moment(3);
+        let var = m2 - m1 * m1;
+        let mu3 = m3 - 3.0 * m1 * m2 + 2.0 * m1 * m1 * m1;
+        mu3 / var.powf(1.5)
     }
 
     fn kurtosis(&self) -> f64 {
-        f64::NAN
+        // Excess kurtosis μ₄/μ₂² − 3 from the raw moments about the mean.
+        let m1 = self.raw_moment(1);
+        let m2 = self.raw_moment(2);
+        let m3 = self.raw_moment(3);
+        let m4 = self.raw_moment(4);
+        let var = m2 - m1 * m1;
+        let mu4 = m4 - 4.0 * m1 * m3 + 6.0 * m1 * m1 * m2 - 3.0 * m1 * m1 * m1 * m1;
+        mu4 / (var * var) - 3.0
     }
 
     fn mode(&self) -> f64 {
