@@ -12108,7 +12108,7 @@ pub fn eye(n: usize, m: usize) -> Vec<Vec<f64>> {
 /// Matrix-matrix multiplication C = A * B.
 ///
 /// Matches `numpy.matmul` / `A @ B`.
-const MATMUL_FLAT_WORKSPACE_MIN_DIM: usize = 512;
+const MATMUL_FLAT_WORKSPACE_MIN_DIM: usize = 256;
 
 fn rows_are_rectangular(rows: &[Vec<f64>], width: usize) -> bool {
     rows.iter().all(|row| row.len() == width)
@@ -13456,9 +13456,11 @@ mod tests {
     /// public dispatch gate is covered by `matmul_medium_flat_workspace_route_golden_digest`.
     #[test]
     fn matmul_flat_workspace_is_bit_identical_to_naive_ijk() {
-        assert_eq!(MATMUL_FLAT_WORKSPACE_MIN_DIM, 512);
-        assert!(!matmul_flat_workspace_candidate_dims(256, 256, 256));
-        assert!(matmul_flat_workspace_candidate_dims(512, 512, 512));
+        assert_eq!(MATMUL_FLAT_WORKSPACE_MIN_DIM, 256);
+        assert!(!matmul_flat_workspace_candidate_dims(255, 256, 256));
+        assert!(!matmul_flat_workspace_candidate_dims(256, 255, 256));
+        assert!(!matmul_flat_workspace_candidate_dims(256, 256, 255));
+        assert!(matmul_flat_workspace_candidate_dims(256, 256, 256));
 
         let make_matrix = |rows: usize, cols: usize, seed: u64| -> Vec<Vec<f64>> {
             (0..rows)
@@ -13507,7 +13509,7 @@ mod tests {
     }
 
     /// Golden-output proof for the medium public GEMM route [frankenscipy-8l8r1.72].
-    /// The 512x512 case now crosses the flat-workspace dispatch gate. The helper
+    /// The 256x256 case now crosses the flat-workspace dispatch gate. The helper
     /// and public path are both k-monotonic, so this freezes route selection and
     /// every output bit without introducing a default-test runtime cost.
     #[test]
@@ -13550,7 +13552,7 @@ mod tests {
         }
         println!("matmul_medium_flat_route_golden_digest={digest:#018x}");
         assert_eq!(
-            digest, 0x5fd3_7bf0_53d5_4fb0,
+            digest, 0x6e40_1fad_043a_c8fd,
             "medium flat-workspace route golden digest changed (got {digest:#018x})"
         );
     }
@@ -15619,14 +15621,18 @@ mod tests {
         let n = FLAT_LU_SOLVE_MIN_DIM;
         let mut a = vec![vec![0.0; n]; n];
         for i in 0..n {
-            for j in 0..=i {
+            let (rows_before_i, rows_from_i) = a.split_at_mut(i);
+            let row_i = &mut rows_from_i[0];
+            for (j, cell_ij) in row_i.iter_mut().take(i + 1).enumerate() {
                 let value = if i == j {
                     n as f64 + 1.0
                 } else {
                     (((i * 31 + j * 17 + 11) % 9) as f64 - 4.0) * 1.0e-4
                 };
-                a[i][j] = value;
-                a[j][i] = value;
+                *cell_ij = value;
+                if j < i {
+                    rows_before_i[j][i] = value;
+                }
             }
         }
         let x_expected: Vec<f64> = (0..n).map(|i| ((i % 19) as f64 - 9.0) * 0.125).collect();
