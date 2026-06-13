@@ -28635,26 +28635,71 @@ fn mgc_permutation_pvalue(
     reps: usize,
     random_state: Option<u64>,
 ) -> f64 {
+    // Pre-generate every permutation SEQUENTIALLY from the RNG, so the exact shuffle
+    // sequence (hence each permutation) is identical to the old serial loop; only the
+    // independent, side-effect-free scoring of each permutation is parallelized below.
     let mut rng = StdRng::seed_from_u64(random_state.unwrap_or(0));
     let mut permutation: Vec<usize> = (0..n).collect();
-    let mut exceedances = 1usize;
+    let permutations: Vec<Vec<usize>> = (0..reps)
+        .map(|_| {
+            permutation.shuffle(&mut rng);
+            permutation.clone()
+        })
+        .collect();
 
-    for _ in 0..reps {
-        permutation.shuffle(&mut rng);
-
-        // Permute Y's centered matrix and ranks
-        let perm_centered_y = permute_matrix(centered_y, &permutation);
-        let perm_rank_y = permute_matrix_usize(rank_y, &permutation);
-
-        // Compute MGC map for permuted data
+    // Each rep is independent: permute Y, build the MGC map, take the optimal-scale
+    // statistic, and test it against the observed value. The exceedance tally is a sum of
+    // booleans, which is order-independent, so distributing reps across threads is
+    // byte-identical to the serial accumulation (same permutations, same per-rep stat,
+    // same count).
+    let score = |perm: &[usize]| -> bool {
+        let perm_centered_y = permute_matrix(centered_y, perm);
+        let perm_rank_y = permute_matrix_usize(rank_y, perm);
         let perm_map = compute_mgc_map(centered_x, &perm_centered_y, rank_x, &perm_rank_y, n);
         let (_, _, perm_stat) = find_optimal_scale(&perm_map, n);
+        perm_stat >= observed - 1e-12
+    };
 
-        if perm_stat >= observed - 1e-12 {
-            exceedances += 1;
-        }
-    }
+    // Each permutation scores in O(n²); gate parallelism on total work (reps · n²).
+    let work = (reps as u64).saturating_mul((n as u64).saturating_mul(n as u64));
+    let nthreads = if work < 1 << 20 || reps < 4 {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(reps)
+            .max(1)
+    };
 
+    let exceed = if nthreads <= 1 {
+        permutations.iter().filter(|p| score(p)).count()
+    } else {
+        let chunk = reps.div_ceil(nthreads);
+        let score = &score;
+        let permutations = &permutations;
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..nthreads)
+                .filter_map(|t| {
+                    let i0 = t * chunk;
+                    if i0 >= reps {
+                        return None;
+                    }
+                    let i1 = (i0 + chunk).min(reps);
+                    Some(scope.spawn(move || {
+                        permutations[i0..i1].iter().filter(|p| score(p)).count()
+                    }))
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().expect("mgc permutation worker panicked"))
+                .sum::<usize>()
+        })
+    };
+
+    // Matches the serial seed of `exceedances = 1` (the observed statistic counts itself).
+    let exceedances = 1 + exceed;
     exceedances as f64 / (reps + 1) as f64
 }
 
