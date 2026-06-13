@@ -1184,9 +1184,18 @@ pub fn shichi(x: f64) -> (f64, f64) {
 
     let ax = x.abs();
 
-    // Shi and Chi are computed using series for all x
-    // (they don't have the oscillatory behavior of Si/Ci)
-    let (shi, chi) = shichi_series(ax);
+    // Small/moderate x: the all-positive power series is exact. For large x it
+    // needs O(x) terms and the previous 80-term cap truncated before convergence
+    // (~1e-8 error by x≈100, and unusable past ~120). Switch to the exponential-
+    // integral identities Shi=(Ei+E₁)/2, Chi=(Ei−E₁)/2 — no cancellation for
+    // x≳1, accurate to ~1e-16 out to x≈700 (where Ei overflows). frankenscipy.
+    let (shi, chi) = if ax >= 18.0 {
+        let ei = expi_scalar(ax);
+        let e1 = expn(1, ax);
+        (0.5 * (ei + e1), 0.5 * (ei - e1))
+    } else {
+        shichi_series(ax)
+    };
 
     // Shi(-x) = -Shi(x), Chi(-x) = Chi(x)
     if x < 0.0 { (-shi, chi) } else { (shi, chi) }
