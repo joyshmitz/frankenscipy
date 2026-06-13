@@ -823,39 +823,88 @@ pub fn cdist_metric(
     let na = xa.len();
     let nb = xb.len();
     let nthreads = cdist_thread_count(na, nb, dim);
-    let result: Vec<Vec<f64>> = if nthreads <= 1 {
-        xa.iter()
-            .map(|a| xb.iter().map(|b| metric_distance(a, b, metric)).collect())
-            .collect()
-    } else {
-        let chunk = na.div_ceil(nthreads);
-        std::thread::scope(|scope| {
-            let handles: Vec<_> = (0..nthreads)
-                .filter_map(|t| {
-                    let i0 = t * chunk;
-                    if i0 >= na {
-                        return None;
-                    }
-                    let i1 = (i0 + chunk).min(na);
-                    Some(scope.spawn(move || {
-                        xa[i0..i1]
-                            .iter()
-                            .map(|a| {
-                                xb.iter()
-                                    .map(|b| metric_distance(a, b, metric))
-                                    .collect::<Vec<f64>>()
-                            })
-                            .collect::<Vec<Vec<f64>>>()
-                    }))
-                })
-                .collect();
-            handles
-                .into_iter()
-                .flat_map(|h| h.join().expect("cdist worker panicked"))
-                .collect()
-        })
+
+    // Cosine and Correlation recompute each vector's norm / mean+centered+ssa per pair —
+    // quantities depending on ONE vector. Precompute them once for BOTH xa and xb (O((na+nb)·d))
+    // so each of the na·nb pairs does only the cross term. Byte-identical: precomputed
+    // quantities and the cross term use the same arithmetic/summation order as the scalar
+    // `cosine`/`correlation` helpers (see `pdist`).
+    let result: Vec<Vec<f64>> = match metric {
+        DistanceMetric::Cosine => {
+            let na_norm: Vec<f64> = xa.iter().map(|v| simd_sqsum(v).sqrt()).collect();
+            let nb_norm: Vec<f64> = xb.iter().map(|v| simd_sqsum(v).sqrt()).collect();
+            cdist_fill(na, nb, nthreads, |i, j| {
+                let denom = na_norm[i] * nb_norm[j];
+                if denom == 0.0 {
+                    f64::NAN
+                } else {
+                    1.0 - simd_dot(&xa[i], &xb[j]) / denom
+                }
+            })
+        }
+        DistanceMetric::Correlation if dim >= 2 => {
+            let dn = dim as f64;
+            let prep = |v: &[f64]| -> (Vec<f64>, f64) {
+                let mean = v.iter().sum::<f64>() / dn;
+                let c: Vec<f64> = v.iter().map(|&xi| xi - mean).collect();
+                let ss: f64 = c.iter().map(|&ci| ci * ci).sum();
+                (c, ss)
+            };
+            let pa: Vec<(Vec<f64>, f64)> = xa.iter().map(|v| prep(v)).collect();
+            let pb: Vec<(Vec<f64>, f64)> = xb.iter().map(|v| prep(v)).collect();
+            cdist_fill(na, nb, nthreads, |i, j| {
+                let (ci, ssa) = &pa[i];
+                let (cj, ssb) = &pb[j];
+                let ssab: f64 = ci.iter().zip(cj.iter()).map(|(&p, &q)| p * q).sum();
+                let denom = (ssa * ssb).sqrt();
+                if denom == 0.0 {
+                    f64::NAN
+                } else {
+                    1.0 - ssab / denom
+                }
+            })
+        }
+        _ => cdist_fill(na, nb, nthreads, |i, j| {
+            metric_distance(&xa[i], &xb[j], metric)
+        }),
     };
     Ok(result)
+}
+
+/// Fill a `na × nb` distance matrix by evaluating `pair(i, j)`. Rows of xa are split across
+/// threads (each fills a contiguous row block) and reassembled in order — bit-identical to
+/// the sequential row-major order regardless of which core owns a row.
+fn cdist_fill<F>(na: usize, nb: usize, nthreads: usize, pair: F) -> Vec<Vec<f64>>
+where
+    F: Fn(usize, usize) -> f64 + Sync,
+{
+    if nthreads <= 1 {
+        return (0..na)
+            .map(|i| (0..nb).map(|j| pair(i, j)).collect())
+            .collect();
+    }
+    let chunk = na.div_ceil(nthreads);
+    let pair = &pair;
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..nthreads)
+            .filter_map(|t| {
+                let i0 = t * chunk;
+                if i0 >= na {
+                    return None;
+                }
+                let i1 = (i0 + chunk).min(na);
+                Some(scope.spawn(move || {
+                    (i0..i1)
+                        .map(|i| (0..nb).map(|j| pair(i, j)).collect::<Vec<f64>>())
+                        .collect::<Vec<Vec<f64>>>()
+                }))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().expect("cdist worker panicked"))
+            .collect()
+    })
 }
 
 /// Worker count for a parallel `cdist`: 1 (sequential) unless the distance matrix
