@@ -1,0 +1,5 @@
+810e540821136044643d90d3ed4fa1e601f430e03a24f2c2e38d9d91b0b4d951  tests/artifacts/perf/2026-06-13-linalg-det-lu-route/baseline_det_256_rch.txt
+448235cc22cb67b24b44b4544a7beec451525c790ca6e6ad8c985d53e39414b1  tests/artifacts/perf/2026-06-13-linalg-det-lu-route/proof_dmatrix_from_rows_bits_rch.txt
+d83de3187da6625aa423a0d799043556518c358f7a3c82300c50e40ca9a1f7cd  tests/artifacts/perf/2026-06-13-linalg-det-lu-route/proof_det_matches_rch.txt
+0697e90ba6960a9e54f63f2582b14884899c935e4b9aff1a7939188f27d85fc6  tests/artifacts/perf/2026-06-13-linalg-det-lu-route/after_det_256_rch.txt
+6302ff4e551f8a91ee0a6bdb49de5ecadedc2a010d0818bee65de8f27c71b23b  tests/artifacts/perf/2026-06-13-linalg-det-lu-route/rejected_row_slice_dmatrix_materialization.md

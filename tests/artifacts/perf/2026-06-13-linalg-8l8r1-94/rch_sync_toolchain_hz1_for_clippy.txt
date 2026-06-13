@@ -1,0 +1,8 @@
+
+Sync Rust Toolchain
+-------------------
+
+  → Required toolchain: nightly
+
+
+  Summary: Installed: 0, Already present: 1, Failed: 0

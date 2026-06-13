@@ -12135,7 +12135,7 @@ fn matmul_flat_compute_rows(
     row_end: usize,
     a_flat: &[f64],
     packed_b: &[f64],
-    b_flat: &[f64],
+    b: &[Vec<f64>],
     ka: usize,
     n: usize,
 ) {
@@ -12291,7 +12291,7 @@ fn matmul_flat_compute_rows(
                         for dj in 0..nr {
                             let mut s = 0.0;
                             for k in 0..ka {
-                                s += a_flat[a_base + k] * b_flat[k * n + j0 + dj];
+                                s += a_flat[a_base + k] * b[k][j0 + dj];
                             }
                             out[c_base + dj] = s;
                         }
@@ -12329,15 +12329,11 @@ fn matmul_flat_workspace(
     n: usize,
 ) -> Option<Vec<Vec<f64>>> {
     let a_len = m.checked_mul(ka)?;
-    let b_len = ka.checked_mul(n)?;
+    let _ = ka.checked_mul(n)?;
     let c_len = m.checked_mul(n)?;
     let mut a_flat = Vec::with_capacity(a_len);
     for row in a {
         a_flat.extend_from_slice(row);
-    }
-    let mut b_flat = Vec::with_capacity(b_len);
-    for row in b {
-        b_flat.extend_from_slice(row);
     }
     let mut c_flat = vec![0.0; c_len];
 
@@ -12347,9 +12343,8 @@ fn matmul_flat_workspace(
     let mut packed_b = Vec::with_capacity(packed_b_len);
     for jb in 0..full_n_blocks {
         let j0 = jb * NR;
-        for k in 0..ka {
-            let b_base = k * n + j0;
-            packed_b.extend_from_slice(&b_flat[b_base..b_base + NR]);
+        for row in b.iter().take(ka) {
+            packed_b.extend_from_slice(&row[j0..j0 + NR]);
         }
     }
 
@@ -12359,11 +12354,11 @@ fn matmul_flat_workspace(
     // *which* core writes each row changes.
     let nthreads = matmul_thread_count(m, ka, n);
     if nthreads <= 1 {
-        matmul_flat_compute_rows(&mut c_flat, 0, m, &a_flat, &packed_b, &b_flat, ka, n);
+        matmul_flat_compute_rows(&mut c_flat, 0, m, &a_flat, &packed_b, b, ka, n);
     } else {
         let chunk_rows = m.div_ceil(nthreads);
         let a_ref = &a_flat;
-        let b_ref = &b_flat;
+        let b_ref = b;
         let pb_ref = &packed_b;
         std::thread::scope(|scope| {
             for (t, out_chunk) in c_flat.chunks_mut(chunk_rows * n).enumerate() {
@@ -13307,19 +13302,19 @@ mod tests {
         };
         let a_flat = make(m, ka, 23);
         let b_flat = make(ka, n, 123);
+        let b_rows: Vec<Vec<f64>> = b_flat.chunks(n).map(<[f64]>::to_vec).collect();
         const NR: usize = 8;
         let full_n_blocks = n / NR;
         let mut packed_b = Vec::new();
         for jb in 0..full_n_blocks {
             let j0 = jb * NR;
-            for k in 0..ka {
-                let base = k * n + j0;
-                packed_b.extend_from_slice(&b_flat[base..base + NR]);
+            for row in b_rows.iter().take(ka) {
+                packed_b.extend_from_slice(&row[j0..j0 + NR]);
             }
         }
 
         let mut full = vec![0.0; m * n];
-        matmul_flat_compute_rows(&mut full, 0, m, &a_flat, &packed_b, &b_flat, ka, n);
+        matmul_flat_compute_rows(&mut full, 0, m, &a_flat, &packed_b, &b_rows, ka, n);
 
         for &nchunks in &[2usize, 3, 5, 8, m] {
             let chunk = m.div_ceil(nchunks);
@@ -13337,7 +13332,7 @@ mod tests {
                     re,
                     &a_flat,
                     &packed_b,
-                    &b_flat,
+                    &b_rows,
                     ka,
                     n,
                 );

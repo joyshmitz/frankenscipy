@@ -1,0 +1,373 @@
+  [2m2026-06-13T01:11:11.962472Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mSelected worker: vmi1152480 at root@109.205.181.92 (5 slots remaining after reservation, speed 50.0)[0m
+    [2;3mat[0m rch/src/hook.rs:514 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:12.384427Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mStarting remote compilation pipeline for frankenscipy (hash: 79896f4b691558cb)[0m
+    [2;3mat[0m rch/src/hook.rs:5994 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:12.384474Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mPrepared dependency sync manifest for 20 roots[0m
+    [2;3mat[0m rch/src/hook.rs:6016 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:14.284360Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mSyncing project to worker vmi1152480...[0m
+    [2;3mat[0m rch/src/hook.rs:6046 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:14.284466Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy -> /data/projects/frankenscipy on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:18.295528Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 4011ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:18.295644Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-arrayapi -> /data/projects/frankenscipy/crates/fsci-arrayapi on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:20.222509Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1926ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:20.222737Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-cluster -> /data/projects/frankenscipy/crates/fsci-cluster on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:22.094911Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1872ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:22.095058Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-conformance -> /data/projects/frankenscipy/crates/fsci-conformance on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:25.577412Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 3482ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:25.577563Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-constants -> /data/projects/frankenscipy/crates/fsci-constants on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:27.480428Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1902ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:27.480561Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-datasets -> /data/projects/frankenscipy/crates/fsci-datasets on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:29.489010Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 2008ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:29.489170Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-fft -> /data/projects/frankenscipy/crates/fsci-fft on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:31.375879Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1886ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:31.376039Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-integrate -> /data/projects/frankenscipy/crates/fsci-integrate on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:33.265063Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1889ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:33.265171Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-interpolate -> /data/projects/frankenscipy/crates/fsci-interpolate on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:35.157466Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1892ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:35.157607Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-io -> /data/projects/frankenscipy/crates/fsci-io on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:36.967042Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1809ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:36.967201Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-linalg -> /data/projects/frankenscipy/crates/fsci-linalg on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:38.885011Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1917ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:38.885131Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-ndimage -> /data/projects/frankenscipy/crates/fsci-ndimage on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:40.693416Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1808ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:40.693552Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-odr -> /data/projects/frankenscipy/crates/fsci-odr on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:42.592204Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1898ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:42.592355Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-opt -> /data/projects/frankenscipy/crates/fsci-opt on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:44.444832Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1852ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:44.445001Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-runtime -> /data/projects/frankenscipy/crates/fsci-runtime on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:46.416592Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1971ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:46.416740Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-signal -> /data/projects/frankenscipy/crates/fsci-signal on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:48.258924Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1842ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:48.259090Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-sparse -> /data/projects/frankenscipy/crates/fsci-sparse on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:50.148277Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1889ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:50.148406Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-spatial -> /data/projects/frankenscipy/crates/fsci-spatial on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:52.029386Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1880ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:52.029521Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-special -> /data/projects/frankenscipy/crates/fsci-special on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:53.930324Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1900ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:53.930454Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/frankenscipy/crates/fsci-stats -> /data/projects/frankenscipy/crates/fsci-stats on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:55.735715Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1805ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:11:55.735754Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mSync complete: 26699 files, 954565 bytes in 41439ms[0m
+    [2;3mat[0m rch/src/hook.rs:6209 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:12:28.966711Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mExecuting command remotely: cargo clippy -j 1 -p fsci-linalg --all-targets --no-deps --locked -- -D warnings[0m
+    [2;3mat[0m rch/src/hook.rs:6252 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-13T01:12:28.966762Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mRewriting CARGO_TARGET_DIR for remote execution (worker-scoped path): /data/tmp/cargo-target -> /data/projects/frankenscipy/.rch-target-vmi1152480-job-29884606035526422-1781313074284353790-0[0m
+    [2;3mat[0m rch/src/transfer.rs:712 [2;3mon[0m ThreadId(1)
+
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded alloca v0.4.0
+  Downloaded approx v0.5.1
+  Downloaded arrayref v0.3.9
+  Downloaded errno v0.3.14
+  Downloaded anes v0.1.6
+  Downloaded anstyle v1.0.14
+  Downloaded equivalent v1.0.2
+  Downloaded zmij v1.0.21
+  Downloaded crossbeam-utils v0.8.21
+  Downloaded either v1.15.0
+  Downloaded clap v4.6.1
+  Downloaded wait-timeout v0.2.1
+  Downloaded shlex v1.3.0
+  Downloaded unarray v0.1.4
+  Downloaded getrandom v0.3.4
+  Downloaded aho-corasick v1.1.4
+  Downloaded blake3 v1.8.4
+  Downloaded tinytemplate v1.2.1
+  Downloaded walkdir v2.5.0
+  Downloaded glam v0.16.0
+  Downloaded num-rational v0.4.2
+  Downloaded plotters-backend v0.3.7
+  Downloaded fnv v1.0.7
+  Downloaded glam v0.15.2
+  Downloaded plotters-svg v0.3.7
+  Downloaded cpufeatures v0.3.0
+  Downloaded simba v0.9.1
+  Downloaded tempfile v3.27.0
+  Downloaded unicode-ident v1.0.24
+  Downloaded zerocopy-derive v0.8.48
+  Downloaded wide v0.7.33
+  Downloaded typenum v1.20.0
+  Downloaded num-integer v0.1.46
+  Downloaded zerocopy v0.8.48
+  Downloaded nalgebra-macros v0.3.0
+  Downloaded syn v2.0.117
+  Downloaded cast v0.3.0
+  Downloaded page_size v0.6.0
+  Downloaded rand_xorshift v0.4.0
+  Downloaded constant_time_eq v0.4.2
+  Downloaded fastrand v2.4.1
+  Downloaded quick-error v1.2.3
+  Downloaded clap_lex v1.1.0
+  Downloaded paste v1.0.15
+  Downloaded find-msvc-tools v0.1.9
+  Downloaded rusty-fork v0.3.1
+  Downloaded autocfg v1.5.0
+  Downloaded ciborium-io v0.2.2
+  Downloaded rawpointer v0.2.1
+  Downloaded same-file v1.0.6
+  Downloaded ciborium-ll v0.2.2
+  Downloaded bit-set v0.8.0
+  Downloaded cfg-if v1.0.4
+  Downloaded crossbeam-deque v0.8.6
+  Downloaded oorandom v11.1.5
+  Downloaded rand_core v0.9.5
+  Downloaded num-complex v0.4.6
+  Downloaded rand_chacha v0.9.0
+  Downloaded criterion-plot v0.8.2
+  Downloaded ppv-lite86 v0.2.21
+  Downloaded arrayvec v0.7.6
+  Downloaded bit-vec v0.8.0
+  Downloaded quote v1.0.45
+  Downloaded crossbeam-epoch v0.9.18
+  Downloaded half v2.7.1
+  Downloaded once_cell v1.21.4
+  Downloaded itoa v1.0.18
+  Downloaded ciborium v0.2.2
+  Downloaded bytemuck v1.25.0
+  Downloaded num-traits v0.2.19
+  Downloaded proc-macro2 v1.0.106
+  Downloaded bitflags v2.11.1
+  Downloaded serde_derive v1.0.228
+  Downloaded matrixmultiply v0.3.10
+  Downloaded proptest v1.11.0
+  Downloaded memchr v2.8.0
+  Downloaded rayon-core v1.13.0
+  Downloaded safe_arch v0.7.4
+  Downloaded serde_core v1.0.228
+  Downloaded indexmap v2.14.0
+  Downloaded cc v1.2.60
+  Downloaded serde v1.0.228
+  Downloaded rand v0.9.4
+  Downloaded glam v0.14.0
+  Downloaded num-bigint v0.4.6
+  Downloaded plotters v0.3.7
+  Downloaded hashbrown v0.17.0
+  Downloaded glam v0.17.3
+  Downloaded criterion v0.8.2
+  Downloaded glam v0.21.3
+  Downloaded serde_json v1.0.149
+  Downloaded itertools v0.13.0
+  Downloaded regex v1.12.3
+  Downloaded rayon v1.12.0
+  Downloaded clap_builder v4.6.0
+  Downloaded glam v0.20.5
+  Downloaded glam v0.18.0
+  Downloaded glam v0.19.0
+  Downloaded glam v0.22.0
+  Downloaded glam v0.23.0
+  Downloaded glam v0.24.2
+  Downloaded glam v0.25.0
+  Downloaded regex-syntax v0.8.10
+  Downloaded glam v0.27.0
+  Downloaded nalgebra v0.34.2
+  Downloaded rustix v1.1.4
+  Downloaded glam v0.28.0
+  Downloaded glam v0.29.3
+  Downloaded regex-automata v0.4.14
+  Downloaded glam v0.30.10
+  Downloaded glam v0.31.1
+  Downloaded glam v0.32.1
+  Downloaded libc v0.2.185
+  Downloaded linux-raw-sys v0.12.1
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.45
+   Compiling syn v2.0.117
+   Compiling autocfg v1.5.0
+    Checking cfg-if v1.0.4
+   Compiling num-traits v0.2.19
+   Compiling shlex v1.3.0
+   Compiling find-msvc-tools v0.1.9
+   Compiling cc v1.2.60
+   Compiling serde_core v1.0.228
+   Compiling serde v1.0.228
+   Compiling zmij v1.0.21
+   Compiling serde_derive v1.0.228
+   Compiling serde_json v1.0.149
+    Checking equivalent v1.0.2
+    Checking hashbrown v0.17.0
+    Checking indexmap v2.14.0
+    Checking itoa v1.0.18
+    Checking memchr v2.8.0
+   Compiling blake3 v1.8.4
+   Compiling paste v1.0.15
+    Checking bytemuck v1.25.0
+    Checking safe_arch v0.7.4
+   Compiling matrixmultiply v0.3.10
+    Checking arrayvec v0.7.6
+    Checking constant_time_eq v0.4.2
+    Checking cpufeatures v0.3.0
+    Checking arrayref v0.3.9
+    Checking wide v0.7.33
+    Checking num-integer v0.1.46
+    Checking num-complex v0.4.6
+    Checking approx v0.5.1
+    Checking rawpointer v0.2.1
+    Checking simba v0.9.1
+    Checking num-rational v0.4.2
+    Checking fsci-runtime v0.1.0 (/data/projects/frankenscipy/crates/fsci-runtime)
+   Compiling nalgebra-macros v0.3.0
+    Checking typenum v1.20.0
+    Checking nalgebra v0.34.2
+    Checking fsci-fft v0.1.0 (/data/projects/frankenscipy/crates/fsci-fft)
+    Checking fsci-linalg v0.1.0 (/data/projects/frankenscipy/crates/fsci-linalg)
+   Compiling libc v0.2.185
+   Compiling getrandom v0.3.4
+   Compiling zerocopy v0.8.48
+   Compiling zerocopy-derive v0.8.48
+   Compiling crossbeam-utils v0.8.21
+   Compiling rustix v1.1.4
+    Checking crossbeam-epoch v0.9.18
+    Checking rand_core v0.9.5
+    Checking either v1.15.0
+    Checking bitflags v2.11.1
+    Checking regex-syntax v0.8.10
+    Checking linux-raw-sys v0.12.1
+   Compiling rayon-core v1.13.0
+    Checking crossbeam-deque v0.8.6
+    Checking half v2.7.1
+   Compiling alloca v0.4.0
+    Checking ciborium-io v0.2.2
+    Checking clap_lex v1.1.0
+    Checking anstyle v1.0.14
+    Checking once_cell v1.21.4
+    Checking fastrand v2.4.1
+    Checking plotters-backend v0.3.7
+    Checking plotters-svg v0.3.7
+    Checking tempfile v3.27.0
+    Checking clap_builder v4.6.0
+    Checking ciborium-ll v0.2.2
+    Checking regex-automata v0.4.14
+    Checking itertools v0.13.0
+    Checking ppv-lite86 v0.2.21
+    Checking wait-timeout v0.2.1
+    Checking same-file v1.0.6
+    Checking bit-vec v0.8.0
+    Checking quick-error v1.2.3
+    Checking fnv v1.0.7
+    Checking cast v0.3.0
+    Checking criterion-plot v0.8.2
+    Checking rusty-fork v0.3.1
+    Checking bit-set v0.8.0
+    Checking walkdir v2.5.0
+    Checking rand_chacha v0.9.0
+    Checking regex v1.12.3
+    Checking rayon v1.12.0
+    Checking ciborium v0.2.2
+    Checking clap v4.6.1
+    Checking plotters v0.3.7
+    Checking rand_xorshift v0.4.0
+    Checking rand v0.9.4
+    Checking page_size v0.6.0
+    Checking tinytemplate v1.2.1
+    Checking unarray v0.1.4
+    Checking oorandom v11.1.5
+    Checking anes v0.1.6
+    Checking criterion v0.8.2
+    Checking proptest v1.11.0
+error: the loop variable `k` is only used to index `b_rows`
+     --> crates/fsci-linalg/src/lib.rs:13311:22
+      |
+13311 |             for k in 0..ka {
+      |                      ^^^^^
+      |
+      = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#needless_range_loop
+      = note: `-D clippy::needless-range-loop` implied by `-D warnings`
+      = help: to override `-D warnings` add `#[allow(clippy::needless_range_loop)]`
+help: consider using an iterator
+      |
+13311 -             for k in 0..ka {
+13311 +             for <item> in b_rows.iter().take(ka) {
+      |
+
+error: could not compile `fsci-linalg` (lib test) due to 1 previous error
+  [2m2026-06-13T01:13:34.233415Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mRemote command finished: exit=101 in 65266ms[0m
+    [2;3mat[0m rch/src/hook.rs:6376 [2;3mon[0m ThreadId(1)
+
+[RCH] remote vmi1152480 failed (exit 101)
