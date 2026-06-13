@@ -1902,6 +1902,83 @@ fn boundary_index_1d(mut i: i64, n: i64, mode: BoundaryMode) -> Option<i64> {
     }
 }
 
+// O(n) running-sum uniform (box-mean) filter along `axis`, replacing the O(n·size)
+// per-window re-summation. Mirrors `minmax_filter_along_axis`'s line walk: each line head
+// (flat/stride a multiple of shape[axis]) is processed once, sliding a sum that adds the
+// entering element and subtracts the leaving one (the algorithm SciPy's uniform_filter1d
+// uses). Window for output i spans input coords [i-lo, i-lo+size-1], lo=size/2+origin —
+// identical elements to the per-window kernel, so out[0] (summed left-to-right) is
+// byte-identical; later positions accumulate incrementally (tolerance-parity).
+fn uniform_filter_along_axis(
+    arr: &NdArray,
+    axis: usize,
+    size: usize,
+    origin: i64,
+    mode: BoundaryMode,
+    cval: f64,
+) -> NdArray {
+    let mid = arr.shape[axis];
+    let inner: usize = arr.shape[axis + 1..].iter().product();
+    let outer: usize = arr.shape[..axis].iter().product();
+    let slab = mid * inner;
+    let size_i = size as i64;
+    let lo = size_i / 2 + origin;
+    // Divide (not multiply-by-reciprocal): sum/size is byte-identical to the per-window
+    // mean for exact sums, and matches SciPy. inv-multiply would drift a ULP (5/3 ≠ 5·⅓).
+    let size_f = size as f64;
+    let mut out = NdArray::zeros(arr.shape.clone());
+
+    // Process one contiguous [mid×inner] slab (fixed outer index): each of its `inner`
+    // lines along `axis` slides a running sum (drop leaving, add entering element).
+    // out[0] is summed left-to-right (byte-identical to the per-window kernel); later
+    // positions accumulate incrementally (tolerance-parity). Writes stay inside `os`.
+    let do_slab = |is: &[f64], os: &mut [f64]| {
+        let val_at = |i: usize, a: i64| -> f64 {
+            match boundary_index_1d(a, mid as i64, mode) {
+                Some(m) => is[i + (m as usize) * inner],
+                None => cval,
+            }
+        };
+        for i in 0..inner {
+            let mut sum = 0.0;
+            for k in 0..size_i {
+                sum += val_at(i, k - lo);
+            }
+            os[i] = sum / size_f;
+            for a in 1..mid as i64 {
+                sum += val_at(i, a - lo + size_i - 1) - val_at(i, (a - 1) - lo);
+                os[i + (a as usize) * inner] = sum / size_f;
+            }
+        }
+    };
+
+    // Parallelize across outer slabs (contiguous & disjoint ⇒ no aliasing) when there are
+    // enough of them to amortize spawn; otherwise sequential.
+    let nthreads = ndimage_filter_thread_count(arr.size(), size).min(outer.max(1));
+    if nthreads <= 1 || outer < 2 {
+        for (is, os) in arr.data.chunks(slab).zip(out.data.chunks_mut(slab)) {
+            do_slab(is, os);
+        }
+    } else {
+        let slabs_per = outer.div_ceil(nthreads);
+        let do_slab = &do_slab;
+        std::thread::scope(|scope| {
+            for (in_chunk, out_chunk) in arr
+                .data
+                .chunks(slab * slabs_per)
+                .zip(out.data.chunks_mut(slab * slabs_per))
+            {
+                scope.spawn(move || {
+                    for (is, os) in in_chunk.chunks(slab).zip(out_chunk.chunks_mut(slab)) {
+                        do_slab(is, os);
+                    }
+                });
+            }
+        });
+    }
+    out
+}
+
 fn minmax_filter_along_axis(
     arr: &NdArray,
     axis: usize,
@@ -5865,6 +5942,42 @@ pub fn uniform_filter1d_with_origin(
     cval: f64,
     origin: i64,
 ) -> Result<NdArray, NdimageError> {
+    if axis >= input.ndim() {
+        return Err(NdimageError::InvalidArgument(format!(
+            "axis {axis} out of range for {}-dimensional input",
+            input.ndim()
+        )));
+    }
+    if size == 0 {
+        return Err(NdimageError::InvalidArgument(
+            "filter size must be positive".to_string(),
+        ));
+    }
+    if input.size() == 0 {
+        return Err(NdimageError::EmptyInput);
+    }
+    validate_filter_origin(size, origin)?;
+    Ok(uniform_filter_along_axis(input, axis, size, origin, mode, cval))
+}
+
+/// Reference per-window uniform-filter path (pre running-sum), retained for the
+/// same-process A/B benchmark only. Computes each output as a fresh O(size) window mean.
+#[doc(hidden)]
+pub fn uniform_filter1d_perwindow_ref(
+    input: &NdArray,
+    size: usize,
+    axis: usize,
+    mode: BoundaryMode,
+    cval: f64,
+    origin: i64,
+) -> Result<NdArray, NdimageError> {
+    if axis >= input.ndim() {
+        return Err(NdimageError::InvalidArgument("axis out of range".to_string()));
+    }
+    if size == 0 || input.size() == 0 {
+        return Err(NdimageError::InvalidArgument("bad size/empty".to_string()));
+    }
+    validate_filter_origin(size, origin)?;
     filter1d_axis_with_origin(input, size, axis, mode, cval, origin, |window| {
         window.iter().sum::<f64>() / window.len() as f64
     })
@@ -7752,6 +7865,42 @@ mod tests {
         let result = uniform_filter(&input, 3, BoundaryMode::Constant, 0.0).unwrap();
         // Center should be average of [0, 1, 0] = 1/3
         assert!((result.data[2] - 1.0 / 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn uniform_running_sum_matches_perwindow_reference() {
+        // The O(n) running-sum path must match the per-window reference to rounding
+        // across sizes, axes, and boundary modes (running sum is tolerance-parity).
+        let (rows, cols) = (37usize, 41usize);
+        let data: Vec<f64> = (0..rows * cols)
+            .map(|i| ((i * 2654435761usize) % 1000) as f64 / 1000.0 - 0.5)
+            .collect();
+        let arr = NdArray::new(data, vec![rows, cols]).unwrap();
+        for mode in [
+            BoundaryMode::Nearest,
+            BoundaryMode::Reflect,
+            BoundaryMode::Constant,
+            BoundaryMode::Wrap,
+            BoundaryMode::Mirror,
+        ] {
+            for size in [2usize, 3, 7, 12, 20] {
+                for axis in [0usize, 1usize] {
+                    let got = uniform_filter1d(&arr, size, axis, mode, 0.3).unwrap();
+                    let want =
+                        uniform_filter1d_perwindow_ref(&arr, size, axis, mode, 0.3, 0).unwrap();
+                    let max_dx = got
+                        .data
+                        .iter()
+                        .zip(&want.data)
+                        .map(|(a, b)| (a - b).abs())
+                        .fold(0.0_f64, f64::max);
+                    assert!(
+                        max_dx < 1e-12,
+                        "mode={mode:?} size={size} axis={axis}: max|dx|={max_dx:.2e}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
