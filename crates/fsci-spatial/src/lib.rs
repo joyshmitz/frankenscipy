@@ -332,17 +332,33 @@ pub fn jaccard(a: &[f64], b: &[f64]) -> f64 {
 /// Matches `scipy.spatial.distance.canberra(u, v)`.
 /// d(u,v) = Σ|u_i - v_i| / (|u_i| + |v_i|)
 pub fn canberra(a: &[f64], b: &[f64]) -> f64 {
-    a.iter()
-        .zip(b.iter())
-        .map(|(&ai, &bi)| {
-            let denom = ai.abs() + bi.abs();
-            if denom == 0.0 {
-                0.0
-            } else {
-                (ai - bi).abs() / denom
-            }
-        })
-        .sum()
+    // Σ |ai-bi| / (|ai|+|bi|), term=0 when denom==0. The per-element divide makes this
+    // compute-bound, so 8-wide SIMD wins ~2x. `simd_eq(0)` reproduces the denom==0⇒0 guard
+    // via a lane mask (denom==0 ⇒ both 0 ⇒ 0/0=NaN, masked to 0 before the add).
+    use std::simd::{Select, Simd, cmp::SimdPartialEq, num::SimdFloat};
+    const L: usize = 8;
+    let n = a.len().min(b.len());
+    let zero = Simd::<f64, L>::splat(0.0);
+    let mut acc = Simd::<f64, L>::splat(0.0);
+    let mut i = 0;
+    while i + L <= n {
+        let av = Simd::<f64, L>::from_slice(&a[i..i + L]);
+        let bv = Simd::<f64, L>::from_slice(&b[i..i + L]);
+        let denom = av.abs() + bv.abs();
+        let term = (av - bv).abs() / denom;
+        acc += denom.simd_eq(zero).select(zero, term);
+        i += L;
+    }
+    let mut s = acc.reduce_sum();
+    while i < n {
+        let (ai, bi) = (a[i], b[i]);
+        let denom = ai.abs() + bi.abs();
+        if denom != 0.0 {
+            s += (ai - bi).abs() / denom;
+        }
+        i += 1;
+    }
+    s
 }
 
 /// Bray-Curtis dissimilarity.
