@@ -13038,6 +13038,34 @@ fn det_flat_lu_product(a_in: &[Vec<f64>]) -> Option<f64> {
     Some(determinant)
 }
 
+/// 8-wide dot product `sum x[i]*y[i]` (lanes reduced at the end). `x`/`y` same length.
+#[inline]
+fn simd_dot(x: &[f64], y: &[f64]) -> f64 {
+    let mut acc = Simd::<f64, 8>::splat(0.0);
+    let mut p = 0;
+    while p + 8 <= x.len() {
+        acc += Simd::<f64, 8>::from_slice(&x[p..p + 8]) * Simd::<f64, 8>::from_slice(&y[p..p + 8]);
+        p += 8;
+    }
+    let mut s: f64 = acc.to_array().iter().sum();
+    while p < x.len() {
+        s += x[p] * y[p];
+        p += 1;
+    }
+    s
+}
+
+fn cholesky_syrk_rows(rows: &mut [Vec<f64>], row_offset: usize, l21: &[f64], nb: usize, kb: usize) {
+    for (local_i, row) in rows.iter_mut().enumerate() {
+        let ii = row_offset + local_i;
+        let lhs = &l21[ii * nb..ii * nb + nb];
+        for (jj, aij) in row[kb..=kb + ii].iter_mut().enumerate() {
+            let rhs = &l21[jj * nb..jj * nb + nb];
+            *aij -= simd_dot(lhs, rhs);
+        }
+    }
+}
+
 /// `b[bi..bi+w] -= scal · b[bp..bp+w]`, 8-wide. Rows `bi`/`bp` are disjoint, so the
 /// owned-`Simd` loads release their borrows before the in-place store.
 #[inline]
@@ -13204,28 +13232,32 @@ fn cholesky_solve_blocked(a_in: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
                 a[i][j] = s / a[j][j];
             }
         }
-        // (3) Trailing update A22 -= L21 · L21ᵀ via the parallel GEMM.
+        // (3) Trailing update A22 -= L21 · L21ᵀ as a symmetric rank-nb update (SYRK).
+        // Only the LOWER triangle of A22 is ever read downstream (the upper is scratch),
+        // and A22 is symmetric, so we compute just `a[i][j] -= L21[i]·L21[j]` for j <= i —
+        // half the FLOPs of the full GEMM and no L21ᵀ transpose. L21 rows are packed
+        // contiguously for SIMD dot products; the work is parallel over the trailing rows
+        // (each thread writes its own disjoint rows, reads the shared packed L21).
         if kb < n {
             let m2 = n - kb;
             let nb = kb - k;
-            let mut l21 = Vec::with_capacity(m2);
-            for row in a.iter().take(n).skip(kb) {
-                l21.push(row[k..kb].to_vec());
-            }
-            // L21ᵀ as nb×m2.
-            let mut l21t = vec![vec![0.0; m2]; nb];
+            let mut l21 = vec![0.0f64; m2 * nb];
             for (ii, row) in a.iter().take(n).skip(kb).enumerate() {
-                for (jj, &v) in row[k..kb].iter().enumerate() {
-                    l21t[jj][ii] = v;
-                }
+                l21[ii * nb..ii * nb + nb].copy_from_slice(&row[k..kb]);
             }
-            let prod = matmul_flat_workspace(&l21, &l21t, m2, nb, m2)?;
-            for (ii, i) in (kb..n).enumerate() {
-                let pr = &prod[ii];
-                let row = &mut a[i];
-                for (jj, j) in (kb..n).enumerate() {
-                    row[j] -= pr[jj];
-                }
+            let l21_ref = &l21;
+            let nthreads = matmul_thread_count(m2, nb, m2);
+            let (_, lower) = a.split_at_mut(kb);
+            if nthreads <= 1 {
+                cholesky_syrk_rows(lower, 0, l21_ref, nb, kb);
+            } else {
+                let chunk = m2.div_ceil(nthreads);
+                std::thread::scope(|scope| {
+                    for (t, rows) in lower.chunks_mut(chunk).enumerate() {
+                        let r0 = t * chunk;
+                        scope.spawn(move || cholesky_syrk_rows(rows, r0, l21_ref, nb, kb));
+                    }
+                });
             }
         }
         k = kb;
