@@ -51,6 +51,28 @@ fn opts_with(ordering: PermutationOrdering) -> SolveOptions {
     SolveOptions { ordering, ..SolveOptions::default() }
 }
 
+// Diagonally-dominant banded matrix, half-bandwidth `hb` (2·hb+1 nnz/row). For hb>8 this
+// exceeds the old nnz<=16n gate and used to densify to O(n³); the bandwidth gate now
+// routes it to the sparse LU (fill bounded by the band).
+fn banded(n: usize, hb: usize) -> CsrMatrix {
+    let mut rows = Vec::new();
+    let mut cols = Vec::new();
+    let mut data = Vec::new();
+    for i in 0..n {
+        let lo = i.saturating_sub(hb);
+        let hi = (i + hb).min(n - 1);
+        for j in lo..=hi {
+            rows.push(i);
+            cols.push(j);
+            data.push(if i == j { 2.0 * hb as f64 + 2.0 } else { -1.0 });
+        }
+    }
+    CooMatrix::from_triplets(Shape2D::new(n, n), data, rows, cols, false)
+        .unwrap()
+        .to_csr()
+        .unwrap()
+}
+
 // 2D 5-point Laplacian on a k×k grid (n=k²): the canonical fill-reduction benchmark.
 // RCM keeps bandwidth ~k -> fill O(n·k)=O(n^1.5); minimum-degree/nested-dissection
 // achieve O(n log n) fill. Diagonally dominant (diag 4+eps, neighbors -1) -> stable.
@@ -158,6 +180,26 @@ fn time<F: FnMut()>(reps: usize, mut f: F) -> f64 {
 }
 
 fn main() {
+    // Wider-banded routing: matrices with >16 nnz/row but a narrow band now route to the
+    // sparse LU (bandwidth gate) instead of densifying to an O(n³) dense LU.
+    println!("--- wider-banded routing: dense(old) vs sparse(bandwidth gate) ---");
+    for &(n, hb) in &[(1024usize, 16usize), (2048, 24), (3000, 30)] {
+        let a = banded(n, hb);
+        let b: Vec<f64> = (0..n).map(|i| 1.0 + (i % 13) as f64 * 0.5).collect();
+        let x_sparse = spsolve(&a, &b, SolveOptions::default()).expect("spsolve").solution;
+        let x_dense = dense_solve_baseline(&a, &b);
+        let max_dx = x_sparse.iter().zip(&x_dense).map(|(s, d)| (s - d).abs()).fold(0.0_f64, f64::max);
+        let reps_s = (20_000_000 / (n + 1)).clamp(10, 3000);
+        let t_sparse = time(reps_s, || { black_box(spsolve(black_box(&a), black_box(&b), SolveOptions::default()).unwrap()); });
+        let reps_d = if n >= 2048 { 2 } else { 4 };
+        let t_dense = time(reps_d, || { black_box(dense_solve_baseline(black_box(&a), black_box(&b))); });
+        println!(
+            "banded n={n:>5} hb={hb:>3} ({} nnz/row): dense={t_dense:>10.4}ms  sparse={t_sparse:>9.5}ms  speedup={:>9.1}x  max|dx|={max_dx:.2e}",
+            2 * hb + 1,
+            t_dense / t_sparse,
+        );
+    }
+
     println!("===PARITY+AB===");
     for &n in &[512usize, 1024, 2048] {
         let a = pentadiagonal(n);

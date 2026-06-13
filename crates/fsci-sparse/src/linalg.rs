@@ -578,7 +578,11 @@ pub fn spsolve(a: &CsrMatrix, b: &[f64], options: SolveOptions) -> SparseResult<
     // the dense path to rounding. Small or dense-pattern A keeps the cache-friendly
     // dense LU, where the sparse factor's per-entry map overhead would lose.
     let over_dense_guard = n > SPSOLVE_DENSE_MAX_N;
-    let genuinely_sparse = n >= 256 && a.nnz() <= n.saturating_mul(16);
+    // Sparse by row density, OR narrowly banded (bw·32 ≤ n ⇒ fill ≤ O(n·bw), factor
+    // O(n·bw²) ≪ O(n³)) — banded systems with >16 nnz/row would otherwise densify to
+    // an O(n³) dense LU even though their sparse factor is tiny and fill-bounded.
+    let genuinely_sparse = n >= 256
+        && (a.nnz() <= n.saturating_mul(16) || csr_bandwidth(a).saturating_mul(32) <= n);
     if over_dense_guard || genuinely_sparse {
         let lu = NativeSparseLu::factorize_csr(a, 1.0, options.ordering)?;
         let solution = lu.solve(b)?;
@@ -629,7 +633,9 @@ pub fn splu(a: &CscMatrix, options: LuOptions) -> SparseResult<SparseLuFactoriza
     // Genuinely-sparse A factors via the native sparse LU (~O(n·fill)) rather than
     // densifying to an n×n dense matrix for O(n³) dense LU — see `spsolve` for the
     // same routing. scipy's splu is always sparse; small/dense-pattern A keeps dense.
-    let genuinely_sparse = n >= 256 && a.nnz() <= n.saturating_mul(16);
+    // Narrowly-banded A (bw·32 ≤ n) also routes sparse: fill is bounded by the band.
+    let genuinely_sparse = n >= 256
+        && (a.nnz() <= n.saturating_mul(16) || csc_bandwidth(a).saturating_mul(32) <= n);
     let (backend_used, lu_internal) = if n > SPSOLVE_DENSE_MAX_N || genuinely_sparse {
         let csr = a.to_csr()?;
         (
@@ -3090,6 +3096,30 @@ fn csc_matvec(csc: &CscMatrix, x: &[f64]) -> Vec<f64> {
 }
 
 /// Convert a CSR matrix to dense row-major storage.
+// Half-bandwidth: max |row − col| over stored nonzeros. A narrowly-banded matrix has
+// sparse-LU fill bounded by O(n·bandwidth) (partial pivoting at most doubles it), so it
+// factors in O(n·bw²) ≪ O(n³) regardless of nnz/row — a guaranteed sparse-path win with
+// no fill-blowup risk, which is why scipy never densifies banded systems.
+fn csr_bandwidth(a: &CsrMatrix) -> usize {
+    let mut bw = 0;
+    for row in 0..a.shape().rows {
+        for idx in a.indptr()[row]..a.indptr()[row + 1] {
+            bw = bw.max(row.abs_diff(a.indices()[idx]));
+        }
+    }
+    bw
+}
+
+fn csc_bandwidth(a: &CscMatrix) -> usize {
+    let mut bw = 0;
+    for col in 0..a.shape().cols {
+        for idx in a.indptr()[col]..a.indptr()[col + 1] {
+            bw = bw.max(col.abs_diff(a.indices()[idx]));
+        }
+    }
+    bw
+}
+
 fn csr_to_dense(a: &CsrMatrix) -> Vec<f64> {
     let shape = a.shape();
     let n = shape.rows;
@@ -3392,12 +3422,12 @@ pub fn shortest_path(graph: &CsrMatrix, source: usize, target: usize) -> (f64, V
 // Deterministic (lowest-index tie-break). Opt-in via MmdAtPlusA/MmdAta.
 fn minimum_degree_ordering(a: &CsrMatrix) -> Vec<usize> {
     use std::cmp::Reverse;
-    use std::collections::{BTreeSet, BinaryHeap};
+    use std::collections::{BinaryHeap, HashSet};
     let n = a.shape().rows;
     if n == 0 {
         return vec![];
     }
-    let mut adj: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); n];
+    let mut adj: Vec<HashSet<usize>> = vec![HashSet::new(); n];
     for i in 0..n {
         for idx in a.indptr()[i]..a.indptr()[i + 1] {
             let j = a.indices()[idx];
@@ -3407,7 +3437,7 @@ fn minimum_degree_ordering(a: &CsrMatrix) -> Vec<usize> {
             }
         }
     }
-    let mut deg: Vec<usize> = adj.iter().map(BTreeSet::len).collect();
+    let mut deg: Vec<usize> = adj.iter().map(HashSet::len).collect();
     // Lazy heap: (degree, index); stale entries (degree != current deg[v], which can rise
     // as cliques form) are discarded on pop. Tie-break on index → lowest-index min-degree,
     // identical selection to an O(n²) scan.
@@ -5310,6 +5340,43 @@ mod tests {
     }
 
     #[test]
+    fn wide_banded_routes_to_native_sparse_lu() {
+        // n=300, half-bandwidth 9 → 19 nnz/row (over the 16·n density gate) but bw·32=288≤n,
+        // so the bandwidth gate routes it to the native sparse LU instead of densifying.
+        let n = 300usize;
+        let hb = 9usize;
+        let mut rows = Vec::new();
+        let mut cols = Vec::new();
+        let mut data = Vec::new();
+        for i in 0..n {
+            let lo = i.saturating_sub(hb);
+            let hi = (i + hb).min(n - 1);
+            for j in lo..=hi {
+                rows.push(i);
+                cols.push(j);
+                data.push(if i == j { 2.0 * hb as f64 + 2.0 } else { -1.0 });
+            }
+        }
+        let a = CooMatrix::from_triplets(Shape2D::new(n, n), data, rows, cols, false)
+            .expect("coo")
+            .to_csr()
+            .expect("csr");
+        assert!(a.nnz() > n * 16, "should exceed the density gate");
+        let b: Vec<f64> = (0..n).map(|i| 1.0 + (i % 5) as f64).collect();
+        let result = spsolve(&a, &b, SolveOptions::default()).expect("spsolve");
+        assert_eq!(result.backend_used, SparseBackend::NativeSparseLu);
+        let mut max_res = 0.0_f64;
+        for i in 0..n {
+            let mut ax = 0.0;
+            for idx in a.indptr()[i]..a.indptr()[i + 1] {
+                ax += a.data()[idx] * result.solution[a.indices()[idx]];
+            }
+            max_res = max_res.max((ax - b[i]).abs());
+        }
+        assert!(max_res < 1e-9, "residual too large: {max_res}");
+    }
+
+    #[test]
     fn min_degree_ordering_solves_correctly_on_arrowhead() {
         // Arrowhead (dense hub through node 0) at n>=256 so the native sparse LU runs.
         // Min-degree (MmdAtPlusA) reorders via b->Pb, x[P[i]]=z[i]; the result must
@@ -5362,6 +5429,156 @@ mod tests {
             max_res = max_res.max((ax - b[i]).abs());
         }
         assert!(max_res < 1e-8, "residual too large: {max_res}");
+    }
+
+    fn laplacian_2d_for_mmd(k: usize) -> CsrMatrix {
+        let n = k * k;
+        let mut rows = Vec::new();
+        let mut cols = Vec::new();
+        let mut data = Vec::new();
+        let idx = |r: usize, c: usize| r * k + c;
+        for r in 0..k {
+            for c in 0..k {
+                let i = idx(r, c);
+                rows.push(i);
+                cols.push(i);
+                data.push(4.001);
+                for (dr, dc) in [(-1i64, 0i64), (1, 0), (0, -1), (0, 1)] {
+                    let (nr, nc) = (r as i64 + dr, c as i64 + dc);
+                    if nr >= 0 && nr < k as i64 && nc >= 0 && nc < k as i64 {
+                        rows.push(i);
+                        cols.push(idx(nr as usize, nc as usize));
+                        data.push(-1.0);
+                    }
+                }
+            }
+        }
+        CooMatrix::from_triplets(Shape2D::new(n, n), data, rows, cols, false)
+            .expect("coo")
+            .to_csr()
+            .expect("csr")
+    }
+
+    fn arrowhead_for_mmd(n: usize) -> CsrMatrix {
+        let mut rows = Vec::new();
+        let mut cols = Vec::new();
+        let mut data = Vec::new();
+        for i in 0..n {
+            rows.push(i);
+            cols.push(i);
+            data.push(n as f64 + 4.0);
+            if i != 0 {
+                rows.push(0);
+                cols.push(i);
+                data.push(-1.0);
+                rows.push(i);
+                cols.push(0);
+                data.push(-1.0);
+            }
+        }
+        CooMatrix::from_triplets(Shape2D::new(n, n), data, rows, cols, false)
+            .expect("coo")
+            .to_csr()
+            .expect("csr")
+    }
+
+    fn minimum_degree_ordering_btree_reference(a: &CsrMatrix) -> Vec<usize> {
+        use std::cmp::Reverse;
+        use std::collections::{BTreeSet, BinaryHeap};
+        let n = a.shape().rows;
+        if n == 0 {
+            return vec![];
+        }
+        let mut adj: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); n];
+        for i in 0..n {
+            for idx in a.indptr()[i]..a.indptr()[i + 1] {
+                let j = a.indices()[idx];
+                if j != i && a.data()[idx] != 0.0 {
+                    adj[i].insert(j);
+                    adj[j].insert(i);
+                }
+            }
+        }
+        let mut deg: Vec<usize> = adj.iter().map(BTreeSet::len).collect();
+        let mut heap: BinaryHeap<Reverse<(usize, usize)>> =
+            (0..n).map(|v| Reverse((deg[v], v))).collect();
+        let mut eliminated = vec![false; n];
+        let mut order = Vec::with_capacity(n);
+        while order.len() < n {
+            let u = loop {
+                let Reverse((d, v)) = heap.pop().expect("heap nonempty while nodes remain");
+                if !eliminated[v] && d == deg[v] {
+                    break v;
+                }
+            };
+            eliminated[u] = true;
+            order.push(u);
+            let nbrs: Vec<usize> = adj[u].iter().copied().filter(|&w| !eliminated[w]).collect();
+            for &w in &nbrs {
+                adj[w].remove(&u);
+            }
+            for ai in 0..nbrs.len() {
+                for bi in (ai + 1)..nbrs.len() {
+                    let (x, y) = (nbrs[ai], nbrs[bi]);
+                    adj[x].insert(y);
+                    adj[y].insert(x);
+                }
+            }
+            for &w in &nbrs {
+                let nd = adj[w].len();
+                if nd != deg[w] {
+                    deg[w] = nd;
+                    heap.push(Reverse((nd, w)));
+                }
+            }
+        }
+        order
+    }
+
+    #[test]
+    fn minimum_degree_ordering_matches_btree_reference_bit_for_bit() {
+        let cases = [
+            laplacian_2d_for_mmd(8),
+            laplacian_2d_for_mmd(16),
+            arrowhead_for_mmd(96),
+            fragmented_pairs_graph(64),
+        ];
+        for (case_idx, a) in cases.iter().enumerate() {
+            assert_eq!(
+                super::minimum_degree_ordering(a),
+                minimum_degree_ordering_btree_reference(a),
+                "MMD order changed for case {case_idx}"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "golden payload: run with rch --release and pipe output to sha256sum"]
+    fn dump_mmd_laplacian_solution_payload_for_golden_sha() {
+        let a = laplacian_2d_for_mmd(20);
+        let n = a.shape().rows;
+        let b: Vec<f64> = (0..n).map(|i| 1.0 + (i % 13) as f64 * 0.5).collect();
+        let order = super::minimum_degree_ordering(&a);
+        let x = spsolve(
+            &a,
+            &b,
+            SolveOptions { ordering: PermutationOrdering::MmdAtPlusA, ..SolveOptions::default() },
+        )
+        .expect("mmd solve")
+        .solution;
+
+        println!("MMD_LAPLACIAN_GOLDEN_BEGIN");
+        println!("k=20 n={n} order_len={} x_len={}", order.len(), x.len());
+        for value in order.iter().take(32) {
+            println!("order_head={value}");
+        }
+        for value in order.iter().rev().take(32) {
+            println!("order_tail={value}");
+        }
+        for (idx, value) in x.iter().enumerate().step_by(17) {
+            println!("x[{idx}]={:016x}", value.to_bits());
+        }
+        println!("MMD_LAPLACIAN_GOLDEN_END");
     }
 
     #[test]
