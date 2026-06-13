@@ -7533,36 +7533,48 @@ impl DiscreteDistribution for BetaNegativeBinomial {
         ln_comb + ln_beta_num - ln_beta_den
     }
 
+    // Moments follow scipy.stats.betanbinom._stats (Wolfram BetaNegativeBinomial
+    // [a,b,n]) exactly; the previous fsci closed forms used a broken
+    // parametrization (mean(10,3,4) gave 4.44 vs the true 20). They diverge for
+    // small a (heavy tail), where scipy returns +inf. frankenscipy.
     fn mean(&self) -> f64 {
-        if self.b <= 1.0 {
+        let (n, a, b) = (self.n as f64, self.a, self.b);
+        if a <= 1.0 {
             return f64::INFINITY;
         }
-        self.n as f64 * self.b / (self.a * (self.b - 1.0))
+        n * b / (a - 1.0)
     }
 
     fn var(&self) -> f64 {
-        if self.b <= 2.0 {
+        let (n, a, b) = (self.n as f64, self.a, self.b);
+        if a <= 2.0 {
             return f64::INFINITY;
         }
-        let n = self.n as f64;
-        let a = self.a;
-        let b = self.b;
-        n * b * (a + b - 1.0) * (n + a) / (a * a * (b - 2.0) * (b - 1.0) * (b - 1.0))
+        n * b * (n + a - 1.0) * (a + b - 1.0) / ((a - 2.0) * (a - 1.0) * (a - 1.0))
     }
 
     fn skewness(&self) -> f64 {
-        if self.b <= 3.0 {
-            return f64::NAN;
+        let (n, a, b) = (self.n as f64, self.a, self.b);
+        if a <= 3.0 {
+            return f64::INFINITY;
         }
-        let a = self.a;
-        let b = self.b;
-        let n = self.n as f64;
-        2.0 * (2.0 * n + a) * (a + b - 1.0).sqrt() / ((b - 3.0) * ((n + a) * (b - 2.0)).sqrt())
-            * ((1.0 + a / (b - 1.0)).sqrt())
+        (2.0 * n + a - 1.0) * (2.0 * b + a - 1.0)
+            / ((a - 3.0) * (n * b * (n + a - 1.0) * (b + a - 1.0) / (a - 2.0)).sqrt())
     }
 
     fn kurtosis(&self) -> f64 {
-        f64::NAN
+        let (n, a, b) = (self.n as f64, self.a, self.b);
+        if a <= 4.0 {
+            return f64::INFINITY;
+        }
+        let term = a - 2.0;
+        let am1_sq = (a - 1.0) * (a - 1.0);
+        let inner = (a + 5.0) * b * b + (a + 5.0) * (a - 1.0) * b + 2.0 * am1_sq;
+        let term2 = am1_sq * (a * a + a * (6.0 * b - 1.0) + 6.0 * (b - 1.0) * b)
+            + 3.0 * n * n * inner
+            + 3.0 * (a - 1.0) * n * inner;
+        let denom = (a - 4.0) * (a - 3.0) * b * n * (a + b - 1.0) * (a + n - 1.0);
+        term * term2 / denom - 3.0
     }
 
     fn mode(&self) -> f64 {
@@ -66380,6 +66392,34 @@ mod tests {
         // support is 0..=n: pmf must vanish above n=7.
         assert_eq!(d.pmf(8), 0.0);
         assert!((d.cdf(7) - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn betanbinom_moments_match_scipy() {
+        // Golden values from scipy.stats.betanbinom(n,a,b).stats('mvsk') 1.17.1.
+        // (Regression for frankenscipy: the closed forms were a wrong
+        // parametrization — mean(10,3,4) gave 4.44 vs the true 20.)
+        let d = BetaNegativeBinomial::new(10, 5.0, 4.0);
+        assert!((d.mean() - 10.0).abs() < 1e-9, "mean = {}", d.mean());
+        assert!(
+            (d.var() - 93.333_333_333_333_33).abs() < 1e-7,
+            "var = {}",
+            d.var()
+        );
+        assert!(
+            (d.skewness() - 3.726_354_020_448_712_7).abs() < 1e-9,
+            "skew = {}",
+            d.skewness()
+        );
+        assert!(
+            (d.kurtosis() - 47.635_714_285_714_286).abs() < 1e-7,
+            "kurt = {}",
+            d.kurtosis()
+        );
+        // Heavy-tail regime: moments diverge → +inf (scipy convention).
+        let heavy = BetaNegativeBinomial::new(10, 3.0, 4.0);
+        assert!(heavy.var().is_infinite() || heavy.skewness().is_infinite());
+        assert!(BetaNegativeBinomial::new(10, 1.0, 4.0).mean().is_infinite());
     }
 
     #[test]
