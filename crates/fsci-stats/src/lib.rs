@@ -6747,9 +6747,23 @@ impl ContinuousDistribution for VonMises {
     }
 
     fn var(&self) -> f64 {
+        // scipy.stats.vonmises reports the LINEAR variance over the principal
+        // period [−π, π], not the circular variance 1 − I₁/I₀. The Fourier
+        // expansion of the pdf gives
+        //   var = π²/3 + (4/I₀(κ)) Σ_{k≥1} (−1)^k I_k(κ)/k².
+        // frankenscipy.
         let i0 = modified_bessel_i(0.0, self.kappa);
-        let i1 = modified_bessel_i(1.0, self.kappa);
-        1.0 - i1 / i0
+        let mut sum = 0.0_f64;
+        for k in 1..256 {
+            let kf = f64::from(k);
+            let sign = if k % 2 == 0 { 1.0 } else { -1.0 };
+            let term = sign * modified_bessel_i(kf, self.kappa) / (kf * kf);
+            sum += term;
+            if k > 2 && term.abs() <= 1e-18 * (1.0 + sum.abs()) {
+                break;
+            }
+        }
+        PI * PI / 3.0 + 4.0 / i0 * sum
     }
 
     fn entropy(&self) -> f64 {
@@ -6762,15 +6776,31 @@ impl ContinuousDistribution for VonMises {
     }
 
     fn skewness(&self) -> f64 {
-        // VonMises is a circular distribution on [−π, π]; "linear"
-        // skewness/kurtosis aren't well-defined the way they are for
-        // distributions on ℝ. scipy.stats.vonmises returns NaN for
-        // both — match that contract explicitly.
-        f64::NAN
+        // VonMises is symmetric about its mean, so every odd central moment
+        // vanishes: skewness = 0 (matches scipy.stats.vonmises). frankenscipy.
+        0.0
     }
 
     fn kurtosis(&self) -> f64 {
-        f64::NAN
+        // Excess kurtosis of the LINEAR moments on [−π, π] (scipy convention):
+        //   μ₄ = π⁴/5 + (8/I₀(κ)) Σ_{k≥1} (−1)^k (π²/k² − 6/k⁴) I_k(κ),
+        //   kurt = μ₄/var² − 3. frankenscipy.
+        let i0 = modified_bessel_i(0.0, self.kappa);
+        let mut sum = 0.0_f64;
+        for k in 1..256 {
+            let kf = f64::from(k);
+            let sign = if k % 2 == 0 { 1.0 } else { -1.0 };
+            let term = sign
+                * (PI * PI / (kf * kf) - 6.0 / (kf * kf * kf * kf))
+                * modified_bessel_i(kf, self.kappa);
+            sum += term;
+            if k > 2 && term.abs() <= 1e-18 * (1.0 + sum.abs()) {
+                break;
+            }
+        }
+        let mu4 = PI.powi(4) / 5.0 + 8.0 / i0 * sum;
+        let v = self.var();
+        mu4 / (v * v) - 3.0
     }
 
     fn mode(&self) -> f64 {
@@ -46619,13 +46649,30 @@ mod tests {
     }
 
     #[test]
-    fn vonmises_skewness_and_kurtosis_are_nan() {
-        // VonMises is circular; linear skew/kurt aren't well-defined.
-        // scipy returns NaN, we match.
-        for &kappa in &[0.5_f64, 1.0, 2.5, 5.0] {
+    fn vonmises_linear_moments_match_scipy() {
+        // scipy.stats.vonmises reports LINEAR moments over [−π, π]: skewness is 0
+        // (symmetry) and var/kurt are finite. Golden values from scipy 1.17.1
+        // vonmises(kappa).stats(moments='mvsk'). (Earlier this test wrongly
+        // enshrined NaN; scipy never returned NaN here.)
+        let cases = [
+            (0.5_f64, 2.348_803_34_f64, -0.741_953_34_f64),
+            (1.0, 1.604_254_30, -0.154_146_39),
+            (2.0, 0.764_461_88, 0.884_726_59),
+            (5.0, 0.227_230_16, 0.427_510_76),
+        ];
+        for &(kappa, var, kurt) in &cases {
             let v = VonMises { kappa, loc: 0.0 };
-            assert!(v.skewness().is_nan(), "VonMises({kappa}) skew NaN");
-            assert!(v.kurtosis().is_nan(), "VonMises({kappa}) kurt NaN");
+            assert!(v.skewness().abs() < 1e-12, "VonMises({kappa}) skew 0");
+            assert!(
+                (v.var() - var).abs() < 1e-6,
+                "VonMises({kappa}) var: got {} want {var}",
+                v.var()
+            );
+            assert!(
+                (v.kurtosis() - kurt).abs() < 1e-6,
+                "VonMises({kappa}) kurt: got {} want {kurt}",
+                v.kurtosis()
+            );
         }
     }
 
