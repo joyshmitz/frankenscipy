@@ -12595,14 +12595,28 @@ fn lu_factor_blocked(a_in: &[Vec<f64>]) -> Option<LuFactorsFlat> {
             }
         }
 
+        // U12 solve U12 = L11^-1 * A12, vectorized 8-wide over the trailing columns. Each
+        // element keeps the identical incremental `s -= L[i][p] * U[p][jj]` over monotonic p,
+        // so the result is bit-identical to the scalar form (golden digest preserved).
         for i in k..kb {
             let i_base = i * n;
-            for jj in kb..n {
+            let mut jj = kb;
+            while jj + 8 <= n {
+                let mut acc = Simd::<_, 8>::from_slice(&data[i_base + jj..i_base + jj + 8]);
+                for p in k..i {
+                    let lip = Simd::splat(data[i_base + p]);
+                    acc -= lip * Simd::<_, 8>::from_slice(&data[p * n + jj..p * n + jj + 8]);
+                }
+                acc.copy_to_slice(&mut data[i_base + jj..i_base + jj + 8]);
+                jj += 8;
+            }
+            while jj < n {
                 let mut s = data[i_base + jj];
                 for p in k..i {
                     s -= data[i_base + p] * data[p * n + jj];
                 }
                 data[i_base + jj] = s;
+                jj += 1;
             }
         }
 
@@ -12776,14 +12790,28 @@ fn lu_factor_blocked_f32(a_in: &[Vec<f64>]) -> Option<LuFactorsFlatF32> {
             }
         }
 
+        // U12 solve U12 = L11^-1 * A12, vectorized 8-wide over the trailing columns. Each
+        // element keeps the identical incremental `s -= L[i][p] * U[p][jj]` over monotonic p,
+        // so the result is bit-identical to the scalar form (golden digest preserved).
         for i in k..kb {
             let i_base = i * n;
-            for jj in kb..n {
+            let mut jj = kb;
+            while jj + 8 <= n {
+                let mut acc = Simd::<_, 8>::from_slice(&data[i_base + jj..i_base + jj + 8]);
+                for p in k..i {
+                    let lip = Simd::splat(data[i_base + p]);
+                    acc -= lip * Simd::<_, 8>::from_slice(&data[p * n + jj..p * n + jj + 8]);
+                }
+                acc.copy_to_slice(&mut data[i_base + jj..i_base + jj + 8]);
+                jj += 8;
+            }
+            while jj < n {
                 let mut s = data[i_base + jj];
                 for p in k..i {
                     s -= data[i_base + p] * data[p * n + jj];
                 }
                 data[i_base + jj] = s;
+                jj += 1;
             }
         }
 
