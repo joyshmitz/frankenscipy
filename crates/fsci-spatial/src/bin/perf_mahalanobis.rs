@@ -1,6 +1,6 @@
 // Correctness + A/B for cdist_mahalanobis (GEMM-expansion) vs the naive per-pair loop.
 // Expansion must match the direct per-pair mahalanobis within ~1e-9; the speedup is ~d×.
-use fsci_spatial::{cdist_mahalanobis, mahalanobis};
+use fsci_spatial::{cdist_mahalanobis, mahalanobis, pdist_mahalanobis};
 use std::hint::black_box;
 use std::time::Instant;
 
@@ -64,7 +64,35 @@ fn main() {
     let exp = t_exp[trials / 2] * 1e3;
     let naive = t_naive[trials / 2] * 1e3;
     println!(
-        "naive(per-pair) {naive:.2} ms | expansion {exp:.2} ms | speedup {:.2}x  (na={na} nb={nb} d={d})",
+        "cdist: naive(per-pair) {naive:.2} ms | expansion {exp:.2} ms | speedup {:.2}x  (na={na} nb={nb} d={d})",
         naive / exp
+    );
+
+    // pdist (self-pairs, condensed) — same lever.
+    let np = 560usize;
+    let xp: Vec<Vec<f64>> = (0..np).map(|_| (0..d).map(|_| rng() * 2.0 - 1.0).collect()).collect();
+    let mut pe = Vec::new();
+    let mut pn = Vec::new();
+    for _ in 0..trials {
+        let t = Instant::now();
+        black_box(pdist_mahalanobis(&xp, &vi).unwrap());
+        pe.push(t.elapsed().as_secs_f64());
+        let t = Instant::now();
+        let mut cond = Vec::with_capacity(np * (np - 1) / 2);
+        for i in 0..np {
+            for j in (i + 1)..np {
+                cond.push(mahalanobis(&xp[i], &xp[j], &vi));
+            }
+        }
+        black_box(&cond);
+        pn.push(t.elapsed().as_secs_f64());
+    }
+    pe.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    pn.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let pem = pe[trials / 2] * 1e3;
+    let pnm = pn[trials / 2] * 1e3;
+    println!(
+        "pdist: naive(per-pair) {pnm:.2} ms | expansion {pem:.2} ms | speedup {:.2}x  (n={np} d={d})",
+        pnm / pem
     );
 }

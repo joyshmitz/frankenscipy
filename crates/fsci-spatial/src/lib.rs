@@ -3700,6 +3700,63 @@ pub fn cdist_mahalanobis(
     Ok(out)
 }
 
+/// Condensed pairwise Mahalanobis distance matrix over the rows of `x` given the inverse
+/// covariance matrix `vi` (d×d, symmetric).
+///
+/// Matches `scipy.spatial.distance.pdist(X, 'mahalanobis', VI=vi)`: the upper triangle in
+/// row-major order, `d(0,1), d(0,2), …, d(0,n-1), d(1,2), …`.
+///
+/// Same GEMM-expansion as [`cdist_mahalanobis`] specialised to self-pairs:
+/// `q[i] = xᵢᵀVIxᵢ` from `U = X·VI`, cross term `G = U·Xᵀ`, then
+/// `d(i,j) = sqrt(q[i] + q[j] − 2·G[i][j])`. O(n²·d + n·d²) versus the naive
+/// O(n²·d²) per-pair quadratic — a ~d× reduction.
+pub fn pdist_mahalanobis(x: &[Vec<f64>], vi: &[Vec<f64>]) -> Result<Vec<f64>, SpatialError> {
+    if x.is_empty() {
+        return Err(SpatialError::EmptyData);
+    }
+    let d = x[0].len();
+    let dim_err = |actual: usize| SpatialError::DimensionMismatch { expected: d, actual };
+    if vi.len() != d {
+        return Err(dim_err(vi.len()));
+    }
+    for row in vi {
+        if row.len() != d {
+            return Err(dim_err(row.len()));
+        }
+    }
+    for row in x {
+        if row.len() != d {
+            return Err(dim_err(row.len()));
+        }
+    }
+    let n = x.len();
+
+    let map_err = |_| SpatialError::InvalidArgument("matmul shape error".to_string());
+    let u = fsci_linalg::matmul(x, vi).map_err(map_err)?; // U[i] = VI·xᵢ
+    let q: Vec<f64> = x.iter().zip(u.iter()).map(|(xi, ui)| simd_dot(xi, ui)).collect();
+
+    // Cross term G[i][j] = Uᵢ·xⱼ = xᵢᵀ VI xⱼ via the blocked GEMM U·Xᵀ (full matrix; only
+    // the strict upper triangle is read — the symmetric lower half is redundant work but
+    // the blocked GEMM still dwarfs the per-pair quadratic).
+    let mut xt = vec![vec![0.0; n]; d];
+    for (i, row) in x.iter().enumerate() {
+        for (k, &v) in row.iter().enumerate() {
+            xt[k][i] = v;
+        }
+    }
+    let g = fsci_linalg::matmul(&u, &xt).map_err(map_err)?;
+
+    let mut out = Vec::with_capacity(n * (n.saturating_sub(1)) / 2);
+    for i in 0..n {
+        let qi = q[i];
+        let gi = &g[i];
+        for j in (i + 1)..n {
+            out.push((qi + q[j] - 2.0 * gi[j]).max(0.0).sqrt());
+        }
+    }
+    Ok(out)
+}
+
 /// Standardized Euclidean distance.
 ///
 /// d = sqrt(sum((x-y)² / v)) where v is the per-component variance.
@@ -7289,6 +7346,43 @@ mod tests {
         let xb = vec![vec![0.0, 1.0]];
         let vi_bad = vec![vec![1.0, 0.0, 0.0], vec![0.0, 1.0, 0.0]]; // 2x3, not 2x2
         assert!(cdist_mahalanobis(&xa, &xb, &vi_bad).is_err());
+    }
+
+    #[test]
+    fn pdist_mahalanobis_matches_per_pair_condensed() {
+        // The condensed batch path must equal the direct per-pair `mahalanobis` in
+        // scipy's upper-triangle row-major order.
+        let mut s: u64 = 0xfeed_face_cafe_babe;
+        let mut rng = || {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((s >> 11) as f64) / (1u64 << 53) as f64
+        };
+        let d = 9usize;
+        let n = 19usize;
+        let x: Vec<Vec<f64>> =
+            (0..n).map(|_| (0..d).map(|_| rng() * 2.0 - 1.0).collect()).collect();
+        let m: Vec<Vec<f64>> = (0..d).map(|_| (0..d).map(|_| rng() - 0.5).collect()).collect();
+        let mut vi = vec![vec![0.0; d]; d];
+        for i in 0..d {
+            for j in 0..d {
+                let dot: f64 = (0..d).map(|k| m[i][k] * m[j][k]).sum();
+                vi[i][j] = dot / d as f64 + if i == j { 1.0 } else { 0.0 };
+            }
+        }
+        let got = pdist_mahalanobis(&x, &vi).expect("pdist_mahalanobis");
+        assert_eq!(got.len(), n * (n - 1) / 2);
+        let mut k = 0;
+        for i in 0..n {
+            for j in (i + 1)..n {
+                let want = mahalanobis(&x[i], &x[j], &vi);
+                assert!(
+                    (got[k] - want).abs() < 1e-9,
+                    "pdist_mahalanobis[{k}] (i={i},j={j}) = {}, per-pair = {want}",
+                    got[k]
+                );
+                k += 1;
+            }
+        }
     }
 
     #[test]
