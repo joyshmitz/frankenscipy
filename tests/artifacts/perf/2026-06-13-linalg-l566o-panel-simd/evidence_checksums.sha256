@@ -1,0 +1,9 @@
+f46b2f8ef519a73706e572482a2cb174b9e127f71a3b60de423e19bd38e6bcfc  tests/artifacts/perf/2026-06-13-linalg-l566o-panel-simd/after_solve_1000_f64_panel_only_rch.txt
+79f9c3b86414324b10894cb22801f21a1c1233f151551dffba2f2d6a9afc42c6  tests/artifacts/perf/2026-06-13-linalg-l566o-panel-simd/after_solve_1000_panel_simd_rch.txt
+6996b28b67ff7d4bdc98bbff81cf58296e4f1c31ae496ed97ab691adcae75847  tests/artifacts/perf/2026-06-13-linalg-l566o-panel-simd/baseline_post_u12_solve_1000_vmi1149989_rch.txt
+5568c0d63bc3bc5eec7b40ce0a5e3b794276cf78be09256dfb5e5c226152b2bb  tests/artifacts/perf/2026-06-13-linalg-l566o-panel-simd/baseline_solve_1000_current_head_rch.txt
+5fc0451730469c253e24c6449e07656fdc0395b420c5f17c1a38a2edcbf0eae1  tests/artifacts/perf/2026-06-13-linalg-l566o-panel-simd/REJECT.md
+ec3fda2968432b666ca849a706916a6daead4b8b301b8a8414811a896e324bdf  tests/artifacts/perf/2026-06-13-linalg-l566o-inv-trsm/after_inv_2000_trsm_rch.txt
+e9efc49cd0ca024b06185fdcd4f44febcfb0f6cea41b57ac135c8a068c819ea0  tests/artifacts/perf/2026-06-13-linalg-l566o-inv-trsm/after_inv_2000_trsm_vmi1152480_rch.txt
+8b050296427ef591799c0272fd6fde349d23a185e55f33654d984afb8adcdefc  tests/artifacts/perf/2026-06-13-linalg-l566o-inv-trsm/baseline_inv_2000_clean_head_rch.txt
+dd8267f3150a49dbae8cd603396fada56c6728779e4b82a39db61a7fe720265c  tests/artifacts/perf/2026-06-13-linalg-l566o-inv-trsm/proof_flat_lu_golden_digest_rch.txt
