@@ -542,7 +542,11 @@ pub fn splu(a: &CscMatrix, options: LuOptions) -> SparseResult<SparseLuFactoriza
         });
     }
     let n = shape.rows;
-    let (backend_used, lu_internal) = if n > SPSOLVE_DENSE_MAX_N {
+    // Genuinely-sparse A factors via the native sparse LU (~O(n·fill)) rather than
+    // densifying to an n×n dense matrix for O(n³) dense LU — see `spsolve` for the
+    // same routing. scipy's splu is always sparse; small/dense-pattern A keeps dense.
+    let genuinely_sparse = n >= 256 && a.nnz() <= n.saturating_mul(16);
+    let (backend_used, lu_internal) = if n > SPSOLVE_DENSE_MAX_N || genuinely_sparse {
         let csr = a.to_csr()?;
         (
             SparseBackend::NativeSparseLu,

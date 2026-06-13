@@ -10,7 +10,10 @@
 use std::hint::black_box;
 use std::time::Instant;
 
-use fsci_sparse::{CooMatrix, CsrMatrix, FormatConvertible, Shape2D, SolveOptions, spsolve};
+use fsci_sparse::{
+    CooMatrix, CscMatrix, CsrMatrix, FormatConvertible, LuOptions, Shape2D, SolveOptions, splu,
+    splu_solve, spsolve,
+};
 use nalgebra::{DMatrix, DVector};
 
 // Diagonally-dominant pentadiagonal A (bandwidth 2): diag 6, off-diagonals -1 at
@@ -86,8 +89,38 @@ fn main() {
         });
 
         println!(
-            "n={n:>5}: dense={t_before:>10.4}ms  sparse={t_after:>9.5}ms  speedup={:>9.1}x  max|dx|={max_dx:.2e}",
+            "spsolve n={n:>5}: dense={t_before:>10.4}ms  sparse={t_after:>9.5}ms  speedup={:>9.1}x  max|dx|={max_dx:.2e}",
             t_before / t_after
+        );
+
+        // splu factorization: same routing. Time factorize-only (the dominant cost).
+        let a_csc: CscMatrix = a.to_csc().unwrap();
+        let fac = splu(&a_csc, LuOptions::default()).expect("splu");
+        let x_splu = splu_solve(&fac, &b).expect("splu_solve");
+        let max_dx2 = x_splu
+            .iter()
+            .zip(x_dense.iter())
+            .map(|(s, d)| (s - d).abs())
+            .fold(0.0_f64, f64::max);
+        let t_splu = time(reps_sparse, || {
+            black_box(splu(black_box(&a_csc), LuOptions::default()).unwrap());
+        });
+        let t_dense_fac = time(reps_dense, || {
+            let n = a.shape().rows;
+            let mut dense = vec![0.0f64; n * n];
+            let indptr = a.indptr();
+            let indices = a.indices();
+            let data = a.data();
+            for i in 0..n {
+                for idx in indptr[i]..indptr[i + 1] {
+                    dense[i * n + indices[idx]] = data[idx];
+                }
+            }
+            black_box(DMatrix::from_row_slice(n, n, &dense).lu());
+        });
+        println!(
+            "splu    n={n:>5}: dense={t_dense_fac:>10.4}ms  sparse={t_splu:>9.5}ms  speedup={:>9.1}x  max|dx|={max_dx2:.2e}",
+            t_dense_fac / t_splu
         );
     }
 }
