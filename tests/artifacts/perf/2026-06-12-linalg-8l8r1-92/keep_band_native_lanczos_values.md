@@ -90,9 +90,10 @@ Clippy:
 
 - Existing artifact `clippy_fsci_linalg_all_targets_no_deps_after_fix_rch.txt`
   records the crate-scoped RCH command passing.
-- Two fresh retries on 2026-06-13 were blocked by RCH selecting `hz2`, whose
-  nightly toolchain lacks `cargo-clippy`. UBS also ran clippy locally as part of
-  the single-file scan and reported clean formatting/clippy for the touched file.
+- Two fresh retries on 2026-06-13 were blocked by RCH selecting `hz1` and
+  `hz2`, whose nightly toolchains lack `cargo-clippy`. UBS also ran clippy
+  locally as part of the single-file scan and reported clean formatting/clippy
+  for the touched file.
 
 ## Next Route
 
