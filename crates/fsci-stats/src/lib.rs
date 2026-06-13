@@ -8025,6 +8025,26 @@ impl DiscreteDistribution for YuleSimon {
         (1.0 - kf * self.ln_beta_k(kf).exp()).clamp(0.0, 1.0)
     }
 
+    fn sf(&self, k: u64) -> f64 {
+        // P(X > k) = k · B(k, α + 1) directly (the default 1 − cdf cancels and
+        // underflows to 0 in the power-law tail). Matches scipy yulesimon._sf.
+        // frankenscipy.
+        if k == 0 {
+            return 1.0;
+        }
+        let kf = k as f64;
+        (kf * self.ln_beta_k(kf).exp()).clamp(0.0, 1.0)
+    }
+
+    fn logsf(&self, k: u64) -> f64 {
+        // ln(k) + ln B(k, α + 1); finite deep in the tail where ln(sf) → −inf.
+        // Matches scipy yulesimon._logsf. frankenscipy.
+        if k == 0 {
+            return 0.0;
+        }
+        (k as f64).ln() + self.ln_beta_k(k as f64)
+    }
+
     fn mean(&self) -> f64 {
         if self.alpha > 1.0 {
             self.alpha / (self.alpha - 1.0)
