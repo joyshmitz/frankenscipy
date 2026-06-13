@@ -1119,6 +1119,130 @@ pub fn convolve_axes(
 /// `origins` may contain one scalar origin applied to every axis, or one origin
 /// per input axis. Positive origins shift the convolution window toward higher
 /// input coordinates; negative origins shift it toward lower coordinates.
+// Apply an N-D filter whose taps are supplied as per-tap per-dim input-index deltas (already
+// folding in any kernel flip, center offset, and origin). Two paths, both summing weights in
+// k=0..len order so the result is BYTE-IDENTICAL to the per-pixel `get_boundary` loop:
+//   • INTERIOR pixels (whole footprint in-bounds) gather directly from the flat array via
+//     precomputed flat deltas — no boundary handling, no per-tap index arithmetic;
+//   • BORDER pixels fall back to `get_boundary`.
+// The old path's per-tap `weights.unravel` heap alloc and per-pixel `input.unravel` are gone.
+fn nd_filter_apply(
+    input: &NdArray,
+    weights: &[f64],
+    tap_delta: &[Vec<i64>],
+    mode: BoundaryMode,
+    cval: f64,
+) -> NdArray {
+    let ndim = input.ndim();
+    let shape = &input.shape;
+    let strides = &input.strides;
+    let total = input.size();
+    let tap_flat: Vec<i64> = tap_delta
+        .iter()
+        .map(|d| (0..ndim).map(|i| d[i] * strides[i] as i64).sum())
+        .collect();
+    // Interior box [lo[d], hi[d)): every tap stays in-bounds along dim d.
+    let mut lo = vec![0i64; ndim];
+    let mut hi: Vec<i64> = shape.iter().map(|&s| s as i64).collect();
+    for d in 0..ndim {
+        let mut mn = 0i64;
+        let mut mx = 0i64;
+        for t in tap_delta {
+            mn = mn.min(t[d]);
+            mx = mx.max(t[d]);
+        }
+        lo[d] = -mn;
+        hi[d] = shape[d] as i64 - mx;
+    }
+    let mut output = NdArray::zeros(shape.clone());
+    let work = |start: usize, os: &mut [f64]| {
+        let mut out_idx = vec![0i64; ndim];
+        let mut in_idx = vec![0i64; ndim];
+        for (li, slot) in os.iter_mut().enumerate() {
+            let p = start + li;
+            let mut rem = p;
+            let mut interior = true;
+            for d in 0..ndim {
+                let c = (rem / strides[d]) as i64;
+                rem %= strides[d];
+                out_idx[d] = c;
+                if c < lo[d] || c >= hi[d] {
+                    interior = false;
+                }
+            }
+            let mut sum = 0.0;
+            if interior {
+                for (k, &w) in weights.iter().enumerate() {
+                    sum += w * input.data[(p as i64 + tap_flat[k]) as usize];
+                }
+            } else {
+                for (k, &w) in weights.iter().enumerate() {
+                    for d in 0..ndim {
+                        in_idx[d] = out_idx[d] + tap_delta[k][d];
+                    }
+                    sum += w * input.get_boundary(&in_idx, mode, cval);
+                }
+            }
+            *slot = sum;
+        }
+    };
+    let nthreads = ndimage_filter_thread_count(total, weights.len());
+    if nthreads <= 1 {
+        work(0, &mut output.data);
+    } else {
+        let chunk = total.div_ceil(nthreads);
+        let work = &work;
+        std::thread::scope(|scope| {
+            for (t, os) in output.data.chunks_mut(chunk).enumerate() {
+                scope.spawn(move || work(t * chunk, os));
+            }
+        });
+    }
+    output
+}
+
+/// Reference per-pixel N-D filter path (pre interior/flat-gather), retained for the
+/// same-process A/B benchmark and byte-identity proof only. `flip` selects convolve vs
+/// correlate kernel orientation/offset/origin sign.
+#[doc(hidden)]
+pub fn nd_filter_perpixel_ref(
+    input: &NdArray,
+    weights: &NdArray,
+    origins: &[i64],
+    mode: BoundaryMode,
+    cval: f64,
+    flip: bool,
+) -> Result<NdArray, NdimageError> {
+    let ndim = input.ndim();
+    let origins = normalize_filter_origins(ndim, &weights.shape, origins)?;
+    let offsets: Vec<i64> = weights
+        .shape
+        .iter()
+        .map(|&s| if flip { (s as i64 - 1) / 2 } else { s as i64 / 2 })
+        .collect();
+    let mut output = NdArray::zeros(input.shape.clone());
+    fill_pixels_parallel(&mut output, weights.size().max(1), |flat_out, _s| {
+        let out_idx = input.unravel(flat_out);
+        let mut in_idx = vec![0i64; ndim];
+        let mut sum = 0.0;
+        for flat_k in 0..weights.size() {
+            let k_idx = weights.unravel(flat_k);
+            for d in 0..ndim {
+                in_idx[d] = if flip {
+                    out_idx[d] as i64 + (weights.shape[d] as i64 - 1 - k_idx[d] as i64)
+                        - offsets[d]
+                        + origins[d]
+                } else {
+                    out_idx[d] as i64 + k_idx[d] as i64 - offsets[d] - origins[d]
+                };
+            }
+            sum += weights.data[flat_k] * input.get_boundary(&in_idx, mode, cval);
+        }
+        sum
+    });
+    Ok(output)
+}
+
 pub fn convolve_with_origins(
     input: &NdArray,
     weights: &NdArray,
@@ -1137,32 +1261,19 @@ pub fn convolve_with_origins(
 
     let ndim = input.ndim();
     let origins = normalize_filter_origins(ndim, &weights.shape, origins)?;
-    let mut output = NdArray::zeros(input.shape.clone());
-
-    // Kernel center offsets
     let offsets: Vec<i64> = weights.shape.iter().map(|&s| (s as i64 - 1) / 2).collect();
-
-    // Each output pixel is an independent weighted sum over the flipped kernel
-    // footprint; distribute output pixels across threads. Byte-identical: same
-    // weights summed in the same flat_k order into the same flat_out slot.
-    let kernel_work = weights.size().max(1);
-    fill_pixels_parallel(&mut output, kernel_work, |flat_out, _scratch| {
-        let out_idx = input.unravel(flat_out);
-        let mut in_idx = vec![0i64; ndim];
-        let mut sum = 0.0;
-        for flat_k in 0..weights.size() {
+    // Convolution: flip the kernel (k_flipped = len-1-k), center, add origin.
+    let tap_delta: Vec<Vec<i64>> = (0..weights.size())
+        .map(|flat_k| {
             let k_idx = weights.unravel(flat_k);
-            for d in 0..ndim {
-                // Convolution: flip the kernel (unlike correlation)
-                let k_flipped = weights.shape[d] as i64 - 1 - k_idx[d] as i64;
-                in_idx[d] = out_idx[d] as i64 + k_flipped - offsets[d] + origins[d];
-            }
-            sum += weights.data[flat_k] * input.get_boundary(&in_idx, mode, cval);
-        }
-        sum
-    });
-
-    Ok(output)
+            (0..ndim)
+                .map(|d| {
+                    (weights.shape[d] as i64 - 1 - k_idx[d] as i64) - offsets[d] + origins[d]
+                })
+                .collect()
+        })
+        .collect();
+    Ok(nd_filter_apply(input, &weights.data, &tap_delta, mode, cval))
 }
 
 /// One-dimensional convolution along a selected axis.
@@ -1317,31 +1428,17 @@ pub fn correlate_with_origins(
 
     let ndim = input.ndim();
     let origins = normalize_filter_origins(ndim, &weights.shape, origins)?;
-    let mut output = NdArray::zeros(input.shape.clone());
-
     let offsets: Vec<i64> = weights.shape.iter().map(|&s| s as i64 / 2).collect();
-
-    // Each output pixel is an independent weighted sum over the (read-only)
-    // kernel footprint, so distribute the output pixels across threads. The
-    // `in_idx` scratch vector is reused per pixel within a worker. Byte-identical:
-    // the same weights are summed in the same flat_k order, written to the same
-    // flat_out slot — only the owning core changes.
-    let kernel_work = weights.size().max(1);
-    fill_pixels_parallel(&mut output, kernel_work, |flat_out, _scratch| {
-        let out_idx = input.unravel(flat_out);
-        let mut in_idx = vec![0i64; ndim];
-        let mut sum = 0.0;
-        for flat_k in 0..weights.size() {
+    // Correlation: no flip; center the kernel and subtract origin.
+    let tap_delta: Vec<Vec<i64>> = (0..weights.size())
+        .map(|flat_k| {
             let k_idx = weights.unravel(flat_k);
-            for d in 0..ndim {
-                in_idx[d] = out_idx[d] as i64 + k_idx[d] as i64 - offsets[d] - origins[d];
-            }
-            sum += weights.data[flat_k] * input.get_boundary(&in_idx, mode, cval);
-        }
-        sum
-    });
-
-    Ok(output)
+            (0..ndim)
+                .map(|d| k_idx[d] as i64 - offsets[d] - origins[d])
+                .collect()
+        })
+        .collect();
+    Ok(nd_filter_apply(input, &weights.data, &tap_delta, mode, cval))
 }
 
 /// One-dimensional correlation along a selected axis.
@@ -8057,6 +8154,54 @@ mod tests {
         let result = uniform_filter(&input, 3, BoundaryMode::Constant, 0.0).unwrap();
         // Center should be average of [0, 1, 0] = 1/3
         assert!((result.data[2] - 1.0 / 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn nd_filter_interior_fast_path_is_byte_identical_to_perpixel() {
+        // correlate/convolve via the interior/flat-gather path must equal the per-pixel
+        // get_boundary reference bit-for-bit across modes, kernel sizes (incl. asymmetric
+        // and kernels wider than the array), and origins.
+        let arr = NdArray::new(
+            (0..23 * 19).map(|i| ((i * 7919) % 877) as f64 / 80.0 - 5.0).collect(),
+            vec![23, 19],
+        )
+        .unwrap();
+        for mode in [
+            BoundaryMode::Nearest,
+            BoundaryMode::Reflect,
+            BoundaryMode::Constant,
+            BoundaryMode::Wrap,
+            BoundaryMode::Mirror,
+        ] {
+            for ks in [[3usize, 3], [1, 5], [4, 2], [25, 3]] {
+                let w = NdArray::new(
+                    (0..ks[0] * ks[1]).map(|k| (k as f64 * 0.3 - 1.0).cos()).collect(),
+                    ks.to_vec(),
+                )
+                .unwrap();
+                for origin in [&[0i64, 0][..], &[1, -1][..]] {
+                    if origin.iter().enumerate().any(|(d, &o)| {
+                        o < -(ks[d] as i64 / 2) || o > (ks[d] as i64 - 1) / 2
+                    }) {
+                        continue;
+                    }
+                    for flip in [false, true] {
+                        let got = if flip {
+                            convolve_with_origins(&arr, &w, origin, mode, 0.4).unwrap()
+                        } else {
+                            correlate_with_origins(&arr, &w, origin, mode, 0.4).unwrap()
+                        };
+                        let want =
+                            nd_filter_perpixel_ref(&arr, &w, origin, mode, 0.4, flip).unwrap();
+                        assert_eq!(
+                            got.data.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                            want.data.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                            "mode={mode:?} ks={ks:?} origin={origin:?} flip={flip}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]
