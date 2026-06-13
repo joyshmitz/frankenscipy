@@ -1,0 +1,18 @@
+Command:
+RCH_REQUIRE_REMOTE=1 RCH_WORKER=ovh-a RCH_TEST_SLOTS=1 CARGO_BUILD_JOBS=1 rch exec -- cargo check -j 1 -p fsci-linalg --all-targets --locked
+
+Worker selected by RCH:
+hz2
+
+Result:
+exit=0
+
+Observed check output:
+
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 53.99s
+Remote command finished: exit=0 in 56164ms
+
+Note:
+This was crate-scoped (`-p fsci-linalg --all-targets`) but RCH selected `hz2`
+despite the worker hint. This is compile-only evidence; perf/proof timing used
+`ovh-a`.

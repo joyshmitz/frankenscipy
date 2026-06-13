@@ -1,0 +1,47 @@
+Command:
+RCH_REQUIRE_REMOTE=1 RCH_WORKER=ovh-a RCH_TEST_SLOTS=1 CARGO_BUILD_JOBS=1 rch exec -- cargo test -j 1 -p fsci-linalg --lib --release --locked -- eig_banded_lanczos_perf_probe --ignored --nocapture
+
+Worker:
+ovh-a
+
+Result:
+exit=0
+
+Observed release probe output:
+
+running 1 test
+EIG_BANDED_LANCZOS_PERF_BEGIN
+shape=256x256
+bandwidth=32
+candidate_ms=23.811788
+max_abs_diff=3.86535248253494501e-11
+candidate_digest=0x5cf77c2e08c5de38
+dense_digest=0xbc00c62977653f28
+EIG_BANDED_LANCZOS_PERF_END
+EIG_BANDED_LANCZOS_PERF_BEGIN
+shape=512x512
+bandwidth=32
+candidate_ms=137.553186
+max_abs_diff=1.30967237055301666e-10
+candidate_digest=0x795ec5aae4fa0dd5
+dense_digest=0x063f7473019c571a
+EIG_BANDED_LANCZOS_PERF_END
+test proptest_tests::eig_banded_lanczos_perf_probe ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 426 filtered out; finished in 0.28s
+
+Baseline comparison:
+
+- Prior dense-expanded baseline, same worker family/artifact from `.90`:
+  256x256 bw32 = 66.890671 ms
+- Candidate:
+  256x256 bw32 = 23.811788 ms
+- Speedup:
+  2.809985x
+
+- Prior dense-expanded baseline, same worker family/artifact from `.90`:
+  512x512 bw32 = 512.075240 ms
+- Candidate:
+  512x512 bw32 = 137.553186 ms
+- Speedup:
+  3.722014x

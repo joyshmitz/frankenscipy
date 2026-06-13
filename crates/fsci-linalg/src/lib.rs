@@ -4411,6 +4411,157 @@ pub fn eigvalsh(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<f64>, Lina
     Ok(eigenvalues)
 }
 
+fn symmetric_lower_band_matvec(ab: &[Vec<f64>], input: &[f64], output: &mut [f64]) {
+    output.fill(0.0);
+    let n = input.len();
+    for col in 0..n {
+        let x_col = input[col];
+        output[col] += ab[0][col] * x_col;
+        for (offset, band_row) in ab.iter().enumerate().skip(1) {
+            let row = col + offset;
+            if row >= n {
+                break;
+            }
+            let value = band_row[col];
+            output[row] += value * x_col;
+            output[col] += value * input[row];
+        }
+    }
+}
+
+fn vector_dot(left: &[f64], right: &[f64]) -> f64 {
+    left.iter()
+        .zip(right.iter())
+        .map(|(left_value, right_value)| left_value * right_value)
+        .sum()
+}
+
+fn vector_l2_norm(values: &[f64]) -> f64 {
+    vector_dot(values, values).sqrt()
+}
+
+fn normalize_vector(values: &mut [f64]) -> Option<f64> {
+    let norm = vector_l2_norm(values);
+    if norm == 0.0 {
+        return None;
+    }
+    for value in values {
+        *value /= norm;
+    }
+    Some(norm)
+}
+
+fn deterministic_lanczos_seed(n: usize) -> Vec<f64> {
+    let center = (n.saturating_sub(1) as f64) * 0.5;
+    let mut seed: Vec<f64> = (0..n)
+        .map(|idx| {
+            let stagger = ((idx * 17 + 11) % 29) as f64;
+            1.0 + stagger * 0.001 + (idx as f64 - center) * 0.000_001
+        })
+        .collect();
+    normalize_vector(&mut seed).expect("deterministic Lanczos seed is nonzero");
+    seed
+}
+
+fn reorthogonalize_against_basis(vector: &mut [f64], basis: &[Vec<f64>]) {
+    for basis_vector in basis {
+        let coefficient = vector_dot(basis_vector, vector);
+        if coefficient == 0.0 {
+            continue;
+        }
+        for (value, basis_value) in vector.iter_mut().zip(basis_vector.iter()) {
+            *value -= coefficient * basis_value;
+        }
+    }
+}
+
+fn deterministic_lanczos_restart(n: usize, basis: &[Vec<f64>], tolerance: f64) -> Option<Vec<f64>> {
+    for seed_idx in 0..n {
+        let mut candidate = vec![0.0; n];
+        candidate[seed_idx] = 1.0;
+        reorthogonalize_against_basis(&mut candidate, basis);
+        reorthogonalize_against_basis(&mut candidate, basis);
+        if vector_l2_norm(&candidate) > tolerance {
+            normalize_vector(&mut candidate)?;
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+fn symmetric_lower_band_lanczos_eigenvalues(
+    ab: &[Vec<f64>],
+    options: DecompOptions,
+) -> Result<Vec<f64>, LinalgError> {
+    let n = ab[0].len();
+    let mut diagonal = Vec::with_capacity(n);
+    let mut offdiagonal = Vec::with_capacity(n.saturating_sub(1));
+    let mut basis = Vec::with_capacity(n);
+    let mut previous = vec![0.0; n];
+    let mut current = deterministic_lanczos_seed(n);
+    let mut work = vec![0.0; n];
+    let mut previous_beta = 0.0;
+    let scale = ab
+        .iter()
+        .flat_map(|row| row.iter())
+        .copied()
+        .map(f64::abs)
+        .fold(0.0_f64, f64::max)
+        .max(1.0);
+    let breakdown_tolerance = f64::EPSILON.sqrt() * scale;
+
+    for step in 0..n {
+        symmetric_lower_band_matvec(ab, &current, &mut work);
+        if step > 0 {
+            for idx in 0..n {
+                work[idx] -= previous_beta * previous[idx];
+            }
+        }
+
+        let alpha = vector_dot(&current, &work);
+        for idx in 0..n {
+            work[idx] -= alpha * current[idx];
+        }
+
+        basis.push(current.clone());
+        reorthogonalize_against_basis(&mut work, &basis);
+        reorthogonalize_against_basis(&mut work, &basis);
+
+        diagonal.push(alpha);
+        if step + 1 == n {
+            break;
+        }
+
+        let beta = vector_l2_norm(&work);
+        if beta <= breakdown_tolerance {
+            let Some(restart) = deterministic_lanczos_restart(n, &basis, breakdown_tolerance)
+            else {
+                return Err(LinalgError::ConvergenceFailure {
+                    detail: format!(
+                        "symmetric band Lanczos exhausted the restart basis at step {step}"
+                    ),
+                });
+            };
+            offdiagonal.push(0.0);
+            previous.fill(0.0);
+            current = restart;
+            previous_beta = 0.0;
+            continue;
+        }
+
+        offdiagonal.push(beta);
+        std::mem::swap(&mut previous, &mut current);
+        for idx in 0..n {
+            current[idx] = work[idx] / beta;
+        }
+        previous_beta = beta;
+    }
+
+    let (mut eigenvalues, _) = eigh_tridiagonal(&diagonal, &offdiagonal, true, options)?;
+    eigenvalues.sort_by(|left, right| left.total_cmp(right));
+    Ok(eigenvalues)
+}
+
 /// Eigenvalues and eigenvectors of a symmetric banded matrix.
 ///
 /// Given a symmetric banded matrix in banded storage format, computes eigenvalues
@@ -4507,6 +4658,19 @@ pub fn eig_banded(
             Some(evecs)
         };
         return Ok((eigenvalues, eigenvectors));
+    }
+
+    if eigvals_only {
+        let eigenvalues = symmetric_lower_band_lanczos_eigenvalues(ab, options)?;
+        emit_trace(LinalgTrace {
+            operation: "eig_banded",
+            matrix_size: (n, n),
+            mode: options.mode,
+            rcond: None,
+            warning: None,
+            error: None,
+        });
+        return Ok((eigenvalues, None));
     }
 
     // General case: reduce banded matrix to tridiagonal form
@@ -21953,6 +22117,158 @@ mod proptest_tests {
             eig_banded(&ab, true, false, DecompOptions::default()).expect("empty");
         assert!(eigenvalues.is_empty());
         assert!(eigenvectors.unwrap().is_empty());
+    }
+
+    fn make_lower_band_eig_probe(n: usize, bandwidth: usize) -> Vec<Vec<f64>> {
+        let mut ab = vec![vec![0.0; n]; bandwidth + 1];
+        for (col, diagonal) in ab[0].iter_mut().enumerate() {
+            *diagonal = (n as f64) * 3.0 + (col as f64) * 0.01;
+        }
+        for (offset, band_row) in ab.iter_mut().enumerate().skip(1) {
+            for (col, value) in band_row
+                .iter_mut()
+                .enumerate()
+                .take(n.saturating_sub(offset))
+            {
+                let stagger = ((col * 13 + offset * 7) % 19) as f64;
+                *value = (1.0 + stagger * 0.002) / ((offset + 1) as f64);
+            }
+        }
+        ab
+    }
+
+    fn dense_from_lower_band_eig_probe(ab: &[Vec<f64>]) -> Vec<Vec<f64>> {
+        let n = ab[0].len();
+        let mut dense = vec![vec![0.0; n]; n];
+        for col in 0..n {
+            dense[col][col] = ab[0][col];
+            for (offset, band_row) in ab.iter().enumerate().skip(1) {
+                let row = col + offset;
+                if row >= n {
+                    break;
+                }
+                dense[row][col] = band_row[col];
+                dense[col][row] = band_row[col];
+            }
+        }
+        dense
+    }
+
+    fn dense_reference_lower_band_eigenvalues(ab: &[Vec<f64>]) -> Vec<f64> {
+        let dense = dense_from_lower_band_eig_probe(ab);
+        eigh(
+            &dense,
+            DecompOptions {
+                mode: RuntimeMode::Strict,
+                check_finite: false,
+            },
+        )
+        .expect("dense symmetric reference")
+        .eigenvalues
+    }
+
+    fn eig_banded_values_digest(values: &[f64]) -> u64 {
+        const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+        const FNV_PRIME: u64 = 0x100000001b3;
+
+        let mut digest = FNV_OFFSET;
+        for value in values {
+            digest ^= value.to_bits();
+            digest = digest.wrapping_mul(FNV_PRIME);
+        }
+        digest
+    }
+
+    #[test]
+    fn eig_banded_lanczos_values_match_dense_reference() {
+        for (n, bandwidth) in [(12usize, 3usize), (33, 5), (96, 8)] {
+            let ab = make_lower_band_eig_probe(n, bandwidth);
+            let candidate = symmetric_lower_band_lanczos_eigenvalues(
+                &ab,
+                DecompOptions {
+                    mode: RuntimeMode::Strict,
+                    check_finite: false,
+                },
+            )
+            .expect("band-native Lanczos values");
+            let dense = dense_reference_lower_band_eigenvalues(&ab);
+            let max_abs = candidate
+                .iter()
+                .zip(dense.iter())
+                .map(|(left, right)| (left - right).abs())
+                .fold(0.0_f64, f64::max);
+            assert!(
+                max_abs <= 1e-8 * (n as f64).max(1.0),
+                "band-native Lanczos drift {max_abs:.17e} for n={n}, bandwidth={bandwidth}"
+            );
+            println!(
+                "eig_banded_lanczos_digest n={n} bandwidth={bandwidth} candidate={:#018x} dense={:#018x}",
+                eig_banded_values_digest(&candidate),
+                eig_banded_values_digest(&dense)
+            );
+        }
+    }
+
+    #[test]
+    fn eig_banded_lanczos_rejects_invalid_shapes() {
+        let ragged = vec![vec![1.0, 2.0], vec![0.5]];
+        let err = eig_banded(
+            &ragged,
+            true,
+            true,
+            DecompOptions {
+                mode: RuntimeMode::Strict,
+                check_finite: false,
+            },
+        )
+        .expect_err("ragged band storage rejected before Lanczos route");
+        assert!(matches!(err, LinalgError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    #[ignore = "perf probe: run with rch and --release for band-native Lanczos eig_banded values"]
+    fn eig_banded_lanczos_perf_probe() {
+        for n in [256usize, 512] {
+            let bandwidth = 32;
+            let ab = make_lower_band_eig_probe(n, bandwidth);
+
+            let started_at = std::time::Instant::now();
+            let candidate = eig_banded(
+                std::hint::black_box(&ab),
+                true,
+                true,
+                DecompOptions {
+                    mode: RuntimeMode::Strict,
+                    check_finite: false,
+                },
+            )
+            .expect("public band-native eig_banded values")
+            .0;
+            let candidate_ms = started_at.elapsed().as_secs_f64() * 1_000.0;
+
+            let dense = dense_reference_lower_band_eigenvalues(&ab);
+            let max_abs = candidate
+                .iter()
+                .zip(dense.iter())
+                .map(|(left, right)| (left - right).abs())
+                .fold(0.0_f64, f64::max);
+            assert!(
+                max_abs <= 1e-8 * (n as f64).max(1.0),
+                "public band-native eig_banded drift {max_abs:.17e} for n={n}"
+            );
+
+            println!("EIG_BANDED_LANCZOS_PERF_BEGIN");
+            println!("shape={n}x{n}");
+            println!("bandwidth={bandwidth}");
+            println!("candidate_ms={candidate_ms:.6}");
+            println!("max_abs_diff={max_abs:.17e}");
+            println!(
+                "candidate_digest={:#018x}",
+                eig_banded_values_digest(&candidate)
+            );
+            println!("dense_digest={:#018x}", eig_banded_values_digest(&dense));
+            println!("EIG_BANDED_LANCZOS_PERF_END");
+        }
     }
 
     #[test]

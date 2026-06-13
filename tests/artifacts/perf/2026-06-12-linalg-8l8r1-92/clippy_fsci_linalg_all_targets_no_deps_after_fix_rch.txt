@@ -1,0 +1,19 @@
+Command:
+RCH_REQUIRE_REMOTE=1 RCH_WORKER=ovh-a RCH_TEST_SLOTS=1 CARGO_BUILD_JOBS=1 rch exec -- cargo clippy -j 1 -p fsci-linalg --all-targets --no-deps --locked -- -D warnings
+
+Worker:
+ovh-a
+
+Result:
+exit=0
+
+Observed clippy output:
+
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 36.62s
+Remote command finished: exit=0 in 37501ms
+
+Note:
+The first all-targets clippy attempt without `--no-deps` reached dependency
+`fsci-fft` and failed on a pre-existing `manual_is_multiple_of` lint before it
+could validate `fsci-linalg`. The passing command above isolates the touched
+crate with `--no-deps`.
