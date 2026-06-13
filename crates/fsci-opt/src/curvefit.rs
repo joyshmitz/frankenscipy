@@ -160,6 +160,13 @@ where
     let mut jac = finite_diff_jacobian(&residuals, &x, &r, options.diff_step);
     nfev += n;
     njev += 1;
+    // J^T J (O(n²·m)) and J^T r depend only on (jac, r), which change ONLY on an accepted
+    // step. Cache them and recompute only when jac/r change, rather than rebuilding both at
+    // the top of every iteration — on a rejected step (mu ratchets up, common for hard /
+    // ill-conditioned problems) only `mu`/`nu` change, so the rebuild was redundant. Byte-
+    // identical: jtj/jtr are deterministic functions of (jac, r).
+    let mut jtj = jtj_matrix(&jac);
+    let mut jtr = jt_vec(&jac, &r);
 
     // Initial damping parameter (Marquardt strategy)
     let mut mu = 1.0e-3 * max_diag_jtj(&jac);
@@ -172,9 +179,8 @@ where
     for _ in 0..max_nfev {
         nit += 1;
 
-        // Compute J^T * r and J^T * J
-        let jtj = jtj_matrix(&jac);
-        let jtr = jt_vec(&jac, &r);
+        // jtj / jtr are current for this (jac, r) — computed before the loop and refreshed
+        // only after an accepted step recomputes the Jacobian (see below).
 
         // Check gradient convergence: ||J^T r||_inf <= gtol
         let grad_inf = jtr.iter().map(|v| v.abs()).fold(0.0_f64, |a: f64, b: f64| {
@@ -262,10 +268,12 @@ where
                     });
                 }
 
-                // Recompute Jacobian
+                // Recompute Jacobian (and the derived J^T J / J^T r) — jac and r changed.
                 jac = finite_diff_jacobian(&residuals, &x, &r, options.diff_step);
                 nfev += n;
                 njev += 1;
+                jtj = jtj_matrix(&jac);
+                jtr = jt_vec(&jac, &r);
 
                 // Decrease damping
                 mu *= f64::max(1.0 / 3.0, 1.0 - (2.0 * rho - 1.0).powi(3));

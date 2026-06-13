@@ -1676,6 +1676,15 @@ where
     let boundary_threshold = 0.9;
     let mut nit = 0usize;
 
+    // The finite-difference Hessian depends only on (x, grad), which change ONLY on an
+    // accepted step. A rejected step merely shrinks the trust radius `delta` — x/grad are
+    // unchanged — so rebuilding the Hessian (O(n) gradient evals ≈ O(n²) function evals)
+    // at the top of the next iteration recomputes an identical matrix. Cache it and refresh
+    // only when x moves. Byte-identical: same (x, grad) → bit-identical Hessian → identical
+    // step and accept/reject decision; only the redundant eval work (njev/nhev) is removed.
+    let mut hessian: Vec<Vec<f64>> = Vec::new();
+    let mut hess_dirty = true;
+
     for iteration in 0..maxiter {
         let grad_norm = l2_norm(&grad);
         if grad_norm <= tol {
@@ -1718,12 +1727,16 @@ where
             return Ok(result);
         }
 
-        let (hessian, hess_grad_evals) = match finite_diff_hessian(&mut objective, &x, &grad, eps) {
-            Ok(v) => v,
-            Err(err) => return Ok(result_from_error(&x, iteration, objective.nfev, njev, err)),
-        };
-        njev += hess_grad_evals;
-        nhev += 1;
+        if hess_dirty {
+            let (h, hess_grad_evals) = match finite_diff_hessian(&mut objective, &x, &grad, eps) {
+                Ok(v) => v,
+                Err(err) => return Ok(result_from_error(&x, iteration, objective.nfev, njev, err)),
+            };
+            hessian = h;
+            njev += hess_grad_evals;
+            nhev += 1;
+            hess_dirty = false;
+        }
 
         let mut step = trust_region_exact_step(&grad, &hessian, delta);
         let mut predicted_reduction = trust_model_reduction(&grad, &hessian, &step);
@@ -1781,6 +1794,7 @@ where
                     return Ok(result_from_error(&x, iteration, objective.nfev, njev, err));
                 }
             };
+            hess_dirty = true; // x/grad moved → cached Hessian is stale
             nit = iteration + 1;
         } else if delta <= 1.0e-8 {
             let result = OptimizeResult {
