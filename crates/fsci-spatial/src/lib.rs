@@ -3483,18 +3483,14 @@ pub fn mahalanobis(x: &[f64], y: &[f64], vi: &[Vec<f64>]) -> f64 {
 
     let diff: Vec<f64> = x.iter().zip(y.iter()).map(|(&a, &b)| a - b).collect();
 
+    // V⁻¹·diff is the O(n²) bottleneck: each component is a full dot product of a row of
+    // `vi` with `diff`, so SIMD-vectorise it (compute-bound, unlike a single elementwise
+    // reduction). The final quadratic form `diffᵀ·(V⁻¹·diff)` is one more dot.
     let mut vi_diff = vec![0.0; n];
-    for i in 0..n {
-        for j in 0..n {
-            vi_diff[i] += vi[i][j] * diff[j];
-        }
+    for (vd, row) in vi_diff.iter_mut().zip(vi.iter()) {
+        *vd = simd_dot(row, &diff);
     }
-
-    let result: f64 = diff
-        .iter()
-        .zip(vi_diff.iter())
-        .map(|(&d, &vd)| d * vd)
-        .sum();
+    let result = simd_dot(&diff, &vi_diff);
     result.max(0.0).sqrt()
 }
 

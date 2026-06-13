@@ -4,7 +4,7 @@
 use std::hint::black_box;
 use std::time::Instant;
 
-use fsci_spatial::{DistanceMetric, cdist_metric, metric_distance, pdist};
+use fsci_spatial::{DistanceMetric, cdist_metric, mahalanobis, metric_distance, pdist};
 
 fn grid(n: usize, dim: usize, seed: f64) -> Vec<Vec<f64>> {
     (0..n)
@@ -87,6 +87,25 @@ fn main() {
             "pdist n={n} dim={dim}: seq={seq:>8.3}ms  par={par:>8.3}ms  speedup={:>6.2}x  bit_identical={exact}",
             seq / par
         );
+    }
+    maha_bench();
+}
+
+fn maha_bench() {
+    for &n in &[64usize, 128, 256] {
+        let x: Vec<f64> = (0..n).map(|i| (i as f64 * 0.37).sin()).collect();
+        let y: Vec<f64> = (0..n).map(|i| (i as f64 * 0.41 + 1.0).cos()).collect();
+        let vi: Vec<Vec<f64>> = (0..n)
+            .map(|i| (0..n).map(|j| 1.0 / ((i + j + 1) as f64)).collect())
+            .collect();
+        let reps = (40_000_000 / (n * n + 1)).clamp(50, 5000);
+        let t0 = Instant::now();
+        let mut acc = 0.0;
+        for _ in 0..reps {
+            acc += mahalanobis(black_box(&x), black_box(&y), black_box(&vi));
+        }
+        let ms = t0.elapsed().as_secs_f64() * 1e3 / reps as f64;
+        println!("mahalanobis n={n}: per_call={ms:>8.5}ms checksum={acc:.6e}");
     }
 }
 
