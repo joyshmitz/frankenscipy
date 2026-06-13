@@ -8532,11 +8532,30 @@ impl DiscreteDistribution for NegHypergeometric {
     }
 
     fn skewness(&self) -> f64 {
-        f64::NAN
+        // Finite support [0, n]: sum the central moments exactly (scipy
+        // nhypergeom reports finite skew/kurt). frankenscipy.
+        let mu = self.mean();
+        let (mut m2, mut m3) = (0.0_f64, 0.0_f64);
+        for k in 0..=self.n {
+            let p = self.pmf(k);
+            let d = k as f64 - mu;
+            m2 += p * d * d;
+            m3 += p * d * d * d;
+        }
+        m3 / m2.powf(1.5)
     }
 
     fn kurtosis(&self) -> f64 {
-        f64::NAN
+        // Excess kurtosis via exact central-moment summation over [0, n].
+        let mu = self.mean();
+        let (mut m2, mut m4) = (0.0_f64, 0.0_f64);
+        for k in 0..=self.n {
+            let p = self.pmf(k);
+            let d2 = (k as f64 - mu).powi(2);
+            m2 += p * d2;
+            m4 += p * d2 * d2;
+        }
+        m4 / (m2 * m2) - 3.0
     }
 
     fn mode(&self) -> f64 {
