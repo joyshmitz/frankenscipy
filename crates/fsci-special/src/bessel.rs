@@ -1591,7 +1591,31 @@ fn kv_scalar(v: f64, z: f64, mode: RuntimeMode) -> Result<f64, SpecialError> {
     // K_v = e^{-z} · (K_v·e^z). The scaled value is computed without ever forming
     // the tiny K_v directly; for z ≳ 745 the e^{-z} underflows to 0, matching
     // SciPy (kve stays finite via kve_scalar). K_v is symmetric: K_{-v} = K_v.
-    Ok(kv_scaled_value(v.abs(), z) * (-z).exp())
+    let result = kv_scaled_value(v.abs(), z) * (-z).exp();
+    if result.is_finite() {
+        return Ok(result);
+    }
+    // The SCALED value K_v·e^z overflowed at large order (e.g. K_500(100)·e^100
+    // ≈ 7e322) even though K_v itself is representable (2.7e279). Rebuild K_v
+    // UNSCALED via the upward recurrence K_{ν+1} = K_{ν-1} + (2ν/z)K_ν (stable
+    // for K), which grows from the tiny base orders to the finite K_v without
+    // the e^z inflation. frankenscipy.
+    let va = v.abs();
+    let v0 = va.fract();
+    let steps = va.floor() as u64;
+    let base0 = kv_scaled_value(v0, z) * (-z).exp();
+    if steps == 0 {
+        return Ok(base0);
+    }
+    let base1 = kv_scaled_value(v0 + 1.0, z) * (-z).exp();
+    let (mut k_prev, mut k_curr) = (base0, base1);
+    for i in 1..steps {
+        let order = v0 + i as f64;
+        let k_next = k_prev + 2.0 * order / z * k_curr;
+        k_prev = k_curr;
+        k_curr = k_next;
+    }
+    Ok(k_curr)
 }
 
 /// Exponentially scaled K_v: returns K_v(z)·e^z for z > 0, staying O(1)/finite
@@ -5481,6 +5505,31 @@ mod tests {
             assert!(
                 ((yval - yref) / yref).abs() < 1e-10,
                 "yv({v},{z})={yval:e} vs {yref:e}"
+            );
+        }
+    }
+
+    #[test]
+    fn kv_large_order_finite() {
+        // K_v is representable (≈2.7e279) but the scaled K_v·e^z overflows f64
+        // (≈7e322) at large order; the unscaled-recurrence fallback keeps kv
+        // finite. Golden from scipy.special.kv. frankenscipy regression.
+        let rv = |r: SpecialResult| match r {
+            Ok(SpecialTensor::RealScalar(v)) => v,
+            _ => f64::NAN,
+        };
+        let s = SpecialTensor::RealScalar;
+        let m = RuntimeMode::Strict;
+        for (v, z, kref) in [
+            (500.0_f64, 100.0_f64, 2.731_38e279_f64),
+            (700.0, 200.0, 1.221_70e280),
+            (500.5, 100.0, 8.678_01e279),
+        ] {
+            let kval = rv(kv(&s(v), &s(z), m));
+            assert!(kval.is_finite(), "kv({v},{z}) not finite");
+            assert!(
+                ((kval - kref) / kref).abs() < 1e-4,
+                "kv({v},{z})={kval:e} vs {kref:e}"
             );
         }
     }
