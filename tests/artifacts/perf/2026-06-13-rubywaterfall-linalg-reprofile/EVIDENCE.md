@@ -38,6 +38,8 @@ Proof artifacts:
 
 - `proof_matmul_flat_workspace_256_route_rch.txt`
 - `proof_matmul_256_public_route_golden_rch.txt`
+- `proof_matmul_flat_workspace_256_route_after_fix_rch.txt`
+- `proof_matmul_256_public_route_golden_after_fix_rch.txt`
 
 The first clippy pass exposed a test-only `needless_range_loop` lint in the SPD golden helper. That helper was rewritten with `split_at_mut`/`enumerate` to preserve the same symmetric matrix values without changing the optimization lever.
 
@@ -49,10 +51,22 @@ The lever clears the required Score >= 2.0 gate and keeps the optimization in th
 
 ## Validation
 
-- `rch exec -- cargo test -j 1 -p fsci-linalg --lib matmul_flat_workspace_is_bit_identical_to_naive_ijk --locked -- --nocapture`
-- `rch exec -- cargo test -j 1 -p fsci-linalg --lib matmul_medium_flat_workspace_route_golden_digest --locked -- --nocapture`
+- `rch exec -- cargo test -j 1 -p fsci-linalg matmul_flat_workspace_is_bit_identical_to_naive_ijk -- --nocapture`
+- `rch exec -- cargo test -j 1 -p fsci-linalg --release matmul_medium_flat_workspace_route_golden_digest -- --ignored --nocapture`
 - `rch exec -- cargo check -j 1 -p fsci-linalg --all-targets --locked`
 - `rch exec -- cargo clippy -j 1 -p fsci-linalg --all-targets --no-deps --locked -- -D warnings` (`clippy_fsci_linalg_all_targets_no_deps_after_fix_rch.txt`)
 - `rustfmt --edition 2024 --check crates/fsci-linalg/src/lib.rs`
 - `git diff --check -- crates/fsci-linalg/src/lib.rs tests/artifacts/perf/2026-06-13-rubywaterfall-linalg-reprofile`
-- `ubs crates/fsci-linalg/src/lib.rs`
+- `ubs crates/fsci-linalg/src/lib.rs .skill-loop-progress.md`
+
+## Post-keep reprofile
+
+Attempted same-worker broad `matmul` Criterion reprofile:
+
+```text
+RCH_REQUIRE_REMOTE=1 RCH_WORKER=vmi1227854 RCH_TEST_SLOTS=1 CARGO_BUILD_JOBS=1 rch exec -- cargo bench -j 1 -p fsci-linalg --bench linalg_bench -- matmul --sample-size 10
+```
+
+Artifact: `post_keep_matmul_reprofile_vmi1227854_rch.txt`.
+
+The command failed before sampling because the remote build reported a missing tracked bin source, `crates/fsci-linalg/src/bin/diff_matfuncs.rs`. The file exists locally and is clean in git; this failure is recorded as an RCH remote-state/sync issue, not as keep/reject evidence for the 256x256 threshold lever.
