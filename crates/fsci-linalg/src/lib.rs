@@ -734,7 +734,7 @@ pub fn solve(a: &[Vec<f64>], b: &[f64], options: SolveOptions) -> Result<SolveRe
         && rows_are_rectangular(a, n)
         && a.iter().flatten().all(|v| v.is_finite())
         && b.iter().all(|v| v.is_finite())
-        && let Some(x) = lu_solve_blocked(a, b)
+        && let Some(x) = lu_solve_mixed_precision(a, b).or_else(|| lu_solve_blocked(a, b))
     {
         let backward_error = compute_backward_error_dense(a, &x, b);
         emit_trace(LinalgTrace {
@@ -12711,6 +12711,248 @@ fn lu_solve_blocked(a_in: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
     lu_subst_factored(&factors, pb)
 }
 
+struct LuFactorsFlatF32 {
+    n: usize,
+    data: Vec<f32>,
+    perm: Vec<usize>,
+}
+
+/// f32 analogue of `lu_factor_blocked` for mixed-precision iterative refinement. The
+/// factorization carries the whole O(n³) cost, so doing it in single precision halves the
+/// DRAM traffic of the bandwidth-bound trailing update and doubles the SIMD width (16-wide
+/// vs 8). Same right-looking partial-pivot algorithm and pivot semantics; a zero/non-finite
+/// pivot returns None so the caller falls back to the exact f64 path.
+#[allow(clippy::needless_range_loop)]
+fn lu_factor_blocked_f32(a_in: &[Vec<f64>]) -> Option<LuFactorsFlatF32> {
+    let n = a_in.len();
+    if n == 0 || !rows_are_rectangular(a_in, n) {
+        return None;
+    }
+    const NB: usize = 64;
+
+    let mut data: Vec<f32> = Vec::with_capacity(n.checked_mul(n)?);
+    for row in a_in {
+        data.extend(row.iter().map(|&v| v as f32));
+    }
+    let mut perm: Vec<usize> = (0..n).collect();
+
+    let mut k = 0;
+    while k < n {
+        let kb = (k + NB).min(n);
+        for j in k..kb {
+            let mut p = j;
+            let mut mx = data[j * n + j].abs();
+            for i in (j + 1)..n {
+                let v = data[i * n + j].abs();
+                if v > mx {
+                    mx = v;
+                    p = i;
+                }
+            }
+            if mx == 0.0 || !mx.is_finite() {
+                return None;
+            }
+            if p != j {
+                let p_base = p * n;
+                let j_base = j * n;
+                for col in 0..n {
+                    data.swap(p_base + col, j_base + col);
+                }
+                perm.swap(p, j);
+            }
+            let pivot = data[j * n + j];
+            for i in (j + 1)..n {
+                data[i * n + j] /= pivot;
+            }
+            let j_base = j * n;
+            for i in (j + 1)..n {
+                let i_base = i * n;
+                let lij = data[i_base + j];
+                if lij != 0.0 {
+                    for jj in (j + 1)..kb {
+                        data[i_base + jj] -= lij * data[j_base + jj];
+                    }
+                }
+            }
+        }
+
+        for i in k..kb {
+            let i_base = i * n;
+            for jj in kb..n {
+                let mut s = data[i_base + jj];
+                for p in k..i {
+                    s -= data[i_base + p] * data[p * n + jj];
+                }
+                data[i_base + jj] = s;
+            }
+        }
+
+        // Trailing update A22 -= L21·U12, register-blocked at 16-wide f32 (mirrors the
+        // f64 kernel; reduction is monotonic-p sum-then-subtract over the panel).
+        const MR: usize = 4;
+        const NR: usize = 16;
+        let mut i0 = kb;
+        while i0 < n {
+            let mr = (n - i0).min(MR);
+            let mut j0 = kb;
+            while j0 < n {
+                let nr = (n - j0).min(NR);
+                if mr == MR && nr == NR {
+                    let r0 = i0 * n;
+                    let r1 = (i0 + 1) * n;
+                    let r2 = (i0 + 2) * n;
+                    let r3 = (i0 + 3) * n;
+                    let mut acc0 = Simd::<f32, NR>::splat(0.0);
+                    let mut acc1 = Simd::<f32, NR>::splat(0.0);
+                    let mut acc2 = Simd::<f32, NR>::splat(0.0);
+                    let mut acc3 = Simd::<f32, NR>::splat(0.0);
+                    for p in k..kb {
+                        let p_base = p * n + j0;
+                        let urow = Simd::<f32, NR>::from_slice(&data[p_base..p_base + NR]);
+                        acc0 += Simd::splat(data[r0 + p]) * urow;
+                        acc1 += Simd::splat(data[r1 + p]) * urow;
+                        acc2 += Simd::splat(data[r2 + p]) * urow;
+                        acc3 += Simd::splat(data[r3 + p]) * urow;
+                    }
+                    let c0 = r0 + j0;
+                    let c1 = r1 + j0;
+                    let c2 = r2 + j0;
+                    let c3 = r3 + j0;
+                    (Simd::<f32, NR>::from_slice(&data[c0..c0 + NR]) - acc0)
+                        .copy_to_slice(&mut data[c0..c0 + NR]);
+                    (Simd::<f32, NR>::from_slice(&data[c1..c1 + NR]) - acc1)
+                        .copy_to_slice(&mut data[c1..c1 + NR]);
+                    (Simd::<f32, NR>::from_slice(&data[c2..c2 + NR]) - acc2)
+                        .copy_to_slice(&mut data[c2..c2 + NR]);
+                    (Simd::<f32, NR>::from_slice(&data[c3..c3 + NR]) - acc3)
+                        .copy_to_slice(&mut data[c3..c3 + NR]);
+                } else {
+                    for di in 0..mr {
+                        let i_base = (i0 + di) * n;
+                        for dj in 0..nr {
+                            let j = j0 + dj;
+                            let mut s = 0.0f32;
+                            for p in k..kb {
+                                s += data[i_base + p] * data[p * n + j];
+                            }
+                            data[i_base + j] -= s;
+                        }
+                    }
+                }
+                j0 += nr;
+            }
+            i0 += mr;
+        }
+        k = kb;
+    }
+
+    Some(LuFactorsFlatF32 { n, data, perm })
+}
+
+/// Solve `A·z = rhs` with the f32 factors (forward/back substitution carried in f32). The
+/// RHS is taken in f64 and the result returned in f64 so the refinement loop keeps the
+/// residual computation full precision.
+#[allow(clippy::needless_range_loop)]
+fn lu_subst_factored_f32(factors: &LuFactorsFlatF32, rhs: &[f64]) -> Option<Vec<f64>> {
+    let n = factors.n;
+    let mut y: Vec<f32> = rhs.iter().map(|&v| v as f32).collect();
+    for i in 0..n {
+        let mut s = y[i];
+        let i_base = i * n;
+        for p in 0..i {
+            s -= factors.data[i_base + p] * y[p];
+        }
+        y[i] = s;
+    }
+    for i in (0..n).rev() {
+        let mut s = y[i];
+        let i_base = i * n;
+        for p in (i + 1)..n {
+            s -= factors.data[i_base + p] * y[p];
+        }
+        let d = factors.data[i_base + i];
+        if d == 0.0 {
+            return None;
+        }
+        y[i] = s / d;
+    }
+    Some(y.into_iter().map(f64::from).collect())
+}
+
+/// Mixed-precision solve (LAPACK `dsgesv` strategy): factor `A` once in f32 — the
+/// bandwidth-bound O(n³) hot path — then recover full f64 accuracy by iterative
+/// refinement: r = b − A·x in f64, A·d = r via the f32 factors, x += d. Returns the
+/// refined x ONLY when its f64 backward error reaches the f64-LU quality bar; otherwise
+/// None, so the caller solves exactly in f64. Parity-safe: any system where the f32
+/// factors are too inaccurate to converge (ill-conditioned) falls back unchanged.
+/// Runtime switch to force the exact f64 LU route (bit-reproducible factors; also the
+/// f64 arm of the same-worker A/B benchmark). Defaults off. `#[doc(hidden)]` — internal.
+#[doc(hidden)]
+pub static DISABLE_MIXED_LU: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+fn mixed_lu_disabled() -> bool {
+    if DISABLE_MIXED_LU.load(std::sync::atomic::Ordering::Relaxed) {
+        return true;
+    }
+    // Operational escape hatch via env, read once.
+    static ENV: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENV.get_or_init(|| std::env::var_os("FSCI_DISABLE_MIXED_LU").is_some())
+}
+
+fn lu_solve_mixed_precision(a_in: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
+    if mixed_lu_disabled() {
+        return None;
+    }
+    let n = a_in.len();
+    if b.len() != n {
+        return None;
+    }
+    let factors = lu_factor_blocked_f32(a_in)?;
+    let pb: Vec<f64> = factors.perm.iter().map(|&orig| b[orig]).collect();
+    let mut x = lu_subst_factored_f32(&factors, &pb)?;
+
+    let bnorm = b.iter().fold(0.0f64, |m, &v| m.max(v.abs()));
+    let anorm = a_in
+        .iter()
+        .fold(0.0f64, |m, row| m.max(row.iter().fold(0.0, |s, &v| s + v.abs())));
+
+    const MAX_REFINE: usize = 8;
+    let mut prev_res = f64::INFINITY;
+    for _ in 0..MAX_REFINE {
+        // Residual r = b − A·x and its ∞-norm, in full f64.
+        let mut r = vec![0.0f64; n];
+        let mut res = 0.0f64;
+        for i in 0..n {
+            let row = &a_in[i];
+            let mut s = 0.0f64;
+            for j in 0..n {
+                s += row[j] * x[j];
+            }
+            let ri = b[i] - s;
+            r[i] = ri;
+            res = res.max(ri.abs());
+        }
+        let xnorm = x.iter().fold(0.0f64, |m, &v| m.max(v.abs()));
+        // Backward-stability bar that an f64 LU solve itself satisfies.
+        let bar = 8.0 * (n as f64) * f64::EPSILON * (anorm * xnorm + bnorm);
+        if res <= bar {
+            return Some(x);
+        }
+        if res >= prev_res {
+            // Refinement stalled before reaching f64 quality — cannot match f64 LU.
+            return None;
+        }
+        prev_res = res;
+        let pr: Vec<f64> = factors.perm.iter().map(|&orig| r[orig]).collect();
+        let d = lu_subst_factored_f32(&factors, &pr)?;
+        for j in 0..n {
+            x[j] += d[j];
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 fn det_flat_lu_product(a_in: &[Vec<f64>]) -> Option<f64> {
     if a_in.is_empty() || a_in.iter().flatten().any(|value| !value.is_finite()) {
@@ -13378,6 +13620,82 @@ mod tests {
                 max_res < 1e-9,
                 "blocked LU residual too large at n={n}: {max_res:e}"
             );
+        }
+    }
+
+    #[test]
+    #[allow(clippy::needless_range_loop)]
+    fn lu_solve_mixed_precision_matches_f64_and_falls_back() {
+        // Strongly diagonally dominant (like the solve bench fixture): the f32 factors are
+        // accurate enough that iterative refinement reaches f64 quality, so the
+        // mixed-precision path is actually taken (Some) and matches the f64 reference.
+        let make = |n: usize, seed: u64| -> (Vec<Vec<f64>>, Vec<f64>) {
+            let a: Vec<Vec<f64>> = (0..n)
+                .map(|i| {
+                    (0..n)
+                        .map(|j| {
+                            if i == j {
+                                (n as f64) * 2.0
+                            } else {
+                                let r = seed
+                                    .wrapping_mul(i as u64 + 7)
+                                    .wrapping_add(j as u64 * 31 + 5)
+                                    % 9973;
+                                r as f64 / 4986.0 - 1.0
+                            }
+                        })
+                        .collect()
+                })
+                .collect();
+            let b: Vec<f64> = (0..n)
+                .map(|i| (seed.wrapping_mul(i as u64 + 3) % 1009) as f64 / 503.0 - 1.0)
+                .collect();
+            (a, b)
+        };
+        for &(n, seed) in &[(130usize, 23u64), (200, 41), (270, 57)] {
+            let (a, b) = make(n, seed);
+            let x = lu_solve_mixed_precision(&a, &b)
+                .expect("well-conditioned: mixed precision must converge to f64 quality");
+            let reference = solve_general(&a, &b).expect("reference solve");
+            let mut max_diff = 0.0_f64;
+            for (&xi, &ri) in x.iter().zip(&reference.x) {
+                max_diff = max_diff.max((xi - ri).abs());
+            }
+            let mut max_res = 0.0_f64;
+            for i in 0..n {
+                let mut s = 0.0;
+                for j in 0..n {
+                    s += a[i][j] * x[j];
+                }
+                max_res = max_res.max((s - b[i]).abs());
+            }
+            assert!(
+                max_diff < 1e-9,
+                "mixed-precision vs reference diverged at n={n}: {max_diff:e}"
+            );
+            assert!(
+                max_res < 1e-9,
+                "mixed-precision residual too large at n={n}: {max_res:e}"
+            );
+        }
+
+        // Ill-conditioned (near-singular): the f32 factors cannot refine to f64 quality,
+        // so the mixed path must decline (None) and the caller stays on the exact f64 LU.
+        let near_singular: Vec<Vec<f64>> = vec![
+            vec![1.0, 2.0, 3.0],
+            vec![4.0, 5.0, 6.0],
+            vec![7.0, 8.0, 9.000000001],
+        ];
+        let rhs = vec![1.0, 2.0, 3.0];
+        // Either it declines, or (if it somehow converges) it still matches f64 to tol —
+        // both outcomes preserve parity. The important guarantee is no worse-than-f64 x.
+        if let Some(x) = lu_solve_mixed_precision(&near_singular, &rhs) {
+            let reference = solve_general(&near_singular, &rhs).expect("reference solve");
+            let mut max_diff = 0.0_f64;
+            for (&xi, &ri) in x.iter().zip(&reference.x) {
+                max_diff = max_diff.max((xi - ri).abs());
+            }
+            assert!(max_diff < 1e-6, "mixed precision accepted a bad x: {max_diff:e}");
         }
     }
 

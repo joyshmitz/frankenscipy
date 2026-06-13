@@ -242,13 +242,22 @@ fn bench_eigh_dense(c: &mut Criterion) {
 // ══════════════════════════════════════════════════════════════════════════════
 
 fn bench_baseline_solve(c: &mut Criterion) {
+    use std::sync::atomic::Ordering::Relaxed;
     let mut group = c.benchmark_group("baseline_solve");
     group.sample_size(100);
     for &n in BASELINE_SIZES {
         let a = make_diag_dominant(n);
         let b = make_rhs(n);
+        // Mixed-precision (default) arm.
         group.bench_function(format!("{n}x{n}"), |bencher| {
+            fsci_linalg::DISABLE_MIXED_LU.store(false, Relaxed);
             bencher.iter(|| solve(&a, &b, SolveOptions::default()).unwrap());
+        });
+        // Exact-f64 arm on the SAME worker/binary — the A/B baseline for the mixed route.
+        group.bench_function(format!("{n}x{n}_f64"), |bencher| {
+            fsci_linalg::DISABLE_MIXED_LU.store(true, Relaxed);
+            bencher.iter(|| solve(&a, &b, SolveOptions::default()).unwrap());
+            fsci_linalg::DISABLE_MIXED_LU.store(false, Relaxed);
         });
     }
     group.finish();
