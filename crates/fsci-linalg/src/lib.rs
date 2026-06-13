@@ -13038,6 +13038,77 @@ fn det_flat_lu_product(a_in: &[Vec<f64>]) -> Option<f64> {
     Some(determinant)
 }
 
+/// `b[bi..bi+w] -= scal · b[bp..bp+w]`, 8-wide. Rows `bi`/`bp` are disjoint, so the
+/// owned-`Simd` loads release their borrows before the in-place store.
+#[inline]
+fn block_axpy_sub(b: &mut [f64], bi: usize, bp: usize, w: usize, scal: f64) {
+    let sv = Simd::<f64, 8>::splat(scal);
+    let mut jc = 0;
+    while jc + 8 <= w {
+        let other = Simd::<f64, 8>::from_slice(&b[bp + jc..bp + jc + 8]);
+        let cur = Simd::<f64, 8>::from_slice(&b[bi + jc..bi + jc + 8]);
+        (cur - sv * other).copy_to_slice(&mut b[bi + jc..bi + jc + 8]);
+        jc += 8;
+    }
+    while jc < w {
+        b[bi + jc] -= scal * b[bp + jc];
+        jc += 1;
+    }
+}
+
+/// Multi-RHS triangular solve for the inverse: solve `A·X[:, c0..c1] = I[:, c0..c1]`
+/// using the LU `factors`, vectorized 8-wide across the RHS columns (a BLAS-3 TRSM
+/// instead of `c1-c0` scalar single-RHS substitutions). Returns the block row-major as
+/// `n × (c1-c0)`, `out[i·w + (j-c0)] = (A⁻¹)[i][j]`. Every element keeps the identical
+/// incremental forward/back substitution over monotonic p that the per-column scalar
+/// `lu_subst_factored` performs, so the result is bit-identical (the public golden digest
+/// covers `inv_blocked`). `None` on a zero pivot, matching the scalar path.
+#[allow(clippy::needless_range_loop)]
+fn trsm_inv_columns(factors: &LuFactorsFlat, c0: usize, c1: usize) -> Option<Vec<f64>> {
+    let n = factors.n;
+    let w = c1 - c0;
+    let mut b = vec![0.0f64; n * w];
+    // RHS = the permuted identity columns c0..c1: row i carries a 1 at column perm[i].
+    for i in 0..n {
+        let pj = factors.perm[i];
+        if pj >= c0 && pj < c1 {
+            b[i * w + (pj - c0)] = 1.0;
+        }
+    }
+    // Forward solve L·Z = B (unit lower).
+    for i in 0..n {
+        let i_base = i * n;
+        let bi = i * w;
+        for p in 0..i {
+            block_axpy_sub(&mut b, bi, p * w, w, factors.data[i_base + p]);
+        }
+    }
+    // Back solve U·X = Z.
+    for i in (0..n).rev() {
+        let i_base = i * n;
+        let bi = i * w;
+        for p in (i + 1)..n {
+            block_axpy_sub(&mut b, bi, p * w, w, factors.data[i_base + p]);
+        }
+        let d = factors.data[i_base + i];
+        if d == 0.0 {
+            return None;
+        }
+        let dv = Simd::<f64, 8>::splat(d);
+        let mut jc = 0;
+        while jc + 8 <= w {
+            (Simd::<f64, 8>::from_slice(&b[bi + jc..bi + jc + 8]) / dv)
+                .copy_to_slice(&mut b[bi + jc..bi + jc + 8]);
+            jc += 8;
+        }
+        while jc < w {
+            b[bi + jc] /= d;
+            jc += 1;
+        }
+    }
+    Some(b)
+}
+
 /// Invert a general square `A` by factoring once with the flat LU and solving
 /// `A X = I` over identity columns in parallel. The public route stays gated at
 /// 1024 because the 256x256 dispatch was measured and rejected for this bead.
@@ -13047,21 +13118,15 @@ fn inv_blocked(a_in: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
         return None;
     }
     let factors = lu_factor_blocked(a_in)?;
-    let solve_col = |j: usize| -> Option<Vec<f64>> {
-        let mut y = vec![0.0; n];
-        if let Some(i) = factors.perm.iter().position(|&orig| orig == j) {
-            y[i] = 1.0;
-        }
-        lu_subst_factored(&factors, y)
-    };
 
+    // Solve A·X = I as a multi-RHS TRSM, in column-blocks across threads.
     let nthreads = matmul_thread_count(n, n, n);
-    let cols: Vec<Vec<f64>> = if nthreads <= 1 {
-        (0..n).map(solve_col).collect::<Option<Vec<_>>>()?
+    let blocks: Vec<Option<Vec<f64>>> = if nthreads <= 1 {
+        vec![trsm_inv_columns(&factors, 0, n)]
     } else {
         let chunk = n.div_ceil(nthreads);
         let factors_ref = &factors;
-        let chunks: Vec<Option<Vec<Vec<f64>>>> = std::thread::scope(|scope| {
+        std::thread::scope(|scope| {
             let handles: Vec<_> = (0..nthreads)
                 .filter_map(|t| {
                     let c0 = t * chunk;
@@ -13069,35 +13134,24 @@ fn inv_blocked(a_in: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
                         return None;
                     }
                     let c1 = (c0 + chunk).min(n);
-                    Some(scope.spawn(move || {
-                        (c0..c1)
-                            .map(|j| {
-                                let mut y = vec![0.0; n];
-                                if let Some(i) = factors_ref.perm.iter().position(|&orig| orig == j)
-                                {
-                                    y[i] = 1.0;
-                                }
-                                lu_subst_factored(factors_ref, y)
-                            })
-                            .collect::<Option<Vec<_>>>()
-                    }))
+                    Some(scope.spawn(move || trsm_inv_columns(factors_ref, c0, c1)))
                 })
                 .collect();
             handles.into_iter().map(|h| h.join().unwrap()).collect()
-        });
-        let mut cols = Vec::with_capacity(n);
-        for c in chunks {
-            cols.extend(c?);
-        }
-        cols
+        })
     };
 
+    // Assemble the row-major inverse from the column-blocks (in column order).
     let mut x = vec![vec![0.0; n]; n];
-    for j in 0..n {
-        let col = &cols[j];
-        for i in 0..n {
-            x[i][j] = col[i];
+    let mut c0 = 0;
+    for blk in blocks {
+        let b = blk?;
+        let w = b.len() / n;
+        for (i, xrow) in x.iter_mut().enumerate() {
+            let bi = i * w;
+            xrow[c0..c0 + w].copy_from_slice(&b[bi..bi + w]);
         }
+        c0 += w;
     }
     Some(x)
 }

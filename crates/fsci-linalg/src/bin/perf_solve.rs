@@ -24,8 +24,8 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use fsci_linalg::{
-    DecompOptions, SolveOptions, TriangularSolveOptions, lu_factor, lu_solve, solve,
-    solve_toeplitz, solve_triangular, toeplitz,
+    DecompOptions, InvOptions, SolveOptions, TriangularSolveOptions, inv, lu_factor, lu_solve,
+    solve, solve_toeplitz, solve_triangular, toeplitz,
 };
 use nalgebra::{DMatrix, DVector};
 
@@ -172,6 +172,25 @@ fn main() {
         for _ in 0..repeats {
             checksum +=
                 compute_backward_error_probe(black_box(&matrix), black_box(&x), black_box(&rhs));
+        }
+        let elapsed = t0.elapsed();
+        let per_call_ms = elapsed.as_secs_f64() * 1e3 / repeats as f64;
+        println!(
+            "{{\"mode\":\"{mode}\",\"n\":{n},\"repeats\":{repeats},\"total_ms\":{:.3},\"per_call_ms\":{:.4},\"checksum\":{:.6e}}}",
+            elapsed.as_secs_f64() * 1e3,
+            per_call_ms,
+            checksum
+        );
+        return;
+    }
+
+    if mode == "inv" {
+        let a = make_matrix(n, seed);
+        let t0 = Instant::now();
+        let mut checksum = 0.0_f64;
+        for _ in 0..repeats {
+            let x = inv(black_box(&a), InvOptions::default()).unwrap().inverse;
+            checksum += x[0][0] + x[n - 1][n - 1];
         }
         let elapsed = t0.elapsed();
         let per_call_ms = elapsed.as_secs_f64() * 1e3 / repeats as f64;
