@@ -1,0 +1,4 @@
+d24ddd5c5d2c4708665ee8481e233fb80453cb3435cab8eb6510561c5d0acf44  tests/artifacts/perf/2026-06-13-sparse-post-102-reprofile/mmd_ordering_perf_probe_vmi1152480_rch.txt
+af50a679f65b38a69947a28ff830c180fd3bd296475f59d9dfff507d30021100  tests/artifacts/perf/2026-06-13-sparse-8l8r1-103-mmd-scratch/after_mmd_scratch_vmi1152480_rch.txt
+2df32961cb75f19645b2fe7f30e6c54aea7651ff282aa6d3d2aec646d340ddca  tests/artifacts/perf/2026-06-13-sparse-8l8r1-103-mmd-scratch/baseline_mmd_no_scratch_vmi1293453_rch.txt
+463d79e78af0055fad1fae7cf18f0927709e0bca3f99350311c8680f920d90c8  tests/artifacts/perf/2026-06-13-sparse-8l8r1-103-mmd-scratch/REJECT.md
