@@ -1395,7 +1395,15 @@ pub fn correlate1d_with_origin(
         return Err(NdimageError::EmptyInput);
     }
     validate_filter_origin(weights.len(), origin)?;
-
+    // The line walk parallelizes across outer slabs; on the outermost axis (few/one slab) the
+    // per-pixel `fill_pixels_parallel` path parallelizes better, so keep it there. Both are
+    // byte-identical — only the per-pixel index overhead differs. Gate on having enough slabs
+    // to feed the threads.
+    let outer: usize = input.shape[..axis].iter().product();
+    let nthreads = ndimage_filter_thread_count(input.size(), weights.len());
+    if outer >= nthreads {
+        return Ok(correlate1d_along_axis(input, weights, axis, origin, mode, cval));
+    }
     let offset = weights.len() as i64 / 2;
     let mut output = NdArray::zeros(input.shape.clone());
     fill_pixels_parallel(&mut output, weights.len(), |flat_out, _scratch| {
@@ -1408,8 +1416,99 @@ pub fn correlate1d_with_origin(
         }
         sum
     });
-
     Ok(output)
+}
+
+/// Reference per-pixel correlate1d path (pre line-walk), retained for the same-process A/B
+/// benchmark and byte-identity proof only.
+#[doc(hidden)]
+pub fn correlate1d_perwindow_ref(
+    input: &NdArray,
+    weights: &[f64],
+    axis: usize,
+    mode: BoundaryMode,
+    cval: f64,
+    origin: i64,
+) -> Result<NdArray, NdimageError> {
+    if axis >= input.ndim() || weights.is_empty() || input.size() == 0 {
+        return Err(NdimageError::InvalidArgument("bad args".to_string()));
+    }
+    validate_filter_origin(weights.len(), origin)?;
+    let offset = weights.len() as i64 / 2;
+    let mut output = NdArray::zeros(input.shape.clone());
+    fill_pixels_parallel(&mut output, weights.len(), |flat_out, _scratch| {
+        let out_idx = input.unravel(flat_out);
+        let mut in_idx: Vec<i64> = out_idx.iter().map(|&i| i as i64).collect();
+        let mut sum = 0.0;
+        for (k, &weight) in weights.iter().enumerate() {
+            in_idx[axis] = out_idx[axis] as i64 + k as i64 - offset - origin;
+            sum += weight * input.get_boundary(&in_idx, mode, cval);
+        }
+        sum
+    });
+    Ok(output)
+}
+
+// O(n·k) 1-D correlation along `axis` via a line walk over contiguous outer slabs, instead
+// of the per-pixel path that re-`unravel`s a multi-index and does a full-rank `get_boundary`
+// for every kernel tap. The per-output dot is summed in the SAME k=0..len order as the old
+// kernel with the SAME boundary values (`boundary_index_1d` ≡ the per-axis `get_boundary`),
+// so the result is BYTE-IDENTICAL; only the per-pixel indexing overhead is removed. Slabs are
+// contiguous & disjoint ⇒ safe parallelism with no aliasing.
+fn correlate1d_along_axis(
+    arr: &NdArray,
+    weights: &[f64],
+    axis: usize,
+    origin: i64,
+    mode: BoundaryMode,
+    cval: f64,
+) -> NdArray {
+    let mid = arr.shape[axis];
+    let inner: usize = arr.shape[axis + 1..].iter().product();
+    let outer: usize = arr.shape[..axis].iter().product();
+    let slab = mid * inner;
+    let offset = weights.len() as i64 / 2;
+    let mut out = NdArray::zeros(arr.shape.clone());
+    let do_slab = |is: &[f64], os: &mut [f64]| {
+        let val_at = |i: usize, a: i64| -> f64 {
+            match boundary_index_1d(a, mid as i64, mode) {
+                Some(m) => is[i + (m as usize) * inner],
+                None => cval,
+            }
+        };
+        for i in 0..inner {
+            for a in 0..mid as i64 {
+                let mut sum = 0.0;
+                for (k, &w) in weights.iter().enumerate() {
+                    sum += w * val_at(i, a + k as i64 - offset - origin);
+                }
+                os[i + (a as usize) * inner] = sum;
+            }
+        }
+    };
+    let nthreads = ndimage_filter_thread_count(arr.size(), weights.len()).min(outer.max(1));
+    if nthreads <= 1 || outer < 2 {
+        for (is, os) in arr.data.chunks(slab).zip(out.data.chunks_mut(slab)) {
+            do_slab(is, os);
+        }
+    } else {
+        let slabs_per = outer.div_ceil(nthreads);
+        let do_slab = &do_slab;
+        std::thread::scope(|scope| {
+            for (in_chunk, out_chunk) in arr
+                .data
+                .chunks(slab * slabs_per)
+                .zip(out.data.chunks_mut(slab * slabs_per))
+            {
+                scope.spawn(move || {
+                    for (is, os) in in_chunk.chunks(slab).zip(out_chunk.chunks_mut(slab)) {
+                        do_slab(is, os);
+                    }
+                });
+            }
+        });
+    }
+    out
 }
 
 /// Uniform (box) filter.
@@ -7865,6 +7964,38 @@ mod tests {
         let result = uniform_filter(&input, 3, BoundaryMode::Constant, 0.0).unwrap();
         // Center should be average of [0, 1, 0] = 1/3
         assert!((result.data[2] - 1.0 / 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn correlate1d_line_walk_is_byte_identical_to_perwindow() {
+        // The slab line walk must be BYTE-identical to the per-pixel reference (same dot
+        // order, same boundary values) across modes, kernel sizes, axes, and origins.
+        let (rows, cols) = (43usize, 39usize);
+        let data: Vec<f64> = (0..rows * cols)
+            .map(|i| ((i * 2654435761usize) % 997) as f64 / 100.0 - 5.0)
+            .collect();
+        let arr = NdArray::new(data, vec![rows, cols]).unwrap();
+        for mode in [
+            BoundaryMode::Nearest,
+            BoundaryMode::Reflect,
+            BoundaryMode::Constant,
+            BoundaryMode::Wrap,
+            BoundaryMode::Mirror,
+        ] {
+            for klen in [2usize, 3, 6, 11] {
+                let weights: Vec<f64> = (0..klen).map(|k| (k as f64 * 0.7 - 1.0).cos()).collect();
+                for axis in [0usize, 1usize] {
+                    let got = correlate1d(&arr, &weights, axis, mode, 0.5).unwrap();
+                    let want =
+                        correlate1d_perwindow_ref(&arr, &weights, axis, mode, 0.5, 0).unwrap();
+                    assert_eq!(
+                        got.data.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                        want.data.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                        "mode={mode:?} klen={klen} axis={axis}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
