@@ -1,0 +1,3 @@
+crates/fsci-linalg/src/lib.rs working-tree sha256: 94090452738c5e741ed879f37301e59aa1fd81d8359f42c9f77632256fbb84b1
+crates/fsci-linalg/src/lib.rs HEAD sha256: 94090452738c5e741ed879f37301e59aa1fd81d8359f42c9f77632256fbb84b1
+git diff --quiet -- crates/fsci-linalg/src/lib.rs: clean
