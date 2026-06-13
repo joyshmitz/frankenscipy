@@ -122,6 +122,10 @@ struct NativeSparseLu {
     row_perm: Vec<usize>,
     l_rows: Vec<Vec<(usize, f64)>>,
     u_rows: Vec<Vec<(usize, f64)>>,
+    // Symmetric fill-reducing permutation applied before factorization: the matrix
+    // actually factored is B = P·A·Pᵀ (B[i][j] = A[fill_perm[i]][fill_perm[j]]).
+    // `None` ⇒ natural ordering. Solve maps b → P·b, back-substitutes, then x = Pᵀ·z.
+    fill_perm: Option<Vec<usize>>,
 }
 
 /// ILU(0) factorization result.
@@ -208,7 +212,11 @@ fn is_sparse_zero_pivot(value: f64) -> bool {
 }
 
 impl NativeSparseLu {
-    fn factorize_csr(a: &CsrMatrix, diag_pivot_thresh: f64) -> SparseResult<Self> {
+    fn factorize_csr(
+        a: &CsrMatrix,
+        diag_pivot_thresh: f64,
+        ordering: PermutationOrdering,
+    ) -> SparseResult<Self> {
         let shape = a.shape();
         if !shape.is_square() {
             return Err(SparseError::InvalidShape {
@@ -217,7 +225,25 @@ impl NativeSparseLu {
         }
 
         let n = shape.rows;
-        let mut rows = csr_rows_as_maps(a);
+        // Fill-reducing reorder: factor B = P·A·Pᵀ instead of A. A small-bandwidth
+        // ordering keeps L/U fill near O(n·band); without it a sparse matrix whose
+        // nonzeros are scattered (large bandwidth in natural order) fills in toward
+        // dense, defeating the sparse path. We use reverse Cuthill–McKee — a symmetric
+        // bandwidth minimizer that is cheap (O(V log V + E)) and already bit-tested here.
+        // Any non-Natural request maps to it (a full COLAMD/AMD port is a later lever);
+        // the choice only affects fill, not the result, which stays the unique solution.
+        let fill_perm: Option<Vec<usize>> = match ordering {
+            PermutationOrdering::Natural => None,
+            _ => {
+                let p = reverse_cuthill_mckee(a);
+                if p.len() == n { Some(p) } else { None }
+            }
+        };
+
+        let mut rows = match &fill_perm {
+            Some(p) => permuted_rows_as_maps(a, p),
+            None => csr_rows_as_maps(a),
+        };
         let mut column_rows = sparse_column_membership(n, &rows);
         let mut row_perm: Vec<usize> = (0..n).collect();
         let mut l_rows = vec![Vec::new(); n];
@@ -284,6 +310,7 @@ impl NativeSparseLu {
             row_perm,
             l_rows,
             u_rows,
+            fill_perm,
         })
     }
 
@@ -294,16 +321,27 @@ impl NativeSparseLu {
             });
         }
 
+        // Solve A·x = b as (P·A·Pᵀ)·(P·x) = P·b. Permute the rhs into the factored
+        // space, back-substitute, then map the solution back: x[fill_perm[i]] = z[i].
+        let permuted_storage;
+        let rhs: &[f64] = match &self.fill_perm {
+            Some(p) => {
+                permuted_storage = p.iter().map(|&old| b[old]).collect::<Vec<f64>>();
+                &permuted_storage
+            }
+            None => b,
+        };
+
         let mut y = vec![0.0; self.n];
         for row in 0..self.n {
-            let mut value = b[self.row_perm[row]];
+            let mut value = rhs[self.row_perm[row]];
             for &(col, multiplier) in &self.l_rows[row] {
                 value -= multiplier * y[col];
             }
             y[row] = value;
         }
 
-        let mut x = vec![0.0; self.n];
+        let mut z = vec![0.0; self.n];
         for row in (0..self.n).rev() {
             let mut value = y[row];
             let mut diagonal = None;
@@ -311,7 +349,7 @@ impl NativeSparseLu {
                 if col == row {
                     diagonal = Some(entry);
                 } else if col > row {
-                    value -= entry * x[col];
+                    value -= entry * z[col];
                 }
             }
             let pivot = diagonal.unwrap_or(0.0);
@@ -320,10 +358,19 @@ impl NativeSparseLu {
                     message: format!("zero pivot in sparse LU solve at row {row}"),
                 });
             }
-            x[row] = value / pivot;
+            z[row] = value / pivot;
         }
 
-        Ok(x)
+        match &self.fill_perm {
+            Some(p) => {
+                let mut x = vec![0.0; self.n];
+                for (new_i, &old_i) in p.iter().enumerate() {
+                    x[old_i] = z[new_i];
+                }
+                Ok(x)
+            }
+            None => Ok(z),
+        }
     }
 
     #[cfg(test)]
@@ -331,6 +378,34 @@ impl NativeSparseLu {
         self.l_rows.iter().map(Vec::len).sum::<usize>()
             + self.u_rows.iter().map(Vec::len).sum::<usize>()
     }
+}
+
+// Build the symmetrically-permuted rows-as-maps for B = P·A·Pᵀ, i.e.
+// B[new_i][new_j] = A[fill_perm[new_i]][fill_perm[new_j]]. Mirrors `csr_rows_as_maps`'
+// duplicate-accumulate-and-cancel handling so the factored matrix is identical to what
+// natural ordering would produce on the same entries, just relabeled.
+fn permuted_rows_as_maps(a: &CsrMatrix, fill_perm: &[usize]) -> Vec<BTreeMap<usize, f64>> {
+    let n = a.shape().rows;
+    let mut inv = vec![0usize; n];
+    for (new_i, &old_i) in fill_perm.iter().enumerate() {
+        inv[old_i] = new_i;
+    }
+    let mut rows = vec![BTreeMap::new(); n];
+    for (new_i, row) in rows.iter_mut().enumerate() {
+        let old_i = fill_perm[new_i];
+        for idx in a.indptr()[old_i]..a.indptr()[old_i + 1] {
+            let value = a.data()[idx];
+            if value != 0.0 {
+                let new_col = inv[a.indices()[idx]];
+                let entry = row.entry(new_col).or_insert(0.0);
+                *entry += value;
+                if *entry == 0.0 {
+                    row.remove(&new_col);
+                }
+            }
+        }
+    }
+    rows
 }
 
 fn csr_rows_as_maps(a: &CsrMatrix) -> Vec<BTreeMap<usize, f64>> {
@@ -496,7 +571,7 @@ pub fn spsolve(a: &CsrMatrix, b: &[f64], options: SolveOptions) -> SparseResult<
     let over_dense_guard = n > SPSOLVE_DENSE_MAX_N;
     let genuinely_sparse = n >= 256 && a.nnz() <= n.saturating_mul(16);
     if over_dense_guard || genuinely_sparse {
-        let lu = NativeSparseLu::factorize_csr(a, 1.0)?;
+        let lu = NativeSparseLu::factorize_csr(a, 1.0, options.ordering)?;
         let solution = lu.solve(b)?;
         let warnings = if over_dense_guard {
             vec![format!(
@@ -553,6 +628,7 @@ pub fn splu(a: &CscMatrix, options: LuOptions) -> SparseResult<SparseLuFactoriza
             SparseLuInternal::Native(NativeSparseLu::factorize_csr(
                 &csr,
                 options.diag_pivot_thresh,
+                options.ordering,
             )?),
         )
     } else {
@@ -5191,7 +5267,8 @@ mod tests {
         .expect("coo")
         .to_csr()
         .expect("csr");
-        let lu = NativeSparseLu::factorize_csr(&a, 1.0).expect("native sparse LU");
+        let lu = NativeSparseLu::factorize_csr(&a, 1.0, PermutationOrdering::Natural)
+            .expect("native sparse LU");
         let x = lu.solve(&[4.0, 7.0]).expect("native sparse solve");
 
         assert_close_slice(&x, &[1.0, 2.0], 1e-12);
