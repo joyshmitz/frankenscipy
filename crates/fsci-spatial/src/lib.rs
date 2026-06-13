@@ -117,9 +117,87 @@ pub fn sqeuclidean(a: &[f64], b: &[f64]) -> f64 {
     s
 }
 
-/// Manhattan (L1) distance.
+/// 8-wide `Σ a[i]·b[i]` over `min(a,b)` length (two accumulators + scalar tail). The
+/// scalar `.map().sum()` fold is not auto-vectorized.
+#[inline]
+fn simd_dot(a: &[f64], b: &[f64]) -> f64 {
+    use std::simd::{Simd, num::SimdFloat};
+    const L: usize = 8;
+    let n = a.len().min(b.len());
+    let mut acc0 = Simd::<f64, L>::splat(0.0);
+    let mut acc1 = Simd::<f64, L>::splat(0.0);
+    let mut i = 0;
+    while i + 2 * L <= n {
+        acc0 += Simd::<f64, L>::from_slice(&a[i..i + L]) * Simd::from_slice(&b[i..i + L]);
+        acc1 += Simd::<f64, L>::from_slice(&a[i + L..i + 2 * L])
+            * Simd::from_slice(&b[i + L..i + 2 * L]);
+        i += 2 * L;
+    }
+    if i + L <= n {
+        acc0 += Simd::<f64, L>::from_slice(&a[i..i + L]) * Simd::from_slice(&b[i..i + L]);
+        i += L;
+    }
+    let mut s = (acc0 + acc1).reduce_sum();
+    while i < n {
+        s += a[i] * b[i];
+        i += 1;
+    }
+    s
+}
+
+/// 8-wide `Σ x[i]²` (two accumulators + scalar tail).
+#[inline]
+fn simd_sqsum(x: &[f64]) -> f64 {
+    use std::simd::{Simd, num::SimdFloat};
+    const L: usize = 8;
+    let mut acc0 = Simd::<f64, L>::splat(0.0);
+    let mut acc1 = Simd::<f64, L>::splat(0.0);
+    let mut i = 0;
+    while i + 2 * L <= x.len() {
+        let v0 = Simd::<f64, L>::from_slice(&x[i..i + L]);
+        let v1 = Simd::<f64, L>::from_slice(&x[i + L..i + 2 * L]);
+        acc0 += v0 * v0;
+        acc1 += v1 * v1;
+        i += 2 * L;
+    }
+    if i + L <= x.len() {
+        let v = Simd::<f64, L>::from_slice(&x[i..i + L]);
+        acc0 += v * v;
+        i += L;
+    }
+    let mut s = (acc0 + acc1).reduce_sum();
+    while i < x.len() {
+        s += x[i] * x[i];
+        i += 1;
+    }
+    s
+}
+
+/// Manhattan (L1) distance: `Σ |a[i]-b[i]|`, 8-wide.
 pub fn cityblock(a: &[f64], b: &[f64]) -> f64 {
-    a.iter().zip(b.iter()).map(|(ai, bi)| (ai - bi).abs()).sum()
+    use std::simd::{Simd, num::SimdFloat};
+    const L: usize = 8;
+    let n = a.len().min(b.len());
+    let mut acc0 = Simd::<f64, L>::splat(0.0);
+    let mut acc1 = Simd::<f64, L>::splat(0.0);
+    let mut i = 0;
+    while i + 2 * L <= n {
+        acc0 += (Simd::<f64, L>::from_slice(&a[i..i + L]) - Simd::from_slice(&b[i..i + L])).abs();
+        acc1 += (Simd::<f64, L>::from_slice(&a[i + L..i + 2 * L])
+            - Simd::from_slice(&b[i + L..i + 2 * L]))
+        .abs();
+        i += 2 * L;
+    }
+    if i + L <= n {
+        acc0 += (Simd::<f64, L>::from_slice(&a[i..i + L]) - Simd::from_slice(&b[i..i + L])).abs();
+        i += L;
+    }
+    let mut s = (acc0 + acc1).reduce_sum();
+    while i < n {
+        s += (a[i] - b[i]).abs();
+        i += 1;
+    }
+    s
 }
 
 /// Chebyshev (L∞) distance.
@@ -138,9 +216,9 @@ pub fn chebyshev(a: &[f64], b: &[f64]) -> f64 {
 
 /// Cosine distance: 1 - cosine_similarity(a, b).
 pub fn cosine(a: &[f64], b: &[f64]) -> f64 {
-    let dot: f64 = a.iter().zip(b.iter()).map(|(ai, bi)| ai * bi).sum();
-    let norm_a: f64 = a.iter().map(|ai| ai * ai).sum::<f64>().sqrt();
-    let norm_b: f64 = b.iter().map(|bi| bi * bi).sum::<f64>().sqrt();
+    let dot = simd_dot(a, b);
+    let norm_a = simd_sqsum(a).sqrt();
+    let norm_b = simd_sqsum(b).sqrt();
     let denom = norm_a * norm_b;
     if denom == 0.0 {
         // scipy returns NaN when either vector has zero norm: the cosine
