@@ -976,17 +976,6 @@ pub fn det(a: &[Vec<f64>], mode: RuntimeMode, check_finite: bool) -> Result<f64,
     if rows == 0 {
         return Ok(1.0);
     }
-    if let Some(result) = det_flat_lu_product(a) {
-        emit_trace(LinalgTrace {
-            operation: "det",
-            matrix_size: (rows, cols),
-            mode,
-            rcond: None,
-            warning: None,
-            error: None,
-        });
-        return Ok(result);
-    }
     let matrix = dmatrix_from_rows(a)?;
     let result = matrix.lu().determinant();
     emit_trace(LinalgTrace {
@@ -12515,7 +12504,6 @@ pub fn matmul(a: &[Vec<f64>], b: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, LinalgErr
 /// 1000x1000 profiled gate; inverse stays higher because the 256x256 gate regressed.
 const FLAT_LU_SOLVE_MIN_DIM: usize = 1000;
 const FLAT_LU_INV_MIN_DIM: usize = 1024;
-const FLAT_LU_DET_MIN_DIM: usize = 256;
 
 struct LuFactorsFlat {
     n: usize,
@@ -12523,6 +12511,7 @@ struct LuFactorsFlat {
     perm: Vec<usize>,
 }
 
+#[cfg(test)]
 fn permutation_parity_is_odd(perm: &[usize]) -> Option<bool> {
     let n = perm.len();
     let mut values_seen = vec![false; n];
@@ -12559,7 +12548,6 @@ fn lu_factor_blocked(a_in: &[Vec<f64>]) -> Option<LuFactorsFlat> {
         return None;
     }
     const NB: usize = 64;
-    const COL_TILE: usize = 64;
 
     let mut data = Vec::with_capacity(n.checked_mul(n)?);
     for row in a_in {
@@ -12618,22 +12606,69 @@ fn lu_factor_blocked(a_in: &[Vec<f64>]) -> Option<LuFactorsFlat> {
             }
         }
 
-        for i in kb..n {
-            let i_base = i * n;
+        // (3) Trailing update A22 -= L21 · U12 via a register-blocked microkernel.
+        // L21 = data[kb..n][k..kb] (panel inner dim kk = kb-k <= NB), U12 =
+        // data[k..kb][kb..n]. The old kernel streamed A22 read-modify-write once per
+        // panel column (memory-bound, kk passes over A22). Here each MR×NR output tile
+        // holds its product sum in register-resident SIMD accumulators across the whole
+        // p-reduction, so A22 is read/written exactly once and each loaded U row is
+        // reused for MR rows of L. Reduction order over p is monotonic k..kb, so every
+        // output element is data[i][j] - Σ_p L[i][p]·U[p][j] (sum-then-subtract); the
+        // disjoint L (cols < kb) / U (rows < kb) / A22 (rows,cols >= kb) regions never
+        // alias, so the single flat buffer is updated in place.
+        const MR: usize = 4;
+        const NR: usize = 8;
+        let mut i0 = kb;
+        while i0 < n {
+            let mr = (n - i0).min(MR);
             let mut j0 = kb;
             while j0 < n {
-                let j1 = (j0 + COL_TILE).min(n);
-                for p in k..kb {
-                    let lip = data[i_base + p];
-                    if lip != 0.0 {
-                        let p_base = p * n;
-                        for j in j0..j1 {
-                            data[i_base + j] -= lip * data[p_base + j];
+                let nr = (n - j0).min(NR);
+                if mr == MR && nr == NR {
+                    let r0 = i0 * n;
+                    let r1 = (i0 + 1) * n;
+                    let r2 = (i0 + 2) * n;
+                    let r3 = (i0 + 3) * n;
+                    let mut acc0 = Simd::<f64, NR>::splat(0.0);
+                    let mut acc1 = Simd::<f64, NR>::splat(0.0);
+                    let mut acc2 = Simd::<f64, NR>::splat(0.0);
+                    let mut acc3 = Simd::<f64, NR>::splat(0.0);
+                    for p in k..kb {
+                        let p_base = p * n + j0;
+                        let urow = Simd::<f64, NR>::from_slice(&data[p_base..p_base + NR]);
+                        acc0 += Simd::splat(data[r0 + p]) * urow;
+                        acc1 += Simd::splat(data[r1 + p]) * urow;
+                        acc2 += Simd::splat(data[r2 + p]) * urow;
+                        acc3 += Simd::splat(data[r3 + p]) * urow;
+                    }
+                    let c0 = r0 + j0;
+                    let c1 = r1 + j0;
+                    let c2 = r2 + j0;
+                    let c3 = r3 + j0;
+                    (Simd::<f64, NR>::from_slice(&data[c0..c0 + NR]) - acc0)
+                        .copy_to_slice(&mut data[c0..c0 + NR]);
+                    (Simd::<f64, NR>::from_slice(&data[c1..c1 + NR]) - acc1)
+                        .copy_to_slice(&mut data[c1..c1 + NR]);
+                    (Simd::<f64, NR>::from_slice(&data[c2..c2 + NR]) - acc2)
+                        .copy_to_slice(&mut data[c2..c2 + NR]);
+                    (Simd::<f64, NR>::from_slice(&data[c3..c3 + NR]) - acc3)
+                        .copy_to_slice(&mut data[c3..c3 + NR]);
+                } else {
+                    for di in 0..mr {
+                        let i_base = (i0 + di) * n;
+                        for dj in 0..nr {
+                            let j = j0 + dj;
+                            let mut s = 0.0;
+                            for p in k..kb {
+                                s += data[i_base + p] * data[p * n + j];
+                            }
+                            data[i_base + j] -= s;
                         }
                     }
                 }
-                j0 = j1;
+                j0 += nr;
             }
+            i0 += mr;
         }
         k = kb;
     }
@@ -12676,8 +12711,9 @@ fn lu_solve_blocked(a_in: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
     lu_subst_factored(&factors, pb)
 }
 
+#[cfg(test)]
 fn det_flat_lu_product(a_in: &[Vec<f64>]) -> Option<f64> {
-    if a_in.len() < FLAT_LU_DET_MIN_DIM || a_in.iter().flatten().any(|value| !value.is_finite()) {
+    if a_in.is_empty() || a_in.iter().flatten().any(|value| !value.is_finite()) {
         return None;
     }
     let max_abs = max_abs(a_in);
@@ -12715,11 +12751,8 @@ fn inv_blocked(a_in: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
     let factors = lu_factor_blocked(a_in)?;
     let solve_col = |j: usize| -> Option<Vec<f64>> {
         let mut y = vec![0.0; n];
-        for i in 0..n {
-            if factors.perm[i] == j {
-                y[i] = 1.0;
-                break;
-            }
+        if let Some(i) = factors.perm.iter().position(|&orig| orig == j) {
+            y[i] = 1.0;
         }
         lu_subst_factored(&factors, y)
     };
@@ -12742,11 +12775,9 @@ fn inv_blocked(a_in: &[Vec<f64>]) -> Option<Vec<Vec<f64>>> {
                         (c0..c1)
                             .map(|j| {
                                 let mut y = vec![0.0; n];
-                                for i in 0..n {
-                                    if factors_ref.perm[i] == j {
-                                        y[i] = 1.0;
-                                        break;
-                                    }
+                                if let Some(i) = factors_ref.perm.iter().position(|&orig| orig == j)
+                                {
+                                    y[i] = 1.0;
                                 }
                                 lu_subst_factored(factors_ref, y)
                             })
@@ -13398,7 +13429,7 @@ mod tests {
         }
         println!("flat_lu_golden_digest={digest:#018x}");
         assert_eq!(
-            digest, 0x3476_4a79_88b2_f9f8,
+            digest, 0x2fc8_ed29_4ef0_427c,
             "flat LU golden digest changed (got {digest:#018x})"
         );
     }
