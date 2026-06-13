@@ -12215,34 +12215,10 @@ fn matmul_flat_compute_rows(
                         acc2[3] += Simd::splat(a3) * b2_vec;
                     }
                     for di in 0..MR {
-                        let acc0_row = acc0[di].to_array();
-                        let acc1_row = acc1[di].to_array();
-                        let acc2_row = acc2[di].to_array();
                         let c_base = (i0 + di - row_start) * n + j0;
-                        out[c_base] = acc0_row[0];
-                        out[c_base + 1] = acc0_row[1];
-                        out[c_base + 2] = acc0_row[2];
-                        out[c_base + 3] = acc0_row[3];
-                        out[c_base + 4] = acc0_row[4];
-                        out[c_base + 5] = acc0_row[5];
-                        out[c_base + 6] = acc0_row[6];
-                        out[c_base + 7] = acc0_row[7];
-                        out[c_base + 8] = acc1_row[0];
-                        out[c_base + 9] = acc1_row[1];
-                        out[c_base + 10] = acc1_row[2];
-                        out[c_base + 11] = acc1_row[3];
-                        out[c_base + 12] = acc1_row[4];
-                        out[c_base + 13] = acc1_row[5];
-                        out[c_base + 14] = acc1_row[6];
-                        out[c_base + 15] = acc1_row[7];
-                        out[c_base + 16] = acc2_row[0];
-                        out[c_base + 17] = acc2_row[1];
-                        out[c_base + 18] = acc2_row[2];
-                        out[c_base + 19] = acc2_row[3];
-                        out[c_base + 20] = acc2_row[4];
-                        out[c_base + 21] = acc2_row[5];
-                        out[c_base + 22] = acc2_row[6];
-                        out[c_base + 23] = acc2_row[7];
+                        acc0[di].copy_to_slice(&mut out[c_base..c_base + NR]);
+                        acc1[di].copy_to_slice(&mut out[c_base + NR..c_base + 2 * NR]);
+                        acc2[di].copy_to_slice(&mut out[c_base + 2 * NR..c_base + NC]);
                     }
                 } else if mr == MR && nr == NR {
                     let a0_base = i0 * ka;
@@ -12273,16 +12249,8 @@ fn matmul_flat_compute_rows(
                         acc[3] += Simd::splat(a3) * b_vec;
                     }
                     for (di, acc_row) in acc.iter().enumerate().take(MR) {
-                        let acc_row = acc_row.to_array();
                         let c_base = (i0 + di - row_start) * n + j0;
-                        out[c_base] = acc_row[0];
-                        out[c_base + 1] = acc_row[1];
-                        out[c_base + 2] = acc_row[2];
-                        out[c_base + 3] = acc_row[3];
-                        out[c_base + 4] = acc_row[4];
-                        out[c_base + 5] = acc_row[5];
-                        out[c_base + 6] = acc_row[6];
-                        out[c_base + 7] = acc_row[7];
+                        acc_row.copy_to_slice(&mut out[c_base..c_base + NR]);
                     }
                 } else {
                     for di in 0..mr {
