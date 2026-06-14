@@ -2194,6 +2194,10 @@ pub struct GmmResult {
     pub labels: Vec<usize>,
     /// Final average log-likelihood per sample.
     pub log_likelihood: f64,
+    /// Bayesian information criterion (lower is better) for choosing `n_components`.
+    pub bic: f64,
+    /// Akaike information criterion (lower is better).
+    pub aic: f64,
     /// EM iterations performed.
     pub n_iter: usize,
 }
@@ -2339,6 +2343,13 @@ pub fn gaussian_mixture(
         })
         .collect();
 
+    // Information criteria for model selection. Free params (diag): means k·d + variances k·d +
+    // weights (k−1).
+    let total_ll = log_likelihood * n as f64;
+    let n_params = (k * (2 * d + 1) - 1) as f64;
+    let bic = -2.0 * total_ll + n_params * (n as f64).ln();
+    let aic = -2.0 * total_ll + 2.0 * n_params;
+
     Ok(GmmResult {
         weights,
         means,
@@ -2346,6 +2357,8 @@ pub fn gaussian_mixture(
         responsibilities: resp,
         labels,
         log_likelihood,
+        bic,
+        aic,
         n_iter: iters,
     })
 }
@@ -2365,6 +2378,10 @@ pub struct GmmFullResult {
     pub labels: Vec<usize>,
     /// Final average log-likelihood per sample.
     pub log_likelihood: f64,
+    /// Bayesian information criterion (lower is better) for choosing `n_components`.
+    pub bic: f64,
+    /// Akaike information criterion (lower is better).
+    pub aic: f64,
     /// EM iterations performed.
     pub n_iter: usize,
 }
@@ -2566,6 +2583,12 @@ pub fn gaussian_mixture_full(
         })
         .collect();
 
+    // Free params (full): means k·d + covariances k·d(d+1)/2 + weights (k−1).
+    let total_ll = log_likelihood * n as f64;
+    let n_params = ((k - 1) + k * d + k * d * (d + 1) / 2) as f64;
+    let bic = -2.0 * total_ll + n_params * (n as f64).ln();
+    let aic = -2.0 * total_ll + 2.0 * n_params;
+
     Ok(GmmFullResult {
         weights,
         means,
@@ -2573,6 +2596,8 @@ pub fn gaussian_mixture_full(
         responsibilities: resp,
         labels,
         log_likelihood,
+        bic,
+        aic,
         n_iter: iters,
     })
 }
@@ -5779,6 +5804,10 @@ mod tests {
                 .fold(f64::INFINITY, f64::min);
             assert!(best < 0.25, "no recovered mean near center {ctr:?}");
         }
+        // Model selection: BIC/AIC finite, and the true k=3 beats an underfit k=1.
+        assert!(gmm.bic.is_finite() && gmm.aic.is_finite());
+        let under = gaussian_mixture(&data, 1, 200, 1e-6, 1e-6, 7).expect("k=1");
+        assert!(gmm.bic < under.bic, "true k=3 BIC should beat k=1");
 
         assert!(gaussian_mixture(&[], 2, 10, 1e-3, 1e-6, 1).is_err());
         assert!(gaussian_mixture(&data, 0, 10, 1e-3, 1e-6, 1).is_err());
