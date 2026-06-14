@@ -631,6 +631,42 @@ impl Display for FftError {
 
 impl std::error::Error for FftError {}
 
+/// Fast Walsh–Hadamard transform (natural / Hadamard ordering) in O(n·log n).
+///
+/// Computes `H_n · x`, where `H_n` is the n×n Hadamard matrix
+/// (`H_n[i][j] = (−1)^popcount(i & j)`, the n-fold Kronecker power of `[[1,1],[1,−1]]`) and
+/// `n` must be a power of two. The in-place butterfly evaluates it in O(n·log n) versus the
+/// O(n²) explicit matrix–vector product one would otherwise form as
+/// `scipy.linalg.hadamard(n) @ x`. Unnormalized: `fwht` is its own inverse up to scale —
+/// `fwht(fwht(x)) == n·x`, so the inverse transform is `fwht(y)` divided by `n`. `options`
+/// only governs the finite-input policy.
+pub fn fwht(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError> {
+    ensure_non_empty(input.len())?;
+    validate_finite_real(input, options)?;
+    let n = input.len();
+    if !n.is_power_of_two() {
+        return Err(FftError::InvalidShape {
+            detail: "fwht length must be a power of two",
+        });
+    }
+    let mut x = input.to_vec();
+    let mut h = 1usize;
+    while h < n {
+        let mut i = 0;
+        while i < n {
+            for j in i..i + h {
+                let a = x[j];
+                let b = x[j + h];
+                x[j] = a + b;
+                x[j + h] = a - b;
+            }
+            i += h * 2;
+        }
+        h *= 2;
+    }
+    Ok(x)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransformTrace {
     pub operation_id: String,
@@ -3663,7 +3699,8 @@ mod tests {
     use super::{
         Complex64, FftError, FftOptions, TransformKind, WorkerPolicy, dct, dct_iv,
         dctn,
-        dst_ii, dst_iii, dstn, estimate_fft_flops, fft, fft_with_audit, fft2, fftn, hfft, hfft2,
+        dst_ii, dst_iii, dstn, estimate_fft_flops, fft, fft_with_audit, fft2, fftn, fwht, hfft,
+        hfft2,
         hfftn, idct, idctn, idstn, ifft, ifft2, ifftn, ihfft, ihfft2, ihfftn, irfft, irfft2, irfftn,
         is_fast_len, next_fast_len, prev_fast_len, rfft, rfft_with_audit, rfft2, rfftn,
         sync_audit_ledger, take_transform_traces,
@@ -4886,5 +4923,38 @@ mod tests {
                 "idct(dct(x))[{i}] got {got}, expected {want}"
             );
         }
+    }
+
+    #[test]
+    fn fwht_matches_naive_hadamard_and_is_involution() {
+        let opts = FftOptions::default();
+        // Smallest case: [a, b] -> [a+b, a-b].
+        let two = fwht(&[3.0, 5.0], &opts).expect("fwht");
+        assert_eq!(two, vec![8.0, -2.0]);
+
+        // Match the naive H_n·x (H[k][j] = (-1)^popcount(k&j)) for random input.
+        let n = 64usize;
+        let mut s: u64 = 0xdead_beef_1234_5678;
+        let mut rng = || {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((s >> 11) as f64) / (1u64 << 53) as f64 - 0.5
+        };
+        let x: Vec<f64> = (0..n).map(|_| rng()).collect();
+        let fast = fwht(&x, &opts).expect("fwht");
+        for (k, &fk) in fast.iter().enumerate() {
+            let naive: f64 = (0..n)
+                .map(|j| if (k & j).count_ones() & 1 == 0 { x[j] } else { -x[j] })
+                .sum();
+            assert!((fk - naive).abs() < 1e-12, "fwht[{k}] {fk} vs naive {naive}");
+        }
+
+        // Involution up to scale: fwht(fwht(x)) == n·x.
+        let twice = fwht(&fast, &opts).expect("fwht");
+        for (&t, &xi) in twice.iter().zip(&x) {
+            assert!((t - n as f64 * xi).abs() < 1e-10, "involution: {t} vs {}", n as f64 * xi);
+        }
+
+        // Non-power-of-two length is rejected.
+        assert!(fwht(&[1.0, 2.0, 3.0], &opts).is_err());
     }
 }
