@@ -3805,6 +3805,61 @@ pub fn randomized_eigh(
     })
 }
 
+/// Rank-`k` (truncated) Moore–Penrose pseudoinverse of `a` (m×n) via randomized SVD.
+///
+/// Computes a rank-`k` SVD with [`randomized_svd`] and assembles `A⁺ = V·Σ⁻¹·Uᵀ` (n×m),
+/// dropping singular values at or below the relative tolerance `rtol·σ₁` (default
+/// `max(m,n)·ε`). Cost O(m·n·k) versus O(m·n·min(m,n)) for the full-SVD pseudoinverse — a
+/// large win when the numerical rank k ≪ min(m,n) (regularised / low-rank inverses), where
+/// the dense `pinv` otherwise falls to its slow full-SVD route. Approximate: equals the
+/// full truncated pseudoinverse to the random-sketch error (machine precision once the
+/// sketch dimension exceeds the numerical rank).
+pub fn randomized_pinv(
+    a: &[Vec<f64>],
+    k: usize,
+    n_oversamples: usize,
+    n_iter: usize,
+    rtol: Option<f64>,
+    seed: u64,
+) -> Result<PinvResult, LinalgError> {
+    let (m, n) = matrix_shape(a)?;
+    let svd = randomized_svd(a, k, n_oversamples, n_iter, seed)?;
+    let kk = svd.s.len();
+    if kk == 0 {
+        return Ok(PinvResult {
+            pseudo_inverse: vec![vec![0.0; m]; n],
+            rank: 0,
+            certificate: None,
+        });
+    }
+    let smax = svd.s[0];
+    let tol = rtol.unwrap_or((m.max(n) as f64) * f64::EPSILON) * smax;
+    let inv_s: Vec<f64> = svd
+        .s
+        .iter()
+        .map(|&si| if si > tol { 1.0 / si } else { 0.0 })
+        .collect();
+    let rank = inv_s.iter().filter(|&&x| x != 0.0).count();
+
+    // A⁺ = V · (Σ⁻¹ Uᵀ). Build M = Σ⁻¹ Uᵀ (kk×m), V = (Vᵀ)ᵀ (n×kk), then the parallel
+    // matmul gives the (n×m) pseudoinverse.
+    let mut mmat = vec![vec![0.0; m]; kk];
+    for (t, mrow) in mmat.iter_mut().enumerate() {
+        let it = inv_s[t];
+        for (j, slot) in mrow.iter_mut().enumerate() {
+            *slot = it * svd.u[j][t];
+        }
+    }
+    let v = transpose_rows(&svd.vt); // n×kk
+    let pseudo_inverse = matmul(&v, &mmat)?;
+
+    Ok(PinvResult {
+        pseudo_inverse,
+        rank,
+        certificate: None,
+    })
+}
+
 /// Cholesky decomposition for symmetric positive-definite matrices: A = LLᵀ.
 ///
 /// If `lower` is true (default), returns L such that A = LLᵀ.
@@ -17550,6 +17605,51 @@ mod tests {
             assert!(resid < 1e-6, "eigenvector residual {resid} for column {j}");
         }
         assert!(randomized_eigh(&[vec![1.0, 2.0]], k, 4, 1, 1).is_err());
+    }
+
+    #[test]
+    fn randomized_pinv_matches_full_pinv_on_low_rank() {
+        let mut s: u64 = 0x7766_5544_3322_1100;
+        let mut rng = || {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((s >> 11) as f64) / (1u64 << 53) as f64 - 0.5
+        };
+        let (m, n, r, k) = (120usize, 50usize, 8usize, 12usize);
+        let rtol = 1e-3;
+        let b: Vec<Vec<f64>> = (0..m).map(|_| (0..r).map(|_| rng()).collect()).collect();
+        let c: Vec<Vec<f64>> = (0..r).map(|_| (0..n).map(|_| rng()).collect()).collect();
+        let a: Vec<Vec<f64>> = b
+            .iter()
+            .map(|bi| {
+                (0..n)
+                    .map(|j| (0..r).map(|t| bi[t] * c[t][j]).sum::<f64>() + 1e-6 * rng())
+                    .collect()
+            })
+            .collect();
+
+        let opts = PinvOptions {
+            rtol: Some(rtol),
+            ..Default::default()
+        };
+        let full = pinv(&a, opts).expect("full pinv");
+        let rp = randomized_pinv(&a, k, 8, 2, Some(rtol), 5).expect("randomized_pinv");
+        assert_eq!(rp.rank, full.rank);
+        assert_eq!(rp.pseudo_inverse.len(), n);
+        assert_eq!(rp.pseudo_inverse[0].len(), m);
+
+        let mut num = 0.0;
+        let mut den = 0.0;
+        for (rf, rr) in full.pseudo_inverse.iter().zip(&rp.pseudo_inverse) {
+            for (&x, &y) in rf.iter().zip(rr) {
+                num += (x - y) * (x - y);
+                den += x * x;
+            }
+        }
+        assert!(
+            (num / den).sqrt() < 1e-8,
+            "rel pinv err {} too large",
+            (num / den).sqrt()
+        );
     }
 
     #[test]
