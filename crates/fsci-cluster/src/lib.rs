@@ -867,16 +867,14 @@ pub fn factor_analysis(
         let unexp_var = fro2 - cap2;
 
         // W = sqrt(max(s^2 - 1, 0)) * Vt, then rescale by sqrt_psi (k×d).
-        for t in 0..kk {
+        for (t, wrow) in w.iter_mut().enumerate().take(kk) {
             let scale = (s2[t] - 1.0).max(0.0).sqrt();
-            for j in 0..d {
-                w[t][j] = scale * svd.vt[t][j] * sqrt_psi[j];
+            for ((wv, &vv), &sp) in wrow.iter_mut().zip(&svd.vt[t]).zip(&sqrt_psi) {
+                *wv = scale * vv * sp;
             }
         }
-        for t in kk..n_components {
-            for j in 0..d {
-                w[t][j] = 0.0;
-            }
+        for wrow in w.iter_mut().take(n_components).skip(kk) {
+            wrow.iter_mut().for_each(|v| *v = 0.0);
         }
 
         // Average log-likelihood.
