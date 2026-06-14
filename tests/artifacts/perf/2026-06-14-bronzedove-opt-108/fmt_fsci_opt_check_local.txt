@@ -1,0 +1,96 @@
+Diff in /data/projects/frankenscipy/crates/fsci-opt/src/bin/perf_lm_jtj.rs:71:
+         for row in jac {
+             diag += row[j] * row[j];
+         }
+[31m-        max_val = if max_val.is_nan() || diag.is_nan() { f64::NAN } else { max_val.max(diag) };
+[m[32m+        max_val = if max_val.is_nan() || diag.is_nan() {
+[m[32m+            f64::NAN
+[m[32m+        } else {
+[m[32m+            max_val.max(diag)
+[m[32m+        };
+[m     }
+     max_val
+ }
+Diff in /data/projects/frankenscipy/crates/fsci-opt/src/bin/perf_lm_jtj.rs:220:
+     let m = 1600usize;
+     let mut s: u64 = 0x9e3779b97f4a7c15;
+     let mut rng = || {
+[31m-        s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+[m[32m+        s = s
+[m[32m+            .wrapping_mul(6364136223846793005)
+[m[32m+            .wrapping_add(1442695040888963407);
+[m         ((s >> 33) as f64) / (1u64 << 31) as f64
+     };
+     let basis: Vec<Vec<f64>> = (0..m)
+Diff in /data/projects/frankenscipy/crates/fsci-opt/src/bin/perf_lm_jtj.rs:245:
+             .collect()
+     };
+     // Bad start: wrong sign + scale → many rejected steps before convergence.
+[31m-    let x0: Vec<f64> = (0..n).map(|i| if i % 3 == 0 { -1.5 } else { 0.8 }).collect();
+[m[32m+    let x0: Vec<f64> = (0..n)
+[m[32m+        .map(|i| if i % 3 == 0 { -1.5 } else { 0.8 })
+[m[32m+        .collect();
+[m     let max_nfev = 400;
+ 
+     // Verify byte-identical trajectory/result between the two variants.
+Diff in /data/projects/frankenscipy/crates/fsci-opt/src/bin/perf_lm_jtj.rs:252:
+     let (xo, nit_o, rej_o) = run_lm(&residuals, &x0, max_nfev, false);
+     let (xc, nit_c, rej_c) = run_lm(&residuals, &x0, max_nfev, true);
+[31m-    let bits_match = xo.iter().zip(xc.iter()).all(|(a, b)| a.to_bits() == b.to_bits());
+[m[32m+    let bits_match = xo
+[m[32m+        .iter()
+[m[32m+        .zip(xc.iter())
+[m[32m+        .all(|(a, b)| a.to_bits() == b.to_bits());
+[m     println!(
+         "trajectory: OLD nit={nit_o} rejects={rej_o} | NEW nit={nit_c} rejects={rej_c} | bit-identical result={bits_match}"
+     );
+Diff in /data/projects/frankenscipy/crates/fsci-opt/src/bin/perf_trust_exact.rs:2:
+ // minimize(TrustExact) on a reject-heavy high-dimensional Rosenbrock and prints the
+ // converged point (as bits) plus eval counts. Run once on the cached (NEW) build and once
+ // on the stashed (OLD) build: x must be bit-identical; nfev/njev are the speedup.
+[31m-use fsci_opt::{minimize, MinimizeOptions, OptimizeMethod};
+[m[32m+use fsci_opt::{MinimizeOptions, OptimizeMethod, minimize};
+[m 
+ fn rosenbrock_nd(x: &[f64]) -> f64 {
+     let mut acc = 0.0;
+Diff in /data/projects/frankenscipy/crates/fsci-opt/src/bin/perf_trust_exact.rs:37:
+         ..MinimizeOptions::default()
+     };
+     let r = minimize(f, x0, options).expect("minimize");
+[31m-    let dist: f64 = r
+[m[31m-        .x
+[m[31m-        .iter()
+[m[31m-        .zip(opt.iter())
+[m[31m-        .map(|(a, b)| (a - b) * (a - b))
+[m[31m-        .sum::<f64>()
+[m[31m-        .sqrt();
+[m[32m+    let dist: f64 =
+[m[32m+        r.x.iter()
+[m[32m+            .zip(opt.iter())
+[m[32m+            .map(|(a, b)| (a - b) * (a - b))
+[m[32m+            .sum::<f64>()
+[m[32m+            .sqrt();
+[m     println!(
+         "{name}: nfev={} njev={} nhev={} fun={:.10e} dist_to_opt={:.4e}",
+[31m-        r.nfev, r.njev, r.nhev, r.fun.unwrap_or(f64::NAN), dist
+[m[32m+        r.nfev,
+[m[32m+        r.njev,
+[m[32m+        r.nhev,
+[m[32m+        r.fun.unwrap_or(f64::NAN),
+[m[32m+        dist
+[m     );
+ }
+ 
+Diff in /data/projects/frankenscipy/crates/fsci-opt/src/bin/perf_trust_exact.rs:53:
+ fn main() {
+[31m-    let rb10: Vec<f64> = (0..10).map(|i| if i % 2 == 0 { -1.5 } else { 1.7 }).collect();
+[m[31m-    let rb20: Vec<f64> = (0..20).map(|i| if i % 2 == 0 { -1.5 } else { 1.7 }).collect();
+[m[32m+    let rb10: Vec<f64> = (0..10)
+[m[32m+        .map(|i| if i % 2 == 0 { -1.5 } else { 1.7 })
+[m[32m+        .collect();
+[m[32m+    let rb20: Vec<f64> = (0..20)
+[m[32m+        .map(|i| if i % 2 == 0 { -1.5 } else { 1.7 })
+[m[32m+        .collect();
+[m     let pw: Vec<f64> = (0..12)
+         .map(|i| match i % 4 {
+             0 => 3.0,
