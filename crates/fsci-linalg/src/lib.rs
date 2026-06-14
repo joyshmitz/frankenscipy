@@ -3752,6 +3752,59 @@ pub fn clarkson_woodruff_transform(
     Ok(out)
 }
 
+/// The `k` dominant (largest-magnitude) eigenpairs of a symmetric matrix `a` (n×n), via
+/// randomized range finding.
+///
+/// Computes a truncated SVD with [`randomized_svd`] — for symmetric A the left singular
+/// vectors span the dominant invariant subspace and the singular values are |λ| — then
+/// recovers each signed eigenvalue from the Rayleigh quotient `λ = uᵀ·A·u` (exact for a true
+/// eigenvector). Cost O(n²·k + n²·n_iter) versus O(n³) for a full symmetric
+/// eigendecomposition — a large win when k ≪ n (PCA, spectral embeddings). Approximate (the
+/// dominant subspace is captured to the random-sketch error, machine-precision when the
+/// sketch dimension exceeds the numerical rank). Returns an [`EighResult`] with the k
+/// eigenvalues in ASCENDING order and matching eigenvector columns.
+pub fn randomized_eigh(
+    a: &[Vec<f64>],
+    k: usize,
+    n_oversamples: usize,
+    n_iter: usize,
+    seed: u64,
+) -> Result<EighResult, LinalgError> {
+    let (n, cols) = matrix_shape(a)?;
+    if n != cols {
+        return Err(LinalgError::ExpectedSquareMatrix);
+    }
+    let svd = randomized_svd(a, k, n_oversamples, n_iter, seed)?;
+    let kk = svd.s.len();
+
+    // Rayleigh quotient λ_i = u_iᵀ (A u_i) gives the signed eigenvalue for each captured
+    // singular vector u_i (column i of svd.u, row-major storage).
+    let mut pairs: Vec<(f64, Vec<f64>)> = Vec::with_capacity(kk);
+    for i in 0..kk {
+        let u_i: Vec<f64> = svd.u.iter().map(|row| row[i]).collect();
+        let au: Vec<f64> = a
+            .iter()
+            .map(|row| row.iter().zip(&u_i).map(|(&p, &q)| p * q).sum())
+            .collect();
+        let lambda: f64 = u_i.iter().zip(&au).map(|(&p, &q)| p * q).sum();
+        pairs.push((lambda, u_i));
+    }
+    // Ascending eigenvalue order to honour the EighResult contract.
+    pairs.sort_by(|x, y| x.0.total_cmp(&y.0));
+
+    let eigenvalues: Vec<f64> = pairs.iter().map(|(l, _)| *l).collect();
+    let mut eigenvectors = vec![vec![0.0; kk]; n];
+    for (j, (_, v)) in pairs.iter().enumerate() {
+        for (r, row) in eigenvectors.iter_mut().enumerate() {
+            row[j] = v[r];
+        }
+    }
+    Ok(EighResult {
+        eigenvalues,
+        eigenvectors,
+    })
+}
+
 /// Cholesky decomposition for symmetric positive-definite matrices: A = LLᵀ.
 ///
 /// If `lower` is true (default), returns L such that A = LLᵀ.
@@ -17441,6 +17494,62 @@ mod tests {
         );
 
         assert!(clarkson_woodruff_transform(&a, 0, 1).is_err());
+    }
+
+    #[test]
+    fn randomized_eigh_matches_full_eigh_on_low_rank() {
+        let mut s: u64 = 0x0f1e_2d3c_4b5a_6978;
+        let mut rng = || {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((s >> 11) as f64) / (1u64 << 53) as f64 - 0.5
+        };
+        let (n, r, k) = (90usize, 14usize, 6usize);
+        let w: Vec<Vec<f64>> = (0..r).map(|_| (0..n).map(|_| rng()).collect()).collect();
+        let d: Vec<f64> = (0..r)
+            .map(|t| (if t % 2 == 0 { 1.0 } else { -1.0 }) * (30.0 - t as f64))
+            .collect();
+        let mut a = vec![vec![0.0; n]; n];
+        for t in 0..r {
+            for i in 0..n {
+                let dwi = d[t] * w[t][i];
+                for j in 0..n {
+                    a[i][j] += dwi * w[t][j];
+                }
+            }
+        }
+
+        let full = eigh(&a, DecompOptions::default()).expect("full eigh");
+        let re = randomized_eigh(&a, k, 12, 2, 3).expect("randomized_eigh");
+        assert_eq!(re.eigenvalues.len(), k);
+        assert_eq!(re.eigenvectors.len(), n);
+        assert_eq!(re.eigenvectors[0].len(), k);
+        for win in re.eigenvalues.windows(2) {
+            assert!(win[0] <= win[1] + 1e-9, "eigenvalues must be ascending");
+        }
+
+        // The k returned eigenvalues are the k largest by magnitude of the full spectrum.
+        let mut by_mag = full.eigenvalues.clone();
+        by_mag.sort_by(|x, y| y.abs().total_cmp(&x.abs()));
+        let mut topk: Vec<f64> = by_mag[..k].to_vec();
+        topk.sort_by(|x, y| x.total_cmp(y));
+        for (g, want) in re.eigenvalues.iter().zip(&topk) {
+            assert!((g - want).abs() < 1e-7, "eigenvalue {g} vs {want}");
+        }
+        // Each returned column is a genuine eigenvector: ‖A v − λ v‖ ≈ 0.
+        for j in 0..k {
+            let v: Vec<f64> = (0..n).map(|i| re.eigenvectors[i][j]).collect();
+            let lam = re.eigenvalues[j];
+            let resid: f64 = a
+                .iter()
+                .zip(&v)
+                .map(|(row, &vi)| {
+                    (row.iter().zip(&v).map(|(&p, &q)| p * q).sum::<f64>() - lam * vi).powi(2)
+                })
+                .sum::<f64>()
+                .sqrt();
+            assert!(resid < 1e-6, "eigenvector residual {resid} for column {j}");
+        }
+        assert!(randomized_eigh(&[vec![1.0, 2.0]], k, 4, 1, 1).is_err());
     }
 
     #[test]
