@@ -3554,6 +3554,47 @@ pub fn svd(a: &[Vec<f64>], options: DecompOptions) -> Result<SvdResult, LinalgEr
         }
     }
 
+    // Wide fast path (mirror of the tall/square branch on Aᵀ): A = Vₜ·Σ·Uₜᵀ. Reduce Aᵀ once, then
+    // reroute a rank-deficient matrix to jacobi_svd or feed the same reduction to the deterministic
+    // path (byte-for-byte identical to public_wide_svd_via_transpose for full-rank).
+    if rows < cols
+        && rows >= PUBLIC_BIDIAG_SVD_MIN_COLS
+        && let Ok(reduction) = golub_kahan_bidiagonal_reduction(&matrix.transpose())
+    {
+        if bidiagonal_is_rank_deficient(&reduction) {
+            emit_trace(LinalgTrace {
+                operation: "svd",
+                matrix_size: (rows, cols),
+                mode: options.mode,
+                rcond: None,
+                warning: None,
+                error: None,
+            });
+            return jacobi_svd(a, options);
+        }
+        let at = matrix.transpose();
+        if let Ok(thin) = deterministic_thin_svd_from_reduction(&reduction)
+            && let Some((max_s, _)) = public_bidiag_svd_stats(&thin.singular_values)
+        {
+            let threshold = public_bidiag_default_threshold(at.nrows(), at.ncols(), max_s);
+            if public_bidiag_svd_accepts(&at, &thin, threshold) {
+                emit_trace(LinalgTrace {
+                    operation: "svd",
+                    matrix_size: (rows, cols),
+                    mode: options.mode,
+                    rcond: None,
+                    warning: None,
+                    error: None,
+                });
+                return Ok(SvdResult {
+                    u: rows_from_dmatrix(&thin.v_t.transpose()),
+                    s: thin.singular_values,
+                    vt: rows_from_dmatrix(&thin.u.transpose()),
+                });
+            }
+        }
+    }
+
     if let Some((u_a, s, vt_a)) = public_wide_svd_via_transpose(&matrix) {
         emit_trace(LinalgTrace {
             operation: "svd",
@@ -17969,6 +18010,25 @@ mod tests {
         for w in res.s.windows(2) {
             assert!(w[0] >= w[1] - 1e-12, "singular values descending");
         }
+
+        // Wide (rows < cols) rank-deficient must also reroute and reconstruct.
+        let (wm, wn, wr) = (96usize, 150usize, 20usize);
+        let wb: Vec<Vec<f64>> = (0..wm).map(|_| (0..wr).map(|_| rng()).collect()).collect();
+        let wc: Vec<Vec<f64>> = (0..wr).map(|_| (0..wn).map(|_| rng()).collect()).collect();
+        let wa: Vec<Vec<f64>> = (0..wm)
+            .map(|i| (0..wn).map(|j| (0..wr).map(|t| wb[i][t] * wc[t][j]).sum()).collect())
+            .collect();
+        let wres = svd(&wa, DecompOptions::default()).expect("wide svd");
+        assert_eq!(wres.s.len(), wm); // k = min(m,n) = m
+        assert_eq!(wres.s.iter().filter(|&&x| x > 1e-9).count(), wr);
+        let mut we = 0.0f64;
+        for i in 0..wm {
+            for j in 0..wn {
+                let v: f64 = (0..wm).map(|t| wres.u[i][t] * wres.s[t] * wres.vt[t][j]).sum();
+                we = we.max((v - wa[i][j]).abs());
+            }
+        }
+        assert!(we < 1e-10, "wide rank-deficient reconstruction maxerr {we}");
     }
 
     #[test]
