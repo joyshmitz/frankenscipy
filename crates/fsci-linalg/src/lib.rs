@@ -3705,6 +3705,53 @@ pub fn randomized_svd(
     Ok(SvdResult { u, s, vt })
 }
 
+/// Clarkson–Woodruff transform (CountSketch): apply a random sketch S (sketch_size × m) to
+/// `input_matrix` (m × n), returning S·A (sketch_size × n).
+///
+/// Matches `scipy.linalg.clarkson_woodruff_transform(input_matrix, sketch_size, seed)`.
+///
+/// S has exactly one nonzero per column: row i of A is hashed to a uniformly random output
+/// bucket h(i) ∈ [0, sketch_size) carrying a random sign ±1, and added there. The result is
+/// a subspace embedding — ‖S·A·x‖ ≈ ‖A·x‖ for all x with high probability, and
+/// E[‖S·y‖²] = ‖y‖² exactly — the basis for sketched least-squares and low-rank
+/// approximation. Applied IMPLICITLY in O(m·n) (one pass, hashing each row) rather than
+/// forming the dense s×m matrix S and paying O(sketch_size·m·n). The bucket hash and signs
+/// come from a deterministic SplitMix64 stream seeded by `seed`, so the sketch is
+/// reproducible.
+pub fn clarkson_woodruff_transform(
+    input_matrix: &[Vec<f64>],
+    sketch_size: usize,
+    seed: u64,
+) -> Result<Vec<Vec<f64>>, LinalgError> {
+    let (_m, n) = matrix_shape(input_matrix)?;
+    if sketch_size == 0 {
+        return Err(LinalgError::InvalidArgument {
+            detail: "sketch_size must be positive".to_string(),
+        });
+    }
+    let mut out = vec![vec![0.0; n]; sketch_size];
+    if n == 0 {
+        return Ok(out);
+    }
+    let mut state = seed ^ 0x9e37_79b9_7f4a_7c15;
+    let mut next = || -> u64 {
+        state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    };
+    let ss = sketch_size as u64;
+    for row in input_matrix {
+        let bucket = (next() % ss) as usize;
+        let sign = if next() & 1 == 0 { 1.0 } else { -1.0 };
+        for (o, &v) in out[bucket].iter_mut().zip(row.iter()) {
+            *o += sign * v;
+        }
+    }
+    Ok(out)
+}
+
 /// Cholesky decomposition for symmetric positive-definite matrices: A = LLᵀ.
 ///
 /// If `lower` is true (default), returns L such that A = LLᵀ.
@@ -17348,6 +17395,52 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn clarkson_woodruff_shape_determinism_and_embedding() {
+        let mut s: u64 = 0xa5a5_5a5a_1234_5678;
+        let mut rng = || {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((s >> 11) as f64) / (1u64 << 53) as f64 - 0.5
+        };
+        let (m, n, sketch) = (300usize, 8usize, 120usize);
+        let a: Vec<Vec<f64>> = (0..m).map(|_| (0..n).map(|_| rng()).collect()).collect();
+
+        let sa = clarkson_woodruff_transform(&a, sketch, 99).expect("cwt");
+        assert_eq!(sa.len(), sketch);
+        assert_eq!(sa[0].len(), n);
+
+        // Same seed → bit-identical (reproducible).
+        let sa2 = clarkson_woodruff_transform(&a, sketch, 99).expect("cwt");
+        for (r1, r2) in sa.iter().zip(&sa2) {
+            for (&x, &y) in r1.iter().zip(r2) {
+                assert_eq!(x.to_bits(), y.to_bits());
+            }
+        }
+        // Different seed → different sketch (almost surely).
+        let sa3 = clarkson_woodruff_transform(&a, sketch, 100).expect("cwt");
+        assert!(sa.iter().flatten().zip(sa3.iter().flatten()).any(|(&x, &y)| x != y));
+
+        // Unbiased squared-norm embedding: E[‖S·A·x‖²] = ‖A·x‖²; average over many x → ≈ 1.
+        let trials = 60;
+        let mut ratio_sum = 0.0;
+        for _ in 0..trials {
+            let x: Vec<f64> = (0..n).map(|_| rng()).collect();
+            let dot = |row: &[f64]| row.iter().zip(&x).map(|(&p, &q)| p * q).sum::<f64>();
+            let n_ax: f64 = a.iter().map(|row| dot(row).powi(2)).sum();
+            let n_sax: f64 = sa.iter().map(|row| dot(row).powi(2)).sum();
+            if n_ax > 1e-12 {
+                ratio_sum += n_sax / n_ax;
+            }
+        }
+        let mean = ratio_sum / trials as f64;
+        assert!(
+            (0.5..1.5).contains(&mean),
+            "mean ‖SAx‖²/‖Ax‖² = {mean}, expected ≈ 1"
+        );
+
+        assert!(clarkson_woodruff_transform(&a, 0, 1).is_err());
     }
 
     #[test]
