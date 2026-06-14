@@ -224,7 +224,13 @@ where
         Err(err) => return Ok(result_from_error(x0, 0, 0, 0, err)),
     };
     let mut njev = 0usize;
-    let mut grad = match finite_diff_gradient(&mut objective, &x, options.gradient_eps) {
+    let exact_gradient = options.gradient;
+    let mut grad = match evaluate_minimize_gradient(
+        &mut objective,
+        exact_gradient,
+        &x,
+        options.gradient_eps,
+    ) {
         Ok(value) => {
             njev += 1;
             value
@@ -304,8 +310,12 @@ where
             Err(err) => return Ok(result_from_error(&x, nit, objective.nfev, njev, err)),
         };
 
-        let next_grad = match finite_diff_gradient(&mut objective, &search.x, options.gradient_eps)
-        {
+        let next_grad = match evaluate_minimize_gradient(
+            &mut objective,
+            exact_gradient,
+            &search.x,
+            options.gradient_eps,
+        ) {
             Ok(value) => {
                 njev += 1;
                 value
@@ -4234,6 +4244,86 @@ mod tests {
             RuntimeMode::Strict,
             &result,
             105,
+        );
+    }
+
+    #[test]
+    fn bfgs_rosenbrock_exact_gradient_uses_callback_jacobian() {
+        let mut options = MinimizeOptions {
+            method: Some(OptimizeMethod::Bfgs),
+            tol: Some(1.0e-7),
+            maxiter: Some(800),
+            maxfev: Some(80_000),
+            mode: RuntimeMode::Strict,
+            ..MinimizeOptions::default()
+        };
+        options.gradient = Some(rosenbrock_gradient);
+
+        let initial = rosenbrock(&[-1.2, 1.0]);
+        let exact = bfgs(&rosenbrock, &[-1.2, 1.0], options).expect("bfgs exact");
+        let expected_jac = rosenbrock_gradient(&exact.x);
+
+        assert!(exact.fun.expect("objective") < initial);
+        assert_eq!(exact.jac.as_ref().expect("jac"), &expected_jac);
+        assert!(exact.njev > 0);
+        push_test_log(
+            "bfgs-rosenbrock-exact-gradient",
+            "bfgs",
+            "rosenbrock",
+            2,
+            RuntimeMode::Strict,
+            &exact,
+            118,
+        );
+    }
+
+    #[test]
+    fn bfgs_exact_gradient_rejects_bad_callback_shape() {
+        fn bad_gradient(_: &[f64]) -> Vec<f64> {
+            vec![0.0]
+        }
+
+        let result = bfgs(
+            &sphere,
+            &[2.0, -3.0],
+            MinimizeOptions {
+                method: Some(OptimizeMethod::Bfgs),
+                gradient: Some(bad_gradient),
+                mode: RuntimeMode::Strict,
+                ..MinimizeOptions::default()
+            },
+        )
+        .expect("bfgs returns invalid-input result");
+
+        assert!(!result.success);
+        assert_eq!(result.status, ConvergenceStatus::InvalidInput);
+        assert!(result.message.contains("gradient callback returned length"));
+    }
+
+    #[test]
+    fn bfgs_exact_gradient_rejects_nonfinite_callback() {
+        fn nonfinite_gradient(x: &[f64]) -> Vec<f64> {
+            vec![f64::NAN; x.len()]
+        }
+
+        let result = bfgs(
+            &sphere,
+            &[2.0, -3.0],
+            MinimizeOptions {
+                method: Some(OptimizeMethod::Bfgs),
+                gradient: Some(nonfinite_gradient),
+                mode: RuntimeMode::Strict,
+                ..MinimizeOptions::default()
+            },
+        )
+        .expect("bfgs returns non-finite result");
+
+        assert!(!result.success);
+        assert_eq!(result.status, ConvergenceStatus::NanEncountered);
+        assert!(
+            result
+                .message
+                .contains("gradient callback returned NaN or Inf")
         );
     }
 

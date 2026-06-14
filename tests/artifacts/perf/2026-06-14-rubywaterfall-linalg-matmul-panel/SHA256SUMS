@@ -1,0 +1,7 @@
+eb799fd0b5fb6b1accc1133fb210e999d1f8e297183507ae324889eed726af43  tests/artifacts/perf/2026-06-14-rubywaterfall-linalg-matmul-panel/REJECT.md
+f03172cbe121fb04c0af795a28cf703dafd9e3e96359d0a42c761d4a1c4937b7  tests/artifacts/perf/2026-06-14-rubywaterfall-linalg-matmul-panel/after_confirm_768_vmi1227854_rch.txt
+eac485b9929182a9d5713f6fb9a6c6938363877c435ddcb341b28e91ee8ce79b  tests/artifacts/perf/2026-06-14-rubywaterfall-linalg-matmul-panel/after_matmul_vmi1227854_rch.txt
+09347b3b233f7fc1318080b9030b3250550ab1ea7c570c72d3a6ba1d5d034df2  tests/artifacts/perf/2026-06-14-rubywaterfall-linalg-matmul-panel/baseline_matmul_vmi1227854_rch.txt
+262bf192da053d3001cfa1886e44334a5355b2733610941fa9decbeeb17489ee  tests/artifacts/perf/2026-06-14-rubywaterfall-linalg-matmul-panel/proof_matmul_flat_rch.txt
+15d2ba50d366630c512d3364092fe3c142dca8f780dbac3be2b10c68ec33824d  tests/artifacts/perf/2026-06-14-rubywaterfall-linalg-matmul-panel/proof_matmul_golden_rch.txt
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  tests/artifacts/perf/2026-06-14-rubywaterfall-linalg-matmul-panel/rustfmt_linalg_lib_check.txt

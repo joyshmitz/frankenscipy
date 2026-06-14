@@ -74,6 +74,17 @@ fn bench_bfgs(c: &mut Criterion) {
             },
         );
         group.bench_with_input(
+            BenchmarkId::new("rosenbrock_exact_gradient", dim),
+            &(x0.clone()),
+            |b, x0| {
+                b.iter(|| {
+                    let mut options = opts(OptimizeMethod::Bfgs);
+                    options.gradient = Some(rosenbrock_gradient);
+                    let _ = bfgs(&rosenbrock, x0, options);
+                });
+            },
+        );
+        group.bench_with_input(
             BenchmarkId::new("quadratic", dim),
             &(x0.clone()),
             |b, x0| {
