@@ -2179,6 +2179,177 @@ pub fn mini_batch_kmeans(
     })
 }
 
+/// Result of [`gaussian_mixture`], mirroring `sklearn.mixture.GaussianMixture`.
+#[derive(Debug, Clone)]
+pub struct GmmResult {
+    /// Mixture weights `π_k` (length k, sum to 1).
+    pub weights: Vec<f64>,
+    /// Component means `μ_k` (k×d).
+    pub means: Vec<Vec<f64>>,
+    /// Per-component diagonal covariances `σ²_k` (k×d).
+    pub covariances: Vec<Vec<f64>>,
+    /// Posterior responsibilities `γ_{ik}` (n×k), each row sums to 1.
+    pub responsibilities: Vec<Vec<f64>>,
+    /// Hard cluster labels `argmax_k γ_{ik}` (length n).
+    pub labels: Vec<usize>,
+    /// Final average log-likelihood per sample.
+    pub log_likelihood: f64,
+    /// EM iterations performed.
+    pub n_iter: usize,
+}
+
+/// Gaussian Mixture Model with diagonal covariances, fit by expectation-maximization.
+///
+/// Matches `sklearn.mixture.GaussianMixture(covariance_type="diag")`: fits
+/// `p(x) = Σ_k π_k·N(x | μ_k, diag(σ²_k))` by EM. The E-step forms posterior responsibilities
+/// `γ_{ik}` from the per-component diagonal-Gaussian log-density (combined with a numerically
+/// stable log-sum-exp); the M-step re-estimates weights, means and diagonal variances as the
+/// responsibility-weighted moments. Means are seeded by k-means++ (see [`kmeans`]); iterates
+/// until the mean log-likelihood gain drops below `tol` or `max_iter`. `reg_covar` (≥0) is added
+/// to every variance for numerical stability. Returns the parameters, soft responsibilities and
+/// the hard `argmax` labels. Deterministic by `seed`.
+pub fn gaussian_mixture(
+    data: &[Vec<f64>],
+    n_components: usize,
+    max_iter: usize,
+    tol: f64,
+    reg_covar: f64,
+    seed: u64,
+) -> Result<GmmResult, ClusterError> {
+    if data.is_empty() || data[0].is_empty() {
+        return Err(ClusterError::EmptyData);
+    }
+    let n = data.len();
+    let d = data[0].len();
+    if data.iter().any(|row| row.len() != d) {
+        return Err(ClusterError::InvalidArgument(
+            "all rows must have the same length".to_string(),
+        ));
+    }
+    let k = n_components;
+    if k == 0 || k > n {
+        return Err(ClusterError::InvalidArgument(format!(
+            "n_components={k} must be in [1, n={n}]"
+        )));
+    }
+    if !(reg_covar.is_finite() && reg_covar >= 0.0) {
+        return Err(ClusterError::InvalidArgument(
+            "reg_covar must be finite and non-negative".to_string(),
+        ));
+    }
+    if data.iter().flatten().any(|v| !v.is_finite()) {
+        return Err(ClusterError::InvalidArgument(
+            "data must be finite".to_string(),
+        ));
+    }
+
+    const FLOOR: f64 = 1e-12;
+    // Initialize: k-means++ means, uniform weights, global per-feature variance.
+    let mut means = kmeans_plusplus_init(data, k, seed);
+    let global_mean: Vec<f64> = (0..d)
+        .map(|j| data.iter().map(|r| r[j]).sum::<f64>() / n as f64)
+        .collect();
+    let global_var: Vec<f64> = (0..d)
+        .map(|j| {
+            data.iter().map(|r| (r[j] - global_mean[j]).powi(2)).sum::<f64>() / n as f64 + reg_covar
+        })
+        .collect();
+    let mut covariances = vec![global_var.clone(); k];
+    let mut weights = vec![1.0 / k as f64; k];
+
+    let half_log_2pi = 0.5 * (2.0 * std::f64::consts::PI).ln();
+    let mut resp = vec![vec![0.0f64; k]; n];
+    let mut log_likelihood = f64::NEG_INFINITY;
+    let mut old_ll = f64::NEG_INFINITY;
+    let mut iters = 0;
+
+    for it in 0..max_iter.max(1) {
+        iters = it + 1;
+        // Precompute per-component log-weight and −½Σ log(2π σ²) normalizer.
+        let mut log_norm = vec![0.0f64; k];
+        for c in 0..k {
+            let mut s = weights[c].max(FLOOR).ln();
+            for &cov in &covariances[c] {
+                s -= half_log_2pi + 0.5 * cov.max(FLOOR).ln();
+            }
+            log_norm[c] = s;
+        }
+
+        // E-step: responsibilities + total log-likelihood (log-sum-exp per point).
+        let mut total_ll = 0.0;
+        for (i, row) in data.iter().enumerate() {
+            let mut logp = vec![0.0f64; k];
+            let mut maxlp = f64::NEG_INFINITY;
+            for c in 0..k {
+                let mut s = log_norm[c];
+                for j in 0..d {
+                    let diff = row[j] - means[c][j];
+                    s -= 0.5 * diff * diff / covariances[c][j].max(FLOOR);
+                }
+                logp[c] = s;
+                if s > maxlp {
+                    maxlp = s;
+                }
+            }
+            let mut sumexp = 0.0;
+            for lp in logp.iter_mut() {
+                *lp = (*lp - maxlp).exp();
+                sumexp += *lp;
+            }
+            let lse = maxlp + sumexp.ln();
+            total_ll += lse;
+            let inv = 1.0 / sumexp;
+            for c in 0..k {
+                resp[i][c] = logp[c] * inv;
+            }
+        }
+        log_likelihood = total_ll / n as f64;
+        if (log_likelihood - old_ll).abs() < tol {
+            break;
+        }
+        old_ll = log_likelihood;
+
+        // M-step: weighted moments.
+        for c in 0..k {
+            let nk: f64 = resp.iter().map(|r| r[c]).sum::<f64>().max(FLOOR);
+            weights[c] = nk / n as f64;
+            for j in 0..d {
+                let mut mean = 0.0;
+                for (i, row) in data.iter().enumerate() {
+                    mean += resp[i][c] * row[j];
+                }
+                mean /= nk;
+                means[c][j] = mean;
+                let mut var = 0.0;
+                for (i, row) in data.iter().enumerate() {
+                    var += resp[i][c] * (row[j] - mean).powi(2);
+                }
+                covariances[c][j] = var / nk + reg_covar;
+            }
+        }
+    }
+
+    let labels: Vec<usize> = resp
+        .iter()
+        .map(|r| {
+            r.iter()
+                .enumerate()
+                .max_by(|a, b| a.1.total_cmp(b.1))
+                .map_or(0, |(c, _)| c)
+        })
+        .collect();
+
+    Ok(GmmResult {
+        weights,
+        means,
+        covariances,
+        responsibilities: resp,
+        labels,
+        log_likelihood,
+        n_iter: iters,
+    })
+}
+
 /// Vector quantization: assign each observation to the nearest centroid.
 ///
 /// Matches `scipy.cluster.vq.vq`.
@@ -5321,6 +5492,71 @@ mod tests {
         assert!(ppca(&[], 2, 1).is_err());
         assert!(ppca(&x, 0, 1).is_err());
         assert!(ppca(&x, d + 1, 1).is_err());
+    }
+
+    #[test]
+    fn gaussian_mixture_recovers_separated_gaussians() {
+        let mut s: u64 = 0x6a09_e667_f3bc_c908;
+        let mut gauss = || {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let u1 = ((s >> 11) as f64) / (1u64 << 53) as f64 + 1e-12;
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let u2 = ((s >> 11) as f64) / (1u64 << 53) as f64;
+            (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()
+        };
+        // Three well-separated 2-D Gaussians (σ≈0.4) at distinct centers.
+        let centers = [[0.0, 0.0], [10.0, 0.0], [5.0, 9.0]];
+        let per = 80usize;
+        let mut data = Vec::new();
+        let mut truth = Vec::new();
+        for (c, ctr) in centers.iter().enumerate() {
+            for _ in 0..per {
+                data.push(vec![ctr[0] + 0.4 * gauss(), ctr[1] + 0.4 * gauss()]);
+                truth.push(c);
+            }
+        }
+        let n = data.len();
+
+        let gmm = gaussian_mixture(&data, 3, 200, 1e-6, 1e-6, 7).expect("gmm");
+        assert_eq!(gmm.weights.len(), 3);
+        assert_eq!(gmm.means.len(), 3);
+        assert_eq!(gmm.means[0].len(), 2);
+        assert_eq!(gmm.responsibilities.len(), n);
+        assert!(gmm.log_likelihood.is_finite());
+        assert!((gmm.weights.iter().sum::<f64>() - 1.0).abs() < 1e-9);
+        for w in &gmm.weights {
+            assert!((w - 1.0 / 3.0).abs() < 0.05, "weight {w} should be ~1/3");
+        }
+        // Each row of responsibilities sums to 1.
+        for r in &gmm.responsibilities {
+            assert!((r.iter().sum::<f64>() - 1.0).abs() < 1e-9);
+        }
+        // Hard labels separate the blobs (purity 1.0).
+        let mut correct = 0usize;
+        for pred in 0..3 {
+            let mut counts = vec![0usize; 3];
+            for i in 0..n {
+                if gmm.labels[i] == pred {
+                    counts[truth[i]] += 1;
+                }
+            }
+            correct += counts.iter().copied().max().unwrap_or(0);
+        }
+        assert_eq!(correct, n, "GMM should perfectly separate the Gaussians");
+        // Each recovered mean is close to one true center.
+        for ctr in &centers {
+            let best = gmm
+                .means
+                .iter()
+                .map(|m| (m[0] - ctr[0]).powi(2) + (m[1] - ctr[1]).powi(2))
+                .fold(f64::INFINITY, f64::min);
+            assert!(best < 0.25, "no recovered mean near center {ctr:?}");
+        }
+
+        assert!(gaussian_mixture(&[], 2, 10, 1e-3, 1e-6, 1).is_err());
+        assert!(gaussian_mixture(&data, 0, 10, 1e-3, 1e-6, 1).is_err());
+        assert!(gaussian_mixture(&data, n + 1, 10, 1e-3, 1e-6, 1).is_err());
+        assert!(gaussian_mixture(&data, 2, 10, 1e-3, -1.0, 1).is_err()); // reg_covar < 0
     }
 
     #[test]
