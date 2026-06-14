@@ -71,7 +71,11 @@ fn max_diag_jtj(jac: &[Vec<f64>]) -> f64 {
         for row in jac {
             diag += row[j] * row[j];
         }
-        max_val = if max_val.is_nan() || diag.is_nan() { f64::NAN } else { max_val.max(diag) };
+        max_val = if max_val.is_nan() || diag.is_nan() {
+            f64::NAN
+        } else {
+            max_val.max(diag)
+        };
     }
     max_val
 }
@@ -220,7 +224,9 @@ fn main() {
     let m = 1600usize;
     let mut s: u64 = 0x9e3779b97f4a7c15;
     let mut rng = || {
-        s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        s = s
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         ((s >> 33) as f64) / (1u64 << 31) as f64
     };
     let basis: Vec<Vec<f64>> = (0..m)
@@ -245,13 +251,18 @@ fn main() {
             .collect()
     };
     // Bad start: wrong sign + scale → many rejected steps before convergence.
-    let x0: Vec<f64> = (0..n).map(|i| if i % 3 == 0 { -1.5 } else { 0.8 }).collect();
+    let x0: Vec<f64> = (0..n)
+        .map(|i| if i % 3 == 0 { -1.5 } else { 0.8 })
+        .collect();
     let max_nfev = 400;
 
     // Verify byte-identical trajectory/result between the two variants.
     let (xo, nit_o, rej_o) = run_lm(&residuals, &x0, max_nfev, false);
     let (xc, nit_c, rej_c) = run_lm(&residuals, &x0, max_nfev, true);
-    let bits_match = xo.iter().zip(xc.iter()).all(|(a, b)| a.to_bits() == b.to_bits());
+    let bits_match = xo
+        .iter()
+        .zip(xc.iter())
+        .all(|(a, b)| a.to_bits() == b.to_bits());
     println!(
         "trajectory: OLD nit={nit_o} rejects={rej_o} | NEW nit={nit_c} rejects={rej_c} | bit-identical result={bits_match}"
     );

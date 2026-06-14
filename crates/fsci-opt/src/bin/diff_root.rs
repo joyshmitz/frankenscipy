@@ -21,7 +21,7 @@ fn main() {
             method: m,
             ..Default::default()
         };
-        match root(&f1, &[2.0, 0.5], o) {
+        match root(f1, &[2.0, 0.5], o) {
             Ok(r) => println!(
                 "s1_{mn},x,{:?},conv,{},resid,{:.2e}",
                 r.x,
@@ -34,7 +34,7 @@ fn main() {
             method: m,
             ..Default::default()
         };
-        match root(&f2, &[1.5, 1.5, 0.5], o2) {
+        match root(f2, &[1.5, 1.5, 0.5], o2) {
             Ok(r) => println!(
                 "s2_{mn},x,{:?},conv,{},resid,{:.2e}",
                 r.x,

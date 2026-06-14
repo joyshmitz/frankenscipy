@@ -2,7 +2,7 @@
 // minimize(TrustExact) on a reject-heavy high-dimensional Rosenbrock and prints the
 // converged point (as bits) plus eval counts. Run once on the cached (NEW) build and once
 // on the stashed (OLD) build: x must be bit-identical; nfev/njev are the speedup.
-use fsci_opt::{minimize, MinimizeOptions, OptimizeMethod};
+use fsci_opt::{MinimizeOptions, OptimizeMethod, minimize};
 
 fn rosenbrock_nd(x: &[f64]) -> f64 {
     let mut acc = 0.0;
@@ -37,22 +37,29 @@ fn run(name: &str, f: fn(&[f64]) -> f64, x0: &[f64], opt: &[f64]) {
         ..MinimizeOptions::default()
     };
     let r = minimize(f, x0, options).expect("minimize");
-    let dist: f64 = r
-        .x
-        .iter()
-        .zip(opt.iter())
-        .map(|(a, b)| (a - b) * (a - b))
-        .sum::<f64>()
-        .sqrt();
+    let dist: f64 =
+        r.x.iter()
+            .zip(opt.iter())
+            .map(|(a, b)| (a - b) * (a - b))
+            .sum::<f64>()
+            .sqrt();
     println!(
         "{name}: nfev={} njev={} nhev={} fun={:.10e} dist_to_opt={:.4e}",
-        r.nfev, r.njev, r.nhev, r.fun.unwrap_or(f64::NAN), dist
+        r.nfev,
+        r.njev,
+        r.nhev,
+        r.fun.unwrap_or(f64::NAN),
+        dist
     );
 }
 
 fn main() {
-    let rb10: Vec<f64> = (0..10).map(|i| if i % 2 == 0 { -1.5 } else { 1.7 }).collect();
-    let rb20: Vec<f64> = (0..20).map(|i| if i % 2 == 0 { -1.5 } else { 1.7 }).collect();
+    let rb10: Vec<f64> = (0..10)
+        .map(|i| if i % 2 == 0 { -1.5 } else { 1.7 })
+        .collect();
+    let rb20: Vec<f64> = (0..20)
+        .map(|i| if i % 2 == 0 { -1.5 } else { 1.7 })
+        .collect();
     let pw: Vec<f64> = (0..12)
         .map(|i| match i % 4 {
             0 => 3.0,

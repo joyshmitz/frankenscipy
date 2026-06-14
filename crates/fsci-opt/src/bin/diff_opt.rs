@@ -5,9 +5,12 @@ use fsci_opt::{
     bisect, brenth, brentq, isotonic_regression, linear_sum_assignment, nnls, ridder, toms748,
 };
 
+type RootProb = (&'static str, fn(f64) -> f64, (f64, f64));
+type IsoCase = (&'static str, Vec<f64>, Option<Vec<f64>>);
+
 fn main() {
     // ---- root finders on several functions/brackets ----
-    let probs: Vec<(&str, fn(f64) -> f64, (f64, f64))> = vec![
+    let probs: Vec<RootProb> = vec![
         ("cubic", |x| x * x * x - 2.0 * x - 5.0, (2.0, 3.0)),
         ("cos_x", |x| x.cos() - x, (0.0, 1.0)),
         ("exp", |x| (-x).exp() - x, (0.0, 1.0)),
@@ -16,19 +19,19 @@ fn main() {
     ];
     for (name, f, br) in &probs {
         let o = RootOptions::default();
-        if let Ok(r) = brentq(f, *br, o.clone()) {
+        if let Ok(r) = brentq(f, *br, o) {
             println!("brentq,{name},{:.17e}", r.root);
         }
-        if let Ok(r) = brenth(f, *br, o.clone()) {
+        if let Ok(r) = brenth(f, *br, o) {
             println!("brenth,{name},{:.17e}", r.root);
         }
-        if let Ok(r) = ridder(f, *br, o.clone()) {
+        if let Ok(r) = ridder(f, *br, o) {
             println!("ridder,{name},{:.17e}", r.root);
         }
-        if let Ok(r) = toms748(f, *br, o.clone()) {
+        if let Ok(r) = toms748(f, *br, o) {
             println!("toms748,{name},{:.17e}", r.root);
         }
-        if let Ok(r) = bisect(f, *br, o.clone()) {
+        if let Ok(r) = bisect(f, *br, o) {
             println!("bisect,{name},{:.17e}", r.root);
         }
     }
@@ -65,7 +68,7 @@ fn main() {
     }
 
     // ---- isotonic_regression ----
-    let ys: Vec<(&str, Vec<f64>, Option<Vec<f64>>)> = vec![
+    let ys: Vec<IsoCase> = vec![
         ("iso1", vec![3.0, 1.0, 4.0, 1.0, 5.0, 9.0, 2.0, 6.0], None),
         (
             "iso_w",
