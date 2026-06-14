@@ -12009,6 +12009,57 @@ pub fn dlsim(system: &Dlti, u: &[f64], zi: Option<&[f64]>) -> Result<Vec<f64>, S
     system.dlsim(u, zi)
 }
 
+/// Left-pad numerator to the denominator length so the transfer function is
+/// expressed with matching powers — the state-space convention used by
+/// `scipy.signal.dstep`/`dimpulse` (a strictly-proper system then has `y[0] == 0`).
+fn left_pad_num(num: &[f64], den_len: usize) -> Result<Vec<f64>, SignalError> {
+    if num.len() > den_len {
+        return Err(SignalError::InvalidArgument(
+            "improper system: numerator degree exceeds denominator".to_string(),
+        ));
+    }
+    let mut padded = vec![0.0; den_len - num.len()];
+    padded.extend_from_slice(num);
+    Ok(padded)
+}
+
+/// Step response of a discrete-time LTI system.
+///
+/// Matches `scipy.signal.dstep(system, n=...)` for the single-input/single-output
+/// case. Returns `(tout, yout)` where `tout[k] = k * dt` and `yout` is the response
+/// to a unit step. `n` defaults to 100. Unlike [`Dlti::step`] (which applies the
+/// raw `lfilter` convention), this uses the state-space alignment scipy applies via
+/// `dlsim`, so a strictly-proper system yields `yout[0] == 0`.
+pub fn dstep(system: &Dlti, n: Option<usize>) -> Result<(Vec<f64>, Vec<f64>), SignalError> {
+    let n = n.unwrap_or(100);
+    let tout: Vec<f64> = (0..n).map(|k| k as f64 * system.dt).collect();
+    if n == 0 {
+        return Ok((tout, Vec::new()));
+    }
+    let num = left_pad_num(&system.num, system.den.len())?;
+    let u = vec![1.0; n];
+    let yout = lfilter(&num, &system.den, &u, None)?;
+    Ok((tout, yout))
+}
+
+/// Impulse response of a discrete-time LTI system.
+///
+/// Matches `scipy.signal.dimpulse(system, n=...)` for the SISO case. Returns
+/// `(tout, yout)` where `yout` is the response to a unit impulse. `n` defaults to
+/// 100. Uses the same state-space alignment as [`dstep`].
+pub fn dimpulse(system: &Dlti, n: Option<usize>) -> Result<(Vec<f64>, Vec<f64>), SignalError> {
+    let n = n.unwrap_or(100);
+    let tout: Vec<f64> = (0..n).map(|k| k as f64 * system.dt).collect();
+    if n == 0 {
+        return Ok((tout, Vec::new()));
+    }
+    let num = left_pad_num(&system.num, system.den.len())?;
+    let mut u = vec![0.0; n];
+    u[0] = 1.0;
+    let yout = lfilter(&num, &system.den, &u, None)?;
+    Ok((tout, yout))
+}
+
 // ═══════════════════════════════════════════════════════════════════
 // LTI Helper Functions
 // ═══════════════════════════════════════════════════════════════════
@@ -13630,6 +13681,30 @@ mod tests {
                 "iir a {g} vs {w}"
             );
         }
+    }
+
+    #[test]
+    fn dstep_dimpulse_match_scipy() {
+        // scipy.signal.dlti([1,0],[1,-0.5,0.06], dt=0.1)
+        let sys = Dlti::new(vec![1.0, 0.0], vec![1.0, -0.5, 0.06], 0.1).unwrap();
+        let (t, y) = dstep(&sys, Some(8)).unwrap();
+        let wt = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7];
+        let wy = [0.0, 1.0, 1.5, 1.69, 1.755, 1.7761, 1.78275, 1.784809];
+        for (g, w) in t.iter().zip(wt.iter()) {
+            assert!((g - w).abs() <= 1e-12, "dstep t {g} vs {w}");
+        }
+        for (g, w) in y.iter().zip(wy.iter()) {
+            assert!((g - w).abs() <= 1e-9, "dstep y {g} vs {w}");
+        }
+        let (_, yi) = dimpulse(&sys, Some(8)).unwrap();
+        let wyi = [0.0, 1.0, 0.5, 0.19, 0.065, 0.0211, 0.00665, 0.002059];
+        for (g, w) in yi.iter().zip(wyi.iter()) {
+            assert!((g - w).abs() <= 1e-9, "dimpulse y {g} vs {w}");
+        }
+        // default n == 100
+        let (t100, y100) = dstep(&sys, None).unwrap();
+        assert_eq!(t100.len(), 100);
+        assert_eq!(y100.len(), 100);
     }
 
     #[test]
