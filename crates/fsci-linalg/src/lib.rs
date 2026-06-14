@@ -3618,6 +3618,93 @@ pub fn svdvals(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<f64>, Linal
     Ok(s)
 }
 
+/// Transpose a row-major matrix.
+fn transpose_rows(a: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    let cols = a.first().map_or(0, Vec::len);
+    (0..cols).map(|j| a.iter().map(|row| row[j]).collect()).collect()
+}
+
+/// Truncated SVD of `a` (m×n) via randomized range finding (Halko–Martinsson–Tropp).
+///
+/// Returns the leading `k` singular triplet `(U: m×k, s: k descending, Vᵀ: k×n)`. The cost
+/// is O(m·n·l + (m+n)·l²) with `l = k + n_oversamples`, versus the full SVD's
+/// O(m·n·min(m,n)) — a large win when `k ≪ min(m,n)`. `n_iter` subspace (power) iterations
+/// sharpen accuracy when the spectrum decays slowly. The Gaussian sketch is a deterministic
+/// SplitMix64 + Box–Muller stream seeded by `seed`, so the result is reproducible. This is
+/// an APPROXIMATE decomposition (the point of randomization): the returned singular values
+/// match the exact leading `k` to within the random subspace error, which `n_iter ≥ 1`
+/// drives toward machine precision for well-separated spectra. Reuses the crate's own
+/// parallel register-blocked `matmul`, `qr`, and `svd` — no external BLAS.
+pub fn randomized_svd(
+    a: &[Vec<f64>],
+    k: usize,
+    n_oversamples: usize,
+    n_iter: usize,
+    seed: u64,
+) -> Result<SvdResult, LinalgError> {
+    let (m, n) = matrix_shape(a)?;
+    let kk = k.min(m).min(n);
+    if kk == 0 {
+        return Ok(SvdResult {
+            u: vec![Vec::new(); m],
+            s: Vec::new(),
+            vt: Vec::new(),
+        });
+    }
+    let l = (kk + n_oversamples).min(m).min(n);
+    let opts = DecompOptions::default();
+
+    // Deterministic standard-normal stream (SplitMix64 → Box–Muller), so the sketch — and
+    // hence the whole decomposition — is reproducible for a given `seed`.
+    let mut state = seed ^ 0x9e37_79b9_7f4a_7c15;
+    let mut draw_u01 = || -> f64 {
+        state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^= z >> 31;
+        // Map to (0, 1): the +1 offsets keep the log in Box–Muller finite.
+        ((z >> 11) as f64 + 1.0) / ((1u64 << 53) as f64 + 2.0)
+    };
+    let mut next_gauss = move || -> f64 {
+        let u1 = draw_u01();
+        let u2 = draw_u01();
+        (-2.0 * u1.ln()).sqrt() * (std::f64::consts::TAU * u2).cos()
+    };
+    let omega: Vec<Vec<f64>> = (0..n)
+        .map(|_| (0..l).map(|_| next_gauss()).collect())
+        .collect();
+
+    // Range finder: Y = (A Aᵀ)^{n_iter} A Ω  (m×l), then orthonormalise.
+    let at = transpose_rows(a);
+    let mut y = matmul(a, &omega)?;
+    for _ in 0..n_iter {
+        let aty = matmul(&at, &y)?; // n×l
+        y = matmul(a, &aty)?; // m×l
+    }
+    let q_full = qr(&y, opts)?.q;
+    // Keep the first `l` orthonormal columns (qr may return a full m×m Q).
+    let q: Vec<Vec<f64>> = q_full
+        .iter()
+        .map(|row| row[..l.min(row.len())].to_vec())
+        .collect();
+
+    // Project: B = Qᵀ A (l×n), then SVD the small matrix and lift U back.
+    let qt = transpose_rows(&q);
+    let b = matmul(&qt, a)?;
+    let svd_b = svd(&b, opts)?;
+    let u_full = matmul(&q, &svd_b.u)?; // m×min(l,n)
+
+    let trunc = kk.min(svd_b.s.len());
+    let u: Vec<Vec<f64>> = u_full
+        .iter()
+        .map(|row| row[..trunc.min(row.len())].to_vec())
+        .collect();
+    let s = svd_b.s[..trunc].to_vec();
+    let vt = svd_b.vt[..trunc].to_vec();
+    Ok(SvdResult { u, s, vt })
+}
+
 /// Cholesky decomposition for symmetric positive-definite matrices: A = LLᵀ.
 ///
 /// If `lower` is true (default), returns L such that A = LLᵀ.
@@ -17210,6 +17297,57 @@ mod tests {
         );
         println!("speedup={:.6}", rowwise_ms / workspace_ms);
         println!("BIDIAG_RIGHT_WORKSPACE_PERF_END");
+    }
+
+    #[test]
+    fn randomized_svd_matches_full_svd_on_low_rank() {
+        // When the sketch dimension l = k + oversamples exceeds the true rank r, the random
+        // range finder captures the entire column space, so the leading-k singular triplet
+        // matches the full SVD to rounding. Also checks the rank-k reconstruction error.
+        let mut s: u64 = 0x0123_4567_89ab_cdef;
+        let mut rng = || {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((s >> 11) as f64) / (1u64 << 53) as f64 - 0.5
+        };
+        let (m, n, r, k) = (80usize, 60usize, 12usize, 6usize);
+        let bm: Vec<Vec<f64>> = (0..m).map(|_| (0..r).map(|_| rng()).collect()).collect();
+        let cm: Vec<Vec<f64>> = (0..r).map(|_| (0..n).map(|_| rng()).collect()).collect();
+        let a: Vec<Vec<f64>> = bm
+            .iter()
+            .map(|bi| {
+                (0..n)
+                    .map(|j| (0..r).map(|t| bi[t] * cm[t][j]).sum::<f64>())
+                    .collect()
+            })
+            .collect();
+
+        let full = svd(&a, DecompOptions::default()).expect("full svd");
+        let rsvd = randomized_svd(&a, k, 8, 2, 7).expect("randomized_svd");
+        assert_eq!(rsvd.s.len(), k);
+        assert_eq!(rsvd.u.len(), m);
+        assert_eq!(rsvd.u[0].len(), k);
+        assert_eq!(rsvd.vt.len(), k);
+        assert_eq!(rsvd.vt[0].len(), n);
+        for i in 0..k {
+            assert!(
+                (rsvd.s[i] - full.s[i]).abs() < 1e-8 * full.s[0],
+                "singular value {i}: rsvd {} vs full {}",
+                rsvd.s[i],
+                full.s[i]
+            );
+        }
+        // Reconstruct the rank-k approximation U·diag(s)·Vᵀ and compare to the exact
+        // truncation built from the full SVD.
+        for row in 0..m {
+            for col in 0..n {
+                let approx: f64 = (0..k).map(|t| rsvd.u[row][t] * rsvd.s[t] * rsvd.vt[t][col]).sum();
+                let exact: f64 = (0..k).map(|t| full.u[row][t] * full.s[t] * full.vt[t][col]).sum();
+                assert!(
+                    (approx - exact).abs() < 1e-7 * (1.0 + exact.abs()),
+                    "reconstruction[{row}][{col}]: {approx} vs {exact}"
+                );
+            }
+        }
     }
 
     #[test]
