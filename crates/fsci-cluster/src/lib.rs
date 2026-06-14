@@ -904,6 +904,96 @@ pub fn factor_analysis(
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Probabilistic PCA (Tipping–Bishop, closed form)
+// ══════════════════════════════════════════════════════════════════════
+
+/// Result of [`ppca`].
+#[derive(Debug, Clone)]
+pub struct PpcaResult {
+    /// Factor-loading matrix `W` (k×d): `W_i = √max(λ_i − σ², 0)·V_i`.
+    pub components: Vec<Vec<f64>>,
+    /// Isotropic noise variance `σ²` (the mean of the discarded covariance eigenvalues).
+    pub noise_variance: f64,
+    /// The leading k covariance eigenvalues `λ_i` (descending).
+    pub explained_variance: Vec<f64>,
+    /// Per-feature mean removed before fitting (length d).
+    pub mean: Vec<f64>,
+}
+
+/// Probabilistic PCA (Tipping–Bishop) — the maximum-likelihood factor model with *isotropic*
+/// noise, `x = W·z + μ + ε`, `ε ~ N(0, σ²I)`.
+///
+/// Unlike [`factor_analysis`] (diagonal noise, solved by EM) PPCA has a closed-form ML
+/// solution: with the top-`k` covariance eigenpairs `(λ_i, v_i)`, the noise variance is the
+/// mean of the *discarded* eigenvalues `σ² = (tr Σ − Σ_{i<k} λ_i)/(d − k)` and the loadings are
+/// `W_i = √max(λ_i − σ², 0)·v_i`. The eigenpairs come from one [`fsci_linalg::randomized_svd`]
+/// of the centered data (O(n·d·k)) instead of a full O(n·d·min) SVD — and the trace is just the
+/// summed feature variances — so no eigendecomposition of the full covariance is ever formed.
+/// `n_components` must be in `[1, min(n, d)]`; deterministic by `seed`.
+pub fn ppca(x: &[Vec<f64>], n_components: usize, seed: u64) -> Result<PpcaResult, ClusterError> {
+    if x.is_empty() || x[0].is_empty() {
+        return Err(ClusterError::EmptyData);
+    }
+    let n = x.len();
+    let d = x[0].len();
+    if x.iter().any(|row| row.len() != d) {
+        return Err(ClusterError::InvalidArgument(
+            "all rows must have the same length".to_string(),
+        ));
+    }
+    if n_components == 0 || n_components > n.min(d) {
+        return Err(ClusterError::InvalidArgument(format!(
+            "n_components={n_components} must be in [1, min(n,d)={}]",
+            n.min(d)
+        )));
+    }
+    if x.iter().flatten().any(|v| !v.is_finite()) {
+        return Err(ClusterError::InvalidArgument("x must be finite".to_string()));
+    }
+
+    let mean: Vec<f64> = (0..d)
+        .map(|j| x.iter().map(|r| r[j]).sum::<f64>() / n as f64)
+        .collect();
+    let xc: Vec<Vec<f64>> = x
+        .iter()
+        .map(|r| (0..d).map(|j| r[j] - mean[j]).collect())
+        .collect();
+    // Total variance = trace(covariance) = Σ_j var_j.
+    let total_var: f64 = (0..d)
+        .map(|j| xc.iter().map(|r| r[j] * r[j]).sum::<f64>() / n as f64)
+        .sum();
+
+    let svd = fsci_linalg::randomized_svd(&xc, n_components, 10, 4, seed)
+        .map_err(|e| ClusterError::InvalidArgument(format!("randomized_svd: {e}")))?;
+    let kk = svd.s.len();
+    // Covariance eigenvalues λ_i = σ_i² / n. randomized_svd returns singular values descending.
+    let explained_variance: Vec<f64> = svd.s.iter().map(|&s| s * s / n as f64).collect();
+    let sum_top: f64 = explained_variance.iter().sum();
+
+    // σ² = mean of the discarded eigenvalues (0 when k captures the full dimension).
+    let noise_variance = if d > kk {
+        ((total_var - sum_top) / (d - kk) as f64).max(0.0)
+    } else {
+        0.0
+    };
+
+    // W_i = √max(λ_i − σ², 0) · V_i (k×d).
+    let components: Vec<Vec<f64>> = (0..kk)
+        .map(|i| {
+            let scale = (explained_variance[i] - noise_variance).max(0.0).sqrt();
+            svd.vt[i].iter().map(|&v| scale * v).collect()
+        })
+        .collect();
+
+    Ok(PpcaResult {
+        components,
+        noise_variance,
+        explained_variance,
+        mean,
+    })
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Nyström kernel approximation (column sampling)
 // ══════════════════════════════════════════════════════════════════════
 
@@ -4162,6 +4252,70 @@ mod tests {
         assert!(cur_decomposition(&[], 2, 5, 1).is_err());
         assert!(cur_decomposition(&a, 0, 5, 1).is_err());
         assert!(cur_decomposition(&a, m + 1, 5, 1).is_err());
+    }
+
+    #[test]
+    fn ppca_recovers_isotropic_noise_and_covariance() {
+        let mut s: u64 = 0x5151_2323_8989_abab;
+        let mut gauss = || {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let u1 = ((s >> 11) as f64) / (1u64 << 53) as f64 + 1e-12;
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let u2 = ((s >> 11) as f64) / (1u64 << 53) as f64;
+            (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()
+        };
+        let (n, d, k) = (6000usize, 8usize, 3usize);
+        let load: Vec<Vec<f64>> = (0..k).map(|_| (0..d).map(|_| gauss()).collect()).collect();
+        let sigma = 0.5f64; // isotropic noise std
+        let x: Vec<Vec<f64>> = (0..n)
+            .map(|_| {
+                let z: Vec<f64> = (0..k).map(|_| gauss()).collect();
+                (0..d)
+                    .map(|j| (0..k).map(|t| z[t] * load[t][j]).sum::<f64>() + sigma * gauss())
+                    .collect()
+            })
+            .collect();
+
+        let p = ppca(&x, k, 5).expect("ppca");
+        assert_eq!(p.components.len(), k);
+        assert_eq!(p.components[0].len(), d);
+        assert_eq!(p.explained_variance.len(), k);
+        for w in p.explained_variance.windows(2) {
+            assert!(w[0] >= w[1] - 1e-9, "explained_variance descending");
+        }
+        // Recovered isotropic noise variance ≈ σ².
+        assert!(
+            (p.noise_variance - sigma * sigma).abs() < 0.05,
+            "noise_variance {} vs {}",
+            p.noise_variance,
+            sigma * sigma
+        );
+
+        // Model covariance C = Wᵀ W + σ²I ≈ sample covariance.
+        let mut samp = vec![vec![0.0; d]; d];
+        for row in &x {
+            for a in 0..d {
+                for b in 0..d {
+                    samp[a][b] += (row[a] - p.mean[a]) * (row[b] - p.mean[b]);
+                }
+            }
+        }
+        let mut maxerr = 0.0f64;
+        for a in 0..d {
+            for b in 0..d {
+                samp[a][b] /= n as f64;
+                let mut c: f64 = (0..k).map(|t| p.components[t][a] * p.components[t][b]).sum();
+                if a == b {
+                    c += p.noise_variance;
+                }
+                maxerr = maxerr.max((c - samp[a][b]).abs());
+            }
+        }
+        assert!(maxerr < 0.1, "covariance reconstruction maxerr {maxerr}");
+
+        assert!(ppca(&[], 2, 1).is_err());
+        assert!(ppca(&x, 0, 1).is_err());
+        assert!(ppca(&x, d + 1, 1).is_err());
     }
 
     #[test]
