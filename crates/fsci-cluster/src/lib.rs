@@ -770,6 +770,143 @@ pub fn truncated_svd(
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Factor Analysis (randomized EM)
+// ══════════════════════════════════════════════════════════════════════
+
+/// Result of [`factor_analysis`], mirroring `sklearn.decomposition.FactorAnalysis`.
+#[derive(Debug, Clone)]
+pub struct FactorAnalysisResult {
+    /// The `k×d` factor-loading matrix `W` (`components_`).
+    pub components: Vec<Vec<f64>>,
+    /// Per-feature noise variances `Ψ` (length d, `noise_variance_`).
+    pub noise_variance: Vec<f64>,
+    /// Per-feature mean removed before fitting (length d).
+    pub mean: Vec<f64>,
+    /// Final average log-likelihood of the model.
+    pub loglike: f64,
+    /// EM iterations performed.
+    pub n_iter: usize,
+}
+
+/// Factor Analysis via expectation-maximization with a randomized SVD inner solver.
+///
+/// Matches `sklearn.decomposition.FactorAnalysis(svd_method="randomized")`: fits the
+/// generative model `x = W·z + μ + ε`, `ε ~ N(0, diag(Ψ))`, by EM. Each iteration scales the
+/// centered data by `1/√Ψ` and takes its top-`k` SVD — here via [`fsci_linalg::randomized_svd`]
+/// (O(n·d·k) per step) rather than a full O(n·d·min(n,d)) SVD — to update the loadings `W` and
+/// noise variances `Ψ`. Iterates until the log-likelihood gain drops below `tol` or `max_iter`
+/// is reached. Returns `components_` (`W`, k×d) and `noise_variance_` (`Ψ`). Deterministic by
+/// `seed`.
+pub fn factor_analysis(
+    x: &[Vec<f64>],
+    n_components: usize,
+    max_iter: usize,
+    tol: f64,
+    seed: u64,
+) -> Result<FactorAnalysisResult, ClusterError> {
+    if x.is_empty() {
+        return Err(ClusterError::EmptyData);
+    }
+    let n = x.len();
+    let d = x[0].len();
+    if d == 0 {
+        return Err(ClusterError::EmptyData);
+    }
+    if x.iter().any(|row| row.len() != d) {
+        return Err(ClusterError::InvalidArgument(
+            "all rows must have the same length".to_string(),
+        ));
+    }
+    if n_components == 0 || n_components > n.min(d) {
+        return Err(ClusterError::InvalidArgument(format!(
+            "n_components={n_components} must be in [1, min(n,d)={}]",
+            n.min(d)
+        )));
+    }
+    if x.iter().flatten().any(|v| !v.is_finite()) {
+        return Err(ClusterError::InvalidArgument(
+            "x must be finite".to_string(),
+        ));
+    }
+
+    const SMALL: f64 = 1e-12;
+    let mean: Vec<f64> = (0..d)
+        .map(|j| x.iter().map(|r| r[j]).sum::<f64>() / n as f64)
+        .collect();
+    let xc: Vec<Vec<f64>> = x
+        .iter()
+        .map(|r| (0..d).map(|j| r[j] - mean[j]).collect())
+        .collect();
+    let var: Vec<f64> = (0..d)
+        .map(|j| xc.iter().map(|r| r[j] * r[j]).sum::<f64>() / n as f64)
+        .collect();
+
+    let nsqrt = (n as f64).sqrt();
+    let llconst = d as f64 * (2.0 * std::f64::consts::PI).ln() + n_components as f64;
+    let mut psi = vec![1.0f64; d];
+    let mut old_ll = f64::NEG_INFINITY;
+    let mut w: Vec<Vec<f64>> = vec![vec![0.0; d]; n_components];
+    let mut loglike = f64::NEG_INFINITY;
+    let mut iters = 0;
+
+    for it in 0..max_iter {
+        iters = it + 1;
+        let sqrt_psi: Vec<f64> = psi.iter().map(|&p| p.sqrt() + SMALL).collect();
+        // Xs = Xc / (sqrt_psi * nsqrt), columnwise.
+        let xs: Vec<Vec<f64>> = xc
+            .iter()
+            .map(|r| (0..d).map(|j| r[j] / (sqrt_psi[j] * nsqrt)).collect())
+            .collect();
+        let fro2: f64 = xs.iter().flatten().map(|v| v * v).sum();
+
+        let svd = fsci_linalg::randomized_svd(&xs, n_components, 10, 4, seed)
+            .map_err(|e| ClusterError::InvalidArgument(format!("randomized_svd: {e}")))?;
+        let kk = svd.s.len();
+        let s2: Vec<f64> = svd.s.iter().map(|&s| s * s).collect();
+        let cap2: f64 = s2.iter().sum();
+        let unexp_var = fro2 - cap2;
+
+        // W = sqrt(max(s^2 - 1, 0)) * Vt, then rescale by sqrt_psi (k×d).
+        for t in 0..kk {
+            let scale = (s2[t] - 1.0).max(0.0).sqrt();
+            for j in 0..d {
+                w[t][j] = scale * svd.vt[t][j] * sqrt_psi[j];
+            }
+        }
+        for t in kk..n_components {
+            for j in 0..d {
+                w[t][j] = 0.0;
+            }
+        }
+
+        // Average log-likelihood.
+        let log_s2: f64 = s2.iter().map(|&v| v.max(SMALL).ln()).sum();
+        let log_psi: f64 = psi.iter().map(|&p| p.ln()).sum();
+        let ll = -(d as f64) / 2.0 * (llconst + log_s2 + unexp_var + log_psi);
+        loglike = ll;
+
+        if ll - old_ll < tol {
+            break;
+        }
+        old_ll = ll;
+
+        // Update noise variances: psi = max(var - sum_t W[t]^2, SMALL).
+        for j in 0..d {
+            let wj2: f64 = (0..n_components).map(|t| w[t][j] * w[t][j]).sum();
+            psi[j] = (var[j] - wj2).max(SMALL);
+        }
+    }
+
+    Ok(FactorAnalysisResult {
+        components: w,
+        noise_variance: psi,
+        mean,
+        loglike,
+        n_iter: iters,
+    })
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // K-Means Clustering
 // ══════════════════════════════════════════════════════════════════════
 
@@ -3660,6 +3797,70 @@ mod tests {
         assert!(spectral_embedding(&[], 2, 1).is_err());
         assert!(spectral_embedding(&aff, 0, 1).is_err());
         assert!(spectral_embedding(&[vec![0.0, 1.0]], 1, 1).is_err()); // non-square
+    }
+
+    #[test]
+    fn factor_analysis_recovers_lowrank_plus_diagonal_covariance() {
+        let mut s: u64 = 0x0123_4567_89ab_cdef;
+        let mut gauss = || {
+            // Box–Muller from the LCG.
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let u1 = ((s >> 11) as f64) / (1u64 << 53) as f64 + 1e-12;
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let u2 = ((s >> 11) as f64) / (1u64 << 53) as f64;
+            (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()
+        };
+        let (n, d, k) = (4000usize, 8usize, 3usize);
+        // Loadings (k×d) and per-feature noise std.
+        let load: Vec<Vec<f64>> = (0..k).map(|_| (0..d).map(|_| gauss()).collect()).collect();
+        let noise_sd: Vec<f64> = (0..d).map(|j| 0.3 + 0.1 * j as f64).collect();
+        let x: Vec<Vec<f64>> = (0..n)
+            .map(|_| {
+                let z: Vec<f64> = (0..k).map(|_| gauss()).collect();
+                (0..d)
+                    .map(|j| (0..k).map(|t| z[t] * load[t][j]).sum::<f64>() + noise_sd[j] * gauss())
+                    .collect()
+            })
+            .collect();
+
+        let fa = factor_analysis(&x, k, 1000, 1e-4, 5).expect("factor_analysis");
+        assert_eq!(fa.components.len(), k);
+        assert_eq!(fa.components[0].len(), d);
+        assert_eq!(fa.noise_variance.len(), d);
+        assert!(fa.loglike.is_finite());
+
+        // Sample covariance of centered X.
+        let mean = &fa.mean;
+        let mut samp = vec![vec![0.0; d]; d];
+        for row in &x {
+            for a in 0..d {
+                for b in 0..d {
+                    samp[a][b] += (row[a] - mean[a]) * (row[b] - mean[b]);
+                }
+            }
+        }
+        for r in &mut samp {
+            for v in r.iter_mut() {
+                *v /= n as f64;
+            }
+        }
+        // Model covariance C = Wᵀ W + diag(Ψ).
+        let mut maxerr = 0.0f64;
+        for a in 0..d {
+            for b in 0..d {
+                let mut c: f64 = (0..k).map(|t| fa.components[t][a] * fa.components[t][b]).sum();
+                if a == b {
+                    c += fa.noise_variance[a];
+                }
+                maxerr = maxerr.max((c - samp[a][b]).abs());
+            }
+        }
+        // FA maximizes likelihood of exactly this model; for n large the fit is tight.
+        assert!(maxerr < 0.1, "covariance reconstruction maxerr {maxerr}");
+
+        assert!(factor_analysis(&[], 2, 10, 1e-3, 1).is_err());
+        assert!(factor_analysis(&x, 0, 10, 1e-3, 1).is_err());
+        assert!(factor_analysis(&x, d + 1, 10, 1e-3, 1).is_err());
     }
 
     #[test]
