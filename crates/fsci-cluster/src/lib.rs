@@ -1210,6 +1210,91 @@ pub fn nystroem(
     })
 }
 
+/// Data-based RBF Nyström feature map — `sklearn.kernel_approximation.Nystroem(kernel="rbf")`.
+///
+/// Unlike [`nystroem`] (which takes a precomputed `n×n` kernel) this works directly from `n×d`
+/// data and an RBF kernel `k(x,y)=exp(−γ‖x−y‖²)`, so the full kernel is **never formed**:
+/// samples `n_components` landmark points, builds `W = K[L,L]` (m×m) and `E = K[:,L]` (n×m)
+/// — only O(n·m·d) kernel evaluations — and returns the explicit feature map `Z = E·W^{-1/2}`
+/// with `Z·Zᵀ ≈ K_rbf`. Cost O(n·m·d + n·m² + m³) versus O(n²·d + n³) for forming and
+/// factoring the dense kernel — an asymptotic O(n²)→O(n·m) drop, exact when the kernel's
+/// numerical rank is ≤ m. Feed `Z` to any linear method for an approximate kernel pipeline.
+/// `gamma` is the RBF width; deterministic by `seed`.
+pub fn rbf_nystroem(
+    data: &[Vec<f64>],
+    n_components: usize,
+    gamma: f64,
+    seed: u64,
+) -> Result<NystroemResult, ClusterError> {
+    if data.is_empty() || data[0].is_empty() {
+        return Err(ClusterError::EmptyData);
+    }
+    let n = data.len();
+    let dim = data[0].len();
+    if data.iter().any(|row| row.len() != dim) {
+        return Err(ClusterError::InvalidArgument(
+            "all rows must have the same length".to_string(),
+        ));
+    }
+    if n_components == 0 || n_components > n {
+        return Err(ClusterError::InvalidArgument(format!(
+            "n_components={n_components} must be in [1, n={n}]"
+        )));
+    }
+    if !(gamma.is_finite() && gamma > 0.0) {
+        return Err(ClusterError::InvalidArgument(
+            "gamma must be finite and positive".to_string(),
+        ));
+    }
+    if data.iter().flatten().any(|v| !v.is_finite()) {
+        return Err(ClusterError::InvalidArgument(
+            "data must be finite".to_string(),
+        ));
+    }
+
+    let rbf = |a: &[f64], b: &[f64]| -> f64 {
+        let d2: f64 = a.iter().zip(b).map(|(&x, &y)| (x - y) * (x - y)).sum();
+        (-gamma * d2).exp()
+    };
+
+    // Deterministic landmark sample.
+    let mut perm: Vec<usize> = (0..n).collect();
+    let mut state = seed ^ 0x9e37_79b9_7f4a_7c15;
+    let mut nxt = || {
+        state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        state >> 11
+    };
+    for i in 0..n_components {
+        let j = i + (nxt() as usize) % (n - i);
+        perm.swap(i, j);
+    }
+    let mut landmarks: Vec<usize> = perm[..n_components].to_vec();
+    landmarks.sort_unstable();
+    let m = landmarks.len();
+
+    // W (m×m) and E (n×m) RBF blocks — O(n·m·d) kernel evals, no n×n matrix.
+    let w: Vec<Vec<f64>> = landmarks
+        .iter()
+        .map(|&a| landmarks.iter().map(|&b| rbf(&data[a], &data[b])).collect())
+        .collect();
+    let e_mat: Vec<Vec<f64>> = data
+        .iter()
+        .map(|xi| landmarks.iter().map(|&b| rbf(xi, &data[b])).collect())
+        .collect();
+
+    // Z = E · W^{-1/2} (n×m).
+    let w_inv_sqrt = sym_inv_sqrt(&w, m)?;
+    let feature_map = fsci_linalg::matmul(&e_mat, &w_inv_sqrt)
+        .map_err(|err| ClusterError::InvalidArgument(format!("matmul: {err}")))?;
+
+    Ok(NystroemResult {
+        feature_map,
+        landmark_indices: landmarks,
+    })
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // CUR decomposition (leverage-score row/column sampling)
 // ══════════════════════════════════════════════════════════════════════
@@ -4587,6 +4672,51 @@ mod tests {
         assert!(nystroem(&kernel, 0, 1).is_err());
         assert!(nystroem(&kernel, n + 1, 1).is_err());
         assert!(nystroem(&[vec![1.0, 0.0]], 1, 1).is_err()); // non-square
+    }
+
+    #[test]
+    fn rbf_nystroem_reconstructs_full_kernel_at_full_rank() {
+        let mut s: u64 = 0x2468_ace0_1357_9bdf;
+        let mut rng = || {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((s >> 11) as f64) / (1u64 << 53) as f64 - 0.5
+        };
+        let (n, dim, gamma) = (40usize, 3usize, 0.7f64);
+        let data: Vec<Vec<f64>> = (0..n).map(|_| (0..dim).map(|_| rng()).collect()).collect();
+        // Reference full RBF kernel.
+        let kref: Vec<Vec<f64>> = (0..n)
+            .map(|i| {
+                (0..n)
+                    .map(|j| {
+                        let d2: f64 = (0..dim).map(|t| (data[i][t] - data[j][t]).powi(2)).sum();
+                        (-gamma * d2).exp()
+                    })
+                    .collect()
+            })
+            .collect();
+
+        // m = n landmarks ⇒ Z·Zᵀ = K exactly (W = K, Z = K·K^{-1/2}).
+        let ny = rbf_nystroem(&data, n, gamma, 9).expect("rbf_nystroem");
+        assert_eq!(ny.feature_map.len(), n);
+        let mp = ny.feature_map[0].len();
+        let mut maxerr = 0.0f64;
+        for i in 0..n {
+            for j in 0..n {
+                let zz: f64 = (0..mp).map(|t| ny.feature_map[i][t] * ny.feature_map[j][t]).sum();
+                maxerr = maxerr.max((zz - kref[i][j]).abs());
+            }
+        }
+        assert!(maxerr < 1e-8, "full-rank RBF reconstruction maxerr {maxerr}");
+
+        // Fewer landmarks: a valid (smaller) feature map, still finite.
+        let ny2 = rbf_nystroem(&data, 12, gamma, 9).expect("rbf_nystroem m<n");
+        assert_eq!(ny2.feature_map.len(), n);
+        assert!(ny2.feature_map.iter().flatten().all(|v| v.is_finite()));
+
+        assert!(rbf_nystroem(&[], 2, gamma, 1).is_err());
+        assert!(rbf_nystroem(&data, 0, gamma, 1).is_err());
+        assert!(rbf_nystroem(&data, n + 1, gamma, 1).is_err());
+        assert!(rbf_nystroem(&data, 5, 0.0, 1).is_err()); // gamma <= 0
     }
 
     #[test]
