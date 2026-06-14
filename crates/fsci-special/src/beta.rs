@@ -762,6 +762,80 @@ pub fn nctdtrinc(df: f64, p: f64, t: f64) -> f64 {
     0.5 * (lo + hi)
 }
 
+// Solve g(x) = target for a positive parameter x ∈ [1e-8, 1e12], with g (numerically) monotone,
+// via bisection — the safeguarded parameter inversion cdflib's DINVR performs for the
+// degrees-of-freedom inverses. The direction is read from the bracket endpoints; a target outside
+// the achievable range clamps to the corresponding bound (matching scipy's behaviour).
+fn invert_positive_param(target: f64, g: impl Fn(f64) -> f64) -> f64 {
+    const LO: f64 = 1e-8;
+    const HI: f64 = 1e12; // "no finite solution" sentinel (the CDF is numerically flat beyond this)
+    let (mut lo, mut hi) = (LO, HI);
+    let glo = g(lo);
+    let ghi = g(hi);
+    if !glo.is_finite() || !ghi.is_finite() {
+        return f64::NAN;
+    }
+    let increasing = ghi >= glo;
+    let (gmin, gmax) = if increasing { (glo, ghi) } else { (ghi, glo) };
+    if target <= gmin {
+        return if increasing { LO } else { HI };
+    }
+    if target >= gmax {
+        return if increasing { HI } else { LO };
+    }
+    for _ in 0..200 {
+        let mid = 0.5 * (lo + hi);
+        if (g(mid) < target) == increasing {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    0.5 * (lo + hi)
+}
+
+/// Inverse of [`ncfdtr`] in the denominator degrees of freedom `dfd`.
+///
+/// Returns `dfd` such that `ncfdtr(dfn, dfd, nc, f) = p`, matching
+/// `scipy.special.ncfdtridfd(dfn, p, nc, f)`.
+#[must_use]
+pub fn ncfdtridfd(dfn: f64, p: f64, nc: f64, f: f64) -> f64 {
+    if dfn.is_nan() || p.is_nan() || nc.is_nan() || f.is_nan() || !(0.0..=1.0).contains(&p) {
+        return f64::NAN;
+    }
+    if dfn <= 0.0 || nc < 0.0 || f < 0.0 {
+        return f64::NAN;
+    }
+    invert_positive_param(p, |dfd| ncfdtr(dfn, dfd, nc, f))
+}
+
+/// Inverse of [`ncfdtr`] in the numerator degrees of freedom `dfn`.
+///
+/// Returns `dfn` such that `ncfdtr(dfn, dfd, nc, f) = p`, matching
+/// `scipy.special.ncfdtridfn(p, dfd, nc, f)`.
+#[must_use]
+pub fn ncfdtridfn(p: f64, dfd: f64, nc: f64, f: f64) -> f64 {
+    if dfd.is_nan() || p.is_nan() || nc.is_nan() || f.is_nan() || !(0.0..=1.0).contains(&p) {
+        return f64::NAN;
+    }
+    if dfd <= 0.0 || nc < 0.0 || f < 0.0 {
+        return f64::NAN;
+    }
+    invert_positive_param(p, |dfn| ncfdtr(dfn, dfd, nc, f))
+}
+
+/// Inverse of [`nctdtr`] in the degrees of freedom `df`.
+///
+/// Returns `df` such that `nctdtr(df, nc, t) = p`, matching
+/// `scipy.special.nctdtridf(p, nc, t)`.
+#[must_use]
+pub fn nctdtridf(p: f64, nc: f64, t: f64) -> f64 {
+    if p.is_nan() || nc.is_nan() || t.is_nan() || !(0.0..=1.0).contains(&p) {
+        return f64::NAN;
+    }
+    invert_positive_param(p, |df| nctdtr(df, nc, t))
+}
+
 /// Student's t distribution CDF.
 ///
 /// Returns P(T <= t) where T follows a Student's t distribution
@@ -3483,6 +3557,48 @@ mod tests {
         let nct = nctdtrinc(10.0, 0.7, 1.5);
         assert!((nct - 0.909_707_486_336_509_2).abs() < 1e-7, "nctdtrinc = {nct}");
         assert!((nctdtr(10.0, nct, 1.5) - 0.7).abs() < 1e-9);
+    }
+
+    #[test]
+    fn ncf_nct_df_inverses_round_trip() {
+        // ncfdtridfd and nctdtridf are monotone in their parameter, so inverting a CDF value
+        // recovers the exact df that produced it. (These solve the inverse correctly even on the
+        // inputs where scipy's cdflib DINVR fails and returns its 1e100 bound.)
+        for &(dfn, dfd, nc, f) in &[
+            (5.0, 10.0, 1.0, 2.0),
+            (3.0, 20.0, 0.0, 1.5),
+            (8.0, 6.0, 3.0, 1.2),
+            (4.0, 30.0, 2.0, 0.9),
+            (10.0, 15.0, 5.0, 1.8),
+        ] {
+            let p = ncfdtr(dfn, dfd, nc, f);
+            let solved = ncfdtridfd(dfn, p, nc, f);
+            assert!(
+                (solved - dfd).abs() < 1e-6 * dfd,
+                "ncfdtridfd recovered {solved}, expected {dfd}"
+            );
+            assert!((ncfdtr(dfn, solved, nc, f) - p).abs() < 1e-9);
+        }
+        for &(df, nc, t) in &[(10.0, 0.7, 1.5), (5.0, 0.0, 1.2), (20.0, 2.0, 2.5), (8.0, 1.5, 0.8)] {
+            let p = nctdtr(df, nc, t);
+            let solved = nctdtridf(p, nc, t);
+            assert!(
+                (solved - df).abs() < 1e-5 * df,
+                "nctdtridf recovered {solved}, expected {df}"
+            );
+            assert!((nctdtr(solved, nc, t) - p).abs() < 1e-9);
+        }
+        // ncfdtridfn: the noncentral-F CDF is unimodal in the numerator df, so the inverse may
+        // return the larger of two roots (as scipy does) — assert it returns a *valid* root.
+        for &(dfn, dfd, nc, f) in &[(5.0, 10.0, 1.0, 2.0), (8.0, 6.0, 3.0, 1.2)] {
+            let p = ncfdtr(dfn, dfd, nc, f);
+            let solved = ncfdtridfn(p, dfd, nc, f);
+            assert!((ncfdtr(solved, dfd, nc, f) - p).abs() < 1e-9, "ncfdtridfn root invalid");
+        }
+        // Boundary / invalid argument handling.
+        assert!(ncfdtridfd(5.0, f64::NAN, 1.0, 2.0).is_nan());
+        assert!(ncfdtridfd(-1.0, 0.5, 1.0, 2.0).is_nan());
+        assert!(nctdtridf(1.5, 0.0, 1.0).is_nan()); // p out of [0,1]
     }
 
     #[test]
