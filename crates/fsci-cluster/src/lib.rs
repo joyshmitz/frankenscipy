@@ -1436,6 +1436,165 @@ fn sym_inv_sqrt(matrix: &[Vec<f64>], m: usize) -> Result<Vec<Vec<f64>>, ClusterE
     Ok(out)
 }
 
+// Shared Nyström spectral embedding (Fowlkes orthogonalized Nyström): returns the raw n×k
+// embedding V and the top-k normalized-affinity eigenvalues (descending). Inputs are assumed
+// already validated. Never materializes the n×n affinity.
+fn nystroem_spectral_embed(
+    data: &[Vec<f64>],
+    k: usize,
+    n_landmarks: usize,
+    gamma: f64,
+    seed: u64,
+) -> Result<(Vec<Vec<f64>>, Vec<f64>), ClusterError> {
+    let n = data.len();
+    let rbf = |a: &[f64], b: &[f64]| -> f64 {
+        let d2: f64 = a.iter().zip(b).map(|(&x, &y)| (x - y) * (x - y)).sum();
+        (-gamma * d2).exp()
+    };
+
+    // Deterministic landmark sample.
+    let mut perm: Vec<usize> = (0..n).collect();
+    let mut state = seed ^ 0x9e37_79b9_7f4a_7c15;
+    let mut nxt = || {
+        state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        state >> 11
+    };
+    for i in 0..n_landmarks {
+        let j = i + (nxt() as usize) % (n - i);
+        perm.swap(i, j);
+    }
+    let mut landmarks: Vec<usize> = perm[..n_landmarks].to_vec();
+    landmarks.sort_unstable();
+    let m = landmarks.len();
+
+    // W (m×m, landmark–landmark) and E (n×m, all–landmark) RBF affinities.
+    let w: Vec<Vec<f64>> = landmarks
+        .iter()
+        .map(|&a| landmarks.iter().map(|&b| rbf(&data[a], &data[b])).collect())
+        .collect();
+    let e_mat: Vec<Vec<f64>> = data
+        .iter()
+        .map(|xi| landmarks.iter().map(|&b| rbf(xi, &data[b])).collect())
+        .collect();
+
+    // Degree d = E·W⁻¹·(Eᵀ1). colsum_b = Σ_i E[i][b]; y = W⁻¹colsum.
+    let colsum: Vec<f64> = (0..m).map(|b| e_mat.iter().map(|r| r[b]).sum()).collect();
+    let w_inv = fsci_linalg::pinv(&w, fsci_linalg::PinvOptions::default())
+        .map_err(|err| ClusterError::InvalidArgument(format!("pinv(W): {err}")))?
+        .pseudo_inverse; // (m×m)
+    let y: Vec<f64> = (0..m)
+        .map(|a| w_inv[a].iter().zip(&colsum).map(|(&wv, &cs)| wv * cs).sum())
+        .collect();
+    let deg: Vec<f64> = e_mat
+        .iter()
+        .map(|row| row.iter().zip(&y).map(|(&ev, &yv)| ev * yv).sum::<f64>())
+        .collect();
+
+    // F = D^{-1/2} E (row-scaled).
+    let f_mat: Vec<Vec<f64>> = e_mat
+        .iter()
+        .zip(&deg)
+        .map(|(row, &d)| {
+            let s = if d > 0.0 { 1.0 / d.sqrt() } else { 0.0 };
+            row.iter().map(|&v| v * s).collect()
+        })
+        .collect();
+
+    // M = W^{-1/2}·(FᵀF)·W^{-1/2} (m×m). FᵀF accumulated in O(n·m²).
+    let mut ftf = vec![vec![0.0f64; m]; m];
+    for row in &f_mat {
+        for a in 0..m {
+            let ra = row[a];
+            if ra == 0.0 {
+                continue;
+            }
+            let dst = &mut ftf[a];
+            for (b, slot) in dst.iter_mut().enumerate() {
+                *slot += ra * row[b];
+            }
+        }
+    }
+    let w_inv_sqrt = sym_inv_sqrt(&w, m)?;
+    let tmp = fsci_linalg::matmul(&w_inv_sqrt, &ftf)
+        .map_err(|err| ClusterError::InvalidArgument(format!("matmul: {err}")))?;
+    let mmat = fsci_linalg::matmul(&tmp, &w_inv_sqrt)
+        .map_err(|err| ClusterError::InvalidArgument(format!("matmul: {err}")))?;
+
+    // Eigenpairs of M (ascending) → top-k (largest) = leading normalized-affinity modes.
+    let em = fsci_linalg::eigh(&mmat, fsci_linalg::DecompOptions::default())
+        .map_err(|err| ClusterError::InvalidArgument(format!("eigh: {err}")))?;
+    let tol =
+        (m as f64) * f64::EPSILON * em.eigenvalues.iter().cloned().fold(0.0, f64::max).max(1.0);
+    let order: Vec<usize> = (0..m).rev().take(k).collect();
+    let eigenvalues: Vec<f64> = order.iter().map(|&t| em.eigenvalues[t]).collect();
+
+    // G = W^{-1/2}·U_M[:,top]·Σ^{-1/2} (m×kk); then V = F·G (n×kk).
+    let kk = order.len();
+    let mut g = vec![vec![0.0f64; kk]; m];
+    for (col, &t) in order.iter().enumerate() {
+        let sig = em.eigenvalues[t];
+        let inv_sqrt_sig = if sig > tol { 1.0 / sig.sqrt() } else { 0.0 };
+        for (a, grow) in g.iter_mut().enumerate() {
+            let wa = &w_inv_sqrt[a];
+            let val: f64 = (0..m).map(|b| wa[b] * em.eigenvectors[b][t]).sum();
+            grow[col] = val * inv_sqrt_sig;
+        }
+    }
+    let v = fsci_linalg::matmul(&f_mat, &g)
+        .map_err(|err| ClusterError::InvalidArgument(format!("matmul: {err}")))?; // (n×kk)
+    Ok((v, eigenvalues))
+}
+
+/// Nyström-accelerated Laplacian-eigenmap embedding directly from `n×d` data — without ever
+/// materializing the `n×n` affinity.
+///
+/// The embedding-only sibling of [`nystroem_spectral_clustering`]: returns the leading `k`
+/// normalized-affinity eigenvectors (the manifold coordinates) and their eigenvalues, computed
+/// by the same Fowlkes orthogonalized-Nyström method, with no row-normalisation and no k-means.
+/// Cost O(n·m² + m³ + n·m·k) versus O(n²·d + n³) for the dense path. `gamma` is the RBF width;
+/// deterministic by `seed`.
+pub fn nystroem_spectral_embedding(
+    data: &[Vec<f64>],
+    n_components: usize,
+    n_landmarks: usize,
+    gamma: f64,
+    seed: u64,
+) -> Result<SpectralEmbeddingResult, ClusterError> {
+    if data.is_empty() || data[0].is_empty() {
+        return Err(ClusterError::EmptyData);
+    }
+    let n = data.len();
+    let dim = data[0].len();
+    if data.iter().any(|row| row.len() != dim) {
+        return Err(ClusterError::InvalidArgument(
+            "all rows must have the same length".to_string(),
+        ));
+    }
+    if n_components == 0 || n_components > n_landmarks || n_landmarks > n {
+        return Err(ClusterError::InvalidArgument(format!(
+            "need 1 ≤ n_components={n_components} ≤ n_landmarks={n_landmarks} ≤ n={n}"
+        )));
+    }
+    if !(gamma.is_finite() && gamma > 0.0) {
+        return Err(ClusterError::InvalidArgument(
+            "gamma must be finite and positive".to_string(),
+        ));
+    }
+    if data.iter().flatten().any(|v| !v.is_finite()) {
+        return Err(ClusterError::InvalidArgument(
+            "data must be finite".to_string(),
+        ));
+    }
+    let (embedding, eigenvalues) =
+        nystroem_spectral_embed(data, n_components, n_landmarks, gamma, seed)?;
+    Ok(SpectralEmbeddingResult {
+        embedding,
+        eigenvalues,
+    })
+}
+
 /// Nyström-accelerated normalized spectral clustering directly from `n×d` data — without ever
 /// materializing the `n×n` affinity.
 ///
@@ -1482,102 +1641,7 @@ pub fn nystroem_spectral_clustering(
         ));
     }
 
-    let rbf = |a: &[f64], b: &[f64]| -> f64 {
-        let d2: f64 = a.iter().zip(b).map(|(&x, &y)| (x - y) * (x - y)).sum();
-        (-gamma * d2).exp()
-    };
-
-    // Deterministic landmark sample.
-    let mut perm: Vec<usize> = (0..n).collect();
-    let mut state = seed ^ 0x9e37_79b9_7f4a_7c15;
-    let mut nxt = || {
-        state = state
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        state >> 11
-    };
-    for i in 0..n_landmarks {
-        let j = i + (nxt() as usize) % (n - i);
-        perm.swap(i, j);
-    }
-    let mut landmarks: Vec<usize> = perm[..n_landmarks].to_vec();
-    landmarks.sort_unstable();
-    let m = landmarks.len();
-
-    // W (m×m, landmark–landmark) and E (n×m, all–landmark) RBF affinities.
-    let w: Vec<Vec<f64>> = landmarks
-        .iter()
-        .map(|&a| landmarks.iter().map(|&b| rbf(&data[a], &data[b])).collect())
-        .collect();
-    let e_mat: Vec<Vec<f64>> = data
-        .iter()
-        .map(|xi| landmarks.iter().map(|&b| rbf(xi, &data[b])).collect())
-        .collect();
-
-    // Degree d = E·W⁻¹·(Eᵀ1). colsum_b = Σ_i E[i][b]; solve W·y = colsum ⇒ y = W⁻¹colsum.
-    let colsum: Vec<f64> = (0..m).map(|b| e_mat.iter().map(|r| r[b]).sum()).collect();
-    let w_inv = fsci_linalg::pinv(&w, fsci_linalg::PinvOptions::default())
-        .map_err(|err| ClusterError::InvalidArgument(format!("pinv(W): {err}")))?
-        .pseudo_inverse; // (m×m)
-    let y: Vec<f64> = (0..m)
-        .map(|a| w_inv[a].iter().zip(&colsum).map(|(&wv, &cs)| wv * cs).sum())
-        .collect();
-    let deg: Vec<f64> = e_mat
-        .iter()
-        .map(|row| row.iter().zip(&y).map(|(&ev, &yv)| ev * yv).sum::<f64>())
-        .collect();
-
-    // F = D^{-1/2} E (row-scaled).
-    let f_mat: Vec<Vec<f64>> = e_mat
-        .iter()
-        .zip(&deg)
-        .map(|(row, &d)| {
-            let s = if d > 0.0 { 1.0 / d.sqrt() } else { 0.0 };
-            row.iter().map(|&v| v * s).collect()
-        })
-        .collect();
-
-    // M = W^{-1/2}·(FᵀF)·W^{-1/2} (m×m). FᵀF accumulated in O(n·m²).
-    let mut ftf = vec![vec![0.0f64; m]; m];
-    for row in &f_mat {
-        for a in 0..m {
-            let ra = row[a];
-            if ra == 0.0 {
-                continue;
-            }
-            let dst = &mut ftf[a];
-            for (b, slot) in dst.iter_mut().enumerate() {
-                *slot += ra * row[b];
-            }
-        }
-    }
-    let w_inv_sqrt = sym_inv_sqrt(&w, m)?;
-    let tmp = fsci_linalg::matmul(&w_inv_sqrt, &ftf)
-        .map_err(|err| ClusterError::InvalidArgument(format!("matmul: {err}")))?;
-    let mmat = fsci_linalg::matmul(&tmp, &w_inv_sqrt)
-        .map_err(|err| ClusterError::InvalidArgument(format!("matmul: {err}")))?;
-
-    // Eigenpairs of M (ascending) → top-k (largest) give the leading normalized-affinity modes.
-    let em = fsci_linalg::eigh(&mmat, fsci_linalg::DecompOptions::default())
-        .map_err(|err| ClusterError::InvalidArgument(format!("eigh: {err}")))?;
-    let tol = (m as f64) * f64::EPSILON * em.eigenvalues.iter().cloned().fold(0.0, f64::max).max(1.0);
-    let order: Vec<usize> = (0..m).rev().take(n_clusters).collect();
-
-    // G = W^{-1/2}·U_M[:,top]·Σ^{-1/2} (m×k); then V = F·G (n×k) = the spectral embedding.
-    let k = order.len();
-    let mut g = vec![vec![0.0f64; k]; m];
-    for (col, &t) in order.iter().enumerate() {
-        let sig = em.eigenvalues[t];
-        let inv_sqrt_sig = if sig > tol { 1.0 / sig.sqrt() } else { 0.0 };
-        // u_t = U_M[:,t]; (W^{-1/2} u_t)·inv_sqrt_sig.
-        for (a, grow) in g.iter_mut().enumerate() {
-            let wa = &w_inv_sqrt[a];
-            let val: f64 = (0..m).map(|b| wa[b] * em.eigenvectors[b][t]).sum();
-            grow[col] = val * inv_sqrt_sig;
-        }
-    }
-    let v = fsci_linalg::matmul(&f_mat, &g)
-        .map_err(|err| ClusterError::InvalidArgument(format!("matmul: {err}")))?; // (n×k)
+    let (v, _eigenvalues) = nystroem_spectral_embed(data, n_clusters, n_landmarks, gamma, seed)?;
 
     // Row-normalise the embedding (Ng–Jordan–Weiss), then k-means.
     let mut embedding = v;
@@ -4323,6 +4387,49 @@ mod tests {
         assert!(nystroem_spectral_clustering(&pts, 5, 3, 0.5, 10, 1).is_err()); // k > landmarks
         assert!(nystroem_spectral_clustering(&pts, 2, n + 1, 0.5, 10, 1).is_err()); // landmarks > n
         assert!(nystroem_spectral_clustering(&pts, 2, 5, 0.0, 10, 1).is_err()); // gamma <= 0
+    }
+
+    #[test]
+    fn nystroem_spectral_embedding_separates_blobs() {
+        let mut s: u64 = 0x1212_3434_5656_7878;
+        let mut rng = || {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((s >> 11) as f64) / (1u64 << 53) as f64 - 0.5
+        };
+        let (k, per) = (3usize, 50usize);
+        let n = k * per;
+        let mut pts = Vec::new();
+        let mut truth = Vec::new();
+        for c in 0..k {
+            for _ in 0..per {
+                pts.push(vec![15.0 * c as f64 + rng(), rng()]);
+                truth.push(c);
+            }
+        }
+
+        let se = nystroem_spectral_embedding(&pts, k, 24, 0.5, 7).expect("embedding");
+        assert_eq!(se.embedding.len(), n);
+        assert_eq!(se.embedding[0].len(), se.eigenvalues.len());
+        for w in se.eigenvalues.windows(2) {
+            assert!(w[0] >= w[1] - 1e-9, "eigenvalues descending");
+        }
+        // The embedding must separate the blobs: k-means on it recovers them (purity 1.0).
+        let labels = kmeans(&se.embedding, k, 100, 7).expect("kmeans").labels;
+        let mut correct = 0usize;
+        for pred in 0..k {
+            let mut counts = vec![0usize; k];
+            for i in 0..n {
+                if labels[i] == pred {
+                    counts[truth[i]] += 1;
+                }
+            }
+            correct += counts.iter().copied().max().unwrap_or(0);
+        }
+        assert_eq!(correct, n, "embedding should separate the blobs");
+
+        assert!(nystroem_spectral_embedding(&[], 2, 2, 0.5, 1).is_err());
+        assert!(nystroem_spectral_embedding(&pts, 5, 3, 0.5, 1).is_err()); // k > landmarks
+        assert!(nystroem_spectral_embedding(&pts, 2, 5, 0.0, 1).is_err()); // gamma <= 0
     }
 
     #[test]
