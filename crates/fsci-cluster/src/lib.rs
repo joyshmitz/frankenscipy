@@ -507,6 +507,91 @@ pub fn nmf(
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Truncated SVD (LSA)
+// ══════════════════════════════════════════════════════════════════════
+
+/// Result of [`truncated_svd`], mirroring `sklearn.decomposition.TruncatedSVD`.
+#[derive(Debug, Clone)]
+pub struct TruncatedSvdResult {
+    /// Top-k right singular vectors as rows (k×d).
+    pub components: Vec<Vec<f64>>,
+    /// The k largest singular values.
+    pub singular_values: Vec<f64>,
+    /// The data projected onto the components, `U·diag(σ)` (n×k).
+    pub transformed: Vec<Vec<f64>>,
+    /// Fraction of total variance explained by each component (length k).
+    pub explained_variance_ratio: Vec<f64>,
+}
+
+/// Truncated SVD of `x` (n×d) — the top-`k` SVD WITHOUT centering (Latent Semantic
+/// Analysis).
+///
+/// Matches `sklearn.decomposition.TruncatedSVD(n_components=k)`: unlike [`pca`] it does NOT
+/// mean-center, so it works directly on raw / count / sparse-style data (text LSA). Computed
+/// via [`fsci_linalg::randomized_svd`]: O(n·d·k) versus O(n·d·min(n,d)) for a full SVD — a
+/// large win when k ≪ min(n,d). Deterministic given `seed`.
+pub fn truncated_svd(
+    x: &[Vec<f64>],
+    n_components: usize,
+    seed: u64,
+) -> Result<TruncatedSvdResult, ClusterError> {
+    if x.is_empty() {
+        return Err(ClusterError::EmptyData);
+    }
+    let n = x.len();
+    let d = x[0].len();
+    if d == 0 {
+        return Err(ClusterError::EmptyData);
+    }
+    if x.iter().any(|row| row.len() != d) {
+        return Err(ClusterError::InvalidArgument(
+            "all rows must have the same length".to_string(),
+        ));
+    }
+    let k = n_components.min(n).min(d);
+    if k == 0 {
+        return Err(ClusterError::InvalidArgument(
+            "n_components must be at least 1".to_string(),
+        ));
+    }
+
+    let svd = fsci_linalg::randomized_svd(x, k, 10, 4, seed)
+        .map_err(|e| ClusterError::InvalidArgument(format!("randomized_svd: {e}")))?;
+    let kk = svd.s.len();
+    let transformed: Vec<Vec<f64>> = svd
+        .u
+        .iter()
+        .map(|urow| urow.iter().zip(&svd.s).map(|(&u, &s)| u * s).collect())
+        .collect();
+
+    // explained_variance_ratio_ = var(transformed column) / total variance of X.
+    let denom = (n.max(2) - 1) as f64;
+    let exp_var: Vec<f64> = (0..kk)
+        .map(|t| {
+            let mean: f64 = transformed.iter().map(|r| r[t]).sum::<f64>() / n as f64;
+            transformed.iter().map(|r| (r[t] - mean).powi(2)).sum::<f64>() / denom
+        })
+        .collect();
+    let total_var: f64 = (0..d)
+        .map(|j| {
+            let cm: f64 = x.iter().map(|r| r[j]).sum::<f64>() / n as f64;
+            x.iter().map(|r| (r[j] - cm).powi(2)).sum::<f64>() / denom
+        })
+        .sum();
+    let explained_variance_ratio: Vec<f64> = exp_var
+        .iter()
+        .map(|&v| if total_var > 0.0 { v / total_var } else { 0.0 })
+        .collect();
+
+    Ok(TruncatedSvdResult {
+        components: svd.vt,
+        singular_values: svd.s,
+        transformed,
+        explained_variance_ratio,
+    })
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // K-Means Clustering
 // ══════════════════════════════════════════════════════════════════════
 
@@ -3268,6 +3353,44 @@ mod tests {
 
         assert!(nmf(&[], k, 10, 1e-6, NmfInit::Random, 1).is_err());
         assert!(nmf(&[vec![-1.0, 1.0]], 1, 10, 1e-6, NmfInit::Random, 1).is_err());
+    }
+
+    #[test]
+    fn truncated_svd_reconstructs_low_rank() {
+        let mut s: u64 = 0x4242_aaaa_5555_1234;
+        let mut rng = || {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((s >> 11) as f64) / (1u64 << 53) as f64 - 0.5
+        };
+        let (n, d, r, k) = (120usize, 40usize, 7usize, 12usize); // k > r
+        let u: Vec<Vec<f64>> = (0..n).map(|_| (0..r).map(|_| rng()).collect()).collect();
+        let v: Vec<Vec<f64>> = (0..r).map(|_| (0..d).map(|_| rng()).collect()).collect();
+        let x: Vec<Vec<f64>> = u
+            .iter()
+            .map(|ui| (0..d).map(|j| (0..r).map(|t| ui[t] * v[t][j]).sum()).collect())
+            .collect();
+
+        let ts = truncated_svd(&x, k, 5).expect("truncated_svd");
+        let kk = ts.singular_values.len();
+        assert_eq!(ts.components.len(), kk);
+        assert_eq!(ts.components[0].len(), d);
+        assert_eq!(ts.transformed.len(), n);
+        assert_eq!(ts.transformed[0].len(), kk);
+        for w in ts.singular_values.windows(2) {
+            assert!(w[0] >= w[1] - 1e-9, "singular values must be descending");
+        }
+        // X ≈ transformed · components (rank k > r ⇒ exact to rounding).
+        let mut maxerr = 0.0f64;
+        for i in 0..n {
+            for j in 0..d {
+                let approx: f64 = (0..kk).map(|t| ts.transformed[i][t] * ts.components[t][j]).sum();
+                maxerr = maxerr.max((x[i][j] - approx).abs());
+            }
+        }
+        assert!(maxerr < 1e-8, "reconstruction maxerr {maxerr}");
+
+        assert!(truncated_svd(&[], 2, 1).is_err());
+        assert!(truncated_svd(&x, 0, 1).is_err());
     }
 
     #[test]
