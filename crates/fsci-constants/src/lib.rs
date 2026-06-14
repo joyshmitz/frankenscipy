@@ -490,6 +490,20 @@ pub fn freq_to_wavelength(freq: f64) -> f64 {
     SPEED_OF_LIGHT / freq
 }
 
+/// Convert wavelength (m) to optical frequency (Hz).
+///
+/// Matches `scipy.constants.lambda2nu(lambda_)` — `nu = c / lambda`.
+pub fn lambda2nu(lambda_: f64) -> f64 {
+    SPEED_OF_LIGHT / lambda_
+}
+
+/// Convert optical frequency (Hz) to wavelength (m).
+///
+/// Matches `scipy.constants.nu2lambda(nu)` — `lambda = c / nu`.
+pub fn nu2lambda(nu: f64) -> f64 {
+    SPEED_OF_LIGHT / nu
+}
+
 /// Lookup a physical constant by name (case-insensitive).
 ///
 /// Matches `scipy.constants.value(name)`.
@@ -786,6 +800,16 @@ mod tests {
     }
 
     #[test]
+    fn lambda_nu_round_trip_matches_scipy() {
+        // scipy.constants.lambda2nu(500e-9) == 599584916000000.0
+        assert!((lambda2nu(500e-9) - 599_584_916_000_000.0).abs() <= 1.0);
+        // scipy.constants.nu2lambda(5e14) == 5.99584916e-07
+        assert!((nu2lambda(5e14) - 5.99584916e-07).abs() <= 1e-19);
+        // round-trip
+        assert!((nu2lambda(lambda2nu(632.8e-9)) - 632.8e-9).abs() <= 1e-18);
+    }
+
+    #[test]
     fn si_prefixes() {
         assert_eq!(KILO, 1e3);
         assert_eq!(MILLI, 1e-3);
@@ -1022,8 +1046,16 @@ mod tests {
     fn physical_constants_match_scipy_reference_values() {
         // scipy.constants values (CODATA 2018)
         // Use relative tolerances for physical constants since different CODATA years may differ slightly
-        assert_eq!(SPEED_OF_LIGHT, 299792458.0, "c should match scipy.constants.c exactly");
-        assert_close(MU_0, 1.25663706127e-6, 1e-15, "mu_0 vs scipy.constants.mu_0");
+        assert_eq!(
+            SPEED_OF_LIGHT, 299792458.0,
+            "c should match scipy.constants.c exactly"
+        );
+        assert_close(
+            MU_0,
+            1.25663706127e-6,
+            1e-15,
+            "mu_0 vs scipy.constants.mu_0",
+        );
         assert_close(
             EPSILON_0,
             8.8541878188e-12,
@@ -1050,12 +1082,7 @@ mod tests {
             "R vs scipy.constants.R",
         );
         assert_close(AVOGADRO, 6.02214076e23, 1e14, "N_A vs scipy.constants.N_A");
-        assert_close(
-            BOLTZMANN,
-            1.380649e-23,
-            1e-29,
-            "k vs scipy.constants.k",
-        );
+        assert_close(BOLTZMANN, 1.380649e-23, 1e-29, "k vs scipy.constants.k");
         assert_close(
             GOLDEN_RATIO,
             1.618033988749895,
@@ -1096,7 +1123,12 @@ mod tests {
         let results = find("light");
         assert!(!results.is_empty(), "find('light') should return results");
         // Should include speed of light
-        let has_speed_of_light = results.iter().any(|(name, _)| name.contains("speed of light"));
-        assert!(has_speed_of_light, "find('light') should include speed of light");
+        let has_speed_of_light = results
+            .iter()
+            .any(|(name, _)| name.contains("speed of light"));
+        assert!(
+            has_speed_of_light,
+            "find('light') should include speed of light"
+        );
     }
 }
