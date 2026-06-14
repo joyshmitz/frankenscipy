@@ -27,6 +27,91 @@ impl std::fmt::Display for ClusterError {
 impl std::error::Error for ClusterError {}
 
 // ══════════════════════════════════════════════════════════════════════
+// Principal Component Analysis (randomized)
+// ══════════════════════════════════════════════════════════════════════
+
+/// Result of [`pca`], mirroring `sklearn.decomposition.PCA`.
+#[derive(Debug, Clone)]
+pub struct PcaResult {
+    /// Principal axes as rows (k×d): the top-k right singular vectors of the centered data.
+    pub components: Vec<Vec<f64>>,
+    /// Variance explained by each component, `σᵢ²/(n−1)` (length k).
+    pub explained_variance: Vec<f64>,
+    /// Fraction of total variance explained by each component (length k).
+    pub explained_variance_ratio: Vec<f64>,
+    /// Singular values of the centered data (length k).
+    pub singular_values: Vec<f64>,
+    /// Per-feature mean subtracted before the decomposition (length d).
+    pub mean: Vec<f64>,
+    /// The data projected onto the components, `U·diag(σ)` (n×k).
+    pub transformed: Vec<Vec<f64>>,
+}
+
+/// Principal Component Analysis via randomized SVD.
+///
+/// Matches `sklearn.decomposition.PCA(n_components=k, svd_solver="randomized")`: centers the
+/// `n×d` data, takes the top-`k` SVD of the centered matrix via
+/// [`fsci_linalg::randomized_svd`], and returns the principal axes, explained variance, and
+/// the projected data. Cost O(n·d·k) versus O(n·d·min(n,d)) for a full-SVD PCA — a large win
+/// when k ≪ min(n,d) (the usual dimensionality-reduction regime). Deterministic given `seed`.
+pub fn pca(x: &[Vec<f64>], n_components: usize, seed: u64) -> Result<PcaResult, ClusterError> {
+    if x.is_empty() {
+        return Err(ClusterError::EmptyData);
+    }
+    let n = x.len();
+    let d = x[0].len();
+    if d == 0 {
+        return Err(ClusterError::EmptyData);
+    }
+    if x.iter().any(|row| row.len() != d) {
+        return Err(ClusterError::InvalidArgument(
+            "all samples must have the same dimension".to_string(),
+        ));
+    }
+    let k = n_components.min(n).min(d);
+    if k == 0 {
+        return Err(ClusterError::InvalidArgument(
+            "n_components must be at least 1".to_string(),
+        ));
+    }
+
+    let denom = (n.max(2) - 1) as f64;
+    let mean: Vec<f64> = (0..d)
+        .map(|j| x.iter().map(|row| row[j]).sum::<f64>() / n as f64)
+        .collect();
+    let xc: Vec<Vec<f64>> = x
+        .iter()
+        .map(|row| row.iter().zip(&mean).map(|(&v, &m)| v - m).collect())
+        .collect();
+    // Total variance = trace of the covariance = ‖Xc‖_F² / (n−1).
+    let total_var: f64 = xc.iter().flatten().map(|&v| v * v).sum::<f64>() / denom;
+
+    let svd = fsci_linalg::randomized_svd(&xc, k, 10, 4, seed)
+        .map_err(|e| ClusterError::InvalidArgument(format!("randomized_svd: {e}")))?;
+
+    let explained_variance: Vec<f64> = svd.s.iter().map(|&s| s * s / denom).collect();
+    let explained_variance_ratio: Vec<f64> = explained_variance
+        .iter()
+        .map(|&v| if total_var > 0.0 { v / total_var } else { 0.0 })
+        .collect();
+    // transform(X) = Xc·Vᵀ = U·diag(σ).
+    let transformed: Vec<Vec<f64>> = svd
+        .u
+        .iter()
+        .map(|urow| urow.iter().zip(&svd.s).map(|(&u, &s)| u * s).collect())
+        .collect();
+
+    Ok(PcaResult {
+        components: svd.vt,
+        explained_variance,
+        explained_variance_ratio,
+        singular_values: svd.s,
+        mean,
+        transformed,
+    })
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // K-Means Clustering
 // ══════════════════════════════════════════════════════════════════════
 
@@ -2627,6 +2712,48 @@ pub fn kmedoids(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pca_matches_full_svd_on_low_rank() {
+        let mut s: u64 = 0x3141_5926_5358_9793;
+        let mut rng = || {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((s >> 11) as f64) / (1u64 << 53) as f64 - 0.5
+        };
+        let (n, d, r, k) = (200usize, 30usize, 6usize, 10usize);
+        let u: Vec<Vec<f64>> = (0..n).map(|_| (0..r).map(|_| rng()).collect()).collect();
+        let v: Vec<Vec<f64>> = (0..r).map(|_| (0..d).map(|_| rng()).collect()).collect();
+        let x: Vec<Vec<f64>> = u
+            .iter()
+            .map(|ui| (0..d).map(|j| (0..r).map(|t| ui[t] * v[t][j]).sum()).collect())
+            .collect();
+
+        let p = pca(&x, k, 3).expect("pca");
+        let kk = p.components.len();
+        assert_eq!(p.mean.len(), d);
+        assert_eq!(p.components[0].len(), d);
+        assert_eq!(p.transformed.len(), n);
+        assert_eq!(p.transformed[0].len(), kk);
+        assert_eq!(p.explained_variance.len(), kk);
+        assert_eq!(p.singular_values.len(), kk);
+        for w in p.explained_variance.windows(2) {
+            assert!(w[0] >= w[1] - 1e-9, "explained variance must be descending");
+        }
+
+        // Reconstruction: Xc ≈ transformed · components (rank-k approx; X is exactly rank r ≤ k).
+        let mut maxerr = 0.0f64;
+        for i in 0..n {
+            for j in 0..d {
+                let approx: f64 = (0..kk).map(|t| p.transformed[i][t] * p.components[t][j]).sum();
+                let xc = x[i][j] - p.mean[j];
+                maxerr = maxerr.max((xc - approx).abs());
+            }
+        }
+        assert!(maxerr < 1e-9, "reconstruction maxerr {maxerr}");
+
+        assert!(pca(&[], k, 1).is_err());
+        assert!(pca(&x, 0, 1).is_err());
+    }
 
     #[test]
     fn kmeans_two_clusters() {
