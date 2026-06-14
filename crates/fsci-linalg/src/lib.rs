@@ -3668,13 +3668,25 @@ fn one_sided_jacobi_svd_tall(a: &[Vec<f64>], m: usize, n: usize) -> SvdResult {
     // so a skipped (already-orthogonal) pair costs only one dot product γ — the common case for
     // rank-deficient inputs whose zero columns are mutually orthogonal.
     let mut nrm2: Vec<f64> = (0..n).map(|j| w[j].iter().map(|x| x * x).sum()).collect();
+    // A column whose squared norm has collapsed this far below the largest is a numerical zero
+    // (norm ≤ ~1e-13·‖A‖). Its singular value and reconstruction contribution are below the
+    // rounding floor, so any pair involving it is permanently orthogonal — skip it WITHOUT the
+    // O(m) dot product. On rank-deficient inputs (the only ones routed here) the dependent columns
+    // collapse and this prunes the bulk of the pair work in later sweeps.
+    let zero_tol = nrm2.iter().cloned().fold(0.0_f64, f64::max) * 1e-26;
 
     for _ in 0..MAX_SWEEPS {
         let mut converged = true;
         for i in 0..n {
+            if nrm2[i] <= zero_tol {
+                continue;
+            }
             for j in (i + 1)..n {
                 let alpha = nrm2[i];
                 let beta = nrm2[j];
+                if beta <= zero_tol {
+                    continue;
+                }
                 let (wi, wj) = (&w[i], &w[j]);
                 let mut gamma = 0.0;
                 for k in 0..m {
