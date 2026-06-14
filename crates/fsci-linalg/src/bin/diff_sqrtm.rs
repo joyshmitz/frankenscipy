@@ -1,5 +1,5 @@
 //! Probe: sqrtm on complex-eigenvalue matrices vs scipy.linalg.sqrtm (gitignored).
-use fsci_linalg::{sqrtm, DecompOptions};
+use fsci_linalg::{DecompOptions, sqrtm};
 
 fn dump(func: &str, m: &[Vec<f64>]) {
     for (r, row) in m.iter().enumerate() {

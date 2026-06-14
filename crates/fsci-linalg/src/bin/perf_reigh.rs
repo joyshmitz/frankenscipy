@@ -2,7 +2,7 @@
 // On a rank-r symmetric matrix with the sketch dimension > r, the dominant subspace is
 // captured exactly, so the k largest-magnitude eigenvalues match the full eigh's; the
 // speedup is the wall-clock ratio (full eigh O(n³) vs randomized O(n²k)).
-use fsci_linalg::{eigh, randomized_eigh, DecompOptions};
+use fsci_linalg::{DecompOptions, eigh, randomized_eigh};
 use std::hint::black_box;
 use std::time::Instant;
 
@@ -12,7 +12,9 @@ fn main() {
     let k = 10usize;
     let mut st: u64 = 0x243f_6a88_85a3_08d3;
     let mut rng = || {
-        st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        st = st
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         ((st >> 11) as f64) / (1u64 << 53) as f64 - 0.5
     };
     // Symmetric A = Σ_t d_t w_t w_tᵀ, mixed-sign decaying d_t → rank-r symmetric.
@@ -66,5 +68,8 @@ fn main() {
     tr.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let f = tf[trials / 2] * 1e3;
     let rr = tr[trials / 2] * 1e3;
-    println!("full eigh {f:.2} ms | randomized_eigh {rr:.2} ms | speedup {:.2}x  (n={n} k={k})", f / rr);
+    println!(
+        "full eigh {f:.2} ms | randomized_eigh {rr:.2} ms | speedup {:.2}x  (n={n} k={k})",
+        f / rr
+    );
 }

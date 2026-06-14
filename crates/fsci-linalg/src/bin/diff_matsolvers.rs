@@ -1,8 +1,8 @@
 //! Differential oracle probe: matrix-equation solvers + polar vs scipy.linalg (gitignored).
 //! Lines: `name,r,c,value`. Inputs match the python comparator.
 use fsci_linalg::{
-    polar, solve_continuous_are, solve_continuous_lyapunov, solve_discrete_are,
-    solve_discrete_lyapunov, solve_sylvester, DecompOptions,
+    DecompOptions, polar, solve_continuous_are, solve_continuous_lyapunov, solve_discrete_are,
+    solve_discrete_lyapunov, solve_sylvester,
 };
 
 fn dump(name: &str, m: &[Vec<f64>]) {
@@ -42,7 +42,10 @@ fn main() {
     let bare = vec![vec![0.0], vec![1.0]];
     let qare = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
     let rare = vec![vec![1.0]];
-    run("care", solve_continuous_are(&aare, &bare, &qare, &rare, o()));
+    run(
+        "care",
+        solve_continuous_are(&aare, &bare, &qare, &rare, o()),
+    );
 
     // Discrete ARE
     let adare = vec![vec![0.9, 0.1], vec![0.0, 0.8]];

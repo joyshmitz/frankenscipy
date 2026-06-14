@@ -1,6 +1,8 @@
 //! Differential oracle probe: matrix functions vs scipy.linalg (gitignored).
 //! Lines: `func,mat,r,c,value` or `func,mat,ERR`. Matrices defined identically in python cmp.
-use fsci_linalg::{coshm, cosm, expm, fractional_matrix_power, logm, signm, sinhm, sinm, sqrtm, DecompOptions};
+use fsci_linalg::{
+    DecompOptions, coshm, cosm, expm, fractional_matrix_power, logm, signm, sinhm, sinm, sqrtm,
+};
 
 fn dump(func: &str, mat: &str, m: &[Vec<f64>]) {
     for (r, row) in m.iter().enumerate() {

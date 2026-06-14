@@ -1,7 +1,7 @@
 // Correctness + A/B for pivoted_cholesky (low-rank, O(n·k²)) vs full cholesky (O(n³)) on a
 // numerically rank-r PSD matrix. The pivoted factor must reconstruct A to the noise floor;
 // the speedup is the wall-clock ratio.
-use fsci_linalg::{cholesky, pivoted_cholesky, DecompOptions};
+use fsci_linalg::{DecompOptions, cholesky, pivoted_cholesky};
 use std::hint::black_box;
 use std::time::Instant;
 
@@ -11,7 +11,9 @@ fn main() {
     let k = 40usize;
     let mut st: u64 = 0x243f_6a88_85a3_08d3;
     let mut rng = || {
-        st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        st = st
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         ((st >> 11) as f64) / (1u64 << 53) as f64 - 0.5
     };
     // PSD A = B·Bᵀ (rank r) + 1e-8·I (strictly PD so the full Cholesky is well-behaved).
@@ -33,7 +35,9 @@ fn main() {
     let mut den = 0.0f64;
     for i in 0..n {
         for j in 0..n {
-            let approx: f64 = (0..pc.rank).map(|t| pc.factor[i][t] * pc.factor[j][t]).sum();
+            let approx: f64 = (0..pc.rank)
+                .map(|t| pc.factor[i][t] * pc.factor[j][t])
+                .sum();
             num += (a[i][j] - approx).powi(2);
             den += a[i][j] * a[i][j];
         }
@@ -59,5 +63,8 @@ fn main() {
     tp.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let f = tf[trials / 2] * 1e3;
     let p = tp[trials / 2] * 1e3;
-    println!("full cholesky {f:.2} ms | pivoted_cholesky {p:.2} ms | speedup {:.1}x  (n={n} rank≈{r} k={k})", f / p);
+    println!(
+        "full cholesky {f:.2} ms | pivoted_cholesky {p:.2} ms | speedup {:.1}x  (n={n} rank≈{r} k={k})",
+        f / p
+    );
 }

@@ -1,7 +1,7 @@
 //! Probe: Lyapunov/Sylvester/ARE with COMPLEX-eigenvalue A vs scipy.linalg (gitignored).
 use fsci_linalg::{
-    solve_continuous_are, solve_continuous_lyapunov, solve_discrete_are, solve_discrete_lyapunov,
-    solve_sylvester, DecompOptions,
+    DecompOptions, solve_continuous_are, solve_continuous_lyapunov, solve_discrete_are,
+    solve_discrete_lyapunov, solve_sylvester,
 };
 
 fn dump(name: &str, m: &[Vec<f64>]) {
@@ -40,9 +40,15 @@ fn main() {
     let bare = vec![vec![0.0], vec![1.0]];
     let qare = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
     let rare = vec![vec![1.0]];
-    run("care_cplx", solve_continuous_are(&aare, &bare, &qare, &rare, o()));
+    run(
+        "care_cplx",
+        solve_continuous_are(&aare, &bare, &qare, &rare, o()),
+    );
 
     // Discrete ARE with complex-eigenvalue A
     let adare = vec![vec![0.3, -0.5], vec![0.5, 0.3]];
-    run("dare_cplx", solve_discrete_are(&adare, &bare, &qare, &rare, o()));
+    run(
+        "dare_cplx",
+        solve_discrete_are(&adare, &bare, &qare, &rare, o()),
+    );
 }

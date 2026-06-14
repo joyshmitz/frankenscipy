@@ -2,7 +2,7 @@
 // On a rank-r matrix with l = k + oversamples > r, the random sketch captures the entire
 // range, so the leading-k singular values match the full SVD to ~machine precision; the
 // speedup is the wall-clock ratio (full SVD does O(m·n·min) work, randomized O(m·n·l)).
-use fsci_linalg::{randomized_svd, svd, DecompOptions};
+use fsci_linalg::{DecompOptions, randomized_svd, svd};
 use std::hint::black_box;
 use std::time::Instant;
 
@@ -13,7 +13,9 @@ fn main() {
     let k = 10usize;
     let mut s: u64 = 0x243f_6a88_85a3_08d3;
     let mut rng = || {
-        s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        s = s
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         ((s >> 11) as f64) / (1u64 << 53) as f64 - 0.5
     };
     // A = B (m×r) · C (r×n)  → exactly rank r.
@@ -61,5 +63,8 @@ fn main() {
     tr.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let f = tf[trials / 2] * 1e3;
     let rr = tr[trials / 2] * 1e3;
-    println!("full svd {f:.2} ms | randomized_svd {rr:.2} ms | speedup {:.2}x  (m={m} n={n} k={k})", f / rr);
+    println!(
+        "full svd {f:.2} ms | randomized_svd {rr:.2} ms | speedup {:.2}x  (m={m} n={n} k={k})",
+        f / rr
+    );
 }

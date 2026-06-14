@@ -12,7 +12,9 @@ fn main() {
     let s = 600usize;
     let mut st: u64 = 0x243f_6a88_85a3_08d3;
     let mut u01 = || {
-        st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        st = st
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         (st >> 11) as f64 / (1u64 << 53) as f64
     };
 
@@ -51,7 +53,10 @@ fn main() {
             ratio += nsax / nax;
         }
     }
-    println!("srht embedding mean ‖SAx‖²/‖Ax‖² = {:.4} (≈1 expected)", ratio / trials_emb as f64);
+    println!(
+        "srht embedding mean ‖SAx‖²/‖Ax‖² = {:.4} (≈1 expected)",
+        ratio / trials_emb as f64
+    );
 
     let trials = 5;
     let mut tsr = Vec::new();
@@ -69,5 +74,8 @@ fn main() {
     tg.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let sr = tsr[trials / 2] * 1e3;
     let g = tg[trials / 2] * 1e3;
-    println!("dense Gaussian sketch {g:.2} ms | srht_transform {sr:.2} ms | speedup {:.1}x  (m={m} n={n} s={s})", g / sr);
+    println!(
+        "dense Gaussian sketch {g:.2} ms | srht_transform {sr:.2} ms | speedup {:.1}x  (m={m} n={n} s={s})",
+        g / sr
+    );
 }

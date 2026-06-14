@@ -2777,7 +2777,7 @@ fn real_fft_unscaled(input: &[f64], backend: &dyn FftBackend) -> Vec<Complex64> 
     // path instead of transforming N points and discarding the redundant half;
     // for the common non-pow2 even lengths (1000, 22050, 44100, …) that roughly
     // halves the FFT work. Odd N keeps the full transform (no even pack exists).
-    if input.len() >= 4 && input.len() % 2 == 0 {
+    if input.len() >= 4 && input.len().is_multiple_of(2) {
         real_fft_specialized(input, backend)
     } else {
         let complex_input: Vec<Complex64> = input.iter().map(|&x| (x, 0.0)).collect();

@@ -32,7 +32,9 @@ fn main() {
     let seed = 7u64;
     let mut st: u64 = 0x243f_6a88_85a3_08d3;
     let mut rng = || {
-        st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        st = st
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         ((st >> 11) as f64) / (1u64 << 53) as f64 - 0.5
     };
     let a: Vec<Vec<f64>> = (0..m).map(|_| (0..n).map(|_| rng()).collect()).collect();
@@ -64,5 +66,8 @@ fn main() {
     te.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let imp = ti[trials / 2] * 1e3;
     let exp = te[trials / 2] * 1e3;
-    println!("explicit(form S + matmul) {exp:.2} ms | implicit CountSketch {imp:.2} ms | speedup {:.1}x  (m={m} n={n} sketch={sketch})", exp / imp);
+    println!(
+        "explicit(form S + matmul) {exp:.2} ms | implicit CountSketch {imp:.2} ms | speedup {:.1}x  (m={m} n={n} sketch={sketch})",
+        exp / imp
+    );
 }

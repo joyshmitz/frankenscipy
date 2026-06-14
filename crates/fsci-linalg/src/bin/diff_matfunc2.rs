@@ -1,5 +1,5 @@
 //! Probe: logm/fracpow/signm on a complex-eigenvalue matrix vs scipy (gitignored).
-use fsci_linalg::{fractional_matrix_power, logm, signm, expm, DecompOptions};
+use fsci_linalg::{DecompOptions, expm, fractional_matrix_power, logm, signm};
 
 fn dump(func: &str, m: &[Vec<f64>]) {
     for (r, row) in m.iter().enumerate() {
@@ -30,7 +30,10 @@ fn main() {
     ];
     for (lbl, a) in [("m2", &m2), ("m4", &m4)] {
         run(&format!("logm_{lbl}"), logm(a, o()));
-        run(&format!("fracpow0.5_{lbl}"), fractional_matrix_power(a, 0.5, o()));
+        run(
+            &format!("fracpow0.5_{lbl}"),
+            fractional_matrix_power(a, 0.5, o()),
+        );
         run(&format!("signm_{lbl}"), signm(a, o()));
         run(&format!("expm_{lbl}"), expm(a, o()));
     }

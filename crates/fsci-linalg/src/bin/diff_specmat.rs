@@ -19,9 +19,15 @@ fn main() {
     dump("invhilbert5", &invhilbert(5));
     dump("pascal_sym4", &pascal(4, true));
     dump("pascal_low4", &pascal(4, false));
-    dump("toeplitz", &toeplitz(&[1.0, 2.0, 3.0, 4.0], Some(&[1.0, 5.0, 6.0])));
+    dump(
+        "toeplitz",
+        &toeplitz(&[1.0, 2.0, 3.0, 4.0], Some(&[1.0, 5.0, 6.0])),
+    );
     dump("circulant", &circulant(&[1.0, 2.0, 3.0, 4.0]));
-    dump("hankel", &hankel(&[1.0, 2.0, 3.0, 4.0], Some(&[4.0, 7.0, 8.0, 9.0])));
+    dump(
+        "hankel",
+        &hankel(&[1.0, 2.0, 3.0, 4.0], Some(&[4.0, 7.0, 8.0, 9.0])),
+    );
     dump("tri_5_4_1", &tri(5, 4, 1));
     dump("tri_4_4_-1", &tri(4, 4, -1));
     dump("vander_inc", &vander(&[1.0, 2.0, 3.0, 5.0], Some(4), true));
@@ -29,7 +35,10 @@ fn main() {
     dump("helmert5", &helmert(5));
     dump("helmert_full5", &helmert_full(5));
     dump("fiedler", &fiedler(&[1.0, 4.0, 12.0, 45.0]));
-    dump("fiedler_companion", &fiedler_companion(&[1.0, -3.0, 2.0, -5.0, 7.0]));
+    dump(
+        "fiedler_companion",
+        &fiedler_companion(&[1.0, -3.0, 2.0, -5.0, 7.0]),
+    );
     if let Ok(m) = hadamard(8) {
         dump("hadamard8", &m);
     }

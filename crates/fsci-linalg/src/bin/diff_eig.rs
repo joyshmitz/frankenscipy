@@ -1,15 +1,43 @@
 //! Differential oracle probe: general eig eigenvalues vs scipy.linalg.eig (gitignored).
 //! Lines: `name,ev,k,re,im` (sorted eigenvalues) and `name,resid,k,value` (real-ev residual).
-use fsci_linalg::{eig, DecompOptions};
+use fsci_linalg::{DecompOptions, eig};
 
 fn main() {
     let o = || DecompOptions::default();
     let mats: Vec<(&str, Vec<Vec<f64>>)> = vec![
-        ("sym", vec![vec![2.0, 1.0, 0.0], vec![1.0, 3.0, 1.0], vec![0.0, 1.0, 2.0]]),
-        ("real_nonsym", vec![vec![3.0, 0.4, 0.1], vec![0.0, 2.0, 0.3], vec![0.0, 0.0, 1.5]]),
+        (
+            "sym",
+            vec![
+                vec![2.0, 1.0, 0.0],
+                vec![1.0, 3.0, 1.0],
+                vec![0.0, 1.0, 2.0],
+            ],
+        ),
+        (
+            "real_nonsym",
+            vec![
+                vec![3.0, 0.4, 0.1],
+                vec![0.0, 2.0, 0.3],
+                vec![0.0, 0.0, 1.5],
+            ],
+        ),
         ("rot", vec![vec![0.0, -1.0], vec![1.0, 0.0]]),
-        ("complex3", vec![vec![0.5, -1.2, 0.3], vec![1.1, 0.4, -0.2], vec![0.0, 0.6, 0.9]]),
-        ("scalerot", vec![vec![1.0, -2.0, 0.0], vec![2.0, 1.0, 0.0], vec![0.0, 0.0, 4.0]]),
+        (
+            "complex3",
+            vec![
+                vec![0.5, -1.2, 0.3],
+                vec![1.1, 0.4, -0.2],
+                vec![0.0, 0.6, 0.9],
+            ],
+        ),
+        (
+            "scalerot",
+            vec![
+                vec![1.0, -2.0, 0.0],
+                vec![2.0, 1.0, 0.0],
+                vec![0.0, 0.0, 4.0],
+            ],
+        ),
     ];
     for (name, a) in &mats {
         let n = a.len();

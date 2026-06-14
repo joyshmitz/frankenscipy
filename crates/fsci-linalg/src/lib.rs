@@ -3858,7 +3858,9 @@ pub fn svdvals(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<f64>, Linal
 /// Transpose a row-major matrix.
 fn transpose_rows(a: &[Vec<f64>]) -> Vec<Vec<f64>> {
     let cols = a.first().map_or(0, Vec::len);
-    (0..cols).map(|j| a.iter().map(|row| row[j]).collect()).collect()
+    (0..cols)
+        .map(|j| a.iter().map(|row| row[j]).collect())
+        .collect()
 }
 
 /// Truncated SVD of `a` (m×n) via randomized range finding (Halko–Martinsson–Tropp).
@@ -4131,7 +4133,9 @@ pub fn srht_transform(
         z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
         z ^ (z >> 31)
     };
-    let signs: Vec<f64> = (0..mp).map(|_| if next() & 1 == 0 { 1.0 } else { -1.0 }).collect();
+    let signs: Vec<f64> = (0..mp)
+        .map(|_| if next() & 1 == 0 { 1.0 } else { -1.0 })
+        .collect();
     let mut perm: Vec<usize> = (0..mp).collect();
     for i in 0..s {
         let j = i + (next() as usize) % (mp - i);
@@ -4167,8 +4171,8 @@ pub fn srht_transform(
                         for (i, slot) in v.iter_mut().enumerate() {
                             *slot = if i < m { a[i][j] * signs_r[i] } else { 0.0 };
                         }
-                        let hv = fsci_fft::fwht(&v, opts_r)
-                            .expect("fwht on power-of-two finite input");
+                        let hv =
+                            fsci_fft::fwht(&v, opts_r).expect("fwht on power-of-two finite input");
                         local.push(rows.iter().map(|&r| scale * hv[r]).collect::<Vec<f64>>());
                     }
                     local
@@ -4280,7 +4284,10 @@ fn pivoted_columns(y: &[Vec<f64>], k: usize) -> Vec<usize> {
     let l = y.len();
     let n = if l > 0 { y[0].len() } else { 0 };
     let cols: Vec<Vec<f64>> = (0..n).map(|j| (0..l).map(|i| y[i][j]).collect()).collect();
-    let mut norms: Vec<f64> = cols.iter().map(|c| c.iter().map(|&x| x * x).sum()).collect();
+    let mut norms: Vec<f64> = cols
+        .iter()
+        .map(|c| c.iter().map(|&x| x * x).sum())
+        .collect();
     let mut basis: Vec<Vec<f64>> = Vec::new();
     let mut pivots = Vec::with_capacity(k);
     let kk = k.min(n).min(l);
@@ -17995,14 +18002,20 @@ mod tests {
         // now detect the rank deficiency from the bidiagonal and return the correct SVD quickly.
         let mut s: u64 = 0x9e37_79b9_1234_abcd;
         let mut rng = || {
-            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             ((s >> 11) as f64) / (1u64 << 53) as f64 - 0.5
         };
         let (m, n, r) = (150usize, 96usize, 20usize);
         let b: Vec<Vec<f64>> = (0..m).map(|_| (0..r).map(|_| rng()).collect()).collect();
         let c: Vec<Vec<f64>> = (0..r).map(|_| (0..n).map(|_| rng()).collect()).collect();
         let a: Vec<Vec<f64>> = (0..m)
-            .map(|i| (0..n).map(|j| (0..r).map(|t| b[i][t] * c[t][j]).sum()).collect())
+            .map(|i| {
+                (0..n)
+                    .map(|j| (0..r).map(|t| b[i][t] * c[t][j]).sum())
+                    .collect()
+            })
             .collect();
 
         let res = svd(&a, DecompOptions::default()).expect("svd");
@@ -18018,7 +18031,10 @@ mod tests {
                 maxerr = maxerr.max((v - a[i][j]).abs());
             }
         }
-        assert!(maxerr < 1e-10, "rank-deficient svd reconstruction maxerr {maxerr}");
+        assert!(
+            maxerr < 1e-10,
+            "rank-deficient svd reconstruction maxerr {maxerr}"
+        );
         for w in res.s.windows(2) {
             assert!(w[0] >= w[1] - 1e-12, "singular values descending");
         }
@@ -18028,7 +18044,11 @@ mod tests {
         let wb: Vec<Vec<f64>> = (0..wm).map(|_| (0..wr).map(|_| rng()).collect()).collect();
         let wc: Vec<Vec<f64>> = (0..wr).map(|_| (0..wn).map(|_| rng()).collect()).collect();
         let wa: Vec<Vec<f64>> = (0..wm)
-            .map(|i| (0..wn).map(|j| (0..wr).map(|t| wb[i][t] * wc[t][j]).sum()).collect())
+            .map(|i| {
+                (0..wn)
+                    .map(|j| (0..wr).map(|t| wb[i][t] * wc[t][j]).sum())
+                    .collect()
+            })
             .collect();
         let wres = svd(&wa, DecompOptions::default()).expect("wide svd");
         assert_eq!(wres.s.len(), wm); // k = min(m,n) = m
@@ -18036,7 +18056,9 @@ mod tests {
         let mut we = 0.0f64;
         for i in 0..wm {
             for j in 0..wn {
-                let v: f64 = (0..wm).map(|t| wres.u[i][t] * wres.s[t] * wres.vt[t][j]).sum();
+                let v: f64 = (0..wm)
+                    .map(|t| wres.u[i][t] * wres.s[t] * wres.vt[t][j])
+                    .sum();
                 we = we.max((v - wa[i][j]).abs());
             }
         }
@@ -18047,7 +18069,9 @@ mod tests {
     fn jacobi_svd_reconstructs_and_is_orthonormal() {
         let mut s: u64 = 0x5a5a_3c3c_1e1e_0f0f;
         let mut rng = || {
-            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             ((s >> 11) as f64) / (1u64 << 53) as f64 - 0.5
         };
 
@@ -18058,7 +18082,11 @@ mod tests {
             let b: Vec<Vec<f64>> = (0..m).map(|_| (0..r).map(|_| rng()).collect()).collect();
             let c: Vec<Vec<f64>> = (0..r).map(|_| (0..n).map(|_| rng()).collect()).collect();
             let a: Vec<Vec<f64>> = (0..m)
-                .map(|i| (0..n).map(|j| (0..r).map(|t| b[i][t] * c[t][j]).sum()).collect())
+                .map(|i| {
+                    (0..n)
+                        .map(|j| (0..r).map(|t| b[i][t] * c[t][j]).sum())
+                        .collect()
+                })
                 .collect();
 
             let res = jacobi_svd(&a, DecompOptions::default()).expect("jacobi_svd");
@@ -18080,7 +18108,10 @@ mod tests {
                     maxerr = maxerr.max((val - a[i][j]).abs());
                 }
             }
-            assert!(maxerr < 1e-10, "reconstruction maxerr {maxerr} for {m}x{n} rank {r}");
+            assert!(
+                maxerr < 1e-10,
+                "reconstruction maxerr {maxerr} for {m}x{n} rank {r}"
+            );
 
             // Vᵀ rows orthonormal.
             for p in 0..k {
@@ -18128,7 +18159,9 @@ mod tests {
         // matches the full SVD to rounding. Also checks the rank-k reconstruction error.
         let mut s: u64 = 0x0123_4567_89ab_cdef;
         let mut rng = || {
-            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             ((s >> 11) as f64) / (1u64 << 53) as f64 - 0.5
         };
         let (m, n, r, k) = (80usize, 60usize, 12usize, 6usize);
@@ -18162,8 +18195,12 @@ mod tests {
         // truncation built from the full SVD.
         for row in 0..m {
             for col in 0..n {
-                let approx: f64 = (0..k).map(|t| rsvd.u[row][t] * rsvd.s[t] * rsvd.vt[t][col]).sum();
-                let exact: f64 = (0..k).map(|t| full.u[row][t] * full.s[t] * full.vt[t][col]).sum();
+                let approx: f64 = (0..k)
+                    .map(|t| rsvd.u[row][t] * rsvd.s[t] * rsvd.vt[t][col])
+                    .sum();
+                let exact: f64 = (0..k)
+                    .map(|t| full.u[row][t] * full.s[t] * full.vt[t][col])
+                    .sum();
                 assert!(
                     (approx - exact).abs() < 1e-7 * (1.0 + exact.abs()),
                     "reconstruction[{row}][{col}]: {approx} vs {exact}"
@@ -18176,7 +18213,9 @@ mod tests {
     fn clarkson_woodruff_shape_determinism_and_embedding() {
         let mut s: u64 = 0xa5a5_5a5a_1234_5678;
         let mut rng = || {
-            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             ((s >> 11) as f64) / (1u64 << 53) as f64 - 0.5
         };
         let (m, n, sketch) = (300usize, 8usize, 120usize);
@@ -18195,7 +18234,12 @@ mod tests {
         }
         // Different seed → different sketch (almost surely).
         let sa3 = clarkson_woodruff_transform(&a, sketch, 100).expect("cwt");
-        assert!(sa.iter().flatten().zip(sa3.iter().flatten()).any(|(&x, &y)| x != y));
+        assert!(
+            sa.iter()
+                .flatten()
+                .zip(sa3.iter().flatten())
+                .any(|(&x, &y)| x != y)
+        );
 
         // Unbiased squared-norm embedding: E[‖S·A·x‖²] = ‖A·x‖²; average over many x → ≈ 1.
         let trials = 60;
@@ -18222,7 +18266,9 @@ mod tests {
     fn randomized_eigh_matches_full_eigh_on_low_rank() {
         let mut s: u64 = 0x0f1e_2d3c_4b5a_6978;
         let mut rng = || {
-            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             ((s >> 11) as f64) / (1u64 << 53) as f64 - 0.5
         };
         let (n, r, k) = (90usize, 14usize, 6usize);
@@ -18278,7 +18324,9 @@ mod tests {
     fn randomized_pinv_matches_full_pinv_on_low_rank() {
         let mut s: u64 = 0x7766_5544_3322_1100;
         let mut rng = || {
-            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             ((s >> 11) as f64) / (1u64 << 53) as f64 - 0.5
         };
         let (m, n, r, k) = (120usize, 50usize, 8usize, 12usize);
@@ -18323,7 +18371,9 @@ mod tests {
     fn srht_transform_is_a_norm_preserving_embedding() {
         let mut sr: u64 = 0x1357_9bdf_2468_ace0;
         let mut rng = || {
-            sr = sr.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            sr = sr
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             ((sr >> 11) as f64) / (1u64 << 53) as f64 - 0.5
         };
         let (m, n, sk) = (300usize, 12usize, 96usize);
@@ -18342,7 +18392,12 @@ mod tests {
         }
         // Different seed → different sketch.
         let sa3 = srht_transform(&a, sk, 12).expect("srht");
-        assert!(sa.iter().flatten().zip(sa3.iter().flatten()).any(|(&x, &y)| x != y));
+        assert!(
+            sa.iter()
+                .flatten()
+                .zip(sa3.iter().flatten())
+                .any(|(&x, &y)| x != y)
+        );
 
         // Norm-preserving subspace embedding: mean ‖S·A·x‖² / ‖A·x‖² ≈ 1.
         let trials = 50;
@@ -18367,7 +18422,9 @@ mod tests {
     fn interp_decomp_reconstructs_low_rank() {
         let mut s: u64 = 0x5151_2626_3737_4848;
         let mut rng = || {
-            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             ((s >> 11) as f64) / (1u64 << 53) as f64 - 0.5
         };
         let (m, n, r, k) = (140usize, 60usize, 8usize, 14usize);
@@ -18375,7 +18432,11 @@ mod tests {
         let c: Vec<Vec<f64>> = (0..r).map(|_| (0..n).map(|_| rng()).collect()).collect();
         let a: Vec<Vec<f64>> = b
             .iter()
-            .map(|bi| (0..n).map(|j| (0..r).map(|t| bi[t] * c[t][j]).sum()).collect())
+            .map(|bi| {
+                (0..n)
+                    .map(|j| (0..r).map(|t| bi[t] * c[t][j]).sum())
+                    .collect()
+            })
             .collect();
 
         let id = interp_decomp(&a, k, 8, 5).expect("interp_decomp");
@@ -18390,7 +18451,9 @@ mod tests {
         let mut maxerr = 0.0f64;
         for i in 0..m {
             for j in 0..n {
-                let approx: f64 = (0..id.rank).map(|t| a[i][id.skeleton[t]] * id.proj[t][j]).sum();
+                let approx: f64 = (0..id.rank)
+                    .map(|t| a[i][id.skeleton[t]] * id.proj[t][j])
+                    .sum();
                 maxerr = maxerr.max((a[i][j] - approx).abs());
             }
         }
@@ -18401,7 +18464,9 @@ mod tests {
     fn pivoted_cholesky_reconstructs_low_rank_psd() {
         let mut s: u64 = 0x2718_2818_2845_9045;
         let mut rng = || {
-            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             ((s >> 11) as f64) / (1u64 << 53) as f64 - 0.5
         };
         let (n, r) = (80usize, 9usize);
@@ -18423,7 +18488,9 @@ mod tests {
         let mut maxerr = 0.0f64;
         for i in 0..n {
             for j in 0..n {
-                let approx: f64 = (0..pc.rank).map(|t| pc.factor[i][t] * pc.factor[j][t]).sum();
+                let approx: f64 = (0..pc.rank)
+                    .map(|t| pc.factor[i][t] * pc.factor[j][t])
+                    .sum();
                 maxerr = maxerr.max((a[i][j] - approx).abs());
             }
         }

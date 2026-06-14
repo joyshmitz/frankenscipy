@@ -1,7 +1,7 @@
 // Correctness + A/B for randomized_pinv vs the full-SVD pinv, on a numerically rank-r
 // matrix. With both truncating at the same relative tolerance (above the noise floor,
 // below the signal), the two pseudoinverses agree; the speedup is the wall-clock ratio.
-use fsci_linalg::{pinv, randomized_pinv, PinvOptions};
+use fsci_linalg::{PinvOptions, pinv, randomized_pinv};
 use std::hint::black_box;
 use std::time::Instant;
 
@@ -13,7 +13,9 @@ fn main() {
     let rtol = 1e-3;
     let mut st: u64 = 0x243f_6a88_85a3_08d3;
     let mut rng = || {
-        st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        st = st
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         ((st >> 11) as f64) / (1u64 << 53) as f64 - 0.5
     };
     // A = B(m×r)·C(r×n) (signal) + tiny noise → numerically rank-r, but full-rank so the
@@ -66,5 +68,8 @@ fn main() {
     tr.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let f = tf[trials / 2] * 1e3;
     let rr = tr[trials / 2] * 1e3;
-    println!("full pinv {f:.2} ms | randomized_pinv {rr:.2} ms | speedup {:.2}x  (m={m} n={n} k={k})", f / rr);
+    println!(
+        "full pinv {f:.2} ms | randomized_pinv {rr:.2} ms | speedup {:.2}x  (m={m} n={n} k={k})",
+        f / rr
+    );
 }
