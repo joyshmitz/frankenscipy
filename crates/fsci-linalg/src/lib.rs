@@ -3565,6 +3565,152 @@ pub fn svd(a: &[Vec<f64>], options: DecompOptions) -> Result<SvdResult, LinalgEr
     })
 }
 
+// One-sided Jacobi SVD core for a TALL/SQUARE matrix (m ≥ n). Orthogonalizes the columns of A
+// by a cyclic sweep of Givens rotations (W ← A·V); on convergence the column norms are the
+// singular values and W/σ are the left singular vectors. Guaranteed-convergent with high
+// relative accuracy and — unlike the Gram-tridiagonal QR path — it deflates exact-zero singular
+// values trivially (zero/orthogonal columns need no rotation), so rank-deficient inputs that
+// stall the bidiagonal QR (frankenscipy-9xrce) finish in a couple of sweeps. Returns thin
+// (U: m×n, s: n desc, Vᵀ: n×n).
+fn one_sided_jacobi_svd_tall(a: &[Vec<f64>], m: usize, n: usize) -> SvdResult {
+    // Column-major working copies: w[j] is column j of W = A·V (length m); v[j] is column j of
+    // the accumulated right factor V (length n).
+    let mut w: Vec<Vec<f64>> = (0..n).map(|j| (0..m).map(|i| a[i][j]).collect()).collect();
+    let mut v: Vec<Vec<f64>> = (0..n)
+        .map(|j| {
+            let mut col = vec![0.0; n];
+            col[j] = 1.0;
+            col
+        })
+        .collect();
+    let tol = f64::EPSILON;
+    const MAX_SWEEPS: usize = 60;
+    // Cached squared column norms of W: α = nrm2[i], β = nrm2[j] are read instead of recomputed,
+    // so a skipped (already-orthogonal) pair costs only one dot product γ — the common case for
+    // rank-deficient inputs whose zero columns are mutually orthogonal.
+    let mut nrm2: Vec<f64> = (0..n).map(|j| w[j].iter().map(|x| x * x).sum()).collect();
+
+    for _ in 0..MAX_SWEEPS {
+        let mut converged = true;
+        for i in 0..n {
+            for j in (i + 1)..n {
+                let alpha = nrm2[i];
+                let beta = nrm2[j];
+                let (wi, wj) = (&w[i], &w[j]);
+                let mut gamma = 0.0;
+                for k in 0..m {
+                    gamma += wi[k] * wj[k];
+                }
+                if gamma.abs() <= tol * (alpha * beta).sqrt() {
+                    continue; // columns already orthogonal (covers zero columns: γ = 0)
+                }
+                converged = false;
+                let zeta = (beta - alpha) / (2.0 * gamma);
+                let t = if zeta == 0.0 {
+                    1.0
+                } else {
+                    zeta.signum() / (zeta.abs() + (1.0 + zeta * zeta).sqrt())
+                };
+                let c = 1.0 / (1.0 + t * t).sqrt();
+                let s = c * t;
+                let mut ni = 0.0;
+                let mut nj = 0.0;
+                for k in 0..m {
+                    let (wik, wjk) = (w[i][k], w[j][k]);
+                    let nik = c * wik - s * wjk;
+                    let njk = s * wik + c * wjk;
+                    w[i][k] = nik;
+                    w[j][k] = njk;
+                    ni += nik * nik;
+                    nj += njk * njk;
+                }
+                nrm2[i] = ni;
+                nrm2[j] = nj;
+                for k in 0..n {
+                    let (vik, vjk) = (v[i][k], v[j][k]);
+                    v[i][k] = c * vik - s * vjk;
+                    v[j][k] = s * vik + c * vjk;
+                }
+            }
+        }
+        if converged {
+            break;
+        }
+    }
+
+    // Singular values = column norms of W; sort descending (stable on index for ties).
+    let mut order: Vec<(f64, usize)> = (0..n).map(|j| (nrm2[j].max(0.0).sqrt(), j)).collect();
+    order.sort_by(|x, y| y.0.total_cmp(&x.0).then(x.1.cmp(&y.1)));
+    let s: Vec<f64> = order.iter().map(|(nrm, _)| *nrm).collect();
+    let smax = s.first().copied().unwrap_or(0.0);
+    let svtol = (m.max(n) as f64) * f64::EPSILON * smax.max(1.0);
+
+    let mut u = vec![vec![0.0; n]; m];
+    let mut vt = vec![vec![0.0; n]; n];
+    for (out, &(nrm, orig)) in order.iter().enumerate() {
+        if nrm > svtol {
+            let inv = 1.0 / nrm;
+            for (row, urow) in u.iter_mut().enumerate() {
+                urow[out] = w[orig][row] * inv;
+            }
+        }
+        vt[out].copy_from_slice(&v[orig]);
+    }
+    SvdResult { u, s, vt }
+}
+
+/// Singular value decomposition by the one-sided Jacobi method — `A = U·Σ·Vᵀ` (thin).
+///
+/// An alternative to [`svd`] that trades speed for robustness and high relative accuracy: it
+/// orthogonalizes columns with cyclic Givens rotations rather than reducing to bidiagonal form
+/// and running implicit-shift QR. Its key property is that it deflates exactly-zero singular
+/// values trivially, so it returns in a couple of sweeps on rank-deficient matrices that stall
+/// the bidiagonal-QR path (see `frankenscipy-9xrce`). Reconstruction is exact to rounding and
+/// `U`, `V` have orthonormal columns. Cost O(m·n²·sweeps); use [`svd`] for large well-conditioned
+/// inputs and this when robustness on (near-)singular matrices matters.
+pub fn jacobi_svd(a: &[Vec<f64>], options: DecompOptions) -> Result<SvdResult, LinalgError> {
+    let (rows, cols) = matrix_shape(a)?;
+    hardened_dimension_check(options.mode, rows, cols)?;
+    validate_finite_matrix(a, options.mode, options.check_finite)?;
+
+    if rows == 0 || cols == 0 {
+        return Ok(SvdResult {
+            u: Vec::new(),
+            s: Vec::new(),
+            vt: Vec::new(),
+        });
+    }
+
+    let result = if rows >= cols {
+        one_sided_jacobi_svd_tall(a, rows, cols)
+    } else {
+        // Work on Aᵀ (tall), then A = (Aᵀ)ᵀ ⇒ swap the roles of U and Vᵀ.
+        let at: Vec<Vec<f64>> = (0..cols)
+            .map(|i| (0..rows).map(|j| a[j][i]).collect())
+            .collect();
+        let t = one_sided_jacobi_svd_tall(&at, cols, rows);
+        // t: U' (cols×rows), s (rows), Vᵀ' (rows×rows). A = Vᵀ'ᵀ·Σ·U'ᵀ.
+        let u: Vec<Vec<f64>> = (0..rows)
+            .map(|i| (0..rows).map(|j| t.vt[j][i]).collect())
+            .collect();
+        let vt: Vec<Vec<f64>> = (0..rows)
+            .map(|i| (0..cols).map(|j| t.u[j][i]).collect())
+            .collect();
+        SvdResult { u, s: t.s, vt }
+    };
+
+    emit_trace(LinalgTrace {
+        operation: "jacobi_svd",
+        matrix_size: (rows, cols),
+        mode: options.mode,
+        rcond: None,
+        warning: None,
+        error: None,
+    });
+
+    Ok(result)
+}
+
 /// Compute singular values only (without U and Vᵀ).
 ///
 /// Matches `scipy.linalg.svdvals(a)`.
@@ -17743,6 +17889,84 @@ mod tests {
         );
         println!("speedup={:.6}", rowwise_ms / workspace_ms);
         println!("BIDIAG_RIGHT_WORKSPACE_PERF_END");
+    }
+
+    #[test]
+    fn jacobi_svd_reconstructs_and_is_orthonormal() {
+        let mut s: u64 = 0x5a5a_3c3c_1e1e_0f0f;
+        let mut rng = || {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((s >> 11) as f64) / (1u64 << 53) as f64 - 0.5
+        };
+
+        // Full-rank tall, full-rank wide, and an EXACTLY rank-deficient matrix (the 9xrce case).
+        let cases: [(usize, usize, usize); 3] = [(20, 12, 12), (10, 16, 10), (24, 18, 5)];
+        for (m, n, r) in cases {
+            // A = B·C has rank min(r, m, n).
+            let b: Vec<Vec<f64>> = (0..m).map(|_| (0..r).map(|_| rng()).collect()).collect();
+            let c: Vec<Vec<f64>> = (0..r).map(|_| (0..n).map(|_| rng()).collect()).collect();
+            let a: Vec<Vec<f64>> = (0..m)
+                .map(|i| (0..n).map(|j| (0..r).map(|t| b[i][t] * c[t][j]).sum()).collect())
+                .collect();
+
+            let res = jacobi_svd(&a, DecompOptions::default()).expect("jacobi_svd");
+            let k = m.min(n);
+            assert_eq!(res.s.len(), k);
+            assert_eq!(res.u.len(), m);
+            assert_eq!(res.u[0].len(), k);
+            assert_eq!(res.vt.len(), k);
+            assert_eq!(res.vt[0].len(), n);
+            for w in res.s.windows(2) {
+                assert!(w[0] >= w[1] - 1e-9, "singular values descending");
+            }
+
+            // Reconstruction A ≈ U·Σ·Vᵀ.
+            let mut maxerr = 0.0f64;
+            for i in 0..m {
+                for j in 0..n {
+                    let val: f64 = (0..k).map(|t| res.u[i][t] * res.s[t] * res.vt[t][j]).sum();
+                    maxerr = maxerr.max((val - a[i][j]).abs());
+                }
+            }
+            assert!(maxerr < 1e-10, "reconstruction maxerr {maxerr} for {m}x{n} rank {r}");
+
+            // Vᵀ rows orthonormal.
+            for p in 0..k {
+                for q in 0..k {
+                    let dot: f64 = (0..n).map(|j| res.vt[p][j] * res.vt[q][j]).sum();
+                    let expect = if p == q { 1.0 } else { 0.0 };
+                    assert!((dot - expect).abs() < 1e-9, "Vt not orthonormal ({p},{q})");
+                }
+            }
+            // U columns with σ>0 orthonormal.
+            for p in 0..k {
+                if res.s[p] <= 1e-9 {
+                    continue;
+                }
+                for q in 0..k {
+                    if res.s[q] <= 1e-9 {
+                        continue;
+                    }
+                    let dot: f64 = (0..m).map(|i| res.u[i][p] * res.u[i][q]).sum();
+                    let expect = if p == q { 1.0 } else { 0.0 };
+                    assert!((dot - expect).abs() < 1e-9, "U not orthonormal ({p},{q})");
+                }
+            }
+            // Rank-deficient case: trailing singular values are ~0.
+            if r < k {
+                for &sv in &res.s[r..] {
+                    assert!(sv < 1e-9, "expected zero singular value, got {sv}");
+                }
+            }
+        }
+
+        // Matches the reference SVD's singular values on a well-conditioned matrix.
+        let a: Vec<Vec<f64>> = (0..15).map(|_| (0..10).map(|_| rng()).collect()).collect();
+        let jac = jacobi_svd(&a, DecompOptions::default()).expect("jacobi");
+        let reff = svd(&a, DecompOptions::default()).expect("svd");
+        for (x, y) in jac.s.iter().zip(&reff.s) {
+            assert!((x - y).abs() < 1e-9, "singular value mismatch {x} vs {y}");
+        }
     }
 
     #[test]
