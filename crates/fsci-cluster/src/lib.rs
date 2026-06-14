@@ -2350,6 +2350,233 @@ pub fn gaussian_mixture(
     })
 }
 
+/// Result of [`gaussian_mixture_full`].
+#[derive(Debug, Clone)]
+pub struct GmmFullResult {
+    /// Mixture weights `π_k` (length k, sum to 1).
+    pub weights: Vec<f64>,
+    /// Component means `μ_k` (k×d).
+    pub means: Vec<Vec<f64>>,
+    /// Full component covariance matrices `Σ_k` (k of d×d).
+    pub covariances: Vec<Vec<Vec<f64>>>,
+    /// Posterior responsibilities `γ_{ik}` (n×k), each row sums to 1.
+    pub responsibilities: Vec<Vec<f64>>,
+    /// Hard cluster labels `argmax_k γ_{ik}` (length n).
+    pub labels: Vec<usize>,
+    /// Final average log-likelihood per sample.
+    pub log_likelihood: f64,
+    /// EM iterations performed.
+    pub n_iter: usize,
+}
+
+// Lower-triangular Cholesky L (A = L·Lᵀ) of a d×d SPD matrix, or None if not positive definite.
+fn cholesky_lower(m: &[Vec<f64>], d: usize) -> Option<Vec<Vec<f64>>> {
+    let mut l = vec![vec![0.0f64; d]; d];
+    for i in 0..d {
+        for j in 0..=i {
+            let mut s = m[i][j];
+            for (lik, ljk) in l[i].iter().zip(&l[j]).take(j) {
+                s -= lik * ljk;
+            }
+            if i == j {
+                if s <= 0.0 {
+                    return None;
+                }
+                l[i][j] = s.sqrt();
+            } else {
+                l[i][j] = s / l[j][j];
+            }
+        }
+    }
+    Some(l)
+}
+
+/// Gaussian Mixture Model with FULL covariances, fit by expectation-maximization.
+///
+/// `sklearn.mixture.GaussianMixture(covariance_type="full")` (the default): fits
+/// `p(x) = Σ_k π_k·N(x | μ_k, Σ_k)` with general `d×d` covariances, so it captures correlated
+/// features that the diagonal [`gaussian_mixture`] cannot. Each E-step Cholesky-factors every
+/// `Σ_k` once (`Σ = L·Lᵀ`), giving `log det Σ = 2·Σ log L_ii` and the squared Mahalanobis
+/// distance `‖L⁻¹(x−μ)‖²` via forward substitution; responsibilities follow from a stable
+/// log-sum-exp. The M-step re-estimates `Σ_k` as the responsibility-weighted scatter plus
+/// `reg_covar·I` (which keeps every `Σ_k` positive definite — `reg_covar` must be > 0). Means
+/// seeded by k-means++. Deterministic by `seed`.
+pub fn gaussian_mixture_full(
+    data: &[Vec<f64>],
+    n_components: usize,
+    max_iter: usize,
+    tol: f64,
+    reg_covar: f64,
+    seed: u64,
+) -> Result<GmmFullResult, ClusterError> {
+    if data.is_empty() || data[0].is_empty() {
+        return Err(ClusterError::EmptyData);
+    }
+    let n = data.len();
+    let d = data[0].len();
+    if data.iter().any(|row| row.len() != d) {
+        return Err(ClusterError::InvalidArgument(
+            "all rows must have the same length".to_string(),
+        ));
+    }
+    let k = n_components;
+    if k == 0 || k > n {
+        return Err(ClusterError::InvalidArgument(format!(
+            "n_components={k} must be in [1, n={n}]"
+        )));
+    }
+    if !(reg_covar.is_finite() && reg_covar > 0.0) {
+        return Err(ClusterError::InvalidArgument(
+            "reg_covar must be finite and positive".to_string(),
+        ));
+    }
+    if data.iter().flatten().any(|v| !v.is_finite()) {
+        return Err(ClusterError::InvalidArgument(
+            "data must be finite".to_string(),
+        ));
+    }
+
+    const FLOOR: f64 = 1e-12;
+    let mut means = kmeans_plusplus_init(data, k, seed);
+    // Initialize covariances to the (regularized) global covariance.
+    let global_mean: Vec<f64> = (0..d)
+        .map(|j| data.iter().map(|r| r[j]).sum::<f64>() / n as f64)
+        .collect();
+    let mut global_cov = vec![vec![0.0f64; d]; d];
+    for row in data {
+        for a in 0..d {
+            let da = row[a] - global_mean[a];
+            for b in 0..d {
+                global_cov[a][b] += da * (row[b] - global_mean[b]);
+            }
+        }
+    }
+    for (a, rowv) in global_cov.iter_mut().enumerate() {
+        for v in rowv.iter_mut() {
+            *v /= n as f64;
+        }
+        rowv[a] += reg_covar;
+    }
+    let mut covariances = vec![global_cov; k];
+    let mut weights = vec![1.0 / k as f64; k];
+
+    let half_d_log_2pi = 0.5 * d as f64 * (2.0 * std::f64::consts::PI).ln();
+    let mut resp = vec![vec![0.0f64; k]; n];
+    let mut log_likelihood = f64::NEG_INFINITY;
+    let mut old_ll = f64::NEG_INFINITY;
+    let mut iters = 0;
+
+    for it in 0..max_iter.max(1) {
+        iters = it + 1;
+        // Per-component Cholesky factor + log-normalizer (log π_k − ½ log det Σ_k − (d/2)log2π).
+        let mut chols: Vec<Vec<Vec<f64>>> = Vec::with_capacity(k);
+        let mut log_norm = vec![0.0f64; k];
+        for c in 0..k {
+            let l = cholesky_lower(&covariances[c], d).ok_or_else(|| {
+                ClusterError::ConvergenceFailed(format!(
+                    "component {c} covariance not positive definite"
+                ))
+            })?;
+            let logdet: f64 = (0..d).map(|j| l[j][j].max(FLOOR).ln()).sum::<f64>() * 2.0;
+            log_norm[c] = weights[c].max(FLOOR).ln() - 0.5 * logdet - half_d_log_2pi;
+            chols.push(l);
+        }
+
+        // E-step.
+        let mut total_ll = 0.0;
+        let mut y = vec![0.0f64; d];
+        for (i, row) in data.iter().enumerate() {
+            let mut logp = vec![0.0f64; k];
+            let mut maxlp = f64::NEG_INFINITY;
+            for c in 0..k {
+                let l = &chols[c];
+                // Forward-solve L·y = (x − μ_c); Mahalanobis = ‖y‖².
+                let mut maha = 0.0;
+                for r in 0..d {
+                    let mut s = row[r] - means[c][r];
+                    for q in 0..r {
+                        s -= l[r][q] * y[q];
+                    }
+                    let yr = s / l[r][r];
+                    y[r] = yr;
+                    maha += yr * yr;
+                }
+                let lp = log_norm[c] - 0.5 * maha;
+                logp[c] = lp;
+                if lp > maxlp {
+                    maxlp = lp;
+                }
+            }
+            let mut sumexp = 0.0;
+            for lp in logp.iter_mut() {
+                *lp = (*lp - maxlp).exp();
+                sumexp += *lp;
+            }
+            total_ll += maxlp + sumexp.ln();
+            let inv = 1.0 / sumexp;
+            for c in 0..k {
+                resp[i][c] = logp[c] * inv;
+            }
+        }
+        log_likelihood = total_ll / n as f64;
+        if (log_likelihood - old_ll).abs() < tol {
+            break;
+        }
+        old_ll = log_likelihood;
+
+        // M-step.
+        for c in 0..k {
+            let nk: f64 = resp.iter().map(|r| r[c]).sum::<f64>().max(FLOOR);
+            weights[c] = nk / n as f64;
+            for j in 0..d {
+                means[c][j] = data.iter().enumerate().map(|(i, r)| resp[i][c] * r[j]).sum::<f64>() / nk;
+            }
+            let mut cov = vec![vec![0.0f64; d]; d];
+            for (i, row) in data.iter().enumerate() {
+                let g = resp[i][c];
+                if g == 0.0 {
+                    continue;
+                }
+                for a in 0..d {
+                    let ga = g * (row[a] - means[c][a]);
+                    for b in 0..d {
+                        cov[a][b] += ga * (row[b] - means[c][b]);
+                    }
+                }
+            }
+            for rowv in cov.iter_mut() {
+                for v in rowv.iter_mut() {
+                    *v /= nk;
+                }
+            }
+            for (a, rowv) in cov.iter_mut().enumerate() {
+                rowv[a] += reg_covar;
+            }
+            covariances[c] = cov;
+        }
+    }
+
+    let labels: Vec<usize> = resp
+        .iter()
+        .map(|r| {
+            r.iter()
+                .enumerate()
+                .max_by(|a, b| a.1.total_cmp(b.1))
+                .map_or(0, |(c, _)| c)
+        })
+        .collect();
+
+    Ok(GmmFullResult {
+        weights,
+        means,
+        covariances,
+        responsibilities: resp,
+        labels,
+        log_likelihood,
+        n_iter: iters,
+    })
+}
+
 /// Vector quantization: assign each observation to the nearest centroid.
 ///
 /// Matches `scipy.cluster.vq.vq`.
@@ -5557,6 +5784,79 @@ mod tests {
         assert!(gaussian_mixture(&data, 0, 10, 1e-3, 1e-6, 1).is_err());
         assert!(gaussian_mixture(&data, n + 1, 10, 1e-3, 1e-6, 1).is_err());
         assert!(gaussian_mixture(&data, 2, 10, 1e-3, -1.0, 1).is_err()); // reg_covar < 0
+    }
+
+    #[test]
+    fn gaussian_mixture_full_recovers_correlated_gaussians() {
+        let mut s: u64 = 0xbb67_ae85_84ca_a73b;
+        let mut gauss = || {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let u1 = ((s >> 11) as f64) / (1u64 << 53) as f64 + 1e-12;
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let u2 = ((s >> 11) as f64) / (1u64 << 53) as f64;
+            (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()
+        };
+        // Two well-separated 2-D Gaussians with strong, opposite correlations (a diagonal model
+        // could not represent these). x = center + L·z, z ~ N(0,I).
+        let centers = [[0.0, 0.0], [12.0, 12.0]];
+        let chols = [[[0.6, 0.0], [0.55, 0.25]], [[0.6, 0.0], [-0.55, 0.25]]];
+        let per = 120usize;
+        let mut data = Vec::new();
+        let mut truth = Vec::new();
+        for (c, ctr) in centers.iter().enumerate() {
+            for _ in 0..per {
+                let (z0, z1) = (gauss(), gauss());
+                let l = &chols[c];
+                data.push(vec![
+                    ctr[0] + l[0][0] * z0 + l[0][1] * z1,
+                    ctr[1] + l[1][0] * z0 + l[1][1] * z1,
+                ]);
+                truth.push(c);
+            }
+        }
+        let n = data.len();
+
+        let gmm = gaussian_mixture_full(&data, 2, 200, 1e-6, 1e-6, 11).expect("gmm full");
+        assert_eq!(gmm.covariances.len(), 2);
+        assert_eq!(gmm.covariances[0].len(), 2);
+        assert!((gmm.weights.iter().sum::<f64>() - 1.0).abs() < 1e-9);
+        for r in &gmm.responsibilities {
+            assert!((r.iter().sum::<f64>() - 1.0).abs() < 1e-9);
+        }
+        // Covariances symmetric.
+        for cov in &gmm.covariances {
+            assert!((cov[0][1] - cov[1][0]).abs() < 1e-12);
+        }
+        // Purity 1.0.
+        let mut correct = 0usize;
+        for pred in 0..2 {
+            let mut counts = vec![0usize; 2];
+            for i in 0..n {
+                if gmm.labels[i] == pred {
+                    counts[truth[i]] += 1;
+                }
+            }
+            correct += counts.iter().copied().max().unwrap_or(0);
+        }
+        assert_eq!(correct, n, "full GMM should separate the correlated Gaussians");
+        // The recovered component covering each center should have the right correlation SIGN.
+        for (c, ctr) in centers.iter().enumerate() {
+            let comp = (0..2)
+                .min_by(|&a, &b| {
+                    let da = (gmm.means[a][0] - ctr[0]).powi(2) + (gmm.means[a][1] - ctr[1]).powi(2);
+                    let db = (gmm.means[b][0] - ctr[0]).powi(2) + (gmm.means[b][1] - ctr[1]).powi(2);
+                    da.total_cmp(&db)
+                })
+                .unwrap();
+            let true_off = chols[c][1][0] * chols[c][0][0]; // sign of the off-diagonal covariance
+            assert!(
+                gmm.covariances[comp][0][1].signum() == true_off.signum(),
+                "covariance correlation sign mismatch for center {ctr:?}"
+            );
+        }
+
+        assert!(gaussian_mixture_full(&data, 2, 10, 1e-3, 0.0, 1).is_err()); // reg_covar must be > 0
+        assert!(gaussian_mixture_full(&[], 2, 10, 1e-3, 1e-6, 1).is_err());
     }
 
     #[test]
