@@ -200,6 +200,98 @@ pub fn spectral_clustering(
     Ok(kmeans(&embedding, n_clusters, max_iter, seed)?.labels)
 }
 
+/// Result of [`spectral_embedding`].
+#[derive(Debug, Clone)]
+pub struct SpectralEmbeddingResult {
+    /// The `n×k` Laplacian-eigenmap embedding (rows are points), columns ordered by descending
+    /// normalized-affinity eigenvalue (= ascending normalized-Laplacian eigenvalue).
+    pub embedding: Vec<Vec<f64>>,
+    /// The corresponding normalized-affinity eigenvalues `μ = 1 − λ_Laplacian`, descending.
+    pub eigenvalues: Vec<f64>,
+}
+
+/// Laplacian-eigenmaps spectral embedding of a precomputed `n×n` affinity matrix into
+/// `n_components` dimensions.
+///
+/// Matches `sklearn.manifold.SpectralEmbedding(affinity="precomputed")`: forms the symmetric
+/// normalized affinity `D^{-1/2}·A·D^{-1/2}`, takes its top-`k` eigenvectors `u` via
+/// [`fsci_linalg::randomized_eigh`], and returns the generalized eigenvectors `y = D^{-1/2}·u`
+/// — the solutions of `L y = λ D y` for the smallest non-trivial normalized-Laplacian
+/// eigenvalues, i.e. the manifold coordinates. Unlike [`spectral_clustering`] there is no
+/// row-normalisation and no k-means; this is the embedding itself. The eigendecomposition
+/// dominates: O(n²·k) randomized versus O(n³) full `eigh`, a large win when k ≪ n. `affinity`
+/// should be symmetric with non-negative entries; deterministic given `seed`.
+pub fn spectral_embedding(
+    affinity: &[Vec<f64>],
+    n_components: usize,
+    seed: u64,
+) -> Result<SpectralEmbeddingResult, ClusterError> {
+    if affinity.is_empty() {
+        return Err(ClusterError::EmptyData);
+    }
+    let n = affinity.len();
+    if affinity.iter().any(|row| row.len() != n) {
+        return Err(ClusterError::InvalidArgument(
+            "affinity matrix must be square".to_string(),
+        ));
+    }
+    if n_components == 0 || n_components > n {
+        return Err(ClusterError::InvalidArgument(format!(
+            "n_components={n_components} must be in [1, n={n}]"
+        )));
+    }
+    if affinity.iter().flatten().any(|v| !v.is_finite()) {
+        return Err(ClusterError::InvalidArgument(
+            "affinity must be finite".to_string(),
+        ));
+    }
+
+    let inv_sqrt: Vec<f64> = affinity
+        .iter()
+        .map(|row| {
+            let deg: f64 = row.iter().sum();
+            if deg > 0.0 {
+                1.0 / deg.sqrt()
+            } else {
+                0.0
+            }
+        })
+        .collect();
+    let normalized: Vec<Vec<f64>> = (0..n)
+        .map(|i| {
+            (0..n)
+                .map(|j| affinity[i][j] * inv_sqrt[i] * inv_sqrt[j])
+                .collect()
+        })
+        .collect();
+
+    let re = fsci_linalg::randomized_eigh(&normalized, n_components, 10, 4, seed)
+        .map_err(|e| ClusterError::InvalidArgument(format!("randomized_eigh: {e}")))?;
+    let kk = re.eigenvalues.len();
+    if kk == 0 {
+        return Err(ClusterError::ConvergenceFailed(
+            "spectral embedding is empty".to_string(),
+        ));
+    }
+
+    // randomized_eigh yields eigenvalues ascending; the embedding wants the largest
+    // normalized-affinity eigenvalues (= smallest Laplacian) first. y = D^{-1/2} u.
+    let eigenvalues: Vec<f64> = (0..kk).rev().map(|t| re.eigenvalues[t]).collect();
+    let embedding: Vec<Vec<f64>> = (0..n)
+        .map(|i| {
+            (0..kk)
+                .rev()
+                .map(|t| inv_sqrt[i] * re.eigenvectors[i][t])
+                .collect()
+        })
+        .collect();
+
+    Ok(SpectralEmbeddingResult {
+        embedding,
+        eigenvalues,
+    })
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Kernel PCA (randomized)
 // ══════════════════════════════════════════════════════════════════════
@@ -3525,6 +3617,49 @@ mod tests {
         assert!(classical_mds(&[], 2, 1).is_err());
         assert!(classical_mds(&dist, 0, 1).is_err());
         assert!(classical_mds(&[vec![0.0, 1.0]], 1, 1).is_err()); // non-square
+    }
+
+    #[test]
+    fn spectral_embedding_solves_generalized_eigenproblem() {
+        let mut s: u64 = 0x9e37_79b9_7f4a_7c15;
+        let mut rng = || {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((s >> 11) as f64) / (1u64 << 53) as f64
+        };
+        // Symmetric non-negative affinity (Gaussian-like) on random 1-D positions.
+        let n = 60usize;
+        let pos: Vec<f64> = (0..n).map(|_| rng() * 5.0).collect();
+        let mut aff = vec![vec![0.0; n]; n];
+        for i in 0..n {
+            for j in 0..n {
+                aff[i][j] = (-(pos[i] - pos[j]).powi(2)).exp();
+            }
+        }
+        let k = 4usize;
+        let se = spectral_embedding(&aff, k, 3).expect("spectral_embedding");
+        let kk = se.eigenvalues.len();
+        assert_eq!(se.embedding.len(), n);
+        assert_eq!(se.embedding[0].len(), kk);
+        for w in se.eigenvalues.windows(2) {
+            assert!(w[0] >= w[1] - 1e-9, "eigenvalues must be descending");
+        }
+        let deg: Vec<f64> = aff.iter().map(|r| r.iter().sum()).collect();
+        // Each column y_c must satisfy A y_c = μ_c D y_c (generalized eigenproblem).
+        let mut maxres = 0.0f64;
+        for c in 0..kk {
+            let y: Vec<f64> = se.embedding.iter().map(|r| r[c]).collect();
+            let ynorm: f64 = y.iter().map(|v| v * v).sum::<f64>().sqrt().max(1e-300);
+            for i in 0..n {
+                let ay: f64 = (0..n).map(|j| aff[i][j] * y[j]).sum();
+                let res = (ay - se.eigenvalues[c] * deg[i] * y[i]).abs() / ynorm;
+                maxres = maxres.max(res);
+            }
+        }
+        assert!(maxres < 1e-7, "generalized-eig residual {maxres}");
+
+        assert!(spectral_embedding(&[], 2, 1).is_err());
+        assert!(spectral_embedding(&aff, 0, 1).is_err());
+        assert!(spectral_embedding(&[vec![0.0, 1.0]], 1, 1).is_err()); // non-square
     }
 
     #[test]
