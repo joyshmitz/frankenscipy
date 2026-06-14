@@ -3264,7 +3264,11 @@ fn ord_digital_prewarp(
     let half_pi = std::f64::consts::FRAC_PI_2;
     let passb = (half_pi * wp).tan();
     let stopb = (half_pi * ws).tan();
-    let nat = if wp < ws { stopb / passb } else { passb / stopb };
+    let nat = if wp < ws {
+        stopb / passb
+    } else {
+        passb / stopb
+    };
     if !(nat > 1.0) {
         return Err(SignalError::InvalidArgument(format!(
             "{name}: wp and ws must differ (passband and stopband edges coincide)"
@@ -4788,6 +4792,133 @@ pub enum ButterOutput {
     Ba,
     /// Second-order sections.
     Sos,
+}
+
+/// Filter type for [`gammatone`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GammatoneType {
+    /// `order`-th order FIR gammatone filter.
+    Fir,
+    /// 8th-order digital IIR filter modelling a 4th-order gammatone (Slaney 1993).
+    Iir,
+}
+
+/// Gammatone filter design, matching `scipy.signal.gammatone(freq, ftype, order, numtaps, fs)`.
+///
+/// `freq` is the center frequency (same units as `fs`, must satisfy `0 < freq < fs/2`). For
+/// [`GammatoneType::Fir`], `order` (default 4, in `1..=24`) and `numtaps` (default
+/// `max(fs·0.015, 15)`) shape an FIR gammatone impulse response scaled to unit gain at `freq`;
+/// for [`GammatoneType::Iir`], `order`/`numtaps` are ignored and an 8th-order IIR is produced.
+/// `fs` defaults to 2. Returns the `(b, a)` transfer-function coefficients.
+pub fn gammatone(
+    freq: f64,
+    ftype: GammatoneType,
+    order: Option<usize>,
+    numtaps: Option<usize>,
+    fs: Option<f64>,
+) -> Result<BaCoeffs, SignalError> {
+    let fs = fs.unwrap_or(2.0);
+    if !(fs.is_finite() && fs > 0.0) {
+        return Err(SignalError::InvalidParameter {
+            detail: "fs must be finite and positive".to_string(),
+        });
+    }
+    if !(freq.is_finite() && freq > 0.0 && freq < fs / 2.0) {
+        return Err(SignalError::FrequencyOutOfBand {
+            detail: format!("freq must be in (0, {}) (Nyquist)", fs / 2.0),
+        });
+    }
+    // _hz_to_erb(freq) = freq / EarQ + minBW, EarQ = 9.26449, minBW = 24.7.
+    let erb = freq / 9.264_49 + 24.7;
+    let tau = std::f64::consts::TAU; // 2π
+
+    match ftype {
+        GammatoneType::Fir => {
+            let order = order.unwrap_or(4);
+            if order == 0 || order > 24 {
+                return Err(SignalError::InvalidParameter {
+                    detail: "order must be in 1..=24".to_string(),
+                });
+            }
+            let numtaps = numtaps.unwrap_or_else(|| ((fs * 0.015) as usize).max(15));
+            let bw = 1.019 * erb;
+            // factorial(order-1) as f64 (order-1 up to 23 overflows u64).
+            let mut fact = 1.0f64;
+            for k in 2..order {
+                fact *= k as f64;
+            }
+            let scale = 2.0 * (tau * bw).powi(order as i32) / fact / fs;
+            let b: Vec<f64> = (0..numtaps)
+                .map(|i| {
+                    let t = i as f64 / fs;
+                    t.powi((order - 1) as i32)
+                        * (-tau * bw * t).exp()
+                        * (tau * freq * t).cos()
+                        * scale
+                })
+                .collect();
+            Ok(BaCoeffs { b, a: vec![1.0] })
+        }
+        GammatoneType::Iir => {
+            // Inline complex arithmetic (re, im).
+            let cmul =
+                |a: (f64, f64), b: (f64, f64)| (a.0 * b.0 - a.1 * b.1, a.0 * b.1 + a.1 * b.0);
+            let cadd = |a: (f64, f64), b: (f64, f64)| (a.0 + b.0, a.1 + b.1);
+            let cscale = |a: (f64, f64), s: f64| (a.0 * s, a.1 * s);
+
+            let t_s = 1.0 / fs;
+            let bw = tau * 1.019 * erb;
+            let fr = 2.0 * freq * std::f64::consts::PI * t_s;
+            let bwt = bw * t_s;
+            let cf = fr.cos();
+
+            // exp(2j·fr), exp(-bwt + i·fr).
+            let g1 = cscale(((2.0 * fr).cos(), (2.0 * fr).sin()), -2.0 * t_s);
+            let g2 = cscale((fr.cos(), fr.sin()), 2.0 * t_s * (-bwt).exp());
+            let g3 = (3.0 + 2.0f64.powf(1.5)).sqrt() * fr.sin();
+            let g4 = (3.0 - 2.0f64.powf(1.5)).sqrt() * fr.sin();
+            let g5 = ((2.0 * fr).cos(), (2.0 * fr).sin());
+
+            let fac = |r: f64| cadd(g1, cscale(g2, cf + r));
+            let mut g = cmul(fac(-g4), fac(g4));
+            g = cmul(g, fac(-g3));
+            g = cmul(g, fac(g3));
+
+            // d = -2/exp(2bwt) − 2·g5 + 2(1+g5)/exp(bwt); then d^4.
+            let one_plus_g5 = cadd((1.0, 0.0), g5);
+            let mut d = cadd(
+                cadd((-2.0 * (-2.0 * bwt).exp(), 0.0), cscale(g5, -2.0)),
+                cscale(one_plus_g5, 2.0 * (-bwt).exp()),
+            );
+            let d2 = cmul(d, d);
+            d = cmul(d2, d2);
+            // g /= d  (complex division).
+            let dnorm = d.0 * d.0 + d.1 * d.1;
+            g = cmul(g, (d.0 / dnorm, -d.1 / dnorm));
+            let gmag = g.0.hypot(g.1);
+
+            let t4 = t_s.powi(4);
+            let b = vec![
+                t4 / gmag,
+                -4.0 * t4 * cf / bwt.exp() / gmag,
+                6.0 * t4 * (2.0 * fr).cos() / (2.0 * bwt).exp() / gmag,
+                -4.0 * t4 * (3.0 * fr).cos() / (3.0 * bwt).exp() / gmag,
+                t4 * (4.0 * fr).cos() / (4.0 * bwt).exp() / gmag,
+            ];
+            let a = vec![
+                1.0,
+                -8.0 * cf / bwt.exp(),
+                4.0 * (4.0 + 3.0 * (2.0 * fr).cos()) / (2.0 * bwt).exp(),
+                -8.0 * (6.0 * cf + (3.0 * fr).cos()) / (3.0 * bwt).exp(),
+                2.0 * (18.0 + 16.0 * (2.0 * fr).cos() + (4.0 * fr).cos()) / (4.0 * bwt).exp(),
+                -8.0 * (6.0 * cf + (3.0 * fr).cos()) / (5.0 * bwt).exp(),
+                4.0 * (4.0 + 3.0 * (2.0 * fr).cos()) / (6.0 * bwt).exp(),
+                -8.0 * cf / (7.0 * bwt).exp(),
+                (-8.0 * bwt).exp(),
+            ];
+            Ok(BaCoeffs { b, a })
+        }
+    }
 }
 
 /// Design a Butterworth IIR filter.
@@ -13443,6 +13574,73 @@ mod tests {
     }
 
     #[test]
+    fn gammatone_fir_matches_scipy() {
+        // scipy.signal.gammatone(440, 'fir', order=4, fs=16000) — first taps + length.
+        let c = gammatone(440.0, GammatoneType::Fir, Some(4), None, Some(16000.0)).unwrap();
+        assert_eq!(c.a, vec![1.0]);
+        assert_eq!(c.b.len(), 240); // max(16000*0.015, 15) = 240
+        let want = [
+            0.0,
+            2.22196718504643e-07,
+            1.64942101296993e-06,
+            4.99298227062015e-06,
+            1.01993969224887e-05,
+        ];
+        for (g, w) in c.b.iter().zip(want.iter()) {
+            assert!(
+                (g - w).abs() <= 1e-20 + 1e-13 * w.abs(),
+                "fir tap {g} vs {w}"
+            );
+        }
+    }
+
+    #[test]
+    fn gammatone_iir_matches_scipy() {
+        // scipy.signal.gammatone(440, 'iir', fs=16000): 5 b-taps, 9 a-taps.
+        let c = gammatone(440.0, GammatoneType::Iir, None, None, Some(16000.0)).unwrap();
+        let wb = [
+            1.31494461367464e-06,
+            -5.03391196645395e-06,
+            7.00649426000898e-06,
+            -4.18951968419854e-06,
+            9.02614910412011e-07,
+        ];
+        let wa = [
+            1.0,
+            -7.65646235454218e+00,
+            2.57584699322366e+01,
+            -4.97319214483238e+01,
+            6.02667361289181e+01,
+            -4.69399590980486e+01,
+            2.29474798808461e+01,
+            -6.43799381299034e+00,
+            7.93651554625368e-01,
+        ];
+        assert_eq!(c.b.len(), 5);
+        assert_eq!(c.a.len(), 9);
+        for (g, w) in c.b.iter().zip(wb.iter()) {
+            assert!(
+                (g - w).abs() <= 1e-13 * w.abs().max(1e-12),
+                "iir b {g} vs {w}"
+            );
+        }
+        for (g, w) in c.a.iter().zip(wa.iter()) {
+            assert!(
+                (g - w).abs() <= 1e-12 * w.abs().max(1.0),
+                "iir a {g} vs {w}"
+            );
+        }
+    }
+
+    #[test]
+    fn gammatone_rejects_bad_args() {
+        assert!(gammatone(440.0, GammatoneType::Fir, Some(0), None, Some(16000.0)).is_err());
+        assert!(gammatone(440.0, GammatoneType::Fir, Some(25), None, Some(16000.0)).is_err());
+        assert!(gammatone(9000.0, GammatoneType::Iir, None, None, Some(16000.0)).is_err()); // > Nyquist
+        assert!(gammatone(-1.0, GammatoneType::Iir, None, None, Some(16000.0)).is_err());
+    }
+
+    #[test]
     fn butter_bandpass_passes_midband_and_rejects_outside() {
         let coeffs = butter(2, &[0.2, 0.4], FilterType::Bandpass).expect("butter bp");
         let result = freqz(&coeffs.b, &coeffs.a, Some(1024)).expect("freqz");
@@ -15211,8 +15409,16 @@ mod tests {
         let y = sosfiltfilt(&sos, &x).expect("sosfiltfilt");
         // scipy.signal.sosfiltfilt edge + endpoint values (zero-phase).
         assert!((y[0] - 0.411_861_627_967_496).abs() < 1e-9, "y[0]={}", y[0]);
-        assert!((y[1] - 0.478_766_072_128_180_2).abs() < 1e-9, "y[1]={}", y[1]);
-        assert!((y[39] - (-0.025_264_896_683_001_06)).abs() < 1e-9, "y[39]={}", y[39]);
+        assert!(
+            (y[1] - 0.478_766_072_128_180_2).abs() < 1e-9,
+            "y[1]={}",
+            y[1]
+        );
+        assert!(
+            (y[39] - (-0.025_264_896_683_001_06)).abs() < 1e-9,
+            "y[39]={}",
+            y[39]
+        );
     }
 
     #[test]
@@ -18741,7 +18947,11 @@ mod tests {
             })
             .collect();
         let r = periodogram(&x, fs, None).unwrap();
-        assert!(r.psd[0] < 1e-12, "DC bin should vanish after detrend: {}", r.psd[0]);
+        assert!(
+            r.psd[0] < 1e-12,
+            "DC bin should vanish after detrend: {}",
+            r.psd[0]
+        );
         assert!((r.psd[8] - 4.0).abs() < 1e-9, "psd[8]={}", r.psd[8]);
         assert!((r.psd[20] - 1.0).abs() < 1e-9, "psd[20]={}", r.psd[20]);
     }
