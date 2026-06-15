@@ -1,0 +1,4 @@
+a456b0b83dc045578c4aefadbfb4e9441c5fbcba7c7f6329d360fa252ee15ba4  tests/artifacts/perf/2026-06-15-rubywaterfall-linalg-psn7x4-stage-profile/EVIDENCE.md
+7ea8f334e11a3d6e549bba9fed5fadebeb08716fd55ad3d7dd42475c549d44b3  tests/artifacts/perf/2026-06-15-rubywaterfall-linalg-psn7x4-stage-profile/check_fsci_linalg_lib_rch.txt
+a8956906131494e16a5a182e37196982d4a8b4d81351e77c48e6baa880aa1294  tests/artifacts/perf/2026-06-15-rubywaterfall-linalg-psn7x4-stage-profile/clippy_fsci_linalg_lib_rch.txt
+d5cfbf2b4ab3be8bc68e8d004cbdfee34be0f1731a60f56581de1516e0124249  tests/artifacts/perf/2026-06-15-rubywaterfall-linalg-psn7x4-stage-profile/stage_profile_native_eigh_ovh_a_rch.txt

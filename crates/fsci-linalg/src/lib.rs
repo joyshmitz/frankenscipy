@@ -21557,6 +21557,108 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "perf/profile probe: run with rch and --release for native eigh stage split"]
+    fn symmetric_eigh_native_stage_breakdown_probe() {
+        let mut s: u64 = 0x2468_ace0_1357_9bdf;
+        let mut rng = || {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((s >> 11) as f64) / (1u64 << 53) as f64 - 0.5
+        };
+        for &n in &[400usize, 800, 1200] {
+            let mut matrix = DMatrix::<f64>::zeros(n, n);
+            for i in 0..n {
+                for j in i..n {
+                    let v = rng();
+                    matrix[(i, j)] = v;
+                    matrix[(j, i)] = v;
+                }
+            }
+
+            let mut m = matrix.clone();
+            let mut reflectors: Vec<HouseholderReflector> = Vec::with_capacity(n.saturating_sub(2));
+            let mut rank2_p = vec![0.0_f64; n];
+            let mut rank2_w = vec![0.0_f64; n];
+            let started_at = std::time::Instant::now();
+            for k in 0..n - 2 {
+                let first = m[(k + 1, k)];
+                let col: Vec<f64> = (k + 1..n).map(|i| m[(i, k)]).collect();
+                let refl = make_householder_reflector(k + 1, col);
+                let beta = first - refl.values[0];
+                if refl.tau != 0.0 {
+                    apply_symmetric_householder_trailing_rank2(
+                        &mut m,
+                        &refl,
+                        &mut rank2_p,
+                        &mut rank2_w,
+                    );
+                }
+                m[(k + 1, k)] = beta;
+                m[(k, k + 1)] = beta;
+                for i in k + 2..n {
+                    m[(i, k)] = 0.0;
+                    m[(k, i)] = 0.0;
+                }
+                reflectors.push(refl);
+            }
+            let reduction_ms = started_at.elapsed().as_secs_f64() * 1_000.0;
+
+            let diag: Vec<f64> = (0..n).map(|i| m[(i, i)]).collect();
+            let offdiag: Vec<f64> = (0..n - 1).map(|i| m[(i + 1, i)]).collect();
+            let started_at = std::time::Instant::now();
+            let eig = symmetric_tridiagonal_inverse_iteration_eigen(&diag, &offdiag)
+                .or_else(|| symmetric_tridiagonal_qr_eigen(&diag, &offdiag))
+                .expect("tridiagonal eigen stage");
+            let tridiagonal_eigen_ms = started_at.elapsed().as_secs_f64() * 1_000.0;
+
+            let mut vecs = eig.eigenvectors;
+            let worker_count =
+                std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
+            let started_at = std::time::Instant::now();
+            apply_left_reflectors_column_chunks(&mut vecs, &reflectors, worker_count);
+            let backtransform_ms = started_at.elapsed().as_secs_f64() * 1_000.0;
+
+            let started_at = std::time::Instant::now();
+            let mut order: Vec<usize> = (0..n).collect();
+            order.sort_by(|&i, &j| eig.eigenvalues[i].total_cmp(&eig.eigenvalues[j]));
+            let eigenvalues: Vec<f64> = order.iter().map(|&i| eig.eigenvalues[i]).collect();
+            let mut sorted = DMatrix::<f64>::zeros(n, n);
+            for (new_col, &old_col) in order.iter().enumerate() {
+                for r in 0..n {
+                    sorted[(r, new_col)] = vecs[(r, old_col)];
+                }
+            }
+            std::hint::black_box(&sorted);
+            let sort_ms = started_at.elapsed().as_secs_f64() * 1_000.0;
+
+            let mut nalgebra_values: Vec<f64> =
+                matrix.symmetric_eigenvalues().iter().copied().collect();
+            nalgebra_values.sort_by(|left, right| left.total_cmp(right));
+            let max_abs_diff = eigenvalues
+                .iter()
+                .zip(nalgebra_values.iter())
+                .map(|(left, right)| (left - right).abs())
+                .fold(0.0_f64, f64::max);
+            assert!(
+                max_abs_diff <= 1e-8 * (n as f64).sqrt(),
+                "stage-profile native eigenvalue drift {max_abs_diff:.17e} for n={n}"
+            );
+
+            println!("SYMMETRIC_EIGH_NATIVE_STAGE_PROFILE_BEGIN");
+            println!("shape={n}x{n}");
+            println!("reduction_ms={reduction_ms:.6}");
+            println!("tridiagonal_eigen_ms={tridiagonal_eigen_ms:.6}");
+            println!("backtransform_ms={backtransform_ms:.6}");
+            println!("sort_ms={sort_ms:.6}");
+            println!("worker_count={worker_count}");
+            println!("max_abs_diff={max_abs_diff:.17e}");
+            println!("values_digest={:#018x}", eig_values_digest(&eigenvalues));
+            println!("SYMMETRIC_EIGH_NATIVE_STAGE_PROFILE_END");
+        }
+    }
+
+    #[test]
     fn eigh_symmetric_eigenvalues_ascending() {
         let a = vec![vec![2.0, 1.0], vec![1.0, 3.0]];
         let result = eigh(&a, DecompOptions::default()).expect("eigh works");
