@@ -5123,6 +5123,31 @@ pub fn eigh(a: &[Vec<f64>], options: DecompOptions) -> Result<EighResult, Linalg
     }
 
     let matrix = dmatrix_from_rows(a)?;
+    if rows >= PUBLIC_NATIVE_EIGH_MIN_DIM
+        && let Some((eigenvalues, native_vectors)) = symmetric_eigh_native(&matrix)
+    {
+        let mut eigenvectors = vec![vec![0.0; cols]; rows];
+        for col_idx in 0..cols {
+            for row_idx in 0..rows {
+                eigenvectors[row_idx][col_idx] = native_vectors[(row_idx, col_idx)];
+            }
+        }
+
+        emit_trace(LinalgTrace {
+            operation: "eigh",
+            matrix_size: (rows, cols),
+            mode: options.mode,
+            rcond: None,
+            warning: None,
+            error: None,
+        });
+
+        return Ok(EighResult {
+            eigenvalues,
+            eigenvectors,
+        });
+    }
+
     let sym = matrix.symmetric_eigen();
 
     // nalgebra returns eigenvalues in arbitrary order; sort ascending
@@ -7813,6 +7838,7 @@ const TRIDIAGONAL_INVERSE_ITERATIONS: usize = 4;
 const TRIDIAGONAL_INVERSE_MIN_PIVOT: f64 = 64.0 * f64::EPSILON;
 const TRIDIAGONAL_INVERSE_MIN_GAP_REL: f64 = 1e-6;
 const TRIDIAGONAL_INVERSE_RESIDUAL_TOL: f64 = 1e-7;
+const PUBLIC_NATIVE_EIGH_MIN_DIM: usize = 256;
 const PUBLIC_BIDIAG_SVD_MIN_COLS: usize = 64;
 const PUBLIC_BIDIAG_RANK_GAP_REL_TOL: f64 = 64.0 * f64::EPSILON;
 const PUBLIC_BIDIAG_RECON_REL_TOL: f64 = 1e-8;
@@ -21271,6 +21297,69 @@ mod tests {
     fn public_eigvalsh_values_only_perf_probe() {
         for n in [256usize, 512] {
             public_eigvalsh_values_only_probe_shape(n);
+        }
+    }
+
+    fn public_eigh_native_route_probe_shape(n: usize) {
+        let mut s: u64 = 0x2468_ace0_1357_9bdf;
+        let mut rng = || {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((s >> 11) as f64) / (1u64 << 53) as f64 - 0.5
+        };
+        let mut rows = vec![vec![0.0; n]; n];
+        let mut matrix = DMatrix::<f64>::zeros(n, n);
+        for i in 0..n {
+            for j in i..n {
+                let value = rng();
+                rows[i][j] = value;
+                rows[j][i] = value;
+                matrix[(i, j)] = value;
+                matrix[(j, i)] = value;
+            }
+        }
+
+        let started_at = std::time::Instant::now();
+        let routed = eigh(std::hint::black_box(&rows), DecompOptions::default())
+            .expect("public native eigh route");
+        let routed_ms = started_at.elapsed().as_secs_f64() * 1_000.0;
+
+        let started_at = std::time::Instant::now();
+        let sym = matrix.symmetric_eigen();
+        let nalgebra_ms = started_at.elapsed().as_secs_f64() * 1_000.0;
+        let mut nalgebra_values: Vec<f64> = sym.eigenvalues.iter().copied().collect();
+        nalgebra_values.sort_by(|left, right| left.total_cmp(right));
+
+        let max_abs_diff = routed
+            .eigenvalues
+            .iter()
+            .zip(nalgebra_values.iter())
+            .map(|(left, right)| (left - right).abs())
+            .fold(0.0_f64, f64::max);
+        assert!(
+            max_abs_diff <= 1e-8 * (n as f64).sqrt(),
+            "public native eigh eigenvalue drift {max_abs_diff:.17e} for n={n}"
+        );
+
+        println!("PUBLIC_EIGH_NATIVE_ROUTE_PERF_BEGIN");
+        println!("shape={n}x{n}");
+        println!("routed_eigh_ms={routed_ms:.6}");
+        println!("nalgebra_eigh_ms={nalgebra_ms:.6}");
+        println!("speedup={:.6}", nalgebra_ms / routed_ms);
+        println!("max_abs_diff={max_abs_diff:.17e}");
+        println!(
+            "routed_values_digest={:#018x}",
+            eig_values_digest(&routed.eigenvalues)
+        );
+        println!("PUBLIC_EIGH_NATIVE_ROUTE_PERF_END");
+    }
+
+    #[test]
+    #[ignore = "perf/proof probe: run with rch and --release for public native eigh route"]
+    fn public_eigh_native_route_perf_probe() {
+        for n in [400usize, 800, 1200] {
+            public_eigh_native_route_probe_shape(n);
         }
     }
 

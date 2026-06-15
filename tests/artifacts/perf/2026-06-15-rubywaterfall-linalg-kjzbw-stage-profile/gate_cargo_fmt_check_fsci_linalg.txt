@@ -1,0 +1,111 @@
+Diff in /data/projects/.scratch/frankenscipy-psn7x-rubywaterfall-integrate-20260615-0528/crates/fsci-linalg/src/lib.rs:13621:
+         });
+     }
+     let k = a[0].len();
+-    if k == 0
+-        || b[0].len() != k
+-        || a.iter().any(|r| r.len() != k)
+-        || b.iter().any(|r| r.len() != k)
++    if k == 0 || b[0].len() != k || a.iter().any(|r| r.len() != k) || b.iter().any(|r| r.len() != k)
+     {
+         return Err(LinalgError::InvalidArgument {
+             detail: "orthogonal_procrustes: A and B must have the same shape".to_string(),
+Diff in /data/projects/.scratch/frankenscipy-psn7x-rubywaterfall-integrate-20260615-0528/crates/fsci-linalg/src/lib.rs:22484:
+         // scipy.linalg.matmul_toeplitz((c, r), x)
+         let c = [1.0, 2.0, 3.0];
+         let r = [1.0, 4.0, 5.0, 6.0];
+-        let x = vec![vec![1.0, 0.0], vec![2.0, 1.0], vec![3.0, 0.0], vec![4.0, 1.0]];
++        let x = vec![
++            vec![1.0, 0.0],
++            vec![2.0, 1.0],
++            vec![3.0, 0.0],
++            vec![4.0, 1.0],
++        ];
+         let y = matmul_toeplitz(&c, Some(&r), &x).unwrap();
+         let want = [[48.0, 10.0], [36.0, 6.0], [26.0, 6.0]];
+         assert_eq!(y.len(), 3);
+Diff in /data/projects/.scratch/frankenscipy-psn7x-rubywaterfall-integrate-20260615-0528/crates/fsci-linalg/src/lib.rs:22491:
+         for i in 0..3 {
+             for j in 0..2 {
+-                assert!((y[i][j] - want[i][j]).abs() < 1e-9, "Y[{i}][{j}] = {}", y[i][j]);
++                assert!(
++                    (y[i][j] - want[i][j]).abs() < 1e-9,
++                    "Y[{i}][{j}] = {}",
++                    y[i][j]
++                );
+             }
+         }
+
+Diff in /data/projects/.scratch/frankenscipy-psn7x-rubywaterfall-integrate-20260615-0528/crates/fsci-linalg/src/lib.rs:22517:
+         ];
+         let p = pinvh(&a, None, None).unwrap();
+         let want = [
+-            [0.3488372093023255, -0.11627906976744184, -0.13953488372093023],
+-            [-0.11627906976744184, 0.3720930232558139, 0.04651162790697674],
+-            [-0.13953488372093026, 0.04651162790697673, 0.25581395348837205],
++            [
++                0.3488372093023255,
++                -0.11627906976744184,
++                -0.13953488372093023,
++            ],
++            [
++                -0.11627906976744184,
++                0.3720930232558139,
++                0.04651162790697674,
++            ],
++            [
++                -0.13953488372093026,
++                0.04651162790697673,
++                0.25581395348837205,
++            ],
+         ];
+         for i in 0..3 {
+             for j in 0..3 {
+Diff in /data/projects/.scratch/frankenscipy-psn7x-rubywaterfall-integrate-20260615-0528/crates/fsci-linalg/src/lib.rs:22526:
+-                assert!((p[i][j] - want[i][j]).abs() < 1e-9, "P[{i}][{j}] = {}", p[i][j]);
++                assert!(
++                    (p[i][j] - want[i][j]).abs() < 1e-9,
++                    "P[{i}][{j}] = {}",
++                    p[i][j]
++                );
+             }
+         }
+         // A · A⁺ · A == A (Moore–Penrose identity).
+Diff in /data/projects/.scratch/frankenscipy-psn7x-rubywaterfall-integrate-20260615-0528/crates/fsci-linalg/src/lib.rs:22531:
+         let apa = matmul(&ap, &a).unwrap();
+         for i in 0..3 {
+             for j in 0..3 {
+-                assert!((apa[i][j] - a[i][j]).abs() < 1e-9, "AA+A[{i}][{j}] = {}", apa[i][j]);
++                assert!(
++                    (apa[i][j] - a[i][j]).abs() < 1e-9,
++                    "AA+A[{i}][{j}] = {}",
++                    apa[i][j]
++                );
+             }
+         }
+
+Diff in /data/projects/.scratch/frankenscipy-psn7x-rubywaterfall-integrate-20260615-0528/crates/fsci-linalg/src/lib.rs:22560:
+         ];
+         for i in 0..2 {
+             for j in 0..2 {
+-                assert!((r[i][j] - want[i][j]).abs() < 1e-9, "R[{i}][{j}] = {}", r[i][j]);
++                assert!(
++                    (r[i][j] - want[i][j]).abs() < 1e-9,
++                    "R[{i}][{j}] = {}",
++                    r[i][j]
++                );
+             }
+         }
+         assert!((scale - 16.492422502470646).abs() < 1e-9, "scale {scale}");
+Diff in /data/projects/.scratch/frankenscipy-psn7x-rubywaterfall-integrate-20260615-0528/crates/fsci-linalg/src/lib.rs:22580:
+         let (r2, _) = orthogonal_procrustes(&a, &aq).unwrap();
+         for i in 0..2 {
+             for j in 0..2 {
+-                assert!((r2[i][j] - q[i][j]).abs() < 1e-9, "recovered Q[{i}][{j}] = {}", r2[i][j]);
++                assert!(
++                    (r2[i][j] - q[i][j]).abs() < 1e-9,
++                    "recovered Q[{i}][{j}] = {}",
++                    r2[i][j]
++                );
+             }
+         }
