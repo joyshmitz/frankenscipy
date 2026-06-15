@@ -2690,6 +2690,163 @@ where
     fmin_with_method(func, x0, OptimizeMethod::Bfgs)
 }
 
+/// Squared Euclidean norm of a residual vector.
+fn nonlin_dot(a: &[f64], b: &[f64]) -> f64 {
+    a.iter().zip(b).map(|(&x, &y)| x * y).sum()
+}
+
+/// Backtracking Armijo line search on `phi(s) = ‖F(x + s·dx)‖²`, mirroring the
+/// `armijo` search of scipy's nonlinear solvers (derphi0 = −phi0, c1 = 1e-4).
+/// Returns the accepted `(x_new, F(x_new))`; always takes some step so the
+/// quasi-Newton update has a nonzero secant even when no descent is found (the
+/// diagonal-Broyden update is scale-invariant in `s`, so it still self-corrects).
+fn nonlin_line_search<F>(f: &F, x: &[f64], fx: &[f64], dx: &[f64]) -> (Vec<f64>, Vec<f64>)
+where
+    F: Fn(&[f64]) -> Vec<f64>,
+{
+    let phi0 = nonlin_dot(fx, fx);
+    let c1 = 1e-4;
+    let mut s = 1.0;
+    let mut last = None;
+    for _ in 0..50 {
+        let xt: Vec<f64> = x.iter().zip(dx).map(|(&xi, &di)| xi + s * di).collect();
+        let ft = f(&xt);
+        let phi = nonlin_dot(&ft, &ft);
+        if phi <= phi0 * (1.0 - c1 * s) {
+            return (xt, ft);
+        }
+        last = Some((xt, ft));
+        s *= 0.5;
+    }
+    last.unwrap_or_else(|| (x.to_vec(), fx.to_vec()))
+}
+
+/// Auto-scaled initial Jacobian parameter `α = 0.5·max(‖x₀‖, 1)/‖F₀‖`, matching
+/// scipy's `GenericBroyden` autoscaling when `alpha` is not supplied.
+fn nonlin_auto_alpha(x0: &[f64], f0: &[f64]) -> f64 {
+    let nf0 = nonlin_dot(f0, f0).sqrt();
+    if nf0 == 0.0 {
+        return 1.0;
+    }
+    0.5 * nonlin_dot(x0, x0).sqrt().max(1.0) / nf0
+}
+
+const NONLIN_FTOL: f64 = 6.055_454_452_393_343e-6; // f64::EPSILON.powf(1.0/3.0), scipy default
+
+fn nonlin_setup<F>(func: &F, x0: &[f64]) -> Result<Vec<f64>, OptError>
+where
+    F: Fn(&[f64]) -> Vec<f64>,
+{
+    if x0.is_empty() {
+        return Err(OptError::InvalidArgument {
+            detail: "x0 must be non-empty".to_string(),
+        });
+    }
+    if x0.iter().any(|v| !v.is_finite()) {
+        return Err(OptError::NonFiniteInput {
+            detail: "x0 must be finite".to_string(),
+        });
+    }
+    let f0 = func(x0);
+    if f0.len() != x0.len() {
+        return Err(OptError::InvalidArgument {
+            detail: format!("F(x0) length {} must equal x0 length {}", f0.len(), x0.len()),
+        });
+    }
+    Ok(f0)
+}
+
+fn nonlin_converged(fx: &[f64]) -> bool {
+    fx.iter().fold(0.0_f64, |m, &v| m.max(v.abs())) < NONLIN_FTOL
+}
+
+/// Find a root of a vector function using a diagonal Broyden Jacobian
+/// approximation, matching `scipy.optimize.diagbroyden(F, xin)`.
+///
+/// The Jacobian is approximated by a diagonal `d` initialized to `-1/alpha`
+/// (auto-scaled when `alpha` is `None`) and refined by the diagonal Broyden
+/// update each step; an Armijo line search globalizes the iteration. Returns the
+/// converged root (`‖F‖∞ < eps^(1/3)`), or `EvaluationBudgetExceeded` if
+/// `maxiter` is reached. The returned root matches scipy's to solver tolerance.
+pub fn diagbroyden<F>(
+    func: F,
+    x0: &[f64],
+    alpha: Option<f64>,
+    maxiter: usize,
+) -> Result<Vec<f64>, OptError>
+where
+    F: Fn(&[f64]) -> Vec<f64>,
+{
+    let mut fx = nonlin_setup(&func, x0)?;
+    let mut x = x0.to_vec();
+    if nonlin_converged(&fx) {
+        return Ok(x);
+    }
+    let n = x.len();
+    let a = alpha.unwrap_or_else(|| nonlin_auto_alpha(&x, &fx));
+    // scipy DiagBroyden.setup: d = 1/alpha (solve returns -f/d, so dx = f/d).
+    let mut d = vec![1.0 / a; n];
+    for _ in 0..maxiter {
+        let dx: Vec<f64> = fx.iter().zip(&d).map(|(&fi, &di)| fi / di).collect();
+        let (x_new, fx_new) = nonlin_line_search(&func, &x, &fx, &dx);
+        let dx_taken: Vec<f64> = x_new.iter().zip(&x).map(|(&a, &b)| a - b).collect();
+        let dnorm = nonlin_dot(&dx_taken, &dx_taken);
+        if dnorm > 0.0 {
+            // d -= (df + d·dx)·dx / ‖dx‖²  (componentwise; scipy diagonal Broyden).
+            for i in 0..n {
+                let df = fx_new[i] - fx[i];
+                d[i] -= (df + d[i] * dx_taken[i]) * dx_taken[i] / dnorm;
+            }
+        }
+        x = x_new;
+        fx = fx_new;
+        if nonlin_converged(&fx) {
+            return Ok(x);
+        }
+    }
+    Err(OptError::EvaluationBudgetExceeded {
+        detail: format!("diagbroyden failed to converge in {maxiter} iterations"),
+    })
+}
+
+/// Find a root of a vector function using a scalar Jacobian approximation
+/// (linear mixing), matching `scipy.optimize.linearmixing(F, xin)`.
+///
+/// The Jacobian is fixed at `-1/alpha`, so the step is `dx = alpha·F(x)`,
+/// globalized by an Armijo line search. As scipy warns, convergence depends
+/// strongly on a well-chosen (often negative) `alpha`; when `alpha` is `None`
+/// it is auto-scaled like scipy's. Returns the converged root or
+/// `EvaluationBudgetExceeded`.
+pub fn linearmixing<F>(
+    func: F,
+    x0: &[f64],
+    alpha: Option<f64>,
+    maxiter: usize,
+) -> Result<Vec<f64>, OptError>
+where
+    F: Fn(&[f64]) -> Vec<f64>,
+{
+    let mut fx = nonlin_setup(&func, x0)?;
+    let mut x = x0.to_vec();
+    if nonlin_converged(&fx) {
+        return Ok(x);
+    }
+    let a = alpha.unwrap_or_else(|| nonlin_auto_alpha(&x, &fx));
+    for _ in 0..maxiter {
+        // dx = -solve(Fx) = -(-Fx·alpha) = alpha·Fx.
+        let dx: Vec<f64> = fx.iter().map(|&fi| a * fi).collect();
+        let (x_new, fx_new) = nonlin_line_search(&func, &x, &fx, &dx);
+        x = x_new;
+        fx = fx_new;
+        if nonlin_converged(&fx) {
+            return Ok(x);
+        }
+    }
+    Err(OptError::EvaluationBudgetExceeded {
+        detail: format!("linearmixing failed to converge in {maxiter} iterations"),
+    })
+}
+
 /// Fixed-point iteration: find x such that f(x) = x.
 ///
 /// Matches `scipy.optimize.fixed_point`.
@@ -4236,6 +4393,34 @@ mod tests {
         linprog, milp, minimize_scalar_bounded, nnls, projected_gradient_descent, pso, rosen,
         rosen_der, rosen_hess, rosen_hess_prod, shgo,
     };
+
+    #[test]
+    fn nonlinear_mixing_solvers_find_root() {
+        use crate::{diagbroyden, linearmixing};
+        // F(x) = 0 has the unique root (0.8411639, 0.1588361); scipy's
+        // diagbroyden/linearmixing both converge there from (0, 0).
+        let f = |x: &[f64]| {
+            vec![
+                x[0] + 0.5 * (x[0] - x[1]).powi(3) - 1.0,
+                0.5 * (x[1] - x[0]).powi(3) + x[1],
+            ]
+        };
+        let root = [0.8411639019, 0.1588360981];
+
+        let rd = diagbroyden(f, &[0.0, 0.0], None, 500).expect("diagbroyden converges");
+        assert!((rd[0] - root[0]).abs() < 1e-5, "diagbroyden x0 {}", rd[0]);
+        assert!((rd[1] - root[1]).abs() < 1e-5, "diagbroyden x1 {}", rd[1]);
+
+        // linearmixing needs a well-chosen (negative) alpha, like scipy.
+        let rl = linearmixing(f, &[0.0, 0.0], Some(-0.1), 2000).expect("linearmixing converges");
+        assert!((rl[0] - root[0]).abs() < 1e-3, "linearmixing x0 {}", rl[0]);
+        assert!((rl[1] - root[1]).abs() < 1e-3, "linearmixing x1 {}", rl[1]);
+
+        // Already-at-root returns immediately; bad input rejected.
+        let at_root = diagbroyden(f, &root, None, 10).expect("at root");
+        assert!((at_root[0] - root[0]).abs() < 1e-3);
+        assert!(diagbroyden(f, &[], None, 10).is_err());
+    }
 
     #[test]
     fn fmin_legacy_wrappers_reach_quadratic_minimum() {
