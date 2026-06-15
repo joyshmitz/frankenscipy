@@ -13278,6 +13278,53 @@ fn matmul_flat_workspace(
     Some(c)
 }
 
+/// Moore–Penrose pseudo-inverse of a real symmetric (Hermitian) matrix.
+///
+/// Matches `scipy.linalg.pinvh(a, atol, rtol)`. Uses the symmetric eigen-
+/// decomposition `A = V Λ Vᵀ`; eigenvalues with `|λ| ≤ atol + max|λ|·rtol` are
+/// treated as zero and dropped, and `A⁺ = Σ (1/λₖ) vₖ vₖᵀ` over the rest. The
+/// result is the unique pseudo-inverse, so it is independent of eigenvector sign
+/// conventions. Defaults follow scipy: `atol = 0` and `rtol = n · ε`
+/// (`ε = f64::EPSILON`). The matrix must be square.
+pub fn pinvh(
+    a: &[Vec<f64>],
+    atol: Option<f64>,
+    rtol: Option<f64>,
+) -> Result<Vec<Vec<f64>>, LinalgError> {
+    let n = a.len();
+    if n == 0 {
+        return Ok(Vec::new());
+    }
+    if a.iter().any(|r| r.len() != n) {
+        return Err(LinalgError::InvalidArgument {
+            detail: "pinvh: matrix must be square".to_string(),
+        });
+    }
+    let EighResult {
+        eigenvalues,
+        eigenvectors,
+    } = eigh(a, DecompOptions::default())?;
+    let max_s = eigenvalues.iter().fold(0.0_f64, |m, &v| m.max(v.abs()));
+    let atol = atol.unwrap_or(0.0);
+    let rtol = rtol.unwrap_or(n as f64 * f64::EPSILON);
+    let cutoff = atol + max_s * rtol;
+
+    // A⁺[i][j] = Σ_{k: |λₖ| > cutoff} V[i][k] · (1/λₖ) · V[j][k].
+    let mut out = vec![vec![0.0; n]; n];
+    for (k, &lam) in eigenvalues.iter().enumerate() {
+        if lam.abs() > cutoff {
+            let inv = 1.0 / lam;
+            for i in 0..n {
+                let scaled = eigenvectors[i][k] * inv;
+                for j in 0..n {
+                    out[i][j] += scaled * eigenvectors[j][k];
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Compute the orthogonal matrix that most nearly maps `A` onto `B`.
 ///
 /// Matches `scipy.linalg.orthogonal_procrustes(A, B)`: given two `m × k`
@@ -22022,6 +22069,47 @@ mod tests {
         // n=1 and unknown kind.
         assert_eq!(invpascal(1, "symmetric"), vec![vec![1.0]]);
         assert!(invpascal(4, "bogus").is_empty());
+    }
+
+    #[test]
+    fn pinvh_matches_scipy() {
+        // scipy.linalg.pinvh on a full-rank symmetric matrix.
+        let a = vec![
+            vec![4.0, 1.0, 2.0],
+            vec![1.0, 3.0, 0.0],
+            vec![2.0, 0.0, 5.0],
+        ];
+        let p = pinvh(&a, None, None).unwrap();
+        let want = [
+            [0.3488372093023255, -0.11627906976744184, -0.13953488372093023],
+            [-0.11627906976744184, 0.3720930232558139, 0.04651162790697674],
+            [-0.13953488372093026, 0.04651162790697673, 0.25581395348837205],
+        ];
+        for i in 0..3 {
+            for j in 0..3 {
+                assert!((p[i][j] - want[i][j]).abs() < 1e-9, "P[{i}][{j}] = {}", p[i][j]);
+            }
+        }
+        // A · A⁺ · A == A (Moore–Penrose identity).
+        let ap = matmul(&a, &p).unwrap();
+        let apa = matmul(&ap, &a).unwrap();
+        for i in 0..3 {
+            for j in 0..3 {
+                assert!((apa[i][j] - a[i][j]).abs() < 1e-9, "AA+A[{i}][{j}] = {}", apa[i][j]);
+            }
+        }
+
+        // Rank-deficient symmetric: scipy.linalg.pinvh([[2,2],[2,2]]) = [[.125,.125],[.125,.125]].
+        let b = vec![vec![2.0, 2.0], vec![2.0, 2.0]];
+        let pb = pinvh(&b, None, None).unwrap();
+        for row in &pb {
+            for &v in row {
+                assert!((v - 0.125).abs() < 1e-9, "rankdef entry {v}");
+            }
+        }
+
+        // Non-square rejected.
+        assert!(pinvh(&[vec![1.0, 2.0]], None, None).is_err());
     }
 
     #[test]
