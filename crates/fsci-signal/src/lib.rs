@@ -7989,6 +7989,89 @@ pub fn freqs(b: &[f64], a: &[f64], w: &[f64]) -> Result<FreqzResult, SignalError
     })
 }
 
+/// Evaluate a real polynomial in descending-power order at a complex point via
+/// Horner's method, returning `(re, im)`.
+fn eval_poly_complex(p: &[f64], zre: f64, zim: f64) -> (f64, f64) {
+    let mut re = 0.0_f64;
+    let mut im = 0.0_f64;
+    for &c in p {
+        let nre = re * zre - im * zim + c;
+        let nim = re * zim + im * zre;
+        re = nre;
+        im = nim;
+    }
+    (re, im)
+}
+
+/// Magnitude (dB) and unwrapped phase (degrees) from a complex response.
+fn bode_from_complex(h: &[(f64, f64)], w: &[f64]) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
+    let mag: Vec<f64> = h.iter().map(|&(re, im)| 20.0 * re.hypot(im).log10()).collect();
+    let raw: Vec<f64> = h.iter().map(|&(re, im)| im.atan2(re)).collect();
+    let phase: Vec<f64> = unwrap_phase(&raw)
+        .iter()
+        .map(|&p| p * 180.0 / std::f64::consts::PI)
+        .collect();
+    (w.to_vec(), mag, phase)
+}
+
+/// Bode magnitude and phase of a continuous-time transfer function, matching
+/// `scipy.signal.bode((num, den), w)` for the explicit-frequency case.
+///
+/// `num`/`den` are descending-power polynomial coefficients; `w` are the
+/// frequencies (rad/s) at which to evaluate `H(jω) = num(jω)/den(jω)`. Returns
+/// `(w, mag_dB, phase_deg)` with `mag = 20·log10|H|` and the phase unwrapped
+/// like numpy. (The auto-frequency `w=None` path needs `findfreqs`, deferred.)
+pub fn bode(num: &[f64], den: &[f64], w: &[f64]) -> Result<(Vec<f64>, Vec<f64>, Vec<f64>), SignalError> {
+    if num.is_empty() || den.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "num and den must be non-empty".to_string(),
+        ));
+    }
+    let h: Vec<(f64, f64)> = w
+        .iter()
+        .map(|&omega| {
+            let (br, bi) = eval_analog_poly(num, omega);
+            let (ar, ai) = eval_analog_poly(den, omega);
+            let denom = ar * ar + ai * ai;
+            ((br * ar + bi * ai) / denom, (bi * ar - br * ai) / denom)
+        })
+        .collect();
+    Ok(bode_from_complex(&h, w))
+}
+
+/// Bode magnitude and phase of a discrete-time transfer function, matching
+/// `scipy.signal.dbode((num, den, dt), w)` for the explicit-frequency case.
+///
+/// `H(z) = num(z)/den(z)` is evaluated at `z = e^{jω}` for each `ω` in `w`,
+/// where `w` is in radians/sample. As in scipy, the sample time `dt` is system
+/// metadata and does not affect the explicit-frequency response (kept in the
+/// signature for parity with the `(num, den, dt)` system tuple). Returns
+/// `(w, mag_dB, phase_deg)` as in [`bode`].
+pub fn dbode(
+    num: &[f64],
+    den: &[f64],
+    dt: f64,
+    w: &[f64],
+) -> Result<(Vec<f64>, Vec<f64>, Vec<f64>), SignalError> {
+    let _ = dt; // unused for explicit-frequency response (matches scipy)
+    if num.is_empty() || den.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "num and den must be non-empty".to_string(),
+        ));
+    }
+    let h: Vec<(f64, f64)> = w
+        .iter()
+        .map(|&omega| {
+            let (zre, zim) = (omega.cos(), omega.sin());
+            let (br, bi) = eval_poly_complex(num, zre, zim);
+            let (ar, ai) = eval_poly_complex(den, zre, zim);
+            let denom = ar * ar + ai * ai;
+            ((br * ar + bi * ai) / denom, (bi * ar - br * ai) / denom)
+        })
+        .collect();
+    Ok(bode_from_complex(&h, w))
+}
+
 /// Compute group delay of a digital filter.
 ///
 /// Matches `scipy.signal.group_delay((b, a), w)`.
@@ -22550,6 +22633,32 @@ mod tests {
         }
         assert_eq!(left_bases, expected_left, "left_bases mismatch");
         assert_eq!(right_bases, expected_right, "right_bases mismatch");
+    }
+
+    #[test]
+    fn bode_dbode_match_scipy() {
+        // Continuous H(s) = (s+2)/(s^2+3s+2).
+        let w = [0.1, 0.5, 1.0, 2.0, 5.0, 10.0];
+        let (_, mag, ph) = bode(&[1.0, 2.0], &[1.0, 3.0, 2.0], &w).unwrap();
+        let cmag = [-0.04321374, -0.96910013, -3.01029996, -6.98970004, -14.14973348, -20.04321374];
+        let cpha = [-5.71059314, -26.56505118, -45.0, -63.43494882, -78.69006753, -84.28940686];
+        for (g, e) in mag.iter().zip(&cmag) {
+            assert!((g - e).abs() < 1e-6, "cmag {g} vs {e}");
+        }
+        for (g, e) in ph.iter().zip(&cpha) {
+            assert!((g - e).abs() < 1e-6, "cpha {g} vs {e}");
+        }
+        // Discrete H(z) = (z+0.5)/(z^2-0.3z+0.1), dt=0.1; phase unwraps past -180.
+        let wd = [0.1, 0.5, 1.0, 2.0, 3.0];
+        let (_, dmag, dpha) = dbode(&[1.0, 0.5], &[1.0, -0.3, 0.1], 0.1, &wd).unwrap();
+        let dmexp = [5.45505269, 5.29335234, 4.33269855, -1.73705729, -8.74029528];
+        let dpexp = [-8.36128602, -42.42298117, -87.08884395, -162.65824963, -182.72943349];
+        for (g, e) in dmag.iter().zip(&dmexp) {
+            assert!((g - e).abs() < 1e-6, "dmag {g} vs {e}");
+        }
+        for (g, e) in dpha.iter().zip(&dpexp) {
+            assert!((g - e).abs() < 1e-6, "dpha {g} vs {e}");
+        }
     }
 
     #[test]
