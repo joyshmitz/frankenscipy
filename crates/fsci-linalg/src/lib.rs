@@ -11800,6 +11800,25 @@ pub fn polar(a: &[Vec<f64>], options: DecompOptions) -> Result<PolarResult, Lina
 ///
 /// A Toeplitz matrix has constant diagonals. The first column is `c` and
 /// the first row is `r`. If `r` is None, the matrix is symmetric.
+/// Multiply a Toeplitz matrix by a matrix: `T · x`.
+///
+/// Matches `scipy.linalg.matmul_toeplitz`. `T` is the Toeplitz matrix with first
+/// column `c` and first row `r` (when `r` is `None`, `T` is symmetric with first
+/// row `c`, as in [`toeplitz`]); `x` has one inner `Vec` per row (`len(r)` rows,
+/// or `len(c)` when `r` is `None`). Returns the `len(c) × cols(x)` product.
+///
+/// scipy performs this via an FFT/circulant embedding for speed; this forms the
+/// dense Toeplitz matrix and applies it directly, which is numerically identical
+/// to the true `T · x` (and matches scipy to rounding).
+pub fn matmul_toeplitz(
+    c: &[f64],
+    r: Option<&[f64]>,
+    x: &[Vec<f64>],
+) -> Result<Vec<Vec<f64>>, LinalgError> {
+    let t = toeplitz(c, r);
+    matmul(&t, x)
+}
+
 pub fn toeplitz(c: &[f64], r: Option<&[f64]>) -> Vec<Vec<f64>> {
     let n = c.len();
     let row = r.unwrap_or(c);
@@ -22069,6 +22088,34 @@ mod tests {
         // n=1 and unknown kind.
         assert_eq!(invpascal(1, "symmetric"), vec![vec![1.0]]);
         assert!(invpascal(4, "bogus").is_empty());
+    }
+
+    #[test]
+    fn matmul_toeplitz_matches_scipy() {
+        // scipy.linalg.matmul_toeplitz((c, r), x)
+        let c = [1.0, 2.0, 3.0];
+        let r = [1.0, 4.0, 5.0, 6.0];
+        let x = vec![vec![1.0, 0.0], vec![2.0, 1.0], vec![3.0, 0.0], vec![4.0, 1.0]];
+        let y = matmul_toeplitz(&c, Some(&r), &x).unwrap();
+        let want = [[48.0, 10.0], [36.0, 6.0], [26.0, 6.0]];
+        assert_eq!(y.len(), 3);
+        for i in 0..3 {
+            for j in 0..2 {
+                assert!((y[i][j] - want[i][j]).abs() < 1e-9, "Y[{i}][{j}] = {}", y[i][j]);
+            }
+        }
+
+        // Single-array (symmetric) form: matmul_toeplitz(c, x).
+        let xs = vec![vec![1.0], vec![1.0], vec![1.0]];
+        let ys = matmul_toeplitz(&c, None, &xs).unwrap();
+        // toeplitz([1,2,3]) @ [1,1,1] = [6, 5, 6].
+        assert!((ys[0][0] - 6.0).abs() < 1e-9);
+        assert!((ys[1][0] - 5.0).abs() < 1e-9);
+        assert!((ys[2][0] - 6.0).abs() < 1e-9);
+
+        // Equivalent to the dense toeplitz · x.
+        let dense = matmul(&toeplitz(&c, Some(&r)), &x).unwrap();
+        assert_eq!(y, dense);
     }
 
     #[test]
