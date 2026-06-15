@@ -22357,6 +22357,110 @@ pub fn wasserstein_distance(u: &[f64], v: &[f64]) -> f64 {
     distance
 }
 
+/// First Wasserstein (earth-mover's) distance between two N-D discrete
+/// distributions.
+///
+/// Matches `scipy.stats.wasserstein_distance_nd`. `u_values` and `v_values` are
+/// point sets (one inner `Vec` per support point, all of the same dimension `d`);
+/// `u_weights`/`v_weights` are optional masses (default uniform). The distance is
+/// the optimal-transport cost under the Euclidean ground metric, obtained here by
+/// solving the transport LP `min Σ Dᵢⱼ Pᵢⱼ` s.t. the row/column marginals equal
+/// the (normalised) weights and `P ≥ 0` — the same optimum scipy computes via the
+/// Kantorovich dual.
+///
+/// Returns `NaN` on empty/ragged input or non-positive total weight. Mirrors
+/// scipy's infinity handling: `+∞` if exactly one input contains an infinity,
+/// `NaN` if both do.
+pub fn wasserstein_distance_nd(
+    u_values: &[Vec<f64>],
+    v_values: &[Vec<f64>],
+    u_weights: Option<&[f64]>,
+    v_weights: Option<&[f64]>,
+) -> f64 {
+    let m = u_values.len();
+    let n = v_values.len();
+    if m == 0 || n == 0 {
+        return f64::NAN;
+    }
+    let d = u_values[0].len();
+    if d == 0 || u_values.iter().any(|r| r.len() != d) || v_values.iter().any(|r| r.len() != d) {
+        return f64::NAN;
+    }
+
+    // Infinity handling, mirroring scipy.
+    let u_inf = u_values.iter().flatten().any(|x| x.is_infinite());
+    let v_inf = v_values.iter().flatten().any(|x| x.is_infinite());
+    if u_inf ^ v_inf {
+        return f64::INFINITY;
+    }
+    if u_inf && v_inf {
+        return f64::NAN;
+    }
+
+    // Normalise the marginals (default uniform).
+    let normalize = |w: Option<&[f64]>, len: usize| -> Option<Vec<f64>> {
+        match w {
+            None => Some(vec![1.0 / len as f64; len]),
+            Some(weights) => {
+                if weights.len() != len {
+                    return None;
+                }
+                let sum: f64 = weights.iter().sum();
+                if !(sum.is_finite() && sum > 0.0) {
+                    return None;
+                }
+                Some(weights.iter().map(|&x| x / sum).collect())
+            }
+        }
+    };
+    let (p_u, p_v) = match (normalize(u_weights, m), normalize(v_weights, n)) {
+        (Some(a), Some(b)) => (a, b),
+        _ => return f64::NAN,
+    };
+
+    // Cost matrix c = vec(D), Dᵢⱼ = ‖u_i − v_j‖₂.
+    let nvars = m * n;
+    let mut cost = Vec::with_capacity(nvars);
+    for ui in u_values.iter() {
+        for vj in v_values.iter() {
+            let dist = ui
+                .iter()
+                .zip(vj.iter())
+                .map(|(a, b)| (a - b) * (a - b))
+                .sum::<f64>()
+                .sqrt();
+            cost.push(dist);
+        }
+    }
+
+    // Equality constraints: m row marginals + (n−1) column marginals (the last
+    // column marginal is dropped to keep A_eq full-rank for balanced masses).
+    let mut a_eq: Vec<Vec<f64>> = Vec::with_capacity(m + n.saturating_sub(1));
+    let mut b_eq: Vec<f64> = Vec::with_capacity(m + n.saturating_sub(1));
+    for (i, &pi) in p_u.iter().enumerate() {
+        let mut row = vec![0.0; nvars];
+        for j in 0..n {
+            row[i * n + j] = 1.0;
+        }
+        a_eq.push(row);
+        b_eq.push(pi);
+    }
+    for j in 0..n.saturating_sub(1) {
+        let mut row = vec![0.0; nvars];
+        for i in 0..m {
+            row[i * n + j] = 1.0;
+        }
+        a_eq.push(row);
+        b_eq.push(p_v[j]);
+    }
+
+    let bounds = vec![(Some(0.0), None); nvars];
+    match fsci_opt::linprog(&cost, &[], &[], &a_eq, &b_eq, &bounds, None) {
+        Ok(res) if res.success => res.fun,
+        _ => f64::NAN,
+    }
+}
+
 /// Energy distance between two 1D distributions.
 ///
 /// A statistical distance based on the Cramér distance:
@@ -56407,6 +56511,32 @@ mod tests {
     fn wasserstein_nan_input_returns_nan() {
         assert!(wasserstein_distance(&[1.0, f64::NAN], &[1.0, 2.0]).is_nan());
         assert!(wasserstein_distance(&[1.0, 2.0], &[1.0, f64::NAN]).is_nan());
+    }
+
+    #[test]
+    fn wasserstein_distance_nd_matches_scipy() {
+        // scipy.stats.wasserstein_distance_nd, uniform weights.
+        let u = vec![vec![0.0, 0.0], vec![1.0, 0.0], vec![0.0, 1.0]];
+        let v = vec![vec![1.0, 1.0], vec![2.0, 2.0], vec![0.0, 3.0]];
+        let d = wasserstein_distance_nd(&u, &v, None, None);
+        assert!((d - 1.883427179957628).abs() < 1e-6, "caseA got {d}");
+
+        // Weighted case.
+        let u2 = vec![vec![0.0, 0.0], vec![3.0, 4.0]];
+        let v2 = vec![vec![1.0, 1.0], vec![2.0, 2.0]];
+        let dw = wasserstein_distance_nd(&u2, &v2, Some(&[2.0, 8.0]), Some(&[3.0, 1.0]));
+        assert!((dw - 2.8249129083547606).abs() < 1e-6, "caseB got {dw}");
+
+        // Identical distributions -> 0.
+        let d0 = wasserstein_distance_nd(&u, &u, None, None);
+        assert!(d0.abs() < 1e-9, "identical got {d0}");
+
+        // Invalid inputs.
+        assert!(wasserstein_distance_nd(&[], &v, None, None).is_nan());
+        assert!(wasserstein_distance_nd(&u, &v, Some(&[1.0, 2.0]), None).is_nan()); // wrong weight len
+        // Infinity handling.
+        let uinf = vec![vec![f64::INFINITY, 0.0], vec![1.0, 0.0]];
+        assert!(wasserstein_distance_nd(&uinf, &v2, None, None).is_infinite());
     }
 
     // ── energy_distance tests ────────────────────────────────────────
