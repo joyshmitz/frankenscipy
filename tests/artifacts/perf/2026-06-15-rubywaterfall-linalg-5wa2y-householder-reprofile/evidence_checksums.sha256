@@ -1,0 +1,4 @@
+4ed08ef9fa2e1d52f52938b260c98d48627e77dc2aa0690d77fbafde0686b1dd  tests/artifacts/perf/2026-06-15-rubywaterfall-linalg-5wa2y-householder-reprofile/EVIDENCE.md
+a1a7c0caea714c93a756d16741d1575c1e9f8ac0a2cca49fea2a964383cdff3b  tests/artifacts/perf/2026-06-15-rubywaterfall-linalg-5wa2y-householder-reprofile/baseline_public_eigh_native_route_rch.txt
+1b13dbd82d58d854e9b30ef203233306b372a63a98c1b3fdec157a389f3f9d30  tests/artifacts/perf/2026-06-15-rubywaterfall-linalg-5wa2y-householder-reprofile/baseline_stage_breakdown_rch.txt
+fab055575e0462327dc069a6577502393e3d44f6d23d7ad14c1995824e8a2486  tests/artifacts/perf/2026-06-15-rubywaterfall-linalg-5wa2y-householder-reprofile/compact_wy_full_to_band_probe_rch.txt

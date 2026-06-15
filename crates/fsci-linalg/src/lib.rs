@@ -3689,8 +3689,8 @@ fn one_sided_jacobi_svd_tall(a: &[Vec<f64>], m: usize, n: usize) -> SvdResult {
                 }
                 let (wi, wj) = (&w[i], &w[j]);
                 let mut gamma = 0.0;
-                for k in 0..m {
-                    gamma += wi[k] * wj[k];
+                for (&wik, &wjk) in wi.iter().zip(wj.iter()).take(m) {
+                    gamma += wik * wjk;
                 }
                 if gamma.abs() <= tol * (alpha * beta).sqrt() {
                     continue; // columns already orthogonal (covers zero columns: γ = 0)
@@ -3706,21 +3706,25 @@ fn one_sided_jacobi_svd_tall(a: &[Vec<f64>], m: usize, n: usize) -> SvdResult {
                 let s = c * t;
                 let mut ni = 0.0;
                 let mut nj = 0.0;
-                for k in 0..m {
-                    let (wik, wjk) = (w[i][k], w[j][k]);
-                    let nik = c * wik - s * wjk;
-                    let njk = s * wik + c * wjk;
-                    w[i][k] = nik;
-                    w[j][k] = njk;
+                let (w_left, w_right) = w.split_at_mut(j);
+                let (wi, wj) = (&mut w_left[i], &mut w_right[0]);
+                for (wik, wjk) in wi.iter_mut().zip(wj.iter_mut()).take(m) {
+                    let (old_wik, old_wjk) = (*wik, *wjk);
+                    let nik = c * old_wik - s * old_wjk;
+                    let njk = s * old_wik + c * old_wjk;
+                    *wik = nik;
+                    *wjk = njk;
                     ni += nik * nik;
                     nj += njk * njk;
                 }
                 nrm2[i] = ni;
                 nrm2[j] = nj;
-                for k in 0..n {
-                    let (vik, vjk) = (v[i][k], v[j][k]);
-                    v[i][k] = c * vik - s * vjk;
-                    v[j][k] = s * vik + c * vjk;
+                let (v_left, v_right) = v.split_at_mut(j);
+                let (vi, vj) = (&mut v_left[i], &mut v_right[0]);
+                for (vik, vjk) in vi.iter_mut().zip(vj.iter_mut()).take(n) {
+                    let (old_vik, old_vjk) = (*vik, *vjk);
+                    *vik = c * old_vik - s * old_vjk;
+                    *vjk = s * old_vik + c * old_vjk;
                 }
             }
         }
@@ -4167,6 +4171,7 @@ pub fn srht_transform(
                 Some(scope.spawn(move || {
                     let mut v = vec![0.0; mp];
                     let mut local = Vec::with_capacity(j1 - j0);
+                    #[allow(clippy::needless_range_loop)]
                     for j in j0..j1 {
                         for (i, slot) in v.iter_mut().enumerate() {
                             *slot = if i < m { a[i][j] * signs_r[i] } else { 0.0 };
@@ -5595,6 +5600,42 @@ pub fn eig_banded(
             error: None,
         });
         return Ok((eigenvalues, None));
+    }
+
+    if n >= EIG_BANDED_NATIVE_EIGENVECTOR_MIN_DIM {
+        let mut matrix = DMatrix::<f64>::zeros(n, n);
+        for col in 0..n {
+            matrix[(col, col)] = ab[0][col];
+            for (offset, band_row) in ab.iter().enumerate().skip(1) {
+                let row = col + offset;
+                if row >= n {
+                    break;
+                }
+                let value = band_row[col];
+                matrix[(row, col)] = value;
+                matrix[(col, row)] = value;
+            }
+        }
+
+        if let Some((eigenvalues, native_vectors)) = symmetric_eigh_native(&matrix) {
+            let mut eigenvectors = vec![vec![0.0; n]; n];
+            for col_idx in 0..n {
+                for row_idx in 0..n {
+                    eigenvectors[row_idx][col_idx] = native_vectors[(row_idx, col_idx)];
+                }
+            }
+
+            emit_trace(LinalgTrace {
+                operation: "eig_banded",
+                matrix_size: (n, n),
+                mode: options.mode,
+                rcond: None,
+                warning: None,
+                error: None,
+            });
+
+            return Ok((eigenvalues, Some(eigenvectors)));
+        }
     }
 
     // General case: reduce banded matrix to tridiagonal form
@@ -8048,6 +8089,7 @@ const TRIDIAGONAL_INVERSE_MIN_PIVOT: f64 = 64.0 * f64::EPSILON;
 const TRIDIAGONAL_INVERSE_MIN_GAP_REL: f64 = 1e-6;
 const TRIDIAGONAL_INVERSE_RESIDUAL_TOL: f64 = 1e-7;
 const PUBLIC_NATIVE_EIGH_MIN_DIM: usize = 256;
+const EIG_BANDED_NATIVE_EIGENVECTOR_MIN_DIM: usize = 128;
 const PUBLIC_BIDIAG_SVD_MIN_COLS: usize = 64;
 const PUBLIC_BIDIAG_RANK_GAP_REL_TOL: f64 = 64.0 * f64::EPSILON;
 const PUBLIC_BIDIAG_RECON_REL_TOL: f64 = 1e-8;
@@ -25453,6 +25495,41 @@ mod proptest_tests {
         digest
     }
 
+    fn eig_banded_vectors_digest(vectors: &[Vec<f64>]) -> u64 {
+        const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+        const FNV_PRIME: u64 = 0x100000001b3;
+
+        let mut digest = FNV_OFFSET;
+        for row in vectors {
+            for value in row {
+                digest ^= value.to_bits();
+                digest = digest.wrapping_mul(FNV_PRIME);
+            }
+        }
+        digest
+    }
+
+    fn dense_eigenvector_residual_max(
+        dense: &[Vec<f64>],
+        eigenvalues: &[f64],
+        eigenvectors: &[Vec<f64>],
+    ) -> f64 {
+        let n = dense.len();
+        let mut max_residual = 0.0_f64;
+        for col in 0..n {
+            let lambda = eigenvalues[col];
+            for row in 0..n {
+                let mut projected = 0.0;
+                for k in 0..n {
+                    projected += dense[row][k] * eigenvectors[k][col];
+                }
+                max_residual =
+                    max_residual.max((projected - lambda * eigenvectors[row][col]).abs());
+            }
+        }
+        max_residual
+    }
+
     #[test]
     fn eig_banded_lanczos_values_match_dense_reference() {
         for (n, bandwidth) in [(12usize, 3usize), (33, 5), (96, 8)] {
@@ -25542,6 +25619,68 @@ mod proptest_tests {
             );
             println!("dense_digest={:#018x}", eig_banded_values_digest(&dense));
             println!("EIG_BANDED_LANCZOS_PERF_END");
+        }
+    }
+
+    #[test]
+    #[ignore = "perf probe: run with rch and --release for public eig_banded eigenvectors"]
+    fn eig_banded_eigenvectors_perf_probe() {
+        for n in [128usize, 256] {
+            let bandwidth = 32;
+            let ab = make_lower_band_eig_probe(n, bandwidth);
+            let dense = dense_from_lower_band_eig_probe(&ab);
+
+            let started_at = std::time::Instant::now();
+            let (candidate_values, candidate_vectors) = eig_banded(
+                std::hint::black_box(&ab),
+                true,
+                false,
+                DecompOptions {
+                    mode: RuntimeMode::Strict,
+                    check_finite: false,
+                },
+            )
+            .expect("public eig_banded eigenvectors");
+            let candidate_ms = started_at.elapsed().as_secs_f64() * 1_000.0;
+            let candidate_vectors =
+                candidate_vectors.expect("eig_banded must return eigenvectors when requested");
+
+            let dense_values = dense_reference_lower_band_eigenvalues(&ab);
+            let max_abs = candidate_values
+                .iter()
+                .zip(dense_values.iter())
+                .map(|(left, right)| (left - right).abs())
+                .fold(0.0_f64, f64::max);
+            let residual =
+                dense_eigenvector_residual_max(&dense, &candidate_values, &candidate_vectors);
+            assert!(
+                max_abs <= 1e-8 * (n as f64).max(1.0),
+                "public eig_banded eigenvalue drift {max_abs:.17e} for n={n}"
+            );
+            assert!(
+                residual <= 1e-8 * (n as f64).max(1.0),
+                "public eig_banded eigenvector residual {residual:.17e} for n={n}"
+            );
+
+            println!("EIG_BANDED_EIGENVECTORS_PERF_BEGIN");
+            println!("shape={n}x{n}");
+            println!("bandwidth={bandwidth}");
+            println!("candidate_ms={candidate_ms:.6}");
+            println!("max_abs_diff={max_abs:.17e}");
+            println!("residual={residual:.17e}");
+            println!(
+                "candidate_values_digest={:#018x}",
+                eig_banded_values_digest(&candidate_values)
+            );
+            println!(
+                "candidate_vectors_digest={:#018x}",
+                eig_banded_vectors_digest(&candidate_vectors)
+            );
+            println!(
+                "dense_values_digest={:#018x}",
+                eig_banded_values_digest(&dense_values)
+            );
+            println!("EIG_BANDED_EIGENVECTORS_PERF_END");
         }
     }
 
