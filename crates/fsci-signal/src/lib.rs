@@ -3696,6 +3696,82 @@ pub fn buttord(wp: f64, ws: f64, gpass: f64, gstop: f64) -> Result<(u32, f64), S
     Ok((order, wn))
 }
 
+/// Band-stop objective for analog filter-order minimization, matching
+/// `scipy.signal.band_stop_obj(wp, ind, passb, stopb, gpass, gstop, type)`.
+///
+/// Returns the (possibly non-integer, possibly negative) filter order `n` as a
+/// function of the varied passband edge `wp` (which replaces `passb[ind]`), for
+/// `type` in `"butter"`, `"cheby"`, or `"ellip"`. `passb`/`stopb` are the fixed
+/// `(lower, upper)` band edges; `gpass`/`gstop` are the passband ripple and
+/// stopband attenuation in dB. Used by the band-stop branch of the `*ord`
+/// helpers to locate the optimal stopband geometry.
+pub fn band_stop_obj(
+    wp: f64,
+    ind: usize,
+    passb: (f64, f64),
+    stopb: (f64, f64),
+    gpass: f64,
+    gstop: f64,
+    filter_type: &str,
+) -> Result<f64, SignalError> {
+    if gpass <= 0.0 || gstop <= 0.0 {
+        return Err(SignalError::InvalidArgument(
+            "gpass and gstop must be positive".to_string(),
+        ));
+    }
+    if gpass > gstop {
+        return Err(SignalError::InvalidArgument(
+            "gpass should be smaller than gstop".to_string(),
+        ));
+    }
+    let mut passbc = [passb.0, passb.1];
+    match ind {
+        0 | 1 => passbc[ind] = wp,
+        _ => {
+            return Err(SignalError::InvalidArgument(
+                "ind must be 0 or 1".to_string(),
+            ));
+        }
+    }
+    let (p0, p1) = (passbc[0], passbc[1]);
+    // nat = min over both stopband edges of |s·(p0−p1)/(s²−p0·p1)|.
+    let nat = [stopb.0, stopb.1]
+        .iter()
+        .map(|&s| (s * (p0 - p1) / (s * s - p0 * p1)).abs())
+        .fold(f64::INFINITY, f64::min);
+
+    let n = match filter_type {
+        "butter" => {
+            let gstop_lin = 10f64.powf(0.1 * gstop.abs());
+            let gpass_lin = 10f64.powf(0.1 * gpass.abs());
+            ((gstop_lin - 1.0) / (gpass_lin - 1.0)).log10() / (2.0 * nat.log10())
+        }
+        "cheby" => {
+            let gstop_lin = 10f64.powf(0.1 * gstop.abs());
+            let gpass_lin = 10f64.powf(0.1 * gpass.abs());
+            ((gstop_lin - 1.0) / (gpass_lin - 1.0)).sqrt().acosh() / nat.acosh()
+        }
+        "ellip" => {
+            let gstop_lin = 10f64.powf(0.1 * gstop);
+            let gpass_lin = 10f64.powf(0.1 * gpass);
+            let arg1 = ((gpass_lin - 1.0) / (gstop_lin - 1.0)).sqrt();
+            let arg0 = 1.0 / nat;
+            // d0 = [K(arg0²), K(1−arg0²)]; d1 = [K(arg1²), K(1−arg1²)].
+            let d00 = ellipk_internal(arg0 * arg0);
+            let d01 = ellipk_internal(1.0 - arg0 * arg0);
+            let d10 = ellipk_internal(arg1 * arg1);
+            let d11 = ellipk_internal(1.0 - arg1 * arg1);
+            d00 * d11 / (d01 * d10)
+        }
+        other => {
+            return Err(SignalError::InvalidArgument(format!(
+                "incorrect type: {other}"
+            )));
+        }
+    };
+    Ok(n)
+}
+
 /// Map an analog ZPK to digital via the bilinear transform.
 ///
 /// Matches `scipy.signal.bilinear_zpk(z, p, k, fs)`. The bilinear
@@ -13042,6 +13118,28 @@ pub fn daub(p: usize) -> Result<Vec<f64>, SignalError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn band_stop_obj_matches_scipy() {
+        // scipy.signal.band_stop_obj with passb=(1,3), stopb=(0.5,4), wp=2, ind=1.
+        let n = band_stop_obj(2.0, 1, (1.0, 3.0), (0.5, 4.0), 3.0, 30.0, "butter").unwrap();
+        assert!((n - (-2.758_504_160_760_643)).abs() < 1e-10, "butter {n}");
+        let n0 = band_stop_obj(0.8, 0, (1.0, 3.0), (0.5, 4.0), 3.0, 30.0, "butter").unwrap();
+        assert!((n0 - (-5.156_625_157_428_381)).abs() < 1e-10, "ind0 {n0}");
+        // Geometry where all three filter types yield finite orders.
+        let pb = (1.0, 5.0);
+        let sb = (2.0, 3.0);
+        let b = band_stop_obj(3.5, 1, pb, sb, 1.0, 40.0, "butter").unwrap();
+        let c = band_stop_obj(3.5, 1, pb, sb, 1.0, 40.0, "cheby").unwrap();
+        let e = band_stop_obj(3.5, 1, pb, sb, 1.0, 40.0, "ellip").unwrap();
+        assert!((b - 17.026_096_713_734_145).abs() < 1e-9, "butter {b}");
+        assert!((c - 7.207_236_368_909_567).abs() < 1e-9, "cheby {c}");
+        assert!((e - 4.393_680_914_049_473).abs() < 1e-7, "ellip {e}");
+        // Invalid inputs are rejected.
+        assert!(band_stop_obj(2.0, 2, pb, sb, 1.0, 40.0, "butter").is_err());
+        assert!(band_stop_obj(2.0, 1, pb, sb, 1.0, 40.0, "bogus").is_err());
+        assert!(band_stop_obj(2.0, 1, pb, sb, 40.0, 1.0, "butter").is_err());
+    }
 
     #[test]
     fn hilbert2_matches_scipy() {
