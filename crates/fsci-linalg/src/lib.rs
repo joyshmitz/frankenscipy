@@ -10,6 +10,7 @@ use fsci_runtime::{
 use std::{borrow::Cow, fmt, simd::Simd};
 
 type EigenDecomposition = (Vec<f64>, Option<Vec<Vec<f64>>>);
+type DenseMatrix = Vec<Vec<f64>>;
 
 /// Create a new shared audit ledger for synchronous contexts.
 #[must_use]
@@ -6309,7 +6310,7 @@ pub fn expm_frechet(
     a: &[Vec<f64>],
     e: &[Vec<f64>],
     options: DecompOptions,
-) -> Result<(Vec<Vec<f64>>, Vec<Vec<f64>>), LinalgError> {
+) -> Result<(DenseMatrix, DenseMatrix), LinalgError> {
     let (n, nc) = matrix_shape(a)?;
     if n != nc {
         return Err(LinalgError::ExpectedSquareMatrix);
@@ -6373,8 +6374,7 @@ pub fn expm_cond(a: &[Vec<f64>], options: DecompOptions) -> Result<f64, LinalgEr
 
     let sigma_max = svdvals(&k, options)?.into_iter().fold(0.0_f64, f64::max);
 
-    let frob =
-        |m: &[Vec<f64>]| -> f64 { m.iter().flatten().map(|&v| v * v).sum::<f64>().sqrt() };
+    let frob = |m: &[Vec<f64>]| -> f64 { m.iter().flatten().map(|&v| v * v).sum::<f64>().sqrt() };
     let expm_a = expm(a, options)?;
     let x_norm = frob(&expm_a);
     let a_norm = frob(a);
@@ -8088,7 +8088,7 @@ const TRIDIAGONAL_INVERSE_ITERATIONS: usize = 4;
 const TRIDIAGONAL_INVERSE_MIN_PIVOT: f64 = 64.0 * f64::EPSILON;
 const TRIDIAGONAL_INVERSE_MIN_GAP_REL: f64 = 1e-6;
 const TRIDIAGONAL_INVERSE_RESIDUAL_TOL: f64 = 1e-7;
-const PUBLIC_NATIVE_EIGH_MIN_DIM: usize = 256;
+const PUBLIC_NATIVE_EIGH_MIN_DIM: usize = 512;
 const EIG_BANDED_NATIVE_EIGENVECTOR_MIN_DIM: usize = 128;
 const PUBLIC_BIDIAG_SVD_MIN_COLS: usize = 64;
 const PUBLIC_BIDIAG_RANK_GAP_REL_TOL: f64 = 64.0 * f64::EPSILON;
@@ -26421,7 +26421,10 @@ mod proptest_tests {
             vec![-0.7, 1.2, 0.9],
         ];
         let kappa = expm_cond(&b, DecompOptions::default()).unwrap();
-        assert!((kappa - 1.778_780_586_446_986_6).abs() < 1e-9, "expm_cond = {kappa}");
+        assert!(
+            (kappa - 1.778_780_586_446_986_6).abs() < 1e-9,
+            "expm_cond = {kappa}"
+        );
 
         // Shape mismatch -> error.
         let bad_e = vec![vec![1.0, 2.0, 3.0]];

@@ -1,0 +1,19 @@
+Command:
+
+ubs crates/fsci-linalg/src/lib.rs crates/fsci-linalg/src/bin/diff_expm_frechet.rs .skill-loop-progress.md .beads/issues.jsonl tests/artifacts/perf/2026-06-15-rubywaterfall-linalg-r5sjf-native-threshold/EVIDENCE.md tests/artifacts/perf/2026-06-15-rubywaterfall-linalg-vtf92-compact-wy-public-eigh/EVIDENCE.md
+
+Result:
+
+- Exit code: 0
+- Rust source files scanned: 2
+- Critical issues: 0
+- Warning issues: 3208
+- Info items: 1066
+- Formatter: clean
+- Clippy: clean
+- Cargo check: clean
+- Tests build: clean
+
+Notes:
+
+UBS reports broad pre-existing warning inventory in the large `fsci-linalg` module. No critical finding was introduced by the `frankenscipy-r5sjf` threshold guard or its local formatting/clippy cleanup.
