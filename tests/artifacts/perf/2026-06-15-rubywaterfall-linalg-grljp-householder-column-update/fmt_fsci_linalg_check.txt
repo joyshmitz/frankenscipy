@@ -1,0 +1,26 @@
+Diff in /data/projects/.scratch/frankenscipy-ruby-psn7x-next-20260615T1849Z/crates/fsci-linalg/src/lib.rs:26082:
+             2.975_278_548_546_838,
+         ];
+         for (j, &r) in diag_ref.iter().enumerate() {
+-            assert!((cu[2][j] - r).abs() < 1e-12, "upper diag[{j}] = {}", cu[2][j]);
++            assert!(
++                (cu[2][j] - r).abs() < 1e-12,
++                "upper diag[{j}] = {}",
++                cu[2][j]
++            );
+         }
+         // First super-diagonal row.
+         assert!((cu[1][1] - 0.5).abs() < 1e-12);
+Diff in /data/projects/.scratch/frankenscipy-ruby-psn7x-next-20260615T1849Z/crates/fsci-linalg/src/lib.rs:26096:
+         ];
+         let cl = cholesky_banded(&ab_l, true).expect("lower cholesky_banded");
+         for (j, &r) in diag_ref.iter().enumerate() {
+-            assert!((cl[0][j] - r).abs() < 1e-12, "lower diag[{j}] = {}", cl[0][j]);
++            assert!(
++                (cl[0][j] - r).abs() < 1e-12,
++                "lower diag[{j}] = {}",
++                cl[0][j]
++            );
+         }
+ 
+         // Non-positive-definite matrix must be rejected.

@@ -8262,17 +8262,19 @@ fn apply_symmetric_householder_trailing_rank2(
     }
 
     let data = matrix.as_mut_slice();
-    for row_offset in 0..active {
-        let row = start + row_offset;
-        let v_row = reflector.values[row_offset];
-        let w_row = w[row_offset];
-        for (col_offset, &w_col) in w.iter().enumerate().take(row_offset + 1) {
-            let col = start + col_offset;
-            let v_col = reflector.values[col_offset];
+    for (col_offset, &w_col) in w.iter().enumerate().take(active) {
+        let col = start + col_offset;
+        let v_col = reflector.values[col_offset];
+        let col_base = col * n;
+        for (row_offset, &w_row) in w.iter().enumerate().take(active).skip(col_offset) {
+            let row = start + row_offset;
+            let v_row = reflector.values[row_offset];
             let update = v_row * w_col + w_row * v_col;
-            let value = data[col * n + row] - update;
-            data[col * n + row] = value;
-            data[row * n + col] = value;
+            let value = data[col_base + row] - update;
+            data[col_base + row] = value;
+            if row != col {
+                data[row * n + col] = value;
+            }
         }
     }
 }
@@ -21148,6 +21150,108 @@ mod tests {
     }
 
     #[test]
+    fn symmetric_rank2_column_update_matches_rowwise_bits() {
+        fn rowwise_reference(
+            matrix: &mut DMatrix<f64>,
+            reflector: &HouseholderReflector,
+            p: &mut [f64],
+            w: &mut [f64],
+        ) {
+            if reflector.tau == 0.0 || reflector.values.is_empty() {
+                return;
+            }
+
+            let n = matrix.nrows();
+            let start = reflector.start;
+            let active = reflector.values.len();
+            p[..active].fill(0.0);
+            let data = matrix.as_slice();
+            for (col_offset, &v_col) in reflector.values.iter().enumerate() {
+                if v_col == 0.0 {
+                    continue;
+                }
+                let col = start + col_offset;
+                let col_base = col * n;
+                for row_offset in 0..active {
+                    p[row_offset] += data[col_base + start + row_offset] * v_col;
+                }
+            }
+            for value in &mut p[..active] {
+                *value *= reflector.tau;
+            }
+
+            let v_dot_p = reflector
+                .values
+                .iter()
+                .zip(&p[..active])
+                .map(|(v, p_value)| v * p_value)
+                .sum::<f64>();
+            let correction = 0.5 * reflector.tau * v_dot_p;
+            for row_offset in 0..active {
+                w[row_offset] = p[row_offset] - correction * reflector.values[row_offset];
+            }
+
+            let data = matrix.as_mut_slice();
+            for row_offset in 0..active {
+                let row = start + row_offset;
+                let v_row = reflector.values[row_offset];
+                let w_row = w[row_offset];
+                for (col_offset, &w_col) in w.iter().enumerate().take(row_offset + 1) {
+                    let col = start + col_offset;
+                    let v_col = reflector.values[col_offset];
+                    let update = v_row * w_col + w_row * v_col;
+                    let value = data[col * n + row] - update;
+                    data[col * n + row] = value;
+                    data[row * n + col] = value;
+                }
+            }
+        }
+
+        let n = 128usize;
+        let start = 9usize;
+        let mut rowwise = DMatrix::<f64>::zeros(n, n);
+        for row in 0..n {
+            for col in row..n {
+                let value = ((row * 19 + col * 23 + 7) % 41) as f64 / 37.0 - 0.5;
+                rowwise[(row, col)] = value;
+                rowwise[(col, row)] = value;
+            }
+        }
+        let mut columnwise = rowwise.clone();
+        let values: Vec<f64> = (start..n)
+            .map(|idx| ((idx * 13 + 5) % 47) as f64 / 43.0 - 0.45)
+            .collect();
+        let reflector = make_householder_reflector(start, values);
+        assert_ne!(reflector.tau, 0.0);
+
+        let mut p_ref = vec![0.0; n];
+        let mut w_ref = vec![0.0; n];
+        let mut p_new = vec![0.0; n];
+        let mut w_new = vec![0.0; n];
+        rowwise_reference(&mut rowwise, &reflector, &mut p_ref, &mut w_ref);
+        apply_symmetric_householder_trailing_rank2(
+            &mut columnwise,
+            &reflector,
+            &mut p_new,
+            &mut w_new,
+        );
+
+        for idx in 0..reflector.values.len() {
+            assert_eq!(p_ref[idx].to_bits(), p_new[idx].to_bits(), "p[{idx}]");
+            assert_eq!(w_ref[idx].to_bits(), w_new[idx].to_bits(), "w[{idx}]");
+        }
+        for row in 0..n {
+            for col in 0..n {
+                assert_eq!(
+                    rowwise[(row, col)].to_bits(),
+                    columnwise[(row, col)].to_bits(),
+                    "matrix bit mismatch at ({row}, {col})"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn symmetric_eigh_native_matches_nalgebra_and_timing() {
         let mut s: u64 = 0x1357_2468_9bdf_ace0;
         let mut rng = || {
@@ -26091,7 +26195,11 @@ mod proptest_tests {
             2.975_278_548_546_838,
         ];
         for (j, &r) in diag_ref.iter().enumerate() {
-            assert!((cu[2][j] - r).abs() < 1e-12, "upper diag[{j}] = {}", cu[2][j]);
+            assert!(
+                (cu[2][j] - r).abs() < 1e-12,
+                "upper diag[{j}] = {}",
+                cu[2][j]
+            );
         }
         // First super-diagonal row.
         assert!((cu[1][1] - 0.5).abs() < 1e-12);
@@ -26105,7 +26213,11 @@ mod proptest_tests {
         ];
         let cl = cholesky_banded(&ab_l, true).expect("lower cholesky_banded");
         for (j, &r) in diag_ref.iter().enumerate() {
-            assert!((cl[0][j] - r).abs() < 1e-12, "lower diag[{j}] = {}", cl[0][j]);
+            assert!(
+                (cl[0][j] - r).abs() < 1e-12,
+                "lower diag[{j}] = {}",
+                cl[0][j]
+            );
         }
 
         // Non-positive-definite matrix must be rejected.
