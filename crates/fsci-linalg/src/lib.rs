@@ -6254,6 +6254,93 @@ pub fn ordqz(
 // Matrix Functions — Public API
 // ══════════════════════════════════════════════════════════════════════
 
+/// Fréchet derivative of the matrix exponential.
+///
+/// Returns `(expm(A), L)` where `L = d/dt expm(A + tE)|_{t=0}` is the Fréchet
+/// derivative of `expm` at `A` in the direction `E`. Computed via the standard
+/// block-triangular identity
+/// `expm([[A, E], [0, A]]) = [[expm(A), L], [0, expm(A)]]`, so `L` is the
+/// top-right `n×n` block.
+///
+/// Matches `scipy.linalg.expm_frechet(A, E)` (which returns
+/// `(expm_A, expm_frechet_AE)` by default).
+pub fn expm_frechet(
+    a: &[Vec<f64>],
+    e: &[Vec<f64>],
+    options: DecompOptions,
+) -> Result<(Vec<Vec<f64>>, Vec<Vec<f64>>), LinalgError> {
+    let (n, nc) = matrix_shape(a)?;
+    if n != nc {
+        return Err(LinalgError::ExpectedSquareMatrix);
+    }
+    let (er, ec) = matrix_shape(e)?;
+    if er != n || ec != n {
+        return Err(LinalgError::InvalidArgument {
+            detail: format!("E must be {n}×{n} to match A, got {er}×{ec}"),
+        });
+    }
+
+    // Assemble M = [[A, E], [0, A]] (2n × 2n).
+    let mut m = vec![vec![0.0; 2 * n]; 2 * n];
+    for i in 0..n {
+        for j in 0..n {
+            m[i][j] = a[i][j];
+            m[i][n + j] = e[i][j];
+            m[n + i][n + j] = a[i][j];
+        }
+    }
+
+    let em = expm(&m, options)?;
+    let expm_a: Vec<Vec<f64>> = (0..n).map(|i| em[i][0..n].to_vec()).collect();
+    let frechet: Vec<Vec<f64>> = (0..n).map(|i| em[i][n..2 * n].to_vec()).collect();
+    Ok((expm_a, frechet))
+}
+
+/// Relative condition number of the matrix exponential in the Frobenius norm.
+///
+/// Matches `scipy.linalg.expm_cond(A)`:
+/// `κ = ‖K‖₂ · ‖A‖_F / ‖expm(A)‖_F`, where `K` is the Kronecker form of the
+/// Fréchet derivative (its column `i·n + j` is `vec(L(A, E_{ij}))`) and `‖K‖₂`
+/// is its induced 2-norm (largest singular value). `A` and `expm(A)` use the
+/// Frobenius norm.
+pub fn expm_cond(a: &[Vec<f64>], options: DecompOptions) -> Result<f64, LinalgError> {
+    let (n, nc) = matrix_shape(a)?;
+    if n != nc {
+        return Err(LinalgError::ExpectedSquareMatrix);
+    }
+    if n == 0 {
+        return Ok(0.0);
+    }
+
+    // Build the Kronecker form K (n² × n²): column (i*n + j) is the row-major
+    // vectorization of the Fréchet derivative in the direction E_{ij}.
+    let mut k = vec![vec![0.0; n * n]; n * n];
+    let mut e = vec![vec![0.0; n]; n];
+    for i in 0..n {
+        for j in 0..n {
+            e[i][j] = 1.0;
+            let (_, l) = expm_frechet(a, &e, options)?;
+            e[i][j] = 0.0;
+            let col = i * n + j;
+            for (p, lrow) in l.iter().enumerate() {
+                for (q, &val) in lrow.iter().enumerate() {
+                    k[p * n + q][col] = val;
+                }
+            }
+        }
+    }
+
+    let sigma_max = svdvals(&k, options)?.into_iter().fold(0.0_f64, f64::max);
+
+    let frob =
+        |m: &[Vec<f64>]| -> f64 { m.iter().flatten().map(|&v| v * v).sum::<f64>().sqrt() };
+    let expm_a = expm(a, options)?;
+    let x_norm = frob(&expm_a);
+    let a_norm = frob(a);
+
+    Ok(sigma_max * a_norm / x_norm)
+}
+
 /// Matrix exponential using scaling and squaring with Padé approximation.
 ///
 /// Computes exp(A) for a square matrix A.
@@ -26058,5 +26145,35 @@ mod proptest_tests {
         let x1 = solve_lyapunov(&a, &q, DecompOptions::default()).unwrap();
         let x2 = solve_continuous_lyapunov(&a, &q, DecompOptions::default()).unwrap();
         assert_eq!(x1, x2);
+    }
+
+    #[test]
+    fn expm_frechet_and_cond_match_scipy() {
+        let a = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        let e = vec![vec![0.5, 0.1], vec![0.2, 0.3]];
+        let (_, l) = expm_frechet(&a, &e, DecompOptions::default()).unwrap();
+        // scipy.linalg.expm_frechet(A, E, compute_expm=False)
+        let expected = [
+            [29.428_863_624_879_536, 37.057_058_774_688_684],
+            [57.454_002_276_208_115, 71.935_552_987_687],
+        ];
+        for (row, er) in l.iter().zip(expected.iter()) {
+            for (got, e) in row.iter().zip(er.iter()) {
+                assert!((got - e).abs() < 1e-9, "frechet {got}, expected {e}");
+            }
+        }
+
+        // scipy.linalg.expm_cond(A) on the 3×3 example from scipy's docstring.
+        let b = vec![
+            vec![-0.3, 0.2, 0.6],
+            vec![0.6, 0.3, -0.1],
+            vec![-0.7, 1.2, 0.9],
+        ];
+        let kappa = expm_cond(&b, DecompOptions::default()).unwrap();
+        assert!((kappa - 1.778_780_586_446_986_6).abs() < 1e-9, "expm_cond = {kappa}");
+
+        // Shape mismatch -> error.
+        let bad_e = vec![vec![1.0, 2.0, 3.0]];
+        assert!(expm_frechet(&a, &bad_e, DecompOptions::default()).is_err());
     }
 }
