@@ -13247,6 +13247,100 @@ fn tf2ss(num: &[f64], den: &[f64]) -> Result<StateSpace, SignalError> {
     Ok((a, b, c, d))
 }
 
+/// Characteristic polynomial coefficients (monic, descending powers) of a
+/// square matrix via the Faddeev–LeVerrier recursion. Returns
+/// `[1, c_{n-1}, …, c_0]` with no eigenvalue computation, matching
+/// `numpy.poly(A)` to numerical tolerance.
+fn char_poly(a: &[Vec<f64>]) -> Vec<f64> {
+    let n = a.len();
+    let mut coeffs = vec![1.0_f64];
+    if n == 0 {
+        return coeffs;
+    }
+    // M starts at the identity (M_1).
+    let mut m = vec![vec![0.0_f64; n]; n];
+    for (i, row) in m.iter_mut().enumerate() {
+        row[i] = 1.0;
+    }
+    for k in 1..=n {
+        // am = A · M_k
+        let mut am = vec![vec![0.0_f64; n]; n];
+        for i in 0..n {
+            for l in 0..n {
+                let ail = a[i][l];
+                if ail == 0.0 {
+                    continue;
+                }
+                for j in 0..n {
+                    am[i][j] += ail * m[l][j];
+                }
+            }
+        }
+        let trace: f64 = (0..n).map(|i| am[i][i]).sum();
+        let c = -trace / k as f64;
+        coeffs.push(c);
+        if k < n {
+            // M_{k+1} = A·M_k + c·I
+            for i in 0..n {
+                am[i][i] += c;
+            }
+            m = am;
+        }
+    }
+    coeffs
+}
+
+/// Convert a single-input/single-output state-space realization `(A, B, C, D)`
+/// to transfer-function form, matching `scipy.signal.ss2tf(A, B, C, D)`.
+///
+/// `a` is the `n×n` state matrix, `b`/`c` the length-`n` input/output vectors,
+/// `d` the scalar feedthrough. Returns `(num, den)` in descending-power order.
+/// The transfer function is realization-independent, so the result matches
+/// scipy regardless of which equivalent `(A, B, C, D)` produced it:
+/// `den = charpoly(A)`, `num = charpoly(A − B·Cᵀ) + (D − 1)·den`.
+pub fn ss2tf(
+    a: &[Vec<f64>],
+    b: &[f64],
+    c: &[f64],
+    d: f64,
+) -> Result<(Vec<f64>, Vec<f64>), SignalError> {
+    let n = a.len();
+    if n == 0 {
+        // Static gain: H(s) = D.
+        return Ok((vec![d], vec![1.0]));
+    }
+    if a.iter().any(|row| row.len() != n) || b.len() != n || c.len() != n {
+        return Err(SignalError::InvalidArgument(
+            "A must be n×n and B, C length n".to_string(),
+        ));
+    }
+    let den = char_poly(a);
+    // A − B·Cᵀ (rank-1 update), then its characteristic polynomial.
+    let mut abc = a.to_vec();
+    for (i, row) in abc.iter_mut().enumerate() {
+        for (j, val) in row.iter_mut().enumerate() {
+            *val -= b[i] * c[j];
+        }
+    }
+    let num_bc = char_poly(&abc);
+    let num: Vec<f64> = num_bc
+        .iter()
+        .zip(&den)
+        .map(|(&nb, &dn)| nb + (d - 1.0) * dn)
+        .collect();
+    Ok((num, den))
+}
+
+/// Convert a single-input/single-output state-space realization `(A, B, C, D)`
+/// to zero-pole-gain form, matching `scipy.signal.ss2zpk(A, B, C, D)`.
+///
+/// Composes [`ss2tf`] with [`tf2zpk`]; the poles, zeros, and gain are
+/// realization-independent, so the result matches scipy.
+pub fn ss2zpk(a: &[Vec<f64>], b: &[f64], c: &[f64], d: f64) -> Result<ZpkCoeffs, SignalError> {
+    let (num, den) = ss2tf(a, b, c, d)?;
+    tf2zpk(&num, &den)
+}
+
 /// Simulate step response using RK4 integration.
 fn simulate_lti_step(
     a: &[Vec<f64>],
@@ -16320,6 +16414,45 @@ mod tests {
             .min_by(|(_, a), (_, b)| ((**a) - omega).abs().total_cmp(&((**b) - omega).abs()))
             .map(|(i, _)| i)
             .unwrap_or(0)
+    }
+
+    #[test]
+    fn ss2tf_ss2zpk_match_scipy() {
+        // 2nd-order: scipy tf2ss([1,3,3],[1,2,1]) -> this realization.
+        let a = vec![vec![-2.0, -1.0], vec![1.0, 0.0]];
+        let (num, den) = ss2tf(&a, &[1.0, 0.0], &[1.0, 2.0], 1.0).unwrap();
+        for (g, e) in num.iter().zip(&[1.0, 3.0, 3.0]) {
+            assert!((g - e).abs() < 1e-9, "num {g} vs {e}");
+        }
+        for (g, e) in den.iter().zip(&[1.0, 2.0, 1.0]) {
+            assert!((g - e).abs() < 1e-9, "den {g} vs {e}");
+        }
+        let zpk = ss2zpk(&a, &[1.0, 0.0], &[1.0, 2.0], 1.0).unwrap();
+        assert!((zpk.gain - 1.0).abs() < 1e-9);
+        // both poles at -1
+        for &pr in &zpk.poles_re {
+            assert!((pr + 1.0).abs() < 1e-6, "pole re {pr}");
+        }
+
+        // 3rd-order: (2s+1)/(s^3+0.5s^2+2s+0.3).
+        let a3 = vec![
+            vec![-0.5, -2.0, -0.3],
+            vec![1.0, 0.0, 0.0],
+            vec![0.0, 1.0, 0.0],
+        ];
+        let (num3, den3) = ss2tf(&a3, &[1.0, 0.0, 0.0], &[0.0, 2.0, 1.0], 0.0).unwrap();
+        let nexp = [0.0, 0.0, 2.0, 1.0];
+        let dexp = [1.0, 0.5, 2.0, 0.3];
+        for (g, e) in num3.iter().zip(&nexp) {
+            assert!((g - e).abs() < 1e-9, "num3 {g} vs {e}");
+        }
+        for (g, e) in den3.iter().zip(&dexp) {
+            assert!((g - e).abs() < 1e-9, "den3 {g} vs {e}");
+        }
+        // static system: H = D.
+        let (ns, ds) = ss2tf(&[], &[], &[], 4.0).unwrap();
+        assert_eq!(ns, vec![4.0]);
+        assert_eq!(ds, vec![1.0]);
     }
 
     #[test]
