@@ -3656,7 +3656,10 @@ pub fn cdist_mahalanobis(
         return Err(SpatialError::EmptyData);
     }
     let d = xa[0].len();
-    let dim_err = |actual: usize| SpatialError::DimensionMismatch { expected: d, actual };
+    let dim_err = |actual: usize| SpatialError::DimensionMismatch {
+        expected: d,
+        actual,
+    };
     if vi.len() != d {
         return Err(dim_err(vi.len()));
     }
@@ -3677,8 +3680,16 @@ pub fn cdist_mahalanobis(
     let map_err = |_| SpatialError::InvalidArgument("matmul shape error".to_string());
     let u = fsci_linalg::matmul(xa, vi).map_err(map_err)?;
     let w = fsci_linalg::matmul(xb, vi).map_err(map_err)?;
-    let qx: Vec<f64> = xa.iter().zip(u.iter()).map(|(x, ui)| simd_dot(x, ui)).collect();
-    let qy: Vec<f64> = xb.iter().zip(w.iter()).map(|(y, wj)| simd_dot(y, wj)).collect();
+    let qx: Vec<f64> = xa
+        .iter()
+        .zip(u.iter())
+        .map(|(x, ui)| simd_dot(x, ui))
+        .collect();
+    let qy: Vec<f64> = xb
+        .iter()
+        .zip(w.iter())
+        .map(|(y, wj)| simd_dot(y, wj))
+        .collect();
 
     // Cross term C[i][j] = Uᵢ·yⱼ = xᵢᵀ VI yⱼ, via the blocked GEMM U·XBᵀ.
     let mut xbt = vec![vec![0.0; nb]; d];
@@ -3715,7 +3726,10 @@ pub fn pdist_mahalanobis(x: &[Vec<f64>], vi: &[Vec<f64>]) -> Result<Vec<f64>, Sp
         return Err(SpatialError::EmptyData);
     }
     let d = x[0].len();
-    let dim_err = |actual: usize| SpatialError::DimensionMismatch { expected: d, actual };
+    let dim_err = |actual: usize| SpatialError::DimensionMismatch {
+        expected: d,
+        actual,
+    };
     if vi.len() != d {
         return Err(dim_err(vi.len()));
     }
@@ -3733,7 +3747,11 @@ pub fn pdist_mahalanobis(x: &[Vec<f64>], vi: &[Vec<f64>]) -> Result<Vec<f64>, Sp
 
     let map_err = |_| SpatialError::InvalidArgument("matmul shape error".to_string());
     let u = fsci_linalg::matmul(x, vi).map_err(map_err)?; // U[i] = VI·xᵢ
-    let q: Vec<f64> = x.iter().zip(u.iter()).map(|(xi, ui)| simd_dot(xi, ui)).collect();
+    let q: Vec<f64> = x
+        .iter()
+        .zip(u.iter())
+        .map(|(xi, ui)| simd_dot(xi, ui))
+        .collect();
 
     // Cross term G[i][j] = Uᵢ·xⱼ = xᵢᵀ VI xⱼ via the blocked GEMM U·Xᵀ (full matrix; only
     // the strict upper triangle is read — the symmetric lower half is redundant work but
@@ -3810,6 +3828,97 @@ pub fn wminkowski(x: &[f64], y: &[f64], p: f64, w: &[f64]) -> f64 {
         .map(|((&xi, &yi), &wi)| (wi * (xi - yi).abs()).powf(p))
         .sum::<f64>()
         .powf(1.0 / p)
+}
+
+/// pth power of the L^p (Minkowski) distance between rows of two point arrays.
+///
+/// Matches `scipy.spatial.minkowski_distance_p(x, y, p)`. Each inner `Vec<f64>`
+/// is one K-dimensional point; the reduction is over that last axis. For
+/// efficiency the pth root is *not* taken — for `p == 1` or `p == ∞` this is
+/// already the true L^p distance, otherwise it is `distance**p`.
+///
+/// `xa` and `xb` must have the same number of rows, or one of them may have a
+/// single row which is broadcast against the other (mirroring numpy's
+/// leading-axis broadcasting). Every compared row pair must share the same
+/// length K. Branches on `p` exactly as scipy does (`∞ → max`, `1 → sum`,
+/// `else → sum(|·|^p)`).
+pub fn minkowski_distance_p(
+    xa: &[Vec<f64>],
+    xb: &[Vec<f64>],
+    p: f64,
+) -> Result<Vec<f64>, SpatialError> {
+    minkowski_rowwise(xa, xb, p, false)
+}
+
+/// L^p (Minkowski) distance between rows of two point arrays.
+///
+/// Matches `scipy.spatial.minkowski_distance(x, y, p)`: the same row-wise
+/// reduction as [`minkowski_distance_p`] but with the pth root applied for
+/// finite `p > 1` (`p == 1` and `p == ∞` need no root).
+pub fn minkowski_distance(
+    xa: &[Vec<f64>],
+    xb: &[Vec<f64>],
+    p: f64,
+) -> Result<Vec<f64>, SpatialError> {
+    minkowski_rowwise(xa, xb, p, true)
+}
+
+fn minkowski_rowwise(
+    xa: &[Vec<f64>],
+    xb: &[Vec<f64>],
+    p: f64,
+    take_root: bool,
+) -> Result<Vec<f64>, SpatialError> {
+    let n = match (xa.len(), xb.len()) {
+        (a, b) if a == b => a,
+        (1, b) => b,
+        (a, 1) => a,
+        (a, b) => {
+            return Err(SpatialError::InvalidArgument(format!(
+                "minkowski_distance: incompatible row counts {a} and {b}"
+            )));
+        }
+    };
+
+    let row_p = |a: &[f64], b: &[f64]| -> Result<f64, SpatialError> {
+        if a.len() != b.len() {
+            return Err(SpatialError::DimensionMismatch {
+                expected: a.len(),
+                actual: b.len(),
+            });
+        }
+        // Mirror scipy's exact three-way branch on p.
+        let val = if p == f64::INFINITY {
+            a.iter()
+                .zip(b.iter())
+                .map(|(&ai, &bi)| (bi - ai).abs())
+                .fold(0.0_f64, f64::max)
+        } else if p == 1.0 {
+            a.iter()
+                .zip(b.iter())
+                .map(|(&ai, &bi)| (bi - ai).abs())
+                .sum()
+        } else {
+            a.iter()
+                .zip(b.iter())
+                .map(|(&ai, &bi)| (bi - ai).abs().powf(p))
+                .sum()
+        };
+        Ok(val)
+    };
+
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        let a = &xa[if xa.len() == 1 { 0 } else { i }];
+        let b = &xb[if xb.len() == 1 { 0 } else { i }];
+        let mut d = row_p(a, b)?;
+        // scipy only takes the root for finite p != 1 (p == ∞ returns the max).
+        if take_root && p != 1.0 && p != f64::INFINITY {
+            d = d.powf(1.0 / p);
+        }
+        out.push(d);
+    }
+    Ok(out)
 }
 
 /// Yule dissimilarity for boolean vectors.
@@ -7246,6 +7355,44 @@ mod tests {
     }
 
     #[test]
+    fn minkowski_distance_batched_matches_scipy() {
+        // scipy.spatial.minkowski_distance_p / minkowski_distance over row arrays.
+        let x = vec![vec![1.0, 2.0, 3.0]];
+        let y = vec![vec![4.0, 0.0, 3.0]];
+        // mdp p2 = 13.0, md p2 = 3.605551275463989
+        let mdp = minkowski_distance_p(&x, &y, 2.0).unwrap();
+        assert!((mdp[0] - 13.0).abs() < 1e-12);
+        let md = minkowski_distance(&x, &y, 2.0).unwrap();
+        assert!((md[0] - 3.605551275463989).abs() < 1e-12);
+        // p == 1 and p == inf: distance == _p (no root).
+        assert!((minkowski_distance(&x, &y, 1.0).unwrap()[0] - 5.0).abs() < 1e-12);
+        assert!((minkowski_distance(&x, &y, f64::INFINITY).unwrap()[0] - 3.0).abs() < 1e-12);
+        assert!((minkowski_distance_p(&x, &y, f64::INFINITY).unwrap()[0] - 3.0).abs() < 1e-12);
+
+        // 2D row-wise: scipy.spatial.minkowski_distance(X, Y, 2) -> [2.236.., 3.605..]
+        let xx = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        let yy = vec![vec![0.0, 0.0], vec![1.0, 1.0]];
+        let md2 = minkowski_distance(&xx, &yy, 2.0).unwrap();
+        assert!((md2[0] - 2.23606797749979).abs() < 1e-12);
+        assert!((md2[1] - 3.605551275463989).abs() < 1e-12);
+        // mdp p3 -> [9.0, 35.0]
+        let mdp3 = minkowski_distance_p(&xx, &yy, 3.0).unwrap();
+        assert!((mdp3[0] - 9.0).abs() < 1e-12 && (mdp3[1] - 35.0).abs() < 1e-12);
+
+        // Single-row broadcast against many rows.
+        let one = vec![vec![0.0, 0.0]];
+        let bc = minkowski_distance(&one, &xx, 2.0).unwrap();
+        assert_eq!(bc.len(), 2);
+        assert!((bc[0] - 2.23606797749979).abs() < 1e-12);
+        assert!((bc[1] - 5.0).abs() < 1e-12);
+
+        // Incompatible row counts are rejected.
+        assert!(minkowski_distance(&xx, &one, 2.0).is_ok()); // 2 vs 1 broadcasts
+        let three = vec![vec![0.0, 0.0]; 3];
+        assert!(minkowski_distance(&xx, &three, 2.0).is_err()); // 2 vs 3
+    }
+
+    #[test]
     fn cosine_matches_scipy_reference_values() {
         // scipy.spatial.distance.cosine([1,2,3], [4,5,6])
         let a = [1.0, 2.0, 3.0];
@@ -7287,18 +7434,24 @@ mod tests {
         // `mahalanobis` to within rounding, for every (i, j).
         let mut s: u64 = 0x1234_5678_9abc_def0;
         let mut rng = || {
-            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             ((s >> 11) as f64) / (1u64 << 53) as f64
         };
         let d = 12usize;
         let na = 23usize;
         let nb = 17usize;
-        let xa: Vec<Vec<f64>> =
-            (0..na).map(|_| (0..d).map(|_| rng() * 2.0 - 1.0).collect()).collect();
-        let xb: Vec<Vec<f64>> =
-            (0..nb).map(|_| (0..d).map(|_| rng() * 2.0 - 1.0).collect()).collect();
+        let xa: Vec<Vec<f64>> = (0..na)
+            .map(|_| (0..d).map(|_| rng() * 2.0 - 1.0).collect())
+            .collect();
+        let xb: Vec<Vec<f64>> = (0..nb)
+            .map(|_| (0..d).map(|_| rng() * 2.0 - 1.0).collect())
+            .collect();
         // SPD inverse-covariance VI = M·Mᵀ/d + I.
-        let m: Vec<Vec<f64>> = (0..d).map(|_| (0..d).map(|_| rng() - 0.5).collect()).collect();
+        let m: Vec<Vec<f64>> = (0..d)
+            .map(|_| (0..d).map(|_| rng() - 0.5).collect())
+            .collect();
         let mut vi = vec![vec![0.0; d]; d];
         for i in 0..d {
             for j in 0..d {
@@ -7354,14 +7507,19 @@ mod tests {
         // scipy's upper-triangle row-major order.
         let mut s: u64 = 0xfeed_face_cafe_babe;
         let mut rng = || {
-            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             ((s >> 11) as f64) / (1u64 << 53) as f64
         };
         let d = 9usize;
         let n = 19usize;
-        let x: Vec<Vec<f64>> =
-            (0..n).map(|_| (0..d).map(|_| rng() * 2.0 - 1.0).collect()).collect();
-        let m: Vec<Vec<f64>> = (0..d).map(|_| (0..d).map(|_| rng() - 0.5).collect()).collect();
+        let x: Vec<Vec<f64>> = (0..n)
+            .map(|_| (0..d).map(|_| rng() * 2.0 - 1.0).collect())
+            .collect();
+        let m: Vec<Vec<f64>> = (0..d)
+            .map(|_| (0..d).map(|_| rng() - 0.5).collect())
+            .collect();
         let mut vi = vec![vec![0.0; d]; d];
         for i in 0..d {
             for j in 0..d {
