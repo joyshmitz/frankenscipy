@@ -4,6 +4,7 @@ Bead: `frankenscipy-w2pp0`
 Agent: `RubyWaterfall`
 Worktree: `/data/projects/.scratch/frankenscipy-rubywaterfall-psn7x-20260615-1850`
 Base commit: `7284b661`
+Closeout commit base: `bc2a6ac3`
 Date: 2026-06-15
 
 ## Profile-backed target
@@ -44,6 +45,12 @@ The audit verdict was that this bundled generator work with a replay-order
 change. The source probe was restored to zero `crates/fsci-linalg/src/lib.rs`
 diff after the proof failed.
 
+Explorer cross-check also rejected the candidate: the small-shape replay helper
+regressed when panel width exceeded bandwidth, so the failure is not just large
+release-noise. A retry must either prove or reject `panel_width > bandwidth` up
+front and must keep scalar-vs-compact generation/replay proof on a grid covering
+tail panels and `panel_width == bandwidth`.
+
 ## Proof and benchmark gate
 
 `proof_compact_wy_generation_matches_scalar_rch_retry.txt`:
@@ -80,10 +87,7 @@ Do not retry delayed panel generation with stale cross-block state, replay-order
 changes, row-block Givens replay, row-major Givens replay, or slice/index
 spelling variants.
 
-The next admissible primitive must replace the tridiagonal eigensolver burden
-directly:
-
-- divide-and-conquer symmetric tridiagonal eigensolver,
-- MRRR-style relatively robust representations,
-- or a structurally different band-to-tridiagonal plus eigenvector backtransform
-  route with a fresh scalar-oracle proof.
+The next admissible primitive is a structurally different Householder-reduction
+route, such as persistent scoped reduction workers or another
+communication-avoiding formulation that amortizes setup while preserving scalar
+rank-2 reduction semantics.
