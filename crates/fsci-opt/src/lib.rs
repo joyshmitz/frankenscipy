@@ -2847,6 +2847,59 @@ where
     })
 }
 
+/// Find a root of a vector function using a tuned diagonal (exciting mixing)
+/// Jacobian approximation, matching `scipy.optimize.excitingmixing(F, xin)`.
+///
+/// Each component carries its own step weight `beta_i` (initialized to `alpha`):
+/// when a residual component keeps its sign across a step the weight grows by
+/// `alpha` (accelerating), otherwise it resets to `alpha`; weights are clamped
+/// to `[0, alphamax]` (scipy default `alphamax = 1.0`). The step is
+/// `dx = beta·F(x)`, globalized by an Armijo line search. As scipy notes, this
+/// works for problems whose Jacobian is negative-definite-ish (positive
+/// `alpha`); returns the converged root or `EvaluationBudgetExceeded`.
+pub fn excitingmixing<F>(
+    func: F,
+    x0: &[f64],
+    alpha: Option<f64>,
+    alphamax: f64,
+    maxiter: usize,
+) -> Result<Vec<f64>, OptError>
+where
+    F: Fn(&[f64]) -> Vec<f64>,
+{
+    let mut fx = nonlin_setup(&func, x0)?;
+    let mut x = x0.to_vec();
+    if nonlin_converged(&fx) {
+        return Ok(x);
+    }
+    let n = x.len();
+    let a = alpha.unwrap_or_else(|| nonlin_auto_alpha(&x, &fx));
+    let mut beta = vec![a; n];
+    for _ in 0..maxiter {
+        // dx = -solve(Fx) = -(-Fx·beta) = beta·Fx.
+        let dx: Vec<f64> = fx.iter().zip(&beta).map(|(&fi, &bi)| bi * fi).collect();
+        let (x_new, fx_new) = nonlin_line_search(&func, &x, &fx, &dx);
+        // Per-component weight update: grow where the residual sign persisted,
+        // reset where it flipped, then clamp to [0, alphamax].
+        for i in 0..n {
+            if fx_new[i] * fx[i] > 0.0 {
+                beta[i] += a;
+            } else {
+                beta[i] = a;
+            }
+            beta[i] = beta[i].clamp(0.0, alphamax);
+        }
+        x = x_new;
+        fx = fx_new;
+        if nonlin_converged(&fx) {
+            return Ok(x);
+        }
+    }
+    Err(OptError::EvaluationBudgetExceeded {
+        detail: format!("excitingmixing failed to converge in {maxiter} iterations"),
+    })
+}
+
 /// Fixed-point iteration: find x such that f(x) = x.
 ///
 /// Matches `scipy.optimize.fixed_point`.
@@ -4420,6 +4473,22 @@ mod tests {
         let at_root = diagbroyden(f, &root, None, 10).expect("at root");
         assert!((at_root[0] - root[0]).abs() < 1e-3);
         assert!(diagbroyden(f, &[], None, 10).is_err());
+    }
+
+    #[test]
+    fn exciting_mixing_finds_root() {
+        use crate::excitingmixing;
+        // Negative-definite Jacobian system (where exciting mixing applies):
+        // F = c - x - 0.1 x^3; scipy converges to (1.5945621, 2.0887301).
+        let f = |x: &[f64]| {
+            vec![
+                2.0 - x[0] - 0.1 * x[0].powi(3),
+                3.0 - x[1] - 0.1 * x[1].powi(3),
+            ]
+        };
+        let r = excitingmixing(f, &[0.0, 0.0], Some(0.1), 1.0, 500).expect("converges");
+        assert!((r[0] - 1.5945621166).abs() < 1e-5, "x0 {}", r[0]);
+        assert!((r[1] - 2.0887301451).abs() < 1e-5, "x1 {}", r[1]);
     }
 
     #[test]
