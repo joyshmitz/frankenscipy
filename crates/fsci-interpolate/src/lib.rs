@@ -4001,6 +4001,165 @@ pub fn make_splrep(x: &[f64], y: &[f64], k: usize, s: f64) -> Result<BSpline, In
     make_interp_spline(x, y, k)
 }
 
+/// Coefficients of the divided difference over `xs` (scipy `_coeff_of_divided_diff`):
+/// `res[i] = 1 / Π_{k≠i}(xs[i] - xs[k])`.
+fn coeff_of_divided_diff(xs: &[f64]) -> Vec<f64> {
+    let n = xs.len();
+    (0..n)
+        .map(|i| {
+            let mut pp = 1.0_f64;
+            for k in 0..n {
+                if k != i {
+                    pp *= xs[i] - xs[k];
+                }
+            }
+            1.0 / pp
+        })
+        .collect()
+}
+
+/// Create a cubic smoothing B-spline for an explicit regularization parameter
+/// `lam`, matching `scipy.interpolate.make_smoothing_spline(x, y, w, lam=lam)`.
+///
+/// Solves the penalized weighted least-squares problem
+/// `Σ w_i (y_i − f(x_i))² + lam·∫ f''²` in the natural-cubic-spline basis (knots
+/// at the data points), via the banded design matrix `X` and penalty `E` exactly
+/// as scipy does, then maps back to B-spline coefficients. Returns the
+/// [`BSpline`]. The automatic GCV selection (`lam = None`) is not yet
+/// implemented — pass an explicit non-negative `lam`.
+pub fn make_smoothing_spline(
+    x: &[f64],
+    y: &[f64],
+    w: Option<&[f64]>,
+    lam: Option<f64>,
+) -> Result<BSpline, InterpError> {
+    let n = x.len();
+    if y.len() != n {
+        return Err(InterpError::InvalidArgument {
+            detail: "x and y must have the same length".to_string(),
+        });
+    }
+    if n <= 4 {
+        return Err(InterpError::TooFewPoints { minimum: 5, actual: n });
+    }
+    if x.windows(2).any(|p| p[1] <= p[0]) {
+        return Err(InterpError::InvalidArgument {
+            detail: "x should be an ascending array".to_string(),
+        });
+    }
+    let lam = match lam {
+        Some(l) if l >= 0.0 => l,
+        Some(_) => {
+            return Err(InterpError::InvalidArgument {
+                detail: "regularization parameter should be non-negative".to_string(),
+            });
+        }
+        None => {
+            return Err(InterpError::InvalidArgument {
+                detail: "make_smoothing_spline GCV (lam=None) is not yet implemented; \
+                         pass an explicit lam"
+                    .to_string(),
+            });
+        }
+    };
+    let w: Vec<f64> = match w {
+        Some(s) if s.len() == n => s.to_vec(),
+        Some(_) => {
+            return Err(InterpError::InvalidArgument {
+                detail: "weights must match the data length".to_string(),
+            });
+        }
+        None => vec![1.0; n],
+    };
+
+    // Knot vector: triple-clamped at the ends with data points in between.
+    let mut t = vec![x[0]; 3];
+    t.extend_from_slice(x);
+    t.extend(std::iter::repeat(x[n - 1]).take(3));
+    let ncoef = t.len() - 4; // = n + 2
+    // Collocation matrix rows X_bspl[i] = [B_j(x_i)].
+    let xb: Vec<Vec<f64>> = (0..n).map(|i| eval_basis_all(&t, x[i], 3, ncoef)).collect();
+
+    // Banded design matrix X (5 × n, LAPACK (2,2) storage) in the natural basis.
+    let mut xm = vec![vec![0.0_f64; n]; 5];
+    for i in 1..4 {
+        for d in 0..(n - 4) {
+            xm[i][2 + d] = xb[i + d][3 + d];
+        }
+    }
+    xm[1][1] = xb[0][0];
+    xm[2][0] = (x[2] + x[1] - 2.0 * x[0]) * xb[0][0];
+    xm[2][1] = xb[1][1] + xb[1][2];
+    xm[3][0] = (x[2] - x[0]) * xb[1][1];
+    xm[3][1] = xb[2][2];
+    xm[1][n - 2] = xb[n - 3][ncoef - 3];
+    xm[1][n - 1] = (x[n - 1] - x[n - 3]) * xb[n - 2][ncoef - 2];
+    xm[2][n - 2] = xb[n - 2][ncoef - 3] + xb[n - 2][ncoef - 2];
+    xm[2][n - 1] = (2.0 * x[n - 1] - x[n - 2] - x[n - 3]) * xb[n - 1][ncoef - 1];
+    xm[3][n - 2] = xb[n - 1][ncoef - 1];
+
+    // Banded penalty matrix W⁻¹E (5 × n), scaled by 6.
+    let mut we = vec![vec![0.0_f64; n]; 5];
+    let c_left3 = coeff_of_divided_diff(&x[0..3]);
+    for r in 0..3 {
+        we[2 + r][0] = c_left3[r] / w[r];
+    }
+    let c_left4 = coeff_of_divided_diff(&x[0..4]);
+    for r in 0..4 {
+        we[1 + r][1] = c_left4[r] / w[r];
+    }
+    for j in 2..(n - 2) {
+        let cj = coeff_of_divided_diff(&x[j - 2..j + 3]);
+        let scale = x[j + 2] - x[j - 2];
+        for r in 0..5 {
+            we[r][j] = scale * cj[r] / w[j - 2 + r];
+        }
+    }
+    let c_r4 = coeff_of_divided_diff(&x[n - 4..n]);
+    for r in 0..4 {
+        we[r][n - 2] = -c_r4[r] / w[n - 4 + r];
+    }
+    let c_r3 = coeff_of_divided_diff(&x[n - 3..n]);
+    for r in 0..3 {
+        we[r][n - 1] = c_r3[r] / w[n - 3 + r];
+    }
+    for row in &mut we {
+        for v in row {
+            *v *= 6.0;
+        }
+    }
+
+    // Assemble (X + lam·E) from its 5 bands (LAPACK (2,2) storage: entry
+    // A[i][j] = ab[2+i-j][j] for |i-j| ≤ 2) into a full matrix, then dense-solve.
+    let ab: Vec<Vec<f64>> = (0..5)
+        .map(|r| (0..n).map(|c| xm[r][c] + lam * we[r][c]).collect())
+        .collect();
+    let mut full = vec![vec![0.0_f64; n]; n];
+    for i in 0..n {
+        for j in 0..n {
+            let d = 2 + i as isize - j as isize;
+            if (0..5).contains(&d) {
+                full[i][j] = ab[d as usize][j];
+            }
+        }
+    }
+    let mut rhs = y.to_vec();
+    let c = solve_dense_system(&mut full, &mut rhs)?;
+
+    // Map the natural-basis solution back to B-spline coefficients (length ncoef).
+    let tl = t.len();
+    let mut cfull = Vec::with_capacity(ncoef);
+    cfull.push(c[0] * (t[5] + t[4] - 2.0 * t[3]) + c[1]);
+    cfull.push(c[0] * (t[5] - t[3]) + c[1]);
+    for i in 1..(n - 1) {
+        cfull.push(c[i]);
+    }
+    cfull.push(c[n - 1] * (t[tl - 4] - t[tl - 6]) + c[n - 2]);
+    cfull.push(c[n - 1] * (2.0 * t[tl - 4] - t[tl - 5] - t[tl - 6]) + c[n - 2]);
+
+    BSpline::new(t, cfull, 3)
+}
+
 /// Fit a parametric interpolating B-spline through N-D points, matching
 /// `scipy.interpolate.splprep(points, k=k, s=0)` (the interpolation case).
 ///
@@ -6099,6 +6258,29 @@ fn smooth_bivariate_solve_coefficients(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn make_smoothing_spline_lam_matches_scipy() {
+        // scipy.interpolate.make_smoothing_spline(x, y, lam=0.5).
+        let x = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let y = [0.1, 0.9, 2.1, 2.9, 3.8, 5.2, 5.9];
+        let b = make_smoothing_spline(&x, &y, None, Some(0.5)).unwrap();
+        let t_exp = [0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 6.0, 6.0, 6.0];
+        for (g, e) in b.knots().iter().zip(&t_exp) {
+            assert!((g - e).abs() < 1e-12, "t {g} vs {e}");
+        }
+        let c_exp = [
+            0.06367822, 0.3721146, 0.98898735, 1.98694003, 2.92799062, 3.92768077,
+            5.02602438, 5.65853435, 5.97478933,
+        ];
+        assert_eq!(b.coeffs().len(), c_exp.len());
+        for (g, e) in b.coeffs().iter().zip(&c_exp) {
+            assert!((g - e).abs() < 1e-6, "c {g} vs {e}");
+        }
+        // GCV (lam=None) and negative lam are rejected.
+        assert!(make_smoothing_spline(&x, &y, None, None).is_err());
+        assert!(make_smoothing_spline(&x, &y, None, Some(-1.0)).is_err());
+    }
 
     #[test]
     fn make_splrep_interpolation_matches_scipy() {
