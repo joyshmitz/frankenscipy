@@ -36464,6 +36464,79 @@ pub fn yeojohnson_normplot(
     Ok((lmbdas, ppcc))
 }
 
+/// Uniform order-statistic medians (the plotting positions before applying a
+/// distribution's ppf), matching scipy's `_calc_uniform_order_statistic_medians`.
+fn uniform_order_medians(n: usize) -> Vec<f64> {
+    if n == 0 {
+        return Vec::new();
+    }
+    let mut probs = vec![0.0_f64; n];
+    let tail = 0.5_f64.powf(1.0 / n as f64);
+    probs[0] = 1.0 - tail;
+    if n > 1 {
+        probs[n - 1] = tail;
+    }
+    for i in 1..n.saturating_sub(1) {
+        probs[i] = (i as f64 + 1.0 - 0.3175) / (n as f64 + 0.365);
+    }
+    probs
+}
+
+/// Probability-plot correlation coefficient of `x` against a Tukey-lambda
+/// distribution with shape `c`: Pearson r between the shape-`c` order-statistic
+/// medians and the sorted data.
+fn tukeylambda_ppcc(osr: &[f64], probs: &[f64], c: f64) -> f64 {
+    let dist = TukeyLambda::new(c);
+    let osm: Vec<f64> = probs.iter().map(|&p| dist.ppf(p)).collect();
+    pearsonr(&osm, osr).statistic
+}
+
+/// Calculate the data for a probability-plot correlation-coefficient (PPCC)
+/// plot against the Tukey-lambda distribution, matching
+/// `scipy.stats.ppcc_plot(x, a, b, N=80)` (default `dist='tukeylambda'`).
+///
+/// Returns `(svals, ppcc)`: `N` evenly spaced shape values in `[a, b]` and the
+/// PPCC of `x` against the Tukey-lambda distribution at each.
+pub fn ppcc_plot(x: &[f64], a: f64, b: f64, n: usize) -> Result<(Vec<f64>, Vec<f64>), String> {
+    if b <= a {
+        return Err("`b` has to be larger than `a`.".to_string());
+    }
+    if x.is_empty() || n == 0 {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    let probs = uniform_order_medians(x.len());
+    let mut osr = x.to_vec();
+    osr.sort_by(f64::total_cmp);
+    let svals: Vec<f64> = (0..n)
+        .map(|i| a + (b - a) * i as f64 / (n - 1).max(1) as f64)
+        .collect();
+    let ppcc = svals
+        .iter()
+        .map(|&c| tukeylambda_ppcc(&osr, &probs, c))
+        .collect();
+    Ok((svals, ppcc))
+}
+
+/// Find the shape parameter that maximizes the Tukey-lambda PPCC of `x`,
+/// matching `scipy.stats.ppcc_max(x, brack=(0.0, 1.0))`.
+///
+/// Minimizes `1 - PPCC(c)` over the shape via bracketing + Brent's method,
+/// returning the best-fitting shape. The maximizer is unique, so the result
+/// matches scipy to optimizer tolerance.
+pub fn ppcc_max(x: &[f64], brack: (f64, f64)) -> f64 {
+    if x.is_empty() {
+        return f64::NAN;
+    }
+    let probs = uniform_order_medians(x.len());
+    let mut osr = x.to_vec();
+    osr.sort_by(f64::total_cmp);
+    let tempfunc = |c: f64| 1.0 - tukeylambda_ppcc(&osr, &probs, c);
+    let (xa, _, xc, _, _, _) = fsci_opt::bracket(&tempfunc, brack.0, brack.1);
+    let (lo, hi) = (xa.min(xc), xa.max(xc));
+    let (xmin, _) = fsci_opt::brent_minimize(&tempfunc, lo, hi, 1.48e-8, 500);
+    xmin
+}
+
 /// Compute the expected frequency for a Chi-squared goodness-of-fit test
 /// against a uniform distribution.
 pub fn expected_freq_uniform(observed: &[f64]) -> Vec<f64> {
@@ -41795,6 +41868,21 @@ pub fn kendall_distance(rank1: &[usize], rank2: &[usize]) -> usize {
 )]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ppcc_plot_max_match_scipy() {
+        let x = [0.5, 1.2, 2.1, 2.9, 3.3, 4.7, 5.1, 6.8];
+        let (s, p) = ppcc_plot(&x, -2.0, 2.0, 5).unwrap();
+        assert_eq!(s, vec![-2.0, -1.0, 0.0, 1.0, 2.0]);
+        let exp = [0.88093198, 0.95098997, 0.99018306, 0.99011715, 0.99011715];
+        for (g, e) in p.iter().zip(&exp) {
+            assert!((g - e).abs() < 1e-6, "ppcc {g} vs {e}");
+        }
+        // ppcc_max finds the maximizing shape (~0.3578).
+        let best = ppcc_max(&x, (0.0, 1.0));
+        assert!((best - 0.35779018).abs() < 1e-4, "ppcc_max {best}");
+        assert!(ppcc_plot(&x, 2.0, -2.0, 5).is_err());
+    }
 
     #[test]
     fn boxcox_yeojohnson_normplot_match_scipy() {
