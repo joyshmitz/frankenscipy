@@ -11122,6 +11122,91 @@ fn stft_frame_thread_count(frame_count: usize, nperseg: usize) -> usize {
     cores.min(frame_count / 4).max(1)
 }
 
+/// Numpy-compatible median of a slice (average of the two middle elements for
+/// an even-length input). Used by the COLA check.
+fn median_of(values: &[f64]) -> f64 {
+    let mut sorted = values.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    let n = sorted.len();
+    if n % 2 == 1 {
+        sorted[n / 2]
+    } else {
+        0.5 * (sorted[n / 2 - 1] + sorted[n / 2])
+    }
+}
+
+/// Fold a length-`nperseg` window into its `step = nperseg - noverlap` overlap
+/// bins, applying `f` to each sample, matching scipy's COLA/NOLA accumulation.
+fn overlap_add_binsums(
+    window: &[f64],
+    nperseg: usize,
+    noverlap: usize,
+    f: impl Fn(f64) -> f64,
+) -> Result<Vec<f64>, SignalError> {
+    if nperseg < 1 {
+        return Err(SignalError::InvalidArgument(
+            "nperseg must be a positive integer".to_string(),
+        ));
+    }
+    if noverlap >= nperseg {
+        return Err(SignalError::InvalidArgument(
+            "noverlap must be less than nperseg".to_string(),
+        ));
+    }
+    if window.len() != nperseg {
+        return Err(SignalError::InvalidArgument(format!(
+            "window must have length of nperseg ({nperseg})"
+        )));
+    }
+    let step = nperseg - noverlap;
+    let mut binsums = vec![0.0_f64; step];
+    for ii in 0..(nperseg / step) {
+        for (j, slot) in binsums.iter_mut().enumerate() {
+            *slot += f(window[ii * step + j]);
+        }
+    }
+    let rem = nperseg % step;
+    if rem != 0 {
+        for j in 0..rem {
+            binsums[j] += f(window[nperseg - rem + j]);
+        }
+    }
+    Ok(binsums)
+}
+
+/// Check whether the Constant OverLap Add (COLA) constraint is met, matching
+/// `scipy.signal.check_COLA(window, nperseg, noverlap)`.
+///
+/// COLA holds when the overlap-add of the window weights every input sample
+/// equally, which is required for exact STFT inversion by the overlap-add
+/// method. `window` must already be the sampled window of length `nperseg`
+/// (use [`get_window`] for the named-window form). Uses scipy's default
+/// tolerance `tol = 1e-10` on the deviation from the median bin sum.
+#[allow(non_snake_case)] // matches scipy.signal.check_COLA spelling
+pub fn check_COLA(window: &[f64], nperseg: usize, noverlap: usize) -> Result<bool, SignalError> {
+    let binsums = overlap_add_binsums(window, nperseg, noverlap, |w| w)?;
+    let median = median_of(&binsums);
+    let max_dev = binsums
+        .iter()
+        .map(|&b| (b - median).abs())
+        .fold(0.0_f64, f64::max);
+    Ok(max_dev < 1e-10)
+}
+
+/// Check whether the Nonzero OverLap Add (NOLA) constraint is met, matching
+/// `scipy.signal.check_NOLA(window, nperseg, noverlap)`.
+///
+/// NOLA — the weaker condition that the squared window's overlap-add is nonzero
+/// everywhere — is what [`istft`] actually requires for invertibility. `window`
+/// must be the sampled window of length `nperseg`. Uses scipy's default
+/// tolerance `tol = 1e-10` on the minimum bin sum.
+#[allow(non_snake_case)] // matches scipy.signal.check_NOLA spelling
+pub fn check_NOLA(window: &[f64], nperseg: usize, noverlap: usize) -> Result<bool, SignalError> {
+    let binsums = overlap_add_binsums(window, nperseg, noverlap, |w| w * w)?;
+    let min = binsums.iter().copied().fold(f64::INFINITY, f64::min);
+    Ok(min > 1e-10)
+}
+
 pub fn stft(
     x: &[f64],
     fs: f64,
@@ -12817,6 +12902,35 @@ pub fn daub(p: usize) -> Result<Vec<f64>, SignalError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn check_cola_nola_match_scipy() {
+        // Rectangular window: COLA at 75% overlap, not at 25%; NOLA always (win>0).
+        let rect = [1.0_f64; 8];
+        assert!(check_COLA(&rect, 8, 6).unwrap());
+        assert!(check_NOLA(&rect, 8, 6).unwrap());
+        assert!(!check_COLA(&rect, 8, 2).unwrap());
+        assert!(check_NOLA(&rect, 8, 2).unwrap());
+
+        // Periodic ("DFT-even") Hann is COLA and NOLA at 50% overlap.
+        let hann_periodic = [
+            0.0, 0.146_446_609_406_726_24, 0.5, 0.853_553_390_593_273_8, 1.0,
+            0.853_553_390_593_273_8, 0.5, 0.146_446_609_406_726_24,
+        ];
+        assert!(check_COLA(&hann_periodic, 8, 4).unwrap());
+        assert!(check_NOLA(&hann_periodic, 8, 4).unwrap());
+
+        // Symmetric Hann is not COLA at 50% overlap (first/last samples zero).
+        let hann_sym = [
+            0.0, 0.188_255_099_070_633_4, 0.611_260_466_978_157_8, 0.950_484_433_951_210_3,
+            0.950_484_433_951_210_3, 0.611_260_466_978_157_8, 0.188_255_099_070_633_4, 0.0,
+        ];
+        assert!(!check_COLA(&hann_sym, 8, 4).unwrap());
+
+        // Validation: noverlap >= nperseg and wrong window length are errors.
+        assert!(check_COLA(&rect, 8, 8).is_err());
+        assert!(check_NOLA(&rect, 4, 2).is_err());
+    }
 
     #[test]
     fn signal_error_classifies_string_constructor() {
