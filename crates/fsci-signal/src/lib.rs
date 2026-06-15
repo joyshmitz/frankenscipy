@@ -7620,6 +7620,51 @@ pub fn sosfreqz_with_whole(
     Ok(FreqzResult { w, h_mag, h_phase })
 }
 
+/// Compute the frequency response of an analog filter from its zeros, poles and
+/// gain.
+///
+/// Matches `scipy.signal.freqs_zpk(z, p, k, worN)` for an explicit array of
+/// angular frequencies `w`. Evaluates
+/// `H(jω) = k · Π(jω − zₘ) / Π(jω − pₙ)` at each `ω`, returning the magnitude and
+/// (wrapped) phase in a [`FreqzResult`], consistent with [`freqs`].
+pub fn freqs_zpk(zpk: &ZpkCoeffs, w: &[f64]) -> Result<FreqzResult, SignalError> {
+    if w.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "w must not be empty".to_string(),
+        ));
+    }
+    let cmul = |a: (f64, f64), b: (f64, f64)| (a.0 * b.0 - a.1 * b.1, a.0 * b.1 + a.1 * b.0);
+
+    let mut h_mag = Vec::with_capacity(w.len());
+    let mut h_phase = Vec::with_capacity(w.len());
+    for &omega in w {
+        // numerator = k · Π (jω − z); denominator = Π (jω − p).
+        let mut num = (zpk.gain, 0.0);
+        for (&zr, &zi) in zpk.zeros_re.iter().zip(zpk.zeros_im.iter()) {
+            num = cmul(num, (-zr, omega - zi));
+        }
+        let mut den = (1.0, 0.0);
+        for (&pr, &pi) in zpk.poles_re.iter().zip(zpk.poles_im.iter()) {
+            den = cmul(den, (-pr, omega - pi));
+        }
+        let dd = den.0 * den.0 + den.1 * den.1;
+        if dd < 1e-300 {
+            h_mag.push(f64::INFINITY);
+            h_phase.push(0.0);
+        } else {
+            let h_re = (num.0 * den.0 + num.1 * den.1) / dd;
+            let h_im = (num.1 * den.0 - num.0 * den.1) / dd;
+            h_mag.push((h_re * h_re + h_im * h_im).sqrt());
+            h_phase.push(h_im.atan2(h_re));
+        }
+    }
+    Ok(FreqzResult {
+        w: w.to_vec(),
+        h_mag,
+        h_phase,
+    })
+}
+
 /// Compute the frequency response of an analog filter.
 ///
 /// Matches `scipy.signal.freqs(b, a, worN)`.
@@ -14046,6 +14091,26 @@ mod tests {
         assert!((d.a[8] - (-8.81618592363189e-01)).abs() <= 1e-13);
         // not divisible → error
         assert!(iircomb(0.3, 25.0, CombType::Notch, Some(2.0), false).is_err());
+    }
+
+    #[test]
+    fn freqs_zpk_matches_scipy() {
+        // scipy.signal.freqs_zpk([-1], [-2, -0.5], 3, worN=[0,1,2])
+        let zpk = ZpkCoeffs {
+            zeros_re: vec![-1.0],
+            zeros_im: vec![0.0],
+            poles_re: vec![-2.0, -0.5],
+            poles_im: vec![0.0, 0.0],
+            gain: 3.0,
+        };
+        let res = freqs_zpk(&zpk, &[0.0, 1.0, 2.0]).unwrap();
+        let mag = [3.0, 1.6970562748477143, 1.1504474832710556];
+        let phase = [0.0, -0.7853981633974483, -1.0040671092713902];
+        for i in 0..3 {
+            assert!((res.h_mag[i] - mag[i]).abs() < 1e-12, "mag[{i}] = {}", res.h_mag[i]);
+            assert!((res.h_phase[i] - phase[i]).abs() < 1e-12, "phase[{i}] = {}", res.h_phase[i]);
+        }
+        assert!(freqs_zpk(&zpk, &[]).is_err());
     }
 
     #[test]
