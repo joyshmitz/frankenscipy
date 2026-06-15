@@ -36395,6 +36395,75 @@ pub fn probplot_quantiles(n: usize) -> Vec<f64> {
         .collect()
 }
 
+/// Probability-plot correlation coefficient of the transformed data against the
+/// normal distribution: the Pearson correlation between the theoretical normal
+/// quantiles and the sorted transformed values (the `r` of a normal prob plot).
+fn normplot_ppcc(transformed: &[f64], osm: &[f64]) -> f64 {
+    let mut zs = transformed.to_vec();
+    zs.sort_by(f64::total_cmp);
+    pearsonr(osm, &zs).statistic
+}
+
+/// Compute the data for a Box-Cox normality plot, matching
+/// `scipy.stats.boxcox_normplot(x, la, lb, N=80)`.
+///
+/// Returns `(lmbdas, ppcc)`: `N` evenly spaced Box-Cox parameters in `[la, lb]`
+/// and, for each, the probability-plot correlation coefficient of the
+/// transformed data against the normal distribution. The maximiser is the
+/// best-normalizing `lambda`.
+pub fn boxcox_normplot(
+    x: &[f64],
+    la: f64,
+    lb: f64,
+    n: usize,
+) -> Result<(Vec<f64>, Vec<f64>), String> {
+    if lb <= la {
+        return Err("`lb` has to be larger than `la`.".to_string());
+    }
+    if x.is_empty() || n == 0 {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    if x.iter().any(|&v| v <= 0.0) {
+        return Err("Data must be positive.".to_string());
+    }
+    let osm = probplot_quantiles(x.len());
+    let lmbdas: Vec<f64> = (0..n)
+        .map(|i| la + (lb - la) * i as f64 / (n - 1).max(1) as f64)
+        .collect();
+    let mut ppcc = Vec::with_capacity(n);
+    for &lm in &lmbdas {
+        let z = boxcox(x, Some(lm))?.data;
+        ppcc.push(normplot_ppcc(&z, &osm));
+    }
+    Ok((lmbdas, ppcc))
+}
+
+/// Compute the data for a Yeo-Johnson normality plot, matching
+/// `scipy.stats.yeojohnson_normplot(x, la, lb, N=80)`. As [`boxcox_normplot`]
+/// but with the Yeo-Johnson transform (no positivity requirement).
+pub fn yeojohnson_normplot(
+    x: &[f64],
+    la: f64,
+    lb: f64,
+    n: usize,
+) -> Result<(Vec<f64>, Vec<f64>), String> {
+    if lb <= la {
+        return Err("`lb` has to be larger than `la`.".to_string());
+    }
+    if x.is_empty() || n == 0 {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    let osm = probplot_quantiles(x.len());
+    let lmbdas: Vec<f64> = (0..n)
+        .map(|i| la + (lb - la) * i as f64 / (n - 1).max(1) as f64)
+        .collect();
+    let ppcc = lmbdas
+        .iter()
+        .map(|&lm| normplot_ppcc(&yeojohnson(x, lm), &osm))
+        .collect();
+    Ok((lmbdas, ppcc))
+}
+
 /// Compute the expected frequency for a Chi-squared goodness-of-fit test
 /// against a uniform distribution.
 pub fn expected_freq_uniform(observed: &[f64]) -> Vec<f64> {
@@ -41726,6 +41795,25 @@ pub fn kendall_distance(rank1: &[usize], rank2: &[usize]) -> usize {
 )]
 mod tests {
     use super::*;
+
+    #[test]
+    fn boxcox_yeojohnson_normplot_match_scipy() {
+        let x = [1.0, 2.5, 3.1, 4.8, 6.2, 7.0, 9.5, 12.1];
+        let (lm, ppcc) = boxcox_normplot(&x, -2.0, 2.0, 5).unwrap();
+        assert_eq!(lm, vec![-2.0, -1.0, 0.0, 1.0, 2.0]);
+        let exp = [0.71893012, 0.84198625, 0.97442219, 0.98675161, 0.92273515];
+        for (g, e) in ppcc.iter().zip(&exp) {
+            assert!((g - e).abs() < 1e-6, "bc ppcc {g} vs {e}");
+        }
+        let (_, py) = yeojohnson_normplot(&x, -2.0, 2.0, 5).unwrap();
+        let yexp = [0.81521271, 0.91651547, 0.98869183, 0.98675161, 0.93436138];
+        for (g, e) in py.iter().zip(&yexp) {
+            assert!((g - e).abs() < 1e-6, "yj ppcc {g} vs {e}");
+        }
+        // boxcox rejects non-positive data; lb<=la rejected.
+        assert!(boxcox_normplot(&[1.0, -1.0], -2.0, 2.0, 5).is_err());
+        assert!(boxcox_normplot(&x, 2.0, -2.0, 5).is_err());
+    }
 
     fn assert_close(actual: f64, expected: f64, tol: f64, msg: &str) {
         assert!(
