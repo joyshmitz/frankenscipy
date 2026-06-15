@@ -8257,7 +8257,7 @@ fn apply_householder_left(
     }
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, clippy::needless_range_loop)]
 fn apply_symmetric_householder_trailing_rank2(
     matrix: &mut DMatrix<f64>,
     reflector: &HouseholderReflector,
@@ -8278,7 +8278,8 @@ fn apply_symmetric_householder_trailing_rank2(
 
     p[..active].fill(0.0);
     let data = matrix.as_slice();
-    for (col_offset, &v_col) in reflector.values.iter().enumerate() {
+    for col_offset in 0..active {
+        let v_col = reflector.values[col_offset];
         if v_col == 0.0 {
             continue;
         }
@@ -8288,27 +8289,25 @@ fn apply_symmetric_householder_trailing_rank2(
             p[row_offset] += data[col_base + start + row_offset] * v_col;
         }
     }
-    for value in &mut p[..active] {
-        *value *= reflector.tau;
-    }
 
-    let v_dot_p = reflector
-        .values
-        .iter()
-        .zip(&p[..active])
-        .map(|(v, p_value)| v * p_value)
-        .sum::<f64>();
+    let mut v_dot_p = 0.0;
+    for row_offset in 0..active {
+        p[row_offset] *= reflector.tau;
+        v_dot_p += reflector.values[row_offset] * p[row_offset];
+    }
     let correction = 0.5 * reflector.tau * v_dot_p;
     for row_offset in 0..active {
         w[row_offset] = p[row_offset] - correction * reflector.values[row_offset];
     }
 
     let data = matrix.as_mut_slice();
-    for (col_offset, &w_col) in w.iter().enumerate().take(active) {
+    for col_offset in 0..active {
+        let w_col = w[col_offset];
         let col = start + col_offset;
         let v_col = reflector.values[col_offset];
         let col_base = col * n;
-        for (row_offset, &w_row) in w.iter().enumerate().take(active).skip(col_offset) {
+        for row_offset in col_offset..active {
+            let w_row = w[row_offset];
             let row = start + row_offset;
             let v_row = reflector.values[row_offset];
             let update = v_row * w_col + w_row * v_col;
