@@ -6936,6 +6936,78 @@ impl MultivariateHypergeom {
     }
 }
 
+/// The Dirichlet-multinomial (compound) distribution, matching
+/// `scipy.stats.dirichlet_multinomial(alpha, n)`.
+pub struct DirichletMultinomial {
+    alpha: Vec<f64>,
+    n: usize,
+    alpha_sum: f64,
+}
+
+impl DirichletMultinomial {
+    /// Create the distribution with concentration `alpha` and `n` trials.
+    pub fn new(alpha: &[f64], n: usize) -> Self {
+        assert!(!alpha.is_empty(), "alpha must be non-empty");
+        assert!(alpha.iter().all(|&a| a > 0.0), "alpha must be positive");
+        let alpha_sum = alpha.iter().sum();
+        Self { alpha: alpha.to_vec(), n, alpha_sum }
+    }
+
+    /// Log probability mass function. Returns `-inf` unless the counts are
+    /// non-negative and sum to `n`.
+    pub fn logpmf(&self, x: &[f64]) -> f64 {
+        if x.len() != self.alpha.len() {
+            return f64::NEG_INFINITY;
+        }
+        let sum: f64 = x.iter().sum();
+        if (sum - self.n as f64).abs() > 1e-9 || x.iter().any(|&xi| xi < 0.0) {
+            return f64::NEG_INFINITY;
+        }
+        let mut lp = ln_gamma(self.alpha_sum) - ln_gamma(self.n as f64 + self.alpha_sum)
+            + ln_gamma(self.n as f64 + 1.0);
+        for (&xi, &ai) in x.iter().zip(&self.alpha) {
+            lp += ln_gamma(xi + ai) - ln_gamma(ai) - ln_gamma(xi + 1.0);
+        }
+        lp
+    }
+
+    /// Probability mass function.
+    pub fn pmf(&self, x: &[f64]) -> f64 {
+        self.logpmf(x).exp()
+    }
+
+    /// Mean vector `n·α_i/α₀`.
+    pub fn mean(&self) -> Vec<f64> {
+        let nf = self.n as f64;
+        self.alpha.iter().map(|&ai| nf * ai / self.alpha_sum).collect()
+    }
+
+    /// Variance of each component (the diagonal of [`cov`](Self::cov)).
+    pub fn var(&self) -> Vec<f64> {
+        let cov = self.cov();
+        (0..self.alpha.len()).map(|i| cov[i][i]).collect()
+    }
+
+    /// Covariance `cov_ij = n·p_i(δ_ij − p_j)·(n+α₀)/(1+α₀)`, `p_i = α_i/α₀`.
+    pub fn cov(&self) -> Vec<Vec<f64>> {
+        let k = self.alpha.len();
+        let nf = self.n as f64;
+        let overdisp = (nf + self.alpha_sum) / (1.0 + self.alpha_sum);
+        (0..k)
+            .map(|i| {
+                let pi = self.alpha[i] / self.alpha_sum;
+                (0..k)
+                    .map(|j| {
+                        let pj = self.alpha[j] / self.alpha_sum;
+                        let delta = if i == j { 1.0 } else { 0.0 };
+                        nf * pi * (delta - pj) * overdisp
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Von Mises Distribution
 // ══════════════════════════════════════════════════════════════════════
@@ -42087,6 +42159,22 @@ mod tests {
         let best = ppcc_max(&x, (0.0, 1.0));
         assert!((best - 0.35779018).abs() < 1e-4, "ppcc_max {best}");
         assert!(ppcc_plot(&x, 2.0, -2.0, 5).is_err());
+    }
+
+    #[test]
+    fn dirichlet_multinomial_matches_scipy() {
+        let d = DirichletMultinomial::new(&[1.0, 2.0, 3.0], 6);
+        assert!((d.pmf(&[1.0, 2.0, 3.0]) - 0.06493506493506493).abs() < 1e-12);
+        assert!((d.logpmf(&[1.0, 2.0, 3.0]) - (-2.7343675094195836)).abs() < 1e-12);
+        assert_eq!(d.mean(), vec![1.0, 2.0, 3.0]);
+        let var_exp = [1.4285714285714286, 2.2857142857142856, 2.5714285714285716];
+        for (g, e) in d.var().iter().zip(&var_exp) {
+            assert!((g - e).abs() < 1e-10, "var {g} vs {e}");
+        }
+        let cov = d.cov();
+        assert!((cov[0][1] - (-0.5714285714285714)).abs() < 1e-10);
+        assert!((cov[1][2] - (-1.7142857142857142)).abs() < 1e-10);
+        assert_eq!(d.pmf(&[1.0, 2.0, 2.0]), 0.0); // sum != n
     }
 
     #[test]
