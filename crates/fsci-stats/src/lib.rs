@@ -7008,6 +7008,63 @@ impl DirichletMultinomial {
     }
 }
 
+/// The multivariate Student-t distribution, matching
+/// `scipy.stats.multivariate_t(loc, shape, df)`.
+pub struct MultivariateT {
+    pub loc: Vec<f64>,
+    df: f64,
+    chol: Vec<Vec<f64>>,
+    log_det: f64,
+}
+
+impl MultivariateT {
+    /// Create the distribution with location `loc`, positive-definite `shape`
+    /// matrix, and `df` degrees of freedom.
+    pub fn new(loc: &[f64], shape: &[Vec<f64>], df: f64) -> Result<Self, StatsError> {
+        if loc.is_empty() {
+            return Err(StatsError::InvalidArgument("loc must be non-empty".to_string()));
+        }
+        if shape.len() != loc.len() {
+            return Err(StatsError::InvalidArgument(
+                "shape dimension must match loc".to_string(),
+            ));
+        }
+        let chol = cholesky_decompose(shape)?;
+        let log_det = 2.0 * (0..chol.len()).map(|i| chol[i][i].ln()).sum::<f64>();
+        Ok(Self { loc: loc.to_vec(), df, chol, log_det })
+    }
+
+    /// Log probability density function.
+    pub fn logpdf(&self, x: &[f64]) -> Result<f64, StatsError> {
+        if x.len() != self.loc.len() {
+            return Err(StatsError::InvalidArgument(
+                "x length must match dimension".to_string(),
+            ));
+        }
+        let centered: Vec<f64> = x.iter().zip(&self.loc).map(|(&xi, &li)| xi - li).collect();
+        let solved = solve_lower_triangular(&self.chol, &centered)?;
+        let maha: f64 = solved.iter().map(|v| v * v).sum();
+        let p = self.loc.len() as f64;
+        let df = self.df;
+        let pi = std::f64::consts::PI;
+        let logpdf = ln_gamma(0.5 * (df + p)) - ln_gamma(0.5 * df)
+            - 0.5 * p * (df.ln() + pi.ln())
+            - 0.5 * self.log_det
+            - 0.5 * (df + p) * (1.0 + maha / df).ln();
+        Ok(logpdf)
+    }
+
+    /// Probability density function.
+    pub fn pdf(&self, x: &[f64]) -> Result<f64, StatsError> {
+        Ok(self.logpdf(x)?.exp())
+    }
+
+    /// Mean vector (defined as `loc` for `df > 1`).
+    pub fn mean(&self) -> Vec<f64> {
+        self.loc.clone()
+    }
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Von Mises Distribution
 // ══════════════════════════════════════════════════════════════════════
@@ -42159,6 +42216,14 @@ mod tests {
         let best = ppcc_max(&x, (0.0, 1.0));
         assert!((best - 0.35779018).abs() < 1e-4, "ppcc_max {best}");
         assert!(ppcc_plot(&x, 2.0, -2.0, 5).is_err());
+    }
+
+    #[test]
+    fn multivariate_t_matches_scipy() {
+        let d = MultivariateT::new(&[1.0, 2.0], &[vec![2.0, 0.3], vec![0.3, 1.0]], 5.0).unwrap();
+        assert!((d.pdf(&[1.5, 2.5]).unwrap() - 0.0930430847783872).abs() < 1e-12);
+        assert!((d.logpdf(&[1.5, 2.5]).unwrap() - (-2.3746926159216657)).abs() < 1e-12);
+        assert_eq!(d.mean(), vec![1.0, 2.0]);
     }
 
     #[test]
