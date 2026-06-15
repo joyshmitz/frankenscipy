@@ -3189,6 +3189,19 @@ pub fn cheb1ap(
     Ok((Vec::new(), poles, k))
 }
 
+/// Gaussian approximation to the B-spline basis function of order `n`.
+///
+/// Matches `scipy.signal.gauss_spline(x, n)`: a zero-mean Gaussian with variance
+/// `σ² = (n + 1) / 12`, evaluated at each knot in `x` —
+/// `g(x) = exp(−x² / (2σ²)) / √(2π σ²)`.
+pub fn gauss_spline(x: &[f64], n: u32) -> Vec<f64> {
+    let signsq = (n as f64 + 1.0) / 12.0;
+    let coef = 1.0 / (2.0 * std::f64::consts::PI * signsq).sqrt();
+    x.iter()
+        .map(|&xi| coef * (-xi * xi / (2.0 * signsq)).exp())
+        .collect()
+}
+
 /// Analog Chebyshev type II (inverse Chebyshev) lowpass prototype.
 ///
 /// Matches `scipy.signal.cheb2ap(N, rs)`. Returns `(zeros, poles, gain)` for the
@@ -14033,6 +14046,24 @@ mod tests {
         assert!((d.a[8] - (-8.81618592363189e-01)).abs() <= 1e-13);
         // not divisible → error
         assert!(iircomb(0.3, 25.0, CombType::Notch, Some(2.0), false).is_err());
+    }
+
+    #[test]
+    fn gauss_spline_matches_scipy() {
+        // scipy.signal.gauss_spline([0, 0.5, 1, 2], 3)
+        let g = gauss_spline(&[0.0, 0.5, 1.0, 2.0], 3);
+        let want = [
+            0.690988298942671,
+            0.4749088496333091,
+            0.15418032980376928,
+            0.0017127887500551302,
+        ];
+        for (a, b) in g.iter().zip(want.iter()) {
+            assert!((a - b).abs() < 1e-12, "gauss_spline {a} vs {b}");
+        }
+        // Symmetric: g(-x) == g(x).
+        let sym = gauss_spline(&[-1.0, 1.0], 5);
+        assert!((sym[0] - sym[1]).abs() < 1e-15);
     }
 
     #[test]
