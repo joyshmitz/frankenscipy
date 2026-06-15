@@ -6822,6 +6822,53 @@ impl Multinomial {
     }
 }
 
+/// The Poisson binomial distribution — the number of successes in `n`
+/// independent Bernoulli trials with (possibly different) success
+/// probabilities `p`, matching `scipy.stats.poisson_binom(p)`.
+pub struct PoissonBinom {
+    p: Vec<f64>,
+    /// pmf[k] = P(X = k), k = 0..=n, computed by the exact convolution DP.
+    pmf: Vec<f64>,
+}
+
+impl PoissonBinom {
+    /// Create a Poisson binomial distribution from per-trial success
+    /// probabilities `p` (each in `[0, 1]`).
+    pub fn new(p: &[f64]) -> Self {
+        // DP: fold each Bernoulli in, dp[j] = dp[j](1-p_i) + dp[j-1] p_i.
+        let mut pmf = vec![1.0_f64];
+        for &pi in p {
+            let mut next = vec![0.0_f64; pmf.len() + 1];
+            for (j, &v) in pmf.iter().enumerate() {
+                next[j] += v * (1.0 - pi);
+                next[j + 1] += v * pi;
+            }
+            pmf = next;
+        }
+        Self { p: p.to_vec(), pmf }
+    }
+
+    /// Probability mass function `P(X = k)`.
+    pub fn pmf(&self, k: usize) -> f64 {
+        self.pmf.get(k).copied().unwrap_or(0.0)
+    }
+
+    /// Cumulative distribution function `P(X ≤ k)`.
+    pub fn cdf(&self, k: usize) -> f64 {
+        self.pmf.iter().take(k + 1).sum()
+    }
+
+    /// Mean `Σ p_i`.
+    pub fn mean(&self) -> f64 {
+        self.p.iter().sum()
+    }
+
+    /// Variance `Σ p_i(1 − p_i)`.
+    pub fn var(&self) -> f64 {
+        self.p.iter().map(|&pi| pi * (1.0 - pi)).sum()
+    }
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Von Mises Distribution
 // ══════════════════════════════════════════════════════════════════════
@@ -41973,6 +42020,22 @@ mod tests {
         let best = ppcc_max(&x, (0.0, 1.0));
         assert!((best - 0.35779018).abs() < 1e-4, "ppcc_max {best}");
         assert!(ppcc_plot(&x, 2.0, -2.0, 5).is_err());
+    }
+
+    #[test]
+    fn poisson_binom_matches_scipy() {
+        let d = PoissonBinom::new(&[0.1, 0.5, 0.8, 0.3]);
+        let pmf_exp = [0.063, 0.349, 0.425, 0.151, 0.012];
+        for (k, &e) in pmf_exp.iter().enumerate() {
+            assert!((d.pmf(k) - e).abs() < 1e-10, "pmf {k}");
+        }
+        let cdf_exp = [0.063, 0.412, 0.837, 0.988, 1.0];
+        for (k, &e) in cdf_exp.iter().enumerate() {
+            assert!((d.cdf(k) - e).abs() < 1e-10, "cdf {k}");
+        }
+        assert!((d.mean() - 1.7).abs() < 1e-12);
+        assert!((d.var() - 0.71).abs() < 1e-12);
+        assert_eq!(d.pmf(5), 0.0);
     }
 
     #[test]
