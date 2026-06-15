@@ -140,6 +140,7 @@ pub enum IntegrateValidationError {
     NotYetImplemented { function: &'static str },
     QuadInvalidBounds { detail: String },
     QuadInvalidTolerance { detail: String },
+    LebedevOrderUnavailable { order: i64 },
 }
 
 impl std::fmt::Display for IntegrateValidationError {
@@ -165,6 +166,12 @@ impl std::fmt::Display for IntegrateValidationError {
             }
             Self::QuadInvalidBounds { detail } => write!(f, "{detail}"),
             Self::QuadInvalidTolerance { detail } => write!(f, "{detail}"),
+            Self::LebedevOrderUnavailable { order } => write!(
+                f,
+                "Lebedev order {order} not available. Available orders are 3, 5, 7, \
+                 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31, 35, 41, 47, 53, 59, \
+                 65, 71, 77, 83, 89, 95, 101, 107, 113, 119, 125, 131."
+            ),
         }
     }
 }
