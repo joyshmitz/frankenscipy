@@ -39781,6 +39781,127 @@ pub fn binned_statistic(
     (stats, bin_edges)
 }
 
+/// Compute a bidimensional binned statistic for one or more sets of data.
+///
+/// Matches `scipy.stats.binned_statistic_2d(x, y, values, statistic, bins)` for
+/// the common scalar-`bins` form. Points `(x[i], y[i])` carry value `values[i]`;
+/// the data plane is split into `bins × bins` equal-width cells spanning the data
+/// range in each axis. Returns `(statistic, x_edges, y_edges)` where `statistic`
+/// is indexed `[i_x][i_y]` (scipy's convention).
+///
+/// Empty bins follow scipy: `count`/`sum` yield `0.0`, while `mean`/`median`/
+/// `std`/`min`/`max` yield `NaN`. `std` is the population standard deviation
+/// (ddof = 0), matching scipy and [`binned_statistic`]. Returns three empty
+/// vectors on invalid input (mismatched lengths, empty data, `bins == 0`, or any
+/// non-finite coordinate).
+///
+/// As with the 1-D [`binned_statistic`], a degenerate axis (all coordinates
+/// equal) falls back to unit-width bins; scipy instead expands such a range to
+/// `[v − 0.5, v + 0.5]`, so results differ only in that corner case.
+pub fn binned_statistic_2d(
+    x: &[f64],
+    y: &[f64],
+    values: &[f64],
+    bins: usize,
+    statistic: &str,
+) -> (Vec<Vec<f64>>, Vec<f64>, Vec<f64>) {
+    if x.len() != y.len()
+        || x.len() != values.len()
+        || x.is_empty()
+        || bins == 0
+        || x.iter().any(|v| !v.is_finite())
+        || y.iter().any(|v| !v.is_finite())
+    {
+        return (vec![], vec![], vec![]);
+    }
+
+    // NaN-propagating min/max, matching the 1-D `binned_statistic` helper.
+    let nan_min = |data: &[f64]| {
+        data.iter().cloned().fold(f64::INFINITY, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.min(b)
+            }
+        })
+    };
+    let nan_max = |data: &[f64]| {
+        data.iter()
+            .cloned()
+            .fold(f64::NEG_INFINITY, |a: f64, b: f64| {
+                if a.is_nan() || b.is_nan() {
+                    f64::NAN
+                } else {
+                    a.max(b)
+                }
+            })
+    };
+
+    let min_x = nan_min(x);
+    let max_x = nan_max(x);
+    let min_y = nan_min(y);
+    let max_y = nan_max(y);
+    let bw_x = if max_x > min_x {
+        (max_x - min_x) / bins as f64
+    } else {
+        1.0
+    };
+    let bw_y = if max_y > min_y {
+        (max_y - min_y) / bins as f64
+    } else {
+        1.0
+    };
+
+    let x_edges: Vec<f64> = (0..=bins).map(|i| min_x + i as f64 * bw_x).collect();
+    let y_edges: Vec<f64> = (0..=bins).map(|i| min_y + i as f64 * bw_y).collect();
+
+    let mut bin_values: Vec<Vec<Vec<f64>>> = vec![vec![vec![]; bins]; bins];
+    for ((&xi, &yi), &vi) in x.iter().zip(y.iter()).zip(values.iter()) {
+        let bx = (((xi - min_x) / bw_x).floor() as usize).min(bins - 1);
+        let by = (((yi - min_y) / bw_y).floor() as usize).min(bins - 1);
+        bin_values[bx][by].push(vi);
+    }
+
+    let cell_stat = |bv: &[f64]| -> f64 {
+        // count/sum are well-defined (0) for empty bins; the rest are NaN.
+        match statistic {
+            "count" => return bv.len() as f64,
+            "sum" => return bv.iter().sum(),
+            _ => {}
+        }
+        if bv.is_empty() {
+            return f64::NAN;
+        }
+        match statistic {
+            "mean" => bv.iter().sum::<f64>() / bv.len() as f64,
+            "min" => nan_min(bv),
+            "max" => nan_max(bv),
+            "median" => {
+                let mut sorted = bv.to_vec();
+                sorted.sort_by(|a, b| a.total_cmp(b));
+                let n = sorted.len();
+                if n.is_multiple_of(2) {
+                    (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
+                } else {
+                    sorted[n / 2]
+                }
+            }
+            "std" => {
+                let mean = bv.iter().sum::<f64>() / bv.len() as f64;
+                (bv.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / bv.len() as f64).sqrt()
+            }
+            _ => bv.iter().sum::<f64>() / bv.len() as f64,
+        }
+    };
+
+    let stats: Vec<Vec<f64>> = bin_values
+        .iter()
+        .map(|row| row.iter().map(|bv| cell_stat(bv)).collect())
+        .collect();
+
+    (stats, x_edges, y_edges)
+}
+
 /// Compute the relative frequency histogram.
 ///
 /// Returns (relative_frequencies, bin_edges).
@@ -69034,6 +69155,51 @@ mod tests {
             "binned_statistic sum[1] got {}, expected 400.0",
             stats_sum[1]
         );
+    }
+
+    #[test]
+    fn binned_statistic_2d_matches_scipy_reference_values() {
+        // scipy.stats.binned_statistic_2d(x, y, v, statistic, bins=2)
+        let x = [0.1, 0.1, 0.6, 0.9, 0.4];
+        let y = [0.1, 0.9, 0.6, 0.2, 0.4];
+        let v = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-12;
+
+        let (m, xe, ye) = binned_statistic_2d(&x, &y, &v, 2, "mean");
+        assert_eq!((m.len(), m[0].len()), (2, 2));
+        // statistic indexed [i_x][i_y]
+        assert!(close(m[0][0], 3.0) && close(m[0][1], 2.0));
+        assert!(close(m[1][0], 4.0) && close(m[1][1], 3.0));
+        assert!(close(xe[0], 0.1) && close(xe[1], 0.5) && close(xe[2], 0.9));
+        assert!(close(ye[0], 0.1) && close(ye[1], 0.5) && close(ye[2], 0.9));
+
+        let (c, _, _) = binned_statistic_2d(&x, &y, &v, 2, "count");
+        assert!(close(c[0][0], 2.0) && close(c[0][1], 1.0) && close(c[1][0], 1.0) && close(c[1][1], 1.0));
+        let (s, _, _) = binned_statistic_2d(&x, &y, &v, 2, "sum");
+        assert!(close(s[0][0], 6.0) && close(s[0][1], 2.0) && close(s[1][0], 4.0) && close(s[1][1], 3.0));
+        let (sd, _, _) = binned_statistic_2d(&x, &y, &v, 2, "std");
+        assert!(close(sd[0][0], 2.0) && close(sd[0][1], 0.0));
+        let (mn, _, _) = binned_statistic_2d(&x, &y, &v, 2, "min");
+        assert!(close(mn[0][0], 1.0) && close(mn[1][0], 4.0));
+        let (mx, _, _) = binned_statistic_2d(&x, &y, &v, 2, "max");
+        assert!(close(mx[0][0], 5.0) && close(mx[1][0], 4.0));
+
+        // Empty-bin conventions on a non-degenerate range: leave cell [1][1] empty.
+        // scipy: mean [[1,2],[3,nan]], count [[1,1],[1,0]], sum [[1,2],[3,0]].
+        let ex = [0.0, 0.0, 1.0];
+        let ey = [0.0, 1.0, 0.0];
+        let ev = [1.0, 2.0, 3.0];
+        let (cm, _, _) = binned_statistic_2d(&ex, &ey, &ev, 2, "mean");
+        assert!(close(cm[0][0], 1.0) && close(cm[0][1], 2.0) && close(cm[1][0], 3.0));
+        assert!(cm[1][1].is_nan());
+        let (cc, _, _) = binned_statistic_2d(&ex, &ey, &ev, 2, "count");
+        assert!(close(cc[1][0], 1.0) && close(cc[1][1], 0.0));
+        let (cs, _, _) = binned_statistic_2d(&ex, &ey, &ev, 2, "sum");
+        assert!(close(cs[1][0], 3.0) && close(cs[1][1], 0.0));
+
+        // Invalid input -> empty.
+        let (e, ex2, ey2) = binned_statistic_2d(&x, &y[..3], &v, 2, "mean");
+        assert!(e.is_empty() && ex2.is_empty() && ey2.is_empty());
     }
 
     #[test]
