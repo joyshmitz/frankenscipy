@@ -10215,6 +10215,76 @@ pub fn detrend(data: &[f64], dtype: DetrendType) -> Result<Vec<f64>, SignalError
     }
 }
 
+/// Shared symmetric exponential B-spline coefficient filter (Unser): a causal
+/// forward pass with the mirror-boundary initial condition followed by an
+/// anti-causal reverse pass, scaled by `gain`. Used by [`cspline1d`] (cubic,
+/// `zi = -2+√3`, `gain = 6`) and [`qspline1d`] (quadratic, `zi = -3+2√2`,
+/// `gain = 8`). Exactly mirrors scipy's `_cubic_coeff`/`_quadratic_coeff`.
+fn spline1d_coeff(signal: &[f64], zi: f64, gain: f64) -> Vec<f64> {
+    let k = signal.len();
+    if k == 0 {
+        return Vec::new();
+    }
+    // Causal initial condition: yplus[0] = s[0] + zi · Σ_j zi^j · s[j].
+    let mut acc = 0.0_f64;
+    let mut p = 1.0_f64;
+    for &s in signal {
+        acc += p * s;
+        p *= zi;
+    }
+    let yplus0 = signal[0] + zi * acc;
+    if k == 1 {
+        // scipy's K==1 branch returns without the gain factor.
+        return vec![zi / (zi - 1.0) * yplus0];
+    }
+    // Forward (causal) filter.
+    let mut yplus = vec![0.0_f64; k];
+    yplus[0] = yplus0;
+    for i in 1..k {
+        yplus[i] = signal[i] + zi * yplus[i - 1];
+    }
+    // Reverse (anti-causal) filter.
+    let mut output = vec![0.0_f64; k];
+    output[k - 1] = zi / (zi - 1.0) * yplus[k - 1];
+    for i in (0..k - 1).rev() {
+        output[i] = zi * (output[i + 1] - yplus[i]);
+    }
+    for v in &mut output {
+        *v *= gain;
+    }
+    output
+}
+
+/// Compute cubic-spline coefficients of a 1-D signal under mirror-symmetric
+/// boundary conditions, matching `scipy.signal.cspline1d(signal, lamb=0.0)`.
+///
+/// Convolving the returned coefficients with the length-3 FIR window
+/// `[1, 4, 1] / 6` (mirror-symmetric) reconstructs the signal. Only the
+/// non-smoothing case `lamb == 0` is supported; a nonzero smoothing parameter
+/// returns an error.
+pub fn cspline1d(signal: &[f64], lamb: f64) -> Result<Vec<f64>, SignalError> {
+    if lamb != 0.0 {
+        return Err(SignalError::InvalidArgument(
+            "cspline1d smoothing (lamb != 0) is not supported".to_string(),
+        ));
+    }
+    Ok(spline1d_coeff(signal, -2.0 + 3.0_f64.sqrt(), 6.0))
+}
+
+/// Compute quadratic-spline coefficients of a 1-D signal under mirror-symmetric
+/// boundary conditions, matching `scipy.signal.qspline1d(signal, lamb=0.0)`.
+///
+/// Only the non-smoothing case `lamb == 0` is supported; a nonzero smoothing
+/// parameter returns an error.
+pub fn qspline1d(signal: &[f64], lamb: f64) -> Result<Vec<f64>, SignalError> {
+    if lamb != 0.0 {
+        return Err(SignalError::InvalidArgument(
+            "qspline1d smoothing (lamb != 0) is not supported".to_string(),
+        ));
+    }
+    Ok(spline1d_coeff(signal, -3.0 + 2.0 * 2.0_f64.sqrt(), 8.0))
+}
+
 /// Apply a median filter to a 1-D signal.
 ///
 /// Matches `scipy.signal.medfilt(volume, kernel_size)`.
@@ -22372,6 +22442,29 @@ mod tests {
         }
         assert_eq!(left_bases, expected_left, "left_bases mismatch");
         assert_eq!(right_bases, expected_right, "right_bases mismatch");
+    }
+
+    #[test]
+    fn cspline1d_qspline1d_match_scipy() {
+        let s = [1.0, 2.0, 5.0, 3.0, 8.0, 4.0, 2.0, 6.0, 1.0, 7.0];
+        let c = cspline1d(&s, 0.0).unwrap();
+        let cexp = [
+            1.0159134252, 0.9204627659, 7.3022355113, -0.129404811, 11.2153837329, 3.2678698795,
+            -0.2868632507, 9.8795831234, -3.231469243, 9.0462938486,
+        ];
+        for (g, e) in c.iter().zip(&cexp) {
+            assert!((g - e).abs() < 1e-8, "cubic {g} vs {e}");
+        }
+        let q = qspline1d(&s, 0.0).unwrap();
+        let qexp = [
+            0.9316946252, 1.4781378801, 6.1994780944, 1.3249935538, 9.8505605828, 3.5716429497,
+            0.7195817193, 8.1108667343, -1.3847821254, 8.1978260179,
+        ];
+        for (g, e) in q.iter().zip(&qexp) {
+            assert!((g - e).abs() < 1e-8, "quad {g} vs {e}");
+        }
+        // Smoothing branch is rejected.
+        assert!(cspline1d(&s, 1.0).is_err());
     }
 
     #[test]
