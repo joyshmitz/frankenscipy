@@ -8059,6 +8059,28 @@ pub fn dbode(
             "num and den must be non-empty".to_string(),
         ));
     }
+    let h = dfreqresp(num, den, dt, w)?.1;
+    Ok(bode_from_complex(&h, w))
+}
+
+/// Complex frequency response of a discrete-time transfer function, matching
+/// `scipy.signal.dfreqresp((num, den, dt), w)` for the explicit-frequency case.
+///
+/// Evaluates `H(z) = num(z)/den(z)` at `z = e^{jω}` for each `ω` in `w` (radians
+/// per sample) and returns `(w, H)` with `H` as `(re, im)` pairs. As in scipy,
+/// `dt` is system metadata and does not affect the explicit-frequency response.
+pub fn dfreqresp(
+    num: &[f64],
+    den: &[f64],
+    dt: f64,
+    w: &[f64],
+) -> Result<(Vec<f64>, Vec<(f64, f64)>), SignalError> {
+    let _ = dt; // unused for explicit-frequency response (matches scipy)
+    if num.is_empty() || den.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "num and den must be non-empty".to_string(),
+        ));
+    }
     let h: Vec<(f64, f64)> = w
         .iter()
         .map(|&omega| {
@@ -8069,7 +8091,7 @@ pub fn dbode(
             ((br * ar + bi * ai) / denom, (bi * ar - br * ai) / denom)
         })
         .collect();
-    Ok(bode_from_complex(&h, w))
+    Ok((w.to_vec(), h))
 }
 
 /// Compute group delay of a digital filter.
@@ -22633,6 +22655,21 @@ mod tests {
         }
         assert_eq!(left_bases, expected_left, "left_bases mismatch");
         assert_eq!(right_bases, expected_right, "right_bases mismatch");
+    }
+
+    #[test]
+    fn dfreqresp_matches_scipy() {
+        let w = [0.1, 0.5, 1.0, 2.0];
+        let (_, h) = dfreqresp(&[1.0, 0.5], &[1.0, -0.3, 0.1], 0.1, &w).unwrap();
+        let expected = [
+            (1.8540085337, -0.2724962436),
+            (1.3577903797, -1.2408320556),
+            (0.0836355475, -1.6446523246),
+            (-0.7815252637, -0.2440428840),
+        ];
+        for ((re, im), (ere, eim)) in h.iter().zip(&expected) {
+            assert!((re - ere).abs() < 1e-8 && (im - eim).abs() < 1e-8, "{re}+{im}j vs {ere}+{eim}j");
+        }
     }
 
     #[test]
