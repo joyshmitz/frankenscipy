@@ -1429,6 +1429,64 @@ pub fn hilbert(x: &[f64]) -> Result<Vec<(f64, f64)>, SignalError> {
     Ok(analytic)
 }
 
+/// Build the per-axis analytic-signal multiplier of length `n` used by
+/// [`hilbert2`]: DC weighted 1, positive frequencies `1..(n+1)/2` weighted 2,
+/// and everything from `(n+1)/2` on (including the Nyquist bin for even `n`)
+/// zeroed — matching scipy's current `hilbert2` (which, unlike the 1-D
+/// `hilbert`, discards the Nyquist component).
+fn hilbert2_multiplier(n: usize) -> Vec<f64> {
+    let mut h = vec![0.0; n];
+    if n == 0 {
+        return h;
+    }
+    let k_half = (n + 1) / 2;
+    h[0] = 1.0;
+    for item in h.iter_mut().take(k_half).skip(1) {
+        *item = 2.0;
+    }
+    h
+}
+
+/// Compute the 2-D analytic signal of a real matrix using the Hilbert
+/// transform, matching `scipy.signal.hilbert2`.
+///
+/// `x` is a row-major `rows × cols` real matrix. The analytic signal is formed
+/// by FFT2, applying the outer product of the per-axis analytic multipliers
+/// (zeroing the negative-frequency quadrants), and inverse FFT2. Returns the
+/// complex result as flat row-major `(re, im)` pairs.
+pub fn hilbert2(x: &[f64], shape: (usize, usize)) -> Result<Vec<(f64, f64)>, SignalError> {
+    let (rows, cols) = shape;
+    if x.len() != rows * cols {
+        return Err(SignalError::InvalidArgument(
+            "input length must match rows * cols".to_string(),
+        ));
+    }
+    if rows == 0 || cols == 0 {
+        return Err(SignalError::InvalidArgument(
+            "input must be non-empty".to_string(),
+        ));
+    }
+
+    let fft_opts = fsci_fft::FftOptions::default();
+    let complex_input: Vec<(f64, f64)> = x.iter().map(|&v| (v, 0.0)).collect();
+    let spectrum = fsci_fft::fft2(&complex_input, shape, &fft_opts)
+        .map_err(|e| SignalError::InvalidArgument(format!("FFT failed: {e}")))?;
+
+    let h_row = hilbert2_multiplier(rows);
+    let h_col = hilbert2_multiplier(cols);
+    let filtered: Vec<(f64, f64)> = spectrum
+        .iter()
+        .enumerate()
+        .map(|(idx, &(re, im))| {
+            let hv = h_row[idx / cols] * h_col[idx % cols];
+            (re * hv, im * hv)
+        })
+        .collect();
+
+    fsci_fft::ifft2(&filtered, shape, &fft_opts)
+        .map_err(|e| SignalError::InvalidArgument(format!("IFFT failed: {e}")))
+}
+
 /// Compute the envelope (instantaneous amplitude) of a signal.
 ///
 /// This is `|hilbert(x)|` — the magnitude of the analytic signal.
@@ -12984,6 +13042,24 @@ pub fn daub(p: usize) -> Result<Vec<f64>, SignalError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hilbert2_matches_scipy() {
+        // 2x3 ramp 0..5, matching scipy.signal.hilbert2.
+        let x: Vec<f64> = (0..6).map(|v| v as f64).collect();
+        let y = hilbert2(&x, (2, 3)).unwrap();
+        let s = 0.577_350_269_189_625_8; // 1/sqrt(3)
+        let expected = [
+            (1.5, s), (2.5, -2.0 * s), (3.5, s),
+            (1.5, s), (2.5, -2.0 * s), (3.5, s),
+        ];
+        assert_eq!(y.len(), 6);
+        for ((re, im), (ere, eim)) in y.iter().zip(&expected) {
+            assert!((re - ere).abs() < 1e-9, "re {re} vs {ere}");
+            assert!((im - eim).abs() < 1e-9, "im {im} vs {eim}");
+        }
+        assert!(hilbert2(&x, (2, 2)).is_err());
+    }
 
     #[test]
     fn medfilt2d_matches_scipy() {
