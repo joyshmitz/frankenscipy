@@ -1,0 +1,160 @@
+Script started on 2026-06-15 00:27:56-04:00 [COMMAND="RCH_REQUIRE_REMOTE=1 RCH_WORKER=vmi1152480 RCH_TEST_SLOTS=1 rch exec -- env CARGO_BUILD_JOBS=1 cargo test -j 1 -p fsci-linalg --release --locked --lib tridiagonal_row_major_givens_replay_matches_immediate_bits symmetric_eigh_native_matches_nalgebra_and_timing -- --nocapture" <not executed on terminal>]
+  [2m2026-06-15T04:27:56.523598Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mSelected worker: vmi1152480 at root@109.205.181.92 (3 slots remaining after reservation, speed 50.0)[0m
+    [2;3mat[0m rch/src/hook.rs:514 [2;3mon[0m ThreadId(1)
+
+[*] Job j-29884606035532314 submitted to vmi1152480 (3 slots remaining, speed 50.0)
+  [2m2026-06-15T04:27:56.849636Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mStarting remote compilation pipeline for frankenscipy-psn7x-native-eigh-20260615T0418 (hash: 547f19c03cc95f95)[0m
+    [2;3mat[0m rch/src/hook.rs:5994 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:27:56.849706Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mPrepared dependency sync manifest for 20 roots[0m
+    [2;3mat[0m rch/src/hook.rs:6016 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:28:00.499409Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mSyncing project to worker vmi1152480...[0m
+    [2;3mat[0m rch/src/hook.rs:6046 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:28:00.499499Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418 -> /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418 on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:28:04.614890Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 4115ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:28:04.615023Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418/crates/fsci-arrayapi -> /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418/crates/fsci-arrayapi on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:28:07.934452Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 3319ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:28:07.934628Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418/crates/fsci-cluster -> /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418/crates/fsci-cluster on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:28:10.772819Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 2838ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:28:10.772946Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418/crates/fsci-conformance -> /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418/crates/fsci-conformance on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:28:14.165559Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 3392ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:28:14.165656Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418/crates/fsci-constants -> /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418/crates/fsci-constants on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:28:16.660906Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 2495ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:28:16.661013Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418/crates/fsci-datasets -> /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418/crates/fsci-datasets on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:28:19.567726Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 2906ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:28:19.567837Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418/crates/fsci-fft -> /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418/crates/fsci-fft on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:28:22.527927Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 2960ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:28:22.528100Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418/crates/fsci-integrate -> /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418/crates/fsci-integrate on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:28:25.540428Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 3012ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:28:25.540546Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418/crates/fsci-interpolate -> /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418/crates/fsci-interpolate on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:28:29.554815Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 4014ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:28:29.554955Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418/crates/fsci-io -> /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418/crates/fsci-io on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:28:33.333349Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 3778ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:28:33.333444Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418/crates/fsci-linalg -> /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418/crates/fsci-linalg on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:28:36.843583Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 3510ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:28:36.843715Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418/crates/fsci-ndimage -> /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418/crates/fsci-ndimage on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:28:39.886897Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 3043ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:28:39.887038Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418/crates/fsci-odr -> /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418/crates/fsci-odr on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:28:43.665860Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 3778ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:28:43.665978Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418/crates/fsci-opt -> /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418/crates/fsci-opt on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:28:46.609729Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 2943ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:28:46.609840Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418/crates/fsci-runtime -> /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418/crates/fsci-runtime on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:28:49.534565Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 2924ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:28:49.534683Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418/crates/fsci-signal -> /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418/crates/fsci-signal on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:28:52.537680Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 3002ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:28:52.537784Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418/crates/fsci-sparse -> /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418/crates/fsci-sparse on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:28:56.013997Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 3476ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:28:56.014174Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418/crates/fsci-spatial -> /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418/crates/fsci-spatial on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:28:59.810587Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 3796ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:28:59.810702Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418/crates/fsci-special -> /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418/crates/fsci-special on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:29:03.955070Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 4144ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:29:03.955186Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418/crates/fsci-stats -> /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418/crates/fsci-stats on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:29:07.676945Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 3721ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:29:07.676985Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mSync complete: 4162 files, 146660 bytes in 67166ms[0m
+    [2;3mat[0m rch/src/hook.rs:6209 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:30:01.656089Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mExecuting command remotely: env 'CARGO_BUILD_JOBS=1' cargo test -j 1 -p fsci-linalg --release --locked --lib tridiagonal_row_major_givens_replay_matches_immediate_bits symmetric_eigh_native_matches_nalgebra_and_timing -- --nocapture[0m
+    [2;3mat[0m rch/src/hook.rs:6252 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-15T04:30:01.656150Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mRewriting CARGO_TARGET_DIR for remote execution (worker-scoped path): /data/tmp/cargo-target -> /data/projects/.scratch/frankenscipy-psn7x-native-eigh-20260615T0418/.rch-target-vmi1152480-job-29884606035532314-1781497680499401557-0[0m
+    [2;3mat[0m rch/src/transfer.rs:712 [2;3mon[0m ThreadId(1)
+
+error: unexpected argument 'symmetric_eigh_native_matches_nalgebra_and_timing' found
+
+Usage: cargo test [OPTIONS] [TESTNAME] [-- [ARGS]...]
+
+For more information, try '--help'.
+  [2m2026-06-15T04:30:05.001177Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mRemote command finished: exit=1 in 3344ms[0m
+    [2;3mat[0m rch/src/hook.rs:6376 [2;3mon[0m ThreadId(1)
+
+[W] Worker: vmi1152480 | Job: j-29884606035532314
+[T] Total: 70.5s (sync 67.2s, build 3.3s, artifacts --)
+^ Sync: 143.2 KB in 67.2s (2.1 KB/s)
+[C] Compile: 3.3s
+Artifacts: skipped
+[T] Cache: MISS
+[RCH] remote vmi1152480 failed (exit 1)
+
+Script done on 2026-06-15 00:30:05-04:00 [COMMAND_EXIT_CODE="1"]

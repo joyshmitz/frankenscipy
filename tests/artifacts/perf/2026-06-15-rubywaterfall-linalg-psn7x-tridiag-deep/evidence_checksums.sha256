@@ -1,0 +1,5 @@
+92f705fd07bcb78b34cd4bf1d63b1dd2ae14820ac4285f9732534962121f1f7c  tests/artifacts/perf/2026-06-15-rubywaterfall-linalg-psn7x-tridiag-deep/after_row_major_givens_native_timing_vmi1152480_rch.txt
+02226140712d611915bb48fe19be5ea486b70532325373fbdc5c9cb1d395dd14  tests/artifacts/perf/2026-06-15-rubywaterfall-linalg-psn7x-tridiag-deep/baseline_native_vs_nalgebra_vmi1152480_rch.txt
+99f1b30183170a7095252ede3f428fea2f85963e5c6388e68e2797e9f2a386d1  tests/artifacts/perf/2026-06-15-rubywaterfall-linalg-psn7x-tridiag-deep/proof_row_major_givens_and_native_rch.txt
+cd365b83bf4b01548bc41f8bce33d99cbb855dc7fe0a4591e1daf000233f45b6  tests/artifacts/perf/2026-06-15-rubywaterfall-linalg-psn7x-tridiag-deep/proof_row_major_givens_bits_rch.txt
+ee4ba00d73b30d8ea33b4c4172af3f7bdfb72591e24a380da2035edf7b6f7715  tests/artifacts/perf/2026-06-15-rubywaterfall-linalg-psn7x-tridiag-deep/EVIDENCE.md
