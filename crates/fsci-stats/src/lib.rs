@@ -6869,6 +6869,73 @@ impl PoissonBinom {
     }
 }
 
+/// The multivariate hypergeometric distribution — drawing `n` items without
+/// replacement from a collection with `m_i` items of each color, matching
+/// `scipy.stats.multivariate_hypergeom(m, n)`.
+pub struct MultivariateHypergeom {
+    m: Vec<usize>,
+    n: usize,
+    total: usize,
+}
+
+impl MultivariateHypergeom {
+    /// Create the distribution: `m[i]` items of color `i`, drawing `n` total.
+    pub fn new(m: &[usize], n: usize) -> Self {
+        let total: usize = m.iter().sum();
+        Self { m: m.to_vec(), n, total }
+    }
+
+    /// Probability mass function `Π C(m_i, x_i) / C(M, n)`; zero unless the
+    /// draw is valid (`0 ≤ x_i ≤ m_i` and `Σ x_i = n`).
+    pub fn pmf(&self, x: &[usize]) -> f64 {
+        if x.len() != self.m.len()
+            || x.iter().sum::<usize>() != self.n
+            || x.iter().zip(&self.m).any(|(&xi, &mi)| xi > mi)
+        {
+            return 0.0;
+        }
+        let ln_c = |a: usize, b: usize| -> f64 {
+            ln_gamma(a as f64 + 1.0) - ln_gamma(b as f64 + 1.0) - ln_gamma((a - b) as f64 + 1.0)
+        };
+        let mut ln_p = -ln_c(self.total, self.n);
+        for (&xi, &mi) in x.iter().zip(&self.m) {
+            ln_p += ln_c(mi, xi);
+        }
+        ln_p.exp()
+    }
+
+    /// Mean vector `n·m_i/M`.
+    pub fn mean(&self) -> Vec<f64> {
+        let (nf, mf) = (self.n as f64, self.total as f64);
+        self.m.iter().map(|&mi| nf * mi as f64 / mf).collect()
+    }
+
+    /// Variance of each component, the diagonal of [`cov`](Self::cov).
+    pub fn var(&self) -> Vec<f64> {
+        let cov = self.cov();
+        (0..self.m.len()).map(|i| cov[i][i]).collect()
+    }
+
+    /// Covariance `cov_ij = n·(M−n)/(M−1)·(m_i/M)·(δ_ij − m_j/M)`.
+    pub fn cov(&self) -> Vec<Vec<f64>> {
+        let k = self.m.len();
+        let (nf, mf) = (self.n as f64, self.total as f64);
+        let factor = nf * (mf - nf) / (mf - 1.0);
+        (0..k)
+            .map(|i| {
+                let pi = self.m[i] as f64 / mf;
+                (0..k)
+                    .map(|j| {
+                        let pj = self.m[j] as f64 / mf;
+                        let delta = if i == j { 1.0 } else { 0.0 };
+                        factor * pi * (delta - pj)
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Von Mises Distribution
 // ══════════════════════════════════════════════════════════════════════
@@ -42020,6 +42087,24 @@ mod tests {
         let best = ppcc_max(&x, (0.0, 1.0));
         assert!((best - 0.35779018).abs() < 1e-4, "ppcc_max {best}");
         assert!(ppcc_plot(&x, 2.0, -2.0, 5).is_err());
+    }
+
+    #[test]
+    fn multivariate_hypergeom_matches_scipy() {
+        let d = MultivariateHypergeom::new(&[10, 8, 6], 5);
+        assert!((d.pmf(&[2, 2, 1]) - 0.1778656126482213).abs() < 1e-12);
+        assert_eq!(d.pmf(&[2, 2, 2]), 0.0); // sum != n
+        let mean_exp = [2.0833333333333335, 1.6666666666666667, 1.25];
+        for (g, e) in d.mean().iter().zip(&mean_exp) {
+            assert!((g - e).abs() < 1e-10, "mean {g} vs {e}");
+        }
+        let var_exp = [1.0039251207729467, 0.9178743961352657, 0.7744565217391304];
+        for (g, e) in d.var().iter().zip(&var_exp) {
+            assert!((g - e).abs() < 1e-10, "var {g} vs {e}");
+        }
+        let cov = d.cov();
+        assert!((cov[0][1] - (-0.5736714975845411)).abs() < 1e-10);
+        assert!((cov[1][2] - (-0.34420289855072466)).abs() < 1e-10);
     }
 
     #[test]
