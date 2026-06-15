@@ -395,6 +395,91 @@ where
     })
 }
 
+/// Result from [`leastsq`] — the classic MINPACK-style interface.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LeastsqResult {
+    /// Solution parameters (scipy's `x`).
+    pub x: Vec<f64>,
+    /// Unscaled covariance estimate `cov_x = (JᵀJ)⁻¹`, or `None` if the
+    /// Jacobian is rank-deficient at the solution (matching scipy, which
+    /// returns `None` for `cov_x` in that case).
+    pub cov_x: Option<Vec<Vec<f64>>>,
+    /// Number of function evaluations (scipy's `infodict['nfev']`).
+    pub nfev: usize,
+    /// Human-readable termination message (scipy's `mesg`).
+    pub mesg: String,
+    /// MINPACK termination flag (scipy's `ier`). A value in `1..=4` means a
+    /// solution was found.
+    pub ier: i32,
+}
+
+/// Minimize the sum of squares of a set of equations (Levenberg-Marquardt).
+///
+/// Mirrors `scipy.optimize.leastsq(func, x0)`: `func` maps the parameter vector
+/// to a vector of residuals, and the solver returns the optimal parameters
+/// together with the unscaled covariance `cov_x = (JᵀJ)⁻¹` and a MINPACK-style
+/// `ier` termination flag (`ier in {1, 2, 3, 4}` indicates success).
+///
+/// This is the legacy interface that predates [`least_squares`]; both wrap the
+/// same Levenberg-Marquardt core, so they converge to the same minimum.
+pub fn leastsq<F>(
+    func: F,
+    x0: &[f64],
+    options: LeastSquaresOptions,
+) -> Result<LeastsqResult, OptError>
+where
+    F: Fn(&[f64]) -> Vec<f64>,
+{
+    let ls = least_squares(func, x0, options)?;
+    let n = x0.len();
+    let m = ls.fun.len();
+
+    // scipy's `cov_x` is the *unscaled* inverse (JᵀJ)⁻¹; reuse the
+    // `absolute_sigma` branch of the covariance helper. A rank-deficient
+    // Jacobian yields a non-finite inverse -> report `None` like scipy.
+    let cov = compute_covariance(&ls.jac, ls.cost, m, n, true);
+    let cov_x = if cov.iter().flatten().all(|v| v.is_finite()) {
+        Some(cov)
+    } else {
+        None
+    };
+
+    // Map the convergence reason onto the MINPACK `ier` codes scipy reports.
+    let (ier, mesg) = if ls.success {
+        if ls.message.contains("ftol") {
+            (
+                1,
+                "Both actual and predicted relative reductions in the sum of squares\n  are at most ftol.",
+            )
+        } else if ls.message.contains("xtol") {
+            (
+                2,
+                "The relative error between two consecutive iterates is at most xtol.",
+            )
+        } else if ls.message.contains("gtol") {
+            (
+                4,
+                "The cosine of the angle between func(x) and any column of the\n  Jacobian is at most gtol in absolute value.",
+            )
+        } else {
+            (1, "The solution converged.")
+        }
+    } else {
+        (
+            5,
+            "Number of calls to function has reached maxfev = 0.",
+        )
+    };
+
+    Ok(LeastsqResult {
+        x: ls.x,
+        cov_x,
+        nfev: ls.nfev,
+        mesg: mesg.to_string(),
+        ier,
+    })
+}
+
 // ────────────────────────── helpers ──────────────────────────
 
 fn dot_vec(a: &[f64], b: &[f64]) -> f64 {
@@ -855,5 +940,30 @@ mod tests {
             "|sigma| ~ 2.0, got {}",
             result.x[2]
         );
+    }
+
+    #[test]
+    fn leastsq_matches_scipy_rosenbrock_and_linear() {
+        // Rosenbrock residuals; minimum at (1, 1) — scipy.optimize.leastsq agrees.
+        let r1 = |x: &[f64]| vec![10.0 * (x[1] - x[0] * x[0]), 1.0 - x[0]];
+        let res = leastsq(r1, &[-1.2, 1.0], LeastSquaresOptions::default()).unwrap();
+        assert!((res.x[0] - 1.0).abs() < 1e-6, "x0 = {}", res.x[0]);
+        assert!((res.x[1] - 1.0).abs() < 1e-6, "x1 = {}", res.x[1]);
+        // A converged run reports a MINPACK success flag (1..=4).
+        assert!((1..=4).contains(&res.ier), "ier = {}", res.ier);
+        // cov_x is the unscaled (JᵀJ)⁻¹ and is finite for a full-rank Jacobian.
+        let cov = res.cov_x.expect("cov_x should be Some for full-rank Jacobian");
+        assert_eq!(cov.len(), 2);
+        assert!(cov.iter().flatten().all(|v| v.is_finite()));
+
+        // Overdetermined linear fit r_i = a*u_i + b - v_i; scipy gives a≈0.97714286.
+        let us = [0.0_f64, 1.0, 2.0, 3.0, 4.0, 5.0];
+        let vs = [0.1_f64, 0.9, 2.1, 2.9, 4.2, 4.8];
+        let r3 = move |p: &[f64]| -> Vec<f64> {
+            us.iter().zip(vs.iter()).map(|(&u, &v)| p[0] * u + p[1] - v).collect()
+        };
+        let lin = leastsq(r3, &[0.0, 0.0], LeastSquaresOptions::default()).unwrap();
+        assert!((lin.x[0] - 0.977_142_857).abs() < 1e-6, "slope = {}", lin.x[0]);
+        assert!((lin.x[1] - 0.057_142_857).abs() < 1e-6, "intercept = {}", lin.x[1]);
     }
 }

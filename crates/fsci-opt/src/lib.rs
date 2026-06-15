@@ -9,8 +9,8 @@ pub mod types;
 
 pub use audit::{SyncSharedAuditLedger, record_fail_closed, sync_audit_ledger};
 pub use curvefit::{
-    CurveFitOptions, CurveFitResult, LeastSquaresOptions, LeastSquaresResult, curve_fit,
-    least_squares,
+    CurveFitOptions, CurveFitResult, LeastSquaresOptions, LeastSquaresResult, LeastsqResult,
+    curve_fit, least_squares, leastsq,
 };
 pub use linesearch::{LineSearchResult, WolfeParams, line_search_wolfe1, line_search_wolfe2};
 pub use minimize::{
