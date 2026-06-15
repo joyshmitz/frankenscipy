@@ -3,6 +3,7 @@
 pub mod api;
 pub mod bdf;
 pub mod bvp;
+pub mod complex;
 pub mod lebedev;
 pub mod quad;
 pub mod radau;
@@ -17,6 +18,7 @@ pub use api::{
 };
 pub use bdf::{BdfSolver, BdfSolverConfig};
 pub use bvp::{BvpError, BvpOptions, BvpResult, solve_bvp};
+pub use complex::{ComplexOdeResult, complex_ode};
 pub use lebedev::{LebedevRule, lebedev_rule};
 pub use quad::{
     CompositeQuadResult, CubatureOptions, CubatureRegion, CubatureResult, CubatureRule,
