@@ -3985,6 +3985,70 @@ pub fn splrep(
     ))
 }
 
+/// Fit a parametric interpolating B-spline through N-D points, matching
+/// `scipy.interpolate.splprep(points, k=k, s=0)` (the interpolation case).
+///
+/// `points` is a list of coordinate arrays (`[x, y, …]`), each of length `m`.
+/// The curve is parameterized by cumulative chord length normalized to `[0, 1]`,
+/// then each coordinate is fit against that parameter with [`splrep`] (`s = 0`),
+/// sharing one knot vector. Returns `((t, c, k), u)` where `c[d]` are the
+/// (unpadded) coefficients for coordinate `d` and `u` is the parameter sample.
+///
+/// Only smoothing factor `s = 0` (interpolation) is supported; a positive `s`
+/// (FITPACK smoothing, which fits all coordinates with a shared adaptive knot
+/// set) returns an error.
+#[allow(clippy::type_complexity)]
+pub fn splprep(
+    points: &[Vec<f64>],
+    k: usize,
+    s: f64,
+) -> Result<((Vec<f64>, Vec<Vec<f64>>, usize), Vec<f64>), InterpError> {
+    if s != 0.0 {
+        return Err(InterpError::InvalidArgument {
+            detail: "splprep currently supports only s = 0 (interpolation)".to_string(),
+        });
+    }
+    if points.is_empty() {
+        return Err(InterpError::InvalidArgument {
+            detail: "splprep requires at least one coordinate array".to_string(),
+        });
+    }
+    let m = points[0].len();
+    if points.iter().any(|p| p.len() != m) {
+        return Err(InterpError::InvalidArgument {
+            detail: "all coordinate arrays must have the same length".to_string(),
+        });
+    }
+    // Cumulative chord-length parameter, normalized to [0, 1].
+    let mut u = vec![0.0_f64; m];
+    for i in 1..m {
+        let d: f64 = points
+            .iter()
+            .map(|p| (p[i] - p[i - 1]).powi(2))
+            .sum::<f64>()
+            .sqrt();
+        u[i] = u[i - 1] + d;
+    }
+    let total = u[m - 1];
+    if total <= 0.0 {
+        return Err(InterpError::InvalidArgument {
+            detail: "splprep requires distinct points (nonzero total chord length)".to_string(),
+        });
+    }
+    for v in &mut u {
+        *v /= total;
+    }
+    // Fit each coordinate against u; all share the same knot vector.
+    let (t, _, _) = splrep(&u, &points[0], k, 0.0)?;
+    let ncoef = t.len().saturating_sub(k + 1);
+    let mut coeffs = Vec::with_capacity(points.len());
+    for p in points {
+        let (_, c, _) = splrep(&u, p, k, 0.0)?;
+        coeffs.push(c[..ncoef].to_vec());
+    }
+    Ok(((t, coeffs, k), u))
+}
+
 /// Pad B-spline coefficients to `len(t)` with trailing zeros, matching scipy's
 /// FITPACK tck convention (`len(c) == len(t)`; the last k+1 entries are zero).
 fn pad_tck_coeffs(t: &[f64], c: &[f64]) -> Vec<f64> {
@@ -6019,6 +6083,35 @@ fn smooth_bivariate_solve_coefficients(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn splprep_interpolation_matches_scipy() {
+        let x = vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0];
+        let y = vec![0.0, 1.0, 0.5, 2.0, 1.5, 3.0];
+        let ((t, c, k), u) = splprep(&[x, y], 3, 0.0).unwrap();
+        assert_eq!(k, 3);
+        let u_exp = [
+            0.0, 0.19490713173322144, 0.3489947488550868, 0.5974535658666107,
+            0.751541182988476, 1.0,
+        ];
+        for (g, e) in u.iter().zip(&u_exp) {
+            assert!((g - e).abs() < 1e-12, "u {g} vs {e}");
+        }
+        let t_exp = [0.0, 0.0, 0.0, 0.0, 0.3489947488550868, 0.5974535658666107, 1.0, 1.0, 1.0, 1.0];
+        for (g, e) in t.iter().zip(&t_exp) {
+            assert!((g - e).abs() < 1e-12, "t {g} vs {e}");
+        }
+        let cx_exp = [0.0, 0.22741584352883404, 2.230476464532552, 2.7991826521281657, 5.149697841196444, 5.0];
+        let cy_exp = [0.0, 2.374428814147836, -1.121083821635914, 3.865470998324146, -0.4202192267585394, 3.0];
+        for (g, e) in c[0].iter().zip(&cx_exp) {
+            assert!((g - e).abs() < 1e-9, "cx {g} vs {e}");
+        }
+        for (g, e) in c[1].iter().zip(&cy_exp) {
+            assert!((g - e).abs() < 1e-9, "cy {g} vs {e}");
+        }
+        // s>0 (FITPACK smoothing) is rejected.
+        assert!(splprep(&[vec![0.0, 1.0, 2.0, 3.0], vec![0.0, 1.0, 0.0, 1.0]], 3, 1.0).is_err());
+    }
 
     /// Parallel `RbfInterpolator::eval_many` must be BIT-IDENTICAL to the sequential
     /// per-query map (each query is an independent pure `eval`). Uses a size above the
