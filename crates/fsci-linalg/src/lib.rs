@@ -7811,6 +7811,7 @@ const BIDIAG_TRIDIAGONAL_QR_MIN_DIM: usize = 128;
 const BIDIAG_TRIDIAGONAL_QR_MAX_ITERS_PER_DIM: usize = 64;
 const TRIDIAGONAL_INVERSE_ITERATIONS: usize = 4;
 const TRIDIAGONAL_INVERSE_MIN_PIVOT: f64 = 64.0 * f64::EPSILON;
+const TRIDIAGONAL_INVERSE_MIN_GAP_REL: f64 = 1e-6;
 const TRIDIAGONAL_INVERSE_RESIDUAL_TOL: f64 = 1e-7;
 const PUBLIC_BIDIAG_SVD_MIN_COLS: usize = 64;
 const PUBLIC_BIDIAG_RANK_GAP_REL_TOL: f64 = 64.0 * f64::EPSILON;
@@ -9311,6 +9312,14 @@ fn tridiagonal_inverse_iteration_eigenvectors(
         .map(f64::abs)
         .fold(0.0_f64, f64::max)
         .max(1.0);
+    let min_gap = TRIDIAGONAL_INVERSE_MIN_GAP_REL * scale;
+    if eigenvalues
+        .windows(2)
+        .any(|pair| pair[1] - pair[0] <= min_gap)
+    {
+        return None;
+    }
+
     let min_pivot = TRIDIAGONAL_INVERSE_MIN_PIVOT * scale;
     let shift_unit = 32.0 * f64::EPSILON * scale;
     let mut eigenvectors = DMatrix::<f64>::zeros(n, n);
@@ -13595,10 +13604,7 @@ pub fn orthogonal_procrustes(
         });
     }
     let k = a[0].len();
-    if k == 0
-        || b[0].len() != k
-        || a.iter().any(|r| r.len() != k)
-        || b.iter().any(|r| r.len() != k)
+    if k == 0 || b[0].len() != k || a.iter().any(|r| r.len() != k) || b.iter().any(|r| r.len() != k)
     {
         return Err(LinalgError::InvalidArgument {
             detail: "orthogonal_procrustes: A and B must have the same shape".to_string(),
@@ -20882,6 +20888,18 @@ mod tests {
     }
 
     #[test]
+    fn tridiagonal_inverse_iteration_rejects_clustered_eigenvalues() {
+        let diagonal = [1.0, 1.0];
+        let offdiagonal = [0.0];
+        let eigenvalues = [1.0, 1.0];
+        assert!(
+            tridiagonal_inverse_iteration_eigenvectors(&diagonal, &offdiagonal, &eigenvalues)
+                .is_none(),
+            "clustered tridiagonal eigenvalues must use the QR fallback"
+        );
+    }
+
+    #[test]
     fn symmetric_eigh_native_matches_nalgebra_and_timing() {
         let mut s: u64 = 0x1357_2468_9bdf_ace0;
         let mut rng = || {
@@ -22395,13 +22413,22 @@ mod tests {
         // scipy.linalg.matmul_toeplitz((c, r), x)
         let c = [1.0, 2.0, 3.0];
         let r = [1.0, 4.0, 5.0, 6.0];
-        let x = vec![vec![1.0, 0.0], vec![2.0, 1.0], vec![3.0, 0.0], vec![4.0, 1.0]];
+        let x = vec![
+            vec![1.0, 0.0],
+            vec![2.0, 1.0],
+            vec![3.0, 0.0],
+            vec![4.0, 1.0],
+        ];
         let y = matmul_toeplitz(&c, Some(&r), &x).unwrap();
         let want = [[48.0, 10.0], [36.0, 6.0], [26.0, 6.0]];
         assert_eq!(y.len(), 3);
         for i in 0..3 {
             for j in 0..2 {
-                assert!((y[i][j] - want[i][j]).abs() < 1e-9, "Y[{i}][{j}] = {}", y[i][j]);
+                assert!(
+                    (y[i][j] - want[i][j]).abs() < 1e-9,
+                    "Y[{i}][{j}] = {}",
+                    y[i][j]
+                );
             }
         }
 
@@ -22428,13 +22455,29 @@ mod tests {
         ];
         let p = pinvh(&a, None, None).unwrap();
         let want = [
-            [0.3488372093023255, -0.11627906976744184, -0.13953488372093023],
-            [-0.11627906976744184, 0.3720930232558139, 0.04651162790697674],
-            [-0.13953488372093026, 0.04651162790697673, 0.25581395348837205],
+            [
+                0.3488372093023255,
+                -0.11627906976744184,
+                -0.13953488372093023,
+            ],
+            [
+                -0.11627906976744184,
+                0.3720930232558139,
+                0.04651162790697674,
+            ],
+            [
+                -0.13953488372093026,
+                0.04651162790697673,
+                0.25581395348837205,
+            ],
         ];
         for i in 0..3 {
             for j in 0..3 {
-                assert!((p[i][j] - want[i][j]).abs() < 1e-9, "P[{i}][{j}] = {}", p[i][j]);
+                assert!(
+                    (p[i][j] - want[i][j]).abs() < 1e-9,
+                    "P[{i}][{j}] = {}",
+                    p[i][j]
+                );
             }
         }
         // A · A⁺ · A == A (Moore–Penrose identity).
@@ -22442,7 +22485,11 @@ mod tests {
         let apa = matmul(&ap, &a).unwrap();
         for i in 0..3 {
             for j in 0..3 {
-                assert!((apa[i][j] - a[i][j]).abs() < 1e-9, "AA+A[{i}][{j}] = {}", apa[i][j]);
+                assert!(
+                    (apa[i][j] - a[i][j]).abs() < 1e-9,
+                    "AA+A[{i}][{j}] = {}",
+                    apa[i][j]
+                );
             }
         }
 
@@ -22471,7 +22518,11 @@ mod tests {
         ];
         for i in 0..2 {
             for j in 0..2 {
-                assert!((r[i][j] - want[i][j]).abs() < 1e-9, "R[{i}][{j}] = {}", r[i][j]);
+                assert!(
+                    (r[i][j] - want[i][j]).abs() < 1e-9,
+                    "R[{i}][{j}] = {}",
+                    r[i][j]
+                );
             }
         }
         assert!((scale - 16.492422502470646).abs() < 1e-9, "scale {scale}");
@@ -22491,7 +22542,11 @@ mod tests {
         let (r2, _) = orthogonal_procrustes(&a, &aq).unwrap();
         for i in 0..2 {
             for j in 0..2 {
-                assert!((r2[i][j] - q[i][j]).abs() < 1e-9, "recovered Q[{i}][{j}] = {}", r2[i][j]);
+                assert!(
+                    (r2[i][j] - q[i][j]).abs() < 1e-9,
+                    "recovered Q[{i}][{j}] = {}",
+                    r2[i][j]
+                );
             }
         }
 

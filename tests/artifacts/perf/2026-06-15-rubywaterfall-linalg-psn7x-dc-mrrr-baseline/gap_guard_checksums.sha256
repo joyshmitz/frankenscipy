@@ -1,0 +1,5 @@
+db08dc81f7d5a18bcf0dbd260644c42c7dbd0f71acc71988ac568555ca54c499  tests/artifacts/perf/2026-06-15-rubywaterfall-linalg-psn7x-dc-mrrr-baseline/EVIDENCE.md
+531d93f54bb954ddf043d10b1f2ff61cc65f48469d3bf3e948b2065ea9d51153  tests/artifacts/perf/2026-06-15-rubywaterfall-linalg-psn7x-dc-mrrr-baseline/proof_inverse_iteration_gap_guard_rch.txt
+319913d7e758bbd2a83daf61ef5838ad137d46257ca45048da547819def48ad5  tests/artifacts/perf/2026-06-15-rubywaterfall-linalg-psn7x-dc-mrrr-baseline/after_inverse_iteration_gap_guard_timing_rch.txt
+8ce16dc59c6661ab008ac1813c219548cbf1e46727abe45d746e365eb5871de4  tests/artifacts/perf/2026-06-15-rubywaterfall-linalg-psn7x-dc-mrrr-baseline/fmt_fsci_linalg_gap_guard.txt
+f1796c08a531fe843f712a9a902a7bdcc2bf818065e6fd5aebf5b95be6fe397b  tests/artifacts/perf/2026-06-15-rubywaterfall-linalg-psn7x-dc-mrrr-baseline/clippy_fsci_linalg_gap_guard_rch.txt

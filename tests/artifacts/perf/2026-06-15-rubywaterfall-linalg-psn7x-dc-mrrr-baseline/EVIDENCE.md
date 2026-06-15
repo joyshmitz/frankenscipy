@@ -45,6 +45,17 @@ Score: `Impact 3.5 * Confidence 4.0 / Effort 2.0 = 7.0` (KEEP).
 - `fmt_fsci_linalg_check_final.txt`: changed hunk is formatted; `cargo fmt -p fsci-linalg -- --check` still reports pre-existing formatting drift at `orthogonal_procrustes`, `matmul_toeplitz`, and `pinvh` tests.
 - `ubs_fsci_linalg_lib_final.txt`: changed-file UBS scan completed with `Critical issues: 0`.
 
+## Gap Guard Follow-Up
+
+Follow-up commit: add `TRIDIAGONAL_INVERSE_MIN_GAP_REL` so inverse iteration is accepted only when adjacent tridiagonal eigenvalues are separated by more than `1e-6 * scale`. Clustered spectra now fail closed to the existing QR eigenvector path instead of accepting residual-clean but potentially non-orthogonal inverse-iteration vectors.
+
+Additional artifacts:
+
+- `proof_inverse_iteration_gap_guard_rch.txt`: RCH `cargo test -j 1 -p fsci-linalg --lib tridiagonal_inverse_iteration --locked -- --nocapture` passed both the residual/orthogonality test and the clustered-eigenvalue fallback test.
+- `fmt_fsci_linalg_gap_guard.txt`: `cargo fmt -p fsci-linalg -- --check` passed after the guard.
+- `after_inverse_iteration_gap_guard_timing_rch.txt`: RCH release smoke timing on `ovh-a` passed native correctness and showed native still faster than nalgebra at n=`400/800/1200` (`1.53x/1.74x/1.58x`). This run was noisier than the parent keep run, with nalgebra also materially slower, so it is retained as a guard smoke artifact rather than a new optimization score.
+- `clippy_fsci_linalg_gap_guard_rch.txt`: RCH `cargo clippy -j 1 -p fsci-linalg --lib --no-deps --locked -- -D warnings` remains blocked by the same pre-existing `needless_range_loop` findings at `lib.rs:3709`, `3720`, and `4170`; the guard added no new clippy finding.
+
 ## Transcript SHA-256
 
 - `baseline_current_tip_native_timing_rch.txt`: `8a59b97996202f4417679be41bf7f05563f3828b9cf4cdafa1c08c376cf161eb`
