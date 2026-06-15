@@ -10013,6 +10013,62 @@ pub fn medfilt(data: &[f64], kernel_size: usize) -> Result<Vec<f64>, SignalError
     Ok(result)
 }
 
+/// Apply a 2-D median filter to a matrix, matching `scipy.signal.medfilt2d`.
+///
+/// `input` is a row-major `rows × cols` matrix; `kernel_size = (kr, kc)` gives
+/// the (odd) window height and width. The window is zero-padded at the borders
+/// (scipy's behaviour) and the rank-`(kr·kc)/2` element by total ordering is the
+/// median. Returns the filtered matrix in the same row-major layout.
+pub fn medfilt2d(
+    input: &[f64],
+    shape: (usize, usize),
+    kernel_size: (usize, usize),
+) -> Result<Vec<f64>, SignalError> {
+    let (rows, cols) = shape;
+    let (kr, kc) = kernel_size;
+    if input.len() != rows * cols {
+        return Err(SignalError::InvalidArgument(
+            "input length must match rows * cols".to_string(),
+        ));
+    }
+    if kr == 0 || kc == 0 || kr.is_multiple_of(2) || kc.is_multiple_of(2) {
+        return Err(SignalError::InvalidArgument(
+            "kernel_size dimensions must be odd and >= 1".to_string(),
+        ));
+    }
+    if rows == 0 || cols == 0 {
+        return Ok(vec![]);
+    }
+
+    let half_r = (kr / 2) as i64;
+    let half_c = (kc / 2) as i64;
+    let mid = (kr * kc) / 2;
+    let mut result = vec![0.0_f64; rows * cols];
+    let mut window = vec![0.0_f64; kr * kc];
+
+    for i in 0..rows {
+        for j in 0..cols {
+            let mut w = 0;
+            for di in 0..kr {
+                let ri = i as i64 + di as i64 - half_r;
+                for dj in 0..kc {
+                    let cj = j as i64 + dj as i64 - half_c;
+                    window[w] = if ri >= 0 && ri < rows as i64 && cj >= 0 && cj < cols as i64 {
+                        input[ri as usize * cols + cj as usize]
+                    } else {
+                        0.0
+                    };
+                    w += 1;
+                }
+            }
+            let (_, &mut m, _) = window.select_nth_unstable_by(mid, f64::total_cmp);
+            result[i * cols + j] = m;
+        }
+    }
+
+    Ok(result)
+}
+
 const MEDFILT_SLIDING_THRESHOLD: usize = 64;
 
 /// `total_cmp`-ordered f64 wrapper so f64 can key a `BTreeMap` multiset with the
@@ -12928,6 +12984,26 @@ pub fn daub(p: usize) -> Result<Vec<f64>, SignalError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn medfilt2d_matches_scipy() {
+        // 4x4 ramp 0..15, matching scipy.signal.medfilt2d.
+        let x: Vec<f64> = (0..16).map(|v| v as f64).collect();
+        let out3 = medfilt2d(&x, (4, 4), (3, 3)).unwrap();
+        let exp3 = [
+            0.0, 1.0, 2.0, 0.0, 1.0, 5.0, 6.0, 3.0, 5.0, 9.0, 10.0, 7.0, 0.0, 9.0, 10.0, 0.0,
+        ];
+        assert_eq!(out3, exp3);
+        // Rectangular kernel [3,1] (vertical median only).
+        let out_rect = medfilt2d(&x, (4, 4), (3, 1)).unwrap();
+        let exp_rect = [
+            0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 8.0, 9.0, 10.0, 11.0,
+        ];
+        assert_eq!(out_rect, exp_rect);
+        // Even kernel and shape mismatch are rejected.
+        assert!(medfilt2d(&x, (4, 4), (2, 3)).is_err());
+        assert!(medfilt2d(&x, (4, 5), (3, 3)).is_err());
+    }
 
     #[test]
     fn czt_points_match_scipy() {
