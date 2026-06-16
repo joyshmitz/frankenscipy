@@ -12686,7 +12686,7 @@ pub fn cdf2rdf(
         });
     }
     let complex_idx: Vec<usize> = (0..n).filter(|&i| w[i].1 != 0.0).collect();
-    if complex_idx.len() % 2 != 0 {
+    if !complex_idx.len().is_multiple_of(2) {
         return Err(LinalgError::InvalidArgument {
             detail: "expected complex-conjugate pairs of eigenvalues".to_string(),
         });
@@ -12785,25 +12785,28 @@ pub fn rsf2csf(
             let c = (mu.0 / rn, mu.1 / rn);
             let s_rot = r / rn;
             // T[m-1:m+1, m-1:] = G @ T[m-1:m+1, m-1:]
-            for col in (m - 1)..n {
-                let t0 = tc[m - 1][col];
-                let t1 = tc[m][col];
-                tc[m - 1][col] = cadd(cmul(cconj(c), t0), cscale(t1, s_rot));
-                tc[m][col] = cadd(cscale(t0, -s_rot), cmul(c, t1));
+            let (tc_lo, tc_hi) = tc.split_at_mut(m);
+            let row_m1 = &mut tc_lo[m - 1];
+            let row_m = &mut tc_hi[0];
+            for (t0_ref, t1_ref) in row_m1[m - 1..].iter_mut().zip(row_m[m - 1..].iter_mut()) {
+                let t0 = *t0_ref;
+                let t1 = *t1_ref;
+                *t0_ref = cadd(cmul(cconj(c), t0), cscale(t1, s_rot));
+                *t1_ref = cadd(cscale(t0, -s_rot), cmul(c, t1));
             }
             // T[:m+1, m-1:m+1] = T[:m+1, m-1:m+1] @ G.conj().T
-            for row in 0..=m {
-                let a0 = tc[row][m - 1];
-                let a1 = tc[row][m];
-                tc[row][m - 1] = cadd(cmul(a0, c), cscale(a1, s_rot));
-                tc[row][m] = cadd(cscale(a0, -s_rot), cmul(a1, cconj(c)));
+            for row in tc[..=m].iter_mut() {
+                let a0 = row[m - 1];
+                let a1 = row[m];
+                row[m - 1] = cadd(cmul(a0, c), cscale(a1, s_rot));
+                row[m] = cadd(cscale(a0, -s_rot), cmul(a1, cconj(c)));
             }
             // Z[:, m-1:m+1] = Z[:, m-1:m+1] @ G.conj().T
-            for row in 0..n {
-                let a0 = zc[row][m - 1];
-                let a1 = zc[row][m];
-                zc[row][m - 1] = cadd(cmul(a0, c), cscale(a1, s_rot));
-                zc[row][m] = cadd(cscale(a0, -s_rot), cmul(a1, cconj(c)));
+            for row in zc.iter_mut() {
+                let a0 = row[m - 1];
+                let a1 = row[m];
+                row[m - 1] = cadd(cmul(a0, c), cscale(a1, s_rot));
+                row[m] = cadd(cscale(a0, -s_rot), cmul(a1, cconj(c)));
             }
         }
         tc[m][m - 1] = (0.0, 0.0);
@@ -12983,9 +12986,11 @@ pub fn matrix_balance(
             swapped = true;
             while swapped {
                 swapped = false;
-                for j in ilo..=ihi {
+                let mut j = ilo;
+                while j <= ihi {
                     let isolated = (ilo..=ihi).all(|i| i == j || m[i][j] == 0.0);
                     if !isolated {
+                        j += 1;
                         continue;
                     }
                     sc[ilo] = j as f64;
@@ -13021,12 +13026,8 @@ pub fn matrix_balance(
                 conv = true;
                 for i in ilo..=ihi {
                     // c = ‖column i‖₂, r = ‖row i‖₂ over the active block.
-                    let mut c = 0.0;
-                    let mut r = 0.0;
-                    for k in ilo..=ihi {
-                        c += m[k][i] * m[k][i];
-                        r += m[i][k] * m[i][k];
-                    }
+                    let c: f64 = m[ilo..=ihi].iter().map(|row| row[i] * row[i]).sum();
+                    let r: f64 = m[i][ilo..=ihi].iter().map(|v| v * v).sum();
                     let mut c = c.sqrt();
                     let mut r = r.sqrt();
                     // ca/ra are max-abs over wider ranges (overflow guards only).
@@ -13070,8 +13071,8 @@ pub fn matrix_balance(
                     // Apply the diagonal similarity: row i ·= 1/f, col i ·= f.
                     sc[i] *= f;
                     let inv_f = 1.0 / f;
-                    for k in ilo..n {
-                        m[i][k] *= inv_f;
+                    for v in m[i][ilo..].iter_mut() {
+                        *v *= inv_f;
                     }
                     for row in m.iter_mut().take(ihi + 1) {
                         row[i] *= f;

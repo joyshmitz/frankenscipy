@@ -17,7 +17,7 @@ fn build_sketch_matrix(m: usize, sketch: usize, seed: u64) -> Vec<Vec<f64>> {
         z ^ (z >> 31)
     };
     let mut s = vec![vec![0.0f64; m]; sketch];
-    for (j, col) in (0..m).enumerate() {
+    for col in 0..m {
         let bucket = (next() % sketch as u64) as usize;
         let sign = if next() & 1 == 0 { 1.0 } else { -1.0 };
         s[bucket][col] = sign;
