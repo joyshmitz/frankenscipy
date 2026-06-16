@@ -23,9 +23,10 @@ pub use plan::{
 };
 pub use transforms::{
     BackendKind, Complex64, FftError, FftOptions, SyncSharedAuditLedger, TransformTrace,
-    WorkerPolicy, dct, dct_i, dct_iii, dct_iv, dctn, dst_i, dst_ii, dst_iii, dst_iv, dstn, fft,
+    WorkerPolicy, dct, dct_i, dct_iii, dct_iv, dctn, dst, dst_i, dst_ii, dst_iii, dst_iv, dstn, fft,
     fft_with_audit, fft2, fft2_with_audit, fftn, fftn_with_audit, fht, fhtoffset, fwht, hfft,
-    hfft_with_audit, hfft2, hfft2_with_audit, hfftn, hfftn_with_audit, hilbert, idct, idctn, idstn,
+    hfft_with_audit, hfft2, hfft2_with_audit, hfftn, hfftn_with_audit, hilbert, idct, idctn, idst,
+    idstn,
     ifft, ifft_with_audit, ifft2, ifft2_with_audit, ifftn, ifftn_with_audit, ifht, ihfft,
     ihfft_with_audit, ihfft2, ihfft2_with_audit, ihfftn, ihfftn_with_audit, irfft,
     irfft_with_audit, irfft2, irfft2_with_audit, irfftn, irfftn_with_audit, next_fast_len,
@@ -71,8 +72,8 @@ mod tests {
         periodogram_simple, rfftfreq,
     };
     use super::transforms::{
-        Complex64, FftOptions, dct, dct_i, dct_iv, dst_i, dst_ii, dst_iii, dst_iv, fft, fht,
-        fhtoffset, hilbert, idct, ifft, ifht, irfft, rfft,
+        Complex64, FftOptions, dct, dct_i, dct_iv, dst, dst_i, dst_ii, dst_iii, dst_iv, fft, fht,
+        fhtoffset, hilbert, idct, idst, ifft, ifht, irfft, rfft,
     };
     use super::{Normalization, TransformKind};
 
@@ -284,6 +285,61 @@ mod tests {
                 "DCT-I[{k}] = {val}, expected {expected}"
             );
         }
+    }
+
+    #[test]
+    fn dst_idst_dispatch_match_scipy() {
+        let x = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let opts = FftOptions::default();
+
+        // dst dispatcher routes to dst_ii by default (scipy type=2).
+        let d2 = dst(&x, 2, &opts).expect("dst t2");
+        let want_d2 = [
+            27.04592314, -12.0, 9.89949494, -6.92820323, 7.24693326, -6.0,
+        ];
+        for (a, b) in d2.iter().zip(want_d2.iter()) {
+            assert!((a - b).abs() < 1e-7, "dst t2 {a} vs {b}");
+        }
+        assert_eq!(d2, dst_ii(&x, &opts).unwrap());
+
+        // idst type 2 (backward) vs scipy.fft.idst oracle.
+        let i2 = idst(&x, 2, &opts).expect("idst t2");
+        let want_i2 = [
+            2.44564502, -0.2845178, 0.11243318, -0.06619961, 0.04881554, -0.04238885,
+        ];
+        for (a, b) in i2.iter().zip(want_i2.iter()) {
+            assert!((a - b).abs() < 1e-7, "idst t2 back {a} vs {b}");
+        }
+
+        // idst type 2 (ortho) vs scipy oracle.
+        let ortho = opts.clone().with_normalization(Normalization::Ortho);
+        let i2o = idst(&x, 2, &ortho).expect("idst t2 ortho");
+        let want_i2o = [
+            9.18940181, -1.70303749, 1.1069189, -0.94676112, 0.88654091, -0.86427822,
+        ];
+        for (a, b) in i2o.iter().zip(want_i2o.iter()) {
+            assert!((a - b).abs() < 1e-7, "idst t2 ortho {a} vs {b}");
+        }
+
+        // Round-trips: idst(dst(x)) == x for every type and normalization.
+        for t in 1u8..=4 {
+            for norm in [
+                Normalization::Backward,
+                Normalization::Ortho,
+                Normalization::Forward,
+            ] {
+                let o = opts.clone().with_normalization(norm);
+                let fwd = dst(&x, t, &o).expect("dst");
+                let back = idst(&fwd, t, &o).expect("idst");
+                for (a, b) in back.iter().zip(&x) {
+                    assert!((a - b).abs() < 1e-8, "roundtrip t{t} {norm:?}: {a} vs {b}");
+                }
+            }
+        }
+
+        // Invalid type errors.
+        assert!(dst(&x, 5, &opts).is_err());
+        assert!(idst(&x, 0, &opts).is_err());
     }
 
     #[test]

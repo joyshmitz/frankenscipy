@@ -1599,6 +1599,64 @@ pub fn dst_iv(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError>
     Ok(result)
 }
 
+/// Discrete Sine Transform dispatcher, matching `scipy.fft.dst(x, type, norm)`.
+///
+/// Routes to the type-1..4 DST (`dst_i`/`dst_ii`/`dst_iii`/`dst_iv`); scipy's
+/// default is `type=2`. `dst_type` must be one of 1, 2, 3, 4.
+pub fn dst(input: &[f64], dst_type: u8, options: &FftOptions) -> Result<Vec<f64>, FftError> {
+    match dst_type {
+        1 => dst_i(input, options),
+        2 => dst_ii(input, options),
+        3 => dst_iii(input, options),
+        4 => dst_iv(input, options),
+        _ => Err(FftError::InvalidShape {
+            detail: "dst type must be 1, 2, 3, or 4",
+        }),
+    }
+}
+
+/// Inverse Discrete Sine Transform, matching `scipy.fft.idst(x, type, norm)`.
+///
+/// The inverse of a type-`t` DST is the forward DST of the inverse type
+/// (`{1:1, 2:3, 3:2, 4:4}`) with reciprocal normalization: `Ortho` stays
+/// `Ortho`; `Forward` maps to a `Backward` forward-DST; the default `Backward`
+/// additionally divides by `2N` (`2(N+1)` for type 1). `dst_type` must be one
+/// of 1, 2, 3, 4.
+pub fn idst(input: &[f64], dst_type: u8, options: &FftOptions) -> Result<Vec<f64>, FftError> {
+    let inv_type: u8 = match dst_type {
+        1 => 1,
+        2 => 3,
+        3 => 2,
+        4 => 4,
+        _ => {
+            return Err(FftError::InvalidShape {
+                detail: "idst type must be 1, 2, 3, or 4",
+            });
+        }
+    };
+    let n = input.len();
+    match options.normalization {
+        Normalization::Ortho => dst(input, inv_type, options),
+        Normalization::Forward => {
+            let opts = options.clone().with_normalization(Normalization::Backward);
+            dst(input, inv_type, &opts)
+        }
+        Normalization::Backward => {
+            let opts = options.clone().with_normalization(Normalization::Backward);
+            let mut out = dst(input, inv_type, &opts)?;
+            let scale = if dst_type == 1 {
+                2.0 * (n as f64 + 1.0)
+            } else {
+                2.0 * n as f64
+            };
+            for v in out.iter_mut() {
+                *v /= scale;
+            }
+            Ok(out)
+        }
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // N-Dimensional DCT/DST
 // ═══════════════════════════════════════════════════════════════════════════
