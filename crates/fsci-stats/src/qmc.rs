@@ -813,6 +813,60 @@ pub fn update_discrepancy(
     update_centered_discrepancy(sample, dimension, initial_disc, x_new)
 }
 
+/// Discrepancy type selector for [`discrepancy`], mirroring the `method`
+/// argument of `scipy.stats.qmc.discrepancy`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiscrepancyMethod {
+    /// Centered discrepancy (`"CD"`, scipy default).
+    CenteredDiscrepancy,
+    /// Wrap-around discrepancy (`"WD"`).
+    WrapAround,
+    /// Mixture discrepancy (`"MD"`).
+    Mixture,
+    /// L2-star discrepancy (`"L2-star"`).
+    L2Star,
+}
+
+/// Discrepancy of a sample, the unified dispatcher matching
+/// `scipy.stats.qmc.discrepancy(sample, *, iterative=False, method="CD")`.
+///
+/// `sample` is laid out row-major as `n × dimension` (the convention used
+/// throughout this module). The four methods route to the corresponding
+/// dedicated kernels ([`centered_discrepancy`], [`wraparound_discrepancy`],
+/// [`mixture_discrepancy`], [`l2_star_discrepancy`]), each bit-exact vs scipy.
+///
+/// `iterative = true` computes the discrepancy "as if we had `n + 1` samples"
+/// (for the incremental candidate-selection workflow with
+/// [`update_discrepancy`]). SciPy supports this for every method; here it is
+/// implemented for [`DiscrepancyMethod::CenteredDiscrepancy`] (via
+/// [`centered_discrepancy_iterative`]) and returns an error for the other three
+/// (their iterative kernels are not yet ported), rather than returning a value
+/// that would not match scipy.
+pub fn discrepancy(
+    sample: &[f64],
+    dimension: usize,
+    method: DiscrepancyMethod,
+    iterative: bool,
+) -> Result<f64, StatsError> {
+    if iterative {
+        return match method {
+            DiscrepancyMethod::CenteredDiscrepancy => {
+                centered_discrepancy_iterative(sample, dimension)
+            }
+            _ => Err(StatsError::InvalidArgument(
+                "discrepancy: iterative=true is only supported for method=CenteredDiscrepancy"
+                    .to_string(),
+            )),
+        };
+    }
+    match method {
+        DiscrepancyMethod::CenteredDiscrepancy => centered_discrepancy(sample, dimension),
+        DiscrepancyMethod::WrapAround => wraparound_discrepancy(sample, dimension),
+        DiscrepancyMethod::Mixture => mixture_discrepancy(sample, dimension),
+        DiscrepancyMethod::L2Star => l2_star_discrepancy(sample, dimension),
+    }
+}
+
 /// Compute the mixture L2 discrepancy MD²(P) of an `n × d` point set in
 /// `[0, 1)^d`, with `sample` row-major.
 ///
@@ -1480,6 +1534,35 @@ pub fn geometric_discrepancy(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discrepancy_dispatcher_matches_kernels_and_scipy() {
+        // 6x3 deterministic sample in [0,1]; values verified vs scipy.stats.qmc
+        // .discrepancy to <1e-12 in the probe (probe_disc).
+        let d = 3;
+        let s: Vec<f64> = (0..6 * d)
+            .map(|i| (i as f64 * 0.123 + 0.07).sin().abs())
+            .collect();
+        let cd = discrepancy(&s, d, DiscrepancyMethod::CenteredDiscrepancy, false).unwrap();
+        let wd = discrepancy(&s, d, DiscrepancyMethod::WrapAround, false).unwrap();
+        let md = discrepancy(&s, d, DiscrepancyMethod::Mixture, false).unwrap();
+        let l2 = discrepancy(&s, d, DiscrepancyMethod::L2Star, false).unwrap();
+        // dispatch must equal the dedicated kernels exactly
+        assert_eq!(cd, centered_discrepancy(&s, d).unwrap());
+        assert_eq!(wd, wraparound_discrepancy(&s, d).unwrap());
+        assert_eq!(md, mixture_discrepancy(&s, d).unwrap());
+        assert_eq!(l2, l2_star_discrepancy(&s, d).unwrap());
+        // scipy reference values
+        assert!((cd - 0.372379682695).abs() < 1e-10);
+        assert!((wd - 0.195387943594).abs() < 1e-10);
+        assert!((md - 0.381890632902).abs() < 1e-10);
+        assert!((l2 - 0.089802221780).abs() < 1e-10);
+        // CD iterative (scipy iterative=True, method=CD)
+        let cdit = discrepancy(&s, d, DiscrepancyMethod::CenteredDiscrepancy, true).unwrap();
+        assert!((cdit - 0.283173785530).abs() < 1e-10);
+        // iterative is only supported for CD
+        assert!(discrepancy(&s, d, DiscrepancyMethod::WrapAround, true).is_err());
+    }
 
     #[test]
     fn halton_construct_rejects_zero_dimension() {
