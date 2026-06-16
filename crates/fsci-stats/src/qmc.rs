@@ -837,11 +837,9 @@ pub enum DiscrepancyMethod {
 ///
 /// `iterative = true` computes the discrepancy "as if we had `n + 1` samples"
 /// (for the incremental candidate-selection workflow with
-/// [`update_discrepancy`]). SciPy supports this for every method; here it is
-/// implemented for [`DiscrepancyMethod::CenteredDiscrepancy`] (via
-/// [`centered_discrepancy_iterative`]) and returns an error for the other three
-/// (their iterative kernels are not yet ported), rather than returning a value
-/// that would not match scipy.
+/// [`update_discrepancy`]). This is the batch formula with the normalization
+/// denominators using `n + 1` instead of `n` (the single/double sums are
+/// unchanged), matching scipy for every method.
 pub fn discrepancy(
     sample: &[f64],
     dimension: usize,
@@ -853,10 +851,9 @@ pub fn discrepancy(
             DiscrepancyMethod::CenteredDiscrepancy => {
                 centered_discrepancy_iterative(sample, dimension)
             }
-            _ => Err(StatsError::InvalidArgument(
-                "discrepancy: iterative=true is only supported for method=CenteredDiscrepancy"
-                    .to_string(),
-            )),
+            DiscrepancyMethod::WrapAround => wraparound_discrepancy_iterative(sample, dimension),
+            DiscrepancyMethod::Mixture => mixture_discrepancy_iterative(sample, dimension),
+            DiscrepancyMethod::L2Star => l2_star_discrepancy_iterative(sample, dimension),
         };
     }
     match method {
@@ -865,6 +862,137 @@ pub fn discrepancy(
         DiscrepancyMethod::Mixture => mixture_discrepancy(sample, dimension),
         DiscrepancyMethod::L2Star => l2_star_discrepancy(sample, dimension),
     }
+}
+
+/// Validate a discrepancy `sample` buffer (`n × dimension`, all in `[0, 1]`).
+fn validate_discrepancy_sample(
+    sample: &[f64],
+    dimension: usize,
+    who: &str,
+) -> Result<usize, StatsError> {
+    if dimension == 0 {
+        return Err(StatsError::InvalidArgument(format!(
+            "{who}: dimension must be ≥ 1"
+        )));
+    }
+    if !sample.len().is_multiple_of(dimension) {
+        return Err(StatsError::InvalidArgument(format!(
+            "{who}: sample.len() {} not a multiple of dimension {dimension}",
+            sample.len()
+        )));
+    }
+    for (idx, &v) in sample.iter().enumerate() {
+        if !v.is_finite() || !(0.0..=1.0).contains(&v) {
+            return Err(StatsError::InvalidArgument(format!(
+                "{who}: sample[{idx}] = {v} outside [0, 1]"
+            )));
+        }
+    }
+    Ok(sample.len() / dimension)
+}
+
+/// Wrap-around discrepancy "as if we had `n + 1` samples" — the
+/// [`wraparound_discrepancy`] formula with `(n + 1)²` normalization. Matches
+/// `scipy.stats.qmc.discrepancy(method="WD", iterative=True)`.
+pub fn wraparound_discrepancy_iterative(
+    sample: &[f64],
+    dimension: usize,
+) -> Result<f64, StatsError> {
+    let n = validate_discrepancy_sample(sample, dimension, "wraparound_discrepancy_iterative")?;
+    if n == 0 {
+        return Ok(-(4.0_f64 / 3.0).powi(dimension as i32));
+    }
+    let leading = -(4.0_f64 / 3.0).powi(dimension as i32);
+    let mut double = 0.0_f64;
+    for i in 0..n {
+        for j in 0..n {
+            let mut prod = 1.0_f64;
+            for k in 0..dimension {
+                let d = (sample[i * dimension + k] - sample[j * dimension + k]).abs();
+                prod *= 1.5 - d * (1.0 - d);
+            }
+            double += prod;
+        }
+    }
+    let m = (n + 1) as f64;
+    Ok(leading + double / (m * m))
+}
+
+/// Mixture discrepancy "as if we had `n + 1` samples" — the
+/// [`mixture_discrepancy`] formula with `(n + 1)` normalization. Matches
+/// `scipy.stats.qmc.discrepancy(method="MD", iterative=True)`.
+pub fn mixture_discrepancy_iterative(
+    sample: &[f64],
+    dimension: usize,
+) -> Result<f64, StatsError> {
+    let n = validate_discrepancy_sample(sample, dimension, "mixture_discrepancy_iterative")?;
+    if n == 0 {
+        return Ok((19.0_f64 / 12.0).powi(dimension as i32));
+    }
+    let leading = (19.0_f64 / 12.0).powi(dimension as i32);
+    let mut single = 0.0_f64;
+    for i in 0..n {
+        let mut prod = 1.0_f64;
+        for k in 0..dimension {
+            let centered = sample[i * dimension + k] - 0.5;
+            prod *= 5.0 / 3.0 - 0.25 * centered.abs() - 0.25 * centered * centered;
+        }
+        single += prod;
+    }
+    let mut double = 0.0_f64;
+    for i in 0..n {
+        for j in 0..n {
+            let mut prod = 1.0_f64;
+            for k in 0..dimension {
+                let xi = sample[i * dimension + k];
+                let xj = sample[j * dimension + k];
+                let d = (xi - xj).abs();
+                prod *= 15.0 / 8.0 - 0.25 * (xi - 0.5).abs() - 0.25 * (xj - 0.5).abs() - 0.75 * d
+                    + 0.5 * (xi - xj).powi(2);
+            }
+            double += prod;
+        }
+    }
+    let m = (n + 1) as f64;
+    Ok(leading - 2.0 / m * single + double / (m * m))
+}
+
+/// L2-star discrepancy "as if we had `n + 1` samples" — the
+/// [`l2_star_discrepancy`] formula with `(n + 1)` normalization. Matches
+/// `scipy.stats.qmc.discrepancy(method="L2-star", iterative=True)`.
+pub fn l2_star_discrepancy_iterative(
+    sample: &[f64],
+    dimension: usize,
+) -> Result<f64, StatsError> {
+    let n = validate_discrepancy_sample(sample, dimension, "l2_star_discrepancy_iterative")?;
+    if n == 0 {
+        return Ok((1.0_f64 / 3.0).powi(dimension as i32).sqrt());
+    }
+    let leading = (1.0_f64 / 3.0).powi(dimension as i32);
+    let two_pow_one_minus_d = 2.0_f64.powi(1 - dimension as i32);
+    let mut single = 0.0_f64;
+    for i in 0..n {
+        let mut prod = 1.0_f64;
+        for k in 0..dimension {
+            let x = sample[i * dimension + k];
+            prod *= 1.0 - x * x;
+        }
+        single += prod;
+    }
+    let mut double = 0.0_f64;
+    for i in 0..n {
+        for j in 0..n {
+            let mut prod = 1.0_f64;
+            for k in 0..dimension {
+                let xi = sample[i * dimension + k];
+                let xj = sample[j * dimension + k];
+                prod *= 1.0 - xi.max(xj);
+            }
+            double += prod;
+        }
+    }
+    let m = (n + 1) as f64;
+    Ok((leading - two_pow_one_minus_d / m * single + double / (m * m)).sqrt())
 }
 
 /// Compute the mixture L2 discrepancy MD²(P) of an `n × d` point set in
@@ -1557,11 +1685,15 @@ mod tests {
         assert!((wd - 0.195387943594).abs() < 1e-10);
         assert!((md - 0.381890632902).abs() < 1e-10);
         assert!((l2 - 0.089802221780).abs() < 1e-10);
-        // CD iterative (scipy iterative=True, method=CD)
+        // iterative=true (scipy "as if n+1 samples") for every method, vs scipy.
         let cdit = discrepancy(&s, d, DiscrepancyMethod::CenteredDiscrepancy, true).unwrap();
+        let wdit = discrepancy(&s, d, DiscrepancyMethod::WrapAround, true).unwrap();
+        let mdit = discrepancy(&s, d, DiscrepancyMethod::Mixture, true).unwrap();
+        let l2it = discrepancy(&s, d, DiscrepancyMethod::L2Star, true).unwrap();
         assert!((cdit - 0.283173785530).abs() < 1e-10);
-        // iterative is only supported for CD
-        assert!(discrepancy(&s, d, DiscrepancyMethod::WrapAround, true).is_err());
+        assert!((wdit - (-0.485323445825)).abs() < 1e-10);
+        assert!((mdit - 0.421337179778).abs() < 1e-10);
+        assert!((l2it - 0.096375602741).abs() < 1e-10);
     }
 
     #[test]

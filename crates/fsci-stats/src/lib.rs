@@ -19,8 +19,9 @@ pub use qmc::{
     DiscrepancyMethod, GeometricDiscrepancyMethod, HaltonSampler, LatinHypercubeSampler,
     PoissonDiskSampler, QmcEngine, SobolSampler, centered_discrepancy,
     centered_discrepancy_iterative, discrepancy, geometric_discrepancy, l2_star_discrepancy,
-    mixture_discrepancy, scale as qmc_scale, update_centered_discrepancy, update_discrepancy,
-    wraparound_discrepancy,
+    l2_star_discrepancy_iterative, mixture_discrepancy, mixture_discrepancy_iterative,
+    scale as qmc_scale, update_centered_discrepancy, update_discrepancy, wraparound_discrepancy,
+    wraparound_discrepancy_iterative,
 };
 
 use std::{
