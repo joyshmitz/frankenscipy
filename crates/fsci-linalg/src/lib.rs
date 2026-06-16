@@ -27167,6 +27167,138 @@ mod proptest_tests {
         }
     }
 
+    #[derive(Debug)]
+    struct LowerBandFusedFrontierChaseProbe {
+        diagonal: Vec<f64>,
+        offdiagonal: Vec<f64>,
+        tridiagonal: DMatrix<f64>,
+        transformed: DMatrix<f64>,
+        eigenvectors: DMatrix<f64>,
+        rotation_count: usize,
+    }
+
+    fn lower_band_frontier_chase_digest(probe: &LowerBandFusedFrontierChaseProbe) -> u64 {
+        const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+        const FNV_PRIME: u64 = 0x100000001b3;
+
+        let mut digest = FNV_OFFSET;
+        for value in probe
+            .diagonal
+            .iter()
+            .chain(probe.offdiagonal.iter())
+            .chain(probe.tridiagonal.iter())
+            .chain(probe.eigenvectors.iter())
+        {
+            digest ^= value.to_bits();
+            digest = digest.wrapping_mul(FNV_PRIME);
+        }
+        digest
+    }
+
+    fn lower_band_dense_frontier_chase_oracle(
+        ab: &[Vec<f64>],
+        bandwidth: usize,
+        vector_cols: usize,
+    ) -> LowerBandFusedFrontierChaseProbe {
+        let n = ab[0].len();
+        let original = dmatrix_from_lower_band_eig_probe(ab);
+        let rotations = lower_band_frontier_rotations(n, bandwidth);
+        let mut transformed = original;
+        apply_frontier_rotations_dense(&mut transformed, &rotations);
+
+        let q = dense_q_from_frontier_rotations(n, &rotations);
+        let source = lower_band_frontier_eigenvector_block(n, vector_cols);
+        let eigenvectors = &q * &source;
+        let diagonal: Vec<f64> = (0..n).map(|idx| transformed[(idx, idx)]).collect();
+        let offdiagonal: Vec<f64> = (0..n.saturating_sub(1))
+            .map(|idx| transformed[(idx + 1, idx)])
+            .collect();
+        let tridiagonal = tridiagonal_matrix_from_parts(&diagonal, &offdiagonal);
+
+        LowerBandFusedFrontierChaseProbe {
+            diagonal,
+            offdiagonal,
+            tridiagonal,
+            transformed,
+            eigenvectors,
+            rotation_count: rotations.len(),
+        }
+    }
+
+    fn lower_band_compact_frontier_chase(
+        ab: &[Vec<f64>],
+        bandwidth: usize,
+        vector_cols: usize,
+    ) -> LowerBandFusedFrontierChaseProbe {
+        let n = ab[0].len();
+        let rotations = lower_band_frontier_rotations(n, bandwidth);
+        let mut envelope = LowerBandEnvelopeProbe::from_lower_band(ab, bandwidth + 1);
+        apply_frontier_rotations_envelope(&mut envelope, &rotations);
+
+        let mut eigenvectors = lower_band_frontier_eigenvector_block(n, vector_cols);
+        replay_frontier_rotations_to_rows(&mut eigenvectors, &rotations);
+        let diagonal: Vec<f64> = (0..n).map(|idx| envelope.get(idx, idx)).collect();
+        let offdiagonal: Vec<f64> = (0..n.saturating_sub(1))
+            .map(|idx| envelope.get(idx + 1, idx))
+            .collect();
+        let tridiagonal = tridiagonal_matrix_from_parts(&diagonal, &offdiagonal);
+
+        LowerBandFusedFrontierChaseProbe {
+            diagonal,
+            offdiagonal,
+            tridiagonal,
+            transformed: envelope.to_dense(),
+            eigenvectors,
+            rotation_count: rotations.len(),
+        }
+    }
+
+    fn assert_lower_band_frontier_chase_matches(
+        compact: &LowerBandFusedFrontierChaseProbe,
+        dense: &LowerBandFusedFrontierChaseProbe,
+        tolerance: f64,
+        label: &str,
+    ) {
+        assert_eq!(compact.rotation_count, dense.rotation_count);
+        let transformed_drift =
+            lower_band_probe_max_abs_dmatrix_diff(&compact.transformed, &dense.transformed);
+        let tridiagonal_drift =
+            lower_band_probe_max_abs_dmatrix_diff(&compact.tridiagonal, &dense.tridiagonal);
+        let eigenvector_drift =
+            lower_band_probe_max_abs_dmatrix_diff(&compact.eigenvectors, &dense.eigenvectors);
+        assert!(
+            transformed_drift <= tolerance,
+            "{label} transformed drift {transformed_drift:.17e}"
+        );
+        assert!(
+            tridiagonal_drift <= tolerance,
+            "{label} D/E tridiagonal drift {tridiagonal_drift:.17e}"
+        );
+        assert!(
+            eigenvector_drift <= tolerance,
+            "{label} replayed eigenvector drift {eigenvector_drift:.17e}"
+        );
+        for (idx, value) in compact.diagonal.iter().enumerate() {
+            assert_eq!(
+                value.to_bits(),
+                compact.tridiagonal[(idx, idx)].to_bits(),
+                "{label} compact diagonal extraction {idx}"
+            );
+        }
+        for (idx, value) in compact.offdiagonal.iter().enumerate() {
+            assert_eq!(
+                value.to_bits(),
+                compact.tridiagonal[(idx + 1, idx)].to_bits(),
+                "{label} compact offdiagonal extraction {idx}"
+            );
+            assert_eq!(
+                value.to_bits(),
+                compact.tridiagonal[(idx, idx + 1)].to_bits(),
+                "{label} compact mirrored offdiagonal extraction {idx}"
+            );
+        }
+    }
+
     #[test]
     fn lower_band_frontier_q_metadata_replay_matches_dense_q() {
         for (n, bandwidth, cols) in [(18usize, 4usize, 7usize), (37, 8, 13), (64, 12, 17)] {
@@ -27245,6 +27377,99 @@ mod proptest_tests {
             println!("dense_digest={dense_digest:#018x}");
             println!("replay_digest={replay_digest:#018x}");
             println!("LOWER_BAND_Q_METADATA_REPLAY_PERF_END");
+        }
+    }
+
+    #[test]
+    fn lower_band_fused_frontier_chase_matches_dense_oracle() {
+        for (n, bandwidth, cols) in [(18usize, 4usize, 7usize), (37, 8, 13), (64, 12, 17)] {
+            let ab = make_lower_band_eig_probe(n, bandwidth);
+            let dense = lower_band_dense_frontier_chase_oracle(&ab, bandwidth, cols);
+            let compact = lower_band_compact_frontier_chase(&ab, bandwidth, cols);
+            let tolerance = 1e-10 * dmatrix_max_abs_value(&dense.transformed).max(1.0) * n as f64;
+
+            assert_lower_band_frontier_chase_matches(&compact, &dense, tolerance, "fused chase");
+            let q =
+                dense_q_from_frontier_rotations(n, &lower_band_frontier_rotations(n, bandwidth));
+            let projected = (&q.transpose() * dmatrix_from_lower_band_eig_probe(&ab)) * &q;
+            let projection_residual =
+                lower_band_probe_max_abs_dmatrix_diff(&projected, &dense.transformed);
+            let q_orthogonality = lower_band_probe_orthogonality_error(&q);
+            assert!(
+                projection_residual <= tolerance,
+                "dense frontier projection residual {projection_residual:.17e}"
+            );
+            assert!(
+                q_orthogonality <= tolerance,
+                "dense frontier Q orthogonality {q_orthogonality:.17e}"
+            );
+
+            println!(
+                "lower_band_fused_chase n={n} bandwidth={bandwidth} cols={cols} rotations={} transformed_drift={:.17e} eigenvector_drift={:.17e} compact_digest={:#018x}",
+                compact.rotation_count,
+                lower_band_probe_max_abs_dmatrix_diff(&compact.transformed, &dense.transformed),
+                lower_band_probe_max_abs_dmatrix_diff(&compact.eigenvectors, &dense.eigenvectors),
+                lower_band_frontier_chase_digest(&compact)
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "perf probe: run locally with --release for fused compact-band frontier chase"]
+    fn lower_band_fused_frontier_chase_perf_probe() {
+        for (n, bandwidth, cols, repeats) in [
+            (128usize, 32usize, 64usize, 32usize),
+            (256, 32, 96, 16),
+            (512, 32, 128, 8),
+        ] {
+            let ab = make_lower_band_eig_probe(n, bandwidth);
+
+            let started_at = std::time::Instant::now();
+            let mut dense_digest = 0_u64;
+            for _ in 0..repeats {
+                let dense = lower_band_dense_frontier_chase_oracle(
+                    std::hint::black_box(&ab),
+                    bandwidth,
+                    cols,
+                );
+                dense_digest =
+                    dense_digest.rotate_left(1) ^ lower_band_frontier_chase_digest(&dense);
+            }
+            let dense_ms = started_at.elapsed().as_secs_f64() * 1_000.0;
+
+            let started_at = std::time::Instant::now();
+            let mut compact_digest = 0_u64;
+            for _ in 0..repeats {
+                let compact =
+                    lower_band_compact_frontier_chase(std::hint::black_box(&ab), bandwidth, cols);
+                compact_digest =
+                    compact_digest.rotate_left(1) ^ lower_band_frontier_chase_digest(&compact);
+            }
+            let compact_ms = started_at.elapsed().as_secs_f64() * 1_000.0;
+
+            let dense = lower_band_dense_frontier_chase_oracle(&ab, bandwidth, cols);
+            let compact = lower_band_compact_frontier_chase(&ab, bandwidth, cols);
+            let tolerance = 1e-9 * dmatrix_max_abs_value(&dense.transformed).max(1.0) * n as f64;
+            assert_lower_band_frontier_chase_matches(&compact, &dense, tolerance, "perf fused");
+            let transformed_drift =
+                lower_band_probe_max_abs_dmatrix_diff(&compact.transformed, &dense.transformed);
+            let eigenvector_drift =
+                lower_band_probe_max_abs_dmatrix_diff(&compact.eigenvectors, &dense.eigenvectors);
+
+            println!("LOWER_BAND_FUSED_FRONTIER_CHASE_PERF_BEGIN");
+            println!("shape={n}x{n}");
+            println!("bandwidth={bandwidth}");
+            println!("cols={cols}");
+            println!("rotation_count={}", compact.rotation_count);
+            println!("repeats={repeats}");
+            println!("dense_ms={dense_ms:.6}");
+            println!("compact_ms={compact_ms:.6}");
+            println!("speedup={:.6}", dense_ms / compact_ms);
+            println!("transformed_drift={transformed_drift:.17e}");
+            println!("eigenvector_drift={eigenvector_drift:.17e}");
+            println!("dense_digest={dense_digest:#018x}");
+            println!("compact_digest={compact_digest:#018x}");
+            println!("LOWER_BAND_FUSED_FRONTIER_CHASE_PERF_END");
         }
     }
 
