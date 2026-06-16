@@ -5068,6 +5068,107 @@ pub fn ldl(a: &[Vec<f64>], options: DecompOptions) -> Result<LdlResult, LinalgEr
 /// Returns eigenvalues as (real, imaginary) pairs and right eigenvectors.
 /// For real matrices with complex eigenvalues, complex conjugate pairs appear
 /// consecutively. Matches `scipy.linalg.eig(a)`.
+/// Solve `(T[0:bc, 0:bc] − λI) y = rhs` where `T` is the real quasi-upper-
+/// triangular Schur factor (upper-triangular except for 2×2 diagonal blocks
+/// from complex-conjugate eigenvalue pairs) and `λ` is real.
+///
+/// This replaces a full `O(bc³)` LU solve with `O(bc²)` block back-substitution:
+/// processing rows bottom-up, 1×1 diagonal entries divide directly and 2×2
+/// blocks (detected via a non-negligible subdiagonal) solve a local 2×2 system.
+/// Mathematically the same linear system, so the result equals the LU solve to
+/// rounding. Returns `None` if a diagonal block is singular (λ is, to working
+/// precision, an eigenvalue of the leading block — a defective/repeated case the
+/// caller handles by falling back to the Schur basis column).
+fn solve_quasi_triangular_real(t: &DMatrix<f64>, lambda: f64, bc: usize, rhs: &[f64]) -> Option<Vec<f64>> {
+    let thresh = f64::EPSILON * 100.0;
+    let mut y = vec![0.0_f64; bc];
+    let mut r = bc;
+    while r > 0 {
+        if r >= 2 && t[(r - 1, r - 2)].abs() > thresh {
+            let (i0, i1) = (r - 2, r - 1);
+            let mut b0 = rhs[i0];
+            let mut b1 = rhs[i1];
+            for c in r..bc {
+                b0 -= t[(i0, c)] * y[c];
+                b1 -= t[(i1, c)] * y[c];
+            }
+            let m00 = t[(i0, i0)] - lambda;
+            let m01 = t[(i0, i1)];
+            let m10 = t[(i1, i0)];
+            let m11 = t[(i1, i1)] - lambda;
+            let det = m00 * m11 - m01 * m10;
+            if det == 0.0 || !det.is_finite() {
+                return None;
+            }
+            y[i0] = (b0 * m11 - m01 * b1) / det;
+            y[i1] = (m00 * b1 - m10 * b0) / det;
+            r -= 2;
+        } else {
+            let i = r - 1;
+            let mut bi = rhs[i];
+            for c in r..bc {
+                bi -= t[(i, c)] * y[c];
+            }
+            let mii = t[(i, i)] - lambda;
+            if mii == 0.0 || !mii.is_finite() {
+                return None;
+            }
+            y[i] = bi / mii;
+            r -= 1;
+        }
+    }
+    Some(y)
+}
+
+/// Complex analogue of [`solve_quasi_triangular_real`]: solve
+/// `(T[0:bc, 0:bc] − λI) y = rhs` for complex `λ` (and complex `rhs`/`y`) with
+/// `T` real quasi-upper-triangular. `O(bc²)` block back-substitution.
+fn solve_quasi_triangular_complex(
+    t: &DMatrix<f64>,
+    lambda: Complex<f64>,
+    bc: usize,
+    rhs: &[Complex<f64>],
+) -> Option<Vec<Complex<f64>>> {
+    let thresh = f64::EPSILON * 100.0;
+    let mut y = vec![Complex::new(0.0, 0.0); bc];
+    let mut r = bc;
+    while r > 0 {
+        if r >= 2 && t[(r - 1, r - 2)].abs() > thresh {
+            let (i0, i1) = (r - 2, r - 1);
+            let mut b0 = rhs[i0];
+            let mut b1 = rhs[i1];
+            for c in r..bc {
+                b0 -= Complex::new(t[(i0, c)], 0.0) * y[c];
+                b1 -= Complex::new(t[(i1, c)], 0.0) * y[c];
+            }
+            let m00 = Complex::new(t[(i0, i0)], 0.0) - lambda;
+            let m01 = Complex::new(t[(i0, i1)], 0.0);
+            let m10 = Complex::new(t[(i1, i0)], 0.0);
+            let m11 = Complex::new(t[(i1, i1)], 0.0) - lambda;
+            let det = m00 * m11 - m01 * m10;
+            if det.norm() == 0.0 || !det.re.is_finite() || !det.im.is_finite() {
+                return None;
+            }
+            y[i0] = (b0 * m11 - m01 * b1) / det;
+            y[i1] = (m00 * b1 - m10 * b0) / det;
+            r -= 2;
+        } else {
+            let i = r - 1;
+            let mut bi = rhs[i];
+            for c in r..bc {
+                bi -= Complex::new(t[(i, c)], 0.0) * y[c];
+            }
+            let mii = Complex::new(t[(i, i)], 0.0) - lambda;
+            if mii.norm() == 0.0 || !mii.re.is_finite() || !mii.im.is_finite() {
+                return None;
+            }
+            y[i] = bi / mii;
+            r -= 1;
+        }
+    }
+    Some(y)
+}
+
 pub fn eig(a: &[Vec<f64>], options: DecompOptions) -> Result<EigResult, LinalgError> {
     let (rows, cols) = matrix_shape(a)?;
     if rows != cols {
@@ -5159,21 +5260,16 @@ pub fn eig(a: &[Vec<f64>], options: DecompOptions) -> Result<EigResult, LinalgEr
             // blocks above this pair, like the real-eigenvalue path below).
             let mut singular = false;
             if bc > 0 {
-                let mut mm = DMatrix::<Complex<f64>>::zeros(bc, bc);
-                let mut rhs = DVector::<Complex<f64>>::zeros(bc);
-                for r in 0..bc {
-                    for cc in 0..bc {
-                        mm[(r, cc)] = Complex::new(t_mat[(r, cc)], 0.0);
-                    }
-                    mm[(r, r)] -= lam;
-                    rhs[r] = -(Complex::new(t_mat[(r, bc)], 0.0) * y[bc]
+                let mut rhs = vec![Complex::new(0.0, 0.0); bc];
+                for (r, slot) in rhs.iter_mut().enumerate() {
+                    *slot = -(Complex::new(t_mat[(r, bc)], 0.0) * y[bc]
                         + Complex::new(t_mat[(r, bc + 1)], 0.0) * y[bc + 1]);
                 }
-                match mm.lu().solve(&rhs) {
+                // (T[0:bc,0:bc] − λI) is quasi-upper-triangular ⇒ O(bc²) block
+                // back-substitution (was a full O(bc³) LU solve).
+                match solve_quasi_triangular_complex(&t_mat, lam, bc, &rhs) {
                     Some(sol) => {
-                        for r in 0..bc {
-                            y[r] = sol[r];
-                        }
+                        y[..bc].copy_from_slice(&sol);
                     }
                     None => singular = true,
                 }
@@ -5243,20 +5339,15 @@ pub fn eig(a: &[Vec<f64>], options: DecompOptions) -> Result<EigResult, LinalgEr
         let mut y = vec![0.0_f64; rows];
         y[bc] = 1.0;
         if bc > 0 {
-            let mut m = DMatrix::<f64>::zeros(bc, bc);
-            let mut rhs = DVector::<f64>::zeros(bc);
-            for r in 0..bc {
-                for c in 0..bc {
-                    m[(r, c)] = t_mat[(r, c)];
-                }
-                m[(r, r)] -= lambda;
-                rhs[r] = -t_mat[(r, bc)];
+            let mut rhs = vec![0.0_f64; bc];
+            for (r, slot) in rhs.iter_mut().enumerate() {
+                *slot = -t_mat[(r, bc)];
             }
-            match m.lu().solve(&rhs) {
+            // (T[0:bc,0:bc] − λI) is quasi-upper-triangular ⇒ O(bc²) block
+            // back-substitution (was a full O(bc³) LU solve).
+            match solve_quasi_triangular_real(&t_mat, lambda, bc, &rhs) {
                 Some(sol) => {
-                    for r in 0..bc {
-                        y[r] = sol[r];
-                    }
+                    y[..bc].copy_from_slice(&sol);
                 }
                 None => {
                     let dest_col = q_mat.column(col_idx);
