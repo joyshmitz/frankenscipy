@@ -1,0 +1,5 @@
+74a4b41bc2df9542079dd247829b998389d2fd1218bd52cd33c310ad751d6686  tests/artifacts/perf/2026-06-15-rubywaterfall-linalg-psn7x4-rowwise-p/EVIDENCE.md
+51e476567bd715017dcc9d9a8ba113c083d21938f77ce9217ebad9489665a87b  tests/artifacts/perf/2026-06-15-rubywaterfall-linalg-psn7x4-rowwise-p/after_public_eigh_route_rch.txt
+75540fe673ad1942c3f4296758106ea75460b1c70405512698c0cd4a4db51460  tests/artifacts/perf/2026-06-15-rubywaterfall-linalg-psn7x4-rowwise-p/baseline_public_eigh_route_rch.txt
+bfff9f4f3be4f73a0a6409c6ebc7a728c725e21c1216d19ff5ed80264bb1cf49  tests/artifacts/perf/2026-06-15-rubywaterfall-linalg-psn7x4-rowwise-p/proof_lower_storage_rowwise_p_bits_rch.txt
+a3505cd7997ec6ab3e58c58ab6361538113593705d9d48eeb4f3ead514a43196  tests/artifacts/perf/2026-06-15-rubywaterfall-linalg-psn7x4-rowwise-p/rowwise_p_ab_probe_rch.txt
