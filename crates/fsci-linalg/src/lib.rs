@@ -26739,6 +26739,297 @@ mod proptest_tests {
         dense
     }
 
+    #[derive(Debug)]
+    struct LowerBandTridiagonalReductionProbe {
+        diagonal: Vec<f64>,
+        offdiagonal: Vec<f64>,
+        tridiagonal: DMatrix<f64>,
+        q_transpose: DMatrix<f64>,
+        reflector_count: usize,
+    }
+
+    fn dmatrix_from_lower_band_eig_probe(ab: &[Vec<f64>]) -> DMatrix<f64> {
+        let n = ab[0].len();
+        DMatrix::<f64>::from_fn(n, n, |row, col| {
+            if row == col {
+                ab[0][col]
+            } else {
+                let lo = row.min(col);
+                let hi = row.max(col);
+                let offset = hi - lo;
+                if offset < ab.len() {
+                    ab[offset][lo]
+                } else {
+                    0.0
+                }
+            }
+        })
+    }
+
+    fn lower_band_probe_max_abs_dmatrix_diff(
+        actual: &DMatrix<f64>,
+        expected: &DMatrix<f64>,
+    ) -> f64 {
+        assert_eq!(actual.nrows(), expected.nrows());
+        assert_eq!(actual.ncols(), expected.ncols());
+        let mut max_abs = 0.0_f64;
+        for row in 0..actual.nrows() {
+            for col in 0..actual.ncols() {
+                max_abs = max_abs.max((actual[(row, col)] - expected[(row, col)]).abs());
+            }
+        }
+        max_abs
+    }
+
+    fn lower_band_probe_orthogonality_error(matrix: &DMatrix<f64>) -> f64 {
+        let gram = matrix * matrix.transpose();
+        let identity = DMatrix::<f64>::identity(matrix.nrows(), matrix.ncols());
+        lower_band_probe_max_abs_dmatrix_diff(&gram, &identity)
+    }
+
+    fn lower_band_probe_q_transpose(n: usize, reflectors: &[HouseholderReflector]) -> DMatrix<f64> {
+        let mut q_transpose = DMatrix::<f64>::identity(n, n);
+        for reflector in reflectors {
+            apply_householder_left(&mut q_transpose, reflector, 0);
+        }
+        q_transpose
+    }
+
+    fn tridiagonal_matrix_from_parts(diagonal: &[f64], offdiagonal: &[f64]) -> DMatrix<f64> {
+        let n = diagonal.len();
+        let mut tridiagonal = DMatrix::<f64>::zeros(n, n);
+        for idx in 0..n {
+            tridiagonal[(idx, idx)] = diagonal[idx];
+            if idx + 1 < n {
+                tridiagonal[(idx + 1, idx)] = offdiagonal[idx];
+                tridiagonal[(idx, idx + 1)] = offdiagonal[idx];
+            }
+        }
+        tridiagonal
+    }
+
+    fn lower_band_tridiagonal_rank2_reduction(
+        ab: &[Vec<f64>],
+    ) -> Result<LowerBandTridiagonalReductionProbe, LinalgError> {
+        let n = ab[0].len();
+        let mut work = dmatrix_from_lower_band_eig_probe(ab);
+        let mut reflectors = Vec::with_capacity(n.saturating_sub(2));
+        let mut rank2_p = vec![0.0_f64; n];
+        let mut rank2_w = vec![0.0_f64; n];
+
+        for col in 0..n.saturating_sub(2) {
+            let first = work[(col + 1, col)];
+            let values: Vec<f64> = (col + 1..n).map(|row| work[(row, col)]).collect();
+            let reflector = make_householder_reflector(col + 1, values);
+            let beta = first - reflector.values[0];
+            if reflector.tau != 0.0 {
+                apply_symmetric_householder_trailing_rank2(
+                    &mut work,
+                    &reflector,
+                    &mut rank2_p,
+                    &mut rank2_w,
+                );
+            }
+            work[(col + 1, col)] = beta;
+            work[(col, col + 1)] = beta;
+            for row in col + 2..n {
+                work[(row, col)] = 0.0;
+                work[(col, row)] = 0.0;
+            }
+            reflectors.push(reflector);
+        }
+
+        let diagonal: Vec<f64> = (0..n).map(|idx| work[(idx, idx)]).collect();
+        let offdiagonal: Vec<f64> = (0..n.saturating_sub(1))
+            .map(|idx| work[(idx + 1, idx)])
+            .collect();
+        let tridiagonal = tridiagonal_matrix_from_parts(&diagonal, &offdiagonal);
+        let q_transpose = lower_band_probe_q_transpose(n, &reflectors);
+
+        Ok(LowerBandTridiagonalReductionProbe {
+            diagonal,
+            offdiagonal,
+            tridiagonal,
+            q_transpose,
+            reflector_count: reflectors.len(),
+        })
+    }
+
+    fn lower_band_tridiagonal_scalar_oracle(
+        ab: &[Vec<f64>],
+    ) -> Result<LowerBandTridiagonalReductionProbe, LinalgError> {
+        let original = dmatrix_from_lower_band_eig_probe(ab);
+        let reduction = deterministic_symmetric_full_to_band_reflectors(&original, 1)?;
+        let n = original.nrows();
+        let diagonal: Vec<f64> = (0..n).map(|idx| reduction.reduced[(idx, idx)]).collect();
+        let offdiagonal: Vec<f64> = (0..n.saturating_sub(1))
+            .map(|idx| reduction.reduced[(idx + 1, idx)])
+            .collect();
+        let tridiagonal = tridiagonal_matrix_from_parts(&diagonal, &offdiagonal);
+        let q_transpose = lower_band_probe_q_transpose(n, &reduction.reflectors);
+
+        Ok(LowerBandTridiagonalReductionProbe {
+            diagonal,
+            offdiagonal,
+            tridiagonal,
+            q_transpose,
+            reflector_count: reduction.reflectors.len(),
+        })
+    }
+
+    fn assert_lower_band_tridiagonal_reduction_contract(
+        original: &DMatrix<f64>,
+        reduction: &LowerBandTridiagonalReductionProbe,
+        tolerance: f64,
+        label: &str,
+    ) {
+        let projected = (&reduction.q_transpose * original) * reduction.q_transpose.transpose();
+        let reconstruction_residual =
+            lower_band_probe_max_abs_dmatrix_diff(&projected, &reduction.tridiagonal);
+        let q_orthogonality = lower_band_probe_orthogonality_error(&reduction.q_transpose);
+        assert!(
+            reconstruction_residual <= tolerance,
+            "{label} Q^T A Q reconstruction residual {reconstruction_residual:.17e}"
+        );
+        assert!(
+            q_orthogonality <= tolerance,
+            "{label} Q orthogonality error {q_orthogonality:.17e}"
+        );
+        for (idx, value) in reduction.diagonal.iter().enumerate() {
+            assert_eq!(
+                value.to_bits(),
+                reduction.tridiagonal[(idx, idx)].to_bits(),
+                "{label} diagonal extraction {idx}"
+            );
+        }
+        for (idx, value) in reduction.offdiagonal.iter().enumerate() {
+            assert_eq!(
+                value.to_bits(),
+                reduction.tridiagonal[(idx + 1, idx)].to_bits(),
+                "{label} offdiagonal extraction {idx}"
+            );
+            assert_eq!(
+                value.to_bits(),
+                reduction.tridiagonal[(idx, idx + 1)].to_bits(),
+                "{label} mirrored offdiagonal extraction {idx}"
+            );
+        }
+    }
+
+    fn lower_band_tridiagonal_digest(reduction: &LowerBandTridiagonalReductionProbe) -> u64 {
+        const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+        const FNV_PRIME: u64 = 0x100000001b3;
+
+        let mut digest = FNV_OFFSET;
+        for value in reduction
+            .diagonal
+            .iter()
+            .chain(reduction.offdiagonal.iter())
+            .chain(reduction.tridiagonal.iter())
+            .chain(reduction.q_transpose.iter())
+        {
+            digest ^= value.to_bits();
+            digest = digest.wrapping_mul(FNV_PRIME);
+        }
+        digest
+    }
+
+    #[test]
+    fn lower_band_tridiagonal_rank2_matches_scalar_oracle() {
+        for (n, bandwidth) in [(18usize, 4usize), (37, 8), (64, 12)] {
+            let ab = make_lower_band_eig_probe(n, bandwidth);
+            let original = dmatrix_from_lower_band_eig_probe(&ab);
+            let scale = dmatrix_max_abs_value(&original).max(1.0);
+            let tolerance = 1e-9 * scale * n as f64;
+            let scalar = lower_band_tridiagonal_scalar_oracle(&ab).expect("scalar oracle");
+            let rank2 = lower_band_tridiagonal_rank2_reduction(&ab).expect("rank-2 reduction");
+
+            assert_lower_band_tridiagonal_reduction_contract(
+                &original,
+                &scalar,
+                tolerance,
+                "scalar oracle",
+            );
+            assert_lower_band_tridiagonal_reduction_contract(
+                &original,
+                &rank2,
+                tolerance,
+                "rank-2 reduction",
+            );
+
+            let tri_drift =
+                lower_band_probe_max_abs_dmatrix_diff(&rank2.tridiagonal, &scalar.tridiagonal);
+            assert!(
+                tri_drift <= tolerance,
+                "rank-2 tridiagonal drift {tri_drift:.17e} for n={n}, bandwidth={bandwidth}"
+            );
+            assert_eq!(scalar.reflector_count, rank2.reflector_count);
+            println!(
+                "lower_band_rank2_oracle n={n} bandwidth={bandwidth} tri_drift={tri_drift:.17e} scalar_digest={:#018x} rank2_digest={:#018x}",
+                lower_band_tridiagonal_digest(&scalar),
+                lower_band_tridiagonal_digest(&rank2)
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "perf probe: run locally with --release for lower-band rank-2 DSBTRD oracle harness"]
+    fn lower_band_tridiagonal_rank2_oracle_perf_probe() {
+        for (n, bandwidth) in [(128usize, 32usize), (256, 32), (512, 32)] {
+            let ab = make_lower_band_eig_probe(n, bandwidth);
+            let original = dmatrix_from_lower_band_eig_probe(&ab);
+            let scale = dmatrix_max_abs_value(&original).max(1.0);
+            let tolerance = 1e-8 * scale * n as f64;
+
+            let started_at = std::time::Instant::now();
+            let scalar = lower_band_tridiagonal_scalar_oracle(std::hint::black_box(&ab))
+                .expect("scalar oracle");
+            let scalar_ms = started_at.elapsed().as_secs_f64() * 1_000.0;
+
+            let started_at = std::time::Instant::now();
+            let rank2 = lower_band_tridiagonal_rank2_reduction(std::hint::black_box(&ab))
+                .expect("rank-2 reduction");
+            let rank2_ms = started_at.elapsed().as_secs_f64() * 1_000.0;
+
+            assert_lower_band_tridiagonal_reduction_contract(
+                &original,
+                &scalar,
+                tolerance,
+                "scalar oracle perf",
+            );
+            assert_lower_band_tridiagonal_reduction_contract(
+                &original,
+                &rank2,
+                tolerance,
+                "rank-2 reduction perf",
+            );
+            let tri_drift =
+                lower_band_probe_max_abs_dmatrix_diff(&rank2.tridiagonal, &scalar.tridiagonal);
+            assert!(
+                tri_drift <= tolerance,
+                "rank-2 tridiagonal drift {tri_drift:.17e} for n={n}, bandwidth={bandwidth}"
+            );
+
+            println!("LOWER_BAND_TRIDIAGONAL_RANK2_ORACLE_PERF_BEGIN");
+            println!("shape={n}x{n}");
+            println!("bandwidth={bandwidth}");
+            println!("reflector_count={}", rank2.reflector_count);
+            println!("scalar_oracle_ms={scalar_ms:.6}");
+            println!("rank2_oracle_ms={rank2_ms:.6}");
+            println!("speedup={:.6}", scalar_ms / rank2_ms);
+            println!("tri_drift={tri_drift:.17e}");
+            println!(
+                "scalar_digest={:#018x}",
+                lower_band_tridiagonal_digest(&scalar)
+            );
+            println!(
+                "rank2_digest={:#018x}",
+                lower_band_tridiagonal_digest(&rank2)
+            );
+            println!("LOWER_BAND_TRIDIAGONAL_RANK2_ORACLE_PERF_END");
+        }
+    }
+
     fn dense_reference_lower_band_eigenvalues(ab: &[Vec<f64>]) -> Vec<f64> {
         let dense = dense_from_lower_band_eig_probe(ab);
         eigh(

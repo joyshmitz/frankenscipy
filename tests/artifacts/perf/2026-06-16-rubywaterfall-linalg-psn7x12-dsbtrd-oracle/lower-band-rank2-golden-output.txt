@@ -1,0 +1,3 @@
+lower_band_rank2_oracle n=18 bandwidth=4 tri_drift=8.52651282912120223e-14 scalar_digest=0x4f36279a9fc7fb58 rank2_digest=0xf5a344e20bf95982
+lower_band_rank2_oracle n=37 bandwidth=8 tri_drift=9.01494157101723204e-13 scalar_digest=0xd552cac930030969 rank2_digest=0x2c0ca6db29ec6061
+lower_band_rank2_oracle n=64 bandwidth=12 tri_drift=2.35900188272353262e-12 scalar_digest=0x9cf661458b0e182c rank2_digest=0x971933511ccecbf9
