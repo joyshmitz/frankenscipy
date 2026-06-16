@@ -38338,6 +38338,48 @@ pub fn ppcc_max(x: &[f64], brack: (f64, f64)) -> f64 {
     xmin
 }
 
+/// Result of [`probplot`].
+#[derive(Debug, Clone)]
+pub struct ProbplotResult {
+    /// Theoretical quantiles (ordered statistic medians passed through the
+    /// distribution's ppf) — the x-coordinates of the probability plot.
+    pub osm: Vec<f64>,
+    /// The sorted sample values — the y-coordinates of the probability plot.
+    pub osr: Vec<f64>,
+    /// Least-squares fit slope of `osr` on `osm`.
+    pub slope: f64,
+    /// Least-squares fit intercept.
+    pub intercept: f64,
+    /// Correlation coefficient of the fit.
+    pub r: f64,
+}
+
+/// Probability plot of sample data against the standard normal distribution,
+/// matching `scipy.stats.probplot(x, dist='norm', fit=True)`.
+///
+/// `osm` are the theoretical normal quantiles `Φ⁻¹` of the uniform
+/// order-statistic medians, `osr` is the sorted sample, and `(slope, intercept,
+/// r)` are the least-squares line fit of `osr` against `osm`. Only the default
+/// `dist='norm'` is supported.
+#[must_use]
+pub fn probplot(x: &[f64]) -> ProbplotResult {
+    let probs = uniform_order_medians(x.len());
+    let osm: Vec<f64> = probs
+        .iter()
+        .map(|&p| fsci_special::ndtri_scalar(p))
+        .collect();
+    let mut osr = x.to_vec();
+    osr.sort_by(f64::total_cmp);
+    let fit = linregress(&osm, &osr);
+    ProbplotResult {
+        osm,
+        osr,
+        slope: fit.slope,
+        intercept: fit.intercept,
+        r: fit.rvalue,
+    }
+}
+
 /// Compute the expected frequency for a Chi-squared goodness-of-fit test
 /// against a uniform distribution.
 pub fn expected_freq_uniform(observed: &[f64]) -> Vec<f64> {
@@ -46243,6 +46285,36 @@ mod tests {
             assert!((a - b).abs() <= 1e-12, "intra {a} vs {b}");
         }
         assert!((inter - 0.625).abs() <= 1e-12, "inter {inter}");
+    }
+
+    #[test]
+    fn probplot_matches_scipy() {
+        let x = [2.0, 4.0, 1.0, 7.0, 3.0, 9.0, 5.0, 6.0, 8.0, 2.5, 4.5, 6.5];
+        let r = probplot(&x);
+        let want_osm = [
+            -1.588154642966,
+            -1.098149754686,
+            -0.782559268059,
+            -0.530691128617,
+            -0.308923525477,
+            -0.101534002506,
+            0.101534002506,
+            0.308923525477,
+            0.530691128617,
+            0.782559268059,
+            1.098149754686,
+            1.588154642966,
+        ];
+        for (a, b) in r.osm.iter().zip(want_osm.iter()) {
+            assert!((a - b).abs() <= 1e-11, "osm {a} vs {b}");
+        }
+        let want_osr = [
+            1.0, 2.0, 2.5, 3.0, 4.0, 4.5, 5.0, 6.0, 6.5, 7.0, 8.0, 9.0,
+        ];
+        assert_eq!(r.osr, want_osr);
+        assert!((r.slope - 2.679990558093668).abs() <= 1e-9, "slope {}", r.slope);
+        assert!((r.intercept - 4.875).abs() <= 1e-9, "intercept {}", r.intercept);
+        assert!((r.r - 0.9952703286568034).abs() <= 1e-9, "r {}", r.r);
     }
 
     #[test]
