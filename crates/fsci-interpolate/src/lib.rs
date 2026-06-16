@@ -4692,6 +4692,113 @@ fn binom(n: usize, k: usize) -> f64 {
     result
 }
 
+/// N-D tensor-product piecewise polynomial, matching `scipy.interpolate.NdPPoly`.
+///
+/// `c` is the flat (row-major) coefficient tensor of shape
+/// `[k0+1, …, k_{D-1}+1, m0, …, m_{D-1}]` (`k_d` = degree, `m_d` = cells in dim
+/// `d`); `x[d]` holds the `m_d+1` breakpoints of dimension `d`. On the cell
+/// selected per dimension, the value is the tensor-product polynomial
+/// `Σ c[i0,…,cell0,…] · Π_d (p_d − x[d][cell_d])^{k_d − i_d}`.
+pub struct NdPPoly {
+    /// Flat row-major coefficient tensor.
+    pub c: Vec<f64>,
+    /// Tensor shape `[k0+1, …, k_{D-1}+1, m0, …, m_{D-1}]` (length `2·ndim`).
+    pub c_shape: Vec<usize>,
+    /// Per-dimension breakpoints.
+    pub x: Vec<Vec<f64>>,
+}
+
+impl NdPPoly {
+    /// Build an N-D piecewise polynomial; validates the tensor shape against the
+    /// breakpoints.
+    pub fn new(c: Vec<f64>, c_shape: Vec<usize>, x: Vec<Vec<f64>>) -> Result<Self, InterpError> {
+        let ndim = x.len();
+        if c_shape.len() != 2 * ndim {
+            return Err(InterpError::InvalidArgument {
+                detail: "c_shape length must be 2*ndim".to_string(),
+            });
+        }
+        let prod: usize = c_shape.iter().product();
+        if c.len() != prod {
+            return Err(InterpError::InvalidArgument {
+                detail: format!("c has {} entries, expected {prod}", c.len()),
+            });
+        }
+        for d in 0..ndim {
+            if x[d].len() < 2 || c_shape[ndim + d] != x[d].len() - 1 {
+                return Err(InterpError::InvalidArgument {
+                    detail: format!("dimension {d}: cell count must equal len(x[{d}])-1"),
+                });
+            }
+        }
+        Ok(Self { c, c_shape, x })
+    }
+
+    /// Evaluate the polynomial at `point` (length `ndim`), extrapolating with the
+    /// nearest cell for out-of-range coordinates.
+    pub fn evaluate(&self, point: &[f64]) -> f64 {
+        let ndim = self.x.len();
+        // Per-dimension cell index and local coordinate.
+        let mut cell = vec![0usize; ndim];
+        let mut dx = vec![0.0f64; ndim];
+        for d in 0..ndim {
+            let bp = &self.x[d];
+            let m = bp.len() - 1; // number of cells
+            // largest j with bp[j] <= point[d], clamped to [0, m-1].
+            let mut j = 0usize;
+            while j + 1 < m && point[d] >= bp[j + 1] {
+                j += 1;
+            }
+            cell[d] = j;
+            dx[d] = point[d] - bp[j];
+        }
+        // Strides for the row-major tensor.
+        let nd2 = self.c_shape.len();
+        let mut stride = vec![1usize; nd2];
+        for i in (0..nd2 - 1).rev() {
+            stride[i] = stride[i + 1] * self.c_shape[i + 1];
+        }
+        // Base offset from the cell indices (last ndim axes).
+        let mut base = 0usize;
+        for d in 0..ndim {
+            base += cell[d] * stride[ndim + d];
+        }
+        // Precompute powers dx[d]^(k_d - i_d) for i_d in 0..=k_d.
+        let orders: Vec<usize> = (0..ndim).map(|d| self.c_shape[d] - 1).collect();
+        let mut powers: Vec<Vec<f64>> = Vec::with_capacity(ndim);
+        for d in 0..ndim {
+            let kd = orders[d];
+            let mut p = vec![0.0f64; kd + 1];
+            for id in 0..=kd {
+                p[id] = dx[d].powi((kd - id) as i32);
+            }
+            powers.push(p);
+        }
+        // Sum over the order multi-index (i0,…,i_{D-1}).
+        let total: usize = orders.iter().map(|&k| k + 1).product();
+        let mut idx = vec![0usize; ndim];
+        let mut sum = 0.0f64;
+        for _ in 0..total {
+            let mut off = base;
+            let mut term = 1.0f64;
+            for d in 0..ndim {
+                off += idx[d] * stride[d];
+                term *= powers[d][idx[d]];
+            }
+            sum += self.c[off] * term;
+            // increment the mixed-radix multi-index.
+            for d in (0..ndim).rev() {
+                idx[d] += 1;
+                if idx[d] <= orders[d] {
+                    break;
+                }
+                idx[d] = 0;
+            }
+        }
+        sum
+    }
+}
+
 /// Smoothing spline representation (splrep equivalent).
 ///
 /// Returns (knots, coefficients, degree) that can be used with `splev`.
@@ -7838,6 +7945,20 @@ fn smooth_bivariate_solve_coefficients(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ndppoly_matches_scipy() {
+        // c = arange(1..=36).reshape(3,2,2,3); x=([0,1,2],[0,1,2,3]).
+        let c: Vec<f64> = (1..=36).map(|v| v as f64).collect();
+        let c_shape = vec![3, 2, 2, 3];
+        let x = vec![vec![0.0, 1.0, 2.0], vec![0.0, 1.0, 2.0, 3.0]];
+        let p = NdPPoly::new(c, c_shape, x).unwrap();
+        let pts = [[0.5, 0.5], [1.5, 2.5], [0.2, 1.8], [1.9, 0.1]];
+        let want = [58.125, 71.25, 59.424, 66.46399999999998];
+        for (pt, w) in pts.iter().zip(want.iter()) {
+            assert!((p.evaluate(pt) - w).abs() <= 1e-9, "{:?}: {} vs {w}", pt, p.evaluate(pt));
+        }
+    }
 
     #[test]
     fn lsq_univariate_spline_matches_scipy() {
