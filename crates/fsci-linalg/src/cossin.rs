@@ -140,6 +140,29 @@ pub(crate) fn dlarf_right(c: &mut [Vec<f64>], v_tail: &[f64], tau: f64) {
     }
 }
 
+/// Compute the CS-decomposition angle vector `theta` from the upper-left block
+/// `x11` (`p × q`) of an `m × m` orthogonal matrix, matching the `theta` returned
+/// by `scipy.linalg.cossin(..., separate=True)`.
+///
+/// The cosines of the angles are the `r = min(p, q, m-p, m-q)` smallest singular
+/// values of `x11` (the larger `min(p,q) − r` singular values are ≈ 1 and form
+/// the identity blocks). With `n11 = min(p,q) − r` and the singular values `σ`
+/// in descending order, `theta[i] = arccos(σ[n11 + i])`, ascending.
+pub(crate) fn cs_angles(
+    x11: &[Vec<f64>],
+    p: usize,
+    q: usize,
+    m: usize,
+) -> Result<Vec<f64>, crate::LinalgError> {
+    let r = p.min(q).min(m - p).min(m - q);
+    let n11 = p.min(q) - r;
+    let res = crate::svd(x11, crate::DecompOptions::default())?;
+    let theta = (0..r)
+        .map(|i| res.s[n11 + i].clamp(-1.0, 1.0).acos())
+        .collect();
+    Ok(theta)
+}
+
 /// Assemble the `m × m` cosine-sine middle factor `CS` from the angle vector
 /// `theta`, matching the construction in scipy's `_cossin` (default
 /// `swap_sign=False`: the `-S`/`-I` blocks sit in the upper-right).
@@ -242,6 +265,35 @@ mod tests {
                     cs[i][j]
                 );
             }
+        }
+    }
+
+    #[test]
+    fn cs_angles_match_scipy() {
+        // Case A: m=6, p=q=3, r=3, n11=0.
+        let a_x11 = vec![
+            vec![-0.5299718695, -0.2604647036, -0.4936740867],
+            vec![-0.105673699, -0.0378100654, 0.1484074059],
+            vec![0.3840964564, -0.4523877513, -0.6696005085],
+        ];
+        let a_theta = cs_angles(&a_x11, 3, 3, 6).unwrap();
+        let a_want = [0.159776054, 0.8461927778, 1.45411065];
+        for (g, w) in a_theta.iter().zip(a_want.iter()) {
+            assert!((g - w).abs() < 1e-8, "A theta {g} vs {w}");
+        }
+
+        // Case B: m=8, p=q=5, r=3, n11=2 (identity block present).
+        let b_x11 = vec![
+            vec![-0.597715282, -0.2284842244, 6.461e-06, -0.6729100837, 0.2199323067],
+            vec![-0.1438553634, -0.4268619363, -0.5315047497, -0.0442671386, -0.2683036699],
+            vec![-0.2517464206, 0.5361883302, -0.0607574542, -0.0670250601, -0.7047191734],
+            vec![-0.2152718386, -0.016432015, 0.7485130952, -0.1263420574, -0.2090926243],
+            vec![0.0634716335, -0.1290424626, 0.0822154112, -0.0422565627, -0.1356398819],
+        ];
+        let b_theta = cs_angles(&b_x11, 5, 5, 8).unwrap();
+        let b_want = [0.4701951603, 1.0653266212, 1.4673215];
+        for (g, w) in b_theta.iter().zip(b_want.iter()) {
+            assert!((g - w).abs() < 1e-7, "B theta {g} vs {w}");
         }
     }
 
