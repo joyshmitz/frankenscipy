@@ -3731,6 +3731,122 @@ fn collect_depths(z: &[[f64; 4]], node: usize, n: usize, depth: usize, dists: &m
     }
 }
 
+/// Maximum linkage distance within each non-singleton cluster's subtree.
+///
+/// Matches `scipy.cluster.hierarchy.maxdists`. `MD[i]` is the largest link
+/// height (column 2 of `Z`) among internal node `n + i` and all of its
+/// descendant merges — which can exceed `Z[i, 2]` when the linkage has
+/// inversions (centroid/median/Ward).
+pub fn maxdists(z: &[[f64; 4]]) -> Vec<f64> {
+    if z.is_empty() {
+        return vec![];
+    }
+    let n = z.len() + 1;
+    let mut md = vec![0.0_f64; z.len()];
+    for (i, row) in z.iter().enumerate() {
+        let mut m = row[2];
+        let c1 = row[0] as usize;
+        let c2 = row[1] as usize;
+        if c1 >= n {
+            m = m.max(md[c1 - n]);
+        }
+        if c2 >= n {
+            m = m.max(md[c2 - n]);
+        }
+        md[i] = m;
+    }
+    md
+}
+
+/// Maximum inconsistency coefficient within each non-singleton cluster's subtree.
+///
+/// Matches `scipy.cluster.hierarchy.maxinconsts(Z, R)`. Like [`maxdists`] but
+/// propagates the inconsistency coefficient (column 3 of the inconsistency
+/// matrix `R` from [`inconsistent`]) instead of the link height.
+pub fn maxinconsts(z: &[[f64; 4]], r: &[[f64; 4]]) -> Result<Vec<f64>, ClusterError> {
+    if z.len() != r.len() {
+        return Err(ClusterError::InvalidArgument(
+            "Z and R must have the same number of rows".to_string(),
+        ));
+    }
+    if z.is_empty() {
+        return Ok(vec![]);
+    }
+    let n = z.len() + 1;
+    let mut mi = vec![0.0_f64; z.len()];
+    for (i, row) in z.iter().enumerate() {
+        let mut m = r[i][3];
+        let c1 = row[0] as usize;
+        let c2 = row[1] as usize;
+        if c1 >= n {
+            m = m.max(mi[c1 - n]);
+        }
+        if c2 >= n {
+            m = m.max(mi[c2 - n]);
+        }
+        mi[i] = m;
+    }
+    Ok(mi)
+}
+
+/// Find the root linkage node of each flat cluster.
+///
+/// Matches `scipy.cluster.hierarchy.leaders(Z, T)`. Given a flat cluster
+/// assignment `T` (length `n`), returns `(L, M)` where `L[j]` is the linkage
+/// node id leading flat cluster `M[j]`. `L` is in ascending node-id order. If
+/// `T` is not a valid flat clustering of `Z` (a cluster spans more than one
+/// subtree), an error is returned.
+pub fn leaders(z: &[[f64; 4]], t: &[usize]) -> Result<(Vec<usize>, Vec<usize>), ClusterError> {
+    let n = z.len() + 1;
+    if t.len() != n {
+        return Err(ClusterError::InvalidArgument(format!(
+            "T must have length {n} (number of observations)"
+        )));
+    }
+    let total = 2 * n - 1;
+    // belong[node] = cluster id if the subtree is monochromatic, else -1.
+    let mut belong = vec![-1_i64; total];
+    for i in 0..n {
+        belong[i] = t[i] as i64;
+    }
+    let mut parent = vec![usize::MAX; total];
+    for (k, row) in z.iter().enumerate() {
+        let node = n + k;
+        let c1 = row[0] as usize;
+        let c2 = row[1] as usize;
+        parent[c1] = node;
+        parent[c2] = node;
+        belong[node] = if belong[c1] != -1 && belong[c1] == belong[c2] {
+            belong[c1]
+        } else {
+            -1
+        };
+    }
+    let mut l = Vec::new();
+    let mut m = Vec::new();
+    for node in 0..total {
+        let b = belong[node];
+        if b == -1 {
+            continue;
+        }
+        let is_leader = parent[node] == usize::MAX || belong[parent[node]] == -1;
+        if is_leader {
+            l.push(node);
+            m.push(b as usize);
+        }
+    }
+    // A valid flat clustering yields exactly one leader per cluster id.
+    let mut seen = std::collections::HashSet::new();
+    for &c in &m {
+        if !seen.insert(c) {
+            return Err(ClusterError::InvalidArgument(
+                "T is not a valid flat cluster assignment for Z".to_string(),
+            ));
+        }
+    }
+    Ok((l, m))
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // DBSCAN
 // ══════════════════════════════════════════════════════════════════════
@@ -7514,6 +7630,38 @@ mod tests {
         );
         // Third row has multiple elements so std > 0
         assert!(incon[2][1] > 0.0, "std of row 2 should be > 0");
+    }
+
+    #[test]
+    fn maxdists_maxinconsts_leaders_match_scipy() {
+        // Fixed linkage matrix (5 obs, 4 merges) — same Z fed to both libs.
+        let z = [
+            [0.0, 1.0, 1.0, 2.0],
+            [2.0, 3.0, 1.5, 2.0],
+            [5.0, 4.0, 2.0, 3.0],
+            [6.0, 7.0, 3.0, 5.0],
+        ];
+        // scipy.cluster.hierarchy.maxdists(Z)
+        assert_eq!(maxdists(&z), vec![1.0, 1.5, 2.0, 3.0]);
+
+        // maxinconsts(Z, inconsistent(Z, 2))
+        let r = inconsistent(&z, 2);
+        let mi = maxinconsts(&z, &r).unwrap();
+        let exp_mi = [0.0, 0.0, 0.70710678, 1.09108945];
+        for (a, b) in mi.iter().zip(exp_mi.iter()) {
+            assert!((a - b).abs() < 1e-7, "maxinconsts {a} vs {b}");
+        }
+
+        // leaders for T = [2,2,1,1,2]  -> L=[6,7], M=[1,2]
+        let (l, m) = leaders(&z, &[2, 2, 1, 1, 2]).unwrap();
+        assert_eq!(l, vec![6, 7]);
+        assert_eq!(m, vec![1, 2]);
+        // Swapped labels -> L ascending by node id, M follows: L=[6,7], M=[2,1]
+        let (l2, m2) = leaders(&z, &[1, 1, 2, 2, 1]).unwrap();
+        assert_eq!(l2, vec![6, 7]);
+        assert_eq!(m2, vec![2, 1]);
+        // Invalid (cluster split across two subtrees) is rejected.
+        assert!(leaders(&z, &[1, 2, 1, 2, 1]).is_err());
     }
 
     #[test]
