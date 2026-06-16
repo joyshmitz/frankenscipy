@@ -1,0 +1,4 @@
+759e0aecae4e4385ee8d4bd7a7a80f2aad2d921e037ba07150f36513b54ed1f2  tests/artifacts/perf/2026-06-16-rubywaterfall-linalg-psn7x6-blocked-reduction/EVIDENCE.md
+7d610a08aa06d3d11ba35a3067b76284ebddf061521fca6bdc0a7ed6dfadd703  tests/artifacts/perf/2026-06-16-rubywaterfall-linalg-psn7x6-blocked-reduction/baseline_stage_profile_rch.txt
+e923345baa9b2a118e67b8b7de472f746df6fa18b2d98506960177fdb083eece  tests/artifacts/perf/2026-06-16-rubywaterfall-linalg-psn7x6-blocked-reduction/proof_simd_lower_storage_bits_rch.txt
+dffd1d14e8216095e66dd54e4eabf0ba0bb70b6cbd9660f332b665c00ea4f0bf  tests/artifacts/perf/2026-06-16-rubywaterfall-linalg-psn7x6-blocked-reduction/after_simd_lower_storage_stage_profile_rch.txt
