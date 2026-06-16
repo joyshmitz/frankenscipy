@@ -5092,9 +5092,435 @@ impl std::ops::Mul for RigidTransform {
     }
 }
 
+// ── RotationSpline helpers (faithful port of scipy._rotation_spline) ──────────
+
+fn rs_skew(x: [f64; 3]) -> [[f64; 3]; 3] {
+    [
+        [0.0, -x[2], x[1]],
+        [x[2], 0.0, -x[0]],
+        [-x[1], x[0], 0.0],
+    ]
+}
+
+fn rs_matmul3(a: &[[f64; 3]; 3], b: &[[f64; 3]; 3]) -> [[f64; 3]; 3] {
+    let mut r = [[0.0; 3]; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            r[i][j] = a[i][0] * b[0][j] + a[i][1] * b[1][j] + a[i][2] * b[2][j];
+        }
+    }
+    r
+}
+
+fn rs_matvec3(a: &[[f64; 3]; 3], b: [f64; 3]) -> [f64; 3] {
+    [
+        a[0][0] * b[0] + a[0][1] * b[1] + a[0][2] * b[2],
+        a[1][0] * b[0] + a[1][1] * b[1] + a[1][2] * b[2],
+        a[2][0] * b[0] + a[2][1] * b[1] + a[2][2] * b[2],
+    ]
+}
+
+fn rs_norm(x: [f64; 3]) -> f64 {
+    (x[0] * x[0] + x[1] * x[1] + x[2] * x[2]).sqrt()
+}
+
+fn rs_cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+fn rs_dot(a: [f64; 3], b: [f64; 3]) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+// Matrix transforming an angular rate to the rotation-vector derivative.
+fn rs_angular_rate_to_rotvec_dot(rotvec: [f64; 3]) -> [[f64; 3]; 3] {
+    let norm = rs_norm(rotvec);
+    let k = if norm > 1e-4 {
+        (1.0 - 0.5 * norm / (0.5 * norm).tan()) / (norm * norm)
+    } else {
+        1.0 / 12.0 + norm * norm / 720.0
+    };
+    let skew = rs_skew(rotvec);
+    let skew2 = rs_matmul3(&skew, &skew);
+    let mut r = [[0.0; 3]; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            let id = if i == j { 1.0 } else { 0.0 };
+            r[i][j] = id + 0.5 * skew[i][j] + k * skew2[i][j];
+        }
+    }
+    r
+}
+
+// Matrix transforming a rotation-vector derivative to the angular rate.
+fn rs_rotvec_dot_to_angular_rate(rotvec: [f64; 3]) -> [[f64; 3]; 3] {
+    let norm = rs_norm(rotvec);
+    let (k1, k2) = if norm > 1e-4 {
+        (
+            (1.0 - norm.cos()) / (norm * norm),
+            (norm - norm.sin()) / (norm * norm * norm),
+        )
+    } else {
+        (0.5 - norm * norm / 24.0, 1.0 / 6.0 - norm * norm / 120.0)
+    };
+    let skew = rs_skew(rotvec);
+    let skew2 = rs_matmul3(&skew, &skew);
+    let mut r = [[0.0; 3]; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            let id = if i == j { 1.0 } else { 0.0 };
+            r[i][j] = id - k1 * skew[i][j] + k2 * skew2[i][j];
+        }
+    }
+    r
+}
+
+// Non-linear (quadratic-in-rotvec_dot) term of the angular acceleration.
+fn rs_angular_accel_nonlinear(rotvec: [f64; 3], rotvec_dot: [f64; 3]) -> [f64; 3] {
+    let norm = rs_norm(rotvec);
+    let dp = rs_dot(rotvec, rotvec_dot);
+    let cp = rs_cross(rotvec, rotvec_dot);
+    let ccp = rs_cross(rotvec, cp);
+    let dccp = rs_cross(rotvec_dot, cp);
+    let (k1, k2, k3) = if norm > 1e-4 {
+        let n = norm;
+        (
+            (-n * n.sin() - 2.0 * (n.cos() - 1.0)) / n.powi(4),
+            (-2.0 * n + 3.0 * n.sin() - n * n.cos()) / n.powi(5),
+            (n - n.sin()) / n.powi(3),
+        )
+    } else {
+        let n2 = norm * norm;
+        (
+            1.0 / 12.0 - n2 / 180.0,
+            -1.0 / 60.0 + n2 / 12604.0,
+            1.0 / 6.0 - n2 / 120.0,
+        )
+    };
+    let mut out = [0.0; 3];
+    for i in 0..3 {
+        out[i] = dp * (k1 * cp[i] + k2 * ccp[i]) + k3 * dccp[i];
+    }
+    out
+}
+
+fn rs_compute_angular_rate(rotvec: [f64; 3], rotvec_dot: [f64; 3]) -> [f64; 3] {
+    rs_matvec3(&rs_rotvec_dot_to_angular_rate(rotvec), rotvec_dot)
+}
+
+fn rs_compute_angular_accel(
+    rotvec: [f64; 3],
+    rotvec_dot: [f64; 3],
+    rotvec_dot_dot: [f64; 3],
+) -> [f64; 3] {
+    let lin = rs_compute_angular_rate(rotvec, rotvec_dot_dot);
+    let nl = rs_angular_accel_nonlinear(rotvec, rotvec_dot);
+    [lin[0] + nl[0], lin[1] + nl[1], lin[2] + nl[2]]
+}
+
+/// Interpolate rotations with continuous angular rate and acceleration,
+/// matching `scipy.spatial.transform.RotationSpline`.
+///
+/// The rotation vector between consecutive orientations is a cubic function of
+/// time with continuous angular rate and acceleration (a rotation analogue of
+/// cubic-spline interpolation). Construct with [`RotationSpline::new`] then query
+/// [`RotationSpline::evaluate`] (rotation), [`RotationSpline::angular_rate`], or
+/// [`RotationSpline::angular_acceleration`].
+#[derive(Debug, Clone)]
+pub struct RotationSpline {
+    times: Vec<f64>,
+    rotations: Vec<Rotation>,
+    // Per-segment cubic coefficients: coeff[seg][k] are the degree-(3-k) terms.
+    coeff: Vec<[[f64; 3]; 4]>,
+}
+
+impl RotationSpline {
+    const MAX_ITER: usize = 10;
+    const TOL: f64 = 1e-9;
+
+    /// Build a spline through `rotations` at the strictly-increasing `times`
+    /// (at least 2 of each, equal counts).
+    pub fn new(times: &[f64], rotations: &[Rotation]) -> Result<Self, String> {
+        let n = rotations.len();
+        if n < 2 {
+            return Err("`rotations` must contain at least 2 rotations.".to_string());
+        }
+        if times.len() != n {
+            return Err("Expected number of rotations to equal number of times.".to_string());
+        }
+        let dt: Vec<f64> = (0..n - 1).map(|i| times[i + 1] - times[i]).collect();
+        if dt.iter().any(|&d| d <= 0.0) {
+            return Err("Values in `times` must be strictly increasing.".to_string());
+        }
+
+        // rotvecs[i] = (R_i^{-1} ∘ R_{i+1}) as a rotation vector.
+        let rotvecs: Vec<[f64; 3]> = (0..n - 1)
+            .map(|i| rotations[i].inv().multiply(&rotations[i + 1]).as_rotvec())
+            .collect();
+        let mut angular_rates: Vec<[f64; 3]> = (0..n - 1)
+            .map(|i| {
+                [
+                    rotvecs[i][0] / dt[i],
+                    rotvecs[i][1] / dt[i],
+                    rotvecs[i][2] / dt[i],
+                ]
+            })
+            .collect();
+
+        let rotvecs_dot: Vec<[f64; 3]> = if n == 2 {
+            angular_rates.clone()
+        } else {
+            let (ar, rd) = Self::solve_for_angular_rates(&dt, &mut angular_rates, &rotvecs);
+            angular_rates = ar;
+            rd
+        };
+
+        let mut coeff: Vec<[[f64; 3]; 4]> = Vec::with_capacity(n - 1);
+        for i in 0..n - 1 {
+            let d = dt[i];
+            let mut c = [[0.0; 3]; 4];
+            for k in 0..3 {
+                let rv = rotvecs[i][k];
+                let ar = angular_rates[i][k];
+                let rd = rotvecs_dot[i][k];
+                c[0][k] = (-2.0 * rv + d * ar + d * rd) / d.powi(3);
+                c[1][k] = (3.0 * rv - 2.0 * d * ar - d * rd) / d.powi(2);
+                c[2][k] = ar;
+                c[3][k] = 0.0;
+            }
+            coeff.push(c);
+        }
+
+        Ok(Self {
+            times: times.to_vec(),
+            rotations: rotations.to_vec(),
+            coeff,
+        })
+    }
+
+    fn solve_for_angular_rates(
+        dt: &[f64],
+        angular_rates: &mut [[f64; 3]],
+        rotvecs: &[[f64; 3]],
+    ) -> (Vec<[f64; 3]>, Vec<[f64; 3]>) {
+        let m = rotvecs.len(); // = n - 1
+        let angular_rate_first = angular_rates[0];
+        let a: Vec<[[f64; 3]; 3]> = rotvecs
+            .iter()
+            .map(|&rv| rs_angular_rate_to_rotvec_dot(rv))
+            .collect();
+        let a_inv: Vec<[[f64; 3]; 3]> = rotvecs
+            .iter()
+            .map(|&rv| rs_rotvec_dot_to_angular_rate(rv))
+            .collect();
+
+        let nb = m - 1; // number of diagonal blocks (= n - 2)
+        let sz = 3 * nb;
+        // Block-tridiagonal system matrix (dense; the system is well-conditioned).
+        let d: Vec<f64> = (0..nb).map(|i| 4.0 * (1.0 / dt[i] + 1.0 / dt[i + 1])).collect();
+        let mut mat = vec![vec![0.0; sz]; sz];
+        for (i, &di) in d.iter().enumerate() {
+            for k in 0..3 {
+                mat[3 * i + k][3 * i + k] = di;
+            }
+        }
+        for i in 0..nb - 1 {
+            let f = 2.0 / dt[1 + i];
+            for r in 0..3 {
+                for c in 0..3 {
+                    mat[3 * (i + 1) + r][3 * i + c] = f * a_inv[1 + i][r][c]; // sub-diagonal A
+                    mat[3 * i + r][3 * (i + 1) + c] = f * a[1 + i][r][c]; // super-diagonal B
+                }
+            }
+        }
+
+        // Constant part of the right-hand side.
+        let mut b0: Vec<[f64; 3]> = (0..nb)
+            .map(|i| {
+                let mut v = [0.0; 3];
+                for k in 0..3 {
+                    v[k] = 6.0
+                        * (rotvecs[i][k] / (dt[i] * dt[i])
+                            + rotvecs[i + 1][k] / (dt[i + 1] * dt[i + 1]));
+                }
+                v
+            })
+            .collect();
+        let corr0 = rs_matvec3(&a_inv[0], angular_rate_first);
+        for k in 0..3 {
+            b0[0][k] -= 2.0 / dt[0] * corr0[k];
+        }
+        let corr_last = rs_matvec3(&a[m - 1], angular_rates[m - 1]);
+        for k in 0..3 {
+            b0[nb - 1][k] -= 2.0 / dt[m - 1] * corr_last[k];
+        }
+
+        for _ in 0..Self::MAX_ITER {
+            // rotvecs_dot = A · angular_rates over all m entries.
+            let rotvecs_dot: Vec<[f64; 3]> =
+                (0..m).map(|i| rs_matvec3(&a[i], angular_rates[i])).collect();
+            let mut rhs = vec![0.0; sz];
+            for i in 0..nb {
+                let db = rs_angular_accel_nonlinear(rotvecs[i], rotvecs_dot[i]);
+                for k in 0..3 {
+                    rhs[3 * i + k] = b0[i][k] - db[k];
+                }
+            }
+            let sol = solve_linear_system(&mat, &rhs, 1e-12)
+                .expect("RotationSpline banded system is solvable");
+            let mut converged = true;
+            for i in 0..nb {
+                let new_i = [sol[3 * i], sol[3 * i + 1], sol[3 * i + 2]];
+                for k in 0..3 {
+                    let delta = (new_i[k] - angular_rates[i][k]).abs();
+                    if delta >= Self::TOL * (1.0 + new_i[k].abs()) {
+                        converged = false;
+                    }
+                }
+                angular_rates[i] = new_i; // angular_rates[:-1] = angular_rates_new
+            }
+            if converged {
+                break;
+            }
+        }
+
+        let rotvecs_dot: Vec<[f64; 3]> =
+            (0..m).map(|i| rs_matvec3(&a[i], angular_rates[i])).collect();
+        // angular_rates = vstack(angular_rate_first, angular_rates[:-1]).
+        let mut final_rates = Vec::with_capacity(m);
+        final_rates.push(angular_rate_first);
+        for rate in angular_rates.iter().take(m - 1) {
+            final_rates.push(*rate);
+        }
+        (final_rates, rotvecs_dot)
+    }
+
+    // Segment index and local offset for a query time (matches scipy's PPoly +
+    // searchsorted(times, t, 'right') - 1, clamped to a valid segment).
+    fn locate(&self, t: f64) -> (usize, f64) {
+        let n_seg = self.times.len() - 1;
+        let ss = self.times.partition_point(|&x| x <= t);
+        let idx = ss.saturating_sub(1).min(n_seg - 1);
+        (idx, t - self.times[idx])
+    }
+
+    fn eval_rotvec(&self, idx: usize, dx: f64, order: usize) -> [f64; 3] {
+        let c = &self.coeff[idx];
+        let mut out = [0.0; 3];
+        for k in 0..3 {
+            out[k] = match order {
+                0 => ((c[0][k] * dx + c[1][k]) * dx + c[2][k]) * dx + c[3][k],
+                1 => (3.0 * c[0][k] * dx + 2.0 * c[1][k]) * dx + c[2][k],
+                _ => 6.0 * c[0][k] * dx + 2.0 * c[1][k],
+            };
+        }
+        out
+    }
+
+    /// Interpolated rotation at time `t`.
+    #[must_use]
+    pub fn evaluate(&self, t: f64) -> Rotation {
+        let (idx, dx) = self.locate(t);
+        let rotvec = self.eval_rotvec(idx, dx, 0);
+        self.rotations[idx].multiply(&Rotation::from_rotvec(rotvec))
+    }
+
+    /// Angular rate (rad/s) at time `t`.
+    #[must_use]
+    pub fn angular_rate(&self, t: f64) -> [f64; 3] {
+        let (idx, dx) = self.locate(t);
+        let rotvec = self.eval_rotvec(idx, dx, 0);
+        let rotvec_dot = self.eval_rotvec(idx, dx, 1);
+        rs_compute_angular_rate(rotvec, rotvec_dot)
+    }
+
+    /// Angular acceleration (rad/s²) at time `t`.
+    #[must_use]
+    pub fn angular_acceleration(&self, t: f64) -> [f64; 3] {
+        let (idx, dx) = self.locate(t);
+        let rotvec = self.eval_rotvec(idx, dx, 0);
+        let rotvec_dot = self.eval_rotvec(idx, dx, 1);
+        let rotvec_dot_dot = self.eval_rotvec(idx, dx, 2);
+        rs_compute_angular_accel(rotvec, rotvec_dot, rotvec_dot_dot)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rotation_spline_matches_scipy() {
+        let quats = [
+            [0.0, 0.0, 0.0, 1.0],
+            [
+                0.022260026714733816,
+                0.43967973954090955,
+                0.3604234056503559,
+                0.8223631719059994,
+            ],
+            [0.0, 0.0, 0.7071067811865475, 0.7071067811865476],
+            [0.5, 0.5, 0.5, 0.5],
+        ];
+        let rots: Vec<Rotation> = quats.iter().map(|&q| Rotation::from_quat(q)).collect();
+        let times = [0.0, 1.0, 2.5, 4.0];
+        let sp = RotationSpline::new(&times, &rots).unwrap();
+
+        let close3 = |a: [f64; 3], b: [f64; 3], msg: &str| {
+            for k in 0..3 {
+                assert!((a[k] - b[k]).abs() < 1e-8, "{msg}[{k}]: {} vs {}", a[k], b[k]);
+            }
+        };
+        let close_quat = |q: [f64; 4], w: [f64; 4], msg: &str| {
+            // Quaternion sign is arbitrary; compare up to global sign.
+            let same = (0..4).all(|i| (q[i] - w[i]).abs() < 1e-8);
+            let neg = (0..4).all(|i| (q[i] + w[i]).abs() < 1e-8);
+            assert!(same || neg, "{msg}: {q:?} vs {w:?}");
+        };
+
+        // scipy oracle.
+        close_quat(
+            sp.evaluate(0.5).as_quat(),
+            [0.0190532683, 0.2724705434, 0.1865647354, 0.9437109597],
+            "q@0.5",
+        );
+        close3(
+            sp.angular_rate(0.5),
+            [0.0776760538, 1.1108034724, 0.7605840739],
+            "rate@0.5",
+        );
+        close3(
+            sp.angular_acceleration(0.5),
+            [-0.2497892938, -0.6616823691, -0.0200775903],
+            "acc@0.5",
+        );
+        close_quat(
+            sp.evaluate(1.7).as_quat(),
+            [-0.028057948, 0.2710122459, 0.5893995291, 0.7605085859],
+            "q@1.7",
+        );
+        close3(
+            sp.angular_rate(1.7),
+            [-0.7664033976, -0.580715646, 0.3985478359],
+            "rate@1.7",
+        );
+        close3(
+            sp.angular_acceleration(3.0),
+            [1.1515799765, 0.3738062021, -0.3029762586],
+            "acc@3.0",
+        );
+        close_quat(
+            sp.evaluate(3.0).as_quat(),
+            [0.1429451934, 0.0900362009, 0.7085729963, 0.6851163865],
+            "q@3.0",
+        );
+        // At a knot, returns the input rotation.
+        close_quat(sp.evaluate(2.5).as_quat(), quats[2], "knot@2.5");
+    }
 
     #[test]
     fn rigid_transform_matches_scipy() {
