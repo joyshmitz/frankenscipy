@@ -35402,6 +35402,56 @@ pub fn chi2_contingency_with_lambda(
     }
 }
 
+/// Marginal sums of a 2-D contingency table, matching `scipy.stats.contingency.margins`.
+///
+/// Returns `(row_margins, col_margins)`: `row_margins[i]` is the sum of row `i`
+/// (scipy's `a.sum(axis=1)`, shape `(r, 1)`) and `col_margins[j]` is the sum of
+/// column `j` (`a.sum(axis=0)`, shape `(1, c)`).
+#[must_use]
+pub fn margins(observed: &[Vec<f64>]) -> (Vec<f64>, Vec<f64>) {
+    let ncols = observed.first().map_or(0, Vec::len);
+    let row_margins: Vec<f64> = observed.iter().map(|r| r.iter().sum()).collect();
+    let mut col_margins = vec![0.0_f64; ncols];
+    for row in observed {
+        for (j, &v) in row.iter().enumerate() {
+            col_margins[j] += v;
+        }
+    }
+    (row_margins, col_margins)
+}
+
+/// Measure of association between two nominal variables in a contingency table,
+/// matching `scipy.stats.contingency.association`.
+///
+/// `method` is one of `"cramer"` (Cramér's V), `"tschuprow"` (Tschuprow's T), or
+/// `"pearson"` (Pearson's contingency coefficient). The chi-square statistic is
+/// computed via [`chi2_contingency`] (or [`chi2_contingency_with_lambda`] when
+/// `lambda_` is supplied); `phi² = χ²/n`, then `V = √(phi²/min(r-1, c-1))`,
+/// `T = √(phi²/√((r-1)(c-1)))`, `C = √(phi²/(1+phi²))`.
+#[must_use]
+pub fn association(
+    observed: &[Vec<f64>],
+    method: &str,
+    correction: bool,
+    lambda_: Option<f64>,
+) -> f64 {
+    let nrows = observed.len();
+    let ncols = observed.first().map_or(0, Vec::len);
+    let n: f64 = observed.iter().flat_map(|r| r.iter()).sum();
+    let chi2 = match lambda_ {
+        Some(l) => chi2_contingency_with_lambda(observed, correction, l).statistic,
+        None => chi2_contingency(observed, correction).statistic,
+    };
+    let phi2 = chi2 / n;
+    let value = match method {
+        "cramer" => phi2 / ((ncols - 1).min(nrows - 1) as f64),
+        "tschuprow" => phi2 / (((nrows - 1) * (ncols - 1)) as f64).sqrt(),
+        "pearson" => phi2 / (1.0 + phi2),
+        _ => return f64::NAN,
+    };
+    value.sqrt()
+}
+
 /// Result of McNemar's test.
 #[derive(Debug, Clone)]
 pub struct McnemarResult {
@@ -56290,6 +56340,25 @@ mod tests {
         // Length mismatch / empty -> empty results.
         let (e1, e2, e3) = crosstab(&a, &b[..3]);
         assert!(e1.is_empty() && e2.is_empty() && e3.is_empty());
+    }
+
+    #[test]
+    fn association_margins_match_scipy() {
+        let obs = vec![
+            vec![10.0, 20.0, 30.0],
+            vec![6.0, 9.0, 17.0],
+            vec![8.0, 12.0, 11.0],
+        ];
+        assert!((association(&obs, "cramer", false, None) - 0.1039372184708552).abs() < 1e-12);
+        assert!((association(&obs, "tschuprow", false, None) - 0.1039372184708552).abs() < 1e-12);
+        assert!((association(&obs, "pearson", false, None) - 0.1454267818780979).abs() < 1e-12);
+        assert!(
+            (association(&obs, "cramer", false, Some(0.0)) - 0.10450391196795591).abs() < 1e-12
+        );
+
+        let (rows, cols) = margins(&obs);
+        assert_eq!(rows, vec![60.0, 32.0, 31.0]);
+        assert_eq!(cols, vec![24.0, 41.0, 58.0]);
     }
 
     #[test]
