@@ -1403,6 +1403,8 @@ pub enum MultivariateRootMethod {
     Anderson,
     /// Levenberg-Marquardt algorithm (damped least squares).
     Lm,
+    /// Jacobian-free Newton-Krylov method (Newton + finite-difference GMRES).
+    NewtonKrylov,
 }
 
 /// Options for multivariate root finding.
@@ -1451,6 +1453,9 @@ where
             anderson(func, x0, options.tol, options.max_iter, 5, 1.0)
         }
         MultivariateRootMethod::Lm => lm_root(func, x0, options.tol, options.max_iter),
+        MultivariateRootMethod::NewtonKrylov => {
+            newton_krylov(func, x0, options.tol, options.max_iter)
+        }
     }
 }
 
@@ -1837,6 +1842,180 @@ where
 /// (J^T J + λI) dx = -J^T F(x)
 ///
 /// where λ is an adaptive damping parameter. When λ is small, this approaches
+// L2 norm.
+fn nk_norm(v: &[f64]) -> f64 {
+    v.iter().map(|x| x * x).sum::<f64>().sqrt()
+}
+
+fn nk_dot(a: &[f64], b: &[f64]) -> f64 {
+    a.iter().zip(b).map(|(x, y)| x * y).sum()
+}
+
+// Jacobian-free GMRES (non-restarted, up to `max_dim` Arnoldi vectors): solve
+// `A·x = b` where `matvec(v) ≈ A·v`. Returns the approximate solution; for
+// `max_dim >= n` this is the exact solve (the Krylov space spans Rⁿ).
+fn nk_gmres<MV>(matvec: &mut MV, b: &[f64], tol: f64, max_dim: usize) -> Vec<f64>
+where
+    MV: FnMut(&[f64]) -> Vec<f64>,
+{
+    let n = b.len();
+    let bnorm = nk_norm(b);
+    if bnorm == 0.0 {
+        return vec![0.0; n];
+    }
+    let m = max_dim.clamp(1, n);
+    let mut q: Vec<Vec<f64>> = Vec::with_capacity(m + 1);
+    let mut h = vec![vec![0.0_f64; m]; m + 1];
+    let mut cs = vec![0.0_f64; m];
+    let mut sn = vec![0.0_f64; m];
+    let mut g = vec![0.0_f64; m + 1];
+    g[0] = bnorm;
+    q.push(b.iter().map(|v| v / bnorm).collect());
+
+    let mut k_used = 0;
+    for k in 0..m {
+        let mut w = matvec(&q[k]);
+        // Modified Gram-Schmidt against q[0..=k].
+        for i in 0..=k {
+            h[i][k] = nk_dot(&w, &q[i]);
+            for j in 0..n {
+                w[j] -= h[i][k] * q[i][j];
+            }
+        }
+        h[k + 1][k] = nk_norm(&w);
+        let breakdown = h[k + 1][k] <= 1e-14 * bnorm;
+        if !breakdown {
+            let hk = h[k + 1][k];
+            q.push(w.iter().map(|v| v / hk).collect());
+        }
+        // Apply previous Givens rotations to column k.
+        for i in 0..k {
+            let temp = cs[i] * h[i][k] + sn[i] * h[i + 1][k];
+            h[i + 1][k] = -sn[i] * h[i][k] + cs[i] * h[i + 1][k];
+            h[i][k] = temp;
+        }
+        // New Givens rotation to zero h[k+1][k].
+        let r = (h[k][k] * h[k][k] + h[k + 1][k] * h[k + 1][k]).sqrt();
+        if r == 0.0 {
+            k_used = k + 1;
+            break;
+        }
+        cs[k] = h[k][k] / r;
+        sn[k] = h[k + 1][k] / r;
+        h[k][k] = r;
+        h[k + 1][k] = 0.0;
+        g[k + 1] = -sn[k] * g[k];
+        g[k] = cs[k] * g[k];
+        k_used = k + 1;
+        if g[k + 1].abs() <= tol * bnorm || breakdown {
+            break;
+        }
+    }
+
+    // Back-substitution: solve upper-triangular H[0..k_used] y = g[0..k_used].
+    let kk = k_used;
+    let mut y = vec![0.0_f64; kk];
+    for i in (0..kk).rev() {
+        let mut s = g[i];
+        for j in (i + 1)..kk {
+            s -= h[i][j] * y[j];
+        }
+        y[i] = if h[i][i] != 0.0 { s / h[i][i] } else { 0.0 };
+    }
+    let mut x = vec![0.0_f64; n];
+    for i in 0..kk {
+        for j in 0..n {
+            x[j] += y[i] * q[i][j];
+        }
+    }
+    x
+}
+
+/// Solve `F(x) = 0` with a Jacobian-free Newton-Krylov method, matching
+/// `scipy.optimize.newton_krylov(func, x0, f_tol=...)`.
+///
+/// Each Newton step solves `J·dx = −F(x)` with an inner GMRES that approximates
+/// `J·v` by the forward finite difference `(F(x + εv) − F(x))/ε`
+/// (`ε = √ε_mach·(1+‖x‖)/‖v‖`, as in scipy's `KrylovJacobian`), globalized by an
+/// Armijo backtracking line search on `‖F‖`. Terminates when `‖F(x)‖ < f_tol`.
+/// Returns the same [`MultivariateRootResult`] as the other root methods.
+pub fn newton_krylov<F>(
+    func: F,
+    x0: &[f64],
+    f_tol: f64,
+    maxiter: usize,
+) -> Result<MultivariateRootResult, OptError>
+where
+    F: Fn(&[f64]) -> Vec<f64>,
+{
+    validate_multivariate_root_params(x0, f_tol, maxiter)?;
+    let n = x0.len();
+    let mut x = x0.to_vec();
+    let mut fx = evaluate_multivariate_root(&func, &x, n, "newton_krylov")?;
+    let mut nfev = 1usize;
+
+    for iteration in 0..maxiter {
+        let norm_fx = nk_norm(&fx);
+        if norm_fx < f_tol {
+            return Ok(MultivariateRootResult {
+                x,
+                fun: fx,
+                converged: true,
+                message: "newton_krylov converged".to_string(),
+                iterations: iteration,
+                function_calls: nfev,
+            });
+        }
+
+        // Inexact-Newton inner tolerance (Eisenstat-Walker style, capped).
+        let eta = (0.1 * norm_fx).clamp(1e-10, 0.1);
+        let rhs: Vec<f64> = fx.iter().map(|v| -v).collect();
+        let normx = nk_norm(&x);
+        let rdiff = f64::EPSILON.sqrt();
+        let mut matvec = |v: &[f64]| -> Vec<f64> {
+            let normv = nk_norm(v);
+            if normv == 0.0 {
+                return vec![0.0; n];
+            }
+            let eps = rdiff * (1.0 + normx) / normv;
+            let xp: Vec<f64> = x.iter().zip(v).map(|(xi, vi)| xi + eps * vi).collect();
+            let fxp = func(&xp);
+            nfev += 1;
+            fxp.iter().zip(&fx).map(|(a, b)| (a - b) / eps).collect()
+        };
+        let dx = nk_gmres(&mut matvec, &rhs, eta, n);
+
+        // Armijo backtracking line search on ‖F‖.
+        let mut lam = 1.0_f64;
+        let (x_next, fx_next) = loop {
+            let x_new: Vec<f64> = x.iter().zip(&dx).map(|(xi, di)| xi + lam * di).collect();
+            let fx_new = func(&x_new);
+            nfev += 1;
+            let norm_new = nk_norm(&fx_new);
+            if norm_new < (1.0 - 1e-4 * lam) * norm_fx || lam < 1e-10 {
+                break (x_new, fx_new);
+            }
+            lam *= 0.5;
+        };
+        x = x_next;
+        fx = fx_next;
+    }
+
+    let converged = nk_norm(&fx) < f_tol;
+    Ok(MultivariateRootResult {
+        x,
+        fun: fx,
+        converged,
+        message: if converged {
+            "newton_krylov converged".to_string()
+        } else {
+            "newton_krylov reached maxiter without converging".to_string()
+        },
+        iterations: maxiter,
+        function_calls: nfev,
+    })
+}
+
 /// the Gauss-Newton method; when λ is large, it approaches gradient descent.
 ///
 /// # Arguments
@@ -2092,7 +2271,7 @@ mod tests {
     };
     use crate::{
         ConvergenceStatus, RootMethod, RootOptions, bisect, brenth, brentq, halley, newton,
-        newton_scalar, ridder, root_scalar, secant, toms748,
+        newton_krylov, newton_scalar, ridder, root_scalar, secant, toms748,
     };
 
     #[derive(Debug, Serialize)]
@@ -2197,6 +2376,33 @@ mod tests {
             result.function_calls,
             Some(cubic(result.root)),
             301,
+        );
+    }
+
+    #[test]
+    fn newton_krylov_finds_roots() {
+        // F(x) = [x0+x1-3, x0^2+x1^2-5]; scipy newton_krylov from [2,0.5] -> (2,1).
+        let f1 = |x: &[f64]| vec![x[0] + x[1] - 3.0, x[0] * x[0] + x[1] * x[1] - 5.0];
+        let r = newton_krylov(f1, &[2.0, 0.5], 1e-10, 100).unwrap();
+        assert!(r.converged, "{}", r.message);
+        assert!((r.x[0] - 2.0).abs() < 1e-7 && (r.x[1] - 1.0).abs() < 1e-7, "x = {:?}", r.x);
+
+        // Classic 3-equation system; scipy root (0.5, 0, -0.52359878).
+        let f2 = |x: &[f64]| {
+            vec![
+                3.0 * x[0] - (x[1] * x[2]).cos() - 0.5,
+                x[0] * x[0] - 81.0 * (x[1] + 0.1).powi(2) + x[2].sin() + 1.06,
+                (-x[0] * x[1]).exp() + 20.0 * x[2] + (10.0 * std::f64::consts::PI - 3.0) / 3.0,
+            ]
+        };
+        let r2 = newton_krylov(f2, &[0.1, 0.1, -0.1], 1e-10, 200).unwrap();
+        assert!(r2.converged, "{}", r2.message);
+        assert!(
+            (r2.x[0] - 0.5).abs() < 1e-6
+                && r2.x[1].abs() < 1e-6
+                && (r2.x[2] + 0.52359878).abs() < 1e-6,
+            "x2 = {:?}",
+            r2.x
         );
     }
 
