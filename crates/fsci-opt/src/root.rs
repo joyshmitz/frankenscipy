@@ -811,6 +811,186 @@ where
     ))
 }
 
+/// Unified scalar root finder, matching `scipy.optimize.newton(func, x0, ...)`.
+///
+/// Dispatches exactly as scipy does: with `fprime` it runs Newton-Raphson (and
+/// Halley's method when `fprime2` is also given), otherwise the secant method
+/// (starting from `x1` if provided, else `x0·(1+1e-4)` nudged away from zero).
+/// Convergence uses scipy's `np.isclose(p, p_prev, rtol, atol=tol)` test, i.e.
+/// `|p − p_prev| ≤ tol + rtol·|p_prev|`. Defaults: `tol = 1.48e-8`,
+/// `rtol = 0.0`, `maxiter = 50`.
+#[expect(clippy::too_many_arguments)]
+pub fn newton<F>(
+    func: F,
+    x0: f64,
+    fprime: Option<&dyn Fn(f64) -> f64>,
+    fprime2: Option<&dyn Fn(f64) -> f64>,
+    x1: Option<f64>,
+    tol: f64,
+    rtol: f64,
+    maxiter: usize,
+) -> Result<RootResult, OptError>
+where
+    F: Fn(f64) -> f64,
+{
+    if tol <= 0.0 {
+        return Err(OptError::InvalidArgument {
+            detail: format!("tol too small ({tol:e} <= 0)"),
+        });
+    }
+    if maxiter < 1 {
+        return Err(OptError::InvalidArgument {
+            detail: String::from("maxiter must be greater than 0"),
+        });
+    }
+    if !x0.is_finite() {
+        return Err(OptError::NonFiniteInput {
+            detail: String::from("newton: x0 must be finite"),
+        });
+    }
+    let close = |p: f64, prev: f64| (p - prev).abs() <= tol + rtol * prev.abs();
+    let mut funcalls = 0usize;
+
+    if let Some(fp) = fprime {
+        // Newton-Raphson (and Halley when fprime2 is supplied).
+        let mut p0 = x0;
+        let mut method = RootMethod::Newton;
+        for itr in 0..maxiter {
+            let fval = func(p0);
+            funcalls += 1;
+            if fval == 0.0 {
+                return Ok(RootResult::terminal(
+                    method,
+                    p0,
+                    true,
+                    ConvergenceStatus::Success,
+                    itr,
+                    funcalls,
+                    "converged",
+                ));
+            }
+            let fder = fp(p0);
+            funcalls += 1;
+            if fder == 0.0 {
+                return Ok(RootResult::terminal(
+                    method,
+                    p0,
+                    false,
+                    ConvergenceStatus::PrecisionLoss,
+                    itr + 1,
+                    funcalls,
+                    "Derivative was zero.",
+                ));
+            }
+            let mut newton_step = fval / fder;
+            if let Some(fp2) = fprime2 {
+                let fder2 = fp2(p0);
+                funcalls += 1;
+                method = RootMethod::Halley;
+                let adj = newton_step * fder2 / fder / 2.0;
+                if adj.abs() < 1.0 {
+                    newton_step /= 1.0 - adj;
+                }
+            }
+            let p = p0 - newton_step;
+            if close(p, p0) {
+                return Ok(RootResult::terminal(
+                    method,
+                    p,
+                    true,
+                    ConvergenceStatus::Success,
+                    itr + 1,
+                    funcalls,
+                    "converged",
+                ));
+            }
+            p0 = p;
+        }
+        return Ok(RootResult::terminal(
+            method,
+            p0,
+            false,
+            ConvergenceStatus::MaxIterations,
+            maxiter,
+            funcalls,
+            "Failed to converge",
+        ));
+    }
+
+    // Secant method.
+    let method = RootMethod::Secant;
+    let mut p0 = x0;
+    let mut p1 = match x1 {
+        Some(x1v) => {
+            if x1v == x0 {
+                return Err(OptError::InvalidArgument {
+                    detail: String::from("x1 and x0 must be different"),
+                });
+            }
+            x1v
+        }
+        None => {
+            let eps = 1e-4;
+            let mut p1 = x0 * (1.0 + eps);
+            p1 += if p1 >= 0.0 { eps } else { -eps };
+            p1
+        }
+    };
+    let mut q0 = func(p0);
+    funcalls += 1;
+    let mut q1 = func(p1);
+    funcalls += 1;
+    if q1.abs() < q0.abs() {
+        std::mem::swap(&mut p0, &mut p1);
+        std::mem::swap(&mut q0, &mut q1);
+    }
+    let mut p = p1;
+    for itr in 0..maxiter {
+        if q1 == q0 {
+            p = (p1 + p0) / 2.0;
+            return Ok(RootResult::terminal(
+                method,
+                p,
+                false,
+                ConvergenceStatus::PrecisionLoss,
+                itr + 1,
+                funcalls,
+                "Tolerance reached.",
+            ));
+        }
+        if q1.abs() > q0.abs() {
+            p = (-q0 / q1 * p1 + p0) / (1.0 - q0 / q1);
+        } else {
+            p = (-q1 / q0 * p0 + p1) / (1.0 - q1 / q0);
+        }
+        if close(p, p1) {
+            return Ok(RootResult::terminal(
+                method,
+                p,
+                true,
+                ConvergenceStatus::Success,
+                itr + 1,
+                funcalls,
+                "converged",
+            ));
+        }
+        p0 = p1;
+        q0 = q1;
+        p1 = p;
+        q1 = func(p1);
+        funcalls += 1;
+    }
+    Ok(RootResult::terminal(
+        method,
+        p,
+        false,
+        ConvergenceStatus::MaxIterations,
+        maxiter,
+        funcalls,
+        "Failed to converge",
+    ))
+}
+
 fn require_bracket(bracket: Option<(f64, f64)>) -> Result<(f64, f64), OptError> {
     bracket.ok_or_else(|| OptError::InvalidArgument {
         detail: String::from("bracket is required for bracketing root methods"),
@@ -1911,8 +2091,8 @@ mod tests {
         lm_root, root,
     };
     use crate::{
-        ConvergenceStatus, RootMethod, RootOptions, bisect, brenth, brentq, halley, newton_scalar,
-        ridder, root_scalar, secant, toms748,
+        ConvergenceStatus, RootMethod, RootOptions, bisect, brenth, brentq, halley, newton,
+        newton_scalar, ridder, root_scalar, secant, toms748,
     };
 
     #[derive(Debug, Serialize)]
@@ -2018,6 +2198,39 @@ mod tests {
             Some(cubic(result.root)),
             301,
         );
+    }
+
+    #[test]
+    fn newton_unified_matches_scipy() {
+        // f(x) = x^3 - 2x - 5, root ~2.0945514815423265.
+        let f = |x: f64| x * x * x - 2.0 * x - 5.0;
+        let fp = |x: f64| 3.0 * x * x - 2.0;
+        let fp2 = |x: f64| 6.0 * x;
+        let root = 2.0945514815423265_f64;
+
+        // Newton-Raphson: scipy 4 iters, 8 funcalls.
+        let r = newton(f, 2.0, Some(&fp), None, None, 1.48e-8, 0.0, 50).unwrap();
+        assert!(r.converged && r.method == RootMethod::Newton);
+        assert!((r.root - root).abs() < 1e-12);
+        assert_eq!((r.iterations, r.function_calls), (4, 8));
+
+        // Halley: scipy 3 iters, 9 funcalls.
+        let r = newton(f, 2.0, Some(&fp), Some(&fp2), None, 1.48e-8, 0.0, 50).unwrap();
+        assert!(r.converged && r.method == RootMethod::Halley);
+        assert!((r.root - root).abs() < 1e-12);
+        assert_eq!((r.iterations, r.function_calls), (3, 9));
+
+        // Secant: scipy 5 iters, 6 funcalls.
+        let r = newton(f, 2.0, None, None, None, 1.48e-8, 0.0, 50).unwrap();
+        assert!(r.converged && r.method == RootMethod::Secant);
+        assert!((r.root - root).abs() < 1e-12);
+        assert_eq!((r.iterations, r.function_calls), (5, 6));
+
+        // Secant on cos(x) - x: scipy root 0.7390851332151601, 5 iters, 6 funcalls.
+        let g = |x: f64| x.cos() - x;
+        let r = newton(g, 0.5, None, None, None, 1.48e-8, 0.0, 50).unwrap();
+        assert!((r.root - 0.7390851332151601).abs() < 1e-12);
+        assert_eq!((r.iterations, r.function_calls), (5, 6));
     }
 
     #[test]
