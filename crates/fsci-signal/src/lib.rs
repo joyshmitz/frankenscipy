@@ -7169,6 +7169,44 @@ pub type SosSection = [f64; 6];
 /// Matches `scipy.signal.tf2zpk(b, a)`.
 ///
 /// Finds zeros (roots of b) and poles (roots of a) via companion matrix eigenvalues.
+/// Normalize the coefficients of a transfer function `(b, a)`.
+///
+/// Matches the 1-D form of `scipy.signal.normalize(b, a)`. Leading exact zeros
+/// in the denominator `a` are trimmed; both polynomials are then divided by the
+/// leading denominator coefficient so the result has `a[0] == 1`. Leading
+/// near-zero entries (`|·| <= 1e-14`) of the numerator are trimmed as well,
+/// keeping at least one coefficient.
+pub fn normalize(b: &[f64], a: &[f64]) -> Result<(Vec<f64>, Vec<f64>), SignalError> {
+    if a.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "denominator a must be non-empty".to_string(),
+        ));
+    }
+    if a.iter().all(|&v| v == 0.0) {
+        return Err(SignalError::InvalidArgument(
+            "denominator must have at least one nonzero element".to_string(),
+        ));
+    }
+    // Trim leading exact zeros in the denominator (np.trim_zeros, 'f').
+    let den_start = a.iter().position(|&v| v != 0.0).unwrap();
+    let den_trim = &a[den_start..];
+    let a0 = den_trim[0];
+    let den: Vec<f64> = den_trim.iter().map(|&v| v / a0).collect();
+    let mut num: Vec<f64> = b.iter().map(|&v| v / a0).collect();
+    if num.is_empty() {
+        num.push(0.0);
+    }
+    // Trim leading near-zero numerator coefficients, leaving at least one.
+    let mut lead = 0usize;
+    while lead < num.len() - 1 && num[lead].abs() <= 1e-14 {
+        lead += 1;
+    }
+    if lead > 0 {
+        num.drain(0..lead);
+    }
+    Ok((num, den))
+}
+
 pub fn tf2zpk(b: &[f64], a: &[f64]) -> Result<ZpkCoeffs, SignalError> {
     if b.is_empty() || a.is_empty() {
         return Err(SignalError::InvalidArgument(
@@ -17187,6 +17225,28 @@ mod tests {
         assert_close(zpk.zeros_re[0], 0.5, 1e-10, "zero");
         assert_close(zpk.poles_re[0], 0.9, 1e-10, "pole");
         assert_close(zpk.gain, 1.0, 1e-10, "gain");
+    }
+
+    #[test]
+    fn normalize_matches_scipy() {
+        // Reference values from scipy.signal.normalize.
+        let (nb, na) = normalize(&[1.0, 2.0, 3.0], &[2.0, 4.0, 6.0]).unwrap();
+        assert_eq!(nb, vec![0.5, 1.0, 1.5]);
+        assert_eq!(na, vec![1.0, 2.0, 3.0]);
+        // Leading zero in numerator is trimmed.
+        let (nb, na) = normalize(&[0.0, 1.0, 2.0], &[1.0, 2.0, 3.0]).unwrap();
+        assert_eq!(nb, vec![1.0, 2.0]);
+        assert_eq!(na, vec![1.0, 2.0, 3.0]);
+        // Leading zeros in denominator are trimmed before normalizing.
+        let (nb, na) = normalize(&[1.0, 2.0], &[0.0, 0.0, 2.0, 4.0]).unwrap();
+        assert_eq!(nb, vec![0.5, 1.0]);
+        assert_eq!(na, vec![1.0, 2.0]);
+        // Multiple leading zeros in numerator collapse to a single coefficient.
+        let (nb, na) = normalize(&[0.0, 0.0, 3.0], &[1.0, 2.0]).unwrap();
+        assert_eq!(nb, vec![3.0]);
+        assert_eq!(na, vec![1.0, 2.0]);
+        // All-zero denominator is rejected.
+        assert!(normalize(&[1.0], &[0.0, 0.0]).is_err());
     }
 
     #[test]
