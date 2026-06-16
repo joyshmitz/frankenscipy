@@ -2630,6 +2630,54 @@ where
     minimize_scalar_bounded(func, (x1, x2), 1e-5, 500).0
 }
 
+/// Unconstrained scalar minimization via Brent's method.
+///
+/// Matches `scipy.optimize.brent(func, brack, tol, maxiter)`, returning the
+/// minimizer. `brack` may be `None` (default, brackets downhill from `(0, 1)`),
+/// a two-element `[xa, xb]` bracketing interval to expand, or a three-element
+/// `[xa, xb, xc]` already-downhill bracket (requires `f(xb) < f(xa)` and
+/// `f(xb) < f(xc)`). The bracket establishes the search bounds, then Brent's
+/// parabolic-interpolation method locates the minimum within them.
+pub fn brent<F>(
+    func: F,
+    brack: Option<&[f64]>,
+    tol: f64,
+    maxiter: usize,
+) -> Result<f64, OptError>
+where
+    F: Fn(f64) -> f64,
+{
+    // Establish the bracketing triple (xa, xc) bounding the minimum.
+    let (xa, xc) = match brack {
+        None => {
+            let (a, _b, c, ..) = bracket(&func, 0.0, 1.0);
+            (a, c)
+        }
+        Some(b) if b.len() == 2 => {
+            let (a, _b, c, ..) = bracket(&func, b[0], b[1]);
+            (a, c)
+        }
+        Some(b) if b.len() == 3 => {
+            let (fa, fb, fc) = (func(b[0]), func(b[1]), func(b[2]));
+            if !(fb < fa && fb < fc) {
+                return Err(OptError::InvalidArgument {
+                    detail: "brack must be a downhill bracket: f(xb) < f(xa) and f(xb) < f(xc)"
+                        .to_string(),
+                });
+            }
+            (b[0], b[2])
+        }
+        Some(_) => {
+            return Err(OptError::InvalidArgument {
+                detail: "brack must have 2 or 3 elements".to_string(),
+            });
+        }
+    };
+    let lo = xa.min(xc);
+    let hi = xa.max(xc);
+    Ok(brent_minimize(&func, lo, hi, tol, maxiter).0)
+}
+
 /// Run [`minimize`] with a fixed method and return the minimiser `xopt`, the
 /// first output of the legacy `scipy.optimize.fmin_*` family.
 fn fmin_with_method<F>(fun: F, x0: &[f64], method: OptimizeMethod) -> Result<Vec<f64>, OptError>
@@ -6014,6 +6062,31 @@ mod tests {
             (x_opt - 2.0).abs() < 1e-8,
             "brent (x-2)^2 minimum at {x_opt}, expected ~2"
         );
+    }
+
+    #[test]
+    fn brent_matches_scipy() {
+        use crate::brent;
+        // scipy.optimize.brent references.
+        let x = brent(|x| (x - 2.0).powi(2), None, 1.48e-8, 500).unwrap();
+        assert!((x - 2.0).abs() < 1e-6, "quad default {x} vs 2");
+        let x = brent(|x| (x - 2.0).powi(2), Some(&[0.0, 1.0]), 1.48e-8, 500).unwrap();
+        assert!((x - 2.0).abs() < 1e-6, "quad brack2 {x} vs 2");
+        let x = brent(|x| x.cos(), Some(&[0.0, 2.0]), 1.48e-8, 500).unwrap();
+        assert!((x - std::f64::consts::PI).abs() < 1e-6, "cos {x} vs pi");
+        let x = brent(|x| (x + 3.5).powi(2) + 1.0, Some(&[-10.0, -1.0]), 1.48e-8, 500).unwrap();
+        assert!((x + 3.5).abs() < 1e-6, "shifted {x} vs -3.5");
+        let x = brent(
+            |x| (x - 1.3).powi(4) + 0.5 * x,
+            Some(&[0.0, 2.0]),
+            1.48e-8,
+            500,
+        )
+        .unwrap();
+        assert!((x - 0.8000000000410487).abs() < 1e-5, "quartic {x} vs 0.8");
+        // Non-downhill 3-point bracket and wrong-length bracket are rejected.
+        assert!(brent(|x| (x - 2.0).powi(2), Some(&[0.0, 0.0, 4.0]), 1.48e-8, 500).is_err());
+        assert!(brent(|x| (x - 2.0).powi(2), Some(&[0.0]), 1.48e-8, 500).is_err());
     }
 
     #[test]
