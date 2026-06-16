@@ -1,6 +1,7 @@
 // Correctness + A/B for interp_decomp (randomized, SRHT-sketched column pivoting) vs a
 // deterministic full-matrix column-pivoted ID. Both reconstruct a low-rank A as
 // A[:,skeleton]·proj; the randomized version pivots a tiny sketch instead of all m rows.
+#![allow(clippy::needless_range_loop)]
 use fsci_linalg::{PinvOptions, interp_decomp, matmul, pinv};
 use std::hint::black_box;
 use std::time::Instant;

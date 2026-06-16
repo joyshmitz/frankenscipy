@@ -15597,6 +15597,9 @@ pub fn vnorm(v: &[f64]) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    // Matrix reconstruction/parity checks legitimately index by (i, j); golden
+    // fixtures occasionally coincide with named constants like 1/√2.
+    #![allow(clippy::needless_range_loop, clippy::approx_constant)]
     use super::*;
 
     #[test]
@@ -24922,6 +24925,7 @@ mod tests {
 
 #[cfg(test)]
 mod proptest_tests {
+    #![allow(clippy::needless_range_loop)]
     use super::*;
     use proptest::prelude::*;
 

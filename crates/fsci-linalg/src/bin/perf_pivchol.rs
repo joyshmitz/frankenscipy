@@ -1,6 +1,7 @@
 // Correctness + A/B for pivoted_cholesky (low-rank, O(n·k²)) vs full cholesky (O(n³)) on a
 // numerically rank-r PSD matrix. The pivoted factor must reconstruct A to the noise floor;
 // the speedup is the wall-clock ratio.
+#![allow(clippy::needless_range_loop)]
 use fsci_linalg::{DecompOptions, cholesky, pivoted_cholesky};
 use std::hint::black_box;
 use std::time::Instant;

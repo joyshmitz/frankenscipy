@@ -2,6 +2,7 @@
 // vs the naive EXPLICIT application — materialise the dense sketch matrix S (sketch×m,
 // one ±1 per column) and compute S·A via matmul, O(sketch·m·n). Same sketch, so the
 // outputs agree to rounding; the speedup is why scipy.linalg ships the implicit form.
+#![allow(clippy::needless_range_loop)]
 use fsci_linalg::{clarkson_woodruff_transform, matmul};
 use std::hint::black_box;
 use std::time::Instant;

@@ -1,5 +1,6 @@
 //! expm_frechet / expm_cond probe vs scipy.linalg.
 //! Lines: `tag,...`. The python comparator uses the same matrices.
+#![allow(clippy::type_complexity)]
 use fsci_linalg::{DecompOptions, expm_cond, expm_frechet};
 
 fn main() {
