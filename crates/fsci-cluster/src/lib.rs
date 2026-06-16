@@ -4046,6 +4046,51 @@ pub fn cut_tree(
     Ok(out)
 }
 
+/// Convert a SciPy/FrankenSciPy linkage matrix to MATLAB(TM) format.
+///
+/// Matches `scipy.cluster.hierarchy.to_mlab_linkage(Z)`: 1-indexes the two
+/// cluster columns and drops the cluster-size column, yielding `[c1+1, c2+1, d]`.
+pub fn to_mlab_linkage(z: &[[f64; 4]]) -> Vec<[f64; 3]> {
+    z.iter()
+        .map(|row| [row[0] + 1.0, row[1] + 1.0, row[2]])
+        .collect()
+}
+
+/// Convert a MATLAB(TM) linkage matrix to SciPy/FrankenSciPy format.
+///
+/// Matches `scipy.cluster.hierarchy.from_mlab_linkage(Z)`: 0-indexes the cluster
+/// columns and appends the recomputed cluster-size column.
+pub fn from_mlab_linkage(z: &[[f64; 3]]) -> Vec<[f64; 4]> {
+    let n = z.len() + 1;
+    let mut sizes = vec![0usize; 2 * n - 1];
+    for slot in sizes.iter_mut().take(n) {
+        *slot = 1;
+    }
+    let mut out = Vec::with_capacity(z.len());
+    for (i, row) in z.iter().enumerate() {
+        let c1 = (row[0] - 1.0) as usize;
+        let c2 = (row[1] - 1.0) as usize;
+        let count = sizes[c1] + sizes[c2];
+        sizes[n + i] = count;
+        out.push([row[0] - 1.0, row[1] - 1.0, row[2], count as f64]);
+    }
+    out
+}
+
+/// Whether `r` is a valid inconsistency matrix.
+///
+/// Matches `scipy.cluster.hierarchy.is_valid_im(R)`: non-empty, all entries
+/// finite, link heights/means (col 0) and standard deviations (col 1)
+/// non-negative, and link counts (col 2) at least 1.
+pub fn is_valid_im(r: &[[f64; 4]]) -> bool {
+    if r.is_empty() {
+        return false;
+    }
+    r.iter().all(|row| {
+        row.iter().all(|v| v.is_finite()) && row[0] >= 0.0 && row[1] >= 0.0 && row[2] >= 1.0
+    })
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // DBSCAN
 // ══════════════════════════════════════════════════════════════════════
@@ -7896,6 +7941,16 @@ mod tests {
         assert!(!is_isomorphic(&[1, 2, 1], &[1, 2, 3]));
         assert!(correspond(&z, &(0..10).map(|i| i as f64).collect::<Vec<_>>()));
         assert!(!correspond(&z, &[0.0, 1.0, 2.0]));
+
+        // to_mlab / from_mlab round-trip and scipy values.
+        let ml = to_mlab_linkage(&z);
+        let exp_ml = [[1.0, 2.0, 1.0], [3.0, 4.0, 1.5], [6.0, 5.0, 2.0], [7.0, 8.0, 3.0]];
+        assert_eq!(ml, exp_ml);
+        let back = from_mlab_linkage(&ml);
+        assert_eq!(back, z);
+        assert!(is_valid_im(&r));
+        assert!(!is_valid_im(&[]));
+        assert!(!is_valid_im(&[[1.0, -1.0, 2.0, 0.0]])); // negative std
     }
 
     #[test]
