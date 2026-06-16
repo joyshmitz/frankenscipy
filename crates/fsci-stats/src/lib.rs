@@ -7217,6 +7217,67 @@ impl Wishart {
     }
 }
 
+/// The inverse Wishart distribution, matching `scipy.stats.invwishart(df, scale)`.
+pub struct InvWishart {
+    df: f64,
+    scale: Vec<Vec<f64>>,
+    chol_v: Vec<Vec<f64>>,
+    ln_det_v: f64,
+    p: usize,
+}
+
+impl InvWishart {
+    /// Create the distribution with `df` degrees of freedom and `p×p` positive
+    /// definite `scale` matrix.
+    pub fn new(df: f64, scale: &[Vec<f64>]) -> Result<Self, StatsError> {
+        let p = scale.len();
+        if p == 0 {
+            return Err(StatsError::InvalidArgument("scale must be non-empty".to_string()));
+        }
+        let chol_v = cholesky_decompose(scale)?;
+        let ln_det_v = 2.0 * (0..p).map(|i| chol_v[i][i].ln()).sum::<f64>();
+        Ok(Self { df, scale: scale.to_vec(), chol_v, ln_det_v, p })
+    }
+
+    /// Log probability density function at a `p×p` symmetric positive-definite
+    /// matrix `x`.
+    pub fn logpdf(&self, x: &[Vec<f64>]) -> Result<f64, StatsError> {
+        let p = self.p;
+        if x.len() != p || x.iter().any(|r| r.len() != p) {
+            return Err(StatsError::InvalidArgument("x dimension must match scale".to_string()));
+        }
+        let chol_x = cholesky_decompose(x)?;
+        let ln_det_x = 2.0 * (0..p).map(|i| chol_x[i][i].ln()).sum::<f64>();
+        // tr(V·X⁻¹) = ‖L_X⁻¹ · chol(V)‖_F² (V = chol_v·chol_vᵀ).
+        let mut tr = 0.0_f64;
+        for j in 0..p {
+            let col: Vec<f64> = (0..p).map(|i| self.chol_v[i][j]).collect();
+            let w = solve_lower_triangular(&chol_x, &col)?;
+            tr += w.iter().map(|&v| v * v).sum::<f64>();
+        }
+        let (n, pf) = (self.df, p as f64);
+        Ok(n / 2.0 * self.ln_det_v
+            - n * pf / 2.0 * 2.0_f64.ln()
+            - ln_multivariate_gamma(p, n / 2.0)
+            - (n + pf + 1.0) / 2.0 * ln_det_x
+            - 0.5 * tr)
+    }
+
+    /// Probability density function.
+    pub fn pdf(&self, x: &[Vec<f64>]) -> Result<f64, StatsError> {
+        Ok(self.logpdf(x)?.exp())
+    }
+
+    /// Mean `scale / (df − p − 1)` (defined for `df > p + 1`).
+    pub fn mean(&self) -> Vec<Vec<f64>> {
+        let denom = self.df - self.p as f64 - 1.0;
+        self.scale
+            .iter()
+            .map(|row| row.iter().map(|&v| v / denom).collect())
+            .collect()
+    }
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Von Mises Distribution
 // ══════════════════════════════════════════════════════════════════════
@@ -42368,6 +42429,15 @@ mod tests {
         let best = ppcc_max(&x, (0.0, 1.0));
         assert!((best - 0.35779018).abs() < 1e-4, "ppcc_max {best}");
         assert!(ppcc_plot(&x, 2.0, -2.0, 5).is_err());
+    }
+
+    #[test]
+    fn invwishart_matches_scipy() {
+        let d = InvWishart::new(5.0, &[vec![1.0, 0.3], vec![0.3, 2.0]]).unwrap();
+        let x = vec![vec![2.0, 0.5], vec![0.5, 3.0]];
+        assert!((d.logpdf(&x).unwrap() - (-10.28443372594021)).abs() < 1e-10);
+        assert!((d.pdf(&x).unwrap() - 3.416073318749046e-05).abs() < 1e-16);
+        assert_eq!(d.mean(), vec![vec![0.5, 0.15], vec![0.15, 1.0]]);
     }
 
     #[test]
