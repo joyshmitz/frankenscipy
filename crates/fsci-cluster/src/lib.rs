@@ -4219,6 +4219,185 @@ pub fn median(data: &[Vec<f64>]) -> Result<Vec<[f64; 4]>, ClusterError> {
     linkage(data, LinkageMethod::Median)
 }
 
+/// Disjoint-set (union-find) data structure for incremental connectivity
+/// queries, matching `scipy.cluster.hierarchy.DisjointSet`.
+///
+/// `find` (via [`DisjointSet::find`]) uses path halving; [`DisjointSet::merge`]
+/// uses merge-by-size with insertion-order tie-breaking (the earlier-inserted
+/// root becomes the parent on a size tie). Elements are kept in insertion order
+/// for iteration and subset enumeration.
+#[derive(Debug, Clone, Default)]
+pub struct DisjointSet<T: Clone + Eq + std::hash::Hash> {
+    n_subsets: usize,
+    order: Vec<T>,
+    indices: std::collections::HashMap<T, usize>,
+    parents: std::collections::HashMap<T, T>,
+    sizes: std::collections::HashMap<T, usize>,
+    // Circular linked list linking the elements of each subset.
+    nbrs: std::collections::HashMap<T, T>,
+}
+
+impl<T: Clone + Eq + std::hash::Hash> DisjointSet<T> {
+    /// Create an empty disjoint set.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            n_subsets: 0,
+            order: Vec::new(),
+            indices: std::collections::HashMap::new(),
+            parents: std::collections::HashMap::new(),
+            sizes: std::collections::HashMap::new(),
+            nbrs: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Create a disjoint set from an iterator of elements (each its own subset).
+    pub fn from_elements<I: IntoIterator<Item = T>>(elements: I) -> Self {
+        let mut ds = Self::new();
+        for x in elements {
+            ds.add(x);
+        }
+        ds
+    }
+
+    /// Number of distinct subsets.
+    #[must_use]
+    pub fn n_subsets(&self) -> usize {
+        self.n_subsets
+    }
+
+    /// Total number of elements.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.order.len()
+    }
+
+    /// Whether the set is empty.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.order.is_empty()
+    }
+
+    /// Whether `x` is present.
+    #[must_use]
+    pub fn contains(&self, x: &T) -> bool {
+        self.indices.contains_key(x)
+    }
+
+    /// Elements in insertion order.
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        self.order.iter()
+    }
+
+    /// Add element `x` (a no-op if already present).
+    pub fn add(&mut self, x: T) {
+        if self.indices.contains_key(&x) {
+            return;
+        }
+        let idx = self.order.len();
+        self.indices.insert(x.clone(), idx);
+        self.parents.insert(x.clone(), x.clone());
+        self.sizes.insert(x.clone(), 1);
+        self.nbrs.insert(x.clone(), x.clone());
+        self.order.push(x);
+        self.n_subsets += 1;
+    }
+
+    /// Find the root element of `x` (path halving). Returns `None` if absent.
+    pub fn find(&mut self, x: &T) -> Option<T> {
+        if !self.indices.contains_key(x) {
+            return None;
+        }
+        let mut cur = x.clone();
+        loop {
+            let parent = self.parents[&cur].clone();
+            if self.indices[&cur] == self.indices[&parent] {
+                return Some(cur);
+            }
+            // Path halving: parents[cur] = parents[parent]; cur = that.
+            let grandparent = self.parents[&parent].clone();
+            self.parents.insert(cur.clone(), grandparent.clone());
+            cur = grandparent;
+        }
+    }
+
+    /// Merge the subsets of `x` and `y`. Returns `true` if they were distinct.
+    pub fn merge(&mut self, x: &T, y: &T) -> bool {
+        let (xr, yr) = match (self.find(x), self.find(y)) {
+            (Some(a), Some(b)) => (a, b),
+            _ => return false,
+        };
+        if self.indices[&xr] == self.indices[&yr] {
+            return false;
+        }
+        // Merge by size; on a tie, the earlier-inserted root is the parent.
+        let (parent, child) = if (self.sizes[&xr], self.indices[&yr])
+            < (self.sizes[&yr], self.indices[&xr])
+        {
+            (yr, xr)
+        } else {
+            (xr, yr)
+        };
+        self.parents.insert(child.clone(), parent.clone());
+        self.sizes
+            .insert(parent.clone(), self.sizes[&parent] + self.sizes[&child]);
+        let np = self.nbrs[&parent].clone();
+        let nc = self.nbrs[&child].clone();
+        self.nbrs.insert(parent, nc);
+        self.nbrs.insert(child, np);
+        self.n_subsets -= 1;
+        true
+    }
+
+    /// Whether `x` and `y` are in the same subset.
+    pub fn connected(&mut self, x: &T, y: &T) -> bool {
+        match (self.find(x), self.find(y)) {
+            (Some(a), Some(b)) => self.indices[&a] == self.indices[&b],
+            _ => false,
+        }
+    }
+
+    /// The elements of the subset containing `x`, in internal traversal order.
+    #[must_use]
+    pub fn subset(&self, x: &T) -> Vec<T> {
+        if !self.indices.contains_key(x) {
+            return Vec::new();
+        }
+        let mut result = vec![x.clone()];
+        let mut nxt = self.nbrs[x].clone();
+        while self.indices[&nxt] != self.indices[x] {
+            result.push(nxt.clone());
+            nxt = self.nbrs[&nxt].clone();
+        }
+        result
+    }
+
+    /// The size of the subset containing `x`.
+    pub fn subset_size(&mut self, x: &T) -> usize {
+        match self.find(x) {
+            Some(r) => self.sizes[&r],
+            None => 0,
+        }
+    }
+
+    /// All subsets, ordered by the insertion order of their first-seen element.
+    #[must_use]
+    pub fn subsets(&self) -> Vec<Vec<T>> {
+        let mut result = Vec::new();
+        let mut visited: std::collections::HashSet<T> = std::collections::HashSet::new();
+        for x in &self.order {
+            if !visited.contains(x) {
+                let xset = self.subset(x);
+                for e in &xset {
+                    visited.insert(e.clone());
+                }
+                result.push(xset);
+            }
+        }
+        result
+    }
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // DBSCAN
 // ══════════════════════════════════════════════════════════════════════
@@ -8056,6 +8235,36 @@ mod tests {
         assert_eq!(ward(&data).unwrap(), linkage(&data, LinkageMethod::Ward).unwrap());
         assert_eq!(centroid(&data).unwrap(), linkage(&data, LinkageMethod::Centroid).unwrap());
         assert_eq!(median(&data).unwrap(), linkage(&data, LinkageMethod::Median).unwrap());
+    }
+
+    #[test]
+    fn disjoint_set_matches_scipy() {
+        let mut d = DisjointSet::from_elements([1, 2, 3, 4, 5]);
+        assert!(d.merge(&1, &2));
+        assert!(d.merge(&3, &4));
+        assert!(d.merge(&4, &5));
+        assert!(!d.merge(&5, &5));
+        // Roots (scipy: d[2]==1, d[5]==3).
+        assert_eq!(d.find(&2), Some(1));
+        assert_eq!(d.find(&5), Some(3));
+        assert!(d.connected(&1, &2));
+        assert!(!d.connected(&1, &5));
+        let mut s4 = d.subset(&4);
+        s4.sort_unstable();
+        assert_eq!(s4, vec![3, 4, 5]);
+        assert_eq!(d.subset_size(&4), 3);
+        let subsets: Vec<Vec<i32>> = d
+            .subsets()
+            .into_iter()
+            .map(|mut s| {
+                s.sort_unstable();
+                s
+            })
+            .collect();
+        assert_eq!(subsets, vec![vec![1, 2], vec![3, 4, 5]]);
+        assert_eq!(d.n_subsets(), 2);
+        assert_eq!(d.len(), 5);
+        assert!(d.contains(&3) && !d.contains(&9));
     }
 
     #[test]
