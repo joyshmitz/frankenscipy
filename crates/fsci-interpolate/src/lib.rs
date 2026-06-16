@@ -1420,6 +1420,232 @@ impl FloaterHormannInterpolator {
     }
 }
 
+/// The minimal-singular-value right vector(s) of `a`, summed over a degenerate
+/// minimum and normalized by `√count` (the AAA weight selection of scipy). Falls
+/// back to a column-normalized SVD when `a` is severely ill-conditioned, exactly
+/// as scipy does.
+fn aaa_min_singular_vector(a: &[Vec<f64>]) -> Result<Vec<f64>, InterpError> {
+    fn min_sv(res: &fsci_linalg::SvdResult) -> Vec<f64> {
+        let smin = res.s.iter().copied().fold(f64::INFINITY, f64::min);
+        let ncol = res.vt[0].len();
+        let mut wj = vec![0.0_f64; ncol];
+        let mut cnt = 0.0_f64;
+        for (i, &si) in res.s.iter().enumerate() {
+            if si == smin {
+                cnt += 1.0;
+                for c in 0..ncol {
+                    wj[c] += res.vt[i][c];
+                }
+            }
+        }
+        let scale = cnt.sqrt();
+        for w in &mut wj {
+            *w /= scale;
+        }
+        wj
+    }
+    let opt = fsci_linalg::DecompOptions::default();
+    let res = fsci_linalg::svd(a, opt).map_err(|e| InterpError::InvalidArgument {
+        detail: format!("AAA: SVD failed: {e}"),
+    })?;
+    let cond_tol = 1.0 / (3.0 * f64::EPSILON);
+    let last = res.s.len() - 1;
+    if res.s[last] > 0.0 && res.s[0] / res.s[last] > cond_tol {
+        // Severely ill-conditioned: re-solve on column-normalized columns.
+        let nrows = a.len();
+        let ncol = a[0].len();
+        let colnorm: Vec<f64> = (0..ncol)
+            .map(|c| (0..nrows).map(|r| a[r][c] * a[r][c]).sum::<f64>().sqrt())
+            .collect();
+        let an: Vec<Vec<f64>> = a
+            .iter()
+            .map(|row| (0..ncol).map(|c| row[c] / colnorm[c]).collect())
+            .collect();
+        let res2 = fsci_linalg::svd(&an, opt).map_err(|e| InterpError::InvalidArgument {
+            detail: format!("AAA: SVD failed: {e}"),
+        })?;
+        let wj = min_sv(&res2);
+        return Ok((0..ncol).map(|c| wj[c] / colnorm[c]).collect());
+    }
+    Ok(min_sv(&res))
+}
+
+/// Adaptive Antoulas–Anderson (AAA) barycentric rational approximation.
+///
+/// Matches `scipy.interpolate.AAA(x, y)` for real 1-D data: greedily adds the
+/// support point where the current approximant is worst and solves a
+/// least-squares (SVD) problem for the barycentric weights each step, until the
+/// residual `‖y − r‖∞` drops below `rtol·‖y‖∞` (`rtol` defaults to `eps^0.75`,
+/// `max_terms` caps the support set). The approximant is evaluated in barycentric
+/// form and interpolates the data at the support points.
+///
+/// The Froissart-doublet `clean_up` post-process (scipy's `clean_up=True`) is not
+/// performed; the result equals scipy's for well-conditioned data, where no
+/// spurious poles arise.
+pub struct Aaa {
+    support_points: Vec<f64>,
+    support_values: Vec<f64>,
+    weights: Vec<f64>,
+}
+
+impl Aaa {
+    pub fn new(
+        z: &[f64],
+        f: &[f64],
+        rtol: Option<f64>,
+        max_terms: usize,
+    ) -> Result<Self, InterpError> {
+        let m_total = z.len();
+        if m_total != f.len() {
+            return Err(InterpError::LengthMismatch {
+                x_len: m_total,
+                y_len: f.len(),
+            });
+        }
+        if m_total == 0 {
+            return Err(InterpError::TooFewPoints {
+                minimum: 1,
+                actual: 0,
+            });
+        }
+        if max_terms < 1 {
+            return Err(InterpError::InvalidArgument {
+                detail: "max_terms must be >= 1".to_string(),
+            });
+        }
+        let rtol = rtol.unwrap_or(f64::EPSILON.powf(0.75));
+        let fmax = f.iter().fold(0.0_f64, |a, &v| a.max(v.abs()));
+        let atol = rtol * fmax;
+        let max_terms = max_terms.min(m_total);
+
+        let mut mask = vec![true; m_total];
+        let mean_f = f.iter().sum::<f64>() / m_total as f64;
+        let mut r = vec![mean_f; m_total];
+        let mut cols_c: Vec<Vec<f64>> = Vec::new(); // Cauchy columns, each length m_total
+        let mut zj: Vec<f64> = Vec::new();
+        let mut fj: Vec<f64> = Vec::new();
+        let mut weights: Vec<f64> = Vec::new();
+
+        for m in 0..max_terms {
+            // Select the worst-approximated remaining point (first max on ties).
+            let mut jj = usize::MAX;
+            let mut best = -1.0_f64;
+            for i in 0..m_total {
+                if mask[i] {
+                    let e = (f[i] - r[i]).abs();
+                    if e > best {
+                        best = e;
+                        jj = i;
+                    }
+                }
+            }
+            zj.push(z[jj]);
+            fj.push(f[jj]);
+            let cm: Vec<f64> = (0..m_total).map(|i| 1.0 / (z[i] - z[jj])).collect();
+            cols_c.push(cm);
+            mask[jj] = false;
+
+            // Loewner submatrix over remaining rows, columns 0..=m.
+            let ncol = m + 1;
+            let masked_rows: Vec<usize> = (0..m_total).filter(|&i| mask[i]).collect();
+            let asub: Vec<Vec<f64>> = masked_rows
+                .iter()
+                .map(|&i| (0..ncol).map(|c| (f[i] - fj[c]) * cols_c[c][i]).collect())
+                .collect();
+            let wj = aaa_min_singular_vector(&asub)?;
+
+            // Rational approximant R at every point (= f at support points).
+            let mut new_r = vec![0.0_f64; m_total];
+            for i in 0..m_total {
+                let mut nn = 0.0_f64;
+                let mut dd = 0.0_f64;
+                let mut at_support = false;
+                for c in 0..ncol {
+                    if wj[c] == 0.0 {
+                        continue;
+                    }
+                    let cc = cols_c[c][i];
+                    if !cc.is_finite() {
+                        at_support = true;
+                        break;
+                    }
+                    nn += cc * wj[c] * fj[c];
+                    dd += cc * wj[c];
+                }
+                new_r[i] = if at_support || !dd.is_finite() || dd == 0.0 {
+                    f[i]
+                } else {
+                    nn / dd
+                };
+            }
+            r = new_r;
+            weights = wj;
+
+            let max_err = (0..m_total)
+                .map(|i| (f[i] - r[i]).abs())
+                .fold(0.0_f64, f64::max);
+            if max_err <= atol {
+                break;
+            }
+        }
+
+        // Drop any zero-weight support points (scipy does the same).
+        let mut sp = Vec::new();
+        let mut sv = Vec::new();
+        let mut w = Vec::new();
+        for c in 0..weights.len() {
+            if weights[c] != 0.0 {
+                sp.push(zj[c]);
+                sv.push(fj[c]);
+                w.push(weights[c]);
+            }
+        }
+        Ok(Self {
+            support_points: sp,
+            support_values: sv,
+            weights: w,
+        })
+    }
+
+    pub fn support_points(&self) -> &[f64] {
+        &self.support_points
+    }
+    pub fn support_values(&self) -> &[f64] {
+        &self.support_values
+    }
+    pub fn weights(&self) -> &[f64] {
+        &self.weights
+    }
+
+    pub fn eval(&self, x: f64) -> f64 {
+        if !x.is_finite() {
+            return f64::NAN;
+        }
+        for (&zk, &fk) in self.support_points.iter().zip(self.support_values.iter()) {
+            if x == zk {
+                return fk;
+            }
+        }
+        let mut num = 0.0_f64;
+        let mut den = 0.0_f64;
+        for ((&zk, &fk), &wk) in self
+            .support_points
+            .iter()
+            .zip(self.support_values.iter())
+            .zip(self.weights.iter())
+        {
+            let t = wk / (x - zk);
+            num += t * fk;
+            den += t;
+        }
+        num / den
+    }
+
+    pub fn eval_many(&self, xs: &[f64]) -> Vec<f64> {
+        xs.iter().map(|&x| self.eval(x)).collect()
+    }
+}
+
 /// One-shot barycentric interpolation: build a `BarycentricInterpolator`
 /// from `(xi, yi)` and evaluate it at every point in `x_new`.
 ///
@@ -7613,6 +7839,39 @@ mod tests {
             err,
             InterpError::InvalidArgument { detail } if detail == "0<=der=3<=k=2 must hold"
         ));
+    }
+
+    #[test]
+    fn aaa_matches_scipy() {
+        let z: Vec<f64> = (0..100).map(|i| -1.0 + i as f64 * (2.0 / 99.0)).collect();
+        let xs = [-0.3_f64, 0.1, 0.77];
+
+        // Rational function: AAA recovers it exactly with 3 support points.
+        let fr: Vec<f64> = z.iter().map(|&x| 1.0 / (x + 1.5) + 0.5 / (x - 2.0)).collect();
+        let a = Aaa::new(&z, &fr, None, 100).unwrap();
+        assert_eq!(a.support_points().len(), 3, "rational nterms");
+        let exp = [0.615942029, 0.3618421053, 0.0340245693];
+        for (x, e) in xs.iter().zip(exp.iter()) {
+            assert!((a.eval(*x) - e).abs() < 1e-8, "rational eval {} vs {e}", a.eval(*x));
+        }
+        // exact at support points
+        for (&zk, &fk) in a.support_points().iter().zip(a.support_values().iter()) {
+            assert!((a.eval(zk) - fk).abs() < 1e-12);
+        }
+
+        // exp(x): 6 support points, values match scipy.
+        let fe: Vec<f64> = z.iter().map(|&x| x.exp()).collect();
+        let ae = Aaa::new(&z, &fe, None, 100).unwrap();
+        assert_eq!(ae.support_points().len(), 6, "exp nterms");
+        let expe = [0.7408182207, 1.1051709181, 2.1597662538];
+        for (x, e) in xs.iter().zip(expe.iter()) {
+            assert!((ae.eval(*x) - e).abs() < 1e-7, "exp eval {} vs {e}", ae.eval(*x));
+        }
+
+        // Runge function: 3 support points.
+        let fg: Vec<f64> = z.iter().map(|&x| 1.0 / (1.0 + 25.0 * x * x)).collect();
+        let ag = Aaa::new(&z, &fg, None, 100).unwrap();
+        assert_eq!(ag.support_points().len(), 3, "runge nterms");
     }
 
     #[test]
