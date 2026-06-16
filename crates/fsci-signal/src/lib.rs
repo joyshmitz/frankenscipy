@@ -8027,6 +8027,78 @@ pub fn freqs_zpk(zpk: &ZpkCoeffs, w: &[f64]) -> Result<FreqzResult, SignalError>
     })
 }
 
+/// Find a logarithmically-spaced array of frequencies covering the "interesting"
+/// part of an analog filter's response.
+///
+/// Matches `scipy.signal.findfreqs(num, den, N)` (the default `kind='ba'`, where
+/// `num`/`den` are transfer-function coefficients highest-degree-first). Returns
+/// `N` log-spaced frequencies bracketing the poles and zeros. Uses round-half-to-
+/// even (matching NumPy) for the decade bounds.
+pub fn findfreqs(num: &[f64], den: &[f64], n: usize) -> Result<Vec<f64>, SignalError> {
+    let (ep_re, ep_im) = poly_roots(den)?;
+    let (tz_re, tz_im) = poly_roots(num)?;
+    let (ep_re, ep_im) = if ep_re.is_empty() {
+        (vec![-1000.0], vec![0.0])
+    } else {
+        (ep_re, ep_im)
+    };
+
+    // ez = poles with imag >= 0, then zeros with |z| < 1e5 and imag >= 0.
+    let mut ez_re = Vec::new();
+    let mut ez_im = Vec::new();
+    for (i, &im) in ep_im.iter().enumerate() {
+        if im >= 0.0 {
+            ez_re.push(ep_re[i]);
+            ez_im.push(im);
+        }
+    }
+    for (i, &im) in tz_im.iter().enumerate() {
+        let mag = (tz_re[i] * tz_re[i] + im * im).sqrt();
+        if mag < 1e5 && im >= 0.0 {
+            ez_re.push(tz_re[i]);
+            ez_im.push(im);
+        }
+    }
+    if ez_re.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "findfreqs: no poles or zeros to bracket".to_string(),
+        ));
+    }
+
+    let mut hmax = f64::NEG_INFINITY;
+    let mut lmin = f64::INFINITY;
+    for (i, &re) in ez_re.iter().enumerate() {
+        let im = ez_im[i];
+        let mag = (re * re + im * im).sqrt();
+        let integ = if mag < 1e-10 { 1.0 } else { 0.0 };
+        let hval = 3.0 * (re + integ).abs() + 1.5 * im;
+        if hval > hmax {
+            hmax = hval;
+        }
+        let lval = (re + integ).abs() + 2.0 * im;
+        if lval < lmin {
+            lmin = lval;
+        }
+    }
+    let hfreq = (hmax.log10() + 0.5).round_ties_even();
+    let lfreq = ((0.1 * lmin).log10() - 0.5).round_ties_even();
+
+    if n == 0 {
+        return Ok(Vec::new());
+    }
+    let w = (0..n)
+        .map(|i| {
+            let frac = if n == 1 {
+                lfreq
+            } else {
+                lfreq + (hfreq - lfreq) * i as f64 / (n - 1) as f64
+            };
+            10.0_f64.powf(frac)
+        })
+        .collect();
+    Ok(w)
+}
+
 /// Compute the frequency response of an analog filter.
 ///
 /// Matches `scipy.signal.freqs(b, a, worN)`.
@@ -16231,6 +16303,34 @@ mod tests {
         )
         .expect("iirfilter butter");
         assert_ba_close(&direct, &dispatch, 1e-10, "butter");
+    }
+
+    #[test]
+    fn findfreqs_matches_scipy() {
+        let chk = |got: &[f64], exp: &[f64], msg: &str| {
+            assert_eq!(got.len(), exp.len(), "{msg} len");
+            for (g, e) in got.iter().zip(exp) {
+                assert!((g - e).abs() < 1e-7 * (1.0 + e.abs()), "{msg}: {g} vs {e}");
+            }
+        };
+        // scipy.signal.findfreqs docstring example.
+        let w = findfreqs(&[1.0, 0.0], &[1.0, 8.0, 25.0], 9).unwrap();
+        chk(
+            &w,
+            &[1e-2, 3.16227766e-2, 1e-1, 3.16227766e-1, 1.0, 3.16227766, 1e1, 3.16227766e1, 1e2],
+            "docstring",
+        );
+        // Additional references from scipy.signal.findfreqs.
+        chk(
+            &findfreqs(&[1.0, 2.0], &[1.0, 3.0, 2.0], 5).unwrap(),
+            &[0.01, 0.05623413, 0.31622777, 1.77827941, 10.0],
+            "ba1",
+        );
+        chk(
+            &findfreqs(&[1.0, 0.0, 1.0], &[1.0, 2.0, 3.0, 4.0], 5).unwrap(),
+            &[0.1, 0.31622777, 1.0, 3.16227766, 10.0],
+            "ba2",
+        );
     }
 
     #[test]
