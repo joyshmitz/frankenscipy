@@ -140,6 +140,59 @@ pub(crate) fn dlarf_right(c: &mut [Vec<f64>], v_tail: &[f64], tau: f64) {
     }
 }
 
+/// Assemble the `m × m` cosine-sine middle factor `CS` from the angle vector
+/// `theta`, matching the construction in scipy's `_cossin` (default
+/// `swap_sign=False`: the `-S`/`-I` blocks sit in the upper-right).
+///
+/// `p`, `q` are the row/column counts of the upper-left block `X11`; `r =
+/// min(p, q, m-p, m-q)` is the number of nontrivial angles (`theta.len() == r`).
+/// The identity-block ranks are `n11 = min(p,q)-r`, `n12 = min(p,m-q)-r`,
+/// `n21 = min(m-p,q)-r`, `n22 = min(m-p,m-q)-r`.
+pub(crate) fn build_cs_matrix(theta: &[f64], p: usize, q: usize, m: usize) -> Vec<Vec<f64>> {
+    let r = p.min(q).min(m - p).min(m - q);
+    let n11 = p.min(q) - r;
+    let n12 = p.min(m - q) - r;
+    let n21 = (m - p).min(q) - r;
+    let n22 = (m - p).min(m - q) - r;
+    let mut cs = vec![vec![0.0_f64; m]; m];
+
+    // Leading identity block.
+    for i in 0..n11 {
+        cs[i][i] = 1.0;
+    }
+    // Upper-right -I block.
+    {
+        let xs = n11 + r;
+        let ys = n11 + n21 + n22 + 2 * r;
+        for i in 0..n12 {
+            cs[xs + i][ys + i] = -1.0;
+        }
+    }
+    // Lower-left I block.
+    {
+        let xs = p + n22 + r;
+        let ys = n11 + r;
+        for i in 0..n21 {
+            cs[xs + i][ys + i] = 1.0;
+        }
+    }
+    // Middle I block.
+    for i in 0..n22 {
+        cs[p + i][q + i] = 1.0;
+    }
+    // Cosine diagonals (upper-left and lower-right).
+    for (i, &t) in theta.iter().enumerate().take(r) {
+        cs[n11 + i][n11 + i] = t.cos();
+        cs[p + n22 + i][n11 + r + n21 + n22 + i] = t.cos();
+    }
+    // Sine blocks: -S (upper-right) and +S (lower-left).
+    for (i, &t) in theta.iter().enumerate().take(r) {
+        cs[n11 + i][n11 + n21 + n22 + r + i] = -t.sin();
+        cs[p + n22 + i][n11 + i] = t.sin();
+    }
+    cs
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -176,6 +229,64 @@ mod tests {
         check_reflector(&[5.0]); // n=1
         check_reflector(&[-5.0]); // n=1, negative
         check_reflector(&[2.0, 1e-20]); // tail negligible vs alpha
+    }
+
+    fn assert_cs(theta: &[f64], p: usize, q: usize, m: usize, want_flat: &[f64]) {
+        let cs = build_cs_matrix(theta, p, q, m);
+        for i in 0..m {
+            for j in 0..m {
+                let w = want_flat[i * m + j];
+                assert!(
+                    (cs[i][j] - w).abs() < 1e-6,
+                    "CS[{i}][{j}] = {} vs {w}",
+                    cs[i][j]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn build_cs_matrix_matches_scipy() {
+        // scipy.linalg.cossin CS oracles (separate=False, swap_sign=False).
+        assert_cs(
+            &[0.27701, 0.340936, 1.327589, 1.483862],
+            4,
+            4,
+            8,
+            &[
+                0.961877, 0.0, 0.0, 0.0, -0.273481, 0.0, 0.0, 0.0, 0.0, 0.942442, 0.0, 0.0, 0.0,
+                -0.334369, 0.0, 0.0, 0.0, 0.0, 0.240817, 0.0, 0.0, 0.0, -0.970571, 0.0, 0.0, 0.0,
+                0.0, 0.086825, 0.0, 0.0, 0.0, -0.996224, 0.273481, 0.0, 0.0, 0.0, 0.961877, 0.0,
+                0.0, 0.0, 0.0, 0.334369, 0.0, 0.0, 0.0, 0.942442, 0.0, 0.0, 0.0, 0.0, 0.970571, 0.0,
+                0.0, 0.0, 0.240817, 0.0, 0.0, 0.0, 0.0, 0.996224, 0.0, 0.0, 0.0, 0.086825,
+            ],
+        );
+        // Unbalanced p<q.
+        assert_cs(
+            &[0.042939, 0.54894, 0.872127],
+            3,
+            5,
+            8,
+            &[
+                0.999078, 0.0, 0.0, 0.0, 0.0, -0.042926, 0.0, 0.0, 0.0, 0.853078, 0.0, 0.0, 0.0,
+                0.0, -0.521784, 0.0, 0.0, 0.0, 0.643199, 0.0, 0.0, 0.0, 0.0, -0.765699, 0.042926,
+                0.0, 0.0, 0.0, 0.0, 0.999078, 0.0, 0.0, 0.0, 0.521784, 0.0, 0.0, 0.0, 0.0, 0.853078,
+                0.0, 0.0, 0.0, 0.765699, 0.0, 0.0, 0.0, 0.0, 0.643199, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0,
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0,
+            ],
+        );
+        // Smaller unbalanced p=2,q=3,m=6.
+        assert_cs(
+            &[0.193469, 0.956576],
+            2,
+            3,
+            6,
+            &[
+                0.981343, 0.0, 0.0, 0.0, -0.192264, 0.0, 0.0, 0.576321, 0.0, 0.0, 0.0, -0.817223,
+                0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.192264, 0.0, 0.0, 0.0, 0.981343, 0.0, 0.0, 0.817223,
+                0.0, 0.0, 0.0, 0.576321, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0,
+            ],
+        );
     }
 
     #[test]
