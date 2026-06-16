@@ -7544,6 +7544,46 @@ impl GenInvGauss {
     }
 }
 
+/// Stable log of the modified Bessel function of the second kind `ln K_v(z)`,
+/// `z > 0`, via fsci-special's exponentially-scaled `kve` (`K_{-v}=K_v`).
+fn ln_bessel_k(v: f64, z: f64) -> f64 {
+    fsci_special::bessel::kve_scalar(v.abs(), z).ln() - z
+}
+
+/// The generalized hyperbolic distribution, matching
+/// `scipy.stats.genhyperbolic(p, a, b)` (`|b| < a`).
+pub struct GenHyperbolic {
+    p: f64,
+    a: f64,
+    b: f64,
+}
+
+impl GenHyperbolic {
+    /// Create the distribution with tail/shape `p`, `a` and skew `b` (`|b| < a`).
+    pub fn new(p: f64, a: f64, b: f64) -> Self {
+        Self { p, a, b }
+    }
+
+    /// Log probability density at `x`.
+    pub fn logpdf(&self, x: f64) -> f64 {
+        let (p, a, b) = (self.p, self.a, self.b);
+        let t = (a * a - b * b).sqrt();
+        let r = (1.0 + x * x).sqrt();
+        (p / 2.0) * (a * a - b * b).ln()
+            - 0.5 * (2.0 * std::f64::consts::PI).ln()
+            - (p - 0.5) * a.ln()
+            - ln_bessel_k(p, t)
+            + (p - 0.5) * r.ln()
+            + ln_bessel_k(p - 0.5, a * r)
+            + b * x
+    }
+
+    /// Probability density at `x`.
+    pub fn pdf(&self, x: f64) -> f64 {
+        self.logpdf(x).exp()
+    }
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Von Mises Distribution
 // ══════════════════════════════════════════════════════════════════════
@@ -42695,6 +42735,13 @@ mod tests {
         let best = ppcc_max(&x, (0.0, 1.0));
         assert!((best - 0.35779018).abs() < 1e-4, "ppcc_max {best}");
         assert!(ppcc_plot(&x, 2.0, -2.0, 5).is_err());
+    }
+
+    #[test]
+    fn genhyperbolic_matches_scipy() {
+        let d = GenHyperbolic::new(0.5, 1.5, 0.5);
+        assert!((d.pdf(0.5) - 0.40507662291930885).abs() < 1e-10, "pdf {}", d.pdf(0.5));
+        assert!((d.logpdf(0.5) - (-0.9036790373768666)).abs() < 1e-9, "logpdf {}", d.logpdf(0.5));
     }
 
     #[test]
