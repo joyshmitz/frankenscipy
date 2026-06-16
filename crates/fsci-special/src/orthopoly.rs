@@ -2958,6 +2958,1070 @@ pub fn ellip_normal(h2: f64, k2: f64, n: u32, p: u32) -> f64 {
     8.0 * val
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// Spheroidal radial functions of the SECOND kind (pro_rad2 / obl_rad2).
+//
+// Faithful port of Zhang & Jin `specfun.f` (RSWFP/RSWFO drivers and their
+// helpers SDMN, SCKB, KMN, RMN2L, RMN2SP, RMN2SO, QSTAR, CBK, GMN, SPHY,
+// LPMNS, LQMNS), kept in specfun's own coefficient normalization. The
+// first-kind radial function used by RMN2SO is taken from the verified
+// [`spheroidal_rad1`]. Fortran 1-based arrays are mirrored with 1-based `Vec`s
+// (index 0 unused) so the index arithmetic matches the reference line-for-line.
+// ───────────────────────────────────────────────────────────────────────────
+
+/// SDMN recurrence factor `(m+k-1)(m+k+ip-1.5)/((k-1)(k+ip-1.5))` (k ≥ 2).
+fn sdmn_fac(m: i64, ip: i64, k: i64) -> f64 {
+    (m + k - 1) as f64 * (m as f64 + k as f64 + ip as f64 - 1.5)
+        / (k - 1) as f64
+        / (k as f64 + ip as f64 - 1.5)
+}
+
+/// Spherical Bessel functions of the second kind `y_n(x)` and `y_n'(x)` for
+/// `n = 0..=nmax` (specfun SPHY, forward recurrence).
+fn sphy_arr(nmax: i64, x: f64) -> (Vec<f64>, Vec<f64>) {
+    let nu = nmax.max(1) as usize;
+    let mut sy = vec![0.0_f64; nu + 1];
+    let mut dy = vec![0.0_f64; nu + 1];
+    if x < 1.0e-60 {
+        for k in 0..=nu {
+            sy[k] = -1.0e300;
+            dy[k] = 1.0e300;
+        }
+        return (sy, dy);
+    }
+    sy[0] = -x.cos() / x;
+    dy[0] = (x.sin() + x.cos() / x) / x;
+    if nmax >= 1 {
+        sy[1] = (sy[0] - x.sin()) / x;
+        for k in 2..=nu {
+            sy[k] = (2.0 * k as f64 - 1.0) * sy[k - 1] / x - sy[k - 2];
+        }
+        for k in 1..=nu {
+            dy[k] = sy[k - 1] - (k as f64 + 1.0) * sy[k] / x;
+        }
+    }
+    (sy, dy)
+}
+
+/// Associated Legendre functions `P_n^m(x)` and `P_n^{m'}(x)` for fixed order
+/// `m`, degrees `n = 0..=nbig` (specfun LPMNS).
+fn lpmns_arr(m: i64, nbig: i64, x: f64) -> (Vec<f64>, Vec<f64>) {
+    let nn = nbig.max(0) as usize;
+    let mut pm = vec![0.0_f64; nn + 1];
+    let mut pd = vec![0.0_f64; nn + 1];
+    if x.abs() == 1.0 {
+        for k in 0..=nn as i64 {
+            if m == 0 {
+                pm[k as usize] = 1.0;
+                pd[k as usize] = 0.5 * k as f64 * (k as f64 + 1.0);
+                if x < 0.0 {
+                    pm[k as usize] *= if k % 2 == 0 { 1.0 } else { -1.0 };
+                    pd[k as usize] *= if (k + 1) % 2 == 0 { 1.0 } else { -1.0 };
+                }
+            } else if m == 1 {
+                pd[k as usize] = 1.0e300;
+            } else if m == 2 {
+                pd[k as usize] =
+                    -0.25 * (k as f64 + 2.0) * (k as f64 + 1.0) * k as f64 * (k as f64 - 1.0);
+                if x < 0.0 {
+                    pd[k as usize] *= if (k + 1) % 2 == 0 { 1.0 } else { -1.0 };
+                }
+            }
+        }
+        return (pm, pd);
+    }
+    let x0 = (1.0 - x * x).abs();
+    let mut pm0 = 1.0_f64;
+    let mut pmk = pm0;
+    for k in 1..=m {
+        pmk = (2.0 * k as f64 - 1.0) * x0.sqrt() * pm0;
+        pm0 = pmk;
+    }
+    let mut pm1 = (2.0 * m as f64 + 1.0) * x * pm0;
+    pm[m as usize] = pmk;
+    if (m + 1) as usize <= nn {
+        pm[(m + 1) as usize] = pm1;
+    }
+    for k in (m + 2)..=(nn as i64) {
+        let pm2 = ((2.0 * k as f64 - 1.0) * x * pm1 - (k as f64 + m as f64 - 1.0) * pmk)
+            / (k - m) as f64;
+        pm[k as usize] = pm2;
+        pmk = pm1;
+        pm1 = pm2;
+    }
+    pd[0] = ((1.0 - m as f64) * pm[1.min(nn)] - x * pm[0]) / (x * x - 1.0);
+    for k in 1..=nn {
+        pd[k] = (k as f64 * x * pm[k] - (k as f64 + m as f64) * pm[k - 1]) / (x * x - 1.0);
+    }
+    let sgn = if m % 2 == 0 { 1.0 } else { -1.0 };
+    for k in 1..=nn {
+        pm[k] *= sgn;
+        pd[k] *= sgn;
+    }
+    (pm, pd)
+}
+
+/// Associated Legendre functions of the second kind `Q_n^m(x)` and `Q_n^{m'}(x)`
+/// for fixed order `m`, degrees `n = 0..=nbig` (specfun LQMNS).
+fn lqmns_arr(m: i64, nbig: i64, x: f64) -> (Vec<f64>, Vec<f64>) {
+    let nn = nbig.max(0) as usize;
+    let mut qm = vec![0.0_f64; nn + 1];
+    let mut qd = vec![0.0_f64; nn + 1];
+    if x.abs() == 1.0 {
+        for k in 0..=nn {
+            qm[k] = 1.0e300;
+            qd[k] = 1.0e300;
+        }
+        return (qm, qd);
+    }
+    let ls = if x.abs() > 1.0 { -1.0 } else { 1.0 };
+    let xq = (ls * (1.0 - x * x)).sqrt();
+    let q0 = 0.5 * ((x + 1.0) / (x - 1.0)).abs().ln();
+    let q00 = q0;
+    let q10 = -1.0 / xq;
+    let q01 = x * q0 - 1.0;
+    let q11 = -ls * xq * (q0 + x / (1.0 - x * x));
+    let mut qf0 = q00;
+    let mut qf1 = q10;
+    let mut qm0 = 0.0_f64;
+    for k in 2..=m {
+        qm0 = -2.0 * (k - 1) as f64 / xq * x * qf1 - ls * (k - 1) as f64 * (2 - k) as f64 * qf0;
+        qf0 = qf1;
+        qf1 = qm0;
+    }
+    if m == 0 {
+        qm0 = q00;
+    }
+    if m == 1 {
+        qm0 = q10;
+    }
+    qm[0] = qm0;
+    if x.abs() < 1.0001 {
+        if m == 0 && nbig > 0 {
+            qf0 = q00;
+            qf1 = q01;
+            for k in 2..=nn {
+                let qf2 = ((2.0 * k as f64 - 1.0) * x * qf1 - (k as f64 - 1.0) * qf0) / k as f64;
+                qm[k] = qf2;
+                qf0 = qf1;
+                qf1 = qf2;
+            }
+        }
+        let mut qg0 = q01;
+        let mut qg1 = q11;
+        let mut qm1 = 0.0_f64;
+        for k in 2..=m {
+            qm1 = -2.0 * (k - 1) as f64 / xq * x * qg1 - ls * k as f64 * (3 - k) as f64 * qg0;
+            qg0 = qg1;
+            qg1 = qm1;
+        }
+        if m == 0 {
+            qm1 = q01;
+        }
+        if m == 1 {
+            qm1 = q11;
+        }
+        if nn >= 1 {
+            qm[1] = qm1;
+        }
+        if m == 1 && nbig > 1 {
+            let mut qh0 = q10;
+            let mut qh1 = q11;
+            for k in 2..=nn {
+                let qh2 = ((2.0 * k as f64 - 1.0) * x * qh1 - k as f64 * qh0) / (k as f64 - 1.0);
+                qm[k] = qh2;
+                qh0 = qh1;
+                qh1 = qh2;
+            }
+        } else if m >= 2 {
+            let mut qg0 = q00;
+            let mut qg1 = q01;
+            let mut qh0 = q10;
+            let mut qh1 = q11;
+            for l in 2..=(nn as i64) {
+                let q0l = ((2.0 * l as f64 - 1.0) * x * qg1 - (l as f64 - 1.0) * qg0) / l as f64;
+                let q1l = ((2.0 * l as f64 - 1.0) * x * qh1 - l as f64 * qh0) / (l as f64 - 1.0);
+                let mut qf0 = q0l;
+                let mut qf1 = q1l;
+                let mut qmk = 0.0_f64;
+                for k in 2..=m {
+                    qmk = -2.0 * (k - 1) as f64 / xq * x * qf1
+                        - ls * (k + l - 1) as f64 * (l + 2 - k) as f64 * qf0;
+                    qf0 = qf1;
+                    qf1 = qmk;
+                }
+                qm[l as usize] = qmk;
+                qg0 = qg1;
+                qg1 = q0l;
+                qh0 = qh1;
+                qh1 = q1l;
+            }
+        }
+    } else {
+        let km = if x.abs() > 1.1 {
+            40 + m + nbig
+        } else {
+            (40 + m + nbig) * (-1.0 - 1.8 * (x - 1.0).ln()) as i64
+        };
+        let mut qf2 = 0.0_f64;
+        let mut qf1 = 1.0_f64;
+        let mut qf0 = 0.0_f64;
+        for k in (0..=km).rev() {
+            qf0 = ((2.0 * k as f64 + 3.0) * x * qf1 - (k as f64 + 2.0 - m as f64) * qf2)
+                / (k as f64 + m as f64 + 1.0);
+            if k <= nbig {
+                qm[k as usize] = qf0;
+            }
+            qf2 = qf1;
+            qf1 = qf0;
+        }
+        for k in 0..=nn {
+            qm[k] = qm[k] * qm0 / qf0;
+        }
+    }
+    if x.abs() < 1.0 {
+        let sgn = if m % 2 == 0 { 1.0 } else { -1.0 };
+        for k in 0..=nn {
+            qm[k] *= sgn;
+        }
+    }
+    qd[0] = ((1.0 - m as f64) * qm[1.min(nn)] - x * qm[0]) / (x * x - 1.0);
+    for k in 1..=nn {
+        qd[k] = (k as f64 * x * qm[k] - (k as f64 + m as f64) * qm[k - 1]) / (x * x - 1.0);
+    }
+    (qm, qd)
+}
+
+/// Number of expansion terms used throughout the specfun spheroidal routines.
+fn spheroidal_nm(m: i64, n: i64, c: f64) -> i64 {
+    25 + (0.5 * (n - m) as f64 + c) as i64
+}
+
+/// SDMN: expansion coefficients `d_k` (specfun normalization). Returns a 1-based
+/// `Vec` with valid entries in `1..=nm` (index 0 unused). `kd = 1` prolate,
+/// `kd = -1` oblate.
+fn sdmn_coef(m: i64, n: i64, c: f64, cv: f64, kd: i64) -> Vec<f64> {
+    let nm = spheroidal_nm(m, n, c);
+    let nmu = nm as usize;
+    let mut df = vec![0.0_f64; nmu + 3];
+    if c < 1.0e-10 {
+        df[((n - m) / 2 + 1) as usize] = 1.0;
+        return df;
+    }
+    let cs = c * c * kd as f64;
+    let ip = (n - m) % 2;
+    let dim = nmu + 2;
+    let mut a = vec![0.0_f64; dim + 2];
+    let mut d = vec![0.0_f64; dim + 2];
+    let mut g = vec![0.0_f64; dim + 2];
+    for i in 1..=(nm + 2) {
+        let k = if ip == 0 { 2 * (i - 1) } else { 2 * i - 1 };
+        let dk0 = (m + k) as f64;
+        let dk1 = (m + k + 1) as f64;
+        let dk2 = (2 * (m + k)) as f64;
+        let d2k = (2 * m + k) as f64;
+        a[i as usize] = (d2k + 2.0) * (d2k + 1.0) / ((dk2 + 3.0) * (dk2 + 5.0)) * cs;
+        d[i as usize] = dk0 * dk1
+            + (2.0 * dk0 * dk1 - 2.0 * (m * m) as f64 - 1.0) / ((dk2 - 1.0) * (dk2 + 3.0)) * cs;
+        g[i as usize] = (k * (k - 1)) as f64 / ((dk2 - 3.0) * (dk2 - 1.0)) * cs;
+    }
+    let mut fs = 1.0_f64;
+    let mut f1 = 0.0_f64;
+    let mut f0 = 1.0e-100;
+    let mut kb = 0i64;
+    let mut fl = 0.0_f64;
+    // df[nm+1] already 0.
+    let mut broke = false;
+    let mut k = nm;
+    while k >= 1 {
+        let ku = k as usize;
+        let f = -((d[ku + 1] - cv) * f0 + a[ku + 1] * f1) / g[ku + 1];
+        if f.abs() > df[ku + 1].abs() {
+            df[ku] = f;
+            f1 = f0;
+            f0 = f;
+            if f.abs() > 1.0e100 {
+                for k1 in ku..=nmu {
+                    df[k1] *= 1.0e-100;
+                }
+                f1 *= 1.0e-100;
+                f0 *= 1.0e-100;
+            }
+        } else {
+            kb = k;
+            fl = df[ku + 1];
+            f1 = 1.0e-100;
+            let mut f2 = -(d[1] - cv) / a[1] * f1;
+            df[1] = f1;
+            if kb == 1 {
+                fs = f2;
+            } else if kb == 2 {
+                df[2] = f2;
+                fs = -((d[2] - cv) * f2 + g[2] * f1) / a[2];
+            } else {
+                df[2] = f2;
+                let mut ff = 0.0_f64;
+                for j in 3..=(kb + 1) {
+                    let ju = j as usize;
+                    ff = -((d[ju - 1] - cv) * f2 + g[ju - 1] * f1) / a[ju - 1];
+                    if j <= kb {
+                        df[ju] = ff;
+                    }
+                    if ff.abs() > 1.0e100 {
+                        for k1 in 1..=ju {
+                            df[k1] *= 1.0e-100;
+                        }
+                        ff *= 1.0e-100;
+                        f2 *= 1.0e-100;
+                    }
+                    f1 = f2;
+                    f2 = ff;
+                }
+                fs = ff;
+            }
+            broke = true;
+            break;
+        }
+        k -= 1;
+    }
+    if !broke {
+        kb = 0;
+    }
+    // Normalization (label 35).
+    let mut su1 = 0.0_f64;
+    let mut r1 = 1.0_f64;
+    for j in (m + ip + 1)..=(2 * (m + ip)) {
+        r1 *= j as f64;
+    }
+    su1 = df[1] * r1;
+    for k in 2..=kb {
+        r1 = -r1 * (k as f64 + m as f64 + ip as f64 - 1.5) / (k as f64 - 1.0);
+        su1 += r1 * df[k as usize];
+    }
+    let mut su2 = 0.0_f64;
+    let mut sw = 0.0_f64;
+    for k in (kb + 1)..=nm {
+        if k != 1 {
+            r1 = -r1 * (k as f64 + m as f64 + ip as f64 - 1.5) / (k as f64 - 1.0);
+        }
+        su2 += r1 * df[k as usize];
+        if (sw - su2).abs() < su2.abs() * 1.0e-14 {
+            break;
+        }
+        sw = su2;
+    }
+    let mut r3 = 1.0_f64;
+    for j in 1..=((m + n + ip) / 2) {
+        r3 *= j as f64 + 0.5 * (n + m + ip) as f64;
+    }
+    let mut r4 = 1.0_f64;
+    for j in 1..=((n - m - ip) / 2) {
+        r4 = -4.0 * r4 * j as f64;
+    }
+    let s0 = r3 / (fl * (su1 / fs) + su2) / r4;
+    for k in 1..=kb {
+        df[k as usize] = fl / fs * s0 * df[k as usize];
+    }
+    for k in (kb + 1)..=nm {
+        df[k as usize] = s0 * df[k as usize];
+    }
+    df
+}
+
+/// SCKB: expansion coefficients `c_{2k}` from the `d_k` (1-based, valid 1..=nm).
+fn sckb_coef(m: i64, n: i64, c: f64, df: &[f64]) -> Vec<f64> {
+    let cc = if c <= 1.0e-10 { 1.0e-10 } else { c };
+    let nm = spheroidal_nm(m, n, cc);
+    let nmu = nm as usize;
+    let ip = (n - m) % 2;
+    let reg = if m + nm > 80 { 1.0e-200 } else { 1.0 };
+    let mut ck = vec![0.0_f64; nmu + 3];
+    let mut fac = -(0.5_f64.powi(m as i32));
+    let mut sw = 0.0_f64;
+    for k in 0..=(nm - 1) {
+        fac = -fac;
+        let i1 = 2 * k + ip + 1;
+        let mut r = reg;
+        for i in i1..=(i1 + 2 * m - 1) {
+            r *= i as f64;
+        }
+        let i2 = k + m + ip;
+        for i in i2..=(i2 + k - 1) {
+            r *= i as f64 + 0.5;
+        }
+        let mut sum = r * df[(k + 1) as usize];
+        for i in (k + 1)..=nm {
+            let d1 = 2.0 * i as f64 + ip as f64;
+            let d2 = 2.0 * m as f64 + d1;
+            let d3 = (i + m + ip) as f64 - 0.5;
+            r = r * d2 * (d2 - 1.0) * i as f64 * (d3 + k as f64)
+                / (d1 * (d1 - 1.0) * (i - k) as f64 * d3);
+            sum += r * df[(i + 1) as usize];
+            if (sw - sum).abs() < sum.abs() * 1.0e-14 {
+                break;
+            }
+            sw = sum;
+        }
+        let mut r1 = reg;
+        for i in 2..=(m + k) {
+            r1 *= i as f64;
+        }
+        ck[(k + 1) as usize] = fac * sum / r1;
+    }
+    ck
+}
+
+/// KMN: joining factors and the auxiliary `D_n` coefficients. Returns
+/// `(dn, ck1, ck2)` with `dn` 1-based. For `kd=1` only `ck2` is meaningful; for
+/// `kd=-1` only `ck1`.
+fn kmn_coef(m: i64, n: i64, c: f64, cv: f64, kd: i64, df: &[f64]) -> (Vec<f64>, f64, f64) {
+    let nm = spheroidal_nm(m, n, c);
+    let nn = nm + m;
+    let nnu = nn as usize;
+    let cs = c * c * kd as f64;
+    let ip = (n - m) % 2;
+    let dim = nnu + 4;
+    let mut u = vec![0.0_f64; dim];
+    let mut v = vec![0.0_f64; dim];
+    let mut w = vec![0.0_f64; dim];
+    let mut dn = vec![0.0_f64; dim];
+    let mut tp = vec![0.0_f64; dim];
+    let mut rk = vec![0.0_f64; dim];
+    for i in 1..=(nn + 3) {
+        let k = if ip == 0 { -2 * (i - 1) } else { -(2 * i - 3) };
+        let gk0 = 2.0 * m as f64 + k as f64;
+        let gk1 = (m + k) as f64 * (m + k + 1) as f64;
+        let gk2 = 2.0 * (m + k) as f64 - 1.0;
+        let gk3 = 2.0 * (m + k) as f64 + 3.0;
+        u[i as usize] = gk0 * (gk0 - 1.0) * cs / (gk2 * (gk2 + 2.0));
+        v[i as usize] = gk1 - cv + (2.0 * (gk1 - (m * m) as f64) - 1.0) * cs / (gk2 * gk3);
+        w[i as usize] = (k + 1) as f64 * (k + 2) as f64 * cs / ((gk2 + 2.0) * gk3);
+    }
+    for k in 1..=m {
+        let mut t = v[(m + 1) as usize];
+        for l in 0..=(m - k - 1) {
+            t = v[(m - l) as usize] - w[(m - l + 1) as usize] * u[(m - l) as usize] / t;
+        }
+        rk[k as usize] = -u[k as usize] / t;
+    }
+    let mut r = 1.0_f64;
+    for k in 1..=m {
+        r *= rk[k as usize];
+        dn[k as usize] = df[1] * r;
+    }
+    tp[nnu] = v[nnu + 1];
+    let mut kk = nn - 1;
+    while kk >= m + 1 {
+        let ku = kk as usize;
+        tp[ku] = v[ku + 1] - w[ku + 2] * u[ku + 1] / tp[ku + 1];
+        if kk > m + 1 {
+            rk[ku] = -u[ku] / tp[ku];
+        }
+        kk -= 1;
+    }
+    let dnp = if m == 0 { df[1] } else { dn[m as usize] };
+    let sgn_ip = if ip % 2 == 0 { 1.0 } else { -1.0 };
+    dn[(m + 1) as usize] = sgn_ip * dnp * cs
+        / ((2.0 * m as f64 - 1.0) * (2.0 * m as f64 + 1.0 - 4.0 * ip as f64) * tp[(m + 1) as usize]);
+    for k in (m + 2)..=nn {
+        dn[k as usize] = rk[k as usize] * dn[(k - 1) as usize];
+    }
+    let mut r1 = 1.0_f64;
+    for j in 1..=((n + m + ip) / 2) {
+        r1 *= j as f64 + 0.5 * (n + m + ip) as f64;
+    }
+    let nm1 = (n - m) / 2;
+    let mut rr = 1.0_f64;
+    for j in 1..=(2 * m + ip) {
+        rr *= j as f64;
+    }
+    let mut su0 = rr * df[1];
+    let mut sw = 0.0_f64;
+    for k in 2..=nm {
+        rr *= sdmn_fac(m, ip, k);
+        su0 += rr * df[k as usize];
+        if k > nm1 && ((su0 - sw) / su0).abs() < 1.0e-14 {
+            break;
+        }
+        sw = su0;
+    }
+    let mut ck1 = 0.0_f64;
+    let mut ck2 = 0.0_f64;
+    if kd != 1 {
+        let mut r2 = 1.0_f64;
+        for j in 1..=m {
+            r2 = 2.0 * c * r2 * j as f64;
+        }
+        let mut r3 = 1.0_f64;
+        for j in 1..=((n - m - ip) / 2) {
+            r3 *= j as f64;
+        }
+        let sa0 = (2.0 * (m + ip) as f64 + 1.0) * r1
+            / (2.0_f64.powi(n as i32) * c.powi(ip as i32) * r2 * r3 * df[1]);
+        ck1 = sa0 * su0;
+        if kd == -1 {
+            return (dn, ck1, ck2);
+        }
+    }
+    let mut r4 = 1.0_f64;
+    for j in 1..=((n - m - ip) / 2) {
+        r4 = 4.0 * r4 * j as f64;
+    }
+    let mut r5 = 1.0_f64;
+    for j in 1..=m {
+        r5 = r5 * (j + m) as f64 / c;
+    }
+    let g0 = if m == 0 { df[1] } else { dn[m as usize] };
+    let sb0 = (ip as f64 + 1.0) * c.powi((ip + 1) as i32)
+        / (2.0 * ip as f64 * (m as f64 - 2.0) + 1.0)
+        / (2.0 * m as f64 - 1.0);
+    ck2 = sgn_ip * sb0 * r4 * r5 * g0 / r1 * su0;
+    (dn, ck1, ck2)
+}
+
+/// RMN2L: spheroidal radial function of the second kind for a large argument,
+/// by the optimally-truncated spherical-Bessel-`y` expansion. Returns
+/// `(r2f, r2d, id)`; `id` is the number-of-significant-digits indicator (callers
+/// fall back to RMN2SP/RMN2SO when `id` is too large).
+fn rmn2l_eval(m: i64, n: i64, c: f64, x: f64, df: &[f64], kd: i64) -> (f64, f64, i64) {
+    let eps = 1.0e-14;
+    let ip = (n - m) % 2;
+    let nm1 = (n - m) / 2;
+    let nm = 25 + nm1 + c as i64;
+    let reg = if m + nm > 80 { 1.0e-200 } else { 1.0 };
+    let nm2 = 2 * nm + m;
+    let cx = c * x;
+    let (sy, dy) = sphy_arr(nm2, cx);
+    let mut r0 = reg;
+    for j in 1..=(2 * m + ip) {
+        r0 *= j as f64;
+    }
+    let mut r = r0;
+    let mut suc = r * df[1];
+    let mut sw = 0.0_f64;
+    for k in 2..=nm {
+        r *= sdmn_fac(m, ip, k);
+        suc += r * df[k as usize];
+        if k > nm1 && (suc - sw).abs() < suc.abs() * eps {
+            break;
+        }
+        sw = suc;
+    }
+    let a0 = (1.0 - kd as f64 / (x * x)).powf(0.5 * m as f64) / suc;
+    let mut r2f = 0.0_f64;
+    let mut eps1 = 0.0_f64;
+    let mut np = 0i64;
+    sw = 0.0;
+    for k in 1..=nm {
+        let l = 2 * k + m - n - 2 + ip;
+        let lg = if l % 4 == 0 { 1.0 } else { -1.0 };
+        if k == 1 {
+            r = r0;
+        } else {
+            r *= sdmn_fac(m, ip, k);
+        }
+        np = m + 2 * k - 2 + ip;
+        r2f += lg * r * (df[k as usize] * sy[np as usize]);
+        eps1 = (r2f - sw).abs();
+        if k > nm1 && eps1 < r2f.abs() * eps {
+            break;
+        }
+        sw = r2f;
+    }
+    let id1 = (eps1 / r2f.abs() + eps).log10() as i64;
+    r2f *= a0;
+    if np >= nm2 {
+        return (r2f, f64::NAN, 10);
+    }
+    let b0 = kd as f64 * m as f64 / x.powi(3) / (1.0 - kd as f64 / (x * x)) * r2f;
+    let mut sud = 0.0_f64;
+    let mut eps2 = 0.0_f64;
+    sw = 0.0;
+    for k in 1..=nm {
+        let l = 2 * k + m - n - 2 + ip;
+        let lg = if l % 4 == 0 { 1.0 } else { -1.0 };
+        if k == 1 {
+            r = r0;
+        } else {
+            r *= sdmn_fac(m, ip, k);
+        }
+        np = m + 2 * k - 2 + ip;
+        sud += lg * r * (df[k as usize] * dy[np as usize]);
+        eps2 = (sud - sw).abs();
+        if k > nm1 && eps2 < sud.abs() * eps {
+            break;
+        }
+        sw = sud;
+    }
+    let r2d = b0 + a0 * c * sud;
+    let id2 = (eps2 / sud.abs() + eps).log10() as i64;
+    (r2f, r2d, id1.max(id2))
+}
+
+/// RMN2SP: prolate spheroidal radial function of the second kind for a small
+/// argument, via Legendre `P`/`Q` expansions and the KMN joining factor.
+fn rmn2sp_eval(m: i64, n: i64, c: f64, x: f64, cv: f64, df: &[f64], kd: i64) -> (f64, f64) {
+    if df[1].abs() < 1.0e-280 {
+        return (1.0e300, 1.0e300);
+    }
+    let eps = 1.0e-14;
+    let ip = (n - m) % 2;
+    let nm1 = (n - m) / 2;
+    let nm = spheroidal_nm(m, n, c);
+    let nm2 = 2 * nm + m;
+    let (dn, _ck1, ck2) = kmn_coef(m, n, c, cv, kd, df);
+    let (pm, pd) = lpmns_arr(m, nm2, x);
+    let (qm, qd) = lqmns_arr(m, nm2, x);
+    let mut su0 = 0.0_f64;
+    let mut sw = 0.0_f64;
+    for k in 1..=nm {
+        let j = 2 * k - 2 + m + ip;
+        su0 += df[k as usize] * qm[j as usize];
+        if k > nm1 && (su0 - sw).abs() < su0.abs() * eps {
+            break;
+        }
+        sw = su0;
+    }
+    let mut sd0 = 0.0_f64;
+    for k in 1..=nm {
+        let j = 2 * k - 2 + m + ip;
+        sd0 += df[k as usize] * qd[j as usize];
+        if k > nm1 && (sd0 - sw).abs() < sd0.abs() * eps {
+            break;
+        }
+        sw = sd0;
+    }
+    let mut su1 = 0.0_f64;
+    let mut sd1 = 0.0_f64;
+    for k in 1..=m {
+        let mut j = m - 2 * k + ip;
+        if j < 0 {
+            j = -j - 1;
+        }
+        su1 += dn[k as usize] * qm[j as usize];
+        sd1 += dn[k as usize] * qd[j as usize];
+    }
+    let ga = ((x - 1.0) / (x + 1.0)).powf(0.5 * m as f64);
+    for k in 1..=m {
+        let j0 = m - 2 * k + ip;
+        if j0 >= 0 {
+            continue;
+        }
+        let j = -j0 - 1;
+        let mut r1 = 1.0_f64;
+        for j1 in 1..=j {
+            r1 = (m + j1) as f64 * r1;
+        }
+        let mut r2 = 1.0_f64;
+        for j2 in 1..=(m - j - 2) {
+            r2 = j2 as f64 * r2;
+        }
+        let mut r3 = 1.0_f64;
+        let mut sf = 1.0_f64;
+        for l1 in 1..=j {
+            r3 = 0.5 * r3 * (-j + l1 - 1) as f64 * (j + l1) as f64
+                / ((m + l1) as f64 * l1 as f64)
+                * (1.0 - x);
+            sf += r3;
+        }
+        let gb = if m - j >= 2 { (m - j - 1) as f64 * r2 } else { 1.0 };
+        let spl = r1 * ga * gb * sf;
+        let sgn = if (j + m) % 2 == 0 { 1.0 } else { -1.0 };
+        su1 += sgn * dn[k as usize] * spl;
+        let spd1 = m as f64 / (x * x - 1.0) * spl;
+        let gc = 0.5 * j as f64 * (j + 1) as f64 / (m + 1) as f64;
+        let mut sd = 1.0_f64;
+        let mut r4 = 1.0_f64;
+        for l1 in 1..=(j - 1) {
+            r4 = 0.5 * r4 * (-j + l1) as f64 * (j + l1 + 1) as f64
+                / ((m + l1 + 1) as f64 * l1 as f64)
+                * (1.0 - x);
+            sd += r4;
+        }
+        let spd2 = r1 * ga * gb * gc * sd;
+        sd1 += sgn * dn[k as usize] * (spd1 + spd2);
+    }
+    let ki = (2 * m + 1 + ip) / 2;
+    let nm3 = nm + ki;
+    let mut su2 = 0.0_f64;
+    for k in ki..=nm3 {
+        let j = 2 * k - 1 - m - ip;
+        if k < 1 || j < 0 {
+            continue;
+        }
+        su2 += dn[k as usize] * pm[j as usize];
+        if j > m && (su2 - sw).abs() < su2.abs() * eps {
+            break;
+        }
+        sw = su2;
+    }
+    let mut sd2 = 0.0_f64;
+    for k in ki..=nm3 {
+        let j = 2 * k - 1 - m - ip;
+        if k < 1 || j < 0 {
+            continue;
+        }
+        sd2 += dn[k as usize] * pd[j as usize];
+        if j > m && (sd2 - sw).abs() < sd2.abs() * eps {
+            break;
+        }
+        sw = sd2;
+    }
+    let sum = su0 + su1 + su2;
+    let sdm = sd0 + sd1 + sd2;
+    (sum / ck2, sdm / ck2)
+}
+
+/// QSTAR: factor `Q*_mn(-ic)` used by the oblate small-argument routine.
+fn qstar_eval(m: i64, n: i64, c: f64, ck: &[f64], ck1: f64) -> (f64, f64) {
+    let ip = (n - m) % 2;
+    let mut ap = vec![0.0_f64; (m + 2) as usize];
+    let r = 1.0 / (ck[1] * ck[1]);
+    ap[1] = r;
+    for i in 1..=m {
+        let mut s = 0.0_f64;
+        for l in 1..=i {
+            let mut sk = 0.0_f64;
+            for k in 0..=l {
+                sk += ck[(k + 1) as usize] * ck[(l - k + 1) as usize];
+            }
+            s += sk * ap[(i - l + 1) as usize];
+        }
+        ap[(i + 1) as usize] = -r * s;
+    }
+    let mut qs0 = ap[(m + 1) as usize];
+    for l in 1..=m {
+        let mut rr = 1.0_f64;
+        for k in 1..=l {
+            rr = rr * (2.0 * k as f64 + ip as f64) * (2.0 * k as f64 - 1.0 + ip as f64)
+                / (2.0 * k as f64).powi(2);
+        }
+        qs0 += ap[(m - l + 1) as usize] * rr;
+    }
+    let sgn = if ip % 2 == 0 { 1.0 } else { -1.0 };
+    let qs = sgn * ck1 * (ck1 * qs0) / c;
+    let qt = -2.0 / ck1 * qs;
+    (qs, qt)
+}
+
+/// CBK: coefficients `B_k` for the oblate small-argument routine.
+fn cbk_coef(m: i64, n: i64, c: f64, cv: f64, qt: f64, ck: &[f64]) -> Vec<f64> {
+    let eps = 1.0e-14;
+    let ip = (n - m) % 2;
+    let nm = spheroidal_nm(m, n, c);
+    let n2 = nm - 2;
+    let dim = (nm + 3) as usize;
+    let mut u = vec![0.0_f64; dim];
+    let mut v = vec![0.0_f64; dim];
+    let mut w = vec![0.0_f64; dim];
+    let mut bk = vec![0.0_f64; dim];
+    for j in 2..=n2 {
+        u[j as usize] = c * c;
+    }
+    for j in 1..=n2 {
+        v[j as usize] = (2.0 * j as f64 - 1.0 - ip as f64) * (2.0 * (j - m) as f64 - ip as f64)
+            + (m * (m - 1)) as f64
+            - cv;
+    }
+    for j in 1..=(nm - 1) {
+        w[j as usize] = (2.0 * j as f64 - ip as f64) * (2.0 * j as f64 + 1.0 - ip as f64);
+    }
+    if ip == 0 {
+        let mut sw = 0.0_f64;
+        for k in 0..=(n2 - 1) {
+            let mut s1 = 0.0_f64;
+            let i1 = k - m + 1;
+            for i in i1..=nm {
+                if i < 0 {
+                    continue;
+                }
+                let mut r1 = 1.0_f64;
+                for j in 1..=k {
+                    r1 = r1 * (i + m - j) as f64 / j as f64;
+                }
+                s1 += ck[(i + 1) as usize] * (2 * i + m) as f64 * r1;
+                if (s1 - sw).abs() < s1.abs() * eps {
+                    break;
+                }
+                sw = s1;
+            }
+            bk[(k + 1) as usize] = qt * s1;
+        }
+    } else {
+        let mut sw = 0.0_f64;
+        for k in 0..=(n2 - 1) {
+            let mut s1 = 0.0_f64;
+            let i1 = k - m + 1;
+            for i in i1..=nm {
+                if i < 0 {
+                    continue;
+                }
+                let mut r1 = 1.0_f64;
+                for j in 1..=k {
+                    r1 = r1 * (i + m - j) as f64 / j as f64;
+                }
+                if i > 0 {
+                    s1 += ck[i as usize] * (2 * i + m - 1) as f64 * r1;
+                }
+                s1 -= ck[(i + 1) as usize] * (2 * i + m) as f64 * r1;
+                if (s1 - sw).abs() < s1.abs() * eps {
+                    break;
+                }
+                sw = s1;
+            }
+            bk[(k + 1) as usize] = qt * s1;
+        }
+    }
+    w[1] /= v[1];
+    bk[1] /= v[1];
+    for k in 2..=n2 {
+        let t = v[k as usize] - w[(k - 1) as usize] * u[k as usize];
+        w[k as usize] /= t;
+        bk[k as usize] = (bk[k as usize] - bk[(k - 1) as usize] * u[k as usize]) / t;
+    }
+    let mut k = n2 - 1;
+    while k >= 1 {
+        bk[k as usize] -= w[k as usize] * bk[(k + 1) as usize];
+        k -= 1;
+    }
+    bk
+}
+
+/// GMN: `g_mn(-ic, ix)` and its derivative for the oblate small-argument routine.
+fn gmn_eval(m: i64, n: i64, c: f64, x: f64, bk: &[f64]) -> (f64, f64) {
+    let eps = 1.0e-14;
+    let ip = (n - m) % 2;
+    let nm = spheroidal_nm(m, n, c);
+    let xm = (1.0 + x * x).powf(-0.5 * m as f64);
+    let mut gf0 = 0.0_f64;
+    let mut gw = 0.0_f64;
+    for k in 1..=nm {
+        gf0 += bk[k as usize] * x.powf(2.0 * k as f64 - 2.0);
+        if ((gf0 - gw) / gf0).abs() < eps && k >= 10 {
+            break;
+        }
+        gw = gf0;
+    }
+    let gf = xm * gf0 * x.powf((1 - ip) as f64);
+    let gd1 = -(m as f64) * x / (1.0 + x * x) * gf;
+    let mut gd0 = 0.0_f64;
+    for k in 1..=nm {
+        if ip == 0 {
+            gd0 += (2.0 * k as f64 - 1.0) * bk[k as usize] * x.powf(2.0 * k as f64 - 2.0);
+        } else {
+            gd0 += 2.0 * k as f64 * bk[(k + 1) as usize] * x.powf(2.0 * k as f64 - 1.0);
+        }
+        if ((gd0 - gw) / gd0).abs() < eps && k >= 10 {
+            break;
+        }
+        gw = gd0;
+    }
+    let gd = gd1 + xm * gd0;
+    (gf, gd)
+}
+
+/// RMN2SO: oblate spheroidal radial function of the second kind for a small
+/// argument.
+fn rmn2so_eval(m: i64, n: i64, c: f64, x: f64, cv: f64, df: &[f64], kd: i64) -> (f64, f64) {
+    if df[1].abs() <= 1.0e-280 {
+        return (1.0e300, 1.0e300);
+    }
+    let eps = 1.0e-14;
+    let pi = std::f64::consts::PI;
+    let nm = 25 + ((n - m) / 2) as i64 + c as i64;
+    let ip = (n - m) % 2;
+    let ck = sckb_coef(m, n, c, df);
+    let (_dn, ck1, _ck2) = kmn_coef(m, n, c, cv, kd, df);
+    let (qs, qt) = qstar_eval(m, n, c, &ck, ck1);
+    let bk = cbk_coef(m, n, c, cv, qt, &ck);
+    if x == 0.0 {
+        let mut sum = 0.0_f64;
+        let mut sw = 0.0_f64;
+        for j in 1..=nm {
+            sum += ck[j as usize];
+            if (sum - sw).abs() < sum.abs() * eps {
+                break;
+            }
+            sw = sum;
+        }
+        if ip == 0 {
+            let r1f = sum / ck1;
+            return (-0.5 * pi * qs * r1f, qs * r1f + bk[1]);
+        } else {
+            let r1d = sum / ck1;
+            return (bk[1], -0.5 * pi * qs * r1d);
+        }
+    }
+    let (gf, gd) = gmn_eval(m, n, c, x, &bk);
+    let (r1f, r1d) = spheroidal_rad1(m as u32, n as u32, c, x, false, cv);
+    let h0 = x.atan() - 0.5 * pi;
+    let r2f = qs * r1f * h0 + gf;
+    let r2d = qs * (r1d * h0 + r1f / (1.0 + x * x)) + gd;
+    (r2f, r2d)
+}
+
+/// RSWFP driver: prolate radial function of the second kind (SDMN → RMN2L,
+/// falling back to RMN2SP for small arguments).
+fn pro_rad2_driver(m: i64, n: i64, c: f64, x: f64, cv: f64) -> (f64, f64) {
+    let df = sdmn_coef(m, n, c, cv, 1);
+    let (r2f, r2d, id) = rmn2l_eval(m, n, c, x, &df, 1);
+    if id > -8 {
+        return rmn2sp_eval(m, n, c, x, cv, &df, 1);
+    }
+    (r2f, r2d)
+}
+
+/// RSWFO driver: oblate radial function of the second kind (SDMN → RMN2L,
+/// falling back to RMN2SO for small arguments).
+fn obl_rad2_driver(m: i64, n: i64, c: f64, x: f64, cv: f64) -> (f64, f64) {
+    let df = sdmn_coef(m, n, c, cv, -1);
+    let mut id = 10i64;
+    let mut r2f = f64::NAN;
+    let mut r2d = f64::NAN;
+    if x > 1.0e-8 {
+        let res = rmn2l_eval(m, n, c, x, &df, -1);
+        r2f = res.0;
+        r2d = res.1;
+        id = res.2;
+    }
+    if id > -1 {
+        return rmn2so_eval(m, n, c, x, cv, &df, -1);
+    }
+    (r2f, r2d)
+}
+
+/// Prolate spheroidal radial function of the second kind `R_mn^{(2)}(c, x)` and
+/// its derivative w.r.t. `x`, matching `scipy.special.pro_rad2(m, n, c, x)`
+/// (`n ≥ m`, `x > 1`).
+#[must_use]
+pub fn pro_rad2(m: u32, n: u32, c: f64, x: f64) -> (f64, f64) {
+    if n < m {
+        return (f64::NAN, f64::NAN);
+    }
+    pro_rad2_driver(m as i64, n as i64, c, x, spheroidal_cv(m, n, c, true))
+}
+
+/// As [`pro_rad2`] but with a precomputed characteristic value `cv` (from
+/// [`pro_cv`]), matching `scipy.special.pro_rad2_cv(m, n, c, cv, x)`.
+#[must_use]
+pub fn pro_rad2_cv(m: u32, n: u32, c: f64, cv: f64, x: f64) -> (f64, f64) {
+    if n < m {
+        return (f64::NAN, f64::NAN);
+    }
+    pro_rad2_driver(m as i64, n as i64, c, x, cv)
+}
+
+/// Oblate spheroidal radial function of the second kind `R_mn^{(2)}(c, x)` and
+/// its derivative w.r.t. `x`, matching `scipy.special.obl_rad2(m, n, c, x)`
+/// (`n ≥ m`, `x ≥ 0`).
+#[must_use]
+pub fn obl_rad2(m: u32, n: u32, c: f64, x: f64) -> (f64, f64) {
+    if n < m {
+        return (f64::NAN, f64::NAN);
+    }
+    obl_rad2_driver(m as i64, n as i64, c, x, spheroidal_cv(m, n, c, false))
+}
+
+/// As [`obl_rad2`] but with a precomputed characteristic value `cv` (from
+/// [`obl_cv`]), matching `scipy.special.obl_rad2_cv(m, n, c, cv, x)`.
+#[must_use]
+pub fn obl_rad2_cv(m: u32, n: u32, c: f64, cv: f64, x: f64) -> (f64, f64) {
+    if n < m {
+        return (f64::NAN, f64::NAN);
+    }
+    obl_rad2_driver(m as i64, n as i64, c, x, cv)
+}
+
+#[cfg(test)]
+mod rad2_tests {
+    use super::{obl_rad1, obl_rad2, pro_rad1, pro_rad2};
+
+    #[test]
+    fn pro_rad2_matches_scipy_clean_cases() {
+        // scipy.special.pro_rad2 on cases where its algorithm is numerically
+        // reliable (verified Wronskian-good). (m, n, c, x, f, d).
+        let cases = [
+            (0u32, 0u32, 1.0, 1.5, -0.2629632165298937, 1.201753060631887),
+            (1, 2, 1.5, 2.0, -0.35521673340490706, 0.6188029556849332),
+            (0, 2, 3.0, 1.2, -0.37213935937490855, 2.019289234135577),
+            (1, 1, 0.5, 5.0, -0.12746713326589287, 0.21222783488703173),
+            (0, 1, 1.0, 10.0, 0.061440967797188654, 0.0731530889731605),
+            (3, 5, 1.0, 2.0, -31.14063470350044, 105.76406624483339),
+        ];
+        for (m, n, c, x, f, d) in cases {
+            let (rf, rd) = pro_rad2(m, n, c, x);
+            assert!(
+                (rf - f).abs() <= 1e-6 * f.abs().max(1.0),
+                "pro_rad2({m},{n},{c},{x}) f: {rf} vs {f}"
+            );
+            assert!(
+                (rd - d).abs() <= 1e-6 * d.abs().max(1.0),
+                "pro_rad2({m},{n},{c},{x}) d: {rd} vs {d}"
+            );
+        }
+    }
+
+    #[test]
+    fn obl_rad2_matches_scipy_clean_cases() {
+        let cases = [
+            (0u32, 0u32, 1.0, 1.5, 0.07333899023344355, 0.48168787555779563),
+            (1, 2, 1.5, 2.0, -0.2007277794317659, 0.42235369638112114),
+            (1, 1, 0.5, 5.0, -0.09559169029903253, 0.197579744721507),
+            (3, 5, 1.0, 2.0, -12.403073666800394, 29.191869622608543),
+            (1, 3, 4.0, 1.3, 0.11946461167969895, 0.3049683241608749),
+        ];
+        for (m, n, c, x, f, d) in cases {
+            let (rf, rd) = obl_rad2(m, n, c, x);
+            assert!(
+                (rf - f).abs() <= 1e-6 * f.abs().max(1.0),
+                "obl_rad2({m},{n},{c},{x}) f: {rf} vs {f}"
+            );
+            assert!(
+                (rd - d).abs() <= 1e-6 * d.abs().max(1.0),
+                "obl_rad2({m},{n},{c},{x}) d: {rd} vs {d}"
+            );
+        }
+    }
+
+    #[test]
+    fn rad2_satisfies_wronskian() {
+        // The first- and second-kind radial functions satisfy the exact
+        // Wronskian identity W = R1 R2' - R1' R2 = 1/(c (x^2 ∓ 1)) (− prolate,
+        // + oblate). This is a parameter-free correctness proof independent of
+        // any oracle; it holds wherever the expansion is well-conditioned.
+        let grid = [
+            (0u32, 0u32, 1.0, 1.5),
+            (0, 1, 2.0, 1.5),
+            (1, 2, 1.5, 2.0),
+            (0, 2, 3.0, 1.5),
+            (1, 1, 0.5, 5.0),
+            (2, 3, 2.0, 2.0),
+            (0, 1, 1.0, 10.0),
+            (3, 5, 1.0, 2.0),
+            (2, 4, 3.0, 1.5),
+            (1, 3, 4.0, 2.0),
+        ];
+        for (m, n, c, x) in grid {
+            let (p1, p1d) = pro_rad1(m, n, c, x);
+            let (p2, p2d) = pro_rad2(m, n, c, x);
+            let wp = p1 * p2d - p1d * p2;
+            let ep = 1.0 / (c * (x * x - 1.0));
+            assert!(
+                (wp - ep).abs() <= 1e-6 * ep.abs(),
+                "prolate Wronskian ({m},{n},{c},{x}): {wp} vs {ep}"
+            );
+            let (o1, o1d) = obl_rad1(m, n, c, x);
+            let (o2, o2d) = obl_rad2(m, n, c, x);
+            let wo = o1 * o2d - o1d * o2;
+            let eo = 1.0 / (c * (x * x + 1.0));
+            assert!(
+                (wo - eo).abs() <= 1e-6 * eo.abs(),
+                "oblate Wronskian ({m},{n},{c},{x}): {wo} vs {eo}"
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
