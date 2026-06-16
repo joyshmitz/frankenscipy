@@ -4209,6 +4209,16 @@ pub fn ward(data: &[Vec<f64>]) -> Result<Vec<[f64; 4]>, ClusterError> {
     linkage(data, LinkageMethod::Ward)
 }
 
+/// Centroid (UPGMC) linkage. Matches `scipy.cluster.hierarchy.centroid(X)`.
+pub fn centroid(data: &[Vec<f64>]) -> Result<Vec<[f64; 4]>, ClusterError> {
+    linkage(data, LinkageMethod::Centroid)
+}
+
+/// Median (WPGMC) linkage. Matches `scipy.cluster.hierarchy.median(X)`.
+pub fn median(data: &[Vec<f64>]) -> Result<Vec<[f64; 4]>, ClusterError> {
+    linkage(data, LinkageMethod::Median)
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // DBSCAN
 // ══════════════════════════════════════════════════════════════════════
@@ -8044,6 +8054,38 @@ mod tests {
         assert_eq!(average(&data).unwrap(), linkage(&data, LinkageMethod::Average).unwrap());
         assert_eq!(weighted(&data).unwrap(), linkage(&data, LinkageMethod::Weighted).unwrap());
         assert_eq!(ward(&data).unwrap(), linkage(&data, LinkageMethod::Ward).unwrap());
+        assert_eq!(centroid(&data).unwrap(), linkage(&data, LinkageMethod::Centroid).unwrap());
+        assert_eq!(median(&data).unwrap(), linkage(&data, LinkageMethod::Median).unwrap());
+    }
+
+    #[test]
+    fn centroid_median_match_scipy() {
+        let data = vec![
+            vec![0.0, 0.0],
+            vec![0.0, 1.0],
+            vec![5.0, 5.0],
+            vec![5.0, 6.0],
+            vec![10.0, 0.0],
+        ];
+        // scipy.cluster.hierarchy.centroid/median oracle.
+        let want = [
+            [0.0, 1.0, 1.0, 2.0],
+            [2.0, 3.0, 1.0, 2.0],
+            [5.0, 6.0, 7.07106781, 4.0],
+            [4.0, 7.0, 8.07774721, 5.0],
+        ];
+        for (name, z) in [("centroid", centroid(&data).unwrap()), ("median", median(&data).unwrap())] {
+            for (i, row) in z.iter().enumerate() {
+                for k in 0..4 {
+                    assert!(
+                        (row[k] - want[i][k]).abs() < 1e-6,
+                        "{name}[{i}][{k}]: {} vs {}",
+                        row[k],
+                        want[i][k]
+                    );
+                }
+            }
+        }
     }
 
     #[test]
