@@ -1569,6 +1569,284 @@ fn interpolation_knots(x: &[f64], k: usize) -> Vec<f64> {
     t
 }
 
+/// Weighted least-squares B-spline fit on knots `t` plus the per-data residuals,
+/// for the FITPACK knot-placement loop. Mirrors [`make_lsq_spline`]'s banded
+/// normal-equations assembly but with linear weights `w`, returning
+/// `(residuals_i = w_i²·(y_i − s(x_i))², fp = Σ residuals_i)` — exactly what
+/// scipy's `_get_residuals` produces.
+fn lsq_residuals(
+    x: &[f64],
+    y: &[f64],
+    w: &[f64],
+    t: &[f64],
+    k: usize,
+) -> Result<(Vec<f64>, f64), InterpError> {
+    let m = x.len();
+    let n = t.len() - k - 1;
+    let mut ata = vec![vec![0.0_f64; n]; n];
+    let mut aty = vec![0.0_f64; n];
+    let mut scratch = vec![0.0_f64; n];
+    for i in 0..m {
+        let Some(mu) = bspline_find_interval(t, x[i], n) else {
+            continue;
+        };
+        scratch[mu] = 1.0;
+        for p in 1..=k {
+            let start = mu.saturating_sub(p);
+            for idx in start..=mu {
+                let mut val = 0.0;
+                if idx + p < t.len() {
+                    let denom_left = t[idx + p] - t[idx];
+                    if denom_left > 0.0 {
+                        val += (x[i] - t[idx]) / denom_left * scratch[idx];
+                    }
+                }
+                if idx + p + 1 < t.len() && idx + 1 < n {
+                    let denom_right = t[idx + p + 1] - t[idx + 1];
+                    if denom_right > 0.0 {
+                        val += (t[idx + p + 1] - x[i]) / denom_right * scratch[idx + 1];
+                    }
+                }
+                scratch[idx] = val;
+            }
+        }
+        let lo = mu.saturating_sub(k);
+        let wi = w[i];
+        let yi = y[i];
+        for a in lo..=mu {
+            let ba = scratch[a];
+            aty[a] += wi * ba * yi;
+            let row = &mut ata[a];
+            for b in lo..=mu {
+                row[b] += wi * ba * scratch[b];
+            }
+        }
+        for sc in scratch[lo..=mu].iter_mut() {
+            *sc = 0.0;
+        }
+    }
+    let c = solve_banded(&mut ata, &mut aty, k)?;
+    let spl = BSpline::new(t.to_vec(), c, k)?;
+    let mut residuals = vec![0.0_f64; m];
+    let mut fp = 0.0_f64;
+    for i in 0..m {
+        let d = y[i] - spl.eval(x[i]);
+        let r = w[i] * w[i] * d * d;
+        residuals[i] = r;
+        fp += r;
+    }
+    Ok((residuals, fp))
+}
+
+/// FITPACK `fpknot`: locate a new interior knot inside the knot interval with the
+/// largest `fpint`, placed at the middle strictly-interior data point.
+///
+/// `fpint` for interval `[t[k+j], t[k+j+1]]` follows FITPACK's `fpcurf`
+/// accumulation: the full squared residual of every data point strictly inside,
+/// plus the boundary data points (which sit on knots) contributing *half* to each
+/// adjacent interval — except the global endpoints `xb`/`xe`, which contribute in
+/// full to the first/last interval. Intervals with no strictly-interior point are
+/// skipped (`nrdata == 0`); the first interval attaining the maximal `fpint` wins,
+/// and the new knot is the middle strictly-interior data point `x[beg + cnt/2]`.
+fn fpknot(x: &[f64], t: &[f64], k: usize, residuals: &[f64]) -> f64 {
+    let n = t.len();
+    let nrint = n - 2 * k - 1;
+    let m = x.len();
+    let xb = x[0];
+    let xe = x[m - 1];
+    let mut best_fpint = f64::NEG_INFINITY;
+    let mut best_beg = 0usize;
+    let mut best_cnt = 0usize;
+    for j in 0..nrint {
+        let lo = t[k + j];
+        let hi = t[k + j + 1];
+        // Strictly-interior data points: lo < x[i] < hi.
+        let mut beg = 0usize;
+        while beg < m && x[beg] <= lo {
+            beg += 1;
+        }
+        let mut end = beg;
+        let mut fpint = 0.0_f64;
+        while end < m && x[end] < hi {
+            fpint += residuals[end];
+            end += 1;
+        }
+        let cnt = end - beg;
+        if cnt == 0 {
+            continue;
+        }
+        // Left boundary data point (== lo): full if it's the global start, else half.
+        if beg > 0 && x[beg - 1] == lo {
+            fpint += if lo == xb {
+                residuals[beg - 1]
+            } else {
+                0.5 * residuals[beg - 1]
+            };
+        }
+        // Right boundary data point (== hi): full if it's the global end, else half.
+        if end < m && x[end] == hi {
+            fpint += if hi == xe {
+                residuals[end]
+            } else {
+                0.5 * residuals[end]
+            };
+        }
+        if fpint > best_fpint {
+            best_fpint = fpint;
+            best_beg = beg;
+            best_cnt = cnt;
+        }
+    }
+    x[best_beg + best_cnt / 2]
+}
+
+/// Insert the knot chosen by [`fpknot`], keeping `t` sorted (scipy `add_knot`).
+fn add_knot(x: &[f64], t: &[f64], k: usize, residuals: &[f64]) -> Vec<f64> {
+    let new_knot = fpknot(x, t, k, residuals);
+    let idx = t.partition_point(|&v| v < new_knot);
+    let mut nt = Vec::with_capacity(t.len() + 1);
+    nt.extend_from_slice(&t[..idx]);
+    nt.push(new_knot);
+    nt.extend_from_slice(&t[idx..]);
+    nt
+}
+
+/// Generate the sequence of FITPACK least-squares knot vectors of increasing
+/// length, denser where the LSQ spline deviates most from the data, until the
+/// smoothing criterion `fp ≤ s` is satisfied (or the knot count reaches the
+/// interpolation/`nest` limit).
+///
+/// Matches the non-periodic, not-a-knot form of
+/// `scipy.interpolate.generate_knots(x, y, w, xb, xe, k, s, nest)`, returning the
+/// full sequence of knot vectors that the SciPy generator would yield. For
+/// `s == 0` it yields a single interpolation knot vector (and rejects `w`/`nest`,
+/// as SciPy does). The periodic boundary condition is not supported.
+#[allow(clippy::too_many_arguments)]
+pub fn generate_knots(
+    x: &[f64],
+    y: &[f64],
+    w: Option<&[f64]>,
+    xb: Option<f64>,
+    xe: Option<f64>,
+    k: usize,
+    s: f64,
+    nest: Option<usize>,
+) -> Result<Vec<Vec<f64>>, InterpError> {
+    let m = x.len();
+    if m != y.len() {
+        return Err(InterpError::LengthMismatch {
+            x_len: m,
+            y_len: y.len(),
+        });
+    }
+    if k == 0 {
+        return Err(InterpError::InvalidArgument {
+            detail: "spline degree k must be >= 1".to_string(),
+        });
+    }
+    if m < k + 1 {
+        return Err(InterpError::TooFewPoints {
+            minimum: k + 1,
+            actual: m,
+        });
+    }
+    if x.windows(2).any(|p| p[1] <= p[0]) {
+        return Err(InterpError::UnsortedX);
+    }
+    if s < 0.0 {
+        return Err(InterpError::InvalidArgument {
+            detail: "smoothing factor s must be >= 0".to_string(),
+        });
+    }
+    if let Some(ww) = w {
+        if ww.len() != m {
+            return Err(InterpError::InvalidArgument {
+                detail: format!("weights length {} must match data length {m}", ww.len()),
+            });
+        }
+    }
+
+    if s == 0.0 {
+        if nest.is_some() || w.is_some() {
+            return Err(InterpError::InvalidArgument {
+                detail: "s == 0 is interpolation only (no weights or nest)".to_string(),
+            });
+        }
+        return Ok(vec![interpolation_knots(x, k)]);
+    }
+
+    let xb = xb.unwrap_or(x[0]);
+    let xe = xe.unwrap_or(x[m - 1]);
+    let ones = vec![1.0_f64; m];
+    let w = w.unwrap_or(&ones);
+    let acc = s * 1e-3; // TOL = 1e-3
+    let nmin = 2 * (k + 1);
+    let nmax = m + k + 1;
+    let nest = nest.unwrap_or((m + k + 1).max(2 * k + 3));
+    if nest < nmin {
+        return Err(InterpError::InvalidArgument {
+            detail: format!("nest too small: {nest} < 2*(k+1) = {nmin}"),
+        });
+    }
+
+    let mut out: Vec<Vec<f64>> = Vec::new();
+    // Start with no interior knots: (k+1) copies of each endpoint.
+    let mut t: Vec<f64> = Vec::with_capacity(nmin);
+    for _ in 0..=k {
+        t.push(xb);
+    }
+    for _ in 0..=k {
+        t.push(xe);
+    }
+    let mut fp = 0.0_f64;
+    let mut nplus = 1usize;
+
+    for _iter in 0..m {
+        out.push(t.clone());
+        let fpold = fp;
+        let (residuals, fp_new) = lsq_residuals(x, y, w, &t, k)?;
+        fp = fp_new;
+        let fpms = fp - s;
+        if fpms.abs() < acc || fpms < 0.0 {
+            return Ok(out);
+        }
+
+        // Decide how many knots to add this round (FITPACK heuristic).
+        let n = t.len();
+        if n == nmin {
+            nplus = 1;
+        } else {
+            let delta = fpold - fp;
+            let npl1: i64 = if delta > acc {
+                (nplus as f64 * fpms / delta) as i64
+            } else {
+                (nplus * 2) as i64
+            };
+            let cand = npl1.max((nplus / 2) as i64).max(1);
+            nplus = (nplus * 2).min(cand as usize);
+        }
+
+        let mut residuals = residuals;
+        for j in 0..nplus {
+            t = add_knot(x, &t, k, &residuals);
+            let n = t.len();
+            if n >= nmax {
+                out.push(interpolation_knots(x, k));
+                return Ok(out);
+            }
+            if n >= nest {
+                out.push(t);
+                return Ok(out);
+            }
+            if j < nplus - 1 {
+                let (r, _) = lsq_residuals(x, y, w, &t, k)?;
+                residuals = r;
+            }
+        }
+    }
+    Ok(out)
+}
+
 fn make_smoothing_spline_impl(
     x: &[f64],
     y: &[f64],
@@ -8506,6 +8784,116 @@ mod tests {
             assert_eq!(dc.len(), dt.len() - dk - 1);
             assert_eq!(dc, expected_c);
         }
+    }
+
+    #[test]
+    fn generate_knots_matches_scipy() {
+        fn check(got: &[Vec<f64>], exp: &[Vec<f64>], label: &str) {
+            assert_eq!(got.len(), exp.len(), "{label}: sequence length");
+            for (gi, (g, e)) in got.iter().zip(exp.iter()).enumerate() {
+                assert_eq!(g.len(), e.len(), "{label} step {gi}: knot count");
+                for (a, b) in g.iter().zip(e.iter()) {
+                    assert!((a - b).abs() < 1e-9, "{label} step {gi}: {a} vs {b}");
+                }
+            }
+        }
+        // Dataset A: linspace(0,1,11), y = sin(6x) + 0.1 cos(20x).
+        let xa: Vec<f64> = (0..11).map(|i| i as f64 * 0.1).collect();
+        let xa = {
+            let mut v = xa;
+            v[10] = 1.0;
+            v
+        };
+        let ya: Vec<f64> = xa.iter().map(|&x| (6.0 * x).sin() + 0.1 * (20.0 * x).cos()).collect();
+
+        let s05 = generate_knots(&xa, &ya, None, None, None, 3, 0.05, None).unwrap();
+        check(
+            &s05,
+            &[
+                vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+                vec![0.0, 0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0, 1.0],
+                vec![0.0, 0.0, 0.0, 0.0, 0.3, 0.5, 0.8, 1.0, 1.0, 1.0, 1.0],
+            ],
+            "A s=0.05",
+        );
+
+        let s005 = generate_knots(&xa, &ya, None, None, None, 3, 0.005, None).unwrap();
+        check(
+            &s005,
+            &[
+                vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+                vec![0.0, 0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0, 1.0],
+                vec![0.0, 0.0, 0.0, 0.0, 0.3, 0.5, 0.8, 1.0, 1.0, 1.0, 1.0],
+                vec![0.0, 0.0, 0.0, 0.0, 0.3, 0.5, 0.7, 0.8, 1.0, 1.0, 1.0, 1.0],
+                vec![0.0, 0.0, 0.0, 0.0, 0.2, 0.3, 0.5, 0.7, 0.8, 1.0, 1.0, 1.0, 1.0],
+                vec![0.0, 0.0, 0.0, 0.0, 0.2, 0.3, 0.5, 0.6, 0.7, 0.8, 1.0, 1.0, 1.0, 1.0],
+            ],
+            "A s=0.005",
+        );
+
+        // Large s -> constant fit, only the initial knot vector.
+        let s5 = generate_knots(&xa, &ya, None, None, None, 3, 0.5, None).unwrap();
+        check(&s5, &[vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0]], "A s=0.5");
+
+        // k = 2.
+        let c = generate_knots(&xa, &ya, None, None, None, 2, 0.05, None).unwrap();
+        check(
+            &c,
+            &[
+                vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                vec![0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0],
+                vec![0.0, 0.0, 0.0, 0.5, 0.8, 1.0, 1.0, 1.0],
+                vec![0.0, 0.0, 0.0, 0.3, 0.5, 0.8, 1.0, 1.0, 1.0],
+                vec![0.0, 0.0, 0.0, 0.2, 0.3, 0.5, 0.7, 0.8, 1.0, 1.0, 1.0],
+            ],
+            "C k=2 s=0.05",
+        );
+
+        // Weighted (linear ramp 1..2): one extra refinement step vs unweighted.
+        let wd: Vec<f64> = (0..11).map(|i| 1.0 + i as f64 * 0.1).collect();
+        let d = generate_knots(&xa, &ya, Some(&wd), None, None, 3, 0.05, None).unwrap();
+        check(
+            &d,
+            &[
+                vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+                vec![0.0, 0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0, 1.0],
+                vec![0.0, 0.0, 0.0, 0.0, 0.3, 0.5, 0.8, 1.0, 1.0, 1.0, 1.0],
+                vec![0.0, 0.0, 0.0, 0.0, 0.3, 0.5, 0.7, 0.8, 1.0, 1.0, 1.0, 1.0],
+            ],
+            "D weighted s=0.05",
+        );
+
+        // Dataset B: linspace(-3,3,20), y = exp(-x^2).
+        let xb: Vec<f64> = {
+            let mut v: Vec<f64> = (0..20).map(|i| -3.0 + i as f64 * (6.0 / 19.0)).collect();
+            v[19] = 3.0;
+            v
+        };
+        let yb: Vec<f64> = xb.iter().map(|&x| (-x * x).exp()).collect();
+        let b = generate_knots(&xb, &yb, None, None, None, 3, 0.01, None).unwrap();
+        check(
+            &b,
+            &[
+                vec![-3.0, -3.0, -3.0, -3.0, 3.0, 3.0, 3.0, 3.0],
+                vec![-3.0, -3.0, -3.0, -3.0, 0.1578947368, 3.0, 3.0, 3.0, 3.0],
+                vec![-3.0, -3.0, -3.0, -3.0, 0.1578947368, 1.7368421053, 3.0, 3.0, 3.0, 3.0],
+                vec![
+                    -3.0, -3.0, -3.0, -3.0, -1.4210526316, 0.1578947368, 1.7368421053, 3.0, 3.0,
+                    3.0, 3.0,
+                ],
+                vec![
+                    -3.0, -3.0, -3.0, -3.0, -1.4210526316, 0.1578947368, 1.1052631579,
+                    1.7368421053, 3.0, 3.0, 3.0, 3.0,
+                ],
+            ],
+            "B s=0.01",
+        );
+
+        // s == 0 yields a single interpolation knot vector and rejects w/nest.
+        let interp = generate_knots(&xa, &ya, None, None, None, 3, 0.0, None).unwrap();
+        assert_eq!(interp.len(), 1);
+        assert_eq!(interp[0].len(), xa.len() + 3 + 1);
+        assert!(generate_knots(&xa, &ya, Some(&wd), None, None, 3, 0.0, None).is_err());
     }
 
     #[test]
