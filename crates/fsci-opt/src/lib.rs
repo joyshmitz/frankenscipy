@@ -12,7 +12,10 @@ pub use curvefit::{
     CurveFitOptions, CurveFitResult, LeastSquaresOptions, LeastSquaresResult, LeastsqResult,
     curve_fit, least_squares, leastsq,
 };
-pub use linesearch::{LineSearchResult, WolfeParams, line_search_wolfe1, line_search_wolfe2};
+pub use linesearch::{
+    LineSearchResult, ScipyLineSearchResult, WolfeParams, line_search, line_search_wolfe1,
+    line_search_wolfe2,
+};
 pub use minimize::{
     MinimizeScalarOptions, MinimizeScalarResult, OptCaspDecision, OptCaspProblem, bfgs, cg_pr_plus,
     get_optimize_traces, lbfgsb, minimize, minimize_scalar, minimize_with_audit, nelder_mead,
