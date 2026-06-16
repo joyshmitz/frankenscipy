@@ -12644,6 +12644,233 @@ pub fn dft(n: usize, scale: Option<&str>) -> Result<Vec<Vec<Complex<f64>>>, Lina
     Ok(result)
 }
 
+/// Result of [`matrix_balance`].
+#[derive(Clone, Debug)]
+pub struct MatrixBalance {
+    /// The balanced matrix `B = T⁻¹·A·T`.
+    pub balanced: Vec<Vec<f64>>,
+    /// The (possibly permuted) diagonal similarity transform `T`. Nonzero
+    /// entries are integer powers of two.
+    pub transform: Vec<Vec<f64>>,
+    /// The per-column scaling factors (the diagonal of the scaling part).
+    pub scaling: Vec<f64>,
+    /// The permutation applied (column `j` ends up at position `perm[j]`).
+    pub perm: Vec<usize>,
+}
+
+/// Compute a diagonal similarity transform that balances `a`'s row/column norms.
+///
+/// Matches `scipy.linalg.matrix_balance(A, permute, scale)`. Reproduces LAPACK's
+/// `?gebal`: optional permutation to isolate already-triangular eigenvalues,
+/// then iterative power-of-two scaling so each row and its corresponding column
+/// have nearly equal 2-norms over the active block. Returns the balanced matrix
+/// `B`, the transform `T` (with `B = T⁻¹·A·T`), and the separate scaling/perm
+/// vectors. Scaling factors are exact powers of two to avoid round-off.
+pub fn matrix_balance(
+    a: &[Vec<f64>],
+    permute: bool,
+    scale: bool,
+) -> Result<MatrixBalance, LinalgError> {
+    let n = a.len();
+    if n == 0 || a.iter().any(|r| r.len() != n) {
+        return Err(LinalgError::InvalidArgument {
+            detail: "matrix_balance requires a square non-empty matrix".to_string(),
+        });
+    }
+
+    // Working copy (row-major) and the combined scale/perm output array.
+    let mut m: Vec<Vec<f64>> = a.to_vec();
+    let mut sc = vec![1.0_f64; n];
+    let mut ilo = 0usize;
+    let mut ihi = n - 1;
+    // Set when the permutation cascade isolates everything down to a 1×1 block;
+    // LAPACK returns immediately in that case, skipping the scaling phase.
+    let mut early_return = false;
+
+    if permute {
+        // Search for rows that isolate an eigenvalue and push them to the bottom.
+        let mut swapped = true;
+        while swapped {
+            swapped = false;
+            for i in (0..=ihi).rev() {
+                let isolated = (0..=ihi).all(|j| j == i || m[i][j] == 0.0);
+                if !isolated {
+                    continue;
+                }
+                sc[ihi] = i as f64;
+                if i != ihi {
+                    for row in m.iter_mut().take(ihi + 1) {
+                        row.swap(i, ihi);
+                    }
+                    m.swap(i, ihi);
+                }
+                if ihi == 0 {
+                    sc[0] = 1.0;
+                    early_return = true;
+                    break;
+                }
+                ihi -= 1;
+                swapped = true;
+                break;
+            }
+            if early_return {
+                break;
+            }
+        }
+        // Search for columns that isolate an eigenvalue and push them left.
+        if !early_return {
+            swapped = true;
+            while swapped {
+                swapped = false;
+                for j in ilo..=ihi {
+                    let isolated = (ilo..=ihi).all(|i| i == j || m[i][j] == 0.0);
+                    if !isolated {
+                        continue;
+                    }
+                    sc[ilo] = j as f64;
+                    if j != ilo {
+                        for row in m.iter_mut().take(ihi + 1) {
+                            row.swap(j, ilo);
+                        }
+                        m.swap(j, ilo);
+                    }
+                    ilo += 1;
+                    swapped = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    if !early_return {
+        for s in sc.iter_mut().take(ihi + 1).skip(ilo) {
+            *s = 1.0;
+        }
+        if scale {
+            // LAPACK gebal scaling constants.
+            let sfmin1 = f64::MIN_POSITIVE / f64::EPSILON;
+            let sfmax1 = 1.0 / sfmin1;
+            let sclfac = 2.0_f64;
+            let sfmin2 = sfmin1 * sclfac;
+            let sfmax2 = 1.0 / sfmin2;
+            let factor = 0.95_f64;
+
+            let mut conv = false;
+            while !conv {
+                conv = true;
+                for i in ilo..=ihi {
+                    // c = ‖column i‖₂, r = ‖row i‖₂ over the active block.
+                    let mut c = 0.0;
+                    let mut r = 0.0;
+                    for k in ilo..=ihi {
+                        c += m[k][i] * m[k][i];
+                        r += m[i][k] * m[i][k];
+                    }
+                    let mut c = c.sqrt();
+                    let mut r = r.sqrt();
+                    // ca/ra are max-abs over wider ranges (overflow guards only).
+                    let mut ca = (0..=ihi).map(|k| m[k][i].abs()).fold(0.0, f64::max);
+                    let mut ra = (ilo..n).map(|k| m[i][k].abs()).fold(0.0, f64::max);
+
+                    if c == 0.0 || r == 0.0 {
+                        continue;
+                    }
+                    let mut g = r / sclfac;
+                    let mut f = 1.0_f64;
+                    let s = c + r;
+                    while c < g
+                        && f.max(c.max(ca)) < sfmax2
+                        && r.min(g.min(ra)) > sfmin2
+                    {
+                        f *= sclfac;
+                        c *= sclfac;
+                        ca *= sclfac;
+                        g /= sclfac;
+                        r /= sclfac;
+                        ra /= sclfac;
+                    }
+                    g = c / sclfac;
+                    while r <= g
+                        && r.max(ra) < sfmax2
+                        && f.min(c).min(g.min(ca)) > sfmin2
+                    {
+                        f /= sclfac;
+                        c /= sclfac;
+                        ca /= sclfac;
+                        g /= sclfac;
+                        r *= sclfac;
+                        ra *= sclfac;
+                    }
+
+                    if c + r >= factor * s {
+                        continue;
+                    }
+                    if f < 1.0 && sc[i] < 1.0 && f * sc[i] <= sfmin1 {
+                        continue;
+                    }
+                    if f > 1.0 && sc[i] > 1.0 && sc[i] >= sfmax1 / f {
+                        continue;
+                    }
+
+                    // Apply the diagonal similarity: row i ·= 1/f, col i ·= f.
+                    sc[i] *= f;
+                    let inv_f = 1.0 / f;
+                    for k in ilo..n {
+                        m[i][k] *= inv_f;
+                    }
+                    for row in m.iter_mut().take(ihi + 1) {
+                        row[i] *= f;
+                    }
+                    conv = false;
+                }
+            }
+        }
+    }
+
+    // Reconstruct the separate scaling vector and permutation (mirrors scipy).
+    let mut scaling = vec![1.0_f64; n];
+    for (i, s) in scaling.iter_mut().enumerate().take(ihi + 1).skip(ilo) {
+        *s = sc[i];
+    }
+    let mut perm: Vec<usize> = (0..n).collect();
+    if ihi < n - 1 {
+        for (k0, &xf) in sc[ihi + 1..].iter().rev().enumerate() {
+            let target = n - (k0 + 1);
+            let x = xf as usize;
+            if target == x {
+                continue;
+            }
+            perm.swap(x, target);
+        }
+    }
+    if ilo > 0 {
+        for (ind, &xf) in sc[..ilo].iter().enumerate() {
+            let x = xf as usize;
+            if ind == x {
+                continue;
+            }
+            perm.swap(x, ind);
+        }
+    }
+
+    // T = diag(scaling) with rows reordered by the inverse permutation.
+    let mut iperm = vec![0usize; n];
+    for (i, &p) in perm.iter().enumerate() {
+        iperm[p] = i;
+    }
+    let mut transform = vec![vec![0.0_f64; n]; n];
+    for (i, trow) in transform.iter_mut().enumerate() {
+        trow[iperm[i]] = scaling[iperm[i]];
+    }
+
+    Ok(MatrixBalance {
+        balanced: m,
+        transform,
+        scaling,
+        perm,
+    })
+}
+
 /// Construct a Hilbert matrix.
 ///
 /// Matches `scipy.linalg.hilbert(n)`.
@@ -23218,6 +23445,78 @@ mod tests {
     fn hadamard_non_power_of_2_rejected() {
         assert!(hadamard(3).is_err());
         assert!(hadamard(6).is_err());
+    }
+
+    #[test]
+    fn matrix_balance_matches_scipy() {
+        // Irreducible matrix: pure scaling, column 0 scaled by 8.
+        let a = vec![
+            vec![1.0, 1000.0, 0.01],
+            vec![0.001, 1.0, 100.0],
+            vec![10.0, 0.1, 1.0],
+        ];
+        let res = matrix_balance(&a, true, true).unwrap();
+        let exp_b = [
+            [1.0, 125.0, 0.00125],
+            [0.008, 1.0, 100.0],
+            [80.0, 0.1, 1.0],
+        ];
+        for i in 0..3 {
+            for j in 0..3 {
+                assert!(
+                    (res.balanced[i][j] - exp_b[i][j]).abs() < 1e-9,
+                    "B[{i}][{j}] = {} vs {}",
+                    res.balanced[i][j],
+                    exp_b[i][j]
+                );
+            }
+        }
+        assert_eq!(res.scaling, vec![8.0, 1.0, 1.0]);
+        assert_eq!(res.perm, vec![0, 1, 2]);
+
+        // Reducible block matrix: pure permutation, no scaling.
+        let r = vec![
+            vec![2.0, 3.0, 0.0, 0.0],
+            vec![0.0, 4.0, 0.0, 0.0],
+            vec![1.0, 1.0, 5.0, 6.0],
+            vec![1.0, 1.0, 0.0, 7.0],
+        ];
+        let res2 = matrix_balance(&r, true, true).unwrap();
+        let exp_b2 = [
+            [5.0, 6.0, 1.0, 1.0],
+            [0.0, 7.0, 1.0, 1.0],
+            [0.0, 0.0, 2.0, 3.0],
+            [0.0, 0.0, 0.0, 4.0],
+        ];
+        for i in 0..4 {
+            for j in 0..4 {
+                assert!(
+                    (res2.balanced[i][j] - exp_b2[i][j]).abs() < 1e-9,
+                    "B2[{i}][{j}] = {} vs {}",
+                    res2.balanced[i][j],
+                    exp_b2[i][j]
+                );
+            }
+        }
+        assert_eq!(res2.scaling, vec![1.0, 1.0, 1.0, 1.0]);
+        assert_eq!(res2.perm, vec![2, 3, 0, 1]);
+        // T column-permutation matches scipy: rows [2,3,0,1] of the identity.
+        let exp_t2 = [
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+        ];
+        for i in 0..4 {
+            for j in 0..4 {
+                assert_eq!(res2.transform[i][j], exp_t2[i][j], "T2[{i}][{j}]");
+            }
+        }
+
+        // scale=false leaves the matrix only permuted; permute=false skips perm.
+        let res3 = matrix_balance(&a, false, false).unwrap();
+        assert_eq!(res3.balanced, a);
+        assert_eq!(res3.scaling, vec![1.0, 1.0, 1.0]);
     }
 
     #[test]
