@@ -13850,6 +13850,143 @@ impl Lti {
     }
 }
 
+/// Continuous-time LTI system in transfer-function form, matching
+/// `scipy.signal.TransferFunction(num, den)`.
+///
+/// Provides the canonical `to_tf`/`to_zpk`/`to_ss` conversions (delegating to
+/// the verified `tf2zpk`/`tf2ss`). SISO.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TransferFunction {
+    /// Numerator polynomial coefficients (highest power first).
+    pub num: Vec<f64>,
+    /// Denominator polynomial coefficients (highest power first).
+    pub den: Vec<f64>,
+}
+
+impl TransferFunction {
+    /// Create from numerator/denominator coefficients.
+    pub fn new(num: Vec<f64>, den: Vec<f64>) -> Result<Self, SignalError> {
+        if num.is_empty() || den.is_empty() {
+            return Err(SignalError::InvalidArgument(
+                "num and den must be non-empty".to_string(),
+            ));
+        }
+        Ok(Self { num, den })
+    }
+
+    /// Identity conversion.
+    #[must_use]
+    pub fn to_tf(&self) -> TransferFunction {
+        self.clone()
+    }
+
+    /// Convert to zero-pole-gain form (`scipy TransferFunction.to_zpk`).
+    pub fn to_zpk(&self) -> Result<ZerosPolesGain, SignalError> {
+        Ok(ZerosPolesGain {
+            zpk: tf2zpk(&self.num, &self.den)?,
+        })
+    }
+
+    /// Convert to state-space form (`scipy TransferFunction.to_ss`).
+    pub fn to_ss(&self) -> Result<StateSpace, SignalError> {
+        let (a, b, c, d) = tf2ss(&self.num, &self.den)?;
+        Ok(StateSpace { a, b, c, d })
+    }
+}
+
+/// Continuous-time LTI system in zero-pole-gain form, matching
+/// `scipy.signal.ZerosPolesGain(zeros, poles, gain)`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ZerosPolesGain {
+    /// Zeros, poles, and gain.
+    pub zpk: ZpkCoeffs,
+}
+
+impl ZerosPolesGain {
+    /// Create from complex zeros/poles (split re/im) and a scalar gain.
+    #[must_use]
+    pub fn new(
+        zeros_re: Vec<f64>,
+        zeros_im: Vec<f64>,
+        poles_re: Vec<f64>,
+        poles_im: Vec<f64>,
+        gain: f64,
+    ) -> Self {
+        Self {
+            zpk: ZpkCoeffs {
+                zeros_re,
+                zeros_im,
+                poles_re,
+                poles_im,
+                gain,
+            },
+        }
+    }
+
+    /// Convert to transfer-function form (`scipy ZerosPolesGain.to_tf`).
+    #[must_use]
+    pub fn to_tf(&self) -> TransferFunction {
+        let ba = zpk2tf(&self.zpk);
+        TransferFunction {
+            num: ba.b,
+            den: ba.a,
+        }
+    }
+
+    /// Identity conversion.
+    #[must_use]
+    pub fn to_zpk(&self) -> ZerosPolesGain {
+        self.clone()
+    }
+
+    /// Convert to state-space form (`scipy ZerosPolesGain.to_ss`).
+    pub fn to_ss(&self) -> Result<StateSpace, SignalError> {
+        let (a, b, c, d) = zpk2ss(&self.zpk)?;
+        Ok(StateSpace { a, b, c, d })
+    }
+}
+
+/// Continuous-time LTI system in state-space form, matching
+/// `scipy.signal.StateSpace(A, B, C, D)`. SISO (`B`/`C` vectors, `D` scalar).
+#[derive(Debug, Clone, PartialEq)]
+pub struct StateSpace {
+    /// State matrix `A` (n×n).
+    pub a: Vec<Vec<f64>>,
+    /// Input vector `B` (n).
+    pub b: Vec<f64>,
+    /// Output vector `C` (n).
+    pub c: Vec<f64>,
+    /// Feedthrough scalar `D`.
+    pub d: f64,
+}
+
+impl StateSpace {
+    /// Create from state-space matrices.
+    #[must_use]
+    pub fn new(a: Vec<Vec<f64>>, b: Vec<f64>, c: Vec<f64>, d: f64) -> Self {
+        Self { a, b, c, d }
+    }
+
+    /// Convert to transfer-function form (`scipy StateSpace.to_tf`).
+    pub fn to_tf(&self) -> Result<TransferFunction, SignalError> {
+        let (num, den) = ss2tf(&self.a, &self.b, &self.c, self.d)?;
+        Ok(TransferFunction { num, den })
+    }
+
+    /// Convert to zero-pole-gain form (`scipy StateSpace.to_zpk`).
+    pub fn to_zpk(&self) -> Result<ZerosPolesGain, SignalError> {
+        Ok(ZerosPolesGain {
+            zpk: ss2zpk(&self.a, &self.b, &self.c, self.d)?,
+        })
+    }
+
+    /// Identity conversion.
+    #[must_use]
+    pub fn to_ss(&self) -> StateSpace {
+        self.clone()
+    }
+}
+
 /// Discrete-time Linear Time-Invariant system representation.
 ///
 /// Matches `scipy.signal.dlti`. Represents a discrete-time LTI system
@@ -14118,9 +14255,9 @@ fn poly_eval_complex(coeffs: &[f64], z_re: f64, z_im: f64) -> (f64, f64) {
 /// than scipy's [`tf2ss`]; since simulation output is realization-independent,
 /// the two are interchangeable for the simulators. Public scipy-matching
 /// conversion is [`tf2ss`].
-type StateSpace = (Vec<Vec<f64>>, Vec<f64>, Vec<f64>, f64);
+type SsControllable = (Vec<Vec<f64>>, Vec<f64>, Vec<f64>, f64);
 
-fn tf2ss_controllable(num: &[f64], den: &[f64]) -> Result<StateSpace, SignalError> {
+fn tf2ss_controllable(num: &[f64], den: &[f64]) -> Result<SsControllable, SignalError> {
     if den.is_empty() || den[0] == 0.0 {
         return Err(SignalError::InvalidArgument(
             "denominator leading coefficient cannot be zero".to_string(),
@@ -16174,6 +16311,46 @@ mod tests {
             },
         );
         assert_eq!(ml5, vec![30, 57, 90, 122, 151]);
+    }
+
+    #[test]
+    fn lti_classes_match_scipy() {
+        // H(s) = (s^2 + 3s + 3) / (s^2 + 2s + 1).
+        let tf = TransferFunction::new(vec![1.0, 3.0, 3.0], vec![1.0, 2.0, 1.0]).unwrap();
+
+        // to_zpk: zeros -1.5 +/- 0.8660254j, poles -1,-1, gain 1.
+        let zpk = tf.to_zpk().unwrap();
+        assert!((zpk.zpk.gain - 1.0).abs() < 1e-9);
+        let mut zr = zpk.zpk.zeros_re.clone();
+        zr.sort_by(f64::total_cmp);
+        for z in &zr {
+            assert!((z + 1.5).abs() < 1e-7, "zero re {z}");
+        }
+        let mut zi = zpk.zpk.zeros_im.clone();
+        zi.sort_by(f64::total_cmp);
+        assert!((zi[0] + 0.8660254).abs() < 1e-6 && (zi[1] - 0.8660254).abs() < 1e-6);
+        for p in &zpk.zpk.poles_re {
+            assert!((p + 1.0).abs() < 1e-6, "pole re {p}");
+        }
+
+        // to_ss then back to_tf round-trips to the original TF.
+        let ss = tf.to_ss().unwrap();
+        let tf2 = ss.to_tf().unwrap();
+        for (a, b) in tf2.num.iter().zip(&[1.0, 3.0, 3.0]) {
+            assert!((a - b).abs() < 1e-7, "ss2tf num {a} vs {b}");
+        }
+        for (a, b) in tf2.den.iter().zip(&[1.0, 2.0, 1.0]) {
+            assert!((a - b).abs() < 1e-7, "ss2tf den {a} vs {b}");
+        }
+
+        // ZerosPolesGain.to_tf recovers the numerator/denominator.
+        let tf3 = zpk.to_tf();
+        for (a, b) in tf3.num.iter().zip(&[1.0, 3.0, 3.0]) {
+            assert!((a - b).abs() < 1e-7, "zpk2tf num {a} vs {b}");
+        }
+        // StateSpace.to_zpk matches tf.to_zpk poles.
+        let ssz = ss.to_zpk().unwrap();
+        assert_eq!(ssz.zpk.poles_re.len(), 2);
     }
 
     #[test]
