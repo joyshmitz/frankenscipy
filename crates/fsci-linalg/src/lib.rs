@@ -12612,6 +12612,38 @@ pub fn circulant(c: &[f64]) -> Vec<Vec<f64>> {
     result
 }
 
+/// Construct the discrete Fourier transform matrix.
+///
+/// Matches `scipy.linalg.dft(n, scale=None)`.
+///
+/// Entry `(j, k)` is `ω^(j·k)` with `ω = exp(-2πi/n)`. The optional `scale`
+/// argument may be `None` (unscaled), `"sqrtn"` (divide by `√n`, making the
+/// matrix unitary), or `"n"` (divide by `n`, so the matrix maps a signal to its
+/// inverse-DFT-consistent coefficients). Any other value is an error.
+pub fn dft(n: usize, scale: Option<&str>) -> Result<Vec<Vec<Complex<f64>>>, LinalgError> {
+    let factor = match scale {
+        None => 1.0,
+        Some("sqrtn") => 1.0 / (n as f64).sqrt(),
+        Some("n") => 1.0 / n as f64,
+        Some(other) => {
+            return Err(LinalgError::InvalidArgument {
+                detail: format!("scale must be None, 'sqrtn', or 'n', got {other:?}"),
+            });
+        }
+    };
+    let mut result = vec![vec![Complex::new(0.0, 0.0); n]; n];
+    let base = -2.0 * std::f64::consts::PI / n as f64;
+    for (j, row) in result.iter_mut().enumerate() {
+        for (k, entry) in row.iter_mut().enumerate() {
+            // Reduce j·k mod n before scaling the angle to limit round-off.
+            let m = (j * k) % n;
+            let theta = base * m as f64;
+            *entry = Complex::new(theta.cos() * factor, theta.sin() * factor);
+        }
+    }
+    Ok(result)
+}
+
 /// Construct a Hilbert matrix.
 ///
 /// Matches `scipy.linalg.hilbert(n)`.
@@ -23186,6 +23218,41 @@ mod tests {
     fn hadamard_non_power_of_2_rejected() {
         assert!(hadamard(3).is_err());
         assert!(hadamard(6).is_err());
+    }
+
+    #[test]
+    fn dft_matches_scipy() {
+        // scipy.linalg.dft(4) unscaled, row 1 = [1, -i, -1, i]
+        let m = dft(4, None).unwrap();
+        let exp = [
+            [(1.0, 0.0), (1.0, 0.0), (1.0, 0.0), (1.0, 0.0)],
+            [(1.0, 0.0), (0.0, -1.0), (-1.0, 0.0), (0.0, 1.0)],
+            [(1.0, 0.0), (-1.0, 0.0), (1.0, 0.0), (-1.0, 0.0)],
+            [(1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0)],
+        ];
+        for j in 0..4 {
+            for k in 0..4 {
+                assert!(
+                    (m[j][k].re - exp[j][k].0).abs() < 1e-12
+                        && (m[j][k].im - exp[j][k].1).abs() < 1e-12,
+                    "dft(4)[{j}][{k}] = {:?}, expected {:?}",
+                    m[j][k],
+                    exp[j][k]
+                );
+            }
+        }
+        // sqrtn scaling divides by 2; n scaling divides by 4.
+        let ms = dft(4, Some("sqrtn")).unwrap();
+        assert!((ms[1][1].re - 0.0).abs() < 1e-12 && (ms[1][1].im + 0.5).abs() < 1e-12);
+        let mn = dft(4, Some("n")).unwrap();
+        assert!((mn[1][1].re - 0.0).abs() < 1e-12 && (mn[1][1].im + 0.25).abs() < 1e-12);
+        // n=3: ω = exp(-2πi/3); entry (1,1) = -0.5 - i·√3/2.
+        let m3 = dft(3, None).unwrap();
+        assert!(
+            (m3[1][1].re + 0.5).abs() < 1e-12 && (m3[1][1].im + 0.8660254037844387).abs() < 1e-12
+        );
+        // Invalid scale rejected.
+        assert!(dft(4, Some("bogus")).is_err());
     }
 
     #[test]
