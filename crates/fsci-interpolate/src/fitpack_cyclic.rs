@@ -71,9 +71,64 @@ pub(crate) fn fpcyt2(a: &[Vec<f64>], n: usize, b: &[f64], c: &mut [f64]) {
     }
 }
 
+/// `fpbacp`: back-substitution for a periodic banded upper-triangular system
+/// (FITPACK). `a` (rows `1..=n-k`, cols `1..=k1=k+1`) is the banded body part
+/// (`a[i][1]` diagonal, `a[i][1+l]` super-diagonals); `b` (rows `1..=n`, cols
+/// `1..=k`) is the periodic coupling block whose last `k` columns wrap. `z` is
+/// the right-hand side; the solution is written to `c[1..=n]`.
+#[allow(dead_code)]
+pub(crate) fn fpbacp(a: &[Vec<f64>], b: &[Vec<f64>], z: &[f64], n: usize, k: usize, c: &mut [f64]) {
+    let n2 = n - k;
+    // Solve the trailing k unknowns (the periodic block, upper-triangular in b).
+    let mut l = n;
+    for i in 1..=k {
+        let mut store = z[l];
+        let j = k + 2 - i;
+        if i != 1 {
+            let mut l0 = l;
+            for l1 in j..=k {
+                l0 += 1;
+                store -= c[l0] * b[l][l1];
+            }
+        }
+        c[l] = store / b[l][j - 1];
+        if l == 1 {
+            return;
+        }
+        l -= 1;
+    }
+    // Fold the trailing unknowns into the body right-hand side.
+    for i in 1..=n2 {
+        let mut store = z[i];
+        let mut ll = n2;
+        for j in 1..=k {
+            ll += 1;
+            store -= c[ll] * b[i][j];
+        }
+        c[i] = store;
+    }
+    // Back-substitute the banded body part.
+    let mut i = n2;
+    c[i] /= a[i][1];
+    if i == 1 {
+        return;
+    }
+    for j in 2..=n2 {
+        i -= 1;
+        let mut store = c[i];
+        let i1 = if j <= k { j - 1 } else { k };
+        let mut ll = i;
+        for l0 in 1..=i1 {
+            ll += 1;
+            store -= c[ll] * a[i][l0 + 1];
+        }
+        c[i] = store / a[i][1];
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{fpcyt1, fpcyt2};
+    use super::{fpbacp, fpcyt1, fpcyt2};
 
     // Dense apply of the cyclic-tridiagonal matrix encoded in `a` (1-based,
     // columns 1=sub, 2=diag, 3=super; corners a[1][1]=(1,n), a[n][3]=(n,1)).
@@ -93,6 +148,65 @@ mod tests {
         out[1] += a[1][1] * c[n];
         out[n] += a[n][3] * c[1];
         out
+    }
+
+    // Build the implied n×n upper-triangular matrix of fpbacp from (a,b) and
+    // verify M·c == z for the computed solution.
+    #[test]
+    fn fpbacp_solves_periodic_banded() {
+        let (n, k) = (8usize, 2usize);
+        let n2 = n - k;
+        // Body band a (rows 1..=n2, cols 1..=k+1): a[i][1] diag (nonzero).
+        let mut a = vec![vec![0.0_f64; k + 2]; n2 + 1];
+        for i in 1..=n2 {
+            a[i][1] = 4.0 + i as f64 * 0.5;
+            a[i][2] = -0.7 + 0.1 * i as f64;
+            a[i][3] = 0.4 - 0.05 * i as f64;
+        }
+        // Coupling block b (rows 1..=n, cols 1..=k). Tail diagonals nonzero.
+        let mut b = vec![vec![0.0_f64; k + 1]; n + 1];
+        for i in 1..=n {
+            b[i][1] = 0.3 + 0.07 * i as f64;
+            b[i][2] = -0.2 + 0.04 * i as f64;
+        }
+        b[n - 1][1] = 5.0; // M[7][7] diagonal
+        b[n][2] = 5.5; // M[8][8] diagonal
+        // Build M (1-based) from fpbacp's implied equations.
+        let mut mm = vec![vec![0.0_f64; n + 1]; n + 1];
+        // body rows
+        for i in 1..=n2 {
+            mm[i][i] = a[i][1];
+            let lim = k.min(n2 - i);
+            for l0 in 1..=lim {
+                mm[i][i + l0] = a[i][l0 + 1];
+            }
+            for j in 1..=k {
+                mm[i][n2 + j] = b[i][j];
+            }
+        }
+        // tail rows
+        for ii in 1..=k {
+            let l = n - ii + 1;
+            let j = k + 2 - ii;
+            mm[l][l] = b[l][j - 1];
+            for l1 in j..=k {
+                mm[l][l + (l1 - j + 1)] = b[l][l1];
+            }
+        }
+        let c_true: Vec<f64> = (0..=n).map(|i| (i as f64 * 0.37).sin() + 0.5).collect();
+        let mut z = vec![0.0_f64; n + 1];
+        for i in 1..=n {
+            let mut s = 0.0;
+            for jc in 1..=n {
+                s += mm[i][jc] * c_true[jc];
+            }
+            z[i] = s;
+        }
+        let mut c = vec![0.0_f64; n + 1];
+        fpbacp(&a, &b, &z, n, k, &mut c);
+        for i in 1..=n {
+            assert!((c[i] - c_true[i]).abs() <= 1e-9, "c[{i}]: {} vs {}", c[i], c_true[i]);
+        }
     }
 
     #[test]
