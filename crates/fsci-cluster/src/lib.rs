@@ -3910,6 +3910,142 @@ pub fn leaders(z: &[[f64; 4]], t: &[usize]) -> Result<(Vec<usize>, Vec<usize>), 
     Ok((l, m))
 }
 
+/// Maximum of column `i` of the inconsistency matrix `R` over each non-singleton
+/// cluster's subtree. Matches `scipy.cluster.hierarchy.maxRstat(Z, R, i)`
+/// (`maxinconsts` is the `i == 3` case, `maxdists` propagates `Z[:,2]`).
+pub fn max_rstat(z: &[[f64; 4]], r: &[[f64; 4]], i: usize) -> Result<Vec<f64>, ClusterError> {
+    if i > 3 {
+        return Err(ClusterError::InvalidArgument(
+            "i must be in 0..=3".to_string(),
+        ));
+    }
+    if z.len() != r.len() {
+        return Err(ClusterError::InvalidArgument(
+            "Z and R must have the same number of rows".to_string(),
+        ));
+    }
+    if z.is_empty() {
+        return Ok(vec![]);
+    }
+    let n = z.len() + 1;
+    let mut out = vec![0.0_f64; z.len()];
+    for (j, row) in z.iter().enumerate() {
+        let mut m = r[j][i];
+        let c1 = row[0] as usize;
+        let c2 = row[1] as usize;
+        if c1 >= n {
+            m = m.max(out[c1 - n]);
+        }
+        if c2 >= n {
+            m = m.max(out[c2 - n]);
+        }
+        out[j] = m;
+    }
+    Ok(out)
+}
+
+/// Whether two flat cluster assignments are identical up to relabeling.
+///
+/// Matches `scipy.cluster.hierarchy.is_isomorphic(T1, T2)`: returns true iff
+/// there is a bijection between the labels of `t1` and `t2` consistent on every
+/// element.
+pub fn is_isomorphic(t1: &[usize], t2: &[usize]) -> bool {
+    if t1.len() != t2.len() {
+        return false;
+    }
+    let mut fwd: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    let mut rev: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    for (&a, &b) in t1.iter().zip(t2.iter()) {
+        if *fwd.entry(a).or_insert(b) != b {
+            return false;
+        }
+        if *rev.entry(b).or_insert(a) != a {
+            return false;
+        }
+    }
+    true
+}
+
+/// Whether a linkage matrix `Z` corresponds to a condensed distance vector `Y`,
+/// i.e. they describe the same number of original observations.
+///
+/// Matches `scipy.cluster.hierarchy.correspond(Z, Y)`.
+pub fn correspond(z: &[[f64; 4]], y: &[f64]) -> bool {
+    let n = z.len() + 1;
+    y.len() == n * (n - 1) / 2
+}
+
+/// Cut a hierarchical clustering into flat clusters.
+///
+/// Matches `scipy.cluster.hierarchy.cut_tree(Z, n_clusters=…, height=…)` for a
+/// single cut: supply exactly one of `n_clusters` or `height`. Returns the
+/// 0-based flat labels, numbered in order of first appearance. (`height` cuts
+/// assume a monotone linkage, as produced by the standard linkage methods.)
+pub fn cut_tree(
+    z: &[[f64; 4]],
+    n_clusters: Option<usize>,
+    height: Option<f64>,
+) -> Result<Vec<usize>, ClusterError> {
+    let n = z.len() + 1;
+    let num_merges = match (n_clusters, height) {
+        (Some(k), None) => {
+            if k == 0 || k > n {
+                return Err(ClusterError::InvalidArgument(
+                    "n_clusters must be in 1..=n".to_string(),
+                ));
+            }
+            n - k
+        }
+        (None, Some(h)) => z.iter().take_while(|row| row[2] <= h).count(),
+        _ => {
+            return Err(ClusterError::InvalidArgument(
+                "specify exactly one of n_clusters or height".to_string(),
+            ));
+        }
+    };
+
+    fn find(parent: &mut [usize], x: usize) -> usize {
+        let mut r = x;
+        while parent[r] != r {
+            r = parent[r];
+        }
+        let mut c = x;
+        while parent[c] != c {
+            let nx = parent[c];
+            parent[c] = r;
+            c = nx;
+        }
+        r
+    }
+
+    let mut parent: Vec<usize> = (0..n).collect();
+    let mut node_rep = vec![0usize; 2 * n - 1];
+    for (p, slot) in node_rep.iter_mut().enumerate().take(n) {
+        *slot = p;
+    }
+    for (i, row) in z.iter().enumerate().take(num_merges) {
+        let c1 = row[0] as usize;
+        let c2 = row[1] as usize;
+        let r1 = find(&mut parent, node_rep[c1]);
+        let r2 = find(&mut parent, node_rep[c2]);
+        parent[r2] = r1;
+        node_rep[n + i] = r1;
+    }
+
+    let mut label_of: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    let mut next = 0usize;
+    let mut out = vec![0usize; n];
+    for (p, slot) in out.iter_mut().enumerate() {
+        let root = find(&mut parent, p);
+        *slot = *label_of.entry(root).or_insert_with(|| {
+            let l = next;
+            next += 1;
+            l
+        });
+    }
+    Ok(out)
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // DBSCAN
 // ══════════════════════════════════════════════════════════════════════
@@ -7726,6 +7862,40 @@ mod tests {
             }
         }
         assert!(kmeans2(&data, &init, 0).is_err());
+    }
+
+    #[test]
+    fn hierarchy_maxrstat_cut_tree_match_scipy() {
+        let z = [
+            [0.0, 1.0, 1.0, 2.0],
+            [2.0, 3.0, 1.5, 2.0],
+            [5.0, 4.0, 2.0, 3.0],
+            [6.0, 7.0, 3.0, 5.0],
+        ];
+        let r = inconsistent(&z, 2);
+        // scipy.cluster.hierarchy.maxRstat(Z, R, i)
+        let m0 = max_rstat(&z, &r, 0).unwrap();
+        for (g, e) in m0.iter().zip(&[1.0, 1.5, 1.5, 2.166667]) {
+            assert!((g - e).abs() < 1e-5, "maxRstat0 {g} vs {e}");
+        }
+        let m3 = max_rstat(&z, &r, 3).unwrap();
+        for (g, e) in m3.iter().zip(&[0.0, 0.0, 0.707107, 1.091089]) {
+            assert!((g - e).abs() < 1e-5, "maxRstat3 {g} vs {e}");
+        }
+        assert!(max_rstat(&z, &r, 4).is_err());
+
+        // cut_tree
+        assert_eq!(cut_tree(&z, Some(2), None).unwrap(), vec![0, 0, 1, 1, 0]);
+        assert_eq!(cut_tree(&z, None, Some(1.7)).unwrap(), vec![0, 0, 1, 1, 2]);
+        assert_eq!(cut_tree(&z, Some(5), None).unwrap(), vec![0, 1, 2, 3, 4]);
+        assert_eq!(cut_tree(&z, Some(1), None).unwrap(), vec![0, 0, 0, 0, 0]);
+        assert!(cut_tree(&z, Some(2), Some(1.0)).is_err());
+
+        // is_isomorphic / correspond
+        assert!(is_isomorphic(&[1, 1, 2, 2], &[2, 2, 1, 1]));
+        assert!(!is_isomorphic(&[1, 2, 1], &[1, 2, 3]));
+        assert!(correspond(&z, &(0..10).map(|i| i as f64).collect::<Vec<_>>()));
+        assert!(!correspond(&z, &[0.0, 1.0, 2.0]));
     }
 
     #[test]
