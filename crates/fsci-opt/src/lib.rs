@@ -620,6 +620,185 @@ fn transpose_matrix(matrix: &[Vec<f64>]) -> Vec<Vec<f64>> {
     transposed
 }
 
+/// Result of [`quadratic_assignment`].
+#[derive(Debug, Clone)]
+pub struct QuadraticAssignmentResult {
+    /// The column indices of the optimal permutation: node `i` of `A` maps to
+    /// node `col_ind[i]` of `B`.
+    pub col_ind: Vec<usize>,
+    /// The objective value `Σ A[i][j]·B[col[i]][col[j]]`.
+    pub fun: f64,
+    /// The number of FAQ iterations performed.
+    pub nit: usize,
+}
+
+// Dense n×n matrix multiply (small matrices).
+fn qap_matmul(x: &[Vec<f64>], y: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    let n = x.len();
+    let m = if y.is_empty() { 0 } else { y[0].len() };
+    let k = y.len();
+    let mut out = vec![vec![0.0; m]; n];
+    for i in 0..n {
+        for p in 0..k {
+            let xip = x[i][p];
+            if xip == 0.0 {
+                continue;
+            }
+            for j in 0..m {
+                out[i][j] += xip * y[p][j];
+            }
+        }
+    }
+    out
+}
+
+// Σ_ij x[i][j]·y[i][j] (trace(Xᵀ Y) written as an elementwise product sum).
+fn qap_elem_mul_sum(x: &[Vec<f64>], y: &[Vec<f64>]) -> f64 {
+    x.iter()
+        .zip(y)
+        .map(|(xr, yr)| xr.iter().zip(yr).map(|(&a, &b)| a * b).sum::<f64>())
+        .sum()
+}
+
+/// Solve the quadratic assignment problem (approximately) with the Fast
+/// Approximate QAP (FAQ) algorithm, matching `scipy.optimize.quadratic_assignment`
+/// with `method='faq'` for the default options (no `partial_match`, no input
+/// shuffle, `P0='barycenter'`).
+///
+/// Minimizes `trace(Aᵀ P B Pᵀ)` over permutation matrices `P` (or maximizes it
+/// when `maximize` is true), returning the column permutation, objective value,
+/// and iteration count. `A` and `B` must be square of the same size.
+/// scipy defaults are `maximize=false`, `maxiter=30`, `tol=0.03`.
+pub fn quadratic_assignment(
+    a: &[Vec<f64>],
+    b: &[Vec<f64>],
+    maximize: bool,
+    maxiter: usize,
+    tol: f64,
+) -> Result<QuadraticAssignmentResult, OptError> {
+    let n = a.len();
+    if maxiter == 0 {
+        return Err(OptError::InvalidArgument {
+            detail: String::from("'maxiter' must be a positive integer"),
+        });
+    }
+    if tol <= 0.0 {
+        return Err(OptError::InvalidArgument {
+            detail: String::from("'tol' must be a positive float"),
+        });
+    }
+    if a.iter().any(|r| r.len() != n) || b.len() != n || b.iter().any(|r| r.len() != n) {
+        return Err(OptError::InvalidArgument {
+            detail: String::from("`A` and `B` must be square matrices of the same size"),
+        });
+    }
+    if n == 0 {
+        return Ok(QuadraticAssignmentResult {
+            col_ind: Vec::new(),
+            fun: 0.0,
+            nit: 0,
+        });
+    }
+
+    let obj_scalar = if maximize { -1.0 } else { 1.0 };
+    let at = transpose_matrix(a);
+    let bt = transpose_matrix(b);
+    let nf = n as f64;
+    // P0 = barycenter of the Birkhoff polytope.
+    let mut p = vec![vec![1.0 / nf; n]; n];
+    let mut n_iter = 0usize;
+
+    for it in 1..=maxiter {
+        n_iter = it;
+        // grad = A·P·Bᵀ + Aᵀ·P·B.
+        let grad1 = qap_matmul(&qap_matmul(a, &p), &bt);
+        let grad2 = qap_matmul(&qap_matmul(&at, &p), b);
+        let grad: Vec<Vec<f64>> = grad1
+            .iter()
+            .zip(&grad2)
+            .map(|(r1, r2)| r1.iter().zip(r2).map(|(&x, &y)| x + y).collect())
+            .collect();
+
+        // Direction Q from the linear assignment on the gradient.
+        let cost: Vec<Vec<f64>> = if maximize {
+            grad.iter().map(|r| r.iter().map(|&v| -v).collect()).collect()
+        } else {
+            grad.clone()
+        };
+        let (_, cols) = linear_sum_assignment(&cost)?;
+        let mut q = vec![vec![0.0; n]; n];
+        for (i, &c) in cols.iter().enumerate() {
+            q[i][c] = 1.0;
+        }
+
+        // R = P - Q.
+        let r: Vec<Vec<f64>> = p
+            .iter()
+            .zip(&q)
+            .map(|(pr, qr)| pr.iter().zip(qr).map(|(&x, &y)| x - y).collect())
+            .collect();
+        // AR = Aᵀ·R ; BR = B·Rᵀ.
+        let ar = qap_matmul(&at, &r);
+        let br = qap_matmul(b, &transpose_matrix(&r));
+        // Step-size quadratic coefficients (no-seed simplification).
+        let bt_cols: Vec<Vec<f64>> = cols.iter().map(|&c| bt[c].clone()).collect();
+        let br_cols: Vec<Vec<f64>> = cols.iter().map(|&c| br[c].clone()).collect();
+        let b22a = qap_elem_mul_sum(&ar, &bt_cols);
+        let b22b = qap_elem_mul_sum(a, &br_cols);
+        let a_coef = qap_elem_mul_sum(&transpose_matrix(&ar), &br);
+        let b_coef = b22a + b22b;
+
+        let crit = -b_coef / (2.0 * a_coef);
+        let alpha = if a_coef * obj_scalar > 0.0 && (0.0..=1.0).contains(&crit) {
+            crit
+        } else if (b_coef + a_coef) * obj_scalar >= 0.0 {
+            0.0
+        } else {
+            1.0
+        };
+
+        // P_i1 = alpha·P + (1 - alpha)·Q.
+        let p_new: Vec<Vec<f64>> = p
+            .iter()
+            .zip(&q)
+            .map(|(pr, qr)| {
+                pr.iter()
+                    .zip(qr)
+                    .map(|(&pv, &qv)| alpha * pv + (1.0 - alpha) * qv)
+                    .collect()
+            })
+            .collect();
+        // Convergence on ‖P - P_i1‖_F / √n.
+        let diff: f64 = p
+            .iter()
+            .zip(&p_new)
+            .map(|(pr, nr)| pr.iter().zip(nr).map(|(&x, &y)| (x - y) * (x - y)).sum::<f64>())
+            .sum::<f64>()
+            .sqrt()
+            / nf.sqrt();
+        p = p_new;
+        if diff < tol {
+            break;
+        }
+    }
+
+    // Project onto a permutation: maximize the trace against P (== min on -P).
+    let neg_p: Vec<Vec<f64>> = p.iter().map(|r| r.iter().map(|&v| -v).collect()).collect();
+    let (_, col) = linear_sum_assignment(&neg_p)?;
+    // Objective: Σ A[i][j]·B[col[i]][col[j]].
+    let mut fun = 0.0;
+    for i in 0..n {
+        for j in 0..n {
+            fun += a[i][j] * b[col[i]][col[j]];
+        }
+    }
+    Ok(QuadraticAssignmentResult {
+        col_ind: col,
+        fun,
+        nit: n_iter,
+    })
+}
+
 // Hungarian implementation for row_count <= col_count.
 fn hungarian_rectangular(cost_matrix: &[Vec<f64>]) -> Vec<usize> {
     let row_count = cost_matrix.len();
@@ -4872,8 +5051,8 @@ mod tests {
         basinhopping, bracket, brent_minimize, brute, check_grad, cobyla, derivative,
         differential_evolution, differential_evolution_constrained, dual_annealing, fixed_point,
         golden, gradient_descent, hessian, isotonic_regression, jacobian, linear_sum_assignment,
-        linprog, milp, minimize_scalar_bounded, nnls, projected_gradient_descent, pso, rosen,
-        rosen_der, rosen_hess, rosen_hess_prod, shgo,
+        linprog, milp, minimize_scalar_bounded, nnls, projected_gradient_descent, pso,
+        quadratic_assignment, rosen, rosen_der, rosen_hess, rosen_hess_prod, shgo,
     };
 
     #[test]
@@ -5289,6 +5468,50 @@ mod tests {
         );
         assert!(!non_finite.success);
         assert_eq!(non_finite.status, ConvergenceStatus::InvalidInput);
+    }
+
+    #[test]
+    fn quadratic_assignment_faq_matches_scipy() {
+        let a = vec![
+            vec![0.0, 5.0, 8.0, 3.0],
+            vec![5.0, 0.0, 2.0, 7.0],
+            vec![8.0, 2.0, 0.0, 4.0],
+            vec![3.0, 7.0, 4.0, 0.0],
+        ];
+        let b = vec![
+            vec![0.0, 2.0, 4.0, 6.0],
+            vec![2.0, 0.0, 3.0, 1.0],
+            vec![4.0, 3.0, 0.0, 5.0],
+            vec![6.0, 1.0, 5.0, 0.0],
+        ];
+        let r = quadratic_assignment(&a, &b, false, 30, 0.03).unwrap();
+        assert_eq!(r.col_ind, vec![1, 0, 2, 3]);
+        assert!((r.fun - 214.0).abs() < 1e-9);
+        assert_eq!(r.nit, 1);
+
+        let rmax = quadratic_assignment(&a, &b, true, 30, 0.03).unwrap();
+        assert_eq!(rmax.col_ind, vec![0, 2, 3, 1]);
+        assert!((rmax.fun - 218.0).abs() < 1e-9);
+
+        // 5x5 case (scipy: col_ind=[2,3,1,0,4], fun=311, nit=24).
+        let a5 = vec![
+            vec![0.0, 7.0, 0.0, 3.0, 1.0],
+            vec![1.0, 0.0, 3.0, 4.0, 5.0],
+            vec![4.0, 7.0, 0.0, 9.0, 0.0],
+            vec![7.0, 4.0, 6.0, 0.0, 2.0],
+            vec![8.0, 10.0, 3.0, 7.0, 0.0],
+        ];
+        let b5 = vec![
+            vec![0.0, 1.0, 0.0, 2.0, 9.0],
+            vec![1.0, 0.0, 10.0, 5.0, 7.0],
+            vec![3.0, 7.0, 0.0, 0.0, 8.0],
+            vec![10.0, 7.0, 3.0, 0.0, 1.0],
+            vec![4.0, 9.0, 3.0, 3.0, 0.0],
+        ];
+        let r5 = quadratic_assignment(&a5, &b5, false, 30, 0.03).unwrap();
+        assert_eq!(r5.col_ind, vec![2, 3, 1, 0, 4]);
+        assert!((r5.fun - 311.0).abs() < 1e-9);
+        assert_eq!(r5.nit, 24);
     }
 
     #[test]
