@@ -7147,6 +7147,76 @@ impl MatrixNormal {
     }
 }
 
+/// Log of the multivariate gamma function `Γ_p(a) = π^{p(p-1)/4} Π Γ(a+(1-i)/2)`.
+fn ln_multivariate_gamma(p: usize, a: f64) -> f64 {
+    let pf = p as f64;
+    let mut s = pf * (pf - 1.0) / 4.0 * std::f64::consts::PI.ln();
+    for i in 1..=p {
+        s += ln_gamma(a + (1.0 - i as f64) / 2.0);
+    }
+    s
+}
+
+/// The Wishart distribution, matching `scipy.stats.wishart(df, scale)`.
+pub struct Wishart {
+    df: f64,
+    scale: Vec<Vec<f64>>,
+    chol_v: Vec<Vec<f64>>,
+    ln_det_v: f64,
+    p: usize,
+}
+
+impl Wishart {
+    /// Create the distribution with `df` degrees of freedom and `p×p` positive
+    /// definite `scale` matrix.
+    pub fn new(df: f64, scale: &[Vec<f64>]) -> Result<Self, StatsError> {
+        let p = scale.len();
+        if p == 0 {
+            return Err(StatsError::InvalidArgument("scale must be non-empty".to_string()));
+        }
+        let chol_v = cholesky_decompose(scale)?;
+        let ln_det_v = 2.0 * (0..p).map(|i| chol_v[i][i].ln()).sum::<f64>();
+        Ok(Self { df, scale: scale.to_vec(), chol_v, ln_det_v, p })
+    }
+
+    /// Log probability density function at a `p×p` symmetric positive-definite
+    /// matrix `x`.
+    pub fn logpdf(&self, x: &[Vec<f64>]) -> Result<f64, StatsError> {
+        let p = self.p;
+        if x.len() != p || x.iter().any(|r| r.len() != p) {
+            return Err(StatsError::InvalidArgument("x dimension must match scale".to_string()));
+        }
+        let chol_x = cholesky_decompose(x)?;
+        let ln_det_x = 2.0 * (0..p).map(|i| chol_x[i][i].ln()).sum::<f64>();
+        // tr(V⁻¹X) = ‖L_V⁻¹ · chol(X)‖_F² (X = chol_x·chol_xᵀ).
+        let mut tr = 0.0_f64;
+        for j in 0..p {
+            let col: Vec<f64> = (0..p).map(|i| chol_x[i][j]).collect();
+            let w = solve_lower_triangular(&self.chol_v, &col)?;
+            tr += w.iter().map(|&v| v * v).sum::<f64>();
+        }
+        let (n, pf) = (self.df, p as f64);
+        Ok((n - pf - 1.0) / 2.0 * ln_det_x
+            - 0.5 * tr
+            - n * pf / 2.0 * 2.0_f64.ln()
+            - n / 2.0 * self.ln_det_v
+            - ln_multivariate_gamma(p, n / 2.0))
+    }
+
+    /// Probability density function.
+    pub fn pdf(&self, x: &[Vec<f64>]) -> Result<f64, StatsError> {
+        Ok(self.logpdf(x)?.exp())
+    }
+
+    /// Mean `df · scale`.
+    pub fn mean(&self) -> Vec<Vec<f64>> {
+        self.scale
+            .iter()
+            .map(|row| row.iter().map(|&v| self.df * v).collect())
+            .collect()
+    }
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Von Mises Distribution
 // ══════════════════════════════════════════════════════════════════════
@@ -42298,6 +42368,16 @@ mod tests {
         let best = ppcc_max(&x, (0.0, 1.0));
         assert!((best - 0.35779018).abs() < 1e-4, "ppcc_max {best}");
         assert!(ppcc_plot(&x, 2.0, -2.0, 5).is_err());
+    }
+
+    #[test]
+    fn wishart_matches_scipy() {
+        let d = Wishart::new(5.0, &[vec![1.0, 0.3], vec![0.3, 2.0]]).unwrap();
+        let x = vec![vec![2.0, 0.5], vec![0.5, 3.0]];
+        assert!((d.logpdf(&x).unwrap() - (-5.945268668105113)).abs() < 1e-10);
+        assert!((d.pdf(&x).unwrap() - 0.0026181988273429446).abs() < 1e-14);
+        let mean = d.mean();
+        assert_eq!(mean, vec![vec![5.0, 1.5], vec![1.5, 10.0]]);
     }
 
     #[test]
