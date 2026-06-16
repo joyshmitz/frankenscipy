@@ -28178,6 +28178,46 @@ pub fn hdquantiles_sd(data: &[f64], prob: &[f64]) -> Vec<f64> {
 
 /// Computes empirical quantiles using configurable plotting positions.
 ///
+/// Maritz-Jarrett estimates of the standard error of sample quantiles,
+/// matching `scipy.stats.mstats.mjci(data, prob)` for 1-D unmasked input.
+///
+/// For each quantile `p`, with `m = int(p*n + 0.5)` and the order statistics
+/// `x_(1..n)` (sorted), the weights are
+/// `W_j = I_{j/n}(m-1, n-m) - I_{(j-1)/n}(m-1, n-m)` (`I` the regularized
+/// incomplete beta), and the SE is `sqrt(Σ W_j x_j² − (Σ W_j x_j)²)`. Degenerate
+/// beta parameters (`m == 1` or `m == n`) yield `NaN`, as in scipy.
+#[must_use]
+pub fn mjci(data: &[f64], prob: &[f64]) -> Vec<f64> {
+    let mut sorted: Vec<f64> = data.iter().copied().filter(|v| !v.is_nan()).collect();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let n = sorted.len();
+    let nf = n as f64;
+    prob
+        .iter()
+        .map(|&p| {
+            let m = (p * nf + 0.5) as i64; // int() truncation (p*n+0.5 >= 0)
+            let a = (m - 1) as f64;
+            let b = (n as i64 - m) as f64;
+            if a <= 0.0 || b <= 0.0 {
+                return f64::NAN;
+            }
+            let mut c1 = 0.0_f64;
+            let mut c2 = 0.0_f64;
+            let mut prev = regularized_incomplete_beta(a, b, 0.0); // y at j=1 is 0
+            for j in 1..=n {
+                let xj = j as f64 / nf;
+                let cur = regularized_incomplete_beta(a, b, xj);
+                let w = cur - prev;
+                let d = sorted[j - 1];
+                c1 += w * d;
+                c2 += w * d * d;
+                prev = cur;
+            }
+            (c2 - c1 * c1).max(0.0).sqrt()
+        })
+        .collect()
+}
+
 /// Matches `scipy.stats.mstats.mquantiles(a, prob, alphap, betap)`.
 /// Returns quantiles at the specified probabilities using the formula:
 /// `Q(p) = (1-g)*x[j] + g*x[j+1]`, where `j = floor(n*p + m)`, `m = alphap + p*(1 - alphap - betap)`.
@@ -45696,6 +45736,21 @@ mod tests {
     }
 
     // ── Poisson distribution ────────────────────────────────────────
+
+    #[test]
+    fn mjci_matches_scipy() {
+        let d = [2.0, 4.0, 1.0, 7.0, 3.0, 9.0, 5.0, 6.0, 8.0, 2.5, 4.5, 6.5];
+        let mj = mjci(&d, &[0.25, 0.5, 0.75]);
+        // scipy.stats.mstats.mjci oracle.
+        let want = [0.9279858105472303, 1.1755571308621218, 1.1081990325384956];
+        for (a, b) in mj.iter().zip(want.iter()) {
+            assert!((a - b).abs() <= 1e-9, "{a} vs {b}");
+        }
+        // p=0.1 with n=12 -> m=1 -> degenerate beta -> NaN (matches scipy).
+        let mj2 = mjci(&d, &[0.1, 0.9]);
+        assert!(mj2[0].is_nan());
+        assert!((mj2[1] - 0.8529247612753136).abs() <= 1e-9);
+    }
 
     #[test]
     fn discrete_ppf_isf_match_scipy() {
