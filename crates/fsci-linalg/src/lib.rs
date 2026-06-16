@@ -8204,6 +8204,8 @@ const BIDIAG_RANK_DEFICIENT_REL_TOL: f64 = 1e-11;
 const THIN_BIDIAG_LEFT_REPLAY_MIN_PAR_COLS: usize = 128;
 const THIN_BIDIAG_LEFT_REPLAY_MIN_COLS_PER_WORKER: usize = 32;
 const THIN_BIDIAG_LEFT_REPLAY_MAX_WORKERS: usize = 8;
+const SYMMETRIC_EIGH_COMPACT_BACKTRANSFORM_MIN_DIM: usize = 512;
+const SYMMETRIC_EIGH_COMPACT_BACKTRANSFORM_PANEL_WIDTH: usize = 8;
 const THIN_BIDIAG_RIGHT_REPLAY_MIN_PAR_ROWS: usize = 128;
 const THIN_BIDIAG_RIGHT_REPLAY_MIN_ROWS_PER_WORKER: usize = 32;
 const THIN_BIDIAG_RIGHT_REPLAY_MAX_WORKERS: usize = 8;
@@ -8504,16 +8506,149 @@ fn apply_left_reflectors_column_chunks(
         return;
     }
 
+    let compact_panels = if rows >= SYMMETRIC_EIGH_COMPACT_BACKTRANSFORM_MIN_DIM
+        && cols >= SYMMETRIC_EIGH_COMPACT_BACKTRANSFORM_MIN_DIM
+    {
+        compact_wy_left_backtransform_panels(
+            rows,
+            reflectors,
+            SYMMETRIC_EIGH_COMPACT_BACKTRANSFORM_PANEL_WIDTH,
+        )
+    } else {
+        None
+    };
+
     let cols_per_worker = cols.div_ceil(usable_workers);
     let chunk_len = rows * cols_per_worker;
+    let compact_panels = compact_panels.as_deref();
     std::thread::scope(|scope| {
         for chunk in matrix.as_mut_slice().chunks_mut(chunk_len) {
             let chunk_cols = chunk.len() / rows;
             scope.spawn(move || {
-                apply_left_reflectors_to_column_chunk(chunk, rows, chunk_cols, reflectors);
+                if let Some(panels) = compact_panels {
+                    apply_compact_wy_left_panels_to_column_chunk(chunk, rows, chunk_cols, panels);
+                } else {
+                    apply_left_reflectors_to_column_chunk(chunk, rows, chunk_cols, reflectors);
+                }
             });
         }
     });
+}
+
+#[allow(clippy::needless_range_loop)]
+fn compact_wy_left_backtransform_panels(
+    rows: usize,
+    reflectors: &[HouseholderReflector],
+    panel_width: usize,
+) -> Option<Vec<CompactWyPanel>> {
+    if rows == 0 || reflectors.is_empty() || panel_width == 0 {
+        return Some(Vec::new());
+    }
+
+    let mut panels = Vec::with_capacity(reflectors.len().div_ceil(panel_width));
+    let mut start = 0;
+    while start < reflectors.len() {
+        let end = (start + panel_width).min(reflectors.len());
+        let active_start = reflectors[start].start;
+        let row_count = rows.checked_sub(active_start)?;
+        let panel =
+            compact_wy_panel_from_reflectors(active_start, row_count, &reflectors[start..end])
+                .ok()?;
+        panels.push(panel);
+        start = end;
+    }
+    Some(panels)
+}
+
+#[allow(clippy::needless_range_loop)]
+fn apply_compact_wy_left_panels_to_column_chunk(
+    chunk: &mut [f64],
+    rows: usize,
+    cols: usize,
+    panels: &[CompactWyPanel],
+) {
+    let max_reflector_count = panels
+        .iter()
+        .map(|panel| panel.reflector_count)
+        .max()
+        .unwrap_or(0);
+    if max_reflector_count == 0 || cols == 0 {
+        return;
+    }
+    let mut y = vec![0.0_f64; max_reflector_count * cols];
+    let mut z = vec![0.0_f64; max_reflector_count * cols];
+    for panel in panels.iter().rev() {
+        apply_compact_wy_left_panel_to_column_chunk(chunk, rows, cols, panel, &mut y, &mut z);
+    }
+}
+
+#[allow(clippy::needless_range_loop)]
+fn apply_compact_wy_left_panel_to_column_chunk(
+    chunk: &mut [f64],
+    rows: usize,
+    cols: usize,
+    panel: &CompactWyPanel,
+    y_workspace: &mut [f64],
+    z_workspace: &mut [f64],
+) {
+    let active_start = panel.active_start;
+    let row_count = panel.row_count;
+    let k_count = panel.reflector_count;
+    if k_count == 0 || row_count == 0 {
+        return;
+    }
+    debug_assert!(active_start + row_count <= rows);
+    debug_assert!(panel.v_by_k_row.len() >= k_count * row_count);
+    debug_assert!(panel.t_row_major.len() >= k_count * k_count);
+    debug_assert!(y_workspace.len() >= k_count * cols);
+    debug_assert!(z_workspace.len() >= k_count * cols);
+
+    let y = &mut y_workspace[..k_count * cols];
+    let z = &mut z_workspace[..k_count * cols];
+    y.fill(0.0);
+    z.fill(0.0);
+
+    for k_idx in 0..k_count {
+        let v_base = k_idx * row_count;
+        let y_base = k_idx * cols;
+        for col in 0..cols {
+            let col_base = col * rows + active_start;
+            let mut dot = 0.0;
+            for row_rel in 0..row_count {
+                dot += panel.v_by_k_row[v_base + row_rel] * chunk[col_base + row_rel];
+            }
+            y[y_base + col] = dot;
+        }
+    }
+
+    for out_k in 0..k_count {
+        let z_base = out_k * cols;
+        for in_k in 0..k_count {
+            let coeff = panel.t_row_major[out_k * k_count + in_k];
+            if coeff == 0.0 {
+                continue;
+            }
+            let y_base = in_k * cols;
+            for col in 0..cols {
+                z[z_base + col] += coeff * y[y_base + col];
+            }
+        }
+    }
+
+    for k_idx in 0..k_count {
+        let v_base = k_idx * row_count;
+        let z_base = k_idx * cols;
+        for col in 0..cols {
+            let scale = z[z_base + col];
+            if scale == 0.0 {
+                continue;
+            }
+            let col_base = col * rows + active_start;
+            for row_rel in 0..row_count {
+                chunk[col_base + row_rel] -= panel.v_by_k_row[v_base + row_rel] * scale;
+            }
+        }
+    }
 }
 
 fn apply_left_reflectors_to_column_chunk(
@@ -22131,6 +22266,174 @@ mod tests {
                     "bit mismatch at ({row}, {col})"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn compact_wy_backtransform_matches_scalar_replay_contract() {
+        for (n, panel_width) in [(48usize, 4usize), (96, 8)] {
+            let mut original = DMatrix::<f64>::zeros(n, n);
+            for row in 0..n {
+                for col in 0..n {
+                    original[(row, col)] =
+                        ((row * 19 + col * 23 + row * col + 7) % 53) as f64 / 47.0 - 0.5;
+                }
+            }
+
+            let mut reflectors = Vec::with_capacity(n.saturating_sub(2));
+            for start in 1..n - 1 {
+                let values: Vec<f64> = (start..n)
+                    .map(|idx| ((idx * 13 + start * 29 + 11) % 67) as f64 / 71.0 - 0.45)
+                    .collect();
+                let reflector = make_householder_reflector(start, values);
+                reflectors.push(reflector);
+            }
+
+            let mut scalar = original.clone();
+            for reflector in reflectors.iter().rev() {
+                apply_householder_left(&mut scalar, reflector, 0);
+            }
+
+            let panels = compact_wy_left_backtransform_panels(n, &reflectors, panel_width)
+                .expect("compact-WY backtransform panels");
+            let mut compact = original;
+            apply_compact_wy_left_panels_to_column_chunk(compact.as_mut_slice(), n, n, &panels);
+
+            let max_abs = max_abs_dmatrix_diff(&compact, &scalar);
+            let scale = dmatrix_max_abs_value(&scalar).max(1.0);
+            assert!(
+                max_abs <= 1e-9 * scale * (n as f64).sqrt(),
+                "compact-WY backtransform drift {max_abs:.17e} for n={n}, panel_width={panel_width}"
+            );
+            println!(
+                "compact_wy_backtransform_contract n={n} panel_width={panel_width} max_abs_diff={max_abs:.17e} scalar_digest={:#018x} compact_digest={:#018x}",
+                dmatrix_bits_digest(&scalar),
+                dmatrix_bits_digest(&compact)
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "perf/proof probe: run with rch and --release for scalar vs compact-WY backtransform chunks"]
+    fn compact_wy_backtransform_chunk_perf_probe() {
+        for &n in &[400usize, 800, 1200] {
+            let mut s: u64 = 0x2468_ace0_1357_9bdf;
+            let mut rng = || {
+                s = s
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                ((s >> 11) as f64) / (1u64 << 53) as f64 - 0.5
+            };
+            let mut m = DMatrix::<f64>::zeros(n, n);
+            for i in 0..n {
+                for j in i..n {
+                    let value = rng();
+                    m[(i, j)] = value;
+                    m[(j, i)] = value;
+                }
+            }
+
+            let mut reflectors: Vec<HouseholderReflector> = Vec::with_capacity(n.saturating_sub(2));
+            let mut rank2_p = vec![0.0_f64; n];
+            let mut rank2_w = vec![0.0_f64; n];
+            for k in 0..n - 2 {
+                let first = m[(k + 1, k)];
+                let col: Vec<f64> = (k + 1..n).map(|i| m[(i, k)]).collect();
+                let refl = make_householder_reflector(k + 1, col);
+                let beta = first - refl.values[0];
+                if refl.tau != 0.0 {
+                    apply_symmetric_householder_trailing_rank2_lower_storage(
+                        &mut m,
+                        &refl,
+                        &mut rank2_p,
+                        &mut rank2_w,
+                    );
+                }
+                m[(k + 1, k)] = beta;
+                m[(k, k + 1)] = beta;
+                for i in k + 2..n {
+                    m[(i, k)] = 0.0;
+                    m[(k, i)] = 0.0;
+                }
+                reflectors.push(refl);
+            }
+
+            let diag: Vec<f64> = (0..n).map(|i| m[(i, i)]).collect();
+            let offdiag: Vec<f64> = (0..n - 1).map(|i| m[(i + 1, i)]).collect();
+            let eig = symmetric_tridiagonal_inverse_iteration_eigen(&diag, &offdiag)
+                .or_else(|| symmetric_tridiagonal_qr_eigen(&diag, &offdiag))
+                .expect("tridiagonal eigen stage");
+            let usable_workers = std::thread::available_parallelism()
+                .map_or(1, std::num::NonZeroUsize::get)
+                .min(THIN_BIDIAG_LEFT_REPLAY_MAX_WORKERS)
+                .min(n / THIN_BIDIAG_LEFT_REPLAY_MIN_COLS_PER_WORKER);
+            let chunk_cols = n.div_ceil(usable_workers.max(1));
+            let mut chunk = vec![0.0_f64; n * chunk_cols];
+            for col in 0..chunk_cols {
+                for row in 0..n {
+                    chunk[col * n + row] = eig.eigenvectors[(row, col)];
+                }
+            }
+
+            let mut scalar = chunk.clone();
+            let started_at = std::time::Instant::now();
+            apply_left_reflectors_to_column_chunk(
+                std::hint::black_box(&mut scalar),
+                n,
+                chunk_cols,
+                &reflectors,
+            );
+            let scalar_ms = started_at.elapsed().as_secs_f64() * 1_000.0;
+
+            let panels = compact_wy_left_backtransform_panels(
+                n,
+                &reflectors,
+                SYMMETRIC_EIGH_COMPACT_BACKTRANSFORM_PANEL_WIDTH,
+            )
+            .expect("compact-WY backtransform panels");
+            let mut compact = chunk;
+            let started_at = std::time::Instant::now();
+            apply_compact_wy_left_panels_to_column_chunk(
+                std::hint::black_box(&mut compact),
+                n,
+                chunk_cols,
+                &panels,
+            );
+            let compact_ms = started_at.elapsed().as_secs_f64() * 1_000.0;
+
+            let max_abs = scalar
+                .iter()
+                .zip(compact.iter())
+                .map(|(left, right)| (left - right).abs())
+                .fold(0.0_f64, f64::max);
+            let scale = scalar
+                .iter()
+                .fold(0.0_f64, |max_abs, value| max_abs.max(value.abs()))
+                .max(1.0);
+            assert!(
+                max_abs <= 1e-9 * scale * (n as f64).sqrt(),
+                "compact-WY chunk drift {max_abs:.17e} for n={n}, chunk_cols={chunk_cols}"
+            );
+
+            println!("COMPACT_WY_BACKTRANSFORM_CHUNK_PERF_BEGIN");
+            println!("shape={n}x{n}");
+            println!("chunk_cols={chunk_cols}");
+            println!("worker_count={usable_workers}");
+            println!(
+                "panel_width={}",
+                SYMMETRIC_EIGH_COMPACT_BACKTRANSFORM_PANEL_WIDTH
+            );
+            println!("scalar_chunk_ms={scalar_ms:.6}");
+            println!("compact_chunk_ms={compact_ms:.6}");
+            println!("speedup={:.6}", scalar_ms / compact_ms);
+            println!("max_abs_diff={max_abs:.17e}");
+            println!("scalar_digest={:#018x}", eig_values_digest(&scalar));
+            println!("compact_digest={:#018x}", eig_values_digest(&compact));
+            println!(
+                "values_digest={:#018x}",
+                eig_values_digest(&eig.eigenvalues)
+            );
+            println!("COMPACT_WY_BACKTRANSFORM_CHUNK_PERF_END");
         }
     }
 
