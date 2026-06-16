@@ -2071,6 +2071,311 @@ pub fn zoom_fft(x: &[f64], f_range: (f64, f64), m: usize) -> Result<Vec<(f64, f6
     czt(x, m, Some(w), Some(a))
 }
 
+/// Callable chirp z-transform, mirroring `scipy.signal.CZT`.
+///
+/// Precomputes the constant Bluestein chirps for a fixed `(n, m, w, a)` so the
+/// transform can be applied repeatedly to length-`n` inputs. `w` and `a` are
+/// complex `(re, im)` (matching SciPy), where `w` is the ratio between output
+/// points and `a` the starting point in the complex plane. Faithful port of
+/// SciPy's `_czt.CZT`: `y = ifft(Fwk2 · fft(x·Awk2, nfft))[n-1 : n+m-1] · wk2`.
+#[derive(Clone, Debug)]
+pub struct CZT {
+    n: usize,
+    m: usize,
+    w: (f64, f64),
+    a: (f64, f64),
+    nfft: usize,
+    awk2: Vec<(f64, f64)>,
+    fwk2: Vec<(f64, f64)>,
+    wk2: Vec<(f64, f64)>,
+}
+
+#[inline]
+fn czt_cmul(x: (f64, f64), y: (f64, f64)) -> (f64, f64) {
+    (x.0 * y.0 - x.1 * y.1, x.0 * y.1 + x.1 * y.0)
+}
+
+/// `z^p` (principal branch), `z` complex, `p` real — matches numpy `z**p`.
+#[inline]
+fn czt_cpowf(z: (f64, f64), p: f64) -> (f64, f64) {
+    let mag = z.0.hypot(z.1);
+    if mag == 0.0 {
+        return if p == 0.0 { (1.0, 0.0) } else { (0.0, 0.0) };
+    }
+    let lnmag = mag.ln();
+    let arg = z.1.atan2(z.0);
+    let out_mag = (p * lnmag).exp();
+    let out_ang = p * arg;
+    (out_mag * out_ang.cos(), out_mag * out_ang.sin())
+}
+
+impl CZT {
+    /// Construct a CZT for length-`n` inputs producing `m` points (default
+    /// `m = n`), step `w` (default the full unit circle `exp(-2πj/m)`), starting
+    /// at `a` (default `1+0j`). All complex args are `(re, im)`.
+    pub fn new(
+        n: usize,
+        m: Option<usize>,
+        w: Option<(f64, f64)>,
+        a: Option<(f64, f64)>,
+    ) -> Result<Self, SignalError> {
+        if n < 1 {
+            return Err(SignalError::InvalidArgument(format!(
+                "Invalid number of CZT data points ({n}) specified. n must be positive."
+            )));
+        }
+        let m = match m {
+            None => n,
+            Some(m) if m >= 1 => m,
+            Some(m) => {
+                return Err(SignalError::InvalidArgument(format!(
+                    "Invalid number of CZT output points ({m}) specified. m must be positive."
+                )));
+            }
+        };
+        let kmax = m.max(n);
+        let two_pi = 2.0 * std::f64::consts::PI;
+        let mf = m as f64;
+
+        // wk2[k] for k in 0..kmax.
+        let (w_val, wk2): ((f64, f64), Vec<(f64, f64)>) = match w {
+            None => {
+                let w_val = ((-two_pi / mf).cos(), (-two_pi / mf).sin());
+                let m2 = 2 * m;
+                let wk2 = (0..kmax)
+                    .map(|k| {
+                        // exp(-(1j*pi*((k^2) % (2m)))/m); %(2m) bounds the phase.
+                        let kk = (k as u128 * k as u128 % m2 as u128) as f64;
+                        let ang = -std::f64::consts::PI * kk / mf;
+                        (ang.cos(), ang.sin())
+                    })
+                    .collect();
+                (w_val, wk2)
+            }
+            Some(w_val) => {
+                let wk2 = (0..kmax)
+                    .map(|k| {
+                        let p = (k as f64) * (k as f64) / 2.0;
+                        czt_cpowf(w_val, p)
+                    })
+                    .collect();
+                (w_val, wk2)
+            }
+        };
+        let a_val = a.unwrap_or((1.0, 0.0));
+
+        let nfft = fsci_fft::next_fast_len(n + m - 1);
+
+        // _Awk2 = a^-k[:n] * wk2[:n]
+        let awk2: Vec<(f64, f64)> = (0..n)
+            .map(|k| {
+                let ak = czt_cpowf(a_val, -(k as f64));
+                czt_cmul(ak, wk2[k])
+            })
+            .collect();
+
+        // _Fwk2 = fft(1/hstack((wk2[n-1:0:-1], wk2[:m])), nfft)
+        let mut filt: Vec<(f64, f64)> = Vec::with_capacity(nfft);
+        for k in (1..n).rev() {
+            filt.push(czt_recip(wk2[k]));
+        }
+        for k in 0..m {
+            filt.push(czt_recip(wk2[k]));
+        }
+        filt.resize(nfft, (0.0, 0.0));
+        let opts = fsci_fft::FftOptions::default();
+        let fwk2 = fsci_fft::fft(&filt, &opts)
+            .map_err(|e| SignalError::InvalidArgument(format!("{e}")))?;
+
+        let wk2_out = wk2[..m].to_vec();
+
+        Ok(CZT {
+            n,
+            m,
+            w: w_val,
+            a: a_val,
+            nfft,
+            awk2,
+            fwk2,
+            wk2: wk2_out,
+        })
+    }
+
+    /// Number of output points `m`.
+    pub fn m(&self) -> usize {
+        self.m
+    }
+
+    /// Required input length `n`.
+    pub fn n(&self) -> usize {
+        self.n
+    }
+
+    /// Compute the chirp z-transform of a complex length-`n` signal.
+    pub fn transform(&self, x: &[(f64, f64)]) -> Result<Vec<(f64, f64)>, SignalError> {
+        if x.len() != self.n {
+            return Err(SignalError::InvalidArgument(format!(
+                "CZT defined for length {}, not {}",
+                self.n,
+                x.len()
+            )));
+        }
+        let opts = fsci_fft::FftOptions::default();
+        let mut xa: Vec<(f64, f64)> = Vec::with_capacity(self.nfft);
+        for k in 0..self.n {
+            xa.push(czt_cmul(x[k], self.awk2[k]));
+        }
+        xa.resize(self.nfft, (0.0, 0.0));
+        let fx = fsci_fft::fft(&xa, &opts).map_err(|e| SignalError::InvalidArgument(format!("{e}")))?;
+        let prod: Vec<(f64, f64)> = self
+            .fwk2
+            .iter()
+            .zip(fx.iter())
+            .map(|(&f, &g)| czt_cmul(f, g))
+            .collect();
+        let y = fsci_fft::ifft(&prod, &opts).map_err(|e| SignalError::InvalidArgument(format!("{e}")))?;
+        let out = (0..self.m)
+            .map(|k| czt_cmul(y[self.n - 1 + k], self.wk2[k]))
+            .collect();
+        Ok(out)
+    }
+
+    /// Real-input convenience: transform a real length-`n` signal.
+    pub fn transform_real(&self, x: &[f64]) -> Result<Vec<(f64, f64)>, SignalError> {
+        let xc: Vec<(f64, f64)> = x.iter().map(|&v| (v, 0.0)).collect();
+        self.transform(&xc)
+    }
+
+    /// The points in the complex plane at which the transform is computed.
+    pub fn points(&self) -> Vec<(f64, f64)> {
+        let w_polar = (self.w.0.hypot(self.w.1), self.w.1.atan2(self.w.0));
+        let a_polar = (self.a.0.hypot(self.a.1), self.a.1.atan2(self.a.0));
+        czt_points(self.m, Some(w_polar), Some(a_polar))
+    }
+}
+
+#[inline]
+fn czt_recip(z: (f64, f64)) -> (f64, f64) {
+    let d = z.0 * z.0 + z.1 * z.1;
+    if d == 0.0 {
+        (0.0, 0.0)
+    } else {
+        (z.0 / d, -z.1 / d)
+    }
+}
+
+/// Callable zoom FFT, mirroring `scipy.signal.ZoomFFT` (a `CZT` specialized to a
+/// normalized frequency range). `fn_range` is `(f1, f2)`; pass `(0.0, f2)` for
+/// the scalar form. `fs` is the sampling frequency (SciPy default 2). With
+/// `endpoint = true`, `f2` is the last sample rather than one-past-the-end.
+#[derive(Clone, Debug)]
+pub struct ZoomFFT {
+    czt: CZT,
+}
+
+impl ZoomFFT {
+    pub fn new(
+        n: usize,
+        fn_range: (f64, f64),
+        m: Option<usize>,
+        fs: f64,
+        endpoint: bool,
+    ) -> Result<Self, SignalError> {
+        if n < 1 {
+            return Err(SignalError::InvalidArgument(format!(
+                "Invalid number of CZT data points ({n}) specified. n must be positive."
+            )));
+        }
+        let m = match m {
+            None => n,
+            Some(m) if m >= 1 => m,
+            Some(m) => {
+                return Err(SignalError::InvalidArgument(format!(
+                    "Invalid number of CZT output points ({m}) specified. m must be positive."
+                )));
+            }
+        };
+        let (f1, f2) = fn_range;
+        let mf = m as f64;
+        let scale = if endpoint {
+            ((f2 - f1) * mf) / (fs * (mf - 1.0))
+        } else {
+            (f2 - f1) / fs
+        };
+        let two_pi = 2.0 * std::f64::consts::PI;
+        // a = exp(2j*pi*f1/fs)
+        let a_ang = two_pi * f1 / fs;
+        let a_val = (a_ang.cos(), a_ang.sin());
+        // w = exp(-2j*pi/m * scale)
+        let w_ang = -two_pi / mf * scale;
+        let w_val = (w_ang.cos(), w_ang.sin());
+
+        let kmax = m.max(n);
+        // wk2[k] = exp(-(1j*pi*scale*k^2)/m)
+        let wk2: Vec<(f64, f64)> = (0..kmax)
+            .map(|k| {
+                let kk = (k as f64) * (k as f64);
+                let ang = -std::f64::consts::PI * scale * kk / mf;
+                (ang.cos(), ang.sin())
+            })
+            .collect();
+
+        let nfft = fsci_fft::next_fast_len(n + m - 1);
+        // _Awk2 = exp(-2j*pi*f1/fs*k[:n]) * wk2[:n]
+        let awk2: Vec<(f64, f64)> = (0..n)
+            .map(|k| {
+                let ang = -two_pi * f1 / fs * (k as f64);
+                let ak = (ang.cos(), ang.sin());
+                czt_cmul(ak, wk2[k])
+            })
+            .collect();
+
+        let mut filt: Vec<(f64, f64)> = Vec::with_capacity(nfft);
+        for k in (1..n).rev() {
+            filt.push(czt_recip(wk2[k]));
+        }
+        for k in 0..m {
+            filt.push(czt_recip(wk2[k]));
+        }
+        filt.resize(nfft, (0.0, 0.0));
+        let opts = fsci_fft::FftOptions::default();
+        let fwk2 = fsci_fft::fft(&filt, &opts)
+            .map_err(|e| SignalError::InvalidArgument(format!("{e}")))?;
+
+        let czt = CZT {
+            n,
+            m,
+            w: w_val,
+            a: a_val,
+            nfft,
+            awk2,
+            fwk2,
+            wk2: wk2[..m].to_vec(),
+        };
+        Ok(ZoomFFT { czt })
+    }
+
+    /// Number of output points `m`.
+    pub fn m(&self) -> usize {
+        self.czt.m
+    }
+
+    /// Compute the zoom FFT of a complex length-`n` signal.
+    pub fn transform(&self, x: &[(f64, f64)]) -> Result<Vec<(f64, f64)>, SignalError> {
+        self.czt.transform(x)
+    }
+
+    /// Real-input convenience.
+    pub fn transform_real(&self, x: &[f64]) -> Result<Vec<(f64, f64)>, SignalError> {
+        self.czt.transform_real(x)
+    }
+
+    /// The points at which the transform is computed.
+    pub fn points(&self) -> Vec<(f64, f64)> {
+        self.czt.points()
+    }
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Sequences and Matched Filtering
 // ══════════════════════════════════════════════════════════════════════
@@ -15267,6 +15572,71 @@ pub fn daub(p: usize) -> Result<Vec<f64>, SignalError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn czt_xin(n: usize) -> Vec<(f64, f64)> {
+        (0..n)
+            .map(|k| ((0.3 * k as f64 + 1.0).sin(), (0.17 * k as f64).cos()))
+            .collect()
+    }
+
+    #[test]
+    fn czt_default_equals_fft() {
+        // SciPy invariant: CZT(n)(x) == fft(x) for default params.
+        let n = 12;
+        let x = czt_xin(n);
+        let got = CZT::new(n, None, None, None).unwrap().transform(&x).unwrap();
+        let want = fsci_fft::fft(&x, &fsci_fft::FftOptions::default()).unwrap();
+        assert_eq!(got.len(), want.len());
+        for (g, w) in got.iter().zip(&want) {
+            assert!((g.0 - w.0).abs() < 1e-9 && (g.1 - w.1).abs() < 1e-9, "{g:?} vs {w:?}");
+        }
+    }
+
+    #[test]
+    fn czt_matches_scipy_values() {
+        // Regression vs scipy.signal.CZT on the czt_xin signal.
+        // CZT(7)(x)[0] and [1]:
+        let c = CZT::new(7, None, None, None).unwrap();
+        let y = c.transform(&czt_xin(7)).unwrap();
+        assert!((y[0].0 - 5.492859559033).abs() < 1e-9);
+        assert!((y[0].1 - 5.762005755971).abs() < 1e-9);
+        assert!((y[1].0 - 0.392838302532).abs() < 1e-9);
+        assert!((y[1].1 - (-0.844983401607)).abs() < 1e-9);
+        // points() first two: 1+0j, 0.623489801859+0.781831482468j
+        let p = c.points();
+        assert!((p[0].0 - 1.0).abs() < 1e-12 && p[0].1.abs() < 1e-12);
+        assert!((p[1].0 - 0.623489801859).abs() < 1e-9 && (p[1].1 - 0.781831482468).abs() < 1e-9);
+        // m > n
+        let y = CZT::new(6, Some(10), None, None)
+            .unwrap()
+            .transform(&czt_xin(6))
+            .unwrap();
+        assert_eq!(y.len(), 10);
+        assert!((y[0].0 - 5.157871408878).abs() < 1e-9);
+        assert!((y[0].1 - 5.238639804720).abs() < 1e-9);
+    }
+
+    #[test]
+    fn zoom_fft_matches_scipy_values() {
+        // scipy.signal.ZoomFFT(16,(0.2,0.6),m=8,fs=2,endpoint=False) on czt_xin.
+        let z = ZoomFFT::new(16, (0.2, 0.6), Some(8), 2.0, false).unwrap();
+        let y = z.transform(&czt_xin(16)).unwrap();
+        assert_eq!(y.len(), 8);
+        assert!((y[0].0 - (-0.204891724721)).abs() < 1e-8);
+        assert!((y[0].1 - 0.909179367635).abs() < 1e-8);
+        // endpoint=True, scalar-style range (0,0.5)
+        let z = ZoomFFT::new(16, (0.0, 0.5), Some(8), 2.0, true).unwrap();
+        let y = z.transform(&czt_xin(16)).unwrap();
+        assert_eq!(y.len(), 8);
+    }
+
+    #[test]
+    fn czt_rejects_wrong_length() {
+        let c = CZT::new(7, None, None, None).unwrap();
+        assert!(c.transform(&czt_xin(6)).is_err());
+        assert!(CZT::new(0, None, None, None).is_err());
+        assert!(CZT::new(7, Some(0), None, None).is_err());
+    }
 
     #[test]
     fn band_stop_obj_matches_scipy() {
