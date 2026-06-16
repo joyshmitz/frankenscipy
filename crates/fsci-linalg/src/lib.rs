@@ -8426,14 +8426,34 @@ fn apply_left_reflectors_to_column_chunk(
         }
         for col in 0..cols {
             let col_base = col * rows;
+            let base = col_base + reflector.start;
+            let values = &reflector.values;
             let mut dot = 0.0;
-            for (offset, value) in reflector.values.iter().enumerate() {
-                dot += value * chunk[col_base + reflector.start + offset];
+            let mut offset = 0;
+            while offset + 4 <= values.len() {
+                dot += values[offset] * chunk[base + offset];
+                dot += values[offset + 1] * chunk[base + offset + 1];
+                dot += values[offset + 2] * chunk[base + offset + 2];
+                dot += values[offset + 3] * chunk[base + offset + 3];
+                offset += 4;
+            }
+            while offset < values.len() {
+                dot += values[offset] * chunk[base + offset];
+                offset += 1;
             }
             let scale = reflector.tau * dot;
             if scale != 0.0 {
-                for (offset, value) in reflector.values.iter().enumerate() {
-                    chunk[col_base + reflector.start + offset] -= scale * value;
+                let mut offset = 0;
+                while offset + 4 <= values.len() {
+                    chunk[base + offset] -= scale * values[offset];
+                    chunk[base + offset + 1] -= scale * values[offset + 1];
+                    chunk[base + offset + 2] -= scale * values[offset + 2];
+                    chunk[base + offset + 3] -= scale * values[offset + 3];
+                    offset += 4;
+                }
+                while offset < values.len() {
+                    chunk[base + offset] -= scale * values[offset];
+                    offset += 1;
                 }
             }
         }
@@ -12500,10 +12520,14 @@ pub fn rsf2csf(
     let cscale = |a: (f64, f64), s: f64| (a.0 * s, a.1 * s);
     let cabs = |a: (f64, f64)| a.0.hypot(a.1);
 
-    let mut tc: Vec<Vec<(f64, f64)>> =
-        t.iter().map(|row| row.iter().map(|&v| (v, 0.0)).collect()).collect();
-    let mut zc: Vec<Vec<(f64, f64)>> =
-        z.iter().map(|row| row.iter().map(|&v| (v, 0.0)).collect()).collect();
+    let mut tc: Vec<Vec<(f64, f64)>> = t
+        .iter()
+        .map(|row| row.iter().map(|&v| (v, 0.0)).collect())
+        .collect();
+    let mut zc: Vec<Vec<(f64, f64)>> = z
+        .iter()
+        .map(|row| row.iter().map(|&v| (v, 0.0)).collect())
+        .collect();
     let eps = f64::EPSILON;
 
     for m in (1..n).rev() {
@@ -12778,10 +12802,7 @@ pub fn matrix_balance(
                     let mut g = r / sclfac;
                     let mut f = 1.0_f64;
                     let s = c + r;
-                    while c < g
-                        && f.max(c.max(ca)) < sfmax2
-                        && r.min(g.min(ra)) > sfmin2
-                    {
+                    while c < g && f.max(c.max(ca)) < sfmax2 && r.min(g.min(ra)) > sfmin2 {
                         f *= sclfac;
                         c *= sclfac;
                         ca *= sclfac;
@@ -12790,10 +12811,7 @@ pub fn matrix_balance(
                         ra /= sclfac;
                     }
                     g = c / sclfac;
-                    while r <= g
-                        && r.max(ra) < sfmax2
-                        && f.min(c).min(g.min(ca)) > sfmin2
-                    {
+                    while r <= g && r.max(ra) < sfmax2 && f.min(c).min(g.min(ca)) > sfmin2 {
                         f /= sclfac;
                         c /= sclfac;
                         ca /= sclfac;
@@ -15396,10 +15414,22 @@ mod tests {
     #[test]
     fn cdf2rdf_matches_scipy() {
         // eig of [[1,-2,0.5],[2,1,0.3],[0,0,3]] -> conjugate pair 1±2i + real 3.
-        let w = [(1.0, 2.0000000000000004), (1.0, -2.0000000000000004), (3.0, 0.0)];
+        let w = [
+            (1.0, 2.0000000000000004),
+            (1.0, -2.0000000000000004),
+            (3.0, 0.0),
+        ];
         let v = vec![
-            vec![(0.0, 0.7071067811865475), (0.0, -0.7071067811865475), (0.04897021068743917, 0.0)],
-            vec![(0.7071067811865476, 0.0), (0.7071067811865476, -0.0), (0.19588084274975673, 0.0)],
+            vec![
+                (0.0, 0.7071067811865475),
+                (0.0, -0.7071067811865475),
+                (0.04897021068743917, 0.0),
+            ],
+            vec![
+                (0.7071067811865476, 0.0),
+                (0.7071067811865476, -0.0),
+                (0.19588084274975673, 0.0),
+            ],
             vec![(0.0, 0.0), (0.0, -0.0), (0.9794042137487836, 0.0)],
         ];
         let (wr, vr) = cdf2rdf(&w, &v).unwrap();
@@ -23457,11 +23487,7 @@ mod tests {
             vec![10.0, 0.1, 1.0],
         ];
         let res = matrix_balance(&a, true, true).unwrap();
-        let exp_b = [
-            [1.0, 125.0, 0.00125],
-            [0.008, 1.0, 100.0],
-            [80.0, 0.1, 1.0],
-        ];
+        let exp_b = [[1.0, 125.0, 0.00125], [0.008, 1.0, 100.0], [80.0, 0.1, 1.0]];
         for i in 0..3 {
             for j in 0..3 {
                 assert!(
