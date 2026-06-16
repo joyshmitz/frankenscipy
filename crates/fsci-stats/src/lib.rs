@@ -8121,6 +8121,80 @@ pub trait DiscreteDistribution {
     fn mode(&self) -> f64 {
         f64::NAN
     }
+    /// Percent-point (inverse CDF) function: the smallest integer `k` with
+    /// `cdf(k) >= q`. Matches SciPy's discrete `ppf`: `q == 0` returns the
+    /// support's lower bound minus one, `q == 1` returns `+inf`, and `q` outside
+    /// `[0, 1]` returns `NaN`. Default via monotone-CDF binary search; override
+    /// when a closed-form quantile is available.
+    fn ppf(&self, q: f64) -> f64 {
+        if q.is_nan() || !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return discrete_support_lower(self) as f64 - 1.0;
+        }
+        if q >= 1.0 {
+            return f64::INFINITY;
+        }
+        let mut hi: u64 = 1;
+        while self.cdf(hi) < q {
+            if hi > (1u64 << 62) {
+                return f64::INFINITY;
+            }
+            hi = hi.saturating_mul(2);
+        }
+        let mut lo: u64 = 0;
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            if self.cdf(mid) >= q {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+            }
+        }
+        lo as f64
+    }
+    /// Inverse survival function: the smallest integer `k` with `sf(k) <= q`.
+    /// Matches SciPy's discrete `isf`: `q == 0` returns `+inf`, `q == 1` returns
+    /// the support's lower bound minus one, and `q` outside `[0, 1]` returns `NaN`.
+    fn isf(&self, q: f64) -> f64 {
+        if q.is_nan() || !(0.0..=1.0).contains(&q) {
+            return f64::NAN;
+        }
+        if q == 0.0 {
+            return f64::INFINITY;
+        }
+        if q >= 1.0 {
+            return discrete_support_lower(self) as f64 - 1.0;
+        }
+        let mut hi: u64 = 1;
+        while self.sf(hi) > q {
+            if hi > (1u64 << 62) {
+                return f64::INFINITY;
+            }
+            hi = hi.saturating_mul(2);
+        }
+        let mut lo: u64 = 0;
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            if self.sf(mid) <= q {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+            }
+        }
+        lo as f64
+    }
+}
+
+/// Smallest `k` with `cdf(k) > 0`, i.e. the lower bound of a discrete
+/// distribution's support (used by the default `ppf`/`isf` boundary handling).
+fn discrete_support_lower<D: DiscreteDistribution + ?Sized>(dist: &D) -> u64 {
+    let mut a = 0u64;
+    while a < (1u64 << 20) && dist.cdf(a) <= 0.0 {
+        a += 1;
+    }
+    a
 }
 
 impl DiscreteDistribution for Poisson {
@@ -8253,6 +8327,15 @@ impl Skellam {
 }
 
 impl DiscreteDistribution for Skellam {
+    // Skellam has full-integer (signed) support; the u64 `DiscreteDistribution`
+    // ppf/isf cannot represent negative quantiles, so they are unsupported here
+    // (the default would silently clamp to 0). Use the signed pmf/cdf API instead.
+    fn ppf(&self, _q: f64) -> f64 {
+        f64::NAN
+    }
+    fn isf(&self, _q: f64) -> f64 {
+        f64::NAN
+    }
     fn pmf(&self, k: u64) -> f64 {
         self.pmf_signed(k as i64)
     }
@@ -9011,6 +9094,15 @@ impl DiscreteLaplace {
 }
 
 impl DiscreteDistribution for DiscreteLaplace {
+    // DiscreteLaplace has full-integer (signed) support; the u64 ppf/isf cannot
+    // represent negative quantiles, so they are unsupported here (the default
+    // would silently clamp to 0).
+    fn ppf(&self, _q: f64) -> f64 {
+        f64::NAN
+    }
+    fn isf(&self, _q: f64) -> f64 {
+        f64::NAN
+    }
     fn pmf(&self, k: u64) -> f64 {
         (self.a / 2.0).tanh() * (-self.a * k as f64).exp()
     }
@@ -45429,6 +45521,30 @@ mod tests {
     }
 
     // ── Poisson distribution ────────────────────────────────────────
+
+    #[test]
+    fn discrete_ppf_isf_match_scipy() {
+        // Generic DiscreteDistribution::ppf/isf (cdf/sf binary search).
+        let p = Poisson::new(3.0);
+        // scipy.stats.poisson(3).ppf / .isf
+        assert_eq!(p.ppf(0.01), 0.0);
+        assert_eq!(p.ppf(0.5), 3.0);
+        assert_eq!(p.ppf(0.95), 6.0);
+        assert_eq!(p.ppf(0.999), 10.0);
+        assert_eq!(p.ppf(0.0), -1.0);
+        assert!(p.ppf(1.0).is_infinite() && p.ppf(1.0) > 0.0);
+        assert!(p.ppf(-0.1).is_nan());
+        assert_eq!(p.isf(0.001), 10.0);
+        assert_eq!(p.isf(0.05), 6.0);
+        assert_eq!(p.isf(0.5), 3.0);
+        assert_eq!(p.isf(0.99), 0.0);
+        assert_eq!(p.isf(1.0), -1.0);
+        assert!(p.isf(0.0).is_infinite() && p.isf(0.0) > 0.0);
+
+        // Signed-support distributions are unsupported via the u64 ppf/isf.
+        assert!(Skellam::new(2.0, 1.0).ppf(0.5).is_nan());
+        assert!(DiscreteLaplace::new(0.5).isf(0.5).is_nan());
+    }
 
     #[test]
     fn poisson_pmf_known() {
