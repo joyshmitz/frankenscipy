@@ -27037,14 +27037,30 @@ pub fn msign(data: &[f64]) -> Vec<f64> {
 /// - (0.375, 0.375): Blom
 /// - (1/3, 1/3): approximately median-unbiased
 pub fn plotting_positions(data: &[f64], alpha: f64, beta: f64) -> Vec<f64> {
-    let mut sorted: Vec<f64> = data.iter().copied().filter(|v| !v.is_nan()).collect();
-    sorted.sort_by(|a, b| a.total_cmp(b));
-    let n = sorted.len();
+    // scipy assigns position (rank - alpha)/(n + 1 - alpha - beta) to each value
+    // by its rank order, and returns the positions in the *original* data order
+    // (via argsort), not sorted order. NaN entries are skipped and left as NaN.
+    let mut idx: Vec<usize> = (0..data.len()).filter(|&i| !data[i].is_nan()).collect();
+    let n = idx.len();
     if n == 0 {
-        return vec![];
+        return vec![f64::NAN; data.len()];
     }
+    idx.sort_by(|&a, &b| data[a].total_cmp(&data[b]));
     let denom = n as f64 + 1.0 - alpha - beta;
-    (1..=n).map(|i| (i as f64 - alpha) / denom).collect()
+    let mut out = vec![f64::NAN; data.len()];
+    for (rank, &orig) in idx.iter().enumerate() {
+        out[orig] = ((rank + 1) as f64 - alpha) / denom;
+    }
+    out
+}
+
+/// Empirical percentile points (alias of [`plotting_positions`]).
+///
+/// Matches `scipy.stats.mstats.meppf(data, alpha, beta)`, which is the same
+/// function as `plotting_positions`.
+#[must_use]
+pub fn meppf(data: &[f64], alpha: f64, beta: f64) -> Vec<f64> {
+    plotting_positions(data, alpha, beta)
 }
 
 /// Counts tied groups in data by tie size.
@@ -29034,6 +29050,45 @@ pub fn trimmed_sem(data: &[f64], proportiontocut: f64, ddof: usize) -> f64 {
 
     let std = trimmed_std(data, proportiontocut, ddof);
     std / (trimmed.len() as f64).sqrt()
+}
+
+/// Standard error of the trimmed mean, matching `scipy.stats.mstats.trimmed_stde`.
+///
+/// `limits = (lower, upper)` are the proportions cut from each end (relative to
+/// `n`). The tail values are *winsorized* to the boundary order statistics, the
+/// sample standard deviation (ddof = 1) is taken over the full winsorized array,
+/// and the result is `winstd / ((1 − lower − upper)·√n)`. Tail counts use
+/// `int(limit·n)` truncation (the `inclusive` rounding path is broken in scipy
+/// itself). Returns NaN for empty input or any NaN.
+#[must_use]
+pub fn trimmed_stde(data: &[f64], limits: (f64, f64)) -> f64 {
+    if data.is_empty() || data.iter().any(|v| v.is_nan()) {
+        return f64::NAN;
+    }
+    let (lo, up) = limits;
+    let n = data.len();
+    let nf = n as f64;
+    // indices sorted by value (argsort).
+    let mut idx: Vec<usize> = (0..n).collect();
+    idx.sort_by(|&a, &b| data[a].total_cmp(&data[b]));
+    let lowidx = (lo * nf) as usize; // int() truncation
+    let upidx = n - (nf * up) as usize;
+    if lowidx >= upidx {
+        return f64::NAN;
+    }
+    // Winsorize: tail values replaced by the boundary order statistics.
+    let low_val = data[idx[lowidx]];
+    let up_val = data[idx[upidx - 1]];
+    let mut w = data.to_vec();
+    for &i in &idx[..lowidx] {
+        w[i] = low_val;
+    }
+    for &i in &idx[upidx..] {
+        w[i] = up_val;
+    }
+    let mean = w.iter().sum::<f64>() / nf;
+    let winvar = w.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (nf - 1.0);
+    winvar.sqrt() / ((1.0 - lo - up) * nf.sqrt())
 }
 
 /// Trim a proportion of elements from both ends of a sorted array.
@@ -45953,6 +46008,26 @@ mod tests {
             assert!((a - b).abs() <= 1e-12, "intra {a} vs {b}");
         }
         assert!((inter - 0.625).abs() <= 1e-12, "inter {inter}");
+    }
+
+    #[test]
+    fn meppf_trimmed_stde_match_scipy() {
+        let d = [
+            2.0, 4.0, 1.0, 7.0, 3.0, 9.0, 5.0, 6.0, 8.0, 2.5, 4.5, 6.5, 0.3, 11.0, 1.5, 8.5, 3.7,
+            5.2, 9.9, 0.8,
+        ];
+        // meppf == plotting_positions, returned in ORIGINAL data order.
+        let pp = meppf(&d, 0.5, 0.5);
+        let want_pp = [
+            0.225, 0.425, 0.125, 0.725, 0.325, 0.875, 0.525, 0.625, 0.775, 0.275, 0.475, 0.675,
+            0.025, 0.975, 0.175, 0.825, 0.375, 0.575, 0.925, 0.075,
+        ];
+        for (a, b) in pp.iter().zip(want_pp.iter()) {
+            assert!((a - b).abs() <= 1e-12, "meppf {a} vs {b}");
+        }
+        // trimmed_stde default limits (0.1, 0.1) and (0.2, 0.2).
+        assert!((trimmed_stde(&d, (0.1, 0.1)) - 0.8076576349315084).abs() <= 1e-12);
+        assert!((trimmed_stde(&d, (0.2, 0.2)) - 0.8972912453308391).abs() <= 1e-12);
     }
 
     #[test]
