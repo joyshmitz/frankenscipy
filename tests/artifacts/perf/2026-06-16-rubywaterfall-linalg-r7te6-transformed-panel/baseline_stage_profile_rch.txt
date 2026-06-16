@@ -1,0 +1,633 @@
+  [2m2026-06-16T04:10:13.879138Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mSelected worker: vmi1152480 at root@109.205.181.92 (0 slots remaining after reservation, speed 50.0)[0m
+    [2;3mat[0m rch/src/hook.rs:514 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:10:14.202151Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mStarting remote compilation pipeline for frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331 (hash: 2b1babfaf36b2f54)[0m
+    [2;3mat[0m rch/src/hook.rs:5994 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:10:14.202271Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mPrepared dependency sync manifest for 20 roots[0m
+    [2;3mat[0m rch/src/hook.rs:6016 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:10:16.750959Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mSyncing project to worker vmi1152480...[0m
+    [2;3mat[0m rch/src/hook.rs:6046 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:10:16.751041Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331 -> /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331 on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:10:20.217444Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 3466ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:10:20.217562Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-arrayapi -> /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-arrayapi on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:10:22.366963Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 2149ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:10:22.367072Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-cluster -> /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-cluster on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:10:24.738070Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 2370ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:10:24.738165Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-conformance -> /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-conformance on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:10:27.165041Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 2426ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:10:27.165150Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-constants -> /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-constants on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:10:29.412180Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 2247ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:10:29.412298Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-datasets -> /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-datasets on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:10:31.716397Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 2304ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:10:31.716514Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-fft -> /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-fft on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:10:33.746615Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 2030ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:10:33.746722Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-integrate -> /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-integrate on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:10:35.845428Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 2098ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:10:35.845533Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-interpolate -> /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-interpolate on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:10:38.291217Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 2445ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:10:38.291325Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-io -> /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-io on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:10:40.561664Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 2270ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:10:40.561802Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-linalg -> /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-linalg on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:10:42.581179Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 2019ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:10:42.581292Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-ndimage -> /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-ndimage on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:10:44.649593Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 2068ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:10:44.649703Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-odr -> /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-odr on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:10:46.792093Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 2142ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:10:46.792206Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-opt -> /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-opt on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:10:49.650867Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 2858ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:10:49.650999Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-runtime -> /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-runtime on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:10:51.747825Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 2096ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:10:51.747925Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-signal -> /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-signal on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:10:53.875839Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 2127ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:10:53.875965Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-sparse -> /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-sparse on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:10:56.067463Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 2191ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:10:56.067590Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-spatial -> /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-spatial on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:10:58.172585Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 2104ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:10:58.172683Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-special -> /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-special on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:11:00.676812Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 2504ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:11:00.676905Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-stats -> /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-stats on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:1434 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:11:02.862447Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 2185ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1503 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:11:02.862481Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mSync complete: 4186 files, 210044 bytes in 46099ms[0m
+    [2;3mat[0m rch/src/hook.rs:6209 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:11:36.978277Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mExecuting command remotely: cargo test -p fsci-linalg symmetric_eigh_native_stage_breakdown_probe --release -- --ignored --nocapture[0m
+    [2;3mat[0m rch/src/hook.rs:6252 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:11:36.978328Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mRewriting CARGO_TARGET_DIR for remote execution (worker-scoped path): /data/tmp/cargo-target -> /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/.rch-target-vmi1152480-job-29884606035534720-1781583016750952234-0[0m
+    [2;3mat[0m rch/src/transfer.rs:712 [2;3mon[0m ThreadId(1)
+
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded ciborium-io v0.2.2
+  Downloaded alloca v0.4.0
+  Downloaded clap_lex v1.1.0
+  Downloaded approx v0.5.1
+  Downloaded cfg-if v1.0.4
+  Downloaded ciborium-ll v0.2.2
+  Downloaded cpufeatures v0.3.0
+  Downloaded bit-vec v0.8.0
+  Downloaded cast v0.3.0
+  Downloaded anstyle v1.0.14
+  Downloaded arrayref v0.3.9
+  Downloaded bit-set v0.8.0
+  Downloaded arrayvec v0.7.6
+  Downloaded ciborium v0.2.2
+  Downloaded constant_time_eq v0.4.2
+  Downloaded nalgebra-macros v0.3.0
+  Downloaded page_size v0.6.0
+  Downloaded tempfile v3.27.0
+  Downloaded zmij v1.0.21
+  Downloaded anes v0.1.6
+  Downloaded bytemuck v1.25.0
+  Downloaded unarray v0.1.4
+  Downloaded wait-timeout v0.2.1
+  Downloaded plotters-backend v0.3.7
+  Downloaded rawpointer v0.2.1
+  Downloaded same-file v1.0.6
+  Downloaded itoa v1.0.18
+  Downloaded clap v4.6.1
+  Downloaded plotters-svg v0.3.7
+  Downloaded ppv-lite86 v0.2.21
+  Downloaded quick-error v1.2.3
+  Downloaded walkdir v2.5.0
+  Downloaded autocfg v1.5.0
+  Downloaded bitflags v2.11.1
+  Downloaded equivalent v1.0.2
+  Downloaded errno v0.3.14
+  Downloaded paste v1.0.15
+  Downloaded rand_chacha v0.9.0
+  Downloaded rand_core v0.9.5
+  Downloaded rusty-fork v0.3.1
+  Downloaded tinytemplate v1.2.1
+  Downloaded crossbeam-deque v0.8.6
+  Downloaded find-msvc-tools v0.1.9
+  Downloaded fnv v1.0.7
+  Downloaded rand_xorshift v0.4.0
+  Downloaded oorandom v11.1.5
+  Downloaded crossbeam-utils v0.8.21
+  Downloaded crossbeam-epoch v0.9.18
+  Downloaded criterion-plot v0.8.2
+  Downloaded fastrand v2.4.1
+  Downloaded shlex v1.3.0
+  Downloaded num-rational v0.4.2
+  Downloaded once_cell v1.21.4
+  Downloaded either v1.15.0
+  Downloaded cc v1.2.60
+  Downloaded num-complex v0.4.6
+  Downloaded num-integer v0.1.46
+  Downloaded num-traits v0.2.19
+  Downloaded unicode-ident v1.0.24
+  Downloaded proc-macro2 v1.0.106
+  Downloaded quote v1.0.45
+  Downloaded serde_core v1.0.228
+  Downloaded serde_derive v1.0.228
+  Downloaded simba v0.9.1
+  Downloaded half v2.7.1
+  Downloaded zerocopy-derive v0.8.48
+  Downloaded wide v0.7.33
+  Downloaded getrandom v0.3.4
+  Downloaded rayon-core v1.13.0
+  Downloaded glam v0.14.0
+  Downloaded memchr v2.8.0
+  Downloaded safe_arch v0.7.4
+  Downloaded serde v1.0.228
+  Downloaded zerocopy v0.8.48
+  Downloaded criterion v0.8.2
+  Downloaded syn v2.0.117
+  Downloaded matrixmultiply v0.3.10
+  Downloaded rand v0.9.4
+  Downloaded glam v0.15.2
+  Downloaded glam v0.16.0
+  Downloaded indexmap v2.14.0
+  Downloaded num-bigint v0.4.6
+  Downloaded typenum v1.20.0
+  Downloaded glam v0.17.3
+  Downloaded glam v0.18.0
+  Downloaded clap_builder v4.6.0
+  Downloaded hashbrown v0.17.0
+  Downloaded itertools v0.13.0
+  Downloaded plotters v0.3.7
+  Downloaded regex v1.12.3
+  Downloaded aho-corasick v1.1.4
+  Downloaded glam v0.19.0
+  Downloaded blake3 v1.8.4
+  Downloaded glam v0.20.5
+  Downloaded serde_json v1.0.149
+  Downloaded rayon v1.12.0
+  Downloaded proptest v1.11.0
+  Downloaded glam v0.23.0
+  Downloaded glam v0.21.3
+  Downloaded glam v0.22.0
+  Downloaded glam v0.24.2
+  Downloaded regex-syntax v0.8.10
+  Downloaded glam v0.25.0
+  Downloaded nalgebra v0.34.2
+  Downloaded glam v0.27.0
+  Downloaded rustix v1.1.4
+  Downloaded glam v0.28.0
+  Downloaded glam v0.29.3
+  Downloaded regex-automata v0.4.14
+  Downloaded glam v0.31.1
+  Downloaded libc v0.2.185
+  Downloaded glam v0.30.10
+  Downloaded glam v0.32.1
+  Downloaded linux-raw-sys v0.12.1
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.45
+   Compiling cfg-if v1.0.4
+   Compiling autocfg v1.5.0
+   Compiling find-msvc-tools v0.1.9
+   Compiling shlex v1.3.0
+   Compiling serde_core v1.0.228
+   Compiling zmij v1.0.21
+   Compiling serde v1.0.228
+   Compiling serde_json v1.0.149
+   Compiling equivalent v1.0.2
+   Compiling hashbrown v0.17.0
+   Compiling memchr v2.8.0
+   Compiling cc v1.2.60
+   Compiling itoa v1.0.18
+   Compiling paste v1.0.15
+   Compiling bytemuck v1.25.0
+   Compiling num-traits v0.2.19
+   Compiling matrixmultiply v0.3.10
+   Compiling safe_arch v0.7.4
+   Compiling constant_time_eq v0.4.2
+   Compiling arrayvec v0.7.6
+   Compiling cpufeatures v0.3.0
+   Compiling syn v2.0.117
+   Compiling arrayref v0.3.9
+   Compiling indexmap v2.14.0
+   Compiling wide v0.7.33
+   Compiling approx v0.5.1
+   Compiling num-integer v0.1.46
+   Compiling num-complex v0.4.6
+   Compiling rawpointer v0.2.1
+   Compiling typenum v1.20.0
+   Compiling libc v0.2.185
+   Compiling num-rational v0.4.2
+   Compiling blake3 v1.8.4
+   Compiling zerocopy v0.8.48
+   Compiling getrandom v0.3.4
+   Compiling crossbeam-utils v0.8.21
+   Compiling rustix v1.1.4
+   Compiling regex-syntax v0.8.10
+   Compiling simba v0.9.1
+   Compiling rand_core v0.9.5
+   Compiling crossbeam-epoch v0.9.18
+   Compiling rayon-core v1.13.0
+   Compiling linux-raw-sys v0.12.1
+   Compiling either v1.15.0
+   Compiling bitflags v2.11.1
+   Compiling alloca v0.4.0
+   Compiling crossbeam-deque v0.8.6
+   Compiling once_cell v1.21.4
+   Compiling plotters-backend v0.3.7
+   Compiling fastrand v2.4.1
+   Compiling clap_lex v1.1.0
+   Compiling ciborium-io v0.2.2
+   Compiling anstyle v1.0.14
+   Compiling regex-automata v0.4.14
+   Compiling clap_builder v4.6.0
+   Compiling plotters-svg v0.3.7
+   Compiling serde_derive v1.0.228
+   Compiling nalgebra-macros v0.3.0
+   Compiling zerocopy-derive v0.8.48
+   Compiling tempfile v3.27.0
+   Compiling itertools v0.13.0
+   Compiling wait-timeout v0.2.1
+   Compiling bit-vec v0.8.0
+   Compiling cast v0.3.0
+   Compiling fnv v1.0.7
+   Compiling same-file v1.0.6
+   Compiling nalgebra v0.34.2
+   Compiling quick-error v1.2.3
+   Compiling rusty-fork v0.3.1
+   Compiling walkdir v2.5.0
+   Compiling bit-set v0.8.0
+   Compiling criterion-plot v0.8.2
+   Compiling regex v1.12.3
+   Compiling clap v4.6.1
+   Compiling rayon v1.12.0
+   Compiling plotters v0.3.7
+   Compiling rand_xorshift v0.4.0
+   Compiling rand v0.9.4
+   Compiling fsci-runtime v0.1.0 (/data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-runtime)
+   Compiling half v2.7.1
+   Compiling ppv-lite86 v0.2.21
+   Compiling ciborium-ll v0.2.2
+   Compiling rand_chacha v0.9.0
+   Compiling tinytemplate v1.2.1
+   Compiling ciborium v0.2.2
+   Compiling page_size v0.6.0
+   Compiling anes v0.1.6
+   Compiling oorandom v11.1.5
+   Compiling unarray v0.1.4
+   Compiling proptest v1.11.0
+   Compiling criterion v0.8.2
+   Compiling fsci-fft v0.1.0 (/data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-fft)
+warning: unused variable: `total`
+  --> crates/fsci-fft/src/helpers.rs:58:9
+   |
+58 |     let total: usize = input.len();
+   |         ^^^^^ help: if this is intentional, prefix it with an underscore: `_total`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling fsci-linalg v0.1.0 (/data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331/crates/fsci-linalg)
+warning: `fsci-fft` (lib) generated 1 warning (run `cargo fix --lib -p fsci-fft` to apply 1 suggestion)
+warning: unused variable: `j`
+  --> crates/fsci-linalg/src/bin/perf_cwt.rs:20:10
+   |
+20 |     for (j, col) in (0..m).enumerate() {
+   |          ^ help: if this is intentional, prefix it with an underscore: `_j`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `fsci-linalg` (bin "perf_cwt") generated 1 warning (run `cargo fix --bin "perf_cwt" -p fsci-linalg` to apply 1 suggestion)
+warning: `fsci-linalg` (bin "perf_cwt" test) generated 1 warning (1 duplicate)
+    Finished `release` profile [optimized] target(s) in 1m 32s
+     Running unittests src/lib.rs (.rch-target-vmi1152480-job-29884606035534720-1781583016750952234-0/release/deps/fsci_linalg-c4287c5201a86d5d)
+
+running 1 test
+SYMMETRIC_EIGH_NATIVE_STAGE_PROFILE_BEGIN
+shape=400x400
+reduction_storage=lower
+reduction_ms=20.399006
+tridiagonal_eigen_ms=15.233532
+backtransform_ms=26.621937
+sort_ms=0.988595
+worker_count=10
+max_abs_diff=5.24025267623073887e-13
+values_digest=0x0dbbde75b75c8612
+SYMMETRIC_EIGH_NATIVE_STAGE_PROFILE_END
+SYMMETRIC_EIGH_NATIVE_STAGE_PROFILE_BEGIN
+shape=800x800
+reduction_storage=lower
+reduction_ms=174.336668
+tridiagonal_eigen_ms=49.244159
+backtransform_ms=106.755178
+sort_ms=2.455152
+worker_count=10
+max_abs_diff=1.71418435002124170e-12
+values_digest=0x4461962827bdb038
+SYMMETRIC_EIGH_NATIVE_STAGE_PROFILE_END
+SYMMETRIC_EIGH_NATIVE_STAGE_PROFILE_BEGIN
+shape=1200x1200
+reduction_storage=lower
+reduction_ms=464.094159
+tridiagonal_eigen_ms=104.148309
+backtransform_ms=281.030846
+sort_ms=5.612751
+worker_count=10
+max_abs_diff=1.79412040779425297e-12
+values_digest=0x2fc45e1f18ceb0ab
+SYMMETRIC_EIGH_NATIVE_STAGE_PROFILE_END
+test tests::symmetric_eigh_native_stage_breakdown_probe ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 466 filtered out; finished in 2.11s
+
+     Running unittests src/bin/check_eigh_tridiag_vectors.rs (.rch-target-vmi1152480-job-29884606035534720-1781583016750952234-0/release/deps/check_eigh_tridiag_vectors-bae2aac504be7ca5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/diff_cholesky_banded.rs (.rch-target-vmi1152480-job-29884606035534720-1781583016750952234-0/release/deps/diff_cholesky_banded-9cc1029878c94bb3)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/diff_decomp2.rs (.rch-target-vmi1152480-job-29884606035534720-1781583016750952234-0/release/deps/diff_decomp2-b1299d24a65a04bf)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/diff_eig.rs (.rch-target-vmi1152480-job-29884606035534720-1781583016750952234-0/release/deps/diff_eig-be82a611f7d7a340)
+     Running unittests src/bin/diff_eigvec_cplx.rs (.rch-target-vmi1152480-job-29884606035534720-1781583016750952234-0/release/deps/diff_eigvec_cplx-39b4cdc04eb01722)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/diff_expm_frechet.rs (.rch-target-vmi1152480-job-29884606035534720-1781583016750952234-0/release/deps/diff_expm_frechet-edf820e79a3d5910)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/diff_lyap_complex.rs (.rch-target-vmi1152480-job-29884606035534720-1781583016750952234-0/release/deps/diff_lyap_complex-e8a64170b69143a7)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/diff_matfunc2.rs (.rch-target-vmi1152480-job-29884606035534720-1781583016750952234-0/release/deps/diff_matfunc2-9dfde0e0b663a169)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/diff_matfuncs.rs (.rch-target-vmi1152480-job-29884606035534720-1781583016750952234-0/release/deps/diff_matfuncs-91aa85b855ee5621)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/diff_matsolvers.rs (.rch-target-vmi1152480-job-29884606035534720-1781583016750952234-0/release/deps/diff_matsolvers-bad4a04b3b12ba29)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/diff_signm.rs (.rch-target-vmi1152480-job-29884606035534720-1781583016750952234-0/release/deps/diff_signm-b5af06569733418d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/diff_specmat.rs (.rch-target-vmi1152480-job-29884606035534720-1781583016750952234-0/release/deps/diff_specmat-f3110cbd5dbf6fdd)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/diff_specmat2.rs (.rch-target-vmi1152480-job-29884606035534720-1781583016750952234-0/release/deps/diff_specmat2-687b4b4824b85bad)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/diff_sqrtm.rs (.rch-target-vmi1152480-job-29884606035534720-1781583016750952234-0/release/deps/diff_sqrtm-253db010fc141669)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/perf_cwt.rs (.rch-target-vmi1152480-job-29884606035534720-1781583016750952234-0/release/deps/perf_cwt-fc4f8ffae04bb2c3)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/perf_discrete_lyapunov_tri.rs (.rch-target-vmi1152480-job-29884606035534720-1781583016750952234-0/release/deps/perf_discrete_lyapunov_tri-19166b46537a20c3)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/perf_id.rs (.rch-target-vmi1152480-job-29884606035534720-1781583016750952234-0/release/deps/perf_id-74f010b9cb5572c7)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/perf_kron.rs (.rch-target-vmi1152480-job-29884606035534720-1781583016750952234-0/release/deps/perf_kron-edbbdb7a57b4265e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/perf_lstsq_probe.rs (.rch-target-vmi1152480-job-29884606035534720-1781583016750952234-0/release/deps/perf_lstsq_probe-acedd3b193e1d4f1)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/perf_matmul.rs (.rch-target-vmi1152480-job-29884606035534720-1781583016750952234-0/release/deps/perf_matmul-71c9abaa12fb4b32)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/perf_pivchol.rs (.rch-target-vmi1152480-job-29884606035534720-1781583016750952234-0/release/deps/perf_pivchol-34ebf563112a8fbb)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/perf_reigh.rs (.rch-target-vmi1152480-job-29884606035534720-1781583016750952234-0/release/deps/perf_reigh-52b4845ac0c64519)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/perf_rpinv.rs (.rch-target-vmi1152480-job-29884606035534720-1781583016750952234-0/release/deps/perf_rpinv-21d5d86e3e4f6de8)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/perf_rsvd.rs (.rch-target-vmi1152480-job-29884606035534720-1781583016750952234-0/release/deps/perf_rsvd-2c14251f8ca2e4c7)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/perf_solve.rs (.rch-target-vmi1152480-job-29884606035534720-1781583016750952234-0/release/deps/perf_solve-6282193fd8c573e6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/perf_solve_banded.rs (.rch-target-vmi1152480-job-29884606035534720-1781583016750952234-0/release/deps/perf_solve_banded-0e8883ced83abc8e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/perf_solve_probe.rs (.rch-target-vmi1152480-job-29884606035534720-1781583016750952234-0/release/deps/perf_solve_probe-99f859de0108382a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/perf_srht.rs (.rch-target-vmi1152480-job-29884606035534720-1781583016750952234-0/release/deps/perf_srht-c07876f4e8735e10)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/perf_sylvester_tritriangular.rs (.rch-target-vmi1152480-job-29884606035534720-1781583016750952234-0/release/deps/perf_sylvester_tritriangular-b903327f17cf184b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/differential_linalg.rs (.rch-target-vmi1152480-job-29884606035534720-1781583016750952234-0/release/deps/differential_linalg-5c2846295401e95b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 34 filtered out; finished in 0.00s
+
+     Running tests/metamorphic_tests.rs (.rch-target-vmi1152480-job-29884606035534720-1781583016750952234-0/release/deps/metamorphic_tests-199eb29e52b52e61)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 59 filtered out; finished in 0.00s
+
+     Running tests/repro_tri_be.rs (.rch-target-vmi1152480-job-29884606035534720-1781583016750952234-0/release/deps/repro_tri_be-4f44b934da0c843a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/test_nan_eig.rs (.rch-target-vmi1152480-job-29884606035534720-1781583016750952234-0/release/deps/test_nan_eig-46448ffbcd818385)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/test_nan_svd.rs (.rch-target-vmi1152480-job-29884606035534720-1781583016750952234-0/release/deps/test_nan_svd-8637b0004ed40d7b)
+  [2m2026-06-16T04:13:13.782804Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mRemote command finished: exit=0 in 96804ms[0m
+    [2;3mat[0m rch/src/hook.rs:6376 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:13:13.783090Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mRetrieving build artifacts...[0m
+    [2;3mat[0m rch/src/hook.rs:6425 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:13:13.783104Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mRetrieving artifacts from /data/projects/.scratch/frankenscipy-rubywaterfall-psn7x6-integrate2-20260616-0331 on vmi1152480[0m
+    [2;3mat[0m rch/src/transfer.rs:2106 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:13:15.953193Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mArtifacts retrieved in 2170ms (1 files, 1186 bytes)[0m
+    [2;3mat[0m rch/src/transfer.rs:2145 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-16T04:13:15.953213Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mArtifacts retrieved: 1 files, 1186 bytes in 2170ms[0m
+    [2;3mat[0m rch/src/hook.rs:6458 [2;3mon[0m ThreadId(1)
+
+[RCH] remote vmi1152480 (182.1s)
