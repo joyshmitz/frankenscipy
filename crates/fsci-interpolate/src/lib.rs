@@ -4271,12 +4271,269 @@ pub fn splrep(
 /// positive `s` (FITPACK smoothing with adaptive knot insertion) returns an
 /// error.
 pub fn make_splrep(x: &[f64], y: &[f64], k: usize, s: f64) -> Result<BSpline, InterpError> {
-    if s != 0.0 {
+    if s < 0.0 {
         return Err(InterpError::InvalidArgument {
-            detail: "make_splrep currently supports only s = 0 (interpolation)".to_string(),
+            detail: "smoothing factor s must be >= 0".to_string(),
         });
     }
-    make_interp_spline(x, y, k)
+    if s == 0.0 {
+        return make_interp_spline(x, y, k);
+    }
+    // Smoothing spline: place knots via the FITPACK LSQ loop, then fit the
+    // penalized spline whose residual fp equals s.
+    let seq = generate_knots(x, y, None, None, None, k, s, None)?;
+    let t = seq.last().expect("generate_knots yields at least one vector").clone();
+    let nmin = 2 * (k + 1);
+    if t.len() == nmin {
+        // No interior knots: nothing to optimize, plain LSQ (constant-ish fit).
+        return make_lsq_spline(x, y, &t, k);
+    }
+    let w = vec![1.0_f64; x.len()];
+    splrep_smoothing_fit(x, y, &w, &t, k, s)
+}
+
+/// Product `Π_{s≠j-i}(t[j] - t[i+s])` over `s = 0..=k+1` (scipy `prodd`).
+fn prodd(t: &[f64], i: usize, j: usize, k: usize) -> f64 {
+    let mut res = 1.0_f64;
+    for s in 0..k + 2 {
+        if i + s != j {
+            res *= t[j] - t[i + s];
+        }
+    }
+    res
+}
+
+/// FITPACK discontinuity matrix: jumps of the k-th derivative of the B-splines at
+/// interior knots (scipy `disc`). Returns one row per interior knot as
+/// `(offset, [k+2 values])`, where the values occupy coefficient columns
+/// `offset..offset+k+2`.
+fn disc_matrix(t: &[f64], k: usize) -> Vec<(usize, Vec<f64>)> {
+    let n = t.len();
+    let nrint = n - 2 * k - 1;
+    let delta = t[n - k - 1] - t[k];
+    let factor = (delta / nrint as f64).powi(k as i32);
+    let mut rows = Vec::with_capacity(nrint.saturating_sub(1));
+    for jj in 0..nrint - 1 {
+        let j = jj + k + 1;
+        let mut vals = vec![0.0_f64; k + 2];
+        for (ii, v) in vals.iter_mut().enumerate() {
+            let i = jj + ii;
+            *v = (t[i + k + 1] - t[i]) / prodd(t, i, j, k) * factor;
+        }
+        rows.push((jj, vals));
+    }
+    rows
+}
+
+/// Sum of the Cholesky-factor diagonal of an SPD matrix `g` (equals `Σ R[i,i]`
+/// for the QR factor `R` of the data matrix), used to seed FITPACK's `p`.
+fn cholesky_diag_sum(g: &[Vec<f64>]) -> f64 {
+    let n = g.len();
+    let mut l = vec![vec![0.0_f64; n]; n];
+    let mut sum = 0.0_f64;
+    for i in 0..n {
+        for j in 0..=i {
+            let mut acc = g[i][j];
+            for kk in 0..j {
+                acc -= l[i][kk] * l[j][kk];
+            }
+            if i == j {
+                let d = acc.max(0.0).sqrt();
+                l[i][j] = d;
+                sum += d;
+            } else {
+                l[i][j] = if l[j][j] != 0.0 { acc / l[j][j] } else { 0.0 };
+            }
+        }
+    }
+    sum
+}
+
+/// FITPACK `fprati`: root of the rational interpolant `r(p)=(u·p+v)/(p+w)` through
+/// three points; `p3 == +inf` is handled explicitly.
+fn fprati(p1: f64, f1: f64, p2: f64, f2: f64, p3: f64, f3: f64) -> f64 {
+    let h1 = f1 * (f2 - f3);
+    let h2 = f2 * (f3 - f1);
+    let h3 = f3 * (f1 - f2);
+    if p3.is_infinite() {
+        -(p2 * h1 + p1 * h2) / h3
+    } else {
+        -(p1 * p2 * h3 + p2 * p3 * h1 + p1 * p3 * h2) / (p1 * h1 + p2 * h2 + p3 * h3)
+    }
+}
+
+/// FITPACK `root_rati`: find `p` with `f(p)=0` for the monotonically decreasing
+/// `f`, maintaining a three-point bracket and stepping via [`fprati`].
+fn root_rati(f: &mut dyn FnMut(f64) -> f64, p0: f64, bracket: ((f64, f64), (f64, f64)), acc: f64) -> f64 {
+    let (con1, con9, con4) = (0.1_f64, 0.9_f64, 0.04_f64);
+    let ((mut p1, mut f1), (mut p3, mut f3)) = bracket;
+    let (mut ich1, mut ich3) = (false, false);
+    let mut p = p0;
+    for _ in 0..20 {
+        let p2 = p;
+        let f2 = f(p);
+        if f2.abs() < acc {
+            return p2;
+        }
+        if !ich3 {
+            if f2 - f3 <= acc {
+                p3 = p2;
+                f3 = f2;
+                p = p * con4;
+                if p <= p1 {
+                    p = p1 * con9 + p2 * con1;
+                }
+                continue;
+            } else if f2 < 0.0 {
+                ich3 = true;
+            }
+        }
+        if !ich1 {
+            if f1 - f2 <= acc {
+                p1 = p2;
+                f1 = f2;
+                p = p / con4;
+                if p3.is_finite() && p <= p3 {
+                    p = p2 * con1 + p3 * con9;
+                }
+                continue;
+            } else if f2 > 0.0 {
+                ich1 = true;
+            }
+        }
+        if f1 <= f2 || f2 <= f3 {
+            return p2;
+        }
+        p = fprati(p1, f1, p2, f2, p3, f3);
+        if f2 < 0.0 {
+            p3 = p2;
+            f3 = f2;
+        } else {
+            p1 = p2;
+            f1 = f2;
+        }
+    }
+    p
+}
+
+/// Penalized smoothing-spline fit on fixed knots `t`: find `p` such that the
+/// data residual `fp(p) = Σ w_i²(y_i − s(x_i))²` equals `s`, where `s_p`
+/// minimizes `Σ w_i(y_i − s)² + (1/p²)·‖B c‖²` and `B` is the discontinuity
+/// matrix. Mirrors scipy's `_make_splrep_impl` / `F` via normal equations.
+fn splrep_smoothing_fit(
+    x: &[f64],
+    y: &[f64],
+    w: &[f64],
+    t: &[f64],
+    k: usize,
+    s: f64,
+) -> Result<BSpline, InterpError> {
+    let m = x.len();
+    let nc = t.len() - k - 1;
+
+    // G = AᵀWA (linear weights) and rhs = AᵀWy, assembled like make_lsq_spline.
+    let mut g = vec![vec![0.0_f64; nc]; nc];
+    let mut rhs = vec![0.0_f64; nc];
+    let mut scratch = vec![0.0_f64; nc];
+    for i in 0..m {
+        let Some(mu) = bspline_find_interval(t, x[i], nc) else {
+            continue;
+        };
+        scratch[mu] = 1.0;
+        for p in 1..=k {
+            let start = mu.saturating_sub(p);
+            for idx in start..=mu {
+                let mut val = 0.0;
+                if idx + p < t.len() {
+                    let dl = t[idx + p] - t[idx];
+                    if dl > 0.0 {
+                        val += (x[i] - t[idx]) / dl * scratch[idx];
+                    }
+                }
+                if idx + p + 1 < t.len() && idx + 1 < nc {
+                    let dr = t[idx + p + 1] - t[idx + 1];
+                    if dr > 0.0 {
+                        val += (t[idx + p + 1] - x[i]) / dr * scratch[idx + 1];
+                    }
+                }
+                scratch[idx] = val;
+            }
+        }
+        let lo = mu.saturating_sub(k);
+        let wi = w[i];
+        let yi = y[i];
+        for a in lo..=mu {
+            let ba = scratch[a];
+            rhs[a] += wi * ba * yi;
+            for b in lo..=mu {
+                g[a][b] += wi * ba * scratch[b];
+            }
+        }
+        for sc in scratch[lo..=mu].iter_mut() {
+            *sc = 0.0;
+        }
+    }
+
+    // H = BᵀB from the discontinuity matrix.
+    let brows = disc_matrix(t, k);
+    let mut h = vec![vec![0.0_f64; nc]; nc];
+    for (off, vals) in &brows {
+        for (a, &va) in vals.iter().enumerate() {
+            for (b, &vb) in vals.iter().enumerate() {
+                h[off + a][off + b] += va * vb;
+            }
+        }
+    }
+
+    // Solve (G + (1/p²) H) c = rhs and return (fp, c). p == inf drops the penalty.
+    let band = k + 1;
+    let solve_at = |p: f64| -> Option<(f64, Vec<f64>)> {
+        let inv = if p.is_infinite() { 0.0 } else { 1.0 / (p * p) };
+        let mut mat = vec![vec![0.0_f64; nc]; nc];
+        for i in 0..nc {
+            for j in 0..nc {
+                mat[i][j] = g[i][j] + inv * h[i][j];
+            }
+        }
+        let mut b = rhs.clone();
+        let c = solve_banded(&mut mat, &mut b, band).ok()?;
+        let spl = BSpline::new(t.to_vec(), c.clone(), k).ok()?;
+        let mut fp = 0.0_f64;
+        for i in 0..m {
+            let d = y[i] - spl.eval(x[i]);
+            fp += w[i] * w[i] * d * d;
+        }
+        Some((fp, c))
+    };
+
+    // Bracket: f(p=inf) = LSQ on knots t (min fp); f(p=0) = constant fit (max fp).
+    let (fp_inf, _) = solve_at(f64::INFINITY).ok_or_else(|| InterpError::InvalidArgument {
+        detail: "smoothing fit: singular system".to_string(),
+    })?;
+    let xb = x[0];
+    let xe = x[m - 1];
+    let mut t0: Vec<f64> = Vec::with_capacity(2 * (k + 1));
+    for _ in 0..=k {
+        t0.push(xb);
+    }
+    for _ in 0..=k {
+        t0.push(xe);
+    }
+    let (_, fp0) = lsq_residuals(x, y, w, &t0, k)?;
+
+    let acc = s * 1e-3;
+    let p0 = nc as f64 / cholesky_diag_sum(&g);
+    let mut f = |p: f64| -> f64 {
+        match solve_at(p) {
+            Some((fp, _)) => fp - s,
+            None => f64::INFINITY,
+        }
+    };
+    let p = root_rati(&mut f, p0, ((0.0, fp0 - s), (f64::INFINITY, fp_inf - s)), acc);
+    let (_, c) = solve_at(p).ok_or_else(|| InterpError::InvalidArgument {
+        detail: "smoothing fit: singular system at solution".to_string(),
+    })?;
+    BSpline::new(t.to_vec(), c, k)
 }
 
 /// Coefficients of the divided difference over `xs` (scipy `_coeff_of_divided_diff`):
@@ -6813,7 +7070,17 @@ mod tests {
         for (g, e) in b.coeffs().iter().zip(&c_exp) {
             assert!((g - e).abs() < 1e-5, "c {g} vs {e}");
         }
-        assert!(make_splrep(&x, &y, 3, 1.0).is_err());
+        // s > 0 now smooths: scipy make_splrep(x, y, k=3, s=1.0).
+        let bs = make_splrep(&x, &y, 3, 1.0).unwrap();
+        let ts_exp = [0.0, 0.0, 0.0, 0.0, 5.0, 5.0, 5.0, 5.0];
+        for (g, e) in bs.knots().iter().zip(&ts_exp) {
+            assert!((g - e).abs() < 1e-12, "ts {g} vs {e}");
+        }
+        let cs_exp = [0.04365079, 1.69157848, 0.52865961, 2.92063492];
+        assert_eq!(bs.coeffs().len(), cs_exp.len());
+        for (g, e) in bs.coeffs().iter().zip(&cs_exp) {
+            assert!((g - e).abs() < 1e-5, "cs {g} vs {e}");
+        }
     }
 
     #[test]
@@ -8894,6 +9161,47 @@ mod tests {
         assert_eq!(interp.len(), 1);
         assert_eq!(interp[0].len(), xa.len() + 3 + 1);
         assert!(generate_knots(&xa, &ya, Some(&wd), None, None, 3, 0.0, None).is_err());
+    }
+
+    #[test]
+    fn make_splrep_smoothing_matches_scipy() {
+        let x: Vec<f64> = {
+            let mut v: Vec<f64> = (0..11).map(|i| i as f64 * 0.1).collect();
+            v[10] = 1.0;
+            v
+        };
+        let y: Vec<f64> = x.iter().map(|&t| (6.0 * t).sin() + 0.1 * (20.0 * t).cos()).collect();
+
+        // scipy.interpolate.make_splrep(x, y, k=3, s=0.05)
+        let spl = make_splrep(&x, &y, 3, 0.05).unwrap();
+        let exp_t = [0.0, 0.0, 0.0, 0.0, 0.3, 0.5, 0.8, 1.0, 1.0, 1.0, 1.0];
+        let exp_c = [
+            0.06567173, 0.65378525, 1.37575535, -0.00672879, -1.42662387, -0.74611222, -0.19968622,
+        ];
+        for (a, b) in spl.knots().iter().zip(exp_t.iter()) {
+            assert!((a - b).abs() < 1e-9, "t {a} vs {b}");
+        }
+        assert_eq!(spl.coeffs().len(), exp_c.len());
+        for (a, b) in spl.coeffs().iter().zip(exp_c.iter()) {
+            assert!((a - b).abs() < 1e-5, "c {a} vs {b}");
+        }
+
+        // s = 0.005 (more interior knots).
+        let spl2 = make_splrep(&x, &y, 3, 0.005).unwrap();
+        let exp_c2 = [
+            0.10214238, 0.3404046, 0.86000172, 1.2173123, 0.18503621, -0.3681132, -0.90141417,
+            -1.28396656, -0.48171754, -0.23430597,
+        ];
+        assert_eq!(spl2.coeffs().len(), exp_c2.len());
+        for (a, b) in spl2.coeffs().iter().zip(exp_c2.iter()) {
+            assert!((a - b).abs() < 1e-5, "c2 {a} vs {b}");
+        }
+
+        // s = 0 still interpolates.
+        let interp = make_splrep(&x, &y, 3, 0.0).unwrap();
+        for (&xi, &yi) in x.iter().zip(y.iter()) {
+            assert!((interp.eval(xi) - yi).abs() < 1e-9);
+        }
     }
 
     #[test]
