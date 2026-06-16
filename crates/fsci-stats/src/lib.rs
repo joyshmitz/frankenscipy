@@ -7709,6 +7709,52 @@ impl DparetoLognorm {
     }
 }
 
+/// The Kolmogorov-Smirnov one-sided (Smirnov) distribution of the statistic
+/// `D⁺_n`, matching `scipy.stats.ksone(n)`.
+pub struct KsOne {
+    n: usize,
+}
+
+impl KsOne {
+    /// Create the distribution for sample size `n`.
+    pub fn new(n: usize) -> Self {
+        Self { n }
+    }
+
+    /// Survival function `P(D⁺_n ≥ d)` via Smirnov's exact formula
+    /// `d·Σ_{j=0}^{⌊n(1−d)⌋} C(n,j)(1−d−j/n)^{n−j}(d+j/n)^{j−1}`.
+    pub fn sf(&self, d: f64) -> f64 {
+        if d <= 0.0 {
+            return 1.0;
+        }
+        if d >= 1.0 {
+            return 0.0;
+        }
+        let nf = self.n as f64;
+        let jmax = (nf * (1.0 - d)).floor() as usize;
+        let ln_n_fact = ln_gamma(nf + 1.0);
+        let mut sum = 0.0_f64;
+        for j in 0..=jmax {
+            let jf = j as f64;
+            let base1 = 1.0 - d - jf / nf;
+            if base1 < 0.0 {
+                break;
+            }
+            let base2 = d + jf / nf;
+            let lnc = ln_n_fact - ln_gamma(jf + 1.0) - ln_gamma(nf - jf + 1.0);
+            // (n-j) ≥ 1 here, so base1==0 ⇒ ln term -inf ⇒ exp 0 (no 0·-inf NaN).
+            let log_term = lnc + (nf - jf) * base1.ln() + (jf - 1.0) * base2.ln();
+            sum += log_term.exp();
+        }
+        (d * sum).clamp(0.0, 1.0)
+    }
+
+    /// Cumulative distribution function `P(D⁺_n ≤ d)`.
+    pub fn cdf(&self, d: f64) -> f64 {
+        1.0 - self.sf(d)
+    }
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Von Mises Distribution
 // ══════════════════════════════════════════════════════════════════════
@@ -42860,6 +42906,17 @@ mod tests {
         let best = ppcc_max(&x, (0.0, 1.0));
         assert!((best - 0.35779018).abs() < 1e-4, "ppcc_max {best}");
         assert!(ppcc_plot(&x, 2.0, -2.0, 5).is_err());
+    }
+
+    #[test]
+    fn ksone_matches_scipy() {
+        let d = KsOne::new(20);
+        assert!((d.sf(0.1) - 0.6290710188849629).abs() < 1e-10, "sf {}", d.sf(0.1));
+        assert!((d.cdf(0.1) - 0.37092898111503714).abs() < 1e-10);
+        assert!((KsOne::new(10).sf(0.3) - 0.1354635556).abs() < 1e-9);
+        assert!((KsOne::new(15).cdf(0.25) - 0.870226977592069).abs() < 1e-9);
+        assert_eq!(d.sf(-0.5), 1.0);
+        assert_eq!(d.cdf(1.5), 1.0);
     }
 
     #[test]
