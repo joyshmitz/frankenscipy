@@ -5248,6 +5248,336 @@ pub fn splprep(
     Ok(((t, coeffs, k), u))
 }
 
+/// Multi-dimensional [`lsq_residuals`] for parametric fitting: per-point summed
+/// squared residual across all coordinate splines (which share knots `t`), plus
+/// the total `fp`. Mirrors `_get_residuals` with 2-D `y` (summed over axis 1).
+fn lsq_residuals_nd(
+    u: &[f64],
+    ys: &[Vec<f64>],
+    w: &[f64],
+    t: &[f64],
+    k: usize,
+) -> Result<(Vec<f64>, f64), InterpError> {
+    let m = u.len();
+    let n = t.len() - k - 1;
+    let d = ys.len();
+    let mut ata = vec![vec![0.0_f64; n]; n];
+    let mut atys = vec![vec![0.0_f64; n]; d];
+    let mut scratch = vec![0.0_f64; n];
+    for i in 0..m {
+        let Some(mu) = bspline_find_interval(t, u[i], n) else {
+            continue;
+        };
+        scratch[mu] = 1.0;
+        for p in 1..=k {
+            let start = mu.saturating_sub(p);
+            for idx in start..=mu {
+                let mut val = 0.0;
+                if idx + p < t.len() {
+                    let dl = t[idx + p] - t[idx];
+                    if dl > 0.0 {
+                        val += (u[i] - t[idx]) / dl * scratch[idx];
+                    }
+                }
+                if idx + p + 1 < t.len() && idx + 1 < n {
+                    let dr = t[idx + p + 1] - t[idx + 1];
+                    if dr > 0.0 {
+                        val += (t[idx + p + 1] - u[i]) / dr * scratch[idx + 1];
+                    }
+                }
+                scratch[idx] = val;
+            }
+        }
+        let lo = mu.saturating_sub(k);
+        let wi = w[i];
+        for a in lo..=mu {
+            let ba = scratch[a];
+            for dd in 0..d {
+                atys[dd][a] += wi * ba * ys[dd][i];
+            }
+            for b in lo..=mu {
+                ata[a][b] += wi * ba * scratch[b];
+            }
+        }
+        for sc in scratch[lo..=mu].iter_mut() {
+            *sc = 0.0;
+        }
+    }
+    let mut residuals = vec![0.0_f64; m];
+    for dd in 0..d {
+        let mut a = ata.clone();
+        let mut b = atys[dd].clone();
+        let c = solve_banded(&mut a, &mut b, k)?;
+        let spl = BSpline::new(t.to_vec(), c, k)?;
+        for i in 0..m {
+            let e = ys[dd][i] - spl.eval(u[i]);
+            residuals[i] += w[i] * w[i] * e * e;
+        }
+    }
+    let fp = residuals.iter().sum();
+    Ok((residuals, fp))
+}
+
+/// Multi-dimensional FITPACK knot placement (parametric): returns the final knot
+/// vector that scipy's `generate_knots` would yield last for the summed residuals.
+fn generate_knots_nd_last(
+    u: &[f64],
+    ys: &[Vec<f64>],
+    w: &[f64],
+    k: usize,
+    s: f64,
+) -> Result<Vec<f64>, InterpError> {
+    let m = u.len();
+    let xb = u[0];
+    let xe = u[m - 1];
+    let acc = s * 1e-3;
+    let nmin = 2 * (k + 1);
+    let nmax = m + k + 1;
+    let nest = (m + k + 1).max(2 * k + 3);
+    let mut t: Vec<f64> = Vec::with_capacity(nmin);
+    for _ in 0..=k {
+        t.push(xb);
+    }
+    for _ in 0..=k {
+        t.push(xe);
+    }
+    let mut fp = 0.0_f64;
+    let mut nplus = 1usize;
+    for _iter in 0..m {
+        let fpold = fp;
+        let (residuals, fp_new) = lsq_residuals_nd(u, ys, w, &t, k)?;
+        fp = fp_new;
+        let fpms = fp - s;
+        if fpms.abs() < acc || fpms < 0.0 {
+            return Ok(t);
+        }
+        let n = t.len();
+        if n == nmin {
+            nplus = 1;
+        } else {
+            let delta = fpold - fp;
+            let npl1: i64 = if delta > acc {
+                (nplus as f64 * fpms / delta) as i64
+            } else {
+                (nplus * 2) as i64
+            };
+            let cand = npl1.max((nplus / 2) as i64).max(1);
+            nplus = (nplus * 2).min(cand as usize);
+        }
+        let mut residuals = residuals;
+        for j in 0..nplus {
+            t = add_knot(u, &t, k, &residuals);
+            let n = t.len();
+            if n >= nmax {
+                return Ok(interpolation_knots(u, k));
+            }
+            if n >= nest {
+                return Ok(t);
+            }
+            if j < nplus - 1 {
+                let (r, _) = lsq_residuals_nd(u, ys, w, &t, k)?;
+                residuals = r;
+            }
+        }
+    }
+    Ok(t)
+}
+
+/// Multi-dimensional [`splrep_smoothing_fit`]: per-coordinate penalized fit on
+/// shared knots `t` with a single smoothing parameter `p` chosen so the *total*
+/// residual `fp` (summed across coordinates) equals `s`. Returns one coefficient
+/// vector per coordinate.
+fn splrep_smoothing_fit_nd(
+    u: &[f64],
+    ys: &[Vec<f64>],
+    w: &[f64],
+    t: &[f64],
+    k: usize,
+    s: f64,
+) -> Result<Vec<Vec<f64>>, InterpError> {
+    let m = u.len();
+    let nc = t.len() - k - 1;
+    let d = ys.len();
+    let mut g = vec![vec![0.0_f64; nc]; nc];
+    let mut rhs = vec![vec![0.0_f64; nc]; d];
+    let mut scratch = vec![0.0_f64; nc];
+    for i in 0..m {
+        let Some(mu) = bspline_find_interval(t, u[i], nc) else {
+            continue;
+        };
+        scratch[mu] = 1.0;
+        for p in 1..=k {
+            let start = mu.saturating_sub(p);
+            for idx in start..=mu {
+                let mut val = 0.0;
+                if idx + p < t.len() {
+                    let dl = t[idx + p] - t[idx];
+                    if dl > 0.0 {
+                        val += (u[i] - t[idx]) / dl * scratch[idx];
+                    }
+                }
+                if idx + p + 1 < t.len() && idx + 1 < nc {
+                    let dr = t[idx + p + 1] - t[idx + 1];
+                    if dr > 0.0 {
+                        val += (t[idx + p + 1] - u[i]) / dr * scratch[idx + 1];
+                    }
+                }
+                scratch[idx] = val;
+            }
+        }
+        let lo = mu.saturating_sub(k);
+        let wi = w[i];
+        for a in lo..=mu {
+            let ba = scratch[a];
+            for dd in 0..d {
+                rhs[dd][a] += wi * ba * ys[dd][i];
+            }
+            for b in lo..=mu {
+                g[a][b] += wi * ba * scratch[b];
+            }
+        }
+        for sc in scratch[lo..=mu].iter_mut() {
+            *sc = 0.0;
+        }
+    }
+
+    let brows = disc_matrix(t, k);
+    let mut h = vec![vec![0.0_f64; nc]; nc];
+    for (off, vals) in &brows {
+        for (a, &va) in vals.iter().enumerate() {
+            for (b, &vb) in vals.iter().enumerate() {
+                h[off + a][off + b] += va * vb;
+            }
+        }
+    }
+
+    let band = k + 1;
+    let solve_at = |p: f64| -> Option<(f64, Vec<Vec<f64>>)> {
+        let inv = if p.is_infinite() { 0.0 } else { 1.0 / (p * p) };
+        let mut mat0 = vec![vec![0.0_f64; nc]; nc];
+        for i in 0..nc {
+            for j in 0..nc {
+                mat0[i][j] = g[i][j] + inv * h[i][j];
+            }
+        }
+        let mut fp = 0.0_f64;
+        let mut cper = Vec::with_capacity(d);
+        for dd in 0..d {
+            let mut mat = mat0.clone();
+            let mut b = rhs[dd].clone();
+            let c = solve_banded(&mut mat, &mut b, band).ok()?;
+            let spl = BSpline::new(t.to_vec(), c.clone(), k).ok()?;
+            for i in 0..m {
+                let e = ys[dd][i] - spl.eval(u[i]);
+                fp += w[i] * w[i] * e * e;
+            }
+            cper.push(c);
+        }
+        Some((fp, cper))
+    };
+
+    let (fp_inf, _) = solve_at(f64::INFINITY).ok_or_else(|| InterpError::InvalidArgument {
+        detail: "smoothing fit: singular system".to_string(),
+    })?;
+    let xb = u[0];
+    let xe = u[m - 1];
+    let mut t0 = Vec::with_capacity(2 * (k + 1));
+    for _ in 0..=k {
+        t0.push(xb);
+    }
+    for _ in 0..=k {
+        t0.push(xe);
+    }
+    let (_, fp0) = lsq_residuals_nd(u, ys, w, &t0, k)?;
+
+    let acc = s * 1e-3;
+    let p0 = nc as f64 / cholesky_diag_sum(&g);
+    let mut f = |p: f64| -> f64 {
+        match solve_at(p) {
+            Some((fp, _)) => fp - s,
+            None => f64::INFINITY,
+        }
+    };
+    let p = root_rati(&mut f, p0, ((0.0, fp0 - s), (f64::INFINITY, fp_inf - s)), acc);
+    let (_, cper) = solve_at(p).ok_or_else(|| InterpError::InvalidArgument {
+        detail: "smoothing fit: singular system at solution".to_string(),
+    })?;
+    Ok(cper)
+}
+
+/// Smoothing parametric B-spline curve. Matches `scipy.interpolate.make_splprep`.
+///
+/// Given `points` as `ndim` coordinate arrays of equal length sampling a curve,
+/// parametrizes by normalized cumulative chord length `u`, places knots with the
+/// FITPACK least-squares loop on the summed-across-dimensions residuals, and fits
+/// the penalized smoothing spline whose total residual `fp` equals `s` (every
+/// coordinate shares the knots and smoothing parameter). Returns
+/// `((t, c_per_dim, k), u)`. `s == 0` reduces to interpolation (see [`splprep`]).
+pub fn make_splprep(
+    points: &[Vec<f64>],
+    k: usize,
+    s: f64,
+) -> Result<((Vec<f64>, Vec<Vec<f64>>, usize), Vec<f64>), InterpError> {
+    if s < 0.0 {
+        return Err(InterpError::InvalidArgument {
+            detail: "smoothing factor s must be >= 0".to_string(),
+        });
+    }
+    if s == 0.0 {
+        return splprep(points, k, s);
+    }
+    if points.is_empty() {
+        return Err(InterpError::InvalidArgument {
+            detail: "make_splprep requires at least one coordinate array".to_string(),
+        });
+    }
+    let m = points[0].len();
+    if points.iter().any(|p| p.len() != m) {
+        return Err(InterpError::InvalidArgument {
+            detail: "all coordinate arrays must have the same length".to_string(),
+        });
+    }
+    if m < k + 1 {
+        return Err(InterpError::TooFewPoints {
+            minimum: k + 1,
+            actual: m,
+        });
+    }
+    // Normalized cumulative chord-length parametrization.
+    let mut u = vec![0.0_f64; m];
+    for i in 1..m {
+        let dd: f64 = points
+            .iter()
+            .map(|p| (p[i] - p[i - 1]).powi(2))
+            .sum::<f64>()
+            .sqrt();
+        u[i] = u[i - 1] + dd;
+    }
+    let total = u[m - 1];
+    if total <= 0.0 {
+        return Err(InterpError::InvalidArgument {
+            detail: "make_splprep requires distinct points (nonzero total chord length)".to_string(),
+        });
+    }
+    for v in &mut u {
+        *v /= total;
+    }
+
+    let w = vec![1.0_f64; m];
+    let t = generate_knots_nd_last(&u, points, &w, k, s)?;
+    let nmin = 2 * (k + 1);
+    let coeffs = if t.len() == nmin {
+        let mut cper = Vec::with_capacity(points.len());
+        for coord in points {
+            cper.push(make_lsq_spline(&u, coord, &t, k)?.coeffs().to_vec());
+        }
+        cper
+    } else {
+        splrep_smoothing_fit_nd(&u, points, &w, &t, k, s)?
+    };
+    Ok(((t, coeffs, k), u))
+}
+
 /// Pad B-spline coefficients to `len(t)` with trailing zeros, matching scipy's
 /// FITPACK tck convention (`len(c) == len(t)`; the last k+1 entries are zero).
 fn pad_tck_coeffs(t: &[f64], c: &[f64]) -> Vec<f64> {
@@ -7412,6 +7742,52 @@ mod tests {
         for (g, e) in bs.coeffs().iter().zip(&cs_exp) {
             assert!((g - e).abs() < 1e-5, "cs {g} vs {e}");
         }
+    }
+
+    #[test]
+    fn make_splprep_smoothing_matches_scipy() {
+        // 2-D curve sampled at 15 points; scipy.interpolate.make_splprep(s=0.01).
+        let tt: Vec<f64> = (0..15).map(|i| i as f64 / 14.0).collect();
+        let x: Vec<f64> = tt
+            .iter()
+            .map(|&t| (2.0 * std::f64::consts::PI * t).cos() + 0.05 * (20.0 * t).sin())
+            .collect();
+        let y: Vec<f64> = tt
+            .iter()
+            .map(|&t| (2.0 * std::f64::consts::PI * t).sin())
+            .collect();
+        let ((t, c, k), u) = make_splprep(&[x, y], 3, 0.01).unwrap();
+        assert_eq!(k, 3);
+        let t_exp = [
+            0.0, 0.0, 0.0, 0.0, 0.29257123, 0.49981611, 0.78720603, 1.0, 1.0, 1.0, 1.0,
+        ];
+        for (g, e) in t.iter().zip(&t_exp) {
+            assert!((g - e).abs() < 1e-6, "t {g} vs {e}");
+        }
+        let u_exp = [
+            0.0, 0.06979872, 0.14459583, 0.22440958, 0.29257123, 0.35453232, 0.4256846, 0.49981611,
+            0.57035793, 0.64780129, 0.72402847, 0.78720603, 0.85134033, 0.92617459, 1.0,
+        ];
+        for (g, e) in u.iter().zip(&u_exp) {
+            assert!((g - e).abs() < 1e-7, "u {g} vs {e}");
+        }
+        let cx_exp = [
+            1.00482233, 1.09933223, -0.19034036, -1.47614048, 0.0889122, 1.02839757, 1.04381222,
+        ];
+        let cy_exp = [
+            -0.01613521, 0.7105643, 1.43592329, -0.21018385, -1.44683564, -0.48400388, 0.02505848,
+        ];
+        assert_eq!(c.len(), 2);
+        for (g, e) in c[0].iter().zip(&cx_exp) {
+            assert!((g - e).abs() < 1e-5, "cx {g} vs {e}");
+        }
+        for (g, e) in c[1].iter().zip(&cy_exp) {
+            assert!((g - e).abs() < 1e-5, "cy {g} vs {e}");
+        }
+        // s = 0 reduces to interpolation (delegates to splprep).
+        let xi = vec![0.0, 1.0, 2.0, 3.0];
+        let yi = vec![0.0, 1.0, 0.5, 2.0];
+        assert!(make_splprep(&[xi, yi], 3, 0.0).is_ok());
     }
 
     #[test]
