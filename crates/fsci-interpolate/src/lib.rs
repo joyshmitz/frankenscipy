@@ -4516,6 +4516,79 @@ fn tck_n_coeffs(t: &[f64], k: usize) -> Result<usize, InterpError> {
         })
 }
 
+/// Insert `m` knots at position `x` into a B-spline using Boehm's algorithm.
+///
+/// Matches the non-periodic form of `scipy.interpolate.insert(x, tck, m, per=0)`.
+/// The spline curve is unchanged; only its `(t, c)` representation gains `m`
+/// extra knots/coefficients. `x` must lie within the base interval
+/// `[t[k], t[len(t)-k-1]]`. The returned coefficient vector is zero-padded to
+/// `len(t)` to match SciPy's convention. The periodic case (`per=true`) is not
+/// supported.
+pub fn insert(
+    x: f64,
+    tck: &(Vec<f64>, Vec<f64>, usize),
+    m: usize,
+    per: bool,
+) -> Result<(Vec<f64>, Vec<f64>, usize), InterpError> {
+    if per {
+        return Err(InterpError::InvalidArgument {
+            detail: "periodic knot insertion (per=true) is not supported".to_string(),
+        });
+    }
+    let (t0, c0, k) = tck;
+    let k = *k;
+    let n = tck_n_coeffs(t0, k)?;
+    if c0.len() < n {
+        return Err(InterpError::InvalidArgument {
+            detail: format!("invalid tck: {} coefficients, {n} required", c0.len()),
+        });
+    }
+    let lo = t0[k];
+    let hi = t0[t0.len() - k - 1];
+    if x < lo || x > hi {
+        return Err(InterpError::InvalidArgument {
+            detail: format!("x={x} outside the spline interval [{lo}, {hi}]"),
+        });
+    }
+
+    // Work on the meaningful coefficients only; re-pad at the end.
+    let mut t: Vec<f64> = t0.clone();
+    let mut c: Vec<f64> = c0[..n].to_vec();
+
+    for _ in 0..m {
+        let nc = c.len(); // current number of coefficients
+        // Find span l with t[l] <= x < t[l+1], clamped to the interior range.
+        let mut l = k;
+        while l < nc && x >= t[l + 1] {
+            l += 1;
+        }
+        // Boehm single-knot insertion.
+        let mut new_c = vec![0.0; nc + 1];
+        for (i, slot) in new_c.iter_mut().enumerate() {
+            *slot = if i <= l - k {
+                c[i]
+            } else if i <= l {
+                let denom = t[i + k] - t[i];
+                let alpha = if denom.abs() > 0.0 {
+                    (x - t[i]) / denom
+                } else {
+                    0.0
+                };
+                alpha * c[i] + (1.0 - alpha) * c[i - 1]
+            } else {
+                c[i - 1]
+            };
+        }
+        // Insert the knot, keeping t sorted.
+        t.insert(l + 1, x);
+        c = new_c;
+    }
+
+    // Zero-pad coefficients to len(t), matching SciPy.
+    c.resize(t.len(), 0.0);
+    Ok((t, c, k))
+}
+
 /// Compute the derivative of a B-spline.
 ///
 /// Returns new knots and coefficients for the derivative spline. Accepts both
@@ -8433,6 +8506,56 @@ mod tests {
             assert_eq!(dc.len(), dt.len() - dk - 1);
             assert_eq!(dc, expected_c);
         }
+    }
+
+    #[test]
+    fn insert_matches_scipy() {
+        // tck from scipy.interpolate.splrep(linspace(0,1,7), sin(3x), s=0).
+        let t = vec![
+            0.0, 0.0, 0.0, 0.0, 0.33333333, 0.5, 0.66666667, 1.0, 1.0, 1.0, 1.0,
+        ];
+        let c = vec![
+            -0.0, 0.336776, 0.82341466, 1.03979653, 0.91776607, 0.47545689, 0.14112001, 0.0, 0.0,
+            0.0, 0.0,
+        ];
+        let tck = (t, c, 3usize);
+
+        // Single insertion at x = 0.45.
+        let (nt, nc, nk) = insert(0.45, &tck, 1, false).unwrap();
+        assert_eq!(nk, 3);
+        let exp_t = [
+            0.0, 0.0, 0.0, 0.0, 0.33333333, 0.45, 0.5, 0.66666667, 1.0, 1.0, 1.0, 1.0,
+        ];
+        let exp_c = [
+            -0.0, 0.336776, 0.77475079, 0.96947242, 1.0184412, 0.91776607, 0.47545689, 0.14112001,
+            0.0, 0.0, 0.0, 0.0,
+        ];
+        for (a, b) in nt.iter().zip(exp_t.iter()) {
+            assert!((a - b).abs() < 1e-7, "knot {a} vs {b}");
+        }
+        for (a, b) in nc.iter().zip(exp_c.iter()) {
+            assert!((a - b).abs() < 1e-7, "coeff {a} vs {b}");
+        }
+
+        // Double insertion at x = 0.6.
+        let (nt2, nc2, _) = insert(0.6, &tck, 2, false).unwrap();
+        let exp_t2 = [
+            0.0, 0.0, 0.0, 0.0, 0.33333333, 0.5, 0.6, 0.6, 0.66666667, 1.0, 1.0, 1.0, 1.0,
+        ];
+        let exp_c2 = [
+            -0.0, 0.336776, 0.82341466, 1.01815834, 0.99641914, 0.95864832, 0.82930424, 0.47545689,
+            0.14112001, 0.0, 0.0, 0.0, 0.0,
+        ];
+        for (a, b) in nt2.iter().zip(exp_t2.iter()) {
+            assert!((a - b).abs() < 1e-7, "knot2 {a} vs {b}");
+        }
+        for (a, b) in nc2.iter().zip(exp_c2.iter()) {
+            assert!((a - b).abs() < 1e-7, "coeff2 {a} vs {b}");
+        }
+
+        // Out-of-range x and periodic mode are rejected.
+        assert!(insert(1.5, &tck, 1, false).is_err());
+        assert!(insert(0.45, &tck, 1, true).is_err());
     }
 
     #[test]
