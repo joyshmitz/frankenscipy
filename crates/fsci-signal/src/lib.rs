@@ -13386,6 +13386,27 @@ impl ShortTimeFft {
         })
     }
 
+    /// Construct from a named window, mirroring
+    /// `scipy.signal.ShortTimeFFT.from_window(window, fs, nperseg, noverlap)`:
+    /// `win = get_window(window, nperseg, fftbins=!symmetric)`, `hop = nperseg −
+    /// noverlap`. Chain `with_mfft`/`with_fft_mode`/`with_scale_to`/
+    /// `with_phase_shift` for the scipy keyword options.
+    pub fn from_window(
+        window: &str,
+        fs: f64,
+        nperseg: usize,
+        noverlap: usize,
+        symmetric_win: bool,
+    ) -> Result<Self, SignalError> {
+        if noverlap >= nperseg {
+            return Err(SignalError::InvalidArgument(format!(
+                "from_window: noverlap ({noverlap}) must be < nperseg ({nperseg})"
+            )));
+        }
+        let win = get_window_with_fftbins(window, nperseg, !symmetric_win)?;
+        Self::new(win, nperseg - noverlap, fs)
+    }
+
     /// Scale the window to `Magnitude` (unit area) or `Psd` (unit energy),
     /// matching scipy's `scale_to`. Idempotent for the same scaling; switching
     /// scaling recomputes the factor from the current window (as scipy does).
@@ -16296,6 +16317,16 @@ mod tests {
                 .stft(&x)
                 .is_err()
         );
+
+        // from_window: hann via get_window(nperseg, fftbins=True), hop=nperseg-noverlap.
+        let fw = ShortTimeFft::from_window("hann", 100.0, 8, 5, false).unwrap();
+        assert_eq!(fw.hop(), 3);
+        assert_eq!(fw.m_num(), 8);
+        assert_eq!(fw.p_min(), -1);
+        assert_eq!(fw.p_max(n), 8);
+        let sfw = fw.stft(&x).unwrap();
+        assert!((sfw[1][0].0 - (-5.177_669_529_664e-2)).abs() < 1e-8);
+        assert!(ShortTimeFft::from_window("hann", 100.0, 8, 8, false).is_err()); // noverlap>=nperseg
     }
 
     #[test]
