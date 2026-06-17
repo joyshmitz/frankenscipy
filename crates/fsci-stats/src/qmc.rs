@@ -403,6 +403,237 @@ const fn sobol_direction_const(dimension: usize, bit: usize) -> u64 {
     direction
 }
 
+/// Quasi-Monte Carlo sampler for a multivariate normal `N(mean, cov)`,
+/// mirroring `scipy.stats.qmc.MultivariateNormalQMC`.
+///
+/// Base quasi-random points are drawn from an **unscrambled** Sobol' sequence
+/// (bit-identical to `scipy.stats.qmc.Sobol(d, scramble=False)`), mapped to
+/// standard-normal deviates by the inverse-transform method (default) or
+/// Box–Muller, then correlated by the upper-triangular Cholesky root of `cov`
+/// (`cov_root = cholesky(cov).T`). With matching base points the samples equal
+/// SciPy's `MultivariateNormalQMC(..., engine=Sobol(d, scramble=False))` output
+/// to floating-point tolerance.
+///
+/// ```
+/// use fsci_stats::qmc::MultivariateNormalQmc;
+/// let mut d = MultivariateNormalQmc::new(&[1.0, -2.0], &[vec![2.0, 0.3], vec![0.3, 1.0]]).unwrap();
+/// let s = d.sample(4); // 4 rows × 2 cols, row-major
+/// assert_eq!(s.len(), 8);
+/// ```
+pub struct MultivariateNormalQmc {
+    mean: Vec<f64>,
+    /// Upper-triangular Cholesky root (`d×d`); `None` means identity covariance.
+    cov_root: Option<Vec<Vec<f64>>>,
+    inv_transform: bool,
+    engine: SobolSampler,
+    d: usize,
+}
+
+impl MultivariateNormalQmc {
+    /// Construct `N(mean, cov)`; `cov` must be symmetric positive-definite
+    /// (the Cholesky path, matching SciPy's default for a provided `cov`).
+    ///
+    /// For a non-positive-definite (rank-deficient) covariance SciPy falls back
+    /// to an eigendecomposition whose vector signs are LAPACK-specific and
+    /// cannot be reproduced byte-for-byte; supply the root directly via
+    /// [`MultivariateNormalQmc::from_root`] in that case.
+    pub fn new(mean: &[f64], cov: &[Vec<f64>]) -> Result<Self, StatsError> {
+        let d = mean.len();
+        if d == 0 {
+            return Err(StatsError::InvalidArgument(
+                "MultivariateNormalQmc: mean must be non-empty".to_string(),
+            ));
+        }
+        if cov.len() != d || cov.iter().any(|r| r.len() != d) {
+            return Err(StatsError::InvalidArgument(format!(
+                "MultivariateNormalQmc: cov must be {d}×{d} to match mean length {d}"
+            )));
+        }
+        // SciPy requires symmetry (np.allclose(cov, cov.T): atol 1e-8, rtol 1e-5).
+        #[allow(clippy::needless_range_loop)] // cross-indexes cov[i][j] vs cov[j][i]
+        for i in 0..d {
+            for j in (i + 1)..d {
+                let (a, b) = (cov[i][j], cov[j][i]);
+                if (a - b).abs() > 1e-8 + 1e-5 * b.abs() {
+                    return Err(StatsError::InvalidArgument(
+                        "MultivariateNormalQmc: covariance matrix is not symmetric".to_string(),
+                    ));
+                }
+            }
+        }
+        let cov_root = cholesky_upper(cov, d)?;
+        Self::from_root(mean, &cov_root)
+    }
+
+    /// Construct from the mean and an explicit upper-triangular covariance root
+    /// `cov_root` (`d×d`), where `cov = cov_root.T @ cov_root`. Use this for the
+    /// non-positive-definite case or when the root is already known.
+    pub fn from_root(mean: &[f64], cov_root: &[Vec<f64>]) -> Result<Self, StatsError> {
+        let d = mean.len();
+        if d == 0 {
+            return Err(StatsError::InvalidArgument(
+                "MultivariateNormalQmc: mean must be non-empty".to_string(),
+            ));
+        }
+        if cov_root.len() != d || cov_root.iter().any(|r| r.len() != d) {
+            return Err(StatsError::InvalidArgument(format!(
+                "MultivariateNormalQmc: cov_root must be {d}×{d} to match mean length {d}"
+            )));
+        }
+        let engine = SobolSampler::new(d)?;
+        Ok(Self {
+            mean: mean.to_vec(),
+            cov_root: Some(cov_root.iter().map(|r| r.to_vec()).collect()),
+            inv_transform: true,
+            engine,
+            d,
+        })
+    }
+
+    /// Construct `N(mean, I)` with identity covariance (no correlation step).
+    pub fn standard(mean: &[f64]) -> Result<Self, StatsError> {
+        let d = mean.len();
+        if d == 0 {
+            return Err(StatsError::InvalidArgument(
+                "MultivariateNormalQmc: mean must be non-empty".to_string(),
+            ));
+        }
+        let engine = SobolSampler::new(d)?;
+        Ok(Self {
+            mean: mean.to_vec(),
+            cov_root: None,
+            inv_transform: true,
+            engine,
+            d,
+        })
+    }
+
+    /// Use the Box–Muller transform instead of the inverse transform (consumes
+    /// and rebuilds the engine, which then draws `2·ceil(d/2)` dimensions, as in
+    /// SciPy's `inv_transform=False` mode).
+    pub fn with_box_muller(mut self) -> Result<Self, StatsError> {
+        let engine_dim = 2 * self.d.div_ceil(2);
+        self.engine = SobolSampler::new(engine_dim)?;
+        self.inv_transform = false;
+        Ok(self)
+    }
+
+    /// Dimension `d` of the distribution.
+    pub fn dimension(&self) -> usize {
+        self.d
+    }
+
+    /// Reset the underlying Sobol' engine to the start of the sequence.
+    pub fn reset(&mut self) {
+        self.engine.reset();
+    }
+
+    /// Map `n` base QMC points to standard-normal deviates (`n×d`, row-major).
+    fn standard_normal_samples(&mut self, n: usize) -> Vec<f64> {
+        let ed = self.engine.dimension();
+        let base = self.engine.sample(n);
+        if self.inv_transform {
+            // norm.ppf(0.5 + (1 - 1e-10) * (u - 0.5)); the squeeze keeps the
+            // origin sample (u == 0) finite, exactly as SciPy does.
+            base.iter()
+                .map(|&u| fsci_special::ndtri_scalar(0.5 + (1.0 - 1e-10) * (u - 0.5)))
+                .collect()
+        } else {
+            // Box–Muller on consecutive dimension pairs, then take the first d.
+            let mut out = vec![0.0; n * self.d];
+            for row in 0..n {
+                let src = &base[row * ed..row * ed + ed];
+                let dst = &mut out[row * self.d..row * self.d + self.d];
+                let mut k = 0;
+                let mut e = 0;
+                while k < self.d {
+                    let r = (-2.0 * src[e].ln()).sqrt();
+                    let theta = 2.0 * std::f64::consts::PI * src[e + 1];
+                    dst[k] = r * theta.cos();
+                    if k + 1 < self.d {
+                        dst[k + 1] = r * theta.sin();
+                    }
+                    k += 2;
+                    e += 2;
+                }
+            }
+            out
+        }
+    }
+
+    /// Draw `n` QMC samples from `N(mean, cov)`, returned row-major as `n` rows
+    /// of `d` columns (length `n·d`).
+    pub fn sample(&mut self, n: usize) -> Vec<f64> {
+        let std = self.standard_normal_samples(n);
+        let mut out = vec![0.0; n * self.d];
+        match &self.cov_root {
+            Some(root) => {
+                // out = std @ cov_root + mean (cov_root upper-triangular).
+                for row in 0..n {
+                    let z = &std[row * self.d..row * self.d + self.d];
+                    let o = &mut out[row * self.d..row * self.d + self.d];
+                    for (c, oc) in o.iter_mut().enumerate() {
+                        let mut acc = 0.0;
+                        for (r, zr) in z.iter().enumerate().take(c + 1) {
+                            acc += zr * root[r][c];
+                        }
+                        *oc = acc + self.mean[c];
+                    }
+                }
+            }
+            None => {
+                for row in 0..n {
+                    let z = &std[row * self.d..row * self.d + self.d];
+                    let o = &mut out[row * self.d..row * self.d + self.d];
+                    for (c, oc) in o.iter_mut().enumerate() {
+                        *oc = z[c] + self.mean[c];
+                    }
+                }
+            }
+        }
+        out
+    }
+}
+
+/// Upper-triangular Cholesky root `R` (`d×d`) with `R.T @ R == cov`, i.e.
+/// `R == cholesky(cov).T` (matching `numpy.linalg.cholesky(cov).T`). Errors if
+/// `cov` is not positive-definite.
+#[allow(clippy::needless_range_loop)] // triangular index-coupled recurrence
+fn cholesky_upper(cov: &[Vec<f64>], d: usize) -> Result<Vec<Vec<f64>>, StatsError> {
+    // Standard lower Cholesky L (L @ L.T == cov), then transpose to upper.
+    let mut l = vec![vec![0.0; d]; d];
+    for j in 0..d {
+        let mut diag = cov[j][j];
+        for k in 0..j {
+            diag -= l[j][k] * l[j][k];
+        }
+        // `<= 0 || is_nan` rejects non-PD and NaN diagonals explicitly.
+        if diag <= 0.0 || diag.is_nan() {
+            return Err(StatsError::InvalidArgument(
+                "MultivariateNormalQmc: covariance matrix is not positive-definite \
+                 (use from_root for a rank-deficient covariance)"
+                    .to_string(),
+            ));
+        }
+        let ljj = diag.sqrt();
+        l[j][j] = ljj;
+        for i in (j + 1)..d {
+            let mut s = cov[i][j];
+            for k in 0..j {
+                s -= l[i][k] * l[j][k];
+            }
+            l[i][j] = s / ljj;
+        }
+    }
+    let mut r = vec![vec![0.0; d]; d];
+    for i in 0..d {
+        for j in 0..d {
+            r[i][j] = l[j][i];
+        }
+    }
+    Ok(r)
+}
+
 /// Highest Sobol dimension count supported by this surface.
 ///
 /// Dimensions 0,1 use the locally-generated direction tables; dimensions 2..31
@@ -2587,6 +2818,117 @@ mod tests {
         assert!(
             cd_lhs < cd_cluster,
             "LHS CD²={cd_lhs} should beat clustered CD²={cd_cluster}"
+        );
+    }
+
+    #[test]
+    fn mvn_qmc_matches_scipy_inverse_transform() {
+        // scipy.stats.qmc.MultivariateNormalQMC(mean, cov,
+        //     engine=Sobol(3, scramble=False), inv_transform=True).random(6).
+        let mean = [1.0, -2.0, 0.5];
+        let cov = [
+            vec![2.0, 0.3, -0.5],
+            vec![0.3, 1.0, 0.2],
+            vec![-0.5, 0.2, 1.5],
+        ];
+        let expected: [[f64; 3]; 6] = [
+            [-8.145_649_917_089_85, -9.691_617_315_163_89, -6.394_987_329_865_302],
+            [1.0, -2.0, 0.5],
+            [1.953_872_552_297_681_4, -2.516_058_164_684_654_5, -0.696_069_330_882_207_9],
+            [0.046_127_447_702_318_58, -1.483_941_835_315_345_7, 1.696_069_330_882_207_9],
+            [0.549_375_890_022_262_7, -2.378_981_071_695_993_2, 0.885_708_515_392_510_1],
+            [2.626_839_694_937_612_3, -0.631_805_450_677_065_6, -0.892_481_914_798_102_5],
+        ];
+        let mut dist = MultivariateNormalQmc::new(&mean, &cov).unwrap();
+        let got = dist.sample(6);
+        for (i, row) in expected.iter().enumerate() {
+            for (j, &want) in row.iter().enumerate() {
+                let g = got[i * 3 + j];
+                assert!(
+                    (g - want).abs() <= 1e-11 + 1e-11 * want.abs(),
+                    "mvn[{i}][{j}] got {g} want {want}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn mvn_qmc_cholesky_root_reconstructs_cov() {
+        // cov_root.T @ cov_root == cov for the upper-triangular Cholesky root.
+        let cov = [
+            vec![2.0, 0.3, -0.5],
+            vec![0.3, 1.0, 0.2],
+            vec![-0.5, 0.2, 1.5],
+        ];
+        let r = cholesky_upper(&cov, 3).unwrap();
+        for i in 0..3 {
+            for j in 0..3 {
+                let mut acc = 0.0;
+                for rk in &r {
+                    acc += rk[i] * rk[j];
+                }
+                assert!((acc - cov[i][j]).abs() < 1e-13, "cov[{i}][{j}]");
+            }
+        }
+        // Upper-triangular (zeros strictly below the diagonal).
+        for i in 0..3 {
+            for j in 0..i {
+                assert_eq!(r[i][j], 0.0);
+            }
+        }
+    }
+
+    #[test]
+    fn mvn_qmc_standard_is_mean_plus_inverse_transform() {
+        // Identity covariance: sample == ndtri(...) + mean, first row = mean.
+        let mean = [3.0, -1.0];
+        let mut dist = MultivariateNormalQmc::standard(&mean).unwrap();
+        let got = dist.sample(2);
+        // Sobol point [0.5, 0.5] -> ndtri(0.5) == 0 -> exactly the mean.
+        assert!((got[2] - 3.0).abs() < 1e-12);
+        assert!((got[3] - (-1.0)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn mvn_qmc_box_muller_matches_scipy() {
+        // scipy.stats.qmc.MultivariateNormalQMC(mean, cov,
+        //     engine=Sobol(4, scramble=False), inv_transform=False).random(4).
+        // Row 0 is the Sobol origin -> log(0) -> NaN in both; check rows 1..3.
+        let mean = [1.0, -2.0, 0.5];
+        let cov = [
+            vec![2.0, 0.3, -0.5],
+            vec![0.3, 1.0, 0.2],
+            vec![-0.5, 0.2, 1.5],
+        ];
+        let expected: [[f64; 3]; 3] = [
+            [-0.665_109_222_315_396, -2.249_766_383_347_31, -0.424_012_290_339_737],
+            [1.0, -1.258_735_702_746_38, 0.713_453_069_889_786],
+            [1.0, -3.627_213_025_310_14, 0.031_430_804_230_063_2],
+        ];
+        let mut dist = MultivariateNormalQmc::new(&mean, &cov)
+            .unwrap()
+            .with_box_muller()
+            .unwrap();
+        let got = dist.sample(4);
+        for (i, row) in expected.iter().enumerate() {
+            for (j, &want) in row.iter().enumerate() {
+                let g = got[(i + 1) * 3 + j];
+                assert!(
+                    (g - want).abs() <= 1e-11 + 1e-11 * want.abs(),
+                    "bm[{}][{j}] got {g} want {want}",
+                    i + 1
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn mvn_qmc_rejects_asymmetric_and_non_pd() {
+        assert!(
+            MultivariateNormalQmc::new(&[0.0, 0.0], &[vec![1.0, 0.5], vec![0.4, 1.0]]).is_err()
+        );
+        assert!(
+            MultivariateNormalQmc::new(&[0.0, 0.0], &[vec![1.0, 2.0], vec![2.0, 1.0]]).is_err()
         );
     }
 }
