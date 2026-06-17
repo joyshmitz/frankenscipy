@@ -13,6 +13,18 @@
 //! consume them — mirroring how `fitpack_cyclic` shipped its solvers ahead of
 //! the spline driver.
 #![allow(dead_code)]
+// This module transcribes LAPACK reference kernels (dorbdb/dbbcsd and their
+// Householder/rotation primitives) line-for-line. Index-based loops, explicit
+// `x = x op y` updates, and the multi-factor result tuples mirror the Fortran
+// for verifiability against the reference; the corresponding clippy style lints
+// are intentionally allowed here.
+#![allow(
+    clippy::needless_range_loop,
+    clippy::assign_op_pattern,
+    clippy::type_complexity,
+    clippy::manual_is_multiple_of,
+    clippy::manual_range_contains
+)]
 
 /// Generate an elementary Householder reflector with a **non-negative** beta,
 /// faithfully matching LAPACK `DLARFGP`.
@@ -682,7 +694,7 @@ pub(crate) fn dbbcsd_balanced(theta_in: &[f64], phi_in: &[f64], q: usize) -> Bbc
     while imax > 0 && phi[imax - 1] == 0.0 {
         imax -= 1;
     }
-    let mut imin = if imax >= 1 { imax - 1 } else { 0 };
+    let mut imin = imax.saturating_sub(1);
     while imin > 0 && phi[imin - 1] != 0.0 {
         imin -= 1;
     }
@@ -1168,18 +1180,19 @@ mod tests {
     use super::*;
 
     fn matmul(a: &[Vec<f64>], b: &[Vec<f64>]) -> Vec<Vec<f64>> {
-        let (n, k, m) = (a.len(), b.len(), b[0].len());
-        let mut c = vec![vec![0.0; m]; n];
+        let (n, k, p) = (a.len(), b.len(), b[0].len());
+        let mut c = vec![vec![0.0; p]; n];
         for i in 0..n {
             for l in 0..k {
                 let ail = a[i][l];
-                for j in 0..m {
+                for j in 0..p {
                     c[i][j] += ail * b[l][j];
                 }
             }
         }
         c
     }
+
     fn transpose(a: &[Vec<f64>]) -> Vec<Vec<f64>> {
         let (n, m) = (a.len(), a[0].len());
         let mut t = vec![vec![0.0; n]; m];
@@ -1191,13 +1204,14 @@ mod tests {
         t
     }
 
-    // Deterministic 2q×2q orthogonal matrix (Q factor of a pseudo-random matrix).
     fn orthogonal(m: usize, seed: u64) -> Vec<Vec<f64>> {
         let mut s = seed;
         let mut a = vec![vec![0.0; m]; m];
         for row in a.iter_mut() {
             for v in row.iter_mut() {
-                s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                s = s
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
                 *v = ((s >> 11) as f64) / ((1u64 << 53) as f64) - 0.5;
             }
         }
