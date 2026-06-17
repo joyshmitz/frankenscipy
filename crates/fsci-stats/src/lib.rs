@@ -26916,6 +26916,172 @@ pub fn spearmanr_alternative(x: &[f64], y: &[f64], alternative: &str) -> Correla
     }
 }
 
+/// Result of [`bws_test`]: the Baumgartner-Weiss-Schindler statistic and its
+/// exact permutation p-value.
+pub struct BwsTestResult {
+    /// Observed BWS test statistic.
+    pub statistic: f64,
+    /// Exact permutation p-value for the requested alternative.
+    pub pvalue: f64,
+}
+
+// BWS statistic on the pooled-rank groups (already split into x/y ranks).
+fn bws_statistic(rx: &[f64], ry: &[f64], two_sided: bool) -> f64 {
+    let n = rx.len() as f64;
+    let m = ry.len() as f64;
+    let mut ri = rx.to_vec();
+    ri.sort_by(|a, b| a.total_cmp(b));
+    let mut hj = ry.to_vec();
+    hj.sort_by(|a, b| a.total_cmp(b));
+
+    let mut bx = 0.0;
+    for (idx, &r) in ri.iter().enumerate() {
+        let i = (idx + 1) as f64;
+        let num = r - (m + n) / n * i;
+        let numv = if two_sided { num * num } else { num * num.abs() };
+        let den = i / (n + 1.0) * (1.0 - i / (n + 1.0)) * m * (m + n) / n;
+        bx += numv / den;
+    }
+    bx /= n;
+
+    let mut by = 0.0;
+    for (idx, &h) in hj.iter().enumerate() {
+        let j = (idx + 1) as f64;
+        let num = h - (m + n) / m * j;
+        let numv = if two_sided { num * num } else { num * num.abs() };
+        let den = j / (m + 1.0) * (1.0 - j / (m + 1.0)) * n * (m + n) / m;
+        by += numv / den;
+    }
+    by /= m;
+
+    if two_sided {
+        (bx + by) / 2.0
+    } else {
+        (bx - by) / 2.0
+    }
+}
+
+/// Baumgartner-Weiss-Schindler two-sample test, matching
+/// `scipy.stats.bws_test(x, y, alternative=...)`.
+///
+/// A nonparametric test that the distributions underlying `x` and `y` are equal,
+/// weighting the integrated squared CDF difference by its variance (emphasising
+/// the tails). `alternative` is `"two-sided"`, `"less"` or `"greater"`.
+///
+/// The p-value is the *exact* permutation p-value: every way of splitting the
+/// pooled ranks into groups of sizes `len(x)` and `len(y)` is enumerated (this
+/// matches SciPy whenever the number of splits is `<= 9999`, where SciPy also
+/// enumerates exactly). Returns an error if the number of splits exceeds
+/// `max_exact` resamples (default 1_000_000 when `None`).
+pub fn bws_test(
+    x: &[f64],
+    y: &[f64],
+    alternative: &str,
+    max_exact: Option<u64>,
+) -> Result<BwsTestResult, StatsError> {
+    let n = x.len();
+    let m = y.len();
+    if n == 0 || m == 0 {
+        return Err(StatsError::DataTooSmall {
+            required: 1,
+            got: n.min(m),
+        });
+    }
+    let alt = alternative.to_ascii_lowercase();
+    let (two_sided, greater) = match alt.as_str() {
+        "two-sided" => (true, true),
+        "greater" => (false, true),
+        "less" => (false, false),
+        _ => {
+            return Err(StatsError::InvalidArgument(format!(
+                "bws_test: alternative must be 'two-sided', 'less' or 'greater', got '{alternative}'"
+            )));
+        }
+    };
+    if x.iter().chain(y.iter()).any(|v| !v.is_finite()) {
+        return Err(StatsError::NonFiniteInput { argument: "x/y" });
+    }
+
+    // Pooled ranks (average ties), then split back into x- and y-ranks.
+    let mut pooled = Vec::with_capacity(n + m);
+    pooled.extend_from_slice(x);
+    pooled.extend_from_slice(y);
+    let ranks = rankdata(&pooled, Some("average"))?;
+    let rx: Vec<f64> = ranks[..n].to_vec();
+    let ry: Vec<f64> = ranks[n..].to_vec();
+    let b_obs = bws_statistic(&rx, &ry, two_sided);
+
+    // Number of distinct splits C(n+m, n).
+    let nn = n + m;
+    let total = {
+        let mut c: u128 = 1;
+        let k = n.min(m);
+        for i in 0..k {
+            c = c * (nn - i) as u128 / (i + 1) as u128;
+        }
+        c
+    };
+    let cap = max_exact.unwrap_or(1_000_000) as u128;
+    if total > cap {
+        return Err(StatsError::InvalidArgument(format!(
+            "bws_test: exact permutation needs {total} resamples (> max_exact); \
+             larger samples require a randomized method not yet supported"
+        )));
+    }
+
+    // Enumerate every n-subset of the pooled ranks; recompute the statistic.
+    // SciPy's permutation_test compares against observed +/- gamma with
+    // gamma = |eps * observed|, eps = 100 * machine epsilon.
+    let tol = f64::EPSILON * 100.0 * b_obs.abs();
+    let mut count: u128 = 0;
+    let mut comb: Vec<usize> = (0..n).collect();
+    let mut grx = vec![0.0f64; n];
+    let mut gry = vec![0.0f64; m];
+    loop {
+        // Build the two groups for the current combination of indices.
+        let mut yi = 0usize;
+        let mut ci = 0usize;
+        for (p, &rv) in ranks.iter().enumerate() {
+            if ci < n && comb[ci] == p {
+                grx[ci] = rv;
+                ci += 1;
+            } else {
+                gry[yi] = rv;
+                yi += 1;
+            }
+        }
+        let b = bws_statistic(&grx, &gry, two_sided);
+        let hit = if greater {
+            b >= b_obs - tol
+        } else {
+            b <= b_obs + tol
+        };
+        if hit {
+            count += 1;
+        }
+        // Advance to the next combination (lexicographic).
+        let mut i = n;
+        while i > 0 {
+            i -= 1;
+            if comb[i] != i + nn - n {
+                comb[i] += 1;
+                for j in (i + 1)..n {
+                    comb[j] = comb[j - 1] + 1;
+                }
+                break;
+            }
+            if i == 0 {
+                // exhausted
+                let pvalue = count as f64 / total as f64;
+                return Ok(BwsTestResult {
+                    statistic: b_obs,
+                    pvalue,
+                });
+            }
+        }
+    }
+}
+
 /// Compute ranks with a SciPy-style tie handling method.
 ///
 /// Matches `scipy.stats.rankdata(a, method=...)` for the implemented methods.
