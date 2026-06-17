@@ -13294,6 +13294,17 @@ pub enum StftFftMode {
     Centered,
 }
 
+/// Window scaling for [`ShortTimeFft`], mirroring `scipy.signal.ShortTimeFFT`'s
+/// `scale_to`: `Magnitude` gives the window unit area; `Psd` gives `|win|²` unit
+/// area (so the squared STFT is a power spectral density).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StftScaling {
+    /// Unit-area window (magnitude spectrum).
+    Magnitude,
+    /// Unit-energy window (power spectral density).
+    Psd,
+}
+
 #[inline]
 fn stft_fftfreq(n: usize, d: f64) -> Vec<f64> {
     if n == 0 {
@@ -13337,6 +13348,7 @@ pub struct ShortTimeFft {
     mfft: usize,
     fft_mode: StftFftMode,
     phase_shift: Option<i64>,
+    scaling: Option<StftScaling>,
 }
 
 impl ShortTimeFft {
@@ -13366,7 +13378,33 @@ impl ShortTimeFft {
             mfft,
             fft_mode: StftFftMode::Onesided,
             phase_shift: Some(0),
+            scaling: None,
         })
+    }
+
+    /// Scale the window to `Magnitude` (unit area) or `Psd` (unit energy),
+    /// matching scipy's `scale_to`. Idempotent for the same scaling; switching
+    /// scaling recomputes the factor from the current window (as scipy does).
+    pub fn with_scale_to(mut self, scaling: StftScaling) -> Self {
+        if self.scaling == Some(scaling) {
+            return self;
+        }
+        let fac = match scaling {
+            StftScaling::Magnitude => 1.0 / self.win.iter().sum::<f64>().abs(),
+            StftScaling::Psd => {
+                1.0 / (self.win.iter().map(|w| w * w).sum::<f64>() / self.t_sample()).sqrt()
+            }
+        };
+        for w in self.win.iter_mut() {
+            *w *= fac;
+        }
+        self.scaling = Some(scaling);
+        self
+    }
+
+    /// Current window scaling, if any.
+    pub fn scaling(&self) -> Option<StftScaling> {
+        self.scaling
     }
 
     /// Set `mfft` (FFT length, may exceed the window length for zero-padding).
@@ -13593,6 +13631,36 @@ impl ShortTimeFft {
         Ok(s.into_iter()
             .map(|row| row.into_iter().map(|(re, im)| re * re + im * im).collect())
             .collect())
+    }
+
+    /// Time axis of the STFT slices for an `n`-sample signal:
+    /// `arange(p_min, p_max(n)) * delta_t`. Matches `ShortTimeFFT.t(n)`.
+    pub fn t(&self, n: usize) -> Vec<f64> {
+        let dt = self.delta_t();
+        (self.p_min()..self.p_max(n)).map(|p| p as f64 * dt).collect()
+    }
+
+    /// `(t0, t1, f0, f1)` plotting extent for an `n`-sample signal (`axes_seq='tf'`,
+    /// `center_bins=False`), matching `ShortTimeFFT.extent`. Onesided/Centered
+    /// only (scipy raises for twosided).
+    pub fn extent(&self, n: usize) -> Result<(f64, f64, f64, f64), SignalError> {
+        let (q0, q1): (i64, i64) = match self.fft_mode {
+            StftFftMode::Onesided => (0, self.f_pts() as i64),
+            StftFftMode::Centered => {
+                let m = self.mfft as i64;
+                (-(m / 2), if m % 2 == 0 { m / 2 } else { m / 2 + 1 })
+            }
+            StftFftMode::Twosided => {
+                return Err(SignalError::InvalidArgument(
+                    "extent: fft_mode must be Onesided or Centered".to_string(),
+                ));
+            }
+        };
+        let dt = self.delta_t();
+        let df = self.delta_f();
+        let p0 = self.p_min();
+        let p1 = self.p_max(n);
+        Ok((dt * p0 as f64, dt * p1 as f64, df * q0 as f64, df * q1 as f64))
     }
 
     /// Canonical dual window (the default dual used by [`Self::istft`]).
@@ -16120,6 +16188,33 @@ pub fn daub(p: usize) -> Result<Vec<f64>, SignalError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn short_time_fft_scaling_and_axes() {
+        let hann = |n: usize| -> Vec<f64> {
+            (0..n)
+                .map(|i| 0.5 - 0.5 * (2.0 * std::f64::consts::PI * i as f64 / n as f64).cos())
+                .collect()
+        };
+        let n = 20usize;
+        let x: Vec<f64> = (0..n)
+            .map(|i| (0.3 * i as f64).sin() + 0.5 * (0.07 * i as f64).cos())
+            .collect();
+        // magnitude scaling: sum(hann(8)) = 4 → fac = 0.25; unscaled S[0][0]=0.0732233.
+        let sm = ShortTimeFft::new(hann(8), 3, 100.0)
+            .unwrap()
+            .with_scale_to(StftScaling::Magnitude);
+        let s = sm.stft(&x).unwrap();
+        assert!((s[0][0].0 - 0.073_223_304_703 * 0.25).abs() < 1e-9);
+        // t() and extent() exactly match scipy.
+        let su = ShortTimeFft::new(hann(8), 3, 100.0).unwrap();
+        let t = su.t(n);
+        assert_eq!(t.len(), su.p_num(n));
+        assert!((t[0] - (-0.03)).abs() < 1e-12); // p_min=-1, delta_t=0.03
+        let (t0, t1, f0, f1) = su.extent(n).unwrap();
+        assert!((t0 - (-0.03)).abs() < 1e-12 && (t1 - 0.24).abs() < 1e-12);
+        assert!(f0.abs() < 1e-12 && (f1 - 62.5).abs() < 1e-9);
+    }
 
     #[test]
     fn short_time_fft_matches_scipy() {
