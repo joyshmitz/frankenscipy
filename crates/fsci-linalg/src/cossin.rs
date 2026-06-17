@@ -868,16 +868,60 @@ pub(crate) fn dbbcsd_balanced(theta_in: &[f64], phi_in: &[f64], q: usize) -> Bbc
             let y2 = theta[i - 1].sin() * b12bulge + theta[i - 1].cos() * b22bulge;
             phi[i - 1] = (x1 * x1 + x2 * x2).sqrt().atan2((y1 * y1 + y2 * y2).sqrt());
 
-            // V1T rotation at i (generic: dlartgp(x2,x1) -> sn,cs), then negate.
-            let (sn, cs, _r) = dlartgp(x2, x1);
-            v1tsn[i] = sn;
-            v1tcs[i] = cs;
+            // V1T rotation at i with LAPACK dbbcsd RESTART branches, then negate.
+            let restart11 = b11e[i - 1] * b11e[i - 1] + b11bulge * b11bulge
+                <= (thresh * b11d[i - 1].abs().max(b11d[i].abs()).max(unfl)).powi(2);
+            let restart21 = b21e[i - 1] * b21e[i - 1] + b21bulge * b21bulge
+                <= (thresh * b21d[i - 1].abs().max(b21d[i].abs()).max(unfl)).powi(2);
+            if !restart11 && !restart21 {
+                let (sn, cs, _r) = dlartgp(x2, x1);
+                v1tsn[i] = sn;
+                v1tcs[i] = cs;
+            } else if !restart11 && restart21 {
+                let (sn, cs, _r) = dlartgp(b11bulge, b11e[i - 1]);
+                v1tsn[i] = sn;
+                v1tcs[i] = cs;
+            } else if restart11 && !restart21 {
+                let (sn, cs, _r) = dlartgp(b21bulge, b21e[i - 1]);
+                v1tsn[i] = sn;
+                v1tcs[i] = cs;
+            } else if mu <= nu {
+                let (cc, ss) = dlartgs(b11d[i], b11e[i], mu);
+                v1tcs[i] = cc;
+                v1tsn[i] = ss;
+            } else {
+                let (cc, ss) = dlartgs(b21d[i], b21e[i], nu);
+                v1tcs[i] = cc;
+                v1tsn[i] = ss;
+            }
             v1tcs[i] = -v1tcs[i];
             v1tsn[i] = -v1tsn[i];
-            // V2T rotation at i-1: dlartgp(y2,y1) -> sn,cs
-            let (sn2, cs2, _r2) = dlartgp(y2, y1);
-            v2tsn[i - 1] = sn2;
-            v2tcs[i - 1] = cs2;
+            // V2T rotation at i-1 with RESTART branches (not negated).
+            let restart12 = b12d[i - 1] * b12d[i - 1] + b12bulge * b12bulge
+                <= (thresh * b12e[i - 1].abs().max(b12d[i].abs()).max(unfl)).powi(2);
+            let restart22 = b22d[i - 1] * b22d[i - 1] + b22bulge * b22bulge
+                <= (thresh * b22e[i - 1].abs().max(b22d[i].abs()).max(unfl)).powi(2);
+            if !restart12 && !restart22 {
+                let (sn2, cs2, _r2) = dlartgp(y2, y1);
+                v2tsn[i - 1] = sn2;
+                v2tcs[i - 1] = cs2;
+            } else if !restart12 && restart22 {
+                let (sn2, cs2, _r2) = dlartgp(b12bulge, b12d[i - 1]);
+                v2tsn[i - 1] = sn2;
+                v2tcs[i - 1] = cs2;
+            } else if restart12 && !restart22 {
+                let (sn2, cs2, _r2) = dlartgp(b22bulge, b22d[i - 1]);
+                v2tsn[i - 1] = sn2;
+                v2tcs[i - 1] = cs2;
+            } else if nu < mu {
+                let (cc, ss) = dlartgs(b12e[i - 1], b12d[i], nu);
+                v2tcs[i - 1] = cc;
+                v2tsn[i - 1] = ss;
+            } else {
+                let (cc, ss) = dlartgs(b22e[i - 1], b22d[i], mu);
+                v2tcs[i - 1] = cc;
+                v2tsn[i - 1] = ss;
+            }
 
             let (c, s) = (v1tcs[i], v1tsn[i]);
             temp = c * b11d[i] + s * b11e[i];
@@ -908,14 +952,58 @@ pub(crate) fn dbbcsd_balanced(theta_in: &[f64], phi_in: &[f64], q: usize) -> Bbc
             let y2b = phi[i - 1].cos() * b21bulge + phi[i - 1].sin() * b22bulge;
             theta[i] = (y1b * y1b + y2b * y2b).sqrt().atan2((x1b * x1b + x2b * x2b).sqrt());
 
-            // U1 rotation at i (generic: dlartgp(x2b,x1b) -> sn,cs)
-            let (sn, cs, _r) = dlartgp(x2b, x1b);
-            u1sn[i] = sn;
-            u1cs[i] = cs;
-            // U2 rotation at i: dlartgp(y2b,y1b) -> sn,cs; negate.
-            let (sn2, cs2, _r2) = dlartgp(y2b, y1b);
-            u2sn[i] = sn2;
-            u2cs[i] = cs2;
+            // U1 rotation at i with LAPACK dbbcsd RESTART branches.
+            let urestart11 = b11d[i] * b11d[i] + b11bulge * b11bulge
+                <= (thresh * b11e[i].abs().max(b11d[i + 1].abs()).max(unfl)).powi(2);
+            let urestart12 = b12e[i - 1] * b12e[i - 1] + b12bulge * b12bulge
+                <= (thresh * b12d[i].abs().max(b12e[i].abs()).max(unfl)).powi(2);
+            if !urestart11 && !urestart12 {
+                let (sn, cs, _r) = dlartgp(x2b, x1b);
+                u1sn[i] = sn;
+                u1cs[i] = cs;
+            } else if !urestart11 && urestart12 {
+                let (sn, cs, _r) = dlartgp(b11bulge, b11d[i]);
+                u1sn[i] = sn;
+                u1cs[i] = cs;
+            } else if urestart11 && !urestart12 {
+                let (sn, cs, _r) = dlartgp(b12bulge, b12e[i - 1]);
+                u1sn[i] = sn;
+                u1cs[i] = cs;
+            } else if mu <= nu {
+                let (cc, ss) = dlartgs(b11e[i], b11d[i + 1], mu);
+                u1cs[i] = cc;
+                u1sn[i] = ss;
+            } else {
+                let (cc, ss) = dlartgs(b12d[i], b12e[i], nu);
+                u1cs[i] = cc;
+                u1sn[i] = ss;
+            }
+            // U2 rotation at i with RESTART branches, then negate.
+            let urestart21 = b21d[i] * b21d[i] + b21bulge * b21bulge
+                <= (thresh * b21e[i].abs().max(b21d[i + 1].abs()).max(unfl)).powi(2);
+            let urestart22 = b22e[i - 1] * b22e[i - 1] + b22bulge * b22bulge
+                <= (thresh * b22d[i].abs().max(b22e[i].abs()).max(unfl)).powi(2);
+            if !urestart21 && !urestart22 {
+                let (sn2, cs2, _r2) = dlartgp(y2b, y1b);
+                u2sn[i] = sn2;
+                u2cs[i] = cs2;
+            } else if !urestart21 && urestart22 {
+                let (sn2, cs2, _r2) = dlartgp(b21bulge, b21d[i]);
+                u2sn[i] = sn2;
+                u2cs[i] = cs2;
+            } else if urestart21 && !urestart22 {
+                let (sn2, cs2, _r2) = dlartgp(b22bulge, b22e[i - 1]);
+                u2sn[i] = sn2;
+                u2cs[i] = cs2;
+            } else if nu < mu {
+                let (cc, ss) = dlartgs(b21e[i], b21d[i + 1], nu);
+                u2cs[i] = cc;
+                u2sn[i] = ss;
+            } else {
+                let (cc, ss) = dlartgs(b22d[i], b22e[i], mu);
+                u2cs[i] = cc;
+                u2sn[i] = ss;
+            }
             u2cs[i] = -u2cs[i];
             u2sn[i] = -u2sn[i];
 
@@ -952,9 +1040,32 @@ pub(crate) fn dbbcsd_balanced(theta_in: &[f64], phi_in: &[f64], q: usize) -> Bbc
         let y1 = theta[imax - 1].sin() * b12d[imax - 1] + theta[imax - 1].cos() * b22d[imax - 1];
         let y2 = theta[imax - 1].sin() * b12bulge + theta[imax - 1].cos() * b22bulge;
         phi[imax - 1] = x1.abs().atan2((y1 * y1 + y2 * y2).sqrt());
-        let (sn, cs, _r) = dlartgp(y2, y1);
-        v2tsn[imax - 1] = sn;
-        v2tcs[imax - 1] = cs;
+        // Post-loop V2T at imax-1 with LAPACK dbbcsd RESTART branches.
+        let prestart12 = b12d[imax - 1] * b12d[imax - 1] + b12bulge * b12bulge
+            <= (thresh * b12e[imax - 1].abs().max(unfl)).powi(2);
+        let prestart22 = b22d[imax - 1] * b22d[imax - 1] + b22bulge * b22bulge
+            <= (thresh * b22e[imax - 1].abs().max(unfl)).powi(2);
+        if !prestart12 && !prestart22 {
+            let (sn, cs, _r) = dlartgp(y2, y1);
+            v2tsn[imax - 1] = sn;
+            v2tcs[imax - 1] = cs;
+        } else if !prestart12 && prestart22 {
+            let (sn, cs, _r) = dlartgp(b12bulge, b12d[imax - 1]);
+            v2tsn[imax - 1] = sn;
+            v2tcs[imax - 1] = cs;
+        } else if prestart12 && !prestart22 {
+            let (sn, cs, _r) = dlartgp(b22bulge, b22d[imax - 1]);
+            v2tsn[imax - 1] = sn;
+            v2tcs[imax - 1] = cs;
+        } else if nu < mu {
+            let (cc, ss) = dlartgs(b12e[imax - 1], b12d[imax], nu);
+            v2tcs[imax - 1] = cc;
+            v2tsn[imax - 1] = ss;
+        } else {
+            let (cc, ss) = dlartgs(b22e[imax - 1], b22d[imax], mu);
+            v2tcs[imax - 1] = cc;
+            v2tsn[imax - 1] = ss;
+        }
         let (c2, s2) = (v2tcs[imax - 1], v2tsn[imax - 1]);
         temp = c2 * b12e[imax - 1] + s2 * b12d[imax];
         b12d[imax] = c2 * b12d[imax] - s2 * b12e[imax - 1];
