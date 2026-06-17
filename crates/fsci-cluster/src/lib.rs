@@ -915,16 +915,56 @@ pub fn landmark_isomap(
 
     // Symmetric k-NN graph (edge weight = Euclidean distance). Undirected: an edge is kept if
     // either endpoint lists the other among its k nearest.
-    let mut adj: Vec<Vec<(usize, f64)>> = vec![Vec::new(); n];
-    let mut seen: Vec<std::collections::HashSet<usize>> = vec![std::collections::HashSet::new(); n];
-    for i in 0..n {
+    //
+    // Phase 1 (parallel): each row i's k nearest are computed independently — the sort key
+    // (`total_cmp` on distance, then ascending index) is a total order, so each row's top-k
+    // candidate list is deterministic and row-independent. Producing them in parallel is
+    // byte-identical to the sequential selection. This O(n²·(d + log n)) distance+sort sweep
+    // dominates landmark Isomap, so it is the parallelized stage.
+    let knn_row = |i: usize| -> Vec<(f64, usize)> {
         let mut d: Vec<(f64, usize)> = (0..n)
             .filter(|&j| j != i)
             .map(|j| (edist(&data[i], &data[j]), j))
             .collect();
-        // Partial selection of the k smallest, then exact order among them.
         d.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
-        for &(w, j) in d.iter().take(n_neighbors) {
+        d.truncate(n_neighbors);
+        d
+    };
+    let work = (n as u64).saturating_mul(n as u64);
+    let nthreads = if work < (1 << 16) || n < 8 {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n)
+    };
+    let topk: Vec<Vec<(f64, usize)>> = if nthreads <= 1 {
+        (0..n).map(knn_row).collect()
+    } else {
+        let mut out: Vec<Vec<(f64, usize)>> = vec![Vec::new(); n];
+        let chunk = n.div_ceil(nthreads);
+        let knn_row = &knn_row;
+        std::thread::scope(|scope| {
+            for (t, slot) in out.chunks_mut(chunk).enumerate() {
+                let base = t * chunk;
+                scope.spawn(move || {
+                    for (off, o) in slot.iter_mut().enumerate() {
+                        *o = knn_row(base + off);
+                    }
+                });
+            }
+        });
+        out
+    };
+
+    // Phase 2 (serial): undirected edge insertion in the SAME order as the original single loop
+    // (rows ascending, candidates in sorted order), so `adj`/`seen` are byte-identical to the
+    // sequential build — and thus every downstream geodesic and the MDS embedding are unchanged.
+    let mut adj: Vec<Vec<(usize, f64)>> = vec![Vec::new(); n];
+    let mut seen: Vec<std::collections::HashSet<usize>> = vec![std::collections::HashSet::new(); n];
+    for (i, cand) in topk.iter().enumerate() {
+        for &(w, j) in cand {
             if seen[i].insert(j) {
                 adj[i].push((j, w));
             }

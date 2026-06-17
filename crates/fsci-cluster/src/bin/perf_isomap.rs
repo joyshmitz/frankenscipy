@@ -85,6 +85,12 @@ fn dijkstra(adj: &[Vec<(usize, f64)>], src: usize) -> Vec<f64> {
     dist
 }
 
+fn digest(emb: &[Vec<f64>]) -> u64 {
+    emb.iter().flatten().fold(1469598103934665603u64, |h, v| {
+        (h ^ v.to_bits()).wrapping_mul(1099511628211)
+    })
+}
+
 fn full_isomap(data: &[Vec<f64>], k: usize, kgraph: usize) -> Vec<Vec<f64>> {
     let adj = knn_graph(data, kgraph);
     let n = data.len();
@@ -111,6 +117,35 @@ fn main() {
     let iso = landmark_isomap(&data, 2, kgraph, m, 7).expect("landmark_isomap");
     assert_eq!(iso.embedding.len(), n);
     println!("landmark_isomap embedded n={n} to 2-D ({m} landmarks, k-NN={kgraph})");
+    println!("GOLDEN landmark_isomap embedding digest = {:016x}", digest(&iso.embedding));
+
+    // Larger case to exercise the O(n^2) k-NN build (the parallelized stage).
+    {
+        let (nt2, nh2) = (220usize, 45usize);
+        let n2 = nt2 * nh2;
+        let mut d2 = Vec::with_capacity(n2);
+        for it in 0..nt2 {
+            let t = 1.5 * std::f64::consts::PI * (1.0 + 2.0 * it as f64 / (nt2 - 1) as f64);
+            for ih in 0..nh2 {
+                let h = 21.0 * ih as f64 / (nh2 - 1) as f64;
+                d2.push(vec![t * t.cos(), h, t * t.sin()]);
+            }
+        }
+        let mut tt = Vec::new();
+        for _ in 0..3 {
+            let t = Instant::now();
+            let r = landmark_isomap(&d2, 2, kgraph, 60, 7).unwrap();
+            tt.push(t.elapsed().as_secs_f64());
+            black_box(r);
+        }
+        tt.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let big = landmark_isomap(&d2, 2, kgraph, 60, 7).unwrap();
+        println!(
+            "BIG landmark_isomap n={n2} median={:.2} ms digest={:016x}",
+            tt[1] * 1e3,
+            digest(&big.embedding)
+        );
+    }
 
     let trials = 3;
     let mut tl = Vec::new();
