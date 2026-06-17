@@ -887,7 +887,11 @@ impl RkSolver {
 
             // Perform the RK step using stored function (borrow only for this call)
             let (y_new, f_new) = {
-                let fun = self.fun.as_mut().unwrap();
+                let Some(fun) = self.fun.as_mut() else {
+                    return Err(StepFailure::NotYetImplemented(
+                        "OdeSolver::step requires solver created with new_owned; use step_with instead",
+                    ));
+                };
                 rk_step(
                     &mut **fun,
                     t,
