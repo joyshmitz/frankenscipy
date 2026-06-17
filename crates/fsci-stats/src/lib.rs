@@ -37803,6 +37803,15 @@ fn lcg_jump(a: u64, c: u64, steps: usize) -> (u64, u64) {
     (res_a, res_c)
 }
 
+fn multivariate_normal_work_units(n_samples: usize, d: usize) -> usize {
+    let per_sample = d.saturating_mul(d).saturating_add(d.saturating_mul(2));
+    n_samples.saturating_mul(per_sample)
+}
+
+fn multivariate_normal_rng_jump_steps(chunk: usize, d: usize) -> usize {
+    chunk.saturating_mul(2).saturating_mul(d)
+}
+
 /// Evaluate a per-resample statistic over `n_bootstrap` bootstrap resamples
 /// (sampling `data` with replacement via the LCG seeded at `seed`), in parallel.
 /// Each resample consumes exactly `n` LCG draws, so chunk-boundary RNG states are
@@ -40331,7 +40340,7 @@ pub fn multivariate_normal_rvs(
 
     // Parallel only once there is enough per-sample work to absorb thread setup;
     // otherwise the inlined serial loop wins.
-    let work = n_samples.saturating_mul(d * d + 2 * d);
+    let work = multivariate_normal_work_units(n_samples, d);
     let nthreads = if work < (1 << 16) || n_samples < 2 {
         1
     } else {
@@ -40351,7 +40360,8 @@ pub fn multivariate_normal_rvs(
     }
 
     let chunk = n_samples.div_ceil(nthreads);
-    let (jump_a, jump_c) = lcg_jump(6364136223846793005, 1, chunk * 2 * d);
+    let (jump_a, jump_c) =
+        lcg_jump(6364136223846793005, 1, multivariate_normal_rng_jump_steps(chunk, d));
     let mut starts = Vec::new();
     let mut cs = seed;
     let mut t = 0;
@@ -46730,6 +46740,18 @@ mod tests {
         let mean1 = samples.iter().map(|row| row[1]).sum::<f64>() / samples.len() as f64;
         assert!((mean0 - 1.0).abs() < 0.08, "sample mean0 = {mean0}");
         assert!((mean1 + 2.0).abs() < 0.08, "sample mean1 = {mean1}");
+    }
+
+    #[test]
+    fn multivariate_normal_rvs_work_arithmetic_saturates() {
+        assert_eq!(super::multivariate_normal_work_units(4, 3), 60);
+        assert_eq!(super::multivariate_normal_rng_jump_steps(4, 3), 24);
+        assert_eq!(super::multivariate_normal_work_units(usize::MAX, 1), usize::MAX);
+        assert_eq!(super::multivariate_normal_work_units(1, usize::MAX), usize::MAX);
+        assert_eq!(
+            super::multivariate_normal_rng_jump_steps(usize::MAX, 2),
+            usize::MAX
+        );
     }
 
     #[test]
