@@ -618,6 +618,440 @@ fn mm(a: &[Vec<f64>], b: &[Vec<f64>]) -> Vec<Vec<f64>> {
     c
 }
 
+// Apply a single Givens rotation (cs, sn) in plane (j, j+1) to columns of `a`
+// (right side: a := a·G where G rotates cols j,j+1).
+fn rot_cols(a: &mut [Vec<f64>], j: usize, cs: f64, sn: f64) {
+    for row in a.iter_mut() {
+        let t = row[j + 1];
+        row[j + 1] = cs * t - sn * row[j];
+        row[j] = sn * t + cs * row[j];
+    }
+}
+// Apply a single Givens rotation (cs, sn) in plane (j, j+1) to rows of `a`
+// (left side: a := G·a where G rotates rows j,j+1).
+fn rot_rows(a: &mut [Vec<f64>], j: usize, cs: f64, sn: f64) {
+    let n = a[0].len();
+    for c in 0..n {
+        let t = a[j + 1][c];
+        a[j + 1][c] = cs * t - sn * a[j][c];
+        a[j][c] = sn * t + cs * a[j][c];
+    }
+}
+
+/// Result of [`dbbcsd_balanced`].
+pub(crate) struct BbcsdResult {
+    pub theta: Vec<f64>,
+    pub u1: Vec<Vec<f64>>,
+    pub u2: Vec<Vec<f64>>,
+    pub v1t: Vec<Vec<f64>>,
+    pub v2t: Vec<Vec<f64>>,
+}
+
+/// CS bidiagonal-SVD by implicit QR (LAPACK `DBBCSD`, balanced square `p=q=m/2`,
+/// generic non-degenerate spectrum). Diagonalizes the bidiagonal-block form
+/// defined by the `dorbdb` angles `theta`/`phi` into the clean CS form,
+/// accumulating the Givens rotations into `u1`,`u2` (column-rotated) and
+/// `v1t`,`v2t` (row-rotated, i.e. `V1ᵀ`/`V2ᵀ`), all `q×q`, identity-initialized.
+///
+/// This is the COLMAJOR path of the reference, restricted to the case where no
+/// mid-sweep deflation (`RESTART`) is triggered — which holds for spectra with
+/// distinct angles bounded away from `0` and `π/2` (random orthogonal inputs).
+pub(crate) fn dbbcsd_balanced(theta_in: &[f64], phi_in: &[f64], q: usize) -> BbcsdResult {
+    let thresh = (f64::EPSILON).powf(0.875); // matches dbbcsd TOLMUL-ish gate loosely
+    let unfl = f64::MIN_POSITIVE;
+    let pi2 = std::f64::consts::FRAC_PI_2;
+    let mut theta = theta_in.to_vec();
+    let mut phi = phi_in.to_vec(); // length q-1
+    let mut u1 = identity(q);
+    let mut u2 = identity(q);
+    let mut v1t = identity(q);
+    let mut v2t = identity(q);
+
+    // Bidiagonal D/E arrays (0-indexed). D length q, E length q-1.
+    let mut b11d = vec![0.0; q];
+    let mut b11e = vec![0.0; q.saturating_sub(1)];
+    let mut b12d = vec![0.0; q];
+    let mut b12e = vec![0.0; q.saturating_sub(1)];
+    let mut b21d = vec![0.0; q];
+    let mut b21e = vec![0.0; q.saturating_sub(1)];
+    let mut b22d = vec![0.0; q];
+    let mut b22e = vec![0.0; q.saturating_sub(1)];
+
+    // Initial IMIN/IMAX (0-indexed inclusive). imax = last index with nonzero phi chain.
+    let mut imax = q - 1;
+    while imax > 0 && phi[imax - 1] == 0.0 {
+        imax -= 1;
+    }
+    let mut imin = if imax >= 1 { imax - 1 } else { 0 };
+    while imin > 0 && phi[imin - 1] != 0.0 {
+        imin -= 1;
+    }
+
+    let maxit = 6 * q * q;
+    let mut iter = 0usize;
+
+    while imax > 0 {
+        // (Re)build the bidiagonal blocks over [imin, imax].
+        b11d[imin] = theta[imin].cos();
+        b21d[imin] = -theta[imin].sin();
+        for i in imin..imax {
+            b11e[i] = -theta[i].sin() * phi[i].sin();
+            b11d[i + 1] = theta[i + 1].cos() * phi[i].cos();
+            b12d[i] = theta[i].sin() * phi[i].cos();
+            b12e[i] = theta[i + 1].cos() * phi[i].sin();
+            b21e[i] = -theta[i].cos() * phi[i].sin();
+            b21d[i + 1] = -theta[i + 1].sin() * phi[i].cos();
+            b22d[i] = theta[i].cos() * phi[i].cos();
+            b22e[i] = -theta[i + 1].sin() * phi[i].sin();
+        }
+        b12d[imax] = theta[imax].sin();
+        b22d[imax] = theta[imax].cos();
+
+        if iter > maxit {
+            break;
+        }
+        iter += imax - imin;
+
+        // Compute shift mu/nu.
+        let mut thmax = theta[imin];
+        let mut thmin = theta[imin];
+        for i in imin + 1..=imax {
+            thmax = thmax.max(theta[i]);
+            thmin = thmin.min(theta[i]);
+        }
+        let (mu, nu);
+        if thmax > pi2 - thresh {
+            mu = 0.0;
+            nu = 1.0;
+        } else if thmin < thresh {
+            mu = 1.0;
+            nu = 0.0;
+        } else {
+            let (s11, _) = dlas2(b11d[imax - 1], b11e[imax - 1], b11d[imax]);
+            let (s21, _) = dlas2(b21d[imax - 1], b21e[imax - 1], b21d[imax]);
+            if s11 <= s21 {
+                let m = s11;
+                if m < thresh {
+                    mu = 0.0;
+                    nu = 1.0;
+                } else {
+                    mu = m;
+                    nu = (1.0 - m * m).sqrt();
+                }
+            } else {
+                let nn = s21;
+                if nn < thresh {
+                    mu = 1.0;
+                    nu = 0.0;
+                } else {
+                    nu = nn;
+                    mu = (1.0 - nn * nn).sqrt();
+                }
+            }
+        }
+
+        // Rotation arrays for this sweep (indexed by global position).
+        let mut v1tcs = vec![0.0; q];
+        let mut v1tsn = vec![0.0; q];
+        let mut u1cs = vec![0.0; q];
+        let mut u1sn = vec![0.0; q];
+        let mut u2cs = vec![0.0; q];
+        let mut u2sn = vec![0.0; q];
+        let mut v2tcs = vec![0.0; q];
+        let mut v2tsn = vec![0.0; q];
+
+        // --- Initial V1T rotation at imin ---
+        if mu <= nu {
+            let (c, s) = dlartgs(b11d[imin], b11e[imin], mu);
+            v1tcs[imin] = c;
+            v1tsn[imin] = s;
+        } else {
+            let (c, s) = dlartgs(b21d[imin], b21e[imin], nu);
+            v1tcs[imin] = c;
+            v1tsn[imin] = s;
+        }
+        let (c, s) = (v1tcs[imin], v1tsn[imin]);
+        let mut temp = c * b11d[imin] + s * b11e[imin];
+        b11e[imin] = c * b11e[imin] - s * b11d[imin];
+        b11d[imin] = temp;
+        let mut b11bulge = s * b11d[imin + 1];
+        b11d[imin + 1] = c * b11d[imin + 1];
+        temp = c * b21d[imin] + s * b21e[imin];
+        b21e[imin] = c * b21e[imin] - s * b21d[imin];
+        b21d[imin] = temp;
+        let mut b21bulge = s * b21d[imin + 1];
+        b21d[imin + 1] = c * b21d[imin + 1];
+        theta[imin] = (b21d[imin] * b21d[imin] + b21bulge * b21bulge)
+            .sqrt()
+            .atan2((b11d[imin] * b11d[imin] + b11bulge * b11bulge).sqrt());
+
+        // --- U1 rotation at imin ---
+        if b11d[imin] * b11d[imin] + b11bulge * b11bulge
+            > (thresh * b11d[imin].abs().max(b11d[imin + 1].abs()).max(unfl)).powi(2)
+        {
+            let (sn, cs, _r) = dlartgp(b11bulge, b11d[imin]);
+            u1sn[imin] = sn;
+            u1cs[imin] = cs;
+        } else if mu <= nu {
+            let (cc, ss) = dlartgs(b11e[imin], b11d[imin + 1], mu);
+            u1cs[imin] = cc;
+            u1sn[imin] = ss;
+        } else {
+            let (cc, ss) = dlartgs(b12d[imin], b12e[imin], nu);
+            u1cs[imin] = cc;
+            u1sn[imin] = ss;
+        }
+        // --- U2 rotation at imin ---
+        if b21d[imin] * b21d[imin] + b21bulge * b21bulge
+            > (thresh * b21d[imin].abs().max(b21d[imin + 1].abs()).max(unfl)).powi(2)
+        {
+            let (sn, cs, _r) = dlartgp(b21bulge, b21d[imin]);
+            u2sn[imin] = sn;
+            u2cs[imin] = cs;
+        } else if nu < mu {
+            let (cc, ss) = dlartgs(b21e[imin], b21d[imin + 1], nu);
+            u2cs[imin] = cc;
+            u2sn[imin] = ss;
+        } else {
+            let (cc, ss) = dlartgs(b22d[imin], b22e[imin], mu);
+            u2cs[imin] = cc;
+            u2sn[imin] = ss;
+        }
+        u2cs[imin] = -u2cs[imin];
+        u2sn[imin] = -u2sn[imin];
+
+        // Apply U1 to B11,B12 and U2 to B21,B22 at imin.
+        let (u1c, u1s) = (u1cs[imin], u1sn[imin]);
+        temp = u1c * b11e[imin] + u1s * b11d[imin + 1];
+        b11d[imin + 1] = u1c * b11d[imin + 1] - u1s * b11e[imin];
+        b11e[imin] = temp;
+        if imax > imin + 1 {
+            b11bulge = u1s * b11e[imin + 1];
+            b11e[imin + 1] = u1c * b11e[imin + 1];
+        }
+        temp = u1c * b12d[imin] + u1s * b12e[imin];
+        b12e[imin] = u1c * b12e[imin] - u1s * b12d[imin];
+        b12d[imin] = temp;
+        let mut b12bulge = u1s * b12d[imin + 1];
+        b12d[imin + 1] = u1c * b12d[imin + 1];
+        let (u2c, u2s) = (u2cs[imin], u2sn[imin]);
+        temp = u2c * b21e[imin] + u2s * b21d[imin + 1];
+        b21d[imin + 1] = u2c * b21d[imin + 1] - u2s * b21e[imin];
+        b21e[imin] = temp;
+        if imax > imin + 1 {
+            b21bulge = u2s * b21e[imin + 1];
+            b21e[imin + 1] = u2c * b21e[imin + 1];
+        }
+        temp = u2c * b22d[imin] + u2s * b22e[imin];
+        b22e[imin] = u2c * b22e[imin] - u2s * b22d[imin];
+        b22d[imin] = temp;
+        let mut b22bulge = u2s * b22d[imin + 1];
+        b22d[imin + 1] = u2c * b22d[imin + 1];
+
+        // --- Inner loop i = imin+1 .. imax-1 ---
+        for i in (imin + 1)..imax {
+            let x1 = theta[i - 1].sin() * b11e[i - 1] + theta[i - 1].cos() * b21e[i - 1];
+            let x2 = theta[i - 1].sin() * b11bulge + theta[i - 1].cos() * b21bulge;
+            let y1 = theta[i - 1].sin() * b12d[i - 1] + theta[i - 1].cos() * b22d[i - 1];
+            let y2 = theta[i - 1].sin() * b12bulge + theta[i - 1].cos() * b22bulge;
+            phi[i - 1] = (x1 * x1 + x2 * x2).sqrt().atan2((y1 * y1 + y2 * y2).sqrt());
+
+            // V1T rotation at i (generic: dlartgp(x2,x1) -> sn,cs), then negate.
+            let (sn, cs, _r) = dlartgp(x2, x1);
+            v1tsn[i] = sn;
+            v1tcs[i] = cs;
+            v1tcs[i] = -v1tcs[i];
+            v1tsn[i] = -v1tsn[i];
+            // V2T rotation at i-1: dlartgp(y2,y1) -> sn,cs
+            let (sn2, cs2, _r2) = dlartgp(y2, y1);
+            v2tsn[i - 1] = sn2;
+            v2tcs[i - 1] = cs2;
+
+            let (c, s) = (v1tcs[i], v1tsn[i]);
+            temp = c * b11d[i] + s * b11e[i];
+            b11e[i] = c * b11e[i] - s * b11d[i];
+            b11d[i] = temp;
+            b11bulge = s * b11d[i + 1];
+            b11d[i + 1] = c * b11d[i + 1];
+            temp = c * b21d[i] + s * b21e[i];
+            b21e[i] = c * b21e[i] - s * b21d[i];
+            b21d[i] = temp;
+            b21bulge = s * b21d[i + 1];
+            b21d[i + 1] = c * b21d[i + 1];
+            let (c2, s2) = (v2tcs[i - 1], v2tsn[i - 1]);
+            temp = c2 * b12e[i - 1] + s2 * b12d[i];
+            b12d[i] = c2 * b12d[i] - s2 * b12e[i - 1];
+            b12e[i - 1] = temp;
+            b12bulge = s2 * b12e[i];
+            b12e[i] = c2 * b12e[i];
+            temp = c2 * b22e[i - 1] + s2 * b22d[i];
+            b22d[i] = c2 * b22d[i] - s2 * b22e[i - 1];
+            b22e[i - 1] = temp;
+            b22bulge = s2 * b22e[i];
+            b22e[i] = c2 * b22e[i];
+
+            let x1b = phi[i - 1].cos() * b11d[i] + phi[i - 1].sin() * b12e[i - 1];
+            let x2b = phi[i - 1].cos() * b11bulge + phi[i - 1].sin() * b12bulge;
+            let y1b = phi[i - 1].cos() * b21d[i] + phi[i - 1].sin() * b22e[i - 1];
+            let y2b = phi[i - 1].cos() * b21bulge + phi[i - 1].sin() * b22bulge;
+            theta[i] = (y1b * y1b + y2b * y2b).sqrt().atan2((x1b * x1b + x2b * x2b).sqrt());
+
+            // U1 rotation at i (generic: dlartgp(x2b,x1b) -> sn,cs)
+            let (sn, cs, _r) = dlartgp(x2b, x1b);
+            u1sn[i] = sn;
+            u1cs[i] = cs;
+            // U2 rotation at i: dlartgp(y2b,y1b) -> sn,cs; negate.
+            let (sn2, cs2, _r2) = dlartgp(y2b, y1b);
+            u2sn[i] = sn2;
+            u2cs[i] = cs2;
+            u2cs[i] = -u2cs[i];
+            u2sn[i] = -u2sn[i];
+
+            let (u1c, u1s) = (u1cs[i], u1sn[i]);
+            temp = u1c * b11e[i] + u1s * b11d[i + 1];
+            b11d[i + 1] = u1c * b11d[i + 1] - u1s * b11e[i];
+            b11e[i] = temp;
+            if i < imax - 1 {
+                b11bulge = u1s * b11e[i + 1];
+                b11e[i + 1] = u1c * b11e[i + 1];
+            }
+            let (u2c, u2s) = (u2cs[i], u2sn[i]);
+            temp = u2c * b21e[i] + u2s * b21d[i + 1];
+            b21d[i + 1] = u2c * b21d[i + 1] - u2s * b21e[i];
+            b21e[i] = temp;
+            if i < imax - 1 {
+                b21bulge = u2s * b21e[i + 1];
+                b21e[i + 1] = u2c * b21e[i + 1];
+            }
+            temp = u1c * b12d[i] + u1s * b12e[i];
+            b12e[i] = u1c * b12e[i] - u1s * b12d[i];
+            b12d[i] = temp;
+            b12bulge = u1s * b12d[i + 1];
+            b12d[i + 1] = u1c * b12d[i + 1];
+            temp = u2c * b22d[i] + u2s * b22e[i];
+            b22e[i] = u2c * b22e[i] - u2s * b22d[i];
+            b22d[i] = temp;
+            b22bulge = u2s * b22d[i + 1];
+            b22d[i + 1] = u2c * b22d[i + 1];
+        }
+
+        // --- Final V2T rotation at imax-1 ---
+        let x1 = theta[imax - 1].sin() * b11e[imax - 1] + theta[imax - 1].cos() * b21e[imax - 1];
+        let y1 = theta[imax - 1].sin() * b12d[imax - 1] + theta[imax - 1].cos() * b22d[imax - 1];
+        let y2 = theta[imax - 1].sin() * b12bulge + theta[imax - 1].cos() * b22bulge;
+        phi[imax - 1] = x1.abs().atan2((y1 * y1 + y2 * y2).sqrt());
+        let (sn, cs, _r) = dlartgp(y2, y1);
+        v2tsn[imax - 1] = sn;
+        v2tcs[imax - 1] = cs;
+        let (c2, s2) = (v2tcs[imax - 1], v2tsn[imax - 1]);
+        temp = c2 * b12e[imax - 1] + s2 * b12d[imax];
+        b12d[imax] = c2 * b12d[imax] - s2 * b12e[imax - 1];
+        b12e[imax - 1] = temp;
+        temp = c2 * b22e[imax - 1] + s2 * b22d[imax];
+        b22d[imax] = c2 * b22d[imax] - s2 * b22e[imax - 1];
+        b22e[imax - 1] = temp;
+
+        // --- Apply accumulated rotations to U1,U2 (columns) and V1T,V2T (rows) ---
+        for j in imin..imax {
+            rot_cols(&mut u1, j, u1cs[j], u1sn[j]);
+            rot_cols(&mut u2, j, u2cs[j], u2sn[j]);
+            rot_rows(&mut v1t, j, v1tcs[j], v1tsn[j]);
+            rot_rows(&mut v2t, j, v2tcs[j], v2tsn[j]);
+        }
+
+        // --- Sign cleanup ---
+        if b11e[imax - 1] + b21e[imax - 1] > 0.0 {
+            b11d[imax] = -b11d[imax];
+            b21d[imax] = -b21d[imax];
+            for r in v1t.iter_mut() {
+                r[imax] = -r[imax];
+            }
+        }
+        let x1f = phi[imax - 1].cos() * b11d[imax] + phi[imax - 1].sin() * b12e[imax - 1];
+        let y1f = phi[imax - 1].cos() * b21d[imax] + phi[imax - 1].sin() * b22e[imax - 1];
+        theta[imax] = y1f.abs().atan2(x1f.abs());
+        if b11d[imax] + b12e[imax - 1] < 0.0 {
+            b12d[imax] = -b12d[imax];
+            for r in u1.iter_mut() {
+                r[imax] = -r[imax];
+            }
+        }
+        if b21d[imax] + b22e[imax - 1] > 0.0 {
+            b22d[imax] = -b22d[imax];
+            for r in u2.iter_mut() {
+                r[imax] = -r[imax];
+            }
+        }
+        if b12d[imax] + b22d[imax] < 0.0 {
+            for c in 0..q {
+                v2t[imax][c] = -v2t[imax][c];
+            }
+        }
+
+        // --- theta/phi cleanup ---
+        for t in theta.iter_mut().take(imax + 1).skip(imin) {
+            if *t < thresh {
+                *t = 0.0;
+            } else if *t > pi2 - thresh {
+                *t = pi2;
+            }
+        }
+        for p in phi.iter_mut().take(imax).skip(imin) {
+            if *p < thresh {
+                *p = 0.0;
+            } else if *p > pi2 - thresh {
+                *p = pi2;
+            }
+        }
+
+        // --- Update imin/imax ---
+        if imax > 0 {
+            while imax > 0 && phi[imax - 1] == 0.0 {
+                imax -= 1;
+            }
+        }
+        if imin > imax.saturating_sub(1) {
+            imin = imax.saturating_sub(1);
+        }
+        if imin > 0 {
+            while imin > 0 && phi[imin - 1] != 0.0 {
+                imin -= 1;
+            }
+        }
+    }
+
+    // --- Sort theta ascending, swapping U1/U2 columns and V1T/V2T rows ---
+    for i in 0..q {
+        let mut mini = i;
+        let mut tmin = theta[i];
+        for j in i + 1..q {
+            if theta[j] < tmin {
+                mini = j;
+                tmin = theta[j];
+            }
+        }
+        if mini != i {
+            theta.swap(mini, i);
+            for r in u1.iter_mut() {
+                r.swap(i, mini);
+            }
+            for r in u2.iter_mut() {
+                r.swap(i, mini);
+            }
+            v1t.swap(i, mini);
+            v2t.swap(i, mini);
+        }
+    }
+
+    BbcsdResult {
+        theta,
+        u1,
+        u2,
+        v1t,
+        v2t,
+    }
+}
+
 /// Balanced-square (`p = q = m/2`) cosine-sine decomposition factors via
 /// `dorbdb` + a CS-SVD of the reduced `BigB`. Returns `(u, vh)` (each `2q×2q`)
 /// such that `u · cs · vh == x` where `cs == build_cs_matrix(cs_angles(x11))`.
@@ -697,6 +1131,52 @@ pub(crate) fn cossin_factors_balanced(
         }
     }
     Ok((u, vh))
+}
+
+/// Full balanced-square (`p=q=m/2`) cosine-sine decomposition `X = u · cs · vh`
+/// via `dorbdb` reduction + the `dbbcsd` implicit-QR sweep.
+///
+/// WIP: the `cs` factor (angles) is scipy-exact and the `dbbcsd` sweep converges
+/// correctly, but the `u`/`vh` factors are not yet right — `dorbdb` currently
+/// emits a non-standard bidiagonal convention (B12 sign / B21 orientation differ
+/// from LAPACK's `dbbcsd` input), so its P/Q do not integrate with the sweep's
+/// U/V. Closing that requires making `dorbdb` LAPACK-faithful (bead
+/// frankenscipy-5tmu1). Kept `pub(crate)` until then.
+pub(crate) fn cossin_full(
+    x: &[Vec<f64>],
+) -> Result<(Vec<Vec<f64>>, Vec<Vec<f64>>, Vec<Vec<f64>>), crate::LinalgError> {
+    let q = x.len() / 2;
+    let m = 2 * q;
+    let mut x11: Vec<Vec<f64>> = x[..q].iter().map(|r| r[..q].to_vec()).collect();
+    let mut x12: Vec<Vec<f64>> = x[..q].iter().map(|r| r[q..].to_vec()).collect();
+    let mut x21: Vec<Vec<f64>> = x[q..].iter().map(|r| r[..q].to_vec()).collect();
+    let mut x22: Vec<Vec<f64>> = x[q..].iter().map(|r| r[q..].to_vec()).collect();
+    let res = dorbdb_balanced(&mut x11, &mut x12, &mut x21, &mut x22, q);
+    let p1 = build_from_col_reflectors(&x11, &res.taup1, q);
+    let p2 = build_from_col_reflectors(&x21, &res.taup2, q);
+    let q1 = build_from_row_reflectors(&x11, &res.tauq1, q, 1);
+    let q2 = build_from_row_reflectors(&x12, &res.tauq2, q, 0);
+    let bb = dbbcsd_balanced(&res.theta, &res.phi, q);
+    // U1 = P1·Ub1, U2 = P2·Ub2.
+    let u1 = mm(&p1, &bb.u1);
+    let u2 = mm(&p2, &bb.u2);
+    // V1 = Q1·Vb1 where Vb1 = v1tᵀ; V1ᵀ = v1t·Q1ᵀ.
+    let q1t: Vec<Vec<f64>> = (0..q).map(|i| (0..q).map(|j| q1[j][i]).collect()).collect();
+    let q2t: Vec<Vec<f64>> = (0..q).map(|i| (0..q).map(|j| q2[j][i]).collect()).collect();
+    let v1h = mm(&bb.v1t, &q1t); // V1ᵀ (q×q)
+    let v2h = mm(&bb.v2t, &q2t);
+    let cs = build_cs_matrix(&bb.theta, q, q, m);
+    let mut u = vec![vec![0.0; m]; m];
+    let mut vh = vec![vec![0.0; m]; m];
+    for i in 0..q {
+        for j in 0..q {
+            u[i][j] = u1[i][j];
+            u[q + i][q + j] = u2[i][j];
+            vh[i][j] = v1h[i][j];
+            vh[q + i][q + j] = v2h[i][j];
+        }
+    }
+    Ok((u, cs, vh))
 }
 
 #[cfg(test)]
@@ -880,6 +1360,38 @@ mod tests {
         for &(x, y, sig) in &[(2.0, 1.0, 0.5), (-3.0, 2.0, 0.0), (1.0, 0.0, 1.0), (0.4, 0.7, 0.3)] {
             let (cs, sn) = dlartgs(x, y, sig);
             assert!((cs * cs + sn * sn - 1.0).abs() < 1e-13, "not orthonormal for ({x},{y},{sig})");
+        }
+    }
+
+    #[test]
+    fn dbbcsd_sweep_converges_theta() {
+        // The implicit-QR sweep diagonalizes the bidiagonal-block form to the
+        // correct CS angles (same as the singular values of X11 via cs_angles).
+        for &q in &[2usize, 3, 4, 5, 6] {
+            for seed in 0..4u64 {
+                let m = 2 * q;
+                let x = orthogonal(m, seed + q as u64 * 17);
+                let mut x11: Vec<Vec<f64>> = x[..q].iter().map(|r| r[..q].to_vec()).collect();
+                let mut x12: Vec<Vec<f64>> = x[..q].iter().map(|r| r[q..].to_vec()).collect();
+                let mut x21: Vec<Vec<f64>> = x[q..].iter().map(|r| r[..q].to_vec()).collect();
+                let mut x22: Vec<Vec<f64>> = x[q..].iter().map(|r| r[q..].to_vec()).collect();
+                let res = dorbdb_balanced(&mut x11, &mut x12, &mut x21, &mut x22, q);
+                let bb = dbbcsd_balanced(&res.theta, &res.phi, q);
+                // Reference: arccos of singular values of X11 (ascending).
+                let x11ref: Vec<Vec<f64>> = x[..q].iter().map(|r| r[..q].to_vec()).collect();
+                let mut want = cs_angles(&x11ref, q, q, m).unwrap();
+                want.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                let mut got = bb.theta.clone();
+                got.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                let mut maxerr = 0.0f64;
+                for i in 0..q {
+                    maxerr = maxerr.max((got[i] - want[i]).abs());
+                }
+                assert!(
+                    maxerr < 1e-9,
+                    "q={q} seed={seed}: dbbcsd theta error {maxerr:.3e}"
+                );
+            }
         }
     }
 
