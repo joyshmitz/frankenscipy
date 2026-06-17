@@ -119,3 +119,9 @@ Route:
 
 - Do not retry blind envelope widening.
 - Next primitive must explicitly represent and chase escaped bulges instead of depending on a fixed/adaptive lane width to contain them.
+
+## Closeout
+
+`frankenscipy-wm1gg` was closed rejected/no-ship after the fixed-width and adaptive-width compact lane attempts both fell back and regressed.
+
+Successor: `frankenscipy-nvsct` for explicit bulge storage/chase queues with direct Q metadata replay.

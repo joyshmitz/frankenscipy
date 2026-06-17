@@ -1,8 +1,8 @@
-c3b5b9f9163522cf5584a1c74de5d6a0fa8ff1acc95358ab867794d02179d5de  tests/artifacts/perf/2026-06-17-rubywaterfall-linalg-wm1gg-compact-lane-bulge/EVIDENCE.md
+51e049ee49cfc036d11bc61f99e203f83b169d562b74fa9e1f0617779770cd18  tests/artifacts/perf/2026-06-17-rubywaterfall-linalg-wm1gg-compact-lane-bulge/EVIDENCE.md
 0c784f44995700494588f66f8d99c5a9c64f60859efb3f963ef376d30f671b92  tests/artifacts/perf/2026-06-17-rubywaterfall-linalg-wm1gg-compact-lane-bulge/after_adaptive_lane_hyperfine.txt
 616ded5758770d0be261db54067da53d856604ce4730e2b9f2bd37a7518ecfb3  tests/artifacts/perf/2026-06-17-rubywaterfall-linalg-wm1gg-compact-lane-bulge/after_adaptive_lane_probe.txt
 60ec7cf9907a38b88d64c7a1f6db5c3449321e2751c498f4c36fea9b189bc63d  tests/artifacts/perf/2026-06-17-rubywaterfall-linalg-wm1gg-compact-lane-bulge/after_compact_lane_hyperfine.txt
 a462ace9b0abdd86ca68d1323c3fc4372e25546c641350c7097a853c77cea864  tests/artifacts/perf/2026-06-17-rubywaterfall-linalg-wm1gg-compact-lane-bulge/after_compact_lane_probe.txt
 46bbb2cb3871b63024cbf3b4ad62d47f501a1d1b48c7c5e25a4cf61a5565edd6  tests/artifacts/perf/2026-06-17-rubywaterfall-linalg-wm1gg-compact-lane-bulge/baseline_hyperfine_local.txt
 4e55ade095c5a0493d3fff221ae36403fda00b0177d48fef41cd3bc3c3c8c6ff  tests/artifacts/perf/2026-06-17-rubywaterfall-linalg-wm1gg-compact-lane-bulge/baseline_probe_local.txt
-77f6f46a1e1f8a11020c379485804b24f4d8ca2abfac2475b497953303dea368  .skill-loop-progress.md
+de1688b5cf1cbf5e78fbf7da7b1272297c1d335db7bce449b2b2747f57966e14  .skill-loop-progress.md
