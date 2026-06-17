@@ -5619,10 +5619,6 @@ pub fn smirnovi(n: i32, p: f64) -> f64 {
     0.5 * (lo + hi)
 }
 
-/// Cosine of angle given in degrees.
-///
-/// Matches `scipy.special.cosdg(x)`.
-#[must_use]
 // --- Cephes degree-trig support (sindg.c / tandg.c) ---
 // scipy.special.{sindg,cosdg,tandg,cotdg} are the Cephes routines: reduce the
 // angle in DEGREES (mod 360, then to an octant + small residual mod 45°) before
@@ -5659,6 +5655,10 @@ fn degtrig_polevl(x: f64, coef: &[f64]) -> f64 {
     acc
 }
 
+/// Cosine of angle given in degrees.
+///
+/// Matches `scipy.special.cosdg(x)`.
+#[must_use]
 pub fn cosdg(x: f64) -> f64 {
     if x.is_nan() {
         return f64::NAN;

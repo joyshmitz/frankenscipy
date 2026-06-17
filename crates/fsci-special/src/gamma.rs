@@ -1225,21 +1225,6 @@ pub fn gammaincc_scalar(a: f64, x: f64, mode: RuntimeMode) -> Result<f64, Specia
     Ok(q)
 }
 
-/// Natural log of the regularized upper incomplete gamma function `Q(a, x)`.
-///
-/// `ln Q(a, x)` stays finite deep in the right tail where `Q` itself
-/// underflows to 0 (so `gammaincc_scalar(a, x).ln()` would be `-inf`). In the
-/// upper-tail region (`x >= a + 1`) `Q = prefactor * h`, where
-/// `prefactor = exp(-x + a*ln x - lnΓ(a))` underflows but the Lentz continued
-/// fraction `h` is `O(1)`; computing
-/// `ln Q = (-x + a*ln x - lnΓ(a)) + ln(h)` keeps full precision. In the
-/// lower-dominant region (`x < a + 1`) `Q` is `O(1)`, so it is evaluated
-/// directly and logged. Matches `gammaincc_scalar(a, x).ln()` wherever the
-/// latter is representable.
-///
-/// Domain: `a > 0`, `x >= 0`. Returns `NaN` for invalid `a`/`x`, `0.0` at
-/// `x = 0` (`Q = 1`), and `-inf` at `x = +inf` (`Q = 0`).
-#[must_use]
 /// Natural log of the regularized lower incomplete gamma function `P(a, x)`.
 ///
 /// `ln P(a, x)` stays finite deep in the left tail where `P` itself underflows
@@ -1330,6 +1315,21 @@ pub fn log_gammainc_scalar(a: f64, x: f64) -> f64 {
     }
 }
 
+/// Natural log of the regularized upper incomplete gamma function `Q(a, x)`.
+///
+/// `ln Q(a, x)` stays finite deep in the right tail where `Q` itself
+/// underflows to 0 (so `gammaincc_scalar(a, x).ln()` would be `-inf`). In the
+/// upper-tail region (`x >= a + 1`) `Q = prefactor * h`, where
+/// `prefactor = exp(-x + a*ln x - lnΓ(a))` underflows but the Lentz continued
+/// fraction `h` is `O(1)`; computing
+/// `ln Q = (-x + a*ln x - lnΓ(a)) + ln(h)` keeps full precision. In the
+/// lower-dominant region (`x < a + 1`) `Q` is `O(1)`, so it is evaluated
+/// directly and logged. Matches `gammaincc_scalar(a, x).ln()` wherever the
+/// latter is representable.
+///
+/// Domain: `a > 0`, `x >= 0`. Returns `NaN` for invalid `a`/`x`, `0.0` at
+/// `x = 0` (`Q = 1`), and `-inf` at `x = +inf` (`Q = 0`).
+#[must_use]
 pub fn log_gammaincc_scalar(a: f64, x: f64) -> f64 {
     if a.is_nan() || x.is_nan() {
         return f64::NAN;

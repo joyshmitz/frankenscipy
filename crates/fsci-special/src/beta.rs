@@ -836,13 +836,6 @@ pub fn nctdtridf(p: f64, nc: f64, t: f64) -> f64 {
     invert_positive_param(p, |df| nctdtr(df, nc, t))
 }
 
-/// Student's t distribution CDF.
-///
-/// Returns P(T <= t) where T follows a Student's t distribution
-/// with v degrees of freedom.
-///
-/// Matches `scipy.special.stdtr(v, t)`.
-#[must_use]
 /// Non-central Student's t cumulative distribution function.
 ///
 /// Matches `scipy.special.nctdtr(df, nc, t)`: the CDF at `t` of a non-central
@@ -919,6 +912,13 @@ pub fn nctdtr(df: f64, nc: f64, t: f64) -> f64 {
     (phi + 0.5 * s).clamp(0.0, 1.0)
 }
 
+/// Student's t distribution CDF.
+///
+/// Returns P(T <= t) where T follows a Student's t distribution
+/// with v degrees of freedom.
+///
+/// Matches `scipy.special.stdtr(v, t)`.
+#[must_use]
 pub fn stdtr(v: f64, t: f64) -> f64 {
     if v.is_nan() || t.is_nan() {
         return f64::NAN;
