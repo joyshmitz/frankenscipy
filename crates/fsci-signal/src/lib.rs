@@ -13281,6 +13281,321 @@ pub fn closest_stft_dual_window(
     Ok((dual, alpha))
 }
 
+/// FFT mode for [`ShortTimeFft`], mirroring `scipy.signal.ShortTimeFFT`'s
+/// `fft_mode`. (`Onesided2X` — the doubled one-sided mode — needs window
+/// scaling and is not yet supported by this core.)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StftFftMode {
+    /// Real-input one-sided FFT (`mfft/2 + 1` bins). The scipy default.
+    Onesided,
+    /// Full complex two-sided FFT (`mfft` bins, `fftfreq`-ordered).
+    Twosided,
+    /// Two-sided FFT with the zero frequency shifted to the center.
+    Centered,
+}
+
+#[inline]
+fn stft_fftfreq(n: usize, d: f64) -> Vec<f64> {
+    if n == 0 {
+        return Vec::new();
+    }
+    let val = 1.0 / (n as f64 * d);
+    let n_i = n as i64;
+    (0..n)
+        .map(|i| {
+            let i = i as i64;
+            let k = if i <= (n_i - 1) / 2 { i } else { i - n_i };
+            k as f64 * val
+        })
+        .collect()
+}
+
+#[inline]
+fn stft_fftshift<T: Copy + Default>(v: &[T]) -> Vec<T> {
+    let n = v.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let s = n / 2;
+    (0..n).map(|i| v[(i + n - s) % n]).collect()
+}
+
+/// Sliding-window short-time Fourier transform, a faithful port of the core of
+/// `scipy.signal.ShortTimeFFT` for 1-D real input.
+///
+/// Mirrors scipy's sliding-window geometry exactly (the `p_min`/`p_max`/`k_min`/
+/// `k_max` border scans, the centered-window `phase_shift` roll, and `mfft`
+/// zero-padding), so [`ShortTimeFft::stft`] aligns bin-for-bin with scipy's
+/// `ShortTimeFFT.stft`. Construction defaults match scipy: `fft_mode=Onesided`,
+/// `mfft=len(win)`, `phase_shift=Some(0)`. Window scaling (`scale_to`), the dual
+/// window / `istft`, and `Onesided2X` are deferred follow-ups.
+#[derive(Clone, Debug)]
+pub struct ShortTimeFft {
+    win: Vec<f64>,
+    hop: usize,
+    fs: f64,
+    mfft: usize,
+    fft_mode: StftFftMode,
+    phase_shift: Option<i64>,
+}
+
+impl ShortTimeFft {
+    /// Construct with scipy defaults (`fft_mode=Onesided`, `mfft=len(win)`,
+    /// `phase_shift=Some(0)`). `win` must be non-empty and finite; `hop >= 1`.
+    pub fn new(win: Vec<f64>, hop: usize, fs: f64) -> Result<Self, SignalError> {
+        if win.is_empty() {
+            return Err(SignalError::InvalidArgument(
+                "ShortTimeFft: win must be a non-empty 1-D window".to_string(),
+            ));
+        }
+        if !win.iter().all(|v| v.is_finite()) {
+            return Err(SignalError::InvalidArgument(
+                "ShortTimeFft: win must have finite entries".to_string(),
+            ));
+        }
+        if hop < 1 {
+            return Err(SignalError::InvalidArgument(
+                "ShortTimeFft: hop must be an integer >= 1".to_string(),
+            ));
+        }
+        let mfft = win.len();
+        Ok(Self {
+            win,
+            hop,
+            fs,
+            mfft,
+            fft_mode: StftFftMode::Onesided,
+            phase_shift: Some(0),
+        })
+    }
+
+    /// Set `mfft` (FFT length, may exceed the window length for zero-padding).
+    pub fn with_mfft(mut self, mfft: usize) -> Result<Self, SignalError> {
+        if mfft < self.win.len() {
+            return Err(SignalError::InvalidArgument(format!(
+                "ShortTimeFft: mfft={mfft} must be >= window length {}",
+                self.win.len()
+            )));
+        }
+        self.mfft = mfft;
+        Ok(self)
+    }
+
+    /// Set the FFT mode (default [`StftFftMode::Onesided`]).
+    pub fn with_fft_mode(mut self, mode: StftFftMode) -> Self {
+        self.fft_mode = mode;
+        self
+    }
+
+    /// Set the `phase_shift` (default `Some(0)`; `None` disables the centering
+    /// roll, matching scipy's `phase_shift=None`).
+    pub fn with_phase_shift(mut self, phase_shift: Option<i64>) -> Self {
+        self.phase_shift = phase_shift;
+        self
+    }
+
+    /// Number of samples in the window.
+    pub fn m_num(&self) -> usize {
+        self.win.len()
+    }
+    /// Center index of the window (`m_num // 2`).
+    pub fn m_num_mid(&self) -> usize {
+        self.win.len() / 2
+    }
+    /// FFT length.
+    pub fn mfft(&self) -> usize {
+        self.mfft
+    }
+    /// Hop size in samples.
+    pub fn hop(&self) -> usize {
+        self.hop
+    }
+    /// Sampling interval `T = 1/fs`.
+    pub fn t_sample(&self) -> f64 {
+        1.0 / self.fs
+    }
+    /// Time increment between slices `delta_t = T * hop`.
+    pub fn delta_t(&self) -> f64 {
+        self.t_sample() * self.hop as f64
+    }
+    /// Frequency bin width `delta_f = fs / mfft`.
+    pub fn delta_f(&self) -> f64 {
+        self.fs / self.mfft as f64
+    }
+    /// Number of frequency bins.
+    pub fn f_pts(&self) -> usize {
+        match self.fft_mode {
+            StftFftMode::Onesided => self.mfft / 2 + 1,
+            StftFftMode::Twosided | StftFftMode::Centered => self.mfft,
+        }
+    }
+    /// Frequencies of the STFT bins.
+    pub fn f(&self) -> Vec<f64> {
+        match self.fft_mode {
+            StftFftMode::Onesided => {
+                let df = self.delta_f();
+                (0..self.f_pts()).map(|k| k as f64 * df).collect()
+            }
+            StftFftMode::Twosided => stft_fftfreq(self.mfft, self.t_sample()),
+            StftFftMode::Centered => stft_fftshift(&stft_fftfreq(self.mfft, self.t_sample())),
+        }
+    }
+
+    // Pre-padding scan → (k_min, p_min), both <= 0. Faithful port of
+    // scipy's ShortTimeFFT._pre_padding.
+    fn pre_padding(&self) -> (i64, i64) {
+        let m_num = self.win.len() as i64;
+        let mid = self.m_num_mid() as i64;
+        let hop = self.hop as i64;
+        let w2: Vec<f64> = self.win.iter().map(|&w| w * w).collect();
+        let n0 = -mid;
+        let mut p_ = 0i64;
+        let mut n_ = n0;
+        while n_ > n0 - m_num - 1 {
+            let n_next = n_ - hop;
+            let start = (w2.len() as i64 + n_next).max(0) as usize;
+            let all_zero = w2[start.min(w2.len())..].iter().all(|&v| v == 0.0);
+            if n_next + m_num <= 0 || all_zero {
+                return (n_, -p_);
+            }
+            p_ += 1;
+            n_ -= hop;
+        }
+        (n0 - hop + m_num - mid, -p_)
+    }
+
+    // Post-padding scan → (k_max, p_max). Faithful port of
+    // scipy's ShortTimeFFT._post_padding.
+    fn post_padding(&self, n: usize) -> (i64, i64) {
+        let m_num = self.win.len() as i64;
+        let mid = self.m_num_mid() as i64;
+        let hop = self.hop as i64;
+        let n_i = n as i64;
+        let w2: Vec<f64> = self.win.iter().map(|&w| w * w).collect();
+        let q1 = n_i.div_euclid(hop);
+        let k1 = q1 * hop - mid;
+        let mut q_ = q1;
+        let mut k_ = k1;
+        while k_ < n_i + m_num {
+            let n_next = k_ + hop;
+            let end = n_i - n_next;
+            let all_zero = if end <= 0 {
+                true
+            } else {
+                w2[..(end as usize).min(w2.len())].iter().all(|&v| v == 0.0)
+            };
+            if n_next >= n_i || all_zero {
+                return (k_ + m_num, q_ + 1);
+            }
+            q_ += 1;
+            k_ += hop;
+        }
+        (k1 + m_num - mid, q1 + 1)
+    }
+
+    /// Smallest slice index (`<= 0`).
+    pub fn p_min(&self) -> i64 {
+        self.pre_padding().1
+    }
+    /// Smallest signal index (`<= 0`).
+    pub fn k_min(&self) -> i64 {
+        self.pre_padding().0
+    }
+    /// Index of the first non-overlapping upper slice for an `n`-sample signal.
+    pub fn p_max(&self, n: usize) -> i64 {
+        self.post_padding(n).1
+    }
+    /// First sample index after the signal end not touched by a slice.
+    pub fn k_max(&self, n: usize) -> i64 {
+        self.post_padding(n).0
+    }
+    /// Number of time slices for an `n`-sample signal.
+    pub fn p_num(&self, n: usize) -> usize {
+        (self.p_max(n) - self.p_min()).max(0) as usize
+    }
+
+    // Windowed-slice FFT for one slice (length m_num), mirroring _fft_func.
+    fn fft_func(&self, seg: &[f64]) -> Result<Vec<(f64, f64)>, SignalError> {
+        let m_num = self.win.len() as i64;
+        let mut buf = seg.to_vec();
+        if buf.len() < self.mfft {
+            buf.resize(self.mfft, 0.0);
+        }
+        if let Some(ps_param) = self.phase_shift {
+            let mid = self.m_num_mid() as i64;
+            let p_s = (ps_param + mid).rem_euclid(m_num);
+            let len = self.mfft as i64;
+            let rolled: Vec<f64> = (0..self.mfft)
+                .map(|j| buf[((j as i64 + p_s) % len) as usize])
+                .collect();
+            buf = rolled;
+        }
+        let opts = fsci_fft::FftOptions::default();
+        match self.fft_mode {
+            StftFftMode::Onesided => {
+                fsci_fft::rfft(&buf, &opts).map_err(|e| SignalError::InvalidArgument(format!("{e}")))
+            }
+            StftFftMode::Twosided => {
+                let cx: Vec<fsci_fft::Complex64> = buf.iter().map(|&v| (v, 0.0)).collect();
+                fsci_fft::fft(&cx, &opts).map_err(|e| SignalError::InvalidArgument(format!("{e}")))
+            }
+            StftFftMode::Centered => {
+                let cx: Vec<fsci_fft::Complex64> = buf.iter().map(|&v| (v, 0.0)).collect();
+                let out = fsci_fft::fft(&cx, &opts)
+                    .map_err(|e| SignalError::InvalidArgument(format!("{e}")))?;
+                Ok(stft_fftshift(&out))
+            }
+        }
+    }
+
+    /// Short-time Fourier transform of real signal `x`, returned as
+    /// `S[freq][slice]` (shape `f_pts × p_num`), matching
+    /// `scipy.signal.ShortTimeFFT.stft(x)` over the default slice range.
+    pub fn stft(&self, x: &[f64]) -> Result<Vec<Vec<(f64, f64)>>, SignalError> {
+        let n = x.len();
+        let m2p = self.win.len() - self.m_num_mid();
+        if n < m2p {
+            return Err(SignalError::InvalidArgument(format!(
+                "ShortTimeFft::stft: signal length {n} must be >= ceil(m_num/2) = {m2p}"
+            )));
+        }
+        let m_num = self.win.len();
+        let mid = self.m_num_mid() as i64;
+        let hop = self.hop as i64;
+        let p_min = self.pre_padding().1;
+        let p_max = self.post_padding(n).1;
+        let f_pts = self.f_pts();
+        let p_num = (p_max - p_min).max(0) as usize;
+        let mut s = vec![vec![(0.0_f64, 0.0_f64); p_num]; f_pts];
+        let mut seg = vec![0.0_f64; m_num];
+        for (pi, p) in (p_min..p_max).enumerate() {
+            let k0 = p * hop - mid;
+            for (j, slot) in seg.iter_mut().enumerate() {
+                let idx = k0 + j as i64;
+                *slot = if idx >= 0 && (idx as usize) < n {
+                    x[idx as usize] * self.win[j]
+                } else {
+                    0.0
+                };
+            }
+            let col = self.fft_func(&seg)?;
+            for (fi, &c) in col.iter().enumerate().take(f_pts) {
+                s[fi][pi] = c;
+            }
+        }
+        Ok(s)
+    }
+
+    /// Spectrogram `|stft(x)|²` (shape `f_pts × p_num`), matching
+    /// `scipy.signal.ShortTimeFFT.spectrogram(x)` for the unscaled core.
+    pub fn spectrogram(&self, x: &[f64]) -> Result<Vec<Vec<f64>>, SignalError> {
+        let s = self.stft(x)?;
+        Ok(s.into_iter()
+            .map(|row| row.into_iter().map(|(re, im)| re * re + im * im).collect())
+            .collect())
+    }
+}
+
 pub fn istft(
     stft_result: &StftResult,
     nperseg: usize,
@@ -15685,6 +16000,55 @@ pub fn daub(p: usize) -> Result<Vec<f64>, SignalError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn short_time_fft_matches_scipy() {
+        let hann = |n: usize| -> Vec<f64> {
+            (0..n)
+                .map(|i| 0.5 - 0.5 * (2.0 * std::f64::consts::PI * i as f64 / n as f64).cos())
+                .collect()
+        };
+        let n = 20usize;
+        let x: Vec<f64> = (0..n)
+            .map(|i| (0.3 * i as f64).sin() + 0.5 * (0.07 * i as f64).cos())
+            .collect();
+        // hann(8), hop=3, fs=100, onesided (scipy defaults).
+        let sft = ShortTimeFft::new(hann(8), 3, 100.0).unwrap();
+        // geometry exactly equals scipy.signal.ShortTimeFFT.
+        assert_eq!(sft.p_min(), -1);
+        assert_eq!(sft.p_max(n), 8);
+        assert_eq!(sft.k_min(), -7);
+        assert_eq!(sft.k_max(n), 25);
+        assert_eq!(sft.p_num(n), 9);
+        assert_eq!(sft.f_pts(), 5);
+        assert!((sft.delta_t() - 0.03).abs() < 1e-12);
+        assert!((sft.delta_f() - 12.5).abs() < 1e-12);
+        let s = sft.stft(&x).unwrap();
+        assert_eq!(s.len(), 5);
+        assert_eq!(s[0].len(), 9);
+        // scipy reference values (S[freq][slice]):
+        assert!((s[0][0].0 - 7.322_330_470_3e-2).abs() < 1e-8 && s[0][0].1.abs() < 1e-8);
+        assert!((s[0][1].0 - 1.894_179_255_1).abs() < 1e-8);
+        // spectrogram = |stft|^2
+        let sp = sft.spectrogram(&x).unwrap();
+        assert!((sp[0][1] - (s[0][1].0 * s[0][1].0 + s[0][1].1 * s[0][1].1)).abs() < 1e-12);
+        // twosided + mfft padding: shape/geometry.
+        let sft2 = ShortTimeFft::new(hann(8), 4, 100.0)
+            .unwrap()
+            .with_mfft(16)
+            .unwrap()
+            .with_fft_mode(StftFftMode::Twosided);
+        assert_eq!(sft2.f_pts(), 16);
+        assert_eq!(sft2.p_min(), 0);
+        assert_eq!(sft2.p_max(n), 6);
+        let s2 = sft2.stft(&x).unwrap();
+        assert_eq!(s2.len(), 16);
+        assert_eq!(s2[0].len(), 6);
+        // error cases
+        assert!(ShortTimeFft::new(vec![], 1, 1.0).is_err());
+        assert!(ShortTimeFft::new(hann(8), 0, 1.0).is_err());
+        assert!(sft.stft(&[1.0, 2.0]).is_err()); // n < ceil(m_num/2)
+    }
 
     #[test]
     fn closest_stft_dual_window_matches_scipy() {
