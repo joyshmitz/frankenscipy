@@ -240,9 +240,326 @@ pub(crate) fn build_cs_matrix(theta: &[f64], p: usize, q: usize, m: usize) -> Ve
     cs
 }
 
+// Apply H = I − tau·v·vᵀ (v[r0]=1, `vtail` at rows r0+1..) to columns `c0..c1`
+// of the row-major matrix `c`, from the left.
+fn apply_left_block(c: &mut [Vec<f64>], r0: usize, c0: usize, c1: usize, vtail: &[f64], tau: f64) {
+    if tau == 0.0 {
+        return;
+    }
+    for col in c0..c1 {
+        let mut w = c[r0][col];
+        for (k, &vt) in vtail.iter().enumerate() {
+            w += vt * c[r0 + 1 + k][col];
+        }
+        let tw = tau * w;
+        c[r0][col] -= tw;
+        for (k, &vt) in vtail.iter().enumerate() {
+            c[r0 + 1 + k][col] -= tw * vt;
+        }
+    }
+}
+
+// Apply C·H (H = I − tau·w·wᵀ, w[c0]=1, `wtail` at cols c0+1..) to rows `r0..r1`
+// of the row-major matrix `c`, from the right.
+fn apply_right_block(c: &mut [Vec<f64>], r0: usize, r1: usize, c0: usize, wtail: &[f64], tau: f64) {
+    if tau == 0.0 {
+        return;
+    }
+    for row in c.iter_mut().take(r1).skip(r0) {
+        let mut w = row[c0];
+        for (k, &wt) in wtail.iter().enumerate() {
+            w += wt * row[c0 + 1 + k];
+        }
+        let tw = tau * w;
+        row[c0] -= tw;
+        for (k, &wt) in wtail.iter().enumerate() {
+            row[c0 + 1 + k] -= tw * wt;
+        }
+    }
+}
+
+/// Reflector scalars and angles from [`dorbdb_balanced`].
+pub(crate) struct OrbdbResult {
+    pub theta: Vec<f64>,
+    pub phi: Vec<f64>,
+    pub taup1: Vec<f64>,
+    pub taup2: Vec<f64>,
+    pub tauq1: Vec<f64>,
+    pub tauq2: Vec<f64>,
+}
+
+/// Simultaneous bidiagonalization (LAPACK `DORBDB`, `TRANS='N'`, default signs)
+/// of the four `q×q` blocks of a `2q×2q` partitioned orthogonal matrix (the
+/// balanced square case `p = q = m/2`). On return the blocks hold the packed
+/// Householder reflector tails; the angles and reflector scalars are returned.
+pub(crate) fn dorbdb_balanced(
+    x11: &mut [Vec<f64>],
+    x12: &mut [Vec<f64>],
+    x21: &mut [Vec<f64>],
+    x22: &mut [Vec<f64>],
+    q: usize,
+) -> OrbdbResult {
+    let (p, mp) = (q, q); // P = M-P = q
+    let mut theta = vec![0.0f64; q];
+    let mut phi = vec![0.0f64; q.saturating_sub(1)];
+    let mut taup1 = vec![0.0; q];
+    let mut taup2 = vec![0.0; q];
+    let mut tauq1 = vec![0.0; q.saturating_sub(1)];
+    let mut tauq2 = vec![0.0; q];
+
+    for i in 0..q {
+        // Step 1: column update mixing X11/X12 (and X21/X22) by phi[i-1].
+        if i > 0 {
+            let (c, s) = (phi[i - 1].cos(), phi[i - 1].sin());
+            for r in i..p {
+                x11[r][i] = c * x11[r][i] - s * x12[r][i - 1];
+            }
+            for r in i..mp {
+                x21[r][i] = c * x21[r][i] - s * x22[r][i - 1];
+            }
+        }
+        // Step 2: theta[i] = atan2(||X21(i:,i)||, ||X11(i:,i)||).
+        let n21 = (i..mp).map(|r| x21[r][i] * x21[r][i]).sum::<f64>().sqrt();
+        let n11 = (i..p).map(|r| x11[r][i] * x11[r][i]).sum::<f64>().sqrt();
+        theta[i] = n21.atan2(n11);
+        // Step 3: column reflectors P1, P2.
+        {
+            let mut tail: Vec<f64> = (i + 1..p).map(|r| x11[r][i]).collect();
+            let (beta, tau) = dlarfgp(x11[i][i], &mut tail);
+            x11[i][i] = beta;
+            for (k, r) in (i + 1..p).enumerate() {
+                x11[r][i] = tail[k];
+            }
+            taup1[i] = tau;
+        }
+        {
+            let mut tail: Vec<f64> = (i + 1..mp).map(|r| x21[r][i]).collect();
+            let (beta, tau) = dlarfgp(x21[i][i], &mut tail);
+            x21[i][i] = beta;
+            for (k, r) in (i + 1..mp).enumerate() {
+                x21[r][i] = tail[k];
+            }
+            taup2[i] = tau;
+        }
+        // Step 4: apply P1/P2 from the left.
+        let v1: Vec<f64> = (i + 1..p).map(|r| x11[r][i]).collect();
+        if i + 1 < q {
+            apply_left_block(x11, i, i + 1, q, &v1, taup1[i]);
+        }
+        apply_left_block(x12, i, i, q, &v1, taup1[i]);
+        let v2: Vec<f64> = (i + 1..mp).map(|r| x21[r][i]).collect();
+        if i + 1 < q {
+            apply_left_block(x21, i, i + 1, q, &v2, taup2[i]);
+        }
+        apply_left_block(x22, i, i, q, &v2, taup2[i]);
+        // Step 5: row update mixing X11/X21 (and X12/X22) by theta[i].
+        let (st, ct) = (theta[i].sin(), theta[i].cos());
+        if i + 1 < q {
+            for col in i + 1..q {
+                x11[i][col] = -st * x11[i][col] + ct * x21[i][col];
+            }
+        }
+        for col in i..q {
+            x12[i][col] = -st * x12[i][col] + ct * x22[i][col];
+        }
+        // Step 6: phi[i] = atan2(||X11(i,i+1:)||, ||X12(i,i:)||).
+        if i + 1 < q {
+            let n11r = (i + 1..q).map(|c| x11[i][c] * x11[i][c]).sum::<f64>().sqrt();
+            let n12r = (i..q).map(|c| x12[i][c] * x12[i][c]).sum::<f64>().sqrt();
+            phi[i] = n11r.atan2(n12r);
+        }
+        // Step 7: row reflectors Q1, Q2.
+        if i + 1 < q {
+            let mut tail: Vec<f64> = (i + 2..q).map(|c| x11[i][c]).collect();
+            let (beta, tau) = dlarfgp(x11[i][i + 1], &mut tail);
+            x11[i][i + 1] = beta;
+            for (k, c) in (i + 2..q).enumerate() {
+                x11[i][c] = tail[k];
+            }
+            tauq1[i] = tau;
+        }
+        {
+            let mut tail: Vec<f64> = (i + 1..q).map(|c| x12[i][c]).collect();
+            let (beta, tau) = dlarfgp(x12[i][i], &mut tail);
+            x12[i][i] = beta;
+            for (k, c) in (i + 1..q).enumerate() {
+                x12[i][c] = tail[k];
+            }
+            tauq2[i] = tau;
+        }
+        // Step 8: apply Q1/Q2 from the right to the trailing rows.
+        if i + 1 < q {
+            let w1: Vec<f64> = (i + 2..q).map(|c| x11[i][c]).collect();
+            apply_right_block(x11, i + 1, p, i + 1, &w1, tauq1[i]);
+            apply_right_block(x21, i + 1, mp, i + 1, &w1, tauq1[i]);
+        }
+        let w2: Vec<f64> = (i + 1..q).map(|c| x12[i][c]).collect();
+        if i + 1 < p {
+            apply_right_block(x12, i + 1, p, i, &w2, tauq2[i]);
+        }
+        if i + 1 < mp {
+            apply_right_block(x22, i + 1, mp, i, &w2, tauq2[i]);
+        }
+    }
+    OrbdbResult {
+        theta,
+        phi,
+        taup1,
+        taup2,
+        tauq1,
+        tauq2,
+    }
+}
+
+fn identity(n: usize) -> Vec<Vec<f64>> {
+    let mut a = vec![vec![0.0; n]; n];
+    for (i, row) in a.iter_mut().enumerate() {
+        row[i] = 1.0;
+    }
+    a
+}
+
+// Accumulate the orthogonal factor from column Householder reflectors stored in
+// `src` (reflector i: v[i]=1, tail = src[i+1..n][i]).
+pub(crate) fn build_from_col_reflectors(src: &[Vec<f64>], tau: &[f64], n: usize) -> Vec<Vec<f64>> {
+    let mut a = identity(n);
+    for i in (0..tau.len()).rev() {
+        let tail: Vec<f64> = (i + 1..n).map(|r| src[r][i]).collect();
+        apply_left_block(&mut a, i, 0, n, &tail, tau[i]);
+    }
+    a
+}
+
+// Accumulate the orthogonal factor from row Householder reflectors stored in
+// `src` (reflector i: w[i+col_off]=1, tail = src[i][i+col_off+1..n]).
+pub(crate) fn build_from_row_reflectors(
+    src: &[Vec<f64>],
+    tau: &[f64],
+    n: usize,
+    col_off: usize,
+) -> Vec<Vec<f64>> {
+    let mut a = identity(n);
+    for i in (0..tau.len()).rev() {
+        let cs = i + col_off;
+        let tail: Vec<f64> = (cs + 1..n).map(|c| src[i][c]).collect();
+        apply_left_block(&mut a, cs, 0, n, &tail, tau[i]);
+    }
+    a
+}
+
+/// Build the `2q×2q` bidiagonal-block matrix `BigB` from the CS angles, matching
+/// LAPACK's `DBBCSD` input layout (balanced square, `M-P-Q = 0`).
+pub(crate) fn build_bigb(theta: &[f64], phi: &[f64], q: usize) -> Vec<Vec<f64>> {
+    let m = 2 * q;
+    let mut b = vec![vec![0.0; m]; m];
+    let c: Vec<f64> = theta.iter().map(|t| t.cos()).collect();
+    let s: Vec<f64> = theta.iter().map(|t| t.sin()).collect();
+    // This matches the bidiagonalization produced by [`dorbdb_balanced`]:
+    // B11 upper-bidiagonal, B22 lower-bidiagonal (LAPACK DBBCSD convention),
+    // B12 lower-bidiagonal but sign-negated, and B21 upper-bidiagonal positive.
+    for i in 0..q {
+        let cp_prev = if i == 0 { 1.0 } else { phi[i - 1].cos() };
+        let cp_cur = if i + 1 < q { phi[i].cos() } else { 1.0 };
+        b[i][i] = c[i] * cp_prev; // B11 D
+        b[q + i][i] = s[i] * cp_prev; // B21 D (positive)
+        b[i][q + i] = -s[i] * cp_cur; // B12 D (negated)
+        b[q + i][q + i] = c[i] * cp_cur; // B22 D
+    }
+    for i in 0..q.saturating_sub(1) {
+        let sp = phi[i].sin();
+        b[i][i + 1] = -s[i] * sp; // B11 superdiagonal
+        b[i + 1][q + i] = -c[i + 1] * sp; // B12 subdiagonal (negated)
+        b[q + i][i + 1] = c[i] * sp; // B21 superdiagonal (positive, upper)
+        b[q + i + 1][q + i] = -s[i + 1] * sp; // B22 subdiagonal
+    }
+    b
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn matmul(a: &[Vec<f64>], b: &[Vec<f64>]) -> Vec<Vec<f64>> {
+        let (n, k, m) = (a.len(), b.len(), b[0].len());
+        let mut c = vec![vec![0.0; m]; n];
+        for i in 0..n {
+            for l in 0..k {
+                let ail = a[i][l];
+                for j in 0..m {
+                    c[i][j] += ail * b[l][j];
+                }
+            }
+        }
+        c
+    }
+    fn transpose(a: &[Vec<f64>]) -> Vec<Vec<f64>> {
+        let (n, m) = (a.len(), a[0].len());
+        let mut t = vec![vec![0.0; n]; m];
+        for i in 0..n {
+            for j in 0..m {
+                t[j][i] = a[i][j];
+            }
+        }
+        t
+    }
+
+    // Deterministic 2q×2q orthogonal matrix (Q factor of a pseudo-random matrix).
+    fn orthogonal(m: usize, seed: u64) -> Vec<Vec<f64>> {
+        let mut s = seed;
+        let mut a = vec![vec![0.0; m]; m];
+        for row in a.iter_mut() {
+            for v in row.iter_mut() {
+                s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                *v = ((s >> 11) as f64) / ((1u64 << 53) as f64) - 0.5;
+            }
+        }
+        crate::qr(&a, crate::DecompOptions::default()).unwrap().q
+    }
+
+    #[test]
+    fn dorbdb_reconstructs_balanced() {
+        for &q in &[2usize, 3, 4, 5, 6] {
+            for seed in 0..4u64 {
+                let m = 2 * q;
+                let x = orthogonal(m, seed + q as u64 * 100);
+                let mut x11: Vec<Vec<f64>> = x[..q].iter().map(|r| r[..q].to_vec()).collect();
+                let mut x12: Vec<Vec<f64>> = x[..q].iter().map(|r| r[q..].to_vec()).collect();
+                let mut x21: Vec<Vec<f64>> = x[q..].iter().map(|r| r[..q].to_vec()).collect();
+                let mut x22: Vec<Vec<f64>> = x[q..].iter().map(|r| r[q..].to_vec()).collect();
+
+                let res = dorbdb_balanced(&mut x11, &mut x12, &mut x21, &mut x22, q);
+                let p1 = build_from_col_reflectors(&x11, &res.taup1, q);
+                let p2 = build_from_col_reflectors(&x21, &res.taup2, q);
+                let q1 = build_from_row_reflectors(&x11, &res.tauq1, q, 1);
+                let q2 = build_from_row_reflectors(&x12, &res.tauq2, q, 0);
+                let bigb = build_bigb(&res.theta, &res.phi, q);
+
+                // diag(P1,P2) · BigB · diag(Q1,Q2)ᵀ
+                let mut big_p = vec![vec![0.0; m]; m];
+                let mut big_q = vec![vec![0.0; m]; m];
+                for i in 0..q {
+                    for j in 0..q {
+                        big_p[i][j] = p1[i][j];
+                        big_p[q + i][q + j] = p2[i][j];
+                        big_q[i][j] = q1[i][j];
+                        big_q[q + i][q + j] = q2[i][j];
+                    }
+                }
+                let bqt = transpose(&big_q);
+                let recon = matmul(&matmul(&big_p, &bigb), &bqt);
+                let mut maxerr = 0.0f64;
+                for i in 0..m {
+                    for j in 0..m {
+                        maxerr = maxerr.max((recon[i][j] - x[i][j]).abs());
+                    }
+                }
+                assert!(
+                    maxerr < 1e-10,
+                    "q={q} seed={seed}: reconstruction error {maxerr:.3e}"
+                );
+            }
+        }
+    }
 
     // Reconstruct H = I - tau v vᵀ and apply to x; check H·x = beta·e1, beta≥0.
     fn check_reflector(x: &[f64]) {
