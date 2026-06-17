@@ -2539,6 +2539,11 @@ pub fn gaussian_mixture(
             "max_iter must be positive".to_string(),
         ));
     }
+    if !tol.is_finite() || tol < 0.0 {
+        return Err(ClusterError::InvalidArgument(
+            "tol must be finite and non-negative".to_string(),
+        ));
+    }
     if !(reg_covar.is_finite() && reg_covar >= 0.0) {
         return Err(ClusterError::InvalidArgument(
             "reg_covar must be finite and non-negative".to_string(),
@@ -2748,6 +2753,11 @@ pub fn gaussian_mixture_full(
     if max_iter == 0 {
         return Err(ClusterError::InvalidArgument(
             "max_iter must be positive".to_string(),
+        ));
+    }
+    if !tol.is_finite() || tol < 0.0 {
+        return Err(ClusterError::InvalidArgument(
+            "tol must be finite and non-negative".to_string(),
         ));
     }
     if !(reg_covar.is_finite() && reg_covar > 0.0) {
@@ -7133,6 +7143,8 @@ mod tests {
         assert!(gaussian_mixture(&data, 0, 10, 1e-3, 1e-6, 1).is_err());
         assert!(gaussian_mixture(&data, n + 1, 10, 1e-3, 1e-6, 1).is_err());
         assert!(gaussian_mixture(&data, 2, 0, 1e-3, 1e-6, 1).is_err());
+        assert!(gaussian_mixture(&data, 2, 10, f64::NAN, 1e-6, 1).is_err());
+        assert!(gaussian_mixture(&data, 2, 10, -1e-3, 1e-6, 1).is_err());
         assert!(gaussian_mixture(&data, 2, 10, 1e-3, -1.0, 1).is_err()); // reg_covar < 0
     }
 
@@ -7207,6 +7219,8 @@ mod tests {
 
         assert!(gaussian_mixture_full(&data, 2, 10, 1e-3, 0.0, 1).is_err()); // reg_covar must be > 0
         assert!(gaussian_mixture_full(&data, 2, 0, 1e-3, 1e-6, 1).is_err());
+        assert!(gaussian_mixture_full(&data, 2, 10, f64::INFINITY, 1e-6, 1).is_err());
+        assert!(gaussian_mixture_full(&data, 2, 10, -1e-3, 1e-6, 1).is_err());
         assert!(gaussian_mixture_full(&[], 2, 10, 1e-3, 1e-6, 1).is_err());
     }
 
