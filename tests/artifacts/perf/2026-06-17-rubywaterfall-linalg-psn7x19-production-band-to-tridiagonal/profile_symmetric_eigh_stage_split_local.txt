@@ -1,0 +1,53 @@
+Script started on 2026-06-17 03:01:31-04:00 [COMMAND="env RCH_REQUIRE_REMOTE=0 CARGO_TARGET_DIR=/data/projects/.scratch/frankenscipy-rubywaterfall-psn7x17-target cargo test -j 1 -p fsci-linalg --lib symmetric_eigh_native_stage_breakdown_probe --release --locked -- --ignored --nocapture" <not executed on terminal>]
+warning: unused variable: `total`
+  --> crates/fsci-fft/src/helpers.rs:58:9
+   |
+58 |     let total: usize = input.len();
+   |         ^^^^^ help: if this is intentional, prefix it with an underscore: `_total`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `fsci-fft` (lib) generated 1 warning (run `cargo fix --lib -p fsci-fft` to apply 1 suggestion)
+    Finished `release` profile [optimized] target(s) in 0.15s
+     Running unittests src/lib.rs (/data/projects/.scratch/frankenscipy-rubywaterfall-psn7x17-target/release/deps/fsci_linalg-c4287c5201a86d5d)
+
+running 1 test
+SYMMETRIC_EIGH_NATIVE_STAGE_PROFILE_BEGIN
+shape=400x400
+reduction_storage=lower
+reduction_ms=13.865564
+tridiagonal_eigen_ms=10.344970
+backtransform_ms=6.895181
+sort_ms=0.917507
+worker_count=64
+max_abs_diff=5.24025267623073887e-13
+values_digest=0x0dbbde75b75c8612
+SYMMETRIC_EIGH_NATIVE_STAGE_PROFILE_END
+SYMMETRIC_EIGH_NATIVE_STAGE_PROFILE_BEGIN
+shape=800x800
+reduction_storage=lower
+reduction_ms=107.966982
+tridiagonal_eigen_ms=40.287203
+backtransform_ms=40.239793
+sort_ms=3.232749
+worker_count=64
+max_abs_diff=1.71418435002124170e-12
+values_digest=0x4461962827bdb038
+SYMMETRIC_EIGH_NATIVE_STAGE_PROFILE_END
+SYMMETRIC_EIGH_NATIVE_STAGE_PROFILE_BEGIN
+shape=1200x1200
+reduction_storage=lower
+reduction_ms=365.980855
+tridiagonal_eigen_ms=90.414421
+backtransform_ms=119.430150
+sort_ms=6.562060
+worker_count=64
+max_abs_diff=1.79412040779425297e-12
+values_digest=0x2fc45e1f18ceb0ab
+SYMMETRIC_EIGH_NATIVE_STAGE_PROFILE_END
+test tests::symmetric_eigh_native_stage_breakdown_probe ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 479 filtered out; finished in 1.35s
+
+
+Script done on 2026-06-17 03:01:33-04:00 [COMMAND_EXIT_CODE="0"]

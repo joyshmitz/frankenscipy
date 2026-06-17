@@ -1,0 +1,229 @@
+Script started on 2026-06-17 02:58:58-04:00 [COMMAND="env RCH_REQUIRE_REMOTE=0 CARGO_TARGET_DIR=/data/projects/.scratch/frankenscipy-rubywaterfall-psn7x17-target hyperfine --warmup 1 --runs 5 --show-output 'cargo test -j 1 -p fsci-linalg --lib eig_banded_eigenvectors_perf_probe --release --locked -- --ignored --nocapture'" <not executed on terminal>]
+Benchmark 1: cargo test -j 1 -p fsci-linalg --lib eig_banded_eigenvectors_perf_probe --release --locked -- --ignored --nocapture
+warning: unused variable: `total`
+  --> crates/fsci-fft/src/helpers.rs:58:9
+   |
+58 |     let total: usize = input.len();
+   |         ^^^^^ help: if this is intentional, prefix it with an underscore: `_total`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `fsci-fft` (lib) generated 1 warning (run `cargo fix --lib -p fsci-fft` to apply 1 suggestion)
+    Finished `release` profile [optimized] target(s) in 0.12s
+     Running unittests src/lib.rs (/data/projects/.scratch/frankenscipy-rubywaterfall-psn7x17-target/release/deps/fsci_linalg-c4287c5201a86d5d)
+
+running 1 test
+EIG_BANDED_EIGENVECTORS_PERF_BEGIN
+shape=128x128
+bandwidth=32
+candidate_ms=3.654164
+max_abs_diff=7.56017470848746598e-12
+residual=1.64845914696343243e-12
+candidate_values_digest=0xd6dbb9200f65bd92
+candidate_vectors_digest=0x6cf3573b5b50c275
+dense_values_digest=0x7bdbe4513b62a730
+EIG_BANDED_EIGENVECTORS_PERF_END
+EIG_BANDED_EIGENVECTORS_PERF_BEGIN
+shape=256x256
+bandwidth=32
+candidate_ms=14.542679
+max_abs_diff=4.16093826061114669e-11
+residual=7.73070496506989002e-12
+candidate_values_digest=0x09ed4d367faab431
+candidate_vectors_digest=0xc32797c0d224a75a
+dense_values_digest=0xbc00c62977653f28
+EIG_BANDED_EIGENVECTORS_PERF_END
+test proptest_tests::eig_banded_eigenvectors_perf_probe ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 479 filtered out; finished in 0.05s
+
+warning: unused variable: `total`
+  --> crates/fsci-fft/src/helpers.rs:58:9
+   |
+58 |     let total: usize = input.len();
+   |         ^^^^^ help: if this is intentional, prefix it with an underscore: `_total`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `fsci-fft` (lib) generated 1 warning (run `cargo fix --lib -p fsci-fft` to apply 1 suggestion)
+    Finished `release` profile [optimized] target(s) in 0.11s
+     Running unittests src/lib.rs (/data/projects/.scratch/frankenscipy-rubywaterfall-psn7x17-target/release/deps/fsci_linalg-c4287c5201a86d5d)
+
+running 1 test
+EIG_BANDED_EIGENVECTORS_PERF_BEGIN
+shape=128x128
+bandwidth=32
+candidate_ms=3.642072
+max_abs_diff=7.56017470848746598e-12
+residual=1.64845914696343243e-12
+candidate_values_digest=0xd6dbb9200f65bd92
+candidate_vectors_digest=0x6cf3573b5b50c275
+dense_values_digest=0x7bdbe4513b62a730
+EIG_BANDED_EIGENVECTORS_PERF_END
+EIG_BANDED_EIGENVECTORS_PERF_BEGIN
+shape=256x256
+bandwidth=32
+candidate_ms=14.669839
+max_abs_diff=4.16093826061114669e-11
+residual=7.73070496506989002e-12
+candidate_values_digest=0x09ed4d367faab431
+candidate_vectors_digest=0xc32797c0d224a75a
+dense_values_digest=0xbc00c62977653f28
+EIG_BANDED_EIGENVECTORS_PERF_END
+test proptest_tests::eig_banded_eigenvectors_perf_probe ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 479 filtered out; finished in 0.05s
+
+warning: unused variable: `total`
+  --> crates/fsci-fft/src/helpers.rs:58:9
+   |
+58 |     let total: usize = input.len();
+   |         ^^^^^ help: if this is intentional, prefix it with an underscore: `_total`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `fsci-fft` (lib) generated 1 warning (run `cargo fix --lib -p fsci-fft` to apply 1 suggestion)
+    Finished `release` profile [optimized] target(s) in 0.11s
+     Running unittests src/lib.rs (/data/projects/.scratch/frankenscipy-rubywaterfall-psn7x17-target/release/deps/fsci_linalg-c4287c5201a86d5d)
+
+running 1 test
+EIG_BANDED_EIGENVECTORS_PERF_BEGIN
+shape=128x128
+bandwidth=32
+candidate_ms=3.841108
+max_abs_diff=7.56017470848746598e-12
+residual=1.64845914696343243e-12
+candidate_values_digest=0xd6dbb9200f65bd92
+candidate_vectors_digest=0x6cf3573b5b50c275
+dense_values_digest=0x7bdbe4513b62a730
+EIG_BANDED_EIGENVECTORS_PERF_END
+EIG_BANDED_EIGENVECTORS_PERF_BEGIN
+shape=256x256
+bandwidth=32
+candidate_ms=16.014925
+max_abs_diff=4.16093826061114669e-11
+residual=7.73070496506989002e-12
+candidate_values_digest=0x09ed4d367faab431
+candidate_vectors_digest=0xc32797c0d224a75a
+dense_values_digest=0xbc00c62977653f28
+EIG_BANDED_EIGENVECTORS_PERF_END
+test proptest_tests::eig_banded_eigenvectors_perf_probe ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 479 filtered out; finished in 0.05s
+
+warning: unused variable: `total`
+  --> crates/fsci-fft/src/helpers.rs:58:9
+   |
+58 |     let total: usize = input.len();
+   |         ^^^^^ help: if this is intentional, prefix it with an underscore: `_total`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `fsci-fft` (lib) generated 1 warning (run `cargo fix --lib -p fsci-fft` to apply 1 suggestion)
+    Finished `release` profile [optimized] target(s) in 0.10s
+     Running unittests src/lib.rs (/data/projects/.scratch/frankenscipy-rubywaterfall-psn7x17-target/release/deps/fsci_linalg-c4287c5201a86d5d)
+
+running 1 test
+EIG_BANDED_EIGENVECTORS_PERF_BEGIN
+shape=128x128
+bandwidth=32
+candidate_ms=3.321615
+max_abs_diff=7.56017470848746598e-12
+residual=1.64845914696343243e-12
+candidate_values_digest=0xd6dbb9200f65bd92
+candidate_vectors_digest=0x6cf3573b5b50c275
+dense_values_digest=0x7bdbe4513b62a730
+EIG_BANDED_EIGENVECTORS_PERF_END
+EIG_BANDED_EIGENVECTORS_PERF_BEGIN
+shape=256x256
+bandwidth=32
+candidate_ms=13.419694
+max_abs_diff=4.16093826061114669e-11
+residual=7.73070496506989002e-12
+candidate_values_digest=0x09ed4d367faab431
+candidate_vectors_digest=0xc32797c0d224a75a
+dense_values_digest=0xbc00c62977653f28
+EIG_BANDED_EIGENVECTORS_PERF_END
+test proptest_tests::eig_banded_eigenvectors_perf_probe ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 479 filtered out; finished in 0.05s
+
+warning: unused variable: `total`
+  --> crates/fsci-fft/src/helpers.rs:58:9
+   |
+58 |     let total: usize = input.len();
+   |         ^^^^^ help: if this is intentional, prefix it with an underscore: `_total`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `fsci-fft` (lib) generated 1 warning (run `cargo fix --lib -p fsci-fft` to apply 1 suggestion)
+    Finished `release` profile [optimized] target(s) in 0.11s
+     Running unittests src/lib.rs (/data/projects/.scratch/frankenscipy-rubywaterfall-psn7x17-target/release/deps/fsci_linalg-c4287c5201a86d5d)
+
+running 1 test
+EIG_BANDED_EIGENVECTORS_PERF_BEGIN
+shape=128x128
+bandwidth=32
+candidate_ms=3.524690
+max_abs_diff=7.56017470848746598e-12
+residual=1.64845914696343243e-12
+candidate_values_digest=0xd6dbb9200f65bd92
+candidate_vectors_digest=0x6cf3573b5b50c275
+dense_values_digest=0x7bdbe4513b62a730
+EIG_BANDED_EIGENVECTORS_PERF_END
+EIG_BANDED_EIGENVECTORS_PERF_BEGIN
+shape=256x256
+bandwidth=32
+candidate_ms=16.822633
+max_abs_diff=4.16093826061114669e-11
+residual=7.73070496506989002e-12
+candidate_values_digest=0x09ed4d367faab431
+candidate_vectors_digest=0xc32797c0d224a75a
+dense_values_digest=0xbc00c62977653f28
+EIG_BANDED_EIGENVECTORS_PERF_END
+test proptest_tests::eig_banded_eigenvectors_perf_probe ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 479 filtered out; finished in 0.05s
+
+warning: unused variable: `total`
+  --> crates/fsci-fft/src/helpers.rs:58:9
+   |
+58 |     let total: usize = input.len();
+   |         ^^^^^ help: if this is intentional, prefix it with an underscore: `_total`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `fsci-fft` (lib) generated 1 warning (run `cargo fix --lib -p fsci-fft` to apply 1 suggestion)
+    Finished `release` profile [optimized] target(s) in 0.11s
+     Running unittests src/lib.rs (/data/projects/.scratch/frankenscipy-rubywaterfall-psn7x17-target/release/deps/fsci_linalg-c4287c5201a86d5d)
+
+running 1 test
+EIG_BANDED_EIGENVECTORS_PERF_BEGIN
+shape=128x128
+bandwidth=32
+candidate_ms=3.543876
+max_abs_diff=7.56017470848746598e-12
+residual=1.64845914696343243e-12
+candidate_values_digest=0xd6dbb9200f65bd92
+candidate_vectors_digest=0x6cf3573b5b50c275
+dense_values_digest=0x7bdbe4513b62a730
+EIG_BANDED_EIGENVECTORS_PERF_END
+EIG_BANDED_EIGENVECTORS_PERF_BEGIN
+shape=256x256
+bandwidth=32
+candidate_ms=15.062402
+max_abs_diff=4.16093826061114669e-11
+residual=7.73070496506989002e-12
+candidate_values_digest=0x09ed4d367faab431
+candidate_vectors_digest=0xc32797c0d224a75a
+dense_values_digest=0xbc00c62977653f28
+EIG_BANDED_EIGENVECTORS_PERF_END
+test proptest_tests::eig_banded_eigenvectors_perf_probe ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 479 filtered out; finished in 0.05s
+
+  Time (mean ± σ):     210.6 ms ±   5.6 ms    [User: 150.3 ms, System: 74.2 ms]
+  Range (min … max):   202.0 ms … 217.6 ms    5 runs
+ 
+
+Script done on 2026-06-17 02:58:59-04:00 [COMMAND_EXIT_CODE="0"]
