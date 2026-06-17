@@ -595,6 +595,107 @@ impl MultivariateNormalQmc {
     }
 }
 
+/// Quasi-Monte Carlo sampler for a multinomial distribution, mirroring
+/// `scipy.stats.qmc.MultinomialQMC`.
+///
+/// Each sample draws `n_trials` one-dimensional quasi-random points from an
+/// **unscrambled** Sobol' sequence (bit-identical to
+/// `scipy.stats.qmc.Sobol(1, scramble=False)`) and bins them by the cumulative
+/// category probabilities, yielding the per-category counts. The Sobol' engine
+/// advances across successive samples (it is not reset), matching SciPy.
+///
+/// ```
+/// use fsci_stats::qmc::MultinomialQmc;
+/// let mut d = MultinomialQmc::new(&[0.2, 0.5, 0.3], 20).unwrap();
+/// let counts = d.sample(1); // one row of 3 category counts summing to 20
+/// assert_eq!(counts.iter().sum::<u64>(), 20);
+/// ```
+pub struct MultinomialQmc {
+    pvals: Vec<f64>,
+    /// Cumulative sum of `pvals` (last element ≈ 1.0).
+    p_cumulative: Vec<f64>,
+    n_trials: usize,
+    engine: SobolSampler,
+}
+
+impl MultinomialQmc {
+    /// Construct from category probabilities `pvals` (non-negative, summing to
+    /// 1) and the number of trials per sample.
+    pub fn new(pvals: &[f64], n_trials: usize) -> Result<Self, StatsError> {
+        if pvals.is_empty() {
+            return Err(StatsError::InvalidArgument(
+                "MultinomialQmc: pvals must be non-empty".to_string(),
+            ));
+        }
+        if pvals.iter().any(|&p| p < 0.0) {
+            return Err(StatsError::InvalidArgument(
+                "MultinomialQmc: elements of pvals must be non-negative".to_string(),
+            ));
+        }
+        let sum: f64 = pvals.iter().sum();
+        // SciPy: np.isclose(sum(pvals), 1) — atol 1e-8, rtol 1e-5.
+        if (sum - 1.0).abs() > 1e-8 + 1e-5 {
+            return Err(StatsError::InvalidArgument(
+                "MultinomialQmc: elements of pvals must sum to 1".to_string(),
+            ));
+        }
+        let mut p_cumulative = vec![0.0; pvals.len()];
+        let mut acc = 0.0;
+        for (slot, &p) in p_cumulative.iter_mut().zip(pvals.iter()) {
+            acc += p;
+            *slot = acc;
+        }
+        let engine = SobolSampler::new(1)?;
+        Ok(Self {
+            pvals: pvals.to_vec(),
+            p_cumulative,
+            n_trials,
+            engine,
+        })
+    }
+
+    /// Number of categories (`pvals.len()`).
+    pub fn categories(&self) -> usize {
+        self.pvals.len()
+    }
+
+    /// Reset the underlying Sobol' engine to the start of the sequence.
+    pub fn reset(&mut self) {
+        self.engine.reset();
+    }
+
+    /// First index `l` with `value <= p_cumulative[l]` (SciPy's `_categorize`
+    /// binary search: strict `>` steps right, so boundary values bin low).
+    fn find_index(&self, value: f64) -> usize {
+        let mut l = 0usize;
+        let mut r = self.p_cumulative.len() - 1;
+        while l < r {
+            let m = (l + r) / 2;
+            if value > self.p_cumulative[m] {
+                l = m + 1;
+            } else {
+                r = m;
+            }
+        }
+        l
+    }
+
+    /// Draw `n` multinomial samples, returned row-major as `n` rows of
+    /// `categories()` counts (each row sums to `n_trials`).
+    pub fn sample(&mut self, n: usize) -> Vec<u64> {
+        let k = self.pvals.len();
+        let mut out = vec![0u64; n * k];
+        for i in 0..n {
+            let draws = self.engine.sample(self.n_trials);
+            let row = &mut out[i * k..i * k + k];
+            for &d in &draws {
+                row[self.find_index(d)] += 1;
+            }
+        }
+        out
+    }
+}
+
 /// Upper-triangular Cholesky root `R` (`d×d`) with `R.T @ R == cov`, i.e.
 /// `R == cholesky(cov).T` (matching `numpy.linalg.cholesky(cov).T`). Errors if
 /// `cov` is not positive-definite.
@@ -2920,6 +3021,27 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn multinomial_qmc_matches_scipy() {
+        // scipy.stats.qmc.MultinomialQMC([0.2, 0.5, 0.3], n_trials=20,
+        //     engine=Sobol(1, scramble=False)).random(4).astype(int).
+        let mut dist = MultinomialQmc::new(&[0.2, 0.5, 0.3], 20).unwrap();
+        let got = dist.sample(4);
+        let expected: [u64; 12] = [5, 10, 5, 4, 10, 6, 3, 10, 7, 4, 10, 6];
+        assert_eq!(got, expected.to_vec());
+        // Each row sums to n_trials.
+        for chunk in got.chunks(3) {
+            assert_eq!(chunk.iter().sum::<u64>(), 20);
+        }
+    }
+
+    #[test]
+    fn multinomial_qmc_rejects_bad_pvals() {
+        assert!(MultinomialQmc::new(&[0.5, 0.6], 10).is_err()); // sum != 1
+        assert!(MultinomialQmc::new(&[-0.1, 1.1], 10).is_err()); // negative
+        assert!(MultinomialQmc::new(&[], 10).is_err()); // empty
     }
 
     #[test]
