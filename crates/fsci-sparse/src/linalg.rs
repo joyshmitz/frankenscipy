@@ -1045,6 +1045,11 @@ fn validate_iterative_finite_inputs(
     x0: Option<&[f64]>,
     options: IterativeSolveOptions,
 ) -> SparseResult<()> {
+    if !options.tol.is_finite() || options.tol < 0.0 {
+        return Err(SparseError::InvalidArgument {
+            message: "tol must be finite and non-negative".to_string(),
+        });
+    }
     let must_check = options.check_finite || options.mode == RuntimeMode::Hardened;
     let x0_has_non_finite = x0.is_some_and(|initial| initial.iter().any(|v| !v.is_finite()));
     if must_check
@@ -1616,6 +1621,11 @@ pub fn lgmres(
     if b.len() != n {
         return Err(SparseError::IncompatibleShape {
             message: "rhs length must match matrix rows".to_string(),
+        });
+    }
+    if !options.tol.is_finite() || options.tol < 0.0 {
+        return Err(SparseError::InvalidArgument {
+            message: "tol must be finite and non-negative".to_string(),
         });
     }
 
@@ -6009,6 +6019,25 @@ mod tests {
     }
 
     #[test]
+    fn cg_rejects_invalid_tolerance() {
+        let a = spd_csr_3x3();
+        let b = vec![5.0, 5.0, 3.0];
+        let nan_tol = IterativeSolveOptions {
+            tol: f64::NAN,
+            ..IterativeSolveOptions::default()
+        };
+        let err = cg(&a, &b, None, nan_tol).expect_err("nan tolerance");
+        assert!(matches!(err, SparseError::InvalidArgument { .. }));
+
+        let negative_tol = IterativeSolveOptions {
+            tol: -1e-6,
+            ..IterativeSolveOptions::default()
+        };
+        let err = cg(&a, &b, None, negative_tol).expect_err("negative tolerance");
+        assert!(matches!(err, SparseError::InvalidArgument { .. }));
+    }
+
+    #[test]
     fn cg_max_iter_limits_iterations() {
         let a = spd_csr_3x3();
         let b = vec![5.0, 5.0, 3.0];
@@ -6152,6 +6181,25 @@ mod tests {
         )
         .expect_err("hardened finite guard");
         assert!(matches!(err, SparseError::NonFiniteInput { .. }));
+    }
+
+    #[test]
+    fn gmres_rejects_invalid_tolerance() {
+        let a = nonsymmetric_csr_3x3();
+        let b = vec![5.0, 7.0, 4.0];
+        let infinite_tol = IterativeSolveOptions {
+            tol: f64::INFINITY,
+            ..IterativeSolveOptions::default()
+        };
+        let err = gmres(&a, &b, None, infinite_tol).expect_err("infinite tolerance");
+        assert!(matches!(err, SparseError::InvalidArgument { .. }));
+
+        let negative_tol = IterativeSolveOptions {
+            tol: -1e-6,
+            ..IterativeSolveOptions::default()
+        };
+        let err = gmres(&a, &b, None, negative_tol).expect_err("negative tolerance");
+        assert!(matches!(err, SparseError::InvalidArgument { .. }));
     }
 
     #[test]
@@ -7420,6 +7468,25 @@ mod tests {
         .expect("csr");
         let err = lgmres(&a, &[1.0, 2.0], None, LgmresOptions::default()).expect_err("non-square");
         assert!(matches!(err, SparseError::InvalidShape { .. }));
+    }
+
+    #[test]
+    fn lgmres_rejects_invalid_tolerance() {
+        let a = diagonally_dominant_csr_3x3();
+        let b = vec![7.0, 7.0, 7.0];
+        let nan_tol = LgmresOptions {
+            tol: f64::NAN,
+            ..LgmresOptions::default()
+        };
+        let err = lgmres(&a, &b, None, nan_tol).expect_err("nan tolerance");
+        assert!(matches!(err, SparseError::InvalidArgument { .. }));
+
+        let negative_tol = LgmresOptions {
+            tol: -1e-6,
+            ..LgmresOptions::default()
+        };
+        let err = lgmres(&a, &b, None, negative_tol).expect_err("negative tolerance");
+        assert!(matches!(err, SparseError::InvalidArgument { .. }));
     }
 
     #[test]
