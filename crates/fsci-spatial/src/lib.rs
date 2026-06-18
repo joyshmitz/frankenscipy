@@ -5126,6 +5126,42 @@ impl RigidTransform {
         }
     }
 
+    /// Apply the transform to many points (the realistic point-cloud workload).
+    ///
+    /// Byte-identical to mapping [`apply`](Self::apply), but the rotation matrix
+    /// (and, for `inverse`, the inverse rotation) is built ONCE rather than per
+    /// point.
+    #[must_use]
+    pub fn apply_many(&self, points: &[[f64; 3]], inverse: bool) -> Vec<[f64; 3]> {
+        let t = self.translation;
+        if inverse {
+            let m = self.rotation.inv().as_matrix();
+            points
+                .iter()
+                .map(|&[x, y, z]| {
+                    let (sx, sy, sz) = (x - t[0], y - t[1], z - t[2]);
+                    [
+                        m[0][0] * sx + m[0][1] * sy + m[0][2] * sz,
+                        m[1][0] * sx + m[1][1] * sy + m[1][2] * sz,
+                        m[2][0] * sx + m[2][1] * sy + m[2][2] * sz,
+                    ]
+                })
+                .collect()
+        } else {
+            let m = self.rotation.as_matrix();
+            points
+                .iter()
+                .map(|&[x, y, z]| {
+                    [
+                        m[0][0] * x + m[0][1] * y + m[0][2] * z + t[0],
+                        m[1][0] * x + m[1][1] * y + m[1][2] * z + t[1],
+                        m[2][0] * x + m[2][1] * y + m[2][2] * z + t[2],
+                    ]
+                })
+                .collect()
+        }
+    }
+
     /// Compose two transforms: `self.compose(other)` applies `other` first,
     /// then `self` (equivalent to scipy's `self * other`).
     #[must_use]
@@ -5597,6 +5633,25 @@ mod tests {
         );
         // At a knot, returns the input rotation.
         close_quat(sp.evaluate(2.5).as_quat(), quats[2], "knot@2.5");
+    }
+
+    #[test]
+    fn rigid_transform_apply_many_matches_apply() {
+        // apply_many (matrix precomputed once) must be byte-identical to per-point apply.
+        let r = Rotation::from_quat([
+            0.022260026714733816,
+            0.43967973954090955,
+            0.3604234056503559,
+            0.8223631719059994,
+        ]);
+        let tf = RigidTransform::from_components([1.0, 2.0, 3.0], r);
+        let pts = [[0.5, -1.0, 2.0], [1.0, 0.0, 0.0], [-3.0, 2.5, -0.25]];
+        for inverse in [false, true] {
+            let batch = tf.apply_many(&pts, inverse);
+            for (p, b) in pts.iter().zip(batch.iter()) {
+                assert_eq!(*b, tf.apply(*p, inverse), "apply_many({inverse}) != apply at {p:?}");
+            }
+        }
     }
 
     #[test]
