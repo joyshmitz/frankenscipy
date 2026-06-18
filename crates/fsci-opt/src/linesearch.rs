@@ -43,9 +43,16 @@ pub fn validate_wolfe_params(params: WolfeParams) -> Result<(), OptError> {
             detail: String::from("Wolfe constants must satisfy 0 < c1 < c2 < 1"),
         });
     }
-    if params.amin <= 0.0 || params.amax <= 0.0 || params.amin >= params.amax {
+    if !params.amin.is_finite()
+        || !params.amax.is_finite()
+        || params.amin <= 0.0
+        || params.amax <= 0.0
+        || params.amin >= params.amax
+    {
         return Err(OptError::InvalidArgument {
-            detail: String::from("line-search alpha bounds must satisfy 0 < amin < amax"),
+            detail: String::from(
+                "line-search alpha bounds must be finite and satisfy 0 < amin < amax",
+            ),
         });
     }
     if params.maxiter == 0 {
@@ -1022,6 +1029,24 @@ mod tests {
         })
         .expect_err("invalid params");
         assert!(matches!(err, OptError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn wolfe_params_reject_non_finite_alpha_bounds() {
+        for (amin, amax) in [
+            (f64::NAN, 50.0),
+            (f64::INFINITY, 50.0),
+            (1.0e-8, f64::NAN),
+            (1.0e-8, f64::INFINITY),
+        ] {
+            let err = validate_wolfe_params(WolfeParams {
+                amin,
+                amax,
+                ..WolfeParams::default()
+            })
+            .expect_err("non-finite alpha bounds should fail");
+            assert!(matches!(err, OptError::InvalidArgument { .. }));
+        }
     }
 
     #[test]
