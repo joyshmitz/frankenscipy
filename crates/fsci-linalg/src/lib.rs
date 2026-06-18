@@ -16729,6 +16729,33 @@ mod tests {
     }
 
     #[test]
+    fn pinv_satisfies_moore_penrose() {
+        // Property: A·A⁺·A = A (Moore-Penrose cond. 1) for a 3x2 full-column-rank
+        // matrix; rank should be 2. Default cutoff is rtol=max(M,N)*eps (scipy).
+        let a = vec![vec![1.0, 2.0], vec![3.0, 4.0], vec![5.0, 6.0]];
+        let res = pinv(&a, PinvOptions::default()).expect("pinv");
+        assert_eq!(res.rank, 2, "rank");
+        let p = &res.pseudo_inverse; // 2x3
+        let (m, n) = (3usize, 2usize);
+        let mut aap = vec![vec![0.0; m]; m];
+        for (i, row) in aap.iter_mut().enumerate() {
+            for (j, slot) in row.iter_mut().enumerate() {
+                *slot = (0..n).map(|k| a[i][k] * p[k][j]).sum();
+            }
+        }
+        for i in 0..m {
+            for j in 0..n {
+                let recon: f64 = (0..m).map(|k| aap[i][k] * a[k][j]).sum();
+                assert!(
+                    (recon - a[i][j]).abs() < 1e-9,
+                    "AApA[{i}][{j}]: {recon} vs {}",
+                    a[i][j]
+                );
+            }
+        }
+    }
+
+    #[test]
     fn cholesky_match_scipy() {
         // scipy.linalg.cholesky(A, lower=True) for SPD A=[[4,2,2],[2,5,3],[2,3,6]]
         // gives L=[[2,0,0],[1,2,0],[1,1,2]] (L·Lᵀ = A).
