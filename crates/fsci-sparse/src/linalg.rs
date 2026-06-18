@@ -2378,6 +2378,7 @@ pub fn qmr(
             message: "rhs length must match matrix rows".to_string(),
         });
     }
+    validate_iterative_finite_inputs(a, b, x0, options)?;
 
     let max_iter = options.max_iter.unwrap_or(n * 10);
 
@@ -7657,6 +7658,38 @@ mod tests {
         let b = vec![1.0, 2.0];
         let err = qmr(&a, &b, None, IterativeSolveOptions::default()).expect_err("non-square");
         assert!(matches!(err, SparseError::InvalidShape { .. }));
+    }
+
+    #[test]
+    fn qmr_hardened_rejects_non_finite_when_check_disabled() {
+        let a = diagonally_dominant_csr_3x3();
+        let err = qmr(
+            &a,
+            &[f64::NAN, 1.0, 1.0],
+            None,
+            hardened_unchecked_iterative_options(),
+        )
+        .expect_err("hardened finite guard");
+        assert!(matches!(err, SparseError::NonFiniteInput { .. }));
+    }
+
+    #[test]
+    fn qmr_rejects_invalid_tolerance() {
+        let a = diagonally_dominant_csr_3x3();
+        let b = vec![6.0, 11.0, 15.0];
+        let infinite_tol = IterativeSolveOptions {
+            tol: f64::INFINITY,
+            ..IterativeSolveOptions::default()
+        };
+        let err = qmr(&a, &b, None, infinite_tol).expect_err("infinite tolerance");
+        assert!(matches!(err, SparseError::InvalidArgument { .. }));
+
+        let negative_tol = IterativeSolveOptions {
+            tol: -1e-6,
+            ..IterativeSolveOptions::default()
+        };
+        let err = qmr(&a, &b, None, negative_tol).expect_err("negative tolerance");
+        assert!(matches!(err, SparseError::InvalidArgument { .. }));
     }
 
     #[test]
