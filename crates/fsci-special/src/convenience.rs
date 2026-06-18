@@ -7316,6 +7316,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn rgamma_scalar_poles_match_scipy() {
+        // scipy.special.rgamma: 1/Γ is exactly 0 at the non-positive-integer poles
+        // (including 0, where Γ→+inf so 1/Γ→0), and finite elsewhere.
+        use crate::gamma::rgamma_scalar;
+        let m = RuntimeMode::Strict;
+        assert_eq!(rgamma_scalar(0.0, m).unwrap(), 0.0);
+        assert_eq!(rgamma_scalar(-1.0, m).unwrap(), 0.0);
+        assert_eq!(rgamma_scalar(-2.0, m).unwrap(), 0.0);
+        assert!(
+            (rgamma_scalar(5.0, m).unwrap() - 0.041_666_666_666_666_664).abs() < 1e-15,
+            "rgamma(5)"
+        );
+        assert!(
+            (rgamma_scalar(0.5, m).unwrap() - 0.564_189_583_547_756_3).abs() < 1e-15,
+            "rgamma(0.5)"
+        );
+    }
+
+    #[test]
     fn comb_perm_match_scipy() {
         // scipy.special.comb/perm: direct path, k>n edge, and the log-gamma path.
         use crate::gamma::{comb, perm};
