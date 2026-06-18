@@ -16749,6 +16749,36 @@ mod tests {
     }
 
     #[test]
+    fn qr_reconstructs_and_is_orthonormal() {
+        // Property test (no sign assumption): A = Q·R, Qᵀ·Q = I, R upper-tri.
+        let a = vec![
+            vec![12.0, -51.0, 4.0],
+            vec![6.0, 167.0, -68.0],
+            vec![-4.0, 24.0, -41.0],
+        ];
+        let res = qr(&a, DecompOptions::default()).expect("qr");
+        let n = 3;
+        for i in 0..n {
+            for j in 0..n {
+                let s: f64 = (0..n).map(|k| res.q[i][k] * res.r[k][j]).sum();
+                assert!((s - a[i][j]).abs() < 1e-9, "QR[{i}][{j}]: {s} vs {}", a[i][j]);
+            }
+        }
+        for i in 0..n {
+            for j in 0..n {
+                let s: f64 = (0..n).map(|k| res.q[k][i] * res.q[k][j]).sum();
+                let want = if i == j { 1.0 } else { 0.0 };
+                assert!((s - want).abs() < 1e-9, "QtQ[{i}][{j}]: {s} vs {want}");
+            }
+        }
+        for i in 0..n {
+            for j in 0..i {
+                assert!(res.r[i][j].abs() < 1e-9, "R not upper at [{i}][{j}]");
+            }
+        }
+    }
+
+    #[test]
     fn det_solve_eigvalsh_match_scipy() {
         // A = [[4,1,2],[1,3,0],[2,0,5]] (symmetric). Golden from scipy.linalg /
         // numpy 1.17.1: det=43, solve(A,[1,2,3]), eigvalsh ascending.
