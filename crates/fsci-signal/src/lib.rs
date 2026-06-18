@@ -18365,6 +18365,16 @@ mod tests {
     }
 
     #[test]
+    fn find_peaks_match_scipy() {
+        // scipy.signal.find_peaks default: indices of local maxima.
+        let r = find_peaks(
+            &[1.0, 3.0, 1.0, 4.0, 1.0, 5.0, 2.0, 6.0, 1.0],
+            FindPeaksOptions::default(),
+        );
+        assert_eq!(r.peaks, vec![1, 3, 5, 7]);
+    }
+
+    #[test]
     fn detrend_match_scipy() {
         // scipy.signal.detrend linear (remove best-fit line) and constant (mean).
         let lin = detrend(&[2.0, 4.0, 6.0, 9.0, 10.0], DetrendType::Linear).expect("linear");
