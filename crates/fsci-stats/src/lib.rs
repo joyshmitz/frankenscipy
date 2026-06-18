@@ -61359,6 +61359,16 @@ mod tests {
     }
 
     #[test]
+    fn invweibull_pdf_cdf_match_scipy() {
+        // Exact scipy.stats.invweibull(c=2). The InvWeibull suite covers entropy,
+        // variance, skew/kurt, and ppf but no exact pdf/cdf at a point.
+        let w = InvWeibull::new(2.0);
+        assert!((w.pdf(1.0) - 0.735_758_882_342_884_7).abs() < 1e-12, "pdf(1)");
+        assert!((w.pdf(2.0) - 0.194_700_195_767_851_22).abs() < 1e-12, "pdf(2)");
+        assert!((w.cdf(1.0) - 0.367_879_441_171_442_33).abs() < 1e-12, "cdf(1)=exp(-1)");
+    }
+
+    #[test]
     fn invweibull_ppf_matches_scipy_reference_values() {
         let dist = InvWeibull::new(3.0);
         let qs = [0.001, 0.1, 0.25, 0.5, 0.75, 0.9, 0.999];
