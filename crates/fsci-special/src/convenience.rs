@@ -7316,6 +7316,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn rel_entr_kl_div_match_scipy() {
+        // scipy.special.rel_entr/kl_div edge cases (x=0, y=0, x<0) + a normal value.
+        assert_eq!(rel_entr_scalar(0.0, 5.0), 0.0);
+        assert_eq!(rel_entr_scalar(0.0, 0.0), 0.0);
+        assert_eq!(rel_entr_scalar(2.0, 0.0), f64::INFINITY);
+        assert_eq!(rel_entr_scalar(-1.0, 2.0), f64::INFINITY);
+        assert!(
+            (rel_entr_scalar(2.0, 3.0) - -0.810_930_216_216_328_8).abs() < 1e-15,
+            "rel_entr(2,3)"
+        );
+        assert_eq!(kl_div_scalar(0.0, 5.0), 5.0);
+        assert!(
+            (kl_div_scalar(2.0, 3.0) - 0.189_069_783_783_671_23).abs() < 1e-15,
+            "kl_div(2,3)"
+        );
+    }
+
+    #[test]
     fn xlogy_xlog1py_match_scipy() {
         // scipy.special.xlogy/xlog1py: x==0 forces 0 (even 0*log(0)=0), else
         // x*log(y); xlog1py uses log1p for small-y precision.
