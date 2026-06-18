@@ -14687,15 +14687,26 @@ pub fn resample_poly_with_padtype(
 
     // Design anti-aliasing FIR filter.
     let cutoff = 1.0 / (up.max(down) as f64);
-    let n_taps = 2 * 10 * up.max(down) + 1; // ~10 periods per side
+    let n_taps = up
+        .max(down)
+        .checked_mul(20)
+        .and_then(|value| value.checked_add(1))
+        .ok_or_else(|| {
+            SignalError::InvalidArgument("resample_poly rate is too large".to_string())
+        })?; // ~10 periods per side
+    let n_taps_i64 = i64::try_from(n_taps).map_err(|_| {
+        SignalError::InvalidArgument("resample_poly rate is too large".to_string())
+    })?;
     let h = firwin(n_taps, &[cutoff], FirWindow::Kaiser(5.0), true)?;
     // Scale filter by up to compensate for upsampling gain.
     let h_scaled: Vec<f64> = h.iter().map(|&v| v * up as f64).collect();
 
     // Polyphase implementation to avoid materializing the full upsampled signal.
     // Equivalent to: upsample -> convolve(mode=Same) -> downsample.
-    let upsampled_len = input.len() * up;
-    let half_taps = (n_taps - 1) as i64 / 2;
+    let upsampled_len = input.len().checked_mul(up).ok_or_else(|| {
+        SignalError::InvalidArgument("resample_poly output length overflows usize".to_string())
+    })?;
+    let half_taps = (n_taps_i64 - 1) / 2;
     let n_out = upsampled_len.div_ceil(down);
 
     // Output sample `j` reads upsampled position `i = j*down` and is an independent FIR
@@ -22677,6 +22688,15 @@ mod tests {
         assert_eq!(
             err,
             SignalError::InvalidArgument("cval has no effect when padtype is mean".to_string())
+        );
+    }
+
+    #[test]
+    fn resample_poly_rejects_overflowing_rate_lengths() {
+        let err = resample_poly(&[1.0, 2.0], usize::MAX, 1).expect_err("overflowing rate");
+        assert_eq!(
+            err,
+            SignalError::InvalidArgument("resample_poly rate is too large".to_string())
         );
     }
 
