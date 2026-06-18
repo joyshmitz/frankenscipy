@@ -819,9 +819,13 @@ fn prefilter_spline_coefficients(
             .collect();
         let line_count = reduced_shape.iter().product::<usize>().max(1);
         let mut next = current.clone();
+        // idx/line hoisted out of the per-line loop and reused (idx is fully set
+        // each line from reduced_idx + the axis sweep; line is cleared and refilled)
+        // -> byte-identical, saving 2×line_count allocations. frankenscipy-7nlc4.
+        let mut idx = vec![0usize; ndim];
+        let mut line = Vec::with_capacity(axis_len);
         for line_flat in 0..line_count {
             let reduced_idx = unravel_with_shape(line_flat, &reduced_shape);
-            let mut idx = vec![0usize; ndim];
             let mut src = 0usize;
             for (d, slot) in idx.iter_mut().enumerate() {
                 if d == axis {
@@ -830,7 +834,7 @@ fn prefilter_spline_coefficients(
                 *slot = reduced_idx[src];
                 src += 1;
             }
-            let mut line = Vec::with_capacity(axis_len);
+            line.clear();
             for i in 0..axis_len {
                 idx[axis] = i;
                 line.push(current.get(&idx));
