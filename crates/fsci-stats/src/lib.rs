@@ -71499,6 +71499,32 @@ mod tests {
     }
 
     #[test]
+    fn rankdata_methods_match_scipy() {
+        // scipy.stats.rankdata(a, method=...) for [1,2,2,3,3,3], all tie methods.
+        let a = [1.0, 2.0, 2.0, 3.0, 3.0, 3.0];
+        assert_eq!(
+            rankdata(&a, Some("average")).unwrap(),
+            vec![1.0, 2.5, 2.5, 5.0, 5.0, 5.0]
+        );
+        assert_eq!(
+            rankdata(&a, Some("min")).unwrap(),
+            vec![1.0, 2.0, 2.0, 4.0, 4.0, 4.0]
+        );
+        assert_eq!(
+            rankdata(&a, Some("max")).unwrap(),
+            vec![1.0, 3.0, 3.0, 6.0, 6.0, 6.0]
+        );
+        assert_eq!(
+            rankdata(&a, Some("dense")).unwrap(),
+            vec![1.0, 2.0, 2.0, 3.0, 3.0, 3.0]
+        );
+        assert_eq!(
+            rankdata(&a, Some("ordinal")).unwrap(),
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+        );
+    }
+
+    #[test]
     fn linregress_match_scipy() {
         // scipy.stats.linregress 1.17.1 for x=[1..5], y=[2.1,3.9,6.1,8.0,9.9].
         let x = [1.0, 2.0, 3.0, 4.0, 5.0];
