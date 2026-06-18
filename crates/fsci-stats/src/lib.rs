@@ -61393,6 +61393,16 @@ mod tests {
     }
 
     #[test]
+    fn betaprime_pdf_cdf_match_scipy() {
+        // Exact scipy.stats.betaprime(2,3). The BetaPrime suite has entropy and
+        // skew/kurt but no exact pdf/cdf at a point.
+        let bp = BetaPrime::new(2.0, 3.0);
+        assert!((bp.pdf(0.5) - 0.790_123_456_790_123_2).abs() < 1e-12, "pdf(0.5)");
+        assert!((bp.pdf(1.0) - 0.375).abs() < 1e-12, "pdf(1)");
+        assert!((bp.cdf(1.0) - 0.6875).abs() < 1e-12, "cdf(1)");
+    }
+
+    #[test]
     fn betaprime_skewness_and_kurtosis_match_scipy_reference_values() {
         // scipy.stats.betaprime(a,b).stats(moments='sk'). Skew needs
         // b > 3, kurt needs b > 4. All three cases here satisfy both.
