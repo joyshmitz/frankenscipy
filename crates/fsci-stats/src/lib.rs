@@ -61173,6 +61173,16 @@ mod tests {
     }
 
     #[test]
+    fn doubleweibull_pdf_cdf_match_scipy() {
+        // Exact scipy.stats.dweibull(c=2). The DoubleWeibull suite covers entropy,
+        // ppf, and skew/kurt but no exact pdf/cdf at a point (the dist is symmetric).
+        let w = DoubleWeibull::new(2.0);
+        assert!((w.pdf(0.5) - 0.389_400_391_535_702_44).abs() < 1e-12, "pdf(0.5)");
+        assert!((w.pdf(-1.0) - 0.367_879_441_171_442_33).abs() < 1e-12, "pdf(-1) neg branch");
+        assert!((w.cdf(0.5) - 0.610_599_608_464_297_5).abs() < 1e-12, "cdf(0.5)");
+    }
+
+    #[test]
     fn doubleweibull_ppf_matches_scipy_reference_values() {
         let dist = DoubleWeibull::new(2.5);
         let qs = [0.001, 0.1, 0.25, 0.5, 0.75, 0.9, 0.999];
