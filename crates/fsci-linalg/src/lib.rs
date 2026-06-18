@@ -16796,6 +16796,31 @@ mod tests {
     }
 
     #[test]
+    fn matrix_helpers2_match_numpy() {
+        // More previously-untested linalg helpers vs numpy/analytic identities.
+        let rank_def = vec![vec![1.0, 2.0], vec![2.0, 4.0]];
+        assert_eq!(numerical_rank(&rank_def, 1e-10, DecompOptions::default()).unwrap(), 1);
+        let full = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
+        assert_eq!(numerical_rank(&full, 1e-10, DecompOptions::default()).unwrap(), 2);
+        // eye_k(n,m,k) matches numpy.eye: superdiagonal for k=1.
+        assert_eq!(
+            eye_k(3, 3, 1),
+            vec![vec![0.0, 1.0, 0.0], vec![0.0, 0.0, 1.0], vec![0.0, 0.0, 0.0]]
+        );
+        // antidiag places v top-right -> bottom-left.
+        assert_eq!(
+            antidiag(&[1.0, 2.0, 3.0]),
+            vec![vec![0.0, 0.0, 1.0], vec![0.0, 2.0, 0.0], vec![3.0, 0.0, 0.0]]
+        );
+        let a = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        assert_eq!(matvec(&a, &[1.0, 1.0]).unwrap(), vec![3.0, 7.0]);
+        let b = vec![vec![5.0, 5.0], vec![5.0, 5.0]];
+        assert_eq!(mat_add(&a, &b), vec![vec![6.0, 7.0], vec![8.0, 9.0]]);
+        assert_eq!(mat_sub(&b, &a), vec![vec![4.0, 3.0], vec![2.0, 1.0]]);
+        assert_eq!(mat_scale(&a, 2.0), vec![vec![2.0, 4.0], vec![6.0, 8.0]]);
+    }
+
+    #[test]
     fn matrix_helpers_match_numpy() {
         // Several previously-untested linalg helpers vs numpy/analytic identities.
         assert_eq!(
