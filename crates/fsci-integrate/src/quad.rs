@@ -1597,9 +1597,9 @@ fn validate_cubature_inputs(
             detail: "cubature bounds must have the same dimensionality".to_string(),
         });
     }
-    if options.atol.is_nan() || options.rtol.is_nan() || options.atol < 0.0 || options.rtol < 0.0 {
+    if !options.atol.is_finite() || !options.rtol.is_finite() || options.atol < 0.0 || options.rtol < 0.0 {
         return Err(IntegrateValidationError::QuadInvalidTolerance {
-            detail: "cubature tolerances must be non-negative".to_string(),
+            detail: "cubature tolerances must be finite and non-negative".to_string(),
         });
     }
     for point in &options.points {
@@ -4031,6 +4031,24 @@ mod tests {
             tolerance_err,
             IntegrateValidationError::QuadInvalidTolerance { .. }
         ));
+
+        for options in [
+            CubatureOptions {
+                rtol: f64::INFINITY,
+                ..CubatureOptions::default()
+            },
+            CubatureOptions {
+                atol: f64::INFINITY,
+                ..CubatureOptions::default()
+            },
+        ] {
+            let tolerance_err = cubature_scalar(|x| x[0], &[0.0], &[1.0], options)
+                .expect_err("infinite tolerance");
+            assert!(matches!(
+                tolerance_err,
+                IntegrateValidationError::QuadInvalidTolerance { .. }
+            ));
+        }
 
         let point_err = cubature_scalar(
             |x| x[0],
