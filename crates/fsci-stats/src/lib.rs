@@ -30490,13 +30490,18 @@ pub fn page_trend_test(data: &[&[f64]]) -> PageTrendResult {
 
     // Rank within each row
     let mut rank_sums = vec![0.0; k];
+    // Per-row scratch hoisted out of the loop: indexed is cleared+rebuilt each row,
+    // ranks is fully overwritten (the while loop assigns every column) -> byte-
+    // identical, saving 2×n_rows allocations. frankenscipy-26zjo.
+    let mut indexed: Vec<(usize, f64)> = Vec::with_capacity(k);
+    let mut ranks = vec![0.0; k];
 
     for row in data {
         // Get ranks for this row
-        let mut indexed: Vec<(usize, f64)> = row.iter().copied().enumerate().collect();
+        indexed.clear();
+        indexed.extend(row.iter().copied().enumerate());
         indexed.sort_by(|a, b| a.1.total_cmp(&b.1));
 
-        let mut ranks = vec![0.0; k];
         let mut i = 0;
         while i < k {
             let mut j = i + 1;
