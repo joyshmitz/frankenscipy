@@ -11259,6 +11259,7 @@ pub fn gauspuls(t: &[f64], fc: f64, bw: f64, bwr: f64) -> Result<GauspulsResult,
             "bwr must be a negative dB level; got {bwr}"
         )));
     }
+    validate_real_values_finite(t, "gauspuls time samples must be finite")?;
 
     let r = 10.0_f64.powf(bwr / 20.0);
     let pi_fc_bw = std::f64::consts::PI * fc * bw;
@@ -22535,6 +22536,18 @@ mod tests {
         // bwr must be negative dB.
         assert!(gauspuls(&[0.0], 1000.0, 0.5, 0.0).is_err());
         assert!(gauspuls(&[0.0], 1000.0, 0.5, 6.0).is_err());
+        assert_eq!(
+            gauspuls(&[0.0, f64::NAN], 1000.0, 0.5, -6.0),
+            Err(SignalError::NonFiniteInput {
+                detail: "gauspuls time samples must be finite".to_string(),
+            })
+        );
+        assert_eq!(
+            gauspuls(&[0.0, f64::INFINITY], 1000.0, 0.5, -6.0),
+            Err(SignalError::NonFiniteInput {
+                detail: "gauspuls time samples must be finite".to_string(),
+            })
+        );
     }
 
     // ── normalize_filter tests ─────────────────────────────────────
