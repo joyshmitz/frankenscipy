@@ -8207,6 +8207,28 @@ impl VonMises {
         Self { kappa, loc }
     }
 
+    /// Log-density at many angles, hoisting `ln(2π)` and `ln I₀(κ)` out of the
+    /// per-point loop. Byte-identical to mapping `logpdf` (same `− ln2π − ln_i0`
+    /// subtraction order).
+    #[must_use]
+    pub fn logpdf_many(&self, xs: &[f64]) -> Vec<f64> {
+        let ln_2pi = (2.0 * PI).ln();
+        let ln_i0 = fsci_special::log_ive_scalar(0.0, self.kappa) + self.kappa;
+        xs.iter()
+            .map(|&x| self.kappa * (x - self.loc).cos() - ln_2pi - ln_i0)
+            .collect()
+    }
+
+    /// Density at many angles; hoists the `2π·I₀(κ)` denominator (Bessel I₀) like
+    /// [`logpdf_many`](Self::logpdf_many). Byte-identical to mapping `pdf`.
+    #[must_use]
+    pub fn pdf_many(&self, xs: &[f64]) -> Vec<f64> {
+        let denom = 2.0 * PI * modified_bessel_i(0.0, self.kappa);
+        xs.iter()
+            .map(|&x| (self.kappa * (x - self.loc).cos()).exp() / denom)
+            .collect()
+    }
+
     fn period_start(&self) -> f64 {
         self.loc - PI
     }
@@ -47799,6 +47821,19 @@ mod tests {
         let d = Dirichlet::new(&[1.0, 1.0]);
         assert!(d.pdf(&[0.5, 0.6]).abs() < 1e-300);
         assert!(d.pdf(&[-0.1, 1.1]).abs() < 1e-300);
+    }
+
+    #[test]
+    fn vonmises_pdf_many_matches_pdf() {
+        // Batch pdf_many/logpdf_many (Bessel I0 hoisted) byte-identical to per-point.
+        let vm = VonMises::new(2.5, 0.3);
+        let xs = [-2.0, -0.5, 0.0, 0.3, 1.2, 3.0];
+        let pm = vm.pdf_many(&xs);
+        let lpm = vm.logpdf_many(&xs);
+        for (i, &x) in xs.iter().enumerate() {
+            assert_eq!(pm[i], vm.pdf(x), "pdf_many != pdf at {x}");
+            assert_eq!(lpm[i], vm.logpdf(x), "logpdf_many != logpdf at {x}");
+        }
     }
 
     #[test]
