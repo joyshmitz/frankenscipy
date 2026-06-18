@@ -5693,6 +5693,33 @@ mod tests {
     }
 
     #[test]
+    fn coordinate_transforms_roundtrip_and_analytic() {
+        use std::f64::consts::FRAC_PI_2;
+        // Spherical: (r, theta=polar angle from +z, phi=azimuth). All four
+        // transforms were previously untested.
+        let (r, theta, phi) = cartesian_to_spherical(1.0, 0.0, 0.0);
+        assert!(
+            (r - 1.0).abs() < 1e-12 && (theta - FRAC_PI_2).abs() < 1e-12 && phi.abs() < 1e-12,
+            "c2s (1,0,0)"
+        );
+        // Round-trip spherical.
+        let (x, y, z) = spherical_to_cartesian(2.0, 1.0, 0.5);
+        let (r2, t2, p2) = cartesian_to_spherical(x, y, z);
+        assert!(
+            (r2 - 2.0).abs() < 1e-12 && (t2 - 1.0).abs() < 1e-12 && (p2 - 0.5).abs() < 1e-12,
+            "spherical roundtrip"
+        );
+        // Cylindrical direct + round-trip.
+        let (rho, th, zc) = cartesian_to_cylindrical(3.0, 4.0, 5.0);
+        assert!((rho - 5.0).abs() < 1e-12 && (zc - 5.0).abs() < 1e-12, "c2cyl (3,4,5)");
+        let (xx, yy, zz) = cylindrical_to_cartesian(rho, th, zc);
+        assert!(
+            (xx - 3.0).abs() < 1e-12 && (yy - 4.0).abs() < 1e-12 && (zz - 5.0).abs() < 1e-12,
+            "cyl roundtrip"
+        );
+    }
+
+    #[test]
     fn spatial_vector_helpers_match_analytic() {
         // Previously-untested spatial vector helpers vs analytic identities.
         assert!((dot(&[1.0, 2.0, 3.0], &[4.0, 5.0, 6.0]) - 32.0).abs() < 1e-12, "dot");
