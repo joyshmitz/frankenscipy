@@ -140,3 +140,25 @@ condition so dead ends are not repeated casually.
   helper is neutral/slower, reject this exact norm helper and do not retry
   unless allocation profiles show BDF Newton scaled-vector churn is again a
   top-5 integrate hotspot.
+
+## 2026-06-18 - frankenscipy-8l8r1.120 - Radau streamed scaled RMS norms
+
+- Agent: cod-a / MistyBirch
+- Lever: replace Radau's per-step scaled-vector materialization for Newton
+  correction norms and embedded error norms with streamed scaled RMS
+  accumulation over the LU solve output and scale slices.
+- Status: pending batch-test. This is a code-first commit per campaign
+  instruction; only local `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a
+  cargo check -p fsci-integrate` is expected before commit.
+- Correctness guard: `streamed_scaled_norms_match_collected_reference` proves
+  the streamed error norm and stage-major Newton correction norm match the old
+  collect-then-`rms_norm` path bit-for-bit for the same scaled values; existing
+  Radau stiff-solver tests cover convergence and validation semantics.
+- Benchmark guard: compare focused stiff `solve_ivp(method=Radau)` workloads
+  against the pre-change commit on the same worker/target dir, especially
+  medium/high-dimensional states and rejected-step stabilised error estimates.
+- Retry condition: keep only if same-worker focused Radau timings improve
+  without `nfev`, `njev`, `nlu`, accepted-step, final-state, tolerance, or
+  rejection-pattern drift; if streamed norms are neutral/slower, reject this
+  exact formulation and do not retry unless allocation profiles show Radau
+  scaled-norm Vec churn is again a top-5 integrate hotspot.

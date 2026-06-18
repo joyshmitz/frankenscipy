@@ -37,12 +37,29 @@ pub struct RadauSolverConfig<'a> {
     pub mode: RuntimeMode,
 }
 
+#[cfg(test)]
 fn rms_norm(x: &[f64]) -> f64 {
     if x.is_empty() {
         return 0.0;
     }
     let s: f64 = x.iter().map(|&v| v * v).sum();
     (s / x.len() as f64).sqrt()
+}
+
+fn rms_norm_from_scaled_squares(sum_squares: f64, len: usize) -> f64 {
+    if len == 0 {
+        return 0.0;
+    }
+    (sum_squares / len as f64).sqrt()
+}
+
+fn rms_norm_scaled(values: impl Iterator<Item = f64>, scale: &[f64]) -> f64 {
+    let mut sum_squares = 0.0;
+    for (value, &scale_j) in values.zip(scale.iter()) {
+        let scaled = value / scale_j;
+        sum_squares += scaled * scaled;
+    }
+    rms_norm_from_scaled_squares(sum_squares, scale.len())
 }
 
 /// Radau IIA solver state.
@@ -368,15 +385,16 @@ impl RadauSolver {
                     bad = true;
                     break;
                 };
-                let mut dz_scaled = vec![0.0; 3 * n];
+                let mut dz_scaled_squares = 0.0;
                 for i in 0..3 {
                     for j in 0..n {
                         let d = dz[i * n + j];
                         z[i][j] += d;
-                        dz_scaled[i * n + j] = d / scale[j];
+                        let scaled = d / scale[j];
+                        dz_scaled_squares += scaled * scaled;
                     }
                 }
-                let dz_norm = rms_norm(&dz_scaled);
+                let dz_norm = rms_norm_from_scaled_squares(dz_scaled_squares, 3 * n);
                 let rate = dz_norm_old.map(|old| if old > 0.0 { dz_norm / old } else { 0.0 });
                 if let Some(r) = rate
                     && (r >= 1.0
@@ -415,8 +433,7 @@ impl RadauSolver {
                 .solve(&err_rhs)
                 .map(|v| (0..n).map(|j| v[j]).collect::<Vec<_>>())
                 .unwrap_or_else(|| vec![f64::NAN; n]);
-            let mut error_norm =
-                rms_norm(&(0..n).map(|j| error[j] / err_scale[j]).collect::<Vec<_>>());
+            let mut error_norm = rms_norm_scaled(error.iter().copied(), &err_scale);
 
             // Stabilised estimate after a rejection (scipy): re-solve with f(t, y+error).
             if rejected && error_norm > 1.0 {
@@ -426,8 +443,7 @@ impl RadauSolver {
                 err_rhs = DVector::<f64>::from_iterator(n, (0..n).map(|j| fp[j] + ze[j]));
                 if let Some(v) = lu_real.solve(&err_rhs) {
                     error = (0..n).map(|j| v[j]).collect();
-                    error_norm =
-                        rms_norm(&(0..n).map(|j| error[j] / err_scale[j]).collect::<Vec<_>>());
+                    error_norm = rms_norm_scaled(error.iter().copied(), &err_scale);
                 }
             }
 
@@ -474,6 +490,37 @@ impl RadauSolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn streamed_scaled_norms_match_collected_reference() {
+        let scale = [0.5, 2.0, 0.25];
+        let error = [2.0, -3.0, 0.25];
+        let error_scaled: Vec<f64> = error
+            .iter()
+            .zip(scale.iter())
+            .map(|(&value, &scale_j)| value / scale_j)
+            .collect();
+        assert_eq!(
+            rms_norm_scaled(error.iter().copied(), &scale).to_bits(),
+            rms_norm(&error_scaled).to_bits()
+        );
+
+        let dz = [2.0, -3.0, 0.25, 10.0, -1.5, 0.75, -8.0, 4.0, 1.25];
+        let mut collected = Vec::with_capacity(dz.len());
+        let mut streamed_squares = 0.0;
+        for i in 0..3 {
+            for (j, &scale_j) in scale.iter().enumerate() {
+                let scaled = dz[i * scale.len() + j] / scale_j;
+                collected.push(scaled);
+                streamed_squares += scaled * scaled;
+            }
+        }
+        assert_eq!(
+            rms_norm_from_scaled_squares(streamed_squares, dz.len()).to_bits(),
+            rms_norm(&collected).to_bits()
+        );
+        assert_eq!(rms_norm_from_scaled_squares(0.0, 0).to_bits(), 0.0f64.to_bits());
+    }
 
     #[test]
     fn radau_first_step_hardened_rejects_non_finite_f0() {
