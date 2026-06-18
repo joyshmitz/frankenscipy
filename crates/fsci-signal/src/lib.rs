@@ -3766,12 +3766,22 @@ pub fn autocorrelation(x: &[f64], max_lag: usize) -> Vec<f64> {
         .collect()
 }
 
+fn has_invalid_paired_spectral_bins(magnitudes: &[f64], freqs: &[f64]) -> bool {
+    magnitudes
+        .iter()
+        .zip(freqs.iter())
+        .any(|(&m, &f)| !m.is_finite() || m < 0.0 || !f.is_finite())
+}
+
 /// Compute the spectral centroid of a magnitude spectrum.
 ///
 /// Returns the weighted mean frequency.
 pub fn spectral_centroid(magnitudes: &[f64], freqs: &[f64]) -> f64 {
     if magnitudes.is_empty() || freqs.is_empty() {
         return 0.0;
+    }
+    if has_invalid_paired_spectral_bins(magnitudes, freqs) {
+        return f64::NAN;
     }
     let total: f64 = magnitudes.iter().zip(freqs.iter()).map(|(&m, _)| m).sum();
     if total == 0.0 {
@@ -3814,6 +3824,9 @@ pub fn spectral_rolloff(magnitudes: &[f64], freqs: &[f64], rolloff_percent: f64)
 pub fn spectral_bandwidth(magnitudes: &[f64], freqs: &[f64]) -> f64 {
     if magnitudes.is_empty() || freqs.is_empty() {
         return 0.0;
+    }
+    if has_invalid_paired_spectral_bins(magnitudes, freqs) {
+        return f64::NAN;
     }
     let centroid = spectral_centroid(magnitudes, freqs);
     let total: f64 = magnitudes.iter().zip(freqs.iter()).map(|(&m, _)| m).sum();
@@ -19541,6 +19554,23 @@ mod tests {
             (centroid - 25.0).abs() < 1e-12,
             "expected paired-sample centroid, got {centroid}"
         );
+    }
+
+    #[test]
+    fn spectral_centroid_and_bandwidth_invalid_bins_return_nan() {
+        for (magnitudes, freqs) in [
+            ([-1.0, 2.0], [10.0, 20.0]),
+            ([f64::NAN, 2.0], [10.0, 20.0]),
+            ([1.0, 2.0], [10.0, f64::INFINITY]),
+        ] {
+            let centroid = spectral_centroid(&magnitudes, &freqs);
+            let bandwidth = spectral_bandwidth(&magnitudes, &freqs);
+            assert!(centroid.is_nan(), "centroid should reject malformed bins");
+            assert!(bandwidth.is_nan(), "bandwidth should reject malformed bins");
+        }
+
+        assert_eq!(spectral_centroid(&[0.0, 0.0], &[10.0, 20.0]), 0.0);
+        assert_eq!(spectral_bandwidth(&[0.0, 0.0], &[10.0, 20.0]), 0.0);
     }
 
     #[test]
