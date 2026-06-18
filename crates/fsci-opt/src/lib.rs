@@ -1732,6 +1732,11 @@ where
             detail: "popsize must be at least 1".to_string(),
         });
     }
+    if opts.maxiter == 0 {
+        return Err(OptError::InvalidArgument {
+            detail: "maxiter must be greater than zero".to_string(),
+        });
+    }
     let pop_count = opts
         .popsize
         .checked_mul(ndim)
@@ -6295,6 +6300,18 @@ mod tests {
         let bounds = vec![(-1.0, 1.0)];
         let opts = DifferentialEvolutionOptions {
             popsize: 3,
+            ..Default::default()
+        };
+        let err = differential_evolution(sphere, &bounds, opts).unwrap_err();
+        assert!(matches!(err, crate::OptError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn de_rejects_zero_iteration_budget() {
+        let sphere = |x: &[f64]| -> f64 { x.iter().map(|xi| xi * xi).sum() };
+        let bounds = vec![(-1.0, 1.0)];
+        let opts = DifferentialEvolutionOptions {
+            maxiter: 0,
             ..Default::default()
         };
         let err = differential_evolution(sphere, &bounds, opts).unwrap_err();
