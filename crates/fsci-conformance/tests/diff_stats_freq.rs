@@ -11,10 +11,11 @@
 //! `(frequency, lowerlimit, binsize, extrapoints)`. The
 //! harness compares the frequency vector element-wise plus
 //! lowerlimit (= edges[0]) and binsize
-//! (= edges[1] - edges[0]).
+//! (= edges[1] - edges[0]), using SciPy's default padded
+//! limits.
 //!
-//! 3 datasets × 2 bin counts × 2 funcs × (frequency_max +
-//! lowerlimit + binsize) = 36 cases via subprocess. Tol 1e-12
+//! 4 datasets × 2 bin counts × 2 funcs × (frequency_max +
+//! lowerlimit + binsize) = 48 cases via subprocess. Tol 1e-12
 //! abs (closed-form histogram + cumulative sum).
 
 use std::collections::HashMap;
@@ -114,6 +115,7 @@ fn generate_query() -> OracleQuery {
                 1.0, 2.0, 2.0, 3.0, 3.0, 3.0, 4.0, 4.0, 5.0, 5.0, 6.0, 7.0, 8.0,
             ],
         ),
+        ("constant", vec![3.0, 3.0, 3.0, 3.0]),
     ];
     let bin_counts: [u64; 2] = [5, 10];
 
@@ -168,14 +170,13 @@ for case in q["points"]:
     bins = int(case["bins"])
     out = {"case_id": cid, "frequency": None, "lowerlimit": None, "binsize": None}
     try:
-        # scipy defaults to a padded range [min - 0.5*r/(b-1), max + ...];
-        # fsci uses the natural [min, max]. Pin defaultreallimits to align.
-        lo, hi = float(data.min()), float(data.max())
         if func == "relfreq":
-            res = stats.relfreq(data, numbins=bins, defaultreallimits=(lo, hi))
+            res = stats.relfreq(data, numbins=bins)
+            values = res.frequency
         else:
-            res = stats.cumfreq(data, numbins=bins, defaultreallimits=(lo, hi))
-        out["frequency"] = vec_or_none(res.frequency.tolist())
+            res = stats.cumfreq(data, numbins=bins)
+            values = res.cumcount
+        out["frequency"] = vec_or_none(values.tolist())
         out["lowerlimit"] = fnone(res.lowerlimit)
         out["binsize"] = fnone(res.binsize)
     except Exception:

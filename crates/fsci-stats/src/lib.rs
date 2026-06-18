@@ -42327,6 +42327,58 @@ pub fn histogram(data: &[f64], bins: usize) -> (Vec<usize>, Vec<f64>) {
     (counts, bin_edges)
 }
 
+fn scipy_frequency_histogram(data: &[f64], bins: usize) -> (Vec<usize>, Vec<f64>) {
+    if data.is_empty() || bins <= 1 || data.iter().any(|v| !v.is_finite()) {
+        return (vec![], vec![]);
+    }
+
+    let min_val = data.iter().cloned().fold(f64::INFINITY, |a: f64, b: f64| {
+        if a.is_nan() || b.is_nan() {
+            f64::NAN
+        } else {
+            a.min(b)
+        }
+    });
+    let max_val = data
+        .iter()
+        .cloned()
+        .fold(f64::NEG_INFINITY, |a: f64, b: f64| {
+            if a.is_nan() || b.is_nan() {
+                f64::NAN
+            } else {
+                a.max(b)
+            }
+        });
+
+    let padding = (max_val - min_val) / (2.0 * (bins - 1) as f64);
+    let lower = min_val - padding;
+    let upper = max_val + padding;
+    let (hist_lower, hist_upper) = if upper > lower {
+        (lower, upper)
+    } else {
+        // NumPy expands a degenerate explicit range by +/-0.5 before binning,
+        // while SciPy still reports the original lower limit.
+        (lower - 0.5, upper + 0.5)
+    };
+    let bin_width = (hist_upper - hist_lower) / bins as f64;
+
+    let mut counts = vec![0usize; bins];
+    for &v in data {
+        if v < hist_lower || v > hist_upper {
+            continue;
+        }
+        let bin = if v == hist_upper {
+            bins - 1
+        } else {
+            (((v - hist_lower) / bin_width).floor() as usize).min(bins - 1)
+        };
+        counts[bin] += 1;
+    }
+
+    let bin_edges = (0..=bins).map(|i| lower + i as f64 * bin_width).collect();
+    (counts, bin_edges)
+}
+
 /// Compute histogram bin edges using various strategies.
 ///
 /// Methods: "auto" (Sturges), "sqrt", "sturges", "rice", "scott", "fd" (Freedman-Diaconis).
@@ -42721,9 +42773,10 @@ pub fn binned_statistic_dd(
 
 /// Compute the relative frequency histogram.
 ///
-/// Returns (relative_frequencies, bin_edges).
+/// Returns `(relative_frequencies, bin_edges)`, using SciPy's default
+/// `cumfreq`/`relfreq` padded bin limits.
 pub fn relfreq(data: &[f64], bins: usize) -> (Vec<f64>, Vec<f64>) {
-    let (counts, edges) = histogram(data, bins);
+    let (counts, edges) = scipy_frequency_histogram(data, bins);
     let n = data.len() as f64;
     let rel: Vec<f64> = counts.iter().map(|&c| c as f64 / n).collect();
     (rel, edges)
@@ -42731,9 +42784,10 @@ pub fn relfreq(data: &[f64], bins: usize) -> (Vec<f64>, Vec<f64>) {
 
 /// Compute the cumulative frequency histogram.
 ///
-/// Returns (cumulative_frequencies, bin_edges).
+/// Returns `(cumulative_frequencies, bin_edges)`, using SciPy's default
+/// `cumfreq`/`relfreq` padded bin limits.
 pub fn cumfreq(data: &[f64], bins: usize) -> (Vec<f64>, Vec<f64>) {
-    let (counts, edges) = histogram(data, bins);
+    let (counts, edges) = scipy_frequency_histogram(data, bins);
     let mut cum = Vec::with_capacity(counts.len());
     let mut total = 0.0;
     for &c in &counts {
@@ -72274,6 +72328,79 @@ mod tests {
             "cumfreq last bin should equal total count, got {}",
             cum[4]
         );
+    }
+
+    #[test]
+    fn relfreq_cumfreq_use_scipy_default_limits() {
+        let data = vec![1.0, 2.0, 2.5, 3.0, 4.0, 4.5, 5.0, 7.0, 8.0, 9.0];
+
+        let (cum, cum_edges) = cumfreq(&data, 5);
+        assert_eq!(
+            cum,
+            vec![1.0, 4.0, 7.0, 8.0, 10.0],
+            "cumfreq should match scipy.stats.cumfreq default binning"
+        );
+        assert_eq!(
+            cum_edges,
+            vec![0.0, 2.0, 4.0, 6.0, 8.0, 10.0],
+            "cumfreq edges should reflect scipy lowerlimit and binsize"
+        );
+
+        let (rel, rel_edges) = relfreq(&data, 5);
+        assert_eq!(
+            rel,
+            vec![0.1, 0.3, 0.3, 0.1, 0.2],
+            "relfreq should match scipy.stats.relfreq default binning"
+        );
+        assert_eq!(
+            rel_edges,
+            vec![0.0, 2.0, 4.0, 6.0, 8.0, 10.0],
+            "relfreq edges should reflect scipy lowerlimit and binsize"
+        );
+    }
+
+    #[test]
+    fn relfreq_cumfreq_match_scipy_degenerate_default_limits() {
+        let data = vec![3.0, 3.0, 3.0];
+
+        let (rel, rel_edges) = relfreq(&data, 5);
+        assert_eq!(
+            rel,
+            vec![0.0, 0.0, 1.0, 0.0, 0.0],
+            "relfreq should match scipy.stats.relfreq for constant data"
+        );
+        assert_vec_close(
+            &rel_edges,
+            &[3.0, 3.2, 3.4, 3.6, 3.8, 4.0],
+            1e-12,
+            "relfreq edges should use SciPy's reported lowerlimit and binsize",
+        );
+
+        let (cum, cum_edges) = cumfreq(&data, 5);
+        assert_eq!(
+            cum,
+            vec![0.0, 0.0, 3.0, 3.0, 3.0],
+            "cumfreq should match scipy.stats.cumfreq for constant data"
+        );
+        assert_vec_close(
+            &cum_edges,
+            &[3.0, 3.2, 3.4, 3.6, 3.8, 4.0],
+            1e-12,
+            "cumfreq edges should use SciPy's reported lowerlimit and binsize",
+        );
+    }
+
+    #[test]
+    fn relfreq_cumfreq_reject_scipy_invalid_single_bin_default_limits() {
+        let data = vec![1.0, 2.0, 3.0];
+
+        let (rel, rel_edges) = relfreq(&data, 1);
+        assert!(rel.is_empty());
+        assert!(rel_edges.is_empty());
+
+        let (cum, cum_edges) = cumfreq(&data, 1);
+        assert!(cum.is_empty());
+        assert!(cum_edges.is_empty());
     }
 
     #[test]

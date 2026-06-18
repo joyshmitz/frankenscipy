@@ -4,13 +4,12 @@
 //! `cumfreq(data, bins) → (cum, edges)`.
 //!
 //! Resolves [frankenscipy-q2fq4]. The oracle calls
-//! `scipy.stats.{relfreq, cumfreq}` with
-//! `defaultreallimits=(min, max)` to align with fsci's
-//! natural [min, max] range — scipy otherwise pads the range
-//! beyond the data extrema by default.
+//! `scipy.stats.{relfreq, cumfreq}` with SciPy's default padded
+//! range, then compares fsci's `(values, edges)` contract against
+//! the corresponding frequency/cumulative vector and derived edges.
 //!
-//! 3 datasets × 2 funcs × 2 arms (frequencies + bin_edges) =
-//! 12 cases. Tol 1e-12 abs (closed-form integer / n
+//! 4 datasets × 2 funcs × 2 arms (frequencies + bin_edges) =
+//! 16 cases. Tol 1e-12 abs (closed-form integer / n
 //! histogram counts; bin edges via linspace).
 
 use std::collections::HashMap;
@@ -111,6 +110,7 @@ fn generate_query() -> OracleQuery {
             ],
             4,
         ),
+        ("constant_n4_b5", vec![3.0, 3.0, 3.0, 3.0], 5),
     ];
 
     let mut points = Vec::new();
@@ -155,15 +155,15 @@ for case in q["points"]:
     bins = int(case["bins"])
     out = {"case_id": cid, "freqs": None, "edges": None}
     try:
-        lo = float(data.min()); hi = float(data.max())
         if func == "relfreq":
-            r = stats.relfreq(data, numbins=bins, defaultreallimits=(lo, hi))
+            r = stats.relfreq(data, numbins=bins)
+            freqs = np.asarray(r.frequency).tolist()
         elif func == "cumfreq":
-            r = stats.cumfreq(data, numbins=bins, defaultreallimits=(lo, hi))
+            r = stats.cumfreq(data, numbins=bins)
+            freqs = np.asarray(r.cumcount).tolist()
         else:
             r = None
         if r is not None:
-            freqs = np.asarray(r.frequency).tolist()
             # scipy returns lowerlimit + binsize, not edge array. Compute edges
             # from those: edges = lowerlimit + binsize * arange(numbins+1).
             edges = [r.lowerlimit + r.binsize * i for i in range(bins + 1)]
