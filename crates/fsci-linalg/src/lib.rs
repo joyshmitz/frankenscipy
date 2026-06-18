@@ -13413,10 +13413,13 @@ pub fn companion(a: &[f64]) -> Result<Vec<Vec<f64>>, LinalgError> {
 /// with zeros elsewhere.
 pub fn block_diag(blocks: &[Vec<Vec<f64>>]) -> Vec<Vec<f64>> {
     if blocks.is_empty() {
-        return vec![];
+        return vec![Vec::new()];
     }
 
-    let total_rows: usize = blocks.iter().map(|b| b.len()).sum();
+    let total_rows: usize = blocks
+        .iter()
+        .map(|b| if b.is_empty() { 1 } else { b.len() })
+        .sum();
     let total_cols: usize = blocks
         .iter()
         .map(|b| if b.is_empty() { 0 } else { b[0].len() })
@@ -13427,11 +13430,13 @@ pub fn block_diag(blocks: &[Vec<Vec<f64>>]) -> Vec<Vec<f64>> {
     let mut col_offset = 0;
 
     for block in blocks {
-        let br = block.len();
-        let bc = if br > 0 { block[0].len() } else { 0 };
-        for i in 0..br {
-            for j in 0..bc {
-                result[row_offset + i][col_offset + j] = block[i][j];
+        let br = if block.is_empty() { 1 } else { block.len() };
+        let bc = if block.is_empty() { 0 } else { block[0].len() };
+        if !block.is_empty() {
+            for i in 0..br {
+                for j in 0..bc {
+                    result[row_offset + i][col_offset + j] = block[i][j];
+                }
             }
         }
         row_offset += br;
@@ -24571,7 +24576,20 @@ mod tests {
     #[test]
     fn block_diag_empty() {
         let bd = block_diag(&[]);
-        assert!(bd.is_empty());
+        assert_eq!(bd, vec![Vec::<f64>::new()]);
+    }
+
+    #[test]
+    fn block_diag_empty_block_contributes_zero_width_row_like_scipy() {
+        let empty = Vec::<Vec<f64>>::new();
+        assert_eq!(block_diag(std::slice::from_ref(&empty)), vec![Vec::<f64>::new()]);
+
+        let dense = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        let leading = block_diag(&[empty.clone(), dense.clone()]);
+        assert_eq!(leading, vec![vec![0.0, 0.0], vec![1.0, 2.0], vec![3.0, 4.0]]);
+
+        let trailing = block_diag(&[vec![vec![1.0, 2.0]], empty]);
+        assert_eq!(trailing, vec![vec![1.0, 2.0], vec![0.0, 0.0]]);
     }
 
     #[test]
