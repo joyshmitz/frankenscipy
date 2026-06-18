@@ -72011,6 +72011,16 @@ mod tests {
     }
 
     #[test]
+    fn percentileofscore_kinds_match_scipy() {
+        // scipy.stats.percentileofscore([1,2,3,3,5], 3) for all 4 kinds.
+        let a = [1.0, 2.0, 3.0, 3.0, 5.0];
+        assert!((percentileofscore(&a, 3.0, Some("rank")) - 70.0).abs() < 1e-10, "rank");
+        assert!((percentileofscore(&a, 3.0, Some("weak")) - 80.0).abs() < 1e-10, "weak");
+        assert!((percentileofscore(&a, 3.0, Some("strict")) - 40.0).abs() < 1e-10, "strict");
+        assert!((percentileofscore(&a, 3.0, Some("mean")) - 60.0).abs() < 1e-10, "mean");
+    }
+
+    #[test]
     fn yeojohnson_branches_match_scipy() {
         // scipy.stats.yeojohnson all 4 sign/lambda branches.
         assert!(
