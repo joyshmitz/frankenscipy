@@ -1501,13 +1501,15 @@ fn gmres_inner(
     g[0] = r_norm;
 
     let mut iters = 0;
+    // Reused Arnoldi vector A·v_j: the normalized copy is pushed into v, so wj
+    // itself is free to reuse next step. frankenscipy-2hclc (byte-identical).
+    let mut wj = vec![0.0; n];
 
     for j in 0..m {
         iters = j + 1;
 
         // w = A * v_j
-        let w = csr_matvec(a, &v[j]);
-        let mut wj = w;
+        csr_matvec_into(a, &v[j], &mut wj);
 
         // Modified Gram-Schmidt orthogonalization
         for i in 0..=j {
@@ -1847,12 +1849,14 @@ fn lgmres_inner(
     let mut sn = vec![0.0; m];
 
     let mut k = 0;
+    // Reused Arnoldi vector A·v[k] (normalized copy is pushed into v, so wj is
+    // free to reuse next step). frankenscipy-2hclc (byte-identical).
+    let mut wj = vec![0.0; r0.len()];
     while k < m {
         // w = A * v[k]
-        let w = csr_matvec(a, &v[k]);
+        csr_matvec_into(a, &v[k], &mut wj);
 
         // Gram-Schmidt orthogonalization
-        let mut wj = w;
         for i in 0..=k {
             h[i][k] = dot_product(&wj, &v[i]);
             for (idx, wval) in wj.iter_mut().enumerate() {
