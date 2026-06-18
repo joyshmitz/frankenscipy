@@ -8472,6 +8472,27 @@ mod tests {
     }
 
     #[test]
+    fn elbow_inertias_recovers_known_inertia() {
+        // elbow_inertias was untested. 4 points at square corners: the k=1 inertia
+        // is the exact total within-cluster SS = sum||x-centroid||^2 = 4*2 = 8
+        // (seed-independent), and k=4 (each point its own cluster) -> 0. Inertias
+        // are non-increasing in k.
+        let data = vec![
+            vec![0.0, 0.0],
+            vec![2.0, 0.0],
+            vec![0.0, 2.0],
+            vec![2.0, 2.0],
+        ];
+        let inertias = elbow_inertias(&data, 4, 42);
+        assert_eq!(inertias.len(), 4);
+        assert!((inertias[0] - 8.0).abs() < 1e-9, "k=1 inertia = {}", inertias[0]);
+        assert!(inertias[3].abs() < 1e-9, "k=4 inertia ~ 0");
+        for w in inertias.windows(2) {
+            assert!(w[1] <= w[0] + 1e-9, "inertias non-increasing");
+        }
+    }
+
+    #[test]
     fn vq_match_scipy() {
         // scipy.cluster.vq.vq: assign each obs to nearest centroid (code, distance).
         let obs = vec![vec![1.0, 1.0], vec![5.0, 5.0], vec![1.0, 6.0]];
