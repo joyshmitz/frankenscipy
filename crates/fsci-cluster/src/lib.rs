@@ -2462,17 +2462,23 @@ pub fn mini_batch_kmeans(
     let mut counts = vec![0usize; k];
     let mut rng = seed.wrapping_add(12345);
 
+    // Per-iteration scratch hoisted out of the loop and reused (byte-identical):
+    // batch_indices/batch_labels are cleared and refilled, centroids_flat is
+    // rewritten in place. frankenscipy-p1pp8.
+    let mut batch_indices = Vec::with_capacity(batch);
+    let mut batch_labels = Vec::with_capacity(batch);
+    let mut centroids_flat = Vec::with_capacity(k * d);
     for _ in 0..max_iter {
         // Sample mini-batch
-        let mut batch_indices = Vec::with_capacity(batch);
+        batch_indices.clear();
         for _ in 0..batch {
             rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
             batch_indices.push((rng >> 33) as usize % n);
         }
 
         // Assignment
-        let centroids_flat = flatten_centroids(&centroids, d);
-        let mut batch_labels = Vec::with_capacity(batch);
+        flatten_centroids_into(&centroids, d, &mut centroids_flat);
+        batch_labels.clear();
         for &idx in &batch_indices {
             let (best_c, _) = nearest_centroid(&data[idx], &centroids_flat, k, d);
             batch_labels.push(best_c);
@@ -4953,6 +4959,16 @@ fn flatten_centroids(centroids: &[Vec<f64>], d: usize) -> Vec<f64> {
         flat.extend_from_slice(&centroid[..d]);
     }
     flat
+}
+
+/// Buffer-reusing variant of [`flatten_centroids`]: rewrites `flat` in place
+/// (byte-identical content) so iterative loops can avoid reallocating the
+/// `k × d` flat centroid buffer every step.
+fn flatten_centroids_into(centroids: &[Vec<f64>], d: usize, flat: &mut Vec<f64>) {
+    flat.clear();
+    for centroid in centroids {
+        flat.extend_from_slice(&centroid[..d]);
+    }
 }
 
 /// Exact nearest-centroid search over a contiguous `k × d` centroid buffer:
