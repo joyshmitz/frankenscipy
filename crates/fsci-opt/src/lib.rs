@@ -2735,6 +2735,16 @@ where
             detail: "max_inner must be greater than zero".to_string(),
         });
     }
+    let initial_constraints = constraints(x0);
+    if initial_constraints.len() != n_constraints {
+        return Err(OptError::InvalidArgument {
+            detail: format!(
+                "constraints(x0) length {} must equal n_constraints {}",
+                initial_constraints.len(),
+                n_constraints
+            ),
+        });
+    }
 
     let mut x = x0.to_vec();
     let mut lambda = vec![0.0; n_constraints]; // Lagrange multipliers
@@ -5341,6 +5351,17 @@ mod tests {
         let constraints = |x: &[f64]| vec![x[0] + 1.0];
         assert!(augmented_lagrangian(f, constraints, &[0.0], 1, 0, 10).is_err());
         assert!(augmented_lagrangian(f, constraints, &[0.0], 1, 10, 0).is_err());
+    }
+
+    #[test]
+    fn augmented_lagrangian_rejects_constraint_length_mismatch() {
+        use crate::augmented_lagrangian;
+
+        let f = |x: &[f64]| x[0] * x[0];
+        let missing_constraint = |_x: &[f64]| Vec::<f64>::new();
+        let extra_constraints = |_x: &[f64]| vec![1.0, 2.0];
+        assert!(augmented_lagrangian(f, missing_constraint, &[0.0], 1, 10, 10).is_err());
+        assert!(augmented_lagrangian(f, extra_constraints, &[0.0], 1, 10, 10).is_err());
     }
 
     #[test]
