@@ -187,6 +187,11 @@ where
 }
 
 fn validate_bvp_options(options: &BvpOptions) -> Result<(), BvpError> {
+    if options.max_iter == 0 {
+        return Err(BvpError::InvalidArgument(
+            "max_iter must be positive".to_string(),
+        ));
+    }
     if !options.tol.is_finite() || options.tol < 0.0 {
         return Err(BvpError::InvalidArgument(
             "tol must be finite and non-negative".to_string(),
@@ -386,6 +391,22 @@ mod tests {
                 .expect_err("invalid boundary tolerance");
             assert!(matches!(err, BvpError::InvalidArgument(msg) if msg.contains("tol")));
         }
+    }
+
+    #[test]
+    fn bvp_rejects_zero_iteration_budget() {
+        let mut f = |_t: f64, _y: &[f64]| vec![0.0];
+        let bc = |ya: &[f64], _yb: &[f64]| vec![ya[0]];
+        let options = BvpOptions {
+            max_iter: 0,
+            ..BvpOptions::default()
+        };
+        let err = solve_bvp(&mut f, &bc, (0.0, 1.0), &[0.0], options)
+            .expect_err("zero max_iter");
+        assert!(matches!(
+            err,
+            BvpError::InvalidArgument(msg) if msg.contains("max_iter")
+        ));
     }
 
     #[test]
