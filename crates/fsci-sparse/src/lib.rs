@@ -293,6 +293,21 @@ mod tests {
     const PROPTEST_CASES: u32 = 512;
 
     #[test]
+    fn isspmatrix_lil_dok_dia_checkers_work() {
+        // isspmatrix_lil/dok/dia were previously untested (csr/csc/coo were covered).
+        use crate::{DiaMatrix, DokMatrix, LilMatrix};
+        let lil = LilMatrix::from_triplets(Shape2D::new(2, 2), vec![1.0], vec![0], vec![0]).unwrap();
+        assert!(isspmatrix_lil(&lil));
+        assert!(!isspmatrix_dok(&lil));
+        let dok = DokMatrix::from_triplets(Shape2D::new(2, 2), vec![1.0], vec![0], vec![0]).unwrap();
+        assert!(isspmatrix_dok(&dok));
+        assert!(!isspmatrix_lil(&dok));
+        let dia = DiaMatrix::from_diagonals(Shape2D::new(2, 2), vec![0], vec![vec![1.0, 1.0]]).unwrap();
+        assert!(isspmatrix_dia(&dia));
+        assert!(!isspmatrix_csr(&dia));
+    }
+
+    #[test]
     fn issparse_and_isspmatrix_type_checks_work() {
         let csr = CsrMatrix::from_components(
             Shape2D::new(2, 2),
