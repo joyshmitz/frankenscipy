@@ -2086,6 +2086,16 @@ pub fn czt_points(m: usize, w: Option<(f64, f64)>, a: Option<(f64, f64)>) -> Vec
         .collect()
 }
 
+fn validate_zoom_fft_range(f_range: (f64, f64)) -> Result<(), SignalError> {
+    let (f1, f2) = f_range;
+    if f1.is_finite() && f2.is_finite() {
+        return Ok(());
+    }
+    Err(SignalError::InvalidParameter {
+        detail: "frequency range endpoints must be finite".to_string(),
+    })
+}
+
 /// Zoom FFT: compute the DFT over a frequency sub-range [f1, f2] with M points.
 ///
 /// This uses the Chirp Z-Transform to evaluate the Z-transform at M equally
@@ -2105,6 +2115,7 @@ pub fn zoom_fft(x: &[f64], f_range: (f64, f64), m: usize) -> Result<Vec<(f64, f6
             "Input signal must be non-empty".to_string(),
         ));
     }
+    validate_zoom_fft_range(f_range)?;
     if m == 0 {
         return Ok(vec![]);
     }
@@ -2348,6 +2359,7 @@ impl ZoomFFT {
                 detail: "fs must be finite and positive".to_string(),
             });
         }
+        validate_zoom_fft_range(fn_range)?;
         let m = match m {
             None => n,
             Some(m) if m >= 1 => m,
@@ -16912,6 +16924,26 @@ mod tests {
     }
 
     #[test]
+    fn zoom_fft_rejects_non_finite_frequency_range() {
+        for range in [
+            (f64::NAN, 0.5),
+            (0.0, f64::NAN),
+            (f64::INFINITY, 0.5),
+            (0.0, f64::NEG_INFINITY),
+        ] {
+            let err =
+                ZoomFFT::new(8, range, Some(4), 2.0, false).expect_err("invalid frequency range");
+            assert_eq!(
+                err,
+                SignalError::InvalidParameter {
+                    detail: "frequency range endpoints must be finite".to_string()
+                },
+                "range={range:?}"
+            );
+        }
+    }
+
+    #[test]
     fn zoom_fft_endpoint_single_point_samples_start_frequency() {
         let n = 16;
         let f1 = 0.2;
@@ -25010,6 +25042,26 @@ mod tests {
                 "zoom imag[{idx}]={}, czt={}",
                 got.1,
                 want.1
+            );
+        }
+    }
+
+    #[test]
+    fn zoom_fft_function_rejects_non_finite_frequency_range() {
+        let x = [1.0, 2.0, 3.0, 4.0];
+        for range in [
+            (f64::NAN, 0.5),
+            (0.0, f64::NAN),
+            (f64::INFINITY, 0.5),
+            (0.0, f64::NEG_INFINITY),
+        ] {
+            let err = zoom_fft(&x, range, 4).expect_err("invalid frequency range");
+            assert_eq!(
+                err,
+                SignalError::InvalidParameter {
+                    detail: "frequency range endpoints must be finite".to_string()
+                },
+                "range={range:?}"
             );
         }
     }
