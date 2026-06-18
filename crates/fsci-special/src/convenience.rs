@@ -7331,6 +7331,20 @@ mod tests {
     }
 
     #[test]
+    fn gammaincinv_betaincinv_match_scipy() {
+        // scipy.special.gammaincinv/betaincinv (inverses of the regularized
+        // incomplete gamma/beta).
+        assert!(
+            (gammaincinv_scalar(2.0, 0.5) - 1.678_346_990_016_661_2).abs() < 1e-11,
+            "gammaincinv(2,0.5)"
+        );
+        assert!(
+            (betaincinv_scalar(2.0, 3.0, 0.5) - 0.385_727_568_132_389_5).abs() < 1e-11,
+            "betaincinv(2,3,0.5)"
+        );
+    }
+
+    #[test]
     fn exp2_exp10_cosdg_sindg_match_scipy() {
         // scipy.special exp2/exp10 and degree trig (exact zeros at the axes).
         assert_eq!(exp2(3.0), 8.0);
