@@ -4904,6 +4904,72 @@ impl NdPPoly {
         }
         sum
     }
+
+    /// Evaluate at many points (the realistic grid-evaluation workload, matching
+    /// `scipy.interpolate.NdPPoly.__call__` on an array of points).
+    ///
+    /// Byte-identical to mapping [`evaluate`](Self::evaluate) over `points`, but the
+    /// point-invariant tensor strides, per-dimension orders and the cell/dx/powers/
+    /// idx scratch are computed/allocated once instead of on every point.
+    pub fn evaluate_many(&self, points: &[Vec<f64>]) -> Vec<f64> {
+        let ndim = self.x.len();
+        let nd2 = self.c_shape.len();
+        let mut stride = vec![1usize; nd2];
+        for i in (0..nd2 - 1).rev() {
+            stride[i] = stride[i + 1] * self.c_shape[i + 1];
+        }
+        let orders: Vec<usize> = (0..ndim).map(|d| self.c_shape[d] - 1).collect();
+        let total: usize = orders.iter().map(|&k| k + 1).product();
+        // Reused per-point scratch.
+        let mut cell = vec![0usize; ndim];
+        let mut dx = vec![0.0f64; ndim];
+        let mut idx = vec![0usize; ndim];
+        let mut powers: Vec<Vec<f64>> = orders.iter().map(|&kd| vec![0.0f64; kd + 1]).collect();
+        points
+            .iter()
+            .map(|point| {
+                for d in 0..ndim {
+                    let bp = &self.x[d];
+                    let m = bp.len() - 1;
+                    let mut j = 0usize;
+                    while j + 1 < m && point[d] >= bp[j + 1] {
+                        j += 1;
+                    }
+                    cell[d] = j;
+                    dx[d] = point[d] - bp[j];
+                }
+                let mut base = 0usize;
+                for d in 0..ndim {
+                    base += cell[d] * stride[ndim + d];
+                }
+                for d in 0..ndim {
+                    let kd = orders[d];
+                    for id in 0..=kd {
+                        powers[d][id] = dx[d].powi((kd - id) as i32);
+                    }
+                }
+                idx.iter_mut().for_each(|v| *v = 0);
+                let mut sum = 0.0f64;
+                for _ in 0..total {
+                    let mut off = base;
+                    let mut term = 1.0f64;
+                    for d in 0..ndim {
+                        off += idx[d] * stride[d];
+                        term *= powers[d][idx[d]];
+                    }
+                    sum += self.c[off] * term;
+                    for d in (0..ndim).rev() {
+                        idx[d] += 1;
+                        if idx[d] <= orders[d] {
+                            break;
+                        }
+                        idx[d] = 0;
+                    }
+                }
+                sum
+            })
+            .collect()
+    }
 }
 
 /// Smoothing spline representation (splrep equivalent).
@@ -8097,6 +8163,12 @@ mod tests {
         let want = [58.125, 71.25, 59.424, 66.46399999999998];
         for (pt, w) in pts.iter().zip(want.iter()) {
             assert!((p.evaluate(pt) - w).abs() <= 1e-9, "{:?}: {} vs {w}", pt, p.evaluate(pt));
+        }
+        // evaluate_many must be byte-identical to mapping evaluate over the points.
+        let many: Vec<Vec<f64>> = pts.iter().map(|pt| pt.to_vec()).collect();
+        let batch = p.evaluate_many(&many);
+        for (pt, b) in pts.iter().zip(batch.iter()) {
+            assert_eq!(*b, p.evaluate(pt), "evaluate_many != evaluate at {pt:?}");
         }
     }
 
