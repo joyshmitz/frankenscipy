@@ -25218,6 +25218,18 @@ mod tests {
     }
 
     #[test]
+    fn vander_increasing_and_zero_column_goldens_match_numpy() {
+        let increasing = vander(&[1.0, 2.0, 3.0], None, true);
+        assert_eq!(
+            increasing,
+            vec![vec![1.0, 1.0, 1.0], vec![1.0, 2.0, 4.0], vec![1.0, 3.0, 9.0]]
+        );
+
+        let zero_cols = vander(&[1.0, 2.0, 3.0], Some(0), false);
+        assert_eq!(zero_cols, vec![Vec::<f64>::new(), Vec::new(), Vec::new()]);
+    }
+
+    #[test]
     fn dft_matrix_unitary() {
         let f = dft_matrix(4);
         // DFT matrix should be unitary: F * F^H = I
