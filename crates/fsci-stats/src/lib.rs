@@ -33695,13 +33695,18 @@ pub struct GaussianKde {
 impl GaussianKde {
     /// Create a new Gaussian KDE from data.
     ///
-    /// Uses Silverman's rule: bw = n^(-1/5) * std(data).
+    /// Uses Scott's rule (the `scipy.stats.gaussian_kde` default): the kernel
+    /// bandwidth is `factor * std(data)` with `factor = n^(-1/(d+4)) = n^(-1/5)`
+    /// for 1-D data, and `std` the SAMPLE standard deviation (ddof=1, matching
+    /// numpy's `np.cov(..., bias=False)` that scipy uses).
     pub fn new(data: &[f64]) -> Self {
         let n = data.len() as f64;
         let mean = data.iter().sum::<f64>() / n;
-        let var = data.iter().map(|&x| (x - mean) * (x - mean)).sum::<f64>() / n;
+        // ddof=1 sample variance, matching scipy's np.cov(bias=False); the
+        // `.max(EPSILON)` below absorbs the degenerate n==1 (0/0) case.
+        let var = data.iter().map(|&x| (x - mean) * (x - mean)).sum::<f64>() / (n - 1.0);
         let std_dev = var.sqrt();
-        let bw = std_dev * n.powf(-0.2); // Silverman's rule
+        let bw = std_dev * n.powf(-0.2); // Scott's factor n^(-1/5)
         Self {
             dataset: data.to_vec(),
             bandwidth: bw.max(f64::EPSILON),
@@ -56375,6 +56380,24 @@ mod tests {
                 "kde evaluate_many mismatch at {k}"
             );
         }
+    }
+
+    #[test]
+    fn gaussian_kde_match_scipy_scott() {
+        // scipy.stats.gaussian_kde(data) default Scott rule, sample (ddof=1) std.
+        // Regression guard for the ddof=0 bandwidth bug: ddof=0 gave 0.19556 at
+        // 2.5 (~1.8% off scipy's 0.19218).
+        let kde = GaussianKde::new(&[1.0, 2.0, 3.0, 4.0, 5.0]);
+        assert!(
+            (kde.evaluate(2.5) - 0.192_176_550_785_222_3).abs() < 1e-12,
+            "kde(2.5): {}",
+            kde.evaluate(2.5)
+        );
+        assert!(
+            (kde.evaluate(3.0) - 0.195_149_352_437_649_2).abs() < 1e-12,
+            "kde(3.0): {}",
+            kde.evaluate(3.0)
+        );
     }
 
     #[test]
