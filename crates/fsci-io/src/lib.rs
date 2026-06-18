@@ -957,11 +957,282 @@ pub fn savemat(arrays: &[MatArray]) -> Result<Vec<u8>, IoError> {
     Ok(out)
 }
 
+// --- MATLAB Level-5 (.mat v5) reader ---------------------------------------
+//
+// Supports the SciPy `format="5"` (uncompressed) subset: real, full, 2-D
+// numeric arrays. Complex, sparse, char, cell, struct, object, N-D, and
+// zlib-compressed (miCOMPRESSED) elements fail closed with a clear message.
+
+// MAT v5 data element types.
+const MI_INT8: u32 = 1;
+const MI_UINT8: u32 = 2;
+const MI_INT16: u32 = 3;
+const MI_UINT16: u32 = 4;
+const MI_INT32: u32 = 5;
+const MI_UINT32: u32 = 6;
+const MI_SINGLE: u32 = 7;
+const MI_DOUBLE: u32 = 9;
+const MI_INT64: u32 = 12;
+const MI_UINT64: u32 = 13;
+const MI_MATRIX: u32 = 14;
+const MI_COMPRESSED: u32 = 15;
+
+/// Read one MAT v5 data element at `off`, returning `(type, payload, next_off)`.
+/// Handles both the standard tag (8-byte header + padded payload) and the
+/// "small element" form (size packed into the upper 16 bits of the tag).
+fn read_v5_element(bytes: &[u8], off: usize) -> Result<(u32, &[u8], usize), IoError> {
+    let head = bytes
+        .get(off..off + 4)
+        .ok_or_else(|| IoError::InvalidFormat("truncated MAT v5 element tag".to_string()))?;
+    let raw = u32::from_le_bytes([head[0], head[1], head[2], head[3]]);
+    if (raw >> 16) != 0 {
+        // Small-element form: bytes 2..4 hold the size, bytes 0..2 the type.
+        let size = (raw >> 16) as usize;
+        let typ = raw & 0xFFFF;
+        if size > 4 {
+            return Err(IoError::InvalidFormat(
+                "MAT v5 small element claims size > 4 bytes".to_string(),
+            ));
+        }
+        let payload = bytes
+            .get(off + 4..off + 4 + size)
+            .ok_or_else(|| IoError::InvalidFormat("truncated MAT v5 small element".to_string()))?;
+        Ok((typ, payload, off + 8))
+    } else {
+        let szb = bytes
+            .get(off + 4..off + 8)
+            .ok_or_else(|| IoError::InvalidFormat("truncated MAT v5 element size".to_string()))?;
+        let size = u32::from_le_bytes([szb[0], szb[1], szb[2], szb[3]]) as usize;
+        let data_start = off + 8;
+        let data_end = data_start
+            .checked_add(size)
+            .ok_or_else(|| IoError::InvalidFormat("MAT v5 element size overflow".to_string()))?;
+        let payload = bytes
+            .get(data_start..data_end)
+            .ok_or_else(|| IoError::InvalidFormat("truncated MAT v5 element payload".to_string()))?;
+        // Elements are padded to an 8-byte boundary.
+        let next = (data_end + 7) & !7usize;
+        Ok((raw, payload, next))
+    }
+}
+
+/// Decode a MAT v5 numeric data element into `f64` values (no reordering).
+fn decode_v5_numeric(typ: u32, p: &[u8]) -> Result<Vec<f64>, IoError> {
+    let aligned = |unit: usize| -> Result<(), IoError> {
+        if p.len().is_multiple_of(unit) {
+            Ok(())
+        } else {
+            Err(IoError::InvalidFormat(format!(
+                "MAT v5 numeric payload {} not a multiple of {unit}",
+                p.len()
+            )))
+        }
+    };
+    Ok(match typ {
+        MI_DOUBLE => {
+            aligned(8)?;
+            p.chunks_exact(8)
+                .map(|b| f64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
+                .collect()
+        }
+        MI_SINGLE => {
+            aligned(4)?;
+            p.chunks_exact(4)
+                .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]) as f64)
+                .collect()
+        }
+        MI_INT8 => p.iter().map(|&b| b as i8 as f64).collect(),
+        MI_UINT8 => p.iter().map(|&b| b as f64).collect(),
+        MI_INT16 => {
+            aligned(2)?;
+            p.chunks_exact(2)
+                .map(|b| i16::from_le_bytes([b[0], b[1]]) as f64)
+                .collect()
+        }
+        MI_UINT16 => {
+            aligned(2)?;
+            p.chunks_exact(2)
+                .map(|b| u16::from_le_bytes([b[0], b[1]]) as f64)
+                .collect()
+        }
+        MI_INT32 => {
+            aligned(4)?;
+            p.chunks_exact(4)
+                .map(|b| i32::from_le_bytes([b[0], b[1], b[2], b[3]]) as f64)
+                .collect()
+        }
+        MI_UINT32 => {
+            aligned(4)?;
+            p.chunks_exact(4)
+                .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as f64)
+                .collect()
+        }
+        MI_INT64 => {
+            aligned(8)?;
+            p.chunks_exact(8)
+                .map(|b| i64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]) as f64)
+                .collect()
+        }
+        MI_UINT64 => {
+            aligned(8)?;
+            p.chunks_exact(8)
+                .map(|b| u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]) as f64)
+                .collect()
+        }
+        other => {
+            return Err(IoError::UnsupportedFeature(format!(
+                "MAT v5 real data element type {other} is not a supported numeric type"
+            )));
+        }
+    })
+}
+
+/// Parse a single `miMATRIX` payload into a [`MatArray`].
+fn parse_v5_matrix(payload: &[u8]) -> Result<MatArray, IoError> {
+    // Sub-element 1: array flags (miUINT32, class + flag bits).
+    let (flag_type, flags, off) = read_v5_element(payload, 0)?;
+    if flag_type != MI_UINT32 || flags.len() < 8 {
+        return Err(IoError::InvalidFormat(
+            "MAT v5 array flags sub-element malformed".to_string(),
+        ));
+    }
+    let class_flags = u32::from_le_bytes([flags[0], flags[1], flags[2], flags[3]]);
+    let class = class_flags & 0xFF;
+    let is_complex = (class_flags & 0x0000_0800) != 0;
+
+    // Sub-element 2: dimensions (miINT32).
+    let (dim_type, dim_bytes, off) = read_v5_element(payload, off)?;
+    if dim_type != MI_INT32 {
+        return Err(IoError::InvalidFormat(
+            "MAT v5 dimensions sub-element must be miINT32".to_string(),
+        ));
+    }
+    let ndim = dim_bytes.len() / 4;
+    let dims: Vec<i64> = dim_bytes
+        .chunks_exact(4)
+        .map(|b| i32::from_le_bytes([b[0], b[1], b[2], b[3]]) as i64)
+        .collect();
+
+    // Sub-element 3: array name (miINT8), trimmed at the first NUL.
+    let (_name_type, name_bytes, off) = read_v5_element(payload, off)?;
+    let name: String = name_bytes
+        .iter()
+        .take_while(|&&b| b != 0)
+        .map(|&b| char::from(b))
+        .collect();
+
+    // Fail closed on everything outside the real-full-2D-numeric contract.
+    if is_complex {
+        return Err(IoError::UnsupportedFeature(format!(
+            "MAT v5 complex array '{name}' is not supported"
+        )));
+    }
+    // Numeric classes are mxDOUBLE(6)..=mxUINT64(15); 1..=5 are
+    // cell/struct/object/char/sparse.
+    if !(6..=15).contains(&class) {
+        return Err(IoError::UnsupportedFeature(format!(
+            "MAT v5 array '{name}' has unsupported class {class} (cell/struct/char/sparse/object)"
+        )));
+    }
+    if ndim != 2 {
+        return Err(IoError::UnsupportedFeature(format!(
+            "MAT v5 array '{name}' is {ndim}-D; only 2-D arrays are supported"
+        )));
+    }
+    let rows = mat5_dim_usize(dims[0], &name)?;
+    let cols = mat5_dim_usize(dims[1], &name)?;
+
+    // Sub-element 4: real part (column-major on disk).
+    let (real_type, real_bytes, _) = read_v5_element(payload, off)?;
+    let column_major = decode_v5_numeric(real_type, real_bytes)?;
+    let expected = checked_mat_dense_len(rows, cols)?;
+    if column_major.len() != expected {
+        return Err(IoError::InvalidFormat(format!(
+            "MAT v5 array '{name}' has {} values but dimensions imply {expected}",
+            column_major.len()
+        )));
+    }
+
+    // Transpose disk column-major into fsci's row-major storage.
+    let mut data = vec![0.0; expected];
+    for col in 0..cols {
+        for row in 0..rows {
+            data[row * cols + col] = column_major[col * rows + row];
+        }
+    }
+    Ok(MatArray {
+        name,
+        rows,
+        cols,
+        data,
+    })
+}
+
+fn mat5_dim_usize(value: i64, name: &str) -> Result<usize, IoError> {
+    usize::try_from(value).map_err(|_| {
+        IoError::InvalidFormat(format!("MAT v5 array '{name}' has invalid dimension {value}"))
+    })
+}
+
+/// Load arrays from MATLAB Level-5 (.mat v5) bytes (uncompressed, real, full,
+/// 2-D numeric arrays — the SciPy `format="5"` default subset).
+fn loadmat_v5(bytes: &[u8]) -> Result<Vec<MatArray>, IoError> {
+    if bytes.len() < 128 {
+        return Err(IoError::InvalidFormat(
+            "MAT v5 file shorter than its 128-byte header".to_string(),
+        ));
+    }
+    // Endian indicator: "IM" on disk == little-endian (no swap); "MI" == big.
+    match &bytes[126..128] {
+        b"IM" => {}
+        b"MI" => {
+            return Err(IoError::UnsupportedFeature(
+                "big-endian MAT v5 files are not supported".to_string(),
+            ));
+        }
+        other => {
+            return Err(IoError::InvalidFormat(format!(
+                "MAT v5 endian indicator {other:?} is not 'IM' or 'MI'"
+            )));
+        }
+    }
+
+    let mut arrays = Vec::new();
+    let mut off = 128;
+    while off + 8 <= bytes.len() {
+        let (typ, payload, next) = read_v5_element(bytes, off)?;
+        off = next;
+        match typ {
+            MI_MATRIX => arrays.push(parse_v5_matrix(payload)?),
+            MI_COMPRESSED => {
+                return Err(IoError::UnsupportedFeature(
+                    "MAT v5 compressed elements require zlib inflation; re-save with \
+                     do_compression=False"
+                        .to_string(),
+                ));
+            }
+            0 => break, // trailing zero padding
+            other => {
+                return Err(IoError::UnsupportedFeature(format!(
+                    "unexpected MAT v5 top-level element type {other}"
+                )));
+            }
+        }
+    }
+    Ok(arrays)
+}
+
 /// Load arrays from MATLAB MAT-file Level 4 bytes.
 ///
 /// The returned `MatArray::data` uses the same row-major layout as the rest of
 /// `fsci-io`; MAT v4 stores full matrices in column-major order on disk.
 pub fn loadmat(bytes: &[u8]) -> Result<Vec<MatArray>, IoError> {
+    // MATLAB Level-5 files open with the 128-byte text header "MATLAB 5.0 ...".
+    // MAT v4 files instead begin with the small integer `mopt` field, so the
+    // ASCII prefix unambiguously distinguishes the two formats.
+    if bytes.len() >= 128 && bytes.starts_with(b"MATLAB 5.0") {
+        return loadmat_v5(bytes);
+    }
     let mut arrays = Vec::new();
     let mut offset = 0usize;
     while offset < bytes.len() {
@@ -4568,6 +4839,59 @@ mod tests {
         let v = loaded.iter().find(|m| m.name == "v").expect("v present");
         assert_eq!((v.rows, v.cols), (1, 4));
         assert_eq!(v.data, vec![10.0, 20.0, 30.0, 40.0]);
+    }
+
+    #[test]
+    fn loadmat_reads_real_scipy_mat5_bytes() {
+        // No-mock differential coverage for MATLAB Level-5: exact bytes from
+        // `scipy.io.savemat(buf, {'A': [[1,2,3],[4,5,6]], 'v': [[10,20,30,40]]},
+        // format='5')` (SciPy 1.17.1, uncompressed default). fsci loadmat must
+        // detect the v5 header and recover SciPy's shapes/row-major values.
+        let scipy_mat5: &[u8] = &[
+            77, 65, 84, 76, 65, 66, 32, 53, 46, 48, 32, 77, 65, 84, 45, 102, 105, 108, 101, 32,
+            80, 108, 97, 116, 102, 111, 114, 109, 58, 32, 112, 111, 115, 105, 120, 44, 32, 67,
+            114, 101, 97, 116, 101, 100, 32, 111, 110, 58, 32, 87, 101, 100, 32, 74, 117, 110, 32,
+            49, 55, 32, 50, 49, 58, 53, 51, 58, 50, 57, 32, 50, 48, 50, 54, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 73, 77, 14, 0, 0, 0, 96, 0, 0, 0, 6, 0,
+            0, 0, 8, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 8, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0,
+            0, 1, 0, 1, 0, 65, 0, 0, 0, 9, 0, 0, 0, 48, 0, 0, 0, 0, 0, 0, 0, 0, 0, 240, 63, 0, 0,
+            0, 0, 0, 0, 16, 64, 0, 0, 0, 0, 0, 0, 0, 64, 0, 0, 0, 0, 0, 0, 20, 64, 0, 0, 0, 0, 0,
+            0, 8, 64, 0, 0, 0, 0, 0, 0, 24, 64, 14, 0, 0, 0, 80, 0, 0, 0, 6, 0, 0, 0, 8, 0, 0, 0,
+            6, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 8, 0, 0, 0, 1, 0, 0, 0, 4, 0, 0, 0, 1, 0, 1, 0,
+            118, 0, 0, 0, 9, 0, 0, 0, 32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 36, 64, 0, 0, 0, 0, 0, 0, 52,
+            64, 0, 0, 0, 0, 0, 0, 62, 64, 0, 0, 0, 0, 0, 0, 68, 64,
+        ];
+        let loaded = loadmat(scipy_mat5).expect("fsci loadmat must read scipy MAT v5 output");
+        assert_eq!(loaded.len(), 2);
+        let a = loaded.iter().find(|m| m.name == "A").expect("A present");
+        assert_eq!((a.rows, a.cols), (2, 3));
+        assert_eq!(a.data, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+        let v = loaded.iter().find(|m| m.name == "v").expect("v present");
+        assert_eq!((v.rows, v.cols), (1, 4));
+        assert_eq!(v.data, vec![10.0, 20.0, 30.0, 40.0]);
+    }
+
+    #[test]
+    fn loadmat_v5_rejects_compressed_and_complex_clearly() {
+        // miCOMPRESSED top-level element (type 15) -> clear, actionable error.
+        let mut compressed = vec![0u8; 128];
+        compressed[0..10].copy_from_slice(b"MATLAB 5.0");
+        compressed[126] = b'I';
+        compressed[127] = b'M';
+        compressed.extend_from_slice(&15u32.to_le_bytes()); // miCOMPRESSED
+        compressed.extend_from_slice(&8u32.to_le_bytes());
+        compressed.extend_from_slice(&[0u8; 8]);
+        let err = loadmat(&compressed).expect_err("compressed must be rejected");
+        assert!(matches!(err, IoError::UnsupportedFeature(_)));
+
+        // Big-endian indicator "MI" -> clear unsupported error.
+        let mut big = vec![0u8; 128];
+        big[0..10].copy_from_slice(b"MATLAB 5.0");
+        big[126] = b'M';
+        big[127] = b'I';
+        let err = loadmat(&big).expect_err("big-endian must be rejected");
+        assert!(matches!(err, IoError::UnsupportedFeature(_)));
     }
 
     #[test]
