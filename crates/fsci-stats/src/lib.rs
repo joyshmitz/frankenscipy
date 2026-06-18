@@ -71499,6 +71499,22 @@ mod tests {
     }
 
     #[test]
+    fn percentile_quantile_match_numpy_linear() {
+        // numpy.percentile/quantile default method='linear' ((n-1) interpolation)
+        // for a=[1..10].
+        let a = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        assert!((percentile(&a, 25.0) - 3.25).abs() < 1e-12, "p25");
+        assert!((percentile(&a, 50.0) - 5.5).abs() < 1e-12, "p50");
+        assert!((percentile(&a, 75.0) - 7.75).abs() < 1e-12, "p75");
+        assert!((percentile(&a, 0.0) - 1.0).abs() < 1e-12, "p0");
+        assert!((percentile(&a, 100.0) - 10.0).abs() < 1e-12, "p100");
+        let q = quantile(&a, &[0.25, 0.5, 0.75]);
+        for (g, e) in q.iter().zip(&[3.25, 5.5, 7.75]) {
+            assert!((g - e).abs() < 1e-12, "quantile: {g} vs {e}");
+        }
+    }
+
+    #[test]
     fn rankdata_methods_match_scipy() {
         // scipy.stats.rankdata(a, method=...) for [1,2,2,3,3,3], all tie methods.
         let a = [1.0, 2.0, 2.0, 3.0, 3.0, 3.0];
