@@ -61629,6 +61629,16 @@ mod tests {
     }
 
     #[test]
+    fn gompertz_pdf_cdf_match_scipy() {
+        // Exact scipy.stats.gompertz(c=2). The Gompertz suite covers moments,
+        // skew/kurt, entropy, and fit but no exact pdf/cdf at a point.
+        let g = Gompertz::new(2.0);
+        assert!((g.pdf(0.5) - 0.900_959_150_066_736_9).abs() < 1e-12, "pdf(0.5)");
+        assert!((g.pdf(1.0) - 0.174_921_762_516_665_94).abs() < 1e-12, "pdf(1)");
+        assert!((g.cdf(0.5) - 0.726_770_326_167_944_3).abs() < 1e-12, "cdf(0.5)");
+    }
+
+    #[test]
     fn gompertz_moments_match_scipy_reference_values() {
         let cases = [
             (0.5, (0.922_910_632_477_416_4, 0.329_627_827_869_170_1)),
