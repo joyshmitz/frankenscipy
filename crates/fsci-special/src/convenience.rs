@@ -7331,6 +7331,26 @@ mod tests {
     }
 
     #[test]
+    fn betaln_scalar_match_scipy() {
+        // scipy.special.betaln = ln(B(a,b)); stays finite where B underflows.
+        use crate::beta::betaln_scalar;
+        let m = RuntimeMode::Strict;
+        assert!(
+            (betaln_scalar(2.0, 3.0, m).unwrap() - -2.484_906_649_788_000_4).abs() < 1e-13,
+            "betaln(2,3)"
+        );
+        assert!(
+            (betaln_scalar(0.5, 0.5, m).unwrap() - 1.144_729_885_849_4).abs() < 1e-12,
+            "betaln(0.5,0.5)=ln(pi)"
+        );
+        // Large args: B(100,100) underflows but betaln stays finite.
+        assert!(
+            (betaln_scalar(100.0, 100.0, m).unwrap() - -139.665_259_086_706_67).abs() < 1e-10,
+            "betaln(100,100)"
+        );
+    }
+
+    #[test]
     fn poch_match_scipy() {
         // scipy.special.poch (Pochhammer rising factorial) = Gamma(x+n)/Gamma(x).
         assert!((poch(2.0, 3.0) - 24.0).abs() < 1e-12, "poch(2,3)");
