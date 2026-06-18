@@ -189,6 +189,9 @@ pub fn random(shape: Shape2D, density: f64, seed: u64) -> SparseResult<CooMatrix
         .ok_or_else(|| SparseError::IndexOverflow {
             message: "rows * cols overflows usize".to_string(),
         })?;
+    if total == 0 || density == 0.0 {
+        return CooMatrix::from_triplets(shape, Vec::new(), Vec::new(), Vec::new(), true);
+    }
 
     let mut state = seed.max(1);
     let mut rows: Vec<usize>;
@@ -949,6 +952,13 @@ mod tests {
     fn random_density_zero_returns_empty_matrix() {
         let coo = random(Shape2D::new(4, 5), 0.0, 11).expect("random");
         assert_eq!(coo.shape(), Shape2D::new(4, 5));
+        assert_eq!(coo.nnz(), 0);
+    }
+
+    #[test]
+    fn random_density_zero_does_not_scan_huge_shape() {
+        let coo = random(Shape2D::new(usize::MAX, 1), 0.0, 11).expect("random");
+        assert_eq!(coo.shape(), Shape2D::new(usize::MAX, 1));
         assert_eq!(coo.nnz(), 0);
     }
 
