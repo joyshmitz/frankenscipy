@@ -1235,7 +1235,10 @@ mod tests {
             mode: RuntimeMode::Hardened,
             tableau: &RK45_TABLEAU,
         };
-        let err = RkSolver::new(&mut fun, config).expect_err("non-finite f0 should fail");
+        let err = match RkSolver::new(&mut fun, config) {
+            Ok(_) => panic!("non-finite f0 should fail"),
+            Err(err) => err,
+        };
         assert_eq!(err, IntegrateValidationError::NonFiniteF0);
     }
 
