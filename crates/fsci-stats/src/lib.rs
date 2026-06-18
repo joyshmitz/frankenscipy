@@ -12821,6 +12821,22 @@ impl ContinuousDistribution for GenExtreme {
         }
     }
 
+    fn logcdf(&self, x: f64) -> f64 {
+        let c = self.c;
+        // cdf = exp(-τ), so logcdf = -τ directly. The default ln(cdf) underflows
+        // to -inf once cdf -> 0 in the left tail (genextreme(0).logcdf(-50) =
+        // -inf vs scipy -5.18e21). τ = exp(-x) (Gumbel) or (1+cx)^(-1/c).
+        if c.abs() < 1e-15 {
+            -(-x).exp()
+        } else {
+            let t = 1.0 + c * x;
+            if t <= 0.0 {
+                return if c > 0.0 { f64::NEG_INFINITY } else { 0.0 };
+            }
+            -t.powf(-1.0 / c)
+        }
+    }
+
     fn sf(&self, x: f64) -> f64 {
         // Survival = 1 − exp(−τ) = −expm1(−τ), computed directly so the right
         // tail (τ→0, cdf→1) doesn't collapse to 0 (genextreme(0).sf(40) scipy
@@ -71657,6 +71673,24 @@ mod tests {
         let hm = hmean(&data);
         let expected_hm = 5.0 / (1.0 + 0.5 + 1.0 / 3.0 + 0.25 + 0.2);
         assert!((hm - expected_hm).abs() < 1e-10, "hmean, got {}", hm);
+    }
+
+    #[test]
+    fn genextreme_logcdf_left_tail_match_scipy() {
+        // scipy.stats.genextreme (fsci c = -scipy c). Default ln(cdf) underflows
+        // to -inf in the left tail; logcdf = -tau stays finite.
+        // Gumbel (c=0): logcdf(-50) = -exp(50) = -5.18e21 (cdf underflows to 0).
+        let g = GenExtreme { c: 0.0 };
+        assert!((g.logcdf(0.0) - -1.0).abs() < 1e-12, "gumbel logcdf(0)");
+        assert!(
+            (g.logcdf(-50.0) - -5.184_705_528_587_072e21).abs() / 5.184_705_528_587_072e21 < 1e-12,
+            "gumbel tail: {}",
+            g.logcdf(-50.0)
+        );
+        // c=0.2 (scipy genextreme(-0.2)): logcdf(1) = -1.2^-5.
+        let g2 = GenExtreme { c: 0.2 };
+        assert!((g2.logcdf(1.0) - -0.401_877_572_016_460_96).abs() < 1e-12, "c=0.2 logcdf(1)");
+        assert!(g2.logcdf(-50.0) == f64::NEG_INFINITY, "c=0.2 out-of-support -> -inf");
     }
 
     #[test]
