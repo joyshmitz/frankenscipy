@@ -10907,9 +10907,7 @@ pub fn chirp(
 ///   `width=0.5` a triangle wave.
 pub fn sawtooth(t: &[f64], width: f64) -> Result<Vec<f64>, SignalError> {
     if !width.is_finite() || !(0.0..=1.0).contains(&width) {
-        return Err(SignalError::InvalidArgument(
-            "width must be finite and in [0, 1]".to_string(),
-        ));
+        return Ok(vec![f64::NAN; t.len()]);
     }
     let two_pi = 2.0 * std::f64::consts::PI;
     let result = t
@@ -10939,9 +10937,7 @@ pub fn sawtooth(t: &[f64], width: f64) -> Result<Vec<f64>, SignalError> {
 /// * `duty` — Duty cycle (fraction of period at +1). Default 0.5.
 pub fn square(t: &[f64], duty: f64) -> Result<Vec<f64>, SignalError> {
     if !duty.is_finite() || !(0.0..=1.0).contains(&duty) {
-        return Err(SignalError::InvalidArgument(
-            "duty must be finite and in [0, 1]".to_string(),
-        ));
+        return Ok(vec![f64::NAN; t.len()]);
     }
     let two_pi = 2.0 * std::f64::consts::PI;
     let result = t
@@ -21492,6 +21488,21 @@ mod tests {
     }
 
     #[test]
+    fn sawtooth_invalid_width_matches_scipy_nan_output() {
+        // scipy.signal.sawtooth([0, 1, 2], width=-0.25) and width=nan
+        // return NaN at every sample rather than raising.
+        let t = [0.0, 1.0, 2.0];
+        for width in [-0.25, 1.25, f64::NAN, f64::INFINITY] {
+            let sig = sawtooth(&t, width).expect("invalid width still returns samples");
+            assert_eq!(sig.len(), t.len());
+            assert!(
+                sig.iter().all(|v| v.is_nan()),
+                "width {width} should produce all-NaN output: {sig:?}"
+            );
+        }
+    }
+
+    #[test]
     fn square_wave_duty_cycle() {
         let two_pi = 2.0 * std::f64::consts::PI;
         let t: Vec<f64> = (0..1000).map(|i| i as f64 / 1000.0 * two_pi).collect();
@@ -21513,6 +21524,21 @@ mod tests {
         // All values should be exactly +1 or -1
         for &v in &sig {
             assert!(v == 1.0 || v == -1.0, "unexpected value: {v}");
+        }
+    }
+
+    #[test]
+    fn square_invalid_duty_matches_scipy_nan_output() {
+        // scipy.signal.square([0, 1, 2], duty=-0.25) and duty=nan
+        // return NaN at every sample rather than raising.
+        let t = [0.0, 1.0, 2.0];
+        for duty in [-0.25, 1.25, f64::NAN, f64::INFINITY] {
+            let sig = square(&t, duty).expect("invalid duty still returns samples");
+            assert_eq!(sig.len(), t.len());
+            assert!(
+                sig.iter().all(|v| v.is_nan()),
+                "duty {duty} should produce all-NaN output: {sig:?}"
+            );
         }
     }
 
