@@ -71460,6 +71460,28 @@ mod tests {
     }
 
     #[test]
+    fn correlations_match_scipy_statistic_and_pvalue() {
+        // Golden values from scipy.stats (1.17.1) for x=[1..7], y=[2,1,4,3,6,5,8]
+        // (distinct, untied). Locks both the coefficient and the two-sided
+        // p-value — pearsonr (t/beta), spearmanr, and kendalltau (exact Mahonian
+        // distribution for untied n<=33).
+        let x = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0];
+        let y = [2.0, 1.0, 4.0, 3.0, 6.0, 5.0, 8.0];
+        let close = |got: f64, want: f64, name: &str| {
+            assert!((got - want).abs() < 1e-9, "{name}: {got} != {want}");
+        };
+        let pr = pearsonr(&x, &y);
+        close(pr.statistic, 0.896_258_159_530_271_7, "pearsonr r");
+        close(pr.pvalue, 0.006_291_660_415_713_509, "pearsonr p");
+        let sr = spearmanr(&x, &y);
+        close(sr.statistic, 0.892_857_142_857_142_9, "spearmanr rho");
+        close(sr.pvalue, 0.006_807_187_408_935_393, "spearmanr p");
+        let kt = kendalltau(&x, &y);
+        close(kt.statistic, 0.714_285_714_285_714_3, "kendalltau tau");
+        close(kt.pvalue, 0.030_158_730_158_730_16, "kendalltau p (exact)");
+    }
+
+    #[test]
     fn zscore_matches_scipy_reference() {
         // scipy.stats.zscore([1,2,3,4,5]) normalizes to mean=0, std=1
         let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
