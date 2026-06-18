@@ -3089,31 +3089,39 @@ pub fn kmeans2(
     let nc = init_centroids.len();
     let mut code_book = init_centroids.to_vec();
     let mut label = vec![0usize; data.len()];
+    // Lloyd scratch hoisted out of the loop: sums/counts are zeroed-and-reaccumulated
+    // each pass; next_cb double-buffers the new code_book (mem::swap instead of a
+    // fresh nc×d allocation per iteration). Byte-identical: every entry is fully
+    // rewritten each pass. frankenscipy-4ylee.
+    let mut sums = vec![vec![0.0_f64; d]; nc];
+    let mut counts = vec![0usize; nc];
+    let mut next_cb = code_book.clone();
     for _ in 0..iter {
         // Assign each observation to its nearest current centroid.
         label = vq(data, &code_book)?.0;
         // Recompute centroids as the mean of assigned observations.
-        let mut sums = vec![vec![0.0_f64; d]; nc];
-        let mut counts = vec![0usize; nc];
+        for row in sums.iter_mut() {
+            row.iter_mut().for_each(|x| *x = 0.0);
+        }
+        counts.iter_mut().for_each(|x| *x = 0);
         for (i, &lab) in label.iter().enumerate() {
             counts[lab] += 1;
             for c in 0..d {
                 sums[lab][c] += data[i][c];
             }
         }
-        let mut new_cb = vec![vec![0.0_f64; d]; nc];
         for j in 0..nc {
             if counts[j] > 0 {
                 let inv = 1.0 / counts[j] as f64;
                 for c in 0..d {
-                    new_cb[j][c] = sums[j][c] * inv;
+                    next_cb[j][c] = sums[j][c] * inv;
                 }
             } else {
                 // Empty cluster keeps its previous position.
-                new_cb[j].clone_from(&code_book[j]);
+                next_cb[j].clone_from(&code_book[j]);
             }
         }
-        code_book = new_cb;
+        std::mem::swap(&mut code_book, &mut next_cb);
     }
     Ok((code_book, label))
 }
