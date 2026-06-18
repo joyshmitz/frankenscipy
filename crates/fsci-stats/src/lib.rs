@@ -70229,6 +70229,16 @@ mod tests {
     }
 
     #[test]
+    fn gibrat_pdf_cdf_match_scipy() {
+        // Exact scipy.stats.gibrat (standard lognormal, s=1). test_gibrat pins
+        // cdf(1)=0.5 and ppf(0.5)=1 but not exact pdf values or off-median cdf.
+        let g = Gibrat::new();
+        assert!((g.pdf(1.0) - 0.398_942_280_401_432_7).abs() < 1e-12, "pdf(1)");
+        assert!((g.pdf(2.0) - 0.156_874_019_278_981_12).abs() < 1e-12, "pdf(2)");
+        assert!((g.cdf(2.0) - 0.755_891_404_214_417_3).abs() < 1e-12, "cdf(2)");
+    }
+
+    #[test]
     fn test_gibrat() {
         let g = Gibrat::new();
         assert!(g.pdf(1.0) > 0.0);
