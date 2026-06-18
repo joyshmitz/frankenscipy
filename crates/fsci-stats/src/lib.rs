@@ -11650,6 +11650,38 @@ impl InverseGamma {
         assert!(a > 0.0, "shape parameter must be positive");
         Self { a }
     }
+
+    /// Log-density at many points, hoisting `lnΓ(a)` out of the per-point loop.
+    /// Byte-identical to mapping `logpdf` (kept as the last subtraction); x≤0 → −∞.
+    #[must_use]
+    pub fn logpdf_many(&self, xs: &[f64]) -> Vec<f64> {
+        let a = self.a;
+        let lg = ln_gamma(a);
+        xs.iter()
+            .map(|&x| {
+                if x <= 0.0 {
+                    return f64::NEG_INFINITY;
+                }
+                (-a - 1.0) * x.ln() - 1.0 / x - lg
+            })
+            .collect()
+    }
+
+    /// Density at many points; hoists `Γ(a) = exp(lnΓ(a))` (the divisor) like
+    /// [`logpdf_many`](Self::logpdf_many). Byte-identical to mapping `pdf`.
+    #[must_use]
+    pub fn pdf_many(&self, xs: &[f64]) -> Vec<f64> {
+        let a = self.a;
+        let gamma_a = ln_gamma(a).exp();
+        xs.iter()
+            .map(|&x| {
+                if x <= 0.0 {
+                    return 0.0;
+                }
+                x.powf(-a - 1.0) * (-1.0 / x).exp() / gamma_a
+            })
+            .collect()
+    }
 }
 
 impl ContinuousDistribution for InverseGamma {
@@ -47332,6 +47364,14 @@ mod tests {
         assert!((d.pdf(0.3) - 2.202_098_354_768_667).abs() < 1e-11, "pdf(0.3)");
         assert!((d.pdf(0.5) - 1.082_682_265_892_901_4).abs() < 1e-12, "pdf(0.5)");
         assert!((d.cdf(0.5) - 0.676_676_416_183_063_4).abs() < 1e-12, "cdf(0.5)");
+        // Batch pdf_many/logpdf_many (Gamma(a) hoisted) byte-identical to per-point.
+        let xs = [-1.0, 0.0, 0.3, 0.5, 1.0, 3.0];
+        let pm = d.pdf_many(&xs);
+        let lpm = d.logpdf_many(&xs);
+        for (i, &x) in xs.iter().enumerate() {
+            assert_eq!(pm[i], d.pdf(x), "pdf_many != pdf at {x}");
+            assert_eq!(lpm[i], d.logpdf(x), "logpdf_many != logpdf at {x}");
+        }
     }
 
     /// InverseGamma skew/kurt closed forms — frankenscipy-d4j8j.
