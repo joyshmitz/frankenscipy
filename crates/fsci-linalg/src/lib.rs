@@ -16756,6 +16756,30 @@ mod tests {
     }
 
     #[test]
+    fn expm_match_scipy() {
+        // scipy.linalg.expm: rotation generator -> rotation matrix; diagonal ->
+        // diag(exp).
+        let rot = expm(
+            &[vec![0.0, 1.0], vec![-1.0, 0.0]],
+            DecompOptions::default(),
+        )
+        .expect("expm");
+        let er = [
+            [0.540_302_305_868_139_7, 0.841_470_984_807_896_6],
+            [-0.841_470_984_807_896_5, 0.540_302_305_868_139_7],
+        ];
+        for (gr, e) in rot.iter().zip(&er) {
+            for (g, ex) in gr.iter().zip(e) {
+                assert!((g - ex).abs() < 1e-12, "rot: {g} vs {ex}");
+            }
+        }
+        let diag = expm(&[vec![1.0, 0.0], vec![0.0, 2.0]], DecompOptions::default()).expect("expm");
+        assert!((diag[0][0] - std::f64::consts::E).abs() < 1e-12, "diag[0][0]");
+        assert!((diag[1][1] - 7.389_056_098_930_65).abs() < 1e-12, "diag[1][1]");
+        assert!(diag[0][1].abs() < 1e-14 && diag[1][0].abs() < 1e-14, "off-diag ~0");
+    }
+
+    #[test]
     fn cholesky_match_scipy() {
         // scipy.linalg.cholesky(A, lower=True) for SPD A=[[4,2,2],[2,5,3],[2,3,6]]
         // gives L=[[2,0,0],[1,2,0],[1,1,2]] (L·Lᵀ = A).
