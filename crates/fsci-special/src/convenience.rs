@@ -7331,6 +7331,16 @@ mod tests {
     }
 
     #[test]
+    fn zeta_zetac_match_scipy() {
+        // scipy.special.zeta/zetac (Riemann zeta) at integer arguments.
+        use crate::gamma::{zeta, zetac};
+        assert!((zeta(2.0) - 1.644_934_066_848_226_4).abs() < 1e-13, "zeta(2)=pi^2/6");
+        assert!((zeta(3.0) - 1.202_056_903_159_594_2).abs() < 1e-13, "zeta(3) Apery");
+        assert!((zeta(4.0) - 1.082_323_233_711_138_1).abs() < 1e-13, "zeta(4)=pi^4/90");
+        assert!((zetac(2.0) - 0.644_934_066_848_226_4).abs() < 1e-13, "zetac(2)=zeta(2)-1");
+    }
+
+    #[test]
     fn betaln_scalar_match_scipy() {
         // scipy.special.betaln = ln(B(a,b)); stays finite where B underflows.
         use crate::beta::betaln_scalar;
