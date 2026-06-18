@@ -3647,8 +3647,8 @@ pub fn irfftn_with_audit(
 ///
 /// Matches `scipy.fft.next_fast_len(target)`.
 ///
-/// Returns the smallest integer >= `target` that is a product of
-/// small prime factors (2, 3, 5), since FFT is most efficient for these sizes.
+/// Returns the smallest integer >= `target` that scipy treats as fast for
+/// complex FFTs: products of the small prime factors 2, 3, 5, 7, and 11.
 pub fn next_fast_len(target: usize) -> usize {
     if target <= 1 {
         return target;
@@ -3667,8 +3667,8 @@ pub fn next_fast_len(target: usize) -> usize {
 /// Matches `scipy.fft.prev_fast_len(target)`.
 ///
 /// Returns the largest integer ≤ `target` that is a product of small
-/// prime factors {2, 3, 5}. Used to downsize an FFT to a length cheaper
-/// than `target`. The empty-product `1` is always 5-smooth, so the
+/// prime factors {2, 3, 5, 7, 11}. Used to downsize an FFT to a length cheaper
+/// than `target`. The empty-product `1` is always fast, so the
 /// search terminates at 1 in the worst case. Input `0` returns `0`.
 #[must_use]
 pub fn prev_fast_len(target: usize) -> usize {
@@ -3684,20 +3684,16 @@ pub fn prev_fast_len(target: usize) -> usize {
     }
 }
 
-/// Check if n is composed only of factors 2, 3, 5 (Hamming numbers / regular numbers).
+/// Check if n is composed only of scipy's complex FFT fast factors.
 #[allow(clippy::manual_is_multiple_of)]
 fn is_fast_len(mut n: usize) -> bool {
     if n == 0 {
         return false;
     }
-    while n % 2 == 0 {
-        n /= 2;
-    }
-    while n % 3 == 0 {
-        n /= 3;
-    }
-    while n % 5 == 0 {
-        n /= 5;
+    for factor in [2usize, 3, 5, 7, 11] {
+        while n % factor == 0 {
+            n /= factor;
+        }
     }
     n == 1
 }
@@ -5081,16 +5077,19 @@ mod tests {
 
     #[test]
     fn next_fast_len_non_powers() {
-        assert_eq!(next_fast_len(7), 8);
-        assert_eq!(next_fast_len(11), 12); // 12 = 2^2 * 3
-        assert_eq!(next_fast_len(13), 15); // 15 = 3 * 5
+        assert_eq!(next_fast_len(7), 7);
+        assert_eq!(next_fast_len(11), 11);
+        assert_eq!(next_fast_len(13), 14); // 14 = 2 * 7
         assert_eq!(next_fast_len(17), 18); // 18 = 2 * 3^2
+        assert_eq!(next_fast_len(101), 105); // 105 = 3 * 5 * 7
     }
 
     #[test]
     fn next_fast_len_already_fast() {
         // 30 = 2 * 3 * 5
         assert_eq!(next_fast_len(30), 30);
+        // 77 = 7 * 11
+        assert_eq!(next_fast_len(77), 77);
         // 100 = 2^2 * 5^2
         assert_eq!(next_fast_len(100), 100);
     }
@@ -5190,11 +5189,12 @@ mod tests {
 
     #[test]
     fn prev_fast_len_non_smooth() {
-        assert_eq!(prev_fast_len(7), 6); // 6 = 2·3, 7 prime
-        assert_eq!(prev_fast_len(11), 10); // 10 = 2·5
+        assert_eq!(prev_fast_len(7), 7); // 7 is fast for scipy's complex FFT path
+        assert_eq!(prev_fast_len(11), 11); // 11 is fast for scipy's complex FFT path
         assert_eq!(prev_fast_len(13), 12); // 12 = 2²·3
         assert_eq!(prev_fast_len(17), 16); // 16 = 2⁴
         assert_eq!(prev_fast_len(31), 30); // 30 = 2·3·5
+        assert_eq!(prev_fast_len(1025), 1024);
     }
 
     #[test]
@@ -5210,8 +5210,8 @@ mod tests {
             let n = next_fast_len(t);
             assert!(p <= t, "prev_fast_len({t}) = {p} should be ≤ {t}");
             assert!(t <= n, "next_fast_len({t}) = {n} should be ≥ {t}");
-            assert!(is_fast_len(p), "prev_fast_len({t}) = {p} not 5-smooth");
-            assert!(is_fast_len(n), "next_fast_len({t}) = {n} not 5-smooth");
+            assert!(is_fast_len(p), "prev_fast_len({t}) = {p} not scipy-fast");
+            assert!(is_fast_len(n), "next_fast_len({t}) = {n} not scipy-fast");
         }
     }
 
