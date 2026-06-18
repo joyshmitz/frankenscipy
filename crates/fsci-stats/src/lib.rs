@@ -2475,6 +2475,16 @@ impl ContinuousDistribution for Exponential {
         }
     }
 
+    fn logsf(&self, x: f64) -> f64 {
+        // logsf = -lambda*x; the default ln(sf) underflows to -inf once sf -> 0
+        // (expon.logsf(1000)=-inf vs scipy -1000).
+        if x < 0.0 {
+            0.0
+        } else {
+            -self.lambda * x
+        }
+    }
+
     fn ppf(&self, q: f64) -> f64 {
         Exponential::ppf(self, q)
     }
@@ -4382,6 +4392,15 @@ impl ContinuousDistribution for Weibull {
         (-(x / self.scale).powf(self.c)).exp()
     }
 
+    fn logsf(&self, x: f64) -> f64 {
+        // logsf = -(x/scale)^c; the default ln(sf) underflows to -inf once sf->0
+        // (weibull_min(1.5).logsf(200)=-inf vs scipy -2828).
+        if x <= 0.0 {
+            return 0.0;
+        }
+        -(x / self.scale).powf(self.c)
+    }
+
     fn ppf(&self, q: f64) -> f64 {
         Weibull::ppf(self, q)
     }
@@ -6225,6 +6244,18 @@ impl ContinuousDistribution for Logistic {
             (-z).exp().ln_1p()
         };
         -softplus_neg_z
+    }
+
+    fn logsf(&self, x: f64) -> f64 {
+        // logsf = ln(sf) = -softplus(z). The default ln(sf) underflows for z >> 0
+        // (sf=1/(1+exp(z))->0, logsf(1000)=-inf vs scipy -1000).
+        let z = (x - self.loc) / self.scale;
+        let softplus_z = if z <= 0.0 {
+            z.exp().ln_1p()
+        } else {
+            z + (-z).exp().ln_1p()
+        };
+        -softplus_z
     }
 
     fn sf(&self, x: f64) -> f64 {
@@ -71691,6 +71722,28 @@ mod tests {
         let g2 = GenExtreme { c: 0.2 };
         assert!((g2.logcdf(1.0) - -0.401_877_572_016_460_96).abs() < 1e-12, "c=0.2 logcdf(1)");
         assert!(g2.logcdf(-50.0) == f64::NEG_INFINITY, "c=0.2 out-of-support -> -inf");
+    }
+
+    #[test]
+    fn logsf_tail_match_scipy() {
+        // logsf overrides keep the right tail finite where the default ln(sf)
+        // underflows to -inf (the 1000/200 points). Values from scipy.stats.
+        let e = Exponential::new(1.0);
+        assert!((e.logsf(2.0) - -2.0).abs() < 1e-12, "expon logsf(2)");
+        assert!((e.logsf(1000.0) - -1000.0).abs() < 1e-9, "expon tail");
+        let w = Weibull::new(1.5, 1.0);
+        assert!((w.logsf(2.0) - -2.828_427_124_746_190_3).abs() < 1e-12, "weibull logsf(2)");
+        assert!(
+            (w.logsf(200.0) - -2828.427_124_746_190_3).abs() < 1e-8,
+            "weibull tail: {}",
+            w.logsf(200.0)
+        );
+        let l = Logistic {
+            loc: 0.0,
+            scale: 1.0,
+        };
+        assert!((l.logsf(2.0) - -2.126_928_011_042_972_7).abs() < 1e-12, "logistic logsf(2)");
+        assert!((l.logsf(1000.0) - -1000.0).abs() < 1e-9, "logistic tail");
     }
 
     #[test]
