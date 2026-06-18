@@ -61999,6 +61999,20 @@ mod tests {
     }
 
     #[test]
+    fn crystal_ball_pdf_cdf_match_scipy() {
+        // Exact scipy.stats.crystalball(beta=1.5, m=2.5). The CrystalBall suite
+        // covers entropy, moments, skew/kurt, and the sf Gaussian tail but no exact
+        // pdf/cdf. pdf(0) is the Gaussian region; pdf(-2) the power-law tail (x<-beta).
+        let cb = CrystalBall::new(1.5, 2.5);
+        assert!((cb.pdf(0.0) - 0.370_385_128_336_587_43).abs() < 1e-12, "pdf(0) gaussian");
+        assert!(
+            (cb.pdf(-2.0) - 0.062_404_206_846_704_155).abs() < 1e-12,
+            "pdf(-2) power-law tail"
+        );
+        assert!((cb.cdf(0.0) - 0.535_791_082_404_339).abs() < 1e-10, "cdf(0)");
+    }
+
+    #[test]
     fn crystal_ball_moments_match_scipy_reference_values() {
         let finite_cases = [
             (
