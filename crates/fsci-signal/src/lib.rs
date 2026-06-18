@@ -1636,6 +1636,7 @@ pub fn hilbert(x: &[f64]) -> Result<Vec<(f64, f64)>, SignalError> {
             "input must be non-empty".to_string(),
         ));
     }
+    validate_real_values_finite(x, "hilbert input samples must be finite")?;
 
     let fft_opts = fsci_fft::FftOptions::default();
 
@@ -1708,6 +1709,7 @@ pub fn hilbert2(x: &[f64], shape: (usize, usize)) -> Result<Vec<(f64, f64)>, Sig
             "input must be non-empty".to_string(),
         ));
     }
+    validate_real_values_finite(x, "hilbert2 input samples must be finite")?;
 
     let fft_opts = fsci_fft::FftOptions::default();
     let complex_input: Vec<(f64, f64)> = x.iter().map(|&v| (v, 0.0)).collect();
@@ -24801,6 +24803,28 @@ mod tests {
     }
 
     // ── Hilbert transform tests ──────────────────────────────────────
+
+    #[test]
+    fn hilbert_rejects_non_finite_samples() {
+        assert_eq!(
+            hilbert(&[1.0, f64::NAN, 3.0]),
+            Err(SignalError::NonFiniteInput {
+                detail: "hilbert input samples must be finite".to_string(),
+            })
+        );
+        assert_eq!(
+            hilbert_envelope(&[1.0, f64::INFINITY, 3.0]),
+            Err(SignalError::NonFiniteInput {
+                detail: "hilbert input samples must be finite".to_string(),
+            })
+        );
+        assert_eq!(
+            hilbert2(&[1.0, 2.0, f64::NEG_INFINITY, 4.0], (2, 2)),
+            Err(SignalError::NonFiniteInput {
+                detail: "hilbert2 input samples must be finite".to_string(),
+            })
+        );
+    }
 
     #[test]
     fn hilbert_sinusoid_envelope() {
