@@ -9903,6 +9903,28 @@ impl NegBinomial {
         assert!(p > 0.0 && p <= 1.0, "p must be in (0, 1], got {p}");
         Self { n, p }
     }
+
+    /// Probability mass at many outcomes (overdispersed count-data workload). Hoists
+    /// the parameter-only terms `lnΓ(n)`, `n·ln(p)`, and `ln(1−p)` out of the
+    /// per-`k` loop (the `lnΓ(k+n)`/`lnΓ(k+1)` terms vary with `k` and stay). Byte-
+    /// identical to mapping `pmf`: same `ln_comb`/`ln_pmf` order, same p==1 case.
+    #[must_use]
+    pub fn pmf_many(&self, ks: &[u64]) -> Vec<f64> {
+        let lg_n = ln_gamma(self.n);
+        let n_ln_p = self.n * self.p.ln();
+        let ln_1mp = (1.0 - self.p).ln();
+        ks.iter()
+            .map(|&k| {
+                if self.p == 1.0 {
+                    return if k == 0 { 1.0 } else { 0.0 };
+                }
+                let kf = k as f64;
+                let ln_comb = ln_gamma(kf + self.n) - ln_gamma(kf + 1.0) - lg_n;
+                let ln_pmf = ln_comb + n_ln_p + kf * ln_1mp;
+                ln_pmf.exp()
+            })
+            .collect()
+    }
 }
 
 impl DiscreteDistribution for NegBinomial {
@@ -55694,6 +55716,19 @@ mod tests {
         let nb = NegBinomial::new(5.0, 0.4);
         let sum: f64 = (0..=200).map(|k| nb.pmf(k)).sum();
         assert!((sum - 1.0).abs() < 1e-6, "PMF sum = {sum}");
+    }
+
+    #[test]
+    fn negbinomial_pmf_many_matches_pmf() {
+        // Batch pmf_many (lnΓ(n)/n·ln p/ln(1-p) hoisted) byte-identical to per-k pmf,
+        // incl. the p==1 limit.
+        let ks: Vec<u64> = (0..=15).collect();
+        for nb in [NegBinomial::new(5.0, 0.4), NegBinomial::new(2.5, 1.0)] {
+            let pm = nb.pmf_many(&ks);
+            for (i, &k) in ks.iter().enumerate() {
+                assert_eq!(pm[i], nb.pmf(k), "pmf_many != pmf at k={k}");
+            }
+        }
     }
 
     #[test]
