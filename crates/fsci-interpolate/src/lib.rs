@@ -9544,6 +9544,25 @@ mod tests {
     }
 
     #[test]
+    fn griddata_linear_nearest_match_scipy() {
+        // scipy.interpolate.griddata on unit-square corners with f(x,y)=x+y.
+        let pts = vec![
+            vec![0.0, 0.0],
+            vec![1.0, 0.0],
+            vec![0.0, 1.0],
+            vec![1.0, 1.0],
+        ];
+        let vals = vec![0.0, 1.0, 1.0, 2.0];
+        let xi = vec![vec![0.5, 0.5], vec![0.2, 0.7]];
+        let lin = griddata(&pts, &vals, &xi, GriddataMethod::Linear).expect("linear");
+        assert!((lin[0] - 1.0).abs() < 1e-12, "linear[0]: {}", lin[0]);
+        assert!((lin[1] - 0.9).abs() < 1e-12, "linear[1]: {}", lin[1]);
+        // Nearest at a non-tie point: [0.2,0.7] is closest to [0,1] -> 1.0.
+        let near = griddata(&pts, &vals, &xi, GriddataMethod::Nearest).expect("nearest");
+        assert!((near[1] - 1.0).abs() < 1e-12, "nearest[1]: {}", near[1]);
+    }
+
+    #[test]
     fn interpn_linear_match_scipy() {
         // scipy.interpolate.interpn((x,y), values, pts, method='linear') for
         // f(x,y)=x+y on a 3x3 grid; bilinear interpolation recovers f at the pts.
