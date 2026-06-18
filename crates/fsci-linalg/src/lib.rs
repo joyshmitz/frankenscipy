@@ -24424,6 +24424,12 @@ mod tests {
         }
         assert_eq!(res.scaling, vec![8.0, 1.0, 1.0]);
         assert_eq!(res.perm, vec![0, 1, 2]);
+        let exp_t = [[8.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        for i in 0..3 {
+            for j in 0..3 {
+                assert_eq!(res.transform[i][j], exp_t[i][j], "T[{i}][{j}]");
+            }
+        }
 
         // Reducible block matrix: pure permutation, no scaling.
         let r = vec![
