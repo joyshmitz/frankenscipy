@@ -8884,6 +8884,21 @@ pub fn freqs_zpk(zpk: &ZpkCoeffs, w: &[f64]) -> Result<FreqzResult, SignalError>
             "w must not be empty".to_string(),
         ));
     }
+    if zpk.zeros_re.len() != zpk.zeros_im.len() {
+        return Err(SignalError::InvalidArgument(
+            "zeros real and imaginary slices must agree on length".into(),
+        ));
+    }
+    if zpk.poles_re.len() != zpk.poles_im.len() {
+        return Err(SignalError::InvalidArgument(
+            "poles real and imaginary slices must agree on length".into(),
+        ));
+    }
+    if !zpk.gain.is_finite() {
+        return Err(SignalError::InvalidArgument("gain must be finite".into()));
+    }
+    validate_zpk_response_values_finite(zpk, "freqs_zpk")?;
+    validate_real_values_finite(w, "freqs_zpk frequencies must be finite")?;
     let cmul = |a: (f64, f64), b: (f64, f64)| (a.0 * b.0 - a.1 * b.1, a.0 * b.1 + a.1 * b.0);
 
     let mut h_mag = Vec::with_capacity(w.len());
@@ -9004,6 +9019,8 @@ pub fn freqs(b: &[f64], a: &[f64], w: &[f64]) -> Result<FreqzResult, SignalError
             "w must not be empty".to_string(),
         ));
     }
+    validate_ba_coefficients_finite(b, a, "freqs")?;
+    validate_real_values_finite(w, "freqs frequencies must be finite")?;
 
     let mut h_mag = Vec::with_capacity(w.len());
     let mut h_phase = Vec::with_capacity(w.len());
@@ -9072,6 +9089,8 @@ pub fn bode(num: &[f64], den: &[f64], w: &[f64]) -> Result<BodeTriplet, SignalEr
             "num and den must be non-empty".to_string(),
         ));
     }
+    validate_ba_coefficients_finite(num, den, "bode")?;
+    validate_real_values_finite(w, "bode frequencies must be finite")?;
     let h: Vec<(f64, f64)> = w
         .iter()
         .map(|&omega| {
@@ -19291,6 +19310,63 @@ mod tests {
             assert!((res.h_phase[i] - phase[i]).abs() < 1e-12, "phase[{i}] = {}", res.h_phase[i]);
         }
         assert!(freqs_zpk(&zpk, &[]).is_err());
+    }
+
+    #[test]
+    fn analog_frequency_responses_reject_non_finite_inputs() {
+        let zpk = ZpkCoeffs {
+            zeros_re: vec![f64::NAN],
+            zeros_im: vec![0.0],
+            poles_re: vec![-1.0],
+            poles_im: vec![0.0],
+            gain: 1.0,
+        };
+        assert_eq!(
+            freqs_zpk(&zpk, &[1.0]),
+            Err(SignalError::NonFiniteInput {
+                detail: "freqs_zpk zeros must be finite".to_string(),
+            })
+        );
+        let zpk = ZpkCoeffs {
+            zeros_re: vec![0.0],
+            zeros_im: vec![0.0],
+            poles_re: vec![-1.0],
+            poles_im: vec![0.0],
+            gain: 1.0,
+        };
+        assert_eq!(
+            freqs_zpk(&zpk, &[f64::INFINITY]),
+            Err(SignalError::NonFiniteInput {
+                detail: "freqs_zpk frequencies must be finite".to_string(),
+            })
+        );
+        let mismatched = ZpkCoeffs {
+            zeros_re: vec![0.0],
+            zeros_im: vec![],
+            poles_re: vec![-1.0],
+            poles_im: vec![0.0],
+            gain: 1.0,
+        };
+        assert!(freqs_zpk(&mismatched, &[1.0]).is_err());
+
+        assert_eq!(
+            freqs(&[1.0, f64::NAN], &[1.0, 2.0], &[1.0]),
+            Err(SignalError::NonFiniteInput {
+                detail: "freqs numerator coefficients must be finite".to_string(),
+            })
+        );
+        assert_eq!(
+            freqs(&[1.0], &[1.0, 2.0], &[f64::NAN]),
+            Err(SignalError::NonFiniteInput {
+                detail: "freqs frequencies must be finite".to_string(),
+            })
+        );
+        assert_eq!(
+            bode(&[1.0], &[1.0, 2.0], &[f64::INFINITY]),
+            Err(SignalError::NonFiniteInput {
+                detail: "bode frequencies must be finite".to_string(),
+            })
+        );
     }
 
     #[test]
