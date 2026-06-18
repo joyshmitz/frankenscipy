@@ -16787,10 +16787,15 @@ mod tests {
         let f1 = 0.2;
         let fs = 2.0;
         let x = czt_xin(n);
-        let y = ZoomFFT::new(n, (f1, 0.6), Some(1), fs, true)
-            .expect("single-point endpoint grid")
-            .transform(&x)
-            .expect("transform");
+        let zoom = ZoomFFT::new(n, (f1, 0.6), Some(1), fs, true)
+            .expect("single-point endpoint grid");
+        let start_angle = 2.0 * std::f64::consts::PI * f1 / fs;
+        let points = zoom.points();
+        assert_eq!(points.len(), 1);
+        assert!((points[0].0 - start_angle.cos()).abs() < 1e-12);
+        assert!((points[0].1 - start_angle.sin()).abs() < 1e-12);
+
+        let y = zoom.transform(&x).expect("transform");
         assert_eq!(y.len(), 1);
         assert!(
             y[0].0.is_finite() && y[0].1.is_finite(),
