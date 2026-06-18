@@ -126,6 +126,9 @@ where
     // Evaluate f1 = fun(t0 + h0 * direction, y1)
     let f1 = fun(request.t0 + h0 * request.direction, &y1);
     validate_rhs_shape(f1.len(), n)?;
+    if request.mode == RuntimeMode::Hardened && !f1.iter().all(|v| v.is_finite()) {
+        return Err(IntegrateValidationError::NonFiniteF0);
+    }
 
     // d2 = norm((f1 - f0) / scale) / h0
     let mut diff_scaled_sum_sq = 0.0_f64;
@@ -407,6 +410,26 @@ mod tests {
 
         let err = select_initial_step(&mut |_t, _y| vec![], &request)
             .expect_err("non-finite f0 must fail in Hardened mode");
+        assert_eq!(err, IntegrateValidationError::NonFiniteF0);
+    }
+
+    #[test]
+    fn select_initial_step_hardened_rejects_non_finite_probe_rhs() {
+        let request = InitialStepRequest {
+            t0: 0.0,
+            y0: &[1.0],
+            t_bound: 1.0,
+            max_step: f64::INFINITY,
+            f0: &[1.0],
+            direction: 1.0,
+            order: 4.0,
+            rtol: 1e-3,
+            atol: ToleranceValue::Scalar(1e-6),
+            mode: RuntimeMode::Hardened,
+        };
+
+        let err = select_initial_step(&mut |_t, _y| vec![f64::NAN], &request)
+            .expect_err("non-finite probe rhs must fail in Hardened mode");
         assert_eq!(err, IntegrateValidationError::NonFiniteF0);
     }
 }
