@@ -13669,22 +13669,21 @@ pub fn leslie(f_vals: &[f64], s_vals: &[f64]) -> Result<Vec<Vec<f64>>, LinalgErr
 /// Matches `scipy.linalg.convolution_matrix`.
 pub fn convolution_matrix(h: &[f64], n: usize, mode: &str) -> Vec<Vec<f64>> {
     let k = h.len();
+    if k == 0 || n == 0 {
+        return Vec::new();
+    }
+    let short = k.min(n);
+    let long = k.max(n);
     let out_len = match mode {
         "full" => n + k - 1,
-        "same" => n,
-        "valid" => {
-            if n >= k {
-                n - k + 1
-            } else {
-                0
-            }
-        }
+        "same" => long,
+        "valid" => long - short + 1,
         _ => n + k - 1, // default to full
     };
 
     let offset = match mode {
-        "same" => (k - 1) / 2,
-        "valid" => k - 1,
+        "same" => (short - 1) / 2,
+        "valid" => short - 1,
         _ => 0,
     };
 
@@ -25059,6 +25058,21 @@ mod tests {
         assert_eq!(m[0].len(), 4);
         // First row should be [1, 0, 0, 0] (h[0] applied to first input)
         assert_eq!(m[0][0], 1.0);
+    }
+
+    #[test]
+    fn convolution_matrix_short_input_modes_match_scipy() {
+        let same = convolution_matrix(&[1.0, 2.0, 3.0], 2, "same");
+        assert_eq!(same, vec![vec![1.0, 0.0], vec![2.0, 1.0], vec![3.0, 2.0]]);
+
+        let valid = convolution_matrix(&[1.0, 2.0, 3.0], 2, "valid");
+        assert_eq!(valid, vec![vec![2.0, 1.0], vec![3.0, 2.0]]);
+
+        let one_col_same = convolution_matrix(&[1.0, 2.0], 1, "same");
+        assert_eq!(one_col_same, vec![vec![1.0], vec![2.0]]);
+
+        let one_col_valid = convolution_matrix(&[1.0, 2.0], 1, "valid");
+        assert_eq!(one_col_valid, vec![vec![1.0], vec![2.0]]);
     }
 
     #[test]
