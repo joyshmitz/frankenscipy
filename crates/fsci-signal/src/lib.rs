@@ -12171,6 +12171,7 @@ pub fn medfilt(data: &[f64], kernel_size: usize) -> Result<Vec<f64>, SignalError
     if data.is_empty() {
         return Ok(vec![]);
     }
+    validate_real_values_finite(data, "medfilt input samples must be finite")?;
 
     // For large kernels the per-window O(k) selection (O(n*k) total) is replaced
     // by a sliding two-ordered-multiset median (O(n*log k)). Both return the
@@ -12228,6 +12229,7 @@ pub fn medfilt2d(
     if rows == 0 || cols == 0 {
         return Ok(vec![]);
     }
+    validate_real_values_finite(input, "medfilt2d input samples must be finite")?;
 
     let half_r = (kr / 2) as i64;
     let half_c = (kc / 2) as i64;
@@ -12457,6 +12459,7 @@ pub fn wiener(data: &[f64], mysize: usize, noise: Option<f64>) -> Result<Vec<f64
     if data.is_empty() {
         return Ok(Vec::new());
     }
+    validate_real_values_finite(data, "wiener input samples must be finite")?;
 
     let half = mysize / 2;
     let n = data.len();
@@ -17257,6 +17260,16 @@ mod tests {
         // Even kernel and shape mismatch are rejected.
         assert!(medfilt2d(&x, (4, 4), (2, 3)).is_err());
         assert!(medfilt2d(&x, (4, 5), (3, 3)).is_err());
+    }
+
+    #[test]
+    fn medfilt2d_rejects_non_finite_samples() {
+        assert_eq!(
+            medfilt2d(&[1.0, 2.0, f64::NAN, 4.0], (2, 2), (3, 3)),
+            Err(SignalError::NonFiniteInput {
+                detail: "medfilt2d input samples must be finite".to_string(),
+            })
+        );
     }
 
     #[test]
@@ -23103,6 +23116,16 @@ mod tests {
     }
 
     #[test]
+    fn medfilt_rejects_non_finite_samples() {
+        assert_eq!(
+            medfilt(&[1.0, f64::INFINITY, 3.0], 3),
+            Err(SignalError::NonFiniteInput {
+                detail: "medfilt input samples must be finite".to_string(),
+            })
+        );
+    }
+
+    #[test]
     fn wiener_constant_signal_is_stable() {
         let data = vec![2.0; 9];
         let filtered = wiener(&data, 3, None).unwrap();
@@ -23141,6 +23164,16 @@ mod tests {
     fn wiener_rejects_invalid_window() {
         assert!(wiener(&[1.0, 2.0, 3.0], 0, None).is_err());
         assert!(wiener(&[1.0, 2.0, 3.0], 4, None).is_err());
+    }
+
+    #[test]
+    fn wiener_rejects_non_finite_samples() {
+        assert_eq!(
+            wiener(&[1.0, f64::NEG_INFINITY, 3.0], 3, None),
+            Err(SignalError::NonFiniteInput {
+                detail: "wiener input samples must be finite".to_string(),
+            })
+        );
     }
 
     // ── get_window tests ───────────────────────────────────────────
