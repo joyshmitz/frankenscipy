@@ -246,7 +246,7 @@ pub struct NdArray {
 impl NdArray {
     /// Create an NdArray from data and shape.
     pub fn new(data: Vec<f64>, shape: Vec<usize>) -> Result<Self, NdimageError> {
-        let total: usize = shape.iter().product();
+        let total = checked_shape_product(&shape)?;
         if total != data.len() {
             return Err(NdimageError::DimensionMismatch(format!(
                 "shape {:?} requires {} elements, got {}",
@@ -255,7 +255,7 @@ impl NdArray {
                 data.len()
             )));
         }
-        let strides = compute_strides(&shape);
+        let strides = checked_strides(&shape)?;
         Ok(Self {
             data,
             shape,
@@ -373,6 +373,23 @@ fn compute_strides(shape: &[usize]) -> Vec<usize> {
         strides[d] = strides[d + 1] * shape[d + 1];
     }
     strides
+}
+
+fn checked_shape_product(shape: &[usize]) -> Result<usize, NdimageError> {
+    shape
+        .iter()
+        .try_fold(1usize, |acc, &dim| acc.checked_mul(dim))
+        .ok_or_else(|| NdimageError::InvalidArgument("shape product overflows usize".to_string()))
+}
+
+fn checked_strides(shape: &[usize]) -> Result<Vec<usize>, NdimageError> {
+    let mut strides = vec![1usize; shape.len()];
+    for d in (0..shape.len().saturating_sub(1)).rev() {
+        strides[d] = strides[d + 1].checked_mul(shape[d + 1]).ok_or_else(|| {
+            NdimageError::InvalidArgument("shape strides overflow usize".to_string())
+        })?;
+    }
+    Ok(strides)
 }
 
 fn unravel_with_shape(mut flat: usize, shape: &[usize]) -> Vec<usize> {
@@ -7549,7 +7566,7 @@ pub fn ones(shape: Vec<usize>) -> NdArray {
 
 /// Reshape an NdArray (must have same total number of elements).
 pub fn reshape(input: &NdArray, new_shape: Vec<usize>) -> Result<NdArray, NdimageError> {
-    let new_total: usize = new_shape.iter().product();
+    let new_total = checked_shape_product(&new_shape)?;
     if new_total != input.size() {
         return Err(NdimageError::DimensionMismatch(format!(
             "cannot reshape {} elements into {:?}",
@@ -8401,6 +8418,27 @@ fn compute_structure_offsets(struct_shape: &[usize], struct_data: &[f64]) -> Vec
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ndarray_new_rejects_overflowing_shape_product() {
+        let err = NdArray::new(vec![0.0], vec![usize::MAX, 2])
+            .expect_err("overflowing shape product should fail closed");
+        assert_eq!(
+            err,
+            NdimageError::InvalidArgument("shape product overflows usize".to_string())
+        );
+    }
+
+    #[test]
+    fn reshape_rejects_overflowing_target_shape_product() {
+        let input = NdArray::new(Vec::new(), vec![0]).expect("empty 1-D array");
+        let err = reshape(&input, vec![usize::MAX, 2])
+            .expect_err("overflowing reshape target should fail closed");
+        assert_eq!(
+            err,
+            NdimageError::InvalidArgument("shape product overflows usize".to_string())
+        );
+    }
 
     #[test]
     fn shift_order0_boundary_matches_scipy() {
