@@ -11828,6 +11828,11 @@ pub fn cspline1d_eval(
             "spline coefficients must not be empty".to_string(),
         ));
     }
+    if dx == 0.0 || !dx.is_finite() {
+        return Err(SignalError::InvalidArgument(
+            "dx must be finite and nonzero".to_string(),
+        ));
+    }
     let n = cj.len();
     let out = newx
         .iter()
@@ -11860,6 +11865,11 @@ pub fn qspline1d_eval(
     if cj.is_empty() {
         return Err(SignalError::InvalidArgument(
             "spline coefficients must not be empty".to_string(),
+        ));
+    }
+    if dx == 0.0 || !dx.is_finite() {
+        return Err(SignalError::InvalidArgument(
+            "dx must be finite and nonzero".to_string(),
         ));
     }
     let n = cj.len();
@@ -26382,6 +26392,24 @@ mod tests {
             assert!((g - e).abs() < 1e-7, "quad eval {g} vs {e}");
         }
         assert!(cspline1d_eval(&[], &nx, 1.0, 0.0).is_err());
+        assert_eq!(
+            cspline1d_eval(&cj, &nx, 0.0, 0.0),
+            Err(SignalError::InvalidArgument(
+                "dx must be finite and nonzero".to_string()
+            ))
+        );
+        assert_eq!(
+            qspline1d_eval(&qj, &nx, f64::INFINITY, 0.0),
+            Err(SignalError::InvalidArgument(
+                "dx must be finite and nonzero".to_string()
+            ))
+        );
+        assert_eq!(
+            cspline1d_eval(&cj, &nx, f64::NAN, 0.0),
+            Err(SignalError::InvalidArgument(
+                "dx must be finite and nonzero".to_string()
+            ))
+        );
     }
 
     #[test]
