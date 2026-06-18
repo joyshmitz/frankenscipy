@@ -27260,6 +27260,148 @@ mod proptest_tests {
         rotations
     }
 
+    #[derive(Clone, Copy, Debug)]
+    struct LowerBandBulgePacketProbe {
+        pivot: usize,
+        c: f64,
+        s: f64,
+        frontier_row: usize,
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct LowerBandBulgeQueueStats {
+        pushed: usize,
+        drained: usize,
+        max_occupancy: usize,
+        capacity: usize,
+    }
+
+    #[derive(Debug)]
+    struct LowerBandBulgeQueueProbe {
+        slots: Vec<Option<LowerBandBulgePacketProbe>>,
+        head: usize,
+        len: usize,
+        pushed: usize,
+        drained: usize,
+        max_occupancy: usize,
+    }
+
+    impl LowerBandBulgeQueueProbe {
+        fn with_capacity(capacity: usize) -> Self {
+            assert!(capacity > 0, "bulge queue capacity must be positive");
+            Self {
+                slots: vec![None; capacity],
+                head: 0,
+                len: 0,
+                pushed: 0,
+                drained: 0,
+                max_occupancy: 0,
+            }
+        }
+
+        fn push(&mut self, packet: LowerBandBulgePacketProbe) {
+            assert!(self.len < self.slots.len(), "bulge queue capacity exceeded");
+            let tail = (self.head + self.len) % self.slots.len();
+            self.slots[tail] = Some(packet);
+            self.len += 1;
+            self.pushed += 1;
+            self.max_occupancy = self.max_occupancy.max(self.len);
+        }
+
+        fn pop(&mut self) -> Option<LowerBandBulgePacketProbe> {
+            if self.len == 0 {
+                return None;
+            }
+            let packet = self.slots[self.head]
+                .take()
+                .expect("occupied bulge queue slot must contain a packet");
+            self.head = (self.head + 1) % self.slots.len();
+            self.len -= 1;
+            self.drained += 1;
+            Some(packet)
+        }
+
+        fn remaining_capacity(&self) -> usize {
+            self.slots.len() - self.len
+        }
+
+        fn is_empty(&self) -> bool {
+            self.len == 0
+        }
+
+        fn stats(&self) -> LowerBandBulgeQueueStats {
+            LowerBandBulgeQueueStats {
+                pushed: self.pushed,
+                drained: self.drained,
+                max_occupancy: self.max_occupancy,
+                capacity: self.slots.len(),
+            }
+        }
+    }
+
+    fn lower_band_frontier_bulge_packets(
+        n: usize,
+        bandwidth: usize,
+    ) -> Vec<LowerBandBulgePacketProbe> {
+        lower_band_frontier_rotations(n, bandwidth)
+            .into_iter()
+            .map(|(pivot, c, s)| LowerBandBulgePacketProbe {
+                pivot,
+                c,
+                s,
+                frontier_row: (pivot + bandwidth + 1).min(n.saturating_sub(1)),
+            })
+            .collect()
+    }
+
+    fn apply_frontier_bulge_packets_envelope(
+        envelope: &mut LowerBandEnvelopeProbe,
+        packets: &[LowerBandBulgePacketProbe],
+        queue_capacity: usize,
+    ) -> LowerBandBulgeQueueStats {
+        let mut queue = LowerBandBulgeQueueProbe::with_capacity(queue_capacity);
+        let mut next_packet = 0usize;
+
+        while next_packet < packets.len() || !queue.is_empty() {
+            while next_packet < packets.len() && queue.remaining_capacity() > 0 {
+                queue.push(packets[next_packet]);
+                next_packet += 1;
+            }
+
+            if let Some(packet) = queue.pop() {
+                assert!(
+                    packet.frontier_row >= packet.pivot + 1,
+                    "bulge packet frontier must trail the rotation pivot"
+                );
+                apply_adjacent_rotation_envelope_diagonal_lanes(
+                    envelope,
+                    packet.pivot,
+                    packet.c,
+                    packet.s,
+                );
+            }
+        }
+
+        queue.stats()
+    }
+
+    fn replay_frontier_bulge_packets_to_rows(
+        matrix: &mut DMatrix<f64>,
+        packets: &[LowerBandBulgePacketProbe],
+        queue_capacity: usize,
+    ) -> LowerBandBulgeQueueStats {
+        let mut queue = LowerBandBulgeQueueProbe::with_capacity(queue_capacity);
+
+        for packet in packets.iter().rev() {
+            queue.push(*packet);
+            if let Some(packet) = queue.pop() {
+                apply_adjacent_rotation_rows(matrix, packet.pivot, packet.c, packet.s);
+            }
+        }
+
+        queue.stats()
+    }
+
     fn apply_adjacent_rotation_dense(matrix: &mut DMatrix<f64>, p: usize, c: f64, s: f64) {
         let n = matrix.nrows();
         let q = p + 1;
@@ -27659,6 +27801,70 @@ mod proptest_tests {
                 lower_band_probe_max_abs_dmatrix_diff(&compact.transformed, &dense.transformed),
                 lower_band_probe_max_abs_dmatrix_diff(&compact.eigenvectors, &dense.eigenvectors),
                 lower_band_frontier_chase_digest(&compact)
+            );
+        }
+    }
+
+    #[test]
+    fn lower_band_explicit_bulge_queue_matches_dense_oracle() {
+        for (n, bandwidth, cols) in [(18usize, 4usize, 7usize), (37, 8, 13), (64, 12, 17)] {
+            let ab = make_lower_band_eig_probe(n, bandwidth);
+            let dense = lower_band_dense_frontier_chase_oracle(&ab, bandwidth, cols);
+            let packets = lower_band_frontier_bulge_packets(n, bandwidth);
+            let queue_capacity = 3usize;
+
+            let mut envelope = LowerBandEnvelopeProbe::from_lower_band(&ab, bandwidth + 1);
+            let envelope_stats =
+                apply_frontier_bulge_packets_envelope(&mut envelope, &packets, queue_capacity);
+            let transformed = envelope.to_dense();
+
+            let mut replay = lower_band_frontier_eigenvector_block(n, cols);
+            let replay_stats =
+                replay_frontier_bulge_packets_to_rows(&mut replay, &packets, queue_capacity);
+
+            let scale = dmatrix_max_abs_value(&dense.transformed).max(1.0);
+            let tolerance = 1e-10 * scale * n as f64;
+            let transformed_drift =
+                lower_band_probe_max_abs_dmatrix_diff(&transformed, &dense.transformed);
+            let eigenvector_drift =
+                lower_band_probe_max_abs_dmatrix_diff(&replay, &dense.eigenvectors);
+            assert!(
+                transformed_drift <= tolerance,
+                "queued bulge transformed drift {transformed_drift:.17e} for n={n}, bandwidth={bandwidth}"
+            );
+            assert!(
+                eigenvector_drift <= tolerance,
+                "queued bulge Q replay drift {eigenvector_drift:.17e} for n={n}, bandwidth={bandwidth}"
+            );
+
+            assert_eq!(envelope_stats.pushed, packets.len());
+            assert_eq!(envelope_stats.drained, packets.len());
+            assert!(envelope_stats.max_occupancy <= envelope_stats.capacity);
+            assert_eq!(replay_stats.pushed, packets.len());
+            assert_eq!(replay_stats.drained, packets.len());
+            assert!(replay_stats.max_occupancy <= replay_stats.capacity);
+
+            let q =
+                dense_q_from_frontier_rotations(n, &lower_band_frontier_rotations(n, bandwidth));
+            let projected = (&q.transpose() * dmatrix_from_lower_band_eig_probe(&ab)) * &q;
+            let projection_residual =
+                lower_band_probe_max_abs_dmatrix_diff(&projected, &dense.transformed);
+            let q_orthogonality = lower_band_probe_orthogonality_error(&q);
+            assert!(
+                projection_residual <= tolerance,
+                "queued bulge dense projection residual {projection_residual:.17e}"
+            );
+            assert!(
+                q_orthogonality <= tolerance,
+                "queued bulge Q orthogonality {q_orthogonality:.17e}"
+            );
+
+            println!(
+                "lower_band_bulge_queue n={n} bandwidth={bandwidth} cols={cols} packets={} queue_peak={} transformed_drift={transformed_drift:.17e} eigenvector_drift={eigenvector_drift:.17e} transformed_digest={:#018x} replay_digest={:#018x}",
+                packets.len(),
+                envelope_stats.max_occupancy,
+                lower_band_probe_dmatrix_digest(&transformed),
+                lower_band_probe_dmatrix_digest(&replay)
             );
         }
     }
