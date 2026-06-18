@@ -18345,6 +18345,19 @@ mod tests {
     }
 
     #[test]
+    fn detrend_match_scipy() {
+        // scipy.signal.detrend linear (remove best-fit line) and constant (mean).
+        let lin = detrend(&[2.0, 4.0, 6.0, 9.0, 10.0], DetrendType::Linear).expect("linear");
+        for (g, e) in lin.iter().zip(&[0.0, -0.1, -0.2, 0.7, -0.4]) {
+            assert!((g - e).abs() < 1e-12, "linear: {g} vs {e}");
+        }
+        let con = detrend(&[1.0, 2.0, 3.0, 2.0, 1.0], DetrendType::Constant).expect("constant");
+        for (g, e) in con.iter().zip(&[-0.8, 0.2, 1.2, 0.2, -0.8]) {
+            assert!((g - e).abs() < 1e-12, "constant: {g} vs {e}");
+        }
+    }
+
+    #[test]
     fn firwin_lowpass_match_scipy() {
         // scipy.signal.firwin(5, 0.3) default: hamming window, pass_zero=True
         // (lowpass), normalized. Coefficients are symmetric (linear phase).
