@@ -2168,6 +2168,15 @@ fn read_idl_string_data(reader: &mut IdlReader<'_>, context: &str) -> Result<Vec
 /// Load a whitespace-delimited text file as a matrix.
 ///
 /// Like `numpy.loadtxt`.
+/// Reduce a raw text line to its numeric payload the way `numpy.loadtxt` does:
+/// everything from the first `#` to end-of-line is a comment and is dropped,
+/// then the remainder is trimmed. A line that is only a comment (or blank)
+/// becomes empty. The legacy `%` leading-comment convention is handled by the
+/// callers (an empty payload or a `%`-led payload is skipped).
+fn loadtxt_line_payload(line: &str) -> &str {
+    line.split('#').next().unwrap_or("").trim()
+}
+
 pub fn loadtxt(content: &str) -> Result<(usize, usize, Vec<f64>), IoError> {
     // Parsing `split_whitespace().parse::<f64>()` for every field dominates loadtxt on
     // large numeric files. Each data line maps to its own contiguous output row with no
@@ -2183,8 +2192,8 @@ pub fn loadtxt(content: &str) -> Result<(usize, usize, Vec<f64>), IoError> {
     let mut cols = 0usize;
     let mut have_data = false;
     for line in &lines {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with('%') {
+        let trimmed = loadtxt_line_payload(line);
+        if trimmed.is_empty() || trimmed.starts_with('%') {
             continue;
         }
         cols = trimmed.split_whitespace().count();
@@ -2214,8 +2223,8 @@ pub fn loadtxt(content: &str) -> Result<(usize, usize, Vec<f64>), IoError> {
         let mut local = Vec::new();
         let mut r = 0usize;
         for line in chunk {
-            let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with('%') {
+            let trimmed = loadtxt_line_payload(line);
+            if trimmed.is_empty() || trimmed.starts_with('%') {
                 continue;
             }
             let mut count = 0usize;
@@ -2280,8 +2289,8 @@ fn loadtxt_serial(content: &str) -> Result<(usize, usize, Vec<f64>), IoError> {
     let mut rows = 0usize;
 
     for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with('%') {
+        let trimmed = loadtxt_line_payload(line);
+        if trimmed.is_empty() || trimmed.starts_with('%') {
             continue;
         }
 
@@ -5258,6 +5267,21 @@ mod tests {
         assert_eq!(rows, 2);
         assert_eq!(cols, 3);
         assert_eq!(data, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    }
+
+    #[test]
+    fn loadtxt_strips_inline_comments_like_numpy() {
+        // numpy.loadtxt drops everything from the first '#' to end of line, so
+        // trailing comments and a full-line comment are both handled.
+        let content = "1 2 3 # first row\n# skip me\n4 5 6  #trailing\n7 8 9\n";
+        let (rows, cols, data) = loadtxt(content).unwrap();
+        assert_eq!((rows, cols), (3, 3));
+        assert_eq!(data, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]);
+
+        // A '#' immediately after a value (no space) still delimits the comment.
+        let (r, c, d) = loadtxt("1.5 2.5#note\n3.5 4.5\n").unwrap();
+        assert_eq!((r, c), (2, 2));
+        assert_eq!(d, vec![1.5, 2.5, 3.5, 4.5]);
     }
 
     #[test]
