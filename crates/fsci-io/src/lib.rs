@@ -4602,6 +4602,28 @@ mod tests {
     }
 
     #[test]
+    fn mmwrite_complex_roundtrips_via_mmread() {
+        // mmwrite_complex/mmwrite_sparse_complex were previously untested.
+        let s = mmwrite_complex(1, 1, &[(3.0, -4.0)]).unwrap();
+        assert!(s.contains("complex"), "MM complex header");
+        let m = mmread(&s).unwrap();
+        let cd = m.complex_data.expect("complex data");
+        assert!(
+            (cd[0].0 - 3.0).abs() < 1e-12 && (cd[0].1 - (-4.0)).abs() < 1e-12,
+            "roundtrip 3-4i"
+        );
+        // sparse coordinate complex: (0,0)=1+2i, (1,1)=5+6i.
+        let ss = mmwrite_sparse_complex(2, 2, &[(0, 0, (1.0, 2.0)), (1, 1, (5.0, 6.0))]).unwrap();
+        assert!(ss.contains("coordinate complex"), "sparse complex header");
+        let ms = mmread(&ss).unwrap();
+        let csd = ms.complex_data.expect("sparse complex data");
+        assert!(
+            (csd[0].0 - 1.0).abs() < 1e-12 && (csd[0].1 - 2.0).abs() < 1e-12,
+            "sparse (0,0)=1+2i"
+        );
+    }
+
+    #[test]
     fn mmwrite_roundtrip() {
         let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let content = mmwrite(2, 3, &data).unwrap();
