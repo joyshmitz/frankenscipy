@@ -18735,6 +18735,31 @@ impl ContinuousDistribution for KsTwoBign {
         }
     }
 
+    fn sf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 1.0;
+        }
+        if x < KSTWOBIGN_THRESHOLD {
+            // Small x: cdf is near 0, so 1 - cdf has no cancellation.
+            return (1.0 - kstwobign_cdf_small(x)).clamp(0.0, 1.0);
+        }
+        // Large-x Kolmogorov survival series: sf = 2*sum_{k>=1} (-1)^(k-1)
+        // e^{-2k^2 x^2}. The default 1 - cdf RE-cancels (cdf_large = 1 + 2*sum of
+        // the same exp terms) and underflowed sf to exactly 0 by x~5
+        // (scipy.kstwobign.sf(5)=3.86e-22) — and sf IS the KS-test p-value, so
+        // the deep tail matters for significant results. Sum the series directly.
+        let mut sum = 0.0_f64;
+        for k in 1..=KSTWOBIGN_KMAX {
+            let kf = k as f64;
+            let term = (-2.0 * kf * kf * x * x).exp();
+            sum += if k % 2 == 1 { term } else { -term };
+            if term < KSTWOBIGN_TOL {
+                break;
+            }
+        }
+        (2.0 * sum).clamp(0.0, 1.0)
+    }
+
     fn ppf(&self, q: f64) -> f64 {
         if !(0.0..=1.0).contains(&q) {
             return f64::NAN;
@@ -71555,6 +71580,19 @@ mod tests {
         let hm = hmean(&data);
         let expected_hm = 5.0 / (1.0 + 0.5 + 1.0 / 3.0 + 0.25 + 0.2);
         assert!((hm - expected_hm).abs() < 1e-10, "hmean, got {}", hm);
+    }
+
+    #[test]
+    fn kstwobign_sf_tail_match_scipy() {
+        // scipy.stats.kstwobign — sf IS the KS-test asymptotic p-value. The
+        // default 1-cdf re-cancels the Kolmogorov series and underflowed sf to 0
+        // by x~5; the direct series stays accurate (sf(5)=3.86e-22).
+        let d = KsTwoBign;
+        assert!((d.sf(0.5) - 0.963_945_243_664_875_1).abs() < 1e-12, "sf(0.5)");
+        let rel = |g: f64, e: f64| (g - e).abs() / e < 1e-10;
+        assert!(rel(d.sf(1.5), 0.022_217_962_616_525_127), "sf(1.5): {}", d.sf(1.5));
+        assert!(rel(d.sf(3.0), 3.045_995_948_942_526e-8), "sf(3): {}", d.sf(3.0));
+        assert!(rel(d.sf(5.0), 3.857_499_695_927_835_6e-22), "sf(5) tail: {}", d.sf(5.0));
     }
 
     #[test]
