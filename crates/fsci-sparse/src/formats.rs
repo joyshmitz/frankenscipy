@@ -173,6 +173,26 @@ impl CsrMatrix {
         self.data.len()
     }
 
+    /// Sparse matrix–vector product `A·x` (each output row is the dot product of
+    /// that CSR row with `x`). Matches `scipy.sparse.csr_matrix.dot` on a 1-D rhs.
+    pub fn matvec(&self, x: &[f64]) -> SparseResult<Vec<f64>> {
+        let (rows, cols) = (self.shape.rows, self.shape.cols);
+        if x.len() != cols {
+            return Err(SparseError::IncompatibleShape {
+                message: format!("x length {} != cols {}", x.len(), cols),
+            });
+        }
+        let mut y = vec![0.0; rows];
+        for (i, yi) in y.iter_mut().enumerate() {
+            let mut sum = 0.0;
+            for idx in self.indptr[i]..self.indptr[i + 1] {
+                sum += self.data[idx] * x[self.indices[idx]];
+            }
+            *yi = sum;
+        }
+        Ok(y)
+    }
+
     #[must_use]
     pub fn canonical_meta(&self) -> CanonicalMeta {
         self.canonical
