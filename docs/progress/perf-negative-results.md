@@ -162,6 +162,7 @@ condition so dead ends are not repeated casually.
   rejection-pattern drift; if streamed norms are neutral/slower, reject this
   exact formulation and do not retry unless allocation profiles show Radau
   scaled-norm Vec churn is again a top-5 integrate hotspot.
+
 ## 2026-06-18 - frankenscipy-8l8r1.121 - BDF streamed step/order error norms
 
 - Agent: cod-a / MistyBirch
@@ -183,3 +184,26 @@ condition so dead ends are not repeated casually.
   streaming order-error formulation is neutral/slower, reject it and do not
   retry unless allocation profiles show BDF error-norm Vec churn remains a top
   integrate hotspot.
+
+## 2026-06-18 - frankenscipy-8l8r1.118 - CSD chunk-local cross-spectrum accumulator
+
+- Agent: cod-b / MistyBirch
+- Lever: apply the coherence accumulator pattern to `csd_with_scaling` itself:
+  each worker chunk now reuses `wx`/`wy` segment scratch and folds
+  cross-periodograms directly into one Pxy accumulator instead of allocating
+  and retaining one `Vec<(re, im)>` per segment before the final average.
+- Status: pending batch-test. This is a code-first commit per campaign
+  instruction; local `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b
+  cargo check -p fsci-signal` is the only required pre-commit gate.
+- Correctness guard: existing `csd_auto_spectrum_matches_welch`,
+  `csd_scaling_matches_scipy_density_and_spectrum`, and
+  `coherence_matches_compositional_csd_formula` cover the scaled CSD contract
+  and downstream coherence use.
+- Benchmark guard: compare focused Welch/CSD rows, especially
+  `spectral/csd/65536_w1024_o512` if present, plus the coherence target that
+  consumes `csd` compositionally in the guard path.
+- Retry condition: keep only if same-worker CSD/Welch timings improve without
+  SciPy density/spectrum drift; if chunk-local reduction grouping or scratch
+  initialization costs erase the allocation savings, reject this CSD accumulator
+  formulation and do not retry unless retained segment spectra reappear as a
+  top-5 signal allocation hotspot.

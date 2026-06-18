@@ -14668,57 +14668,61 @@ pub fn csd_with_scaling(
     // nperseg <= x.len() above, so at least one segment fits.
     let n_segments = (x.len() - nperseg) / step + 1;
 
-    // Each segment's cross-periodogram (constant-detrend + window + two rffts + conj(X)*Y)
-    // is independent and expensive (two FFTs per segment); for many segments the work is
-    // split across threads. Each segment returns its per-bin contribution (with the
-    // one-sided factor applied), and the averaging fold runs in segment order, so the
-    // result is bit-identical to the sequential loop.
-    let compute_segment = |s: usize| -> Result<Vec<(f64, f64)>, SignalError> {
-        let start = s * step;
-        let xs = &x[start..start + nperseg];
-        let ys = &y[start..start + nperseg];
-        let xmean = xs.iter().sum::<f64>() / nperseg as f64;
-        let ymean = ys.iter().sum::<f64>() / nperseg as f64;
-        let wx: Vec<f64> = xs
-            .iter()
-            .zip(&win_coeffs)
-            .map(|(&xi, &wi)| (xi - xmean) * wi)
-            .collect();
-        let wy: Vec<f64> = ys
-            .iter()
-            .zip(&win_coeffs)
-            .map(|(&yi, &wi)| (yi - ymean) * wi)
-            .collect();
-        let sx = fsci_fft::rfft(&wx, &opts)
-            .map_err(|e| SignalError::InvalidArgument(format!("FFT failed: {e}")))?;
-        let sy = fsci_fft::rfft(&wy, &opts)
-            .map_err(|e| SignalError::InvalidArgument(format!("FFT failed: {e}")))?;
-        let mut out = Vec::with_capacity(n_freqs);
-        for (k, (&(xr, xi), &(yr, yi))) in sx.iter().zip(sy.iter()).take(n_freqs).enumerate() {
-            // conj(X) * Y = (xr - j*xi) * (yr + j*yi) = (xr*yr + xi*yi) + j*(xr*yi - xi*yr)
-            let re = xr * yr + xi * yi;
-            let im = xr * yi - xi * yr;
-            let factor = if k == 0 || (nperseg.is_multiple_of(2) && k == n_freqs - 1) {
-                1.0
-            } else {
-                2.0
-            };
-            out.push((re * factor, im * factor));
+    // Each chunk owns its windowed segment scratch and folds cross-periodograms
+    // directly into one accumulator, avoiding one Vec of spectra per segment.
+    let accumulate_range = |s0: usize, s1: usize| -> Result<Vec<(f64, f64)>, SignalError> {
+        let mut acc = vec![(0.0, 0.0); n_freqs];
+        let mut wx = vec![0.0; nperseg];
+        let mut wy = vec![0.0; nperseg];
+
+        for s in s0..s1 {
+            let start = s * step;
+            let xs = &x[start..start + nperseg];
+            let ys = &y[start..start + nperseg];
+            let xmean = xs.iter().sum::<f64>() / nperseg as f64;
+            let ymean = ys.iter().sum::<f64>() / nperseg as f64;
+            for (((wxi, wyi), (&xi, &yi)), &wi) in wx
+                .iter_mut()
+                .zip(wy.iter_mut())
+                .zip(xs.iter().zip(ys.iter()))
+                .zip(&win_coeffs)
+            {
+                *wxi = (xi - xmean) * wi;
+                *wyi = (yi - ymean) * wi;
+            }
+
+            let sx = fsci_fft::rfft(&wx, &opts)
+                .map_err(|e| SignalError::InvalidArgument(format!("FFT failed: {e}")))?;
+            let sy = fsci_fft::rfft(&wy, &opts)
+                .map_err(|e| SignalError::InvalidArgument(format!("FFT failed: {e}")))?;
+            for (k, (&(xr, xi), &(yr, yi))) in
+                sx.iter().zip(sy.iter()).take(n_freqs).enumerate()
+            {
+                // conj(X) * Y = (xr - j*xi) * (yr + j*yi) = (xr*yr + xi*yi) + j*(xr*yi - xi*yr)
+                let re = xr * yr + xi * yi;
+                let im = xr * yi - xi * yr;
+                let factor = if k == 0 || (nperseg.is_multiple_of(2) && k == n_freqs - 1) {
+                    1.0
+                } else {
+                    2.0
+                };
+                acc[k].0 += re * factor;
+                acc[k].1 += im * factor;
+            }
         }
-        Ok(out)
+
+        Ok(acc)
     };
 
-    let seg_csds: Vec<Vec<(f64, f64)>> = {
+    let mut avg_csd = {
         let nthreads = stft_frame_thread_count(n_segments, nperseg);
         if nthreads <= 1 {
-            (0..n_segments)
-                .map(&compute_segment)
-                .collect::<Result<Vec<_>, _>>()?
+            accumulate_range(0, n_segments)?
         } else {
             let chunk = n_segments.div_ceil(nthreads);
-            let cs = &compute_segment;
-            type SegChunk = Result<Vec<Vec<(f64, f64)>>, SignalError>;
-            let chunk_results: Vec<SegChunk> = std::thread::scope(|scope| {
+            let ar = &accumulate_range;
+            type ChunkCsd = Result<Vec<(f64, f64)>, SignalError>;
+            let chunk_results: Vec<ChunkCsd> = std::thread::scope(|scope| {
                 let handles: Vec<_> = (0..nthreads)
                     .filter_map(|t| {
                         let s0 = t * chunk;
@@ -14726,7 +14730,7 @@ pub fn csd_with_scaling(
                             return None;
                         }
                         let s1 = (s0 + chunk).min(n_segments);
-                        Some(scope.spawn(move || (s0..s1).map(cs).collect::<Result<Vec<_>, _>>()))
+                        Some(scope.spawn(move || ar(s0, s1)))
                     })
                     .collect();
                 handles
@@ -14734,21 +14738,16 @@ pub fn csd_with_scaling(
                     .map(|h| h.join().expect("csd worker panicked"))
                     .collect()
             });
-            let mut v = Vec::with_capacity(n_segments);
-            for cr in chunk_results {
-                v.extend(cr?);
+            let mut avg = vec![(0.0, 0.0); n_freqs];
+            for chunk_csd in chunk_results {
+                for ((avg_re, avg_im), (re, im)) in avg.iter_mut().zip(chunk_csd?) {
+                    *avg_re += re;
+                    *avg_im += im;
+                }
             }
-            v
+            avg
         }
     };
-
-    let mut avg_csd = vec![(0.0, 0.0); n_freqs];
-    for seg in &seg_csds {
-        for ((avg_re, avg_im), &(re, im)) in avg_csd.iter_mut().zip(seg.iter()) {
-            *avg_re += re;
-            *avg_im += im;
-        }
-    }
 
     let scale = match scaling {
         SpectralScaling::Density => 1.0 / (fs * nperseg as f64 * win_power * n_segments as f64),
