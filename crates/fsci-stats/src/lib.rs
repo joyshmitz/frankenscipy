@@ -72020,6 +72020,20 @@ mod tests {
     }
 
     #[test]
+    fn half_normal_try_fit_validates_support() {
+        // HalfNormal is parameterless (standard half-normal); try_fit only
+        // validates the sample support and fails closed on out-of-support data.
+        assert!(HalfNormal::try_fit(&[0.0, 1.0, 2.5, 3.0]).is_ok());
+        // Negative data is outside HalfNormal support -> UnsupportedData.
+        assert!(matches!(
+            HalfNormal::try_fit(&[1.0, -0.5, 2.0]),
+            Err(FitError::UnsupportedData(_))
+        ));
+        // Empty data is rejected by the parameterless-fit validator.
+        assert!(HalfNormal::try_fit(&[]).is_err());
+    }
+
+    #[test]
     fn median_abs_deviation_match_scipy() {
         // scipy.stats.median_abs_deviation: scale=1.0 (default) is the raw MAD;
         // scale='normal' divides by norm.ppf(0.75)=0.6744897501960817.
