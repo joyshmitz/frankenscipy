@@ -48119,6 +48119,17 @@ mod tests {
     }
 
     #[test]
+    fn folded_cauchy_pdf_cdf_sf_match_scipy() {
+        // Exact scipy.stats.foldcauchy(c=1). FoldedCauchy had only an entropy test;
+        // pin pdf/cdf and the cancellation-free sf override.
+        let d = FoldedCauchy::new(1.0);
+        assert!((d.pdf(0.0) - 0.318_309_886_183_790_7).abs() < 1e-12, "pdf(0)");
+        assert!((d.pdf(2.0) - 0.190_985_931_710_274_42).abs() < 1e-12, "pdf(2)");
+        assert!((d.cdf(2.0) - 0.647_583_617_650_433_3).abs() < 1e-12, "cdf(2)");
+        assert!((d.sf(2.0) - 0.352_416_382_349_566_74).abs() < 1e-12, "sf(2)");
+    }
+
+    #[test]
     fn fatiguelife_skewnorm_foldednormal_foldedcauchy_entropy_match_scipy() {
         // FatigueLife(c)
         for &(c, expected) in &[
