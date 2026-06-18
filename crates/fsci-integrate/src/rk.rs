@@ -14,7 +14,7 @@ use fsci_runtime::RuntimeMode;
 
 use crate::solver::{OdeSolver, OdeSolverState, StepFailure, StepOutcome};
 use crate::step_size::InitialStepRequest;
-use crate::validation::{ToleranceValue, validate_tol};
+use crate::validation::{ToleranceValue, validate_rhs_shape, validate_tol};
 use crate::{
     IntegrateValidationError, select_initial_step, validate_first_step, validate_max_step,
 };
@@ -474,6 +474,7 @@ impl RkSolver {
 
         // Evaluate f0
         let f0 = fun(config.t0, config.y0);
+        validate_rhs_shape(f0.len(), n)?;
         let nfev = 1;
 
         // Determine initial step size
@@ -574,6 +575,7 @@ impl RkSolver {
 
         // Evaluate f0
         let f0 = fun_box(config.t0, config.y0);
+        validate_rhs_shape(f0.len(), n)?;
         let nfev = 1;
 
         // Determine initial step size

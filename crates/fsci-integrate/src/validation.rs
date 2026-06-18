@@ -183,6 +183,16 @@ impl std::fmt::Display for IntegrateValidationError {
 
 impl std::error::Error for IntegrateValidationError {}
 
+pub(crate) fn validate_rhs_shape(
+    actual: usize,
+    expected: usize,
+) -> Result<(), IntegrateValidationError> {
+    if actual != expected {
+        return Err(IntegrateValidationError::RhsWrongShape { expected, actual });
+    }
+    Ok(())
+}
+
 pub fn validate_first_step(
     first_step: f64,
     t0: f64,

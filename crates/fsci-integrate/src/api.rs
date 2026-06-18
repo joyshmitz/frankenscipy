@@ -987,6 +987,31 @@ mod tests {
     }
 
     #[test]
+    fn solve_ivp_rejects_wrong_size_initial_rhs_output() {
+        for method in [SolverKind::Rk45, SolverKind::Bdf, SolverKind::Radau] {
+            let err = solve_ivp(
+                &mut |_t, _y| Vec::new(),
+                &SolveIvpOptions {
+                    t_span: (0.0, 1.0),
+                    y0: &[1.0],
+                    method,
+                    first_step: Some(0.1),
+                    ..SolveIvpOptions::default()
+                },
+            )
+            .expect_err("wrong-size RHS output should be rejected");
+            assert_eq!(
+                err,
+                IntegrateValidationError::RhsWrongShape {
+                    expected: 1,
+                    actual: 0
+                },
+                "method {method:?}"
+            );
+        }
+    }
+
+    #[test]
     fn solve_ivp_with_audit_records_fail_closed_on_empty_initial_state() {
         let audit_ledger = crate::sync_audit_ledger();
         let err = solve_ivp_with_audit(

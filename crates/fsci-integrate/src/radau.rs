@@ -13,7 +13,9 @@
 
 use crate::bdf::select_initial_step_bdf;
 use crate::solver::{OdeSolverState, StepFailure, StepOutcome};
-use crate::validation::{ToleranceValue, validate_first_step, validate_max_step, validate_tol};
+use crate::validation::{
+    ToleranceValue, validate_first_step, validate_max_step, validate_rhs_shape, validate_tol,
+};
 use fsci_runtime::RuntimeMode;
 use nalgebra::{DMatrix, DVector};
 
@@ -117,13 +119,14 @@ impl RadauSolver {
                 direction,
                 config.rtol,
                 &atol_vec,
-            )
+            )?
             .min(config.max_step),
         };
         let h = h_mag * direction;
 
         let y0 = config.y0.to_vec();
         let f0 = fun(config.t0, &y0);
+        validate_rhs_shape(f0.len(), n)?;
 
         let s6 = 6.0_f64.sqrt();
         let c = [(4.0 - s6) / 10.0, (4.0 + s6) / 10.0, 1.0];

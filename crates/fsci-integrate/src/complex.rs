@@ -12,7 +12,9 @@
 //! object; the numerical result matches SciPy's `complex_ode` to tolerance.
 
 use crate::api::{SolveIvpOptions, SolverKind, solve_ivp};
-use crate::validation::{IntegrateValidationError, ToleranceValue, validate_tol};
+use crate::validation::{
+    IntegrateValidationError, ToleranceValue, validate_rhs_shape, validate_tol,
+};
 
 /// A complex number as a `(real, imaginary)` pair, matching the workspace
 /// `Complex64` convention used elsewhere (e.g. `fsci-fft`).
@@ -62,7 +64,7 @@ where
     validate_complex_ode_inputs(y0, t_span, t_eval, rtol, atol)?;
 
     let initial_dyc = fun(t_span.0, y0);
-    validate_complex_rhs_len(initial_dyc.len(), n)?;
+    validate_rhs_shape(initial_dyc.len(), n)?;
 
     // Pack the complex initial state into [Re.., Im..].
     let mut real_y0 = Vec::with_capacity(2 * n);
@@ -174,13 +176,6 @@ fn validate_complex_t_eval(
     };
     if !sorted {
         return Err(IntegrateValidationError::TEvalNotSorted);
-    }
-    Ok(())
-}
-
-fn validate_complex_rhs_len(actual: usize, expected: usize) -> Result<(), IntegrateValidationError> {
-    if actual != expected {
-        return Err(IntegrateValidationError::RhsWrongShape { expected, actual });
     }
     Ok(())
 }

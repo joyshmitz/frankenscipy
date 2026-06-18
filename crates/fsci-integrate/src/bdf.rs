@@ -12,7 +12,9 @@
 //! own genuine Radau IIA solver (see `radau.rs`).
 
 use crate::solver::{OdeSolverState, StepFailure, StepOutcome};
-use crate::validation::{ToleranceValue, validate_first_step, validate_max_step, validate_tol};
+use crate::validation::{
+    ToleranceValue, validate_first_step, validate_max_step, validate_rhs_shape, validate_tol,
+};
 use fsci_runtime::RuntimeMode;
 use nalgebra::{DMatrix, DVector, Dyn, LU};
 
@@ -203,13 +205,14 @@ impl BdfSolver {
                 direction,
                 config.rtol,
                 &atol_vec,
-            )
+            )?
             .min(config.max_step),
         };
         let h = h_mag * direction;
 
         let y0 = config.y0.to_vec();
         let f0 = fun(config.t0, &y0);
+        validate_rhs_shape(f0.len(), n)?;
 
         // Backward-difference array D[0..=MAX_ORDER+2]: D[0] = y, D[1] = h*f, rest 0.
         let mut d = vec![vec![0.0; n]; MAX_ORDER + 3];
@@ -625,12 +628,13 @@ pub(crate) fn select_initial_step_bdf<F>(
     direction: f64,
     rtol: f64,
     atol: &[f64],
-) -> f64
+) -> Result<f64, crate::IntegrateValidationError>
 where
     F: FnMut(f64, &[f64]) -> Vec<f64>,
 {
     let f0 = fun(t0, y0);
     let n = y0.len();
+    validate_rhs_shape(f0.len(), n)?;
 
     let mut d0 = 0.0_f64;
     let mut d1 = 0.0_f64;
@@ -654,6 +658,7 @@ where
         .map(|(yi, fi)| yi + direction * h0 * fi)
         .collect();
     let f1 = fun(t0 + direction * h0, &y1);
+    validate_rhs_shape(f1.len(), n)?;
 
     let mut d2 = 0.0_f64;
     for j in 0..n {
@@ -678,9 +683,9 @@ where
     };
 
     if h0.is_nan() || h1.is_nan() {
-        f64::NAN
+        Ok(f64::NAN)
     } else {
-        (100.0 * h0).min(h1)
+        Ok((100.0 * h0).min(h1))
     }
 }
 
