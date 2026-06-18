@@ -14771,8 +14771,15 @@ pub fn upfirdn(h: &[f64], x: &[f64], up: usize, down: usize) -> Result<Vec<f64>,
         return Ok(Vec::new());
     }
 
-    let upsampled_len = (x.len() - 1) * up + 1;
-    let full_len = upsampled_len + h.len() - 1;
+    let upsampled_len = (x.len() - 1)
+        .checked_mul(up)
+        .and_then(|value| value.checked_add(1))
+        .ok_or_else(|| {
+            SignalError::InvalidArgument("upfirdn output length overflows usize".to_string())
+        })?;
+    let full_len = upsampled_len.checked_add(h.len() - 1).ok_or_else(|| {
+        SignalError::InvalidArgument("upfirdn output length overflows usize".to_string())
+    })?;
     let mut output = vec![0.0; full_len];
 
     for (i, &sample) in x.iter().enumerate() {
@@ -23633,6 +23640,12 @@ mod tests {
         assert!(upfirdn(&[], &[1.0, 2.0], 1, 1).is_err());
         assert!(upfirdn(&[1.0], &[1.0, 2.0], 0, 1).is_err());
         assert!(upfirdn(&[1.0], &[1.0, 2.0], 1, 0).is_err());
+        assert_eq!(
+            upfirdn(&[1.0], &[1.0, 2.0], usize::MAX, 1),
+            Err(SignalError::InvalidArgument(
+                "upfirdn output length overflows usize".to_string()
+            ))
+        );
     }
 
     // ── Max-length sequence + matched filter tests ───────────────────
