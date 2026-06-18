@@ -50359,6 +50359,17 @@ mod tests {
     }
 
     #[test]
+    fn loglaplace_pdf_cdf_interior_match_scipy() {
+        // Exact scipy.stats.loglaplace(c=2). loglaplace_pdf_boundary_matches_scipy
+        // only checks the boundary; this pins the pdf/cdf on both power-law branches
+        // (pdf(0.5) is x<1, pdf(2) is x>1, split at the x=1 peak).
+        let l = LogLaplace::new(2.0);
+        assert!((l.pdf(0.5) - 0.5).abs() < 1e-12, "pdf(0.5) left branch");
+        assert!((l.pdf(2.0) - 0.125).abs() < 1e-12, "pdf(2) right branch");
+        assert!((l.cdf(2.0) - 0.875).abs() < 1e-12, "cdf(2)");
+    }
+
+    #[test]
     fn loglaplace_pdf_boundary_matches_scipy() {
         // /mock-code-finder regression for [frankenscipy-27u2d]:
         // loglaplace.pdf at x=0 is 0/0.5/+∞ depending on shape c.
