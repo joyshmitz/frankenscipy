@@ -785,9 +785,7 @@ pub fn trapezoid(y: &[f64], x: &[f64]) -> Result<CompositeQuadResult, IntegrateV
         });
     }
     if y.len() < 2 {
-        return Err(IntegrateValidationError::QuadInvalidBounds {
-            detail: "need at least 2 points for trapezoidal rule".to_string(),
-        });
+        return Ok(CompositeQuadResult { integral: 0.0 });
     }
     validate_sample_coordinates(x)?;
 
@@ -808,9 +806,7 @@ pub fn trapezoid_uniform(
     dx: f64,
 ) -> Result<CompositeQuadResult, IntegrateValidationError> {
     if y.len() < 2 {
-        return Err(IntegrateValidationError::QuadInvalidBounds {
-            detail: "need at least 2 points for trapezoidal rule".to_string(),
-        });
+        return Ok(CompositeQuadResult { integral: 0.0 });
     }
     if !dx.is_finite() {
         return Err(IntegrateValidationError::QuadInvalidTolerance {
@@ -845,10 +841,13 @@ pub fn simpson(y: &[f64], x: &[f64]) -> Result<CompositeQuadResult, IntegrateVal
             ),
         });
     }
-    if y.len() < 2 {
+    if y.is_empty() {
         return Err(IntegrateValidationError::QuadInvalidBounds {
             detail: "need at least 2 points for Simpson's rule".to_string(),
         });
+    }
+    if y.len() == 1 {
+        return Ok(CompositeQuadResult { integral: 0.0 });
     }
     validate_sample_coordinates(x)?;
     if y.len() == 2 {
@@ -932,10 +931,13 @@ pub fn simpson_uniform(
     y: &[f64],
     dx: f64,
 ) -> Result<CompositeQuadResult, IntegrateValidationError> {
-    if y.len() < 2 {
+    if y.is_empty() {
         return Err(IntegrateValidationError::QuadInvalidBounds {
             detail: "need at least 2 points for Simpson's rule".to_string(),
         });
+    }
+    if y.len() == 1 {
+        return Ok(CompositeQuadResult { integral: 0.0 });
     }
     if !dx.is_finite() {
         return Err(IntegrateValidationError::QuadInvalidTolerance {
@@ -4371,12 +4373,15 @@ mod tests {
     }
 
     #[test]
-    fn trapezoid_too_few_points_error() {
-        let err = trapezoid(&[1.0], &[0.0]).expect_err("too few points");
-        assert!(matches!(
-            err,
-            IntegrateValidationError::QuadInvalidBounds { .. }
-        ));
+    fn trapezoid_short_inputs_return_zero_like_scipy() {
+        let empty = trapezoid(&[], &[]).expect("empty trapezoid");
+        assert_eq!(empty.integral, 0.0);
+
+        let singleton = trapezoid(&[1.0], &[f64::NAN]).expect("singleton trapezoid");
+        assert_eq!(singleton.integral, 0.0);
+
+        let uniform = trapezoid_uniform(&[1.0], f64::INFINITY).expect("singleton uniform");
+        assert_eq!(uniform.integral, 0.0);
     }
 
     #[test]
@@ -4525,8 +4530,17 @@ mod tests {
     }
 
     #[test]
-    fn simpson_too_few_points_error() {
-        let err = simpson(&[1.0], &[0.0]).expect_err("too few points");
+    fn simpson_singleton_returns_zero_like_scipy() {
+        let singleton = simpson(&[1.0], &[f64::NAN]).expect("singleton simpson");
+        assert_eq!(singleton.integral, 0.0);
+
+        let uniform = simpson_uniform(&[1.0], f64::INFINITY).expect("singleton uniform simpson");
+        assert_eq!(uniform.integral, 0.0);
+    }
+
+    #[test]
+    fn simpson_empty_input_errors() {
+        let err = simpson(&[], &[]).expect_err("empty simpson");
         assert!(matches!(
             err,
             IntegrateValidationError::QuadInvalidBounds { .. }
