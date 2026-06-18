@@ -484,6 +484,9 @@ pub fn phase_spectrum_signal(x: &[f64]) -> Result<Vec<f64>, FftError> {
 
 /// Zero-pad a signal to the next power of 2.
 pub fn zero_pad_pow2(x: &[f64]) -> Vec<f64> {
+    if x.is_empty() {
+        return Vec::new();
+    }
     let n = x.len().next_power_of_two();
     let mut padded = x.to_vec();
     padded.resize(n, 0.0);
@@ -522,7 +525,7 @@ mod tests {
 
     use super::{
         fftconvolve, fftfreq, fftshift, fftshift_1d, ifftshift, ifftshift_1d,
-        polynomial_multiply_fft, rfftfreq,
+        polynomial_multiply_fft, rfftfreq, zero_pad_pow2,
     };
     use crate::{FftError, FftOptions};
 
@@ -563,6 +566,11 @@ mod tests {
         // shape mismatch errors
         assert!(fftshift(&d, &[2, 3], None).is_err());
         assert!(fftshift(&d, &[5], Some(&[1])).is_err());
+    }
+
+    #[test]
+    fn zero_pad_pow2_preserves_empty_input() {
+        assert!(zero_pad_pow2(&[]).is_empty());
     }
 
     #[test]
