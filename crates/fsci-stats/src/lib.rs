@@ -8846,6 +8846,35 @@ impl Binomial {
         assert!((0.0..=1.0).contains(&p), "p must be in [0, 1], got {p}");
         Self { n, p }
     }
+
+    /// Probability mass at many outcomes (the realistic full-support / count-data
+    /// workload). Hoists the parameter-only terms `lnΓ(n+1)`, `ln p`, and `ln(1−p)`
+    /// out of the per-`k` loop (the `lnΓ(k+1)` and `lnΓ(n−k+1)` terms vary with `k`
+    /// and stay). Byte-identical to mapping `pmf`: same `ln_comb`/`ln_pmf` operation
+    /// order and the same p∈{0,1} and k>n special cases.
+    #[must_use]
+    pub fn pmf_many(&self, ks: &[u64]) -> Vec<f64> {
+        let lg_n1 = ln_gamma(self.n as f64 + 1.0);
+        let ln_p = self.p.ln();
+        let ln_1mp = (1.0 - self.p).ln();
+        ks.iter()
+            .map(|&k| {
+                if k > self.n {
+                    return 0.0;
+                }
+                if self.p == 0.0 {
+                    return if k == 0 { 1.0 } else { 0.0 };
+                }
+                if self.p == 1.0 {
+                    return if k == self.n { 1.0 } else { 0.0 };
+                }
+                let ln_comb =
+                    lg_n1 - ln_gamma(k as f64 + 1.0) - ln_gamma((self.n - k) as f64 + 1.0);
+                let ln_pmf = ln_comb + k as f64 * ln_p + (self.n - k) as f64 * ln_1mp;
+                ln_pmf.exp()
+            })
+            .collect()
+    }
 }
 
 impl DiscreteDistribution for Binomial {
@@ -55565,6 +55594,19 @@ mod tests {
         let b = Binomial::new(10, 0.3);
         let sum: f64 = (0..=10).map(|k| b.pmf(k)).sum();
         assert!((sum - 1.0).abs() < 1e-10, "PMF sum = {sum}");
+    }
+
+    #[test]
+    fn binomial_pmf_many_matches_pmf() {
+        // Batch pmf_many (lnΓ(n+1)/ln p/ln(1-p) hoisted) byte-identical to per-k pmf,
+        // incl. k>n and p∈{0,1} special cases.
+        let ks: Vec<u64> = (0..=12).collect();
+        for b in [Binomial::new(10, 0.3), Binomial::new(10, 0.0), Binomial::new(10, 1.0)] {
+            let pm = b.pmf_many(&ks);
+            for (i, &k) in ks.iter().enumerate() {
+                assert_eq!(pm[i], b.pmf(k), "pmf_many != pmf at k={k}");
+            }
+        }
     }
 
     #[test]
