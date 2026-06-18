@@ -12791,12 +12791,13 @@ pub fn polar(a: &[Vec<f64>], options: DecompOptions) -> Result<PolarResult, Lina
 ///
 /// Matches `scipy.linalg.diagsvd(s, M, N)`: places `s` on the leading diagonal of
 /// an otherwise-zero `M × N` matrix, so that `A = U · diagsvd(s, M, N) · Vᵀ`.
-/// scipy requires `len(s)` to equal `M` or `N`; that constraint is enforced here.
+/// scipy requires `len(s)` to fit the leading diagonal, so it must equal
+/// `min(M, N)`; that constraint is enforced here.
 pub fn diagsvd(s: &[f64], m: usize, n: usize) -> Result<Vec<Vec<f64>>, LinalgError> {
     let k = s.len();
-    if k != m && k != n {
+    if k != m.min(n) {
         return Err(LinalgError::InvalidArgument {
-            detail: "diagsvd: length of s must equal M or N".to_string(),
+            detail: "diagsvd: length of s must equal min(M, N)".to_string(),
         });
     }
     let mut out = vec![vec![0.0; n]; m];
@@ -24552,6 +24553,11 @@ mod tests {
                 vec![0.0, 0.0, 1.0],
             ]
         );
+        // len(s) must fit the leading diagonal. scipy errors when it matches
+        // only the larger dimension because the trailing singular value would
+        // otherwise be dropped.
+        assert!(diagsvd(&[2.0, 1.0], 1, 2).is_err());
+        assert!(diagsvd(&[2.0, 1.0], 2, 1).is_err());
         // len(s) neither M nor N -> error (matches scipy ValueError).
         assert!(diagsvd(&[2.0, 1.0], 3, 4).is_err());
     }
