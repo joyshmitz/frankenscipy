@@ -1915,6 +1915,26 @@ pub fn sweep_poly(t: &[f64], poly: &[f64]) -> Vec<f64> {
 // Chirp Z-Transform
 // ══════════════════════════════════════════════════════════════════════
 
+fn validate_czt_polar_control(name: &str, value: (f64, f64)) -> Result<(), SignalError> {
+    let (magnitude, angle) = value;
+    if magnitude.is_finite() && magnitude > 0.0 && angle.is_finite() {
+        return Ok(());
+    }
+    Err(SignalError::InvalidParameter {
+        detail: format!("{name} magnitude must be finite and positive and angle must be finite"),
+    })
+}
+
+fn validate_czt_complex_control(name: &str, value: (f64, f64)) -> Result<(), SignalError> {
+    let (real, imag) = value;
+    if real.is_finite() && imag.is_finite() && (real != 0.0 || imag != 0.0) {
+        return Ok(());
+    }
+    Err(SignalError::InvalidParameter {
+        detail: format!("{name} must be finite and nonzero"),
+    })
+}
+
 /// Chirp Z-Transform: evaluate the Z-transform at M points along a spiral
 /// in the complex plane starting at `a`, stepping by `w`.
 ///
@@ -1952,6 +1972,8 @@ pub fn czt(
     let (w_mag, w_ang) = w.unwrap_or((1.0, -two_pi / m as f64));
     // Default a: z = 1
     let (a_mag, a_ang) = a.unwrap_or((1.0, 0.0));
+    validate_czt_polar_control("w", (w_mag, w_ang))?;
+    validate_czt_polar_control("a", (a_mag, a_ang))?;
 
     // Bluestein's algorithm for CZT via convolution:
     // 1) Form yn[n] = x[n] * a^{-n} * w^{n²/2}
@@ -2186,6 +2208,7 @@ impl CZT {
                 (w_val, wk2)
             }
             Some(w_val) => {
+                validate_czt_complex_control("w", w_val)?;
                 let wk2 = (0..kmax)
                     .map(|k| {
                         let p = (k as f64) * (k as f64) / 2.0;
@@ -2196,6 +2219,7 @@ impl CZT {
             }
         };
         let a_val = a.unwrap_or((1.0, 0.0));
+        validate_czt_complex_control("a", a_val)?;
 
         let nfft = fsci_fft::next_fast_len(n + m - 1);
 
@@ -16940,6 +16964,35 @@ mod tests {
     }
 
     #[test]
+    fn czt_rejects_invalid_complex_controls() {
+        let invalid_controls = [
+            (0.0, 0.0),
+            (f64::NAN, 0.0),
+            (0.0, f64::NAN),
+            (f64::INFINITY, 0.0),
+            (0.0, f64::NEG_INFINITY),
+        ];
+        for control in invalid_controls {
+            let err = CZT::new(7, None, Some(control), None).expect_err("invalid w");
+            assert_eq!(
+                err,
+                SignalError::InvalidParameter {
+                    detail: "w must be finite and nonzero".to_string()
+                },
+                "w={control:?}"
+            );
+            let err = CZT::new(7, None, None, Some(control)).expect_err("invalid a");
+            assert_eq!(
+                err,
+                SignalError::InvalidParameter {
+                    detail: "a must be finite and nonzero".to_string()
+                },
+                "a={control:?}"
+            );
+        }
+    }
+
+    #[test]
     fn band_stop_obj_matches_scipy() {
         // scipy.signal.band_stop_obj with passb=(1,3), stopb=(0.5,4), wp=2, ind=1.
         let n = band_stop_obj(2.0, 1, (1.0, 3.0), (0.5, 4.0), 3.0, 30.0, "butter").unwrap();
@@ -25151,6 +25204,41 @@ mod tests {
     fn czt_empty_input_errors() {
         let result = czt(&[], 4, None, None);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn czt_rejects_invalid_polar_controls() {
+        let x = [1.0, 2.0, 3.0];
+        let invalid_controls = [
+            (0.0, 0.0),
+            (-1.0, 0.0),
+            (f64::NAN, 0.0),
+            (1.0, f64::NAN),
+            (f64::INFINITY, 0.0),
+            (1.0, f64::NEG_INFINITY),
+        ];
+        for control in invalid_controls {
+            let err = czt(&x, 3, Some(control), None).expect_err("invalid w");
+            assert_eq!(
+                err,
+                SignalError::InvalidParameter {
+                    detail:
+                        "w magnitude must be finite and positive and angle must be finite"
+                            .to_string()
+                },
+                "w={control:?}"
+            );
+            let err = czt(&x, 3, None, Some(control)).expect_err("invalid a");
+            assert_eq!(
+                err,
+                SignalError::InvalidParameter {
+                    detail:
+                        "a magnitude must be finite and positive and angle must be finite"
+                            .to_string()
+                },
+                "a={control:?}"
+            );
+        }
     }
 
     #[test]
