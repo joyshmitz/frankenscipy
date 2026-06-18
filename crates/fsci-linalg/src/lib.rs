@@ -1265,7 +1265,7 @@ fn condition_diagnostics_with_assumption_mode(
                 | MatrixAssumption::Hermitian
                 | MatrixAssumption::PositiveDefinite
         )
-    ) || issymmetric(a, tol, tol)?;
+    ) || (rows == cols && issymmetric(a, tol, tol)?);
     let positive_definite = assumption == Some(MatrixAssumption::PositiveDefinite)
         || (evaluate_positive_definite && symmetric && is_positive_definite(a));
     let bandwidth = bandwidth_with_tolerance(a, tol);
@@ -1377,17 +1377,19 @@ fn assumption_incompatibility_score(
         return Ok(0.0);
     };
     let tol = structure_tolerance(a);
+    let (rows, cols) = matrix_shape(a)?;
     let incompatible = match assumption {
         MatrixAssumption::General => false,
         MatrixAssumption::Diagonal => !is_diagonal(a, tol),
         MatrixAssumption::UpperTriangular => !is_upper_triangular(a, tol),
         MatrixAssumption::LowerTriangular => !is_lower_triangular(a, tol),
-        MatrixAssumption::Symmetric | MatrixAssumption::Hermitian => !issymmetric(a, tol, tol)?,
+        MatrixAssumption::Symmetric | MatrixAssumption::Hermitian => {
+            rows != cols || !issymmetric(a, tol, tol)?
+        }
         MatrixAssumption::PositiveDefinite => {
-            !issymmetric(a, tol, tol)? || !is_positive_definite(a)
+            rows != cols || !issymmetric(a, tol, tol)? || !is_positive_definite(a)
         }
         MatrixAssumption::Banded => {
-            let (rows, cols) = matrix_shape(a)?;
             let bandwidth = bandwidth_with_tolerance(a, tol);
             bandwidth.0 + bandwidth.1 + 1 >= rows.max(cols)
         }
@@ -7640,7 +7642,9 @@ pub fn solve_toeplitz(c: &[f64], r: Option<&[f64]>, b: &[f64]) -> Result<Vec<f64
 pub fn issymmetric(a: &[Vec<f64>], atol: f64, rtol: f64) -> Result<bool, LinalgError> {
     let (rows, cols) = matrix_shape(a)?;
     if rows != cols {
-        return Ok(false);
+        return Err(LinalgError::InvalidArgument {
+            detail: "input array must be square".to_string(),
+        });
     }
     for (i, row) in a.iter().enumerate().take(rows) {
         for (j, &upper) in row.iter().enumerate().skip(i + 1).take(cols - (i + 1)) {
@@ -26895,7 +26899,10 @@ mod proptest_tests {
     #[test]
     fn issymmetric_non_square() {
         let a = vec![vec![1.0, 2.0, 3.0]];
-        assert!(!issymmetric(&a, 0.0, 0.0).expect("non-square"));
+        let err = issymmetric(&a, 0.0, 0.0).expect_err("scipy rejects non-square input");
+        assert!(matches!(err, LinalgError::InvalidArgument { .. }));
+        let err = ishermitian(&a, 0.0, 0.0).expect_err("scipy rejects non-square input");
+        assert!(matches!(err, LinalgError::InvalidArgument { .. }));
     }
 
     #[test]
