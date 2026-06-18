@@ -1995,6 +1995,9 @@ pub fn bicg(
     let mut p_tilde = r_tilde.clone();
 
     let mut rho = dot_product(&r_tilde, &r);
+    // Reused matvec buffers hoisted out of the loop (byte-identical). frankenscipy-2hclc.
+    let mut q = vec![0.0; r.len()];
+    let mut q_tilde = vec![0.0; r.len()];
 
     for iteration in 0..max_iter {
         let r_norm = vec_norm(&r);
@@ -2018,9 +2021,9 @@ pub fn bicg(
         }
 
         // q = A * p
-        let q = csr_matvec(a, &p);
+        csr_matvec_into(a, &p, &mut q);
         // q_tilde = A^T * p_tilde
-        let q_tilde = csr_matvec(&a_t, &p_tilde);
+        csr_matvec_into(&a_t, &p_tilde, &mut q_tilde);
 
         let alpha_denom = dot_product(&p_tilde, &q);
         if alpha_denom.abs() < f64::EPSILON * 1e6 {
@@ -2290,6 +2293,9 @@ pub fn bicgstab(
 
     let mut v = vec![0.0; n];
     let mut p = vec![0.0; n];
+    // Reused per-iteration scratch (A·p, s, A·s) — byte-identical. frankenscipy-2hclc.
+    let mut s = vec![0.0; n];
+    let mut t = vec![0.0; n];
 
     for iteration in 0..max_iter {
         let r_norm = vec_norm(&r);
@@ -2322,7 +2328,7 @@ pub fn bicgstab(
         }
 
         // v = A * p
-        v = csr_matvec(a, &p);
+        csr_matvec_into(a, &p, &mut v);
 
         let r_hat_v = dot_product(&r_hat, &v);
         if r_hat_v.abs() < f64::EPSILON * 1e6 {
@@ -2337,11 +2343,9 @@ pub fn bicgstab(
         alpha = rho / r_hat_v;
 
         // s = r - alpha * v
-        let s: Vec<f64> = r
-            .iter()
-            .zip(v.iter())
-            .map(|(ri, vi)| ri - alpha * vi)
-            .collect();
+        for i in 0..n {
+            s[i] = r[i] - alpha * v[i];
+        }
 
         let s_norm = vec_norm(&s);
         if s_norm / b_norm < options.tol {
@@ -2358,7 +2362,7 @@ pub fn bicgstab(
         }
 
         // t = A * s
-        let t = csr_matvec(a, &s);
+        csr_matvec_into(a, &s, &mut t);
 
         // omega = (t · s) / (t · t)
         let t_dot_s = dot_product(&t, &s);
