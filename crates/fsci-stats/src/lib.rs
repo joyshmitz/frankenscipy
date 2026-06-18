@@ -61593,6 +61593,16 @@ mod tests {
     }
 
     #[test]
+    fn gen_half_logistic_pdf_cdf_match_scipy() {
+        // Exact scipy.stats.genhalflogistic(c=1.5). The suite covers entropy,
+        // moments, and skew/kurt but no exact pdf/cdf at a point.
+        let g = GenHalfLogistic::new(1.5);
+        assert!((g.pdf(0.0) - 0.5).abs() < 1e-12, "pdf(0)");
+        assert!((g.pdf(0.3) - 0.873_923_699_038_734_8).abs() < 1e-12, "pdf(0.3)");
+        assert!((g.cdf(0.3) - 0.196_682_309_975_736_63).abs() < 1e-12, "cdf(0.3)");
+    }
+
+    #[test]
     fn gen_half_logistic_moments_match_scipy_reference_values() {
         // Reanchored against actual scipy.stats.genhalflogistic(c).mean()
         // / .var() (scipy 1.17). The earlier fixture's (mean, var) values
