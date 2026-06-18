@@ -1186,11 +1186,8 @@ pub fn correlate2d(
 ) -> Result<Vec<f64>, SignalError> {
     let (ar, ac) = a_shape;
     let (vr, vc) = v_shape;
-    if a.len() != ar * ac || v.len() != vr * vc {
-        return Err(SignalError::InvalidArgument(
-            "array length must match shape".to_string(),
-        ));
-    }
+    checked_2d_element_count(a_shape, a.len())?;
+    let v_len = checked_2d_element_count(v_shape, v.len())?;
     if ar == 0 || ac == 0 || vr == 0 || vc == 0 {
         return Err(SignalError::InvalidArgument(
             "inputs must be non-empty".to_string(),
@@ -1198,7 +1195,7 @@ pub fn correlate2d(
     }
 
     // Reverse v in both dimensions for correlation
-    let mut v_rev = vec![0.0; vr * vc];
+    let mut v_rev = vec![0.0; v_len];
     for i in 0..vr {
         for j in 0..vc {
             v_rev[i * vc + j] = v[(vr - 1 - i) * vc + (vc - 1 - j)];
@@ -1333,15 +1330,12 @@ pub fn convolve2d(
     v_shape: (usize, usize),
     mode: ConvolveMode,
 ) -> Result<Vec<f64>, SignalError> {
+    let a_len = checked_2d_element_count(a_shape, a.len())?;
     let (vr, vc) = v_shape;
-    if v.len() != vr * vc {
-        return Err(SignalError::InvalidArgument(
-            "array length must match shape".to_string(),
-        ));
-    }
+    let v_len = checked_2d_element_count(v_shape, v.len())?;
     // Flip the kernel in both axes; correlate2d flips again internally, so the
     // net effect is a true convolution Σ a[i,j]·v[m-i, n-j].
-    let mut v_flip = vec![0.0; vr * vc];
+    let mut v_flip = vec![0.0; v_len];
     for i in 0..vr {
         for j in 0..vc {
             v_flip[i * vc + j] = v[(vr - 1 - i) * vc + (vc - 1 - j)];
@@ -1358,7 +1352,7 @@ pub fn convolve2d(
     let full = correlate2d(a, a_shape, &v_flip, v_shape, ConvolveMode::Full)?;
     let full_c = ac + vc - 1;
     let (sr, sc) = ((vr - 1) / 2, (vc - 1) / 2);
-    let mut out = vec![0.0; ar * ac];
+    let mut out = vec![0.0; a_len];
     for i in 0..ar {
         for j in 0..ac {
             out[i * ac + j] = full[(i + sr) * full_c + (j + sc)];
@@ -1470,11 +1464,8 @@ pub fn correlate2d_with_boundary(
     }
     let (ar, ac) = a_shape;
     let (vr, vc) = v_shape;
-    if a.len() != ar * ac || v.len() != vr * vc {
-        return Err(SignalError::InvalidArgument(
-            "array length must match shape".to_string(),
-        ));
-    }
+    checked_2d_element_count(a_shape, a.len())?;
+    checked_2d_element_count(v_shape, v.len())?;
     if matches!(mode, ConvolveMode::Valid) && (ar < vr || ac < vc) {
         return Err(SignalError::InvalidArgument(
             "in valid mode, a must be at least as large as v".to_string(),
@@ -1505,18 +1496,15 @@ pub fn convolve2d_with_boundary(
     }
     let (ar, ac) = a_shape;
     let (vr, vc) = v_shape;
-    if a.len() != ar * ac || v.len() != vr * vc {
-        return Err(SignalError::InvalidArgument(
-            "array length must match shape".to_string(),
-        ));
-    }
+    checked_2d_element_count(a_shape, a.len())?;
+    let v_len = checked_2d_element_count(v_shape, v.len())?;
     if matches!(mode, ConvolveMode::Valid) && (ar < vr || ac < vc) {
         return Err(SignalError::InvalidArgument(
             "in valid mode, a must be at least as large as v".to_string(),
         ));
     }
     // Flip the kernel (correlate2d flips again internally → net convolution).
-    let mut v_flip = vec![0.0; vr * vc];
+    let mut v_flip = vec![0.0; v_len];
     for i in 0..vr {
         for j in 0..vc {
             v_flip[i * vc + j] = v[(vr - 1 - i) * vc + (vc - 1 - j)];
@@ -16945,6 +16933,26 @@ mod tests {
         let x = [0.0_f64];
         let taps = [1.0_f64];
 
+        assert_shape_overflow(correlate2d(&x, shape, &taps, (1, 1), ConvolveMode::Same));
+        assert_shape_overflow(convolve2d(&x, shape, &taps, (1, 1), ConvolveMode::Same));
+        assert_shape_overflow(correlate2d_with_boundary(
+            &x,
+            shape,
+            &taps,
+            (1, 1),
+            ConvolveMode::Same,
+            Boundary2d::Symm,
+            0.0,
+        ));
+        assert_shape_overflow(convolve2d_with_boundary(
+            &x,
+            shape,
+            &taps,
+            (1, 1),
+            ConvolveMode::Same,
+            Boundary2d::Symm,
+            0.0,
+        ));
         assert_shape_overflow(sepfir2d(&x, shape, &taps, &taps));
         assert_shape_overflow(hilbert2(&x, shape));
         assert_shape_overflow(cspline2d(&x, shape, 0.0));
