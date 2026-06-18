@@ -2734,6 +2734,7 @@ where
             "widths must be non-empty".to_string(),
         ));
     }
+    validate_real_values_finite(data, "cwt data samples must be finite")?;
 
     let na = data.len();
     let mut result = Vec::with_capacity(widths.len());
@@ -2763,6 +2764,7 @@ where
         let wavelet_len = (10.0 * width).ceil() as usize;
         let wavelet_len = wavelet_len.max(1);
         let wavelet = wavelet_fn(wavelet_len, width);
+        validate_real_values_finite(&wavelet, "cwt wavelet samples must be finite")?;
         let nb = wavelet.len();
 
         // Mirror `convolve(data, &wavelet, Same)` exactly, but reuse the
@@ -25224,6 +25226,22 @@ mod tests {
     fn cwt_empty_data_rejected() {
         let err = cwt(&[], ricker, &[1.0]).expect_err("empty");
         assert!(err.is_argument_error());
+    }
+
+    #[test]
+    fn cwt_rejects_non_finite_data_and_wavelets() {
+        assert_eq!(
+            cwt(&[1.0, f64::NAN, 3.0], ricker, &[1.0]),
+            Err(SignalError::NonFiniteInput {
+                detail: "cwt data samples must be finite".to_string(),
+            })
+        );
+        assert_eq!(
+            cwt(&[1.0, 2.0, 3.0], |_, _| vec![1.0, f64::INFINITY], &[1.0]),
+            Err(SignalError::NonFiniteInput {
+                detail: "cwt wavelet samples must be finite".to_string(),
+            })
+        );
     }
 
     #[test]
