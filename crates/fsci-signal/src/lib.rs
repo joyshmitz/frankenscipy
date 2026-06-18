@@ -11299,6 +11299,7 @@ pub fn detrend(data: &[f64], dtype: DetrendType) -> Result<Vec<f64>, SignalError
             )),
         };
     }
+    validate_real_values_finite(data, "detrend input samples must be finite")?;
     match dtype {
         DetrendType::Constant => {
             let mean = data.iter().sum::<f64>() / data.len() as f64;
@@ -22838,6 +22839,22 @@ mod tests {
         assert_eq!(
             linear,
             SignalError::InvalidArgument("data must not be empty".to_string())
+        );
+    }
+
+    #[test]
+    fn detrend_rejects_non_finite_samples() {
+        assert_eq!(
+            detrend(&[1.0, f64::NAN, 3.0], DetrendType::Constant),
+            Err(SignalError::NonFiniteInput {
+                detail: "detrend input samples must be finite".to_string(),
+            })
+        );
+        assert_eq!(
+            detrend(&[1.0, f64::INFINITY, 3.0], DetrendType::Linear),
+            Err(SignalError::NonFiniteInput {
+                detail: "detrend input samples must be finite".to_string(),
+            })
         );
     }
 
