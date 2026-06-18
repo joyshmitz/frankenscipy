@@ -26942,7 +26942,9 @@ pub fn pearsonr(x: &[f64], y: &[f64]) -> CorrelationResult {
 
     // p-value via t-distribution: t = r * sqrt((n-2)/(1-r²))
     let df = nf - 2.0;
-    let pvalue = if df > 0.0 && r.abs() < 1.0 {
+    let pvalue = if n == 2 {
+        1.0
+    } else if df > 0.0 && r.abs() < 1.0 {
         let t = r * (df / (1.0 - r * r)).sqrt();
         let tdist = StudentT::new(df);
         2.0 * tdist.sf(t.abs())
@@ -27015,7 +27017,9 @@ pub fn pearsonr_alternative(x: &[f64], y: &[f64], alternative: &str) -> Correlat
     // a vanishingly small but non-zero pvalue at the boundary
     // (frankenscipy-vgl6u).
     let ab = nf / 2.0 - 1.0;
-    let pvalue = if ab > 0.0 {
+    let pvalue = if n == 2 {
+        1.0
+    } else if ab > 0.0 {
         let u = (r + 1.0) / 2.0;
         let beta = BetaDist::new(ab, ab);
         match alternative {
@@ -27031,7 +27035,7 @@ pub fn pearsonr_alternative(x: &[f64], y: &[f64], alternative: &str) -> Correlat
             }
         }
     } else {
-        // df ≤ 0 (n ≤ 2): pvalue undefined.
+        // df < 0 (unreachable after the length guard): pvalue undefined.
         f64::NAN
     };
 
@@ -53830,6 +53834,27 @@ mod tests {
     fn pearsonr_too_few_points() {
         let result = pearsonr(&[1.0], &[2.0]);
         assert!(result.statistic.is_nan());
+    }
+
+    #[test]
+    fn pearsonr_length_two_pvalue_matches_scipy() {
+        let positive = pearsonr(&[1.0, 2.0], &[3.0, 4.0]);
+        assert_eq!(positive.statistic, 1.0);
+        assert_eq!(positive.pvalue, 1.0);
+
+        let negative = pearsonr(&[1.0, 2.0], &[4.0, 3.0]);
+        assert_eq!(negative.statistic, -1.0);
+        assert_eq!(negative.pvalue, 1.0);
+
+        for alternative in ["two-sided", "less", "greater"] {
+            let positive = pearsonr_alternative(&[1.0, 2.0], &[3.0, 4.0], alternative);
+            assert_eq!(positive.statistic, 1.0);
+            assert_eq!(positive.pvalue, 1.0);
+
+            let negative = pearsonr_alternative(&[1.0, 2.0], &[4.0, 3.0], alternative);
+            assert_eq!(negative.statistic, -1.0);
+            assert_eq!(negative.pvalue, 1.0);
+        }
     }
 
     // ── Spearman correlation ──────────────────────────────────────
