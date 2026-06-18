@@ -16787,6 +16787,27 @@ mod tests {
     }
 
     #[test]
+    fn matrix_constructors_match_scipy() {
+        // numpy.kron, scipy.linalg.block_diag/toeplitz/circulant.
+        assert_eq!(
+            kron(&[vec![1.0, 2.0]], &[vec![0.0, 1.0], vec![1.0, 0.0]]),
+            vec![vec![0.0, 1.0, 0.0, 2.0], vec![1.0, 0.0, 2.0, 0.0]]
+        );
+        assert_eq!(
+            block_diag(&[vec![vec![1.0, 2.0], vec![3.0, 4.0]], vec![vec![5.0]]]),
+            vec![vec![1.0, 2.0, 0.0], vec![3.0, 4.0, 0.0], vec![0.0, 0.0, 5.0]]
+        );
+        assert_eq!(
+            toeplitz(&[1.0, 2.0, 3.0], None),
+            vec![vec![1.0, 2.0, 3.0], vec![2.0, 1.0, 2.0], vec![3.0, 2.0, 1.0]]
+        );
+        assert_eq!(
+            circulant(&[1.0, 2.0, 3.0]),
+            vec![vec![1.0, 3.0, 2.0], vec![2.0, 1.0, 3.0], vec![3.0, 2.0, 1.0]]
+        );
+    }
+
+    #[test]
     fn solve_toeplitz_match_scipy() {
         // scipy.linalg.solve_toeplitz((c, r), b) via Levinson recursion. Non-
         // symmetric Toeplitz (c != r): T=[[4,3,5],[1,4,3],[2,1,4]], b=[1,2,3].
