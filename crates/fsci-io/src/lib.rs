@@ -385,51 +385,71 @@ pub fn mmread(content: &str) -> Result<MmMatrix, IoError> {
             let rows = info.rows;
             let cols = info.cols;
             let dense_len = checked_mm_dense_read_len(rows, cols)?;
-            // Array format: column-major order
             let mut data = vec![0.0; dense_len];
-            let mut complex_data: Option<Vec<(f64, f64)>> = None;
-            let mut idx = 0;
 
+            // Stored (row, col) positions in column-major file order. For
+            // symmetric/hermitian only the lower triangle (incl. diagonal) is
+            // stored; skew-symmetric stores the strictly-lower triangle; the
+            // upper triangle is reconstructed by mirroring (negating for skew).
+            // This matches `scipy.io.mmread` of `scipy.io.mmwrite(..., symmetry=)`.
+            let positions: Vec<(usize, usize)> = match info.symmetry {
+                MmSymmetry::General => (0..cols)
+                    .flat_map(|c| (0..rows).map(move |r| (r, c)))
+                    .collect(),
+                MmSymmetry::Symmetric | MmSymmetry::Hermitian => (0..cols)
+                    .flat_map(|c| (c..rows).map(move |r| (r, c)))
+                    .collect(),
+                MmSymmetry::SkewSymmetric => (0..cols)
+                    .flat_map(|c| (c + 1..rows).map(move |r| (r, c)))
+                    .collect(),
+            };
+
+            let mut values: Vec<f64> = Vec::with_capacity(positions.len());
             for line in lines {
                 let trimmed = line.trim();
                 if trimmed.is_empty() || trimmed.starts_with('%') {
                     continue;
                 }
-                if idx >= dense_len {
+                if values.len() >= positions.len() {
                     return Err(IoError::InvalidFormat(format!(
                         "array format has more than the declared {} values",
-                        dense_len
+                        positions.len()
                     )));
                 }
-                let v = trimmed
-                    .parse()
-                    .map_err(|e| IoError::InvalidFormat(format!("bad value: {e}")))?;
-                let v_im = 0.0;
-
-                // Column-major to row-major conversion
-                let col = idx / rows;
-                let row = idx % rows;
-                if row < rows && col < cols {
-                    if let Some(ref mut cd) = complex_data {
-                        cd[row * cols + col] = (v, v_im);
-                    } else {
-                        data[row * cols + col] = v;
-                    }
-                }
-                idx += 1;
+                values.push(
+                    trimmed
+                        .parse()
+                        .map_err(|e| IoError::InvalidFormat(format!("bad value: {e}")))?,
+                );
             }
-            if idx != dense_len {
+            if values.len() != positions.len() {
                 return Err(IoError::InvalidFormat(format!(
-                    "array format expected {} values but found {idx}",
-                    dense_len
+                    "array format expected {} values but found {}",
+                    positions.len(),
+                    values.len()
                 )));
+            }
+
+            for (&(row, col), &v) in positions.iter().zip(values.iter()) {
+                data[row * cols + col] = v;
+                // Mirror the stored triangle for the symmetric families (each is
+                // guaranteed square above, so the transposed index is in bounds).
+                // General stores the full matrix, so it is never mirrored.
+                if info.symmetry != MmSymmetry::General && row != col {
+                    let mirror = if info.symmetry == MmSymmetry::SkewSymmetric {
+                        -v
+                    } else {
+                        v
+                    };
+                    data[col * cols + row] = mirror;
+                }
             }
 
             Ok(MmMatrix {
                 rows,
                 cols,
                 data,
-                complex_data,
+                complex_data: None,
                 info,
             })
         }
@@ -4309,6 +4329,29 @@ mod tests {
         assert_eq!(mat.data[0], 5.0); // (0,0)
         assert_eq!(mat.data[3], 3.0); // (1,0)
         assert_eq!(mat.data[1], 3.0); // (0,1) = symmetric
+    }
+
+    #[test]
+    fn mmread_array_symmetry_matches_scipy() {
+        // Exact strings from scipy.io.mmwrite(A, symmetry=...) (SciPy 1.17.1).
+        // Symmetric/hermitian array files store only the lower triangle incl.
+        // diagonal; skew-symmetric the strictly-lower triangle. The Array branch
+        // must reconstruct the full matrix (mirroring, negating for skew) — it
+        // previously demanded rows*cols values and failed on these files.
+        let sym = "%%MatrixMarket matrix array real symmetric\n%\n3 3\n1\n2\n3\n4\n5\n6\n";
+        let m = mmread(sym).expect("symmetric array");
+        assert_eq!((m.rows, m.cols), (3, 3));
+        assert_eq!(m.data, vec![1.0, 2.0, 3.0, 2.0, 4.0, 5.0, 3.0, 5.0, 6.0]);
+
+        let skew = "%%MatrixMarket matrix array real skew-symmetric\n%\n3 3\n-2\n-3\n-5\n";
+        let m = mmread(skew).expect("skew array");
+        assert_eq!(m.data, vec![0.0, 2.0, 3.0, -2.0, 0.0, 5.0, -3.0, -5.0, 0.0]);
+
+        // General (rectangular) must remain a plain column-major read.
+        let rect = "%%MatrixMarket matrix array real general\n%\n2 3\n1\n4\n2\n5.5\n3\n-6\n";
+        let m = mmread(rect).expect("general array");
+        assert_eq!((m.rows, m.cols), (2, 3));
+        assert_eq!(m.data, vec![1.0, 2.0, 3.0, 4.0, 5.5, -6.0]);
     }
 
     #[test]
