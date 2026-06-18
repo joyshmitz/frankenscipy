@@ -10991,6 +10991,20 @@ mod tests {
     }
 
     #[test]
+    fn polyroots_matches_numpy() {
+        // numpy.roots convention: descending coeffs, real roots only. polyroots was
+        // previously untested. Quadratic x^2-5x+6=(x-2)(x-3): larger root first.
+        let r = polyroots(&[1.0, -5.0, 6.0]);
+        assert_eq!(r.len(), 2);
+        assert!((r[0] - 3.0).abs() < 1e-12, "root0");
+        assert!((r[1] - 2.0).abs() < 1e-12, "root1");
+        // Linear 2x-4=0 -> x=2.
+        assert_eq!(polyroots(&[2.0, -4.0]), vec![2.0]);
+        // x^2+1 has only complex roots -> no real roots.
+        assert!(polyroots(&[1.0, 0.0, 1.0]).is_empty());
+    }
+
+    #[test]
     fn pade_exp_approximant_matches_scipy() {
         // scipy.interpolate.pade(exp Taylor coeffs, 2): the [2/2] Pade approximant
         // of exp. pade was previously untested. fsci returns (p, q) as ascending-
