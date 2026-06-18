@@ -71496,6 +71496,20 @@ mod tests {
     }
 
     #[test]
+    fn yulesimon_sf_tail_match_scipy() {
+        // scipy.stats.yulesimon(2.0). sf(100) exercises the power-law tail computed
+        // via the closed form k*B(k,alpha+1), NOT 1-cdf (which cancels to 0).
+        let y = YuleSimon::new(2.0);
+        assert!((y.pmf(1) - 0.666_666_666_666_666_6).abs() < 1e-14, "pmf(1)");
+        assert!((y.pmf(3) - 0.066_666_666_666_666_67).abs() < 1e-14, "pmf(3)");
+        assert!(
+            (y.sf(100) - 0.000_194_137_060_764_900_04).abs() < 1e-12,
+            "sf(100) tail: {}",
+            y.sf(100)
+        );
+    }
+
+    #[test]
     fn poisson_pmf_cdf_sf_tail_match_scipy() {
         // scipy.stats.poisson(3.0). sf(20) exercises the stable right tail
         // (computed via the incomplete gamma, not 1-cdf which would underflow).
