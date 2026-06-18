@@ -13251,6 +13251,7 @@ pub fn stft(
             "input must not be empty".to_string(),
         ));
     }
+    validate_sampling_frequency(fs)?;
 
     let nperseg = nperseg.unwrap_or_else(|| x.len().min(256));
     if nperseg == 0 {
@@ -13557,6 +13558,7 @@ impl ShortTimeFft {
                 "ShortTimeFft: hop must be an integer >= 1".to_string(),
             ));
         }
+        validate_sampling_frequency(fs)?;
         let mfft = win.len();
         Ok(Self {
             win,
@@ -19984,6 +19986,15 @@ mod tests {
                     .expect_err("coherence should reject invalid fs"),
                 "coherence",
             );
+            assert_invalid_fs(
+                stft(&x, fs, None, Some(4), Some(2)).expect_err("stft should reject invalid fs"),
+                "stft",
+            );
+            assert_invalid_fs(
+                spectrogram(&x, fs, None, Some(4), Some(2))
+                    .expect_err("spectrogram should reject invalid fs"),
+                "spectrogram",
+            );
         }
     }
 
@@ -22656,6 +22667,20 @@ mod tests {
         assert!((res.frequencies[0]).abs() < 1e-12);
         // Last frequency should be Nyquist
         assert!((res.frequencies[128] - 500.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn short_time_fft_rejects_invalid_sampling_frequency() {
+        for fs in [0.0, -1.0, f64::INFINITY, f64::NAN] {
+            assert!(
+                ShortTimeFft::new(vec![1.0; 4], 2, fs).is_err(),
+                "ShortTimeFft::new should reject fs={fs:?}"
+            );
+            assert!(
+                ShortTimeFft::from_window("hann", fs, 4, 2, false).is_err(),
+                "ShortTimeFft::from_window should reject fs={fs:?}"
+            );
+        }
     }
 
     // ── Spectrogram tests ──────────────────────────────────────────
