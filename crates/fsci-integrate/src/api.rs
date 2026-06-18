@@ -251,6 +251,7 @@ fn eval_time_in_range(t_eval: f64, t_old: f64, t_new: f64, direction: f64) -> bo
 }
 
 fn solve_event_equation(
+    event_index: usize,
     event_fn: EventFn,
     t_old: f64,
     t_new: f64,
@@ -258,10 +259,17 @@ fn solve_event_equation(
     y_new: &[f64],
     f_old: &[f64],
     f_new: &[f64],
-) -> f64 {
+) -> Result<f64, IntegrateValidationError> {
+    let saw_non_finite = std::cell::Cell::new(false);
     let f = |t: f64| {
         let y = interpolate_state(y_old, y_new, f_old, f_new, t_old, t_new, t);
-        event_fn(t, &y)
+        let value = event_fn(t, &y);
+        if value.is_finite() {
+            value
+        } else {
+            saw_non_finite.set(true);
+            0.0
+        }
     };
 
     let options = RootOptions {
@@ -270,9 +278,14 @@ fn solve_event_equation(
         ..Default::default()
     };
 
-    match brentq(f, (t_old, t_new), options) {
+    let root = match brentq(f, (t_old, t_new), options) {
         Ok(res) => res.root,
         Err(_) => 0.5 * (t_old + t_new),
+    };
+    if saw_non_finite.get() {
+        Err(IntegrateValidationError::NonFiniteEventValue { index: event_index })
+    } else {
+        Ok(root)
     }
 }
 
@@ -709,6 +722,7 @@ where
                         let val = validate_event_value(i, (ev_spec.func)(t, &y))?;
                         if event_active(old_vals[i], val, ev_spec.direction) {
                             let t_ev = solve_event_equation(
+                                i,
                                 ev_spec.func,
                                 t_old,
                                 t,
@@ -716,7 +730,7 @@ where
                                 &y,
                                 &f_old,
                                 &f,
-                            );
+                            )?;
                             let y_ev = interpolate_state(&y_old, &y, &f_old, &f, t_old, t, t_ev);
 
                             if let Some(tes) = t_events.as_mut() {
@@ -1421,6 +1435,37 @@ mod tests {
             },
         )
         .expect_err("non-finite stepped event value");
+        assert_eq!(
+            err,
+            IntegrateValidationError::NonFiniteEventValue { index: 0 }
+        );
+    }
+
+    #[test]
+    fn solve_ivp_rejects_non_finite_event_value_during_root_solve() {
+        fn bad_inside_bracket(t: f64, _y: &[f64]) -> f64 {
+            if t <= 0.0 {
+                -1.0
+            } else if t >= 1.0 {
+                1.0
+            } else {
+                f64::NAN
+            }
+        }
+
+        let err = solve_ivp(
+            &mut |_t, _y| vec![0.0],
+            &SolveIvpOptions {
+                t_span: (0.0, 1.0),
+                y0: &[0.0],
+                method: SolverKind::Rk45,
+                first_step: Some(1.0),
+                max_step: 1.0,
+                events: Some(vec![EventSpec::new(bad_inside_bracket)]),
+                ..SolveIvpOptions::default()
+            },
+        )
+        .expect_err("non-finite event value during root solve");
         assert_eq!(
             err,
             IntegrateValidationError::NonFiniteEventValue { index: 0 }
