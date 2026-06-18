@@ -1,9 +1,9 @@
 #![forbid(unsafe_code)]
 //! Live SciPy differential coverage for fsci_linalg::eig_banded
-//! (symmetric banded eigenvalue problem, eigvals_only=true).
+//! (symmetric banded eigenvalue problem, values and vectors).
 //!
 //! Resolves [frankenscipy-vpaa7]. 1e-9 abs. Compares sorted eigenvalues
-//! in `lower` band storage (row 0 = diagonal, row 1 = subdiagonal, …).
+//! and sign-aligned eigenvectors in lower/upper band storage.
 
 use std::collections::HashMap;
 use std::fs;
@@ -38,6 +38,7 @@ struct OracleQuery {
 struct PointArm {
     case_id: String,
     eigvals_sorted: Option<Vec<f64>>,
+    eigvecs: Option<Vec<Vec<f64>>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -49,6 +50,9 @@ struct OracleResult {
 struct CaseDiff {
     case_id: String,
     abs_diff: f64,
+    eigvec_abs_diff: f64,
+    residual_abs: f64,
+    orthogonality_abs: f64,
     pass: bool,
 }
 
@@ -127,6 +131,19 @@ fn generate_query() -> OracleQuery {
             lower: true,
         },
         PointCase {
+            // Same pentadiagonal matrix as upper band storage:
+            // row 2 = diag, row 1 = first superdiag, row 0 = second superdiag.
+            case_id: "pentadiag_4_upper".into(),
+            ab_flat: vec![
+                0.0, 0.0, 0.1, 0.2, // super-2
+                0.0, 0.5, 0.7, 0.3, // super-1
+                3.0, 4.0, 5.0, 6.0, // diag
+            ],
+            rows: 3,
+            cols: 4,
+            lower: false,
+        },
+        PointCase {
             // 6x6 tridiag
             case_id: "tridiag_6_mixed".into(),
             ab_flat: vec![
@@ -158,6 +175,17 @@ def finite_sorted_or_none(arr):
     flat.sort()
     return flat
 
+def finite_matrix_or_none(mat):
+    out = []
+    for row in np.asarray(mat, dtype=float).tolist():
+        row_out = []
+        for v in row:
+            if not math.isfinite(float(v)):
+                return None
+            row_out.append(float(v))
+        out.append(row_out)
+    return out
+
 q = json.load(sys.stdin)
 points = []
 for case in q["points"]:
@@ -166,16 +194,29 @@ for case in q["points"]:
     ab = np.array(case["ab_flat"], dtype=float).reshape(r, c)
     lower = bool(case["lower"])
     try:
-        w = linalg.eig_banded(ab, lower=lower, eigvals_only=True)
-        points.append({"case_id": cid, "eigvals_sorted": finite_sorted_or_none(w)})
+        w, v = linalg.eig_banded(ab, lower=lower, eigvals_only=False)
+        points.append({
+            "case_id": cid,
+            "eigvals_sorted": finite_sorted_or_none(w),
+            "eigvecs": finite_matrix_or_none(v),
+        })
     except Exception:
-        points.append({"case_id": cid, "eigvals_sorted": None})
+        points.append({"case_id": cid, "eigvals_sorted": None, "eigvecs": None})
 print(json.dumps({"points": points}))
 "#;
     let query_json = serde_json::to_string(query).expect("serialize eig_banded query");
+    ensure_output_dir();
+    let script_path = output_dir().join(format!("eig_banded_oracle_{}.py", timestamp_ms()));
+    if let Err(e) = fs::write(&script_path, script) {
+        assert!(
+            std::env::var(REQUIRE_SCIPY_ENV).is_err(),
+            "failed to write eig_banded oracle script: {e}"
+        );
+        eprintln!("skipping eig_banded oracle: script write failed ({e})");
+        return None;
+    }
     let mut child = match Command::new("python3")
-        .arg("-c")
-        .arg(script)
+        .arg(&script_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -220,6 +261,90 @@ print(json.dumps({"points": points}))
     Some(serde_json::from_str(&stdout).expect("parse eig_banded oracle JSON"))
 }
 
+fn dense_from_case(case: &PointCase) -> Vec<Vec<f64>> {
+    let ab = rows_of(&case.ab_flat, case.rows, case.cols);
+    let n = case.cols;
+    let bandwidth = case.rows - 1;
+    let mut dense = vec![vec![0.0; n]; n];
+    if case.lower {
+        for col in 0..n {
+            dense[col][col] = ab[0][col];
+            for (offset, band_row) in ab.iter().enumerate().skip(1) {
+                let row = col + offset;
+                if row >= n {
+                    break;
+                }
+                dense[row][col] = band_row[col];
+                dense[col][row] = band_row[col];
+            }
+        }
+    } else {
+        for col in 0..n {
+            dense[col][col] = ab[bandwidth][col];
+            for offset in 1..=bandwidth {
+                if col < offset {
+                    continue;
+                }
+                let row = col - offset;
+                let value = ab[bandwidth - offset][col];
+                dense[row][col] = value;
+                dense[col][row] = value;
+            }
+        }
+    }
+    dense
+}
+
+fn sign_aligned_eigenvector_max_abs(actual: &[Vec<f64>], expected: &[Vec<f64>]) -> f64 {
+    let n = actual.len();
+    let mut max_abs = 0.0_f64;
+    for col in 0..n {
+        let mut dot = 0.0_f64;
+        for row in 0..n {
+            dot += actual[row][col] * expected[row][col];
+        }
+        let sign = if dot < 0.0 { -1.0 } else { 1.0 };
+        for row in 0..n {
+            max_abs = max_abs.max((sign * actual[row][col] - expected[row][col]).abs());
+        }
+    }
+    max_abs
+}
+
+fn eigenvector_residual_max_abs(
+    dense: &[Vec<f64>],
+    eigenvalues: &[f64],
+    eigenvectors: &[Vec<f64>],
+) -> f64 {
+    let n = dense.len();
+    let mut max_abs = 0.0_f64;
+    for col in 0..n {
+        let lambda = eigenvalues[col];
+        for row in 0..n {
+            let projected: f64 = dense[row]
+                .iter()
+                .zip(eigenvectors.iter())
+                .map(|(a, vector_row)| a * vector_row[col])
+                .sum();
+            max_abs = max_abs.max((projected - lambda * eigenvectors[row][col]).abs());
+        }
+    }
+    max_abs
+}
+
+fn eigenvector_orthogonality_max_abs(eigenvectors: &[Vec<f64>]) -> f64 {
+    let n = eigenvectors.len();
+    let mut max_abs = 0.0_f64;
+    for left in 0..n {
+        for right in 0..n {
+            let dot: f64 = eigenvectors.iter().map(|row| row[left] * row[right]).sum();
+            let target = if left == right { 1.0 } else { 0.0 };
+            max_abs = max_abs.max((dot - target).abs());
+        }
+    }
+    max_abs
+}
+
 #[test]
 fn diff_linalg_eig_banded() {
     let query = generate_query();
@@ -243,12 +368,14 @@ fn diff_linalg_eig_banded() {
         let Some(expected) = scipy_arm.eigvals_sorted.as_ref() else {
             continue;
         };
-        let ab = rows_of(&case.ab_flat, case.rows, case.cols);
-        let opts = DecompOptions::default();
-        let Ok((mut w, _)) = eig_banded(&ab, case.lower, true, opts) else {
+        let Some(expected_vectors) = scipy_arm.eigvecs.as_ref() else {
             continue;
         };
-        w.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let ab = rows_of(&case.ab_flat, case.rows, case.cols);
+        let opts = DecompOptions::default();
+        let Ok((w, vectors)) = eig_banded(&ab, case.lower, false, opts) else {
+            continue;
+        };
         let abs_d = if w.len() != expected.len() {
             f64::INFINITY
         } else {
@@ -257,11 +384,23 @@ fn diff_linalg_eig_banded() {
                 .map(|(a, b)| (a - b).abs())
                 .fold(0.0_f64, f64::max)
         };
+        let vectors = vectors.expect("eig_banded vectors requested");
+        let eigvec_abs_diff = sign_aligned_eigenvector_max_abs(&vectors, expected_vectors);
+        let dense = dense_from_case(case);
+        let residual_abs = eigenvector_residual_max_abs(&dense, &w, &vectors);
+        let orthogonality_abs = eigenvector_orthogonality_max_abs(&vectors);
+        let pass = abs_d <= ABS_TOL
+            && eigvec_abs_diff <= 1.0e-8
+            && residual_abs <= 1.0e-8
+            && orthogonality_abs <= 1.0e-8;
         max_overall = max_overall.max(abs_d);
         diffs.push(CaseDiff {
             case_id: case.case_id.clone(),
             abs_diff: abs_d,
-            pass: abs_d <= ABS_TOL,
+            eigvec_abs_diff,
+            residual_abs,
+            orthogonality_abs,
+            pass,
         });
     }
 
@@ -281,7 +420,10 @@ fn diff_linalg_eig_banded() {
 
     for d in &diffs {
         if !d.pass {
-            eprintln!("eig_banded mismatch: {} abs_diff={}", d.case_id, d.abs_diff);
+            eprintln!(
+                "eig_banded mismatch: {} abs_diff={} eigvec_abs_diff={} residual_abs={} orthogonality_abs={}",
+                d.case_id, d.abs_diff, d.eigvec_abs_diff, d.residual_abs, d.orthogonality_abs
+            );
         }
     }
 
