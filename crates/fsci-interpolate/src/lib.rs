@@ -4744,6 +4744,52 @@ impl NdBSpline {
         }
         sum
     }
+
+    /// Evaluate the spline at many points (the realistic grid-evaluation workload,
+    /// matching `scipy.interpolate.NdBSpline.__call__` on an array of points).
+    ///
+    /// Byte-identical to mapping [`evaluate`](Self::evaluate) over `points`, but the
+    /// point-invariant per-dimension sizes, coefficient-tensor strides and the index
+    /// scratch are computed once instead of on every point.
+    pub fn evaluate_many(&self, points: &[Vec<f64>]) -> Vec<f64> {
+        let ndim = self.t.len();
+        let ns: Vec<usize> = (0..ndim).map(|d| self.t[d].len() - self.k - 1).collect();
+        let mut stride = vec![1usize; ndim];
+        for i in (0..ndim.saturating_sub(1)).rev() {
+            stride[i] = stride[i + 1] * ns[i + 1];
+        }
+        let total: usize = ns.iter().product();
+        let mut idx = vec![0usize; ndim];
+        points
+            .iter()
+            .map(|point| {
+                let bases: Vec<Vec<f64>> = (0..ndim)
+                    .map(|d| eval_basis_all(&self.t[d], point[d], self.k, ns[d]))
+                    .collect();
+                idx.iter_mut().for_each(|v| *v = 0);
+                let mut sum = 0.0f64;
+                for _ in 0..total {
+                    let mut off = 0usize;
+                    let mut w = 1.0f64;
+                    for d in 0..ndim {
+                        off += idx[d] * stride[d];
+                        w *= bases[d][idx[d]];
+                    }
+                    if w != 0.0 {
+                        sum += self.c[off] * w;
+                    }
+                    for d in (0..ndim).rev() {
+                        idx[d] += 1;
+                        if idx[d] < ns[d] {
+                            break;
+                        }
+                        idx[d] = 0;
+                    }
+                }
+                sum
+            })
+            .collect()
+    }
 }
 
 /// N-D tensor-product piecewise polynomial, matching `scipy.interpolate.NdPPoly`.
@@ -8025,6 +8071,12 @@ mod tests {
         for (pt, w) in pts.iter().zip(want.iter()) {
             // c is rounded to 6 digits, so allow ~1e-5.
             assert!((nb.evaluate(pt) - w).abs() <= 1e-5, "{:?}: {} vs {w}", pt, nb.evaluate(pt));
+        }
+        // evaluate_many must be byte-identical to mapping evaluate over the points.
+        let many: Vec<Vec<f64>> = pts.iter().map(|p| p.to_vec()).collect();
+        let batch = nb.evaluate_many(&many);
+        for (pt, b) in pts.iter().zip(batch.iter()) {
+            assert_eq!(*b, nb.evaluate(pt), "evaluate_many != evaluate at {pt:?}");
         }
     }
 
