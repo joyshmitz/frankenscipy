@@ -7331,6 +7331,17 @@ mod tests {
     }
 
     #[test]
+    fn sici_shichi_match_scipy() {
+        // scipy.special.sici (Si, Ci) and shichi (Shi, Chi) integrals at x=1.
+        let (si, ci) = sici(1.0);
+        assert!((si - 0.946_083_070_367_183_1).abs() < 1e-13, "Si(1)");
+        assert!((ci - 0.337_403_922_900_968_16).abs() < 1e-13, "Ci(1)");
+        let (shi, chi) = shichi(1.0);
+        assert!((shi - 1.057_250_875_375_728_6).abs() < 1e-13, "Shi(1)");
+        assert!((chi - 0.837_866_940_980_208_2).abs() < 1e-13, "Chi(1)");
+    }
+
+    #[test]
     fn fresnel_real_match_scipy() {
         // scipy.special.fresnel returns (S, C) Fresnel integrals.
         let (s, c) = fresnel(1.0);
