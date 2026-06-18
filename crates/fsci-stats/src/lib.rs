@@ -71455,6 +71455,27 @@ mod tests {
     }
 
     #[test]
+    fn ttest_ks_match_scipy() {
+        // scipy.stats 1.17.1 for a=[1,2,3,4,5], b=[3,4,5,6,7].
+        let a = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let b = [3.0, 4.0, 5.0, 6.0, 7.0];
+        let t = ttest_ind(&a, &b);
+        assert!((t.statistic + 2.0).abs() < 1e-10, "ttest stat: {}", t.statistic);
+        assert!(
+            (t.pvalue - 0.080_516_237_957_262_62).abs() < 1e-10,
+            "ttest p: {}",
+            t.pvalue
+        );
+        let k = ks_2samp(&a, &b);
+        assert!((k.statistic - 0.4).abs() < 1e-12, "ks stat: {}", k.statistic);
+        assert!(
+            (k.pvalue - 0.873_015_873_015_873).abs() < 1e-9,
+            "ks p: {}",
+            k.pvalue
+        );
+    }
+
+    #[test]
     fn descriptive_stats_match_scipy_with_outlier() {
         // Golden values from scipy.stats (1.17.1) for an asymmetric, outlier-heavy
         // sample [1,2,3,4,5,100]. Locks gstd/sem/variation/iqr/median_abs_deviation
