@@ -7316,6 +7316,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn sinc_match_numpy() {
+        // numpy.sinc (normalized): sin(pi*x)/(pi*x), sinc(0)=1, sinc(integer)~0.
+        assert_eq!(sinc_scalar(0.0), 1.0);
+        assert!(
+            (sinc_scalar(0.5) - 0.636_619_772_367_581_4).abs() < 1e-15,
+            "sinc(0.5)=2/pi"
+        );
+        assert!(sinc_scalar(1.0).abs() < 1e-15, "sinc(1)~0");
+        assert!(sinc_scalar(2.0).abs() < 1e-15, "sinc(2)~0");
+    }
+
+    #[test]
     fn exprel_match_scipy() {
         // scipy.special.exprel = (e^x - 1)/x, with the x->0 limit = 1 (Taylor near
         // 0 avoids the 0/0); expm1 elsewhere for accuracy.
