@@ -23383,6 +23383,13 @@ fn sample_median(data: &[f64]) -> f64 {
 /// Returns NaN statistic and p-value for samples with fewer than 2 elements.
 pub fn ttest_1samp(data: &[f64], popmean: f64) -> TtestResult {
     let n = data.len() as f64;
+    if data.is_empty() {
+        return TtestResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            df: f64::NAN,
+        };
+    }
     if data.len() < 2 {
         return TtestResult {
             statistic: f64::NAN,
@@ -23427,6 +23434,13 @@ pub fn ttest_1samp(data: &[f64], popmean: f64) -> TtestResult {
 /// * `alternative` - "two-sided" (default), "less", or "greater"
 pub fn ttest_1samp_alternative(data: &[f64], popmean: f64, alternative: &str) -> TtestResult {
     let n = data.len() as f64;
+    if data.is_empty() {
+        return TtestResult {
+            statistic: f64::NAN,
+            pvalue: f64::NAN,
+            df: f64::NAN,
+        };
+    }
     if data.len() < 2 {
         return TtestResult {
             statistic: f64::NAN,
@@ -52702,6 +52716,20 @@ mod tests {
         let result = ttest_1samp(&[5.0], 0.0);
         assert!(result.statistic.is_nan());
         assert!(result.pvalue.is_nan());
+        assert_eq!(result.df, 0.0);
+    }
+
+    #[test]
+    fn ttest_1samp_empty_input_matches_scipy_df() {
+        let result = ttest_1samp(&[], 0.0);
+        assert!(result.statistic.is_nan());
+        assert!(result.pvalue.is_nan());
+        assert!(result.df.is_nan());
+
+        let alternative = ttest_1samp_alternative(&[], 0.0, "greater");
+        assert!(alternative.statistic.is_nan());
+        assert!(alternative.pvalue.is_nan());
+        assert!(alternative.df.is_nan());
     }
 
     #[test]
