@@ -9368,6 +9368,33 @@ mod tests {
     }
 
     #[test]
+    fn uniform_maximum_filter1d_match_scipy() {
+        // scipy.ndimage.{uniform,maximum}_filter1d(a, 3, mode='reflect') for
+        // a=[1,2,3,4,5,4,3,2,1]. gaussian_filter1d has a golden test; these did not.
+        let input = NdArray::new(vec![1., 2., 3., 4., 5., 4., 3., 2., 1.], vec![9]).unwrap();
+        let u = uniform_filter1d(&input, 3, 0, BoundaryMode::Reflect, 0.0).unwrap();
+        let eu = [
+            4.0 / 3.0,
+            2.0,
+            3.0,
+            4.0,
+            13.0 / 3.0,
+            4.0,
+            3.0,
+            2.0,
+            4.0 / 3.0,
+        ];
+        for (g, e) in u.data.iter().zip(&eu) {
+            assert!((g - e).abs() < 1e-12, "uniform_filter1d: {g} vs {e}");
+        }
+        let m = maximum_filter1d(&input, 3, 0, BoundaryMode::Reflect, 0.0).unwrap();
+        let em = [2.0, 3.0, 4.0, 5.0, 5.0, 5.0, 4.0, 3.0, 2.0];
+        for (g, e) in m.data.iter().zip(&em) {
+            assert!((g - e).abs() < 1e-12, "maximum_filter1d: {g} vs {e}");
+        }
+    }
+
+    #[test]
     fn gaussian_filter1d_matches_scipy_axis0_reflect() {
         let input = NdArray::new(vec![0., 1., 2., 3., 4., 5.], vec![2, 3]).unwrap();
         // scipy.ndimage.gaussian_filter1d(x, 0.75, axis=0, mode='reflect')
