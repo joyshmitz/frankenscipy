@@ -11695,6 +11695,27 @@ impl ContinuousDistribution for Pearson3 {
         beta.abs() * transx.powf(alpha - 1.0) * (-transx).exp() / ln_gamma(alpha).exp()
     }
 
+    fn logpdf(&self, x: f64) -> f64 {
+        const NORMAL_TRANSITION: f64 = 1.6e-5;
+        let skew = self.skew;
+        if skew.abs() < NORMAL_TRANSITION {
+            // Standard normal: ln pdf = -x^2/2 - ln(sqrt(2pi)).
+            return -0.5 * x * x - 0.5 * (2.0 * PI).ln();
+        }
+        let beta = 2.0 / skew;
+        let alpha = beta * beta;
+        let zeta = -beta;
+        let transx = beta * (x - zeta);
+        if transx <= 0.0 {
+            return f64::NEG_INFINITY;
+        }
+        // pdf = |beta|*transx^(alpha-1)*exp(-transx)/gamma(alpha). The default
+        // logpdf = ln(pdf) returns -inf once pdf underflows to 0 in the tail
+        // (e.g. pearson3(0.5).pdf(1000)=0 but scipy logpdf=-3918). Evaluate the
+        // log directly so it stays finite.
+        beta.abs().ln() + (alpha - 1.0) * transx.ln() - transx - ln_gamma(alpha)
+    }
+
     fn cdf(&self, x: f64) -> f64 {
         const NORMAL_TRANSITION: f64 = 1.6e-5;
         let skew = self.skew;
@@ -71580,6 +71601,22 @@ mod tests {
         let hm = hmean(&data);
         let expected_hm = 5.0 / (1.0 + 0.5 + 1.0 / 3.0 + 0.25 + 0.2);
         assert!((hm - expected_hm).abs() < 1e-10, "hmean, got {}", hm);
+    }
+
+    #[test]
+    fn pearson3_logpdf_tail_match_scipy() {
+        // scipy.stats.pearson3(0.5). The default logpdf=ln(pdf) returns -inf once
+        // pdf underflows in the tail; the direct gamma logpdf stays finite.
+        let d = Pearson3 { skew: 0.5 };
+        assert!((d.logpdf(0.0) - -0.924_146_189_124_286_6).abs() < 1e-12, "logpdf(0)");
+        assert!((d.logpdf(1.0) - -1.576_992_919_411_14).abs() < 1e-12, "logpdf(1)");
+        // pdf(1000) underflows to 0 -> default would be -inf; scipy = -3918.04.
+        assert!(
+            (d.logpdf(1000.0) - -3918.042_352_102_148).abs() < 1e-7,
+            "logpdf(1000) tail: {}",
+            d.logpdf(1000.0)
+        );
+        assert!(d.pdf(1000.0) == 0.0, "pdf(1000) underflows as expected");
     }
 
     #[test]
