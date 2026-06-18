@@ -4261,6 +4261,52 @@ mod tests {
     }
 
     #[test]
+    fn fft_normalization_conventions_match_scipy() {
+        // scipy.fft.fft norm=backward/ortho/forward and ifft (1/n) for [1,2,3,4].
+        let x: Vec<Complex64> = [1.0, 2.0, 3.0, 4.0].iter().map(|&r| (r, 0.0)).collect();
+        let chk = |got: &[Complex64], want: &[(f64, f64)], n: &str| {
+            for (g, e) in got.iter().zip(want) {
+                assert!(
+                    (g.0 - e.0).abs() < 1e-12 && (g.1 - e.1).abs() < 1e-12,
+                    "{n}: {g:?} vs {e:?}"
+                );
+            }
+        };
+        let back = fft(&x, &FftOptions::default()).unwrap();
+        chk(
+            &back,
+            &[(10.0, 0.0), (-2.0, 2.0), (-2.0, 0.0), (-2.0, -2.0)],
+            "fft backward",
+        );
+        let ortho = fft(
+            &x,
+            &FftOptions::default().with_normalization(Normalization::Ortho),
+        )
+        .unwrap();
+        chk(
+            &ortho,
+            &[(5.0, 0.0), (-1.0, 1.0), (-1.0, 0.0), (-1.0, -1.0)],
+            "fft ortho",
+        );
+        let fwd = fft(
+            &x,
+            &FftOptions::default().with_normalization(Normalization::Forward),
+        )
+        .unwrap();
+        chk(
+            &fwd,
+            &[(2.5, 0.0), (-0.5, 0.5), (-0.5, 0.0), (-0.5, -0.5)],
+            "fft forward",
+        );
+        let inv = ifft(&x, &FftOptions::default()).unwrap();
+        chk(
+            &inv,
+            &[(2.5, 0.0), (-0.5, -0.5), (-0.5, 0.0), (-0.5, 0.5)],
+            "ifft",
+        );
+    }
+
+    #[test]
     fn dct_ii_match_scipy() {
         // scipy.fft.dct([1,2,3,4], type=2). Backward == norm=None; Ortho == 'ortho'.
         let x = [1.0, 2.0, 3.0, 4.0];
