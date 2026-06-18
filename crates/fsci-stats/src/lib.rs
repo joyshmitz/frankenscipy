@@ -47676,6 +47676,16 @@ mod tests {
     }
 
     #[test]
+    fn weibull_pdf_cdf_match_scipy() {
+        // Exact scipy.stats.weibull_min(c=1.5, scale=2). weibull_pdf_positive_only
+        // checks only positivity; this pins the pdf/cdf at interior points.
+        let w = Weibull::new(1.5, 2.0);
+        assert!((w.pdf(1.0) - 0.372_391_688_219_422_03).abs() < 1e-12, "pdf(1)");
+        assert!((w.pdf(2.0) - 0.275_909_580_878_581_75).abs() < 1e-12, "pdf(2)");
+        assert!((w.cdf(1.0) - 0.297_811_498_673_440_37).abs() < 1e-12, "cdf(1)");
+    }
+
+    #[test]
     fn weibull_pdf_positive_only() {
         let w = Weibull::new(2.0, 1.0);
         assert_eq!(w.pdf(-1.0), 0.0);
