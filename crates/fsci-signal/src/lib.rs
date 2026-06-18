@@ -12098,6 +12098,13 @@ pub fn cspline1d_eval(
             "dx must be finite and nonzero".to_string(),
         ));
     }
+    validate_real_values_finite(cj, "cspline1d_eval coefficients must be finite")?;
+    validate_real_values_finite(newx, "cspline1d_eval coordinates must be finite")?;
+    if !x0.is_finite() {
+        return Err(SignalError::NonFiniteInput {
+            detail: "cspline1d_eval x0 must be finite".to_string(),
+        });
+    }
     let n = cj.len();
     let out = newx
         .iter()
@@ -12136,6 +12143,13 @@ pub fn qspline1d_eval(
         return Err(SignalError::InvalidArgument(
             "dx must be finite and nonzero".to_string(),
         ));
+    }
+    validate_real_values_finite(cj, "qspline1d_eval coefficients must be finite")?;
+    validate_real_values_finite(newx, "qspline1d_eval coordinates must be finite")?;
+    if !x0.is_finite() {
+        return Err(SignalError::NonFiniteInput {
+            detail: "qspline1d_eval x0 must be finite".to_string(),
+        });
     }
     let n = cj.len();
     let out = newx
@@ -28186,6 +28200,48 @@ mod tests {
             Err(SignalError::InvalidArgument(
                 "dx must be finite and nonzero".to_string()
             ))
+        );
+    }
+
+    #[test]
+    fn spline1d_eval_rejects_non_finite_inputs() {
+        let cj = [1.0, 2.0, 3.0];
+        let nx = [0.0, 1.0, 2.0];
+        assert_eq!(
+            cspline1d_eval(&[1.0, f64::NAN, 3.0], &nx, 1.0, 0.0),
+            Err(SignalError::NonFiniteInput {
+                detail: "cspline1d_eval coefficients must be finite".to_string(),
+            })
+        );
+        assert_eq!(
+            cspline1d_eval(&cj, &[0.0, f64::INFINITY], 1.0, 0.0),
+            Err(SignalError::NonFiniteInput {
+                detail: "cspline1d_eval coordinates must be finite".to_string(),
+            })
+        );
+        assert_eq!(
+            cspline1d_eval(&cj, &nx, 1.0, f64::NEG_INFINITY),
+            Err(SignalError::NonFiniteInput {
+                detail: "cspline1d_eval x0 must be finite".to_string(),
+            })
+        );
+        assert_eq!(
+            qspline1d_eval(&[1.0, f64::INFINITY, 3.0], &nx, 1.0, 0.0),
+            Err(SignalError::NonFiniteInput {
+                detail: "qspline1d_eval coefficients must be finite".to_string(),
+            })
+        );
+        assert_eq!(
+            qspline1d_eval(&cj, &[0.0, f64::NAN], 1.0, 0.0),
+            Err(SignalError::NonFiniteInput {
+                detail: "qspline1d_eval coordinates must be finite".to_string(),
+            })
+        );
+        assert_eq!(
+            qspline1d_eval(&cj, &nx, 1.0, f64::INFINITY),
+            Err(SignalError::NonFiniteInput {
+                detail: "qspline1d_eval x0 must be finite".to_string(),
+            })
         );
     }
 
