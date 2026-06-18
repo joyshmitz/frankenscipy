@@ -47706,6 +47706,16 @@ mod tests {
     // ── Lognormal distribution ──────────────────────────────────────
 
     #[test]
+    fn lognormal_pdf_cdf_match_scipy() {
+        // Exact scipy.stats.lognorm(s=0.5, scale=1.0). lognormal_pdf_positive_only
+        // checks only positivity; this pins the pdf/cdf at interior points.
+        let ln = Lognormal::new(0.5, 1.0);
+        assert!((ln.pdf(1.0) - 0.797_884_560_802_865_4).abs() < 1e-12, "pdf(1)");
+        assert!((ln.pdf(2.0) - 0.152_613_826_047_545_78).abs() < 1e-12, "pdf(2)");
+        assert!((ln.cdf(1.0) - 0.5).abs() < 1e-12, "cdf(1) median=scale");
+    }
+
+    #[test]
     fn lognormal_pdf_positive_only() {
         let ln = Lognormal::new(1.0, 1.0);
         assert_eq!(ln.pdf(-1.0), 0.0);
