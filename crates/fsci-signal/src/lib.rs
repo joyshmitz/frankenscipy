@@ -14789,6 +14789,12 @@ pub struct CoherenceResult {
     pub coherence: Vec<f64>,
 }
 
+struct CoherenceSegmentSpectra {
+    pxy: Vec<(f64, f64)>,
+    pxx: Vec<f64>,
+    pyy: Vec<f64>,
+}
+
 /// Compute magnitude-squared coherence between two signals.
 ///
 /// Matches `scipy.signal.coherence(x, y, fs, nperseg, noverlap)`.
@@ -14811,18 +14817,140 @@ pub fn coherence(
     nperseg: Option<usize>,
     noverlap: Option<usize>,
 ) -> Result<CoherenceResult, SignalError> {
-    let pxy = csd(x, y, fs, window, nperseg, noverlap)?;
-    let pxx = csd(x, x, fs, window, nperseg, noverlap)?;
-    let pyy = csd(y, y, fs, window, nperseg, noverlap)?;
+    if x.len() != y.len() {
+        return Err(SignalError::InvalidArgument(format!(
+            "x and y must have same length ({} vs {})",
+            x.len(),
+            y.len()
+        )));
+    }
+    if x.is_empty() {
+        return Err(SignalError::InvalidArgument(
+            "input must not be empty".to_string(),
+        ));
+    }
+    validate_sampling_frequency(fs)?;
+    validate_spectral_samples(x)?;
+    validate_spectral_samples(y)?;
 
-    let coh: Vec<f64> = pxy
-        .csd
+    let nperseg = nperseg.unwrap_or_else(|| x.len().min(256));
+    if nperseg == 0 || nperseg > x.len() {
+        return Err(SignalError::InvalidArgument(
+            "nperseg must be > 0 and <= signal length".to_string(),
+        ));
+    }
+    let noverlap = noverlap.unwrap_or(nperseg / 2);
+    if noverlap >= nperseg {
+        return Err(SignalError::InvalidArgument(
+            "noverlap must be < nperseg".to_string(),
+        ));
+    }
+
+    let step = nperseg - noverlap;
+    let win_coeffs = get_window(window.unwrap_or("hann"), nperseg)?;
+    let win_power: f64 = win_coeffs.iter().map(|&w| w * w).sum::<f64>() / nperseg as f64;
+    let n_freqs = nperseg / 2 + 1;
+    let opts = fsci_fft::FftOptions::default();
+    let n_segments = (x.len() - nperseg) / step + 1;
+
+    let compute_segment = |s: usize| -> Result<CoherenceSegmentSpectra, SignalError> {
+        let start = s * step;
+        let xs = &x[start..start + nperseg];
+        let ys = &y[start..start + nperseg];
+        let xmean = xs.iter().sum::<f64>() / nperseg as f64;
+        let ymean = ys.iter().sum::<f64>() / nperseg as f64;
+        let mut wx = Vec::with_capacity(nperseg);
+        let mut wy = Vec::with_capacity(nperseg);
+        for ((&xi, &yi), &wi) in xs.iter().zip(ys.iter()).zip(&win_coeffs) {
+            wx.push((xi - xmean) * wi);
+            wy.push((yi - ymean) * wi);
+        }
+
+        let sx = fsci_fft::rfft(&wx, &opts)
+            .map_err(|e| SignalError::InvalidArgument(format!("FFT failed: {e}")))?;
+        let sy = fsci_fft::rfft(&wy, &opts)
+            .map_err(|e| SignalError::InvalidArgument(format!("FFT failed: {e}")))?;
+        let mut pxy = Vec::with_capacity(n_freqs);
+        let mut pxx = Vec::with_capacity(n_freqs);
+        let mut pyy = Vec::with_capacity(n_freqs);
+        for (k, (&(xr, xi), &(yr, yi))) in sx.iter().zip(sy.iter()).take(n_freqs).enumerate() {
+            let factor = if k == 0 || (nperseg.is_multiple_of(2) && k == n_freqs - 1) {
+                1.0
+            } else {
+                2.0
+            };
+            let re = xr * yr + xi * yi;
+            let im = xr * yi - xi * yr;
+            pxy.push((re * factor, im * factor));
+            pxx.push((xr * xr + xi * xi) * factor);
+            pyy.push((yr * yr + yi * yi) * factor);
+        }
+
+        Ok(CoherenceSegmentSpectra { pxy, pxx, pyy })
+    };
+
+    let seg_spectra: Vec<CoherenceSegmentSpectra> = {
+        let nthreads = stft_frame_thread_count(n_segments, nperseg);
+        if nthreads <= 1 {
+            (0..n_segments)
+                .map(&compute_segment)
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            let chunk = n_segments.div_ceil(nthreads);
+            let cs = &compute_segment;
+            type SegChunk = Result<Vec<CoherenceSegmentSpectra>, SignalError>;
+            let chunk_results: Vec<SegChunk> = std::thread::scope(|scope| {
+                let handles: Vec<_> = (0..nthreads)
+                    .filter_map(|t| {
+                        let s0 = t * chunk;
+                        if s0 >= n_segments {
+                            return None;
+                        }
+                        let s1 = (s0 + chunk).min(n_segments);
+                        Some(scope.spawn(move || (s0..s1).map(cs).collect::<Result<Vec<_>, _>>()))
+                    })
+                    .collect();
+                handles
+                    .into_iter()
+                    .map(|h| h.join().expect("coherence worker panicked"))
+                    .collect()
+            });
+            let mut v = Vec::with_capacity(n_segments);
+            for cr in chunk_results {
+                v.extend(cr?);
+            }
+            v
+        }
+    };
+
+    let mut avg_pxy = vec![(0.0, 0.0); n_freqs];
+    let mut avg_pxx = vec![0.0; n_freqs];
+    let mut avg_pyy = vec![0.0; n_freqs];
+    for seg in &seg_spectra {
+        for (((avg_xy, avg_xx), avg_yy), (&xy, (&xx, &yy))) in avg_pxy
+            .iter_mut()
+            .zip(avg_pxx.iter_mut())
+            .zip(avg_pyy.iter_mut())
+            .zip(seg.pxy.iter().zip(seg.pxx.iter().zip(seg.pyy.iter())))
+        {
+            avg_xy.0 += xy.0;
+            avg_xy.1 += xy.1;
+            *avg_xx += xx;
+            *avg_yy += yy;
+        }
+    }
+
+    let scale = 1.0 / (fs * nperseg as f64 * win_power * n_segments as f64);
+    let coh: Vec<f64> = avg_pxy
         .iter()
-        .zip(pxx.csd.iter().zip(pyy.csd.iter()))
-        .map(|(&(pxy_re, pxy_im), (&(pxx_re, _), &(pyy_re, _)))| {
-            // |Pxy|² / (Pxx * Pyy). Auto-spectra are real (imaginary ≈ 0).
+        .zip(avg_pxx.iter().zip(avg_pyy.iter()))
+        .map(|(&(pxy_re, pxy_im), (&pxx, &pyy))| {
+            let pxy_re = pxy_re * scale;
+            let pxy_im = pxy_im * scale;
+            let pxx = pxx * scale;
+            let pyy = pyy * scale;
             let pxy_mag2 = pxy_re * pxy_re + pxy_im * pxy_im;
-            let denom = pxx_re * pyy_re;
+            let denom = pxx * pyy;
             if denom.abs() < 1e-30 {
                 0.0
             } else {
@@ -14831,8 +14959,11 @@ pub fn coherence(
         })
         .collect();
 
+    let freq_step = fs / nperseg as f64;
+    let frequencies: Vec<f64> = (0..n_freqs).map(|k| k as f64 * freq_step).collect();
+
     Ok(CoherenceResult {
-        frequencies: pxy.frequencies,
+        frequencies,
         coherence: coh,
     })
 }
@@ -24087,6 +24218,53 @@ mod tests {
             avg_coh < 0.5,
             "average coherence of uncorrelated signals: {avg_coh}"
         );
+    }
+
+    #[test]
+    fn coherence_matches_compositional_csd_formula() {
+        let fs = 512.0;
+        let n = 1024;
+        let x: Vec<f64> = (0..n)
+            .map(|i| {
+                let t = i as f64 / fs;
+                (2.0 * std::f64::consts::PI * 41.0 * t).sin()
+                    + 0.25 * (2.0 * std::f64::consts::PI * 97.0 * t).cos()
+                    + 0.01 * (i % 11) as f64
+            })
+            .collect();
+        let y: Vec<f64> = (0..n)
+            .map(|i| {
+                let t = i as f64 / fs;
+                0.8 * (2.0 * std::f64::consts::PI * 41.0 * t + 0.37).sin()
+                    + 0.35 * (2.0 * std::f64::consts::PI * 123.0 * t).cos()
+                    - 0.01 * (i % 7) as f64
+            })
+            .collect();
+
+        let fused =
+            coherence(&x, &y, fs, Some("hann"), Some(128), Some(64)).expect("coherence");
+        let pxy = csd(&x, &y, fs, Some("hann"), Some(128), Some(64)).expect("csd(x, y)");
+        let pxx = csd(&x, &x, fs, Some("hann"), Some(128), Some(64)).expect("csd(x, x)");
+        let pyy = csd(&y, &y, fs, Some("hann"), Some(128), Some(64)).expect("csd(y, y)");
+
+        assert_eq!(fused.frequencies, pxy.frequencies);
+        for (k, (&got, (&(pxy_re, pxy_im), (&(pxx_re, _), &(pyy_re, _))))) in fused
+            .coherence
+            .iter()
+            .zip(pxy.csd.iter().zip(pxx.csd.iter().zip(pyy.csd.iter())))
+            .enumerate()
+        {
+            let denom = pxx_re * pyy_re;
+            let expected = if denom.abs() < 1e-30 {
+                0.0
+            } else {
+                ((pxy_re * pxy_re + pxy_im * pxy_im) / denom).clamp(0.0, 1.0)
+            };
+            assert!(
+                (got - expected).abs() < 1e-12,
+                "coherence bin {k}: fused {got} != compositional {expected}"
+            );
+        }
     }
 
     #[test]

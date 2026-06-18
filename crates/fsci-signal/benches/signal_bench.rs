@@ -1,7 +1,7 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use fsci_signal::{
-    ConvolveMode, FirWindow, SosSection, cwt, fftconvolve, filtfilt, firls, firwin, lfilter,
-    medfilt, order_filter, remez, ricker, sosfilt, welch,
+    ConvolveMode, FirWindow, SosSection, coherence, cwt, fftconvolve, filtfilt, firls, firwin,
+    lfilter, medfilt, order_filter, remez, ricker, sosfilt, welch,
 };
 use std::hint::black_box;
 
@@ -89,6 +89,29 @@ fn bench_spectral(c: &mut Criterion) {
                 black_box(Some("hann")),
                 black_box(Some(256)),
                 black_box(Some(128)),
+            ))
+        })
+    });
+
+    let long_x = deterministic_signal(65_536);
+    let long_y: Vec<f64> = (0..65_536)
+        .map(|i| {
+            let t = i as f64 / 65_536.0;
+            0.8 * (41.0 * t + 0.37).sin()
+                + 0.4 * (103.0 * t).cos()
+                + 0.05 * ((i * 31 % 43) as f64 - 21.0)
+        })
+        .collect();
+
+    c.bench_function("spectral/coherence/65536_w1024_o512", |b| {
+        b.iter(|| {
+            black_box(coherence(
+                black_box(&long_x),
+                black_box(&long_y),
+                black_box(1.0),
+                black_box(Some("hann")),
+                black_box(Some(1024)),
+                black_box(Some(512)),
             ))
         })
     });
