@@ -3048,6 +3048,23 @@ pub fn brent<F>(
 where
     F: Fn(f64) -> f64,
 {
+    if !tol.is_finite() || tol <= 0.0 {
+        return Err(OptError::InvalidArgument {
+            detail: "tol must be a positive finite value".to_string(),
+        });
+    }
+    if maxiter == 0 {
+        return Err(OptError::InvalidArgument {
+            detail: "maxiter must be greater than zero".to_string(),
+        });
+    }
+    if let Some(b) = brack {
+        if b.iter().any(|value| !value.is_finite()) {
+            return Err(OptError::InvalidArgument {
+                detail: "brack values must be finite".to_string(),
+            });
+        }
+    }
     // Establish the bracketing triple (xa, xc) bounding the minimum.
     let (xa, xc) = match brack {
         None => {
@@ -6698,6 +6715,10 @@ mod tests {
         // Non-downhill 3-point bracket and wrong-length bracket are rejected.
         assert!(brent(|x| (x - 2.0).powi(2), Some(&[0.0, 0.0, 4.0]), 1.48e-8, 500).is_err());
         assert!(brent(|x| (x - 2.0).powi(2), Some(&[0.0]), 1.48e-8, 500).is_err());
+        assert!(brent(|x| (x - 2.0).powi(2), None, 0.0, 500).is_err());
+        assert!(brent(|x| (x - 2.0).powi(2), None, f64::NAN, 500).is_err());
+        assert!(brent(|x| (x - 2.0).powi(2), None, 1.48e-8, 0).is_err());
+        assert!(brent(|x| (x - 2.0).powi(2), Some(&[0.0, f64::INFINITY]), 1.48e-8, 500).is_err());
     }
 
     #[test]
