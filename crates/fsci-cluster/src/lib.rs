@@ -8472,6 +8472,23 @@ mod tests {
     }
 
     #[test]
+    fn whiten_match_scipy() {
+        // scipy.cluster.vq.whiten: divide each column by its (population) std.
+        let x = vec![vec![1.0, 2.0], vec![4.0, 8.0], vec![7.0, 2.0]];
+        let w = whiten(&x).expect("whiten");
+        let e = [
+            [0.408_248_290_463_863_1, 0.707_106_781_186_547_5],
+            [1.632_993_161_855_452_5, 2.828_427_124_746_190_3],
+            [2.857_738_033_247_041_5, 0.707_106_781_186_547_5],
+        ];
+        for (gr, er) in w.iter().zip(&e) {
+            for (g, ex) in gr.iter().zip(er) {
+                assert!((g - ex).abs() < 1e-11, "whiten: {g} vs {ex}");
+            }
+        }
+    }
+
+    #[test]
     fn fcluster_maxclust_match_scipy() {
         // Single-linkage Z of [[0,0],[0,1],[5,5],[5,6]]. fcluster (maxclust):
         // 2 clusters -> [1,1,2,2], 1 -> all 1, 4 -> [1,2,3,4]. Matches
