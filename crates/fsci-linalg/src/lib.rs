@@ -16749,6 +16749,49 @@ mod tests {
     }
 
     #[test]
+    fn lu_factors_are_valid() {
+        // Property test: L unit-lower-triangular, U upper-triangular, and the
+        // factorization reconstructs A in a standard permutation convention
+        // (either A=P·L·U or P·A=L·U) — convention-agnostic so it can't false-fail
+        // on the P-vs-Pᵀ choice while still catching a broken LU.
+        let a = vec![
+            vec![2.0, 1.0, 1.0],
+            vec![4.0, 3.0, 3.0],
+            vec![8.0, 7.0, 9.0],
+        ];
+        let r = lu(&a, DecompOptions::default()).expect("lu");
+        let n = 3;
+        let mm = |x: &[Vec<f64>], y: &[Vec<f64>]| -> Vec<Vec<f64>> {
+            (0..n)
+                .map(|i| (0..n).map(|j| (0..n).map(|k| x[i][k] * y[k][j]).sum()).collect())
+                .collect()
+        };
+        for i in 0..n {
+            for j in 0..n {
+                if j > i {
+                    assert!(r.l[i][j].abs() < 1e-12, "L not lower at [{i}][{j}]");
+                }
+                if i == j {
+                    assert!((r.l[i][j] - 1.0).abs() < 1e-12, "L diag not 1 at {i}");
+                }
+                if j < i {
+                    assert!(r.u[i][j].abs() < 1e-12, "U not upper at [{i}][{j}]");
+                }
+            }
+        }
+        let lu_prod = mm(&r.l, &r.u);
+        let plu = mm(&r.p, &lu_prod); // A = P·L·U (scipy)
+        let pa = mm(&r.p, &a); // P·A = L·U (PA=LU)
+        let close = |x: &[Vec<f64>], y: &[Vec<f64>]| {
+            (0..n).all(|i| (0..n).all(|j| (x[i][j] - y[i][j]).abs() < 1e-9))
+        };
+        assert!(
+            close(&plu, &a) || close(&pa, &lu_prod),
+            "LU reconstruction failed in both conventions"
+        );
+    }
+
+    #[test]
     fn svd_reconstructs_and_singular_values_descending() {
         // Property test (no sign assumption): A = U·diag(s)·Vᵀ, s descending and
         // non-negative, U and Vᵀ orthonormal.
