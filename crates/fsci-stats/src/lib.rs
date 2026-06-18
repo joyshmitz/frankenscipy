@@ -64023,6 +64023,16 @@ mod tests {
     }
 
     #[test]
+    fn half_cauchy_pdf_cdf_interior_match_scipy() {
+        // Exact scipy.stats.halfcauchy at interior points. half_cauchy_pdf_cdf_ppf_
+        // roundtrip pins pdf(0)=2/pi and a cdf/ppf roundtrip, but not pdf/cdf at x>0.
+        let d = HalfCauchy;
+        assert!((d.pdf(1.0) - 0.318_309_886_183_790_7).abs() < 1e-12, "pdf(1)=1/pi");
+        assert!((d.pdf(2.0) - 0.127_323_954_473_516_27).abs() < 1e-12, "pdf(2)=2/(5pi)");
+        assert!((d.cdf(1.0) - 0.5).abs() < 1e-12, "cdf(1) median");
+    }
+
+    #[test]
     fn half_cauchy_pdf_cdf_ppf_roundtrip() {
         let hc = HalfCauchy;
         assert_close(hc.pdf(0.0), 2.0 / PI, 1e-12, "HalfCauchy pdf(0)");
