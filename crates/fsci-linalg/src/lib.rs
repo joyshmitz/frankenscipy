@@ -4616,20 +4616,24 @@ pub fn cho_solve(cho: &ChoFactorResult, b: &[f64]) -> Result<SolveResult, Linalg
     })
 }
 
-/// Solve a banded positive definite system using banded Cholesky factorization.
+/// Solve a banded positive definite system using a banded Cholesky factor.
 ///
-/// Given the lower triangular banded Cholesky factor `cb` of a symmetric
-/// positive definite banded matrix A (stored in lower band storage format),
-/// solves A @ x = b.
+/// Given the banded Cholesky factor `cb` of a symmetric positive definite
+/// banded matrix A, solves A @ x = b.
 ///
-/// The matrix cb has shape (lower_bandwidth + 1, n) where:
+/// If `lower=true`, `cb` stores the lower triangular factor L:
 /// - cb[0, :] contains the main diagonal of L
-/// - cb[k, i] contains L[i+k, i] for k = 1, ..., lower_bandwidth
+/// - cb[k, i] contains L[i+k, i] for k = 1, ..., bandwidth
+///
+/// If `lower=false`, `cb` stores the upper triangular factor U in SciPy/LAPACK
+/// upper band format:
+/// - cb[bandwidth, :] contains the main diagonal of U
+/// - cb[bandwidth-k, i] contains U[i-k, i] for k = 1, ..., bandwidth
 ///
 /// Matches `scipy.linalg.cho_solve_banded((cb, lower), b)`.
 ///
 /// # Arguments
-/// * `cb` - Cholesky factor in banded storage format, shape (lower_bandwidth + 1, n)
+/// * `cb` - Cholesky factor in SciPy banded storage format, shape (bandwidth + 1, n)
 /// * `b` - Right-hand side vector
 /// * `lower` - If true, cb contains lower triangular factor; if false, upper triangular
 pub fn cho_solve_banded(
@@ -4697,27 +4701,29 @@ pub fn cho_solve_banded(
             x[i] /= cb[0][i];
         }
     } else {
-        // Upper triangular: Solve U^T @ y = b then U @ x = y
-        // U is stored with U[0,:] = diagonal, U[k,i] = U[i-k,i]
+        // Upper triangular: solve U^T @ y = b then U @ x = y.
+        // SciPy stores U[i, j] at cb[kd - (j - i)][j], with the diagonal in
+        // the last row cb[kd].
+        let kd = bandwidth_plus_1 - 1;
         for i in 0..n {
-            for k in 1..bandwidth_plus_1 {
-                if i >= k {
-                    x[i] -= cb[k][i] * x[i - k];
+            for offset in 1..=kd {
+                if i >= offset {
+                    x[i] -= cb[kd - offset][i] * x[i - offset];
                 }
             }
-            if cb[0][i].abs() < 1e-15 {
+            if cb[kd][i].abs() < 1e-15 {
                 return Err(LinalgError::SingularMatrix);
             }
-            x[i] /= cb[0][i];
+            x[i] /= cb[kd][i];
         }
 
         for i in (0..n).rev() {
-            for k in 1..bandwidth_plus_1 {
-                if i + k < n {
-                    x[i] -= cb[k][i + k] * x[i + k];
+            for offset in 1..=kd {
+                if i + offset < n {
+                    x[i] -= cb[kd - offset][i + offset] * x[i + offset];
                 }
             }
-            x[i] /= cb[0][i];
+            x[i] /= cb[kd][i];
         }
     }
 
@@ -4743,11 +4749,10 @@ pub fn cho_solve_banded(
 /// Given a symmetric positive-definite banded matrix A in banded storage format,
 /// solves the system Ax = b using banded Cholesky factorization.
 ///
-/// The matrix `ab` stores the lower or upper band of A:
-/// - If lower=true: ab[k, i] = A[i+k, i] for k = 0, ..., lower_bandwidth
-/// - If lower=false: ab[k, i] = A[i-k, i] for k = 0, ..., upper_bandwidth
-///
-/// The diagonal is always ab[0, :].
+/// The matrix `ab` stores the lower or upper band of A using SciPy/LAPACK
+/// conventions:
+/// - If lower=true: ab[k, i] = A[i+k, i], with the diagonal in ab[0]
+/// - If lower=false: ab[u-k, i] = A[i-k, i], with the diagonal in ab[u]
 ///
 /// Matches `scipy.linalg.solveh_banded(ab, b, lower)`.
 ///
@@ -4762,7 +4767,6 @@ pub fn solveh_banded(ab: &[Vec<f64>], b: &[f64], lower: bool) -> Result<SolveRes
         });
     }
 
-    let bandwidth_plus_1 = ab.len();
     let n = ab[0].len();
 
     if b.len() != n {
@@ -4772,90 +4776,7 @@ pub fn solveh_banded(ab: &[Vec<f64>], b: &[f64], lower: bool) -> Result<SolveRes
         });
     }
 
-    for row in ab.iter() {
-        if row.len() != n {
-            return Err(LinalgError::InvalidArgument {
-                detail: "All rows in ab must have the same length".to_string(),
-            });
-        }
-    }
-
-    if n == 0 {
-        return Ok(SolveResult {
-            x: vec![],
-            warning: None,
-            backward_error: None,
-            certificate: None,
-        });
-    }
-
-    // Perform banded Cholesky factorization
-    // L stored in same format as input
-    let mut cb = ab.to_vec();
-
-    if lower {
-        // Cholesky factorization for lower band storage
-        for j in 0..n {
-            // Compute diagonal element
-            let mut diag = cb[0][j];
-            for k in 1..bandwidth_plus_1 {
-                if j >= k {
-                    let lkj = cb[k][j - k];
-                    diag -= lkj * lkj;
-                }
-            }
-            if diag <= 0.0 {
-                return Err(LinalgError::InvalidArgument {
-                    detail: "Matrix is not positive definite".to_string(),
-                });
-            }
-            cb[0][j] = diag.sqrt();
-
-            // Compute sub-diagonal elements
-            for i in 1..bandwidth_plus_1 {
-                if j + i < n {
-                    let mut sum = cb[i][j];
-                    for k in 1..bandwidth_plus_1 {
-                        if j >= k && i + k < bandwidth_plus_1 {
-                            sum -= cb[k][j - k] * cb[i + k][j - k];
-                        }
-                    }
-                    cb[i][j] = sum / cb[0][j];
-                }
-            }
-        }
-    } else {
-        // Cholesky factorization for upper band storage
-        for j in 0..n {
-            let mut diag = cb[0][j];
-            for (k, band_row) in cb.iter().enumerate().take(bandwidth_plus_1).skip(1) {
-                if j >= k {
-                    let ukj = band_row[j];
-                    diag -= ukj * ukj;
-                }
-            }
-            if diag <= 0.0 {
-                return Err(LinalgError::InvalidArgument {
-                    detail: "Matrix is not positive definite".to_string(),
-                });
-            }
-            cb[0][j] = diag.sqrt();
-
-            for i in 1..bandwidth_plus_1 {
-                if j + i < n {
-                    let mut sum = cb[i][j + i];
-                    for k in 1..bandwidth_plus_1.min(j + 1) {
-                        if i + k < bandwidth_plus_1 {
-                            sum -= cb[k][j] * cb[i + k][j + i];
-                        }
-                    }
-                    cb[i][j + i] = sum / cb[0][j];
-                }
-            }
-        }
-    }
-
-    // Now solve using the computed Cholesky factor
+    let cb = cholesky_banded(ab, lower)?;
     cho_solve_banded(&cb, b, lower)
 }
 
@@ -22130,6 +22051,18 @@ mod tests {
     }
 
     #[test]
+    fn cho_solve_banded_upper_tridiagonal() {
+        // Same matrix as cho_solve_banded_tridiagonal, but with the upper
+        // Cholesky factor U = L^T in SciPy upper band storage. The diagonal
+        // lives in the last row, and cb[0][j] stores U[j-1, j].
+        let sqrt5 = 5.0_f64.sqrt();
+        let cb = vec![vec![0.0, 1.0, 1.0], vec![2.0, 2.0, sqrt5]];
+        let b = vec![6.0, 9.0, 8.0];
+        let result = cho_solve_banded(&cb, &b, false).expect("upper cho_solve_banded");
+        assert_close_slice(&result.x, &[1.0, 1.0, 1.0], 1e-10, 1e-10);
+    }
+
+    #[test]
     fn cho_solve_banded_diagonal() {
         // Diagonal positive definite matrix
         let cb = vec![vec![2.0, 3.0, 4.0]]; // Only diagonal, no off-diagonal bands
@@ -22167,6 +22100,16 @@ mod tests {
         assert!((result.x[0] - 1.0).abs() < 1e-8, "x[0] = {}", result.x[0]);
         assert!((result.x[1] - 1.0).abs() < 1e-8, "x[1] = {}", result.x[1]);
         assert!((result.x[2] - 1.0).abs() < 1e-8, "x[2] = {}", result.x[2]);
+    }
+
+    #[test]
+    fn solveh_banded_upper_tridiagonal() {
+        // SciPy upper band storage for A = [[4, 2, 0], [2, 5, 2], [0, 2, 6]]:
+        // diagonal in the last row, first super-diagonal in row 0.
+        let ab = vec![vec![0.0, 2.0, 2.0], vec![4.0, 5.0, 6.0]];
+        let b = vec![6.0, 9.0, 8.0];
+        let result = solveh_banded(&ab, &b, false).expect("upper solveh_banded");
+        assert_close_slice(&result.x, &[1.0, 1.0, 1.0], 1e-8, 1e-8);
     }
 
     #[test]
