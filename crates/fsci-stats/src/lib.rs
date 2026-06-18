@@ -71499,6 +71499,19 @@ mod tests {
     }
 
     #[test]
+    fn trim_mean_tmean_match_scipy() {
+        // scipy.stats.trim_mean uses floor(n*prop) cut from each end; tmean keeps
+        // values within (inclusive) limits. Golden from scipy.stats 1.17.1.
+        let a = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        assert!((trim_mean(&a, 0.1) - 5.5).abs() < 1e-12, "trim_mean 0.1");
+        assert!((trim_mean(&a, 0.25) - 5.5).abs() < 1e-12, "trim_mean 0.25");
+        assert!(
+            (tmean(&a, (2.0, 8.0), (true, true)) - 5.0).abs() < 1e-12,
+            "tmean (2,8)"
+        );
+    }
+
+    #[test]
     fn percentile_quantile_match_numpy_linear() {
         // numpy.percentile/quantile default method='linear' ((n-1) interpolation)
         // for a=[1..10].
