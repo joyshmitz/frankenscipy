@@ -1136,6 +1136,49 @@ mod tests {
     }
 
     #[test]
+    fn value_lookup_matches_scipy_codata_2022() {
+        // Each key must return scipy.constants.physical_constants[key][0]
+        // (CODATA 2022, SciPy 1.17.1) bit-for-bit. Locks both the constant
+        // values and the value() key→symbol mapping. frankenscipy-nwzcn.
+        let cases: &[(&str, f64)] = &[
+            ("faraday constant", 96485.33212331001),
+            ("electron g factor", -2.00231930436092),
+            ("proton g factor", 5.5856946893),
+            ("neutron g factor", -3.82608552),
+            ("muon g factor", -2.00233184123),
+            ("thomson cross section", 6.6524587051e-29),
+            ("characteristic impedance of vacuum", 376.730313412),
+            ("molar planck constant", 3.990312712893431e-10),
+            ("rydberg constant times c in hz", 3289841960250000.0),
+            ("inverse fine-structure constant", 137.035999177),
+            ("first radiation constant", 3.7417718521927573e-16),
+            ("second radiation constant", 0.014387768775039337),
+            ("electron-proton mass ratio", 0.0005446170214889),
+            ("proton-electron mass ratio", 1836.152673426),
+            ("bohr magneton in ev/t", 5.7883817982e-05),
+            ("electron mass energy equivalent in mev", 0.51099895069),
+            ("proton mass energy equivalent in mev", 938.27208943),
+            ("neutron mass energy equivalent in mev", 939.56542194),
+            ("proton compton wavelength", 1.3214098536e-15),
+            ("neutron compton wavelength", 1.31959090382e-15),
+            ("neutron-electron mass ratio", 1838.683662),
+            ("muon-electron mass ratio", 206.7682827),
+            ("proton-neutron mass ratio", 0.99862347797),
+            ("deuteron-electron mass ratio", 3670.482967655),
+            ("alpha particle-electron mass ratio", 7294.29954171),
+        ];
+        for &(key, want) in cases {
+            let got = value(key).unwrap_or_else(|| panic!("value({key:?}) returned None"));
+            assert_eq!(got, want, "value({key:?})");
+            // Case-insensitivity must hold (scipy keys are case-sensitive but
+            // fsci's value() lowercases): an upper-cased key resolves the same.
+            assert_eq!(value(&key.to_uppercase()), Some(want), "value({key:?}) upper");
+        }
+        // Unknown keys return None (scipy raises; fsci is Option-typed).
+        assert_eq!(value("not a real constant"), None);
+    }
+
+    #[test]
     fn value_matches_scipy_reference_values() {
         // scipy.constants.value('speed of light in vacuum') = 299792458.0
         // Our API uses simpler keys
