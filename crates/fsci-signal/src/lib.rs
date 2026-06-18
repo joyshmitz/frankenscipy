@@ -226,7 +226,7 @@ impl std::error::Error for SignalError {}
 /// the signal, produce the smoothed (or differentiated) output.
 ///
 /// # Arguments
-/// * `window_length` — Must be odd and >= 1
+/// * `window_length` — Must be >= 1
 /// * `polyorder` — Polynomial order, must be < window_length
 /// * `deriv` — Derivative order (0 = smoothing, 1 = first derivative, etc.)
 pub fn savgol_coeffs(
@@ -234,9 +234,9 @@ pub fn savgol_coeffs(
     polyorder: usize,
     deriv: usize,
 ) -> Result<Vec<f64>, SignalError> {
-    if window_length == 0 || window_length.is_multiple_of(2) {
+    if window_length == 0 {
         return Err(SignalError::InvalidWindowLength(
-            "window_length must be a positive odd integer".to_string(),
+            "window_length must be positive".to_string(),
         ));
     }
     if polyorder >= window_length {
@@ -245,20 +245,24 @@ pub fn savgol_coeffs(
         ));
     }
     if deriv > polyorder {
-        return Err(SignalError::InvalidPolyOrder(
-            "deriv must be <= polyorder".to_string(),
-        ));
+        return Ok(vec![0.0; window_length]);
     }
 
-    let half = (window_length / 2) as i64;
+    let pos = if window_length.is_multiple_of(2) {
+        window_length as f64 * 0.5 - 0.5
+    } else {
+        (window_length / 2) as f64
+    };
     let order = polyorder + 1;
 
     // Build the normal equations matrix A^T A.
-    // (A^T A)_{r,c} = sum_{i=-half}^{half} i^{r+c}
+    // SciPy's default `use="conv"` reverses the sample coordinates, and even
+    // windows are centered on a half-sample position.
+    // (A^T A)_{r,c} = sum_i x_i^{r+c}
     // We only need to compute sums of powers up to 2 * polyorder.
     let mut sums = vec![0.0; 2 * polyorder + 1];
     for i in 0..window_length {
-        let xi = (i as i64 - half) as f64;
+        let xi = pos - i as f64;
         let mut p = 1.0;
         for value in sums.iter_mut().take(2 * polyorder + 1) {
             *value += p;
@@ -288,7 +292,7 @@ pub fn savgol_coeffs(
     let deriv_factorial = factorial_small(deriv);
     let mut coeffs = Vec::with_capacity(window_length);
     for i in 0..window_length {
-        let xi = (i as i64 - half) as f64;
+        let xi = pos - i as f64;
         let mut val = 0.0;
         let mut power = 1.0;
         for &cj in &c {
@@ -361,6 +365,7 @@ pub fn savgol_filter_mode(
 
     let coeffs = savgol_coeffs(window_length, polyorder, 0)?;
     let half = window_length / 2;
+    let even_shift = usize::from(window_length.is_multiple_of(2));
     let n = x.len();
 
     if mode == SavgolMode::Interp {
@@ -370,7 +375,7 @@ pub fn savgol_filter_mode(
         for (i, slot) in result.iter_mut().enumerate() {
             let mut val = 0.0;
             for (j, &c) in coeffs.iter().enumerate() {
-                let idx = i as i64 + j as i64 - half as i64;
+                let idx = i as i64 + j as i64 - half as i64 + even_shift as i64;
                 if idx >= 0 && idx < n as i64 {
                     val += c * x[idx as usize];
                 }
@@ -412,7 +417,7 @@ pub fn savgol_filter_mode(
     for (i, slot) in result.iter_mut().enumerate() {
         let mut val = 0.0;
         for (j, &c) in coeffs.iter().enumerate() {
-            val += c * padded[i + j];
+            val += c * padded[i + j + even_shift];
         }
         *slot = val;
     }
@@ -17113,6 +17118,20 @@ mod tests {
     }
 
     #[test]
+    fn savgol_filter_even_window_interp_matches_scipy() {
+        // scipy.signal.savgol_filter(np.arange(5.0), 4, 2)
+        let x = vec![0.0, 1.0, 2.0, 3.0, 4.0];
+        let filtered = savgol_filter(&x, 4, 2).expect("even window filter");
+        let expected = [0.0, 1.0, 2.5, 3.0, 4.0];
+        for (i, (&got, &want)) in filtered.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-10,
+                "savgol_filter even window[{i}] = {got}, expected {want}"
+            );
+        }
+    }
+
+    #[test]
     fn savgol_filter_modes_match_scipy() {
         // scipy.signal.savgol_filter([1,2,4,7,11,16,22,29,37], 5, 2, mode=m).
         // frankenscipy-ckrdw: nearest/constant/mirror/wrap boundary parity.
@@ -17198,9 +17217,23 @@ mod tests {
     }
 
     #[test]
-    fn savgol_coeffs_even_window_rejected() {
-        let err = savgol_coeffs(4, 2, 0).expect_err("even window");
-        assert!(matches!(err, SignalError::InvalidWindowLength(_)));
+    fn savgol_coeffs_even_window_matches_scipy() {
+        // scipy.signal.savgol_coeffs(4, 2)
+        let coeffs = savgol_coeffs(4, 2, 0).expect("even window coeffs");
+        let expected = [-0.0625, 0.5625, 0.5625, -0.0625];
+        for (i, (&got, &want)) in coeffs.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-12,
+                "savgol_coeffs(4,2)[{i}] got {got}, expected {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn savgol_coeffs_high_derivative_returns_zeros() {
+        // scipy.signal.savgol_coeffs(5, 2, deriv=3) -> [0, 0, 0, 0, 0].
+        let coeffs = savgol_coeffs(5, 2, 3).expect("high derivative coeffs");
+        assert_eq!(coeffs, vec![0.0; 5]);
     }
 
     #[test]
@@ -17217,9 +17250,16 @@ mod tests {
 
     #[test]
     fn savgol_coeffs_first_derivative() {
-        // First derivative coefficients for window=5, polyorder=2
+        // scipy.signal.savgol_coeffs(5, 2, deriv=1)
         let c = savgol_coeffs(5, 2, 1).expect("deriv coeffs");
-        assert_eq!(c.len(), 5);
+        let expected = [0.2, 0.1, 0.0, -0.1, -0.2];
+        assert_eq!(c.len(), expected.len());
+        for (i, (&got, &want)) in c.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-12,
+                "savgol_coeffs(5,2,deriv=1)[{i}] got {got}, expected {want}"
+            );
+        }
         // For first derivative, sum should be 0 (since differentiating a constant gives 0)
         let sum: f64 = c.iter().sum();
         assert!(
