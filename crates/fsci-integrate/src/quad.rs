@@ -685,6 +685,15 @@ where
             detail: "outer integration bounds must be finite".to_string(),
         });
     }
+    if !options.epsabs.is_finite()
+        || !options.epsrel.is_finite()
+        || options.epsabs < 0.0
+        || options.epsrel < 0.0
+    {
+        return Err(IntegrateValidationError::QuadInvalidTolerance {
+            detail: "tolerances must be finite and non-negative".to_string(),
+        });
+    }
 
     if (a - b).abs() < f64::EPSILON {
         return Ok(DblquadResult {
@@ -4215,6 +4224,42 @@ mod tests {
         )
         .expect("dblquad equal bounds");
         assert_eq!(result.integral, 0.0);
+    }
+
+    #[test]
+    fn dblquad_equal_bounds_rejects_invalid_tolerances() {
+        for options in [
+            DblquadOptions {
+                epsabs: f64::INFINITY,
+                ..DblquadOptions::default()
+            },
+            DblquadOptions {
+                epsrel: f64::INFINITY,
+                ..DblquadOptions::default()
+            },
+            DblquadOptions {
+                epsabs: f64::NAN,
+                ..DblquadOptions::default()
+            },
+            DblquadOptions {
+                epsrel: -1.0,
+                ..DblquadOptions::default()
+            },
+        ] {
+            let err = dblquad(
+                |y, x| x * y,
+                3.0,
+                3.0,
+                |_| 0.0,
+                |_| 1.0,
+                options,
+            )
+            .expect_err("invalid equal-bound dblquad tolerance");
+            assert!(matches!(
+                err,
+                IntegrateValidationError::QuadInvalidTolerance { .. }
+            ));
+        }
     }
 
     #[test]
