@@ -5330,6 +5330,30 @@ mod tests {
     };
 
     #[test]
+    fn opt_numerical_and_trisection_match_analytic() {
+        // numerical gradient/hessian/jacobian (exact within FD roundoff for low-degree
+        // polys) and minimize_trisection. All four were previously untested.
+        let g = numerical_gradient(|x: &[f64]| x[0] * x[0] + x[1] * x[1], &[1.0, 2.0], 1e-5);
+        assert!((g[0] - 2.0).abs() < 1e-4 && (g[1] - 4.0).abs() < 1e-4, "gradient");
+        let h = numerical_hessian(|x: &[f64]| x[0] * x[0] + x[1] * x[1], &[1.0, 2.0], 1e-3);
+        assert!(
+            (h[0][0] - 2.0).abs() < 1e-3 && (h[1][1] - 2.0).abs() < 1e-3 && h[0][1].abs() < 1e-3,
+            "hessian"
+        );
+        let j = numerical_jacobian(|x: &[f64]| vec![x[0] * x[1], x[0] + x[1]], &[2.0, 3.0], 1e-5);
+        assert!(
+            (j[0][0] - 3.0).abs() < 1e-4
+                && (j[0][1] - 2.0).abs() < 1e-4
+                && (j[1][0] - 1.0).abs() < 1e-4
+                && (j[1][1] - 1.0).abs() < 1e-4,
+            "jacobian"
+        );
+        // minimize_trisection of (x-2)^2 over [0,5] -> (2, 0).
+        let (xmin, fmin) = minimize_trisection(|x: f64| (x - 2.0).powi(2), 0.0, 5.0, 1e-8, 200);
+        assert!((xmin - 2.0).abs() < 1e-5 && fmin.abs() < 1e-9, "trisection min");
+    }
+
+    #[test]
     fn lsq_linear_matches_scipy_bvls() {
         use crate::lsq_linear;
         let a = vec![
