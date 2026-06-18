@@ -7316,6 +7316,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn softmax_log_softmax_match_scipy() {
+        // scipy.special.softmax/log_softmax, including shift-invariant stability.
+        let es = [
+            0.090_030_573_170_380_46,
+            0.244_728_471_054_797_64,
+            0.665_240_955_774_821_8,
+        ];
+        let s = softmax(&[1.0, 2.0, 3.0]);
+        for (g, e) in s.iter().zip(&es) {
+            assert!((g - e).abs() < 1e-12, "softmax: {g} vs {e}");
+        }
+        // Large values overflow a naive exp; result is identical (shift-invariant).
+        let s2 = softmax(&[1000.0, 1001.0, 1002.0]);
+        for (g, e) in s2.iter().zip(&es) {
+            assert!((g - e).abs() < 1e-12, "softmax stable: {g} vs {e}");
+        }
+        let ls = log_softmax(&[1.0, 2.0, 3.0]);
+        let els = [
+            -2.407_605_964_444_380_6,
+            -1.407_605_964_444_380_4,
+            -0.407_605_964_444_380_4,
+        ];
+        for (g, e) in ls.iter().zip(&els) {
+            assert!((g - e).abs() < 1e-12, "log_softmax: {g} vs {e}");
+        }
+    }
+
+    #[test]
     fn logsumexp_match_scipy_with_stability() {
         // scipy.special.logsumexp. The large-value case would overflow a naive
         // exp(), but the max-subtraction keeps it finite (shift-invariant: the
