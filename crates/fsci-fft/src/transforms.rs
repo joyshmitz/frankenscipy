@@ -4261,6 +4261,37 @@ mod tests {
     }
 
     #[test]
+    fn dst_ii_match_scipy() {
+        // scipy.fft.dst([1,2,3,4], type=2). Backward == norm=None; Ortho == 'ortho'.
+        let x = [1.0, 2.0, 3.0, 4.0];
+        let back = dst(&x, 2, &FftOptions::default()).expect("dst");
+        let eb = [
+            13.065_629_648_763_766,
+            -5.656_854_249_492_38,
+            5.411_961_001_461_97,
+            -4.0,
+        ];
+        for (g, e) in back.iter().zip(&eb) {
+            assert!((g - e).abs() < 1e-11, "dst backward: {g} vs {e}");
+        }
+        let ortho = dst(
+            &x,
+            2,
+            &FftOptions::default().with_normalization(Normalization::Ortho),
+        )
+        .expect("dst ortho");
+        let eo = [
+            4.619_397_662_556_434,
+            -2.0,
+            1.913_417_161_825_449,
+            -1.000_000_000_000_000_2,
+        ];
+        for (g, e) in ortho.iter().zip(&eo) {
+            assert!((g - e).abs() < 1e-11, "dst ortho: {g} vs {e}");
+        }
+    }
+
+    #[test]
     fn fft_normalization_conventions_match_scipy() {
         // scipy.fft.fft norm=backward/ortho/forward and ifft (1/n) for [1,2,3,4].
         let x: Vec<Complex64> = [1.0, 2.0, 3.0, 4.0].iter().map(|&r| (r, 0.0)).collect();
