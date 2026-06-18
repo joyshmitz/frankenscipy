@@ -8618,6 +8618,33 @@ pub fn freqz_zpk(zpk: &ZpkCoeffs, n_freqs: Option<usize>) -> Result<FreqzResult,
     freqz_zpk_with_whole(zpk, n_freqs, false)
 }
 
+fn validate_zpk_response_values_finite(
+    zpk: &ZpkCoeffs,
+    context: &str,
+) -> Result<(), SignalError> {
+    if zpk
+        .zeros_re
+        .iter()
+        .chain(zpk.zeros_im.iter())
+        .all(|value| value.is_finite())
+    {
+        if zpk
+            .poles_re
+            .iter()
+            .chain(zpk.poles_im.iter())
+            .all(|value| value.is_finite())
+        {
+            return Ok(());
+        }
+        return Err(SignalError::NonFiniteInput {
+            detail: format!("{context} poles must be finite"),
+        });
+    }
+    Err(SignalError::NonFiniteInput {
+        detail: format!("{context} zeros must be finite"),
+    })
+}
+
 /// Compute the frequency response of a digital filter from ZPK form
 /// over half or the whole unit circle.
 ///
@@ -8640,6 +8667,7 @@ pub fn freqz_zpk_with_whole(
     if !zpk.gain.is_finite() {
         return Err(SignalError::InvalidArgument("gain must be finite".into()));
     }
+    validate_zpk_response_values_finite(zpk, "freqz_zpk")?;
 
     let n = n_freqs.unwrap_or(512);
     if n == 0 {
@@ -8712,6 +8740,7 @@ pub fn freqz_sos(sos: &[SosSection], n_freqs: Option<usize>) -> Result<FreqzResu
             "sos must not be empty".to_string(),
         ));
     }
+    validate_sos_coefficients_finite(sos, "freqz_sos")?;
 
     let n = n_freqs.unwrap_or(512);
     if n == 0 {
@@ -8788,6 +8817,7 @@ pub fn sosfreqz_with_whole(
             "sos must not be empty".to_string(),
         ));
     }
+    validate_sos_coefficients_finite(sos, "sosfreqz")?;
 
     let n = n_freqs.unwrap_or(512);
     if n == 0 {
@@ -22722,6 +22752,21 @@ mod tests {
         assert!(freqz_zpk(&zpk, None).is_err());
         zpk.gain = 1.0;
         assert!(freqz_zpk(&zpk, Some(0)).is_err());
+        zpk.zeros_re[0] = f64::NAN;
+        assert_eq!(
+            freqz_zpk(&zpk, None),
+            Err(SignalError::NonFiniteInput {
+                detail: "freqz_zpk zeros must be finite".to_string(),
+            })
+        );
+        zpk.zeros_re[0] = 1.0;
+        zpk.poles_im[0] = f64::INFINITY;
+        assert_eq!(
+            freqz_zpk_with_whole(&zpk, None, true),
+            Err(SignalError::NonFiniteInput {
+                detail: "freqz_zpk poles must be finite".to_string(),
+            })
+        );
     }
 
     // ── unique_roots tests ──────────────────────────────────────────
@@ -26700,6 +26745,26 @@ mod tests {
         assert_eq!(half.w.len(), 128);
         assert_eq!(whole.w.len(), 256);
         assert!(whole.w.last().unwrap() > &std::f64::consts::PI);
+    }
+
+    #[test]
+    fn sosfreqz_rejects_non_finite_sections() {
+        let mut sos: Vec<SosSection> = vec![[1.0, 0.5, 0.0, 1.0, -0.3, 0.1]];
+        sos[0][1] = f64::NAN;
+        assert_eq!(
+            freqz_sos(&sos, Some(64)),
+            Err(SignalError::NonFiniteInput {
+                detail: "freqz_sos SOS coefficients must be finite".to_string(),
+            })
+        );
+        sos[0][1] = 0.5;
+        sos[0][4] = f64::INFINITY;
+        assert_eq!(
+            sosfreqz_with_whole(&sos, Some(64), true),
+            Err(SignalError::NonFiniteInput {
+                detail: "sosfreqz SOS coefficients must be finite".to_string(),
+            })
+        );
     }
 
     #[test]
