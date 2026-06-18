@@ -15112,6 +15112,11 @@ pub fn decimate(x: &[f64], q: usize) -> Result<Vec<f64>, SignalError> {
     if q < 2 {
         return Err(SignalError::InvalidArgument("q must be >= 2".to_string()));
     }
+    if x.iter().any(|value| !value.is_finite()) {
+        return Err(SignalError::NonFiniteInput {
+            detail: "decimate input samples must be finite".to_string(),
+        });
+    }
 
     // scipy.signal.decimate default: cheby1(8, 0.05, 0.8/q) anti-alias
     // filter (a fixed order 8 — not reduced for small q — and cutoff
@@ -23901,6 +23906,22 @@ mod tests {
     #[test]
     fn decimate_rejects_q_less_than_2() {
         assert!(decimate(&[1.0, 2.0], 1).is_err());
+    }
+
+    #[test]
+    fn decimate_rejects_non_finite_samples() {
+        for x in [
+            [1.0, f64::NAN, 3.0, 4.0],
+            [1.0, 2.0, f64::NEG_INFINITY, 4.0],
+        ] {
+            let err = decimate(&x, 2).expect_err("non-finite decimate input");
+            assert_eq!(
+                err,
+                SignalError::NonFiniteInput {
+                    detail: "decimate input samples must be finite".to_string()
+                }
+            );
+        }
     }
 
     // ── Cross-correlation tests ──────────────────────────────────────
