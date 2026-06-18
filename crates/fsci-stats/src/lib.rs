@@ -46969,6 +46969,16 @@ mod tests {
         assert!(f2.kurtosis().is_nan());
     }
 
+    #[test]
+    fn invgamma_pdf_cdf_match_scipy() {
+        // Exact scipy.stats.invgamma(a=3). The InverseGamma suite covers skew/kurt
+        // and entropy but no exact pdf/cdf at a point.
+        let d = InverseGamma::new(3.0);
+        assert!((d.pdf(0.3) - 2.202_098_354_768_667).abs() < 1e-11, "pdf(0.3)");
+        assert!((d.pdf(0.5) - 1.082_682_265_892_901_4).abs() < 1e-12, "pdf(0.5)");
+        assert!((d.cdf(0.5) - 0.676_676_416_183_063_4).abs() < 1e-12, "cdf(0.5)");
+    }
+
     /// InverseGamma skew/kurt closed forms — frankenscipy-d4j8j.
     #[test]
     fn invgamma_skew_kurt_match_scipy() {
