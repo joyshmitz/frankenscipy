@@ -64240,6 +64240,16 @@ mod tests {
     }
 
     #[test]
+    fn truncnormal_pdf_cdf_match_scipy() {
+        // Exact scipy.stats.truncnorm(-1, 2). The TruncNormal suite covers entropy
+        // and skew/kurt but no exact pdf/cdf at a point.
+        let t = TruncNormal::new(-1.0, 2.0);
+        assert!((t.pdf(0.0) - 0.487_350_238_469_530_7).abs() < 1e-12, "pdf(0)");
+        assert!((t.pdf(1.0) - 0.295_592_861_650_033_7).abs() < 1e-12, "pdf(1)");
+        assert!((t.cdf(0.0) - 0.416_988_751_428_985_9).abs() < 1e-12, "cdf(0)");
+    }
+
+    #[test]
     fn truncnormal_skewness_and_kurtosis_match_scipy_reference_values() {
         // scipy.stats.truncnorm(a, b).stats(moments='sk'). Covers a
         // symmetric, an asymmetric, and a wide window to exercise the
