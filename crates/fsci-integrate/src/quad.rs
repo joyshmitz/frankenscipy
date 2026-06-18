@@ -3516,6 +3516,13 @@ mod tests {
     }
 
     #[test]
+    fn trapezoid_match_scipy() {
+        // scipy.integrate.trapezoid([1,4,9,16], x=[0,1,2,3]) = 21.5.
+        let r = trapezoid(&[1.0, 4.0, 9.0, 16.0], &[0.0, 1.0, 2.0, 3.0]).expect("trapezoid");
+        assert!((r.integral - 21.5).abs() < 1e-12, "trapezoid: {}", r.integral);
+    }
+
+    #[test]
     fn cumulative_trapezoid_match_scipy() {
         // scipy.integrate.cumulative_trapezoid (no initial): length n-1.
         let r = cumulative_trapezoid(&[1.0, 2.0, 3.0, 4.0], &[0.0, 1.0, 2.0, 3.0]).expect("cumtrapz");
