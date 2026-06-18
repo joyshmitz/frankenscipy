@@ -7340,6 +7340,17 @@ mod tests {
     }
 
     #[test]
+    fn debye_erfc_exp2_iterated_match_analytic() {
+        // Previously-untested helpers. debye(1,0)=1; debye(1,1)=int_0^1 t/(e^t-1) dt.
+        assert!((debye(1, 0.0) - 1.0).abs() < 1e-12, "debye(1,0)");
+        assert!((debye(1, 1.0) - 0.777_504_634_112_248_5).abs() < 1e-7, "debye(1,1)");
+        // erfc_conv = erfc.
+        assert!((erfc_conv(1.0) - 0.157_299_207_050_285_16).abs() < 1e-12, "erfc_conv(1)");
+        // exp2_iterated(x) = exp(exp(x)).
+        assert!((exp2_iterated(0.0) - std::f64::consts::E).abs() < 1e-12, "exp2_iterated(0)=e");
+    }
+
+    #[test]
     fn numerical_diff_helpers_match_analytic() {
         // Numerical-diff helpers, exact (within FD roundoff) for low-degree polys.
         // f=x^2: f''(2)=2.
