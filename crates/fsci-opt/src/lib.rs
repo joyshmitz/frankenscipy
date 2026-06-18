@@ -3803,6 +3803,30 @@ pub fn lsq_linear(
             detail: "inconsistent A/b/bounds dimensions".to_string(),
         });
     }
+    for (row_index, row) in a.iter().enumerate() {
+        if row.len() != n {
+            return Err(OptError::InvalidArgument {
+                detail: format!("A row {row_index} length {} != {n}", row.len()),
+            });
+        }
+        if row.iter().any(|value| !value.is_finite()) {
+            return Err(OptError::NonFiniteInput {
+                detail: format!("A row {row_index} contains non-finite values"),
+            });
+        }
+    }
+    if b.iter().any(|value| !value.is_finite()) {
+        return Err(OptError::NonFiniteInput {
+            detail: "b must contain only finite values".to_string(),
+        });
+    }
+    for (index, (&lo, &hi)) in lb.iter().zip(ub.iter()).enumerate() {
+        if lo.is_nan() || hi.is_nan() || lo > hi {
+            return Err(OptError::InvalidBounds {
+                detail: format!("invalid bounds for variable {index}"),
+            });
+        }
+    }
     // Gram = AᵀA, atb = Aᵀb.
     let mut gram = vec![vec![0.0_f64; n]; n];
     for j1 in 0..n {
@@ -5279,6 +5303,28 @@ mod tests {
         for (g, e) in x3.iter().zip(&[0.9, 0.2113636364, 1.4613636364]) {
             assert!((g - e).abs() < 1e-8, "lb {g} vs {e}");
         }
+    }
+
+    #[test]
+    fn lsq_linear_rejects_ragged_matrix() {
+        use crate::lsq_linear;
+        let err = lsq_linear(&[vec![1.0, 2.0], vec![3.0]], &[1.0, 2.0], &[0.0, 0.0], &[1.0, 1.0])
+            .expect_err("ragged A should fail closed");
+        assert!(matches!(err, crate::OptError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn lsq_linear_rejects_invalid_bounds() {
+        use crate::lsq_linear;
+        let a = [vec![1.0, 0.0], vec![0.0, 1.0]];
+        let b = [1.0, 2.0];
+        let err = lsq_linear(&a, &b, &[2.0, 0.0], &[1.0, 3.0])
+            .expect_err("lower bound greater than upper should fail");
+        assert!(matches!(err, crate::OptError::InvalidBounds { .. }));
+
+        let err =
+            lsq_linear(&a, &b, &[f64::NAN, 0.0], &[1.0, 3.0]).expect_err("NaN bound should fail");
+        assert!(matches!(err, crate::OptError::InvalidBounds { .. }));
     }
 
     #[test]
