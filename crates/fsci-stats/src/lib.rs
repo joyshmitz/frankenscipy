@@ -21619,6 +21619,49 @@ impl ContinuousDistribution for Kappa4 {
         }
     }
 
+    fn logpdf(&self, x: f64) -> f64 {
+        if x.is_nan() {
+            return f64::NAN;
+        }
+        let (h, k) = self.normalized_shapes();
+        let (lower, upper) = self.support();
+        if x < lower || x > upper {
+            return f64::NEG_INFINITY;
+        }
+        // Branch-by-branch log of pdf so the tail stays finite where pdf -> 0.
+        // The default logpdf = ln(pdf) returned -inf once pdf underflowed, e.g.
+        // kappa4(0,0) (Gumbel) logpdf(1e4) = -1e4 vs scipy, where pdf(1e4)=0.
+        if h != 0.0 && k != 0.0 {
+            let base = 1.0 - k * x;
+            if base <= 0.0 {
+                return f64::NEG_INFINITY;
+            }
+            let transformed = base.powf(1.0 / k);
+            let inner = 1.0 - h * transformed;
+            if inner <= 0.0 {
+                return f64::NEG_INFINITY;
+            }
+            (1.0 / k - 1.0) * base.ln() + (1.0 / h - 1.0) * inner.ln()
+        } else if h == 0.0 && k != 0.0 {
+            let base = 1.0 - k * x;
+            if base <= 0.0 {
+                return f64::NEG_INFINITY;
+            }
+            let transformed = base.powf(1.0 / k);
+            (1.0 / k - 1.0) * base.ln() - transformed
+        } else if h != 0.0 {
+            let exp_neg_x = (-x).exp();
+            let inner = 1.0 - h * exp_neg_x;
+            if inner <= 0.0 {
+                return f64::NEG_INFINITY;
+            }
+            -x + (1.0 / h - 1.0) * inner.ln()
+        } else {
+            // h == 0 && k == 0: Gumbel. pdf = exp(-x - exp(-x)).
+            -x - (-x).exp()
+        }
+    }
+
     fn cdf(&self, x: f64) -> f64 {
         if x.is_nan() {
             return f64::NAN;
@@ -71601,6 +71644,19 @@ mod tests {
         let hm = hmean(&data);
         let expected_hm = 5.0 / (1.0 + 0.5 + 1.0 / 3.0 + 0.25 + 0.2);
         assert!((hm - expected_hm).abs() < 1e-10, "hmean, got {}", hm);
+    }
+
+    #[test]
+    fn kappa4_logpdf_branches_match_scipy() {
+        // scipy.stats.kappa4 logpdf across all 4 (h,k) branches + the Gumbel tail
+        // where the default ln(pdf) underflowed to -inf.
+        let lp = |h: f64, k: f64, x: f64| Kappa4 { h, k }.logpdf(x);
+        assert!((lp(0.0, 0.0, 1.0) - -1.367_879_441_171_442_3).abs() < 1e-12, "gumbel");
+        assert!((lp(0.5, 0.5, 0.5) - -0.617_923_759_322_357_8).abs() < 1e-12, "h!=0,k!=0");
+        assert!((lp(0.0, 0.5, 0.5) - -0.850_182_072_451_780_9).abs() < 1e-12, "h=0,k!=0");
+        assert!((lp(0.5, 0.0, 1.0) - -1.203_267_054_915_195_4).abs() < 1e-12, "h!=0,k=0");
+        // Gumbel tail: pdf(1e4)=0 -> default would be -inf; scipy = -1e4.
+        assert!((lp(0.0, 0.0, 1e4) - -1e4).abs() < 1e-6, "gumbel tail: {}", lp(0.0, 0.0, 1e4));
     }
 
     #[test]
