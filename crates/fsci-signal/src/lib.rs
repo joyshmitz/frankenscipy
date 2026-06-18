@@ -11990,15 +11990,18 @@ pub fn medfilt2d(
             "kernel_size dimensions must be odd and >= 1".to_string(),
         ));
     }
+    let kernel_area = kr.checked_mul(kc).ok_or_else(|| {
+        SignalError::InvalidArgument("kernel_size area is too large".to_string())
+    })?;
     if rows == 0 || cols == 0 {
         return Ok(vec![]);
     }
 
     let half_r = (kr / 2) as i64;
     let half_c = (kc / 2) as i64;
-    let mid = (kr * kc) / 2;
+    let mid = kernel_area / 2;
     let mut result = vec![0.0_f64; output_len];
-    let mut window = vec![0.0_f64; kr * kc];
+    let mut window = vec![0.0_f64; kernel_area];
 
     for i in 0..rows {
         for j in 0..cols {
@@ -16904,6 +16907,20 @@ mod tests {
         // Even kernel and shape mismatch are rejected.
         assert!(medfilt2d(&x, (4, 4), (2, 3)).is_err());
         assert!(medfilt2d(&x, (4, 5), (3, 3)).is_err());
+    }
+
+    #[test]
+    fn medfilt2d_rejects_overflowing_kernel_area() {
+        let err = medfilt2d(&[1.0], (1, 1), (usize::MAX, 3))
+            .expect_err("overflowing kernel area should fail before allocation");
+        assert!(
+            matches!(
+                err,
+                SignalError::InvalidParameter { ref detail }
+                    if detail == "kernel_size area is too large"
+            ),
+            "expected checked kernel-area overflow error, got {err:?}"
+        );
     }
 
     #[test]
