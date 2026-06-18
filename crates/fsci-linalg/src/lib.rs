@@ -16796,6 +16796,22 @@ mod tests {
     }
 
     #[test]
+    fn cond_matches_numpy() {
+        // numpy.linalg.cond (2-norm) = sigma_max/sigma_min. cond was untested.
+        let diag = vec![vec![3.0, 0.0], vec![0.0, 1.0]];
+        assert!(
+            (cond(&diag, DecompOptions::default()).unwrap() - 3.0).abs() < 1e-12,
+            "cond diag"
+        );
+        let shear = vec![vec![1.0, 1.0], vec![0.0, 1.0]];
+        assert!(
+            (cond(&shear, DecompOptions::default()).unwrap() - 2.618_033_988_749_895_3).abs()
+                < 1e-10,
+            "cond shear"
+        );
+    }
+
+    #[test]
     fn matrix_constructors_match_scipy() {
         // numpy.kron, scipy.linalg.block_diag/toeplitz/circulant.
         assert_eq!(
