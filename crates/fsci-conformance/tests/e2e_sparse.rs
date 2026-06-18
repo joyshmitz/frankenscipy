@@ -1351,6 +1351,44 @@ fn e2e_011_cg_spd_system() {
     assert!(pass, "CG solver: converged={}, diff={diff:.4e}", converged);
 }
 
+#[test]
+fn e2e_011b_spsolve_cg_spd_scipy_golden() {
+    // scipy.sparse.linalg.spsolve/cg on diag(-1,4,-1), b=[1,2,0,1,3].
+    let a = make_tridiag(5, -1.0, 4.0, -1.0);
+    let b = vec![1.0, 2.0, 0.0, 1.0, 3.0];
+    let expected = vec![
+        0.420_512_820_512_820_52,
+        0.682_051_282_051_282_1,
+        0.307_692_307_692_307_7,
+        0.548_717_948_717_948_8,
+        0.887_179_487_179_487_1,
+    ];
+
+    let direct = spsolve(&a, &b, SolveOptions::default()).expect("spsolve");
+    assert!(
+        max_abs_diff_vec(&direct, &expected) <= TOL,
+        "spsolve {direct:?} != {expected:?}"
+    );
+
+    let cg_result = cg(
+        &a,
+        &b,
+        None,
+        IterativeSolveOptions {
+            max_iter: Some(100),
+            tol: 1e-12,
+            ..Default::default()
+        },
+    )
+    .expect("cg");
+    assert!(cg_result.converged, "cg did not converge");
+    assert!(
+        max_abs_diff_vec(&cg_result.solution, &expected) <= TOL,
+        "cg {:?} != {expected:?}",
+        cg_result.solution
+    );
+}
+
 /// Scenario 12: GMRES solver for general system
 /// Tests GMRES on a non-symmetric matrix.
 #[test]
