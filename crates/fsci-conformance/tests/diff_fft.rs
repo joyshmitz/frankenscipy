@@ -918,6 +918,31 @@ fn adv_009_fftfreq_negative_spacing_matches_scipy() {
 }
 
 #[test]
+fn adv_009b_fftfreq_non_finite_spacing_matches_scipy() {
+    let inf_freqs = fftfreq(4, f64::INFINITY).unwrap();
+    let inf_expected = vec![0.0, 0.0, -0.0, -0.0];
+    let inf_diff = max_abs_diff_real(&inf_freqs, &inf_expected);
+
+    let nan_freqs = rfftfreq(4, f64::NAN).unwrap();
+    let nan_pass = nan_freqs.iter().all(|value| value.is_nan());
+    let pass = inf_diff <= 0.0 && nan_pass;
+    let log = DiffTestLog {
+        test_id: "adv_009b_fftfreq_nonfinite_d".to_string(),
+        category: "differential".to_string(),
+        input_summary: "fftfreq(n=4, d=inf); rfftfreq(n=4, d=nan)".to_string(),
+        expected: "scipy returns signed zero bins for inf and NaN bins for nan".to_string(),
+        actual: format!("inf={inf_freqs:?}; nan={nan_freqs:?}"),
+        diff: inf_diff,
+        tolerance: 0.0,
+        pass,
+        timestamp_ms: timestamp_ms(),
+        duration_ns: 0,
+    };
+    emit_log(&log);
+    assert!(pass, "non-finite spacing should match scipy/numpy propagation");
+}
+
+#[test]
 fn adv_010_all_zeros_input() {
     let input = vec![(0.0, 0.0); 8];
     let opts = FftOptions::default();

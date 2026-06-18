@@ -732,7 +732,7 @@ impl Display for FftError {
                 write!(f, "length mismatch: expected {expected}, got {actual}")
             }
             Self::NonPositiveSampleSpacing => {
-                write!(f, "sample spacing must be finite and non-zero")
+                write!(f, "sample spacing must be non-zero")
             }
             Self::NonFiniteInput => write!(f, "non-finite input rejected by policy"),
         }
