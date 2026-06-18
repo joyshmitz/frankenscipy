@@ -803,9 +803,9 @@ pub fn trapezoid_uniform(
             detail: "need at least 2 points for trapezoidal rule".to_string(),
         });
     }
-    if !dx.is_finite() || dx <= 0.0 {
+    if !dx.is_finite() {
         return Err(IntegrateValidationError::QuadInvalidTolerance {
-            detail: "dx must be finite and positive".to_string(),
+            detail: "dx must be finite".to_string(),
         });
     }
 
@@ -928,9 +928,9 @@ pub fn simpson_uniform(
             detail: "need at least 2 points for Simpson's rule".to_string(),
         });
     }
-    if !dx.is_finite() || dx <= 0.0 {
+    if !dx.is_finite() {
         return Err(IntegrateValidationError::QuadInvalidTolerance {
-            detail: "dx must be finite and positive".to_string(),
+            detail: "dx must be finite".to_string(),
         });
     }
     if y.len() == 2 {
@@ -1014,9 +1014,9 @@ pub fn cumulative_trapezoid_uniform(
             detail: "need at least 2 points for cumulative trapezoid".to_string(),
         });
     }
-    if !dx.is_finite() || dx <= 0.0 {
+    if !dx.is_finite() {
         return Err(IntegrateValidationError::QuadInvalidTolerance {
-            detail: "dx must be finite and positive".to_string(),
+            detail: "dx must be finite".to_string(),
         });
     }
 
@@ -4213,6 +4213,26 @@ mod tests {
             "got {}",
             result.integral
         );
+    }
+
+    #[test]
+    fn uniform_sampled_integrators_accept_signed_and_zero_dx() {
+        let y = [1.0, 2.0, 3.0];
+
+        let trap_neg = trapezoid_uniform(&y, -1.0).expect("negative dx");
+        assert_eq!(trap_neg.integral, -4.0);
+        let trap_zero = trapezoid_uniform(&y, 0.0).expect("zero dx");
+        assert_eq!(trap_zero.integral, 0.0);
+
+        let simpson_neg = simpson_uniform(&y, -1.0).expect("negative dx");
+        assert_eq!(simpson_neg.integral, -4.0);
+        let simpson_zero = simpson_uniform(&y, 0.0).expect("zero dx");
+        assert_eq!(simpson_zero.integral, 0.0);
+
+        let cum_neg = cumulative_trapezoid_uniform(&y, -1.0).expect("negative dx");
+        assert_eq!(cum_neg, vec![-1.5, -4.0]);
+        let cum_zero = cumulative_trapezoid_uniform(&y, 0.0).expect("zero dx");
+        assert_eq!(cum_zero, vec![0.0, 0.0]);
     }
 
     #[test]
