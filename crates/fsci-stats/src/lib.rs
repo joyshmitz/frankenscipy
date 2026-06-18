@@ -72646,6 +72646,21 @@ mod tests {
     }
 
     #[test]
+    fn circular_and_gzscore_weighted_match_analytic() {
+        use std::f64::consts::{FRAC_PI_2, FRAC_PI_4};
+        // circmean_weighted/circstd_weighted/gzscore_weighted were untested.
+        // circmean_weighted with uniform weights = circmean; [0, pi/2] -> pi/4.
+        let w2 = [1.0, 1.0];
+        assert!((circmean_weighted(&[0.0, FRAC_PI_2], &w2) - FRAC_PI_4).abs() < 1e-12, "circmean");
+        let w3 = [1.0, 1.0, 1.0];
+        // identical angles -> circular std 0.
+        assert!(circstd_weighted(&[0.3, 0.3, 0.3], &w3).abs() < 1e-12, "circstd identical");
+        // identical values -> geometric z-scores all 0.
+        let gz = gzscore_weighted(&[2.0, 2.0, 2.0], &w3);
+        assert!(gz.iter().all(|&v| v.abs() < 1e-12), "gzscore identical");
+    }
+
+    #[test]
     fn correlation_ratio_and_cv_match_analytic() {
         // correlation_ratio/coefficient_of_variation were previously untested.
         // eta = 1 for perfectly separated groups, 0 for identical groups.
