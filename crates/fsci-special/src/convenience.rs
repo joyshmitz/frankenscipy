@@ -7316,6 +7316,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn expit_logit_match_scipy() {
+        // scipy.special.expit (stable two-branch form, no overflow) and logit.
+        assert_eq!(expit_scalar(0.0), 0.5);
+        assert_eq!(expit_scalar(-1000.0), 0.0); // overflow-safe (naive 1/(1+e^1000))
+        assert_eq!(expit_scalar(1000.0), 1.0);
+        assert!(
+            (expit_scalar(2.0) - 0.880_797_077_977_882_3).abs() < 1e-15,
+            "expit(2)"
+        );
+        let m = RuntimeMode::Strict;
+        assert!(logit_scalar(0.5, m).unwrap().abs() < 1e-15, "logit(0.5)");
+        assert!(
+            (logit_scalar(0.880_797_077_977_882_3, m).unwrap() - 2.0).abs() < 1e-12,
+            "logit round-trip"
+        );
+    }
+
+    #[test]
     fn rgamma_scalar_poles_match_scipy() {
         // scipy.special.rgamma: 1/Γ is exactly 0 at the non-positive-integer poles
         // (including 0, where Γ→+inf so 1/Γ→0), and finite elsewhere.
