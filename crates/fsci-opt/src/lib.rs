@@ -5171,9 +5171,9 @@ where
         || !temp_final.is_finite()
         || temp_initial <= 0.0
         || temp_final <= 0.0
+        || max_iter == 0
     {
-        let c = cost(&initial);
-        return (initial, c);
+        return (initial, f64::NAN);
     }
     let mut current = initial;
     let mut current_cost = cost(&current);
@@ -6655,6 +6655,31 @@ mod tests {
         assert_eq!(best.len(), 2);
         assert!(best.iter().all(|value| value.is_nan()));
         assert!(cost.is_nan());
+    }
+
+    #[test]
+    fn simulated_annealing_rejects_invalid_controls_without_sampling() {
+        for (temp_initial, temp_final, max_iter) in [
+            (f64::NAN, 1.0, 10),
+            (1.0, f64::INFINITY, 10),
+            (0.0, 1.0, 10),
+            (1.0, -1.0, 10),
+            (1.0, 0.1, 0),
+        ] {
+            let (state, cost) = crate::simulated_annealing(
+                7_i32,
+                |_| -> f64 { panic!("invalid simulated_annealing controls should not sample cost") },
+                |_, _| -> i32 {
+                    panic!("invalid simulated_annealing controls should not sample neighbor")
+                },
+                temp_initial,
+                temp_final,
+                max_iter,
+                123,
+            );
+            assert_eq!(state, 7);
+            assert!(cost.is_nan());
+        }
     }
 
     #[test]
