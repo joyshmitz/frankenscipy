@@ -1120,6 +1120,9 @@ pub fn cg(
     let mut r: Vec<f64> = b.iter().zip(ax.iter()).map(|(bi, axi)| bi - axi).collect();
     let mut p = r.clone();
     let mut rs_old: f64 = r.iter().map(|v| v * v).sum();
+    // Reused A·p buffer: hoisted out of the loop so each CG iteration writes into
+    // it instead of allocating a fresh Vec. frankenscipy-... (byte-identical).
+    let mut ap = vec![0.0; r.len()];
 
     for iteration in 0..max_iter {
         let r_norm = rs_old.sqrt();
@@ -1132,7 +1135,7 @@ pub fn cg(
             });
         }
 
-        let ap = csr_matvec(a, &p);
+        csr_matvec_into(a, &p, &mut ap);
         let p_ap: f64 = p.iter().zip(ap.iter()).map(|(pi, api)| pi * api).sum();
 
         if p_ap.abs() < f64::EPSILON * 100.0 {
@@ -1196,34 +1199,70 @@ fn csr_matvec(a: &CsrMatrix, x: &[f64]) -> Vec<f64> {
     };
 
     let mut result = vec![0.0; n];
+    csr_matvec_into_impl(indptr, indices, data, x, &mut result, nthreads);
+    result
+}
+
+/// Buffer-reusing matvec: writes A·x into `out` (byte-identical to `csr_matvec`,
+/// but lets Krylov solvers hoist the result buffer out of their iteration loop
+/// instead of allocating a fresh Vec every step). `out.len()` must equal A.rows.
+fn csr_matvec_into(a: &CsrMatrix, x: &[f64], out: &mut [f64]) {
+    let n = a.shape().rows;
+    let indptr = a.indptr();
+    let indices = a.indices();
+    let data = a.data();
+    let nnz = data.len();
+    let nthreads = if nnz < 1 << 18 || n < 256 {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(|c| c.get())
+            .unwrap_or(1)
+            .min(nnz >> 17)
+            .max(1)
+    };
+    csr_matvec_into_impl(indptr, indices, data, x, out, nthreads);
+}
+
+/// Shared kernel for `csr_matvec`/`csr_matvec_into`. Each output row is an
+/// independent dot product accumulated in CSR index order, so the threaded path
+/// (disjoint output chunks) is byte-identical to the serial sweep.
+fn csr_matvec_into_impl(
+    indptr: &[usize],
+    indices: &[usize],
+    data: &[f64],
+    x: &[f64],
+    out: &mut [f64],
+    nthreads: usize,
+) {
+    let n = out.len();
     if nthreads <= 1 {
-        for i in 0..n {
+        for (i, slot) in out.iter_mut().enumerate() {
             let mut sum = 0.0;
             for idx in indptr[i]..indptr[i + 1] {
                 sum += data[idx] * x[indices[idx]];
             }
-            result[i] = sum;
+            *slot = sum;
         }
-        return result;
+        return;
     }
 
     let chunk = n.div_ceil(nthreads);
     std::thread::scope(|scope| {
-        for (t, slot) in result.chunks_mut(chunk).enumerate() {
+        for (t, slot) in out.chunks_mut(chunk).enumerate() {
             let base = t * chunk;
             scope.spawn(move || {
-                for (r, out) in slot.iter_mut().enumerate() {
+                for (r, o) in slot.iter_mut().enumerate() {
                     let i = base + r;
                     let mut sum = 0.0;
                     for idx in indptr[i]..indptr[i + 1] {
                         sum += data[idx] * x[indices[idx]];
                     }
-                    *out = sum;
+                    *o = sum;
                 }
             });
         }
     });
-    result
 }
 
 /// Preconditioned Conjugate Gradient solver.
