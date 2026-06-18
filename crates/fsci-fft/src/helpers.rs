@@ -636,6 +636,34 @@ mod tests {
     }
 
     #[test]
+    fn analytic_signal_odd_length_matches_scipy_golden() {
+        // scipy.signal.hilbert([1.0, 2.0, 0.0, -1.0, 3.0])
+        let input = [1.0, 2.0, 0.0, -1.0, 3.0];
+        let expected = [
+            (1.0, 0.7608452130361227),
+            (2.0, 0.034302685030761906),
+            (-1.7763568394002506e-16, 2.1372271335072965),
+            (-1.0, -1.9919186279062242),
+            (3.0, -0.940456403667957),
+        ];
+        let got = analytic_signal(&input).expect("analytic_signal");
+        for (idx, (&actual, &expected)) in got.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (actual.0 - expected.0).abs() < 1e-12,
+                "real[{idx}] {} != {}",
+                actual.0,
+                expected.0
+            );
+            assert!(
+                (actual.1 - expected.1).abs() < 1e-12,
+                "imag[{idx}] {} != {}",
+                actual.1,
+                expected.1
+            );
+        }
+    }
+
+    #[test]
     fn fftshift_rejects_overflowing_shape_product() {
         let input = vec![0_i32; 1];
         let shape = [usize::MAX, 2];
