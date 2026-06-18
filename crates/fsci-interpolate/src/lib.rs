@@ -9544,6 +9544,19 @@ mod tests {
     }
 
     #[test]
+    fn interpn_linear_match_scipy() {
+        // scipy.interpolate.interpn((x,y), values, pts, method='linear') for
+        // f(x,y)=x+y on a 3x3 grid; bilinear interpolation recovers f at the pts.
+        let points = vec![vec![0.0, 1.0, 2.0], vec![0.0, 1.0, 2.0]];
+        let values = vec![0.0, 1.0, 2.0, 1.0, 2.0, 3.0, 2.0, 3.0, 4.0];
+        let xi = vec![vec![0.5, 0.5], vec![1.5, 0.5], vec![0.25, 1.75]];
+        let out = interpn(points, values, &xi, RegularGridMethod::Linear, true, None).unwrap();
+        for (g, e) in out.iter().zip(&[1.0, 2.0, 2.0]) {
+            assert!((g - e).abs() < 1e-12, "interpn: {g} vs {e}");
+        }
+    }
+
+    #[test]
     fn pchip_akima_krogh_match_scipy() {
         let x = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0];
         let y = [0.0, 1.0, 4.0, 9.0, 16.0, 25.0]; // x^2
