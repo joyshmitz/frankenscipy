@@ -5400,9 +5400,7 @@ pub fn normalize_minmax(x: &[f64]) -> Vec<f64> {
 
 /// Downsample a signal by taking every n-th sample.
 pub fn downsample(x: &[f64], factor: usize) -> Vec<f64> {
-    if factor == 0 {
-        return x.to_vec();
-    }
+    assert!(factor > 0, "downsample factor must be > 0");
     x.iter().step_by(factor).cloned().collect()
 }
 
@@ -22455,6 +22453,19 @@ mod tests {
                 "coherence at bin {k} out of range: {c}"
             );
         }
+    }
+
+    #[test]
+    fn downsample_keeps_every_factor_th_sample() {
+        let x = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        assert_eq!(downsample(&x, 2), vec![1.0, 3.0, 5.0]);
+        assert_eq!(downsample(&x, 3), vec![1.0, 4.0]);
+    }
+
+    #[test]
+    #[should_panic(expected = "downsample factor must be > 0")]
+    fn downsample_rejects_zero_factor() {
+        let _ = downsample(&[1.0, 2.0, 3.0], 0);
     }
 
     // ── Resample tests ─────────────────────────────────────────────
