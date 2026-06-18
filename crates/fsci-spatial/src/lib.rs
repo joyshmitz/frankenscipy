@@ -2155,16 +2155,21 @@ impl Delaunay {
         all_points.push(((min_x + max_x) / 2.0, max_y + margin * dy));
 
         let mut triangles = vec![(n, n + 1, n + 2)];
+        // Per-point scratch hoisted out of the insertion loop and cleared each pass
+        // (both are fully rebuilt every point -> byte-identical), saving 2n Vec
+        // allocations. frankenscipy-8d2z2.
+        let mut bad: Vec<usize> = Vec::new();
+        let mut boundary: Vec<(usize, usize)> = Vec::new();
         for p_idx in 0..n {
             let point = all_points[p_idx];
-            let mut bad = Vec::new();
+            bad.clear();
             for (t_idx, &(a, b, c)) in triangles.iter().enumerate() {
                 if point_in_circumcircle(all_points[a], all_points[b], all_points[c], point) {
                     bad.push(t_idx);
                 }
             }
 
-            let mut boundary = Vec::new();
+            boundary.clear();
             for &t_idx in &bad {
                 let (a, b, c) = triangles[t_idx];
                 for &(e0, e1) in &[(a, b), (b, c), (c, a)] {
