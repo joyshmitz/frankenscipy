@@ -61977,6 +61977,17 @@ mod tests {
     }
 
     #[test]
+    fn frechet_r_pdf_cdf_match_scipy() {
+        // FrechetR (support x<=0) == scipy.stats.weibull_max(c). The suite has
+        // moments, skew/kurt, and a weibull_max relationship test but no exact
+        // scipy pdf/cdf value (the relationship alone can't catch a shared error).
+        let f = FrechetR::new(2.0);
+        assert!((f.pdf(-0.5) - 0.778_800_783_071_404_9).abs() < 1e-12, "pdf(-0.5)");
+        assert!((f.pdf(-1.0) - 0.735_758_882_342_884_7).abs() < 1e-12, "pdf(-1)");
+        assert!((f.cdf(-0.5) - 0.778_800_783_071_404_9).abs() < 1e-12, "cdf(-0.5)");
+    }
+
+    #[test]
     fn frechet_r_moments_match_scipy_reference_values() {
         let cases = [
             (3.0, (-0.892_979_511_569_248_9, 0.105_332_884_868_479_14)),
