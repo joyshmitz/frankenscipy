@@ -3635,6 +3635,17 @@ mod tests {
     }
 
     #[test]
+    fn quad_full_inf_gaussian_matches_analytic() {
+        // integral_{-inf}^{inf} exp(-x^2) dx = sqrt(pi). quad_full_inf was untested.
+        let r = quad_full_inf(|x: f64| (-x * x).exp(), QuadOptions::default()).unwrap();
+        assert!(
+            (r.integral - std::f64::consts::PI.sqrt()).abs() < 1e-8,
+            "gaussian over R = {}",
+            r.integral
+        );
+    }
+
+    #[test]
     fn trapezoid_match_scipy() {
         // scipy.integrate.trapezoid([1,4,9,16], x=[0,1,2,3]) = 21.5.
         let r = trapezoid(&[1.0, 4.0, 9.0, 16.0], &[0.0, 1.0, 2.0, 3.0]).expect("trapezoid");
