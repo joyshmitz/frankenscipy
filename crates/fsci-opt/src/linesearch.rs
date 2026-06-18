@@ -72,7 +72,18 @@ fn validate_line_search_inputs(x: &[f64], direction: &[f64], g0: &[f64]) -> Resu
     }
     if direction.len() != n || g0.len() != n {
         return Err(OptError::InvalidArgument {
-            detail: String::from("line-search x, direction, and gradient must have matching lengths"),
+            detail: String::from(
+                "line-search x, direction, and gradient must have matching lengths",
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn validate_gradient_output_len(gradient: &[f64], expected: usize) -> Result<(), OptError> {
+    if gradient.len() != expected {
+        return Err(OptError::InvalidArgument {
+            detail: String::from("line-search gradient output length must match x length"),
         });
     }
     Ok(())
@@ -193,11 +204,12 @@ where
         f(&xp)
     };
 
-    let eval_dg = |alpha: f64, evals: &mut usize| -> (f64, Vec<f64>) {
+    let eval_dg = |alpha: f64, evals: &mut usize| -> Result<(f64, Vec<f64>), OptError> {
         let xp: Vec<f64> = (0..n).map(|i| x[i] + alpha * d[i]).collect();
         let gp = grad(&xp);
         *evals += 1;
-        (dot(&gp, d), gp)
+        validate_gradient_output_len(&gp, n)?;
+        Ok((dot(&gp, d), gp))
     };
 
     // Bracketing phase (Algorithm 3.5)
@@ -215,7 +227,7 @@ where
             );
         }
 
-        let (dgi, gi) = eval_dg(alpha, &mut evals);
+        let (dgi, gi) = eval_dg(alpha, &mut evals)?;
 
         // Curvature condition satisfied
         let curvature_ok = if strong {
@@ -306,7 +318,7 @@ where
             );
         }
 
-        let dgi = eval_dg_current(grad_dot, &mut trial, &mut gradient, &mut evals);
+        let dgi = eval_dg_current(grad_dot, &mut trial, &mut gradient, &mut evals)?;
 
         if dgi.abs() <= params.c2 * dg0.abs() {
             return Ok(LineSearchWithGradient {
@@ -382,7 +394,7 @@ where
         if fj > f0 + params.c1 * alpha_j * dg0 || fj >= f_lo {
             alpha_hi = alpha_j;
         } else {
-            let dgj = eval_dg_current(grad_dot, trial, gradient, evals);
+            let dgj = eval_dg_current(grad_dot, trial, gradient, evals)?;
 
             if dgj.abs() <= params.c2 * dg0.abs() {
                 return Ok(LineSearchWithGradient {
@@ -441,12 +453,14 @@ fn eval_dg_current<G>(
     trial: &mut [f64],
     gradient: &mut Vec<f64>,
     evals: &mut usize,
-) -> f64
+) -> Result<f64, OptError>
 where
     G: FnMut(&mut [f64], &mut Vec<f64>) -> f64,
 {
     *evals += 1;
-    grad_dot(trial, gradient)
+    let directional_derivative = grad_dot(trial, gradient);
+    validate_gradient_output_len(gradient, trial.len())?;
+    Ok(directional_derivative)
 }
 
 fn fill_trial(out: &mut [f64], x: &[f64], d: &[f64], alpha: f64) {
@@ -492,6 +506,7 @@ where
         } else {
             let gj = grad(&xj);
             *evals += 1;
+            validate_gradient_output_len(&gj, n)?;
             let dgj = dot(&gj, d);
 
             let curvature_ok = if strong {
@@ -1113,6 +1128,44 @@ mod tests {
             WolfeParams::default(),
         )
         .expect_err("probe path should share dimension validation");
+        assert!(matches!(err, OptError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn wolfe_apis_reject_mismatched_gradient_outputs() {
+        let x = vec![1.0, 2.0];
+        let g = quadratic_grad(&x);
+        let f0 = quadratic(&x);
+        let direction = vec![-0.2, -0.4];
+        let short_grad = |_x: &[f64]| vec![1.0];
+
+        let err = line_search_wolfe2(
+            &quadratic,
+            &short_grad,
+            &x,
+            &direction,
+            f0,
+            &g,
+            WolfeParams::default(),
+        )
+        .expect_err("short gradient output should fail before dot truncation");
+        assert!(matches!(err, OptError::InvalidArgument { .. }));
+
+        let mut short_probe_grad = |_trial: &mut [f64], gradient: &mut Vec<f64>| {
+            gradient.clear();
+            gradient.push(1.0);
+            -1.0
+        };
+        let err = line_search_wolfe2_with_gradient_probe(
+            &quadratic,
+            &mut short_probe_grad,
+            &x,
+            &direction,
+            f0,
+            &g,
+            WolfeParams::default(),
+        )
+        .expect_err("short probe gradient output should fail");
         assert!(matches!(err, OptError::InvalidArgument { .. }));
     }
 
