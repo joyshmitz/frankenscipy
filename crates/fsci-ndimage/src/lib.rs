@@ -1256,19 +1256,31 @@ pub fn nd_filter_perpixel_ref(
         })
         .collect();
     let mut output = NdArray::zeros(input.shape.clone());
+    // Precompute each tap's per-dimension delta ONCE (it is independent of the
+    // output pixel), instead of unravelling flat_k for every pixel — eliminates the
+    // n_pixels×kernel_total k_idx allocations + recomputation. Mirrors the existing
+    // convolve_with_origins tap table; byte-identical. frankenscipy-e3r7e.
+    let tap_delta: Vec<Vec<i64>> = (0..weights.size())
+        .map(|flat_k| {
+            let k_idx = weights.unravel(flat_k);
+            (0..ndim)
+                .map(|d| {
+                    if flip {
+                        (weights.shape[d] as i64 - 1 - k_idx[d] as i64) - offsets[d] + origins[d]
+                    } else {
+                        k_idx[d] as i64 - offsets[d] - origins[d]
+                    }
+                })
+                .collect()
+        })
+        .collect();
     fill_pixels_parallel(&mut output, weights.size().max(1), |flat_out, _s| {
         let out_idx = input.unravel(flat_out);
         let mut in_idx = vec![0i64; ndim];
         let mut sum = 0.0;
         for flat_k in 0..weights.size() {
-            let k_idx = weights.unravel(flat_k);
             for d in 0..ndim {
-                in_idx[d] = if flip {
-                    out_idx[d] as i64 + (weights.shape[d] as i64 - 1 - k_idx[d] as i64) - offsets[d]
-                        + origins[d]
-                } else {
-                    out_idx[d] as i64 + k_idx[d] as i64 - offsets[d] - origins[d]
-                };
+                in_idx[d] = out_idx[d] as i64 + tap_delta[flat_k][d];
             }
             sum += weights.data[flat_k] * input.get_boundary(&in_idx, mode, cval);
         }
