@@ -73598,7 +73598,7 @@ mod tests {
     fn exp_regression_and_biweight_match_analytic() {
         // exponential_regression/biweight_midcorrelation were previously untested.
         // exponential_regression recovers (a,b) from y=a*exp(b*x) exactly.
-        let x = [0.0, 1.0, 2.0, 3.0];
+        let x = [0.0_f64, 1.0, 2.0, 3.0];
         let y: Vec<f64> = x.iter().map(|&xi| 2.0 * (0.5 * xi).exp()).collect();
         let (a, b) = exponential_regression(&x, &y);
         assert!((a - 2.0).abs() < 1e-10 && (b - 0.5).abs() < 1e-10, "exp regression a={a} b={b}");
