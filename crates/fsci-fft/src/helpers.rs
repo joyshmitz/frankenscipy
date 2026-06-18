@@ -337,12 +337,7 @@ pub fn fftcorrelate(a: &[f64], b: &[f64], mode: &str) -> Result<Vec<f64>, FftErr
 /// input. scipy.signal.periodogram uses rfft internally for the same
 /// reason.
 pub fn periodogram_simple(x: &[f64], fs: f64) -> Result<(Vec<f64>, Vec<f64>), FftError> {
-    if !fs.is_finite() {
-        return Err(FftError::NonFiniteInput);
-    }
-    if fs <= 0.0 {
-        return Err(FftError::NonPositiveSampleSpacing);
-    }
+    validate_sampling_rate(fs)?;
     if x.is_empty() {
         return Ok((vec![], vec![]));
     }
@@ -374,6 +369,7 @@ pub type CrossSpectralResult = Result<(Vec<f64>, Vec<(f64, f64)>), FftError>;
 
 /// Compute the cross-spectral density of two real signals.
 pub fn cross_spectral_density(x: &[f64], y: &[f64], fs: f64) -> CrossSpectralResult {
+    validate_sampling_rate(fs)?;
     if x.len() != y.len() || x.is_empty() {
         return Ok((vec![], vec![]));
     }
@@ -402,6 +398,16 @@ pub fn cross_spectral_density(x: &[f64], y: &[f64], fs: f64) -> CrossSpectralRes
     }
 
     Ok((freqs, csd))
+}
+
+fn validate_sampling_rate(fs: f64) -> Result<(), FftError> {
+    if !fs.is_finite() {
+        return Err(FftError::NonFiniteInput);
+    }
+    if fs <= 0.0 {
+        return Err(FftError::NonPositiveSampleSpacing);
+    }
+    Ok(())
 }
 
 /// Apply a window function to a signal.
@@ -541,8 +547,9 @@ mod tests {
     use fsci_runtime::RuntimeMode;
 
     use super::{
-        analytic_signal, fftconvolve, fftfreq, fftshift, fftshift_1d, ifftshift, ifftshift_1d,
-        periodogram_simple, polynomial_multiply_fft, rfftfreq, zero_pad_pow2,
+        analytic_signal, cross_spectral_density, fftconvolve, fftfreq, fftshift, fftshift_1d,
+        ifftshift, ifftshift_1d, periodogram_simple, polynomial_multiply_fft, rfftfreq,
+        zero_pad_pow2,
     };
     use crate::{FftError, FftOptions};
 
@@ -713,6 +720,28 @@ mod tests {
         );
         assert_eq!(
             periodogram_simple(&input, f64::INFINITY).expect_err("infinite sampling rate"),
+            FftError::NonFiniteInput
+        );
+    }
+
+    #[test]
+    fn cross_spectral_density_rejects_invalid_sampling_rate() {
+        let input = [1.0, 2.0, 3.0, 4.0];
+        assert_eq!(
+            cross_spectral_density(&input, &input, 0.0).expect_err("zero sampling rate"),
+            FftError::NonPositiveSampleSpacing
+        );
+        assert_eq!(
+            cross_spectral_density(&input, &input, -1.0).expect_err("negative sampling rate"),
+            FftError::NonPositiveSampleSpacing
+        );
+        assert_eq!(
+            cross_spectral_density(&input, &input, f64::NAN).expect_err("nan sampling rate"),
+            FftError::NonFiniteInput
+        );
+        assert_eq!(
+            cross_spectral_density(&input, &input, f64::INFINITY)
+                .expect_err("infinite sampling rate"),
             FftError::NonFiniteInput
         );
     }
