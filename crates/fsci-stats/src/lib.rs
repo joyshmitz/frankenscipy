@@ -23678,7 +23678,11 @@ pub fn ttest_ind_welch(a: &[f64], b: &[f64]) -> TtestResult {
         return TtestResult {
             statistic: f64::NAN,
             pvalue: f64::NAN,
-            df: f64::NAN,
+            df: if a.is_empty() || b.is_empty() {
+                f64::NAN
+            } else {
+                1.0
+            },
         };
     }
     let n1 = a.len() as f64;
@@ -53770,6 +53774,24 @@ mod tests {
         );
         // Welch df should be less than n1+n2-2
         assert!(result.df < 128.0, "Welch df should be adjusted");
+    }
+
+    #[test]
+    fn ttest_ind_welch_singleton_df_matches_scipy_reference() {
+        let both_singleton = ttest_ind_welch(&[1.0], &[2.0]);
+        assert!(both_singleton.statistic.is_nan());
+        assert!(both_singleton.pvalue.is_nan());
+        assert_eq!(both_singleton.df, 1.0);
+
+        let one_singleton = ttest_ind_welch(&[1.0], &[2.0, 3.0]);
+        assert!(one_singleton.statistic.is_nan());
+        assert!(one_singleton.pvalue.is_nan());
+        assert_eq!(one_singleton.df, 1.0);
+
+        let empty = ttest_ind_welch(&[], &[1.0, 2.0]);
+        assert!(empty.statistic.is_nan());
+        assert!(empty.pvalue.is_nan());
+        assert!(empty.df.is_nan());
     }
 
     #[test]
