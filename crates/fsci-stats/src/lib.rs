@@ -6740,6 +6740,51 @@ impl MultivariateNormal {
         Ok(self.logpdf(x)?.exp())
     }
 
+    /// Log-density at many points (the realistic dataset-likelihood workload,
+    /// matching `scipy.stats.multivariate_normal.logpdf` on an array of points).
+    ///
+    /// Byte-identical to mapping [`logpdf`](Self::logpdf): the `dim·ln(2π)+log_det`
+    /// constant is computed once and the centered/forward-solve scratch buffers are
+    /// reused across points instead of reallocated per point.
+    pub fn logpdf_many(&self, xs: &[Vec<f64>]) -> Result<Vec<f64>, StatsError> {
+        let n = self.mean.len();
+        let dim = n as f64;
+        let const_term = dim * (2.0 * PI).ln() + self.log_det;
+        let mut centered = vec![0.0; n];
+        let mut solved = vec![0.0; n];
+        xs.iter()
+            .map(|x| {
+                if x.len() != n {
+                    return Err(StatsError::InvalidArgument(format!(
+                        "x length ({}) must match dimension ({})",
+                        x.len(),
+                        n
+                    )));
+                }
+                for i in 0..n {
+                    centered[i] = x[i] - self.mean[i];
+                }
+                // Forward substitution chol·solved = centered (inlined to reuse buffers).
+                for i in 0..n {
+                    let sum = (0..i).map(|j| self.chol[i][j] * solved[j]).sum::<f64>();
+                    if self.chol[i][i] == 0.0 {
+                        return Err(StatsError::InvalidArgument(
+                            "singular lower-triangular system".to_string(),
+                        ));
+                    }
+                    solved[i] = (centered[i] - sum) / self.chol[i][i];
+                }
+                let mahalanobis = solved.iter().map(|value| value * value).sum::<f64>();
+                Ok(-0.5 * (const_term + mahalanobis))
+            })
+            .collect()
+    }
+
+    /// Density at many points (`exp` of [`logpdf_many`](Self::logpdf_many)).
+    pub fn pdf_many(&self, xs: &[Vec<f64>]) -> Result<Vec<f64>, StatsError> {
+        Ok(self.logpdf_many(xs)?.into_iter().map(f64::exp).collect())
+    }
+
     pub fn rvs(&self, n: usize, rng: &mut impl Rng) -> Vec<Vec<f64>> {
         let mut samples = Vec::with_capacity(n);
         for _ in 0..n {
@@ -47215,6 +47260,20 @@ mod tests {
             .expect("multivariate normal");
         let pdf = rv.pdf(&[0.0, 0.0]).expect("pdf");
         assert_close(pdf, 0.11368210220849669, 1e-12, "multivariate_normal pdf");
+    }
+
+    #[test]
+    fn multivariate_normal_logpdf_many_matches_logpdf() {
+        // Batch logpdf_many/pdf_many must be byte-identical to per-point logpdf/pdf.
+        let rv = MultivariateNormal::new(&[0.5, -1.0], &[vec![1.0, 0.2], vec![0.2, 2.0]])
+            .expect("multivariate normal");
+        let pts = vec![vec![0.0, 0.0], vec![1.5, -0.5], vec![-2.0, 3.0]];
+        let batch_lp = rv.logpdf_many(&pts).expect("logpdf_many");
+        let batch_p = rv.pdf_many(&pts).expect("pdf_many");
+        for (i, x) in pts.iter().enumerate() {
+            assert_eq!(batch_lp[i], rv.logpdf(x).unwrap(), "logpdf_many != logpdf");
+            assert_eq!(batch_p[i], rv.pdf(x).unwrap(), "pdf_many != pdf");
+        }
     }
 
     #[test]
