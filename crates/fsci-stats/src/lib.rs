@@ -52679,6 +52679,17 @@ mod tests {
     // ── Laplace distribution ──────────────────────────────────────
 
     #[test]
+    fn laplace_pdf_cdf_off_peak_match_scipy() {
+        // Exact scipy.stats.laplace(loc=1, scale=2) AWAY from the loc.
+        // laplace_pdf_at_loc/laplace_cdf_at_loc only check the peak/median; this
+        // exercises the exponential-decay tails in both pdf and cdf.
+        let l = Laplace::new(1.0, 2.0);
+        assert!((l.pdf(4.0) - 0.055_782_540_037_107_455).abs() < 1e-12, "pdf(4)");
+        assert!((l.cdf(2.0) - 0.696_734_670_143_683_3).abs() < 1e-12, "cdf(2)");
+        assert!((l.cdf(4.0) - 0.888_434_919_925_785).abs() < 1e-12, "cdf(4)");
+    }
+
+    #[test]
     fn laplace_pdf_at_loc() {
         let l = Laplace::default();
         assert_close(l.pdf(0.0), 0.5, 1e-12, "Laplace pdf(0) = 1/(2*1)");
