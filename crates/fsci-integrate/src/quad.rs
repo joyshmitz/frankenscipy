@@ -992,10 +992,13 @@ pub fn cumulative_trapezoid(y: &[f64], x: &[f64]) -> Result<Vec<f64>, IntegrateV
             ),
         });
     }
-    if y.len() < 2 {
+    if y.is_empty() {
         return Err(IntegrateValidationError::QuadInvalidBounds {
-            detail: "need at least 2 points for cumulative trapezoid".to_string(),
+            detail: "need at least one point for cumulative trapezoid".to_string(),
         });
+    }
+    if y.len() == 1 {
+        return Ok(Vec::new());
     }
     validate_sample_coordinates(x)?;
 
@@ -1018,10 +1021,13 @@ pub fn cumulative_trapezoid_uniform(
     y: &[f64],
     dx: f64,
 ) -> Result<Vec<f64>, IntegrateValidationError> {
-    if y.len() < 2 {
+    if y.is_empty() {
         return Err(IntegrateValidationError::QuadInvalidBounds {
-            detail: "need at least 2 points for cumulative trapezoid".to_string(),
+            detail: "need at least one point for cumulative trapezoid".to_string(),
         });
+    }
+    if y.len() == 1 {
+        return Ok(Vec::new());
     }
     if !dx.is_finite() {
         return Err(IntegrateValidationError::QuadInvalidTolerance {
@@ -2043,9 +2049,9 @@ pub fn cumulative_simpson(y: &[f64], x: &[f64]) -> Result<Vec<f64>, IntegrateVal
         });
     }
     let n = y.len();
-    if n < 2 {
+    if n == 0 {
         return Err(IntegrateValidationError::QuadInvalidBounds {
-            detail: "need at least 2 points for cumulative integration".to_string(),
+            detail: "need at least one point for cumulative integration".to_string(),
         });
     }
     if n <= 2 {
@@ -4582,12 +4588,22 @@ mod tests {
     }
 
     #[test]
-    fn cumtrapz_too_few_points() {
-        let err = cumulative_trapezoid(&[1.0], &[0.0]).expect_err("too few");
+    fn cumtrapz_empty_input_errors() {
+        let err = cumulative_trapezoid(&[], &[]).expect_err("empty input");
         assert!(matches!(
             err,
             IntegrateValidationError::QuadInvalidBounds { .. }
         ));
+    }
+
+    #[test]
+    fn cumtrapz_singleton_returns_empty_like_scipy() {
+        let result = cumulative_trapezoid(&[1.0], &[f64::NAN]).expect("singleton cumtrapz");
+        assert!(result.is_empty());
+
+        let uniform =
+            cumulative_trapezoid_uniform(&[1.0], f64::INFINITY).expect("singleton uniform");
+        assert!(uniform.is_empty());
     }
 
     #[test]
@@ -4795,8 +4811,14 @@ mod tests {
     }
 
     #[test]
-    fn cumulative_simpson_too_few() {
-        assert!(cumulative_simpson(&[1.0], &[0.0]).is_err());
+    fn cumulative_simpson_singleton_returns_empty_like_scipy() {
+        let result = cumulative_simpson(&[1.0], &[f64::NAN]).expect("singleton cumulative simpson");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn cumulative_simpson_empty_input_errors() {
+        assert!(cumulative_simpson(&[], &[]).is_err());
     }
 
     // ── nquad tests ──────────────────────────────────────────────────
