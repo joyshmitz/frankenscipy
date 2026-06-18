@@ -8472,6 +8472,30 @@ mod tests {
     }
 
     #[test]
+    fn cluster_indices_match_sklearn_exactly() {
+        // Exact golden values from sklearn.metrics for the two well-separated
+        // clusters [[0,0],[1,1],[10,10],[11,11]] with labels [0,0,1,1]. The other
+        // index tests only check loose inequalities; this pins the precise values
+        // and adds calinski_harabasz_score coverage (previously untested).
+        let data = vec![
+            vec![0.0, 0.0],
+            vec![1.0, 1.0],
+            vec![10.0, 10.0],
+            vec![11.0, 11.0],
+        ];
+        let labels = vec![0, 0, 1, 1];
+        let ch = calinski_harabasz_score(&data, &labels).expect("calinski_harabasz");
+        assert!((ch - 200.0).abs() < 1e-9, "calinski_harabasz: {ch} != 200.0");
+        let db = davies_bouldin_score(&data, &labels).expect("davies_bouldin");
+        assert!((db - 0.1).abs() < 1e-12, "davies_bouldin: {db} != 0.1");
+        let sil = silhouette_score(&data, &labels).expect("silhouette");
+        assert!(
+            (sil - 0.899_749_373_433_583_9).abs() < 1e-12,
+            "silhouette: {sil} != 0.8997493734335839"
+        );
+    }
+
+    #[test]
     fn kmeans_well_separated_clusters_matches_scipy_reference_values() {
         // scipy.cluster.vq.kmeans2([[0,0], [1,1], [0,1], [1,0], [10,10], [11,11], [10,11], [11,10]], 2)
         // Two well-separated clusters should converge to centroids near [0.5, 0.5] and [10.5, 10.5]
