@@ -16011,6 +16011,36 @@ impl DoubleGamma {
         assert!(a > 0.0, "a must be positive");
         Self { a }
     }
+
+    /// Log-density at many points, hoisting `ln(½)` and `lnΓ(a)` out of the
+    /// per-point loop. Byte-identical to mapping `logpdf` (`ln(½)` leading, `lnΓ(a)`
+    /// last subtraction); x==0 delegates to `pdf`.
+    #[must_use]
+    pub fn logpdf_many(&self, xs: &[f64]) -> Vec<f64> {
+        let a = self.a;
+        let ln_half = 0.5_f64.ln();
+        let lg = ln_gamma(a);
+        xs.iter()
+            .map(|&x| {
+                if x == 0.0 {
+                    return self.pdf(x).ln();
+                }
+                let ax = x.abs();
+                ln_half + (a - 1.0) * ax.ln() - ax - lg
+            })
+            .collect()
+    }
+
+    /// Density at many points; hoists `Γ(a) = exp(lnΓ(a))` (the divisor) like
+    /// [`logpdf_many`](Self::logpdf_many). Byte-identical to mapping `pdf`.
+    #[must_use]
+    pub fn pdf_many(&self, xs: &[f64]) -> Vec<f64> {
+        let a = self.a;
+        let gamma_a = ln_gamma(a).exp();
+        xs.iter()
+            .map(|&x| 0.5 * x.abs().powf(a - 1.0) * (-x.abs()).exp() / gamma_a)
+            .collect()
+    }
 }
 
 impl ContinuousDistribution for DoubleGamma {
@@ -49517,6 +49547,14 @@ mod tests {
         assert!((d.pdf(0.5) - 0.241_970_724_519_143_37).abs() < 1e-12, "pdf(0.5)");
         assert!((d.pdf(-1.0) - 0.207_553_748_710_297_36).abs() < 1e-12, "pdf(-1) neg branch");
         assert!((d.cdf(0.5) - 0.599_374_021_549_399_6).abs() < 1e-12, "cdf(0.5)");
+        // Batch pdf_many/logpdf_many (Gamma(a) hoisted) byte-identical to per-point.
+        let xs = [-2.0, -1.0, 0.0, 0.5, 1.0, 3.0];
+        let pm = d.pdf_many(&xs);
+        let lpm = d.logpdf_many(&xs);
+        for (i, &x) in xs.iter().enumerate() {
+            assert_eq!(pm[i], d.pdf(x), "pdf_many != pdf at {x}");
+            assert_eq!(lpm[i], d.logpdf(x), "logpdf_many != logpdf at {x}");
+        }
     }
 
     #[test]
