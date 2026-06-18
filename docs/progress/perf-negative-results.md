@@ -231,3 +231,26 @@ condition so dead ends are not repeated casually.
   nalgebra's generic transpose product, reject this exact column-dot formulation
   and do not retry unless profiling puts `A^T` materialization or Gram formation
   back in the top linalg hotspot list.
+
+## 2026-06-18 - frankenscipy-va60h - MDS streamed double-centering
+
+- Agent: cod-a / MistyBirch
+- Lever: remove internal full squared-distance materializations from
+  `classical_mds`, `landmark_mds`, and `landmark_isomap` by streaming the
+  double-centering formula from squared-distance callbacks; stream landmark
+  triangulation dot products instead of allocating a per-point `dshift` vector.
+- Status: pending batch-test. This is a code-first commit per campaign
+  instruction; only local `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a
+  cargo check -p fsci-cluster` is expected before commit.
+- Correctness guard: `double_centered_gram_matches_materialized_delta_reference`
+  locks the streamed centering helper against the materialized formula, while
+  existing MDS and Isomap recovery tests preserve embedding-distance behavior.
+- Benchmark guard: compare focused `classical_mds`, `landmark_mds`, and
+  `landmark_isomap` workloads against the previous same-worker commit,
+  emphasizing large n with small k/m where allocation traffic competes with the
+  randomized eigensolve.
+- Retry condition: keep only if same-worker MDS/Isomap timings improve without
+  embedding distance, eigenvalue ordering, or validation drift; if recomputing
+  squared distances beats no allocation only in noise or regresses, reject this
+  streaming double-centering formulation and do not retry unless allocation
+  profiles again show `D^2`/`Delta` or `dshift` churn as a top cluster hotspot.

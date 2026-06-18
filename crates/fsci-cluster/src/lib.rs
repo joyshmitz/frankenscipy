@@ -644,6 +644,30 @@ pub struct MdsResult {
     pub eigenvalues: Vec<f64>,
 }
 
+fn double_centered_gram_from_squared<F>(n: usize, squared: F) -> (Vec<Vec<f64>>, Vec<f64>, f64)
+where
+    F: Fn(usize, usize) -> f64,
+{
+    let denom = n as f64;
+    let mut row_mean = vec![0.0; n];
+    for (row, mean) in row_mean.iter_mut().enumerate() {
+        let mut sum = 0.0;
+        for col in 0..n {
+            sum += squared(row, col);
+        }
+        *mean = sum / denom;
+    }
+    let total_mean = row_mean.iter().sum::<f64>() / denom;
+    let gram: Vec<Vec<f64>> = (0..n)
+        .map(|row| {
+            (0..n)
+                .map(|col| -0.5 * (squared(row, col) - row_mean[row] - row_mean[col] + total_mean))
+                .collect()
+        })
+        .collect();
+    (gram, row_mean, total_mean)
+}
+
 /// Classical (metric) multidimensional scaling — Torgerson/Gower PCoA — from a precomputed
 /// `n×n` distance matrix.
 ///
@@ -679,20 +703,12 @@ pub fn classical_mds(
         ));
     }
 
-    // Squared distances, then double-center: B = −½ (D² − row_mean − col_mean + total_mean).
-    let d2: Vec<Vec<f64>> = distances
-        .iter()
-        .map(|row| row.iter().map(|&v| v * v).collect())
-        .collect();
-    let row_mean: Vec<f64> = d2.iter().map(|r| r.iter().sum::<f64>() / n as f64).collect();
-    let total_mean: f64 = row_mean.iter().sum::<f64>() / n as f64;
-    let b: Vec<Vec<f64>> = (0..n)
-        .map(|i| {
-            (0..n)
-                .map(|j| -0.5 * (d2[i][j] - row_mean[i] - row_mean[j] + total_mean))
-                .collect()
-        })
-        .collect();
+    // Stream the squared-distance callback twice instead of materializing the
+    // full D² matrix before the double-centering pass.
+    let (b, _, _) = double_centered_gram_from_squared(n, |i, j| {
+        let distance = distances[i][j];
+        distance * distance
+    });
 
     let re = fsci_linalg::randomized_eigh(&b, n_components, 10, 4, seed)
         .map_err(|e| ClusterError::InvalidArgument(format!("randomized_eigh: {e}")))?;
@@ -769,20 +785,10 @@ pub fn landmark_mds(
     landmarks.sort_unstable();
     let m = landmarks.len();
 
-    // Double-center the landmark squared-distance block: B_L = −½ J Δ J.
-    let delta: Vec<Vec<f64>> = landmarks
-        .iter()
-        .map(|&a| landmarks.iter().map(|&b| distances[a][b].powi(2)).collect())
-        .collect();
-    let mu: Vec<f64> = delta.iter().map(|r| r.iter().sum::<f64>() / m as f64).collect();
-    let total: f64 = mu.iter().sum::<f64>() / m as f64;
-    let bl: Vec<Vec<f64>> = (0..m)
-        .map(|a| {
-            (0..m)
-                .map(|b| -0.5 * (delta[a][b] - mu[a] - mu[b] + total))
-                .collect()
-        })
-        .collect();
+    // Double-center the landmark squared-distance block without materializing Δ.
+    let (bl, mu, _) = double_centered_gram_from_squared(m, |a, b| {
+        distances[landmarks[a]][landmarks[b]].powi(2)
+    });
 
     let e = fsci_linalg::eigh(&bl, fsci_linalg::DecompOptions::default())
         .map_err(|err| ClusterError::InvalidArgument(format!("eigh: {err}")))?;
@@ -806,13 +812,14 @@ pub fn landmark_mds(
     let k = order.len();
     let embedding: Vec<Vec<f64>> = (0..n)
         .map(|p| {
-            let dshift: Vec<f64> = landmarks
-                .iter()
-                .enumerate()
-                .map(|(b, &lb)| distances[p][lb].powi(2) - mu[b])
-                .collect();
             (0..k)
-                .map(|t| -0.5 * lpinv[t].iter().zip(&dshift).map(|(&l, &ds)| l * ds).sum::<f64>())
+                .map(|t| {
+                    let mut projected = 0.0;
+                    for (b, &lb) in landmarks.iter().enumerate() {
+                        projected += lpinv[t][b] * (distances[p][lb].powi(2) - mu[b]);
+                    }
+                    -0.5 * projected
+                })
                 .collect()
         })
         .collect();
@@ -1009,16 +1016,11 @@ pub fn landmark_isomap(
         ));
     }
 
-    // Landmark classical MDS on the geodesic distances.
-    // Δ[a][b] = geodesic(landmark_a, landmark_b)²  (m×m, symmetric).
-    let delta: Vec<Vec<f64>> = (0..m)
-        .map(|a| (0..m).map(|b| geo[a][landmarks[b]].powi(2)).collect())
-        .collect();
-    let mu: Vec<f64> = delta.iter().map(|r| r.iter().sum::<f64>() / m as f64).collect();
-    let total: f64 = mu.iter().sum::<f64>() / m as f64;
-    let bl: Vec<Vec<f64>> = (0..m)
-        .map(|a| (0..m).map(|b| -0.5 * (delta[a][b] - mu[a] - mu[b] + total)).collect())
-        .collect();
+    // Landmark classical MDS on geodesic distances, streaming Δ[a][b] =
+    // geodesic(landmark_a, landmark_b)² instead of materializing the m×m block.
+    let (bl, mu, _) = double_centered_gram_from_squared(m, |a, b| {
+        geo[a][landmarks[b]].powi(2)
+    });
 
     let e = fsci_linalg::eigh(&bl, fsci_linalg::DecompOptions::default())
         .map_err(|err| ClusterError::InvalidArgument(format!("eigh: {err}")))?;
@@ -1042,9 +1044,14 @@ pub fn landmark_isomap(
     let k = order.len();
     let embedding: Vec<Vec<f64>> = (0..n)
         .map(|p| {
-            let dshift: Vec<f64> = (0..m).map(|b| geo[b][p].powi(2) - mu[b]).collect();
             (0..k)
-                .map(|t| -0.5 * lpinv[t].iter().zip(&dshift).map(|(&l, &ds)| l * ds).sum::<f64>())
+                .map(|t| {
+                    let mut projected = 0.0;
+                    for b in 0..m {
+                        projected += lpinv[t][b] * (geo[b][p].powi(2) - mu[b]);
+                    }
+                    -0.5 * projected
+                })
                 .collect()
         })
         .collect();
@@ -6688,6 +6695,39 @@ mod tests {
 
         assert!(truncated_svd(&[], 2, 1).is_err());
         assert!(truncated_svd(&x, 0, 1).is_err());
+    }
+
+    #[test]
+    fn double_centered_gram_matches_materialized_delta_reference() {
+        let delta = [
+            [0.0_f64, 1.0, 9.0, 16.0],
+            [1.0, 0.0, 4.0, 25.0],
+            [9.0, 4.0, 0.0, 36.0],
+            [16.0, 25.0, 36.0, 0.0],
+        ];
+        let n = delta.len();
+        let (actual, row_mean, total_mean) =
+            double_centered_gram_from_squared(n, |i, j| delta[i][j]);
+        let expected_row_mean: Vec<f64> =
+            delta.iter().map(|row| row.iter().sum::<f64>() / n as f64).collect();
+        let expected_total = expected_row_mean.iter().sum::<f64>() / n as f64;
+
+        for idx in 0..n {
+            assert!((row_mean[idx] - expected_row_mean[idx]).abs() <= 1e-12);
+        }
+        assert!((total_mean - expected_total).abs() <= 1e-12);
+
+        for row in 0..n {
+            for col in 0..n {
+                let expected = -0.5
+                    * (delta[row][col] - expected_row_mean[row] - expected_row_mean[col]
+                        + expected_total);
+                assert!(
+                    (actual[row][col] - expected).abs() <= 1e-12,
+                    "double-centered gram drift at ({row}, {col})"
+                );
+            }
+        }
     }
 
     #[test]
