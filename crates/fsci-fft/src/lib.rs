@@ -68,8 +68,8 @@ mod tests {
     use std::f64::consts::PI;
 
     use super::helpers::{
-        analytic_signal, fftconvolve, fftfreq, fftshift_1d, ifftshift_1d, magnitude_spectrum,
-        periodogram_simple, rfftfreq,
+        analytic_signal, fftconvolve, fftfreq, fftshift, fftshift_1d, ifftshift, ifftshift_1d,
+        magnitude_spectrum, periodogram_simple, rfftfreq,
     };
     use super::transforms::{
         Complex64, FftOptions, dct, dct_i, dct_iii, dct_iv, dst, dst_i, dst_ii, dst_iii, dst_iv,
@@ -958,6 +958,28 @@ mod tests {
                 "ifftshift[{i}] = {got}, want {want}"
             );
         }
+    }
+
+    #[test]
+    fn fftshift_nd_scalar_shape_matches_scipy_reference_values() {
+        let input = vec![42.0];
+
+        assert_eq!(
+            fftshift(&input, &[], None).expect("fftshift scalar"),
+            input
+        );
+        assert_eq!(
+            ifftshift(&input, &[], None).expect("ifftshift scalar"),
+            input
+        );
+        assert!(
+            fftshift::<f64>(&[], &[], None).is_err(),
+            "empty shape represents a scalar and requires one flat value"
+        );
+        assert!(
+            fftshift(&input, &[], Some(&[0])).is_err(),
+            "scalar has no shiftable axis"
+        );
     }
 
     #[test]

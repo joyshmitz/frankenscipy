@@ -69,11 +69,6 @@ fn roll_axis<T: Clone>(input: &[T], shape: &[usize], axis: usize, k_right: usize
 }
 
 fn validate_nd_shape(len: usize, shape: &[usize]) -> Result<(), FftError> {
-    if shape.is_empty() {
-        return Err(FftError::InvalidShape {
-            detail: "shape must have at least one dimension",
-        });
-    }
     let expected = shape
         .iter()
         .try_fold(1usize, |acc, &dim| acc.checked_mul(dim))
