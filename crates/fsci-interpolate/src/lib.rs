@@ -10991,6 +10991,21 @@ mod tests {
     }
 
     #[test]
+    fn chebyshev_nodes_match_analytic() {
+        // chebyshev_nodes(n,a,b): first-kind nodes x_k=(a+b)/2+(b-a)/2*cos(pi(2k+1)/2n).
+        // Was untested. n=3 on [-1,1]: [cos30, cos90, cos150] = [sqrt3/2, 0, -sqrt3/2].
+        let nodes = chebyshev_nodes(3, -1.0, 1.0);
+        assert_eq!(nodes.len(), 3);
+        let s3 = 3.0_f64.sqrt() / 2.0;
+        assert!((nodes[0] - s3).abs() < 1e-15, "node0");
+        assert!(nodes[1].abs() < 1e-15, "node1~0");
+        assert!((nodes[2] + s3).abs() < 1e-15, "node2");
+        // On [0,4] the nodes are affine-mapped: center 2, half-width 2.
+        let n2 = chebyshev_nodes(3, 0.0, 4.0);
+        assert!((n2[0] - (2.0 + 2.0 * s3)).abs() < 1e-14, "mapped node0");
+    }
+
+    #[test]
     fn polyint_definite_matches_numpy() {
         // polyint_definite(descending coeffs, a, b) = integral_a^b p(x) dx. Untested.
         // integral_0^2 (3x^2+2x+1) dx = [x^3+x^2+x]_0^2 = 14.
