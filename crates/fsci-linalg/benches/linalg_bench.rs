@@ -322,10 +322,18 @@ fn bench_baseline_pinv(c: &mut Criterion) {
         let a = make_overdetermined(rows, n);
         group.bench_function(format!("{rows}x{n}"), |bencher| {
             fsci_linalg::DISABLE_TALL_PINV_TRSM.store(false, Relaxed);
+            fsci_linalg::DISABLE_TALL_PINV_TRSM_THREADS.store(false, Relaxed);
             bencher.iter(|| pinv(&a, PinvOptions::default()).unwrap());
+        });
+        group.bench_function(format!("{rows}x{n}_trsm_serial"), |bencher| {
+            fsci_linalg::DISABLE_TALL_PINV_TRSM.store(false, Relaxed);
+            fsci_linalg::DISABLE_TALL_PINV_TRSM_THREADS.store(true, Relaxed);
+            bencher.iter(|| pinv(&a, PinvOptions::default()).unwrap());
+            fsci_linalg::DISABLE_TALL_PINV_TRSM_THREADS.store(false, Relaxed);
         });
         group.bench_function(format!("{rows}x{n}_chol_solve"), |bencher| {
             fsci_linalg::DISABLE_TALL_PINV_TRSM.store(true, Relaxed);
+            fsci_linalg::DISABLE_TALL_PINV_TRSM_THREADS.store(false, Relaxed);
             bencher.iter(|| pinv(&a, PinvOptions::default()).unwrap());
             fsci_linalg::DISABLE_TALL_PINV_TRSM.store(false, Relaxed);
         });

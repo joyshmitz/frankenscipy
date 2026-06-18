@@ -11135,6 +11135,11 @@ const FULL_RANK_TALL_PINV_RIGHT_INVERSE_REL_TOL: f64 = 1e-8;
 #[doc(hidden)]
 pub static DISABLE_TALL_PINV_TRSM: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+/// Runtime switch to force the row-major TRSM route to remain single-threaded
+/// for same-binary A/B benchmarks. Defaults off. `#[doc(hidden)]` — internal.
+#[doc(hidden)]
+pub static DISABLE_TALL_PINV_TRSM_THREADS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 /// Loose conditioning sanity floor for the solve-only normal-equations lstsq
 /// route: spectra below this rcond are hopeless even with refinement, so we
 /// fall back to the public thin-SVD route. Real acceptance is governed by the
@@ -11157,6 +11162,14 @@ fn tall_pinv_trsm_disabled() -> bool {
     }
     static ENV: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENV.get_or_init(|| std::env::var_os("FSCI_DISABLE_TALL_PINV_TRSM").is_some())
+}
+
+fn tall_pinv_trsm_threads_disabled() -> bool {
+    if DISABLE_TALL_PINV_TRSM_THREADS.load(std::sync::atomic::Ordering::Relaxed) {
+        return true;
+    }
+    static ENV: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENV.get_or_init(|| std::env::var_os("FSCI_DISABLE_TALL_PINV_TRSM_THREADS").is_some())
 }
 
 fn pinv_full_rank_tall_cholesky(
@@ -15603,12 +15616,68 @@ fn cholesky_solve_matrix_rhs_batched(
     if l.ncols() != n || rhs.nrows() != n {
         return None;
     }
+    if w == 0 {
+        return Some(DMatrix::<f64>::zeros(n, 0));
+    }
+
+    let nthreads = if tall_pinv_trsm_threads_disabled() {
+        1
+    } else {
+        matmul_thread_count(n, n, w).min(w.div_ceil(64)).max(1)
+    };
+    if nthreads <= 1 {
+        return cholesky_solve_matrix_rhs_columns(chol, rhs, 0, w);
+    }
+
+    let chunk = w.div_ceil(nthreads);
+    let blocks: Vec<Option<(usize, DMatrix<f64>)>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..nthreads)
+            .filter_map(|thread_idx| {
+                let c0 = thread_idx * chunk;
+                if c0 >= w {
+                    return None;
+                }
+                let c1 = (c0 + chunk).min(w);
+                Some(scope.spawn(move || {
+                    cholesky_solve_matrix_rhs_columns(chol, rhs, c0, c1)
+                        .map(|block| (c0, block))
+                }))
+            })
+            .collect();
+        handles.into_iter().map(|handle| handle.join().unwrap()).collect()
+    });
+
+    let mut out = DMatrix::<f64>::zeros(n, w);
+    for block in blocks {
+        let (c0, block) = block?;
+        for col in 0..block.ncols() {
+            for row in 0..n {
+                out[(row, c0 + col)] = block[(row, col)];
+            }
+        }
+    }
+    Some(out)
+}
+
+#[allow(clippy::needless_range_loop)]
+fn cholesky_solve_matrix_rhs_columns(
+    chol: &Cholesky<f64, Dyn>,
+    rhs: &DMatrix<f64>,
+    c0: usize,
+    c1: usize,
+) -> Option<DMatrix<f64>> {
+    let l = chol.l_dirty();
+    let n = l.nrows();
+    let w = c1.checked_sub(c0)?;
+    if l.ncols() != n || rhs.nrows() != n || c1 > rhs.ncols() {
+        return None;
+    }
 
     let mut b = vec![0.0f64; n * w];
     for i in 0..n {
         let bi = i * w;
         for col in 0..w {
-            b[bi + col] = rhs[(i, col)];
+            b[bi + col] = rhs[(i, c0 + col)];
         }
     }
 
@@ -18620,6 +18689,39 @@ mod tests {
         let actual = cholesky_solve_matrix_rhs_batched(&chol, &a_t).expect("batched solve");
 
         assert!(max_abs_dmatrix_diff(&actual, &expected) <= 1e-12);
+    }
+
+    #[test]
+    fn cholesky_rhs_column_blocks_reassemble_exactly() {
+        let rows = 32;
+        let cols = 16;
+        let mut data = Vec::with_capacity(rows * cols);
+        for row in 0..rows {
+            for col in 0..cols {
+                let diagonal = if row == col { 9.0 + col as f64 } else { 0.0 };
+                let smooth = ((row * 31 + col * 13 + 7) % 47) as f64 / 113.0;
+                data.push(diagonal + smooth);
+            }
+        }
+        let matrix = DMatrix::from_row_slice(rows, cols, &data);
+        let a_t = matrix.transpose();
+        let chol = Cholesky::new(&a_t * &matrix).expect("SPD Gram factor");
+
+        let left = cholesky_solve_matrix_rhs_columns(&chol, &a_t, 0, rows / 2).expect("left block");
+        let right = cholesky_solve_matrix_rhs_columns(&chol, &a_t, rows / 2, rows).expect("right block");
+        let full = cholesky_solve_matrix_rhs_columns(&chol, &a_t, 0, rows).expect("full block");
+
+        let mut reassembled = DMatrix::<f64>::zeros(cols, rows);
+        for row in 0..cols {
+            for col in 0..left.ncols() {
+                reassembled[(row, col)] = left[(row, col)];
+            }
+            for col in 0..right.ncols() {
+                reassembled[(row, left.ncols() + col)] = right[(row, col)];
+            }
+        }
+
+        assert!(max_abs_dmatrix_diff(&reassembled, &full) <= 0.0);
     }
 
     #[test]
