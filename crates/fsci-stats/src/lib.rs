@@ -2921,6 +2921,50 @@ impl FDistribution {
         assert!(dfd > 0.0, "dfd must be positive, got {dfd}");
         Self { dfn, dfd }
     }
+
+    /// Log-density at many points, hoisting the constant `0.5·d1·ln(d1/d2)` lead
+    /// term and the `ln_beta(d1/2, d2/2)` normalizer (three lgamma evals) out of the
+    /// per-point loop. Byte-identical to mapping `logpdf`: the lead term is kept as
+    /// the FIRST addend and `ln_beta` as the LAST subtraction, matching the
+    /// arithmetic order exactly; x≤0 delegates to `pdf`.
+    #[must_use]
+    pub fn logpdf_many(&self, xs: &[f64]) -> Vec<f64> {
+        let d1 = self.dfn;
+        let d2 = self.dfd;
+        let lead = 0.5 * d1 * (d1 / d2).ln();
+        let lb = ln_beta(0.5 * d1, 0.5 * d2);
+        xs.iter()
+            .map(|&x| {
+                if x <= 0.0 {
+                    return self.pdf(x).ln();
+                }
+                lead + (0.5 * d1 - 1.0) * x.ln()
+                    - 0.5 * (d1 + d2) * (1.0 + d1 * x / d2).ln()
+                    - lb
+            })
+            .collect()
+    }
+
+    /// Density at many points; hoists the lead term and `ln_beta` like
+    /// [`logpdf_many`](Self::logpdf_many). Byte-identical to mapping `pdf`.
+    #[must_use]
+    pub fn pdf_many(&self, xs: &[f64]) -> Vec<f64> {
+        let d1 = self.dfn;
+        let d2 = self.dfd;
+        let lead = 0.5 * d1 * (d1 / d2).ln();
+        let lb = ln_beta(0.5 * d1, 0.5 * d2);
+        xs.iter()
+            .map(|&x| {
+                if x <= 0.0 {
+                    return 0.0;
+                }
+                (lead + (0.5 * d1 - 1.0) * x.ln()
+                    - 0.5 * (d1 + d2) * (1.0 + d1 * x / d2).ln()
+                    - lb)
+                    .exp()
+            })
+            .collect()
+    }
 }
 
 impl ContinuousDistribution for FDistribution {
@@ -47139,6 +47183,20 @@ mod tests {
         assert_eq!(f.pdf(-1.0), 0.0);
         assert_eq!(f.pdf(0.0), 0.0);
         assert!(f.pdf(1.0) > 0.0);
+    }
+
+    #[test]
+    fn f_dist_pdf_many_matches_pdf() {
+        // Batch pdf_many/logpdf_many (ln_beta + lead term hoisted) must be
+        // byte-identical to per-point pdf/logpdf, including x<=0.
+        let f = FDistribution::new(5.0, 10.0);
+        let xs = [-1.0, 0.0, 0.5, 1.0, 2.5, 9.0];
+        let pm = f.pdf_many(&xs);
+        let lpm = f.logpdf_many(&xs);
+        for (i, &x) in xs.iter().enumerate() {
+            assert_eq!(pm[i], f.pdf(x), "pdf_many != pdf at {x}");
+            assert_eq!(lpm[i], f.logpdf(x), "logpdf_many != logpdf at {x}");
+        }
     }
 
     #[test]
