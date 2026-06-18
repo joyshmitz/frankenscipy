@@ -225,13 +225,13 @@ where
             detail: "integration bounds must be finite".to_string(),
         });
     }
-    if options.epsabs.is_nan()
-        || options.epsrel.is_nan()
+    if !options.epsabs.is_finite()
+        || !options.epsrel.is_finite()
         || options.epsabs < 0.0
         || options.epsrel < 0.0
     {
         return Err(IntegrateValidationError::QuadInvalidTolerance {
-            detail: "tolerances must be non-negative".to_string(),
+            detail: "tolerances must be finite and non-negative".to_string(),
         });
     }
 
@@ -283,13 +283,13 @@ where
             detail: "integration bounds must be finite".to_string(),
         });
     }
-    if options.epsabs.is_nan()
-        || options.epsrel.is_nan()
+    if !options.epsabs.is_finite()
+        || !options.epsrel.is_finite()
         || options.epsabs < 0.0
         || options.epsrel < 0.0
     {
         return Err(IntegrateValidationError::QuadInvalidTolerance {
-            detail: "tolerances must be non-negative".to_string(),
+            detail: "tolerances must be finite and non-negative".to_string(),
         });
     }
 
@@ -3830,6 +3830,23 @@ mod tests {
             err,
             IntegrateValidationError::QuadInvalidTolerance { .. }
         ));
+
+        for options in [
+            QuadOptions {
+                epsabs: f64::INFINITY,
+                ..QuadOptions::default()
+            },
+            QuadOptions {
+                epsrel: f64::INFINITY,
+                ..QuadOptions::default()
+            },
+        ] {
+            let err = quad(|x| x, 0.0, 1.0, options).expect_err("infinite tolerance");
+            assert!(matches!(
+                err,
+                IntegrateValidationError::QuadInvalidTolerance { .. }
+            ));
+        }
     }
 
     #[test]
@@ -3907,6 +3924,24 @@ mod tests {
             tol_err,
             IntegrateValidationError::QuadInvalidTolerance { .. }
         ));
+
+        for options in [
+            QuadOptions {
+                epsabs: f64::INFINITY,
+                ..QuadOptions::default()
+            },
+            QuadOptions {
+                epsrel: f64::INFINITY,
+                ..QuadOptions::default()
+            },
+        ] {
+            let tol_err =
+                quad_vec(|x| vec![x], 0.0, 1.0, options).expect_err("infinite tolerance");
+            assert!(matches!(
+                tol_err,
+                IntegrateValidationError::QuadInvalidTolerance { .. }
+            ));
+        }
     }
 
     #[test]
