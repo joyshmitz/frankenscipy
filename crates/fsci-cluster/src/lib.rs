@@ -1200,6 +1200,11 @@ pub fn nmf(
             "n_components must be at least 1".to_string(),
         ));
     }
+    if max_iter == 0 {
+        return Err(ClusterError::InvalidArgument(
+            "max_iter must be positive".to_string(),
+        ));
+    }
 
     let (mut w, mut h) = match init {
         NmfInit::Nndsvd => nndsvd_init(x, k, seed)?,
@@ -1419,6 +1424,11 @@ pub fn factor_analysis(
             "n_components={n_components} must be in [1, min(n,d)={}]",
             n.min(d)
         )));
+    }
+    if max_iter == 0 {
+        return Err(ClusterError::InvalidArgument(
+            "max_iter must be positive".to_string(),
+        ));
     }
     if x.iter().flatten().any(|v| !v.is_finite()) {
         return Err(ClusterError::InvalidArgument(
@@ -5535,6 +5545,11 @@ pub fn mean_shift(
             "bandwidth must be finite and positive".to_string(),
         ));
     }
+    if max_iter == 0 {
+        return Err(ClusterError::InvalidArgument(
+            "max_iter must be positive".to_string(),
+        ));
+    }
     if data.iter().flatten().any(|v| !v.is_finite()) {
         return Err(ClusterError::InvalidArgument(
             "mean_shift input must be finite".to_string(),
@@ -6025,6 +6040,11 @@ pub fn kmedoids(
         return Err(ClusterError::InvalidArgument(format!(
             "k={k} must be in [1, n={n}]"
         )));
+    }
+    if max_iter == 0 {
+        return Err(ClusterError::InvalidArgument(
+            "max_iter must be positive".to_string(),
+        ));
     }
 
     // Initialize medoids randomly
@@ -7276,7 +7296,7 @@ mod tests {
     }
 
     #[test]
-    fn kmeans_rejects_zero_iteration_budgets() {
+    fn cluster_estimators_reject_zero_iteration_budgets() {
         let data = vec![vec![0.0, 0.0], vec![1.0, 1.0]];
 
         let err = kmeans(&data, 1, 0, 42).expect_err("kmeans should reject max_iter=0");
@@ -7284,6 +7304,21 @@ mod tests {
 
         let err = mini_batch_kmeans(&data, 1, 0, 1, 42)
             .expect_err("mini_batch_kmeans should reject max_iter=0");
+        assert!(matches!(err, ClusterError::InvalidArgument(_)));
+
+        let err = nmf(&data, 1, 0, 1e-6, NmfInit::Random, 42)
+            .expect_err("nmf should reject max_iter=0");
+        assert!(matches!(err, ClusterError::InvalidArgument(_)));
+
+        let err = factor_analysis(&data, 1, 0, 1e-6, 42)
+            .expect_err("factor_analysis should reject max_iter=0");
+        assert!(matches!(err, ClusterError::InvalidArgument(_)));
+
+        let err =
+            mean_shift(&data, 1.0, 0).expect_err("mean_shift should reject max_iter=0");
+        assert!(matches!(err, ClusterError::InvalidArgument(_)));
+
+        let err = kmedoids(&data, 1, 0, 42).expect_err("kmedoids should reject max_iter=0");
         assert!(matches!(err, ClusterError::InvalidArgument(_)));
     }
 
