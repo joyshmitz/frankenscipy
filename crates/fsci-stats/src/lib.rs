@@ -20909,6 +20909,27 @@ impl GenNorm {
         assert!(beta > 0.0, "beta must be positive");
         Self { beta }
     }
+
+    /// Log-density at many points, hoisting `ln(β) − ln2 − lnΓ(1/β)` out of the
+    /// per-point loop. Byte-identical to mapping `logpdf` (lead kept leading, same
+    /// final `− |x|^β` subtraction).
+    #[must_use]
+    pub fn logpdf_many(&self, xs: &[f64]) -> Vec<f64> {
+        let b = self.beta;
+        let lead = b.ln() - 2.0_f64.ln() - ln_gamma(1.0 / b);
+        xs.iter().map(|&x| lead - x.abs().powf(b)).collect()
+    }
+
+    /// Density at many points; hoists the `β / (2·Γ(1/β))` coefficient like
+    /// [`logpdf_many`](Self::logpdf_many). Byte-identical to mapping `pdf`.
+    #[must_use]
+    pub fn pdf_many(&self, xs: &[f64]) -> Vec<f64> {
+        let b = self.beta;
+        let coeff = b / (2.0 * ln_gamma(1.0 / b).exp());
+        xs.iter()
+            .map(|&x| coeff * (-x.abs().powf(b)).exp())
+            .collect()
+    }
 }
 
 impl ContinuousDistribution for GenNorm {
@@ -64775,6 +64796,14 @@ mod tests {
         assert!((g.pdf(0.0) - 0.553_866_083_716_236_2).abs() < 1e-12, "pdf(0) peak");
         assert!((g.pdf(1.0) - 0.203_755_945_361_344_28).abs() < 1e-12, "pdf(1)");
         assert!((g.cdf(1.0) - 0.887_591_235_991_927_8).abs() < 1e-12, "cdf(1)");
+        // Batch pdf_many/logpdf_many (lgamma(1/β) hoisted) byte-identical to per-point.
+        let xs = [-2.0, -0.5, 0.0, 1.0, 3.0];
+        let pm = g.pdf_many(&xs);
+        let lpm = g.logpdf_many(&xs);
+        for (i, &x) in xs.iter().enumerate() {
+            assert_eq!(pm[i], g.pdf(x), "pdf_many != pdf at {x}");
+            assert_eq!(lpm[i], g.logpdf(x), "logpdf_many != logpdf at {x}");
+        }
     }
 
     #[test]
