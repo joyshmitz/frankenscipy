@@ -9507,6 +9507,43 @@ mod tests {
     }
 
     #[test]
+    fn cubic_spline_bc_types_match_scipy() {
+        // Golden values from scipy.interpolate.CubicSpline(x, y, bc_type=...)
+        // for x=[0..4], y=x^3, evaluated at [0.5,1.5,2.5,3.5].
+        let x = [0.0, 1.0, 2.0, 3.0, 4.0];
+        let y = [0.0, 1.0, 8.0, 27.0, 64.0];
+        let xe = [0.5, 1.5, 2.5, 3.5];
+        let check = |bc: SplineBc, want: [f64; 4], name: &str| {
+            let s = CubicSplineStandalone::new(&x, &y, bc).unwrap();
+            for (i, (&got, &w)) in s.eval_many(&xe).iter().zip(want.iter()).enumerate() {
+                assert!((got - w).abs() < 1e-9, "{name}[{i}]: {got} != {w}");
+            }
+        };
+        check(
+            SplineBc::Natural,
+            [
+                0.098_214_285_714_285_64,
+                3.455_357_142_857_143,
+                15.330_357_142_857_142,
+                43.973_214_285_714_29,
+            ],
+            "natural",
+        );
+        // not-a-knot reproduces the cubic x^3 exactly.
+        check(SplineBc::NotAKnot, [0.125, 3.375, 15.625, 42.875], "not-a-knot");
+        check(
+            SplineBc::Clamped(0.0, 0.0),
+            [
+                0.017_857_142_857_142_85,
+                3.910_714_285_714_286_5,
+                13.589_285_714_285_714,
+                50.482_142_857_142_86,
+            ],
+            "clamped",
+        );
+    }
+
+    #[test]
     fn cubic_spline_periodic_rejects_mismatched_endpoints() {
         let x = vec![0.0, 1.0, 2.0, 3.0];
         let y = vec![0.0, 1.0, 0.5, 0.25];
