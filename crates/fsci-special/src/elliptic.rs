@@ -1979,6 +1979,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ellipk_ellipe_complete_match_scipy() {
+        // scipy.special.ellipk/ellipe (complete elliptic integrals).
+        let m = RuntimeMode::Strict;
+        assert!(
+            (ellipk_scalar(0.5, m).unwrap() - 1.854_074_677_301_371_9).abs() < 1e-13,
+            "ellipk(0.5)"
+        );
+        assert!(
+            (ellipk_scalar(0.0, m).unwrap() - std::f64::consts::FRAC_PI_2).abs() < 1e-14,
+            "ellipk(0)=pi/2"
+        );
+        assert!(
+            (ellipe_scalar(0.5, m).unwrap() - 1.350_643_881_047_675_5).abs() < 1e-13,
+            "ellipe(0.5)"
+        );
+        assert!(
+            (ellipe_scalar(1.0, m).unwrap() - 1.0).abs() < 1e-14,
+            "ellipe(1)=1"
+        );
+    }
+
+    #[test]
     #[allow(clippy::excessive_precision)]
     // golden constants verbatim from scipy
     // φ test inputs 1.5707/1.5707963 are deliberate angles near (but not equal
