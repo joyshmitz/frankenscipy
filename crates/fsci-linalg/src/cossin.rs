@@ -1,17 +1,13 @@
 //! Building blocks for the cosine-sine (CS) decomposition (`scipy.linalg.cossin`).
 //!
-//! `cossin` matches LAPACK's `dorcsd`, which chains `dorbdb` (simultaneous
-//! bidiagonalization of the 2×2 partitioned orthogonal matrix) and `dbbcsd`
-//! (bidiagonal CS values via an implicit QR sweep). Achieving scipy-identical
-//! factor signs requires faithful ports of those routines — a multi-stage
-//! effort (see bead frankenscipy-5tmu1).
+//! The balanced-square factor path follows LAPACK's `dorcsd`, which chains
+//! `dorbdb` (simultaneous bidiagonalization of the 2×2 partitioned orthogonal
+//! matrix) and `dbbcsd` (bidiagonal CS values via an implicit QR sweep).
+//! `cossin_angles` covers the general `(p, q)` CS middle factor.
 //!
-//! This module starts that port with the foundational Householder primitives
-//! `dlarfgp` and `dlarf`, transcribed from the LAPACK reference with the exact
-//! conventions `dorbdb` relies on. They are independently verifiable (the
-//! Householder reflection property) and are `pub(crate)` until `dorbdb`/`dbbcsd`
-//! consume them — mirroring how `fitpack_cyclic` shipped its solvers ahead of
-//! the spline driver.
+//! The LAPACK ports are intentionally direct: the Householder and rotation
+//! primitives keep the reference conventions so the sign-gauge behavior can be
+//! checked against SciPy's LAPACK-backed implementation.
 #![allow(dead_code)]
 // This module transcribes LAPACK reference kernels (dorbdb/dbbcsd and their
 // Householder/rotation primitives) line-for-line. Index-based loops, explicit
@@ -192,11 +188,31 @@ pub fn cossin_angles(
     p: usize,
     q: usize,
 ) -> Result<(Vec<f64>, Vec<Vec<f64>>), crate::LinalgError> {
-    let m = x.len();
+    let m = validate_partitioned_square(x, p, q, "cossin_angles")?;
     let x11: Vec<Vec<f64>> = x[..p].iter().map(|row| row[..q].to_vec()).collect();
     let theta = cs_angles(&x11, p, q, m)?;
     let cs = build_cs_matrix(&theta, p, q, m);
     Ok((theta, cs))
+}
+
+fn validate_partitioned_square(
+    x: &[Vec<f64>],
+    p: usize,
+    q: usize,
+    caller: &str,
+) -> Result<usize, crate::LinalgError> {
+    let m = x.len();
+    if m == 0 || x.iter().any(|row| row.len() != m) {
+        return Err(crate::LinalgError::InvalidArgument {
+            detail: format!("{caller}: x must be a non-empty square matrix"),
+        });
+    }
+    if p == 0 || q == 0 || p >= m || q >= m {
+        return Err(crate::LinalgError::InvalidArgument {
+            detail: format!("{caller}: p and q must satisfy 0 < p,q < m"),
+        });
+    }
+    Ok(m)
 }
 
 /// Assemble the `m × m` cosine-sine middle factor `CS` from the angle vector
@@ -1183,9 +1199,10 @@ pub(crate) fn dbbcsd_balanced(theta_in: &[f64], phi_in: &[f64], q: usize) -> Bbc
 /// are the `2q×2q` orthogonal CS factors and `theta` are the CS angles (sorted
 /// ascending, aligned with the `u`/`vh` columns).
 ///
-/// `u`/`vh` match `scipy.linalg.cossin` to machine precision **including the
-/// per-vector signs** — the signs emerge from `dbbcsd`'s coupled QR sweep, not a
-/// canonical normalization, so the full sweep is required for byte-parity.
+/// `u`/`vh` are the sign-gauge factors emitted by the `dbbcsd` sweep. They
+/// match SciPy's reference-LAPACK signs for pinned low-order golden fixtures;
+/// larger cases are valid CSD factors, with sign choices determined by
+/// near-zero cleanup roundoff in the LAPACK-style sweep.
 pub(crate) fn cossin_factors_balanced(
     x: &[Vec<f64>],
 ) -> Result<(Vec<Vec<f64>>, Vec<Vec<f64>>, Vec<f64>), crate::LinalgError> {
@@ -1235,11 +1252,9 @@ pub(crate) fn cossin_factors_balanced(
 /// `(u, cs, vh)` with `x = u · cs · vh`.
 ///
 /// `cs` is the cosine-sine middle factor, and `u = diag(U1, U2)` /
-/// `vh = diag(V1ᵀ, V2ᵀ)` are the orthogonal CS factors. All three match
-/// `scipy.linalg.cossin(x, q, q)` to machine precision, **including the
-/// per-vector signs**: the factors are produced by the same `dorbdb` + `dbbcsd`
-/// (LAPACK `dorcsd`) pipeline scipy uses, so the sign convention emerging from
-/// `dbbcsd`'s coupled implicit-QR sweep is reproduced exactly.
+/// `vh = diag(V1ᵀ, V2ᵀ)` are the orthogonal CS factors. The `cs` factor matches
+/// SciPy's balanced-square construction; `u`/`vh` use the LAPACK-style sign
+/// gauge produced by the `dorbdb` + `dbbcsd` sweep.
 pub fn cossin(
     x: &[Vec<f64>],
 ) -> Result<(Vec<Vec<f64>>, Vec<Vec<f64>>, Vec<Vec<f64>>), crate::LinalgError> {
@@ -1323,6 +1338,42 @@ mod tests {
             }
             assert!(err < 1e-12, "{lbl} differs from scipy by {err:.3e}");
         }
+    }
+
+    #[test]
+    fn cossin_angles_rejects_invalid_shapes_and_partitions() {
+        let x = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
+        for (p, q) in [(0, 1), (1, 0), (2, 1), (1, 2)] {
+            let err = cossin_angles(&x, p, q).unwrap_err();
+            assert!(matches!(err, crate::LinalgError::InvalidArgument { .. }));
+        }
+
+        let empty: Vec<Vec<f64>> = Vec::new();
+        let err = cossin_angles(&empty, 1, 1).unwrap_err();
+        assert!(matches!(err, crate::LinalgError::InvalidArgument { .. }));
+
+        let ragged = vec![vec![1.0, 0.0], vec![0.0]];
+        let err = cossin_angles(&ragged, 1, 1).unwrap_err();
+        assert!(matches!(err, crate::LinalgError::InvalidArgument { .. }));
+    }
+
+    #[test]
+    fn cossin_rejects_invalid_shapes() {
+        let empty: Vec<Vec<f64>> = Vec::new();
+        let err = cossin(&empty).unwrap_err();
+        assert!(matches!(err, crate::LinalgError::InvalidArgument { .. }));
+
+        let ragged = vec![vec![1.0, 0.0], vec![0.0]];
+        let err = cossin(&ragged).unwrap_err();
+        assert!(matches!(err, crate::LinalgError::InvalidArgument { .. }));
+
+        let odd = vec![
+            vec![1.0, 0.0, 0.0],
+            vec![0.0, 1.0, 0.0],
+            vec![0.0, 0.0, 1.0],
+        ];
+        let err = cossin(&odd).unwrap_err();
+        assert!(matches!(err, crate::LinalgError::InvalidArgument { .. }));
     }
 
     fn matmul(a: &[Vec<f64>], b: &[Vec<f64>]) -> Vec<Vec<f64>> {
