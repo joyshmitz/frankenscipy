@@ -12,8 +12,8 @@
 
 use fsci_linalg::{
     DecompOptions, InvOptions, LinalgError, LstsqOptions, NormKind, PinvOptions, SolveOptions,
-    cholesky, cond, det, eig, eigh, expm, inv, lstsq, lu, norm, pinv, qr, solve, solve_sylvester,
-    svd,
+    cholesky, cond, det, eig, eigh, eigvalsh, expm, inv, lstsq, lu, norm, pinv, qr, solve,
+    solve_sylvester, svd,
 };
 use fsci_runtime::RuntimeMode;
 use serde::Serialize;
@@ -910,6 +910,78 @@ fn e2e_p2c002_10_det_chain() {
                 Err(format!(
                     "identity violated: product={product}, diff={diff:.2e}"
                 ))
+            }
+        },
+    );
+
+    let bundle = r.finish();
+    assert_eq!(bundle.overall.status, "pass");
+}
+
+#[test]
+fn e2e_p2c002_10b_det_solve_eigvalsh_scipy_golden() {
+    // scipy.linalg.det/solve/eigvalsh on a symmetric 3x3 matrix.
+    let mut r = ScenarioRunner::new("p2c002_10b_det_solve_eigvalsh_scipy_golden");
+    let a = vec![
+        vec![4.0, 1.0, 2.0],
+        vec![1.0, 3.0, 0.0],
+        vec![2.0, 0.0, 5.0],
+    ];
+    let b = vec![1.0, 2.0, 3.0];
+    r.set_matrix_meta((3, 3), "strict");
+
+    r.record_step("det_golden", "det(A)", "scipy det=43", "strict", || {
+        let value =
+            det(&a, RuntimeMode::Strict, true).map_err(|e| format!("det(A) failed: {e}"))?;
+        let diff = (value - 43.0).abs();
+        if diff <= 1e-10 {
+            Ok(format!("det={value}, diff={diff:.2e}"))
+        } else {
+            Err(format!("det={value}, expected=43, diff={diff:.2e}"))
+        }
+    });
+
+    r.record_step(
+        "solve_golden",
+        "solve(A, b)",
+        "scipy solve vector",
+        "strict",
+        || {
+            let expected = vec![
+                -0.302_325_581_395_348_93,
+                0.767_441_860_465_116_3,
+                0.720_930_232_558_139_7,
+            ];
+            let result =
+                solve(&a, &b, SolveOptions::default()).map_err(|e| format!("solve failed: {e}"))?;
+            let diff = max_abs_diff_vec(&result.x, &expected);
+            if diff <= 1e-10 {
+                Ok(format!("solve max_diff={diff:.2e}"))
+            } else {
+                Err(format!("solve max_diff={diff:.2e}; x={:?}", result.x))
+            }
+        },
+    );
+
+    r.record_step(
+        "eigvalsh_golden",
+        "eigvalsh(A)",
+        "scipy ascending eigenvalues",
+        "strict",
+        || {
+            let expected = vec![
+                1.854_897_308_799_577_5,
+                3.476_023_602_918_134,
+                6.669_079_088_282_287,
+            ];
+            let mut values = eigvalsh(&a, DecompOptions::default())
+                .map_err(|e| format!("eigvalsh failed: {e}"))?;
+            values.sort_by(|x, y| x.total_cmp(y));
+            let diff = max_abs_diff_vec(&values, &expected);
+            if diff <= 1e-9 {
+                Ok(format!("eigvalsh max_diff={diff:.2e}"))
+            } else {
+                Err(format!("eigvalsh max_diff={diff:.2e}; values={values:?}"))
             }
         },
     );
