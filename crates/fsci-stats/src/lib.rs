@@ -70204,6 +70204,17 @@ mod tests {
     }
 
     #[test]
+    fn discrete_laplace_pmf_cdf_match_scipy() {
+        // Exact scipy.stats.dlaplace(1.0). test_discrete_laplace checks sum~1,
+        // mean=0, skew=0, and symmetry, but not exact pmf/cdf/var.
+        let d = DiscreteLaplace::new(1.0);
+        assert!((d.pmf_signed(0) - 0.462_117_157_260_009_74).abs() < 1e-12, "pmf(0)=tanh(0.5)");
+        assert!((d.pmf_signed(2) - 0.062_540_756_366_281_72).abs() < 1e-12, "pmf(2)");
+        assert!((d.cdf(2) - 0.963_602_736_564_834_5).abs() < 1e-12, "cdf(2)");
+        assert!((d.var() - 1.841_347_188_415_584_8).abs() < 1e-12, "var");
+    }
+
+    #[test]
     fn test_discrete_laplace() {
         let dl = DiscreteLaplace::new(1.0);
         let mut total = dl.pmf(0);
