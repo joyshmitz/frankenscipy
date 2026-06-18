@@ -23,6 +23,8 @@ use crate::{
 const SAFETY: f64 = 0.9;
 const MIN_FACTOR: f64 = 0.2;
 const MAX_FACTOR: f64 = 10.0;
+const RHS_WRONG_SHAPE_RUNTIME_ERROR: &str =
+    "right-hand side returned wrong number of derivative values";
 
 type OdeFn = Box<dyn FnMut(f64, &[f64]) -> Vec<f64>>;
 
@@ -314,11 +316,12 @@ fn rk_step<F>(
     h: f64,
     tableau: &ButcherTableau,
     k: &mut [Vec<f64>],
-) -> (Vec<f64>, Vec<f64>)
+) -> Result<(Vec<f64>, Vec<f64>), StepFailure>
 where
     F: FnMut(f64, &[f64]) -> Vec<f64> + ?Sized,
 {
     let n = y.len();
+    validate_stage_rhs_shape(f.len(), n)?;
     k[0] = f.to_vec();
 
     for s in 1..tableau.n_stages {
@@ -337,7 +340,9 @@ where
             .zip(dy.iter())
             .map(|(yi, di)| yi + h * di)
             .collect();
-        k[s] = fun(t + c_s * h, &y_stage);
+        let stage = fun(t + c_s * h, &y_stage);
+        validate_stage_rhs_shape(stage.len(), n)?;
+        k[s] = stage;
     }
 
     // y_new = y + h * sum(B[s] * K[s])
@@ -356,7 +361,12 @@ where
     let f_new = k[tableau.n_stages - 1].clone();
     k[tableau.n_stages] = f_new.clone(); // store for next step if needed
 
-    (y_new, f_new)
+    Ok((y_new, f_new))
+}
+
+fn validate_stage_rhs_shape(actual: usize, expected: usize) -> Result<(), StepFailure> {
+    validate_rhs_shape(actual, expected)
+        .map_err(|_| StepFailure::RuntimeError(RHS_WRONG_SHAPE_RUNTIME_ERROR))
 }
 
 fn error_scale(atol: f64, rtol: f64, y: f64, y_new: f64) -> f64 {
@@ -730,7 +740,8 @@ impl RkSolver {
             h_abs = h.abs();
 
             // Perform the RK step
-            let (y_new, f_new) = rk_step(fun, t, &self.y, &self.f, h, self.tableau, &mut self.k);
+            let (y_new, f_new) =
+                rk_step(fun, t, &self.y, &self.f, h, self.tableau, &mut self.k)?;
             self.nfev += self.tableau.n_stages - 1; // leverage FSAL: exactly n_stages - 1 new evals per step
 
             let err_norm = self.estimate_error_norm(h, &y_new);
@@ -902,7 +913,7 @@ impl RkSolver {
                     h,
                     self.tableau,
                     &mut self.k,
-                )
+                )?
             };
             self.nfev += self.tableau.n_stages - 1;
 
@@ -1010,7 +1021,8 @@ mod tests {
             0.1,
             &RK45_TABLEAU,
             &mut k,
-        );
+        )
+        .expect("rk step");
         // y_new should be close to 2 * exp(-0.5 * 0.1) ≈ 1.90245
         assert!(
             (y_new[0] - 2.0 * (-0.05_f64).exp()).abs() < 1e-6,
@@ -1031,12 +1043,33 @@ mod tests {
             0.1,
             &RK23_TABLEAU,
             &mut k,
-        );
+        )
+        .expect("rk step");
         // RK23 is order 3, so the error should be O(h^4) ≈ 1e-4
         assert!(
             (y_new[0] - 2.0 * (-0.05_f64).exp()).abs() < 1e-4,
             "RK23 step should be reasonably accurate, got {}",
             y_new[0]
+        );
+    }
+
+    #[test]
+    fn rk_step_rejects_wrong_size_stage_rhs() {
+        let n = 1;
+        let mut k = vec![vec![0.0; n]; RK45_TABLEAU.n_stages + 1];
+        let err = rk_step(
+            &mut |_t, _y| Vec::new(),
+            0.0,
+            &[2.0],
+            &[-1.0],
+            0.1,
+            &RK45_TABLEAU,
+            &mut k,
+        )
+        .expect_err("wrong-size stage derivative");
+        assert_eq!(
+            err,
+            StepFailure::RuntimeError(RHS_WRONG_SHAPE_RUNTIME_ERROR)
         );
     }
 
