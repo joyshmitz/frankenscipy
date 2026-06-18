@@ -505,14 +505,25 @@ pub fn analytic_signal(x: &[f64]) -> Result<Vec<(f64, f64)>, FftError> {
     let complex_input: Vec<(f64, f64)> = x.iter().map(|&v| (v, 0.0)).collect();
     let mut spectrum = crate::fft(&complex_input, &opts)?;
 
-    // Double positive frequencies, zero negative frequencies
+    // Double positive frequencies, zero negative frequencies. Odd lengths have
+    // no Nyquist bin, so the highest positive-frequency bin is doubled too.
     if n > 1 {
-        let half = n / 2;
-        for item in &mut spectrum[1..half] {
-            *item = (item.0 * 2.0, item.1 * 2.0);
-        }
-        for item in &mut spectrum[half + 1..n] {
-            *item = (0.0, 0.0);
+        if n.is_multiple_of(2) {
+            let half = n / 2;
+            for item in &mut spectrum[1..half] {
+                *item = (item.0 * 2.0, item.1 * 2.0);
+            }
+            for item in &mut spectrum[half + 1..n] {
+                *item = (0.0, 0.0);
+            }
+        } else {
+            let half_pos = n.div_ceil(2);
+            for item in &mut spectrum[1..half_pos] {
+                *item = (item.0 * 2.0, item.1 * 2.0);
+            }
+            for item in &mut spectrum[half_pos..n] {
+                *item = (0.0, 0.0);
+            }
         }
     }
 
@@ -524,7 +535,7 @@ mod tests {
     use fsci_runtime::RuntimeMode;
 
     use super::{
-        fftconvolve, fftfreq, fftshift, fftshift_1d, ifftshift, ifftshift_1d,
+        analytic_signal, fftconvolve, fftfreq, fftshift, fftshift_1d, ifftshift, ifftshift_1d,
         polynomial_multiply_fft, rfftfreq, zero_pad_pow2,
     };
     use crate::{FftError, FftOptions};
@@ -571,6 +582,28 @@ mod tests {
     #[test]
     fn zero_pad_pow2_preserves_empty_input() {
         assert!(zero_pad_pow2(&[]).is_empty());
+    }
+
+    #[test]
+    fn analytic_signal_odd_length_matches_hilbert_mask() {
+        let input = [1.0, 2.0, 0.0, -1.0, 3.0];
+        let got = analytic_signal(&input).expect("analytic_signal");
+        let expected =
+            crate::transforms::hilbert(&input, &FftOptions::default()).expect("hilbert");
+        for (idx, (lhs, rhs)) in got.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (lhs.0 - rhs.0).abs() < 1e-10,
+                "real[{idx}] {} != {}",
+                lhs.0,
+                rhs.0
+            );
+            assert!(
+                (lhs.1 - rhs.1).abs() < 1e-10,
+                "imag[{idx}] {} != {}",
+                lhs.1,
+                rhs.1
+            );
+        }
     }
 
     #[test]
