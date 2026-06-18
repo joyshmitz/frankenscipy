@@ -7316,6 +7316,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn entr_match_scipy() {
+        // scipy.special.entr: -x*log(x), with entr(0)=0 and entr(x<0)=-inf.
+        assert_eq!(entr_scalar(0.0), 0.0);
+        assert_eq!(entr_scalar(-1.0), f64::NEG_INFINITY);
+        assert!(
+            (entr_scalar(0.5) - 0.346_573_590_279_972_64).abs() < 1e-15,
+            "entr(0.5)"
+        );
+        assert!(
+            (entr_scalar(2.0) - -1.386_294_361_119_890_6).abs() < 1e-15,
+            "entr(2)"
+        );
+    }
+
+    #[test]
     fn rel_entr_kl_div_match_scipy() {
         // scipy.special.rel_entr/kl_div edge cases (x=0, y=0, x<0) + a normal value.
         assert_eq!(rel_entr_scalar(0.0, 5.0), 0.0);
