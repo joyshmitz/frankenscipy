@@ -9682,6 +9682,23 @@ impl DiscreteDistribution for Hypergeometric {
         big_n * (n / m) * ((m - n) / m) * ((m - big_n) / (m - 1.0))
     }
 
+    fn sf(&self, k: u64) -> f64 {
+        // P(X > k) summed DIRECTLY over the upper tail [k+1, k_max]. The trait
+        // default 1 - cdf cancels and underflows to 0 deep in the right tail
+        // (e.g. hypergeom(500,50,100).sf(40) = 5.9e-24 vs 0.0 from 1-cdf, and
+        // already ~7e-6 off at sf(30)). Matches scipy.stats.hypergeom.sf, same
+        // direct-sum approach used for geom/skellam/yulesimon.
+        let k_max = self.n.min(self.big_n);
+        if k >= k_max {
+            return 0.0;
+        }
+        let mut sum = 0.0;
+        for j in (k + 1)..=k_max {
+            sum += self.pmf(j);
+        }
+        sum.clamp(0.0, 1.0)
+    }
+
     fn skewness(&self) -> f64 {
         let m = self.big_m as f64;
         let n = self.n as f64;
@@ -71493,6 +71510,22 @@ mod tests {
         let hm = hmean(&data);
         let expected_hm = 5.0 / (1.0 + 0.5 + 1.0 / 3.0 + 0.25 + 0.2);
         assert!((hm - expected_hm).abs() < 1e-10, "hmean, got {}", hm);
+    }
+
+    #[test]
+    fn hypergeometric_sf_tail_match_scipy() {
+        // scipy.stats.hypergeom(500,50,100). The direct upper-tail sum sf must NOT
+        // underflow to 0 like the trait-default 1-cdf: sf(40)=5.9e-24 (1-cdf=0).
+        let h = Hypergeometric::new(500, 50, 100);
+        assert!((h.pmf(10) - 0.147_367_844_204_117_47).abs() < 1e-14, "pmf(10)");
+        let rel = |g: f64, e: f64| (g - e).abs() / e < 1e-9;
+        assert!(rel(h.sf(20), 0.000_139_464_623_384_479_92), "sf(20): {}", h.sf(20));
+        assert!(rel(h.sf(30), 4.692_102_536_998_179e-12), "sf(30): {}", h.sf(30));
+        assert!(
+            rel(h.sf(40), 5.924_967_056_648_660_4e-24),
+            "sf(40) deep tail: {}",
+            h.sf(40)
+        );
     }
 
     #[test]
