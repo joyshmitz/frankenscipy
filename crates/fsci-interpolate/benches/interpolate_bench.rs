@@ -221,6 +221,46 @@ fn bench_rbf_and_rect(c: &mut Criterion) {
     group.finish();
 }
 
+/// Batch evaluation vs mapping the scalar evaluate (the "original"). Quantifies the
+/// loop-invariant hoist: evaluate_many computes the point-independent setup
+/// (Bernstein binomials / tensor strides + per-dim orders + scratch) ONCE.
+fn bench_batch_eval(c: &mut Criterion) {
+    use fsci_interpolate::{BPoly, NdPPoly};
+    let m = 4096usize;
+    let mut group = c.benchmark_group("batch_eval");
+
+    // BPoly: per-segment Bernstein binomials hoisted in evaluate_many.
+    let n_pieces = 200usize;
+    let bx: Vec<f64> = (0..=n_pieces).map(|i| i as f64).collect();
+    let bc: Vec<Vec<f64>> = (0..n_pieces)
+        .map(|i| vec![i as f64, (i + 1) as f64, 0.5, 1.5])
+        .collect();
+    let bp = BPoly::new(bc, bx).expect("bpoly");
+    let qs: Vec<f64> = (0..m).map(|i| (i as f64) * n_pieces as f64 / m as f64).collect();
+    group.bench_function("bpoly/evaluate_many", |b| b.iter(|| bp.evaluate_many(&qs)));
+    group.bench_function("bpoly/map_evaluate", |b| {
+        b.iter(|| qs.iter().map(|&x| bp.evaluate(x)).collect::<Vec<_>>())
+    });
+
+    // NdPPoly: tensor strides + per-dim orders + powers/idx scratch hoisted.
+    let c_tensor: Vec<f64> = (1..=36).map(|v| v as f64).collect();
+    let c_shape = vec![3usize, 2, 2, 3];
+    let x = vec![vec![0.0, 1.0, 2.0], vec![0.0, 1.0, 2.0, 3.0]];
+    let np = NdPPoly::new(c_tensor, c_shape, x).expect("ndppoly");
+    let pts: Vec<Vec<f64>> = (0..m)
+        .map(|i| {
+            let t = i as f64 / m as f64;
+            vec![t * 2.0, t * 3.0]
+        })
+        .collect();
+    group.bench_function("ndppoly/evaluate_many", |b| b.iter(|| np.evaluate_many(&pts)));
+    group.bench_function("ndppoly/map_evaluate", |b| {
+        b.iter(|| pts.iter().map(|p| np.evaluate(p)).collect::<Vec<_>>())
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_interp1d,
@@ -228,6 +268,7 @@ criterion_group!(
     bench_polynomial,
     bench_regular_grid,
     bench_scattered,
-    bench_rbf_and_rect
+    bench_rbf_and_rect,
+    bench_batch_eval
 );
 criterion_main!(benches);
