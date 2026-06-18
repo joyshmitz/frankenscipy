@@ -48932,6 +48932,16 @@ mod tests {
     }
 
     #[test]
+    fn rayleigh_pdf_match_scipy() {
+        // Exact scipy.stats.rayleigh(scale=2). The Rayleigh suite locks cdf, mode,
+        // mean/var, sf-tail, and skew/kurt but not the pdf at an interior point.
+        let r = Rayleigh::new(2.0);
+        assert!((r.pdf(1.0) - 0.220_624_225_646_148_86).abs() < 1e-12, "pdf(1)");
+        assert!((r.pdf(3.0) - 0.243_489_350_518_762_3).abs() < 1e-12, "pdf(3)");
+        assert!((r.cdf(1.0) - 0.117_503_097_415_404_6).abs() < 1e-12, "cdf(1)");
+    }
+
+    #[test]
     fn rayleigh_mean_and_variance() {
         let r = Rayleigh::new(2.0);
         assert_close(r.mean(), 2.0 * (PI / 2.0).sqrt(), 1e-12, "rayleigh mean");
