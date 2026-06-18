@@ -7340,6 +7340,30 @@ mod tests {
     }
 
     #[test]
+    fn numerical_diff_helpers_match_analytic() {
+        // Numerical-diff helpers, exact (within FD roundoff) for low-degree polys.
+        // f=x^2: f''(2)=2.
+        assert!((central_diff2(|x: f64| x * x, 2.0, 0.01) - 2.0).abs() < 1e-6, "central_diff2");
+        // f=x0^2+x1^2: grad at [1,2]=[2,4]; Hessian diag 2, off-diag 0.
+        let g = gradient_approx(|x: &[f64]| x[0] * x[0] + x[1] * x[1], &[1.0, 2.0], 0.001);
+        assert!((g[0] - 2.0).abs() < 1e-5 && (g[1] - 4.0).abs() < 1e-5, "gradient_approx");
+        let h = hessian_approx(|x: &[f64]| x[0] * x[0] + x[1] * x[1], &[1.0, 2.0], 0.01);
+        assert!(
+            (h[0][0] - 2.0).abs() < 1e-4 && (h[1][1] - 2.0).abs() < 1e-4 && h[0][1].abs() < 1e-4,
+            "hessian_approx"
+        );
+        // f(x)=[x0*x1, x0+x1] at [2,3]: Jacobian [[3,2],[1,1]].
+        let j = jacobian_approx(|x: &[f64]| vec![x[0] * x[1], x[0] + x[1]], &[2.0, 3.0], 0.001);
+        assert!(
+            (j[0][0] - 3.0).abs() < 1e-5
+                && (j[0][1] - 2.0).abs() < 1e-5
+                && (j[1][0] - 1.0).abs() < 1e-5
+                && (j[1][1] - 1.0).abs() < 1e-5,
+            "jacobian_approx"
+        );
+    }
+
+    #[test]
     fn special_scalar_helpers_match_analytic() {
         // Previously-untested scalar helpers vs analytic/numpy values.
         assert!((arcsinh(1.0) - (1.0 + 2.0_f64.sqrt()).ln()).abs() < 1e-12, "arcsinh(1)");
