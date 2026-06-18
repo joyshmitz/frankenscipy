@@ -29392,27 +29392,32 @@ mod proptest_tests {
     #[test]
     fn polar_matches_scipy_reference_values() {
         // scipy.linalg.polar([[1, 2], [3, 4]]) -> (u, p)
-        // u is unitary, p is positive semidefinite hermitian
         let a = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
         let result = polar(&a, DecompOptions::default()).expect("polar");
-        // Verify U is orthogonal: U^T * U ≈ I
-        let ut_u_00 = result.u[0][0] * result.u[0][0] + result.u[1][0] * result.u[1][0];
-        let ut_u_11 = result.u[0][1] * result.u[0][1] + result.u[1][1] * result.u[1][1];
-        assert!(
-            (ut_u_00 - 1.0).abs() < 1e-6,
-            "U^T*U[0][0] = {}, expected 1.0",
-            ut_u_00
-        );
-        assert!(
-            (ut_u_11 - 1.0).abs() < 1e-6,
-            "U^T*U[1][1] = {}, expected 1.0",
-            ut_u_11
-        );
-        // P should be symmetric positive
-        assert!(
-            (result.p[0][1] - result.p[1][0]).abs() < 1e-6,
-            "P should be symmetric"
-        );
+        let expected_u = [
+            [-0.5144957554275261, 0.8574929257125442],
+            [0.8574929257125442, 0.5144957554275263],
+        ];
+        let expected_p = [
+            [2.0579830217101063, 2.400980191995124],
+            [2.400980191995124, 3.772968873135193],
+        ];
+        for i in 0..2 {
+            for j in 0..2 {
+                assert!(
+                    (result.u[i][j] - expected_u[i][j]).abs() < 1e-12,
+                    "U[{i}][{j}] = {}, expected {}",
+                    result.u[i][j],
+                    expected_u[i][j]
+                );
+                assert!(
+                    (result.p[i][j] - expected_p[i][j]).abs() < 1e-12,
+                    "P[{i}][{j}] = {}, expected {}",
+                    result.p[i][j],
+                    expected_p[i][j]
+                );
+            }
+        }
     }
 
     #[test]
