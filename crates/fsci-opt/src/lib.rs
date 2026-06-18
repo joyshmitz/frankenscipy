@@ -2725,6 +2725,16 @@ where
             detail: "x0 must be non-empty".to_string(),
         });
     }
+    if max_outer == 0 {
+        return Err(OptError::InvalidArgument {
+            detail: "max_outer must be greater than zero".to_string(),
+        });
+    }
+    if max_inner == 0 {
+        return Err(OptError::InvalidArgument {
+            detail: "max_inner must be greater than zero".to_string(),
+        });
+    }
 
     let mut x = x0.to_vec();
     let mut lambda = vec![0.0; n_constraints]; // Lagrange multipliers
@@ -5321,6 +5331,16 @@ mod tests {
         assert!(cobyla(f, &[3.0, 2.0], &cons, 0, 1.0).is_err());
         assert!(cobyla(f, &[3.0, 2.0], &cons, 10, 0.0).is_err());
         assert!(fmin_cobyla(f, &[3.0, 2.0], &cons, f64::INFINITY, 10).is_err());
+    }
+
+    #[test]
+    fn augmented_lagrangian_rejects_zero_iteration_budgets() {
+        use crate::augmented_lagrangian;
+
+        let f = |x: &[f64]| x[0] * x[0];
+        let constraints = |x: &[f64]| vec![x[0] + 1.0];
+        assert!(augmented_lagrangian(f, constraints, &[0.0], 1, 0, 10).is_err());
+        assert!(augmented_lagrangian(f, constraints, &[0.0], 1, 10, 0).is_err());
     }
 
     #[test]
