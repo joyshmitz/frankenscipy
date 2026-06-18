@@ -7316,6 +7316,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn exprel_match_scipy() {
+        // scipy.special.exprel = (e^x - 1)/x, with the x->0 limit = 1 (Taylor near
+        // 0 avoids the 0/0); expm1 elsewhere for accuracy.
+        assert_eq!(exprel_scalar(0.0), 1.0);
+        assert!(
+            (exprel_scalar(1e-12) - 1.000_000_000_000_5).abs() < 1e-12,
+            "exprel(1e-12)"
+        );
+        assert!(
+            (exprel_scalar(1.0) - 1.718_281_828_459_045).abs() < 1e-15,
+            "exprel(1)"
+        );
+        assert!(
+            (exprel_scalar(2.0) - 3.194_528_049_465_325).abs() < 1e-15,
+            "exprel(2)"
+        );
+    }
+
+    #[test]
     fn entr_match_scipy() {
         // scipy.special.entr: -x*log(x), with entr(0)=0 and entr(x<0)=-inf.
         assert_eq!(entr_scalar(0.0), 0.0);
