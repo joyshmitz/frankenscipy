@@ -16756,6 +16756,17 @@ mod tests {
     }
 
     #[test]
+    fn lstsq_match_scipy() {
+        // scipy.linalg.lstsq: overdetermined least squares. A=[[1,1],[1,2],[1,3]],
+        // b=[1,2,2] -> x=[2/3, 1/2], rank 2.
+        let a = vec![vec![1.0, 1.0], vec![1.0, 2.0], vec![1.0, 3.0]];
+        let r = lstsq(&a, &[1.0, 2.0, 2.0], LstsqOptions::default()).expect("lstsq");
+        assert_eq!(r.rank, 2, "rank");
+        assert!((r.x[0] - 2.0 / 3.0).abs() < 1e-10, "x0: {}", r.x[0]);
+        assert!((r.x[1] - 0.5).abs() < 1e-10, "x1: {}", r.x[1]);
+    }
+
+    #[test]
     fn logm_sqrtm_match_scipy() {
         // scipy.linalg.logm/sqrtm of A=[[4,1],[1,4]] (symmetric, eigenvalues 5,3).
         let a = vec![vec![4.0, 1.0], vec![1.0, 4.0]];
