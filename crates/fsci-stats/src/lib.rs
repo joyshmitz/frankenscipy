@@ -21344,6 +21344,38 @@ impl HalfGenNorm {
         assert!(beta > 0.0, "beta must be positive");
         Self { beta }
     }
+
+    /// Log-density at many points, hoisting `ln(β) − lnΓ(1/β)` out of the per-point
+    /// loop. Byte-identical to mapping `logpdf` (lead leading, same `− x^β`); x<0 → −∞.
+    #[must_use]
+    pub fn logpdf_many(&self, xs: &[f64]) -> Vec<f64> {
+        let b = self.beta;
+        let lead = b.ln() - ln_gamma(1.0 / b);
+        xs.iter()
+            .map(|&x| {
+                if x < 0.0 {
+                    return f64::NEG_INFINITY;
+                }
+                lead - x.powf(b)
+            })
+            .collect()
+    }
+
+    /// Density at many points; hoists the `β / Γ(1/β)` coefficient like
+    /// [`logpdf_many`](Self::logpdf_many). Byte-identical to mapping `pdf`.
+    #[must_use]
+    pub fn pdf_many(&self, xs: &[f64]) -> Vec<f64> {
+        let b = self.beta;
+        let coeff = b / ln_gamma(1.0 / b).exp();
+        xs.iter()
+            .map(|&x| {
+                if x < 0.0 {
+                    return 0.0;
+                }
+                coeff * (-x.powf(b)).exp()
+            })
+            .collect()
+    }
 }
 
 impl ContinuousDistribution for HalfGenNorm {
@@ -65012,6 +65044,19 @@ mod tests {
                 "FatigueLife({c}).kurt = {}, scipy {wk}",
                 d.kurtosis()
             );
+        }
+    }
+
+    #[test]
+    fn halfgennorm_pdf_many_matches_pdf() {
+        // Batch pdf_many/logpdf_many (lgamma(1/β) hoisted) byte-identical to per-point.
+        let d = HalfGenNorm::new(1.5);
+        let xs = [-1.0, 0.0, 0.5, 1.0, 2.0, 4.0];
+        let pm = d.pdf_many(&xs);
+        let lpm = d.logpdf_many(&xs);
+        for (i, &x) in xs.iter().enumerate() {
+            assert_eq!(pm[i], d.pdf(x), "pdf_many != pdf at {x}");
+            assert_eq!(lpm[i], d.logpdf(x), "logpdf_many != logpdf at {x}");
         }
     }
 
