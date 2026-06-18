@@ -10985,9 +10985,9 @@ pub struct GauspulsResult {
 /// only need the real signal use the `.i` field. Resolves
 /// [frankenscipy-8jpj9].
 pub fn gauspuls(t: &[f64], fc: f64, bw: f64, bwr: f64) -> Result<GauspulsResult, SignalError> {
-    if !(fc > 0.0 && fc.is_finite()) {
+    if !(fc >= 0.0 && fc.is_finite()) {
         return Err(SignalError::InvalidArgument(format!(
-            "fc must be a positive finite frequency; got {fc}"
+            "fc must be a non-negative finite frequency; got {fc}"
         )));
     }
     if !(bw > 0.0 && bw.is_finite()) {
@@ -21654,9 +21654,18 @@ mod tests {
     }
 
     #[test]
+    fn gauspuls_zero_center_frequency_matches_scipy() {
+        // scipy.signal.gausspulse([0, 0.1], fc=0, retquad=True, retenv=True)
+        // returns yI=[1,1], yQ=[0,0], yenv=[1,1].
+        let r = gauspuls(&[0.0, 0.1], 0.0, 0.5, -6.0).expect("zero fc");
+        assert_eq!(r.i, vec![1.0, 1.0]);
+        assert_eq!(r.q, vec![0.0, 0.0]);
+        assert_eq!(r.envelope, vec![1.0, 1.0]);
+    }
+
+    #[test]
     fn gauspuls_input_contract() {
-        // fc must be positive.
-        assert!(gauspuls(&[0.0], 0.0, 0.5, -6.0).is_err());
+        // fc must be non-negative and finite.
         assert!(gauspuls(&[0.0], -100.0, 0.5, -6.0).is_err());
         assert!(gauspuls(&[0.0], f64::NAN, 0.5, -6.0).is_err());
         // bw must be positive.
