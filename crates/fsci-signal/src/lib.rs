@@ -14678,6 +14678,11 @@ pub fn resample(x: &[f64], num: usize) -> Result<Vec<f64>, SignalError> {
     if num == 0 {
         return Err(SignalError::InvalidArgument("num must be > 0".to_string()));
     }
+    if x.iter().any(|value| !value.is_finite()) {
+        return Err(SignalError::NonFiniteInput {
+            detail: "resample input samples must be finite".to_string(),
+        });
+    }
 
     let n = x.len();
     if num == n {
@@ -23661,6 +23666,22 @@ mod tests {
             assert!(
                 (a - b).abs() < 1e-10,
                 "same-length resample mismatch at {i}: {a} vs {b}"
+            );
+        }
+    }
+
+    #[test]
+    fn resample_rejects_non_finite_samples() {
+        for (x, num) in [
+            ([1.0, f64::NAN, 3.0, 4.0], 8),
+            ([1.0, 2.0, f64::INFINITY, 4.0], 4),
+        ] {
+            let err = resample(&x, num).expect_err("non-finite resample input");
+            assert_eq!(
+                err,
+                SignalError::NonFiniteInput {
+                    detail: "resample input samples must be finite".to_string()
+                }
             );
         }
     }
