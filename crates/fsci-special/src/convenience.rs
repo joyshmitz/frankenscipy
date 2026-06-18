@@ -7331,6 +7331,13 @@ mod tests {
     }
 
     #[test]
+    fn struve_match_scipy() {
+        // scipy.special.struve (Struve function H_v(x)).
+        assert!((struve(0.0, 1.0) - 0.568_656_627_048_288_1).abs() < 1e-13, "struve(0,1)");
+        assert!((struve(1.0, 2.0) - 0.646_763_728_283_562_2).abs() < 1e-13, "struve(1,2)");
+    }
+
+    #[test]
     fn sici_shichi_match_scipy() {
         // scipy.special.sici (Si, Ci) and shichi (Shi, Chi) integrals at x=1.
         let (si, ci) = sici(1.0);
