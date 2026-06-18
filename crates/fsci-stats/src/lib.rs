@@ -50316,6 +50316,16 @@ mod tests {
     }
 
     #[test]
+    fn burr12_pdf_cdf_interior_match_scipy() {
+        // Exact scipy.stats.burr12(c=2, d=3). burr12_pdf_boundary_matches_scipy only
+        // checks the boundary; this pins the pdf/cdf at interior points.
+        let b = Burr12::new(2.0, 3.0);
+        assert!((b.pdf(1.0) - 0.375).abs() < 1e-12, "pdf(1)");
+        assert!((b.pdf(2.0) - 0.019_200_000_000_000_01).abs() < 1e-12, "pdf(2)");
+        assert!((b.cdf(1.0) - 0.875).abs() < 1e-12, "cdf(1)");
+    }
+
+    #[test]
     fn burr12_pdf_boundary_matches_scipy() {
         // /mock-code-finder regression for [frankenscipy-27u2d]:
         // burr12.pdf at x=0 is 0/d/+∞ depending on shape c per scipy.
