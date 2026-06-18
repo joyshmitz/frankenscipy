@@ -14357,6 +14357,41 @@ impl Chi {
         assert!(df > 0.0, "df must be positive");
         Self { df }
     }
+
+    /// Log-density at many points, hoisting `(1−k/2)·ln2` and `lnΓ(k/2)` out of the
+    /// per-point loop. Byte-identical to mapping `logpdf` (lead leading, lnΓ last
+    /// subtraction); x≤0 delegates to `pdf`.
+    #[must_use]
+    pub fn logpdf_many(&self, xs: &[f64]) -> Vec<f64> {
+        let k = self.df;
+        let lead = (1.0 - k / 2.0) * 2.0_f64.ln();
+        let lg = ln_gamma(k / 2.0);
+        xs.iter()
+            .map(|&x| {
+                if x <= 0.0 {
+                    return self.pdf(x).ln();
+                }
+                lead + (k - 1.0) * x.ln() - x * x / 2.0 - lg
+            })
+            .collect()
+    }
+
+    /// Density at many points; hoists `2^(1−k/2)` and `Γ(k/2)` like
+    /// [`logpdf_many`](Self::logpdf_many). Byte-identical to mapping `pdf`.
+    #[must_use]
+    pub fn pdf_many(&self, xs: &[f64]) -> Vec<f64> {
+        let k = self.df;
+        let lead = 2.0_f64.powf(1.0 - k / 2.0);
+        let gamma_k2 = ln_gamma(k / 2.0).exp();
+        xs.iter()
+            .map(|&x| {
+                if x < 0.0 {
+                    return 0.0;
+                }
+                lead * x.powf(k - 1.0) * (-x * x / 2.0).exp() / gamma_k2
+            })
+            .collect()
+    }
 }
 
 impl ContinuousDistribution for Chi {
@@ -50632,6 +50667,19 @@ mod tests {
                 1e-12,
                 &format!("ChiSquared(df=2).sf({x}) vs Exponential(scale=2).sf({x})"),
             );
+        }
+    }
+
+    #[test]
+    fn chi_pdf_many_matches_pdf() {
+        // Batch pdf_many/logpdf_many (lead/Γ(k/2) hoisted) byte-identical to per-point.
+        let c = Chi::new(3.0);
+        let xs = [-1.0, 0.0, 0.4, 1.0, 2.0, 4.0];
+        let pm = c.pdf_many(&xs);
+        let lpm = c.logpdf_many(&xs);
+        for (i, &x) in xs.iter().enumerate() {
+            assert_eq!(pm[i], c.pdf(x), "pdf_many != pdf at {x}");
+            assert_eq!(lpm[i], c.logpdf(x), "logpdf_many != logpdf at {x}");
         }
     }
 
