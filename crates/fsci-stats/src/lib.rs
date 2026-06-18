@@ -71496,6 +71496,16 @@ mod tests {
     }
 
     #[test]
+    fn poisson_pmf_cdf_sf_tail_match_scipy() {
+        // scipy.stats.poisson(3.0). sf(20) exercises the stable right tail
+        // (computed via the incomplete gamma, not 1-cdf which would underflow).
+        let p = Poisson::new(3.0);
+        assert!((p.pmf(2) - 0.224_041_807_655_387_75).abs() < 1e-14, "pmf(2)");
+        assert!((p.cdf(2) - 0.423_190_081_126_843_64).abs() < 1e-14, "cdf(2)");
+        assert!((p.sf(20) - 1.179_044_819_414_564_3e-11).abs() < 1e-22, "sf(20) tail");
+    }
+
+    #[test]
     fn binomial_pmf_cdf_sf_match_scipy() {
         // scipy.stats.binom(10, 0.3) pmf/cdf/sf at sample points.
         let b = Binomial::new(10, 0.3);
