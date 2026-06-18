@@ -46818,6 +46818,16 @@ mod tests {
     // ── Exponential distribution ────────────────────────────────────
 
     #[test]
+    fn exponential_pdf_decay_match_scipy() {
+        // Exact scipy.stats.expon(scale=2) [rate lambda=0.5]. exponential_pdf_at_zero
+        // only checks the peak (pdf(0)=lambda); this pins the exp decay at x>0.
+        let e = Exponential::new(0.5);
+        assert!((e.pdf(2.0) - 0.183_939_720_585_721_17).abs() < 1e-12, "pdf(2)");
+        assert!((e.pdf(4.0) - 0.067_667_641_618_306_35).abs() < 1e-12, "pdf(4)");
+        assert!((e.cdf(2.0) - 0.632_120_558_828_557_7).abs() < 1e-12, "cdf(2)");
+    }
+
+    #[test]
     fn exponential_pdf_at_zero() {
         let e = Exponential::new(2.0);
         assert_close(e.pdf(0.0), 2.0, 1e-12, "expon pdf(0) = lambda");
