@@ -27054,6 +27054,15 @@ pub fn spearmanrho(x: &[f64], y: &[f64], alternative: &str) -> CorrelationResult
     spearmanr_alternative(x, y, alternative)
 }
 
+fn spearmanr_length_two(x: &[f64], y: &[f64]) -> CorrelationResult {
+    let rank_x = rankdata_average(x);
+    let rank_y = rankdata_average(y);
+    CorrelationResult {
+        statistic: pearsonr(&rank_x, &rank_y).statistic,
+        pvalue: f64::NAN,
+    }
+}
+
 /// Calculate the Spearman rank-order correlation coefficient and p-value.
 ///
 /// Matches `scipy.stats.spearmanr(a, b)`.
@@ -27061,11 +27070,14 @@ pub fn spearmanrho(x: &[f64], y: &[f64], alternative: &str) -> CorrelationResult
 /// Uses the Pearson correlation of the rank-transformed data.
 pub fn spearmanr(x: &[f64], y: &[f64]) -> CorrelationResult {
     let n = x.len();
-    if n < 3 || n != y.len() {
+    if n < 2 || n != y.len() {
         return CorrelationResult {
             statistic: f64::NAN,
             pvalue: f64::NAN,
         };
+    }
+    if n == 2 {
+        return spearmanr_length_two(x, y);
     }
 
     let rank_x = rankdata_average(x);
@@ -27079,11 +27091,14 @@ pub fn spearmanr(x: &[f64], y: &[f64]) -> CorrelationResult {
 /// Matches `scipy.stats.spearmanr(a, b, alternative=...)`.
 pub fn spearmanr_alternative(x: &[f64], y: &[f64], alternative: &str) -> CorrelationResult {
     let n = x.len();
-    if n < 3 || n != y.len() {
+    if n < 2 || n != y.len() {
         return CorrelationResult {
             statistic: f64::NAN,
             pvalue: f64::NAN,
         };
+    }
+    if n == 2 {
+        return spearmanr_length_two(x, y);
     }
 
     let rank_x = rankdata_average(x);
@@ -53889,9 +53904,40 @@ mod tests {
     }
 
     #[test]
+    fn spearmanr_length_two_matches_scipy_statistic() {
+        let positive = spearmanr(&[1.0, 2.0], &[3.0, 4.0]);
+        assert_close(positive.statistic, 1.0, 1e-12, "n=2 positive spearmanr");
+        assert!(positive.pvalue.is_nan());
+
+        let negative = spearmanr(&[1.0, 2.0], &[4.0, 3.0]);
+        assert_close(
+            negative.statistic,
+            -1.0,
+            1e-12,
+            "n=2 negative spearmanr",
+        );
+        assert!(negative.pvalue.is_nan());
+
+        for alternative in ["two-sided", "less", "greater"] {
+            let positive = spearmanr_alternative(&[1.0, 2.0], &[3.0, 4.0], alternative);
+            assert_close(positive.statistic, 1.0, 1e-12, "n=2 positive alternative");
+            assert!(positive.pvalue.is_nan());
+
+            let negative = spearmanr_alternative(&[1.0, 2.0], &[4.0, 3.0], alternative);
+            assert_close(
+                negative.statistic,
+                -1.0,
+                1e-12,
+                "n=2 negative alternative",
+            );
+            assert!(negative.pvalue.is_nan());
+        }
+    }
+
+    #[test]
     fn spearmanr_too_few() {
-        let result = spearmanr(&[1.0, 2.0], &[3.0, 4.0]);
-        assert!(result.statistic.is_nan(), "need at least 3 for spearmanr");
+        let result = spearmanr(&[1.0], &[3.0]);
+        assert!(result.statistic.is_nan(), "need at least 2 for spearmanr");
     }
 
     #[test]
