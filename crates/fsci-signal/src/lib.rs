@@ -9185,6 +9185,30 @@ fn validate_sampling_frequency(fs: f64) -> Result<(), SignalError> {
     }
 }
 
+fn validate_periodogram_window(window: &[f64], n: usize) -> Result<f64, SignalError> {
+    if window.len() != n {
+        return Err(SignalError::InvalidArgument(format!(
+            "window length ({}) must match signal length ({n})",
+            window.len()
+        )));
+    }
+    let mut power_sum = 0.0;
+    for &wi in window {
+        if !wi.is_finite() {
+            return Err(SignalError::InvalidParameter {
+                detail: "window coefficients must be finite".to_string(),
+            });
+        }
+        power_sum += wi * wi;
+    }
+    if power_sum <= 0.0 {
+        return Err(SignalError::InvalidParameter {
+            detail: "window power must be positive".to_string(),
+        });
+    }
+    Ok(power_sum / n as f64)
+}
+
 /// Estimate power spectral density using a periodogram.
 ///
 /// Matches `scipy.signal.periodogram(x, fs, window, scaling='density')`.
@@ -9212,28 +9236,19 @@ pub fn periodogram(
     let mean = x.iter().sum::<f64>() / n as f64;
     let detrended: Vec<f64> = x.iter().map(|&xi| xi - mean).collect();
 
-    // Apply window
-    let windowed: Vec<f64> = match window {
-        Some(w) => {
-            if w.len() != n {
-                return Err(SignalError::InvalidArgument(format!(
-                    "window length ({}) must match signal length ({n})",
-                    w.len()
-                )));
-            }
-            detrended
-                .iter()
-                .zip(w.iter())
-                .map(|(&xi, &wi)| xi * wi)
-                .collect()
-        }
-        None => detrended,
+    let win_power = match window {
+        Some(w) => validate_periodogram_window(w, n)?,
+        None => 1.0,
     };
 
-    // Window power for normalization
-    let win_power: f64 = match window {
-        Some(w) => w.iter().map(|&wi| wi * wi).sum::<f64>() / n as f64,
-        None => 1.0,
+    // Apply window
+    let windowed: Vec<f64> = match window {
+        Some(w) => detrended
+            .iter()
+            .zip(w.iter())
+            .map(|(&xi, &wi)| xi * wi)
+            .collect(),
+        None => detrended,
     };
 
     // Compute FFT
@@ -20303,6 +20318,40 @@ mod tests {
     #[test]
     fn periodogram_empty_rejected() {
         assert!(periodogram(&[], 1.0, None).is_err());
+    }
+
+    #[test]
+    fn periodogram_rejects_invalid_window_coefficients() {
+        let x = [0.0, 1.0, 0.0, -1.0];
+        let nan_window = [1.0, f64::NAN, 1.0, 1.0];
+        let inf_window = [1.0, 1.0, f64::INFINITY, 1.0];
+        for window in [&nan_window[..], &inf_window[..]] {
+            let err = periodogram(&x, 8.0, Some(window)).expect_err("invalid window");
+            assert_eq!(
+                err,
+                SignalError::InvalidParameter {
+                    detail: "window coefficients must be finite".to_string()
+                }
+            );
+        }
+
+        let zero_window = [0.0; 4];
+        let err = periodogram(&x, 8.0, Some(&zero_window)).expect_err("zero-power window");
+        assert_eq!(
+            err,
+            SignalError::InvalidParameter {
+                detail: "window power must be positive".to_string()
+            }
+        );
+
+        let short_window = [1.0, 1.0];
+        let err = periodogram(&x, 8.0, Some(&short_window)).expect_err("short window");
+        assert_eq!(
+            err,
+            SignalError::InvalidArgument(
+                "window length (2) must match signal length (4)".to_string()
+            )
+        );
     }
 
     #[test]
