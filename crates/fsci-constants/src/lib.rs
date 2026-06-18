@@ -2,7 +2,7 @@
 
 //! Physical and mathematical constants for FrankenSciPy.
 //!
-//! Matches `scipy.constants` — CODATA 2018 recommended values.
+//! Matches `scipy.constants` — CODATA 2022 recommended values (SciPy 1.17.x).
 //!
 //! # Usage
 //! ```
@@ -51,7 +51,7 @@ pub const ZEPTO: f64 = 1e-21;
 pub const YOCTO: f64 = 1e-24;
 
 // ══════════════════════════════════════════════════════════════════════
-// Fundamental Physical Constants (CODATA 2018)
+// Fundamental Physical Constants (CODATA 2022)
 // ══════════════════════════════════════════════════════════════════════
 
 /// Speed of light in vacuum [m/s]
