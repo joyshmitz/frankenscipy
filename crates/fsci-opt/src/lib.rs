@@ -4071,6 +4071,7 @@ where
     if x0.is_empty()
         || !tol.is_finite()
         || tol <= 0.0
+        || maxiter == 0
         || !learning_rate.is_finite()
         || learning_rate <= 0.0
         || x0.iter().any(|v| !v.is_finite())
@@ -4207,6 +4208,7 @@ where
         || ub.len() != n
         || !tol.is_finite()
         || tol <= 0.0
+        || maxiter == 0
         || !learning_rate.is_finite()
         || learning_rate <= 0.0
         || x0.iter().any(|v| !v.is_finite())
@@ -5685,6 +5687,23 @@ mod tests {
     }
 
     #[test]
+    fn gradient_descent_rejects_zero_iteration_budget() {
+        let f = |x: &[f64]| x.iter().map(|value| value * value).sum::<f64>();
+        let result = gradient_descent(
+            f,
+            |_x| panic!("gradient callback should not run for invalid controls"),
+            &[1.0, 2.0],
+            1.0e-6,
+            0,
+            0.1,
+        );
+        assert!(!result.success);
+        assert_eq!(result.status, ConvergenceStatus::InvalidInput);
+        assert_eq!(result.nfev, 0);
+        assert_eq!(result.njev, 0);
+    }
+
+    #[test]
     fn projected_gradient_descent_rejects_invalid_callback_gradient() {
         let f = |x: &[f64]| x.iter().map(|value| value * value).sum::<f64>();
 
@@ -5713,6 +5732,25 @@ mod tests {
         );
         assert!(!non_finite.success);
         assert_eq!(non_finite.status, ConvergenceStatus::InvalidInput);
+    }
+
+    #[test]
+    fn projected_gradient_descent_rejects_zero_iteration_budget() {
+        let f = |x: &[f64]| x.iter().map(|value| value * value).sum::<f64>();
+        let result = projected_gradient_descent(
+            f,
+            |_x| panic!("gradient callback should not run for invalid controls"),
+            &[1.0, 2.0],
+            &[0.0, 0.0],
+            &[2.0, 2.0],
+            1.0e-6,
+            0,
+            0.1,
+        );
+        assert!(!result.success);
+        assert_eq!(result.status, ConvergenceStatus::InvalidInput);
+        assert_eq!(result.nfev, 0);
+        assert_eq!(result.njev, 0);
     }
 
     #[test]
