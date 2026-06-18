@@ -18315,6 +18315,23 @@ mod tests {
     }
 
     #[test]
+    fn firwin_lowpass_match_scipy() {
+        // scipy.signal.firwin(5, 0.3) default: hamming window, pass_zero=True
+        // (lowpass), normalized. Coefficients are symmetric (linear phase).
+        let c = firwin(5, &[0.3], FirWindow::Hamming, true).expect("firwin");
+        let e = [
+            0.020_103_708_268_285_354,
+            0.230_866_681_805_421_94,
+            0.498_059_219_852_585_5,
+            0.230_866_681_805_421_94,
+            0.020_103_708_268_285_354,
+        ];
+        for (g, ex) in c.iter().zip(&e) {
+            assert!((g - ex).abs() < 1e-12, "firwin: {g} vs {ex}");
+        }
+    }
+
+    #[test]
     fn convolve_modes_match_scipy() {
         // scipy.signal.convolve full/same/valid for a=[1,2,3], b=[0,1,0.5].
         let a = [1.0, 2.0, 3.0];
