@@ -12126,6 +12126,38 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy 1.17.1
+    fn powm1_and_cosm1_match_scipy_golden_values() {
+        let close = |got: f64, want: f64, tol: f64, label: &str| {
+            assert!(
+                (got - want).abs() <= tol,
+                "{label}: got {got}, scipy {want}, tol {tol}"
+            );
+        };
+
+        let pow_cases = [
+            (1.000_000_000_001, 3.0, 3.000_266_701_750_023_6e-12),
+            (1.000_000_1, 0.5, 4.999_999_877_919_342e-8),
+            (2.0, 3.0, 7.0),
+            (0.5, -2.0, 3.0),
+            (-2.0, 3.0, -9.0),
+        ];
+        for (x, y, want) in pow_cases {
+            close(powm1_scalar(x, y), want, 1e-18, "powm1");
+        }
+
+        let cos_cases = [
+            (1.0e-8, -5.000_000_000_000_000_5e-17),
+            (0.25, -0.031_087_578_289_355_215),
+            (std::f64::consts::PI, -2.0),
+            (std::f64::consts::TAU, 0.0),
+        ];
+        for (x, want) in cos_cases {
+            close(cosm1_scalar(x), want, 1e-15, "cosm1");
+        }
+    }
+
+    #[test]
     fn powm1_supports_real_tensor_dispatch() -> Result<(), String> {
         let scalar = powm1(
             &SpecialTensor::RealScalar(1.0 + 1.0e-15),
