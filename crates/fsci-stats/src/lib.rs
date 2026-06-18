@@ -3464,6 +3464,55 @@ impl BetaDist {
         assert!(b > 0.0, "b must be positive, got {b}");
         Self { a, b }
     }
+
+    /// Log-density at many points, hoisting the `ln_beta(a, b)` normalizer (three
+    /// lgamma evaluations) out of the per-point loop. Byte-identical to mapping
+    /// `logpdf` (same single `- lb` subtraction; boundaries delegate to `pdf`).
+    #[must_use]
+    pub fn logpdf_many(&self, xs: &[f64]) -> Vec<f64> {
+        let lb = ln_beta(self.a, self.b);
+        xs.iter()
+            .map(|&x| {
+                if !(0.0..1.0).contains(&x) || x == 0.0 {
+                    return self.pdf(x).ln();
+                }
+                (self.a - 1.0) * x.ln() + (self.b - 1.0) * (1.0 - x).ln() - lb
+            })
+            .collect()
+    }
+
+    /// Density at many points; hoists `ln_beta(a, b)` like
+    /// [`logpdf_many`](Self::logpdf_many). Byte-identical to mapping `pdf`.
+    #[must_use]
+    pub fn pdf_many(&self, xs: &[f64]) -> Vec<f64> {
+        let lb = ln_beta(self.a, self.b);
+        xs.iter()
+            .map(|&x| {
+                if !(0.0..=1.0).contains(&x) {
+                    return 0.0;
+                }
+                if x == 0.0 {
+                    return if self.a < 1.0 {
+                        f64::INFINITY
+                    } else if self.a == 1.0 {
+                        (-lb).exp()
+                    } else {
+                        0.0
+                    };
+                }
+                if x == 1.0 {
+                    return if self.b < 1.0 {
+                        f64::INFINITY
+                    } else if self.b == 1.0 {
+                        (-lb).exp()
+                    } else {
+                        0.0
+                    };
+                }
+                ((self.a - 1.0) * x.ln() + (self.b - 1.0) * (1.0 - x).ln() - lb).exp()
+            })
+            .collect()
+    }
 }
 
 impl ContinuousDistribution for BetaDist {
@@ -47181,6 +47230,20 @@ mod tests {
         assert_eq!(b.pdf(-0.1), 0.0);
         assert_eq!(b.pdf(1.1), 0.0);
         assert!(b.pdf(0.5) > 0.0);
+    }
+
+    #[test]
+    fn beta_dist_pdf_many_matches_pdf() {
+        // Batch pdf_many/logpdf_many (ln_beta hoisted) must be byte-identical to
+        // per-point pdf/logpdf, including out-of-support and x∈{0,1} boundaries.
+        let b = BetaDist::new(2.5, 3.5);
+        let xs = [-0.1, 0.0, 0.25, 0.5, 0.9, 1.0, 1.1];
+        let pm = b.pdf_many(&xs);
+        let lpm = b.logpdf_many(&xs);
+        for (i, &x) in xs.iter().enumerate() {
+            assert_eq!(pm[i], b.pdf(x), "pdf_many != pdf at {x}");
+            assert_eq!(lpm[i], b.logpdf(x), "logpdf_many != logpdf at {x}");
+        }
     }
 
     #[test]
