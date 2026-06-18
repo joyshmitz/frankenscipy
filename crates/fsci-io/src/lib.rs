@@ -5285,6 +5285,38 @@ mod tests {
     }
 
     #[test]
+    fn savetxt_loadtxt_roundtrip_is_exact() {
+        // savetxt uses f64 Display (shortest round-trippable form), so loadtxt
+        // must recover the data bit-for-bit across signs, decimals, scientific
+        // magnitudes, and zero — for several delimiters.
+        let data = vec![
+            0.0,
+            -1.5,
+            3.25,
+            1.0e-12,
+            -2.5e8,
+            123_456.789,
+            -0.000_125,
+            9.0,
+        ];
+        for delim in [" ", "\t", ","] {
+            let text = savetxt(2, 4, &data, delim).expect("savetxt");
+            // loadtxt is whitespace-delimited; only exercise it for space/tab.
+            if delim == "," {
+                continue;
+            }
+            let (rows, cols, back) = loadtxt(&text).expect("loadtxt");
+            assert_eq!((rows, cols), (2, 4), "shape for delim {delim:?}");
+            assert_eq!(back, data, "round-trip exact for delim {delim:?}");
+        }
+        // A trailing inline comment appended to savetxt output is ignored.
+        let text = savetxt(1, 3, &[1.0, 2.0, 3.0], " ").unwrap();
+        let annotated = format!("{}# generated\n", text.trim_end());
+        let (r, c, back) = loadtxt(&annotated).unwrap();
+        assert_eq!((r, c, back), (1, 3, vec![1.0, 2.0, 3.0]));
+    }
+
+    #[test]
     fn savetxt_basic() {
         let data = vec![1.0, 2.0, 3.0, 4.0];
         let text = savetxt(2, 2, &data, " ").expect("matching shape should succeed");
