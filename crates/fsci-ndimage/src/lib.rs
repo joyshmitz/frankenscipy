@@ -1436,16 +1436,28 @@ pub fn correlate_axes(
 
     // Independent per-output weighted sum over the axes-mapped kernel footprint.
     let kernel_work = weights.size().max(1);
+    let ndim = input.ndim();
+    // Precompute each tap's full-ndim delta ONCE (pixel-independent): 0 on axes the
+    // kernel doesn't touch, the centered+origin-shifted offset on mapped axes. Was
+    // unravelling k_idx and rebuilding in_idx for every pixel×tap. frankenscipy-dn3i6.
+    let tap_delta: Vec<Vec<i64>> = (0..weights.size())
+        .map(|flat_k| {
+            let k_idx = weights.unravel(flat_k);
+            let mut delta = vec![0i64; ndim];
+            for (kernel_axis, &input_axis) in axes.iter().enumerate() {
+                delta[input_axis] =
+                    k_idx[kernel_axis] as i64 - offsets[kernel_axis] - origins[kernel_axis];
+            }
+            delta
+        })
+        .collect();
     fill_pixels_parallel(&mut output, kernel_work, |flat_out, _scratch| {
         let out_idx = input.unravel(flat_out);
+        let mut in_idx = vec![0i64; ndim];
         let mut sum = 0.0;
         for flat_k in 0..weights.size() {
-            let k_idx = weights.unravel(flat_k);
-            let mut in_idx: Vec<i64> = out_idx.iter().map(|&idx| idx as i64).collect();
-            for (kernel_axis, &input_axis) in axes.iter().enumerate() {
-                in_idx[input_axis] = out_idx[input_axis] as i64 + k_idx[kernel_axis] as i64
-                    - offsets[kernel_axis]
-                    - origins[kernel_axis];
+            for d in 0..ndim {
+                in_idx[d] = out_idx[d] as i64 + tap_delta[flat_k][d];
             }
             sum += weights.data[flat_k] * input.get_boundary(&in_idx, mode, cval);
         }
