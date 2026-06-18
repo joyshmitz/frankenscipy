@@ -14795,6 +14795,13 @@ fn parse_resample_poly_pad_mode(
             "cval has no effect when padtype is {padtype}"
         )));
     }
+    if let Some(value) = cval {
+        if !value.is_finite() {
+            return Err(SignalError::InvalidParameter {
+                detail: "cval must be finite".to_string(),
+            });
+        }
+    }
 
     let constant = |value: f64| Ok(ResamplePolyPadMode::Constant(value));
     match padtype {
@@ -23856,6 +23863,22 @@ mod tests {
             err,
             SignalError::InvalidArgument("cval has no effect when padtype is mean".to_string())
         );
+    }
+
+    #[test]
+    fn resample_poly_padtype_rejects_non_finite_cval() {
+        let x = [1.0, 2.0, 4.0, 8.0];
+        for cval in [f64::NAN, f64::INFINITY] {
+            let err = resample_poly_with_padtype(&x, 3, 2, Some("constant"), Some(cval))
+                .expect_err("non-finite cval");
+            assert_eq!(
+                err,
+                SignalError::InvalidParameter {
+                    detail: "cval must be finite".to_string()
+                },
+                "cval={cval:?}"
+            );
+        }
     }
 
     #[test]
