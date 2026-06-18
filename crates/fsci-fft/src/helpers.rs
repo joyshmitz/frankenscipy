@@ -554,6 +554,22 @@ mod tests {
     use crate::{FftError, FftOptions};
 
     #[test]
+    fn fftfreq_rfftfreq_match_scipy() {
+        // scipy.fft.fftfreq/rfftfreq(8, 0.1). fftfreq wraps the Nyquist bin
+        // negative (index 4 -> -5, not +5).
+        let f = fftfreq(8, 0.1).unwrap();
+        let ef = [0.0, 1.25, 2.5, 3.75, -5.0, -3.75, -2.5, -1.25];
+        for (g, e) in f.iter().zip(&ef) {
+            assert!((g - e).abs() < 1e-12, "fftfreq: {g} vs {e}");
+        }
+        let r = rfftfreq(8, 0.1).unwrap();
+        let er = [0.0, 1.25, 2.5, 3.75, 5.0];
+        for (g, e) in r.iter().zip(&er) {
+            assert!((g - e).abs() < 1e-12, "rfftfreq: {g} vs {e}");
+        }
+    }
+
+    #[test]
     fn fftshift_nd_matches_numpy() {
         // 2x3, all axes
         let a: Vec<i32> = (0..6).collect();
