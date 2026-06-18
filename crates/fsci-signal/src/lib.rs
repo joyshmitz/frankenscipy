@@ -5514,6 +5514,12 @@ pub fn thd(magnitudes: &[f64], fundamental_bin: usize) -> f64 {
 
 /// Add white Gaussian noise to a signal at a specified SNR (dB).
 pub fn add_noise(signal: &[f64], snr_db: f64, seed: u64) -> Vec<f64> {
+    if signal.is_empty() {
+        return Vec::new();
+    }
+    if !snr_db.is_finite() || signal.iter().any(|value| !value.is_finite()) {
+        return vec![f64::NAN; signal.len()];
+    }
     let sig_power: f64 = signal.iter().map(|&v| v * v).sum::<f64>() / signal.len().max(1) as f64;
     let noise_power = sig_power / 10.0f64.powf(snr_db / 10.0);
     let noise_std = noise_power.sqrt();
@@ -19710,6 +19716,21 @@ mod tests {
         assert!(snr(&[1.0, f64::NAN], &[0.1, 0.2]).is_nan());
         assert!(snr(&[1.0, 2.0], &[0.1, f64::INFINITY]).is_nan());
         assert!(snr(&[1.0, 2.0], &[0.0, 0.0]).is_infinite());
+    }
+
+    #[test]
+    fn add_noise_rejects_non_finite_controls() {
+        for output in [
+            add_noise(&[1.0, 2.0], f64::NAN, 42),
+            add_noise(&[1.0, f64::INFINITY], 20.0, 42),
+        ] {
+            assert!(
+                output.iter().all(|value| value.is_nan()),
+                "invalid add_noise inputs should produce all-NaN output: {output:?}"
+            );
+        }
+
+        assert!(add_noise(&[], f64::NAN, 42).is_empty());
     }
 
     #[test]
