@@ -50393,6 +50393,16 @@ mod tests {
     }
 
     #[test]
+    fn fisk_pdf_cdf_interior_match_scipy() {
+        // Exact scipy.stats.fisk(c=3) (log-logistic). fisk_pdf_boundary_matches_scipy
+        // only checks the boundary; this pins the pdf/cdf at interior points.
+        let f = Fisk::new(3.0);
+        assert!((f.pdf(1.0) - 0.75).abs() < 1e-12, "pdf(1)");
+        assert!((f.pdf(2.0) - 0.148_148_148_148_148_14).abs() < 1e-12, "pdf(2)");
+        assert!((f.cdf(2.0) - 0.888_888_888_888_888_8).abs() < 1e-12, "cdf(2)");
+    }
+
+    #[test]
     fn fisk_pdf_boundary_matches_scipy() {
         // /mock-code-finder regression for [frankenscipy-zu96v]:
         // fisk.pdf at x=0 is 0/1/+∞ depending on shape c per scipy.
