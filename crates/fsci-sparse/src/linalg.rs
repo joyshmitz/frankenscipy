@@ -1324,6 +1324,8 @@ pub fn pcg(
 
     let mut p = z.clone();
     let mut rz: f64 = r.iter().zip(z.iter()).map(|(ri, zi)| ri * zi).sum();
+    // Reused A·p buffer hoisted out of the PCG loop (byte-identical). frankenscipy-2hclc.
+    let mut ap = vec![0.0; r.len()];
 
     for iteration in 0..max_iter {
         let r_norm: f64 = r.iter().map(|v| v * v).sum::<f64>().sqrt();
@@ -1336,7 +1338,7 @@ pub fn pcg(
             });
         }
 
-        let ap = csr_matvec(a, &p);
+        csr_matvec_into(a, &p, &mut ap);
         let p_ap: f64 = p.iter().zip(ap.iter()).map(|(pi, api)| pi * api).sum();
 
         if p_ap.abs() < f64::EPSILON * 100.0 {
@@ -2135,6 +2137,12 @@ pub fn cgs(
 
     let mut p = r.clone();
     let mut u = r.clone();
+    // Per-iteration scratch hoisted out of the loop and reused (each is fully
+    // overwritten every iteration -> byte-identical). frankenscipy-2hclc.
+    let mut v = vec![0.0; n];
+    let mut q = vec![0.0; n];
+    let mut u_plus_q = vec![0.0; n];
+    let mut a_upq = vec![0.0; n];
 
     for iteration in 0..max_iter {
         let r_norm = vec_norm(&r);
@@ -2157,7 +2165,7 @@ pub fn cgs(
         }
 
         // v = A * p
-        let v = csr_matvec(a, &p);
+        csr_matvec_into(a, &p, &mut v);
 
         let sigma = dot_product(&r_tilde, &v);
         if sigma.abs() < f64::EPSILON * 1e6 {
@@ -2172,13 +2180,11 @@ pub fn cgs(
         let alpha = rho / sigma;
 
         // q = u - alpha * v
-        let mut q = vec![0.0; n];
         for i in 0..n {
             q[i] = u[i] - alpha * v[i];
         }
 
         // u_plus_q = u + q
-        let mut u_plus_q = vec![0.0; n];
         for i in 0..n {
             u_plus_q[i] = u[i] + q[i];
         }
@@ -2189,7 +2195,7 @@ pub fn cgs(
         }
 
         // r = r - alpha * A * (u + q)
-        let a_upq = csr_matvec(a, &u_plus_q);
+        csr_matvec_into(a, &u_plus_q, &mut a_upq);
         for i in 0..n {
             r[i] -= alpha * a_upq[i];
         }
