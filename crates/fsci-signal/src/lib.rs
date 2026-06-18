@@ -9185,6 +9185,15 @@ fn validate_sampling_frequency(fs: f64) -> Result<(), SignalError> {
     }
 }
 
+fn validate_spectral_samples(x: &[f64]) -> Result<(), SignalError> {
+    if x.iter().all(|value| value.is_finite()) {
+        return Ok(());
+    }
+    Err(SignalError::NonFiniteInput {
+        detail: "spectral input samples must be finite".to_string(),
+    })
+}
+
 fn validate_periodogram_window(window: &[f64], n: usize) -> Result<f64, SignalError> {
     if window.len() != n {
         return Err(SignalError::InvalidArgument(format!(
@@ -9228,6 +9237,7 @@ pub fn periodogram(
         ));
     }
     validate_sampling_frequency(fs)?;
+    validate_spectral_samples(x)?;
     let n = x.len();
 
     // scipy.signal.periodogram defaults to detrend='constant': subtract the
@@ -9304,6 +9314,7 @@ pub fn welch(
         ));
     }
     validate_sampling_frequency(fs)?;
+    validate_spectral_samples(x)?;
 
     let nperseg = nperseg.unwrap_or_else(|| x.len().min(256));
     if nperseg == 0 {
@@ -20355,6 +20366,19 @@ mod tests {
     }
 
     #[test]
+    fn periodogram_rejects_non_finite_samples() {
+        for x in [[0.0, f64::NAN, 1.0, -1.0], [0.0, f64::INFINITY, 1.0, -1.0]] {
+            let err = periodogram(&x, 8.0, None).expect_err("non-finite samples");
+            assert_eq!(
+                err,
+                SignalError::NonFiniteInput {
+                    detail: "spectral input samples must be finite".to_string()
+                }
+            );
+        }
+    }
+
+    #[test]
     fn spectral_estimators_reject_invalid_sampling_frequency() {
         fn assert_invalid_fs(err: SignalError, label: &str) {
             assert!(
@@ -20517,6 +20541,30 @@ mod tests {
     #[test]
     fn welch_empty_rejected() {
         assert!(welch(&[], 1.0, None, None, None).is_err());
+    }
+
+    #[test]
+    fn welch_rejects_non_finite_samples() {
+        let mut x = [0.0; 10];
+        x[1] = f64::NAN;
+        let err = welch(&x, 1.0, None, Some(4), Some(0)).expect_err("non-finite samples");
+        assert_eq!(
+            err,
+            SignalError::NonFiniteInput {
+                detail: "spectral input samples must be finite".to_string()
+            }
+        );
+
+        let mut tail_only = [0.0; 10];
+        tail_only[9] = f64::INFINITY;
+        let err = welch(&tail_only, 1.0, None, Some(4), Some(0))
+            .expect_err("non-finite tail sample");
+        assert_eq!(
+            err,
+            SignalError::NonFiniteInput {
+                detail: "spectral input samples must be finite".to_string()
+            }
+        );
     }
 
     #[test]
