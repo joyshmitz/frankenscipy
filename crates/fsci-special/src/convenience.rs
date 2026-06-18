@@ -7316,6 +7316,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn logsumexp_match_scipy_with_stability() {
+        // scipy.special.logsumexp. The large-value case would overflow a naive
+        // exp(), but the max-subtraction keeps it finite (shift-invariant: the
+        // two results differ by exactly 1000).
+        assert!(
+            (logsumexp(&[0.0, 1.0, 2.0]) - 2.407_605_964_444_38).abs() < 1e-12,
+            "lse small"
+        );
+        assert!(
+            (logsumexp(&[1000.0, 1001.0, 1002.0]) - 1002.407_605_964_444_4).abs() < 1e-9,
+            "lse stable"
+        );
+    }
+
+    #[test]
     fn incomplete_gamma_beta_scalars_match_scipy() {
         // scipy.special regularized incomplete gamma/beta (1.17.1).
         use crate::beta::betainc_scalar;
