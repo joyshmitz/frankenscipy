@@ -1055,6 +1055,11 @@ pub fn linprog(
             detail: "c must not be empty".to_string(),
         });
     }
+    if c.iter().any(|value| !value.is_finite()) {
+        return Err(OptError::NonFiniteInput {
+            detail: "c must contain only finite values".to_string(),
+        });
+    }
 
     // Validate dimensions.
     if a_ub.len() != b_ub.len() {
@@ -1072,6 +1077,16 @@ pub fn linprog(
                 detail: format!("A_ub row {i} has {} cols, expected {n}", row.len()),
             });
         }
+        if row.iter().any(|value| !value.is_finite()) {
+            return Err(OptError::NonFiniteInput {
+                detail: format!("A_ub row {i} contains non-finite values"),
+            });
+        }
+    }
+    if b_ub.iter().any(|value| !value.is_finite()) {
+        return Err(OptError::NonFiniteInput {
+            detail: "b_ub must contain only finite values".to_string(),
+        });
     }
     if a_eq.len() != b_eq.len() {
         return Err(OptError::InvalidArgument {
@@ -1088,6 +1103,16 @@ pub fn linprog(
                 detail: format!("A_eq row {i} has {} cols, expected {n}", row.len()),
             });
         }
+        if row.iter().any(|value| !value.is_finite()) {
+            return Err(OptError::NonFiniteInput {
+                detail: format!("A_eq row {i} contains non-finite values"),
+            });
+        }
+    }
+    if b_eq.iter().any(|value| !value.is_finite()) {
+        return Err(OptError::NonFiniteInput {
+            detail: "b_eq must contain only finite values".to_string(),
+        });
     }
 
     // Apply variable bounds by transforming to standard form.
@@ -6077,6 +6102,21 @@ mod tests {
         let a_ub = vec![vec![1.0]]; // wrong number of columns
         let b_ub = vec![5.0];
         assert!(linprog(&c, &a_ub, &b_ub, &[], &[], &[], None).is_err());
+    }
+
+    #[test]
+    fn linprog_rejects_non_finite_coefficients() {
+        let err = linprog(&[f64::NAN], &[], &[], &[], &[], &[], None)
+            .expect_err("NaN objective should fail");
+        assert!(matches!(err, crate::OptError::NonFiniteInput { .. }));
+
+        let err = linprog(&[1.0], &[vec![f64::INFINITY]], &[1.0], &[], &[], &[], None)
+            .expect_err("Inf inequality coefficient should fail");
+        assert!(matches!(err, crate::OptError::NonFiniteInput { .. }));
+
+        let err = linprog(&[1.0], &[], &[], &[vec![1.0]], &[f64::NAN], &[], None)
+            .expect_err("NaN equality RHS should fail");
+        assert!(matches!(err, crate::OptError::NonFiniteInput { .. }));
     }
 
     // ── milp tests ──────────────────────────────────────────────────
