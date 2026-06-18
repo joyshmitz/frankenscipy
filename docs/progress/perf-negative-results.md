@@ -207,3 +207,27 @@ condition so dead ends are not repeated casually.
   initialization costs erase the allocation savings, reject this CSD accumulator
   formulation and do not retry unless retained segment spectra reappear as a
   top-5 signal allocation hotspot.
+
+## 2026-06-18 - frankenscipy-u0ucw - Tall normal-equation Gram/vector streaming
+
+- Agent: cod-a / MistyBirch
+- Lever: compute the full-rank tall `pinv`/`lstsq` normal-equation products
+  directly from DMatrix column slices: `A^T A` is formed symmetrically without
+  materializing `A^T`, and `lstsq` computes `A^T b` / `A^T r` with the same
+  contiguous column-dot helper.
+- Status: pending batch-test. This is a code-first commit per campaign
+  instruction; only local `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a
+  cargo check -p fsci-linalg` is expected before commit.
+- Correctness guard: `normal_equation_column_helpers_match_nalgebra_products`
+  compares the new Gram/vector helpers against the previous nalgebra transpose
+  products, while existing full-rank tall `pinv`/`lstsq` route tests preserve
+  the SVD-reference tolerance contract.
+- Benchmark guard: compare focused tall `pinv`/`lstsq` normal-equation
+  workloads, especially 1000x500 and 3000x1500 shapes from `u0ucw`, against the
+  previous same-worker commit.
+- Retry condition: keep only if same-worker tall `pinv`/`lstsq` timings improve
+  without fast-route acceptance, rank, singular-value, residual, or
+  pseudo-inverse tolerance drift; if the hand-rolled symmetric Gram loses to
+  nalgebra's generic transpose product, reject this exact column-dot formulation
+  and do not retry unless profiling puts `A^T` materialization or Gram formation
+  back in the top linalg hotspot list.

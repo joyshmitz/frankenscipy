@@ -11330,8 +11330,7 @@ fn pinv_full_rank_tall_cholesky_with_min_cols(
         return None;
     }
 
-    let a_t = matrix.transpose();
-    let gram = &a_t * matrix;
+    let gram = symmetric_gram_matrix_from_columns(matrix);
     let mut max_diag = 0.0_f64;
     let mut min_diag = f64::MAX;
     for idx in 0..cols {
@@ -11348,18 +11347,21 @@ fn pinv_full_rank_tall_cholesky_with_min_cols(
 
     let chol = Cholesky::new(gram)?;
     let pseudo_inverse = if tall_pinv_trsm_disabled() {
+        let a_t = matrix.transpose();
         let pinv = chol.solve(&a_t);
         if pinv.iter().any(|value| !value.is_finite()) {
             return None;
         }
         rows_from_dmatrix(&pinv)
     } else if tall_pinv_row_major_solve_disabled() {
+        let a_t = matrix.transpose();
         let pinv = cholesky_solve_matrix_rhs_batched(&chol, &a_t)?;
         if pinv.iter().any(|value| !value.is_finite()) {
             return None;
         }
         rows_from_dmatrix(&pinv)
     } else if tall_pinv_transpose_rhs_copy_disabled() {
+        let a_t = matrix.transpose();
         let rows = cholesky_solve_matrix_rhs_rows_batched(&chol, &a_t)?;
         if rows
             .iter()
@@ -11647,8 +11649,7 @@ fn lstsq_full_rank_tall_cholesky(
         return None;
     }
 
-    let a_t = matrix.transpose();
-    let gram = &a_t * matrix;
+    let gram = symmetric_gram_matrix_from_columns(matrix);
     for idx in 0..cols {
         let diag = gram[(idx, idx)];
         if diag <= 0.0 || !diag.is_finite() {
@@ -11695,7 +11696,7 @@ fn lstsq_full_rank_tall_cholesky(
     // apply one step of iterative refinement to recover the κ(A)^2 → κ(A)
     // accuracy that forming the Gram matrix would otherwise cost (Björck).
     let chol = Cholesky::new(gram.clone())?;
-    let normal_rhs = &a_t * rhs;
+    let normal_rhs = matrix_transpose_mul_vector_from_columns(matrix, rhs)?;
     let mut x = chol.solve(&normal_rhs);
     if x.iter().any(|value| !value.is_finite()) {
         return None;
@@ -11703,7 +11704,7 @@ fn lstsq_full_rank_tall_cholesky(
     // Refinement residual computed against the original A (not the squared
     // Gram): r = A^T (b - A x); correction dx = (A^T A)^{-1} r.
     let primal_residual = rhs - matrix * &x;
-    let refinement_rhs = &a_t * &primal_residual;
+    let refinement_rhs = matrix_transpose_mul_vector_from_columns(matrix, &primal_residual)?;
     let dx = chol.solve(&refinement_rhs);
     if dx.iter().any(|value| !value.is_finite()) {
         return None;
@@ -15856,6 +15857,47 @@ fn simd_dot(x: &[f64], y: &[f64]) -> f64 {
     s
 }
 
+/// Compute `A^T A` directly from nalgebra's contiguous column-major storage.
+///
+/// The full-rank tall `pinv`/`lstsq` routes only need the symmetric Gram
+/// matrix, so this avoids materializing `A^T` and computes each column dot once.
+fn symmetric_gram_matrix_from_columns(matrix: &DMatrix<f64>) -> DMatrix<f64> {
+    let rows = matrix.nrows();
+    let cols = matrix.ncols();
+    let data = matrix.as_slice();
+    let mut gram = DMatrix::<f64>::zeros(cols, cols);
+    for left in 0..cols {
+        let left_col = &data[left * rows..(left + 1) * rows];
+        for right in left..cols {
+            let right_col = &data[right * rows..(right + 1) * rows];
+            let value = simd_dot(left_col, right_col);
+            gram[(left, right)] = value;
+            gram[(right, left)] = value;
+        }
+    }
+    gram
+}
+
+/// Compute `A^T v` without constructing `A^T`.
+fn matrix_transpose_mul_vector_from_columns(
+    matrix: &DMatrix<f64>,
+    vector: &DVector<f64>,
+) -> Option<DVector<f64>> {
+    let rows = matrix.nrows();
+    let cols = matrix.ncols();
+    if vector.len() != rows {
+        return None;
+    }
+    let data = matrix.as_slice();
+    let vector = vector.as_slice();
+    let mut out = DVector::<f64>::zeros(cols);
+    for col in 0..cols {
+        let matrix_col = &data[col * rows..(col + 1) * rows];
+        out[col] = simd_dot(matrix_col, vector);
+    }
+    Some(out)
+}
+
 fn cholesky_syrk_rows(rows: &mut [Vec<f64>], row_offset: usize, l21: &[f64], nb: usize, kb: usize) {
     for (local_i, row) in rows.iter_mut().enumerate() {
         let ii = row_offset + local_i;
@@ -19129,6 +19171,32 @@ mod tests {
             1e-7,
             1e-7,
         );
+    }
+
+    #[test]
+    fn normal_equation_column_helpers_match_nalgebra_products() {
+        let rows = 33;
+        let cols = 17;
+        let matrix = DMatrix::from_fn(rows, cols, |row, col| {
+            let diagonal = if row == col { 7.0 + col as f64 } else { 0.0 };
+            let smooth = ((row * 23 + col * 31 + 5) % 59) as f64 / 131.0;
+            diagonal + smooth
+        });
+        let rhs = DVector::from_fn(rows, |row, _| ((row * 17 + 11) % 43) as f64 / 19.0 - 1.0);
+
+        let a_t = matrix.transpose();
+        let expected_gram = &a_t * &matrix;
+        let actual_gram = symmetric_gram_matrix_from_columns(&matrix);
+        assert!(max_abs_dmatrix_diff(&actual_gram, &expected_gram) <= 1e-10);
+
+        let expected_rhs = &a_t * &rhs;
+        let actual_rhs =
+            matrix_transpose_mul_vector_from_columns(&matrix, &rhs).expect("A^T rhs");
+        let mut max_rhs_diff = 0.0_f64;
+        for idx in 0..cols {
+            max_rhs_diff = max_rhs_diff.max((actual_rhs[idx] - expected_rhs[idx]).abs());
+        }
+        assert!(max_rhs_diff <= 1e-10);
     }
 
     #[test]
