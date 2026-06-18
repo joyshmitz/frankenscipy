@@ -2270,6 +2270,11 @@ pub fn kmeans(
             "k={k} must be in [1, n={n}]"
         )));
     }
+    if max_iter == 0 {
+        return Err(ClusterError::InvalidArgument(
+            "max_iter must be positive".to_string(),
+        ));
+    }
 
     // K-means++ initialization
     let mut centroids = kmeans_plusplus_init(data, k, seed);
@@ -2420,6 +2425,11 @@ pub fn mini_batch_kmeans(
         return Err(ClusterError::InvalidArgument(format!(
             "k={k} must be in [1, n={n}]"
         )));
+    }
+    if max_iter == 0 {
+        return Err(ClusterError::InvalidArgument(
+            "max_iter must be positive".to_string(),
+        ));
     }
     if batch_size == 0 {
         return Err(ClusterError::InvalidArgument(
@@ -7262,6 +7272,18 @@ mod tests {
     fn mini_batch_kmeans_rejects_ragged_input() {
         let data = vec![vec![1.0, 2.0], vec![3.0]];
         let err = mini_batch_kmeans(&data, 1, 5, 1, 7).expect_err("ragged input");
+        assert!(matches!(err, ClusterError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn kmeans_rejects_zero_iteration_budgets() {
+        let data = vec![vec![0.0, 0.0], vec![1.0, 1.0]];
+
+        let err = kmeans(&data, 1, 0, 42).expect_err("kmeans should reject max_iter=0");
+        assert!(matches!(err, ClusterError::InvalidArgument(_)));
+
+        let err = mini_batch_kmeans(&data, 1, 0, 1, 42)
+            .expect_err("mini_batch_kmeans should reject max_iter=0");
         assert!(matches!(err, ClusterError::InvalidArgument(_)));
     }
 
