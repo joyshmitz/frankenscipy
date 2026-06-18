@@ -9544,6 +9544,22 @@ mod tests {
     }
 
     #[test]
+    fn interp1d_linear_match_scipy() {
+        // scipy.interpolate.interp1d default (linear) on y=x^2 nodes: midpoints
+        // are the average of adjacent node values.
+        let f = Interp1d::new(
+            &[0.0, 1.0, 2.0, 3.0],
+            &[0.0, 1.0, 4.0, 9.0],
+            Interp1dOptions::default(),
+        )
+        .expect("interp1d");
+        let out = f.eval_many(&[0.5, 1.5, 2.5]).expect("eval");
+        for (g, e) in out.iter().zip(&[0.5, 2.5, 6.5]) {
+            assert!((g - e).abs() < 1e-12, "interp1d: {g} vs {e}");
+        }
+    }
+
+    #[test]
     fn griddata_linear_nearest_match_scipy() {
         // scipy.interpolate.griddata on unit-square corners with f(x,y)=x+y.
         let pts = vec![
