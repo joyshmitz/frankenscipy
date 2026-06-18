@@ -16749,6 +16749,40 @@ mod tests {
     }
 
     #[test]
+    fn svd_reconstructs_and_singular_values_descending() {
+        // Property test (no sign assumption): A = U·diag(s)·Vᵀ, s descending and
+        // non-negative, U and Vᵀ orthonormal.
+        let a = vec![
+            vec![1.0, 2.0, 3.0],
+            vec![4.0, 5.0, 6.0],
+            vec![7.0, 8.0, 10.0],
+        ];
+        let r = svd(&a, DecompOptions::default()).expect("svd");
+        let n = 3;
+        for i in 0..n {
+            for j in 0..n {
+                let s: f64 = (0..n).map(|k| r.u[i][k] * r.s[k] * r.vt[k][j]).sum();
+                assert!((s - a[i][j]).abs() < 1e-9, "USV[{i}][{j}]: {s} vs {}", a[i][j]);
+            }
+        }
+        for k in 0..n {
+            assert!(r.s[k] >= -1e-12, "s[{k}] negative: {}", r.s[k]);
+        }
+        for k in 1..n {
+            assert!(r.s[k] <= r.s[k - 1] + 1e-12, "s not descending at {k}");
+        }
+        for i in 0..n {
+            for j in 0..n {
+                let want = if i == j { 1.0 } else { 0.0 };
+                let utu: f64 = (0..n).map(|k| r.u[k][i] * r.u[k][j]).sum();
+                assert!((utu - want).abs() < 1e-9, "UtU[{i}][{j}]");
+                let vvt: f64 = (0..n).map(|k| r.vt[i][k] * r.vt[j][k]).sum();
+                assert!((vvt - want).abs() < 1e-9, "VVt[{i}][{j}]");
+            }
+        }
+    }
+
+    #[test]
     fn qr_reconstructs_and_is_orthonormal() {
         // Property test (no sign assumption): A = Q·R, Qᵀ·Q = I, R upper-tri.
         let a = vec![
