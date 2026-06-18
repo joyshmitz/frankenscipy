@@ -5107,6 +5107,32 @@ mod tests {
     }
 
     #[test]
+    fn closeness_betweenness_on_path_graph() {
+        use crate::{CsrMatrix, Shape2D};
+        // Undirected path 0-1-2. closeness/betweenness_centrality were untested.
+        let g = CsrMatrix::from_components(
+            Shape2D::new(3, 3),
+            vec![1.0, 1.0, 1.0, 1.0],
+            vec![1, 0, 2, 1],
+            vec![0, 1, 3, 4],
+            false,
+        )
+        .unwrap();
+        // closeness = reachable_count / sum_dist: center=2/2=1, endpoints=2/3.
+        let cc = closeness_centrality(&g);
+        assert!(
+            (cc[0] - 2.0 / 3.0).abs() < 1e-12
+                && (cc[1] - 1.0).abs() < 1e-12
+                && (cc[2] - 2.0 / 3.0).abs() < 1e-12,
+            "closeness {cc:?}"
+        );
+        // betweenness: only the center lies on the 0-2 shortest path; endpoints 0.
+        let bc = betweenness_centrality(&g);
+        assert!(bc[0].abs() < 1e-12 && bc[2].abs() < 1e-12, "endpoints 0: {bc:?}");
+        assert!(bc[1] > 0.0, "center > 0: {bc:?}");
+    }
+
+    #[test]
     fn sparse_ops2_match_numpy() {
         use crate::{CsrMatrix, Shape2D};
         // A=[[1,0],[2,3]], B=[[1,1],[0,1]]. These ops were previously untested.
