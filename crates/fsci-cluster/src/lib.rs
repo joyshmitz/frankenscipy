@@ -8472,6 +8472,30 @@ mod tests {
     }
 
     #[test]
+    fn linkage_single_match_scipy() {
+        // scipy.cluster.hierarchy.linkage(X, method='single') Z-matrix for two
+        // well-separated pairs; final merge distance = sqrt(41) (single linkage).
+        let x = vec![
+            vec![0.0, 0.0],
+            vec![0.0, 1.0],
+            vec![5.0, 5.0],
+            vec![5.0, 6.0],
+        ];
+        let z = linkage(&x, LinkageMethod::Single).expect("linkage");
+        let expect = [
+            [0.0, 1.0, 1.0, 2.0],
+            [2.0, 3.0, 1.0, 2.0],
+            [4.0, 5.0, 6.403_124_237_432_849, 4.0],
+        ];
+        assert_eq!(z.len(), 3);
+        for (gr, er) in z.iter().zip(&expect) {
+            for (g, e) in gr.iter().zip(er) {
+                assert!((g - e).abs() < 1e-12, "linkage: {g} vs {e}");
+            }
+        }
+    }
+
+    #[test]
     fn cluster_indices_match_sklearn_exactly() {
         // Exact golden values from sklearn.metrics for the two well-separated
         // clusters [[0,0],[1,1],[10,10],[11,11]] with labels [0,0,1,1]. The other
