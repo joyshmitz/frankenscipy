@@ -5657,6 +5657,36 @@ mod tests {
     }
 
     #[test]
+    fn cdist_pdist_match_scipy() {
+        // scipy.spatial.distance.cdist (euclidean) and pdist (condensed), 1.17.1.
+        let a = vec![vec![0.0, 0.0], vec![1.0, 1.0]];
+        let b = vec![vec![1.0, 0.0], vec![0.0, 2.0]];
+        let c = cdist(&a, &b).unwrap();
+        let ec = [[1.0, 2.0], [1.0, std::f64::consts::SQRT_2]];
+        for (gr, er) in c.iter().zip(&ec) {
+            for (g, e) in gr.iter().zip(er) {
+                assert!((g - e).abs() < 1e-12, "cdist: {g} vs {e}");
+            }
+        }
+        let x = vec![vec![0.0, 0.0], vec![1.0, 1.0], vec![2.0, 0.0]];
+        let pe = pdist(&x, DistanceMetric::Euclidean).unwrap();
+        for (g, e) in pe
+            .iter()
+            .zip(&[std::f64::consts::SQRT_2, 2.0, std::f64::consts::SQRT_2])
+        {
+            assert!((g - e).abs() < 1e-12, "pdist euclidean: {g} vs {e}");
+        }
+        assert_eq!(
+            pdist(&x, DistanceMetric::Cityblock).unwrap(),
+            vec![2.0, 2.0, 2.0]
+        );
+        assert_eq!(
+            pdist(&x, DistanceMetric::Chebyshev).unwrap(),
+            vec![1.0, 2.0, 1.0]
+        );
+    }
+
+    #[test]
     fn boolean_metrics_match_scipy_1_17() {
         // Golden values from scipy.spatial.distance (1.17.1) for
         // u=[T,F,T,F], v=[T,T,F,F]: contingency ntt=ntf=nft=nff=1.
