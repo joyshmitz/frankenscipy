@@ -2983,6 +2983,13 @@ where
             detail: "integration bounds and singular point must be finite".to_string(),
         });
     }
+    let lo = a.min(b);
+    let hi = a.max(b);
+    if !(singular_point > lo && singular_point < hi) {
+        return Err(IntegrateValidationError::QuadInvalidBounds {
+            detail: "singular point must lie strictly inside the integration interval".to_string(),
+        });
+    }
     let eps = 1e-8 * (b - a).abs();
 
     let left = quad(&f, a, singular_point - eps, options)?;
@@ -3939,6 +3946,30 @@ mod tests {
                 QuadOptions::default(),
             )
             .expect_err("quad_neg_inf anchor should fail");
+            assert!(matches!(
+                err,
+                IntegrateValidationError::QuadInvalidBounds { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn quad_cauchy_pv_rejects_singularity_outside_interval() {
+        for (a, b, singular_point) in [
+            (0.0, 1.0, -0.5),
+            (0.0, 1.0, 0.0),
+            (0.0, 1.0, 1.0),
+            (0.0, 1.0, 1.5),
+            (1.0, 0.0, -0.5),
+        ] {
+            let err = quad_cauchy_pv(
+                |_| -> f64 { panic!("invalid Cauchy-PV singular point should not be sampled") },
+                a,
+                b,
+                singular_point,
+                QuadOptions::default(),
+            )
+            .expect_err("singular point outside interval should fail");
             assert!(matches!(
                 err,
                 IntegrateValidationError::QuadInvalidBounds { .. }
