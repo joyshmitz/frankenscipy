@@ -69830,6 +69830,18 @@ mod tests {
     }
 
     #[test]
+    fn wrapcauchy_pdf_cdf_match_scipy() {
+        // Exact scipy.stats.wrapcauchy(0.5). wrapcauchy_pdf_integrates_to_one only
+        // checks the integral. Cross-read: fsci pdf (1-c^2)/(2pi(1+c^2-2c cos x))
+        // matches scipy.
+        let d = WrapCauchy::new(0.5);
+        assert!((d.pdf(1.0) - 0.168_193_032_478_337_94).abs() < 1e-12, "pdf(1)");
+        assert!((d.pdf(3.0) - 0.053_288_663_912_972_586).abs() < 1e-12, "pdf(3)");
+        assert!((d.cdf(1.0) - 0.325_611_226_207_336_35).abs() < 1e-10, "cdf(1)");
+        assert!((d.cdf(3.0) - 0.492_477_102_304_080_2).abs() < 1e-10, "cdf(3)");
+    }
+
+    #[test]
     fn wrapcauchy_pdf_integrates_to_one() {
         // /porting-to-rust: verify the new WrapCauchy distribution
         // satisfies ∫₀^{2π} pdf(x) dx ≈ 1 across multiple c values.
