@@ -61616,6 +61616,16 @@ mod tests {
     }
 
     #[test]
+    fn gen_logistic_pdf_cdf_match_scipy() {
+        // Exact scipy.stats.genlogistic(c=2). The GenLogistic suite covers entropy,
+        // moments, skew/kurt, and fit but no exact pdf/cdf at a point.
+        let g = GenLogistic::new(2.0);
+        assert!((g.pdf(0.0) - 0.25).abs() < 1e-12, "pdf(0)");
+        assert!((g.pdf(1.0) - 0.287_469_680_914_430_26).abs() < 1e-12, "pdf(1)");
+        assert!((g.cdf(0.0) - 0.25).abs() < 1e-12, "cdf(0)");
+    }
+
+    #[test]
     fn gen_logistic_moments_match_scipy_reference_values() {
         let cases = [
             (0.5, (-1.386_294_361_119_890_8, 6.579_736_267_392_906_5)),
