@@ -5778,7 +5778,7 @@ fn symmetric_lower_band_lanczos_eigenvalues(
 ///
 /// Matches `scipy.linalg.eigvals_banded(a_band, lower)`: the eigenvalue-only
 /// path of [`eig_banded`]. `ab` is the banded storage (bandwidth+1 rows × n);
-/// only `lower = true` storage is supported, as for [`eig_banded`].
+/// lower and upper SciPy band storage are both supported.
 pub fn eigvals_banded(
     ab: &[Vec<f64>],
     lower: bool,
@@ -5794,15 +5794,19 @@ pub fn eigvals_banded(
 /// and optionally eigenvectors. The matrix is first reduced to tridiagonal form
 /// using Householder transformations, then solved via the QR algorithm.
 ///
-/// Banded storage format (lower=true):
+/// Banded storage format (`lower=true`):
 /// - ab[0, :] = main diagonal
 /// - ab[k, i] = A[i+k, i] for k = 1, ..., lower_bandwidth
+///
+/// Banded storage format (`lower=false`):
+/// - ab[upper_bandwidth, :] = main diagonal
+/// - ab[upper_bandwidth-k, i] = A[i-k, i] for k = 1, ..., upper_bandwidth
 ///
 /// Matches `scipy.linalg.eig_banded(a_band, lower, eigvals_only, ...)`.
 ///
 /// # Arguments
-/// * `ab` - Banded matrix in lower band storage, shape (bandwidth+1, n)
-/// * `lower` - If true, ab contains lower band (only lower=true supported currently)
+/// * `ab` - Banded matrix in SciPy band storage, shape (bandwidth+1, n)
+/// * `lower` - If true, ab contains lower band; otherwise it contains upper band
 /// * `eigvals_only` - If true, only compute eigenvalues
 /// * `options` - Decomposition options
 pub fn eig_banded(
@@ -5845,11 +5849,17 @@ pub fn eig_banded(
     }
 
     if !lower {
-        // Convert upper to lower band storage
-        // For now, only support lower=true
-        return Err(LinalgError::NotSupported {
-            detail: "eig_banded currently only supports lower=true".to_string(),
-        });
+        let upper_bandwidth = bandwidth_plus_1 - 1;
+        let mut lower_ab = vec![vec![0.0; n]; bandwidth_plus_1];
+        for col in 0..n {
+            lower_ab[0][col] = ab[upper_bandwidth][col];
+            for offset in 1..=upper_bandwidth {
+                if col + offset < n {
+                    lower_ab[offset][col] = ab[upper_bandwidth - offset][col + offset];
+                }
+            }
+        }
+        return eig_banded(&lower_ab, true, eigvals_only, options);
     }
 
     // Special case: tridiagonal (bandwidth = 1)
@@ -25171,6 +25181,17 @@ mod proptest_tests {
         }
     }
 
+    fn assert_close_slice(actual: &[f64], expected: &[f64], atol: f64, rtol: f64) {
+        assert_eq!(actual.len(), expected.len());
+        for (idx, (a, e)) in actual.iter().zip(expected.iter()).enumerate() {
+            let tol = atol + rtol * e.abs();
+            assert!(
+                (a - e).abs() <= tol,
+                "index={idx} expected={e} actual={a} tol={tol}"
+            );
+        }
+    }
+
     fn rotated_diagonal(lambda1: f64, lambda2: f64) -> Vec<Vec<f64>> {
         let diag = 0.5 * (lambda1 + lambda2);
         let off_diag = 0.5 * (lambda1 - lambda2);
@@ -26900,6 +26921,55 @@ mod proptest_tests {
             eig_banded(&ab, true, true, DecompOptions::default()).expect("eigvals only");
         assert_eq!(eigenvalues.len(), 3);
         assert!(eigenvectors.is_none());
+    }
+
+    #[test]
+    fn eig_banded_upper_tridiagonal() {
+        // Upper band storage for A = [[2, 1, 0], [1, 2, 1], [0, 1, 2]]:
+        // ab[1] is the diagonal and ab[0][j] is A[j-1, j].
+        let ab = vec![vec![0.0, 1.0, 1.0], vec![2.0, 2.0, 2.0]];
+        let (eigenvalues, eigenvectors) =
+            eig_banded(&ab, false, false, DecompOptions::default()).expect("upper eig_banded");
+        let sqrt2 = std::f64::consts::SQRT_2;
+        assert_close_slice(
+            &eigenvalues,
+            &[2.0 - sqrt2, 2.0, 2.0 + sqrt2],
+            1e-8,
+            1e-8,
+        );
+        assert!(eigenvectors.is_some());
+    }
+
+    #[test]
+    fn eig_banded_upper_matches_lower_wide_band() {
+        let lower_ab = vec![
+            vec![4.0, 5.0, 6.0, 7.0],
+            vec![0.5, 0.25, 0.75, 0.0],
+            vec![0.125, 0.375, 0.0, 0.0],
+        ];
+        let upper_ab = vec![
+            vec![0.0, 0.0, 0.125, 0.375],
+            vec![0.0, 0.5, 0.25, 0.75],
+            vec![4.0, 5.0, 6.0, 7.0],
+        ];
+
+        let (lower_values, lower_vectors) =
+            eig_banded(&lower_ab, true, false, DecompOptions::default()).expect("lower");
+        let (upper_values, upper_vectors) =
+            eig_banded(&upper_ab, false, false, DecompOptions::default()).expect("upper");
+        assert_close_slice(&upper_values, &lower_values, 1e-12, 1e-12);
+        assert_close_matrix(
+            &upper_vectors.expect("upper vectors"),
+            &lower_vectors.expect("lower vectors"),
+            1e-12,
+            1e-12,
+        );
+
+        let lower_values_only =
+            eigvals_banded(&lower_ab, true, DecompOptions::default()).expect("lower values");
+        let upper_values_only =
+            eigvals_banded(&upper_ab, false, DecompOptions::default()).expect("upper values");
+        assert_close_slice(&upper_values_only, &lower_values_only, 1e-12, 1e-12);
     }
 
     #[test]
