@@ -4826,6 +4826,26 @@ impl Rotation {
         ]
     }
 
+    /// Rotate many vectors (the realistic point-cloud workload, matching
+    /// `scipy.spatial.transform.Rotation.apply` on an array of vectors).
+    ///
+    /// Byte-identical to mapping [`apply`](Self::apply), but the quaternion→matrix
+    /// conversion is done ONCE rather than for every vector.
+    #[must_use]
+    pub fn apply_many(&self, vectors: &[[f64; 3]]) -> Vec<[f64; 3]> {
+        let m = self.as_matrix();
+        vectors
+            .iter()
+            .map(|&[x, y, z]| {
+                [
+                    m[0][0] * x + m[0][1] * y + m[0][2] * z,
+                    m[1][0] * x + m[1][1] * y + m[1][2] * z,
+                    m[2][0] * x + m[2][1] * y + m[2][2] * z,
+                ]
+            })
+            .collect()
+    }
+
     /// Return the inverse rotation.
     #[must_use]
     pub fn inv(&self) -> Self {
@@ -8090,6 +8110,22 @@ mod tests {
         assert!((rv[0]).abs() < 1e-12);
         assert!((rv[1] - 1.0).abs() < 1e-12);
         assert!((rv[2]).abs() < 1e-12);
+    }
+
+    #[test]
+    fn rotation_apply_many_matches_apply() {
+        // apply_many (matrix precomputed once) must be byte-identical to per-vector apply.
+        let r = Rotation::from_quat([
+            0.022260026714733816,
+            0.43967973954090955,
+            0.3604234056503559,
+            0.8223631719059994,
+        ]);
+        let pts = [[0.5, -1.0, 2.0], [1.0, 0.0, 0.0], [-3.0, 2.5, -0.25]];
+        let batch = r.apply_many(&pts);
+        for (p, b) in pts.iter().zip(batch.iter()) {
+            assert_eq!(*b, r.apply(*p), "apply_many != apply at {p:?}");
+        }
     }
 
     #[test]
