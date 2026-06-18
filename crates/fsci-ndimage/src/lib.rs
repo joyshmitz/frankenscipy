@@ -9368,6 +9368,27 @@ mod tests {
     }
 
     #[test]
+    fn center_of_mass_match_scipy() {
+        // scipy.ndimage.center_of_mass of the whole array (single all-ones label):
+        // a symmetric plus -> (1,1); the weighted case [[1,0],[0,3]] -> (0.75,0.75).
+        let input = NdArray::new(
+            vec![0.0, 1.0, 0.0, 1.0, 1.0, 1.0, 0.0, 1.0, 0.0],
+            vec![3, 3],
+        )
+        .unwrap();
+        let labels = NdArray::new(vec![1.0; 9], vec![3, 3]).unwrap();
+        let com = center_of_mass(&input, &labels, 1).expect("com");
+        assert_eq!(com.len(), 1);
+        assert!((com[0][0] - 1.0).abs() < 1e-12, "com row: {}", com[0][0]);
+        assert!((com[0][1] - 1.0).abs() < 1e-12, "com col: {}", com[0][1]);
+
+        let w_in = NdArray::new(vec![1.0, 0.0, 0.0, 3.0], vec![2, 2]).unwrap();
+        let w_lbl = NdArray::new(vec![1.0; 4], vec![2, 2]).unwrap();
+        let wc = center_of_mass(&w_in, &w_lbl, 1).expect("weighted com");
+        assert!((wc[0][0] - 0.75).abs() < 1e-12 && (wc[0][1] - 0.75).abs() < 1e-12, "wcom: {:?}", wc[0]);
+    }
+
+    #[test]
     fn label_connected_components_match_scipy() {
         // scipy.ndimage.label default (4-connectivity cross) on a 3x4 binary image.
         let input = NdArray::new(
