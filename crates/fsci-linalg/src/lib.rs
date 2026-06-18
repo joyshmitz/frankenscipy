@@ -3182,10 +3182,12 @@ pub fn randomized_rcond_estimate(
 // Matrix Decompositions — Public API
 // ══════════════════════════════════════════════════════════════════════
 
-/// LU decomposition with partial pivoting: PA = LU.
+/// LU decomposition with partial pivoting: `A = P · L · U`.
 ///
-/// Returns permutation matrix P, unit lower triangular L, and upper triangular U.
-/// Matches `scipy.linalg.lu(a)`.
+/// Returns the permutation matrix P, unit lower triangular L, and upper
+/// triangular U. The returned P follows SciPy's `scipy.linalg.lu(a)` convention
+/// `A = P · L · U` (equivalently `Pᵀ · A = L · U`) — NOT the `P · A = L · U`
+/// form; the implementation transposes nalgebra's row-permutation accordingly.
 pub fn lu(a: &[Vec<f64>], options: DecompOptions) -> Result<LuResult, LinalgError> {
     let (rows, cols) = matrix_shape(a)?;
     if rows != cols {
