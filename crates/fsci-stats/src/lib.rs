@@ -41069,6 +41069,24 @@ impl ContinuousDistribution for FoldedCauchy {
         ((x - c).atan() + (x + c).atan()) / PI
     }
 
+    fn sf(&self, x: f64) -> f64 {
+        if x <= 0.0 {
+            return 1.0;
+        }
+        let c = self.c;
+        // The trait default 1 - cdf cancels in the right tail (cdf -> 1):
+        // foldcauchy(0).sf(1e8) = 6.366e-9 but 1-cdf loses ~8 digits. Using the
+        // identity atan(y)+atan(1/y)=pi/2 (y>0), sf = (atan(1/(x-c))+
+        // atan(1/(x+c)))/pi without cancellation. Valid where x-c>0 (and x+c>0);
+        // for x<=c the cdf is far from 1 so the default form is already accurate.
+        // Continuous at x=c (both branches -> 1 - atan(2c)/pi). Matches scipy.
+        if x - c > 0.0 && x + c > 0.0 {
+            ((1.0 / (x - c)).atan() + (1.0 / (x + c)).atan()) / PI
+        } else {
+            1.0 - ((x - c).atan() + (x + c).atan()) / PI
+        }
+    }
+
     fn mean(&self) -> f64 {
         f64::INFINITY
     }
@@ -71510,6 +71528,17 @@ mod tests {
         let hm = hmean(&data);
         let expected_hm = 5.0 / (1.0 + 0.5 + 1.0 / 3.0 + 0.25 + 0.2);
         assert!((hm - expected_hm).abs() < 1e-10, "hmean, got {}", hm);
+    }
+
+    #[test]
+    fn foldcauchy_sf_tail_match_scipy() {
+        // scipy.stats.foldcauchy(0.5). The default 1-cdf cancels in the right
+        // tail; the closed-form sf stays accurate (sf(1e8)=6.37e-9).
+        let h = FoldedCauchy { c: 0.5 };
+        assert!((h.sf(2.0) - 0.308_285_983_401_842_2).abs() < 1e-12, "sf(2)");
+        let rel = |g: f64, e: f64| (g - e).abs() / e < 1e-12;
+        assert!(rel(h.sf(1e4), 6.366_197_718_370_65e-5), "sf(1e4): {}", h.sf(1e4));
+        assert!(rel(h.sf(1e8), 6.366_197_723_675_814e-9), "sf(1e8): {}", h.sf(1e8));
     }
 
     #[test]
