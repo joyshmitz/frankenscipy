@@ -2611,10 +2611,15 @@ pub fn gaussian_mixture(
     let mut old_ll = f64::NEG_INFINITY;
     let mut iters = 0;
 
+    // E-step scratch hoisted out of the EM loop: log_norm (k) is rewritten each
+    // iteration, logp (k) is rewritten for every data point — was allocated
+    // n×max_iter times. Both fully overwritten before read -> byte-identical.
+    // frankenscipy-5ufms.
+    let mut log_norm = vec![0.0f64; k];
+    let mut logp = vec![0.0f64; k];
     for it in 0..max_iter {
         iters = it + 1;
         // Precompute per-component log-weight and −½Σ log(2π σ²) normalizer.
-        let mut log_norm = vec![0.0f64; k];
         for c in 0..k {
             let mut s = weights[c].max(FLOOR).ln();
             for &cov in &covariances[c] {
@@ -2626,7 +2631,6 @@ pub fn gaussian_mixture(
         // E-step: responsibilities + total log-likelihood (log-sum-exp per point).
         let mut total_ll = 0.0;
         for (i, row) in data.iter().enumerate() {
-            let mut logp = vec![0.0f64; k];
             let mut maxlp = f64::NEG_INFINITY;
             for c in 0..k {
                 let mut s = log_norm[c];
@@ -2837,11 +2841,15 @@ pub fn gaussian_mixture_full(
     let mut old_ll = f64::NEG_INFINITY;
     let mut iters = 0;
 
+    // E-step scratch hoisted out of the EM loop (logp was allocated n×max_iter
+    // times; both fully overwritten before read -> byte-identical).
+    // frankenscipy-5ufms.
+    let mut log_norm = vec![0.0f64; k];
+    let mut logp = vec![0.0f64; k];
     for it in 0..max_iter {
         iters = it + 1;
         // Per-component Cholesky factor + log-normalizer (log π_k − ½ log det Σ_k − (d/2)log2π).
         let mut chols: Vec<Vec<Vec<f64>>> = Vec::with_capacity(k);
-        let mut log_norm = vec![0.0f64; k];
         for c in 0..k {
             let l = cholesky_lower(&covariances[c], d).ok_or_else(|| {
                 ClusterError::ConvergenceFailed(format!(
@@ -2857,7 +2865,6 @@ pub fn gaussian_mixture_full(
         let mut total_ll = 0.0;
         let mut y = vec![0.0f64; d];
         for (i, row) in data.iter().enumerate() {
-            let mut logp = vec![0.0f64; k];
             let mut maxlp = f64::NEG_INFINITY;
             for c in 0..k {
                 let l = &chols[c];
