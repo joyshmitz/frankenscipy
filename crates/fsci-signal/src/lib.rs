@@ -1218,6 +1218,8 @@ pub fn correlate2d(
     checked_2d_element_count(a_shape, a.len())?;
     let v_len = checked_2d_element_count(v_shape, v.len())?;
     checked_nonempty_2d_shapes(a_shape, v_shape)?;
+    validate_real_values_finite(a, "correlate2d first input samples must be finite")?;
+    validate_real_values_finite(v, "correlate2d second input samples must be finite")?;
 
     // Reverse v in both dimensions for correlation
     let mut v_rev = vec![0.0; v_len];
@@ -1359,6 +1361,8 @@ pub fn convolve2d(
     let (vr, vc) = v_shape;
     let v_len = checked_2d_element_count(v_shape, v.len())?;
     checked_nonempty_2d_shapes(a_shape, v_shape)?;
+    validate_real_values_finite(a, "convolve2d first input samples must be finite")?;
+    validate_real_values_finite(v, "convolve2d second input samples must be finite")?;
     // Flip the kernel in both axes; correlate2d flips again internally, so the
     // net effect is a true convolution Σ a[i,j]·v[m-i, n-j].
     let mut v_flip = vec![0.0; v_len];
@@ -1493,6 +1497,13 @@ pub fn correlate2d_with_boundary(
     checked_2d_element_count(a_shape, a.len())?;
     checked_2d_element_count(v_shape, v.len())?;
     checked_nonempty_2d_shapes(a_shape, v_shape)?;
+    validate_real_values_finite(a, "correlate2d boundary first input samples must be finite")?;
+    validate_real_values_finite(v, "correlate2d boundary second input samples must be finite")?;
+    if !cval.is_finite() {
+        return Err(SignalError::NonFiniteInput {
+            detail: "correlate2d boundary fill value must be finite".to_string(),
+        });
+    }
     if matches!(mode, ConvolveMode::Valid) && (ar < vr || ac < vc) {
         return Err(SignalError::InvalidArgument(
             "in valid mode, a must be at least as large as v".to_string(),
@@ -1526,6 +1537,13 @@ pub fn convolve2d_with_boundary(
     checked_2d_element_count(a_shape, a.len())?;
     let v_len = checked_2d_element_count(v_shape, v.len())?;
     checked_nonempty_2d_shapes(a_shape, v_shape)?;
+    validate_real_values_finite(a, "convolve2d boundary first input samples must be finite")?;
+    validate_real_values_finite(v, "convolve2d boundary second input samples must be finite")?;
+    if !cval.is_finite() {
+        return Err(SignalError::NonFiniteInput {
+            detail: "convolve2d boundary fill value must be finite".to_string(),
+        });
+    }
     if matches!(mode, ConvolveMode::Valid) && (ar < vr || ac < vc) {
         return Err(SignalError::InvalidArgument(
             "in valid mode, a must be at least as large as v".to_string(),
@@ -24534,6 +24552,64 @@ mod tests {
                 16.0, 24.0, 28.0, 23.0, 24.0, 32.0, 32.0, 24.0, 24.0, 32.0, 32.0, 24.0, -28.0,
                 -40.0, -44.0, -35.0
             ]
+        );
+    }
+
+    #[test]
+    fn convolve2d_paths_reject_non_finite_values() {
+        let a = [1.0, 2.0, 3.0, 4.0];
+        let v = [1.0, 0.0, 0.0, 1.0];
+        assert_eq!(
+            correlate2d(
+                &[1.0, f64::NAN, 3.0, 4.0],
+                (2, 2),
+                &v,
+                (2, 2),
+                ConvolveMode::Full
+            ),
+            Err(SignalError::NonFiniteInput {
+                detail: "correlate2d first input samples must be finite".to_string(),
+            })
+        );
+        assert_eq!(
+            convolve2d(
+                &a,
+                (2, 2),
+                &[1.0, f64::INFINITY, 0.0, 1.0],
+                (2, 2),
+                ConvolveMode::Same
+            ),
+            Err(SignalError::NonFiniteInput {
+                detail: "convolve2d second input samples must be finite".to_string(),
+            })
+        );
+        assert_eq!(
+            correlate2d_with_boundary(
+                &a,
+                (2, 2),
+                &v,
+                (2, 2),
+                ConvolveMode::Same,
+                Boundary2d::Fill,
+                f64::NAN
+            ),
+            Err(SignalError::NonFiniteInput {
+                detail: "correlate2d boundary fill value must be finite".to_string(),
+            })
+        );
+        assert_eq!(
+            convolve2d_with_boundary(
+                &[1.0, 2.0, 3.0, f64::NEG_INFINITY],
+                (2, 2),
+                &v,
+                (2, 2),
+                ConvolveMode::Same,
+                Boundary2d::Wrap,
+                0.0
+            ),
+            Err(SignalError::NonFiniteInput {
+                detail: "convolve2d boundary first input samples must be finite".to_string(),
+            })
         );
     }
 
