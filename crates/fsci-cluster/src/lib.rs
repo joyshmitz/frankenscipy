@@ -8496,6 +8496,47 @@ mod tests {
     }
 
     #[test]
+    fn comparison_metrics_match_sklearn_exactly() {
+        // Exact golden values from sklearn.metrics for two clusterings of 6
+        // samples: true=[0,0,1,1,2,2], pred=[0,0,1,2,2,2] (partial agreement).
+        let t = [0usize, 0, 1, 1, 2, 2];
+        let p = [0usize, 0, 1, 2, 2, 2];
+        let close = |got: f64, want: f64, name: &str| {
+            assert!((got - want).abs() < 1e-12, "{name}: {got} != {want}");
+        };
+        close(
+            adjusted_rand_score(&t, &p).unwrap(),
+            0.444_444_444_444_444_4,
+            "adjusted_rand",
+        );
+        close(
+            fowlkes_mallows_score(&t, &p).unwrap(),
+            0.577_350_269_189_625_8,
+            "fowlkes_mallows",
+        );
+        close(
+            normalized_mutual_info(&t, &p).unwrap(),
+            0.739_667_376_800_759_2,
+            "nmi (arithmetic)",
+        );
+        close(
+            homogeneity_score(&t, &p).unwrap(),
+            0.710_309_917_857_152_5,
+            "homogeneity",
+        );
+        close(
+            completeness_score(&t, &p).unwrap(),
+            0.771_556_173_679_471_2,
+            "completeness",
+        );
+        close(
+            v_measure_score(&t, &p).unwrap(),
+            0.739_667_376_800_759,
+            "v_measure",
+        );
+    }
+
+    #[test]
     fn kmeans_well_separated_clusters_matches_scipy_reference_values() {
         // scipy.cluster.vq.kmeans2([[0,0], [1,1], [0,1], [1,0], [10,10], [11,11], [10,11], [11,10]], 2)
         // Two well-separated clusters should converge to centroids near [0.5, 0.5] and [10.5, 10.5]
