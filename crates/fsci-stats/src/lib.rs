@@ -72646,6 +72646,22 @@ mod tests {
     }
 
     #[test]
+    fn stats_helpers_match_analytic() {
+        // Previously-untested stats helpers vs analytic/numpy values.
+        assert_eq!(argmax(&[3.0, 1.0, 4.0, 1.0, 5.0]), Some(4));
+        assert_eq!(argmin(&[3.0, 1.0, 4.0, 1.0, 5.0]), Some(1)); // first min
+        assert_eq!(center(&[1.0, 2.0, 3.0]), vec![-1.0, 0.0, 1.0]); // subtract mean
+        // cross-entropy of identical uniform dists (base 2) = 1 bit.
+        assert!(
+            (cross_entropy(&[0.5, 0.5], &[0.5, 0.5], Some(2.0)) - 1.0).abs() < 1e-12,
+            "cross_entropy"
+        );
+        // ewma of constant data stays constant.
+        let e = ewma(&[5.0, 5.0, 5.0, 5.0], 2.0);
+        assert!(e.iter().all(|&v| (v - 5.0).abs() < 1e-12), "ewma constant");
+    }
+
+    #[test]
     fn percentileofscore_kinds_match_scipy() {
         // scipy.stats.percentileofscore([1,2,3,3,5], 3) for all 4 kinds.
         let a = [1.0, 2.0, 3.0, 3.0, 5.0];
