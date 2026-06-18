@@ -530,6 +530,16 @@ pub fn value(name: &str) -> Option<f64> {
         "atomic mass" | "u" => Some(ATOMIC_MASS),
         "mu_0" | "magnetic constant" => Some(MU_0),
         "epsilon_0" | "electric constant" => Some(EPSILON_0),
+        // Electromagnetic & atomic constants — keys mirror
+        // scipy.constants.physical_constants (case-insensitive).
+        "bohr magneton" => Some(BOHR_MAGNETON),
+        "nuclear magneton" => Some(NUCLEAR_MAGNETON),
+        "mag. flux quantum" => Some(MAGNETIC_FLUX_QUANTUM),
+        "conductance quantum" => Some(CONDUCTANCE_QUANTUM),
+        "josephson constant" => Some(JOSEPHSON),
+        "von klitzing constant" => Some(VON_KLITZING),
+        "hartree energy" => Some(HARTREE),
+        "classical electron radius" => Some(CLASSICAL_ELECTRON_RADIUS),
         // br-wada additions — keys mirror scipy.constants.physical_constants
         // exactly (case-insensitive) so value() is a drop-in for scipy's.
         "faraday constant" | "faraday" => Some(FARADAY),
@@ -1166,6 +1176,14 @@ mod tests {
             ("proton-neutron mass ratio", 0.99862347797),
             ("deuteron-electron mass ratio", 3670.482967655),
             ("alpha particle-electron mass ratio", 7294.29954171),
+            ("bohr magneton", 9.2740100657e-24),
+            ("nuclear magneton", 5.0507837393e-27),
+            ("mag. flux quantum", 2.0678338484619295e-15),
+            ("conductance quantum", 7.748091729863649e-05),
+            ("josephson constant", 483597848416983.6),
+            ("von klitzing constant", 25812.807459304513),
+            ("hartree energy", 4.359744722206e-18),
+            ("classical electron radius", 2.8179403205e-15),
         ];
         for &(key, want) in cases {
             let got = value(key).unwrap_or_else(|| panic!("value({key:?}) returned None"));
