@@ -581,6 +581,10 @@ pub fn mminfo(content: &str) -> Result<MmInfo, IoError> {
 // ══════════════════════════════════════════════════════════════════════
 
 /// WAV file data.
+///
+/// `data` holds interleaved samples normalised to the floating-point range
+/// `[-1.0, 1.0]` (the soundfile/librosa convention), **not** the raw integer
+/// samples that `scipy.io.wavfile.read` returns. See [`wav_read`].
 #[derive(Debug, Clone)]
 pub struct WavData {
     pub sample_rate: u32,
@@ -591,7 +595,17 @@ pub struct WavData {
 
 /// Read a WAV file from bytes.
 ///
-/// Matches `scipy.io.wavfile.read`.
+/// Parses the RIFF/`fmt`/`data` chunks and returns the sample rate, channel
+/// count, bit depth, and interleaved samples. Supported encodings: 8/16/24/32-bit
+/// PCM and 32-bit IEEE float.
+///
+/// Note on values: samples are **normalised to `[-1.0, 1.0]`** by dividing each
+/// PCM sample by its full-scale magnitude (8-bit is also recentred from
+/// `[0, 255]`). `scipy.io.wavfile.read` instead returns the *raw* integer
+/// samples in their native dtype, so the parsed sample rate / channels / bit
+/// depth match SciPy exactly while `data` equals SciPy's samples divided by
+/// full scale. This `f64` API cannot reproduce SciPy's dtype-driven raw output
+/// losslessly; the chosen convention is tracked by bead frankenscipy-8hj9z.
 pub fn wav_read(bytes: &[u8]) -> Result<WavData, IoError> {
     if bytes.len() < 44 {
         return Err(IoError::InvalidFormat("WAV file too short".to_string()));
@@ -744,7 +758,11 @@ pub fn wav_read(bytes: &[u8]) -> Result<WavData, IoError> {
 
 /// Write WAV file data as bytes (16-bit PCM).
 ///
-/// Matches `scipy.io.wavfile.write`.
+/// `data` is interpreted as interleaved samples in `[-1.0, 1.0]` (the inverse of
+/// [`wav_read`]'s normalisation): each value is clamped to `[-1, 1]` and scaled
+/// by `32767` into a little-endian `i16`. This differs from
+/// `scipy.io.wavfile.write`, which writes the array's raw integer/float samples
+/// in their native dtype without scaling. Tracked by bead frankenscipy-8hj9z.
 pub fn wav_write(sample_rate: u32, channels: u16, data: &[f64]) -> Result<Vec<u8>, IoError> {
     if sample_rate == 0 {
         return Err(IoError::InvalidFormat(
@@ -4648,6 +4666,32 @@ mod tests {
             assert!(
                 (orig - read).abs() < 0.001,
                 "sample {i}: orig={orig}, read={read}"
+            );
+        }
+    }
+
+    #[test]
+    fn wav_read_matches_scipy_wavfile_structure_and_scale() {
+        // Exact bytes from scipy.io.wavfile.write(8000, np.array(
+        // [0, 16384, -16384, 32767, -32768], dtype=int16)) (SciPy 1.17.1).
+        // fsci must parse the same rate/channels/bit-depth SciPy reports, and
+        // its normalised samples must equal SciPy's raw int16 values / 32768.
+        let scipy_wav: &[u8] = &[
+            82, 73, 70, 70, 46, 0, 0, 0, 87, 65, 86, 69, 102, 109, 116, 32, 16, 0, 0, 0, 1, 0, 1,
+            0, 64, 31, 0, 0, 128, 62, 0, 0, 2, 0, 16, 0, 100, 97, 116, 97, 10, 0, 0, 0, 0, 0, 0,
+            64, 0, 192, 255, 127, 0, 128,
+        ];
+        let wav = wav_read(scipy_wav).expect("fsci must read scipy WAV bytes");
+        assert_eq!(wav.sample_rate, 8000);
+        assert_eq!(wav.channels, 1);
+        assert_eq!(wav.bits_per_sample, 16);
+        // SciPy returns these raw int16 samples; fsci returns them / 32768.
+        let scipy_raw = [0i32, 16384, -16384, 32767, -32768];
+        assert_eq!(wav.data.len(), scipy_raw.len());
+        for (&got, &raw) in wav.data.iter().zip(scipy_raw.iter()) {
+            assert!(
+                (got - raw as f64 / 32768.0).abs() < 1e-12,
+                "sample {got} != scipy {raw}/32768"
             );
         }
     }
