@@ -10991,6 +10991,20 @@ mod tests {
     }
 
     #[test]
+    fn hermite_interp_recovers_cubic() {
+        // Cubic Hermite with 2 nodes (value+derivative each) gives a degree-3
+        // polynomial = the unique cubic. y=x^3, y'=3x^2 at [0,2] -> reproduces x^3.
+        // hermite_interp was untested.
+        let nodes = [0.0, 2.0];
+        let values = [0.0, 8.0];
+        let derivs = [0.0, 12.0];
+        assert!((hermite_interp(&nodes, &values, &derivs, 1.0) - 1.0).abs() < 1e-12, "x=1");
+        assert!((hermite_interp(&nodes, &values, &derivs, 1.5) - 3.375).abs() < 1e-12, "x=1.5");
+        // Matches the value and the derivative at a node.
+        assert!((hermite_interp(&nodes, &values, &derivs, 2.0) - 8.0).abs() < 1e-12, "at node");
+    }
+
+    #[test]
     fn neville_recovers_cubic() {
         // Neville's algorithm exactly reproduces a polynomial of degree < n_nodes.
         // y = x^3 through 4 nodes -> the unique interpolating cubic is x^3. Untested.
