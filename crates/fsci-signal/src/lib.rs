@@ -18315,6 +18315,22 @@ mod tests {
     }
 
     #[test]
+    fn convolve_modes_match_scipy() {
+        // scipy.signal.convolve full/same/valid for a=[1,2,3], b=[0,1,0.5].
+        let a = [1.0, 2.0, 3.0];
+        let b = [0.0, 1.0, 0.5];
+        assert_eq!(
+            convolve(&a, &b, ConvolveMode::Full).unwrap(),
+            vec![0.0, 1.0, 2.5, 4.0, 1.5]
+        );
+        assert_eq!(
+            convolve(&a, &b, ConvolveMode::Same).unwrap(),
+            vec![1.0, 2.5, 4.0]
+        );
+        assert_eq!(convolve(&a, &b, ConvolveMode::Valid).unwrap(), vec![2.5]);
+    }
+
+    #[test]
     fn hilbert_analytic_signal_match_scipy() {
         // scipy.signal.hilbert: real part == input, imag == Hilbert transform.
         let a = hilbert(&[1.0, 2.0, 3.0, 4.0]).expect("hilbert");
