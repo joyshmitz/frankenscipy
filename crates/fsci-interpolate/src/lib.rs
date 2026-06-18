@@ -10991,6 +10991,23 @@ mod tests {
     }
 
     #[test]
+    fn pade_exp_approximant_matches_scipy() {
+        // scipy.interpolate.pade(exp Taylor coeffs, 2): the [2/2] Pade approximant
+        // of exp. pade was previously untested. fsci returns (p, q) as ascending-
+        // power coefficient vectors; p = 1 + x/2 + x^2/12, q = 1 - x/2 + x^2/12.
+        let coeffs = [1.0, 1.0, 0.5, 1.0 / 6.0, 1.0 / 24.0];
+        let (p, q) = pade(&coeffs, 2, 2).expect("pade");
+        for (g, e) in p.iter().zip(&[1.0, 0.5, 1.0 / 12.0]) {
+            assert!((g - e).abs() < 1e-12, "p coeff: {g}");
+        }
+        for (g, e) in q.iter().zip(&[1.0, -0.5, 1.0 / 12.0]) {
+            assert!((g - e).abs() < 1e-12, "q coeff: {g}");
+        }
+        // p(1)/q(1) approximates e.
+        assert!((ratval(&p, &q, 1.0) - 2.714_285_714_285_714).abs() < 1e-12, "eval at 1");
+    }
+
+    #[test]
     fn barycentric_interpolate_matches_scipy_reference_values() {
         // scipy.interpolate.barycentric_interpolate([0,1,2,3], [1,4,2,5], [0.5,1.5,2.5])
         // -> [3.75, 3.0, 2.25]
