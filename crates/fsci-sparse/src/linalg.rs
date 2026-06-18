@@ -6219,6 +6219,27 @@ mod tests {
         square_csr().to_csc().expect("csc")
     }
 
+    #[test]
+    fn csc_matvec_into_matches_allocating_reference() {
+        let a = CooMatrix::from_triplets(
+            Shape2D::new(4, 3),
+            vec![2.0, -1.0, 4.0, 3.5, -2.0, 7.0],
+            vec![0, 2, 1, 3, 0, 2],
+            vec![0, 0, 1, 1, 2, 2],
+            false,
+        )
+        .expect("coo")
+        .to_csr()
+        .expect("csr")
+        .to_csc()
+        .expect("csc");
+        let x = [1.25, -0.5, 2.0, -3.0];
+        let expected = csc_matvec(&a, &x);
+        let mut actual = vec![f64::NAN; a.shape().cols];
+        csc_matvec_into(&a, &x, &mut actual);
+        assert_close_slice(&actual, &expected, f64::EPSILON);
+    }
+
     fn non_square_csr() -> CsrMatrix {
         CooMatrix::from_triplets(
             Shape2D::new(2, 3),
@@ -9023,7 +9044,14 @@ pub fn eigsh(a: &CsrMatrix, k: usize, options: EigsOptions) -> SparseResult<Eigs
     // (pathologically-clustered spectra would need implicit restarts, as in
     // ARPACK — reported honestly via `converged = false` rather than looping).
     let m = (2 * k + 1).max(20).min(n);
-    let mut result = krylov_arnoldi_eigs(|v| csr_matvec(a, v), n, k, &options, m, false);
+    let mut result = krylov_arnoldi_eigs(
+        |v, out| csr_matvec_into(a, v, out),
+        n,
+        k,
+        &options,
+        m,
+        false,
+    );
     let (converged, resid_matvec) = eigsh_residual_check(a, &result, options.tol.max(1e-8));
     result.nmatvec += resid_matvec;
     result.converged = converged;
@@ -9081,7 +9109,7 @@ pub fn eigs(a: &CsrMatrix, k: usize, options: EigsOptions) -> SparseResult<EigsR
     // Krylov subspace dimension (larger than k for better convergence).
     let m = (2 * k + 1).min(n);
     Ok(krylov_arnoldi_eigs(
-        |v| csr_matvec(a, v),
+        |v, out| csr_matvec_into(a, v, out),
         n,
         k,
         &options,
@@ -9096,7 +9124,7 @@ pub fn eigs(a: &CsrMatrix, k: usize, options: EigsOptions) -> SparseResult<EigsR
 /// Ritz values from the projected upper-Hessenberg matrix `H` (tridiagonal, with
 /// real Ritz values, when `A` is symmetric), and back-transforms the top-`k`-by-
 /// magnitude Ritz vectors into the original space. O(m) matvecs total.
-fn krylov_arnoldi_eigs<F: FnMut(&[f64]) -> Vec<f64>>(
+fn krylov_arnoldi_eigs<F: FnMut(&[f64], &mut [f64])>(
     mut op: F,
     n: usize,
     k: usize,
@@ -9107,8 +9135,11 @@ fn krylov_arnoldi_eigs<F: FnMut(&[f64]) -> Vec<f64>>(
     let mut total_matvec = 0;
 
     // Arnoldi iteration: build orthonormal basis V and upper Hessenberg H
-    // such that A * V_m ≈ V_m * H_m
-    let mut v: Vec<Vec<f64>> = Vec::with_capacity(m + 1);
+    // such that A * V_m ≈ V_m * H_m. Store V as one row-major arena rather than
+    // `Vec<Vec<_>>`: each basis vector is still copied once in the same order,
+    // but the matvec result can be written into reusable scratch instead of
+    // allocating a fresh Vec per Arnoldi step.
+    let mut basis = Vec::with_capacity((m + 1) * n);
     let mut h = vec![vec![0.0; m]; m + 1]; // (m+1) x m upper Hessenberg
 
     // Initial vector. A CONSTANT vector is orthogonal to the antisymmetric
@@ -9134,20 +9165,24 @@ fn krylov_arnoldi_eigs<F: FnMut(&[f64]) -> Vec<f64>>(
             *vi /= v0_norm;
         }
     }
-    v.push(v0);
+    basis.extend_from_slice(&v0);
 
     let mut actual_m = 0usize;
+    let mut w = vec![0.0; n];
     for j in 0..m {
-        // w = op(v_j)  (A·v for eigs/eigsh; AᵀA·v for svds). The result becomes the
-        // next basis vector (v.push(w) below), so its allocation is necessary — but
-        // op itself (FnMut) may reuse internal scratch. frankenscipy-fo9cj.
-        let mut w = op(&v[j]);
+        // w = op(v_j)  (A·v for eigs/eigsh; AᵀA·v for svds). The result is
+        // orthogonalized in-place, then copied into the row-major basis arena if
+        // it becomes the next vector. The scratch allocation is hoisted out of the
+        // Arnoldi loop. frankenscipy-fo9cj.
+        let vj = &basis[j * n..(j + 1) * n];
+        op(vj, &mut w);
         total_matvec += 1;
 
         // Modified Gram-Schmidt orthogonalization
         for i in 0..=j {
-            h[i][j] = dot_product(&w, &v[i]);
-            for (wk, vik) in w.iter_mut().zip(v[i].iter()) {
+            let vi = &basis[i * n..(i + 1) * n];
+            h[i][j] = dot_product(&w, vi);
+            for (wk, vik) in w.iter_mut().zip(vi.iter()) {
                 *wk -= h[i][j] * vik;
             }
         }
@@ -9170,7 +9205,7 @@ fn krylov_arnoldi_eigs<F: FnMut(&[f64]) -> Vec<f64>>(
         for wi in &mut w {
             *wi /= h[j + 1][j];
         }
-        v.push(w);
+        basis.extend_from_slice(&w);
     }
 
     if general {
@@ -9180,7 +9215,7 @@ fn krylov_arnoldi_eigs<F: FnMut(&[f64]) -> Vec<f64>>(
         // to recover the full complex spectrum, then complex back-substitution for
         // the eigenvectors. Matches `scipy.sparse.linalg.eigs`, which returns a
         // complex array.
-        return krylov_extract_general(&v, &h, actual_m, n, k, options, total_matvec);
+        return krylov_extract_general(&basis, &h, actual_m, n, k, options, total_matvec);
     }
 
     // Symmetric operator (eigsh/svds): real Ritz values from the single-shift QR.
@@ -9208,7 +9243,8 @@ fn krylov_arnoldi_eigs<F: FnMut(&[f64]) -> Vec<f64>>(
             if yj == 0.0 {
                 continue;
             }
-            for (xi, vji) in evec.iter_mut().zip(v[j].iter()) {
+            let vj = &basis[j * n..(j + 1) * n];
+            for (xi, vji) in evec.iter_mut().zip(vj.iter()) {
                 *xi += yj * vji;
             }
         }
@@ -9233,7 +9269,7 @@ fn krylov_arnoldi_eigs<F: FnMut(&[f64]) -> Vec<f64>>(
 }
 
 /// Top-`k`-by-magnitude complex eigenpairs of a general operator from its
-/// Arnoldi basis `v` and upper-Hessenberg projection `h[0..m, 0..m]`.
+/// row-major Arnoldi `basis` and upper-Hessenberg projection `h[0..m, 0..m]`.
 ///
 /// The projected matrix is reduced by the double-shift Francis QR (`hqr`) into
 /// real and imaginary eigenvalue parts; the corresponding Ritz vectors are
@@ -9241,7 +9277,7 @@ fn krylov_arnoldi_eigs<F: FnMut(&[f64]) -> Vec<f64>>(
 /// leaves untouched, working on a copy) and back-transformed into the original
 /// space as `x = V @ y`.
 fn krylov_extract_general(
-    v: &[Vec<f64>],
+    basis: &[f64],
     h: &[Vec<f64>],
     m: usize,
     n: usize,
@@ -9279,7 +9315,8 @@ fn krylov_extract_general(
             if yr == 0.0 && yi == 0.0 {
                 continue;
             }
-            for ((xr, xi), &vji) in evec_re.iter_mut().zip(evec_im.iter_mut()).zip(v[j].iter()) {
+            let vj = &basis[j * n..(j + 1) * n];
+            for ((xr, xi), &vji) in evec_re.iter_mut().zip(evec_im.iter_mut()).zip(vj.iter()) {
                 *xr += yr * vji;
                 *xi += yi * vji;
             }
@@ -9727,7 +9764,7 @@ pub fn svds(a: &CsrMatrix, k: usize, options: EigsOptions) -> SparseResult<SvdsR
     let options = normalize_eigs_options(options);
 
     // Cache A in CSC once so the operator Aᵀ·w is a byte-identical parallel
-    // column-gather (`csc_matvec`), reused across all Krylov steps.
+    // column-gather (`csc_matvec_into`), reused across all Krylov steps.
     let a_csc = a.to_csc()?;
 
     // The top-k singular values of A are the square roots of the top-k eigenvalues
@@ -9737,14 +9774,13 @@ pub fn svds(a: &CsrMatrix, k: usize, options: EigsOptions) -> SparseResult<SvdsR
     // previous power-iteration-with-deflation's O(k·max_iter). For a well-separated
     // spectrum a single subspace of max(2k+1, 20) resolves the extremes.
     let ncv = (2 * k + 1).max(20).min(n);
-    // AᵀA·v: reuse a hoisted `tmp` (rows-length) for the discarded intermediate
-    // A·v instead of allocating it every Arnoldi step; the Aᵀ·tmp result is
-    // returned fresh because it becomes the next basis vector. frankenscipy-fo9cj
-    // (byte-identical: same kernels, tmp fully overwritten each call).
+    // AᵀA·v: reuse hoisted row/column work buffers instead of allocating both
+    // A·v and Aᵀ·tmp every Arnoldi step. The shared Arnoldi helper then copies
+    // the normalized result into its row-major basis arena.
     let mut tmp = vec![0.0; a.shape().rows];
-    let ata_op = move |v: &[f64]| -> Vec<f64> {
+    let ata_op = move |v: &[f64], out: &mut [f64]| {
         csr_matvec_into(a, v, &mut tmp);
-        csc_matvec(&a_csc, &tmp)
+        csc_matvec_into(&a_csc, &tmp, out);
     };
     let eig = krylov_arnoldi_eigs(ata_op, n, k, &options, ncv, false);
 
