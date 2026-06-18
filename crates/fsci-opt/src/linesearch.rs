@@ -63,6 +63,21 @@ pub fn validate_wolfe_params(params: WolfeParams) -> Result<(), OptError> {
     Ok(())
 }
 
+fn validate_line_search_inputs(x: &[f64], direction: &[f64], g0: &[f64]) -> Result<(), OptError> {
+    let n = x.len();
+    if n == 0 {
+        return Err(OptError::InvalidArgument {
+            detail: String::from("line-search x must not be empty"),
+        });
+    }
+    if direction.len() != n || g0.len() != n {
+        return Err(OptError::InvalidArgument {
+            detail: String::from("line-search x, direction, and gradient must have matching lengths"),
+        });
+    }
+    Ok(())
+}
+
 /// Weak Wolfe line search (Armijo + curvature).
 ///
 /// Finds alpha satisfying:
@@ -84,6 +99,7 @@ where
     G: Fn(&[f64]) -> Vec<f64>,
 {
     validate_wolfe_params(params)?;
+    validate_line_search_inputs(x, direction, g0)?;
     let dg0 = dot(g0, direction);
     if dg0 >= 0.0 {
         return Err(OptError::InvalidArgument {
@@ -116,6 +132,7 @@ where
     G: Fn(&[f64]) -> Vec<f64>,
 {
     validate_wolfe_params(params)?;
+    validate_line_search_inputs(x, direction, g0)?;
     let dg0 = dot(g0, direction);
     if dg0 >= 0.0 {
         return Err(OptError::InvalidArgument {
@@ -140,6 +157,7 @@ where
     G: FnMut(&mut [f64], &mut Vec<f64>) -> f64,
 {
     validate_wolfe_params(params)?;
+    validate_line_search_inputs(x, direction, g0)?;
     let dg0 = dot(g0, direction);
     if dg0 >= 0.0 {
         return Err(OptError::InvalidArgument {
@@ -1047,6 +1065,55 @@ mod tests {
             .expect_err("non-finite alpha bounds should fail");
             assert!(matches!(err, OptError::InvalidArgument { .. }));
         }
+    }
+
+    #[test]
+    fn wolfe_apis_reject_mismatched_dimensions() {
+        let x = vec![1.0, 2.0];
+        let g = quadratic_grad(&x);
+        let f0 = quadratic(&x);
+        let short_direction = vec![-1.0];
+        let full_direction = vec![-1.0, -1.0];
+        let short_gradient = vec![1.0];
+
+        let err = line_search_wolfe2(
+            &quadratic,
+            &quadratic_grad,
+            &x,
+            &short_direction,
+            f0,
+            &g,
+            WolfeParams::default(),
+        )
+        .expect_err("short direction should fail before trial-point indexing");
+        assert!(matches!(err, OptError::InvalidArgument { .. }));
+
+        let err = line_search_wolfe1(
+            &quadratic,
+            &quadratic_grad,
+            &x,
+            &full_direction,
+            f0,
+            &short_gradient,
+            WolfeParams::default(),
+        )
+        .expect_err("short initial gradient should fail before dot truncation");
+        assert!(matches!(err, OptError::InvalidArgument { .. }));
+
+        let mut grad_dot = |_trial: &mut [f64], _gradient: &mut Vec<f64>| {
+            panic!("dimension validation should run before gradient probe")
+        };
+        let err = line_search_wolfe2_with_gradient_probe(
+            &quadratic,
+            &mut grad_dot,
+            &x,
+            &short_direction,
+            f0,
+            &g,
+            WolfeParams::default(),
+        )
+        .expect_err("probe path should share dimension validation");
+        assert!(matches!(err, OptError::InvalidArgument { .. }));
     }
 
     #[test]
