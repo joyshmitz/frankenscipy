@@ -7316,6 +7316,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn incomplete_gamma_beta_scalars_match_scipy() {
+        // scipy.special regularized incomplete gamma/beta (1.17.1).
+        use crate::beta::betainc_scalar;
+        use crate::gamma::{gammainc_scalar, gammaincc_scalar};
+        let m = RuntimeMode::Strict;
+        assert!(
+            (gammainc_scalar(2.0, 3.0, m).unwrap() - 0.800_851_726_528_544_2).abs() < 1e-12,
+            "gammainc"
+        );
+        assert!(
+            (gammaincc_scalar(2.0, 3.0, m).unwrap() - 0.199_148_273_471_455_8).abs() < 1e-12,
+            "gammaincc"
+        );
+        assert!(
+            (betainc_scalar(2.0, 3.0, 0.4, m).unwrap() - 0.524_799_999_999_999_9).abs() < 1e-12,
+            "betainc"
+        );
+    }
+
+    #[test]
     fn boxcox_scalar_match_scipy() {
         // scipy.special.boxcox/inv_boxcox/boxcox1p (1.17.1), including the
         // inv_boxcox NaN edge for a negative base (frankenscipy-9ns59).
