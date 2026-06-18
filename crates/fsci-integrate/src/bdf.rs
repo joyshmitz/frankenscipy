@@ -213,6 +213,9 @@ impl BdfSolver {
         let y0 = config.y0.to_vec();
         let f0 = fun(config.t0, &y0);
         validate_rhs_shape(f0.len(), n)?;
+        if config.mode == RuntimeMode::Hardened && !f0.iter().all(|value| value.is_finite()) {
+            return Err(crate::IntegrateValidationError::NonFiniteF0);
+        }
 
         // Backward-difference array D[0..=MAX_ORDER+2]: D[0] = y, D[1] = h*f, rest 0.
         let mut d = vec![vec![0.0; n]; MAX_ORDER + 3];
@@ -797,6 +800,24 @@ mod tests {
         );
         assert!(solver.njev() > 0, "should record Jacobian evaluations");
         assert!(solver.nlu() > 0, "should record LU factorizations");
+    }
+
+    #[test]
+    fn bdf_first_step_hardened_rejects_non_finite_f0() {
+        let mut fun = |_t: f64, _y: &[f64]| vec![f64::NAN];
+        let config = BdfSolverConfig {
+            t0: 0.0,
+            y0: &[1.0],
+            t_bound: 0.1,
+            rtol: 1e-6,
+            atol: ToleranceValue::Scalar(1e-8),
+            max_step: f64::INFINITY,
+            first_step: Some(1e-6),
+            mode: RuntimeMode::Hardened,
+            max_order: 5,
+        };
+        let err = BdfSolver::new(&mut fun, config).expect_err("non-finite f0 should fail");
+        assert_eq!(err, crate::IntegrateValidationError::NonFiniteF0);
     }
 
     #[test]
