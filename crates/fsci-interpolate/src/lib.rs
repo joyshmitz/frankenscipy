@@ -10991,6 +10991,18 @@ mod tests {
     }
 
     #[test]
+    fn barycentric_eval_weights_recover_quadratic() {
+        // barycentric_weights + barycentric_eval reproduce a polynomial of degree
+        // < n exactly. y=x^2 through 3 nodes. Both fns were untested.
+        let nodes = [0.0, 1.0, 2.0];
+        let values = [0.0, 1.0, 4.0];
+        let w = barycentric_weights(&nodes);
+        assert!((barycentric_eval(&nodes, &values, &w, 1.5) - 2.25).abs() < 1e-12, "x=1.5");
+        assert!((barycentric_eval(&nodes, &values, &w, 0.5) - 0.25).abs() < 1e-12, "x=0.5");
+        assert!((barycentric_eval(&nodes, &values, &w, 2.0) - 4.0).abs() < 1e-12, "at node");
+    }
+
+    #[test]
     fn hermite_interp_recovers_cubic() {
         // Cubic Hermite with 2 nodes (value+derivative each) gives a degree-3
         // polynomial = the unique cubic. y=x^3, y'=3x^2 at [0,2] -> reproduces x^3.
