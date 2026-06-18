@@ -4528,16 +4528,16 @@ impl PPoly {
         if xval.is_nan() {
             return f64::NAN;
         }
-        // Find interval
+        // Find interval: largest i in 1..n with x[i] <= xval, else 0. Binary search
+        // over the sorted breakpoints — byte-identical to the former O(n) linear
+        // scan (`partition_point` counts the leading run of x[i] <= xval), O(log n)
+        // per point. frankenscipy-2jmet.
         let n = self.x.len() - 1;
-        let mut seg = 0;
-        for i in 1..n {
-            if xval >= self.x[i] {
-                seg = i;
-            } else {
-                break;
-            }
-        }
+        let seg = if n == 0 {
+            0
+        } else {
+            self.x[1..n].partition_point(|&xi| xval >= xi)
+        };
 
         // Evaluate polynomial in local coordinates
         let dx = xval - self.x[seg];
@@ -8181,6 +8181,31 @@ mod tests {
     fn ndbspline_rejects_degree_overflow() {
         let result = NdBSpline::new(vec![vec![0.0, 1.0]], Vec::new(), usize::MAX / 2 + 1);
         assert!(matches!(result, Err(InterpError::InvalidArgument { .. })));
+    }
+
+    #[test]
+    fn ppoly_interval_selection() {
+        // Constant per-interval pieces pin the interval the binary search selects
+        // (guards the linear-scan -> partition_point change; boundaries land in the
+        // upper interval, out-of-range clamps to the end pieces).
+        let p = PPoly::new(
+            vec![vec![10.0], vec![20.0], vec![30.0]],
+            vec![0.0, 1.0, 2.0, 3.0],
+        )
+        .unwrap();
+        assert_eq!(p.evaluate(0.5), 10.0);
+        assert_eq!(p.evaluate(1.0), 20.0); // boundary -> upper interval
+        assert_eq!(p.evaluate(1.5), 20.0);
+        assert_eq!(p.evaluate(2.0), 30.0);
+        assert_eq!(p.evaluate(2.5), 30.0);
+        assert_eq!(p.evaluate(-1.0), 10.0); // below range -> first piece
+        assert_eq!(p.evaluate(5.0), 30.0); // above range -> last piece
+        // evaluate_many must agree exactly.
+        let xs = [0.5, 1.0, 1.5, 2.0, 2.5, -1.0, 5.0];
+        let batch = p.evaluate_many(&xs);
+        for (&x, b) in xs.iter().zip(batch.iter()) {
+            assert_eq!(*b, p.evaluate(x), "evaluate_many != evaluate at {x}");
+        }
     }
 
     #[test]
