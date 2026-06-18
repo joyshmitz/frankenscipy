@@ -18235,6 +18235,25 @@ mod tests {
     }
 
     #[test]
+    fn butter_lowpass_order2_coeffs_match_scipy() {
+        // scipy.signal.butter(2, 0.3, 'low') exact b/a coefficients (1.17.1) —
+        // the order-2 test above only checks DC gain, not the full transfer fn.
+        let c = butter(2, &[0.3], FilterType::Lowpass).expect("butter");
+        let eb = [
+            0.131_106_439_916_625_93,
+            0.262_212_879_833_251_87,
+            0.131_106_439_916_625_93,
+        ];
+        let ea = [1.0, -0.747_789_178_258_503_4, 0.272_214_937_925_007_17];
+        for (g, e) in c.b.iter().zip(&eb) {
+            assert!((g - e).abs() < 1e-12, "b: {g} vs {e}");
+        }
+        for (g, e) in c.a.iter().zip(&ea) {
+            assert!((g - e).abs() < 1e-12, "a: {g} vs {e}");
+        }
+    }
+
+    #[test]
     fn butter_highpass_nyquist_gain() {
         let coeffs = butter(2, &[0.3], FilterType::Highpass).expect("butter hp");
         // Nyquist gain should be 1: evaluate at z = -1
