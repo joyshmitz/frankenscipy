@@ -3802,6 +3802,9 @@ pub fn spectral_rolloff(magnitudes: &[f64], freqs: &[f64], rolloff_percent: f64)
     if magnitudes.is_empty() || freqs.is_empty() {
         return 0.0;
     }
+    if has_invalid_paired_spectral_bins(magnitudes, freqs) {
+        return f64::NAN;
+    }
     let total: f64 = magnitudes.iter().zip(freqs.iter()).map(|(&m, _)| m).sum();
     if !(rolloff_percent.is_finite() && (0.0..=100.0).contains(&rolloff_percent)) {
         return f64::NAN;
@@ -19599,6 +19602,18 @@ mod tests {
 
         assert!(spectral_rolloff(&[0.0, 0.0], &[10.0, 20.0], 85.0).is_nan());
         assert!(spectral_rolloff(&[f64::NAN, 1.0], &[10.0, 20.0], 85.0).is_nan());
+    }
+
+    #[test]
+    fn spectral_rolloff_invalid_bins_return_nan() {
+        for (magnitudes, freqs) in [
+            ([-1.0, 2.0], [10.0, 20.0]),
+            ([f64::NAN, 2.0], [10.0, 20.0]),
+            ([1.0, 2.0], [10.0, f64::NEG_INFINITY]),
+        ] {
+            let rolloff = spectral_rolloff(&magnitudes, &freqs, 85.0);
+            assert!(rolloff.is_nan(), "rolloff should reject malformed bins");
+        }
     }
 
     #[test]
