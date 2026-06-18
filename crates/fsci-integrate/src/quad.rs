@@ -1339,11 +1339,8 @@ where
 
     let ndim = ranges.len();
     if ndim == 0 {
-        return Ok(QuadResult {
-            integral: func(&[]),
-            error: 0.0,
-            neval: 1,
-            converged: true,
+        return Err(IntegrateValidationError::QuadInvalidBounds {
+            detail: "nquad requires at least one integration range".to_string(),
         });
     }
 
@@ -4877,11 +4874,13 @@ mod tests {
     }
 
     #[test]
-    fn nquad_0d() {
-        // 0-dimensional: just evaluates the function
+    fn nquad_rejects_empty_ranges_like_scipy() {
         let opts = QuadOptions::default();
-        let result = nquad(|_| 42.0, &[], opts).expect("nquad 0d");
-        assert!((result.integral - 42.0).abs() < 1e-12);
+        let err = nquad(|_| 42.0, &[], opts).expect_err("empty nquad ranges");
+        assert!(matches!(
+            err,
+            IntegrateValidationError::QuadInvalidBounds { .. }
+        ));
     }
 
     #[test]
