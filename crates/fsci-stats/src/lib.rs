@@ -67738,6 +67738,17 @@ mod tests {
     }
 
     #[test]
+    fn moyal_pdf_cdf_match_scipy() {
+        // Exact scipy.stats.moyal (standard, loc=0, scale=1). The Moyal suite covers
+        // entropy, skew/kurt, and fit but no exact pdf/cdf at a point.
+        let m = Moyal;
+        assert!((m.pdf(0.0) - 0.241_970_724_519_143_37).abs() < 1e-12, "pdf(0)");
+        assert!((m.pdf(1.0) - 0.201_316_244_064_887_96).abs() < 1e-12, "pdf(1)");
+        assert!((m.pdf(2.0) - 0.137_160_133_945_643_78).abs() < 1e-12, "pdf(2)");
+        assert!((m.cdf(1.0) - 0.544_162_429_362_303_1).abs() < 1e-10, "cdf(1)");
+    }
+
+    #[test]
     fn moyal_skewness_and_kurtosis_match_scipy_reference_values() {
         // scipy.stats.moyal.stats(moments='sk'): skew = 28√2 · ζ(3)/π³
         // ≈ 1.535; ex.kurt = 4 exactly.
