@@ -4590,16 +4590,15 @@ impl BPoly {
     }
 
     fn segment(&self, xval: f64) -> usize {
+        // Largest i in 1..n with x[i] <= xval, else 0. Binary search over the sorted
+        // breakpoints — byte-identical to the former O(n) linear scan, O(log n) per
+        // point. frankenscipy-2jmet.
         let n = self.x.len() - 1;
-        let mut seg = 0;
-        for i in 1..n {
-            if xval >= self.x[i] {
-                seg = i;
-            } else {
-                break;
-            }
+        if n == 0 {
+            0
+        } else {
+            self.x[1..n].partition_point(|&xi| xval >= xi)
         }
-        seg
     }
 
     /// Evaluate the polynomial at a point.
