@@ -3852,6 +3852,9 @@ pub fn spectral_flatness(magnitudes: &[f64]) -> f64 {
     if magnitudes.is_empty() {
         return 0.0;
     }
+    if magnitudes.iter().any(|&m| !m.is_finite() || m < 0.0) {
+        return f64::NAN;
+    }
     let n = magnitudes.len() as f64;
     let arith_mean: f64 = magnitudes.iter().sum::<f64>() / n;
     if arith_mean == 0.0 {
@@ -19626,6 +19629,19 @@ mod tests {
             (bandwidth - 8.660_254_037_844_387).abs() < 1e-12,
             "expected paired-sample bandwidth, got {bandwidth}"
         );
+    }
+
+    #[test]
+    fn spectral_flatness_invalid_magnitudes_return_nan() {
+        for magnitudes in [[-1.0, 2.0], [f64::NAN, 2.0], [1.0, f64::INFINITY]] {
+            let flatness = spectral_flatness(&magnitudes);
+            assert!(
+                flatness.is_nan(),
+                "invalid magnitudes should produce NaN flatness, got {flatness}"
+            );
+        }
+
+        assert_eq!(spectral_flatness(&[0.0, 0.0]), 0.0);
     }
 
     // ── lfilter tests ──────────────────────────────────────────────
