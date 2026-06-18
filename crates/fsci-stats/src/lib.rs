@@ -72011,6 +72011,21 @@ mod tests {
     }
 
     #[test]
+    fn kruskal_match_scipy() {
+        // scipy.stats.kruskal (Kruskal-Wallis H test) with tied ranks.
+        let g1 = [1.0, 2.0, 3.0, 4.0];
+        let g2 = [5.0, 6.0, 7.0, 8.0];
+        let g3 = [2.0, 4.0, 6.0, 8.0];
+        let r = kruskal(&[&g1, &g2, &g3]);
+        assert!((r.statistic - 5.734_042_553_191_489).abs() < 1e-10, "H: {}", r.statistic);
+        assert!(
+            (r.pvalue - 0.056_868_068_788_310_355).abs() < 1e-12,
+            "p: {}",
+            r.pvalue
+        );
+    }
+
+    #[test]
     fn percentileofscore_kinds_match_scipy() {
         // scipy.stats.percentileofscore([1,2,3,3,5], 3) for all 4 kinds.
         let a = [1.0, 2.0, 3.0, 3.0, 5.0];
