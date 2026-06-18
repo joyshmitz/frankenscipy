@@ -5979,6 +5979,11 @@ pub fn gammatone(
                 });
             }
             let numtaps = numtaps.unwrap_or_else(|| ((fs * 0.015) as usize).max(15));
+            if numtaps == 0 {
+                return Err(SignalError::InvalidParameter {
+                    detail: "numtaps must be > 0".to_string(),
+                });
+            }
             let bw = 1.019 * erb;
             // factorial(order-1) as f64 (order-1 up to 23 overflows u64).
             let mut fact = 1.0f64;
@@ -18534,6 +18539,9 @@ mod tests {
     fn gammatone_rejects_bad_args() {
         assert!(gammatone(440.0, GammatoneType::Fir, Some(0), None, Some(16000.0)).is_err());
         assert!(gammatone(440.0, GammatoneType::Fir, Some(25), None, Some(16000.0)).is_err());
+        assert!(
+            gammatone(440.0, GammatoneType::Fir, Some(4), Some(0), Some(16000.0)).is_err()
+        );
         assert!(gammatone(9000.0, GammatoneType::Iir, None, None, Some(16000.0)).is_err()); // > Nyquist
         assert!(gammatone(-1.0, GammatoneType::Iir, None, None, Some(16000.0)).is_err());
     }
