@@ -10857,9 +10857,11 @@ pub fn chirp(
             "f0 and f1 must be finite".to_string(),
         ));
     }
-    if method == ChirpMethod::Logarithmic && (f0 <= 0.0 || f1 <= 0.0) {
+    if method == ChirpMethod::Logarithmic
+        && (f0 == 0.0 || f1 == 0.0 || f0.signum() != f1.signum())
+    {
         return Err(SignalError::InvalidArgument(
-            "logarithmic chirp requires f0 > 0 and f1 > 0".to_string(),
+            "logarithmic chirp requires f0 and f1 to be nonzero and share a sign".to_string(),
         ));
     }
 
@@ -21442,9 +21444,26 @@ mod tests {
     }
 
     #[test]
+    fn chirp_logarithmic_allows_negative_same_sign_frequencies() {
+        let t = vec![0.0, 0.25, 0.5, 0.75, 1.0];
+        let negative = chirp(&t, -10.0, 1.0, -100.0, ChirpMethod::Logarithmic)
+            .expect("negative same-sign logarithmic chirp");
+        let positive =
+            chirp(&t, 10.0, 1.0, 100.0, ChirpMethod::Logarithmic).expect("positive chirp");
+        for (i, (&got, &want)) in negative.iter().zip(positive.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-12,
+                "negative logarithmic chirp sample {i}: {got} != {want}"
+            );
+        }
+    }
+
+    #[test]
     fn chirp_logarithmic_rejects_zero_freq() {
         let t = vec![0.0];
         assert!(chirp(&t, 0.0, 1.0, 10.0, ChirpMethod::Logarithmic).is_err());
+        assert!(chirp(&t, 10.0, 1.0, -10.0, ChirpMethod::Logarithmic).is_err());
+        assert!(chirp(&t, -10.0, 1.0, 10.0, ChirpMethod::Logarithmic).is_err());
     }
 
     #[test]
