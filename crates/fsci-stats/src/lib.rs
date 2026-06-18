@@ -71499,6 +71499,21 @@ mod tests {
     }
 
     #[test]
+    fn entropy_kl_divergence_match_scipy() {
+        // scipy.stats.entropy (natural-log default, normalizes pk) and the KL form
+        // (qk). Golden from scipy.stats 1.17.1.
+        let close = |g: f64, w: f64, n: &str| assert!((g - w).abs() < 1e-12, "{n}: {g} != {w}");
+        close(entropy(&[0.1, 0.2, 0.3, 0.4], None), 1.279_854_225_833_667_6, "entropy");
+        close(entropy(&[1.0, 1.0, 1.0, 1.0], None), 1.386_294_361_119_890_6, "entropy unnorm");
+        close(entropy(&[0.5, 0.5], Some(2.0)), 1.0, "entropy base2");
+        close(
+            kl_divergence(&[0.5, 0.5], &[0.9, 0.1], None),
+            0.510_825_623_765_990_6,
+            "kl",
+        );
+    }
+
+    #[test]
     fn trim_mean_tmean_match_scipy() {
         // scipy.stats.trim_mean uses floor(n*prop) cut from each end; tmean keeps
         // values within (inclusive) limits. Golden from scipy.stats 1.17.1.
