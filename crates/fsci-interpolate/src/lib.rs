@@ -10991,6 +10991,17 @@ mod tests {
     }
 
     #[test]
+    fn neville_recovers_cubic() {
+        // Neville's algorithm exactly reproduces a polynomial of degree < n_nodes.
+        // y = x^3 through 4 nodes -> the unique interpolating cubic is x^3. Untested.
+        let nodes = [0.0, 1.0, 2.0, 3.0];
+        let values = [0.0, 1.0, 8.0, 27.0];
+        assert!((neville(&nodes, &values, 1.5) - 3.375).abs() < 1e-12, "x=1.5");
+        assert!((neville(&nodes, &values, 2.5) - 15.625).abs() < 1e-12, "x=2.5");
+        assert!((neville(&nodes, &values, 2.0) - 8.0).abs() < 1e-12, "at node");
+    }
+
+    #[test]
     fn chebyshev_nodes_match_analytic() {
         // chebyshev_nodes(n,a,b): first-kind nodes x_k=(a+b)/2+(b-a)/2*cos(pi(2k+1)/2n).
         // Was untested. n=3 on [-1,1]: [cos30, cos90, cos150] = [sqrt3/2, 0, -sqrt3/2].
