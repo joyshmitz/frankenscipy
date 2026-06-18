@@ -2798,11 +2798,15 @@ pub fn lsqr(
 
     let mut phi_bar = beta;
     let mut rho_bar = alpha;
+    // Reused bidiagonalization matvec buffers (A·v and Aᵀ·u) hoisted out of the
+    // LSQR loop — byte-identical. frankenscipy-2hclc.
+    let mut av = vec![0.0; u.len()];
+    let mut atu = vec![0.0; v.len()];
 
     for iteration in 0..max_iter {
         // Bidiagonalization step
         // u = A*v - alpha*u
-        let av = csr_matvec(a, &v);
+        csr_matvec_into(a, &v, &mut av);
         for i in 0..m {
             u[i] = av[i] - alpha * u[i];
         }
@@ -2814,7 +2818,7 @@ pub fn lsqr(
         }
 
         // v = A^T*u - beta*v
-        let atu = csc_matvec(&a_csc, &u);
+        csc_matvec_into(&a_csc, &u, &mut atu);
         for i in 0..n {
             v[i] = atu[i] - beta * v[i];
         }
@@ -3143,34 +3147,70 @@ fn csc_matvec(csc: &CscMatrix, x: &[f64]) -> Vec<f64> {
     };
 
     let mut result = vec![0.0; n];
+    csc_matvec_into_impl(indptr, indices, data, x, &mut result, nthreads);
+    result
+}
+
+/// Buffer-reusing CSC matvec: writes A·x into `out` (byte-identical to
+/// `csc_matvec`, lets bidiagonalization/Krylov loops hoist the result buffer).
+/// `out.len()` must equal csc.cols.
+fn csc_matvec_into(csc: &CscMatrix, x: &[f64], out: &mut [f64]) {
+    let n = csc.shape().cols;
+    let indptr = csc.indptr();
+    let indices = csc.indices();
+    let data = csc.data();
+    let nnz = data.len();
+    let nthreads = if nnz < 1 << 18 || n < 256 {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(|c| c.get())
+            .unwrap_or(1)
+            .min(nnz >> 17)
+            .max(1)
+    };
+    csc_matvec_into_impl(indptr, indices, data, x, out, nthreads);
+}
+
+/// Shared kernel for `csc_matvec`/`csc_matvec_into`. Each output column is an
+/// independent dot product, so the threaded (disjoint-chunk) path is
+/// byte-identical to the serial sweep.
+fn csc_matvec_into_impl(
+    indptr: &[usize],
+    indices: &[usize],
+    data: &[f64],
+    x: &[f64],
+    out: &mut [f64],
+    nthreads: usize,
+) {
+    let n = out.len();
     if nthreads <= 1 {
-        for c in 0..n {
+        for (c, slot) in out.iter_mut().enumerate() {
             let mut s = 0.0;
             for idx in indptr[c]..indptr[c + 1] {
                 s += data[idx] * x[indices[idx]];
             }
-            result[c] = s;
+            *slot = s;
         }
-        return result;
+        return;
     }
 
     let chunk = n.div_ceil(nthreads);
     std::thread::scope(|scope| {
-        for (t, slot) in result.chunks_mut(chunk).enumerate() {
+        for (t, slot) in out.chunks_mut(chunk).enumerate() {
             let base = t * chunk;
             scope.spawn(move || {
-                for (r, out) in slot.iter_mut().enumerate() {
+                for (r, o) in slot.iter_mut().enumerate() {
                     let c = base + r;
                     let mut s = 0.0;
                     for idx in indptr[c]..indptr[c + 1] {
                         s += data[idx] * x[indices[idx]];
                     }
-                    *out = s;
+                    *o = s;
                 }
             });
         }
     });
-    result
 }
 
 /// Convert a CSR matrix to dense row-major storage.
