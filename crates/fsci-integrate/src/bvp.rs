@@ -207,6 +207,11 @@ fn validate_boundary_residual_len(residual: &[f64], expected: usize) -> Result<(
             residual.len()
         )));
     }
+    if residual.iter().any(|value| !value.is_finite()) {
+        return Err(BvpError::InvalidArgument(
+            "bc residual values must be finite".to_string(),
+        ));
+    }
     Ok(())
 }
 
@@ -441,5 +446,24 @@ mod tests {
         assert!(
             matches!(err, BvpError::InvalidArgument(msg) if msg.contains("expected 2, got 3"))
         );
+    }
+
+    #[test]
+    fn bvp_rejects_non_finite_boundary_residual() {
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let mut f = |_t: f64, _y: &[f64]| vec![0.0, 0.0];
+            let bc = move |_ya: &[f64], _yb: &[f64]| vec![0.0, bad];
+            let err = solve_bvp(
+                &mut f,
+                &bc,
+                (0.0, 1.0),
+                &[0.0, 0.0],
+                BvpOptions::default(),
+            )
+            .expect_err("non-finite boundary residual");
+            assert!(
+                matches!(err, BvpError::InvalidArgument(msg) if msg.contains("residual values"))
+            );
+        }
     }
 }
