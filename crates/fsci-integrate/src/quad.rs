@@ -3047,8 +3047,8 @@ pub fn gauss_legendre<F>(f: F, a: f64, b: f64, n: usize) -> f64
 where
     F: Fn(f64) -> f64,
 {
-    if n == 0 {
-        return 0.0;
+    if n == 0 || !a.is_finite() || !b.is_finite() {
+        return f64::NAN;
     }
     // True n-point Gauss-Legendre for every n (exact to degree 2n-1), via the same
     // general node/weight generator `fixed_quad` uses. The previous version only
@@ -3539,6 +3539,26 @@ mod tests {
                 rel < 1e-10,
                 "gauss_legendre n={n} on x^{deg}: rel error {rel:.3e} (got {v}, exact {exact})"
             );
+        }
+    }
+
+    #[test]
+    fn gauss_legendre_rejects_zero_order_and_non_finite_bounds() {
+        let invalid_cases = [
+            (0usize, 0.0, 1.0),
+            (4usize, f64::NAN, 1.0),
+            (4usize, 0.0, f64::INFINITY),
+            (4usize, f64::NEG_INFINITY, 1.0),
+        ];
+
+        for (n, a, b) in invalid_cases {
+            let result = gauss_legendre(
+                |_| -> f64 { panic!("invalid Gauss-Legendre input should not be sampled") },
+                a,
+                b,
+                n,
+            );
+            assert!(result.is_nan(), "n={n}, a={a}, b={b}");
         }
     }
 
