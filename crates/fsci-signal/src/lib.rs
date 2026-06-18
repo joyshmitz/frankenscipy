@@ -11064,9 +11064,12 @@ pub enum DetrendType {
 /// * `dtype` — Type of detrending: constant (remove mean) or linear (remove linear fit).
 pub fn detrend(data: &[f64], dtype: DetrendType) -> Result<Vec<f64>, SignalError> {
     if data.is_empty() {
-        return Err(SignalError::InvalidArgument(
-            "data must not be empty".to_string(),
-        ));
+        return match dtype {
+            DetrendType::Constant => Ok(Vec::new()),
+            DetrendType::Linear => Err(SignalError::InvalidArgument(
+                "data must not be empty".to_string(),
+            )),
+        };
     }
     match dtype {
         DetrendType::Constant => {
@@ -22041,6 +22044,18 @@ mod tests {
         for &v in &result {
             assert!(v.abs() < 1e-12, "detrend constant: {v}");
         }
+    }
+
+    #[test]
+    fn detrend_constant_empty_matches_scipy() {
+        let constant = detrend(&[], DetrendType::Constant).expect("constant empty");
+        assert!(constant.is_empty());
+
+        let linear = detrend(&[], DetrendType::Linear).expect_err("linear empty should fail");
+        assert_eq!(
+            linear,
+            SignalError::InvalidArgument("data must not be empty".to_string())
+        );
     }
 
     #[test]
