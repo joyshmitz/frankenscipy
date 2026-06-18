@@ -12,7 +12,7 @@
 //! object; the numerical result matches SciPy's `complex_ode` to tolerance.
 
 use crate::api::{SolveIvpOptions, SolverKind, solve_ivp};
-use crate::validation::{IntegrateValidationError, ToleranceValue};
+use crate::validation::{IntegrateValidationError, ToleranceValue, validate_tol};
 
 /// A complex number as a `(real, imaginary)` pair, matching the workspace
 /// `Complex64` convention used elsewhere (e.g. `fsci-fft`).
@@ -59,6 +59,10 @@ where
     F: FnMut(f64, &[Complex64]) -> Vec<Complex64>,
 {
     let n = y0.len();
+    validate_complex_ode_inputs(y0, t_span, t_eval, rtol, atol)?;
+
+    let initial_dyc = fun(t_span.0, y0);
+    validate_complex_rhs_len(initial_dyc.len(), n)?;
 
     // Pack the complex initial state into [Re.., Im..].
     let mut real_y0 = Vec::with_capacity(2 * n);
@@ -66,11 +70,27 @@ where
     real_y0.extend(y0.iter().map(|c| c.1));
 
     // Wrap the complex RHS as a real RHS on the doubled state.
+    let initial_real_y0 = real_y0.clone();
+    let mut cached_initial_dyc = Some(initial_dyc);
+    let mut rhs_shape_error = None;
     let mut real_fun = |t: f64, u: &[f64]| -> Vec<f64> {
         let yc: Vec<Complex64> = (0..n).map(|j| (u[j], u[n + j])).collect();
-        let dyc = fun(t, &yc);
+        let dyc = if cached_initial_dyc.is_some()
+            && t.to_bits() == t_span.0.to_bits()
+            && u == initial_real_y0.as_slice()
+        {
+            cached_initial_dyc
+                .take()
+                .expect("initial derivative cache checked above")
+        } else {
+            fun(t, &yc)
+        };
+        if dyc.len() != n {
+            rhs_shape_error = Some((n, dyc.len()));
+            return vec![f64::NAN; 2 * n];
+        }
         let mut out = vec![0.0; 2 * n];
-        for (j, d) in dyc.iter().take(n).enumerate() {
+        for (j, d) in dyc.iter().enumerate() {
             out[j] = d.0;
             out[n + j] = d.1;
         }
@@ -87,7 +107,11 @@ where
         ..Default::default()
     };
 
-    let res = solve_ivp(&mut real_fun, &opts)?;
+    let res = solve_ivp(&mut real_fun, &opts);
+    if let Some((expected, actual)) = rhs_shape_error {
+        return Err(IntegrateValidationError::RhsWrongShape { expected, actual });
+    }
+    let res = res?;
 
     // Unpack each real state row back into complex form.
     let y: Vec<Vec<Complex64>> = res
@@ -103,6 +127,62 @@ where
         message: res.message,
         nfev: res.nfev,
     })
+}
+
+fn validate_complex_ode_inputs(
+    y0: &[Complex64],
+    t_span: (f64, f64),
+    t_eval: Option<&[f64]>,
+    rtol: f64,
+    atol: f64,
+) -> Result<(), IntegrateValidationError> {
+    if y0.is_empty() {
+        return Err(IntegrateValidationError::EmptyY0);
+    }
+    if !t_span.0.is_finite() || !t_span.1.is_finite() {
+        return Err(IntegrateValidationError::NonFiniteSpan);
+    }
+    if y0.iter().any(|value| !value.0.is_finite() || !value.1.is_finite()) {
+        return Err(IntegrateValidationError::NonFiniteY0);
+    }
+    validate_tol(
+        ToleranceValue::Scalar(rtol),
+        ToleranceValue::Scalar(atol),
+        y0.len() * 2,
+        fsci_runtime::RuntimeMode::Strict,
+    )?;
+    if let Some(t_eval) = t_eval {
+        validate_complex_t_eval(t_eval, t_span.0, t_span.1)?;
+    }
+    Ok(())
+}
+
+fn validate_complex_t_eval(
+    t_eval: &[f64],
+    t0: f64,
+    tf: f64,
+) -> Result<(), IntegrateValidationError> {
+    let t_min = t0.min(tf);
+    let t_max = t0.max(tf);
+    if t_eval.iter().any(|&te| te < t_min || te > t_max) {
+        return Err(IntegrateValidationError::TEvalOutOfSpan);
+    }
+    let sorted = if tf >= t0 {
+        t_eval.windows(2).all(|window| window[1] > window[0])
+    } else {
+        t_eval.windows(2).all(|window| window[1] < window[0])
+    };
+    if !sorted {
+        return Err(IntegrateValidationError::TEvalNotSorted);
+    }
+    Ok(())
+}
+
+fn validate_complex_rhs_len(actual: usize, expected: usize) -> Result<(), IntegrateValidationError> {
+    if actual != expected {
+        return Err(IntegrateValidationError::RhsWrongShape { expected, actual });
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -148,5 +228,45 @@ mod tests {
         assert!(last[0].1.abs() < 1e-7);
         assert!(last[1].0.abs() < 1e-7);
         assert!((last[1].1 - 1.0_f64.sin()).abs() < 1e-7);
+    }
+
+    #[test]
+    fn complex_ode_rejects_short_rhs_output() {
+        let err = complex_ode(
+            |_t, _y| Vec::new(),
+            &[(1.0, 0.0)],
+            (0.0, 1.0),
+            Some(&[1.0]),
+            1e-6,
+            1e-9,
+        )
+        .expect_err("short complex RHS output");
+        assert_eq!(
+            err,
+            IntegrateValidationError::RhsWrongShape {
+                expected: 1,
+                actual: 0
+            }
+        );
+    }
+
+    #[test]
+    fn complex_ode_rejects_long_rhs_output() {
+        let err = complex_ode(
+            |_t, _y| vec![(0.0, 1.0), (1.0, 0.0)],
+            &[(1.0, 0.0)],
+            (0.0, 1.0),
+            Some(&[1.0]),
+            1e-6,
+            1e-9,
+        )
+        .expect_err("long complex RHS output");
+        assert_eq!(
+            err,
+            IntegrateValidationError::RhsWrongShape {
+                expected: 1,
+                actual: 2
+            }
+        );
     }
 }

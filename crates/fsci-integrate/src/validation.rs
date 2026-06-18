@@ -135,6 +135,7 @@ pub enum IntegrateValidationError {
     NonFiniteY0,
     NonFiniteSpan,
     NonFiniteF0,
+    RhsWrongShape { expected: usize, actual: usize },
     TEvalOutOfSpan,
     TEvalNotSorted,
     NotYetImplemented { function: &'static str },
@@ -159,6 +160,10 @@ impl std::fmt::Display for IntegrateValidationError {
             Self::NonFiniteY0 => write!(f, "`y0` must be finite in Hardened mode."),
             Self::NonFiniteSpan => write!(f, "`t_span` must be finite."),
             Self::NonFiniteF0 => write!(f, "`f0` must be finite in Hardened mode."),
+            Self::RhsWrongShape { expected, actual } => write!(
+                f,
+                "right-hand side returned {actual} derivative values, expected {expected}."
+            ),
             Self::TEvalOutOfSpan => write!(f, "Values in `t_eval` are not within `t_span`."),
             Self::TEvalNotSorted => write!(f, "Values in `t_eval` are not properly sorted."),
             Self::NotYetImplemented { function } => {
