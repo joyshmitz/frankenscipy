@@ -46,3 +46,27 @@ condition so dead ends are not repeated casually.
   path costs more than the allocation removal, reject this scratch formulation
   and do not retry without allocator-profile evidence showing RK temporary Vec
   churn is again a top-5 integrate hotspot.
+
+## 2026-06-18 - frankenscipy-va60h - linkage row-major distance arena
+
+- Agent: cod-a / MistyBirch
+- Lever: replace the nearest-neighbour linkage core's `(2n-1) x (2n-1)`
+  `Vec<Vec<f64>>` inter-cluster distance matrix with one row-major `Vec<f64>`
+  arena and stride indexing; fill that arena directly from observations or
+  condensed precomputed distances for the non-Centroid/Median methods.
+- Status: pending batch-test. This is a code-first commit per campaign
+  instruction; only local `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a
+  cargo check -p fsci-cluster` is expected before commit.
+- Correctness guard: `linkage_flat_core_matches_precomputed_condensed_contract`
+  plus existing SciPy reference and inactive-cluster regression coverage for
+  `linkage` / `linkage_from_distances`.
+- Benchmark guard: compare `cargo run --profile release-perf -p fsci-cluster
+  --bin perf_linkage` against the pre-change commit on the same worker/target
+  dir, with emphasis on Ward/Average linkage at n>=800 where the row-major arena
+  should reduce row-allocation and pointer-chasing overhead.
+- Retry condition: keep only if same-worker focused linkage timings show a
+  stable win outside noise with byte-identical linkage rows; if flat indexing
+  loses to the old nested rows due multiply/index overhead or cache effects,
+  reject this exact full-square arena formulation and do not retry without a
+  profile showing `agglomerate_nnarray` row traversal or allocation is again a
+  top-5 cluster hotspot.

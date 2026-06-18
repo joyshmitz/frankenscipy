@@ -3446,12 +3446,18 @@ fn linkage_fast(n: usize, initial_d: &[Vec<f64>], method: LinkageMethod) -> Vec<
 /// Nearest active successor (smallest `j > i`, both active, minimum distance)
 /// of cluster `i`, scanning the same ascending-`j` strict-`<` order the naive
 /// pairwise scan uses, so ties resolve to the same `j`.
-fn agglo_nearest(inter_dist: &[Vec<f64>], active: &[bool], i: usize, total: usize) -> (usize, f64) {
+#[inline]
+fn agglo_idx(total: usize, row: usize, col: usize) -> usize {
+    row * total + col
+}
+
+fn agglo_nearest(inter_dist: &[f64], active: &[bool], i: usize, total: usize) -> (usize, f64) {
     let mut best_j = i;
     let mut best_d = f64::INFINITY;
+    let row = &inter_dist[agglo_idx(total, i, 0)..agglo_idx(total, i + 1, 0)];
     for j in (i + 1)..total {
-        if active[j] && inter_dist[i][j] < best_d {
-            best_d = inter_dist[i][j];
+        if active[j] && row[j] < best_d {
+            best_d = row[j];
             best_j = j;
         }
     }
@@ -3469,7 +3475,7 @@ fn agglo_nearest(inter_dist: &[Vec<f64>], active: &[bool], i: usize, total: usiz
 /// pairwise scan element-for-element.
 fn agglomerate_nnarray(
     n: usize,
-    mut inter_dist: Vec<Vec<f64>>,
+    mut inter_dist: Vec<f64>,
     method: LinkageMethod,
 ) -> Vec<[f64; 4]> {
     let total = 2 * n - 1;
@@ -3513,8 +3519,8 @@ fn agglomerate_nnarray(
             if !active[k] {
                 continue;
             }
-            let d_ki = inter_dist[k][mi];
-            let d_kj = inter_dist[k][mj];
+            let d_ki = inter_dist[agglo_idx(total, k, mi)];
+            let d_kj = inter_dist[agglo_idx(total, k, mj)];
             let new_dist = match method {
                 LinkageMethod::Single => d_ki.min(d_kj),
                 LinkageMethod::Complete => d_ki.max(d_kj),
@@ -3549,8 +3555,8 @@ fn agglomerate_nnarray(
                     .max(0.0)
                     .sqrt(),
             };
-            inter_dist[k][new_id] = new_dist;
-            inter_dist[new_id][k] = new_dist;
+            inter_dist[agglo_idx(total, k, new_id)] = new_dist;
+            inter_dist[agglo_idx(total, new_id, k)] = new_dist;
         }
 
         // The new cluster is the largest active id, so it has no successor yet.
@@ -3568,9 +3574,12 @@ fn agglomerate_nnarray(
                 let (j, d) = agglo_nearest(&inter_dist, &active, k, total);
                 nn[k] = j;
                 d_nn[k] = d;
-            } else if inter_dist[k][new_id] < d_nn[k] {
-                d_nn[k] = inter_dist[k][new_id];
-                nn[k] = new_id;
+            } else {
+                let d_new = inter_dist[agglo_idx(total, k, new_id)];
+                if d_new < d_nn[k] {
+                    d_nn[k] = d_new;
+                    nn[k] = new_id;
+                }
             }
         }
     }
@@ -3592,32 +3601,36 @@ pub fn linkage(data: &[Vec<f64>], method: LinkageMethod) -> Result<Vec<[f64; 4]>
         ));
     }
 
-    // Compute pairwise distance matrix
-    let mut dist_mat = vec![vec![f64::INFINITY; n]; n];
-    for i in 0..n {
-        dist_mat[i][i] = 0.0;
-        for j in i + 1..n {
-            let d = sq_dist(&data[i], &data[j]).sqrt();
-            dist_mat[i][j] = d;
-            dist_mat[j][i] = d;
-        }
-    }
-
     // br-6m7l: scipy uses fast_linkage (heap-based "Generic Clustering
     // Algorithm" from Mullner 2011) for Centroid/Median; fsci's simpler
     // O(n^3) scan diverges from scipy on tie-break of the column-0/1
     // cluster IDs. Route those two methods through the heap path so the
     // resulting linkage matrix matches scipy element-for-element.
     if matches!(method, LinkageMethod::Centroid | LinkageMethod::Median) {
+        let mut dist_mat = vec![vec![f64::INFINITY; n]; n];
+        for i in 0..n {
+            dist_mat[i][i] = 0.0;
+            for j in i + 1..n {
+                let d = sq_dist(&data[i], &data[j]).sqrt();
+                dist_mat[i][j] = d;
+                dist_mat[j][i] = d;
+            }
+        }
         return Ok(linkage_fast(n, &dist_mat, method));
     }
 
-    // Extend dist_mat to handle new clusters, then run the shared O(n^2)
-    // nearest-neighbour-array agglomeration (byte-identical to the old scan).
+    // Fill the full inter-cluster arena directly in row-major order. The
+    // nearest-neighbour scan is O(n^2)-typical and strides within one flat
+    // allocation instead of chasing `(2n-1)` row allocations.
     let total = 2 * n - 1;
-    let mut inter_dist = vec![vec![f64::INFINITY; total]; total];
+    let mut inter_dist = vec![f64::INFINITY; total * total];
     for i in 0..n {
-        inter_dist[i][..n].copy_from_slice(&dist_mat[i][..n]);
+        inter_dist[agglo_idx(total, i, i)] = 0.0;
+        for j in i + 1..n {
+            let d = sq_dist(&data[i], &data[j]).sqrt();
+            inter_dist[agglo_idx(total, i, j)] = d;
+            inter_dist[agglo_idx(total, j, i)] = d;
+        }
     }
 
     Ok(agglomerate_nnarray(n, inter_dist, method))
@@ -5758,16 +5771,17 @@ pub fn linkage_from_distances(
         ));
     }
 
-    // Build full distance matrix from condensed form
-    let mut dist = vec![vec![f64::INFINITY; n]; n];
+    // Build the full inter-cluster arena directly from condensed form.
+    let total = 2 * n - 1;
+    let mut inter_dist = vec![f64::INFINITY; total * total];
     let mut idx = 0;
     #[allow(clippy::needless_range_loop)]
     for i in 0..n {
-        dist[i][i] = 0.0;
+        inter_dist[agglo_idx(total, i, i)] = 0.0;
         for j in i + 1..n {
             if idx < condensed_dist.len() {
-                dist[i][j] = condensed_dist[idx];
-                dist[j][i] = condensed_dist[idx];
+                inter_dist[agglo_idx(total, i, j)] = condensed_dist[idx];
+                inter_dist[agglo_idx(total, j, i)] = condensed_dist[idx];
                 idx += 1;
             }
         }
@@ -5775,12 +5789,6 @@ pub fn linkage_from_distances(
 
     // Run the shared O(n^2) nearest-neighbour-array agglomeration over the
     // distance matrix (byte-identical to the old pairwise-scan loop).
-    let total = 2 * n - 1;
-    let mut inter_dist = vec![vec![f64::INFINITY; total]; total];
-    for i in 0..n {
-        inter_dist[i][..n].copy_from_slice(&dist[i][..n]);
-    }
-
     Ok(agglomerate_nnarray(n, inter_dist, method))
 }
 
@@ -7685,6 +7693,48 @@ mod tests {
         assert_eq!(z[2][1], 5.0);
         assert!((z[2][2] - 7.0).abs() < 1e-12, "step 2 dist = {}", z[2][2]);
         assert_eq!(z[2][3], 4.0);
+    }
+
+    #[test]
+    fn linkage_flat_core_matches_precomputed_condensed_contract() {
+        let data = vec![
+            vec![0.0, 0.0],
+            vec![1.0, 0.5],
+            vec![2.5, -0.25],
+            vec![4.0, 1.75],
+            vec![5.5, -1.0],
+            vec![7.0, 0.25],
+        ];
+        let n = data.len();
+        let mut condensed = Vec::with_capacity(n * (n - 1) / 2);
+        for i in 0..n {
+            for j in i + 1..n {
+                condensed.push(sq_dist(&data[i], &data[j]).sqrt());
+            }
+        }
+
+        for method in [
+            LinkageMethod::Single,
+            LinkageMethod::Complete,
+            LinkageMethod::Average,
+            LinkageMethod::Ward,
+            LinkageMethod::Weighted,
+        ] {
+            let from_data = linkage(&data, method).unwrap();
+            let from_dist = linkage_from_distances(&condensed, n, method).unwrap();
+            assert_eq!(from_data.len(), from_dist.len(), "{method:?}");
+            for (row_idx, (a, b)) in from_data.iter().zip(&from_dist).enumerate() {
+                for col in 0..4 {
+                    assert_eq!(
+                        a[col].to_bits(),
+                        b[col].to_bits(),
+                        "{method:?} row {row_idx} col {col}: {} != {}",
+                        a[col],
+                        b[col]
+                    );
+                }
+            }
+        }
     }
 
     #[test]
