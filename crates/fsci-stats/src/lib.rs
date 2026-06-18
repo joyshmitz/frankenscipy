@@ -27753,7 +27753,7 @@ pub fn skew_weighted(data: &[f64], weights: &[f64]) -> f64 {
 /// kurtosis = m4 / m2^2 - 3 where m_k are central moments.
 pub fn kurtosis(data: &[f64]) -> f64 {
     let n = data.len();
-    if n < 4 {
+    if n < 2 {
         return f64::NAN;
     }
     let nf = n as f64;
@@ -74554,6 +74554,26 @@ mod tests {
             (result - (-1.2242424242424244)).abs() < 1e-10,
             "kurtosis got {result}, expected -1.2242424242424244"
         );
+    }
+
+    #[test]
+    fn kurtosis_small_samples_match_scipy_reference_values() {
+        let two = vec![1.0, 2.0];
+        let two_result = kurtosis(&two);
+        assert!(
+            (two_result - (-2.0)).abs() < 1e-15,
+            "kurtosis got {two_result}, expected -2.0"
+        );
+
+        let three = vec![1.0, 2.0, 3.0];
+        let three_result = kurtosis(&three);
+        assert!(
+            (three_result - (-1.5)).abs() < 1e-15,
+            "kurtosis got {three_result}, expected -1.5"
+        );
+
+        let degenerate = vec![3.0, 3.0];
+        assert!(kurtosis(&degenerate).is_nan());
     }
 
     #[test]
