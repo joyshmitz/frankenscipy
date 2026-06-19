@@ -73,5 +73,32 @@ fn bench_kdtree(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_transform_batch, bench_pdist, bench_kdtree);
+/// Delaunay triangulation (Bowyer-Watson, frankenscipy-8d2z2 buffer hoist) vs scipy's
+/// Qhull (docs/perf_oracle_delaunay.py). Tests fsci's most complex spatial algorithm
+/// against scipy's elite geometric C.
+fn bench_delaunay(c: &mut Criterion) {
+    use fsci_spatial::Delaunay;
+    let mut group = c.benchmark_group("delaunay");
+    for &n in &[1000usize, 2000] {
+        // Deterministic scattered 2-D points (low-discrepancy-ish, no exact duplicates).
+        let pts: Vec<(f64, f64)> = (0..n)
+            .map(|i| {
+                let t = i as f64;
+                ((t * 0.6180339887).fract() * 100.0, (t * 0.4142135624).fract() * 100.0)
+            })
+            .collect();
+        group.bench_function(BenchmarkId::from_parameter(n), |b| {
+            b.iter(|| Delaunay::new(&pts))
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_transform_batch,
+    bench_pdist,
+    bench_kdtree,
+    bench_delaunay
+);
 criterion_main!(benches);

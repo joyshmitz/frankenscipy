@@ -51,6 +51,8 @@ regressions are reverted. Entries also routed to MistyBirch for the canonical me
 | ndimage zoom (kernel, NOT my opt) | zoom 2× 256² order=3 | 14053 µs | 31573 µs | **0.45× (2.25× slower)** | generic spline-weight kernel | ⚠️ LOSS → bead |
 | kendalltau inversion-count O(n log n) | kendalltau n=2048 | 597 µs | 230.4 µs | **2.59× faster** | scipy fixed overhead | ✅ KEEP |
 | kendalltau inversion-count O(n log n) | kendalltau n=4096 | 537 µs | 552.4 µs | 0.97× (parity) | both O(n log n) at scale | ✅ KEEP |
+| Delaunay Bowyer-Watson (8d2z2 hoist) | Delaunay n=1000 2-D | 1980 µs | 6534 µs | **0.30× (3.3× slower)** | O(n²) point-location | ⚠️ COMPLEXITY gap → bead |
+| Delaunay Bowyer-Watson (8d2z2 hoist) | Delaunay n=2000 2-D | 4488 µs | 26311 µs | **0.17× (5.9× slower)** | scales O(n²) vs Qhull O(n log n) | ⚠️ COMPLEXITY gap → bead |
 
 ## Detail
 
@@ -268,6 +270,19 @@ dominates at smaller n; at n=4096 both O(n log n) merge-sort kernels converge. H
 read: fsci's algorithmic kernel MATCHES scipy's C (parity at scale) and WINS where
 scipy's per-call overhead dominates — the same low-overhead advantage seen in
 SpMV-small/Rotation/transform. KEEP. Conformance green.
+
+### Delaunay (Bowyer-Watson) — ⚠️ COMPLEXITY gap vs Qhull (first asymptotic gap found)
+Oracle `docs/perf_oracle_delaunay.py` (scipy.spatial.Delaunay = Qhull, 2-D). fsci
+**3.3→5.9× SLOWER:** n=1000 6.53 ms vs 1.98 ms; n=2000 26.31 ms vs 4.49 ms. The
+SCALING is the finding: **fsci 6.53→26.31 ms = 4.0× per 2× n (≈O(n²))** while Qhull is
+2.27× (≈O(n log n)). Unlike every prior loss (constant-factor kernel gaps), this is an
+ASYMPTOTIC gap — fsci's Bowyer-Watson does linear point-location (walk all triangles)
+instead of a spatial-index-accelerated locate. The `8d2z2` buffer hoist is a real
+constant-factor win but sits atop an O(n²) algorithm, so the gap WIDENS with n. NOT a
+regression (the hoist helps); the complexity is the underlying triangulation. Fix:
+spatial-accelerated point location (grid/quadtree/jump-and-walk) → O(n log n). Bead
+filed for the spatial owner. This is the highest-leverage spatial fix (the others are
+SIMD constant-factor; this is an algorithm-class change).
 
 ## Release-readiness summary (CrimsonForge beads, as of this round)
 
