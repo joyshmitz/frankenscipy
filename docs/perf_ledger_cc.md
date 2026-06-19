@@ -458,7 +458,13 @@ vectorizable and would win for small s, BUT requires `f64::min` not `total_cmp` 
 changes NaN semantics (no NaN minmax test exists, so it'd pass conformance, but it's a latent
 behaviour divergence from scipy — NOT shipped). A true flip needs an explicit SIMD min with
 total_cmp NaN ordering. The deque is the right scalar algorithm; the gap is scipy's tighter
-vectorized C.
+vectorized C. EMPIRICALLY CONFIRMED (attempted no-NaN-gated shift-min, REVERTED clean 296→
+237/1): `f64::min`/`max` diverge from `total_cmp` not only on NaN but on SIGNED ZEROS —
+`total_cmp(-0.0,+0.0)=Less` so min=-0.0/max=+0.0, but `f64::min(-0.0,+0.0)` is order-dependent
+(x86 minsd). The byte-for-byte `separable_minmax_matches_rank_filter` test (which seeds ±0.0)
+caught it. A correct vectorized version needs the f64→monotonic-i64 transform + SIMD i64 min,
+which is AVX-512-only (AVX2 lacks `vpminsq`) → not portable. NO clean lever; the conformance
+gate prevented shipping a subtly-wrong (signed-zero) result.
 DEAD-END (reverted clean, 296/0): rewrote `minmax_filter_along_axis` to the correlate1d
 slab pattern + parallelize over outer slabs (byte-identical). REGRESSED ~1.5-2× even after
 hoisting the per-slab VecDeque alloc to per-thread reuse. At 256² the filter is below the
