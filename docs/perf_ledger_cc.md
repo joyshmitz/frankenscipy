@@ -41,6 +41,8 @@ regressions are reverted. Entries also routed to MistyBirch for the canonical me
 | gaussian_kde evaluate_many parallel | KDE n=5000 eval 5000 pts | 201197 µs | 11959 µs | **16.8× faster** | — | ✅ KEEP |
 | MGC mgc_map O(n²) + parallel reps | multiscale_graphcorr n=80 reps=100 | 295705 µs | 21578 µs | **13.7× faster** | O(n⁴)→O(n²) + parallel | ✅ KEEP |
 | Rotation.apply_many (w7ocv) | apply 8192 pts | 28.30 µs | 12.03 µs | **2.35× faster** | matrix-once hoist 4.5× vs map | ✅ KEEP |
+| loadtxt direct-parse (fwnb1) | loadtxt 500×20 | 2022 µs | 259.5 µs | **7.79× faster** | vs numpy.loadtxt (Python) | ✅ KEEP |
+| savetxt write! (d1uxy) | savetxt 500×20 | 4208 µs | 631.6 µs | **6.66× faster** | vs numpy.savetxt (Python) | ✅ KEEP |
 
 ## Detail
 
@@ -183,6 +185,14 @@ access) and scipy's Rotation.apply carries numpy dispatch + intermediate-array o
 Refines the boundary: fsci beats scipy on regular low-overhead batch kernels even when
 cheap; it loses only on IRREGULAR kernels where scipy's C is tightly tuned (SpMV gather,
 pdist). KEEP. Conformance green.
+
+### Text I/O: loadtxt / savetxt (frankenscipy-fwnb1, d1uxy) — ✅ KEEP (win)
+Oracle `docs/perf_oracle_io.py` (numpy.loadtxt/savetxt, 500×20 matrix). **fsci 6.7–7.8×
+FASTER:** loadtxt 259.5 µs vs numpy 2022 µs (7.79×); savetxt 631.6 µs vs numpy 4208 µs
+(6.66×). numpy's text I/O is pure-Python parsing/formatting; fsci's direct-parse (parse
+straight into the output buffer) + `write!`-into-buffer crush it. Same family as
+KDE/MGC — fsci wins decisively where the original leans on non-vectorized Python. KEEP.
+Conformance green.
 
 ## Release-readiness summary (CrimsonForge beads, as of this round)
 
