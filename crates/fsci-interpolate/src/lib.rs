@@ -4792,36 +4792,72 @@ impl NdBSpline {
             stride[i] = stride[i + 1] * ns[i + 1];
         }
         let total: usize = ns.iter().product();
-        let mut idx = vec![0usize; ndim];
-        points
-            .iter()
-            .map(|point| {
-                let bases: Vec<Vec<f64>> = (0..ndim)
-                    .map(|d| eval_basis_all(&self.t[d], point[d], self.k, ns[d]))
-                    .collect();
-                idx.iter_mut().for_each(|v| *v = 0);
-                let mut sum = 0.0f64;
-                for _ in 0..total {
-                    let mut off = 0usize;
-                    let mut w = 1.0f64;
-                    for d in 0..ndim {
-                        off += idx[d] * stride[d];
-                        w *= bases[d][idx[d]];
-                    }
-                    if w != 0.0 {
-                        sum += self.c[off] * w;
-                    }
-                    for d in (0..ndim).rev() {
-                        idx[d] += 1;
-                        if idx[d] < ns[d] {
-                            break;
-                        }
-                        idx[d] = 0;
-                    }
+        // Per-point tensor-product B-spline evaluation into a caller-provided `idx`
+        // scratch (the per-dim `bases` are allocated per point already). Each point
+        // is an independent O(total) contraction reading only the immutable knots/
+        // coefficients, so split large point batches across threads into ordered
+        // output slots — byte-identical to the serial map (per-point pure, no cross-
+        // point reduction). Each thread carries its own idx. frankenscipy-yw7ts.
+        let eval_point = |point: &[f64], idx: &mut [usize]| -> f64 {
+            let bases: Vec<Vec<f64>> = (0..ndim)
+                .map(|d| eval_basis_all(&self.t[d], point[d], self.k, ns[d]))
+                .collect();
+            idx.iter_mut().for_each(|v| *v = 0);
+            let mut sum = 0.0f64;
+            for _ in 0..total {
+                let mut off = 0usize;
+                let mut w = 1.0f64;
+                for d in 0..ndim {
+                    off += idx[d] * stride[d];
+                    w *= bases[d][idx[d]];
                 }
-                sum
-            })
-            .collect()
+                if w != 0.0 {
+                    sum += self.c[off] * w;
+                }
+                for d in (0..ndim).rev() {
+                    idx[d] += 1;
+                    if idx[d] < ns[d] {
+                        break;
+                    }
+                    idx[d] = 0;
+                }
+            }
+            sum
+        };
+        let nthreads = if points.len().saturating_mul(total.max(1)) < (1 << 16)
+            || points.len() < 4
+        {
+            1
+        } else {
+            std::thread::available_parallelism()
+                .map(|c| c.get())
+                .unwrap_or(1)
+                .min(points.len())
+        };
+        if nthreads <= 1 {
+            let mut idx = vec![0usize; ndim];
+            points
+                .iter()
+                .map(|point| eval_point(point, &mut idx))
+                .collect()
+        } else {
+            let mut out = vec![0.0f64; points.len()];
+            let chunk = points.len().div_ceil(nthreads);
+            let eval_point = &eval_point;
+            std::thread::scope(|scope| {
+                for (out_chunk, pts_chunk) in
+                    out.chunks_mut(chunk).zip(points.chunks(chunk))
+                {
+                    scope.spawn(move || {
+                        let mut idx = vec![0usize; ndim];
+                        for (o, point) in out_chunk.iter_mut().zip(pts_chunk.iter()) {
+                            *o = eval_point(point, &mut idx);
+                        }
+                    });
+                }
+            });
+            out
+        }
     }
 }
 
