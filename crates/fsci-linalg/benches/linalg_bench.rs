@@ -401,6 +401,27 @@ fn bench_u0ucw_wide_lstsq(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_u0ucw_wide_pinv(c: &mut Criterion) {
+    use std::sync::atomic::Ordering::Relaxed;
+
+    let mut group = c.benchmark_group("u0ucw_wide_pinv");
+    group.sample_size(10);
+    group.measurement_time(Duration::from_secs(3));
+    for &(rows, cols) in &[(500usize, 1000usize), (1000, 2000)] {
+        let a = make_underdetermined(rows, cols);
+        group.bench_function(format!("{rows}x{cols}_normal_equation_cholesky"), |bencher| {
+            fsci_linalg::DISABLE_WIDE_PINV_CHOLESKY.store(false, Relaxed);
+            bencher.iter(|| pinv(&a, PinvOptions::default()).unwrap());
+        });
+        group.bench_function(format!("{rows}x{cols}_svd_fallback"), |bencher| {
+            fsci_linalg::DISABLE_WIDE_PINV_CHOLESKY.store(true, Relaxed);
+            bencher.iter(|| pinv(&a, PinvOptions::default()).unwrap());
+            fsci_linalg::DISABLE_WIDE_PINV_CHOLESKY.store(false, Relaxed);
+        });
+    }
+    group.finish();
+}
+
 fn bench_baseline_pinv(c: &mut Criterion) {
     use std::sync::atomic::Ordering::Relaxed;
     let mut group = c.benchmark_group("baseline_pinv");
@@ -504,6 +525,7 @@ criterion_group!(
     bench_baseline_inv,
     bench_baseline_lstsq,
     bench_u0ucw_wide_lstsq,
+    bench_u0ucw_wide_pinv,
     bench_baseline_pinv
 );
 

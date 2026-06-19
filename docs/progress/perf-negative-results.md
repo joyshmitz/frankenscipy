@@ -284,6 +284,32 @@ condition so dead ends are not repeated casually.
   and do not retry unless allocation or cache profiles put wide-route `A^T`
   materialization back in the top linalg hotspot list.
 
+## 2026-06-19 - frankenscipy-u0ucw - Wide pinv normal-equation Cholesky TRSM
+
+- Agent: cod-a / MistyBirch
+- Lever: add a full-row-rank wide `pinv` route using
+  `A^+ = A^T (A A^T)^-1`: form the small row Gram from row-major input, solve
+  the identity RHS through a new 8-wide batched Cholesky TRSM helper, stream the
+  final `A^T G^-1` multiply without materializing `A^T`, and certify
+  `A A^+ ~= I_rows` before accepting.
+- Status: pending batch-test. This is a code-first commit per campaign
+  instruction; only local `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a
+  cargo check -p fsci-linalg` is expected before commit.
+- Correctness guard: `wide_pinv_cholesky_matches_svd_reference` locks the new
+  route against the SVD pseudo-inverse tolerance contract, while
+  `wide_pinv_helpers_match_materialized_products` checks identity-RHS Cholesky
+  solve, streamed `A^T G^-1`, and streaming left-inverse certificate against
+  materialized nalgebra products.
+- Benchmark guard: same-binary Criterion group `u0ucw_wide_pinv` compares
+  `_normal_equation_cholesky` against `_svd_fallback` on 500x1000 and
+  1000x2000 full-row-rank wide workloads.
+- Retry condition: keep only if same-worker `u0ucw_wide_pinv` timings improve
+  without rank, pseudo-inverse tolerance, Moore-Penrose left-inverse, or public
+  `pinv` certificate drift; if the normal-equation Cholesky route is
+  neutral/slower because the left-inverse certificate or `A^T G^-1` multiply
+  dominates, reject this exact wide-`pinv` formulation and do not retry unless
+  profiles put wide full-row-rank SVD work back in the top linalg hotspot list.
+
 ## 2026-06-18 - frankenscipy-va60h - MDS streamed double-centering
 
 - Agent: cod-a / MistyBirch

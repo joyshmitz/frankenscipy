@@ -2834,6 +2834,51 @@ pub fn pinv_with_casp(
     }
 
     if options.mode == RuntimeMode::Strict
+        && let Some(fast) = pinv_full_rank_wide_cholesky(a, &matrix, atol, rtol)
+    {
+        let (_, posterior, expected_losses, _) = portfolio.select_action(fast.rcond_estimate, None);
+        let action = SolverAction::SVDFallback;
+
+        let certificate = SolveCertificate {
+            action,
+            matrix_shape: (rows, cols),
+            rcond_estimate: fast.rcond_estimate,
+            structural_evidence: StructuralEvidence::General,
+            posterior: posterior.to_vec(),
+            expected_losses: expected_losses.to_vec(),
+            chosen_expected_loss: expected_losses[action.index()],
+            fallback_active: false,
+        };
+
+        emit_trace(LinalgTrace {
+            operation: "pinv_with_casp",
+            matrix_size: (rows, cols),
+            mode: options.mode,
+            rcond: Some(fast.rcond_estimate),
+            warning: None,
+            error: None,
+        });
+
+        portfolio.record_evidence(SolverEvidenceEntry {
+            component: "pinv_with_casp",
+            matrix_shape: (rows, cols),
+            rcond_estimate: fast.rcond_estimate,
+            chosen_action: action,
+            posterior: posterior.to_vec(),
+            expected_losses: expected_losses.to_vec(),
+            chosen_expected_loss: expected_losses[action.index()],
+            fallback_active: false,
+            backward_error: None,
+        });
+
+        return Ok(PinvResult {
+            pseudo_inverse: fast.pseudo_inverse,
+            rank: fast.rank,
+            certificate: Some(certificate),
+        });
+    }
+
+    if options.mode == RuntimeMode::Strict
         && let Some(fast) = pinv_full_rank_square_lu(a, &matrix, atol, rtol)
     {
         let (_, posterior, expected_losses, _) = portfolio.select_action(fast.rcond_estimate, None);
@@ -11242,6 +11287,12 @@ pub static DISABLE_TALL_PINV_TRANSPOSE_RHS_COPY: std::sync::atomic::AtomicBool =
 #[doc(hidden)]
 pub static DISABLE_WIDE_LSTSQ_ROW_STREAMING: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+/// Runtime switch to force full-row-rank wide `pinv` through the public SVD
+/// route for same-binary A/B benchmarks. Defaults off. `#[doc(hidden)]`;
+/// internal.
+#[doc(hidden)]
+pub static DISABLE_WIDE_PINV_CHOLESKY: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 /// Loose conditioning sanity floor for the solve-only normal-equations lstsq
 /// route: spectra below this rcond are hopeless even with refinement, so we
 /// fall back to the public thin-SVD route. Real acceptance is governed by the
@@ -11312,6 +11363,14 @@ fn wide_lstsq_row_streaming_disabled() -> bool {
     }
     static ENV: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENV.get_or_init(|| std::env::var_os("FSCI_DISABLE_WIDE_LSTSQ_ROW_STREAMING").is_some())
+}
+
+fn wide_pinv_cholesky_disabled() -> bool {
+    if DISABLE_WIDE_PINV_CHOLESKY.load(std::sync::atomic::Ordering::Relaxed) {
+        return true;
+    }
+    static ENV: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENV.get_or_init(|| std::env::var_os("FSCI_DISABLE_WIDE_PINV_CHOLESKY").is_some())
 }
 
 fn pinv_full_rank_tall_cholesky(
@@ -11423,6 +11482,100 @@ fn pinv_full_rank_tall_cholesky_with_min_cols(
         pseudo_inverse,
         rank: cols,
         rcond_estimate: (min_diag / max_diag).sqrt(),
+    })
+}
+
+/// Solve-only pseudo-inverse route for a full-row-rank **wide** matrix.
+///
+/// For `rows < cols` and full row rank, `A⁺ = Aᵀ(AAᵀ)⁻¹`. The expensive public
+/// SVD is avoided by factoring the small row Gram once, solving all identity
+/// right-hand sides as a vectorized Cholesky TRSM, then streaming the final
+/// `Aᵀ·G⁻¹` multiply directly from the caller's row-major input. The acceptance
+/// certificate verifies `A·A⁺ ≈ I_rows`; any rank, conditioning, or finiteness
+/// uncertainty falls back to the SVD route.
+fn pinv_full_rank_wide_cholesky(
+    a: &[Vec<f64>],
+    matrix: &DMatrix<f64>,
+    atol: f64,
+    rtol: f64,
+) -> Option<FullRankTallPinvResult> {
+    pinv_full_rank_wide_cholesky_with_min_rows(a, matrix, atol, rtol, FULL_RANK_TALL_PINV_MIN_COLS)
+}
+
+fn pinv_full_rank_wide_cholesky_with_min_rows(
+    a: &[Vec<f64>],
+    matrix: &DMatrix<f64>,
+    atol: f64,
+    rtol: f64,
+    min_rows: usize,
+) -> Option<FullRankTallPinvResult> {
+    if wide_pinv_cholesky_disabled() {
+        return None;
+    }
+
+    let rows = matrix.nrows();
+    let cols = matrix.ncols();
+    let default_rtol = (rows.max(cols) as f64) * f64::EPSILON;
+    if cols <= rows
+        || rows < min_rows
+        || atol != 0.0
+        || rtol > default_rtol
+        || !rows_are_rectangular(a, cols)
+        || matrix.iter().any(|value| !value.is_finite())
+    {
+        return None;
+    }
+
+    let gram = symmetric_row_gram_matrix_from_rows(a, rows, cols)?;
+    for idx in 0..rows {
+        let diag = gram[(idx, idx)];
+        if diag <= 0.0 || !diag.is_finite() {
+            return None;
+        }
+    }
+
+    let eigen = gram.clone().symmetric_eigen();
+    let mut max_eig = 0.0_f64;
+    let mut min_eig = f64::MAX;
+    for &lambda in eigen.eigenvalues.iter() {
+        if !lambda.is_finite() || lambda <= 0.0 {
+            return None;
+        }
+        max_eig = max_eig.max(lambda);
+        min_eig = min_eig.min(lambda);
+    }
+    if max_eig <= 0.0 || min_eig <= 0.0 {
+        return None;
+    }
+
+    let max_s = max_eig.sqrt();
+    let min_s = min_eig.sqrt();
+    let threshold = atol + rtol * max_s;
+    if min_s <= threshold || min_s / max_s < FULL_RANK_TALL_LSTSQ_MIN_RCOND {
+        return None;
+    }
+
+    let chol = Cholesky::new(gram)?;
+    let gram_inv_rows = cholesky_solve_identity_rhs_rows_batched(&chol)?;
+    let pseudo_inverse = matrix_transpose_mul_matrix_from_rows(a, rows, cols, &gram_inv_rows)?;
+    if pseudo_inverse
+        .iter()
+        .flat_map(|row| row.iter())
+        .any(|value| !value.is_finite())
+    {
+        return None;
+    }
+
+    let max_error = wide_pinv_left_inverse_max_error_rows(a, rows, cols, &pseudo_inverse)?;
+    let tolerance = FULL_RANK_TALL_PINV_RIGHT_INVERSE_REL_TOL * (rows as f64).sqrt();
+    if max_error > tolerance {
+        return None;
+    }
+
+    Some(FullRankTallPinvResult {
+        pseudo_inverse,
+        rank: rows,
+        rcond_estimate: min_s / max_s,
     })
 }
 
@@ -15985,6 +16138,98 @@ fn matrix_transpose_mul_vector_from_rows(
     Some(DVector::from_vec(out))
 }
 
+/// Compute `A^T B` from row-major `A` and row-major `B`, where `A` is
+/// `rows x cols` and `B` is `rows x rhs_cols`. The wide `pinv` route uses this
+/// for `A^T (AA^T)^{-1}` without materializing `A^T`.
+fn matrix_transpose_mul_matrix_from_rows(
+    a: &[Vec<f64>],
+    rows: usize,
+    cols: usize,
+    rhs_rows: &[Vec<f64>],
+) -> Option<Vec<Vec<f64>>> {
+    if a.len() != rows || rhs_rows.len() != rows || !rows_are_rectangular(a, cols) {
+        return None;
+    }
+    let rhs_cols = rhs_rows.first().map_or(0, Vec::len);
+    if rhs_rows.iter().any(|row| row.len() != rhs_cols) {
+        return None;
+    }
+
+    let mut out = vec![vec![0.0_f64; rhs_cols]; cols];
+    for (out_col, out_row) in out.iter_mut().enumerate() {
+        for input_row in 0..rows {
+            let scale = a[input_row][out_col];
+            let rhs = &rhs_rows[input_row];
+            let sv = Simd::<f64, 8>::splat(scale);
+            let mut col = 0;
+            while col + 8 <= rhs_cols {
+                let acc = Simd::<f64, 8>::from_slice(&out_row[col..col + 8])
+                    + sv * Simd::<f64, 8>::from_slice(&rhs[col..col + 8]);
+                acc.copy_to_slice(&mut out_row[col..col + 8]);
+                col += 8;
+            }
+            while col < rhs_cols {
+                out_row[col] += scale * rhs[col];
+                col += 1;
+            }
+        }
+    }
+    Some(out)
+}
+
+/// Compute `max(abs(A·A⁺ - I))` for a row-major wide `A` and row-major
+/// pseudo-inverse output without materializing the `rows x rows` certificate.
+fn wide_pinv_left_inverse_max_error_rows(
+    a: &[Vec<f64>],
+    rows: usize,
+    cols: usize,
+    pinv_rows: &[Vec<f64>],
+) -> Option<f64> {
+    if a.len() != rows
+        || pinv_rows.len() != cols
+        || !rows_are_rectangular(a, cols)
+        || pinv_rows.iter().any(|row| row.len() != rows)
+    {
+        return None;
+    }
+
+    let mut max_error = 0.0_f64;
+    for (row_idx, a_row) in a.iter().enumerate() {
+        let mut out_col = 0;
+        while out_col + 8 <= rows {
+            let mut acc = Simd::<f64, 8>::splat(0.0);
+            for col in 0..cols {
+                acc += Simd::<f64, 8>::splat(a_row[col])
+                    * Simd::<f64, 8>::from_slice(&pinv_rows[col][out_col..out_col + 8]);
+            }
+            let values = acc.to_array();
+            for (lane, value) in values.into_iter().enumerate() {
+                let target = if row_idx == out_col + lane { 1.0 } else { 0.0 };
+                let error = (value - target).abs();
+                if !error.is_finite() {
+                    return None;
+                }
+                max_error = max_error.max(error);
+            }
+            out_col += 8;
+        }
+        while out_col < rows {
+            let mut value = 0.0_f64;
+            for col in 0..cols {
+                value += a_row[col] * pinv_rows[col][out_col];
+            }
+            let target = if row_idx == out_col { 1.0 } else { 0.0 };
+            let error = (value - target).abs();
+            if !error.is_finite() {
+                return None;
+            }
+            max_error = max_error.max(error);
+            out_col += 1;
+        }
+    }
+    Some(max_error)
+}
+
 fn cholesky_syrk_rows(rows: &mut [Vec<f64>], row_offset: usize, l21: &[f64], nb: usize, kb: usize) {
     for (local_i, row) in rows.iter_mut().enumerate() {
         let ii = row_offset + local_i;
@@ -16122,6 +16367,60 @@ fn cholesky_solve_matrix_rhs_rows_batched(
     });
 
     let mut out = vec![vec![0.0; w]; n];
+    for block in blocks {
+        let (c0, block) = block?;
+        let block_w = block.len() / n;
+        for row in 0..n {
+            let src = row * block_w;
+            out[row][c0..c0 + block_w].copy_from_slice(&block[src..src + block_w]);
+        }
+    }
+    Some(out)
+}
+
+/// Solve `L·Lᵀ·X = I` and return `X` in row-major layout. This is the
+/// identity-RHS specialization of [`cholesky_solve_matrix_rhs_rows_batched`]:
+/// it keeps the same 8-wide multi-RHS triangular substitutions but skips the
+/// `n x n` identity `DMatrix` allocation and readback.
+#[allow(clippy::needless_range_loop)]
+fn cholesky_solve_identity_rhs_rows_batched(chol: &Cholesky<f64, Dyn>) -> Option<Vec<Vec<f64>>> {
+    let l = chol.l_dirty();
+    let n = l.nrows();
+    if l.ncols() != n {
+        return None;
+    }
+    if n == 0 {
+        return Some(Vec::new());
+    }
+
+    let nthreads = if tall_pinv_trsm_threads_disabled() {
+        1
+    } else {
+        matmul_thread_count(n, n, n).min(n.div_ceil(64)).max(1)
+    };
+    if nthreads <= 1 {
+        let flat = cholesky_solve_identity_rhs_columns_flat(chol, 0, n)?;
+        return Some(cholesky_rhs_flat_to_rows(n, n, &flat));
+    }
+
+    let chunk = n.div_ceil(nthreads);
+    let blocks: Vec<Option<(usize, Vec<f64>)>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..nthreads)
+            .filter_map(|thread_idx| {
+                let c0 = thread_idx * chunk;
+                if c0 >= n {
+                    return None;
+                }
+                let c1 = (c0 + chunk).min(n);
+                Some(scope.spawn(move || {
+                    cholesky_solve_identity_rhs_columns_flat(chol, c0, c1).map(|block| (c0, block))
+                }))
+            })
+            .collect();
+        handles.into_iter().map(|handle| handle.join().unwrap()).collect()
+    });
+
+    let mut out = vec![vec![0.0; n]; n];
     for block in blocks {
         let (c0, block) = block?;
         let block_w = block.len() / n;
@@ -16282,6 +16581,29 @@ fn cholesky_solve_matrix_rhs_columns_flat(
         let bi = i * w;
         for col in 0..w {
             b[bi + col] = rhs[(i, c0 + col)];
+        }
+    }
+
+    cholesky_solve_lower_flat(&l, b, w)
+}
+
+#[allow(clippy::needless_range_loop)]
+fn cholesky_solve_identity_rhs_columns_flat(
+    chol: &Cholesky<f64, Dyn>,
+    c0: usize,
+    c1: usize,
+) -> Option<Vec<f64>> {
+    let l = chol.l_dirty();
+    let n = l.nrows();
+    let w = c1.checked_sub(c0)?;
+    if l.ncols() != n || c1 > n {
+        return None;
+    }
+
+    let mut b = vec![0.0f64; n * w];
+    for row in 0..n {
+        if row >= c0 && row < c1 {
+            b[row * w + (row - c0)] = 1.0;
         }
     }
 
@@ -19317,6 +19639,94 @@ mod tests {
             max_rhs_diff = max_rhs_diff.max((actual_rhs[idx] - expected_rhs[idx]).abs());
         }
         assert!(max_rhs_diff <= 1e-10);
+    }
+
+    #[test]
+    fn wide_pinv_cholesky_matches_svd_reference() {
+        let rows = 9;
+        let cols = 18;
+        let matrix_rows: Vec<Vec<f64>> = (0..rows)
+            .map(|row| {
+                (0..cols)
+                    .map(|col| {
+                        let diagonal = if row == col { 10.0 + row as f64 } else { 0.0 };
+                        let smooth = ((row * 17 + col * 29 + 11) % 61) as f64 / 137.0;
+                        diagonal + smooth
+                    })
+                    .collect()
+            })
+            .collect();
+        let matrix = dmatrix_from_rows(&matrix_rows).expect("matrix rows");
+        let rtol = (rows.max(cols) as f64) * f64::EPSILON;
+        let fast = pinv_full_rank_wide_cholesky_with_min_rows(&matrix_rows, &matrix, 0.0, rtol, 1)
+            .expect("full-row-rank wide Cholesky pinv route");
+
+        let svd = safe_svd(matrix.clone(), true, true).expect("reference SVD");
+        let max_s = svd.singular_values.iter().copied().fold(0.0_f64, f64::max);
+        let threshold = public_bidiag_default_threshold(rows, cols, max_s);
+        let reference = pseudo_inverse_from_svd(&svd, threshold).expect("reference pinv");
+
+        assert_eq!(fast.rank, rows);
+        assert_close_matrix(
+            &fast.pseudo_inverse,
+            &rows_from_dmatrix(&reference),
+            1e-7,
+            1e-7,
+        );
+    }
+
+    #[test]
+    fn wide_pinv_helpers_match_materialized_products() {
+        let rows = 16;
+        let cols = 32;
+        let matrix_rows: Vec<Vec<f64>> = (0..rows)
+            .map(|row| {
+                (0..cols)
+                    .map(|col| {
+                        let diagonal = if row == col { 12.0 + row as f64 } else { 0.0 };
+                        let smooth = ((row * 31 + col * 19 + 3) % 67) as f64 / 151.0;
+                        diagonal + smooth
+                    })
+                    .collect()
+            })
+            .collect();
+        let matrix = dmatrix_from_rows(&matrix_rows).expect("matrix rows");
+        let gram = symmetric_row_gram_matrix_from_rows(&matrix_rows, rows, cols).expect("AA^T");
+        let chol = Cholesky::new(gram).expect("SPD row Gram factor");
+
+        let expected_inv = chol.solve(&DMatrix::<f64>::identity(rows, rows));
+        let actual_inv_rows =
+            cholesky_solve_identity_rhs_rows_batched(&chol).expect("identity-RHS solve");
+        assert_close_matrix(
+            &actual_inv_rows,
+            &rows_from_dmatrix(&expected_inv),
+            1e-12,
+            1e-12,
+        );
+
+        let expected_pinv = matrix.transpose() * expected_inv;
+        let actual_pinv =
+            matrix_transpose_mul_matrix_from_rows(&matrix_rows, rows, cols, &actual_inv_rows)
+                .expect("A^T G^-1");
+        assert_close_matrix(
+            &actual_pinv,
+            &rows_from_dmatrix(&expected_pinv),
+            1e-10,
+            1e-10,
+        );
+
+        let streaming =
+            wide_pinv_left_inverse_max_error_rows(&matrix_rows, rows, cols, &actual_pinv)
+                .expect("streaming left-inverse certificate");
+        let materialized = &matrix * &expected_pinv;
+        let mut expected = 0.0_f64;
+        for row in 0..rows {
+            for col in 0..rows {
+                let target = if row == col { 1.0 } else { 0.0 };
+                expected = expected.max((materialized[(row, col)] - target).abs());
+            }
+        }
+        assert!((streaming - expected).abs() <= 1e-12);
     }
 
     #[test]
