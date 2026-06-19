@@ -2474,7 +2474,7 @@ pub fn lstsq_with_casp(
     }
 
     if options.mode == RuntimeMode::Strict
-        && let Some(fast) = lstsq_min_norm_wide_cholesky(&matrix, &rhs)
+        && let Some(fast) = lstsq_min_norm_wide_cholesky(a, &matrix, &rhs)
     {
         let (selected_action, posterior, expected_losses, _) =
             portfolio.select_action(fast.rcond_estimate, None);
@@ -11236,6 +11236,12 @@ pub static DISABLE_TALL_PINV_ROW_MAJOR_SOLVE: std::sync::atomic::AtomicBool =
 #[doc(hidden)]
 pub static DISABLE_TALL_PINV_TRANSPOSE_RHS_COPY: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+/// Runtime switch to force the wide `lstsq` route through the old materialized
+/// `A^T` products for same-binary A/B benchmarks. Defaults off. `#[doc(hidden)]`;
+/// internal.
+#[doc(hidden)]
+pub static DISABLE_WIDE_LSTSQ_ROW_STREAMING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 /// Loose conditioning sanity floor for the solve-only normal-equations lstsq
 /// route: spectra below this rcond are hopeless even with refinement, so we
 /// fall back to the public thin-SVD route. Real acceptance is governed by the
@@ -11298,6 +11304,14 @@ fn tall_pinv_transpose_rhs_copy_disabled() -> bool {
     }
     static ENV: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENV.get_or_init(|| std::env::var_os("FSCI_DISABLE_TALL_PINV_TRANSPOSE_RHS_COPY").is_some())
+}
+
+fn wide_lstsq_row_streaming_disabled() -> bool {
+    if DISABLE_WIDE_LSTSQ_ROW_STREAMING.load(std::sync::atomic::Ordering::Relaxed) {
+        return true;
+    }
+    static ENV: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENV.get_or_init(|| std::env::var_os("FSCI_DISABLE_WIDE_LSTSQ_ROW_STREAMING").is_some())
 }
 
 fn pinv_full_rank_tall_cholesky(
@@ -11745,6 +11759,7 @@ fn lstsq_full_rank_tall_cholesky(
 /// as the fail-closed acceptance certificate. Returns `None` (falling back to
 /// the public full-SVD route) on any conditioning/finiteness uncertainty.
 fn lstsq_min_norm_wide_cholesky(
+    a: &[Vec<f64>],
     matrix: &DMatrix<f64>,
     rhs: &DVector<f64>,
 ) -> Option<FullRowRankWideLstsqResult> {
@@ -11758,14 +11773,23 @@ fn lstsq_min_norm_wide_cholesky(
     if cols <= rows
         || rows < FULL_RANK_TALL_PINV_MIN_COLS
         || rhs.len() != rows
+        || !rows_are_rectangular(a, cols)
         || matrix.iter().any(|value| !value.is_finite())
         || rhs.iter().any(|value| !value.is_finite())
     {
         return None;
     }
 
-    let a_t = matrix.transpose();
-    let gram = matrix * &a_t;
+    let materialized_a_t = if wide_lstsq_row_streaming_disabled() {
+        Some(matrix.transpose())
+    } else {
+        None
+    };
+    let gram = if let Some(a_t) = materialized_a_t.as_ref() {
+        matrix * a_t
+    } else {
+        symmetric_row_gram_matrix_from_rows(a, rows, cols)?
+    };
     for idx in 0..rows {
         let diag = gram[(idx, idx)];
         if diag <= 0.0 || !diag.is_finite() {
@@ -11807,13 +11831,21 @@ fn lstsq_min_norm_wide_cholesky(
     // original A drives the consistent residual b - A x to zero.
     let chol = Cholesky::new(gram.clone())?;
     let y = chol.solve(rhs);
-    let mut x = &a_t * &y;
+    let mut x = if let Some(a_t) = materialized_a_t.as_ref() {
+        a_t * &y
+    } else {
+        matrix_transpose_mul_vector_from_rows(a, rows, cols, &y)?
+    };
     if x.iter().any(|value| !value.is_finite()) {
         return None;
     }
     let primal_residual = rhs - matrix * &x;
     let dy = chol.solve(&primal_residual);
-    let dx = &a_t * &dy;
+    let dx = if let Some(a_t) = materialized_a_t.as_ref() {
+        a_t * &dy
+    } else {
+        matrix_transpose_mul_vector_from_rows(a, rows, cols, &dy)?
+    };
     if dx.iter().any(|value| !value.is_finite()) {
         return None;
     }
@@ -15898,6 +15930,61 @@ fn matrix_transpose_mul_vector_from_columns(
     Some(out)
 }
 
+/// Compute `A A^T` from the caller's row-major matrix without materializing
+/// `A^T`. The wide `lstsq` normal-equations route needs only this small
+/// `rows x rows` Gram, so each row dot is evaluated once over contiguous slices.
+fn symmetric_row_gram_matrix_from_rows(
+    a: &[Vec<f64>],
+    rows: usize,
+    cols: usize,
+) -> Option<DMatrix<f64>> {
+    if a.len() != rows || !rows_are_rectangular(a, cols) {
+        return None;
+    }
+    let mut gram = DMatrix::<f64>::zeros(rows, rows);
+    for top in 0..rows {
+        let top_row = &a[top];
+        for bottom in top..rows {
+            let value = simd_dot(top_row, &a[bottom]);
+            gram[(top, bottom)] = value;
+            gram[(bottom, top)] = value;
+        }
+    }
+    Some(gram)
+}
+
+/// Compute `A^T v` from the caller's row-major matrix. This streams each input
+/// row once and vectorizes across output columns, avoiding the wide-route
+/// materialized transpose used only for same-binary A/B comparisons.
+fn matrix_transpose_mul_vector_from_rows(
+    a: &[Vec<f64>],
+    rows: usize,
+    cols: usize,
+    vector: &DVector<f64>,
+) -> Option<DVector<f64>> {
+    if a.len() != rows || vector.len() != rows || !rows_are_rectangular(a, cols) {
+        return None;
+    }
+    let mut out = vec![0.0_f64; cols];
+    for row_idx in 0..rows {
+        let scale = vector[row_idx];
+        let row = &a[row_idx];
+        let sv = Simd::<f64, 8>::splat(scale);
+        let mut col = 0;
+        while col + 8 <= cols {
+            let acc = Simd::<f64, 8>::from_slice(&out[col..col + 8])
+                + sv * Simd::<f64, 8>::from_slice(&row[col..col + 8]);
+            acc.copy_to_slice(&mut out[col..col + 8]);
+            col += 8;
+        }
+        while col < cols {
+            out[col] += scale * row[col];
+            col += 1;
+        }
+    }
+    Some(DVector::from_vec(out))
+}
+
 fn cholesky_syrk_rows(rows: &mut [Vec<f64>], row_offset: usize, l21: &[f64], nb: usize, kb: usize) {
     for (local_i, row) in rows.iter_mut().enumerate() {
         let ii = row_offset + local_i;
@@ -19192,6 +19279,39 @@ mod tests {
         let expected_rhs = &a_t * &rhs;
         let actual_rhs =
             matrix_transpose_mul_vector_from_columns(&matrix, &rhs).expect("A^T rhs");
+        let mut max_rhs_diff = 0.0_f64;
+        for idx in 0..cols {
+            max_rhs_diff = max_rhs_diff.max((actual_rhs[idx] - expected_rhs[idx]).abs());
+        }
+        assert!(max_rhs_diff <= 1e-10);
+    }
+
+    #[test]
+    fn wide_normal_equation_row_helpers_match_nalgebra_products() {
+        let rows = 17;
+        let cols = 33;
+        let matrix_rows: Vec<Vec<f64>> = (0..rows)
+            .map(|row| {
+                (0..cols)
+                    .map(|col| {
+                        let diagonal = if row == col { 9.0 + row as f64 } else { 0.0 };
+                        let smooth = ((row * 29 + col * 37 + 7) % 67) as f64 / 149.0;
+                        diagonal + smooth
+                    })
+                    .collect()
+            })
+            .collect();
+        let matrix = dmatrix_from_rows(&matrix_rows).expect("matrix rows");
+        let rhs = DVector::from_fn(rows, |row, _| ((row * 13 + 5) % 47) as f64 / 23.0 - 1.0);
+
+        let a_t = matrix.transpose();
+        let expected_gram = &matrix * &a_t;
+        let actual_gram = symmetric_row_gram_matrix_from_rows(&matrix_rows, rows, cols).expect("AA^T");
+        assert!(max_abs_dmatrix_diff(&actual_gram, &expected_gram) <= 1e-10);
+
+        let expected_rhs = &a_t * &rhs;
+        let actual_rhs =
+            matrix_transpose_mul_vector_from_rows(&matrix_rows, rows, cols, &rhs).expect("A^T rhs");
         let mut max_rhs_diff = 0.0_f64;
         for idx in 0..cols {
             max_rhs_diff = max_rhs_diff.max((actual_rhs[idx] - expected_rhs[idx]).abs());

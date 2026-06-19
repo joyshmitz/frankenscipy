@@ -4,6 +4,32 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-19 - frankenscipy-8l8r1.122 - L-BFGS-B Wolfe probe scratch reuse
+
+- Agent: cod-b / MistyBirch
+- Lever: route unconstrained `L-BFGS-B` Strong-Wolfe finite-difference
+  gradient probes through `line_search_wolfe2_with_gradient_probe`, reusing the
+  line-search trial buffer and gradient `Vec` instead of allocating a fresh
+  `g` and `xp` inside every curvature probe.
+- Status: pending batch-test. This is a code-first commit per campaign
+  instruction; local `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b
+  cargo check -p fsci-opt` is the pre-commit gate.
+- Correctness guard: existing unconstrained/bounded `L-BFGS-B` tests and the
+  hard Rosenbrock Strong-Wolfe regression cover accepted-step behavior; the
+  patch intentionally keeps the accepted-step `finite_diff_gradient` recompute
+  so `OptimizeResult` counters and final gradient shape stay on the previous
+  public path.
+- Benchmark guard: compare focused `fsci-opt` `L-BFGS-B` Rosenbrock/quadratic
+  rows and the optimizer batch wave against the pre-change commit on the same
+  worker/target dir, with attention to high-dimensional finite-difference
+  line-search probes.
+- Retry condition: keep only if same-worker `L-BFGS-B` optimizer timings
+  improve without alpha, `nfev`/`njev`, accepted-gradient, or convergence drift;
+  if the mutable-probe path is neutral or slower, reject this exact
+  finite-difference probe scratch route and do not retry unless allocation
+  profiles put `L-BFGS-B` Wolfe gradient-probe Vec churn back in the top-5
+  `fsci-opt` hotspots.
+
 ## 2026-06-18 - frankenscipy-fo9cj - sparse Arnoldi row-major basis arena
 
 - Agent: cod-b / MistyBirch
@@ -231,6 +257,32 @@ condition so dead ends are not repeated casually.
   nalgebra's generic transpose product, reject this exact column-dot formulation
   and do not retry unless profiling puts `A^T` materialization or Gram formation
   back in the top linalg hotspot list.
+
+## 2026-06-19 - frankenscipy-u0ucw - Wide lstsq row-streamed normal equations
+
+- Agent: cod-a / MistyBirch
+- Lever: route full-row-rank wide `lstsq` normal-equation products through the
+  caller's row-major input: form `A A^T` from contiguous row dot products and
+  compute `A^T y` / `A^T dy` by streaming rows once, avoiding the old
+  materialized `A^T` matrix. `FSCI_DISABLE_WIDE_LSTSQ_ROW_STREAMING` and
+  `DISABLE_WIDE_LSTSQ_ROW_STREAMING` keep the old path available for same-binary
+  A/B benchmarks.
+- Status: pending batch-test. This is a code-first commit per campaign
+  instruction; only local `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a
+  cargo check -p fsci-linalg` is expected before commit.
+- Correctness guard: `wide_normal_equation_row_helpers_match_nalgebra_products`
+  compares row-streamed `A A^T` and `A^T rhs` against the previous materialized
+  transpose products; the existing wide `lstsq` Cholesky/refinement acceptance
+  gate still falls back to SVD on conditioning or refinement uncertainty.
+- Benchmark guard: same-binary Criterion group `u0ucw_wide_lstsq` compares
+  `_row_streaming` against `_materialized_transpose` on 500x1000 and 1000x2000
+  full-row-rank wide workloads.
+- Retry condition: keep only if same-worker `u0ucw_wide_lstsq` timings improve
+  without rank, singular-value, min-norm, residual, or public `lstsq` tolerance
+  drift; if row streaming is neutral/slower due to nalgebra's transpose/multiply
+  kernels winning on wide shapes, reject this exact row-streamed wide formulation
+  and do not retry unless allocation or cache profiles put wide-route `A^T`
+  materialization back in the top linalg hotspot list.
 
 ## 2026-06-18 - frankenscipy-va60h - MDS streamed double-centering
 

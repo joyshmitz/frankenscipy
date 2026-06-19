@@ -57,6 +57,21 @@ fn make_overdetermined(rows: usize, cols: usize) -> Vec<Vec<f64>> {
     a
 }
 
+/// Wide full-row-rank matrix for minimum-norm lstsq/pinv routes.
+fn make_underdetermined(rows: usize, cols: usize) -> Vec<Vec<f64>> {
+    let mut a = vec![vec![0.0; cols]; rows];
+    for (i, row) in a.iter_mut().enumerate() {
+        for (j, cell) in row.iter_mut().enumerate() {
+            *cell = if i == j {
+                (rows as f64) * 2.0
+            } else {
+                1.0 / ((i as f64 - j as f64).abs() + 1.0)
+            };
+        }
+    }
+    a
+}
+
 /// Tridiagonal banded matrix in LAPACK band storage format.
 /// Returns (l_and_u, ab) where ab has shape (3, n).
 fn make_tridiag_banded(n: usize) -> ((usize, usize), Vec<Vec<f64>>) {
@@ -364,6 +379,28 @@ fn bench_baseline_lstsq(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_u0ucw_wide_lstsq(c: &mut Criterion) {
+    use std::sync::atomic::Ordering::Relaxed;
+
+    let mut group = c.benchmark_group("u0ucw_wide_lstsq");
+    group.sample_size(10);
+    group.measurement_time(Duration::from_secs(3));
+    for &(rows, cols) in &[(500usize, 1000usize), (1000, 2000)] {
+        let a = make_underdetermined(rows, cols);
+        let b = make_rhs(rows);
+        group.bench_function(format!("{rows}x{cols}_row_streaming"), |bencher| {
+            fsci_linalg::DISABLE_WIDE_LSTSQ_ROW_STREAMING.store(false, Relaxed);
+            bencher.iter(|| lstsq(&a, &b, LstsqOptions::default()).unwrap());
+        });
+        group.bench_function(format!("{rows}x{cols}_materialized_transpose"), |bencher| {
+            fsci_linalg::DISABLE_WIDE_LSTSQ_ROW_STREAMING.store(true, Relaxed);
+            bencher.iter(|| lstsq(&a, &b, LstsqOptions::default()).unwrap());
+            fsci_linalg::DISABLE_WIDE_LSTSQ_ROW_STREAMING.store(false, Relaxed);
+        });
+    }
+    group.finish();
+}
+
 fn bench_baseline_pinv(c: &mut Criterion) {
     use std::sync::atomic::Ordering::Relaxed;
     let mut group = c.benchmark_group("baseline_pinv");
@@ -466,6 +503,7 @@ criterion_group!(
     bench_baseline_solve_pos,
     bench_baseline_inv,
     bench_baseline_lstsq,
+    bench_u0ucw_wide_lstsq,
     bench_baseline_pinv
 );
 
