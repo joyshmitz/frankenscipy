@@ -5011,16 +5011,43 @@ fn measurement_label_groups(
         None => vec![Vec::new()],
     };
 
-    for (&value, &label_value) in input.data.iter().zip(&labels.data) {
-        if let Some(index) = index {
-            if let Some(pos) = index
-                .iter()
-                .position(|&wanted_label| label_value == wanted_label as f64)
-            {
-                groups[pos].push(value);
+    // Canonical key for exact f64 label equality: +0.0 and -0.0 must hash the
+    // same (they compare equal), every other value keeps its bit pattern.
+    let label_key = |x: f64| -> u64 {
+        if x == 0.0 {
+            0.0f64.to_bits()
+        } else {
+            x.to_bits()
+        }
+    };
+
+    match index {
+        Some(index) => {
+            // Build a label -> first-position map once (O(K)), then bucket each
+            // element in O(1) instead of the old O(K) linear `position` scan.
+            // This makes label-indexed statistics O(N + K) rather than O(N · K).
+            // Byte-identical to the scan: `position` returns the first matching
+            // index, integer/zero labels compare bit-for-bit via the canonical
+            // key, and `or_insert` keeps the first occurrence on duplicates.
+            let mut label_to_pos: std::collections::HashMap<u64, usize> =
+                std::collections::HashMap::with_capacity(index.len());
+            for (pos, &wanted_label) in index.iter().enumerate() {
+                label_to_pos
+                    .entry(label_key(wanted_label as f64))
+                    .or_insert(pos);
             }
-        } else if label_value != 0.0 {
-            groups[0].push(value);
+            for (&value, &label_value) in input.data.iter().zip(&labels.data) {
+                if let Some(&pos) = label_to_pos.get(&label_key(label_value)) {
+                    groups[pos].push(value);
+                }
+            }
+        }
+        None => {
+            for (&value, &label_value) in input.data.iter().zip(&labels.data) {
+                if label_value != 0.0 {
+                    groups[0].push(value);
+                }
+            }
         }
     }
 
@@ -5049,16 +5076,38 @@ fn measurement_label_value_positions(
         None => vec![Vec::new()],
     };
 
-    for (flat, (&value, &label_value)) in input.data.iter().zip(&labels.data).enumerate() {
-        if let Some(index) = index {
-            if let Some(pos) = index
-                .iter()
-                .position(|&wanted_label| label_value == wanted_label as f64)
-            {
-                groups[pos].push((value, flat));
+    // See `measurement_label_groups`: one-time label -> first-position map turns
+    // the per-element O(K) `position` scan into an O(1) lookup (O(N + K) total),
+    // byte-identical via the canonical ±0.0 key and `or_insert` first-wins.
+    let label_key = |x: f64| -> u64 {
+        if x == 0.0 {
+            0.0f64.to_bits()
+        } else {
+            x.to_bits()
+        }
+    };
+
+    match index {
+        Some(index) => {
+            let mut label_to_pos: std::collections::HashMap<u64, usize> =
+                std::collections::HashMap::with_capacity(index.len());
+            for (pos, &wanted_label) in index.iter().enumerate() {
+                label_to_pos
+                    .entry(label_key(wanted_label as f64))
+                    .or_insert(pos);
             }
-        } else if label_value != 0.0 {
-            groups[0].push((value, flat));
+            for (flat, (&value, &label_value)) in input.data.iter().zip(&labels.data).enumerate() {
+                if let Some(&pos) = label_to_pos.get(&label_key(label_value)) {
+                    groups[pos].push((value, flat));
+                }
+            }
+        }
+        None => {
+            for (flat, (&value, &label_value)) in input.data.iter().zip(&labels.data).enumerate() {
+                if label_value != 0.0 {
+                    groups[0].push((value, flat));
+                }
+            }
         }
     }
 

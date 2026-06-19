@@ -4,6 +4,50 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-19 - frankenscipy-label-stats - label-indexed measurement O(N*K)->O(N+K)
+
+- Agent: cc / MistyBirch
+- Lever: the shared core `measurement_label_groups` / `measurement_label_value_positions`
+  (used by `sum_labels`, `mean`, `variance`, `standard_deviation`, `minimum`,
+  `maximum`, `median`, `labeled_comprehension`) bucketed each of the N input
+  elements with an O(K) linear `index.iter().position(...)` scan over the K
+  requested labels — O(N*K). Replace with a one-time `HashMap<label_bits, pos>`
+  built from `index` (O(K)), then an O(1) lookup per element — O(N+K).
+  Canonical ±0.0 key + `or_insert` (keep first) make it byte-identical to the
+  old `position` first-match semantics.
+- Decision: KEEP. Byte-identical (the change only reorders the same grouping),
+  measured large self-speedup that grows with K. Still a SciPy loss in absolute
+  terms (see below).
+- Correctness guards (GREEN): full `cargo test -p fsci-ndimage --lib` = **240
+  passed / 0 failed** (covers `sum_labels`, `mean`, `variance`,
+  `labeled_comprehension`, scipy-reference fixtures); the `perf_label_stats`
+  bin asserts **0 bit-mismatches** vs a verbatim old linear-scan grouping on
+  every row.
+- Benchmark (`cargo run --release -p fsci-ndimage --bin perf_label_stats`,
+  same-binary old-vs-new A/B; SciPy oracle `docs/perf_oracle_label_stats.py`
+  `ndimage.mean`, both same local host, scipy 1.17.1):
+
+  | N | K | old O(N*K) | new O(N+K) | self-speedup | SciPy `ndimage.mean` | new vs SciPy |
+  | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+  | 65536 | 512 | 16.900 ms | 1.024 ms | 16.5x | 0.205 ms | 5.0x slower |
+  | 262144 | 1024 | 105.53 ms | 3.644 ms | 29.0x | 0.541 ms | 6.7x slower |
+  | 262144 | 2048 | 212.80 ms | 3.841 ms | 55.4x | 0.556 ms | 6.9x slower |
+  | 589824 | 4096 | 932.40 ms | 10.516 ms | 88.7x | 1.274 ms | 8.3x slower |
+
+- Negative evidence: even after closing the O(N*K) blowup, fsci is still
+  5-8x slower than SciPy's compiled C. The remaining cost is the
+  `Vec<Vec<f64>>` per-label group materialization (every value pushed into a
+  per-label bucket) plus the per-element HashMap hashing; SciPy accumulates
+  sum/count per label in a flat array without materializing groups. This is a
+  measured SciPy loss recorded as such.
+- Retry condition: do not revert to the linear `position` scan. The next lever
+  is a reduction-specific path that accumulates sum/count (mean/sum/variance)
+  or running min/max directly into a flat per-position array WITHOUT
+  materializing `Vec<Vec<f64>>` — measured same-host vs SciPy `ndimage.mean`,
+  keeping byte-identity (median/comprehension still need the materialized
+  values). A dense lookup table (Vec instead of HashMap) when labels are small
+  and contiguous would also cut the per-element constant.
+
 ## 2026-06-19 - frankenscipy-edt-indices - distance_transform_edt feature transform
 
 - Agent: cc / MistyBirch
