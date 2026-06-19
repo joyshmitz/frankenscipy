@@ -30,6 +30,8 @@ regressions are reverted. Entries also routed to MistyBirch for the canonical me
 | pdist parallel (8e7e6d99, NOT mine) | pdist cosine n=256 | 81.9 µs | 736.7 µs | **0.11× (9× SLOWER)** | — | ⚠️ LOSS → owner |
 | linkage NN-chain (average) | linkage n=400 d=4 | 1586.5 µs | 1904.5 µs | **0.83× (1.2× slower)** | — | ⚠️ near-parity |
 | cophenet mem::take (jphzn) | cophenet n=400 | 401.5 µs | 219.7 µs | **1.83× faster** | — | ✅ KEEP |
+| kmeans2 double-buffer (4ylee) | kmeans2 k4 n2000 iter=50 | 2104.7 µs | 5126 µs | **0.41× (2.4× SLOWER)** | scalar assign vs scipy SIMD | ⚠️ kernel gap → bead |
+| kmeans Lloyd early-stop | kmeans k4 n2000 | 2104.7 µs* | 357.4 µs | **5.9× faster** | *vs scipy kmeans2 fixed-iter | ✅ KEEP (early-stop) |
 
 ## Detail
 
@@ -104,6 +106,19 @@ Oracle `docs/perf_oracle_hier.py` (scipy.cluster.hierarchy, n=400 blobs, average
   traversal is efficient. (NB: the naive `cophenet(Z, Y)` scipy call is 1758 µs but
   ALSO computes the correlation coefficient — not comparable; used `cophenet(Z)`.)
   KEEP.
+
+### kmeans / kmeans2 (frankenscipy-4ylee double-buffer) — mixed; kernel gap surfaced
+Oracle: scipy.cluster.vq.kmeans2 (n=2000, k=4, d=4, fixed init).
+- **kmeans2 fixed 50 iters: fsci 5126 µs vs scipy 2104.7 µs = 0.41× (2.4× SLOWER).**
+  Both run 50 full Lloyd iterations. The 4ylee double-buffer (mem::swap vs realloc) is
+  byte-identical and NOT the cause — the gap is the **scalar nearest-centroid
+  assignment** (n·k·d per iter) vs scipy's vectorized C. At k=4/d=4 (~16 flops/point)
+  PARALLELIZING would regress (cheap-work pathology, cf. interpolate/pdist) — the fix
+  is **SIMD the distance kernel**, not threads. Bead `→` filed. Double-buffer KEEP.
+- **kmeans (early-stop Lloyd): fsci 357.4 µs — 5.9× faster than scipy kmeans2's fixed
+  50 iters** (scipy.cluster.vq.kmeans2 has no convergence check). fsci's early-stop is
+  a real practical advantage on converged data. KEEP. (Not a per-iteration kernel
+  claim — it converges in ~5 iters.)
 
 ## Release-readiness summary (CrimsonForge beads, as of this round)
 
