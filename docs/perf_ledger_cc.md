@@ -879,3 +879,17 @@ array is SPAWN-bound under fleet contention (the rational-vs-series kernel win i
 masked; cf. erf where the kernel was a big enough fraction to show 5×). KEPT: strictly better
 (scipy-exact parity + provably fewer ops), not a regression. j0_series_small retained (y0 uses
 it at 3212). j1/y0/y1 still series (same lever, lower priority).
+
+### 📊 Special-kernel ranking (find-the-next-erf measurement) — erf was UNIQUE; rest complex/nuanced
+MEASURED fsci scalar special kernels to find another erf-class slow-iterative loss:
+- **gammainc** (gamma.rs:1216): 58ns(a1)→94ns(a10), GROWS with a (series ~a terms) → large a
+  much worse vs Cephes igam (bounded). Genuine candidate BUT the Cephes igam port is COMPLEX
+  (multi-regime: small-a series + CF + Temme asymptotic, not a flat rational like erf) AND
+  gamma.rs holds another agent's in-progress breakage (digamma/polygamma fail) → HAND OFF.
+- **beta** (40→96ns, grows): traces to Lanczos gammaln (3 lgam calls), same powf-cost nuance
+  as gamma — not an iterative→rational flip.
+- gamma=Lanczos (nuanced), j0/j1/y0/y1=series but contention-masked (1.1×).
+CONCLUSION: erf (5.9×→1.2×, simple 80-term-series+CF → flat rational) was the UNIQUE clean
+erf-class Cephes lever. The rest are complex multi-regime ports (igam) or Lanczos-nuanced or
+modest — none clears the bar erf did. Next-session: the igam port is the only remaining
+big-loss candidate, but it needs gamma.rs free + a careful multi-regime Cephes port.
