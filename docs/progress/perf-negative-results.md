@@ -35,6 +35,44 @@ condition so dead ends are not repeated casually.
   basis of this gauntlet; route future opt perf work to a lower-level hotspot or
   a workload that shows a measured neutral/loss row.
 
+## 2026-06-19 - frankenscipy-u0ucw - GAUNTLET measured wide pinv vs SciPy
+
+- Agent: cod-a / MistyBirch
+- Workload: full-row-rank wide pseudo-inverse, 500x1000 dense
+  Cauchy-like matrix with a strong diagonal, matching the committed
+  `make_underdetermined` Criterion generator and SciPy oracle construction.
+- Subject commits: `6c139073` wide `pinv` Cholesky TRSM plus `c39e9394`
+  diagonal rcond gate, measured at `41bf34a4`.
+- Criterion command:
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a cargo bench -p fsci-linalg --bench linalg_bench -- u0ucw_gauntlet_scipy_pinv --noplot`
+- Environment: local same-host oracle because rch worker `vmi1152480` lacked
+  `scipy` for the Python oracle row; local `python3` 3.13.7, NumPy 2.4.3,
+  SciPy 1.17.1, rustc 1.98.0-nightly.
+- Results use Criterion mean point estimates from
+  `target/criterion/u0ucw_gauntlet_scipy_pinv/*/new/estimates.json`:
+
+  | Route | Mean | Ratio vs SciPy | Internal delta | Verdict |
+  | --- | ---: | ---: | ---: | --- |
+  | SciPy `scipy.linalg.pinv(check_finite=False)` | 7.257573 s | 1.00x | oracle | reference |
+  | Rust current Cholesky + diagonal rcond gate | 183.699926 ms | 39.51x faster | 1.40x vs eigengate, 2.82x vs SVD fallback | keep |
+  | Rust Cholesky + old eigenspectrum rcond gate | 257.672693 ms | 28.17x faster | current is 28.71% less time | superseded |
+  | Rust SVD fallback route | 517.524097 ms | 14.02x faster | current is 64.50% less time | superseded |
+
+- rch evidence: `rch exec -- cargo bench -p fsci-linalg --bench linalg_bench
+  -- u0ucw_gauntlet_scipy_pinv --noplot` built and timed the Rust rows on
+  worker `vmi1152480` (`current` 171.97 ms, `eigengate` 268.75 ms,
+  `svd_fallback` 416.57 ms), then the SciPy oracle row failed with
+  `ModuleNotFoundError: No module named 'scipy'`. That worker result is
+  retained only as infrastructure evidence and is not used for the
+  head-to-head ratio.
+- Correctness guard: no revert. Keep the Cholesky route and diagonal rcond gate
+  because the measured route is materially faster than the old in-crate routes
+  and 39.51x faster than SciPy on this realistic wide full-row-rank workload.
+- Retry condition: do not retry the old eigenspectrum rcond gate or SVD
+  fallback for this 500x1000 full-row-rank wide workload unless a future
+  conformance failure, condition-audit regression, or same-host SciPy/Criterion
+  rerun reverses the current >1.4x internal win.
+
 ## 2026-06-19 - frankenscipy-y1mzk - least_squares LM normal-equation scratch
 
 - Agent: cod-b / MistyBirch
@@ -373,9 +411,10 @@ condition so dead ends are not repeated casually.
   the identity RHS through a new 8-wide batched Cholesky TRSM helper, stream the
   final `A^T G^-1` multiply without materializing `A^T`, and certify
   `A A^+ ~= I_rows` before accepting.
-- Status: pending batch-test. This is a code-first commit per campaign
-  instruction; only local `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a
-  cargo check -p fsci-linalg` is expected before commit.
+- Status: MEASURED KEEP in the 2026-06-19 gauntlet section above. The
+  same-host SciPy oracle row measured the current wide route at 39.51x faster
+  than SciPy and 2.82x faster than the in-crate SVD fallback on 500x1000
+  full-row-rank input.
 - Correctness guard: `wide_pinv_cholesky_matches_svd_reference` locks the new
   route against the SVD pseudo-inverse tolerance contract, while
   `wide_pinv_helpers_match_materialized_products` checks identity-RHS Cholesky
@@ -401,9 +440,10 @@ condition so dead ends are not repeated casually.
   certificate as the fail-closed acceptance test. The old eigenspectrum gate
   stays behind `FSCI_DISABLE_WIDE_PINV_DIAG_RCOND_GATE` and
   `DISABLE_WIDE_PINV_DIAG_RCOND_GATE` for same-binary A/B.
-- Status: pending batch-test. This is a code-first commit per campaign
-  instruction; only local `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a
-  cargo check -p fsci-linalg` is expected before commit.
+- Status: MEASURED KEEP in the 2026-06-19 gauntlet section above. The
+  same-host Criterion run measured the diagonal rcond gate at 1.40x faster than
+  the old eigenspectrum rcond gate and 39.51x faster than SciPy on 500x1000
+  full-row-rank input.
 - Correctness guard:
   `wide_pinv_diag_rcond_gate_matches_eigen_gate_and_rejects_rank_loss` compares
   the diagonal-gated and eigengated pseudo-inverse outputs on a full-row-rank

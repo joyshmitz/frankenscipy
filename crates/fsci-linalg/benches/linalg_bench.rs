@@ -1,10 +1,15 @@
-use std::time::Duration;
+use std::{
+    hint::black_box,
+    io::Write,
+    process::{Command, Stdio},
+    time::Duration,
+};
 
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{criterion_group, criterion_main, Criterion};
 use fsci_linalg::{
+    det, eigh, inv, lstsq, matmul, pinv, randomized_eigh, solve, solve_banded, solve_triangular,
     DecompOptions, InvOptions, LstsqOptions, MatrixAssumption, PinvOptions, SolveOptions,
-    TriangularSolveOptions, det, eigh, inv, lstsq, matmul, pinv, randomized_eigh, solve,
-    solve_banded, solve_triangular,
+    TriangularSolveOptions,
 };
 use fsci_runtime::RuntimeMode;
 
@@ -409,11 +414,14 @@ fn bench_u0ucw_wide_pinv(c: &mut Criterion) {
     group.measurement_time(Duration::from_secs(3));
     for &(rows, cols) in &[(500usize, 1000usize), (1000, 2000)] {
         let a = make_underdetermined(rows, cols);
-        group.bench_function(format!("{rows}x{cols}_normal_equation_cholesky"), |bencher| {
-            fsci_linalg::DISABLE_WIDE_PINV_CHOLESKY.store(false, Relaxed);
-            fsci_linalg::DISABLE_WIDE_PINV_DIAG_RCOND_GATE.store(false, Relaxed);
-            bencher.iter(|| pinv(&a, PinvOptions::default()).unwrap());
-        });
+        group.bench_function(
+            format!("{rows}x{cols}_normal_equation_cholesky"),
+            |bencher| {
+                fsci_linalg::DISABLE_WIDE_PINV_CHOLESKY.store(false, Relaxed);
+                fsci_linalg::DISABLE_WIDE_PINV_DIAG_RCOND_GATE.store(false, Relaxed);
+                bencher.iter(|| pinv(&a, PinvOptions::default()).unwrap());
+            },
+        );
         group.bench_function(format!("{rows}x{cols}_eigen_rcond_gate"), |bencher| {
             fsci_linalg::DISABLE_WIDE_PINV_CHOLESKY.store(false, Relaxed);
             fsci_linalg::DISABLE_WIDE_PINV_DIAG_RCOND_GATE.store(true, Relaxed);
@@ -426,6 +434,123 @@ fn bench_u0ucw_wide_pinv(c: &mut Criterion) {
             bencher.iter(|| pinv(&a, PinvOptions::default()).unwrap());
             fsci_linalg::DISABLE_WIDE_PINV_CHOLESKY.store(false, Relaxed);
         });
+    }
+    group.finish();
+}
+
+fn scipy_pinv_duration(rows: usize, cols: usize, iters: u64) -> Option<Duration> {
+    let script = r#"
+import sys
+import time
+import numpy as np
+import scipy.linalg as la
+
+rows = int(sys.argv[1])
+cols = int(sys.argv[2])
+iters = int(sys.argv[3])
+i = np.arange(rows, dtype=np.float64)[:, None]
+j = np.arange(cols, dtype=np.float64)[None, :]
+a = 1.0 / (np.abs(i - j) + 1.0)
+d = np.arange(rows)
+a[d, d] = rows * 2.0
+la.pinv(a, check_finite=False)
+start = time.perf_counter()
+checksum = 0.0
+for _ in range(iters):
+    result = la.pinv(a, check_finite=False)
+    checksum += float(result[0, 0])
+elapsed = time.perf_counter() - start
+if not np.isfinite(checksum):
+    raise SystemExit("non-finite checksum")
+print(f"{elapsed:.17f}")
+"#;
+    let mut child = Command::new("python3")
+        .args([
+            "-",
+            &rows.to_string(),
+            &cols.to_string(),
+            &iters.to_string(),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn scipy pinv oracle");
+    child
+        .stdin
+        .as_mut()
+        .expect("open scipy oracle stdin")
+        .write_all(script.as_bytes())
+        .expect("write scipy oracle script");
+    let output = child.wait_with_output().expect("wait for scipy oracle");
+    if !output.status.success() {
+        eprintln!(
+            "scipy pinv oracle failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return None;
+    }
+    let stdout = String::from_utf8(output.stdout).expect("utf8 scipy timing");
+    let seconds: f64 = stdout.trim().parse().expect("parse scipy timing seconds");
+    Some(Duration::from_secs_f64(seconds))
+}
+
+fn scipy_pinv_available() -> bool {
+    let mut child = match Command::new("python3")
+        .arg("-")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => return false,
+    };
+    let Some(stdin) = child.stdin.as_mut() else {
+        return false;
+    };
+    if stdin.write_all(b"import scipy.linalg\n").is_err() {
+        return false;
+    }
+    child.wait().is_ok_and(|status| status.success())
+}
+
+fn bench_u0ucw_gauntlet_scipy_pinv(c: &mut Criterion) {
+    use std::sync::atomic::Ordering::Relaxed;
+
+    const ROWS: usize = 500;
+    const COLS: usize = 1000;
+    let a = make_underdetermined(ROWS, COLS);
+    let mut group = c.benchmark_group("u0ucw_gauntlet_scipy_pinv");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(5));
+    group.bench_function("500x1000_rust_current_diag_gate", |bencher| {
+        fsci_linalg::DISABLE_WIDE_PINV_CHOLESKY.store(false, Relaxed);
+        fsci_linalg::DISABLE_WIDE_PINV_DIAG_RCOND_GATE.store(false, Relaxed);
+        bencher.iter(|| black_box(pinv(black_box(&a), PinvOptions::default()).unwrap()));
+    });
+    group.bench_function("500x1000_rust_eigen_rcond_gate", |bencher| {
+        fsci_linalg::DISABLE_WIDE_PINV_CHOLESKY.store(false, Relaxed);
+        fsci_linalg::DISABLE_WIDE_PINV_DIAG_RCOND_GATE.store(true, Relaxed);
+        bencher.iter(|| black_box(pinv(black_box(&a), PinvOptions::default()).unwrap()));
+        fsci_linalg::DISABLE_WIDE_PINV_DIAG_RCOND_GATE.store(false, Relaxed);
+    });
+    group.bench_function("500x1000_rust_svd_fallback", |bencher| {
+        fsci_linalg::DISABLE_WIDE_PINV_CHOLESKY.store(true, Relaxed);
+        fsci_linalg::DISABLE_WIDE_PINV_DIAG_RCOND_GATE.store(false, Relaxed);
+        bencher.iter(|| black_box(pinv(black_box(&a), PinvOptions::default()).unwrap()));
+        fsci_linalg::DISABLE_WIDE_PINV_CHOLESKY.store(false, Relaxed);
+    });
+    if scipy_pinv_available() {
+        group.bench_function("500x1000_scipy_pinv", |bencher| {
+            bencher.iter_custom(|iters| {
+                scipy_pinv_duration(ROWS, COLS, iters)
+                    .expect("scipy pinv oracle should run after availability check")
+            });
+        });
+    } else {
+        eprintln!("skipping 500x1000_scipy_pinv: python3 cannot import scipy.linalg");
     }
     group.finish();
 }
@@ -534,6 +659,7 @@ criterion_group!(
     bench_baseline_lstsq,
     bench_u0ucw_wide_lstsq,
     bench_u0ucw_wide_pinv,
+    bench_u0ucw_gauntlet_scipy_pinv,
     bench_baseline_pinv
 );
 
