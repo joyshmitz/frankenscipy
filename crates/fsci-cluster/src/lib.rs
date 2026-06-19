@@ -2912,41 +2912,92 @@ pub fn gaussian_mixture_full(
             chols.push(l);
         }
 
-        // E-step.
-        let mut total_ll = 0.0;
-        let mut y = vec![0.0f64; d];
-        for (i, row) in data.iter().enumerate() {
-            let mut maxlp = f64::NEG_INFINITY;
-            for c in 0..k {
-                let l = &chols[c];
-                // Forward-solve L·y = (x − μ_c); Mahalanobis = ‖y‖².
-                let mut maha = 0.0;
-                for r in 0..d {
-                    let mut s = row[r] - means[c][r];
-                    for q in 0..r {
-                        s -= l[r][q] * y[q];
+        // E-step. Each point's resp row and lse are independent (per-component
+        // Cholesky forward-solve Mahalanobis + log-sum-exp), so split the points
+        // across threads into ordered slots; total_ll is the SAME ordered sum of the
+        // SAME per-point lse values -> byte-identical to the serial loop. Each thread
+        // carries its own y (forward-solve) and logp scratch. The block scope drops
+        // the borrowing closure before the M-step mutates means/covariances.
+        // frankenscipy-yw7ts.
+        let total_ll: f64 = {
+            let mut lse = vec![0.0f64; n];
+            let e_step_point =
+                |row: &[f64], y: &mut [f64], logp: &mut [f64], resp_i: &mut [f64]| -> f64 {
+                    let mut maxlp = f64::NEG_INFINITY;
+                    for c in 0..k {
+                        let l = &chols[c];
+                        // Forward-solve L·y = (x − μ_c); Mahalanobis = ‖y‖².
+                        let mut maha = 0.0;
+                        for r in 0..d {
+                            let mut s = row[r] - means[c][r];
+                            for q in 0..r {
+                                s -= l[r][q] * y[q];
+                            }
+                            let yr = s / l[r][r];
+                            y[r] = yr;
+                            maha += yr * yr;
+                        }
+                        let lp = log_norm[c] - 0.5 * maha;
+                        logp[c] = lp;
+                        if lp > maxlp {
+                            maxlp = lp;
+                        }
                     }
-                    let yr = s / l[r][r];
-                    y[r] = yr;
-                    maha += yr * yr;
+                    let mut sumexp = 0.0;
+                    for lp in logp.iter_mut() {
+                        *lp = (*lp - maxlp).exp();
+                        sumexp += *lp;
+                    }
+                    let inv = 1.0 / sumexp;
+                    for c in 0..k {
+                        resp_i[c] = logp[c] * inv;
+                    }
+                    maxlp + sumexp.ln()
+                };
+            let work = n
+                .saturating_mul(k)
+                .saturating_mul(d)
+                .saturating_mul(d);
+            let nthreads_e = if work < (1 << 16) || n < 2 {
+                1
+            } else {
+                std::thread::available_parallelism()
+                    .map(|c| c.get())
+                    .unwrap_or(1)
+                    .min(n)
+            };
+            if nthreads_e <= 1 {
+                let mut y = vec![0.0f64; d];
+                for ((row, resp_i), lse_i) in
+                    data.iter().zip(resp.iter_mut()).zip(lse.iter_mut())
+                {
+                    *lse_i = e_step_point(row, &mut y, &mut logp, resp_i);
                 }
-                let lp = log_norm[c] - 0.5 * maha;
-                logp[c] = lp;
-                if lp > maxlp {
-                    maxlp = lp;
-                }
+            } else {
+                let chunk = n.div_ceil(nthreads_e);
+                let e_step_point = &e_step_point;
+                std::thread::scope(|scope| {
+                    for ((resp_chunk, lse_chunk), data_chunk) in resp
+                        .chunks_mut(chunk)
+                        .zip(lse.chunks_mut(chunk))
+                        .zip(data.chunks(chunk))
+                    {
+                        scope.spawn(move || {
+                            let mut y_local = vec![0.0f64; d];
+                            let mut logp_local = vec![0.0f64; k];
+                            for ((row, resp_i), lse_i) in data_chunk
+                                .iter()
+                                .zip(resp_chunk.iter_mut())
+                                .zip(lse_chunk.iter_mut())
+                            {
+                                *lse_i = e_step_point(row, &mut y_local, &mut logp_local, resp_i);
+                            }
+                        });
+                    }
+                });
             }
-            let mut sumexp = 0.0;
-            for lp in logp.iter_mut() {
-                *lp = (*lp - maxlp).exp();
-                sumexp += *lp;
-            }
-            total_ll += maxlp + sumexp.ln();
-            let inv = 1.0 / sumexp;
-            for c in 0..k {
-                resp[i][c] = logp[c] * inv;
-            }
-        }
+            lse.iter().sum()
+        };
         log_likelihood = total_ll / n as f64;
         if (log_likelihood - old_ll).abs() < tol {
             break;
