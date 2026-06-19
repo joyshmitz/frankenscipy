@@ -450,7 +450,15 @@ would FLIP both binary-morph losses to wins. scipy's NI_BinaryErosion is a speci
 binary path; fsci runs the general float min-filter on booleanized data. Byte-identical
 (same 0/1 output). Needs exact window-origin-semantics matching with the deque path —
 high-risk multi-cycle, filed as a focused future effort, not started blind. minimum_filter
-(float) has no bit-pack lever; its constant factor needs SIMD on the deque (hard).
+(float) has no bit-pack lever; its constant factor needs SIMD on the deque (hard). ANALYSIS
+(no clean lever — DON'T re-chase byte-identically): the monotonic deque is already amortized
+O(1)/pixel (~1 total_cmp); van Herk/Gil-Werman does MORE (3 total_cmp/pixel: prefix+suffix+
+combine) so it's not faster; shift-min (f64-min shifted s times, the bit-pack analogue) is
+vectorizable and would win for small s, BUT requires `f64::min` not `total_cmp` → silently
+changes NaN semantics (no NaN minmax test exists, so it'd pass conformance, but it's a latent
+behaviour divergence from scipy — NOT shipped). A true flip needs an explicit SIMD min with
+total_cmp NaN ordering. The deque is the right scalar algorithm; the gap is scipy's tighter
+vectorized C.
 DEAD-END (reverted clean, 296/0): rewrote `minmax_filter_along_axis` to the correlate1d
 slab pattern + parallelize over outer slabs (byte-identical). REGRESSED ~1.5-2× even after
 hoisting the per-slab VecDeque alloc to per-thread reuse. At 256² the filter is below the
