@@ -48,6 +48,7 @@ regressions are reverted. Entries also routed to MistyBirch for the canonical me
 | silhouette per-anchor parallel | silhouette n=500 d=4 | 2064 µs | 720.8 µs | **2.86× faster** | no small-n regression | ✅ KEEP |
 | silhouette per-anchor parallel | silhouette n=2000 d=4 | 32928 µs | 3113.5 µs | **10.6× faster** | scales w/ n | ✅ KEEP |
 | ndimage zoom order=1 FIXED (wm14d) | zoom 2× 256² order=1 | 4842 µs | 19409 µs | **0.25× (4.0× slower)** — was 0.06× (17.7×) | cardinal fast path added | ✅ FIXED (4.4× faster) |
+| ndimage zoom order=1 residual fast path (wm14d) | zoom 2× 256² order=1 | 3889 µs | 7968 µs | **0.49× (2.05× slower)** | 4.27× faster than generic sampler | ✅ KEEP, residual gap |
 | ndimage zoom order=3 | zoom 2× 256² order=3 | 14053 µs | 31573 µs | **0.45× (2.25× slower)** | generic spline-weight kernel | ⚠️ residual gap |
 | ndimage rotate order=3 (shares wm14d fix) | rotate 30° 256² order=3 | 5577 µs | 6439 µs | **0.87× (1.15× ~parity)** | cardinal spline path | ✅ near-parity |
 | ndimage rotate order=1 (shares wm14d fix) | rotate 30° 256² order=1 | 1991 µs | 8733 µs | **0.23× (4.4× slower)** | residual machinery gap (was ~17×) | ⚠️ residual gap |
@@ -301,6 +302,13 @@ order=1>order=3 inversion is gone (19.4 ms < order=3's 54 ms).** Conformance: nd
 arithmetic + parallel overhead vs scipy's tight C — a follow-up SIMD/branchless target.
 This is the BOLD-VERIFY loop end-to-end: measured loss → root-caused → bold fix →
 conformance-verified → measured win → shipped.
+
+2026-06-19 cod-b residual pass: a narrower 2D Reflect/order=1 direct bilinear zoom
+path precomputes row/column supports and replaces the generic per-pixel sampler with a
+fixed four-load sum. Same-worker `ovh-b` A/B improved 34.034 ms to 7.9684 ms
+(4.27× faster), but local SciPy still measured 3.88937 ms, so the lane remains a
+2.05× SciPy loss. A serial fill probe regressed to 9.6976 ms and was reverted; do not
+retry scheduler-only variants without a fresh profile.
 
 ### ndimage rotate — zoom fix's BROAD REACH (frankenscipy-wm14d)
 Oracle `docs/perf_oracle_rotate.py` (scipy.ndimage.rotate 30°, 256²). rotate shares

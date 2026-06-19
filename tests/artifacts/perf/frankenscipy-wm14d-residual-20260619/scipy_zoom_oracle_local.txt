@@ -1,0 +1,2 @@
+scipy ndimage zoom 2x 256x256 order=1: 3889.37 us
+scipy ndimage zoom 2x 256x256 order=3: 13201.46 us

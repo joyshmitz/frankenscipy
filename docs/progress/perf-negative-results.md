@@ -4,6 +4,69 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-19 - frankenscipy-wm14d - ndimage zoom order=1 residual fast path
+
+- Agent: cod-b / MistyBirch
+- Lever: add a narrow 2D Reflect/order=1 `zoom` fast path that precomputes
+  separable row and column linear supports once, then evaluates each output
+  pixel with a fixed four-load bilinear sum over the existing padded spline
+  coefficient image.
+- Graveyard/artifact route tested: separable support caching, fixed-kernel
+  output-sensitive interpolation, cache-friendly row/column support reuse, and
+  removal of the generic recursive sampler from the hot pixel loop.
+- Decision: KEEP as a measured internal win, route residual SciPy loss deeper.
+  No revert.
+- Artifact:
+  `tests/artifacts/perf/frankenscipy-wm14d-residual-20260619/EVIDENCE.md`
+- Baseline/candidate command:
+  `RCH_REQUIRE_REMOTE=1 RCH_WORKER=ovh-b CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec -- cargo bench -p fsci-ndimage --bench ndimage_bench -- zoom/2x_256/1 --noplot --sample-size 10 --measurement-time 1 --warm-up-time 1`
+- SciPy oracle command:
+  `python3 docs/perf_oracle_zoom.py`
+- Same-worker internal A/B on rch worker `ovh-b`:
+
+  | Workload | Baseline current mean | Candidate current mean | Candidate/baseline | Verdict |
+  | --- | ---: | ---: | ---: | --- |
+  | `zoom/2x_256/order=1` | 34.034 ms | 7.9684 ms | 0.234x time, 4.27x faster | keep |
+
+- Local SciPy oracle (`scipy.ndimage.zoom`, Python 3.13.7, NumPy 2.4.3,
+  SciPy 1.17.1):
+
+  | Workload | Candidate Rust mean | SciPy median | Candidate/SciPy | Verdict |
+  | --- | ---: | ---: | ---: | --- |
+  | `ndimage.zoom(256x256, 2x, order=1)` | 7.9684 ms | 3.88937 ms | 2.05x slower | residual loss |
+
+- SciPy win/loss/neutral: `0/1/0`.
+- Same-worker internal keep/loss/neutral: `1/0/0`.
+- Correctness/conformance guards:
+  - PASS: `RCH_REQUIRE_REMOTE=1 RCH_WORKER=ovh-b CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec -- cargo test -p fsci-ndimage zoom_order_one_reflect_fast_path_matches_generic_sampler_bits -- --nocapture`
+    (`1 passed; 0 failed; 238 filtered out`).
+  - PASS: `RCH_REQUIRE_REMOTE=1 RCH_WORKER=ovh-b CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec -- cargo test -p fsci-ndimage zoom_ -- --nocapture`
+    (`6 passed; 0 failed; 233 filtered out`; metamorphic
+    `mr_zoom_by_one_is_identity` also passed).
+  - PASS: `FSCI_REQUIRE_SCIPY_ORACLE=1 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b cargo test -p fsci-conformance --test diff_ndimage_zoom -- --nocapture`
+    (`1 passed; 0 failed` against live local SciPy).
+  - PASS: `RCH_REQUIRE_REMOTE=1 RCH_WORKER=ovh-b CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec -- cargo check -p fsci-ndimage --all-targets`.
+  - PASS: `git diff --check`.
+  - PASS: `ubs` on the touched Rust file, scorecard/ledger docs, and this
+    evidence bundle found no critical issues.
+  - BLOCKED: `cargo fmt -p fsci-ndimage --check` and direct
+    Rust 2024 rustfmt remain blocked by pre-existing formatting drift outside
+    this patch.
+  - BLOCKED: strict clippy remains blocked by existing `fsci-linalg`
+    dependency lints and existing `fsci-ndimage` library lint debt unrelated
+    to this fast path.
+- Rejected sub-variant: serial fill inside the new fixed-order fast path
+  measured 9.6976 ms versus 7.9684 ms for the kept parallel fill, a 1.22x
+  regression. Reverted to `fill_pixels_parallel`.
+- Negative evidence: the direct bilinear fast path is worthwhile but not
+  sufficient; Rust remains 2.05x slower than SciPy on the local oracle. Do not
+  repeat serial-fill or other scheduler-only probes without a fresh profile
+  showing parallel overhead dominates after this patch.
+- Retry condition: route deeper to a proof-backed no-prefilter order=1 path,
+  code-generated/tiled geometric order=1 kernels, or SIMD contiguous row
+  interpolation while preserving the existing Reflect boundary and tolerance
+  contracts.
+
 ## 2026-06-19 - frankenscipy-96n2y - jnjnp_zeros tighter frontier seed
 
 - Agent: cod-b / MistyBirch

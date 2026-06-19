@@ -20,6 +20,7 @@ win/loss/neutral ledger lives in `docs/progress/perf-negative-results.md`.
 | --- | --- | --- | ---: | ---: | ---: | --- |
 | `frankenscipy-8l8r1.123` | `jnjnp_zeros` cutoff-driven generator | `scipy.special.jnjnp_zeros(nt=64)` equivalent | 1.5856 ms | 427.47 us | 3.71x slower | keep 2.30x internal win; route deeper |
 | `frankenscipy-8l8r1.123` | `jnjnp_zeros` cutoff-driven generator | `scipy.special.jnjnp_zeros(nt=128)` equivalent | 2.9035 ms | 789.23 us | 3.68x slower | keep 2.28x internal win; route deeper |
+| `frankenscipy-wm14d` | `ndimage.zoom` 2D linear Reflect fast path | `scipy.ndimage.zoom(256x256, 2x, order=1)` equivalent | 7.9684 ms | 3.88937 ms | 2.05x slower | keep 4.27x internal win; route deeper |
 | `frankenscipy-96n2y` | `jnjnp_zeros` tighter frontier seed | `scipy.special.jnjnp_zeros(nt=64)` equivalent | 2.2230 ms | 424.10 us | 5.24x slower | keep 2.12x internal win; route deeper |
 | `frankenscipy-96n2y` | `jnjnp_zeros` tighter frontier seed | `scipy.special.jnjnp_zeros(nt=128)` equivalent | 6.1605 ms | 799.97 us | 7.70x slower | keep 1.38x internal win; route deeper |
 | `frankenscipy-x9ckc` | `jnjnp_zeros` guarded root-cost refinement | `scipy.special.jnjnp_zeros(nt=64)` equivalent | 4.6666 ms | 439.49 us | 10.62x slower | keep 1.17x internal win; route deeper |
@@ -57,6 +58,8 @@ win/loss/neutral ledger lives in `docs/progress/perf-negative-results.md`.
 | `frankenscipy-acoco` | `jnjnp_zeros` bracket reuse | Pre-optimization duplicate `jnp_zeros` bracketing route | 1.26x faster at `nt=64`; 1.33x faster at `nt=128` | keep current despite SciPy loss |
 | `frankenscipy-96n2y` | `jnjnp_zeros` tighter frontier seed and dimension-specific expansion | Guarded root-cost route from `frankenscipy-x9ckc` | 2.12x faster at `nt=64`; 1.38x faster at `nt=128` on same-worker `hz1` | keep current despite SciPy loss |
 | `frankenscipy-8l8r1.123` | `jnjnp_zeros` cutoff-driven generator | Tighter rectangular frontier seed from `frankenscipy-96n2y` | 2.30x faster at `nt=64`; 2.28x faster at `nt=128` on same-worker `ovh-b` | keep current despite SciPy loss |
+| `frankenscipy-wm14d` | 2D Reflect/order=1 direct bilinear zoom fast path with parallel fill | Generic per-pixel sampler path | 4.27x faster on `zoom/2x_256/order=1` on same-worker `ovh-b` | keep current despite SciPy loss |
+| `frankenscipy-wm14d` | 2D Reflect/order=1 direct bilinear zoom fast path with parallel fill | Serial fill probe inside the same fast path | 1.22x faster than serial on same-worker `ovh-b` | revert serial probe |
 | `frankenscipy-8l8r1.116` | Full-complex CSD route | rfft CSD route | 1.123x faster on 4096; rfft wins 2.107x on 65536 but loses to SciPy rfft oracle | revert rfft route |
 | `frankenscipy-va60h` | Flat row-major linkage arena | Legacy nested-row NN-array helper | 1.128x faster on Average; 1.019x faster on Ward | keep current despite SciPy loss |
 | `frankenscipy-va60h` | Flat row-major linkage arena | Reverted production nested route probe | 1.290x faster on Average; 1.251x faster on Ward | undo revert; keep flat route |
@@ -82,6 +85,9 @@ win/loss/neutral ledger lives in `docs/progress/perf-negative-results.md`.
 | `fsci-special` `jnjnp_zeros` performance | measured loss plus internal keep | cutoff-driven generator is 2.30x faster at `nt=64` and 2.28x faster at `nt=128` than the tighter rectangular frontier on same-worker `ovh-b`, but still 3.68-3.71x slower than SciPy |
 | `fsci-special` `jnjnp_zeros` correctness | guarded | `jnjnp_adaptive_envelope_matches_oversized_reference`, `jnjnp_frontier_matches_scipy_bench_cutoffs`, and `jnyn_and_jnjnp_zeros_match_scipy` passed via rch; live SciPy `diff_special_bessel_zeros` conformance passed locally |
 | `fsci-special` lint/build gate | partial | `cargo check -p fsci-special --all-targets` passed; clippy `-D warnings` stopped on existing `fsci-integrate`/`fsci-linalg` dependency lints; broad rustfmt/touched-file rustfmt remain blocked by pre-existing formatting drift outside this patch |
+| `fsci-ndimage` zoom order=1 performance | measured loss plus internal keep | 2D Reflect/order=1 direct bilinear zoom path is 4.27x faster than the generic sampler on same-worker `ovh-b`, but still 2.05x slower than SciPy |
+| `fsci-ndimage` zoom order=1 correctness | guarded | focused bit-equivalence guard against the generic sampler passed via rch; broader `zoom_` test filter passed via rch; live SciPy `diff_ndimage_zoom` conformance passed locally |
+| `fsci-ndimage` lint/build gate | partial | `cargo check -p fsci-ndimage --all-targets`, `git diff --check`, and UBS passed; fmt remains blocked by pre-existing drift and clippy by existing `fsci-linalg`/`fsci-ndimage` lint debt outside this patch |
 | `fsci-fft` lint/build gate | guarded | `cargo check -p fsci-fft --all-targets`, focused CSD/rfft tests, and `cargo clippy -p fsci-fft --all-targets -- -D warnings` passed; broad rustfmt remains blocked by pre-existing file-wide drift |
 | `fsci-cluster` linkage performance | measured loss plus internal keep | flat arena is 1.128x faster than the legacy nested helper on Average and 1.019x on Ward, but 1.385-1.497x slower than SciPy |
 | `fsci-cluster` linkage correctness | guarded | filtered linkage tests passed via rch (28 unit, 9 metamorphic); SciPy-backed `diff_cluster_linkage_from_distances` conformance passed locally |

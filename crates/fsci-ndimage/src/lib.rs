@@ -626,6 +626,78 @@ fn cardinal_bspline(order: usize, x: f64) -> f64 {
     vals[span as usize]
 }
 
+#[derive(Clone, Copy)]
+struct LinearAxisSupport {
+    lo: usize,
+    hi: usize,
+    w_lo: f64,
+    w_hi: f64,
+}
+
+fn zoom_order1_axis_supports(
+    input_len: usize,
+    output_len: usize,
+    coeff_len: usize,
+    coord_offset: f64,
+) -> Vec<LinearAxisSupport> {
+    (0..output_len)
+        .map(|out| {
+            let coord = if output_len <= 1 || input_len <= 1 {
+                0.0
+            } else {
+                out as f64 * (input_len - 1) as f64 / (output_len - 1) as f64
+            };
+            let cc = coord + coord_offset;
+            let floor = cc.floor() as isize;
+            let max = coeff_len as isize - 1;
+            let lo = floor.clamp(0, max) as usize;
+            let hi = (floor + 1).clamp(0, max) as usize;
+            LinearAxisSupport {
+                lo,
+                hi,
+                w_lo: cardinal_bspline(1, cc - floor as f64),
+                w_hi: cardinal_bspline(1, cc - (floor + 1) as f64),
+            }
+        })
+        .collect()
+}
+
+fn zoom_order1_reflect_2d_fast(
+    input: &NdArray,
+    coeffs: &NdArray,
+    coord_offsets: &[f64],
+    new_shape: &[usize],
+) -> NdArray {
+    let out_rows = new_shape[0];
+    let out_cols = new_shape[1];
+    let coeff_cols = coeffs.shape[1];
+    let row_support =
+        zoom_order1_axis_supports(input.shape[0], out_rows, coeffs.shape[0], coord_offsets[0]);
+    let col_support =
+        zoom_order1_axis_supports(input.shape[1], out_cols, coeffs.shape[1], coord_offsets[1]);
+    let mut output = NdArray::zeros(new_shape.to_vec());
+    fill_pixels_parallel(&mut output, 4, |flat, _scratch| {
+        let y = flat / out_cols;
+        let x = flat - y * out_cols;
+        let ys = row_support[y];
+        let xs = col_support[x];
+
+        let row_lo = ys.lo * coeff_cols;
+        let row_hi = ys.hi * coeff_cols;
+        let mut upper = 0.0;
+        upper += xs.w_lo * coeffs.data[row_lo + xs.lo];
+        upper += xs.w_hi * coeffs.data[row_lo + xs.hi];
+        let mut lower = 0.0;
+        lower += xs.w_lo * coeffs.data[row_hi + xs.lo];
+        lower += xs.w_hi * coeffs.data[row_hi + xs.hi];
+        let mut acc = 0.0;
+        acc += ys.w_lo * upper;
+        acc += ys.w_hi * lower;
+        acc
+    });
+    output
+}
+
 /// IIR poles of the order-`order` B-spline interpolation prefilter (the roots
 /// of the symbol of `beta^order` sampled on the integers), `order` in 2..=5.
 fn bspline_reflect_poles(order: usize) -> Vec<f64> {
@@ -6253,6 +6325,15 @@ pub fn zoom(
         .collect();
 
     let spline = prefilter_spline_coefficients(input, order, mode)?;
+    if order == 1 && mode == BoundaryMode::Reflect && input.ndim() == 2 && !input.shape.contains(&0)
+    {
+        return Ok(zoom_order1_reflect_2d_fast(
+            input,
+            &spline.coeffs,
+            &spline.coord_offsets,
+            &new_shape,
+        ));
+    }
     let mut output = NdArray::zeros(new_shape.clone());
 
     // Each output pixel is an independent interpolation of the (read-only) spline
@@ -11937,6 +12018,64 @@ mod tests {
         let input = NdArray::new(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]).unwrap();
         let result = zoom(&input, &[2.0, 2.0], 0, BoundaryMode::Nearest, 0.0).unwrap();
         assert_eq!(result.shape, vec![4, 4]);
+    }
+
+    #[test]
+    fn zoom_order_one_reflect_fast_path_matches_generic_sampler_bits() {
+        let input = NdArray::new(
+            (0..20)
+                .map(|i| {
+                    let x = i as f64;
+                    (x * 0.37).sin() * 11.0 + (x * 0.11).cos() * 3.0
+                })
+                .collect(),
+            vec![5, 4],
+        )
+        .unwrap();
+        let zoom_factors = [1.7, 2.25];
+        let new_shape: Vec<usize> = input
+            .shape
+            .iter()
+            .zip(zoom_factors.iter())
+            .map(|(&s, &z)| ((s as f64 * z).round() as usize).max(1))
+            .collect();
+        let spline = prefilter_spline_coefficients(&input, 1, BoundaryMode::Reflect).unwrap();
+        let fast =
+            zoom_order1_reflect_2d_fast(&input, &spline.coeffs, &spline.coord_offsets, &new_shape);
+
+        let mut generic = NdArray::zeros(new_shape.clone());
+        for flat in 0..generic.size() {
+            let out_idx = unravel_with_shape(flat, &new_shape);
+            let coords: Vec<f64> = out_idx
+                .iter()
+                .enumerate()
+                .map(|(axis, &o)| {
+                    if new_shape[axis] <= 1 || input.shape[axis] <= 1 {
+                        0.0
+                    } else {
+                        o as f64 * (input.shape[axis] - 1) as f64 / (new_shape[axis] - 1) as f64
+                    }
+                })
+                .collect();
+            generic.data[flat] = sample_interpolated(
+                &input,
+                &spline.coeffs,
+                &coords,
+                &spline.coord_offsets,
+                1,
+                BoundaryMode::Reflect,
+                0.0,
+            );
+        }
+
+        assert_eq!(fast.shape, generic.shape);
+        for (i, (got, expected)) in fast.data.iter().zip(&generic.data).enumerate() {
+            assert_eq!(
+                got.to_bits(),
+                expected.to_bits(),
+                "zoom order=1 fast path bit mismatch at {i}: {got} vs {expected}"
+            );
+        }
     }
 
     #[test]
