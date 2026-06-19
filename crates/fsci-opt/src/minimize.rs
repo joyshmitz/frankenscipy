@@ -3,7 +3,7 @@
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::linesearch::{WolfeParams, line_search_wolfe2, line_search_wolfe2_with_gradient_probe};
+use crate::linesearch::{WolfeParams, line_search_wolfe2_with_gradient_probe};
 use crate::types::{
     Bound, ConvergenceStatus, GradientFunc, MinimizeOptions, OptError, OptimizeMethod,
     OptimizeResult, OptimizeTraceEntry,
@@ -1262,26 +1262,27 @@ where
                 counter.set(counter.get() + 1);
                 (fun)(xv)
             };
-            let g_closure = |xv: &[f64]| {
-                let mut g = vec![0.0; xv.len()];
-                let mut xp = xv.to_vec();
+            let mut g_closure = |xv: &mut [f64], gradient: &mut Vec<f64>| {
+                if gradient.len() != xv.len() {
+                    gradient.resize(xv.len(), 0.0);
+                }
                 for i in 0..xv.len() {
                     let step = eps * (1.0 + xv[i].abs());
-                    let orig = xp[i];
-                    xp[i] = orig + step;
+                    let orig = xv[i];
+                    xv[i] = orig + step;
                     counter.set(counter.get() + 1);
-                    let fp = (fun)(&xp);
-                    xp[i] = orig - step;
+                    let fp = (fun)(xv);
+                    xv[i] = orig - step;
                     counter.set(counter.get() + 1);
-                    let fm = (fun)(&xp);
-                    xp[i] = orig;
-                    g[i] = (fp - fm) / (2.0 * step);
+                    let fm = (fun)(xv);
+                    xv[i] = orig;
+                    gradient[i] = (fp - fm) / (2.0 * step);
                 }
-                g
+                dot(gradient, &direction)
             };
-            let wolfe = line_search_wolfe2(
+            let wolfe = line_search_wolfe2_with_gradient_probe(
                 &f_closure,
-                &g_closure,
+                &mut g_closure,
                 &x,
                 &direction,
                 f,
@@ -1290,10 +1291,10 @@ where
             );
             if let Ok(ls) = wolfe {
                 objective.nfev += counter.get();
-                let new_x = add_scaled(&x, &direction, ls.alpha);
+                let new_x = add_scaled(&x, &direction, ls.result.alpha);
                 let s = sub_vectors(&new_x, &x);
                 x = new_x;
-                f = ls.f_at_alpha;
+                f = ls.result.f_at_alpha;
                 let new_grad = match finite_diff_gradient(&mut objective, &x, eps) {
                     Ok(g) => {
                         njev += 1;
@@ -1321,7 +1322,7 @@ where
                     iteration,
                     f,
                     grad_norm,
-                    ls.alpha,
+                    ls.result.alpha,
                     objective.nfev,
                 );
                 continue;
