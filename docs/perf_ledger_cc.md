@@ -370,6 +370,19 @@ around n≈3–4k; the full jump-and-walk O(n log n) rewrite (now safety-netted 
 property test) is the future lever to win at ALL sizes. But at realistic small-medium
 sizes fsci now DOMINATES.
 
+## IO crate — head-to-head vs numpy/scipy.io (2026-06-19) — fsci DOMINATES
+fsci vs numpy (loadtxt/savetxt) + scipy.io (mmread/mmwrite), in-memory:
+
+| function | fsci | numpy/scipy | ratio |
+|---|---|---|---|
+| mmread 100×100 | 289 µs | 4282 µs | **14.8× faster** |
+| mmwrite 100×100 | 619 µs | 3747 µs | **6.1× faster** |
+| savetxt 500×20 | 584 µs | 2951 µs | **5.0× faster** |
+| loadtxt 500×20 | 267 µs | 929 µs | **3.5× faster** |
+
+Same structural reason as opt/integrate: fsci's Rust text/MatrixMarket parse+format has no
+Python interpreter overhead; numpy/scipy pay it on every cell. IO HARVESTED — fsci dominates.
+
 ## Special crate — array (RealVec) sweep vs scipy (2026-06-19) — measured slower, cause CORRECTED
 Bench added (`special_array_65536`). fsci vs scipy.special over a 65536 RealVec:
 
