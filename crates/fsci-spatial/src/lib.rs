@@ -173,6 +173,30 @@ fn simd_sqsum(x: &[f64]) -> f64 {
     s
 }
 
+#[inline]
+fn sqeuclidean4(a: &[f64], b: &[f64]) -> f64 {
+    debug_assert_eq!(a.len(), 4);
+    debug_assert_eq!(b.len(), 4);
+    let d0 = a[0] - b[0];
+    let d1 = a[1] - b[1];
+    let d2 = a[2] - b[2];
+    let d3 = a[3] - b[3];
+    d0 * d0 + d1 * d1 + d2 * d2 + d3 * d3
+}
+
+#[inline]
+fn dot4(a: &[f64], b: &[f64]) -> f64 {
+    debug_assert_eq!(a.len(), 4);
+    debug_assert_eq!(b.len(), 4);
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]
+}
+
+#[inline]
+fn sqsum4(x: &[f64]) -> f64 {
+    debug_assert_eq!(x.len(), 4);
+    x[0] * x[0] + x[1] * x[1] + x[2] * x[2] + x[3] * x[3]
+}
+
 /// Manhattan (L1) distance: `Σ |a[i]-b[i]|`, 8-wide.
 pub fn cityblock(a: &[f64], b: &[f64]) -> f64 {
     use std::simd::{Simd, num::SimdFloat};
@@ -491,7 +515,14 @@ pub fn pdist(x: &[Vec<f64>], metric: DistanceMetric) -> Result<Vec<f64>, Spatial
     }
 
     let total = n * (n - 1) / 2;
-    let nthreads = cdist_thread_count(n, n, dim);
+    let nthreads = if dim == 4
+        && n <= 512
+        && matches!(metric, DistanceMetric::Euclidean | DistanceMetric::Cosine)
+    {
+        1
+    } else {
+        cdist_thread_count(n, n, dim)
+    };
 
     // Cosine and Correlation recompute each vector's norm/mean+centered-norm — quantities
     // that depend on ONE vector — inside the O(n²) pair loop. Precompute them ONCE (O(n·d))
@@ -499,6 +530,11 @@ pub fn pdist(x: &[Vec<f64>], metric: DistanceMetric) -> Result<Vec<f64>, Spatial
     // precomputed per-vector quantities use the same arithmetic/summation order as the
     // scalar `cosine`/`correlation` helpers, and the cross term is summed in the same order.
     let result = match metric {
+        DistanceMetric::Euclidean if dim == 4 => pdist_fill_euclidean4(x, n, total, nthreads),
+        DistanceMetric::Cosine if dim == 4 => {
+            let norms: Vec<f64> = x.iter().map(|v| sqsum4(v).sqrt()).collect();
+            pdist_fill_cosine4(x, &norms, n, total, nthreads)
+        }
         DistanceMetric::Cosine => {
             let norms: Vec<f64> = x.iter().map(|v| simd_sqsum(v).sqrt()).collect();
             pdist_fill(n, total, nthreads, |i, j| {
@@ -540,6 +576,97 @@ pub fn pdist(x: &[Vec<f64>], metric: DistanceMetric) -> Result<Vec<f64>, Spatial
         }),
     };
     Ok(result)
+}
+
+fn pdist_fill_euclidean4(x: &[Vec<f64>], n: usize, total: usize, nthreads: usize) -> Vec<f64> {
+    if nthreads <= 1 {
+        let mut result = Vec::with_capacity(total);
+        for i in 0..n {
+            let xi = &x[i];
+            for xj in &x[i + 1..] {
+                result.push(sqeuclidean4(xi, xj).sqrt());
+            }
+        }
+        return result;
+    }
+    let mut result = vec![0.0_f64; total];
+    let bounds = pdist_row_bounds(n, nthreads);
+    let offset = |r: usize| -> usize { r * (n - 1) - r * (r.saturating_sub(1)) / 2 };
+    std::thread::scope(|scope| {
+        let mut rest: &mut [f64] = &mut result;
+        let mut prev = 0usize;
+        for w in 0..bounds.len() - 1 {
+            let r0 = bounds[w];
+            let r1 = bounds[w + 1];
+            let take = offset(r1) - prev;
+            prev = offset(r1);
+            let (seg, tail) = rest.split_at_mut(take);
+            rest = tail;
+            scope.spawn(move || {
+                let mut local = 0usize;
+                for i in r0..r1 {
+                    let xi = &x[i];
+                    for xj in &x[i + 1..] {
+                        seg[local] = sqeuclidean4(xi, xj).sqrt();
+                        local += 1;
+                    }
+                }
+            });
+        }
+    });
+    result
+}
+
+fn pdist_fill_cosine4(
+    x: &[Vec<f64>],
+    norms: &[f64],
+    n: usize,
+    total: usize,
+    nthreads: usize,
+) -> Vec<f64> {
+    let pair = |i: usize, j: usize| {
+        let denom = norms[i] * norms[j];
+        if denom == 0.0 {
+            f64::NAN
+        } else {
+            1.0 - dot4(&x[i], &x[j]) / denom
+        }
+    };
+    if nthreads <= 1 {
+        let mut result = Vec::with_capacity(total);
+        for i in 0..n {
+            for j in (i + 1)..n {
+                result.push(pair(i, j));
+            }
+        }
+        return result;
+    }
+    let mut result = vec![0.0_f64; total];
+    let bounds = pdist_row_bounds(n, nthreads);
+    let offset = |r: usize| -> usize { r * (n - 1) - r * (r.saturating_sub(1)) / 2 };
+    let pair = &pair;
+    std::thread::scope(|scope| {
+        let mut rest: &mut [f64] = &mut result;
+        let mut prev = 0usize;
+        for w in 0..bounds.len() - 1 {
+            let r0 = bounds[w];
+            let r1 = bounds[w + 1];
+            let take = offset(r1) - prev;
+            prev = offset(r1);
+            let (seg, tail) = rest.split_at_mut(take);
+            rest = tail;
+            scope.spawn(move || {
+                let mut local = 0usize;
+                for i in r0..r1 {
+                    for j in (i + 1)..n {
+                        seg[local] = pair(i, j);
+                        local += 1;
+                    }
+                }
+            });
+        }
+    });
+    result
 }
 
 /// Fill a condensed pairwise-distance vector by evaluating `pair(i, j)` for every i<j.
@@ -5986,6 +6113,38 @@ mod tests {
             assert_eq!(got.len(), want.len());
             for (k, (&g, &w)) in got.iter().zip(&want).enumerate() {
                 assert_eq!(g.to_bits(), w.to_bits(), "pdist mismatch at {k} {metric:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn pdist_dim4_fast_paths_match_metric_helpers() {
+        let x: Vec<Vec<f64>> = (0..32)
+            .map(|i| {
+                let t = i as f64;
+                vec![
+                    (t * 0.11).sin(),
+                    (t * 0.07).cos(),
+                    t * 0.003,
+                    (t * 0.17).sin() - 0.25,
+                ]
+            })
+            .collect();
+        for metric in [DistanceMetric::Euclidean, DistanceMetric::Cosine] {
+            let got = pdist(&x, metric).expect("pdist dim4 fast path");
+            let mut want = Vec::with_capacity(x.len() * (x.len() - 1) / 2);
+            for i in 0..x.len() {
+                for j in (i + 1)..x.len() {
+                    want.push(metric_distance(&x[i], &x[j], metric));
+                }
+            }
+            assert_eq!(got.len(), want.len());
+            for (k, (&g, &w)) in got.iter().zip(&want).enumerate() {
+                assert_eq!(
+                    g.to_bits(),
+                    w.to_bits(),
+                    "dim4 pdist mismatch at {k} {metric:?}"
+                );
             }
         }
     }

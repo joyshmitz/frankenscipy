@@ -20,6 +20,10 @@ win/loss/neutral ledger lives in `docs/progress/perf-negative-results.md`.
 | --- | --- | --- | ---: | ---: | ---: | --- |
 | `frankenscipy-acoco` | `jnjnp_zeros` bracket reuse | `scipy.special.jnjnp_zeros(nt=64)` equivalent | 80.728603 ms | 0.493655 ms | 163.53x slower | keep internal bracket reuse; route deeper |
 | `frankenscipy-acoco` | `jnjnp_zeros` bracket reuse | `scipy.special.jnjnp_zeros(nt=128)` equivalent | 410.059973 ms | 0.924456 ms | 443.57x slower | keep internal bracket reuse; route deeper |
+| `frankenscipy-nm8ex` | Spatial `pdist` dim-4 fast path + serial gate | Euclidean n=256 d=4 | 107.45 us | 94.30 us | 1.14x slower | keep 27.24x internal win; route deeper |
+| `frankenscipy-nm8ex` | Spatial `pdist` dim-4 fast path + serial gate | Cosine n=256 d=4 | 114.04 us | 87.20 us | 1.31x slower | keep 29.51x internal win; route deeper |
+| `frankenscipy-nm8ex` | Spatial `pdist` dim-4 fast path + serial gate | Euclidean n=512 d=4 | 425.75 us | 310.83 us | 1.37x slower | keep 8.35x internal win; route deeper |
+| `frankenscipy-nm8ex` | Spatial `pdist` dim-4 fast path + serial gate | Cosine n=512 d=4 | 461.16 us | 283.75 us | 1.63x slower | keep 5.54x internal win; route deeper |
 | `frankenscipy-va60h` | Linkage flat row-major distance arena | `scipy.cluster.hierarchy.linkage(method="average")`, n=800 d=4 | 6.1713 ms | 4.4550 ms | 1.385x slower | keep internal flat arena; route deeper |
 | `frankenscipy-va60h` | Linkage flat row-major distance arena | `scipy.cluster.hierarchy.linkage(method="ward")`, n=800 d=4 | 7.5250 ms | 5.0256 ms | 1.497x slower | keep internal flat arena; route deeper |
 
@@ -46,6 +50,7 @@ win/loss/neutral ledger lives in `docs/progress/perf-negative-results.md`.
 | `frankenscipy-va60h` | Flat row-major linkage arena | Legacy nested-row NN-array helper | 1.128x faster on Average; 1.019x faster on Ward | keep current despite SciPy loss |
 | `frankenscipy-va60h` | Flat row-major linkage arena | Reverted production nested route probe | 1.290x faster on Average; 1.251x faster on Ward | undo revert; keep flat route |
 | `frankenscipy-8l8r1.118` | Fused signal coherence | Compositional `csd(x,y)` + `csd(x,x)` + `csd(y,y)` route | 2.98x faster locally; 2.80x faster on rch `hz1` | keep fused route |
+| `frankenscipy-nm8ex` | Dim-4 Euclidean/Cosine direct serial `pdist` kernels | Generic metric-dispatch/reduction/threaded path | 5.54-29.51x faster on same-worker `hz2` | keep current despite SciPy loss |
 
 ## Current Readiness
 
@@ -70,8 +75,11 @@ win/loss/neutral ledger lives in `docs/progress/perf-negative-results.md`.
 | `fsci-cluster` linkage correctness | guarded | filtered linkage tests passed via rch (28 unit, 9 metamorphic); SciPy-backed `diff_cluster_linkage_from_distances` conformance passed locally |
 | `fsci-cluster` lint/build gate | partial | `cargo check -p fsci-cluster --benches` passed; fmt blocked on existing `perf_isomap.rs` drift and clippy blocked on existing `fsci-linalg` dependency lints |
 | `fsci-ndimage` gaussian_filter route | measured reject | always-line-walk plus outermost row-split regressed `gaussian_sigma2/256`; source reverted, current remains a SciPy loss routed to inner dot SIMD/tiled contiguous-span work |
+| `fsci-spatial` `pdist` performance | measured loss plus internal keep | dim-4 direct serial kernels are 5.54-29.51x faster than the generic threaded route on same-worker `hz2`, but still 1.14-1.63x slower than SciPy |
+| `fsci-spatial` `pdist` correctness | guarded | focused `pdist` tests passed via rch (10 passed), full `fsci-spatial` lib suite passed via rch (206 passed, 2 ignored) |
+| `fsci-spatial` lint/build gate | partial | `cargo check -p fsci-spatial --all-targets` passed; conformance is blocked by unrelated `e2e_sparse` compile error, clippy by existing `fsci-linalg` lints, and fmt by pre-existing `fsci-spatial` rustfmt drift |
 | rch SciPy oracle parity | blocked on worker image | `vmi1152480` and `vmi1227854` lacked `scipy`; local same-host oracle supplied the head-to-head ratios |
-| Release readiness | partial | two linalg perf clusters, one `fsci-signal` coherence win, one `fsci-opt` L-BFGS-B reject, one `fsci-special` measured SciPy loss, one `fsci-fft` CSD reject, one `fsci-cluster` linkage measured SciPy loss, and one `fsci-ndimage` gaussian reject verified; other code-first perf ledger entries still need gauntlet conversion |
+| Release readiness | partial | two linalg perf clusters, one `fsci-signal` coherence win, one `fsci-opt` L-BFGS-B reject, one `fsci-special` measured SciPy loss, one `fsci-fft` CSD reject, one `fsci-cluster` linkage measured SciPy loss, one `fsci-ndimage` gaussian reject, and one `fsci-spatial` `pdist` internal keep verified; other code-first perf ledger entries still need gauntlet conversion |
 
 ## Pending Gauntlet Backlog
 

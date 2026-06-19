@@ -25,9 +25,10 @@ regressions are reverted. Entries also routed to MistyBirch for the canonical me
 | Distribution pdf_many lgamma-hoist (q53ya) | gamma.pdf n=4096 | 149.6 µs | 49.86 µs | **3.0× faster** | 3.2× (hoist vs map) | ✅ KEEP |
 | Distribution pdf_many lgamma-hoist (q53ya) | beta.pdf n=4096 | 296.8 µs | 60.97 µs | **4.87× faster** | 4.3× (hoist vs map) | ✅ KEEP |
 | Distribution pmf_many lgamma-hoist (q53ya) | hypergeom.pmf supp=701 | 3744.9 µs | 38.34 µs | **97.7× faster** | — | ✅ KEEP |
-| pdist parallel (8e7e6d99, NOT mine) | pdist euclidean n=256 | 92.1 µs | 674.9 µs | **0.14× (7.3× SLOWER)** | gate fires at n=256 | ⚠️ LOSS → owner |
-| pdist parallel (8e7e6d99, NOT mine) | pdist euclidean n=512 | 326.3 µs | 889.0 µs | **0.37× (2.7× SLOWER)** | overhead amortizes w/ n | ⚠️ LOSS → owner |
-| pdist parallel (8e7e6d99, NOT mine) | pdist cosine n=256 | 81.9 µs | 736.7 µs | **0.11× (9× SLOWER)** | — | ⚠️ LOSS → owner |
+| pdist dim-4 fast path + serial gate (nm8ex) | pdist euclidean n=256 | 94.30 µs | 107.45 µs | **0.88× (1.14× SLOWER)** | **27.24× faster** vs generic | ⚠️ KEEP internal, near-parity |
+| pdist dim-4 fast path + serial gate (nm8ex) | pdist cosine n=256 | 87.20 µs | 114.04 µs | **0.76× (1.31× SLOWER)** | **29.51× faster** vs generic | ⚠️ KEEP internal, route deeper |
+| pdist dim-4 fast path + serial gate (nm8ex) | pdist euclidean n=512 | 310.83 µs | 425.75 µs | **0.73× (1.37× SLOWER)** | **8.35× faster** vs generic | ⚠️ KEEP internal, route deeper |
+| pdist dim-4 fast path + serial gate (nm8ex) | pdist cosine n=512 | 283.75 µs | 461.16 µs | **0.62× (1.63× SLOWER)** | **5.54× faster** vs generic | ⚠️ KEEP internal, route deeper |
 | linkage NN-chain (average) | linkage n=400 d=4 | 1586.5 µs | 1904.5 µs | **0.83× (1.2× slower)** | — | ⚠️ near-parity |
 | cophenet mem::take (jphzn) | cophenet n=400 | 401.5 µs | 219.7 µs | **1.83× faster** | — | ✅ KEEP |
 | kmeans2 double-buffer (4ylee) | kmeans2 k4 n2000 iter=50 | 2104.7 µs | 5126 µs | **0.41× (2.4× SLOWER)** | scalar assign vs scipy SIMD | ⚠️ kernel gap → bead |
@@ -103,19 +104,25 @@ is exactly what wins the head-to-head. Byte-identical (normalizer is a loop
 invariant), NO revert risk. The 19-density batch family shares this lever → all KEEP
 by the same construction. Conformance green. Commits: `q53ya` (impl) + oracle here.
 
-### Spatial pdist — ⚠️ LOSS vs scipy (NOT my optimization; flagged to owner)
+### Spatial pdist dim-4 fast path (frankenscipy-nm8ex) — ⚠️ KEEP internal, residual LOSS vs scipy
 Oracle `docs/perf_oracle_pdist.py` (scipy.spatial.distance.pdist, 4-D, n=256/512).
-fsci pdist (parallel, commit `8e7e6d99` by another agent) is **2.7–9× SLOWER than
-scipy**: euclidean 674.9µs vs 92.1µs (n=256), 889.0µs vs 326.3µs (n=512); cosine
-736.7µs vs 81.9µs (n=256). The ratio improves with n (7.3×→2.7×) → fixed thread-spawn
-overhead. The gate `cdist_thread_count` fires at `work=n²·dim≥2¹⁸`, i.e. exactly at
-n=256/dim=4 — parallelizing trivially-small 4-D distance pairs across 64 threads, the
-same over-eager pathology as the (reverted) interpolate evaluators, worsened by
-multi-agent contention. The author's "3.8–7.3×" claim is parallel-vs-serial INTERNAL,
-not vs scipy; implied serial ≈ 3.4–6.5 ms at n=512 → fsci's pure-Rust pdist KERNEL is
-~10–60× slower than scipy's C. **NOT reverted — another agent's file; routed to the
-spatial owner.** Recommendation: raise the pdist gate well above 2¹⁸ AND/OR a faster
-inner kernel (scipy uses tuned C). Honest LOSS recorded.
+The kept dim-4 Euclidean/Cosine fast path bypasses per-pair metric dispatch, generic
+slice reductions, and SIMD-tail setup, then forces the now-cheap dim-4 path through
+the serial gate to avoid thread-spawn overhead. Same-worker `hz2` A/B proves a real
+constant-factor collapse: Euclidean n=256 2.9264 ms → 107.45µs (**27.24× faster**),
+Cosine n=256 3.3658 ms → 114.04µs (**29.51× faster**), Euclidean n=512 3.5554 ms
+→ 425.75µs (**8.35× faster**), Cosine n=512 2.5548 ms → 461.16µs (**5.54× faster**).
+Correctness is guarded by bit-for-bit
+dim-4 fast-path tests against the existing metric helpers plus the full
+`fsci-spatial` lib suite (206 passed, 2 ignored).
+
+Head-to-head SciPy remains a measured loss but is now close: SciPy local p50s are
+94.30µs, 87.20µs, 310.83µs, and 283.75µs respectively, so Rust is still **1.14–1.63×
+slower**. Do not retry generic dispatch removal or dim-4 serial gating. The next
+lever has to attack the layout/kernel constants directly: packed SoA or flat
+contiguous point storage, batch multiple pair outputs per inner loop, and/or a
+generated AVX-style dim-specialized kernel that avoids `Vec<Vec<f64>>` pointer
+chasing and approaches SciPy's C distance loop constants. Honest LOSS recorded.
 
 ### Hierarchical clustering: linkage + cophenet (frankenscipy-jphzn) — ⚠️ parity / ✅ KEEP
 Oracle `docs/perf_oracle_hier.py` (scipy.cluster.hierarchy, n=400 blobs, average).

@@ -44,6 +44,66 @@ condition so dead ends are not repeated casually.
   kernel or a cache-tiled separable scratch/transpose path that preserves the
   existing gaussian tolerance contract.
 
+## 2026-06-19 - frankenscipy-nm8ex - spatial pdist dim-4 fast path
+
+- Agent: cod-a / MistyBirch
+- Lever: specialize `pdist` for the measured 4-D Euclidean and Cosine gap by
+  bypassing per-pair metric dispatch, generic slice reductions, and SIMD-tail
+  setup, then force the now-cheap dim-4 path through the serial gate to avoid
+  thread-spawn overhead at n=256/512. The kept path uses direct dim-4
+  dot/squared-norm arithmetic while leaving the generic pair-balanced row split
+  available for other metrics and shapes.
+- Graveyard/artifact route tested: cache/constant-factor collapse for the tight
+  O(n^2) kernel, branch removal inside the metric loop, and shape-specific
+  codegen without unsafe code.
+- Decision: KEEP as an internal win, route residual SciPy loss deeper. No
+  revert.
+- Artifact:
+  `tests/artifacts/perf/2026-06-19-nm8ex-pdist-dim4/EVIDENCE.md`
+- Baseline/candidate command:
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a rch exec -- cargo bench -p fsci-spatial --bench spatial_bench -- pdist --noplot`
+- SciPy oracle command:
+  `python3 docs/perf_oracle_pdist.py`
+- Same-worker internal A/B on rch worker `hz2`:
+
+  | Workload | Baseline mean | Candidate mean | Candidate/baseline | Verdict |
+  | --- | ---: | ---: | ---: | --- |
+  | `pdist/euclidean/256` | 2.9264 ms | 107.45 us | 0.0367x time, 27.24x faster | keep |
+  | `pdist/cosine/256` | 3.3658 ms | 114.04 us | 0.0339x time, 29.51x faster | keep |
+  | `pdist/euclidean/512` | 3.5554 ms | 425.75 us | 0.1197x time, 8.35x faster | keep |
+  | `pdist/cosine/512` | 2.5548 ms | 461.16 us | 0.1805x time, 5.54x faster | keep |
+
+- Local SciPy oracle (`scipy.spatial.distance.pdist`, SciPy 1.17.1):
+
+  | Workload | Candidate mean | SciPy p50 | Candidate/SciPy | Verdict |
+  | --- | ---: | ---: | ---: | --- |
+  | Euclidean n=256 d=4 | 107.45 us | 94.30 us | 1.14x slower | residual near-parity |
+  | Cosine n=256 d=4 | 114.04 us | 87.20 us | 1.31x slower | residual loss |
+  | Euclidean n=512 d=4 | 425.75 us | 310.83 us | 1.37x slower | residual loss |
+  | Cosine n=512 d=4 | 461.16 us | 283.75 us | 1.63x slower | residual loss |
+
+- Correctness/conformance guards:
+  - PASS: `rch exec -- cargo test -p fsci-spatial pdist --lib -- --nocapture`
+    (10 passed).
+  - PASS: `rch exec -- cargo test -p fsci-spatial --lib -- --nocapture`
+    (206 passed, 2 ignored).
+  - PASS: `rch exec -- cargo check -p fsci-spatial --all-targets`; existing
+    warning remains `point_in_circumcircle` dead code.
+  - BLOCKED: `rch exec -- cargo test -p fsci-conformance -- --nocapture`
+    fails before this spatial lane in `crates/fsci-conformance/tests/e2e_sparse.rs`
+    with `SolveResult` passed where `&[f64]` is expected.
+  - BLOCKED: `rch exec -- cargo clippy -p fsci-spatial --all-targets -- -D warnings`
+    stops in dependency crate `fsci-linalg` on existing lint debt.
+  - BLOCKED: `cargo fmt -p fsci-spatial --check` reports pre-existing
+    `fsci-spatial` source/bench rustfmt drift outside this patch; `git diff --check`
+    is clean.
+- Retry condition: do not retry generic metric-dispatch removal, dim-4 scalar
+  helper extraction, or dim-4 serial gating for this workload. The next
+  credible route is a deeper layout/kernel change: packed SoA/flat
+  contiguous point storage, batch several pair outputs per inner loop, or a
+  generated AVX-style dim-specialized kernel that removes `Vec<Vec<f64>>`
+  pointer chasing and matches SciPy's C distance loop constants.
+
 ## 2026-06-19 - frankenscipy-8l8r1.115 - randomized_eigh projected sketch
 
 - Agent: cod-b / MistyBirch
