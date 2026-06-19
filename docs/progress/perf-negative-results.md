@@ -4,6 +4,39 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-19 - frankenscipy-8l8r1.117 - sparse random rounded-empty path
+
+- Agent: cod-b / MistyBirch
+- Lever: compute `round(density * rows * cols)` before sampling in
+  `fsci_sparse::random`; if the rounded cardinality is zero, return an empty COO
+  after overflow validation. This was already implemented by `f037b1da`; this
+  entry is the measured closeout.
+- Graveyard/artifact route tested: output-sensitive cardinality short-circuit,
+  constant-time empty artifact construction, and zero scan of impossible output.
+- Decision: KEEP. No revert.
+- Artifact: `tests/artifacts/perf/frankenscipy-8l8r1.117/EVIDENCE.md`
+- Rust command:
+  `RCH_WORKER=hz1 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec -- cargo bench -p fsci-sparse --bench sparse_bench -- sparse_random_tiny_density --sample-size 10 --measurement-time 1 --warm-up-time 1`
+- SciPy oracle command:
+  `RCH_WORKER=hz1 rch exec -- python3 -c '... scipy.sparse.random(..., format="coo", rng=reused_rng) ...'`
+- Same-worker head-to-head on `hz1`:
+
+  | Workload | Rust Criterion point | SciPy median | SciPy/Rust | Verdict |
+  | --- | ---: | ---: | ---: | --- |
+  | `random(1e9 x 1e9, density=1e-19)` | 39.405 ns | 46,453 ns | 1,179x faster | win |
+  | `random(2e9 x 2e9, density=1e-20)` | 39.408 ns | 55,310 ns | 1,403x faster | win |
+
+- SciPy win/loss/neutral: `2/0/0`.
+- Correctness/conformance guards:
+  - PASS: `RCH_WORKER=hz1 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec -- cargo test -p fsci-sparse random_ -- --nocapture`
+    (`10 passed; 0 failed; 338 filtered out`).
+- Negative evidence: do not retry dense Bernoulli scanning for rounded-empty
+  sparse random. The current cardinality-first path is both SciPy-compatible and
+  orders of magnitude faster.
+- Retry condition: only revisit this specific regime if SciPy changes the
+  rounded-cardinality contract or a future profile shows non-empty sparse random
+  collision handling, direct CSR/CSC construction, or data generation dominates.
+
 ## 2026-06-19 - frankenscipy-x9ckc - jnjnp_zeros root-cost refinement
 
 - Agent: cod-b / MistyBirch
