@@ -1,0 +1,78 @@
+{
+  "date": "2026-06-19",
+  "agent": "cod-b / MistyBirch",
+  "bead": "frankenscipy-8l8r1.122",
+  "decision": "reject_and_revert",
+  "optimization": {
+    "commit": "b5dbf1244e52632edc9bd0edc2102cb3ff78dfad",
+    "parent": "69ae5d214f8e90356789b112cff30a5c69b43d2a",
+    "summary": "L-BFGS-B unconstrained Strong-Wolfe finite-difference probe scratch reuse"
+  },
+  "commands": {
+    "parent_bench": "rch exec -- env CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b RUSTFLAGS='-C force-frame-pointers=yes' cargo bench -p fsci-opt --bench optimize_bench --profile release-perf -- lbfgsb --noplot",
+    "candidate_bench": "rch exec -- env CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b RUSTFLAGS='-C force-frame-pointers=yes' cargo bench -p fsci-opt --bench optimize_bench --profile release-perf -- lbfgsb --noplot",
+    "post_revert_bench": "rch exec -- env CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b RUSTFLAGS='-C force-frame-pointers=yes' cargo bench -p fsci-opt --bench optimize_bench --profile release-perf -- lbfgsb --noplot",
+    "scipy_oracle": "python3 docs/perf_oracle_lbfgsb.py"
+  },
+  "same_worker_internal_ab": {
+    "worker": "ovh-a",
+    "criterion_p50_us": [
+      {
+        "case": "lbfgsb/rosenbrock_unconstrained_fd/2",
+        "parent_us": 17.491,
+        "candidate_us": 17.405,
+        "candidate_time_vs_parent": 0.995,
+        "verdict": "neutral"
+      },
+      {
+        "case": "lbfgsb/rosenbrock_unconstrained_fd/10",
+        "parent_us": 87.087,
+        "candidate_us": 106.44,
+        "candidate_time_vs_parent": 1.222,
+        "verdict": "loss"
+      },
+      {
+        "case": "lbfgsb/quadratic_unconstrained_fd/32",
+        "parent_us": 5.2463,
+        "candidate_us": 6.0548,
+        "candidate_time_vs_parent": 1.154,
+        "verdict": "loss"
+      }
+    ]
+  },
+  "post_revert_current_vs_scipy": {
+    "rust_worker": "hz2",
+    "rust_profile": "release-perf",
+    "scipy_provenance": "local Python 3, SciPy 1.17.1 / NumPy 2.4.3; rch exec declined the Python oracle as a non-compilation command",
+    "rows": [
+      {
+        "case": "lbfgsb/rosenbrock_unconstrained_fd/2",
+        "rust_p50_us": 22.236,
+        "scipy_p50_us": 4585.899063386023,
+        "scipy_p95_us": 5483.083485160023,
+        "scipy_over_rust_p50": 206.24
+      },
+      {
+        "case": "lbfgsb/rosenbrock_unconstrained_fd/10",
+        "rust_p50_us": 105.09,
+        "scipy_p50_us": 18262.641970068216,
+        "scipy_p95_us": 18849.509418942034,
+        "scipy_over_rust_p50": 173.78
+      },
+      {
+        "case": "lbfgsb/quadratic_unconstrained_fd/32",
+        "rust_p50_us": 6.3129,
+        "scipy_p50_us": 1447.1720205619931,
+        "scipy_p95_us": 1534.352486487478,
+        "scipy_over_rust_p50": 229.23
+      }
+    ]
+  },
+  "correctness_gates": [
+    "PASS cargo fmt -p fsci-opt --check",
+    "PASS rch exec -- env CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b RUSTFLAGS='-C force-frame-pointers=yes' cargo check -p fsci-opt --all-targets",
+    "PASS rch exec -- env CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b RUSTFLAGS='-C force-frame-pointers=yes' cargo test -p fsci-opt lbfgsb -- --nocapture",
+    "PASS rch exec -- env CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b RUSTFLAGS='-C force-frame-pointers=yes' FSCI_REQUIRE_SCIPY_ORACLE=1 cargo test -p fsci-conformance --test diff_opt_lbfgsb_minimize -- --nocapture",
+    "PASS rch exec -- env CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b RUSTFLAGS='-C force-frame-pointers=yes' cargo clippy -p fsci-opt --all-targets -- -D warnings"
+  ]
+}
