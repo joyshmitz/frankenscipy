@@ -370,6 +370,26 @@ around n≈3–4k; the full jump-and-walk O(n log n) rewrite (now safety-netted 
 property test) is the future lever to win at ALL sizes. But at realistic small-medium
 sizes fsci now DOMINATES.
 
+## Interpolate crate — FULL head-to-head sweep vs scipy (2026-06-19)
+Measured every major interpolator (oracles `docs/perf_oracle_{griddata,clough_tocher,rect}.py`
++ `/tmp/oracle_{1d,rgi}.py`). fsci DOMINATES or matches scipy across the board — no
+remaining losses:
+
+| function | fsci | scipy | ratio |
+|---|---|---|---|
+| griddata / LinearND (576/1024) | 118 µs | 5507 µs | **46.5× faster** |
+| CloughTocher eval (576/1024) | 83.5 µs | 537 µs | **6.4× faster** |
+| RegularGrid nearest (32³/4096) | 69.8 µs | 361 µs | **5.2× faster** |
+| RegularGrid linear (32³/4096) | 178 µs | 608 µs | **3.4× faster** |
+| CubicSpline construct (1024) | 25.1 µs | 237.7 µs | **9.5× faster** |
+| CubicSpline eval (1024/4096) | 38.8 µs | 73.6 µs | **1.9× faster** |
+| interp1d linear (4096/8192) | 39.2 µs | 38.4 µs | parity |
+| RectBivariate eval_grid (32²→64²) | 65.8 µs | 48.3 µs | 0.73× (near-parity, was 0.20×) |
+
+LinearND/Clough-Tocher/eval_grid wins came from the precompute-element-invariant lever
+(this phase); cubic/RGI/interp1d were already competitive. The ONLY non-win is eval_grid
+at 1.36× off scipy's elite Fortran (down from 5.1×). Interpolate is HARVESTED.
+
 ## BOLD-VERIFY phase outcome (implemented levers, not just measured)
 
 This phase moved from MEASURING gaps to FIXING them, conformance-gated via `cargo test`:
