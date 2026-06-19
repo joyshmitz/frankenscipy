@@ -510,8 +510,27 @@ fn bench_acoco_gauntlet_jnjnp_zeros(c: &mut Criterion) {
     group.finish();
 }
 
+/// Array (RealVec) dispatch — the realistic ufunc workload. fsci parallelizes the per-family
+/// array path; scipy.special is vectorized single-core C. Head-to-head vs scipy.
+fn bench_array(c: &mut Criterion) {
+    let xs: Vec<f64> = (0..65536).map(|i| 0.5 + (i as f64) * 0.0001).collect();
+    let t = real_vec(&xs);
+    let mut group = c.benchmark_group("special_array_65536");
+    group.bench_function("gamma", |b| {
+        b.iter(|| gamma(black_box(&t), RuntimeMode::Strict).expect("gamma"))
+    });
+    group.bench_function("erf", |b| {
+        b.iter(|| erf(black_box(&t), RuntimeMode::Strict).expect("erf"))
+    });
+    group.bench_function("j0", |b| {
+        b.iter(|| j0(black_box(&t), RuntimeMode::Strict).expect("j0"))
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
+    bench_array,
     bench_gamma,
     bench_gammaln,
     bench_rgamma,

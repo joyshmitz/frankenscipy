@@ -370,6 +370,26 @@ around n≈3–4k; the full jump-and-walk O(n log n) rewrite (now safety-netted 
 property test) is the future lever to win at ALL sizes. But at realistic small-medium
 sizes fsci now DOMINATES.
 
+## Special crate — array (RealVec) sweep vs scipy (2026-06-19) — ⚠️ BROAD LOSS (serial dispatch)
+Bench added (`special_array_65536`). fsci vs scipy.special over a 65536 RealVec:
+
+| function | fsci | scipy | ratio |
+|---|---|---|---|
+| gamma | 1.04 ms | 426 µs | 0.41× (2.4× SLOWER) |
+| j0 | 1.08 ms | 664 µs | 0.61× (1.6× SLOWER) |
+| erf | 4.49 ms | 757 µs | **0.17× (5.9× SLOWER)** |
+
+ROOT CAUSE: the special crate has **ZERO parallelization** (`grep -c par_map_indices/thread::
+scope/par_iter = 0` — a prior parallelization was apparently refactored out). The array
+dispatch maps the scalar kernel serially, so every special function over an array is
+1.6–5.9× slower than scipy's vectorized single-core Cephes (fsci's per-element Rust kernels
+are also ~2–6× slower than Cephes, e.g. erf ~68 ns/elem vs ~11 ns). LEVER (high-value, broad,
+byte-identical): re-parallelize the elementwise RealVec map (thread::scope over chunks, order
+preserved) → 65536/64 cores would flip ALL of them to FASTER than scipy (erf 68 ns/elem ÷ 64
+≈ 1 ns → ~65 µs vs scipy 757 µs = ~11× faster). Dispatch is macro-generated/per-function +
+the crate is actively developed by other sessions (feature commits) → flagged for the special
+owner, not dived into here (conflict risk). The bench is the head-to-head harness.
+
 ## Opt crate — minimize sweep vs scipy (2026-06-19) — fsci DOMINATES (largest ratios of phase)
 fsci vs scipy.optimize.minimize(method='BFGS') on Rosenbrock, x0=zeros:
 
