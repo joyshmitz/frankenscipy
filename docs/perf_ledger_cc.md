@@ -49,6 +49,8 @@ regressions are reverted. Entries also routed to MistyBirch for the canonical me
 | silhouette per-anchor parallel | silhouette n=2000 d=4 | 32928 µs | 3113.5 µs | **10.6× faster** | scales w/ n | ✅ KEEP |
 | ndimage zoom order=1 FIXED (wm14d) | zoom 2× 256² order=1 | 4842 µs | 19409 µs | **0.25× (4.0× slower)** — was 0.06× (17.7×) | cardinal fast path added | ✅ FIXED (4.4× faster) |
 | ndimage zoom order=3 | zoom 2× 256² order=3 | 14053 µs | 31573 µs | **0.45× (2.25× slower)** | generic spline-weight kernel | ⚠️ residual gap |
+| ndimage rotate order=3 (shares wm14d fix) | rotate 30° 256² order=3 | 5577 µs | 6439 µs | **0.87× (1.15× ~parity)** | cardinal spline path | ✅ near-parity |
+| ndimage rotate order=1 (shares wm14d fix) | rotate 30° 256² order=1 | 1991 µs | 8733 µs | **0.23× (4.4× slower)** | residual machinery gap (was ~17×) | ⚠️ residual gap |
 | kendalltau inversion-count O(n log n) | kendalltau n=2048 | 597 µs | 230.4 µs | **2.59× faster** | scipy fixed overhead | ✅ KEEP |
 | kendalltau inversion-count O(n log n) | kendalltau n=4096 | 537 µs | 552.4 µs | 0.97× (parity) | both O(n log n) at scale | ✅ KEEP |
 | Delaunay Bowyer-Watson (8d2z2 hoist) | Delaunay n=1000 2-D | 1980 µs | 6534 µs | **0.30× (3.3× slower)** | O(n²) point-location | ⚠️ COMPLEXITY gap → bead |
@@ -299,6 +301,19 @@ order=1>order=3 inversion is gone (19.4 ms < order=3's 54 ms).** Conformance: nd
 arithmetic + parallel overhead vs scipy's tight C — a follow-up SIMD/branchless target.
 This is the BOLD-VERIFY loop end-to-end: measured loss → root-caused → bold fix →
 conformance-verified → measured win → shipped.
+
+### ndimage rotate — zoom fix's BROAD REACH (frankenscipy-wm14d)
+Oracle `docs/perf_oracle_rotate.py` (scipy.ndimage.rotate 30°, 256²). rotate shares
+`sample_interpolated` with zoom, so the order=1 cardinal fast path (`3c027183`) rescued
+it from the same ~17× padded-order=1 pathology too. MEASURED post-fix: **order=3 6.44 ms
+vs scipy 5.58 ms = 0.87× (NEAR-PARITY)** — fsci's cubic-spline rotate is competitive with
+scipy's C; **order=1 8.73 ms vs 1.99 ms = 4.4× slower** (residual general-machinery +
+parallel overhead, the same gap as zoom order=1 post-fix). Takeaway: one targeted fix
+removed the pathology across the WHOLE geometric-transform family (zoom/rotate/affine/
+map_coordinates all share the path); the residual ~4× order=1 gap is the general
+`sample_interpolated` support-computation machinery — a wholesale specialized-bilinear
+rewrite, not the weight arithmetic (the direct-weights micro-opt was measured ~0-gain
+and reverted). order=3 is already a release-ready near-parity result.
 
 ## Release-readiness summary (CrimsonForge beads, as of this round)
 

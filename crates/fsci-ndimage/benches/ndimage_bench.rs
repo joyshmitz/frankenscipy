@@ -103,9 +103,27 @@ criterion_group!(
     bench_binary_morph,
     bench_rank_filter,
     bench_correlate_gaussian,
-    bench_zoom
+    bench_zoom,
+    bench_rotate
 );
 criterion_main!(benches);
+
+/// Geometric rotate — shares `sample_interpolated` with zoom, so it benefits from the
+/// order=1 cardinal fast path (frankenscipy-wm14d). Head-to-head vs scipy.ndimage.rotate.
+fn bench_rotate(c: &mut Criterion) {
+    use fsci_ndimage::rotate;
+    let img = image(256);
+    let mut group = c.benchmark_group("rotate");
+    for &order in &[1usize, 3] {
+        group.bench_function(BenchmarkId::new("30deg_256", order), |b| {
+            b.iter(|| {
+                rotate(black_box(&img), 30.0, false, order, BoundaryMode::Reflect, 0.0)
+                    .expect("rotate")
+            })
+        });
+    }
+    group.finish();
+}
 
 /// Geometric zoom (output-pixel loop parallelized). order=1 is cheap per pixel
 /// (bilinear) — a regression candidate if the parallel gate is over-eager; order=3
