@@ -1,5 +1,36 @@
 # Performance Release-Readiness Scorecard
 
+## 2026-06-19 - fsci-signal coherence fused-Welch gauntlet
+
+- Agent: cod-b / MistyBirch
+- Bead: `frankenscipy-8l8r1.118`
+- Decision: KEEP the fused coherence route. Score for this sub-cluster: 5/5.
+- Artifact: `tests/artifacts/perf/frankenscipy-8l8r1.118/EVIDENCE.md`
+
+| Gate | Result | Notes |
+| --- | --- | --- |
+| Rust per-crate compile | PASS | `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec -- cargo check -p fsci-signal --all-targets` |
+| Focused signal tests | PASS | `cargo test -p fsci-signal coherence_matches --lib -- --nocapture` passed via rch worker `hz2` |
+| Criterion focused bench | PASS | `coherence_gauntlet_scipy` group only; local SciPy oracle plus rch Rust-only confirmation |
+| SciPy head-to-head oracle | PASS | local Python oracle, `scipy.signal.coherence`; rch worker `hz1` lacked `scipy.signal`, so the remote run skipped the SciPy row |
+| Changed benchmark formatting | PASS | `rustfmt --edition 2024 --check crates/fsci-signal/benches/signal_bench.rs` |
+
+| Workload / route | Mean | Ratio | Verdict |
+| --- | ---: | ---: | --- |
+| Rust fused `coherence`, 65536 samples, Hann 1024/512 | 2.191980 ms | 8.65x faster than SciPy | SciPy win |
+| Rust compositional triple-CSD route | 6.536569 ms | fused is 2.98x faster | internal win |
+| SciPy `scipy.signal.coherence` | 18.961613 ms | 1.00x oracle | reference |
+| Rust fused `coherence`, rch worker `hz1` | 4.3780 ms | 2.80x faster than compositional | internal win |
+| Rust compositional triple-CSD route, rch worker `hz1` | 12.269 ms | 1.00x internal baseline | slower |
+
+Readiness notes:
+
+- The fused coherence API is now release evidence: it wins against original
+  SciPy and the internal compositional route on the scoped workload.
+- Future signal work should route deeper into FFT/window staging or shared
+  Welch segment infrastructure instead of decomposing coherence back into
+  independent `csd` calls.
+
 ## 2026-06-19 - fsci-cluster linkage flat-arena gauntlet
 
 - Agent: cod-a / MistyBirch

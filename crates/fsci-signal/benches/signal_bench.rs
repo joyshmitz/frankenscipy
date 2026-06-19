@@ -1,9 +1,12 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use fsci_signal::{
-    ConvolveMode, FirWindow, SosSection, coherence, cwt, fftconvolve, filtfilt, firls, firwin,
+    ConvolveMode, FirWindow, SosSection, coherence, csd, cwt, fftconvolve, filtfilt, firls, firwin,
     lfilter, medfilt, order_filter, remez, ricker, sosfilt, welch,
 };
 use std::hint::black_box;
+use std::io::Write;
+use std::process::{Command, Stdio};
+use std::time::Duration;
 
 fn deterministic_signal(len: usize) -> Vec<f64> {
     (0..len)
@@ -117,6 +120,181 @@ fn bench_spectral(c: &mut Criterion) {
     });
 }
 
+fn deterministic_coherence_pair(len: usize) -> (Vec<f64>, Vec<f64>) {
+    let x = deterministic_signal(len);
+    let y: Vec<f64> = (0..len)
+        .map(|i| {
+            let t = i as f64 / len as f64;
+            0.8 * (41.0 * t + 0.37).sin()
+                + 0.4 * (103.0 * t).cos()
+                + 0.05 * ((i * 31 % 43) as f64 - 21.0)
+        })
+        .collect();
+    (x, y)
+}
+
+fn coherence_via_csd_composition(
+    x: &[f64],
+    y: &[f64],
+    fs: f64,
+    window: Option<&str>,
+    nperseg: Option<usize>,
+    noverlap: Option<usize>,
+) -> Vec<f64> {
+    let pxy = csd(x, y, fs, window, nperseg, noverlap).expect("Pxy CSD");
+    let pxx = csd(x, x, fs, window, nperseg, noverlap).expect("Pxx CSD");
+    let pyy = csd(y, y, fs, window, nperseg, noverlap).expect("Pyy CSD");
+    pxy.csd
+        .iter()
+        .zip(pxx.csd.iter().zip(pyy.csd.iter()))
+        .map(|(&(re, im), (&(xx, _), &(yy, _)))| {
+            let denom = xx * yy;
+            if denom.abs() < 1e-30 {
+                0.0
+            } else {
+                ((re * re + im * im) / denom).clamp(0.0, 1.0)
+            }
+        })
+        .collect()
+}
+
+fn scipy_coherence_duration(
+    len: usize,
+    nperseg: usize,
+    noverlap: usize,
+    iters: u64,
+) -> Option<Duration> {
+    let script = r#"
+import sys
+import time
+import numpy as np
+import scipy.signal as sig
+
+length = int(sys.argv[1])
+nperseg = int(sys.argv[2])
+noverlap = int(sys.argv[3])
+iters = int(sys.argv[4])
+i = np.arange(length, dtype=np.float64)
+t = i / float(length)
+x = np.sin(37.0 * t) + 0.35 * np.cos(91.0 * t) + 0.1 * ((np.mod(i * 17.0, 29.0)) - 14.0)
+y = 0.8 * np.sin(41.0 * t + 0.37) + 0.4 * np.cos(103.0 * t) + 0.05 * ((np.mod(i * 31.0, 43.0)) - 21.0)
+sig.coherence(x, y, fs=1.0, window="hann", nperseg=nperseg, noverlap=noverlap)
+start = time.perf_counter()
+checksum = 0.0
+for _ in range(iters):
+    f, cxy = sig.coherence(x, y, fs=1.0, window="hann", nperseg=nperseg, noverlap=noverlap)
+    checksum += float(f[-1]) + float(cxy[len(cxy) // 2])
+elapsed = time.perf_counter() - start
+if not np.isfinite(checksum):
+    raise SystemExit("non-finite checksum")
+print(f"{elapsed:.17f}")
+"#;
+    let mut child = Command::new("python3")
+        .args([
+            "-",
+            &len.to_string(),
+            &nperseg.to_string(),
+            &noverlap.to_string(),
+            &iters.to_string(),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn scipy coherence oracle");
+    child
+        .stdin
+        .as_mut()
+        .expect("open scipy coherence oracle stdin")
+        .write_all(script.as_bytes())
+        .expect("write scipy coherence oracle script");
+    let output = child
+        .wait_with_output()
+        .expect("wait for scipy coherence oracle");
+    if !output.status.success() {
+        eprintln!(
+            "scipy coherence oracle failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return None;
+    }
+    let stdout = String::from_utf8(output.stdout).expect("utf8 scipy coherence timing");
+    let seconds: f64 = stdout
+        .trim()
+        .parse()
+        .expect("parse scipy coherence timing seconds");
+    Some(Duration::from_secs_f64(seconds))
+}
+
+fn scipy_signal_available() -> bool {
+    let script = b"import scipy.signal as sig\nassert sig.coherence is not None\n";
+    let Ok(mut child) = Command::new("python3")
+        .arg("-")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return false;
+    };
+    let Some(mut stdin) = child.stdin.take() else {
+        return false;
+    };
+    if stdin.write_all(script).is_err() {
+        return false;
+    }
+    drop(stdin);
+    child.wait().map(|status| status.success()).unwrap_or(false)
+}
+
+fn bench_coherence_gauntlet_scipy(c: &mut Criterion) {
+    let mut group = c.benchmark_group("coherence_gauntlet_scipy");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(5));
+
+    let (x, y) = deterministic_coherence_pair(65_536);
+    group.bench_function("65536_w1024_o512_rust_fused", |b| {
+        b.iter(|| {
+            black_box(
+                coherence(
+                    black_box(&x),
+                    black_box(&y),
+                    black_box(1.0),
+                    black_box(Some("hann")),
+                    black_box(Some(1024)),
+                    black_box(Some(512)),
+                )
+                .expect("fused coherence"),
+            )
+        })
+    });
+    group.bench_function("65536_w1024_o512_rust_compositional_csd", |b| {
+        b.iter(|| {
+            black_box(coherence_via_csd_composition(
+                black_box(&x),
+                black_box(&y),
+                black_box(1.0),
+                black_box(Some("hann")),
+                black_box(Some(1024)),
+                black_box(Some(512)),
+            ))
+        })
+    });
+    if scipy_signal_available() {
+        group.bench_function("65536_w1024_o512_scipy_coherence", |b| {
+            b.iter_custom(|iters| {
+                scipy_coherence_duration(65_536, 1024, 512, iters)
+                    .expect("scipy coherence oracle should run after availability check")
+            });
+        });
+    } else {
+        eprintln!("skipping 65536_w1024_o512_scipy_coherence: python3 cannot import scipy.signal");
+    }
+
+    group.finish();
+}
+
 fn bench_wavelets(c: &mut Criterion) {
     let x = deterministic_signal(2048);
     let widths: Vec<f64> = (1..=32).map(|w| w as f64).collect();
@@ -193,6 +371,7 @@ criterion_group!(
     bench_convolution,
     bench_filtering,
     bench_spectral,
+    bench_coherence_gauntlet_scipy,
     bench_wavelets,
     bench_design,
     bench_medfilt,

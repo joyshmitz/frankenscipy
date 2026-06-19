@@ -367,21 +367,30 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
   removes one spectra allocation triplet per segment and avoids retaining all
   segment spectra before the final fold on the target
   `spectral/coherence/65536_w1024_o512` workload.
-- Status: pending batch-test. This is a code-first commit per campaign
-  instruction; local `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b
-  cargo check -p fsci-signal` is the only required pre-commit gate.
+- Status: measured gauntlet complete on 2026-06-19. Decision: KEEP. The fused
+  coherence route beats original `scipy.signal.coherence` by 8.65x on the
+  scoped 65536-sample Hann-window workload, and beats the internal triple-CSD
+  composition by 2.98x locally and 2.80x on rch worker `hz1`.
+- Artifact: `tests/artifacts/perf/frankenscipy-8l8r1.118/EVIDENCE.md`.
 - Correctness guard: existing `coherence_matches_compositional_csd_formula`
   compares the fused path against `csd(x,y)`, `csd(x,x)`, and `csd(y,y)`;
   existing SciPy-reference coherence coverage anchors the public tolerance
-  contract.
-- Benchmark guard: compare focused Criterion
-  `spectral/coherence/65536_w1024_o512` and any batch Welch/coherence rows
-  against the pre-change commit on the same worker/target dir.
-- Retry condition: keep only if same-worker coherence timings improve without
-  frequency-grid, range-clamp, or compositional-formula drift; if chunk-local
-  reduction grouping or scratch initialization costs erase the allocation win,
-  reject this accumulator formulation and do not retry it without allocation
-  profiles showing retained segment spectra are again a top-5 signal hotspot.
+  contract. `cargo check -p fsci-signal --all-targets` and the focused
+  `coherence_matches` tests passed via rch.
+
+| Workload / route | Mean | Ratio | Verdict |
+| --- | ---: | ---: | --- |
+| Rust fused `coherence`, local SciPy-oracle host | 2.191980 ms | 8.65x faster than SciPy | SciPy win |
+| Rust compositional triple-CSD route, local host | 6.536569 ms | fused is 2.98x faster | internal win |
+| SciPy `scipy.signal.coherence`, local host | 18.961613 ms | 1.00x oracle | reference |
+| Rust fused `coherence`, rch worker `hz1` | 4.3780 ms | 2.80x faster than compositional | internal win |
+| Rust compositional triple-CSD route, rch worker `hz1` | 12.269 ms | 1.00x internal baseline | slower |
+
+- Retry condition: do not retry the triple-Welch/triple-CSD coherence route
+  unless a same-host gauntlet reverses both the >=2.8x internal fused win and
+  the >8x SciPy win. Future signal work should route below this API into FFT
+  staging, windowing, or shared Welch segment infrastructure rather than
+  decomposing coherence back into independent `csd` calls.
 
 ## 2026-06-18 - frankenscipy-8l8r1.119 - BDF Newton streamed scaled RMS norm
 
