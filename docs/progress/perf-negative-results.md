@@ -4,6 +4,32 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-19 - frankenscipy-szky7 - least_squares fixed-shape Jacobian scratch
+
+- Agent: cod-b / MistyBirch
+- Lever: keep `fsci_opt::curvefit::least_squares` on the same
+  Levenberg-Marquardt control path while reusing the finite-difference
+  Jacobian rows and perturbation vector across accepted steps instead of
+  allocating a fresh `m x n` `Vec<Vec<f64>>` plus `x_perturbed` for every
+  Jacobian rebuild.
+- Status: pending batch-test. This is a code-first commit per campaign
+  instruction; local `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b
+  cargo check -p fsci-opt` is the pre-commit gate.
+- Correctness guard: existing `least_squares`, `curve_fit`, and `leastsq`
+  coverage plus the `diff_lsq` probe exercise the residual evaluation contract.
+  The helper preserves forward-difference order, residual call count,
+  `nfev`/`njev` accounting, accepted/rejected damping updates, and final
+  Jacobian row/column shape.
+- Benchmark guard: new Criterion `least_squares/rosenbrock_residual` and
+  `least_squares/exp_curve_64` rows quantify the allocation-removal path
+  against the original allocation-per-Jacobian route in the opt batch wave.
+- Retry condition: keep only if same-worker focused `fsci-opt` least-squares /
+  curve-fit timings improve without convergence, `nfev`/`njev`, cost, or
+  parameter drift; if timings are neutral or slower, reject this exact
+  fixed-shape Jacobian scratch route and do not retry unless allocation
+  profiles put curvefit Jacobian matrix allocation back in the top-5
+  `fsci-opt` hotspots.
+
 ## 2026-06-19 - frankenscipy-8l8r1.122 - L-BFGS-B Wolfe probe scratch reuse
 
 - Agent: cod-b / MistyBirch

@@ -157,7 +157,16 @@ where
     }
 
     let mut cost = 0.5 * dot_vec(&r, &r);
-    let mut jac = finite_diff_jacobian(&residuals, &x, &r, options.diff_step);
+    let mut jac = Vec::new();
+    let mut x_perturbed = x.clone();
+    finite_diff_jacobian_into(
+        &residuals,
+        &x,
+        &r,
+        options.diff_step,
+        &mut jac,
+        &mut x_perturbed,
+    );
     nfev += n;
     njev += 1;
     // J^T J (O(n²·m)) and J^T r depend only on (jac, r), which change ONLY on an accepted
@@ -252,7 +261,14 @@ where
                 // Check cost convergence
                 let cost_change = (old_cost - cost) / (1.0 + cost);
                 if cost_change.abs() <= options.ftol {
-                    jac = finite_diff_jacobian(&residuals, &x, &r, options.diff_step);
+                    finite_diff_jacobian_into(
+                        &residuals,
+                        &x,
+                        &r,
+                        options.diff_step,
+                        &mut jac,
+                        &mut x_perturbed,
+                    );
                     nfev += n;
                     njev += 1;
                     return Ok(LeastSquaresResult {
@@ -269,7 +285,14 @@ where
                 }
 
                 // Recompute Jacobian (and the derived J^T J / J^T r) — jac and r changed.
-                jac = finite_diff_jacobian(&residuals, &x, &r, options.diff_step);
+                finite_diff_jacobian_into(
+                    &residuals,
+                    &x,
+                    &r,
+                    options.diff_step,
+                    &mut jac,
+                    &mut x_perturbed,
+                );
                 nfev += n;
                 njev += 1;
                 jtj = jtj_matrix(&jac);
@@ -490,15 +513,27 @@ fn l2_norm(v: &[f64]) -> f64 {
     dot_vec(v, v).sqrt()
 }
 
-/// Compute finite-difference Jacobian (m x n) at point x with residuals r.
-fn finite_diff_jacobian<F>(residuals: &F, x: &[f64], r0: &[f64], eps: f64) -> Vec<Vec<f64>>
-where
+/// Compute finite-difference Jacobian into fixed-shape scratch.
+fn finite_diff_jacobian_into<F>(
+    residuals: &F,
+    x: &[f64],
+    r0: &[f64],
+    eps: f64,
+    jac: &mut Vec<Vec<f64>>,
+    x_perturbed: &mut Vec<f64>,
+) where
     F: Fn(&[f64]) -> Vec<f64>,
 {
     let n = x.len();
     let m = r0.len();
-    let mut jac = vec![vec![0.0; n]; m];
-    let mut x_perturbed = x.to_vec();
+    if jac.len() != m {
+        jac.resize_with(m, Vec::new);
+    }
+    for row in jac.iter_mut() {
+        row.resize(n, 0.0);
+    }
+    x_perturbed.resize(n, 0.0);
+    x_perturbed.copy_from_slice(x);
 
     for j in 0..n {
         let step = eps * (1.0 + x[j].abs());
@@ -510,7 +545,6 @@ where
             jac[i][j] = (r_plus[i] - r0[i]) / step;
         }
     }
-    jac
 }
 
 /// Compute J^T * J (n x n).

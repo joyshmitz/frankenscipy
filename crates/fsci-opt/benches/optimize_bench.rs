@@ -5,8 +5,8 @@
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_opt::{
-    MinimizeOptions, OptimizeMethod, RootMethod, RootOptions, bfgs, bisect, brenth, brentq,
-    cg_pr_plus, powell, ridder,
+    LeastSquaresOptions, MinimizeOptions, OptimizeMethod, RootMethod, RootOptions, bfgs, bisect,
+    brenth, brentq, cg_pr_plus, least_squares, powell, ridder,
 };
 use fsci_runtime::RuntimeMode;
 
@@ -220,6 +220,44 @@ fn bench_ridder(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_least_squares(c: &mut Criterion) {
+    let mut group = c.benchmark_group("least_squares");
+    group.bench_function("rosenbrock_residual", |b| {
+        b.iter(|| {
+            let residuals =
+                |x: &[f64]| vec![10.0 * (x[1] - x[0] * x[0]), 1.0 - x[0]];
+            let _ = least_squares(
+                residuals,
+                &[-1.2, 1.0],
+                LeastSquaresOptions::default(),
+            );
+        });
+    });
+
+    let xs: Vec<f64> = (0..64).map(|i| i as f64 * 0.125).collect();
+    let truth = [2.5_f64, 1.3, 0.5];
+    let ys: Vec<f64> = xs
+        .iter()
+        .map(|&x| truth[0] * (-truth[1] * x).exp() + truth[2])
+        .collect();
+    group.bench_function("exp_curve_64", |b| {
+        b.iter(|| {
+            let residuals = |p: &[f64]| {
+                xs.iter()
+                    .zip(ys.iter())
+                    .map(|(&x, &y)| p[0] * (-p[1] * x).exp() + p[2] - y)
+                    .collect::<Vec<_>>()
+            };
+            let _ = least_squares(
+                residuals,
+                &[1.0, 1.0, 1.0],
+                LeastSquaresOptions::default(),
+            );
+        });
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_bfgs,
@@ -229,5 +267,6 @@ criterion_group!(
     bench_brenth,
     bench_bisect,
     bench_ridder,
+    bench_least_squares,
 );
 criterion_main!(benches);
