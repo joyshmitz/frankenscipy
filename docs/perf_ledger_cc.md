@@ -47,8 +47,8 @@ regressions are reverted. Entries also routed to MistyBirch for the canonical me
 | KDTree query dual-tree parallel (9k50g) | cKDTree query 4096 pts | 2032.8 µs | 1756.7 µs | **1.16× faster** | beats single-threaded C | ✅ KEEP |
 | silhouette per-anchor parallel | silhouette n=500 d=4 | 2064 µs | 720.8 µs | **2.86× faster** | no small-n regression | ✅ KEEP |
 | silhouette per-anchor parallel | silhouette n=2000 d=4 | 32928 µs | 3113.5 µs | **10.6× faster** | scales w/ n | ✅ KEEP |
-| ndimage zoom (kernel, NOT my opt) | zoom 2× 256² order=1 | 4842 µs | 85950 µs | **0.06× (17.7× SLOWER)** | order=1 slower than order=3! | ⚠️ LOSS → bead |
-| ndimage zoom (kernel, NOT my opt) | zoom 2× 256² order=3 | 14053 µs | 31573 µs | **0.45× (2.25× slower)** | generic spline-weight kernel | ⚠️ LOSS → bead |
+| ndimage zoom order=1 FIXED (wm14d) | zoom 2× 256² order=1 | 4842 µs | 19409 µs | **0.25× (4.0× slower)** — was 0.06× (17.7×) | cardinal fast path added | ✅ FIXED (4.4× faster) |
+| ndimage zoom order=3 | zoom 2× 256² order=3 | 14053 µs | 31573 µs | **0.45× (2.25× slower)** | generic spline-weight kernel | ⚠️ residual gap |
 | kendalltau inversion-count O(n log n) | kendalltau n=2048 | 597 µs | 230.4 µs | **2.59× faster** | scipy fixed overhead | ✅ KEEP |
 | kendalltau inversion-count O(n log n) | kendalltau n=4096 | 537 µs | 552.4 µs | 0.97× (parity) | both O(n log n) at scale | ✅ KEEP |
 | Delaunay Bowyer-Watson (8d2z2 hoist) | Delaunay n=1000 2-D | 1980 µs | 6534 µs | **0.30× (3.3× slower)** | O(n²) point-location | ⚠️ COMPLEXITY gap → bead |
@@ -283,6 +283,22 @@ regression (the hoist helps); the complexity is the underlying triangulation. Fi
 spatial-accelerated point location (grid/quadtree/jump-and-walk) → O(n log n). Bead
 filed for the spatial owner. This is the highest-leverage spatial fix (the others are
 SIMD constant-factor; this is an algorithm-class change).
+
+### ✅ ndimage zoom order=1 — FIXED (BOLD-VERIFY, frankenscipy-wm14d) — biggest loss closed
+The gauntlet's single biggest loss (zoom order=1 17.7× slower than scipy) is now FIXED
+and shipped (commit `3c027183`). Root cause was that order=1 was the lone interpolating
+order with no fast path: order=1 Reflect/Mirror is PADDED (coord_offsets=SPLINE_NEAREST_
+PAD) so the cardinal `coord_offsets==0` gate excluded it → it fell through to the slow
+generic `eval_bspline_basis_all`. Fix: route padded order=1 through the cardinal fast
+path with clamp(Nearest) fold (the padding already encodes the reflection, so the linear
+support always lands in range) + made `cardinal_bspline` use stack arrays instead of
+per-call heap Vecs (hot per-tap-per-pixel path). **MEASURED: order=1 zoom 85.95 ms →
+19.41 ms = 4.4× faster; loss vs scipy 17.7× → 4.0× (≈2.4× contention-adjusted); the
+order=1>order=3 inversion is gone (19.4 ms < order=3's 54 ms).** Conformance: ndimage
+296 passed / 0 failed (verified twice). The residual ~2.4–4× gap is the cardinal_bspline
+arithmetic + parallel overhead vs scipy's tight C — a follow-up SIMD/branchless target.
+This is the BOLD-VERIFY loop end-to-end: measured loss → root-caused → bold fix →
+conformance-verified → measured win → shipped.
 
 ## Release-readiness summary (CrimsonForge beads, as of this round)
 
