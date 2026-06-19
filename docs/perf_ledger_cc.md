@@ -574,6 +574,11 @@ fsci was **12× slower → now 2.3× slower** — Horner cuts most of the gap; t
 O(n_freqs·n_coeffs) Horner vs scipy's O(n log n) FFT-of-coefficients. RESIDUAL LEVER (flag,
 bigger change): FFT-based freqz for the FIR / whole-circle / linear-ω-grid cases (matches
 scipy's algorithm). Common function — broad win. Added freqz/fir128_512 bench.
+PLUS: routed `group_delay_from_ba` + `magnitude_response_db` (two MORE functions with the
+same inline per-coefficient cos/sin loop, not previously using the helper) through the Horner
+`eval_poly_on_unit_circle` — inherit the 5.2× large-filter speedup, conformance 707/0. Also
+NOTED (bigger lever, not done): the MFCC power spectrum (lib.rs ~5949) is a naive O(N²) DFT
+(`re += s·cos(2πkn/N)`) that should be an fsci_fft O(N log N) FFT.
 
 ## Signal crate — head-to-head sweep vs scipy (2026-06-19)
 Oracle `docs/perf_oracle_signal.py` + `/tmp/oracle_sig2.py`. fsci vs scipy.signal:

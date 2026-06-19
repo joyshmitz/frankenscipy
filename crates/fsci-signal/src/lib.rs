@@ -5341,19 +5341,10 @@ pub fn magnitude_response(b: &[f64], a: &[f64], n_freqs: usize) -> (Vec<f64>, Ve
         let w = std::f64::consts::PI * k as f64 / n_freqs as f64;
         freqs.push(w);
 
-        let mut br = 0.0;
-        let mut bi = 0.0;
-        for (i, &coeff) in b.iter().enumerate() {
-            br += coeff * (w * i as f64).cos();
-            bi -= coeff * (w * i as f64).sin();
-        }
-
-        let mut ar = 0.0;
-        let mut ai = 0.0;
-        for (i, &coeff) in a.iter().enumerate() {
-            ar += coeff * (w * i as f64).cos();
-            ai -= coeff * (w * i as f64).sin();
-        }
+        // Polynomial-on-unit-circle via Horner (frankenscipy-9l5oo): 1 cos+sin per frequency
+        // instead of one per coefficient — the same lever as freqz.
+        let (br, bi) = eval_poly_on_unit_circle(b, w);
+        let (ar, ai) = eval_poly_on_unit_circle(a, w);
 
         let h_mag2 = br * br + bi * bi;
         let a_mag2 = ar * ar + ai * ai;
@@ -5402,19 +5393,10 @@ pub fn phase_response(b: &[f64], a: &[f64], n_freqs: usize) -> (Vec<f64>, Vec<f6
         let w = std::f64::consts::PI * k as f64 / n_freqs as f64;
         freqs.push(w);
 
-        let mut br = 0.0;
-        let mut bi = 0.0;
-        for (i, &coeff) in b.iter().enumerate() {
-            br += coeff * (w * i as f64).cos();
-            bi -= coeff * (w * i as f64).sin();
-        }
-
-        let mut ar = 0.0;
-        let mut ai = 0.0;
-        for (i, &coeff) in a.iter().enumerate() {
-            ar += coeff * (w * i as f64).cos();
-            ai -= coeff * (w * i as f64).sin();
-        }
+        // Polynomial-on-unit-circle via Horner (frankenscipy-9l5oo): 1 cos+sin per frequency
+        // instead of one per coefficient — the same lever as freqz.
+        let (br, bi) = eval_poly_on_unit_circle(b, w);
+        let (ar, ai) = eval_poly_on_unit_circle(a, w);
 
         // H = B/A, phase = arg(B) - arg(A)
         let phase_b = bi.atan2(br);
