@@ -9284,12 +9284,21 @@ fn eval_weighted_poly_on_unit_circle(coeffs: &[f64], omega: f64) -> (f64, f64) {
 /// Evaluate polynomial in z^{-1} on the unit circle at angle ω.
 /// Returns (real_part, imag_part) of Σ c[k] * e^{-jkω}.
 fn eval_poly_on_unit_circle(coeffs: &[f64], omega: f64) -> (f64, f64) {
-    let mut re = 0.0;
+    // Σ c[k]·e^{-jkω} = Σ c[k]·(z⁻¹)^k at z⁻¹ = e^{-jω} via HORNER's method: ONE cos+sin per
+    // call (for z⁻¹) plus a complex-multiply accumulation, instead of a cos() AND sin() per
+    // coefficient. Same polynomial value as the direct sum (within ~1e-13). frankenscipy-9l5oo.
+    if coeffs.is_empty() {
+        return (0.0, 0.0);
+    }
+    let zr = omega.cos();
+    let zi = -omega.sin(); // z⁻¹ = e^{-jω} = cos ω − j·sin ω
+    let mut re = coeffs[coeffs.len() - 1];
     let mut im = 0.0;
-    for (k, &c) in coeffs.iter().enumerate() {
-        let angle = -(k as f64) * omega;
-        re += c * angle.cos();
-        im += c * angle.sin();
+    for &c in coeffs[..coeffs.len() - 1].iter().rev() {
+        let nr = re * zr - im * zi + c; // acc = acc·z⁻¹ + c[k]
+        let ni = re * zi + im * zr;
+        re = nr;
+        im = ni;
     }
     (re, im)
 }

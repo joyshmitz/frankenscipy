@@ -1,7 +1,7 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use fsci_signal::{
     ConvolveMode, FirWindow, SosSection, coherence, csd, cwt, fftconvolve, filtfilt, firls, firwin,
-    lfilter, medfilt, order_filter, remez, ricker, sosfilt, welch,
+    freqz, lfilter, medfilt, order_filter, remez, ricker, sosfilt, welch,
 };
 use std::hint::black_box;
 use std::io::Write;
@@ -378,8 +378,19 @@ fn bench_order_filter(c: &mut Criterion) {
     group.finish();
 }
 
+/// freqz on a high-order FIR (128 taps) over 512 frequencies — exercises the per-coefficient
+/// polynomial-on-unit-circle evaluation now using Horner (frankenscipy-9l5oo).
+fn bench_freqz(c: &mut Criterion) {
+    let b: Vec<f64> = deterministic_signal(128);
+    let a = vec![1.0];
+    c.bench_function("freqz/fir128_512", |bn| {
+        bn.iter(|| black_box(freqz(black_box(&b), black_box(&a), black_box(Some(512)))))
+    });
+}
+
 criterion_group!(
     benches,
+    bench_freqz,
     bench_convolution,
     bench_filtering,
     bench_spectral,

@@ -563,6 +563,18 @@ dominates the rest). Accurate to ~1e-14 (within remez's ~1e-6 tolerance), confor
 has no head-to-head, but it's a real self-speedup. KEEP (not ~0-gain). The recurrence lever
 applies to any cos(2π·k·f) response-basis loop.
 
+### ✅ freqz Horner's method (5.2× self-speedup, signal) — closes a 12× loss to 2.3×
+`eval_poly_on_unit_circle` (used by `freqz`/`freqz_with_whole`, the frequency-response
+function) computed `cos(kω)` AND `sin(kω)` PER COEFFICIENT per frequency — despite a comment
+falsely claiming "Horner's method." Implemented ACTUAL Horner: z⁻¹=e^{-jω} via ONE cos+sin
+per frequency, then a complex-multiply accumulation `acc=acc·z⁻¹+c[k]`. **A/B MEASURED on a
+128-tap FIR / 512 freqs: 978→187 µs = 5.2×.** Same polynomial value as the direct sum
+(~1e-13), conformance signal **707/0**. Head-to-head vs scipy.signal.freqz (81 µs, FFT-based):
+fsci was **12× slower → now 2.3× slower** — Horner cuts most of the gap; the residual is the
+O(n_freqs·n_coeffs) Horner vs scipy's O(n log n) FFT-of-coefficients. RESIDUAL LEVER (flag,
+bigger change): FFT-based freqz for the FIR / whole-circle / linear-ω-grid cases (matches
+scipy's algorithm). Common function — broad win. Added freqz/fir128_512 bench.
+
 ## Signal crate — head-to-head sweep vs scipy (2026-06-19)
 Oracle `docs/perf_oracle_signal.py` + `/tmp/oracle_sig2.py`. fsci vs scipy.signal:
 
