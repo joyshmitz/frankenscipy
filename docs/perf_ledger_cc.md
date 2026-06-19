@@ -328,6 +328,20 @@ tolerance-OK since gaussian isn't chaotic), but that's shared kernel code. Also 
 `uniform_filter` already O(1) running-sum, `correlate1d`/`convolve1d` already specialized
 1D-axis — the ndimage filters are otherwise well-optimized; the residual is SIMD-kernel.
 
+### ✅✅ Clough-Tocher LOSS → WIN: precompute Bézier patches, 26.6× self-speedup (9l5oo lever)
+Oracle `/tmp/oracle_ct.py` (scipy.interpolate.CloughTocher2DInterpolator eval_many, 576
+pts / 1024 q). **BEFORE: fsci 2222.8 µs vs scipy 537 µs = 4.1× SLOWER (a LOSS).** The
+per-query `clough_tocher_triangle_eval` rebuilt the ENTIRE macro-patch every query — 3
+edge vectors, 6 directional derivatives, 19 cubic Bézier control points, AND a neighbour
+loop (3 neighbours × barycentric + centroid + division) — all query-INVARIANT. FIX:
+split into `clough_tocher_patch → [f64;19]` (the invariant patch) + `clough_tocher_eval_
+patch` (the Bézier sum, the only query-dependent step); precompute `patches: Vec<[f64;19]>`
+once per triangle in `with_options`. **AFTER: fsci 83.5 µs = 26.6× self-speedup = 6.4×
+FASTER than scipy.** A 4.1× LOSS flipped to a 6.4× WIN. BYTE-IDENTICAL (patch + eval are
+the original code verbatim, just reorganised), conformance interpolate **227/0**. KEEP.
+The 4th application of the precompute-per-element-predicate lever, biggest self-speedup
+yet (the neighbour loop made the per-query cost enormous).
+
 ### ✅ griddata / LinearND 46.5× faster than scipy + barycentric precompute (9l5oo lever)
 Oracle `/tmp/oracle_griddata.py` (scipy.interpolate.griddata linear, 576 pts / 1024
 queries, same data as bench_scattered). **fsci griddata 118.3 µs vs scipy 5507 µs =

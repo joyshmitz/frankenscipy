@@ -3689,6 +3689,10 @@ pub struct CloughTocher2DInterpolator {
     delaunay: Delaunay2D,
     values: Vec<f64>,
     gradients: Vec<(f64, f64)>,
+    /// Precomputed cubic Bézier patch (19 control points) per triangle — the entire
+    /// query-invariant Clough-Tocher patch, built once so `eval` only runs the Bézier
+    /// sum per query instead of rebuilding the patch. frankenscipy-9l5oo.
+    patches: Vec<[f64; 19]>,
     fill_value: f64,
     offset: (f64, f64),
     scale: (f64, f64),
@@ -3714,10 +3718,14 @@ impl CloughTocher2DInterpolator {
             });
         }
         let gradients = estimate_clough_tocher_gradients(&delaunay, values);
+        let patches: Vec<[f64; 19]> = (0..delaunay.simplices.len())
+            .map(|i| clough_tocher_patch(&delaunay, i, values, &gradients))
+            .collect();
         Ok(Self {
             delaunay,
             values: values.to_vec(),
             gradients,
+            patches,
             fill_value: options.fill_value,
             offset,
             scale,
@@ -3738,13 +3746,7 @@ impl CloughTocher2DInterpolator {
         let Some((idx, l1, l2, l3)) = self.delaunay.find_simplex(point) else {
             return Ok(self.fill_value);
         };
-        Ok(clough_tocher_triangle_eval(
-            &self.delaunay,
-            idx,
-            &self.values,
-            &self.gradients,
-            [l1, l2, l3],
-        ))
+        Ok(clough_tocher_eval_patch(&self.patches[idx], [l1, l2, l3]))
     }
 
     pub fn eval_many(&self, queries: &[Vec<f64>]) -> Result<Vec<f64>, InterpError> {
@@ -3943,13 +3945,15 @@ fn triangle_plane_gradient(points: [(f64, f64); 3], values: [f64; 3]) -> Option<
     Some(((dz1 * dy2 - dz2 * dy1) / det, (dx1 * dz2 - dx2 * dz1) / det))
 }
 
-fn clough_tocher_triangle_eval(
+/// Precompute the 19 cubic Bézier control points of the Clough-Tocher macro-patch for
+/// one triangle — all query-INVARIANT (vertices/values/gradients/neighbours only), so
+/// it is computed ONCE per triangle instead of on every eval. frankenscipy-9l5oo.
+fn clough_tocher_patch(
     delaunay: &Delaunay2D,
     simplex_index: usize,
     values: &[f64],
     gradients: &[(f64, f64)],
-    bary: [f64; 3],
-) -> f64 {
+) -> [f64; 19] {
     let (a, b, c) = delaunay.simplices[simplex_index];
     let points = [delaunay.points[a], delaunay.points[b], delaunay.points[c]];
     let values = [values[a], values[b], values[c]];
@@ -4024,6 +4028,21 @@ fn clough_tocher_triangle_eval(
     let c0102 = (c1101 + c0111 + c0201) / 3.0;
     let c0012 = (c1011 + c0111 + c0021) / 3.0;
     let c0003 = (c1002 + c0102 + c0012) / 3.0;
+
+    [
+        c3000, c2100, c2010, c2001, c1200, c1101, c1020, c1011, c1002, c0300, c0210,
+        c0201, c0120, c0111, c0102, c0030, c0021, c0012, c0003,
+    ]
+}
+
+/// Evaluate a precomputed Clough-Tocher patch (19 control points, in the order produced
+/// by [`clough_tocher_patch`]) at barycentric coords `bary`. This is the only
+/// query-dependent step; everything else is precomputed once per triangle.
+fn clough_tocher_eval_patch(p: &[f64; 19], bary: [f64; 3]) -> f64 {
+    let [
+        c3000, c2100, c2010, c2001, c1200, c1101, c1020, c1011, c1002, c0300, c0210,
+        c0201, c0120, c0111, c0102, c0030, c0021, c0012, c0003,
+    ] = *p;
 
     let min_bary = bary[0].min(bary[1]).min(bary[2]);
     let b1 = bary[0] - min_bary;
