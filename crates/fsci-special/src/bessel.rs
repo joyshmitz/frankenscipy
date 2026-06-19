@@ -4908,12 +4908,14 @@ pub fn jnjnp_zeros(nt: usize) -> (Vec<f64>, Vec<i32>, Vec<i32>, Vec<i32>) {
 
     let max_envelope = nt + 2;
     let root = (nt as f64).sqrt().ceil() as usize;
-    let mut per = (root + 4).clamp(1, max_envelope);
-    let mut n_max = (2 * root + 6).clamp(1, max_envelope);
+    let mut per = ((root + 1) / 2 + 3).clamp(1, max_envelope);
+    let mut n_max = (2 * root).clamp(1, max_envelope);
 
     loop {
         let (mut cands, serial_frontier, order_frontier) =
             jnjnp_zero_candidates_with_frontier(per, n_max, max_envelope);
+        let mut expand_per = per < max_envelope;
+        let mut expand_n_max = n_max < max_envelope;
         if cands.len() >= nt {
             sort_jnjnp_candidates(&mut cands);
             let cutoff = cands[nt - 1].0;
@@ -4922,10 +4924,23 @@ pub fn jnjnp_zeros(nt: usize) -> (Vec<f64>, Vec<i32>, Vec<i32>, Vec<i32>) {
             {
                 return collect_jnjnp_candidates(&cands, nt);
             }
+            expand_per &= serial_frontier <= cutoff;
+            expand_n_max &= order_frontier <= cutoff;
+        } else if per == max_envelope && n_max == max_envelope {
+            sort_jnjnp_candidates(&mut cands);
+            return collect_jnjnp_candidates(&cands, nt);
         }
 
-        let next_per = (per.saturating_mul(2)).min(max_envelope);
-        let next_n_max = (n_max.saturating_mul(2)).min(max_envelope);
+        let next_per = if expand_per {
+            per.saturating_mul(2).min(max_envelope)
+        } else {
+            per
+        };
+        let next_n_max = if expand_n_max {
+            n_max.saturating_mul(2).min(max_envelope)
+        } else {
+            n_max
+        };
         if next_per == per && next_n_max == n_max {
             sort_jnjnp_candidates(&mut cands);
             return collect_jnjnp_candidates(&cands, nt);
@@ -5146,6 +5161,26 @@ mod tests {
             assert_eq!(adaptive.1, reference.1, "n for nt={nt}");
             assert_eq!(adaptive.2, reference.2, "m for nt={nt}");
             assert_eq!(adaptive.3, reference.3, "t for nt={nt}");
+        }
+    }
+
+    #[test]
+    fn jnjnp_frontier_matches_scipy_bench_cutoffs() {
+        // SciPy 1.17.1 golden cutoffs for the two perf-gauntlet sizes.
+        for (nt, want_zo, want_n, want_m, want_t, want_max_n, want_max_m) in [
+            (64_usize, 15.268_181_461_097_873, 6, 3, 1, 13, 5),
+            (128_usize, 22.046_985_364_697_804, 10, 3, 0, 19, 7),
+        ] {
+            let (zo, n, m, t) = jnjnp_zeros(nt);
+            let last = nt - 1;
+            assert!(
+                (zo[last] - want_zo).abs() < 1e-10,
+                "jnjnp_zeros({nt}) cutoff {} != {want_zo}",
+                zo[last]
+            );
+            assert_eq!((n[last], m[last], t[last]), (want_n, want_m, want_t));
+            assert_eq!(n.iter().copied().max(), Some(want_max_n));
+            assert_eq!(m.iter().copied().max(), Some(want_max_m));
         }
     }
 

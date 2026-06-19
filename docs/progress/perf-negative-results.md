@@ -4,6 +4,54 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-19 - frankenscipy-96n2y - jnjnp_zeros tighter frontier seed
+
+- Agent: cod-b / MistyBirch
+- Lever: tighten the adaptive `jnjnp_zeros` frontier seed and expand the serial
+  root count (`per`) and order envelope (`n_max`) independently based on the
+  existing exact frontier proof. The prior seed overgenerated the gauntlet
+  cases: `nt=128` only needs max serial `m=7` and max order `n=19`, while the
+  old first pass evaluated `per=16` through `n_max=30`.
+- Graveyard/artifact route tested: output-sensitive enumeration, asymmetric
+  frontier growth, constant-factor candidate pruning before root polishing.
+- Decision: KEEP as a measured internal win, route residual SciPy loss deeper.
+  No revert.
+- Artifact:
+  `tests/artifacts/perf/frankenscipy-cod-b-jnjnp-stream/EVIDENCE.md`
+- Baseline/candidate command:
+  `RCH_REQUIRE_REMOTE=1 RCH_WORKER=hz1 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec -- cargo bench -p fsci-special --bench special_bench -- acoco_gauntlet_jnjnp_zeros --noplot`
+- SciPy oracle command:
+  local Python timing of `scipy.special.jnjnp_zeros` because rch worker `hz1`
+  could not import `scipy.special`.
+- Same-worker internal A/B on rch worker `hz1`:
+
+  | Workload | Baseline current mean | Candidate current mean | Candidate/baseline | Verdict |
+  | --- | ---: | ---: | ---: | --- |
+  | `jnjnp_zeros(nt=64)` | 4.7127 ms | 2.2230 ms | 0.472x time, 2.12x faster | keep |
+  | `jnjnp_zeros(nt=128)` | 8.5181 ms | 6.1605 ms | 0.723x time, 1.38x faster | keep |
+
+- Local SciPy oracle (`scipy.special.jnjnp_zeros`, Python 3.13.7, NumPy 2.4.3,
+  SciPy 1.17.1):
+
+  | Workload | Candidate Rust mean | SciPy median | Candidate/SciPy | Verdict |
+  | --- | ---: | ---: | ---: | --- |
+  | `jnjnp_zeros(nt=64)` | 2.2230 ms | 424.10 us | 5.24x slower | residual loss |
+  | `jnjnp_zeros(nt=128)` | 6.1605 ms | 799.97 us | 7.70x slower | residual loss |
+
+- SciPy win/loss/neutral: `0/2/0`.
+- Same-worker internal keep/loss/neutral: `2/0/0`.
+- Correctness/conformance guards:
+  - PASS: `RCH_REQUIRE_REMOTE=1 RCH_WORKER=hz1 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec -- cargo test -p fsci-special jnjnp -- --nocapture`
+    (`3 passed; 0 failed; 1109 filtered out`).
+  - PASS: `RCH_REQUIRE_REMOTE=1 RCH_WORKER=hz1 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec -- cargo check -p fsci-special --all-targets`.
+- Negative evidence: frontier seed retuning is worthwhile but not enough; Rust
+  remains 5.24-7.70x slower than SciPy on the local oracle. Do not repeat
+  small envelope constant tuning without a fresh profile showing candidate
+  overgeneration still dominates.
+- Retry condition: route deeper to lower-constant Bessel root generation,
+  cached cross-order recurrences, or a true heap-streamed global zero
+  enumerator that preserves the exact SciPy output ordering.
+
 ## 2026-06-19 - frankenscipy-8l8r1.117 - sparse random rounded-empty path
 
 - Agent: cod-b / MistyBirch
