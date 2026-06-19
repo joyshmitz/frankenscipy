@@ -1,0 +1,84 @@
+   Compiling fsci-opt v0.1.0 (/data/projects/frankenscipy/crates/fsci-opt)
+   Compiling fsci-linalg v0.1.0 (/data/projects/frankenscipy/crates/fsci-linalg)
+   Compiling fsci-integrate v0.1.0 (/data/projects/frankenscipy/crates/fsci-integrate)
+   Compiling fsci-special v0.1.0 (/data/projects/frankenscipy/crates/fsci-special)
+warning: variable does not need to be mutable
+    --> crates/fsci-special/src/convenience.rs:5667:9
+     |
+5667 |     let mut x = x.abs(); // cos is even
+     |         ----^
+     |         |
+     |         help: remove this `mut`
+     |
+     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `su1` is never read
+    --> crates/fsci-special/src/orthopoly.rs:3291:19
+     |
+3291 |     let mut su1 = 0.0_f64;
+     |                   ^^^^^^^ this value is reassigned later and never used
+...
+3296 |     su1 = df[1] * r1;
+     |     ---------------- `su1` is overwritten here before the previous value is read
+     |
+     = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: `fsci-special` (lib) generated 2 warnings (run `cargo fix --lib -p fsci-special` to apply 1 suggestion)
+warning: variable does not need to be mutable
+  --> crates/fsci-special/src/bin/diff_complex_bessel.rs:51:9
+   |
+51 |     let mut emit = |name: &str, f: Vf, ords: &[f64]| {
+   |         ----^^^^
+   |         |
+   |         help: remove this `mut`
+   |
+   = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `fsci-special` (bin "diff_complex_bessel") generated 1 warning (run `cargo fix --bin "diff_complex_bessel" -p fsci-special` to apply 1 suggestion)
+    Finished `bench` profile [optimized] target(s) in 17.07s
+     Running benches/special_bench.rs (/data/projects/.rch-targets/frankenscipy-cod-a/release/deps/special_bench-9d52b9ea2a7f7090)
+Gnuplot not found, using plotters backend
+Benchmarking acoco_gauntlet_jnjnp_zeros/rust_current_nt64
+Benchmarking acoco_gauntlet_jnjnp_zeros/rust_current_nt64: Warming up for 1.0000 s
+Benchmarking acoco_gauntlet_jnjnp_zeros/rust_current_nt64: Collecting 10 samples in estimated 9.4604 s (110 iterations)
+Benchmarking acoco_gauntlet_jnjnp_zeros/rust_current_nt64: Analyzing
+acoco_gauntlet_jnjnp_zeros/rust_current_nt64
+                        time:   [78.470 ms 80.826 ms 83.056 ms]
+Benchmarking acoco_gauntlet_jnjnp_zeros/rust_legacy_duplicate_nt64
+Benchmarking acoco_gauntlet_jnjnp_zeros/rust_legacy_duplicate_nt64: Warming up for 1.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 5.7s or enable flat sampling.
+Benchmarking acoco_gauntlet_jnjnp_zeros/rust_legacy_duplicate_nt64: Collecting 10 samples in estimated 5.7471 s (55 iterations)
+Benchmarking acoco_gauntlet_jnjnp_zeros/rust_legacy_duplicate_nt64: Analyzing
+acoco_gauntlet_jnjnp_zeros/rust_legacy_duplicate_nt64
+                        time:   [98.825 ms 101.11 ms 103.51 ms]
+Benchmarking acoco_gauntlet_jnjnp_zeros/scipy_nt64
+Benchmarking acoco_gauntlet_jnjnp_zeros/scipy_nt64: Warming up for 1.0000 s
+Benchmarking acoco_gauntlet_jnjnp_zeros/scipy_nt64: Collecting 10 samples in estimated 8.4995 s (110 iterations)
+Benchmarking acoco_gauntlet_jnjnp_zeros/scipy_nt64: Analyzing
+acoco_gauntlet_jnjnp_zeros/scipy_nt64
+                        time:   [438.15 µs 484.68 µs 531.90 µs]
+                        change: [−17.335% −6.3105% +7.1980%] (p = 0.37 > 0.05)
+                        No change in performance detected.
+Benchmarking acoco_gauntlet_jnjnp_zeros/rust_current_nt128
+Benchmarking acoco_gauntlet_jnjnp_zeros/rust_current_nt128: Warming up for 1.0000 s
+Benchmarking acoco_gauntlet_jnjnp_zeros/rust_current_nt128: Collecting 10 samples in estimated 8.5323 s (20 iterations)
+Benchmarking acoco_gauntlet_jnjnp_zeros/rust_current_nt128: Analyzing
+acoco_gauntlet_jnjnp_zeros/rust_current_nt128
+                        time:   [405.87 ms 410.06 ms 414.44 ms]
+Benchmarking acoco_gauntlet_jnjnp_zeros/rust_legacy_duplicate_nt128
+Benchmarking acoco_gauntlet_jnjnp_zeros/rust_legacy_duplicate_nt128: Warming up for 1.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 5.5s.
+Benchmarking acoco_gauntlet_jnjnp_zeros/rust_legacy_duplicate_nt128: Collecting 10 samples in estimated 5.4637 s (10 iterations)
+Benchmarking acoco_gauntlet_jnjnp_zeros/rust_legacy_duplicate_nt128: Analyzing
+acoco_gauntlet_jnjnp_zeros/rust_legacy_duplicate_nt128
+                        time:   [531.80 ms 544.01 ms 557.24 ms]
+Benchmarking acoco_gauntlet_jnjnp_zeros/scipy_nt128
+Benchmarking acoco_gauntlet_jnjnp_zeros/scipy_nt128: Warming up for 1.0000 s
+Benchmarking acoco_gauntlet_jnjnp_zeros/scipy_nt128: Collecting 10 samples in estimated 7.9483 s (110 iterations)
+Benchmarking acoco_gauntlet_jnjnp_zeros/scipy_nt128: Analyzing
+acoco_gauntlet_jnjnp_zeros/scipy_nt128
+                        time:   [871.87 µs 950.07 µs 1.0194 ms]
+                        change: [−16.214% −3.7817% +10.521%] (p = 0.61 > 0.05)
+                        No change in performance detected.

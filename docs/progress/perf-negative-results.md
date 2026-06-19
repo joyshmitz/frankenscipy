@@ -519,17 +519,28 @@ SciPy 1.17.1 / NumPy 2.4.3 oracle p50):
 - Lever: reuse the per-order `J_n` zero sequence already computed by
   `jnjnp_zeros` when bracketing `J_n'` roots, avoiding a duplicate
   `jn_zeros(n, per)` call for every positive order.
-- Status: pending batch-test. This is a code-first commit per campaign
-  instruction; only local `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a
-  cargo check -p fsci-special` is expected before commit.
+- Status: MEASURED INTERNAL KEEP / SCIPY LOSS. The bracket-reuse route is
+  faster than the benchmark-only recreation of the previous duplicate
+  bracketing route, so it stays in tree. The full routine is still much slower
+  than original SciPy and must route to a deeper algorithmic optimization.
+- Artifact:
+  `tests/artifacts/perf/2026-06-19-acoco-jnjnp-zeros-gauntlet/`.
+- Head-to-head result, Criterion point-estimate means:
+
+  | Workload | Rust current | Rust legacy duplicate route | SciPy original | Current vs SciPy | Current vs legacy |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | `jnjnp_zeros(nt=64)` | 80.728603 ms | 101.762454 ms | 0.493655 ms | 163.53x slower | 1.26x faster |
+  | `jnjnp_zeros(nt=128)` | 410.059973 ms | 544.006333 ms | 0.924456 ms | 443.57x slower | 1.33x faster |
 - Correctness guard: `derivative_bessel_zeros_match_scipy_reference_points`
-  now checks that the helper-fed derivative-zero route is bit-identical to the
-  public `jnp_zeros` output for representative order/count, while the existing
-  Bessel-zero SciPy anchors preserve ordering and value tolerances.
-- Benchmark guard: compare focused `jnjnp_zeros(nt=64..256)` workloads against
-  the previous same-worker commit and SciPy oracle ordering/type outputs.
-- Retry condition: keep only if same-worker special-zero timings improve
-  without zero magnitude, order, serial, type, or tie-order drift; if duplicate
-  `jn_zeros` work is hidden in noise by derivative Bessel evaluations, reject
-  this bracket-reuse formulation and do not retry unless profiles put
-  `jnp_zeros`' internal `jn_zeros` call back on the `jnjnp_zeros` hot path.
+  passed via rch, and the existing
+  `jnyn_and_jnjnp_zeros_match_scipy` SciPy anchor also passed.
+- Build/format guard: `cargo check -p fsci-special --benches` passed via rch;
+  `rustfmt --edition 2024 --check crates/fsci-special/benches/special_bench.rs`
+  passed.
+- Blocked lint guard: `cargo clippy -p fsci-special --benches -- -D warnings`
+  failed before this benchmark file on existing dependency lints in
+  `fsci-integrate` and `fsci-linalg`.
+- Retry condition: do not retry this exact duplicate-`jn_zeros` lever without a
+  fresh profile. Future work should target SciPy's much faster zero
+  enumeration/root-finding strategy or another measured special-function
+  hotspot.

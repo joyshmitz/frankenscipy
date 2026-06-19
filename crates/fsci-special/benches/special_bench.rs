@@ -2,10 +2,13 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_runtime::RuntimeMode;
 use fsci_special::{
     SpecialTensor, beta, ellipe, ellipeinc, ellipk, ellipkinc, erf, erfc, erfinv, gamma, gammainc,
-    gammaln, j0, j1, rgamma, y0,
+    gammaln, j0, j1, jn_zeros, jnjnp_zeros, jnp_zeros, rgamma, y0,
 };
 use std::f64::consts::PI;
 use std::hint::black_box;
+use std::io::Write;
+use std::process::{Command, Stdio};
+use std::time::Duration;
 
 fn scalar(x: f64) -> SpecialTensor {
     SpecialTensor::RealScalar(x)
@@ -372,6 +375,141 @@ fn bench_incomplete_elliptic(c: &mut Criterion) {
     group.finish();
 }
 
+fn scipy_special_available() -> bool {
+    let script = "import scipy.special\n";
+    let mut child = Command::new("python3")
+        .arg("-")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn scipy special availability check");
+    child
+        .stdin
+        .as_mut()
+        .expect("open scipy special availability stdin")
+        .write_all(script.as_bytes())
+        .expect("write scipy special availability script");
+    child.wait().is_ok_and(|status| status.success())
+}
+
+fn scipy_jnjnp_zeros_duration(nt: usize, iters: u64) -> Option<Duration> {
+    let script = r#"
+import sys
+import time
+import numpy as np
+import scipy.special as sc
+
+nt = int(sys.argv[1])
+iters = int(sys.argv[2])
+sc.jnjnp_zeros(nt)
+start = time.perf_counter()
+checksum = 0.0
+for _ in range(iters):
+    zo, n, m, t = sc.jnjnp_zeros(nt)
+    checksum += float(zo[-1]) + float(n[-1]) + float(m[-1]) + float(t[-1])
+elapsed = time.perf_counter() - start
+if not np.isfinite(checksum):
+    raise SystemExit("non-finite checksum")
+print(f"{elapsed:.17f}")
+"#;
+    let mut child = Command::new("python3")
+        .args(["-", &nt.to_string(), &iters.to_string()])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn scipy jnjnp_zeros oracle");
+    child
+        .stdin
+        .as_mut()
+        .expect("open scipy jnjnp_zeros oracle stdin")
+        .write_all(script.as_bytes())
+        .expect("write scipy jnjnp_zeros oracle script");
+    let output = child
+        .wait_with_output()
+        .expect("wait for scipy jnjnp_zeros oracle");
+    if !output.status.success() {
+        eprintln!(
+            "scipy jnjnp_zeros oracle failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return None;
+    }
+    let stdout = String::from_utf8(output.stdout).expect("utf8 scipy jnjnp_zeros timing");
+    let seconds: f64 = stdout
+        .trim()
+        .parse()
+        .expect("parse scipy jnjnp_zeros timing seconds");
+    Some(Duration::from_secs_f64(seconds))
+}
+
+fn legacy_duplicate_jnjnp_zeros(nt: usize) -> (Vec<f64>, Vec<i32>, Vec<i32>, Vec<i32>) {
+    if nt == 0 {
+        return (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    }
+    let mut cands: Vec<(f64, i32, i32, i32)> = Vec::new();
+    cands.push((0.0, 0, 0, 1));
+    let per = nt + 2;
+    let n_max = nt as u32 + 2;
+    for n in 0..=n_max {
+        for (i, &x) in jn_zeros(n, per).iter().enumerate() {
+            cands.push((x, n as i32, (i + 1) as i32, 0));
+        }
+        let jp = if n == 0 {
+            jn_zeros(1, per)
+        } else {
+            jnp_zeros(n, per)
+        };
+        for (i, &x) in jp.iter().enumerate() {
+            cands.push((x, n as i32, (i + 1) as i32, 1));
+        }
+    }
+    cands.sort_by(|a, b| {
+        a.0.partial_cmp(&b.0)
+            .expect("Bessel zeros are finite")
+            .then(a.3.cmp(&b.3))
+    });
+    cands.truncate(nt);
+    let zo = cands.iter().map(|c| c.0).collect();
+    let n = cands.iter().map(|c| c.1).collect();
+    let m = cands.iter().map(|c| c.2).collect();
+    let t = cands.iter().map(|c| c.3).collect();
+    (zo, n, m, t)
+}
+
+fn bench_acoco_gauntlet_jnjnp_zeros(c: &mut Criterion) {
+    let mut group = c.benchmark_group("acoco_gauntlet_jnjnp_zeros");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(5));
+    for &nt in &[64_usize, 128_usize] {
+        group.bench_function(format!("rust_current_nt{nt}"), |b| {
+            b.iter(|| {
+                let (zo, n, m, t) = jnjnp_zeros(black_box(nt));
+                black_box((zo, n, m, t));
+            });
+        });
+        group.bench_function(format!("rust_legacy_duplicate_nt{nt}"), |b| {
+            b.iter(|| {
+                let (zo, n, m, t) = legacy_duplicate_jnjnp_zeros(black_box(nt));
+                black_box((zo, n, m, t));
+            });
+        });
+        if scipy_special_available() {
+            group.bench_function(format!("scipy_nt{nt}"), |b| {
+                b.iter_custom(|iters| {
+                    scipy_jnjnp_zeros_duration(nt, iters)
+                        .expect("scipy jnjnp_zeros oracle should run after availability check")
+                });
+            });
+        } else {
+            eprintln!("skipping scipy_nt{nt}: python3 cannot import scipy.special");
+        }
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_gamma,
@@ -385,6 +523,7 @@ criterion_group!(
     bench_bessel_j,
     bench_bessel_y0,
     bench_complete_elliptic,
-    bench_incomplete_elliptic
+    bench_incomplete_elliptic,
+    bench_acoco_gauntlet_jnjnp_zeros
 );
 criterion_main!(benches);

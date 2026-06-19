@@ -1,5 +1,42 @@
 # Performance Release-Readiness Scorecard
 
+## 2026-06-19 - fsci-special jnjnp_zeros bracket-reuse gauntlet
+
+- Agent: cod-a / MistyBirch
+- Bead: `frankenscipy-acoco`
+- Decision: KEEP the bracket-reuse optimization as an internal win, but mark
+  the full routine as a SciPy LOSS. Score for this sub-cluster: 3/5.
+- Artifact:
+  `tests/artifacts/perf/2026-06-19-acoco-jnjnp-zeros-gauntlet/`
+
+| Gate | Result | Notes |
+| --- | --- | --- |
+| Rust per-crate compile | PASS | `rch exec -- env CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a cargo check -p fsci-special --benches` |
+| Criterion focused bench | PASS | `acoco_gauntlet_jnjnp_zeros` group only; local SciPy oracle in the same benchmark process |
+| SciPy head-to-head oracle | PASS | Python 3.13.7, NumPy 2.4.3, SciPy 1.17.1, `scipy.special.jnjnp_zeros(nt)` |
+| Targeted special tests | PASS | `jnyn_and_jnjnp_zeros_match_scipy` and `derivative_bessel_zeros_match_scipy_reference_points` passed via rch |
+| Benchmark formatting | PASS | `rustfmt --edition 2024 --check crates/fsci-special/benches/special_bench.rs` |
+| Clippy `-D warnings` | BLOCKED | `cargo clippy -p fsci-special --benches -- -D warnings` stopped on existing `fsci-integrate` and `fsci-linalg` dependency lints before this benchmark file was linted |
+
+| Workload / route | Mean | Ratio | Verdict |
+| --- | ---: | ---: | --- |
+| Rust current `jnjnp_zeros(nt=64)` | 80.728603 ms | 163.53x slower than SciPy | SciPy loss |
+| Rust legacy duplicate route, `nt=64` | 101.762454 ms | current is 1.26x faster | internal keep |
+| SciPy `scipy.special.jnjnp_zeros(nt=64)` | 0.493655 ms | 1.00x oracle | reference |
+| Rust current `jnjnp_zeros(nt=128)` | 410.059973 ms | 443.57x slower than SciPy | SciPy loss |
+| Rust legacy duplicate route, `nt=128` | 544.006333 ms | current is 1.33x faster | internal keep |
+| SciPy `scipy.special.jnjnp_zeros(nt=128)` | 0.924456 ms | 1.00x oracle | reference |
+
+Readiness notes:
+
+- The bracket-reuse optimization should stay because reverting it would make
+  the current Rust path slower on both measured rows.
+- This is not release-speed evidence against original SciPy. The next
+  performance bead should target the zero-enumeration/root-finding algorithm
+  rather than another duplicate-bracketing micro-lever.
+- The clippy blocker is outside this benchmark/evidence change and should be
+  handled as a separate lint-hygiene bead.
+
 ## 2026-06-19 - fsci-opt L-BFGS-B Wolfe-probe gauntlet
 
 - Agent: cod-b / MistyBirch

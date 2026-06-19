@@ -1,6 +1,6 @@
 # Gauntlet Release Scorecard
 
-Last updated: 2026-06-19 by cod-b / MistyBirch.
+Last updated: 2026-06-19 by cod-a / MistyBirch.
 
 This scorecard tracks code-first performance work that has been converted into
 measured head-to-head evidence against the SciPy original. The detailed
@@ -12,6 +12,13 @@ win/loss/neutral ledger lives in `docs/progress/perf-negative-results.md`.
 | --- | --- | --- | ---: | ---: | ---: | --- |
 | `frankenscipy-u0ucw` | Wide `pinv` Cholesky TRSM + diagonal rcond gate | 500x1000 full-row-rank dense `scipy.linalg.pinv` equivalent | 183.699926 ms | 7.257573 s | 39.51x faster | keep |
 | `frankenscipy-u0ucw` | Wide `lstsq` current materialized normal equations after row-stream revert | 500x1000 full-row-rank dense `scipy.linalg.lstsq` equivalent | 109.369915 ms | 1.253347 s | 11.46x faster | keep current, reject row-stream lever |
+
+## Measured Losses / Internal Keeps
+
+| Bead | Cluster | Realistic workload | Rust result | SciPy result | Ratio | Decision |
+| --- | --- | --- | ---: | ---: | ---: | --- |
+| `frankenscipy-acoco` | `jnjnp_zeros` bracket reuse | `scipy.special.jnjnp_zeros(nt=64)` equivalent | 80.728603 ms | 0.493655 ms | 163.53x slower | keep internal bracket reuse; route deeper |
+| `frankenscipy-acoco` | `jnjnp_zeros` bracket reuse | `scipy.special.jnjnp_zeros(nt=128)` equivalent | 410.059973 ms | 0.924456 ms | 443.57x slower | keep internal bracket reuse; route deeper |
 
 ## Measured Rejects
 
@@ -28,6 +35,7 @@ win/loss/neutral ledger lives in `docs/progress/perf-negative-results.md`.
 | `frankenscipy-u0ucw` | Cholesky + diagonal rcond gate | SVD fallback | 2.82x faster | keep current |
 | `frankenscipy-u0ucw` | Wide `lstsq` materialized `A^T` | Row-streamed `A A^T` + `A^T y` | 1.035x faster | revert row-streaming |
 | `frankenscipy-8l8r1.122` | Parent-style `line_search_wolfe2` gradient closure | Mutable `line_search_wolfe2_with_gradient_probe` path | 1.222x faster on 10D Rosenbrock; 1.154x faster on 32D quadratic | revert mutable-probe route |
+| `frankenscipy-acoco` | `jnjnp_zeros` bracket reuse | Pre-optimization duplicate `jnp_zeros` bracketing route | 1.26x faster at `nt=64`; 1.33x faster at `nt=128` | keep current despite SciPy loss |
 
 ## Current Readiness
 
@@ -40,8 +48,11 @@ win/loss/neutral ledger lives in `docs/progress/perf-negative-results.md`.
 | L-BFGS-B performance | measured reject plus current-route keep | mutable Wolfe probe scratch regressed same-worker rows; reverted route is still 173.78-229.23x faster than SciPy on measured callback workloads |
 | L-BFGS-B correctness | guarded | `fsci-opt lbfgsb` tests and SciPy-backed `diff_opt_lbfgsb_minimize` conformance passed after revert |
 | `fsci-opt` lint/build gate | guarded | `cargo check -p fsci-opt --all-targets`, `cargo fmt -p fsci-opt --check`, and `cargo clippy -p fsci-opt --all-targets -- -D warnings` passed |
+| `fsci-special` `jnjnp_zeros` performance | measured loss plus internal keep | current route is 1.26-1.33x faster than the old duplicate-bracketing route, but 163.53-443.57x slower than SciPy |
+| `fsci-special` `jnjnp_zeros` correctness | guarded | `jnyn_and_jnjnp_zeros_match_scipy` and `derivative_bessel_zeros_match_scipy_reference_points` passed via rch |
+| `fsci-special` lint/build gate | partial | `cargo check -p fsci-special --benches` and benchmark-file rustfmt passed; clippy `-D warnings` stopped on existing `fsci-integrate`/`fsci-linalg` dependency lints |
 | rch SciPy oracle parity | blocked on worker image | `vmi1152480` and `vmi1227854` lacked `scipy`; local same-host oracle supplied the head-to-head ratios |
-| Release readiness | partial | two linalg perf clusters plus one `fsci-opt` L-BFGS-B reject verified; other code-first perf ledger entries still need gauntlet conversion |
+| Release readiness | partial | two linalg perf clusters, one `fsci-opt` L-BFGS-B reject, and one `fsci-special` measured SciPy loss verified; other code-first perf ledger entries still need gauntlet conversion |
 
 ## Pending Gauntlet Backlog
 
