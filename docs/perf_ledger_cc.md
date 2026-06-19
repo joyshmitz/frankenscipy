@@ -854,3 +854,17 @@ exp2/powm1 — another agent's in-progress gamma/convenience work; those fns don
 not caused by this change; verified by static isolation.) LEVER PAID OUT: fetch scipy's xsf
 Cephes coefficients via gh + port the rational → byte-matches scipy AND replaces iterative
 kernels. Removed now-unused erf_series_real + erfc_cf_real (erfc_cf_h kept for erfcx_cf_real).
+
+### 📋 Remaining special-kernel Cephes-port candidates (lever PROVEN via erf, lower ROI)
+After the erf 5.9×→1.2× flip, audited the other measured special losses for the same
+iterative-kernel→Cephes-rational lever:
+- **gamma (2.4×)**: gamma_core uses LANCZOS — a fixed ~15-coeff approximation, NOT iterative.
+  Its gap is the `powf(x, x+0.5)` cost vs Cephes' recurrence-to-[2,3] rational (avoids powf for
+  moderate x). Nuanced, not a clean flip. gamma.rs also has another agent's in-progress
+  breakage (digamma/polygamma failing). → leave to that owner.
+- **j0/j1/y0/y1 (j0 1.6×)**: j0_core uses a genuine convergence-loop power series for x<14
+  (`j0_series_small`, ~15-25 terms in the bench range). CLEAN Cephes lever (rational P0/Q0 for
+  x<5 + asymptotic PP/PQ/QP/QQ modulus/phase for x≥5, ~6 arrays). But modest gain (1.6×) for a
+  ~80-line/6-array port across 4 functions → lower ROI than erf's 5.9×; flagged not done.
+RECIPE (proven): `gh api repos/scipy/xsf/contents/include/xsf/cephes/<file>.h --jq .content |
+base64 -d` → transcribe the exact coefficient arrays → byte-matches scipy.special.
