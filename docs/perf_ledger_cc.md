@@ -579,9 +579,17 @@ per frequency, then a complex-multiply accumulation `acc=acc·z⁻¹+c[k]`. **A/
 128-tap FIR / 512 freqs: 978→187 µs = 5.2×.** Same polynomial value as the direct sum
 (~1e-13), conformance signal **707/0**. Head-to-head vs scipy.signal.freqz (81 µs, FFT-based):
 fsci was **12× slower → now 2.3× slower** — Horner cuts most of the gap; the residual is the
-O(n_freqs·n_coeffs) Horner vs scipy's O(n log n) FFT-of-coefficients. RESIDUAL LEVER (flag,
-bigger change): FFT-based freqz for the FIR / whole-circle / linear-ω-grid cases (matches
-scipy's algorithm). Common function — broad win. Added freqz/fir128_512 bench.
+O(n_freqs·n_coeffs) Horner vs scipy's O(n log n) FFT-of-coefficients. ✅ RESIDUAL NOW DONE
+(see freqz FFT-hybrid below). Added freqz/fir128_512 bench.
+
+### ✅✅ freqz FFT-hybrid (FLIPS the residual loss to a WIN, signal)
+DONE — the flagged residual. B(e^jω)/A(e^jω) on the linear ω-grid IS the DFT of the zero-
+padded coefficients (whole: nfft=n; half: nfft=2n), so for large filters use `fsci_fft::fft`
+(O(N log N)) instead of the O(n·n_coeffs) Horner loop; small filters (b.len+a.len < 16 or
+n < 64) keep Horner (so biquads don't regress). **MEASURED freqz/fir128_512: Horner 187 µs →
+FFT 49.9 µs = 3.7×; vs scipy 81 µs now 1.6× FASTER.** Full freqz journey: 12× slower → 2.3×
+slower (Horner) → **1.6× faster than scipy**. Same response within ~1e-13, conformance 707/0
+(tolerance tests; biquad path unchanged). Falls back to Horner if the FFT errors.
 PLUS: routed `group_delay_from_ba` + `magnitude_response_db` (two MORE functions with the
 same inline per-coefficient cos/sin loop, not previously using the helper) through the Horner
 `eval_poly_on_unit_circle` — inherit the 5.2× large-filter speedup, conformance 707/0. Also

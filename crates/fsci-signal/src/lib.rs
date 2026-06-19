@@ -8555,6 +8555,26 @@ pub fn freqz_with_whole(
     let mut h_mag = Vec::with_capacity(n);
     let mut h_phase = Vec::with_capacity(n);
 
+    // For large filters, B(e^jω)/A(e^jω) sampled on the linear ω-grid is exactly the DFT of
+    // the zero-padded coefficients — O(N log N) via fsci_fft beats the O(n·n_coeffs) Horner
+    // loop (this is what scipy's freqz does). frankenscipy-9l5oo. Small filters keep the
+    // cheaper Horner path. Whole: nfft=n, ω_i=2πi/n; half: nfft=2n, ω_i=πi/n=2πi/(2n).
+    let fft_responses = if b.len() + a.len() >= 16 && n >= 64 {
+        let nfft = if whole { n } else { 2 * n };
+        let opts = fsci_fft::FftOptions::default();
+        let pad = |c: &[f64]| -> Vec<fsci_fft::Complex64> {
+            let mut v: Vec<fsci_fft::Complex64> = c.iter().map(|&x| (x, 0.0)).collect();
+            v.resize(nfft, (0.0, 0.0));
+            v
+        };
+        match (fsci_fft::fft(&pad(b), &opts), fsci_fft::fft(&pad(a), &opts)) {
+            (Ok(fb), Ok(fa)) => Some((fb, fa)),
+            _ => None,
+        }
+    } else {
+        None
+    };
+
     for i in 0..n {
         // scipy uses endpoint=False:
         // half spectrum: w = np.linspace(0, pi, n, endpoint=False)
@@ -8566,11 +8586,16 @@ pub fn freqz_with_whole(
         };
         w.push(omega);
 
-        // Evaluate B(e^{jω}) and A(e^{jω}) using Horner's method
-        // B(z) = b[0] + b[1]*z^{-1} + b[2]*z^{-2} + ...
-        // At z = e^{jω}: z^{-k} = e^{-jkω} = cos(kω) - j*sin(kω)
-        let (b_re, b_im) = eval_poly_on_unit_circle(b, omega);
-        let (a_re, a_im) = eval_poly_on_unit_circle(a, omega);
+        // B(e^{jω}) and A(e^{jω}): FFT-precomputed for large filters, else Horner.
+        // At z = e^{jω}: z^{-k} = e^{-jkω}; DFT bin i equals Σ c[k] e^{-jkω_i}.
+        let (b_re, b_im, a_re, a_im) = match &fft_responses {
+            Some((fb, fa)) => (fb[i].0, fb[i].1, fa[i].0, fa[i].1),
+            None => {
+                let (b_re, b_im) = eval_poly_on_unit_circle(b, omega);
+                let (a_re, a_im) = eval_poly_on_unit_circle(a, omega);
+                (b_re, b_im, a_re, a_im)
+            }
+        };
 
         // H = B / A (complex division)
         let denom = a_re * a_re + a_im * a_im;
