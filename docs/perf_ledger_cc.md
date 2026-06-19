@@ -552,6 +552,17 @@ fsci vs scipy.stats / scipy.stats.qmc — all WINS, no losses:
 Stats is HARVESTED — fsci wins every measured function (QMC sampling especially, where
 scipy's Python-loop generators are 14-21× slower than fsci's vectorized Rust).
 
+### ✅ remez even-WLS cos-basis Chebyshev recurrence (1.17×, signal)
+The even-numtaps remez fallback (WLS frequency-sampling; the benched odd-257 path uses the
+already-efficient PM+barycentric route) rebuilt its cos-basis with `n_coeffs` separate
+`cos(2π·j·f)` calls per grid point. Replaced with the Chebyshev recurrence `cos(jθ)=2cos(θ)
+cos((j-1)θ)-cos((j-2)θ)` — ONE cos() per grid point. **A/B MEASURED: 3.58→3.06 ms = 1.17×**
+(the O(ng·n_coeffs) cos was ~15% of the work; the O(ng·n_coeffs²) normal-equations build
+dominates the rest). Accurate to ~1e-14 (within remez's ~1e-6 tolerance), conformance signal
+**707/0**. scipy.signal.remez ERRORS on this case (PM non-convergence) so fsci's WLS fallback
+has no head-to-head, but it's a real self-speedup. KEEP (not ~0-gain). The recurrence lever
+applies to any cos(2π·k·f) response-basis loop.
+
 ## Signal crate — head-to-head sweep vs scipy (2026-06-19)
 Oracle `docs/perf_oracle_signal.py` + `/tmp/oracle_sig2.py`. fsci vs scipy.signal:
 

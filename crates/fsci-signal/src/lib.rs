@@ -10025,8 +10025,17 @@ pub fn remez(
         let f = freq_grid[i];
         let w = weight_grid[i]; // WLS weight: minimize Σ w_i * (H(f_i) - D(f_i))²
         let d = desired_grid[i];
-        for (j, basis) in cos_basis.iter_mut().enumerate() {
-            *basis = (two_pi * j as f64 * f).cos();
+        // cos(2π·j·f) for j=0..n_coeffs via the Chebyshev recurrence
+        // cos(jθ) = 2cos(θ)·cos((j-1)θ) − cos((j-2)θ): ONE cos() per grid point instead of
+        // n_coeffs, accurate to ~1e-14 (well within remez's ~1e-6 tolerance). frankenscipy-9l5oo.
+        cos_basis[0] = 1.0;
+        if n_coeffs > 1 {
+            let c1 = (two_pi * f).cos();
+            cos_basis[1] = c1;
+            let two_c1 = 2.0 * c1;
+            for j in 2..n_coeffs {
+                cos_basis[j] = two_c1 * cos_basis[j - 1] - cos_basis[j - 2];
+            }
         }
 
         for j in 0..n_coeffs {
