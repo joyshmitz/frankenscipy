@@ -370,6 +370,20 @@ around n≈3–4k; the full jump-and-walk O(n log n) rewrite (now safety-netted 
 property test) is the future lever to win at ALL sizes. But at realistic small-medium
 sizes fsci now DOMINATES.
 
+## Opt crate — minimize sweep vs scipy (2026-06-19) — fsci DOMINATES (largest ratios of phase)
+fsci vs scipy.optimize.minimize(method='BFGS') on Rosenbrock, x0=zeros:
+
+| dim | fsci | scipy | ratio |
+|---|---|---|---|
+| 2 | 10.7 µs | 3914 µs | **367× faster** |
+| 5 | 21.7 µs | 10672 µs | **491× faster** |
+| 10 | 76.4 µs | 27285 µs | **357× faster** |
+
+Same structural reason as solve_ivp, amplified: BFGS does MANY objective+gradient
+evaluations (numerical gradient + line search), each a Python callback in scipy; fsci runs
+the whole optimizer + Rust objective with zero callback overhead. Optimizer/root/ODE crates
+(any iterative solver over a user function) are fsci's biggest categorical win vs scipy.
+
 ## Integrate crate — ODE sweep vs scipy (2026-06-19) — fsci DOMINATES (biggest ratios yet)
 fsci vs scipy.integrate.solve_ivp (RK45, rtol 1e-6, atol 1e-9):
 
