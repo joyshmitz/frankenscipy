@@ -4,6 +4,53 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-19 - frankenscipy-edt-indices - distance_transform_edt feature transform
+
+- Agent: cc / MistyBirch
+- Lever: replace the `distance_transform_edt(return_indices=True)` brute-force
+  nearest-background scan (O(foreground · background) via `nearest_edt_background`)
+  with the exact separable Euclidean **feature transform** O(N · ndim). The
+  existing Felzenszwalb 1-D pass (`edt_1d_squared`) already finds the winning
+  vertex per output position; I expose it (`w` out-param) and propagate a
+  parallel nearest-background flat-index array (`feat`) through the separable
+  passes in `edt_squared_felzenszwalb_with_indices`. Background-free and
+  non-finite-sampling inputs stay on the brute-force/sentinel path.
+- Decision: KEEP. A measured, byte-verified complexity win that closes the
+  largest single gap from the ndimage recon. Resolves bead
+  `frankenscipy-edt-indices-feature-transform-xsudx`.
+- Correctness guards (all GREEN):
+  - `edt_feature_transform_distances_byte_identical_and_indices_valid` (new
+    property test): over multi-background/tie 2-D/3-D grids with non-unit
+    sampling, squared distances are byte-identical to the shipped distance-only
+    fast path AND every returned index is a genuine nearest background (its
+    squared distance equals the exact EDT at that cell).
+  - `perf_edt` isomorphism harness: **0 mismatches / 10876 cells**.
+  - All 18 `distance_transform` unit tests pass, including the scipy-pinned
+    `..._indices_match_scipy` fixtures (single-background → unique nearest → no
+    ties → unchanged output).
+  - Live SciPy conformance `diff_ndimage_distance_transform_edt` PASS (local
+    scipy 1.17.1, `FSCI_REQUIRE_SCIPY_ORACLE=1`).
+- Benchmark (`cargo run --release -p fsci-ndimage --bin perf_edt`, same-binary
+  brute-vs-feature A/B; SciPy oracle `docs/perf_oracle_edt_indices.py`). All
+  rows below are **same local host** (scipy 1.17.1), so both the self-speedup
+  and the vs-SciPy ratio are directly comparable:
+
+  | Image | brute O(f·b) | feature transform | self-speedup | SciPy `return_indices` | fsci vs SciPy |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | 64x64 | 17.799 ms | 295.9 us | 60.2x | 169.95 us | 1.74x slower |
+  | 128x128 | 334.07 ms | 1.353 ms | 246.9x | 769.50 us | 1.76x slower |
+  | 192x192 | 1.527 s | 3.581 ms | 426.5x | 2.263 ms | 1.58x slower |
+  | 256x256 | 4.764 s | 5.705 ms | 835.1x | 4.108 ms | 1.39x slower |
+
+- Negative evidence: fsci remains ~1.4-1.8x slower than SciPy's compiled C
+  feature transform (the gap narrows with size: 1.39x at 256x256), so in
+  absolute terms this is still a measured SciPy loss — but the catastrophic
+  O(f·b) brute force is gone (60-835x self-speedup, growing with N).
+- Retry condition: do not revert to the brute-force indices scan. Further gains
+  must tighten the feature-transform constant factor (inner separable line loop
+  / index propagation), measured same-host vs SciPy, without distance
+  byte-identity or nearest-background-validity drift.
+
 ## 2026-06-19 - frankenscipy-8l8r1.124 - jnjnp_zeros top-k select
 
 - Agent: cod-a / MistyBirch

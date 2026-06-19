@@ -1097,13 +1097,12 @@ fn sample_interpolated(
                 let len = coeff_len as isize;
                 // Padded order=1 reflect/mirror folds via clamp (the padding already
                 // encodes the reflection); everything else folds per the actual mode.
-                let fold_mode = if order == 1
-                    && matches!(mode, BoundaryMode::Reflect | BoundaryMode::Mirror)
-                {
-                    BoundaryMode::Nearest
-                } else {
-                    mode
-                };
+                let fold_mode =
+                    if order == 1 && matches!(mode, BoundaryMode::Reflect | BoundaryMode::Mirror) {
+                        BoundaryMode::Nearest
+                    } else {
+                        mode
+                    };
                 let fold = |i: isize| -> usize {
                     match fold_mode {
                         BoundaryMode::Nearest => i.clamp(0, len - 1) as usize,
@@ -5685,6 +5684,43 @@ pub fn distance_transform_edt_full(
         });
     }
 
+    // Fast path: indices (optionally with distances) via the exact separable
+    // feature transform — replaces the brute-force O(foreground · background)
+    // nearest-background scan with O(N · ndim). Distances are byte-identical to
+    // the distance-only fast path above; the returned index is a genuine
+    // nearest background (it achieves the exact squared distance `squared`).
+    // The all-foreground sentinel and non-finite sampling stay on the
+    // brute-force path below. frankenscipy-9l5oo.
+    if return_indices
+        && !backgrounds.is_empty()
+        && sampling.iter().all(|&s| s.is_finite() && s > 0.0)
+    {
+        let (squared, feat) = edt_squared_felzenszwalb_with_indices(input, &sampling);
+        let mut distances = return_distances.then(|| NdArray::zeros(input.shape.clone()));
+        let mut axis_indices = (0..input.ndim())
+            .map(|_| NdArray::zeros(input.shape.clone()))
+            .collect::<Vec<_>>();
+        for flat in 0..input.data.len() {
+            let is_background = input.data[flat] == 0.0;
+            if let Some(output) = distances.as_mut() {
+                output.data[flat] = if is_background {
+                    0.0
+                } else {
+                    squared[flat].sqrt()
+                };
+            }
+            let nearest_flat = if is_background { flat } else { feat[flat] };
+            let nearest_coords = input.unravel(nearest_flat);
+            for (axis, output) in axis_indices.iter_mut().enumerate() {
+                output.data[flat] = nearest_coords[axis] as f64;
+            }
+        }
+        return Ok(DistanceTransformEdtResult {
+            distances,
+            indices: Some(axis_indices),
+        });
+    }
+
     let mut distances = return_distances.then(|| NdArray::zeros(input.shape.clone()));
     let mut indices = return_indices.then(|| {
         (0..input.ndim())
@@ -6128,13 +6164,82 @@ fn edt_squared_felzenszwalb(input: &NdArray, sampling: &[f64]) -> Vec<f64> {
             for t in 0..len {
                 line[t] = f[base + t * stride];
             }
-            edt_1d_squared(&line, scale, scale2, &mut d, &mut v, &mut z);
+            edt_1d_squared(&line, scale, scale2, &mut d, &mut v, &mut z, None);
             for t in 0..len {
                 f[base + t * stride] = d[t];
             }
         }
     }
     f
+}
+
+/// Exact separable Euclidean feature transform: returns both the squared EDT
+/// (byte-identical to [`edt_squared_felzenszwalb`]) and, for each cell, the
+/// flat index of a nearest background cell. Each separable 1-D pass already
+/// finds the winning vertex per output position; we carry the source cell's
+/// nearest-background index alongside `f` so the final `feat[i]` is a genuine
+/// argmin (it achieves the exact squared distance `f[i]`). Requires at least
+/// one background cell. frankenscipy-9l5oo.
+fn edt_squared_felzenszwalb_with_indices(
+    input: &NdArray,
+    sampling: &[f64],
+) -> (Vec<f64>, Vec<usize>) {
+    let n = input.data.len();
+    let mut f: Vec<f64> = input
+        .data
+        .iter()
+        .map(|&v| if v == 0.0 { 0.0 } else { f64::INFINITY })
+        .collect();
+    // Background cells are their own nearest feature; foreground cells get
+    // overwritten the first time a finite distance reaches them. `feat[i]` is
+    // only meaningful where `f[i]` is finite.
+    let mut feat: Vec<usize> = (0..n).collect();
+
+    let mut line: Vec<f64> = Vec::new();
+    let mut feat_line: Vec<usize> = Vec::new();
+    let mut d: Vec<f64> = Vec::new();
+    let mut v: Vec<usize> = Vec::new();
+    let mut z: Vec<f64> = Vec::new();
+    let mut w: Vec<usize> = Vec::new();
+
+    #[allow(clippy::needless_range_loop)]
+    for axis in 0..input.ndim() {
+        let len = input.shape[axis];
+        if len <= 1 {
+            continue;
+        }
+        let stride = input.strides[axis];
+        let scale = sampling[axis];
+        let scale2 = scale * scale;
+        line.resize(len, 0.0);
+        feat_line.resize(len, 0);
+        d.resize(len, 0.0);
+        v.resize(len, 0);
+        z.resize(len + 1, 0.0);
+        w.resize(len, 0);
+
+        for base in 0..n {
+            if !(base / stride).is_multiple_of(len) {
+                continue;
+            }
+            for t in 0..len {
+                line[t] = f[base + t * stride];
+                feat_line[t] = feat[base + t * stride];
+            }
+            edt_1d_squared(&line, scale, scale2, &mut d, &mut v, &mut z, Some(&mut w));
+            for t in 0..len {
+                f[base + t * stride] = d[t];
+                // A finite output position is covered by a winning vertex whose
+                // carried feature (snapshot in `feat_line`) is its nearest
+                // background. All-infinite lines leave `d[t]` infinite and are
+                // skipped, so stale `w` entries are never read.
+                if d[t].is_finite() {
+                    feat[base + t * stride] = feat_line[w[t]];
+                }
+            }
+        }
+    }
+    (f, feat)
 }
 
 /// One-dimensional squared distance transform of `f` with axis scale `scale`
@@ -6148,6 +6253,7 @@ fn edt_1d_squared(
     d: &mut [f64],
     v: &mut [usize],
     z: &mut [f64],
+    mut w: Option<&mut [usize]>,
 ) {
     let n = f.len();
     let mut k: isize = -1;
@@ -6200,6 +6306,9 @@ fn edt_1d_squared(
             let vk = v[k2];
             let delta = (qf - vk as f64) * scale;
             d[q] = delta * delta + f[vk];
+            if let Some(w) = w.as_deref_mut() {
+                w[q] = vk;
+            }
         }
     }
 }
@@ -9783,7 +9892,10 @@ mod tests {
             "exp"
         );
         let lg = log_array(&NdArray::new(vec![1.0, std::f64::consts::E], vec![2]).unwrap());
-        assert!(lg.data[0].abs() < 1e-12 && (lg.data[1] - 1.0).abs() < 1e-12, "log");
+        assert!(
+            lg.data[0].abs() < 1e-12 && (lg.data[1] - 1.0).abs() < 1e-12,
+            "log"
+        );
         assert_eq!(
             cumprod_array(&NdArray::new(vec![1.0, 2.0, 3.0, 4.0], vec![4]).unwrap()).data,
             vec![1.0, 2.0, 6.0, 24.0]
@@ -9821,7 +9933,10 @@ mod tests {
         assert_eq!(cumsum_array(&b).data, vec![1.0, 3.0, 6.0, 10.0]);
         assert_eq!(diff_array(&b).data, vec![1.0, 1.0, 1.0]); // numpy.diff
         let c = NdArray::new(vec![1.0, 2.0, 3.0, 4.0, 5.0], vec![5]).unwrap();
-        assert!((array_std(&c) - 2.0_f64.sqrt()).abs() < 1e-12, "std (population)");
+        assert!(
+            (array_std(&c) - 2.0_f64.sqrt()).abs() < 1e-12,
+            "std (population)"
+        );
         let d = NdArray::new(vec![-1.0, 0.0, 5.0, 10.0], vec![4]).unwrap();
         assert_eq!(clip(&d, 0.0, 5.0).data, vec![0.0, 0.0, 5.0, 5.0]);
         let e = NdArray::new(vec![0.0, 1.0, 0.0, 2.0, 0.0], vec![5]).unwrap();
@@ -9861,7 +9976,11 @@ mod tests {
         let w_in = NdArray::new(vec![1.0, 0.0, 0.0, 3.0], vec![2, 2]).unwrap();
         let w_lbl = NdArray::new(vec![1.0; 4], vec![2, 2]).unwrap();
         let wc = center_of_mass(&w_in, &w_lbl, 1).expect("weighted com");
-        assert!((wc[0][0] - 0.75).abs() < 1e-12 && (wc[0][1] - 0.75).abs() < 1e-12, "wcom: {:?}", wc[0]);
+        assert!(
+            (wc[0][0] - 0.75).abs() < 1e-12 && (wc[0][1] - 0.75).abs() < 1e-12,
+            "wcom: {:?}",
+            wc[0]
+        );
     }
 
     #[test]
@@ -9980,9 +10099,8 @@ mod tests {
             .expect_err("non-positive sigma should be rejected");
         assert!(matches!(sigma_err, NdimageError::InvalidArgument(_)));
 
-        let huge_sigma_err =
-            gaussian_filter1d(&input, f64::MAX, 0, 0, BoundaryMode::Reflect, 0.0)
-                .expect_err("overflowing Gaussian kernel radius should be rejected");
+        let huge_sigma_err = gaussian_filter1d(&input, f64::MAX, 0, 0, BoundaryMode::Reflect, 0.0)
+            .expect_err("overflowing Gaussian kernel radius should be rejected");
         assert!(matches!(huge_sigma_err, NdimageError::InvalidArgument(_)));
     }
 
@@ -11797,6 +11915,83 @@ mod tests {
         assert_eq!(indices[0].shape, vec![2, 3]);
         assert_eq!(indices[0].data, vec![0.0; 6]);
         assert_eq!(indices[1].data, vec![1.0; 6]);
+    }
+
+    #[test]
+    fn edt_feature_transform_distances_byte_identical_and_indices_valid() {
+        // Deterministic pseudo-random binary grids with MANY backgrounds (so
+        // distance ties are present), across 2-D/3-D shapes and non-unit
+        // sampling. The separable feature transform must (1) produce squared
+        // distances byte-identical to the shipped distance-only fast path
+        // (`edt_squared_felzenszwalb`), and (2) return, for every foreground
+        // cell, a genuine nearest background — a background cell whose squared
+        // distance equals the exact EDT value at that cell.
+        let mut seed: u64 = 0x1234_5678_9abc_def0;
+        let mut rng = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let cases: &[(Vec<usize>, Vec<f64>)] = &[
+            (vec![9, 7], vec![1.0, 1.0]),
+            (vec![8, 11], vec![2.0, 1.0]),
+            (vec![6, 5, 4], vec![1.0, 1.0, 1.0]),
+            (vec![5, 6, 3], vec![1.5, 1.0, 2.0]),
+        ];
+        for (shape, sampling) in cases {
+            for _trial in 0..25 {
+                let n: usize = shape.iter().product();
+                let mut data = vec![1.0; n];
+                for v in data.iter_mut() {
+                    if rng() % 4 == 0 {
+                        *v = 0.0;
+                    }
+                }
+                if data.iter().all(|&v| v != 0.0) {
+                    data[(rng() as usize) % n] = 0.0;
+                }
+                if data.iter().all(|&v| v == 0.0) {
+                    data[(rng() as usize) % n] = 1.0;
+                }
+                let input = NdArray::new(data.clone(), shape.clone()).unwrap();
+
+                let (squared, feat) = edt_squared_felzenszwalb_with_indices(&input, sampling);
+
+                // (1) distances byte-identical to the shipped distance fast path.
+                let squared_ref = edt_squared_felzenszwalb(&input, sampling);
+                assert_eq!(
+                    squared, squared_ref,
+                    "with-indices squared EDT must equal the distance-only fast path (shape {shape:?})"
+                );
+
+                // (2) every returned feature index is a genuine nearest background.
+                for flat in 0..n {
+                    if data[flat] == 0.0 {
+                        continue;
+                    }
+                    let nf = feat[flat];
+                    assert_eq!(data[nf], 0.0, "feature {nf} is not a background cell");
+                    let coords = input.unravel(flat);
+                    let ncoords = input.unravel(nf);
+                    let d2: f64 = coords
+                        .iter()
+                        .zip(&ncoords)
+                        .zip(sampling)
+                        .map(|((&c, &nc), &s)| {
+                            let delta = (c as f64 - nc as f64) * s;
+                            delta * delta
+                        })
+                        .sum();
+                    let tol = 1e-9 * squared[flat].max(1.0);
+                    assert!(
+                        (d2 - squared[flat]).abs() <= tol,
+                        "indexed background at squared {d2} but EDT is {} (flat {flat}, shape {shape:?})",
+                        squared[flat]
+                    );
+                }
+            }
+        }
     }
 
     #[test]

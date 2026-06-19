@@ -6,7 +6,7 @@
 //! across randomized binary images and time both.
 //! Run: `cargo run --release -p fsci-ndimage --bin perf_edt`.
 
-use fsci_ndimage::{NdArray, distance_transform_edt};
+use fsci_ndimage::{NdArray, distance_transform_edt, distance_transform_edt_full};
 use std::time::Instant;
 
 struct Lcg(u64);
@@ -177,6 +177,38 @@ fn main() {
             side * side,
             brute_t / 3,
             fh_t / 3
+        );
+    }
+
+    // ---- Timing: return_indices path (the optimized feature transform) ----
+    // The old indices path paid the same O(foreground · background) nearest
+    // search per foreground pixel as `brute_edt`; the new path is the separable
+    // feature transform O(N · ndim). frankenscipy-9l5oo.
+    println!("--- return_indices: brute O(f*b) vs separable feature transform ---");
+    for &side in &[64usize, 128, 192, 256] {
+        let img = make_image(&[side, side], 50, 0xC0DE + side as u64);
+        let samp_vec = vec![1.0, 1.0];
+
+        let t0 = Instant::now();
+        let mut acc = 0.0f64;
+        for _ in 0..3 {
+            acc += brute_edt(&img, &samp_vec)[0];
+        }
+        let brute_t = t0.elapsed();
+
+        let t1 = Instant::now();
+        for _ in 0..3 {
+            let r = distance_transform_edt_full(&img, None, true, true).unwrap();
+            acc += r.indices.unwrap()[0].data[0];
+        }
+        let ft_t = t1.elapsed();
+
+        let ratio = brute_t.as_secs_f64() / ft_t.as_secs_f64();
+        println!(
+            "indices N={:>6} ({side}x{side})  brute={:>10.3?}  feat={:>10.3?}  ratio={ratio:>7.1}x  (acc={acc:.1})",
+            side * side,
+            brute_t / 3,
+            ft_t / 3
         );
     }
 }
