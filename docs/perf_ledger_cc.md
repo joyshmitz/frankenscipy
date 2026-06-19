@@ -810,3 +810,15 @@ Per demonstrate-or-revert + "same-worker A/B in ONE binary mandatory" (cross-run
 signal here), REVERTED. The lever is sound for normal/idle machines (fewer threads = less spawn
 for medium filters) but needs a same-process atomic-toggle bench in an idle window to prove.
 Flagged. (Sibling of the pdist nm8ex gate finding handed to MistyBirch.)
+
+### 📋 PARALLEL-GATE AUDIT (all crates) — pdist is the lone bug; rest are correctly designed
+Audited every `*_thread_count` / `work < 1<<N → serial` gate for the gate-below-spawn-break-even
+bug. Verdict by per-op cost (the real determinant — cheap multiply/subtract ops need a HIGH
+threshold; expensive sort/trig ops can use a low one):
+- **pdist/cdist** `cdist_thread_count` 1<<18, cheap subtract-square → **BUG** (handed to MistyBirch, nm8ex).
+- **interpolate** `par_query_map` 1<<18 → OK: cost-aware, caller passes `work_per_query`.
+- **stats** `compute_row_ranks` 1<<18, **stats** + **cluster** `landmark_isomap` 1<<16 → OK: O(n log n) sort per row.
+- **signal** `lombscargle_thread_count` 1<<16 → OK: sin/cos per op (expensive).
+- **ndimage** `ndimage_filter_thread_count` 1<<18, cheap mul-add → benched cases (gaussian 1.1M,
+  correlate 1.6M) sit AT/above break-even, not clearly below; thread-cap fix unmeasurable under
+  ramping load (reverted). The class is otherwise clean — no further gate bugs in my crates.
