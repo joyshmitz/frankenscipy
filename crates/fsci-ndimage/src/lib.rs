@@ -4135,12 +4135,87 @@ fn binary_erosion_once_with_origins(current: &NdArray, size: usize, origins: &[i
 /// uses the reflected structuring-element origin). Byte-identical to the float max-filter for
 /// binary data (`max == 1` ⇔ at least one one in the window). frankenscipy-9l5oo.
 fn binary_dilate_separable(bin: &NdArray, size: usize) -> NdArray {
+    if size < 64 {
+        if let Some(packed) = binary_dilate_bitpack_2d(bin, size) {
+            return packed;
+        }
+    }
     let refl = binary_dilation_origin_reflection(size);
     let mut cur = bin.clone();
     for axis in 0..bin.ndim() {
         cur = binary_dilate_along_axis(&cur, axis, size, refl);
     }
     cur
+}
+
+/// 2D bit-packed binary dilation (OR analogue of [`binary_erode_bitpack_2d`]): horizontal
+/// via shift-OR, vertical via word-OR of the in-window rows. Uses the reflected-SE origin
+/// (`lo = size/2 + refl`); out-of-range bits/rows contribute 0 (OR identity), matching the
+/// Constant-0 max-filter border. Byte-identical 0/1 output. `None` for non-2D. 9l5oo.
+fn binary_dilate_bitpack_2d(bin: &NdArray, size: usize) -> Option<NdArray> {
+    if bin.ndim() != 2 {
+        return None;
+    }
+    let h = bin.shape[0];
+    let w = bin.shape[1];
+    if h == 0 || w == 0 {
+        return None;
+    }
+    let wpr = w.div_ceil(64);
+    let refl = binary_dilation_origin_reflection(size);
+    let lo = size as i64 / 2 + refl; // 0 for odd sizes, size/2-1 for even (≥ 0)
+    let center = (size as i64 - 1 - lo) as usize;
+
+    let mut packed = vec![0u64; h * wpr];
+    for r in 0..h {
+        let row_base = r * w;
+        let pk_base = r * wpr;
+        for c in 0..w {
+            if bin.data[row_base + c] != 0.0 {
+                packed[pk_base + c / 64] |= 1u64 << (c % 64);
+            }
+        }
+    }
+
+    // Horizontal dilation (OR of the window within each row).
+    let mut h_dil = vec![0u64; h * wpr];
+    let mut acc = vec![0u64; wpr];
+    let mut shifted = vec![0u64; wpr];
+    for r in 0..h {
+        let row = &packed[r * wpr..(r + 1) * wpr];
+        acc.copy_from_slice(row);
+        for k in 1..size {
+            shift_bits_up(row, k, &mut shifted);
+            for (a, s) in acc.iter_mut().zip(shifted.iter()) {
+                *a |= *s;
+            }
+        }
+        shift_bits_down(&acc, center, &mut h_dil[r * wpr..(r + 1) * wpr]);
+    }
+
+    // Vertical dilation: OR the in-range rows in [r-lo, r-lo+size-1] (out-of-range = 0).
+    let mut out = NdArray::zeros(bin.shape.clone());
+    let mut col_acc = vec![0u64; wpr];
+    for r in 0..h {
+        col_acc.iter_mut().for_each(|x| *x = 0);
+        for j in 0..size as i64 {
+            let rr = r as i64 - lo + j;
+            if rr < 0 || rr >= h as i64 {
+                continue;
+            }
+            let src = &h_dil[rr as usize * wpr..(rr as usize + 1) * wpr];
+            for (a, s) in col_acc.iter_mut().zip(src.iter()) {
+                *a |= *s;
+            }
+        }
+        let out_base = r * w;
+        for c in 0..w {
+            if (col_acc[c / 64] >> (c % 64)) & 1 == 1 {
+                out.data[out_base + c] = 1.0;
+            }
+        }
+    }
+    Some(out)
 }
 
 fn binary_dilate_along_axis(arr: &NdArray, axis: usize, size: usize, origin: i64) -> NdArray {

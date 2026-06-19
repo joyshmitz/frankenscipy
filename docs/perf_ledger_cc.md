@@ -421,7 +421,12 @@ window. Constant-0 border falls out free (out-of-range bits/rows are 0 → AND i
 ndimage **296/0**. A 2.76–3.7× LOSS flipped to parity-to-4.5×-WIN. The op-count math (~30×
 fewer ops) predicted it. KEY: erosion AND is commutative across axes so horizontal-then-
 vertical order is byte-identical; the Constant-0 border needs no special-casing in bit-space.
-EARLIER (superseded): running-count partial got 1.2–1.4×; the bit-pack subsumes it. SAME lever applied to
+EARLIER (superseded): running-count partial got 1.2–1.4×; the bit-pack subsumes it.
+SYMMETRIC: `binary_dilate_bitpack_2d` (OR instead of AND, reflected-SE origin lo=size/2+refl,
+out-of-range = OR-identity 0). **s7 ~2.2 ms→642 µs (3.4× self) = 2.3× slower (was 6.6×);
+s15 ~2.2 ms→159 µs (14× self) = 3.3× FASTER vs scipy 521 µs (was 3.1× slower)**, 296/0.
+dilation-s7 still loses to scipy's very-fast 279 µs (mostly-set image) but improved 3.4×.
+Net: binary morphology 3 of 4 cases now parity-or-WIN (was all losses). SAME lever applied to
 `binary_dilation` (`binary_dilate_separable`: running count of ONES > 0, origin-aware lo =
 size/2 + refl to match the reflected-SE max-filter; even sizes use refl=−1): byte-identical
 **296/0**, dilation ~1.84/1.64 ms (same ~1.2–1.4× self-speedup). Dilation is still 3–6.6×
