@@ -36,5 +36,19 @@ fn bench_gmm(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_kmeans, bench_gmm);
+/// Hierarchical clustering: NN-chain linkage + cophenetic distances (the cophenet
+/// member-list move-instead-of-clone win, frankenscipy-jphzn).
+fn bench_hierarchical(c: &mut Criterion) {
+    use fsci_cluster::{LinkageMethod, cophenet, linkage};
+    let data = blobs(400, 4);
+    let z = linkage(&data, LinkageMethod::Average).expect("linkage");
+    let mut group = c.benchmark_group("hierarchical");
+    group.bench_function("linkage_average/n400", |b| {
+        b.iter(|| linkage(&data, LinkageMethod::Average))
+    });
+    group.bench_function("cophenet/n400", |b| b.iter(|| cophenet(&z)));
+    group.finish();
+}
+
+criterion_group!(benches, bench_kmeans, bench_gmm, bench_hierarchical);
 criterion_main!(benches);
