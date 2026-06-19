@@ -6,8 +6,8 @@ use fsci_runtime::RuntimeMode;
 
 use crate::gamma::gamma_scalar;
 use crate::types::{
-    Complex64, DispatchPlan, DispatchStep, KernelRegime, SpecialError, SpecialErrorKind,
-    SpecialResult, SpecialTensor, not_yet_implemented, record_special_trace,
+    not_yet_implemented, record_special_trace, Complex64, DispatchPlan, DispatchStep, KernelRegime,
+    SpecialError, SpecialErrorKind, SpecialResult, SpecialTensor,
 };
 
 pub const BESSEL_DISPATCH_PLAN: &[DispatchPlan] = &[
@@ -207,12 +207,15 @@ pub const BESSEL_DISPATCH_PLAN: &[DispatchPlan] = &[
                 when: "large-a windows collapse to early terms through log-gamma damping",
             },
         ],
-        notes: "SciPy only exposes the nonnegative real domain; strict mode returns NaN outside it.",
+        notes:
+            "SciPy only exposes the nonnegative real domain; strict mode returns NaN outside it.",
     },
 ];
 
 const EULER_MASCHERONI: f64 = 0.577_215_664_901_532_9;
 const BESSEL_SERIES_MAX_TERMS: usize = 96;
+const BESSEL_ZERO_BRACKET_TOL: f64 = 1.0e-12;
+const BESSEL_ZERO_MAX_REFINE_ITERS: usize = 80;
 
 pub fn j0(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     map_real_input("j0", z, mode, |x| Ok(j0_core(x)))
@@ -1250,7 +1253,11 @@ fn gamma_sign_fn(x: f64) -> f64 {
         // Pole — caller is responsible for guarding before reaching here.
         return 0.0;
     }
-    if (PI * x).sin() >= 0.0 { 1.0 } else { -1.0 }
+    if (PI * x).sin() >= 0.0 {
+        1.0
+    } else {
+        -1.0
+    }
 }
 
 /// Asymptotic expansion for J_v(z) for large |z|.
@@ -1489,7 +1496,11 @@ pub(crate) fn iv_scalar(v: f64, z: f64) -> f64 {
             0.0
         } else if v.fract() == 0.0 {
             // I_{-n}(0) = I_n(0)
-            if v.abs() == 0.0 { 1.0 } else { 0.0 }
+            if v.abs() == 0.0 {
+                1.0
+            } else {
+                0.0
+            }
         } else {
             f64::INFINITY
         };
@@ -3196,7 +3207,11 @@ fn j1_core(x: f64) -> f64 {
         jv_asymptotic(1.0, ax)
     };
 
-    if x < 0.0 { -ans } else { ans }
+    if x < 0.0 {
+        -ans
+    } else {
+        ans
+    }
 }
 
 fn y0_core_positive(x: f64) -> f64 {
@@ -4349,10 +4364,162 @@ fn olver_yn_first_zero(n_f: f64) -> f64 {
         - 0.043_4 * inv_n_five_thirds
 }
 
-/// Refine a bessel-zero initial guess by bracket expansion + bisection.
+fn jn_derivative_nonnegative(n: u32, x: f64) -> f64 {
+    jn_derivative_from_value(n, x, jn_nonnegative(n, x))
+}
+
+fn jn_derivative_from_value(n: u32, x: f64, value: f64) -> f64 {
+    if n == 0 {
+        -jn_nonnegative(1, x)
+    } else {
+        jn_nonnegative(n - 1, x) - (n as f64 / x) * value
+    }
+}
+
+fn refine_bracketed_zero(
+    f_at: impl Fn(f64) -> f64,
+    mut lo: f64,
+    mut hi: f64,
+    mut f_lo: f64,
+    mut f_hi: f64,
+) -> f64 {
+    if f_lo == 0.0 {
+        return lo;
+    }
+    if f_hi == 0.0 {
+        return hi;
+    }
+    if !(lo.is_finite()
+        && hi.is_finite()
+        && f_lo.is_finite()
+        && f_hi.is_finite()
+        && lo < hi
+        && f_lo.signum() != f_hi.signum())
+    {
+        return 0.5 * (lo + hi);
+    }
+
+    for _ in 0..BESSEL_ZERO_MAX_REFINE_ITERS {
+        let width = hi - lo;
+        if width < BESSEL_ZERO_BRACKET_TOL {
+            break;
+        }
+
+        let midpoint = 0.5 * (lo + hi);
+        let secant = if f_hi != f_lo {
+            lo - f_lo * width / (f_hi - f_lo)
+        } else {
+            f64::NAN
+        };
+        let guard = width * 0.125;
+        let mut probe = if secant.is_finite() && secant > lo + guard && secant < hi - guard {
+            secant
+        } else {
+            midpoint
+        };
+        let mut f_probe = f_at(probe);
+        if !f_probe.is_finite() && probe != midpoint {
+            probe = midpoint;
+            f_probe = f_at(probe);
+        }
+        if !f_probe.is_finite() {
+            break;
+        }
+        if f_probe == 0.0 {
+            return probe;
+        }
+
+        if f_probe.signum() == f_lo.signum() {
+            lo = probe;
+            f_lo = f_probe;
+        } else {
+            hi = probe;
+            f_hi = f_probe;
+        }
+    }
+
+    0.5 * (lo + hi)
+}
+
+fn refine_bracketed_zero_with_derivative(
+    eval_at: impl Fn(f64) -> (f64, f64),
+    mut lo: f64,
+    mut hi: f64,
+    mut f_lo: f64,
+    mut f_hi: f64,
+) -> f64 {
+    if f_lo == 0.0 {
+        return lo;
+    }
+    if f_hi == 0.0 {
+        return hi;
+    }
+    if !(lo.is_finite()
+        && hi.is_finite()
+        && f_lo.is_finite()
+        && f_hi.is_finite()
+        && lo < hi
+        && f_lo.signum() != f_hi.signum())
+    {
+        return 0.5 * (lo + hi);
+    }
+
+    let mut probe = 0.5 * (lo + hi);
+    for _ in 0..BESSEL_ZERO_MAX_REFINE_ITERS {
+        let (f_probe, df_probe) = eval_at(probe);
+        if !f_probe.is_finite() {
+            return refine_bracketed_zero(|x| eval_at(x).0, lo, hi, f_lo, f_hi);
+        }
+        if f_probe == 0.0 {
+            return probe;
+        }
+
+        let correction = if df_probe.is_finite() && df_probe != 0.0 {
+            f_probe / df_probe
+        } else {
+            f64::NAN
+        };
+        if correction.is_finite() && correction.abs() < 0.5 * BESSEL_ZERO_BRACKET_TOL {
+            return probe;
+        }
+
+        if f_probe.signum() == f_lo.signum() {
+            lo = probe;
+            f_lo = f_probe;
+        } else {
+            hi = probe;
+            f_hi = f_probe;
+        }
+
+        let width = hi - lo;
+        if width < BESSEL_ZERO_BRACKET_TOL {
+            break;
+        }
+
+        let midpoint = 0.5 * (lo + hi);
+        let newton = probe - correction;
+        let secant = if f_hi != f_lo {
+            lo - f_lo * width / (f_hi - f_lo)
+        } else {
+            f64::NAN
+        };
+        let guard = width * 0.0625;
+        probe = if newton.is_finite() && newton > lo + guard && newton < hi - guard {
+            newton
+        } else if secant.is_finite() && secant > lo + guard && secant < hi - guard {
+            secant
+        } else {
+            midpoint
+        };
+    }
+
+    0.5 * (lo + hi)
+}
+
+/// Refine a bessel-zero initial guess by bracket expansion + safeguarded interpolation.
 /// Walks outward from `initial` in steps of `step`, bounded by [`floor`,
 /// initial+max_outward], until a sign change of `f_at` is found, then
-/// bisects to ~1e-12 precision. Returns `initial` unchanged if no
+/// refines to ~1e-12 precision. Returns `initial` unchanged if no
 /// bracket can be found within `max_outward`.
 fn bracket_and_bisect_zero(
     f_at: impl Fn(f64) -> f64,
@@ -4384,27 +4551,53 @@ fn bracket_and_bisect_zero(
     if !f_lo.is_finite() || !f_hi.is_finite() || f_lo.signum() == f_hi.signum() {
         return initial;
     }
-    for _ in 0..120 {
-        let mid = 0.5 * (lo + hi);
-        let f_mid = f_at(mid);
-        if !f_mid.is_finite() {
-            break;
-        }
-        if f_mid.signum() == f_lo.signum() {
-            lo = mid;
-            f_lo = f_mid;
-        } else {
-            hi = mid;
-        }
-        if (hi - lo) < 1.0e-12 {
-            break;
-        }
-    }
-    0.5 * (lo + hi)
+    refine_bracketed_zero(f_at, lo, hi, f_lo, f_hi)
 }
 
-fn bisect_bracketed_zero(f_at: impl Fn(f64) -> f64, mut lo: f64, mut hi: f64) -> f64 {
-    let mut f_lo = f_at(lo);
+fn bracket_and_refine_jn_zero(
+    n: u32,
+    initial: f64,
+    floor: f64,
+    step: f64,
+    max_outward: f64,
+) -> f64 {
+    let mut lo = (initial - step).max(floor);
+    let mut hi = (initial + step).max(lo + step);
+    let mut f_lo = jn_nonnegative(n, lo);
+    let mut f_hi = jn_nonnegative(n, hi);
+    let mut walked = step;
+    while walked < max_outward {
+        if f_lo.is_finite() && f_hi.is_finite() && f_lo.signum() != f_hi.signum() {
+            break;
+        }
+        let new_lo = (lo - step).max(floor);
+        let new_hi = hi + step;
+        if new_lo == lo && new_hi == hi {
+            break;
+        }
+        lo = new_lo;
+        hi = new_hi;
+        f_lo = jn_nonnegative(n, lo);
+        f_hi = jn_nonnegative(n, hi);
+        walked += step;
+    }
+    if !f_lo.is_finite() || !f_hi.is_finite() || f_lo.signum() == f_hi.signum() {
+        return initial;
+    }
+    refine_bracketed_zero_with_derivative(
+        |x| {
+            let value = jn_nonnegative(n, x);
+            (value, jn_derivative_from_value(n, x, value))
+        },
+        lo,
+        hi,
+        f_lo,
+        f_hi,
+    )
+}
+
+fn bisect_bracketed_zero(f_at: impl Fn(f64) -> f64, lo: f64, hi: f64) -> f64 {
+    let f_lo = f_at(lo);
     let f_hi = f_at(hi);
     if !lo.is_finite()
         || !hi.is_finite()
@@ -4415,26 +4608,34 @@ fn bisect_bracketed_zero(f_at: impl Fn(f64) -> f64, mut lo: f64, mut hi: f64) ->
         return 0.5 * (lo + hi);
     }
 
-    for _ in 0..120 {
-        let mid = 0.5 * (lo + hi);
-        let f_mid = f_at(mid);
-        if !f_mid.is_finite() {
-            break;
-        }
-        if f_mid == 0.0 {
-            return mid;
-        }
-        if f_mid.signum() == f_lo.signum() {
-            lo = mid;
-            f_lo = f_mid;
-        } else {
-            hi = mid;
-        }
-        if (hi - lo) < 1.0e-12 {
-            break;
-        }
+    refine_bracketed_zero(f_at, lo, hi, f_lo, f_hi)
+}
+
+fn refine_bracketed_jnp_zero(n: u32, lo: f64, hi: f64) -> f64 {
+    let f_lo = jn_derivative_nonnegative(n, lo);
+    let f_hi = jn_derivative_nonnegative(n, hi);
+    if !lo.is_finite()
+        || !hi.is_finite()
+        || !f_lo.is_finite()
+        || !f_hi.is_finite()
+        || f_lo.signum() == f_hi.signum()
+    {
+        return 0.5 * (lo + hi);
     }
-    0.5 * (lo + hi)
+
+    let n_sq = (n as f64) * (n as f64);
+    refine_bracketed_zero_with_derivative(
+        |x| {
+            let value = jn_nonnegative(n, x);
+            let derivative = jn_derivative_from_value(n, x, value);
+            let second_derivative = (n_sq / (x * x) - 1.0) * value - derivative / x;
+            (derivative, second_derivative)
+        },
+        lo,
+        hi,
+        f_lo,
+        f_hi,
+    )
 }
 
 /// First `k` positive zeros of the Bessel function Y_n(x), for integer
@@ -4523,19 +4724,6 @@ pub fn jnp_zeros(n: u32, nt: usize) -> Vec<f64> {
 fn jnp_zeros_from_function_zeros(n: u32, nt: usize, function_zeros: &[f64]) -> Vec<f64> {
     debug_assert!(n > 0);
     debug_assert!(function_zeros.len() >= nt);
-    let n_f = n as f64;
-    let f_at = |x: f64| -> f64 {
-        bessel_derivative_real_scalar(
-            "jnp_zeros",
-            n_f,
-            x,
-            1,
-            RuntimeMode::Strict,
-            BesselKind::Jv,
-            DerivativeRule::Alternating,
-        )
-        .unwrap_or(f64::NAN)
-    };
 
     let mut out = Vec::with_capacity(nt);
     for idx in 0..nt {
@@ -4545,7 +4733,7 @@ fn jnp_zeros_from_function_zeros(n: u32, nt: usize, function_zeros: &[f64]) -> V
             function_zeros[idx - 1] + 1.0e-6
         };
         let hi = function_zeros[idx] - 1.0e-6;
-        out.push(bisect_bracketed_zero(f_at, lo, hi));
+        out.push(refine_bracketed_jnp_zero(n, lo, hi));
     }
     out
 }
@@ -4628,9 +4816,8 @@ pub fn jn_zeros(n: u32, k: usize) -> Vec<f64> {
         } else {
             mcmahon
         };
-        let f_at = |x: f64| -> f64 { jn_scalar(n_f, x, RuntimeMode::Strict).unwrap_or(f64::NAN) };
         let floor = if ki >= 2 { prev_zero + 1.0e-6 } else { 1.0e-6 };
-        let zero = bracket_and_bisect_zero(f_at, initial, floor, 0.5, (n_f * 0.25).max(20.0));
+        let zero = bracket_and_refine_jn_zero(n, initial, floor, 0.5, (n_f * 0.25).max(20.0));
         out.push(zero);
         prev_zero = zero;
     }
@@ -4826,8 +5013,14 @@ mod tests {
     #[test]
     fn jv_yv_scalar_match_scipy() {
         // scipy.special.jv/yv (Bessel functions of the first/second kind).
-        assert!((jv_scalar(0.0, 1.0) - 0.765_197_686_557_966_6).abs() < 1e-13, "jv(0,1)");
-        assert!((jv_scalar(1.0, 2.0) - 0.576_724_807_756_873_6).abs() < 1e-13, "jv(1,2)");
+        assert!(
+            (jv_scalar(0.0, 1.0) - 0.765_197_686_557_966_6).abs() < 1e-13,
+            "jv(0,1)"
+        );
+        assert!(
+            (jv_scalar(1.0, 2.0) - 0.576_724_807_756_873_6).abs() < 1e-13,
+            "jv(1,2)"
+        );
         assert!(
             (yv_scalar(0.0, 1.0, RuntimeMode::Strict).unwrap() - 0.088_256_964_215_677).abs()
                 < 1e-13,

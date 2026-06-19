@@ -18,6 +18,8 @@ win/loss/neutral ledger lives in `docs/progress/perf-negative-results.md`.
 
 | Bead | Cluster | Realistic workload | Rust result | SciPy result | Ratio | Decision |
 | --- | --- | --- | ---: | ---: | ---: | --- |
+| `frankenscipy-x9ckc` | `jnjnp_zeros` guarded root-cost refinement | `scipy.special.jnjnp_zeros(nt=64)` equivalent | 4.6666 ms | 439.49 us | 10.62x slower | keep 1.17x internal win; route deeper |
+| `frankenscipy-x9ckc` | `jnjnp_zeros` guarded root-cost refinement | `scipy.special.jnjnp_zeros(nt=128)` equivalent | 8.3620 ms | 787.18 us | 10.62x slower | keep 1.20x internal win; route deeper |
 | `frankenscipy-01lxz` | `jnjnp_zeros` output-sensitive frontier | `scipy.special.jnjnp_zeros(nt=64)` equivalent | 4.3372 ms | 486.57 us | 8.91x slower | keep 17.82x internal win; route deeper |
 | `frankenscipy-01lxz` | `jnjnp_zeros` output-sensitive frontier | `scipy.special.jnjnp_zeros(nt=128)` equivalent | 7.5415 ms | 792.81 us | 9.51x slower | keep 50.77x internal win; route deeper |
 | `frankenscipy-acoco` | `jnjnp_zeros` bracket reuse | `scipy.special.jnjnp_zeros(nt=64)` equivalent | 80.728603 ms | 0.493655 ms | 163.53x slower | keep internal bracket reuse; route deeper |
@@ -54,6 +56,7 @@ win/loss/neutral ledger lives in `docs/progress/perf-negative-results.md`.
 | `frankenscipy-va60h` | Flat row-major linkage arena | Reverted production nested route probe | 1.290x faster on Average; 1.251x faster on Ward | undo revert; keep flat route |
 | `frankenscipy-8l8r1.118` | Fused signal coherence | Compositional `csd(x,y)` + `csd(x,x)` + `csd(y,y)` route | 2.98x faster locally; 2.80x faster on rch `hz1` | keep fused route |
 | `frankenscipy-nm8ex` | Dim-4 Euclidean/Cosine direct serial `pdist` kernels | Generic metric-dispatch/reduction/threaded path | 5.54-29.51x faster on same-worker `hz2` | keep current despite SciPy loss |
+| `frankenscipy-x9ckc` | `jnjnp_zeros` guarded direct integer-order root polishing | Generic strict-mode bracketed zero route after output frontier | 1.17x faster at `nt=64`; 1.20x faster at `nt=128` on same-worker `hz1` | keep current despite SciPy loss |
 
 ## Current Readiness
 
@@ -70,7 +73,7 @@ win/loss/neutral ledger lives in `docs/progress/perf-negative-results.md`.
 | FFT CSD performance | measured reject | rfft route regressed 4096 internally and was 1.42-1.75x slower than the equivalent SciPy rfft formula; full-complex route restored |
 | FFT CSD correctness | guarded | full-complex equivalence guard retained; final fsci-fft gates recorded in `docs/progress/perf-release-readiness-scorecard.md` |
 | `fsci-opt` lint/build gate | guarded | `cargo check -p fsci-opt --all-targets`, `cargo fmt -p fsci-opt --check`, and `cargo clippy -p fsci-opt --all-targets -- -D warnings` passed |
-| `fsci-special` `jnjnp_zeros` performance | measured loss plus internal keep | output-sensitive frontier is 17.82-50.77x faster than the old fixed candidate rectangle on same-worker `hz1`, but still 8.91-9.51x slower than SciPy |
+| `fsci-special` `jnjnp_zeros` performance | measured loss plus internal keep | guarded root-cost refinement is 1.17-1.20x faster than the post-frontier route on same-worker `hz1`, but still 10.62x slower than SciPy |
 | `fsci-special` `jnjnp_zeros` correctness | guarded | `jnjnp_adaptive_envelope_matches_oversized_reference` and `jnyn_and_jnjnp_zeros_match_scipy` passed via rch |
 | `fsci-special` lint/build gate | partial | `cargo check -p fsci-special --all-targets` passed; clippy `-D warnings` stopped on existing `fsci-integrate`/`fsci-linalg` dependency lints; broad rustfmt/touched-file rustfmt remain blocked by pre-existing formatting drift outside this patch |
 | `fsci-fft` lint/build gate | guarded | `cargo check -p fsci-fft --all-targets`, focused CSD/rfft tests, and `cargo clippy -p fsci-fft --all-targets -- -D warnings` passed; broad rustfmt remains blocked by pre-existing file-wide drift |

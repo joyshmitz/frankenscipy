@@ -4,6 +4,53 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-19 - frankenscipy-x9ckc - jnjnp_zeros root-cost refinement
+
+- Agent: cod-b / MistyBirch
+- Lever: reduce the residual per-root cost after `frankenscipy-01lxz` by
+  replacing generic strict-mode `J_n`/`J_n'` zero evaluation with direct
+  integer-order kernels plus bracket-safe secant/Newton refinement. The Newton
+  path uses Bessel derivative identities and falls back to bracketed refinement
+  when the correction is not finite or would leave the current bracket.
+- Graveyard/artifact route tested: lower-constant scalar kernel, guarded
+  Newton/root-polishing, branch-constrained fast path with deterministic
+  bracket fallback.
+- Decision: KEEP as a measured internal win, route residual SciPy loss deeper.
+  No revert.
+- Artifact:
+  `tests/artifacts/perf/frankenscipy-x9ckc-jnjnp-rootcost/EVIDENCE.md`
+- Baseline/candidate command:
+  `RCH_WORKER=hz1 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec -- cargo bench -p fsci-special --bench special_bench -- acoco_gauntlet_jnjnp_zeros --noplot`
+- SciPy oracle command:
+  local Python timing of `scipy.special.jnjnp_zeros` because rch worker `hz1`
+  could not import `scipy.special`.
+- Same-worker internal A/B on rch worker `hz1`:
+
+  | Workload | Baseline current mean | Candidate current mean | Candidate/baseline | Verdict |
+  | --- | ---: | ---: | ---: | --- |
+  | `jnjnp_zeros(nt=64)` | 5.4622 ms | 4.6666 ms | 0.854x time, 1.17x faster | keep |
+  | `jnjnp_zeros(nt=128)` | 9.9958 ms | 8.3620 ms | 0.837x time, 1.20x faster | keep |
+
+- Local SciPy oracle (`scipy.special.jnjnp_zeros`, SciPy 1.17.1):
+
+  | Workload | Candidate Rust mean | SciPy mean | Candidate/SciPy | Verdict |
+  | --- | ---: | ---: | ---: | --- |
+  | `jnjnp_zeros(nt=64)` | 4.6666 ms | 439.49 us | 10.62x slower | residual loss |
+  | `jnjnp_zeros(nt=128)` | 8.3620 ms | 787.18 us | 10.62x slower | residual loss |
+
+- SciPy win/loss/neutral: `0/2/0`.
+- Same-worker internal keep/loss/neutral: `2/0/0`.
+- Correctness/conformance guards:
+  - PASS: `RCH_WORKER=hz1 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec -- cargo test -p fsci-special jnjnp -- --nocapture`.
+- Negative evidence: guarded root polishing and direct integer-order derivative
+  evaluation are worthwhile but not enough; Rust is still roughly 10.6x slower
+  than SciPy on the local oracle. Do not repeat the same secant/Newton guard
+  tuning without a fresh profile showing the same loop is still dominant.
+- Retry condition: route deeper to a SciPy-style global zero enumerator,
+  batched recurrence/evaluation cache across neighboring orders, or a generated
+  lower-constant integer-order Bessel kernel that preserves the existing
+  SciPy-order output contract.
+
 ## 2026-06-19 - frankenscipy-01lxz - jnjnp_zeros output frontier
 
 - Agent: cod-b / MistyBirch
