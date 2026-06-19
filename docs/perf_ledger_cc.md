@@ -370,6 +370,19 @@ around n≈3–4k; the full jump-and-walk O(n log n) rewrite (now safety-netted 
 property test) is the future lever to win at ALL sizes. But at realistic small-medium
 sizes fsci now DOMINATES.
 
+## Integrate crate — ODE sweep vs scipy (2026-06-19) — fsci DOMINATES (biggest ratios yet)
+fsci vs scipy.integrate.solve_ivp (RK45, rtol 1e-6, atol 1e-9):
+
+| ODE | fsci | scipy | ratio |
+|---|---|---|---|
+| exponential decay (0,10) | 15.7 µs | 1284 µs | **81.6× faster** |
+| Lorenz (0,1) | 24.4 µs | 1935 µs | **79.2× faster** |
+
+The ~80× is structural: fsci's RHS is compiled Rust evaluated inline, scipy calls a Python
+callback at every RK45 stage + runs the step loop in Python. Any ODE/quadrature with a
+cheap RHS will show this — fsci's no-callback-overhead is decisive. Integrate ODE path
+HARVESTED (dominant).
+
 ## Ndimage crate — filter/morphology sweep vs scipy (2026-06-19)
 fsci vs scipy.ndimage (256² / 160² images):
 
