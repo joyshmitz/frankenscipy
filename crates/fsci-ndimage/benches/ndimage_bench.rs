@@ -81,10 +81,27 @@ fn bench_rank_filter(c: &mut Criterion) {
     group.finish();
 }
 
+/// Correlation (precomputed tap-delta table, frankenscipy-e3r7e) and the separable
+/// Gaussian filter — the common dense-filter workloads.
+fn bench_correlate_gaussian(c: &mut Criterion) {
+    use fsci_ndimage::{correlate, gaussian_filter};
+    let img = image(256);
+    let weights = NdArray::new(vec![1.0; 25], vec![5, 5]).expect("weights");
+    let mut group = c.benchmark_group("correlate_gaussian");
+    group.bench_function("correlate_5x5/256", |b| {
+        b.iter(|| correlate(black_box(&img), &weights, BoundaryMode::Reflect, 0.0).expect("corr"))
+    });
+    group.bench_function("gaussian_sigma2/256", |b| {
+        b.iter(|| gaussian_filter(black_box(&img), 2.0, BoundaryMode::Reflect, 0.0).expect("gauss"))
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_minmax_filter,
     bench_binary_morph,
-    bench_rank_filter
+    bench_rank_filter,
+    bench_correlate_gaussian
 );
 criterion_main!(benches);
