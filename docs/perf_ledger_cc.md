@@ -237,6 +237,13 @@ parallelization is correct/byte-identical; the slow kernel is the underlying spl
 interpolation). Bead filed for the ndimage owner.** This is the gauntlet's single
 biggest loss and the clearest fix-target: special-case order≤1 (direct bilinear) +
 hoist any per-pixel weight setup. Honest LOSS recorded.
+- **REPRODUCED (2nd run, integrity check):** order=3 STABLE (31.6→33.2 ms) while
+  order=1 consistently far slower (86→133 ms). So the anomaly is a REAL kernel
+  pathology, NOT contention variance (a contention spike would have hit order=3 too).
+  Refined hypothesis: for cheap order=1 pixels, the per-pixel `thread_local`
+  INTERP_SCRATCH borrow + generic B-spline weight path dominates — overhead that is
+  amortized away by order=3's heavier interpolation. Fix = add an order≤1 fast path
+  (direct linear weights, no thread_local borrow per pixel). Bead `wm14d` confirmed.
 
 ## Release-readiness summary (CrimsonForge beads, as of this round)
 
