@@ -393,6 +393,13 @@ binary path; fsci runs the general float min-filter on booleanized data. Byte-id
 (same 0/1 output). Needs exact window-origin-semantics matching with the deque path —
 high-risk multi-cycle, filed as a focused future effort, not started blind. minimum_filter
 (float) has no bit-pack lever; its constant factor needs SIMD on the deque (hard).
+DEAD-END (reverted clean, 296/0): rewrote `minmax_filter_along_axis` to the correlate1d
+slab pattern + parallelize over outer slabs (byte-identical). REGRESSED ~1.5-2× even after
+hoisting the per-slab VecDeque alloc to per-thread reuse. At 256² the filter is below the
+parallel gate (work < 2¹⁸ → serial) so the parallel path wasn't even engaged — the slab
+restructure measured slower under heavy multi-agent load, and the parallel path would add
+core-contention at larger sizes. Don't re-chase slab-parallel for minmax; the win (if any)
+needs the bit-pack (binary) or SIMD-deque (float) lever, not coarse line parallelism.
 
 ## Cluster crate — head-to-head sweep vs scipy (2026-06-19)
 fsci vs scipy.cluster.hierarchy: **cophenet n400 206µs vs 290µs = 1.40× faster** (WIN);
