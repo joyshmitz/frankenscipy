@@ -370,6 +370,23 @@ around n≈3–4k; the full jump-and-walk O(n log n) rewrite (now safety-netted 
 property test) is the future lever to win at ALL sizes. But at realistic small-medium
 sizes fsci now DOMINATES.
 
+## Stats crate — head-to-head sweep vs scipy (2026-06-19) — fsci DOMINATES
+fsci vs scipy.stats / scipy.stats.qmc — all WINS, no losses:
+
+| function | fsci | scipy | ratio |
+|---|---|---|---|
+| QMC Sobol 4096×2 | 9.6 µs | 200.7 µs | **20.8× faster** |
+| QMC Halton 4096×4 | 95.5 µs | 1326.7 µs | **13.9× faster** |
+| discrepancy centered 512×2 | 221 µs | 622 µs | **2.8× faster** |
+| discrepancy mixture 512×2 | 288 µs | 720 µs | **2.5× faster** |
+| kendalltau 2048 | 196 µs | 380 µs | **1.94× faster** |
+| discrepancy wraparound 512×2 | 225 µs | 412 µs | 1.83× faster |
+| discrepancy l2_star 512×2 | 227 µs | 383 µs | 1.69× faster |
+| kendalltau 4096 | 440 µs | 533 µs | 1.21× faster |
+
+Stats is HARVESTED — fsci wins every measured function (QMC sampling especially, where
+scipy's Python-loop generators are 14-21× slower than fsci's vectorized Rust).
+
 ## Signal crate — head-to-head sweep vs scipy (2026-06-19)
 Oracle `docs/perf_oracle_signal.py` + `/tmp/oracle_sig2.py`. fsci vs scipy.signal:
 
