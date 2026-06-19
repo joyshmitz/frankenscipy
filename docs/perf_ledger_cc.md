@@ -370,6 +370,26 @@ around n≈3–4k; the full jump-and-walk O(n log n) rewrite (now safety-netted 
 property test) is the future lever to win at ALL sizes. But at realistic small-medium
 sizes fsci now DOMINATES.
 
+## Signal crate — head-to-head sweep vs scipy (2026-06-19)
+Oracle `docs/perf_oracle_signal.py`. fsci vs scipy.signal:
+
+| function | fsci | scipy | ratio |
+|---|---|---|---|
+| **firls 257 (FIXED)** | **296.5 µs** | 366 µs | **1.24× faster** (was 0.42×) |
+| filtfilt 4096 biquad | 80.3 µs | 120.2 µs | 1.50× faster |
+| sosfilt 4096×2 | 34.0 µs | 46.0 µs | 1.35× faster |
+| lfilter 4096 biquad | 37.4 µs | 24.5 µs | **0.65× (1.53× SLOWER — OPEN)** |
+
+### ✅✅ firls LOSS → WIN: precompute integrate_cos table (9l5oo lever, signal crate)
+firls builds the LS normal-equations matrix Q[i,j] = w/2·(∫cos(2π(i-j)f)df + ∫cos(2π(i+j)f)df)
+over an O(n²) (i,j) double loop, calling `integrate_cos` (2 sin each) PER CELL — but it
+depends only on the integer args (i-j) and (i+j). FIX: precompute `ic[arg]` once per band
+(offset-indexed over [-(m)..2m], same arg signs ⇒ BYTE-IDENTICAL via exact negation), read
+Q from the table. O(n²) sin → O(n). **MEASURED: 873.6 → 296.5 µs = 2.95× self-speedup =
+1.24× FASTER than scipy** (was 2.38× slower). Conformance signal **707/0**. The precompute-
+element-invariant lever's 5th call site, first OUTSIDE interpolate/spatial. OPEN: lfilter
+1.53× slower (sequential IIR recurrence — scipy's tight C, no obvious lever).
+
 ## Interpolate crate — FULL head-to-head sweep vs scipy (2026-06-19)
 Measured every major interpolator (oracles `docs/perf_oracle_{griddata,clough_tocher,rect}.py`
 + `/tmp/oracle_{1d,rgi}.py`). fsci DOMINATES or matches scipy across the board — no

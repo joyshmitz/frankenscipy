@@ -10923,6 +10923,24 @@ pub fn firls(
 
         let pi = std::f64::consts::PI;
 
+        // integrate_cos(freq) = ∫ cos(2π·freq·f) df over [f_lo, f_hi]. Q[i,j] needs it
+        // only at freq = (i-j) and (i+j), so precompute ONE value per distinct integer
+        // argument (offset-indexed over [-(m) .. 2m]) instead of recomputing 2 sin per
+        // (i,j) — O(n) sin total instead of O(n²). Same argument signs as the original
+        // per-cell calls ⇒ byte-identical. frankenscipy-9l5oo.
+        let integrate_cos = |freq: f64| -> f64 {
+            if freq.abs() < 1e-15 {
+                df
+            } else {
+                let pf = 2.0 * pi * freq;
+                ((pf * f_hi).sin() - (pf * f_lo).sin()) / pf
+            }
+        };
+        let offset = n_coeffs - 1;
+        let ic: Vec<f64> = (0..=3 * offset)
+            .map(|idx| integrate_cos(idx as f64 - offset as f64))
+            .collect();
+
         for (i, row_i) in q.iter_mut().enumerate().take(n_coeffs) {
             // b[i] = w * ∫ D(f) cos(2πif) df over [f_lo, f_hi]
             let bi = if i == 0 {
@@ -10946,21 +10964,13 @@ pub fn firls(
             b_vec[i] += bi;
 
             for (j, cell) in row_i.iter_mut().enumerate().skip(i) {
-                // Q[i,j] = w * ∫ cos(2πif) cos(2πjf) df
-                // = w/2 * ∫ [cos(2π(i-j)f) + cos(2π(i+j)f)] df
+                // Q[i,j] = w/2 * ∫ [cos(2π(i-j)f) + cos(2π(i+j)f)] df, read from the table
+                // (index = arg + offset; i+offset-j and i+j+offset are underflow-safe as
+                // j ≤ m = offset). Same arguments as the original ⇒ byte-identical.
                 let qij = if i == 0 && j == 0 {
                     w * df
                 } else {
-                    let integrate_cos = |freq: f64| -> f64 {
-                        if freq.abs() < 1e-15 {
-                            df
-                        } else {
-                            let pf = 2.0 * pi * freq;
-                            ((pf * f_hi).sin() - (pf * f_lo).sin()) / pf
-                        }
-                    };
-                    w * 0.5
-                        * (integrate_cos(i as f64 - j as f64) + integrate_cos(i as f64 + j as f64))
+                    w * 0.5 * (ic[i + offset - j] + ic[i + j + offset])
                 };
                 *cell += qij;
             }
