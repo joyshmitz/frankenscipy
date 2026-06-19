@@ -371,20 +371,23 @@ pub fn cross_spectral_density(x: &[f64], y: &[f64], fs: f64) -> CrossSpectralRes
     let n = x.len();
     let opts = crate::FftOptions::default();
 
-    let fx = crate::rfft(x, &opts)?;
-    let fy = crate::rfft(y, &opts)?;
-    debug_assert_eq!(fx.len(), n / 2 + 1);
-    debug_assert_eq!(fy.len(), fx.len());
+    let cx: Vec<(f64, f64)> = x.iter().map(|&v| (v, 0.0)).collect();
+    let cy: Vec<(f64, f64)> = y.iter().map(|&v| (v, 0.0)).collect();
 
-    let n_freq = fx.len();
+    let fx = crate::fft(&cx, &opts)?;
+    let fy = crate::fft(&cy, &opts)?;
+
+    let n_freq = n / 2 + 1;
     let mut csd = Vec::with_capacity(n_freq);
     let mut freqs = Vec::with_capacity(n_freq);
-    let scale = 1.0 / (n as f64 * fs);
 
-    for (k, (&(xr, xi), &(yr, yi))) in fx.iter().zip(fy.iter()).enumerate() {
+    for k in 0..n_freq {
+        let (xr, xi) = fx[k];
+        let (yr, yi) = fy[k];
         // Cross-spectrum: X * conj(Y)
         let cr = xr * yr + xi * yi;
         let ci = xi * yr - xr * yi;
+        let scale = 1.0 / (n as f64 * fs);
         csd.push((cr * scale, ci * scale));
         freqs.push(k as f64 * fs / n as f64);
     }
@@ -784,10 +787,9 @@ mod tests {
 
     #[test]
     fn cross_spectral_density_matches_full_complex_fft_route() {
-        // PERF GUARD [frankenscipy-8l8r1.116]: CSD only needs the
-        // one-sided spectrum. The production path routes real inputs through
-        // rfft; this pins equivalence to the previous full-complex FFT route
-        // so batch conformance can reject any Hermitian unpack drift.
+        // PERF GUARD [frankenscipy-8l8r1.116]: the rfft production route was
+        // measured and rejected. Keep this full-complex equivalence guard so a
+        // future retry can prove it did not change the public CSD contract.
         for n in [7_usize, 8, 31, 32] {
             let x: Vec<f64> = (0..n)
                 .map(|idx| (idx as f64 * 0.23).sin() + 0.25 * (idx as f64 * 0.07).cos())

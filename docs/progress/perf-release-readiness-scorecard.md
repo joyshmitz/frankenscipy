@@ -37,6 +37,51 @@ Readiness notes:
 - The clippy blocker is outside this benchmark/evidence change and should be
   handled as a separate lint-hygiene bead.
 
+## 2026-06-19 - fsci-fft CSD rfft-route gauntlet
+
+- Agent: cod-b / MistyBirch
+- Bead: `frankenscipy-8l8r1.116`
+- Decision: REJECT and revert the `cross_spectral_density` rfft real-spectrum
+  route. Score for this sub-cluster: 3/5.
+- Artifact: `tests/artifacts/perf/2026-06-19-fft-csd-gauntlet/csd_rfft_reject.json`
+
+| Gate | Result | Notes |
+| --- | --- | --- |
+| Rust per-crate Criterion bench | PASS | same-worker parent/candidate A/B on `hz1`; post-revert confirmation landed on `ovh-a` and is not used for the A/B |
+| SciPy head-to-head oracle | PASS | local SciPy 1.17.1 / NumPy 2.4.3, equivalent `scipy.fft.rfft` cross-spectrum formula |
+| Source revert | PASS | `crates/fsci-fft/src/helpers.rs` restored to the full-complex route |
+| Rust per-crate compile | PASS | `rch exec -- env CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b RUSTFLAGS='-C force-frame-pointers=yes' cargo check -p fsci-fft --all-targets` |
+| CSD conformance guard | PASS | `rch exec -- env CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b RUSTFLAGS='-C force-frame-pointers=yes' cargo test -p fsci-fft cross_spectral_density -- --nocapture` |
+| Clippy `-D warnings` | PASS | `rch exec -- env CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b RUSTFLAGS='-C force-frame-pointers=yes' cargo clippy -p fsci-fft --all-targets -- -D warnings`; required a test-only `dst` import and one golden-value precision cleanup |
+| Golden-value guard | PASS | `rch exec -- env CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b RUSTFLAGS='-C force-frame-pointers=yes' cargo test -p fsci-fft rfft_matches_exact_numpy_dft_golden_values -- --nocapture` |
+| Diff hygiene | PASS | `git diff --check` |
+| UBS changed-file scan | PASS | `ubs` on the changed file set exited 0; warnings were broad existing FFT inventory, not commit-blocking criticals |
+| Changed-file formatting | PASS/BLOCKED | `rustfmt --edition 2024 --check` passes for the changed bench/import surface; broad crate formatting still reports pre-existing file-wide drift in `src/lib.rs` and `src/helpers.rs`, so this commit does not normalize unrelated formatting |
+
+Same-worker internal A/B:
+
+| Workload | Parent full-complex mean | Candidate rfft mean | Candidate time vs parent | Verdict |
+| --- | ---: | ---: | ---: | --- |
+| `fft_helpers/cross_spectral_density/4096` | 112.08 us | 125.88 us | 1.123x | loss |
+| `fft_helpers/cross_spectral_density/65536` | 4.9543 ms | 2.3509 ms | 0.475x | win |
+
+Candidate vs original SciPy rfft formula:
+
+| Workload | Candidate Rust mean | SciPy p50 | SciPy/Rust | Verdict |
+| --- | ---: | ---: | ---: | --- |
+| `cross_spectral_density/4096` | 125.88 us | 72.091 us | 0.573x | Rust slower |
+| `cross_spectral_density/65536` | 2.3509 ms | 1.653584 ms | 0.703x | Rust slower |
+
+Readiness notes:
+
+- The rfft route is not release evidence: it has one internal win, one
+  internal loss, and loses both rows against the fastest equivalent SciPy
+  formula.
+- The CSD Criterion rows and SciPy oracle script remain as durable gauntlet
+  infrastructure for future FFT work.
+- Future attempts need a same-worker win on both 4096 and 65536 and must beat
+  the SciPy rfft formula before replacing the full-complex route again.
+
 ## 2026-06-19 - fsci-opt L-BFGS-B Wolfe-probe gauntlet
 
 - Agent: cod-b / MistyBirch

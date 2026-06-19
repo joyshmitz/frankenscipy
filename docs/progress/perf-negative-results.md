@@ -167,6 +167,54 @@ SciPy 1.17.1 / NumPy 2.4.3 oracle p50):
   and a new same-worker parent/candidate A/B shows a material win across the
   10D Rosenbrock and 32D quadratic rows.
 
+## 2026-06-19 - frankenscipy-8l8r1.116 - FFT CSD rfft real-spectrum route
+
+- Agent: cod-b / MistyBirch
+- Lever: route `fsci_fft::cross_spectral_density` real input pairs through
+  two `rfft` calls instead of promoting both inputs to complex buffers and
+  running two full complex FFTs before taking the one-sided half.
+- Status: measured REJECT and reverted. The rfft route won the large internal
+  row but regressed the 4096 row and remained slower than the fastest
+  equivalent SciPy `scipy.fft.rfft` cross-spectrum formula on both measured
+  sizes. The release route is restored to the full-complex implementation while
+  keeping the Criterion CSD rows, SciPy oracle script, and full-complex
+  equivalence guard.
+- Artifact: `tests/artifacts/perf/2026-06-19-fft-csd-gauntlet/csd_rfft_reject.json`
+- Optimization commit under test: `d027c140bc8a937877e8c018cf7265d1f4bc5049`
+  vs parent `55f32c99f69991f4ab252621dd86948dc6e95b20`.
+
+Same-worker internal A/B (`hz1`, Criterion mean; parent scratch had only the
+same CSD bench harness added, with parent library code unchanged):
+
+| Workload | Parent full-complex mean | Candidate rfft mean | Candidate time vs parent | Verdict |
+| --- | ---: | ---: | ---: | --- |
+| `fft_helpers/cross_spectral_density/4096` | 112.08 us | 125.88 us | 1.123x | loss |
+| `fft_helpers/cross_spectral_density/65536` | 4.9543 ms | 2.3509 ms | 0.475x | win |
+
+Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
+--warmups 5`, Python 3.13.7 / NumPy 2.4.3 / SciPy 1.17.1):
+
+| Workload | SciPy rfft-formula p50 | Candidate Rust mean | SciPy/Rust | Verdict |
+| --- | ---: | ---: | ---: | --- |
+| `cross_spectral_density/4096` | 72.091 us | 125.88 us | 0.573x | Rust slower |
+| `cross_spectral_density/65536` | 1.653584 ms | 2.3509 ms | 0.703x | Rust slower |
+
+- Correctness/conformance guards:
+  - PASS: `python3 docs/perf_oracle_fft_csd.py --reps 120 --warmups 5`
+  - PASS: `rch exec -- env CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b RUSTFLAGS='-C force-frame-pointers=yes' cargo bench -p fsci-fft --bench fft_bench -- fft_helpers/cross_spectral_density --noplot` for the parent/candidate measurement rows above
+  - PASS: `rch exec -- env CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b RUSTFLAGS='-C force-frame-pointers=yes' cargo check -p fsci-fft --all-targets`
+  - PASS: `rch exec -- env CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b RUSTFLAGS='-C force-frame-pointers=yes' cargo test -p fsci-fft cross_spectral_density -- --nocapture`
+  - PASS: `rch exec -- env CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b RUSTFLAGS='-C force-frame-pointers=yes' cargo clippy -p fsci-fft --all-targets -- -D warnings`
+  - PASS: `rch exec -- env CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b RUSTFLAGS='-C force-frame-pointers=yes' cargo test -p fsci-fft rfft_matches_exact_numpy_dft_golden_values -- --nocapture`
+  - PASS: `git diff --check` and targeted `rustfmt --edition 2024 --check crates/fsci-fft/benches/fft_bench.rs crates/fsci-fft/src/transforms.rs`
+  - PASS: `ubs` on the changed file set exited 0.
+  - BLOCKED: broad `fsci-fft` rustfmt still reports pre-existing file-wide drift in `src/lib.rs` and `src/helpers.rs`; this commit avoids unrelated formatting churn.
+- Retry condition: do not retry this standalone rfft CSD route. Reopen only if
+  a fresh same-worker profile attributes a clearly-above-noise share to full
+  complex promotion inside `cross_spectral_density` on a workload of at least
+  65536 samples, and the replacement beats the fastest equivalent SciPy rfft
+  formula while not regressing the 4096 row.
+
 ## 2026-06-18 - frankenscipy-fo9cj - sparse Arnoldi row-major basis arena
 
 - Agent: cod-b / MistyBirch

@@ -1,6 +1,6 @@
 # Gauntlet Release Scorecard
 
-Last updated: 2026-06-19 by cod-a / MistyBirch.
+Last updated: 2026-06-19 by cod-a/cod-b / MistyBirch.
 
 This scorecard tracks code-first performance work that has been converted into
 measured head-to-head evidence against the SciPy original. The detailed
@@ -26,6 +26,8 @@ win/loss/neutral ledger lives in `docs/progress/perf-negative-results.md`.
 | --- | --- | --- | ---: | ---: | --- |
 | `frankenscipy-8l8r1.122` | L-BFGS-B mutable Wolfe finite-difference probe scratch | 10D Rosenbrock finite-difference `L-BFGS-B` | 106.440 us | 87.087 us parent | reject and revert |
 | `frankenscipy-8l8r1.122` | L-BFGS-B mutable Wolfe finite-difference probe scratch | 32D quadratic finite-difference `L-BFGS-B` | 6.055 us | 5.246 us parent | reject and revert |
+| `frankenscipy-8l8r1.116` | FFT CSD rfft real-spectrum route | 4096-sample CSD helper | 125.88 us | 112.08 us parent | reject and revert |
+| `frankenscipy-8l8r1.116` | FFT CSD rfft real-spectrum route | 65536-sample CSD helper vs SciPy rfft formula | 2.3509 ms | 1.653584 ms SciPy | reject and revert |
 
 ## Internal Regression Gates
 
@@ -36,6 +38,7 @@ win/loss/neutral ledger lives in `docs/progress/perf-negative-results.md`.
 | `frankenscipy-u0ucw` | Wide `lstsq` materialized `A^T` | Row-streamed `A A^T` + `A^T y` | 1.035x faster | revert row-streaming |
 | `frankenscipy-8l8r1.122` | Parent-style `line_search_wolfe2` gradient closure | Mutable `line_search_wolfe2_with_gradient_probe` path | 1.222x faster on 10D Rosenbrock; 1.154x faster on 32D quadratic | revert mutable-probe route |
 | `frankenscipy-acoco` | `jnjnp_zeros` bracket reuse | Pre-optimization duplicate `jnp_zeros` bracketing route | 1.26x faster at `nt=64`; 1.33x faster at `nt=128` | keep current despite SciPy loss |
+| `frankenscipy-8l8r1.116` | Full-complex CSD route | rfft CSD route | 1.123x faster on 4096; rfft wins 2.107x on 65536 but loses to SciPy rfft oracle | revert rfft route |
 
 ## Current Readiness
 
@@ -47,12 +50,15 @@ win/loss/neutral ledger lives in `docs/progress/perf-negative-results.md`.
 | Wide `lstsq` correctness | guarded | `public_wide_min_norm_lstsq_route_perf_probe` passed in release with max abs diff `3.38840067115597776e-13` |
 | L-BFGS-B performance | measured reject plus current-route keep | mutable Wolfe probe scratch regressed same-worker rows; reverted route is still 173.78-229.23x faster than SciPy on measured callback workloads |
 | L-BFGS-B correctness | guarded | `fsci-opt lbfgsb` tests and SciPy-backed `diff_opt_lbfgsb_minimize` conformance passed after revert |
+| FFT CSD performance | measured reject | rfft route regressed 4096 internally and was 1.42-1.75x slower than the equivalent SciPy rfft formula; full-complex route restored |
+| FFT CSD correctness | guarded | full-complex equivalence guard retained; final fsci-fft gates recorded in `docs/progress/perf-release-readiness-scorecard.md` |
 | `fsci-opt` lint/build gate | guarded | `cargo check -p fsci-opt --all-targets`, `cargo fmt -p fsci-opt --check`, and `cargo clippy -p fsci-opt --all-targets -- -D warnings` passed |
 | `fsci-special` `jnjnp_zeros` performance | measured loss plus internal keep | current route is 1.26-1.33x faster than the old duplicate-bracketing route, but 163.53-443.57x slower than SciPy |
 | `fsci-special` `jnjnp_zeros` correctness | guarded | `jnyn_and_jnjnp_zeros_match_scipy` and `derivative_bessel_zeros_match_scipy_reference_points` passed via rch |
 | `fsci-special` lint/build gate | partial | `cargo check -p fsci-special --benches` and benchmark-file rustfmt passed; clippy `-D warnings` stopped on existing `fsci-integrate`/`fsci-linalg` dependency lints |
+| `fsci-fft` lint/build gate | guarded | `cargo check -p fsci-fft --all-targets`, focused CSD/rfft tests, and `cargo clippy -p fsci-fft --all-targets -- -D warnings` passed; broad rustfmt remains blocked by pre-existing file-wide drift |
 | rch SciPy oracle parity | blocked on worker image | `vmi1152480` and `vmi1227854` lacked `scipy`; local same-host oracle supplied the head-to-head ratios |
-| Release readiness | partial | two linalg perf clusters, one `fsci-opt` L-BFGS-B reject, and one `fsci-special` measured SciPy loss verified; other code-first perf ledger entries still need gauntlet conversion |
+| Release readiness | partial | two linalg perf clusters, one `fsci-opt` L-BFGS-B reject, one `fsci-special` measured SciPy loss, and one `fsci-fft` CSD reject verified; other code-first perf ledger entries still need gauntlet conversion |
 
 ## Pending Gauntlet Backlog
 

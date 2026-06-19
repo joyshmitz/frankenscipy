@@ -4006,9 +4006,9 @@ mod tests {
     use fsci_runtime::{AuditAction, RuntimeMode};
 
     use super::{
-        Complex64, FftError, FftOptions, TransformKind, WorkerPolicy, dct, dct_iv, dctn, dst_ii,
-        dst_iii, dstn, estimate_fft_flops, fft, fft_with_audit, fft2, fftn, fwht, hfft, hfft2,
-        hfftn, idct, idctn, idstn, ifft, ifft2, ifftn, ihfft, ihfft2, ihfftn, irfft, irfft2,
+        Complex64, FftError, FftOptions, TransformKind, WorkerPolicy, dct, dct_iv, dctn, dst,
+        dst_ii, dst_iii, dstn, estimate_fft_flops, fft, fft_with_audit, fft2, fftn, fwht, hfft,
+        hfft2, hfftn, idct, idctn, idstn, ifft, ifft2, ifftn, ihfft, ihfft2, ihfftn, irfft, irfft2,
         irfftn, is_fast_len, next_fast_len, prev_fast_len, rfft, rfft_with_audit, rfft2, rfftn,
         sync_audit_ledger, take_transform_traces,
     };

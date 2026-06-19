@@ -1,0 +1,99 @@
+{
+  "artifact_schema": "frankenscipy.gauntlet.perf_result.v1",
+  "agent": "cod-b / MistyBirch",
+  "bead": "frankenscipy-8l8r1.116",
+  "candidate_commit_under_test": "d027c140bc8a937877e8c018cf7265d1f4bc5049",
+  "decision": "reject_and_revert_rfft_csd_route",
+  "generated_at_utc": "2026-06-19T04:09:17Z",
+  "metric": "Criterion mean for Rust rows; Python perf_counter p50 for SciPy rows",
+  "parent_commit_under_test": "55f32c99f69991f4ab252621dd86948dc6e95b20",
+  "run_id": "2026-06-19-fft-csd-gauntlet",
+  "subject_head_before_revert": "2e73369b3fce49bd1ba1d66727cffb5c8d1933b2",
+  "commands": {
+    "candidate_hz1": "RCH_WORKER=hz1 RCH_REQUESTED_WORKER=hz1 rch exec --json -- env CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b RUSTFLAGS='-C force-frame-pointers=yes' cargo bench -p fsci-fft --bench fft_bench -- fft_helpers/cross_spectral_density --noplot",
+    "parent_hz1": "rch exec --json -- env CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b RUSTFLAGS='-C force-frame-pointers=yes' cargo bench -p fsci-fft --bench fft_bench -- fft_helpers/cross_spectral_density --noplot",
+    "scipy_oracle": "python3 docs/perf_oracle_fft_csd.py --reps 120 --warmups 5"
+  },
+  "fairness_notes": [
+    "Same-worker internal A/B used hz1 for parent full-complex route and candidate rfft route.",
+    "The parent commit did not have the CSD Criterion row; the same bench harness was applied only in the parent scratch worktree without changing parent library code.",
+    "SciPy oracle uses the equivalent scipy.fft.rfft cross-spectrum formula as the fastest matching original-SciPy route, with the full-complex scipy.fft.fft formula also reported.",
+    "A discarded current-tree routing run on vmi1227854 measured 53.782 us and 1.6805 ms before parent harness parity existed; it is not used for the decision.",
+    "A post-revert confirmation run landed on ovh-a, not hz1, and is recorded only as non-comparable confirmation that the reverted route benchmarks."
+  ],
+  "internal_ab_hz1": [
+    {
+      "workload": "fft_helpers/cross_spectral_density/4096",
+      "parent_full_complex_mean_us": 112.08,
+      "candidate_rfft_mean_us": 125.88,
+      "candidate_time_vs_parent": 1.123,
+      "verdict": "loss"
+    },
+    {
+      "workload": "fft_helpers/cross_spectral_density/65536",
+      "parent_full_complex_mean_us": 4954.3,
+      "candidate_rfft_mean_us": 2350.9,
+      "candidate_time_vs_parent": 0.475,
+      "verdict": "win"
+    }
+  ],
+  "post_revert_confirmation": {
+    "worker": "ovh-a",
+    "workload_4096_mean_us": 72.461,
+    "workload_65536_mean_us": 3166.1,
+    "comparability": "not used for hz1 A/B; confirms reverted full-complex route runs"
+  },
+  "scipy_oracle_local": {
+    "python": "3.13.7",
+    "numpy": "2.4.3",
+    "scipy": "1.17.1",
+    "rows": [
+      {
+        "workload": "scipy_rfft_formula/4096",
+        "p50_us": 72.091,
+        "p95_us": 77.337
+      },
+      {
+        "workload": "scipy_full_fft_formula/4096",
+        "p50_us": 70.429,
+        "p95_us": 77.797
+      },
+      {
+        "workload": "scipy_rfft_formula/65536",
+        "p50_us": 1653.584,
+        "p95_us": 2393.705
+      },
+      {
+        "workload": "scipy_full_fft_formula/65536",
+        "p50_us": 3490.894,
+        "p95_us": 3655.175
+      }
+    ]
+  },
+  "ratio_vs_scipy_rfft_formula": [
+    {
+      "workload": "4096",
+      "candidate_rfft_scipy_over_rust": 0.573,
+      "post_revert_full_complex_scipy_over_rust": 0.643,
+      "verdict": "rust_slower_than_scipy"
+    },
+    {
+      "workload": "65536",
+      "candidate_rfft_scipy_over_rust": 0.703,
+      "post_revert_full_complex_scipy_over_rust": 0.334,
+      "verdict": "rust_slower_than_scipy"
+    }
+  ],
+  "revert_summary": {
+    "reverted_files": [
+      "crates/fsci-fft/src/helpers.rs"
+    ],
+    "kept_infrastructure": [
+      "crates/fsci-fft/benches/fft_bench.rs CSD Criterion rows",
+      "cross_spectral_density_matches_full_complex_fft_route contract guard",
+      "docs/perf_oracle_fft_csd.py",
+      "this artifact"
+    ],
+    "reason": "Candidate regressed 4096 internally and remained slower than the fastest equivalent SciPy rfft formula on both measured sizes."
+  }
+}

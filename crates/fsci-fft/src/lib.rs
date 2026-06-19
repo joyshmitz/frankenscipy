@@ -836,7 +836,7 @@ mod tests {
         let input: Vec<f64> = vec![0.5, -1.0, 2.5, 0.0, -3.5];
         let expected: Vec<Complex64> = vec![
             (-1.5, 0.0),
-            (-2.9131189606246322, -3.8471044214690666),
+            (-2.913_118_960_624_632, -3.8471044214690666),
             (4.913118960624631, 0.9081781600067007),
         ];
         let result = rfft(&input, &FftOptions::default()).expect("rfft should succeed");

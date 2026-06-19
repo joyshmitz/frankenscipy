@@ -35,15 +35,13 @@ fn make_real_pair(n: usize) -> (Vec<f64>, Vec<f64>) {
     let x: Vec<f64> = (0..n)
         .map(|i| {
             let t = i as f64 / n as f64;
-            (2.0 * std::f64::consts::PI * t).sin()
-                + 0.25 * (13.0 * std::f64::consts::PI * t).cos()
+            (2.0 * std::f64::consts::PI * t).sin() + 0.25 * (13.0 * std::f64::consts::PI * t).cos()
         })
         .collect();
     let y: Vec<f64> = (0..n)
         .map(|i| {
             let t = i as f64 / n as f64;
-            (3.0 * std::f64::consts::PI * t).cos()
-                - 0.5 * (17.0 * std::f64::consts::PI * t).sin()
+            (3.0 * std::f64::consts::PI * t).cos() - 0.5 * (17.0 * std::f64::consts::PI * t).sin()
         })
         .collect();
     (x, y)
