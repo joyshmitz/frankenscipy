@@ -32,6 +32,8 @@ regressions are reverted. Entries also routed to MistyBirch for the canonical me
 | cophenet mem::take (jphzn) | cophenet n=400 | 401.5 µs | 219.7 µs | **1.83× faster** | — | ✅ KEEP |
 | kmeans2 double-buffer (4ylee) | kmeans2 k4 n2000 iter=50 | 2104.7 µs | 5126 µs | **0.41× (2.4× SLOWER)** | scalar assign vs scipy SIMD | ⚠️ kernel gap → bead |
 | kmeans Lloyd early-stop | kmeans k4 n2000 | 2104.7 µs* | 357.4 µs | **5.9× faster** | *vs scipy kmeans2 fixed-iter | ✅ KEEP (early-stop) |
+| correlate tap-table (e3r7e) | correlate 5x5 256² | 933.7 µs | 1099 µs | **0.85× (1.18× slower)** | byte-identical | ✅ KEEP (parity) |
+| gaussian_filter (NOT mine) | gaussian σ=2 256² | 1143.0 µs | 3238 µs | **0.35× (2.83× slower)** | separable but slow 1D kernel | ⚠️ gap → owner |
 
 ## Detail
 
@@ -119,6 +121,17 @@ Oracle: scipy.cluster.vq.kmeans2 (n=2000, k=4, d=4, fixed init).
   50 iters** (scipy.cluster.vq.kmeans2 has no convergence check). fsci's early-stop is
   a real practical advantage on converged data. KEEP. (Not a per-iteration kernel
   claim — it converges in ~5 iters.)
+
+### ndimage correlate + gaussian_filter (correlate = frankenscipy-e3r7e) — parity / gap
+Oracle `docs/perf_oracle_ndimage.py` (scipy.ndimage, 256² image).
+- **correlate 5×5: fsci 1099 µs vs scipy 933.7 µs = 0.85× (1.18× slower).** Near-
+  parity. The `e3r7e` precomputed tap-delta table is byte-identical (not a regression);
+  fsci's direct correlation is within 18% of scipy's C. KEEP.
+- **gaussian_filter σ=2: fsci 3238 µs vs scipy 1143 µs = 0.35× (2.83× SLOWER).** NOT my
+  optimization. fsci IS separable (per-axis `gaussian_filter1d_axis` passes), so the
+  gap is a slow 1D convolution kernel vs scipy's tuned C `correlate1d` — a SIMD/inner-
+  loop opportunity (same class as kmeans2/pdist), not a parallelization. Noted for the
+  ndimage owner; not reverted (not mine, not a regression).
 
 ## Release-readiness summary (CrimsonForge beads, as of this round)
 
