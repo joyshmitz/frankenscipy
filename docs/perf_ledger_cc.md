@@ -370,6 +370,17 @@ around n≈3–4k; the full jump-and-walk O(n log n) rewrite (now safety-netted 
 property test) is the future lever to win at ALL sizes. But at realistic small-medium
 sizes fsci now DOMINATES.
 
+## Cluster crate — head-to-head sweep vs scipy (2026-06-19)
+fsci vs scipy.cluster.hierarchy: **cophenet n400 206µs vs 290µs = 1.40× faster** (WIN);
+**linkage_average n400 1.847ms vs 1.655ms = 1.12× slower** (near-parity, OPEN). GMM/
+silhouette already wins (gauntlet ledger); kmeans2 chaotic-iteration loss (unfixable
+byte-identically). DEAD-END (reverted clean): parallelizing linkage's O(n²·dim) distance
+build via split_at_mut row-blocks was BYTE-IDENTICAL (193/0) but **2.5× SLOWER** (1.847→
+4.61ms) — the distance build is NOT the bottleneck (the NN-chain `agglomerate_nnarray`
+is), so parallelizing the small part added thread overhead + 2× redundant sqrt + cache
+thrash on the 5 MB arena. The 1.12× gap lives in the NN-chain, not the distance fill —
+don't re-chase the distance parallelization.
+
 ## Stats crate — head-to-head sweep vs scipy (2026-06-19) — fsci DOMINATES
 fsci vs scipy.stats / scipy.stats.qmc — all WINS, no losses:
 
