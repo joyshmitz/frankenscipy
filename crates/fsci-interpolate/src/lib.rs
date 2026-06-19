@@ -4634,25 +4634,28 @@ impl BPoly {
                 (0..=k).map(|a| binom(k, a)).collect()
             })
             .collect();
-        xs.iter()
-            .map(|&xval| {
-                if xval.is_nan() {
-                    return f64::NAN;
-                }
-                let seg = self.segment(xval);
-                let coeffs = &self.c[seg];
-                let k = coeffs.len() - 1;
-                let d = self.x[seg + 1] - self.x[seg];
-                let s = (xval - self.x[seg]) / d;
-                let s1 = 1.0 - s;
-                let bn = &binoms[seg];
-                let mut value = 0.0;
-                for (a, &ca) in coeffs.iter().enumerate() {
-                    value += ca * bn[a] * s.powi(a as i32) * s1.powi((k - a) as i32);
-                }
-                value
-            })
-            .collect()
+        // Each query is an independent segment lookup + Bernstein sum reading the
+        // shared read-only `binoms` table, so split large query batches across
+        // threads (par_query_map) — bit-identical to the sequential map (order
+        // preserved, per-query pure). frankenscipy-yw7ts.
+        let work = self.c.first().map_or(1, Vec::len);
+        par_query_map(xs, work, |&xval| {
+            if xval.is_nan() {
+                return f64::NAN;
+            }
+            let seg = self.segment(xval);
+            let coeffs = &self.c[seg];
+            let k = coeffs.len() - 1;
+            let d = self.x[seg + 1] - self.x[seg];
+            let s = (xval - self.x[seg]) / d;
+            let s1 = 1.0 - s;
+            let bn = &binoms[seg];
+            let mut value = 0.0;
+            for (a, &ca) in coeffs.iter().enumerate() {
+                value += ca * bn[a] * s.powi(a as i32) * s1.powi((k - a) as i32);
+            }
+            value
+        })
     }
 
     /// The first derivative as a degree `k-1` Bernstein polynomial; the
