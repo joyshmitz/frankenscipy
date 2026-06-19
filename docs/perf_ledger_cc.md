@@ -404,6 +404,14 @@ the shared, actively-developed special crate — flagged, not dived into): a per
 POOL (amortize the per-call spawn) and/or a COST-AWARE gate (cheap kernels need a higher n
 threshold than 256). The measured ratios are contention-influenced; the bench is the harness
 to re-check on an idle machine. NOT a clean serial-dispatch loss as first claimed.
+KERNEL FINDING (dug to erf_scalar, error.rs:206): erf (4.49 ms) is 4× slower than the more-
+expensive gamma (1.04 ms) because the kernel is ITERATIVE — `erf_series_real` (Maclaurin, up
+to 80 terms for |x|<1) + `erfc_cf_real` (continued fraction for x≥1, ~10-30 iters) — whereas
+scipy's Cephes uses a fixed-degree RATIONAL approximation (~10 mults, no loop). REAL LEVER:
+port Cephes' rational erf/erfc (faster + matches scipy exactly, conformance-safe since scipy
+IS Cephes). Out of MY reach (needs Cephes's exact coefficients — no source access to
+transcribe — or a custom minimax rational fit). Flagged for the special owner: the per-element
+kernel speed (not just the thread spawn) is the real gap for the iterative special functions.
 
 ## Opt crate — minimize sweep vs scipy (2026-06-19) — fsci DOMINATES (largest ratios of phase)
 fsci vs scipy.optimize.minimize(method='BFGS') on Rosenbrock, x0=zeros:
