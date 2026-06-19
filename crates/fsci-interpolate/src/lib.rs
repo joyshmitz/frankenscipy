@@ -4953,55 +4953,102 @@ impl NdPPoly {
         }
         let orders: Vec<usize> = (0..ndim).map(|d| self.c_shape[d] - 1).collect();
         let total: usize = orders.iter().map(|&k| k + 1).product();
-        // Reused per-point scratch.
-        let mut cell = vec![0usize; ndim];
-        let mut dx = vec![0.0f64; ndim];
-        let mut idx = vec![0usize; ndim];
-        let mut powers: Vec<Vec<f64>> = orders.iter().map(|&kd| vec![0.0f64; kd + 1]).collect();
-        points
-            .iter()
-            .map(|point| {
-                for d in 0..ndim {
-                    let bp = &self.x[d];
-                    let m = bp.len() - 1;
-                    let mut j = 0usize;
-                    while j + 1 < m && point[d] >= bp[j + 1] {
-                        j += 1;
-                    }
-                    cell[d] = j;
-                    dx[d] = point[d] - bp[j];
+        // Per-point tensor-product Horner evaluation into caller-provided scratch
+        // (cell/dx/idx/powers). Each point is an independent O(total) contraction
+        // reading only the immutable coefficients/breakpoints, so split large point
+        // batches across threads into ordered output slots — byte-identical to the
+        // serial map (per-point pure, no cross-point reduction). Each thread carries
+        // its own scratch (the reused serial buffers become per-thread).
+        // frankenscipy-yw7ts.
+        let eval_point = |point: &[f64],
+                          cell: &mut [usize],
+                          dx: &mut [f64],
+                          idx: &mut [usize],
+                          powers: &mut [Vec<f64>]|
+         -> f64 {
+            for d in 0..ndim {
+                let bp = &self.x[d];
+                let m = bp.len() - 1;
+                let mut j = 0usize;
+                while j + 1 < m && point[d] >= bp[j + 1] {
+                    j += 1;
                 }
-                let mut base = 0usize;
-                for d in 0..ndim {
-                    base += cell[d] * stride[ndim + d];
+                cell[d] = j;
+                dx[d] = point[d] - bp[j];
+            }
+            let mut base = 0usize;
+            for d in 0..ndim {
+                base += cell[d] * stride[ndim + d];
+            }
+            for d in 0..ndim {
+                let kd = orders[d];
+                for id in 0..=kd {
+                    powers[d][id] = dx[d].powi((kd - id) as i32);
                 }
+            }
+            idx.iter_mut().for_each(|v| *v = 0);
+            let mut sum = 0.0f64;
+            for _ in 0..total {
+                let mut off = base;
+                let mut term = 1.0f64;
                 for d in 0..ndim {
-                    let kd = orders[d];
-                    for id in 0..=kd {
-                        powers[d][id] = dx[d].powi((kd - id) as i32);
-                    }
+                    off += idx[d] * stride[d];
+                    term *= powers[d][idx[d]];
                 }
-                idx.iter_mut().for_each(|v| *v = 0);
-                let mut sum = 0.0f64;
-                for _ in 0..total {
-                    let mut off = base;
-                    let mut term = 1.0f64;
-                    for d in 0..ndim {
-                        off += idx[d] * stride[d];
-                        term *= powers[d][idx[d]];
+                sum += self.c[off] * term;
+                for d in (0..ndim).rev() {
+                    idx[d] += 1;
+                    if idx[d] <= orders[d] {
+                        break;
                     }
-                    sum += self.c[off] * term;
-                    for d in (0..ndim).rev() {
-                        idx[d] += 1;
-                        if idx[d] <= orders[d] {
-                            break;
+                    idx[d] = 0;
+                }
+            }
+            sum
+        };
+        let nthreads = if points.len().saturating_mul(total.max(1)) < (1 << 16)
+            || points.len() < 4
+        {
+            1
+        } else {
+            std::thread::available_parallelism()
+                .map(|c| c.get())
+                .unwrap_or(1)
+                .min(points.len())
+        };
+        if nthreads <= 1 {
+            let mut cell = vec![0usize; ndim];
+            let mut dx = vec![0.0f64; ndim];
+            let mut idx = vec![0usize; ndim];
+            let mut powers: Vec<Vec<f64>> =
+                orders.iter().map(|&kd| vec![0.0f64; kd + 1]).collect();
+            points
+                .iter()
+                .map(|point| eval_point(point, &mut cell, &mut dx, &mut idx, &mut powers))
+                .collect()
+        } else {
+            let mut out = vec![0.0f64; points.len()];
+            let chunk = points.len().div_ceil(nthreads);
+            let eval_point = &eval_point;
+            let orders = &orders;
+            std::thread::scope(|scope| {
+                for (out_chunk, pts_chunk) in
+                    out.chunks_mut(chunk).zip(points.chunks(chunk))
+                {
+                    scope.spawn(move || {
+                        let mut cell = vec![0usize; ndim];
+                        let mut dx = vec![0.0f64; ndim];
+                        let mut idx = vec![0usize; ndim];
+                        let mut powers: Vec<Vec<f64>> =
+                            orders.iter().map(|&kd| vec![0.0f64; kd + 1]).collect();
+                        for (o, point) in out_chunk.iter_mut().zip(pts_chunk.iter()) {
+                            *o = eval_point(point, &mut cell, &mut dx, &mut idx, &mut powers);
                         }
-                        idx[d] = 0;
-                    }
+                    });
                 }
-                sum
-            })
-            .collect()
+            });
+            out
+        }
     }
 }
 
