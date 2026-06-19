@@ -152,6 +152,24 @@ low-dim) is not. Gates expressed as raw `count·dim` flop-products fire too earl
 cheap kernels. Recommend auditing every `< 1 << 1x` parallel gate in the codebase
 against the per-element op cost.
 
+### Updated tally (11 beads, rounds 1–3)
+- **WINS (algorithmic / byte-identical lever + heavy work):** GMM 4–11×, distribution
+  3–98×, kmeans early-stop 5.9×, cophenet 1.83×, AP parallel 2.02× internal.
+- **PARITY (within ~20% of scipy's tuned C):** AP vs sklearn, linkage 0.83×,
+  correlate 0.85×.
+- **REVERTED:** interpolate evaluate_many parallel (0.88×).
+- **KERNEL GAPS (fsci scalar inner loop vs scipy SIMD/C; flagged, not mine to fix):**
+  pdist 2.7–9× (`nm8ex`), kmeans2 2.4× (`9g6ku`), gaussian_filter 2.83×.
+
+**Emerging release pattern:** fsci WINS decisively where the lever is algorithmic
+(better asymptotics, early-stop, normalizer-hoist) and the work is heavy; it reaches
+PARITY-to-LOSS on tight inner numeric kernels (distance, 1D convolution, centroid
+assignment) where scipy's C is SIMD-vectorized and fsci's is scalar. **The highest-
+leverage release work is SIMD-vectorizing those 3–4 inner kernels** (`nm8ex`/`9g6ku`
++ ndimage 1D filter) — NOT more threads (cheap-per-element parallelism regresses, as
+the interpolate revert proves). The byte-identical alloc/precompute/batch wins are all
+safe KEEPs by construction.
+
 ## Notes / negative evidence
 - The ~50 byte-identical allocation/precompute/batch wins (buffer reuse, mem::take,
   loop-invariant hoist, interval binary-search, write!-amplification, retain) carry
