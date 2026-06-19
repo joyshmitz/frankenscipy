@@ -893,3 +893,15 @@ CONCLUSION: erf (5.9×→1.2×, simple 80-term-series+CF → flat rational) was 
 erf-class Cephes lever. The rest are complex multi-regime ports (igam) or Lanczos-nuanced or
 modest — none clears the bar erf did. Next-session: the igam port is the only remaining
 big-loss candidate, but it needs gamma.rs free + a careful multi-regime Cephes port.
+
+### ✅ ellipeinc combined Carlson R_F+R_D (1.4×, byte-identical, slowest special kernel)
+The find-an-erf-class measurement flagged ellipeinc (incomplete elliptic E) as the SLOWEST
+special kernel (280-307ns). E(φ,m) = s·R_F(cc,d,1) − (m/3)s³·R_D(cc,d,1) called carlson_rf AND
+carlson_rd over the SAME (cc,d,1) — TWO separate sqrt-heavy duplication sequences. R_F and R_D
+share the IDENTICAL (x,y,z) sequence (only `ave`/convergence + R_D's `s` accumulation differ),
+so a combined `carlson_rf_rd` computes the sqrt-sequence ONCE, tracking each convergence
+independently → BYTE-IDENTICAL. **MEASURED ellipeinc_scalar: m0.5 280→195ns (1.44×), m0.9
+307→219ns (1.40×)** (1.4× not 2× because R_D is costlier than R_F). Conformance: same 4
+pre-existing failures, NO new (byte-identical). NOT a Cephes port — a pure shared-iteration
+refactor in a FREE file (elliptic.rs), refreshed-first (no clobber). Reusable: any code calling
+carlson_rf+carlson_rd on the same args.

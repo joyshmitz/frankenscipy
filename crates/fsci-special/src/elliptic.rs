@@ -509,6 +509,72 @@ fn ellipkinc_carlson(phi: f64, m: f64, mode: RuntimeMode) -> f64 {
 }
 
 /// E(φ, m) for any φ via Carlson R_F/R_D, with E(φ + nπ, m) = E(φ, m) + 2n·E(m).
+/// Combined Carlson R_F(x,y,z) and R_D(x,y,z): both share the IDENTICAL duplication sequence
+/// (sqrt/lam/0.25-update), differing only in their convergence `ave` and R_D's `s` accumulation.
+/// Computing the sqrt-heavy sequence ONCE yields both, byte-identical to `carlson_rf(x,y,z)` +
+/// `carlson_rd(x,y,z)` at ~half the work — the dominant cost of E(φ,m). frankenscipy-9l5oo.
+fn carlson_rf_rd(mut x: f64, mut y: f64, mut z: f64) -> (f64, f64) {
+    const ERRTOL: f64 = 1e-5;
+    const C1: f64 = 3.0 / 14.0;
+    const C2: f64 = 1.0 / 6.0;
+    const C3: f64 = 9.0 / 22.0;
+    const C4: f64 = 3.0 / 26.0;
+    const C5: f64 = 0.25 * C3;
+    const C6: f64 = 1.5 * C4;
+    let mut s = 0.0;
+    let mut fac = 1.0;
+    let mut rf: Option<f64> = None;
+    let mut rd: Option<f64> = None;
+    for _ in 0..1000 {
+        let (sx, sy, sz) = (x.sqrt(), y.sqrt(), z.sqrt());
+        let lam = sx * sy + sy * sz + sz * sx;
+        if rd.is_none() {
+            s += fac / (sz * (z + lam));
+            fac *= 0.25;
+        }
+        x = 0.25 * (x + lam);
+        y = 0.25 * (y + lam);
+        z = 0.25 * (z + lam);
+        if rf.is_none() {
+            let ave = (x + y + z) / 3.0;
+            let dx = (ave - x) / ave;
+            let dy = (ave - y) / ave;
+            let dz = (ave - z) / ave;
+            if dx.abs().max(dy.abs()).max(dz.abs()) < ERRTOL {
+                let e2 = dx * dy - dz * dz;
+                let e3 = dx * dy * dz;
+                rf =
+                    Some((1.0 + (e2 / 24.0 - 0.1 - 3.0 * e3 / 44.0) * e2 + e3 / 14.0) / ave.sqrt());
+            }
+        }
+        if rd.is_none() {
+            let ave = (x + y + 3.0 * z) / 5.0;
+            let dx = (ave - x) / ave;
+            let dy = (ave - y) / ave;
+            let dz = (ave - z) / ave;
+            if dx.abs().max(dy.abs()).max(dz.abs()) < ERRTOL {
+                let ea = dx * dy;
+                let eb = dz * dz;
+                let ec = ea - eb;
+                let ed = ea - 6.0 * eb;
+                let ee = ed + ec + ec;
+                rd = Some(
+                    3.0 * s
+                        + fac
+                            * (1.0
+                                + ed * (-C1 + C5 * ed - C6 * dz * ee)
+                                + dz * (C2 * ee + dz * (-C3 * ec + dz * C4 * ea)))
+                            / (ave * ave.sqrt()),
+                );
+            }
+        }
+        if rf.is_some() && rd.is_some() {
+            return (rf.unwrap(), rd.unwrap());
+        }
+    }
+    (rf.unwrap_or(f64::NAN), rd.unwrap_or(f64::NAN))
+}
+
 fn ellipeinc_carlson(phi: f64, m: f64, mode: RuntimeMode) -> f64 {
     let n = (phi / PI).round();
     let phi_r = phi - n * PI;
@@ -516,7 +582,8 @@ fn ellipeinc_carlson(phi: f64, m: f64, mode: RuntimeMode) -> f64 {
     let c = phi_r.cos();
     let cc = c * c;
     let d = 1.0 - m * s * s;
-    let e_r = s * carlson_rf(cc, d, 1.0) - (m / 3.0) * s * s * s * carlson_rd(cc, d, 1.0);
+    let (rf, rd) = carlson_rf_rd(cc, d, 1.0); // one shared sqrt-sequence instead of two
+    let e_r = s * rf - (m / 3.0) * s * s * s * rd;
     if n == 0.0 {
         e_r
     } else {
