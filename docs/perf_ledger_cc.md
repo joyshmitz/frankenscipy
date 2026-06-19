@@ -799,3 +799,14 @@ large matrices parallelize; cap thread count for medium work. spatial lib.rs is 
 MistyBirch → sent the finding+fix via agent-mail (msg 1336) rather than collide. This is the
 real mechanism behind the documented pdist loss: it's a parallel-gate-below-break-even bug, NOT
 the SIMD kernel (sqeuclidean is already explicit Simd<f64,8>) and NOT a structural layout wall.
+
+### ⚖️ ndimage_filter_thread_count work-capped threads — PRINCIPLED but UNMEASURABLE (reverted)
+Hypothesis (byte-identical): cap thread count by work (`min(cores, pixels/2, work>>18)`) so each
+thread does ≥256k ops — a separable σ=2 Gaussian pass (~1.1M work) otherwise spawns 64 threads
+for ~17µs each. Conformance 297/0 (chunk count ⊥ per-pixel value). BUT the A/B was destroyed by
+RAMPING multi-agent load: gaussian_sigma2/256 measured 3.73ms (orig, early window) → 5.20ms
+(capped, mid) → 6.70ms (reverted, late) — a monotonic climb that is the LOAD, not the change.
+Per demonstrate-or-revert + "same-worker A/B in ONE binary mandatory" (cross-run variance ≫
+signal here), REVERTED. The lever is sound for normal/idle machines (fewer threads = less spawn
+for medium filters) but needs a same-process atomic-toggle bench in an idle window to prove.
+Flagged. (Sibling of the pdist nm8ex gate finding handed to MistyBirch.)
