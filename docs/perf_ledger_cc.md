@@ -22,6 +22,9 @@ regressions are reverted. Entries also routed to MistyBirch for the canonical me
 | AP responsibility parallel (yw7ts) | AP n=2000 d=4 | 2158 ms | 2098 ms | **1.03× (PARITY)** | **2.02×** (4.23→2.10 s) | ✅ KEEP (parity) |
 | Interpolate evaluate_many parallel (yw7ts) | NdPPoly m=200k total=6 | n/a | 8.86 ms | — | **0.88× (REGRESSION)** vs serial 7.79 ms | ❌ **REVERTED** |
 | Interpolate evaluate_many parallel (yw7ts) | BPoly m=200k | n/a | ~8.5 ms | — | ~serial 8.18 ms (no gain) | ❌ **REVERTED** |
+| Distribution pdf_many lgamma-hoist (q53ya) | gamma.pdf n=4096 | 149.6 µs | 49.86 µs | **3.0× faster** | 3.2× (hoist vs map) | ✅ KEEP |
+| Distribution pdf_many lgamma-hoist (q53ya) | beta.pdf n=4096 | 296.8 µs | 60.97 µs | **4.87× faster** | 4.3× (hoist vs map) | ✅ KEEP |
+| Distribution pmf_many lgamma-hoist (q53ya) | hypergeom.pmf supp=701 | 3744.9 µs | 38.34 µs | **97.7× faster** | — | ✅ KEEP |
 
 ## Detail
 
@@ -58,6 +61,17 @@ the break-even (if any) is contention-dependent and unverifiable on this shared 
 **Reverted all three to the serial map; the byte-identical loop-invariant HOIST
 (binoms/strides/scratch precomputed once) is PRESERVED — that was the real, monotone
 win.** Conformance green (interpolate evaluate_many tests). Revert commit: this one.
+
+### Distribution batch pdf_many/pmf_many lgamma-hoist (frankenscipy-q53ya) — ✅ KEEP (strong)
+Oracle `docs/perf_oracle_dist.py` (scipy.stats vectorized pdf/pmf over arrays, n=4096
+/ full support). fsci `pdf_many`/`pmf_many` hoist the expensive lgamma/ln_beta
+normalizer ONCE then map. **fsci beats scipy.stats 3–98×:** gamma 3.0×, beta 4.87×,
+hypergeom **97.7×** (scipy's hypergeom.pmf is famously slow — betaln + overflow
+guards per outcome). The hoist itself is 3–4× over the naive `map(pdf)` (gamma
+49.9µs vs 159.9µs; beta 61.0µs vs 261.3µs), and `map(pdf)` ≈ scipy — i.e. the hoist
+is exactly what wins the head-to-head. Byte-identical (normalizer is a loop
+invariant), NO revert risk. The 19-density batch family shares this lever → all KEEP
+by the same construction. Conformance green. Commits: `q53ya` (impl) + oracle here.
 
 ## Notes / negative evidence
 - The ~50 byte-identical allocation/precompute/batch wins (buffer reuse, mem::take,
