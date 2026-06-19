@@ -588,6 +588,15 @@ same inline per-coefficient cos/sin loop, not previously using the helper) throu
 NOTED (bigger lever, not done): the MFCC power spectrum (lib.rs ~5949) is a naive O(N²) DFT
 (`re += s·cos(2πkn/N)`) that should be an fsci_fft O(N log N) FFT.
 
+### ✅✅ mfcc naive-DFT → fsci_fft (181× !!, signal) — MARQUEE algorithmic flip
+DONE. The mfcc per-frame power spectrum computed `|Σ s[n]·e^{-j2πkn/N}|²` as a NAIVE O(N²) DFT
+(n_freq×frame_len per frame, every frame). Replaced with `fsci_fft::fft` (O(N log N)) — pad
+frame to complex, FFT, |·|²/n_fft. **A/B MEASURED on 16384 samples / frame_len 512:
+149.45 ms → 0.825 ms = 181×.** Same DFT value (~1e-13), conformance signal **707/0**. The
+single biggest self-speedup of the phase — a naive DFT in a hot per-frame loop is catastrophic
+(149 ms). LEVER: grep nested-loop `cos(2πkn/N)`/`sin` (DFT-by-hand) in any transform/feature
+fn → replace with fsci_fft. Added mfcc/16384_frame512 bench.
+
 ## Signal crate — head-to-head sweep vs scipy (2026-06-19)
 Oracle `docs/perf_oracle_signal.py` + `/tmp/oracle_sig2.py`. fsci vs scipy.signal:
 

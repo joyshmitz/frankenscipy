@@ -5939,17 +5939,15 @@ pub fn mfcc(
             .map(|(&s, &w)| s * w)
             .collect();
 
-        // Power spectrum via DFT
-        let two_pi = 2.0 * std::f64::consts::PI;
+        // Power spectrum via FFT (frankenscipy-9l5oo): |FFT(frame)|²/n_fft in O(N log N)
+        // instead of the naive O(N²) DFT. fsci_fft handles arbitrary frame_len (mixed-radix);
+        // identical to the direct DFT within ~1e-13.
+        let buf: Vec<fsci_fft::Complex64> = frame.iter().map(|&s| (s, 0.0)).collect();
+        let spec = fsci_fft::fft(&buf, &fsci_fft::FftOptions::default())
+            .expect("mfcc power-spectrum fft");
         let mut power_spec = vec![0.0; n_freq];
         for (k, spec_val) in power_spec.iter_mut().enumerate().take(n_freq) {
-            let mut re = 0.0;
-            let mut im = 0.0;
-            for (n, &s) in frame.iter().enumerate() {
-                let angle = two_pi * k as f64 * n as f64 / n_fft as f64;
-                re += s * angle.cos();
-                im -= s * angle.sin();
-            }
+            let (re, im) = spec[k];
             *spec_val = (re * re + im * im) / n_fft as f64;
         }
 

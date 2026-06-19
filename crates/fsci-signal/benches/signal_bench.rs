@@ -1,7 +1,7 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use fsci_signal::{
     ConvolveMode, FirWindow, SosSection, coherence, csd, cwt, fftconvolve, filtfilt, firls, firwin,
-    freqz, lfilter, medfilt, order_filter, remez, ricker, sosfilt, welch,
+    freqz, lfilter, medfilt, mfcc, order_filter, remez, ricker, sosfilt, welch,
 };
 use std::hint::black_box;
 use std::io::Write;
@@ -388,8 +388,18 @@ fn bench_freqz(c: &mut Criterion) {
     });
 }
 
+/// mfcc over a 16384-sample signal, frame_len 512 — the per-frame power spectrum now uses
+/// fsci_fft (O(N log N)) instead of a naive O(N²) DFT (frankenscipy-9l5oo).
+fn bench_mfcc(c: &mut Criterion) {
+    let sig = deterministic_signal(16384);
+    c.bench_function("mfcc/16384_frame512", |b| {
+        b.iter(|| black_box(mfcc(black_box(&sig), 16000.0, 13, 26, 512, 256)))
+    });
+}
+
 criterion_group!(
     benches,
+    bench_mfcc,
     bench_freqz,
     bench_convolution,
     bench_filtering,
