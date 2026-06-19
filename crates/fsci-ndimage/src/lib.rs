@@ -602,18 +602,21 @@ fn cubic_constant_wrap_coefficients(line: &[f64]) -> Vec<f64> {
 /// cancellation, accurate to a few ulp even for quintic splines.
 fn cardinal_bspline(order: usize, x: f64) -> f64 {
     // beta^1 (triangle) sampled at the offsets x + 0.5*m, m = -order ..= order.
+    // Stack arrays (order <= 5 => len <= 11) instead of per-call heap Vecs — this is
+    // on the hot per-tap-per-pixel interpolation path (~M calls/transform); byte-
+    // identical (same values, same float op order). frankenscipy-wm14d.
     let span = order as isize;
-    let mut vals: Vec<f64> = (-span..=span)
-        .map(|m| {
-            let t = (x + 0.5 * m as f64).abs();
-            (1.0 - t).max(0.0)
-        })
-        .collect();
+    let len = 2 * order + 1;
+    let mut vals = [0.0f64; 11];
+    for (slot, m) in vals[..len].iter_mut().zip(-span..=span) {
+        let t = (x + 0.5 * m as f64).abs();
+        *slot = (1.0 - t).max(0.0);
+    }
     for d in 2..=order {
         let n = d as f64;
         let half = (n + 1.0) / 2.0;
-        let mut next = vec![0.0; vals.len()];
-        for idx in 1..vals.len() - 1 {
+        let mut next = [0.0f64; 11];
+        for idx in 1..len - 1 {
             let m = idx as isize - span;
             let arg = x + 0.5 * m as f64;
             next[idx] = ((arg + half) * vals[idx + 1] + (half - arg) * vals[idx - 1]) / n;
@@ -1002,18 +1005,35 @@ fn sample_interpolated(
                 support.push((fold_wrap_cubic_index(base + 3, max), t * t * t / 6.0));
                 continue;
             }
-            // Reflect / Mirror / Nearest orders 2..=5: cardinal B-spline kernel with a
+            // Reflect / Mirror / Nearest orders 1..=5: cardinal B-spline kernel with a
             // per-tap boundary fold (matches scipy: fold the support TAPS, not the coord).
+            // order=1 (linear) was excluded and fell through to the slow generic
+            // eval_bspline_basis_all path — the lone interpolating order without a fast
+            // path, making zoom order=1 ~17x slower than scipy (frankenscipy-wm14d).
+            // cardinal_bspline(1, cc-k) = (1-|cc-k|).max(0) yields the linear weights.
             let cardinal_reflect_nearest = effective_order == order
-                && matches!(order, 2..=5)
-                && ((mode == BoundaryMode::Reflect && coord_offsets[axis] == 0.0)
-                    || (mode == BoundaryMode::Mirror && coord_offsets[axis] == 0.0)
-                    || mode == BoundaryMode::Nearest);
+                && matches!(order, 1..=5)
+                && (mode == BoundaryMode::Nearest
+                    || (matches!(mode, BoundaryMode::Reflect | BoundaryMode::Mirror)
+                        // order=1 Reflect/Mirror is PADDED (coord_offsets=SPLINE_NEAREST_PAD)
+                        // so the linear support always lands inside the padded coeffs →
+                        // clamp (Nearest) fold; that path was previously routed to the slow
+                        // generic eval_bspline_basis_all (frankenscipy-wm14d).
+                        && (coord_offsets[axis] == 0.0 || order == 1)));
             if cardinal_reflect_nearest {
                 let cc = coord + coord_offsets[axis];
                 let len = coeff_len as isize;
+                // Padded order=1 reflect/mirror folds via clamp (the padding already
+                // encodes the reflection); everything else folds per the actual mode.
+                let fold_mode = if order == 1
+                    && matches!(mode, BoundaryMode::Reflect | BoundaryMode::Mirror)
+                {
+                    BoundaryMode::Nearest
+                } else {
+                    mode
+                };
                 let fold = |i: isize| -> usize {
-                    match mode {
+                    match fold_mode {
                         BoundaryMode::Nearest => i.clamp(0, len - 1) as usize,
                         BoundaryMode::Mirror => {
                             if len <= 1 {
