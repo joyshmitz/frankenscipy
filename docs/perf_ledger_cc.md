@@ -28,6 +28,10 @@ regressions are reverted. Entries also routed to MistyBirch for the canonical me
 | pdist parallel (8e7e6d99, NOT mine) | pdist euclidean n=256 | 92.1 µs | 674.9 µs | **0.14× (7.3× SLOWER)** | gate fires at n=256 | ⚠️ LOSS → owner |
 | pdist parallel (8e7e6d99, NOT mine) | pdist euclidean n=512 | 326.3 µs | 889.0 µs | **0.37× (2.7× SLOWER)** | overhead amortizes w/ n | ⚠️ LOSS → owner |
 | pdist parallel (8e7e6d99, NOT mine) | pdist cosine n=256 | 81.9 µs | 736.7 µs | **0.11× (9× SLOWER)** | — | ⚠️ LOSS → owner |
+| pdist flat dim-4 rows (nm8ex.1) | pdist euclidean n=256 | 88.96 µs | 172.83 µs | **0.51× (1.94× SLOWER)** | 1.52× faster internally | ✅ KEEP, residual gap |
+| pdist flat dim-4 rows (nm8ex.1) | pdist cosine n=256 | 79.69 µs | 208.89 µs | **0.38× (2.62× SLOWER)** | 1.83× faster internally | ✅ KEEP, residual gap |
+| pdist flat dim-4 rows (nm8ex.1) | pdist euclidean n=512 | 309.79 µs | 714.58 µs | **0.43× (2.31× SLOWER)** | 1.11× faster internally | ✅ KEEP, residual gap |
+| pdist flat dim-4 rows (nm8ex.1) | pdist cosine n=512 | 275.14 µs | 828.70 µs | **0.33× (3.01× SLOWER)** | 1.44× faster internally | ✅ KEEP, residual gap |
 | linkage NN-chain (average) | linkage n=400 d=4 | 1586.5 µs | 1904.5 µs | **0.83× (1.2× slower)** | — | ⚠️ near-parity |
 | cophenet mem::take (jphzn) | cophenet n=400 | 401.5 µs | 219.7 µs | **1.83× faster** | — | ✅ KEEP |
 | kmeans2 double-buffer (4ylee) | kmeans2 k4 n2000 iter=50 | 2104.7 µs | 5126 µs | **0.41× (2.4× SLOWER)** | scalar assign vs scipy SIMD | ⚠️ kernel gap → bead |
@@ -117,6 +121,23 @@ not vs scipy; implied serial ≈ 3.4–6.5 ms at n=512 → fsci's pure-Rust pdis
 ~10–60× slower than scipy's C. **NOT reverted — another agent's file; routed to the
 spatial owner.** Recommendation: raise the pdist gate well above 2¹⁸ AND/OR a faster
 inner kernel (scipy uses tuned C). Honest LOSS recorded.
+
+### Spatial pdist flat dim-4 rows (frankenscipy-nm8ex.1) — ✅ KEEP internally, ⚠️ LOSS vs SciPy
+Follow-up to the `nm8ex` residual gap. The direct dim-4 fast path still loaded
+every pair through `Vec<Vec<f64>>`; this lever stages validated 4-column rows
+into compact `[f64; 4]` points once per call and runs the same Euclidean/Cosine
+arithmetic over fixed-width rows. Same-worker rch `ovh-b` Criterion medians
+improved across all four rows: 263.00→172.83µs (1.52×) for euclidean n=256,
+381.98→208.89µs (1.83×) for cosine n=256, 794.72→714.58µs (1.11×) for
+euclidean n=512, and 1.1930ms→828.70µs (1.44×) for cosine n=512. The focused
+bit-exact dim-4 `pdist` guard passed via rch.
+
+Honest SciPy score remains a loss: local SciPy 1.17.1 / NumPy 2.4.3 oracle was
+88.96µs, 79.69µs, 309.79µs, and 275.14µs respectively, so Rust is still
+1.94×, 2.62×, 2.31×, and 3.01× slower (0 wins / 4 losses / 0 neutral). KEEP
+because the internal win is significant and behavior-preserving; route deeper
+to output batching or generated SIMD-style dim-specialized kernels rather than
+retrying row staging alone.
 
 ### Hierarchical clustering: linkage + cophenet (frankenscipy-jphzn) — ⚠️ parity / ✅ KEEP
 Oracle `docs/perf_oracle_hier.py` (scipy.cluster.hierarchy, n=400 blobs, average).

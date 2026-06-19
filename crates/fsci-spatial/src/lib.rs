@@ -174,9 +174,7 @@ fn simd_sqsum(x: &[f64]) -> f64 {
 }
 
 #[inline]
-fn sqeuclidean4(a: &[f64], b: &[f64]) -> f64 {
-    debug_assert_eq!(a.len(), 4);
-    debug_assert_eq!(b.len(), 4);
+fn sqeuclidean4(a: &[f64; 4], b: &[f64; 4]) -> f64 {
     let d0 = a[0] - b[0];
     let d1 = a[1] - b[1];
     let d2 = a[2] - b[2];
@@ -185,16 +183,19 @@ fn sqeuclidean4(a: &[f64], b: &[f64]) -> f64 {
 }
 
 #[inline]
-fn dot4(a: &[f64], b: &[f64]) -> f64 {
-    debug_assert_eq!(a.len(), 4);
-    debug_assert_eq!(b.len(), 4);
+fn dot4(a: &[f64; 4], b: &[f64; 4]) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]
 }
 
 #[inline]
-fn sqsum4(x: &[f64]) -> f64 {
-    debug_assert_eq!(x.len(), 4);
+fn sqsum4(x: &[f64; 4]) -> f64 {
     x[0] * x[0] + x[1] * x[1] + x[2] * x[2] + x[3] * x[3]
+}
+
+fn collect_dim4_points(x: &[Vec<f64>]) -> Vec<[f64; 4]> {
+    x.iter()
+        .map(|row| [row[0], row[1], row[2], row[3]])
+        .collect()
 }
 
 /// Manhattan (L1) distance: `Σ |a[i]-b[i]|`, 8-wide.
@@ -530,10 +531,14 @@ pub fn pdist(x: &[Vec<f64>], metric: DistanceMetric) -> Result<Vec<f64>, Spatial
     // precomputed per-vector quantities use the same arithmetic/summation order as the
     // scalar `cosine`/`correlation` helpers, and the cross term is summed in the same order.
     let result = match metric {
-        DistanceMetric::Euclidean if dim == 4 => pdist_fill_euclidean4(x, n, total, nthreads),
+        DistanceMetric::Euclidean if dim == 4 => {
+            let points = collect_dim4_points(x);
+            pdist_fill_euclidean4(&points, n, total, nthreads)
+        }
         DistanceMetric::Cosine if dim == 4 => {
-            let norms: Vec<f64> = x.iter().map(|v| sqsum4(v).sqrt()).collect();
-            pdist_fill_cosine4(x, &norms, n, total, nthreads)
+            let points = collect_dim4_points(x);
+            let norms: Vec<f64> = points.iter().map(|v| sqsum4(v).sqrt()).collect();
+            pdist_fill_cosine4(&points, &norms, n, total, nthreads)
         }
         DistanceMetric::Cosine => {
             let norms: Vec<f64> = x.iter().map(|v| simd_sqsum(v).sqrt()).collect();
@@ -578,7 +583,7 @@ pub fn pdist(x: &[Vec<f64>], metric: DistanceMetric) -> Result<Vec<f64>, Spatial
     Ok(result)
 }
 
-fn pdist_fill_euclidean4(x: &[Vec<f64>], n: usize, total: usize, nthreads: usize) -> Vec<f64> {
+fn pdist_fill_euclidean4(x: &[[f64; 4]], n: usize, total: usize, nthreads: usize) -> Vec<f64> {
     if nthreads <= 1 {
         let mut result = Vec::with_capacity(total);
         for i in 0..n {
@@ -618,7 +623,7 @@ fn pdist_fill_euclidean4(x: &[Vec<f64>], n: usize, total: usize, nthreads: usize
 }
 
 fn pdist_fill_cosine4(
-    x: &[Vec<f64>],
+    x: &[[f64; 4]],
     norms: &[f64],
     n: usize,
     total: usize,
@@ -2388,6 +2393,7 @@ fn cross(o: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
     (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0)
 }
 
+#[allow(dead_code)]
 fn point_in_circumcircle(a: (f64, f64), b: (f64, f64), c: (f64, f64), d: (f64, f64)) -> bool {
     let (ax, ay) = (a.0 - d.0, a.1 - d.1);
     let (bx, by) = (b.0 - d.0, b.1 - d.1);
@@ -5733,7 +5739,12 @@ mod tests {
                 0.3604234056503559,
                 0.8223631719059994,
             ],
-            [0.0, 0.0, 0.7071067811865475, 0.7071067811865476],
+            [
+                0.0,
+                0.0,
+                std::f64::consts::FRAC_1_SQRT_2,
+                std::f64::consts::FRAC_1_SQRT_2,
+            ],
             [0.5, 0.5, 0.5, 0.5],
         ];
         let rots: Vec<Rotation> = quats.iter().map(|&q| Rotation::from_quat(q)).collect();
@@ -5850,7 +5861,12 @@ mod tests {
         assert_eq!(m[3], [0.0, 0.0, 0.0, 1.0]);
 
         // Composition: tf * tf2.
-        let r2 = Rotation::from_quat([0.0, 0.0, 0.7071067811865475, 0.7071067811865476]);
+        let r2 = Rotation::from_quat([
+            0.0,
+            0.0,
+            std::f64::consts::FRAC_1_SQRT_2,
+            std::f64::consts::FRAC_1_SQRT_2,
+        ]);
         let tf2 = RigidTransform::from_components([0.0, 0.0, 1.0], r2);
         let comp = tf * tf2;
         close(

@@ -413,6 +413,67 @@ condition so dead ends are not repeated casually.
   generated AVX-style dim-specialized kernel that removes `Vec<Vec<f64>>`
   pointer chasing and matches SciPy's C distance loop constants.
 
+## 2026-06-19 - frankenscipy-nm8ex.1 - spatial pdist dim-4 flat row staging
+
+- Agent: cod-a / MistyBirch
+- Lever: after the dim-4 direct serial kernel keep, stage validated 4-column
+  `Vec<Vec<f64>>` rows into compact `[f64; 4]` points once per `pdist` call and
+  run the same Euclidean/Cosine arithmetic over the fixed-width row layout. This
+  removes hot-loop pointer chasing and slice-length metadata from the O(n^2)
+  all-pairs loop without changing arithmetic order or adding unsafe code.
+- Graveyard/artifact route tested: A1 numeric-kernel cache locality and
+  constant-factor collapse, flat-vector layout from nested data-parallelism,
+  and profile-first "constants kill you" discipline. No SIMD or batch-output
+  rewrite was mixed into this commit, so the attribution stays on row layout.
+- Decision: KEEP as an internal win, route residual SciPy loss deeper. No
+  revert.
+- Artifact:
+  `tests/artifacts/perf/2026-06-19-nm8ex1-pdist-flatdim4-ovhb/EVIDENCE.md`
+- Baseline/candidate command:
+  `RCH_WORKER=ovh-b CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a rch exec -- cargo bench -p fsci-spatial --bench spatial_bench -- pdist --noplot`
+- SciPy oracle command:
+  `python3 docs/perf_oracle_pdist.py`
+- Same-worker internal A/B on rch worker `ovh-b`:
+
+  | Workload | Baseline median | Candidate median | Candidate/baseline | Verdict |
+  | --- | ---: | ---: | ---: | --- |
+  | `pdist/euclidean/256` | 263.00 us | 172.83 us | 0.657x time, 1.52x faster | keep |
+  | `pdist/cosine/256` | 381.98 us | 208.89 us | 0.547x time, 1.83x faster | keep |
+  | `pdist/euclidean/512` | 794.72 us | 714.58 us | 0.899x time, 1.11x faster | keep |
+  | `pdist/cosine/512` | 1.1930 ms | 828.70 us | 0.695x time, 1.44x faster | keep |
+
+- Local SciPy oracle (`scipy.spatial.distance.pdist`, SciPy 1.17.1, NumPy 2.4.3):
+
+  | Workload | Candidate median | SciPy p50 | Candidate/SciPy | Verdict |
+  | --- | ---: | ---: | ---: | --- |
+  | Euclidean n=256 d=4 | 172.83 us | 88.96 us | 1.94x slower | residual loss |
+  | Cosine n=256 d=4 | 208.89 us | 79.69 us | 2.62x slower | residual loss |
+  | Euclidean n=512 d=4 | 714.58 us | 309.79 us | 2.31x slower | residual loss |
+  | Cosine n=512 d=4 | 828.70 us | 275.14 us | 3.01x slower | residual loss |
+
+- Win/loss/neutral vs SciPy: 0 / 4 / 0. Internal A/B: 4 / 0 / 0.
+- Correctness/conformance guards:
+  - PASS: `rch exec -- cargo test -p fsci-spatial pdist_dim4_fast_paths_match_metric_helpers -- --nocapture`
+    (1 passed; validates bit-identical dim-4 Euclidean/Cosine output against
+    `metric_distance`).
+  - PASS: `rch exec -- cargo test -p fsci-spatial --lib -- --nocapture`
+    (206 passed, 2 ignored).
+  - PASS: `rch exec -- cargo check -p fsci-spatial --all-targets`.
+  - PASS: `rch exec -- cargo clippy -p fsci-spatial --all-targets --no-deps -- -D warnings`
+    after clearing same-file pre-existing lint blockers.
+  - PASS: candidate Criterion run completed on `ovh-b`; Criterion reported
+    statistically significant improvements for all four rows.
+  - PASS: `git diff --check`.
+  - PASS: `ubs` on the changed file set exited 0; it reported no critical
+    issues and only pre-existing broad warnings in the large spatial module.
+  - BLOCKED: `cargo fmt --check -p fsci-spatial` remains red on pre-existing
+    `fsci-spatial` bench/source rustfmt drift outside this patch.
+- Retry condition: do not retry fixed-width row staging alone. The next
+  credible route must change the inner kernel more deeply: batch several
+  output pairs per loop, generate dim-specialized SIMD-style kernels, or move
+  the public representation toward packed SoA/flat buffers so the copy into
+  `[f64; 4]` disappears.
+
 ## 2026-06-19 - frankenscipy-8l8r1.115 - randomized_eigh projected sketch
 
 - Agent: cod-b / MistyBirch

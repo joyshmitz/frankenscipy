@@ -33,6 +33,10 @@ win/loss/neutral ledger lives in `docs/progress/perf-negative-results.md`.
 | `frankenscipy-nm8ex` | Spatial `pdist` dim-4 fast path + serial gate | Cosine n=256 d=4 | 114.04 us | 87.20 us | 1.31x slower | keep 29.51x internal win; route deeper |
 | `frankenscipy-nm8ex` | Spatial `pdist` dim-4 fast path + serial gate | Euclidean n=512 d=4 | 425.75 us | 310.83 us | 1.37x slower | keep 8.35x internal win; route deeper |
 | `frankenscipy-nm8ex` | Spatial `pdist` dim-4 fast path + serial gate | Cosine n=512 d=4 | 461.16 us | 283.75 us | 1.63x slower | keep 5.54x internal win; route deeper |
+| `frankenscipy-nm8ex.1` | Spatial `pdist` dim-4 flat row staging | Euclidean n=256 d=4 | 172.83 us | 88.96 us | 1.94x slower | keep 1.52x internal win; route deeper |
+| `frankenscipy-nm8ex.1` | Spatial `pdist` dim-4 flat row staging | Cosine n=256 d=4 | 208.89 us | 79.69 us | 2.62x slower | keep 1.83x internal win; route deeper |
+| `frankenscipy-nm8ex.1` | Spatial `pdist` dim-4 flat row staging | Euclidean n=512 d=4 | 714.58 us | 309.79 us | 2.31x slower | keep 1.11x internal win; route deeper |
+| `frankenscipy-nm8ex.1` | Spatial `pdist` dim-4 flat row staging | Cosine n=512 d=4 | 828.70 us | 275.14 us | 3.01x slower | keep 1.44x internal win; route deeper |
 | `frankenscipy-va60h` | Linkage flat row-major distance arena | `scipy.cluster.hierarchy.linkage(method="average")`, n=800 d=4 | 6.1713 ms | 4.4550 ms | 1.385x slower | keep internal flat arena; route deeper |
 | `frankenscipy-va60h` | Linkage flat row-major distance arena | `scipy.cluster.hierarchy.linkage(method="ward")`, n=800 d=4 | 7.5250 ms | 5.0256 ms | 1.497x slower | keep internal flat arena; route deeper |
 
@@ -71,6 +75,7 @@ win/loss/neutral ledger lives in `docs/progress/perf-negative-results.md`.
 | `frankenscipy-nm8ex` | Dim-4 Euclidean/Cosine direct serial `pdist` kernels | Generic metric-dispatch/reduction/threaded path | 5.54-29.51x faster on same-worker `hz2` | keep current despite SciPy loss |
 | `frankenscipy-x9ckc` | `jnjnp_zeros` guarded direct integer-order root polishing | Generic strict-mode bracketed zero route after output frontier | 1.17x faster at `nt=64`; 1.20x faster at `nt=128` on same-worker `hz1` | keep current despite SciPy loss |
 | `frankenscipy-fo9cj` | Restored sparse Arnoldi `Vec<Vec>` basis and allocating matvec closure | Row-major basis arena plus mutable operator scratch | 1.19-1.41x faster on `eigsh`; candidate `svds` movement only 0.99-1.06x | reject arena/scratch route |
+| `frankenscipy-nm8ex.1` | Dim-4 `pdist` fixed-width `[f64; 4]` row staging | Prior direct serial dim-4 `Vec<Vec<f64>>` fast path | 1.11-1.83x faster on same-worker `ovh-b`; still 0/4/0 vs SciPy | keep current despite SciPy loss |
 
 ## Current Readiness
 
@@ -98,9 +103,9 @@ win/loss/neutral ledger lives in `docs/progress/perf-negative-results.md`.
 | `fsci-cluster` linkage correctness | guarded | filtered linkage tests passed via rch (28 unit, 9 metamorphic); SciPy-backed `diff_cluster_linkage_from_distances` conformance passed locally |
 | `fsci-cluster` lint/build gate | partial | `cargo check -p fsci-cluster --benches` passed; fmt blocked on existing `perf_isomap.rs` drift and clippy blocked on existing `fsci-linalg` dependency lints |
 | `fsci-ndimage` gaussian_filter route | measured reject | always-line-walk plus outermost row-split regressed `gaussian_sigma2/256`; source reverted, current remains a SciPy loss routed to inner dot SIMD/tiled contiguous-span work |
-| `fsci-spatial` `pdist` performance | measured loss plus internal keep | dim-4 direct serial kernels are 5.54-29.51x faster than the generic threaded route on same-worker `hz2`, but still 1.14-1.63x slower than SciPy |
-| `fsci-spatial` `pdist` correctness | guarded | focused `pdist` tests passed via rch (10 passed), full `fsci-spatial` lib suite passed via rch (206 passed, 2 ignored) |
-| `fsci-spatial` lint/build gate | partial | `cargo check -p fsci-spatial --all-targets` passed; conformance is blocked by unrelated `e2e_sparse` compile error, clippy by existing `fsci-linalg` lints, and fmt by pre-existing `fsci-spatial` rustfmt drift |
+| `fsci-spatial` `pdist` performance | measured loss plus internal keep | dim-4 direct serial kernels were 5.54-29.51x faster than the generic threaded route; follow-up flat row staging is another 1.11-1.83x same-worker `ovh-b` internal win but still 0/4/0 vs SciPy, 1.94-3.01x slower |
+| `fsci-spatial` `pdist` correctness | guarded | focused dim-4 bit-exact `pdist` test and full `fsci-spatial --lib` suite passed after flat row staging |
+| `fsci-spatial` lint/build gate | partial | `cargo check -p fsci-spatial --all-targets`, `cargo clippy -p fsci-spatial --all-targets --no-deps -- -D warnings`, `git diff --check`, and UBS passed; `cargo fmt --check -p fsci-spatial` remains blocked by pre-existing `fsci-spatial` rustfmt drift |
 | `fsci-sparse` `eigsh`/`svds` performance | measured reject plus current-route SciPy wins | row-major Arnoldi arena regressed all `eigsh` rows and was reverted; restored route is 4 wins / 1 loss / 1 neutral vs SciPy, with the remaining loss at `eigsh n=8000 k=6` |
 | `fsci-sparse` `eigsh`/`svds` correctness | guarded | focused sparse eig/svds tests passed via rch; SciPy-backed `diff_sparse_eigsh_largest` and `diff_sparse_svds` conformance passed locally |
 | `fsci-sparse` lint/build gate | partial | `cargo check -p fsci-sparse --all-targets`, focused sparse tests, `cargo clippy -p fsci-sparse --all-targets --no-deps -- -D warnings`, UBS, and `git diff --check` passed; rch SciPy conformance blocked by missing worker SciPy and rustfmt by pre-existing file-wide drift |
