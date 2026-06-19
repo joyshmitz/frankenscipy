@@ -475,18 +475,28 @@ evaluations (numerical gradient + line search), each a Python callback in scipy;
 the whole optimizer + Rust objective with zero callback overhead. Optimizer/root/ODE crates
 (any iterative solver over a user function) are fsci's biggest categorical win vs scipy.
 
-## Integrate crate — ODE sweep vs scipy (2026-06-19) — fsci DOMINATES (biggest ratios yet)
+## Integrate crate — ODE sweep vs scipy (2026-06-19) — fsci DOMINATES
 fsci vs scipy.integrate.solve_ivp (RK45, rtol 1e-6, atol 1e-9):
 
 | ODE | fsci | scipy | ratio |
 |---|---|---|---|
-| exponential decay (0,10) | 15.7 µs | 1284 µs | **81.6× faster** |
-| Lorenz (0,1) | 24.4 µs | 1935 µs | **79.2× faster** |
+| exponential decay (0,10) | 18.589129 µs | 1443.255860 µs | **77.64× faster** |
+| Lorenz (0,1) | 28.266539 µs | 2062.735365 µs | **72.97× faster** |
 
 The ~80× is structural: fsci's RHS is compiled Rust evaluated inline, scipy calls a Python
 callback at every RK45 stage + runs the step loop in Python. Any ODE/quadrature with a
 cheap RHS will show this — fsci's no-callback-overhead is decisive. Integrate ODE path
 HARVESTED (dominant).
+
+### frankenscipy-bpzha: RK scratch double-buffer measured reject
+The solver-owned scratch/double-buffer idea was tested and reverted. It had one
+scalar exponential win on `hz2` (`17.356838 -> 13.863079 µs/call`) but regressed
+paired Lorenz/vector rows on `hz2` (`21.951172 -> 23.402816 µs/call`), `hz1`
+(`28.621224 -> 31.335899 µs/call`), and `ovh-a`
+(`20.597014 -> 32.037205 µs/call`). Final helper-dispatch sanity also measured
+`27.755498 µs/call` on exponential on `ovh-b`, a red flag against all parent
+exponential rows. Decision: reject/revert; next integrate work should come from a
+fresh profile, not from RK scratch reuse.
 
 ## Ndimage crate — filter/morphology sweep vs scipy (2026-06-19)
 fsci vs scipy.ndimage (256² / 160² images):

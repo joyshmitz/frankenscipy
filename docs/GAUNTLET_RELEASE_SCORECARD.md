@@ -55,6 +55,9 @@ win/loss/neutral ledger lives in `docs/progress/perf-negative-results.md`.
 | `frankenscipy-fo9cj` | Sparse Arnoldi row-major basis arena plus mutable operator scratch | `eigsh n=8000 k=6` | 6.594 ms | 5.548 ms parent/restored | reject and revert |
 | `frankenscipy-fo9cj` | Sparse Arnoldi row-major basis arena plus mutable operator scratch | `eigsh n=20000 k=8` | 16.147 ms | 11.599 ms parent/restored | reject and revert |
 | `frankenscipy-fo9cj` | Sparse Arnoldi row-major basis arena plus mutable operator scratch | `svds 2200/8200/20200 sweep` | 1.203 / 4.654 / 12.362 ms | 1.191 / 4.929 / 12.534 ms parent/restored | reject: mixed near-noise cannot offset `eigsh` regression |
+| `frankenscipy-bpzha` | Solver-owned RK scratch double-buffer variants | `solve_ivp RK45` Lorenz on rch `hz2`, repeats=3000 | 23.402816 us/call | 21.951172 us/call parent | reject and revert |
+| `frankenscipy-bpzha` | Solver-owned RK scratch double-buffer variants | `solve_ivp RK45` Lorenz on rch `hz1`, repeats=3000 | 31.335899 us/call | 28.621224 us/call parent | reject and revert |
+| `frankenscipy-bpzha` | Solver-owned RK scratch double-buffer variants | `solve_ivp RK45` Lorenz on rch `ovh-a`, repeats=3000 | 32.037205 us/call | 20.597014 us/call parent | reject and revert |
 
 ## Internal Regression Gates
 
@@ -79,6 +82,7 @@ win/loss/neutral ledger lives in `docs/progress/perf-negative-results.md`.
 | `frankenscipy-x9ckc` | `jnjnp_zeros` guarded direct integer-order root polishing | Generic strict-mode bracketed zero route after output frontier | 1.17x faster at `nt=64`; 1.20x faster at `nt=128` on same-worker `hz1` | keep current despite SciPy loss |
 | `frankenscipy-fo9cj` | Restored sparse Arnoldi `Vec<Vec>` basis and allocating matvec closure | Row-major basis arena plus mutable operator scratch | 1.19-1.41x faster on `eigsh`; candidate `svds` movement only 0.99-1.06x | reject arena/scratch route |
 | `frankenscipy-nm8ex.1` | Dim-4 `pdist` fixed-width `[f64; 4]` row staging | Prior direct serial dim-4 `Vec<Vec<f64>>` fast path | 1.11-1.83x faster on same-worker `ovh-b`; still 0/4/0 vs SciPy | keep current despite SciPy loss |
+| `frankenscipy-bpzha` | Restored parent per-attempt RK temporaries | Solver-owned scratch double-buffer variants | paired rows finished 1 win / 3 losses / 0 neutral; Lorenz regressed 1.067x-1.555x on fresh rch workers | reject scratch route |
 
 ## Current Readiness
 
@@ -112,8 +116,11 @@ win/loss/neutral ledger lives in `docs/progress/perf-negative-results.md`.
 | `fsci-sparse` `eigsh`/`svds` performance | measured reject plus current-route SciPy wins | row-major Arnoldi arena regressed all `eigsh` rows and was reverted; restored route is 4 wins / 1 loss / 1 neutral vs SciPy, with the remaining loss at `eigsh n=8000 k=6` |
 | `fsci-sparse` `eigsh`/`svds` correctness | guarded | focused sparse eig/svds tests passed via rch; SciPy-backed `diff_sparse_eigsh_largest` and `diff_sparse_svds` conformance passed locally |
 | `fsci-sparse` lint/build gate | partial | `cargo check -p fsci-sparse --all-targets`, focused sparse tests, `cargo clippy -p fsci-sparse --all-targets --no-deps -- -D warnings`, UBS, and `git diff --check` passed; rch SciPy conformance blocked by missing worker SciPy and rustfmt by pre-existing file-wide drift |
+| `fsci-integrate` RK performance | measured reject plus restored SciPy wins | RK scratch double-buffer was reverted after paired same-worker/fresh-worker rows finished 1 win / 3 losses / 0 neutral; restored parent route remains 77.64x faster than SciPy on exponential and 72.97x faster on Lorenz |
+| `fsci-integrate` RK correctness | guarded | scratch candidate passed focused RK and IVP `e2e_ivp` checks before rejection; final source ships no RK code change |
+| `fsci-integrate` lint/build gate | partial | scratch candidate `cargo check -p fsci-integrate --all-targets` passed; final source ships no RK lint surface, while crate clippy remains blocked by unrelated existing `api.rs`/`quad.rs` lints |
 | rch SciPy oracle parity | blocked on worker image | `vmi1152480` and `vmi1227854` lacked `scipy`; local same-host oracle supplied the head-to-head ratios |
-| Release readiness | partial | two linalg perf clusters, one `fsci-signal` coherence win, one `fsci-opt` L-BFGS-B reject, one `fsci-special` measured SciPy-loss/internal-keep cutoff win plus one top-k reject, one `fsci-fft` CSD reject, one `fsci-cluster` linkage measured SciPy loss, one `fsci-ndimage` gaussian reject, one `fsci-spatial` `pdist` internal keep, and one `fsci-sparse` Arnoldi reject verified; other code-first perf ledger entries still need gauntlet conversion |
+| Release readiness | partial | two linalg perf clusters, one `fsci-signal` coherence win, one `fsci-opt` L-BFGS-B reject, one `fsci-special` measured SciPy-loss/internal-keep cutoff win plus one top-k reject, one `fsci-fft` CSD reject, one `fsci-cluster` linkage measured SciPy loss, one `fsci-ndimage` gaussian reject, one `fsci-spatial` `pdist` internal keep, one `fsci-sparse` Arnoldi reject, and one `fsci-integrate` RK scratch reject verified; other code-first perf ledger entries still need gauntlet conversion |
 
 ## Pending Gauntlet Backlog
 

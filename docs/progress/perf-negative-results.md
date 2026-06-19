@@ -827,21 +827,69 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
   buffers for `dy`, `y_stage`, `y_new`, and `f_new`; accepted steps swap the
   buffers into live state, while rejected attempts overwrite the same scratch on
   retry.
-- Status: pending batch-test. This is a code-first commit per campaign
-  instruction; local `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b
-  cargo check -p fsci-integrate` passed before commit.
-- Correctness guard: existing RK45/RK23 step unit coverage now exercises the
-  scratch-buffer API, including wrong-size RHS rejection; solver accept/reject
-  semantics still preserve `y_old`, `f_old`, boundary clamping, and FSAL storage.
-- Benchmark guard: compare focused `solve_ivp` RK45/RK23 workloads against the
-  pre-change commit on the same worker/target dir, especially high-dimensional
-  adaptive problems with rejected steps where per-attempt vector allocation was
-  visible in profiles.
-- Retry condition: keep only if focused same-worker integrate timings improve
-  without changing step counts, `nfev`, or final tolerances; if the swap/copy
-  path costs more than the allocation removal, reject this scratch formulation
-  and do not retry without allocator-profile evidence showing RK temporary Vec
-  churn is again a top-5 integrate hotspot.
+- Status: measured reject and reverted on 2026-06-19. The scratch variants had
+  one promising scalar row, but the broader RK gate failed once Lorenz/vector
+  workloads were repeated on fresh rch workers.
+- Worker/target: rch `vmi1149989`,
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b`.
+  RCH rewrote that to worker-scoped target directories under each scratch
+  worktree; later repeats also used `hz2`, `hz1`, `ovh-a`, and `ovh-b` with the
+  same target-dir root.
+
+Initial internal A/B against `07ec1ab4^` parent looked keep-worthy but did not
+survive repeat/fresh-worker validation:
+
+| Workload | Parent route | Candidate route | Candidate/parent | Invariant |
+| --- | ---: | ---: | ---: | --- |
+| `vmi1149989 solve_ivp RK45 exponential`, repeats=3000 | 18.589129 us/call | 14.068991 us/call | 1.321x faster | `nfev=741000`, checksum `6.061522287381e5` |
+| `vmi1149989 solve_ivp RK45 Lorenz`, repeats=3000 | 28.266539 us/call | 21.940886 us/call | 1.288x faster | `nfev=975000`, checksum `4.576590840398e6` |
+| `hz2 solve_ivp RK45 exponential`, repeats=3000 | 17.356838 us/call | 13.863079 us/call | 1.252x faster | `nfev=741000`, checksum `6.061522287381e5` |
+| `hz2 solve_ivp RK45 Lorenz`, repeats=3000 | 21.951172 us/call | 23.402816 us/call | 0.938x slower | `nfev=975000`, checksum `4.576590840398e6` |
+| `hz1 solve_ivp RK45 Lorenz`, repeats=3000 | 28.621224 us/call | 31.335899 us/call | 0.913x slower | `nfev=975000`, checksum `4.576590840398e6` |
+| `ovh-a solve_ivp RK45 Lorenz`, repeats=3000 | 20.597014 us/call | 32.037205 us/call | 0.643x slower | `nfev=975000`, checksum `4.576590840398e6` |
+
+Final scalar/vector helper sanity check was also red: the final candidate's
+`ovh-b solve_ivp RK45 exponential` row measured `27.755498 us/call`, slower
+than every parent exponential row observed in this lane. That row had no
+same-worker parent pair, so it is recorded as a rejection signal rather than a
+standalone ratio.
+
+Internal keep-gate summary for the scratch lever: 1 paired win / 3 paired
+losses / 0 neutral after excluding the preliminary `vmi1149989` route as
+superseded by later final-source validation.
+
+SciPy head-to-head for the restored parent route, local SciPy 1.17.1 oracle with
+the same ODE/tolerance shape:
+
+| Workload | Restored Rust | SciPy 1.17.1 | SciPy/Rust | Result |
+| --- | ---: | ---: | ---: | --- |
+| `solve_ivp RK45 exponential` | 18.589129 us/call | 1443.255860 us/call | 77.64x | Rust win |
+| `solve_ivp RK45 Lorenz` | 28.266539 us/call | 2062.735365 us/call | 72.97x | Rust win |
+
+- Ratio summary vs SciPy for restored Rust: 2 wins / 0 losses / 0 neutral.
+- Ratio summary for this scratch lever vs restored parent: 1 win / 3 losses /
+  0 neutral on paired final-validation rows, so the source change was reverted.
+- Correctness/conformance guards:
+  - PASS: rch `cargo check -p fsci-integrate --all-targets` on the scratch
+    candidate before rejection.
+  - PASS: rch `cargo test -p fsci-integrate rk -- --nocapture` on the scratch
+    candidate after the `RkStepScratch` cleanup (`17` filtered RK tests plus
+    the focused property row passed).
+  - PASS: rch `cargo test -p fsci-conformance --test e2e_ivp -- --nocapture`
+    on the scratch candidate (`11` IVP scenarios passed on `vmi1227854`).
+  - PASS: local `rustfmt --edition 2024 crates/fsci-integrate/src/rk.rs` and
+    `git diff --check` before final source revert.
+  - BLOCKED: rch `cargo clippy -p fsci-integrate --all-targets --no-deps --
+    -D warnings` had no remaining RK scratch API lint, but still failed on
+    pre-existing unrelated `api.rs`/`quad.rs` lints:
+    `solve_event_equation` too-many-arguments, `quad.rs` excessive precision,
+    and `quad.rs` type complexity.
+- Decision: reject and revert. The source tree is back to the parent RK route;
+  the public SciPy ratios remain wins because the baseline Rust solver already
+  avoids Python callback overhead. Do not retry this scratch formulation unless
+  a fresh allocation profile puts RK temporary `Vec` churn back in the top five
+  costs and the replacement proves both scalar and vector ODE rows on the same
+  worker in one run window.
 
 ## 2026-06-18 - frankenscipy-6m75u - Wolfe trial-point scratch reuse
 
