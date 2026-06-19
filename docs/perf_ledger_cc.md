@@ -868,3 +868,14 @@ iterative-kernel→Cephes-rational lever:
   ~80-line/6-array port across 4 functions → lower ROI than erf's 5.9×; flagged not done.
 RECIPE (proven): `gh api repos/scipy/xsf/contents/include/xsf/cephes/<file>.h --jq .content |
 base64 -d` → transcribe the exact coefficient arrays → byte-matches scipy.special.
+
+### ✅ j0 Cephes rational kernel (byte-matches scipy; array 1.1×, kernel win contention-masked)
+Applied the proven Cephes-fetch lever to j0_core: replaced the convergence-loop power series
+(~25 terms for x<14) with scipy's xsf EXACT Cephes rational (RP/RQ for |x|≤5 + PP/PQ/QP/QQ
+asymptotic modulus/phase for |x|>5) → byte-matches scipy.special.j0. Conformance: NO new
+failures (the 4 — digamma/polygamma/exp2/powm1 — are pre-existing non-j0/non-erf, another
+agent's work). MEASURED special_array_65536/j0: 1.08ms → 0.985ms = 1.1× — modest because the
+array is SPAWN-bound under fleet contention (the rational-vs-series kernel win is bigger but
+masked; cf. erf where the kernel was a big enough fraction to show 5×). KEPT: strictly better
+(scipy-exact parity + provably fewer ops), not a regression. j0_series_small retained (y0 uses
+it at 3212). j1/y0/y1 still series (same lever, lower priority).
