@@ -1,5 +1,42 @@
 # Performance Release-Readiness Scorecard
 
+## 2026-06-20 - fsci-ndimage gaussian_filter inner1 reflect reject
+
+- Agent: cod-a / MistyBirch
+- Bead: `frankenscipy-6l77z`
+- Decision: REJECT AND REVERT. The row-contiguous reflect/origin-zero direct
+  interior dot specialization was intended to remove boundary-branch overhead in
+  the final gaussian pass, but same-worker rch Criterion showed a regression.
+  Release-readiness score for this attempted lever is `0/1/0` against the
+  restored current Rust route and `0/1/0` against SciPy.
+- Artifact:
+  `tests/artifacts/perf/2026-06-20-ndimage-gaussian-inner1-reflect-reject/EVIDENCE.md`
+
+| Gate | Result | Notes |
+| --- | --- | --- |
+| rch same-worker baseline | PASS | current `gaussian_sigma2/256` on `hz2`: 3.4399 ms mean, [3.3426, 3.5375] ms |
+| rch same-worker candidate | FAIL | candidate `gaussian_sigma2/256` on `hz2`: 4.0213 ms mean, [3.8424, 4.1989] ms; Criterion reported +16.902% regression |
+| SciPy oracle | PASS | local SciPy 1.17.1 `gaussian_filter sigma=2 256x256`: 1.13557 ms p50 |
+| Candidate revert | PASS | no production code from the attempted fast path is staged |
+| Focused gaussian guard | PASS | `cargo test -p fsci-ndimage gaussian_filter1d_matches_scipy_axis1_reflect --lib -- --nocapture` via rch `hz2`: 1 passed / 0 failed |
+| Local live SciPy conformance | PASS | `FSCI_REQUIRE_SCIPY_ORACLE=1 cargo test -p fsci-conformance --test diff_ndimage -- --nocapture`: 5 passed / 0 failed |
+| Full clippy/check/fmt | NOT RUN | no production code was kept; existing shared `fsci-ndimage/src/lib.rs` dirt belongs to a separate EDT worker and is not staged here |
+
+| Workload / route | Mean | Ratio | Verdict |
+| --- | ---: | ---: | --- |
+| Restored current Rust `gaussian_sigma2/256` | 3.4399 ms | 3.03x slower than SciPy | retained current |
+| Candidate inner1 reflect direct interior dot | 4.0213 ms | 1.17x slower than current; 3.54x slower than SciPy | reject |
+| SciPy `ndimage.gaussian_filter` sigma=2 256x256 | 1.13557 ms | 1.00x oracle | reference |
+
+Readiness notes:
+
+- The final-axis row-contiguous loop is not the isolated bottleneck enough to
+  justify scalar border/interior splitting. It increased overhead despite using
+  direct in-bounds indexing for the interior.
+- Future gaussian work should move one level deeper: transpose/cache-tile the
+  separable passes so both axes can run contiguous, or build a vector-friendly
+  shared dot kernel and prove it against this restored route.
+
 ## 2026-06-20 - fsci-ndimage label mean one-based contiguous gauntlet
 
 - Agent: cod-b / MistyBirch

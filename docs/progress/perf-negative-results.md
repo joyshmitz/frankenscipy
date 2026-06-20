@@ -4,6 +4,55 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-20 - frankenscipy-6l77z - ndimage gaussian_filter inner1 reflect reject
+
+- Agent: cod-a / MistyBirch
+- Lever: specialize `convolve1d_along_axis` for the row-contiguous
+  `inner == 1`, `BoundaryMode::Reflect`, odd-kernel, `origin == 0` path used by
+  the final axis of `gaussian_filter(..., sigma=2.0)` on 2-D images. The
+  candidate kept border samples on the existing `boundary_index_1d` path and
+  used direct in-bounds indexing only for the interior tap dot.
+- Graveyard/artifact route tested: cache-line contiguous stencil specialization
+  and branch removal inside the dense dot, after the previous always-line-walk
+  and outer-axis row-splitting route was rejected.
+- Decision: REJECT AND REVERT. Same-worker Criterion on rch `hz2` regressed the
+  realistic gaussian row by `1.17x` versus current, so no source change shipped.
+- Artifact:
+  `tests/artifacts/perf/2026-06-20-ndimage-gaussian-inner1-reflect-reject/EVIDENCE.md`
+- Baseline/current Rust command:
+  `AGENT_NAME=MistyBirch RCH_REQUIRE_REMOTE=1 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a rch exec -- cargo bench -p fsci-ndimage --bench ndimage_bench -- correlate_gaussian/gaussian_sigma2/256 --noplot`
+- Candidate Rust command:
+  `AGENT_NAME=MistyBirch RCH_REQUIRE_REMOTE=1 RCH_WORKER=hz2 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a rch exec -- cargo bench -p fsci-ndimage --bench ndimage_bench -- correlate_gaussian/gaussian_sigma2/256 --noplot`
+- SciPy oracle command:
+  `AGENT_NAME=MistyBirch python3 docs/perf_oracle_ndimage.py`
+- Benchmark evidence:
+
+  | Workload / route | Mean | Interval | Ratio / verdict |
+  | --- | ---: | ---: | --- |
+  | Current Rust `gaussian_sigma2/256`, rch `hz2` | 3.4399 ms | [3.3426, 3.5375] ms | 3.03x slower than SciPy |
+  | Candidate inner1 reflect direct interior dot, rch `hz2` | 4.0213 ms | [3.8424, 4.1989] ms | 1.17x slower than current; 3.54x slower than SciPy |
+  | SciPy `ndimage.gaussian_filter`, local SciPy 1.17.1 | 1.13557 ms | p50 | oracle |
+
+- Win/loss/neutral:
+  - Same-worker candidate versus current: `0/1/0`.
+  - Final restored current versus SciPy oracle: `0/1/0`.
+- Correctness/conformance guards:
+  - PASS: focused gaussian guard via rch `hz2`:
+    `cargo test -p fsci-ndimage gaussian_filter1d_matches_scipy_axis1_reflect --lib -- --nocapture`
+    = **1 passed / 0 failed**.
+  - PASS: local live SciPy conformance:
+    `FSCI_REQUIRE_SCIPY_ORACLE=1 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a cargo test -p fsci-conformance --test diff_ndimage -- --nocapture`
+    = **5 passed / 0 failed**.
+  - PASS: candidate source was reverted before staging; the remaining production
+    `crates/fsci-ndimage/src/lib.rs` diff belongs to a separate live EDT worker
+    and is not part of this commit.
+- Negative evidence: do not retry another scalar `inner == 1` reflect-only
+  interior/border split for this gaussian workload without a new profile proving
+  the old closure/boundary branch is still dominant. The next plausible route is
+  a deeper separable-layout primitive: transpose/cache-tile between axes so both
+  passes are contiguous, or introduce a shared vector-friendly dot kernel with a
+  same-worker A/B against the restored current route.
+
 ## 2026-06-20 - frankenscipy-8l8r1.126 - label mean one-based contiguous index
 
 - Agent: cod-b / MistyBirch

@@ -6,6 +6,27 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-20 - frankenscipy-6l77z - gaussian_filter inner1 reflect reject
+
+- Agent: cod-a / MistyBirch
+- Decision: REJECT AND REVERT. The row-contiguous reflect/origin-zero direct
+  interior dot specialization regressed `gaussian_sigma2/256` on the same rch
+  worker.
+- Artifact:
+  `tests/artifacts/perf/2026-06-20-ndimage-gaussian-inner1-reflect-reject/EVIDENCE.md`
+- Same-worker candidate/current score: `0/1/0`.
+- Final restored current/SciPy score: `0/1/0`.
+
+| Route | Mean | Ratio |
+| --- | ---: | ---: |
+| Current Rust on rch `hz2` | 3.4399 ms | 3.03x slower than SciPy |
+| Candidate Rust on rch `hz2` | 4.0213 ms | 1.17x slower than current; 3.54x slower than SciPy |
+| SciPy `ndimage.gaussian_filter` | 1.13557 ms | oracle |
+
+Negative evidence: do not retry scalar row-contiguous reflect-only interior
+tap peeling for this workload without a fresh profile; route next to
+transpose/cache-tiled separable layout or a shared vector-friendly dot kernel.
+
 ## 2026-06-20 - frankenscipy-8l8r1.126 - label mean one-based contiguous index
 
 - Agent: cod-b / MistyBirch

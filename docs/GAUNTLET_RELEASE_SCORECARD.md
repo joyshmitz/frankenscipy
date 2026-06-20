@@ -42,6 +42,7 @@ win/loss/neutral ledger lives in `docs/progress/perf-negative-results.md`.
 | `frankenscipy-8l8r1.126` | `ndimage.mean(labels,index)` one-based contiguous index | N=262144 K=1024 label-indexed mean | 634.996 us | 0.585 ms | 1.09x slower | keep 1.02x same-host internal win vs dense table; route deeper |
 | `frankenscipy-8l8r1.126` | `ndimage.mean(labels,index)` one-based contiguous index | N=262144 K=2048 label-indexed mean | 687.054 us | 0.576 ms | 1.19x slower | keep 1.25x same-host internal win vs dense table; route deeper |
 | `frankenscipy-8l8r1.126` | `ndimage.mean(labels,index)` one-based contiguous index | N=589824 K=4096 label-indexed mean | 1.423 ms | 1.380 ms | 1.03x slower | keep 1.25x same-host internal win vs dense table; near parity |
+| `frankenscipy-6l77z` | `ndimage.gaussian_filter` restored current route | `gaussian_filter(sigma=2)` 256x256 Reflect | 3.4399 ms | 1.13557 ms | 3.03x slower | reject inner1 reflect direct-dot candidate; route deeper |
 | `frankenscipy-fa62u` | `ndimage.mean(labels,index)` cheap dense integer probe | N=65536 K=512 label-indexed mean | 278.230 us | 0.210 ms | 1.33x slower | keep 2.13x same-host internal win vs dense `fract` probe; route deeper |
 | `frankenscipy-fa62u` | `ndimage.mean(labels,index)` cheap dense integer probe | N=262144 K=1024 label-indexed mean | 1.122 ms | 0.749 ms | 1.50x slower | keep 2.09x same-host internal win vs dense `fract` probe; route deeper |
 | `frankenscipy-fa62u` | `ndimage.mean(labels,index)` cheap dense integer probe | N=262144 K=2048 label-indexed mean | 1.186 ms | 0.751 ms | 1.58x slower | keep 2.13x same-host internal win vs dense `fract` probe; route deeper |
@@ -73,6 +74,7 @@ win/loss/neutral ledger lives in `docs/progress/perf-negative-results.md`.
 | `frankenscipy-8l8r1.116` | FFT CSD rfft real-spectrum route | 65536-sample CSD helper vs SciPy rfft formula | 2.3509 ms | 1.653584 ms SciPy | reject and revert |
 | `frankenscipy-8l8r1.124` | `jnjnp_zeros` top-k candidate partition | `jnjnp_zeros(nt=64)` same-binary probe | 0.911730 ms | 0.928939 ms full-sort | reject: 1.019x near-noise |
 | `frankenscipy-8l8r1.124` | `jnjnp_zeros` top-k candidate partition | `jnjnp_zeros(nt=128)` same-binary probe | 1.715855 ms | 1.737776 ms full-sort | reject: 1.013x near-noise |
+| `frankenscipy-6l77z` | `gaussian_filter1d` row-contiguous reflect/origin-zero direct interior dot | `ndimage` gaussian sigma=2, 256x256 | 4.0213 ms | 3.4399 ms current; 1.13557 ms SciPy | reject and revert |
 | `frankenscipy-acdq2` | `gaussian_filter1d` always-line-walk plus outermost row-split/direct interior taps | `ndimage` gaussian sigma=2, 256x256 | 4.2236 ms | 2.4792 ms clean current; prior ledger current 3.238 ms | reject and revert |
 | `frankenscipy-fo9cj` | Sparse Arnoldi row-major basis arena plus mutable operator scratch | `eigsh n=2000 k=6` | 1.667 ms | 1.184 ms parent/restored | reject and revert |
 | `frankenscipy-fo9cj` | Sparse Arnoldi row-major basis arena plus mutable operator scratch | `eigsh n=8000 k=6` | 6.594 ms | 5.548 ms parent/restored | reject and revert |
