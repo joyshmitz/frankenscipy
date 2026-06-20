@@ -541,3 +541,26 @@ interior-direct (boundary-map only the ~window-1 edge cells).**
   total. Still a strict, byte-identical improvement that removes the
   sequential-outlier inconsistency and beats scipy end-to-end. Further gain would
   need a parallel sort / parallel DOK assembly.
+
+## 2026-06-20 - theilslopes/siegelslopes MEASURED WIN (8-54x vs scipy); build-parallel = no-op reject
+
+- Agent: cc / MistyBirch
+- Finding (MEASURED, rch vs scipy.stats.theilslopes/siegelslopes — both O(n²) in
+  scipy's C): fsci already DOMINATES. Added a `robust_slopes` bench (was uncovered).
+
+| Op (n) | fsci | scipy | ratio |
+| --- | ---: | ---: | --- |
+| theilslopes n=2000  | 9.81 ms | 81.9 ms | **8.3x faster** |
+| theilslopes n=4000  | 36.9 ms | 365 ms  | **9.9x faster** |
+| siegelslopes n=2000 | 3.10 ms | 71.0 ms | **22.9x faster** |
+| siegelslopes n=4000 | 5.53 ms | 297 ms  | **53.7x faster** |
+
+- siegelslopes wins via its already-parallel per-anchor repeated-median;
+  theilslopes wins via the count-based (`count_le`) rank selection / O(n log n)
+  inversion fast path (falling back to materialized O(n²) only for x-ties).
+- REJECT (reverted): parallelizing the `theilslopes_materialized` O(n²) slope BUILD
+  (byte-identical — slopes feed only multiset median/rank statistics). Measured
+  no-op: n=4000 36.9→34.1 ms (<8%, noise). The materialized fallback is not the hot
+  path for distinct-x data (the count-based fast path is), and even when it is, the
+  `select_nth`/median dominate the build. Don't parallelize the build alone. Only
+  the bench (regression coverage) is kept.

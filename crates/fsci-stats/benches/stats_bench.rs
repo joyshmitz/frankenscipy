@@ -1,8 +1,9 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use std::hint::black_box;
 use fsci_stats::{
     HaltonSampler, SobolSampler, SomersDInput, acf, argsort, centered_discrepancy, ecdf, histogram,
     kendalltau, l2_star_discrepancy, mannkendall, mixture_discrepancy, pacf, psd_welch, rand_index,
-    somersd, wraparound_discrepancy,
+    siegelslopes, somersd, theilslopes, wraparound_discrepancy,
 };
 
 fn deterministic_data(n: usize) -> Vec<f64> {
@@ -198,8 +199,28 @@ fn bench_mgc(c: &mut Criterion) {
     group.finish();
 }
 
+/// Theil-Sen / Siegel robust regression slopes — head-to-head vs
+/// scipy.stats.theilslopes / siegelslopes (both O(n^2) in scipy's C).
+fn bench_robust_slopes(c: &mut Criterion) {
+    let mut group = c.benchmark_group("robust_slopes");
+    for &n in &[2000usize, 4000] {
+        let x: Vec<f64> = (0..n).map(|i| i as f64 * 0.001 + (i % 7) as f64 * 1e-4).collect();
+        let y: Vec<f64> = (0..n)
+            .map(|i| 2.0 * x[i] + ((i * 2654435761usize) % 1000) as f64 * 1e-3)
+            .collect();
+        group.bench_function(BenchmarkId::new("theilslopes", n), |b| {
+            b.iter(|| theilslopes(black_box(&x), black_box(&y), 0.95))
+        });
+        group.bench_function(BenchmarkId::new("siegelslopes", n), |b| {
+            b.iter(|| siegelslopes(black_box(&x), black_box(&y)))
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
+    bench_robust_slopes,
     bench_mgc,
     bench_qmc_discrepancy,
     bench_qmc_sampling,
