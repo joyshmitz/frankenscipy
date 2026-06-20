@@ -4,6 +4,59 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-20 - frankenscipy-zpunl - Radau diagonal stage solve
+
+- Agent: cod-a / MistyBirch
+- Lever: specialize Radau's exactly diagonal Jacobian path. The `3n x 3n`
+  collocation system splits into `n` independent `3 x 3` systems and the
+  real-shift error solve becomes scalar division. The dense assembly/LU fallback
+  remains for non-diagonal Jacobians.
+- Decision: KEEP. This flips the previous Radau64 stiff-suite SciPy loss into a
+  large measured win.
+- Artifact:
+  `tests/artifacts/perf/frankenscipy-zpunl-radau64-stage-lu/EVIDENCE.md`
+- Correctness guards:
+  - Focused Radau tests via rch:
+    `cargo test -p fsci-integrate radau --lib -- --nocapture` =
+    **3 passed / 0 failed**.
+  - New diagonal solve guard compares the diagonal `3 x 3` block route against
+    the dense `3n x 3n` LU route to `1e-12`.
+  - `cargo check -p fsci-integrate --all-targets` via rch: **PASS**.
+  - Touched-file rustfmt and `git diff --check`: **PASS**.
+- Gate caveats:
+  - `cargo clippy -p fsci-integrate --all-targets -- -D warnings` is still
+    blocked by pre-existing non-Radau lint debt after the touched helper issue
+    was fixed: `api.rs`, `rk.rs`, and `quad.rs`.
+  - `cargo test -p fsci-conformance --test e2e_ivp -- --nocapture` is blocked
+    before IVP tests by unrelated `fsci-cluster` compile errors for missing
+    `fsci_linalg::{randomized_svd, randomized_eigh}` symbols plus one ambiguous
+    float.
+- Same-worker A/B on `ovh-a`, repeats=20:
+
+  | Route | per-call | nfev | njev | nlu | checksum |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | baseline dense Radau stage LU | 70047.428100 us | 20900 | 20 | 5600 | 3.234169482298e4 |
+  | diagonal stage/scalar solve | 1124.530700 us | 20900 | 20 | 5600 | 3.234169482298e4 |
+
+- Final-source head-to-head vs local SciPy 1.17.1:
+
+  | Workload | Rust final | SciPy oracle | Ratio | Verdict |
+  | --- | ---: | ---: | ---: | --- |
+  | `radau-stiff64`, repeats=20 | 1687.783900 us | 36545.873049 us | 21.65x faster | SciPy win |
+  | `bdf-stiff64` | 2306.348100 us | 25448.461401 us | 11.03x faster | SciPy win |
+  | `bdf-stiff128` | 12041.547000 us | 29874.872195 us | 2.48x faster | SciPy win |
+  | `radau-stiff32` | 591.275600 us | 33708.498604 us | 57.01x faster | SciPy win |
+  | `radau-stiff64`, stiff-suite repeats=10 | 1306.515700 us | 36488.462600 us | 27.93x faster | SciPy win |
+
+- SciPy win/loss/neutral for final stiff suite: `4/0/0`.
+- Negative evidence: the previous Radau scaled-RMS stream candidate remains a
+  no-retry rejection. The profitable target was dense stage linear algebra for
+  structured Jacobians, not norm materialization.
+- Retry condition: future Radau attempts should move to banded/non-diagonal
+  structure detection, step-to-step LU reuse, or analytic Jacobian plumbing. Do
+  not spend another pass on collected-vs-streamed norm micro-variants unless a
+  fresh profile shows norm work back on the hot path.
+
 ## 2026-06-20 - frankenscipy-klb7o - label mean dense lookup
 
 - Agent: cod-a / MistyBirch

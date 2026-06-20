@@ -1,5 +1,42 @@
 # Performance Release-Readiness Scorecard
 
+## 2026-06-20 - fsci-integrate Radau diagonal-Jacobian stage solve
+
+- Agent: cod-a / MistyBirch
+- Bead: `frankenscipy-zpunl`
+- Decision: KEEP. The remaining Radau64 stiff-suite loss is now a SciPy win by
+  avoiding dense stage-system assembly/LU when the Jacobian is exactly diagonal.
+  Final stiff-suite score is `4/0/0` against SciPy.
+- Artifact:
+  `tests/artifacts/perf/frankenscipy-zpunl-radau64-stage-lu/EVIDENCE.md`
+
+| Gate | Result | Notes |
+| --- | --- | --- |
+| Same-worker A/B | PASS | Baseline worktree `8e8a5b45` vs candidate on rch `ovh-a`: Radau64 `70047.428100 us -> 1124.530700 us`, 62.29x faster, unchanged counters/checksum |
+| Rust release benchmark | PASS | Final-source `radau-stiff64 20` on rch `hz2`: `1687.783900 us/call`; final-source `stiff-suite 10` on rch `hz2`: `4/0/0` vs SciPy |
+| SciPy head-to-head oracle | PASS | local SciPy 1.17.1 via `docs/perf_oracle_integrate_stiff.py`; final Radau64 focused row is 21.65x faster than SciPy |
+| Focused Radau tests | PASS | `cargo test -p fsci-integrate radau --lib -- --nocapture` via rch: 3 passed / 0 failed |
+| Crate compile | PASS | `cargo check -p fsci-integrate --all-targets` via rch |
+| Formatting | PASS | `rustfmt --edition 2024 --check crates/fsci-integrate/src/radau.rs` |
+| Diff hygiene | PASS | `git diff --check` |
+| Clippy `-D warnings` | BLOCKED | existing non-Radau `api.rs`/`rk.rs`/`quad.rs` lint debt; touched Radau helper issue fixed |
+| IVP conformance | BLOCKED | `fsci-conformance` currently compiles unrelated `fsci-cluster`, which fails before IVP tests on missing `fsci_linalg::randomized_svd/randomized_eigh` symbols |
+
+| Workload / route | Final Rust | SciPy oracle | Ratio | Verdict |
+| --- | ---: | ---: | ---: | --- |
+| `bdf-stiff64` | 2306.348100 us | 25448.461401 us | 11.03x faster | SciPy win |
+| `bdf-stiff128` | 12041.547000 us | 29874.872195 us | 2.48x faster | SciPy win |
+| `radau-stiff32` | 591.275600 us | 33708.498604 us | 57.01x faster | SciPy win |
+| `radau-stiff64` | 1306.515700 us | 36488.462600 us | 27.93x faster | SciPy win |
+| `radau-stiff64` focused final source | 1687.783900 us | 36545.873049 us | 21.65x faster | SciPy win |
+
+Readiness notes:
+
+- Exactly diagonal Radau Jacobians now use independent `3 x 3` stage solves and
+  scalar real-shift solves. Non-diagonal Jacobians keep the dense fallback.
+- The prior Radau streamed scaled-RMS candidate remains rejected. Future Radau
+  work should target banded/non-diagonal structure detection or LU reuse.
+
 ## 2026-06-20 - fsci-integrate stiff BDF/Radau stream-norm gauntlet
 
 - Agent: cod-a / MistyBirch

@@ -45,6 +45,113 @@ fn rms_norm(x: &[f64]) -> f64 {
     (s / x.len() as f64).sqrt()
 }
 
+fn diagonal_jacobian_entries(jac: &DMatrix<f64>) -> Option<Vec<f64>> {
+    let n = jac.nrows();
+    if jac.ncols() != n {
+        return None;
+    }
+
+    let mut diagonal = Vec::with_capacity(n);
+    for row in 0..n {
+        for col in 0..n {
+            let value = jac[(row, col)];
+            if row == col {
+                diagonal.push(value);
+            } else if value != 0.0 {
+                return None;
+            }
+        }
+    }
+    Some(diagonal)
+}
+
+fn solve_3x3(mut matrix: [[f64; 3]; 3], mut rhs: [f64; 3]) -> Option<[f64; 3]> {
+    for pivot_col in 0..3 {
+        let mut pivot_row = pivot_col;
+        let mut pivot_abs = matrix[pivot_col][pivot_col].abs();
+        for (row, values) in matrix.iter().enumerate().skip(pivot_col + 1) {
+            let candidate_abs = values[pivot_col].abs();
+            if candidate_abs > pivot_abs {
+                pivot_row = row;
+                pivot_abs = candidate_abs;
+            }
+        }
+        if pivot_abs == 0.0 || !pivot_abs.is_finite() {
+            return None;
+        }
+        if pivot_row != pivot_col {
+            matrix.swap(pivot_col, pivot_row);
+            rhs.swap(pivot_col, pivot_row);
+        }
+
+        let pivot = matrix[pivot_col][pivot_col];
+        let pivot_values = matrix[pivot_col];
+        let pivot_rhs = rhs[pivot_col];
+        for (row, row_values) in matrix.iter_mut().enumerate().skip(pivot_col + 1) {
+            let factor = row_values[pivot_col] / pivot;
+            row_values[pivot_col] = 0.0;
+            for (col, value) in row_values.iter_mut().enumerate().skip(pivot_col + 1) {
+                *value -= factor * pivot_values[col];
+            }
+            rhs[row] -= factor * pivot_rhs;
+        }
+    }
+
+    let mut out = [0.0; 3];
+    for row in (0..3).rev() {
+        let mut value = rhs[row];
+        for (col, &out_col) in out.iter().enumerate().skip(row + 1) {
+            value -= matrix[row][col] * out_col;
+        }
+        out[row] = value / matrix[row][row];
+    }
+    Some(out)
+}
+
+fn solve_collocation_diagonal(
+    diagonal: &[f64],
+    h: f64,
+    tableau_a: &[[f64; 3]; 3],
+    rhs: &DVector<f64>,
+) -> Option<Vec<f64>> {
+    let n = diagonal.len();
+    let mut out = vec![0.0; 3 * n];
+    for (j, &lambda) in diagonal.iter().enumerate() {
+        let mut block = [[0.0; 3]; 3];
+        for i in 0..3 {
+            for l in 0..3 {
+                block[i][l] = -h * tableau_a[i][l] * lambda;
+                if i == l {
+                    block[i][l] += 1.0;
+                }
+            }
+        }
+        let solved = solve_3x3(block, [rhs[j], rhs[n + j], rhs[2 * n + j]])?;
+        out[j] = solved[0];
+        out[n + j] = solved[1];
+        out[2 * n + j] = solved[2];
+    }
+    Some(out)
+}
+
+fn solve_real_diagonal(
+    diagonal: &[f64],
+    h: f64,
+    mu_real: f64,
+    rhs: &DVector<f64>,
+) -> Option<Vec<f64>> {
+    let shift = mu_real / h;
+    let mut out = Vec::with_capacity(diagonal.len());
+    for (j, &lambda) in diagonal.iter().enumerate() {
+        let denom = shift - lambda;
+        if denom == 0.0 || !denom.is_finite() {
+            return None;
+        }
+        out.push(rhs[j] / denom);
+    }
+    Some(out)
+}
+
 /// Radau IIA solver state.
 pub struct RadauSolver {
     n: usize,
@@ -305,27 +412,37 @@ impl RadauSolver {
                 let jac = self.compute_jacobian(fun, self.t, &y_cur, &f_cur);
                 self.jac = Some(jac);
             }
-            let jac = self.jac.clone().expect("jacobian present");
-
             // M_3n = I_{3n} − h (A ⊗ J); M_real = (mu_real/h) I − J.
-            let mut m = DMatrix::<f64>::zeros(3 * n, 3 * n);
-            for bi in 0..3 {
-                for bj in 0..3 {
-                    let coef = h * self.a[bi][bj];
-                    for r in 0..n {
-                        for col in 0..n {
-                            let mut val = -coef * jac[(r, col)];
-                            if bi == bj && r == col {
-                                val += 1.0;
+            // Exactly diagonal Jacobians split M_3n into n independent 3x3
+            // systems and M_real into scalar solves, avoiding dense assembly
+            // and LU while preserving the same simplified-Newton equations.
+            let mut lu_3n = None;
+            let mut lu_real = None;
+            let diagonal_jac = {
+                let jac = self.jac.as_ref().expect("jacobian present");
+                let diagonal = diagonal_jacobian_entries(jac);
+                if diagonal.is_none() {
+                    let mut m = DMatrix::<f64>::zeros(3 * n, 3 * n);
+                    for bi in 0..3 {
+                        for bj in 0..3 {
+                            let coef = h * self.a[bi][bj];
+                            for r in 0..n {
+                                for col in 0..n {
+                                    let mut val = -coef * jac[(r, col)];
+                                    if bi == bj && r == col {
+                                        val += 1.0;
+                                    }
+                                    m[(bi * n + r, bj * n + col)] = val;
+                                }
                             }
-                            m[(bi * n + r, bj * n + col)] = val;
                         }
                     }
+                    let m_real = DMatrix::<f64>::identity(n, n) * (self.mu_real / h) - jac;
+                    lu_3n = Some(m.lu());
+                    lu_real = Some(m_real.lu());
                 }
-            }
-            let lu_3n = m.lu();
-            let m_real = DMatrix::<f64>::identity(n, n) * (self.mu_real / h) - &jac;
-            let lu_real = m_real.lu();
+                diagonal
+            };
             self.nlu += 2;
 
             // Simplified Newton on the stage corrections Z (3 × n), initial guess 0.
@@ -364,7 +481,15 @@ impl RadauSolver {
                         rhs[i * n + j] = -acc;
                     }
                 }
-                let Some(dz) = lu_3n.solve(&rhs) else {
+                let dz = if let Some(diagonal) = diagonal_jac.as_deref() {
+                    solve_collocation_diagonal(diagonal, h, &self.a, &rhs)
+                } else {
+                    lu_3n
+                        .as_ref()
+                        .and_then(|lu| lu.solve(&rhs))
+                        .map(|dz| dz.iter().copied().collect())
+                };
+                let Some(dz) = dz else {
                     bad = true;
                     break;
                 };
@@ -411,10 +536,15 @@ impl RadauSolver {
                 .map(|j| self.atol[j] + self.rtol * self.y[j].abs().max(y_new[j].abs()))
                 .collect();
             let mut err_rhs = DVector::<f64>::from_iterator(n, (0..n).map(|j| self.f[j] + ze[j]));
-            let mut error = lu_real
-                .solve(&err_rhs)
-                .map(|v| (0..n).map(|j| v[j]).collect::<Vec<_>>())
-                .unwrap_or_else(|| vec![f64::NAN; n]);
+            let mut error = if let Some(diagonal) = diagonal_jac.as_deref() {
+                solve_real_diagonal(diagonal, h, self.mu_real, &err_rhs)
+            } else {
+                lu_real
+                    .as_ref()
+                    .and_then(|lu| lu.solve(&err_rhs))
+                    .map(|v| (0..n).map(|j| v[j]).collect::<Vec<_>>())
+            }
+            .unwrap_or_else(|| vec![f64::NAN; n]);
             let mut error_norm =
                 rms_norm(&(0..n).map(|j| error[j] / err_scale[j]).collect::<Vec<_>>());
 
@@ -424,8 +554,16 @@ impl RadauSolver {
                 let fp = fun(self.t, &yp);
                 self.nfev += 1;
                 err_rhs = DVector::<f64>::from_iterator(n, (0..n).map(|j| fp[j] + ze[j]));
-                if let Some(v) = lu_real.solve(&err_rhs) {
-                    error = (0..n).map(|j| v[j]).collect();
+                let corrected_error = if let Some(diagonal) = diagonal_jac.as_deref() {
+                    solve_real_diagonal(diagonal, h, self.mu_real, &err_rhs)
+                } else {
+                    lu_real
+                        .as_ref()
+                        .and_then(|lu| lu.solve(&err_rhs))
+                        .map(|v| (0..n).map(|j| v[j]).collect::<Vec<_>>())
+                };
+                if let Some(v) = corrected_error {
+                    error = v;
                     error_norm =
                         rms_norm(&(0..n).map(|j| error[j] / err_scale[j]).collect::<Vec<_>>());
                 }
@@ -474,6 +612,59 @@ impl RadauSolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn diagonal_collocation_solve_matches_dense_block_solve() {
+        let s6 = 6.0_f64.sqrt();
+        let tableau_a = [
+            [
+                (88.0 - 7.0 * s6) / 360.0,
+                (296.0 - 169.0 * s6) / 1800.0,
+                (-2.0 + 3.0 * s6) / 225.0,
+            ],
+            [
+                (296.0 + 169.0 * s6) / 1800.0,
+                (88.0 + 7.0 * s6) / 360.0,
+                (-2.0 - 3.0 * s6) / 225.0,
+            ],
+            [(16.0 - s6) / 36.0, (16.0 + s6) / 36.0, 1.0 / 9.0],
+        ];
+        let diagonal = [-1.25, -32.0, -800.0];
+        let h = 0.0025;
+        let n = diagonal.len();
+        let rhs = DVector::<f64>::from_vec(vec![0.25, -0.5, 1.0, 2.0, -3.0, 4.0, -5.0, 6.0, -7.0]);
+
+        let diagonal_solution =
+            solve_collocation_diagonal(&diagonal, h, &tableau_a, &rhs).expect("diagonal solve");
+
+        let mut jac = DMatrix::<f64>::zeros(n, n);
+        for (idx, &value) in diagonal.iter().enumerate() {
+            jac[(idx, idx)] = value;
+        }
+        let mut dense = DMatrix::<f64>::zeros(3 * n, 3 * n);
+        for bi in 0..3 {
+            for bj in 0..3 {
+                let coef = h * tableau_a[bi][bj];
+                for row in 0..n {
+                    for col in 0..n {
+                        let mut value = -coef * jac[(row, col)];
+                        if bi == bj && row == col {
+                            value += 1.0;
+                        }
+                        dense[(bi * n + row, bj * n + col)] = value;
+                    }
+                }
+            }
+        }
+        let dense_solution = dense.lu().solve(&rhs).expect("dense solve");
+
+        for (diagonal_value, dense_value) in diagonal_solution.iter().zip(dense_solution.iter()) {
+            assert!(
+                (diagonal_value - dense_value).abs() <= 1e-12,
+                "diagonal={diagonal_value}, dense={dense_value}"
+            );
+        }
+    }
 
     #[test]
     fn radau_first_step_hardened_rejects_non_finite_f0() {
