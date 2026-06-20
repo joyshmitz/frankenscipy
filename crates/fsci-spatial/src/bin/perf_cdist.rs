@@ -42,7 +42,9 @@ fn main() {
 
     let metric = DistanceMetric::Euclidean;
     for &(na, nb, dim) in &[
-        (2000usize, 2000usize, 3usize),
+        (1000usize, 1000usize, 4usize),
+        (2000, 500, 4),
+        (2000, 2000, 3),
         (4000, 1000, 8),
         (3000, 3000, 16),
     ] {

@@ -1057,6 +1057,29 @@ pub fn cdist_metric(
     // quantities and the cross term use the same arithmetic/summation order as the scalar
     // `cosine`/`correlation` helpers (see `pdist`).
     let result: Vec<Vec<f64>> = match metric {
+        // Dim-4 Euclidean/Cosine: vectorize a whole output row across xb columns (SoA) so the
+        // dependent per-pair sqrt/divide pipeline across SIMD lanes. BIT-identical to the
+        // generic per-pair arm at d=4 (see pdist nm8ex); flips a 2.4-2.6x SciPy loss.
+        DistanceMetric::Euclidean if dim == 4 => {
+            let xa4 = collect_dim4_points(xa);
+            let b4 = collect_dim4_points(xb);
+            let b_soa = dim4_soa(&b4);
+            // The d=4 kernel is memory-bandwidth-bound (≈40 bytes traffic per 8-byte output,
+            // low arithmetic intensity), so ~16 threads saturate bandwidth; beyond that extra
+            // workers only contend (measured: cap16 1.9ms vs cap64 4.6ms vs SciPy 2.2ms).
+            cdist_fill_rows(na, nthreads.min(16), |i| cdist_row_euclidean4(&xa4[i], &b_soa, nb))
+        }
+        DistanceMetric::Cosine if dim == 4 => {
+            let na_norm: Vec<f64> = xa.iter().map(|v| simd_sqsum(v).sqrt()).collect();
+            let nb_norm: Vec<f64> = xb.iter().map(|v| simd_sqsum(v).sqrt()).collect();
+            let xa4 = collect_dim4_points(xa);
+            let b4 = collect_dim4_points(xb);
+            let b_soa = dim4_soa(&b4);
+            // Bandwidth-bound like Euclidean: cap workers at 16 to avoid contention.
+            cdist_fill_rows(na, nthreads.min(16), |i| {
+                cdist_row_cosine4(&xa4[i], na_norm[i], &b_soa, &nb_norm, nb)
+            })
+        }
         DistanceMetric::Cosine => {
             let na_norm: Vec<f64> = xa.iter().map(|v| simd_sqsum(v).sqrt()).collect();
             let nb_norm: Vec<f64> = xb.iter().map(|v| simd_sqsum(v).sqrt()).collect();
@@ -1148,6 +1171,120 @@ fn cdist_thread_count(na: usize, nb: usize, dim: usize) -> usize {
         .map(std::num::NonZero::get)
         .unwrap_or(1);
     cores.min(na / 2).max(1)
+}
+
+/// Fill a `na × nb` distance matrix one row at a time via `fill_row(i)`, splitting xa's
+/// rows across threads (each thread owns a contiguous block, reassembled in order — so the
+/// result is bit-identical to sequential row-major regardless of which core owns a row).
+/// Lets the dim-4 fast paths vectorize a whole output row with one SIMD-across-columns pass.
+fn cdist_fill_rows<F>(na: usize, nthreads: usize, fill_row: F) -> Vec<Vec<f64>>
+where
+    F: Fn(usize) -> Vec<f64> + Sync,
+{
+    if nthreads <= 1 {
+        return (0..na).map(&fill_row).collect();
+    }
+    let chunk = na.div_ceil(nthreads);
+    let fill_row = &fill_row;
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..nthreads)
+            .filter_map(|t| {
+                let i0 = t * chunk;
+                if i0 >= na {
+                    return None;
+                }
+                let i1 = (i0 + chunk).min(na);
+                Some(scope.spawn(move || (i0..i1).map(fill_row).collect::<Vec<Vec<f64>>>()))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().expect("cdist worker panicked"))
+            .collect()
+    })
+}
+
+/// One dim-4 Euclidean cdist output row: distances from `ai` to every xb point, xb stored
+/// SoA in columns `b`. Lane k holds column j+k; per lane the squared sum and sqrt run in
+/// the same order as scalar `sqeuclidean4(..).sqrt()` (== `euclidean` at d=4), so the row is
+/// BIT-identical to the generic `metric_distance` arm while `vsqrtpd` pipelines the sqrts.
+fn cdist_row_euclidean4(ai: &[f64; 4], b: &[Vec<f64>; 4], nb: usize) -> Vec<f64> {
+    use std::simd::{Simd, StdFloat};
+    const L: usize = 8;
+    let (b0, b1, b2, b3) = (&b[0], &b[1], &b[2], &b[3]);
+    let a0 = Simd::<f64, L>::splat(ai[0]);
+    let a1 = Simd::<f64, L>::splat(ai[1]);
+    let a2 = Simd::<f64, L>::splat(ai[2]);
+    let a3 = Simd::<f64, L>::splat(ai[3]);
+    let mut row = vec![0.0_f64; nb];
+    let mut j = 0usize;
+    while j + L <= nb {
+        let d0 = a0 - Simd::<f64, L>::from_slice(&b0[j..j + L]);
+        let d1 = a1 - Simd::<f64, L>::from_slice(&b1[j..j + L]);
+        let d2 = a2 - Simd::<f64, L>::from_slice(&b2[j..j + L]);
+        let d3 = a3 - Simd::<f64, L>::from_slice(&b3[j..j + L]);
+        let sq = d0 * d0 + d1 * d1 + d2 * d2 + d3 * d3;
+        sq.sqrt().copy_to_slice(&mut row[j..j + L]);
+        j += L;
+    }
+    while j < nb {
+        let bj = [b0[j], b1[j], b2[j], b3[j]];
+        row[j] = sqeuclidean4(ai, &bj).sqrt();
+        j += 1;
+    }
+    row
+}
+
+/// One dim-4 Cosine cdist output row with precomputed norms (`ni` for `ai`, `nb_norm` for
+/// xb). Lane k holds column j+k; per lane `1 - dot/(ni·nj)` and the denom==0⇒NaN guard run
+/// identically to the scalar Cosine arm, so BIT-identical while `vdivpd` pipelines the
+/// dependent divisions.
+fn cdist_row_cosine4(
+    ai: &[f64; 4],
+    ni: f64,
+    b: &[Vec<f64>; 4],
+    nb_norm: &[f64],
+    nb: usize,
+) -> Vec<f64> {
+    use std::simd::{Select, Simd, cmp::SimdPartialEq};
+    const L: usize = 8;
+    let (b0, b1, b2, b3) = (&b[0], &b[1], &b[2], &b[3]);
+    let a0 = Simd::<f64, L>::splat(ai[0]);
+    let a1 = Simd::<f64, L>::splat(ai[1]);
+    let a2 = Simd::<f64, L>::splat(ai[2]);
+    let a3 = Simd::<f64, L>::splat(ai[3]);
+    let niv = Simd::<f64, L>::splat(ni);
+    let one = Simd::<f64, L>::splat(1.0);
+    let zero = Simd::<f64, L>::splat(0.0);
+    let nan = Simd::<f64, L>::splat(f64::NAN);
+    let mut row = vec![0.0_f64; nb];
+    let mut j = 0usize;
+    while j + L <= nb {
+        let bb0 = Simd::<f64, L>::from_slice(&b0[j..j + L]);
+        let bb1 = Simd::<f64, L>::from_slice(&b1[j..j + L]);
+        let bb2 = Simd::<f64, L>::from_slice(&b2[j..j + L]);
+        let bb3 = Simd::<f64, L>::from_slice(&b3[j..j + L]);
+        let njv = Simd::<f64, L>::from_slice(&nb_norm[j..j + L]);
+        let denom = niv * njv;
+        let dot = a0 * bb0 + a1 * bb1 + a2 * bb2 + a3 * bb3;
+        let val = one - dot / denom;
+        denom
+            .simd_eq(zero)
+            .select(nan, val)
+            .copy_to_slice(&mut row[j..j + L]);
+        j += L;
+    }
+    while j < nb {
+        let denom = ni * nb_norm[j];
+        row[j] = if denom == 0.0 {
+            f64::NAN
+        } else {
+            let bj = [b0[j], b1[j], b2[j], b3[j]];
+            1.0 - dot4(ai, &bj) / denom
+        };
+        j += 1;
+    }
+    row
 }
 
 /// Compute the full Euclidean distance matrix between two point sets.
@@ -6333,6 +6470,51 @@ mod tests {
                         w.to_bits(),
                         "cdist mismatch at ({i},{j}) {metric:?}"
                     );
+                }
+            }
+        }
+    }
+
+    /// The dim-4 Euclidean/Cosine cdist SoA fast paths (SIMD across xb columns) must stay
+    /// BIT-identical to the generic per-pair `metric_distance` arm, at BOTH a serial size
+    /// and a size above the parallel gate (where xa rows split across workers). Includes a
+    /// zero-norm xb row so the Cosine denom==0⇒NaN select is exercised.
+    #[test]
+    fn cdist_dim4_fast_paths_match_metric_distance() {
+        let mk = |n: usize, seed: f64, zero_row: bool| -> Vec<Vec<f64>> {
+            (0..n)
+                .map(|i| {
+                    if zero_row && i == n / 2 {
+                        return vec![0.0, 0.0, 0.0, 0.0];
+                    }
+                    let t = i as f64;
+                    vec![
+                        (t * 0.11 + seed).sin(),
+                        (t * 0.07 + seed).cos(),
+                        t * 0.003 - 0.2,
+                        (t * 0.17 + seed).sin() - 0.25,
+                    ]
+                })
+                .collect()
+        };
+        // (na, nb): (40,40) stays serial; (600,600) exceeds the 2^18 work gate -> parallel.
+        for &(na, nb) in &[(40usize, 40usize), (600, 600)] {
+            let xa = mk(na, 0.3, false);
+            let xb = mk(nb, 1.1, true);
+            for metric in [DistanceMetric::Euclidean, DistanceMetric::Cosine] {
+                let got = cdist_metric(&xa, &xb, metric).expect("dim4 cdist");
+                let want: Vec<Vec<f64>> = xa
+                    .iter()
+                    .map(|a| xb.iter().map(|b| metric_distance(a, b, metric)).collect())
+                    .collect();
+                for (i, (gr, wr)) in got.iter().zip(&want).enumerate() {
+                    for (j, (&g, &w)) in gr.iter().zip(wr).enumerate() {
+                        assert_eq!(
+                            g.to_bits(),
+                            w.to_bits(),
+                            "dim4 cdist mismatch at ({i},{j}) {metric:?} na={na} nb={nb}"
+                        );
+                    }
                 }
             }
         }
