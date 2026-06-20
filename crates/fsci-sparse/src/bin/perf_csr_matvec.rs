@@ -7,7 +7,60 @@
 use std::hint::black_box;
 use std::time::Instant;
 
-use fsci_sparse::{CsrMatrix, FormatConvertible, Shape2D, random};
+use fsci_sparse::{CsrMatrix, FormatConvertible, Shape2D, random, spmv_csr};
+
+fn legacy_public_spmv_csr(a: &CsrMatrix, x: &[f64]) -> Vec<f64> {
+    let mut result = vec![0.0; a.shape().rows];
+    for (row, output) in result.iter_mut().enumerate().take(a.shape().rows) {
+        for idx in a.indptr()[row]..a.indptr()[row + 1] {
+            *output += a.data()[idx] * x[a.indices()[idx]];
+        }
+    }
+    result
+}
+
+fn public_spmv_ab() {
+    println!("public spmv_csr legacy-row-sweep vs current; bit identity + timing\n");
+    for &(n, density, reps) in &[
+        (100usize, 0.05f64, 200_000u32),
+        (1_000, 0.01, 50_000),
+        (10_000, 0.001, 5_000),
+    ] {
+        let a = random(Shape2D::new(n, n), density, 0xA11CE ^ n as u64)
+            .unwrap()
+            .to_csr()
+            .unwrap();
+        let x: Vec<f64> = (0..n).map(|i| (i as f64) * 0.01 - 0.5).collect();
+
+        let legacy = legacy_public_spmv_csr(&a, &x);
+        let current = spmv_csr(&a, &x).unwrap();
+        let identical = legacy
+            .iter()
+            .zip(&current)
+            .all(|(a, b)| a.to_bits() == b.to_bits());
+
+        let mut acc = 0.0;
+        let _ = legacy_public_spmv_csr(&a, &x);
+        let _ = spmv_csr(&a, &x).unwrap();
+        let t0 = Instant::now();
+        for _ in 0..reps {
+            acc += legacy_public_spmv_csr(black_box(&a), black_box(&x))[0];
+        }
+        let legacy_time = t0.elapsed();
+        let t1 = Instant::now();
+        for _ in 0..reps {
+            acc += spmv_csr(black_box(&a), black_box(&x)).unwrap()[0];
+        }
+        let current_time = t1.elapsed();
+        println!(
+            "n={n:>5} nnz={:>7} reps={reps:>6} identical={identical} legacy={:>9.3?} current={:>9.3?} ratio={:>5.2}x (acc={acc:.3})",
+            a.nnz(),
+            legacy_time / reps,
+            current_time / reps,
+            legacy_time.as_secs_f64() / current_time.as_secs_f64(),
+        );
+    }
+}
 
 fn serial(a: &CsrMatrix, x: &[f64]) -> Vec<f64> {
     let n = a.shape().rows;
@@ -62,6 +115,11 @@ fn parallel(a: &CsrMatrix, x: &[f64]) -> Vec<f64> {
 }
 
 fn main() {
+    if std::env::var_os("FSCI_PUBLIC_SPMV_AB").is_some() {
+        public_spmv_ab();
+        return;
+    }
+
     println!("nproc check below; A/B byte-identity + timing\n");
     for &(n, density) in &[
         (20_000usize, 0.0005f64),

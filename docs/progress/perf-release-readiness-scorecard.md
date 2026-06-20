@@ -41,6 +41,48 @@ Readiness notes:
   micro-lever. It should target Radau stage linear algebra, LU reuse, allocation
   in matrix/vector assembly, or structured-Jacobian exploitation.
 
+## 2026-06-20 - fsci-sparse public CSR SpMV row-loop gauntlet
+
+- Agent: cod-b / MistyBirch
+- Bead: `frankenscipy-2hclc`
+- Decision: KEEP the cached-slice + 4-lane unrolled public CSR row sweep.
+  Score for this sub-cluster: 4/5. It closes the public `spmv_csr` scale loss
+  on the scoped CSR `.dot(x)` benchmark; future work should profile before
+  attempting explicit SIMD or sparse-BLAS-style row blocking.
+- Artifact: inline in `docs/progress/perf-negative-results.md` and
+  `docs/perf_ledger_cc.md` (no new artifact directory).
+
+| Gate | Result | Notes |
+| --- | --- | --- |
+| SciPy head-to-head oracle | PASS | `python3 docs/perf_oracle_spmv.py`, local SciPy 1.17.1, n=100/1000/10000 |
+| Criterion focused bench | PASS | `cargo bench -p fsci-sparse --bench sparse_bench -- sparse_spmv --sample-size 10 --measurement-time 1 --warm-up-time 1` via rch |
+| Same-process old/current A/B | PASS | `env FSCI_PUBLIC_SPMV_AB=1 cargo run --profile release-perf -p fsci-sparse --bin perf_csr_matvec` via rch `ovh-a`; all rows `identical=true` |
+| Focused sparse tests | PASS | `cargo test -p fsci-sparse spmv -- --nocapture` via rch: 5 unit/property + 4 metamorphic pass |
+| Sparse compile | PASS | `cargo check -p fsci-sparse --all-targets` via rch |
+| Sparse clippy | PASS | `cargo clippy -p fsci-sparse --all-targets --no-deps -- -D warnings` via rch |
+| Touched-file formatting | PASS | `rustfmt --edition 2024 --check crates/fsci-sparse/src/ops.rs crates/fsci-sparse/src/bin/perf_csr_matvec.rs` |
+| Crate-wide formatting | BLOCKED | `cargo fmt -p fsci-sparse --check` reports existing drift in untouched `sparse_bench.rs`, `src/lib.rs`, and `src/linalg.rs`; not reformatted in this patch |
+| Diff hygiene | PASS | `git diff --check -- crates/fsci-sparse/src/ops.rs crates/fsci-sparse/src/bin/perf_csr_matvec.rs .beads/issues.jsonl` |
+| Changed-file UBS scan | PASS | `ubs crates/fsci-sparse/src/ops.rs crates/fsci-sparse/src/bin/perf_csr_matvec.rs`: 0 critical; existing warnings only |
+| Sparse conformance | PASS | `cargo test -p fsci-conformance --test diff_sparse spmv -- --nocapture` via rch: 11 passed / 0 failed |
+
+| Workload / route | Mean | Ratio | Verdict |
+| --- | ---: | ---: | --- |
+| Rust current `spmv_csr`, n=100 nnz=500 | 387.54 ns | 11.95x faster than SciPy | SciPy win |
+| SciPy CSR `.dot(x)`, n=100 nnz=500 | 4.63 us | 1.00x oracle | reference |
+| Rust current `spmv_csr`, n=1000 nnz=10000 | 7.077 us | 1.13x faster than SciPy | SciPy win |
+| SciPy CSR `.dot(x)`, n=1000 nnz=10000 | 8.00 us | 1.00x oracle | reference |
+| Rust current `spmv_csr`, n=10000 nnz=100000 | 68.820 us | 1.41x faster than SciPy | SciPy win |
+| SciPy CSR `.dot(x)`, n=10000 nnz=100000 | 96.95 us | 1.00x oracle | reference |
+| Legacy public row sweep A/B, n=100/1000/10000 | 550 ns / 12.074 us / 135.043 us | current is 1.54x / 2.10x / 2.14x faster | internal baseline |
+
+Readiness notes:
+
+- Score vs SciPy is 3 wins / 0 losses / 0 neutral. The prior public SpMV
+  ledger row was 1 win / 2 losses, so this closes the measured scale gap.
+- The private Krylov/eigensolver `csr_matvec_into` route was already present;
+  this patch targets only the public `ops.rs` SpMV API and the perf proof mode.
+
 ## 2026-06-20 - fsci-ndimage label mean dense-lookup gauntlet
 
 - Agent: cod-a / MistyBirch

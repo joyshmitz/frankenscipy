@@ -38,9 +38,9 @@ regressions are reverted. Entries also routed to MistyBirch for the canonical me
 | kmeans Lloyd early-stop | kmeans k4 n2000 | 2104.7 µs* | 357.4 µs | **5.9× faster** | *vs scipy kmeans2 fixed-iter | ✅ KEEP (early-stop) |
 | correlate tap-table (e3r7e) | correlate 5x5 256² | 933.7 µs | 1099 µs | **0.85× (1.18× slower)** | byte-identical | ✅ KEEP (parity) |
 | gaussian_filter (NOT mine) | gaussian σ=2 256² | 1143.0 µs | 3238 µs | **0.35× (2.83× slower)** | separable but slow 1D kernel | ⚠️ gap → owner |
-| spmv_csr (serial, baseline) | SpMV n=100 nnz=500 | 3.45 µs | 0.81 µs | **4.26× faster** | scipy Python dispatch overhead | ✅ small-n win |
-| spmv_csr (serial, baseline) | SpMV n=1000 nnz=10k | 8.14 µs | 17.97 µs | **0.45× (2.2× slower)** | scalar kernel vs scipy C | ⚠️ scale gap |
-| spmv_csr (serial, baseline) | SpMV n=10000 nnz=100k | 131.6 µs | 197.5 µs | **0.67× (1.5× slower)** | gap narrows w/ n | ⚠️ scale gap |
+| spmv_csr cached+unrolled row sweep (2hclc) | SpMV n=100 nnz=500 | 4.63 µs | 0.388 µs | **11.9× faster** | 1.54× vs legacy row-sweep; bit-identical | ✅ KEEP |
+| spmv_csr cached+unrolled row sweep (2hclc) | SpMV n=1000 nnz=10k | 8.00 µs | 7.077 µs | **1.13× faster** | 2.10× vs legacy row-sweep; scale loss closed | ✅ KEEP |
+| spmv_csr cached+unrolled row sweep (2hclc) | SpMV n=10000 nnz=100k | 96.95 µs | 68.82 µs | **1.41× faster** | 2.14× vs legacy row-sweep; scale loss closed | ✅ KEEP |
 | gaussian_kde evaluate_many parallel | KDE n=1000 eval 1000 pts | 19090 µs | 1062 µs | **18.0× faster** | heavy per-pt → scales | ✅ KEEP |
 | gaussian_kde evaluate_many parallel | KDE n=5000 eval 5000 pts | 201197 µs | 11959 µs | **16.8× faster** | — | ✅ KEEP |
 | MGC mgc_map O(n²) + parallel reps | multiscale_graphcorr n=80 reps=100 | 295705 µs | 21578 µs | **13.7× faster** | O(n⁴)→O(n²) + parallel | ✅ KEEP |
@@ -176,19 +176,22 @@ Oracle `docs/perf_oracle_ndimage.py` (scipy.ndimage, 256² image).
   loop opportunity (same class as kmeans2/pdist), not a parallelization. Noted for the
   ndimage owner; not reverted (not mine, not a regression).
 
-### Sparse SpMV — `spmv_csr` (serial baseline) — small-n WIN, scale LOSS
+### Sparse SpMV — `spmv_csr` cached+unrolled row sweep (frankenscipy-2hclc) — ✅ KEEP, scale LOSS closed
 Oracle: scipy.sparse.random CSR `.dot(x)` (same n/density; SpMV time≈O(nnz)).
-`spmv_csr` is a plain serial row-sweep (NOT the parallel internal `csr_matvec`).
-- **n=100 nnz=500: fsci 0.81 µs vs scipy 3.45 µs = 4.26× FASTER.** At tiny sizes
-  scipy's Python/numpy dispatch overhead (~µs) dwarfs the actual SpMV; fsci is a
-  direct Rust call with none. Real advantage for many-small-SpMV workloads.
-- **n=1000/10000: fsci 2.2× / 1.5× SLOWER** (17.97 vs 8.14 µs; 197.5 vs 131.6 µs).
-  scipy's C SpMV kernel out-throughputs fsci's scalar row-sweep; the gap narrows with
-  n (overhead amortizes). Same SIMD-class inner-kernel gap as pdist/kmeans2/gaussian.
-- **Nuance for release:** fsci's zero-overhead calls WIN on small/repeated ops where
-  scipy pays Python tax; scipy's vectorized C WINS on large single kernels. Not a
-  regression, not a parallelization issue. SpMV is a candidate for a SIMD/unrolled
-  row-sweep if large sparse problems matter.
+`spmv_csr` is the public serial row-sweep (NOT the parallel internal `csr_matvec`).
+The old public route won only tiny calls and lost at scale; the cached-slice +
+4-lane unrolled row loop closes those losses without changing accumulation order.
+- **n=100 nnz=500: fsci 0.388 µs vs scipy 4.63 µs = 11.9× FASTER.**
+- **n=1000 nnz=10k: fsci 7.077 µs vs scipy 8.00 µs = 1.13× FASTER.**
+- **n=10000 nnz=100k: fsci 68.82 µs vs scipy 96.95 µs = 1.41× FASTER.**
+- Same-process A/B on rch `ovh-a` (`FSCI_PUBLIC_SPMV_AB=1 cargo run --profile
+  release-perf -p fsci-sparse --bin perf_csr_matvec`) compared the legacy public
+  row sweep to current in one binary: 550 ns→356 ns (1.54×), 12.074 µs→5.741 µs
+  (2.10×), 135.043 µs→63.231 µs (2.14×), all `identical=true`.
+- Score vs SciPy after this lever: **3 wins / 0 losses / 0 neutral**. Prior
+  ledger status was 1 win / 2 losses. Remaining route is explicit SIMD or
+  sparse-BLAS-style row blocking only if a fresh profile shows public SpMV still
+  matters after this constant-factor win.
 
 ### Sparse eigsh / svds (frankenscipy-fo9cj Arnoldi arena) — REJECT, restored route 4W/1L/1N
 Oracle: SciPy 1.17.1 `scipy.sparse.linalg.eigsh` / `svds` on the same deterministic

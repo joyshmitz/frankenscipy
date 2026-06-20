@@ -356,11 +356,27 @@ pub fn spmv_csr(matrix: &CsrMatrix, vector: &[f64]) -> SparseResult<Vec<f64>> {
             message: "spmv vector length must match matrix columns".to_string(),
         });
     }
-    let mut result = vec![0.0; matrix.shape().rows];
-    for (row, output) in result.iter_mut().enumerate().take(matrix.shape().rows) {
-        for idx in matrix.indptr()[row]..matrix.indptr()[row + 1] {
-            *output += matrix.data()[idx] * vector[matrix.indices()[idx]];
+    let rows = matrix.shape().rows;
+    let indptr = matrix.indptr();
+    let indices = matrix.indices();
+    let data = matrix.data();
+    let mut result = vec![0.0; rows];
+    for row in 0..rows {
+        let mut sum = 0.0;
+        let mut idx = indptr[row];
+        let end = indptr[row + 1];
+        while idx + 4 <= end {
+            sum += data[idx] * vector[indices[idx]];
+            sum += data[idx + 1] * vector[indices[idx + 1]];
+            sum += data[idx + 2] * vector[indices[idx + 2]];
+            sum += data[idx + 3] * vector[indices[idx + 3]];
+            idx += 4;
         }
+        while idx < end {
+            sum += data[idx] * vector[indices[idx]];
+            idx += 1;
+        }
+        result[row] = sum;
     }
     Ok(result)
 }

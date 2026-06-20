@@ -1643,3 +1643,52 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
   `cargo clippy -p fsci-spatial --all-targets --no-deps -- -D warnings`;
   `cargo fmt --check -p fsci-spatial`; `ubs` on touched files; and
   `cargo test -p fsci-conformance --test e2e_spatial -- --nocapture` 16/0.
+
+## 2026-06-20 - frankenscipy-2hclc - public CSR SpMV cached+unrolled row sweep closes scale loss
+
+- Agent: cod-b / MistyBirch
+- Starting point: the original Krylov-owned allocation issue had already been
+  mostly completed in `linalg.rs` (`csr_matvec_into` is used by CG/GMRES/BiCGSTAB/
+  LSMR/LSQR/SVDS-style paths), and `frankenscipy-fo9cj` already rejected the
+  deeper Arnoldi arena/mutable scratch route. The live measured sparse loss was
+  the public `spmv_csr` row loop in `ops.rs`, where the ledger showed 1 win /
+  2 losses vs SciPy.
+- Lever: cache `shape/indptr/indices/data` once, use an index row loop, and
+  unroll the per-row multiply-add by 4. This preserves left-to-right row
+  accumulation order and keeps the public API allocation behavior unchanged.
+- Same-process old/current proof on rch `ovh-a`:
+  `env FSCI_PUBLIC_SPMV_AB=1 cargo run --profile release-perf -p fsci-sparse
+  --bin perf_csr_matvec`. The perf binary runs the legacy public row sweep and
+  current `spmv_csr` in one process and checks `to_bits` equality.
+
+  | n | nnz | legacy row sweep | current | Internal ratio | Identity |
+  | --- | ---: | ---: | ---: | ---: | --- |
+  | 100 | 500 | 550 ns | 356 ns | 1.54x faster | true |
+  | 1000 | 10000 | 12.074 us | 5.741 us | 2.10x faster | true |
+  | 10000 | 100000 | 135.043 us | 63.231 us | 2.14x faster | true |
+
+- Head-to-head vs SciPy (`docs/perf_oracle_spmv.py`, local SciPy 1.17.1; Rust
+  `cargo bench -p fsci-sparse --bench sparse_bench -- sparse_spmv --sample-size
+  10 --measurement-time 1 --warm-up-time 1` via rch `hz2` after the lever):
+
+  | n | nnz | Rust after | SciPy | Ratio vs SciPy | Verdict |
+  | --- | ---: | ---: | ---: | ---: | --- |
+  | 100 | 500 | 387.54 ns | 4.63 us | 11.95x faster | win |
+  | 1000 | 10000 | 7.077 us | 8.00 us | 1.13x faster | win |
+  | 10000 | 100000 | 68.820 us | 96.95 us | 1.41x faster | win |
+
+- Score vs SciPy: **3 wins / 0 losses / 0 neutral**. Prior ledger status was
+  **1 win / 2 losses / 0 neutral**; the two scale losses are closed on the
+  scoped public CSR SpMV workload.
+- Gates: `cargo bench -p fsci-sparse --bench sparse_bench -- sparse_spmv`
+  via rch; same-process A/B via rch; `cargo test -p fsci-sparse spmv -- --nocapture`
+  via rch (5 unit/property + 4 metamorphic pass); `cargo check -p fsci-sparse
+  --all-targets` via rch; `cargo clippy -p fsci-sparse --all-targets --no-deps
+  -- -D warnings` via rch; sparse conformance
+  `cargo test -p fsci-conformance --test diff_sparse spmv -- --nocapture`
+  via rch (11/0); touched-file `rustfmt --edition 2024 --check`;
+  `git diff --check`; UBS on touched Rust files (0 critical, existing warnings).
+- Remaining route: explicit SIMD or sparse-BLAS-style row blocking only if fresh
+  profiles still show public SpMV as a top gap. Do not retry the rejected
+  `frankenscipy-fo9cj` row-major Arnoldi arena/scratch family without new
+  allocation-profile proof.
