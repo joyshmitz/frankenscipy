@@ -1,7 +1,7 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_ndimage::{
     BoundaryMode, NdArray, binary_closing, binary_dilation, binary_erosion, binary_opening,
-    maximum_filter, median_filter, minimum_filter, rank_filter,
+    maximum_filter, maximum_filter1d, median_filter, minimum_filter, minimum_filter1d, rank_filter,
 };
 use std::hint::black_box;
 
@@ -27,6 +27,30 @@ fn bench_minmax_filter(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("maximum_256x256", size), |b| {
             b.iter(|| {
                 maximum_filter(black_box(&img), size, BoundaryMode::Reflect, 0.0).expect("max")
+            })
+        });
+    }
+    group.finish();
+}
+
+fn bench_minmax_filter1d(c: &mut Criterion) {
+    let mut group = c.benchmark_group("minmax_filter1d");
+    let n = 65536usize;
+    let data: Vec<f64> = (0..n)
+        .map(|i| (i as f64 * 0.01).sin() * 100.0 + (i % 7) as f64)
+        .collect();
+    let line = NdArray::new(data, vec![n]).expect("line");
+    for &size in &[31usize, 101] {
+        group.bench_function(BenchmarkId::new("maximum_65536", size), |b| {
+            b.iter(|| {
+                maximum_filter1d(black_box(&line), size, 0, BoundaryMode::Reflect, 0.0)
+                    .expect("max1d")
+            })
+        });
+        group.bench_function(BenchmarkId::new("minimum_65536", size), |b| {
+            b.iter(|| {
+                minimum_filter1d(black_box(&line), size, 0, BoundaryMode::Reflect, 0.0)
+                    .expect("min1d")
             })
         });
     }
@@ -109,6 +133,7 @@ fn bench_correlate_gaussian(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_minmax_filter,
+    bench_minmax_filter1d,
     bench_binary_morph,
     bench_rank_filter,
     bench_correlate_gaussian,

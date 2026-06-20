@@ -257,3 +257,32 @@ interior-direct (boundary-map only the ~window-1 edge cells).**
   cache-blocking that keeps the working set resident, AND must clear ≥1.3x on a
   same-process A/B. Consistent with the prior `6l77z`/`acdq2` direct-interior
   rejects. Reverted to `0cf3cc42`; no source shipped.
+
+## 2026-06-20 - frankenscipy filter1d van Herk routing - KEEP (4-7x self, residual loss)
+
+- Agent: cc / MistyBirch
+- Decision: **KEEP**. Route `maximum_filter1d` / `minimum_filter1d` through the
+  O(n) van Herk / Gil-Werman block prefix-suffix kernel (`minmax_along_axis_hgw`)
+  with a NaN-propagating op, replacing the O(n·size) per-window fold
+  (`filter1d_axis_with_origin`) that also allocated a coordinate Vec and a window
+  Vec per output pixel.
+- Correctness: **byte-for-bit identical** to the fold — the NaN-propagating max/min
+  is associative + idempotent, so the HGW reassociation reproduces the per-window
+  fold exactly (extremum is one of the inputs, NaN propagates regardless of
+  grouping). Proven by `filter1d_hgw_byte_identical_to_fold` across ndim {1,2,3},
+  all axes, sizes {1,2,4,5,n+3} (incl. window > axis length), origins, all 5
+  boundary modes, min & max, with NaN/±0/±inf data.
+
+| Workload (n=65536, Reflect, same-proc A/B) | old fold (O(n·size)) | new HGW (O(n)) | self-speedup |
+| --- | ---: | ---: | ---: |
+| `maximum_filter1d` size=31  | 4907.3 us | 1191.5 us | **4.12x faster** |
+| `maximum_filter1d` size=101 | 8729.0 us | 1179.5 us | **7.40x faster** |
+
+- vs SciPy `maximum_filter1d` (≈516 us, O(n)): the loss closes from ~9.5x slower
+  (size 31) / ~16.8x slower (size 101) to a **constant ~2.3x** — the old path grew
+  with `size`, the new path is flat (1191 vs 1180 us). Residual `0/1/0` vs SciPy.
+- Negative evidence / next: the residual ~2.3x is HGW's 4 passes (ext materialize
+  + prefix g + suffix h + combine) and 3 per-call buffers for a single long line
+  vs SciPy's tighter in-place pass. A further flip needs pass fusion or chunked
+  parallelism of the single 1-D line; the routing here is the byte-identical
+  asymptotic fix and is kept regardless.

@@ -2645,6 +2645,31 @@ fn tc_min(a: f64, b: f64) -> f64 {
     }
 }
 
+/// NaN-propagating max/min, exactly matching the `maximum_filter1d` /
+/// `minimum_filter1d` per-window fold (`if a||b NaN → NaN else a.max(b)`).
+/// Both are associative and idempotent, so feeding them to the van Herk
+/// block prefix/suffix scans reproduces the per-window fold bit-for-bit
+/// (the extremum is one of the inputs — no rounding — and NaN propagates
+/// regardless of association). Lets the 1-D filters use the O(n) HGW kernel
+/// instead of the O(n·size) per-window scan with its per-pixel allocation.
+#[inline(always)]
+fn nanprop_max(a: f64, b: f64) -> f64 {
+    if a.is_nan() || b.is_nan() {
+        f64::NAN
+    } else {
+        a.max(b)
+    }
+}
+
+#[inline(always)]
+fn nanprop_min(a: f64, b: f64) -> f64 {
+    if a.is_nan() || b.is_nan() {
+        f64::NAN
+    } else {
+        a.min(b)
+    }
+}
+
 /// van Herk / Gil-Werman sliding-window min/max along `axis`. Byte-identical to the
 /// monotonic-deque path — same `total_cmp` total order (so the min/max element's bits
 /// are uniquely determined, including NaN and signed-zero), same `boundary_index_1d`
@@ -7724,18 +7749,33 @@ pub fn maximum_filter1d_with_origin(
     cval: f64,
     origin: i64,
 ) -> Result<NdArray, NdimageError> {
-    filter1d_axis_with_origin(input, size, axis, mode, cval, origin, |window| {
-        window
-            .iter()
-            .copied()
-            .fold(f64::NEG_INFINITY, |a: f64, b: f64| {
-                if a.is_nan() || b.is_nan() {
-                    f64::NAN
-                } else {
-                    a.max(b)
-                }
-            })
-    })
+    if axis >= input.ndim() {
+        return Err(NdimageError::InvalidArgument(format!(
+            "axis {axis} out of range for {}-dimensional input",
+            input.ndim()
+        )));
+    }
+    if size == 0 {
+        return Err(NdimageError::InvalidArgument(
+            "filter size must be positive".to_string(),
+        ));
+    }
+    if input.size() == 0 {
+        return Err(NdimageError::EmptyInput);
+    }
+    validate_filter_origin(size, origin)?;
+    // O(n) van Herk block prefix/suffix with the NaN-propagating max — byte-identical
+    // to the per-window fold but linear in the axis length, not O(n·size), and with no
+    // per-pixel allocation. frankenscipy filter1d van-Herk routing.
+    Ok(minmax_along_axis_hgw(
+        input,
+        axis,
+        size,
+        origin,
+        mode,
+        cval,
+        nanprop_max,
+    ))
 }
 
 /// Apply a minimum filter along a single axis.
@@ -7782,18 +7822,30 @@ pub fn minimum_filter1d_with_origin(
     cval: f64,
     origin: i64,
 ) -> Result<NdArray, NdimageError> {
-    filter1d_axis_with_origin(input, size, axis, mode, cval, origin, |window| {
-        window
-            .iter()
-            .copied()
-            .fold(f64::INFINITY, |a: f64, b: f64| {
-                if a.is_nan() || b.is_nan() {
-                    f64::NAN
-                } else {
-                    a.min(b)
-                }
-            })
-    })
+    if axis >= input.ndim() {
+        return Err(NdimageError::InvalidArgument(format!(
+            "axis {axis} out of range for {}-dimensional input",
+            input.ndim()
+        )));
+    }
+    if size == 0 {
+        return Err(NdimageError::InvalidArgument(
+            "filter size must be positive".to_string(),
+        ));
+    }
+    if input.size() == 0 {
+        return Err(NdimageError::EmptyInput);
+    }
+    validate_filter_origin(size, origin)?;
+    Ok(minmax_along_axis_hgw(
+        input,
+        axis,
+        size,
+        origin,
+        mode,
+        cval,
+        nanprop_min,
+    ))
 }
 
 /// Generate a structuring element (cross/diamond shape).
@@ -9587,6 +9639,109 @@ mod tests {
             "gaussian 2D A/B sigma=2 256x256: gather={gather_us:.1}us axpy={axpy_us:.1}us  speedup={:.2}x",
             gather_us / axpy_us
         );
+    }
+
+    /// The HGW-routed `maximum/minimum_filter1d` must be bit-for-bit identical to
+    /// the legacy O(n·size) per-window fold (`filter1d_axis_with_origin`) across
+    /// dims, axes, window sizes (incl. size > axis length), origins, boundary
+    /// modes, and NaN/±0/±inf data.
+    #[test]
+    fn filter1d_hgw_byte_identical_to_fold() {
+        let max_fold = |window: &[f64]| {
+            window.iter().copied().fold(f64::NEG_INFINITY, |a: f64, b: f64| {
+                if a.is_nan() || b.is_nan() { f64::NAN } else { a.max(b) }
+            })
+        };
+        let min_fold = |window: &[f64]| {
+            window.iter().copied().fold(f64::INFINITY, |a: f64, b: f64| {
+                if a.is_nan() || b.is_nan() { f64::NAN } else { a.min(b) }
+            })
+        };
+        let cases: Vec<(Vec<f64>, Vec<usize>)> = vec![
+            ({
+                let mut v: Vec<f64> = (0..40).map(|i| ((i * 7) % 13) as f64 - 6.0).collect();
+                v[5] = f64::NAN; v[6] = -0.0; v[7] = 0.0; v[30] = f64::INFINITY;
+                v
+            }, vec![40]),
+            ((0..6 * 9).map(|i| (i as f64 * 0.3).sin() * 4.0).collect(), vec![6, 9]),
+            ((0..4 * 5 * 7).map(|i| (i % 11) as f64 - 5.0).collect(), vec![4, 5, 7]),
+        ];
+        let modes = [
+            BoundaryMode::Reflect, BoundaryMode::Constant, BoundaryMode::Nearest,
+            BoundaryMode::Wrap, BoundaryMode::Mirror,
+        ];
+        for (data, shape) in &cases {
+            let arr = NdArray::new(data.clone(), shape.clone()).unwrap();
+            for axis in 0..shape.len() {
+                for &size in &[1usize, 2, 4, 5, shape[axis] + 3] {
+                    let omax = ((size - 1) / 2) as i64;
+                    for origin in [-omax, 0, omax] {
+                        for &mode in &modes {
+                            for is_max in [true, false] {
+                                let reference = if is_max {
+                                    filter1d_axis_with_origin(&arr, size, axis, mode, 0.0, origin, max_fold)
+                                } else {
+                                    filter1d_axis_with_origin(&arr, size, axis, mode, 0.0, origin, min_fold)
+                                }.unwrap();
+                                let got = if is_max {
+                                    maximum_filter1d_with_origin(&arr, size, axis, mode, 0.0, origin)
+                                } else {
+                                    minimum_filter1d_with_origin(&arr, size, axis, mode, 0.0, origin)
+                                }.unwrap();
+                                for (k, (a, b)) in
+                                    reference.data.iter().zip(got.data.iter()).enumerate()
+                                {
+                                    assert_eq!(
+                                        a.to_bits(), b.to_bits(),
+                                        "shape={shape:?} axis={axis} size={size} origin={origin} mode={mode:?} is_max={is_max} idx={k}: ref={a} got={b}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Error paths preserved.
+        let a = NdArray::new(vec![1.0, 2.0], vec![2]).unwrap();
+        assert!(maximum_filter1d_with_origin(&a, 0, 0, BoundaryMode::Reflect, 0.0, 0).is_err());
+        assert!(maximum_filter1d_with_origin(&a, 3, 5, BoundaryMode::Reflect, 0.0, 0).is_err());
+    }
+
+    /// Same-process A/B: legacy O(n·size) per-window fold vs the O(n) HGW routing
+    /// for maximum_filter1d. Ignored; run with
+    /// `cargo test -p fsci-ndimage --release filter1d_hgw_ab -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn filter1d_hgw_ab_timing() {
+        use std::time::Instant;
+        let n = 65536usize;
+        let data: Vec<f64> = (0..n).map(|i| (i as f64 * 0.01).sin() * 100.0 + (i % 7) as f64).collect();
+        let line = NdArray::new(data, vec![n]).unwrap();
+        let max_fold = |w: &[f64]| {
+            w.iter().copied().fold(f64::NEG_INFINITY, |a: f64, b: f64| {
+                if a.is_nan() || b.is_nan() { f64::NAN } else { a.max(b) }
+            })
+        };
+        for &size in &[31usize, 101] {
+            let (mut t_old, mut t_new) = (0.0f64, 0.0f64);
+            let rounds = 30;
+            for r in 0..rounds {
+                let order = if r % 2 == 0 { [false, true] } else { [true, false] };
+                for &new_path in &order {
+                    let t = Instant::now();
+                    let _ = if new_path {
+                        maximum_filter1d(&line, size, 0, BoundaryMode::Reflect, 0.0).unwrap()
+                    } else {
+                        filter1d_axis_with_origin(&line, size, 0, BoundaryMode::Reflect, 0.0, 0, max_fold).unwrap()
+                    };
+                    let el = t.elapsed().as_secs_f64();
+                    if new_path { t_new += el } else { t_old += el }
+                }
+            }
+            let (o, ne) = (t_old / rounds as f64 * 1e6, t_new / rounds as f64 * 1e6);
+            println!("filter1d A/B max n={n} size={size}: old_fold={o:.1}us new_hgw={ne:.1}us  speedup={:.2}x", o / ne);
+        }
     }
 
     #[test]

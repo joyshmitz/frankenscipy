@@ -34,6 +34,7 @@ win/loss/neutral ledger lives in `docs/progress/perf-negative-results.md`.
 
 | Bead | Cluster | Realistic workload | Rust result | SciPy result | Ratio | Decision |
 | --- | --- | --- | ---: | ---: | ---: | --- |
+| `filter1d-vanherk` | `ndimage.maximum/minimum_filter1d` van Herk O(n) routing (was O(n·size) per-window fold + per-pixel alloc) | `scipy.ndimage.maximum_filter1d` n=65536 Reflect, size 31 / 101 | 1.1915 ms / 1.1795 ms | 0.516 ms / 0.520 ms | 2.31x / 2.27x slower | keep — **4.12x / 7.40x self-speedup** (same-proc A/B), byte-identical; closes 9.5x/16.8x loss to a flat 2.3x (old grew with size, new is O(n)) |
 | `frankenscipy-8l8r1.123` | `jnjnp_zeros` cutoff-driven generator | `scipy.special.jnjnp_zeros(nt=64)` equivalent | 1.5856 ms | 427.47 us | 3.71x slower | keep 2.30x internal win; route deeper |
 | `frankenscipy-8l8r1.123` | `jnjnp_zeros` cutoff-driven generator | `scipy.special.jnjnp_zeros(nt=128)` equivalent | 2.9035 ms | 789.23 us | 3.68x slower | keep 2.28x internal win; route deeper |
 | `frankenscipy-8l8r1.125` | `ndimage.mean(labels,index)` flat sum/count accumulator | N=65536 K=512 label-indexed mean | 590.978 us | 159 us | 3.72x slower | keep 1.77x internal win; route deeper |
