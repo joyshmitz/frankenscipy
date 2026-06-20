@@ -2,7 +2,7 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use fsci_stats::{
     HaltonSampler, SobolSampler, SomersDInput, acf, argsort, centered_discrepancy, ecdf, histogram,
-    binned_statistic_2d, binned_statistic_dd, kendalltau, l2_star_discrepancy, mannkendall, mixture_discrepancy, pacf,
+    binned_statistic, binned_statistic_2d, binned_statistic_dd, kendalltau, l2_star_discrepancy, mannkendall, mixture_discrepancy, pacf,
     psd_welch, rand_index, siegelslopes, somersd, theilslopes, wraparound_discrepancy,
 };
 
@@ -218,6 +218,20 @@ fn bench_robust_slopes(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_binned_statistic_1d(c: &mut Criterion) {
+    use criterion::BenchmarkId;
+    let mut group = c.benchmark_group("binned_statistic_1d");
+    let n = 200_000usize;
+    let xs: Vec<f64> = (0..n).map(|i| ((i * 2654435761usize) % 100000) as f64 / 100000.0).collect();
+    let vs: Vec<f64> = (0..n).map(|i| (i as f64 * 0.001).sin()).collect();
+    for &bins in &[1000usize, 5000] {
+        group.bench_function(BenchmarkId::new("mean", bins), |b| {
+            b.iter(|| binned_statistic(black_box(&xs), black_box(&vs), bins, "mean"))
+        });
+    }
+    group.finish();
+}
+
 fn bench_binned_statistic_dd(c: &mut Criterion) {
     use criterion::BenchmarkId;
     let mut group = c.benchmark_group("binned_statistic_dd");
@@ -259,6 +273,7 @@ criterion_group!(
     benches,
     bench_robust_slopes,
     bench_binned_statistic_2d,
+    bench_binned_statistic_1d,
     bench_binned_statistic_dd,
     bench_mgc,
     bench_qmc_discrepancy,

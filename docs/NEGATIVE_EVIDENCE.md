@@ -819,3 +819,30 @@ interior-direct (boundary-map only the ~window-1 edge cells).**
   For higher ndim the gap widens further. Byte-identical structural cleanup. (1-D
   `binned_statistic` left as-is: tiny bin counts + an ambiguous empty-bin NaN policy
   vs its own doc — not worth the risk for a negligible win.)
+
+## 2026-06-20 - binned_statistic (1-D) accumulator fast path - WIN 1.17-1.61x self (6.7-7.5x vs scipy), byte-identical
+
+- Agent: cc / MistyBirch. Completes the binned-statistic accumulate family (1-D + 2-D + N-D dd).
+- Decision: **KEEP**. 1-D `binned_statistic` count/sum/mean/min/max now use flat
+  aggregate arrays instead of materializing `Vec<Vec<f64>>`; median/std keep the
+  materialize path. Preserves this helper's distinct EMPTY-bin policy (NaN for
+  EVERY statistic, count/sum included — its `is_empty` check comes first, unlike
+  2-D/dd which give 0 for count/sum).
+- Correctness: **byte-for-bit identical** to materialize-then-fold — proven by
+  `binned_statistic_fast_path_matches_materialize` (137 bins → guaranteed empties,
+  NaN values, vs brute-force ref). Existing scipy-reference test passes; isolated.
+
+| stat (n=200k) | materialize | accumulate | self | scipy | vs scipy |
+| --- | ---: | ---: | ---: | ---: | --- |
+| mean bins=1000 | 2.46 ms | 2.10 ms | 1.17x | 14.1 ms | 6.7x faster |
+| mean bins=5000 | 3.53 ms | 2.19 ms | **1.61x** | 16.4 ms | **7.5x faster** |
+
+- Self-speedup grows with bin count (1.17x→1.61x) as the materialize alloc cost
+  (O(bins) Vecs) scales. Family now fully on the accumulate path.
+
+### Rejected this cycle (measured, not a practical loss)
+- `somersd` continuous/distinct-rank data: fsci is O((R·C)²)=O(n⁴), but **scipy is
+  also catastrophic** (2276 ms at n=200, O(n²) crosstab) — both unusable on large
+  continuous input; the practical (categorical/small-table) case is fast in both.
+  Not a target. `sosfiltfilt` (2.5ms, sequential-IIR wall), RegularGridInterpolator
+  (5.5ms) and RectBivariateSpline (7ms) are fast scipy C — low headroom.
