@@ -3582,12 +3582,13 @@ fn agglo_idx(total: usize, row: usize, col: usize) -> usize {
     row * total + col
 }
 
-fn agglo_nearest(inter_dist: &[f64], active: &[bool], i: usize, total: usize) -> (usize, f64) {
+fn agglo_nearest(inter_dist: &[f64], active_ids: &[usize], i: usize, total: usize) -> (usize, f64) {
     let mut best_j = i;
     let mut best_d = f64::INFINITY;
     let row = &inter_dist[agglo_idx(total, i, 0)..agglo_idx(total, i + 1, 0)];
-    for j in (i + 1)..total {
-        if active[j] && row[j] < best_d {
+    let start = active_ids.partition_point(|&j| j <= i);
+    for &j in &active_ids[start..] {
+        if row[j] < best_d {
             best_d = row[j];
             best_j = j;
         }
@@ -3604,19 +3605,14 @@ fn agglo_nearest(inter_dist: &[f64], active: &[bool], i: usize, total: usize) ->
 /// tie-break) is identical each step, the merge sequence — and every
 /// Lance-Williams distance, computed with the exact same operands — matches the
 /// pairwise scan element-for-element.
-fn agglomerate_nnarray(
-    n: usize,
-    mut inter_dist: Vec<f64>,
-    method: LinkageMethod,
-) -> Vec<[f64; 4]> {
+fn agglomerate_nnarray(n: usize, mut inter_dist: Vec<f64>, method: LinkageMethod) -> Vec<[f64; 4]> {
     let total = 2 * n - 1;
-    let mut active = vec![false; total];
-    active[..n].fill(true);
+    let mut active_ids: Vec<usize> = (0..n).collect();
     let mut cluster_size = vec![1usize; total];
     let mut nn = vec![0usize; total];
     let mut d_nn = vec![f64::INFINITY; total];
     for i in 0..n {
-        let (j, d) = agglo_nearest(&inter_dist, &active, i, total);
+        let (j, d) = agglo_nearest(&inter_dist, &active_ids, i, total);
         nn[i] = j;
         d_nn[i] = d;
     }
@@ -3629,8 +3625,8 @@ fn agglomerate_nnarray(
         // recorded neighbour nn[i] is the smallest-index minimiser j > i.
         let mut min_d = f64::INFINITY;
         let mut mi = 0;
-        for i in 0..new_id {
-            if active[i] && d_nn[i] < min_d {
+        for &i in &active_ids {
+            if d_nn[i] < min_d {
                 min_d = d_nn[i];
                 mi = i;
             }
@@ -3640,16 +3636,11 @@ fn agglomerate_nnarray(
         let new_size = cluster_size[mi] + cluster_size[mj];
         result.push([mi as f64, mj as f64, min_d, new_size as f64]);
 
-        active[mi] = false;
-        active[mj] = false;
-        active[new_id] = true;
         cluster_size[new_id] = new_size;
+        active_ids.retain(|&k| k != mi && k != mj);
 
         // Distances from the new cluster to every remaining active cluster.
-        for k in 0..new_id {
-            if !active[k] {
-                continue;
-            }
+        for &k in &active_ids {
             let d_ki = inter_dist[agglo_idx(total, k, mi)];
             let d_kj = inter_dist[agglo_idx(total, k, mj)];
             let new_dist = match method {
@@ -3693,16 +3684,15 @@ fn agglomerate_nnarray(
         // The new cluster is the largest active id, so it has no successor yet.
         d_nn[new_id] = f64::INFINITY;
         nn[new_id] = new_id;
+        let refresh_len = active_ids.len();
+        active_ids.push(new_id);
 
         // Refresh nearest neighbours: clusters that pointed at a merged cluster
         // recompute from scratch; the rest only need to test the new cluster as
         // a (strictly closer) candidate, matching the scan's smallest-j tie-break.
-        for k in 0..new_id {
-            if !active[k] {
-                continue;
-            }
+        for &k in &active_ids[..refresh_len] {
             if nn[k] == mi || nn[k] == mj {
-                let (j, d) = agglo_nearest(&inter_dist, &active, k, total);
+                let (j, d) = agglo_nearest(&inter_dist, &active_ids, k, total);
                 nn[k] = j;
                 d_nn[k] = d;
             } else {

@@ -6,6 +6,35 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-20 - frankenscipy-8l8r1.133 - linkage compact active frontier
+
+- Agent: cod-a / BlackThrush
+- Decision: KEEP the compact active-cluster frontier in the NN-array linkage
+  core. It replaces boolean-active range scans with a sorted `active_ids`
+  frontier, preserving the exact ascending tie order while skipping inactive
+  clusters in pair selection, Lance-Williams updates, and NN refresh.
+- Artifact:
+  `tests/artifacts/perf/2026-06-20-cod-a-linkage-133/EVIDENCE.md`
+- Same-machine internal score versus current: `2/0/0`.
+- Same-machine median score versus the local SciPy oracle: `2/0/0`, recorded as
+  near-parity/slight wins because the independent Criterion intervals overlap.
+
+| Workload | Baseline Rust | Final Rust | SciPy oracle | Verdict |
+| --- | ---: | ---: | ---: | --- |
+| `linkage(Average)`, n=800 d=4 | 8.5503 ms | 4.5727 ms | 4.8204 ms | keep: 1.87x faster than current; Rust 1.05x faster than SciPy median |
+| `linkage(Ward)`, n=800 d=4 | 10.831 ms | 5.4267 ms | 5.6168 ms | keep: 2.00x faster than current; Rust 1.04x faster than SciPy median |
+
+Guards: focused bit-contract and broad linkage tests via rch, plus live SciPy
+linkage conformance for raw linkage helpers and precomputed distances. Full
+formatting remains blocked by pre-existing `fsci-cluster` rustfmt drift outside
+this scoped patch.
+
+Negative evidence: do not retry full-square arena initialization or lazy-fill
+tweaks for this route. The profitable layer is compact nearest-neighbour
+maintenance that skips inactive state without changing merge order. Future
+linkage work should target a true method-specific NN-chain primitive or smaller
+distance frontier.
+
 ## 2026-06-20 - frankenscipy-8l8r1.132 - gaussian_filter tile-local scratch
 
 - Agent: cod-a / BlackThrush

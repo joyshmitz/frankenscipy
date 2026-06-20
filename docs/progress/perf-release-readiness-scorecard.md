@@ -1,5 +1,51 @@
 # Performance Release-Readiness Scorecard
 
+## 2026-06-20 - fsci-cluster linkage compact active frontier gauntlet
+
+- Agent: cod-a / BlackThrush
+- Bead: `frankenscipy-8l8r1.133`
+- Decision: KEEP. The compact active-id frontier removes inactive-cluster
+  branch scans from the NN-array linkage core while preserving ascending
+  tie-order semantics. The tracked Average/Ward rows move from large SciPy
+  losses to near-parity/slight median wins in the same local SciPy gauntlet.
+- Artifact:
+  `tests/artifacts/perf/2026-06-20-cod-a-linkage-133/EVIDENCE.md`
+
+| Gate | Result | Notes |
+| --- | --- | --- |
+| Local SciPy baseline | PASS | Average current 8.5503 ms vs SciPy 5.1922 ms; Ward current 10.831 ms vs SciPy 5.2467 ms |
+| Local SciPy candidate | PASS | Average final 4.5727 ms vs SciPy 4.8204 ms; Ward final 5.4267 ms vs SciPy 5.6168 ms |
+| Focused linkage bit-contract | PASS | `cargo test -p fsci-cluster linkage_flat_core_matches_precomputed_condensed_contract -- --nocapture` via rch: 1 passed |
+| Broader linkage filter | PASS | `cargo test -p fsci-cluster linkage -- --nocapture` via rch: 28 linkage unit tests plus 9 linkage metamorphic tests passed |
+| Live SciPy conformance - precomputed | PASS | `cargo test -p fsci-conformance --test diff_cluster_linkage_from_distances -- --nocapture`: 1 passed |
+| Live SciPy conformance - helpers | PASS | `cargo test -p fsci-conformance --test diff_cluster_linkage_helpers -- --nocapture`: 1 passed |
+| Per-crate release build | PASS | `cargo build --release -p fsci-cluster` via rch `vmi1152480`; unrelated existing `perf_kmeans.rs` warning remained |
+| Per-crate check | PASS | `cargo check -p fsci-cluster --all-targets` via rch `vmi1152480`; unrelated existing `perf_kmeans.rs` warning remained |
+| No-deps clippy | PASS | `cargo clippy -p fsci-cluster --lib --no-deps -- -D warnings` via rch `vmi1149989` |
+| Final local lib check | PASS | `cargo check -p fsci-cluster --lib` after the final formatting-only signature adjustment |
+| Diff hygiene | PASS | `git diff --check` on touched files |
+| Changed-file UBS | PASS | `ubs` on touched source/docs/artifact files found 0 critical issues; existing broad `fsci-cluster` warning inventory remains |
+| Full crate formatting | BLOCKED | `cargo fmt -p fsci-cluster --check` reports pre-existing crate-wide rustfmt drift outside this scoped patch |
+
+| Workload / route | Mean | Ratio | Verdict |
+| --- | ---: | ---: | --- |
+| Baseline Rust `linkage(Average)` | 8.5503 ms | 1.65x slower than same-run SciPy | prior current |
+| Final Rust active frontier `linkage(Average)` | 4.5727 ms | 1.87x faster than current; 1.05x faster than SciPy median | keep |
+| SciPy `linkage(Average)` | 4.8204 ms | 1.00x oracle | reference |
+| Baseline Rust `linkage(Ward)` | 10.831 ms | 2.06x slower than same-run SciPy | prior current |
+| Final Rust active frontier `linkage(Ward)` | 5.4267 ms | 2.00x faster than current; 1.04x faster than SciPy median | keep |
+| SciPy `linkage(Ward)` | 5.6168 ms | 1.00x oracle | reference |
+
+Readiness notes:
+
+- This is the nearest-neighbour maintenance change requested by the prior
+  linkage negative evidence. It keeps the same flat arena and Lance-Williams
+  formulas; only the live-cluster frontier changes.
+- The SciPy win margins are small and intervals overlap, so count this as
+  release-readiness near-parity rather than a broad domination claim. The next
+  linkage attack should be a true method-specific NN-chain or smaller frontier
+  primitive.
+
 ## 2026-06-20 - fsci-ndimage gaussian_filter tile-local scratch gauntlet
 
 - Agent: cod-a / BlackThrush

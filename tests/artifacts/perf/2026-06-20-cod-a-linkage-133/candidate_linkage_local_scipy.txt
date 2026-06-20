@@ -1,0 +1,77 @@
+   Compiling fsci-cluster v0.1.0 (/data/projects/frankenscipy/crates/fsci-cluster)
+warning: unnecessary parentheses around closure body
+  --> crates/fsci-cluster/src/bin/perf_kmeans.rs:15:26
+   |
+15 |                 .map(|j| ((i as f64 * 0.013 + j as f64 * 0.7).sin() + (i % 50) as f64 * 0.1))
+   |                          ^                                                                 ^
+   |
+   = note: `#[warn(unused_parens)]` (part of `#[warn(unused)]`) on by default
+help: remove these parentheses
+   |
+15 -                 .map(|j| ((i as f64 * 0.013 + j as f64 * 0.7).sin() + (i % 50) as f64 * 0.1))
+15 +                 .map(|j| (i as f64 * 0.013 + j as f64 * 0.7).sin() + (i % 50) as f64 * 0.1)
+   |
+
+warning: `fsci-cluster` (bin "perf_kmeans") generated 1 warning (run `cargo fix --bin "perf_kmeans" -p fsci-cluster` to apply 1 suggestion)
+    Finished `bench` profile [optimized] target(s) in 5.22s
+     Running benches/cluster_bench.rs (/data/projects/.rch-targets/frankenscipy-cod-a-local/release/deps/cluster_bench-38108ba4e0ea8744)
+Gnuplot not found, using plotters backend
+Benchmarking va60h_gauntlet_linkage/rust_current_flat/average_n800_d4
+Benchmarking va60h_gauntlet_linkage/rust_current_flat/average_n800_d4: Warming up for 3.0000 s
+Benchmarking va60h_gauntlet_linkage/rust_current_flat/average_n800_d4: Collecting 10 samples in estimated 5.2355 s (1045 iterations)
+Benchmarking va60h_gauntlet_linkage/rust_current_flat/average_n800_d4: Analyzing
+va60h_gauntlet_linkage/rust_current_flat/average_n800_d4
+                        time:   [4.3609 ms 4.5727 ms 4.8932 ms]
+                        change: [−46.447% −40.851% −34.190%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking va60h_gauntlet_linkage/rust_legacy_nested/average_n800_d4
+Benchmarking va60h_gauntlet_linkage/rust_legacy_nested/average_n800_d4: Warming up for 3.0000 s
+Benchmarking va60h_gauntlet_linkage/rust_legacy_nested/average_n800_d4: Collecting 10 samples in estimated 5.1919 s (660 iterations)
+Benchmarking va60h_gauntlet_linkage/rust_legacy_nested/average_n800_d4: Analyzing
+va60h_gauntlet_linkage/rust_legacy_nested/average_n800_d4
+                        time:   [7.8563 ms 8.4471 ms 8.9291 ms]
+                        change: [−15.141% −10.189% −4.7348%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 3 outliers among 10 measurements (30.00%)
+  1 (10.00%) low mild
+  2 (20.00%) high mild
+Benchmarking va60h_gauntlet_linkage/scipy_original/average_n800_d4
+Benchmarking va60h_gauntlet_linkage/scipy_original/average_n800_d4: Warming up for 3.0000 s
+Benchmarking va60h_gauntlet_linkage/scipy_original/average_n800_d4: Collecting 10 samples in estimated 5.9574 s (220 iterations)
+Benchmarking va60h_gauntlet_linkage/scipy_original/average_n800_d4: Analyzing
+va60h_gauntlet_linkage/scipy_original/average_n800_d4
+                        time:   [4.5636 ms 4.8204 ms 4.9797 ms]
+                        change: [−22.500% −11.947% +0.2760%] (p = 0.09 > 0.05)
+                        No change in performance detected.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking va60h_gauntlet_linkage/rust_current_flat/ward_n800_d4
+Benchmarking va60h_gauntlet_linkage/rust_current_flat/ward_n800_d4: Warming up for 3.0000 s
+Benchmarking va60h_gauntlet_linkage/rust_current_flat/ward_n800_d4: Collecting 10 samples in estimated 5.0047 s (935 iterations)
+Benchmarking va60h_gauntlet_linkage/rust_current_flat/ward_n800_d4: Analyzing
+va60h_gauntlet_linkage/rust_current_flat/ward_n800_d4
+                        time:   [5.1571 ms 5.4267 ms 5.6559 ms]
+                        change: [−54.889% −48.487% −41.816%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Benchmarking va60h_gauntlet_linkage/rust_legacy_nested/ward_n800_d4
+Benchmarking va60h_gauntlet_linkage/rust_legacy_nested/ward_n800_d4: Warming up for 3.0000 s
+Benchmarking va60h_gauntlet_linkage/rust_legacy_nested/ward_n800_d4: Collecting 10 samples in estimated 5.3847 s (660 iterations)
+Benchmarking va60h_gauntlet_linkage/rust_legacy_nested/ward_n800_d4: Analyzing
+va60h_gauntlet_linkage/rust_legacy_nested/ward_n800_d4
+                        time:   [7.3210 ms 7.8699 ms 8.7311 ms]
+                        change: [−10.690% −4.7244% +1.2858%] (p = 0.18 > 0.05)
+                        No change in performance detected.
+Benchmarking va60h_gauntlet_linkage/scipy_original/ward_n800_d4
+Benchmarking va60h_gauntlet_linkage/scipy_original/ward_n800_d4: Warming up for 3.0000 s
+Benchmarking va60h_gauntlet_linkage/scipy_original/ward_n800_d4: Collecting 10 samples in estimated 6.0940 s (220 iterations)
+Benchmarking va60h_gauntlet_linkage/scipy_original/ward_n800_d4: Analyzing
+va60h_gauntlet_linkage/scipy_original/ward_n800_d4
+                        time:   [5.2357 ms 5.6168 ms 6.1779 ms]
+                        change: [−20.366% −5.1289% +11.340%] (p = 0.61 > 0.05)
+                        No change in performance detected.
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) high mild
+  1 (10.00%) high severe
+

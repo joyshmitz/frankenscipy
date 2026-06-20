@@ -4,6 +4,82 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-20 - frankenscipy-8l8r1.133 - cluster linkage compact active frontier
+
+- Agent: cod-a / BlackThrush
+- Lever kept: replace the boolean `active[k]` range scans in the flat NN-array
+  linkage core with a sorted compact `active_ids` frontier. The frontier is
+  maintained in ascending cluster-id order, so the pair selection and
+  nearest-successor tie behavior stay byte-identical while update/refresh loops
+  skip inactive clusters directly.
+- Graveyard/artifact route tested: branchless/compact active-set maintenance
+  at the nearest-neighbour frontier, after the earlier row-pack keep and
+  lazy-arena reject left Average/Ward as measured SciPy losses.
+- Decision: KEEP. The same-machine SciPy gauntlet improves Average by `1.87x`
+  and Ward by `2.00x` versus current, moving both tracked rows from clear SciPy
+  losses to near-parity/slight median wins.
+- Artifact:
+  `tests/artifacts/perf/2026-06-20-cod-a-linkage-133/EVIDENCE.md`
+- Baseline command:
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a-local cargo bench -p fsci-cluster --bench cluster_bench -- va60h_gauntlet_linkage --noplot`
+- Candidate command:
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a-local cargo bench -p fsci-cluster --bench cluster_bench -- va60h_gauntlet_linkage --noplot`
+
+Benchmark evidence:
+
+| Workload / route | Mean | Interval / value | Ratio / verdict |
+| --- | ---: | ---: | --- |
+| Current Rust `linkage(Average)` | 8.5503 ms | [7.9590, 8.9969] ms | baseline; 1.65x slower than same-run SciPy |
+| Active-frontier Rust `linkage(Average)` | 4.5727 ms | [4.3609, 4.8932] ms; Criterion change -40.851% | 1.87x faster than current; 1.05x faster than SciPy median |
+| SciPy `linkage(Average)` | 4.8204 ms | [4.5636, 4.9797] ms | oracle |
+| Current Rust `linkage(Ward)` | 10.831 ms | [8.9537, 12.918] ms | baseline; 2.06x slower than same-run SciPy |
+| Active-frontier Rust `linkage(Ward)` | 5.4267 ms | [5.1571, 5.6559] ms; Criterion change -48.487% | 2.00x faster than current; 1.04x faster than SciPy median |
+| SciPy `linkage(Ward)` | 5.6168 ms | [5.2357, 6.1779] ms | oracle |
+
+Win/loss/neutral:
+
+- Same-machine candidate versus current: `2/0/0`.
+- Candidate median versus same-machine SciPy oracle: `2/0/0`, with overlapping
+  independent intervals, so treat as near-parity/slight wins rather than a
+  broad dominance claim.
+
+Correctness/conformance guards:
+
+- PASS: rch focused bit-contract:
+  `cargo test -p fsci-cluster linkage_flat_core_matches_precomputed_condensed_contract -- --nocapture`
+  = 1 passed / 0 failed.
+- PASS: rch broader linkage filter:
+  `cargo test -p fsci-cluster linkage -- --nocapture` = 28 linkage unit tests
+  and 9 linkage metamorphic tests passed.
+- PASS: local live SciPy conformance:
+  `cargo test -p fsci-conformance --test diff_cluster_linkage_from_distances -- --nocapture`
+  = 1 passed / 0 failed.
+- PASS: local live SciPy conformance:
+  `cargo test -p fsci-conformance --test diff_cluster_linkage_helpers -- --nocapture`
+  = 1 passed / 0 failed.
+- PASS: rch per-crate release build:
+  `cargo build --release -p fsci-cluster`; unrelated existing `perf_kmeans.rs`
+  warning remained.
+- PASS: rch per-crate all-targets check:
+  `cargo check -p fsci-cluster --all-targets`; unrelated existing
+  `perf_kmeans.rs` warning remained.
+- PASS: rch no-deps clippy:
+  `cargo clippy -p fsci-cluster --lib --no-deps -- -D warnings`.
+- PASS: final local lib check:
+  `cargo check -p fsci-cluster --lib`.
+- PASS: `git diff --check` on touched files.
+- PASS: changed-file UBS scan found 0 critical issues; existing broad
+  `fsci-cluster` warning inventory remains.
+- BLOCKED: `cargo fmt -p fsci-cluster --check` remains blocked by pre-existing
+  crate-wide formatting drift, including files and hunks unrelated to this
+  patch.
+
+Retry condition: do not retry full-square arena initialization, zero/lazy-fill
+variants, or pure row-packing for this exact Average/Ward frontier. The next
+credible linkage route needs a true method-specific NN-chain primitive, smaller
+candidate-distance frontier, or another algorithmic change with same-machine
+SciPy proof.
+
 ## 2026-06-20 - frankenscipy-8l8r1.132 - ndimage gaussian_filter tile-local scratch
 
 - Agent: cod-a / BlackThrush
