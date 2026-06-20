@@ -1,5 +1,53 @@
 # Performance Release-Readiness Scorecard
 
+## 2026-06-20 - fsci-ndimage label mean dense-lookup gauntlet
+
+- Agent: cod-a / MistyBirch
+- Bead: `frankenscipy-klb7o`
+- Decision: KEEP the compact integer-label dense lookup as an internal win,
+  but mark the routine as a SciPy LOSS on the measured rows. Score for this
+  sub-cluster: 3.5/5.
+- Artifact:
+  `tests/artifacts/perf/2026-06-20-label-stats-dense-mean/EVIDENCE.md`
+
+| Gate | Result | Notes |
+| --- | --- | --- |
+| Rust per-crate compile | PASS | `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a rch exec -- cargo check -p fsci-ndimage --all-targets`; existing `fsci-interpolate` and `diff_geom` warnings remain |
+| Full ndimage lib tests | PASS | `cargo test -p fsci-ndimage --lib -- --nocapture` via rch: 241 passed / 0 failed |
+| Same-binary A/B | PASS | `perf_label_stats` compares old O(N*K), bucketed O(N+K), previous flat HashMap O(N+K), and dense O(N+K); mismatches 0/0/0 |
+| rch release A/B | PASS | `cargo run --release -p fsci-ndimage --bin perf_label_stats` via rch worker `hz2`: dense is 2.00-2.48x faster than prior flat HashMap |
+| SciPy head-to-head oracle | PASS | local SciPy 1.17.1 via `docs/perf_oracle_label_stats.py`; final source remains 1.9-2.6x slower |
+| ndimage conformance | PASS | rch `cargo test -p fsci-conformance ndimage -- --nocapture`: lib-side ndimage filter 5 passed / 0 failed; local live SciPy `diff_ndimage` with `FSCI_REQUIRE_SCIPY_ORACLE=1`: 5 passed / 0 failed |
+| Touched-file formatting | PASS | `rustfmt --edition 2024 --check crates/fsci-ndimage/src/lib.rs crates/fsci-ndimage/src/bin/perf_label_stats.rs` |
+| Diff hygiene | PASS | `git diff --check -- crates/fsci-ndimage/src/lib.rs crates/fsci-ndimage/src/bin/perf_label_stats.rs` |
+| Changed-file UBS scan | PASS | `ubs` exited 0; no critical issues; broad warning inventory left untouched |
+| Clippy `-D warnings` | BLOCKED | dependency clippy stopped on existing `fsci-linalg` lints; no-deps clippy stopped on existing unrelated `fsci-ndimage` lib-file lints outside this patch |
+| Full conformance suite | BLOCKED | unrelated existing failures: missing `P2C-007/contracts/contract_table.json`, Array API tolerance fallback mismatch, and missing `legacy_scipy_code/scipy` on rch worker image |
+
+| Workload / route | Mean | Ratio | Verdict |
+| --- | ---: | ---: | --- |
+| Rust dense mean, N=65536 K=512 | 301.407 us | 1.91x slower than SciPy; 2.08x faster than prior flat HashMap Rust | SciPy loss, internal keep |
+| Rust prior flat HashMap mean, N=65536 K=512 | 625.594 us | dense is 2.08x faster | internal baseline |
+| SciPy `ndimage.mean`, N=65536 K=512 | 158 us | 1.00x oracle | reference |
+| Rust dense mean, N=262144 K=1024 | 1.263 ms | 2.35x slower than SciPy; 2.10x faster than prior flat HashMap Rust | SciPy loss, internal keep |
+| Rust prior flat HashMap mean, N=262144 K=1024 | 2.652 ms | dense is 2.10x faster | internal baseline |
+| SciPy `ndimage.mean`, N=262144 K=1024 | 538 us | 1.00x oracle | reference |
+| Rust dense mean, N=262144 K=2048 | 1.383 ms | 2.51x slower than SciPy; 2.02x faster than prior flat HashMap Rust | SciPy loss, internal keep |
+| Rust prior flat HashMap mean, N=262144 K=2048 | 2.798 ms | dense is 2.02x faster | internal baseline |
+| SciPy `ndimage.mean`, N=262144 K=2048 | 550 us | 1.00x oracle | reference |
+| Rust dense mean, N=589824 K=4096 | 3.351 ms | 2.64x slower than SciPy; 2.02x faster than prior flat HashMap Rust | SciPy loss, internal keep |
+| Rust prior flat HashMap mean, N=589824 K=4096 | 6.772 ms | dense is 2.02x faster | internal baseline |
+| SciPy `ndimage.mean`, N=589824 K=4096 | 1.271 ms | 1.00x oracle | reference |
+
+Readiness notes:
+
+- This is a real measured constant-factor win over the prior flat HashMap
+  implementation. The final source scores `0/4/0` against SciPy and `4/0/0`
+  against the previous Rust flat HashMap route.
+- Future label-stat work should route below per-element lookup overhead:
+  sorted-label remapping, fused integer-label generation from `label()`, SIMD
+  accumulation over contiguous label spans, or cache-tiled sum/count reductions.
+
 ## 2026-06-20 - fsci-ndimage label mean flat-accumulator gauntlet
 
 - Agent: cod-a / MistyBirch

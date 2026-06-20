@@ -4,6 +4,57 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-20 - frankenscipy-klb7o - label mean dense lookup
+
+- Agent: cod-a / MistyBirch
+- Lever: specialize `ndimage.mean(input, labels, index)` for compact
+  non-negative integer labels by building a dense `Vec<usize>` label-to-first
+  position table. This removes the per-element `HashMap` probe from the prior
+  flat sum/count path while preserving the HashMap fallback for huge/sparse
+  indexes and preserving first-position duplicate-index, signed-zero, NaN, and
+  fractional-label semantics.
+- Decision: KEEP as a measured internal win. The route is still a measured
+  SciPy loss, so this is not release-speed parity.
+- Artifact:
+  `tests/artifacts/perf/2026-06-20-label-stats-dense-mean/EVIDENCE.md`
+- Correctness guards:
+  - `cargo test -p fsci-ndimage --lib -- --nocapture` via rch:
+    **241 passed / 0 failed**.
+  - `cargo test -p fsci-conformance ndimage -- --nocapture` via rch:
+    conformance lib-side ndimage filter **5 passed / 0 failed**; rch live
+    `diff_ndimage` integration failed only because worker `hz2` lacked SciPy
+    while `FSCI_REQUIRE_SCIPY_ORACLE=1`.
+  - `FSCI_REQUIRE_SCIPY_ORACLE=1 cargo test -p fsci-conformance --test
+    diff_ndimage -- --nocapture` locally with SciPy 1.17.1:
+    **5 passed / 0 failed**.
+  - Same-binary `perf_label_stats` asserted **0 bit-mismatches** versus the
+    old linear-scan route, previous bucketed O(N+K) route, and previous flat
+    HashMap route on every row.
+- Benchmark (`/data/projects/.rch-targets/frankenscipy-cod-a/release/perf_label_stats`
+  for same-host Rust A/B; SciPy oracle `docs/perf_oracle_label_stats.py`,
+  local SciPy 1.17.1):
+
+  | N | K | previous flat HashMap | dense mean | internal speedup | SciPy `ndimage.mean` | dense vs SciPy |
+  | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+  | 65536 | 512 | 625.594 us | 301.407 us | 2.08x | 158 us | 1.91x slower |
+  | 262144 | 1024 | 2.652 ms | 1.263 ms | 2.10x | 538 us | 2.35x slower |
+  | 262144 | 2048 | 2.798 ms | 1.383 ms | 2.02x | 550 us | 2.51x slower |
+  | 589824 | 4096 | 6.772 ms | 3.351 ms | 2.02x | 1.271 ms | 2.64x slower |
+
+- SciPy win/loss/neutral for final source: `0/4/0`.
+- Same-binary internal keep/loss/neutral versus prior flat HashMap route:
+  `4/0/0`.
+- Negative evidence: dense integer label lookup halves the remaining Rust mean
+  cost on compact label workloads and narrows the prior 3.7-4.7x SciPy gap to
+  1.9-2.6x slower, but SciPy's compiled C implementation still wins every
+  measured row.
+- Retry condition: do not retry another per-element `HashMap`, `Vec<Vec<f64>>`
+  grouping, or scalar-only dense lookup variant for this workload. Next attempts
+  need sorted-label remapping, fused integer-label generation from `label()`,
+  SIMD accumulation over contiguous label spans, or cache-tiled sum/count
+  reductions that beat this dense route in the same binary while preserving
+  SciPy-observable label semantics.
+
 ## 2026-06-20 - frankenscipy-8l8r1.125 - label mean flat accumulator
 
 - Agent: cod-a / MistyBirch

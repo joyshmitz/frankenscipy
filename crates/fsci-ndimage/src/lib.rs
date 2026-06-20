@@ -5052,6 +5052,41 @@ fn measurement_label_key(x: f64) -> u64 {
     }
 }
 
+const MEASUREMENT_DENSE_LABEL_EMPTY: usize = usize::MAX;
+const MEASUREMENT_DENSE_LABEL_EXPANSION_LIMIT: usize = 8;
+const MEASUREMENT_DENSE_LABEL_MIN_CAPACITY: usize = 1024;
+
+fn measurement_dense_label_positions(index: &[usize]) -> Option<Vec<usize>> {
+    let Some(max_label) = index.iter().copied().max() else {
+        return Some(Vec::new());
+    };
+    let dense_len = max_label.checked_add(1)?;
+    let max_dense_len = index
+        .len()
+        .saturating_mul(MEASUREMENT_DENSE_LABEL_EXPANSION_LIMIT)
+        .max(MEASUREMENT_DENSE_LABEL_MIN_CAPACITY);
+    if dense_len > max_dense_len {
+        return None;
+    }
+
+    let mut label_to_pos = vec![MEASUREMENT_DENSE_LABEL_EMPTY; dense_len];
+    for (pos, &wanted_label) in index.iter().enumerate() {
+        if label_to_pos[wanted_label] == MEASUREMENT_DENSE_LABEL_EMPTY {
+            label_to_pos[wanted_label] = pos;
+        }
+    }
+    Some(label_to_pos)
+}
+
+fn measurement_dense_label_pos(label_to_pos: &[usize], label_value: f64) -> Option<usize> {
+    if !label_value.is_finite() || label_value < 0.0 || label_value.fract() != 0.0 {
+        return None;
+    }
+    let label = label_value as usize;
+    let pos = *label_to_pos.get(label)?;
+    (pos != MEASUREMENT_DENSE_LABEL_EMPTY).then_some(pos)
+}
+
 fn measurement_label_mean(
     input: &NdArray,
     labels: Option<&NdArray>,
@@ -5074,17 +5109,26 @@ fn measurement_label_mean(
 
     match index {
         Some(index) => {
-            let mut label_to_pos: std::collections::HashMap<u64, usize> =
-                std::collections::HashMap::with_capacity(index.len());
-            for (pos, &wanted_label) in index.iter().enumerate() {
-                label_to_pos
-                    .entry(measurement_label_key(wanted_label as f64))
-                    .or_insert(pos);
-            }
-            for (&value, &label_value) in input.data.iter().zip(&labels.data) {
-                if let Some(&pos) = label_to_pos.get(&measurement_label_key(label_value)) {
-                    sums[pos] += value;
-                    counts[pos] += 1;
+            if let Some(label_to_pos) = measurement_dense_label_positions(index) {
+                for (&value, &label_value) in input.data.iter().zip(&labels.data) {
+                    if let Some(pos) = measurement_dense_label_pos(&label_to_pos, label_value) {
+                        sums[pos] += value;
+                        counts[pos] += 1;
+                    }
+                }
+            } else {
+                let mut label_to_pos: std::collections::HashMap<u64, usize> =
+                    std::collections::HashMap::with_capacity(index.len());
+                for (pos, &wanted_label) in index.iter().enumerate() {
+                    label_to_pos
+                        .entry(measurement_label_key(wanted_label as f64))
+                        .or_insert(pos);
+                }
+                for (&value, &label_value) in input.data.iter().zip(&labels.data) {
+                    if let Some(&pos) = label_to_pos.get(&measurement_label_key(label_value)) {
+                        sums[pos] += value;
+                        counts[pos] += 1;
+                    }
                 }
             }
         }
@@ -11492,6 +11536,23 @@ mod tests {
         let err =
             mean(&data, Some(&labels), Some(&[1])).expect_err("shape mismatch must be rejected");
         assert!(matches!(err, NdimageError::DimensionMismatch(_)));
+    }
+
+    #[test]
+    fn mean_dense_label_lookup_preserves_exact_label_semantics() {
+        let data = NdArray::new(
+            vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0],
+            vec![8],
+        )
+        .unwrap();
+        let labels =
+            NdArray::new(vec![-0.0, 1.0, 2.0, 2.0, 3.0, 0.5, f64::NAN, -1.0], vec![8]).unwrap();
+        let index = [1, 1, 2, 0];
+
+        assert_close_or_nan(
+            &mean(&data, Some(&labels), Some(&index)).unwrap(),
+            &[20.0, f64::NAN, 35.0, 10.0],
+        );
     }
 
     #[test]
