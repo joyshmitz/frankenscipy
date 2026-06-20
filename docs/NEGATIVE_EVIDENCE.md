@@ -33,6 +33,34 @@ factor was packing the nested observations once before pairwise distance
 construction. Further work needs to change the nearest-neighbour maintenance
 or method-specific clustering primitive rather than another full-square arena
 initialization tweak.
+## 2026-06-20 - frankenscipy-8l8r1.129 - gaussian_filter 2D reflect cache-planned separable pass
+
+- Agent: cod-b / MistyBirch
+- Decision: KEEP as a measured same-worker Rust speedup and residual SciPy
+  loss. The fast path improves the tracked `gaussian_sigma2/256` workload by
+  `1.68x` on the same `vmi1152480` worker, but final Rust remains `1.34x`
+  slower than the SciPy oracle.
+- Artifact:
+  `tests/artifacts/perf/frankenscipy-8l8r1.128-gaussian-cache-planned/EVIDENCE.md`
+- Same-worker internal score versus clean `ae454655` current: `1/0/0`.
+- Strict SciPy score for final source: `0/1/0`.
+
+| Route | Worker | Mean | Ratio |
+| --- | --- | ---: | ---: |
+| Clean current Rust (`ae454655`) | `vmi1152480` | 3.2989 ms | 2.25x slower than SciPy |
+| Candidate Rust | `vmi1152480` | 1.9680 ms | 1.34x slower than SciPy; 1.68x faster than current |
+| SciPy `ndimage.gaussian_filter` | local oracle | 1.46523 ms | oracle |
+
+Routing-only rows: pre-edit RCH baseline on `vmi1227854` was `2.8418 ms`
+(`1.94x` slower than SciPy); clean baseline on `vmi1149989` was `5.8852 ms`
+(`4.02x` slower than SciPy). These were not used for the keep/reject ratio
+because they were not same-worker paired with the candidate.
+
+Negative evidence: cache-planned 2-D separable source-index tables remove enough
+generic N-D filter overhead to keep, but not enough to beat SciPy. Do not retry
+the reverted scalar row-contiguous border/interior split. Route next to
+vectorized row/column dot kernels, transposed scratch for the vertical pass, or
+cache-blocked separable tiles that preserve the same reflect index plan.
 
 ## 2026-06-20 - frankenscipy-8l8r1.127 - EDT feature-transform line starts
 

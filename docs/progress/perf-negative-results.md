@@ -83,6 +83,76 @@ condition so dead ends are not repeated casually.
   has moved. The next SciPy-gap attack should change the primitive: NN-chain,
   method-specific nearest-neighbour maintenance, MST/single-linkage style
   specialization where applicable, or a tighter compiled-distance frontier.
+## 2026-06-20 - frankenscipy-8l8r1.129 - ndimage gaussian_filter 2D reflect cache-planned separable pass
+
+- Agent: cod-b / MistyBirch
+- Lever: specialize the common `gaussian_filter(input, sigma, Reflect, cval)`
+  2-D, order-0, all-axes path by precomputing reflect source-index plans for
+  rows and columns, then applying separable vertical and horizontal passes over
+  row chunks. All other modes, dimensions, orders, and axis subsets retain the
+  generic route.
+- Graveyard/artifact route tested: cache-aware separable source plans and
+  branch/index hoisting at the first-axis generic N-D convolution layer. This
+  is intentionally deeper than the previously rejected scalar row-contiguous
+  border/interior tap split.
+- Decision: KEEP. Same-worker `vmi1152480` proof improves
+  `gaussian_sigma2/256` from `3.2989 ms` to `1.9680 ms` (`1.68x` faster).
+  Final Rust is still `1.34x` slower than the SciPy oracle, so the residual
+  loss remains routed to vectorized/tiled stencil constants.
+- Artifact:
+  `tests/artifacts/perf/frankenscipy-8l8r1.128-gaussian-cache-planned/EVIDENCE.md`
+- Pre-edit Rust command:
+  `AGENT_NAME=MistyBirch RCH_REQUIRE_REMOTE=1 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec -- cargo bench -p fsci-ndimage --bench ndimage_bench -- correlate_gaussian/gaussian_sigma2/256 --noplot`
+- Final Rust command:
+  `AGENT_NAME=MistyBirch RCH_REQUIRE_REMOTE=1 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec -- cargo bench -p fsci-ndimage --bench ndimage_bench -- correlate_gaussian/gaussian_sigma2/256 --noplot`
+- Same-worker clean-current command on `vmi1152480`:
+  `ssh -i ~/.ssh/contabo_vps_ed25519 -o BatchMode=yes root@109.205.181.92 'cd /data/projects/.scratch/frankenscipy-cod-b-gaussian-baseline-vmi115-20260620 && AGENT_NAME=MistyBirch CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b-vmi115-baseline cargo bench -p fsci-ndimage --bench ndimage_bench -- correlate_gaussian/gaussian_sigma2/256 --noplot'`
+- SciPy oracle command:
+  `python3 docs/perf_oracle_ndimage.py`
+- Benchmark evidence:
+
+  | Workload / route | Worker | Mean | Interval | Ratio / verdict |
+  | --- | --- | ---: | ---: | --- |
+  | Clean current Rust `ae454655` | `vmi1152480` | 3.2989 ms | [3.1976, 3.4050] ms | 2.25x slower than SciPy |
+  | Candidate cache-planned separable pass | `vmi1152480` | 1.9680 ms | [1.8608, 2.0797] ms | 1.68x faster than current; 1.34x slower than SciPy |
+  | SciPy `ndimage.gaussian_filter` | local SciPy 1.17.1 | 1.46523 ms | p50 | oracle |
+
+- Routing-only evidence:
+  - Pre-edit RCH current on `vmi1227854`: `2.8418 ms`, `1.94x` slower than
+    SciPy. Not used as keep/reject proof because the candidate proof worker was
+    `vmi1152480`.
+  - Clean current on RCH `vmi1149989`: `5.8852 ms`, `4.02x` slower than SciPy.
+    Not used as keep/reject proof because no candidate sample landed there.
+  - First candidate sample on RCH `vmi1152480`: `2.1316 ms`, `1.45x` slower
+    than SciPy.
+- Win/loss/neutral:
+  - Same-worker candidate versus clean current: `1/0/0`.
+  - Final candidate versus SciPy oracle: `0/1/0`.
+- Correctness/conformance guards:
+  - PASS: `cargo check -p fsci-ndimage --all-targets` via RCH `hz1`; unrelated
+    warnings remained in `fsci-interpolate` and `diff_geom`.
+  - PASS: `cargo test -p fsci-ndimage gaussian_filter --lib -- --nocapture`
+    via RCH `hz1` = **13 passed / 0 failed / 230 filtered**, including
+    `gaussian_filter_reflect_2d_fast_path_matches_generic_sequential_path`.
+  - PASS: local live SciPy conformance:
+    `FSCI_REQUIRE_SCIPY_ORACLE=1 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b-local cargo test -p fsci-conformance --test diff_ndimage_gaussian_filter -- --nocapture`
+    = **1 passed / 0 failed**.
+  - BLOCKED: RCH live SciPy conformance on `vmi1152480` failed before
+    comparison because the worker has no `scipy` module installed.
+  - PASS: `git diff --check`.
+  - PASS: UBS on the changed code/docs/bead/artifact set; exit 0, no
+    criticals, broad pre-existing warning inventory in `lib.rs`.
+  - BLOCKED: `cargo fmt --check -p fsci-ndimage` remains blocked by
+    pre-existing formatting drift in `ndimage_bench.rs` and `diff_fourier.rs`;
+    touched `src/lib.rs` was formatted directly.
+  - BLOCKED: `cargo clippy -p fsci-ndimage --all-targets -- -D warnings`
+    remains blocked before ndimage by pre-existing `fsci-linalg` dependency
+    lints.
+- Negative evidence: cache-planned reflect source tables are worthwhile, but
+  still not SciPy parity. Do not retry the reverted scalar row-contiguous
+  border/interior split or always-line-walk outer-axis split. The next route
+  should be a vector-friendly row/column dot kernel, transposed scratch for the
+  vertical pass, or cache-blocked separable tiles with the same reflect plan.
 
 ## 2026-06-20 - frankenscipy-8l8r1.127 - EDT feature-transform line starts
 
