@@ -1,5 +1,49 @@
 # Performance Release-Readiness Scorecard
 
+## 2026-06-20 - fsci-ndimage label mean cheap dense-probe gauntlet
+
+- Agent: cod-b / MistyBirch
+- Bead: `frankenscipy-fa62u`
+- Decision: KEEP the bounded cast + exact round-trip dense label probe as an
+  internal win, but keep the routine classified as a SciPy LOSS on the measured
+  same-host rows. Score for this sub-cluster remains `0/4/0` against SciPy.
+- Artifact:
+  `tests/artifacts/perf/frankenscipy-fa62u-label-mean-fast-probe-EVIDENCE.md`
+
+| Gate | Result | Notes |
+| --- | --- | --- |
+| rch release A/B | PASS | `cargo run --release -p fsci-ndimage --bin perf_label_stats` on `hz2`: dense_fast is 2.08-2.26x faster than previous dense_fract, 0 mismatches |
+| Same-host SciPy head-to-head | PASS | transferred rch release binary vs local SciPy 1.17.1; final source is 1.33-1.78x slower than SciPy |
+| Focused dense-label test | PASS | `cargo test -p fsci-ndimage mean_dense_label_lookup_preserves_exact_label_semantics --lib -- --nocapture` via rch: 1 passed / 0 failed |
+| Full ndimage lib tests | PASS | `cargo test -p fsci-ndimage --lib -- --nocapture` via rch: 241 passed / 0 failed |
+| Per-crate compile | PASS | `cargo check -p fsci-ndimage --all-targets` via rch; unrelated dependency warnings remain |
+| Local live SciPy conformance | PASS | `FSCI_REQUIRE_SCIPY_ORACLE=1 cargo test -p fsci-conformance --test diff_ndimage -- --nocapture`: 5 passed / 0 failed |
+| rch conformance filter | PARTIAL | lib-side ndimage filter passed 5/0, then live `diff_ndimage` failed because worker `hz2` lacked Python SciPy |
+| Touched-file formatting | PASS | `rustfmt --edition 2024 --check crates/fsci-ndimage/src/lib.rs crates/fsci-ndimage/src/bin/perf_label_stats.rs` |
+| Diff hygiene | PASS | `git diff --check -- crates/fsci-ndimage/src/lib.rs crates/fsci-ndimage/src/bin/perf_label_stats.rs` |
+| Changed-file UBS scan | PASS | `ubs` exited 0; no critical issues; broad warning inventory left untouched |
+| Clippy `-D warnings` | BLOCKED | no-deps clippy stopped on existing unrelated `fsci-ndimage` lib-file lints outside this patch |
+
+| Workload / route | Mean | Ratio | Verdict |
+| --- | ---: | ---: | --- |
+| Rust dense_fast mean, N=65536 K=512 | 278.230 us | 1.33x slower than SciPy; 2.13x faster than previous dense_fract on same host | SciPy loss, internal keep |
+| SciPy `ndimage.mean`, N=65536 K=512 | 0.210 ms | 1.00x oracle | reference |
+| Rust dense_fast mean, N=262144 K=1024 | 1.122 ms | 1.50x slower than SciPy; 2.09x faster than previous dense_fract on same host | SciPy loss, internal keep |
+| SciPy `ndimage.mean`, N=262144 K=1024 | 0.749 ms | 1.00x oracle | reference |
+| Rust dense_fast mean, N=262144 K=2048 | 1.186 ms | 1.58x slower than SciPy; 2.13x faster than previous dense_fract on same host | SciPy loss, internal keep |
+| SciPy `ndimage.mean`, N=262144 K=2048 | 0.751 ms | 1.00x oracle | reference |
+| Rust dense_fast mean, N=589824 K=4096 | 3.169 ms | 1.78x slower than SciPy; 1.94x faster than previous dense_fract on same host | SciPy loss, internal keep |
+| SciPy `ndimage.mean`, N=589824 K=4096 | 1.781 ms | 1.00x oracle | reference |
+
+Readiness notes:
+
+- The dense-label route is now 1.94-2.13x faster than the previous dense
+  `fract` probe on the same host and 2.08-2.26x faster on rch `hz2`, with
+  `mism=0/0/0/0`.
+- This is still not enough to beat SciPy. Future work should move below scalar
+  label probing into parallel/cache-tiled accumulators, vector-friendly label
+  generation, or sorted/run-grouped label spans.
+
 ## 2026-06-20 - fsci-integrate Radau diagonal-Jacobian stage solve
 
 - Agent: cod-a / MistyBirch

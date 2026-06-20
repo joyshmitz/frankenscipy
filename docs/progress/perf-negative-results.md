@@ -4,6 +4,68 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-20 - frankenscipy-fa62u - label mean cheap dense probe
+
+- Agent: cod-b / MistyBirch
+- Lever: replace the dense integer-label hot probe in `ndimage.mean(input,
+  labels, index)` from `is_finite() + fract()` to a bounded cast plus exact
+  `usize -> f64` round-trip check. This preserves NaN, fractional, negative,
+  out-of-table, duplicate first-wins, and `-0.0` label behavior while removing
+  expensive scalar classification from the per-element path.
+- Decision: KEEP as a measured internal win. The same-host SciPy score remains
+  a measured loss, so this is not release-speed parity.
+- Artifact:
+  `tests/artifacts/perf/frankenscipy-fa62u-label-mean-fast-probe-EVIDENCE.md`
+- Correctness guards:
+  - Focused dense-label semantics test via rch:
+    `cargo test -p fsci-ndimage mean_dense_label_lookup_preserves_exact_label_semantics --lib -- --nocapture`
+    = **1 passed / 0 failed**.
+  - Full ndimage lib tests via rch:
+    `cargo test -p fsci-ndimage --lib -- --nocapture` =
+    **241 passed / 0 failed**.
+  - Local live SciPy conformance:
+    `FSCI_REQUIRE_SCIPY_ORACLE=1 cargo test -p fsci-conformance --test diff_ndimage -- --nocapture`
+    = **5 passed / 0 failed**.
+  - rch conformance filter: conformance lib-side ndimage tests passed 5/0, then
+    live `diff_ndimage` failed because worker `hz2` lacked Python SciPy.
+  - `cargo check -p fsci-ndimage --all-targets` via rch: **PASS** with
+    unrelated dependency warnings.
+  - touched-file rustfmt, `git diff --check`, and UBS: **PASS**.
+  - no-deps clippy `-D warnings` remains blocked by pre-existing unrelated
+    `fsci-ndimage` lints outside this patch.
+- Candidate A/B (`CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b`
+  on rch `hz2`, same binary reconstructing the previous dense `fract` probe):
+
+  | N | K | previous dense_fract | new dense_fast | internal speedup | mismatches |
+  | ---: | ---: | ---: | ---: | ---: | ---: |
+  | 65536 | 512 | 353.495 us | 156.520 us | 2.26x | 0/0/0/0 |
+  | 262144 | 1024 | 1.444 ms | 640.903 us | 2.25x | 0/0/0/0 |
+  | 262144 | 2048 | 1.454 ms | 698.663 us | 2.08x | 0/0/0/0 |
+  | 589824 | 4096 | 3.593 ms | 1.696 ms | 2.12x | 0/0/0/0 |
+
+- Same-host final source head-to-head (transferred rch release binary
+  `/data/projects/.rch-targets/frankenscipy-cod-b/release/perf_label_stats`;
+  SciPy oracle `docs/perf_oracle_label_stats.py`, local SciPy 1.17.1):
+
+  | N | K | Rust dense_fast | SciPy `ndimage.mean` | dense_fast vs SciPy |
+  | ---: | ---: | ---: | ---: | ---: |
+  | 65536 | 512 | 278.230 us | 0.210 ms | 1.33x slower |
+  | 262144 | 1024 | 1.122 ms | 0.749 ms | 1.50x slower |
+  | 262144 | 2048 | 1.186 ms | 0.751 ms | 1.58x slower |
+  | 589824 | 4096 | 3.169 ms | 1.781 ms | 1.78x slower |
+
+- SciPy win/loss/neutral for final source: `0/4/0`.
+- Same-binary internal keep/loss/neutral versus previous dense `fract` probe:
+  `4/0/0`.
+- Negative evidence: cheapening the dense probe roughly halves the dense-label
+  Rust route again, but SciPy's C path still wins every same-host measured row.
+- Retry condition: do not retry another `fract()`, `is_finite()`, HashMap, or
+  `Vec<Vec<f64>>` grouping variant for this workload. The next attempt must be
+  a deeper reduction primitive: parallel/cache-tiled sum/count accumulation,
+  vector-friendly integer-label generation, sorted/run-grouped label spans, or
+  another profiled route that beats this dense-fast path in the same binary
+  while preserving SciPy-observable label semantics.
+
 ## 2026-06-20 - frankenscipy-zpunl - Radau diagonal stage solve
 
 - Agent: cod-a / MistyBirch

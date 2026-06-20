@@ -5,8 +5,10 @@
 //! labels — O(N*K). The first fix built a label->position map once and bucketed
 //! in O(1), but still materialized one `Vec` per label. The second fix streamed
 //! directly into flat sum/count arrays but still hashed every element label.
-//! This bin reconstructs all three historical routes, proves byte-identical
-//! means, and times them against the current public `mean`.
+//! The third fix used a dense table for compact integer labels but still called
+//! `fract()` in the hot probe. This bin reconstructs the historical routes,
+//! proves byte-identical means, and times them against the current public
+//! `mean`.
 //! Run: `cargo run --release -p fsci-ndimage --bin perf_label_stats`.
 
 use fsci_ndimage::{NdArray, mean};
@@ -104,6 +106,46 @@ fn flat_hash_mean_by_label(input: &NdArray, labels: &NdArray, index: &[usize]) -
         .collect()
 }
 
+/// Previous shipped dense lookup: direct flat accumulation with a dense
+/// label->position table, but the hot probe used `is_finite` + `fract`.
+fn dense_fract_mean_by_label(input: &NdArray, labels: &NdArray, index: &[usize]) -> Vec<f64> {
+    let Some(max_label) = index.iter().copied().max() else {
+        return Vec::new();
+    };
+    let mut label_to_pos = vec![usize::MAX; max_label + 1];
+    for (pos, &wanted_label) in index.iter().enumerate() {
+        if label_to_pos[wanted_label] == usize::MAX {
+            label_to_pos[wanted_label] = pos;
+        }
+    }
+
+    let mut sums = vec![0.0f64; index.len()];
+    let mut counts = vec![0usize; index.len()];
+    for (&value, &label_value) in input.data.iter().zip(&labels.data) {
+        if !label_value.is_finite() || label_value < 0.0 || label_value.fract() != 0.0 {
+            continue;
+        }
+        let label = label_value as usize;
+        if let Some(&pos) = label_to_pos.get(label) {
+            if pos != usize::MAX {
+                sums[pos] += value;
+                counts[pos] += 1;
+            }
+        }
+    }
+
+    sums.into_iter()
+        .zip(counts)
+        .map(|(sum, count)| {
+            if count == 0 {
+                f64::NAN
+            } else {
+                sum / count as f64
+            }
+        })
+        .collect()
+}
+
 fn label_key(x: f64) -> u64 {
     if x == 0.0 {
         0.0f64.to_bits()
@@ -130,6 +172,7 @@ fn main() {
         let old_means = old_mean_by_label(&input, &labels, &index);
         let bucketed_means = bucketed_mean_by_label(&input, &labels, &index);
         let hash_means = flat_hash_mean_by_label(&input, &labels, &index);
+        let dense_fract_means = dense_fract_mean_by_label(&input, &labels, &index);
         let mismatches = new_means
             .iter()
             .zip(&old_means)
@@ -143,6 +186,11 @@ fn main() {
         let hash_mismatches = new_means
             .iter()
             .zip(&hash_means)
+            .filter(|(a, b)| a.to_bits() != b.to_bits())
+            .count();
+        let dense_fract_mismatches = new_means
+            .iter()
+            .zip(&dense_fract_means)
             .filter(|(a, b)| a.to_bits() != b.to_bits())
             .count();
 
@@ -167,16 +215,23 @@ fn main() {
 
         let t3 = Instant::now();
         for _ in 0..3 {
+            acc += dense_fract_mean_by_label(&input, &labels, &index)[0];
+        }
+        let dense_fract_t = t3.elapsed() / 3;
+
+        let t4 = Instant::now();
+        for _ in 0..3 {
             acc += mean(&input, Some(&labels), Some(&index)).unwrap()[0];
         }
-        let dense_t = t3.elapsed() / 3;
+        let dense_t = t4.elapsed() / 3;
 
         let old_ratio = old_t.as_secs_f64() / dense_t.as_secs_f64();
         let bucketed_ratio = bucketed_t.as_secs_f64() / dense_t.as_secs_f64();
         let hash_ratio = hash_t.as_secs_f64() / dense_t.as_secs_f64();
+        let dense_fract_ratio = dense_fract_t.as_secs_f64() / dense_t.as_secs_f64();
         println!(
-            "N={:>7} K={:>5}  old(O(N*K))={:>10.3?}  bucketed(O(N+K))={:>10.3?}  hashflat(O(N+K))={:>10.3?}  dense(O(N+K))={:>10.3?}  old/dense={old_ratio:>7.1}x  bucketed/dense={bucketed_ratio:>6.2}x  hash/dense={hash_ratio:>6.2}x  mism={mismatches}/{bucketed_mismatches}/{hash_mismatches}  (acc={acc:.3})",
-            n, k, old_t, bucketed_t, hash_t, dense_t
+            "N={:>7} K={:>5}  old(O(N*K))={:>10.3?}  bucketed(O(N+K))={:>10.3?}  hashflat(O(N+K))={:>10.3?}  dense_fract(O(N+K))={:>10.3?}  dense_fast(O(N+K))={:>10.3?}  old/fast={old_ratio:>7.1}x  bucketed/fast={bucketed_ratio:>6.2}x  hash/fast={hash_ratio:>6.2}x  fract/fast={dense_fract_ratio:>6.2}x  mism={mismatches}/{bucketed_mismatches}/{hash_mismatches}/{dense_fract_mismatches}  (acc={acc:.3})",
+            n, k, old_t, bucketed_t, hash_t, dense_fract_t, dense_t
         );
     }
 }

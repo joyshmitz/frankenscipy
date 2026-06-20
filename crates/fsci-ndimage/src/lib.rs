@@ -5079,10 +5079,13 @@ fn measurement_dense_label_positions(index: &[usize]) -> Option<Vec<usize>> {
 }
 
 fn measurement_dense_label_pos(label_to_pos: &[usize], label_value: f64) -> Option<usize> {
-    if !label_value.is_finite() || label_value < 0.0 || label_value.fract() != 0.0 {
+    if !(label_value >= 0.0 && label_value < label_to_pos.len() as f64) {
         return None;
     }
     let label = label_value as usize;
+    if label as f64 != label_value {
+        return None;
+    }
     let pos = *label_to_pos.get(label)?;
     (pos != MEASUREMENT_DENSE_LABEL_EMPTY).then_some(pos)
 }
