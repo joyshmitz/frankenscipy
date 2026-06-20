@@ -6,6 +6,43 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-20 - frankenscipy-8l8r1.135 - filter1d contiguous Reflect direct queue
+
+- Agent: cod-b / BlackThrush
+- Decision: KEEP the guarded contiguous `Reflect`, `origin=0`,
+  `size <= line_len` direct monotonic queue for public
+  `maximum_filter1d` / `minimum_filter1d`. It removes full boundary-resolved
+  line materialization and replaces the full-line queue with a `size + 1`
+  circular deque while preserving the prior generic queue for every other
+  shape/mode/origin.
+- Artifact:
+  `tests/artifacts/perf/2026-06-20-cod-b-filter1d-specialize/EVIDENCE.md`
+- Same-process generic-vs-direct score: `4/0/0`.
+- Conservative direct-vs-SciPy score: `4/0/0`.
+- Absolute Criterion-after-vs-SciPy score: `4/0/0`; worker differs, so the
+  same-process direct A/B is the keep gate and Criterion/SciPy is release
+  evidence.
+
+| Workload | Direct queue | Criterion after | SciPy oracle | Verdict |
+| --- | ---: | ---: | ---: | --- |
+| `maximum_filter1d`, n=65536 size=31 | 470.7 us | 344.48 us | 524.98 us | keep: 2.37x faster than generic; Rust 1.12x to 1.52x faster than SciPy |
+| `minimum_filter1d`, n=65536 size=31 | 465.8 us | 339.06 us | 575.42 us | keep: 2.35x faster than generic; Rust 1.24x to 1.70x faster than SciPy |
+| `maximum_filter1d`, n=65536 size=101 | 464.2 us | 339.74 us | 529.05 us | keep: 2.35x faster than generic; Rust 1.14x to 1.56x faster than SciPy |
+| `minimum_filter1d`, n=65536 size=101 | 466.8 us | 321.55 us | 592.31 us | keep: 2.34x faster than generic; Rust 1.27x to 1.84x faster than SciPy |
+
+Guards: direct/generic bit-identity A/B, existing fold/generic byte identity,
+live SciPy `diff_ndimage_filter_1d`, rch `cargo check -p fsci-ndimage
+--all-targets`, rch `cargo build --release -p fsci-ndimage`, touched-file
+rustfmt, diff hygiene, and changed-file UBS pass. UBS exits 0 with no critical
+issues while reporting the broad existing `fsci-ndimage` warning inventory.
+Strict clippy remains blocked before this patch on existing `fsci-linalg`
+dependency lints.
+
+Negative evidence: do not retry full-line `ext` materialization or whole-line
+queue storage for this contiguous Reflect route. Future filter1d work should
+move to non-contiguous axes, `size > line_len`, or missing SciPy max/min
+filter1d conformance coverage.
+
 ## 2026-06-20 - frankenscipy-8l8r1.133 - linkage compact active frontier
 
 - Agent: cod-a / BlackThrush

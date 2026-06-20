@@ -2761,6 +2761,95 @@ fn filter1d_queue_evicts(back: f64, val: f64, is_max: bool) -> bool {
     if is_max { back <= val } else { back >= val }
 }
 
+#[inline(always)]
+fn reflect_origin0_ext_index(t: usize, mid: usize, lo: usize) -> usize {
+    if t < lo {
+        lo - t - 1
+    } else {
+        let coord = t - lo;
+        if coord < mid {
+            coord
+        } else {
+            (mid - 1) - (coord - mid)
+        }
+    }
+}
+
+fn minmax_filter1d_reflect_contiguous_queue(
+    arr: &NdArray,
+    axis: usize,
+    size: usize,
+    is_max: bool,
+) -> NdArray {
+    let mid = arr.shape[axis];
+    let outer: usize = arr.shape[..axis].iter().product();
+    let slab = mid;
+    let lo = size / 2;
+    let ext_len = mid + size - 1;
+    let cap = size + 1;
+
+    let mut out = NdArray::zeros(arr.shape.clone());
+    let mut queue_idx = vec![0usize; cap];
+    let mut queue_val = vec![0.0f64; cap];
+
+    for o in 0..outer {
+        let base = o * slab;
+        let input = &arr.data[base..base + mid];
+        let output = &mut out.data[base..base + mid];
+        let mut head = 0usize;
+        let mut tail = 0usize;
+        let mut len = 0usize;
+        let mut nan_count = 0usize;
+
+        for next in 0..ext_len {
+            let src = reflect_origin0_ext_index(next, mid, lo);
+            let val = input[src];
+            if val.is_nan() {
+                nan_count += 1;
+            } else {
+                while len > 0 {
+                    let back = if tail == 0 { cap - 1 } else { tail - 1 };
+                    if filter1d_queue_evicts(queue_val[back], val, is_max) {
+                        tail = back;
+                        len -= 1;
+                    } else {
+                        break;
+                    }
+                }
+                queue_idx[tail] = next;
+                queue_val[tail] = val;
+                tail += 1;
+                if tail == cap {
+                    tail = 0;
+                }
+                len += 1;
+            }
+
+            if next + 1 >= size {
+                let left = next + 1 - size;
+                while len > 0 && queue_idx[head] < left {
+                    head += 1;
+                    if head == cap {
+                        head = 0;
+                    }
+                    len -= 1;
+                }
+                output[left] = if nan_count == 0 {
+                    queue_val[head]
+                } else {
+                    f64::NAN
+                };
+                let leaving = input[reflect_origin0_ext_index(left, mid, lo)];
+                if leaving.is_nan() {
+                    nan_count -= 1;
+                }
+            }
+        }
+    }
+
+    out
+}
+
 /// Single-pass monotonic index queue for the public NaN-propagating 1-D min/max
 /// filters. It keeps the HGW boundary-resolved line materialization but fuses the
 /// prefix/suffix/combine passes into one scan. NaNs are counted out-of-band so the
@@ -2768,6 +2857,25 @@ fn filter1d_queue_evicts(back: f64, val: f64, is_max: bool) -> bool {
 /// non-NaN extrema evict older entries to match the left-to-right `f64::max/min`
 /// fold for signed zeros.
 fn minmax_filter1d_nanprop_queue(
+    arr: &NdArray,
+    axis: usize,
+    size: usize,
+    origin: i64,
+    mode: BoundaryMode,
+    cval: f64,
+    is_max: bool,
+) -> NdArray {
+    if mode == BoundaryMode::Reflect
+        && origin == 0
+        && size <= arr.shape[axis]
+        && arr.shape[axis + 1..].iter().product::<usize>() == 1
+    {
+        return minmax_filter1d_reflect_contiguous_queue(arr, axis, size, is_max);
+    }
+    minmax_filter1d_nanprop_queue_generic(arr, axis, size, origin, mode, cval, is_max)
+}
+
+fn minmax_filter1d_nanprop_queue_generic(
     arr: &NdArray,
     axis: usize,
     size: usize,
@@ -9996,6 +10104,85 @@ mod tests {
                 println!(
                     "filter1d queue/HGW {label} n={n} size={size}: hgw={hgw_us:.1}us queue={queue_us:.1}us  speedup_vs_hgw={:.2}x",
                     hgw_us / queue_us
+                );
+            }
+        }
+    }
+
+    /// Same-process A/B: generic boundary-resolved queue vs the contiguous
+    /// Reflect/origin-0 direct queue used by the benchmarked 1-D public route.
+    #[test]
+    #[ignore]
+    fn filter1d_reflect_direct_vs_generic_queue_ab_timing() {
+        use std::hint::black_box;
+        use std::time::Instant;
+
+        let n = 65536usize;
+        let data: Vec<f64> = (0..n)
+            .map(|i| (i as f64 * 0.01).sin() * 100.0 + (i % 7) as f64)
+            .collect();
+        let line = NdArray::new(data, vec![n]).unwrap();
+        for &size in &[31usize, 101] {
+            for is_max in [true, false] {
+                let generic = minmax_filter1d_nanprop_queue_generic(
+                    &line,
+                    0,
+                    size,
+                    0,
+                    BoundaryMode::Reflect,
+                    0.0,
+                    is_max,
+                );
+                let direct = minmax_filter1d_reflect_contiguous_queue(&line, 0, size, is_max);
+                for (k, (a, b)) in generic.data.iter().zip(direct.data.iter()).enumerate() {
+                    assert_eq!(
+                        a.to_bits(),
+                        b.to_bits(),
+                        "size={size} is_max={is_max} idx={k}: generic={a} direct={b}"
+                    );
+                }
+
+                let (mut t_generic, mut t_direct) = (0.0f64, 0.0f64);
+                let rounds = 50;
+                let inner = 2;
+                for r in 0..rounds {
+                    let order = if r % 2 == 0 {
+                        [false, true]
+                    } else {
+                        [true, false]
+                    };
+                    for &use_direct in &order {
+                        let t = Instant::now();
+                        for _ in 0..inner {
+                            let result = if use_direct {
+                                minmax_filter1d_reflect_contiguous_queue(&line, 0, size, is_max)
+                            } else {
+                                minmax_filter1d_nanprop_queue_generic(
+                                    &line,
+                                    0,
+                                    size,
+                                    0,
+                                    BoundaryMode::Reflect,
+                                    0.0,
+                                    is_max,
+                                )
+                            };
+                            black_box(result);
+                        }
+                        let elapsed = t.elapsed().as_secs_f64() / inner as f64;
+                        if use_direct {
+                            t_direct += elapsed;
+                        } else {
+                            t_generic += elapsed;
+                        }
+                    }
+                }
+                let label = if is_max { "max" } else { "min" };
+                let generic_us = t_generic / rounds as f64 * 1e6;
+                let direct_us = t_direct / rounds as f64 * 1e6;
+                println!(
+                    "filter1d direct/generic {label} n={n} size={size}: generic={generic_us:.1}us direct={direct_us:.1}us  speedup_vs_generic={:.2}x",
+                    generic_us / direct_us
                 );
             }
         }

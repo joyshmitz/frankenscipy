@@ -4,6 +4,98 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-20 - frankenscipy-8l8r1.135 - ndimage filter1d contiguous Reflect direct queue
+
+- Agent: cod-b / BlackThrush
+- Lever kept: specialize the public `maximum_filter1d` / `minimum_filter1d`
+  queue route for contiguous `Reflect`, `origin=0`, `size <= line_len` 1-D
+  lines. The fast path computes the reflected source index only when a sample
+  enters or leaves the window and stores the monotonic queue in a fixed
+  circular deque of `size + 1` slots.
+- Graveyard/artifact route tested: fixed-ring monotonic queue plus
+  narrow-interface specialization. This follows the previous `.134` evidence:
+  HGW-to-queue pass fusion paid, but full boundary materialization still left
+  max/min filter1d slower than SciPy.
+- Decision: KEEP. Same-process direct/generic A/B improves the four tracked
+  rows by `2.34-2.37x` while asserting `to_bits` identity. Conservative
+  direct-vs-SciPy comparison scores `4/0/0`, and the after Criterion rows also
+  score `4/0/0` versus the local SciPy oracle.
+- Artifact:
+  `tests/artifacts/perf/2026-06-20-cod-b-filter1d-specialize/EVIDENCE.md`
+- rch baseline command:
+  `AGENT_NAME=BlackThrush RCH_REQUIRE_REMOTE=1 RCH_WORKER=hz2 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec -- cargo bench -p fsci-ndimage --bench ndimage_bench -- minmax_filter1d --noplot`
+- rch same-process A/B command:
+  `AGENT_NAME=BlackThrush RCH_REQUIRE_REMOTE=1 RCH_WORKER=hz1 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec -- cargo test -p fsci-ndimage filter1d_reflect_direct_vs_generic_queue_ab_timing --release -- --ignored --nocapture`
+- rch after command:
+  `AGENT_NAME=BlackThrush RCH_REQUIRE_REMOTE=1 RCH_WORKER=hz1 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec -- cargo bench -p fsci-ndimage --bench ndimage_bench -- minmax_filter1d --noplot`
+- Local SciPy oracle command:
+  `AGENT_NAME=BlackThrush python3 - <<'PY' ... scipy.ndimage maximum/minimum_filter1d ... PY`
+
+Benchmark evidence:
+
+| Workload / route | Mean | Worker/source | Ratio / verdict |
+| --- | ---: | --- | --- |
+| Current Rust `maximum_filter1d` size=31 | 760.87 us | rch `hz1` baseline | baseline; 1.45x slower than local SciPy |
+| Current Rust `minimum_filter1d` size=31 | 1.0810 ms | rch `hz1` baseline | baseline; 1.88x slower than local SciPy |
+| Current Rust `maximum_filter1d` size=101 | 966.29 us | rch `hz1` baseline | baseline; 1.83x slower than local SciPy |
+| Current Rust `minimum_filter1d` size=101 | 1.0142 ms | rch `hz1` baseline | baseline; 1.71x slower than local SciPy |
+| Generic queue A/B `maximum_filter1d` size=31 | 1116.8 us | rch `hz1`, same binary | prior queue arm |
+| Direct queue A/B `maximum_filter1d` size=31 | 470.7 us | rch `hz1`, same binary | 2.37x faster than generic; 1.12x faster than SciPy |
+| Generic queue A/B `minimum_filter1d` size=31 | 1094.4 us | rch `hz1`, same binary | prior queue arm |
+| Direct queue A/B `minimum_filter1d` size=31 | 465.8 us | rch `hz1`, same binary | 2.35x faster than generic; 1.24x faster than SciPy |
+| Generic queue A/B `maximum_filter1d` size=101 | 1089.1 us | rch `hz1`, same binary | prior queue arm |
+| Direct queue A/B `maximum_filter1d` size=101 | 464.2 us | rch `hz1`, same binary | 2.35x faster than generic; 1.14x faster than SciPy |
+| Generic queue A/B `minimum_filter1d` size=101 | 1091.0 us | rch `hz1`, same binary | prior queue arm |
+| Direct queue A/B `minimum_filter1d` size=101 | 466.8 us | rch `hz1`, same binary | 2.34x faster than generic; 1.27x faster than SciPy |
+| Final Criterion `maximum_filter1d` size=31 | 344.48 us | rch `vmi1149989` after | 1.52x faster than SciPy |
+| Final Criterion `minimum_filter1d` size=31 | 339.06 us | rch `vmi1149989` after | 1.70x faster than SciPy |
+| Final Criterion `maximum_filter1d` size=101 | 339.74 us | rch `vmi1149989` after | 1.56x faster than SciPy |
+| Final Criterion `minimum_filter1d` size=101 | 321.55 us | rch `vmi1149989` after | 1.84x faster than SciPy |
+| SciPy `maximum_filter1d` size=31 | 524.98 us | local SciPy 1.17.1 | oracle |
+| SciPy `minimum_filter1d` size=31 | 575.42 us | local SciPy 1.17.1 | oracle |
+| SciPy `maximum_filter1d` size=101 | 529.05 us | local SciPy 1.17.1 | oracle |
+| SciPy `minimum_filter1d` size=101 | 592.31 us | local SciPy 1.17.1 | oracle |
+
+Win/loss/neutral:
+
+- Same-process direct queue versus generic queue: `4/0/0`.
+- Conservative direct queue versus local SciPy oracle: `4/0/0`.
+- Final Criterion rows versus local SciPy oracle: `4/0/0`.
+
+Correctness/conformance guards:
+
+- PASS: rch fold/generic byte identity:
+  `cargo test -p fsci-ndimage filter1d_hgw_byte_identical_to_fold -- --nocapture`
+  = 1 passed / 0 failed.
+- PASS: rch direct/generic same-process A/B:
+  `cargo test -p fsci-ndimage filter1d_reflect_direct_vs_generic_queue_ab_timing --release -- --ignored --nocapture`
+  asserts bit identity before timing and prints all four ratios.
+- PASS: local live SciPy conformance:
+  `FSCI_REQUIRE_SCIPY_ORACLE=1 cargo test -p fsci-conformance --test diff_ndimage_filter_1d -- --nocapture`
+  = 1 passed / 0 failed.
+- PASS: rch per-crate compile:
+  `cargo check -p fsci-ndimage --all-targets`; unrelated existing warnings
+  remained in dependency/test targets.
+- PASS: rch per-crate release build:
+  `cargo build --release -p fsci-ndimage`; unrelated existing warnings remained.
+- PASS: touched-file rustfmt:
+  `rustfmt --edition 2024 --check crates/fsci-ndimage/src/lib.rs`.
+- PASS: `git diff --check`.
+- PASS: changed-file UBS:
+  `ubs crates/fsci-ndimage/src/lib.rs docs/NEGATIVE_EVIDENCE.md docs/GAUNTLET_RELEASE_SCORECARD.md docs/progress/perf-release-readiness-scorecard.md docs/progress/perf-negative-results.md tests/artifacts/perf/2026-06-20-cod-b-filter1d-specialize/EVIDENCE.md`
+  exits 0 with 0 critical issues; broad existing `fsci-ndimage` warning
+  inventory remains.
+- BLOCKED: strict dependency-inclusive
+  `cargo clippy -p fsci-ndimage --all-targets -- -D warnings` stops before this
+  patch on existing `fsci-linalg` `needless_range_loop` and `needless_borrow`
+  lints.
+
+Retry condition: do not retry full-line `ext` materialization, whole-line queue
+storage, or another micro-variant of the contiguous Reflect/origin-0 queue for
+these four rows. The tracked residual is closed; future filter1d work should
+target non-contiguous axes, `size > line_len`, or the still-open max/min
+filter1d SciPy conformance coverage.
+
 ## 2026-06-20 - frankenscipy-8l8r1.133 - cluster linkage compact active frontier
 
 - Agent: cod-a / BlackThrush

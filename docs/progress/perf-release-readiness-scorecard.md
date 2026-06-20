@@ -1,5 +1,56 @@
 # Performance Release-Readiness Scorecard
 
+## 2026-06-20 - fsci-ndimage filter1d contiguous Reflect direct queue gauntlet
+
+- Agent: cod-b / BlackThrush
+- Bead: `frankenscipy-8l8r1.135`
+- Decision: KEEP. The contiguous `Reflect`, `origin=0`, `size <= line_len`
+  fast path removes full boundary-resolved line materialization and replaces
+  the full-line queue with a `size + 1` circular monotonic deque. Every
+  non-gated case still uses the prior generic queue route.
+- Artifact:
+  `tests/artifacts/perf/2026-06-20-cod-b-filter1d-specialize/EVIDENCE.md`
+
+| Gate | Result | Notes |
+| --- | --- | --- |
+| Fresh rch baseline | PASS | `hz1` current rows: 760.87 us / 1.0810 ms / 966.29 us / 1.0142 ms for max31/min31/max101/min101 |
+| Direct/generic A/B | PASS | rch `hz1`: direct queue is 2.37x / 2.35x / 2.35x / 2.34x faster, with bit identity asserted before timing |
+| rch Criterion final | PASS | rch `vmi1149989`: 344.48 us / 339.06 us / 339.74 us / 321.55 us for max31/min31/max101/min101 |
+| SciPy oracle | PASS | local SciPy 1.17.1 / NumPy 2.4.3: medians 524.98 us / 575.42 us / 529.05 us / 592.31 us |
+| Fold/generic byte identity | PASS | `cargo test -p fsci-ndimage filter1d_hgw_byte_identical_to_fold -- --nocapture` via rch: 1 passed / 0 failed |
+| Local live SciPy conformance | PASS | `FSCI_REQUIRE_SCIPY_ORACLE=1 cargo test -p fsci-conformance --test diff_ndimage_filter_1d -- --nocapture`: 1 passed / 0 failed |
+| Per-crate compile | PASS | `cargo check -p fsci-ndimage --all-targets` via rch; unrelated existing warnings remained |
+| Per-crate release build | PASS | `cargo build --release -p fsci-ndimage` via rch; unrelated existing warnings remained |
+| Touched-file formatting | PASS | `rustfmt --edition 2024 --check crates/fsci-ndimage/src/lib.rs` |
+| Diff hygiene | PASS | `git diff --check` |
+| Changed-file UBS | PASS | `ubs` on touched source/docs/artifact files exited 0 with 0 critical issues; broad existing `fsci-ndimage` warning inventory remains |
+| Clippy `-D warnings` | BLOCKED | `cargo clippy -p fsci-ndimage --all-targets -- -D warnings` stops before this patch on existing `fsci-linalg` lints (`needless_range_loop`, `needless_borrow`) |
+
+| Workload / route | Mean | Ratio | Verdict |
+| --- | ---: | ---: | --- |
+| Generic queue A/B `maximum_filter1d`, n=65536 size=31 | 1116.8 us | prior queue arm | baseline arm |
+| Direct queue `maximum_filter1d`, n=65536 size=31 | 470.7 us A/B; 344.48 us Criterion | 2.37x faster than generic; 1.12x to 1.52x faster than SciPy | keep |
+| SciPy `maximum_filter1d`, n=65536 size=31 | 524.98 us | 1.00x oracle | reference |
+| Generic queue A/B `minimum_filter1d`, n=65536 size=31 | 1094.4 us | prior queue arm | baseline arm |
+| Direct queue `minimum_filter1d`, n=65536 size=31 | 465.8 us A/B; 339.06 us Criterion | 2.35x faster than generic; 1.24x to 1.70x faster than SciPy | keep |
+| SciPy `minimum_filter1d`, n=65536 size=31 | 575.42 us | 1.00x oracle | reference |
+| Generic queue A/B `maximum_filter1d`, n=65536 size=101 | 1089.1 us | prior queue arm | baseline arm |
+| Direct queue `maximum_filter1d`, n=65536 size=101 | 464.2 us A/B; 339.74 us Criterion | 2.35x faster than generic; 1.14x to 1.56x faster than SciPy | keep |
+| SciPy `maximum_filter1d`, n=65536 size=101 | 529.05 us | 1.00x oracle | reference |
+| Generic queue A/B `minimum_filter1d`, n=65536 size=101 | 1091.0 us | prior queue arm | baseline arm |
+| Direct queue `minimum_filter1d`, n=65536 size=101 | 466.8 us A/B; 321.55 us Criterion | 2.34x faster than generic; 1.27x to 1.84x faster than SciPy | keep |
+| SciPy `minimum_filter1d`, n=65536 size=101 | 592.31 us | 1.00x oracle | reference |
+
+Readiness notes:
+
+- This is the guarded specialization requested by the prior `.134` residual.
+  It preserves NaN propagation, newest-tie signed-zero queue behavior, and the
+  generic boundary path for all other modes/origins/layouts.
+- Do not retry full-line boundary materialization or whole-line queue storage
+  for this contiguous Reflect route. Move future filter1d work to
+  non-contiguous axes, `size > line_len`, or missing max/min filter1d SciPy
+  conformance coverage.
+
 ## 2026-06-20 - fsci-cluster linkage compact active frontier gauntlet
 
 - Agent: cod-a / BlackThrush
