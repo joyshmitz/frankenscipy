@@ -2342,21 +2342,55 @@ impl KDTree {
             other_points[node.index] = Some(node.point.as_slice());
         }
 
-        let mut entries = Vec::new();
-        for node in &self.nodes {
-            for other_index in other.query_ball_point(&node.point, max_distance)? {
-                let Some(other_point) = other_points[other_index] else {
-                    return Err(SpatialError::InvalidArgument(
-                        "kdtree internal point index mapping was inconsistent".to_string(),
+        // Each `self` node's neighbour query against `other` is independent and the
+        // entries are sorted by (row, col) at the end (keys are unique — each (i,j)
+        // pair occurs once), so the final order is independent of collection order.
+        // Parallelize the outer query loop across `self`'s points (mirrors the
+        // already-parallel `query_ball_tree` / `count_neighbors`); bit-identical.
+        let op = &other_points;
+        let collect_chunk = |chunk_nodes: &[KDNode]| -> Result<Vec<(usize, usize, f64)>, SpatialError> {
+            let mut local = Vec::new();
+            for node in chunk_nodes {
+                for other_index in other.query_ball_point(&node.point, max_distance)? {
+                    let Some(other_point) = op[other_index] else {
+                        return Err(SpatialError::InvalidArgument(
+                            "kdtree internal point index mapping was inconsistent".to_string(),
+                        ));
+                    };
+                    local.push((
+                        node.index,
+                        other_index,
+                        sqeuclidean(&node.point, other_point).sqrt(),
                     ));
-                };
-                entries.push((
-                    node.index,
-                    other_index,
-                    sqeuclidean(&node.point, other_point).sqrt(),
-                ));
+                }
             }
-        }
+            Ok(local)
+        };
+        let n = self.nodes.len();
+        let nthreads = cdist_thread_count(n, other.nodes.len(), self.dim);
+        let mut entries = if nthreads <= 1 {
+            collect_chunk(&self.nodes)?
+        } else {
+            let chunk = n.div_ceil(nthreads);
+            let collect_chunk = &collect_chunk;
+            let parts: Vec<Result<Vec<(usize, usize, f64)>, SpatialError>> =
+                std::thread::scope(|scope| {
+                    let handles: Vec<_> = self
+                        .nodes
+                        .chunks(chunk)
+                        .map(|cn| scope.spawn(move || collect_chunk(cn)))
+                        .collect();
+                    handles
+                        .into_iter()
+                        .map(|h| h.join().expect("sparse_distance_matrix worker panicked"))
+                        .collect()
+                });
+            let mut all = Vec::new();
+            for part in parts {
+                all.extend(part?);
+            }
+            all
+        };
         entries.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
         Ok(entries)
     }
@@ -6629,6 +6663,50 @@ mod tests {
     /// `find_simplex` per point (same simplex index, same barycentric bits),
     /// across interior / exterior / on-vertex queries and a batch that crosses
     /// the serial/parallel gate.
+    /// The (now parallel) `sparse_distance_matrix_triplets` must equal a
+    /// brute-force all-pairs reference, bit-for-bit, at a size that triggers the
+    /// parallel collection path (the final (row,col) sort makes the result
+    /// independent of thread/collection order).
+    #[test]
+    fn sparse_distance_matrix_triplets_matches_brute_force() {
+        let n = 1500usize;
+        let mk = |seed: f64| -> Vec<Vec<f64>> {
+            (0..n)
+                .map(|i| {
+                    let t = i as f64;
+                    vec![
+                        ((t * 0.0137 + seed).sin() * 0.5 + 0.5),
+                        ((t * 0.0291 + seed).cos() * 0.5 + 0.5),
+                    ]
+                })
+                .collect()
+        };
+        let pa = mk(0.0);
+        let pb = mk(1.3);
+        let ta = KDTree::new(&pa).expect("tree a");
+        let tb = KDTree::new(&pb).expect("tree b");
+        let r = 0.05;
+        let mut got = ta.sparse_distance_matrix_triplets(&tb, r).expect("triplets");
+        let mut brute: Vec<(usize, usize, f64)> = Vec::new();
+        let r_sq = r * r;
+        for (i, a) in pa.iter().enumerate() {
+            for (j, b) in pb.iter().enumerate() {
+                let d_sq = sqeuclidean(a, b);
+                if d_sq <= r_sq {
+                    brute.push((i, j, d_sq.sqrt()));
+                }
+            }
+        }
+        brute.sort_by(|l, r| l.0.cmp(&r.0).then(l.1.cmp(&r.1)));
+        got.sort_by(|l, r| l.0.cmp(&r.0).then(l.1.cmp(&r.1)));
+        assert_eq!(got.len(), brute.len(), "nnz mismatch");
+        for (g, b) in got.iter().zip(&brute) {
+            assert_eq!(g.0, b.0);
+            assert_eq!(g.1, b.1);
+            assert_eq!(g.2.to_bits(), b.2.to_bits(), "dist bits ({},{})", g.0, g.1);
+        }
+    }
+
     #[test]
     fn delaunay_find_simplex_many_matches_per_point() {
         // Deterministic scattered points (mirror the perf bench distribution).

@@ -517,3 +517,27 @@ interior-direct (boundary-map only the ~window-1 edge cells).**
   (1.1-3.1s); find_simplex_many + grid is now **14.7-16.4x FASTER** — a ~450-770x
   swing, byte-identical. Each query is now O(1) (cell candidates) instead of
   O(num_simplices). Feeds griddata / LinearND point location.
+
+## 2026-06-20 - KDTree sparse_distance_matrix parallel collection - WIN (1.31-1.34x vs scipy, byte-identical)
+
+- Agent: cc / MistyBirch
+- Decision: **KEEP**. `sparse_distance_matrix_triplets` was the lone SEQUENTIAL
+  outlier among its siblings (`query_ball_tree`, `count_neighbors` are already
+  parallel): it looped over `self.nodes` calling `other.query_ball_point` per
+  point. Parallelized the outer loop (chunk `self.nodes`, collect per-thread,
+  concat) — the entries are sorted by (row,col) with UNIQUE keys at the end, so
+  the result is independent of thread/collection order = byte-identical.
+- Correctness: proven by `sparse_distance_matrix_triplets_matches_brute_force` —
+  parallel output equals an all-pairs brute-force reference bit-for-bit (incl.
+  distance bits) at n=1500 (above the parallel gate). Full lib suite 213/0.
+
+| Workload (cross-tree, d=2) | fsci (parallel) | scipy cKDTree | ratio |
+| --- | ---: | ---: | --- |
+| n=5000, r=0.05 (nnz~188k)  | 60.3 ms | 79.1 ms  | **1.31x faster** |
+| n=10000, r=0.04 (nnz~486k) | 157 ms  | 211 ms   | **1.34x faster** |
+
+- Modest because the final (row,col) sort and the DOK (HashMap) build are
+  sequential and now dominate; the parallelized collection is a fraction of the
+  total. Still a strict, byte-identical improvement that removes the
+  sequential-outlier inconsistency and beats scipy end-to-end. Further gain would
+  need a parallel sort / parallel DOK assembly.

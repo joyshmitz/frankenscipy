@@ -118,6 +118,20 @@ fn bench_kdtree(c: &mut Criterion) {
 /// Delaunay triangulation (Bowyer-Watson, frankenscipy-8d2z2 buffer hoist) vs scipy's
 /// Qhull (docs/perf_oracle_delaunay.py). Tests fsci's most complex spatial algorithm
 /// against scipy's elite geometric C.
+fn bench_sparse_dm(c: &mut Criterion) {
+    use fsci_spatial::KDTree;
+    let mut group = c.benchmark_group("sparse_distance_matrix");
+    for &(n, r) in &[(5000usize, 0.05f64), (10000, 0.04)] {
+        let mk = |seed: f64| -> Vec<Vec<f64>> {
+            (0..n).map(|i| { let t = i as f64; vec![(t*0.0137+seed).sin()*0.5+0.5, (t*0.0291+seed).cos()*0.5+0.5] }).collect()
+        };
+        let a = KDTree::new(&mk(0.0)).expect("a");
+        let b = KDTree::new(&mk(1.3)).expect("b");
+        group.bench_function(BenchmarkId::new("sdm", n), |bn| bn.iter(|| a.sparse_distance_matrix(&b, r).expect("sdm")));
+    }
+    group.finish();
+}
+
 fn bench_find_simplex(c: &mut Criterion) {
     use fsci_spatial::Delaunay;
     let mut group = c.benchmark_group("find_simplex");
@@ -187,6 +201,7 @@ criterion_group!(
     bench_pdist_highdim,
     bench_kdtree,
     bench_delaunay,
-    bench_find_simplex
+    bench_find_simplex,
+    bench_sparse_dm
 );
 criterion_main!(benches);
