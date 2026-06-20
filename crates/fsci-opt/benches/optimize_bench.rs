@@ -8,8 +8,10 @@ use std::time::Duration;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_opt::{
     LeastSquaresOptions, MinimizeOptions, OptimizeMethod, RootMethod, RootOptions, bfgs, bisect,
-    brenth, brentq, cg_pr_plus, lbfgsb, least_squares, linear_sum_assignment, powell, ridder,
+    brenth, brentq, cg_pr_plus, differential_evolution, lbfgsb, least_squares,
+    linear_sum_assignment, powell, ridder,
 };
+use fsci_opt::DifferentialEvolutionOptions;
 use fsci_runtime::RuntimeMode;
 
 // ── Test functions ────────────────────────────────────────────────────
@@ -350,9 +352,39 @@ fn bench_assignment(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_differential_evolution(c: &mut Criterion) {
+    // Global optimizer over a user objective evaluated INLINE in Rust (vs scipy's
+    // Python callback per nfev). Rosenbrock-5d, matched config to the scipy run
+    // (maxiter=100, popsize=15, tol=1e-8, seed=1). scipy ~271 ms (nfev=7689).
+    let rosen = |x: &[f64]| -> f64 {
+        let mut s = 0.0;
+        for i in 0..x.len() - 1 {
+            s += 100.0 * (x[i + 1] - x[i] * x[i]).powi(2) + (1.0 - x[i]).powi(2);
+        }
+        s
+    };
+    let bounds = vec![(-5.0, 5.0); 5];
+    let mut group = c.benchmark_group("differential_evolution");
+    group.sample_size(20);
+    group.bench_function("rosen_5d", |b| {
+        b.iter(|| {
+            let opts = DifferentialEvolutionOptions {
+                maxiter: 100,
+                popsize: 15,
+                tol: 1e-8,
+                seed: Some(1),
+                ..Default::default()
+            };
+            differential_evolution(&rosen, &bounds, opts).expect("DE")
+        })
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_assignment,
+    bench_differential_evolution,
     bench_bfgs,
     bench_lbfgsb,
     bench_cg,

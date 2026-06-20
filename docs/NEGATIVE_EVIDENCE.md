@@ -1142,3 +1142,19 @@ interior-direct (boundary-map only the ~window-1 edge cells).**
   as an FFT-wall loss; the bench tracks it.
 - Other signal ops this sweep are fast scipy C / fsci-competitive: savgol_filter
   (3.96 ms), peak_prominences (4.66 ms), peak_widths (5.76 ms).
+
+## 2026-06-20 - differential_evolution - MEASURED WIN 353x (the iterative-over-callback marquee) - RESUME inline
+
+- Agent: cc / MistyBirch. Global optimizer over a user objective; the biggest
+  structural lever in the port — the objective runs INLINE in Rust vs scipy's
+  Python callback per nfev. Added a `differential_evolution` bench (was uncovered).
+
+| DE rosen-5d (matched: maxiter=100, popsize=15, tol=1e-8, seed=1) | fsci | scipy | vs scipy |
+| --- | ---: | ---: | --- |
+| wall time | 0.768 ms | 271 ms | **353x faster** |
+
+- Matched nfev (~7575 fsci vs 7689 scipy): per-eval 101 ns (Rust inline) vs ~35 µs
+  (Python callback) = ~350x. No source change — fsci DE already converges (existing
+  de_rosenbrock/rastrigin tests). Coverage protects the marquee lever; the same
+  applies to basinhopping/dual_annealing/shgo/brute (all callback-bound, fsci has
+  them). Confirms memory note: iterative-solver-over-user-function is the top win.
