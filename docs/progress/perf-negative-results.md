@@ -4,6 +4,77 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-20 - frankenscipy-8l8r1.131 - sparse eigsh projected-residual certificate
+
+- Agent: cod-a / BlackThrush
+- Lever kept: trust the symmetric Arnoldi/Lanczos projected residual certificate
+  from the tridiagonal/Hessenberg problem for `eigsh` when `k<=6`, avoiding `k`
+  explicit post-hoc sparse residual matvecs.
+- Lever rejected: using the projected certificate unconditionally. The `k=8`
+  row regressed on the same worker despite fewer matvecs, so final source keeps
+  the older explicit residual check for `k>6`.
+- Graveyard/artifact route tested: communication-avoiding residual validation
+  and specialization by small target subspace size; this is a certificate/layout
+  lever, not another row-major basis arena.
+- Artifact:
+  `tests/artifacts/perf/2026-06-20-cod-a-sparse-eigsh-tridiag/EVIDENCE.md`
+- rch command:
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a rch exec -- cargo run --release -p fsci-sparse --bin perf_eigsh`
+- Local SciPy oracle command: Python 3.13.7 / NumPy 2.4.3 / SciPy 1.17.1
+  reimplementation of `perf_eigsh`'s deterministic matrix generator.
+- Same-worker internal A/B on `vmi1227854`:
+
+  | Workload | Baseline Rust | Candidate/final `k<=6` route | Internal delta | Prior SciPy oracle | Candidate vs SciPy |
+  | --- | ---: | ---: | ---: | ---: | --- |
+  | `eigsh n=2000 k=6` | 1.169 ms, 26 matvecs | 1.024 ms, 20 matvecs | 1.14x faster | 3.000 ms | Rust 2.93x faster |
+  | `eigsh n=8000 k=6` | 4.789 ms, 26 matvecs | 4.003 ms, 20 matvecs | 1.20x faster | 2.768 ms | Rust 1.45x slower |
+  | `eigsh n=20000 k=8` raw projected candidate | 10.672 ms, 28 matvecs | 12.289 ms, 20 matvecs | 1.15x slower | 43.023 ms | reject raw k=8 route |
+
+- Final-source sanity on rch `vmi1152480`:
+
+  | Workload | Final Rust | Matvecs | Converged | Max residual |
+  | --- | ---: | ---: | --- | ---: |
+  | `eigsh n=2000 k=6` | 1.091 ms | 20 | true | 1.96e-11 |
+  | `eigsh n=8000 k=6` | 4.797 ms | 20 | true | 3.45e-11 |
+  | `eigsh n=20000 k=8` | 12.042 ms | 28 | true | 2.57e-11 |
+
+- Fresh local SciPy oracle:
+
+  | Workload | SciPy median | Final remote Rust vs fresh SciPy |
+  | --- | ---: | --- |
+  | `eigsh n=2000 k=6` | 1.538154 ms | Rust 1.41x faster |
+  | `eigsh n=8000 k=6` | 3.424127 ms | Rust 1.40x slower |
+  | `eigsh n=20000 k=8` | 7.874257 ms | Rust 1.53x slower on this cross-host oracle |
+
+- Win/loss/neutral:
+  - Same-worker raw candidate versus current: `2/1/0`; final source keeps the
+    two `k=6` wins and guards off the `k=8` loss.
+  - Prior-ledger SciPy score for the final guarded route: `2/1/0`; the live
+    mid-size loss improves from `4.789/2.768 = 1.73x` slower to
+    `4.003/2.768 = 1.45x` slower on the acceptance worker.
+  - Fresh local SciPy oracle versus final remote Rust: `1/2/0`; recorded as
+    routing evidence because Rust and SciPy were not same-host.
+- Correctness/conformance guards:
+  - PASS: rch `cargo check -p fsci-sparse --all-targets`.
+  - PASS: rch focused `cargo test -p fsci-sparse eigsh --lib -- --nocapture`.
+  - PASS: rch `cargo clippy -p fsci-sparse --all-targets --no-deps -- -D warnings`.
+  - PASS: local live SciPy
+    `FSCI_REQUIRE_SCIPY_ORACLE=1 cargo test -p fsci-conformance --test diff_sparse_eigsh_largest -- --nocapture`.
+  - PASS: `git diff --check`.
+  - PASS: `ubs crates/fsci-sparse/src/linalg.rs` completed with 0 critical
+    findings and no new hunk-specific finding.
+  - BLOCKED: local same-host Rust release timing with the shared target stopped
+    on `E0514` because the release target contained worker-built artifacts from
+    rustc `beae78130` while local rustc was `f20a92ec0`; the target was not
+    cleaned.
+  - BLOCKED: `cargo fmt -p fsci-sparse -- --check` reports pre-existing sparse
+    crate formatting drift in `sparse_bench.rs`, `src/lib.rs`, and older
+    `src/linalg.rs` hunks outside this patch.
+- Retry condition: do not retry the row-major Arnoldi basis arena, mutable
+  operator scratch, or unconditional residual removal for `k>6`. Route the
+  remaining `n=8000, k=6` loss to implicit/thick restart, tridiagonal-only
+  eigensolve specialization, or deterministic warm-start subspace reuse.
+
 ## 2026-06-20 - frankenscipy-8l8r1.128 - cluster linkage row-pack keep + lazy-arena reject
 
 - Agent: cod-a / BlackThrush

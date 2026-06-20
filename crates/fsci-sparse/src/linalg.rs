@@ -9024,9 +9024,15 @@ pub fn eigsh(a: &CsrMatrix, k: usize, options: EigsOptions) -> SparseResult<Eigs
     // ARPACK — reported honestly via `converged = false` rather than looping).
     let m = (2 * k + 1).max(20).min(n);
     let mut result = krylov_arnoldi_eigs(|v| csr_matvec(a, v), n, k, &options, m, false);
-    let (converged, resid_matvec) = eigsh_residual_check(a, &result, options.tol.max(1e-8));
-    result.nmatvec += resid_matvec;
-    result.converged = converged;
+    // The Arnoldi residual certificate removes k post-hoc sparse matvecs and
+    // wins the live k=6 gap. A same-worker guard sample showed the k=8 row
+    // regressing despite fewer matvecs, so keep the older explicit residual
+    // check above k=6 until a broader sweep proves that path profitable too.
+    if k > 6 {
+        let (converged, resid_matvec) = eigsh_residual_check(a, &result, options.tol.max(1e-8));
+        result.nmatvec += resid_matvec;
+        result.converged = converged;
+    }
     Ok(result)
 }
 
@@ -9194,6 +9200,8 @@ fn krylov_arnoldi_eigs<F: FnMut(&[f64]) -> Vec<f64>>(
     let k_actual = k.min(indexed.len());
     let mut eigenvalues = Vec::with_capacity(k_actual);
     let mut eigenvectors = Vec::with_capacity(k_actual);
+    let mut converged = k_actual > 0;
+    let residual_tol = options.tol.max(1e-8);
 
     for &(_, val) in indexed.iter().take(k_actual) {
         eigenvalues.push(val);
@@ -9203,6 +9211,26 @@ fn krylov_arnoldi_eigs<F: FnMut(&[f64]) -> Vec<f64>>(
         // projected Hessenberg matrix H for this eigenvalue. Returning a raw
         // Arnoldi basis vector v[idx] is wrong — those are not eigenpairs of A.
         let y = hessenberg_eigenvector(&h, actual_m, val);
+        let y_norm = vec_norm(&y);
+        let projected_resid = if y_norm > 0.0 && actual_m > 0 {
+            let mut resid_sq = 0.0;
+            for row in 0..=actual_m {
+                let mut r = 0.0;
+                for col in 0..actual_m {
+                    r += h[row][col] * y[col];
+                }
+                if row < actual_m {
+                    r -= val * y[row];
+                }
+                resid_sq += r * r;
+            }
+            resid_sq.sqrt() / y_norm
+        } else {
+            f64::INFINITY
+        };
+        if projected_resid > residual_tol * val.abs().max(1.0) {
+            converged = false;
+        }
         let mut evec = vec![0.0; n];
         for (j, &yj) in y.iter().enumerate() {
             if yj == 0.0 {
@@ -9228,7 +9256,7 @@ fn krylov_arnoldi_eigs<F: FnMut(&[f64]) -> Vec<f64>>(
         eigenvectors,
         eigenvectors_im: vec![vec![0.0; n]; n_out],
         nmatvec: total_matvec,
-        converged: true,
+        converged,
     }
 }
 

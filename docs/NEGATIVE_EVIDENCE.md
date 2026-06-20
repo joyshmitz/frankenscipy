@@ -6,6 +6,37 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-20 - frankenscipy-8l8r1.131 - sparse eigsh projected residual certificate
+
+- Agent: cod-a / BlackThrush
+- Decision: KEEP the `k<=6` Arnoldi projected-residual certificate for `eigsh`;
+  REJECT the unconditional form because the `k=8` row regressed on the same
+  worker. Final source guards `k>6` back to the explicit sparse residual
+  matvec check.
+- Artifact:
+  `tests/artifacts/perf/2026-06-20-cod-a-sparse-eigsh-tridiag/EVIDENCE.md`
+- Same-worker internal score versus restored current: `2/1/0` for the raw
+  candidate rows; final source keeps the two `k=6` wins and reverts the `k=8`
+  regression by guard.
+- Prior-ledger SciPy score for the final guarded route: `2/1/0`; the remaining
+  tracked loss is `eigsh n=8000 k=6`, narrowed from `1.73x` slower to `1.45x`
+  slower on the same-worker acceptance row.
+- Fresh local SciPy oracle score for final remote Rust rows: `1/2/0`
+  cross-host; recorded as routing evidence because Rust ran on `vmi1152480`
+  while SciPy ran locally.
+
+| Workload | Baseline Rust | Final/candidate Rust | SciPy oracle | Verdict |
+| --- | ---: | ---: | ---: | --- |
+| `eigsh n=2000 k=6` | 1.169 ms | 1.024 ms | 3.000 ms prior oracle | keep: internal 1.14x faster; Rust 2.93x faster than SciPy |
+| `eigsh n=8000 k=6` | 4.789 ms | 4.003 ms | 2.768 ms prior oracle | keep: internal 1.20x faster; Rust still 1.45x slower than SciPy |
+| `eigsh n=20000 k=8` raw projected candidate | 10.672 ms | 12.289 ms | 43.023 ms prior oracle | reject/guard: 1.15x slower than current despite fewer matvecs |
+
+Negative evidence: do not retry unconditional post-hoc residual removal above
+`k=6`, row-major Arnoldi basis arenas, or mutable operator scratch without fresh
+same-worker proof. The next credible route is a deeper eigensolver primitive
+such as implicit/thick restart or a symmetric tridiagonal-only eigensolve path
+for the remaining mid-size `n=8000, k=6` loss.
+
 ## 2026-06-20 - frankenscipy-8l8r1.128 - linkage row-pack keep + lazy-arena reject
 
 - Agent: cod-a / BlackThrush
