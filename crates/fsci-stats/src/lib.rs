@@ -43807,6 +43807,67 @@ pub fn binned_statistic_dd(
 
     // Strides for row-major (C) flattening over the D axes.
     let total = bins.pow(ndim as u32);
+
+    // Accumulator fast path: count/sum/mean/min/max need only running aggregates,
+    // not the per-bin value lists, so skip the O(total) materialization into
+    // Vec<Vec<f64>> — which allocates a Vec per bin (bins^ndim of them, the
+    // dominant cost in high dimensions). Byte-identical to the materialize path
+    // (per-bin sum in point order; nan-min/max order-independent with a NaN flag;
+    // count/sum 0 for empty). median/std keep the materialize path below.
+    if !matches!(statistic, "median" | "std") {
+        let mut count = vec![0.0f64; total];
+        let mut sum = vec![0.0f64; total];
+        let mut bmin = vec![f64::INFINITY; total];
+        let mut bmax = vec![f64::NEG_INFINITY; total];
+        let mut has_nan = vec![false; total];
+        for (point, &v) in sample.iter().zip(values.iter()) {
+            let mut flat = 0usize;
+            for d in 0..ndim {
+                let bd = (((point[d] - mins[d]) / bws[d]).floor() as usize).min(bins - 1);
+                flat = flat * bins + bd;
+            }
+            count[flat] += 1.0;
+            sum[flat] += v;
+            if v.is_nan() {
+                has_nan[flat] = true;
+            } else {
+                if v < bmin[flat] {
+                    bmin[flat] = v;
+                }
+                if v > bmax[flat] {
+                    bmax[flat] = v;
+                }
+            }
+        }
+        let stats: Vec<f64> = (0..total)
+            .map(|b| {
+                let c = count[b];
+                match statistic {
+                    "count" => c,
+                    "sum" => sum[b],
+                    _ if c == 0.0 => f64::NAN,
+                    "mean" => sum[b] / c,
+                    "min" => {
+                        if has_nan[b] {
+                            f64::NAN
+                        } else {
+                            bmin[b]
+                        }
+                    }
+                    "max" => {
+                        if has_nan[b] {
+                            f64::NAN
+                        } else {
+                            bmax[b]
+                        }
+                    }
+                    _ => sum[b] / c,
+                }
+            })
+            .collect();
+        return (stats, edges);
+    }
+
     let mut bin_values: Vec<Vec<f64>> = vec![Vec::new(); total];
     for (point, &v) in sample.iter().zip(values.iter()) {
         let mut flat = 0usize;
@@ -75960,6 +76021,66 @@ mod tests {
         // Invalid input -> empty.
         let (e, ex2, ey2) = binned_statistic_2d(&x, &y[..3], &v, 2, "mean");
         assert!(e.is_empty() && ex2.is_empty() && ey2.is_empty());
+    }
+
+    /// The binned_statistic_dd accumulator fast path (count/sum/mean/min/max) must
+    /// be bit-for-bit identical to a brute-force materialize-then-fold reference,
+    /// including empty bins and NaN-propagating min/max, in 3-D.
+    #[test]
+    fn binned_statistic_dd_fast_path_matches_materialize() {
+        let n = 3000usize;
+        let mut state = 0xBADF00D_u64;
+        let mut nx = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let sample: Vec<Vec<f64>> = (0..n).map(|_| vec![nx(), nx(), nx()]).collect();
+        let mut values: Vec<f64> = (0..n).map(|_| nx() * 8.0 - 4.0).collect();
+        values[77] = f64::NAN;
+        values[1500] = f64::NAN;
+        let bins = 7usize;
+        let ndim = 3usize;
+        let total = bins.pow(ndim as u32);
+        // brute-force reference: materialize per-bin values + fold like cell_stat.
+        let mut mins = vec![f64::INFINITY; ndim];
+        let mut maxs = vec![f64::NEG_INFINITY; ndim];
+        for p in &sample {
+            for d in 0..ndim {
+                mins[d] = mins[d].min(p[d]);
+                maxs[d] = maxs[d].max(p[d]);
+            }
+        }
+        let bws: Vec<f64> = (0..ndim).map(|d| (maxs[d] - mins[d]) / bins as f64).collect();
+        let mut cells: Vec<Vec<f64>> = vec![Vec::new(); total];
+        for (p, &v) in sample.iter().zip(&values) {
+            let mut flat = 0usize;
+            for d in 0..ndim {
+                let bd = (((p[d] - mins[d]) / bws[d]).floor() as usize).min(bins - 1);
+                flat = flat * bins + bd;
+            }
+            cells[flat].push(v);
+        }
+        let nmin = |bv: &[f64]| bv.iter().cloned().fold(f64::INFINITY, |a: f64, b| if a.is_nan() || b.is_nan() { f64::NAN } else { a.min(b) });
+        let nmax = |bv: &[f64]| bv.iter().cloned().fold(f64::NEG_INFINITY, |a: f64, b| if a.is_nan() || b.is_nan() { f64::NAN } else { a.max(b) });
+        for stat in &["count", "sum", "mean", "min", "max"] {
+            let (got, _) = binned_statistic_dd(&sample, &values, bins, stat);
+            assert_eq!(got.len(), total);
+            for b in 0..total {
+                let bv = &cells[b];
+                let expect = match *stat {
+                    "count" => bv.len() as f64,
+                    "sum" => bv.iter().sum(),
+                    _ if bv.is_empty() => f64::NAN,
+                    "mean" => bv.iter().sum::<f64>() / bv.len() as f64,
+                    "min" => nmin(bv),
+                    "max" => nmax(bv),
+                    _ => unreachable!(),
+                };
+                assert_eq!(got[b].to_bits(), expect.to_bits(), "stat={stat} bin={b}");
+            }
+        }
     }
 
     #[test]

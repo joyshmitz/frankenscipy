@@ -760,3 +760,27 @@ interior-direct (boundary-map only the ~window-1 edge cells).**
 - Modest at 50 bins (the binning floor/min loop dominates), but the win GROWS with
   bin count (materialize allocates a Vec per bin → O(bins²) allocs + cache misses;
   accumulate is flat). Strictly byte-identical structural cleanup, not a tweak.
+
+## 2026-06-20 - binned_statistic_dd accumulator fast path - WIN 1.25-1.49x self (3.0-3.8x vs scipy), byte-identical
+
+- Agent: cc / MistyBirch
+- Decision: **KEEP**. Extend the binned_statistic_2d accumulator fast path to the
+  N-D `binned_statistic_dd`: count/sum/mean/min/max use flat aggregate arrays of
+  size `bins^ndim` instead of materializing `Vec<Vec<f64>>` (a Vec per bin — the
+  dominant cost in high dimensions). median/std keep the materialize path.
+- Correctness: **byte-for-bit identical** to the materialize-then-fold path —
+  proven by `binned_statistic_dd_fast_path_matches_materialize` (3-D, count/sum/
+  mean/min/max vs a brute-force reference incl. NaN values + empty bins). Existing
+  dd scipy-reference test passes; isolated change (the 5 failing zscore/mad/sklearn
+  tests fail identically on origin, unrelated — verified prior cycle).
+
+| stat (n=200k, 3-D) | materialize | accumulate | self | scipy | vs scipy |
+| --- | ---: | ---: | ---: | ---: | --- |
+| mean bins=20 (8000 cells)  | 9.35 ms  | 7.49 ms | 1.25x | 28.4 ms | **3.8x faster** |
+| mean bins=30 (27000 cells) | 12.46 ms | 8.34 ms | **1.49x** | 27.6 ms | **3.3x faster** |
+
+- Self-speedup GROWS with bin count (1.25x at 8000 cells → 1.49x at 27000) exactly
+  as predicted — materialize is O(bins^ndim) Vec allocations, accumulate is flat.
+  For higher ndim the gap widens further. Byte-identical structural cleanup. (1-D
+  `binned_statistic` left as-is: tiny bin counts + an ambiguous empty-bin NaN policy
+  vs its own doc — not worth the risk for a negligible win.)
