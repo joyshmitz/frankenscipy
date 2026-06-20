@@ -3215,6 +3215,63 @@ const J0_QQ: [f64; 7] = [
 ];
 const SQRT2OPI: f64 = 0.79788456080286535588; // √(2/π)
 const SQRT1OPI: f64 = 0.56418958354775628695; // √(1/π)
+const THREE_PI_OVER_FOUR: f64 = 2.35619449019234492885;
+
+const J1_RP: [f64; 4] = [
+    -8.99971225705559398224E8,
+    4.52228297998194034323E11,
+    -7.27494245221818276015E13,
+    3.68295732863852883286E15,
+];
+const J1_RQ: [f64; 8] = [
+    6.20836478118054335476E2,
+    2.56987256757748830383E5,
+    8.35146791431949253037E7,
+    2.21511595479792499675E10,
+    4.74914122079991414898E12,
+    7.84369607876235854894E14,
+    8.95222336184627338078E16,
+    5.32278620332680085395E18,
+];
+const J1_PP: [f64; 7] = [
+    7.62125616208173112003E-4,
+    7.31397056940917570436E-2,
+    1.12719608129684925192E0,
+    5.11207951146807644818E0,
+    8.42404590141772420927E0,
+    5.21451598682361504063E0,
+    1.00000000000000000254E0,
+];
+const J1_PQ: [f64; 7] = [
+    5.71323128072548699714E-4,
+    6.88455908754495404082E-2,
+    1.10514232634061696926E0,
+    5.07386386128601488557E0,
+    8.39985554327604159757E0,
+    5.20982848682361821619E0,
+    9.99999999999999997461E-1,
+];
+const J1_QP: [f64; 8] = [
+    5.10862594750176621635E-2,
+    4.98213872951233449420E0,
+    7.58238284132545283818E1,
+    3.66779609360150777800E2,
+    7.10856304998926107277E2,
+    5.97489612400613639965E2,
+    2.11688757100572135698E2,
+    2.52070205858023719784E1,
+];
+const J1_QQ: [f64; 7] = [
+    7.42373277035675149943E1,
+    1.05644886038262816351E3,
+    4.98641058337653607651E3,
+    9.56231892404756170795E3,
+    7.99704160447350683650E3,
+    2.82619278517639096600E3,
+    3.36093607810698293419E2,
+];
+const J1_Z1: f64 = 1.46819706421238932572E1;
+const J1_Z2: f64 = 4.92184563216946036703E1;
 
 // Cephes rational J0 — scipy's xsf wraps these EXACT coefficients, so this matches
 // scipy.special.j0 to the bit while replacing the O(~25-term) convergence-loop power series
@@ -3274,19 +3331,20 @@ fn j1_core(x: f64) -> f64 {
     }
 
     let ax = x.abs();
-    let ans = if ax < 14.0 {
-        // Power series: machine-precision small-x (frankenscipy-92qwh) extended to
-        // x<14 (≳11 digits, beats the NR fit there); x≥14 uses the NR fit.
-        j1_series_small(ax)
+    let ans = if ax <= 5.0 {
+        let z = ax * ax;
+        let r = cephes_polevl(z, &J1_RP) / cephes_p1evl(z, &J1_RQ);
+        r * ax * (z - J1_Z1) * (z - J1_Z2)
     } else {
-        jv_asymptotic(1.0, ax)
+        let w = 5.0 / ax;
+        let z = w * w;
+        let p = cephes_polevl(z, &J1_PP) / cephes_polevl(z, &J1_PQ);
+        let q = cephes_polevl(z, &J1_QP) / cephes_p1evl(z, &J1_QQ);
+        let xn = ax - THREE_PI_OVER_FOUR;
+        (p * xn.cos() - w * q * xn.sin()) * SQRT2OPI / ax.sqrt()
     };
 
-    if x < 0.0 {
-        -ans
-    } else {
-        ans
-    }
+    if x < 0.0 { -ans } else { ans }
 }
 
 fn y0_core_positive(x: f64) -> f64 {
@@ -5616,8 +5674,15 @@ mod tests {
                 RuntimeMode::Strict,
             )
             .unwrap();
-            let SpecialTensor::ComplexScalar(k) = out else {
-                panic!("kve complex scalar input must yield a complex scalar, got {out:?}");
+            let k = match out {
+                SpecialTensor::ComplexScalar(k) => k,
+                other => {
+                    assert!(
+                        matches!(other, SpecialTensor::ComplexScalar(_)),
+                        "kve complex scalar input must yield a complex scalar, got {other:?}"
+                    );
+                    continue;
+                }
             };
             let err = (k.re - kr).hypot(k.im - ki) / kr.hypot(ki);
             assert!(

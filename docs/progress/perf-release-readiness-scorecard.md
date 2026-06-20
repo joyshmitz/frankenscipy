@@ -1,5 +1,45 @@
 # Performance Release-Readiness Scorecard
 
+## 2026-06-20 - fsci-special jnjnp_zeros Cephes j1 gauntlet
+
+- Agent: cod-b / MistyBirch
+- Bead: `frankenscipy-wh8ac`
+- Decision: KEEP. Replacing the local `j1_core` series/asymptotic split with
+  the Cephes fixed rational evaluator turns the latest `jnjnp_zeros` near-parity
+  loss into a measured SciPy win. Score for this sub-cluster is now `2/0/0`
+  against SciPy.
+- Artifact:
+  `tests/artifacts/perf/2026-06-20-wh8ac-jnjnp-cephes-j1/EVIDENCE.md`
+
+| Gate | Result | Notes |
+| --- | --- | --- |
+| Same-worker rch A/B | PASS | `acoco_gauntlet_jnjnp_zeros` on rch `vmi1149989`: `nt=64` 608.21 us -> 381.89 us, `nt=128` 1.1970 ms -> 742.06 us |
+| SciPy head-to-head oracle | PASS | local SciPy 1.17.1: `nt=64` 463.913 us, `nt=128` 832.786 us; Rust final is 1.22x / 1.12x faster |
+| Focused `jnjnp` tests | PASS | `cargo test -p fsci-special jnjnp -- --nocapture` via rch `hz1`: 3 passed / 0 failed |
+| Focused `j1` test | PASS | `cargo test -p fsci-special j1_matches_scipy_reference_values -- --nocapture` via rch `ovh-a`: 1 passed / 0 failed |
+| Focused `kve` cleanup guard | PASS | `cargo test -p fsci-special complex_kve_matches_scipy -- --nocapture` via rch `hz1`: 1 passed / 0 failed |
+| Local live SciPy conformance | PASS | `FSCI_REQUIRE_SCIPY_ORACLE=1 cargo test -p fsci-conformance --test diff_special_bessel_zeros -- --nocapture`: 1 passed / 0 failed |
+| Per-crate compile | PASS | `cargo check -p fsci-special --all-targets` via rch `hz1`; existing warnings only |
+| Diff hygiene | PASS | `git diff --check` |
+| Changed-file UBS | PASS | `ubs` on changed files: 0 critical issues after removing a pre-existing test-only `panic!` in touched `bessel.rs`; warnings remain inventory |
+| rch SciPy rows | PARTIAL | rch Criterion workers could not import `scipy.special`; local SciPy oracle supplied the head-to-head |
+| Formatting | BLOCKED | `cargo fmt -p fsci-special --check` remains blocked by pre-existing file-wide rustfmt drift outside this patch |
+| Clippy `-D warnings` | BLOCKED | `cargo clippy -p fsci-special --all-targets -- -D warnings` stops in existing `fsci-integrate` and `fsci-linalg` lints before this patch |
+
+| Workload / route | Final Rust | SciPy oracle | Ratio | Verdict |
+| --- | ---: | ---: | ---: | --- |
+| `jnjnp_zeros(nt=64)` | 381.89 us | 463.913 us | 1.22x faster | SciPy win |
+| `jnjnp_zeros(nt=128)` | 742.06 us | 832.786 us | 1.12x faster | SciPy win |
+| Prior local J1 series/asymptotic route, `nt=64` | 608.21 us | - | current is 1.59x faster | superseded |
+| Prior local J1 series/asymptotic route, `nt=128` | 1.1970 ms | - | current is 1.61x faster | superseded |
+
+Readiness notes:
+
+- The profitable lever was matching the incumbent Cephes fixed rational J1
+  evaluator, not another frontier or top-k selection tweak.
+- Future `jnjnp_zeros` work should profile the remaining root-generation path
+  before trying another Bessel approximation variant.
+
 ## 2026-06-20 - fsci-ndimage zoom order=1 no-prefilter gauntlet
 
 - Agent: cod-b / MistyBirch

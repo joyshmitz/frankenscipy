@@ -4,6 +4,63 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-20 - frankenscipy-wh8ac - jnjnp_zeros Cephes j1 seed evaluator
+
+- Agent: cod-b / MistyBirch
+- Lever: replace the local `j1_core` series/asymptotic evaluator with the
+  Cephes fixed rational J1 kernels used by SciPy's `j1` routine. This removes
+  the variable small-series/generic-asymptotic split from the hot
+  `jnjnp_zeros` seed/refinement path.
+- Graveyard/artifact route tested: match the incumbent's constant rational
+  kernel, eliminate branchier convergence work from a repeated evaluator, and
+  stop spending effort on top-k/frontier micro-variants once the approximation
+  itself is measurably slower.
+- Decision: KEEP. The previous `frankenscipy-9l5oo` near-parity SciPy loss is
+  now a measured SciPy win. No revert.
+- Artifact:
+  `tests/artifacts/perf/2026-06-20-wh8ac-jnjnp-cephes-j1/EVIDENCE.md`
+- Baseline/final Rust command:
+  `RCH_REQUIRE_REMOTE=1 RCH_WORKER=vmi1149989 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec -- cargo bench -p fsci-special --bench special_bench -- acoco_gauntlet_jnjnp_zeros --noplot`
+- SciPy oracle command:
+  local Python timing of `scipy.special.jnjnp_zeros(nt)` with SciPy 1.17.1.
+- Benchmark evidence:
+
+  | Workload | Baseline Rust | Final Rust | SciPy oracle | Verdict |
+  | --- | ---: | ---: | ---: | --- |
+  | `jnjnp_zeros(nt=64)` | 608.21 us | 381.89 us | 463.913 us | Rust 1.59x faster internally, 1.22x faster than SciPy |
+  | `jnjnp_zeros(nt=128)` | 1.1970 ms | 742.06 us | 832.786 us | Rust 1.61x faster internally, 1.12x faster than SciPy |
+
+- SciPy win/loss/neutral for final source: `2/0/0`.
+- Same-worker internal keep/loss/neutral versus the prior local J1
+  series/asymptotic route: `2/0/0`.
+- Correctness/conformance guards:
+  - PASS: `cargo test -p fsci-special jnjnp -- --nocapture` via rch `hz1`:
+    `3 passed; 0 failed`.
+  - PASS: `cargo test -p fsci-special j1_matches_scipy_reference_values -- --nocapture`
+    via rch `ovh-a`: `1 passed; 0 failed`.
+  - PASS: `cargo test -p fsci-special complex_kve_matches_scipy -- --nocapture`
+    via rch `hz1`: `1 passed; 0 failed` after replacing a pre-existing
+    test-only `panic!` in touched `bessel.rs`.
+  - PASS: `FSCI_REQUIRE_SCIPY_ORACLE=1 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b cargo test -p fsci-conformance --test diff_special_bessel_zeros -- --nocapture`:
+    `1 passed; 0 failed`.
+  - PASS: `cargo check -p fsci-special --all-targets` via rch `hz1` with
+    existing unrelated warnings.
+  - PASS: `git diff --check`.
+  - PASS: changed-file `ubs` reported 0 critical issues; warning inventory
+    remains non-blocking.
+  - PARTIAL: rch Criterion SciPy rows were skipped because worker Python could
+    not import `scipy.special`; local SciPy supplied the head-to-head rows.
+  - BLOCKED: `cargo fmt -p fsci-special --check` remains blocked by
+    pre-existing rustfmt drift outside this patch.
+  - BLOCKED: `cargo clippy -p fsci-special --all-targets -- -D warnings`
+    stopped before this patch on existing `fsci-integrate` and `fsci-linalg`
+    dependency lints.
+- Negative evidence: do not retry local J1 power-series/asymptotic split
+  tuning for `jnjnp_zeros`. The Cephes fixed rational evaluator is both faster
+  and on the SciPy oracle surface. Next work should profile below the remaining
+  root-generation/frontier path, not another Bessel J1 approximation
+  micro-variant.
+
 ## 2026-06-20 - frankenscipy-oi8hq - ndimage zoom order=1 no-prefilter fast path
 
 - Agent: cod-b / MistyBirch
