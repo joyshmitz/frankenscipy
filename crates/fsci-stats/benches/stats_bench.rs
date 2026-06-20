@@ -2,7 +2,7 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use fsci_stats::{
     HaltonSampler, SobolSampler, SomersDInput, acf, argsort, centered_discrepancy, ecdf, histogram,
-    binned_statistic, binned_statistic_2d, binned_statistic_dd, kendalltau, l2_star_discrepancy, mannkendall, mixture_discrepancy, pacf,
+    binned_statistic, binned_statistic_2d, energy_distance, wasserstein_distance, binned_statistic_dd, kendalltau, l2_star_discrepancy, mannkendall, mixture_discrepancy, pacf,
     psd_welch, rand_index, siegelslopes, somersd, theilslopes, wraparound_discrepancy,
 };
 
@@ -218,6 +218,22 @@ fn bench_robust_slopes(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_distribution_distances(c: &mut Criterion) {
+    use criterion::BenchmarkId;
+    let mut group = c.benchmark_group("distribution_distances");
+    for &n in &[50_000usize, 200_000] {
+        let u: Vec<f64> = (0..n).map(|i| (i as f64 * 0.0007).sin() * 2.0 + (i % 31) as f64 * 0.03).collect();
+        let v: Vec<f64> = (0..n).map(|i| (i as f64 * 0.0011).cos() * 2.0 + 0.3 + (i % 17) as f64 * 0.05).collect();
+        group.bench_function(BenchmarkId::new("wasserstein", n), |b| {
+            b.iter(|| wasserstein_distance(black_box(&u), black_box(&v)))
+        });
+        group.bench_function(BenchmarkId::new("energy", n), |b| {
+            b.iter(|| energy_distance(black_box(&u), black_box(&v)))
+        });
+    }
+    group.finish();
+}
+
 fn bench_binned_statistic_1d(c: &mut Criterion) {
     use criterion::BenchmarkId;
     let mut group = c.benchmark_group("binned_statistic_1d");
@@ -273,6 +289,7 @@ criterion_group!(
     benches,
     bench_robust_slopes,
     bench_binned_statistic_2d,
+    bench_distribution_distances,
     bench_binned_statistic_1d,
     bench_binned_statistic_dd,
     bench_mgc,

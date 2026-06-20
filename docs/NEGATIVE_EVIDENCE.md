@@ -1074,3 +1074,28 @@ interior-direct (boundary-map only the ~window-1 edge cells).**
   continuous input; the practical (categorical/small-table) case is fast in both.
   Not a target. `sosfiltfilt` (2.5ms, sequential-IIR wall), RegularGridInterpolator
   (5.5ms) and RectBivariateSpline (7ms) are fast scipy C — low headroom.
+
+## 2026-06-20 - wasserstein_distance / energy_distance - MEASURED WINS 4.8-14.3x (coverage added)
+
+- Agent: cc / MistyBirch (RESUME inline)
+- Both already O((N+M)log(N+M)) optimal (two-pointer sweep on sorted inputs; beads
+  k8sed/ggmrw/6nuo5 previously dropped O(N·M) double loops) — verified by reading
+  the impls; no source change. Added a `distribution_distances` bench (were
+  uncovered) to protect the wins.
+
+| op (per-call) | fsci | scipy | vs scipy |
+| --- | ---: | ---: | --- |
+| wasserstein n=50k  | 2.63 ms | 37.6 ms | **14.3x faster** |
+| wasserstein n=200k | 13.0 ms | 102 ms  | **7.8x faster** |
+| energy n=50k       | 4.43 ms | 35.9 ms | **8.1x faster** |
+| energy n=200k      | 24.8 ms | 118 ms  | **4.8x faster** |
+
+- The only remaining lever is parallelizing the two float sorts (the O(n log n)
+  bottleneck), but there is no safe parallel-sort primitive without rayon and the
+  win is already 5-14x — not pursued.
+
+### Confirmed already-optimal this RESUME sweep (no action)
+- somersd (both libs catastrophic on continuous data), sosfiltfilt/RGI/
+  RectBivariateSpline (fast scipy C), wasserstein/energy (above). sz53j (claimed
+  fsci-stats --tests compile break) is STALE — `cargo test -p fsci-stats --no-run`
+  builds clean (0 errors).
