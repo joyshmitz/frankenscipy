@@ -1,6 +1,6 @@
 # Gauntlet Release Scorecard
 
-Last updated: 2026-06-20 by cod-a/cod-b / MistyBirch.
+Last updated: 2026-06-20 by cod-a/cod-b / MistyBirch, BlackThrush.
 
 This scorecard tracks code-first performance work that has been converted into
 measured head-to-head evidence against the SciPy original. The detailed
@@ -66,6 +66,8 @@ win/loss/neutral ledger lives in `docs/progress/perf-negative-results.md`.
 | `frankenscipy-nm8ex` | Spatial `pdist` dim-4 (was serial gate / flat row staging) | All 4 dim-4 workloads (eucl/cos × 256/512) | — | — | **GAP CLOSED → now 1.86-2.21x FASTER** | **WIN** — SIMD-across-pairs (SoA) `595eceb5` pipelines the dependent per-pair sqrt/div; bit-identical; promoted to Measured Keeps |
 | `frankenscipy-va60h` | Linkage flat row-major distance arena | `scipy.cluster.hierarchy.linkage(method="average")`, n=800 d=4 | 6.1713 ms | 4.4550 ms | 1.385x slower | keep internal flat arena; route deeper |
 | `frankenscipy-va60h` | Linkage flat row-major distance arena | `scipy.cluster.hierarchy.linkage(method="ward")`, n=800 d=4 | 7.5250 ms | 5.0256 ms | 1.497x slower | keep internal flat arena; route deeper |
+| `frankenscipy-8l8r1.128` | Linkage packed observation rows before distance build | `scipy.cluster.hierarchy.linkage(method="average")`, n=800 d=4 | 7.1304 ms | 4.3843 ms | 1.626x slower | keep neutral 1.007x internal row-pack movement; route deeper |
+| `frankenscipy-8l8r1.128` | Linkage packed observation rows before distance build | `scipy.cluster.hierarchy.linkage(method="ward")`, n=800 d=4 | 6.9591 ms | 4.8687 ms | 1.429x slower | keep 1.184x internal win; route deeper |
 | `frankenscipy-zpunl` | Restored Radau route after stream-norm reject | `solve_ivp(method=Radau)` stiff diagonal decay, n=64 | 70.176946 ms | 35.156708 ms | 2.00x slower | superseded by diagonal stage solve keep above |
 
 ## Measured Rejects
@@ -91,6 +93,8 @@ win/loss/neutral ledger lives in `docs/progress/perf-negative-results.md`.
 | `frankenscipy-8l8r1.120` | Radau streamed scaled RMS norms | `radau-stiff64` same-worker `hz2` | 81.492956 ms | 78.394828 ms parent | reject and revert |
 | `frankenscipy-va60h` | Linkage compact upper-triangular inter-cluster arena | `linkage(Average)` n=800 d=4 | 8.8260 ms; 2.064x slower than SciPy | 7.5772 ms restored current; 4.2755 ms SciPy | reject and revert |
 | `frankenscipy-va60h` | Linkage compact upper-triangular inter-cluster arena | `linkage(Ward)` n=800 d=4 | 9.9240 ms; 1.809x slower than SciPy | 7.4597 ms restored current; 5.4866 ms SciPy | reject and revert |
+| `frankenscipy-8l8r1.128` | Linkage lazy full-arena zero initialization | `linkage(Average)` n=800 d=4 | 7.6203 ms; 1.690x slower than SciPy | 7.1834 ms current; 4.5097 ms SciPy | reject and revert |
+| `frankenscipy-8l8r1.128` | Linkage lazy full-arena zero initialization | `linkage(Ward)` n=800 d=4 | 8.2002 ms; 1.560x slower than SciPy | 8.2387 ms current; 5.2550 ms SciPy | reject: neutral internal movement cannot offset Average regression |
 
 ## Internal Regression Gates
 
@@ -113,6 +117,8 @@ win/loss/neutral ledger lives in `docs/progress/perf-negative-results.md`.
 | `frankenscipy-va60h` | Flat row-major linkage arena | Legacy nested-row NN-array helper | 1.128x faster on Average; 1.019x faster on Ward | keep current despite SciPy loss |
 | `frankenscipy-va60h` | Flat row-major linkage arena | Reverted production nested route probe | 1.290x faster on Average; 1.251x faster on Ward | undo revert; keep flat route |
 | `frankenscipy-va60h` | Flat row-major linkage arena | Compact upper-triangular inter-cluster arena | 1.165x faster on Average; 1.330x faster on Ward | reject triangular arena; keep flat route |
+| `frankenscipy-8l8r1.128` | Packed observation rows before linkage pairwise distance build | Prior nested `Vec<Vec<f64>>` row access for distance construction | 1.007x faster on Average; 1.184x faster on Ward | keep row-pack; still `0/2/0` vs SciPy |
+| `frankenscipy-8l8r1.128` | Restored `f64::INFINITY` full-arena initialization | Lazy zero-initialized full arena | candidate regressed Average 1.061x and only moved Ward 1.005x | reject lazy arena; source reverted |
 | `frankenscipy-8l8r1.118` | Fused signal coherence | Compositional `csd(x,y)` + `csd(x,x)` + `csd(y,y)` route | 2.98x faster locally; 2.80x faster on rch `hz1` | keep fused route |
 | `frankenscipy-8l8r1.119/.121` | BDF streamed scaled RMS norms | Pre-stream BDF norm materialization | BDF64 1.040x faster; BDF128 0.991x neutral on same-worker `hz2` | keep BDF stream helper |
 | `frankenscipy-8l8r1.120` | Restored Radau collected scaled-vector route | Radau streamed scaled RMS candidate | candidate regressed same-worker `hz2` Radau32 1.19x and Radau64 1.04x | reject and revert streamed Radau norms |
@@ -151,9 +157,9 @@ win/loss/neutral ledger lives in `docs/progress/perf-negative-results.md`.
 | `fsci-ndimage` label-indexed measurements correctness | guarded | byte-identical (`mism=0/0/0/0/0` vs old linear scan, previous bucketed route, previous flat HashMap route, dense_fract, and dense_table in `perf_label_stats`); full `cargo test -p fsci-ndimage --lib` 242 passed / 0 failed; live SciPy-backed `diff_ndimage` conformance passed locally 5/0 |
 | `fsci-ndimage` lint/build gate | partial | `cargo check -p fsci-ndimage --all-targets`, touched-file rustfmt, `git diff --check`, changed-file UBS, focused zoom tests, and local SciPy `diff_ndimage_zoom` conformance passed; explicit `cargo clippy -p fsci-ndimage --all-targets -- -D warnings` is blocked before this patch on existing `fsci-linalg` dependency lints |
 | `fsci-fft` lint/build gate | guarded | `cargo check -p fsci-fft --all-targets`, focused CSD/rfft tests, and `cargo clippy -p fsci-fft --all-targets -- -D warnings` passed; broad rustfmt remains blocked by pre-existing file-wide drift |
-| `fsci-cluster` linkage performance | measured loss plus internal keep | flat arena is 1.128x faster than the legacy nested helper on Average and 1.019x on Ward, but 1.385-1.497x slower than SciPy |
-| `fsci-cluster` linkage correctness | guarded | filtered linkage tests passed via rch (28 unit, 9 metamorphic); SciPy-backed `diff_cluster_linkage_from_distances` conformance passed locally |
-| `fsci-cluster` lint/build gate | partial | `cargo check -p fsci-cluster --benches` passed; fmt blocked on existing `perf_isomap.rs` drift and clippy blocked on existing `fsci-linalg` dependency lints |
+| `fsci-cluster` linkage performance | measured loss plus internal keeps/rejects | flat arena beat the legacy nested helper; `frankenscipy-8l8r1.128` now packs observations once before pairwise distance construction, moving Average 1.007x and Ward 1.184x internally. Final source is still 1.626x / 1.429x slower than SciPy on Average/Ward n=800 d=4. Lazy full-arena zeroing was rejected/reverted after Average regressed 1.061x |
+| `fsci-cluster` linkage correctness | guarded | `perf_linkage` printed 0 mismatches / 7200 linkage matrices; focused `linkage_flat_core_matches_precomputed_condensed_contract` and broader `linkage_` filtered tests passed via rch; prior SciPy-backed `diff_cluster_linkage_from_distances` conformance passed locally |
+| `fsci-cluster` lint/build gate | partial | `cargo build --release -p fsci-cluster`, focused linkage tests, broader linkage filter, changed-file UBS, and `cargo clippy -p fsci-cluster --lib --no-deps -- -D warnings` passed; dependency-inclusive clippy remains blocked by existing `fsci-linalg` lints, and `rustfmt --edition 2024 --check crates/fsci-cluster/src/lib.rs` reports pre-existing file-wide drift |
 | `fsci-ndimage` gaussian_filter route | measured reject | always-line-walk plus outermost row-split regressed `gaussian_sigma2/256`; source reverted, current remains a SciPy loss routed to inner dot SIMD/tiled contiguous-span work |
 | `fsci-spatial` `pdist` performance | measured loss plus internal keep | dim-4 direct serial kernels were 5.54-29.51x faster than the generic threaded route; follow-up flat row staging is another 1.11-1.83x same-worker `ovh-b` internal win but still 0/4/0 vs SciPy, 1.94-3.01x slower |
 | `fsci-spatial` `pdist` correctness | guarded | focused dim-4 bit-exact `pdist` test and full `fsci-spatial --lib` suite passed after flat row staging |

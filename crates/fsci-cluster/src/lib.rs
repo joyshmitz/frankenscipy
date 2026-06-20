@@ -3725,12 +3725,14 @@ pub fn linkage(data: &[Vec<f64>], method: LinkageMethod) -> Result<Vec<[f64; 4]>
             "need at least 2 observations".to_string(),
         ));
     }
-    validate_feature_dimensions(data, "linkage")?;
+    let d = validate_feature_dimensions(data, "linkage")?;
     if data.iter().flatten().any(|v| !v.is_finite()) {
         return Err(ClusterError::InvalidArgument(
             "linkage input must be finite".to_string(),
         ));
     }
+    let flat = flatten_points(data, d);
+    let row = |idx: usize| -> &[f64] { &flat[idx * d..idx * d + d] };
 
     // br-6m7l: scipy uses fast_linkage (heap-based "Generic Clustering
     // Algorithm" from Mullner 2011) for Centroid/Median; fsci's simpler
@@ -3739,12 +3741,13 @@ pub fn linkage(data: &[Vec<f64>], method: LinkageMethod) -> Result<Vec<[f64; 4]>
     // resulting linkage matrix matches scipy element-for-element.
     if matches!(method, LinkageMethod::Centroid | LinkageMethod::Median) {
         let mut dist_mat = vec![vec![f64::INFINITY; n]; n];
+        #[allow(clippy::needless_range_loop)]
         for i in 0..n {
             dist_mat[i][i] = 0.0;
             for j in i + 1..n {
-                let d = sq_dist(&data[i], &data[j]).sqrt();
-                dist_mat[i][j] = d;
-                dist_mat[j][i] = d;
+                let dist = sq_dist(row(i), row(j)).sqrt();
+                dist_mat[i][j] = dist;
+                dist_mat[j][i] = dist;
             }
         }
         return Ok(linkage_fast(n, &dist_mat, method));
@@ -3758,9 +3761,9 @@ pub fn linkage(data: &[Vec<f64>], method: LinkageMethod) -> Result<Vec<[f64; 4]>
     for i in 0..n {
         inter_dist[agglo_idx(total, i, i)] = 0.0;
         for j in i + 1..n {
-            let d = sq_dist(&data[i], &data[j]).sqrt();
-            inter_dist[agglo_idx(total, i, j)] = d;
-            inter_dist[agglo_idx(total, j, i)] = d;
+            let dist = sq_dist(row(i), row(j)).sqrt();
+            inter_dist[agglo_idx(total, i, j)] = dist;
+            inter_dist[agglo_idx(total, j, i)] = dist;
         }
     }
 

@@ -1,5 +1,51 @@
 # Performance Release-Readiness Scorecard
 
+## 2026-06-20 - fsci-cluster linkage row-pack gauntlet
+
+- Agent: cod-a / BlackThrush
+- Bead: `frankenscipy-8l8r1.128`
+- Decision: KEEP the observation-row packing lever; REJECT AND REVERT lazy
+  full-arena zero initialization. The final source closes part of the Ward
+  gap but remains a strict `0/2/0` SciPy loss, so release-readiness remains
+  partial for this linkage cluster.
+- Artifact:
+  `tests/artifacts/perf/2026-06-20-cod-a-linkage-lazy-arena-EVIDENCE.md`
+
+| Gate | Result | Notes |
+| --- | --- | --- |
+| rch Criterion attempt | BLOCKED | `cargo bench -p fsci-cluster --bench cluster_bench -- va60h_gauntlet_linkage --noplot` ran Rust rows on `hz1` but failed when the worker Python could not import `scipy` |
+| Local SciPy baseline | PASS | local SciPy 1.17.1, exact crate-scoped Criterion group: Average 7.1834 ms vs SciPy 5.0346 ms, Ward 8.2387 ms vs SciPy 5.3080 ms |
+| Rejected candidate A/B | FAIL | lazy zero arena: Average 7.6203 ms, 1.061x slower than current; Ward 8.2002 ms, neutral 1.005x faster than current; source reverted |
+| Final row-pack A/B | PASS | Average 7.1304 ms, 1.007x faster than baseline; Ward 6.9591 ms, 1.184x faster than baseline |
+| Final SciPy oracle | LOSS | same-run SciPy 1.17.1: Average 4.3843 ms and Ward 4.8687 ms; final Rust remains 1.626x / 1.429x slower |
+| Isomorphism harness | PASS | `cargo run --release -p fsci-cluster --bin perf_linkage`: 0 mismatches / 7200 linkage matrices |
+| Focused linkage contract test | PASS | `cargo test -p fsci-cluster linkage_flat_core_matches_precomputed_condensed_contract -- --nocapture` via rch |
+| Broader linkage filter | PASS | `cargo test -p fsci-cluster linkage_ -- --nocapture` via rch |
+| Per-crate release build | PASS | `cargo build --release -p fsci-cluster` via rch; unrelated warning remained in `perf_kmeans.rs` |
+| No-deps clippy | PASS | `cargo clippy -p fsci-cluster --lib --no-deps -- -D warnings` via rch |
+| Changed-file UBS | PASS | `ubs crates/fsci-cluster/src/lib.rs ...` exited 0 with 0 critical findings; existing warning inventory remains |
+| Dependency-inclusive clippy | BLOCKED | `cargo clippy -p fsci-cluster --lib -- -D warnings` stops before this patch on existing `fsci-linalg` lints |
+| File formatting | BLOCKED | `rustfmt --edition 2024 --check crates/fsci-cluster/src/lib.rs` reports pre-existing file-wide drift outside this scoped patch |
+
+| Workload / route | Mean | Ratio | Verdict |
+| --- | ---: | ---: | --- |
+| Baseline Rust `linkage(Average)` | 7.1834 ms | 1.427x slower than SciPy baseline | prior current |
+| Final Rust `linkage(Average)` | 7.1304 ms | 1.007x faster than baseline; 1.626x slower than same-run SciPy | neutral/internal keep |
+| SciPy `linkage(Average)` | 4.3843 ms | 1.00x final oracle | reference |
+| Baseline Rust `linkage(Ward)` | 8.2387 ms | 1.552x slower than SciPy baseline | prior current |
+| Final Rust `linkage(Ward)` | 6.9591 ms | 1.184x faster than baseline; 1.429x slower than same-run SciPy | internal keep |
+| SciPy `linkage(Ward)` | 4.8687 ms | 1.00x final oracle | reference |
+| Lazy arena Average candidate | 7.6203 ms | 1.061x slower than baseline; 1.690x slower than SciPy | reject |
+| Lazy arena Ward candidate | 8.2002 ms | neutral 1.005x faster than baseline; 1.560x slower than SciPy | reject/no ship |
+
+Readiness notes:
+
+- Packing nested observations once reduced repeated row indirection in the
+  pairwise distance frontier without changing linkage semantics.
+- Arena fill elision is not worth retrying on this route. Future work should
+  target NN-chain/method-specific nearest-neighbour maintenance or another
+  algorithmic primitive that changes the amount of scanned state.
+
 ## 2026-06-20 - fsci-ndimage EDT feature-transform line-start gauntlet
 
 - Agent: cod-b / MistyBirch

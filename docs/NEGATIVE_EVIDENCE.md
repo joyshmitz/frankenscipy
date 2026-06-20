@@ -6,6 +6,34 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-20 - frankenscipy-8l8r1.128 - linkage row-pack keep + lazy-arena reject
+
+- Agent: cod-a / BlackThrush
+- Decision: KEEP the observation-row packing lever for `linkage`, because Ward
+  closes a real internal gap while Average stays neutral/slightly better.
+  REJECT AND REVERT lazy full-arena zero initialization, which regressed Average
+  and did not move Ward enough to justify shipping.
+- Artifact:
+  `tests/artifacts/perf/2026-06-20-cod-a-linkage-lazy-arena-EVIDENCE.md`
+- Baseline SciPy score for current flat arena: `0/2/0`.
+- Lazy-arena candidate/internal score: `0/1/1`; reverted.
+- Final row-pack internal score versus current baseline: `1/0/1`.
+- Final row-pack strict SciPy score: `0/2/0`.
+
+| Workload | Baseline Rust | Final Rust | SciPy oracle | Verdict |
+| --- | ---: | ---: | ---: | --- |
+| `linkage(Average)`, n=800 d=4 | 7.1834 ms | 7.1304 ms | 4.3843 ms | internal 1.007x faster; Rust 1.626x slower than SciPy |
+| `linkage(Ward)`, n=800 d=4 | 8.2387 ms | 6.9591 ms | 4.8687 ms | internal 1.184x faster; Rust 1.429x slower than SciPy |
+| Lazy arena Average candidate | 7.1834 ms current | 7.6203 ms candidate | 4.5097 ms | reject: 1.061x slower than current, 1.690x slower than SciPy |
+| Lazy arena Ward candidate | 8.2387 ms current | 8.2002 ms candidate | 5.2550 ms | reject/neutral: 1.005x faster than current, 1.560x slower than SciPy |
+
+Negative evidence: do not retry zero/lazy initialization of the full
+inter-cluster arena on this NN-array linkage route. The profitable constant
+factor was packing the nested observations once before pairwise distance
+construction. Further work needs to change the nearest-neighbour maintenance
+or method-specific clustering primitive rather than another full-square arena
+initialization tweak.
+
 ## 2026-06-20 - frankenscipy-8l8r1.127 - EDT feature-transform line starts
 
 - Agent: cod-b / MistyBirch

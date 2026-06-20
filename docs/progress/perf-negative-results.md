@@ -4,6 +4,86 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-20 - frankenscipy-8l8r1.128 - cluster linkage row-pack keep + lazy-arena reject
+
+- Agent: cod-a / BlackThrush
+- Lever kept: pack nested observation rows once in `linkage` and build pairwise
+  distances from contiguous row slices. The Lance-Williams update path, tie
+  order, error behavior, and full row-major inter-cluster arena are unchanged.
+- Lever rejected: initialize the full inter-cluster arena with zeroes instead
+  of `f64::INFINITY`, relying on later active-pair writes. This was intended to
+  remove a full-memory fill, but it did not pay in the real `linkage` group.
+- Graveyard/artifact route tested: data-layout pressure at the pairwise
+  distance frontier and allocator/fill removal in the full arena, after the
+  earlier compact triangular arena lost to row-major locality.
+- Decision: KEEP the row-pack lever and REJECT/REVERT lazy arena zeroing. Ward
+  gets a measured internal win; Average is neutral/slightly better. Both rows
+  remain SciPy losses, so this is not a parity claim.
+- Artifact:
+  `tests/artifacts/perf/2026-06-20-cod-a-linkage-lazy-arena-EVIDENCE.md`
+- rch baseline command:
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a rch exec -- cargo bench -p fsci-cluster --bench cluster_bench -- va60h_gauntlet_linkage --noplot`
+- Local SciPy head-to-head command:
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a-local cargo bench -p fsci-cluster --bench cluster_bench -- va60h_gauntlet_linkage --noplot`
+- rch gate commands:
+  `cargo build --release -p fsci-cluster`,
+  `cargo test -p fsci-cluster linkage_flat_core_matches_precomputed_condensed_contract -- --nocapture`,
+  `cargo test -p fsci-cluster linkage_ -- --nocapture`, and
+  `cargo clippy -p fsci-cluster --lib --no-deps -- -D warnings`.
+- Baseline/head-to-head evidence:
+
+  | Workload | Baseline Rust | SciPy oracle | Baseline vs SciPy |
+  | --- | ---: | ---: | --- |
+  | `linkage(Average)`, n=800 d=4 | 7.1834 ms | 5.0346 ms | 1.427x slower |
+  | `linkage(Ward)`, n=800 d=4 | 8.2387 ms | 5.3080 ms | 1.552x slower |
+
+- Rejected candidate evidence:
+
+  | Workload | Current baseline | Lazy-arena candidate | SciPy oracle | Verdict |
+  | --- | ---: | ---: | ---: | --- |
+  | `linkage(Average)`, n=800 d=4 | 7.1834 ms | 7.6203 ms | 4.5097 ms | 1.061x slower than current; 1.690x slower than SciPy |
+  | `linkage(Ward)`, n=800 d=4 | 8.2387 ms | 8.2002 ms | 5.2550 ms | 1.005x faster than current; still 1.560x slower than SciPy |
+
+- Final source evidence:
+
+  | Workload | Baseline Rust | Final Rust | Internal delta | Same-run SciPy oracle | Final vs SciPy |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | `linkage(Average)`, n=800 d=4 | 7.1834 ms | 7.1304 ms | 1.007x faster | 4.3843 ms | 1.626x slower |
+  | `linkage(Ward)`, n=800 d=4 | 8.2387 ms | 6.9591 ms | 1.184x faster | 4.8687 ms | 1.429x slower |
+
+- Win/loss/neutral:
+  - Baseline current versus SciPy: `0/2/0`.
+  - Lazy-arena candidate versus current: `0/1/1`; source reverted.
+  - Final row-pack source versus current baseline: `1/0/1`.
+  - Final row-pack source versus SciPy: `0/2/0`.
+- Correctness/conformance guards:
+  - PASS: `perf_linkage` isomorphism printed **0 mismatches / 7200 linkage
+    matrices** after the row-pack change.
+  - PASS: focused linkage contract test via rch:
+    `cargo test -p fsci-cluster linkage_flat_core_matches_precomputed_condensed_contract -- --nocapture`.
+  - PASS: broader filtered linkage tests via rch:
+    `cargo test -p fsci-cluster linkage_ -- --nocapture`.
+  - PASS: release build via rch:
+    `cargo build --release -p fsci-cluster`; an unrelated warning remained in
+    `crates/fsci-cluster/src/bin/perf_kmeans.rs`.
+  - PASS: no-deps clippy via rch:
+    `cargo clippy -p fsci-cluster --lib --no-deps -- -D warnings`.
+  - PASS: changed-file UBS scan exited 0 with 0 critical findings; existing
+    warning inventory remains in `fsci-cluster/src/lib.rs`.
+  - BLOCKED: rch SciPy benchmark rows failed because the selected worker could
+    not import `scipy`; local SciPy 1.17.1 supplied the head-to-head oracle.
+  - BLOCKED: dependency-inclusive clippy stops before this patch on existing
+    `fsci-linalg` lints.
+  - BLOCKED: `rustfmt --edition 2024 --check crates/fsci-cluster/src/lib.rs`
+    reports pre-existing file-wide drift outside this patch; this patch did not
+    run a broad format churn.
+- Negative evidence: do not retry zero/lazy initialization of the full
+  inter-cluster arena on this route. Also avoid another full-square-to-
+  triangular storage tweak unless a fresh profile shows the row-major scan cost
+  has moved. The next SciPy-gap attack should change the primitive: NN-chain,
+  method-specific nearest-neighbour maintenance, MST/single-linkage style
+  specialization where applicable, or a tighter compiled-distance frontier.
+
 ## 2026-06-20 - frankenscipy-8l8r1.127 - EDT feature-transform line starts
 
 - Agent: cod-b / MistyBirch
