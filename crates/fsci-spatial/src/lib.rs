@@ -583,14 +583,61 @@ pub fn pdist(x: &[Vec<f64>], metric: DistanceMetric) -> Result<Vec<f64>, Spatial
     Ok(result)
 }
 
+/// Transpose dim-4 AoS points into 4 contiguous coordinate columns (SoA). Lets the
+/// all-pairs loop load `L` consecutive `j`-points per coordinate with one aligned SIMD
+/// gather, so each output element of a SIMD chunk is a *different* pair — the dependent
+/// per-pair `sqrt`/`div` then pipeline across lanes instead of stalling one at a time.
+fn dim4_soa(x: &[[f64; 4]]) -> [Vec<f64>; 4] {
+    let n = x.len();
+    let mut c = [
+        vec![0.0_f64; n],
+        vec![0.0_f64; n],
+        vec![0.0_f64; n],
+        vec![0.0_f64; n],
+    ];
+    for (idx, p) in x.iter().enumerate() {
+        c[0][idx] = p[0];
+        c[1][idx] = p[1];
+        c[2][idx] = p[2];
+        c[3][idx] = p[3];
+    }
+    c
+}
+
 fn pdist_fill_euclidean4(x: &[[f64; 4]], n: usize, total: usize, nthreads: usize) -> Vec<f64> {
     if nthreads <= 1 {
-        let mut result = Vec::with_capacity(total);
+        // SIMD across pairs: lane k of a chunk holds pair (i, start+j+k). Per lane the
+        // squared sum d0²+d1²+d2²+d3² and its sqrt are evaluated in the same left-to-right
+        // order as the scalar `sqeuclidean4(..).sqrt()`, so the result is BIT-identical to
+        // the scalar helper while the 8-wide `vsqrtpd` chunk pipelines the sqrts.
+        use std::simd::{Simd, StdFloat};
+        const L: usize = 8;
+        let [c0, c1, c2, c3] = dim4_soa(x);
+        let mut result = vec![0.0_f64; total];
+        let mut pos = 0usize;
         for i in 0..n {
-            let xi = &x[i];
-            for xj in &x[i + 1..] {
-                result.push(sqeuclidean4(xi, xj).sqrt());
+            let a0 = Simd::<f64, L>::splat(c0[i]);
+            let a1 = Simd::<f64, L>::splat(c1[i]);
+            let a2 = Simd::<f64, L>::splat(c2[i]);
+            let a3 = Simd::<f64, L>::splat(c3[i]);
+            let row = n - 1 - i;
+            let start = i + 1;
+            let mut j = 0usize;
+            while j + L <= row {
+                let s = start + j;
+                let d0 = a0 - Simd::<f64, L>::from_slice(&c0[s..s + L]);
+                let d1 = a1 - Simd::<f64, L>::from_slice(&c1[s..s + L]);
+                let d2 = a2 - Simd::<f64, L>::from_slice(&c2[s..s + L]);
+                let d3 = a3 - Simd::<f64, L>::from_slice(&c3[s..s + L]);
+                let sq = d0 * d0 + d1 * d1 + d2 * d2 + d3 * d3;
+                sq.sqrt().copy_to_slice(&mut result[pos + j..pos + j + L]);
+                j += L;
             }
+            while j < row {
+                result[pos + j] = sqeuclidean4(&x[i], &x[start + j]).sqrt();
+                j += 1;
+            }
+            pos += row;
         }
         return result;
     }
@@ -638,11 +685,48 @@ fn pdist_fill_cosine4(
         }
     };
     if nthreads <= 1 {
-        let mut result = Vec::with_capacity(total);
+        // SIMD across pairs: lane k holds pair (i, start+j+k). Per lane `1 - dot/(ni·nj)`
+        // and the denom==0 ⇒ NaN guard are evaluated identically to the scalar `pair`, so
+        // the output is BIT-identical while the 8-wide `vdivpd` chunk pipelines the
+        // otherwise-serial dependent divisions (the cosine bottleneck).
+        use std::simd::{Select, Simd, cmp::SimdPartialEq};
+        const L: usize = 8;
+        let [c0, c1, c2, c3] = dim4_soa(x);
+        let one = Simd::<f64, L>::splat(1.0);
+        let zero = Simd::<f64, L>::splat(0.0);
+        let nan = Simd::<f64, L>::splat(f64::NAN);
+        let mut result = vec![0.0_f64; total];
+        let mut pos = 0usize;
         for i in 0..n {
-            for j in (i + 1)..n {
-                result.push(pair(i, j));
+            let a0 = Simd::<f64, L>::splat(c0[i]);
+            let a1 = Simd::<f64, L>::splat(c1[i]);
+            let a2 = Simd::<f64, L>::splat(c2[i]);
+            let a3 = Simd::<f64, L>::splat(c3[i]);
+            let ni = Simd::<f64, L>::splat(norms[i]);
+            let row = n - 1 - i;
+            let start = i + 1;
+            let mut j = 0usize;
+            while j + L <= row {
+                let s = start + j;
+                let b0 = Simd::<f64, L>::from_slice(&c0[s..s + L]);
+                let b1 = Simd::<f64, L>::from_slice(&c1[s..s + L]);
+                let b2 = Simd::<f64, L>::from_slice(&c2[s..s + L]);
+                let b3 = Simd::<f64, L>::from_slice(&c3[s..s + L]);
+                let nj = Simd::<f64, L>::from_slice(&norms[s..s + L]);
+                let denom = ni * nj;
+                let dot = a0 * b0 + a1 * b1 + a2 * b2 + a3 * b3;
+                let val = one - dot / denom;
+                denom
+                    .simd_eq(zero)
+                    .select(nan, val)
+                    .copy_to_slice(&mut result[pos + j..pos + j + L]);
+                j += L;
             }
+            while j < row {
+                result[pos + j] = pair(i, start + j);
+                j += 1;
+            }
+            pos += row;
         }
         return result;
     }
