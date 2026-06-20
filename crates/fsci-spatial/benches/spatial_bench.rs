@@ -223,6 +223,9 @@ fn bench_pdist_highdim(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("euclidean", format!("n{n}_d{d}")), |b| {
             b.iter(|| pdist(&data, DistanceMetric::Euclidean))
         });
+        group.bench_function(BenchmarkId::new("chebyshev", format!("n{n}_d{d}")), |b| {
+            b.iter(|| pdist(&data, DistanceMetric::Chebyshev))
+        });
     }
     group.finish();
 }

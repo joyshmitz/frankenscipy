@@ -6,6 +6,39 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-20 - frankenscipy-4tkgx - pdist Chebyshev d16/d64 SIMD helper
+
+- Agent: cod-a / BlackThrush
+- Decision: KEEP. The generic Chebyshev distance helper now uses an 8-lane
+  `std::simd` abs-diff max with an explicit NaN mask, preserving the scalar
+  NaN-propagating max fold while accelerating all high-dimensional batch routes
+  that call the helper.
+- Artifact:
+  `tests/artifacts/perf/2026-06-20-cod-a-pdist-chebyshev-wide/EVIDENCE.md`
+- Same-worker target score versus current Rust on `vmi1227854`: `3/0/0`
+  (3.01x / 8.80x / 7.41x faster on d16, d64, and n2048/d64 Chebyshev).
+- Strict final source versus local SciPy 1.17.1 oracle score across the sweep:
+  `15/1/0`. The only remaining loss is the tiny d16 Chebyshev row.
+
+| Workload | Baseline Rust | Final Rust | SciPy oracle | Verdict |
+| --- | ---: | ---: | ---: | --- |
+| `pdist/chebyshev/n512/d16` | 1.735 ms | 0.576 ms | 0.560 ms | keep: 3.01x self-speedup; Rust 1.03x slower than SciPy |
+| `pdist/chebyshev/n512/d64` | 8.195 ms | 0.931 ms | 2.172 ms | keep: 8.80x self-speedup; Rust 2.33x faster than SciPy |
+| `pdist/chebyshev/n2048/d64` | 78.381 ms | 10.575 ms | 40.949 ms | keep: 7.41x self-speedup; Rust 3.87x faster than SciPy |
+
+Guards: focused wide-Chebyshev bit-identity test including NaN fold passed via
+rch; spatial `pdist/cdist` live SciPy conformance passed locally after the rch
+worker failed before comparison due missing Python `scipy`; `cargo check -p
+fsci-spatial --all-targets`, `cargo clippy -p fsci-spatial --all-targets
+--no-deps -- -D warnings`, `cargo fmt --check -p fsci-spatial`, and `git diff
+--check` passed. Changed-file `ubs` exited 1 on the existing broad
+`fsci-spatial` test panic / unwrap / assert / direct-indexing inventory, not on
+a new unsafe, clippy, check, or formatting finding.
+
+Negative evidence: do not retry the scalar iterator/fold Chebyshev helper for
+d16/d64. The d64 rows are closed; the remaining d16 row is a 1.03x SciPy loss
+and needs a deeper across-pairs/layout lever if it is worth chasing.
+
 ## 2026-06-20 - frankenscipy-i0ghz - pdist Chebyshev d4 SoA SIMD
 
 - Agent: cod-a / BlackThrush

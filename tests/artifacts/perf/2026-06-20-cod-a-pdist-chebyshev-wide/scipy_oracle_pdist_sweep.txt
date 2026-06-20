@@ -1,0 +1,18 @@
+scipy_version 1.17.1
+numpy_version 2.4.3
+scipy pdist/euclidean/n512/d4: 0.307 ms
+scipy pdist/cityblock/n512/d4: 0.196 ms
+scipy pdist/sqeuclidean/n512/d4: 0.177 ms
+scipy pdist/chebyshev/n512/d4: 0.177 ms
+scipy pdist/euclidean/n512/d16: 0.761 ms
+scipy pdist/cityblock/n512/d16: 0.623 ms
+scipy pdist/sqeuclidean/n512/d16: 0.547 ms
+scipy pdist/chebyshev/n512/d16: 0.560 ms
+scipy pdist/euclidean/n512/d64: 2.210 ms
+scipy pdist/cityblock/n512/d64: 2.748 ms
+scipy pdist/sqeuclidean/n512/d64: 2.039 ms
+scipy pdist/chebyshev/n512/d64: 2.172 ms
+scipy[big] pdist/euclidean/n4096/d4: 50.667 ms
+scipy[big] pdist/cosine/n4096/d4: 48.631 ms
+scipy[big] pdist/chebyshev/n2048/d64: 40.949 ms
+scipy[big] pdist/cityblock/n2048/d64: 48.429 ms

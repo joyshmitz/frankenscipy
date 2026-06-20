@@ -252,16 +252,33 @@ pub fn cityblock(a: &[f64], b: &[f64]) -> f64 {
 
 /// Chebyshev (L∞) distance.
 pub fn chebyshev(a: &[f64], b: &[f64]) -> f64 {
-    a.iter()
-        .zip(b.iter())
-        .map(|(ai, bi)| (ai - bi).abs())
-        .fold(0.0_f64, |a: f64, b: f64| {
-            if a.is_nan() || b.is_nan() {
-                f64::NAN
-            } else {
-                a.max(b)
-            }
-        })
+    use std::simd::{Select, Simd, cmp::SimdPartialEq, cmp::SimdPartialOrd, num::SimdFloat};
+    const L: usize = 8;
+    let n = a.len().min(b.len());
+    let mut vmax = Simd::<f64, L>::splat(0.0);
+    let mut nan_mask = vmax.simd_ne(vmax);
+    let mut i = 0usize;
+    while i + L <= n {
+        let d = (Simd::<f64, L>::from_slice(&a[i..i + L])
+            - Simd::<f64, L>::from_slice(&b[i..i + L]))
+        .abs();
+        nan_mask |= d.simd_ne(d);
+        vmax = vmax.simd_gt(d).select(vmax, d);
+        i += L;
+    }
+    if nan_mask.any() {
+        return f64::NAN;
+    }
+    let mut max = vmax.reduce_max();
+    while i < n {
+        let d = (a[i] - b[i]).abs();
+        if d.is_nan() {
+            return f64::NAN;
+        }
+        max = max.max(d);
+        i += 1;
+    }
+    max
 }
 
 /// Cosine distance: 1 - cosine_similarity(a, b).
@@ -7506,6 +7523,49 @@ mod tests {
 
         for (k, (&g, &w)) in got.iter().zip(&want).enumerate() {
             assert_eq!(g.to_bits(), w.to_bits(), "nan fold mismatch at {k}");
+        }
+    }
+
+    #[test]
+    fn pdist_wide_chebyshev_matches_scalar_nan_fold() {
+        fn scalar_chebyshev_ref(a: &[f64], b: &[f64]) -> f64 {
+            a.iter().zip(b.iter()).map(|(ai, bi)| (ai - bi).abs()).fold(
+                0.0_f64,
+                |a: f64, b: f64| {
+                    if a.is_nan() || b.is_nan() {
+                        f64::NAN
+                    } else {
+                        a.max(b)
+                    }
+                },
+            )
+        }
+
+        for &dim in &[16usize, 64] {
+            let mut x: Vec<Vec<f64>> = (0..40)
+                .map(|i| {
+                    (0..dim)
+                        .map(|k| ((i * 37 + k * 17) as f64 * 0.013).sin() - 0.25)
+                        .collect()
+                })
+                .collect();
+            x[7][dim / 2] = f64::NAN;
+
+            let got = pdist(&x, DistanceMetric::Chebyshev).expect("wide chebyshev pdist");
+            let mut want = Vec::with_capacity(x.len() * (x.len() - 1) / 2);
+            for i in 0..x.len() {
+                for j in (i + 1)..x.len() {
+                    want.push(scalar_chebyshev_ref(&x[i], &x[j]));
+                }
+            }
+
+            for (k, (&g, &w)) in got.iter().zip(&want).enumerate() {
+                assert_eq!(
+                    g.to_bits(),
+                    w.to_bits(),
+                    "wide chebyshev mismatch at dim {dim}, pair {k}"
+                );
+            }
         }
     }
 

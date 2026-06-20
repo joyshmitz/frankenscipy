@@ -1,5 +1,43 @@
 # Performance Release-Readiness Scorecard
 
+## 2026-06-20 - fsci-spatial pdist Chebyshev wide-SIMD gauntlet
+
+- Agent: cod-a / BlackThrush
+- Bead: `frankenscipy-4tkgx`
+- Decision: KEEP. The generic Chebyshev distance helper now uses 8-lane
+  `std::simd` abs-diff/max with an explicit NaN mask. This preserves the
+  scalar NaN-propagating max fold and closes the d64 Chebyshev SciPy losses;
+  d16 is now a tiny residual loss.
+- Artifact:
+  `tests/artifacts/perf/2026-06-20-cod-a-pdist-chebyshev-wide/EVIDENCE.md`
+
+| Gate | Result | Notes |
+| --- | --- | --- |
+| rch same-worker baseline | PASS | `vmi1227854`: d16 1.735 ms, d64 8.195 ms, n2048/d64 78.381 ms |
+| rch same-worker final | PASS | `vmi1227854`: d16 0.576 ms, d64 0.931 ms, n2048/d64 10.575 ms; same-worker target score `3/0/0` |
+| Full SciPy oracle sweep | MIXED | local SciPy 1.17.1 / NumPy 2.4.3; final sweep score `15/1/0`; only d16 Chebyshev remains 1.03x slower |
+| Criterion bench | PASS | rch `vmi1264463`: `pdist_highdim/chebyshev/n1000_d64` time `[28.945 ms 36.717 ms 42.736 ms]` |
+| Focused bit-identity tests | PASS | rch `cargo test -p fsci-spatial pdist_wide_chebyshev_matches_scalar_nan_fold --lib -- --nocapture`: 1 passed including NaN fold fixture |
+| Live SciPy conformance | PASS | local `cargo test -p fsci-conformance --test diff_spatial_pdist_cdist -- --nocapture`: 1 passed |
+| rch conformance attempt | BLOCKED/INFRA | worker `hz2` failed before comparison because Python `scipy` is not installed |
+| Per-crate compile | PASS | rch `cargo check -p fsci-spatial --all-targets` |
+| Per-crate clippy | PASS | rch `cargo clippy -p fsci-spatial --all-targets --no-deps -- -D warnings` |
+| Per-crate formatting | PASS | `cargo fmt --check -p fsci-spatial` |
+| Diff hygiene | PASS | `git diff --check` |
+| Changed-file UBS | BLOCKED/EXISTING | `ubs` exits 1 on the existing broad `fsci-spatial` test panic / unwrap / assert / direct-indexing inventory; no unsafe blocks, clippy failure, check failure, or formatter issue |
+
+| Workload | Baseline Rust | Final Rust | SciPy oracle | Ratio | Verdict |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `pdist/chebyshev/n512/d16` | 1.735 ms | 0.576 ms | 0.560 ms | 3.01x self-speedup; 1.03x slower than SciPy | residual near-parity loss |
+| `pdist/chebyshev/n512/d64` | 8.195 ms | 0.931 ms | 2.172 ms | 8.80x self-speedup; 2.33x faster than SciPy | keep |
+| `pdist/chebyshev/n2048/d64` | 78.381 ms | 10.575 ms | 40.949 ms | 7.41x self-speedup; 3.87x faster than SciPy | keep |
+
+Readiness notes:
+
+- This supersedes the d64 residual losses created by `frankenscipy-i0ghz`.
+- The d16 row is no longer a large loss; future work should use an across-pairs
+  SoA/cache-layout lever if the remaining 1.03x SciPy gap matters.
+
 ## 2026-06-20 - fsci-spatial pdist Chebyshev d4 gauntlet
 
 - Agent: cod-a / BlackThrush

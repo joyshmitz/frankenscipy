@@ -4,6 +4,94 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-20 - frankenscipy-4tkgx - spatial pdist Chebyshev wide SIMD helper
+
+- Agent: cod-a / BlackThrush
+- Lever kept: replace the generic `chebyshev(a, b)` iterator/fold with an
+  8-lane `std::simd` abs-diff max and explicit NaN mask. This keeps the old
+  `fold(0.0, nan-propagating max)` observable contract while removing scalar
+  per-coordinate dispatch from d16/d64 `pdist` rows.
+- Graveyard/artifact route tested: SIMD over coordinate lanes, branchless max
+  select, explicit NaN side mask, and a single helper-level specialization that
+  accelerates every non-dim4 batch route without new allocation or unsafe code.
+- Decision: KEEP. Same-worker target rows on `vmi1227854` improve 3.01x,
+  8.80x, and 7.41x. The previous d64 SciPy losses flip to clear wins; the d16
+  row is reduced to a tiny 1.03x SciPy loss.
+- Artifact:
+  `tests/artifacts/perf/2026-06-20-cod-a-pdist-chebyshev-wide/EVIDENCE.md`
+- Baseline command:
+  `AGENT_NAME=BlackThrush RCH_REQUIRE_REMOTE=1 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a rch exec -- cargo run --release -p fsci-spatial --bin perf_pdist_sweep`
+  (`vmi1227854`).
+- Candidate command:
+  `AGENT_NAME=BlackThrush RCH_WORKER=vmi1227854 RCH_REQUIRE_REMOTE=1 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a rch exec -- cargo run --release -p fsci-spatial --bin perf_pdist_sweep`
+  (`vmi1227854`).
+- SciPy oracle command:
+  focused local oracle in
+  `tests/artifacts/perf/2026-06-20-cod-a-pdist-chebyshev-wide/scipy_oracle_pdist_sweep.txt`,
+  SciPy 1.17.1 / NumPy 2.4.3.
+- Criterion command:
+  `AGENT_NAME=BlackThrush RCH_REQUIRE_REMOTE=1 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a rch exec -- cargo bench -p fsci-spatial --bench spatial_bench -- pdist_highdim/chebyshev/n1000_d64 --noplot --sample-size 10 --warm-up-time 1 --measurement-time 2`
+  (`vmi1264463`; interval `[28.945 ms 36.717 ms 42.736 ms]`).
+
+Benchmark evidence:
+
+| Workload | Baseline Rust | Final Rust | SciPy oracle | Ratio / verdict |
+| --- | ---: | ---: | ---: | --- |
+| `pdist/chebyshev/n512/d16` | 1.735 ms | 0.576 ms | 0.560 ms | 3.01x self-speedup; Rust 1.03x slower than SciPy |
+| `pdist/chebyshev/n512/d64` | 8.195 ms | 0.931 ms | 2.172 ms | 8.80x self-speedup; Rust 2.33x faster than SciPy |
+| `pdist/chebyshev/n2048/d64` | 78.381 ms | 10.575 ms | 40.949 ms | 7.41x self-speedup; Rust 3.87x faster than SciPy |
+
+Full candidate sweep versus SciPy:
+
+| Workload | Final Rust | SciPy oracle | Ratio / verdict |
+| --- | ---: | ---: | --- |
+| `pdist/euclidean/n512/d4` | 0.162 ms | 0.307 ms | Rust 1.90x faster |
+| `pdist/cityblock/n512/d4` | 0.106 ms | 0.196 ms | Rust 1.85x faster |
+| `pdist/sqeuclidean/n512/d4` | 0.110 ms | 0.177 ms | Rust 1.61x faster |
+| `pdist/chebyshev/n512/d4` | 0.154 ms | 0.177 ms | Rust 1.15x faster |
+| `pdist/euclidean/n512/d16` | 0.476 ms | 0.761 ms | Rust 1.60x faster |
+| `pdist/cityblock/n512/d16` | 0.424 ms | 0.623 ms | Rust 1.47x faster |
+| `pdist/sqeuclidean/n512/d16` | 0.431 ms | 0.547 ms | Rust 1.27x faster |
+| `pdist/chebyshev/n512/d16` | 0.576 ms | 0.560 ms | Rust 1.03x slower |
+| `pdist/euclidean/n512/d64` | 0.633 ms | 2.210 ms | Rust 3.49x faster |
+| `pdist/cityblock/n512/d64` | 0.556 ms | 2.748 ms | Rust 4.94x faster |
+| `pdist/sqeuclidean/n512/d64` | 0.709 ms | 2.039 ms | Rust 2.88x faster |
+| `pdist/chebyshev/n512/d64` | 0.931 ms | 2.172 ms | Rust 2.33x faster |
+| `pdist/euclidean/n4096/d4` | 11.336 ms | 50.667 ms | Rust 4.47x faster |
+| `pdist/cosine/n4096/d4` | 11.345 ms | 48.631 ms | Rust 4.29x faster |
+| `pdist/chebyshev/n2048/d64` | 10.575 ms | 40.949 ms | Rust 3.87x faster |
+| `pdist/cityblock/n2048/d64` | 5.872 ms | 48.429 ms | Rust 8.25x faster |
+
+Win/loss/neutral:
+
+- Same-worker target rows versus current Rust: `3/0/0`.
+- Strict final Rust versus local SciPy oracle across scored sweep rows:
+  `15/1/0`.
+- Remaining loss: `pdist/chebyshev/n512/d16` at 0.576 ms versus SciPy 0.560 ms.
+
+Correctness/conformance guards:
+
+- PASS: focused wide Chebyshev bit-identity test via rch:
+  `cargo test -p fsci-spatial pdist_wide_chebyshev_matches_scalar_nan_fold --lib -- --nocapture`.
+- PASS: `cargo check -p fsci-spatial --all-targets` via rch.
+- PASS: `cargo clippy -p fsci-spatial --all-targets --no-deps -- -D warnings`
+  via rch.
+- PASS: `cargo fmt --check -p fsci-spatial`.
+- PASS: local live SciPy conformance:
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a cargo test -p fsci-conformance --test diff_spatial_pdist_cdist -- --nocapture`.
+- PASS: `git diff --check`.
+- BLOCKED/INFRA: the rch conformance attempt on `hz2` failed before behavioral
+  comparison because the worker Python image has no `scipy` module.
+- BLOCKED/EXISTING: changed-file `ubs` exited 1 on the existing broad
+  `fsci-spatial` test panic / unwrap / assert / direct-indexing inventory. It
+  reports no unsafe blocks and no clippy/check/test build failure for this
+  patch.
+
+Negative evidence: do not retry the scalar iterator/fold Chebyshev helper for
+d16/d64. The helper-level SIMD lever closes the d64 losses. If the remaining
+d16 1.03x SciPy loss matters, route to a deeper across-pairs SoA or cache
+layout lever rather than another coordinate-fold micro-variant.
+
 ## 2026-06-20 - frankenscipy-i0ghz - spatial pdist Chebyshev dim-4 SoA SIMD
 
 - Agent: cod-a / BlackThrush
