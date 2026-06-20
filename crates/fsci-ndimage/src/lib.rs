@@ -188,6 +188,15 @@ fn reflect_convolve1d_sources(len: usize, kernel_len: usize) -> Vec<usize> {
     sources
 }
 
+/// Runtime A/B toggle: folded symmetric axpy row pass (default) vs the legacy
+/// per-pixel strided gather-dot. The gaussian kernel is symmetric, so each
+/// output is `w[mid]*x[mid] + sum w[mid +/- k]*(x[+k] + x[-k])` in scipy's
+/// correlate1d order. The axis-0 pass is reformulated as contiguous axpy passes
+/// over each row, making the hot loop stride-1 instead of gathering at
+/// `cols` stride.
+pub static GAUSSIAN_2D_AXPY: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(true);
+
 fn gaussian_filter_2d_reflect_order0(input: &NdArray, sigma: f64) -> Result<NdArray, NdimageError> {
     if input.size() == 0 {
         return Err(NdimageError::EmptyInput);
@@ -206,6 +215,8 @@ fn gaussian_filter_2d_reflect_order0(input: &NdArray, sigma: f64) -> Result<NdAr
         .min(rows)
         .max(1);
     let row_chunk = rows.div_ceil(nthreads);
+    let axpy = GAUSSIAN_2D_AXPY.load(std::sync::atomic::Ordering::Relaxed);
+    let mid = kernel_len / 2;
 
     let input_data = &input.data;
     let kernel = kernel.as_slice();
@@ -217,12 +228,35 @@ fn gaussian_filter_2d_reflect_order0(input: &NdArray, sigma: f64) -> Result<NdAr
                 for (local_row, scratch_row) in scratch_chunk.chunks_mut(cols).enumerate() {
                     let row = start_row + local_row;
                     let row_plan = &row_sources[row * kernel_len..(row + 1) * kernel_len];
-                    for (col, slot) in scratch_row.iter_mut().enumerate() {
-                        let mut sum = 0.0;
-                        for (&weight, &src_row) in kernel.iter().zip(row_plan) {
-                            sum += weight * input_data[src_row * cols + col];
+                    if axpy {
+                        let center_base = row_plan[mid] * cols;
+                        let center_weight = kernel[mid];
+                        for (slot, &x) in scratch_row
+                            .iter_mut()
+                            .zip(&input_data[center_base..center_base + cols])
+                        {
+                            *slot = center_weight * x;
                         }
-                        *slot = sum;
+                        for offset in 1..=mid {
+                            let lo_tap = mid - offset;
+                            let weight = kernel[lo_tap];
+                            let hi_base = row_plan[mid + offset] * cols;
+                            let lo_base = row_plan[lo_tap] * cols;
+                            let hi_row = &input_data[hi_base..hi_base + cols];
+                            let lo_row = &input_data[lo_base..lo_base + cols];
+                            for ((slot, &hi), &lo) in scratch_row.iter_mut().zip(hi_row).zip(lo_row)
+                            {
+                                *slot += weight * (hi + lo);
+                            }
+                        }
+                    } else {
+                        for (col, slot) in scratch_row.iter_mut().enumerate() {
+                            let mut sum = 0.0;
+                            for (&weight, &src_row) in kernel.iter().zip(row_plan) {
+                                sum += weight * input_data[src_row * cols + col];
+                            }
+                            *slot = sum;
+                        }
                     }
                 }
             });
@@ -239,11 +273,22 @@ fn gaussian_filter_2d_reflect_order0(input: &NdArray, sigma: f64) -> Result<NdAr
                     let row_base = (start_row + local_row) * cols;
                     for (col, slot) in output_row.iter_mut().enumerate() {
                         let col_plan = &col_sources[col * kernel_len..(col + 1) * kernel_len];
-                        let mut sum = 0.0;
-                        for (&weight, &src_col) in kernel.iter().zip(col_plan) {
-                            sum += weight * scratch_data[row_base + src_col];
+                        if axpy {
+                            let mut sum = kernel[mid] * scratch_data[row_base + col_plan[mid]];
+                            for offset in 1..=mid {
+                                let lo_tap = mid - offset;
+                                sum += kernel[lo_tap]
+                                    * (scratch_data[row_base + col_plan[mid + offset]]
+                                        + scratch_data[row_base + col_plan[lo_tap]]);
+                            }
+                            *slot = sum;
+                        } else {
+                            let mut sum = 0.0;
+                            for (&weight, &src_col) in kernel.iter().zip(col_plan) {
+                                sum += weight * scratch_data[row_base + src_col];
+                            }
+                            *slot = sum;
                         }
-                        *slot = sum;
                     }
                 }
             });
@@ -9461,6 +9506,87 @@ mod tests {
                 dq / hg
             );
         }
+    }
+
+    /// The folded symmetric axpy gaussian path must agree with the legacy
+    /// gather-dot path to floating-point tolerance. The two paths consume the
+    /// same reflected taps, but fold the symmetric pairs in a different
+    /// accumulation order.
+    #[test]
+    fn gaussian_2d_axpy_matches_gather_dot() {
+        use std::sync::Mutex;
+        static LOCK: Mutex<()> = Mutex::new(());
+        let _guard = LOCK.lock().unwrap();
+
+        for &(rows, cols) in &[(64usize, 64usize), (37, 53), (128, 96), (16, 200)] {
+            let data: Vec<f64> = (0..rows * cols)
+                .map(|i| (i as f64 * 0.013).sin() * 12.0 + (i % 17) as f64 - 8.0)
+                .collect();
+            let img = NdArray::new(data, vec![rows, cols]).unwrap();
+            for &sigma in &[0.8f64, 2.0, 3.5] {
+                GAUSSIAN_2D_AXPY.store(false, AtomOrd::Relaxed);
+                let gather = gaussian_filter(&img, sigma, BoundaryMode::Reflect, 0.0).unwrap();
+                GAUSSIAN_2D_AXPY.store(true, AtomOrd::Relaxed);
+                let axpy = gaussian_filter(&img, sigma, BoundaryMode::Reflect, 0.0).unwrap();
+                let mut maxd = 0.0f64;
+                for (a, b) in gather.data.iter().zip(axpy.data.iter()) {
+                    maxd = maxd.max((a - b).abs());
+                }
+                assert!(
+                    maxd < 1e-10,
+                    "rows={rows} cols={cols} sigma={sigma} max|gather-axpy|={maxd:e}"
+                );
+            }
+        }
+        GAUSSIAN_2D_AXPY.store(true, AtomOrd::Relaxed);
+    }
+
+    /// Same-process interleaved A/B for the gaussian 2D reflect pass. Ignored;
+    /// run with `cargo test -p fsci-ndimage --release gaussian_2d_axpy_ab_timing -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn gaussian_2d_axpy_ab_timing() {
+        use std::time::Instant;
+        let side = 256;
+        let data: Vec<f64> = (0..side * side)
+            .map(|i| {
+                let x = i as f64;
+                (x * 0.017).sin() * 100.0 + (x * 0.0031).cos() * 37.0 + (i % 53) as f64
+            })
+            .collect();
+        let img = NdArray::new(data, vec![side, side]).unwrap();
+        let sigma = 2.0;
+        let mut t_gather = 0.0f64;
+        let mut t_axpy = 0.0f64;
+        let rounds = 50;
+        let inner = 5;
+        for r in 0..rounds {
+            let order = if r % 2 == 0 {
+                [false, true]
+            } else {
+                [true, false]
+            };
+            for &use_axpy in &order {
+                GAUSSIAN_2D_AXPY.store(use_axpy, AtomOrd::Relaxed);
+                let t = Instant::now();
+                for _ in 0..inner {
+                    let _ = gaussian_filter(&img, sigma, BoundaryMode::Reflect, 0.0).unwrap();
+                }
+                let elapsed = t.elapsed().as_secs_f64() / inner as f64;
+                if use_axpy {
+                    t_axpy += elapsed;
+                } else {
+                    t_gather += elapsed;
+                }
+            }
+        }
+        GAUSSIAN_2D_AXPY.store(true, AtomOrd::Relaxed);
+        let gather_us = t_gather / rounds as f64 * 1e6;
+        let axpy_us = t_axpy / rounds as f64 * 1e6;
+        println!(
+            "gaussian 2D A/B sigma=2 256x256: gather={gather_us:.1}us axpy={axpy_us:.1}us  speedup={:.2}x",
+            gather_us / axpy_us
+        );
     }
 
     #[test]

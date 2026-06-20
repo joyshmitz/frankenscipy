@@ -62,6 +62,34 @@ the reverted scalar row-contiguous border/interior split. Route next to
 vectorized row/column dot kernels, transposed scratch for the vertical pass, or
 cache-blocked separable tiles that preserve the same reflect index plan.
 
+## 2026-06-20 - frankenscipy-8l8r1.130 - gaussian_filter folded AXPY reflect pass
+
+- Agent: cod-b / MistyBirch
+- Decision: KEEP as a measured internal win and residual SciPy loss. The folded
+  symmetric AXPY path improves the tracked `gaussian_sigma2/256` workload by
+  `2.05x` in a paired Criterion row on `vmi1167313`, and by `1.22x` in an
+  interleaved same-process A/B toggle. Final Rust remains slower than SciPy.
+- Artifact:
+  `tests/artifacts/perf/frankenscipy-8l8r1.130-gaussian-axpy/EVIDENCE.md`
+- Same-worker internal score versus clean `0cf3cc42` current: `1/0/0`.
+- Same-process A/B score versus gather path: `1/0/0`.
+- Strict SciPy score for final source: `0/1/0`.
+
+| Route | Worker | Mean | Ratio |
+| --- | --- | ---: | ---: |
+| Clean current Rust (`0cf3cc42`) | `vmi1167313` | 6.9394 ms | baseline |
+| Candidate AXPY Rust | `vmi1167313` | 3.3918 ms | 2.05x faster than current; 2.91x slower than SciPy |
+| Same-process gather toggle | `vmi1167313` | 3585.0 us | baseline arm |
+| Same-process AXPY toggle | `vmi1167313` | 2943.3 us | 1.22x faster than gather |
+| Final-source routing sanity | `vmi1149989` | 3.0285 ms | 2.59x slower than SciPy; routing-only |
+| SciPy `ndimage.gaussian_filter` | local oracle | 1.16724 ms | oracle |
+
+Negative evidence: folded row AXPY removes part of the strided-gather penalty,
+but still leaves the horizontal pass as a gather over scratch. Do not retry
+scalar reflect tap peeling or always-line-walk outer-axis variants. Route next
+to transposed scratch/cache-blocked tiles so both separable passes become
+stride-1 row work, then remove the runtime test toggle if that pays.
+
 ## 2026-06-20 - frankenscipy-8l8r1.127 - EDT feature-transform line starts
 
 - Agent: cod-b / MistyBirch

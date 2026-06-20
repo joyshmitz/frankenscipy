@@ -154,6 +154,78 @@ condition so dead ends are not repeated casually.
   should be a vector-friendly row/column dot kernel, transposed scratch for the
   vertical pass, or cache-blocked separable tiles with the same reflect plan.
 
+## 2026-06-20 - frankenscipy-8l8r1.130 - ndimage gaussian_filter folded AXPY reflect pass
+
+- Agent: cod-b / MistyBirch
+- Lever: keep the 2-D `BoundaryMode::Reflect`, order-0 `gaussian_filter` fast
+  path from `.129`, but replace the first-axis strided gather-dot with folded
+  symmetric row AXPY. The Gaussian kernel is symmetric, so each output can be
+  computed as center tap plus paired reflected rows. The hot first pass now
+  streams over contiguous rows instead of gathering at stride `cols`.
+- Graveyard/artifact route tested: vectorized execution and polyhedral/stencil
+  loop restructuring. This is the non-repeated route after scalar reflect tap
+  peeling and outer-axis line-walk variants lost.
+- Decision: KEEP as an internal win. Same-worker `vmi1167313` proof improves
+  `gaussian_sigma2/256` from `6.9394 ms` to `3.3918 ms` (`2.05x` faster), and
+  the in-binary A/B toggle moves gather `3585.0 us` to AXPY `2943.3 us`
+  (`1.22x` faster). Final Rust remains `0/1/0` versus SciPy, so the residual
+  loss stays routed deeper.
+- Artifact:
+  `tests/artifacts/perf/frankenscipy-8l8r1.130-gaussian-axpy/EVIDENCE.md`
+- Clean baseline command:
+  `git worktree add --detach /data/projects/.scratch/frankenscipy-cod-b-gaussian-axpy-baseline-20260620T1044 origin/main`
+- Same-worker clean-current command:
+  `AGENT_NAME=MistyBirch RCH_REQUIRE_REMOTE=1 RCH_WORKER=vmi1152480 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec -- cargo bench -p fsci-ndimage --bench ndimage_bench -- correlate_gaussian/gaussian_sigma2/256 --noplot --sample-size 10 --measurement-time 1 --warm-up-time 1`
+- Same-worker candidate command:
+  `AGENT_NAME=MistyBirch RCH_REQUIRE_REMOTE=1 RCH_WORKER=vmi1167313 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec -- cargo bench -p fsci-ndimage --bench ndimage_bench -- correlate_gaussian/gaussian_sigma2/256 --noplot --sample-size 10 --measurement-time 1 --warm-up-time 1`
+- Same-process A/B command:
+  `AGENT_NAME=MistyBirch RCH_REQUIRE_REMOTE=1 RCH_WORKER=vmi1167313 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec -- cargo test -p fsci-ndimage gaussian_2d_axpy_ab_timing --release -- --ignored --nocapture`
+- SciPy oracle command:
+  `python3 docs/perf_oracle_ndimage.py`
+- Benchmark evidence:
+
+  | Workload / route | Worker | Mean | Interval / value | Ratio / verdict |
+  | --- | --- | ---: | ---: | --- |
+  | Clean current Rust `0cf3cc42` | `vmi1167313` | 6.9394 ms | [5.1048, 9.1535] ms | baseline; noisy row with severe outlier |
+  | Candidate AXPY Rust | `vmi1167313` | 3.3918 ms | [2.9580, 3.7948] ms | 2.05x faster than current; 2.91x slower than SciPy |
+  | Same-process gather toggle | `vmi1167313` | 3585.0 us | one binary, interleaved | baseline arm |
+  | Same-process AXPY toggle | `vmi1167313` | 2943.3 us | one binary, interleaved | 1.22x faster than gather |
+  | Final-source routing sanity | `vmi1149989` | 3.0285 ms | [2.8418, 3.3639] ms | 2.59x slower than SciPy; not paired |
+  | SciPy `ndimage.gaussian_filter` | local SciPy oracle | 1.16724 ms | p50 | oracle |
+
+- Win/loss/neutral:
+  - Same-worker candidate versus clean current: `1/0/0`.
+  - Same-process A/B candidate versus gather path: `1/0/0`.
+  - Final candidate versus SciPy oracle: `0/1/0`.
+- Correctness/conformance guards:
+  - PASS: exact final local source:
+    `cargo test -p fsci-ndimage gaussian_2d_axpy_matches_gather_dot --lib -- --nocapture`
+    = **1 passed / 0 failed**.
+  - PASS: focused Gaussian suite via RCH:
+    `cargo test -p fsci-ndimage gaussian --lib -- --nocapture`
+    = **31 passed / 0 failed / 1 ignored**.
+  - PASS: local live SciPy conformance:
+    `FSCI_REQUIRE_SCIPY_ORACLE=1 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b cargo test -p fsci-conformance --test diff_ndimage_gaussian_filter -- --nocapture`
+    = **1 passed / 0 failed**.
+  - PASS: exact final local source crate check:
+    `cargo check -p fsci-ndimage --all-targets`.
+  - PASS: `git diff --check`.
+  - PASS: changed-file UBS scan exited 0 with 0 criticals; the scan reported
+    the existing broad warning inventory in `crates/fsci-ndimage/src/lib.rs`.
+  - BLOCKED: `cargo fmt --check -p fsci-ndimage` remains blocked by
+    pre-existing formatting drift in `ndimage_bench.rs`, `diff_fourier.rs`, and
+    unrelated existing `src/lib.rs` sections.
+  - BLOCKED: `cargo clippy -p fsci-ndimage --all-targets -- -D warnings`
+    remains blocked before ndimage by pre-existing `fsci-linalg` dependency
+    lints.
+  - PRE-EXISTING WARNINGS: `fsci-interpolate`, `fsci-special`, and
+    `crates/fsci-ndimage/src/bin/diff_geom.rs` warnings appeared during gates.
+- Negative evidence: folded row AXPY pays, but does not close the SciPy gap.
+  Do not retry scalar reflect tap peeling or always-line-walk outer-axis
+  variants. Next route should make the horizontal pass stride-1 too, via
+  transposed scratch or cache-blocked separable tiles, then remove the runtime
+  toggle if the no-toggle production path is measurably faster.
+
 ## 2026-06-20 - frankenscipy-8l8r1.127 - EDT feature-transform line starts
 
 - Agent: cod-b / MistyBirch
