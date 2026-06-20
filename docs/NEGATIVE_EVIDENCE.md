@@ -623,3 +623,28 @@ interior-direct (boundary-map only the ~window-1 edge cells).**
   partial: shrinking remaining-col list + LAZY delta (track a running offset instead
   of the O(n) per-step `minv -= delta` sweep) + buffer reuse ≈ 2x. Filed as a bead.
 - Bench `linear_sum_assignment/dense` added (regression coverage; quantifies the gap).
+
+## 2026-06-20 - linear_sum_assignment LAPJV port - WIN ~2x self (5.6-7.4x loss → 3.0-3.7x), byte-matches scipy
+
+- Agent: cc / MistyBirch (closes the loss filed in frankenscipy-zl4m5)
+- Decision: **KEEP**. Replaced the basic e-maxx O(n³) Hungarian with a faithful
+  port of scipy's `rectangular_lsap.cpp` LAPJV (Crouse 2016): shortest-augmenting-
+  path with LAZY dual updates, a shrinking remaining-column list, and SciPy's exact
+  tie-break (strictly-cheaper column, else equal-cost UNASSIGNED column).
+- Correctness: matches `scipy.optimize.linear_sum_assignment` bit-for-bit on the
+  existing scipy-reference tests, AND a new `linear_sum_assignment_cost_matches_
+  brute_force` test proves the returned assignment is the true optimum (cost ==
+  brute-force min over all permutations) for square + wide continuous matrices.
+  Full fsci-opt lib suite 311/0.
+
+| n×n | old (e-maxx) | LAPJV | self | scipy | vs scipy |
+| --- | ---: | ---: | ---: | ---: | --- |
+| 500  | 40.4 ms | 21.9 ms | **1.84x** | 7.2 ms  | 3.0x slower (was 5.6x) |
+| 1000 | 279 ms  | 140 ms  | **1.99x** | 37.6 ms | 3.7x slower (was 7.4x) |
+
+- Closes the documented loss from 5.6-7.4x to 3.0-3.7x. The residual ~3x is the
+  safe-Rust (`#![forbid(unsafe_code)]`) bounds-check tax on the hot scatter loop
+  (`row_i[j]`, `v[j]`, `shortest[j]` indexed by the scattered remaining-column j)
+  + scipy's contiguous-array C micro-optimizations — not algorithmic. Further close
+  would need bounds-check elision (iterator restructuring of the scatter loop),
+  which is uncertain in safe Rust; documented for follow-up.
