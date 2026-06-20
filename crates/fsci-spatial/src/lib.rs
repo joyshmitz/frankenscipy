@@ -1819,6 +1819,71 @@ impl KDTree {
         Ok((best_idx, best_dist.sqrt()))
     }
 
+    /// Nearest-neighbour query for a batch of points — matches
+    /// `scipy.spatial.cKDTree.query(X, k=1)`. Each query is an independent,
+    /// read-only tree traversal (`nn_search`), so the batch is parallelized
+    /// across query points; results are returned in input order and are
+    /// bit-for-bit identical to calling [`KDTree::query`] on each point (same
+    /// traversal, same `sqrt`). Every query is validated up front so the
+    /// parallel section cannot fault. Tree traversal is latency-bound
+    /// (pointer-chasing), so — unlike bandwidth-bound 1-D scans — the parallel
+    /// fan-out scales.
+    pub fn query_many(&self, queries: &[Vec<f64>]) -> Result<Vec<(usize, f64)>, SpatialError> {
+        if self.nodes.is_empty() {
+            return Err(SpatialError::EmptyData);
+        }
+        for q in queries {
+            if q.len() != self.dim {
+                return Err(SpatialError::DimensionMismatch {
+                    expected: self.dim,
+                    actual: q.len(),
+                });
+            }
+            if q.iter().any(|value| !value.is_finite()) {
+                return Err(SpatialError::InvalidArgument(
+                    "query must be finite".to_string(),
+                ));
+            }
+        }
+        let nq = queries.len();
+        let mut out = vec![(0usize, 0.0f64); nq];
+        let cores = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1);
+        let nthreads = if nq >= 512 {
+            cores.min(16).min(nq / 128).max(1)
+        } else {
+            1
+        };
+        let nodes = &self.nodes;
+        let eval = |slot: &mut (usize, f64), q: &[f64]| {
+            let mut bi = 0;
+            let mut bd = f64::INFINITY;
+            nn_search(nodes, 0, q, &mut bi, &mut bd);
+            *slot = (bi, bd.sqrt());
+        };
+        if nthreads <= 1 {
+            for (slot, q) in out.iter_mut().zip(queries) {
+                eval(slot, q);
+            }
+            return Ok(out);
+        }
+        let chunk = nq.div_ceil(nthreads);
+        std::thread::scope(|s| {
+            for (qchunk, ochunk) in queries.chunks(chunk).zip(out.chunks_mut(chunk)) {
+                s.spawn(move || {
+                    for (slot, q) in ochunk.iter_mut().zip(qchunk) {
+                        let mut bi = 0;
+                        let mut bd = f64::INFINITY;
+                        nn_search(nodes, 0, q, &mut bi, &mut bd);
+                        *slot = (bi, bd.sqrt());
+                    }
+                });
+            }
+        });
+        Ok(out)
+    }
+
     /// Find the k nearest neighbors to `query`.
     /// Returns vectors of (index, distance) sorted by distance.
     pub fn query_k(&self, query: &[f64], k: usize) -> Result<Vec<(usize, f64)>, SpatialError> {
@@ -6295,6 +6360,37 @@ impl RotationSpline {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `query_many` must be bit-for-bit identical to calling `query` per point
+    /// (same traversal + sqrt), across dims and batch sizes that span the
+    /// serial/parallel gate, including non-finite/wrong-dim error propagation.
+    #[test]
+    fn kdtree_query_many_matches_per_query() {
+        for &d in &[2usize, 3, 8] {
+            for &n in &[50usize, 1500] {
+                let data: Vec<Vec<f64>> = (0..n)
+                    .map(|i| (0..d).map(|k| ((i * 31 + k * 7) as f64 * 0.019).sin()).collect())
+                    .collect();
+                let tree = KDTree::new(&data).expect("build");
+                // batch crosses the 512 parallel gate at n=1500
+                let queries: Vec<Vec<f64>> = (0..n)
+                    .map(|i| (0..d).map(|k| ((i * 17 + k * 13) as f64 * 0.023 + 0.5).cos()).collect())
+                    .collect();
+                let batch = tree.query_many(&queries).expect("query_many");
+                assert_eq!(batch.len(), queries.len());
+                for (q, &(bi, bd)) in queries.iter().zip(&batch) {
+                    let (ei, ed) = tree.query(q).expect("query");
+                    assert_eq!(bi, ei, "idx mismatch d={d} n={n}");
+                    assert_eq!(bd.to_bits(), ed.to_bits(), "dist bits mismatch d={d} n={n}");
+                }
+            }
+        }
+        // Error propagation: wrong-dim and non-finite queries.
+        let data: Vec<Vec<f64>> = (0..10).map(|i| vec![i as f64, (i * 2) as f64]).collect();
+        let tree = KDTree::new(&data).expect("build");
+        assert!(tree.query_many(&[vec![1.0, 2.0, 3.0]]).is_err());
+        assert!(tree.query_many(&[vec![f64::NAN, 0.0]]).is_err());
+    }
 
     #[test]
     fn rotation_spline_matches_scipy() {

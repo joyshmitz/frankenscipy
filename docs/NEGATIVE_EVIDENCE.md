@@ -397,3 +397,27 @@ interior-direct (boundary-map only the ~window-1 edge cells).**
   0.88x — query-parallel doesn't pay for this cheap per-point kernel).
 - Action: extended `bench_splines` with a 100k-point case so the large-batch
   eval regime (was only 4096) has regression coverage.
+
+## 2026-06-20 - KDTree query_many parallel batch - WIN (2.2-2.5x self, 4.8x vs scipy, byte-identical)
+
+- Agent: cc / MistyBirch
+- Decision: **KEEP**. Added `KDTree::query_many` — a parallel batch nearest-
+  neighbour query (matches `scipy.spatial.cKDTree.query(X, k=1)`). fsci had only a
+  single-point `query`; the bench mapped it sequentially. Each query is an
+  independent read-only `nn_search` traversal, so the batch parallelizes across
+  query points; tree traversal is LATENCY-bound (pointer-chasing), so — unlike the
+  bandwidth-bound 1-D scans that regressed — the fan-out scales.
+- Correctness: **byte-for-bit identical** to per-point `query` (same traversal +
+  sqrt, input order), proven by `kdtree_query_many_matches_per_query` across
+  d∈{2,3,8}, batch sizes spanning the serial/parallel gate, + error propagation.
+  Full fsci-spatial lib suite 209/0.
+
+| Workload (n=10000) | seq (per-query) | query_many (parallel) | self | vs scipy cKDTree |
+| --- | ---: | ---: | ---: | ---: |
+| query k=1, d=3 | 2.71 ms | 1.23 ms | **2.2x** | 5.95 ms → **4.8x faster** |
+| query k=1, d=8 | 3.25 ms | 1.32 ms | **2.5x** | (scipy randn d=8 108ms — data differs) |
+
+- Scaling is modest (~2.2x not 16x) because each query is cheap (~0.27us) and the
+  shared-tree traversal is memory-latency-bound; still strictly positive and
+  byte-identical. LEVER: parallelize independent COMPUTE/LATENCY-bound batches
+  (tree queries, root-finds) — distinct from bandwidth-bound 1-D scans which wall.

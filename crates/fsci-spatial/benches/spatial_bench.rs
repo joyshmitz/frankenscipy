@@ -77,6 +77,27 @@ fn bench_kdtree(c: &mut Criterion) {
     group.bench_function("query/4096", |b| {
         b.iter(|| queries.iter().map(|q| tree.query(q)).collect::<Vec<_>>())
     });
+    // Head-to-head with scipy.spatial.cKDTree.query(Q, k=1) at scipy's sizes.
+    for &(nn, d) in &[(10000usize, 3usize), (10000, 8)] {
+        let mk = |seed: f64| -> Vec<Vec<f64>> {
+            (0..nn)
+                .map(|i| {
+                    (0..d)
+                        .map(|k| ((i * 97 + k * 51) as f64 * 0.017 + seed).sin())
+                        .collect()
+                })
+                .collect()
+        };
+        let pdata = mk(0.0);
+        let qdata = mk(0.5);
+        let t2 = KDTree::new(&pdata).expect("kdtree");
+        group.bench_function(BenchmarkId::new("query_seq", format!("n{nn}_d{d}")), |b| {
+            b.iter(|| qdata.iter().map(|q| t2.query(q)).collect::<Vec<_>>())
+        });
+        group.bench_function(BenchmarkId::new("query_many", format!("n{nn}_d{d}")), |b| {
+            b.iter(|| t2.query_many(&qdata).expect("query_many"))
+        });
+    }
     group.finish();
 }
 
