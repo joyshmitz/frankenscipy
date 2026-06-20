@@ -1,0 +1,142 @@
+   Compiling fsci-conformance v0.1.0 (/data/projects/.scratch/frankenscipy-cod-b-bold-20260620T181958/crates/fsci-conformance)
+   Compiling fsci-constants v0.1.0 (/data/projects/.scratch/frankenscipy-cod-b-bold-20260620T181958/crates/fsci-constants)
+   Compiling fsci-odr v0.1.0 (/data/projects/.scratch/frankenscipy-cod-b-bold-20260620T181958/crates/fsci-odr)
+   Compiling fsci-runtime v0.1.0 (/data/projects/.scratch/frankenscipy-cod-b-bold-20260620T181958/crates/fsci-runtime)
+   Compiling fsci-fft v0.1.0 (/data/projects/.scratch/frankenscipy-cod-b-bold-20260620T181958/crates/fsci-fft)
+   Compiling fsci-opt v0.1.0 (/data/projects/.scratch/frankenscipy-cod-b-bold-20260620T181958/crates/fsci-opt)
+   Compiling fsci-io v0.1.0 (/data/projects/.scratch/frankenscipy-cod-b-bold-20260620T181958/crates/fsci-io)
+   Compiling fsci-arrayapi v0.1.0 (/data/projects/.scratch/frankenscipy-cod-b-bold-20260620T181958/crates/fsci-arrayapi)
+   Compiling fsci-linalg v0.1.0 (/data/projects/.scratch/frankenscipy-cod-b-bold-20260620T181958/crates/fsci-linalg)
+   Compiling fsci-integrate v0.1.0 (/data/projects/.scratch/frankenscipy-cod-b-bold-20260620T181958/crates/fsci-integrate)
+   Compiling fsci-sparse v0.1.0 (/data/projects/.scratch/frankenscipy-cod-b-bold-20260620T181958/crates/fsci-sparse)
+   Compiling fsci-special v0.1.0 (/data/projects/.scratch/frankenscipy-cod-b-bold-20260620T181958/crates/fsci-special)
+   Compiling fsci-signal v0.1.0 (/data/projects/.scratch/frankenscipy-cod-b-bold-20260620T181958/crates/fsci-signal)
+   Compiling fsci-cluster v0.1.0 (/data/projects/.scratch/frankenscipy-cod-b-bold-20260620T181958/crates/fsci-cluster)
+warning: variable does not need to be mutable
+    --> crates/fsci-special/src/convenience.rs:5667:9
+     |
+5667 |     let mut x = x.abs(); // cos is even
+     |         ----^
+     |         |
+     |         help: remove this `mut`
+     |
+     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `su1` is never read
+    --> crates/fsci-special/src/orthopoly.rs:3291:19
+     |
+3291 |     let mut su1 = 0.0_f64;
+     |                   ^^^^^^^ this value is reassigned later and never used
+...
+3296 |     su1 = df[1] * r1;
+     |     ---------------- `su1` is overwritten here before the previous value is read
+     |
+     = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `carlson_rd` is never used
+   --> crates/fsci-special/src/elliptic.rs:519:4
+    |
+519 | fn carlson_rd(mut x: f64, mut y: f64, mut z: f64) -> f64 {
+    |    ^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling fsci-spatial v0.1.0 (/data/projects/.scratch/frankenscipy-cod-b-bold-20260620T181958/crates/fsci-spatial)
+   Compiling fsci-interpolate v0.1.0 (/data/projects/.scratch/frankenscipy-cod-b-bold-20260620T181958/crates/fsci-interpolate)
+warning: value assigned to `added` is never read
+   --> crates/fsci-interpolate/src/surfit.rs:771:25
+    |
+771 |         let mut added = false;
+    |                         ^^^^^ this value is reassigned later and never used
+...
+836 |                 added = true;
+    |                 ------------ `added` is overwritten here before the previous value is read
+    |
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `iband1` is never read
+   --> crates/fsci-interpolate/src/sphere.rs:182:22
+    |
+182 |     let mut iband1 = 0usize;
+    |                      ^^^^^^ this value is reassigned later and never used
+...
+285 |         iband1 = iband - 1;
+    |         ------------------ `iband1` is overwritten here before the previous value is read
+
+warning: value assigned to `iband1` is never read
+   --> crates/fsci-interpolate/src/sphere.rs:285:9
+    |
+285 |         iband1 = iband - 1;
+    |         ^^^^^^^^^^^^^^^^^^ this value is reassigned later and never used
+...
+588 |     iband1 = iband_eff - 1;
+    |     ---------------------- `iband1` is overwritten here before the previous value is read
+
+warning: value assigned to `nrint` is never read
+   --> crates/fsci-interpolate/src/sphere.rs:189:21
+    |
+189 |     let mut nrint = 0usize;
+    |                     ^^^^^^ this value is reassigned later and never used
+...
+222 |         nrint = ntt + npp;
+    |         ----------------- `nrint` is overwritten here before the previous value is read
+
+warning: value assigned to `j0` is never read
+   --> crates/fsci-interpolate/src/sphere_grid.rs:283:17
+    |
+283 |                 j0 += 1;
+    |                 ^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+
+   Compiling fsci-stats v0.1.0 (/data/projects/.scratch/frankenscipy-cod-b-bold-20260620T181958/crates/fsci-stats)
+warning: fields `values` and `gradients` are never read
+    --> crates/fsci-interpolate/src/lib.rs:3720:5
+     |
+3718 | pub struct CloughTocher2DInterpolator {
+     |            -------------------------- fields in this struct
+3719 |     delaunay: Delaunay2D,
+3720 |     values: Vec<f64>,
+     |     ^^^^^^
+3721 |     gradients: Vec<(f64, f64)>,
+     |     ^^^^^^^^^
+     |
+     = note: `CloughTocher2DInterpolator` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: fields `nx`, `ny`, and `fp` are never read
+   --> crates/fsci-interpolate/src/surfit.rs:412:5
+    |
+411 | struct FpsurfResult {
+    |        ------------ fields in this struct
+412 |     nx: usize,
+    |     ^^
+413 |     ny: usize,
+    |     ^^
+...
+417 |     fp: f64,
+    |     ^^
+
+warning: fields `nt`, `np`, and `fp` are never read
+  --> crates/fsci-interpolate/src/sphere.rs:19:5
+   |
+18 | struct SphereResult {
+   |        ------------ fields in this struct
+19 |     nt: usize,
+   |     ^^
+20 |     np: usize,
+   |     ^^
+...
+24 |     fp: f64,
+   |     ^^
+
+   Compiling fsci-ndimage v0.1.0 (/data/projects/.scratch/frankenscipy-cod-b-bold-20260620T181958/crates/fsci-ndimage)
+warning: `fsci-interpolate` (lib) generated 8 warnings
+warning: `fsci-special` (lib) generated 3 warnings (run `cargo fix --lib -p fsci-special` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 25.49s
+     Running tests/diff_opt_linear_sum_assignment.rs (/data/projects/.rch-targets/frankenscipy-cod-b/debug/deps/diff_opt_linear_sum_assignment-bfaf8310224966f4)
+
+running 1 test
+test diff_opt_linear_sum_assignment ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s

@@ -1,5 +1,51 @@
 # Performance Release-Readiness Scorecard
 
+## 2026-06-20 - fsci-opt linear_sum_assignment first-scan gauntlet
+
+- Agent: cod-b / BlackThrush
+- Bead: `frankenscipy-8l8r1.137`
+- Decision: KEEP. The first shortest-augmenting-path row scan now initializes
+  `path` and `shortest_path_costs` directly, removing redundant whole-vector
+  fills while preserving the existing SciPy tie-break and dual update. The large
+  dense row reaches SciPy parity/slight win; the small row remains a measured
+  SciPy loss.
+- Artifact:
+  `tests/artifacts/perf/2026-06-20-cod-b-lsap-136/EVIDENCE.md`
+
+| Gate | Result | Notes |
+| --- | --- | --- |
+| Requested `cargo bench --release` | BLOCKED | Cargo rejects `--release` for `cargo bench`; recorded in artifact as tooling negative evidence |
+| rch same-worker baseline | PASS | `vmi1227854`: n=500 20.320 ms; n=1000 176.03 ms |
+| rch same-worker final | PASS | `vmi1227854`: n=500 21.009 ms; n=1000 124.20 ms |
+| SciPy oracle | MIXED | local SciPy 1.17.1 p50: n=500 18.906268 ms; n=1000 125.511679 ms |
+| Rejected selected-list variant | FAIL | n=500 regressed 1.18x and n=1000 was worse/no significant win on `vmi1152480`; source reverted |
+| Rejected remaining-template variant | FAIL | n=500 significant regression on `vmi1227854`; n=1000 no significant change; source reverted |
+| Focused assignment tests | PASS | `cargo test -p fsci-opt linear_sum_assignment --lib -- --nocapture` via rch: 9 passed |
+| Per-crate check | PASS | `cargo check -p fsci-opt --all-targets` via rch |
+| No-deps clippy | PASS | `cargo clippy -p fsci-opt --all-targets --no-deps -- -D warnings` via rch |
+| Per-crate release build | PASS | `cargo build --release -p fsci-opt` via rch |
+| Live SciPy conformance | PASS | local `FSCI_REQUIRE_SCIPY_ORACLE=1 cargo test -p fsci-conformance --test diff_opt_linear_sum_assignment -- --nocapture`: 1 passed |
+| Touched-file rustfmt | PASS | `rustfmt --edition 2024 --config skip_children=true --check crates/fsci-opt/src/lib.rs` |
+| Plain child-following rustfmt | BLOCKED | pre-existing `crates/fsci-opt/src/linesearch.rs` formatting drift |
+| Diff hygiene | PASS | `git diff --check` |
+| Changed-file UBS | BLOCKED | existing broad `fsci-opt/src/lib.rs` panic/unwrap/assert/indexing/allocation inventory; no finding points at the changed SAP first-scan block |
+
+| Workload / route | Median | Ratio | Verdict |
+| --- | ---: | ---: | --- |
+| Restored current Rust `linear_sum_assignment/dense/500` | 20.320 ms | 1.07x slower than SciPy | baseline |
+| Final first-scan Rust n=500 | 21.009 ms | neutral vs current; 1.11x slower than SciPy | keep as neutral residual |
+| SciPy n=500 | 18.906268 ms | 1.00x oracle | reference |
+| Restored current Rust `linear_sum_assignment/dense/1000` | 176.03 ms | 1.40x slower than SciPy | baseline |
+| Final first-scan Rust n=1000 | 124.20 ms | 1.42x faster than current; 1.01x faster than SciPy | keep |
+| SciPy n=1000 | 125.511679 ms | 1.00x oracle | reference |
+
+Readiness notes:
+
+- Same-worker internal score is `1/0/1`; strict SciPy score is `1/1/0`.
+- This supersedes part of the prior `frankenscipy-zl4m5` residual: the n=1000
+  LSAP row is no longer a strict SciPy loss on this gauntlet, but n=500 still
+  needs lower-level dense storage/kernel work.
+
 ## 2026-06-20 - fsci-ndimage filter1d contiguous Reflect direct queue gauntlet
 
 - Agent: cod-b / BlackThrush

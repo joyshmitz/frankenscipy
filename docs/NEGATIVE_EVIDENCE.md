@@ -6,6 +6,41 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-20 - frankenscipy-8l8r1.137 - linear_sum_assignment first-scan initialization
+
+- Agent: cod-b / BlackThrush
+- Decision: KEEP the first-scan shortest augmenting path specialization. It
+  removes whole-vector `path` and `shortest_path_costs` fills from each
+  augmenting path search by initializing those arrays during the first start-row
+  scan. The n=1000 row moves from a strict SciPy loss to parity/slight win; the
+  n=500 row remains a small SciPy loss.
+- Artifact:
+  `tests/artifacts/perf/2026-06-20-cod-b-lsap-136/EVIDENCE.md`
+- Same-worker internal score versus restored current: `1/0/1`.
+- Strict median score versus local SciPy 1.17.1 oracle: `1/1/0`.
+- Rejected subvariants: compact selected row/column lists (`0/2/0`) and
+  remaining-template copy (`0/1/1`). Both are reverted.
+
+| Workload | Baseline Rust | Final Rust | SciPy oracle | Verdict |
+| --- | ---: | ---: | ---: | --- |
+| `linear_sum_assignment/dense/500` | 20.320 ms | 21.009 ms | 18.906268 ms | neutral vs current; Rust 1.11x slower than SciPy |
+| `linear_sum_assignment/dense/1000` | 176.03 ms | 124.20 ms | 125.511679 ms | keep: 1.42x faster than current; Rust 1.01x faster than SciPy |
+
+Guards: focused assignment tests, `cargo check -p fsci-opt --all-targets`,
+no-deps clippy, release build, local live SciPy conformance, touched-file
+rustfmt with `skip_children=true`, and diff hygiene passed. Changed-file UBS is
+blocked by the existing broad `fsci-opt/src/lib.rs` inventory and does not point
+at the changed SAP first-scan block. Plain rustfmt over `src/lib.rs` follows
+pre-existing `linesearch.rs` child-module drift. The
+requested `cargo bench --release` form is invalid Cargo syntax and is recorded
+as tooling negative evidence; the valid optimized Criterion route is per-crate
+`cargo bench`.
+
+Negative evidence: do not retry selected row/column list maintenance or
+remaining-template copy initialization in this SAP loop without fresh
+same-worker proof. The remaining n=500 gap needs lower-level dense storage or a
+more invasive LAPJV-style kernel, not another whole-vector reset micro-variant.
+
 ## 2026-06-20 - frankenscipy-8l8r1.135 - filter1d contiguous Reflect direct queue
 
 - Agent: cod-b / BlackThrush

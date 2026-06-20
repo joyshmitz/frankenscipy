@@ -886,17 +886,42 @@ impl ShortestAugmentingPathScratch {
         start_row: usize,
     ) -> (usize, f64) {
         let col_count = v.len();
-        let mut min_val = 0.0;
+        let mut min_val;
         let mut row = start_row;
         let mut remaining_count = col_count;
 
         for (index, slot) in self.remaining.iter_mut().enumerate() {
             *slot = col_count - index - 1;
         }
-        self.path.fill(UNASSIGNED);
         self.sr.fill(false);
         self.sc.fill(false);
-        self.shortest_path_costs.fill(f64::INFINITY);
+
+        let mut lowest = f64::INFINITY;
+        let mut best_remaining_index = 0usize;
+        let cost_row = &cost_matrix[row];
+        let row_dual = u[row];
+        self.sr[row] = true;
+
+        for (remaining_index, &col) in self.remaining[..remaining_count].iter().enumerate() {
+            let reduced_cost = cost_row[col] - row_dual - v[col];
+            self.path[col] = row;
+            self.shortest_path_costs[col] = reduced_cost;
+            if reduced_cost < lowest || (reduced_cost == lowest && row4col[col] == UNASSIGNED) {
+                lowest = reduced_cost;
+                best_remaining_index = remaining_index;
+            }
+        }
+
+        min_val = lowest;
+        let col = self.remaining[best_remaining_index];
+        if row4col[col] == UNASSIGNED {
+            return (col, min_val);
+        }
+
+        row = row4col[col];
+        self.sc[col] = true;
+        remaining_count -= 1;
+        self.remaining[best_remaining_index] = self.remaining[remaining_count];
 
         loop {
             let mut lowest = f64::INFINITY;

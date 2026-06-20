@@ -4,6 +4,89 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-20 - frankenscipy-8l8r1.137 - opt linear_sum_assignment first-scan initialization
+
+- Agent: cod-b / BlackThrush
+- Lever kept: peel the first row scan in the modified Jonker-Volgenant shortest
+  augmenting path kernel used by `fsci_opt::linear_sum_assignment`. The first
+  scan now initializes `path[col]` and `shortest_path_costs[col]` directly,
+  preserving the existing unassigned-column tie-break and primal-dual update
+  while removing two whole-vector fills from every augmenting path search.
+- Graveyard/artifact route tested: cache/branch specialization and scratch
+  initialization elimination. Two more radical subvariants were measured and
+  reverted: compact selected-row/column lists, and a reusable remaining-template
+  copy.
+- Decision: KEEP the first-scan specialization. Same-worker n=1000 improves
+  1.42x and reaches parity/slight win versus the local SciPy oracle. n=500 is
+  neutral versus restored current and remains 1.11x slower than SciPy.
+- Artifact:
+  `tests/artifacts/perf/2026-06-20-cod-b-lsap-136/EVIDENCE.md`
+- Tooling negative evidence:
+  `cargo bench --release` is invalid Cargo syntax and failed before running.
+  The valid optimized Criterion command is per-crate `cargo bench`.
+- Baseline/final command:
+  `AGENT_NAME=BlackThrush RCH_REQUIRE_REMOTE=1 RCH_WORKER=vmi1227854 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec -- cargo bench -p fsci-opt --bench optimize_bench -- linear_sum_assignment/dense --sample-size 10 --measurement-time 1 --warm-up-time 1`
+- Local SciPy oracle command:
+  `AGENT_NAME=BlackThrush python3 - <<'PY' ... scipy.optimize.linear_sum_assignment ... PY`
+
+Benchmark evidence:
+
+| Workload / route | Median | Interval / value | Ratio / verdict |
+| --- | ---: | ---: | --- |
+| Restored current Rust `linear_sum_assignment/dense/500` | 20.320 ms | [19.471, 21.702] ms on `vmi1227854` | baseline |
+| First-scan Rust `linear_sum_assignment/dense/500` | 21.009 ms | [19.964, 22.147] ms on `vmi1227854` | neutral: 0.97x baseline speed, intervals overlap |
+| SciPy 1.17.1 `linear_sum_assignment` n=500 | 18.906268 ms | local p50 | Rust remains 1.11x slower than SciPy |
+| Restored current Rust `linear_sum_assignment/dense/1000` | 176.03 ms | [164.60, 189.98] ms on `vmi1227854` | baseline |
+| First-scan Rust `linear_sum_assignment/dense/1000` | 124.20 ms | [114.81, 135.33] ms on `vmi1227854` | 1.42x faster than current; 1.01x faster than SciPy |
+| SciPy 1.17.1 `linear_sum_assignment` n=1000 | 125.511679 ms | local p50 | oracle |
+
+Win/loss/neutral:
+
+- Same-worker final candidate versus restored current Rust: `1/0/1`.
+- Strict final candidate versus SciPy oracle: `1/1/0`.
+- Rejected selected-list subvariant: `0/2/0`.
+- Rejected remaining-template copy subvariant: `0/1/1`.
+
+Sub-attempt evidence:
+
+| Route | n=500 median | n=1000 median | Verdict |
+| --- | ---: | ---: | --- |
+| Compact selected row/column lists | 31.409 ms vs 26.604 ms baseline on `vmi1152480` | 267.86 ms vs 243.82 ms baseline on `vmi1152480` | rejected: n=500 regressed 1.18x and n=1000 was worse/no significant win |
+| Remaining-template copy | 22.854 ms vs 20.320 ms baseline on `vmi1227854` | 161.26 ms vs 176.03 ms baseline on `vmi1227854` | rejected: n=500 significant regression and n=1000 no significant change |
+| First-scan initialization | 21.009 ms vs 20.320 ms baseline on `vmi1227854` | 124.20 ms vs 176.03 ms baseline on `vmi1227854` | kept: neutral small row, 1.42x large-row win |
+
+Correctness/conformance guards:
+
+- PASS: rch focused assignment tests:
+  `cargo test -p fsci-opt linear_sum_assignment --lib -- --nocapture` =
+  9 passed / 0 failed after the final warning fix.
+- PASS: rch per-crate all-targets check:
+  `cargo check -p fsci-opt --all-targets`.
+- PASS: rch no-deps clippy:
+  `cargo clippy -p fsci-opt --all-targets --no-deps -- -D warnings`.
+- PASS: rch release build:
+  `cargo build --release -p fsci-opt`.
+- PASS: local live SciPy conformance:
+  `FSCI_REQUIRE_SCIPY_ORACLE=1 cargo test -p fsci-conformance --test diff_opt_linear_sum_assignment -- --nocapture`
+  = 1 passed / 0 failed.
+- PASS: touched-file rustfmt with child modules skipped:
+  `rustfmt --edition 2024 --config skip_children=true --check crates/fsci-opt/src/lib.rs`.
+- PASS: `git diff --check`.
+- BLOCKED/EXISTING: changed-file UBS exits nonzero on the existing broad
+  `crates/fsci-opt/src/lib.rs` inventory: test-only panic callbacks, unwrap and
+  assert inventory, direct indexing inventory, and allocation/cast warnings.
+  No finding points at the changed first-scan SAP block.
+- NOTE: plain rustfmt over `crates/fsci-opt/src/lib.rs` follows pre-existing
+  child-module drift in `crates/fsci-opt/src/linesearch.rs`.
+- NOTE: local conformance emitted unrelated existing warnings from
+  `fsci-special` and `fsci-interpolate`.
+
+Retry condition: do not retry selected row/column list maintenance or
+remaining-template copy initialization in this SAP path without new same-worker
+evidence. The remaining n=500 loss is lower-level constant factor; credible next
+work is dense matrix storage/API specialization, row indirection removal
+without copying, or a more invasive LAPJV-style kernel.
+
 ## 2026-06-20 - frankenscipy-8l8r1.135 - ndimage filter1d contiguous Reflect direct queue
 
 - Agent: cod-b / BlackThrush
