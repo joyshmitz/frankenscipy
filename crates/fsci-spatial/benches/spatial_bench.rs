@@ -103,6 +103,14 @@ fn bench_kdtree(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("query_k_many", format!("n{nn}_d{d}_k10")), |b| {
             b.iter(|| t2.query_k_many(&qdata, 10).expect("query_k_many"))
         });
+        if d <= 3 {
+            group.bench_function(BenchmarkId::new("ball_seq", format!("n{nn}_d{d}_r03")), |b| {
+                b.iter(|| qdata.iter().map(|q| t2.query_ball_point(q, 0.3)).collect::<Vec<_>>())
+            });
+            group.bench_function(BenchmarkId::new("ball_many", format!("n{nn}_d{d}_r03")), |b| {
+                b.iter(|| t2.query_ball_point_many(&qdata, 0.3).expect("ball_many"))
+            });
+        }
     }
     group.finish();
 }

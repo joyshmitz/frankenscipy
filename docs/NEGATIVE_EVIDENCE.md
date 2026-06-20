@@ -442,3 +442,26 @@ interior-direct (boundary-map only the ~window-1 edge cells).**
 - k-NN's heavier per-query work (bounded heap + sort over k) amortizes spawn far
   better than k=1 (query_many got 2.2x) → 4.8-5.1x. Confirms the lever: the
   heavier the independent per-element compute, the better the batch fan-out scales.
+
+## 2026-06-20 - KDTree query_ball_point_many parallel batch radius query - WIN (7.9x self, byte-identical)
+
+- Agent: cc / MistyBirch
+- Decision: **KEEP**. Added `KDTree::query_ball_point_many` — parallel batch radius
+  query matching `scipy.spatial.cKDTree.query_ball_point(X, r)`. Third application
+  of the batch-parallel lever: each query runs the same independent read-only
+  `ball_search` + `sort_unstable` as `query_ball_point`, parallelized across points.
+- Correctness: **byte-for-bit identical** to per-point `query_ball_point` (same
+  sorted index lists) — proven by `kdtree_query_ball_point_many_matches_per_query`
+  across d∈{2,3}, r∈{0.1,0.5,1.5}, batch sizes across the gate, empty/error paths.
+  Full fsci-spatial lib suite 211/0.
+
+| Workload (n=10000, d=3, r=0.3) | seq (per-query) | ball_many | self-speedup |
+| --- | ---: | ---: | ---: |
+| query_ball_point | 205.5 ms | 25.9 ms | **7.9x** |
+
+- BEST scaling of the three batch APIs (query_many 2.2x, query_k_many 4.8x, ball
+  7.9x): the radius query is the HEAVIEST per-query (touches many nodes + sorts a
+  large hit list), so it amortizes spawn best — monotone confirmation that batch
+  fan-out scales with per-element work. vs scipy cKDTree.query_ball_point
+  (uniform data, similar n/d, ~156-236ms) the win is ~6-9x but data distributions
+  differ, so the rigorous claim is the same-data 7.9x self-speedup.

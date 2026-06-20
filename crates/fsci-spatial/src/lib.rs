@@ -2027,6 +2027,74 @@ impl KDTree {
         Ok(results)
     }
 
+    /// Radius (ball) query for a batch of points — matches
+    /// `scipy.spatial.cKDTree.query_ball_point(X, r)`. Each query runs the same
+    /// independent, read-only `ball_search` + `sort_unstable` as
+    /// [`KDTree::query_ball_point`], parallelized across query points; the
+    /// per-query index list is bit-for-bit identical (same members, same sorted
+    /// order) and returned in input order. All queries and `r` are validated up
+    /// front so the parallel section cannot fault.
+    pub fn query_ball_point_many(
+        &self,
+        queries: &[Vec<f64>],
+        r: f64,
+    ) -> Result<Vec<Vec<usize>>, SpatialError> {
+        if !r.is_finite() || r < 0.0 {
+            return Err(SpatialError::InvalidArgument(
+                "radius must be finite and nonnegative".to_string(),
+            ));
+        }
+        for q in queries {
+            if q.len() != self.dim {
+                return Err(SpatialError::DimensionMismatch {
+                    expected: self.dim,
+                    actual: q.len(),
+                });
+            }
+            if q.iter().any(|value| !value.is_finite()) {
+                return Err(SpatialError::InvalidArgument(
+                    "query must be finite".to_string(),
+                ));
+            }
+        }
+        let nq = queries.len();
+        let mut out: Vec<Vec<usize>> = vec![Vec::new(); nq];
+        if self.nodes.is_empty() {
+            return Ok(out);
+        }
+        let r_sq = r * r;
+        let nodes = &self.nodes;
+        let cores = std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1);
+        // Each radius query can touch many nodes and sort its hit list, so it is
+        // compute-heavy — a low gate amortizes spawn well.
+        let nthreads = if nq >= 64 {
+            cores.min(16).min(nq / 16).max(1)
+        } else {
+            1
+        };
+        if nthreads <= 1 {
+            for (slot, q) in out.iter_mut().zip(queries) {
+                ball_search(nodes, 0, q, r_sq, slot);
+                slot.sort_unstable();
+            }
+            return Ok(out);
+        }
+        let chunk = nq.div_ceil(nthreads);
+        std::thread::scope(|s| {
+            for (qchunk, ochunk) in queries.chunks(chunk).zip(out.chunks_mut(chunk)) {
+                s.spawn(move || {
+                    for (slot, q) in ochunk.iter_mut().zip(qchunk) {
+                        ball_search(nodes, 0, q, r_sq, slot);
+                        slot.sort_unstable();
+                    }
+                });
+            }
+        });
+        Ok(out)
+    }
+
     /// Find all cross-tree neighbors within distance `r`.
     ///
     /// Matches `scipy.spatial.KDTree.query_ball_tree(other, r)`.
@@ -6438,6 +6506,37 @@ mod tests {
     /// `query_k_many` must be bit-for-bit identical to calling `query_k` per
     /// point (same neighbours/order/distance bits), across dims, k, and batch
     /// sizes spanning the serial/parallel gate, plus error propagation.
+    /// `query_ball_point_many` must be bit-for-bit identical to calling
+    /// `query_ball_point` per point (same sorted index lists), across dims,
+    /// radii, and batch sizes spanning the gate, plus error/empty handling.
+    #[test]
+    fn kdtree_query_ball_point_many_matches_per_query() {
+        for &d in &[2usize, 3] {
+            for &n in &[40usize, 800] {
+                let data: Vec<Vec<f64>> = (0..n)
+                    .map(|i| (0..d).map(|c| ((i * 19 + c * 7) as f64 * 0.5).sin()).collect())
+                    .collect();
+                let tree = KDTree::new(&data).expect("build");
+                let queries: Vec<Vec<f64>> = (0..n)
+                    .map(|i| (0..d).map(|c| ((i * 13 + c * 3) as f64 * 0.5 + 0.2).cos()).collect())
+                    .collect();
+                for &r in &[0.1f64, 0.5, 1.5] {
+                    let batch = tree.query_ball_point_many(&queries, r).expect("batch");
+                    assert_eq!(batch.len(), queries.len());
+                    for (q, brow) in queries.iter().zip(&batch) {
+                        let erow = tree.query_ball_point(q, r).expect("single");
+                        assert_eq!(brow, &erow, "d={d} n={n} r={r}");
+                    }
+                }
+            }
+        }
+        let data: Vec<Vec<f64>> = (0..8).map(|i| vec![i as f64, (i * 2) as f64]).collect();
+        let tree = KDTree::new(&data).expect("build");
+        assert!(tree.query_ball_point_many(&[vec![1.0, 2.0, 3.0]], 1.0).is_err());
+        assert!(tree.query_ball_point_many(&[vec![1.0, 2.0]], -1.0).is_err());
+        assert!(tree.query_ball_point_many(&[vec![f64::NAN, 0.0]], 1.0).is_err());
+    }
+
     #[test]
     fn kdtree_query_k_many_matches_per_query() {
         for &d in &[2usize, 3, 8] {
