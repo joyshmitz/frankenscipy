@@ -104,10 +104,31 @@ fn bench_delaunay(c: &mut Criterion) {
     group.finish();
 }
 
+/// High-dimension pdist euclidean — head-to-head vs scipy.spatial.distance.pdist
+/// at d >> 4 (the dim-4 SoA fast path does not apply here).
+fn bench_pdist_highdim(c: &mut Criterion) {
+    use fsci_spatial::{DistanceMetric, pdist};
+    let mut group = c.benchmark_group("pdist_highdim");
+    for &(n, d) in &[(1000usize, 64usize), (2000, 64), (1000, 128), (2000, 16)] {
+        let data: Vec<Vec<f64>> = (0..n)
+            .map(|i| {
+                (0..d)
+                    .map(|k| ((i * 131 + k * 17) as f64 * 0.013).sin() * 3.0 + (k as f64) * 0.1)
+                    .collect()
+            })
+            .collect();
+        group.bench_function(BenchmarkId::new("euclidean", format!("n{n}_d{d}")), |b| {
+            b.iter(|| pdist(&data, DistanceMetric::Euclidean))
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_transform_batch,
     bench_pdist,
+    bench_pdist_highdim,
     bench_kdtree,
     bench_delaunay
 );

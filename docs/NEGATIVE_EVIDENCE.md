@@ -360,3 +360,27 @@ interior-direct (boundary-map only the ~window-1 edge cells).**
   this entire regime — a benchmark coverage gap). No source change; the residual
   is documented as the FFT-kernel wall. Do NOT re-chase "native real-FFT" (done)
   or radix-8/four-step (rejected); a real flip needs a split-radix kernel rewrite.
+
+## 2026-06-20 - high-dim pdist euclidean - MEASURED WIN (fsci dominates 2.6-5.3x; GEMM lever not needed)
+
+- Agent: cc / MistyBirch
+- Finding (MEASURED, rch fsci vs scipy.spatial.distance.pdist euclidean): the
+  high-dim (d >> 4) regime was UNBENCHMARKED — the spatial bench only covered
+  dim-4. fsci already DOMINATES scipy via 64-thread parallel-over-pairs:
+
+| n, d | fsci pdist | scipy pdist | ratio |
+| --- | ---: | ---: | --- |
+| n=1000 d=64  | 2.42 ms | 8.54 ms  | **3.5x faster** |
+| n=2000 d=64  | 6.80 ms | 34.4 ms  | **5.1x faster** |
+| n=1000 d=128 | 3.05 ms | 16.3 ms  | **5.3x faster** |
+| n=2000 d=16  | 4.41 ms | 11.5 ms  | **2.6x faster** |
+
+- The RADICAL candidate (euclidean-via-GEMM, `‖x-y‖²=‖x‖²+‖y‖²-2x·y` as BLAS-3)
+  was considered: it would further self-speed the kernel, but vs SciPy this is
+  NOT a gap — fsci already wins 2.6-5.3x because scipy's pdist is single-threaded
+  C while fsci parallelizes the O(n²) pair work across 64 cores. Per "target gaps
+  where we LOSE", no source change ships. (GEMM would also risk close-point
+  cancellation accuracy vs scipy's direct sqrt(Σ(a-b)²); deferred unless a
+  same-thread-count loss is ever found.)
+- Action: added `bench_pdist_highdim` (n/d ∈ {1000/64, 2000/64, 1000/128,
+  2000/16}) so this winning regime has permanent regression coverage.
