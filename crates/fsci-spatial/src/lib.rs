@@ -523,7 +523,13 @@ pub fn pdist(x: &[Vec<f64>], metric: DistanceMetric) -> Result<Vec<f64>, Spatial
     // parallel fill wins (n=4096: 13ms vs 43ms serial). Measured same-box, see nm8ex.
     let nthreads = if dim == 4
         && n <= 2048
-        && matches!(metric, DistanceMetric::Euclidean | DistanceMetric::Cosine)
+        && matches!(
+            metric,
+            DistanceMetric::Euclidean
+                | DistanceMetric::Cosine
+                | DistanceMetric::SqEuclidean
+                | DistanceMetric::Cityblock
+        )
     {
         1
     } else {
@@ -539,6 +545,14 @@ pub fn pdist(x: &[Vec<f64>], metric: DistanceMetric) -> Result<Vec<f64>, Spatial
         DistanceMetric::Euclidean if dim == 4 => {
             let points = collect_dim4_points(x);
             pdist_fill_euclidean4(&points, n, total, nthreads)
+        }
+        DistanceMetric::SqEuclidean if dim == 4 => {
+            let points = collect_dim4_points(x);
+            pdist_fill_dim4(&points, n, total, nthreads, fill_sqeuclidean4_rows)
+        }
+        DistanceMetric::Cityblock if dim == 4 => {
+            let points = collect_dim4_points(x);
+            pdist_fill_dim4(&points, n, total, nthreads, fill_cityblock4_rows)
         }
         DistanceMetric::Cosine if dim == 4 => {
             let points = collect_dim4_points(x);
@@ -764,6 +778,120 @@ fn pdist_fill_cosine4(
             let (seg, tail) = rest.split_at_mut(take);
             rest = tail;
             scope.spawn(move || fill_cosine4_rows(x, c, norms, n, r0, r1, seg));
+        }
+    });
+    result
+}
+
+/// SIMD-across-pairs fill of the SqEuclidean dim-4 condensed distances for rows `r0..r1`.
+/// Identical to `fill_euclidean4_rows` minus the final `sqrt` — per lane the squared sum runs
+/// in the same order as scalar `sqeuclidean` at d=4 (the `0.0+` accumulator start is a no-op),
+/// so BIT-identical to the metric helper.
+fn fill_sqeuclidean4_rows(
+    x: &[[f64; 4]],
+    c: &[Vec<f64>; 4],
+    n: usize,
+    r0: usize,
+    r1: usize,
+    seg: &mut [f64],
+) {
+    use std::simd::Simd;
+    const L: usize = 8;
+    let (c0, c1, c2, c3) = (&c[0], &c[1], &c[2], &c[3]);
+    let mut pos = 0usize;
+    for i in r0..r1 {
+        let a0 = Simd::<f64, L>::splat(c0[i]);
+        let a1 = Simd::<f64, L>::splat(c1[i]);
+        let a2 = Simd::<f64, L>::splat(c2[i]);
+        let a3 = Simd::<f64, L>::splat(c3[i]);
+        let row = n - 1 - i;
+        let start = i + 1;
+        let mut j = 0usize;
+        while j + L <= row {
+            let s = start + j;
+            let d0 = a0 - Simd::<f64, L>::from_slice(&c0[s..s + L]);
+            let d1 = a1 - Simd::<f64, L>::from_slice(&c1[s..s + L]);
+            let d2 = a2 - Simd::<f64, L>::from_slice(&c2[s..s + L]);
+            let d3 = a3 - Simd::<f64, L>::from_slice(&c3[s..s + L]);
+            (d0 * d0 + d1 * d1 + d2 * d2 + d3 * d3).copy_to_slice(&mut seg[pos + j..pos + j + L]);
+            j += L;
+        }
+        while j < row {
+            seg[pos + j] = sqeuclidean4(&x[i], &x[start + j]);
+            j += 1;
+        }
+        pos += row;
+    }
+}
+
+/// SIMD-across-pairs fill of the Cityblock (L1) dim-4 condensed distances for rows `r0..r1`.
+/// Per lane `|d0|+|d1|+|d2|+|d3|` runs in the same left-to-right order as scalar `cityblock`
+/// at d=4, so BIT-identical to the metric helper.
+fn fill_cityblock4_rows(
+    x: &[[f64; 4]],
+    c: &[Vec<f64>; 4],
+    n: usize,
+    r0: usize,
+    r1: usize,
+    seg: &mut [f64],
+) {
+    use std::simd::{Simd, num::SimdFloat};
+    const L: usize = 8;
+    let (c0, c1, c2, c3) = (&c[0], &c[1], &c[2], &c[3]);
+    let mut pos = 0usize;
+    for i in r0..r1 {
+        let a0 = Simd::<f64, L>::splat(c0[i]);
+        let a1 = Simd::<f64, L>::splat(c1[i]);
+        let a2 = Simd::<f64, L>::splat(c2[i]);
+        let a3 = Simd::<f64, L>::splat(c3[i]);
+        let row = n - 1 - i;
+        let start = i + 1;
+        let mut j = 0usize;
+        while j + L <= row {
+            let s = start + j;
+            let d0 = (a0 - Simd::<f64, L>::from_slice(&c0[s..s + L])).abs();
+            let d1 = (a1 - Simd::<f64, L>::from_slice(&c1[s..s + L])).abs();
+            let d2 = (a2 - Simd::<f64, L>::from_slice(&c2[s..s + L])).abs();
+            let d3 = (a3 - Simd::<f64, L>::from_slice(&c3[s..s + L])).abs();
+            (d0 + d1 + d2 + d3).copy_to_slice(&mut seg[pos + j..pos + j + L]);
+            j += L;
+        }
+        while j < row {
+            seg[pos + j] = cityblock(&x[i], &x[start + j]);
+            j += 1;
+        }
+        pos += row;
+    }
+}
+
+/// Parallel wrapper shared by the dim-4 SqEuclidean/Cityblock fast paths: identical row-block
+/// split as `pdist_fill_euclidean4` (disjoint contiguous pair ranges, i<j order → bit-identical
+/// regardless of worker count). `fill` is the per-row-block SIMD filler.
+fn pdist_fill_dim4<F>(x: &[[f64; 4]], n: usize, total: usize, nthreads: usize, fill: F) -> Vec<f64>
+where
+    F: Fn(&[[f64; 4]], &[Vec<f64>; 4], usize, usize, usize, &mut [f64]) + Sync,
+{
+    let c = dim4_soa(x);
+    let mut result = vec![0.0_f64; total];
+    if nthreads <= 1 {
+        fill(x, &c, n, 0, n, &mut result);
+        return result;
+    }
+    let bounds = pdist_row_bounds(n, nthreads);
+    let offset = |r: usize| -> usize { r * (n - 1) - r * (r.saturating_sub(1)) / 2 };
+    let c = &c;
+    let fill = &fill;
+    std::thread::scope(|scope| {
+        let mut rest: &mut [f64] = &mut result;
+        let mut prev = 0usize;
+        for w in 0..bounds.len() - 1 {
+            let r0 = bounds[w];
+            let r1 = bounds[w + 1];
+            let take = offset(r1) - prev;
+            prev = offset(r1);
+            let (seg, tail) = rest.split_at_mut(take);
+            rest = tail;
+            scope.spawn(move || fill(x, c, n, r0, r1, seg));
         }
     });
     result
@@ -6407,7 +6535,12 @@ mod tests {
                 ]
             })
             .collect();
-        for metric in [DistanceMetric::Euclidean, DistanceMetric::Cosine] {
+        for metric in [
+            DistanceMetric::Euclidean,
+            DistanceMetric::Cosine,
+            DistanceMetric::SqEuclidean,
+            DistanceMetric::Cityblock,
+        ] {
             let got = pdist(&x, metric).expect("pdist dim4 parallel fast path");
             let mut want = Vec::with_capacity(n * (n - 1) / 2);
             for i in 0..n {
@@ -6439,7 +6572,12 @@ mod tests {
                 ]
             })
             .collect();
-        for metric in [DistanceMetric::Euclidean, DistanceMetric::Cosine] {
+        for metric in [
+            DistanceMetric::Euclidean,
+            DistanceMetric::Cosine,
+            DistanceMetric::SqEuclidean,
+            DistanceMetric::Cityblock,
+        ] {
             let got = pdist(&x, metric).expect("pdist dim4 fast path");
             let mut want = Vec::with_capacity(x.len() * (x.len() - 1) / 2);
             for i in 0..x.len() {
