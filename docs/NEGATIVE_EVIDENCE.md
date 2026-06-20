@@ -1200,3 +1200,27 @@ interior-direct (boundary-map only the ~window-1 edge cells).**
   cores in Rust vs scipy's vectorized-but-Python-bound path. Additive (new pub
   struct); no change to the 1-D GaussianKde. The 5 failing zscore/mad/sklearn stats
   tests are pre-existing/unrelated.
+
+## 2026-06-20 - MultivariateNormal::logpdf_many parallel (n>=5 gated) - WIN up to 2.50x self / 3.62x vs scipy
+
+- Agent: cc / MistyBirch. `logpdf_many` was a sequential `xs.iter().map()` with reused
+  scratch buffers. Parallelized over the independent query points (per-thread
+  centered/solved buffers) — bit-identical (same per-point forward-subst Mahalanobis,
+  order preserved). pdf_many inherits.
+- Correctness: byte-identical to mapping the scalar `logpdf` — proven by
+  multivariate_normal_logpdf_many_parallel_is_bit_identical (6-D, 60k points, to_bits
+  equality) + existing scipy-reference tests (7/7 mvn tests pass).
+- GATED on dimension `n >= 5`: at low n the O(n²) per-point solve is too cheap
+  (memory-bound), so threads regress it. Measured crossover (m=100k):
+
+| d | seq | par | decision | par vs scipy |
+| --- | ---: | ---: | --- | --- |
+| 3  | 2.79 ms | 3.30 ms (0.85x) | **keep sequential** | (seq 2.06x) |
+| 5  | 4.83 ms | 3.42 ms (1.41x) | parallel | 1.68x |
+| 8  | 7.75 ms | 3.58 ms (2.16x) | parallel | — |
+| 10 | 9.85 ms | 3.94 ms (2.50x) | parallel | **3.62x** (was 1.45x) |
+
+- fsci already beat scipy sequentially (d=3 2.06x, d=10 1.45x); the gated parallel
+  path lifts high-d to 3.62x while the common 2-D/3-D stays on the faster sequential
+  path. The n<5 regression is exactly the "parallel gate must scale with per-element
+  OP COST" lesson — gate on n, not raw work. Bench `multivariate_normal_pdf` added.

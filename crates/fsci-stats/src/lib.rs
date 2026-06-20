@@ -7010,34 +7010,72 @@ impl MultivariateNormal {
         let n = self.mean.len();
         let dim = n as f64;
         let const_term = dim * (2.0 * PI).ln() + self.log_det;
-        let mut centered = vec![0.0; n];
-        let mut solved = vec![0.0; n];
-        xs.iter()
-            .map(|x| {
-                if x.len() != n {
-                    return Err(StatsError::InvalidArgument(format!(
-                        "x length ({}) must match dimension ({})",
-                        x.len(),
-                        n
-                    )));
-                }
-                for i in 0..n {
-                    centered[i] = x[i] - self.mean[i];
-                }
-                // Forward substitution chol·solved = centered (inlined to reuse buffers).
-                for i in 0..n {
-                    let sum = (0..i).map(|j| self.chol[i][j] * solved[j]).sum::<f64>();
-                    if self.chol[i][i] == 0.0 {
-                        return Err(StatsError::InvalidArgument(
-                            "singular lower-triangular system".to_string(),
-                        ));
+        if xs.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Validate up front (same errors the sequential map would surface: a length
+        // mismatch short-circuits the whole result to Err before any value is
+        // returned; a singular factor — unreachable for a validly-constructed SPD
+        // covariance — is a property of `self`, identical for every point).
+        for x in xs {
+            if x.len() != n {
+                return Err(StatsError::InvalidArgument(format!(
+                    "x length ({}) must match dimension ({})",
+                    x.len(),
+                    n
+                )));
+            }
+        }
+        if (0..n).any(|i| self.chol[i][i] == 0.0) {
+            return Err(StatsError::InvalidArgument(
+                "singular lower-triangular system".to_string(),
+            ));
+        }
+
+        // Pure per-point log-density (forward-substitution Mahalanobis). Identical
+        // arithmetic and order regardless of the owning thread, so the parallel
+        // path is bit-identical to the sequential map.
+        let eval = |x: &[f64], centered: &mut [f64], solved: &mut [f64]| -> f64 {
+            for i in 0..n {
+                centered[i] = x[i] - self.mean[i];
+            }
+            for i in 0..n {
+                let sum = (0..i).map(|j| self.chol[i][j] * solved[j]).sum::<f64>();
+                solved[i] = (centered[i] - sum) / self.chol[i][i];
+            }
+            let mahalanobis = solved.iter().map(|value| value * value).sum::<f64>();
+            -0.5 * (const_term + mahalanobis)
+        };
+
+        let m = xs.len();
+        let work = (m as u64).saturating_mul((n * n) as u64);
+        let threads = std::thread::available_parallelism()
+            .map(|c| c.get())
+            .unwrap_or(1)
+            .min(m);
+        // Parallelize only for dimension n >= 5: at low n the O(n²) per-point solve
+        // is too cheap (memory-bound), so thread overhead regresses it (measured:
+        // n=3 0.85x, n=5 1.41x, n=8 2.16x, n=10 2.50x at m=100k). Common 2-D/3-D
+        // data stays on the already-scipy-beating sequential path.
+        if n < 5 || work < 1 << 18 || threads <= 1 || m < 4 {
+            let mut centered = vec![0.0; n];
+            let mut solved = vec![0.0; n];
+            return Ok(xs.iter().map(|x| eval(x, &mut centered, &mut solved)).collect());
+        }
+        let mut out = vec![0.0f64; m];
+        let chunk = m.div_ceil(threads);
+        std::thread::scope(|scope| {
+            for (xchunk, ochunk) in xs.chunks(chunk).zip(out.chunks_mut(chunk)) {
+                scope.spawn(move || {
+                    let mut centered = vec![0.0; n];
+                    let mut solved = vec![0.0; n];
+                    for (x, slot) in xchunk.iter().zip(ochunk) {
+                        *slot = eval(x, &mut centered, &mut solved);
                     }
-                    solved[i] = (centered[i] - sum) / self.chol[i][i];
-                }
-                let mahalanobis = solved.iter().map(|value| value * value).sum::<f64>();
-                Ok(-0.5 * (const_term + mahalanobis))
-            })
-            .collect()
+                });
+            }
+        });
+        Ok(out)
     }
 
     /// Density at many points (`exp` of [`logpdf_many`](Self::logpdf_many)).
@@ -48375,6 +48413,36 @@ mod tests {
         for (i, x) in pts.iter().enumerate() {
             assert_eq!(batch_lp[i], rv.logpdf(x).unwrap(), "logpdf_many != logpdf");
             assert_eq!(batch_p[i], rv.pdf(x).unwrap(), "pdf_many != pdf");
+        }
+    }
+
+    #[test]
+    fn multivariate_normal_logpdf_many_parallel_is_bit_identical() {
+        // 6-D, large input (n>=5 + work ≥ 2^18) to exercise the threaded path; it
+        // must be bit-identical to mapping the scalar logpdf.
+        let d = 6usize;
+        let mean: Vec<f64> = (0..d).map(|i| 0.1 * i as f64 - 0.3).collect();
+        let mut cov = vec![vec![0.0f64; d]; d];
+        for i in 0..d {
+            for j in 0..d {
+                cov[i][j] = if i == j { 1.5 + i as f64 * 0.3 } else { 0.15 };
+            }
+        }
+        let rv = MultivariateNormal::new(&mean, &cov).expect("mvn");
+        let mut state = 0x9E37_79B9_u64;
+        let mut nx = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let pts: Vec<Vec<f64>> = (0..60_000)
+            .map(|_| (0..d).map(|_| nx() * 6.0 - 3.0).collect())
+            .collect();
+        let batch = rv.logpdf_many(&pts).expect("logpdf_many");
+        assert_eq!(batch.len(), pts.len());
+        for (x, &b) in pts.iter().zip(&batch) {
+            assert_eq!(b.to_bits(), rv.logpdf(x).unwrap().to_bits(), "parallel != serial");
         }
     }
 
