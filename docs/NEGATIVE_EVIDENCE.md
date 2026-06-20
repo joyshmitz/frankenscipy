@@ -1244,3 +1244,25 @@ interior-direct (boundary-map only the ~window-1 edge cells).**
 
 - Purely additive (new batch methods); scalar path untouched. Same Cholesky+
   Mahalanobis+parallel machinery as the mvn/KDE-nd wins this session.
+
+## 2026-06-20 - rank tests (ks_2samp/mannwhitneyu/kruskal) WINS + rankdata sort_unstable - RESUME inline
+
+- Agent: cc / MistyBirch.
+- MEASURED head-to-head (n=200k per sample), all fsci WINS — added a `rank_tests` bench:
+
+| test | fsci | scipy | vs scipy |
+| --- | ---: | ---: | --- |
+| ks_2samp     | 8.14 ms  | 99.54 ms | **12.2x faster** |
+| mannwhitneyu | 26.84 ms | 66.62 ms | **2.48x faster** |
+| kruskal      | 27.19 ms | 64.36 ms | **2.37x faster** |
+
+- SHIPPED micro-opt: `rankdata_ties` (the rank engine behind mannwhitneyu/kruskal/
+  rankdata/...) used a STABLE `sort_by`. Tied elements all receive the SAME rank
+  (averaged/min/max/dense over the tie run) written back by ORIGINAL INDEX, so their
+  relative order in the sorted array can't affect the output → `sort_unstable_by` is
+  **byte-identical and strictly faster** (mwu/kruskal ~1.08x; broad — every rank-based
+  test inherits it). Byte-identity proven: rankdata 8/8 (incl. all tie methods +
+  scipy-reference), mannwhitneyu 8/8, kruskal 6/6.
+- ks_2samp (12x) sorts the two samples directly (no rankdata); already optimal. The
+  mwu/kruskal residual is the O(n log n) sort + tie pass (sort-bound; no safe parallel
+  sort lever). Coverage protects all three.

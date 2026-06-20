@@ -3,7 +3,7 @@ use std::hint::black_box;
 use fsci_stats::{
     HaltonSampler, SobolSampler, SomersDInput, acf, argsort, centered_discrepancy, ecdf, histogram,
     binned_statistic, binned_statistic_2d, energy_distance, wasserstein_distance, binned_statistic_dd, kendalltau, l2_star_discrepancy, mannkendall, mixture_discrepancy, pacf,
-    psd_welch, rand_index, siegelslopes, somersd, theilslopes, wraparound_discrepancy,
+    ks_2samp, kruskal, mannwhitneyu, psd_welch, rand_index, siegelslopes, somersd, theilslopes, wraparound_discrepancy,
 };
 
 fn deterministic_data(n: usize) -> Vec<f64> {
@@ -163,6 +163,17 @@ fn bench_distribution_batch(c: &mut Criterion) {
 /// Gaussian KDE evaluation at many points — each point is an O(n_data) sum over the
 /// dataset (heavy per-point work), parallelized in evaluate_many. Head-to-head vs
 /// scipy.stats.gaussian_kde (docs/perf_oracle_kde.py).
+fn bench_rank_tests(c: &mut Criterion) {
+    let mut group = c.benchmark_group("rank_tests");
+    let n = 200_000usize;
+    let x: Vec<f64> = (0..n).map(|i| ((i * 2654435761usize) % 100003) as f64 * 1e-4).collect();
+    let y: Vec<f64> = (0..n).map(|i| ((i * 40503usize + 7) % 100003) as f64 * 1e-4 + 0.1).collect();
+    group.bench_function("ks_2samp_200k", |b| b.iter(|| ks_2samp(black_box(&x), black_box(&y))));
+    group.bench_function("mannwhitneyu_200k", |b| b.iter(|| mannwhitneyu(black_box(&x), black_box(&y))));
+    group.bench_function("kruskal_200k", |b| b.iter(|| kruskal(&[black_box(&x), black_box(&y)])));
+    group.finish();
+}
+
 fn bench_mvt_pdf(c: &mut Criterion) {
     use criterion::BenchmarkId;
     use fsci_stats::MultivariateT;
@@ -385,6 +396,7 @@ criterion_group!(
     bench_kde,
     bench_kde_nd,
     bench_mvn_pdf,
-    bench_mvt_pdf
+    bench_mvt_pdf,
+    bench_rank_tests
 );
 criterion_main!(benches);
