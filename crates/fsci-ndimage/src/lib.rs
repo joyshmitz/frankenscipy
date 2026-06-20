@@ -5856,19 +5856,40 @@ pub fn distance_transform_edt_full(
         let mut axis_indices = (0..input.ndim())
             .map(|_| NdArray::zeros(input.shape.clone()))
             .collect::<Vec<_>>();
-        for flat in 0..input.data.len() {
-            let is_background = input.data[flat] == 0.0;
-            if let Some(output) = distances.as_mut() {
-                output.data[flat] = if is_background {
-                    0.0
-                } else {
-                    squared[flat].sqrt()
-                };
+        if input.ndim() == 2 {
+            let cols = input.shape[1];
+            let (axis0, rest) = axis_indices.split_at_mut(1);
+            let rows = &mut axis0[0].data;
+            let cols_out = &mut rest[0].data;
+            for flat in 0..input.data.len() {
+                let is_background = input.data[flat] == 0.0;
+                if let Some(output) = distances.as_mut() {
+                    output.data[flat] = if is_background {
+                        0.0
+                    } else {
+                        squared[flat].sqrt()
+                    };
+                }
+                let nearest_flat = if is_background { flat } else { feat[flat] };
+                rows[flat] = (nearest_flat / cols) as f64;
+                cols_out[flat] = (nearest_flat % cols) as f64;
             }
-            let nearest_flat = if is_background { flat } else { feat[flat] };
-            let nearest_coords = input.unravel(nearest_flat);
-            for (axis, output) in axis_indices.iter_mut().enumerate() {
-                output.data[flat] = nearest_coords[axis] as f64;
+        } else {
+            let mut nearest_coords = vec![0usize; input.ndim()];
+            for flat in 0..input.data.len() {
+                let is_background = input.data[flat] == 0.0;
+                if let Some(output) = distances.as_mut() {
+                    output.data[flat] = if is_background {
+                        0.0
+                    } else {
+                        squared[flat].sqrt()
+                    };
+                }
+                let nearest_flat = if is_background { flat } else { feat[flat] };
+                unravel_into(nearest_flat, &input.strides, &mut nearest_coords);
+                for (axis, output) in axis_indices.iter_mut().enumerate() {
+                    output.data[flat] = nearest_coords[axis] as f64;
+                }
             }
         }
         return Ok(DistanceTransformEdtResult {
@@ -6156,6 +6177,22 @@ fn unravel_into(mut flat: usize, strides: &[usize], out: &mut [usize]) {
     }
 }
 
+fn for_each_axis_line_start(
+    total: usize,
+    axis_len: usize,
+    axis_stride: usize,
+    mut visit: impl FnMut(usize),
+) {
+    let block = axis_len * axis_stride;
+    let mut block_start = 0usize;
+    while block_start < total {
+        for offset in 0..axis_stride {
+            visit(block_start + offset);
+        }
+        block_start += block;
+    }
+}
+
 fn distance_transform_by_metric(
     input: &NdArray,
     metric: DistanceMetric,
@@ -6312,11 +6349,7 @@ fn edt_squared_felzenszwalb(input: &NdArray, sampling: &[f64]) -> Vec<f64> {
         v.resize(len, 0);
         z.resize(len + 1, 0.0);
 
-        // Every flat index whose coordinate along `axis` is 0 starts one line.
-        for base in 0..n {
-            if !(base / stride).is_multiple_of(len) {
-                continue;
-            }
+        for_each_axis_line_start(n, len, stride, |base| {
             for t in 0..len {
                 line[t] = f[base + t * stride];
             }
@@ -6324,7 +6357,7 @@ fn edt_squared_felzenszwalb(input: &NdArray, sampling: &[f64]) -> Vec<f64> {
             for t in 0..len {
                 f[base + t * stride] = d[t];
             }
-        }
+        });
     }
     f
 }
@@ -6374,10 +6407,7 @@ fn edt_squared_felzenszwalb_with_indices(
         z.resize(len + 1, 0.0);
         w.resize(len, 0);
 
-        for base in 0..n {
-            if !(base / stride).is_multiple_of(len) {
-                continue;
-            }
+        for_each_axis_line_start(n, len, stride, |base| {
             for t in 0..len {
                 line[t] = f[base + t * stride];
                 feat_line[t] = feat[base + t * stride];
@@ -6393,7 +6423,7 @@ fn edt_squared_felzenszwalb_with_indices(
                     feat[base + t * stride] = feat_line[w[t]];
                 }
             }
-        }
+        });
     }
     (f, feat)
 }

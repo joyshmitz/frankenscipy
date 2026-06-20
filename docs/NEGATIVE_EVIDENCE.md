@@ -6,6 +6,32 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-20 - frankenscipy-8l8r1.127 - EDT feature-transform line starts
+
+- Agent: cod-b / MistyBirch
+- Decision: KEEP as a measured same-worker internal win and partial SciPy gap
+  close. Strict SciPy score improves to `1/3/0` for the measured rows, but the
+  sub-cluster remains a release-readiness loss overall.
+- Artifact:
+  `tests/artifacts/perf/frankenscipy-8l8r1.127-edt-line-starts-EVIDENCE.md`
+- Same-worker rch internal score versus the prior feature-transform route:
+  `4/0/0`.
+- Strict SciPy score for final source: `1/3/0`.
+
+| Image | Prior Rust | Final Rust | SciPy `return_indices` | Verdict |
+| --- | ---: | ---: | ---: | --- |
+| 64x64 | 325.742 us | 216.733 us | 173.434 us | internal 1.50x; Rust 1.25x slower |
+| 128x128 | 1.380 ms | 1.207 ms | 775.685 us | internal 1.14x; Rust 1.56x slower |
+| 192x192 | 3.814 ms | 2.107 ms | 2.280155 ms | internal 1.81x; Rust 1.08x faster |
+| 256x256 | 5.854 ms | 4.855 ms | 4.288605 ms | internal 1.21x; Rust 1.13x slower |
+
+Negative evidence: exact line-start enumeration and no per-cell coordinate
+allocation help, but they do not fully beat SciPy's compiled C feature
+transform. Do not retry flat-index scan filtering or per-cell `unravel`/Vec
+allocation in this path; route next to deeper feature-transform constants such
+as fused axis passes, scratch layout, SIMD-friendly 1-D lower-envelope work, or
+tile-specialized 2-D kernels with the same nearest-background proof.
+
 ## 2026-06-20 - frankenscipy-6l77z - gaussian_filter inner1 reflect reject
 
 - Agent: cod-a / MistyBirch

@@ -1,5 +1,52 @@
 # Performance Release-Readiness Scorecard
 
+## 2026-06-20 - fsci-ndimage EDT feature-transform line-start gauntlet
+
+- Agent: cod-b / MistyBirch
+- Bead: `frankenscipy-8l8r1.127`
+- Decision: KEEP. Exact separable line-start enumeration plus flat 2-D index
+  materialization improves every `return_indices` row on the same rch worker
+  versus the prior feature-transform route. Release-readiness remains partial:
+  strict SciPy score is `1/3/0`, with a win at 192x192 and losses at
+  64/128/256.
+- Artifact:
+  `tests/artifacts/perf/frankenscipy-8l8r1.127-edt-line-starts-EVIDENCE.md`
+
+| Gate | Result | Notes |
+| --- | --- | --- |
+| rch same-worker baseline | PASS | prior feature-transform route on `vmi1152480`: 325.742 us / 1.380 ms / 3.814 ms / 5.854 ms for 64/128/192/256 `return_indices` rows |
+| rch same-worker final | PASS | final source on `vmi1152480`: 216.733 us / 1.207 ms / 2.107 ms / 4.855 ms; internal speedups 1.50x / 1.14x / 1.81x / 1.21x |
+| SciPy oracle | PASS | local SciPy 1.17.1 via `docs/perf_oracle_edt_indices.py --reps 20`: 173.434 us / 775.685 us / 2.280155 ms / 4.288605 ms |
+| Isomorphism harness | PASS | `perf_edt` printed `0 mismatches / 10876 cells` on both baseline and final runs |
+| Focused EDT tests | PASS | `cargo test -p fsci-ndimage distance_transform_edt --lib -- --nocapture` via rch: 15 passed / 0 failed |
+| Full ndimage lib tests | PASS | `cargo test -p fsci-ndimage --lib -- --nocapture` via rch: 242 passed / 0 failed |
+| Per-crate compile | PASS | `cargo check -p fsci-ndimage --all-targets` via rch `hz1`; unrelated warnings remained in `fsci-interpolate` and `diff_geom` |
+| Local live SciPy conformance | PASS | `FSCI_REQUIRE_SCIPY_ORACLE=1 cargo test -p fsci-conformance --test diff_ndimage_distance_transform_edt -- --nocapture`: 1 passed / 0 failed |
+| Touched-file formatting | PASS | `rustfmt --edition 2024 --check crates/fsci-ndimage/src/lib.rs` |
+| Diff hygiene | PASS | `git diff --check -- crates/fsci-ndimage/src/lib.rs` |
+| Full crate formatting | BLOCKED | `cargo fmt -p fsci-ndimage --check` is blocked by pre-existing drift in `ndimage_bench.rs` and `diff_fourier.rs` |
+| Clippy `-D warnings` | BLOCKED | `cargo clippy -p fsci-ndimage --all-targets -- -D warnings` stops before this patch on existing `fsci-linalg` dependency lints |
+
+| Workload / route | Mean | Ratio | Verdict |
+| --- | ---: | ---: | --- |
+| Rust final `return_indices`, 64x64 | 216.733 us | 1.50x faster than prior; 1.25x slower than SciPy | internal keep, SciPy loss |
+| SciPy `distance_transform_edt(return_indices=True)`, 64x64 | 173.434 us | 1.00x oracle | reference |
+| Rust final `return_indices`, 128x128 | 1.207 ms | 1.14x faster than prior; 1.56x slower than SciPy | internal keep, SciPy loss |
+| SciPy `distance_transform_edt(return_indices=True)`, 128x128 | 775.685 us | 1.00x oracle | reference |
+| Rust final `return_indices`, 192x192 | 2.107 ms | 1.81x faster than prior; 1.08x faster than SciPy | internal keep, SciPy win |
+| SciPy `distance_transform_edt(return_indices=True)`, 192x192 | 2.280155 ms | 1.00x oracle | reference |
+| Rust final `return_indices`, 256x256 | 4.855 ms | 1.21x faster than prior; 1.13x slower than SciPy | internal keep, SciPy loss |
+| SciPy `distance_transform_edt(return_indices=True)`, 256x256 | 4.288605 ms | 1.00x oracle | reference |
+
+Readiness notes:
+
+- The useful lever was eliminating dead flat-index scans and per-cell coordinate
+  allocation, not changing EDT semantics. The nearest-background feature index
+  propagation and tie behavior stay on the existing exact transform.
+- Future EDT work should go below this layer: feature-index scratch layout,
+  fused/tiled axis passes, SIMD-friendly lower-envelope kernels, or a
+  size-specialized 2-D feature transform.
+
 ## 2026-06-20 - fsci-ndimage gaussian_filter inner1 reflect reject
 
 - Agent: cod-a / MistyBirch

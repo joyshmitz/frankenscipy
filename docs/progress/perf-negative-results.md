@@ -4,6 +4,77 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-20 - frankenscipy-8l8r1.127 - EDT feature-transform line starts
+
+- Agent: cod-b / MistyBirch
+- Lever: tighten `distance_transform_edt(return_indices=True)` after the
+  feature-transform complexity keep by enumerating exact separable line starts
+  directly instead of scanning every flat index with division/modulo, then
+  materializing 2-D output indices with flat row/column arithmetic and reusing a
+  coordinate scratch buffer for generic ndim. The feature-transform math,
+  winner propagation, tie behavior, and background-free fallback are unchanged.
+- Graveyard/artifact route tested: cache/data-movement and allocation removal
+  at the remaining constant-factor layer. This is the non-repeated path after
+  the prior catastrophic O(foreground * background) brute-force gap was closed:
+  avoid dead line-start scans and per-cell coordinate Vec allocation rather
+  than changing the nearest-background algorithm.
+- Decision: KEEP. Same-worker rch `vmi1152480` improves every
+  `return_indices` row versus the prior feature-transform route, with a strict
+  final SciPy score of `1/3/0`. This is still not full parity, so the residual
+  loss remains routed to deeper feature-transform constants.
+- Artifact:
+  `tests/artifacts/perf/frankenscipy-8l8r1.127-edt-line-starts-EVIDENCE.md`
+- Baseline Rust command:
+  `AGENT_NAME=MistyBirch RCH_REQUIRE_REMOTE=1 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec -- cargo run --release -p fsci-ndimage --bin perf_edt`
+- Final Rust command:
+  `AGENT_NAME=MistyBirch RCH_REQUIRE_REMOTE=1 RCH_WORKER=vmi1152480 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec -- cargo run --release -p fsci-ndimage --bin perf_edt`
+- SciPy oracle command:
+  `python3 docs/perf_oracle_edt_indices.py --reps 20`
+- Benchmark evidence:
+
+  | Image | Prior Rust `feat` | Final Rust `feat` | Internal speedup | SciPy oracle | Final vs SciPy |
+  | --- | ---: | ---: | ---: | ---: | --- |
+  | 64x64 | 325.742 us | 216.733 us | 1.50x | 173.434 us | 1.25x slower |
+  | 128x128 | 1.380 ms | 1.207 ms | 1.14x | 775.685 us | 1.56x slower |
+  | 192x192 | 3.814 ms | 2.107 ms | 1.81x | 2.280155 ms | 1.08x faster |
+  | 256x256 | 5.854 ms | 4.855 ms | 1.21x | 4.288605 ms | 1.13x slower |
+
+- Secondary distance-only rows also improved on the same run
+  (`259.977 us -> 234.453 us`, `1.094 ms -> 1.038 ms`,
+  `2.206 ms -> 2.119 ms`) because the same direct line-start enumeration feeds
+  the distance-only separable pass.
+- SciPy win/loss/neutral for final source: `1/3/0`.
+- Same-worker internal keep/loss/neutral versus previous feature-transform
+  route: `4/0/0`.
+- Correctness/conformance guards:
+  - PASS: `perf_edt` isomorphism printed **0 mismatches / 10876 cells** on
+    baseline and final runs, with identical digest rows.
+  - PASS: local live SciPy conformance:
+    `FSCI_REQUIRE_SCIPY_ORACLE=1 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b cargo test -p fsci-conformance --test diff_ndimage_distance_transform_edt -- --nocapture`
+    = **1 passed / 0 failed**.
+  - PASS: focused ndimage EDT tests via rch:
+    `cargo test -p fsci-ndimage distance_transform_edt --lib -- --nocapture`
+    = **15 passed / 0 failed**.
+  - PASS: full ndimage lib tests via rch:
+    `cargo test -p fsci-ndimage --lib -- --nocapture` =
+    **242 passed / 0 failed**.
+  - PASS: `cargo check -p fsci-ndimage --all-targets` via rch `hz1`;
+    unrelated warnings remained in `fsci-interpolate` and `diff_geom`.
+  - PASS: touched-file rustfmt and `git diff --check`.
+  - BLOCKED: `cargo fmt -p fsci-ndimage --check` remains blocked by
+    pre-existing rustfmt drift in `crates/fsci-ndimage/benches/ndimage_bench.rs`
+    and `crates/fsci-ndimage/src/bin/diff_fourier.rs`.
+  - BLOCKED: `cargo clippy -p fsci-ndimage --all-targets -- -D warnings`
+    stopped before this patch on existing `fsci-linalg` dependency lints
+    (`needless_range_loop`, `needless_borrow`).
+- Negative evidence: do not retry the old `for base in 0..n` plus
+  `(base / stride).is_multiple_of(len)` line-start filter or per-output
+  `input.unravel(nearest_flat)` allocation in this path. The next attempt must
+  be below this layer: fused/tiled axis passes, a scratch layout that reduces
+  feature-index traffic, SIMD-friendly 1-D lower-envelope work, or a
+  specialized 2-D feature-transform kernel with the same nearest-background
+  validity proof.
+
 ## 2026-06-20 - frankenscipy-6l77z - ndimage gaussian_filter inner1 reflect reject
 
 - Agent: cod-a / MistyBirch
