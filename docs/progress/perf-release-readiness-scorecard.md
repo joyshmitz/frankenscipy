@@ -1,5 +1,85 @@
 # Performance Release-Readiness Scorecard
 
+## 2026-06-20 - fsci-ndimage label mean one-based contiguous gauntlet
+
+- Agent: cod-b / MistyBirch
+- Bead: `frankenscipy-8l8r1.126`
+- Decision: KEEP. The one-based contiguous index fast path is a measured
+  internal win over the prior dense table and turns the smallest label-mean row
+  into a SciPy win. The sub-cluster remains mixed at strict `1/3/0` against
+  SciPy, with the largest row near parity at 1.03x slower.
+- Artifact:
+  `tests/artifacts/perf/frankenscipy-8l8r1.126-label-mean-one-based-EVIDENCE.md`
+
+| Gate | Result | Notes |
+| --- | --- | --- |
+| rch release A/B | PASS | `cargo run --release -p fsci-ndimage --bin perf_label_stats` on `hz2`: one_based is 1.08x / 1.08x / 1.36x / 1.33x faster than reconstructed dense_table, `mism=0/0/0/0/0` |
+| Same-host SciPy head-to-head | PASS | transferred rch release binary vs local SciPy 1.17.1; final source is 1.23x faster on N=65536 K=512 and 1.09x / 1.19x / 1.03x slower on the remaining rows |
+| Focused one-based test | PASS | `cargo test -p fsci-ndimage mean_one_based_contiguous_lookup_preserves_exact_label_semantics --lib -- --nocapture` via rch `hz2`: 1 passed / 0 failed |
+| Full ndimage lib tests | PASS | `cargo test -p fsci-ndimage --lib -- --nocapture` via rch `hz2`: 242 passed / 0 failed |
+| Per-crate compile | PASS | `cargo check -p fsci-ndimage --all-targets` via rch `hz1`; unrelated warnings remain in `fsci-interpolate` and `diff_geom` |
+| Local live SciPy conformance | PASS | `FSCI_REQUIRE_SCIPY_ORACLE=1 cargo test -p fsci-conformance --test diff_ndimage -- --nocapture`: 5 passed / 0 failed |
+| Touched-file formatting | PASS | `rustfmt --edition 2024 --check crates/fsci-ndimage/src/lib.rs crates/fsci-ndimage/src/bin/perf_label_stats.rs` |
+| Diff hygiene | PASS | `git diff --check -- crates/fsci-ndimage/src/lib.rs crates/fsci-ndimage/src/bin/perf_label_stats.rs` |
+| Changed-file UBS scan | PASS | `ubs` exited 0 with 0 critical issues; broad warnings remain inventory |
+| Clippy `-D warnings` | BLOCKED | `cargo clippy -p fsci-ndimage --all-targets -- -D warnings` stopped before this patch on existing `fsci-linalg` dependency lints (`needless_range_loop`, `needless_borrow`) |
+
+| Workload / route | Mean | Ratio | Verdict |
+| --- | ---: | ---: | --- |
+| Rust one_based mean, N=65536 K=512 | 153.257 us | 1.23x faster than SciPy; 1.01x faster than dense_table on same host | SciPy win, internal keep |
+| SciPy `ndimage.mean`, N=65536 K=512 | 0.189 ms | 1.00x oracle | reference |
+| Rust one_based mean, N=262144 K=1024 | 634.996 us | 1.09x slower than SciPy; 1.02x faster than dense_table on same host | SciPy loss, internal keep |
+| SciPy `ndimage.mean`, N=262144 K=1024 | 0.585 ms | 1.00x oracle | reference |
+| Rust one_based mean, N=262144 K=2048 | 687.054 us | 1.19x slower than SciPy; 1.25x faster than dense_table on same host | SciPy loss, internal keep |
+| SciPy `ndimage.mean`, N=262144 K=2048 | 0.576 ms | 1.00x oracle | reference |
+| Rust one_based mean, N=589824 K=4096 | 1.423 ms | 1.03x slower than SciPy; 1.25x faster than dense_table on same host | SciPy near-parity loss, internal keep |
+| SciPy `ndimage.mean`, N=589824 K=4096 | 1.380 ms | 1.00x oracle | reference |
+
+Readiness notes:
+
+- The profitable lever was not another scalar label classifier tweak; it was
+  specializing the common one-based label-index contract and eliminating a
+  short-lived dense table from the hot reduction path.
+- Future work should target parallel/cache-tiled accumulation or sorted spans.
+
+## 2026-06-20 - fsci-cluster linkage triangular-arena reject
+
+- Agent: cod-a / MistyBirch
+- Bead: `frankenscipy-va60h`
+- Decision: REJECT and REVERT. The compact upper-triangular inter-cluster arena
+  preserved exact linkage outputs but lost wall time versus the retained flat
+  full arena. Release-readiness score for this attempted lever is `0/2/0`
+  against SciPy and `0/2/0` against the restored current route.
+- Artifact:
+  `tests/artifacts/perf/2026-06-20-va60h-triangular-arena-reject-EVIDENCE.md`
+
+| Gate | Result | Notes |
+| --- | --- | --- |
+| Local same-machine SciPy gauntlet | PASS | `va60h_gauntlet_linkage` ran Rust current/candidate plus SciPy oracle in one Criterion group |
+| rch exact-output harness | PARTIAL | remote command printed `0 mismatches / 7200 linkage matrices`; rch exited 102 afterward because artifact retrieval timed out |
+| Focused linkage unit guard | PASS | `cargo test -p fsci-cluster linkage_from_distances --lib -- --nocapture`: 2 passed / 0 failed |
+| Local live SciPy conformance | PASS | `FSCI_REQUIRE_SCIPY_ORACLE=1 cargo test -p fsci-conformance --test diff_cluster_linkage_from_distances -- --nocapture`: 1 passed / 0 failed |
+| Candidate revert | PASS | `crates/fsci-cluster/src/lib.rs` restored to the prior flat full arena before staging |
+| rch SciPy rows | BLOCKED | worker Python could not import SciPy; local SciPy 1.17.1 supplied head-to-head rows |
+| Final code delta | PASS | no production code change remains from the rejected lever |
+
+| Workload / route | Mean | Ratio | Verdict |
+| --- | ---: | ---: | --- |
+| Restored flat `linkage(Average)`, n=800 d=4 | 7.5772 ms | 1.723x slower than same-run SciPy baseline | retained current |
+| Triangular candidate `linkage(Average)`, n=800 d=4 | 8.8260 ms | 2.064x slower than SciPy; 1.165x slower than current | reject |
+| SciPy `linkage(method="average")`, n=800 d=4 | 4.2755 ms | 1.00x oracle | reference |
+| Restored flat `linkage(Ward)`, n=800 d=4 | 7.4597 ms | 1.480x slower than same-run SciPy baseline | retained current |
+| Triangular candidate `linkage(Ward)`, n=800 d=4 | 9.9240 ms | 1.809x slower than SciPy; 1.330x slower than current | reject |
+| SciPy `linkage(method="ward")`, n=800 d=4 | 5.4866 ms | 1.00x oracle | reference |
+
+Readiness notes:
+
+- Halving the arena storage did not help this path because the row-major full
+  matrix already gives cheap row scans; triangular indexing adds arithmetic and
+  less regular accesses during merged-cluster updates.
+- Future `fsci-cluster` linkage work should move to algorithmic specializations
+  rather than another full-square arena layout tweak.
+
 ## 2026-06-20 - fsci-special jnjnp_zeros Cephes j1 gauntlet
 
 - Agent: cod-b / MistyBirch

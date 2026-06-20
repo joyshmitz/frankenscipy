@@ -5077,6 +5077,26 @@ fn measurement_dense_label_pos(label_to_pos: &[usize], label_value: f64) -> Opti
     (pos != MEASUREMENT_DENSE_LABEL_EMPTY).then_some(pos)
 }
 
+fn measurement_one_based_contiguous_index_len(index: &[usize]) -> Option<usize> {
+    for (pos, &wanted_label) in index.iter().enumerate() {
+        if wanted_label != pos.checked_add(1)? {
+            return None;
+        }
+    }
+    Some(index.len())
+}
+
+fn measurement_one_based_label_pos(label_count: usize, label_value: f64) -> Option<usize> {
+    if !(label_value >= 1.0 && label_value <= label_count as f64) {
+        return None;
+    }
+    let label = label_value as usize;
+    if label as f64 != label_value {
+        return None;
+    }
+    Some(label - 1)
+}
+
 fn measurement_label_mean(
     input: &NdArray,
     labels: Option<&NdArray>,
@@ -5099,7 +5119,14 @@ fn measurement_label_mean(
 
     match index {
         Some(index) => {
-            if let Some(label_to_pos) = measurement_dense_label_positions(index) {
+            if let Some(label_count) = measurement_one_based_contiguous_index_len(index) {
+                for (&value, &label_value) in input.data.iter().zip(&labels.data) {
+                    if let Some(pos) = measurement_one_based_label_pos(label_count, label_value) {
+                        sums[pos] += value;
+                        counts[pos] += 1;
+                    }
+                }
+            } else if let Some(label_to_pos) = measurement_dense_label_positions(index) {
                 for (&value, &label_value) in input.data.iter().zip(&labels.data) {
                     if let Some(pos) = measurement_dense_label_pos(&label_to_pos, label_value) {
                         sums[pos] += value;
@@ -11539,6 +11566,37 @@ mod tests {
         assert_close_or_nan(
             &mean(&data, Some(&labels), Some(&index)).unwrap(),
             &[20.0, f64::NAN, 35.0, 10.0],
+        );
+    }
+
+    #[test]
+    fn mean_one_based_contiguous_lookup_preserves_exact_label_semantics() {
+        let data = NdArray::new(
+            vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0],
+            vec![10],
+        )
+        .unwrap();
+        let labels = NdArray::new(
+            vec![
+                -0.0,
+                1.0,
+                2.0,
+                2.0,
+                3.0,
+                0.5,
+                f64::NAN,
+                -1.0,
+                4.0,
+                1.0000000000000002,
+            ],
+            vec![10],
+        )
+        .unwrap();
+        let index = [1, 2, 3];
+
+        assert_close_or_nan(
+            &mean(&data, Some(&labels), Some(&index)).unwrap(),
+            &[20.0, 35.0, 50.0],
         );
     }
 

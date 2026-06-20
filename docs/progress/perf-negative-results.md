@@ -4,6 +4,110 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-20 - frankenscipy-8l8r1.126 - label mean one-based contiguous index
+
+- Agent: cod-b / MistyBirch
+- Lever: specialize `ndimage.mean(input, labels, index)` for the common
+  `index == [1, 2, ..., K]` case. This bypasses dense label-table allocation and
+  maps exact positive integer labels directly to `label - 1`, while all
+  duplicate, sparse, zero-containing, and arbitrary indexes keep the existing
+  dense-table/hash routes.
+- Graveyard/artifact route tested: cache/hardware-wall constant reduction after
+  the O(N + K) complexity gap was already closed. The useful lever was removing
+  a table indirection and a short-lived allocation from the hot scalar
+  reduction loop, with an isomorphism proof and same-binary A/B.
+- Decision: KEEP. Strict same-host SciPy score improves from `0/4/0` to
+  `1/3/0`; the largest-K rows are now near parity, but this is not full release
+  speed parity.
+- Artifact:
+  `tests/artifacts/perf/frankenscipy-8l8r1.126-label-mean-one-based-EVIDENCE.md`
+- Baseline/final Rust command:
+  `AGENT_NAME=MistyBirch RCH_REQUIRE_REMOTE=1 RCH_WORKER=hz2 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec -- cargo run --release -p fsci-ndimage --bin perf_label_stats`
+- Same-host Rust command:
+  `/data/projects/.rch-targets/frankenscipy-cod-b/release/perf_label_stats`
+- SciPy oracle command:
+  `python3 docs/perf_oracle_label_stats.py --reps 50`
+- Benchmark evidence:
+
+  | N | K | Prior dense table | New one-based | SciPy oracle | Verdict |
+  | ---: | ---: | ---: | ---: | ---: | --- |
+  | 65536 | 512 | 154.810 us | 153.257 us | 0.189 ms | internal 1.01x; Rust 1.23x faster than SciPy |
+  | 262144 | 1024 | 646.632 us | 634.996 us | 0.585 ms | internal 1.02x; Rust 1.09x slower than SciPy |
+  | 262144 | 2048 | 857.822 us | 687.054 us | 0.576 ms | internal 1.25x; Rust 1.19x slower than SciPy |
+  | 589824 | 4096 | 1.782 ms | 1.423 ms | 1.380 ms | internal 1.25x; Rust 1.03x slower than SciPy |
+
+- rch `hz2` same-binary A/B independently showed `1.08x / 1.08x / 1.36x /
+  1.33x` speedups over the reconstructed prior dense-table route with
+  `mism=0/0/0/0/0`.
+- SciPy win/loss/neutral for final source: `1/3/0` strict.
+- Same-host internal keep/loss/neutral versus previous dense-table route:
+  `4/0/0`.
+- Correctness/conformance guards:
+  - PASS: focused one-based semantics test via rch:
+    `cargo test -p fsci-ndimage mean_one_based_contiguous_lookup_preserves_exact_label_semantics --lib -- --nocapture`
+    = **1 passed / 0 failed**.
+  - PASS: full ndimage lib tests via rch:
+    `cargo test -p fsci-ndimage --lib -- --nocapture` =
+    **242 passed / 0 failed**.
+  - PASS: local live SciPy conformance:
+    `FSCI_REQUIRE_SCIPY_ORACLE=1 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b cargo test -p fsci-conformance --test diff_ndimage -- --nocapture`
+    = **5 passed / 0 failed**.
+  - PASS: `cargo check -p fsci-ndimage --all-targets` via rch `hz1`;
+    unrelated warnings remained in `fsci-interpolate` and `diff_geom`.
+  - PASS: touched-file rustfmt and `git diff --check`.
+  - PASS: changed-file UBS exited 0 with 0 critical issues; warning inventory
+    remains non-blocking.
+  - BLOCKED: `cargo clippy -p fsci-ndimage --all-targets -- -D warnings`
+    stopped before this patch on existing `fsci-linalg` lints
+    (`needless_range_loop`, `needless_borrow`).
+- Negative evidence: do not retry another dense-table, `fract()`,
+  `is_finite()`, HashMap, or `Vec<Vec<f64>>` grouping variant for this workload.
+  The next attempt must be a deeper reduction primitive: parallel/cache-tiled
+  sum/count accumulation, vector-friendly label ingestion, or sorted/run-grouped
+  spans with a same-binary A/B against this one-based route.
+
+## 2026-06-20 - frankenscipy-va60h - linkage triangular arena reject
+
+- Agent: cod-a / MistyBirch
+- Lever: replace the retained flat full inter-cluster linkage arena with a
+  compact upper-triangular arena. The graveyard/artifact route was aggressive
+  cache/data-movement reduction: store half the distances, keep successor rows
+  contiguous, and remove mirrored writes while preserving the same strict `<`
+  ascending successor scan and Lance-Williams operand order.
+- Decision: REJECT and REVERT. Exact-output correctness passed, but the
+  candidate regressed both SciPy head-to-head rows. The production code was
+  restored to the prior flat row-major full arena before commit.
+- Artifact:
+  `tests/artifacts/perf/2026-06-20-va60h-triangular-arena-reject-EVIDENCE.md`
+- Baseline/head-to-head command:
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a-local cargo bench -p fsci-cluster --bench cluster_bench -- va60h_gauntlet_linkage --noplot`
+- rch correctness command:
+  `RCH_REQUIRE_REMOTE=1 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a rch exec -- cargo run -p fsci-cluster --release --bin perf_linkage`
+- Correctness evidence: `perf_linkage` printed `isomorphism: 0 mismatches /
+  7200 linkage matrices`; rch returned exit 102 only after the already-finished
+  remote command because artifact retrieval timed out.
+- Final restored-route guards: `cargo test -p fsci-cluster
+  linkage_from_distances --lib -- --nocapture` passed 2/2 tests, and
+  `FSCI_REQUIRE_SCIPY_ORACLE=1 cargo test -p fsci-conformance --test
+  diff_cluster_linkage_from_distances -- --nocapture` passed 1/1 tests against
+  local SciPy 1.17.1.
+- Benchmark evidence:
+
+  | Workload | Restored current | Triangular candidate | SciPy oracle | Verdict |
+  | --- | ---: | ---: | ---: | --- |
+  | `linkage(Average)`, n=800 d=4 | 7.5772 ms | 8.8260 ms | 4.2755 ms | candidate 1.165x slower than current; 2.064x slower than SciPy |
+  | `linkage(Ward)`, n=800 d=4 | 7.4597 ms | 9.9240 ms | 5.4866 ms | candidate 1.330x slower than current; 1.809x slower than SciPy |
+
+- SciPy win/loss/neutral for candidate: `0/2/0`.
+- Internal keep/loss/neutral versus restored current: `0/2/0`.
+- Retry condition: do not retry full-square-to-triangular arena layout for this
+  NN-array linkage path unless profiling shows index arithmetic and new-cluster
+  scatter are no longer the hot cost, or the algorithm changes to avoid the
+  repeated arbitrary triangular lookups entirely. Route next work to the
+  algorithmic gap with SciPy's compiled linkage implementation: NN-chain/MST
+  specializations, lower-constant nearest-neighbour maintenance, or method-
+  specific kernels.
+
 ## 2026-06-20 - frankenscipy-wh8ac - jnjnp_zeros Cephes j1 seed evaluator
 
 - Agent: cod-b / MistyBirch
