@@ -15,6 +15,11 @@ ledger above so the project has one source of truth.
   a 12.60x SciPy loss in routing evidence to parity/slight win.
 - Artifact:
   `tests/artifacts/perf/2026-06-20-cod-a-pdist-chebyshev-d4/EVIDENCE.md`
+- Additional cod-b corroborating artifact:
+  `tests/artifacts/perf/frankenscipy-i0ghz-chebyshev-d4/EVIDENCE.md`; target
+  row 0.139 ms versus local SciPy 0.176 ms, spatial E2E and local SciPy
+  differential conformance green, changed-file UBS exits 0 after test-only
+  panic-macro cleanup.
 - Strict final source versus local SciPy 1.17.1 oracle score across the sweep:
   `8/6/0`. The target row is a keep; the remaining d16/d64 Chebyshev rows stay
   negative evidence and should route to a higher-dimensional SIMD/blocking pass.
@@ -31,8 +36,8 @@ Guards: focused dim-4 bit-identity tests including NaN fold passed; spatial
 `pdist/cdist` live SciPy conformance passed; `cargo check -p fsci-spatial
 --all-targets`, `cargo clippy -p fsci-spatial --all-targets --no-deps -- -D
 warnings`, `cargo fmt --check -p fsci-spatial`, and `git diff --check` passed.
-Changed-file `ubs` was attempted and exited 1 on existing broad `fsci-spatial`
-test panic / unwrap / indexing findings, not on a new compiler or clippy issue.
+Changed-file `ubs` now exits 0 with 0 critical issues after cod-b converted a
+test-only explicit `panic!` mismatch branch to an assertion failure.
 
 Negative evidence: do not spend another pass on dim-4 Chebyshev. The residual
 losses are d16/d64 Chebyshev, especially `n512/d16` and `n512/d64`; they need a

@@ -1,0 +1,598 @@
+  [2m2026-06-20T20:36:48.667282Z[0m [32m INFO[0m [1;32mrch::hook[0m[32m: [32mSelected worker: vmi1149989 at root@212.90.121.76 (0 slots remaining after reservation, speed 50.0)[0m
+    [2;3mat[0m rch/src/hook.rs:921 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:36:48.988954Z[0m [32m INFO[0m [1;32mrch::hook::transfer_orchestration[0m[32m: [32mStarting remote compilation pipeline for frankenscipy-cod-b-filter1d-20260620 (hash: 0903ce4811a5764c)[0m
+    [2;3mat[0m rch/src/hook/transfer_orchestration.rs:241 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:36:48.989002Z[0m [32m INFO[0m [1;32mrch::hook::transfer_orchestration[0m[32m: [32mPrepared dependency sync manifest for 20 roots[0m
+    [2;3mat[0m rch/src/hook/transfer_orchestration.rs:263 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:36:50.957144Z[0m [32m INFO[0m [1;32mrch::hook::transfer_orchestration[0m[32m: [32mSyncing project to worker vmi1149989...[0m
+    [2;3mat[0m rch/src/hook/transfer_orchestration.rs:323 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:36:50.957190Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620 -> /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620 on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1528 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:36:54.187354Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 3230ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1592 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:36:54.187424Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-arrayapi -> /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-arrayapi on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1528 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:36:56.047001Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1859ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1592 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:36:56.047065Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-cluster -> /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-cluster on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1528 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:36:57.951223Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1904ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1592 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:36:57.951296Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-conformance -> /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-conformance on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1528 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:36:59.979468Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 2028ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1592 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:36:59.979548Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-constants -> /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-constants on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1528 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:37:02.005570Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 2026ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1592 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:37:02.005657Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-datasets -> /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-datasets on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1528 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:37:03.907500Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1901ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1592 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:37:03.907572Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-fft -> /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-fft on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1528 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:37:05.860824Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1953ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1592 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:37:05.860886Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-integrate -> /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-integrate on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1528 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:37:07.778743Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1917ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1592 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:37:07.778808Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-interpolate -> /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-interpolate on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1528 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:37:09.693196Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1914ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1592 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:37:09.693271Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-io -> /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-io on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1528 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:37:11.611484Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1918ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1592 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:37:11.611555Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-linalg -> /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-linalg on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1528 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:37:13.421109Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1809ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1592 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:37:13.421184Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-ndimage -> /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-ndimage on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1528 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:37:15.345651Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1924ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1592 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:37:15.345728Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-odr -> /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-odr on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1528 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:37:17.229424Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1883ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1592 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:37:17.229505Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-opt -> /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-opt on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1528 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:37:19.103535Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1874ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1592 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:37:19.103597Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-runtime -> /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-runtime on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1528 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:37:21.303344Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 2199ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1592 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:37:21.303414Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-signal -> /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-signal on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1528 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:37:23.291142Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1987ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1592 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:37:23.291206Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-sparse -> /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-sparse on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1528 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:37:25.185022Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1893ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1592 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:37:25.185103Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-spatial -> /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-spatial on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1528 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:37:27.130177Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1945ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1592 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:37:27.130273Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-special -> /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-special on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1528 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:37:29.030862Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1900ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1592 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:37:29.030927Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSyncing /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-stats -> /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-stats on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:1528 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:37:30.832794Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mSync completed in 1801ms[0m
+    [2;3mat[0m rch/src/transfer.rs:1592 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:37:30.832830Z[0m [32m INFO[0m [1;32mrch::hook::transfer_orchestration[0m[32m: [32mSync complete: 4311 files, 6278996 bytes in 39865ms[0m
+    [2;3mat[0m rch/src/hook/transfer_orchestration.rs:486 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:38:01.198960Z[0m [32m INFO[0m [1;32mrch::hook::transfer_orchestration[0m[32m: [32mExecuting command remotely: cargo test -p fsci-spatial --lib -- --nocapture[0m
+    [2;3mat[0m rch/src/hook/transfer_orchestration.rs:529 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:38:01.198993Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mRewriting CARGO_TARGET_DIR for remote execution (worker-scoped path): /data/projects/.rch-targets/frankenscipy-cod-b -> /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/.rch-target-vmi1149989-pool-fd9417ed329c1c382d9ee4f9fc04b62e[0m
+    [2;3mat[0m rch/src/transfer.rs:799 [2;3mon[0m ThreadId(1)
+
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded autocfg v1.5.0
+  Downloaded arrayref v0.3.9
+  Downloaded wait-timeout v0.2.1
+  Downloaded bit-set v0.8.0
+  Downloaded thiserror-impl v2.0.18
+  Downloaded zmij v1.0.21
+  Downloaded approx v0.5.1
+  Downloaded walkdir v2.5.0
+  Downloaded shlex v1.3.0
+  Downloaded simba v0.9.1
+  Downloaded unarray v0.1.4
+  Downloaded tempfile v3.27.0
+  Downloaded tinytemplate v1.2.1
+  Downloaded typenum v1.20.0
+  Downloaded unicode-ident v1.0.24
+  Downloaded bit-vec v0.8.0
+  Downloaded thiserror v2.0.18
+  Downloaded arrayvec v0.7.6
+  Downloaded bitflags v2.11.1
+  Downloaded wide v0.7.33
+  Downloaded zerocopy-derive v0.8.48
+  Downloaded zerocopy v0.8.48
+  Downloaded syn v2.0.117
+  Downloaded alloca v0.4.0
+  Downloaded anes v0.1.6
+  Downloaded anstyle v1.0.14
+  Downloaded ciborium-io v0.2.2
+  Downloaded safe_arch v0.7.4
+  Downloaded ciborium-ll v0.2.2
+  Downloaded equivalent v1.0.2
+  Downloaded errno v0.3.14
+  Downloaded crossbeam-epoch v0.9.18
+  Downloaded rand_xorshift v0.4.0
+  Downloaded fnv v1.0.7
+  Downloaded constant_time_eq v0.4.2
+  Downloaded cc v1.2.60
+  Downloaded criterion-plot v0.8.2
+  Downloaded cpufeatures v0.3.0
+  Downloaded cfg-if v1.0.4
+  Downloaded clap_lex v1.1.0
+  Downloaded itoa v1.0.18
+  Downloaded plotters-svg v0.3.7
+  Downloaded rawpointer v0.2.1
+  Downloaded num-rational v0.4.2
+  Downloaded either v1.15.0
+  Downloaded page_size v0.6.0
+  Downloaded plotters-backend v0.3.7
+  Downloaded fastrand v2.4.1
+  Downloaded cast v0.3.0
+  Downloaded nalgebra-macros v0.3.0
+  Downloaded quote v1.0.45
+  Downloaded find-msvc-tools v0.1.9
+  Downloaded quick-error v1.2.3
+  Downloaded rand_core v0.9.5
+  Downloaded same-file v1.0.6
+  Downloaded num-integer v0.1.46
+  Downloaded oorandom v11.1.5
+  Downloaded paste v1.0.15
+  Downloaded ppv-lite86 v0.2.21
+  Downloaded rand_chacha v0.9.0
+  Downloaded aho-corasick v1.1.4
+  Downloaded crossbeam-deque v0.8.6
+  Downloaded clap v4.6.1
+  Downloaded rusty-fork v0.3.1
+  Downloaded ciborium v0.2.2
+  Downloaded getrandom v0.3.4
+  Downloaded once_cell v1.21.4
+  Downloaded num-complex v0.4.6
+  Downloaded serde_core v1.0.228
+  Downloaded crossbeam-utils v0.8.21
+  Downloaded num-traits v0.2.19
+  Downloaded bytemuck v1.25.0
+  Downloaded proc-macro2 v1.0.106
+  Downloaded half v2.7.1
+  Downloaded matrixmultiply v0.3.10
+  Downloaded serde_derive v1.0.228
+  Downloaded serde v1.0.228
+  Downloaded rayon-core v1.13.0
+  Downloaded memchr v2.8.0
+  Downloaded indexmap v2.14.0
+  Downloaded num-bigint v0.4.6
+  Downloaded rand v0.9.4
+  Downloaded glam v0.14.0
+  Downloaded criterion v0.8.2
+  Downloaded glam v0.16.0
+  Downloaded glam v0.15.2
+  Downloaded hashbrown v0.17.0
+  Downloaded itertools v0.13.0
+  Downloaded plotters v0.3.7
+  Downloaded glam v0.18.0
+  Downloaded serde_json v1.0.149
+  Downloaded glam v0.17.3
+  Downloaded regex v1.12.3
+  Downloaded clap_builder v4.6.0
+  Downloaded glam v0.20.5
+  Downloaded blake3 v1.8.4
+  Downloaded rayon v1.12.0
+  Downloaded glam v0.19.0
+  Downloaded proptest v1.11.0
+  Downloaded glam v0.21.3
+  Downloaded glam v0.23.0
+  Downloaded glam v0.22.0
+  Downloaded glam v0.24.2
+  Downloaded regex-syntax v0.8.10
+  Downloaded glam v0.25.0
+  Downloaded nalgebra v0.34.2
+  Downloaded rustix v1.1.4
+  Downloaded glam v0.27.0
+  Downloaded glam v0.28.0
+  Downloaded glam v0.29.3
+  Downloaded regex-automata v0.4.14
+  Downloaded glam v0.32.1
+  Downloaded libc v0.2.185
+  Downloaded glam v0.30.10
+  Downloaded glam v0.31.1
+  Downloaded linux-raw-sys v0.12.1
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.45
+   Compiling unicode-ident v1.0.24
+   Compiling cfg-if v1.0.4
+   Compiling autocfg v1.5.0
+   Compiling libc v0.2.185
+   Compiling shlex v1.3.0
+   Compiling find-msvc-tools v0.1.9
+   Compiling serde_core v1.0.228
+   Compiling zmij v1.0.21
+   Compiling zerocopy v0.8.48
+   Compiling serde v1.0.228
+   Compiling getrandom v0.3.4
+   Compiling cc v1.2.60
+   Compiling hashbrown v0.17.0
+   Compiling equivalent v1.0.2
+   Compiling num-traits v0.2.19
+   Compiling serde_json v1.0.149
+   Compiling memchr v2.8.0
+   Compiling itoa v1.0.18
+   Compiling crossbeam-utils v0.8.21
+   Compiling paste v1.0.15
+   Compiling bytemuck v1.25.0
+   Compiling syn v2.0.117
+   Compiling indexmap v2.14.0
+   Compiling safe_arch v0.7.4
+   Compiling matrixmultiply v0.3.10
+   Compiling arrayref v0.3.9
+   Compiling arrayvec v0.7.6
+   Compiling rustix v1.1.4
+   Compiling constant_time_eq v0.4.2
+   Compiling cpufeatures v0.3.0
+   Compiling rand_core v0.9.5
+   Compiling crossbeam-epoch v0.9.18
+   Compiling wide v0.7.33
+   Compiling num-complex v0.4.6
+   Compiling approx v0.5.1
+   Compiling num-integer v0.1.46
+   Compiling either v1.15.0
+   Compiling bitflags v2.11.1
+   Compiling blake3 v1.8.4
+   Compiling rawpointer v0.2.1
+   Compiling regex-syntax v0.8.10
+   Compiling linux-raw-sys v0.12.1
+   Compiling rayon-core v1.13.0
+   Compiling num-rational v0.4.2
+   Compiling alloca v0.4.0
+   Compiling crossbeam-deque v0.8.6
+   Compiling plotters-backend v0.3.7
+   Compiling thiserror v2.0.18
+   Compiling fastrand v2.4.1
+   Compiling clap_lex v1.1.0
+   Compiling ciborium-io v0.2.2
+   Compiling once_cell v1.21.4
+   Compiling simba v0.9.1
+   Compiling typenum v1.20.0
+   Compiling anstyle v1.0.14
+   Compiling plotters-svg v0.3.7
+   Compiling clap_builder v4.6.0
+   Compiling itertools v0.13.0
+   Compiling wait-timeout v0.2.1
+   Compiling cast v0.3.0
+   Compiling fnv v1.0.7
+   Compiling same-file v1.0.6
+   Compiling tempfile v3.27.0
+   Compiling bit-vec v0.8.0
+   Compiling quick-error v1.2.3
+   Compiling regex-automata v0.4.14
+   Compiling rusty-fork v0.3.1
+   Compiling bit-set v0.8.0
+   Compiling walkdir v2.5.0
+   Compiling rayon v1.12.0
+   Compiling plotters v0.3.7
+   Compiling rand v0.9.4
+   Compiling rand_xorshift v0.4.0
+   Compiling page_size v0.6.0
+   Compiling zerocopy-derive v0.8.48
+   Compiling serde_derive v1.0.228
+   Compiling nalgebra-macros v0.3.0
+   Compiling thiserror-impl v2.0.18
+   Compiling clap v4.6.1
+   Compiling criterion-plot v0.8.2
+   Compiling anes v0.1.6
+   Compiling oorandom v11.1.5
+   Compiling unarray v0.1.4
+   Compiling regex v1.12.3
+   Compiling nalgebra v0.34.2
+   Compiling fsci-runtime v0.1.0 (/data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-runtime)
+   Compiling tinytemplate v1.2.1
+   Compiling fsci-fft v0.1.0 (/data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-fft)
+   Compiling half v2.7.1
+   Compiling ppv-lite86 v0.2.21
+   Compiling ciborium-ll v0.2.2
+   Compiling rand_chacha v0.9.0
+   Compiling ciborium v0.2.2
+   Compiling proptest v1.11.0
+   Compiling criterion v0.8.2
+   Compiling fsci-linalg v0.1.0 (/data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-linalg)
+   Compiling fsci-sparse v0.1.0 (/data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-sparse)
+   Compiling fsci-spatial v0.1.0 (/data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620/crates/fsci-spatial)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 28.65s
+     Running unittests src/lib.rs (.rch-target-vmi1149989-pool-fd9417ed329c1c382d9ee4f9fc04b62e/debug/deps/fsci_spatial-da5512e2cdcad676)
+
+running 216 tests
+test tests::braycurtis_identical ... ok
+test tests::cdist_basic ... ok
+test tests::canberra_matches_scipy_reference_values ... ok
+test tests::canberra_basic ... ok
+test tests::canberra_zeros ... ok
+test tests::cdist_mahalanobis_rejects_bad_dims ... ok
+test tests::braycurtis_matches_scipy_reference_values ... ok
+test tests::cdist_euclidean_matches_scipy_reference_values ... ok
+test tests::cdist_mahalanobis_matches_scipy_reference ... ok
+test tests::cdist_metric_cosine ... ok
+test tests::cdist_metric_dimension_mismatch_in_later_row ... ok
+test tests::cdist_mahalanobis_matches_per_pair ... ok
+test tests::cdist_pdist_match_scipy ... ok
+test tests::chebyshev_single_dimension ... ok
+test tests::boolean_metrics_match_scipy_1_17 ... ok
+test tests::chebyshev_distance ... ok
+test tests::chebyshev_matches_scipy_reference_values ... ok
+test tests::braycurtis_basic ... ok
+test tests::canberra_single_zero_pair ... ok
+test tests::cityblock_distance ... ok
+test tests::cdist_metamorphic_transpose_symmetry ... ok
+test tests::convex_hull_collinear_points_rejected ... ok
+test tests::convex_hull_interior_points_excluded ... ok
+test tests::convex_hull_many_points ... ok
+test tests::convex_hull_square ... ok
+test tests::convex_hull_simplices_form_closed_polygon ... ok
+test tests::convex_hull_triangle ... ok
+test tests::ckdtree_alias_construction_and_query ... ok
+test tests::coordinate_transforms_roundtrip_and_analytic ... ok
+test tests::ckdtree_alias_supports_cross_tree_methods ... ok
+test tests::correlation_constant_vector_returns_nan ... ok
+test tests::correlation_distance_anticorrelated ... ok
+test tests::correlation_distance_perfect ... ok
+test tests::cosine_distance_identical ... ok
+test tests::correlation_matches_scipy_reference_values ... ok
+test tests::cosine_distance_orthogonal ... ok
+test tests::cosine_distance_opposite ... ok
+test tests::cosine_matches_scipy_reference_values ... ok
+test tests::cosine_zero_vector_returns_nan ... ok
+test tests::delaunay_collinear_points_rejected ... ok
+test tests::cityblock_matches_scipy_reference_values ... ok
+test tests::delaunay_find_simplex_inside_triangle ... ok
+test tests::ckdtree_alias_supports_query_pairs ... ok
+test tests::delaunay_find_simplex_outside_returns_none ... ok
+test tests::delaunay_square_triangulates ... ok
+test tests::delaunay_triangulation_matches_scipy_reference_values ... ok
+test tests::dice_sokalsneath_all_false_match_scipy_nan ... ok
+test tests::directed_hausdorff_basic ... ok
+test tests::directed_hausdorff_dimension_mismatch_rejected ... ok
+test tests::directed_hausdorff_empty_xa_rejected ... ok
+test tests::delaunay_empty_circumcircle_property_random ... ok
+test tests::convex_hull_area_matches_scipy_reference_values ... ok
+test tests::directed_hausdorff_nan_rejected ... ok
+test tests::directed_hausdorff_returns_true_euclidean_after_sq_optimization ... ok
+test tests::directed_hausdorff_symmetric_pair_pythagorean ... ok
+test tests::directed_hausdorff_matches_scipy_reference_values ... ok
+test tests::distance_matrix_matches_cdist ... ok
+test tests::delaunay_non_finite_points_rejected ... ok
+test tests::euclidean_identical_points ... ok
+test tests::delaunay_too_few_points_rejected ... ok
+test tests::euclidean_distance ... ok
+test tests::directed_hausdorff_empty_xb_rejected ... ok
+test tests::euclidean_matches_scipy_reference_values ... ok
+test tests::float_metrics_match_scipy_1_17 ... ok
+test tests::halfspace_intersection_add_halfspaces_recomputes_region ... ok
+test tests::halfspace_intersection_rejects_boundary_feasible_point_as_qhull_error ... ok
+test tests::halfspace_intersection_from_nd_supports_bounded_3d_tetrahedron ... ok
+test tests::halfspace_intersection_from_nd_rejects_invalid_higher_dimensional_inputs ... ok
+test tests::halfspace_intersection_from_nd_marks_unbounded_3d_region ... ok
+test tests::halfspace_vertex_candidates_parallel_perf_probe ... ignored
+test tests::halfspace_intersection_unbounded_region_is_marked ... ok
+test tests::hamming_completely_different ... ok
+test tests::hamming_basic ... ok
+test tests::hamming_matches_scipy_reference_values ... ok
+test tests::hausdorff_distance_basic ... ok
+test tests::hausdorff_distance_matches_scipy_reference_values ... ok
+test tests::hausdorff_distance_symmetric ... ok
+test tests::is_valid_dm_accepts_symmetric_zero_diagonal ... ok
+test tests::hamming_identical_vectors ... ok
+test tests::is_valid_dm_rejects_asymmetric ... ok
+test tests::is_valid_dm_rejects_nonzero_diagonal_and_ragged_and_nan ... ok
+test tests::is_valid_dm_matches_scipy_reference_values ... ok
+test tests::is_valid_y_correct_lengths ... ok
+test tests::is_valid_y_rejects_invalid_lengths_and_nan ... ok
+test tests::jaccard_matches_scipy_reference_values ... ok
+test tests::jaccard_real_valued_matches_modern_scipy ... ok
+test tests::jensenshannon_matches_scipy_default_base ... ok
+test tests::halfspace_intersection_square_matches_dual_surface ... ok
+test tests::jensenshannon_metamorphic_disjoint_natural_log_bound ... ok
+test tests::jensenshannon_metamorphic_symmetry_under_swap ... ok
+test tests::jensenshannon_normalizes_input_masses ... ok
+test tests::jensenshannon_respects_base_kwarg ... ok
+test tests::jensenshannon_simd_matches_old_normalized_vec_bits ... ok
+test tests::jensenshannon_zero_mass_vectors_match_scipy_nan ... ok
+test tests::convex_hull_too_few_points ... ok
+test tests::kdtree_count_neighbors_dimension_mismatch ... ok
+test tests::kdtree_count_neighbors_negative_radius_rejected ... ok
+test tests::kdtree_dimension_mismatch ... ok
+test tests::kdtree_empty_rejected ... ok
+test tests::kdtree_exact_match ... ok
+test tests::kdtree_k_nearest ... ok
+test tests::kdtree_large_random ... ok
+test tests::kdtree_nearest_neighbor ... ok
+test tests::kdtree_query_ball_point ... ok
+test tests::kdtree_query_ball_point_empty ... ok
+test tests::jaccard_all_zeros ... ok
+test tests::jaccard_basic ... ok
+test tests::convex_hull_2d_match_scipy ... ok
+test tests::kdtree_count_neighbors ... ok
+test tests::kdtree_query_ball_tree_negative_radius_rejected ... ok
+test tests::kdtree_query_ball_point_negative_radius_rejected ... ok
+test tests::kdtree_query_ball_tree ... ok
+test tests::kdtree_query_ball_tree_dimension_mismatch ... ok
+test tests::halfspace_vertex_candidates_parallel_matches_serial_bits_and_order ... ok
+test tests::kdtree_query_k_zero_returns_empty ... ok
+test tests::kdtree_query_match_scipy ... ok
+test tests::kdtree_query_matches_scipy_reference_values ... ok
+test tests::kdtree_rejects_mixed_input_dimensions ... ok
+test tests::kdtree_rejects_non_finite_points ... ok
+test tests::kdtree_rejects_non_finite_query ... ok
+test tests::kdtree_single_point ... ok
+test tests::kdtree_sparse_distance_matrix_basic ... ok
+test tests::kdtree_sparse_distance_matrix_dimension_mismatch ... ok
+test tests::kdtree_sparse_distance_matrix_empty ... ok
+test tests::kdtree_sparse_distance_matrix_output_type_variants ... ok
+test tests::kdtree_sparse_distance_matrix_rejects_invalid_output_type ... ok
+test tests::mahalanobis_identity_inverse_equals_euclidean ... ok
+test tests::mahalanobis_match_scipy ... ok
+test tests::mahalanobis_matches_scipy_reference_values ... ok
+test tests::medoid_basic ... ok
+test tests::kdtree_query_pairs_basic ... ok
+test tests::medoid_empty_returns_none ... ok
+test tests::kdtree_query_pairs_negative_radius_rejected ... ok
+test tests::minkowski_matches_scipy_reference_values ... ok
+test tests::minkowski_distance_batched_matches_scipy ... ok
+test tests::minkowski_p1_is_cityblock ... ok
+test tests::minkowski_p2_is_euclidean ... ok
+test tests::minkowski_pinf_is_chebyshev ... ok
+test tests::minkowski_rejects_nonpositive_p_like_weighted_variant ... ok
+test tests::minkowski_special_cases ... ok
+test tests::nearest_neighbors_empty ... ok
+test tests::nearest_neighbors_basic ... ok
+test tests::nearest_neighbors_single_point ... ok
+test tests::num_obs_dm_matches_scipy_reference_values ... ok
+test tests::num_obs_y_inverse_of_pair_count ... ok
+test tests::pdist_cityblock ... ok
+test tests::pdist_dim4_chebyshev_fast_path_propagates_nan_like_helper ... ok
+test tests::pdist_dim4_fast_paths_match_metric_helpers ... ok
+test tests::delaunay_find_simplex_many_matches_per_point ... ok
+test tests::medoid_single_point ... ok
+test tests::pdist_euclidean_matches_scipy_reference_values ... ok
+test tests::pdist_euclidean_three_points ... ok
+test tests::pdist_extra_metrics_match_scipy ... ok
+test tests::nearest_neighbors_kdtree_matches_brute_force_bitwise ... ok
+test tests::pdist_mahalanobis_matches_per_pair_condensed ... ok
+test tests::pdist_too_few_points ... ok
+test tests::pdist_with_canberra ... ok
+test tests::procrustes_khoist_is_bit_identical ... ok
+test tests::procrustes_khoist_perf_vs_naive ... ignored
+test tests::procrustes_metamorphic_disparity_is_symmetric ... ok
+test tests::procrustes_identical ... ok
+test tests::procrustes_noisy_near_aligned_matches_scipy ... ok
+test tests::procrustes_rank_deficient_uses_svd_alignment ... ok
+test tests::procrustes_rotated ... ok
+test tests::procrustes_scaled ... ok
+test tests::procrustes_metamorphic_translation_invariance ... ok
+test tests::qhull_error_variant_preserves_message ... ok
+test tests::rectangle_point_distances_match_scipy ... ok
+test tests::rectangle_normalizes_bounds_and_volume ... ok
+test tests::rectangle_rejects_invalid_inputs ... ok
+test tests::rectangle_rectangle_distances_match_scipy ... ok
+test tests::rigid_transform_apply_many_matches_apply ... ok
+test tests::rigid_transform_matches_scipy ... ok
+test tests::rotation_90_deg_z_axis ... ok
+test tests::rotation_apply_many_matches_apply ... ok
+test tests::rotation_euler_roundtrip ... ok
+test tests::rotation_from_quat_normalized ... ok
+test tests::rotation_identity ... ok
+test tests::rotation_inverse ... ok
+test tests::rotation_magnitude ... ok
+test tests::rotation_matrix_roundtrip ... ok
+test tests::rotation_multiply ... ok
+test tests::rotation_slerp_endpoints ... ok
+test tests::rotation_spline_matches_scipy ... ok
+test tests::seuclidean_matches_scipy_reference_values ... ok
+test tests::slerp_dimension_mismatch ... ok
+test tests::slerp_endpoints ... ok
+test tests::slerp_midpoint_on_sphere ... ok
+test tests::rectangle_split_matches_scipy_semantics ... ok
+test tests::spatial_vector_helpers_match_analytic ... ok
+test tests::spherical_voronoi_rejects_coplanar_great_circle_points ... ok
+test tests::spherical_voronoi_rejects_duplicate_points ... ok
+test tests::spherical_voronoi_rejects_wrong_radius ... ok
+test tests::spherical_voronoi_tetrahedron_has_four_vertices ... ok
+test tests::sqeuclidean_matches_scipy_reference_values ... ok
+test tests::squareform_condensed_to_matrix_matches_scipy_reference_values ... ok
+test tests::squareform_invalid_length ... ok
+test tests::squareform_matrix_to_condensed_matches_scipy_reference_values ... ok
+test tests::squareform_roundtrip ... ok
+test tests::squareform_to_condensed_rejects_asymmetric_matrix ... ok
+test tests::squareform_to_condensed_rejects_nonzero_diagonal ... ok
+test tests::squareform_validators_roundtrip ... ok
+test tests::tsearch_matches_find_simplex_and_marks_outside ... ok
+test tests::voronoi_center_point_gets_finite_region ... ok
+test tests::voronoi_triangle_has_single_vertex_and_infinite_ridges ... ok
+test tests::voronoi_vertices_matches_scipy_reference_values ... ok
+test tests::wminkowski_matches_scipy_reference_values ... ok
+test tests::kdtree_query_many_matches_per_query ... ok
+test tests::cdist_dim4_fast_paths_match_metric_distance ... ok
+test tests::sparse_distance_matrix_triplets_matches_brute_force ... ok
+test tests::cdist_metric_parallel_is_bit_identical ... ok
+test tests::pdist_parallel_is_bit_identical ... ok
+test tests::k_nearest_neighbors_kdtree_matches_brute_force_bitwise ... ok
+test tests::kdtree_query_ball_point_many_matches_per_query ... ok
+test tests::kdtree_query_k_many_matches_per_query ... ok
+test tests::pdist_dim4_parallel_matches_metric_helpers ... ok
+
+test result: ok. 214 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 1.54s
+
+  [2m2026-06-20T20:38:33.219916Z[0m [32m INFO[0m [1;32mrch::hook::transfer_orchestration[0m[32m: [32mRemote command finished: exit=0 in 32020ms[0m
+    [2;3mat[0m rch/src/hook/transfer_orchestration.rs:653 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:38:33.220188Z[0m [32m INFO[0m [1;32mrch::hook::transfer_orchestration[0m[32m: [32mRetrieving build artifacts...[0m
+    [2;3mat[0m rch/src/hook/transfer_orchestration.rs:702 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:38:33.220206Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mRetrieving artifacts from /data/projects/.scratch/frankenscipy-cod-b-filter1d-20260620 on vmi1149989[0m
+    [2;3mat[0m rch/src/transfer.rs:2246 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:38:35.247468Z[0m [32m INFO[0m [1;32mrch::transfer[0m[32m: [32mArtifacts retrieved in 2027ms (1 files, 1204 bytes)[0m
+    [2;3mat[0m rch/src/transfer.rs:2301 [2;3mon[0m ThreadId(1)
+
+  [2m2026-06-20T20:38:35.247487Z[0m [32m INFO[0m [1;32mrch::hook::transfer_orchestration[0m[32m: [32mArtifacts retrieved: 1 files, 1204 bytes in 2027ms[0m
+    [2;3mat[0m rch/src/hook/transfer_orchestration.rs:735 [2;3mon[0m ThreadId(1)
+
+[RCH] remote vmi1149989 (106.6s)

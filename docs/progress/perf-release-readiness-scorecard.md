@@ -9,6 +9,11 @@
   tracked d4 row closes from 12.60x slower than SciPy to parity/slight win.
 - Artifact:
   `tests/artifacts/perf/2026-06-20-cod-a-pdist-chebyshev-d4/EVIDENCE.md`
+- Additional cod-b corroborating artifact:
+  `tests/artifacts/perf/frankenscipy-i0ghz-chebyshev-d4/EVIDENCE.md` records
+  an independent final sweep target row at 0.139 ms versus local SciPy
+  0.176 ms, plus spatial E2E, local SciPy differential conformance, and
+  changed-file UBS exit 0 after a test-only panic-macro cleanup.
 
 | Gate | Result | Notes |
 | --- | --- | --- |
@@ -22,7 +27,7 @@
 | Per-crate clippy | PASS | rch `cargo clippy -p fsci-spatial --all-targets --no-deps -- -D warnings`; same-file pre-existing lint blockers were fixed |
 | Per-crate formatting | PASS | `cargo fmt --check -p fsci-spatial` |
 | Diff hygiene | PASS | `git diff --check` |
-| Changed-file UBS | BLOCKED/EXISTING | `ubs` exited 1 on pre-existing broad `fsci-spatial` test panic / unwrap / direct-index findings in the touched file set; compiler, clippy, tests, conformance, format, and diff hygiene are green |
+| Changed-file UBS | PASS | cod-b corroborating pass exits 0 with 0 critical issues after replacing a test-only explicit `panic!` mismatch branch with an assertion failure; broad warning inventory remains |
 
 | Workload | Final Rust | SciPy oracle | Ratio | Verdict |
 | --- | ---: | ---: | ---: | --- |
@@ -40,9 +45,9 @@ Readiness notes:
 - The final source carries small same-file lint cleanup in older KDTree/Delaunay
   code because `fsci-spatial --all-targets -- -D warnings` was otherwise
   blocked before this patch.
-- UBS still needs a separate cleanup pass for existing `fsci-spatial` test
-  panic / unwrap / indexing debt; this patch did not introduce new unsafe code
-  and passed the stricter compiler/clippy/conformance gates above.
+- The post-rebase source removes the explicit test-only `panic!` that made
+  changed-file UBS exit nonzero. Remaining UBS output is warning inventory, not
+  a commit-blocking critical finding.
 
 ## 2026-06-20 - fsci-ndimage EDT constant-factor gauntlet
 

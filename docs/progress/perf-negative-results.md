@@ -20,6 +20,11 @@ condition so dead ends are not repeated casually.
   records d16/d64 Chebyshev losses as the next route.
 - Artifact:
   `tests/artifacts/perf/2026-06-20-cod-a-pdist-chebyshev-d4/EVIDENCE.md`
+- Additional cod-b corroborating artifact:
+  `tests/artifacts/perf/frankenscipy-i0ghz-chebyshev-d4/EVIDENCE.md`
+  records an independent target row at 0.139 ms versus SciPy 0.176 ms, plus
+  spatial E2E, local SciPy differential conformance, and changed-file UBS
+  exit 0 after a test-only panic-macro cleanup.
 - Baseline command:
   `AGENT_NAME=BlackThrush RCH_REQUIRE_REMOTE=1 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a rch exec -- cargo run --release -p fsci-spatial --bin perf_pdist_sweep`
   (`vmi1264463`; target row `2.141 ms`, cross-worker routing evidence only).
@@ -78,10 +83,10 @@ Correctness/conformance guards:
   via rch after clearing same-file pre-existing lint blockers.
 - PASS: `cargo fmt --check -p fsci-spatial`.
 - PASS: `git diff --check`.
-- BLOCKED/EXISTING: changed-file `ubs` exited 1 on pre-existing broad
-  `fsci-spatial` test panic / unwrap / direct-index findings in the touched
-  file set. Compiler, clippy, focused tests, conformance, formatting, and diff
-  hygiene are green for this patch.
+- PASS after cod-b cleanup: changed-file `ubs` exits 0 with 0 critical issues;
+  the remaining output is the broad existing `fsci-spatial` warning inventory.
+  The cleanup changed a test-only explicit `panic!` mismatch branch into an
+  assertion failure and kept focused Delaunay coverage green.
 
 Negative evidence: do not retry the dim-4 Chebyshev specialization family; that
 gap is closed. The next Chebyshev work should target the d16/d64 rows with a

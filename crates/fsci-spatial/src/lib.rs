@@ -6827,7 +6827,11 @@ mod tests {
                     assert_eq!(g3.to_bits(), e3.to_bits(), "l3 q={q:?}");
                 }
                 (None, None) => {}
-                _ => panic!("mismatch presence q={q:?}: {got:?} vs {expect:?}"),
+                _ => assert_eq!(
+                    got.is_some(),
+                    expect.is_some(),
+                    "mismatch presence q={q:?}: {got:?} vs {expect:?}"
+                ),
             }
         }
     }

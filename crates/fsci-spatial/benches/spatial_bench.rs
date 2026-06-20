@@ -63,6 +63,9 @@ fn bench_pdist(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("cosine", n), |b| {
             b.iter(|| pdist(&data, DistanceMetric::Cosine))
         });
+        group.bench_function(BenchmarkId::new("chebyshev", n), |b| {
+            b.iter(|| pdist(&data, DistanceMetric::Chebyshev))
+        });
     }
     group.finish();
 }
