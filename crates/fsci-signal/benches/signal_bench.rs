@@ -1,7 +1,8 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use fsci_signal::{
-    ConvolveMode, FirWindow, SosSection, coherence, csd, cwt, fftconvolve, filtfilt, firls, firwin,
-    freqz, lfilter, medfilt, mfcc, order_filter, remez, ricker, sosfilt, welch,
+    ConvolveMode, FindPeaksCwtOptions, FirWindow, SosSection, coherence, csd, cwt, fftconvolve,
+    filtfilt, find_peaks_cwt, firls, firwin, freqz, lfilter, medfilt, mfcc, order_filter, remez,
+    ricker, sosfilt, welch,
 };
 use std::hint::black_box;
 use std::io::Write;
@@ -397,8 +398,26 @@ fn bench_mfcc(c: &mut Criterion) {
     });
 }
 
+fn bench_find_peaks_cwt(c: &mut Criterion) {
+    let mut group = c.benchmark_group("find_peaks_cwt");
+    let n = 5000usize;
+    let x: Vec<f64> = (0..n)
+        .map(|i| {
+            let t = i as f64;
+            (t * 0.05).sin() * 3.0 + (t * 0.013).cos() + ((i * 2654435761) % 100) as f64 * 0.01
+        })
+        .collect();
+    let widths: Vec<f64> = (1..30).map(|w| w as f64).collect();
+    let opts = FindPeaksCwtOptions::default();
+    group.bench_function("n5000_w29", |b| {
+        b.iter(|| find_peaks_cwt(black_box(&x), black_box(&widths), &opts))
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
+    bench_find_peaks_cwt,
     bench_mfcc,
     bench_freqz,
     bench_convolution,

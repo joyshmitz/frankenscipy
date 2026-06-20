@@ -684,3 +684,17 @@ interior-direct (boundary-map only the ~window-1 edge cells).**
   + scipy's contiguous-array C micro-optimizations — not algorithmic. Further close
   would need bounds-check elision (iterator restructuring of the scatter loop),
   which is uncertain in safe Rust; documented for follow-up.
+
+## 2026-06-20 - find_peaks_cwt - MEASURED WIN (fsci 3.6x faster); CWT-build parallel = no-op reject
+
+- Agent: cc / MistyBirch
+- Finding (MEASURED, rch vs scipy.signal.find_peaks_cwt, n=5000, 29 ricker widths):
+  fsci 22.1 ms vs scipy 80.5 ms = **3.6x faster** (even sequential). Added a
+  `find_peaks_cwt/n5000_w29` bench (was uncovered).
+- REJECT (reverted): parallelizing the CWT-matrix build (the per-width ricker+
+  convolve loop) across widths — byte-identical, but a measured no-op (22.1→21.3 ms,
+  <5% noise). The CWT build is NOT the bottleneck; the sequential ridge-tracking
+  (`identify_ridge_lines`, gap-aware ridge following) dominates the 22 ms and is
+  inherently sequential. Don't parallelize the width loop; a real further win would
+  need a parallel/restructured ridge tracker. fsci already dominates, so no source
+  change ships.
