@@ -3222,6 +3222,24 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   byte-identical. The high-end work-gate lever (see gamma entry above) now flips gamma/gammaln/digamma
   + erf/erfc. Remaining identical candidates: elliptic (ellipk/ellipe) + ~18 convenience activations.
 
+## 2026-06-21 - FIX/WIN: ellipk/ellipe WORK-GATED parallel for huge arrays (>=1M) — flips SciPy loss to 1.4-2.1x
+- Agent: cod-a / BlackThrush. Third payout of the high-end work-gate lever. ellipk/ellipe passed
+  `real_par_min=usize::MAX` ("serial beats par_map ~2.7x" — measured at 100k only). At 2M, fsci
+  serial ellipk LOSES to SciPy (36.7ms vs 29.8ms). Changed `real_par_min` to `1<<20`; byte-identical
+  (acc unchanged serial vs parallel). Same-worker `hz1`, `perf_elliptic_array`, m-range [0,0.98]:
+
+  | fn | n | serial | parallel | self | local SciPy 1.17.1 | vs SciPy |
+  | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+  | ellipk | 2M | 36.66 ms | 17.90 ms | 2.05x | 29.81 ms | 1.67x faster |
+  | ellipe | 2M | 35.76 ms | 15.07 ms | 2.37x | 23.33 ms | 1.55x faster |
+  | ellipk | 4M | 93.51 ms | 29.41 ms | 3.18x | 62.51 ms | 2.13x faster |
+  | ellipe | 4M | 93.36 ms | 30.86 ms | 3.02x | 43.77 ms | 1.42x faster |
+
+- Score: same-worker self 4/0/0; vs local SciPy 4/0/0. ellipk serial was a 1.23x SciPy loss → 1.67x
+  win. Gates: in-crate elliptic tests 107/0; byte-identical. The high-end work-gate now flips
+  gamma/gammaln/digamma + erf/erfc + ellipk/ellipe. Last identical candidate: ~18 convenience
+  activations (convenience.rs map_real default-serial) — likely smaller per-kernel so check 2M/4M flip.
+
 ## 2026-06-21 - dst_iv twiddle reuse (byte-id); DCT/DST twiddle-recompute bug fully closed
 - Agent: cc / MistyBirch. dst_iv recomputed the dct-IV twiddle per coefficient → reuse the cached
   get_or_compute_dct4_twiddles (from the dct_iv fix). dst_iv 65536 2.27ms (matches dct_iv; 2N-FFT

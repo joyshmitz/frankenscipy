@@ -82,7 +82,7 @@ pub fn ellipk(m_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
         mode,
         |m| ellipk_scalar(m, mode),
         ellipk_complex_scalar,
-        usize::MAX, // cheap O(1) real kernel: serial beats par_map (~2.7x)
+        1 << 20, // work-gated: serial small, par_map_indices for huge arrays (>=1M)
     )
 }
 
@@ -115,7 +115,7 @@ pub fn ellipe(m_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
         mode,
         |m| ellipe_scalar(m, mode),
         ellipe_complex_scalar,
-        usize::MAX, // cheap O(1) real kernel: serial beats par_map (~2.7x)
+        1 << 20, // work-gated: serial small, par_map_indices for huge arrays (>=1M)
     )
 }
 
