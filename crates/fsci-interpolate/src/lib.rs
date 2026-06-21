@@ -5827,12 +5827,16 @@ fn gcv_optimal_lambda(x_full: &[Vec<f64>], e_full: &[Vec<f64>], y: &[f64], w: &[
             Ok(c) => c,
             Err(_) => return f64::INFINITY,
         };
-        // numer = ‖λ·E·c‖² / n.
+        // numer = ‖λ·E·c‖² / n. E is (2,2)-banded, so row i's dot with c has nonzero
+        // terms only at |i-j| ≤ 2 — restrict the inner sum to that band (byte-identical:
+        // the rest are +0.0 no-ops, same ascending-j order). O(n²) → O(n) per λ.
         let mut numer = 0.0_f64;
-        for row in e_full {
+        for (i, row) in e_full.iter().enumerate() {
+            let jlo = i.saturating_sub(2);
+            let jhi = (i + 2).min(n - 1);
             let mut r = 0.0_f64;
-            for (j, &v) in row.iter().enumerate() {
-                r += v * c[j];
+            for j in jlo..=jhi {
+                r += row[j] * c[j];
             }
             numer += (lam * r) * (lam * r);
         }

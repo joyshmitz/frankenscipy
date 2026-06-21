@@ -1512,3 +1512,19 @@ interior-direct (boundary-map only the ~window-1 edge cells).**
   + make_smoothing_spline scipy-parity + full suite when disk recovers. Remaining
   follow-up (not byte-identical-mechanical): the trace loop re-builds+re-factors the
   IDENTICAL lhs n times — factor-once + n banded RHS would drop it to O(n·bw²)+O(n²·bw).
+
+## 2026-06-20 - gcv numer build band-restricted (byte-identical, disk-critical) — GCV path complete
+
+- Agent: cc / MistyBirch. CODE-ONLY (disk-critical, no cargo). 4th + final byte-identical
+  band-restriction of gcv_optimal_lambda.
+- `numer = ‖λ E c‖²` summed each row of e_full over ALL n columns; E is (2,2)-banded, so
+  only |i-j| ≤ 2 contribute — restricted the inner dot to that band (byte-identical:
+  out-of-band terms are +0.0 no-ops in ascending-j order). O(n²)→O(n) per λ.
+- GCV path now fully band-optimized: Gram O(n³)→O(n) (033f7bd9), m/lhs builds + numer
+  O(n²)/O(n³)→O(n)/O(n²) (43eb09b2 + this), banded solves (08f79b0e). Net
+  gcv_optimal_lambda O(n³)+O(n³·iters) → O(n)+O(n²·iters).
+- PENDING-BENCH / UNVERIFIED COMPILE (no cargo). Byte-identical by construction; the
+  whole disk-window interpolate stack (08f79b0e, 033f7bd9, 43eb09b2, this) needs one
+  `cargo check -p fsci-interpolate` + make_smoothing_spline scipy-parity + suite 172/0
+  when disk recovers. Remaining (non-mechanical) win: the trace loop's n identical
+  lhs factorizations → factor-once + n banded RHS (O(n²·bw) tr).
