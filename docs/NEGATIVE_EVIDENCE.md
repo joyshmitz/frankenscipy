@@ -6,6 +6,32 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-21 - frankenscipy-8l8r1.142 - opt L-BFGS-B 10D finite-diff partial bench
+
+- Agent: cod-b / BlackThrush
+- Decision: MEASURED WIN / NO SOURCE PERF PATCH. One small per-crate Criterion
+  row shows the current end-to-end `fsci_opt::lbfgsb` finite-difference route is
+  already much faster than SciPy for 10D Rosenbrock. No near-zero-gain
+  optimization was attempted, so no performance patch was reverted.
+- Artifact:
+  `tests/artifacts/perf/2026-06-21-cod-b-opt-lbfgsb-partial-resume/EVIDENCE.md`
+- Note: this is independent end-to-end L-BFGS-B evidence and does not supersede
+  cod-a's now-closed `frankenscipy-8l8r1.141` public finite-difference helper
+  evidence.
+
+| Workload | Rust Criterion | SciPy oracle | Verdict |
+| --- | ---: | ---: | --- |
+| `lbfgsb/rosenbrock_unconstrained_fd/10` | 134.040 us on `vmi1152480` | 16537.314 us local SciPy 1.17.1 | keep evidence: Rust 123.38x faster than SciPy |
+
+Guards: rch focused `fsci-opt` L-BFGS-B tests 8/0, live SciPy
+`diff_opt_lbfgsb_minimize` conformance 1/0 with `FSCI_REQUIRE_SCIPY_ORACLE=1`,
+rch `cargo check -p fsci-opt --all-targets`, rch no-deps clippy, `cargo fmt
+--check -p fsci-opt`, and `git diff --check` passed. Changed-file `ubs` exited
+0 with 0 critical issues and warning inventory in existing benchmark/helper-bin
+code. Clippy initially found an unrelated benchmark-file needless borrow;
+source now includes that minimal bench lint fix plus rustfmt-only helper-bin
+wraps.
+
 ## 2026-06-21 - frankenscipy-8l8r1.141 - opt public finite-difference scratch reuse - KEEP
 
 - Agent: cod-a / BlackThrush

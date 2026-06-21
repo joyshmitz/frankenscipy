@@ -4,6 +4,53 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-21 - frankenscipy-8l8r1.142 - opt L-BFGS-B 10D finite-diff partial bench
+
+- Agent: cod-b / BlackThrush
+- Status: measured evidence win; no library performance patch this turn.
+- Artifact:
+  `tests/artifacts/perf/2026-06-21-cod-b-opt-lbfgsb-partial-resume/EVIDENCE.md`
+- Rust command:
+  `AGENT_NAME=BlackThrush RCH_REQUIRE_REMOTE=1 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec -- cargo bench -p fsci-opt --bench optimize_bench -- lbfgsb/rosenbrock_unconstrained_fd/10 --noplot --sample-size 10 --warm-up-time 1 --measurement-time 2`
+  on `vmi1152480`.
+- SciPy oracle: local SciPy 1.17.1 / NumPy 2.4.3,
+  `scipy.optimize.minimize(method="L-BFGS-B")` on the same 10D Rosenbrock start,
+  no analytic Jacobian, `tol=1e-8`, `maxiter=2000`, `gtol=1e-8`, `eps=1e-8`.
+- Gate cleanup: no fsci-opt library code changed. `optimize_bench.rs` removes
+  an unrelated clippy needless borrow and applies rustfmt line wraps;
+  `diff_leastsq.rs` applies rustfmt line wraps so `cargo fmt --check -p
+  fsci-opt` is green.
+
+| Workload | Rust Criterion | SciPy oracle | Ratio / verdict |
+| --- | ---: | ---: | --- |
+| `lbfgsb/rosenbrock_unconstrained_fd/10` | 134.040 us | 16537.314 us | Rust 123.38x faster (`0.008105x` SciPy time); measured win |
+
+Win/loss/neutral:
+
+- Strict current Rust versus local SciPy oracle for this one requested row:
+  `1/0/0`.
+- Reverts: none. No near-zero-gain performance patch was attempted.
+
+Correctness/conformance guards:
+
+- PASS: rch `cargo test -p fsci-opt lbfgsb --lib -- --nocapture` = 8 passed.
+- PASS: local live SciPy conformance with required oracle:
+  `FSCI_REQUIRE_SCIPY_ORACLE=1 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b cargo test -p fsci-conformance --test diff_opt_lbfgsb_minimize -- --nocapture`
+  = 1 passed.
+- PASS: rch `cargo check -p fsci-opt --all-targets`.
+- PASS: rch `cargo clippy -p fsci-opt --all-targets --no-deps -- -D warnings`
+  after the benchmark-file lint fix.
+- PASS: `cargo fmt --check -p fsci-opt`.
+- PASS: `git diff --check`.
+- PASS/WARN: changed-file `ubs` exited 0 with 0 critical issues. It reported
+  warning inventory in existing benchmark/helper-bin code, including benchmark
+  `expect` calls and direct indexing in `diff_leastsq.rs`.
+
+Negative routing: do not target this end-to-end 10D L-BFGS-B finite-difference
+row next; it is already a large SciPy win. This row is independent of cod-a's
+now-closed `frankenscipy-8l8r1.141` helper-only scratch-buffer evidence and
+does not supersede that helper score.
+
 ## 2026-06-21 - frankenscipy-8l8r1.141 - opt public finite-difference scratch reuse
 
 - Agent: cod-a / BlackThrush

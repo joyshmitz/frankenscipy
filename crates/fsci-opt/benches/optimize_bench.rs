@@ -380,7 +380,7 @@ fn bench_differential_evolution(c: &mut Criterion) {
                 seed: Some(1),
                 ..Default::default()
             };
-            differential_evolution(&rosen, &bounds, opts).expect("DE")
+            differential_evolution(rosen, &bounds, opts).expect("DE")
         })
     });
     group.finish();

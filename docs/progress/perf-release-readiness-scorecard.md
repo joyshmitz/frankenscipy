@@ -1,5 +1,43 @@
 # Performance Release-Readiness Scorecard
 
+## 2026-06-21 - fsci-opt L-BFGS-B 10D finite-diff partial bench
+
+- Agent: cod-b / BlackThrush
+- Bead: `frankenscipy-8l8r1.142`
+- Decision: MEASURED WIN / RELEASE-READY EVIDENCE ROW. The current end-to-end
+  `fsci_opt::lbfgsb` finite-difference 10D Rosenbrock Criterion row is 123.38x
+  faster than the matched local SciPy oracle. No fsci-opt library performance
+  code changed in this pass; there was no neutral/regressing optimization to
+  revert.
+- Artifact:
+  `tests/artifacts/perf/2026-06-21-cod-b-opt-lbfgsb-partial-resume/EVIDENCE.md`
+- Scope note: independent end-to-end L-BFGS-B evidence; it does not supersede
+  the now-closed `frankenscipy-8l8r1.141` public finite-difference helper row.
+
+| Gate | Result | Notes |
+| --- | --- | --- |
+| Per-crate Criterion | PASS | rch `vmi1152480`: `lbfgsb/rosenbrock_unconstrained_fd/10` time `[125.99 us 134.04 us 142.95 us]` |
+| SciPy oracle | PASS | local SciPy 1.17.1 / NumPy 2.4.3 median `16537.314 us`, p95 `19623.567 us`, success true |
+| Ratio vs SciPy | PASS | Rust `123.38x` faster, current-row score `1/0/0` |
+| Focused opt tests | PASS | rch `cargo test -p fsci-opt lbfgsb --lib -- --nocapture`: 8 passed |
+| Live SciPy conformance | PASS | `FSCI_REQUIRE_SCIPY_ORACLE=1` `diff_opt_lbfgsb_minimize`: 1 passed |
+| Per-crate compile | PASS | rch `cargo check -p fsci-opt --all-targets` |
+| Per-crate clippy | PASS | rch `cargo clippy -p fsci-opt --all-targets --no-deps -- -D warnings`; required a benchmark-file needless-borrow fix |
+| Per-crate formatting | PASS | `cargo fmt --check -p fsci-opt`; required rustfmt-only wraps in `optimize_bench.rs` and `diff_leastsq.rs` |
+| Diff hygiene | PASS | `git diff --check` |
+| Changed-file UBS | PASS/WARN | exit 0, 0 critical issues; existing benchmark/helper-bin warning inventory remains |
+
+| Workload | Rust Criterion | SciPy oracle | Ratio | Verdict |
+| --- | ---: | ---: | ---: | --- |
+| `lbfgsb/rosenbrock_unconstrained_fd/10` | 134.040 us | 16537.314 us | 123.38x faster | measured win |
+
+Readiness notes:
+
+- Route future opt benchmarking away from this end-to-end L-BFGS-B 10D row
+  unless a new correctness failure appears; the separate helper-only
+  finite-difference score is tracked under the now-closed
+  `frankenscipy-8l8r1.141` row below.
+
 ## 2026-06-21 - fsci-opt public finite-difference scratch reuse
 
 - Agent: cod-a / BlackThrush
