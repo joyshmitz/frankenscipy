@@ -3,7 +3,7 @@ use std::hint::black_box;
 use fsci_interpolate::{
     BarycentricInterpolator, CloughTocher2DInterpolator, CubicSplineStandalone, GriddataMethod,
     Interp1d, Interp1dOptions, InterpKind, LinearNDInterpolator, PchipInterpolator,
-    RbfInterpolator, RbfKernel, make_interp_spline, RectBivariateSpline, RegularGridInterpolator, RegularGridMethod, SplineBc, griddata,
+    RbfInterpolator, RbfKernel, make_interp_spline, make_smoothing_spline, RectBivariateSpline, RegularGridInterpolator, RegularGridMethod, SplineBc, griddata,
     interp1d_linear, lagrange, polymul, polyroots,
 };
 use fsci_runtime::RuntimeMode;
@@ -334,6 +334,23 @@ fn bench_batch_eval_large(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_smoothing_spline(c: &mut Criterion) {
+    let mut group = c.benchmark_group("smoothing_spline_gcv");
+    for &n in &[200usize, 500, 1000] {
+        // deterministic noisy data; lam=None => GCV path (factor-once banded-Cholesky trace)
+        let x: Vec<f64> = (0..n).map(|i| 10.0 * i as f64 / (n - 1) as f64).collect();
+        let y: Vec<f64> = x
+            .iter()
+            .enumerate()
+            .map(|(i, &xi)| xi.sin() + 0.1 * ((i as f64 * 12.9898).sin() * 43758.5453).fract())
+            .collect();
+        group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
+            b.iter(|| make_smoothing_spline(black_box(&x), black_box(&y), None, None).unwrap())
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_interp1d,
@@ -343,6 +360,7 @@ criterion_group!(
     bench_scattered,
     bench_rbf_and_rect,
     bench_make_interp_spline,
+    bench_smoothing_spline,
     bench_rbf_scattered,
     bench_batch_eval,
     bench_batch_eval_large

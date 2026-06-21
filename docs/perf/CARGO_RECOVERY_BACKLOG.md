@@ -13,9 +13,12 @@ then `cargo test` per crate (interpolate expect 172/0; the 5 zscore/mad/sklearn 
 fails are pre-existing/unrelated). If green, delete the verify-queue doc.
 
 ## P1 — high-value, code already authored / well-scoped
-1. **factor-once GCV trace** (make_smoothing_spline) — real O(n³)→O(n²). PASTE-READY code
-   in make_interp_spline_banded_plan.md "Plan 2" (factor_banded + subst_banded + trace
-   loop). Add the byte-diff test (factor+subst == solve_banded to_bits), then flip.
+1. **factor-once GCV trace** (make_smoothing_spline) — ✅ DONE (2026-06-20, cc): the
+   column-independent SPD `lhs` is now factored ONCE via banded Cholesky (chol_banded)
+   and the n trace RHS substituted (chol_subst) → O(n²). VERIFIED interpolate 173/0
+   (scipy-parity holds; tolerance-parity). NB: the earlier LU-getrs paste-ready code was
+   INCORRECT for a physical-row-swap Vec<Vec> (later swaps scatter stored L) — Cholesky
+   (no pivoting, SPD lhs) avoids that entirely.
 2. **bounded least_squares / curve_fit** — add a `bounds` option + TRF solver (scipy
    default). Common capability gap (non-negative/physical params). Verify vs scipy
    least_squares(method='trf') + curve_fit(bounds=).

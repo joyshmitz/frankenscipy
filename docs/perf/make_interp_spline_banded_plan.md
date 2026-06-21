@@ -296,3 +296,10 @@ CONSEQUENCES for the recovery impl:
 - This means the factor-once trace win is a (tolerance-parity) numerical change to
   make_smoothing_spline's GCV-selected lambda — verify the chosen lambda + coefficients
   stay within scipy tolerance, not that they're unchanged bit-for-bit.
+
+### Plan 2 — SHIPPED via banded Cholesky (2026-06-20, cc)
+The LU factor_banded/subst_banded above is NOT used: for a physical-row-swap Vec<Vec>,
+later-column swaps scatter the stored L multipliers, so a perm-first/interleaved getrs is
+wrong or non-banded. The GCV `lhs = XᵀWX + λXᵀE` is SPD, so it ships as banded CHOLESKY
+(chol_banded + chol_subst, no pivoting → no scatter), factored once per λ. Verified
+interpolate 173/0 (tolerance-parity; scipy-parity tests pass).

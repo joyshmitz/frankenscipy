@@ -2799,6 +2799,66 @@ fn solve_banded(a: &mut [Vec<f64>], b: &mut [f64], bw: usize) -> Result<Vec<f64>
     Ok(x)
 }
 
+/// In-place banded Cholesky of an SPD `(bw,bw)`-banded matrix `a` (only the lower band is
+/// read/written): on success `a`'s lower band holds `L` with `a = L Lᵀ`, `L` lower-`bw`-
+/// banded (Cholesky has no fill-in beyond the original bandwidth, and needs no pivoting).
+/// Returns `None` if `a` is not positive definite (a non-positive pivot) — the caller
+/// treats that like a singular system. Used to factor the column-independent GCV `lhs`
+/// once and substitute the n trace RHS columns (the per-column solve re-factored it n×).
+fn chol_banded(a: &mut [Vec<f64>], bw: usize) -> Option<()> {
+    let n = a.len();
+    for j in 0..n {
+        let klo = j.saturating_sub(bw);
+        let mut d = a[j][j];
+        for k in klo..j {
+            d -= a[j][k] * a[j][k];
+        }
+        if d <= 0.0 {
+            return None;
+        }
+        let ljj = d.sqrt();
+        a[j][j] = ljj;
+        let ihi = (j + bw + 1).min(n);
+        for i in (j + 1)..ihi {
+            // L[i][j] = (a[i][j] - Σ_{k} L[i][k] L[j][k]) / L[j][j], k where both nonzero:
+            // k ∈ [i-bw, j) (since i>j ⇒ i-bw ≥ j-bw, and L[*][k]=0 for k below the band).
+            let kstart = i.saturating_sub(bw);
+            let mut s = a[i][j];
+            for k in kstart..j {
+                s -= a[i][k] * a[j][k];
+            }
+            a[i][j] = s / ljj;
+        }
+    }
+    Some(())
+}
+
+/// Solve `a x = b` for one RHS where `a = L Lᵀ` from [`chol_banded`] (lower `bw`-band):
+/// forward-substitute `L y = b` (in place in `b`), then back-substitute `Lᵀ x = y`.
+/// O(n·bw). Tolerance-parity with `solve_banded` on the same SPD system.
+fn chol_subst(a: &[Vec<f64>], b: &mut [f64], bw: usize) -> Vec<f64> {
+    let n = b.len();
+    for i in 0..n {
+        let klo = i.saturating_sub(bw);
+        let mut s = b[i];
+        for k in klo..i {
+            s -= a[i][k] * b[k];
+        }
+        b[i] = s / a[i][i];
+    }
+    let mut x = vec![0.0; n];
+    for i in (0..n).rev() {
+        let khi = (i + bw + 1).min(n);
+        let mut s = b[i];
+        for k in (i + 1)..khi {
+            // Lᵀ[i][k] = L[k][i] (lower band, row k > col i)
+            s -= a[k][i] * x[k];
+        }
+        x[i] = s / a[i][i];
+    }
+    x
+}
+
 #[derive(Debug)]
 pub struct NearestNDInterpolator {
     tree: fsci_spatial::KDTree,
@@ -5841,28 +5901,31 @@ fn gcv_optimal_lambda(x_full: &[Vec<f64>], e_full: &[Vec<f64>], y: &[f64], w: &[
             numer += (lam * r) * (lam * r);
         }
         numer /= nf;
-        // tr(A) = tr(lhs⁻¹ XtWX), lhs = XtWX + λ XtE; solve lhs Z = XtWX col-by-col.
+        // tr(A) = tr(lhs⁻¹ XtWX), lhs = XtWX + λ XtE. `lhs` is INDEPENDENT of the column,
+        // so the per-column loop was re-factoring the same (4,4)-banded matrix n times
+        // (the residual O(n³): n columns × O(n²) build+factor). `lhs` is SPD (sum of two
+        // Gram matrices, λ≥0), so factor it ONCE with banded Cholesky and substitute the
+        // n RHS columns → O(n·bw² + n²·bw) = O(n²). Tolerance-parity with the per-column
+        // solve_banded (same lhⁱ XtWX, different — Cholesky vs pivoted-LU — FP order); the
+        // GCV objective shifts by ≤~1e-12 so the bounded_minimize λ is effectively the same.
         let mut tr = 0.0_f64;
-        for col in 0..n {
-            // lhs = XᵀWX + λ XᵀWE is (4,4)-banded; fill only |i-j| ≤ 4 (the rest is 0
-            // == the full build). Byte-identical; the per-column build drops O(n²)→O(n)
-            // (so the trace loop O(n³)→O(n²)). solve_banded(_,_,4) creates the LU fill.
-            let mut lhs = vec![vec![0.0_f64; n]; n];
-            for i in 0..n {
-                let jlo = i.saturating_sub(4);
-                let jhi = (i + 4).min(n - 1);
-                for j in jlo..=jhi {
-                    lhs[i][j] = xtwx[i][j] + lam * xte[i][j];
+        let mut lhs = vec![vec![0.0_f64; n]; n];
+        for i in 0..n {
+            let jlo = i.saturating_sub(4);
+            let jhi = (i + 4).min(n - 1);
+            for j in jlo..=jhi {
+                lhs[i][j] = xtwx[i][j] + lam * xte[i][j];
+            }
+        }
+        match chol_banded(&mut lhs, 4) {
+            Some(()) => {
+                for col in 0..n {
+                    let mut b: Vec<f64> = (0..n).map(|i| xtwx[i][col]).collect();
+                    let z = chol_subst(&lhs, &mut b, 4);
+                    tr += z[col];
                 }
             }
-            let mut b: Vec<f64> = (0..n).map(|i| xtwx[i][col]).collect();
-            // lhs = XᵀWX + λ XᵀWE. With X, E (2,2)-banded, both Gram products have
-            // half-bandwidth 2+2 = 4, so lhs is (4,4)-banded → solve_banded(_, _, 4)
-            // is byte-identical to the dense solve and O(n) per column.
-            match solve_banded(&mut lhs, &mut b, 4) {
-                Ok(z) => tr += z[col],
-                Err(_) => return f64::INFINITY,
-            }
+            None => return f64::INFINITY,
         }
         let denom = (1.0 - tr / nf).powi(2);
         numer / denom
