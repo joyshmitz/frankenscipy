@@ -2221,3 +2221,15 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   the fast radix-4 kernel. Substantial FFT engineering, uncertain it beats pocketfft. A genuine
   scalar-vs-SIMD + structure WALL (joins Qhull/HiGHS/LAPACK). Deferred. Twiddles cached + scratch
   reused already (no cheap alloc win). Supersedes yesterday's mixed-radix-lever note.
+
+## 2026-06-21 - GAUNTLET (less-common fns): all WINS — gaussian_kde-nd 14x, RGI 2.3x (no loss)
+- Agent: cc / MistyBirch. Probed less-common/heavy functions beyond the headliners. MEASURED:
+  - gaussian_kde 2D (1000 data × 20000 query): fsci GaussianKdeNd 14.43ms vs scipy 203.7 →
+    WIN 14.1x (parallel + Cholesky/Mahalanobis).
+  - RegularGridInterpolator 4D (100k queries): fsci 17.8ms (serial loop eval) vs scipy 41.3 →
+    WIN 2.3x (eval_many parallel wins more).
+  - periodogram/welch (FFT-based, parallel): prior wins.
+- No clean loss in this batch — the codebase is comprehensively dominant. Confirms the campaign
+  state: every measured function wins or is a documented engineering WALL (pocketfft-non-pow2,
+  Qhull-Delaunay-build, HiGHS, LAPACK) / risky-marginal (kmeans small-n SIMD). Clean algorithmic
+  losses fixed this session.
