@@ -1115,17 +1115,56 @@ pub fn squareform_to_matrix(condensed: &[f64]) -> Result<Vec<Vec<f64>>, SpatialE
         )));
     }
 
-    let mut matrix = vec![vec![0.0; n]; n];
-    let mut idx = 0;
-    #[allow(clippy::needless_range_loop)]
-    for row in 0..n {
-        for col in (row + 1)..n {
-            let val = condensed[idx];
-            matrix[row][col] = val;
-            matrix[col][row] = val;
-            idx += 1;
+    // Build each row independently straight from `condensed` (diagonal 0, off-diagonal the pair
+    // value) — no pre-zero pass and no cross-row mirror writes, so rows are disjoint and parallel.
+    // matrix[i][j] is the same condensed value as the serial fill+mirror ⇒ byte-identical.
+    let row_at = |i: usize, out: &mut Vec<f64>| {
+        for j in 0..n {
+            out.push(if i == j {
+                0.0
+            } else {
+                let (a, b) = if i < j { (i, j) } else { (j, i) };
+                condensed[a * n - a * (a + 1) / 2 + (b - a - 1)]
+            });
         }
+    };
+    let nthreads = cdist_thread_count(n, n, 1);
+    if nthreads <= 1 {
+        let mut matrix = Vec::with_capacity(n);
+        for i in 0..n {
+            let mut row = Vec::with_capacity(n);
+            row_at(i, &mut row);
+            matrix.push(row);
+        }
+        return Ok(matrix);
     }
+    let cond = condensed;
+    let chunk = n.div_ceil(nthreads);
+    let matrix: Vec<Vec<f64>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..n)
+            .step_by(chunk)
+            .map(|r0| {
+                let r1 = (r0 + chunk).min(n);
+                scope.spawn(move || {
+                    let mut part = Vec::with_capacity(r1 - r0);
+                    for i in r0..r1 {
+                        let mut row = Vec::with_capacity(n);
+                        for j in 0..n {
+                            row.push(if i == j {
+                                0.0
+                            } else {
+                                let (a, b) = if i < j { (i, j) } else { (j, i) };
+                                cond[a * n - a * (a + 1) / 2 + (b - a - 1)]
+                            });
+                        }
+                        part.push(row);
+                    }
+                    part
+                })
+            })
+            .collect();
+        handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
+    });
     Ok(matrix)
 }
 
@@ -10692,6 +10731,8 @@ mod pdist_metric_gap_tests {
         }}
     }
 }
+
+
 
 
 
