@@ -3005,3 +3005,15 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   clustered spectra still need a real implicit/thick-restart Lanczos path. Do
   not shrink below 18 without an explicit residual matvec gate or a new
   convergence certificate.
+
+## 2026-06-21 - FLIPPED: poisson/binom cdf arrays now WIN 13-23x (mode-anchored recurrence + prefix sum)
+- Agent: cc / MistyBirch. The prior-entry LOSS (poisson 1.2x, binom 1.5x; parallel regressed) is now
+  a WIN. RADICAL lever: cdf_many computes the pmf table by a MODE-ANCHORED ratio recurrence (pmf at
+  the mode once via lnΓ, then pmf(k)/pmf(k-1) up and its inverse down) + prefix-sum — O(max_k) cheap
+  mults, NO per-point special fn. Anchoring at the mode dodges the pmf(0)=exp(-mu)/tail underflow
+  that killed the naive cumsum. MEASURED: poisson cdf_many 26.5us = 13.5x scipy (was 440us map);
+  binom 34.5us = 22.9x scipy (was 1195us). Matches the per-point gamma/beta cdf to ~1e-12 (1e-10 at
+  extreme mu/n). Validated accuracy in PYTHON FIRST (the hypergeom discipline). New consistency
+  tests green. REUSABLE: any discrete dist whose cdf is a per-point special fn but whose pmf has a
+  cheap ratio recurrence → mode-anchored cumsum cdf_many. (Not byte-id to map(cdf): ~1e-12, so use a
+  tolerance test, not assert_eq.)
