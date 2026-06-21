@@ -1966,19 +1966,17 @@ pub fn gausspulse(t: &[f64], fc: f64, bw: f64) -> Vec<f64> {
 /// * `t` — Time points.
 /// * `poly` — Polynomial coefficients [p₀, p₁, ..., pₙ] for f(t) = p₀tⁿ + ... + pₙ.
 pub fn sweep_poly(t: &[f64], poly: &[f64]) -> Vec<f64> {
-    t.iter()
-        .map(|&ti| {
-            // Integrate polynomial: ∫₀ᵗ (p₀τⁿ + ... + pₙ) dτ
-            // = p₀t^{n+1}/(n+1) + ... + pₙt
-            let n = poly.len();
-            let mut phase_integral = 0.0;
-            for (k, &coeff) in poly.iter().enumerate() {
-                let power = n - 1 - k; // degree of this term
-                phase_integral += coeff * ti.powi(power as i32 + 1) / (power as f64 + 1.0);
-            }
-            (2.0 * std::f64::consts::PI * phase_integral).cos()
-        })
-        .collect()
+    par_index_fill(t.len(), |idx| {
+        let ti = t[idx];
+        // Integrate polynomial: ∫₀ᵗ (p₀τⁿ + ... + pₙ) dτ = p₀t^{n+1}/(n+1) + ... + pₙt
+        let n = poly.len();
+        let mut phase_integral = 0.0;
+        for (k, &coeff) in poly.iter().enumerate() {
+            let power = n - 1 - k; // degree of this term
+            phase_integral += coeff * ti.powi(power as i32 + 1) / (power as f64 + 1.0);
+        }
+        (2.0 * std::f64::consts::PI * phase_integral).cos()
+    })
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -29265,6 +29263,7 @@ mod tests {
         }
     }
 }
+
 
 
 
