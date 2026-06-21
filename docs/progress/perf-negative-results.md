@@ -46,6 +46,68 @@ condition so dead ends are not repeated casually.
   iterative/cache-blocked mixed-radix plan or native SoA/SIMD butterflies with a
   same-host SciPy comparator.
 
+## 2026-06-21 - frankenscipy-8l8r1/cod-a-fft-strided-leaf-tail-20260621 - FFT fused strided small-tail gather rejected
+
+- Agent: cod-a / BlackThrush.
+- Starting point: after the fixed 4/8/16 small power-tail keep, the 5-smooth
+  mixed-radix FFT sweep still lost to local SciPy on most rows. The remaining
+  documented route was a deeper cache/loop-layout plan rather than scalar
+  twiddle or bit-reversal cleanup.
+- Lever: fuse the recursive small power-tail gather into the fixed stack
+  butterflies. For tail lengths 2/4/8/16, the candidate read strided source
+  samples directly into the stack even/odd butterflies and wrote only final
+  output, avoiding the intermediate `out[t] = src[base + t*stride]` leaf pass.
+  This was the smallest reversible artifact from the alien-graveyard
+  polyhedral/cache-layout and NTT/FFT precomputed-twiddle guidance.
+- Decision: REJECT and restore source. The same-worker proof is mixed and the
+  largest power-tail rows regress badly; the fresh SciPy score remains a loss.
+
+Same-worker RCH `hz2`, warm target `/data/projects/.rch-targets/frankenscipy-cod-a`,
+`cargo run --release -p fsci-fft --bin perf_mixed_radix`:
+
+| n | Parent Rust | Candidate Rust | Candidate vs parent |
+| ---: | ---: | ---: | ---: |
+| 720 | 6.440 us | 6.116 us | 1.05x faster |
+| 1000 | 13.252 us | 9.227 us | 1.44x faster |
+| 1080 | 15.330 us | 11.347 us | 1.35x faster |
+| 1500 | 16.864 us | 17.814 us | 1.06x slower |
+| 1920 | 18.240 us | 30.133 us | 1.65x slower |
+| 3000 | 30.539 us | 31.631 us | 1.04x slower |
+| 5000 | 99.940 us | 52.475 us | 1.90x faster |
+| 10000 | 107.460 us | 149.917 us | 1.40x slower |
+
+Fresh local SciPy 1.17.1 / NumPy 2.4.3 oracle on the exact deterministic
+`perf_mixed_radix` signal:
+
+| n | Candidate Rust | SciPy median | Candidate vs SciPy |
+| ---: | ---: | ---: | ---: |
+| 720 | 6.116 us | 9.988 us | 1.63x faster |
+| 1000 | 9.227 us | 7.797 us | 1.18x slower |
+| 1080 | 11.347 us | 8.108 us | 1.40x slower |
+| 1500 | 17.814 us | 11.779 us | 1.51x slower |
+| 1920 | 30.133 us | 12.962 us | 2.32x slower |
+| 3000 | 31.631 us | 21.064 us | 1.50x slower |
+| 5000 | 52.475 us | 37.188 us | 1.41x slower |
+| 10000 | 149.917 us | 72.322 us | 2.07x slower |
+
+- Scorecard: candidate-vs-parent `4/4/0`; candidate-vs-local-SciPy `1/7/0`.
+  Candidate benchmark golden worst max error was `3.394e-14` versus the `1e-9`
+  parity tolerance, and focused correctness passed before the source restore.
+- Final source: restored to the prior fixed-tail implementation. No production
+  code from this candidate remains.
+- Final-source gates after restore: RCH `cargo build --release -p fsci-fft`
+  passed; RCH `cargo test -p fsci-fft
+  mixed_radix_smooth_power_tail_matches_naive_dft --lib -- --nocapture` passed
+  1/0; RCH `cargo test -p fsci-conformance --test diff_fft --test e2e_fft --
+  --nocapture` passed `diff_fft` 34/0 and `e2e_fft` 12/0; RCH
+  `cargo clippy -p fsci-fft --lib -- -D warnings` passed; `git diff --check`
+  passed; UBS reported no recognizable code languages for the changed Markdown
+  evidence files and no findings.
+- Remaining route: do not retry small-tail gather fusion in the current recursive
+  shape. The next plausible FFT attempt is a real iterative/cache-blocked
+  mixed-radix schedule or SIMD-across-r butterfly plan with an in-benchmark
+  current-parent comparator and same-host SciPy timing.
+
 ## 2026-06-21 - frankenscipy-spywk/evc1m/r7y97/u6soc-cod-b-stats-batch-pmf - stats distribution batch PMF/PDF vs SciPy
 
 - Agent: cod-b / BlackThrush.
