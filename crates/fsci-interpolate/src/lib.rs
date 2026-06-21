@@ -1268,17 +1268,24 @@ impl BarycentricInterpolator {
             }
         }
 
-        // Compute barycentric weights using log-sum to reduce overflow risk
-        // for large node counts or widely-spaced nodes.
+        // Barycentric weights w_i = 1/∏_{j≠i}(x_i − x_j). The raw product over/underflows for
+        // even moderate node counts; SciPy's BarycentricInterpolator scales every difference by
+        // the inverse capacity 4/(x_max − x_min), normalizing the interval to unit logarithmic
+        // capacity so the product stays O(1) for large n. The resulting common factor
+        // 4^{−(n−1)}·(x_max−x_min)^{n−1} is identical across all i and cancels in the barycentric
+        // quotient num/den, so eval is unchanged — but now finite for hundreds/thousands of nodes.
+        let x_max = xi.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let x_min = xi.iter().cloned().fold(f64::INFINITY, f64::min);
+        let inv_cap = if x_max > x_min { 4.0 / (x_max - x_min) } else { 1.0 };
         let mut wi = vec![1.0; xi.len()];
         for i in 0..xi.len() {
             let mut denom = 1.0;
             for j in 0..xi.len() {
                 if i != j {
-                    denom *= xi[i] - xi[j];
+                    denom *= inv_cap * (xi[i] - xi[j]);
                 }
             }
-            if !denom.is_finite() || denom.abs() < f64::MIN_POSITIVE {
+            if !denom.is_finite() || denom == 0.0 {
                 return Err(InterpError::InvalidArgument {
                     detail: format!(
                         "barycentric weight computation failed at node {i}: \
@@ -12002,4 +12009,7 @@ mod tests {
         );
     }
 }
+
+
+
 
