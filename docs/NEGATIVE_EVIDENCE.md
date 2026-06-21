@@ -6,6 +6,45 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-21 - frankenscipy-8l8r1.147 - signal upfirdn direct kept-output dot - REJECT
+
+- Agent: cod-b / BlackThrush.
+- Decision: REJECT and restore source. The radical lever replaced the existing
+  full upsampled scatter-convolution plus `step_by(down)` extraction with a
+  direct loop that computes only kept `y[j * down]` outputs. It preserved
+  increasing input-index accumulation order and passed focused correctness, but
+  lost badly in same-binary Criterion.
+- Baseline route: RCH Criterion,
+  `AGENT_NAME=cod-b RCH_REQUIRE_REMOTE=1
+  CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec --
+  cargo bench -p fsci-signal --bench signal_bench -- upfirdn --sample-size 10
+  --warm-up-time 1 --measurement-time 1 --noplot`; old scatter current on
+  `hz1` measured `[6.1036 ms, 6.2150 ms, 6.3814 ms]`.
+- SciPy oracle: local SciPy 1.17.1 / NumPy 2.4.3,
+  `scipy.signal.upfirdn` on the same deterministic `n=200000`, `h=127`,
+  `up=3`, `down=2` row measured p50 `6.334818 ms` (p10 `6.262686 ms`, p90
+  `6.446805 ms`).
+- Failed branch: a scoped threaded version looked good on one RCH worker
+  (`hz2` `[1.9069 ms, 1.9803 ms, 2.0587 ms]`) but regressed on another
+  (`vmi1293453` `[10.106 ms, 11.665 ms, 13.307 ms]`), so thread fan-out is not
+  a safe keep for this row.
+- Same-binary rejection proof after removing thread fan-out: RCH
+  `vmi1227854` measured direct-current
+  `[10.200 ms, 10.620 ms, 10.899 ms]` versus in-bench legacy scatter
+  `[5.1244 ms, 5.3978 ms, 5.5665 ms]`. Internal score: `0/1/0`, candidate is
+  `1.97x` slower than legacy. Ratio vs SciPy: `0/1/0`, candidate is `1.68x`
+  slower than SciPy p50.
+- Correctness gate for the rejected candidate: RCH
+  `cargo test -p fsci-signal upfirdn --lib -- --nocapture` passed `8/8` twice,
+  and the Criterion harness asserted the large direct output was bit-identical
+  to the legacy scatter output before timing.
+- Retry condition: do not retry per-output direct dot for small-rate
+  `up=3/down=2/h=127`; integer division/modulo and strided tap reads dominate
+  the saved writes. A future attempt needs phase-specialized kernels that avoid
+  per-output division, or SIMD/vectorized polyphase blocks with same-worker
+  proof against both legacy and SciPy. Do not use generic `std::thread` fan-out
+  for this row without cross-worker stability proof.
+
 ## 2026-06-21 - frankenscipy-8l8r1/cod-a-zeta-20260621 - special zeta tensor + Riemann fast path - KEEP / RESIDUAL LOSS
 
 - Agent: cod-a / BlackThrush
