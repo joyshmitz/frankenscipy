@@ -12798,12 +12798,11 @@ pub fn gaussian(n: usize, std: f64, sym: bool) -> Vec<f64> {
     }
     let m = if sym { n } else { n + 1 };
     let center = (m as f64 - 1.0) / 2.0;
-    let mut window: Vec<f64> = (0..m)
-        .map(|i| {
-            let x = (i as f64 - center) / std;
-            (-0.5 * x * x).exp()
-        })
-        .collect();
+    // Each sample is an independent compute-bound exp; map it in parallel (work-gated).
+    let mut window = par_index_fill(m, |i| {
+        let x = (i as f64 - center) / std;
+        (-0.5 * x * x).exp()
+    });
     if !sym {
         window.truncate(n);
     }
@@ -29290,6 +29289,7 @@ mod tests {
         }
     }
 }
+
 
 
 
