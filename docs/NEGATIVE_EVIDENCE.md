@@ -3707,3 +3707,24 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   (acc unchanged; par_query_map is order-preserving, proven by 8 existing interpolators). Gates: RCH
   build clean; interpolate lib tests 173/0. The prior "evaluate_many parallel REVERTED (0.88x)" was the
   CHEAP-kernel case pre-par_query_map; the cost-aware gate + heavy cubic kernel makes this a clean flip.
+
+## 2026-06-21 - WIN: ndimage geometric_transform work-gated parallel via fill_pixels_parallel — 6.5-10.3x self
+- Agent: cod-a / BlackThrush. Same lever in fsci-ndimage. The crate has a generic work-gated helper
+  `fill_pixels_parallel(output, kernel_work, |flat, scratch| ...)` already used by affine_transform — but
+  `geometric_transform` was still a SERIAL `for linear_idx in 0..total_out` loop (each output pixel:
+  unravel index → user `mapping` closure → order-N spline interpolation; all independent). The order-3
+  spline kernel is heavy (~560ns/px). Routed the loop through fill_pixels_parallel (added `+ Sync` to the
+  mapping bound). Byte-identical (order-preserving; acc unchanged serial vs parallel).
+- Same-worker hz1, 400x400 input, order-3, Reflect; serial baseline by forcing fill_pixels_parallel serial:
+
+  | output | serial | parallel | self-speedup |
+  | ---: | ---: | ---: | ---: |
+  | 1500x1500 (2.25M px) | 1.260 s | 122.36 ms | 10.3x |
+  | 2500x2500 (6.25M px) | 3.459 s | 528.91 ms | 6.54x |
+
+- vs SciPy: scipy.ndimage.geometric_transform takes a PYTHON mapping callback (one Python call per output
+  pixel) — the documented "callback lever". fsci takes a Rust closure, so it already wins by orders of
+  magnitude serially; the parallel routing stacks another 6.5-10.3x on top. Clean evidence is the
+  same-worker self-speedup (the scipy ratio is huge but not a precise apples-to-apples number).
+- Gates: RCH build clean; ndimage lib suite 246/0 (incl. transform/geometric tests 20/0); byte-identical.
+  affine_transform/map_coordinates were already parallel; geometric_transform was the last serial gap.

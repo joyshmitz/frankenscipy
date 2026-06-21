@@ -9460,7 +9460,7 @@ pub fn geometric_transform<F>(
     cval: f64,
 ) -> Result<NdArray, NdimageError>
 where
-    F: Fn(&[usize]) -> Vec<f64>,
+    F: Fn(&[usize]) -> Vec<f64> + Sync,
 {
     if order > 5 {
         return Err(NdimageError::InvalidArgument(format!(
@@ -9476,20 +9476,23 @@ where
     let total_out: usize = out_shape.iter().product();
 
     let spline = prefilter_spline_coefficients(input, order, mode)?;
-    let mut result = Vec::with_capacity(total_out);
-
-    for linear_idx in 0..total_out {
-        let mut out_coord = Vec::with_capacity(out_shape.len());
-        let mut remaining = linear_idx;
-        for &n in out_shape.iter().rev() {
+    // Each output pixel maps independently (out_coord -> mapping -> spline interpolation of the
+    // read-only coefficients); fill the disjoint output indices in parallel via the shared
+    // work-gated helper — bit-identical to the serial unravel-and-sample loop.
+    let mut output = NdArray::new(vec![0.0_f64; total_out], out_shape.clone())?;
+    let kernel_work = (order + 1).saturating_pow(input.ndim() as u32);
+    let oshape = &out_shape;
+    let mapping = &mapping;
+    fill_pixels_parallel(&mut output, kernel_work, |flat, _scratch| {
+        let mut out_coord = Vec::with_capacity(oshape.len());
+        let mut remaining = flat;
+        for &n in oshape.iter().rev() {
             out_coord.push(remaining % n);
             remaining /= n;
         }
         out_coord.reverse();
-
         let in_coords = mapping(&out_coord);
-
-        let val = sample_interpolated(
+        sample_interpolated(
             input,
             &spline.coeffs,
             &in_coords,
@@ -9497,11 +9500,10 @@ where
             order,
             mode,
             cval,
-        );
-        result.push(val);
-    }
+        )
+    });
 
-    Ok(NdArray::new(result, out_shape).unwrap())
+    Ok(output)
 }
 
 // ══════════════════════════════════════════════════════════════════════
