@@ -610,9 +610,7 @@ pub fn hann(n: usize) -> Vec<f64> {
         return vec![1.0];
     }
     let m = (n - 1) as f64;
-    (0..n)
-        .map(|i| 0.5 * (1.0 - (2.0 * std::f64::consts::PI * i as f64 / m).cos()))
-        .collect()
+    par_index_fill(n, |i| 0.5 * (1.0 - (2.0 * std::f64::consts::PI * i as f64 / m).cos()))
 }
 
 /// Generate a Hamming window of length `n`.
@@ -626,9 +624,7 @@ pub fn hamming(n: usize) -> Vec<f64> {
         return vec![1.0];
     }
     let m = (n - 1) as f64;
-    (0..n)
-        .map(|i| 0.54 - 0.46 * (2.0 * std::f64::consts::PI * i as f64 / m).cos())
-        .collect()
+    par_index_fill(n, |i| 0.54 - 0.46 * (2.0 * std::f64::consts::PI * i as f64 / m).cos())
 }
 
 /// Generate a generalized Hamming window of length `n`.
@@ -659,12 +655,10 @@ pub fn blackman(n: usize) -> Vec<f64> {
         return vec![1.0];
     }
     let m = (n - 1) as f64;
-    (0..n)
-        .map(|i| {
-            let t = 2.0 * std::f64::consts::PI * i as f64 / m;
-            0.42 - 0.5 * t.cos() + 0.08 * (2.0 * t).cos()
-        })
-        .collect()
+    par_index_fill(n, |i| {
+        let t = 2.0 * std::f64::consts::PI * i as f64 / m;
+        0.42 - 0.5 * t.cos() + 0.08 * (2.0 * t).cos()
+    })
 }
 
 /// Generate a Kaiser window of length `n` with shape parameter `beta`.
@@ -3130,12 +3124,10 @@ pub fn barthann(m: usize) -> Vec<f64> {
         return vec![1.0];
     }
     let denom = (m - 1) as f64;
-    (0..m)
-        .map(|i| {
-            let fac = (i as f64 / denom - 0.5).abs();
-            0.62 - 0.48 * fac + 0.38 * (2.0 * std::f64::consts::PI * fac).cos()
-        })
-        .collect()
+    par_index_fill(m, |i| {
+        let fac = (i as f64 / denom - 0.5).abs();
+        0.62 - 0.48 * fac + 0.38 * (2.0 * std::f64::consts::PI * fac).cos()
+    })
 }
 
 /// Nuttall window (minimum 4-term Blackman-Harris).
@@ -29281,6 +29273,7 @@ mod tests {
         }
     }
 }
+
 
 
 
