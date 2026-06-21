@@ -3222,3 +3222,14 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   (distributions 2-71x, special-fns 12-31x, signal+16 windows 6-23x, spatial queries, interpolate).
   Remaining losses are documented WALLS: mode (sort), savgol (bandwidth, shipped to parity), boxcox/
   sweep_poly (powf FMA, skipped), upfirdn, + kernel walls (FFT 5-smooth/Cephes-zeta/Qhull/HiGHS/LAPACK).
+
+## 2026-06-21 - CORRECTION: boxcox parallel IS byte-identical (the FMA rejection was a probe artifact)
+- Agent: cc / MistyBirch. The 2026-06-21 "boxcox parallel 779 mismatches, FMA-blocked, reverted" was
+  WRONG — a probe-reference artifact: a compile-time `lambda=0.5` makes the compiler fold
+  powf(x,0.5)->sqrt (correctly-rounded), but boxcox's RUNTIME lambda uses real powf (~1 ULP off sqrt
+  for ~0.08% of inputs). The 779 was sqrt-vs-powf, NOT serial-vs-parallel. Verified with a runtime
+  (black_box) lambda: boxcox(parallel) == serial map = 0/1e6. SHIPPED boxcox parallel 4.8x.
+- LESSON: when checking serial-vs-parallel byte-identity for a closure with powf(x, EXPONENT), make
+  the exponent RUNTIME (black_box) — a literal/const exponent gets sqrt/cbrt-folded and won't match
+  the runtime-powf production path. The par_map_inline helper (move Copy f, not &f) inlines the
+  closure per-thread. (sweep_poly Horner may likewise be re-checkable.) See [[perf_workgated_parallel_map_continuous]].
