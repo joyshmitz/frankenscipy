@@ -13040,17 +13040,15 @@ pub fn taylor(n: usize, nbar: usize, sll: f64, norm: bool, sym: bool) -> Vec<f64
     // br-y6wj fix (b): scipy's sample positions are (i - (N-1)/2) / N.
     let nf = n_use as f64;
     let center = (nf - 1.0) / 2.0;
-    let mut w: Vec<f64> = (0..n_use)
-        .map(|i| {
-            let pos = (i as f64) - center;
-            let x = pos / nf;
-            let mut val = 1.0;
-            for (m, &fm_m) in fm.iter().enumerate().take(nbar).skip(1) {
-                val += 2.0 * fm_m * (2.0 * std::f64::consts::PI * m as f64 * x).cos();
-            }
-            val
-        })
-        .collect();
+    let mut w = par_index_fill(n_use, |i| {
+        let pos = (i as f64) - center;
+        let x = pos / nf;
+        let mut val = 1.0;
+        for (m, &fm_m) in fm.iter().enumerate().take(nbar).skip(1) {
+            val += 2.0 * fm_m * (2.0 * std::f64::consts::PI * m as f64 * x).cos();
+        }
+        val
+    });
 
     // If asymmetric, truncate to n samples
     if !sym {
@@ -29267,6 +29265,7 @@ mod tests {
         }
     }
 }
+
 
 
 
