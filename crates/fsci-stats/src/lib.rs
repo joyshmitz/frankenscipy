@@ -57108,7 +57108,6 @@ mod tests {
     #[test]
     fn binomial_sf_many_matches_sf() {
         for b in [
-        for b in [
             Binomial::new(10, 0.3),
             Binomial::new(200, 0.5),
             Binomial::new(10, 0.0),
