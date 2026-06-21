@@ -1,5 +1,46 @@
 # Performance Release-Readiness Scorecard
 
+## 2026-06-21 - fsci-ndimage label mean bit-decoder keep / residual loss
+
+- Agent: cod-b / BlackThrush
+- Bead: `frankenscipy-8l8r1.143`
+- Decision: KEEP as an internal win, not a SciPy-dominance claim. The
+  one-based label fast path now uses an exact bit-level positive-integer decoder
+  and beats the parent route on the same worker, but the refreshed strict
+  integer-label SciPy score is still `0/4/0`.
+- Next target: reduction throughput, via deterministic thread-private
+  sharded/cache-tiled sum-count accumulation or sorted/run-grouped labels.
+
+| Gate | Result | Notes |
+| --- | --- | --- |
+| Triage/claim | PASS | `bv --robot-triage` shows `.143` as the active quick win under `frankenscipy-8l8r1`; `br show` has `.143` in_progress, assignee `cod-b` |
+| Helper-bin A/B | PASS | rch `vmi1293453`: parent one_based -> bit decoder speedups 1.18x / 1.30x / 1.16x / 1.38x; `mism=0/0/0/0/0` |
+| Per-crate Criterion | PASS | rch `vmi1293453`: `label_mean` medians 298.57 us / 1.1878 ms / 1.3290 ms / 3.6007 ms |
+| SciPy oracle | FAIL/PERF | local SciPy 1.17.1 / NumPy 2.4.3 integer-label medians: 0.165 ms / 0.578 ms / 0.592 ms / 1.854 ms, so Rust remains 1.81x / 2.05x / 2.25x / 1.94x slower on the Criterion inputs |
+| Focused label semantics | PASS | rch `cargo test -p fsci-ndimage mean_one_based_contiguous_lookup_preserves_exact_label_semantics --lib -- --nocapture`: 1 passed |
+| Negative ledger | PASS | `docs/NEGATIVE_EVIDENCE.md` and `docs/progress/perf-negative-results.md` record ratios and retry predicate |
+| Focused conformance | PASS | local `FSCI_REQUIRE_SCIPY_ORACLE=1 cargo test -p fsci-conformance --test diff_ndimage -- --nocapture`: 5 passed |
+| Per-crate compile | PASS | rch `cargo check -p fsci-ndimage --all-targets` on `hz1`; existing warnings remain in `fsci-interpolate` and `diff_geom` warning was fixed locally |
+| Touched-file formatting / diff hygiene | PASS | `rustfmt --edition 2024 --check` over touched Rust files and `git diff --check` over touched docs/code/beads |
+| Per-crate clippy | BLOCKED/EXISTING | rch `cargo clippy -p fsci-ndimage --all-targets --no-deps -- -D warnings` stops on existing `fsci-ndimage/src/lib.rs` lints outside this patch (`type_complexity`, `needless_range_loop`, `too_many_arguments`, `collapsible_if`) |
+| Changed-file UBS | PASS/WARN | `ubs` on touched Rust/docs/beads exited 0 with 0 critical issues; warning inventory remains broad existing ndimage surface |
+
+| Workload | Parent one_based | Bit-decoder one_based | Self | Criterion Rust | Matching SciPy | Verdict |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| N=65536 K=512 | 411.722 us | 347.753 us | 1.18x faster | 298.57 us | 0.165 ms | residual SciPy loss |
+| N=262144 K=1024 | 1.683 ms | 1.298 ms | 1.30x faster | 1.1878 ms | 0.578 ms | residual SciPy loss |
+| N=262144 K=2048 | 1.578 ms | 1.365 ms | 1.16x faster | 1.3290 ms | 0.592 ms | residual SciPy loss |
+| N=589824 K=4096 | 5.653 ms | 4.092 ms | 1.38x faster | 3.6007 ms | 1.854 ms | residual SciPy loss |
+
+Readiness notes:
+
+- This entry supersedes the old optimistic `1/3/0` label-mean score for this
+  lane with a fresh conservative integer-label oracle: the current route is
+  better than the parent Rust path, but the release gap is not closed.
+- Do not retry scalar classifier variants. The next viable release-readiness
+  move is a deterministic parallel/cache-tiled reducer with a same-worker A/B
+  against this bit-decoder route.
+
 ## 2026-06-21 - fsci-opt L-BFGS-B 10D finite-diff partial bench
 
 - Agent: cod-b / BlackThrush

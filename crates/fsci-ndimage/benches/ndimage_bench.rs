@@ -1,7 +1,8 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_ndimage::{
     BoundaryMode, NdArray, binary_closing, binary_dilation, binary_erosion, binary_opening,
-    maximum_filter, maximum_filter1d, median_filter, minimum_filter, minimum_filter1d, rank_filter,
+    maximum_filter, maximum_filter1d, mean, median_filter, minimum_filter, minimum_filter1d,
+    rank_filter,
 };
 use std::hint::black_box;
 
@@ -130,6 +131,38 @@ fn bench_correlate_gaussian(c: &mut Criterion) {
     group.finish();
 }
 
+fn label_mean_case(side: usize, label_count: usize) -> (NdArray, NdArray, Vec<usize>) {
+    let n = side * side;
+    let labels: Vec<f64> = (0..n)
+        .map(|idx| {
+            let mixed = idx.wrapping_mul(1_664_525).wrapping_add(1_013_904_223) % label_count;
+            (mixed + 1) as f64
+        })
+        .collect();
+    let values: Vec<f64> = (0..n)
+        .map(|idx| {
+            let x = idx as f64;
+            (x * 0.011).sin() * 13.0 + (x * 0.0007).cos() * 17.0
+        })
+        .collect();
+    let input = NdArray::new(values, vec![side, side]).expect("label mean input");
+    let labels = NdArray::new(labels, vec![side, side]).expect("label mean labels");
+    let index = (1..=label_count).collect();
+    (input, labels, index)
+}
+
+fn bench_label_mean(c: &mut Criterion) {
+    let mut group = c.benchmark_group("label_mean");
+    for &(side, label_count) in &[(256usize, 512usize), (512, 1024), (512, 2048), (768, 4096)] {
+        let (input, labels, index) = label_mean_case(side, label_count);
+        group.bench_function(
+            BenchmarkId::new("one_based", format!("n{}_k{}", side * side, label_count)),
+            |b| b.iter(|| mean(black_box(&input), Some(&labels), Some(&index)).expect("mean")),
+        );
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_minmax_filter,
@@ -137,6 +170,7 @@ criterion_group!(
     bench_binary_morph,
     bench_rank_filter,
     bench_correlate_gaussian,
+    bench_label_mean,
     bench_zoom,
     bench_rotate
 );
@@ -151,8 +185,15 @@ fn bench_rotate(c: &mut Criterion) {
     for &order in &[1usize, 3] {
         group.bench_function(BenchmarkId::new("30deg_256", order), |b| {
             b.iter(|| {
-                rotate(black_box(&img), 30.0, false, order, BoundaryMode::Reflect, 0.0)
-                    .expect("rotate")
+                rotate(
+                    black_box(&img),
+                    30.0,
+                    false,
+                    order,
+                    BoundaryMode::Reflect,
+                    0.0,
+                )
+                .expect("rotate")
             })
         });
     }
@@ -169,8 +210,14 @@ fn bench_zoom(c: &mut Criterion) {
     for &order in &[1usize, 3] {
         group.bench_function(BenchmarkId::new("2x_256", order), |b| {
             b.iter(|| {
-                zoom(black_box(&img), &[2.0, 2.0], order, BoundaryMode::Reflect, 0.0)
-                    .expect("zoom")
+                zoom(
+                    black_box(&img),
+                    &[2.0, 2.0],
+                    order,
+                    BoundaryMode::Reflect,
+                    0.0,
+                )
+                .expect("zoom")
             })
         });
     }

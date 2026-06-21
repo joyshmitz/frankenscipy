@@ -6,6 +6,43 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-21 - frankenscipy-8l8r1.143 - ndimage label mean bit decoder - KEEP / RESIDUAL LOSS
+
+- Agent: cod-b / BlackThrush
+- Decision: KEEP as a measured internal win, but do not count it as SciPy
+  dominance. The exact-positive-integer bit decoder removes the hottest
+  one-based label classifier cast/check round trip, but the label-mean route is
+  still slower than local SciPy on the refreshed integer-label oracle.
+- Skill route: graveyard/cache-local constant reduction -> alien-artifact proof
+  obligation is exact integer-label equivalence -> extreme one-lever keep gate
+  -> scoped gauntlet/head-to-head ledger.
+- Bench note: this Cargo does not support `cargo bench --release`; the
+  per-crate Criterion run used Cargo's optimized bench profile via
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b
+  RCH_REQUIRE_REMOTE=1 rch exec -- cargo bench -p fsci-ndimage --bench
+  ndimage_bench -- label_mean --sample-size 10 --warm-up-time 1
+  --measurement-time 1 --noplot` on `vmi1293453`.
+
+| Workload | Parent one_based | Bit-decoder one_based | Local SciPy oracle | Verdict |
+| --- | ---: | ---: | ---: | --- |
+| helper-bin N=65536 K=512 | 411.722 us | 347.753 us | 168.669 us | keep: 1.18x self-speedup; Rust 2.06x slower than SciPy |
+| helper-bin N=262144 K=1024 | 1.683 ms | 1.298 ms | 0.552 ms | keep: 1.30x self-speedup; Rust 2.35x slower than SciPy |
+| helper-bin N=262144 K=2048 | 1.578 ms | 1.365 ms | 0.564 ms | keep: 1.16x self-speedup; Rust 2.42x slower than SciPy |
+| helper-bin N=589824 K=4096 | 5.653 ms | 4.092 ms | 1.616 ms | keep: 1.38x self-speedup; Rust 2.53x slower than SciPy |
+
+Criterion release-bench smoke on the public `mean` path also stayed slower than
+the matching local SciPy oracle: 298.57 us vs 0.165 ms, 1.1878 ms vs 0.578 ms,
+1.3290 ms vs 0.592 ms, and 3.6007 ms vs 1.854 ms. Correctness guard
+`mean_one_based_contiguous_lookup_preserves_exact_label_semantics` passed via
+RCH, with `perf_label_stats` reporting `mism=0/0/0/0/0` against the historical
+routes.
+
+Negative evidence: do not retry dense-table, HashMap, `fract()`, or scalar
+integer-classifier variants for this lane. The remaining gap is reduction
+throughput; retry only with a thread-private sharded/cache-tiled sum-count
+primitive or sorted/run-grouped span ingestion that proves deterministic
+reduction semantics.
+
 ## 2026-06-21 - frankenscipy-8l8r1.142 - opt L-BFGS-B 10D finite-diff partial bench
 
 - Agent: cod-b / BlackThrush

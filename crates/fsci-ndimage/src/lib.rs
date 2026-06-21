@@ -5575,14 +5575,44 @@ fn measurement_one_based_contiguous_index_len(index: &[usize]) -> Option<usize> 
 }
 
 fn measurement_one_based_label_pos(label_count: usize, label_value: f64) -> Option<usize> {
-    if !(label_value >= 1.0 && label_value <= label_count as f64) {
+    let label = measurement_exact_positive_integer_label(label_value)?;
+    (label <= label_count).then_some(label - 1)
+}
+
+fn measurement_exact_positive_integer_label(label_value: f64) -> Option<usize> {
+    let bits = label_value.to_bits();
+    if bits >> 63 != 0 {
         return None;
     }
-    let label = label_value as usize;
-    if label as f64 != label_value {
+
+    let exponent_bits = ((bits >> 52) & 0x7ff) as i32;
+    if exponent_bits == 0 || exponent_bits == 0x7ff {
         return None;
     }
-    Some(label - 1)
+    let exponent = exponent_bits - 1023;
+    if exponent < 0 {
+        return None;
+    }
+
+    let significand = (bits & ((1_u64 << 52) - 1)) | (1_u64 << 52);
+    let label = if exponent <= 52 {
+        let fractional_bits = (52 - exponent) as u32;
+        if fractional_bits > 0 {
+            let fractional_mask = (1_u64 << fractional_bits) - 1;
+            if significand & fractional_mask != 0 {
+                return None;
+            }
+        }
+        significand >> fractional_bits
+    } else {
+        let shift = (exponent - 52) as u32;
+        if shift >= u64::BITS || significand > (u64::MAX >> shift) {
+            return None;
+        }
+        significand << shift
+    };
+
+    usize::try_from(label).ok().filter(|&label| label > 0)
 }
 
 fn measurement_label_mean(

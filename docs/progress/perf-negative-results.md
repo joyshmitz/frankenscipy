@@ -4,6 +4,53 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-21 - frankenscipy-8l8r1.143 - ndimage label mean bit decoder
+
+- Agent: cod-b / BlackThrush
+- Status: measured internal keep; refreshed SciPy residual loss remains.
+- Lever: replace the one-based contiguous `mean(labels,index)` hot classifier's
+  `f64 -> usize -> f64` round-trip with an exact finite positive-integer decoder
+  over IEEE-754 bits. Non-finite, negative, subnormal, fractional, zero, and
+  out-of-range labels still skip exactly as before.
+- Graveyard/artifact route: cache-local constant reduction after the O(N+K)
+  gap was closed; proof obligation is behavior-preserving exact integer-label
+  recognition; fallback remains the dense/hash routes for non-one-based indexes.
+- RCH helper-bin command:
+  `AGENT_NAME=BlackThrush CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b
+  RCH_REQUIRE_REMOTE=1 rch exec -- cargo run --release -p fsci-ndimage --bin
+  perf_label_stats` on `vmi1293453`.
+- RCH Criterion command: `cargo bench -p fsci-ndimage --bench ndimage_bench --
+  label_mean --sample-size 10 --warm-up-time 1 --measurement-time 1 --noplot`
+  on `vmi1293453`. This Cargo does not accept `cargo bench --release`; the
+  bench profile is optimized.
+- Local SciPy oracle: SciPy 1.17.1 / NumPy 2.4.3, integer labels, medians from
+  repeated `scipy.ndimage.mean` calls.
+
+| Workload | Parent one_based | Bit-decoder one_based | Self | SciPy oracle | vs SciPy |
+| --- | ---: | ---: | ---: | ---: | --- |
+| helper-bin N=65536 K=512 | 411.722 us | 347.753 us | 1.18x faster | 168.669 us | Rust 2.06x slower |
+| helper-bin N=262144 K=1024 | 1.683 ms | 1.298 ms | 1.30x faster | 0.552 ms | Rust 2.35x slower |
+| helper-bin N=262144 K=2048 | 1.578 ms | 1.365 ms | 1.16x faster | 0.564 ms | Rust 2.42x slower |
+| helper-bin N=589824 K=4096 | 5.653 ms | 4.092 ms | 1.38x faster | 1.616 ms | Rust 2.53x slower |
+
+| Criterion workload | Rust bench median | Matching SciPy median | Verdict |
+| --- | ---: | ---: | --- |
+| `label_mean/one_based/n65536_k512` | 298.57 us | 0.165 ms | Rust 1.81x slower |
+| `label_mean/one_based/n262144_k1024` | 1.1878 ms | 0.578 ms | Rust 2.05x slower |
+| `label_mean/one_based/n262144_k2048` | 1.3290 ms | 0.592 ms | Rust 2.25x slower |
+| `label_mean/one_based/n589824_k4096` | 3.6007 ms | 1.854 ms | Rust 1.94x slower |
+
+- Same-worker internal score: `4/0/0`.
+- Strict refreshed SciPy score: `0/4/0`.
+- Correctness guard: `mean_one_based_contiguous_lookup_preserves_exact_label_semantics`
+  passed via RCH; helper-bin A/B reports `mism=0/0/0/0/0` against old linear,
+  bucketed, hashflat, dense-fract, and dense-table routes.
+- Negative evidence / retry predicate: do not spend another attempt on scalar
+  label classifier variants (`fract()`, dense table, HashMap, bounded cast, bit
+  decoder). Reopen only for a deeper reduction primitive: thread-private
+  sharded/cache-tiled sum-count accumulation, sorted/run-grouped labels, or a
+  vector-friendly ingestion plan with deterministic reduction proof.
+
 ## 2026-06-21 - frankenscipy-8l8r1.142 - opt L-BFGS-B 10D finite-diff partial bench
 
 - Agent: cod-b / BlackThrush

@@ -21,7 +21,7 @@ fn modes() -> Vec<(&'static str, BoundaryMode)> {
 fn main() {
     // 5x5 deterministic image
     let data: Vec<f64> = (0..25)
-        .map(|i| ((i as f64 * 0.37).sin() + 0.1 * i as f64))
+        .map(|i| (i as f64 * 0.37).sin() + 0.1 * i as f64)
         .collect();
     let img = NdArray::new(data.clone(), vec![5, 5]).unwrap();
     for order in [0usize, 1, 3] {
