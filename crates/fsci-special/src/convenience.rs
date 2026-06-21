@@ -2390,6 +2390,10 @@ where
     Ok(out)
 }
 
+/// Default-SERIAL elementwise map for convenience scalar functions. Nearly all of them are cheap
+/// O(1) kernels (expit/logit/ndtr/relu/silu/… ~14-30ns/call); par_map_indices adds ~40ns/element of
+/// overhead, so parallelizing them is a net LOSS at any practical length. The few genuinely heavy
+/// kernels (kolmogorov/kolmogi series) use [`map_real_par`] instead.
 fn map_real<F>(
     function: &'static str,
     input: &SpecialTensor,
@@ -2399,10 +2403,44 @@ fn map_real<F>(
 where
     F: Fn(f64) -> Result<f64, SpecialError> + Sync,
 {
+    map_real_inner(function, input, mode, kernel, false)
+}
+
+/// Parallel variant of [`map_real`] for heavy per-element kernels (kolmogorov/kolmogi).
+fn map_real_par<F>(
+    function: &'static str,
+    input: &SpecialTensor,
+    mode: RuntimeMode,
+    kernel: F,
+) -> SpecialResult
+where
+    F: Fn(f64) -> Result<f64, SpecialError> + Sync,
+{
+    map_real_inner(function, input, mode, kernel, true)
+}
+
+fn map_real_inner<F>(
+    function: &'static str,
+    input: &SpecialTensor,
+    mode: RuntimeMode,
+    kernel: F,
+    parallel: bool,
+) -> SpecialResult
+where
+    F: Fn(f64) -> Result<f64, SpecialError> + Sync,
+{
     match input {
         SpecialTensor::RealScalar(x) => kernel(*x).map(SpecialTensor::RealScalar),
         SpecialTensor::RealVec(values) => {
-            par_map_indices(values.len(), |i| kernel(values[i])).map(SpecialTensor::RealVec)
+            if parallel {
+                par_map_indices(values.len(), |i| kernel(values[i])).map(SpecialTensor::RealVec)
+            } else {
+                values
+                    .iter()
+                    .map(|&x| kernel(x))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map(SpecialTensor::RealVec)
+            }
         }
         _ => {
             record_special_trace(
@@ -5504,7 +5542,7 @@ where
 ///
 /// Matches `scipy.special.kolmogorov(y)`.
 pub fn kolmogorov(y_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real("kolmogorov", y_tensor, mode, |y| Ok(kolmogorov_scalar(y)))
+    map_real_par("kolmogorov", y_tensor, mode, |y| Ok(kolmogorov_scalar(y)))
 }
 
 #[must_use]
@@ -5544,7 +5582,7 @@ pub fn kolmogorov_scalar(y: f64) -> f64 {
 ///
 /// Matches `scipy.special.kolmogi(p)`.
 pub fn kolmogi(p_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real("kolmogi", p_tensor, mode, |p| Ok(kolmogi_scalar(p)))
+    map_real_par("kolmogi", p_tensor, mode, |p| Ok(kolmogi_scalar(p)))
 }
 
 #[must_use]
