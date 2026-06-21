@@ -1637,3 +1637,18 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   solve_banded(_,_,2) makes the LU fill). Byte-identical; O(n²) → O(n), once per call.
 - PENDING compile-verify (no cargo): identical pattern to 43eb09b2 (already in the
   verify queue); near-zero compile risk; byte-identical so no bench needed.
+
+## 2026-06-20 - AUDIT (read-only, no-cargo): RectBivariateSpline/RGI fits confirmed efficient
+
+- Agent: cc / MistyBirch. Read-only perf audit (no cargo) of fit-constructions I hadn't
+  perf-checked, looking for the dense-where-banded loss pattern (à la make_interp_spline).
+- RectBivariateSpline::new is SEPARABLE (tensor product): compute_coefficients calls
+  `make_interp_spline` per row (along x) then per column (along y). Since
+  make_interp_spline is now COMPACT-BANDED (67798376), RectBivariateSpline **inherits
+  it for free** → O(nx·ny·k), matching scipy. The compact-band fix CASCADED to
+  tensor-product splines (broader impact than the single function). NO loss.
+- RegularGridInterpolator::new is setup/validation only (interpolation happens at query
+  time, already benched ~5.5ms/parity). NO loss.
+- Net: no new loss found; recorded so the surface isn't re-audited. (Confirms the
+  compact-band make_interp_spline win improves any separable spline fit that routes
+  through make_interp_spline / make_lsq_spline per axis.)
