@@ -1796,3 +1796,18 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   Speedup is algorithmic (factor 1× vs n×); MEASURED bench pending (no smoothing-spline
   bench harness). LESSON: the LU getrs factor-once I'd staged was WRONG for physical-swap
   Vec<Vec> (swaps scatter L); SPD ⇒ Cholesky sidesteps pivoting. 3rd correction to this item.
+
+## 2026-06-20 - MEASURED: factor-once GCV vs scipy + next lever (selected-inverse O(n) trace)
+- fsci make_smoothing_spline (lam=None GCV, factor-once banded-Cholesky trace) vs scipy
+  (same noisy data, criterion vs perf_counter): n=200 fsci 25.9ms / scipy 36ms (WIN 1.4x);
+  n=500 232ms / 121ms (LOSE 1.9x); n=1000 889ms / 284ms (LOSE 3.1x).
+- The factor-once IS a real win (O(n³)→O(n²): without it n=1000 would re-factor the
+  col-independent lhs n× per GCV eval ≈ O(n³)·iters = seconds+). And it WINS at n=200.
+- BUT fsci is still O(n²) per GCV eval (n Cholesky substitutions) while scipy is ~O(n)
+  (timing scales O(n^1.2) vs fsci O(n^~2)). scipy computes tr(lhs⁻¹ XtWX) in O(n): since
+  XtWX is banded (bw 4), only the BAND of lhs⁻¹ (|i−j|≤4) is needed:
+  tr = Σ_{|i−j|≤4} (lhs⁻¹)_{ij} (XtWX)_{ij}. The band of lhs⁻¹ comes from the Cholesky
+  factor via the TAKAHASHI selected-inverse recurrence in O(n·bw²) — no n substitutions.
+- NEXT LEVER (would dominate at large n, O(n²)→O(n)): replace the n chol_subst calls with
+  a Takahashi selected-inverse of the (4)-band of lhs⁻¹, then dot against the XtWX band.
+  Added benches/interpolate_bench.rs smoothing_spline_gcv (n=200/500/1000) for A/B.
