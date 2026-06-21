@@ -2174,3 +2174,17 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   (callback-lever 8-441x, parallel/algorithmic wins) with residuals = C-SIMD/library walls
   (FFT, Qhull-Delaunay, HiGHS, LAPACK) + kmeans SIMD/parallel tradeoff. Clean algorithmic
   losses fixed this session (interpolate dense-fits, signal rfft family, linkage family).
+
+## 2026-06-21 - SHIPPED: kmeans/kmeans2 flatten observations to contiguous n×d — large-n 2x self, WIN 2.8x
+- Agent: cc / MistyBirch. kmeans/kmeans2 assigned points over &[Vec<f64>] (scattered heap
+  allocs → cache-miss + non-vectorizable). Flatten the observations ONCE into a contiguous
+  n×d buffer before the Lloyd loop; assign_points now indexes &data_flat[i*d..i*d+d]
+  (sequential, cache-friendly, auto-vectorizable). Byte-identical (deterministic per-point
+  assignment; cluster 142/0).
+- MEASURED (same matrix-init, iter=10): 50000×16 k=20 88→44ms (2.0x self) vs scipy 124ms →
+  WIN 2.8x (was 1.4x). 20000×8 k=10 ~26ms (no regression; data fits cache so flatten neutral
+  there — still loses scipy 9.54ms 2.8x: that small-n case is SIMD-bound on the SERIAL scan
+  below the parallel gate, would need a SIMD nearest_centroid; deferred).
+- REVERTED a gate experiment: lowering the assign parallel gate 2²¹→2¹⁹ made 20000×8 WORSE
+  (46ms — std::thread::scope spawn-per-Lloyd-iter overhead dominates at ~1.6M work); the high
+  gate is correct. Kept only the byte-identical flatten.

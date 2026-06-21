@@ -2338,13 +2338,16 @@ pub fn kmeans(
     let mut labels = vec![0usize; n];
     let mut inertia = f64::INFINITY;
 
+    // Flatten the observations ONCE into a contiguous n×d buffer for cache-friendly,
+    // auto-vectorizable distance scans in the assignment step (vs Vec<Vec> pointer-chasing).
+    let data_flat: Vec<f64> = data.iter().flat_map(|p| p.iter().copied()).collect();
     for iter in 0..max_iter {
         // Assignment step: each point's nearest centroid is independent, so compute
         // (label, min_dist) in parallel. The inertia is then summed SEQUENTIALLY in
         // point order so its floating-point reduction — and therefore the convergence
         // check and iteration count — stay bit-identical to the serial version.
         let centroids_flat = flatten_centroids(&centroids, d);
-        let assignments = assign_points(data, &centroids_flat, k, d);
+        let assignments = assign_points(&data_flat, n, &centroids_flat, k, d);
         let mut new_inertia = 0.0;
         for (i, &(best_c, min_dist)) in assignments.iter().enumerate() {
             labels[i] = best_c;
@@ -3242,11 +3245,12 @@ pub fn kmeans2(
     let mut counts = vec![0usize; nc];
     let mut next_cb = code_book.clone();
     let mut centroids_flat = Vec::with_capacity(nc * d);
+    let data_flat: Vec<f64> = data.iter().flat_map(|p| p.iter().copied()).collect();
     for _ in 0..iter {
         // Assign each observation to its nearest current centroid. kmeans2 only
         // needs labels, so bypass vq's Euclidean-distance sqrt/output vector.
         flatten_centroids_into(&code_book, d, &mut centroids_flat);
-        let assignments = assign_points(data, &centroids_flat, nc, d);
+        let assignments = assign_points(&data_flat, data.len(), &centroids_flat, nc, d);
         for (dst, &(best_c, _)) in label.iter_mut().zip(assignments.iter()) {
             *dst = best_c;
         }
@@ -5374,12 +5378,12 @@ fn flatten_centroids_into(centroids: &[Vec<f64>], d: usize, flat: &mut Vec<f64>)
 // comes from the same pure `nearest_centroid`, so the per-point result is
 // bit-identical and order is preserved (the caller sums inertia sequentially).
 fn assign_points(
-    data: &[Vec<f64>],
+    data_flat: &[f64],
+    n: usize,
     centroids_flat: &[f64],
     k: usize,
     d: usize,
 ) -> Vec<(usize, f64)> {
-    let n = data.len();
     let work = (n as u64)
         .saturating_mul(k as u64)
         .saturating_mul(d.max(1) as u64);
@@ -5394,10 +5398,11 @@ fn assign_points(
             .min(n / 32)
             .max(1)
     };
+    // Contiguous flat layout (n×d): points are read sequentially (cache-friendly + auto-
+    // vectorizable) instead of chasing `Vec<Vec<f64>>` heap pointers.
     if nthreads <= 1 {
-        return data
-            .iter()
-            .map(|p| nearest_centroid(p, centroids_flat, k, d))
+        return (0..n)
+            .map(|i| nearest_centroid(&data_flat[i * d..i * d + d], centroids_flat, k, d))
             .collect();
     }
     let chunk = n.div_ceil(nthreads);
@@ -5410,9 +5415,10 @@ fn assign_points(
                 }
                 let i1 = (i0 + chunk).min(n);
                 Some(scope.spawn(move || {
-                    data[i0..i1]
-                        .iter()
-                        .map(|p| nearest_centroid(p, centroids_flat, k, d))
+                    (i0..i1)
+                        .map(|i| {
+                            nearest_centroid(&data_flat[i * d..i * d + d], centroids_flat, k, d)
+                        })
                         .collect::<Vec<(usize, f64)>>()
                 }))
             })
@@ -9665,6 +9671,7 @@ mod tests {
         );
     }
 }
+
 
 
 
