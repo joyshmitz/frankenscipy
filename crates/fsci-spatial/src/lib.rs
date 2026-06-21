@@ -4870,18 +4870,60 @@ pub fn directed_hausdorff(xa: &[Vec<f64>], xb: &[Vec<f64>]) -> Result<f64, Spati
     // pairs cannot change the result. Iterating in a fixed deterministic
     // shuffled order makes the early break effective on adversarially-ordered
     // input without affecting the result.
-    let order_a = hausdorff_scan_order(xa.len(), 0x9E37_79B9_7F4A_7C15);
-    let order_b = hausdorff_scan_order(xb.len(), 0xD1B5_4A32_D192_ED03);
+    // Flatten to contiguous n*dim buffers: the shuffled inner scan does a random `xb[bi]` access
+    // per pair; with Vec<Vec> that is a pointer-chase + cache miss, with a flat buffer it is one
+    // contiguous slice. Parallelize the outer (a) loop with a per-thread local cmax; the result is
+    // max_a min_b d, which is order- and partition-independent, so per-thread cmax only changes
+    // WHICH non-achieving pairs are pruned — the achieving a never early-breaks (its min_b ≥ cmax),
+    // so its min is computed by the same sqeuclidean → the scalar is byte-identical to the serial
+    // single-cmax loop.
+    let na = xa.len();
+    let nb = xb.len();
+    let xa_flat: Vec<f64> = xa.iter().flat_map(|p| p.iter().copied()).collect();
+    let xb_flat: Vec<f64> = xb.iter().flat_map(|p| p.iter().copied()).collect();
+    let order_a = hausdorff_scan_order(na, 0x9E37_79B9_7F4A_7C15);
+    let order_b = hausdorff_scan_order(nb, 0xD1B5_4A32_D192_ED03);
+    let nthreads = cdist_thread_count(na, nb, dim);
 
+    let cmax = if nthreads <= 1 {
+        hausdorff_taha_chunk(&order_a, &xa_flat, &xb_flat, &order_b, dim)
+    } else {
+        let (xf, bf, ob) = (&xa_flat, &xb_flat, &order_b);
+        let chunk_size = na.div_ceil(nthreads);
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = order_a
+                .chunks(chunk_size)
+                .map(|chunk| scope.spawn(move || hausdorff_taha_chunk(chunk, xf, bf, ob, dim)))
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().unwrap())
+                .fold(0.0_f64, f64::max)
+        })
+    };
+    Ok(cmax.sqrt())
+}
+
+/// Taha & Hanbury directed-Hausdorff inner kernel over a chunk of `a`-indices (flat n*dim buffers).
+/// Returns the chunk's local `max_a min_b d²`; callers max-reduce across chunks. The early break
+/// (`d² < cmax`) prunes only `a`s that cannot raise the max, so the result is exact.
+fn hausdorff_taha_chunk(
+    chunk: &[usize],
+    xa_flat: &[f64],
+    xb_flat: &[f64],
+    order_b: &[usize],
+    dim: usize,
+) -> f64 {
     let mut cmax = 0.0_f64;
-    for &ai in &order_a {
-        let a = &xa[ai];
+    for &ai in chunk {
+        let a = &xa_flat[ai * dim..ai * dim + dim];
         let mut cmin = f64::INFINITY;
-        for &bi in &order_b {
-            let d_sq = sqeuclidean(a, &xb[bi]);
+        for &bi in order_b {
+            let b = &xb_flat[bi * dim..bi * dim + dim];
+            let d_sq = sqeuclidean(a, b);
             if d_sq < cmax {
                 cmin = d_sq;
-                break; // this a cannot beat the current max; stop scanning it
+                break;
             }
             if d_sq < cmin {
                 cmin = d_sq;
@@ -4891,7 +4933,7 @@ pub fn directed_hausdorff(xa: &[Vec<f64>], xb: &[Vec<f64>]) -> Result<f64, Spati
             cmax = cmin;
         }
     }
-    Ok(cmax.sqrt())
+    cmax
 }
 
 /// Deterministic Fisher–Yates permutation of `0..n` from a fixed seed. Only the
@@ -10650,4 +10692,7 @@ mod pdist_metric_gap_tests {
         }}
     }
 }
+
+
+
 
