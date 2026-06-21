@@ -6,6 +6,53 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-21 - frankenscipy-spywk/evc1m/r7y97/u6soc-cod-b-stats-batch-pmf - stats distribution batch PMF/PDF vs SciPy - KEEP / STALE BEADS CLOSED
+
+- Agent: cod-b / BlackThrush.
+- Decision: KEEP the existing batch distribution route and close the stale
+  stats PMF beads. No production source change was needed: `fsci-stats` already
+  has the hoisted batch `pmf_many`/`logpmf_many` implementations for the
+  selected discrete distributions. This pass added missing Criterion coverage
+  for binomial, negative-binomial, and beta-binomial batch-vs-scalar paths and
+  refreshed the head-to-head SciPy ratios.
+- Radical route: alien-graveyard / alien-artifact-coding reduced the target to
+  parameter-only normalizer hoisting across whole support sweeps. The
+  extreme-optimization and gauntlet stop rule rejected lower-level surgery
+  because the measured batch surface already dominates SciPy and the remaining
+  risk is scalar API overhead, not the batch primitive.
+- Rust benchmark: `AGENT_NAME=cod-b RCH_REQUIRE_REMOTE=1
+  CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec --
+  cargo bench -p fsci-stats --bench stats_bench --profile release --
+  distribution_batch --sample-size 10 --warm-up-time 1 --measurement-time 1
+  --noplot` on RCH `ovh-a`.
+- SciPy oracle: local SciPy 1.17.1 / NumPy 2.4.3, same deterministic supports:
+  gamma/beta 4096-point `x`, binomial full `0..=2000` support,
+  negative-binomial `0..4096` tail, beta-binomial full `0..=2000` support, and
+  hypergeometric `0..=700` support.
+
+| Workload | Rust Criterion median | SciPy vector median | Rust vs SciPy |
+| --- | ---: | ---: | ---: |
+| `gamma/pdf_many` | 41.007 us | 141.137 us | 3.44x faster |
+| `beta/pdf_many` | 60.708 us | 291.948 us | 4.81x faster |
+| `binomial/pmf_many` | 72.944 us | 199.684 us | 2.74x faster |
+| `negbinom/pmf_many` | 151.84 us | 363.424 us | 2.39x faster |
+| `betabinom/pmf_many` | 104.92 us | 261.245 us | 2.49x faster |
+| `hypergeom/pmf_many` | 38.493 us | 3.723278 ms | 96.73x faster |
+
+- Batch-vs-scalar sanity: Rust batch also beat Rust scalar-map rows for all six
+  measured distribution surfaces (`6/0/0`), with the discrete bead subset
+  `4/0/0` vs SciPy.
+- Gates: RCH `cargo test -p fsci-stats pmf_many_matches_pmf --lib --
+  --nocapture` passed 5/0; local live-SciPy `FSCI_REQUIRE_SCIPY_ORACLE=1
+  CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b cargo test
+  -p fsci-conformance --test diff_stats_binom --test diff_stats_nbinom --test
+  diff_stats_hypergeom --test diff_stats_discrete_moments -- --nocapture`
+  passed 4/0; touched-file `rustfmt --edition 2024 --check
+  crates/fsci-stats/benches/stats_bench.rs` passed.
+- Follow-up route: target scalar distribution APIs or missing conformance
+  fixtures only if a fresh oracle shows a real loss. Do not reopen these batch
+  PMF beads without a new `0/x/0` batch-vs-SciPy score.
+
 ## 2026-06-21 - frankenscipy-8l8r1/cod-b-label-mean-f64-refresh - ndimage label_mean public f64 labels - STALE LOSS CLOSED / NO CODE CHANGE
 
 - Agent: cod-b / BlackThrush.

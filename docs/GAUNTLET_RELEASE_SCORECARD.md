@@ -1,6 +1,6 @@
 # Gauntlet Release Scorecard
 
-Last updated: 2026-06-21 by cod-a / BlackThrush.
+Last updated: 2026-06-21 by cod-b / BlackThrush.
 
 This scorecard tracks code-first performance work that has been converted into
 measured head-to-head evidence against the SciPy original. The detailed
@@ -45,6 +45,7 @@ win/loss/neutral ledger lives in `docs/progress/perf-negative-results.md`.
 | `frankenscipy-9g6ku` | `cluster.vq.kmeans2` fixed-shape fused SIMD Lloyd assignment | n=2000 k=4 d=4 iter=50, matrix init | 378.67 us | 1624.576 us | **4.29x faster** | keep — final fused assignment+accumulation is 3.14x faster than the fresh legacy `vq` loop; standalone pre-fused candidate was rejected at 1.39x slower than SciPy |
 | `frankenscipy-i0ghz` | `spatial.distance.pdist` dim-4 Chebyshev SIMD-across-pairs | n=512 d=4 | 0.139 ms | 0.176 ms | **1.27x faster** | keep — high-dimension Chebyshev still appears in measured losses below |
 | `frankenscipy-8l8r1/cod-b-label-mean-f64-refresh` | `ndimage.mean(labels,index)` public f64-label Criterion surface | N=65536/K512, N=262144/K1024, N=262144/K2048, N=589824/K4096 | 133.04 us / 620.30 us / 633.41 us / 1.3557 ms on RCH `hz2` | 2.696417 ms / 11.354026 ms / 10.986039 ms / 30.765495 ms local SciPy f64-label oracle | **20.27 / 18.31 / 17.34 / 22.69x faster** | stale-loss correction; no source change; conservative integer-label SciPy oracle remains separate routing evidence |
+| `frankenscipy-spywk/evc1m/r7y97/u6soc` | stats batch distribution PMF/PDF normalizer hoist | gamma/beta 4096-point PDF, binomial n=2000 full support, negative-binomial 4096 tail, beta-binomial n=2000 full support, hypergeometric 701 support | 41.007 / 60.708 / 72.944 / 151.84 / 104.92 / 38.493 us | 141.137 / 291.948 / 199.684 / 363.424 / 261.245 us / 3.723278 ms | **3.44 / 4.81 / 2.74 / 2.39 / 2.49 / 96.73x faster** | keep - batch score `6/0/0` vs SciPy; discrete PMF beads closed with conformance green |
 
 ## Measured Losses / Internal Keeps
 

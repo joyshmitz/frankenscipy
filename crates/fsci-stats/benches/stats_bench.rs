@@ -1,10 +1,12 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use std::hint::black_box;
 use fsci_stats::{
-    HaltonSampler, SobolSampler, SomersDInput, acf, argsort, centered_discrepancy, ecdf, histogram,
-    binned_statistic, binned_statistic_2d, energy_distance, wasserstein_distance, binned_statistic_dd, kendalltau, l2_star_discrepancy, mannkendall, mixture_discrepancy, pacf,
-    ks_2samp, kruskal, mannwhitneyu, psd_welch, rand_index, siegelslopes, somersd, theilslopes, wraparound_discrepancy,
+    HaltonSampler, SobolSampler, SomersDInput, acf, argsort, binned_statistic, binned_statistic_2d,
+    binned_statistic_dd, centered_discrepancy, ecdf, energy_distance, histogram, kendalltau,
+    kruskal, ks_2samp, l2_star_discrepancy, mannkendall, mannwhitneyu, mixture_discrepancy, pacf,
+    psd_welch, rand_index, siegelslopes, somersd, theilslopes, wasserstein_distance,
+    wraparound_discrepancy,
 };
+use std::hint::black_box;
 
 fn deterministic_data(n: usize) -> Vec<f64> {
     (0..n)
@@ -128,7 +130,8 @@ fn bench_rand_index(c: &mut Criterion) {
 /// compute the expensive lgamma/ln_beta normalizer ONCE instead of per point.
 fn bench_distribution_batch(c: &mut Criterion) {
     use fsci_stats::{
-        BetaDist, ContinuousDistribution, DiscreteDistribution, GammaDist, Hypergeometric,
+        BetaBinomial, BetaDist, Binomial, ContinuousDistribution, DiscreteDistribution, GammaDist,
+        Hypergeometric, NegBinomial,
     };
     let n = 4096usize;
     let mut group = c.benchmark_group("distribution_batch");
@@ -149,6 +152,30 @@ fn bench_distribution_batch(c: &mut Criterion) {
         b.iter(|| bx.iter().map(|&x| bt.pdf(x)).collect::<Vec<_>>())
     });
 
+    // Binomial: 3 parameter-only terms hoisted over a full support sweep.
+    let bin = Binomial::new(2000, 0.37);
+    let bin_ks: Vec<u64> = (0..=2000).collect();
+    group.bench_function("binomial/pmf_many", |b| b.iter(|| bin.pmf_many(&bin_ks)));
+    group.bench_function("binomial/map_pmf", |b| {
+        b.iter(|| bin_ks.iter().map(|&k| bin.pmf(k)).collect::<Vec<_>>())
+    });
+
+    // Negative binomial: parameter-only lnGamma/log terms hoisted across a long tail.
+    let nbin = NegBinomial::new(20.0, 0.42);
+    let tail_ks: Vec<u64> = (0..n as u64).collect();
+    group.bench_function("negbinom/pmf_many", |b| b.iter(|| nbin.pmf_many(&tail_ks)));
+    group.bench_function("negbinom/map_pmf", |b| {
+        b.iter(|| tail_ks.iter().map(|&k| nbin.pmf(k)).collect::<Vec<_>>())
+    });
+
+    // Beta-binomial: 5 lgamma/point hoisted over a bounded support.
+    let bb = BetaBinomial::new(2000, 2.5, 7.0);
+    let bb_ks: Vec<u64> = (0..=2000).collect();
+    group.bench_function("betabinom/pmf_many", |b| b.iter(|| bb.pmf_many(&bb_ks)));
+    group.bench_function("betabinom/map_pmf", |b| {
+        b.iter(|| bb_ks.iter().map(|&k| bb.pmf(k)).collect::<Vec<_>>())
+    });
+
     // Hypergeometric: 5 lgamma/point hoisted (Fisher's-exact-test full support).
     let h = Hypergeometric::new(2000, 700, 1200);
     let ks: Vec<u64> = (0..=700).collect();
@@ -166,11 +193,21 @@ fn bench_distribution_batch(c: &mut Criterion) {
 fn bench_rank_tests(c: &mut Criterion) {
     let mut group = c.benchmark_group("rank_tests");
     let n = 200_000usize;
-    let x: Vec<f64> = (0..n).map(|i| ((i * 2654435761usize) % 100003) as f64 * 1e-4).collect();
-    let y: Vec<f64> = (0..n).map(|i| ((i * 40503usize + 7) % 100003) as f64 * 1e-4 + 0.1).collect();
-    group.bench_function("ks_2samp_200k", |b| b.iter(|| ks_2samp(black_box(&x), black_box(&y))));
-    group.bench_function("mannwhitneyu_200k", |b| b.iter(|| mannwhitneyu(black_box(&x), black_box(&y))));
-    group.bench_function("kruskal_200k", |b| b.iter(|| kruskal(&[black_box(&x), black_box(&y)])));
+    let x: Vec<f64> = (0..n)
+        .map(|i| ((i * 2654435761usize) % 100003) as f64 * 1e-4)
+        .collect();
+    let y: Vec<f64> = (0..n)
+        .map(|i| ((i * 40503usize + 7) % 100003) as f64 * 1e-4 + 0.1)
+        .collect();
+    group.bench_function("ks_2samp_200k", |b| {
+        b.iter(|| ks_2samp(black_box(&x), black_box(&y)))
+    });
+    group.bench_function("mannwhitneyu_200k", |b| {
+        b.iter(|| mannwhitneyu(black_box(&x), black_box(&y)))
+    });
+    group.bench_function("kruskal_200k", |b| {
+        b.iter(|| kruskal(&[black_box(&x), black_box(&y)]))
+    });
     group.finish();
 }
 
@@ -182,19 +219,29 @@ fn bench_mvt_pdf(c: &mut Criterion) {
     for &d in &[3usize, 10] {
         let loc: Vec<f64> = (0..d).map(|i| (i as f64) * 0.1).collect();
         let a: Vec<Vec<f64>> = (0..d)
-            .map(|i| (0..d).map(|j| ((i * 7 + j * 3) % 5) as f64 * 0.2 - 0.4).collect())
+            .map(|i| {
+                (0..d)
+                    .map(|j| ((i * 7 + j * 3) % 5) as f64 * 0.2 - 0.4)
+                    .collect()
+            })
             .collect();
         let mut shape = vec![vec![0.0; d]; d];
         for i in 0..d {
             for j in 0..d {
                 let mut sv = 0.0;
-                for k in 0..d { sv += a[i][k] * a[j][k]; }
+                for k in 0..d {
+                    sv += a[i][k] * a[j][k];
+                }
                 shape[i][j] = sv + if i == j { d as f64 } else { 0.0 };
             }
         }
         let mvt = MultivariateT::new(&loc, &shape, 5.0).expect("mvt");
         let q: Vec<Vec<f64>> = (0..m)
-            .map(|t| (0..d).map(|j| ((t * 13 + j * 17) % 1000) as f64 * 0.01 - 5.0).collect())
+            .map(|t| {
+                (0..d)
+                    .map(|j| ((t * 13 + j * 17) % 1000) as f64 * 0.01 - 5.0)
+                    .collect()
+            })
             .collect();
         group.bench_function(BenchmarkId::new("pdf_many", d), |b| {
             b.iter(|| mvt.pdf_many(black_box(&q)).expect("pdf"))
@@ -212,19 +259,29 @@ fn bench_mvn_pdf(c: &mut Criterion) {
         let mean: Vec<f64> = (0..d).map(|i| (i as f64) * 0.1).collect();
         // SPD covariance: A A^T + d I
         let a: Vec<Vec<f64>> = (0..d)
-            .map(|i| (0..d).map(|j| ((i * 7 + j * 3) % 5) as f64 * 0.2 - 0.4).collect())
+            .map(|i| {
+                (0..d)
+                    .map(|j| ((i * 7 + j * 3) % 5) as f64 * 0.2 - 0.4)
+                    .collect()
+            })
             .collect();
         let mut cov = vec![vec![0.0; d]; d];
         for i in 0..d {
             for j in 0..d {
                 let mut s = 0.0;
-                for k in 0..d { s += a[i][k] * a[j][k]; }
+                for k in 0..d {
+                    s += a[i][k] * a[j][k];
+                }
                 cov[i][j] = s + if i == j { d as f64 } else { 0.0 };
             }
         }
         let mvn = MultivariateNormal::new(&mean, &cov).expect("mvn");
         let q: Vec<Vec<f64>> = (0..m)
-            .map(|t| (0..d).map(|j| ((t * 13 + j * 17) % 1000) as f64 * 0.01 - 5.0).collect())
+            .map(|t| {
+                (0..d)
+                    .map(|j| ((t * 13 + j * 17) % 1000) as f64 * 0.01 - 5.0)
+                    .collect()
+            })
             .collect();
         group.bench_function(BenchmarkId::new("pdf_many", d), |b| {
             b.iter(|| mvn.pdf_many(black_box(&q)).expect("pdf"))
@@ -241,14 +298,22 @@ fn bench_kde_nd(c: &mut Criterion) {
     let data: Vec<Vec<f64>> = (0..n)
         .map(|i| {
             let t = i as f64;
-            vec![(t * 0.017).sin(), (t * 0.0031).cos() * 2.0, (t * 0.011).sin() * 0.5]
+            vec![
+                (t * 0.017).sin(),
+                (t * 0.0031).cos() * 2.0,
+                (t * 0.011).sin() * 0.5,
+            ]
         })
         .collect();
     let kde = GaussianKdeNd::new(&data).expect("kde");
     let q: Vec<Vec<f64>> = (0..m)
         .map(|i| {
             let t = i as f64;
-            vec![(t * 0.02).cos(), (t * 0.005).sin() * 2.0, (t * 0.013).cos() * 0.5]
+            vec![
+                (t * 0.02).cos(),
+                (t * 0.005).sin() * 2.0,
+                (t * 0.013).cos() * 0.5,
+            ]
         })
         .collect();
     group.bench_function("d3_eval5k", |b| b.iter(|| kde.evaluate_many(black_box(&q))));
@@ -296,7 +361,9 @@ fn bench_mgc(c: &mut Criterion) {
 fn bench_robust_slopes(c: &mut Criterion) {
     let mut group = c.benchmark_group("robust_slopes");
     for &n in &[2000usize, 4000] {
-        let x: Vec<f64> = (0..n).map(|i| i as f64 * 0.001 + (i % 7) as f64 * 1e-4).collect();
+        let x: Vec<f64> = (0..n)
+            .map(|i| i as f64 * 0.001 + (i % 7) as f64 * 1e-4)
+            .collect();
         let y: Vec<f64> = (0..n)
             .map(|i| 2.0 * x[i] + ((i * 2654435761usize) % 1000) as f64 * 1e-3)
             .collect();
@@ -314,8 +381,12 @@ fn bench_distribution_distances(c: &mut Criterion) {
     use criterion::BenchmarkId;
     let mut group = c.benchmark_group("distribution_distances");
     for &n in &[50_000usize, 200_000] {
-        let u: Vec<f64> = (0..n).map(|i| (i as f64 * 0.0007).sin() * 2.0 + (i % 31) as f64 * 0.03).collect();
-        let v: Vec<f64> = (0..n).map(|i| (i as f64 * 0.0011).cos() * 2.0 + 0.3 + (i % 17) as f64 * 0.05).collect();
+        let u: Vec<f64> = (0..n)
+            .map(|i| (i as f64 * 0.0007).sin() * 2.0 + (i % 31) as f64 * 0.03)
+            .collect();
+        let v: Vec<f64> = (0..n)
+            .map(|i| (i as f64 * 0.0011).cos() * 2.0 + 0.3 + (i % 17) as f64 * 0.05)
+            .collect();
         group.bench_function(BenchmarkId::new("wasserstein", n), |b| {
             b.iter(|| wasserstein_distance(black_box(&u), black_box(&v)))
         });
@@ -330,7 +401,9 @@ fn bench_binned_statistic_1d(c: &mut Criterion) {
     use criterion::BenchmarkId;
     let mut group = c.benchmark_group("binned_statistic_1d");
     let n = 200_000usize;
-    let xs: Vec<f64> = (0..n).map(|i| ((i * 2654435761usize) % 100000) as f64 / 100000.0).collect();
+    let xs: Vec<f64> = (0..n)
+        .map(|i| ((i * 2654435761usize) % 100000) as f64 / 100000.0)
+        .collect();
     let vs: Vec<f64> = (0..n).map(|i| (i as f64 * 0.001).sin()).collect();
     for &bins in &[1000usize, 5000] {
         group.bench_function(BenchmarkId::new("mean", bins), |b| {
@@ -366,8 +439,12 @@ fn bench_binned_statistic_2d(c: &mut Criterion) {
     use criterion::BenchmarkId;
     let mut group = c.benchmark_group("binned_statistic_2d");
     let n = 200_000usize;
-    let xs: Vec<f64> = (0..n).map(|i| ((i * 2654435761usize) % 100000) as f64 / 100000.0).collect();
-    let ys: Vec<f64> = (0..n).map(|i| ((i * 40503usize + 7) % 100000) as f64 / 100000.0).collect();
+    let xs: Vec<f64> = (0..n)
+        .map(|i| ((i * 2654435761usize) % 100000) as f64 / 100000.0)
+        .collect();
+    let ys: Vec<f64> = (0..n)
+        .map(|i| ((i * 40503usize + 7) % 100000) as f64 / 100000.0)
+        .collect();
     let vs: Vec<f64> = (0..n).map(|i| (i as f64 * 0.001).sin()).collect();
     for stat in &["mean", "sum", "count"] {
         group.bench_function(BenchmarkId::new(*stat, n), |b| {
