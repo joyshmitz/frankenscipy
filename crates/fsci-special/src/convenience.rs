@@ -418,6 +418,31 @@ pub fn ndtri_scalar(y: f64) -> f64 {
     }
     // Route through erfcinv on the small complementary argument so the deep tail
     // stays finite (2y-1 rounds to ±1 for |y-½| → ½, killing the old form).
+    // The central region (tail = min(y,1-y) > 0.03125) uses the fast erfinv path below
+    // (~52ns/call). The moderate tail otherwise routes to erfcinv_conv's erfcx
+    // continued-fraction Newton (~5.4µs/call). Instead, refine with HALLEY on the fast,
+    // accurate ndtr CDF: self-correcting to ~1e-15 in a few steps, no magic constants, and
+    // — being the SHARED inverse — keeps ppf/isf consistent. The extreme tail (tail < 1e-15,
+    // where ndtr underflows) keeps the erfcinv erfcx path for accuracy.
+    let t = y.min(1.0 - y);
+    if (1e-3..=0.03125).contains(&t) {
+        // Solve ndtr(xn) = t for the LOWER tail xn<0 (always the small prob t, so ndtr(xn)-t
+        // has no catastrophic cancellation and ndtr stays relatively accurate for t≥1e-3);
+        // ndtri(y) is then xn (y<½) or -xn (y>½). Halley on the fast accurate ndtr converges
+        // to ~1e-15 with no magic constants.
+        const INV_SQRT_2PI: f64 = 0.398_942_280_401_432_7;
+        let mut xn = -(-2.0 * t.ln()).sqrt();
+        for _ in 0..6 {
+            let e = ndtr_scalar(xn) - t;
+            if e == 0.0 {
+                break;
+            }
+            let pdf = (-0.5 * xn * xn).exp() * INV_SQRT_2PI;
+            let u = e / pdf;
+            xn -= u / (1.0 + 0.5 * xn * u);
+        }
+        return if y < 0.5 { xn } else { -xn };
+    }
     if y <= 0.5 {
         -SQRT_2 * erfcinv_conv(2.0 * y)
     } else {
