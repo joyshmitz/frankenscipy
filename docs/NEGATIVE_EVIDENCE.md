@@ -2483,3 +2483,14 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   cramervonmises_2samp 4.92 vs 4.76 PARITY; anderson_ksamp 7.68 vs 5.88 LOSE 1.3x (modest,
   complex test, not chased). fsci's rank/sort-based tests (O(n log n)) dominate scipy's.
 - No clean loss in this surface. Confirms broad dominance; stats hypothesis tests are DONE.
+
+## 2026-06-21 - cluster/integrate gauntlet: cophenet parity, vq/whiten modest walls (no clean loss)
+- Agent: cc / MistyBirch. MEASURED fsci vs scipy: cophenet 1500 1.89ms vs 2.12 WIN 1.1x (parity);
+  vq 50000×8 k=16 3.75 vs 2.58 LOSE 1.45x; whiten 50000×8 5.46 vs 2.44 LOSE 2.2x; simpson/
+  cumulative_simpson tiny (parity).
+- vq is already optimal (flat centroids + nearest_centroid prefilter/early-exit + parallel gate);
+  its 1.45x is the SAME nearest_centroid-vs-scipy-C wall as kmeans small-n (documented).
+- whiten 2.2x: cost is the inherent Vec<Vec<f64>> OUTPUT alloc (50k small Vecs) vs scipy's single
+  contiguous ndarray + a redundant finiteness pass. Fusing the read passes is ~0.4ms (churn,
+  byte-risky if via sumsq); the alloc is an API wall (return type is Vec<Vec>). Not chased.
+- No clean loss in cluster/integrate. Confirms dominance; these surfaces are DONE.
