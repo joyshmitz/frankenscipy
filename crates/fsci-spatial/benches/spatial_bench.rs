@@ -57,7 +57,7 @@ fn bench_pdist(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("euclidean", n), |b| {
             b.iter(|| pdist(&data, DistanceMetric::Euclidean))
         });
-        group.bench_function(BenchmarkId::new("chebyshev", n), |b| {
+        group.bench_function(BenchmarkId::new("chebyshev_repeat", n), |b| {
             b.iter(|| pdist(&data, DistanceMetric::Chebyshev))
         });
         group.bench_function(BenchmarkId::new("cosine", n), |b| {

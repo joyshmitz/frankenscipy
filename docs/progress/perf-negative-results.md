@@ -4207,3 +4207,32 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
   plus timing-oracle covered.
 - Decision: keep the benchmark/evidence closeout and do not spend more cycles on
   these batch PDF/PMF rows unless a future profile shows a new regression.
+
+## 2026-06-21 - frankenscipy-w7ocv/frankenscipy-7b50e/cod-b-spatial-transform-batch-20260621 - Rotation and rigid-transform batch rows verified
+
+- Agent: cod-b / BlackThrush.
+- Lever: existing `Rotation::apply_many` and `RigidTransform::apply_many`
+  precompute the transform matrix once and stream the 8192-point cloud. This
+  closes stale leaves; no production spatial kernel changed.
+- Harness fix: `spatial_bench.rs` had two `pdist/chebyshev/{n}` Criterion IDs.
+  The repeated workload now uses `chebyshev_repeat`, so filtered transform
+  benches exit 0 instead of emitting target rows and then panicking.
+- RCH `vmi1149989`, requested target
+  `/data/projects/.rch-targets/frankenscipy-cod-b`, filtered
+  `cargo bench -p fsci-spatial --bench spatial_bench --profile release --
+  transform_batch --sample-size 10 --warm-up-time 1 --measurement-time 1
+  --noplot`:
+
+| Row | Rust batch | Rust scalar map | Local SciPy 1.17.1 | Ratio vs SciPy |
+| --- | ---: | ---: | ---: | ---: |
+| Rotation apply, 8192 points | 7.8047 us | 45.626 us | 27.482 us | 3.52x faster |
+| RigidTransform apply, 8192 points | 13.336 us | 60.087 us | 221.830 us | 16.63x faster |
+
+- Scorecard: Rust-vs-SciPy `2/0/0`; same-worker batch-vs-scalar `2/0/0`.
+  Same-worker SciPy was unavailable because all configured RCH workers lacked an
+  importable `scipy`; no packages were installed.
+- Gates: `cargo fmt --package fsci-spatial -- --check` passed; RCH
+  `fsci-spatial apply_many_matches_apply` passed 2/0; filtered RCH spatial bench
+  passed; RCH-built `diff_spatial_slerp_rotation` passed locally with
+  `FSCI_REQUIRE_SCIPY_ORACLE=1`.
+- Decision: keep the harness fix and close the stale transform batch leaves.

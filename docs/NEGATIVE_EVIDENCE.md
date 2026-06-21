@@ -3471,3 +3471,49 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
 - Decision: KEEP the benchmark/evidence closeout and close the stale batch
   distribution beads. Remaining stats routes should chase true residual losses,
   not these already-dominant batch PDF/PMF rows.
+
+## 2026-06-21 - KEEP: spatial transform batch APIs dominate SciPy on point-cloud grids
+
+- Agent: cod-b / BlackThrush. Beads `frankenscipy-w7ocv`,
+  `frankenscipy-7b50e`.
+- Lever from the graveyard/vectorization pass: compute the rigid/rotation
+  transform matrix once, then stream the 8192-point cloud through a batch
+  kernel. `Rotation::apply_many` and `RigidTransform::apply_many` already
+  existed on `origin/main`; this pass verifies and closes the stale leaves
+  rather than adding production code.
+- Bench-harness blocker fixed: the spatial Criterion harness registered
+  `pdist/chebyshev/{n}` twice, so even a filtered `transform_batch` run emitted
+  the target rows and then exited 101 during later registration. One repeated
+  Chebyshev row is now `chebyshev_repeat`, preserving the workload and letting
+  filtered benches exit cleanly.
+- RCH Criterion proof, per-crate only, warm target requested as
+  `/data/projects/.rch-targets/frankenscipy-cod-b`. RCH selected `vmi1149989`
+  and rewrote the target dir to its worker-scoped pool path. Command:
+  `AGENT_NAME=cod-b RCH_REQUIRE_REMOTE=1 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec -- cargo bench -p fsci-spatial --bench spatial_bench --profile release -- transform_batch --sample-size 10 --warm-up-time 1 --measurement-time 1 --noplot`.
+
+  | Row | Rust batch median | Rust scalar-map median | Local SciPy 1.17.1 median | Ratio vs SciPy |
+  | --- | ---: | ---: | ---: | ---: |
+  | `Rotation::apply_many`, 8192 points | 7.8047 us | 45.626 us | 27.482 us | 3.52x faster |
+  | `RigidTransform::apply_many`, 8192 points | 13.336 us | 60.087 us | 221.830 us | 16.63x faster |
+
+- Scorecard: RCH-Rust-vs-local-SciPy `2 wins / 0 losses / 0 neutral`;
+  same-worker internal batch-vs-scalar `2 wins / 0 losses / 0 neutral`.
+  Internal speedups are 5.85x for `Rotation` and 4.51x for `RigidTransform`.
+- Same-worker SciPy status: every configured RCH worker probed negative for
+  importable `scipy`, and `rch exec` correctly refuses non-compilation Python
+  commands in proof mode. No packages were installed. A direct local Rust bench
+  into the existing cod-b target was attempted but stopped on mixed-rustc
+  artifacts in that target dir; no clean or new target was used.
+- Gates:
+  - `cargo fmt --package fsci-spatial -- --check` passed.
+  - RCH `cargo test -p fsci-spatial apply_many_matches_apply --lib -- --nocapture`
+    passed `rotation_apply_many_matches_apply` and
+    `rigid_transform_apply_many_matches_apply`.
+  - RCH `cargo bench -p fsci-spatial --bench spatial_bench --profile release --
+    transform_batch ...` passed after the duplicate-ID fix.
+  - RCH compiled `fsci-conformance --test diff_spatial_slerp_rotation`; that
+    remote run failed only because the worker lacked SciPy. The RCH-built test
+    executable was copied into the existing cod-b target dir and passed locally
+    with `FSCI_REQUIRE_SCIPY_ORACLE=1`, exercising live SciPy.
+- Decision: KEEP the bench-harness fix and close the stale transform batch
+  leaves. There is no production source change to revert.
