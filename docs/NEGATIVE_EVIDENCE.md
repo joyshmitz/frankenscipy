@@ -2683,3 +2683,12 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   map_real DEFAULT SERIAL + map_real_par for the only heavy callers (kolmogorov/kolmogi series, which
   genuinely WIN parallel: 4.85/15.06, 5.88/88.9). Byte-identical. The cheap-kernel-serialization lever
   has now flipped ellipk/ellipe + gamma/gammaln/digamma/erf/erfc + ~18 convenience fns = ~25 fns.
+
+## 2026-06-21 - cheap-kernel-serialization vein EXHAUSTED (boundary verified)
+- Agent: cc / MistyBirch. Final sweep: gammasgn serialized (5.9x, par 4.25/ser 0.72). Boundary
+  VERIFIED by measurement (par vs serial 100k): SERIAL (cheap, now fixed) = ellipk/ellipe, gamma/
+  gammaln/digamma, erf/erfc, expit/logit/ndtr/silu/relu/+~14 convenience, gammasgn (~25 fns, 3-6.7x).
+  PARALLEL (heavy, correctly left alone) = rgamma (58ns), beta (115ns), betaln (87ns), multigammaln,
+  kolmogorov/kolmogi (series), struve/jv/bessel/hyper (heavy). LEVER complete: par_map_indices
+  length-gates (n>=256) regardless of COST → serialize real arms with kernel < ~46ns/call (the par
+  break-even given ~40ns/elem overhead); keep parallel above. Don't re-sweep — boundary mapped.
