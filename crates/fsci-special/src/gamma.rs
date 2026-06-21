@@ -2476,13 +2476,21 @@ pub fn perm(n: u64, k: u64) -> f64 {
 // Riemann Zeta Function
 // ══════════════════════════════════════════════════════════════════════
 
-/// Compute the Riemann zeta function ζ(s) for real s.
+/// Compute the Riemann zeta function ζ(s) for real tensors.
+///
+/// Matches `scipy.special.zeta(s)` and uses the same parallel RealVec dispatch
+/// shape as the gamma-family tensor entry points.
+pub fn zeta(s_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real_input("zeta", s_tensor, mode, |s| Ok(zeta_scalar(s)))
+}
+
+/// Compute the Riemann zeta function ζ(s) for real scalar `s`.
 ///
 /// Matches `scipy.special.zeta(s)`.
 ///
 /// Uses direct summation with Euler-Maclaurin acceleration for s > 1,
 /// and the reflection formula for s < 0.
-pub fn zeta(s: f64) -> f64 {
+pub(crate) fn zeta_scalar(s: f64) -> f64 {
     if s.is_nan() {
         return f64::NAN;
     }
@@ -2540,13 +2548,53 @@ pub fn zeta(s: f64) -> f64 {
 
 /// Zeta for s > 1 via Euler-Maclaurin summation.
 ///
-/// Delegates to `hurwitz_zeta(s, 1.0)`. Both Hurwitz and Riemann
-/// share the same Euler-Maclaurin kernel, and routing the Riemann
-/// case through hurwitz_zeta gives the full j=4 Bernoulli correction
-/// (versus the previous in-place j=2 truncation that floored at
-/// ~5e-11 abs accuracy near s=1.1) — frankenscipy-3u8ze.
+/// Specializes the Hurwitz `a = 1` case by hard-wiring the direct
+/// summation prefix and using `exp(-s ln n)` instead of generic
+/// `powf`. N=12 plus four Bernoulli corrections keeps the existing
+/// near-pole unit-test points below 1e-12 abs while removing ten
+/// transcendental calls per positive Riemann evaluation.
 fn zeta_positive(s: f64) -> f64 {
-    crate::convenience::hurwitz_zeta(s, 1.0)
+    const DIRECT_LN: [f64; 11] = [
+        0.693_147_180_559_945_3,
+        1.098_612_288_668_109_8,
+        1.386_294_361_119_890_6,
+        1.609_437_912_434_100_3,
+        1.791_759_469_228_055,
+        1.945_910_149_055_313_2,
+        2.079_441_541_679_835_7,
+        2.197_224_577_336_219_6,
+        2.302_585_092_994_046,
+        2.397_895_272_798_370_7,
+        2.484_906_649_788_000_4,
+    ];
+    const TAIL_NA: f64 = 13.0;
+    const TAIL_LN: f64 = 2.564_949_357_461_536_7;
+    const TAIL_INV: f64 = 1.0 / TAIL_NA;
+    const TAIL_INV_SQ: f64 = TAIL_INV * TAIL_INV;
+
+    let mut sum = 1.0;
+    for &ln_n in &DIRECT_LN {
+        sum += (-s * ln_n).exp();
+    }
+
+    let tail_neg_s = (-s * TAIL_LN).exp();
+    sum += TAIL_NA * tail_neg_s / (s - 1.0);
+    sum += 0.5 * tail_neg_s;
+
+    let mut term = tail_neg_s * TAIL_INV;
+    let mut poch = s;
+    sum += (1.0 / 12.0) * poch * term;
+    term *= TAIL_INV_SQ;
+    poch *= (s + 1.0) * (s + 2.0);
+    sum -= (1.0 / 720.0) * poch * term;
+    term *= TAIL_INV_SQ;
+    poch *= (s + 3.0) * (s + 4.0);
+    sum += (1.0 / 30240.0) * poch * term;
+    term *= TAIL_INV_SQ;
+    poch *= (s + 5.0) * (s + 6.0);
+    sum -= (1.0 / 1209600.0) * poch * term;
+
+    sum
 }
 
 /// Dirichlet eta function η(s) = Σ_{n≥1} (-1)^{n+1} / n^s, for s > 0.
@@ -2582,7 +2630,15 @@ fn dirichlet_eta(s: f64) -> f64 {
     -sum / dn
 }
 
-/// Compute the Riemann zeta function complement: zetac(s) = zeta(s) - 1.
+/// Compute the Riemann zeta function complement: zetac(s) = zeta(s) - 1 for real tensors.
+///
+/// Matches `scipy.special.zetac(s)` and preserves the same RealVec parallel
+/// dispatch contract as [`zeta`].
+pub fn zetac(s_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    map_real_input("zetac", s_tensor, mode, |s| Ok(zetac_scalar(s)))
+}
+
+/// Compute the Riemann zeta function complement: zetac(s) = zeta(s) - 1 for scalar `s`.
 ///
 /// Matches `scipy.special.zetac(s)`.
 ///
@@ -2595,7 +2651,7 @@ fn dirichlet_eta(s: f64) -> f64 {
 ///
 /// # Returns
 /// ζ(s) - 1 for any real s ≠ 1
-pub fn zetac(s: f64) -> f64 {
+pub fn zetac_scalar(s: f64) -> f64 {
     if s.is_nan() {
         return f64::NAN;
     }
@@ -2616,7 +2672,7 @@ pub fn zetac(s: f64) -> f64 {
         sum
     } else {
         // For smaller s, just compute zeta(s) - 1
-        zeta(s) - 1.0
+        zeta_scalar(s) - 1.0
     }
 }
 
@@ -3844,7 +3900,7 @@ mod tests {
     #[test]
     fn zetac_small_s() {
         // zetac(2) = zeta(2) - 1 = π²/6 - 1 ≈ 0.6449340668
-        let result = zetac(2.0);
+        let result = zetac_scalar(2.0);
         let expected = PI * PI / 6.0 - 1.0;
         assert!((result - expected).abs() < 1e-10);
     }
@@ -3853,7 +3909,7 @@ mod tests {
     fn zetac_large_s() {
         // For large s, zetac(s) ≈ 2^(-s)
         let s = 20.0;
-        let result = zetac(s);
+        let result = zetac_scalar(s);
         let approx = 2.0_f64.powf(-s);
         // Should be close to 2^(-s), within a few percent
         assert!((result - approx).abs() / approx < 0.01);
@@ -3863,8 +3919,8 @@ mod tests {
     fn zetac_consistency() {
         // zetac(s) should equal zeta(s) - 1
         for s in [3.0, 4.0, 5.0, 10.0] {
-            let zetac_result = zetac(s);
-            let zeta_minus_one = zeta(s) - 1.0;
+            let zetac_result = zetac_scalar(s);
+            let zeta_minus_one = zeta_scalar(s) - 1.0;
             assert!((zetac_result - zeta_minus_one).abs() < 1e-12);
         }
     }
@@ -3872,7 +3928,7 @@ mod tests {
     #[test]
     fn zetac_pole() {
         // At s=1, zetac should return infinity
-        assert!(zetac(1.0).is_infinite());
+        assert!(zetac_scalar(1.0).is_infinite());
     }
 
     #[test]
@@ -3887,11 +3943,34 @@ mod tests {
             (0.7, -3.778_388_445_553_696),
             (0.9, -10.430_114_019_402_255),
         ] {
-            let got = zetac(s);
+            let got = zetac_scalar(s);
             assert!(
                 (got - expected).abs() < 1e-10,
                 "zetac({s}) = {got}, expected {expected}"
             );
+        }
+    }
+
+    #[test]
+    fn zeta_tensor_vec_matches_scalar_surface() {
+        let values = vec![1.1, 2.0, 3.0, 10.0];
+        let input = SpecialTensor::RealVec(values.clone());
+        let got = zeta(&input, RuntimeMode::Strict).expect("zeta RealVec");
+        let got = match got {
+            SpecialTensor::RealVec(items) => items,
+            other => panic!("expected RealVec, got {other:?}"),
+        };
+        for (value, got_value) in values.iter().zip(got.iter()) {
+            assert_eq!(*got_value, zeta_scalar(*value), "zeta({value})");
+        }
+
+        let got = zetac(&input, RuntimeMode::Strict).expect("zetac RealVec");
+        let got = match got {
+            SpecialTensor::RealVec(items) => items,
+            other => panic!("expected RealVec, got {other:?}"),
+        };
+        for (value, got_value) in values.iter().zip(got.iter()) {
+            assert_eq!(*got_value, zetac_scalar(*value), "zetac({value})");
         }
     }
 
@@ -5144,7 +5223,7 @@ mod tests {
             (6.0, pi.powi(6) / 945.0),
         ];
         for &(s, expected) in cases {
-            let got = zeta(s);
+            let got = zeta_scalar(s);
             let rel = ((got - expected) / expected).abs();
             assert!(
                 rel < 1e-9,
@@ -5152,7 +5231,7 @@ mod tests {
             );
         }
         // Large-s tail: ζ(s) → 1 as s → ∞.
-        assert!((zeta(50.0) - 1.0).abs() < 1e-14);
+        assert!((zeta_scalar(50.0) - 1.0).abs() < 1e-14);
     }
 
     #[test]

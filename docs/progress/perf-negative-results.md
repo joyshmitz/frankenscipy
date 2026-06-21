@@ -3708,3 +3708,40 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
 - Remaining route: iterative/cache-blocked mixed-radix with vectorizable SoA
   butterflies. Do not claim this lane closed until fresh head-to-head rows beat
   SciPy on the 1000-10000 5-smooth sweep.
+
+## 2026-06-21 - frankenscipy-8l8r1/cod-a-zeta-20260621 - special zeta tensor + Riemann fast path narrows but does not close SciPy loss
+
+- Agent: cod-a / BlackThrush
+- Starting point: `scipy.special.zeta` still beat the Rust Riemann-zeta path on
+  large real vectors. The Rust scalar route paid the generic Hurwitz
+  Euler-Maclaurin path for `a = 1`, including 20 `powf` direct-prefix terms per
+  element.
+- Lever: add a real-vector `zeta`/`zetac` tensor surface and specialize positive
+  Riemann zeta with a fixed N=12 Euler-Maclaurin prefix using precomputed
+  `ln(n)` constants plus the existing Bernoulli tail. This preserves the
+  existing scalar semantics while removing the generic Hurwitz overhead from
+  the hot Riemann branch.
+- Same-worker RCH Criterion on `hz1`:
+  `AGENT_NAME=cod-a RCH_WORKER=hz1 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a
+  rch exec -- cargo bench -p fsci-special --bench special_bench special_zeta_array -- --noplot`.
+
+  | Workload | Before | After | Internal ratio |
+  | --- | ---: | ---: | ---: |
+  | scalar loop, 100k `s in [1.1,10]` | 45.382 ms | 6.8706 ms | 6.60x faster |
+  | tensor RealVec, 100k `s in [1.1,10]` | 28.213 ms | 2.6170 ms | 10.78x faster |
+
+- Head-to-head caveat: `hz1` cannot import `scipy.special`, so the Criterion
+  SciPy row skipped remotely. Local SciPy 1.17.1 on the same deterministic
+  100k vector measured 1.937611 ms median. Cross-host ratio is Rust 1.35x
+  slower than SciPy; score vs SciPy remains **0 wins / 1 loss / 0 neutral**.
+  The prior residual was about 14.5x slower, so this is a large narrowing but
+  not a BOLD-VERIFY dominance closeout.
+- Gates: RCH `cargo test -p fsci-special zeta --lib` passed 22/0; local
+  live-SciPy conformance passed `diff_special_common_scalar_wrappers`,
+  `diff_special_binom_zetac`, and `diff_special_zeta`; RCH release build
+  `cargo build --release -p fsci-special -p fsci-stats` passed with existing
+  warnings only.
+- Decision: KEEP the internal win and tensor dispatch, keep the SciPy loss open.
+  Do not retry generic Hurwitz delegation or thread fan-out alone; the remaining
+  path needs a vector-specialized piecewise zeta kernel, measured on a worker
+  that can run the SciPy oracle or by a same-host non-Cargo Rust timing harness.

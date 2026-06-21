@@ -164,7 +164,7 @@ use fsci_special::{
     stdtrit as special_stdtrit, struve as special_struve, tandg as special_tandg,
     wright_bessel as special_wright_bessel, xlog1py as special_xlog1py, xlogx as special_xlogx,
     xlogy as special_xlogy, y0 as special_y0, y1 as special_y1, yn as special_yn,
-    yvp as special_yvp, zeta as special_zeta, zetac as special_zetac,
+    yvp as special_yvp, zeta_scalar as special_zeta, zetac_scalar as special_zetac,
 };
 #[cfg(feature = "dashboard")]
 use ftui::{PackedRgba, Style};

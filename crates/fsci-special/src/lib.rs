@@ -281,7 +281,7 @@ pub use gamma::{
     gammainc_scalar, gammaincc, gammaincc_scalar, gammaln, gammaln_scalar, gammasgn,
     gammasgn_scalar, gdtr, gdtrc, gdtria, gdtrib, gdtrix, log_gammainc_scalar,
     log_gammaincc_scalar, loggamma, loggamma_scalar, multigammaln, pdtr, pdtrc, pdtri, pdtrik,
-    perm, polygamma, psi, rgamma, zeta, zetac,
+    perm, polygamma, psi, rgamma, zeta, zetac, zetac_scalar,
 };
 pub use hyper::{
     HYPER_DISPATCH_PLAN, HyperCaspDecision, HyperCaspProblem, HypergeometricBranch,
@@ -1968,7 +1968,7 @@ mod tests {
     #[test]
     fn zeta_known_values() {
         // ζ(2) = π²/6
-        let z2 = zeta(2.0);
+        let z2 = zeta_scalar(2.0);
         let expected = std::f64::consts::PI * std::f64::consts::PI / 6.0;
         assert!(
             (z2 - expected).abs() < 1e-3,
@@ -1976,7 +1976,7 @@ mod tests {
         );
 
         // ζ(4) = π⁴/90
-        let z4 = zeta(4.0);
+        let z4 = zeta_scalar(4.0);
         let expected4 = std::f64::consts::PI.powi(4) / 90.0;
         assert!(
             (z4 - expected4).abs() < 1e-4,
@@ -1986,24 +1986,32 @@ mod tests {
 
     #[test]
     fn zeta_at_zero() {
-        assert!((zeta(0.0) - (-0.5)).abs() < 1e-12, "zeta(0) = -1/2");
+        assert!((zeta_scalar(0.0) - (-0.5)).abs() < 1e-12, "zeta(0) = -1/2");
     }
 
     #[test]
     fn zeta_pole_at_one() {
-        assert!(zeta(1.0).is_infinite());
+        assert!(zeta_scalar(1.0).is_infinite());
     }
 
     #[test]
     fn zeta_negative_even_integers() {
         // ζ(-2n) = 0 for positive integers n (trivial zeros)
-        assert!(zeta(-2.0).abs() < 1e-6, "zeta(-2) = {}", zeta(-2.0));
-        assert!(zeta(-4.0).abs() < 1e-4, "zeta(-4) = {}", zeta(-4.0));
+        assert!(
+            zeta_scalar(-2.0).abs() < 1e-6,
+            "zeta(-2) = {}",
+            zeta_scalar(-2.0)
+        );
+        assert!(
+            zeta_scalar(-4.0).abs() < 1e-4,
+            "zeta(-4) = {}",
+            zeta_scalar(-4.0)
+        );
     }
 
     #[test]
     fn zeta_nan_passthrough() {
-        assert!(zeta(f64::NAN).is_nan());
+        assert!(zeta_scalar(f64::NAN).is_nan());
     }
 
     // ── Spherical Bessel function tests ──────────────────────────────
@@ -2597,7 +2605,7 @@ mod tests {
     #[test]
     fn hurwitz_zeta_reduces_to_riemann() {
         // ζ(s, 1) = ζ(s) (Riemann zeta)
-        let riemann = zeta(2.0);
+        let riemann = zeta_scalar(2.0);
         let hurwitz = hurwitz_zeta(2.0, 1.0);
         assert!(
             (hurwitz - riemann).abs() < 1e-12,
@@ -2679,7 +2687,7 @@ mod tests {
             (2.0, 1.6449340668482264),
         ];
         for (s, expected) in cases {
-            let got = zeta(s);
+            let got = zeta_scalar(s);
             let diff = (got - expected).abs();
             assert!(
                 diff < 1e-12,

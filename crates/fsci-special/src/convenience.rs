@@ -2192,7 +2192,7 @@ pub fn bernoulli(n: u32) -> f64 {
             // B_{2n} = (-1)^{n+1} * 2 * (2n)! / (2π)^{2n} * ζ(2n)
             let nf = n as f64;
             let sign = if (n / 2) & 1 == 0 { -1.0 } else { 1.0 };
-            let zeta_val = crate::gamma::zeta(nf);
+            let zeta_val = crate::gamma::zeta_scalar(nf);
             sign * 2.0 * gamma_fn(nf + 1.0) / (2.0 * PI).powf(nf) * zeta_val
         }
     }
@@ -4927,13 +4927,13 @@ pub fn lambertw_scalar(x: f64) -> f64 {
 /// scipy returns the analytic continuation over the whole real line — the pole
 /// `ζ(1) = +∞`, `ζ(0) = -1/2`, the negative-`s` reflection (e.g. `ζ(-1) = -1/12`)
 /// and the critical strip `0 < s < 1` (e.g. `ζ(1/2) ≈ -1.4603`). The underlying
-/// `gamma::zeta` already implements all of these; this wrapper previously failed
+/// `gamma::zeta_scalar` already implements all of these; this wrapper previously failed
 /// closed to NaN for every `s ≤ 1`, diverging from scipy. frankenscipy.
 pub fn zeta_scalar(s: f64) -> f64 {
     if s == f64::INFINITY {
         return 1.0;
     }
-    crate::gamma::zeta(s)
+    crate::gamma::zeta_scalar(s)
 }
 
 /// Compute `ln(1 + x) − x` with stable evaluation near zero.
@@ -7693,11 +7693,14 @@ mod tests {
     #[test]
     fn zeta_zetac_match_scipy() {
         // scipy.special.zeta/zetac (Riemann zeta) at integer arguments.
-        use crate::gamma::{zeta, zetac};
-        assert!((zeta(2.0) - 1.644_934_066_848_226_4).abs() < 1e-13, "zeta(2)=pi^2/6");
-        assert!((zeta(3.0) - 1.202_056_903_159_594_2).abs() < 1e-13, "zeta(3) Apery");
-        assert!((zeta(4.0) - 1.082_323_233_711_138_1).abs() < 1e-13, "zeta(4)=pi^4/90");
-        assert!((zetac(2.0) - 0.644_934_066_848_226_4).abs() < 1e-13, "zetac(2)=zeta(2)-1");
+        use crate::gamma::{zeta_scalar, zetac_scalar};
+        assert!((zeta_scalar(2.0) - 1.644_934_066_848_226_4).abs() < 1e-13, "zeta(2)=pi^2/6");
+        assert!((zeta_scalar(3.0) - 1.202_056_903_159_594_2).abs() < 1e-13, "zeta(3) Apery");
+        assert!((zeta_scalar(4.0) - 1.082_323_233_711_138_1).abs() < 1e-13, "zeta(4)=pi^4/90");
+        assert!(
+            (zetac_scalar(2.0) - 0.644_934_066_848_226_4).abs() < 1e-13,
+            "zetac(2)=zeta(2)-1"
+        );
     }
 
     #[test]
@@ -7999,7 +8002,7 @@ mod tests {
         };
         close(crate::error::erf_scalar(0.5), 0.520_499_877_813_046_5, "erf(0.5)");
         close(crate::error::erfc_scalar(0.5), 0.479_500_122_186_953_5, "erfc(0.5)");
-        close(crate::gamma::zeta(2.0), 1.644_934_066_848_226_4, "zeta(2)");
+        close(crate::gamma::zeta_scalar(2.0), 1.644_934_066_848_226_4, "zeta(2)");
         close(crate::bessel::i0_scalar(1.0), 1.266_065_877_752_008_2, "i0(1)");
         close(crate::bessel::k0_scalar(1.0), 0.421_024_438_240_708_23, "k0(1)");
         close(ndtr_scalar(1.0), 0.841_344_746_068_542_9, "ndtr(1)");

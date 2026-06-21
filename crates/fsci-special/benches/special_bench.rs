@@ -2,7 +2,7 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_runtime::RuntimeMode;
 use fsci_special::{
     SpecialTensor, beta, ellipe, ellipeinc, ellipk, ellipkinc, erf, erfc, erfinv, gamma, gammainc,
-    gammaln, j0, j1, jn_zeros, jnjnp_zeros, jnp_zeros, jv, ndtri, rgamma, y0,
+    gammaln, j0, j1, jn_zeros, jnjnp_zeros, jnp_zeros, jv, ndtri, rgamma, y0, zeta, zeta_scalar,
 };
 use std::f64::consts::PI;
 use std::hint::black_box;
@@ -585,6 +585,101 @@ fn bench_special_ndtri_array(c: &mut Criterion) {
     group.finish();
 }
 
+fn scipy_zeta_duration(n: usize, iters: u64) -> Option<Duration> {
+    let script = r#"
+import sys
+import time
+import numpy as np
+import scipy.special as sc
+
+n = int(sys.argv[1])
+iters = int(sys.argv[2])
+s = 1.1 + np.arange(n, dtype=np.float64) * (8.9 / max(n - 1, 1))
+sc.zeta(s)
+start = time.perf_counter()
+checksum = 0.0
+for _ in range(iters):
+    out = sc.zeta(s)
+    checksum += float(out[0] + out[n // 2] + out[-1])
+elapsed = time.perf_counter() - start
+if not np.isfinite(checksum):
+    raise SystemExit("non-finite checksum")
+print(f"{elapsed:.17f}")
+"#;
+    let mut child = Command::new("python3")
+        .args(["-", &n.to_string(), &iters.to_string()])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn scipy zeta oracle");
+    child
+        .stdin
+        .as_mut()
+        .expect("open scipy zeta oracle stdin")
+        .write_all(script.as_bytes())
+        .expect("write scipy zeta oracle script");
+    let output = child.wait_with_output().expect("wait for scipy zeta oracle");
+    if !output.status.success() {
+        eprintln!(
+            "scipy zeta oracle failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return None;
+    }
+    let stdout = String::from_utf8(output.stdout).expect("utf8 scipy zeta timing");
+    let seconds: f64 = stdout
+        .trim()
+        .parse()
+        .expect("parse scipy zeta timing seconds");
+    Some(Duration::from_secs_f64(seconds))
+}
+
+fn bench_special_zeta_array(c: &mut Criterion) {
+    let mut group = c.benchmark_group("special_zeta_array");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(3));
+
+    let n = 100_000usize;
+    let denom = (n - 1).max(1) as f64;
+    let values: Vec<f64> = (0..n)
+        .map(|i| 1.1 + 8.9 * (i as f64) / denom)
+        .collect();
+    let input = real_vec(&values);
+
+    group.bench_function("rust_scalar_loop_n100000", |b| {
+        b.iter(|| {
+            let out: Vec<f64> = values
+                .iter()
+                .copied()
+                .map(zeta_scalar)
+                .collect();
+            black_box(out);
+        });
+    });
+
+    group.bench_function("rust_tensor_n100000", |b| {
+        b.iter(|| {
+            let out = zeta(black_box(&input), RuntimeMode::Strict).expect("zeta");
+            black_box(out);
+        });
+    });
+
+    if scipy_special_available() {
+        group.bench_function("scipy_n100000", |b| {
+            b.iter_custom(|iters| {
+                scipy_zeta_duration(n, iters)
+                    .expect("scipy zeta oracle should run after availability check")
+            });
+        });
+    } else {
+        eprintln!("skipping scipy_zeta_n100000: python3 cannot import scipy.special");
+    }
+
+    group.finish();
+}
+
 fn scipy_jnjnp_zeros_duration(nt: usize, iters: u64) -> Option<Duration> {
     let script = r#"
 import sys
@@ -732,6 +827,7 @@ criterion_group!(
     bench_erfinv,
     bench_special_erfinv_array,
     bench_special_ndtri_array,
+    bench_special_zeta_array,
     bench_beta,
     bench_bessel_jv_array,
     bench_bessel_j,

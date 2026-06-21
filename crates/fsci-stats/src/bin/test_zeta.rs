@@ -15,7 +15,7 @@ fn main() {
     ];
     println!("=== Riemann zeta (single arg) ===");
     for (s, expected) in r_cases {
-        let z = fsci_special::zeta(s);
+        let z = fsci_special::zeta_scalar(s);
         let diff = (z - expected).abs();
         println!("zeta({:>4}) = {:.16} (diff {:.2e})", s, z, diff);
     }

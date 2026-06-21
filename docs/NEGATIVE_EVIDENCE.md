@@ -6,6 +6,41 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-21 - frankenscipy-8l8r1/cod-a-zeta-20260621 - special zeta tensor + Riemann fast path - KEEP / RESIDUAL LOSS
+
+- Agent: cod-a / BlackThrush
+- Decision: KEEP as a large measured Rust-side win, but keep the SciPy gap open.
+  The lever adds a real-vector `zeta`/`zetac` tensor surface and specializes the
+  Riemann `s > 1` kernel with a fixed N=12 Euler-Maclaurin prefix using
+  precomputed `ln(n)` constants instead of the generic Hurwitz `powf` loop.
+- Radical route: alien-graveyard array/data-parallel dispatch plus a
+  coefficient-table style artifact from alien-artifact-coding; extreme
+  optimization gate stayed one-lever and behavior-preserving.
+- RCH `hz1` Criterion, `AGENT_NAME=cod-a RCH_WORKER=hz1
+  CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a rch exec --
+  cargo bench -p fsci-special --bench special_bench special_zeta_array --
+  --noplot`:
+
+| Workload | Before | After | Internal ratio |
+| --- | ---: | ---: | ---: |
+| scalar loop, 100k `s in [1.1,10]` | 45.382 ms | 6.8706 ms | 6.60x faster |
+| tensor RealVec, 100k `s in [1.1,10]` | 28.213 ms | 2.6170 ms | 10.78x faster |
+
+- SciPy comparator: RCH workers currently cannot import `scipy.special`, so the
+  Criterion SciPy arm skipped remotely. Local SciPy 1.17.1 on the same
+  deterministic 100k input vector measured 1.937611 ms median. Cross-host ratio:
+  current RCH Rust tensor is 1.35x slower than local SciPy; score vs SciPy
+  `0/1/0`. This narrows the prior 14.5x residual loss but does not close it.
+- Correctness/conformance: RCH `cargo test -p fsci-special zeta --lib` passed
+  22/0. Local live-SciPy conformance passed for
+  `diff_special_common_scalar_wrappers`, `diff_special_binom_zetac`, and
+  `diff_special_zeta`. RCH release build passed for `fsci-special` and
+  `fsci-stats`.
+- Retry condition: do not retry thread fan-out or generic Hurwitz routing for
+  this lane. The remaining gap needs a true vector-specialized zeta kernel
+  (piecewise minimax/table or SIMD polynomial for `s > 1`) measured against a
+  same-host SciPy oracle.
+
 ## 2026-06-21 - frankenscipy-8l8r1.146 - special erfinv direct ndtri route - KEEP / WIN
 
 - Agent: cod-a / BlackThrush

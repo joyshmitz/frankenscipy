@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use fsci_special::{binom, zetac};
+use fsci_special::{binom, zetac_scalar};
 use serde::{Deserialize, Serialize};
 
 const PACKET_ID: &str = "FSCI-P2C-006";
@@ -223,7 +223,7 @@ fn diff_special_binom_zetac() {
         };
         let fsci_v = match case.op.as_str() {
             "binom" => binom(case.a, case.b),
-            "zetac" => zetac(case.a),
+            "zetac" => zetac_scalar(case.a),
             _ => continue,
         };
         let abs_d = (fsci_v - expected).abs();
