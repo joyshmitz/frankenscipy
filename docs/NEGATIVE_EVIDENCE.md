@@ -2762,3 +2762,11 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   before the method dispatch → rejects with 0 RHS calls. fsci-integrate now 259/0. CRATE STATUS:
   ALL my crates GREEN except fsci-stats (2 hard: hypergeom pmf lgamma-cancellation, pearsonr
   numpy-dot). Conformance-fix vein tally: 8 fixes (4 fsci-special, 3 fsci-stats, 1 fsci-integrate).
+
+## 2026-06-21 - fsci-stats FULLY GREEN (1967/0): pearsonr n==2 round — ALL MY CRATES NOW GREEN
+- Agent: cc / MistyBirch. Last fsci-stats failure cracked by reading scipy's SOURCE: pearsonr has
+  `mask = (n == 2)` → rounds r to exactly ±1 ("as promised"); I'd wrongly dismissed the snap last
+  cycle. Replicated round-for-n==2 in both pearsonr fns. fsci-stats 1967/0. CONFORMANCE-FIX VEIN
+  COMPLETE: all 9 of my crates fully green (special 1113, stats 1967, fft 177, spatial 218, cluster
+  141, signal 173, interpolate 313, opt 648, integrate 259). 10 fixes this session-tail. LEVER that
+  cracked the 2 "hard" ones: don't guess — read scipy's exact source / compute the exact value first.
