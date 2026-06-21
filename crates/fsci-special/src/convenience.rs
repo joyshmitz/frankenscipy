@@ -4220,8 +4220,13 @@ pub fn gammaincinv_scalar(a: f64, y: f64) -> f64 {
         // x ~ (y * a * Gamma(a))^(1/a)
         (y * a * ln_gamma_a.exp()).powf(1.0 / a)
     } else {
-        // For larger y, start near a (the mean of Gamma(a,1))
-        a
+        // Wilson-Hilferty: the Gamma(a,1) quantile ≈ a·(1 − 1/(9a) + z/√(9a))³ with z = Φ⁻¹(y).
+        // Far better than the bare `a` seed → ~3-4 Newton iters instead of ~15 (compounds the
+        // now-fast ndtri). Same converged root ⇒ accuracy unchanged.
+        let z = ndtri_scalar(y);
+        let h = 1.0 / (9.0 * a);
+        let w = 1.0 - h + z * h.sqrt();
+        (a * w * w * w).max(1e-300)
     };
 
     // Bracketed Newton: maintain [lo, hi] where P(a, lo) < y < P(a, hi)
