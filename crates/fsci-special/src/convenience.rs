@@ -386,7 +386,7 @@ pub fn rel_entr(
 ///
 /// Matches `scipy.special.ndtr(x)`.
 pub fn ndtr(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real("ndtr", x_tensor, mode, |x| Ok(ndtr_scalar(x)))
+    map_real_wg("ndtr", x_tensor, mode, |x| Ok(ndtr_scalar(x)))
 }
 
 #[must_use]
@@ -2417,6 +2417,24 @@ where
     F: Fn(f64) -> Result<f64, SpecialError> + Sync,
 {
     map_real_inner(function, input, mode, kernel, true)
+}
+
+/// Work-gated variant of [`map_real`]: serial for short/medium arrays (the cheap-kernel
+/// sweep proved `par_map_indices` over-subscribes them) but parallel at/above 1<<20, where a
+/// mid-cost kernel (e.g. ndtr ~23ns, computed via erfc) finally dominates the thread-spawn +
+/// concat overhead. Same-worker measurement flips ndtr from a slight SciPy loss to a multicore
+/// win at n>=2M. Order-preserving, so byte-identical to the serial map either way.
+fn map_real_wg<F>(
+    function: &'static str,
+    input: &SpecialTensor,
+    mode: RuntimeMode,
+    kernel: F,
+) -> SpecialResult
+where
+    F: Fn(f64) -> Result<f64, SpecialError> + Sync,
+{
+    let parallel = matches!(input, SpecialTensor::RealVec(v) if v.len() >= 1 << 20);
+    map_real_inner(function, input, mode, kernel, parallel)
 }
 
 fn map_real_inner<F>(

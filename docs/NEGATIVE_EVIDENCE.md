@@ -3240,6 +3240,24 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   gamma/gammaln/digamma + erf/erfc + ellipk/ellipe. Last identical candidate: ~18 convenience
   activations (convenience.rs map_real default-serial) — likely smaller per-kernel so check 2M/4M flip.
 
+## 2026-06-21 - FIX/WIN: ndtr WORK-GATED parallel for huge arrays (>=1M) — flips SciPy loss to 2.0-2.7x
+- Agent: cod-a / BlackThrush. Fourth payout of the high-end work-gate lever, into the convenience
+  family. ndtr (normal CDF, ~23ns via erfc) used `map_real` (default-serial since the convenience
+  over-parallelization sweep, again measured only at 100k). At 2M fsci serial ndtr LOSES to SciPy
+  (43.8ms vs 38.9ms). Added `map_real_wg` (work-gated sibling of map_real/map_real_par: serial below
+  1<<20, par_map_indices at/above) and routed ndtr through it. Byte-identical (acc unchanged).
+
+  | n | serial | parallel | self | local SciPy 1.17.1 | vs SciPy |
+  | ---: | ---: | ---: | ---: | ---: | ---: |
+  | 2M | 43.82 ms | 19.64 ms | 2.23x | 38.92 ms | 1.98x faster |
+  | 4M | 104.07 ms | 31.79 ms | 3.27x | 86.08 ms | 2.71x faster |
+
+- Score: same-worker self 2/0/0; vs local SciPy 2/0/0. ndtr serial was a 1.13x SciPy loss → 1.98x
+  win. Gates: in-crate convenience tests 316/0; byte-identical. The cheapest convenience activations
+  (expit/silu ~9ns) likely stay serial-favored even at 4M (overhead fraction too large) — `map_real_wg`
+  is available to route any that measure a flip. Lever summary: gamma family + erf/erfc + ellipk/ellipe
+  + ndtr all flipped, all byte-identical; the "EXHAUSTED" sweeps missed every one by measuring only 100k.
+
 ## 2026-06-21 - dst_iv twiddle reuse (byte-id); DCT/DST twiddle-recompute bug fully closed
 - Agent: cc / MistyBirch. dst_iv recomputed the dct-IV twiddle per coefficient → reuse the cached
   get_or_compute_dct4_twiddles (from the dct_iv fix). dst_iv 65536 2.27ms (matches dct_iv; 2N-FFT
