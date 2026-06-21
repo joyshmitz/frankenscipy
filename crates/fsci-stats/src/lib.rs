@@ -10423,6 +10423,16 @@ impl DiscreteDistribution for Hypergeometric {
         big_n * (n / m) * ((m - n) / m) * ((m - big_n) / (m - 1.0))
     }
 
+    fn cdf(&self, k: u64) -> f64 {
+        // Lower-tail sum via the recurrence sweep (pmf_many) instead of the trait default
+        // (0..=k).map(self.pmf).sum(), which is O(k·N) now that the single pmf is O(N+k). pmf(i)=0
+        // for i>k_max so capping the range is byte-identical; pmf_many==map(pmf). O(N+k).
+        let k_max = self.n.min(self.big_n);
+        let hi = k.min(k_max);
+        let ks: Vec<u64> = (0..=hi).collect();
+        self.pmf_many(&ks).iter().sum::<f64>().min(1.0)
+    }
+
     fn sf(&self, k: u64) -> f64 {
         // P(X > k) summed DIRECTLY over the upper tail [k+1, k_max]. The trait
         // default 1 - cdf cancels and underflows to 0 deep in the right tail
@@ -78369,6 +78379,8 @@ mod tests {
         assert!(dist.cdf(5.0) > 0.99, "hypsecant CDF should be near 1 at 5");
     }
 }
+
+
 
 
 
