@@ -623,7 +623,7 @@ impl PchipInterpolator {
     }
 
     pub fn eval_many(&self, x_new: &[f64]) -> Vec<f64> {
-        x_new.iter().map(|&xi| self.eval(xi)).collect()
+        par_query_map(x_new, 24, |&xi| self.eval(xi))
     }
 }
 
@@ -723,7 +723,7 @@ impl CubicSplineStandalone {
     }
 
     pub fn eval_many(&self, x_new: &[f64]) -> Vec<f64> {
-        x_new.iter().map(|&xi| self.eval(xi)).collect()
+        par_query_map(x_new, 24, |&xi| self.eval(xi))
     }
 
     pub fn derivative(&self, nu: usize) -> CubicSplineDerivative {
@@ -874,7 +874,7 @@ impl Akima1DInterpolator {
     }
 
     pub fn eval_many(&self, x_new: &[f64]) -> Vec<f64> {
-        x_new.iter().map(|&xi| self.eval(xi)).collect()
+        par_query_map(x_new, 24, |&xi| self.eval(xi))
     }
 }
 
@@ -950,7 +950,7 @@ impl CubicHermiteSpline {
     }
 
     pub fn eval_many(&self, x_new: &[f64]) -> Vec<f64> {
-        x_new.iter().map(|&xi| self.eval(xi)).collect()
+        par_query_map(x_new, 24, |&xi| self.eval(xi))
     }
 }
 

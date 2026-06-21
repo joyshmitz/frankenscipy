@@ -3687,3 +3687,23 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   (covers pmf_many consistency); byte-identical. Heavier kernel (ln_gamma) → bigger self-speedup than
   the ~11ns pdf kernels (4-5x vs 2.2x). The stats work-gate vein (par_continuous_map for pdf/cdf/sf/ppf
   + par_discrete_map for pmf) is now complete for the independent-map surfaces.
+
+## 2026-06-21 - WIN: interpolate cubic eval_many work-gated parallel via existing par_query_map — 4-6x self
+- Agent: cod-a / BlackThrush. The work-gate lever extends to fsci-interpolate. The crate already has a
+  cost-aware `par_query_map(queries, work_per_query, f)` (gates on m*work_per_query >= 2^18) used by 8
+  interpolators — but CubicSplineStandalone/Pchip/Akima/CubicHermite `eval_many` were still SERIAL
+  `x_new.iter().map(|&xi| self.eval(xi)).collect()`. The cubic eval kernel is HEAVY (binary search +
+  cubic Horner, ~78ns/elem measured) so it flips big. Routed the 4 through `par_query_map(_, 24, ...)`.
+  (Interp1d excluded — can be cheap linear/nearest, the source of the prior 0.88x evaluate_many revert;
+  BSpline excluded — uses a mutable scratch buffer, not a pure Fn. Both correctly left serial.)
+- Same-worker hz1, CubicSplineStandalone (5000 knots), serial baseline by reverting the routing:
+
+  | n (queries) | serial | parallel | self | scipy CubicSpline(q) | vs SciPy |
+  | ---: | ---: | ---: | ---: | ---: | ---: |
+  | 2M | 156.19 ms | 36.40 ms | 4.29x | 170.20 ms | 4.67x faster |
+  | 4M | 278.76 ms | 46.40 ms | 6.01x | (~340 ms) | ~7.3x faster |
+
+- Score: same-worker self 2/0/0; vs SciPy serial was 1.09x (parity) → parallel 4.67x. Byte-identical
+  (acc unchanged; par_query_map is order-preserving, proven by 8 existing interpolators). Gates: RCH
+  build clean; interpolate lib tests 173/0. The prior "evaluate_many parallel REVERTED (0.88x)" was the
+  CHEAP-kernel case pre-par_query_map; the cost-aware gate + heavy cubic kernel makes this a clean flip.
