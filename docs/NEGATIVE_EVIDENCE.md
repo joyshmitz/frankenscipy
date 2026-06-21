@@ -6,6 +6,87 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-21 - frankenscipy-8l8r1/cod-b-fft-bitrev-gather-20260621 - FFT mixed-radix bit-reversed power-tail gather - REJECT
+
+- Agent: cod-b / BlackThrush.
+- Decision: REJECT and restore source. The one-lever candidate fused the
+  recursive mixed-radix power-of-two tail gather with the radix-2 bit-reversal
+  permutation: the tail wrote `out[bit_reverse(t)] = src[base + t * stride]`
+  and then ran the radix-2^2 butterfly body without its normal permutation
+  pass. The transformation preserved the operation order after permutation and
+  passed the focused golden test, but the measurement never reached a valid
+  same-worker parent/candidate proof and still lost every row to SciPy.
+- Radical route: alien-graveyard Stockham/FFT cache-layout idea narrowed to the
+  smallest reversible artifact from extreme-optimization: remove one full
+  permutation pass from recursive power tails. The gauntlet stop rule rejected
+  it because the current harness cannot compare this sublever to the odd-factor
+  parent in the same binary and `rch exec` did not honor the attempted worker
+  pin.
+- Parent baseline before edit, RCH `hz2`,
+  `AGENT_NAME=cod-b RCH_REQUIRE_REMOTE=1
+  CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec --
+  cargo run --release -p fsci-fft --bin perf_mixed_radix`:
+
+| n | Parent Rust | In-binary legacy | Parent/legacy |
+| ---: | ---: | ---: | ---: |
+| 720 | 21.605 us | 32.606 us | 1.51x faster |
+| 1000 | 35.499 us | 46.628 us | 1.31x faster |
+| 1080 | 32.251 us | 31.680 us | 0.98x slower |
+| 1500 | 27.557 us | 27.869 us | 1.01x faster |
+| 1920 | 18.707 us | 37.547 us | 2.01x faster |
+| 3000 | 43.584 us | 59.308 us | 1.36x faster |
+| 5000 | 74.956 us | 98.382 us | 1.31x faster |
+| 10000 | 139.694 us | 228.135 us | 1.63x faster |
+
+- Candidate run with `RCH_WORKER=hz2` was not comparable: RCH selected `ovh-a`
+  for the focused correctness test and `vmi1152480` for the timing run. That
+  timing is routing evidence only:
+
+| n | Candidate Rust | In-binary legacy | Candidate/legacy |
+| ---: | ---: | ---: | ---: |
+| 720 | 12.769 us | 19.517 us | 1.53x faster |
+| 1000 | 17.333 us | 22.264 us | 1.28x faster |
+| 1080 | 19.789 us | 26.856 us | 1.36x faster |
+| 1500 | 34.005 us | 37.241 us | 1.10x faster |
+| 1920 | 26.180 us | 55.955 us | 2.14x faster |
+| 3000 | 59.032 us | 59.627 us | 1.01x faster |
+| 5000 | 74.085 us | 135.253 us | 1.83x faster |
+| 10000 | 185.792 us | 287.644 us | 1.55x faster |
+
+- Fresh local SciPy 1.17.1 / NumPy 2.4.3 oracle on the exact deterministic
+  `perf_mixed_radix` signal, using `complex128` arrays:
+
+| n | SciPy median | Candidate vs SciPy |
+| ---: | ---: | ---: |
+| 720 | 6.307 us | 2.02x slower |
+| 1000 | 7.996 us | 2.17x slower |
+| 1080 | 8.325 us | 2.38x slower |
+| 1500 | 11.267 us | 3.02x slower |
+| 1920 | 12.614 us | 2.08x slower |
+| 3000 | 20.704 us | 2.85x slower |
+| 5000 | 34.997 us | 2.12x slower |
+| 10000 | 69.778 us | 2.66x slower |
+
+- Keep-gate score: candidate-vs-parent unavailable because RCH would not pin a
+  worker and the existing `perf_mixed_radix` harness compares only against the
+  older legacy split, not the current odd-factor parent. Candidate-vs-SciPy
+  score is `0/8/0`. Final `crates/fsci-fft/src/transforms.rs` diff is empty.
+- Correctness evidence for the rejected candidate: RCH
+  `cargo test -p fsci-fft mixed_radix_smooth_power_tail_matches_naive_dft --lib
+  -- --nocapture` passed 1/0; benchmark golden payload worst max error remained
+  `4.278e-14` versus the naive DFT.
+- Final-source gates after restore: RCH `cargo build --release -p fsci-fft`
+  passed on `hz2`; RCH
+  `cargo test -p fsci-fft mixed_radix_smooth_power_tail_matches_naive_dft --lib
+  -- --nocapture` passed 1/0; RCH
+  `cargo test -p fsci-conformance --test diff_fft --test e2e_fft --
+  --nocapture` passed `diff_fft` 34/0 and `e2e_fft` 12/0.
+- Retry condition: do not retry bit-reversal/gather fusion inside the recursive
+  mixed-radix tail without an in-benchmark current-parent comparator. Closing
+  this FFT gap needs a real iterative/cache-blocked mixed-radix schedule,
+  Stockham-style phase layout, or native SoA/SIMD butterflies measured
+  head-to-head against SciPy.
+
 ## 2026-06-21 - frankenscipy-8l8r1/cod-a-fft-twiddle-index-20260621 - FFT mixed-radix twiddle-index modulo elision - REJECT
 
 - Agent: cod-a / BlackThrush.

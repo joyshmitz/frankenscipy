@@ -4,6 +4,85 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-21 - frankenscipy-8l8r1/cod-b-fft-bitrev-gather-20260621 - FFT mixed-radix bit-reversed power-tail gather
+
+- Agent: cod-b / BlackThrush
+- Status: measured reject / source restored.
+- Lever: fuse the recursive mixed-radix power-of-two tail gather with the
+  radix-2 bit-reversal permutation. The candidate wrote each strided input
+  sample directly to `out[bit_reverse(t)]`, factored the bit-reversal pass out
+  of the radix-2^2 helper, and ran the butterfly body on the already permuted
+  tail. This targets one whole memory pass per power tail without changing the
+  DFT permutation or arithmetic order.
+- Alien/artifact route: Stockham/cache-layout FFT pressure from
+  alien-graveyard, reduced to a reversible gauntlet artifact by
+  extreme-optimization. The larger route remains an iterative/cache-blocked
+  mixed-radix kernel; this attempt only tested whether permutation/gather
+  fusion was enough to move the existing recursive route.
+
+Parent baseline before edit, RCH `hz2`, warm target
+`/data/projects/.rch-targets/frankenscipy-cod-b`:
+
+| n | Parent Rust | In-binary legacy | Parent/legacy |
+| ---: | ---: | ---: | ---: |
+| 720 | 21.605 us | 32.606 us | 1.51x faster |
+| 1000 | 35.499 us | 46.628 us | 1.31x faster |
+| 1080 | 32.251 us | 31.680 us | 0.98x slower |
+| 1500 | 27.557 us | 27.869 us | 1.01x faster |
+| 1920 | 18.707 us | 37.547 us | 2.01x faster |
+| 3000 | 43.584 us | 59.308 us | 1.36x faster |
+| 5000 | 74.956 us | 98.382 us | 1.31x faster |
+| 10000 | 139.694 us | 228.135 us | 1.63x faster |
+
+Candidate routing run. The attempted `RCH_WORKER=hz2` pin was not honored:
+focused correctness ran on `ovh-a`, and timing ran on `vmi1152480`, so this is
+not same-worker keep proof:
+
+| n | Candidate Rust | In-binary legacy | Candidate/legacy |
+| ---: | ---: | ---: | ---: |
+| 720 | 12.769 us | 19.517 us | 1.53x faster |
+| 1000 | 17.333 us | 22.264 us | 1.28x faster |
+| 1080 | 19.789 us | 26.856 us | 1.36x faster |
+| 1500 | 34.005 us | 37.241 us | 1.10x faster |
+| 1920 | 26.180 us | 55.955 us | 2.14x faster |
+| 3000 | 59.032 us | 59.627 us | 1.01x faster |
+| 5000 | 74.085 us | 135.253 us | 1.83x faster |
+| 10000 | 185.792 us | 287.644 us | 1.55x faster |
+
+Fresh local SciPy 1.17.1 / NumPy 2.4.3 oracle on the exact deterministic
+`perf_mixed_radix` signal, using `complex128` arrays:
+
+| n | SciPy median | Candidate vs SciPy |
+| ---: | ---: | ---: |
+| 720 | 6.307 us | 2.02x slower |
+| 1000 | 7.996 us | 2.17x slower |
+| 1080 | 8.325 us | 2.38x slower |
+| 1500 | 11.267 us | 3.02x slower |
+| 1920 | 12.614 us | 2.08x slower |
+| 3000 | 20.704 us | 2.85x slower |
+| 5000 | 34.997 us | 2.12x slower |
+| 10000 | 69.778 us | 2.66x slower |
+
+- Benchmark evidence:
+  `AGENT_NAME=cod-b RCH_REQUIRE_REMOTE=1
+  CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec --
+  cargo run --release -p fsci-fft --bin perf_mixed_radix`.
+- Correctness evidence for the rejected candidate: RCH
+  `cargo test -p fsci-fft mixed_radix_smooth_power_tail_matches_naive_dft --lib
+  -- --nocapture` passed 1/0. The benchmark golden payload kept worst max error
+  `4.278e-14` versus the naive DFT.
+- Final-source gates after restore: RCH `cargo build --release -p fsci-fft`
+  passed on `hz2`; RCH focused mixed-radix unit test passed 1/0; RCH
+  `cargo test -p fsci-conformance --test diff_fft --test e2e_fft --
+  --nocapture` passed `diff_fft` 34/0 and `e2e_fft` 12/0.
+- Score: candidate-vs-parent unavailable because the worker pin was ignored and
+  the existing benchmark only has current-vs-legacy A/B. Candidate-vs-SciPy is
+  `0/8/0`. Source restored; `crates/fsci-fft/src/transforms.rs` diff empty.
+  Retry condition: do not repeat bit-reversal/gather fusion inside the
+  recursive tail without an in-benchmark current-parent comparator. The next
+  credible FFT lever is an iterative/cache-blocked mixed-radix schedule,
+  Stockham-style phase layout, or native SoA/SIMD butterflies.
+
 ## 2026-06-21 - frankenscipy-8l8r1/cod-a-fft-twiddle-index-20260621 - FFT mixed-radix twiddle-index modulo elision
 
 - Agent: cod-a / BlackThrush
