@@ -5998,9 +5998,14 @@ pub fn make_smoothing_spline(
     // Solve (X + lam·E) c = y. X and E are (2,2)-banded (|i-j| ≤ 2), so their sum is
     // too — solve_banded(_, _, 2) is byte-identical to the dense solve here and runs
     // in O(n) instead of O(n²).
+    // full is (2,2)-banded, so only fill |i-j| ≤ 2; out-of-band stays 0 (== the full
+    // build, since x_full,e_full are 0 there) and solve_banded(_,_,2) makes the LU fill.
+    // Byte-identical; O(n²) → O(n). (Matches the GCV closure's m build, 43eb09b2.)
     let mut full = vec![vec![0.0_f64; n]; n];
     for i in 0..n {
-        for j in 0..n {
+        let jlo = i.saturating_sub(2);
+        let jhi = (i + 2).min(n - 1);
+        for j in jlo..=jhi {
             full[i][j] = x_full[i][j] + lam * e_full[i][j];
         }
     }

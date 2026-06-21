@@ -1618,3 +1618,13 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   with a TARGETED rezero of solve_banded's touched band (|i-j| ≤ 2·bw) — either gives
   O(n²·iters). The safe full-rezero reuse only removes malloc calls (the n² zeroing
   remains), so it is NOT worth a blind commit. Updated framing for the verify queue.
+
+## 2026-06-20 - make_smoothing_spline final-solve full build band-restricted (byte-identical, missed earlier)
+
+- Agent: cc / MistyBirch. CODE-ONLY (disk-low, no cargo). Completes the
+  make_smoothing_spline band-restriction — I'd band-restricted the GCV closure's `m`
+  build (43eb09b2) but MISSED the analogous final-solve `full = X + λE` build (a full
+  O(n²) i,j loop). Restricted to |i-j| ≤ 2 (full is (2,2)-banded; out-of-band stays 0;
+  solve_banded(_,_,2) makes the LU fill). Byte-identical; O(n²) → O(n), once per call.
+- PENDING compile-verify (no cargo): identical pattern to 43eb09b2 (already in the
+  verify queue); near-zero compile risk; byte-identical so no bench needed.
