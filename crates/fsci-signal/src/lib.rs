@@ -11252,32 +11252,34 @@ pub fn chirp(
     }
 
     let two_pi = 2.0 * std::f64::consts::PI;
+    // Each sample is an independent (compute-bound) cos of a per-sample phase, so map it in parallel
+    // (work-gated). Byte-identical to the serial map.
     let result = match method {
         ChirpMethod::Linear => {
             let k = (f1 - f0) / t1;
-            t.iter()
-                .map(|&ti| (two_pi * (f0 * ti + 0.5 * k * ti * ti)).cos())
-                .collect()
+            par_index_fill(t.len(), |i| {
+                let ti = t[i];
+                (two_pi * (f0 * ti + 0.5 * k * ti * ti)).cos()
+            })
         }
         ChirpMethod::Quadratic => {
             let k = (f1 - f0) / (t1 * t1);
-            t.iter()
-                .map(|&ti| (two_pi * (f0 * ti + k * ti * ti * ti / 3.0)).cos())
-                .collect()
+            par_index_fill(t.len(), |i| {
+                let ti = t[i];
+                (two_pi * (f0 * ti + k * ti * ti * ti / 3.0)).cos()
+            })
         }
         ChirpMethod::Logarithmic => {
             let ratio = f1 / f0;
             if (ratio - 1.0).abs() < f64::EPSILON {
-                // f0 == f1: constant frequency, just a cosine
-                t.iter().map(|&ti| (two_pi * f0 * ti).cos()).collect()
+                par_index_fill(t.len(), |i| (two_pi * f0 * t[i]).cos())
             } else {
                 let log_ratio = ratio.ln();
-                t.iter()
-                    .map(|&ti| {
-                        let phase = two_pi * f0 * t1 / log_ratio * (ratio.powf(ti / t1) - 1.0);
-                        phase.cos()
-                    })
-                    .collect()
+                par_index_fill(t.len(), |i| {
+                    let ti = t[i];
+                    let phase = two_pi * f0 * t1 / log_ratio * (ratio.powf(ti / t1) - 1.0);
+                    phase.cos()
+                })
             }
         }
     };
@@ -29289,6 +29291,8 @@ mod tests {
         }
     }
 }
+
+
 
 
 
