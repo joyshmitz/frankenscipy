@@ -1075,6 +1075,21 @@ impl StudentT {
             .map(|&x| log_coeff - 0.5 * (v + 1.0) * (1.0 + x * x / v).ln())
             .collect()
     }
+
+    /// Cumulative distribution at many points — work-gated parallel map of the per-point
+    /// cdf, byte-identical to mapping `cdf`.
+    #[must_use]
+    pub fn cdf_many(&self, xs: &[f64]) -> Vec<f64> {
+        par_continuous_map(xs, |x| self.cdf(x))
+    }
+
+    /// Inverse cdf at many probabilities — work-gated parallel map of the per-point
+    /// `ppf`, byte-identical to mapping `ppf`.
+    #[must_use]
+    pub fn ppf_many(&self, qs: &[f64]) -> Vec<f64> {
+        par_continuous_map(qs, |q| self.ppf(q))
+    }
+
 }
 
 impl ContinuousDistribution for StudentT {
@@ -1903,6 +1918,14 @@ impl ChiSquared {
             })
             .collect()
     }
+
+    /// Inverse cdf at many probabilities — work-gated parallel map of the per-point
+    /// `ppf`, byte-identical to mapping `ppf`.
+    #[must_use]
+    pub fn ppf_many(&self, qs: &[f64]) -> Vec<f64> {
+        par_continuous_map(qs, |q| self.ppf(q))
+    }
+
 }
 
 impl ContinuousDistribution for ChiSquared {
@@ -2965,6 +2988,14 @@ impl FDistribution {
             })
             .collect()
     }
+
+    /// Inverse cdf at many probabilities — work-gated parallel map of the per-point
+    /// `ppf`, byte-identical to mapping `ppf`.
+    #[must_use]
+    pub fn ppf_many(&self, qs: &[f64]) -> Vec<f64> {
+        par_continuous_map(qs, |q| self.ppf(q))
+    }
+
 }
 
 impl ContinuousDistribution for FDistribution {
@@ -3634,6 +3665,21 @@ impl BetaDist {
             })
             .collect()
     }
+
+    /// Cumulative distribution at many points — work-gated parallel map of the per-point
+    /// cdf, byte-identical to mapping `cdf`.
+    #[must_use]
+    pub fn cdf_many(&self, xs: &[f64]) -> Vec<f64> {
+        par_continuous_map(xs, |x| self.cdf(x))
+    }
+
+    /// Inverse cdf at many probabilities — work-gated parallel map of the per-point
+    /// `ppf`, byte-identical to mapping `ppf`.
+    #[must_use]
+    pub fn ppf_many(&self, qs: &[f64]) -> Vec<f64> {
+        par_continuous_map(qs, |q| self.ppf(q))
+    }
+
 }
 
 impl ContinuousDistribution for BetaDist {
@@ -49119,6 +49165,24 @@ mod tests {
     }
 
     #[test]
+    fn continuous_cdf_ppf_many_match_scalar() {
+        // The work-gated parallel cdf_many/ppf_many for the other continuous dists are byte-identical
+        // to mapping the scalar (n=6000 > the 2048 work-gate, so the parallel path is exercised).
+        let qs: Vec<f64> = (0..6000).map(|i| (i as f64 + 0.5) / 6000.0).collect();
+        let xs: Vec<f64> = (0..6000).map(|i| (i as f64 / 6000.0) * 6.0).collect();
+        let t = StudentT::new(5.0);
+        assert_eq!(t.cdf_many(&xs), xs.iter().map(|&x| t.cdf(x)).collect::<Vec<_>>());
+        assert_eq!(t.ppf_many(&qs), qs.iter().map(|&q| t.ppf(q)).collect::<Vec<_>>());
+        let c = ChiSquared::new(4.0);
+        assert_eq!(c.ppf_many(&qs), qs.iter().map(|&q| c.ppf(q)).collect::<Vec<_>>());
+        let f = FDistribution::new(5.0, 10.0);
+        assert_eq!(f.ppf_many(&qs), qs.iter().map(|&q| f.ppf(q)).collect::<Vec<_>>());
+        let b = BetaDist::new(2.0, 3.0);
+        assert_eq!(b.cdf_many(&qs), qs.iter().map(|&x| b.cdf(x)).collect::<Vec<_>>());
+        assert_eq!(b.ppf_many(&qs), qs.iter().map(|&q| b.ppf(q)).collect::<Vec<_>>());
+    }
+
+    #[test]
     fn gamma_dist_mean_var() {
         let g = GammaDist::new(3.0, 2.0);
         assert_close(g.mean(), 6.0, 1e-10, "Gamma(3,2) mean");
@@ -79077,6 +79141,7 @@ mod tests {
         assert!(dist.cdf(5.0) > 0.99, "hypsecant CDF should be near 1 at 5");
     }
 }
+
 
 
 
