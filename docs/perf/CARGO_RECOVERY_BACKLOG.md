@@ -50,4 +50,4 @@ RectBivariateSpline (compact-band cascade), RGI, make_interp_spline (compact-ban
 RBF (flat-solve), DE/global-optimizers (callback lever).
 Also confirmed (2026-06-20 audit): Interp1d/CubicSpline (O(n) tridiagonal Thomas
 solve, all BCs), minimize methods present (BFGS/CG/L-BFGS-B/Nelder-Mead/Newton-CG/
-Powell/SLSQP/TNC).
+Powell/SLSQP/TNC). Pchip (Fritsch-Carlson interior + scipy-exact endpoint).
