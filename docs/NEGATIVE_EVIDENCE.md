@@ -2365,3 +2365,21 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   special+stats suites — erfinv is widely used, regression risk). Not chased this cycle.
 - RESIDUAL: erfcinv 7x / erfinv 3.6x are the Halley/Newton-iteration floor vs scipy's direct
   Cephes rationals (no iteration). Parity needs the rational coefficients (not on-system).
+
+## 2026-06-21 - Inverse-CDF vein tail: gammaincinv 2.3x->1.66x FIXED (WH guess); betaincinv-seed REJECTED
+- Agent: cc / MistyBirch. Probed remaining iterative inverses vs scipy (100k): gammaincinv 100->74
+  fixed; betaincinv(2,3) 96.7 LOSE 1.4x; stdtrit(5) 183 LOSE 5.2x (= betaincinv(2.5,0.5)-bound).
+  Closed-form ppf dists (gumbel/logistic/expon/cauchy/laplace/weibull/pareto/rayleigh) all
+  genuinely closed-form → FAST (parity, no loss). Normal-family ppf (lognorm etc.) now fast via
+  the ndtri fix.
+- FIXED gammaincinv (89359267): y>=0.5 seed was the bare mean `a` ('Wilson-Hilferty' comment was
+  aspirational) → ~15 bracketed-Newton iters. Real WH seed a·(1-1/(9a)+z/√(9a))³, z=ndtri(y)
+  (compounds the fast ndtri) → ~3-4 iters. 100.1->73.6ms (1.36x), now 1.66x scipy. Speeds chi2/
+  gamma ppf. Same root ⇒ accuracy unchanged (gammaincinv tests 4/4).
+- REJECTED: betaincinv normal-approximation fallback seed (μ+σ·ndtri(y)) — no gain on (2,3)
+  (small-y seed already valid there) and slightly WORSE on stdtrit's betaincinv(2.5,0.5) (normal
+  approx poor for skewed b=½; ndtri overhead w/o cutting iters). Reverted.
+- REMAINING FLOOR (iterative inverses, modest, deferred): betaincinv 1.4x / stdtrit 5.2x need the
+  Cephes incbi multi-branch initial guess (intricate); erfinv 3.6x (seed+2-Newton vs scipy's
+  single rational, caps erfcinv/ndtri-central, conformance-risky). All are the iterate-vs-direct-
+  Cephes-rational floor; parity needs the rational coefficients (not on-system).
