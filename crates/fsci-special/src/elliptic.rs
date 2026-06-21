@@ -76,12 +76,13 @@ pub const ELLIPTIC_DISPATCH_PLAN: &[DispatchPlan] = &[
 /// Uses the arithmetic-geometric mean (AGM) iteration.
 /// Domain: m in [0, 1).
 pub fn ellipk(m_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_or_complex(
+    map_real_or_complex_rp(
         "ellipk",
         m_tensor,
         mode,
         |m| ellipk_scalar(m, mode),
         ellipk_complex_scalar,
+        usize::MAX, // cheap O(1) real kernel: serial beats par_map (~2.7x)
     )
 }
 
@@ -108,12 +109,13 @@ pub fn ellipkm1(p_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
 /// Uses the AGM method with E accumulator.
 /// Domain: m in [0, 1].
 pub fn ellipe(m_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_or_complex(
+    map_real_or_complex_rp(
         "ellipe",
         m_tensor,
         mode,
         |m| ellipe_scalar(m, mode),
         ellipe_complex_scalar,
+        usize::MAX, // cheap O(1) real kernel: serial beats par_map (~2.7x)
     )
 }
 
@@ -1200,6 +1202,10 @@ where
     Ok(out)
 }
 
+/// Default per-element threshold below which the REAL arm runs serially. Cheap real kernels
+/// (O(1) polynomial/rational, e.g. ellipk/ellipe Cephes) are slower under par_map_indices than
+/// serial at any practical length (thread overhead >> ~14ns/call); callers pass `usize::MAX` to
+/// force serial. Heavy real kernels keep the default so they still parallelize.
 fn map_real_or_complex<F, G>(
     function: &'static str,
     input: &SpecialTensor,
@@ -1211,10 +1217,34 @@ where
     F: Fn(f64) -> Result<f64, SpecialError> + Sync,
     G: Fn(Complex64) -> Result<Complex64, SpecialError> + Sync,
 {
+    map_real_or_complex_rp(function, input, mode, real_kernel, complex_kernel, 256)
+}
+
+fn map_real_or_complex_rp<F, G>(
+    function: &'static str,
+    input: &SpecialTensor,
+    mode: RuntimeMode,
+    real_kernel: F,
+    complex_kernel: G,
+    real_par_min: usize,
+) -> SpecialResult
+where
+    F: Fn(f64) -> Result<f64, SpecialError> + Sync,
+    G: Fn(Complex64) -> Result<Complex64, SpecialError> + Sync,
+{
     match input {
         SpecialTensor::RealScalar(x) => real_kernel(*x).map(SpecialTensor::RealScalar),
         SpecialTensor::RealVec(values) => {
-            par_map_indices(values.len(), |i| real_kernel(values[i])).map(SpecialTensor::RealVec)
+            if values.len() < real_par_min {
+                values
+                    .iter()
+                    .map(|&x| real_kernel(x))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map(SpecialTensor::RealVec)
+            } else {
+                par_map_indices(values.len(), |i| real_kernel(values[i]))
+                    .map(SpecialTensor::RealVec)
+            }
         }
         SpecialTensor::ComplexScalar(value) => {
             complex_kernel(*value).map(SpecialTensor::ComplexScalar)
