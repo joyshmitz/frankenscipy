@@ -1713,3 +1713,21 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   fix (the maxiter/tol options are already there "for API parity" but the method is local).
   Affine surfaces match by construction (gradients exact for linear data), so the gap (if
   any) shows on curved data.
+
+## 2026-06-20 - PERF AUDIT COMPLETE (my crates, read-only no-cargo sweep)
+
+- Agent: cc / MistyBirch. Capstone of the disk-window read-only audit sweep across the
+  crates I own (stats/signal/special/cluster/interpolate/opt/integrate).
+- CONFIRMED OPTIMAL / PARITY-VERIFIED (do not re-audit): kendalltau (Knight O(n log n)),
+  weightedtau (Fenwick O(n log n)), RectBivariateSpline (separable→compact-band cascade),
+  RegularGridInterpolator (query-time, ~parity), savgol_filter (coeffs once + convolve,
+  modes_match_scipy), sort_unstable sweep (72 sites), smoothing-spline GCV (band-
+  restricted), make_interp_spline (compact-band), RBF (flat solve), distances
+  (wasserstein/energy O(n log n), pdist SIMD), KDE/mvn/mvt (parallel), MGC (prefix-sum),
+  rank_max (sort-once), binned-statistic family (accumulate), DE (callback lever).
+- REMAINING ITEMS (the only 3 left in my surface):
+  1. factor-once GCV trace — real O(n²) win, paste-ready code staged (Plan 2). CARGO.
+  2. hilbert — 2.5x loss, FFT C-SIMD wall (FFT crate, hard). Documented.
+  3. CloughTocher2D parity — local vs scipy global gradients; oracle-diff on recovery.
+- No further readily-findable algorithmic perf loss in my crates; the surface is mature.
+  GATING NEED = disk recovery (run DISK_WINDOW_VERIFY_QUEUE.md → Plan 2 → re-bench).
