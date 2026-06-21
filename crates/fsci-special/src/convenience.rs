@@ -4778,7 +4778,7 @@ pub fn inv_boxcox1p_scalar(y: f64, lam: f64) -> f64 {
 ///
 /// Matches `scipy.special.log_ndtr`.
 pub fn log_ndtr(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real("log_ndtr", x_tensor, mode, |x| Ok(log_ndtr_scalar(x)))
+    map_real_wg("log_ndtr", x_tensor, mode, |x| Ok(log_ndtr_scalar(x)))
 }
 
 /// Scalar helper for `log_ndtr`.

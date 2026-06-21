@@ -3271,6 +3271,17 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
 - Score: same-worker self 2/0/0; vs local SciPy 2/0/0. ndtri serial was a 1.14x SciPy loss → 1.99x win.
   Gates: convenience tests 316/0; byte-identical. High-end work-gate now flips gamma/gammaln/digamma +
   erf/erfc + ellipk/ellipe + ndtr + ndtri (5 families).
+- ADD (log_ndtr, heaviest kernel yet ~34ns via erfcx+log): serial was a slight SciPy loss (2M 68.4ms
+  vs 60.0ms); `map_real_wg` flips it. Same-worker hz1, x-range [-8,8]:
+
+  | n | serial | parallel | self | local SciPy 1.17.1 | vs SciPy |
+  | ---: | ---: | ---: | ---: | ---: | ---: |
+  | 2M | 68.45 ms | 19.23 ms | 3.56x | 60.05 ms | 3.12x faster |
+  | 4M | 145.23 ms | 29.36 ms | 4.94x | 114.11 ms | 3.88x faster |
+
+  Score self 2/0/0; vs SciPy 2/0/0; byte-identical (acc unchanged); convenience tests 316/0. The
+  heavier the kernel, the bigger the self-speedup (up to 4.94x) — log_ndtr is now the strongest of the
+  6 work-gated families.
 - BOUNDARY (ndtri_exp = REVERT, ~0-gain): measured ndtri_exp (the heavier-looking inverse) and it does
   NOT cleanly flip — kept serial. Same-worker hz1: 2M serial 21.82ms vs parallel 21.00ms = 1.04x
   (noise-level self-speedup), 4M serial 62.67ms vs parallel 28.68ms = 2.18x. At the negative-log-prob
