@@ -3113,12 +3113,10 @@ pub fn blackmanharris(m: usize) -> Vec<f64> {
         return vec![1.0];
     }
     let n = m - 1;
-    (0..m)
-        .map(|i| {
-            let x = 2.0 * std::f64::consts::PI * i as f64 / n as f64;
-            0.358_75 - 0.488_29 * x.cos() + 0.141_28 * (2.0 * x).cos() - 0.011_68 * (3.0 * x).cos()
-        })
-        .collect()
+    par_index_fill(m, |i| {
+        let x = 2.0 * std::f64::consts::PI * i as f64 / n as f64;
+        0.358_75 - 0.488_29 * x.cos() + 0.141_28 * (2.0 * x).cos() - 0.011_68 * (3.0 * x).cos()
+    })
 }
 
 /// Bartlett-Hann window.
@@ -12768,16 +12766,14 @@ pub fn general_cosine(n: usize, coeffs: &[f64], sym: bool) -> Vec<f64> {
 
     let m = if sym { n } else { n + 1 };
     let denom = (m - 1) as f64;
-    let mut window: Vec<f64> = (0..m)
-        .map(|i| {
-            let angle = -std::f64::consts::PI + 2.0 * std::f64::consts::PI * i as f64 / denom;
-            coeffs
-                .iter()
-                .enumerate()
-                .map(|(k, &coefficient)| coefficient * (k as f64 * angle).cos())
-                .sum()
-        })
-        .collect();
+    let mut window = par_index_fill(m, |i| {
+        let angle = -std::f64::consts::PI + 2.0 * std::f64::consts::PI * i as f64 / denom;
+        coeffs
+            .iter()
+            .enumerate()
+            .map(|(k, &coefficient)| coefficient * (k as f64 * angle).cos())
+            .sum()
+    });
     if !sym {
         window.truncate(n);
     }
@@ -29285,6 +29281,7 @@ mod tests {
         }
     }
 }
+
 
 
 
