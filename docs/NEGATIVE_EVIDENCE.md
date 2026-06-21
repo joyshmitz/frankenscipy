@@ -6,6 +6,49 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-21 - frankenscipy-8l8r1.148 - opt LSAP path-cost local cache - REJECT
+
+- Agent: cod-b / BlackThrush.
+- Decision: REJECT and restore source. The one-lever candidate cached
+  `shortest_path_costs[col]` into a local `path_cost` inside the
+  `linear_sum_assignment` modified Jonker-Volgenant shortest-path scan, avoiding
+  duplicate vector indexing after a relaxation. This targets the documented
+  scalar-loop constant-factor residual without repeating the rejected touched-set
+  or flat-cost-copy families.
+- Baseline route: RCH Criterion,
+  `AGENT_NAME=cod-b RCH_REQUIRE_REMOTE=1
+  CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec --
+  cargo bench -p fsci-opt --bench optimize_bench --
+  linear_sum_assignment/dense --sample-size 10 --warm-up-time 1
+  --measurement-time 1 --noplot`; parent on `hz1` measured
+  n=500 `[24.811 ms, 24.963 ms, 25.151 ms]` and n=1000
+  `[160.12 ms, 161.00 ms, 162.04 ms]`.
+- SciPy oracle: local SciPy 1.17.1 / NumPy 2.4.3 on the exact benchmark
+  matrices measured n=500 p50 `20.024613 ms` and n=1000 p50 `126.495664 ms`.
+  The `hz1` parent rows were therefore `0/2/0` versus this local SciPy oracle,
+  but this cross-host comparison was used only as routing evidence.
+- Correctness gate for the candidate: RCH
+  `cargo test -p fsci-opt linear_sum_assignment --lib -- --nocapture` passed
+  `9/9` on the corrected hunk.
+- Candidate routing result on `ovh-a`: n=500
+  `[17.069 ms, 17.087 ms, 17.113 ms]`; n=1000
+  `[108.27 ms, 108.71 ms, 109.21 ms]`. That was faster than the local SciPy
+  oracle (`2/0/0`), but needed same-worker Rust A/B before any keep.
+- Same-worker rejection proof after restoring source on `ovh-a`: parent measured
+  n=500 `[16.957 ms, 17.067 ms, 17.195 ms]`; n=1000
+  `[111.79 ms, 115.30 ms, 120.59 ms]`. Criterion classified n=500 as within
+  noise; n=1000 showed only a `6.07%` candidate-side point improvement. Parent
+  already beats the local SciPy oracle on both rows on this worker, so the
+  candidate does not close a real same-worker SciPy gap.
+- Keep-gate score: raw candidate-vs-parent `1/0/1`, but BOLD keep-gate score
+  `0/0/2` because the only moved row is a micro gain far below the project
+  `Score >= 2.0` threshold and the target SciPy gap disappears on the fair
+  worker. Final source diff for `crates/fsci-opt/src/lib.rs` is empty.
+- Retry condition: do not retry single-load/indexing micro-hunks inside the
+  LSAP scan. Future LSAP work should only target a true dense-storage API or
+  lower-level LAP kernel that removes `Vec<Vec<_>>` row indirection without
+  per-call copying, with an in-bench same-binary parent/candidate comparator.
+
 ## 2026-06-21 - frankenscipy-8l8r1/cod-a-zeta-b10-20260621 - special zeta N=10/B10 tail - KEEP / RESIDUAL LOSS
 
 - Agent: cod-a / BlackThrush.
