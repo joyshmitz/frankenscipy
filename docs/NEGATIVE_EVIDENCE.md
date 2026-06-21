@@ -3814,3 +3814,27 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
 - Revert discipline: no candidate hunk was introduced, so there is nothing to
   revert. Future sparse `eigsh` work should target genuinely clustered spectra
   or implicit/thick restart behavior, not this planted well-separated benchmark.
+
+## 2026-06-21 - REVERT/NEGATIVE: ndimage shift parallel via fill_pixels_parallel — kernel-bound, still loses to SciPy
+- Agent: cod-a / BlackThrush. Tried the fill_pixels_parallel work-gate on `shift` (the lone serial
+  geometric transform; affine_transform/zoom/rotate/geometric_transform already use it). The per-output
+  pixel sample_interpolated loop parallelized cleanly and byte-identically (acc unchanged), BIG internal
+  self-speedup — but it STILL LOSES to SciPy, so reverted.
+- Same-worker hz1, 2D order-3 Reflect, input==output (the realistic shift case), serial baseline by
+  forcing fill_pixels_parallel serial:
+
+  | output | serial | parallel | self | scipy.ndimage.shift | parallel vs SciPy |
+  | ---: | ---: | ---: | ---: | ---: | ---: |
+  | 1500x1500 (2.25M px) | 1.108 s | 247.4 ms | 4.49x | 141.16 ms | 0.57x SLOWER |
+  | 2500x2500 (6.25M px) | 3.226 s | 750.4 ms | 4.30x | 437.99 ms | 0.58x SLOWER |
+
+- Root cause: fsci's `sample_interpolated` per-pixel spline kernel is ~8x slower than SciPy's C
+  (scipy ~63ns/px TOTAL single-threaded vs fsci ~110ns/px even across cores). The bottleneck is the
+  KERNEL, not parallelism — 4.5x multicore can't overcome an 8x slower per-pixel cost. Reverted (a
+  scipy-losing change is not a domination win, and adds threads for no SciPy gain).
+- IMPLICATION: the already-parallel affine_transform/zoom/rotate likely also LOSE to SciPy on clean
+  (non-callback) comparisons for the same kernel reason — only geometric_transform's win is real,
+  because there SciPy pays a PYTHON mapping callback per pixel (apples-to-oranges; the callback lever,
+  not the interpolation kernel). The real lever to beat SciPy on ndimage geometric transforms is a
+  FASTER sample_interpolated (SIMD/cache-blocked spline weights), not more threads — a kernel rewrite,
+  not a parallel-routing one-liner. Filed as the honest ceiling for this family.
