@@ -2608,3 +2608,11 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   Distance metric family (cdist + pdist) now complete + dominant across minkowski/seuclidean/
   mahalanobis/euclidean/cosine/etc. PROCESS: stripped the perf probe via regex (NOT git checkout,
   which reverts the real fix too — see memory workflow_probe_strip_not_checkout).
+
+## 2026-06-21 - directed_hausdorff flatten+parallel 1.36x (byte-id); residual = random-access C wall
+- Agent: cc / MistyBirch. directed_hausdorff 3000×3000×3 was 5.378ms vs scipy 0.48 (11.2x). fsci
+  ALREADY had Taha early-break + deterministic shuffle; the cost is the random xb[bi] access per
+  pair (Vec<Vec> pointer-chase + cache miss). Flatten to contiguous + parallel outer loop (per-
+  thread local cmax, byte-identical: achieving a never early-breaks). 5.378->3.956ms (1.36x);
+  serial-flatten alone 4.227 (parallel scales better on structured data). Residual ~8x is the
+  shuffled random-access cache-miss constant vs scipy's tuned contiguous C — a C/cache wall.
