@@ -2708,3 +2708,13 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   are WORK-gated (cdist_thread_count(na,nb,dim)). So the over-parallelization bug was fsci-special-
   specific (its par_map_indices uniquely length-gates) and is now fully fixed (~26 fns). DON'T hunt
   over-parallelization in stats/interpolate/spatial — they use serial or cost-aware gates.
+
+## 2026-06-21 - NEGATIVE: whiten parallel output REGRESSES (small-row alloc contention) — reverted
+- Agent: cc / MistyBirch. Tried the squareform parallel-row-build on whiten's Vec<Vec> output
+  (rows independent given stds, byte-identical). MEASURED 50000×8: parallel 6.98ms vs serial 5.46
+  (scipy 2.44) — parallel is WORSE. Reverted (no regression shipped; whiten tests 6/6 byte-id either
+  way). CAUSE: whiten has 50000 SMALL rows (8 f64 = 64B each); 50000 small Vec mallocs across 8
+  threads CONTEND on the allocator. squareform won (1.26x→2.8x) because it has 3000 BIG rows (3000
+  f64 each) — fewer, larger allocs that parallelize cleanly. REFINED LEVER: parallel Vec<Vec>
+  row-build helps only for FEW-BIG-rows; for MANY-SMALL-rows the small-alloc contention dominates →
+  serial wins. whiten's 2.2x is a small-alloc / Vec<Vec>-return wall (would need a flat output).
