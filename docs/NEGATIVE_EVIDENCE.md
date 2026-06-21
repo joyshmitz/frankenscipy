@@ -2126,3 +2126,18 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
 - LINKAGE FAMILY COMPLETE: all 7 methods now O(n²) and WIN/parity scipy (single MST prior
   cycle 9.3x→parity; ward/complete/average/weighted NN-chain this cycle 2.2x→WIN 1.4-1.7x;
   centroid/median already Müller). linkage_from_distances also sped up via the unified path.
+
+## 2026-06-21 - GAUNTLET: fsci-stats DOMINATES; cluster kmeans SIMD/parallel tradeoff (no clean loss)
+- Agent: cc / MistyBirch. MEASURED vs scipy (criterion/perf_counter):
+  STATS (100k / 500×5000): spearmanr 6.44ms vs scipy 25.8 → WIN 4.0x; ks_2samp 6.34ms vs
+  16.0 → WIN 2.5x; gaussian_kde evaluate_many 4.77ms vs 42.1 → WIN 8.8x. fsci-stats well-
+  optimized (parallel + sort-based), no loss.
+  CLUSTER kmeans: 20000×8 k=10 fsci 33.2ms vs scipy 12.3 (LOSE 2.7x) BUT 50000×16 k=20 fsci
+  88.4ms vs 217.6 (WIN 2.46x). MIXED — scipy is C-SIMD single-thread (wins small-n), fsci is
+  parallel (wins large-n + scipy's k-means++ init is O(n·k) slow at large k). Init/RNG-
+  dependent (different ++ init → different convergence) → not a clean per-op loss. Ambiguous;
+  left as-is (no forced change).
+- Major crates now gauntleted: interpolate (dominated), signal (rfft family WINS + near-parity),
+  spatial (optimized, distance_matrix 15.3x), cluster (linkage family all O(n²) WIN/parity;
+  kmeans tradeoff), stats (dominates). Remaining unmeasured: special/integrate/opt (likely
+  callback-lever WINS or HiGHS/QUADPACK walls), fft (pocketfft SIMD wall).
