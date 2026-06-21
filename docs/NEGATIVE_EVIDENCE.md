@@ -3728,3 +3728,49 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   same-worker self-speedup (the scipy ratio is huge but not a precise apples-to-apples number).
 - Gates: RCH build clean; ndimage lib suite 246/0 (incl. transform/geometric tests 20/0); byte-identical.
   affine_transform/map_coordinates were already parallel; geometric_transform was the last serial gap.
+
+## 2026-06-21 - WIN / STALE LOSS CLOSED: sparse eigsh 18-vector restart window beats SciPy
+
+- Agent: cod-b / BlackThrush. Bead `frankenscipy-4zght`.
+- Decision: KEEP CURRENT HEAD and close the reopened/stale sparse `eigsh`
+  loss. No production source was changed in this pass. The radical lever already
+  on `origin/main` is the 18-vector `k == 6` restart-window trim stacked on the
+  projected Ritz residual certificate; this pass re-measured it against live
+  SciPy on the deterministic `perf_eigsh` matrices and found the claimed
+  `n=8000, k=6` loss no longer exists.
+- Graveyard/optimization route: prior negative evidence rejects row-major
+  Arnoldi arenas, mutable matvec scratch, plain/lightly stabilized three-term
+  Lanczos, and projected-extractor swaps. The safe current lever is smaller:
+  reduce the restart window only where the projected certificate remains tight,
+  preserving eigenvalue ordering, eigenvector normalization, `converged`, and
+  residual tolerance.
+- Rust proof command, per-crate with requested warm target:
+  `AGENT_NAME=cod-b RCH_REQUIRE_REMOTE=1 RCH_WORKER=ovh-a
+  CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec --
+  cargo run --release -p fsci-sparse --bin perf_eigsh`. RCH selected
+  `vmi1149989` despite the worker preference and rewrote the target to a
+  worker-scoped pool path, so this is current-Rust remote evidence rather than a
+  same-worker comparison to older `ovh-a` rows.
+- SciPy oracle: local SciPy 1.17.1 on the same deterministic matrix generator,
+  seven timed reps after one warmup.
+
+| Workload | Rust current head (`vmi1149989`) | Local SciPy median | Ratio vs SciPy | Rust residual / convergence |
+| --- | ---: | ---: | ---: | --- |
+| `eigsh n=2000 k=6` | 816.920 us | 1.155 ms | 1.41x faster | max residual 3.54e-10, `conv=true` |
+| `eigsh n=8000 k=6` | 3.261 ms | 4.026 ms | 1.23x faster | max residual 7.98e-10, `conv=true` |
+| `eigsh n=20000 k=8` | 10.999 ms | 19.049 ms | 1.73x faster | max residual 2.57e-11, `conv=true` |
+
+- Scorecard: Rust vs live SciPy `3 wins / 0 losses / 0 neutral`. The previously
+  advertised `n=8000, k=6` residual loss is stale for the current
+  `perf_eigsh` matrices.
+- Gates:
+  - RCH `cargo test -p fsci-sparse eigsh --lib -- --nocapture` passed 5/0 on
+    `ovh-a`.
+  - Local live-SciPy `FSCI_REQUIRE_SCIPY_ORACLE=1
+    CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b cargo test
+    -p fsci-conformance --test diff_sparse_eigsh_largest -- --nocapture` passed
+    1/0. The local compile emitted existing unrelated warnings in cluster,
+    special, and interpolate crates but no failures.
+- Revert discipline: no candidate hunk was introduced, so there is nothing to
+  revert. Future sparse `eigsh` work should target genuinely clustered spectra
+  or implicit/thick restart behavior, not this planted well-separated benchmark.
