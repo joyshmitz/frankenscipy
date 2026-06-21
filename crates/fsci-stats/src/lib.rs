@@ -30364,6 +30364,11 @@ pub fn gzscore_weighted(data: &[f64], weights: &[f64]) -> Vec<f64> {
     if data.iter().any(|&x| x <= 0.0 || !x.is_finite()) {
         return vec![f64::NAN; data.len()];
     }
+    // Constant data has no log-variation; the geometric z-scores are all 0 by convention (the
+    // shared zscore_weighted would return 0/0 = NaN). circular_and_gzscore_weighted_match_analytic.
+    if data.windows(2).all(|w| w[0] == w[1]) {
+        return vec![0.0; data.len()];
+    }
     let logged: Vec<f64> = data.iter().map(|&x| x.ln()).collect();
     zscore_weighted(&logged, weights)
 }
