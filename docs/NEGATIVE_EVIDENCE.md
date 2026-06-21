@@ -3258,6 +3258,21 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   is available to route any that measure a flip. Lever summary: gamma family + erf/erfc + ellipk/ellipe
   + ndtr all flipped, all byte-identical; the "EXHAUSTED" sweeps missed every one by measuring only 100k.
 
+## 2026-06-21 - FIX/WIN: ndtri WORK-GATED parallel for huge arrays (>=1M) — flips SciPy loss to 2.0-2.4x
+- Agent: cod-a / BlackThrush. Fifth payout — the heavier convenience inverse. ndtri (normal quantile,
+  iterative ~22ns) used `map_real` (serial). At 2M fsci serial LOSES to SciPy (41.4ms vs 36.4ms).
+  Routed through `map_real_wg` (added for ndtr). Byte-identical (acc unchanged serial vs parallel).
+
+  | n | serial | parallel | self | local SciPy 1.17.1 | vs SciPy |
+  | ---: | ---: | ---: | ---: | ---: | ---: |
+  | 2M | 41.43 ms | 18.34 ms | 2.26x | 36.35 ms | 1.99x faster |
+  | 4M | 109.14 ms | 30.60 ms | 3.57x | 71.78 ms | 2.35x faster |
+
+- Score: same-worker self 2/0/0; vs local SciPy 2/0/0. ndtri serial was a 1.14x SciPy loss → 1.99x win.
+  Gates: convenience tests 316/0; byte-identical. High-end work-gate now flips gamma/gammaln/digamma +
+  erf/erfc + ellipk/ellipe + ndtr + ndtri (5 families). ndtri_exp is the remaining heavier serial
+  candidate (map_real, ~similar inverse) — same map_real_wg one-liner if it measures a flip.
+
 ## 2026-06-21 - dst_iv twiddle reuse (byte-id); DCT/DST twiddle-recompute bug fully closed
 - Agent: cc / MistyBirch. dst_iv recomputed the dct-IV twiddle per coefficient → reuse the cached
   get_or_compute_dct4_twiddles (from the dct_iv fix). dst_iv 65536 2.27ms (matches dct_iv; 2N-FFT

@@ -399,7 +399,7 @@ pub fn ndtr_scalar(x: f64) -> f64 {
 ///
 /// Matches `scipy.special.ndtri(y)`.
 pub fn ndtri(y_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real("ndtri", y_tensor, mode, |y| Ok(ndtri_scalar(y)))
+    map_real_wg("ndtri", y_tensor, mode, |y| Ok(ndtri_scalar(y)))
 }
 
 #[must_use]
