@@ -6,6 +6,37 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-21 - frankenscipy-20itl - special ndtri Cephes closeout - KEEP / WIN
+
+- Agent: cod-b / BlackThrush
+- Decision: KEEP the new `ndtri_scalar` Cephes rational route and close the
+  prior `norm.ppf / ndtri` loss. This patch routes public `ndtri_scalar`
+  through the Cephes P0/Q0, P1/Q1, and P2/Q2 rational instead of the older
+  `erfcinv_conv` Newton tail, and wires the `special_ndtri_array` Criterion
+  bench into `fsci-special` for repeatable head-to-head measurement.
+- Prior live loss from the discovery entry: `norm.ppf`/`ndtri` 500k values was
+  619 ms Rust vs 24.3 ms SciPy, a 25.5x loss from the old `erfcinv` Newton path.
+- Current measured result: rch `hz2` `cargo bench -p fsci-special --bench
+  special_bench -- special_ndtri_array --noplot` reports
+  `special_ndtri_array/rust_current_n500000` median 1.8652 ms. The same
+  deterministic 500k probability vector measured locally against SciPy 1.17.1
+  / NumPy 2.4.3 at 8.899997 ms median.
+- Ratio-vs-SciPy score: `1/0/0`, current Rust is 4.77x faster than live SciPy
+  on the 500k-vector `ndtri` workload. Relative to the recorded old Rust
+  baseline, the current route is about 332x faster.
+- Correctness gates: rch `cargo test -p fsci-special ndtri --lib --
+  --nocapture` passed 24/0, including the deep-tail SciPy reference and tensor
+  dispatch checks; local live SciPy `cargo test -p fsci-conformance --test
+  diff_stats_norm -- --nocapture` passed 1/0.
+- Build gate: rch `cargo build --release -p fsci-special` passed on `hz2` with
+  existing `fsci-special` warnings. Explicit clippy
+  `cargo clippy -p fsci-special --benches -- -D warnings` is blocked before
+  `fsci-special` by existing dependency lints in `fsci-integrate` and
+  `fsci-linalg`.
+- Retry condition: do not route `ndtri_scalar` back through `erfcinv_conv` or
+  AS241. Future work should only touch this lane for tighter bit parity in
+  exotic tails or for vectorized multi-output dispatch.
+
 ## 2026-06-21 - frankenscipy-8l8r1.145 - ndimage periodic label-mean reducer - REJECT
 
 - Agent: cod-b / BlackThrush

@@ -1,5 +1,36 @@
 # Performance Release-Readiness Scorecard
 
+## 2026-06-21 - fsci-special ndtri Cephes closeout
+
+- Agent: cod-b / BlackThrush
+- Bead: `frankenscipy-20itl`
+- Decision: KEEP / PRIOR LOSS CLOSED. The public `ndtri_scalar` route now uses
+  the direct Cephes rational kernel; this pass wired the `special_ndtri_array`
+  Criterion row and verified it against live SciPy.
+- Final score: current Rust vs live SciPy `1/0/0`.
+
+| Gate | Result | Notes |
+| --- | --- | --- |
+| Triage/claim | PASS | Existing unassigned in-progress bead `frankenscipy-20itl` was claimed as `cod-b` and parented under `frankenscipy-8l8r1` |
+| Radical lever | PASS | Use SciPy/Cephes fixed rational `ndtri` instead of iterative `erfcinv` Newton tail |
+| Per-crate Criterion | PASS | rch `hz2`: `special_ndtri_array/rust_current_n500000` median 1.8652 ms |
+| Live SciPy oracle | PASS | local SciPy 1.17.1 / NumPy 2.4.3 same-vector median 8.899997 ms; Rust is 4.77x faster |
+| Focused correctness | PASS | rch `cargo test -p fsci-special ndtri --lib -- --nocapture`: 24 passed |
+| Live conformance | PASS | local `cargo test -p fsci-conformance --test diff_stats_norm -- --nocapture`: 1 passed |
+| Per-crate release build | PASS/WARN | rch `cargo build --release -p fsci-special` passed on `hz2`; warnings are existing `fsci-special` warnings |
+| Per-crate clippy | BLOCKED/EXISTING | rch `cargo clippy -p fsci-special --benches -- -D warnings` stops in existing dependency lints before this patch: `fsci-integrate` `too_many_arguments`, `fsci-linalg` `needless_range_loop` / `needless_borrow` |
+| Negative ledger | PASS | `docs/NEGATIVE_EVIDENCE.md` and canonical perf ledger record the prior loss, current win, and retry predicate |
+
+| Workload | Current Rust | Live SciPy | Ratio | Verdict |
+| --- | ---: | ---: | ---: | --- |
+| `special_ndtri_array/n500000` | 1.8652 ms | 8.899997 ms | 4.77x faster | keep |
+
+Readiness notes:
+
+- The earlier 25.5x `norm.ppf` loss is closed for the shared inverse-normal
+  primitive. The old AS241 route remains disallowed for this lane because the
+  discovery entry found accuracy failures against the existing `ndtri` contract.
+
 ## 2026-06-21 - fsci-ndimage periodic label-mean reducer reject
 
 - Agent: cod-b / BlackThrush

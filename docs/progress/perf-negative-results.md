@@ -4,6 +4,43 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-21 - frankenscipy-20itl - special ndtri Cephes rational closeout
+
+- Agent: cod-b / BlackThrush
+- Status: measured keep / prior loss closed.
+- Lever: the old loss entry identified `standard_normal_ppf ->
+  fsci_special::ndtri_scalar -> erfcinv_conv` as a 25.5x `norm.ppf` loss. This
+  patch replaces that route with the direct Cephes `ndtri` rational and connects
+  the `special_ndtri_array` Criterion bench to verify it as the active route.
+- Alien/artifact route: follow SciPy's own fixed rational kernel rather than an
+  iterative error-function inverse; exact-domain behavior stays in
+  `ndtri_scalar` and is guarded by deep-tail reference tests.
+
+| Workload | Old Rust loss baseline | Current Rust | Live SciPy oracle | Current vs SciPy |
+| --- | ---: | ---: | ---: | ---: |
+| `special_ndtri_array/n500000` | 619 ms | 1.8652 ms | 8.899997 ms | 4.77x faster |
+
+- Benchmark evidence:
+  `AGENT_NAME=BlackThrush RCH_REQUIRE_REMOTE=1
+  CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec --
+  cargo bench -p fsci-special --bench special_bench -- special_ndtri_array
+  --noplot` on rch `hz2`; Criterion median 1.8652 ms for Rust. The worker did
+  not have SciPy installed, so the same deterministic 500k vector was timed
+  locally with SciPy 1.17.1 / NumPy 2.4.3 at median 8.899997 ms.
+- Score: current-vs-SciPy `1/0/0`; current-vs-old-loss-baseline is about
+  332x faster.
+- Correctness/conformance: rch `cargo test -p fsci-special ndtri --lib --
+  --nocapture` passed 24/0; local live SciPy `cargo test -p fsci-conformance
+  --test diff_stats_norm -- --nocapture` passed 1/0.
+- Build gate: rch `cargo build --release -p fsci-special` passed on `hz2` with
+  existing `fsci-special` warnings. Explicit clippy
+  `cargo clippy -p fsci-special --benches -- -D warnings` is blocked before
+  `fsci-special` by existing dependency lints in `fsci-integrate` and
+  `fsci-linalg`.
+- Retry condition: do not reattempt AS241 for this lane and do not route
+  `ndtri_scalar` through `erfcinv_conv`; future work must be either bit-parity
+  tightening or vectorized dispatch.
+
 ## 2026-06-21 - frankenscipy-8l8r1.145 - ndimage periodic label-mean reducer
 
 - Agent: cod-b / BlackThrush

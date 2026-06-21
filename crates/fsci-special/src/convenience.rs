@@ -416,38 +416,118 @@ pub fn ndtri_scalar(y: f64) -> f64 {
     if y == 1.0 {
         return f64::INFINITY;
     }
-    // Route through erfcinv on the small complementary argument so the deep tail
-    // stays finite (2y-1 rounds to ±1 for |y-½| → ½, killing the old form).
-    // The central region (tail = min(y,1-y) > 0.03125) uses the fast erfinv path below
-    // (~52ns/call). The moderate tail otherwise routes to erfcinv_conv's erfcx
-    // continued-fraction Newton (~5.4µs/call). Instead, refine with HALLEY on the fast,
-    // accurate ndtr CDF: self-correcting to ~1e-15 in a few steps, no magic constants, and
-    // — being the SHARED inverse — keeps ppf/isf consistent. The extreme tail (tail < 1e-15,
-    // where ndtr underflows) keeps the erfcinv erfcx path for accuracy.
-    let t = y.min(1.0 - y);
-    if (1e-3..=0.03125).contains(&t) {
-        // Solve ndtr(xn) = t for the LOWER tail xn<0 (always the small prob t, so ndtr(xn)-t
-        // has no catastrophic cancellation and ndtr stays relatively accurate for t≥1e-3);
-        // ndtri(y) is then xn (y<½) or -xn (y>½). Halley on the fast accurate ndtr converges
-        // to ~1e-15 with no magic constants.
-        const INV_SQRT_2PI: f64 = 0.398_942_280_401_432_7;
-        let mut xn = -(-2.0 * t.ln()).sqrt();
-        for _ in 0..6 {
-            let e = ndtr_scalar(xn) - t;
-            if e == 0.0 {
-                break;
-            }
-            let pdf = (-0.5 * xn * xn).exp() * INV_SQRT_2PI;
-            let u = e / pdf;
-            xn -= u / (1.0 + 0.5 * xn * u);
-        }
-        return if y < 0.5 { xn } else { -xn };
-    }
-    if y <= 0.5 {
-        -SQRT_2 * erfcinv_conv(2.0 * y)
+    let mut p = y;
+    let lower_tail = if p > 1.0 - CEPHES_NDTRI_EXP_NEG2 {
+        p = 1.0 - p;
+        false
     } else {
-        SQRT_2 * erfcinv_conv(2.0 * (1.0 - y))
+        true
+    };
+
+    if p > CEPHES_NDTRI_EXP_NEG2 {
+        let w = p - 0.5;
+        let w2 = w * w;
+        return (w + w
+            * (w2 * cephes_ndtri_polevl(w2, &CEPHES_NDTRI_P0)
+                / cephes_ndtri_p1evl(w2, &CEPHES_NDTRI_Q0)))
+            * CEPHES_NDTRI_SQRT_2PI;
     }
+
+    let x = {
+        let z = (-2.0 * p.ln()).sqrt();
+        let z0 = z - z.ln() / z;
+        let inv_z = 1.0 / z;
+        let correction = if z < 8.0 {
+            inv_z * cephes_ndtri_polevl(inv_z, &CEPHES_NDTRI_P1)
+                / cephes_ndtri_p1evl(inv_z, &CEPHES_NDTRI_Q1)
+        } else {
+            inv_z * cephes_ndtri_polevl(inv_z, &CEPHES_NDTRI_P2)
+                / cephes_ndtri_p1evl(inv_z, &CEPHES_NDTRI_Q2)
+        };
+        z0 - correction
+    };
+
+    if lower_tail { -x } else { x }
+}
+
+const CEPHES_NDTRI_EXP_NEG2: f64 = 0.135_335_283_236_612_7;
+const CEPHES_NDTRI_SQRT_2PI: f64 = 2.506_628_274_631_000_7;
+
+const CEPHES_NDTRI_P0: [f64; 5] = [
+    -5.996_335_010_141_079e1,
+    9.800_107_541_859_997e1,
+    -5.667_628_574_690_703e1,
+    1.393_126_093_872_796_8e1,
+    -1.239_165_838_673_812_5,
+];
+
+const CEPHES_NDTRI_Q0: [f64; 8] = [
+    1.954_488_583_381_417_6,
+    4.676_279_128_988_815,
+    8.636_024_213_908_906e1,
+    -2.254_626_878_541_193_8e2,
+    2.002_602_123_800_606_6e2,
+    -8.203_722_561_683_333e1,
+    1.590_562_251_262_117e1,
+    -1.183_316_211_213_300_1,
+];
+
+const CEPHES_NDTRI_P1: [f64; 9] = [
+    4.055_448_923_059_624,
+    3.152_510_945_998_938_5e1,
+    5.716_281_922_464_213e1,
+    4.408_050_738_932_008e1,
+    1.468_495_619_288_580_2e1,
+    2.186_633_068_507_902_5,
+    -1.402_560_791_713_545e-1,
+    -3.504_246_268_278_482e-2,
+    -8.574_567_851_546_854e-4,
+];
+
+const CEPHES_NDTRI_Q1: [f64; 8] = [
+    1.577_998_832_564_667_5e1,
+    4.539_076_351_288_792e1,
+    4.131_720_382_546_72e1,
+    1.504_253_856_929_075e1,
+    2.504_649_462_083_094,
+    -1.421_829_228_547_877_8e-1,
+    -3.808_064_076_915_783e-2,
+    -9.332_594_808_954_574e-4,
+];
+
+const CEPHES_NDTRI_P2: [f64; 9] = [
+    3.237_748_917_769_460_3,
+    6.915_228_890_689_842,
+    3.938_810_252_924_744_4,
+    1.333_034_608_158_075_5,
+    2.014_853_895_491_790_8e-1,
+    1.237_166_348_178_200_2e-2,
+    3.015_815_535_082_354e-4,
+    2.658_069_746_867_375_5e-6,
+    6.239_745_391_849_833e-9,
+];
+
+const CEPHES_NDTRI_Q2: [f64; 8] = [
+    6.024_270_393_647_42,
+    3.679_835_638_561_608_7,
+    1.377_020_994_890_813_2,
+    2.162_369_935_944_966_3e-1,
+    1.342_040_060_885_431_8e-2,
+    3.280_144_646_821_277_4e-4,
+    2.892_478_647_453_806_8e-6,
+    6.790_194_080_099_813e-9,
+];
+
+fn cephes_ndtri_polevl(x: f64, coef: &[f64]) -> f64 {
+    coef.iter().copied().fold(0.0, |acc, c| acc * x + c)
+}
+
+fn cephes_ndtri_p1evl(x: f64, coef: &[f64]) -> f64 {
+    let mut acc = x + coef[0];
+    for &c in &coef[1..] {
+        acc = acc * x + c;
+    }
+    acc
 }
 
 /// Inverse of `log_ndtr`.
