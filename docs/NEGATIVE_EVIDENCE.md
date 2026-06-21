@@ -2157,3 +2157,20 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
 - ALL major crates gauntleted now (interpolate/signal/spatial/cluster/stats/special): dominant
   except Delaunay-build (1.45x), kmeans (SIMD/parallel tradeoff), + the C-SIMD/library walls
   (fft pocketfft, linprog HiGHS, RBF LAPACK, FFT-residual oaconvolve/hilbert).
+
+## 2026-06-21 - MEASURED: callback-lever marquee CONFIRMED (minimize 441x, quad 8.2x); Delaunay = Qhull wall
+- Agent: cc / MistyBirch. Re-confirmed the biggest win category (iterative-solver-over-user-
+  function: fsci's Rust closure vs scipy's Python objective/integrand):
+  - minimize BFGS Rosenbrock (5-D): fsci 0.0374ms vs scipy 16.5ms → WIN 441x. (scipy pays
+    Python objective + FD-gradient calls per iteration; fsci inlines the Rust closure.)
+  - quad (exp(-x²)cos3x+sin²x over [0,10]): fsci 0.00739ms vs scipy 0.0608ms → WIN 8.2x.
+  Confirms [[perf_gauntlet_7crate_domination]] (opt 357-491x, integrate 80x).
+- DELAUNAY investigation (last cycle's flag): build uses delaunay_triangulate_circle_grid
+  (Bowyer-Watson + DelaunayCircleGrid, dim=√n clamped 16..128). Both fsci+scipy ~O(n log n);
+  the 1.45x is a CONSTANT-FACTOR gap vs heavily-tuned Qhull C (grid sizing reasonable, no
+  obvious inefficiency). Classified a Qhull WALL (like fft/pocketfft, linprog/HiGHS, RBF/LAPACK)
+  — not a clean algorithmic win. The memory's "2.2x faster" was likely smaller-n / different data.
+- CAMPAIGN STATE: gauntlet complete across all major crates; fsci DOMINATES scipy broadly
+  (callback-lever 8-441x, parallel/algorithmic wins) with residuals = C-SIMD/library walls
+  (FFT, Qhull-Delaunay, HiGHS, LAPACK) + kmeans SIMD/parallel tradeoff. Clean algorithmic
+  losses fixed this session (interpolate dense-fits, signal rfft family, linkage family).
