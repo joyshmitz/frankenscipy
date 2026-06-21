@@ -5348,7 +5348,14 @@ pub fn powm1_scalar(x: f64, y: f64) -> f64 {
     if !x.is_finite() || !y.is_finite() {
         return x.powf(y) - 1.0;
     }
-    (y * x.ln()).exp_m1()
+    // SciPy uses pow(x,y)-1 except where x^y is near 1 (catastrophic cancellation), where it
+    // switches to expm1. The expm1 form is 1 ULP off for exact integer powers (powm1(2,3) gave
+    // 6.999…98, not 7); route those through pow(x,y)-1 like SciPy.
+    if (y * (x - 1.0)).abs() < 0.5 || y.abs() < 0.2 {
+        (y * x.ln()).exp_m1()
+    } else {
+        x.powf(y) - 1.0
+    }
 }
 
 pub fn powm1(
