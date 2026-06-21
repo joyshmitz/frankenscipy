@@ -1185,6 +1185,39 @@ Readiness notes:
 - Route future work to a real implicitly restarted or thick-restarted symmetric
   Lanczos primitive with a measured restart policy and convergence certificate.
 
+## 2026-06-21 - fsci-sparse eigsh tridiagonal projection extractor gauntlet
+
+- Agent: cod-b / BlackThrush
+- Bead: `frankenscipy-ymnsn`
+- Decision: REJECT AND RESTORE SOURCE. Replacing symmetric `eigsh`'s projected
+  Hessenberg extraction with a residual-checked `eigh_tridiagonal` extraction
+  moved the focused rows by only 1-4% on the same worker and left the remaining
+  SciPy losses open.
+- Artifact: inline in `docs/NEGATIVE_EVIDENCE.md` and
+  `docs/progress/perf-negative-results.md`; no source artifact retained because
+  the candidate was fully removed.
+
+| Gate | Result | Notes |
+| --- | --- | --- |
+| Same-worker A/B | REJECT | rch `ovh-a` parent 1.026 / 3.795 / 10.388 ms vs candidate 0.988 / 3.738 / 10.240 ms for n=2000 k=6, n=8000 k=6, n=20000 k=8 |
+| SciPy head-to-head ratio | FAIL | local SciPy oracle 1.267 / 2.909 / 6.316 ms; candidate score `1/2/0` and still 1.29x / 1.62x slower on the losing rows |
+| Source restoration | PASS | final `crates/fsci-sparse/src/linalg.rs` diff is empty |
+| Post-restore sanity | PASS | remote focused `perf_eigsh` after revert completed with `conv=true`; RCH reassigned to `vmi1152480`, so this is not same-worker A/B proof |
+
+| Workload / route | Parent Rust | Candidate Rust | SciPy oracle | Verdict |
+| --- | ---: | ---: | ---: | --- |
+| `eigsh n=2000 k=6` | 1.026 ms | 0.988 ms | 1.267 ms | near-noise; both beat SciPy |
+| `eigsh n=8000 k=6` | 3.795 ms | 3.738 ms | 2.909 ms | reject: 1.02x internal move, still 1.29x slower than SciPy |
+| `eigsh n=20000 k=8` | 10.388 ms | 10.240 ms | 6.316 ms | reject: 1.01x internal move, still 1.62x slower than SciPy |
+
+Readiness notes:
+
+- Do not retry projected eigensolver substitutions in this lane. The remaining
+  sparse `eigsh` gap is in the Krylov/restart primitive itself, not the tiny
+  projected eigensolve.
+- Next credible lever remains implicitly restarted or thick-restarted symmetric
+  Lanczos with ghost control and a measured restart policy.
+
 ## 2026-06-20 - fsci-sparse public CSR SpMV row-loop gauntlet
 
 - Agent: cod-b / MistyBirch

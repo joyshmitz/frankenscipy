@@ -86,6 +86,39 @@ ledger above so the project has one source of truth.
   The next credible lever is a streaming SIMD/classifier or data-layout route
   that preserves sequential input reads, not a period-wise input gather.
 
+## 2026-06-21 - frankenscipy-ymnsn - sparse eigsh symmetric tridiagonal projection - REJECT
+
+- Agent: cod-b / BlackThrush
+- Decision: REJECT and restore source. The lever routed symmetric `eigsh`
+  Ritz extraction through `fsci_linalg::eigh_tridiagonal` on the Arnoldi
+  diagonal/subdiagonal, guarded by the same projected residual certificate and
+  falling back to the existing Hessenberg extraction on certificate failure.
+  The certificate held, but the timings were near-noise and did not close the
+  remaining SciPy losses.
+- Skill route: alien-graveyard communication-avoiding / spectral-kernel
+  routing plus alien-artifact residual proof. This was the smallest safe probe
+  before a true restarted Lanczos primitive; it did not produce a radical lever.
+- Same-worker proof command: `AGENT_NAME=BlackThrush RCH_REQUIRE_REMOTE=1
+  RCH_WORKER=ovh-a CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b
+  rch exec -- cargo run --release -p fsci-sparse --bin perf_eigsh`.
+
+| Workload | Restored parent Rust (`ovh-a`) | Tridiagonal candidate (`ovh-a`) | Local SciPy oracle | Verdict |
+| --- | ---: | ---: | ---: | --- |
+| `eigsh n=2000 k=6` | 1.026 ms | 0.988 ms | 1.267 ms | near-noise internal win; both beat SciPy |
+| `eigsh n=8000 k=6` | 3.795 ms | 3.738 ms | 2.909 ms | reject: only 1.02x faster than parent, still 1.29x slower than SciPy |
+| `eigsh n=20000 k=8` | 10.388 ms | 10.240 ms | 6.316 ms | reject: only 1.01x faster than parent, still 1.62x slower than SciPy |
+
+- Win/loss/neutral score: candidate vs restored parent `0/0/3` under the
+  near-noise keep gate; candidate vs live SciPy oracle `1/2/0`.
+- Source restoration: `crates/fsci-sparse/src/linalg.rs` diff is empty after
+  the trial; a post-restore focused `perf_eigsh` sanity run on a reassigned
+  RCH worker (`vmi1152480`) reported the parent path with `conv=true` and
+  residuals unchanged.
+- Retry condition: do not retry substituting the projected eigensolver alone.
+  The remaining sparse loss still needs a real implicitly restarted or
+  thick-restarted symmetric Lanczos primitive with measured restart policy and
+  ghost control; extractor micro-swaps are below the keep threshold.
+
 ## 2026-06-21 - frankenscipy-8l8r1.144 - smoothing spline GCV addendum - LANDED KEEP
 
 - Agent: cod-a / BlackThrush

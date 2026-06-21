@@ -87,6 +87,47 @@ condition so dead ends are not repeated casually.
   Future attempts must keep sequential input reads or prove enough vectorized
   ingestion/classifier speedup to offset input gather locality loss.
 
+## 2026-06-21 - frankenscipy-ymnsn - sparse eigsh symmetric tridiagonal projection
+
+- Agent: cod-b / BlackThrush
+- Status: rejected and restored before commit.
+- Lever tried: for symmetric `eigsh`, extract Ritz values/vectors with
+  `fsci_linalg::eigh_tridiagonal` over the Arnoldi projection's diagonal and
+  subdiagonal, then validate every selected pair against the full Arnoldi
+  residual certificate before returning it. The intended win was to replace the
+  dense Hessenberg QR/eigenvector extraction with a structure-aware symmetric
+  tridiagonal eigensolve.
+- Graveyard/artifact route: communication-avoiding/spectral sparse kernels with
+  a residual-certificate proof. This is not a replacement for restarted
+  Lanczos; it was a bounded extractor micro-probe before attempting that larger
+  primitive.
+- Same-worker RCH command:
+  `AGENT_NAME=BlackThrush RCH_REQUIRE_REMOTE=1 RCH_WORKER=ovh-a
+  CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec --
+  cargo run --release -p fsci-sparse --bin perf_eigsh`.
+- Local SciPy oracle: SciPy 1.17.1 / NumPy 2.4.3 medians from the existing
+  deterministic `perf_eigsh` oracle for the same planted symmetric banded
+  matrices.
+
+| Workload | Restored parent Rust | Tridiagonal extractor candidate | Candidate vs parent | Local SciPy oracle | Candidate vs SciPy |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `eigsh n=2000 k=6` | 1.026 ms | 0.988 ms | 1.04x faster | 1.267 ms | 1.28x faster |
+| `eigsh n=8000 k=6` | 3.795 ms | 3.738 ms | 1.02x faster | 2.909 ms | 1.29x slower |
+| `eigsh n=20000 k=8` | 10.388 ms | 10.240 ms | 1.01x faster | 6.316 ms | 1.62x slower |
+
+- Same-worker candidate-vs-current score: `0/0/3` because the movement is
+  below the keep threshold and still leaves the target rows behind SciPy.
+- Candidate-vs-SciPy score: `1/2/0`.
+- Revert discipline: the `eigh_tridiagonal` import, eigsh-only flag, helper,
+  and call-site changes were removed before committing. `git diff --
+  crates/fsci-sparse/src/linalg.rs` is empty after the revert.
+- Post-restore sanity: a focused `perf_eigsh` rerun completed remotely after
+  restoration with `conv=true` on all rows; RCH reassigned it from `ovh-a` to
+  `vmi1152480`, so that run is sanity evidence only, not same-worker A/B proof.
+- Retry condition: do not retry projected-extractor swaps. Future sparse `eigsh`
+  work should implement an actual restarted symmetric Lanczos path with ghost
+  control and a measured restart policy.
+
 ## 2026-06-21 - frankenscipy-8l8r1.144 - interpolate smoothing spline GCV stack
 
 - Agent: cod-a / BlackThrush
