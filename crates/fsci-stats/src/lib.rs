@@ -27873,6 +27873,8 @@ pub fn pearsonr(x: &[f64], y: &[f64]) -> CorrelationResult {
     let r = ssxym / denom;
     // Clamp to [-1, 1] for numerical safety
     let r = r.clamp(-1.0, 1.0);
+    // scipy returns exactly ±1 for n == 2 (mask = (n == 2) → round).
+    let r = if n == 2 { r.round() } else { r };
 
     // p-value via t-distribution: t = r * sqrt((n-2)/(1-r²))
     let df = nf - 2.0;
@@ -27942,6 +27944,9 @@ pub fn pearsonr_alternative(x: &[f64], y: &[f64], alternative: &str) -> Correlat
         .map(|(&dx, &dy)| (dx / normxm) * (dy / normym))
         .sum::<f64>()
         .clamp(-1.0, 1.0);
+    // scipy rounds r to exactly ±1 for n == 2 (two points are always perfectly correlated; see
+    // scipy.stats.pearsonr `mask = (n == 2)` → round). The vecdot otherwise lands ~1 ULP short.
+    let r = if n == 2 { r.round() } else { r };
 
     // p-value via the scipy convention: under the null, r is distributed
     // as Beta(n/2 − 1, n/2 − 1) on (−1, 1). Translate r ∈ [−1, 1] onto
