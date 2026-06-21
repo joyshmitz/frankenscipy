@@ -1772,11 +1772,10 @@ pub fn dst_iv(input: &[f64], options: &FftOptions) -> Result<Vec<f64>, FftError>
     // DST-IV via the same 2N-point complex FFT as DCT-IV (pre/post rotation);
     // it reads -2·Im instead of 2·Re of e^{-iπ(2k+1)/4N}·U[k]. 8N → 2N.
     let spectrum = dct4_core_fft(input, options);
+    let post_tw = get_or_compute_dct4_twiddles(n); // exp(-iπ(2k+1)/4N), cached (shared with dct_iv)
     let mut result = Vec::with_capacity(n);
     for (k, &uk) in spectrum.iter().enumerate().take(n) {
-        let angle = -PI * (2 * k + 1) as f64 / (4.0 * n as f64);
-        let a = (angle.cos(), angle.sin());
-        result.push(-2.0 * complex_mul(a, uk).1); // -2·Im
+        result.push(-2.0 * complex_mul(post_tw[k], uk).1); // -2·Im
     }
     // br-yjas: scipy normalization for DST-IV (mirror of DCT-IV).
     let scale = match options.normalization {
