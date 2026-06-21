@@ -6,6 +6,55 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-21 - frankenscipy-8l8r1/cod-a-fft-small-power-tail-20260621 - FFT mixed-radix fixed small power tails - KEEP WITH RESIDUAL LOSS
+
+- Agent: cod-a / BlackThrush.
+- Decision: KEEP the source change because the same-worker Rust parent/candidate
+  proof wins every measured 5-smooth row, while keeping the SciPy gap open. The
+  candidate specializes recursive mixed-radix power-of-two tails of length
+  4/8/16 with fixed stack kernels, avoiding the generic twiddle-cache lookup and
+  radix-4 setup in the smallest hot leaves.
+- Radical route: alien-graveyard Stockham/cache-layout FFT guidance was reduced
+  to a reversible leaf-kernel artifact from alien-artifact-coding and
+  extreme-optimization. The larger frontier remains an iterative/cache-blocked
+  mixed-radix schedule; this lever is the smallest conformance-safe step.
+- Same-worker RCH `hz1` proof, warm target
+  `/data/projects/.rch-targets/frankenscipy-cod-a`, command
+  `AGENT_NAME=cod-a RCH_WORKER=hz1 RCH_REQUIRE_REMOTE=1
+  CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a rch exec --
+  cargo run --release -p fsci-fft --bin perf_mixed_radix`:
+
+| n | Parent Rust | Candidate Rust | Candidate vs parent | Candidate vs local SciPy |
+| ---: | ---: | ---: | ---: | ---: |
+| 720 | 20.825 us | 14.125 us | 1.47x faster | 1.37x slower |
+| 1000 | 31.287 us | 19.479 us | 1.61x faster | 1.57x slower |
+| 1080 | 37.350 us | 24.358 us | 1.53x faster | 1.84x slower |
+| 1500 | 62.259 us | 43.958 us | 1.42x faster | 2.54x slower |
+| 1920 | 63.858 us | 40.060 us | 1.59x faster | 1.96x slower |
+| 3000 | 100.903 us | 68.144 us | 1.48x faster | 2.10x slower |
+| 5000 | 164.414 us | 115.431 us | 1.42x faster | 2.15x slower |
+| 10000 | 296.027 us | 227.758 us | 1.30x faster | 2.13x slower |
+
+- Fresh local SciPy 1.17.1 / NumPy 2.4.3 oracle on the exact deterministic
+  `perf_mixed_radix` signal measured medians of 10.299 / 12.424 / 13.205 /
+  17.293 / 20.429 / 32.481 / 53.782 / 107.093 us for n=720..10000. RCH rejected
+  direct non-compilation Python timing in proof mode, so the SciPy row is a
+  local absolute comparator while the keep proof is same-worker Rust A/B.
+- Score: candidate-vs-parent `8/0/0`; candidate-vs-local-SciPy `0/8/0`.
+  Candidate benchmark golden worst max error was `3.394e-14` versus tolerance
+  `1e-9`.
+- Gates: `git diff --check -- crates/fsci-fft/src/transforms.rs` passed; RCH
+  `cargo build --release -p fsci-fft` passed; RCH `cargo test -p fsci-fft --lib`
+  passed 177/0; RCH `cargo test -p fsci-conformance --test diff_fft --test
+  e2e_fft -- --nocapture` passed `diff_fft` 34/0 and `e2e_fft` 12/0; RCH
+  `cargo clippy -p fsci-fft --lib -- -D warnings` passed; changed-file UBS
+  passed. `cargo fmt -p fsci-fft --check` remains blocked by pre-existing
+  formatting drift in untouched fft files.
+- Remaining route: do not retry scalar modulo/permutation cleanups in this
+  recursive structure. Closing the SciPy gap needs a real iterative/cache-blocked
+  mixed-radix schedule or native SoA/SIMD butterflies measured on the same host
+  as the SciPy oracle.
+
 ## 2026-06-21 - frankenscipy-spywk/evc1m/r7y97/u6soc-cod-b-stats-batch-pmf - stats distribution batch PMF/PDF vs SciPy - KEEP / STALE BEADS CLOSED
 
 - Agent: cod-b / BlackThrush.

@@ -4,6 +4,48 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-21 - frankenscipy-8l8r1/cod-a-fft-small-power-tail-20260621 - FFT 5-smooth fixed small power-tail keep
+
+- Agent: cod-a / BlackThrush.
+- Lever: specialize the recursive mixed-radix power-of-two tail at lengths
+  4/8/16 with fixed stack kernels. This removes generic twiddle-cache lookup and
+  radix-4 setup from the smallest hot leaves while keeping the public radix-2
+  path and odd-factor split unchanged.
+- Search route: `/alien-graveyard` Stockham/cache-layout FFT pressure plus
+  `/alien-artifact-coding` artifact reduction collapsed into a small,
+  conformance-reversible tail kernel. `/extreme-software-optimization` kept the
+  proof to one measured lever because previous scalar modulo and bit-reversal
+  tail attempts failed the gauntlet.
+- Same-worker RCH `hz1`, warm target
+  `/data/projects/.rch-targets/frankenscipy-cod-a`, `cargo run --release -p
+  fsci-fft --bin perf_mixed_radix`:
+
+  | n | Parent Rust | Candidate Rust | Internal ratio | Local SciPy median | SciPy ratio |
+  | ---: | ---: | ---: | ---: | ---: | ---: |
+  | 720 | 20.825 us | 14.125 us | 1.47x faster | 10.299 us | 1.37x slower |
+  | 1000 | 31.287 us | 19.479 us | 1.61x faster | 12.424 us | 1.57x slower |
+  | 1080 | 37.350 us | 24.358 us | 1.53x faster | 13.205 us | 1.84x slower |
+  | 1500 | 62.259 us | 43.958 us | 1.42x faster | 17.293 us | 2.54x slower |
+  | 1920 | 63.858 us | 40.060 us | 1.59x faster | 20.429 us | 1.96x slower |
+  | 3000 | 100.903 us | 68.144 us | 1.48x faster | 32.481 us | 2.10x slower |
+  | 5000 | 164.414 us | 115.431 us | 1.42x faster | 53.782 us | 2.15x slower |
+  | 10000 | 296.027 us | 227.758 us | 1.30x faster | 107.093 us | 2.13x slower |
+
+- Scorecard: internal candidate-vs-parent `8/0/0`; candidate-vs-local-SciPy
+  `0/8/0`. Candidate golden worst max error was `3.394e-14` against tolerance
+  `1e-9`, improved from the parent `4.278e-14` payload by roundoff.
+- Gates: `git diff --check -- crates/fsci-fft/src/transforms.rs`; RCH
+  `cargo build --release -p fsci-fft`; RCH `cargo test -p fsci-fft --lib`
+  177/0; RCH `cargo test -p fsci-conformance --test diff_fft --test e2e_fft
+  -- --nocapture` with `diff_fft` 34/0 and `e2e_fft` 12/0; RCH
+  `cargo clippy -p fsci-fft --lib -- -D warnings`; changed-file UBS. `cargo
+  fmt -p fsci-fft --check` is still blocked by pre-existing drift in untouched
+  fft files.
+- Decision: KEEP the fixed-tail kernels as a real same-worker internal win, but
+  keep the 5-smooth SciPy gap open. Remaining route is an
+  iterative/cache-blocked mixed-radix plan or native SoA/SIMD butterflies with a
+  same-host SciPy comparator.
+
 ## 2026-06-21 - frankenscipy-spywk/evc1m/r7y97/u6soc-cod-b-stats-batch-pmf - stats distribution batch PMF/PDF vs SciPy
 
 - Agent: cod-b / BlackThrush.
@@ -4058,4 +4100,3 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
 - Remaining route: a true implicit/thick-restart Lanczos path for clustered
   spectra. Do not shrink the k=6 window below 18 without a stronger residual
   certificate.
-

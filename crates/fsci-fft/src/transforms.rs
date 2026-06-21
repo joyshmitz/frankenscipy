@@ -477,8 +477,12 @@ fn mixed_radix_fft(
         for (t, slot) in out.iter_mut().enumerate().take(n) {
             *slot = src[base + t * stride];
         }
-        let twiddles = get_or_compute_twiddles(n, inverse);
-        cooley_tukey_radix4_inplace_with_twiddles(&mut out[..n], &twiddles);
+        if n <= 16 {
+            mixed_radix_small_power_tail(&mut out[..n], inverse);
+        } else {
+            let twiddles = get_or_compute_twiddles(n, inverse);
+            cooley_tukey_radix4_inplace_with_twiddles(&mut out[..n], &twiddles);
+        }
         return;
     }
 
@@ -606,6 +610,115 @@ fn mixed_radix_fft(
                 out[u * m + r] = acc;
             }
         }
+    }
+}
+
+fn mixed_radix_small_power_tail(data: &mut [Complex64], inverse: bool) {
+    match data.len() {
+        0 | 1 => {}
+        2 => {
+            let a = data[0];
+            let b = data[1];
+            data[0] = complex_add(a, b);
+            data[1] = complex_sub(a, b);
+        }
+        4 => fft4_kernel(data, inverse),
+        8 => fft8_kernel(data, inverse),
+        16 => fft16_kernel(data, inverse),
+        _ => unreachable!("small power tail only supports powers of two up to 16"),
+    }
+}
+
+fn fft4_kernel(data: &mut [Complex64], inverse: bool) {
+    debug_assert_eq!(data.len(), 4);
+    let x0 = data[0];
+    let x1 = data[1];
+    let x2 = data[2];
+    let x3 = data[3];
+    let a02 = complex_add(x0, x2);
+    let b02 = complex_sub(x0, x2);
+    let a13 = complex_add(x1, x3);
+    let b13 = complex_sub(x1, x3);
+    let rot = if inverse {
+        (-b13.1, b13.0)
+    } else {
+        (b13.1, -b13.0)
+    };
+    data[0] = complex_add(a02, a13);
+    data[1] = complex_add(b02, rot);
+    data[2] = complex_sub(a02, a13);
+    data[3] = complex_sub(b02, rot);
+}
+
+fn fft8_kernel(data: &mut [Complex64], inverse: bool) {
+    debug_assert_eq!(data.len(), 8);
+    let mut even = [data[0], data[2], data[4], data[6]];
+    let mut odd = [data[1], data[3], data[5], data[7]];
+    fft4_kernel(&mut even, inverse);
+    fft4_kernel(&mut odd, inverse);
+    for k in 0..4 {
+        let t = complex_mul(odd[k], small_twiddle_8(k, inverse));
+        data[k] = complex_add(even[k], t);
+        data[k + 4] = complex_sub(even[k], t);
+    }
+}
+
+fn fft16_kernel(data: &mut [Complex64], inverse: bool) {
+    debug_assert_eq!(data.len(), 16);
+    let mut even = [
+        data[0], data[2], data[4], data[6], data[8], data[10], data[12], data[14],
+    ];
+    let mut odd = [
+        data[1], data[3], data[5], data[7], data[9], data[11], data[13], data[15],
+    ];
+    fft8_kernel(&mut even, inverse);
+    fft8_kernel(&mut odd, inverse);
+    for k in 0..8 {
+        let t = complex_mul(odd[k], small_twiddle_16(k, inverse));
+        data[k] = complex_add(even[k], t);
+        data[k + 8] = complex_sub(even[k], t);
+    }
+}
+
+fn small_twiddle_8(k: usize, inverse: bool) -> Complex64 {
+    debug_assert!(k < 4);
+    const S: f64 = std::f64::consts::FRAC_1_SQRT_2;
+    let twiddle = match k {
+        0 => (1.0, 0.0),
+        1 => (S, -S),
+        2 => (0.0, -1.0),
+        3 => (-S, -S),
+        _ => unreachable!(),
+    };
+    if inverse {
+        (twiddle.0, -twiddle.1)
+    } else {
+        twiddle
+    }
+}
+
+fn small_twiddle_16(k: usize, inverse: bool) -> Complex64 {
+    debug_assert!(k < 8);
+    const C1: f64 = 0.923_879_532_511_286_7;
+    const S1: f64 = 0.382_683_432_365_089_8;
+    const S: f64 = std::f64::consts::FRAC_1_SQRT_2;
+    const C3: f64 = 0.382_683_432_365_089_84;
+    const S3: f64 = 0.923_879_532_511_286_7;
+    let twiddle = match k {
+        0 => (1.0, 0.0),
+        1 => (C1, -S1),
+        2 => (S, -S),
+        3 => (C3, -S3),
+        4 => (0.0, -1.0),
+        5 => (-C3, -S3),
+        6 => (-S, -S),
+        7 => (-C1, -S1),
+        _ => unreachable!(),
+    };
+    if inverse {
+        (twiddle.0, -twiddle.1)
+    } else {
+        twiddle
     }
 }
 
