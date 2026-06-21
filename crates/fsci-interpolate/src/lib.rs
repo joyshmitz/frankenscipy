@@ -1856,7 +1856,19 @@ pub fn make_lsq_spline(x: &[f64], y: &[f64], t: &[f64], k: usize) -> Result<BSpl
             detail: format!("need t.len()-k-1 coeffs ({n}) <= points ({m})"),
         });
     }
-    let mut ata = vec![vec![0.0; n]; n];
+    // A^T A is k-banded (B_j, B_l overlap iff |j-l| ≤ k); store it in COMPACT banded rows
+    // (O(n·k)) instead of a dense n×n matrix (n inner-Vec allocs). Byte-identical: the same
+    // band entries are accumulated, and solve_banded_compact is bit-identical to solve_banded
+    // for a banded system.
+    // Pre-size each band row to its build window [a-k, a+k] so the scatter never grows the
+    // Vec (solve-time U-fill still grows it, same as make_interp_spline).
+    let mut ata: Vec<CompactBandRow> = (0..n)
+        .map(|a| {
+            let start = a.saturating_sub(k);
+            let end = (a + k).min(n - 1);
+            CompactBandRow::from_slice(start, &vec![0.0; end - start + 1])
+        })
+        .collect();
     let mut aty = vec![0.0; n];
     // O(m*k^2) sparse normal-equations assembly. A B-spline basis has local support: for
     // each sample only the k+1 functions on the knot span containing x[i] are nonzero. So
@@ -1904,8 +1916,11 @@ pub fn make_lsq_spline(x: &[f64], y: &[f64], t: &[f64], k: usize) -> Result<BSpl
             let ba = scratch[a];
             aty[a] += ba * yi;
             let row = &mut ata[a];
+            // Rows are pre-sized to [a-k, a+k] ⊇ [lo, mu], so index the band buffer directly
+            // (no cell_mut growth checks).
+            let base = row.start;
             for b in lo..=mu {
-                row[b] += ba * scratch[b];
+                row.values[b - base] += ba * scratch[b];
             }
         }
         // Reset only the touched window so the buffer stays clean for the next sample.
@@ -1914,7 +1929,7 @@ pub fn make_lsq_spline(x: &[f64], y: &[f64], t: &[f64], k: usize) -> Result<BSpl
         }
     }
     // A^T A of B-splines is banded with half-width k (B_j and B_l overlap iff |j-l| <= k).
-    let c = solve_banded(&mut ata, &mut aty, k)?;
+    let c = solve_banded_compact(&mut ata, &mut aty, k)?;
     BSpline::new(t.to_vec(), c, k)
 }
 

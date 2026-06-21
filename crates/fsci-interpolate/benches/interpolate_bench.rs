@@ -378,6 +378,29 @@ fn bench_bisplrep(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_make_lsq(c: &mut Criterion) {
+    let mut group = c.benchmark_group("make_lsq_spline");
+    let k = 3usize;
+    for &nk in &[200usize, 1000, 3000] {
+        let m = nk * 4;
+        let mut x: Vec<f64> = (0..m).map(|i| i as f64 / (m - 1) as f64).collect();
+        x.sort_by(|a, b| a.total_cmp(b));
+        let y: Vec<f64> = x.iter().map(|&xi| (10.0 * xi).sin()).collect();
+        // interior knots from quantiles + clamped boundary
+        let n_int = nk - 2;
+        let mut t: Vec<f64> = vec![0.0; k + 1];
+        for j in 1..=n_int { t.push(j as f64 / (n_int + 1) as f64); }
+        t.extend(std::iter::repeat(1.0).take(k + 1));
+        group.bench_with_input(BenchmarkId::from_parameter(nk), &nk, |b, _| {
+            b.iter(|| make_interp_spline_lsq_probe(black_box(&x), black_box(&y), black_box(&t), k))
+        });
+    }
+    group.finish();
+}
+fn make_interp_spline_lsq_probe(x: &[f64], y: &[f64], t: &[f64], k: usize) -> usize {
+    fsci_interpolate::make_lsq_spline(x, y, t, k).map(|_| 1usize).unwrap_or(0)
+}
+
 criterion_group!(
     benches,
     bench_interp1d,
@@ -390,6 +413,7 @@ criterion_group!(
     bench_smoothing_spline,
     bench_smooth_bivariate,
     bench_bisplrep,
+    bench_make_lsq,
     bench_rbf_scattered,
     bench_batch_eval,
     bench_batch_eval_large

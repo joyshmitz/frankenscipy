@@ -2031,3 +2031,18 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   NOW scipy-PARITY). Residual 1.8x = Rust-vs-Fortran FITPACK constant (wall).
 - LESSON: when fsci has BOTH a bespoke fit AND a proper FITPACK port (bisplrep/surfit), route
   the bespoke one through the FITPACK port for scipy parity+speed; mind the c index order.
+
+## 2026-06-21 - SHIPPED+MEASURED: make_lsq_spline O(n²) AtA alloc → compact banded (8-74x vs scipy)
+- Agent: cc / MistyBirch. make_lsq_spline already had a sparse build + banded solve but kept
+  AtA as a DENSE vec![vec![0;n];n] (n inner-Vec allocs; dominated large-n). Replaced with
+  pre-sized COMPACT banded rows (Vec<CompactBandRow>, O(n·k)) scattered via DIRECT index
+  (rows pre-sized to [a-k,a+k] ⊇ build window → no cell_mut growth) + solve_banded_compact.
+  Byte-identical (173/0): same band entries, solve_banded_compact bit-identical to solve_banded.
+- MEASURED vs scipy.interpolate.make_lsq_spline (criterion / perf_counter):
+  n_coef=200: 75µs vs 0.61ms → WIN 8.1x (dense was 72µs/8.4x — NO regression)
+  n_coef=1000: 412µs vs 11.4ms → WIN 27.7x (dense was 4.38ms/2.6x)
+  n_coef=3000: 1.33ms vs 98ms → WIN 73.9x (dense was 41ms/2.4x)
+- The dense n×n AtA (n inner-Vec allocs) was the large-n bottleneck (n=3000: 41→1.33ms = 31x
+  self-speedup). Added benches/interpolate_bench.rs make_lsq_spline bench.
+- LEVER (reused): dense Vec<Vec> banded matrix in a fit → pre-sized CompactBandRow + direct
+  index + solve_banded_compact = O(n) memory, byte-identical. (Same as make_smoothing_spline m.)
