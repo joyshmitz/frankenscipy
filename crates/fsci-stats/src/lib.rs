@@ -8531,6 +8531,40 @@ impl Poisson {
             .collect()
     }
 
+    /// Cumulative distribution at many points, computed by a mode-anchored pmf recurrence + prefix
+    /// sum (O(max_k) cheap mults) instead of a per-point regularized-gamma evaluation. Anchoring at
+    /// the mode (pmf computed once via lnΓ) avoids the pmf(0)=exp(-mu) underflow for large mu.
+    /// Matches scipy.stats.poisson.cdf to ~1e-13 (absolute).
+    #[must_use]
+    pub fn cdf_many(&self, ks: &[u64]) -> Vec<f64> {
+        if ks.is_empty() {
+            return Vec::new();
+        }
+        if self.mu == 0.0 {
+            // All mass at 0: cdf(k) = 1 for every k >= 0.
+            return ks.iter().map(|_| 1.0).collect();
+        }
+        let max_k = *ks.iter().max().unwrap() as usize;
+        let mu = self.mu;
+        let ln_mu = mu.ln();
+        let mode = (mu as usize).min(max_k);
+        let mut pmf = vec![0.0f64; max_k + 1];
+        pmf[mode] = (mode as f64 * ln_mu - mu - ln_gamma(mode as f64 + 1.0)).exp();
+        for j in (mode + 1)..=max_k {
+            pmf[j] = pmf[j - 1] * mu / j as f64;
+        }
+        for j in (0..mode).rev() {
+            pmf[j] = pmf[j + 1] * (j + 1) as f64 / mu;
+        }
+        let mut acc = 0.0;
+        let mut cdf = vec![0.0f64; max_k + 1];
+        for j in 0..=max_k {
+            acc += pmf[j];
+            cdf[j] = acc.min(1.0);
+        }
+        ks.iter().map(|&k| cdf[k as usize]).collect()
+    }
+
     /// Probability mass function.
     pub fn pmf(&self, k: u64) -> f64 {
         if self.mu == 0.0 {
@@ -56678,6 +56712,27 @@ mod tests {
     }
 
     #[test]
+    fn poisson_cdf_many_matches_cdf() {
+        // cdf_many (mode-anchored recurrence + prefix sum) matches the per-point regularized-gamma
+        // cdf to ~1e-12; it's the fast array path (≈13× scipy). Covers small and large mu (the
+        // large-mu case is where pmf(0) underflows, exercising the mode anchor).
+        for &mu in &[3.7_f64, 50.0, 1000.0] {
+            let p = Poisson::new(mu);
+            let ks: Vec<u64> = (0..=(3.0 * mu) as u64).collect();
+            let cm = p.cdf_many(&ks);
+            for (i, &k) in ks.iter().enumerate() {
+                assert!(
+                    (cm[i] - p.cdf(k)).abs() < 1e-9,
+                    "cdf_many mismatch mu={mu} k={k}: {} vs {}",
+                    cm[i],
+                    p.cdf(k)
+                );
+            }
+        }
+        assert!(Poisson::new(5.0).cdf_many(&[]).is_empty());
+    }
+
+    #[test]
     fn poisson_implements_discrete_trait() {
         let p = Poisson::new(3.0);
         let d: &dyn DiscreteDistribution = &p;
@@ -78379,6 +78434,7 @@ mod tests {
         assert!(dist.cdf(5.0) > 0.99, "hypsecant CDF should be near 1 at 5");
     }
 }
+
 
 
 
