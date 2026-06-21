@@ -2445,3 +2445,17 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   special+stats suites — erfinv is widely used, regression risk). Not chased this cycle.
 - RESIDUAL: erfcinv 7x / erfinv 3.6x are the Halley/Newton-iteration floor vs scipy's direct
   Cephes rationals (no iteration). Parity needs the rational coefficients (not on-system).
+
+## 2026-06-21 - interpolate/spatial gauntlet: KDTree/Akima/interpn WIN; BarycentricInterpolator overflow FIXED
+- Agent: cc / MistyBirch. MEASURED fsci vs scipy:
+  - KDTree query_many k=1 20k: 2.27ms vs 17.28 WIN 7.6x; query_ball_point r=0.3: 67.5 vs 323.6
+    WIN 4.8x; count_neighbors: 76.4 vs 193.7 WIN 2.5x; build 16 vs 14 parity (parallel queries).
+  - Akima eval_many 50k: 0.49 vs 3.81 WIN 7.8x; interpn 3D 50k: 5.2 vs 11.63 WIN 2.2x.
+  - BarycentricInterpolator: was BROKEN — new() overflowed for moderate n (raw weight product),
+    erroring where scipy works. FIXED (3c99268c) via SciPy capacity scaling (diffs × 4/(x_max−
+    x_min); common factor cancels in eval). Chebyshev n=200/600 now 9e-16/2e-15. interpolate 173/0.
+- LEVER: an interpolant/special-fn computing a raw ∏ of differences → scale by the capacity factor
+  that cancels downstream, to stay finite for large n (Berrut-Trefethen).
+- COLLAB: my ndtri Halley stopgap was superseded by another agent's full Cephes ndtri RATIONAL
+  (749a13e0); my erfcinv→ndtri route now calls it; they did the erfinv-via-ndtri follow-up I filed.
+  All coexist GREEN (special inverse tests + interpolate 173/0; only pre-existing fails remain).
