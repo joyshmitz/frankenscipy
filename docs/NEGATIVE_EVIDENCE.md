@@ -1750,3 +1750,21 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   Verify via oracle-diff on a stiff BVP (e.g. ε y'' = ...) where shooting fails.
 - Validation beads m5d83/u4clx/stwoc (residual len / tolerances / Newton budget) appear
   addressed (validate_boundary_residual_len present).
+
+## 2026-06-20 - AUDIT: linprog — two-phase dense simplex vs scipy HiGHS (wall + scale/degeneracy notes)
+
+- Agent: cc / MistyBirch (read-only no-cargo audit, fsci-opt/src/lib.rs:1199).
+- METHOD: complete two-phase primal simplex on a DENSE tableau. Standard-form transform
+  handles general LP input correctly (finite/upper/free bounds → shifts/reflections/
+  splits + slacks). simplex_iterate (1773) uses BLAND'S RULE on the ENTERING variable
+  (smallest index w/ negative reduced cost) → anti-cycling on the entering side. Robust
+  for typical small/medium LPs.
+- GAPS vs scipy default 'highs' (HiGHS): (a) PERF WALL — HiGHS is sparse + presolve +
+  dual-simplex/interior-point; a dense primal-simplex tableau can't match it (already
+  noted, ~11.7ms scipy probe). (b) SCALE — O(n·m) dense tableau + O(iter·n·m) pivots →
+  memory/time blow up for large/sparse LPs HiGHS handles. (c) DEGENERACY — the LEAVING-
+  variable min-ratio tie-break keeps the first row (row order), NOT the smallest basis-
+  VARIABLE index, so it is not STRICT Bland (which needs smallest-index on BOTH sides) →
+  a theoretical cycling risk on highly-degenerate LPs. VERIFY on recovery (degenerate LP
+  + a large LP vs scipy); harden the leaving tie-break to strict Bland if it cycles.
+- Not a quick byte-identical fix; HiGHS-parity is a known hard wall. Documented.
