@@ -4358,6 +4358,12 @@ pub fn erfcinv_conv(y: f64) -> f64 {
         return crate::erfinv_scalar(1.0 - y, fsci_runtime::RuntimeMode::Strict)
             .unwrap_or(f64::NAN);
     }
+    if y >= 2e-3 {
+        // Moderate tail: erfcinv(y) = -Φ⁻¹(y/2)/√2. ndtri's Halley path (y/2 ∈ [1e-3, 0.03125])
+        // is fast (no erfcx continued-fraction) and accurate to ~1e-15. No recursion: ndtri only
+        // calls back into erfcinv_conv for ITS extreme tail (y/2 < 1e-3, i.e. y < 2e-3, below).
+        return -ndtri_scalar(0.5 * y) * std::f64::consts::FRAC_1_SQRT_2;
+    }
     // Deep tail (x > ~1.3): the 1 - y form rounds to 1 for tiny y (erfcinv(1e-100)
     // was inf). Seed from the asymptotic and refine with log-space Newton on
     //   F(x) = -x² + ln(erfcx(x)) - ln(y),   F'(x) = -2/(√π·erfcx(x)),
