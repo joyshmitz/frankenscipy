@@ -2600,3 +2600,11 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   seuclidean): 10.6ms vs scipy 17.94 (1500²×10) WIN 1.7x. cdist_mahalanobis ALREADY EXISTS
   (another agent) and WINS: 36.6ms vs scipy 95.7 = 2.6x (measured, no action). With cdist_minkowski
   (15x, prior) the cdist metric family is now complete + dominant. cosine/correlation parity.
+
+## 2026-06-21 - spatial pdist gap-fill: pdist_minkowski 10.6x + pdist_seuclidean 3.8x WIN
+- Agent: cc / MistyBirch. Mirror of the cdist fills for the condensed pairwise. MEASURED 2500×10:
+  pdist_minkowski p=3 36.1ms vs scipy 383.16 WIN 10.6x; pdist_seuclidean 6.57 vs 24.72 WIN 3.8x.
+  Parallel pdist_fill + tested scalars; conformance vs scalar. pdist_mahalanobis already existed.
+  Distance metric family (cdist + pdist) now complete + dominant across minkowski/seuclidean/
+  mahalanobis/euclidean/cosine/etc. PROCESS: stripped the perf probe via regex (NOT git checkout,
+  which reverts the real fix too — see memory workflow_probe_strip_not_checkout).
