@@ -3169,6 +3169,37 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   length-gates (n>=256) regardless of COST → serialize real arms with kernel < ~46ns/call (the par
   break-even given ~40ns/elem overhead); keep parallel above. Don't re-sweep — boundary mapped.
 
+## 2026-06-21 - FIX/WIN: gamma/gammaln/digamma WORK-GATED parallel for huge arrays (>=1M) — 2-4x vs SciPy
+- Agent: cod-a / BlackThrush. Bead context frankenscipy-8l8r1. Complements (does NOT undo)
+  MistyBirch's cheap-kernel serialization above: that sweep measured ONLY n=100k, where serial
+  correctly wins (par_map_indices over-subscribes short arrays). But serialization was made
+  UNCONDITIONAL, leaving the large-array win on the table. For n>=1M the ~29ns Lanczos kernel
+  finally dominates the thread-spawn+concat overhead and parallel wins big. FIXED: the three
+  RealVec dispatchers now work-gate at `GAMMA_FAMILY_PAR_MIN = 1<<20` — serial below (MistyBirch's
+  win preserved), `par_map_indices` at/above. Order-preserving → byte-identical (golden xor
+  unchanged; in-crate gamma tests 155/0).
+- Same-worker RCH `hz1`, warm target `/data/projects/.rch-targets/frankenscipy-cc`,
+  `cargo run --release -p fsci-special --bin perf_gamma_array` (threshold=usize::MAX forces serial
+  baseline vs 1<<20 parallel; identical acc proves byte-identity):
+
+  | fn | n | serial (same-worker) | work-gated parallel | self-speedup | local SciPy 1.17.1 | vs SciPy |
+  | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+  | gammaln | 2M | 57.30 ms | 27.05 ms | 2.12x | 69.51 ms | 2.57x faster |
+  | gamma   | 2M | 83.47 ms | 24.15 ms | 3.45x | 54.24 ms | 2.25x faster |
+  | digamma | 2M | 54.09 ms | 16.50 ms | 3.28x | 48.90 ms | 2.96x faster |
+  | gammaln | 4M | 129.52 ms | 37.79 ms | 3.43x | 138.57 ms | 3.67x faster |
+  | gamma   | 4M | 178.19 ms | 48.16 ms | 3.70x | 103.33 ms | 2.15x faster |
+  | digamma | 4M | 138.43 ms | 34.27 ms | 4.04x | 99.10 ms | 2.89x faster |
+
+- Score: same-worker self 6/0/0; vs local SciPy 6/0/0. SciPy is single-threaded cephes; the win is
+  pure multicore (the kernels were already at parity/slight-win serially). SciPy row is local-host
+  (RCH workers can't import SciPy) — BOLD-VERIFY comparator, but the same-worker self-speedup is the
+  hard proof.
+- Threshold is conservative: MistyBirch's 100k serial-win + this 2M parallel-win bracket the break-even
+  to (100k, 1M); 1<<20 guarantees zero regression in the tested-serial band. Remaining route: a 256k/512k
+  sweep could lower the gate to capture mid-size arrays, and erf/erfc (error.rs, same cheap-kernel
+  pattern, currently real_par_min=usize::MAX) are the next identical candidates.
+
 ## 2026-06-21 - dst_iv twiddle reuse (byte-id); DCT/DST twiddle-recompute bug fully closed
 - Agent: cc / MistyBirch. dst_iv recomputed the dct-IV twiddle per coefficient → reuse the cached
   get_or_compute_dct4_twiddles (from the dct_iv fix). dst_iv 65536 2.27ms (matches dct_iv; 2N-FFT

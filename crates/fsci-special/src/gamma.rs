@@ -234,12 +234,28 @@ where
     Ok(out)
 }
 
+/// Real arrays at or above this length route the cheap gamma-family kernels
+/// (gamma/gammaln/digamma, ~29ns Lanczos each) through `par_map_indices`. The
+/// per-element compute finally dominates the OS-thread spawn + chunk-concat
+/// overhead, flipping the serial cheap-kernel win into a multicore win versus
+/// SciPy's single-threaded cephes ufunc. Below it, the serial path stays (the
+/// cheap-kernel-serialization sweep proved parallel over-subscribes short
+/// arrays at n=100k). Order-preserving, so the output is byte-identical to the
+/// serial map either way. Verified break-even is well under 1M for these
+/// kernels; the threshold is set conservatively so only large arrays parallelize.
+const GAMMA_FAMILY_PAR_MIN: usize = 1 << 20;
+
 fn gamma_dispatch(function: &'static str, z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     match z {
         SpecialTensor::RealScalar(x) => gamma_scalar(*x, mode).map(SpecialTensor::RealScalar),
         SpecialTensor::RealVec(values) => {
-            values.iter().map(|&x| gamma_scalar(x, mode)).collect::<Result<Vec<_>, _>>()
-                .map(SpecialTensor::RealVec)
+            if values.len() >= GAMMA_FAMILY_PAR_MIN {
+                par_map_indices(values.len(), |i| gamma_scalar(values[i], mode))
+                    .map(SpecialTensor::RealVec)
+            } else {
+                values.iter().map(|&x| gamma_scalar(x, mode)).collect::<Result<Vec<_>, _>>()
+                    .map(SpecialTensor::RealVec)
+            }
         }
         SpecialTensor::ComplexScalar(z_val) => {
             Ok(SpecialTensor::ComplexScalar(complex_gammaln(*z_val).exp()))
@@ -261,8 +277,13 @@ fn gammaln_dispatch(function: &'static str, z: &SpecialTensor, mode: RuntimeMode
     match z {
         SpecialTensor::RealScalar(x) => gammaln_scalar(*x, mode).map(SpecialTensor::RealScalar),
         SpecialTensor::RealVec(values) => {
-            values.iter().map(|&x| gammaln_scalar(x, mode)).collect::<Result<Vec<_>, _>>()
-                .map(SpecialTensor::RealVec)
+            if values.len() >= GAMMA_FAMILY_PAR_MIN {
+                par_map_indices(values.len(), |i| gammaln_scalar(values[i], mode))
+                    .map(SpecialTensor::RealVec)
+            } else {
+                values.iter().map(|&x| gammaln_scalar(x, mode)).collect::<Result<Vec<_>, _>>()
+                    .map(SpecialTensor::RealVec)
+            }
         }
         SpecialTensor::ComplexScalar(z_val) => {
             Ok(SpecialTensor::ComplexScalar(complex_gammaln(*z_val)))
@@ -319,8 +340,13 @@ fn digamma_dispatch(function: &'static str, z: &SpecialTensor, mode: RuntimeMode
     match z {
         SpecialTensor::RealScalar(x) => digamma_scalar(*x, mode).map(SpecialTensor::RealScalar),
         SpecialTensor::RealVec(values) => {
-            values.iter().map(|&x| digamma_scalar(x, mode)).collect::<Result<Vec<_>, _>>()
-                .map(SpecialTensor::RealVec)
+            if values.len() >= GAMMA_FAMILY_PAR_MIN {
+                par_map_indices(values.len(), |i| digamma_scalar(values[i], mode))
+                    .map(SpecialTensor::RealVec)
+            } else {
+                values.iter().map(|&x| digamma_scalar(x, mode)).collect::<Result<Vec<_>, _>>()
+                    .map(SpecialTensor::RealVec)
+            }
         }
         SpecialTensor::ComplexScalar(z_val) => {
             Ok(SpecialTensor::ComplexScalar(complex_digamma_scalar(*z_val)))
