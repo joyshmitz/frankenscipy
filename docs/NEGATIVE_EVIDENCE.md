@@ -1585,3 +1585,17 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   identical so no bench needed. cargo check -p {fsci-signal,fsci-special,fsci-cluster}
   + suites when disk recovers. Codebase-wide Vec<f64> sort_unstable lever now complete
   (stats 60 + here 9 = 69 sites).
+
+## 2026-06-20 - contingency_table + dbscan: Vec<usize> sort+dedup → sort_unstable (byte-identical)
+
+- Agent: cc / MistyBirch. CODE-ONLY (disk-critical, no cargo; /tmp worktree, no .scratch,
+  no build). Completes the sort_unstable sweep in MY crates (after the 69 f64 sorts).
+- 3 production `Vec<usize>` `.sort()` → `.sort_unstable()` (the textbook pre-dedup idiom):
+  fsci-stats contingency_table row/col labels (×2; feeds chi-square etc. on categorical
+  data) + fsci-cluster dbscan core_samples (×1). Byte-identical: Vec<usize> equal ⟹
+  identical, so the sorted-then-deduped result is unchanged.
+- Left as-is: f64 sorts already done; the 2 test-only `.sort()` (opt permutation test,
+  cluster leaves/cliques tests — no runtime perf); and total_cmp sorts in fsci-linalg
+  (2) / fsci-ndimage (2) which are OTHER agents' crates (not my files).
+- PENDING compile-verify (no cargo): one-token swaps, near-zero risk; byte-identical so
+  no bench needed. cargo check -p {fsci-stats,fsci-cluster} when disk recovers.

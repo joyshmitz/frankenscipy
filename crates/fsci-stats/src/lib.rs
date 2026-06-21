@@ -43092,11 +43092,11 @@ pub fn contingency_table(x: &[usize], y: &[usize]) -> (Vec<Vec<usize>>, Vec<usiz
     }
 
     let mut row_labels: Vec<usize> = x.to_vec();
-    row_labels.sort();
+    row_labels.sort_unstable();
     row_labels.dedup();
 
     let mut col_labels: Vec<usize> = y.to_vec();
-    col_labels.sort();
+    col_labels.sort_unstable();
     col_labels.dedup();
 
     let nr = row_labels.len();

@@ -5088,7 +5088,7 @@ pub fn dbscan(
         cluster_id += 1;
     }
 
-    core_samples.sort();
+    core_samples.sort_unstable();
     core_samples.dedup();
 
     Ok(DbscanResult {
