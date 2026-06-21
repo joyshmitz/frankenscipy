@@ -1454,3 +1454,25 @@ interior-direct (boundary-map only the ~window-1 edge cells).**
   ABANDONED: it conflicted with and would have regressed the superior compact-band
   impl. Confirmed by reading; build verification deferred to the implementing agent /
   CI (disk-low). Open losses remaining: hilbert (FFT C-SIMD wall).
+
+## 2026-06-20 - make_smoothing_spline + GCV: dense→banded solves (byte-identical, disk-low)
+
+- Agent: cc / MistyBirch. CODE-ONLY (disk-low/no-build); byte-identical-by-construction,
+  value provable by complexity (no bench needed). Same lever the compact-band
+  make_interp_spline used (solve_banded == solve_dense_system for a matrix within the
+  band), applied to the smoothing-spline path which still solved DENSE.
+- make_smoothing_spline expands its (2,2)-banded design X and penalty E to full n×n
+  (`band_to_full`, comment: "LAPACK (2,2): A[i][j]=band[2+i-j][j] for |i-j| ≤ 2") and
+  solved dense O(n²). Worse, `gcv_optimal_lambda` (called up to 500x by the λ-search)
+  solves the system PER COLUMN to form tr(lhs⁻¹ XᵀWX) → O(n³) per λ. Routed all three
+  dense solves to solve_banded with the provably-correct bandwidth:
+  - `m = X + λE` and the final `full = X + λE`: (2,2)-band → solve_banded(_,_,2).
+  - `lhs = XᵀWX + λ XᵀWE`: Gram of a (2,2)-banded X → half-bandwidth 2+2 = 4 →
+    solve_banded(_,_,4).
+  Byte-identical (each matrix lies exactly within its band; band_to_full zeroes the
+  rest by construction). Per-solve O(n²)→O(n); GCV per-λ O(n³)→O(n²) — big for large n.
+- UNBENCHED (builds paused) — byte-identical so no bench needed for correctness; verify
+  compile + the make_smoothing_spline scipy-parity test + full suite when builds resume.
+- Follow-up (bigger, not byte-identical to ship now): the GCV `tr` loop re-factors the
+  SAME `lhs` n times (once per column) — factor-once + n banded RHS would drop it to
+  O(n·bw²)+O(n²·bw). Noted for a focused cycle.

@@ -5806,7 +5806,8 @@ fn gcv_optimal_lambda(x_full: &[Vec<f64>], e_full: &[Vec<f64>], y: &[f64], w: &[
             }
         }
         let mut rhs = y.to_vec();
-        let c = match solve_dense_system(&mut m, &mut rhs) {
+        // m = X + λE is (2,2)-banded (X, E both |i-j| ≤ 2) → banded solve, byte-identical.
+        let c = match solve_banded(&mut m, &mut rhs, 2) {
             Ok(c) => c,
             Err(_) => return f64::INFINITY,
         };
@@ -5830,7 +5831,10 @@ fn gcv_optimal_lambda(x_full: &[Vec<f64>], e_full: &[Vec<f64>], y: &[f64], w: &[
                 }
             }
             let mut b: Vec<f64> = (0..n).map(|i| xtwx[i][col]).collect();
-            match solve_dense_system(&mut lhs, &mut b) {
+            // lhs = XᵀWX + λ XᵀWE. With X, E (2,2)-banded, both Gram products have
+            // half-bandwidth 2+2 = 4, so lhs is (4,4)-banded → solve_banded(_, _, 4)
+            // is byte-identical to the dense solve and O(n) per column.
+            match solve_banded(&mut lhs, &mut b, 4) {
                 Ok(z) => tr += z[col],
                 Err(_) => return f64::INFINITY,
             }
@@ -5964,7 +5968,9 @@ pub fn make_smoothing_spline(
         None => gcv_optimal_lambda(&x_full, &e_full, y, &w),
     };
 
-    // Solve (X + lam·E) c = y.
+    // Solve (X + lam·E) c = y. X and E are (2,2)-banded (|i-j| ≤ 2), so their sum is
+    // too — solve_banded(_, _, 2) is byte-identical to the dense solve here and runs
+    // in O(n) instead of O(n²).
     let mut full = vec![vec![0.0_f64; n]; n];
     for i in 0..n {
         for j in 0..n {
@@ -5972,7 +5978,7 @@ pub fn make_smoothing_spline(
         }
     }
     let mut rhs = y.to_vec();
-    let c = solve_dense_system(&mut full, &mut rhs)?;
+    let c = solve_banded(&mut full, &mut rhs, 2)?;
 
     // Map the natural-basis solution back to B-spline coefficients (length ncoef).
     let tl = t.len();
