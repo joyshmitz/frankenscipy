@@ -1731,3 +1731,22 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   3. CloughTocher2D parity — local vs scipy global gradients; oracle-diff on recovery.
 - No further readily-findable algorithmic perf loss in my crates; the surface is mature.
   GATING NEED = disk recovery (run DISK_WINDOW_VERIFY_QUEUE.md → Plan 2 → re-bench).
+
+## 2026-06-20 - AUDIT: solve_bvp is SINGLE SHOOTING vs scipy COLLOCATION — robustness/parity gap
+
+- Agent: cc / MistyBirch (read-only no-cargo audit, fsci-integrate/src/bvp.rs).
+- fsci solve_bvp (bvp.rs:91) = SINGLE SHOOTING: n = y_guess.len() (state dim, small);
+  each Newton iter integrates the IVP from y0 (solve_ivp_internal), evaluates the BC
+  residual, builds an n×n FD Jacobian (n extra IVP solves), and solves the small dense
+  system (solve_small_system). PERF is fine (n small; dense solve trivial).
+- GAP (real, "where we LOSE"): scipy.integrate.solve_bvp uses 4th-order COLLOCATION on
+  a mesh with a large SPARSE/banded system + adaptive mesh refinement. Single shooting:
+  (a) DIVERGES on stiff/sensitive BVPs (the forward IVP blows up) that collocation
+  solves robustly; (b) returns a different solution representation (no mesh/continuous
+   y(x) spline, no residual-controlled mesh) → not value/mesh parity with scipy. This is
+  a ROBUSTNESS + PARITY gap, not a perf loss.
+- FIX (big, cargo-needed; not byte-identical): implement collocation (the scipy method)
+  — block-banded collocation Jacobian + banded solve + mesh refinement. Large; deferred.
+  Verify via oracle-diff on a stiff BVP (e.g. ε y'' = ...) where shooting fails.
+- Validation beads m5d83/u4clx/stwoc (residual len / tolerances / Newton budget) appear
+  addressed (validate_boundary_residual_len present).
