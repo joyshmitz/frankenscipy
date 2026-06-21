@@ -2188,3 +2188,20 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
 - REVERTED a gate experiment: lowering the assign parallel gate 2²¹→2¹⁹ made 20000×8 WORSE
   (46ms — std::thread::scope spawn-per-Lloyd-iter overhead dominates at ~1.6M work); the high
   gate is correct. Kept only the byte-identical flatten.
+
+## 2026-06-21 - MEASURED: FFT "wall" is NON-POW2 only — fsci WINS pow2 1.38x, LOSES 5-smooth 3.7-5.4x
+- Agent: cc / MistyBirch. MEASURED fsci_fft::fft vs scipy.fft.fft (complex, criterion/perf_counter):
+  n=65536 (pow2): 1.10ms vs 1.52 → WIN 1.38x (radix-2² fused BEATS pocketfft on pow2!)
+  n=60000 (5-smooth): 1.83ms vs 0.49 → LOSE 3.7x
+  n=10000 (5-smooth): 0.373ms vs 0.069 → LOSE 5.4x
+  n=65537 (prime): 16.2ms vs 4.79 → LOSE 3.4x
+- INSIGHT (overturns the blanket "FFT is a C-SIMD wall"): the radix-2² kernel is EXCELLENT
+  (wins pow2). The loss is SPECIFICALLY non-power-of-2: fsci_fft has no mixed-radix 3/5, so
+  5-smooth sizes fall back to BLUESTEIN (chirp-z via a ≥2N pow2 FFT, ~3-5x the work of native
+  mixed-radix). scipy/pocketfft has radix 2/3/4/5/7/11 → fast 5-smooth.
+- RADICAL LEVER (high value, multi-function, big port): implement native radix-3 + radix-5
+  (recursive mixed-radix Cooley-Tukey for N=2^a·3^b·5^c) → closes the 3.7-5.4x non-pow2 loss
+  AND lets oaconvolve/fftconvolve pad to next_fast_len (5-smooth) instead of next_pow2
+  (less padding). Substantial FFT implementation (radix-3/5 butterflies + twiddles + mixed
+  decomposition + accuracy verification) — flagged as THE remaining high-value lever; deferred
+  to a focused cycle (or the fsci-fft owner). rfft already competitive (prior).
