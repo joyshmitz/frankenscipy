@@ -2698,3 +2698,13 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   get_or_compute_dct4_twiddles (from the dct_iv fix). dst_iv 65536 2.27ms (matches dct_iv; 2N-FFT
   bound residual). Byte-identical (dst 11/11). DCT/DST twiddle family complete: dct-II/idct/dct_iii/
   dct_iv + dst-I (real-FFT)/dst-II,III (dct/idct routing)/dst_iv — no more per-call cos/sin recompute.
+
+## 2026-06-21 - over-parallelization vein is fsci-special-ONLY (stats/interpolate verified clean)
+- Agent: cc / MistyBirch. Checked whether the cheap-kernel over-parallelization (fsci-special's
+  par_map_indices length-gates n>=256 regardless of cost) exists in other crates. VERIFIED CLEAN:
+  fsci-stats 1-D pdf_many/logpdf_many are SERIAL (xs.iter().map, coeff hoisted); mvn/mvt pdf_many is
+  WORK-gated (n<5 || work<1<<18). fsci-interpolate interp1d/CubicSpline eval_many SERIAL (sorted-
+  sweep); RGI/Akima eval_many parallelize and WON (heavy-enough). fsci-spatial cdist_fill/pdist_fill
+  are WORK-gated (cdist_thread_count(na,nb,dim)). So the over-parallelization bug was fsci-special-
+  specific (its par_map_indices uniquely length-gates) and is now fully fixed (~26 fns). DON'T hunt
+  over-parallelization in stats/interpolate/spatial — they use serial or cost-aware gates.
