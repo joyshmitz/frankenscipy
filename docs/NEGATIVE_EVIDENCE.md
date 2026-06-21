@@ -3374,3 +3374,56 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   the exponent RUNTIME (black_box) — a literal/const exponent gets sqrt/cbrt-folded and won't match
   the runtime-powf production path. The par_map_inline helper (move Copy f, not &f) inlines the
   closure per-thread. (sweep_poly Horner may likewise be re-checkable.) See [[perf_workgated_parallel_map_continuous]].
+
+## 2026-06-21 - KEEP: stats continuous batch PDF rows dominate SciPy on measured grids
+
+- Agent: cod-b / BlackThrush. Beads `frankenscipy-4eef5`, `frankenscipy-ti4gm`,
+  `frankenscipy-zorsu`, `frankenscipy-dzz43`, `frankenscipy-ga9r6`,
+  `frankenscipy-iw2ql`, `frankenscipy-miyj5`, `frankenscipy-lc28n`,
+  `frankenscipy-uzd6h`, `frankenscipy-a6k6s`, `frankenscipy-3en1f`.
+- Lever from the graveyard/vectorization pass: normalize each distribution once
+  and stream the grid through the existing batch route. This pass adds Criterion
+  rows for the already-shipped continuous `pdf_many` surfaces rather than
+  touching production kernels; zero source semantics changed and no regressions
+  were introduced.
+- RCH Criterion proof, per-crate only, warm target requested as
+  `/data/projects/.rch-targets/frankenscipy-cod-b`. RCH selected `ovh-a` and
+  rewrote the target dir to its worker-scoped pool path. Command:
+  `AGENT_NAME=cod-b RCH_REQUIRE_REMOTE=1 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec -- cargo bench -p fsci-stats --bench stats_bench --profile release -- distribution_batch --sample-size 10 --warm-up-time 1 --measurement-time 1 --noplot`.
+
+  | Row | Rust batch median | Rust scalar-map median | Local SciPy 1.17.1 median | Ratio vs SciPy |
+  | --- | ---: | ---: | ---: | ---: |
+  | gamma/pdf | 40.730 us | 129.760 us | 156.322 us | 3.84x faster |
+  | beta/pdf | 60.498 us | 275.840 us | 322.527 us | 5.33x faster |
+  | student_t/pdf | 40.109 us | 235.090 us | 379.900 us | 9.47x faster |
+  | chi/pdf | 57.106 us | 184.780 us | 166.496 us | 2.92x faster |
+  | chi2/pdf | 39.728 us | 111.920 us | 173.910 us | 4.38x faster |
+  | f/pdf | 63.548 us | 320.650 us | 354.112 us | 5.57x faster |
+  | gengamma/pdf | 78.189 us | 181.820 us | 266.395 us | 3.41x faster |
+  | invgamma/pdf | 56.139 us | 239.850 us | 228.447 us | 4.07x faster |
+  | nakagami/pdf | 90.323 us | 240.520 us | 244.012 us | 2.70x faster |
+  | gennorm/pdf | 64.798 us | 191.380 us | 212.553 us | 3.28x faster |
+  | vonmises/pdf | 77.217 us | 1167.700 us | 341.808 us | 4.43x faster |
+  | binomial/pmf | 72.478 us | 96.508 us | 293.993 us | 4.06x faster |
+  | negbinom/pmf | 169.230 us | 231.930 us | 481.723 us | 2.85x faster |
+  | betabinom/pmf | 104.220 us | 230.350 us | 276.489 us | 2.65x faster |
+  | hypergeom/pmf | 39.851 us | 69.792 us | 4270.005 us | 107.15x faster |
+
+- Scorecard: all measured rows vs SciPy `15 wins / 0 losses / 0 neutral`;
+  newly converted continuous rows `9 wins / 0 losses / 0 neutral`. Internal
+  batch-vs-scalar rows are also all wins. Worst new continuous SciPy ratio is
+  Nakagami at 2.70x faster; best is Student-t at 9.47x faster.
+- Gates:
+  - `rustfmt --edition 2024 --check crates/fsci-stats/benches/stats_bench.rs`
+    passed.
+  - RCH `cargo test -p fsci-stats pdf_many_matches_pdf --lib -- --nocapture`
+    passed 10/0 for batch/scalar identity rows.
+  - Live SciPy conformance passed locally with `FSCI_REQUIRE_SCIPY_ORACLE=1` for
+    `diff_stats_beta`, `diff_stats_chi`, `diff_stats_chi2`, `diff_stats_f`,
+    `diff_stats_gamma`, `diff_stats_gennorm`, `diff_stats_invgamma`,
+    `diff_stats_nakagami`, `diff_stats_t`, and `diff_stats_vonmises`.
+  - There is no registered `diff_stats_gengamma` conformance target; gengamma is
+    covered here by batch/scalar identity plus the live SciPy timing oracle.
+- Decision: KEEP the benchmark/evidence closeout and close the stale batch
+  distribution beads. Remaining stats routes should chase true residual losses,
+  not these already-dominant batch PDF/PMF rows.

@@ -4100,3 +4100,48 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
 - Remaining route: a true implicit/thick-restart Lanczos path for clustered
   spectra. Do not shrink the k=6 window below 18 without a stronger residual
   certificate.
+
+## 2026-06-21 - frankenscipy-stats-continuous-batch/cod-b - continuous `pdf_many` SciPy dominance closeout
+
+- Agent: cod-b / BlackThrush. Beads closed as stale converted evidence:
+  `frankenscipy-4eef5`, `frankenscipy-ti4gm`, `frankenscipy-zorsu`,
+  `frankenscipy-dzz43`, `frankenscipy-ga9r6`, `frankenscipy-iw2ql`,
+  `frankenscipy-miyj5`, `frankenscipy-lc28n`, `frankenscipy-uzd6h`,
+  `frankenscipy-a6k6s`, `frankenscipy-3en1f`.
+- Lever: expose the existing once-normalized batch distribution paths in the
+  Criterion harness and compare them directly with SciPy on matching grids. No
+  production code changed; the proof converts pending distribution leaves into a
+  measured release ledger row.
+- RCH `fsci-stats` Criterion on `ovh-a`, per-crate only, requested target
+  `/data/projects/.rch-targets/frankenscipy-cod-b`, command
+  `cargo bench -p fsci-stats --bench stats_bench --profile release -- distribution_batch --sample-size 10 --warm-up-time 1 --measurement-time 1 --noplot`.
+- SciPy oracle: local SciPy 1.17.1 / NumPy 2.4.3, same deterministic grids and
+  parameters, 50 timing reps. RCH workers were not assumed to have SciPy.
+
+  | Workload | Rust batch | SciPy | SciPy ratio |
+  | --- | ---: | ---: | ---: |
+  | Gamma pdf, 4096 points | 40.730 us | 156.322 us | 3.84x faster |
+  | Beta pdf, 4096 points | 60.498 us | 322.527 us | 5.33x faster |
+  | Student-t pdf, 4096 points | 40.109 us | 379.900 us | 9.47x faster |
+  | Chi pdf, 4096 points | 57.106 us | 166.496 us | 2.92x faster |
+  | Chi-square pdf, 4096 points | 39.728 us | 173.910 us | 4.38x faster |
+  | F pdf, 4096 points | 63.548 us | 354.112 us | 5.57x faster |
+  | Generalized gamma pdf, 4096 points | 78.189 us | 266.395 us | 3.41x faster |
+  | Inverse gamma pdf, 4096 points | 56.139 us | 228.447 us | 4.07x faster |
+  | Nakagami pdf, 4096 points | 90.323 us | 244.012 us | 2.70x faster |
+  | Generalized normal pdf, 4096 points | 64.798 us | 212.553 us | 3.28x faster |
+  | Von Mises pdf, 4096 points | 77.217 us | 341.808 us | 4.43x faster |
+  | Binomial pmf, 2001 points | 72.478 us | 293.993 us | 4.06x faster |
+  | Negative binomial pmf, 4096 points | 169.230 us | 481.723 us | 2.85x faster |
+  | Beta-binomial pmf, 2001 points | 104.220 us | 276.489 us | 2.65x faster |
+  | Hypergeometric pmf, 701 points | 39.851 us | 4270.005 us | 107.15x faster |
+
+- Scorecard: `15/0/0` vs SciPy overall, `9/0/0` for the newly added
+  continuous rows. Batch-vs-scalar map is `15/0/0` internally.
+- Gates: touched bench rustfmt passed; RCH `fsci-stats pdf_many_matches_pdf`
+  passed 10/0; live SciPy conformance passed for beta, chi, chi2, F, gamma,
+  generalized-normal, inverse-gamma, Nakagami, Student-t, and von Mises. No
+  `gengamma` conformance target is registered, so that row remains identity-test
+  plus timing-oracle covered.
+- Decision: keep the benchmark/evidence closeout and do not spend more cycles on
+  these batch PDF/PMF rows unless a future profile shows a new regression.

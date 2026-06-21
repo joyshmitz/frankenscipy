@@ -130,11 +130,19 @@ fn bench_rand_index(c: &mut Criterion) {
 /// compute the expensive lgamma/ln_beta normalizer ONCE instead of per point.
 fn bench_distribution_batch(c: &mut Criterion) {
     use fsci_stats::{
-        BetaBinomial, BetaDist, Binomial, ContinuousDistribution, DiscreteDistribution, GammaDist,
-        Hypergeometric, NegBinomial,
+        BetaBinomial, BetaDist, Binomial, Chi, ChiSquared, ContinuousDistribution,
+        DiscreteDistribution, FDistribution, GammaDist, GenGamma, GenNorm, Hypergeometric,
+        InverseGamma, Nakagami, NegBinomial, StudentT, VonMises,
     };
     let n = 4096usize;
     let mut group = c.benchmark_group("distribution_batch");
+    let positive_x: Vec<f64> = (0..n).map(|i| 0.001 + (i as f64 + 0.5) * 0.005).collect();
+    let symmetric_x: Vec<f64> = (0..n)
+        .map(|i| -8.0 + 16.0 * (i as f64 + 0.5) / n as f64)
+        .collect();
+    let angles: Vec<f64> = (0..n)
+        .map(|i| -std::f64::consts::PI + std::f64::consts::TAU * (i as f64 + 0.5) / n as f64)
+        .collect();
 
     // GammaDist: 1 lgamma/point hoisted.
     let g = GammaDist::new(2.7, 1.5);
@@ -150,6 +158,92 @@ fn bench_distribution_batch(c: &mut Criterion) {
     group.bench_function("beta/pdf_many", |b| b.iter(|| bt.pdf_many(&bx)));
     group.bench_function("beta/map_pdf", |b| {
         b.iter(|| bx.iter().map(|&x| bt.pdf(x)).collect::<Vec<_>>())
+    });
+
+    // StudentT: gamma-ratio coefficient hoisted over a symmetric grid.
+    let st = StudentT::new(7.5);
+    group.bench_function("student_t/pdf_many", |b| {
+        b.iter(|| st.pdf_many(&symmetric_x))
+    });
+    group.bench_function("student_t/map_pdf", |b| {
+        b.iter(|| symmetric_x.iter().map(|&x| st.pdf(x)).collect::<Vec<_>>())
+    });
+
+    // Chi/ChiSquared: lgamma normalizers hoisted over positive support.
+    let chi = Chi::new(5.5);
+    group.bench_function("chi/pdf_many", |b| b.iter(|| chi.pdf_many(&positive_x)));
+    group.bench_function("chi/map_pdf", |b| {
+        b.iter(|| positive_x.iter().map(|&x| chi.pdf(x)).collect::<Vec<_>>())
+    });
+    let chi2 = ChiSquared::new(7.5);
+    group.bench_function("chi2/pdf_many", |b| b.iter(|| chi2.pdf_many(&positive_x)));
+    group.bench_function("chi2/map_pdf", |b| {
+        b.iter(|| positive_x.iter().map(|&x| chi2.pdf(x)).collect::<Vec<_>>())
+    });
+
+    // FDistribution and generalized gamma: beta/gamma normalizers hoisted.
+    let fdist = FDistribution::new(9.0, 17.0);
+    group.bench_function("f/pdf_many", |b| b.iter(|| fdist.pdf_many(&positive_x)));
+    group.bench_function("f/map_pdf", |b| {
+        b.iter(|| positive_x.iter().map(|&x| fdist.pdf(x)).collect::<Vec<_>>())
+    });
+    let gengamma = GenGamma::new(2.5, 1.7);
+    group.bench_function("gengamma/pdf_many", |b| {
+        b.iter(|| gengamma.pdf_many(&positive_x))
+    });
+    group.bench_function("gengamma/map_pdf", |b| {
+        b.iter(|| {
+            positive_x
+                .iter()
+                .map(|&x| gengamma.pdf(x))
+                .collect::<Vec<_>>()
+        })
+    });
+
+    // Inverse-gamma, Nakagami, generalized normal, and Von Mises hoist
+    // distribution-wide special-function constants out of the timed map.
+    let invgamma = InverseGamma::new(3.5);
+    group.bench_function("invgamma/pdf_many", |b| {
+        b.iter(|| invgamma.pdf_many(&positive_x))
+    });
+    group.bench_function("invgamma/map_pdf", |b| {
+        b.iter(|| {
+            positive_x
+                .iter()
+                .map(|&x| invgamma.pdf(x))
+                .collect::<Vec<_>>()
+        })
+    });
+    let nakagami = Nakagami::new(2.25);
+    group.bench_function("nakagami/pdf_many", |b| {
+        b.iter(|| nakagami.pdf_many(&positive_x))
+    });
+    group.bench_function("nakagami/map_pdf", |b| {
+        b.iter(|| {
+            positive_x
+                .iter()
+                .map(|&x| nakagami.pdf(x))
+                .collect::<Vec<_>>()
+        })
+    });
+    let gennorm = GenNorm::new(1.5);
+    group.bench_function("gennorm/pdf_many", |b| {
+        b.iter(|| gennorm.pdf_many(&symmetric_x))
+    });
+    group.bench_function("gennorm/map_pdf", |b| {
+        b.iter(|| {
+            symmetric_x
+                .iter()
+                .map(|&x| gennorm.pdf(x))
+                .collect::<Vec<_>>()
+        })
+    });
+    let vonmises = VonMises::new(3.0, 0.25);
+    group.bench_function("vonmises/pdf_many", |b| {
+        b.iter(|| vonmises.pdf_many(&angles))
+    });
+    group.bench_function("vonmises/map_pdf", |b| {
+        b.iter(|| angles.iter().map(|&x| vonmises.pdf(x)).collect::<Vec<_>>())
     });
 
     // Binomial: 3 parameter-only terms hoisted over a full support sweep.
