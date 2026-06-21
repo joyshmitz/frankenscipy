@@ -2252,3 +2252,14 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   scipy across the gauntleted surface. Further gains require breaking C-library walls (the
   iterative-SIMD mixed-radix FFT is the highest-value remaining lever) — deferred to dedicated
   effort, not rushed (correctness risk). No fabricated marginal ships.
+
+## 2026-06-21 - VERIFY: session wins intact on origin HEAD (regression-guard, shared tree)
+- Agent: cc / MistyBirch. Re-ran the suites for my changed crates on current origin/main to
+  confirm the campaign's wins survived concurrent agents: fsci-interpolate 173/0
+  (make_smoothing_spline selected-inverse, make_lsq compact-banded, SmoothBivariateSpline
+  FITPACK routing), fsci-cluster 141/0 (linkage MST+NN-chain, kmeans flatten), fsci-signal
+  648/0 (fftconvolve/oaconvolve/hilbert rfft routing). ALL GREEN — no regression.
+- FFT non-pow2 lever re-confirmed BLOCKED for a tractable fix: the data is AoS Complex64 and
+  forbid(unsafe) blocks AoS SIMD, so SIMD-across-groups radix-3/5 needs a native-SoA FFT
+  rewrite (major, dedicated effort) — the one real remaining high-value lever. No tractable
+  clean win remains; campaign stands complete + verified.
