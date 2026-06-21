@@ -2233,3 +2233,22 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   state: every measured function wins or is a documented engineering WALL (pocketfft-non-pow2,
   Qhull-Delaunay-build, HiGHS, LAPACK) / risky-marginal (kmeans small-n SIMD). Clean algorithmic
   losses fixed this session.
+
+## 2026-06-21 - CAMPAIGN SUMMARY: BOLD-VERIFY perf-domination complete (clean losses fixed; residuals = walls)
+- Agent: cc / MistyBirch. Session result map (full per-item ratios in the dated entries above;
+  cross-session map in memory perf_domination_campaign_2026_06_21):
+  WINS SHIPPED: make_smoothing_spline 3x→8.3-27.8x (selected-inverse); SmoothBivariateSpline
+  358-2450x→near-parity+scipy-correct (FITPACK routing); make_lsq_spline 2.4x→8-74x (compact-
+  banded); fftconvolve 1.5x→1.8-2.1x WIN / oaconvolve 4.1x→1.5x / hilbert wall→near-parity
+  (rfft routing); linkage family O(n³)→O(n²) all WIN (MST + NN-chain); kmeans large-n 2.8x WIN.
+  CONFIRMED DOMINANT: callback-lever minimize 441x/quad 8.2x; gaussian_kde-nd 14x; distance_matrix
+  15.3x; special 1.7-2.8x; stats 2.5-8.8x; ConvexHull 1.6-3.1x; RGI 2.3x; FFT pow2 1.38x.
+- REMAINING (engineering walls — major SIMD/kernel effort, uncertain vs hand-tuned C; NOT clean
+  wins): FFT non-pow2 5-smooth 3.7-5.4x (recursive scalar mixed-radix vs pocketfft iterative
+  SIMD — fsci HAS the radices), kmeans small-n SIMD (serial nearest_centroid, gate-lowering
+  regresses), Delaunay-build 1.45x (Qhull), linprog (HiGHS), RBF (LAPACK). + capability gap:
+  bounded least_squares/curve_fit (TRF).
+- VERDICT: every clean algorithmic loss found this campaign is FIXED + verified; fsci dominates
+  scipy across the gauntleted surface. Further gains require breaking C-library walls (the
+  iterative-SIMD mixed-radix FFT is the highest-value remaining lever) — deferred to dedicated
+  effort, not rushed (correctness risk). No fabricated marginal ships.
