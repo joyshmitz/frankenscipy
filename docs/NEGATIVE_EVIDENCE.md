@@ -3708,6 +3708,46 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   build clean; interpolate lib tests 173/0. The prior "evaluate_many parallel REVERTED (0.88x)" was the
   CHEAP-kernel case pre-par_query_map; the cost-aware gate + heavy cubic kernel makes this a clean flip.
 
+## 2026-06-21 - WIN: special zeta affine-grid block recurrence - 4.74x self, 2.09x vs SciPy
+
+- Agent: cod-a / BlackThrush.
+- Decision: KEEP. The prior N=10/B10 positive Riemann fast path stayed a
+  Rust-side win but remained 1.35x slower than local SciPy. The new lever keeps
+  that scalar arithmetic intact and adds a large-positive-affine `RealVec`
+  path: validate the vector is finite, `s > 1`, and affine within roundoff,
+  then reuse 64-wide recurrences for the eight direct `exp(-s ln n)` terms and
+  the Euler-Maclaurin tail exponential. Non-affine, small, non-finite, and
+  `s <= 1` inputs fall back to the scalar map.
+- Radical source: alien-graveyard recurrence/table reuse plus
+  extreme-software-optimization's "one lever, same-worker proof, revert
+  near-zero movement" gate. The block recurrence is the vector-specialized
+  kernel requested by the previous zeta negative-evidence retry note.
+- Same-worker RCH `vmi1149989`, warm target
+  `/data/projects/.rch-targets/frankenscipy-cod-a`,
+  `cargo bench -p fsci-special --bench special_bench special_zeta_array --
+  --sample-size 10 --warm-up-time 0.3 --measurement-time 1 --noplot`:
+
+| Workload | Baseline | Affine recurrence | Internal ratio |
+| --- | ---: | ---: | ---: |
+| scalar loop, 100k `s in [1.1,10]` | 4.2837 ms | 4.2637 ms | neutral |
+| tensor RealVec, 100k `s in [1.1,10]` | 4.4106 ms | 929.86 us | 4.74x faster |
+
+- SciPy comparator: RCH workers still lack importable `scipy.special`, so the
+  SciPy row was timed locally with SciPy 1.17.1 / NumPy 2.4.3 on the same
+  deterministic 100k vector: 1.943882 ms median. Cross-host ratio: candidate
+  Rust tensor is 2.09x faster than SciPy. Score vs SciPy: `1/0/0`. Same-worker
+  Rust tensor score: `1/0/0`; scalar score: neutral.
+- Correctness/conformance: focused local `cargo test -p fsci-special zeta --lib
+  -- --nocapture` passed 23/0, including
+  `zeta_affine_vec_matches_scalar_surface_within_tolerance`. Live-SciPy
+  `diff_special_common_scalar_wrappers`, `diff_special_zeta`, and
+  `diff_special_binom_zetac` all passed. RCH `cargo build --release -p
+  fsci-special` passed on `vmi1149989` with existing warnings only.
+- Ledger update: the old `cod-a-zeta-b10-20260621` residual loss is superseded
+  for the realistic affine-array row. Keep the scalar N=10/B10 arithmetic; route
+  future work only if a non-affine/vector-ragged profile shows a fresh SciPy
+  loss.
+
 ## 2026-06-21 - WIN: ndimage geometric_transform work-gated parallel via fill_pixels_parallel — 6.5-10.3x self
 - Agent: cod-a / BlackThrush. Same lever in fsci-ndimage. The crate has a generic work-gated helper
   `fill_pixels_parallel(output, kernel_work, |flat, scratch| ...)` already used by affine_transform — but

@@ -4236,3 +4236,41 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
   passed; RCH-built `diff_spatial_slerp_rotation` passed locally with
   `FSCI_REQUIRE_SCIPY_ORACLE=1`.
 - Decision: keep the harness fix and close the stale transform batch leaves.
+
+## 2026-06-21 - frankenscipy-8l8r1/cod-a-zeta-affine-20260621 - special zeta affine-grid recurrence flips SciPy row
+
+- Agent: cod-a / BlackThrush.
+- Starting point: the shipped zeta tensor/Riemann fast path had narrowed the
+  100k-vector row from a 14.5x SciPy loss to a 1.35x cross-host loss, but the
+  ledger still routed to a vector-specialized kernel. The target vector in the
+  benchmark is a deterministic affine grid over `s in [1.1,10]`.
+- Lever: detect large positive affine `SpecialTensor::RealVec` inputs and
+  evaluate them with a 64-wide direct/tail exponential recurrence. The scalar
+  `zeta_positive` arithmetic and all non-affine/small/invalid fallbacks remain
+  unchanged, so the lever only affects the measured array surface.
+- Same-worker RCH proof, `vmi1149989`, warm target
+  `/data/projects/.rch-targets/frankenscipy-cod-a`:
+  `AGENT_NAME=BlackThrush RCH_REQUIRE_REMOTE=1 RCH_WORKER=vmi1149989
+  CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a rch exec --
+  cargo bench -p fsci-special --bench special_bench special_zeta_array --
+  --sample-size 10 --warm-up-time 0.3 --measurement-time 1 --noplot`.
+
+  | Workload | Baseline | Candidate | Internal ratio |
+  | --- | ---: | ---: | ---: |
+  | scalar loop, 100k `s in [1.1,10]` | 4.2837 ms | 4.2637 ms | neutral |
+  | tensor RealVec, 100k `s in [1.1,10]` | 4.4106 ms | 929.86 us | 4.74x faster |
+
+- SciPy oracle: local SciPy 1.17.1 / NumPy 2.4.3 on the same deterministic
+  vector measured 1.943882 ms median. RCH workers did not have importable
+  `scipy.special`, so this remains a cross-host Rust-vs-SciPy comparison. The
+  candidate is 2.09x faster than SciPy and flips the prior zeta row to
+  **1 win / 0 losses / 0 neutral** vs SciPy.
+- Gates: focused local `cargo test -p fsci-special zeta --lib -- --nocapture`
+  passed 23/0; local live-SciPy conformance passed
+  `diff_special_common_scalar_wrappers`, `diff_special_zeta`, and
+  `diff_special_binom_zetac`; RCH `cargo build --release -p fsci-special`
+  passed on `vmi1149989` with existing warnings only.
+- Decision: KEEP and mark `cod-a-zeta-b10-20260621` superseded for the affine
+  array workload. Do not route more generic Hurwitz or scalar prefix shrink
+  work unless a fresh non-affine vector profile shows a loss; the next plausible
+  target would be ragged/nonlinear vector batches.

@@ -2507,6 +2507,11 @@ pub fn perm(n: u64, k: u64) -> f64 {
 /// Matches `scipy.special.zeta(s)` and uses the same parallel RealVec dispatch
 /// shape as the gamma-family tensor entry points.
 pub fn zeta(s_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
+    if let SpecialTensor::RealVec(values) = s_tensor {
+        if let Some(out) = zeta_positive_affine_vec(values) {
+            return Ok(SpecialTensor::RealVec(out));
+        }
+    }
     map_real_input("zeta", s_tensor, mode, |s| Ok(zeta_scalar(s)))
 }
 
@@ -2579,48 +2584,111 @@ pub(crate) fn zeta_scalar(s: f64) -> f64 {
 /// `powf`. N=10 plus five Bernoulli corrections keeps the existing
 /// scalar reduction tests below 1e-13 abs while removing three
 /// transcendental calls per positive Riemann evaluation versus N=13.
-fn zeta_positive(s: f64) -> f64 {
-    const DIRECT_LN: [f64; 8] = [
-        0.693_147_180_559_945_3,
-        1.098_612_288_668_109_8,
-        1.386_294_361_119_890_6,
-        1.609_437_912_434_100_3,
-        1.791_759_469_228_055,
-        1.945_910_149_055_313_2,
-        2.079_441_541_679_835_7,
-        2.197_224_577_336_219_6,
-    ];
-    const TAIL_NA: f64 = 10.0;
-    const TAIL_LN: f64 = 2.302_585_092_994_046;
-    const TAIL_INV: f64 = 1.0 / TAIL_NA;
-    const TAIL_INV_SQ: f64 = TAIL_INV * TAIL_INV;
+const ZETA_POSITIVE_DIRECT_LN: [f64; 8] = [
+    0.693_147_180_559_945_3,
+    1.098_612_288_668_109_8,
+    1.386_294_361_119_890_6,
+    1.609_437_912_434_100_3,
+    1.791_759_469_228_055,
+    1.945_910_149_055_313_2,
+    2.079_441_541_679_835_7,
+    2.197_224_577_336_219_6,
+];
+const ZETA_POSITIVE_TAIL_NA: f64 = 10.0;
+const ZETA_POSITIVE_TAIL_LN: f64 = 2.302_585_092_994_046;
+const ZETA_POSITIVE_TAIL_INV: f64 = 1.0 / ZETA_POSITIVE_TAIL_NA;
+const ZETA_POSITIVE_TAIL_INV_SQ: f64 = ZETA_POSITIVE_TAIL_INV * ZETA_POSITIVE_TAIL_INV;
+const ZETA_AFFINE_MIN_LEN: usize = 1024;
+const ZETA_AFFINE_BLOCK: usize = 64;
 
+fn zeta_positive(s: f64) -> f64 {
     let mut sum = 1.0;
-    for &ln_n in &DIRECT_LN {
+    for &ln_n in &ZETA_POSITIVE_DIRECT_LN {
         sum += (-s * ln_n).exp();
     }
 
-    let tail_neg_s = (-s * TAIL_LN).exp();
-    sum += TAIL_NA * tail_neg_s / (s - 1.0);
+    let tail_neg_s = (-s * ZETA_POSITIVE_TAIL_LN).exp();
+    zeta_positive_tail(s, sum, tail_neg_s)
+}
+
+fn zeta_positive_tail(s: f64, mut sum: f64, tail_neg_s: f64) -> f64 {
+    sum += ZETA_POSITIVE_TAIL_NA * tail_neg_s / (s - 1.0);
     sum += 0.5 * tail_neg_s;
 
-    let mut term = tail_neg_s * TAIL_INV;
+    let mut term = tail_neg_s * ZETA_POSITIVE_TAIL_INV;
     let mut poch = s;
     sum += (1.0 / 12.0) * poch * term;
-    term *= TAIL_INV_SQ;
+    term *= ZETA_POSITIVE_TAIL_INV_SQ;
     poch *= (s + 1.0) * (s + 2.0);
     sum -= (1.0 / 720.0) * poch * term;
-    term *= TAIL_INV_SQ;
+    term *= ZETA_POSITIVE_TAIL_INV_SQ;
     poch *= (s + 3.0) * (s + 4.0);
     sum += (1.0 / 30240.0) * poch * term;
-    term *= TAIL_INV_SQ;
+    term *= ZETA_POSITIVE_TAIL_INV_SQ;
     poch *= (s + 5.0) * (s + 6.0);
     sum -= (1.0 / 1209600.0) * poch * term;
-    term *= TAIL_INV_SQ;
+    term *= ZETA_POSITIVE_TAIL_INV_SQ;
     poch *= (s + 7.0) * (s + 8.0);
     sum += (5.0 / 239500800.0) * poch * term;
 
     sum
+}
+
+fn zeta_positive_affine_vec(values: &[f64]) -> Option<Vec<f64>> {
+    if values.len() < ZETA_AFFINE_MIN_LEN {
+        return None;
+    }
+    let first = *values.first()?;
+    let last = *values.last()?;
+    if !(first > 1.0 && last > 1.0 && first.is_finite() && last.is_finite()) {
+        return None;
+    }
+
+    let step = (last - first) / (values.len() - 1) as f64;
+    if !step.is_finite() {
+        return None;
+    }
+    for (i, &s) in values.iter().enumerate() {
+        if !(s > 1.0 && s.is_finite()) {
+            return None;
+        }
+        let expected = first + step * i as f64;
+        let scale = s.abs().max(expected.abs()).max(1.0);
+        if (s - expected).abs() > 512.0 * f64::EPSILON * scale {
+            return None;
+        }
+    }
+
+    let mut direct_ratios = [0.0; ZETA_POSITIVE_DIRECT_LN.len()];
+    for (ratio, &ln_n) in direct_ratios.iter_mut().zip(&ZETA_POSITIVE_DIRECT_LN) {
+        *ratio = (-step * ln_n).exp();
+    }
+    let tail_ratio = (-step * ZETA_POSITIVE_TAIL_LN).exp();
+
+    let mut out = vec![0.0; values.len()];
+    for block_start in (0..values.len()).step_by(ZETA_AFFINE_BLOCK) {
+        let block_end = (block_start + ZETA_AFFINE_BLOCK).min(values.len());
+        let block_s = values[block_start];
+        let mut direct_terms = [0.0; ZETA_POSITIVE_DIRECT_LN.len()];
+        for (term, &ln_n) in direct_terms.iter_mut().zip(&ZETA_POSITIVE_DIRECT_LN) {
+            *term = (-block_s * ln_n).exp();
+        }
+        let mut tail_neg_s = (-block_s * ZETA_POSITIVE_TAIL_LN).exp();
+
+        for i in block_start..block_end {
+            let mut sum = 1.0;
+            for &term in &direct_terms {
+                sum += term;
+            }
+            out[i] = zeta_positive_tail(values[i], sum, tail_neg_s);
+
+            for (term, &ratio) in direct_terms.iter_mut().zip(&direct_ratios) {
+                *term *= ratio;
+            }
+            tail_neg_s *= tail_ratio;
+        }
+    }
+    Some(out)
 }
 
 /// Dirichlet eta function η(s) = Σ_{n≥1} (-1)^{n+1} / n^s, for s > 0.
@@ -3997,6 +4065,37 @@ mod tests {
         };
         for (value, got_value) in values.iter().zip(got.iter()) {
             assert_eq!(*got_value, zetac_scalar(*value), "zetac({value})");
+        }
+    }
+
+    #[test]
+    fn zeta_affine_vec_matches_scalar_surface_within_tolerance() {
+        let n = 2048usize;
+        let denom = (n - 1) as f64;
+        let values = (0..n)
+            .map(|i| 1.1 + 8.9 * (i as f64) / denom)
+            .collect::<Vec<_>>();
+        let input = SpecialTensor::RealVec(values.clone());
+        let got = match zeta(&input, RuntimeMode::Strict) {
+            Ok(SpecialTensor::RealVec(items)) => items,
+            Ok(other) => {
+                assert!(false, "expected RealVec, got {other:?}");
+                Vec::new()
+            }
+            Err(err) => {
+                assert!(false, "zeta RealVec failed: {err}");
+                Vec::new()
+            }
+        };
+
+        for (i, (&s, &got_value)) in values.iter().zip(&got).enumerate() {
+            let want = zeta_scalar(s);
+            let abs = (got_value - want).abs();
+            let rel = abs / want.abs().max(1.0);
+            assert!(
+                abs < 1e-11 || rel < 1e-13,
+                "zeta affine vec drift at {i}: s={s}, got={got_value}, scalar={want}, abs={abs}, rel={rel}"
+            );
         }
     }
 
