@@ -4,6 +4,33 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-21 - frankenscipy-8l8r1.141 - opt public finite-difference scratch reuse
+
+- Agent: cod-a / BlackThrush
+- Status: pending bench. DISK-LOW paused new cargo bench/build timing work, so
+  this code-only commit must not be counted as a measured win.
+- Lever: `numerical_gradient` and `numerical_jacobian` now allocate one
+  perturbed point each and restore the changed coordinate after every callback,
+  instead of cloning `x` for every dimension. This removes `O(n)` full-vector
+  allocations from the public forward-difference helper path while preserving
+  callback order and derivative formulas.
+- Correctness guard: inline test
+  `numerical_finite_difference_helpers_restore_scratch_point` asserts the
+  callback count, expected gradient/Jacobian values, and scratch restoration
+  invariant.
+- Benchmark guard: resume with per-crate rch only:
+  `cargo test -p fsci-opt numerical_finite_difference_helpers_restore_scratch_point --lib -- --nocapture`,
+  a focused `fsci-opt` optimize-bench row for high-dimensional
+  `numerical_gradient`/`numerical_jacobian`, and a SciPy oracle row for the same
+  forward-difference workloads. Use
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a` and compare
+  candidate against current `origin/main` on the same worker before scoring.
+- Ratio-vs-SciPy: PENDING. No new cargo or SciPy benchmark was started in this
+  disk-low turn.
+- Retry condition: if same-worker helper timings are neutral or slower, revert
+  this scratch-buffer reuse and do not extend the pattern to Hessian/adaptive
+  differentiation without fresh allocation-profile evidence.
+
 ## 2026-06-21 - frankenscipy-8l8r1.139 - make_interp_spline compact row-band assembly
 
 - Agent: cod-a / BlackThrush

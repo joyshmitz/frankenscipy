@@ -5238,10 +5238,12 @@ where
         return vec![f64::NAN; n];
     }
     let mut grad = Vec::with_capacity(n);
+    let mut xp = x.to_vec();
     for i in 0..n {
-        let mut xp = x.to_vec();
-        xp[i] += eps;
+        let original = xp[i];
+        xp[i] = original + eps;
         let fp = f(&xp);
+        xp[i] = original;
         grad.push(if fp.is_finite() {
             (fp - f0) / eps
         } else {
@@ -5309,10 +5311,12 @@ where
         return vec![vec![f64::NAN; n]; m.max(1)];
     }
     let mut jac = vec![vec![0.0; n]; m];
+    let mut xp = x.to_vec();
     for j in 0..n {
-        let mut xp = x.to_vec();
-        xp[j] += eps;
+        let original = xp[j];
+        xp[j] = original + eps;
         let fp = f(&xp);
+        xp[j] = original;
         for i in 0..m {
             let fpi = fp.get(i).copied().unwrap_or(f64::NAN);
             jac[i][j] = if fpi.is_finite() {
@@ -5539,6 +5543,60 @@ mod tests {
             (xmin - 2.0).abs() < 1e-5 && fmin.abs() < 1e-9,
             "trisection min"
         );
+    }
+
+    #[test]
+    fn numerical_finite_difference_helpers_restore_scratch_point() {
+        let base = [1.0, -2.0, 0.5];
+
+        let gradient_calls = std::cell::Cell::new(0usize);
+        let gradient = numerical_gradient(
+            |x: &[f64]| {
+                let changed = x
+                    .iter()
+                    .zip(base.iter())
+                    .filter(|(actual, expected)| (**actual - **expected).abs() > 1.0e-12)
+                    .count();
+                assert!(
+                    changed <= 1,
+                    "gradient scratch point leaked prior perturbation: {x:?}"
+                );
+                gradient_calls.set(gradient_calls.get() + 1);
+                x.iter().sum::<f64>()
+            },
+            &base,
+            1.0e-6,
+        );
+        assert_eq!(gradient_calls.get(), base.len() + 1);
+        for value in gradient {
+            assert!((value - 1.0).abs() < 1.0e-9);
+        }
+
+        let jacobian_calls = std::cell::Cell::new(0usize);
+        let jacobian = numerical_jacobian(
+            |x: &[f64]| {
+                let changed = x
+                    .iter()
+                    .zip(base.iter())
+                    .filter(|(actual, expected)| (**actual - **expected).abs() > 1.0e-12)
+                    .count();
+                assert!(
+                    changed <= 1,
+                    "jacobian scratch point leaked prior perturbation: {x:?}"
+                );
+                jacobian_calls.set(jacobian_calls.get() + 1);
+                vec![x[0] + x[1], x[2] * x[2]]
+            },
+            &base,
+            1.0e-6,
+        );
+        assert_eq!(jacobian_calls.get(), base.len() + 1);
+        assert!((jacobian[0][0] - 1.0).abs() < 1.0e-9);
+        assert!((jacobian[0][1] - 1.0).abs() < 1.0e-9);
+        assert!(jacobian[0][2].abs() < 1.0e-9);
+        assert!(jacobian[1][0].abs() < 1.0e-9);
+        assert!(jacobian[1][1].abs() < 1.0e-9);
+        assert!((jacobian[1][2] - 1.0).abs() < 1.0e-4);
     }
 
     #[test]

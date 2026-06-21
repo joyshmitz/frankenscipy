@@ -1,5 +1,28 @@
 # Performance Release-Readiness Scorecard
 
+## 2026-06-21 - fsci-opt public finite-difference scratch reuse - pending bench
+
+- Agent: cod-a / BlackThrush
+- Bead: `frankenscipy-8l8r1.141`
+- Decision: PENDING. Code-only disk-low commit. Do not count as release-ready
+  until the inline guard, same-worker focused timings, and SciPy oracle rows are
+  refreshed.
+- Lever: reuse one perturbed `Vec` in `numerical_gradient` and
+  `numerical_jacobian` instead of cloning the input once per coordinate.
+
+| Gate | Result | Notes |
+| --- | --- | --- |
+| Scratch restoration guard | PENDING | run `cargo test -p fsci-opt numerical_finite_difference_helpers_restore_scratch_point --lib -- --nocapture` next turn |
+| Same-worker focused timing | PENDING | add/use focused `fsci-opt` helper rows for high-dimensional `numerical_gradient` and `numerical_jacobian` |
+| SciPy oracle | PENDING | compare equivalent forward-difference gradient/Jacobian helper rows against SciPy on the same problem sizes |
+| Formatting / diff hygiene | PARTIAL | `git diff --check` passed; changed-file `ubs` returned nonzero on existing broad `fsci-opt` inventory, so dedicated release gates remain pending |
+
+Readiness notes:
+
+- This is intentionally not in the measured-keep table. If the next bench wave
+  shows neutral or slower helper rows, revert the scratch reuse and record the
+  loss.
+
 ## 2026-06-21 - fsci-interpolate make_interp_spline compact rows - pending bench
 
 - Agent: cod-a / BlackThrush

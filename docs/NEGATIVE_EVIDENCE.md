@@ -6,6 +6,32 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-21 - frankenscipy-8l8r1.141 - opt public finite-difference scratch reuse - CODE COMMITTED, PENDING BENCH
+
+- Agent: cod-a / BlackThrush
+- Decision: PENDING. DISK-LOW paused new cargo bench/build timing work, so this
+  code-only lever must not be promoted to a measured keep until the next
+  benchmark wave.
+- Lever: `fsci_opt::numerical_gradient` and `fsci_opt::numerical_jacobian` now
+  reuse one perturbed `Vec` across coordinates instead of cloning `x` once per
+  dimension. The helper now matches the cheaper scratch-buffer pattern already
+  used by `approx_fprime`.
+- Correctness guard in source: inline test
+  `numerical_finite_difference_helpers_restore_scratch_point` checks callback
+  count, derivative values, and that each callback observes at most one active
+  perturbation.
+
+| Workload | Baseline Rust | Candidate Rust | SciPy oracle | Verdict |
+| --- | ---: | ---: | ---: | --- |
+| `numerical_gradient` public helper, high-dim forward diff | PENDING | PENDING | PENDING | pending-bench |
+| `numerical_jacobian` public helper, high-dim forward diff | PENDING | PENDING | PENDING | pending-bench |
+
+Pending ratio-vs-SciPy: N/A until the focused `fsci-opt` benchmark/SciPy oracle
+is run. Next turn should run crate-scoped tests and same-worker timing under
+`CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a`; if the helper
+rows are neutral or slower, revert this scratch reuse rather than extending it
+to Hessian or adaptive differentiation.
+
 ## 2026-06-21 - frankenscipy-8l8r1.140 - sparse eigsh three-term Lanczos reject
 
 - Agent: cod-b / BlackThrush
