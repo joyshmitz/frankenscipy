@@ -2205,3 +2205,19 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   (less padding). Substantial FFT implementation (radix-3/5 butterflies + twiddles + mixed
   decomposition + accuracy verification) — flagged as THE remaining high-value lever; deferred
   to a focused cycle (or the fsci-fft owner). rfft already competitive (prior).
+
+## 2026-06-21 - CORRECTION: fsci_fft HAS mixed-radix 3/5 — non-pow2 gap is scalar-recursive structure vs pocketfft SIMD
+- Agent: cc / MistyBirch. Root-caused yesterday's "lacks mixed-radix 3/5" claim — WRONG.
+  fsci_fft::mixed_radix_fft (transforms.rs:453) already has SPECIALIZED radix-2/3/4/5
+  butterflies + Bluestein (cached chirp) for primes. The algorithm is complete.
+- The real non-pow2 gap (3.7-5.4x on 5-smooth): the mixed-radix path is RECURSIVE +
+  OUT-OF-PLACE (strided gathers, scalar butterflies), whereas the pure-pow2 path uses the
+  fast IN-PLACE radix-4 kernel (cooley_tukey_radix4_inplace) — which is why fsci WINS pure
+  pow2 (1.38x) but loses 5-smooth: a number like 60000=2^5·3·5^4 runs its whole transform
+  (incl. the 2^5 part) through the slower recursive scalar path, not the in-place radix-4.
+  pocketfft is iterative (Stockham) + SIMD-vectorized across the butterflies.
+- LEVER (now correctly characterized): NOT "add mixed-radix" (exists) but a major restructure
+  — iterative/in-place mixed-radix + SIMD the radix-3/5 butterflies + route the 2-part through
+  the fast radix-4 kernel. Substantial FFT engineering, uncertain it beats pocketfft. A genuine
+  scalar-vs-SIMD + structure WALL (joins Qhull/HiGHS/LAPACK). Deferred. Twiddles cached + scratch
+  reused already (no cheap alloc win). Supersedes yesterday's mixed-radix-lever note.
