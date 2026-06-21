@@ -180,7 +180,7 @@ pub fn gammaln(x: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
 }
 
 pub fn gammasgn(x: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_input("gammasgn", x, mode, |value| gammasgn_scalar(value, mode))
+    map_real_input_rp("gammasgn", x, mode, |value| gammasgn_scalar(value, mode), usize::MAX)
 }
 
 pub fn loggamma(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
@@ -758,10 +758,34 @@ fn map_real_input<F>(
 where
     F: Fn(f64) -> Result<f64, SpecialError> + Sync,
 {
+    map_real_input_rp(function, input, mode, kernel, 256)
+}
+
+/// `real_par_min`: RealVec length below which the real arm runs serially. Cheap O(1) kernels
+/// (e.g. gammasgn ~7ns) pass `usize::MAX` — par_map_indices' per-element overhead makes parallel
+/// a net loss; heavier kernels (multigammaln) keep the default 256.
+fn map_real_input_rp<F>(
+    function: &'static str,
+    input: &SpecialTensor,
+    mode: RuntimeMode,
+    kernel: F,
+    real_par_min: usize,
+) -> SpecialResult
+where
+    F: Fn(f64) -> Result<f64, SpecialError> + Sync,
+{
     match input {
         SpecialTensor::RealScalar(x) => kernel(*x).map(SpecialTensor::RealScalar),
         SpecialTensor::RealVec(values) => {
-            par_map_indices(values.len(), |i| kernel(values[i])).map(SpecialTensor::RealVec)
+            if values.len() < real_par_min {
+                values
+                    .iter()
+                    .map(|&x| kernel(x))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map(SpecialTensor::RealVec)
+            } else {
+                par_map_indices(values.len(), |i| kernel(values[i])).map(SpecialTensor::RealVec)
+            }
         }
         SpecialTensor::ComplexScalar(_) | SpecialTensor::ComplexVec(_) => {
             not_yet_implemented(function, mode, "complex-valued path pending")
