@@ -385,8 +385,7 @@ pub fn savgol_filter_mode(
     if mode == SavgolMode::Interp {
         // Interior: centered correlation; boundary regions overwritten by the
         // polynomial edge fit below (SciPy's `mode='interp'`).
-        let mut result = vec![0.0; n];
-        for (i, slot) in result.iter_mut().enumerate() {
+        let mut result = par_index_fill(n, |i| {
             let mut val = 0.0;
             for (j, &c) in coeffs.iter().enumerate() {
                 let idx = i as i64 + j as i64 - half as i64 + even_shift as i64;
@@ -394,8 +393,8 @@ pub fn savgol_filter_mode(
                     val += c * x[idx as usize];
                 }
             }
-            *slot = val;
-        }
+            val
+        });
         if half > 0 {
             let positions: Vec<f64> = (0..window_length).map(|k| k as f64).collect();
             let left = polyfit(&positions, &x[0..window_length], polyorder)?;
@@ -427,15 +426,49 @@ pub fn savgol_filter_mode(
         padded[half + n + d - 1] = rv;
     }
 
-    let mut result = vec![0.0; n];
-    for (i, slot) in result.iter_mut().enumerate() {
+    let result = par_index_fill(n, |i| {
         let mut val = 0.0;
         for (j, &c) in coeffs.iter().enumerate() {
             val += c * padded[i + j + even_shift];
         }
-        *slot = val;
-    }
+        val
+    });
     Ok(result)
+}
+
+/// Fill `result[0..n]` in parallel from a per-index closure, with a WORK-gated thread count
+/// (>=4096 indices/thread, capped at available cores) so small signals stay serial. Order-preserved,
+/// so byte-identical to the serial `(0..n).map(f).collect()`.
+fn par_index_fill<F>(n: usize, f: F) -> Vec<f64>
+where
+    F: Fn(usize) -> f64 + Sync,
+{
+    let nthreads = if n < 4096 {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n / 4096)
+            .max(1)
+    };
+    if nthreads <= 1 {
+        return (0..n).map(&f).collect();
+    }
+    let chunk = n.div_ceil(nthreads);
+    let mut out = vec![0.0f64; n];
+    let fref = &f;
+    std::thread::scope(|scope| {
+        for (ci, block) in out.chunks_mut(chunk).enumerate() {
+            let base = ci * chunk;
+            scope.spawn(move || {
+                for (k, slot) in block.iter_mut().enumerate() {
+                    *slot = fref(base + k);
+                }
+            });
+        }
+    });
+    out
 }
 
 /// Least-squares polynomial fit of `degree` to `(xs, ys)` via the normal
@@ -29256,6 +29289,7 @@ mod tests {
         }
     }
 }
+
 
 
 
