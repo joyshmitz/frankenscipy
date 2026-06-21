@@ -1894,3 +1894,15 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   subst O(n²) (wins small only) → selected-inverse O(n) trace (2.1-15x, parity n=1000) →
   alloc elimination (DOMINATES 11.6-24.5x ALL sizes). Lever stack: band-restrict + Cholesky
   factor-once + Erisman-Tinney selected inverse + compact/reused scratch.
+
+## 2026-06-21 - MEASURED: GCV domination SCALES (n up to 5000) + next lever (banded storage)
+- Extended smoothing_spline_gcv bench to n=2000/5000. fsci vs scipy make_smoothing_spline:
+  n=2000: 40.7 ms vs 550 ms  → WIN 13.5x
+  n=5000: 177.8 ms vs 1531 ms → WIN 8.6x
+  (full curve now: 200→24x, 500→11.6x, 1000→24.5x, 2000→13.5x, 5000→8.6x — DOMINATES all.)
+- fsci scales ~O(n^1.6), scipy ~O(n^1.1): the residual is the ONE-TIME O(n²) MEMORY —
+  x_full/e_full (make_smoothing_spline_impl) + xtwx/xte (gcv) are full n×n Vec<Vec> (~4×200MB
+  allocs at n=5000 ≈ the 177ms). Per-eval work is already O(n) (selected inverse + reused/
+  compact scratch). NEXT LEVER (for n≥5000 super-domination): banded storage end-to-end
+  (x_full/e_full (2,2)-band, xtwx/xte (4,4)-band) → O(n) memory → n=5000 ~30ms (≈50x). The
+  8.6-24.5x win is already SECURED across all practical sizes; this is incremental.

@@ -336,7 +336,7 @@ fn bench_batch_eval_large(c: &mut Criterion) {
 
 fn bench_smoothing_spline(c: &mut Criterion) {
     let mut group = c.benchmark_group("smoothing_spline_gcv");
-    for &n in &[200usize, 500, 1000] {
+    for &n in &[200usize, 500, 1000, 2000, 5000] {
         // deterministic noisy data; lam=None => GCV path (factor-once banded-Cholesky trace)
         let x: Vec<f64> = (0..n).map(|i| 10.0 * i as f64 / (n - 1) as f64).collect();
         let y: Vec<f64> = x
