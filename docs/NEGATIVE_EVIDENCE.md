@@ -2692,3 +2692,9 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   kolmogorov/kolmogi (series), struve/jv/bessel/hyper (heavy). LEVER complete: par_map_indices
   length-gates (n>=256) regardless of COST → serialize real arms with kernel < ~46ns/call (the par
   break-even given ~40ns/elem overhead); keep parallel above. Don't re-sweep — boundary mapped.
+
+## 2026-06-21 - dst_iv twiddle reuse (byte-id); DCT/DST twiddle-recompute bug fully closed
+- Agent: cc / MistyBirch. dst_iv recomputed the dct-IV twiddle per coefficient → reuse the cached
+  get_or_compute_dct4_twiddles (from the dct_iv fix). dst_iv 65536 2.27ms (matches dct_iv; 2N-FFT
+  bound residual). Byte-identical (dst 11/11). DCT/DST twiddle family complete: dct-II/idct/dct_iii/
+  dct_iv + dst-I (real-FFT)/dst-II,III (dct/idct routing)/dst_iv — no more per-call cos/sin recompute.
