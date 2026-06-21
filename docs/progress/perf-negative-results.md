@@ -4,6 +4,51 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-21 - frankenscipy-8l8r1/cod-b-label-mean-f64-refresh - ndimage label_mean public f64-label stale-loss closure
+
+- Agent: cod-b / BlackThrush.
+- Decision: NO SOURCE CHANGE. The earlier label-mean loss rows are conservative
+  integer-label SciPy oracle rows. The actual public `fsci-ndimage` Criterion
+  benchmark constructs f64 labels in the Rust `NdArray`; refreshed head-to-head
+  timing on that exact public benchmark surface shows Rust already dominates
+  SciPy. A sharded/cache-tiled reducer remains the right deeper family for a
+  future integer-label-style oracle, but it would need a deterministic
+  floating-point accumulation-order proof before touching source.
+- Radical route: alien-graveyard morsel-driven/vectorized execution and the
+  cache-constants wall suggested thread-private cache-sized reducers. The
+  running-the-gauntlet stop rule rejected code surgery because the measured
+  public f64-label surface is already a `4/0/0` SciPy win and the risky lever
+  would change per-label summation order.
+- Rust benchmark: `AGENT_NAME=cod-b RCH_REQUIRE_REMOTE=1
+  CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec --
+  cargo bench -p fsci-ndimage --bench ndimage_bench --profile release --
+  label_mean --sample-size 10 --warm-up-time 1 --measurement-time 1 --noplot`
+  on RCH `hz2`.
+- SciPy oracle: local SciPy 1.17.1 / NumPy 2.4.3, same deterministic values,
+  same f64 labels, same index vectors as `label_mean_case`.
+
+| Workload | Rust Criterion median | SciPy f64-label median | Rust vs SciPy |
+| --- | ---: | ---: | ---: |
+| `label_mean/one_based/n65536_k512` | 133.04 us | 2.696417 ms | 20.27x faster |
+| `label_mean/one_based/n262144_k1024` | 620.30 us | 11.354026 ms | 18.31x faster |
+| `label_mean/one_based/n262144_k2048` | 633.41 us | 10.986039 ms | 17.34x faster |
+| `label_mean/one_based/n589824_k4096` | 1.3557 ms | 30.765495 ms | 22.69x faster |
+
+- Score: public f64-label benchmark `4/0/0` vs SciPy. Conservative integer-label
+  SciPy comparisons from `.143` remain distinct routing evidence (`0/4/0`) and
+  should not be treated as the public Rust benchmark dtype.
+- Gates: RCH `cargo test -p fsci-ndimage
+  mean_one_based_contiguous_lookup_preserves_exact_label_semantics --lib --
+  --nocapture` passed 1/0; local live-SciPy `FSCI_REQUIRE_SCIPY_ORACLE=1
+  CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b cargo test
+  -p fsci-conformance --test diff_ndimage_label_stats -- --nocapture` passed
+  1/0.
+- Retry condition: do not reopen the public f64-label `label_mean` benchmark as
+  a SciPy loss without a fresh oracle showing `0/x/0`. Reopen only for a
+  deterministic sharded/cache-tiled reduction or sorted/run-grouped label-span
+  primitive that preserves or explicitly re-specifies floating-point accumulation
+  order.
+
 ## 2026-06-21 - frankenscipy-8l8r1/cod-b-fft-bitrev-gather-20260621 - FFT mixed-radix bit-reversed power-tail gather
 
 - Agent: cod-b / BlackThrush
