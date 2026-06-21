@@ -2675,3 +2675,11 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   gammaln/erf/erfc 1.9-2.5x faster. Complex arms stay parallel. Byte-identical.
 - LEVER (paid out 6 fns now): par_map_indices length-gate over-parallelizes cheap O(1)/rational real
   kernels → serialize them. Remaining cheap candidates to check: expit/logit/other convenience fns.
+
+## 2026-06-21 - cheap-kernel sweep continues: convenience map_real default-serial (expit/silu/ndtr 3-5x)
+- Agent: cc / MistyBirch. ~18 cheap convenience fns (expit/logit/ndtr/relu/silu/softplus/... activations
+  + O(1) stats) were over-parallelized by map_real→par_map_indices. MEASURED 100k par/serial: expit
+  4.33/0.87 (5x), silu 4.42/0.87 (5x), ndtr 4.43/1.32 (3.4x), ndtri_exp 15.4/5.67 (2.7x). FIXED:
+  map_real DEFAULT SERIAL + map_real_par for the only heavy callers (kolmogorov/kolmogi series, which
+  genuinely WIN parallel: 4.85/15.06, 5.88/88.9). Byte-identical. The cheap-kernel-serialization lever
+  has now flipped ellipk/ellipe + gamma/gammaln/digamma/erf/erfc + ~18 convenience fns = ~25 fns.
