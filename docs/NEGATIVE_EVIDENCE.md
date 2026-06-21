@@ -6,6 +6,67 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-21 - frankenscipy-8l8r1/cod-a-fft-twiddle-index-20260621 - FFT mixed-radix twiddle-index modulo elision - REJECT
+
+- Agent: cod-a / BlackThrush.
+- Decision: REJECT and restore source. The one-lever candidate removed
+  redundant `% n` operations from the recursive mixed-radix combine twiddle
+  indexes. The bound proof is valid for `n = p*m`, `r < m`, and `j < p`
+  because `j*r < n`, so the candidate was behavior-preserving in theory and
+  passed the focused naive-DFT gate. It still regressed too many target rows.
+- Radical route: alien-graveyard cache/SIMD arithmetic cleanup plus
+  extreme-optimization hot-loop divide removal, but constrained by the gauntlet
+  rule to one local arithmetic lever and same-worker A/B before keep.
+- Fresh local SciPy oracle on the exact `perf_mixed_radix` deterministic signal:
+  n=720 `12.203 us`, n=1000 `8.225 us`, n=1080 `8.406 us`,
+  n=1500 `11.401 us`, n=1920 `12.594 us`, n=3000 `21.060 us`,
+  n=5000 `35.628 us`, n=10000 `73.930 us`.
+- Same-worker RCH `vmi1227854` parent vs candidate:
+
+| n | Parent Rust | Candidate Rust | Candidate vs parent | Candidate vs SciPy |
+| ---: | ---: | ---: | ---: | ---: |
+| 720 | 11.052 us | 6.331 us | 1.75x faster | 1.93x faster |
+| 1000 | 10.320 us | 12.064 us | 1.17x slower | 1.47x slower |
+| 1080 | 11.668 us | 10.976 us | 1.06x faster | 1.31x slower |
+| 1500 | 24.992 us | 24.096 us | 1.04x faster | 2.11x slower |
+| 1920 | 13.806 us | 13.057 us | 1.06x faster | 1.04x slower |
+| 3000 | 33.109 us | 39.710 us | 1.20x slower | 1.89x slower |
+| 5000 | 55.760 us | 74.754 us | 1.34x slower | 2.10x slower |
+| 10000 | 142.613 us | 147.706 us | 1.04x slower | 2.00x slower |
+
+- Keep-gate score: candidate-vs-parent `4/4/0`; candidate-vs-SciPy `1/7/0`,
+  same as the parent SciPy score. Large smooth rows got worse, including n=5000
+  at 1.34x slower than parent. Final `crates/fsci-fft/src/transforms.rs` diff
+  is empty.
+- Correctness gates: RCH
+  `cargo test -p fsci-fft mixed_radix_smooth_power_tail_matches_naive_dft --lib
+  -- --nocapture` passed 1/0. Both parent and candidate benchmark payloads kept
+  worst max error `4.278e-14` versus the naive DFT, tolerance `1e-9`.
+- Final-source gates after revert: RCH `cargo build --release -p fsci-fft`
+  passed; RCH `cargo test -p fsci-conformance --test diff_fft --test e2e_fft
+  -- --nocapture` passed `diff_fft` 34/0 and `e2e_fft` 12/0.
+- Retry condition: do not retry scalar twiddle-index arithmetic or modulo
+  cleanup in the current recursive mixed-radix structure. Closing the remaining
+  5-smooth FFT loss needs an iterative/cache-blocked mixed-radix schedule,
+  likely with a native SoA/SIMD plan or an in-benchmark parent/candidate kernel
+  comparator before touching production code.
+
+## 2026-06-21 - frankenscipy-8l8r1/cod-a-spatial-chebyshev-d16-refresh - STALE LOSS CLOSED / NO CODE CHANGE
+
+- Agent: cod-a / BlackThrush.
+- Finding: the scorecard's remaining `pdist/chebyshev/n512/d16` loss was stale.
+  A fresh RCH `perf_pdist_sweep` on `ovh-a` measured current Rust at
+  `0.386 ms`; a local SciPy 1.17.1 oracle on the same deterministic matrix
+  measured `0.751864 ms` median. Refreshed ratio: Rust is 1.95x faster.
+- Related large row: `pdist/chebyshev/n2000/d16` local SciPy median was
+  `9.518837 ms`; current wide-path routing remains in the same closed-loss
+  family. The existing Criterion highdim filter could not be rerun because the
+  bench harness aborts before filtering on duplicate `pdist/chebyshev/256`
+  benchmark IDs, so this is a ledger correction plus harness follow-up, not a
+  source change.
+- Decision: no source edit. Remove d16 Chebyshev from the live perf-loss list;
+  leave the benchmark duplicate-ID cleanup to a separate harness bead.
+
 ## 2026-06-21 - frankenscipy-8l8r1.148 - opt LSAP path-cost local cache - REJECT
 
 - Agent: cod-b / BlackThrush.

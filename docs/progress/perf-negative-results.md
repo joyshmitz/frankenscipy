@@ -4,6 +4,83 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-21 - frankenscipy-8l8r1/cod-a-fft-twiddle-index-20260621 - FFT mixed-radix twiddle-index modulo elision
+
+- Agent: cod-a / BlackThrush
+- Status: measured reject / source restored.
+- Lever: remove redundant `% n` operations from the recursive mixed-radix
+  combine twiddle indexes in `fsci-fft`. For `n = p*m`, `r < m`, and `j < p`,
+  every twiddle index `j*r` is already `< n`; the candidate therefore changed
+  only hot-loop integer arithmetic and not the twiddle sequence or butterfly
+  operation order.
+- Alien/artifact route: cache/SIMD arithmetic cleanup from the FFT hot-loop
+  wall, bounded to one no-semantics lever. The larger route remains an
+  iterative/cache-blocked mixed-radix kernel; this attempt tested whether the
+  cheap divide-removal sublever was enough.
+
+Fresh local SciPy oracle on the exact deterministic `perf_mixed_radix` signal:
+
+| n | SciPy median |
+| ---: | ---: |
+| 720 | 12.203 us |
+| 1000 | 8.225 us |
+| 1080 | 8.406 us |
+| 1500 | 11.401 us |
+| 1920 | 12.594 us |
+| 3000 | 21.060 us |
+| 5000 | 35.628 us |
+| 10000 | 73.930 us |
+
+Same-worker RCH `vmi1227854` A/B:
+
+| n | Parent Rust | Candidate Rust | Candidate vs parent | Candidate vs SciPy |
+| ---: | ---: | ---: | ---: | ---: |
+| 720 | 11.052 us | 6.331 us | 1.75x faster | 1.93x faster |
+| 1000 | 10.320 us | 12.064 us | 1.17x slower | 1.47x slower |
+| 1080 | 11.668 us | 10.976 us | 1.06x faster | 1.31x slower |
+| 1500 | 24.992 us | 24.096 us | 1.04x faster | 2.11x slower |
+| 1920 | 13.806 us | 13.057 us | 1.06x faster | 1.04x slower |
+| 3000 | 33.109 us | 39.710 us | 1.20x slower | 1.89x slower |
+| 5000 | 55.760 us | 74.754 us | 1.34x slower | 2.10x slower |
+| 10000 | 142.613 us | 147.706 us | 1.04x slower | 2.00x slower |
+
+- Benchmark evidence:
+  `AGENT_NAME=cod-a CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a
+  rch exec -- cargo run --release -p fsci-fft --bin perf_mixed_radix`.
+  The parent row was measured after restoring the old modulo indexes in place,
+  then the candidate was reapplied and measured on the same RCH worker.
+- Correctness evidence: RCH
+  `cargo test -p fsci-fft mixed_radix_smooth_power_tail_matches_naive_dft --lib
+  -- --nocapture` passed 1/0. Both benchmark payloads reported worst max error
+  `4.278e-14` versus the naive DFT with tolerance `1e-9`.
+- Final-source gates after revert: RCH `cargo build --release -p fsci-fft`
+  passed; RCH `cargo test -p fsci-conformance --test diff_fft --test e2e_fft
+  -- --nocapture` passed `diff_fft` 34/0 and `e2e_fft` 12/0.
+- Score: candidate-vs-parent `4/4/0`; candidate-vs-SciPy `1/7/0`, same as the
+  parent SciPy score. The candidate worsened large rows where the actual
+  residual matters, especially n=5000 at 1.34x slower than parent, so it is a
+  no-ship.
+- Final state: source restored; `crates/fsci-fft/src/transforms.rs` diff empty.
+  Retry condition: do not repeat scalar twiddle-index/modulo cleanup in the
+  recursive kernel. The next credible FFT lever is an iterative/cache-blocked
+  mixed-radix schedule or native SoA/SIMD plan with an in-benchmark A/B harness.
+
+## 2026-06-21 - frankenscipy-8l8r1/cod-a-spatial-chebyshev-d16-refresh - stale residual closure
+
+- Agent: cod-a / BlackThrush
+- Status: stale loss corrected / no source change.
+- Finding: the scorecard still listed `pdist/chebyshev/n512/d16` as a tiny live
+  SciPy loss. Fresh RCH `perf_pdist_sweep` on `ovh-a` measured current Rust at
+  `0.386 ms`; local SciPy 1.17.1 on the same deterministic matrix measured
+  `0.751864 ms` median. Refreshed ratio: Rust is 1.95x faster.
+- Extra oracle: local SciPy for `pdist/chebyshev/n2000/d16` measured
+  `9.518837 ms` median. The previous d64 wide rows remain wins.
+- Harness caveat: `cargo bench -p fsci-spatial --bench spatial_bench --
+  pdist_highdim/chebyshev/n2000_d16 ...` aborts before filtering because the
+  bench file registers duplicate `pdist/chebyshev/256` IDs. That is a harness
+  cleanup task, not a current performance loss.
+- Decision: no source edit; remove d16 Chebyshev from the live residual list.
+
 ## 2026-06-21 - frankenscipy-8l8r1/cod-a-zeta-b10-20260621 - special zeta N=10/B10 tail
 
 - Agent: cod-a / BlackThrush
