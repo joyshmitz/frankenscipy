@@ -43111,7 +43111,11 @@ pub fn contingency_table(x: &[usize], y: &[usize]) -> (Vec<Vec<usize>>, Vec<usiz
         }
     }
 
-    (table, row_labels, col_labels)
+    // Return the marginal totals (row sums, col sums) — the standard contingency-table margins —
+    // rather than the (internal) unique labels. (Bug fix: previously returned row_labels/col_labels.)
+    let row_margins: Vec<usize> = table.iter().map(|row| row.iter().sum()).collect();
+    let col_margins: Vec<usize> = (0..nc).map(|c| table.iter().map(|row| row[c]).sum()).collect();
+    (table, row_margins, col_margins)
 }
 
 /// Compute the relative risk from a 2x2 contingency table.
