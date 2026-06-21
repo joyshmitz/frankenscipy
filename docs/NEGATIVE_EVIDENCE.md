@@ -2110,3 +2110,19 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
 - NEXT LEVER: ward/complete/average/weighted still on agglomerate_nnarray O(n^3) (lose 2.2x)
   — port scipy's NN-chain O(n²) (reducible Lance-Williams) for those. (Centroid/Median already
   use linkage_fast/Mullner O(n²).)
+
+## 2026-06-21 - SHIPPED: NN-chain O(n²) for ward/complete/average/weighted — losses → WINS; linkage family complete
+- Agent: cc / MistyBirch. Implemented scipy's nearest-neighbour-chain (nn_chain_linkage):
+  reciprocal-NN chains + Lance-Williams update on one n×n matrix, stable-sort by distance +
+  LinkageUnionFind relabel — O(n²) vs the old O(n³) nearest-pair scan. UNIFIED both entry
+  points (linkage from points + linkage_from_distances from condensed) through a shared
+  dm-based router (linkage_from_dm): single→MST, ward/complete/average/weighted→NN-chain,
+  centroid/median→Müller heap — so the two paths are bit-identical (fixed a 1-ULP cross-path
+  average diff). VERIFIED cluster 141/0 (incl. scipy-reference + cross-path contract).
+- MEASURED vs scipy.cluster.hierarchy.linkage (n,4 data):
+  ward n=1000 18.6→8.91ms (scipy 14.5 → WIN 1.63x, was LOSE 1.28x); n=2000 124.8→38.9ms
+  (56.9 → WIN 1.46x, was LOSE 2.19x). average 12.1→6.08ms (1.73x) / 126→36.2ms (1.60x).
+  complete ~12→7.14ms (1.43x) / ~125→31.0ms (1.57x). ~3.2-4x self-speedup at n=2000.
+- LINKAGE FAMILY COMPLETE: all 7 methods now O(n²) and WIN/parity scipy (single MST prior
+  cycle 9.3x→parity; ward/complete/average/weighted NN-chain this cycle 2.2x→WIN 1.4-1.7x;
+  centroid/median already Müller). linkage_from_distances also sped up via the unified path.

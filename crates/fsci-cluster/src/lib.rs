@@ -3800,40 +3800,32 @@ pub fn linkage(data: &[Vec<f64>], method: LinkageMethod) -> Result<Vec<[f64; 4]>
     // O(n^3) scan diverges from scipy on tie-break of the column-0/1
     // cluster IDs. Route those two methods through the heap path so the
     // resulting linkage matrix matches scipy element-for-element.
-    if matches!(method, LinkageMethod::Centroid | LinkageMethod::Median) {
-        let mut dist_mat = vec![vec![f64::INFINITY; n]; n];
-        #[allow(clippy::needless_range_loop)]
-        for i in 0..n {
-            dist_mat[i][i] = 0.0;
-            for j in i + 1..n {
-                let dist = sq_dist(row(i), row(j)).sqrt();
-                dist_mat[i][j] = dist;
-                dist_mat[j][i] = dist;
-            }
-        }
-        return Ok(linkage_fast(n, &dist_mat, method));
-    }
-    // SINGLE linkage IS the minimum spanning tree: Prim O(n^2) + scipy's union-find
-    // relabel — O(n^2) instead of the O(n^3) nearest-pair scan (matches scipy exactly).
-    if matches!(method, LinkageMethod::Single) {
-        return Ok(single_linkage_mst(n, d, &flat));
-    }
-
-    // Fill the full inter-cluster arena directly in row-major order. The
-    // nearest-neighbour scan is O(n^2)-typical and strides within one flat
-    // allocation instead of chasing `(2n-1)` row allocations.
-    let total = 2 * n - 1;
-    let mut inter_dist = vec![f64::INFINITY; total * total];
+    // Build the full n×n distance matrix once and route every method through the shared
+    // O(n²) dm-based path (single→MST, reducible→NN-chain, centroid/median→Müller heap).
+    let mut dm = vec![0.0_f64; n * n];
     for i in 0..n {
-        inter_dist[agglo_idx(total, i, i)] = 0.0;
         for j in i + 1..n {
             let dist = sq_dist(row(i), row(j)).sqrt();
-            inter_dist[agglo_idx(total, i, j)] = dist;
-            inter_dist[agglo_idx(total, j, i)] = dist;
+            dm[i * n + j] = dist;
+            dm[j * n + i] = dist;
         }
     }
+    Ok(linkage_from_dm(n, dm, method))
+}
 
-    Ok(agglomerate_nnarray(n, inter_dist, method))
+/// Shared O(n²) agglomeration over a full n×n distance matrix `dm`, used by BOTH
+/// `linkage` (from points) and `linkage_from_distances` (from a condensed matrix) so the
+/// two entry points are bit-identical. single→MST, ward/complete/average/weighted→NN-chain,
+/// centroid/median→the Müller heap (`linkage_fast`).
+fn linkage_from_dm(n: usize, dm: Vec<f64>, method: LinkageMethod) -> Vec<[f64; 4]> {
+    match method {
+        LinkageMethod::Centroid | LinkageMethod::Median => {
+            let dist_mat: Vec<Vec<f64>> = (0..n).map(|i| dm[i * n..(i + 1) * n].to_vec()).collect();
+            linkage_fast(n, &dist_mat, method)
+        }
+        LinkageMethod::Single => single_linkage_mst(n, &dm),
+        _ => nn_chain_linkage(n, dm, method),
+    }
 }
 
 /// Single linkage via the minimum spanning tree (scipy's `mst_single_linkage`): the
@@ -3841,8 +3833,7 @@ pub fn linkage(data: &[Vec<f64>], method: LinkageMethod) -> Result<Vec<[f64; 4]>
 /// is O(n²) (vs the generic O(n³) nearest-pair scan), then the edges are stably sorted by
 /// distance and relabeled with scipy's LinkageUnionFind (new cluster id n, n+1, …) so the
 /// output matches scipy element-for-element.
-fn single_linkage_mst(n: usize, d: usize, flat: &[f64]) -> Vec<[f64; 4]> {
-    let row = |idx: usize| -> &[f64] { &flat[idx * d..idx * d + d] };
+fn single_linkage_mst(n: usize, dm: &[f64]) -> Vec<[f64; 4]> {
     // Prim's MST from vertex 0, recording edges in add-order.
     let mut in_tree = vec![false; n];
     let mut min_d = vec![f64::INFINITY; n];
@@ -3850,7 +3841,7 @@ fn single_linkage_mst(n: usize, d: usize, flat: &[f64]) -> Vec<[f64; 4]> {
     let mut edges: Vec<(f64, usize, usize)> = Vec::with_capacity(n - 1);
     in_tree[0] = true;
     for j in 1..n {
-        min_d[j] = sq_dist(row(0), row(j)).sqrt();
+        min_d[j] = dm[j];
     }
     for _ in 1..n {
         let mut best = usize::MAX;
@@ -3865,7 +3856,7 @@ fn single_linkage_mst(n: usize, d: usize, flat: &[f64]) -> Vec<[f64; 4]> {
         edges.push((bd, nearest[best], best));
         for j in 0..n {
             if !in_tree[j] {
-                let dj = sq_dist(row(best), row(j)).sqrt();
+                let dj = dm[best * n + j];
                 if dj < min_d[j] {
                     min_d[j] = dj;
                     nearest[j] = best;
@@ -3897,6 +3888,100 @@ fn single_linkage_mst(n: usize, d: usize, flat: &[f64]) -> Vec<[f64; 4]> {
         parent[ru] = next_label;
         parent[rv] = next_label;
         size[next_label] = sz;
+        next_label += 1;
+    }
+    z
+}
+
+/// Nearest-neighbour-chain agglomeration (Müller 2011, scipy's `nn_chain`) for the
+/// reducible Lance-Williams methods (ward/complete/average/weighted): O(n²) instead of the
+/// O(n³) nearest-pair scan. Builds the merge tree by following reciprocal-nearest-neighbour
+/// chains, updating one full distance matrix via the method's Lance-Williams rule, then
+/// stably sorts the merges by distance and relabels with scipy's LinkageUnionFind — output
+/// matches scipy element-for-element.
+fn nn_chain_linkage(n: usize, mut dm: Vec<f64>, method: LinkageMethod) -> Vec<[f64; 4]> {
+    let mut size = vec![1.0_f64; n]; // 0.0 ⇒ inactive slot
+    let mut chain: Vec<usize> = Vec::with_capacity(n);
+    let mut merges: Vec<(usize, usize, f64, f64)> = Vec::with_capacity(n - 1);
+    for _ in 0..n - 1 {
+        if chain.is_empty() {
+            let start = (0..n).find(|&i| size[i] > 0.0).unwrap();
+            chain.push(start);
+        }
+        // Extend the chain until the last two elements are reciprocal nearest neighbours.
+        let (x, y, cur) = loop {
+            let x = *chain.last().unwrap();
+            let mut y = usize::MAX;
+            let mut cur = f64::INFINITY;
+            if chain.len() > 1 {
+                y = chain[chain.len() - 2];
+                cur = dm[x * n + y];
+            }
+            for i in 0..n {
+                if i != x && size[i] > 0.0 {
+                    let dxi = dm[x * n + i];
+                    if dxi < cur {
+                        cur = dxi;
+                        y = i;
+                    }
+                }
+            }
+            if chain.len() > 1 && y == chain[chain.len() - 2] {
+                break (x, y, cur);
+            }
+            chain.push(y);
+        };
+        chain.pop();
+        chain.pop();
+        let (a, b) = if x < y { (x, y) } else { (y, x) };
+        let (na, nb) = (size[a], size[b]);
+        let new_size = na + nb;
+        merges.push((a, b, cur, new_size));
+        // Deactivate slot a; slot b carries the merged cluster. Update D(b, i) via Lance-Williams.
+        size[a] = 0.0;
+        size[b] = new_size;
+        for i in 0..n {
+            if i != a && i != b && size[i] > 0.0 {
+                let dai = dm[a * n + i];
+                let dbi = dm[b * n + i];
+                let ni = size[i];
+                let nd = match method {
+                    LinkageMethod::Ward => {
+                        let t = 1.0 / (na + nb + ni);
+                        (((na + ni) * t) * dai * dai + ((nb + ni) * t) * dbi * dbi
+                            - (ni * t) * cur * cur)
+                            .sqrt()
+                    }
+                    LinkageMethod::Complete => dai.max(dbi),
+                    LinkageMethod::Average => (na * dai + nb * dbi) / (na + nb),
+                    LinkageMethod::Weighted => 0.5 * (dai + dbi),
+                    _ => unreachable!(),
+                };
+                dm[b * n + i] = nd;
+                dm[i * n + b] = nd;
+            }
+        }
+    }
+    // Stable sort by distance, then scipy LinkageUnionFind relabel (new id n, n+1, …).
+    merges.sort_by(|p, q| p.2.total_cmp(&q.2));
+    let total = 2 * n - 1;
+    let mut parent: Vec<usize> = (0..total).collect();
+    fn uf_find(parent: &mut [usize], mut x: usize) -> usize {
+        while parent[x] != x {
+            parent[x] = parent[parent[x]];
+            x = parent[x];
+        }
+        x
+    }
+    let mut z = Vec::with_capacity(n - 1);
+    let mut next_label = n;
+    for (u, v, dist, sz) in merges {
+        let ru = uf_find(&mut parent, u);
+        let rv = uf_find(&mut parent, v);
+        let (lo, hi) = if ru < rv { (ru, rv) } else { (rv, ru) };
+        z.push([lo as f64, hi as f64, dist, sz]);
+        parent[ru] = next_label;
+        parent[rv] = next_label;
         next_label += 1;
     }
     z
@@ -6093,25 +6178,18 @@ pub fn linkage_from_distances(
         ));
     }
 
-    // Build the full inter-cluster arena directly from condensed form.
-    let total = 2 * n - 1;
-    let mut inter_dist = vec![f64::INFINITY; total * total];
+    // Build the full n×n distance matrix from condensed form and route through the same
+    // shared O(n²) path as `linkage` (bit-identical between the two entry points).
+    let mut dm = vec![0.0_f64; n * n];
     let mut idx = 0;
-    #[allow(clippy::needless_range_loop)]
     for i in 0..n {
-        inter_dist[agglo_idx(total, i, i)] = 0.0;
         for j in i + 1..n {
-            if idx < condensed_dist.len() {
-                inter_dist[agglo_idx(total, i, j)] = condensed_dist[idx];
-                inter_dist[agglo_idx(total, j, i)] = condensed_dist[idx];
-                idx += 1;
-            }
+            dm[i * n + j] = condensed_dist[idx];
+            dm[j * n + i] = condensed_dist[idx];
+            idx += 1;
         }
     }
-
-    // Run the shared O(n^2) nearest-neighbour-array agglomeration over the
-    // distance matrix (byte-identical to the old pairwise-scan loop).
-    Ok(agglomerate_nnarray(n, inter_dist, method))
+    Ok(linkage_from_dm(n, dm, method))
 }
 
 /// Maximal cliques in a proximity graph (for small graphs).
@@ -9587,5 +9665,6 @@ mod tests {
         );
     }
 }
+
 
 
