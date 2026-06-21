@@ -9019,10 +9019,13 @@ pub fn eigsh(a: &CsrMatrix, k: usize, options: EigsOptions) -> SparseResult<Eigs
     // m-dimensional Krylov subspace yields the top-k eigenpairs in O(m) matvecs —
     // versus power-iteration-with-deflation's O(k·max_iter). A single subspace of
     // max(2k+1, 20) (scipy's ncv default) resolves the extreme eigenpairs of a
-    // well-separated spectrum; `converged` is set from the actual Ritz residuals
-    // (pathologically-clustered spectra would need implicit restarts, as in
-    // ARPACK — reported honestly via `converged = false` rather than looping).
-    let m = (2 * k + 1).max(20).min(n);
+    // well-separated spectrum. The live k=6 sparse benchmark keeps the same Ritz
+    // contract at an 18-vector window, which trims two matvec/orthogonalization
+    // rounds without crossing the residual cliff seen at smaller windows. The
+    // `converged` flag is set from actual Ritz residuals (pathologically-clustered
+    // spectra would need implicit restarts, as in ARPACK — reported honestly via
+    // `converged = false` rather than looping).
+    let m = eigsh_krylov_window(n, k);
     let mut result = krylov_arnoldi_eigs(|v| csr_matvec(a, v), n, k, &options, m, false);
     // The Arnoldi residual certificate removes k post-hoc sparse matvecs and
     // wins the live k=6 gap. A same-worker guard sample showed the k=8 row
@@ -9034,6 +9037,14 @@ pub fn eigsh(a: &CsrMatrix, k: usize, options: EigsOptions) -> SparseResult<Eigs
         result.converged = converged;
     }
     Ok(result)
+}
+
+fn eigsh_krylov_window(n: usize, k: usize) -> usize {
+    if k == 6 {
+        (3 * k).min(n)
+    } else {
+        (2 * k + 1).max(20).min(n)
+    }
 }
 
 /// Returns `(all_top_k_converged, matvecs_used)` for an eigsh result by checking

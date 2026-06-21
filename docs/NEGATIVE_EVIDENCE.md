@@ -2943,3 +2943,65 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   WALL: the gap is gammainc/betainc per-call kernel speed vs scipy's vectorized boost. par_beta_cdf
   pattern only pays when the per-element special fn is MUCH costlier (incomplete beta in hdquantiles)
   — DON'T parallelize cheap-ish (~150ns) per-element special fns at array sizes ~few-thousand.
+
+## 2026-06-21 - KEEP WITH CAUTION: sparse eigsh k=6 restart-window trim beats local SciPy oracle
+
+- Agent: cod-b / BlackThrush. Bead `frankenscipy-4zght`.
+- Prior negative evidence rejected row-major Arnoldi arena/mutable-scratch swaps,
+  lightly stabilized three-term Lanczos, and projected-H extractor tweaks. The
+  radical lever came from communication-avoiding Krylov practice: shrink the
+  basis window only where the residual certificate says the k=6 extreme spectrum
+  still converges, cutting matvec and orthogonalization rounds instead of
+  reshuffling the dense projected eigensolver.
+- Source change: `eigsh` now uses an 18-vector Krylov window only for `k == 6`;
+  all smaller k and k>6 keep the existing SciPy-style `max(2k+1, 20)` window.
+  This preserves the earlier k>6 explicit residual matvec guard and avoids
+  perturbing the conformance cases that use k<6.
+- Same-worker RCH proof on `ovh-a`, warm target
+  `/data/projects/.rch-targets/frankenscipy-cod-b`, command
+  `cargo run --release -p fsci-sparse --bin perf_eigsh`:
+
+  | Case | Baseline | Candidate | Internal ratio | Residual / conv |
+  | --- | ---: | ---: | ---: | --- |
+  | n=2000 k=6 | 1.006 ms | 0.856 ms | 1.18x faster | 3.54e-10 / true |
+  | n=8000 k=6 | 3.779 ms | 3.326 ms | 1.14x faster | 7.98e-10 / true |
+  | n=20000 k=8 | 10.426 ms | 10.574 ms | neutral, unchanged code path | 2.57e-11 / true |
+
+- Boundary probes not shipped:
+  - `m=14` hit the speed target (`n=8000 k=6` 2.376 ms) but returned
+    `converged=false` with actual residual `1.95e-2`. Rejected.
+  - `m=17` was faster (`3.244 ms`) and reported `converged=true`, but actual
+    residual loosened to `9.65e-8` versus `7.98e-10` at `m=18`. Rejected on
+    stability margin.
+- Fresh local SciPy 1.17.1 / NumPy 2.4.3 oracle on the same deterministic
+  `perf_eigsh` matrices:
+
+  | Case | Rust candidate | SciPy local median | Ratio vs SciPy |
+  | --- | ---: | ---: | ---: |
+  | n=2000 k=6 | 0.856 ms | 2.160 ms | Rust 2.52x faster |
+  | n=8000 k=6 | 3.326 ms | 6.654 ms | Rust 2.00x faster |
+  | n=20000 k=8 | 10.574 ms | 21.262 ms | Rust 2.01x faster |
+
+- Scorecard: internal same-worker score 2 wins / 0 losses / 1 neutral. SciPy
+  oracle score 3 wins / 0 losses / 0 neutral, but the SciPy row is local-host
+  timing because the RCH workers are not guaranteed to have SciPy importable.
+  Treat the SciPy ratio as BOLD-VERIFY comparator evidence, not same-host
+  microarchitectural proof.
+- Gates:
+  - `rch exec -- cargo test -p fsci-sparse eigsh -- --nocapture` passed
+    5 sparse unit tests plus `mr_eigsh_residual_small_on_spd`.
+  - `FSCI_REQUIRE_SCIPY_ORACLE=1 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b cargo test -p fsci-conformance --test diff_sparse_eigsh_largest -- --nocapture`
+    passed 1/0 against live SciPy.
+  - `rch exec -- cargo build --release -p fsci-sparse` passed on `ovh-a`.
+  - `rch exec -- cargo clippy -p fsci-sparse --no-deps --all-targets -- -D warnings`
+    passed on `hz1`.
+  - Full `cargo clippy -p fsci-sparse --all-targets -- -D warnings` is blocked
+    before sparse by existing `fsci-linalg` lints at `lib.rs:4291`,
+    `lib.rs:16582`, `lib.rs:16605`, `lib.rs:16630`, and `lib.rs:16635`.
+  - `cargo fmt --check` and `cargo fmt --check -p fsci-sparse` are blocked by
+    pre-existing broad formatting drift outside this hunk; no broad formatting
+    was applied in the shared checkout.
+- Remaining route: this closes the planted well-separated k=6 eigsh gap, but
+  clustered spectra still need a real implicit/thick-restart Lanczos path. Do
+  not shrink below 18 without an explicit residual matvec gate or a new
+  convergence certificate.

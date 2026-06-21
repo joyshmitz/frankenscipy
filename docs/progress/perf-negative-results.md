@@ -3781,3 +3781,37 @@ Local original-SciPy oracle (`python3 docs/perf_oracle_fft_csd.py --reps 120
   Do not retry generic Hurwitz delegation or thread fan-out alone; the remaining
   path needs a vector-specialized piecewise zeta kernel, measured on a worker
   that can run the SciPy oracle or by a same-host non-Cargo Rust timing harness.
+
+## 2026-06-21 - frankenscipy-4zght/cod-b - sparse eigsh k=6 18-vector window keep
+
+- Agent: cod-b / BlackThrush.
+- Lever: shrink only the `eigsh(k=6)` Krylov window from SciPy-default 20 to
+  18. This cuts two matvec/orthogonalization rounds while leaving k<6 and k>6
+  on the existing window. Rejected smaller probes: `m=14` was fast but
+  `converged=false` with residual `1.95e-2`; `m=17` was faster but loosened
+  actual residual to `9.65e-8`, so it was not shipped.
+- Same-worker RCH `ovh-a`, warm target
+  `/data/projects/.rch-targets/frankenscipy-cod-b`,
+  `cargo run --release -p fsci-sparse --bin perf_eigsh`:
+
+  | Case | Before | After | Internal ratio |
+  | --- | ---: | ---: | ---: |
+  | n=2000 k=6 | 1.006 ms | 0.856 ms | 1.18x faster |
+  | n=8000 k=6 | 3.779 ms | 3.326 ms | 1.14x faster |
+  | n=20000 k=8 | 10.426 ms | 10.574 ms | neutral, unchanged code path |
+
+- Local SciPy oracle on the same deterministic matrices: Rust 2.52x faster at
+  n=2000 k=6, 2.00x faster at n=8000 k=6, 2.01x faster at n=20000 k=8.
+  Caveat: SciPy timing is local-host because RCH workers are not guaranteed to
+  import SciPy, so the same-worker keep proof is Rust-before/after.
+- Scorecard: internal 2 wins / 0 losses / 1 neutral; vs local SciPy 3 wins / 0
+  losses / 0 neutral.
+- Gates: RCH sparse eigsh tests passed; live-SciPy
+  `diff_sparse_eigsh_largest` passed locally with `FSCI_REQUIRE_SCIPY_ORACLE=1`;
+  RCH release build passed; RCH sparse clippy `--no-deps` passed. Full clippy is
+  blocked by existing `fsci-linalg` lints before sparse; fmt checks are blocked
+  by pre-existing broad formatting drift.
+- Remaining route: a true implicit/thick-restart Lanczos path for clustered
+  spectra. Do not shrink the k=6 window below 18 without a stronger residual
+  certificate.
+
