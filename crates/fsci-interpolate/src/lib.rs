@@ -2516,6 +2516,71 @@ fn solve_dense_system(a: &mut [Vec<f64>], b: &mut [f64]) -> Result<Vec<f64>, Int
     Ok(x)
 }
 
+/// Flat row-major (`n×n` in `a`) counterpart of [`solve_dense_system`] for DENSE
+/// systems (used by the RBF coefficient solve). Same partial-pivoting Gaussian
+/// elimination in the same FP order → **bit-identical results**, but contiguous
+/// rows keep the trailing-row update cache-resident and let LLVM vectorize it. The
+/// inner `pivot != 0` / `aij != 0` skips of the Vec<Vec> version are dropped here:
+/// subtracting `0.0` is a no-op for finite entries and a dense Φ has no structural
+/// zeros, so the hot loop becomes a clean SIMD-able axpy. (The banded spline solve
+/// keeps the Vec<Vec> zero-skip path — there the skip is a real O(n·bw) algorithmic
+/// win, not just a guard.)
+fn solve_dense_system_flat(a: &mut [f64], n: usize, b: &mut [f64]) -> Result<Vec<f64>, InterpError> {
+    if n == 0 || a.len() != n * n || b.len() != n {
+        return Err(InterpError::InvalidArgument {
+            detail: "empty or mismatched system".to_string(),
+        });
+    }
+    for col in 0..n {
+        let mut max_row = col;
+        let mut max_val = a[col * n + col].abs();
+        for row in (col + 1)..n {
+            let v = a[row * n + col].abs();
+            if v > max_val {
+                max_val = v;
+                max_row = row;
+            }
+        }
+        if max_val < 1e-14 {
+            return Err(InterpError::InvalidArgument {
+                detail: "singular matrix".to_string(),
+            });
+        }
+        if max_row != col {
+            for k in 0..n {
+                a.swap(col * n + k, max_row * n + k);
+            }
+            b.swap(col, max_row);
+        }
+        let pivot_diag = a[col * n + col];
+        let b_col = b[col];
+        // Borrow the pivot row and the trailing rows disjointly.
+        let (pre, rest) = a.split_at_mut((col + 1) * n);
+        let pivot_row = &pre[col * n..(col + 1) * n];
+        for (r, row_idx) in ((col + 1)..n).enumerate() {
+            let row = &mut rest[r * n..(r + 1) * n];
+            let av = row[col];
+            if av == 0.0 {
+                continue;
+            }
+            let factor = av / pivot_diag;
+            for j in col..n {
+                row[j] -= factor * pivot_row[j];
+            }
+            b[row_idx] -= factor * b_col;
+        }
+    }
+    let mut x = vec![0.0; n];
+    for i in (0..n).rev() {
+        let mut s = b[i];
+        for j in i + 1..n {
+            s -= a[i * n + j] * x[j];
+        }
+        x[i] = s / a[i * n + i];
+    }
+    Ok(x)
+}
+
 /// Partial-pivoting Gaussian elimination for a matrix whose nonzeros are confined to a
 /// band of half-width `bw` (`a[i][j] == 0` for `|i-j| > bw`), e.g. a B-spline A^T A.
 /// Bit-identical to `solve_dense_system`: with partial pivoting the L factor keeps lower
@@ -4204,19 +4269,21 @@ impl RbfInterpolator {
             });
         }
 
-        // Build the RBF matrix: Φ[i,j] = φ(||points[i] - points[j]||)
-        let mut phi = vec![vec![0.0; n]; n];
+        // Build the RBF matrix Φ[i,j] = φ(||points[i] - points[j]||) in FLAT row-major
+        // storage so the dense solve runs over contiguous rows (cache-resident +
+        // SIMD-able inner update) instead of a Vec<Vec> with one heap alloc per row.
+        let mut phi = vec![0.0f64; n * n];
         for i in 0..n {
             for j in 0..n {
                 let r = euclidean_dist(&points[i], &points[j]);
-                phi[i][j] = rbf_eval(kernel, r, epsilon);
+                phi[i * n + j] = rbf_eval(kernel, r, epsilon);
             }
         }
 
-        // Solve Φ w = values for weights
-        let mut phi_mut = phi;
+        // Solve Φ w = values for weights (flat dense solver; same partial-pivoting
+        // elimination + FP order as solve_dense_system → bit-identical weights).
         let mut values_mut = values.to_vec();
-        let weights = solve_dense_system(&mut phi_mut, &mut values_mut)?;
+        let weights = solve_dense_system_flat(&mut phi, n, &mut values_mut)?;
 
         Ok(Self {
             points: points.to_vec(),
@@ -9144,6 +9211,43 @@ mod tests {
     }
 
     // ── RBF Interpolator tests ───────────────────────────────────────
+
+    #[test]
+    fn solve_dense_system_flat_matches_vecvec() {
+        // The flat dense solver must be BIT-IDENTICAL to the Vec<Vec> reference on
+        // random dense systems (this is what makes the RBF flat-Φ solve a byte-
+        // identical perf change).
+        let mut state = 0xDEADBEEF_u64;
+        let mut nx = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 11) as f64 / (1u64 << 53) as f64 * 2.0 - 1.0
+        };
+        for &n in &[1usize, 2, 5, 17, 40] {
+            // diagonally-dominant random A (non-singular) + random b.
+            let mut vv: Vec<Vec<f64>> = (0..n).map(|_| (0..n).map(|_| nx()).collect()).collect();
+            for i in 0..n {
+                vv[i][i] += n as f64 + 1.0;
+            }
+            let b: Vec<f64> = (0..n).map(|_| nx()).collect();
+            let mut flat: Vec<f64> = vec![0.0; n * n];
+            for i in 0..n {
+                for j in 0..n {
+                    flat[i * n + j] = vv[i][j];
+                }
+            }
+            let mut vv2 = vv.clone();
+            let mut b1 = b.clone();
+            let mut b2 = b.clone();
+            let ref_x = solve_dense_system(&mut vv2, &mut b1).expect("ref");
+            let flat_x = solve_dense_system_flat(&mut flat, n, &mut b2).expect("flat");
+            assert_eq!(ref_x.len(), flat_x.len());
+            for (r, f) in ref_x.iter().zip(&flat_x) {
+                assert_eq!(r.to_bits(), f.to_bits(), "n={n}: flat solve != Vec<Vec> solve");
+            }
+        }
+    }
 
     #[test]
     fn rbf_exact_at_data_points() {

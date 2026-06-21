@@ -1290,3 +1290,25 @@ interior-direct (boundary-map only the ~window-1 edge cells).**
   exploit Φ symmetry (LDLᵀ ~2x fewer ops). The per-column thread::scope was already
   tried and REJECTED (130x+ regression — spawn per column). Documented; bench tracks
   the loss.
+
+## 2026-06-20 - RbfInterpolator flat-Φ dense solve - WIN 2.17x self (closes the 2.9x loss to 1.33x), byte-identical
+
+- Agent: cc / MistyBirch. Fixes the RBF loss filed earlier today (the byte-identical
+  lever, lever (a)).
+- RbfInterpolator::new built Φ as `Vec<Vec<f64>>` (one heap alloc per row) and solved
+  it with the Vec<Vec> `solve_dense_system`. Switched to a FLAT row-major `Vec<f64>` Φ
+  + a new `solve_dense_system_flat` running the SAME partial-pivoting elimination in the
+  SAME FP order — contiguous rows keep the trailing-row update cache-resident and let
+  LLVM vectorize the inner axpy (the Vec<Vec> per-row allocs were severely cache-hostile).
+- Correctness: BIT-IDENTICAL — `solve_dense_system_flat_matches_vecvec` proves the flat
+  solver == the Vec<Vec> reference to_bits on random dense systems (n=1..40); full
+  fsci-interpolate suite 172/0 (all RBF conformance tests pass unchanged). The spline
+  banded solve is untouched (keeps its O(n·bw) zero-skip path).
+
+| RBF tps, n=2000 build + 20000 eval | before | after | self | scipy | vs scipy |
+| --- | ---: | ---: | ---: | ---: | --- |
+| build+eval | 3.47 s | 1.60 s | **2.17x** | 1.205 s | 1.33x slower (was 2.9x) |
+
+- Closes the loss from 2.9x to 1.33x (near parity). The residual is scipy's blocked +
+  multithreaded LAPACK LU (lever (b), a bigger tolerance-parity blocked-LU rewrite) —
+  the cheap byte-identical layout win captured the bulk.
