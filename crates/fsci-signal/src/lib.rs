@@ -680,13 +680,12 @@ pub fn kaiser(n: usize, beta: f64) -> Vec<f64> {
     }
     let m = (n - 1) as f64;
     let denom = bessel_i0(beta);
-    (0..n)
-        .map(|i| {
-            let alpha = 2.0 * i as f64 / m - 1.0;
-            let arg = beta * (1.0 - alpha * alpha).max(0.0).sqrt();
-            bessel_i0(arg) / denom
-        })
-        .collect()
+    // Each sample is an independent compute-bound i0(bessel); map it in parallel (work-gated).
+    par_index_fill(n, |i| {
+        let alpha = 2.0 * i as f64 / m - 1.0;
+        let arg = beta * (1.0 - alpha * alpha).max(0.0).sqrt();
+        bessel_i0(arg) / denom
+    })
 }
 
 /// Kaiser-Bessel derived window.
@@ -29291,6 +29290,8 @@ mod tests {
         }
     }
 }
+
+
 
 
 
