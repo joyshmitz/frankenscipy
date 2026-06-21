@@ -2141,3 +2141,19 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   spatial (optimized, distance_matrix 15.3x), cluster (linkage family all O(n²) WIN/parity;
   kmeans tradeoff), stats (dominates). Remaining unmeasured: special/integrate/opt (likely
   callback-lever WINS or HiGHS/QUADPACK walls), fft (pocketfft SIMD wall).
+
+## 2026-06-21 - GAUNTLET: special DOMINATES, ConvexHull WINS, Voronoi parity, Delaunay loss (flag)
+- Agent: cc / MistyBirch. MEASURED vs scipy (criterion/perf_counter):
+  SPECIAL 1M arrays (parallel par_map_indices): gamma 6.88ms vs scipy 11.8 → WIN 1.7x; erf
+  5.35 vs 12.3 → WIN 2.3x; gammaln 6.21 vs 17.3 → WIN 2.8x; digamma 6.47 vs 12.2 → WIN 1.9x.
+  SPATIAL 2D: ConvexHull n=5000/20000 0.234/1.30ms vs scipy 0.72/2.06 → WIN 3.1x/1.58x.
+  Voronoi 24.2/117ms vs 25.5/120 → parity. Delaunay 17.5/88.2ms vs 13.6/60.8 → LOSE 1.29x/1.45x.
+- DELAUNAY FLAG: fsci uses delaunay_triangulate_circle_grid (the circumcircle precompute + grid
+  IS present, not regressed in code) but measures 1.3-1.45x SLOWER than scipy Qhull on random
+  uniform 2D — CONTRADICTS the memory note (95c08d05: "2.2x faster than Qhull"). Likely
+  data-dependent (memory's test data?) or scipy-version/grid-tuning. find_simplex query path is
+  grid-accelerated + fast (separate). Investigate grid sizing for large random n (deferred —
+  moderate loss, involved build-algorithm tuning). NOTE: corrects [[perf_precompute_per_element_predicate]].
+- ALL major crates gauntleted now (interpolate/signal/spatial/cluster/stats/special): dominant
+  except Delaunay-build (1.45x), kmeans (SIMD/parallel tradeoff), + the C-SIMD/library walls
+  (fft pocketfft, linprog HiGHS, RBF LAPACK, FFT-residual oaconvolve/hilbert).
