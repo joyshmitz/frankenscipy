@@ -3172,3 +3172,15 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
     (gammaincinv ≈ 2 gammainc, so warm-start reaches parity not domination) + 1.47e-10 vs scalar's
     1e-14. REVERTED (parity, accuracy loss, new method not worth it). Wall = gammainc/gammaincinv
     kernel speed. The discrete cumsum lever does NOT transfer to continuous (no pmf recurrence).
+
+## 2026-06-21 - OVERTURN: gamma cdf/ppf are NOT kernel walls — work-gated parallel map FLIPS them 3.4-5.4x
+- Agent: cc / MistyBirch. The prior entry called gamma cdf (1.48x) / ppf (2.28x) array losses "kernel
+  walls". WRONG. par_continuous_map (parallel map, thread count gated on WORK: >=2048 elts/thread,
+  capped at avail cores) FLIPS them: gamma cdf_many 2831us = 3.4x scipy, ppf_many 7589us = 5.4x;
+  both BYTE-IDENTICAL to mapping the scalar. The per-point gammainc/gammaincinv is slow but expensive
+  ENOUGH to amortise threads at scale. Also: the serial warm-start ppf (prior entry) only reached
+  PARITY + lost accuracy; the simple parallel map wins outright + is byte-id — overthought it.
+- LEVER (reusable, broad): any CONTINUOUS dist whose cdf/sf/ppf is a costly per-point special fn →
+  work-gated parallel *_many (Beta/ChiSquared/StudentT/F/etc). The over-threading regression that
+  killed the earlier poisson parallel cdf was a CHEAP/SMALL array; the >=2048-elts/thread work-gate
+  fixes it. par_continuous_map helper in fsci-stats. DON'T parallelize cheap kernels or small arrays.
