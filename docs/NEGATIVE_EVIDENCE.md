@@ -2930,3 +2930,16 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   hypergeom where pmf(0) was fine); (2) it changes values ~1 ULP vs lgamma → ULP risk on passing
   golden/byte-exact tests. NOT worth it on an already-winning op. DON'T re-chase poisson/binomial
   pmf_many perf. (hypergeom WAS worth it only because it had a real accuracy BUG to fix.)
+
+## 2026-06-21 - MEASURED LOSS: poisson/binom cdf over arrays 1.2-1.5x slower than scipy; not cleanly fixable
+- Agent: cc / MistyBirch. MEASURED vs scipy 1.17.1: poisson(mu=1000) cdf over 3000 pts fsci 440us
+  vs scipy 359us (1.2x LOSS); binom(5000,0.3) over 5000 pts fsci 1195us vs scipy 789us (1.5x LOSS).
+  fsci maps the single closed-form cdf (lower_regularized_gamma / regularized_incomplete_beta,
+  ~150-240ns each); scipy vectorizes the same special fn via boost. Tried a parallel cdf_many
+  (par_u64_cdf, mirroring par_beta_cdf, gate m>=2048): REGRESSED to ~2180us — the per-call gammainc
+  is too cheap to amortize spawning available_parallelism() workers per call (over-threads a small
+  array). REVERTED (byte-identical but slower). The recurrence-cumsum alternative (cdf(k)=cdf(k-1)
+  +pmf(k)) UNDERFLOWS for large mu (pmf(0)=exp(-mu)=0) — needs mode-start, complex+accuracy-risky.
+  WALL: the gap is gammainc/betainc per-call kernel speed vs scipy's vectorized boost. par_beta_cdf
+  pattern only pays when the per-element special fn is MUCH costlier (incomplete beta in hdquantiles)
+  — DON'T parallelize cheap-ish (~150ns) per-element special fns at array sizes ~few-thousand.
