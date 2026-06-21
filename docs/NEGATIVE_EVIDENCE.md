@@ -3195,3 +3195,17 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
 - Confirmed LOSSES that are NOT cleanly flippable (bandwidth/sort-bound, marginal): mode 1e6 1.84x
   (sort-bound; radix/parallel-sort only reaches ~parity); savgol shipped to parity-win (bandwidth).
   No new ship this sweep — the measured surface is dominant or kernel-bound.
+
+## 2026-06-21 - chirp parallel WIN 7.1x (byte-id); boxcox parallel REJECTED (FMA 1-ULP not byte-id)
+- Agent: cc / MistyBirch. chirp parallelized (par_index_fill over the per-sample cos): 1e6 quadratic
+  4154us = 7.1x scipy (29458) / 2.26x serial. VERIFIED byte-identical (0/1e6 mismatches serial-vs-
+  parallel) — shipped 645f8a97.
+- boxcox parallel (par_continuous_map over (x^λ-1)/λ): 4792us = 4.8x scipy (23168, was 1.8x serial
+  win) BUT 779/1e6 mismatches vs the serial map — the serial `.map().collect()` auto-vectorizes the
+  post-powf `-1.0)/lambda` into an FMA while the threaded loop uses scalar sub/div → 1-ULP for ~0.08%
+  of inputs. Still matches scipy within tolerance (boxcox tests 16/0) but NOT byte-identical. NOT
+  shipped (boxcox already wins serial; a non-byte-id perf change isn't worth it).
+- BYTE-IDENTITY BOUNDARY of the parallel-map levers: byte-identical for OPAQUE-FUNCTION closures
+  (dist cdf/ppf/sf/isf — verified 0 mismatches) and closures ending in a libm call (chirp cos), but
+  can be 1-ULP off for INLINE-ARITHMETIC closures the serial map FMA-vectorizes (boxcox). Always
+  verify serial-vs-parallel byte-identity directly for inline-arithmetic maps, not just vs scipy.
