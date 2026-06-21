@@ -166,6 +166,44 @@ pub trait ContinuousDistribution {
     }
     /// Cumulative distribution function.
     fn cdf(&self, x: f64) -> f64;
+
+    /// Cumulative distribution at many points — work-gated parallel map of the per-point `cdf`,
+    /// byte-identical to mapping it. Wins for dists with a costly special-function cdf; harmless
+    /// (work-gated) for cheap closed-form ones. Default for all continuous dists.
+    #[must_use]
+    fn cdf_many(&self, xs: &[f64]) -> Vec<f64>
+    where
+        Self: Sync,
+    {
+        par_continuous_map(xs, |x| self.cdf(x))
+    }
+
+    /// Survival function at many points — work-gated parallel map of the per-point `sf`.
+    #[must_use]
+    fn sf_many(&self, xs: &[f64]) -> Vec<f64>
+    where
+        Self: Sync,
+    {
+        par_continuous_map(xs, |x| self.sf(x))
+    }
+
+    /// Inverse cdf at many probabilities — work-gated parallel map of the per-point `ppf`.
+    #[must_use]
+    fn ppf_many(&self, qs: &[f64]) -> Vec<f64>
+    where
+        Self: Sync,
+    {
+        par_continuous_map(qs, |q| self.ppf(q))
+    }
+
+    /// Inverse survival at many probabilities — work-gated parallel map of the per-point `isf`.
+    #[must_use]
+    fn isf_many(&self, qs: &[f64]) -> Vec<f64>
+    where
+        Self: Sync,
+    {
+        par_continuous_map(qs, |q| self.isf(q))
+    }
     /// Log cumulative distribution function.
     fn logcdf(&self, x: f64) -> f64 {
         log_probability(self.cdf(x))
@@ -49272,6 +49310,28 @@ mod tests {
     }
 
     #[test]
+    fn continuous_trait_default_many_match_scalar() {
+        // The trait-default cdf_many/sf_many/ppf_many/isf_many (work-gated parallel) are byte-
+        // identical to mapping the scalar for the special-fn dists that don't override them.
+        let xs: Vec<f64> = (0..6000).map(|i| (i as f64 / 6000.0) * 10.0 + 0.01).collect();
+        let qs: Vec<f64> = (0..6000).map(|i| (i as f64 + 0.5) / 6000.0).collect();
+        macro_rules! chk {
+            ($d:expr) => {{
+                let d = $d;
+                assert_eq!(d.cdf_many(&xs), xs.iter().map(|&x| d.cdf(x)).collect::<Vec<_>>());
+                assert_eq!(d.sf_many(&xs), xs.iter().map(|&x| d.sf(x)).collect::<Vec<_>>());
+                assert_eq!(d.ppf_many(&qs), qs.iter().map(|&q| d.ppf(q)).collect::<Vec<_>>());
+                assert_eq!(d.isf_many(&qs), qs.iter().map(|&q| d.isf(q)).collect::<Vec<_>>());
+            }};
+        }
+        chk!(InverseGamma::new(2.5));
+        chk!(Chi::new(4.0));
+        chk!(Nakagami::new(2.0));
+        chk!(Erlang::new(3, 1.0));
+        chk!(GenGamma::new(2.0, 1.5));
+    }
+
+    #[test]
     fn gamma_dist_mean_var() {
         let g = GammaDist::new(3.0, 2.0);
         assert_close(g.mean(), 6.0, 1e-10, "Gamma(3,2) mean");
@@ -79230,6 +79290,7 @@ mod tests {
         assert!(dist.cdf(5.0) > 0.99, "hypsecant CDF should be near 1 at 5");
     }
 }
+
 
 
 
