@@ -2844,3 +2844,14 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   COMPLETE: all 9 of my crates fully green (special 1113, stats 1967, fft 177, spatial 218, cluster
   141, signal 173, interpolate 313, opt 648, integrate 259). 10 fixes this session-tail. LEVER that
   cracked the 2 "hard" ones: don't guess — read scipy's exact source / compute the exact value first.
+
+## 2026-06-21 - MEASURED: poisson/binomial pmf_many already WIN vs scipy; recurrence-sweep deferred
+- Agent: cc / MistyBirch. After the hypergeom recurrence-sweep win, checked whether poisson/binomial
+  pmf_many (per-k lgamma+exp) should switch too. MEASURED vs scipy 1.17.1: poisson(mu=1000) 3001 pts
+  fsci 87us vs scipy 130us = 1.5x WIN; binomial(n=5000) 5001 pts fsci 237us vs scipy 493us = 2.1x
+  WIN. Both already dominate — the lgamma-hoisted form beats scipy's vectorized boost pmf. The
+  ratio-recurrence sweep (1 mult/div per k) would be faster still, BUT: (1) poisson pmf(0)=exp(-mu)
+  UNDERFLOWS to 0 for large mu, so it needs a mode-start + bidirectional sweep (complex, unlike
+  hypergeom where pmf(0) was fine); (2) it changes values ~1 ULP vs lgamma → ULP risk on passing
+  golden/byte-exact tests. NOT worth it on an already-winning op. DON'T re-chase poisson/binomial
+  pmf_many perf. (hypergeom WAS worth it only because it had a real accuracy BUG to fix.)
