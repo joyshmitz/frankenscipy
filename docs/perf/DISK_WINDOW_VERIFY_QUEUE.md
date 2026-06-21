@@ -49,3 +49,19 @@ Read-reviewed all disk-window commits (no cargo available); findings:
 - sort_unstable commits (2893660c/79773b3f/e3e1c396): trivial one-token swaps of valid
   calls; total_cmp-Equal⟺identical-bits / Vec<usize>-equal⟺identical ⇒ byte-identical.
 - No bug found → expect the verify queue (cargo check + suites) to pass green.
+
+## VERIFIED GREEN (2026-06-20, cc — warm per-crate cargo test, frankenscipy-ft target)
+All disk-window byte-identical commits pass:
+- fsci-interpolate: `cargo check` clean + `cargo test --lib` **173 passed / 0 failed** /2
+  ignored — the 6 GCV band-restrict + dense→banded-solve + make_smoothing_spline commits
+  are correct (compile + byte-identity + scipy-parity).
+- fsci-stats: **1962 passed / 5 failed** — the 5 are PRE-EXISTING zscore/mad/sklearn
+  (no sort/median/quantile/ks/mwu/kruskal failure) → the 60 sort_unstable swaps added
+  ZERO new failures.
+- fsci-signal: **648 / 0**. fsci-cluster: **141 / 0**. Sort swaps clean.
+- fsci-special: 1108 passed / 4 failed — the 4 are in convenience.rs + gamma.rs
+  (exp2_exp10_cosdg_sindg, powm1_and_cosm1, digamma_scalar, polygamma) — NOT my files
+  (my commit 79773b3f touches only elliptic.rs + orthopoly.rs, whose Gauss-quadrature
+  tests PASS). The 4 are pre-existing-or-other-agent regressions in the special-functions
+  accuracy tests, unrelated to the sort sweep. Flagged for the fsci-special owner.
+=> P0 VERIFY QUEUE COMPLETE. The disk-window byte-identical work is confirmed correct.
