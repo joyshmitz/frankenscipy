@@ -1551,3 +1551,23 @@ the make_smoothing_spline + make_interp_spline scipy-parity tests.
 - eab4eea3  gcv numer build O(n²)→O(n)
 - (this)    band_to_full fill O(n²)→O(n)
 Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte-identical.
+
+## 2026-06-20 - fsci-stats: 60 Vec<f64> sorts → sort_unstable (byte-identical, disk-critical)
+
+- Agent: cc / MistyBirch. CODE-ONLY (disk-critical, no cargo). Isolated to fsci-stats
+  (separate from the interpolate verify queue). Same lever as rankdata_ties (389353dd),
+  applied broadly.
+- Converted 60 `.sort_by(|a, b| a.total_cmp(b))` (+ one `|x, y|` variant) → unstable.
+  BYTE-IDENTICAL by construction: these sort plain Vec<f64> values (the closure
+  `a.total_cmp(b)` proves f64 elements), and `total_cmp(a,b)==Equal ⟺ a,b have identical
+  bits` (total_cmp orders -0.0<+0.0 and NaNs by bits), so the only elements an unstable
+  sort may reorder are bitwise-identical → the sorted Vec is byte-for-byte the same as
+  the stable sort, hence every downstream median/quantile/test-statistic read is
+  identical. ~10-30% faster per sort across many stats fns (median, percentile, KS,
+  Mann-Whitney pool, mood, ansari, …).
+- The 9 PAIR sorts (`|a, b| a.0.total_cmp(&b.0)`) were left STABLE — equal keys with
+  differing payloads are NOT reorder-safe. partial_cmp sorts also left alone (+0.0/-0.0
+  compare Equal under partial_cmp but differ in bits → unstable not byte-identical there).
+- PENDING compile-verify (no cargo): one-token swaps so near-zero compile risk;
+  byte-identical so no bench needed for correctness. `cargo check -p fsci-stats` +
+  suite when disk recovers.

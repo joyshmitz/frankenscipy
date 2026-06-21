@@ -23070,7 +23070,7 @@ pub fn quantile(data: &[f64], q: &[f64]) -> Vec<f64> {
     }
 
     let mut sorted = data.to_vec();
-    sorted.sort_by(|a, b| a.total_cmp(b));
+    sorted.sort_unstable_by(|a, b| a.total_cmp(b));
 
     q.iter()
         .map(|&qi| {
@@ -23633,7 +23633,7 @@ pub fn nanmedian(data: &[f64]) -> f64 {
     if valid.is_empty() {
         return f64::NAN;
     }
-    valid.sort_by(|a, b| a.total_cmp(b));
+    valid.sort_unstable_by(|a, b| a.total_cmp(b));
     let n = valid.len();
     if n.is_multiple_of(2) {
         (valid[n / 2 - 1] + valid[n / 2]) / 2.0
@@ -23650,7 +23650,7 @@ pub fn nanquantile(data: &[f64], q: &[f64]) -> Vec<f64> {
     if valid.is_empty() {
         return vec![f64::NAN; q.len()];
     }
-    valid.sort_by(|a, b| a.total_cmp(b));
+    valid.sort_unstable_by(|a, b| a.total_cmp(b));
     let n = valid.len();
     q.iter()
         .map(|&qi| {
@@ -24208,7 +24208,7 @@ fn sample_median(data: &[f64]) -> f64 {
         return f64::NAN;
     }
     let mut sorted = data.to_vec();
-    sorted.sort_by(|a, b| a.total_cmp(b));
+    sorted.sort_unstable_by(|a, b| a.total_cmp(b));
     let mid = sorted.len() / 2;
     if sorted.len().is_multiple_of(2) {
         0.5 * (sorted[mid - 1] + sorted[mid])
@@ -24686,8 +24686,8 @@ pub fn wasserstein_distance(u: &[f64], v: &[f64]) -> f64 {
     // The two-pointer variant runs in O(N + M).
     let mut u_sorted = u.to_vec();
     let mut v_sorted = v.to_vec();
-    u_sorted.sort_by(|a, b| a.total_cmp(b));
-    v_sorted.sort_by(|a, b| a.total_cmp(b));
+    u_sorted.sort_unstable_by(|a, b| a.total_cmp(b));
+    v_sorted.sort_unstable_by(|a, b| a.total_cmp(b));
 
     let nu = u.len() as f64;
     let nv = v.len() as f64;
@@ -24881,9 +24881,9 @@ pub fn energy_distance(u: &[f64], v: &[f64]) -> f64 {
 /// energy_distance to avoid the quadratic cross-set term.
 fn cross_set_l1_pair_sum(u: &[f64], v: &[f64]) -> f64 {
     let mut su: Vec<f64> = u.to_vec();
-    su.sort_by(|a, b| a.total_cmp(b));
+    su.sort_unstable_by(|a, b| a.total_cmp(b));
     let mut sv: Vec<f64> = v.to_vec();
-    sv.sort_by(|a, b| a.total_cmp(b));
+    sv.sort_unstable_by(|a, b| a.total_cmp(b));
 
     let m = sv.len();
     let m_f = m as f64;
@@ -24913,7 +24913,7 @@ fn within_set_l1_pair_sum(x: &[f64]) -> f64 {
         return 0.0;
     }
     let mut sorted: Vec<f64> = x.to_vec();
-    sorted.sort_by(|a, b| a.total_cmp(b));
+    sorted.sort_unstable_by(|a, b| a.total_cmp(b));
     let mut sum = 0.0_f64;
     let n_f = n as f64;
     for (i, &val) in sorted.iter().enumerate() {
@@ -26146,7 +26146,7 @@ pub fn fligner(groups: &[&[f64]]) -> VarianceTestResult {
 
     for group in groups {
         let mut sorted = group.to_vec();
-        sorted.sort_by(|a, b| a.total_cmp(b));
+        sorted.sort_unstable_by(|a, b| a.total_cmp(b));
         let median = quantile_sorted(&sorted, 0.5);
         let deviations: Vec<f64> = group.iter().map(|&x| (x - median).abs()).collect();
         all_scores.extend_from_slice(&deviations);
@@ -26426,7 +26426,7 @@ pub fn median_test(groups: &[&[f64]]) -> TtestResult {
 
     // Pool all data and find grand median
     let mut all_data: Vec<f64> = groups.iter().flat_map(|g| g.iter().copied()).collect();
-    all_data.sort_by(|a, b| a.total_cmp(b));
+    all_data.sort_unstable_by(|a, b| a.total_cmp(b));
     let grand_median = quantile_sorted(&all_data, 0.5);
 
     // Count observations above/below median per group
@@ -26493,7 +26493,7 @@ pub fn ansari_alternative(x: &[f64], y: &[f64], alternative: &str) -> TtestResul
 
     let repeats = {
         let mut sorted = pooled.clone();
-        sorted.sort_by(|a, b| a.total_cmp(b));
+        sorted.sort_unstable_by(|a, b| a.total_cmp(b));
         sorted.windows(2).any(|w| w[0].total_cmp(&w[1]).is_eq())
     };
 
@@ -27083,7 +27083,7 @@ pub fn wilcoxon(x: &[f64], y: &[f64]) -> TtestResult {
     let no_zeros = x.len() == nr;
     let no_ties = {
         let mut s = abs_diffs.clone();
-        s.sort_by(|a, b| a.total_cmp(b));
+        s.sort_unstable_by(|a, b| a.total_cmp(b));
         s.windows(2).all(|w| w[0] != w[1])
     };
     if no_zeros && no_ties && nr <= 1000 {
@@ -27115,7 +27115,7 @@ pub fn wilcoxon(x: &[f64], y: &[f64]) -> TtestResult {
     // where t are tie-group sizes among absolute differences.
     let mu = nrf * (nrf + 1.0) / 4.0;
     let mut sorted_abs = abs_diffs.clone();
-    sorted_abs.sort_by(|a, b| a.total_cmp(b));
+    sorted_abs.sort_unstable_by(|a, b| a.total_cmp(b));
     let mut tie_sum = 0.0_f64;
     let mut i = 0;
     while i < sorted_abs.len() {
@@ -27205,7 +27205,7 @@ pub fn wilcoxon_alternative(x: &[f64], y: &[f64], alternative: &str) -> TtestRes
     let no_zeros = x.len() == nr;
     let no_ties = {
         let mut s = abs_diffs.clone();
-        s.sort_by(|a, b| a.total_cmp(b));
+        s.sort_unstable_by(|a, b| a.total_cmp(b));
         s.windows(2).all(|w| w[0] != w[1])
     };
     if no_zeros && no_ties && nr <= 1000 {
@@ -27240,7 +27240,7 @@ pub fn wilcoxon_alternative(x: &[f64], y: &[f64], alternative: &str) -> TtestRes
     //   sigma² = n*(n+1)*(2n+1)/24 - Σ(t³-t)/48
     // where t are tie-group sizes among the absolute differences.
     let mut sorted_abs = abs_diffs.clone();
-    sorted_abs.sort_by(|a, b| a.total_cmp(b));
+    sorted_abs.sort_unstable_by(|a, b| a.total_cmp(b));
     let mut tie_sum = 0.0_f64;
     let mut i = 0;
     while i < sorted_abs.len() {
@@ -27366,7 +27366,7 @@ pub fn kruskal(groups: &[&[f64]]) -> TtestResult {
     // Tie correction. scipy divides H by C = 1 - Σ(t³-t)/(N³-N) where the
     // sum is over each tie-group size t in the combined sorted observations.
     let mut sorted_values = all_values.clone();
-    sorted_values.sort_by(|a, b| a.total_cmp(b));
+    sorted_values.sort_unstable_by(|a, b| a.total_cmp(b));
     let mut tie_sum = 0.0_f64;
     let mut i = 0;
     while i < sorted_values.len() {
@@ -28054,9 +28054,9 @@ fn bws_statistic(rx: &[f64], ry: &[f64], two_sided: bool) -> f64 {
     let n = rx.len() as f64;
     let m = ry.len() as f64;
     let mut ri = rx.to_vec();
-    ri.sort_by(|a, b| a.total_cmp(b));
+    ri.sort_unstable_by(|a, b| a.total_cmp(b));
     let mut hj = ry.to_vec();
-    hj.sort_by(|a, b| a.total_cmp(b));
+    hj.sort_unstable_by(|a, b| a.total_cmp(b));
 
     let mut bx = 0.0;
     for (idx, &r) in ri.iter().enumerate() {
@@ -28372,7 +28372,7 @@ pub fn count_tied_groups(data: &[f64]) -> std::collections::HashMap<usize, usize
     if sorted.is_empty() {
         return counts;
     }
-    sorted.sort_by(|a, b| a.total_cmp(b));
+    sorted.sort_unstable_by(|a, b| a.total_cmp(b));
     let mut i = 0;
     while i < sorted.len() {
         let mut j = i + 1;
@@ -28412,7 +28412,7 @@ pub fn tiecorrect(rankvals: &[f64]) -> f64 {
     }
 
     let mut sorted = rankvals.to_vec();
-    sorted.sort_by(|a, b| a.total_cmp(b));
+    sorted.sort_unstable_by(|a, b| a.total_cmp(b));
 
     let mut tie_sum = 0_i64;
     let mut i = 0;
@@ -28716,7 +28716,7 @@ pub fn mode(data: &[f64]) -> f64 {
         return f64::NAN;
     }
     let mut sorted = data.to_vec();
-    sorted.sort_by(|a, b| a.total_cmp(b));
+    sorted.sort_unstable_by(|a, b| a.total_cmp(b));
 
     let mut best_val = sorted[0];
     let mut best_count = 1usize;
@@ -29513,7 +29513,7 @@ pub fn peak_to_peak(data: &[f64]) -> f64 {
 /// Returns (lower_quartile, upper_quartile) using the ideal fourths algorithm.
 pub fn idealfourths(data: &[f64]) -> (f64, f64) {
     let mut sorted: Vec<f64> = data.iter().copied().filter(|v| !v.is_nan()).collect();
-    sorted.sort_by(|a, b| a.total_cmp(b));
+    sorted.sort_unstable_by(|a, b| a.total_cmp(b));
     let n = sorted.len();
     if n < 3 {
         return (f64::NAN, f64::NAN);
@@ -29536,7 +29536,7 @@ pub fn idealfourths(data: &[f64]) -> (f64, f64) {
 #[must_use]
 pub fn stde_median(data: &[f64]) -> f64 {
     let mut sorted: Vec<f64> = data.iter().copied().filter(|v| !v.is_nan()).collect();
-    sorted.sort_by(|a, b| a.total_cmp(b));
+    sorted.sort_unstable_by(|a, b| a.total_cmp(b));
     let n = sorted.len();
     let z = 2.5758293035489004_f64;
     let nf = n as f64;
@@ -29778,7 +29778,7 @@ pub fn kendalltau_seasonal(data: &[Vec<f64>]) -> KendallSeasonalResult {
 /// Returns (lower_bound, upper_bound).
 pub fn median_cihs(data: &[f64], alpha: f64) -> (f64, f64) {
     let mut sorted: Vec<f64> = data.iter().copied().filter(|v| !v.is_nan()).collect();
-    sorted.sort_by(|a, b| a.total_cmp(b));
+    sorted.sort_unstable_by(|a, b| a.total_cmp(b));
     let n = sorted.len();
     if n < 2 {
         return (f64::NAN, f64::NAN);
@@ -29865,7 +29865,7 @@ fn par_beta_cdf(beta: &BetaDist, xs: &[f64]) -> Vec<f64> {
 
 pub fn hdquantiles(data: &[f64], prob: &[f64]) -> Vec<f64> {
     let mut sorted: Vec<f64> = data.iter().copied().filter(|v| !v.is_nan()).collect();
-    sorted.sort_by(|a, b| a.total_cmp(b));
+    sorted.sort_unstable_by(|a, b| a.total_cmp(b));
     let n = sorted.len();
     if n < 2 {
         return prob.iter().map(|_| f64::NAN).collect();
@@ -29911,7 +29911,7 @@ pub fn hdmedian(data: &[f64]) -> f64 {
 /// Matches `scipy.stats.mstats.hdquantiles_sd(data, prob)`.
 pub fn hdquantiles_sd(data: &[f64], prob: &[f64]) -> Vec<f64> {
     let mut sorted: Vec<f64> = data.iter().copied().filter(|v| !v.is_nan()).collect();
-    sorted.sort_by(|a, b| a.total_cmp(b));
+    sorted.sort_unstable_by(|a, b| a.total_cmp(b));
     let n = sorted.len();
     if n < 2 {
         return prob.iter().map(|_| f64::NAN).collect();
@@ -30029,7 +30029,7 @@ pub fn mquantiles_cimj(data: &[f64], prob: &[f64], alpha: f64) -> (Vec<f64>, Vec
 /// - (1/3, 1/3): R type 8 - approximately median-unbiased
 pub fn mquantiles(data: &[f64], prob: &[f64], alphap: f64, betap: f64) -> Vec<f64> {
     let mut sorted: Vec<f64> = data.iter().copied().filter(|v| !v.is_nan()).collect();
-    sorted.sort_by(|a, b| a.total_cmp(b));
+    sorted.sort_unstable_by(|a, b| a.total_cmp(b));
     let n = sorted.len();
     if n == 0 {
         return prob.iter().map(|_| f64::NAN).collect();
@@ -30489,7 +30489,7 @@ pub fn scoreatpercentile(
         }
         Ok(out)
     } else {
-        filtered.sort_by(|a, b| a.total_cmp(b));
+        filtered.sort_unstable_by(|a, b| a.total_cmp(b));
         per.iter()
             .copied()
             .map(|percentile| scoreatpercentile_single(&filtered, percentile, &method))
@@ -30559,7 +30559,7 @@ pub fn trim_mean(data: &[f64], proportiontocut: f64) -> f64 {
     let prop = proportiontocut.clamp(0.0, 0.5);
     let n = data.len();
     let mut sorted = data.to_vec();
-    sorted.sort_by(|a, b| a.total_cmp(b));
+    sorted.sort_unstable_by(|a, b| a.total_cmp(b));
 
     let ncut = (n as f64 * prop).floor() as usize;
     let trimmed = &sorted[ncut..n - ncut];
@@ -30614,7 +30614,7 @@ pub fn trimmed_mean_ci(
         return (f64::NAN, f64::NAN);
     }
 
-    bootstrap_means.sort_by(|a, b| a.total_cmp(b));
+    bootstrap_means.sort_unstable_by(|a, b| a.total_cmp(b));
 
     let alpha = 1.0 - confidence;
     let lower_idx = ((alpha / 2.0) * bootstrap_means.len() as f64).floor() as usize;
@@ -30864,7 +30864,7 @@ pub fn trimboth(data: &[f64], proportiontocut: f64) -> Vec<f64> {
     let prop = proportiontocut.clamp(0.0, 0.5);
     let n = data.len();
     let mut sorted = data.to_vec();
-    sorted.sort_by(|a, b| a.total_cmp(b));
+    sorted.sort_unstable_by(|a, b| a.total_cmp(b));
 
     let ncut = (n as f64 * prop).floor() as usize;
     if 2 * ncut >= n {
@@ -30895,7 +30895,7 @@ pub fn trim1(data: &[f64], proportiontocut: f64, tail: &str) -> Vec<f64> {
     let prop = proportiontocut.clamp(0.0, 1.0);
     let n = data.len();
     let mut sorted = data.to_vec();
-    sorted.sort_by(|a, b| a.total_cmp(b));
+    sorted.sort_unstable_by(|a, b| a.total_cmp(b));
 
     let ncut = (n as f64 * prop).floor() as usize;
 
@@ -31223,7 +31223,7 @@ pub fn differential_entropy(
 
     // Sort the data
     let mut sorted = filtered;
-    sorted.sort_by(|a, b| a.total_cmp(b));
+    sorted.sort_unstable_by(|a, b| a.total_cmp(b));
 
     // Vasicek spacing estimator
     let mut sum_log = 0.0;
@@ -33427,7 +33427,7 @@ pub fn ks_1samp(data: &[f64], cdf_func: impl Fn(f64) -> f64) -> GoodnessOfFitRes
     let nf = n as f64;
 
     let mut sorted = data.to_vec();
-    sorted.sort_by(|a, b| a.total_cmp(b));
+    sorted.sort_unstable_by(|a, b| a.total_cmp(b));
 
     // D = max_i { max(|i/n - F(x_i)|, |(i-1)/n - F(x_i)|) }
     let mut d_stat = 0.0_f64;
@@ -33722,7 +33722,7 @@ pub fn cramervonmises(data: &[f64], cdf_func: impl Fn(f64) -> f64) -> GoodnessOf
     }
 
     let mut sorted = data.to_vec();
-    sorted.sort_by(|a, b| a.total_cmp(b));
+    sorted.sort_unstable_by(|a, b| a.total_cmp(b));
     let nf = n as f64;
     let statistic = sorted
         .iter()
@@ -33850,8 +33850,8 @@ pub fn cramervonmises_2samp_with_method(
 
     let mut xa = x.to_vec();
     let mut ya = y.to_vec();
-    xa.sort_by(|a, b| a.total_cmp(b));
-    ya.sort_by(|a, b| a.total_cmp(b));
+    xa.sort_unstable_by(|a, b| a.total_cmp(b));
+    ya.sort_unstable_by(|a, b| a.total_cmp(b));
 
     let mut pooled = xa.clone();
     pooled.extend_from_slice(&ya);
@@ -33906,8 +33906,8 @@ pub fn ks_2samp(data1: &[f64], data2: &[f64]) -> GoodnessOfFitResult {
 
     let mut sorted1 = data1.to_vec();
     let mut sorted2 = data2.to_vec();
-    sorted1.sort_by(|a, b| a.total_cmp(b));
-    sorted2.sort_by(|a, b| a.total_cmp(b));
+    sorted1.sort_unstable_by(|a, b| a.total_cmp(b));
+    sorted2.sort_unstable_by(|a, b| a.total_cmp(b));
 
     // Walk both sorted arrays, computing max |F1(x) - F2(x)|
     let n1f = n1 as f64;
@@ -33968,8 +33968,8 @@ pub fn ks_2samp_alternative(
 
     let mut sorted1 = data1.to_vec();
     let mut sorted2 = data2.to_vec();
-    sorted1.sort_by(|a, b| a.total_cmp(b));
-    sorted2.sort_by(|a, b| a.total_cmp(b));
+    sorted1.sort_unstable_by(|a, b| a.total_cmp(b));
+    sorted2.sort_unstable_by(|a, b| a.total_cmp(b));
 
     let n1f = n1 as f64;
     let n2f = n2 as f64;
@@ -34328,7 +34328,7 @@ pub fn shapiro(data: &[f64]) -> GoodnessOfFitResult {
     }
 
     let mut sorted = data.to_vec();
-    sorted.sort_by(|a, b| a.total_cmp(b));
+    sorted.sort_unstable_by(|a, b| a.total_cmp(b));
     shapiro_swilk(&sorted)
 }
 
@@ -34605,7 +34605,7 @@ pub fn anderson(data: &[f64], dist: &str) -> AndersonResult {
 
     // Sort and standardize
     let mut sorted = data.to_vec();
-    sorted.sort_by(|a, b| a.total_cmp(b));
+    sorted.sort_unstable_by(|a, b| a.total_cmp(b));
 
     let norm = Normal::standard();
 
@@ -35529,7 +35529,7 @@ fn kendall_pair_counts_knight(x: &[f64], y: &[f64]) -> (i64, i64, i64, i64) {
 /// Number of pairs equal in `v` (sum t(t-1)/2 over equal-value runs).
 fn kendall_tie_pairs(v: &[f64]) -> i64 {
     let mut s: Vec<f64> = v.to_vec();
-    s.sort_by(|a, b| a.total_cmp(b));
+    s.sort_unstable_by(|a, b| a.total_cmp(b));
     let mut ties = 0i64;
     let mut run = 1i64;
     for w in 1..s.len() {
@@ -36870,7 +36870,7 @@ pub fn crosstab(a: &[f64], b: &[f64]) -> (Vec<f64>, Vec<f64>, Vec<Vec<u64>>) {
 
     let sorted_unique = |data: &[f64]| -> Vec<f64> {
         let mut v = data.to_vec();
-        v.sort_by(|x, y| x.total_cmp(y));
+        v.sort_unstable_by(|x, y| x.total_cmp(y));
         v.dedup_by(|x, y| x.total_cmp(y) == std::cmp::Ordering::Equal);
         v
     };
@@ -39039,7 +39039,7 @@ where
     // statistics in parallel (byte-identical, chunk-boundary RNG via LCG jump).
     let mut boot_stats = bootstrap_statistics(data, n_bootstrap, seed, stat_fn);
 
-    boot_stats.sort_by(|a, b| a.total_cmp(b));
+    boot_stats.sort_unstable_by(|a, b| a.total_cmp(b));
 
     let alpha = 1.0 - confidence;
     let lo_idx = ((alpha / 2.0) * n_bootstrap as f64).floor() as usize;
@@ -39214,7 +39214,7 @@ pub fn bootstrap_mean(data: &[f64], n_bootstrap: usize, confidence: f64, seed: u
     let alpha_lo = bca_percentile(z_lo);
     let alpha_hi = bca_percentile(z_hi);
 
-    boot_means.sort_by(|a, b| a.total_cmp(b));
+    boot_means.sort_unstable_by(|a, b| a.total_cmp(b));
 
     let idx_lo = ((alpha_lo * n_bootstrap as f64).floor() as usize).clamp(0, n_bootstrap - 1);
     let idx_hi = ((alpha_hi * n_bootstrap as f64).ceil() as usize).clamp(0, n_bootstrap - 1);
@@ -39241,7 +39241,7 @@ pub fn bootstrap_std(data: &[f64], n_bootstrap: usize, confidence: f64, seed: u6
         var.sqrt()
     });
 
-    boot_stds.sort_by(|a, b| a.total_cmp(b));
+    boot_stds.sort_unstable_by(|a, b| a.total_cmp(b));
 
     let alpha = 1.0 - confidence;
     let idx_lo = ((alpha / 2.0 * n_bootstrap as f64).floor() as usize).clamp(0, n_bootstrap - 1);
@@ -39920,7 +39920,7 @@ pub fn mode_full(data: &[f64]) -> ModeResult {
     }
 
     let mut sorted = filtered.clone();
-    sorted.sort_by(|a, b| a.total_cmp(b));
+    sorted.sort_unstable_by(|a, b| a.total_cmp(b));
 
     let mut best_mode = sorted[0];
     let mut best_count = 1_usize;
@@ -40310,7 +40310,7 @@ pub fn median_absolute_error(y_true: &[f64], y_pred: &[f64]) -> f64 {
         .zip(y_pred.iter())
         .map(|(&t, &p)| (t - p).abs())
         .collect();
-    errors.sort_by(|a, b| a.total_cmp(b));
+    errors.sort_unstable_by(|a, b| a.total_cmp(b));
     let n = errors.len();
     if n.is_multiple_of(2) {
         (errors[n / 2 - 1] + errors[n / 2]) / 2.0
@@ -43870,7 +43870,7 @@ pub fn binned_statistic(
                     }),
                 "median" => {
                     let mut sorted = bv.clone();
-                    sorted.sort_by(|a, b| a.total_cmp(b));
+                    sorted.sort_unstable_by(|a, b| a.total_cmp(b));
                     let n = sorted.len();
                     if n.is_multiple_of(2) {
                         (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
@@ -44048,7 +44048,7 @@ pub fn binned_statistic_2d(
             "max" => nan_max(bv),
             "median" => {
                 let mut sorted = bv.to_vec();
-                sorted.sort_by(|a, b| a.total_cmp(b));
+                sorted.sort_unstable_by(|a, b| a.total_cmp(b));
                 let n = sorted.len();
                 if n.is_multiple_of(2) {
                     (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
@@ -44231,7 +44231,7 @@ pub fn binned_statistic_dd(
             "max" => nan_max_slice(bv),
             "median" => {
                 let mut sorted = bv.to_vec();
-                sorted.sort_by(|a, b| a.total_cmp(b));
+                sorted.sort_unstable_by(|a, b| a.total_cmp(b));
                 let n = sorted.len();
                 if n.is_multiple_of(2) {
                     (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
@@ -44467,7 +44467,7 @@ pub fn ks_distance(data: &[f64], cdf_func: impl Fn(f64) -> f64) -> f64 {
         return f64::NAN;
     }
     let mut sorted = data.to_vec();
-    sorted.sort_by(|a, b| a.total_cmp(b));
+    sorted.sort_unstable_by(|a, b| a.total_cmp(b));
 
     let mut max_d = 0.0f64;
     for (i, &x) in sorted.iter().enumerate() {
@@ -44495,7 +44495,7 @@ pub fn ecdf(data: &[f64], x_eval: &[f64]) -> Vec<f64> {
         return vec![0.0; x_eval.len()];
     }
     let mut sorted = data.to_vec();
-    sorted.sort_by(|a, b| a.total_cmp(b));
+    sorted.sort_unstable_by(|a, b| a.total_cmp(b));
 
     x_eval
         .iter()
@@ -45391,7 +45391,7 @@ fn select_theil_slope_ranks(x: &[f64], y: &[f64], ranks: &[usize]) -> Option<Vec
     }
 
     let mut sample = sample_theil_slopes(x, y, total)?;
-    sample.sort_by(|a, b| a.total_cmp(b));
+    sample.sort_unstable_by(|a, b| a.total_cmp(b));
     let sample_len = sample.len();
     if sample_len < 16 {
         return None;
@@ -61176,7 +61176,7 @@ mod tests {
                 }
             }
         }
-        slopes.sort_by(|a, b| a.total_cmp(b));
+        slopes.sort_unstable_by(|a, b| a.total_cmp(b));
         slopes
     }
 
@@ -61263,8 +61263,8 @@ mod tests {
                 .filter(|&slope| slope > lower && slope <= upper)
                 .collect();
             let mut got = interval.slopes;
-            expected.sort_by(|a, b| a.total_cmp(b));
-            got.sort_by(|a, b| a.total_cmp(b));
+            expected.sort_unstable_by(|a, b| a.total_cmp(b));
+            got.sort_unstable_by(|a, b| a.total_cmp(b));
             assert_eq!(interval.below, expected_below, "below lower={lower}");
             assert_eq!(
                 got.iter().map(|value| value.to_bits()).collect::<Vec<_>>(),
