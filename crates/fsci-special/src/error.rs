@@ -80,7 +80,7 @@ pub fn erf(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
         mode,
         |x| Ok(erf_scalar(x)),
         |value| Ok(erf_complex_scalar(value)),
-        usize::MAX, // cheap O(1) real kernel: serial beats par_map
+        1 << 20, // work-gated: serial small, par_map_indices for huge arrays (>=1M)
     )
 }
 
@@ -91,7 +91,7 @@ pub fn erfc(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
         mode,
         |x| Ok(erfc_scalar(x)),
         |value| Ok(erfc_complex_scalar(value)),
-        usize::MAX, // cheap O(1) real kernel: serial beats par_map
+        1 << 20, // work-gated: serial small, par_map_indices for huge arrays (>=1M)
     )
 }
 
@@ -177,9 +177,11 @@ where
 }
 
 /// `real_par_min` = the RealVec length below which the real arm runs SERIALLY. Cheap O(1) real
-/// kernels (erf/erfc rational ~14ns/call) are slower under par_map_indices at any practical length
-/// (thread overhead >> per-call work); they pass `usize::MAX`. Heavy real kernels (erfinv/erfcinv
-/// iterative) keep the default 256 so they still parallelize.
+/// kernels (erf/erfc rational ~25ns/call) lose to serial under par_map_indices for short/medium
+/// arrays (thread-spawn overhead >> per-call work) but WIN for huge arrays where the kernel cost
+/// finally dominates: measured same-worker erf/erfc flip from a slight SciPy loss to a 2.3-2.8x win
+/// at n>=2M. So they pass `1<<20` (work-gated). Heavy real kernels (erfinv/erfcinv iterative) keep
+/// the default 256 so they still parallelize at lower lengths.
 fn map_unary_input_rp<F, G>(
     function: &'static str,
     input: &SpecialTensor,

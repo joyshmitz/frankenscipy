@@ -3200,6 +3200,28 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   sweep could lower the gate to capture mid-size arrays, and erf/erfc (error.rs, same cheap-kernel
   pattern, currently real_par_min=usize::MAX) are the next identical candidates.
 
+## 2026-06-21 - FIX/WIN: erf/erfc WORK-GATED parallel for huge arrays (>=1M) — flips a SciPy LOSS to 2.3-2.8x
+- Agent: cod-a / BlackThrush. The follow-on candidate from the gamma-family note above. erf/erfc's
+  `real_par_min` was set to `usize::MAX` (always serial) with the comment "slower at any practical
+  length" — but that, like the gamma sweep, only reflected n=100k. erf serial actually LOSES to
+  SciPy at large n (fsci 41.8ms vs SciPy 38ms at 2M, range [-3,3]); SciPy's erf ufunc is better
+  vectorized. Changed `real_par_min` to `1<<20` (the existing `map_unary_input_rp` work-gate already
+  supported it — just a constant). Order-preserving → byte-identical (acc unchanged serial vs parallel).
+- Same-worker RCH `hz1`, `perf_erf_array` (real_par_min=usize::MAX serial baseline vs 1<<20 parallel,
+  data range [-3,3] to match the SciPy oracle):
+
+  | fn | n | serial | parallel | self | local SciPy 1.17.1 | vs SciPy |
+  | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+  | erf  | 2M | 41.82 ms | 13.74 ms | 3.05x | 38.04 ms | 2.77x faster |
+  | erfc | 2M | 47.74 ms | 11.44 ms | 4.18x | 32.00 ms | 2.80x faster |
+  | erf  | 4M | 121.95 ms | 34.42 ms | 3.54x | 78.72 ms | 2.29x faster |
+  | erfc | 4M | 111.68 ms | 27.19 ms | 4.11x | 67.28 ms | 2.47x faster |
+
+- Score: same-worker self 4/0/0; vs local SciPy 4/0/0. erf serial was a 1.1x SciPy LOSS → now a
+  2.77x win (pure multicore over SciPy's single-threaded ufunc). Gates: in-crate error tests 32/0;
+  byte-identical. The high-end work-gate lever (see gamma entry above) now flips gamma/gammaln/digamma
+  + erf/erfc. Remaining identical candidates: elliptic (ellipk/ellipe) + ~18 convenience activations.
+
 ## 2026-06-21 - dst_iv twiddle reuse (byte-id); DCT/DST twiddle-recompute bug fully closed
 - Agent: cc / MistyBirch. dst_iv recomputed the dct-IV twiddle per coefficient → reuse the cached
   get_or_compute_dct4_twiddles (from the dct_iv fix). dst_iv 65536 2.27ms (matches dct_iv; 2N-FFT
