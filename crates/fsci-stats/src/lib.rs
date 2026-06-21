@@ -30531,6 +30531,40 @@ fn binomial_ppf(binom: &Binomial, q: f64) -> u64 {
 /// incomplete-beta) evaluations across threads in contiguous chunks for large
 /// `xs`. Each value is computed identically and written to its own slot in input
 /// order, so the result is bit-identical to `xs.iter().map(|&v| beta.cdf(v))`.
+fn par_map_inline<F>(xs: &[f64], f: F) -> Vec<f64>
+where
+    F: Fn(f64) -> f64 + Sync + Send + Copy,
+{
+    // Like par_continuous_map but MOVES a Copy of `f` into each thread (not `&f`), so the closure
+    // inlines per-thread and the compiler vectorizes the inline arithmetic identically to the serial
+    // `.map()` — byte-identical even for FMA/vectorizable closures (powf), unlike the &f indirection.
+    let n = xs.len();
+    let nthreads = if n < 2048 {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n / 2048)
+            .max(1)
+    };
+    if nthreads <= 1 {
+        return xs.iter().map(|&x| f(x)).collect();
+    }
+    let chunk = n.div_ceil(nthreads);
+    let mut out = vec![0.0f64; n];
+    std::thread::scope(|scope| {
+        for (block, xblock) in out.chunks_mut(chunk).zip(xs.chunks(chunk)) {
+            scope.spawn(move || {
+                for (slot, &x) in block.iter_mut().zip(xblock.iter()) {
+                    *slot = f(x);
+                }
+            });
+        }
+    });
+    out
+}
+
 fn par_continuous_map<F>(xs: &[f64], f: F) -> Vec<f64>
 where
     F: Fn(f64) -> f64 + Sync,
@@ -35944,16 +35978,13 @@ pub fn boxcox(data: &[f64], lmbda: Option<f64>) -> Result<BoxCoxResult, String> 
 
     let lambda = lmbda.unwrap_or_else(|| find_optimal_boxcox_lambda(data));
 
-    let transformed: Vec<f64> = data
-        .iter()
-        .map(|&x| {
-            if lambda.abs() < 1e-10 {
-                x.ln()
-            } else {
-                (x.powf(lambda) - 1.0) / lambda
-            }
-        })
-        .collect();
+    let transformed = par_map_inline(data, |x| {
+        if lambda.abs() < 1e-10 {
+            x.ln()
+        } else {
+            (x.powf(lambda) - 1.0) / lambda
+        }
+    });
 
     Ok(BoxCoxResult {
         data: transformed,
@@ -79290,6 +79321,10 @@ mod tests {
         assert!(dist.cdf(5.0) > 0.99, "hypsecant CDF should be near 1 at 5");
     }
 }
+
+
+
+
 
 
 
