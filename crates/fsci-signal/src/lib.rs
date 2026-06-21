@@ -12731,14 +12731,12 @@ pub fn flattop(n: usize) -> Vec<f64> {
     }
     let two_pi = 2.0 * std::f64::consts::PI;
     let nf = (n - 1) as f64;
-    (0..n)
-        .map(|i| {
-            let arg = two_pi * i as f64 / nf;
-            0.21557895 - 0.41663158 * arg.cos() + 0.277263158 * (2.0 * arg).cos()
-                - 0.083578947 * (3.0 * arg).cos()
-                + 0.006947368 * (4.0 * arg).cos()
-        })
-        .collect()
+    par_index_fill(n, |i| {
+        let arg = two_pi * i as f64 / nf;
+        0.21557895 - 0.41663158 * arg.cos() + 0.277263158 * (2.0 * arg).cos()
+            - 0.083578947 * (3.0 * arg).cos()
+            + 0.006947368 * (4.0 * arg).cos()
+    })
 }
 
 /// Generate a cosine window.
@@ -29287,6 +29285,7 @@ mod tests {
         }
     }
 }
+
 
 
 
