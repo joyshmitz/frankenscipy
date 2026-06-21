@@ -2616,3 +2616,11 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   thread local cmax, byte-identical: achieving a never early-breaks). 5.378->3.956ms (1.36x);
   serial-flatten alone 4.227 (parallel scales better on structured data). Residual ~8x is the
   shuffled random-access cache-miss constant vs scipy's tuned contiguous C — a C/cache wall.
+
+## 2026-06-21 - squareform_to_matrix 1.26x loss -> 2.8x WIN (parallel row-build, byte-id)
+- Agent: cc / MistyBirch. Name-gap scans: scipy.stats gaps all niche (RNG generators/exotic dists/
+  goodness_of_fit); scipy.spatial.distance complete (squareform exists as squareform_to_matrix/
+  _to_condensed). squareform_to_matrix 3000 was 60ms vs scipy 47.5 (LOSE 1.26x): vec![vec![0;n];n]
+  redundant 9M zero pass + serial fill+mirror. FIXED: build each row independently from condensed
+  (closed-form index, no pre-zero, no cross-row mirror) → disjoint rows → parallel. 60->16.84ms
+  WIN 2.8x, byte-identical (7/7). directed_hausdorff existed (slow, fixed 1.36x prior).
