@@ -1451,10 +1451,10 @@ interior-direct (boundary-map only the ~window-1 edge cells).**
   COMPACT banded storage + solver (no n×n alloc). Shipped the byte-identical solve_banded
   step now; the build rewrite is the larger remaining piece.
 
-## 2026-06-21 - frankenscipy-8l8r1.139 - make_interp_spline compact rows - CODE COMMITTED, PENDING BENCH
+## 2026-06-21 - frankenscipy-8l8r1.139 - make_interp_spline compact rows - MEASURED KEEP
 
-- Agent: cod-a / BlackThrush. Disk-low paused new cargo bench/build work, so this is
-  intentionally a code-only commit with benchmark/conformance gates deferred.
+- Agent: cod-a / BlackThrush. Resumed the disk-low code-only commit and completed
+  the deferred focused bench/conformance wave without creating a new worktree.
 - Lever: remove the remaining dense `n x n` collocation row allocation/fill from
   `make_interp_spline`. The upstream partial fix (`318898bb`) moved the solve to
   `solve_banded`, but still built dense rows through `eval_basis_all`. This follow-up
@@ -1464,15 +1464,27 @@ interior-direct (boundary-map only the ~window-1 edge cells).**
 - Correctness guard in code: `make_interp_spline_compact_band_matches_dense_coefficients_bits`
   compares compact production coefficients against the previous dense collocation path
   to `to_bits()` for degrees 0 through 5.
-- Pending bench/conformance: next turn run per-crate focused gates and same-worker
-  Criterion against `origin/main` partial-band baseline:
-  `cargo test -p fsci-interpolate make_interp_spline_ --lib -- --nocapture`,
-  `cargo bench -p fsci-interpolate --bench interpolate_bench -- make_interp_spline/k3`,
-  and the matching SciPy oracle rows. Do not count this as a measured keep until that
-  batch is green.
-- Retry condition: if compact row growth, pivot swaps, or sparse basis assembly loses
-  to the dense-row `solve_banded` baseline on a same-worker run, revert this exact
-  compact-row representation and replace it with fixed-width band storage.
+- Focused guards:
+  `cargo test -p fsci-interpolate make_interp_spline_ --lib -- --nocapture`
+  passed via RCH on `hz1` (2/0: SciPy reference values plus compact-vs-dense
+  coefficient `to_bits()` guard). Focused conformance
+  `cargo test -p fsci-conformance --test e2e_interpolate scenario_14_bspline_many_knots -- --nocapture`
+  passed against the existing warm local target dir.
+- Bench note: this Cargo rejects `cargo bench --release`; the measured command used
+  Cargo's optimized bench profile:
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a rch exec --
+  cargo bench -p fsci-interpolate --bench interpolate_bench --
+  make_interp_spline/k3 --sample-size 10 --warm-up-time 1 --measurement-time 1
+  --noplot` on `vmi1227854`.
+
+| n (k=3) | partial dense-row banded solve | compact rows | self | SciPy oracle | vs SciPy |
+| --- | ---: | ---: | ---: | ---: | --- |
+| 1000 | 5.57 ms | 111.20 us | 50.1x faster | 193.171 us | Rust 1.74x faster |
+| 3000 | 58.19 ms | 405.68 us | 143.4x faster | 372.952 us | Rust 1.09x slower |
+
+- Decision: KEEP. This is not a near-zero gain: it closes the prior 24x/121x
+  post-partial SciPy losses to a win at n=1000 and near parity at n=3000. No source
+  revert.
 
 ## 2026-06-20 - make_interp_spline 175x loss: CLOSED (compact-band landed, 67798376)
 

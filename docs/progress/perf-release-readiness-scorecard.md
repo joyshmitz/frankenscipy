@@ -70,28 +70,34 @@ Readiness notes:
   conformance green, but the self-speedup is a constant-factor allocation win
   rather than a new algorithmic class.
 
-## 2026-06-21 - fsci-interpolate make_interp_spline compact rows - pending bench
+## 2026-06-21 - fsci-interpolate make_interp_spline compact rows - measured keep
 
 - Agent: cod-a / BlackThrush
 - Bead: `frankenscipy-8l8r1.139`
-- Decision: PENDING. Code-only disk-low commit. Do not count as release-ready
-  until per-crate focused tests, same-worker Criterion, and SciPy oracle rows are
-  refreshed.
+- Decision: KEEP. The compact row-band production path closes the prior
+  post-partial SciPy losses to a win at n=1000 and near parity at n=3000.
 - Lever: remove the dense `n x n` collocation row allocation/fill left behind by
   the upstream partial `solve_banded` fix. Production now stores only compact
   local-support row bands for `make_interp_spline`.
 
 | Gate | Result | Notes |
 | --- | --- | --- |
-| Focused coefficient guard | PENDING | run `cargo test -p fsci-interpolate make_interp_spline_ --lib -- --nocapture` next turn |
-| Same-worker Criterion | PENDING | compare compact rows against current `origin/main` partial-band baseline with `make_interp_spline/k3` |
-| SciPy oracle | PENDING | refresh n=1000 and n=3000 ratios against the SciPy `make_interp_spline` oracle |
-| Formatting / diff hygiene | PENDING | no cargo/rustfmt build-style gate was started after DISK-LOW |
+| Focused coefficient guard | PASS | RCH `cargo test -p fsci-interpolate make_interp_spline_ --lib -- --nocapture` on `hz1`: 2/0 |
+| Focused conformance | PASS | warm-target `cargo test -p fsci-conformance --test e2e_interpolate scenario_14_bspline_many_knots -- --nocapture`: 1/0 |
+| Criterion | PASS | RCH optimized bench profile on `vmi1227854`: n=1000 111.20 us, n=3000 405.68 us |
+| SciPy oracle | PASS | local SciPy 1.17.1 / NumPy 2.4.3: n=1000 193.171 us, n=3000 372.952 us |
+| Formatting / diff hygiene | PASS | `git diff --check -- docs/NEGATIVE_EVIDENCE.md docs/progress/perf-negative-results.md docs/progress/perf-release-readiness-scorecard.md .beads/issues.jsonl` |
 
 Readiness notes:
 
-- This is intentionally not in the measured-keep table. The committed code is the
-  next lever; evidence collection resumes when disk pressure clears.
+- Release score for this lever is `5/5`: behavior guard and focused conformance are
+  green; measured rows show 50.1x/143.4x self-speedups versus the partial
+  dense-row banded baseline, Rust 1.74x faster than SciPy at n=1000, and only
+  1.09x slower at n=3000.
+
+- Keep accepted; no source revert. A later larger-n regression should compare
+  fixed-width band storage against the current dynamic compact rows, not return to
+  dense row construction.
 
 ## 2026-06-20 - fsci-spatial pdist Chebyshev wide-SIMD gauntlet
 

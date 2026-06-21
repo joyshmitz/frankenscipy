@@ -99,9 +99,9 @@ does not supersede that helper score.
 ## 2026-06-21 - frankenscipy-8l8r1.139 - make_interp_spline compact row-band assembly
 
 - Agent: cod-a / BlackThrush
-- Status: pending bench. DISK-LOW paused new cargo build/bench work, so this is a
-  code-only commit and must not be promoted to a measured keep until the next
-  benchmark wave.
+- Decision: KEEP. The resumed disk-frugal verification pass completed the deferred
+  focused guards, Criterion row, and SciPy oracle ratio without creating a new
+  worktree.
 - Lever: replace the remaining dense collocation row build in `make_interp_spline`
   with compact local-support rows. The prior upstream partial fix switched to the
   banded solver but still allocated `n x n` rows and called `eval_basis_all` for a
@@ -112,14 +112,24 @@ does not supersede that helper score.
   `make_interp_spline_compact_band_matches_dense_coefficients_bits` compares compact
   production coefficients to the previous dense collocation reference to `to_bits()`
   for degrees 0 through 5.
-- Benchmark guard: resume with per-crate rch only:
-  `cargo test -p fsci-interpolate make_interp_spline_ --lib -- --nocapture`,
-  `cargo bench -p fsci-interpolate --bench interpolate_bench -- make_interp_spline/k3`,
-  and the matching SciPy oracle for n=1000/n=3000. Compare against the current
-  upstream partial-band baseline on the same worker before scoring.
-- Retry condition: if the compact row representation fails to beat the dense-row
-  `solve_banded` baseline on same-worker timing, revert this representation and try a
-  fixed-width band buffer instead of dynamic row growth.
+- Guards:
+  - PASS: RCH `cargo test -p fsci-interpolate make_interp_spline_ --lib -- --nocapture`
+    on `hz1`: 2 passed, 0 failed.
+  - PASS: warm-target focused conformance
+    `cargo test -p fsci-conformance --test e2e_interpolate scenario_14_bspline_many_knots -- --nocapture`:
+    1 passed, 0 failed.
+  - PASS: RCH Criterion bench on `vmi1227854`; `cargo bench --release` is not
+    accepted by this Cargo, so the measurement used Cargo's optimized bench profile
+    via plain `cargo bench`.
+
+| n (k=3) | partial dense-row banded solve | compact rows | self | SciPy oracle | vs SciPy |
+| --- | ---: | ---: | ---: | ---: | --- |
+| 1000 | 5.57 ms | 111.20 us | 50.1x faster | 193.171 us | Rust 1.74x faster |
+| 3000 | 58.19 ms | 405.68 us | 143.4x faster | 372.952 us | Rust 1.09x slower |
+
+- Retry condition: the dynamic compact row representation is accepted. If a later
+  larger-n row regresses, compare against a fixed-width band buffer; do not return to
+  dense row construction.
 
 ## 2026-06-20 - frankenscipy-4tkgx - spatial pdist Chebyshev wide SIMD helper
 
