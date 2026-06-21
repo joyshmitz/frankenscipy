@@ -1,27 +1,36 @@
 # Performance Release-Readiness Scorecard
 
-## 2026-06-21 - fsci-opt public finite-difference scratch reuse - pending bench
+## 2026-06-21 - fsci-opt public finite-difference scratch reuse
 
 - Agent: cod-a / BlackThrush
 - Bead: `frankenscipy-8l8r1.141`
-- Decision: PENDING. Code-only disk-low commit. Do not count as release-ready
-  until the inline guard, same-worker focused timings, and SciPy oracle rows are
-  refreshed.
+- Decision: KEEP. The partial-resume pass measured all four helper rows faster
+  than the clone-per-dimension reference and faster than SciPy's public
+  `approx_fprime` route.
 - Lever: reuse one perturbed `Vec` in `numerical_gradient` and
   `numerical_jacobian` instead of cloning the input once per coordinate.
 
 | Gate | Result | Notes |
 | --- | --- | --- |
-| Scratch restoration guard | PENDING | run `cargo test -p fsci-opt numerical_finite_difference_helpers_restore_scratch_point --lib -- --nocapture` next turn |
-| Same-worker focused timing | PENDING | add/use focused `fsci-opt` helper rows for high-dimensional `numerical_gradient` and `numerical_jacobian` |
-| SciPy oracle | PENDING | compare equivalent forward-difference gradient/Jacobian helper rows against SciPy on the same problem sizes |
-| Formatting / diff hygiene | PARTIAL | `git diff --check` passed; changed-file `ubs` returned nonzero on existing broad `fsci-opt` inventory, so dedicated release gates remain pending |
+| Scratch restoration guard | PASS | rch `cargo test -p fsci-opt numerical_finite_difference_helpers_restore_scratch_point --lib -- --nocapture`: 1 passed |
+| Focused Criterion timing | PASS | rch `hz1`, one `fsci-opt` bench run; scratch reuse 1.08x-1.24x faster than clone reference |
+| SciPy oracle | PASS | local SciPy 1.17.1 / NumPy 2.4.3; Rust 25.90x-229.81x faster |
+| Conformance | PASS | rch `cargo test -p fsci-conformance --test diff_opt_numerical_grad_jac_hess -- --nocapture`: 1 passed |
+| Bench-target compile | PASS | rch `cargo check -p fsci-opt --bench optimize_bench` |
+| Formatting / diff hygiene | PASS | `rustfmt --edition 2024 --check crates/fsci-opt/benches/optimize_bench.rs`, `git diff --check`, and changed-file `ubs` all exited 0 |
+
+| Workload | Clone-reference Rust | Scratch-reuse Rust | SciPy oracle | Ratio |
+| --- | ---: | ---: | ---: | ---: |
+| `numerical_gradient/256` | 107.96 us | 97.924 us | 4037.153 us | 1.10x vs ref; 41.23x vs SciPy |
+| `numerical_gradient/512` | 403.55 us | 374.17 us | 9690.901 us | 1.08x vs ref; 25.90x vs SciPy |
+| `numerical_jacobian/128` | 24.938 us | 22.564 us | 5185.423 us | 1.11x vs ref; 229.81x vs SciPy |
+| `numerical_jacobian/256` | 109.51 us | 88.177 us | 18353.299 us | 1.24x vs ref; 208.14x vs SciPy |
 
 Readiness notes:
 
-- This is intentionally not in the measured-keep table. If the next bench wave
-  shows neutral or slower helper rows, revert the scratch reuse and record the
-  loss.
+- Release score for this narrow helper lever is `4/5`: measured keep with
+  conformance green, but the self-speedup is a constant-factor allocation win
+  rather than a new algorithmic class.
 
 ## 2026-06-21 - fsci-interpolate make_interp_spline compact rows - pending bench
 

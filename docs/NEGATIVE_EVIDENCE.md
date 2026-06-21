@@ -6,31 +6,40 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
-## 2026-06-21 - frankenscipy-8l8r1.141 - opt public finite-difference scratch reuse - CODE COMMITTED, PENDING BENCH
+## 2026-06-21 - frankenscipy-8l8r1.141 - opt public finite-difference scratch reuse - KEEP
 
 - Agent: cod-a / BlackThrush
-- Decision: PENDING. DISK-LOW paused new cargo bench/build timing work, so this
-  code-only lever must not be promoted to a measured keep until the next
-  benchmark wave.
+- Decision: KEEP. The resumed one-bench pass measured a consistent same-run
+  win against the pre-change clone-per-dimension reference and a clear win
+  against SciPy's public `approx_fprime` route on the same workloads.
 - Lever: `fsci_opt::numerical_gradient` and `fsci_opt::numerical_jacobian` now
   reuse one perturbed `Vec` across coordinates instead of cloning `x` once per
   dimension. The helper now matches the cheaper scratch-buffer pattern already
   used by `approx_fprime`.
-- Correctness guard in source: inline test
-  `numerical_finite_difference_helpers_restore_scratch_point` checks callback
-  count, derivative values, and that each callback observes at most one active
-  perturbation.
+- Rust bench command: `AGENT_NAME=BlackThrush RCH_REQUIRE_REMOTE=1
+  CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a rch exec --
+  cargo bench -p fsci-opt --bench optimize_bench -- finite_difference_helpers
+  --sample-size 10 --warm-up-time 1 --measurement-time 1 --noplot` on `hz1`.
+- SciPy oracle: local Python, SciPy 1.17.1 / NumPy 2.4.3,
+  `scipy.optimize.approx_fprime`, median of repeated loops.
 
-| Workload | Baseline Rust | Candidate Rust | SciPy oracle | Verdict |
+| Workload | Clone-reference Rust | Scratch-reuse Rust | SciPy oracle | Verdict |
 | --- | ---: | ---: | ---: | --- |
-| `numerical_gradient` public helper, high-dim forward diff | PENDING | PENDING | PENDING | pending-bench |
-| `numerical_jacobian` public helper, high-dim forward diff | PENDING | PENDING | PENDING | pending-bench |
+| `numerical_gradient/256` | 107.96 us | 97.924 us | 4037.153 us | keep: 1.10x faster than clone ref; 41.23x faster than SciPy |
+| `numerical_gradient/512` | 403.55 us | 374.17 us | 9690.901 us | keep: 1.08x faster than clone ref; 25.90x faster than SciPy |
+| `numerical_jacobian/128` | 24.938 us | 22.564 us | 5185.423 us | keep: 1.11x faster than clone ref; 229.81x faster than SciPy |
+| `numerical_jacobian/256` | 109.51 us | 88.177 us | 18353.299 us | keep: 1.24x faster than clone ref; 208.14x faster than SciPy |
 
-Pending ratio-vs-SciPy: N/A until the focused `fsci-opt` benchmark/SciPy oracle
-is run. Next turn should run crate-scoped tests and same-worker timing under
-`CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a`; if the helper
-rows are neutral or slower, revert this scratch reuse rather than extending it
-to Hessian or adaptive differentiation.
+Guards: rch `cargo test -p fsci-opt
+numerical_finite_difference_helpers_restore_scratch_point --lib --
+--nocapture` passed; rch `cargo test -p fsci-conformance --test
+diff_opt_numerical_grad_jac_hess -- --nocapture` passed; rch `cargo check -p
+fsci-opt --bench optimize_bench` passed after the bench harness switched to
+`std::hint::black_box`.
+
+Negative evidence: the gains are real but modest on scalar-gradient rows; do
+not extend this scratch-buffer pattern to Hessian/adaptive differentiation
+without a fresh top-5 allocation profile or a fused multi-output primitive.
 
 ## 2026-06-21 - frankenscipy-8l8r1.140 - sparse eigsh three-term Lanczos reject
 

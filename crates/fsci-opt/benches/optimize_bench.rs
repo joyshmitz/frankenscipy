@@ -3,15 +3,16 @@
 //!
 //! Groups: bfgs, lbfgsb, cg, powell, brentq, brenth, bisect, ridder
 
+use std::hint::black_box;
 use std::time::Duration;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use fsci_opt::DifferentialEvolutionOptions;
 use fsci_opt::{
     LeastSquaresOptions, MinimizeOptions, OptimizeMethod, RootMethod, RootOptions, bfgs, bisect,
     brenth, brentq, cg_pr_plus, differential_evolution, lbfgsb, least_squares,
-    linear_sum_assignment, powell, ridder,
+    linear_sum_assignment, numerical_gradient, numerical_jacobian, powell, ridder,
 };
-use fsci_opt::DifferentialEvolutionOptions;
 use fsci_runtime::RuntimeMode;
 
 // ── Test functions ────────────────────────────────────────────────────
@@ -338,8 +339,12 @@ fn bench_assignment(c: &mut Criterion) {
                 (0..n)
                     .map(|j| {
                         // LCG-based continuous values (few ties), matching scipy's uniform.
-                        let s = (i.wrapping_mul(1103515245).wrapping_add(j).wrapping_mul(12345)
-                            ^ (i.wrapping_mul(2654435761) >> 7)) as u64;
+                        let s = (i
+                            .wrapping_mul(1103515245)
+                            .wrapping_add(j)
+                            .wrapping_mul(12345)
+                            ^ (i.wrapping_mul(2654435761) >> 7))
+                            as u64;
                         (s as f64 / u64::MAX as f64) * (i % 9 + 1) as f64
                     })
                     .collect()
@@ -381,8 +386,130 @@ fn bench_differential_evolution(c: &mut Criterion) {
     group.finish();
 }
 
+fn reference_clone_gradient<F>(f: F, x: &[f64], eps: f64) -> Vec<f64>
+where
+    F: Fn(&[f64]) -> f64,
+{
+    let f0 = f(x);
+    let mut grad = Vec::with_capacity(x.len());
+    for i in 0..x.len() {
+        let mut xp = x.to_vec();
+        xp[i] += eps;
+        grad.push((f(&xp) - f0) / eps);
+    }
+    grad
+}
+
+fn reference_clone_jacobian<F>(f: F, x: &[f64], eps: f64) -> Vec<Vec<f64>>
+where
+    F: Fn(&[f64]) -> Vec<f64>,
+{
+    let f0 = f(x);
+    let mut jac = vec![vec![0.0; x.len()]; f0.len()];
+    for j in 0..x.len() {
+        let mut xp = x.to_vec();
+        xp[j] += eps;
+        let fp = f(&xp);
+        for i in 0..f0.len() {
+            jac[i][j] = (fp[i] - f0[i]) / eps;
+        }
+    }
+    jac
+}
+
+fn finite_difference_scalar(x: &[f64]) -> f64 {
+    x.iter()
+        .enumerate()
+        .map(|(i, &value)| {
+            let weight = (i % 7 + 1) as f64;
+            weight * value * value + 0.125 * value
+        })
+        .sum()
+}
+
+fn finite_difference_vector(x: &[f64]) -> Vec<f64> {
+    let mut sums = [0.0; 4];
+    for (i, &value) in x.iter().enumerate() {
+        sums[i & 3] += value * ((i % 11 + 1) as f64);
+    }
+    sums.to_vec()
+}
+
+fn bench_finite_difference_helpers(c: &mut Criterion) {
+    let mut group = c.benchmark_group("finite_difference_helpers");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(1));
+
+    for &dim in &[256usize, 512] {
+        let x: Vec<f64> = (0..dim)
+            .map(|i| ((i % 29) as f64 - 14.0) * 0.03125)
+            .collect();
+        group.bench_with_input(
+            BenchmarkId::new("gradient_clone_reference", dim),
+            &x,
+            |b, x| {
+                b.iter(|| {
+                    black_box(reference_clone_gradient(
+                        finite_difference_scalar,
+                        black_box(x),
+                        1.0e-6,
+                    ))
+                });
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("gradient_scratch_reuse", dim),
+            &x,
+            |b, x| {
+                b.iter(|| {
+                    black_box(numerical_gradient(
+                        finite_difference_scalar,
+                        black_box(x),
+                        1.0e-6,
+                    ))
+                });
+            },
+        );
+    }
+
+    for &dim in &[128usize, 256] {
+        let x: Vec<f64> = (0..dim)
+            .map(|i| ((i % 31) as f64 - 15.0) * 0.015625)
+            .collect();
+        group.bench_with_input(
+            BenchmarkId::new("jacobian_clone_reference", dim),
+            &x,
+            |b, x| {
+                b.iter(|| {
+                    black_box(reference_clone_jacobian(
+                        finite_difference_vector,
+                        black_box(x),
+                        1.0e-6,
+                    ))
+                });
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("jacobian_scratch_reuse", dim),
+            &x,
+            |b, x| {
+                b.iter(|| {
+                    black_box(numerical_jacobian(
+                        finite_difference_vector,
+                        black_box(x),
+                        1.0e-6,
+                    ))
+                });
+            },
+        );
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
+    bench_finite_difference_helpers,
     bench_assignment,
     bench_differential_evolution,
     bench_bfgs,
