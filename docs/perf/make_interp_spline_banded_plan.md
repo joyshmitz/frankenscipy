@@ -203,3 +203,75 @@ for col in 0..n {
   order factor_banded applied them (col ascending), and the back-sub window is
   [i, i+2·bw] (U upper bandwidth grows to 2·bw under pivoting). Keep the zero-skips so
   it stays bit-identical to solve_banded.
+
+### Plan 2 — paste-ready reference code (factor-once GCV trace, O(n³)→O(n²))
+
+UNVERIFIED (no-cargo authoring) — paste, `cargo check`, add the byte-diff test, then
+run make_smoothing_spline scipy-parity + suite 172/0. Split of `solve_banded`
+(line 2741) into factor + substitute; byte-identical to n separate solve_banded calls
+(same pivot/elim/FP order; stored L multiplier replaces the eliminated a[row][col],
+which back-sub never reads since it reads only j>i).
+
+```rust
+fn factor_banded(a: &mut [Vec<f64>], bw: usize) -> Result<Vec<usize>, InterpError> {
+    let n = a.len();
+    let mut perm = vec![0usize; n];
+    for col in 0..n {
+        let row_hi = (col + bw + 1).min(n);
+        let mut max_row = col;
+        let mut max_val = a[col][col].abs();
+        for (off, a_row) in a[(col + 1)..row_hi].iter().enumerate() {
+            let v = a_row[col].abs();
+            if v > max_val { max_val = v; max_row = col + 1 + off; }
+        }
+        if max_val < 1e-14 {
+            return Err(InterpError::InvalidArgument { detail: "singular matrix".to_string() });
+        }
+        if max_row != col { a.swap(col, max_row); }
+        perm[col] = max_row;
+        let col_hi = (col + 2 * bw + 1).min(n);
+        let pivot_diag = a[col][col];
+        for row in (col + 1)..row_hi {
+            if a[row][col] == 0.0 { continue; }
+            let factor = a[row][col] / pivot_diag;
+            let (head, tail) = a.split_at_mut(row);
+            let pivot = &head[col];
+            let target = &mut tail[0];
+            for j in (col + 1)..col_hi {          // U part only (j>col); a[row][col] reused for L
+                let pval = pivot[j];
+                if pval != 0.0 { target[j] -= factor * pval; }
+            }
+            target[col] = factor;                  // store L multiplier
+        }
+    }
+    Ok(perm)
+}
+
+fn subst_banded(a: &[Vec<f64>], perm: &[usize], b: &mut [f64], bw: usize) -> Vec<f64> {
+    let n = b.len();
+    for col in 0..n {                              // forward: same swap+L order as solve_banded
+        if perm[col] != col { b.swap(col, perm[col]); }
+        let row_hi = (col + bw + 1).min(n);
+        for row in (col + 1)..row_hi {
+            let factor = a[row][col];
+            if factor != 0.0 { b[row] -= factor * b[col]; }
+        }
+    }
+    let mut x = vec![0.0; n];                      // back: U
+    for i in (0..n).rev() {
+        let mut s = b[i];
+        let j_hi = (i + 2 * bw + 1).min(n);
+        for j in (i + 1)..j_hi {
+            let aij = a[i][j];
+            if aij != 0.0 { s -= aij * x[j]; }
+        }
+        x[i] = s / a[i][i];
+    }
+    x
+}
+```
+Trace loop (replaces per-column build+solve): build `lhs` once (band-restricted),
+`let perm = factor_banded(&mut lhs, 4)?;` then `for col { for i {b[i]=xtwx[i][col];}
+let z = subst_banded(&lhs,&perm,&mut b,4); tr += z[col]; }`. → O(n·bw² + n²·bw) per λ.
+BYTE-DIFF TEST: factor_banded+subst_banded == solve_banded to_bits on random banded
+systems, before flipping the trace loop.
