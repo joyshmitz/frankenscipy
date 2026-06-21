@@ -3640,3 +3640,28 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
     with `FSCI_REQUIRE_SCIPY_ORACLE=1`, exercising live SciPy.
 - Decision: KEEP the bench-harness fix and close the stale transform batch
   leaves. There is no production source change to revert.
+
+## 2026-06-21 - WIN + NEW VEIN: stats pdf_many work-gated parallel via par_continuous_map (StudentT shipped)
+- Agent: cod-a / BlackThrush. The high-end work-gate lever crosses into fsci-stats. The crate already
+  has a SUPERIOR work-gated primitive `par_continuous_map` (chunked, >=2048 elems/thread, no
+  per-element concat overhead — unlike fsci-special's par_map_indices) which cdf_many/sf_many/ppf_many
+  already use (2-9.9x wins). But `pdf_many`/`logpdf_many` were left SERIAL (`xs.iter().map().collect()`),
+  the symmetric gap. Because par_continuous_map has near-zero per-element overhead, it flips even the
+  cheap ~11ns pdf kernels at 2M (where fsci-special's par_map_indices could not — see ndtri_exp boundary).
+- StudentT pdf_many routed through par_continuous_map (byte-identical, order-preserving). Same-worker
+  hz1, n-range [-8,8]:
+
+  | n | serial | parallel | self | scipy.stats t.pdf (local) | vs SciPy |
+  | ---: | ---: | ---: | ---: | ---: | ---: |
+  | 2M | 21.58 ms | 9.81 ms | 2.20x | 272.27 ms | 27.8x faster |
+  | 4M | 42.40 ms | 17.07 ms | 2.48x | (~545 ms) | ~32x faster |
+
+- Score: same-worker self 2/0/0; vs SciPy already 12.6x serial → 27.8x parallel. Byte-identical (acc
+  unchanged serial vs parallel); StudentT tests 16/0. scipy.stats.t.pdf is slow (frozen-dist Python
+  dispatch ~136ns/elem) so fsci wins hugely either way; the work-gate is a pure +2.2x multicore extension.
+- VEIN (mechanical follow-up, byte-identical by construction): 13 more single-var continuous dists have
+  serial `pdf_many`/`logpdf_many` — BetaDist, InverseGamma, Chi, Nakagami, DoubleGamma, Erlang, GenNorm,
+  HalfGenNorm, VonMises, + others at lib.rs:1947/3036/3715/4222/4510. Uniform transform
+  `xs.iter().map(|&x| BODY).collect()` → `par_continuous_map(xs, |x| BODY)`, conformance-gated. (mvn/mvt
+  pdf_many already work-gated; pmf_many for discretes is a separate check.) Deferred to fresh context to
+  avoid hand-edit errors in the 30k-line hot file.

@@ -1098,9 +1098,7 @@ impl StudentT {
     pub fn pdf_many(&self, xs: &[f64]) -> Vec<f64> {
         let v = self.df;
         let coeff = gamma_ratio_t(v);
-        xs.iter()
-            .map(|&x| coeff * (1.0 + x * x / v).powf(-0.5 * (v + 1.0)))
-            .collect()
+        par_continuous_map(xs, |x| coeff * (1.0 + x * x / v).powf(-0.5 * (v + 1.0)))
     }
 
     /// Log-density at many points; hoists `gamma_ratio_t(df).ln()` like
@@ -1109,9 +1107,7 @@ impl StudentT {
     pub fn logpdf_many(&self, xs: &[f64]) -> Vec<f64> {
         let v = self.df;
         let log_coeff = gamma_ratio_t(v).ln();
-        xs.iter()
-            .map(|&x| log_coeff - 0.5 * (v + 1.0) * (1.0 + x * x / v).ln())
-            .collect()
+        par_continuous_map(xs, |x| log_coeff - 0.5 * (v + 1.0) * (1.0 + x * x / v).ln())
     }
 
     /// Cumulative distribution at many points — work-gated parallel map of the per-point
