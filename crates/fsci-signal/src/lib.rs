@@ -1954,13 +1954,13 @@ pub fn gausspulse(t: &[f64], fc: f64, bw: f64) -> Vec<f64> {
     // factor is a = (π·fc·bw)² / (−4·ln ref), not (−2·ln ref).
     let a = -(std::f64::consts::PI * fc * bw).powi(2) / (4.0 * ref_level.ln());
 
-    t.iter()
-        .map(|&ti| {
-            let envelope = (-a * ti * ti).exp();
-            let carrier = (2.0 * std::f64::consts::PI * fc * ti).cos();
-            envelope * carrier
-        })
-        .collect()
+    // Each sample is an independent (compute-bound) exp·cos; map it in parallel (work-gated).
+    par_index_fill(t.len(), |i| {
+        let ti = t[i];
+        let envelope = (-a * ti * ti).exp();
+        let carrier = (2.0 * std::f64::consts::PI * fc * ti).cos();
+        envelope * carrier
+    })
 }
 
 /// Frequency-swept cosine with polynomial instantaneous frequency.
@@ -29291,6 +29291,8 @@ mod tests {
         }
     }
 }
+
+
 
 
 
