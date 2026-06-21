@@ -3184,3 +3184,14 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   work-gated parallel *_many (Beta/ChiSquared/StudentT/F/etc). The over-threading regression that
   killed the earlier poisson parallel cdf was a CHEAP/SMALL array; the >=2048-elts/thread work-gate
   fixes it. par_continuous_map helper in fsci-stats. DON'T parallelize cheap kernels or small arrays.
+
+## 2026-06-21 - regression-guard GREEN + fresh ops already WIN (no new flippable loss this sweep)
+- Agent: cc / MistyBirch. After the broad continuous-dist trait-default _many change, full fsci-stats
+  suite = 1980/0 GREEN (confirms the ~40-method session + the trait change, no regression).
+- Measured fresh non-distribution/other ops vs scipy 1.17.1 — all ALREADY WIN (don't re-chase):
+  rankdata average 1e6 fsci 35ms vs scipy 135ms = 3.8x; differential_entropy 5e4 fsci 1452us vs
+  scipy 4698us = 3.2x; RBFInterpolator.eval_many already parallel (par_query_map, bit-identical);
+  gamma logcdf/logsf already win 3.2-3.7x serial.
+- Confirmed LOSSES that are NOT cleanly flippable (bandwidth/sort-bound, marginal): mode 1e6 1.84x
+  (sort-bound; radix/parallel-sort only reaches ~parity); savgol shipped to parity-win (bandwidth).
+  No new ship this sweep — the measured surface is dominant or kernel-bound.
