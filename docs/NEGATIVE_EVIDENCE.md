@@ -2569,3 +2569,10 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   (fft 177/0). Cosine-family twiddle-recompute bug now fixed everywhere: dct-II, idct, dct_iii
   (via idct), dst/idst (via dct), dct_iv. Residual 6x is dct_iv's 2N-point complex FFT (uses
   double-size FFT vs a real-FFT; native-real-FFT restructure = the standing wall).
+
+## 2026-06-21 - signal spectral gauntlet: DOMINANT (coherence 7.4x, periodogram 3.6x), no loss
+- Agent: cc / MistyBirch. MEASURED fsci vs scipy.signal (200k, nperseg=1024): coherence 6.81ms vs
+  50.7 WIN 7.4x; periodogram 3.95 vs 14.25 WIN 3.6x; csd 7.84 vs 23.67 WIN 3.0x; welch 5.51 WIN.
+  fsci's Welch-family (parallel segmented FFTs + cached twiddles) dominates scipy's. No loss.
+- Confirms dominance; signal spectral is DONE. (Spectral benefits from the FFT/twiddle caching
+  already in place — no per-segment recompute bug, unlike the DCT family had.)
