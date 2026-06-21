@@ -2654,3 +2654,14 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
 - Agent: cc / MistyBirch. MEASURED 500k: binned_statistic mean/50 5.53ms vs scipy 19.94 WIN 3.6x;
   binned_statistic_2d mean/50² 10.86 vs 36.81 WIN 3.4x; 2d std/50² 14.82 vs 37.09 WIN 2.5x.
   fsci's accumulate-optimized binning dominates scipy's. No loss. Another dominant surface confirmed.
+
+## 2026-06-21 - CORRECTION+FIX: ellipk/ellipe not a Cephes wall — par_map OVER-PARALLELIZES cheap kernels
+- Agent: cc / MistyBirch. ellipk HAS the Cephes ellpk polynomial (byte-matches scipy) — the earlier
+  "Cephes-coefficient wall" for it was WRONG. The 2.6x loss was par_map_indices parallelizing a
+  CHEAP O(1) kernel (~14ns/call) where thread overhead >> benefit: ellipk 100k 4.17ms parallel vs
+  1.43ms SERIAL (scipy 1.44). FIXED: real_par_min threshold in elliptic map_real_or_complex (default
+  256 for heavy callers; usize::MAX for ellipk/ellipe → serial real arm, complex arm stays parallel).
+  ellipk 2.9x loss -> parity; byte-identical (ellip 110/0). LEVER (reusable): par_map_indices gates
+  on LENGTH not COST → cheap poly/rational real kernels regress; serialize them. CHECK gamma (Lanczos
+  1.7x), erf, and other cheap special real arms for the same over-parallelization. Only ZETA is the
+  genuine series-vs-Cephes coefficient gap (Borwein, 9.8x).
