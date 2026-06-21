@@ -8565,6 +8565,41 @@ impl Poisson {
         ks.iter().map(|&k| cdf[k as usize]).collect()
     }
 
+    /// Survival function P(X>k) at many points via a mode-anchored pmf recurrence + suffix sum
+    /// (O(max_k) cheap mults) instead of a per-point regularized gamma. Tail-accurate (direct upper
+    /// sum, not 1-cdf). Matches scipy.stats.poisson.sf to ~1e-13 in the bulk/moderate tail; values
+    /// below ~1e-15 underflow to 0 (use the scalar `sf` for the deep tail).
+    #[must_use]
+    pub fn sf_many(&self, ks: &[u64]) -> Vec<f64> {
+        if ks.is_empty() {
+            return Vec::new();
+        }
+        if self.mu == 0.0 {
+            return ks.iter().map(|_| 0.0).collect();
+        }
+        let mu = self.mu;
+        let ln_mu = mu.ln();
+        let max_k = *ks.iter().max().unwrap() as usize;
+        // Extend past the mode so the upper tail is captured even when max_k < mu.
+        let k_hi = max_k.max(mu as usize + (12.0 * mu.sqrt()) as usize + 12);
+        let mode = (mu as usize).min(k_hi);
+        let mut pmf = vec![0.0f64; k_hi + 1];
+        pmf[mode] = (mode as f64 * ln_mu - mu - ln_gamma(mode as f64 + 1.0)).exp();
+        for j in (mode + 1)..=k_hi {
+            pmf[j] = pmf[j - 1] * mu / j as f64;
+        }
+        for j in (0..mode).rev() {
+            pmf[j] = pmf[j + 1] * (j + 1) as f64 / mu;
+        }
+        let mut suf = vec![0.0f64; k_hi + 2];
+        for k in (0..k_hi).rev() {
+            suf[k] = suf[k + 1] + pmf[k + 1];
+        }
+        ks.iter()
+            .map(|&k| suf[(k as usize).min(k_hi)].clamp(0.0, 1.0))
+            .collect()
+    }
+
     /// Probability mass function.
     pub fn pmf(&self, k: u64) -> f64 {
         if self.mu == 0.0 {
@@ -9080,6 +9115,56 @@ impl Binomial {
         }
         ks.iter()
             .map(|&k| if k >= n { 1.0 } else { cdf[k as usize] })
+            .collect()
+    }
+
+    /// Survival function P(X>k) at many points via a mode-anchored pmf recurrence + suffix sum.
+    /// Tail-accurate (direct upper sum). Matches scipy.stats.binom.sf to ~1e-12 in the bulk; deep
+    /// tail (<~1e-15) underflows to 0 (use the scalar `sf`).
+    #[must_use]
+    pub fn sf_many(&self, ks: &[u64]) -> Vec<f64> {
+        if ks.is_empty() {
+            return Vec::new();
+        }
+        let n = self.n;
+        let p = self.p;
+        if p == 0.0 {
+            return ks.iter().map(|_| 0.0).collect();
+        }
+        if p == 1.0 {
+            return ks.iter().map(|&k| if k < n { 1.0 } else { 0.0 }).collect();
+        }
+        let nf = n as f64;
+        let ln_p = p.ln();
+        let ln_1mp = (1.0 - p).ln();
+        let ratio = p / (1.0 - p);
+        let k_hi = n as usize;
+        let mode = (((nf + 1.0) * p) as usize).min(k_hi);
+        let mut pmf = vec![0.0f64; k_hi + 1];
+        pmf[mode] = (ln_gamma(nf + 1.0)
+            - ln_gamma(mode as f64 + 1.0)
+            - ln_gamma(nf - mode as f64 + 1.0)
+            + mode as f64 * ln_p
+            + (nf - mode as f64) * ln_1mp)
+            .exp();
+        for k in (mode + 1)..=k_hi {
+            pmf[k] = pmf[k - 1] * ((nf - k as f64 + 1.0) / k as f64) * ratio;
+        }
+        for k in (0..mode).rev() {
+            pmf[k] = pmf[k + 1] * ((k as f64 + 1.0) / (nf - k as f64)) / ratio;
+        }
+        let mut suf = vec![0.0f64; k_hi + 2];
+        for k in (0..k_hi).rev() {
+            suf[k] = suf[k + 1] + pmf[k + 1];
+        }
+        ks.iter()
+            .map(|&k| {
+                if k as usize >= k_hi {
+                    0.0
+                } else {
+                    suf[k as usize].clamp(0.0, 1.0)
+                }
+            })
             .collect()
     }
 }
@@ -56806,6 +56891,56 @@ mod tests {
     }
 
     #[test]
+    fn poisson_sf_many_matches_sf() {
+        // sf_many (mode-anchored recurrence + suffix sum) matches the per-point sf to ~1e-12 in the
+        // bulk/moderate tail. Includes max_k < mu (exercises the upper-tail buffer).
+        for &mu in &[3.7_f64, 50.0, 1000.0] {
+            let p = Poisson::new(mu);
+            for hi in [(3.0 * mu) as u64, (0.5 * mu) as u64 + 1] {
+                let ks: Vec<u64> = (0..=hi).collect();
+                let sm = p.sf_many(&ks);
+                for (i, &k) in ks.iter().enumerate() {
+                    let want = p.sf(k);
+                    if want > 1e-13 {
+                        assert!(
+                            (sm[i] - want).abs() < 1e-9,
+                            "sf_many mismatch mu={mu} k={k}: {} vs {want}",
+                            sm[i]
+                        );
+                    }
+                }
+            }
+        }
+        assert!(Poisson::new(5.0).sf_many(&[]).is_empty());
+    }
+
+    #[test]
+    fn binomial_sf_many_matches_sf() {
+        for b in [
+            Binomial::new(10, 0.3),
+            Binomial::new(200, 0.5),
+            Binomial::new(10, 0.0),
+            Binomial::new(10, 1.0),
+        ] {
+            let ks: Vec<u64> = (0..=(b.n + 2)).collect();
+            let sm = b.sf_many(&ks);
+            for (i, &k) in ks.iter().enumerate() {
+                let want = b.sf(k);
+                if want > 1e-13 {
+                    assert!(
+                        (sm[i] - want).abs() < 1e-9,
+                        "sf_many mismatch n={} p={} k={k}: {} vs {want}",
+                        b.n,
+                        b.p,
+                        sm[i]
+                    );
+                }
+            }
+        }
+        assert!(Binomial::new(10, 0.5).sf_many(&[]).is_empty());
+    }
+
+    #[test]
     fn poisson_implements_discrete_trait() {
         let p = Poisson::new(3.0);
         let d: &dyn DiscreteDistribution = &p;
@@ -78507,6 +78642,8 @@ mod tests {
         assert!(dist.cdf(5.0) > 0.99, "hypsecant CDF should be near 1 at 5");
     }
 }
+
+
 
 
 
