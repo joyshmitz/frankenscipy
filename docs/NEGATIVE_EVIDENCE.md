@@ -3209,3 +3209,16 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   (dist cdf/ppf/sf/isf — verified 0 mismatches) and closures ending in a libm call (chirp cos), but
   can be 1-ULP off for INLINE-ARITHMETIC closures the serial map FMA-vectorizes (boxcox). Always
   verify serial-vs-parallel byte-identity directly for inline-arithmetic maps, not just vs scipy.
+
+## 2026-06-21 - SWEEP confirms broad domination already in place (spatial/interpolate/cheap-windows)
+- Agent: cc / MistyBirch. After the signal-window vein (16 fns shipped), swept fresh areas — all
+  ALREADY WIN or already parallel (don't re-chase):
+  - spatial KDTree radius queries: query_ball_point_many 6.8ms vs scipy 96ms = 14.1x (thread::scope,
+    gate nq>=64); count_neighbors + query_pairs already parallel. taylor window shipped 22.4x.
+  - interpolate griddata: linear 1.5x, cubic 1.79x (LinearND/CloughTocher eval_many par_query_try_map).
+  - bartlett window 2.03ms vs scipy 40ms = 19.8x SERIAL (cheap abs/sub, bandwidth-bound — parallel
+    would be gilding, scipy is just slow). cosine/exponential/lanczos shipped 6-9x.
+- STANDING: the per-element/per-sample/per-query array surface is comprehensively parallel + dominant
+  (distributions 2-71x, special-fns 12-31x, signal+16 windows 6-23x, spatial queries, interpolate).
+  Remaining losses are documented WALLS: mode (sort), savgol (bandwidth, shipped to parity), boxcox/
+  sweep_poly (powf FMA, skipped), upfirdn, + kernel walls (FFT 5-smooth/Cephes-zeta/Qhull/HiGHS/LAPACK).
