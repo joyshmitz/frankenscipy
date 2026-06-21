@@ -2836,27 +2836,51 @@ fn chol_banded(a: &mut [Vec<f64>], bw: usize) -> Option<()> {
 /// Solve `a x = b` for one RHS where `a = L Lᵀ` from [`chol_banded`] (lower `bw`-band):
 /// forward-substitute `L y = b` (in place in `b`), then back-substitute `Lᵀ x = y`.
 /// O(n·bw). Tolerance-parity with `solve_banded` on the same SPD system.
-fn chol_subst(a: &[Vec<f64>], b: &mut [f64], bw: usize) -> Vec<f64> {
-    let n = b.len();
-    for i in 0..n {
-        let klo = i.saturating_sub(bw);
-        let mut s = b[i];
-        for k in klo..i {
-            s -= a[i][k] * b[k];
-        }
-        b[i] = s / a[i][i];
-    }
-    let mut x = vec![0.0; n];
+/// `tr(A⁻¹ B)` where `A = G Gᵀ` (`g` = [`chol_banded`] lower factor, lower bandwidth `bw`)
+/// and `B` is symmetric `bw`-banded. Only the band of `A⁻¹` (|i−j| ≤ bw) contributes
+/// (B is banded), and that band is recovered from `g` by the Erisman–Tinney SELECTED
+/// INVERSE backward recurrence in O(n·bw²) — no n solves. `z[i][d] = (A⁻¹)_{i,i+d}` for
+/// `d ∈ 0..=bw` (upper band incl. diagonal; A⁻¹ is symmetric). With `L_{ki}=g[k][i]/g[i][i]`
+/// (unit-lower) and `D_i=g[i][i]²`: `Z_{ij} = −Σ_{k=i+1}^{i+bw} L_{ki} Z_{kj}` (j>i) and
+/// `Z_{ii} = 1/D_i − Σ_{k} L_{ki} Z_{ik}`. Tolerance-parity with `Σ_col (A⁻¹ B)_{col,col}`.
+fn gcv_trace_selinv(g: &[Vec<f64>], b: &[Vec<f64>], n: usize, bw: usize) -> f64 {
+    let mut z = vec![vec![0.0_f64; bw + 1]; n];
     for i in (0..n).rev() {
-        let khi = (i + bw + 1).min(n);
-        let mut s = b[i];
-        for k in (i + 1)..khi {
-            // Lᵀ[i][k] = L[k][i] (lower band, row k > col i)
-            s -= a[k][i] * x[k];
+        let gii = g[i][i];
+        let kmax = (i + bw).min(n - 1);
+        // off-diagonals Z_{ij}, j = kmax..i+1 (descending), then the diagonal.
+        let mut j = kmax;
+        while j > i {
+            let mut s = 0.0_f64;
+            for k in (i + 1)..=kmax {
+                let lki = g[k][i] / gii;
+                if lki != 0.0 {
+                    let (lo, hi) = if k <= j { (k, j) } else { (j, k) };
+                    s -= lki * z[lo][hi - lo];
+                }
+            }
+            z[i][j - i] = s;
+            j -= 1;
         }
-        x[i] = s / a[i][i];
+        let mut s = 1.0 / (gii * gii);
+        for k in (i + 1)..=kmax {
+            let lki = g[k][i] / gii;
+            if lki != 0.0 {
+                s -= lki * z[i][k - i]; // Z_{ik}, k>i, just computed above
+            }
+        }
+        z[i][0] = s;
     }
-    x
+    // tr = Σ_i Z_ii B_ii + 2 Σ_i Σ_{d=1}^{bw} Z_{i,i+d} B_{i,i+d}  (both symmetric, banded)
+    let mut tr = 0.0_f64;
+    for i in 0..n {
+        tr += z[i][0] * b[i][i];
+        let dmax = bw.min(n - 1 - i);
+        for d in 1..=dmax {
+            tr += 2.0 * z[i][d] * b[i][i + d];
+        }
+    }
+    tr
 }
 
 #[derive(Debug)]
@@ -5905,10 +5929,11 @@ fn gcv_optimal_lambda(x_full: &[Vec<f64>], e_full: &[Vec<f64>], y: &[f64], w: &[
         // so the per-column loop was re-factoring the same (4,4)-banded matrix n times
         // (the residual O(n³): n columns × O(n²) build+factor). `lhs` is SPD (sum of two
         // Gram matrices, λ≥0), so factor it ONCE with banded Cholesky and substitute the
-        // n RHS columns → O(n·bw² + n²·bw) = O(n²). Tolerance-parity with the per-column
-        // solve_banded (same lhⁱ XtWX, different — Cholesky vs pivoted-LU — FP order); the
-        // GCV objective shifts by ≤~1e-12 so the bounded_minimize λ is effectively the same.
-        let mut tr = 0.0_f64;
+        // n RHS columns → O(n²). BUT only the trace is needed, and XtWX is bw-4 banded, so
+        // tr(lhs⁻¹ XtWX) = Σ_{|i−j|≤4} (lhs⁻¹)_{ij} (XtWX)_{ij} needs only the BAND of lhs⁻¹.
+        // The Erisman–Tinney SELECTED INVERSE recovers that band from the Cholesky factor in
+        // O(n·bw²) — no n solves → the whole GCV eval is O(n) (matches scipy's Reinsch). The
+        // λ chosen by bounded_minimize is the same (tolerance-parity, ≤~1e-12).
         let mut lhs = vec![vec![0.0_f64; n]; n];
         for i in 0..n {
             let jlo = i.saturating_sub(4);
@@ -5917,16 +5942,10 @@ fn gcv_optimal_lambda(x_full: &[Vec<f64>], e_full: &[Vec<f64>], y: &[f64], w: &[
                 lhs[i][j] = xtwx[i][j] + lam * xte[i][j];
             }
         }
-        match chol_banded(&mut lhs, 4) {
-            Some(()) => {
-                for col in 0..n {
-                    let mut b: Vec<f64> = (0..n).map(|i| xtwx[i][col]).collect();
-                    let z = chol_subst(&lhs, &mut b, 4);
-                    tr += z[col];
-                }
-            }
+        let tr = match chol_banded(&mut lhs, 4) {
+            Some(()) => gcv_trace_selinv(&lhs, &xtwx, n, 4),
             None => return f64::INFINITY,
-        }
+        };
         let denom = (1.0 - tr / nf).powi(2);
         numer / denom
     };

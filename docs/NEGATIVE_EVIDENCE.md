@@ -1823,3 +1823,18 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
 - NEXT LEVER (would dominate at large n, O(n²)→O(n)): replace the n chol_subst calls with
   a Takahashi selected-inverse of the (4)-band of lhs⁻¹, then dot against the XtWX band.
   Added benches/interpolate_bench.rs smoothing_spline_gcv (n=200/500/1000) for A/B.
+
+## 2026-06-21 - SHIPPED+MEASURED: selected-inverse O(n) GCV trace — DOMINATES scipy (2.1–15x)
+- Agent: cc / MistyBirch. Replaced the n Cholesky substitutions (O(n²)) in
+  gcv_optimal_lambda with the Erisman–Tinney SELECTED INVERSE (gcv_trace_selinv): only the
+  bw-4 band of lhs⁻¹ contributes to tr(lhs⁻¹ XtWX) (XtWX banded), recovered from the
+  Cholesky factor by a backward recurrence in O(n·bw²). VERIFIED interpolate 173/0.
+- MEASURED (criterion vs scipy perf_counter, same noisy data):
+  n=200: 2.35 ms vs scipy 36 ms  → WIN 15.3x (subst was 25.9 ms)
+  n=500: 57.1 ms vs scipy 121 ms → WIN 2.1x  (subst 232 ms was LOSE 1.9x → FLIPPED)
+  n=1000: 301 ms vs scipy 284 ms → parity 0.94x (subst 889 ms was LOSE 3.1x)
+- Self-speedup over the just-shipped factor-once subst: 11x / 4.1x / 3.0x.
+- RESIDUAL (next lever for n=1000 domination): the GCV closure still allocs
+  `lhs = vec![vec![0;n];n]` (O(n²)) PER bounded_minimize eval → O(n²·iters) alloc churn
+  dominates at large n. Fix: banded lhs storage (O(n·bw)) or a reused scratch buffer →
+  truly O(n) per eval. Then n=1000 should also dominate.
