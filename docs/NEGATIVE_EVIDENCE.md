@@ -3270,8 +3270,16 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
 
 - Score: same-worker self 2/0/0; vs local SciPy 2/0/0. ndtri serial was a 1.14x SciPy loss → 1.99x win.
   Gates: convenience tests 316/0; byte-identical. High-end work-gate now flips gamma/gammaln/digamma +
-  erf/erfc + ellipk/ellipe + ndtr + ndtri (5 families). ndtri_exp is the remaining heavier serial
-  candidate (map_real, ~similar inverse) — same map_real_wg one-liner if it measures a flip.
+  erf/erfc + ellipk/ellipe + ndtr + ndtri (5 families).
+- BOUNDARY (ndtri_exp = REVERT, ~0-gain): measured ndtri_exp (the heavier-looking inverse) and it does
+  NOT cleanly flip — kept serial. Same-worker hz1: 2M serial 21.82ms vs parallel 21.00ms = 1.04x
+  (noise-level self-speedup), 4M serial 62.67ms vs parallel 28.68ms = 2.18x. At the negative-log-prob
+  input range the kernel is only ~11ns/elem (cheaper than ndtri's ~22ns), so 2M sits right at the
+  par break-even; work-gating at 1<<20 would parallelize the 1M-2M band for no gain (possible slight
+  regression). And fsci already BEATS SciPy serially (2M 21.82ms vs SciPy 53.23ms = 2.44x; 4M 62.67ms
+  vs 97.10ms = 1.55x), so there is no loss to flip. Left as `map_real` (serial). This maps the lever's
+  lower boundary: it pays out for ~22ns+ kernels at n>=1M, but a ~11ns kernel needs n>=4M to clear
+  break-even — not worth a per-function threshold when serial already dominates SciPy.
 
 ## 2026-06-21 - dst_iv twiddle reuse (byte-id); DCT/DST twiddle-recompute bug fully closed
 - Agent: cc / MistyBirch. dst_iv recomputed the dct-IV twiddle per coefficient → reuse the cached
