@@ -8660,15 +8660,13 @@ impl Poisson {
     #[must_use]
     pub fn pmf_many(&self, ks: &[u64]) -> Vec<f64> {
         let ln_mu = self.mu.ln();
-        ks.iter()
-            .map(|&k| {
+        par_discrete_map(ks, |k| {
                 if self.mu == 0.0 {
                     return if k == 0 { 1.0 } else { 0.0 };
                 }
                 let ln_pmf = k as f64 * ln_mu - self.mu - ln_gamma(k as f64 + 1.0);
                 ln_pmf.exp()
             })
-            .collect()
     }
 
     /// Cumulative distribution at many points, computed by a mode-anchored pmf recurrence + prefix
@@ -9251,8 +9249,7 @@ impl Binomial {
         let lg_n1 = ln_gamma(self.n as f64 + 1.0);
         let ln_p = self.p.ln();
         let ln_1mp = (1.0 - self.p).ln();
-        ks.iter()
-            .map(|&k| {
+        par_discrete_map(ks, |k| {
                 if k > self.n {
                     return 0.0;
                 }
@@ -9267,7 +9264,6 @@ impl Binomial {
                 let ln_pmf = ln_comb + k as f64 * ln_p + (self.n - k) as f64 * ln_1mp;
                 ln_pmf.exp()
             })
-            .collect()
     }
 
     /// Cumulative distribution at many points via a mode-anchored pmf recurrence + prefix sum
@@ -9571,8 +9567,7 @@ impl BetaBinomial {
         let lg_n1 = ln_gamma(self.n as f64 + 1.0);
         let lg_nab = ln_gamma(self.n as f64 + self.a + self.b);
         let ln_beta_den = ln_gamma(self.a) + ln_gamma(self.b) - ln_gamma(self.a + self.b);
-        ks.iter()
-            .map(|&k| {
+        par_discrete_map(ks, |k| {
                 if k > self.n {
                     return f64::NEG_INFINITY;
                 }
@@ -9582,7 +9577,6 @@ impl BetaBinomial {
                     ln_gamma(kf + self.a) + ln_gamma((self.n - k) as f64 + self.b) - lg_nab;
                 ln_comb + ln_beta_num - ln_beta_den
             })
-            .collect()
     }
 
     /// Pmf at many outcomes; hoists the same five lgamma terms as
@@ -9592,8 +9586,7 @@ impl BetaBinomial {
         let lg_n1 = ln_gamma(self.n as f64 + 1.0);
         let lg_nab = ln_gamma(self.n as f64 + self.a + self.b);
         let ln_beta_den = ln_gamma(self.a) + ln_gamma(self.b) - ln_gamma(self.a + self.b);
-        ks.iter()
-            .map(|&k| {
+        par_discrete_map(ks, |k| {
                 if k > self.n {
                     return 0.0;
                 }
@@ -9603,7 +9596,6 @@ impl BetaBinomial {
                     ln_gamma(kf + self.a) + ln_gamma((self.n - k) as f64 + self.b) - lg_nab;
                 (ln_comb + ln_beta_num - ln_beta_den).exp()
             })
-            .collect()
     }
 }
 
@@ -10517,8 +10509,7 @@ impl NegBinomial {
         let lg_n = ln_gamma(self.n);
         let n_ln_p = self.n * self.p.ln();
         let ln_1mp = (1.0 - self.p).ln();
-        ks.iter()
-            .map(|&k| {
+        par_discrete_map(ks, |k| {
                 if self.p == 1.0 {
                     return if k == 0 { 1.0 } else { 0.0 };
                 }
@@ -10527,7 +10518,6 @@ impl NegBinomial {
                 let ln_pmf = ln_comb + n_ln_p + kf * ln_1mp;
                 ln_pmf.exp()
             })
-            .collect()
     }
 
     /// Cumulative distribution at many points via a mode-anchored pmf recurrence + prefix sum
@@ -10827,8 +10817,7 @@ impl Hypergeometric {
             0.0
         };
         let k_max = n.min(big_n);
-        ks.iter()
-            .map(|&k| {
+        par_discrete_map(ks, |k| {
                 let kf = k as f64;
                 if kf < k_min || kf > k_max {
                     return f64::NEG_INFINITY;
@@ -10840,7 +10829,6 @@ impl Hypergeometric {
                     + g_bign1
                     + g_mbign1
             })
-            .collect()
     }
 
     /// Pmf at many outcomes; hoists the same five lgamma terms as
@@ -30534,6 +30522,36 @@ where
             scope.spawn(move || {
                 for (slot, &x) in block.iter_mut().zip(xblock.iter()) {
                     *slot = fref(x);
+                }
+            });
+        }
+    });
+    out
+}
+
+/// Discrete-index sibling of `par_continuous_map` for `pmf_many(&[u64])`: same WORK-gated chunked
+/// parallel map (>=2048 elems/thread; small arrays stay serial) for costly per-point pmf kernels
+/// (ln_gamma/ln_beta). Order-preserving -> byte-identical to `ks.iter().map(f).collect()`.
+fn par_discrete_map<F>(ks: &[u64], f: F) -> Vec<f64>
+where
+    F: Fn(u64) -> f64 + Sync,
+{
+    let n = ks.len();
+    let avail = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let nthreads = (n / 2048).clamp(1, avail);
+    if nthreads <= 1 {
+        return ks.iter().map(|&k| f(k)).collect();
+    }
+    let chunk = n.div_ceil(nthreads);
+    let mut out = vec![0.0f64; n];
+    let fref = &f;
+    std::thread::scope(|scope| {
+        for (block, kblock) in out.chunks_mut(chunk).zip(ks.chunks(chunk)) {
+            scope.spawn(move || {
+                for (slot, &k) in block.iter_mut().zip(kblock.iter()) {
+                    *slot = fref(k);
                 }
             });
         }

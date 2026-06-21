@@ -3668,3 +3668,22 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   ~2.2x large-array multicore extension StudentT measured, harmless for small arrays (work-gated >=2048
   elems/thread). mvn/mvt pdf_many were already work-gated; pmf_many for discrete dists remains a
   separate same-pattern candidate.
+
+## 2026-06-21 - WIN: discrete pmf_many work-gated parallel via new par_discrete_map — 4-5x self, 6.9x scipy
+- Agent: cod-a / BlackThrush. Extends the stats work-gate to DISCRETE dists. Added `par_discrete_map`
+  (a `&[u64]` sibling of par_continuous_map, same chunked >=2048/thread gate) and routed the 6 discrete
+  pmf_many/logpmf_many that are independent maps (Poisson/Binomial/BetaBinomial/NegBinomial/Hypergeometric
+  + logpmf) — NOT the recurrence-based cdf/sf sweeps (those are sequential, correctly skipped). The pmf
+  kernel is heavy (ln_gamma/ln_beta ~35ns) so it flips big. Byte-identical (acc unchanged; brace-matched
+  script relocates BODY verbatim).
+- Same-worker hz1, Poisson pmf_many (mu=12), serial baseline by forcing par_discrete_map serial:
+
+  | n | serial | parallel | self | scipy.stats poisson.pmf | vs SciPy |
+  | ---: | ---: | ---: | ---: | ---: | ---: |
+  | 2M | 70.15 ms | 17.08 ms | 4.10x | 118.56 ms | 6.94x faster |
+  | 4M | 116.75 ms | 22.93 ms | 5.10x | (~237 ms) | ~10x faster |
+
+- Score: same-worker self 2/0/0; vs SciPy 6.9x. Gates: RCH build clean; full stats lib suite 1980/0
+  (covers pmf_many consistency); byte-identical. Heavier kernel (ln_gamma) → bigger self-speedup than
+  the ~11ns pdf kernels (4-5x vs 2.2x). The stats work-gate vein (par_continuous_map for pdf/cdf/sf/ppf
+  + par_discrete_map for pmf) is now complete for the independent-map surfaces.
