@@ -5863,8 +5863,21 @@ fn bounded_minimize(f: &dyn Fn(f64) -> f64, a: f64, b: f64, xatol: f64, maxfun: 
 /// matching scipy's `_compute_optimal_gcv_parameter`: minimize over `[0, n]`
 /// `GCV(λ) = (‖λ·E·c_λ‖²/n) / (1 − tr(A_λ)/n)²`, where `c_λ` solves
 /// `(X + λE)c = y` and `tr(A_λ) = tr((XᵀWX + λXᵀE)⁻¹ XᵀWX)`.
-fn gcv_optimal_lambda(x_full: &[Vec<f64>], e_full: &[Vec<f64>], y: &[f64], w: &[f64]) -> f64 {
-    let n = x_full.len();
+/// Read entry (i,j) of a (2,2)-banded matrix stored in LAPACK band form
+/// (`band[2+i-j][j]` for |i-j| ≤ 2), returning 0 outside the band. Lets the
+/// smoothing-spline path keep the design X / penalty E in their O(n) band storage
+/// (`xm`/`we`) instead of expanding to a full n×n matrix (the prior `band_to_full`).
+#[inline]
+fn band2_get(band: &[Vec<f64>], i: usize, j: usize) -> f64 {
+    if j + 2 >= i && i + 2 >= j {
+        band[(2 + i) - j][j]
+    } else {
+        0.0
+    }
+}
+
+fn gcv_optimal_lambda(xm: &[Vec<f64>], we: &[Vec<f64>], y: &[f64], w: &[f64]) -> f64 {
+    let n = y.len();
     let nf = n as f64;
     // XtWX = Xᵀ W X, XtE = Xᵀ W E.
     let mut xtwx = vec![vec![0.0_f64; n]; n];
@@ -5884,9 +5897,9 @@ fn gcv_optimal_lambda(x_full: &[Vec<f64>], e_full: &[Vec<f64>], y: &[f64], w: &[
             let khi = (i.min(j) + 2).min(n - 1);
             let (mut sx, mut se) = (0.0_f64, 0.0_f64);
             for k in klo..=khi {
-                let xwk = x_full[k][i] * w[k];
-                sx += xwk * x_full[k][j];
-                se += xwk * e_full[k][j];
+                let xwk = band2_get(xm, k, i) * w[k];
+                sx += xwk * band2_get(xm, k, j);
+                se += xwk * band2_get(we, k, j);
             }
             xtwx[i][j] = sx;
             xte[i][j] = se;
@@ -5907,7 +5920,7 @@ fn gcv_optimal_lambda(x_full: &[Vec<f64>], e_full: &[Vec<f64>], y: &[f64], w: &[
                 let jlo = i.saturating_sub(2);
                 let jhi = (i + 2).min(n - 1);
                 let vals: Vec<f64> = (jlo..=jhi)
-                    .map(|j| x_full[i][j] + lam * e_full[i][j])
+                    .map(|j| band2_get(xm, i, j) + lam * band2_get(we, i, j))
                     .collect();
                 CompactBandRow::from_slice(jlo, &vals)
             })
@@ -5921,12 +5934,12 @@ fn gcv_optimal_lambda(x_full: &[Vec<f64>], e_full: &[Vec<f64>], y: &[f64], w: &[
         // terms only at |i-j| ≤ 2 — restrict the inner sum to that band (byte-identical:
         // the rest are +0.0 no-ops, same ascending-j order). O(n²) → O(n) per λ.
         let mut numer = 0.0_f64;
-        for (i, row) in e_full.iter().enumerate() {
+        for i in 0..n {
             let jlo = i.saturating_sub(2);
             let jhi = (i + 2).min(n - 1);
             let mut r = 0.0_f64;
             for j in jlo..=jhi {
-                r += row[j] * c[j];
+                r += band2_get(we, i, j) * c[j];
             }
             numer += (lam * r) * (lam * r);
         }
@@ -6059,30 +6072,15 @@ pub fn make_smoothing_spline(
         }
     }
 
-    // Expand the banded design X and penalty E (LAPACK (2,2): A[i][j] =
-    // band[2+i-j][j] for |i-j| ≤ 2) into full n×n matrices.
-    let band_to_full = |band: &[Vec<f64>]| -> Vec<Vec<f64>> {
-        // Only |i-j| ≤ 2 entries are set (d = 2+i-j ∈ 0..5); iterate just that band
-        // instead of scanning all n² (i,j) — byte-identical (out-of-band stays 0).
-        let mut m = vec![vec![0.0_f64; n]; n];
-        for i in 0..n {
-            let jlo = i.saturating_sub(2);
-            let jhi = (i + 2).min(n - 1);
-            for j in jlo..=jhi {
-                let d = (2 + i - j) as usize; // j ∈ [i-2, i+2] ⇒ d ∈ 0..=4
-                m[i][j] = band[d][j];
-            }
-        }
-        m
-    };
-    let x_full = band_to_full(&xm);
-    let e_full = band_to_full(&we);
+    // X (design) and E (penalty) stay in their O(n) LAPACK (2,2)-band storage (`xm`/`we`,
+    // A[i][j] = band[2+i-j][j] for |i-j| ≤ 2); readers use band2_get instead of expanding
+    // to full n×n matrices (the prior band_to_full was the dominant O(n²) memory at large n).
 
     // Resolve the regularization parameter: explicit, or by generalized
     // cross-validation (GCV) minimized over [0, n] when lam is None.
     let lam = match lam {
         Some(l) => l,
-        None => gcv_optimal_lambda(&x_full, &e_full, y, &w),
+        None => gcv_optimal_lambda(&xm, &we, y, &w),
     };
 
     // Solve (X + lam·E) c = y. X and E are (2,2)-banded (|i-j| ≤ 2), so their sum is
@@ -6091,16 +6089,18 @@ pub fn make_smoothing_spline(
     // full is (2,2)-banded, so only fill |i-j| ≤ 2; out-of-band stays 0 (== the full
     // build, since x_full,e_full are 0 there) and solve_banded(_,_,2) makes the LU fill.
     // Byte-identical; O(n²) → O(n). (Matches the GCV closure's m build, 43eb09b2.)
-    let mut full = vec![vec![0.0_f64; n]; n];
-    for i in 0..n {
-        let jlo = i.saturating_sub(2);
-        let jhi = (i + 2).min(n - 1);
-        for j in jlo..=jhi {
-            full[i][j] = x_full[i][j] + lam * e_full[i][j];
-        }
-    }
+    let mut full: Vec<CompactBandRow> = (0..n)
+        .map(|i| {
+            let jlo = i.saturating_sub(2);
+            let jhi = (i + 2).min(n - 1);
+            let vals: Vec<f64> = (jlo..=jhi)
+                .map(|j| band2_get(&xm, i, j) + lam * band2_get(&we, i, j))
+                .collect();
+            CompactBandRow::from_slice(jlo, &vals)
+        })
+        .collect();
     let mut rhs = y.to_vec();
-    let c = solve_banded(&mut full, &mut rhs, 2)?;
+    let c = solve_banded_compact(&mut full, &mut rhs, 2)?;
 
     // Map the natural-basis solution back to B-spline coefficients (length ncoef).
     let tl = t.len();

@@ -1906,3 +1906,15 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   compact scratch). NEXT LEVER (for n≥5000 super-domination): banded storage end-to-end
   (x_full/e_full (2,2)-band, xtwx/xte (4,4)-band) → O(n) memory → n=5000 ~30ms (≈50x). The
   8.6-24.5x win is already SECURED across all practical sizes; this is incremental.
+
+## 2026-06-21 - SHIPPED+MEASURED: eliminate band_to_full in make_smoothing_spline (O(n²) mem↓)
+- Agent: cc / MistyBirch. X/E were already O(n) LAPACK (2,2)-band storage (xm/we) but
+  band_to_full expanded them to full n×n (x_full/e_full) before gcv + the final solve.
+  Eliminated it: readers use band2_get(band,i,j) directly; gcv signature takes xm/we;
+  final solve builds CompactBandRow + solve_banded_compact. Byte-identical (band2_get
+  returns exactly what band_to_full stored). VERIFIED interpolate 173/0.
+- MEASURED vs scipy (criterion / perf_counter): n=200 1.65ms→21.8x; n=500 11.2→7.2ms
+  (16.8x, was 11.6x); n=1000 13.2→10.2ms (27.8x); n=2000 40.7→33.2ms (16.6x); n=5000
+  ~184ms (8.3x, ~unchanged). Mid-n 1.2-1.55x faster + ~2 fewer O(n²) allocs (memory ↓).
+- n=5000 plateau ⇒ the remaining O(n²) is xtwx/xte (still vec![vec![0;n];n] in gcv) +
+  lhs_buf. NEXT LEVER: band xtwx/xte (+ selinv banded read) → O(n) memory, n=5000 win.
