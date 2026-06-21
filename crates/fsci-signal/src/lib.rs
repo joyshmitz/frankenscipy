@@ -12740,9 +12740,7 @@ pub fn cosine(n: usize) -> Vec<f64> {
         return vec![1.0];
     }
     let nf = n as f64;
-    (0..n)
-        .map(|i| (std::f64::consts::PI * (i as f64 + 0.5) / nf).sin())
-        .collect()
+    par_index_fill(n, |i| (std::f64::consts::PI * (i as f64 + 0.5) / nf).sin())
 }
 
 /// Generic weighted sum of cosine terms window.
@@ -12863,9 +12861,7 @@ pub fn exponential(
     }
     let m = if sym { n } else { n + 1 };
     let center = center.unwrap_or((m as f64 - 1.0) / 2.0);
-    let mut window: Vec<f64> = (0..m)
-        .map(|i| (-(i as f64 - center).abs() / tau).exp())
-        .collect();
+    let mut window = par_index_fill(m, |i| (-(i as f64 - center).abs() / tau).exp());
     if !sym {
         window.truncate(n);
     }
@@ -12888,17 +12884,15 @@ pub fn lanczos(n: usize) -> Vec<f64> {
         return vec![1.0];
     }
     let nf = n as f64;
-    (0..n)
-        .map(|i| {
-            let x = 2.0 * (i as f64) / (nf - 1.0) - 1.0;
-            if x.abs() < 1e-10 {
-                1.0
-            } else {
-                let pi_x = std::f64::consts::PI * x;
-                pi_x.sin() / pi_x
-            }
-        })
-        .collect()
+    par_index_fill(n, |i| {
+        let x = 2.0 * (i as f64) / (nf - 1.0) - 1.0;
+        if x.abs() < 1e-10 {
+            1.0
+        } else {
+            let pi_x = std::f64::consts::PI * x;
+            pi_x.sin() / pi_x
+        }
+    })
 }
 
 fn fft_real_parts(input: &[fsci_fft::Complex64]) -> Vec<f64> {
@@ -29273,6 +29267,7 @@ mod tests {
         }
     }
 }
+
 
 
 
