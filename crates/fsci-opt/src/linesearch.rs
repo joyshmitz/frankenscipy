@@ -623,17 +623,19 @@ fn ls_zoom(
     let mut a_rec = 0.0;
     loop {
         let dalpha = a_hi - a_lo;
-        let (a, b) = if dalpha < 0.0 { (a_hi, a_lo) } else { (a_lo, a_hi) };
+        let (a, b) = if dalpha < 0.0 {
+            (a_hi, a_lo)
+        } else {
+            (a_lo, a_hi)
+        };
 
         let cchk = delta1 * dalpha;
         let mut a_j: Option<f64> = None;
         if i > 0 {
             a_j = ls_cubicmin(a_lo, phi_lo, derphi_lo, a_hi, phi_hi, a_rec, phi_rec);
         }
-        let use_quad = i == 0
-            || a_j.is_none()
-            || a_j.unwrap() > b - cchk
-            || a_j.unwrap() < a + cchk;
+        let use_quad =
+            i == 0 || a_j.is_none() || a_j.unwrap() > b - cchk || a_j.unwrap() < a + cchk;
         if use_quad {
             let qchk = delta2 * dalpha;
             a_j = ls_quadmin(a_lo, phi_lo, derphi_lo, a_hi, phi_hi);
