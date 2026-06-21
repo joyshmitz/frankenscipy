@@ -2586,3 +2586,11 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   INHERENT (window functions built once; chirp/von-Mises/lombscargle phases are data-dependent
   = not cacheable). The DCT family was the only cacheable-twiddle recompute bug (now fully fixed).
 - Net: lombscargle dominant; dctn is the DCT/FFT wall at N-D. No new clean loss.
+
+## 2026-06-21 - spatial cdist gauntlet: cosine/correlation parity; cdist_minkowski ADDED (15x win)
+- Agent: cc / MistyBirch. MEASURED cdist 1500²×10: fsci cosine 7.45 vs scipy 8.89 (parity);
+  correlation 9.03 vs 7.92 (parity). GAP: cdist_metric lacked Minkowski/Mahalanobis/SEuclidean
+  (DistanceMetric derives Eq → can't hold f64 p). scipy cdist-minkowski p=3 = 284ms (slow per-elem
+  pow). SHIPPED standalone parallel cdist_minkowski (cdist_fill + scalar minkowski): 19ms = WIN 15x.
+  Conformance test vs scalar minkowski (p=1/1.5/2/3). Mahalanobis/SEuclidean still gaps (need
+  VI-matrix / variance-vector params — separate).
