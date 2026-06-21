@@ -945,6 +945,16 @@ where
     resolved_options.max_step = max_step;
     validate_events_with_audit(resolved_options.events.as_deref(), audit_ledger)?;
 
+    // Validate the initial event values at (t0, y0) before constructing the solver, which evaluates
+    // the RHS for initial step-size selection. This rejects a non-finite initial event value with
+    // zero RHS calls (solve_ivp_rejects_non_finite_initial_event_value), matching the contract that
+    // initial event validation runs before any stepping.
+    if let Some(evs) = resolved_options.events.as_ref() {
+        for (i, ev) in evs.iter().enumerate() {
+            validate_event_value(i, (ev.func)(t0, options.y0))?;
+        }
+    }
+
     if let Some(t_eval) = resolved_options.t_eval {
         validate_t_eval_with_audit(t_eval, t0, tf, audit_ledger)?;
     }
