@@ -3659,9 +3659,12 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
 - Score: same-worker self 2/0/0; vs SciPy already 12.6x serial → 27.8x parallel. Byte-identical (acc
   unchanged serial vs parallel); StudentT tests 16/0. scipy.stats.t.pdf is slow (frozen-dist Python
   dispatch ~136ns/elem) so fsci wins hugely either way; the work-gate is a pure +2.2x multicore extension.
-- VEIN (mechanical follow-up, byte-identical by construction): 13 more single-var continuous dists have
-  serial `pdf_many`/`logpdf_many` — BetaDist, InverseGamma, Chi, Nakagami, DoubleGamma, Erlang, GenNorm,
-  HalfGenNorm, VonMises, + others at lib.rs:1947/3036/3715/4222/4510. Uniform transform
-  `xs.iter().map(|&x| BODY).collect()` → `par_continuous_map(xs, |x| BODY)`, conformance-gated. (mvn/mvt
-  pdf_many already work-gated; pmf_many for discretes is a separate check.) Deferred to fresh context to
-  avoid hand-edit errors in the 30k-line hot file.
+- VEIN COMPLETED (commit after StudentT): the remaining 13 single-var continuous dists' `pdf_many` +
+  their `logpdf_many` (25 functions: BetaDist, InverseGamma, Chi, Nakagami, DoubleGamma, Erlang, GenNorm,
+  HalfGenNorm, VonMises, F, ChiSquared, GenGamma, ...) were routed through `par_continuous_map` via a
+  deterministic brace-matched script that relocates each closure BODY VERBATIM — cannot alter semantics,
+  byte-identical by construction. Gates: RCH `cargo build -p fsci-stats` clean; full stats lib suite
+  **1980/0** (includes pdf_many/logpdf_many consistency checks); net -50 lines. Each gets the same
+  ~2.2x large-array multicore extension StudentT measured, harmless for small arrays (work-gated >=2048
+  elems/thread). mvn/mvt pdf_many were already work-gated; pmf_many for discrete dists remains a
+  separate same-pattern candidate.

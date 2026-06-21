@@ -1922,8 +1922,7 @@ impl ChiSquared {
         let k2 = 0.5 * self.df;
         let k2_ln2 = k2 * 2.0_f64.ln();
         let lg = ln_gamma(k2);
-        xs.iter()
-            .map(|&x| {
+        par_continuous_map(xs, |x| {
                 if x < 0.0 {
                     return f64::NEG_INFINITY;
                 }
@@ -1938,7 +1937,6 @@ impl ChiSquared {
                 }
                 (k2 - 1.0) * x.ln() - 0.5 * x - k2_ln2 - lg
             })
-            .collect()
     }
 
     /// Density at many points; hoists `ln_gamma(df/2)` like
@@ -1948,8 +1946,7 @@ impl ChiSquared {
         let k2 = 0.5 * self.df;
         let k2_ln2 = k2 * 2.0_f64.ln();
         let lg = ln_gamma(k2);
-        xs.iter()
-            .map(|&x| {
+        par_continuous_map(xs, |x| {
                 if x < 0.0 {
                     return 0.0;
                 }
@@ -1964,7 +1961,6 @@ impl ChiSquared {
                 }
                 ((k2 - 1.0) * x.ln() - 0.5 * x - k2_ln2 - lg).exp()
             })
-            .collect()
     }
 
     /// Inverse cdf at many probabilities — work-gated parallel map of the per-point
@@ -3018,8 +3014,7 @@ impl FDistribution {
         let d2 = self.dfd;
         let lead = 0.5 * d1 * (d1 / d2).ln();
         let lb = ln_beta(0.5 * d1, 0.5 * d2);
-        xs.iter()
-            .map(|&x| {
+        par_continuous_map(xs, |x| {
                 if x <= 0.0 {
                     return self.pdf(x).ln();
                 }
@@ -3027,7 +3022,6 @@ impl FDistribution {
                     - 0.5 * (d1 + d2) * (1.0 + d1 * x / d2).ln()
                     - lb
             })
-            .collect()
     }
 
     /// Density at many points; hoists the lead term and `ln_beta` like
@@ -3038,8 +3032,7 @@ impl FDistribution {
         let d2 = self.dfd;
         let lead = 0.5 * d1 * (d1 / d2).ln();
         let lb = ln_beta(0.5 * d1, 0.5 * d2);
-        xs.iter()
-            .map(|&x| {
+        par_continuous_map(xs, |x| {
                 if x <= 0.0 {
                     return 0.0;
                 }
@@ -3048,7 +3041,6 @@ impl FDistribution {
                     - lb)
                     .exp()
             })
-            .collect()
     }
 
     /// Inverse cdf at many probabilities — work-gated parallel map of the per-point
@@ -3699,14 +3691,12 @@ impl BetaDist {
     #[must_use]
     pub fn logpdf_many(&self, xs: &[f64]) -> Vec<f64> {
         let lb = ln_beta(self.a, self.b);
-        xs.iter()
-            .map(|&x| {
+        par_continuous_map(xs, |x| {
                 if !(0.0..1.0).contains(&x) || x == 0.0 {
                     return self.pdf(x).ln();
                 }
                 (self.a - 1.0) * x.ln() + (self.b - 1.0) * (1.0 - x).ln() - lb
             })
-            .collect()
     }
 
     /// Density at many points; hoists `ln_beta(a, b)` like
@@ -3714,8 +3704,7 @@ impl BetaDist {
     #[must_use]
     pub fn pdf_many(&self, xs: &[f64]) -> Vec<f64> {
         let lb = ln_beta(self.a, self.b);
-        xs.iter()
-            .map(|&x| {
+        par_continuous_map(xs, |x| {
                 if !(0.0..=1.0).contains(&x) {
                     return 0.0;
                 }
@@ -3739,7 +3728,6 @@ impl BetaDist {
                 }
                 ((self.a - 1.0) * x.ln() + (self.b - 1.0) * (1.0 - x).ln() - lb).exp()
             })
-            .collect()
     }
 
     /// Cumulative distribution at many points — work-gated parallel map of the per-point
@@ -4197,8 +4185,7 @@ impl GammaDist {
     pub fn logpdf_many(&self, xs: &[f64]) -> Vec<f64> {
         let a_scale_ln = self.a * self.scale.ln();
         let lg = ln_gamma(self.a);
-        xs.iter()
-            .map(|&x| {
+        par_continuous_map(xs, |x| {
                 if x < 0.0 {
                     return f64::NEG_INFINITY;
                 }
@@ -4213,7 +4200,6 @@ impl GammaDist {
                 }
                 (self.a - 1.0) * x.ln() - x / self.scale - a_scale_ln - lg
             })
-            .collect()
     }
 
     /// Density at many points; hoists `ln_gamma(a)` out of the loop like
@@ -4222,8 +4208,7 @@ impl GammaDist {
     pub fn pdf_many(&self, xs: &[f64]) -> Vec<f64> {
         let a_scale_ln = self.a * self.scale.ln();
         let lg = ln_gamma(self.a);
-        xs.iter()
-            .map(|&x| {
+        par_continuous_map(xs, |x| {
                 if x < 0.0 {
                     return 0.0;
                 }
@@ -4238,7 +4223,6 @@ impl GammaDist {
                 }
                 ((self.a - 1.0) * x.ln() - x / self.scale - a_scale_ln - lg).exp()
             })
-            .collect()
     }
 
     /// Cumulative distribution at many points — parallel map of the per-point regularized gamma
@@ -4494,14 +4478,12 @@ impl GenGamma {
         let c = self.c;
         let lead = c.abs().ln();
         let lg = ln_gamma(a);
-        xs.iter()
-            .map(|&x| {
+        par_continuous_map(xs, |x| {
                 if x <= 0.0 {
                     return f64::NEG_INFINITY;
                 }
                 lead + (c * a - 1.0) * x.ln() - x.powf(c) - lg
             })
-            .collect()
     }
 
     /// Density at many points; hoists `ln|c|` and `lnΓ(a)` like
@@ -4512,14 +4494,12 @@ impl GenGamma {
         let c = self.c;
         let lead = c.abs().ln();
         let lg = ln_gamma(a);
-        xs.iter()
-            .map(|&x| {
+        par_continuous_map(xs, |x| {
                 if x <= 0.0 {
                     return 0.0;
                 }
                 (lead + (c * a - 1.0) * x.ln() - x.powf(c) - lg).exp()
             })
-            .collect()
     }
 }
 
@@ -8486,9 +8466,7 @@ impl VonMises {
     pub fn logpdf_many(&self, xs: &[f64]) -> Vec<f64> {
         let ln_2pi = (2.0 * PI).ln();
         let ln_i0 = fsci_special::log_ive_scalar(0.0, self.kappa) + self.kappa;
-        xs.iter()
-            .map(|&x| self.kappa * (x - self.loc).cos() - ln_2pi - ln_i0)
-            .collect()
+        par_continuous_map(xs, |x| self.kappa * (x - self.loc).cos() - ln_2pi - ln_i0)
     }
 
     /// Density at many angles; hoists the `2π·I₀(κ)` denominator (Bessel I₀) like
@@ -8496,9 +8474,7 @@ impl VonMises {
     #[must_use]
     pub fn pdf_many(&self, xs: &[f64]) -> Vec<f64> {
         let denom = 2.0 * PI * modified_bessel_i(0.0, self.kappa);
-        xs.iter()
-            .map(|&x| (self.kappa * (x - self.loc).cos()).exp() / denom)
-            .collect()
+        par_continuous_map(xs, |x| (self.kappa * (x - self.loc).cos()).exp() / denom)
     }
 
     fn period_start(&self) -> f64 {
@@ -12661,14 +12637,12 @@ impl InverseGamma {
     pub fn logpdf_many(&self, xs: &[f64]) -> Vec<f64> {
         let a = self.a;
         let lg = ln_gamma(a);
-        xs.iter()
-            .map(|&x| {
+        par_continuous_map(xs, |x| {
                 if x <= 0.0 {
                     return f64::NEG_INFINITY;
                 }
                 (-a - 1.0) * x.ln() - 1.0 / x - lg
             })
-            .collect()
     }
 
     /// Density at many points; hoists `Γ(a) = exp(lnΓ(a))` (the divisor) like
@@ -12677,14 +12651,12 @@ impl InverseGamma {
     pub fn pdf_many(&self, xs: &[f64]) -> Vec<f64> {
         let a = self.a;
         let gamma_a = ln_gamma(a).exp();
-        xs.iter()
-            .map(|&x| {
+        par_continuous_map(xs, |x| {
                 if x <= 0.0 {
                     return 0.0;
                 }
                 x.powf(-a - 1.0) * (-1.0 / x).exp() / gamma_a
             })
-            .collect()
     }
 }
 
@@ -15370,14 +15342,12 @@ impl Chi {
         let k = self.df;
         let lead = (1.0 - k / 2.0) * 2.0_f64.ln();
         let lg = ln_gamma(k / 2.0);
-        xs.iter()
-            .map(|&x| {
+        par_continuous_map(xs, |x| {
                 if x <= 0.0 {
                     return self.pdf(x).ln();
                 }
                 lead + (k - 1.0) * x.ln() - x * x / 2.0 - lg
             })
-            .collect()
     }
 
     /// Density at many points; hoists `2^(1−k/2)` and `Γ(k/2)` like
@@ -15387,14 +15357,12 @@ impl Chi {
         let k = self.df;
         let lead = 2.0_f64.powf(1.0 - k / 2.0);
         let gamma_k2 = ln_gamma(k / 2.0).exp();
-        xs.iter()
-            .map(|&x| {
+        par_continuous_map(xs, |x| {
                 if x < 0.0 {
                     return 0.0;
                 }
                 lead * x.powf(k - 1.0) * (-x * x / 2.0).exp() / gamma_k2
             })
-            .collect()
     }
 }
 
@@ -15759,14 +15727,12 @@ impl Nakagami {
     pub fn logpdf_many(&self, xs: &[f64]) -> Vec<f64> {
         let nu = self.nu;
         let lead = 2.0_f64.ln() + nu * nu.ln() - ln_gamma(nu);
-        xs.iter()
-            .map(|&x| {
+        par_continuous_map(xs, |x| {
                 if x <= 0.0 {
                     return self.pdf(x).ln();
                 }
                 lead + (2.0 * nu - 1.0) * x.ln() - nu * x * x
             })
-            .collect()
     }
 
     /// Density at many points; hoists the `2·ν^ν / Γ(ν)` coefficient like
@@ -15775,14 +15741,12 @@ impl Nakagami {
     pub fn pdf_many(&self, xs: &[f64]) -> Vec<f64> {
         let nu = self.nu;
         let coeff = 2.0 * nu.powf(nu) / ln_gamma(nu).exp();
-        xs.iter()
-            .map(|&x| {
+        par_continuous_map(xs, |x| {
                 if x < 0.0 {
                     return 0.0;
                 }
                 coeff * x.powf(2.0 * nu - 1.0) * (-nu * x * x).exp()
             })
-            .collect()
     }
 }
 
@@ -16817,15 +16781,13 @@ impl DoubleGamma {
         let a = self.a;
         let ln_half = 0.5_f64.ln();
         let lg = ln_gamma(a);
-        xs.iter()
-            .map(|&x| {
+        par_continuous_map(xs, |x| {
                 if x == 0.0 {
                     return self.pdf(x).ln();
                 }
                 let ax = x.abs();
                 ln_half + (a - 1.0) * ax.ln() - ax - lg
             })
-            .collect()
     }
 
     /// Density at many points; hoists `Γ(a) = exp(lnΓ(a))` (the divisor) like
@@ -16834,9 +16796,7 @@ impl DoubleGamma {
     pub fn pdf_many(&self, xs: &[f64]) -> Vec<f64> {
         let a = self.a;
         let gamma_a = ln_gamma(a).exp();
-        xs.iter()
-            .map(|&x| 0.5 * x.abs().powf(a - 1.0) * (-x.abs()).exp() / gamma_a)
-            .collect()
+        par_continuous_map(xs, |x| 0.5 * x.abs().powf(a - 1.0) * (-x.abs()).exp() / gamma_a)
     }
 }
 
@@ -17623,14 +17583,12 @@ impl Erlang {
         let lambda = self.rate;
         let k_lnlambda = k * lambda.ln();
         let lg = ln_gamma(k);
-        xs.iter()
-            .map(|&x| {
+        par_continuous_map(xs, |x| {
                 if x <= 0.0 {
                     return self.pdf(x).ln();
                 }
                 k_lnlambda + (k - 1.0) * x.ln() - lambda * x - lg
             })
-            .collect()
     }
 
     /// Density at many points; hoists `λ^k` (the lead factor) and `Γ(k)` (the
@@ -17641,14 +17599,12 @@ impl Erlang {
         let lambda = self.rate;
         let coeff = lambda.powf(k);
         let gamma_k = ln_gamma(k).exp();
-        xs.iter()
-            .map(|&x| {
+        par_continuous_map(xs, |x| {
                 if x < 0.0 {
                     return 0.0;
                 }
                 coeff * x.powf(k - 1.0) * (-lambda * x).exp() / gamma_k
             })
-            .collect()
     }
 }
 
@@ -21975,9 +21931,7 @@ impl GenNorm {
     pub fn pdf_many(&self, xs: &[f64]) -> Vec<f64> {
         let b = self.beta;
         let coeff = b / (2.0 * ln_gamma(1.0 / b).exp());
-        xs.iter()
-            .map(|&x| coeff * (-x.abs().powf(b)).exp())
-            .collect()
+        par_continuous_map(xs, |x| coeff * (-x.abs().powf(b)).exp())
     }
 }
 
@@ -22178,14 +22132,12 @@ impl HalfGenNorm {
     pub fn logpdf_many(&self, xs: &[f64]) -> Vec<f64> {
         let b = self.beta;
         let lead = b.ln() - ln_gamma(1.0 / b);
-        xs.iter()
-            .map(|&x| {
+        par_continuous_map(xs, |x| {
                 if x < 0.0 {
                     return f64::NEG_INFINITY;
                 }
                 lead - x.powf(b)
             })
-            .collect()
     }
 
     /// Density at many points; hoists the `β / Γ(1/β)` coefficient like
@@ -22194,14 +22146,12 @@ impl HalfGenNorm {
     pub fn pdf_many(&self, xs: &[f64]) -> Vec<f64> {
         let b = self.beta;
         let coeff = b / ln_gamma(1.0 / b).exp();
-        xs.iter()
-            .map(|&x| {
+        par_continuous_map(xs, |x| {
                 if x < 0.0 {
                     return 0.0;
                 }
                 coeff * (-x.powf(b)).exp()
             })
-            .collect()
     }
 }
 
