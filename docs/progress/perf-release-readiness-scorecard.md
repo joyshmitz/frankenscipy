@@ -19,11 +19,13 @@
 | Live conformance | PASS | local `cargo test -p fsci-conformance --test diff_stats_norm -- --nocapture`: 1 passed |
 | Per-crate release build | PASS/WARN | rch `cargo build --release -p fsci-special` passed on `hz2`; warnings are existing `fsci-special` warnings |
 | Per-crate clippy | BLOCKED/EXISTING | rch `cargo clippy -p fsci-special --benches -- -D warnings` stops in existing dependency lints before this patch: `fsci-integrate` `too_many_arguments`, `fsci-linalg` `needless_range_loop` / `needless_borrow` |
+| Independent cod-a reverify | PASS | RCH `vmi1152480` Rust-only Criterion median 3.3378 ms; same-host local SciPy-capable rerun measured Rust 5.1511 ms vs SciPy 7.1739 ms, 1.39x faster |
 | Negative ledger | PASS | `docs/NEGATIVE_EVIDENCE.md` and canonical perf ledger record the prior loss, current win, and retry predicate |
 
 | Workload | Current Rust | Live SciPy | Ratio | Verdict |
 | --- | ---: | ---: | ---: | --- |
 | `special_ndtri_array/n500000` | 1.8652 ms | 8.899997 ms | 4.77x faster | keep |
+| `special_ndtri_array/n500000` cod-a reverify | 5.1511 ms | 7.1739 ms | 1.39x faster | keep |
 
 Readiness notes:
 

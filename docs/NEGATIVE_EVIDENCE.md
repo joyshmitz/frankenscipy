@@ -33,6 +33,13 @@ ledger above so the project has one source of truth.
   `cargo clippy -p fsci-special --benches -- -D warnings` is blocked before
   `fsci-special` by existing dependency lints in `fsci-integrate` and
   `fsci-linalg`.
+- Independent cod-a reverify on the rebased commit: RCH per-crate Criterion
+  on `vmi1152480` measured Rust-only `special_ndtri_array/rust_current_n500000`
+  at 3.3378 ms median; the SciPy arm skipped remotely because that worker
+  cannot import `scipy.special`. Same-host local rerun with SciPy 1.17.1 /
+  NumPy 2.4.3 measured Rust 5.1511 ms vs SciPy 7.1739 ms, ratio score
+  `1/0/0` and 1.39x faster than SciPy. Live `diff_special_ndtr` conformance
+  passed locally with `FSCI_REQUIRE_SCIPY_ORACLE=1`.
 - Retry condition: do not route `ndtri_scalar` back through `erfcinv_conv` or
   AS241. Future work should only touch this lane for tighter bit parity in
   exotic tails or for vectorized multi-output dispatch.
