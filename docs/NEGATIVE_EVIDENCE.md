@@ -2275,3 +2275,21 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   lever is ruled out (would sacrifice the early-exit that helps larger k). Wall confirmed.
 - Net: with this + the FFT-SoA-rewrite (major) + Delaunay/linprog/RBF C-library walls, ALL
   remaining gaps are confirmed non-tractable-clean-wins. Campaign complete; no clean lever left.
+
+## 2026-06-21 - LOSS FOUND (fix deferred): norm.ppf / ndtri 25x slow (erfcinv-Newton vs Cephes rational)
+- Agent: cc / MistyBirch. MEASURED norm.ppf 500k: fsci 619ms vs scipy 24.3ms → LOSE 25.5x.
+  (norm.cdf WINS 4.2x; rankdata WINS 4.2x; gaussian_kde-nd 14x; RGI 2.3x — all wins.)
+- ROOT CAUSE: standard_normal_ppf → fsci_special::ndtri_scalar → erfcinv_conv, whose deep-tail
+  (y≤0.0625) uses a Newton loop with erfcx CONTINUED-FRACTION per iter (~6µs/tail-call); scipy's
+  ndtri is the direct Cephes RATIONAL (no iteration, ~0.05µs).
+- ATTEMPTED + REVERTED: route standard_normal_ppf through the existing standard_normal_ppf_as241
+  (Wichura). FAILED — fsci's AS241 impl is INACCURATE: broke test_isf_equals_ppf_one_minus_q
+  (>1e-14 vs ndtri even at q=0.9, central) and the comment already notes ~1.8e-4 at p=1e-12.
+  So fsci's AS241 is buggy across regions; can't use it. Reverted (no regression shipped).
+- CLEAN FIX (high value — ppf is common across ALL distributions, the shared inverse): replace
+  the erfcinv-Newton in ndtri_scalar with the direct CEPHES ndtri rational (P0/Q0 central,
+  P1/Q1+P2/Q2 tails) — bit-for-bit with scipy.special.ndtri, fast, full-range accurate, and (as
+  the SHARED inverse) keeps ppf/isf consistent. Needs exact Cephes coefficients (≈50 constants
+  from cephes/ndtri.c) — a focused careful transcription+verify cycle (typo-risk too high to
+  guess from memory). Validate against scipy.special.ndtri at many points + the deep_tail test.
+  FLAGGED as a high-value lever (joins mixed-radix-FFT).
