@@ -10270,7 +10270,23 @@ impl Hypergeometric {
         // byte-identical to the single `pmf` (same pmf0, same per-k ratio loop) and ~1 ULP accurate,
         // vs the ~5e-14 cancellation of the lgamma log-pmf (hypergeometric_sf_tail_match_scipy).
         if k_min == 0.0 {
-            let p0 = self.pmf0_recurrence();
+            // Sweep pmf(0..=max_k) once via the ratio recurrence into a table, then index. table[k]
+            // = pmf0·r1·…·rk is the same left-associated product as the single pmf(k), so this stays
+            // byte-identical to mapping pmf — but O(N + max_k + K) instead of O(N + Σk) per-k.
+            let max_k = ks
+                .iter()
+                .copied()
+                .filter(|&k| (k as f64) <= k_max)
+                .max()
+                .unwrap_or(0);
+            let mut table = vec![0.0_f64; max_k as usize + 1];
+            let mut p = self.pmf0_recurrence();
+            table[0] = p;
+            for i in 1..=max_k {
+                let fi = i as f64;
+                p *= ((n - fi + 1.0) * (big_n - fi + 1.0)) / (fi * (m - n - big_n + fi));
+                table[i as usize] = p;
+            }
             return ks
                 .iter()
                 .map(|&k| {
@@ -10278,7 +10294,7 @@ impl Hypergeometric {
                     if kf < k_min || kf > k_max {
                         0.0
                     } else {
-                        self.pmf_from0(p0, k)
+                        table[k as usize]
                     }
                 })
                 .collect();
@@ -78355,5 +78371,7 @@ mod tests {
         assert!(dist.cdf(5.0) > 0.99, "hypsecant CDF should be near 1 at 5");
     }
 }
+
+
 
 
