@@ -35,3 +35,17 @@ make_interp_spline [another agent, has its own byte-diff test], 318898bb, 17e299
 - Then resume measured loss-hunting; the one OPEN loss is hilbert (FFT C-SIMD wall).
 - Remaining (cargo-needed) follow-ups: factor-once + n-RHS for the GCV trace loop
   (O(n²·bw) tr); hilbert FFT (FFT-crate, hard).
+
+## Compile-soundness + byte-identity self-review (2026-06-20, cc) — CLEAN
+Read-reviewed all disk-window commits (no cargo available); findings:
+- Band-restrict bounds (033f7bd9 Gram, 43eb09b2 m/lhs, eab4eea3 numer, 2e55092a
+  final-full, d437f83f band_to_full): all use `saturating_sub`/`(i+w).min(n-1)` (no
+  usize underflow; capped), and the band width matches each matrix's bandwidth
+  (X/E/m/full/numer over (2,2) ⇒ bw 2; XᵀWX/XᵀWE/lhs Gram ⇒ bw 4). The d=(2+i)-j index
+  in band_to_full is ≥0 for j∈[i-2,i+2]. Byte-identity holds (out-of-band entries are 0
+  in the full build; solve_banded creates the LU fill).
+- solve_banded (Vec<Vec>, line 2741) + solve_banded_compact both exist on origin; the
+  make_smoothing_spline calls match the Vec<Vec> signature.
+- sort_unstable commits (2893660c/79773b3f/e3e1c396): trivial one-token swaps of valid
+  calls; total_cmp-Equal⟺identical-bits / Vec<usize>-equal⟺identical ⇒ byte-identical.
+- No bug found → expect the verify queue (cargo check + suites) to pass green.
