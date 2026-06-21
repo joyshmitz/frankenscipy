@@ -925,6 +925,44 @@ Readiness notes:
   micro-lever. It should target Radau stage linear algebra, LU reuse, allocation
   in matrix/vector assembly, or structured-Jacobian exploitation.
 
+## 2026-06-21 - fsci-sparse eigsh three-term Lanczos gauntlet
+
+- Agent: cod-b / BlackThrush
+- Bead: `frankenscipy-8l8r1.140`
+- Note: renumbered from local `.139` during rebase because upstream already used
+  `.139` for an interpolate task; the artifact path retains the original capture
+  suffix.
+- Decision: REJECT AND RESTORE SOURCE. A plain symmetric three-term Lanczos
+  recurrence was fast but failed the eigenpair residual contract; a lightly
+  stabilized recurrence converged but was median-neutral/slower on the target
+  `eigsh n=8000 k=6` row.
+- Artifact:
+  `tests/artifacts/perf/2026-06-21-cod-b-sparse-eigsh-lanczos-139/EVIDENCE.md`
+
+| Gate | Result | Notes |
+| --- | --- | --- |
+| Parent baseline | PASS | rch `hz1` restored parent: 1.537 / 5.520 / 15.043 ms for n=2000 k=6, n=8000 k=6, n=20000 k=8 |
+| Pure three-term candidate | REJECT | rch `vmi1153651`: target n=8000 k=6 was 4.548 ms but `conv=false`, max residual 7.41e-2 |
+| Stabilized candidate | REJECT | rch `hz1`: target samples 4.368 / 5.556 / 7.241 ms, median 5.556 ms versus 5.520 ms parent |
+| SciPy oracle | PASS | local SciPy 1.17.1 / NumPy 2.4.3 medians: 1.267 / 2.909 / 6.316 ms |
+| Source restoration | PASS | final `crates/fsci-sparse/src/linalg.rs` diff is empty; no sparse source changes retained |
+| rch shell-loop attempt | BLOCKED/INFRA | `rch exec -- bash -lc ...` fell back locally and hit target-dir rustc mismatch `E0514`; no cleanup command was run |
+
+| Workload / route | Parent Rust | Candidate median | SciPy oracle | Verdict |
+| --- | ---: | ---: | ---: | --- |
+| Pure Lanczos `eigsh n=8000 k=6` | 11.228 ms | 4.548 ms | 2.909 ms | reject: fast but residual-failed |
+| Stabilized `eigsh n=2000 k=6` | 1.537 ms | 1.182 ms | 1.267 ms | internal win, not shipped because target row rejected |
+| Stabilized `eigsh n=8000 k=6` | 5.520 ms | 5.556 ms | 2.909 ms | reject: 1.01x slower than parent, 1.91x slower than SciPy |
+| Stabilized `eigsh n=20000 k=8` | 15.043 ms | 12.507 ms | 6.316 ms | internal win, still 1.98x slower than SciPy |
+
+Readiness notes:
+
+- The remaining sparse `eigsh` loss is not a no-restart three-term recurrence
+  problem. Plain Lanczos needs ghost control; light old-direction
+  reorthogonalization is not stable enough on the target median.
+- Route future work to a real implicitly restarted or thick-restarted symmetric
+  Lanczos primitive with a measured restart policy and convergence certificate.
+
 ## 2026-06-20 - fsci-sparse public CSR SpMV row-loop gauntlet
 
 - Agent: cod-b / MistyBirch

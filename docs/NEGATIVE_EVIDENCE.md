@@ -6,6 +6,35 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-21 - frankenscipy-8l8r1.140 - sparse eigsh three-term Lanczos reject
+
+- Agent: cod-b / BlackThrush
+- Note: renumbered from local `.139` during rebase because upstream already used
+  `.139` for an interpolate task; the artifact path retains the original capture
+  suffix.
+- Decision: REJECT AND RESTORE SOURCE. A true symmetric three-term Lanczos
+  recurrence was fast but failed the eigenpair residual contract; a stabilized
+  recurrence converged but did not reliably improve the target `eigsh n=8000
+  k=6` loss.
+- Artifact:
+  `tests/artifacts/perf/2026-06-21-cod-b-sparse-eigsh-lanczos-139/EVIDENCE.md`
+- Final source: restored to the parent full-Arnoldi route; no sparse source code
+  retained from this attempt.
+
+| Workload | Parent Rust | Candidate Rust | SciPy oracle | Verdict |
+| --- | ---: | ---: | ---: | --- |
+| Pure three-term `eigsh n=8000 k=6` | 11.228 ms on `vmi1153651` | 4.548 ms | 2.909 ms local SciPy | reject: `conv=false`, max residual 7.41e-2 |
+| Stabilized `eigsh n=2000 k=6` | 1.537 ms on `hz1` | 1.182 ms median | 1.267 ms | internal win, but source restored with target reject |
+| Stabilized `eigsh n=8000 k=6` | 5.520 ms on `hz1` | 5.556 ms median | 2.909 ms | reject: 1.01x slower than parent, 1.91x slower than SciPy |
+| Stabilized `eigsh n=20000 k=8` | 15.043 ms on `hz1` | 12.507 ms median | 6.316 ms | internal win, still 1.98x slower than SciPy |
+
+Negative evidence: do not retry plain three-term Lanczos without ghost control;
+it violates convergence even when wall time looks excellent. Do not ship the
+lightly stabilized recurrence either: the remaining measured sparse loss is the
+mid-size `n=8000, k=6` row, and that row is median-neutral/slower. Route deeper
+to an implicitly restarted or thick-restarted symmetric Lanczos primitive with a
+measured restart policy.
+
 ## 2026-06-20 - frankenscipy-4tkgx - pdist Chebyshev d16/d64 SIMD helper
 
 - Agent: cod-a / BlackThrush
