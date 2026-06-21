@@ -12821,12 +12821,10 @@ pub fn general_gaussian(n: usize, p: f64, sig: f64, sym: bool) -> Vec<f64> {
     }
     let m = if sym { n } else { n + 1 };
     let center = (m as f64 - 1.0) / 2.0;
-    let mut window: Vec<f64> = (0..m)
-        .map(|i| {
-            let x = (i as f64 - center) / sig;
-            (-0.5 * x.abs().powf(2.0 * p)).exp()
-        })
-        .collect();
+    let mut window = par_index_fill(m, |i| {
+        let x = (i as f64 - center) / sig;
+        (-0.5 * x.abs().powf(2.0 * p)).exp()
+    });
     if !sym {
         window.truncate(n);
     }
@@ -29289,6 +29287,7 @@ mod tests {
         }
     }
 }
+
 
 
 
