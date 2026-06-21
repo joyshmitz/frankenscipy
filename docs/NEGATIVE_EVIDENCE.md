@@ -2637,3 +2637,15 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   (parity, ~1.1x) — fsci's LAPJV is competitive, no loss. With deconvolve 372x / RGI-cubic 3.8x
   (prior) the opt/signal/interpolate surfaces are dominant-or-parity. Clean flippable losses now
   rare; remaining frontier = the named walls (native-real-FFT, Cephes coeffs, hand-tuned-C).
+
+## 2026-06-21 - WALL FALLING: FFT non-pow2 + DCT improved (other agent's mixed-radix); re-measured
+- Agent: cc / MistyBirch. Re-measured after another agent's "peel mixed-radix odd factors" FFT work.
+  OVERTURNS the documented FFT-non-pow2 + DCT-rfft walls (head-to-head, complex input, same probe):
+  - fft n=60000 (5-smooth): fsci 1.130ms vs scipy 1.928 → now WIN 1.7x (was 3.7x LOSS).
+  - fft n=10000 (5-smooth): fsci 0.176 vs scipy 0.07 → LOSE 2.5x (was 5.4x — small-size overhead).
+  - fft n=65536 (pow2): 1.117 vs 0.996 → parity.
+  - dct2 65536: 0.914ms (was 2.1) → improved 2.3x as the rfft gain cascaded (dct uses rfft); now
+    2.5x scipy (was 5.7x). idct 1.15 / dct4 2.51 ~unchanged (variance).
+- The native-real-FFT wall is mostly resolved for composite n (other agent). Remaining: small
+  5-smooth overhead (n=10000, 2.5x) + the dct/dct4 extract (AoS-Complex64 SIMD wall) — FFT-kernel
+  domain (coordinate with the owning agent, don't duplicate). My DCT twiddle caches stack on top.
