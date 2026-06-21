@@ -5810,9 +5810,14 @@ fn gcv_optimal_lambda(x_full: &[Vec<f64>], e_full: &[Vec<f64>], y: &[f64], w: &[
     }
     let gcv = |lam: f64| -> f64 {
         // c solves (X + λE) c = y.
+        // m = X + λE is (2,2)-banded, so only fill |i-j| ≤ 2; out-of-band entries stay 0
+        // (== the full build — x_full,e_full are 0 there), and solve_banded creates the
+        // LU fill in-place. Byte-identical; O(n²) → O(n).
         let mut m = vec![vec![0.0_f64; n]; n];
         for i in 0..n {
-            for j in 0..n {
+            let jlo = i.saturating_sub(2);
+            let jhi = (i + 2).min(n - 1);
+            for j in jlo..=jhi {
                 m[i][j] = x_full[i][j] + lam * e_full[i][j];
             }
         }
@@ -5835,9 +5840,14 @@ fn gcv_optimal_lambda(x_full: &[Vec<f64>], e_full: &[Vec<f64>], y: &[f64], w: &[
         // tr(A) = tr(lhs⁻¹ XtWX), lhs = XtWX + λ XtE; solve lhs Z = XtWX col-by-col.
         let mut tr = 0.0_f64;
         for col in 0..n {
+            // lhs = XᵀWX + λ XᵀWE is (4,4)-banded; fill only |i-j| ≤ 4 (the rest is 0
+            // == the full build). Byte-identical; the per-column build drops O(n²)→O(n)
+            // (so the trace loop O(n³)→O(n²)). solve_banded(_,_,4) creates the LU fill.
             let mut lhs = vec![vec![0.0_f64; n]; n];
             for i in 0..n {
-                for j in 0..n {
+                let jlo = i.saturating_sub(4);
+                let jhi = (i + 4).min(n - 1);
+                for j in jlo..=jhi {
                     lhs[i][j] = xtwx[i][j] + lam * xte[i][j];
                 }
             }

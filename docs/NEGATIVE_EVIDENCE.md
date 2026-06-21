@@ -1495,3 +1495,20 @@ interior-direct (boundary-map only the ~window-1 edge cells).**
   (172/0) the moment disk recovers, before trusting. Byte-identity is by construction
   so no new bench needed for correctness; a smoothing-spline bench would quantify the
   O(n³)→O(n) gain.
+
+## 2026-06-20 - gcv m/lhs builds: band-restricted (byte-identical, disk-critical, no-cargo)
+
+- Agent: cc / MistyBirch. CODE-ONLY (disk-critical, no cargo). Completes the GCV
+  band-optimization started in 08f79b0e (banded solves) + 033f7bd9 (Gram O(n³)→O(n)).
+- Two more full-n×n builds over banded data, restricted to their bands (byte-identical:
+  out-of-band entries are 0 in the full build too, and solve_banded creates the LU fill
+  in-place):
+  - `m = X + λE` (per λ): (2,2)-band, fill |i-j| ≤ 2 → O(n²)→O(n).
+  - `lhs = XᵀWX + λ XᵀWE` (per COLUMN in the trace loop, n× per λ): (4,4)-band, fill
+    |i-j| ≤ 4 → per-build O(n²)→O(n), so the trace loop O(n³)→O(n²).
+- Net: gcv_optimal_lambda now O(n) Gram + O(n²·iters) trace, down from O(n³)+O(n³·iters).
+- PENDING-BENCH / UNVERIFIED COMPILE (disk-critical, no cargo). Byte-identical by
+  construction (no bench needed for correctness); MUST `cargo check -p fsci-interpolate`
+  + make_smoothing_spline scipy-parity + full suite when disk recovers. Remaining
+  follow-up (not byte-identical-mechanical): the trace loop re-builds+re-factors the
+  IDENTICAL lhs n times — factor-once + n banded RHS would drop it to O(n·bw²)+O(n²·bw).
