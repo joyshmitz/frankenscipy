@@ -3813,6 +3813,11 @@ pub fn linkage(data: &[Vec<f64>], method: LinkageMethod) -> Result<Vec<[f64; 4]>
         }
         return Ok(linkage_fast(n, &dist_mat, method));
     }
+    // SINGLE linkage IS the minimum spanning tree: Prim O(n^2) + scipy's union-find
+    // relabel — O(n^2) instead of the O(n^3) nearest-pair scan (matches scipy exactly).
+    if matches!(method, LinkageMethod::Single) {
+        return Ok(single_linkage_mst(n, d, &flat));
+    }
 
     // Fill the full inter-cluster arena directly in row-major order. The
     // nearest-neighbour scan is O(n^2)-typical and strides within one flat
@@ -3829,6 +3834,72 @@ pub fn linkage(data: &[Vec<f64>], method: LinkageMethod) -> Result<Vec<[f64; 4]>
     }
 
     Ok(agglomerate_nnarray(n, inter_dist, method))
+}
+
+/// Single linkage via the minimum spanning tree (scipy's `mst_single_linkage`): the
+/// single-linkage dendrogram is exactly the MST ordered by edge weight. Prim's algorithm
+/// is O(n²) (vs the generic O(n³) nearest-pair scan), then the edges are stably sorted by
+/// distance and relabeled with scipy's LinkageUnionFind (new cluster id n, n+1, …) so the
+/// output matches scipy element-for-element.
+fn single_linkage_mst(n: usize, d: usize, flat: &[f64]) -> Vec<[f64; 4]> {
+    let row = |idx: usize| -> &[f64] { &flat[idx * d..idx * d + d] };
+    // Prim's MST from vertex 0, recording edges in add-order.
+    let mut in_tree = vec![false; n];
+    let mut min_d = vec![f64::INFINITY; n];
+    let mut nearest = vec![0usize; n];
+    let mut edges: Vec<(f64, usize, usize)> = Vec::with_capacity(n - 1);
+    in_tree[0] = true;
+    for j in 1..n {
+        min_d[j] = sq_dist(row(0), row(j)).sqrt();
+    }
+    for _ in 1..n {
+        let mut best = usize::MAX;
+        let mut bd = f64::INFINITY;
+        for j in 0..n {
+            if !in_tree[j] && min_d[j] < bd {
+                bd = min_d[j];
+                best = j;
+            }
+        }
+        in_tree[best] = true;
+        edges.push((bd, nearest[best], best));
+        for j in 0..n {
+            if !in_tree[j] {
+                let dj = sq_dist(row(best), row(j)).sqrt();
+                if dj < min_d[j] {
+                    min_d[j] = dj;
+                    nearest[j] = best;
+                }
+            }
+        }
+    }
+    // Stable sort by distance (matches scipy's argsort(kind='stable') on the MST edges).
+    edges.sort_by(|a, b| a.0.total_cmp(&b.0));
+    // scipy LinkageUnionFind relabel: each merge mints a new cluster id n, n+1, …
+    let total = 2 * n - 1;
+    let mut parent: Vec<usize> = (0..total).collect();
+    let mut size = vec![1usize; total];
+    fn uf_find(parent: &mut [usize], mut x: usize) -> usize {
+        while parent[x] != x {
+            parent[x] = parent[parent[x]];
+            x = parent[x];
+        }
+        x
+    }
+    let mut z = Vec::with_capacity(n - 1);
+    let mut next_label = n;
+    for (dist, u, v) in edges {
+        let ru = uf_find(&mut parent, u);
+        let rv = uf_find(&mut parent, v);
+        let (a, b) = if ru < rv { (ru, rv) } else { (rv, ru) };
+        let sz = size[ru] + size[rv];
+        z.push([a as f64, b as f64, dist, sz as f64]);
+        parent[ru] = next_label;
+        parent[rv] = next_label;
+        size[next_label] = sz;
+        next_label += 1;
+    }
+    z
 }
 
 /// Cut a linkage tree to form flat clusters.
@@ -9516,3 +9587,5 @@ mod tests {
         );
     }
 }
+
+

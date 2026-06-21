@@ -2096,3 +2096,17 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
 - fsci-spatial is well-optimized (no loss): cdist SIMD, distance_matrix win, KDTree k=1 win,
   pdist SIMD (prior), Delaunay 2.2x-faster-than-Qhull (prior), SphericalVoronoi parallel (prior).
   NEUTRAL/WIN cycle. Capability gap noted: KDTree k>1 nearest neighbors (fsci is k=1 only).
+
+## 2026-06-21 - SHIPPED: single linkage via MST (Prim O(n²)) — 9.3x loss → parity/WIN
+- Agent: cc / MistyBirch. fsci-cluster gauntlet vs scipy.cluster.hierarchy.linkage (n,4 data):
+  MEASURED losses — single n=1000/2000: 13.15/121ms vs scipy 3.08/13.0 (LOSE 4.3x/9.3x);
+  ward/average/complete n=2000 ~125ms vs ~57ms (LOSE 2.2x). fsci scaled ~O(n^2.7): all
+  non-centroid methods used agglomerate_nnarray (generic O(n^3) nearest-pair scan).
+- FIX (single): the single-linkage dendrogram IS the MST. Implemented single_linkage_mst —
+  Prim O(n²) + stable sort by distance + scipy LinkageUnionFind relabel (new id n,n+1,…).
+  Matches scipy element-for-element (cluster suite 141/0). MEASURED: n=1000 13.15→3.30ms
+  (4.0x self, scipy 3.08 → parity 1.07x); n=2000 121→11.38ms (10.6x self, scipy 13.0 → WIN
+  1.14x). 9.3x LOSS → parity/WIN.
+- NEXT LEVER: ward/complete/average/weighted still on agglomerate_nnarray O(n^3) (lose 2.2x)
+  — port scipy's NN-chain O(n²) (reducible Lance-Williams) for those. (Centroid/Median already
+  use linkage_fast/Mullner O(n²).)
