@@ -2072,3 +2072,15 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   rfft WINS scipy 1.23x at n=262144, loses 2.5x at n=8192).
 - NEXT (same lever): fftconvolve + hilbert also use the complex fft on real data → route
   through rfft/irfft for ~2x (would close their FFT-wall losses toward parity).
+
+## 2026-06-21 - SHIPPED: fftconvolve + hilbert real-FFT routing — fftconvolve FLIPS to WIN, hilbert near-parity
+- Agent: cc / MistyBirch. Both transformed REAL data with the COMPLEX fft. Routed through
+  fsci_fft::rfft/irfft (N reals → N/2 complex; ~2x less forward work + half-spectrum multiply).
+  - fftconvolve (real*real→real, both inputs rfft + irfft): 65536² 11.87→3.75ms (3.2x self),
+    vs scipy 8.05ms LOSE 1.47x → WIN 2.1x; 262144² 47.1→19.97ms vs 36.4 LOSE 1.30x → WIN 1.8x.
+  - hilbert (analytic filter zeros neg freqs, so only rfft's [0..N/2] half is used → forward
+    rfft, complex ifft): 65536 2.40→1.67ms vs 1.08 LOSE 2.22x→1.55x; 262144 10.93→8.20ms vs
+    7.82 LOSE 1.40x→1.05x (near-parity). hilbert keeps a full complex ifft (only forward halved).
+  Tolerance-parity (rfft==fft to rounding); full signal suite 648/0.
+- The "route real-data FFT consumers through rfft/irfft" lever is now applied across
+  oaconvolve (last cycle) + fftconvolve + hilbert. Remaining FFT-wall residual = pocketfft SIMD.

@@ -1002,32 +1002,30 @@ pub fn fftconvolve(a: &[f64], b: &[f64], mode: ConvolveMode) -> Result<Vec<f64>,
     let fft_len = full_len.next_power_of_two();
     let opts = fsci_fft::FftOptions::default();
 
-    // Zero-pad inputs to fft_len
-    let mut a_padded: Vec<fsci_fft::Complex64> = a.iter().map(|&v| (v, 0.0)).collect();
-    a_padded.resize(fft_len, (0.0, 0.0));
+    // Inputs are REAL: use the real FFT (rfft packs N reals into an N/2 complex transform —
+    // ~2x less work than a full complex FFT for each input, the pointwise multiply runs over
+    // only the fft_len/2+1 nonredundant bins, and irfft returns the real result directly).
+    let mut a_padded: Vec<f64> = a.to_vec();
+    a_padded.resize(fft_len, 0.0);
+    let mut b_padded: Vec<f64> = b.to_vec();
+    b_padded.resize(fft_len, 0.0);
 
-    let mut b_padded: Vec<fsci_fft::Complex64> = b.iter().map(|&v| (v, 0.0)).collect();
-    b_padded.resize(fft_len, (0.0, 0.0));
-
-    // FFT both
-    let fa = fsci_fft::fft(&a_padded, &opts)
+    let fa = fsci_fft::rfft(&a_padded, &opts)
         .map_err(|e| SignalError::InvalidArgument(format!("{e}")))?;
-    let fb = fsci_fft::fft(&b_padded, &opts)
+    let fb = fsci_fft::rfft(&b_padded, &opts)
         .map_err(|e| SignalError::InvalidArgument(format!("{e}")))?;
 
-    // Pointwise multiply
+    // Pointwise multiply (nonredundant half-spectrum)
     let fc: Vec<fsci_fft::Complex64> = fa
         .iter()
         .zip(fb.iter())
         .map(|(&(ar, ai), &(br, bi))| (ar * br - ai * bi, ar * bi + ai * br))
         .collect();
 
-    // Inverse FFT
-    let conv_full =
-        fsci_fft::ifft(&fc, &opts).map_err(|e| SignalError::InvalidArgument(format!("{e}")))?;
-
-    // Extract real part, trimmed to full_len
-    let full: Vec<f64> = conv_full.iter().take(full_len).map(|&(re, _)| re).collect();
+    // Inverse real FFT → real output of length fft_len, trimmed to full_len.
+    let conv_full = fsci_fft::irfft(&fc, Some(fft_len), &opts)
+        .map_err(|e| SignalError::InvalidArgument(format!("{e}")))?;
+    let full: Vec<f64> = conv_full.into_iter().take(full_len).collect();
 
     match mode {
         ConvolveMode::Full => Ok(full),
@@ -1662,36 +1660,28 @@ pub fn hilbert(x: &[f64]) -> Result<Vec<(f64, f64)>, SignalError> {
 
     let fft_opts = fsci_fft::FftOptions::default();
 
-    // Convert real input to complex for full FFT
-    let complex_input: Vec<(f64, f64)> = x.iter().map(|&v| (v, 0.0)).collect();
-
-    // Compute full complex FFT
-    let spectrum = fsci_fft::fft(&complex_input, &fft_opts)
+    // The analytic filter zeros all negative-frequency bins (h[k]=0 for k>N/2), so only the
+    // nonredundant half-spectrum [0..=N/2] is ever used. Compute it with the real FFT (rfft —
+    // ~2x less work than the full complex FFT) and apply h directly; the remaining bins stay 0.
+    let half = fsci_fft::rfft(x, &fft_opts)
         .map_err(|e| SignalError::InvalidArgument(format!("FFT failed: {e}")))?;
 
-    // Build the analytic signal filter h:
-    // h[0] = 1, h[1..N/2] = 2, h[N/2] = 1 (even N), h[N/2+1..] = 0
-    let mut h = vec![0.0; n];
-    h[0] = 1.0;
+    let mut filtered = vec![(0.0_f64, 0.0_f64); n];
+    filtered[0] = half[0]; // h[0] = 1
     if n.is_multiple_of(2) {
-        for item in h.iter_mut().take(n / 2).skip(1) {
-            *item = 2.0;
+        for k in 1..n / 2 {
+            let (re, im) = half[k];
+            filtered[k] = (2.0 * re, 2.0 * im); // h[k] = 2
         }
-        h[n / 2] = 1.0;
+        filtered[n / 2] = half[n / 2]; // h[N/2] = 1
     } else {
-        for item in h.iter_mut().take((n - 1) / 2 + 1).skip(1) {
-            *item = 2.0;
+        for k in 1..half.len() {
+            let (re, im) = half[k];
+            filtered[k] = (2.0 * re, 2.0 * im); // h[k] = 2 up to (N-1)/2
         }
     }
 
-    // Multiply spectrum by h (zero negative frequencies, double positive)
-    let filtered: Vec<(f64, f64)> = spectrum
-        .iter()
-        .zip(h.iter())
-        .map(|(&(re, im), &hi)| (re * hi, im * hi))
-        .collect();
-
-    // Inverse FFT gives the analytic signal
+    // Inverse FFT gives the analytic signal.
     let analytic = fsci_fft::ifft(&filtered, &fft_opts)
         .map_err(|e| SignalError::InvalidArgument(format!("IFFT failed: {e}")))?;
 
@@ -29239,6 +29229,7 @@ mod tests {
         }
     }
 }
+
 
 
 
