@@ -2561,3 +2561,11 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
 - Remaining route: SciPy's pocketfft is still an iterative SIMD/cache-blocked C kernel. Closing
   the 1.4-2.3x smooth-size residual likely needs a native iterative mixed-radix schedule with
   SoA or explicitly vectorizable butterflies, not another recursive split-order tweak.
+
+## 2026-06-21 - fft dct_iv twiddle caches: 11.6x->6.0x (1.93x), byte-identical
+- Agent: cc / MistyBirch. dct_iv was the biggest DCT loss (4.298ms vs scipy 0.372, 11.6x) — TWO
+  per-coefficient cos/sin loops. Pre-twiddle (dct4_core_fft) = DCT-II twiddle → reuse dct2 cache
+  (free); post-extract → new cached dct-IV table. 4.298->2.221ms (1.93x), now 6.0x. Byte-identical
+  (fft 177/0). Cosine-family twiddle-recompute bug now fixed everywhere: dct-II, idct, dct_iii
+  (via idct), dst/idst (via dct), dct_iv. Residual 6x is dct_iv's 2N-point complex FFT (uses
+  double-size FFT vs a real-FFT; native-real-FFT restructure = the standing wall).
