@@ -1264,6 +1264,31 @@ pub fn cdist_minkowski(
     Ok(cdist_fill(na, nb, nthreads, |i, j| minkowski(&xa[i], &xb[j], p)))
 }
 
+/// Cross-distance matrix under the standardized-Euclidean metric, matching
+/// `scipy.spatial.distance.cdist(XA, XB, 'seuclidean', V=v)` (each squared component divided by
+/// `v[k]`). Parallel over rows via `cdist_fill`; per pair uses the tested scalar [`seuclidean`].
+pub fn cdist_seuclidean(
+    xa: &[Vec<f64>],
+    xb: &[Vec<f64>],
+    v: &[f64],
+) -> Result<Vec<Vec<f64>>, SpatialError> {
+    if xa.is_empty() || xb.is_empty() {
+        return Err(SpatialError::EmptyData);
+    }
+    let dim = xa[0].len();
+    if v.len() != dim {
+        return Err(SpatialError::DimensionMismatch { expected: dim, actual: v.len() });
+    }
+    for row in xa.iter().chain(xb.iter()) {
+        if row.len() != dim {
+            return Err(SpatialError::DimensionMismatch { expected: dim, actual: row.len() });
+        }
+    }
+    let (na, nb) = (xa.len(), xb.len());
+    let nthreads = cdist_thread_count(na, nb, dim);
+    Ok(cdist_fill(na, nb, nthreads, |i, j| seuclidean(&xa[i], &xb[j], v)))
+}
+
 pub fn cdist_metric(
     xa: &[Vec<f64>],
     xb: &[Vec<f64>],
@@ -10547,5 +10572,19 @@ mod cdist_minkowski_tests {
                 assert!((m[i][j]-expect).abs() <= 1e-12*expect.abs().max(1e-12), "p={p} i={i} j={j}");
             }}
         }
+    }
+}
+
+#[cfg(test)]
+mod cdist_seuclidean_tests {
+    use super::*;
+    #[test]
+    fn cdist_seuclidean_matches_scalar() {
+        let xa=vec![vec![0.0,1.0,2.0],vec![3.0,-1.0,0.5],vec![-2.0,2.0,1.0]];
+        let xb=vec![vec![1.0,1.0,1.0],vec![0.0,0.0,0.0]];
+        let v=vec![0.5,2.0,1.5];
+        let m=cdist_seuclidean(&xa,&xb,&v).unwrap();
+        assert_eq!(m.len(), xa.len());
+        for i in 0..xa.len(){for j in 0..xb.len(){assert!((m[i][j]-seuclidean(&xa[i],&xb[j],&v)).abs()<1e-12);}}
     }
 }
