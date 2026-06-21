@@ -2727,3 +2727,17 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   1e-13 tol). All legitimate (match scipy's exact/accurate values), byte-changes are strictly more
   accurate. LEVER: a "match_scipy" conformance failure that's only 1-3 ULP / just-over-tol is often
   a cheap exactness fix (integer-power special-case, pow-vs-expm1 branch, +1 asymptotic shift).
+
+## 2026-06-21 - fsci-stats 5 standing failures DIAGNOSED — finicky (not the clean fsci-special pattern)
+- Agent: cc / MistyBirch. After fixing all 4 fsci-special conformance failures (clean exactness),
+  diagnosed the 5 standing fsci-stats failures. They are FINICKY, NOT clean exactness fixes:
+  - pearsonr_length_two: statistic 0.999…98 vs scipy 1.0 (verified scipy=1.0). It's a 1-ULP
+    numpy-dot ROUNDING-DIRECTION match: fsci's Σ(dx/normxm)(dy/normym) rounds DOWN, numpy's np.dot
+    rounds to ≥1→clamp→1.0. Tried sequential divide (ssxym/normxm)/normym → 0.999…9999 (still off)
+    AND broke pearsonr_alternative_boundary. REVERTED. Matching needs numpy's exact dot (FMA/sum
+    order). The basic pearsonr uses (ssxm·ssym).sqrt() (gives 1.0) but the alt uses normalize-then-
+    dot for overflow stability — genuine accuracy-vs-stability conflict.
+  - hypergeometric_sf_tail (pmf accuracy), circular gzscore, zscore mad, stats_helpers2 ([0,1]
+    array) — accuracy/value mismatches, not 1-ULP exactness. Need per-failure investigation.
+- These are NOT the cheap fsci-special fixes; deferred as finicky. DON'T retry the pearsonr
+  sequential-divide (dead-end, breaks boundary).
