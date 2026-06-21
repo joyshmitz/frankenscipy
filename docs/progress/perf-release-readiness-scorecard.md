@@ -1,5 +1,28 @@
 # Performance Release-Readiness Scorecard
 
+## 2026-06-21 - fsci-interpolate make_interp_spline compact rows - pending bench
+
+- Agent: cod-a / BlackThrush
+- Bead: `frankenscipy-8l8r1.139`
+- Decision: PENDING. Code-only disk-low commit. Do not count as release-ready
+  until per-crate focused tests, same-worker Criterion, and SciPy oracle rows are
+  refreshed.
+- Lever: remove the dense `n x n` collocation row allocation/fill left behind by
+  the upstream partial `solve_banded` fix. Production now stores only compact
+  local-support row bands for `make_interp_spline`.
+
+| Gate | Result | Notes |
+| --- | --- | --- |
+| Focused coefficient guard | PENDING | run `cargo test -p fsci-interpolate make_interp_spline_ --lib -- --nocapture` next turn |
+| Same-worker Criterion | PENDING | compare compact rows against current `origin/main` partial-band baseline with `make_interp_spline/k3` |
+| SciPy oracle | PENDING | refresh n=1000 and n=3000 ratios against the SciPy `make_interp_spline` oracle |
+| Formatting / diff hygiene | PENDING | no cargo/rustfmt build-style gate was started after DISK-LOW |
+
+Readiness notes:
+
+- This is intentionally not in the measured-keep table. The committed code is the
+  next lever; evidence collection resumes when disk pressure clears.
+
 ## 2026-06-20 - fsci-spatial pdist Chebyshev wide-SIMD gauntlet
 
 - Agent: cod-a / BlackThrush

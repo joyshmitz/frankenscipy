@@ -4,6 +4,31 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-21 - frankenscipy-8l8r1.139 - make_interp_spline compact row-band assembly
+
+- Agent: cod-a / BlackThrush
+- Status: pending bench. DISK-LOW paused new cargo build/bench work, so this is a
+  code-only commit and must not be promoted to a measured keep until the next
+  benchmark wave.
+- Lever: replace the remaining dense collocation row build in `make_interp_spline`
+  with compact local-support rows. The prior upstream partial fix switched to the
+  banded solver but still allocated `n x n` rows and called `eval_basis_all` for a
+  length-n row at each sample. This change uses `bspline_find_interval`, evaluates
+  only the active `[mu-k, mu]` support window, and solves with compact row-band
+  storage.
+- Correctness guard: inline test
+  `make_interp_spline_compact_band_matches_dense_coefficients_bits` compares compact
+  production coefficients to the previous dense collocation reference to `to_bits()`
+  for degrees 0 through 5.
+- Benchmark guard: resume with per-crate rch only:
+  `cargo test -p fsci-interpolate make_interp_spline_ --lib -- --nocapture`,
+  `cargo bench -p fsci-interpolate --bench interpolate_bench -- make_interp_spline/k3`,
+  and the matching SciPy oracle for n=1000/n=3000. Compare against the current
+  upstream partial-band baseline on the same worker before scoring.
+- Retry condition: if the compact row representation fails to beat the dense-row
+  `solve_banded` baseline on same-worker timing, revert this representation and try a
+  fixed-width band buffer instead of dynamic row growth.
+
 ## 2026-06-20 - frankenscipy-4tkgx - spatial pdist Chebyshev wide SIMD helper
 
 - Agent: cod-a / BlackThrush

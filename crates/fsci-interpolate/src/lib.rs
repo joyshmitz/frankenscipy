@@ -1781,17 +1781,49 @@ pub fn make_interp_spline(x: &[f64], y: &[f64], k: usize) -> Result<BSpline, Int
         return Err(InterpError::UnsortedX);
     }
     let t = interpolation_knots(x, k);
-    let mut a_mat = vec![vec![0.0; n]; n];
+    let mut a_mat = Vec::with_capacity(n);
+    let mut scratch = vec![0.0_f64; n];
+    let mut bw = 0usize;
     for i in 0..n {
-        let basis = eval_basis_all(&t, x[i], k, n);
-        a_mat[i][..n].copy_from_slice(&basis[..n]);
+        let Some(mu) = bspline_find_interval(&t, x[i], n) else {
+            return Err(InterpError::InvalidArgument {
+                detail: format!("x[{i}] is outside the spline knot span"),
+            });
+        };
+        scratch[mu] = 1.0;
+        for p in 1..=k {
+            let start = mu.saturating_sub(p);
+            for idx in start..=mu {
+                let mut val = 0.0;
+                if idx + p < t.len() {
+                    let denom_left = t[idx + p] - t[idx];
+                    if denom_left > 0.0 {
+                        val += (x[i] - t[idx]) / denom_left * scratch[idx];
+                    }
+                }
+                if idx + p + 1 < t.len() && idx + 1 < n {
+                    let denom_right = t[idx + p + 1] - t[idx + 1];
+                    if denom_right > 0.0 {
+                        val += (t[idx + p + 1] - x[i]) / denom_right * scratch[idx + 1];
+                    }
+                }
+                scratch[idx] = val;
+            }
+        }
+        let lo = mu.saturating_sub(k);
+        for col in lo..=mu {
+            bw = bw.max(i.abs_diff(col));
+        }
+        a_mat.push(CompactBandRow::from_slice(lo, &scratch[lo..=mu]));
+        for s in scratch[lo..=mu].iter_mut() {
+            *s = 0.0;
+        }
     }
     let mut rhs = y.to_vec();
-    // The collocation A[i][j]=B_j(x_i) is banded (each B_j has support over k+1
-    // knots → |i-j| ≤ k), so the banded solver is bit-identical to the dense one
-    // (solve_banded is documented identical for bandwidth ≤ bw) at O(n·k²) instead
-    // of the O(n²) dense scan.
-    let c = solve_banded(&mut a_mat, &mut rhs, k)?;
+    // The collocation A[i][j]=B_j(x_i) is banded, so compact rows avoid the
+    // dense O(n^2) allocation/fill that still remains after switching the solve
+    // to a banded window.
+    let c = solve_banded_compact(&mut a_mat, &mut rhs, bw)?;
     BSpline::new(t, c, k)
 }
 
@@ -2581,6 +2613,119 @@ fn solve_dense_system_flat(a: &mut [f64], n: usize, b: &mut [f64]) -> Result<Vec
             s -= a[i * n + j] * x[j];
         }
         x[i] = s / a[i * n + i];
+    }
+    Ok(x)
+}
+
+#[derive(Clone, Debug)]
+struct CompactBandRow {
+    start: usize,
+    values: Vec<f64>,
+}
+
+impl CompactBandRow {
+    fn from_slice(start: usize, values: &[f64]) -> Self {
+        Self {
+            start,
+            values: values.to_vec(),
+        }
+    }
+
+    fn get(&self, col: usize) -> f64 {
+        if col < self.start {
+            return 0.0;
+        }
+        self.values.get(col - self.start).copied().unwrap_or(0.0)
+    }
+
+    fn sub_assign(&mut self, col: usize, value: f64) {
+        let cell = self.cell_mut(col);
+        *cell -= value;
+    }
+
+    fn cell_mut(&mut self, col: usize) -> &mut f64 {
+        if self.values.is_empty() {
+            self.start = col;
+            self.values.push(0.0);
+            return &mut self.values[0];
+        }
+        if col < self.start {
+            let pad = self.start - col;
+            let old = std::mem::take(&mut self.values);
+            self.values = vec![0.0; pad];
+            self.values.extend(old);
+            self.start = col;
+        }
+        let offset = col - self.start;
+        if offset >= self.values.len() {
+            self.values.resize(offset + 1, 0.0);
+        }
+        &mut self.values[offset]
+    }
+}
+
+fn solve_banded_compact(
+    a: &mut [CompactBandRow],
+    b: &mut [f64],
+    bw: usize,
+) -> Result<Vec<f64>, InterpError> {
+    let n = b.len();
+    if n == 0 || a.len() != n {
+        return Err(InterpError::InvalidArgument {
+            detail: "empty or mismatched system".to_string(),
+        });
+    }
+    for col in 0..n {
+        let row_hi = (col + bw + 1).min(n);
+        let mut max_row = col;
+        let mut max_val = a[col].get(col).abs();
+        for (off, a_row) in a[(col + 1)..row_hi].iter().enumerate() {
+            let v = a_row.get(col).abs();
+            if v > max_val {
+                max_val = v;
+                max_row = col + 1 + off;
+            }
+        }
+        if max_val < 1e-14 {
+            return Err(InterpError::InvalidArgument {
+                detail: "singular matrix".to_string(),
+            });
+        }
+        if max_row != col {
+            a.swap(col, max_row);
+            b.swap(col, max_row);
+        }
+        let col_hi = (col + 2 * bw + 1).min(n);
+        let pivot_diag = a[col].get(col);
+        for row in (col + 1)..row_hi {
+            let av = a[row].get(col);
+            if av == 0.0 {
+                continue;
+            }
+            let factor = av / pivot_diag;
+            let (head, tail) = a.split_at_mut(row);
+            let pivot = &head[col];
+            let target = &mut tail[0];
+            for j in col..col_hi {
+                let pval = pivot.get(j);
+                if pval != 0.0 {
+                    target.sub_assign(j, factor * pval);
+                }
+            }
+            b[row] -= factor * b[col];
+        }
+    }
+    let mut x = vec![0.0; n];
+    for i in (0..n).rev() {
+        let mut s = b[i];
+        let j_hi = (i + 2 * bw + 1).min(n);
+        for j in (i + 1)..j_hi {
+            let aij = a[i].get(j);
+            if aij != 0.0 {
+                s -= aij * x[j];
+            }
+        }
+        x[i] = s / a[i].get(i);
     }
     Ok(x)
 }
@@ -11332,6 +11477,37 @@ mod tests {
                 "spline({}) got {got}, expected {want}",
                 x_new[i]
             );
+        }
+    }
+
+    #[test]
+    fn make_interp_spline_compact_band_matches_dense_coefficients_bits() {
+        for k in 0..=5usize {
+            let n = 18 + k;
+            let x: Vec<f64> = (0..n)
+                .map(|i| i as f64 * 0.37 + ((i * 31) % 11) as f64 * 0.001)
+                .collect();
+            let y: Vec<f64> = (0..n)
+                .map(|i| (i as f64 * 0.23).sin() - 0.3 * (i as f64 * 0.11).cos())
+                .collect();
+            let t = interpolation_knots(&x, k);
+            let mut a_mat = vec![vec![0.0; n]; n];
+            for i in 0..n {
+                let basis = eval_basis_all(&t, x[i], k, n);
+                a_mat[i][..n].copy_from_slice(&basis[..n]);
+            }
+            let mut rhs = y.clone();
+            let dense = solve_dense_system(&mut a_mat, &mut rhs).expect("dense coeffs");
+            let compact = make_interp_spline(&x, &y, k).expect("compact coeffs");
+
+            assert_eq!(compact.coeffs().len(), dense.len(), "degree {k}");
+            for (idx, (&got, &want)) in compact.coeffs().iter().zip(&dense).enumerate() {
+                assert_eq!(
+                    got.to_bits(),
+                    want.to_bits(),
+                    "coefficient mismatch degree {k} index {idx}"
+                );
+            }
         }
     }
 

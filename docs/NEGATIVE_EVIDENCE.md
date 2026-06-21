@@ -1361,14 +1361,25 @@ interior-direct (boundary-map only the ~window-1 edge cells).**
   COMPACT banded storage + solver (no n×n alloc). Shipped the byte-identical solve_banded
   step now; the build rewrite is the larger remaining piece.
 
-## 2026-06-20 - make_interp_spline compact-band: DESIGN committed (disk-low, no-build window)
+## 2026-06-21 - frankenscipy-8l8r1.139 - make_interp_spline compact rows - CODE COMMITTED, PENDING BENCH
 
-- Agent: cc / MistyBirch. Disk-low (48G) paused new rch builds/benches, so rather than
-  push an UNVERIFIED conformance-critical band-LU rewrite (risk: break the crate build
-  for the swarm), committed a complete implementation spec:
-  docs/perf/make_interp_spline_banded_plan.md (binary-search interval finder + compact
-  k+1 de-Boor eval + compact banded LU storage/solver → O(n·k) to match scipy; verify
-  vs the byte-identical solve_banded reference + bench expectation n=3000 58ms→~1-2ms).
-- The partial byte-identical solve_banded step is already shipped (318898bb, 1.45x).
-  The compact-band build rewrite is the remaining piece; implement + verify when disk
-  recovers.
+- Agent: cod-a / BlackThrush. Disk-low paused new cargo bench/build work, so this is
+  intentionally a code-only commit with benchmark/conformance gates deferred.
+- Lever: remove the remaining dense `n x n` collocation row allocation/fill from
+  `make_interp_spline`. The upstream partial fix (`318898bb`) moved the solve to
+  `solve_banded`, but still built dense rows through `eval_basis_all`. This follow-up
+  assembles only the active B-spline support window per sample via
+  `bspline_find_interval`, stores rows as compact bands, and solves with a compact
+  row-band Gaussian elimination using the same pivot/window order.
+- Correctness guard in code: `make_interp_spline_compact_band_matches_dense_coefficients_bits`
+  compares compact production coefficients against the previous dense collocation path
+  to `to_bits()` for degrees 0 through 5.
+- Pending bench/conformance: next turn run per-crate focused gates and same-worker
+  Criterion against `origin/main` partial-band baseline:
+  `cargo test -p fsci-interpolate make_interp_spline_ --lib -- --nocapture`,
+  `cargo bench -p fsci-interpolate --bench interpolate_bench -- make_interp_spline/k3`,
+  and the matching SciPy oracle rows. Do not count this as a measured keep until that
+  batch is green.
+- Retry condition: if compact row growth, pivot swaps, or sparse basis assembly loses
+  to the dense-row `solve_banded` baseline on a same-worker run, revert this exact
+  compact-row representation and replace it with fixed-width band storage.
