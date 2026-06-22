@@ -4421,3 +4421,20 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   - EXPENSIVE (correctly eager): betainc family, gammaincinv/gammainccinv, owens_t, hyperu, kv, etc.
 - The moderate slice needs finer benching (8k/16k/32k/128k) per fn + per-fn real_par_min via the
   par_map_indices_gated mechanism (b4db5727). Owner's call (their tuned fns). Vein characterization complete.
+
+## 2026-06-22 - SWEEP CONCLUSION: gate vein closed; remaining fixed-element gates are tuned/low-value
+- Agent: cc / CopperFern. Swept ALL crates for the fixed-element parallel-gate pattern. Findings:
+  - The high-value bug was UNIFORM gates on heterogeneous-cost callers: stats par_continuous_map
+    (2048-for-all-dists) and special par_map_indices (n/32-for-all-functions). Both FIXED/handed-off.
+  - Remaining fixed-element gates are either PER-OPERATION-TUNED (distinct constants set for the
+    op's specific per-item cost — spatial query nq/128, /32, /16; cluster vq work-scaled n·k·d;
+    linalg m/64; sparse rows/256, rows/128) or serve ONE-SHOT/heavy-per-item ops (io loadtxt /2048,
+    csgraph) where the overhead is negligible and the kernel isn't cheap. Code-read assessment (not
+    benched) — none are hot, repeatedly-called, cheap-kernel batch paths like stats distributions, so
+    low/no value; don't chase.
+  - Work-SCALED gates (interpolate par_query_map = m·work_per_query; cluster vq = n·k·d) are the
+    correct design and were never affected.
+- INSIGHT: a parallel gate must scale with PER-ITEM WORK (cost-aware), not raw element count. Uniform
+  element gates on a shared helper serving mixed-cost callers = the pessimization. The campaign's
+  cheap-kernel gate vein is now closed end-to-end (stats fixed, special cheap fixed + moderate handed
+  to BlackThrush, other crates verified tuned/work-scaled).
