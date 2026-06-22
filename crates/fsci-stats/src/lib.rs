@@ -167,15 +167,27 @@ pub trait ContinuousDistribution {
     /// Cumulative distribution function.
     fn cdf(&self, x: f64) -> f64;
 
+    /// Whether `cdf`/`sf` are CHEAP closed forms (≤ a couple transcendentals, e.g. one
+    /// `exp`/`atan`/`powf`). The default `cdf_many`/`sf_many` gate is tuned for COSTLY
+    /// gammainc/betainc cdfs (2048 elts/thread); a cheap 1-exp/1-atan cdf does too little
+    /// work to amortise the thread spawn and runs ~7-9x SLOWER parallel at n≈4096 (measured).
+    /// Override to `true` for elementary closed-form cdf/sf so those `*_many` use a high gate
+    /// (stay serial until the array is genuinely large). Byte-identical either way.
+    fn cdf_sf_is_cheap(&self) -> bool {
+        false
+    }
+
     /// Cumulative distribution at many points — work-gated parallel map of the per-point `cdf`,
-    /// byte-identical to mapping it. Wins for dists with a costly special-function cdf; harmless
-    /// (work-gated) for cheap closed-form ones. Default for all continuous dists.
+    /// byte-identical to mapping it. Wins for dists with a costly special-function cdf; the gate
+    /// is raised for cheap closed-form cdfs (see [`cdf_sf_is_cheap`](Self::cdf_sf_is_cheap)) so the
+    /// thread spawn does not pessimise them. Default for all continuous dists.
     #[must_use]
     fn cdf_many(&self, xs: &[f64]) -> Vec<f64>
     where
         Self: Sync,
     {
-        par_continuous_map(xs, |x| self.cdf(x))
+        let gate = if self.cdf_sf_is_cheap() { 65536 } else { 2048 };
+        par_continuous_map_min(xs, gate, |x| self.cdf(x))
     }
 
     /// Survival function at many points — work-gated parallel map of the per-point `sf`.
@@ -184,7 +196,8 @@ pub trait ContinuousDistribution {
     where
         Self: Sync,
     {
-        par_continuous_map(xs, |x| self.sf(x))
+        let gate = if self.cdf_sf_is_cheap() { 65536 } else { 2048 };
+        par_continuous_map_min(xs, gate, |x| self.sf(x))
     }
 
     /// Inverse cdf at many probabilities — work-gated parallel map of the per-point `ppf`.
@@ -2471,6 +2484,10 @@ impl Uniform {
 }
 
 impl ContinuousDistribution for Uniform {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if x >= self.loc && x <= self.loc + self.scale {
             1.0 / self.scale
@@ -2623,6 +2640,10 @@ impl Exponential {
 }
 
 impl ContinuousDistribution for Exponential {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if x < 0.0 {
             0.0
@@ -4772,6 +4793,10 @@ impl Weibull {
 }
 
 impl ContinuousDistribution for Weibull {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if x < 0.0 {
             return 0.0;
@@ -5445,6 +5470,10 @@ impl Pareto {
 }
 
 impl ContinuousDistribution for Pareto {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if x < self.scale {
             0.0
@@ -5601,6 +5630,10 @@ impl Lomax {
 }
 
 impl ContinuousDistribution for Lomax {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if x < 0.0 {
             0.0
@@ -6205,6 +6238,10 @@ impl Rayleigh {
 }
 
 impl ContinuousDistribution for Rayleigh {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if x < 0.0 {
             0.0
@@ -6371,6 +6408,10 @@ impl Gumbel {
 }
 
 impl ContinuousDistribution for Gumbel {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         let z = (x - self.loc) / self.scale;
         let exp_neg_z = (-z).exp();
@@ -6648,6 +6689,10 @@ impl Logistic {
 }
 
 impl ContinuousDistribution for Logistic {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         let z = (x - self.loc) / self.scale;
         let exp_neg_z = (-z).exp();
@@ -11973,6 +12018,10 @@ impl Cauchy {
 }
 
 impl ContinuousDistribution for Cauchy {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         let z = (x - self.loc) / self.scale;
         1.0 / (PI * self.scale * (1.0 + z * z))
@@ -12166,6 +12215,10 @@ impl Laplace {
 }
 
 impl ContinuousDistribution for Laplace {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         let z = ((x - self.loc) / self.scale).abs();
         (-z).exp() / (2.0 * self.scale)
@@ -14861,6 +14914,10 @@ impl ContinuousDistribution for HalfNormal {
 pub struct HalfLogistic;
 
 impl ContinuousDistribution for HalfLogistic {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if x < 0.0 {
             return 0.0;
@@ -14977,6 +15034,10 @@ impl ContinuousDistribution for HalfLogistic {
 pub struct HalfCauchy;
 
 impl ContinuousDistribution for HalfCauchy {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if x < 0.0 {
             return 0.0;
@@ -15972,6 +16033,10 @@ impl Fisk {
 }
 
 impl ContinuousDistribution for Fisk {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         // /mock-code-finder boundary [frankenscipy-zu96v]: at x=0 the
         // formula c·x^(c-1)/(1+x^c)² has a shape-dependent limit:
@@ -19574,6 +19639,10 @@ impl Gompertz {
 }
 
 impl ContinuousDistribution for Gompertz {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if x < 0.0 {
             return 0.0;

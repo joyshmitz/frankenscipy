@@ -4285,3 +4285,19 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
 - Byte-identical (order-preserving); fsci-stats GREEN 1980/0. Total cheap-kernel *_many sites now
   on the high gate: 27 (14 pdf + 13 logpdf). The continuous-dist cheap-kernel parallel pessimization
   class is now fully closed.
+
+## 2026-06-22 - WIN (big): cheap closed-form cdf_many/sf_many ~7-9x parallel pessimization fixed (14 dists)
+- Agent: cc / CopperFern. The trait-default cdf_many/sf_many (par_continuous_map, 2048 gate, tuned
+  for COSTLY gammainc/betainc cdfs) is shared by ALL non-overriding dists — including those with
+  CHEAP elementary closed-form cdf (1 exp / 1 atan / 1 powf). Measured at n=4096: Exponential
+  cdf_many **344 µs parallel vs 36.9 µs serial (9.3x slower)**; Cauchy **291 vs 38.7 µs (7.5x)** —
+  far worse than the pdf case because the cdf kernel (~9 ns/elt) is dwarfed by 2-thread spawn.
+- FIX (byte-identical): added trait method `cdf_sf_is_cheap()->bool` (default false); the default
+  cdf_many/sf_many pick the gate from it (65536 if cheap else 2048). Flagged 14 verified-elementary
+  closed-form cdf dists (balanced-brace audit: no gammainc/betainc/erf/bessel): Exponential, Cauchy,
+  Logistic, Laplace, Uniform, Rayleigh, Gumbel, Pareto, Weibull, HalfCauchy, HalfLogistic, Fisk,
+  Lomax, Gompertz. Costly-cdf dists (ChiSquared/F/Chi/InverseGamma/… via default, + StudentT/Beta/
+  Gamma overrides) KEEP the 2048 gate. ppf_many/isf_many unchanged (ppf bisection IS costly).
+- RESULT: Exponential cdf_many n=4096 **37.8 µs** (was 344 µs) = **9.1x flip** to the serial-fast
+  path (parity/win vs scipy). fsci-stats GREEN 1981/0. Byte-identical (order-preserving). This was
+  the single biggest cheap-kernel-gate win — cdf kernels are cheaper than pdf so pessimized harder.
