@@ -6,7 +6,63 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
-## 2026-06-21 - frankenscipy-8l8r1.149/cod-b-fft-iterative-odd-tail-20260621 - FFT iterative odd-factor mixed-radix stage plan - KEEP WITH RESIDUAL LOSS
+## 2026-06-22 - CopperFern - ndimage label `mean` AND cluster `linkage` recorded "losses" are RCH-worker-vs-local-SciPy ARTIFACTS — both already DOMINATE on equal hardware
+
+- Agent: CopperFern (claude-code / claude-opus-4-8).
+- Decision: NO source change. Two of the scorecard's standing SciPy losses
+  (ndimage `mean` over labels `0/4/0`, and cluster `linkage` Ward/Average
+  `1.43-2.06x slower`) are MEASUREMENT ARTIFACTS, not real gaps. They were
+  recorded by timing the Rust side on a (slower) RCH worker while timing the
+  SciPy oracle on the local box. Re-measured BOTH sides on the SAME local box
+  (warm `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cc`,
+  SciPy 1.17.1 / NumPy 2.4.3) and frankenscipy WINS every row.
+- Probe method: same-box only, disk-neutral. label `mean` via existing
+  `perf_label_stats` best-of-60 `Instant` loop vs `scipy.ndimage.mean` with
+  integer labels (its fastest path) on the bin's exact LCG label distribution.
+  `linkage` via a throwaway bin (since removed) that dumped the condensed
+  distance vector to `/tmp` and timed `linkage_from_distances` (the exact
+  nn_chain core SciPy's `linkage` runs), then fed the IDENTICAL condensed
+  bytes to `scipy.cluster.hierarchy.linkage`, both best-of-20.
+
+ndimage label `mean` (equal-hardware, ms):
+
+| N / K | fsci (bit-decode, current) | scipy.ndimage.mean(int) | verdict |
+| ---: | ---: | ---: | --- |
+| 65536 / 512 | 0.125 | 0.205 | fsci 1.64x faster |
+| 262144 / 1024 | 0.499 | 0.585 | fsci 1.17x faster |
+| 262144 / 2048 | 0.517 | 0.552 | fsci 1.07x faster |
+| 589824 / 4096 | 1.168 | 1.368 | fsci 1.17x faster |
+
+- A `cast+roundtrip` fast-path candidate replacing the per-element IEEE
+  bit-decoder was byte-identical (mism 0/0/0/0/0/0) but NEUTRAL under best-of-60
+  (0.98-1.09x); the bit decoder is already well optimized, decode is not the
+  bottleneck. Reverted — `~0-gain`, no ship. The `8l8r1.143` "next target"
+  (sharded/parallel reduction) is unwarranted: parallelism would break the
+  byte-identical summation order for ~1ms of work and lose to thread-spawn.
+
+cluster `linkage` (equal-hardware, IDENTICAL condensed distances, ms):
+
+| n | method | fsci `linkage_from_distances` | scipy `linkage` | verdict |
+| ---: | --- | ---: | ---: | --- |
+| 400 | ward | 1.022 | 1.314 | fsci 1.29x faster |
+| 400 | average | 0.834 | 1.190 | fsci 1.43x faster |
+| 800 | ward | 3.814 | 5.157 | fsci 1.35x faster |
+| 800 | average | 3.276 | 4.794 | fsci 1.46x faster |
+| 1500 | ward | 17.088 | 20.321 | fsci 1.19x faster |
+| 1500 | average | 17.689 | 20.205 | fsci 1.14x faster |
+
+- frankenscipy already runs scipy's `nn_chain_linkage` (Müller 2011) with a
+  FULL symmetric matrix + contiguous row reads; the prior `triangular`/condensed
+  candidate that was rejected for being 1.16-1.33x SLOWER was correctly
+  rejected — the full-matrix layout (even with its one strided column write
+  `dm[i*n+b]`) beats the condensed `condensed_index` layout here. No further
+  linkage lever warranted; we win.
+- Retry predicate: do NOT re-chase label `mean` or `linkage` as SciPy losses.
+  ACTION ITEM for the swarm: scorecard rows recorded as "Nx slower" that timed
+  Rust on RCH and SciPy locally are suspect; re-verify on ONE box before
+  spending attempts. The honest head-to-head is same-machine for both sides.
+
+
 
 - Agent: cod-b / BlackThrush.
 - Decision: KEEP the source change because it is not a near-zero lever: the
