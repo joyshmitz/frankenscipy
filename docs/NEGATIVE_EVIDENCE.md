@@ -4510,3 +4510,18 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   FoldedCauchy (2 atan), TruncWeibullMin (3 powf + exp_m1). Flagged cdf_sf_is_cheap (gate 65536).
   Byte-identical; GREEN 1980/0. Confirms the cdf-cheap coverage is now COMPLETE (re-audit found only
   these 2 stragglers). Stats batch-method gate vein fully closed.
+
+## 2026-06-22 - CHARACTERIZED GAP (not safely fixable): discrete cdf O(k) pmf-summation
+- Agent: cc / CopperFern. After completing the stats batch-gate vein (15 wins), audited discrete cdf
+  for O(k) loops. Found 5 dists summing pmf in O(k): Skellam, Hypergeometric, NegHypergeometric,
+  LogSeries, Zipfian. Assessment:
+  - Skellam: CLEAREST loss — scipy uses O(1) ncx2/chdtr closed form; fsci sums O(k). But the ncx2
+    closed-form fix is complex + accuracy-risky (Marcum-Q regime); niche dist. Not shipped.
+  - Zipfian (finite n): no closed form (generalized harmonic partial sum) — scipy also sums; PARITY.
+  - Hypergeometric: recurrence sweep (reasonable; scipy similar). NegHypergeometric: niche.
+  - LogSeries: O(k) sum is EXACT (2.2e-16 vs scipy); the naive betainc closed form (b→0) DIVERGES —
+    the correct closed form is non-trivial, accuracy-risky, niche. Not shipped (exact-but-O(k) kept).
+- CONCLUSION: no CLEAN safe (byte-identical or accuracy-preserving) win here — closed forms need
+  special functions (ncx2/zeta/hypergeometric) that trade exactness for speed on NICHE dists. Left
+  exact. Documented so future agents don't re-chase. The stats safe-perf frontier is reached;
+  remaining gaps are special-crate kernel walls (betainc/gammainc bound nct/beta/F per-call) + FFT.
