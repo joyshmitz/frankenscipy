@@ -4274,3 +4274,14 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   medium arrays now stay serial+hoisted (parity-or-win vs scipy); only arrays >=131072 parallelize.
   NB: a botched bulk-edit duplicated gamma's body mid-work — caught via occurrence-count mismatch,
   restored via `git show HEAD:path > path` (NOT checkout), redone with an index-based replace.
+
+## 2026-06-22 - WIN (extend): 13 cheap-kernel logpdf_many sites get the high parallel gate
+- Agent: cc / CopperFern. logpdf is even cheaper than pdf (no final exp), so its parallel path
+  pessimizes too. Benched StudentT logpdf_many n=4096: parallel **325 µs** vs serial **271 µs**
+  (1.2x self-loss, confirmed). Applied the 65536/thread gate (par_continuous_map_min) to all 13
+  cheap logpdf_many that used the 2048 gate (StudentT, ChiSquared, FDistribution, BetaDist,
+  GammaDist, GenGamma, VonMises, InverseGamma, Chi, Nakagami, DoubleGamma, Erlang, HalfGenNorm).
+  GenNorm::logpdf_many was ALREADY serial (its authors knew) — skipped. cdf/sf keep the 2048 gate.
+- Byte-identical (order-preserving); fsci-stats GREEN 1980/0. Total cheap-kernel *_many sites now
+  on the high gate: 27 (14 pdf + 13 logpdf). The continuous-dist cheap-kernel parallel pessimization
+  class is now fully closed.

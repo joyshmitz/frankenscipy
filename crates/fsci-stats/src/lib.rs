@@ -1107,7 +1107,7 @@ impl StudentT {
     pub fn logpdf_many(&self, xs: &[f64]) -> Vec<f64> {
         let v = self.df;
         let log_coeff = gamma_ratio_t(v).ln();
-        par_continuous_map(xs, |x| log_coeff - 0.5 * (v + 1.0) * (1.0 + x * x / v).ln())
+        par_continuous_map_min(xs, 65536, |x| log_coeff - 0.5 * (v + 1.0) * (1.0 + x * x / v).ln())
     }
 
     /// Cumulative distribution at many points — work-gated parallel map of the per-point
@@ -1934,7 +1934,7 @@ impl ChiSquared {
         let k2 = 0.5 * self.df;
         let k2_ln2 = k2 * 2.0_f64.ln();
         let lg = ln_gamma(k2);
-        par_continuous_map(xs, |x| {
+        par_continuous_map_min(xs, 65536, |x| {
                 if x < 0.0 {
                     return f64::NEG_INFINITY;
                 }
@@ -3036,7 +3036,7 @@ impl FDistribution {
         let d2 = self.dfd;
         let lead = 0.5 * d1 * (d1 / d2).ln();
         let lb = ln_beta(0.5 * d1, 0.5 * d2);
-        par_continuous_map(xs, |x| {
+        par_continuous_map_min(xs, 65536, |x| {
                 if x <= 0.0 {
                     return self.pdf(x).ln();
                 }
@@ -3713,7 +3713,7 @@ impl BetaDist {
     #[must_use]
     pub fn logpdf_many(&self, xs: &[f64]) -> Vec<f64> {
         let lb = ln_beta(self.a, self.b);
-        par_continuous_map(xs, |x| {
+        par_continuous_map_min(xs, 65536, |x| {
                 if !(0.0..1.0).contains(&x) || x == 0.0 {
                     return self.pdf(x).ln();
                 }
@@ -4207,7 +4207,7 @@ impl GammaDist {
     pub fn logpdf_many(&self, xs: &[f64]) -> Vec<f64> {
         let a_scale_ln = self.a * self.scale.ln();
         let lg = ln_gamma(self.a);
-        par_continuous_map(xs, |x| {
+        par_continuous_map_min(xs, 65536, |x| {
                 if x < 0.0 {
                     return f64::NEG_INFINITY;
                 }
@@ -4503,7 +4503,7 @@ impl GenGamma {
         let c = self.c;
         let lead = c.abs().ln();
         let lg = ln_gamma(a);
-        par_continuous_map(xs, |x| {
+        par_continuous_map_min(xs, 65536, |x| {
                 if x <= 0.0 {
                     return f64::NEG_INFINITY;
                 }
@@ -8491,7 +8491,7 @@ impl VonMises {
     pub fn logpdf_many(&self, xs: &[f64]) -> Vec<f64> {
         let ln_2pi = (2.0 * PI).ln();
         let ln_i0 = fsci_special::log_ive_scalar(0.0, self.kappa) + self.kappa;
-        par_continuous_map(xs, |x| self.kappa * (x - self.loc).cos() - ln_2pi - ln_i0)
+        par_continuous_map_min(xs, 65536, |x| self.kappa * (x - self.loc).cos() - ln_2pi - ln_i0)
     }
 
     /// Density at many angles; hoists the `2π·I₀(κ)` denominator (Bessel I₀) like
@@ -12650,7 +12650,7 @@ impl InverseGamma {
     pub fn logpdf_many(&self, xs: &[f64]) -> Vec<f64> {
         let a = self.a;
         let lg = ln_gamma(a);
-        par_continuous_map(xs, |x| {
+        par_continuous_map_min(xs, 65536, |x| {
                 if x <= 0.0 {
                     return f64::NEG_INFINITY;
                 }
@@ -15355,7 +15355,7 @@ impl Chi {
         let k = self.df;
         let lead = (1.0 - k / 2.0) * 2.0_f64.ln();
         let lg = ln_gamma(k / 2.0);
-        par_continuous_map(xs, |x| {
+        par_continuous_map_min(xs, 65536, |x| {
                 if x <= 0.0 {
                     return self.pdf(x).ln();
                 }
@@ -15740,7 +15740,7 @@ impl Nakagami {
     pub fn logpdf_many(&self, xs: &[f64]) -> Vec<f64> {
         let nu = self.nu;
         let lead = 2.0_f64.ln() + nu * nu.ln() - ln_gamma(nu);
-        par_continuous_map(xs, |x| {
+        par_continuous_map_min(xs, 65536, |x| {
                 if x <= 0.0 {
                     return self.pdf(x).ln();
                 }
@@ -16794,7 +16794,7 @@ impl DoubleGamma {
         let a = self.a;
         let ln_half = 0.5_f64.ln();
         let lg = ln_gamma(a);
-        par_continuous_map(xs, |x| {
+        par_continuous_map_min(xs, 65536, |x| {
                 if x == 0.0 {
                     return self.pdf(x).ln();
                 }
@@ -17596,7 +17596,7 @@ impl Erlang {
         let lambda = self.rate;
         let k_lnlambda = k * lambda.ln();
         let lg = ln_gamma(k);
-        par_continuous_map(xs, |x| {
+        par_continuous_map_min(xs, 65536, |x| {
                 if x <= 0.0 {
                     return self.pdf(x).ln();
                 }
@@ -22145,7 +22145,7 @@ impl HalfGenNorm {
     pub fn logpdf_many(&self, xs: &[f64]) -> Vec<f64> {
         let b = self.beta;
         let lead = b.ln() - ln_gamma(1.0 / b);
-        par_continuous_map(xs, |x| {
+        par_continuous_map_min(xs, 65536, |x| {
                 if x < 0.0 {
                     return f64::NEG_INFINITY;
                 }
