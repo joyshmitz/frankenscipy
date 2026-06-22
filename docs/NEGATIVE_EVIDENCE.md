@@ -4480,3 +4480,15 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   The gate-value method now enables precise per-(dist,method) tuning; other erf-class stats dists
   (HalfNormal/FoldedNormal/TruncNorm/Maxwell/Moyal/Levy/SkewNorm) are the same intermediate class —
   FOLLOW-UP (bench each, override to ~32768).
+
+## 2026-06-22 - WIN: 18 more erf-class stats dists get the moderate cdf gate (3-4x@4096 flips)
+- Agent: cc / CopperFern. Extended the Normal moderate-gate fix to all erf/ndtr-class cdf dists using
+  the trait default: Alpha, CrystalBall, ExponNorm, FatigueLife, FoldedNormal, Gibrat, Gilbrat,
+  HalfNormal, InverseGaussian, JohnsonSU, Levy, LevyLeft, Lognormal, Maxwell, Moyal, PowerLognorm,
+  RecipInvGauss, TruncNormal. Benched reps: HalfNormal cdf par/ser 4.02@4096→1.06@65536 (break-even
+  ~70k); InverseGaussian 3.20@4096→0.82@65536 (~45k). All pessimized 3-4x@4096 under the 2048 gate.
+  Applied cdf_sf_par_min→32768 (parallel@65536) — captures the dominant 4x@4096 win for the class;
+  fits the heavier ones, mildly conservative for the lightest (HalfNormal ~6% at ~65k, negligible vs
+  the 4x win). Byte-identical (order-preserving); fsci-stats GREEN 1980/0.
+- The gate-VALUE mechanism (cdf_sf_par_min) makes this a clean per-class override. ppf for these left
+  at default (their ppf varies: ndtri-moderate vs bisection — separate pass if needed).

@@ -5234,6 +5234,12 @@ impl Lognormal {
 }
 
 impl ContinuousDistribution for Lognormal {
+    // erf/ndtr-class cdf (~25-50ns): intermediate cost, pessimized ~3-4x@4096 under the
+    // default 2048 gate (break-even ~45-70k). Moderate gate -> parallel only at ~65k+.
+    fn cdf_sf_par_min(&self) -> usize {
+        32768
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if x <= 0.0 {
             return 0.0;
@@ -5394,6 +5400,12 @@ impl Gibrat {
 }
 
 impl ContinuousDistribution for Gibrat {
+    // erf/ndtr-class cdf (~25-50ns): intermediate cost, pessimized ~3-4x@4096 under the
+    // default 2048 gate (break-even ~45-70k). Moderate gate -> parallel only at ~65k+.
+    fn cdf_sf_par_min(&self) -> usize {
+        32768
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if x <= 0.0 {
             return 0.0;
@@ -7052,6 +7064,12 @@ impl Maxwell {
 }
 
 impl ContinuousDistribution for Maxwell {
+    // erf/ndtr-class cdf (~25-50ns): intermediate cost, pessimized ~3-4x@4096 under the
+    // default 2048 gate (break-even ~45-70k). Moderate gate -> parallel only at ~65k+.
+    fn cdf_sf_par_min(&self) -> usize {
+        32768
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if x < 0.0 {
             0.0
@@ -13059,6 +13077,12 @@ impl InverseGaussian {
 }
 
 impl ContinuousDistribution for InverseGaussian {
+    // erf/ndtr-class cdf (~25-50ns): intermediate cost, pessimized ~3-4x@4096 under the
+    // default 2048 gate (break-even ~45-70k). Moderate gate -> parallel only at ~65k+.
+    fn cdf_sf_par_min(&self) -> usize {
+        32768
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if x <= 0.0 {
             return 0.0;
@@ -13489,6 +13513,12 @@ impl ExponNorm {
 }
 
 impl ContinuousDistribution for ExponNorm {
+    // erf/ndtr-class cdf (~25-50ns): intermediate cost, pessimized ~3-4x@4096 under the
+    // default 2048 gate (break-even ~45-70k). Moderate gate -> parallel only at ~65k+.
+    fn cdf_sf_par_min(&self) -> usize {
+        32768
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         let inv_k = 1.0 / self.k;
         let exp_arg = inv_k * (0.5 * inv_k - x);
@@ -13788,6 +13818,12 @@ impl PowerLognorm {
 }
 
 impl ContinuousDistribution for PowerLognorm {
+    // erf/ndtr-class cdf (~25-50ns): intermediate cost, pessimized ~3-4x@4096 under the
+    // default 2048 gate (break-even ~45-70k). Moderate gate -> parallel only at ~65k+.
+    fn cdf_sf_par_min(&self) -> usize {
+        32768
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if x <= 0.0 || !x.is_finite() {
             return 0.0;
@@ -14020,6 +14056,12 @@ impl JohnsonSU {
 }
 
 impl ContinuousDistribution for JohnsonSU {
+    // erf/ndtr-class cdf (~25-50ns): intermediate cost, pessimized ~3-4x@4096 under the
+    // default 2048 gate (break-even ~45-70k). Moderate gate -> parallel only at ~65k+.
+    fn cdf_sf_par_min(&self) -> usize {
+        32768
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         let z = self.a + self.b * x.asinh();
         self.b * standard_normal_pdf(z) / x.hypot(1.0)
@@ -14952,6 +14994,12 @@ impl ContinuousDistribution for PowerLaw {
 pub struct HalfNormal;
 
 impl ContinuousDistribution for HalfNormal {
+    // erf/ndtr-class cdf (~25-50ns): intermediate cost, pessimized ~3-4x@4096 under the
+    // default 2048 gate (break-even ~45-70k). Moderate gate -> parallel only at ~65k+.
+    fn cdf_sf_par_min(&self) -> usize {
+        32768
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if x < 0.0 {
             0.0
@@ -15297,6 +15345,12 @@ impl FatigueLife {
 }
 
 impl ContinuousDistribution for FatigueLife {
+    // erf/ndtr-class cdf (~25-50ns): intermediate cost, pessimized ~3-4x@4096 under the
+    // default 2048 gate (break-even ~45-70k). Moderate gate -> parallel only at ~65k+.
+    fn cdf_sf_par_min(&self) -> usize {
+        32768
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if x <= 0.0 {
             return 0.0;
@@ -15434,6 +15488,12 @@ impl TruncNormal {
 }
 
 impl ContinuousDistribution for TruncNormal {
+    // erf/ndtr-class cdf (~25-50ns): intermediate cost, pessimized ~3-4x@4096 under the
+    // default 2048 gate (break-even ~45-70k). Moderate gate -> parallel only at ~65k+.
+    fn cdf_sf_par_min(&self) -> usize {
+        32768
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if x < self.a || x > self.b {
             return 0.0;
@@ -18355,6 +18415,12 @@ impl ContinuousDistribution for Bradford {
 pub struct Gilbrat;
 
 impl ContinuousDistribution for Gilbrat {
+    // erf/ndtr-class cdf (~25-50ns): intermediate cost, pessimized ~3-4x@4096 under the
+    // default 2048 gate (break-even ~45-70k). Moderate gate -> parallel only at ~65k+.
+    fn cdf_sf_par_min(&self) -> usize {
+        32768
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if x <= 0.0 {
             0.0
@@ -18497,6 +18563,12 @@ impl Default for Levy {
 }
 
 impl ContinuousDistribution for Levy {
+    // erf/ndtr-class cdf (~25-50ns): intermediate cost, pessimized ~3-4x@4096 under the
+    // default 2048 gate (break-even ~45-70k). Moderate gate -> parallel only at ~65k+.
+    fn cdf_sf_par_min(&self) -> usize {
+        32768
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         let z = x - self.loc;
         if z <= 0.0 {
@@ -18653,6 +18725,12 @@ impl Default for LevyLeft {
 }
 
 impl ContinuousDistribution for LevyLeft {
+    // erf/ndtr-class cdf (~25-50ns): intermediate cost, pessimized ~3-4x@4096 under the
+    // default 2048 gate (break-even ~45-70k). Moderate gate -> parallel only at ~65k+.
+    fn cdf_sf_par_min(&self) -> usize {
+        32768
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         let z = self.loc - x;
         if z <= 0.0 {
@@ -19746,6 +19824,12 @@ impl ContinuousDistribution for Mielke {
 pub struct Moyal;
 
 impl ContinuousDistribution for Moyal {
+    // erf/ndtr-class cdf (~25-50ns): intermediate cost, pessimized ~3-4x@4096 under the
+    // default 2048 gate (break-even ~45-70k). Moderate gate -> parallel only at ~65k+.
+    fn cdf_sf_par_min(&self) -> usize {
+        32768
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         let inv_sqrt_2pi = 1.0 / (2.0 * PI).sqrt();
         inv_sqrt_2pi * (-0.5 * (x + (-x).exp())).exp()
@@ -20782,6 +20866,12 @@ impl RecipInvGauss {
 }
 
 impl ContinuousDistribution for RecipInvGauss {
+    // erf/ndtr-class cdf (~25-50ns): intermediate cost, pessimized ~3-4x@4096 under the
+    // default 2048 gate (break-even ~45-70k). Moderate gate -> parallel only at ~65k+.
+    fn cdf_sf_par_min(&self) -> usize {
+        32768
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if x <= 0.0 {
             return 0.0;
@@ -22843,6 +22933,12 @@ impl Alpha {
 }
 
 impl ContinuousDistribution for Alpha {
+    // erf/ndtr-class cdf (~25-50ns): intermediate cost, pessimized ~3-4x@4096 under the
+    // default 2048 gate (break-even ~45-70k). Moderate gate -> parallel only at ~65k+.
+    fn cdf_sf_par_min(&self) -> usize {
+        32768
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if x <= 0.0 {
             return 0.0;
@@ -23831,6 +23927,12 @@ impl CrystalBall {
 }
 
 impl ContinuousDistribution for CrystalBall {
+    // erf/ndtr-class cdf (~25-50ns): intermediate cost, pessimized ~3-4x@4096 under the
+    // default 2048 gate (break-even ~45-70k). Moderate gate -> parallel only at ~65k+.
+    fn cdf_sf_par_min(&self) -> usize {
+        32768
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         let beta = self.beta_param;
         let m = self.m;
@@ -43596,6 +43698,12 @@ impl FoldedNormal {
 }
 
 impl ContinuousDistribution for FoldedNormal {
+    // erf/ndtr-class cdf (~25-50ns): intermediate cost, pessimized ~3-4x@4096 under the
+    // default 2048 gate (break-even ~45-70k). Moderate gate -> parallel only at ~65k+.
+    fn cdf_sf_par_min(&self) -> usize {
+        32768
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if x < 0.0 {
             return 0.0;
