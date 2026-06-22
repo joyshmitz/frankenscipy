@@ -4503,3 +4503,10 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
 - The stats batch-gate vein is now tuned across pdf/logpdf/cdf/sf/ppf/isf/pmf/logpmf for elementary,
   moderate (erf/ndtri), and costly kernel classes — per-(dist,method) gate values via cdf_sf_par_min/
   ppf_isf_par_min.
+
+## 2026-06-22 - WIN (completeness): 2 missed cheap-cdf dists flagged (FoldedCauchy, TruncWeibullMin)
+- Agent: cc / CopperFern. Comment-stripped re-audit of unflagged dists (my earlier elementary-cdf
+  audit had comment-word false-NEGATIVES) found exactly 2 more genuinely-cheap closed-form cdf dists:
+  FoldedCauchy (2 atan), TruncWeibullMin (3 powf + exp_m1). Flagged cdf_sf_is_cheap (gate 65536).
+  Byte-identical; GREEN 1980/0. Confirms the cdf-cheap coverage is now COMPLETE (re-audit found only
+  these 2 stragglers). Stats batch-method gate vein fully closed.

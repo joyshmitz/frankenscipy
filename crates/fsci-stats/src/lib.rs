@@ -21096,6 +21096,10 @@ impl TruncWeibullMin {
 }
 
 impl ContinuousDistribution for TruncWeibullMin {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if !(self.a < x && x <= self.b) {
             return 0.0;
@@ -43633,6 +43637,10 @@ impl FoldedCauchy {
 }
 
 impl ContinuousDistribution for FoldedCauchy {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if x < 0.0 {
             return 0.0;
