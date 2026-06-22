@@ -309,8 +309,18 @@ fn loggamma_dispatch(
     match z {
         SpecialTensor::RealScalar(x) => loggamma_scalar(*x, mode).map(SpecialTensor::RealScalar),
         SpecialTensor::RealVec(values) => {
-            par_map_indices(values.len(), |i| loggamma_scalar(values[i], mode))
-                .map(SpecialTensor::RealVec)
+            // loggamma(real) == gammaln (cheap ~30ns); gate with the family min so the
+            // n/256-class over-subscription that pessimizes small arrays is avoided.
+            if values.len() >= GAMMA_FAMILY_PAR_MIN {
+                par_map_indices(values.len(), |i| loggamma_scalar(values[i], mode))
+                    .map(SpecialTensor::RealVec)
+            } else {
+                values
+                    .iter()
+                    .map(|&x| loggamma_scalar(x, mode))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map(SpecialTensor::RealVec)
+            }
         }
         SpecialTensor::ComplexScalar(z_val) => {
             Ok(SpecialTensor::ComplexScalar(complex_gammaln(*z_val)))
@@ -605,16 +615,25 @@ fn polygamma_dispatch(
             };
             result.map(SpecialTensor::RealScalar)
         }
-        SpecialTensor::RealVec(values) => par_map_indices(values.len(), |i| {
-            let x = values[i];
-            match n {
+        SpecialTensor::RealVec(values) => {
+            // digamma/trigamma are cheap (~28ns); gate with the family min to avoid the
+            // small-n over-subscription (measured 12x@4096). Order-preserving.
+            let eval = |x: f64| match n {
                 0 => digamma_scalar(x, mode),
                 1 => trigamma_scalar(x, mode),
                 2 => tetragamma_scalar(x, mode),
                 _ => polygamma_higher_scalar(n, x, mode),
+            };
+            if values.len() >= GAMMA_FAMILY_PAR_MIN {
+                par_map_indices(values.len(), |i| eval(values[i])).map(SpecialTensor::RealVec)
+            } else {
+                values
+                    .iter()
+                    .map(|&x| eval(x))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map(SpecialTensor::RealVec)
             }
-        })
-        .map(SpecialTensor::RealVec),
+        }
         SpecialTensor::ComplexScalar(z_val) => Ok(SpecialTensor::ComplexScalar(
             complex_polygamma_scalar(n, *z_val),
         )),
@@ -635,8 +654,17 @@ pub fn rgamma(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     match z {
         SpecialTensor::RealScalar(x) => rgamma_scalar(*x, mode).map(SpecialTensor::RealScalar),
         SpecialTensor::RealVec(values) => {
-            par_map_indices(values.len(), |i| rgamma_scalar(values[i], mode))
-                .map(SpecialTensor::RealVec)
+            // rgamma (1/Gamma) is a cheap kernel; gate with the family min.
+            if values.len() >= GAMMA_FAMILY_PAR_MIN {
+                par_map_indices(values.len(), |i| rgamma_scalar(values[i], mode))
+                    .map(SpecialTensor::RealVec)
+            } else {
+                values
+                    .iter()
+                    .map(|&x| rgamma_scalar(x, mode))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map(SpecialTensor::RealVec)
+            }
         }
         SpecialTensor::ComplexScalar(z_val) => {
             Ok(SpecialTensor::ComplexScalar(complex_rgamma_scalar(*z_val)))
@@ -677,7 +705,7 @@ pub fn multigammaln(a: &SpecialTensor, d: f64, mode: RuntimeMode) -> SpecialResu
         });
     }
 
-    map_real_input("multigammaln", a, mode, |x| multigammaln_scalar(x, d, mode))
+    map_real_input_rp("multigammaln", a, mode, |x| multigammaln_scalar(x, d, mode), 1 << 17) // be ~68k
 }
 
 /// Gamma distribution CDF with rate `a` and shape `b`.
@@ -2512,7 +2540,7 @@ pub fn zeta(s_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
             return Ok(SpecialTensor::RealVec(out));
         }
     }
-    map_real_input("zeta", s_tensor, mode, |s| Ok(zeta_scalar(s)))
+    map_real_input_rp("zeta", s_tensor, mode, |s| Ok(zeta_scalar(s)), 1 << 17) // be ~90k
 }
 
 /// Compute the Riemann zeta function ζ(s) for real scalar `s`.
@@ -2729,7 +2757,7 @@ fn dirichlet_eta(s: f64) -> f64 {
 /// Matches `scipy.special.zetac(s)` and preserves the same RealVec parallel
 /// dispatch contract as [`zeta`].
 pub fn zetac(s_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_input("zetac", s_tensor, mode, |s| Ok(zetac_scalar(s)))
+    map_real_input_rp("zetac", s_tensor, mode, |s| Ok(zetac_scalar(s)), 1 << 15) // be ~30k
 }
 
 /// Compute the Riemann zeta function complement: zetac(s) = zeta(s) - 1 for scalar `s`.

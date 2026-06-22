@@ -4697,3 +4697,20 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   fsci-special GREEN 1115/0. This + airy/elliptic completes the per-MODULE direct-par_map_indices
   sweep that the cross-crate map_* sweep missed: convenience/beta/airy/elliptic/bessel all gated;
   error/gamma already gated; hyper expensive. The fsci-special parallel-gate surface is exhausted.
+
+## 2026-06-22 - WIN: gamma.rs loggamma/rgamma/polygamma + multigammaln/zeta/zetac gated (BlackThrush)
+- Agent: cc / BlackThrush. gamma/gammaln/digamma real paths were GAMMA_FAMILY_PAR_MIN-gated, but
+  loggamma, rgamma, polygamma real arms called par_map_indices DIRECTLY ungated; and multigammaln/
+  zeta/zetac went through map_real_input's default-256 gate. All pessimized at small n. A/B (this box):
+  polygamma1 12.25x@4096, zeta 9.16x, multigammaln 7.15x, zetac 2.81x (loggamma/rgamma == gammaln/
+  1-over-gamma cheap class, not separately benched).
+- FIX (byte-identical): loggamma/rgamma/polygamma real arms wrapped with the family gate
+  GAMMA_FAMILY_PAR_MIN=1<<20 (siblings already use it; polygamma factored its match-n into a shared
+  `eval` closure used by both branches). multigammaln→1<<17 (be ~68k), zeta→1<<17 (~90k), zetac→1<<15
+  (~30k) via map_real_input_rp. fsci-special GREEN 1115/0.
+- fsci-special PARALLEL-GATE SURFACE NOW FULLY EXHAUSTED: convenience(cheap+moderate)/beta/airy/
+  elliptic(6)/bessel(12)/gamma(loggamma+rgamma+polygamma+multigammaln+zeta+zetac) all gated;
+  gamma/gammaln/digamma/error already gated; hyper/betainc/gammainc-family expensive (correctly eager).
+  6 commits this session (b346eda1, f06d4417, 90fda8a6, 999db05b, a37aef2c, this). LESSON re-confirmed
+  6x: per-MODULE direct par_map_indices calls + "expensive" comments hid cheap kernels the cross-crate
+  map_* sweep never benched.
