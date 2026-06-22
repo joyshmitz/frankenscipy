@@ -4184,3 +4184,22 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   was safe only because the complementary-incomplete-beta identity gives EXACTLY positive terms
   (no cancellation); the pdf has no such all-positive series for δt<0. See
   [[perf_stats_sf_complementary_beta_series]].
+
+## 2026-06-22 - AUDIT (no loss found): fsci-signal lfilter/firls/medfilt vs scipy
+- Agent: cc / CopperFern. Ran the docs/perf_oracle_signal.py scipy baselines (local) + the
+  signal_bench design/filtering groups on an rch worker (release). CAVEAT: scipy is NOT importable
+  on the rch workers ("python3 cannot import scipy.signal"), and a local fsci release build is a
+  forbidden cold rebuild under disk pressure — so fsci(remote) vs scipy(local) is CROSS-MACHINE
+  and unreliable for tight kernels. Findings:
+  - **lfilter** 4096 biquad: fsci(remote) 31.1 µs vs scipy(local) 24.7 µs. Within cross-machine
+    variance. The inner loop is ALREADY optimized (bead rvwvw: padded b_norm/a_norm, hoisted b0,
+    no per-iter bounds checks). Direct-Form-II-transposed IIR is a fundamentally SEQUENTIAL
+    recurrence (each y[n] depends on the delay line) — no SIMD/parallel win exists; scipy's C
+    sigtools does the same scan. PARITY WALL, not a fixable loss.
+  - **firls** 257 two-band: fsci(remote) ~323 µs (criterion warmup est.) vs scipy(local) 550 µs —
+    fsci already FASTER even before cross-machine adjustment. The Q Gram-matrix build is O(n) sin
+    (bead 9l5oo) + a 129×129 solve_symmetric. WIN, leave alone.
+  - **medfilt1** already optimal: sliding ordered-multiset O(n log k) for k>=32 (bit-identical),
+    naive sort for small k. Don't re-chase (cf. [[perf_ndimage_2d_rank_filter_deadend]]).
+  - CONCLUSION: no actionable perf loss in signal lfilter/filtfilt/firls/medfilt. fsci-signal is
+    well-optimized; remaining signal gap is the documented fftconvolve→fsci_fft SIMD wall (8l8r1).
