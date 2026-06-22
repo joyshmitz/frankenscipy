@@ -4808,3 +4808,19 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
 - MEASURED: convolve1d len=15 256² axis=0 3454us → 308us = **11.2x faster** (~2.7x faster than scipy, was
   ~4x slower); 512² 1152us. No new helper — reused the proven correlate1d_along_axis. The separable-axpy
   lever now covers gaussian_filter (e767313d) + correlate1d (06671a9b) + convolve1d (this).
+
+## 2026-06-22 - WIN: uniform_filter column running-sum vectorized over `inner` — 512² FLIPS 1.34x loss→1.27x faster
+- Agent: cc / BlackThrush. uniform_filter already used the optimal O(1)/elt running sum, but the
+  per-COLUMN pass (axis=0, inner=cols) strided reads by `inner` → cache-hostile, super-linear scaling
+  (256²→512² was 5.06x for 4x data). Carry a sum VECTOR over the contiguous `inner` dimension instead,
+  updating per row with CONTIGUOUS reads (cache-friendly + auto-vectorizing); inner==1 (last axis,
+  contiguous) keeps the scalar per-line sum.
+- BYTE-IDENTICAL (XOR-checksum matched golden, n=256/512/1024): each column accumulates the same window
+  then `sum[i] += enter[i] - leave[i]` — kept FUSED (not split into += enter; -= leave) so the IEEE
+  rounding matches the original `sum += val_at(enter) - val_at(leave)`. fsci-ndimage GREEN 246/0.
+- MEASURED: uniform_filter size=9: 256² 697→540us (1.6x faster than scipy 868); 512² 3528→2079us
+  (1.70x self, FLIPS 1.34x-slower→1.27x-FASTER than scipy 2640); 1024² 18891→7788us (2.43x; scaling now
+  near-linear, super-linear cache penalty gone). LEVER: a per-column sequential scan that strides by the
+  row width → carry the accumulator as a VECTOR over the contiguous inner dim, update per row with
+  contiguous reads (keep dependent updates FUSED for byte-identity). Same family as the separable-filter
+  axpy [[perf_ndimage_separable_filter_axpy_colpass]] but for a running sum.

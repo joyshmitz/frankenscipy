@@ -2665,15 +2665,82 @@ fn uniform_filter_along_axis(
                 None => cval,
             }
         };
-        for i in 0..inner {
-            let mut sum = 0.0;
-            for k in 0..size_i {
-                sum += val_at(i, k - lo);
+        if inner == 1 {
+            // `a` is the contiguous dimension — the per-line running sum is already
+            // cache-friendly; keep it (vectorizing a dependent scalar sum buys nothing).
+            for i in 0..inner {
+                let mut sum = 0.0;
+                for k in 0..size_i {
+                    sum += val_at(i, k - lo);
+                }
+                os[i] = sum / size_f;
+                for a in 1..mid as i64 {
+                    sum += val_at(i, a - lo + size_i - 1) - val_at(i, (a - 1) - lo);
+                    os[i + (a as usize) * inner] = sum / size_f;
+                }
             }
-            os[i] = sum / size_f;
-            for a in 1..mid as i64 {
-                sum += val_at(i, a - lo + size_i - 1) - val_at(i, (a - 1) - lo);
-                os[i + (a as usize) * inner] = sum / size_f;
+            return;
+        }
+        // inner > 1: the per-COLUMN running sum strides by `inner` (cache-hostile, the
+        // source of the super-linear scaling). Carry a sum VECTOR over the contiguous
+        // `inner` dimension instead, updating it per row with CONTIGUOUS reads — cache-
+        // friendly and auto-vectorizing. BYTE-IDENTICAL: each column accumulates the same
+        // window then `+= enter - leave` (FUSED, not split) in the same row order.
+        let row = |r: i64| -> Option<usize> {
+            boundary_index_1d(r, mid as i64, mode).map(|m| (m as usize) * inner)
+        };
+        let mut sum_vec = vec![0.0f64; inner];
+        for k in 0..size_i {
+            match row(k - lo) {
+                Some(b) => {
+                    let src = &is[b..b + inner];
+                    for (s, &v) in sum_vec.iter_mut().zip(src) {
+                        *s += v;
+                    }
+                }
+                None => {
+                    for s in sum_vec.iter_mut() {
+                        *s += cval;
+                    }
+                }
+            }
+        }
+        for (slot, &s) in os[..inner].iter_mut().zip(&sum_vec) {
+            *slot = s / size_f;
+        }
+        for a in 1..mid as i64 {
+            let e = row(a - lo + size_i - 1);
+            let l = row((a - 1) - lo);
+            let ob = (a as usize) * inner;
+            match (e, l) {
+                (Some(eb), Some(lb)) => {
+                    let er = &is[eb..eb + inner];
+                    let lr = &is[lb..lb + inner];
+                    for i in 0..inner {
+                        sum_vec[i] += er[i] - lr[i];
+                        os[ob + i] = sum_vec[i] / size_f;
+                    }
+                }
+                (Some(eb), None) => {
+                    let er = &is[eb..eb + inner];
+                    for i in 0..inner {
+                        sum_vec[i] += er[i] - cval;
+                        os[ob + i] = sum_vec[i] / size_f;
+                    }
+                }
+                (None, Some(lb)) => {
+                    let lr = &is[lb..lb + inner];
+                    for i in 0..inner {
+                        sum_vec[i] += cval - lr[i];
+                        os[ob + i] = sum_vec[i] / size_f;
+                    }
+                }
+                (None, None) => {
+                    for i in 0..inner {
+                        sum_vec[i] += cval - cval;
+                        os[ob + i] = sum_vec[i] / size_f;
+                    }
+                }
             }
         }
     };
