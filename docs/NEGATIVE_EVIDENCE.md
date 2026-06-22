@@ -4824,3 +4824,18 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   row width → carry the accumulator as a VECTOR over the contiguous inner dim, update per row with
   contiguous reads (keep dependent updates FUSED for byte-identity). Same family as the separable-filter
   axpy [[perf_ndimage_separable_filter_axpy_colpass]] but for a running sum.
+
+## 2026-06-22 - WIN (partial): spline_filter direct in-place line walk — 1.27-1.44x (1.63x loss → 1.13x), byte-identical
+- Agent: cc / BlackThrush. spline_filter (order≥2 prefilter) was 1.45-1.63x slower than scipy. Its
+  per-axis loop did THREE wasteful things: `next = current.clone()` per axis (full-array copy), N-D
+  get/set (per-element multi-index→flat arithmetic) for every gather/scatter, and per-line work.
+- FIX (byte-identical, XOR-checksum matched golden n=256/512): direct strided line walk writing coeffs
+  back IN PLACE (axis-lines occupy disjoint base+i·stride slots, so in-place is safe); line_flat splits
+  into outer (dims<axis) and inner (dims>axis), base=(line_flat/stride)·axis_len·stride + line_flat%stride
+  (proved equal to the old unravel mapping for any ndim). No clone, no N-D index. fsci-ndimage GREEN 246/0.
+- MEASURED: spline_filter order=3: 256² 1370→950us (1.44x; scipy 840, now 1.13x slower); 512² 6363→5024us
+  (1.27x; scipy 4383, now 1.15x slower). Closes most of the loss but does NOT yet flip — the residual is
+  the strided per-column gather + the recursive IIR (bspline_reflect_coefficients, sequential per line).
+- NEXT to flip: vectorize the IIR over the contiguous `inner` dim (operate in-place on the array, sweep
+  causal/anticausal row-by-row with vectorized inner loops + per-column initial-condition reduction) —
+  same lever as uniform_filter (c79ab6c3). Meaty (byte-identity in the recursion), staged separately.

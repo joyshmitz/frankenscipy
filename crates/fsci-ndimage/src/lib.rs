@@ -1038,33 +1038,21 @@ fn prefilter_spline_coefficients(
         if axis_len <= 1 {
             continue;
         }
-        let reduced_shape: Vec<usize> = current
-            .shape
-            .iter()
-            .enumerate()
-            .filter_map(|(d, &size)| (d != axis).then_some(size))
-            .collect();
-        let line_count = reduced_shape.iter().product::<usize>().max(1);
-        let mut next = current.clone();
-        // idx/line hoisted out of the per-line loop and reused (idx is fully set
-        // each line from reduced_idx + the axis sweep; line is cleared and refilled)
-        // -> byte-identical, saving 2×line_count allocations. frankenscipy-7nlc4.
-        let mut idx = vec![0usize; ndim];
+        // Direct strided line walk, IN PLACE: each axis-line occupies disjoint slots
+        // (base + i*stride), so the filter reads the whole line then writes its own
+        // coefficients back — no `next` clone and no per-element N-D get/set index
+        // arithmetic. line_flat splits into outer (dims < axis) and inner (dims > axis):
+        // base = (line_flat/stride)*axis_len*stride + line_flat%stride. BYTE-IDENTICAL
+        // (same line elements, same coefficient kernel, same target slots).
+        let stride: usize = current.shape[axis + 1..].iter().product();
+        let outer: usize = current.shape[..axis].iter().product();
+        let line_count = outer * stride;
         let mut line = Vec::with_capacity(axis_len);
         for line_flat in 0..line_count {
-            let reduced_idx = unravel_with_shape(line_flat, &reduced_shape);
-            let mut src = 0usize;
-            for (d, slot) in idx.iter_mut().enumerate() {
-                if d == axis {
-                    continue;
-                }
-                *slot = reduced_idx[src];
-                src += 1;
-            }
+            let base = (line_flat / stride) * axis_len * stride + (line_flat % stride);
             line.clear();
             for i in 0..axis_len {
-                idx[axis] = i;
-                line.push(current.get(&idx));
+                line.push(current.data[base + i * stride]);
             }
             let coeffs = match (order, mode) {
                 (3, BoundaryMode::Constant | BoundaryMode::Wrap) => {
@@ -1082,11 +1070,9 @@ fn prefilter_spline_coefficients(
                 _ => spline_coefficients_for_line(&line, order)?,
             };
             for (i, coeff) in coeffs.into_iter().enumerate() {
-                idx[axis] = i;
-                next.set(&idx, coeff);
+                current.data[base + i * stride] = coeff;
             }
         }
-        current = next;
     }
     Ok(SplinePrefilter {
         coeffs: current,
