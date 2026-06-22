@@ -4583,3 +4583,24 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   it saves. REVERTED fully (byte-identical to HEAD), toggle + A/B test stripped. The correlate 5x5
   256² 1.18x residual is the genuine scalar-vs-SIMD-C kernel wall (25 scalar fmas/gathers vs scipy's
   vectorized C) — NOT a divide/layout gap. Don't re-chase the index arithmetic.
+
+## 2026-06-22 - NEGATIVE (reverted): nd_filter_apply 2-D SIMD-across-output-pixels is ~0-gain (memory-bound)
+- Agent: cc / CopperFern. Implemented the lever I'd previously SCOPED as high-value (ledger note
+  "SIMD-across-output-pixels ... plausibly flips the 1.18x correlate loss"): `#![feature(portable_simd)]`
+  + process 8 consecutive interior output pixels as Simd<f64,8> (each tap reads 8 CONTIGUOUS input
+  elements at a constant flat offset), interior-run iteration + scalar remainder + boundary slow path.
+  Correctly BYTE-IDENTICAL — verified assert_eq vs the scalar path across kernels 5x5/3x7/1x9/4x4,
+  n∈{37,64,200} (remainder + run-clip cases), modes Reflect/Constant/Nearest, nonzero cval — ALL PASS.
+- MEASURED (same-process A/B, correlate 5x5 256², 200×30): simd=2649µs vs scalar=2714µs = **1.025x
+  (~0-gain, 2.5%)**. ROOT CAUSE: the correlate kernel is MEMORY-BANDWIDTH-bound, not scalar-compute-
+  bound. The 25 taps each read from a DIFFERENT input row (25 distinct cache lines per output pixel);
+  vectorizing 8 output pixels still touches the same 25 cache lines per 8 pixels — SIMD cuts
+  instruction count but NOT the dominant memory traffic. This is exactly why fsci is only 1.18x off
+  scipy's C SIMD (both hit the bandwidth wall, not a compute gap). REVERTED fully (byte-identical to
+  HEAD; feature flag + toggle + test stripped).
+- OVERTURNS the prior "next bold lever" ledger note. LESSON: SIMD-across-pixels wins when the per-pixel
+  kernel is COMPUTE-bound with contiguous reuse (pdist: dependent sqrt/div chain, small dim reused per
+  pair); it does NOT win for a wide-stencil correlate where each tap is a separate row/cache-line
+  (bandwidth-bound). The correlate/gaussian 1.1-1.2x residuals are a MEMORY-BANDWIDTH wall, not a
+  vectorization gap — do not re-chase with SIMD. See [[perf_spatial_pdist_simd_across_pairs]] for the
+  contrasting compute-bound case where it DID win.

@@ -997,6 +997,11 @@ parallel. BYTE-IDENTICAL. fsci-ndimage GREEN 246/0 (+58). Vein tally: gaussian-2
 uniform_filter (1<<20 pixel-count running-sum), now correlate1d/convolve1d (1<<20 tap-dot). The
 shared 1<<18 gate was uniformly too low for ALL cheap separable ndimage kernels.
 
+### ❌ TRIED & REVERTED (~0-gain, see NEGATIVE_EVIDENCE 2026-06-22): SIMD-across-output-pixels for nd_filter_apply
+UPDATE: implemented + measured = **1.025× (memory-bandwidth-bound, NOT compute-bound)**. The 25 taps
+each hit a different input row/cache-line, so vectorizing 8 output pixels cuts instructions but not the
+dominant memory traffic. The correlate/gaussian 1.1-1.2× residuals are a BANDWIDTH wall — do NOT
+re-chase with SIMD. Byte-identity was confirmed (correct, just useless). Original (now-refuted) note:
 ### 📋 NEXT BOLD LEVER (scoped, byte-identical): SIMD-across-output-pixels for nd_filter_apply interior
 The correlate 5x5 256² 1.18× residual (and gaussian/correlate kernel walls generally) is the scalar
 inner loop: per interior pixel, `for k: sum += w[k]*input.data[p+tap_flat[k]]` (25 scalar fmas).
