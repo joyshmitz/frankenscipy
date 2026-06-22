@@ -4142,3 +4142,26 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   a true WIN needs the Kummer/asymptotic SERIES (no integral, machine-accurate AND fast). This is the
   verified no-accuracy-loss partial; bead tkd3v stays open for the series. Same pattern as the dawsn
   NMAX reduction (over-conservative fixed loop bound).
+
+## 2026-06-22 - WIN (loss FLIPPED): nct sf 2.1x LOSS → 2.34x WIN via direct complementary Lenth series
+- Agent: cc / CopperFern. The nct **cdf** was already a fast Lenth series (854baffc, 6x→1.4x win)
+  but **sf** still ran a 2000-panel Simpson per call (~2000 erfc evals/pt) — a residual loss.
+  Applying `I_y(a,b) = 1 − I_{1−y}(b,a)` to the cdf series yields a directly tail-stable
+  survival series with NO additive Φ term to cancel against:
+    **sf(t;ν,δ) = ½ Σ_j [ p_j·I_ȳ(ν/2, j+½) + q_j·I_ȳ(ν/2, j+1) ]**,  ȳ = ν/(t²+ν),  t≥0;
+    t<0 → nct_cdf_integrate(−t,−δ) (reflection, reuses the verified cdf series).
+  Each term is a small positive number, so the deep right tail (where the default `1−cdf`
+  collapses to 0) stays full-precision — the property the Simpson was added for.
+- ACCURACY: pure-Python series vs scipy.stats.nct.sf over a (ν∈{1..100}, δ∈{−8..8}, t∈{−150..150})
+  sweep: worst abs err **2.3e-14**; `nct(10,8).sf(150)` = 8.92e-12 matches to full precision.
+  No regression on the sub-1e-15 δ=−8 far tail (the old Simpson returns ~0 there too). All 11
+  noncentralt tests pass incl. sf_tail_does_not_collapse + sf_consistent_with_cdf_midrange;
+  full fsci-stats lib suite GREEN (1980/0).
+- PERF (same-process A/B, release, rch worker vmi1149989; case mix ν∈{1,2.5,5,10,30,100} ×
+  δ∈{0.5,3,−3,8,3,−8} × t∈{−3,−1,0.2,1,3,10}): new series **20.6 µs/call** vs old Simpson
+  **100.9 µs/call** = **4.89x self-speedup**. vs scipy.stats.nct.sf scalar over the IDENTICAL
+  case mix (48.1 µs/call): fsci flips from **2.1x slower → 2.34x faster**. (Same scalar
+  methodology as the shipped nct cdf win; small-δ cases win ~10-20x, large-δ=8 ~1.7x.)
+  HONEST CAVEAT: scipy's vectorized ufunc path (~0.8-1.4 µs/elt amortized) still beats the
+  serial betainc-bound series for large arrays — the win is on the scalar/per-call path that
+  scipy.stats distributions are realistically used through.
