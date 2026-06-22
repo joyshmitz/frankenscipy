@@ -4301,3 +4301,21 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
 - RESULT: Exponential cdf_many n=4096 **37.8 µs** (was 344 µs) = **9.1x flip** to the serial-fast
   path (parity/win vs scipy). fsci-stats GREEN 1981/0. Byte-identical (order-preserving). This was
   the single biggest cheap-kernel-gate win — cdf kernels are cheaper than pdf so pessimized harder.
+
+## 2026-06-22 - WIN (complete cheap-cdf coverage): 32 more elementary-cdf dists flagged cdf_sf_is_cheap
+- Agent: cc / CopperFern. Extended the cdf_sf_is_cheap fix (f3c7b578) to the long tail. Audited ALL
+  103 ContinuousDistribution impls: balanced-brace cdf body + comprehensive expensive-token filter
+  (lower_regularized_gamma/incomplete_beta/erf/bessel/marcum/_integrate/...) + DELEGATION filter
+  (`for`/`.cdf(`/`::new(`/`self.method(`/bare free-fn calls). The token filter ALONE was unreliable
+  (false positives: ChiSquared/Chi/Erlang/GenGamma/Nakagami delegate to `lower_regularized_gamma`;
+  NoncentralF→FDistribution::cdf→betainc; KsTwoBign→`kstwobign_cdf_{small,large}` series helpers —
+  all EXPENSIVE, correctly EXCLUDED). Final verified-elementary set (powf/exp/atan/sin/asin/expm1
+  only, no delegation): 32 dists — Anglit, Arcsine, Bradford, Burr3, Burr12, CosineDistribution,
+  DoubleWeibull, ExponPow, ExponWeibull, FrechetR, GenExtreme, GenHalfLogistic, GenLogistic,
+  GenPareto, GeneralizedExponential, GumbelLeft, HypSecant, InvWeibull, Kappa3, LaplaceAsymmetric,
+  LogLaplace, Loglogistic, Loguniform, Mielke, PowerLaw, Semicircular, SkewCauchy, Trapezoid,
+  Triangular, TruncExpon, WeibullMax, WrapCauchy.
+- Flip is by-construction (identical flag→65536-gate path verified at Exponential 9.1x in f3c7b578;
+  n=4096 < 131072 ⇒ serial). Byte-identical; fsci-stats GREEN 1980/0. Cheap-cdf/sf coverage now 46
+  dists (14 + 32); costly-cdf dists (gamma-family/noncentrals/Ks/Maxwell-erf) correctly KEEP 2048.
+  The cheap-kernel parallel-gate vein (pdf 14 + logpdf 13 + cdf/sf 46) is now COMPREHENSIVELY closed.

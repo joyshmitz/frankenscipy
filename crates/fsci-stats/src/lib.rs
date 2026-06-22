@@ -2811,6 +2811,10 @@ impl GeneralizedExponential {
 }
 
 impl ContinuousDistribution for GeneralizedExponential {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if x < 0.0 {
             return 0.0;
@@ -5011,6 +5015,10 @@ impl WeibullMax {
 }
 
 impl ContinuousDistribution for WeibullMax {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if x > 0.0 || !x.is_finite() {
             return 0.0;
@@ -6548,6 +6556,10 @@ impl GumbelLeft {
 }
 
 impl ContinuousDistribution for GumbelLeft {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         let z = (x - self.loc) / self.scale;
         (z - z.exp()).exp() / self.scale
@@ -6855,6 +6867,10 @@ impl ContinuousDistribution for Logistic {
 pub struct HypSecant;
 
 impl ContinuousDistribution for HypSecant {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         let exp_neg_abs_x = (-x.abs()).exp();
         2.0 * exp_neg_abs_x / (PI * (1.0 + exp_neg_abs_x * exp_neg_abs_x))
@@ -12384,6 +12400,10 @@ impl Triangular {
 }
 
 impl ContinuousDistribution for Triangular {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         let (a, c, b) = (self.left, self.mode, self.right);
         if x < a || x > b {
@@ -12565,6 +12585,10 @@ impl Trapezoid {
 }
 
 impl ContinuousDistribution for Trapezoid {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         let z = (x - self.loc) / self.scale;
         if !(0.0..=1.0).contains(&z) {
@@ -14198,6 +14222,10 @@ impl GenExtreme {
 }
 
 impl ContinuousDistribution for GenExtreme {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         let c = self.c;
         if c.abs() < 1e-15 {
@@ -14445,6 +14473,10 @@ impl GenPareto {
 }
 
 impl ContinuousDistribution for GenPareto {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if x < 0.0 {
             return 0.0;
@@ -14671,6 +14703,10 @@ impl PowerLaw {
 }
 
 impl ContinuousDistribution for PowerLaw {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if !(0.0..=1.0).contains(&x) {
             0.0
@@ -16255,6 +16291,10 @@ impl Loguniform {
 }
 
 impl ContinuousDistribution for Loguniform {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if x < self.a || x > self.b {
             0.0
@@ -16715,6 +16755,10 @@ impl DoubleWeibull {
 }
 
 impl ContinuousDistribution for DoubleWeibull {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         let c = self.c;
         0.5 * c * x.abs().powf(c - 1.0) * (-x.abs().powf(c)).exp()
@@ -17235,6 +17279,10 @@ impl SkewCauchy {
 }
 
 impl ContinuousDistribution for SkewCauchy {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         let a = self.a;
         let scale = a * x.signum() + 1.0;
@@ -17325,6 +17373,10 @@ impl WrapCauchy {
 }
 
 impl ContinuousDistribution for WrapCauchy {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if !(0.0..2.0 * PI).contains(&x) {
             return 0.0;
@@ -17414,6 +17466,10 @@ impl ContinuousDistribution for WrapCauchy {
 pub struct Semicircular;
 
 impl ContinuousDistribution for Semicircular {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if x.abs() > 1.0 {
             0.0
@@ -17516,6 +17572,10 @@ impl ContinuousDistribution for Semicircular {
 pub struct CosineDistribution;
 
 impl ContinuousDistribution for CosineDistribution {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if x.abs() > PI {
             0.0
@@ -17860,6 +17920,10 @@ impl ContinuousDistribution for Erlang {
 pub struct Anglit;
 
 impl ContinuousDistribution for Anglit {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         let quarter_pi = PI / 4.0;
         if x.abs() > quarter_pi {
@@ -17968,6 +18032,10 @@ impl Bradford {
 }
 
 impl ContinuousDistribution for Bradford {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if !(0.0..=1.0).contains(&x) {
             0.0
@@ -18600,6 +18668,10 @@ impl Burr3 {
 }
 
 impl ContinuousDistribution for Burr3 {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if x <= 0.0 || !x.is_finite() {
             return 0.0;
@@ -18761,6 +18833,10 @@ impl Burr12 {
 }
 
 impl ContinuousDistribution for Burr12 {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         // /mock-code-finder boundary [frankenscipy-27u2d]: at x=0 the
         // formula c·d·x^(c-1)/(1+x^c)^(d+1) has a c-dependent limit:
@@ -18937,6 +19013,10 @@ impl LogLaplace {
 }
 
 impl ContinuousDistribution for LogLaplace {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         // /mock-code-finder boundary [frankenscipy-27u2d]: at x=0 the
         // formula (c/2)·x^(c-1) has a c-dependent limit:
@@ -19146,6 +19226,10 @@ impl Loglogistic {
 }
 
 impl ContinuousDistribution for Loglogistic {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if x <= 0.0 {
             return 0.0;
@@ -19323,6 +19407,10 @@ impl Mielke {
 }
 
 impl ContinuousDistribution for Mielke {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         // /mock-code-finder boundary [frankenscipy-zu96v]: at x=0 the
         // formula k·x^(k-1)/(1+x^s)^(1+k/s) has a shape-dependent
@@ -19817,6 +19905,10 @@ impl ContinuousDistribution for Gompertz {
 pub struct Arcsine;
 
 impl ContinuousDistribution for Arcsine {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         // /mock-code-finder boundary [frankenscipy-1w4wg]: scipy.stats.arcsine
         // returns +∞ at x=0 and x=1 (the limit of 1/(π·√(x(1-x)))).
@@ -19915,6 +20007,10 @@ impl GenLogistic {
 }
 
 impl ContinuousDistribution for GenLogistic {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         let c = self.c;
         c * (-x).exp() / (1.0 + (-x).exp()).powf(c + 1.0)
@@ -20071,6 +20167,10 @@ impl FrechetR {
 }
 
 impl ContinuousDistribution for FrechetR {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if x > 0.0 {
             return 0.0;
@@ -21287,6 +21387,10 @@ impl TruncExpon {
 }
 
 impl ContinuousDistribution for TruncExpon {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if x < 0.0 || x > self.b {
             0.0
@@ -21463,6 +21567,10 @@ impl GenHalfLogistic {
 }
 
 impl ContinuousDistribution for GenHalfLogistic {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if x < 0.0 {
             return 0.0;
@@ -21823,6 +21931,10 @@ impl InvWeibull {
 }
 
 impl ContinuousDistribution for InvWeibull {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if x <= 0.0 {
             return 0.0;
@@ -22654,6 +22766,10 @@ impl LaplaceAsymmetric {
 }
 
 impl ContinuousDistribution for LaplaceAsymmetric {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         let k = self.kappa;
         let norm = 1.0 / (k + 1.0 / k);
@@ -22816,6 +22932,10 @@ impl Kappa3 {
 }
 
 impl ContinuousDistribution for Kappa3 {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if x < 0.0 || !x.is_finite() {
             return 0.0;
@@ -42746,6 +42866,10 @@ impl ExponPow {
 }
 
 impl ContinuousDistribution for ExponPow {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if x < 0.0 {
             return 0.0;
@@ -42953,6 +43077,10 @@ impl ExponWeibull {
 }
 
 impl ContinuousDistribution for ExponWeibull {
+    fn cdf_sf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         // /testing-metamorphic boundary [frankenscipy-3ahgi]: as x→0+,
         // (1 - exp(-x^c)) ~ x^c, so the product
