@@ -4165,3 +4165,22 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   HONEST CAVEAT: scipy's vectorized ufunc path (~0.8-1.4 µs/elt amortized) still beats the
   serial betainc-bound series for large arrays — the win is on the scalar/per-call path that
   scipy.stats distributions are realistically used through.
+
+## 2026-06-22 - NEGATIVE (do not ship): nct pdf/logpdf series replacements both REGRESS accuracy
+- Agent: cc / CopperFern. After flipping nct **sf** to a series (71e8f1ad), checked whether nct
+  **pdf** (currently a 1024-step peak-centered log-space Simpson, `nct_logpdf_integrate`) could
+  get the same treatment. TWO candidate series were verified in pure Python vs scipy.stats.nct.pdf
+  over a (ν∈{1..100}, δ∈{−8..8}, t∈{−50..50}) sweep — BOTH unsafe:
+  1. **Two-cdf Lenth identity** `t·f = ν·[F_{ν+2,δ}(t√(1+2/ν)) − F_{ν,δ}(t)]`: catastrophic
+     cancellation. Worst rel 6.8e-5; small |t| loses ~log10(1/t) digits (t=1e-8 → only ~8 sig
+     figs). The two cdfs are nearly equal near the mode; dividing their difference by t amplifies.
+  2. **Direct positive-term series** `f = C·Σ_j Γ((ν+j+1)/2)/j!·(δt√2/√(ν+t²))^j`: much better in
+     the bulk (small-t and t=0 now ~10 digits) BUT irreducible **alternating-series cancellation
+     when δ·t<0** (the anti-mode tail) → worst rel **2.5e-7** at ~1e-8 pdf values. Reflection
+     f(t;ν,δ)=f(−t;ν,−δ) leaves the product δt invariant, so it can't force positive terms.
+- CONCLUSION: the existing log-space Simpson is machine-accurate everywhere (worst abs ~1e-15);
+  a 2.5e-7 rel regression at small pdf values risks redding a tight pdf-parity test (cf. the
+  reverted dawsn erfi-relation). KEEP the Simpson; nct pdf is NOT a safe series target. The sf win
+  was safe only because the complementary-incomplete-beta identity gives EXACTLY positive terms
+  (no cancellation); the pdf has no such all-positive series for δt<0. See
+  [[perf_stats_sf_complementary_beta_series]].
