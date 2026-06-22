@@ -2,6 +2,7 @@
 
 use fsci_runtime::RuntimeMode;
 
+use crate::convenience::erfcx_scalar;
 use crate::types::{
     Complex64, DispatchPlan, DispatchStep, KernelRegime, SpecialError, SpecialErrorKind,
     SpecialResult, SpecialTensor,
@@ -446,6 +447,20 @@ fn hyperu_dispatch(
         let mut out = Vec::with_capacity(x_vec.len());
         for &x_r in x_vec {
             out.push(hyperu_shifted_b_identity_or_scalar(*a_r, *b_r, x_r, mode)?);
+        }
+        return Ok(SpecialTensor::RealVec(out));
+    }
+
+    if let (
+        SpecialTensor::RealScalar(a_r),
+        SpecialTensor::RealScalar(b_r),
+        SpecialTensor::RealVec(x_vec),
+    ) = (a, b, x)
+        && hyperu_one_three_halves_identity(*a_r, *b_r)
+    {
+        let mut out = Vec::with_capacity(x_vec.len());
+        for &x_r in x_vec {
+            out.push(hyperu_one_three_halves_or_scalar(*a_r, *b_r, x_r, mode)?);
         }
         return Ok(SpecialTensor::RealVec(out));
     }
@@ -1762,6 +1777,10 @@ pub fn hyperu_scalar(a: f64, b: f64, x: f64, mode: RuntimeMode) -> Result<f64, S
         return Ok(hyperu_shifted_b_identity_value(a, x));
     }
 
+    if hyperu_one_three_halves_identity(a, b) {
+        return Ok(hyperu_one_three_halves_value(x));
+    }
+
     if a == 0.0 {
         return Ok(1.0);
     }
@@ -1857,6 +1876,29 @@ fn hyperu_shifted_b_identity_value(a: f64, x: f64) -> f64 {
         return 1.0 / (x * x);
     }
     x.powf(-a)
+}
+
+fn hyperu_one_three_halves_identity(a: f64, b: f64) -> bool {
+    a == 1.0 && b.is_finite() && (b - 1.5).abs() <= 1.0e-12
+}
+
+fn hyperu_one_three_halves_or_scalar(
+    a: f64,
+    b: f64,
+    x: f64,
+    mode: RuntimeMode,
+) -> Result<f64, SpecialError> {
+    if x.is_finite() && x > 0.0 {
+        Ok(hyperu_one_three_halves_value(x))
+    } else {
+        hyperu_scalar(a, b, x, mode)
+    }
+}
+
+fn hyperu_one_three_halves_value(x: f64) -> f64 {
+    const SQRT_PI: f64 = 1.772_453_850_905_516;
+    let root_x = x.sqrt();
+    SQRT_PI * erfcx_scalar(root_x) / root_x
 }
 
 /// U(a, b, x) for a < 0 non-integer and b a positive integer (x > 0) via the
@@ -4002,6 +4044,35 @@ mod tests {
         assert_eq!(values.len(), expected.len());
         for (&actual, &want) in values.iter().zip(expected.iter()) {
             assert!((actual - want).abs() <= 1.0e-14 * want.abs().max(1.0));
+        }
+    }
+
+    #[test]
+    #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy.special.hyperu
+    fn hyperu_one_three_halves_identity_broadcast_matches_scipy() {
+        let scalar_actual = hyperu_scalar(1.0, 1.5, 4.0, RuntimeMode::Strict).unwrap();
+        assert!((scalar_actual - 0.226_338_524_990_587_74).abs() <= 1.0e-12);
+
+        let result = hyperu(
+            &scalar(1.0),
+            &scalar(1.5),
+            &SpecialTensor::RealVec(vec![0.5, 1.0, 2.0, 8.5]),
+            RuntimeMode::Strict,
+        );
+        let values = get_real_vec(&result).unwrap_or(&[]);
+        let expected = [
+            1.311_359_084_837_596_7,
+            0.757_872_156_141_312_1,
+            0.421_369_229_288_053_5,
+            0.111_687_805_254_975_06,
+        ];
+
+        assert_eq!(values.len(), expected.len());
+        for (&actual, &want) in values.iter().zip(expected.iter()) {
+            assert!(
+                (actual - want).abs() <= 2.0e-10 * want.abs().max(1.0),
+                "hyperu(1, 1.5, x) = {actual}, expected {want}"
+            );
         }
     }
 

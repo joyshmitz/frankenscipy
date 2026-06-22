@@ -6,6 +6,42 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-22 - BlackThrush - BOLD-VERIFY hyperu non-shifted identity: 2.02x slower -> 9.31x faster than SciPy on `U(1,3/2,x)`
+
+- Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
+- Decision: KEEP. Live `br ready --json` exposed `frankenscipy-aji5d` after
+  the shifted `bench-hyperu` win, because non-shifted positive-`a` `hyperu`
+  inputs still hit the 768-panel Simpson integral. I added a separate live
+  SciPy row, `perf_special bench-hyperu-generic`, for
+  `hyperu(a=1.0,b=1.5,x=linspace(0.5,8.5,50k))`; the old path measured
+  32.905 ms/iter vs SciPy 16.266 ms/iter, a 2.022937x residual loss.
+- Root cause and lever: this row is the exact non-shifted identity
+  `U(1,3/2,x)=sqrt(pi)*erfcx(sqrt(x))/sqrt(x)`, but FrankenSciPy was still
+  evaluating every vector element through `hyperu_positive_a_integral`. I added
+  scalar and scalar-parameter/vector-`x` shortcuts that preserve all existing
+  nonpositive/nonfinite `x` domain handling by delegating those cases back to
+  `hyperu_scalar`.
+
+| Workload | Before fsci | After fsci | SciPy comparator | Result |
+| --- | ---: | ---: | ---: | --- |
+| `hyperu(1.0,1.5,0.5..8.5,50k)` first live run | 32.905 ms | 1.617 ms | 15.641 ms | before 2.02x slower; after 9.67x faster |
+| `hyperu(1.0,1.5,0.5..8.5,50k)` warm confirmation | - | 1.559 ms | 14.508 ms | 9.31x faster |
+
+- Accuracy/gates: new `hyperu_one_three_halves_identity_broadcast_matches_scipy`
+  covers scalar and vector dispatch against SciPy reference values. With
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b`, the
+  focused identity test, the broader `hyperu` lib-test filter, package
+  `check --all-targets`, and package `fmt -- --check` pass. Per-crate
+  clippy remains blocked by pre-existing lint debt outside this lever: first by
+  path-dependency lints in `fsci-integrate`/`fsci-linalg`, and with `--no-deps`
+  by existing `fsci-special` lint debt in `bessel.rs`, `convenience.rs`,
+  `gamma.rs`, and `orthopoly.rs`.
+- Residual scope: this closes a measured non-shifted positive-`a` row. Generic
+  `b != a+1` positive-`a` inputs without a proved identity still route through
+  Simpson; they are routed to `frankenscipy-r4kkl` for separate benchmark rows
+  and a broader Kummer/asymptotic lever rather than reopening this exact
+  identity win.
+
 ## 2026-06-22 - BlackThrush - BOLD-VERIFY hyperu shifted identity: 4.25x slower -> 35.2x faster than SciPy on bench-hyperu
 
 - Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
