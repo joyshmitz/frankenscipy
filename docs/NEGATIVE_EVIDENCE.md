@@ -4492,3 +4492,14 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   the 4x win). Byte-identical (order-preserving); fsci-stats GREEN 1980/0.
 - The gate-VALUE mechanism (cdf_sf_par_min) makes this a clean per-class override. ppf for these left
   at default (their ppf varies: ndtri-moderate vs bisection — separate pass if needed).
+
+## 2026-06-22 - WIN: 11 erf-class ndtri-ppf dists get the ppf moderate gate (HalfNormal 5.57x@4096)
+- Agent: cc / CopperFern. ppf companion to the erf-class cdf fix. The ndtri-based ppf dists (Alpha,
+  FatigueLife, Gibrat, Gilbrat, HalfNormal, JohnsonSU, Levy, LevyLeft, Lognormal, Moyal, PowerLognorm)
+  use the trait-default ppf_many (2048 gate); ndtri (~50ns) pessimized — HalfNormal ppf par/ser
+  5.57@4096, 1.02@65536 (break-even ~67k). Applied ppf_isf_par_min→65536 (parallel@131k). The
+  BISECTION-ppf erf-class dists (ExponNorm, Maxwell, RecipInvGauss) correctly LEFT eager (expensive
+  ppf amortizes threads). Byte-identical; fsci-stats GREEN 1980/0.
+- The stats batch-gate vein is now tuned across pdf/logpdf/cdf/sf/ppf/isf/pmf/logpmf for elementary,
+  moderate (erf/ndtri), and costly kernel classes — per-(dist,method) gate values via cdf_sf_par_min/
+  ppf_isf_par_min.

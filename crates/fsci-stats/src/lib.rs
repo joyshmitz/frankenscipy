@@ -5234,6 +5234,10 @@ impl Lognormal {
 }
 
 impl ContinuousDistribution for Lognormal {
+    // ndtri-class ppf (~50ns, break-even ~67-90k): pessimized ~5x@4096; gate parallel@131k.
+    fn ppf_isf_par_min(&self) -> usize {
+        65536
+    }
     // erf/ndtr-class cdf (~25-50ns): intermediate cost, pessimized ~3-4x@4096 under the
     // default 2048 gate (break-even ~45-70k). Moderate gate -> parallel only at ~65k+.
     fn cdf_sf_par_min(&self) -> usize {
@@ -5400,6 +5404,10 @@ impl Gibrat {
 }
 
 impl ContinuousDistribution for Gibrat {
+    // ndtri-class ppf (~50ns, break-even ~67-90k): pessimized ~5x@4096; gate parallel@131k.
+    fn ppf_isf_par_min(&self) -> usize {
+        65536
+    }
     // erf/ndtr-class cdf (~25-50ns): intermediate cost, pessimized ~3-4x@4096 under the
     // default 2048 gate (break-even ~45-70k). Moderate gate -> parallel only at ~65k+.
     fn cdf_sf_par_min(&self) -> usize {
@@ -13818,6 +13826,10 @@ impl PowerLognorm {
 }
 
 impl ContinuousDistribution for PowerLognorm {
+    // ndtri-class ppf (~50ns, break-even ~67-90k): pessimized ~5x@4096; gate parallel@131k.
+    fn ppf_isf_par_min(&self) -> usize {
+        65536
+    }
     // erf/ndtr-class cdf (~25-50ns): intermediate cost, pessimized ~3-4x@4096 under the
     // default 2048 gate (break-even ~45-70k). Moderate gate -> parallel only at ~65k+.
     fn cdf_sf_par_min(&self) -> usize {
@@ -14056,6 +14068,10 @@ impl JohnsonSU {
 }
 
 impl ContinuousDistribution for JohnsonSU {
+    // ndtri-class ppf (~50ns, break-even ~67-90k): pessimized ~5x@4096; gate parallel@131k.
+    fn ppf_isf_par_min(&self) -> usize {
+        65536
+    }
     // erf/ndtr-class cdf (~25-50ns): intermediate cost, pessimized ~3-4x@4096 under the
     // default 2048 gate (break-even ~45-70k). Moderate gate -> parallel only at ~65k+.
     fn cdf_sf_par_min(&self) -> usize {
@@ -14994,6 +15010,10 @@ impl ContinuousDistribution for PowerLaw {
 pub struct HalfNormal;
 
 impl ContinuousDistribution for HalfNormal {
+    // ndtri-class ppf (~50ns, break-even ~67-90k): pessimized ~5x@4096; gate parallel@131k.
+    fn ppf_isf_par_min(&self) -> usize {
+        65536
+    }
     // erf/ndtr-class cdf (~25-50ns): intermediate cost, pessimized ~3-4x@4096 under the
     // default 2048 gate (break-even ~45-70k). Moderate gate -> parallel only at ~65k+.
     fn cdf_sf_par_min(&self) -> usize {
@@ -15345,6 +15365,10 @@ impl FatigueLife {
 }
 
 impl ContinuousDistribution for FatigueLife {
+    // ndtri-class ppf (~50ns, break-even ~67-90k): pessimized ~5x@4096; gate parallel@131k.
+    fn ppf_isf_par_min(&self) -> usize {
+        65536
+    }
     // erf/ndtr-class cdf (~25-50ns): intermediate cost, pessimized ~3-4x@4096 under the
     // default 2048 gate (break-even ~45-70k). Moderate gate -> parallel only at ~65k+.
     fn cdf_sf_par_min(&self) -> usize {
@@ -18415,6 +18439,10 @@ impl ContinuousDistribution for Bradford {
 pub struct Gilbrat;
 
 impl ContinuousDistribution for Gilbrat {
+    // ndtri-class ppf (~50ns, break-even ~67-90k): pessimized ~5x@4096; gate parallel@131k.
+    fn ppf_isf_par_min(&self) -> usize {
+        65536
+    }
     // erf/ndtr-class cdf (~25-50ns): intermediate cost, pessimized ~3-4x@4096 under the
     // default 2048 gate (break-even ~45-70k). Moderate gate -> parallel only at ~65k+.
     fn cdf_sf_par_min(&self) -> usize {
@@ -18563,6 +18591,10 @@ impl Default for Levy {
 }
 
 impl ContinuousDistribution for Levy {
+    // ndtri-class ppf (~50ns, break-even ~67-90k): pessimized ~5x@4096; gate parallel@131k.
+    fn ppf_isf_par_min(&self) -> usize {
+        65536
+    }
     // erf/ndtr-class cdf (~25-50ns): intermediate cost, pessimized ~3-4x@4096 under the
     // default 2048 gate (break-even ~45-70k). Moderate gate -> parallel only at ~65k+.
     fn cdf_sf_par_min(&self) -> usize {
@@ -18725,6 +18757,10 @@ impl Default for LevyLeft {
 }
 
 impl ContinuousDistribution for LevyLeft {
+    // ndtri-class ppf (~50ns, break-even ~67-90k): pessimized ~5x@4096; gate parallel@131k.
+    fn ppf_isf_par_min(&self) -> usize {
+        65536
+    }
     // erf/ndtr-class cdf (~25-50ns): intermediate cost, pessimized ~3-4x@4096 under the
     // default 2048 gate (break-even ~45-70k). Moderate gate -> parallel only at ~65k+.
     fn cdf_sf_par_min(&self) -> usize {
@@ -19824,6 +19860,10 @@ impl ContinuousDistribution for Mielke {
 pub struct Moyal;
 
 impl ContinuousDistribution for Moyal {
+    // ndtri-class ppf (~50ns, break-even ~67-90k): pessimized ~5x@4096; gate parallel@131k.
+    fn ppf_isf_par_min(&self) -> usize {
+        65536
+    }
     // erf/ndtr-class cdf (~25-50ns): intermediate cost, pessimized ~3-4x@4096 under the
     // default 2048 gate (break-even ~45-70k). Moderate gate -> parallel only at ~65k+.
     fn cdf_sf_par_min(&self) -> usize {
@@ -22933,6 +22973,10 @@ impl Alpha {
 }
 
 impl ContinuousDistribution for Alpha {
+    // ndtri-class ppf (~50ns, break-even ~67-90k): pessimized ~5x@4096; gate parallel@131k.
+    fn ppf_isf_par_min(&self) -> usize {
+        65536
+    }
     // erf/ndtr-class cdf (~25-50ns): intermediate cost, pessimized ~3-4x@4096 under the
     // default 2048 gate (break-even ~45-70k). Moderate gate -> parallel only at ~65k+.
     fn cdf_sf_par_min(&self) -> usize {
