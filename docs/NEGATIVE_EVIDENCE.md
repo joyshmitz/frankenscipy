@@ -4388,3 +4388,19 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   callers (spence/wrightomega/erfcx/erfi/dawsn — moderate-cost, BlackThrush's tuned fns) left for the
   owner — flagged in the message; they need per-function break-even benching (could regress at
   sub-1M n if gated wrongly).
+
+## 2026-06-22 - DATA (handed to BlackThrush): map_real_or_complex moderate fns have LOW heterogeneous break-evens
+- Agent: cc / CopperFern. Measured the 5 map_real_or_complex callers I'd deferred (par/serial via rch,
+  current ungated n/32 par vs serial):
+    erfcx:       n=4096 14.1x  · 65536 1.18x · 262144 0.55x  → break-even ~100k
+    erfi:        n=4096 3.48x  · 65536 0.46x · 262144 0.34x  → break-even ~25k
+    dawsn:       n=4096 2.16x  · 65536 0.38x · 262144 0.31x  → break-even ~15k
+    spence:      n=4096 4.96x  · 65536 0.52x · 262144 0.37x  → break-even ~50k
+    wrightomega: n=4096 3.45x  · 65536 0.46x · 262144 0.27x  → break-even ~25k
+- CONCLUSION: these moderate kernels pessimize 2-14x at n=4096 (ungated n/32) BUT parallel already
+  WINS by n=65536 for 4 of 5 — so the 1<<20 gate used for cheap binary/pdf kernels would REGRESS them
+  (serial where parallel wins). Each needs its OWN moderate gate (~16k-130k). The factor-4 bench
+  spacing can't pin the gates safely, and these are BlackThrush's tuned fns (esp. dawsn) — so I did
+  NOT gate them (imprecise gates risk regressing their code). Handed the break-even table to
+  BlackThrush to set precise per-fn gates. Confirms the earlier caution was correct: NOT every
+  par_map_indices caller wants 1<<20 — heavier kernels have much lower break-evens.
