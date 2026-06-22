@@ -979,3 +979,20 @@ The 256² 3.78× / 512² 1.48× are the realistic image-filter sizes. Third payo
 gate lever (gaussian 2-D, now uniform_filter); cheap separable/running-sum ndimage kernels need a
 MUCH higher work gate than the shared 1<<18 default — gate on PER-ELEMENT-COST-scaled work, and for
 size-independent running sums that means pixel count, NOT pixel·window.
+
+### ✅ correlate1d/convolve1d along-axis parallel gate raised (serial 2.61×@256²) — also fixes general gaussian path
+Fourth payout of the cost-aware-gate vein. correlate1d_along_axis & convolve1d_along_axis (which
+back public correlate1d/convolve1d AND the GENERAL gaussian path gaussian_filter1d_axis→
+convolve1d_along_axis for 3D/order>0/non-reflect) parallelized across outer slabs when the shared
+`ndimage_filter_thread_count(arr.size(), weights.len()) >= 1<<18`. Per-element cost IS an
+O(weights.len())-tap dot (so the work product is the right metric — unlike uniform's running sum),
+but the 1<<18 threshold is too low: at 256² w5 (work 327k) it spawns ~64 threads for a cheap pass.
+**Same-process A/B (byte-identical assert_eq, axis=1, w5, Reflect):**
+| n     | serial   | parallel | serial speedup |
+|-------|----------|----------|----------------|
+| 256²  | 968 µs   | 2526 µs  | **2.61×**      |
+| 512²  | 3793 µs  | 3075 µs  | 0.81× (parallel wins 1.23×) |
+FIX: gate both at `arr.size()·weights.len() >= 1<<20` (break-even ~n=453); 256²→serial, ≥512²→
+parallel. BYTE-IDENTICAL. fsci-ndimage GREEN 246/0 (+58). Vein tally: gaussian-2D (1<<21 fold),
+uniform_filter (1<<20 pixel-count running-sum), now correlate1d/convolve1d (1<<20 tap-dot). The
+shared 1<<18 gate was uniformly too low for ALL cheap separable ndimage kernels.

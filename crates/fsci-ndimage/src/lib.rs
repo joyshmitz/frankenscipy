@@ -1874,7 +1874,16 @@ fn correlate1d_along_axis(
             }
         }
     };
-    let nthreads = ndimage_filter_thread_count(arr.size(), weights.len()).min(outer.max(1));
+    // Cost-aware gate (same vein as gaussian-2D/uniform_filter): the shared gate trips at
+    // work>=1<<18, but per-element cost here is an O(weights.len())-tap dot, so 256² (work
+    // 327k) spawns ~64 threads for a cheap pass. Same-process A/B (byte-identical): 256²
+    // serial 2.61x faster, 512² parallel 1.23x (break-even ~work 1<<20).
+    let par_work = (arr.size() as u64).saturating_mul(weights.len() as u64);
+    let nthreads = if par_work < (1 << 20) {
+        1
+    } else {
+        ndimage_filter_thread_count(arr.size(), weights.len()).min(outer.max(1))
+    };
     if nthreads <= 1 || outer < 2 {
         for (is, os) in arr.data.chunks(slab).zip(out.data.chunks_mut(slab)) {
             do_slab(is, os);
@@ -1937,7 +1946,16 @@ fn convolve1d_along_axis(
             }
         }
     };
-    let nthreads = ndimage_filter_thread_count(arr.size(), weights.len()).min(outer.max(1));
+    // Cost-aware gate (same vein as gaussian-2D/uniform_filter): the shared gate trips at
+    // work>=1<<18, but per-element cost here is an O(weights.len())-tap dot, so 256² (work
+    // 327k) spawns ~64 threads for a cheap pass. Same-process A/B (byte-identical): 256²
+    // serial 2.61x faster, 512² parallel 1.23x (break-even ~work 1<<20).
+    let par_work = (arr.size() as u64).saturating_mul(weights.len() as u64);
+    let nthreads = if par_work < (1 << 20) {
+        1
+    } else {
+        ndimage_filter_thread_count(arr.size(), weights.len()).min(outer.max(1))
+    };
     if nthreads <= 1 || outer < 2 {
         for (is, os) in arr.data.chunks(slab).zip(out.data.chunks_mut(slab)) {
             do_slab(is, os);
