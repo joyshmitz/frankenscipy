@@ -4345,3 +4345,15 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   right). Cheaper cdf kernels (~9ns/elt vs pdf ~35ns) cross over at even HIGHER n, so 65536 keeps
   them serial longer — also correct. The shipped cheap-kernel gate fixes are confirmed well-tuned;
   no code change needed.
+
+## 2026-06-22 - WIN (last gate site): par_map_inline (Box-Cox transform) cheap-powf 2048→65536 gate
+- Agent: cc / CopperFern. par_map_inline (sole caller: the one-shot Box-Cox transform, 1 powf/elt)
+  used the 2048 gate. Benched: par/serial **6.01x at n=4096**, 3.12x@16k, 1.14x@65k — the
+  well-vectorized serial powf map crushes the 2-thread spawn until ~65536 (same class/break-even as
+  the cheap pdf/cdf kernels). Raised the gate to 65536 (1-line, byte-identical, also skips the
+  syscall below it). Since find_optimal_boxcox_lambda's 401-pt grid IS already parallelized, the
+  one-shot transform was ~19% of boxcox(n=4096) → ~16% boxcox speedup. boxcox tests 16/0.
+- This was the LAST parallel-gate site in fsci-stats. Audited all parallel paths: par_continuous_map
+  /par_discrete_map (gated + syscall-skip), MVN/MVT pdf_many (work-gated n>=5, optimal),
+  boxcox grid (parallelized), par_map_inline (now fixed). The stats cheap-kernel parallel-gate vein
+  is now FULLY exhausted and verified.

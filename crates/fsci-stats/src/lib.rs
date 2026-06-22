@@ -30686,14 +30686,18 @@ where
     // Like par_continuous_map but MOVES a Copy of `f` into each thread (not `&f`), so the closure
     // inlines per-thread and the compiler vectorizes the inline arithmetic identically to the serial
     // `.map()` — byte-identical even for FMA/vectorizable closures (powf), unlike the &f indirection.
+    // High gate (65536/thread): the sole caller is the cheap one-shot Box-Cox transform (1 powf/elt),
+    // whose well-vectorized serial map beats the thread spawn until the array is large — measured
+    // par/serial 6.0x at n=4096, 1.14x at 65536 (break-even ≈65536, same class as the cheap pdf/cdf
+    // gates). Skips the available_parallelism() syscall below the gate.
     let n = xs.len();
-    let nthreads = if n < 2048 {
+    let nthreads = if n < 65536 {
         1
     } else {
         std::thread::available_parallelism()
             .map(std::num::NonZero::get)
             .unwrap_or(1)
-            .min(n / 2048)
+            .min(n / 65536)
             .max(1)
     };
     if nthreads <= 1 {
