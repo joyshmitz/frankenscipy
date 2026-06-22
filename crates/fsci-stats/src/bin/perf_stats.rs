@@ -8,6 +8,7 @@
 //!   `perf_stats sobol2-golden [path]`
 //!   `perf_stats rand-index-golden [path]`
 //!   `perf_stats acf-golden [path]`
+//!   `perf_stats noncentral-cdf <case> <n> <repeats>`
 
 use std::fmt::Write as _;
 use std::hint::black_box;
@@ -15,8 +16,9 @@ use std::path::Path;
 use std::time::Instant;
 
 use fsci_stats::{
-    HaltonSampler, SobolSampler, acf, centered_discrepancy, l2_star_discrepancy,
-    mixture_discrepancy, pacf, psd_welch, rand_index, wraparound_discrepancy,
+    acf, centered_discrepancy, l2_star_discrepancy, mixture_discrepancy, pacf, psd_welch,
+    rand_index, wraparound_discrepancy, ContinuousDistribution, HaltonSampler,
+    NoncentralChiSquared, NoncentralF, NoncentralT, NormInvGauss, SobolSampler,
 };
 
 fn deterministic_data(n: usize) -> Vec<f64> {
@@ -187,6 +189,82 @@ fn timed_psd(repeats: usize) {
     );
 }
 
+fn linspace_midpoints(n: usize, lo: f64, hi: f64) -> Vec<f64> {
+    let step = (hi - lo) / n as f64;
+    (0..n).map(|i| lo + (i as f64 + 0.5) * step).collect()
+}
+
+fn timed_cdf_case<D: ContinuousDistribution + Sync>(
+    case: &str,
+    dist: &D,
+    xs: &[f64],
+    repeats: usize,
+    survival: bool,
+) {
+    let warmup = if survival {
+        dist.sf_many(xs)
+    } else {
+        dist.cdf_many(xs)
+    };
+    black_box(&warmup);
+
+    let t0 = Instant::now();
+    let mut checksum = 0.0_f64;
+    for _ in 0..repeats {
+        let values = if survival {
+            dist.sf_many(xs)
+        } else {
+            dist.cdf_many(xs)
+        };
+        checksum += values.iter().copied().sum::<f64>();
+        black_box(values);
+    }
+    let elapsed = t0.elapsed();
+    let total_ms = elapsed.as_secs_f64() * 1e3;
+    let per_iter_ms = total_ms / repeats as f64;
+    println!(
+        "{{\"mode\":\"noncentral-cdf\",\"case\":\"{case}\",\"n\":{},\"repeats\":{repeats},\"total_ms\":{total_ms:.3},\"per_iter_ms\":{per_iter_ms:.6},\"checksum\":{checksum:.12e}}}",
+        xs.len()
+    );
+}
+
+fn timed_noncentral_cdf(case: &str, n: usize, repeats: usize) {
+    match case {
+        "ncx2-cdf" => {
+            let xs = linspace_midpoints(n, 0.01, 40.0);
+            timed_cdf_case(
+                case,
+                &NoncentralChiSquared::new(4.0, 2.0),
+                &xs,
+                repeats,
+                false,
+            );
+        }
+        "nct-cdf" => {
+            let xs = linspace_midpoints(n, -8.0, 8.0);
+            timed_cdf_case(case, &NoncentralT::new(10.0, 3.0), &xs, repeats, false);
+        }
+        "nct-sf" => {
+            let xs = linspace_midpoints(n, -8.0, 8.0);
+            timed_cdf_case(case, &NoncentralT::new(10.0, 3.0), &xs, repeats, true);
+        }
+        "ncf-cdf" => {
+            let xs = linspace_midpoints(n, 0.01, 20.0);
+            timed_cdf_case(case, &NoncentralF::new(5.0, 12.0, 3.0), &xs, repeats, false);
+        }
+        "nig-cdf" => {
+            let xs = linspace_midpoints(n, -8.0, 8.0);
+            timed_cdf_case(case, &NormInvGauss::new(2.0, 0.7), &xs, repeats, false);
+        }
+        _ => {
+            eprintln!(
+                "unknown noncentral case: {case}; expected ncx2-cdf, nct-cdf, nct-sf, ncf-cdf, nig-cdf"
+            );
+            std::process::exit(2);
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let mode = args.get(1).map(String::as_str).unwrap_or("golden");
@@ -205,6 +283,12 @@ fn main() {
         "psd" => {
             let repeats = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(10);
             timed_psd(repeats);
+        }
+        "noncentral-cdf" => {
+            let case = args.get(2).map(String::as_str).unwrap_or("ncf-cdf");
+            let n = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(100_000);
+            let repeats = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(3);
+            timed_noncentral_cdf(case, n, repeats);
         }
         _ => {
             eprintln!("unknown mode: {mode}");

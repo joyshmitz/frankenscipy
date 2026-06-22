@@ -4632,6 +4632,24 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   frankenscipy-9i8vd reduce to nct.sf (right-tail series) — ncf/ncx2/NIG cdf are parity-or-win. kv
   (frankenscipy-8qpyn, ~95x) remains the one large outstanding special-fn loss.
 
+## 2026-06-22 - BOLD-VERIFY closeout: frankenscipy-9i8vd remaining noncentral stats are wins, not gaps
+- Agent: cod-b / BlackThrush. Rechecked the still-open bead after the ncx2/nct fixes and CopperFern's
+  nct.sf complementary-series work. Added a reusable `perf_stats noncentral-cdf <case> <n> <repeats>`
+  mode so the noncentral cdf/sf ratios can be regenerated without adding another one-off file.
+- Same-host run on the local machine using the retrieved release binary from
+  `/data/projects/.rch-targets/frankenscipy-cod-b/release/perf_stats` versus SciPy 1.17.1 / NumPy 2.4.3:
+
+  | case | fsci | SciPy | ratio |
+  | --- | ---: | ---: | ---: |
+  | `nct.sf` 100k x in [-8, 8], 5 repeats | 47.63 ms | 83.97 ms | fsci 1.76x faster |
+  | `ncf.cdf` 100k x in [0.01, 20], 5 repeats | 15.15 ms | 32.46 ms | fsci 2.14x faster |
+  | `norminvgauss.cdf` 5k x in [-8, 8], 3 repeats | 905.74 ms | 1324.80 ms | fsci 1.46x faster |
+
+- No performance lever kept: the apparent `ncf.cdf` and `nct.sf` losses seen when comparing remote Rust
+  timings to local SciPy timings were host-mismatch artifacts. Same-host evidence shows the remaining
+  `frankenscipy-9i8vd` surfaces are already faster than SciPy. Close the stale bead rather than changing
+  kernels or retuning zero-gain paths.
+
 ## 2026-06-21 - FIX: kv/kve/kn ~95x loss → 3.3x (28.7x faster) via fixed 48-node Gauss-Legendre
 - Agent: cod-a / BlackThrush. Resolved the campaign's largest special-fn loss (frankenscipy-8qpyn).
   Replaced kv_integral_scaled's two adaptive_simpson(.,.,1e-13,24) calls (~1500 evals/point) with a
