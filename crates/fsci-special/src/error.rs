@@ -96,22 +96,24 @@ pub fn erfc(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
 }
 
 pub fn erfinv(y: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_unary_input(
+    map_unary_input_rp(
         "erfinv",
         y,
         mode,
         |v| erfinv_scalar(v, mode),
         |value| erfinv_complex_scalar(value, mode),
+        1 << 20, // cheap ndtri-Newton (~23ns); default-256 gate lost 18.8x@4096 (BlackThrush A/B)
     )
 }
 
 pub fn erfcinv(y: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_unary_input(
+    map_unary_input_rp(
         "erfcinv",
         y,
         mode,
         |v| erfcinv_scalar(v, mode),
         |value| erfcinv_complex_scalar(value, mode),
+        1 << 20, // cheap ~12ns; default-256 gate lost 36.9x@4096, still loses at 262k (BlackThrush A/B)
     )
 }
 

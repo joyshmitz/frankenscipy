@@ -4714,3 +4714,18 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   6 commits this session (b346eda1, f06d4417, 90fda8a6, 999db05b, a37aef2c, this). LESSON re-confirmed
   6x: per-MODULE direct par_map_indices calls + "expensive" comments hid cheap kernels the cross-crate
   map_* sweep never benched.
+
+## 2026-06-22 - WIN: error.rs erfinv/erfcinv gated (BlackThrush — the LAST fsci-special gap, 18-37x@4096)
+- Agent: cc / BlackThrush. erf/erfc were _rp-gated at 1<<20, but erfinv/erfcinv used the DEFAULT
+  map_unary_input (256 gate). A/B: erfinv 18.81x slower parallel @4096, erfcinv 36.87x (erfcinv ~12ns
+  is so cheap it STILL loses 1.54x at 262k). Switched both to map_unary_input_rp at 1<<20 (error-fn
+  family-consistent with erf/erfc; safe for erfcinv's >400k break-even, captures the small-n win).
+  Byte-identical. fsci-special GREEN 1115/0.
+- THE fsci-special PARALLEL-GATE SURFACE IS NOW DEFINITIVELY EXHAUSTED (7 commits 2026-06-22):
+  convenience(cheap+moderate), beta, airy, elliptic(6), bessel(12), gamma(6), error(erfinv/erfcinv).
+  Every per-module par_map_indices dispatcher audited + benched; gamma/gammaln/digamma/erf/erfc already
+  gated; hyper/betainc/gammainc-family/complex-arms correctly eager (heavy kernels). The cross-crate
+  work-scaled gates (signal par_index_fill n/4096, cluster/spatial work<1<<N) are correctly designed —
+  verified, no action. Next un-dominated workloads are the HARD numerical walls (hyperu Kummer series
+  ~23x, kv-Temme ~3.3x, dawsn Cephes ~1.92x, FFT non-pow2, kmeans small-n SIMD) — meaty accuracy-
+  critical ports, already filed as beads; NOT disk-neutral gate work.
