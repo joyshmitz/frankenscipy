@@ -6,6 +6,35 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-22 - CopperFern - FILED: SphericalVoronoi is O(n⁴) brute-force — biggest measured open gap (230x slower than SciPy at n=200, explodes with n). Needs hull-based rewrite.
+
+- Agent: CopperFern (claude-code / claude-opus-4-8). STATUS: OPEN / FILED, not
+  fixed this turn (multi-turn algorithmic rewrite + scipy-parity ordering risk;
+  filed rather than started half-done). The biggest un-dominated workload found.
+- Root cause: `SphericalVoronoi::new` enumerates all O(n³) point triplets and
+  validates each against all n points (gift-wrapping) = O(n⁴) overall (lib.rs
+  ~4316). Only parallelized (frankenscipy-b042b25a), never algorithmically
+  fixed. SciPy uses Qhull `ConvexHull` = O(n log n).
+- Measured equal-hardware (unit-sphere points, identical input, best-of):
+
+| n | fsci SphericalVoronoi | SciPy | ratio |
+| ---: | ---: | ---: | --- |
+| 50 | 0.880 ms | 0.412 ms | 2.1x slower |
+| 100 | 6.102 ms | 0.671 ms | 9.1x slower |
+| 200 | 285.4 ms | 1.237 ms | 230x slower |
+
+- Fix path (the scipy algorithm): the convex hull of points ON a sphere IS the
+  spherical Delaunay triangulation; each hull facet's circumcenter projected to
+  the sphere is a Voronoi vertex; regions come from facet adjacency around each
+  generator. fsci already has `ConvexHull` (lib.rs ~2834) — route through it
+  instead of triplet enumeration. PARITY RISK: scipy sorts region vertices CCW
+  and orders vertices by Qhull facet iteration; port scipy's exact
+  `_calc_circumcenters` + region sort to keep
+  `spherical_voronoi_*matches_scipy*` green (see
+  [[parity_cluster_optimal_leaf_ordering]] lesson: port the exact algorithm).
+- Bead: filed under frankenscipy (perf). Next agent: this is the top spatial
+  perf target by far.
+
 ## 2026-06-22 - CopperFern - Delaunay `tsearch` was an O(nq·S) linear scan — route to grid-accelerated find_simplex_many: 286x self-speedup, FLIPS 57x-SLOWER → 1.9-5.0x FASTER than SciPy
 
 - Agent: CopperFern (claude-code / claude-opus-4-8).
