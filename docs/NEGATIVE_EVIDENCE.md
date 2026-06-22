@@ -4525,3 +4525,16 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   special functions (ncx2/zeta/hypergeometric) that trade exactness for speed on NICHE dists. Left
   exact. Documented so future agents don't re-chase. The stats safe-perf frontier is reached;
   remaining gaps are special-crate kernel walls (betainc/gammainc bound nct/beta/F per-call) + FFT.
+
+## 2026-06-22 - NEGATIVE (benched before implementing): cdist metric-SIMD is ~0-gain; gap is Vec<Vec> layout
+- Agent: cc / CopperFern. Hypothesized cdist dim-4 cityblock/chebyshev (scalar, fall through cdist_fill;
+  only Euclidean/Cosine have the dim-4 SoA-SIMD) could get the proven pdist SIMD lever. BENCHED FIRST
+  (rch, 400x400x4): fsci euclidean (SIMD) **1610µs** ≈ cityblock (scalar) **1686µs** ≈ chebyshev 1323µs
+  — the SIMD euclidean is NOT meaningfully faster than scalar cityblock on the same worker, so the
+  per-pair kernel is NOT the bottleneck. SIMD'ing cityblock/chebyshev would be ~0-gain → did NOT
+  implement (BOLD-VERIFY: measure before writing code).
+- REAL cdist gap (vs scipy euc399/city224/cheb199 µs local; cross-machine so directional): cdist
+  returns `Vec<Vec<f64>>` (AoS — na separate heap allocs + pointer-chase) vs scipy's flat contiguous
+  na×nb array. The output LAYOUT dominates, not the kernel. (pdist returns a FLAT Vec<f64>, which is
+  why its dim-4 SoA-SIMD genuinely won.) Fixing cdist needs a flat-output buffer = an API-breaking
+  return-type change (Vec<Vec> is the public contract) — not a clean byte-identical win. Not pursued.
