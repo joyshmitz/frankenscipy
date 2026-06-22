@@ -4774,3 +4774,24 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   | 256  | 1    | 2551us     | 325us     | 850us  | **2.6x FASTER** (was 3x slower) |
   fsci-ndimage GREEN 246/0 (251 #[test], byte-identical). Generalizes [[perf_ndimage_separable_filter_axpy_colpass]]
   to the N-D separable correlate1d (backs correlate1d/uniform_filter/non-fast-path gaussian).
+
+## 2026-06-22 - REVERTED (byte-identity miss, caught by checksum): convolve1d axpy reroute — order mismatch
+- Agent: cc / BlackThrush. convolve1d (public) ALSO uses the slow per-pixel fill_pixels_parallel path
+  for ALL axes (measured ~3.4ms @256² len=15, same ~4x-slower class as correlate1d was). Tried the same
+  fix as correlate1d: axpy convolve1d_along_axis + reroute convolve1d_with_origin to it. Gave 10x
+  (3454us→336us @256²) BUT the XOR-checksum DID NOT match the golden (0x..100d97 vs 0x..1208ca).
+- ROOT (not a bug, an FP-order subtlety): convolve1d_with_origin (fill) sums `weights.iter().rev()` with
+  source `p+k-offset+origin` (k=0..len ⇒ source LEFT→RIGHT), while convolve1d_along_axis sums
+  `weights.iter()` with source `a+(klen-1-k)-offset+origin` (k=0..len ⇒ source RIGHT→LEFT). SAME terms,
+  OPPOSITE summation order ⇒ ~1 ULP difference ⇒ NOT byte-identical. (correlate1d had NO mismatch because
+  both its paths sum forward in the same order — that's why its reroute was byte-identical.)
+- REVERTED in full (git show HEAD:path > path; dcg blocks checkout). Could NOT just make along_axis match
+  fill's order — along_axis is also used by gaussian_filter1d_axis, so changing its order would break
+  THAT path's byte-identity. THE BYTE-IDENTICAL FIX (next iteration): add a dedicated interior axpy in
+  convolve1d_with_origin preserving fill's exact order: `for k in 0..len { w=weights[len-1-k];
+  shift=k-offset+origin; os[lo..hi] += w*is[lo+shift..hi+shift] }` (inner==1) / over `inner` (else),
+  boundary [0,lo)∪[hi,mid) on the per-pixel path. lo=(offset-origin).max(0),
+  hi=(mid-len+offset-origin+1).clamp(0,mid), offset=(len-1)/2. Golden to match: convolve1d len=15
+  256² ax0=0x0080f1dc3d1208ca ax1=0x0191c08b24bf493f. LESSON: the checksum-golden guard caught a
+  non-byte-identical reroute that tolerance tests would have passed — always checksum BEFORE claiming
+  byte-identical. See [[perf_ndimage_separable_filter_axpy_colpass]].
