@@ -31,13 +31,15 @@ fails are pre-existing/unrelated). If green, delete the verify-queue doc.
 5. **linprog** — leaving-var tie-break is row-order, not strict Bland → harden to
    smallest basis-variable index (degenerate-LP cycling guard). Verify degenerate + large
    LP vs scipy. (HiGHS-parity overall is a known perf wall.)
-   CONFIRMED STILL-PRESENT (2026-06-22, cc/CopperFern): lib.rs:1805 ratio test uses strict
-   `if ratio < min_ratio` → keeps the lowest ROW index on a tie. Entering var already uses
-   Bland (smallest col index, lib.rs:1784); for the no-cycle guarantee the LEAVING var must
-   also break ratio ties by smallest BASIS-VARIABLE index (needs the per-row basis array).
-   Fix is surgical BUT correctness/parity not perf, and RISKY: changes which optimal vertex
-   degenerate LPs return → may red existing linprog tests that enshrine current output. Do
-   under a parity mandate with a degenerate-LP oracle-diff vs scipy, not the perf campaign.
+   THEORETICAL-ONLY, NOT REPRODUCIBLE (2026-06-22, cc/CopperFern — VERIFIED): lib.rs:1805
+   ratio test uses strict `if ratio < min_ratio` (lowest ROW index on a tie), not strict
+   Bland on the leaving var. BUT empirically fsci returns the CORRECT optimum vs scipy on the
+   classic cycling cases — Beale's example (fsci −0.05 = scipy −0.05), plus two other
+   degenerate LPs (−32.5, 0.0) all match. The smallest-index Bland ENTERING rule (lib.rs:1784)
+   + finite maxiter prevent the cycle in practice; I could NOT construct a failing case. So
+   this is a latent theoretical gap with NO demonstrated failure — DO NOT "fix" it (risky:
+   would change passing degenerate-LP output for zero proven benefit) unless someone first
+   exhibits an LP where fsci cycles/wrong-answers vs scipy. Downgraded from suspected-bug.
    NB (2026-06-22 audit): every OPEN [perf] bead was already shipped; this tie-break + the 3
    gaps above (bounded lstsq/curve_fit TRF, solve_bvp collocation, CloughTocher2D global
    gradients) are the ONLY genuinely-unfinished items left, and all are parity/capability.
