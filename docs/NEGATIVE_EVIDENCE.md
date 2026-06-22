@@ -6,6 +6,35 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-22 - BlackThrush - BOLD-VERIFY docs-only closeout: scorecard updated from already-measured rows; no unbenchmarked source diff present
+
+- Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
+- Decision: DOCS-ONLY CLOSEOUT. This pass did not run cargo, rch, or benches
+  because disk was reported critical (~34G). It committed no new performance
+  code and made no new measurement claims.
+- Worktree check: this restart initially saw a clean `git status --short
+  --branch`; after the docs-only update, `git diff --name-status` and `git diff
+  --stat` show only `docs/NEGATIVE_EVIDENCE.md` and
+  `docs/progress/perf-release-readiness-scorecard.md`. There was therefore no
+  unbenchmarked source edit to revert in this restart.
+- Scorecard action: `docs/progress/perf-release-readiness-scorecard.md` now has
+  a top-level 2026-06-22 BOLD-VERIFY closeout summarizing the already-recorded
+  measured rows in this ledger:
+  - fsci-special parallel-gate vein closed by measured BlackThrush/CopperFern
+    gate fixes (`map_real_or_complex`, beta, airy, elliptic, bessel, gamma,
+    error; `fsci-special` green rows recorded in the detailed entries).
+  - fsci-ndimage measured flips and rejects: gaussian/correlate1d/convolve1d/
+    uniform/spline filter wins, CDT taxicab parity, byte-identity misses and
+    same-process regressions documented as no-ship/reverted.
+  - fsci-spatial and fsci-opt measured flips: Delaunay `tsearch`, KDTree build,
+    and flat-buffer `linear_sum_assignment`; SphericalVoronoi remains a filed
+    O(n^4) hull-rewrite gap.
+  - residual walls/routing: FFT non-pow2 `signal.resample`, discrete CDF
+    pmf-summation, hyperu/kv/dawsn/nct numerical kernels, and large-minmax
+    parity erosion are explicitly not disk-neutral follow-ups.
+- Verification for this docs-only pass: diff-only checks and Git status only.
+  No compiler/test/bench gate was run by design under the disk constraint.
+
 ## 2026-06-22 - CopperFern - distance_transform_cdt taxicab: per-index-division + cache-hostile column sweep + wasted background build — 3x self-speedup, FLIPS 2.97x SLOWER → PARITY with SciPy
 
 - Agent: CopperFern (claude-code / claude-opus-4-8).

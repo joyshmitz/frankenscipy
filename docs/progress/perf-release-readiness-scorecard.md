@@ -1,5 +1,36 @@
 # Performance Release-Readiness Scorecard
 
+## 2026-06-22 - BOLD-VERIFY docs-only closeout from already-measured rows
+
+- Agent: cod / BlackThrush (`AGENT_NAME=BlackThrush`).
+- Decision: DOCS-ONLY CLOSEOUT / NO NEW PERF CODE. The current restart first
+  saw a clean `git status --short --branch`; after this docs-only update, the
+  diff is limited to `docs/NEGATIVE_EVIDENCE.md` and this scorecard. There was
+  no unbenchmarked source edit to revert. Disk was reported critical (~34G), so this pass
+  intentionally ran no cargo, rch, or bench commands.
+- Evidence source: already-recorded 2026-06-22 rows in
+  `docs/NEGATIVE_EVIDENCE.md`; this section summarizes those measured rows for
+  release triage and does not introduce new benchmark data.
+
+| Surface | Current scorecard status | Evidence summary |
+| --- | --- | --- |
+| fsci-special parallel-gate vein | CLOSED / KEEP | CopperFern mapped the cheap/moderate gate surface; BlackThrush shipped the measured per-caller gates for `map_real_or_complex`, beta, airy, elliptic, bessel, gamma, and error. Detailed ledger rows record byte-identical/order-preserving gates and `fsci-special` green checks from the original measured passes. |
+| fsci-ndimage separable/filter family | CLOSED / KEEP | Measured wins are recorded for gaussian column axpy, correlate1d interior axpy+routing, convolve1d via reversed correlate1d, uniform_filter vectorized column running sum, and spline_filter in-place/IIR inner-vectorization. The verification sweep records common filter/geometric/rank rows as dominant or parity vs SciPy. |
+| fsci-ndimage distance transform | PARTIAL CLOSE / RESIDUAL | `distance_transform_cdt` taxicab flipped from a 2.97x SciPy loss to parity after direct line-start enumeration, cache-friendly cityblock sweep, and skipped unused background allocation. Chessboard narrowed but remains residual at larger sizes. |
+| fsci-spatial Delaunay/KDTree | CLOSED / KEEP | `tsearch` routed to the existing grid-accelerated batch locator, flipping a 57x SciPy loss to 1.9-5.0x faster. KDTree build flattened coordinate storage, flipping the n=400k build from 1.97x slower to 1.87x faster than SciPy while query rows already dominated. |
+| fsci-opt linear_sum_assignment | CLOSED / KEEP | Flat row-major cost storage flipped the real dense LAP loss to a 1.05-1.06x SciPy win on measured n=256/512/1000 rows, with byte-identical output by unchanged value/order semantics. |
+| Reverted/no-ship ndimage experiments | CLOSED NEGATIVE | Ledger records the convolve1d axpy reroute byte-identity miss, gaussian_filter col-pass candidate regression, nd_filter_apply 2-D incremental-index regression, and SIMD-across-output-pixels near-zero result. These are not release code. |
+| Remaining hard walls | OPEN / ROUTED | SphericalVoronoi O(n^4) remains the largest filed spatial gap; `signal.resample` is an FFT non-pow2 constant-factor wall; discrete CDF pmf-summation, hyperu/kv/dawsn/nct kernels, and large-size minmax parity erosion are routed as deeper numerical/algorithmic work, not disk-neutral gate cleanup. |
+
+Readiness notes:
+
+- This row supersedes stale scorecard loss pointers that were already overturned
+  in `docs/NEGATIVE_EVIDENCE.md`, while preserving the explicit residuals above.
+- The only verification performed in this closeout was status/diff hygiene.
+  Compiler, test, clippy, rch, and benchmark gates were deliberately skipped
+  because the instruction for this restart was "DISK CRITICAL - NO
+  cargo/rch/bench."
+
 ## 2026-06-21 - fsci-special erfinv direct ndtri route
 
 - Agent: cod-a / BlackThrush
