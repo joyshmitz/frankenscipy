@@ -4357,3 +4357,19 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   /par_discrete_map (gated + syscall-skip), MVN/MVT pdf_many (work-gated n>=5, optimal),
   boxcox grid (parallelized), par_map_inline (now fixed). The stats cheap-kernel parallel-gate vein
   is now FULLY exhausted and verified.
+
+## 2026-06-22 - FINDING (handed to BlackThrush): special cheap-binary fns ~63x slower via ungated n/32 gate
+- Agent: cc / CopperFern. Cross-crate hunt for the cheap-kernel-gate anti-pattern (richly paid out in
+  stats) found it in fsci-special/convenience.rs. The generic `map_real_binary`/`map_real_or_complex`
+  dispatch helpers call `par_map_indices` DIRECTLY (gate n/32 — 32 elts/thread, parallel at n>=64),
+  with NO work-gate, unlike the SAME crate's gated paths (GAMMA_FAMILY_PAR_MIN=1<<20, error.rs/
+  convenience O(1)-kernel gate 1<<20). Cheap functions routed through them pessimize hugely.
+- MEASURED (rch, same-process A/B) xlogy real array: par/serial = **63.5x at n=4096** (1021 µs vs
+  16 µs!), 14.1x@16384, 2.40x@65536. The n/32 gate over-subscribes ~16 threads onto a ~4ns/elt
+  kernel. Affected cheap callers: xlogy, xlog1py, rel_entr, boxcox/boxcox_transform/inv_boxcox/
+  boxcox1p/inv_boxcox1p, powm1, huber, pseudo_huber, hardshrink, softshrink, binary_cross_entropy.
+- FIX (handed to BlackThrush — their crate; needs per-caller gating since map_real_binary ALSO serves
+  EXPENSIVE gammaincinv/gammainccinv/owens_t which correctly want eager parallel): route the cheap
+  callers through a work-gated variant (serial below ~1<<20, matching their existing GAMMA_FAMILY_PAR_MIN
+  pattern), leave expensive callers eager. NOT done by me — invasive ~13-caller refactor of their core
+  dispatch; messaged BlackThrush with this measurement + suggested fix. (Did not edit their crate.)
