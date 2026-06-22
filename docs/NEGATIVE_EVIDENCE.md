@@ -4556,3 +4556,16 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   The "obviously-better stride-1 axpy" lost to single-pass cache locality — measure, don't assume.
   (Criterion cross-run showed +20% "regression" too but that's contention noise; the same-process
   A/B is the reliable signal — confirms the change is genuinely worse, not just noisy.)
+
+## 2026-06-22 - CORRECTION (overturns the "lfilter PARITY WALL" audit above): biquad fast path IS a 1.54x win
+- Agent: cc / CopperFern. The 2026-06-22 audit above concluded lfilter is a "PARITY WALL, inner loop
+  ALREADY optimized (bead rvwvw)" — that was a FALSE NEGATIVE (superficial: it saw the rvwvw padded-
+  b_norm/a_norm/hoisted-b0 general loop and stopped). The general lfilter_with_state still ran the
+  DF2T delay-line update as a branchy loop over a HEAP `Vec d` (bounds-checked b_norm[j+1]/d[j+1]
+  indexing + a `j+1<nfilt-1` branch every sample) — NOT the optimal form. sosfilt already used the
+  fully register-unrolled biquad (d1/d2 in registers, no indexing/branch). Adding byte-identical
+  unrolled fast paths for nfilt==2/3 measured **filtering/lfilter/4096_biquad 37.4µs→24.2µs = 1.54x
+  (criterion −35.9%, tight CI), now ≈ scipy 24.5µs** — the recurrence IS sequential, but the per-
+  sample HEAP+BRANCH overhead was the real gap, not the scan. Shipped e96deb2a, GREEN 648/0. LESSON:
+  "already optimized" comments + a sequential-recurrence shape are not proof of optimality — compare
+  the hot loop against the BEST in-tree form (sosfilt) before declaring a wall. See [[perf_signal_lfilter_loworder_unroll]].
