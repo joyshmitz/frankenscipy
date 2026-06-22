@@ -3975,3 +3975,22 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   (Temme series is faster than SciPy's per the gamma/erf pattern). Deferred from this session: an
   accuracy-critical special-function kernel rewrite should not be rushed at extreme context depth where a
   correctness regression is worse than slow-but-correct. hyp1f1/hyp2f1 wins recorded above (no action).
+
+## 2026-06-21 - special bessel/hyper loss-map: kv/kve/kn isolated loss; iv/yv/jv/hyp1f1/hyp2f1 all WIN
+- Agent: cod-a / BlackThrush. Completed the empirical "parallel != winning" sweep over the heavy special
+  families to bound the kv loss. Same-worker hz1, 500k arrays vs scipy.special (v=2, z/x in realistic range):
+
+  | fn | fsci | SciPy | ratio |
+  | --- | ---: | ---: | ---: |
+  | jv | 5.75 ms | 272.29 ms | 47x faster |
+  | yv | 13.11 ms | 375.22 ms | 28.6x faster |
+  | iv | 30.26 ms | 144.74 ms | 4.8x faster |
+  | hyp1f1 | 10.53 ms | 38.23 ms | 3.6x faster |
+  | hyp2f1 | 15.28 ms | 71.88 ms | 4.7x faster |
+  | **kv/kve/kn** | 7.6 s | 80 ms | **~95x SLOWER** (see prior entry, bead frankenscipy-8qpyn) |
+
+- CONCLUSION: the special-fn perf loss is ISOLATED to the K-Bessel functions (kv/kve/kn), whose small-z
+  path uses per-element adaptive-Simpson quadrature. Every other measured heavy special family (J/Y/I
+  Bessel, confluent/Gauss hypergeometric) DOMINATES scipy (3.6-47x), because those use fast
+  series/recurrence (Amos-style) rather than per-point integration. The K-Bessel Temme-series fix
+  (frankenscipy-8qpyn) is the one remaining special-fn domination gap.
