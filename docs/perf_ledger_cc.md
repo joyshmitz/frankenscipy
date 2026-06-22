@@ -959,3 +959,23 @@ reliable signal — criterion cross-run swung +20%…+196% in ONE run, uninterpr
 LEVER (paid out again): a parallel gate must scale with PER-ELEMENT WORK COST, not a flat
 flop-product threshold. Cheap separable/elementwise kernels need a MUCH higher work gate than the
 shared default — the same cost-aware-gate lesson as the stats batch-method and pdist veins.
+
+### ✅ uniform_filter parallel gate fixed (PIXEL-COUNT not work-product) — serial 3.78×@256², 1.48×@512²
+Same cost-aware-gate vein as the gaussian fix. uniform_filter_along_axis parallelized across outer
+slabs when `ndimage_filter_thread_count(arr.size(), size) >= 1<<18` (i.e. arr.size()·size). But the
+sliding window uses a RUNNING SUM — O(1) per output element (drop leaving + add entering),
+INDEPENDENT of window `size` — so multiplying the work metric by `size` is wrong (over-counts large
+windows, trips the gate far too early), and the real amortization point scales with PIXEL COUNT.
+**Same-process interleaved A/B (byte-identical assert_eq all sizes, axis=1, Reflect):**
+| n      | sz | serial    | parallel  | serial speedup |
+|--------|----|-----------|-----------|----------------|
+| 256²   | 5  | 735 µs    | 2780 µs   | **3.78×**      |
+| 512²   | 5  | 3694 µs   | 5470 µs   | **1.48×**      |
+| 1024²  | 5  | 18979 µs  | 18904 µs  | 0.996× (parity)|
+FIX: gate the running-sum pass at `arr.size() >= 1<<20` (~1M px) — below that it spawns up to 64
+threads for cheap O(1)/elt slabs and the spawn overhead dominates; from ~1M px up parallel pays.
+BYTE-IDENTICAL (thread count never changes the result). fsci-ndimage GREEN 246/0 (+58 integration).
+The 256² 3.78× / 512² 1.48× are the realistic image-filter sizes. Third payout of the cost-aware
+gate lever (gaussian 2-D, now uniform_filter); cheap separable/running-sum ndimage kernels need a
+MUCH higher work gate than the shared 1<<18 default — gate on PER-ELEMENT-COST-scaled work, and for
+size-independent running sums that means pixel count, NOT pixel·window.

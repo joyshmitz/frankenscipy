@@ -2598,8 +2598,17 @@ fn uniform_filter_along_axis(
     };
 
     // Parallelize across outer slabs (contiguous & disjoint ⇒ no aliasing) when there are
-    // enough of them to amortize spawn; otherwise sequential.
-    let nthreads = ndimage_filter_thread_count(arr.size(), size).min(outer.max(1));
+    // enough of them to amortize spawn; otherwise sequential. The running-sum pass is O(1)
+    // per output element (drop leaving + add entering), INDEPENDENT of window `size`, so the
+    // amortization point scales with PIXEL COUNT, not the shared `arr.size()·size` work
+    // product (which over-counts large windows and trips far too early). Same-process A/B
+    // (byte-identical): 256² serial 3.78× faster, 512² serial 1.48×, 1024² parity (0.996×) —
+    // parallel only pays from ~1M pixels up. Gate at arr.size() >= 1<<20.
+    let nthreads = if arr.size() < (1 << 20) {
+        1
+    } else {
+        ndimage_filter_thread_count(arr.size(), size).min(outer.max(1))
+    };
     if nthreads <= 1 || outer < 2 {
         for (is, os) in arr.data.chunks(slab).zip(out.data.chunks_mut(slab)) {
             do_slab(is, os);
