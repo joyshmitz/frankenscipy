@@ -2489,6 +2489,7 @@ fn map_real_or_complex<F, G>(
     function: &'static str,
     input: &SpecialTensor,
     mode: RuntimeMode,
+    real_par_min: usize,
     real_kernel: F,
     complex_kernel: G,
 ) -> SpecialResult
@@ -2498,8 +2499,16 @@ where
 {
     match input {
         SpecialTensor::RealScalar(x) => real_kernel(*x).map(SpecialTensor::RealScalar),
+        // Moderate real kernels (erfcx/erfi/dawsn/spence/wrightomega, ~50-300ns/elt)
+        // have per-fn break-evens far below the cheap-kernel 1<<20 but well above the
+        // raw n/32 par_map_indices gate, which over-subscribes ~16 threads onto a
+        // sub-µs kernel and pessimizes 2-14x at n=4096 (measured, NEGATIVE_EVIDENCE
+        // 2026-06-22). Gate the real-array path on each caller's measured break-even.
+        // Order-preserving ⇒ byte-identical either way. The COMPLEX kernels are much
+        // heavier (Faddeeva/series), so their break-even is tiny — left eager.
         SpecialTensor::RealVec(values) => {
-            par_map_indices(values.len(), |i| real_kernel(values[i])).map(SpecialTensor::RealVec)
+            par_map_indices_gated(values.len(), real_par_min, |i| real_kernel(values[i]))
+                .map(SpecialTensor::RealVec)
         }
         SpecialTensor::ComplexScalar(value) => {
             complex_kernel(*value).map(SpecialTensor::ComplexScalar)
@@ -3743,6 +3752,7 @@ pub fn spence(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
         "spence",
         x_tensor,
         mode,
+        1 << 17, // spence break-even ~85k (BlackThrush A/B: 65536 loses 1.20x, 131072 wins 0.63x)
         |x| Ok(spence_scalar(x)),
         // Form 1 - z by negating the imaginary part directly rather than
         // subtracting: `0.0 - (+0.0)` would collapse to `+0.0` and lose the
@@ -3892,6 +3902,7 @@ pub fn wrightomega(z_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult
         "wrightomega",
         z_tensor,
         mode,
+        1 << 16, // wrightomega break-even ~50k (BlackThrush A/B: 32768 loses 1.54x, 65536 wins 0.79x)
         |z| Ok(wrightomega_scalar(z)),
         |z| wrightomega_complex_scalar(z, mode),
     )
@@ -4519,6 +4530,7 @@ pub fn erfcx(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
         "erfcx",
         x_tensor,
         mode,
+        1 << 18, // erfcx break-even ~205k (BlackThrush A/B: 131072 loses 1.52x, 262144 wins 0.85x)
         |x| Ok(erfcx_scalar(x)),
         |z| erfcx_complex_scalar(z, mode),
     )
@@ -4579,6 +4591,7 @@ pub fn erfi(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
         "erfi",
         x_tensor,
         mode,
+        1 << 16, // erfi break-even ~45k (BlackThrush A/B: 32768 loses 1.15x, 65536 wins 0.59x)
         |x| Ok(erfi_scalar(x)),
         |z| Ok(erfi_complex_scalar(z)),
     )
@@ -4892,6 +4905,7 @@ pub fn dawsn(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
         "dawsn",
         x_tensor,
         mode,
+        1 << 15, // dawsn break-even ~30k (BlackThrush A/B 2026-06-22: 16384 loses 1.96x, 32768 wins 0.95x)
         |x| Ok(dawsn_scalar(x)),
         |z| dawsn_complex_scalar(z, mode),
     )

@@ -4604,3 +4604,29 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   (bandwidth-bound). The correlate/gaussian 1.1-1.2x residuals are a MEMORY-BANDWIDTH wall, not a
   vectorization gap — do not re-chase with SIMD. See [[perf_spatial_pdist_simd_across_pairs]] for the
   contrasting compute-bound case where it DID win.
+
+## 2026-06-22 - WIN: map_real_or_complex moderate fns per-fn gated (BlackThrush — closes the n/32 over-subscription handed off by CopperFern)
+- Agent: cc / BlackThrush. Took CopperFern's handoff (the 3 "DATA (handed to BlackThrush)" entries
+  above): the 5 map_real_or_complex callers (erfcx/erfi/dawsn/spence/wrightomega) called par_map_indices
+  DIRECTLY (n/32 gate → ~16 threads onto a sub-µs kernel), pessimizing 2-21x at common batch sizes.
+- IMPLEMENTED (byte-identical, order-preserving): added `real_par_min: usize` param to map_real_or_complex;
+  its RealVec path now routes through par_map_indices_gated (the b4db5727 mechanism). COMPLEX path left
+  eager (heavier Faddeeva/series kernels, tiny break-even). Per-fn gates set from a fresh same-process
+  A/B sweep on THIS box (8 sizes 16k–393k, --test-threads=1 release) — break-evens ran HIGHER here than
+  CopperFern's factor-4 estimates, so I pinned each gate at the smallest measured n where parallel WINS:
+  | fn | par/ser @4096 | par/ser @16384 | break-even | gate |
+  |----|---------------|----------------|-----------|------|
+  | dawsn       | 3.20x | 1.96x | ~30k  | 1<<15 (32768, wins 0.95x)  |
+  | erfi        | 4.19x | 2.43x | ~45k  | 1<<16 (65536, wins 0.59x)  |
+  | wrightomega | 5.26x | 2.96x | ~50k  | 1<<16 (65536, wins 0.79x)  |
+  | spence      | 7.51x | 4.51x | ~85k  | 1<<17 (131072, wins 0.63x) |
+  | erfcx       | 21.36x| 11.38x| ~205k | 1<<18 (262144, wins 0.85x) |
+- GAIN: cheap-batch sizes (n≈4k–16k, the common path) flip from over-subscribed parallel to serial =
+  2-21x faster; large arrays still parallelize (gate set where par is measured to win, so NO regression
+  at any size). erfcx is the standout: its kernel is so cheap (~19ns/elt) that parallel loses up to
+  ~205k — the n/32 gate was catastrophically wrong for it (21x@4096).
+- VERIFY: byte-identical by construction (thread count never changes the result; order-preserving collect).
+  fsci-special lib GREEN 1115/0. Conservative gates (each at/above the measured crossover) ⇒ the factor-4
+  imprecision CopperFern flagged is resolved with finer 8-point benching. CLOSES the moderate slice of the
+  special gate-vein handed to me. STILL OPEN (next): beta.rs map_real_binary {beta ~20k, betaln ~25k} —
+  same n/32 anti-pattern, same crate, separate per-fn gates.
