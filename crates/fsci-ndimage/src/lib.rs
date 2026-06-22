@@ -1632,21 +1632,24 @@ pub fn convolve1d_with_origin(
     }
     validate_filter_origin(weights.len(), origin)?;
 
-    let offset = (weights.len() as i64 - 1) / 2;
-    let mut output = NdArray::zeros(input.shape.clone());
-    // Independent per-output 1D weighted sum (flipped weights) along `axis`.
-    fill_pixels_parallel(&mut output, weights.len().max(1), |flat_out, _scratch| {
-        let out_idx = input.unravel(flat_out);
-        let mut in_idx: Vec<i64> = out_idx.iter().map(|&i| i as i64).collect();
-        let mut sum = 0.0;
-        for (k, &weight) in weights.iter().rev().enumerate() {
-            in_idx[axis] = out_idx[axis] as i64 + k as i64 - offset + origin;
-            sum += weight * input.get_boundary(&in_idx, mode, cval);
-        }
-        sum
-    });
-
-    Ok(output)
+    // convolve1d(w, origin) ≡ correlate1d(reverse(w), origin'), the identity SciPy itself
+    // uses. correlate1d_along_axis sums forward over the reversed weights, which reproduces
+    // the old fill path's exact source-left-to-right summation order (weights.rev() with
+    // source p+k-offset+origin) ⇒ BYTE-IDENTICAL, while reusing its vectorized interior axpy
+    // (10x faster than the per-pixel fill, 06671a9b). The origin shift maps convolve's
+    // offset=(len-1)/2 to correlate's offset=len/2: origin' = (len-1)/2 - len/2 - origin
+    // (= -origin for odd len, -origin-1 for even).
+    let len = weights.len() as i64;
+    let corr_origin = (len - 1) / 2 - len / 2 - origin;
+    let rev: Vec<f64> = weights.iter().rev().copied().collect();
+    Ok(correlate1d_along_axis(
+        input,
+        &rev,
+        axis,
+        corr_origin,
+        mode,
+        cval,
+    ))
 }
 
 /// N-dimensional correlation with a given kernel.

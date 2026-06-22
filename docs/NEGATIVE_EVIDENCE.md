@@ -4795,3 +4795,16 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   256² ax0=0x0080f1dc3d1208ca ax1=0x0191c08b24bf493f. LESSON: the checksum-golden guard caught a
   non-byte-identical reroute that tolerance tests would have passed — always checksum BEFORE claiming
   byte-identical. See [[perf_ndimage_separable_filter_axpy_colpass]].
+
+## 2026-06-22 - WIN (resolves the convolve revert above): convolve1d via correlate1d(reverse) — 11.2x, BYTE-IDENTICAL
+- Agent: cc / BlackThrush. The byte-identical fix for the reverted convolve reroute: convolve1d(w, origin)
+  ≡ correlate1d(reverse(w), origin') — the textbook identity SciPy itself uses. correlate1d_along_axis
+  sums FORWARD over the reversed weights, which reproduces the old fill path's exact source-left-to-right
+  order ⇒ BYTE-IDENTICAL, while reusing its vectorized interior axpy. Origin shift maps convolve's
+  offset=(len-1)/2 to correlate's len/2: origin' = (len-1)/2 - len/2 - origin (= -origin odd, -origin-1 even).
+- VERIFIED byte-identical: XOR-checksums matched the golden EXACTLY for odd len=15 (ax0/ax1, n=256/512);
+  even len=8 source `a+k-3+origin` matches fill's exactly (same weights.rev, same order, same offset after
+  the -1 adjustment); full convolve1d test suite GREEN 246/0 (incl. even kernels).
+- MEASURED: convolve1d len=15 256² axis=0 3454us → 308us = **11.2x faster** (~2.7x faster than scipy, was
+  ~4x slower); 512² 1152us. No new helper — reused the proven correlate1d_along_axis. The separable-axpy
+  lever now covers gaussian_filter (e767313d) + correlate1d (06671a9b) + convolve1d (this).
