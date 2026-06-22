@@ -111,12 +111,16 @@ pub fn airy(x: &SpecialTensor, mode: RuntimeMode) -> Result<Vec<SpecialTensor>, 
             ])
         }
         SpecialTensor::RealVec(values) => {
-            let mut ai_vec = Vec::with_capacity(values.len());
-            let mut aip_vec = Vec::with_capacity(values.len());
-            let mut bi_vec = Vec::with_capacity(values.len());
-            let mut bip_vec = Vec::with_capacity(values.len());
-            for &val in values {
-                let result = airy_scalar(val, mode)?;
+            // Each element is an independent (and expensive: series/asymptotic) Airy evaluation;
+            // fan out across cores then unzip the four outputs in element order. par_map_indices
+            // preserves order and returns the first failing index's error, so the result is
+            // bit-identical to the sequential push loop.
+            let results = par_map_indices(values.len(), |i| airy_scalar(values[i], mode))?;
+            let mut ai_vec = Vec::with_capacity(results.len());
+            let mut aip_vec = Vec::with_capacity(results.len());
+            let mut bi_vec = Vec::with_capacity(results.len());
+            let mut bip_vec = Vec::with_capacity(results.len());
+            for result in &results {
                 ai_vec.push(result.ai);
                 aip_vec.push(result.aip);
                 bi_vec.push(result.bi);

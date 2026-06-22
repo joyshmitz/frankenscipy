@@ -3894,3 +3894,21 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   not the interpolation kernel). The real lever to beat SciPy on ndimage geometric transforms is a
   FASTER sample_interpolated (SIMD/cache-blocked spline weights), not more threads — a kernel rewrite,
   not a parallel-routing one-liner. Filed as the honest ceiling for this family.
+
+## 2026-06-21 - WIN: special airy (4-output) parallel RealVec dispatch — 10x vs SciPy (competitive kernel)
+- Agent: cod-a / BlackThrush. Found the lone serial heavy dispatcher left in fsci-special: `airy`
+  (returns ai/aip/bi/bip) used a `for &val in values { airy_scalar(val)?; push×4 }` loop while a sibling
+  airy variant was already par_map_indices. Routed through par_map_indices (Vec<AiryResult> → unzip the
+  4 outputs in order). Byte-identical (acc unchanged; order + first-error preserved).
+- Same-worker hz1, serial baseline by forcing par_map_indices serial; SciPy = scipy.special.airy:
+
+  | n | serial | parallel | self | scipy.special.airy | parallel vs SciPy |
+  | ---: | ---: | ---: | ---: | ---: | ---: |
+  | 2M | 167.32 ms | 108.39 ms | 1.55x | 1083.90 ms | 10.0x faster |
+  | 4M | 335.28 ms | 228.40 ms | 1.47x | 2162.77 ms | 9.5x faster |
+
+- Key contrast with the ndimage shift REVERT: here fsci's airy kernel is COMPETITIVE (already 6.5x
+  faster than SciPy SERIALLY — scipy.special.airy is a slow Amos 4-output evaluation ~540ns/px), so
+  parallel stacks cleanly to 10x. The modest 1.5x self-speedup is capped by the Vec<AiryResult>
+  intermediate + unzip copy (64-128MB); a direct 4-output-slice chunked parallel could push it higher
+  but the simple par_map_indices route is the low-risk byte-identical ship. Gates: airy tests 33/0.
