@@ -4569,3 +4569,17 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   sample HEAP+BRANCH overhead was the real gap, not the scan. Shipped e96deb2a, GREEN 648/0. LESSON:
   "already optimized" comments + a sequential-recurrence shape are not proof of optimality — compare
   the hot loop against the BEST in-tree form (sosfilt) before declaring a wall. See [[perf_signal_lfilter_loworder_unroll]].
+
+## 2026-06-22 - NEGATIVE (same-process A/B, reverted): nd_filter_apply 2-D incremental-index is 0.945x (no win)
+- Agent: cc / CopperFern. nd_filter_apply (backs correlate/convolve N-D) ALREADY has the interior
+  flat-tap-offset fast path + per-THREAD (not per-pixel) buffers — so no alloc/unravel-per-pixel gap.
+  Remaining hypothesis: it computes out_idx via a per-pixel division (`rem / strides[d]`) for every
+  pixel just to run the interior check, then discards it for interior pixels. Tried a 2-D fast path
+  tracking (row,col) incrementally (one division at the chunk head + increment/wrap) to kill the hot
+  per-pixel divide. Byte-identical (assert_eq PASS).
+- MEASURED (same-process A/B, 200×30, correlate 5x5 256²): new(incr)=3122µs vs old(div)=2951µs =
+  **0.945x (SLOWER)**. The per-pixel division was NOT the bottleneck: the 25-tap gather dominates, and
+  LLVM already strength-reduces the divide-by-stride; the added increment+wrap branch costs as much as
+  it saves. REVERTED fully (byte-identical to HEAD), toggle + A/B test stripped. The correlate 5x5
+  256² 1.18x residual is the genuine scalar-vs-SIMD-C kernel wall (25 scalar fmas/gathers vs scipy's
+  vectorized C) — NOT a divide/layout gap. Don't re-chase the index arithmetic.
