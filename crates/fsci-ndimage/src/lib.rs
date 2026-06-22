@@ -6762,7 +6762,17 @@ pub fn distance_transform_cdt(
         ));
     }
 
-    let backgrounds = background_coordinates(input);
+    // The taxicab/chessboard fast path inside `distance_transform_by_metric` only
+    // needs to know whether ANY background pixel exists (it ignores the coordinate
+    // list). Building the full `Vec<Vec<usize>>` of background coordinates (one
+    // heap-allocated coord vector per zero pixel) is pure waste here, so pass a
+    // cheap non-empty sentinel instead. cdt only accepts grid metrics, so the
+    // brute-force branch that would read the coordinates is never taken.
+    let backgrounds: Vec<Vec<usize>> = if input.data.iter().any(|&v| v == 0.0) {
+        vec![Vec::new()]
+    } else {
+        Vec::new()
+    };
     Ok(distance_transform_by_metric(
         input,
         metric,
@@ -6811,24 +6821,46 @@ fn cityblock_distance_transform(input: &NdArray) -> Vec<f64> {
             continue;
         }
         let stride = input.strides[axis];
-        for base in 0..n {
-            if !(base / stride).is_multiple_of(len) {
-                continue; // only flat indices with axis-coordinate 0 start a line
-            }
-            // Forward sweep: best reachable from the left.
+        // Enumerate the n/len line starts DIRECTLY instead of scanning all n flat
+        // indices and rejecting non-starts with a per-index `base/stride % len`
+        // division. A line along `axis` starts at every flat index whose
+        // axis-coordinate is 0, i.e. `outer*block + inner` for `block = len*stride`,
+        // `outer in 0..n/block`, `inner in 0..stride`. Same set of starts, same
+        // sweeps => byte-identical; drops the dominant divide-per-element overhead.
+        let block = len * stride;
+        let num_blocks = n / block;
+        // Process each level `t` across ALL `stride` parallel lines in the block
+        // before advancing to `t+1` (inner loop over `inner in 0..stride`). Each
+        // line's forward sweep still reads its own level `t-1` (computed in the
+        // prior outer step) and the lines are independent, so the result is
+        // byte-identical to walking one line fully at a time — but the `inner`
+        // loop now strides through CONTIGUOUS memory (the row at level `t`),
+        // turning the cache-hostile column walk into a vectorizable contiguous
+        // min and eliminating the per-step cache miss for axes with `stride > 1`.
+        for outer in 0..num_blocks {
+            let block_base = outer * block;
+            // Forward sweep: best reachable from the left. Split the buffer so the
+            // contiguous `inner` loop is a branchless elementwise `min` over two
+            // disjoint slices, which autovectorizes (vminpd) for `stride > 1`.
             for t in 1..len {
-                let cand = f[base + (t - 1) * stride] + 1.0;
-                let cur = base + t * stride;
-                if cand < f[cur] {
-                    f[cur] = cand;
+                let row = block_base + t * stride;
+                let prev = row - stride;
+                let (head, tail) = f.split_at_mut(row);
+                let prev_row = &head[prev..prev + stride];
+                let cur_row = &mut tail[..stride];
+                for (cur, &p) in cur_row.iter_mut().zip(prev_row) {
+                    *cur = cur.min(p + 1.0);
                 }
             }
             // Backward sweep: best reachable from the right.
             for t in (0..len - 1).rev() {
-                let cand = f[base + (t + 1) * stride] + 1.0;
-                let cur = base + t * stride;
-                if cand < f[cur] {
-                    f[cur] = cand;
+                let row = block_base + t * stride;
+                let next = row + stride;
+                let (head, tail) = f.split_at_mut(next);
+                let cur_row = &mut head[row..row + stride];
+                let next_row = &tail[..stride];
+                for (cur, &nx) in cur_row.iter_mut().zip(next_row) {
+                    *cur = cur.min(nx + 1.0);
                 }
             }
         }

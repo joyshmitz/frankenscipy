@@ -6,6 +6,43 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-22 - CopperFern - distance_transform_cdt taxicab: per-index-division + cache-hostile column sweep + wasted background build — 3x self-speedup, FLIPS 2.97x SLOWER → PARITY with SciPy
+
+- Agent: CopperFern (claude-code / claude-opus-4-8).
+- Decision: KEEP. `distance_transform_cdt` (taxicab/chessboard chamfer) was a
+  GENUINE equal-hardware loss (taxicab 2.97-3.30x, chessboard 3.02-3.23x slower
+  than scipy.ndimage). Three byte-identical fixes:
+  1. `cityblock_distance_transform` line walk did `for base in 0..n { if
+     !(base/stride).is_multiple_of(len) continue }` — scanned ALL n indices with
+     a divide+modulo each to find the n/len line starts. Enumerate starts
+     directly (`outer*block+inner`).
+  2. The per-line forward/backward sweep walked `f[base + t*stride]` — a
+     cache-line jump every step on the strided axis. Reorder to `for t { for
+     inner in 0..stride }` so the inner loop is CONTIGUOUS across parallel lines
+     (classic separable colpass, see [[perf_ndimage_separable_filter_axpy_colpass]]);
+     written as a branchless `cur.min(prev+1.0)` over split_at_mut slices →
+     autovectorizes (vminpd). Lines independent + t-order preserved => byte-identical.
+  3. `distance_transform_cdt` always built the full `Vec<Vec<usize>>` of
+     background coords (one heap alloc per zero pixel) that the fast path
+     ignores — replaced with a cheap non-empty sentinel.
+
+| workload | before | after | SciPy | before vs SciPy | after vs SciPy |
+| --- | ---: | ---: | ---: | --- | --- |
+| cdt taxicab 512² | 12.5 ms | 4.17 ms | 4.2 ms | 2.97x slower | 1.01x FASTER |
+| cdt taxicab 1024² | 55.5 ms | 18.4 ms | 16.8 ms | 3.30x slower | 1.09x slower |
+| cdt chessboard 512² | 17.0 ms | 7.4 ms | 5.6 ms | 3.02x slower | 1.32x slower |
+| cdt chessboard 1024² | 67.1 ms | 38.5 ms | 20.8 ms | 3.23x slower | 1.85x slower |
+
+- taxicab now at PARITY (3x self-speedup); chessboard narrowed 3x→1.3-1.85x via
+  the background-build fix (#3) alone — its raster sweep still does `unravel_into`
+  + per-offset `in_bounds` per cell (next lever: incremental coords, avoid the
+  per-cell divide). distance_transform_edt already wins 1.58x (FH path).
+- Gates: 246 `fsci-ndimage --lib` tests pass incl.
+  `distance_transform_cdt_matches_scipy_metric_fixtures` and
+  `distance_transform_bf_and_cdt_match_all_foreground_sentinels` (validates the
+  sentinel change). clippy/fmt clean on changed regions. Equal-hw, identical
+  input dumped to /tmp.
+
 ## 2026-06-22 - CopperFern - FILED: SphericalVoronoi is O(n⁴) brute-force — biggest measured open gap (230x slower than SciPy at n=200, explodes with n). Needs hull-based rewrite.
 
 - Agent: CopperFern (claude-code / claude-opus-4-8). STATUS: OPEN / FILED, not
