@@ -6922,35 +6922,90 @@ fn chessboard_distance_transform(input: &NdArray) -> Vec<f64> {
         true
     };
 
-    // Forward raster sweep: relax from neighbours that precede the cell.
-    for flat in 0..n {
-        if d[flat] == 0.0 {
-            continue;
+    let shape = &input.shape;
+    // Row-major coordinate stepping replaces the per-cell `unravel_into` (ndim
+    // divisions per cell): the raster scan visits flats in order, so carry the
+    // coordinate vector incrementally — same coords as `unravel_into`, so
+    // byte-identical.
+    let step_forward = |coords: &mut [usize]| {
+        for axis in (0..coords.len()).rev() {
+            coords[axis] += 1;
+            if coords[axis] < shape[axis] {
+                return;
+            }
+            coords[axis] = 0;
         }
-        unravel_into(flat, &input.strides, &mut coords);
-        for (off, flat_delta) in &offsets {
-            if *flat_delta < 0 && in_bounds(&coords, off) {
-                let cand = d[(flat as i64 + flat_delta) as usize] + 1.0;
-                if cand < d[flat] {
-                    d[flat] = cand;
+    };
+    let step_backward = |coords: &mut [usize]| {
+        for axis in (0..coords.len()).rev() {
+            if coords[axis] > 0 {
+                coords[axis] -= 1;
+                return;
+            }
+            coords[axis] = shape[axis] - 1;
+        }
+    };
+
+    // Forward raster sweep: relax from neighbours that precede the cell.
+    for axis in coords.iter_mut() {
+        *axis = 0;
+    }
+    for flat in 0..n {
+        if d[flat] != 0.0 {
+            // Interior cells (no coordinate on a boundary) have every neighbour in
+            // bounds, so skip the per-offset `in_bounds` check — identical verdict,
+            // drops the ndim·offsets bounds work for the all-interior bulk.
+            let interior = (0..ndim).all(|ax| coords[ax] >= 1 && coords[ax] + 1 < shape[ax]);
+            if interior {
+                for (_, flat_delta) in &offsets {
+                    if *flat_delta < 0 {
+                        let cand = d[(flat as i64 + flat_delta) as usize] + 1.0;
+                        if cand < d[flat] {
+                            d[flat] = cand;
+                        }
+                    }
+                }
+            } else {
+                for (off, flat_delta) in &offsets {
+                    if *flat_delta < 0 && in_bounds(&coords, off) {
+                        let cand = d[(flat as i64 + flat_delta) as usize] + 1.0;
+                        if cand < d[flat] {
+                            d[flat] = cand;
+                        }
+                    }
                 }
             }
         }
+        step_forward(&mut coords);
     }
     // Backward raster sweep: relax from neighbours that follow the cell.
+    for axis in 0..ndim {
+        coords[axis] = shape[axis] - 1;
+    }
     for flat in (0..n).rev() {
-        if d[flat] == 0.0 {
-            continue;
-        }
-        unravel_into(flat, &input.strides, &mut coords);
-        for (off, flat_delta) in &offsets {
-            if *flat_delta > 0 && in_bounds(&coords, off) {
-                let cand = d[(flat as i64 + flat_delta) as usize] + 1.0;
-                if cand < d[flat] {
-                    d[flat] = cand;
+        if d[flat] != 0.0 {
+            let interior = (0..ndim).all(|ax| coords[ax] >= 1 && coords[ax] + 1 < shape[ax]);
+            if interior {
+                for (_, flat_delta) in &offsets {
+                    if *flat_delta > 0 {
+                        let cand = d[(flat as i64 + flat_delta) as usize] + 1.0;
+                        if cand < d[flat] {
+                            d[flat] = cand;
+                        }
+                    }
+                }
+            } else {
+                for (off, flat_delta) in &offsets {
+                    if *flat_delta > 0 && in_bounds(&coords, off) {
+                        let cand = d[(flat as i64 + flat_delta) as usize] + 1.0;
+                        if cand < d[flat] {
+                            d[flat] = cand;
+                        }
+                    }
                 }
             }
         }
+        step_backward(&mut coords);
     }
     d
 }
