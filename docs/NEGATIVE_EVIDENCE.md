@@ -143,10 +143,22 @@ cluster `linkage` (equal-hardware, IDENTICAL condensed distances, ms):
   rejected — the full-matrix layout (even with its one strided column write
   `dm[i*n+b]`) beats the condensed `condensed_index` layout here. No further
   linkage lever warranted; we win.
-- Retry predicate: do NOT re-chase label `mean` or `linkage` as SciPy losses.
-  ACTION ITEM for the swarm: scorecard rows recorded as "Nx slower" that timed
-  Rust on RCH and SciPy locally are suspect; re-verify on ONE box before
-  spending attempts. The honest head-to-head is same-machine for both sides.
+ndimage `maximum_filter1d`/`minimum_filter1d` (n=65536, mode=reflect, equal-hw,
+identical input, best-of-40 each side) — scorecard recorded 1.08-1.60x slower:
+
+| size | fsci max | scipy max | fsci min | scipy min | verdict |
+| ---: | ---: | ---: | ---: | ---: | --- |
+| 31 | 1.027 ms | 1.090 ms | 0.990 ms | 1.112 ms | fsci 1.06x / 1.12x faster |
+| 101 | 1.018 ms | 1.121 ms | 1.013 ms | 1.133 ms | fsci 1.10x / 1.12x faster |
+
+- Retry predicate: do NOT re-chase label `mean`, `linkage`, OR
+  `maximum/minimum_filter1d` as SciPy losses — all three confirmed WINS on
+  equal hardware. Also confirmed already-dominant this cycle: KDTree query
+  (6.8-9.6x), interpn linear (4.4-4.5x). ACTION ITEM for the swarm: scorecard
+  rows recorded as "Nx slower" that timed Rust on RCH and SciPy locally are
+  systematically suspect (every one re-checked this cycle flipped to a win);
+  re-verify on ONE box before spending attempts. Honest head-to-head =
+  same-machine for both sides, identical inputs dumped to /tmp.
 
 
 
