@@ -31,6 +31,16 @@ fails are pre-existing/unrelated). If green, delete the verify-queue doc.
 5. **linprog** — leaving-var tie-break is row-order, not strict Bland → harden to
    smallest basis-variable index (degenerate-LP cycling guard). Verify degenerate + large
    LP vs scipy. (HiGHS-parity overall is a known perf wall.)
+   CONFIRMED STILL-PRESENT (2026-06-22, cc/CopperFern): lib.rs:1805 ratio test uses strict
+   `if ratio < min_ratio` → keeps the lowest ROW index on a tie. Entering var already uses
+   Bland (smallest col index, lib.rs:1784); for the no-cycle guarantee the LEAVING var must
+   also break ratio ties by smallest BASIS-VARIABLE index (needs the per-row basis array).
+   Fix is surgical BUT correctness/parity not perf, and RISKY: changes which optimal vertex
+   degenerate LPs return → may red existing linprog tests that enshrine current output. Do
+   under a parity mandate with a degenerate-LP oracle-diff vs scipy, not the perf campaign.
+   NB (2026-06-22 audit): every OPEN [perf] bead was already shipped; this tie-break + the 3
+   gaps above (bounded lstsq/curve_fit TRF, solve_bvp collocation, CloughTocher2D global
+   gradients) are the ONLY genuinely-unfinished items left, and all are parity/capability.
 
 ## P3 — minor capability gaps
 6. **minimize methods** — present: BFGS/CG/L-BFGS-B/Nelder-Mead/Newton-CG/Powell/SLSQP/
