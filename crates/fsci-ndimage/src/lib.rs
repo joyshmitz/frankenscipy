@@ -210,9 +210,21 @@ fn gaussian_filter_2d_reflect_order0(input: &NdArray, sigma: f64) -> Result<NdAr
     let row_sources = reflect_convolve1d_sources(rows, kernel_len);
     let col_sources = reflect_convolve1d_sources(cols, kernel_len);
     let mut output = vec![0.0; input.size()];
-    let nthreads = ndimage_filter_thread_count(input.size(), kernel_len)
-        .min(rows)
-        .max(1);
+    // Cost-aware parallel gate. The separable row/col passes are cheap per pixel
+    // (one symmetric fold, ~kernel_len taps), so the shared `ndimage_filter_thread_count`
+    // gate (work >= 1<<18) fires far too early: at 256² (work ≈ 1.1M) it spawns up
+    // to one thread per few rows, and the spawn overhead dominates — same-process
+    // A/B measured serial 1.82× FASTER at 256² (and 6.98× at 128²), with parallel
+    // only winning from 512² up (work ≈ 4.5M). Require ~2M pixel·tap work before
+    // going parallel; byte-identical (thread count never changes the result).
+    let par_work = (input.size() as u64).saturating_mul(kernel_len as u64);
+    let nthreads = if par_work < (1 << 21) {
+        1
+    } else {
+        ndimage_filter_thread_count(input.size(), kernel_len)
+            .min(rows)
+            .max(1)
+    };
     let row_chunk = rows.div_ceil(nthreads);
     let axpy = GAUSSIAN_2D_AXPY.load(std::sync::atomic::Ordering::Relaxed);
     let mid = kernel_len / 2;

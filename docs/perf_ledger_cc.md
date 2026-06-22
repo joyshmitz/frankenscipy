@@ -935,3 +935,27 @@ lfilter_fir_iir_match_scipy. Byte-identical by construction. Lever: when a gener
 serves a hot low-order case, peel a register-unrolled specialization for the common orders
 (1/2) — the heap delay line + per-iter bounds/branch was the entire gap, exactly as sosfilt
 already demonstrated. (filtfilt/lfilter_axis_2d route through the same core → inherit the win.)
+
+### ✅ gaussian_filter 2-D parallel gate raised (serial 1.82× FASTER at 256² — closes most of the 2.83× loss)
+The documented gaussian_filter loss (σ=2 256²: fsci 3238 µs vs scipy 1143 µs = 2.83× slower).
+Root cause was NOT the kernel (col-pass interior-axpy was a measured 0.755× regression — see
+NEGATIVE_EVIDENCE) but a PARALLEL-BELOW-BREAK-EVEN gate: gaussian_filter_2d_reflect_order0 took
+its thread count from the shared `ndimage_filter_thread_count` (parallel when pixels·kernel_len
+>= 1<<18). At 256² that work ≈ 1.1M trips the gate and spawns ~1 thread per few rows, but the
+separable row/col passes are cheap per pixel (one symmetric fold), so spawn overhead dominates.
+**Same-process interleaved A/B (30 reps × 200 iters, GAUSSIAN_FORCE_SERIAL toggle, byte-identical
+assert_eq across all sizes):**
+| n     | serial    | parallel  | serial speedup |
+|-------|-----------|-----------|----------------|
+| 128²  | 506 µs    | 3530 µs   | **6.98×**      |
+| 256²  | 2095 µs   | 3814 µs   | **1.82×** (bench size) |
+| 512²  | 7010 µs   | 4534 µs   | 0.65× (parallel wins) |
+| 1024² | 24107 µs  | 5079 µs   | 0.21× (parallel wins) |
+FIX: gate the gaussian 2-D path at `pixels·kernel_len >= 1<<21` (~2M) so ≤256² runs serial and
+≥512² stays parallel (break-even is between them). BYTE-IDENTICAL (thread count never changes the
+result — proven by assert_eq). fsci-ndimage GREEN 246/0 (+58 integration). The 256² serial 1.82×
+closes most of the 2.83× scipy gap (absolute µs are contention-inflated here; the A/B RATIO is the
+reliable signal — criterion cross-run swung +20%…+196% in ONE run, uninterpretable under load).
+LEVER (paid out again): a parallel gate must scale with PER-ELEMENT WORK COST, not a flat
+flop-product threshold. Cheap separable/elementwise kernels need a MUCH higher work gate than the
+shared default — the same cost-aware-gate lesson as the stats batch-method and pdist veins.
