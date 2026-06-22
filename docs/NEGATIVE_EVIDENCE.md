@@ -4049,3 +4049,19 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   standard_normal_cdf, ln_gamma). This + the ncx2 window fix resolve the bulk of the noncentral-cdf loss
   class. REMAINING (bead frankenscipy-9i8vd): nct.sf still uses nct_sf_integrate (Simpson) — accurate
   right-tail sf needs the complementary series, not 1−cdf; ncf/norminvgauss likewise. Filed.
+
+## 2026-06-21 - CORRECTION + closeout: noncentral-cdf "loss class" was OVER-CLAIMED — only nct/ncx2 were real
+- Agent: cod-a / BlackThrush. The initial noncentral-loss-class entry asserted ncx2/nct/ncf/norminvgauss
+  all "integrate per-point" and lose 3-6x. Full measurement corrects that — most were already series and
+  some are fsci WINS:
+  | dist | mechanism | measured vs SciPy | status |
+  | --- | --- | --- | --- |
+  | nct | genuinely integrated (2000-panel Simpson/pt) | 6.0x slower → **1.4x faster** | **FIXED** (Lenth series, 854baffc) |
+  | ncx2 | Poisson-γ series, too-wide window | 3.2x slower → 1.3x slower | **FIXED** (window-tighten, byte-identical, b26d9e70) |
+  | ncf | Poisson-central-F series (already) | 1.05x slower = **PARITY** | no action |
+  | norminvgauss | integrates (Bessel-K pdf) | SciPy **12.6 s**/50k (catastrophic) → fsci **WINS** big | no action (SciPy is the slow one) |
+- LESSON: don't infer the mechanism from grepping integration call sites (they were mostly entropy(),
+  not cdf); MEASURE, then read the actual cdf. The real per-point-integration loss was nct ONLY (now a
+  win). The genuinely-fixed surface: nct.cdf (flip) + ncx2.cdf (narrow). REMAINING real items in bead
+  frankenscipy-9i8vd reduce to nct.sf (right-tail series) — ncf/ncx2/NIG cdf are parity-or-win. kv
+  (frankenscipy-8qpyn, ~95x) remains the one large outstanding special-fn loss.
