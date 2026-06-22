@@ -996,3 +996,21 @@ FIX: gate both at `arr.size()·weights.len() >= 1<<20` (break-even ~n=453); 256�
 parallel. BYTE-IDENTICAL. fsci-ndimage GREEN 246/0 (+58). Vein tally: gaussian-2D (1<<21 fold),
 uniform_filter (1<<20 pixel-count running-sum), now correlate1d/convolve1d (1<<20 tap-dot). The
 shared 1<<18 gate was uniformly too low for ALL cheap separable ndimage kernels.
+
+### 📋 NEXT BOLD LEVER (scoped, byte-identical): SIMD-across-output-pixels for nd_filter_apply interior
+The correlate 5x5 256² 1.18× residual (and gaussian/correlate kernel walls generally) is the scalar
+inner loop: per interior pixel, `for k: sum += w[k]*input.data[p+tap_flat[k]]` (25 scalar fmas).
+nd_filter_apply ALREADY has the interior flat-offset fast path; the remaining gap is scalar-vs-C-SIMD.
+LEVER (proven in spatial pdist, see [[perf_spatial_pdist_simd_across_pairs]] — pure std::simd, NO
+unsafe, forbid(unsafe)-safe): process 8 CONSECUTIVE interior output pixels (same row ⇒ contiguous)
+as one Simd<f64,8>: `acc += Simd::splat(w[k]) * Simd::from_slice(&input.data[p+tap_flat[k] ..][..8])`,
+then copy_to_slice. BYTE-IDENTICAL: each lane independently accumulates ITS pixel's sum in the SAME
+k-order as scalar (Rust `+`/`*` don't FMA-contract by default). Needs: region-partition the 2-D
+output into the interior box [lo,hi)² + boundary bands (so interior runs are contiguous and reflection-
+free), iterate interior rows, process interior cols 8-wide + scalar remainder, boundary via the slow
+path. Interior is ~97% of a 256² 5x5 → up to memory-bound 2-4× on the kernel, plausibly flips the
+1.18× loss to a WIN. Build the byte-identity property test first (correlate vs nd_filter_perpixel_ref).
+Same lever extends to gaussian's col-pass and any separable/dense filter interior. NOT YET DONE —
+deferred to a fresh-context iteration (meaty change in a fragile file; do it with full budget).
+NOTE (ruled out this session): the per-pixel DIVIDE in the interior check is NOT the bottleneck
+(incremental-index A/B = 0.945×, reverted) — it's the scalar gather/fma throughput. SIMD is the lever.
