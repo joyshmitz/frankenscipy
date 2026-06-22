@@ -4538,3 +4538,21 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   na×nb array. The output LAYOUT dominates, not the kernel. (pdist returns a FLAT Vec<f64>, which is
   why its dim-4 SoA-SIMD genuinely won.) Fixing cdist needs a flat-output buffer = an API-breaking
   return-type change (Vec<Vec> is the public contract) — not a clean byte-identical win. Not pursued.
+
+## 2026-06-22 - NEGATIVE (same-process A/B): gaussian_filter col-pass interior stride-1 axpy is a REGRESSION (0.755x)
+- Agent: cc / CopperFern. The gaussian_filter_2d_reflect_order0 folded path already vectorizes the
+  ROW pass (stride-1 axpy over full rows), but the COLUMN pass uses a per-column symmetric col_plan
+  gather (no SIMD). Hypothesized: restructure the interior columns [mid, cols-mid) — which are
+  reflection-free so sources are exactly col±offset — as stride-1 contiguous axpy passes (like the
+  row pass), keeping the gather only for the ≤mid boundary columns. Byte-identical by construction
+  (same per-col center→offset accumulation order); verified assert_eq!(a.data, b.data) PASS.
+- MEASURED (same-process interleaved A/B, 200 iters × 40 reps, 256² σ=2, GAUSSIAN_COL_AXPY toggle):
+  new(interior-axpy)=5420µs vs old(gather)=4092µs = **0.755x (SLOWER)**. The interior-axpy makes
+  mid+1 (~9) passes over the output row (9× the output write traffic), whereas the single-pass gather
+  reads scratch within a 17-wide window that stays L1-resident — so the gather is already cache-bound,
+  not gather-bound, and the multi-pass loses. REVERTED fully (ndimage byte-identical to HEAD); probe
+  toggle + A/B test stripped. CONCLUSION: the col-pass gather is NOT the gaussian gap; the remaining
+  2.83x vs scipy is the per-element scalar kernel + outer parallelism overhead, not the col layout.
+  The "obviously-better stride-1 axpy" lost to single-pass cache locality — measure, don't assume.
+  (Criterion cross-run showed +20% "regression" too but that's contention noise; the same-process
+  A/B is the reliable signal — confirms the change is genuinely worse, not just noisy.)
