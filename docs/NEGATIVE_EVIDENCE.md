@@ -4085,3 +4085,19 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   than SciPy — a full WIN needs the Temme/bessik SERIES (no integral): ascending series K0/K1 for z≤2
   (uses fsci's iv = I_v + beschb Chebyshev Γ), Steed CF2 for 2<z<30, then the upward K-recurrence. Bead
   8qpyn updated. The fixed-Gauss is the verified lower-risk partial; Temme is the win.
+
+## 2026-06-21 - MAJOR LOSS FOUND: special hyperu ~157x slower than SciPy (4096-step Simpson per element)
+- Agent: cod-a / BlackThrush. The "parallel != winning" sweep struck again: hyperu (confluent U) array
+  dispatch is parallel but its positive-a scalar kernel (hyper.rs hyperu_positive_a_integral) runs a
+  FIXED 4096-step Simpson per element over the log-space integrand of
+  U(a,b,x)=1/Γ(a)∫₀^∞ e^{-xt}t^{a-1}(1+t)^{b-a-1}dt. ~4096 evals/point.
+- Same-worker hz1, 50k (a=1.5,b=2.5, x in [0.5,8.5]): fsci **1.115 s** vs scipy.special.hyperu **7.08 ms**
+  = **~157x SLOWER** (22 us/elem). Filed.
+- FIX is HARDER than kv (which got a clean fixed-48-Gauss swap): a simple fixed 64×2 Gauss-Legendre on
+  the log-space integrand only reaches **9e-5** rel err (Python-verified) — the t→0 singularity for a<1
+  (integrand ~t^{a-1}) defeats plain Gauss. Proper fix needs a singularity-aware/generalized-Laguerre
+  quadrature OR the Kummer/asymptotic SERIES for U(a,b,x) (what SciPy uses — series + recurrence, no
+  per-point integral). Could still ship a fixed-Gauss for a≥1 (where it's accurate) + keep the
+  high-step Simpson only for a<1, as a partial. Methodology: Python-verify the chosen method to ~1e-12
+  before porting (as done for kv/nct/ncx2). The two large outstanding special-fn losses are now kv
+  (frankenscipy-8qpyn, partial fix landed, Temme for full win) and hyperu (this, new bead).
