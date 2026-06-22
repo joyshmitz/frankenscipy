@@ -4203,3 +4203,18 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
     naive sort for small k. Don't re-chase (cf. [[perf_ndimage_2d_rank_filter_deadend]]).
   - CONCLUSION: no actionable perf loss in signal lfilter/filtfilt/firls/medfilt. fsci-signal is
     well-optimized; remaining signal gap is the documented fftconvolve→fsci_fft SIMD wall (8l8r1).
+
+## 2026-06-22 - NEGATIVE (kernel wall, not a root-finder win): nct ppf ~20x slower than scipy
+- Agent: cc / CopperFern. nct.ppf (67.5 µs scipy scalar) uses pure bisection over the cdf Lenth
+  series (~bracket-expansion + ~47 bisection steps ≈ ~67 cdf evals/call × ~20 µs each ≈ ~1.3 ms →
+  ~20x loss). Looked like an algorithmic root-finder win, but it is NOT:
+  - Illinois/false-position validated in Python (scipy.stats.nct.cdf as f): converging on BRACKET
+    WIDTH (required — converging on |cdf−q| reintroduces the extreme-quantile bug bead ybqjc, where
+    an absolute cdf tol ~ q itself returns far out in the tail) gives **18169 evals vs bisection's
+    17995 = 0.99x, NO speedup**. The secant accelerates the ESTIMATE, not the bracket width, so a
+    width-convergence criterion caps every bracketing method at ~bisection iteration counts.
+  - Fundamentally a KERNEL WALL: each cdf eval is ~20 µs (the betainc-heavy Lenth series). Even an
+    ideal Newton (cdf+pdf, ~5 iters) is 5×20 µs = 100 µs > scipy's 67.5 µs C path. The per-eval
+    cdf-series (betainc) cost is the bottleneck, same class as the documented gamma cdf/ppf kernel
+    walls. No safe-Rust root-finder change closes it. KEEP the robust bisection. See
+    [[perf_stats_sf_complementary_beta_series]].
