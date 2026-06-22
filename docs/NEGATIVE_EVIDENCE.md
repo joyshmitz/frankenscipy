@@ -4659,3 +4659,23 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   Per-module sweep status: error/elliptic ellipk-ellipe already 1<<20-gated; bessel/hyper expensive
   (correctly eager); airy NOW gated. Remaining to check: elliptic.rs's ungated map_real_or_complex /
   map_real_binary helpers (incomplete-elliptic ellipkinc/ellipeinc — moderate Carlson) — next.
+
+## 2026-06-22 - WIN: elliptic.rs 6 fns gated (BlackThrush — ellipkm1 21x, lambertw/expi 5-6x @4096)
+- Agent: cc / BlackThrush. elliptic.rs map_real_or_complex defaulted real_par_min=256 and its
+  map_real_or_complex_binary had NO gate (raw n/32). Six fns pessimized at common sizes:
+  | fn | par/ser@4096 | break-even | gate |
+  |----|-------------|-----------|------|
+  | ellipkm1 (cheap ~20ns Cephes) | 21.61x | ~260k | 1<<20 (matches ellipk sibling) |
+  | lambertw  | 5.16x | ~58k | 1<<16 |
+  | expi      | 5.81x | ~58k | 1<<16 |
+  | ellipkinc | 3.53x | ~45k | 1<<16 |
+  | ellipeinc | 2.99x | ~28k | 1<<15 |
+  | exp1 (~290ns) | 1.72x | ~18k | 1<<15 |
+- FIX (byte-identical, order-preserving): single-arg fns switched map_real_or_complex→_rp with their
+  gate; added real_par_min param + par_map_indices_gated to map_real_or_complex_binary (ellipkinc/
+  ellipeinc). ellipkm1 is the standout — cheap Cephes class like ellipk, was parallelizing at n>=256
+  and losing up to 21x; now serial until ~1M (the high-end multicore gate, see
+  [[perf_special_highend_workgate_huge_arrays]]). fsci-special GREEN 1115/0.
+- SWEEP STATUS: per-module par_map_indices sweep now COMPLETE — convenience (cheap+moderate), beta,
+  airy, elliptic all gated; error/gamma already gated; bessel/hyper expensive (correctly eager). The
+  special n/32 over-subscription anti-pattern is eradicated across the crate.

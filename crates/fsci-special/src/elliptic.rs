@@ -93,12 +93,13 @@ pub fn ellipk(m_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
 /// This is numerically stable when p is small (m close to 1).
 /// Matches `scipy.special.ellipkm1(p)`.
 pub fn ellipkm1(p_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_or_complex(
+    map_real_or_complex_rp(
         "ellipkm1",
         p_tensor,
         mode,
         |p| ellipkm1_scalar(p, mode),
         |p| ellipkm1_complex_scalar(p, mode),
+        1 << 20, // cheap Cephes ~20ns: serial until ~1M (matches ellipk); n/32 over-subscribes up to 21x
     )
 }
 
@@ -142,6 +143,7 @@ pub fn ellipkinc(
         mode,
         |phi, m| ellipkinc_scalar(phi, m, mode),
         ellipkinc_complex_scalar,
+        1 << 16, // ellipkinc break-even ~45k (BlackThrush A/B: 32768 loses 1.23x, 65536 wins 0.56x)
     )
 }
 
@@ -160,6 +162,7 @@ pub fn ellipeinc(
         mode,
         |phi, m| ellipeinc_scalar(phi, m, mode),
         ellipeinc_complex_scalar,
+        1 << 15, // ellipeinc break-even ~28k (BlackThrush A/B: 32768 wins 0.76x)
     )
 }
 
@@ -172,12 +175,13 @@ pub fn ellipeinc(
 /// Solves w * exp(w) = x for w.
 /// Domain: x >= -1/e.
 pub fn lambertw(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_or_complex(
+    map_real_or_complex_rp(
         "lambertw",
         x_tensor,
         mode,
         |x| lambertw_scalar(x, mode),
         |z| lambertw_complex_scalar(z, mode),
+        1 << 16, // lambertw break-even ~58k (BlackThrush A/B: 32768 loses 1.70x, 65536 wins 0.87x)
     )
 }
 
@@ -187,23 +191,25 @@ pub fn lambertw(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
 
 /// Exponential integral E₁(z) = ∫₁^∞ exp(-zt)/t dt for z > 0.
 pub fn exp1(z_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_or_complex(
+    map_real_or_complex_rp(
         "exp1",
         z_tensor,
         mode,
         |z| exp1_scalar(z, mode),
         |z| exp1_complex_scalar(z, mode),
+        1 << 15, // exp1 break-even ~18k (BlackThrush A/B: 16384 loses 1.07x, 32768 wins 0.54x)
     )
 }
 
 /// Exponential integral Ei(x) = -PV∫_{-x}^∞ exp(-t)/t dt for x > 0.
 pub fn expi(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_or_complex(
+    map_real_or_complex_rp(
         "expi",
         x_tensor,
         mode,
         |x| expi_scalar(x, mode),
         |z| expi_complex_scalar(z, mode),
+        1 << 16, // expi break-even ~58k (BlackThrush A/B: 32768 loses 1.61x, 65536 wins 0.84x)
     )
 }
 
@@ -1273,6 +1279,21 @@ where
     }
 }
 
+/// Order-preserving work-gate for the binary real path (ellipkinc/ellipeinc Carlson,
+/// moderate ~150-300ns/elt). The raw n/32 par_map_indices gate over-subscribes ~16
+/// threads onto a sub-µs kernel (2-4x slower at n<=16k; BlackThrush A/B 2026-06-22).
+fn par_map_indices_gated<T, H>(n: usize, real_par_min: usize, f: H) -> Result<Vec<T>, SpecialError>
+where
+    T: Send,
+    H: Fn(usize) -> Result<T, SpecialError> + Sync,
+{
+    if n >= real_par_min {
+        par_map_indices(n, f)
+    } else {
+        (0..n).map(f).collect()
+    }
+}
+
 fn map_real_or_complex_binary<F, G>(
     function: &'static str,
     lhs: &SpecialTensor,
@@ -1280,6 +1301,7 @@ fn map_real_or_complex_binary<F, G>(
     mode: RuntimeMode,
     real_kernel: F,
     complex_kernel: G,
+    real_par_min: usize,
 ) -> SpecialResult
 where
     F: Fn(f64, f64) -> Result<f64, SpecialError> + Sync,
@@ -1308,18 +1330,19 @@ where
         }
         (SpecialTensor::RealVec(left), SpecialTensor::RealScalar(right)) => {
             let right = *right;
-            par_map_indices(left.len(), |i| real_kernel(left[i], right)).map(SpecialTensor::RealVec)
+            par_map_indices_gated(left.len(), real_par_min, |i| real_kernel(left[i], right))
+                .map(SpecialTensor::RealVec)
         }
         (SpecialTensor::RealScalar(left), SpecialTensor::RealVec(right)) => {
             let left = *left;
-            par_map_indices(right.len(), |i| real_kernel(left, right[i]))
+            par_map_indices_gated(right.len(), real_par_min, |i| real_kernel(left, right[i]))
                 .map(SpecialTensor::RealVec)
         }
         (SpecialTensor::RealVec(left), SpecialTensor::RealVec(right)) => {
             if left.len() != right.len() {
                 return vector_length_error(function, mode);
             }
-            par_map_indices(left.len(), |i| real_kernel(left[i], right[i]))
+            par_map_indices_gated(left.len(), real_par_min, |i| real_kernel(left[i], right[i]))
                 .map(SpecialTensor::RealVec)
         }
         (SpecialTensor::ComplexScalar(left), SpecialTensor::ComplexScalar(right)) => {
