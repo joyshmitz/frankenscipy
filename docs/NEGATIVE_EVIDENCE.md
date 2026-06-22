@@ -6,6 +6,54 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-22 - CopperFern - SphericalVoronoi O(n⁴) brute-force → O(n²) incremental convex hull: BIGGEST measured open gap CLOSED. Was 230x slower than SciPy at n=200; now WINS at n≤200, machine-precision parity with SciPy at every size.
+
+- Agent: CopperFern (claude-code / claude-opus-4-8).
+- Decision: KEEP. `SphericalVoronoi::new` face detection was the filed biggest
+  open gap (O(n³)-triplet × O(n)-validation gift-wrap = O(n⁴); 230x slower than
+  `scipy.spatial.SphericalVoronoi` at n=200, exploding with n). The accepted
+  faces are exactly the 3-D convex-hull facets of the on-sphere generators, so I
+  replaced the brute force with an O(n²) incremental (beneath-beyond) hull
+  (`convex_hull_3d_facets`) and projected each facet's outward normal to the
+  sphere — the same Voronoi vertices, found far faster.
+- ROOT-CAUSE BUG found + fixed in the in-progress (uncommitted) hull rewrite:
+  it oriented faces against the SPHERE CENTRE. Intermediate partial hulls of a
+  few on-sphere points need NOT enclose the sphere centre, so `make_face`
+  silently flipped windings, corrupting the horizon twin-edge test → the facet
+  count blew up (n=50 → 4739 facets, n=100 → 701005; or dropped faces, n=6 → 4)
+  and every n>4 errored (DEDUP collision / empty region). FIX: orient against
+  the SEED-TETRAHEDRON CENTROID, which is provably inside every intermediate
+  hull (incremental insertion only expands). One-reference-point change → every
+  n now yields exactly 2n-4 facets. Plus a constant-factor pass: reuse the
+  visible/horizon/HashSet scratch buffers and compact survivor faces in place
+  (no per-insertion Vec allocation).
+- CORRECTNESS (gold standard): structural vertex-set parity vs SciPy on
+  identical random on-sphere points (lexsorted vertex arrays) is MACHINE
+  PRECISION at every size — max abs diff 5.7e-16 (n=100) … 1.4e-15 (n=2000).
+  The diagram is byte-for-byte the SAME as Qhull's, not merely "valid".
+
+| n | scipy | fsci (before: O(n⁴)) | fsci (after) | after vs scipy | vparity |
+| --- | ---: | ---: | ---: | --- | ---: |
+| 100 | 0.545 ms | (huge) | 0.289 ms | **1.89x FASTER** | 5.7e-16 |
+| 200 | 0.934 ms | ~230x slower | 0.750 ms | **1.24x FASTER** | 2.2e-16 |
+| 500 | 1.756 ms | — | 3.277 ms | 1.87x slower | 3.3e-16 |
+| 1000 | 3.668 ms | — | 11.969 ms | 3.26x slower | 7.2e-16 |
+| 2000 | 7.546 ms | — | 48.794 ms | 6.47x slower | 1.4e-15 |
+
+- Equal-hardware A/B: same points dumped to /tmp, fsci binary
+  `perf_sphvor_ab` (best-of-N) vs SciPy `SphericalVoronoi` (best-of-N) in one
+  Python script reading the identical dump.
+- RESIDUAL WALL (follow-up bead candidate): fsci's hull is O(n²) (per-insertion
+  visibility scan over all current faces) while Qhull is ~O(n log n), so the
+  loss grows with n past ~300. Closing the large-n tail needs a conflict-graph
+  randomized-incremental hull (Clarkson–Shor) or a spatial accelerator — a
+  bigger rewrite, not a disk-neutral constant-factor follow-up.
+- Gates: 219 `fsci-spatial --lib` tests pass incl. the new
+  `spherical_voronoi_hull_euler_invariant_random` (V==2n-4 + valid regions +
+  on-sphere over random n∈{8,17,40,75}, guarding the centroid-orientation fix)
+  and the 4 existing structural/rejection tests. clippy clean on changed
+  regions (2 residual warnings are pre-existing at lib.rs:551/1348).
+
 ## 2026-06-22 - BlackThrush - BOLD-VERIFY docs-only closeout: scorecard updated from already-measured rows; no unbenchmarked source diff present
 
 - Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.

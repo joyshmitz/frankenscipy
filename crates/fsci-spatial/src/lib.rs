@@ -4272,6 +4272,140 @@ pub struct SphericalVoronoi {
 /// projected vertex on the sphere.
 type SvCandidateFace = ((usize, usize, usize), [f64; 3]);
 
+/// Triangular facets of the 3-D convex hull of `points`, returned as index
+/// triples. For points on a sphere every point is a hull vertex and the hull
+/// facets are exactly the spherical Delaunay triangles, so this replaces the
+/// O(n⁴) all-triplets gift-wrapping face scan with an O(n²) incremental hull
+/// (Clarkson–Shor style insertion). Orientation within each triple is
+/// unspecified — callers recompute the outward normal — so only the facet *set*
+/// matters. Returns `None` if the points are degenerate (fewer than four
+/// affinely independent, e.g. all coplanar on a great circle).
+fn convex_hull_3d_facets(points: &[[f64; 3]], _center: [f64; 3]) -> Option<Vec<[usize; 3]>> {
+    let n = points.len();
+    if n < 4 {
+        return None;
+    }
+    let tol = 1e-12;
+    let face_normal = |f: &[usize; 3]| {
+        cross3(
+            sub3(points[f[1]], points[f[0]]),
+            sub3(points[f[2]], points[f[0]]),
+        )
+    };
+
+    // Seed an affinely independent tetrahedron: distinct, non-collinear,
+    // non-coplanar points. Any missing => degenerate input.
+    let p0 = 0usize;
+    let p1 = (1..n).find(|&i| norm3(sub3(points[i], points[p0])) > tol)?;
+    let p2 = (0..n).find(|&i| {
+        i != p0
+            && i != p1
+            && norm3(cross3(
+                sub3(points[p1], points[p0]),
+                sub3(points[i], points[p0]),
+            )) > tol
+    })?;
+    let base_normal = cross3(sub3(points[p1], points[p0]), sub3(points[p2], points[p0]));
+    let p3 = (0..n).find(|&i| {
+        i != p0 && i != p1 && i != p2 && dot3(base_normal, sub3(points[i], points[p0])).abs() > tol
+    })?;
+
+    // Orient faces against the seed-tetrahedron centroid, NOT the sphere centre.
+    // The centroid is strictly inside the seed tetra and stays inside every
+    // intermediate hull (incremental insertion only ever expands the hull), so
+    // "normal points away from the centroid" is the true outward direction at
+    // every step. The sphere centre is wrong here: early partial hulls of a few
+    // on-sphere points need not enclose the sphere centre, which silently flips
+    // face windings, corrupts the horizon twin-edge test, and blows the facet
+    // count up (or drops faces) — the bug this replaces.
+    let centroid = scale3(
+        add3(add3(points[p0], points[p1]), add3(points[p2], points[p3])),
+        0.25,
+    );
+    // Outward-oriented facet from three indices: flip so the normal points away
+    // from the hull centroid, making the visibility test unambiguous.
+    let make_face = |a: usize, b: usize, c: usize| -> [usize; 3] {
+        let normal = cross3(sub3(points[b], points[a]), sub3(points[c], points[a]));
+        if dot3(normal, sub3(points[a], centroid)) >= 0.0 {
+            [a, b, c]
+        } else {
+            [a, c, b]
+        }
+    };
+
+    let mut faces: Vec<[usize; 3]> = vec![
+        make_face(p0, p1, p2),
+        make_face(p0, p1, p3),
+        make_face(p0, p2, p3),
+        make_face(p1, p2, p3),
+    ];
+    let mut in_hull = vec![false; n];
+    for &s in &[p0, p1, p2, p3] {
+        in_hull[s] = true;
+    }
+
+    // Reused scratch buffers — the insertion loop is O(n) iterations and each
+    // touches O(faces) work, so allocating these fresh per point dominated the
+    // wall time (gap-grows-with-n alloc tell). Clear-and-refill instead.
+    let mut visible: Vec<bool> = Vec::new();
+    let mut visible_edges: std::collections::HashSet<(usize, usize)> =
+        std::collections::HashSet::new();
+    let mut horizon: Vec<(usize, usize)> = Vec::new();
+
+    for p in 0..n {
+        if in_hull[p] {
+            continue;
+        }
+        let pp = points[p];
+        visible.clear();
+        visible.extend(
+            faces
+                .iter()
+                .map(|f| dot3(face_normal(f), sub3(pp, points[f[0]])) > tol),
+        );
+        if !visible.iter().any(|&v| v) {
+            continue; // strictly inside the current hull (shouldn't happen on a sphere)
+        }
+        // Directed edges of all visible faces; a directed edge whose twin is not
+        // itself in a visible face lies on the horizon.
+        visible_edges.clear();
+        for (fi, f) in faces.iter().enumerate() {
+            if visible[fi] {
+                visible_edges.insert((f[0], f[1]));
+                visible_edges.insert((f[1], f[2]));
+                visible_edges.insert((f[2], f[0]));
+            }
+        }
+        horizon.clear();
+        for (fi, f) in faces.iter().enumerate() {
+            if !visible[fi] {
+                continue;
+            }
+            for &(u, v) in &[(f[0], f[1]), (f[1], f[2]), (f[2], f[0])] {
+                if !visible_edges.contains(&(v, u)) {
+                    horizon.push((u, v));
+                }
+            }
+        }
+        // Drop the visible faces by compacting the survivors in place (no new
+        // allocation), then cone the horizon to the new apex.
+        let mut w = 0;
+        for r in 0..faces.len() {
+            if !visible[r] {
+                faces[w] = faces[r];
+                w += 1;
+            }
+        }
+        faces.truncate(w);
+        for &(u, v) in &horizon {
+            faces.push(make_face(u, v, p));
+        }
+        in_hull[p] = true;
+    }
+
+    Some(faces)
+}
+
 impl SphericalVoronoi {
     /// Construct a spherical Voronoi diagram for 3D points on a common sphere.
     pub fn new(points: &[[f64; 3]], center: [f64; 3], radius: f64) -> Result<Self, SpatialError> {
@@ -4313,88 +4447,31 @@ impl SphericalVoronoi {
 
         let n = points.len();
 
-        // Face detection is the O(n³)-triplet × O(n)-validation cost (overall
-        // O(n⁴)); each (i,j,k) triplet's gift-wrapping test is independent. Detect
-        // the accepted faces in parallel over pair-balanced i-ranges (early i carry
-        // more (j,k) pairs), then collect per-range results in i-order and flatten,
-        // so the accepted triplets appear in exactly the sequential (i,j,k) order.
-        // The dedup check + push (which need the growing `vertices`) stay serial in
-        // that order — byte-identical to the original interleaved loop. A convex-
-        // hull-dual rewrite would reorder the output vertices, so parallelising the
-        // brute force is the parity-preserving lever here.
-        let detect_range = |i0: usize, i1: usize| -> Vec<SvCandidateFace> {
-            let mut out = Vec::new();
-            for i in i0..i1 {
-                for j in (i + 1)..n {
-                    for k in (j + 1)..n {
-                        let pi = points[i];
-                        let pj = points[j];
-                        let pk = points[k];
-                        let mut normal = cross3(sub3(pj, pi), sub3(pk, pi));
-                        let normal_norm = norm3(normal);
-                        if normal_norm <= 1e-12 {
-                            continue;
-                        }
-                        if dot3(normal, sub3(pi, center)) < 0.0 {
-                            normal = scale3(normal, -1.0);
-                        }
-
-                        let mut is_face = true;
-                        for (idx, &point) in points.iter().enumerate() {
-                            if idx == i || idx == j || idx == k {
-                                continue;
-                            }
-                            let signed = dot3(normal, sub3(point, pi));
-                            if signed > tol * radius.max(1.0) {
-                                is_face = false;
-                                break;
-                            }
-                        }
-                        if !is_face {
-                            continue;
-                        }
-
-                        let unit = scale3(normal, 1.0 / norm3(normal));
-                        let vertex = add3(center, scale3(unit, radius));
-                        out.push(((i, j, k), vertex));
-                    }
+        // Face detection used to be an O(n³)-triplet × O(n)-validation gift-wrap
+        // (overall O(n⁴)). The accepted faces are exactly the 3-D convex-hull
+        // facets of the on-sphere generators, so compute the hull in O(n²) via
+        // incremental insertion and project each facet's outward normal onto the
+        // sphere — the same Voronoi vertex the gift-wrap produced, just found far
+        // faster. Orientation within each triple is unspecified (the normal is
+        // recomputed and flipped here), and the downstream region build is
+        // order-independent, so the diagram is structurally identical.
+        let facets = convex_hull_3d_facets(points, center).ok_or_else(|| {
+            SpatialError::InvalidArgument(
+                "spherical voronoi requires non-coplanar generators on the sphere".to_string(),
+            )
+        })?;
+        let accepted: Vec<SvCandidateFace> = facets
+            .iter()
+            .map(|&[i, j, k]| {
+                let mut normal = cross3(sub3(points[j], points[i]), sub3(points[k], points[i]));
+                if dot3(normal, sub3(points[i], center)) < 0.0 {
+                    normal = scale3(normal, -1.0);
                 }
-            }
-            out
-        };
-
-        // Only parallelize once the O(n³) triplet work dwarfs thread-spawn cost
-        // (≈ n ≥ 128); below that the serial sweep is faster. Cap the worker count
-        // so medium n doesn't oversubscribe and pay spawn overhead it can't amortize.
-        let nthreads = if n < 128 {
-            1
-        } else {
-            std::thread::available_parallelism()
-                .map(std::num::NonZero::get)
-                .unwrap_or(1)
-                .min(n / 8)
-                .max(1)
-        };
-        let accepted: Vec<SvCandidateFace> = if nthreads <= 1 {
-            detect_range(0, n)
-        } else {
-            let bounds = pdist_row_bounds(n, nthreads);
-            let detect = &detect_range;
-            let parts: Vec<Vec<SvCandidateFace>> = std::thread::scope(|scope| {
-                let handles: Vec<_> = bounds
-                    .windows(2)
-                    .map(|w| {
-                        let (a, b) = (w[0], w[1]);
-                        scope.spawn(move || detect(a, b))
-                    })
-                    .collect();
-                handles
-                    .into_iter()
-                    .map(|h| h.join().expect("spherical voronoi worker panicked"))
-                    .collect()
-            });
-            parts.into_iter().flatten().collect()
-        };
+                let unit = scale3(normal, 1.0 / norm3(normal));
+                let vertex = add3(center, scale3(unit, radius));
+                ((i, j, k), vertex)
+            })
+            .collect();
 
         let mut vertices = Vec::new();
         let mut face_indices = Vec::new();
@@ -9452,6 +9529,46 @@ mod tests {
         ];
         let err = SphericalVoronoi::new(&points, [0.0, 0.0, 0.0], 1.0).expect_err("degenerate");
         assert!(matches!(err, SpatialError::InvalidArgument(_)));
+    }
+
+    #[test]
+    fn spherical_voronoi_hull_euler_invariant_random() {
+        // The convex-hull face detector must produce a simplicial hull of the
+        // on-sphere generators: V_voronoi == 2n - 4 (Euler, all faces tris),
+        // every generator owns a region of >= 3 vertices, and every Voronoi
+        // vertex sits on the unit sphere. This guards the incremental-hull
+        // rewrite against the orientation-reference regression that blew the
+        // facet count up (or dropped faces) for n > 4.
+        let mut state: u64 = 0x9E3779B97F4A7C15;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (state >> 11) as f64 / (1u64 << 53) as f64
+        };
+        for &n in &[8usize, 17, 40, 75] {
+            let points: Vec<[f64; 3]> = (0..n)
+                .map(|_| {
+                    let z = 2.0 * next() - 1.0;
+                    let theta = 2.0 * std::f64::consts::PI * next();
+                    let r = (1.0 - z * z).sqrt();
+                    [r * theta.cos(), r * theta.sin(), z]
+                })
+                .collect();
+            let sv = SphericalVoronoi::new(&points, [0.0, 0.0, 0.0], 1.0)
+                .unwrap_or_else(|e| panic!("n={n}: {e:?}"));
+            assert_eq!(sv.vertices.len(), 2 * n - 4, "n={n}: V != 2n-4");
+            assert_eq!(sv.regions.len(), n, "n={n}: region count");
+            for (pi, region) in sv.regions.iter().enumerate() {
+                assert!(region.len() >= 3, "n={n}: region {pi} too small");
+                for &vi in region {
+                    assert!(vi < sv.vertices.len(), "n={n}: region {pi} bad index");
+                }
+            }
+            for v in &sv.vertices {
+                assert!((norm3(*v) - 1.0).abs() < 1e-9, "n={n}: vertex off sphere");
+            }
+        }
     }
 
     // ── Procrustes tests ─────────────────────────────────────────────
