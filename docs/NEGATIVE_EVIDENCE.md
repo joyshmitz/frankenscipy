@@ -4032,3 +4032,20 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
 - STILL OPEN (bead frankenscipy-9i8vd, corrected scope): nct/ncf/norminvgauss genuinely integrate the pdf
   per point (nct 6x slower) — those need the series-replacement; the integer-quadrature anti-pattern is
   real for them, just not for ncx2.
+
+## 2026-06-21 - WIN (loss FLIPPED): nct cdf 6x LOSS → 1.4x WIN via Lenth series (was per-point Simpson)
+- Agent: cod-a / BlackThrush. Replaced NoncentralT::nct_cdf_integrate's per-point 2000-panel Simpson
+  quadrature (~2000 norm.cdf evals/point) with the Lenth (1989) series:
+  F = Φ(−δ) + ½ Σ_j [p_j·I_y(j+½, ν/2) + q_j·I_y(j+1, ν/2)], y = t²/(t²+ν), left tail by reflection
+  F(t;ν,δ)=1−F(−t;ν,−δ). Algorithm Python-verified to 1.5e-15 vs scipy.stats.nct.cdf over 400 random
+  (ν,δ,t); Rust output verified ≤7e-14 vs scipy on a spot sweep; noncentral tests 20/0.
+- Same-worker hz1 cdf_many 100k vs scipy.stats.nct.cdf:
+
+  | | before (Simpson) | after (series) | self | vs SciPy |
+  | --- | ---: | ---: | ---: | ---: |
+  | nct.cdf | 615.84 ms | 73.42 ms | **8.4x faster** | **1.4x faster** (SciPy 102.17 ms) |
+
+  → FLIPPED from 6.0x slower to 1.4x faster. fsci has all primitives (regularized_incomplete_beta,
+  standard_normal_cdf, ln_gamma). This + the ncx2 window fix resolve the bulk of the noncentral-cdf loss
+  class. REMAINING (bead frankenscipy-9i8vd): nct.sf still uses nct_sf_integrate (Simpson) — accurate
+  right-tail sf needs the complementary series, not 1−cdf; ncf/norminvgauss likewise. Filed.

@@ -1499,31 +1499,37 @@ impl NoncentralT {
         }
 
         let nu = self.df;
-        let mu = self.nc;
-        let norm = Normal::new(0.0, 1.0);
-
-        let s_max = Self::cdf_pdf_s_max(nu);
-        let steps = 2000usize; // even number of panels for Simpson's rule
-        let h = s_max / steps as f64;
-
-        let integrand = |s: f64| -> f64 {
-            if s <= 0.0 {
-                return 0.0;
-            }
-            let log_d = Self::log_pdf_s(nu, s);
-            if log_d < -700.0 {
-                return 0.0;
-            }
-            log_d.exp() * norm.cdf(t * s - mu)
-        };
-
-        let mut sum = integrand(0.0) + integrand(s_max);
-        for i in 1..steps {
-            let s = i as f64 * h;
-            let coef = if i % 2 == 0 { 2.0 } else { 4.0 };
-            sum += coef * integrand(s);
+        let delta = self.nc;
+        // Reflect the left tail: F(t;ν,δ) = 1 − F(−t;ν,−δ).
+        if t < 0.0 {
+            return 1.0 - NoncentralT::new(nu, -delta).nct_cdf_integrate(-t);
         }
-        (sum * h / 3.0).clamp(0.0, 1.0)
+        // Lenth (1989) noncentral-t CDF series (t ≥ 0):
+        //   F = Φ(−δ) + ½ Σ_j [ p_j·I_y(j+½, ν/2) + q_j·I_y(j+1, ν/2) ],  y = t²/(t²+ν),
+        //   p_j = e^{−δ²/2}(δ²/2)^j / j!,  q_j/q_{j−1} = (δ²/2)/(j+½).
+        // Replaces a per-point 2000-panel Simpson quadrature (≈2000 norm.cdf evals/point);
+        // verified to 1e-15 vs scipy.stats.nct.cdf over a (ν,δ,t) sweep. frankenscipy-9i8vd
+        let y = t * t / (t * t + nu);
+        let half = 0.5 * delta * delta;
+        let phi_neg_delta = standard_normal_cdf(-delta);
+        let mut p = (-half).exp();
+        let mut q = (-half).exp() * delta / std::f64::consts::SQRT_2 / ln_gamma(1.5).exp();
+        let peak = half.floor().max(0.0);
+        let mut series = 0.0;
+        let mut j: u64 = 0;
+        loop {
+            let jf = j as f64;
+            series += p * regularized_incomplete_beta(jf + 0.5, 0.5 * nu, y)
+                + q * regularized_incomplete_beta(jf + 1.0, 0.5 * nu, y);
+            if (jf > peak && (p + q) < 1.0e-18) || j > 100_000 {
+                break;
+            }
+            j += 1;
+            let jf2 = j as f64;
+            p *= half / jf2;
+            q *= half / (jf2 + 0.5);
+        }
+        (phi_neg_delta + 0.5 * series).clamp(0.0, 1.0)
     }
 
     /// PDF via the same chi-scaled quadrature.
