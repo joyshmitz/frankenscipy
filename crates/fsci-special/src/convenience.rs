@@ -2100,7 +2100,7 @@ pub fn stirling2(
     k_tensor: &SpecialTensor,
     mode: RuntimeMode,
 ) -> SpecialResult {
-    map_real_binary("stirling2", n_tensor, k_tensor, mode, |n, k| {
+    map_real_binary_eager("stirling2", n_tensor, k_tensor, mode, |n, k| {
         stirling2_real_scalar(n, k, mode)
     })
 }
@@ -2528,11 +2528,66 @@ where
     }
 }
 
+/// `par_map_indices` with a work-gate: stay serial (no thread spawn, no per-chunk
+/// Vec alloc/concat) until the array is large enough to amortise par_map_indices'
+/// overhead. The established break-even for this helper is ~1<<20 even for ~25-30ns
+/// kernels (see GAMMA_FAMILY_PAR_MIN and the error.rs erf/erfc gate). Order-preserving
+/// ⇒ byte-identical to the ungated call either way.
+fn par_map_indices_gated<T, H>(
+    n: usize,
+    real_par_min: usize,
+    f: H,
+) -> Result<Vec<T>, SpecialError>
+where
+    T: Send,
+    H: Fn(usize) -> Result<T, SpecialError> + Sync,
+{
+    if n >= real_par_min {
+        par_map_indices(n, f)
+    } else {
+        (0..n).map(f).collect()
+    }
+}
+
+/// Eager binary dispatch (real-array path always through `par_map_indices`). For
+/// EXPENSIVE kernels (gammaincinv/gammainccinv/owens_t/stirling2 — µs-scale per call)
+/// where parallelism amortises well below 1<<20.
+fn map_real_binary_eager<F>(
+    function: &'static str,
+    lhs: &SpecialTensor,
+    rhs: &SpecialTensor,
+    mode: RuntimeMode,
+    kernel: F,
+) -> SpecialResult
+where
+    F: Fn(f64, f64) -> Result<f64, SpecialError> + Sync,
+{
+    map_real_binary_gated(function, lhs, rhs, mode, 0, kernel)
+}
+
+/// Binary dispatch for CHEAP kernels (≤ ~30ns/call: xlogy/boxcox/powm1/huber/…).
+/// Real-array path is work-gated at 1<<20 so the well-vectorized serial map is used
+/// until the array is huge — the ungated n/32 par_map_indices over-subscribed ~16
+/// threads onto a ~4ns/elt kernel, measured 63x slower at n=4096 (frankenscipy: cc).
 fn map_real_binary<F>(
     function: &'static str,
     lhs: &SpecialTensor,
     rhs: &SpecialTensor,
     mode: RuntimeMode,
+    kernel: F,
+) -> SpecialResult
+where
+    F: Fn(f64, f64) -> Result<f64, SpecialError> + Sync,
+{
+    map_real_binary_gated(function, lhs, rhs, mode, 1 << 20, kernel)
+}
+
+fn map_real_binary_gated<F>(
+    function: &'static str,
+    lhs: &SpecialTensor,
+    rhs: &SpecialTensor,
+    mode: RuntimeMode,
+    real_par_min: usize,
     kernel: F,
 ) -> SpecialResult
 where
@@ -2544,11 +2599,13 @@ where
         }
         (SpecialTensor::RealVec(left), SpecialTensor::RealScalar(right)) => {
             let right = *right;
-            par_map_indices(left.len(), |i| kernel(left[i], right)).map(SpecialTensor::RealVec)
+            par_map_indices_gated(left.len(), real_par_min, |i| kernel(left[i], right))
+                .map(SpecialTensor::RealVec)
         }
         (SpecialTensor::RealScalar(left), SpecialTensor::RealVec(right)) => {
             let left = *left;
-            par_map_indices(right.len(), |i| kernel(left, right[i])).map(SpecialTensor::RealVec)
+            par_map_indices_gated(right.len(), real_par_min, |i| kernel(left, right[i]))
+                .map(SpecialTensor::RealVec)
         }
         (SpecialTensor::RealVec(left), SpecialTensor::RealVec(right)) => {
             if left.len() != right.len() {
@@ -2568,7 +2625,8 @@ where
                     detail: "vector inputs must have matching lengths",
                 });
             }
-            par_map_indices(left.len(), |i| kernel(left[i], right[i])).map(SpecialTensor::RealVec)
+            par_map_indices_gated(left.len(), real_par_min, |i| kernel(left[i], right[i]))
+                .map(SpecialTensor::RealVec)
         }
         _ => {
             record_special_trace(
@@ -4255,7 +4313,7 @@ pub fn gammaincinv(
     y_tensor: &SpecialTensor,
     mode: RuntimeMode,
 ) -> SpecialResult {
-    map_real_binary("gammaincinv", a_tensor, y_tensor, mode, |a, y| {
+    map_real_binary_eager("gammaincinv", a_tensor, y_tensor, mode, |a, y| {
         Ok(gammaincinv_scalar(a, y))
     })
 }
@@ -4341,7 +4399,7 @@ pub fn gammainccinv(
     y_tensor: &SpecialTensor,
     mode: RuntimeMode,
 ) -> SpecialResult {
-    map_real_binary("gammainccinv", a_tensor, y_tensor, mode, |a, y| {
+    map_real_binary_eager("gammainccinv", a_tensor, y_tensor, mode, |a, y| {
         Ok(gammainccinv_scalar(a, y))
     })
 }
@@ -4547,7 +4605,7 @@ pub fn owens_t(
     a_tensor: &SpecialTensor,
     mode: RuntimeMode,
 ) -> SpecialResult {
-    map_real_binary("owens_t", h_tensor, a_tensor, mode, |h, a| {
+    map_real_binary_eager("owens_t", h_tensor, a_tensor, mode, |h, a| {
         Ok(owens_t_scalar(h, a))
     })
 }
