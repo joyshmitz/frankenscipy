@@ -6,6 +6,45 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-22 - BlackThrush - BOLD-VERIFY dawsn residual follow-up: no small safe lever retained
+
+- Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
+- Bead: `frankenscipy-knnwq` (`[perf][special] dawsn residual: port XSF
+  w_im_y100 real-axis table`). Current source already contains the Cephes
+  rational keep from `2f4f01cb`; the remaining measured SciPy gap is small and
+  noisy on the representative row.
+- Fresh same-host baseline using the warmed cod-b target binary
+  `/data/projects/.rch-targets/frankenscipy-cod-b/release/examples/perf_special
+  bench-dawsn` on `dawsn(linspace(-8.5,8.5,500k))`:
+
+| Workload | fsci current | SciPy comparator | Ratio |
+| --- | ---: | ---: | ---: |
+| sample 1 | 4.469552 ms | 4.191728 ms | 1.066279x slower |
+| sample 2 | 4.307946 ms | 3.193961 ms | 1.348779x slower |
+| sample 3 | 3.573324 ms | 3.224080 ms | 1.108324x slower |
+
+- Reverted no-ship 1: changed the Dawson Cephes Horner helpers to
+  const-generic fixed-length loops plus `#[inline(always)]`. This preserved
+  Horner order but did not produce a durable Rust-side win: candidate samples
+  were `4.562757 / 3.919209 / 3.908094 ms` vs SciPy
+  `3.933057 / 3.905056 / 4.154116 ms` (`1.160104 / 1.003624 /
+  0.940776` ratios). Source restored.
+- Reverted no-ship 2: raised the `dawsn` real-vector gate from `1<<15` to
+  `1<<20` to retest serial execution after the faster Cephes scalar port. It
+  regressed the same row (`4.935128 ms`, then `5.832719 ms`; ratios
+  `1.360528` and `1.747666`). Gate restored to `1<<15`.
+- Source lookup: SciPy 1.17.1 uses XSF submodule
+  `0d0a593fd31073af10062d0093144e13ae34f8f3`, file
+  `include/xsf/faddeeva.h`. The exact deeper route remains a real port of
+  MIT-licensed `w_im_y100(100/(1+|x|), |x|)` plus the `|x|>45` continued
+  fraction. I did not transplant the ~100-case Chebyshev table for this
+  small/noisy residual after the local safe levers failed.
+- Build/bench notes: an RCH package-scoped release example build for
+  `fsci-special` completed on worker `vmi1153651`, but the remote example
+  could not run the SciPy comparator because SciPy was not installed there.
+  The retained measurements above are direct local same-host binary runs
+  against installed SciPy 1.17.1. No code changes are retained.
+
 ## 2026-06-22 - BlackThrush - BOLD-VERIFY dawsn Cephes rational: 1.98x slower -> near parity/slight residual vs SciPy
 
 - Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
