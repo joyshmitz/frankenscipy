@@ -6,6 +6,51 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-22 - BlackThrush - BOLD-VERIFY hyperu a=1 incomplete-gamma identity: 1.84x slower -> parity/slightly faster than SciPy
+
+- Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
+- Decision: KEEP. Live `br ready --json` exposed `frankenscipy-r4kkl` after the
+  previous `U(1,3/2,x)` erfcx shortcut. A first candidate probe for
+  `hyperu(a=2.5,b=1.25,x=50..200,50k)` was already faster than SciPy
+  (`ratio=0.579618`), so I did not use it as the lever. The measured residual
+  gap was instead `hyperu(a=1.0,b=1.25,x=linspace(0.5,8.5,50k))`, which still
+  routed every element through the 768-panel Simpson integral and measured
+  30.957 ms/iter vs SciPy 16.788 ms/iter, a 1.843999x loss.
+- Root cause and lever: for `a=1` and `b>1`,
+  `U(1,b,x)=exp(x)*x^(1-b)*Gamma(b-1,x)`. I added scalar and
+  scalar-parameter/vector-`x` shortcuts using the existing incomplete-gamma
+  kernels, hoisting `Gamma(b-1)` for vector dispatch and preserving existing
+  nonpositive/nonfinite `x` behavior by delegating those cases back to
+  `hyperu_scalar`.
+
+| Workload | Before fsci | After fsci | SciPy comparator | Result |
+| --- | ---: | ---: | ---: | --- |
+| `hyperu(1.0,1.25,0.5..8.5,50k)` baseline | 30.957 ms | - | 16.788 ms | 1.843999x slower |
+| same row, first direct identity | - | 18.313 ms | 16.111 ms | 1.136703x slower, not enough |
+| same row, hoisted gamma confirmation | - | 15.405 ms | 18.201 ms | 0.846354 ratio |
+| same row, warm confirmation | - | 14.513 ms | 17.786 ms | 0.815967 ratio |
+| same row, final repeated samples | - | 14.506 / 15.746 / 16.011 ms | 15.573 / 15.843 / 16.795 ms | 0.931519 / 0.993819 / 0.953287 ratios |
+
+- Noise note: one final identical sample landed at 16.545 ms vs SciPy
+  15.136 ms (`ratio=1.093082`) under active machine load. I am recording the
+  full range rather than overstating the win; the kept effect is the durable
+  Rust-side drop from about 31 ms to about 14.5-16.0 ms and repeated
+  parity/slight lead vs SciPy.
+- Accuracy/gates: new `hyperu_a_one_gamma_identity_broadcast_matches_scipy`
+  covers scalar and vector dispatch against SciPy reference values. With
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b`, the
+  focused identity test, the broader `hyperu` lib-test filter, package
+  `check --all-targets`, and package `fmt -- --check` pass. Per-crate clippy
+  remains blocked by pre-existing lint debt outside this lever: first by
+  path-dependency lints in `fsci-linalg` and `fsci-integrate`, and with
+  `--no-deps` by existing `fsci-special` lint debt in `bessel.rs`,
+  `convenience.rs`, `gamma.rs`, and `orthopoly.rs`.
+- Residual scope: `frankenscipy-r4kkl` closes the measured exact
+  `a=1,b>1` incomplete-gamma identity family. I filed `frankenscipy-8zqah` for
+  the remaining positive-`a` cases with `a != 1` and no shifted/erfcx identity;
+  those still need representative SciPy rows plus a Kummer/asymptotic/recurrence
+  series proof before replacing Simpson.
+
 ## 2026-06-22 - BlackThrush - BOLD-VERIFY hyperu non-shifted identity: 2.02x slower -> 9.31x faster than SciPy on `U(1,3/2,x)`
 
 - Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.

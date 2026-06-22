@@ -3,6 +3,7 @@
 use fsci_runtime::RuntimeMode;
 
 use crate::convenience::erfcx_scalar;
+use crate::gamma::{gammaincc_scalar, log_gammaincc_scalar};
 use crate::types::{
     Complex64, DispatchPlan, DispatchStep, KernelRegime, SpecialError, SpecialErrorKind,
     SpecialResult, SpecialTensor,
@@ -461,6 +462,24 @@ fn hyperu_dispatch(
         let mut out = Vec::with_capacity(x_vec.len());
         for &x_r in x_vec {
             out.push(hyperu_one_three_halves_or_scalar(*a_r, *b_r, x_r, mode)?);
+        }
+        return Ok(SpecialTensor::RealVec(out));
+    }
+
+    if let (
+        SpecialTensor::RealScalar(a_r),
+        SpecialTensor::RealScalar(b_r),
+        SpecialTensor::RealVec(x_vec),
+    ) = (a, b, x)
+        && hyperu_a_one_gamma_identity(*a_r, *b_r)
+    {
+        let s = *b_r - 1.0;
+        let gamma_s = gamma_real(s);
+        let mut out = Vec::with_capacity(x_vec.len());
+        for &x_r in x_vec {
+            out.push(hyperu_a_one_gamma_or_scalar_with_gamma(
+                *a_r, *b_r, s, gamma_s, x_r, mode,
+            )?);
         }
         return Ok(SpecialTensor::RealVec(out));
     }
@@ -1781,6 +1800,10 @@ pub fn hyperu_scalar(a: f64, b: f64, x: f64, mode: RuntimeMode) -> Result<f64, S
         return Ok(hyperu_one_three_halves_value(x));
     }
 
+    if hyperu_a_one_gamma_identity(a, b) {
+        return Ok(hyperu_a_one_gamma_value(b, x));
+    }
+
     if a == 0.0 {
         return Ok(1.0);
     }
@@ -1899,6 +1922,58 @@ fn hyperu_one_three_halves_value(x: f64) -> f64 {
     const SQRT_PI: f64 = 1.772_453_850_905_516;
     let root_x = x.sqrt();
     SQRT_PI * erfcx_scalar(root_x) / root_x
+}
+
+fn hyperu_a_one_gamma_identity(a: f64, b: f64) -> bool {
+    a == 1.0 && b.is_finite() && b > 1.0 && !hyperu_one_three_halves_identity(a, b)
+}
+
+fn hyperu_a_one_gamma_or_scalar_with_gamma(
+    a: f64,
+    b: f64,
+    s: f64,
+    gamma_s: f64,
+    x: f64,
+    mode: RuntimeMode,
+) -> Result<f64, SpecialError> {
+    if x.is_finite() && x > 0.0 {
+        Ok(hyperu_a_one_gamma_value_with_gamma(b, s, gamma_s, x))
+    } else {
+        hyperu_scalar(a, b, x, mode)
+    }
+}
+
+fn hyperu_a_one_gamma_value(b: f64, x: f64) -> f64 {
+    let s = b - 1.0;
+    hyperu_a_one_gamma_value_with_gamma(b, s, gamma_real(s), x)
+}
+
+fn hyperu_a_one_gamma_value_with_gamma(b: f64, s: f64, gamma_s: f64, x: f64) -> f64 {
+    if gamma_s.is_finite() && gamma_s > 0.0 && x < 50.0 {
+        if let Ok(q) = gammaincc_scalar(s, x, RuntimeMode::Strict) {
+            let value = x.exp() * x.powf(1.0 - b) * gamma_s * q;
+            if value.is_finite() {
+                return value;
+            }
+        }
+    }
+
+    let (ln_gamma_s, sign_gamma_s) = ln_gamma_with_sign(s);
+    if !ln_gamma_s.is_finite() || sign_gamma_s <= 0.0 {
+        return f64::NAN;
+    }
+    let log_q = log_gammaincc_scalar(s, x);
+    if log_q == f64::NEG_INFINITY {
+        return 0.0;
+    }
+    let log_value = x + (1.0 - b) * x.ln() + ln_gamma_s + log_q;
+    if log_value < HYPERU_LOG_UNDERFLOW {
+        return 0.0;
+    }
+    if log_value > HYPERU_LOG_OVERFLOW {
+        return f64::INFINITY;
+    }
+    log_value.exp()
 }
 
 /// U(a, b, x) for a < 0 non-integer and b a positive integer (x > 0) via the
@@ -4072,6 +4147,35 @@ mod tests {
             assert!(
                 (actual - want).abs() <= 2.0e-10 * want.abs().max(1.0),
                 "hyperu(1, 1.5, x) = {actual}, expected {want}"
+            );
+        }
+    }
+
+    #[test]
+    #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy.special.hyperu
+    fn hyperu_a_one_gamma_identity_broadcast_matches_scipy() {
+        let scalar_actual = hyperu_scalar(1.0, 1.25, 4.0, RuntimeMode::Strict).unwrap();
+        assert!((scalar_actual - 0.215_933_722_861_767_5).abs() <= 1.0e-11);
+
+        let result = hyperu(
+            &scalar(1.0),
+            &scalar(1.25),
+            &SpecialTensor::RealVec(vec![0.5, 1.0, 2.0, 8.5]),
+            RuntimeMode::Strict,
+        );
+        let values = get_real_vec(&result).unwrap_or(&[]);
+        let expected = [
+            1.091_271_113_524_194_8,
+            0.669_391_930_164_253_7,
+            0.389_410_221_115_701_56,
+            0.108_912_819_854_285_46,
+        ];
+
+        assert_eq!(values.len(), expected.len());
+        for (&actual, &want) in values.iter().zip(expected.iter()) {
+            assert!(
+                (actual - want).abs() <= 2.0e-10 * want.abs().max(1.0),
+                "hyperu(1, 1.25, x) = {actual}, expected {want}"
             );
         }
     }
