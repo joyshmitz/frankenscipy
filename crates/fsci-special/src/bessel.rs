@@ -1635,12 +1635,12 @@ fn kv_scaled_value(v_abs: f64, z: f64) -> f64 {
     }
     // Integer order: the recurrence K_{n+1} = K_{n-1} + (2n/z)K_n is identical for
     // the e^z-scaled values, so build them from the scaled K_0, K_1.
-    let k0 = kv_integral_scaled(0.0, z);
+    let k0 = k0e_cephes(z);
     let n = v_abs.round() as u32;
     if n == 0 {
         return k0;
     }
-    let k1 = kv_integral_scaled(1.0, z);
+    let k1 = k1e_cephes(z);
     if n == 1 {
         return k1;
     }
@@ -1652,6 +1652,24 @@ fn kv_scaled_value(v_abs: f64, z: f64) -> f64 {
         k_curr = k_next;
     }
     k_curr
+}
+
+fn k0e_cephes(x: f64) -> f64 {
+    if x <= 2.0 {
+        let y = cephes_chbevl(x * x - 2.0, &K0_A) - (0.5 * x).ln() * i0_scalar(x);
+        y * x.exp()
+    } else {
+        cephes_chbevl(8.0 / x - 2.0, &K0_B) / x.sqrt()
+    }
+}
+
+fn k1e_cephes(x: f64) -> f64 {
+    if x <= 2.0 {
+        let y = (0.5 * x).ln() * i1_scalar(x) + cephes_chbevl(x * x - 2.0, &K1_A) / x;
+        y * x.exp()
+    } else {
+        cephes_chbevl(8.0 / x - 2.0, &K1_B) / x.sqrt()
+    }
 }
 
 /// Scaled DLMF 10.40.2 asymptotic: K_v(z)·e^z ~ sqrt(π/(2z)) Σ_k a_k/z^k,
@@ -3201,6 +3219,19 @@ fn cephes_p1evl(x: f64, coef: &[f64]) -> f64 {
     coef.iter().fold(1.0, |acc, &c| acc * x + c)
 }
 
+fn cephes_chbevl(x: f64, coef: &[f64]) -> f64 {
+    let mut iter = coef.iter();
+    let mut b0 = *iter.next().expect("non-empty Chebyshev coefficient table");
+    let mut b1 = 0.0;
+    let mut b2 = 0.0;
+    for &c in iter {
+        b2 = b1;
+        b1 = b0;
+        b0 = x * b1 - b2 + c;
+    }
+    0.5 * (b0 - b2)
+}
+
 const J0_DR1: f64 = 5.78318596294678452118E0;
 const J0_DR2: f64 = 3.04712623436620863991E1;
 const J0_RP: [f64; 4] = [
@@ -3315,6 +3346,90 @@ const J1_QQ: [f64; 7] = [
 ];
 const J1_Z1: f64 = 1.46819706421238932572E1;
 const J1_Z2: f64 = 4.92184563216946036703E1;
+
+#[allow(clippy::excessive_precision)] // coefficients verbatim from SciPy/Cephes
+const K0_A: [f64; 10] = [
+    1.37446543561352307156E-16,
+    4.25981614279661018399E-14,
+    1.03496952576338420167E-11,
+    1.90451637722020886025E-9,
+    2.53479107902614945675E-7,
+    2.28621210311945178607E-5,
+    1.26461541144692592338E-3,
+    3.59799365153615016266E-2,
+    3.44289899924628486886E-1,
+    -5.35327393233902768720E-1,
+];
+#[allow(clippy::excessive_precision)] // coefficients verbatim from SciPy/Cephes
+const K0_B: [f64; 25] = [
+    5.30043377268626276149E-18,
+    -1.64758043015242134646E-17,
+    5.21039150503902756861E-17,
+    -1.67823109680541210385E-16,
+    5.51205597852431940784E-16,
+    -1.84859337734377901440E-15,
+    6.34007647740507060557E-15,
+    -2.22751332699166985548E-14,
+    8.03289077536357521100E-14,
+    -2.98009692317273043925E-13,
+    1.14034058820847496303E-12,
+    -4.51459788337394416547E-12,
+    1.85594911495471785253E-11,
+    -7.95748924447710747776E-11,
+    3.57739728140030116597E-10,
+    -1.69753450938905987466E-9,
+    8.57403401741422608519E-9,
+    -4.66048989768794782956E-8,
+    2.76681363944501510342E-7,
+    -1.83175552271911948767E-6,
+    1.39498137188764993662E-5,
+    -1.28495495816278026384E-4,
+    1.56988388573005337491E-3,
+    -3.14481013119645005427E-2,
+    2.44030308206595545468E0,
+];
+#[allow(clippy::excessive_precision)] // coefficients verbatim from SciPy/Cephes
+const K1_A: [f64; 11] = [
+    -7.02386347938628759343E-18,
+    -2.42744985051936593393E-15,
+    -6.66690169419932900609E-13,
+    -1.41148839263352776110E-10,
+    -2.21338763073472585583E-8,
+    -2.43340614156596823496E-6,
+    -1.73028895751305206302E-4,
+    -6.97572385963986435018E-3,
+    -1.22611180822657148235E-1,
+    -3.53155960776544875667E-1,
+    1.52530022733894777053E0,
+];
+#[allow(clippy::excessive_precision)] // coefficients verbatim from SciPy/Cephes
+const K1_B: [f64; 25] = [
+    -5.75674448366501715755E-18,
+    1.79405087314755922667E-17,
+    -5.68946255844285935196E-17,
+    1.83809354436663880070E-16,
+    -6.05704724837331885336E-16,
+    2.03870316562433424052E-15,
+    -7.01983709041831346144E-15,
+    2.47715442448130437068E-14,
+    -8.97670518232499435011E-14,
+    3.34841966607842919884E-13,
+    -1.28917396095102890680E-12,
+    5.13963967348173025100E-12,
+    -2.12996783842756842877E-11,
+    9.21831518760500529508E-11,
+    -4.19035475934189648750E-10,
+    2.01504975519703286596E-9,
+    -1.03457624656780970260E-8,
+    5.74108412545004946722E-8,
+    -3.50196060308781257119E-7,
+    2.40648494783721712015E-6,
+    -1.93619797416608296024E-5,
+    1.95215518471351631108E-4,
+    -2.85781685962277938680E-3,
+    1.03923736576817238437E-1,
+    2.72062619048444266945E0,
+];
 
 // Cephes rational J0 — scipy's xsf wraps these EXACT coefficients, so this matches
 // scipy.special.j0 to the bit while replacing the O(~25-term) convergence-loop power series
@@ -6277,6 +6392,84 @@ mod tests {
             assert!(
                 ((keval - keref) / keref).abs() < 1e-10,
                 "kve({v},{z})={keval:e} vs {keref:e}"
+            );
+        }
+    }
+
+    #[test]
+    #[allow(clippy::excessive_precision)] // golden constants verbatim from scipy 1.17.1
+    fn k0_k1_cephes_base_matches_scipy() {
+        // Integer-order K_v builds from K0e/K1e. These base kernels now use the
+        // same Cephes Chebyshev expansions as SciPy instead of two quadratures.
+        let rv = |r: SpecialResult| match r {
+            Ok(SpecialTensor::RealScalar(v)) => v,
+            _ => f64::NAN,
+        };
+        let s = SpecialTensor::RealScalar;
+        let m = RuntimeMode::Strict;
+        for (x, k0_ref, k1_ref, k0e_ref, k1e_ref) in [
+            (
+                0.125,
+                2.20786908674496951e0,
+                7.83111829911575175e0,
+                2.50184344021912874e0,
+                8.87381958642633073e0,
+            ),
+            (
+                0.5,
+                9.24419071227665645e-1,
+                1.65644112000330068e0,
+                1.52410938577390920e0,
+                2.73100970821178546e0,
+            ),
+            (
+                1.0,
+                4.21024438240708232e-1,
+                6.01907230197234577e-1,
+                1.14446307980689466e0,
+                1.63615348626325807e0,
+            ),
+            (
+                2.0,
+                1.13893872749533401e-1,
+                1.39865881816522458e-1,
+                8.41568215070771175e-1,
+                1.03347684706868881e0,
+            ),
+            (
+                8.5,
+                8.62575663493250739e-5,
+                9.11972477500689693e-5,
+                4.23935999333698021e-1,
+                4.48213391563079377e-1,
+            ),
+            (
+                20.0,
+                5.74123781533652375e-10,
+                5.88305796955703838e-10,
+                2.78544876657182194e-1,
+                2.85425496940726442e-1,
+            ),
+        ] {
+            let got_k0 = rv(k0(&s(x), m));
+            let got_k1 = rv(k1(&s(x), m));
+            let got_k0e = rv(k0e(&s(x), m));
+            let got_k1e = rv(k1e(&s(x), m));
+            assert!(
+                ((got_k0 - k0_ref) / k0_ref).abs() < 1e-13,
+                "k0({x})={got_k0:e} vs {k0_ref:e}"
+            );
+            assert!(
+                ((got_k1 - k1_ref) / k1_ref).abs() < 1e-13,
+                "k1({x})={got_k1:e} vs {k1_ref:e}"
+            );
+            assert!(
+                ((got_k0e - k0e_ref) / k0e_ref).abs() < 1e-13,
+                "k0e({x})={got_k0e:e} vs {k0e_ref:e}"
+            );
+            assert!(
+                ((got_k1e - k1e_ref) / k1e_ref).abs() < 1e-13,
+                "k1e({x})={got_k1e:e} vs {k1e_ref:e}"
             );
         }
     }

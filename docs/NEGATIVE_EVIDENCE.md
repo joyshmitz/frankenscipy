@@ -6,6 +6,47 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-22 - BlackThrush - BOLD-VERIFY kv integer-order Cephes bases: 5.67x slower -> 16.4x faster than SciPy on v=2 workload
+
+- Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
+- Decision: KEEP. Live `bv --robot-triage` / `br ready --json` put
+  `frankenscipy-8qpyn` and `frankenscipy-tkd3v` at the front. The latest
+  `hyperu` comment had just rejected the integer-shift shortcut and measured
+  the current residual at 4.34x slower; `kv` still had a 3.3x residual in the
+  bead comments and a concrete base-kernel lever. I added `perf_special
+  bench-kv` and measured the live integer-order `kv(v=2,z=linspace(0.5,8.5,
+  500k))` path locally with `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b`
+  and `cargo +nightly-2026-06-12 run --release -p fsci-special --example
+  perf_special -- bench-kv`.
+- Root cause: the integer-order path still built scaled `K_0` and `K_1` with
+  fixed 48-node Gauss-Legendre quadrature, then recurred to `K_n`. I ported the
+  SciPy/Cephes `k0e`/`k1e` Chebyshev base kernels (`[0,2]` logarithmic branch,
+  `(2,inf)` scaled branch) and kept the existing recurrence for integer orders.
+  Non-integer real orders still use the quadrature path.
+
+| Workload | Before fsci | After fsci | SciPy comparator | Result |
+| --- | ---: | ---: | ---: | --- |
+| `kv(v=2,z=0.5..8.5,500k)` first live run | 5291.36 ms | 15.76 ms | 139.44 ms | before 5.67x slower on first same-helper baseline; after 8.85x faster |
+| `kv(v=2,z=0.5..8.5,500k)` confirmation | — | 8.50 ms | 139.20 ms | 16.38x faster |
+
+- Accuracy gates: new `k0_k1_cephes_base_matches_scipy` golden rows cover
+  `k0/k1/k0e/k1e` at `x={0.125,0.5,1,2,8.5,20}` against SciPy 1.17.1 to
+  1e-13; existing `kv_kve_large_z_matches_scipy` and
+  `kv_kve_integral_window_and_scaled_overflow` still pass after switching the
+  integer base. Per-crate `cargo +nightly-2026-06-12 check -p fsci-special
+  --all-targets`, `test -p fsci-special --all-targets -- --nocapture`, and
+  `fmt -p fsci-special -- --check` pass with the shared
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b`. Per-crate
+  clippy remains blocked by pre-existing `fsci-special` lint debt outside this
+  lever (`orthopoly.rs` int-plus-one/assignment patterns, legacy Bessel/J/Gamma
+  excessive-precision tables, convenience approx constants/type complexity,
+  and unused/dead helpers including the prior adaptive-Simpson fallback).
+- Residual scope: this closes the measured integer-order `kv/kve/kn` base
+  loss. It is not a full Temme/AMOS replacement for non-integer real-order
+  `kv`; if a fresh non-integer `kv` vs SciPy benchmark shows a material
+  residual, file/route that as the remaining series-kernel bead instead of
+  reopening the integer-order loss.
+
 ## 2026-06-22 - BlackThrush - BOLD-VERIFY rerun: SphericalVoronoi biggest filed gap stays closed at n<=200; large-n O(n^2) tail remains routed
 
 - Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
