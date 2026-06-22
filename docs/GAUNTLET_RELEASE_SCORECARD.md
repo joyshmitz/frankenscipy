@@ -240,6 +240,28 @@ win/loss/neutral ledger lives in `docs/progress/perf-negative-results.md`.
 | rch SciPy oracle parity | blocked on worker image | `vmi1152480` and `vmi1227854` lacked `scipy`; local same-host oracle supplied the head-to-head ratios |
 | Release readiness | partial | two linalg perf clusters, one `fsci-signal` coherence win, one `fsci-opt` L-BFGS-B reject, one `fsci-special` cutoff win plus one top-k reject, one `fsci-fft` CSD reject, `fsci-cluster` linkage/kmeans keeps, `fsci-ndimage` zoom/Gaussian/filter1d/EDT wins, `fsci-spatial` `pdist` keeps, one `fsci-sparse` Arnoldi reject/guarded keep plus `.140` no-ship Lanczos evidence, and one `fsci-integrate` RK scratch reject verified; other code-first perf ledger entries still need gauntlet conversion |
 
+## 2026-06-22 — CopperFern: lfilter parity + ndimage cost-aware parallel-gate sweep
+
+All byte-identical (thread count / register-unrolling never changes the result; verified by
+in-process `assert_eq` and crate conformance), measured by same-process interleaved A/B (the
+reliable signal under multi-agent contention; criterion cross-run swung wildly and was discarded).
+No fresh vs-SciPy benches were run this session for the gate fixes (the gate closes wasted
+parallel-spawn overhead — a self-speedup that narrows the prior SciPy gap); lfilter has a clean
+vs-SciPy parity number.
+
+| Change | Realistic workload | Measured (same-process A/B) | vs SciPy | Decision |
+| --- | --- | --- | --- | --- |
+| `lfilter` biquad register-unrolled fast path (nfilt 2/3) | `scipy.signal.lfilter` 4096 biquad | 37.4 → 24.2 us = **1.54x** (criterion −35.9%, tight CI) | ≈ scipy 24.5 us (**parity**, was 1.53x slower) | keep — GREEN 648/0; overturns prior false-negative "parity wall" audit |
+| `gaussian_filter` 2-D parallel gate `1<<18`→`1<<21` | `scipy.ndimage.gaussian_filter(sigma=2)` 256² Reflect | serial **1.82x** faster than 64-thread path (128² 6.98x, 512² 0.65x, 1024² 0.21x) | narrows the documented 2.83x loss substantially | keep — GREEN 246/0 |
+| `uniform_filter` gate on PIXEL COUNT `>=1<<20` (running-sum is window-size independent) | `scipy.ndimage.uniform_filter` 256²/512² | serial **3.78x** / **1.48x** (1024² parity) | self-speedup closes parallel-overhead waste | keep — GREEN 246/0 |
+| `correlate1d`/`convolve1d` along-axis gate `>=1<<20` (also general gaussian path) | `scipy.ndimage.correlate1d` 256² w5 | serial **2.61x** (512² parallel wins 1.23x) | self-speedup closes parallel-overhead waste | keep — GREEN 246/0 |
+
+Negatives this session (reverted, in `docs/NEGATIVE_EVIDENCE.md`): gaussian col-pass interior axpy
+0.755x (gather cache-bound); nd_filter_apply 2-D incremental-index 0.945x (per-pixel divide is not
+the bottleneck — the 25-tap scalar gather is). Next bold lever (scoped, not yet done): portable
+`std::simd` across 8 interior output pixels in `nd_filter_apply` (byte-identical, no unsafe) to flip
+the correlate ~1.18x scalar-kernel residual.
+
 ## Pending Gauntlet Backlog
 
 Continue converting `pending batch-test` entries in the negative-evidence ledger
