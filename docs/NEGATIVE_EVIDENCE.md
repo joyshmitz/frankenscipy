@@ -4261,3 +4261,16 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   beta/normal/student_t/chi/chi2/f pdf_many also use the 2048 gate with cheap elementary kernels and
   likely pessimize identically at n≈4096+ (the syscall-skip already helps them below 4096). NOT
   VonMises/Nakagami/GenGamma pdf (bessel/heavier kernels — leave parallel).
+
+## 2026-06-22 - WIN (extend): 13 more cheap-kernel pdf_many sites get the high parallel gate
+- Agent: cc / CopperFern. Follow-up to the gamma pdf_many fix (82d989fe). Benched the same-class
+  candidates: StudentT pdf_many n=4096 parallel **418 µs** vs serial **254 µs** (1.65x self-loss);
+  BetaDist **307 µs** vs **280 µs** — both confirm the cheap-kernel parallel pessimization. Applied
+  the verified fix (route through par_continuous_map_min @ 65536/thread) to all 13 cheap elementary
+  pdf_many: StudentT, ChiSquared, FDistribution, BetaDist, GenGamma, VonMises, InverseGamma, Chi,
+  Nakagami, DoubleGamma, Erlang, GenNorm, HalfGenNorm. (gamma already done.) cdf_many/sf_many/
+  ppf_many KEEP the 2048 gate — their kernels are costly gammainc/betainc that DO amortise threads.
+- Byte-identical (order-preserving serial vs parallel chunks). fsci-stats lib GREEN 1980/0. Small/
+  medium arrays now stay serial+hoisted (parity-or-win vs scipy); only arrays >=131072 parallelize.
+  NB: a botched bulk-edit duplicated gamma's body mid-work — caught via occurrence-count mismatch,
+  restored via `git show HEAD:path > path` (NOT checkout), redone with an index-based replace.

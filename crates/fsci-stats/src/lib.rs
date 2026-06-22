@@ -1098,7 +1098,7 @@ impl StudentT {
     pub fn pdf_many(&self, xs: &[f64]) -> Vec<f64> {
         let v = self.df;
         let coeff = gamma_ratio_t(v);
-        par_continuous_map(xs, |x| coeff * (1.0 + x * x / v).powf(-0.5 * (v + 1.0)))
+        par_continuous_map_min(xs, 65536, |x| coeff * (1.0 + x * x / v).powf(-0.5 * (v + 1.0)))
     }
 
     /// Log-density at many points; hoists `gamma_ratio_t(df).ln()` like
@@ -1958,7 +1958,7 @@ impl ChiSquared {
         let k2 = 0.5 * self.df;
         let k2_ln2 = k2 * 2.0_f64.ln();
         let lg = ln_gamma(k2);
-        par_continuous_map(xs, |x| {
+        par_continuous_map_min(xs, 65536, |x| {
                 if x < 0.0 {
                     return 0.0;
                 }
@@ -3054,7 +3054,7 @@ impl FDistribution {
         let d2 = self.dfd;
         let lead = 0.5 * d1 * (d1 / d2).ln();
         let lb = ln_beta(0.5 * d1, 0.5 * d2);
-        par_continuous_map(xs, |x| {
+        par_continuous_map_min(xs, 65536, |x| {
                 if x <= 0.0 {
                     return 0.0;
                 }
@@ -3726,7 +3726,7 @@ impl BetaDist {
     #[must_use]
     pub fn pdf_many(&self, xs: &[f64]) -> Vec<f64> {
         let lb = ln_beta(self.a, self.b);
-        par_continuous_map(xs, |x| {
+        par_continuous_map_min(xs, 65536, |x| {
                 if !(0.0..=1.0).contains(&x) {
                     return 0.0;
                 }
@@ -4519,7 +4519,7 @@ impl GenGamma {
         let c = self.c;
         let lead = c.abs().ln();
         let lg = ln_gamma(a);
-        par_continuous_map(xs, |x| {
+        par_continuous_map_min(xs, 65536, |x| {
                 if x <= 0.0 {
                     return 0.0;
                 }
@@ -8499,7 +8499,7 @@ impl VonMises {
     #[must_use]
     pub fn pdf_many(&self, xs: &[f64]) -> Vec<f64> {
         let denom = 2.0 * PI * modified_bessel_i(0.0, self.kappa);
-        par_continuous_map(xs, |x| (self.kappa * (x - self.loc).cos()).exp() / denom)
+        par_continuous_map_min(xs, 65536, |x| (self.kappa * (x - self.loc).cos()).exp() / denom)
     }
 
     fn period_start(&self) -> f64 {
@@ -12664,7 +12664,7 @@ impl InverseGamma {
     pub fn pdf_many(&self, xs: &[f64]) -> Vec<f64> {
         let a = self.a;
         let gamma_a = ln_gamma(a).exp();
-        par_continuous_map(xs, |x| {
+        par_continuous_map_min(xs, 65536, |x| {
                 if x <= 0.0 {
                     return 0.0;
                 }
@@ -15370,7 +15370,7 @@ impl Chi {
         let k = self.df;
         let lead = 2.0_f64.powf(1.0 - k / 2.0);
         let gamma_k2 = ln_gamma(k / 2.0).exp();
-        par_continuous_map(xs, |x| {
+        par_continuous_map_min(xs, 65536, |x| {
                 if x < 0.0 {
                     return 0.0;
                 }
@@ -15754,7 +15754,7 @@ impl Nakagami {
     pub fn pdf_many(&self, xs: &[f64]) -> Vec<f64> {
         let nu = self.nu;
         let coeff = 2.0 * nu.powf(nu) / ln_gamma(nu).exp();
-        par_continuous_map(xs, |x| {
+        par_continuous_map_min(xs, 65536, |x| {
                 if x < 0.0 {
                     return 0.0;
                 }
@@ -16809,7 +16809,7 @@ impl DoubleGamma {
     pub fn pdf_many(&self, xs: &[f64]) -> Vec<f64> {
         let a = self.a;
         let gamma_a = ln_gamma(a).exp();
-        par_continuous_map(xs, |x| 0.5 * x.abs().powf(a - 1.0) * (-x.abs()).exp() / gamma_a)
+        par_continuous_map_min(xs, 65536, |x| 0.5 * x.abs().powf(a - 1.0) * (-x.abs()).exp() / gamma_a)
     }
 }
 
@@ -17612,7 +17612,7 @@ impl Erlang {
         let lambda = self.rate;
         let coeff = lambda.powf(k);
         let gamma_k = ln_gamma(k).exp();
-        par_continuous_map(xs, |x| {
+        par_continuous_map_min(xs, 65536, |x| {
                 if x < 0.0 {
                     return 0.0;
                 }
@@ -21944,7 +21944,7 @@ impl GenNorm {
     pub fn pdf_many(&self, xs: &[f64]) -> Vec<f64> {
         let b = self.beta;
         let coeff = b / (2.0 * ln_gamma(1.0 / b).exp());
-        par_continuous_map(xs, |x| coeff * (-x.abs().powf(b)).exp())
+        par_continuous_map_min(xs, 65536, |x| coeff * (-x.abs().powf(b)).exp())
     }
 }
 
@@ -22159,7 +22159,7 @@ impl HalfGenNorm {
     pub fn pdf_many(&self, xs: &[f64]) -> Vec<f64> {
         let b = self.beta;
         let coeff = b / ln_gamma(1.0 / b).exp();
-        par_continuous_map(xs, |x| {
+        par_continuous_map_min(xs, 65536, |x| {
                 if x < 0.0 {
                     return 0.0;
                 }
