@@ -4729,3 +4729,27 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   verified, no action. Next un-dominated workloads are the HARD numerical walls (hyperu Kummer series
   ~23x, kv-Temme ~3.3x, dawsn Cephes ~1.92x, FFT non-pow2, kmeans small-n SIMD) — meaty accuracy-
   critical ports, already filed as beads; NOT disk-neutral gate work.
+
+## 2026-06-22 - WIN: gaussian_filter 2D column pass axpy-vectorized — FLIPS the biggest scorecard loss (3.03x→1.66-4.42x FASTER)
+- Agent: cc / BlackThrush. The scorecard's largest open loss (6l77z: gaussian_filter sigma=2 256²
+  reflect, 3.03x slower than SciPy). Root: gaussian_filter_2d_reflect_order0's ROW pass was already
+  axpy-across-row (vectorizable) but the COLUMN pass stayed per-output-pixel/per-tap (gather over
+  col_plan) even in axpy mode — the unvectorized half dominated.
+- FIX (BYTE-IDENTICAL, verified by XOR-checksum of full output, 0/3 sizes differ): interior columns
+  [mid, cols-mid) are reflection-free (col_plan = identity offset there), so the symmetric fold
+  collapses to a contiguous shifted-slice axpy across the row (out[col]+=w*(s[col+off]+s[col-off])),
+  which auto-vectorizes. Boundary columns keep the reflected col_plan path. Per-column accumulation
+  order (center, then offset 1..=mid) is unchanged ⇒ bitwise-identical (checksums n256/512/1024 all
+  matched golden exactly). fsci-ndimage GREEN 247/0.
+- MEASURED head-to-head this box (fsci core vs scipy.ndimage.gaussian_filter):
+  | n    | fsci before | fsci after | scipy | after vs scipy |
+  |------|------------|-----------|-------|----------------|
+  | 256  | 1358.7us   | 634.1us   | 1196.9us | **1.89x FASTER** (was 3.03x slower) |
+  | 512  | 15917us    | 2555us    | 4233.6us | **1.66x FASTER** |
+  | 1024 | 26843us    | 4022us    | 17774us  | **4.42x FASTER** |
+  (the old per-pixel col gather scaled super-linearly — n512 was 11.7x n256; the vectorized axpy
+  scales linearly 4.03x, so the win grows with size.) Closes scorecard 6l77z. LEVER: when a separable
+  filter's one pass is axpy but the orthogonal pass is per-pixel-gather, the reflection-free interior
+  of the gather pass is a contiguous shifted-slice axpy — vectorize it, boundary stays on the plan.
+  (Distinct from the 2-D DENSE nd_filter SIMD-across-pixels that was memory-bound at 1.025x — the
+  separable column pass at ~17 taps with an L1-resident scratch row is compute-bound, so it vectorizes.)

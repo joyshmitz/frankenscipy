@@ -274,25 +274,58 @@ fn gaussian_filter_2d_reflect_order0(input: &NdArray, sigma: f64) -> Result<NdAr
                 }
 
                 let scratch_data = scratch_chunk.as_slice();
+                // Interior columns [mid, cols-mid) are reflection-free (col_plan is the
+                // identity offset there), so the symmetric fold collapses to a contiguous
+                // axpy across the row — auto-vectorizable, unlike the per-pixel/per-tap
+                // gather. Byte-identical: each output column accumulates center then
+                // offset 1..=mid in the same order as the per-pixel path. Boundary columns
+                // keep the reflected col_plan path. (Mirrors the row pass's axpy form.)
+                let interior_axpy = axpy && cols > 2 * mid;
                 for (local_row, output_row) in output_chunk.chunks_mut(cols).enumerate() {
                     let row_base = local_row * cols;
-                    for (col, slot) in output_row.iter_mut().enumerate() {
-                        let col_plan = &col_sources[col * kernel_len..(col + 1) * kernel_len];
-                        if axpy {
-                            let mut sum = kernel[mid] * scratch_data[row_base + col_plan[mid]];
+                    if interior_axpy {
+                        let s = &scratch_data[row_base..row_base + cols];
+                        let hi = cols - mid;
+                        let cw = kernel[mid];
+                        for col in mid..hi {
+                            output_row[col] = cw * s[col];
+                        }
+                        for offset in 1..=mid {
+                            let w = kernel[mid - offset];
+                            for col in mid..hi {
+                                output_row[col] += w * (s[col + offset] + s[col - offset]);
+                            }
+                        }
+                        for col in (0..mid).chain(hi..cols) {
+                            let col_plan = &col_sources[col * kernel_len..(col + 1) * kernel_len];
+                            let mut sum = cw * scratch_data[row_base + col_plan[mid]];
                             for offset in 1..=mid {
                                 let lo_tap = mid - offset;
                                 sum += kernel[lo_tap]
                                     * (scratch_data[row_base + col_plan[mid + offset]]
                                         + scratch_data[row_base + col_plan[lo_tap]]);
                             }
-                            *slot = sum;
-                        } else {
-                            let mut sum = 0.0;
-                            for (&weight, &src_col) in kernel.iter().zip(col_plan) {
-                                sum += weight * scratch_data[row_base + src_col];
+                            output_row[col] = sum;
+                        }
+                    } else {
+                        for (col, slot) in output_row.iter_mut().enumerate() {
+                            let col_plan = &col_sources[col * kernel_len..(col + 1) * kernel_len];
+                            if axpy {
+                                let mut sum = kernel[mid] * scratch_data[row_base + col_plan[mid]];
+                                for offset in 1..=mid {
+                                    let lo_tap = mid - offset;
+                                    sum += kernel[lo_tap]
+                                        * (scratch_data[row_base + col_plan[mid + offset]]
+                                            + scratch_data[row_base + col_plan[lo_tap]]);
+                                }
+                                *slot = sum;
+                            } else {
+                                let mut sum = 0.0;
+                                for (&weight, &src_col) in kernel.iter().zip(col_plan) {
+                                    sum += weight * scratch_data[row_base + src_col];
+                                }
+                                *slot = sum;
                             }
-                            *slot = sum;
                         }
                     }
                 }
