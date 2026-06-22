@@ -4404,3 +4404,20 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   NOT gate them (imprecise gates risk regressing their code). Handed the break-even table to
   BlackThrush to set precise per-fn gates. Confirms the earlier caution was correct: NOT every
   par_map_indices caller wants 1<<20 — heavier kernels have much lower break-evens.
+
+## 2026-06-22 - DATA (handed to BlackThrush): beta/betaln also moderate; special gate-vein FULLY MAPPED
+- Agent: cc / CopperFern. beta.rs has its OWN ungated map_real_binary (n/32) serving beta/betaln
+  (~3-lgamma, moderate). Measured: beta par/ser 3.71@4096, 0.33@65536, 0.28@262144 (break-even ~20k);
+  betaln 2.97@4096, 0.43@65536 (~25k). Same moderate class as erfcx/erfi/dawsn — pessimized 3-4x at
+  n=4096, parallel wins by 65536 → 1<<20 would REGRESS them.
+- SPECIAL GATE-VEIN FULLY MAPPED (n/32 par_map_indices is systemically too aggressive across per-module
+  dispatch helpers):
+  - FIXED by me (truly cheap ≤30ns, clean 1<<20): convenience map_real_binary 14 callers (b4db5727).
+  - ALREADY GATED (correct): gamma family + error erf/erfc + convenience O(1) kernels (all 1<<20);
+    elliptic ellipk/ellipe (prior fix).
+  - MODERATE — need per-fn gate ~15k-130k (HANDED TO BLACKTHRUSH, benched): convenience
+    map_real_or_complex {erfcx ~100k, erfi ~25k, dawsn ~15k, spence ~50k, wrightomega ~25k};
+    beta.rs map_real_binary {beta ~20k, betaln ~25k}.
+  - EXPENSIVE (correctly eager): betainc family, gammaincinv/gammainccinv, owens_t, hyperu, kv, etc.
+- The moderate slice needs finer benching (8k/16k/32k/128k) per fn + per-fn real_par_min via the
+  par_map_indices_gated mechanism (b4db5727). Owner's call (their tuned fns). Vein characterization complete.
