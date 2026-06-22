@@ -4630,3 +4630,17 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   imprecision CopperFern flagged is resolved with finer 8-point benching. CLOSES the moderate slice of the
   special gate-vein handed to me. STILL OPEN (next): beta.rs map_real_binary {beta ~20k, betaln ~25k} —
   same n/32 anti-pattern, same crate, separate per-fn gates.
+
+## 2026-06-22 - WIN: beta.rs map_real_binary gated (BlackThrush — completes the special gate-vein)
+- Agent: cc / BlackThrush. The last open slice of the special gate-vein: beta.rs has its OWN local
+  par_map_indices + map_real_binary (n/32, serving ONLY beta/betaln, ~lgamma-cost moderate kernels).
+- A/B (this box, 7 sizes 4k-98k, release --test-threads=1): beta par/ser 4.38x@4096, 5.15x@8192,
+  2.63x@16384, 1.34x@32768, 0.91x@49152(win); betaln 6.20x@4096, 3.23x@16384, 1.62x@32768,
+  1.32x@49152, 0.91x@65536(win). Break-evens beta ~45k, betaln ~60k.
+- FIX (byte-identical): added par_map_indices_gated + const BETA_REAL_PAR_MIN=1<<16 (65536, safe for
+  BOTH — both measured winning there, serial below). Routed all 3 real-path calls (vec-scalar,
+  scalar-vec, vec-vec) through it. Complex path (map_complex_binary) left eager.
+- GAIN: beta/betaln at common n≤16k flip over-subscribed parallel → serial = 2.6-6.5x; n≥65536 still
+  parallelizes (no regression). fsci-special lib GREEN 1115/0. The special par_map_indices gate-vein is
+  now FULLY closed end-to-end: convenience cheap-binary (b4db5727, CopperFern), convenience
+  map_real_or_complex moderate (b346eda1, BlackThrush), beta.rs map_real_binary (this commit).

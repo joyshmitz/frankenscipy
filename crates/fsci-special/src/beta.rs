@@ -1452,6 +1452,24 @@ where
     Ok(out)
 }
 
+/// beta/betaln are moderate ~lgamma-cost kernels; their par_map_indices break-even
+/// is ~45-60k (BlackThrush A/B 2026-06-22), far above the raw n/32 gate that
+/// over-subscribes ~16 threads onto a sub-microsecond kernel (2.6-6.5x slower at n<=16k).
+/// Stay serial below the shared gate. Order-preserving => byte-identical either way.
+const BETA_REAL_PAR_MIN: usize = 1 << 16; // beta wins 0.91x@49152, betaln 0.91x@65536
+
+fn par_map_indices_gated<T, G>(n: usize, f: G) -> Result<Vec<T>, SpecialError>
+where
+    T: Send,
+    G: Fn(usize) -> Result<T, SpecialError> + Sync,
+{
+    if n >= BETA_REAL_PAR_MIN {
+        par_map_indices(n, f)
+    } else {
+        (0..n).map(f).collect()
+    }
+}
+
 fn map_real_binary<F>(
     function: &'static str,
     a: &SpecialTensor,
@@ -1468,11 +1486,11 @@ where
         }
         (SpecialTensor::RealVec(lhs), SpecialTensor::RealScalar(rhs)) => {
             let rhs = *rhs;
-            par_map_indices(lhs.len(), |i| kernel(lhs[i], rhs)).map(SpecialTensor::RealVec)
+            par_map_indices_gated(lhs.len(), |i| kernel(lhs[i], rhs)).map(SpecialTensor::RealVec)
         }
         (SpecialTensor::RealScalar(lhs), SpecialTensor::RealVec(rhs)) => {
             let lhs = *lhs;
-            par_map_indices(rhs.len(), |i| kernel(lhs, rhs[i])).map(SpecialTensor::RealVec)
+            par_map_indices_gated(rhs.len(), |i| kernel(lhs, rhs[i])).map(SpecialTensor::RealVec)
         }
         (SpecialTensor::RealVec(lhs), SpecialTensor::RealVec(rhs)) => {
             if lhs.len() != rhs.len() {
@@ -1492,7 +1510,7 @@ where
                     detail: "vector inputs must have matching lengths",
                 });
             }
-            par_map_indices(lhs.len(), |i| kernel(lhs[i], rhs[i])).map(SpecialTensor::RealVec)
+            par_map_indices_gated(lhs.len(), |i| kernel(lhs[i], rhs[i])).map(SpecialTensor::RealVec)
         }
         (SpecialTensor::ComplexScalar(_), _)
         | (SpecialTensor::ComplexVec(_), _)
