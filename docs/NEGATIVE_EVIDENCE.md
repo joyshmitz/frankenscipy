@@ -4438,3 +4438,20 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   element gates on a shared helper serving mixed-cost callers = the pessimization. The campaign's
   cheap-kernel gate vein is now closed end-to-end (stats fixed, special cheap fixed + moderate handed
   to BlackThrush, other crates verified tuned/work-scaled).
+
+## 2026-06-22 - WIN: cheap closed-form ppf_many/isf_many work-gated (40 dists; Exponential 10.7x flip)
+- Agent: cc / CopperFern. Found I'd wrongly deferred ppf/isf ("expensive bisection") — many cheap-cdf
+  dists ALSO have CHEAP closed-form ppf (Exponential -ln(1-q)/λ, Cauchy tan, Logistic logit, etc.), but
+  ppf_many/isf_many used the 2048-gate trait default → pessimized. Measured Exponential ppf_many 9.8x
+  slower parallel at n=4096 (351µs vs 36µs serial).
+- FIX (byte-identical): added trait flag ppf_isf_is_cheap() (default false; SEPARATE from cdf_sf_is_cheap
+  — bisection/Newton-ppf dists have EXPENSIVE ppf and must stay eager); ppf_many/isf_many gate on it
+  (65536 if cheap). Audited every ContinuousDistribution ppf body (balanced-brace, comments stripped):
+  flagged 40 verified cheap-closed-form-ppf dists (the 25 cdf-cheap with closed ppf + Exponential,
+  Cauchy, Rayleigh, FrechetR, InvWeibull, TruncExpon, DoubleWeibull, Anglit, Arcsine, GenLogistic,
+  Kappa3, Gompertz, ExponPow, LaplaceAsymmetric, TruncPareto). EXCLUDED (expensive ppf, stay eager):
+  Semicircular (Newton 0..12 over cdf), CosineDistribution (bisection 0..6), + all bisection/ndtri/
+  betaincinv/gammaincinv-ppf dists.
+- RESULT: Exponential ppf_many n=4096 32.8µs (was 351µs) = 10.7x flip; fsci-stats GREEN 1981/0;
+  byte-identical (order-preserving). Completes the stats batch-method gate vein: pdf/logpdf/cdf/sf
+  (cdf_sf_is_cheap) + ppf/isf (ppf_isf_is_cheap), independently classified.

@@ -200,13 +200,25 @@ pub trait ContinuousDistribution {
         par_continuous_map_min(xs, gate, |x| self.sf(x))
     }
 
+    /// Whether `ppf`/`isf` are CHEAP closed forms (analytic quantile, e.g. one
+    /// `ln`/`tan`/`powf`). Distinct from [`cdf_sf_is_cheap`](Self::cdf_sf_is_cheap):
+    /// a dist can have a cheap cdf but an EXPENSIVE bisection/Newton ppf (no closed
+    /// inverse) — those must stay eager. Override to `true` ONLY when both ppf and
+    /// isf are elementary closed forms, so `ppf_many`/`isf_many` use a high gate
+    /// (the default 2048 gate pessimises a cheap 1-ln ppf ~10x at n≈4096, measured).
+    fn ppf_isf_is_cheap(&self) -> bool {
+        false
+    }
+
     /// Inverse cdf at many probabilities — work-gated parallel map of the per-point `ppf`.
+    /// Gate raised for cheap closed-form quantiles (see [`ppf_isf_is_cheap`](Self::ppf_isf_is_cheap)).
     #[must_use]
     fn ppf_many(&self, qs: &[f64]) -> Vec<f64>
     where
         Self: Sync,
     {
-        par_continuous_map(qs, |q| self.ppf(q))
+        let gate = if self.ppf_isf_is_cheap() { 65536 } else { 2048 };
+        par_continuous_map_min(qs, gate, |q| self.ppf(q))
     }
 
     /// Inverse survival at many probabilities — work-gated parallel map of the per-point `isf`.
@@ -215,7 +227,8 @@ pub trait ContinuousDistribution {
     where
         Self: Sync,
     {
-        par_continuous_map(qs, |q| self.isf(q))
+        let gate = if self.ppf_isf_is_cheap() { 65536 } else { 2048 };
+        par_continuous_map_min(qs, gate, |q| self.isf(q))
     }
     /// Log cumulative distribution function.
     fn logcdf(&self, x: f64) -> f64 {
@@ -2484,6 +2497,10 @@ impl Uniform {
 }
 
 impl ContinuousDistribution for Uniform {
+    fn ppf_isf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn cdf_sf_is_cheap(&self) -> bool {
         true
     }
@@ -2640,6 +2657,10 @@ impl Exponential {
 }
 
 impl ContinuousDistribution for Exponential {
+    fn ppf_isf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn cdf_sf_is_cheap(&self) -> bool {
         true
     }
@@ -5015,6 +5036,10 @@ impl WeibullMax {
 }
 
 impl ContinuousDistribution for WeibullMax {
+    fn ppf_isf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn cdf_sf_is_cheap(&self) -> bool {
         true
     }
@@ -5478,6 +5503,10 @@ impl Pareto {
 }
 
 impl ContinuousDistribution for Pareto {
+    fn ppf_isf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn cdf_sf_is_cheap(&self) -> bool {
         true
     }
@@ -5638,6 +5667,10 @@ impl Lomax {
 }
 
 impl ContinuousDistribution for Lomax {
+    fn ppf_isf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn cdf_sf_is_cheap(&self) -> bool {
         true
     }
@@ -6246,6 +6279,10 @@ impl Rayleigh {
 }
 
 impl ContinuousDistribution for Rayleigh {
+    fn ppf_isf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn cdf_sf_is_cheap(&self) -> bool {
         true
     }
@@ -6416,6 +6453,10 @@ impl Gumbel {
 }
 
 impl ContinuousDistribution for Gumbel {
+    fn ppf_isf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn cdf_sf_is_cheap(&self) -> bool {
         true
     }
@@ -6556,6 +6597,10 @@ impl GumbelLeft {
 }
 
 impl ContinuousDistribution for GumbelLeft {
+    fn ppf_isf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn cdf_sf_is_cheap(&self) -> bool {
         true
     }
@@ -6701,6 +6746,10 @@ impl Logistic {
 }
 
 impl ContinuousDistribution for Logistic {
+    fn ppf_isf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn cdf_sf_is_cheap(&self) -> bool {
         true
     }
@@ -6867,6 +6916,10 @@ impl ContinuousDistribution for Logistic {
 pub struct HypSecant;
 
 impl ContinuousDistribution for HypSecant {
+    fn ppf_isf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn cdf_sf_is_cheap(&self) -> bool {
         true
     }
@@ -12034,6 +12087,10 @@ impl Cauchy {
 }
 
 impl ContinuousDistribution for Cauchy {
+    fn ppf_isf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn cdf_sf_is_cheap(&self) -> bool {
         true
     }
@@ -12231,6 +12288,10 @@ impl Laplace {
 }
 
 impl ContinuousDistribution for Laplace {
+    fn ppf_isf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn cdf_sf_is_cheap(&self) -> bool {
         true
     }
@@ -12400,6 +12461,10 @@ impl Triangular {
 }
 
 impl ContinuousDistribution for Triangular {
+    fn ppf_isf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn cdf_sf_is_cheap(&self) -> bool {
         true
     }
@@ -12585,6 +12650,10 @@ impl Trapezoid {
 }
 
 impl ContinuousDistribution for Trapezoid {
+    fn ppf_isf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn cdf_sf_is_cheap(&self) -> bool {
         true
     }
@@ -14222,6 +14291,10 @@ impl GenExtreme {
 }
 
 impl ContinuousDistribution for GenExtreme {
+    fn ppf_isf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn cdf_sf_is_cheap(&self) -> bool {
         true
     }
@@ -14473,6 +14546,10 @@ impl GenPareto {
 }
 
 impl ContinuousDistribution for GenPareto {
+    fn ppf_isf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn cdf_sf_is_cheap(&self) -> bool {
         true
     }
@@ -14703,6 +14780,10 @@ impl PowerLaw {
 }
 
 impl ContinuousDistribution for PowerLaw {
+    fn ppf_isf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn cdf_sf_is_cheap(&self) -> bool {
         true
     }
@@ -14950,6 +15031,10 @@ impl ContinuousDistribution for HalfNormal {
 pub struct HalfLogistic;
 
 impl ContinuousDistribution for HalfLogistic {
+    fn ppf_isf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn cdf_sf_is_cheap(&self) -> bool {
         true
     }
@@ -15070,6 +15155,10 @@ impl ContinuousDistribution for HalfLogistic {
 pub struct HalfCauchy;
 
 impl ContinuousDistribution for HalfCauchy {
+    fn ppf_isf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn cdf_sf_is_cheap(&self) -> bool {
         true
     }
@@ -16069,6 +16158,10 @@ impl Fisk {
 }
 
 impl ContinuousDistribution for Fisk {
+    fn ppf_isf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn cdf_sf_is_cheap(&self) -> bool {
         true
     }
@@ -16291,6 +16384,10 @@ impl Loguniform {
 }
 
 impl ContinuousDistribution for Loguniform {
+    fn ppf_isf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn cdf_sf_is_cheap(&self) -> bool {
         true
     }
@@ -16755,6 +16852,10 @@ impl DoubleWeibull {
 }
 
 impl ContinuousDistribution for DoubleWeibull {
+    fn ppf_isf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn cdf_sf_is_cheap(&self) -> bool {
         true
     }
@@ -17920,6 +18021,10 @@ impl ContinuousDistribution for Erlang {
 pub struct Anglit;
 
 impl ContinuousDistribution for Anglit {
+    fn ppf_isf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn cdf_sf_is_cheap(&self) -> bool {
         true
     }
@@ -18032,6 +18137,10 @@ impl Bradford {
 }
 
 impl ContinuousDistribution for Bradford {
+    fn ppf_isf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn cdf_sf_is_cheap(&self) -> bool {
         true
     }
@@ -18668,6 +18777,10 @@ impl Burr3 {
 }
 
 impl ContinuousDistribution for Burr3 {
+    fn ppf_isf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn cdf_sf_is_cheap(&self) -> bool {
         true
     }
@@ -18833,6 +18946,10 @@ impl Burr12 {
 }
 
 impl ContinuousDistribution for Burr12 {
+    fn ppf_isf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn cdf_sf_is_cheap(&self) -> bool {
         true
     }
@@ -19013,6 +19130,10 @@ impl LogLaplace {
 }
 
 impl ContinuousDistribution for LogLaplace {
+    fn ppf_isf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn cdf_sf_is_cheap(&self) -> bool {
         true
     }
@@ -19226,6 +19347,10 @@ impl Loglogistic {
 }
 
 impl ContinuousDistribution for Loglogistic {
+    fn ppf_isf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn cdf_sf_is_cheap(&self) -> bool {
         true
     }
@@ -19407,6 +19532,10 @@ impl Mielke {
 }
 
 impl ContinuousDistribution for Mielke {
+    fn ppf_isf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn cdf_sf_is_cheap(&self) -> bool {
         true
     }
@@ -19727,6 +19856,10 @@ impl Gompertz {
 }
 
 impl ContinuousDistribution for Gompertz {
+    fn ppf_isf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn cdf_sf_is_cheap(&self) -> bool {
         true
     }
@@ -19905,6 +20038,10 @@ impl ContinuousDistribution for Gompertz {
 pub struct Arcsine;
 
 impl ContinuousDistribution for Arcsine {
+    fn ppf_isf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn cdf_sf_is_cheap(&self) -> bool {
         true
     }
@@ -20007,6 +20144,10 @@ impl GenLogistic {
 }
 
 impl ContinuousDistribution for GenLogistic {
+    fn ppf_isf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn cdf_sf_is_cheap(&self) -> bool {
         true
     }
@@ -20167,6 +20308,10 @@ impl FrechetR {
 }
 
 impl ContinuousDistribution for FrechetR {
+    fn ppf_isf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn cdf_sf_is_cheap(&self) -> bool {
         true
     }
@@ -21265,6 +21410,10 @@ impl TruncPareto {
 }
 
 impl ContinuousDistribution for TruncPareto {
+    fn ppf_isf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         if !(1.0..=self.c).contains(&x) {
             return 0.0;
@@ -21387,6 +21536,10 @@ impl TruncExpon {
 }
 
 impl ContinuousDistribution for TruncExpon {
+    fn ppf_isf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn cdf_sf_is_cheap(&self) -> bool {
         true
     }
@@ -21931,6 +22084,10 @@ impl InvWeibull {
 }
 
 impl ContinuousDistribution for InvWeibull {
+    fn ppf_isf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn cdf_sf_is_cheap(&self) -> bool {
         true
     }
@@ -22766,6 +22923,10 @@ impl LaplaceAsymmetric {
 }
 
 impl ContinuousDistribution for LaplaceAsymmetric {
+    fn ppf_isf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn cdf_sf_is_cheap(&self) -> bool {
         true
     }
@@ -22932,6 +23093,10 @@ impl Kappa3 {
 }
 
 impl ContinuousDistribution for Kappa3 {
+    fn ppf_isf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn cdf_sf_is_cheap(&self) -> bool {
         true
     }
@@ -42876,6 +43041,10 @@ impl ExponPow {
 }
 
 impl ContinuousDistribution for ExponPow {
+    fn ppf_isf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn cdf_sf_is_cheap(&self) -> bool {
         true
     }
@@ -43087,6 +43256,10 @@ impl ExponWeibull {
 }
 
 impl ContinuousDistribution for ExponWeibull {
+    fn ppf_isf_is_cheap(&self) -> bool {
+        true
+    }
+
     fn cdf_sf_is_cheap(&self) -> bool {
         true
     }
