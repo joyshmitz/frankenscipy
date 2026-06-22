@@ -6,6 +6,62 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-21 - frankenscipy-8l8r1.149/cod-b-fft-iterative-odd-tail-20260621 - FFT iterative odd-factor mixed-radix stage plan - KEEP WITH RESIDUAL LOSS
+
+- Agent: cod-b / BlackThrush.
+- Decision: KEEP the source change because it is not a near-zero lever: the
+  in-binary 5-smooth sweep wins every current-vs-legacy row by 1.69-2.33x and
+  tightens the SciPy gap to one win plus one near-parity row. The SciPy gap is
+  still open, so this is an internal keep and a deeper routing point rather
+  than a full dominance closeout.
+- Radical route: prior FFT rejects pointed at a true iterative/cache-blocked
+  mixed-radix schedule instead of more leaf fusions. The alien-graveyard
+  polyhedral/cache-layout idea reduced to a contained artifact: for contiguous
+  `{3,5}*2^k` lengths, gather each power-of-two tail once, run the existing
+  tail kernel contiguously, then combine odd factors stage-by-stage while
+  sharing one twiddle table per stage. Other shapes keep the existing recursive
+  mixed-radix/Bluestein fallback. This follows the extreme-optimization loop:
+  one lever, measured head-to-head, keep only with behavior proof.
+- RCH benchmark proof, `hz2`, requested warm target
+  `/data/projects/.rch-targets/frankenscipy-cod-b` (RCH rewrote it to worker
+  pool `/data/projects/frankenscipy/.rch-target-hz2-pool-b82eb0ef39dfb82d8269f47501537c18`),
+  command `AGENT_NAME=cod-b CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b
+  rch exec -- cargo run --release -p fsci-fft --bin perf_mixed_radix`:
+
+| n | Legacy Rust | Candidate Rust | Candidate vs legacy | Candidate vs local SciPy |
+| ---: | ---: | ---: | ---: | ---: |
+| 720 | 12.925 us | 5.591 us | 2.31x faster | 1.11x faster |
+| 1000 | 17.841 us | 8.364 us | 2.13x faster | 1.05x slower |
+| 1080 | 20.697 us | 9.569 us | 2.16x faster | 1.16x slower |
+| 1500 | 27.385 us | 16.207 us | 1.69x faster | 1.45x slower |
+| 1920 | 37.241 us | 17.001 us | 2.19x faster | 1.36x slower |
+| 3000 | 58.138 us | 28.000 us | 2.08x faster | 1.01x faster / neutral |
+| 5000 | 97.630 us | 48.606 us | 2.01x faster | 1.07x slower |
+| 10000 | 299.464 us | 128.478 us | 2.33x faster | 1.50x slower |
+
+- Fresh local SciPy 1.17.1 / NumPy 2.4.3 oracle on the exact deterministic
+  complex128 `perf_mixed_radix` signal measured medians of 6.222 / 7.935 /
+  8.256 / 11.171 / 12.514 / 28.303 / 45.226 / 85.502 us for n=720..10000.
+  Direct SciPy timing remains local because `rch exec` rejected non-compilation
+  Python timing in proof mode; keep proof is the remote Rust benchmark plus the
+  local absolute SciPy comparator.
+- Score: candidate-vs-legacy `8/0/0`; candidate-vs-local-SciPy `1/6/1`
+  treating the 1.01x faster n=3000 row as neutral. Candidate benchmark golden
+  worst max error was `3.394e-14` versus tolerance `1e-9`.
+- Gates: `git diff --check -- crates/fsci-fft/src/transforms.rs .beads/issues.jsonl`
+  passed; `rustfmt --edition 2024 --check crates/fsci-fft/src/transforms.rs`
+  passed; RCH `cargo test --release -p fsci-fft --lib -- --nocapture` on `hz2`
+  passed 177/0; RCH `cargo test --release -p fsci-conformance --test diff_fft
+  --test e2e_fft -- --nocapture` on `hz2` passed `diff_fft` 34/0 and `e2e_fft`
+  12/0; RCH `cargo clippy --release -p fsci-fft --lib -- -D warnings` on `hz2`
+  passed. An initial RCH attempt on `vmi1227854` was blocked by dependency
+  preflight `RCH-E410` for a stale missing remote `diff_dct.rs` entrypoint; no
+  local fallback was used.
+- Remaining route: stop spending attempts on recursive leaf micro-fusions. The
+  open gap is now native SoA/SIMD butterflies or a fuller Stockham/cache-blocked
+  mixed-radix plan that can beat the remaining n=1000/1080/1500/1920/5000/10000
+  SciPy rows on the same proof surface.
+
 ## 2026-06-21 - frankenscipy-8l8r1/cod-a-fft-small-power-tail-20260621 - FFT mixed-radix fixed small power tails - KEEP WITH RESIDUAL LOSS
 
 - Agent: cod-a / BlackThrush.

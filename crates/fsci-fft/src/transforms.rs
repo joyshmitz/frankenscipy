@@ -97,13 +97,14 @@ impl FftBackend for CooleyTukeyBackend {
             let twiddles = get_or_compute_twiddles(n, inverse);
             cooley_tukey_radix4_inplace_with_twiddles(data, &twiddles);
         } else {
-            // Non-power-of-2: recursive mixed-radix Cooley-Tukey. Decomposes
-            // along the prime factors (radix-2 butterflies for the even part,
-            // small in-place DFTs for odd-prime factors), so a smooth length is
-            // O(n·Σfactors) ≈ O(n log n); Bluestein only carries large residual
-            // prime factors. Uses one scratch buffer the size of the input.
+            // Non-power-of-2: the hot {3,5}*2^k family uses an iterative
+            // stage plan so each stage reuses one twiddle table across all
+            // same-size subtransforms. Other shapes keep the general recursive
+            // mixed-radix/Bluestein route.
             let mut scratch = vec![(0.0, 0.0); n];
-            mixed_radix_fft(data, 0, 1, &mut scratch, n, inverse);
+            if !mixed_radix_iterative_odd_power_tail(data, &mut scratch, inverse) {
+                mixed_radix_fft(data, 0, 1, &mut scratch, n, inverse);
+            }
             data.copy_from_slice(&scratch);
         }
     }
@@ -610,6 +611,144 @@ fn mixed_radix_fft(
                 out[u * m + r] = acc;
             }
         }
+    }
+}
+
+fn mixed_radix_iterative_odd_power_tail(
+    src: &[Complex64],
+    out: &mut [Complex64],
+    inverse: bool,
+) -> bool {
+    let n = src.len();
+    debug_assert_eq!(out.len(), n);
+    if n <= 1 || n.is_power_of_two() {
+        return false;
+    }
+    let Some((factors, tail)) = odd_power_tail_factorization(n) else {
+        return false;
+    };
+
+    let odd_len = n / tail;
+    debug_assert_eq!(factors.iter().product::<usize>(), odd_len);
+
+    // Leaf phase: gather each strided 2^k tail once, then run the existing
+    // power-of-two kernel on a contiguous block. This is the same DIT factor
+    // order as the recursive route; only scheduling/twiddle reuse changes.
+    for leaf in 0..odd_len {
+        let base = mixed_radix_leaf_base(leaf, &factors);
+        let block = &mut out[leaf * tail..(leaf + 1) * tail];
+        for (s, slot) in block.iter_mut().enumerate() {
+            *slot = src[base + s * odd_len];
+        }
+        if tail <= 16 {
+            mixed_radix_small_power_tail(block, inverse);
+        } else {
+            let twiddles = get_or_compute_twiddles(tail, inverse);
+            cooley_tukey_radix4_inplace_with_twiddles(block, &twiddles);
+        }
+    }
+
+    // Combine from the innermost odd factor outwards. All groups at a stage
+    // share the same twiddle table, avoiding recursive per-group cache lookups.
+    let mut m = tail;
+    for &p in factors.iter().rev() {
+        let stage_len = p * m;
+        let twn = get_or_compute_twiddles(stage_len, inverse);
+        for group in out.chunks_exact_mut(stage_len) {
+            mixed_radix_combine_stage(group, p, m, &twn, inverse);
+        }
+        m = stage_len;
+    }
+    true
+}
+
+fn odd_power_tail_factorization(mut n: usize) -> Option<(Vec<usize>, usize)> {
+    let mut factors = Vec::new();
+    while !n.is_power_of_two() {
+        let odd_part = n >> n.trailing_zeros();
+        if odd_part <= 1 {
+            break;
+        }
+        let p = smallest_prime_factor(odd_part);
+        if p != 3 && p != 5 {
+            return None;
+        }
+        factors.push(p);
+        n /= p;
+    }
+    (!factors.is_empty() && n.is_power_of_two()).then_some((factors, n))
+}
+
+fn mixed_radix_leaf_base(mut leaf: usize, factors: &[usize]) -> usize {
+    let mut divisor = factors.iter().product::<usize>();
+    let mut base = 0usize;
+    let mut input_stride = 1usize;
+    for &p in factors {
+        divisor /= p;
+        let digit = leaf / divisor;
+        leaf %= divisor;
+        base += digit * input_stride;
+        input_stride *= p;
+    }
+    base
+}
+
+fn mixed_radix_combine_stage(
+    out: &mut [Complex64],
+    p: usize,
+    m: usize,
+    twn: &[Complex64],
+    inverse: bool,
+) {
+    debug_assert_eq!(out.len(), p * m);
+    if p == 3 {
+        const S3: f64 = 0.866_025_403_784_438_6;
+        let s = if inverse { -S3 } else { S3 };
+        for r in 0..m {
+            let t0 = out[r];
+            let t1 = complex_mul(out[m + r], twn[r]);
+            let t2 = complex_mul(out[2 * m + r], twn[2 * r]);
+            let psum = complex_add(t1, t2);
+            let pdif = complex_sub(t1, t2);
+            let a = (t0.0 - 0.5 * psum.0, t0.1 - 0.5 * psum.1);
+            out[r] = complex_add(t0, psum);
+            out[m + r] = (a.0 + s * pdif.1, a.1 - s * pdif.0);
+            out[2 * m + r] = (a.0 - s * pdif.1, a.1 + s * pdif.0);
+        }
+    } else if p == 5 {
+        const C1: f64 = 0.309_016_994_374_947_45;
+        const C2: f64 = -0.809_016_994_374_947_4;
+        const S1: f64 = 0.951_056_516_295_153_6;
+        const S2: f64 = 0.587_785_252_292_473_1;
+        let (s1, s2) = if inverse { (-S1, -S2) } else { (S1, S2) };
+        for r in 0..m {
+            let t0 = out[r];
+            let t1 = complex_mul(out[m + r], twn[r]);
+            let t2 = complex_mul(out[2 * m + r], twn[2 * r]);
+            let t3 = complex_mul(out[3 * m + r], twn[3 * r]);
+            let t4 = complex_mul(out[4 * m + r], twn[4 * r]);
+            let t1p4 = complex_add(t1, t4);
+            let t1m4 = complex_sub(t1, t4);
+            let t2p3 = complex_add(t2, t3);
+            let t2m3 = complex_sub(t2, t3);
+            let a1 = (
+                t0.0 + C1 * t1p4.0 + C2 * t2p3.0,
+                t0.1 + C1 * t1p4.1 + C2 * t2p3.1,
+            );
+            let a2 = (
+                t0.0 + C2 * t1p4.0 + C1 * t2p3.0,
+                t0.1 + C2 * t1p4.1 + C1 * t2p3.1,
+            );
+            let b1 = (s1 * t1m4.0 + s2 * t2m3.0, s1 * t1m4.1 + s2 * t2m3.1);
+            let b2 = (s2 * t1m4.0 - s1 * t2m3.0, s2 * t1m4.1 - s1 * t2m3.1);
+            out[r] = (t0.0 + t1p4.0 + t2p3.0, t0.1 + t1p4.1 + t2p3.1);
+            out[m + r] = (a1.0 + b1.1, a1.1 - b1.0);
+            out[2 * m + r] = (a2.0 + b2.1, a2.1 - b2.0);
+            out[3 * m + r] = (a2.0 - b2.1, a2.1 + b2.0);
+            out[4 * m + r] = (a1.0 - b1.1, a1.1 + b1.0);
+        }
+    } else {
+        unreachable!("iterative odd-tail FFT supports only radix 3/5 stages")
     }
 }
 

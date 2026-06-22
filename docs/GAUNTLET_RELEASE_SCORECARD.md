@@ -1,6 +1,6 @@
 # Gauntlet Release Scorecard
 
-Last updated: 2026-06-21 by cod-a / BlackThrush.
+Last updated: 2026-06-21 by cod-b / BlackThrush.
 
 This scorecard tracks code-first performance work that has been converted into
 measured head-to-head evidence against the SciPy original. The detailed
@@ -53,6 +53,7 @@ win/loss/neutral ledger lives in `docs/progress/perf-negative-results.md`.
 
 | Bead | Cluster | Realistic workload | Rust result | SciPy result | Ratio | Decision |
 | --- | --- | --- | ---: | ---: | ---: | --- |
+| `frankenscipy-8l8r1.149` | FFT 5-smooth iterative odd-factor mixed-radix stage plan | `fft` 5-smooth sweep n=720..10000 via `perf_mixed_radix` | 5.591..128.478 us on RCH `hz2` | 6.222..85.502 us local SciPy 1.17.1 | score `1/6/1` vs SciPy; 1.11x faster at n=720, neutral at n=3000, residual 1.05-1.50x slower | keep internal 8/0/0 current-vs-legacy win; route deeper to SoA/SIMD or fuller Stockham/cache-blocked mixed-radix |
 | `frankenscipy-8l8r1/cod-a-fft-small-power-tail-20260621` | FFT 5-smooth fixed 4/8/16 mixed-radix power tails | `fft` 5-smooth sweep n=720..10000 via `perf_mixed_radix` | 14.125..227.758 us on RCH `hz1` | 10.299..107.093 us local SciPy 1.17.1 | 1.37-2.54x slower | keep internal 8/0/0 same-worker win; route deeper for SciPy dominance |
 | `frankenscipy-8l8r1/cod-a-zeta-b10-20260621` | `special.zeta` N=10/B10 positive Riemann fast path | `scipy.special.zeta`, 100k deterministic `s in [1.1,10]` | 2.6061 ms RCH `hz1` | 1.933008 ms local SciPy 1.17.1 | 1.35x slower | superseded by `cod-a-zeta-affine-20260621`: the N=10/B10 scalar arithmetic remains, but the current affine RealVec recurrence is 929.86 us and 2.09x faster than local SciPy |
 | `filter1d-vanherk` | `ndimage.maximum/minimum_filter1d` van Herk O(n) routing (was O(n·size) per-window fold + per-pixel alloc) | `scipy.ndimage.maximum_filter1d` n=65536 Reflect, size 31 / 101 | 1.1915 ms / 1.1795 ms | 0.516 ms / 0.520 ms | 2.31x / 2.27x slower | keep — **4.12x / 7.40x self-speedup** (same-proc A/B), byte-identical; closes 9.5x/16.8x loss to a flat 2.3x (old grew with size, new is O(n)) |
