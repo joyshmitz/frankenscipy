@@ -436,6 +436,20 @@ fn hyperu_dispatch(
         return hyperu_scalar(a_r, b_r, x_r, mode).map(SpecialTensor::RealScalar);
     }
 
+    if let (
+        SpecialTensor::RealScalar(a_r),
+        SpecialTensor::RealScalar(b_r),
+        SpecialTensor::RealVec(x_vec),
+    ) = (a, b, x)
+        && hyperu_shifted_b_identity(*a_r, *b_r)
+    {
+        let mut out = Vec::with_capacity(x_vec.len());
+        for &x_r in x_vec {
+            out.push(hyperu_shifted_b_identity_or_scalar(*a_r, *b_r, x_r, mode)?);
+        }
+        return Ok(SpecialTensor::RealVec(out));
+    }
+
     par_map_indices(out_len, |i| {
         let a_r = tensor_get_real_for(function, a, i, a_len, mode)?;
         let b_r = tensor_get_real_for(function, b, i, b_len, mode)?;
@@ -1744,6 +1758,10 @@ pub fn hyperu_scalar(a: f64, b: f64, x: f64, mode: RuntimeMode) -> Result<f64, S
         return Ok(hyperu_at_zero(a, b));
     }
 
+    if hyperu_shifted_b_identity(a, b) {
+        return Ok(hyperu_shifted_b_identity_value(a, x));
+    }
+
     if a == 0.0 {
         return Ok(1.0);
     }
@@ -1805,6 +1823,40 @@ pub fn hyperu_scalar(a: f64, b: f64, x: f64, mode: RuntimeMode) -> Result<f64, S
         mode,
         "hyperu with b = 0 and negative non-integer a is not finite-valued",
     )
+}
+
+fn hyperu_shifted_b_identity(a: f64, b: f64) -> bool {
+    a.is_finite() && b.is_finite() && (b - (a + 1.0)).abs() <= 1.0e-12
+}
+
+// Exact shifted-parameter identity: U(a, a + 1, x) = x^-a for x > 0.
+fn hyperu_shifted_b_identity_or_scalar(
+    a: f64,
+    b: f64,
+    x: f64,
+    mode: RuntimeMode,
+) -> Result<f64, SpecialError> {
+    if x.is_finite() && x > 0.0 {
+        Ok(hyperu_shifted_b_identity_value(a, x))
+    } else {
+        hyperu_scalar(a, b, x, mode)
+    }
+}
+
+fn hyperu_shifted_b_identity_value(a: f64, x: f64) -> f64 {
+    if a == 0.5 {
+        return 1.0 / x.sqrt();
+    }
+    if a == 1.0 {
+        return 1.0 / x;
+    }
+    if a == 1.5 {
+        return 1.0 / (x * x.sqrt());
+    }
+    if a == 2.0 {
+        return 1.0 / (x * x);
+    }
+    x.powf(-a)
 }
 
 /// U(a, b, x) for a < 0 non-integer and b a positive integer (x > 0) via the
@@ -3926,6 +3978,31 @@ mod tests {
         assert_eq!(values.len(), 2);
         assert!((values[0] - 1.0 / 3.0).abs() <= 5.0e-8);
         assert!((values[1] - 6.0).abs() <= 5.0e-7);
+    }
+
+    #[test]
+    fn hyperu_shifted_b_identity_broadcast_matches_scipy() {
+        let scalar_actual = hyperu_scalar(1.5, 2.5, 4.0, RuntimeMode::Strict).unwrap();
+        assert!((scalar_actual - 0.125).abs() <= 1.0e-14);
+
+        let result = hyperu(
+            &scalar(1.5),
+            &scalar(2.5),
+            &SpecialTensor::RealVec(vec![0.5, 1.0, 2.0, 8.5]),
+            RuntimeMode::Strict,
+        );
+        let values = get_real_vec(&result).unwrap_or(&[]);
+        let expected = [
+            2.828_427_124_746_190_3,
+            1.0,
+            0.353_553_390_593_273_73,
+            0.040_352_608_268_825_6,
+        ];
+
+        assert_eq!(values.len(), expected.len());
+        for (&actual, &want) in values.iter().zip(expected.iter()) {
+            assert!((actual - want).abs() <= 1.0e-14 * want.abs().max(1.0));
+        }
     }
 
     #[test]
