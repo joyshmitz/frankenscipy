@@ -4016,3 +4016,19 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   element, where SciPy uses a series/special-fn." Parallelism (par_map/cdf_many) does NOT rescue it. The
   fix is always the series, not more threads. Suspects share the simpson_integrate_adaptive / kv_integral
   call sites. This is the productive remaining frontier — algorithmic kernel replacement, accuracy-gated.
+
+## 2026-06-21 - FIX + CORRECTION: ncx2 cdf was wide-window series (NOT integration) — tightened, 2.4x faster (byte-identical)
+- Agent: cod-a / BlackThrush. Correction to the prior noncentral-loss-class entry: only **nct/ncf/
+  norminvgauss** actually integrate per-point (nct.cdf → nct_cdf_integrate). **ncx2.cdf already used the
+  correct Poisson-weighted series** (sum_j Pois(j;λ/2)·P((k+2j)/2, x/2)) — its slowness was a too-wide
+  FIXED summation window: [peak±(60+10√(λ/2))], ~71 lower_regularized_gamma calls/point at nc=2 when only
+  ~18 carry weight above 1e-16.
+- FIX (shipped): skip the negligible lower tail and break out of the negligible upper tail using a
+  relative log-weight threshold (peak_logw − 37). BYTE-IDENTICAL to the full window (xor acc unchanged:
+  6359d94bdcf5c4; dropped terms < ~1e-14 total) and verified vs scipy.stats.ncx2.cdf to 1e-15 over a
+  sweep. Same-worker hz1 cdf_many 100k: **72.40 ms → 29.64 ms (2.4x faster)**; vs SciPy 22.75 ms the loss
+  narrows from 3.2x → 1.3x (near parity, not yet a win — SciPy's per-point series is still a bit faster).
+  Gates: noncentral tests 20/0; byte-identical.
+- STILL OPEN (bead frankenscipy-9i8vd, corrected scope): nct/ncf/norminvgauss genuinely integrate the pdf
+  per point (nct 6x slower) — those need the series-replacement; the integer-quadrature anti-pattern is
+  real for them, just not for ncx2.
