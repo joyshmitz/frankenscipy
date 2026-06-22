@@ -4585,7 +4585,7 @@ where
 {
     let m = queries.len();
     let work = (m as u64).saturating_mul(work_per_query.max(1) as u64);
-    if work < 1 << 18 || m < 4 {
+    if work < PAR_QUERY_MIN_WORK || m < 4 {
         return queries.iter().map(&f).collect();
     }
     let cores = std::thread::available_parallelism()
@@ -4615,6 +4615,15 @@ where
     })
 }
 
+/// Parallel work-gate (= queries × per-query op-cost) for `par_query_map`/`par_query_try_map`.
+/// The parallel path has a large fixed cost — up to one thread per ~2 queries, each allocating
+/// its own result `Vec` that is then `flat_map`-collected — which under fleet contention is
+/// ~4-5 ms regardless of `m`. Same-process A/B on cubic-spline `eval_many` measured the old
+/// `1<<18` gate parallelizing at m≈11k where SERIAL is 18.5x faster (m=16k), 10.5x (32k), 5.9x
+/// (65k), 3.1x (131k); the break-even is ~350k queries (work ≈ 1<<23). Gate there so cheap batch
+/// evals stay serial up to the point parallelism actually amortizes the spawn/alloc overhead.
+const PAR_QUERY_MIN_WORK: u64 = 1 << 23;
+
 /// Like `par_query_map` but for fallible per-query evaluation. Returns the first error in
 /// query order (matching the serial `queries.iter().map(f).collect::<Result<Vec<_>, _>>()`):
 /// chunks are processed in order, and a chunk's own `collect` short-circuits at its first
@@ -4629,7 +4638,7 @@ where
 {
     let m = queries.len();
     let work = (m as u64).saturating_mul(work_per_query.max(1) as u64);
-    if work < 1 << 18 || m < 4 {
+    if work < PAR_QUERY_MIN_WORK || m < 4 {
         return queries.iter().map(&f).collect();
     }
     let cores = std::thread::available_parallelism()

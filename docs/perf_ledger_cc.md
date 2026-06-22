@@ -1019,3 +1019,27 @@ Same lever extends to gaussian's col-pass and any separable/dense filter interio
 deferred to a fresh-context iteration (meaty change in a fragile file; do it with full budget).
 NOTE (ruled out this session): the per-pixel DIVIDE in the interior check is NOT the bottleneck
 (incremental-index A/B = 0.945×, reverted) — it's the scalar gather/fma throughput. SIMD is the lever.
+
+### ✅✅ interpolate par_query_map gate 1<<18 → 1<<23 — flips an 18.5x over-parallelization REGRESSION (cubic eval_many)
+The cost-aware-gate vein extends to fsci-interpolate. par_query_map/par_query_try_map (back ALL
+*_many evaluators: cubic/pchip/CubicSplineStandalone/RBF/griddata/RGI) gated parallelism at
+`m·work_per_query >= 1<<18`. Unlike ndimage's in-place chunks_mut, this parallel path allocates a
+RESULT VEC PER THREAD (up to ~m/2 threads, capped at cores) and `flat_map`-collects them — a large
+FIXED overhead (~4-5 ms under fleet contention, independent of m). At work_per_query=24 (spline eval)
+the gate fired at m≈10923, catastrophically over-parallelizing common batch sizes.
+**Same-process A/B (cubic eval_many, n=1024 knots, byte-identical assert_eq all sizes):**
+| m (queries) | serial   | parallel | serial speedup |
+|-------------|----------|----------|----------------|
+| 16384       | 212 µs   | 3924 µs  | **18.52x**     |
+| 32768       | 396 µs   | 4144 µs  | **10.48x**     |
+| 65536       | 788 µs   | 4645 µs  | **5.89x**      |
+| 131072      | 1522 µs  | 4753 µs  | **3.12x**      |
+Parallel is ~4-4.8 ms FIXED (spawn + per-thread Vec alloc + flat_map realloc); serial scales, so
+break-even is ~350k queries (work ≈ 1<<23). FIX: raise the shared gate to `1<<23` (single constant,
+both par_query_map + par_query_try_map). Cheap batch evals now stay serial up to ~350k queries where
+parallelism finally amortizes; genuinely huge batches still parallelize. BYTE-IDENTICAL (thread count
+never changes the result; assert_eq verified). fsci-interpolate GREEN 173/0 (+56). HIGH value — eval_many
+at m=16k-131k is the common interpolation batch path and was 3-18x pessimized. Same root cause as the
+ndimage gates (shared 1<<18 too low for many-core spawn) but WORSE here (per-thread Vec alloc, not
+in-place). Lever now paid out 4× across two crates: gate on per-element cost AND account for the
+parallel implementation's fixed overhead (alloc-per-thread ⇒ much higher break-even than chunks_mut).
