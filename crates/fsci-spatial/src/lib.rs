@@ -548,18 +548,25 @@ pub fn pdist_minkowski(x: &[Vec<f64>], p: f64) -> Result<Vec<f64>, SpatialError>
     if n == 0 {
         return Err(SpatialError::EmptyData);
     }
-    if !(p > 0.0) {
-        return Err(SpatialError::InvalidArgument("minkowski p must be > 0".to_string()));
+    if p.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) {
+        return Err(SpatialError::InvalidArgument(
+            "minkowski p must be > 0".to_string(),
+        ));
     }
     let dim = x[0].len();
     for row in x.iter() {
         if row.len() != dim {
-            return Err(SpatialError::DimensionMismatch { expected: dim, actual: row.len() });
+            return Err(SpatialError::DimensionMismatch {
+                expected: dim,
+                actual: row.len(),
+            });
         }
     }
     let total = n * (n - 1) / 2;
     let nthreads = pdist_thread_count(n, dim);
-    Ok(pdist_fill(n, total, nthreads, |i, j| minkowski(&x[i], &x[j], p)))
+    Ok(pdist_fill(n, total, nthreads, |i, j| {
+        minkowski(&x[i], &x[j], p)
+    }))
 }
 
 /// Condensed pairwise standardized-Euclidean distances within `x`, matching
@@ -572,16 +579,24 @@ pub fn pdist_seuclidean(x: &[Vec<f64>], v: &[f64]) -> Result<Vec<f64>, SpatialEr
     }
     let dim = x[0].len();
     if v.len() != dim {
-        return Err(SpatialError::DimensionMismatch { expected: dim, actual: v.len() });
+        return Err(SpatialError::DimensionMismatch {
+            expected: dim,
+            actual: v.len(),
+        });
     }
     for row in x.iter() {
         if row.len() != dim {
-            return Err(SpatialError::DimensionMismatch { expected: dim, actual: row.len() });
+            return Err(SpatialError::DimensionMismatch {
+                expected: dim,
+                actual: row.len(),
+            });
         }
     }
     let total = n * (n - 1) / 2;
     let nthreads = pdist_thread_count(n, dim);
-    Ok(pdist_fill(n, total, nthreads, |i, j| seuclidean(&x[i], &x[j], v)))
+    Ok(pdist_fill(n, total, nthreads, |i, j| {
+        seuclidean(&x[i], &x[j], v)
+    }))
 }
 
 pub fn pdist(x: &[Vec<f64>], metric: DistanceMetric) -> Result<Vec<f64>, SpatialError> {
@@ -1163,7 +1178,10 @@ pub fn squareform_to_matrix(condensed: &[f64]) -> Result<Vec<Vec<f64>>, SpatialE
                 })
             })
             .collect();
-        handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().unwrap())
+            .collect()
     });
     Ok(matrix)
 }
@@ -1327,7 +1345,7 @@ pub fn cdist_minkowski(
     if xa.is_empty() || xb.is_empty() {
         return Err(SpatialError::EmptyData);
     }
-    if !(p > 0.0) {
+    if p.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) {
         return Err(SpatialError::InvalidArgument(
             "minkowski p must be > 0".to_string(),
         ));
@@ -1344,7 +1362,9 @@ pub fn cdist_minkowski(
     let na = xa.len();
     let nb = xb.len();
     let nthreads = cdist_thread_count(na, nb, dim);
-    Ok(cdist_fill(na, nb, nthreads, |i, j| minkowski(&xa[i], &xb[j], p)))
+    Ok(cdist_fill(na, nb, nthreads, |i, j| {
+        minkowski(&xa[i], &xb[j], p)
+    }))
 }
 
 /// Cross-distance matrix under the standardized-Euclidean metric, matching
@@ -1360,16 +1380,24 @@ pub fn cdist_seuclidean(
     }
     let dim = xa[0].len();
     if v.len() != dim {
-        return Err(SpatialError::DimensionMismatch { expected: dim, actual: v.len() });
+        return Err(SpatialError::DimensionMismatch {
+            expected: dim,
+            actual: v.len(),
+        });
     }
     for row in xa.iter().chain(xb.iter()) {
         if row.len() != dim {
-            return Err(SpatialError::DimensionMismatch { expected: dim, actual: row.len() });
+            return Err(SpatialError::DimensionMismatch {
+                expected: dim,
+                actual: row.len(),
+            });
         }
     }
     let (na, nb) = (xa.len(), xb.len());
     let nthreads = cdist_thread_count(na, nb, dim);
-    Ok(cdist_fill(na, nb, nthreads, |i, j| seuclidean(&xa[i], &xb[j], v)))
+    Ok(cdist_fill(na, nb, nthreads, |i, j| {
+        seuclidean(&xa[i], &xb[j], v)
+    }))
 }
 
 pub fn cdist_metric(
@@ -9532,7 +9560,7 @@ mod tests {
     }
 
     #[test]
-    fn spherical_voronoi_hull_euler_invariant_random() {
+    fn spherical_voronoi_hull_euler_invariant_random() -> Result<(), SpatialError> {
         // The convex-hull face detector must produce a simplicial hull of the
         // on-sphere generators: V_voronoi == 2n - 4 (Euler, all faces tris),
         // every generator owns a region of >= 3 vertices, and every Voronoi
@@ -9555,8 +9583,7 @@ mod tests {
                     [r * theta.cos(), r * theta.sin(), z]
                 })
                 .collect();
-            let sv = SphericalVoronoi::new(&points, [0.0, 0.0, 0.0], 1.0)
-                .unwrap_or_else(|e| panic!("n={n}: {e:?}"));
+            let sv = SphericalVoronoi::new(&points, [0.0, 0.0, 0.0], 1.0)?;
             assert_eq!(sv.vertices.len(), 2 * n - 4, "n={n}: V != 2n-4");
             assert_eq!(sv.regions.len(), n, "n={n}: region count");
             for (pi, region) in sv.regions.iter().enumerate() {
@@ -9569,6 +9596,7 @@ mod tests {
                 assert!((norm3(*v) - 1.0).abs() < 1e-9, "n={n}: vertex off sphere");
             }
         }
+        Ok(())
     }
 
     // ── Procrustes tests ─────────────────────────────────────────────
@@ -10817,15 +10845,24 @@ mod cdist_minkowski_tests {
     use super::*;
     #[test]
     fn cdist_minkowski_matches_scalar_minkowski() {
-        let xa = vec![vec![0.0,1.0,2.0], vec![3.0,-1.0,0.5], vec![-2.0,2.0,1.0]];
-        let xb = vec![vec![1.0,1.0,1.0], vec![0.0,0.0,0.0]];
+        let xa = vec![
+            vec![0.0, 1.0, 2.0],
+            vec![3.0, -1.0, 0.5],
+            vec![-2.0, 2.0, 1.0],
+        ];
+        let xb = vec![vec![1.0, 1.0, 1.0], vec![0.0, 0.0, 0.0]];
         for &p in &[1.0_f64, 1.5, 2.0, 3.0] {
-            let m = cdist_minkowski(&xa,&xb,p).unwrap();
+            let m = cdist_minkowski(&xa, &xb, p).unwrap();
             assert_eq!(m.len(), xa.len());
-            for i in 0..xa.len() { for j in 0..xb.len() {
-                let expect = minkowski(&xa[i], &xb[j], p);
-                assert!((m[i][j]-expect).abs() <= 1e-12*expect.abs().max(1e-12), "p={p} i={i} j={j}");
-            }}
+            for i in 0..xa.len() {
+                for j in 0..xb.len() {
+                    let expect = minkowski(&xa[i], &xb[j], p);
+                    assert!(
+                        (m[i][j] - expect).abs() <= 1e-12 * expect.abs().max(1e-12),
+                        "p={p} i={i} j={j}"
+                    );
+                }
+            }
         }
     }
 }
@@ -10835,12 +10872,20 @@ mod cdist_seuclidean_tests {
     use super::*;
     #[test]
     fn cdist_seuclidean_matches_scalar() {
-        let xa=vec![vec![0.0,1.0,2.0],vec![3.0,-1.0,0.5],vec![-2.0,2.0,1.0]];
-        let xb=vec![vec![1.0,1.0,1.0],vec![0.0,0.0,0.0]];
-        let v=vec![0.5,2.0,1.5];
-        let m=cdist_seuclidean(&xa,&xb,&v).unwrap();
+        let xa = vec![
+            vec![0.0, 1.0, 2.0],
+            vec![3.0, -1.0, 0.5],
+            vec![-2.0, 2.0, 1.0],
+        ];
+        let xb = vec![vec![1.0, 1.0, 1.0], vec![0.0, 0.0, 0.0]];
+        let v = vec![0.5, 2.0, 1.5];
+        let m = cdist_seuclidean(&xa, &xb, &v).unwrap();
         assert_eq!(m.len(), xa.len());
-        for i in 0..xa.len(){for j in 0..xb.len(){assert!((m[i][j]-seuclidean(&xa[i],&xb[j],&v)).abs()<1e-12);}}
+        for i in 0..xa.len() {
+            for j in 0..xb.len() {
+                assert!((m[i][j] - seuclidean(&xa[i], &xb[j], &v)).abs() < 1e-12);
+            }
+        }
     }
 }
 
@@ -10849,21 +10894,22 @@ mod pdist_metric_gap_tests {
     use super::*;
     #[test]
     fn pdist_minkowski_seuclidean_match_scalar() {
-        let x=vec![vec![0.0,1.0,2.0],vec![3.0,-1.0,0.5],vec![-2.0,2.0,1.0],vec![1.0,0.0,-1.0]];
-        let v=vec![0.5,2.0,1.5];
-        let m=pdist_minkowski(&x,3.0).unwrap();
-        let se=pdist_seuclidean(&x,&v).unwrap();
-        let mut idx=0;
-        for i in 0..x.len(){for j in (i+1)..x.len(){
-            assert!((m[idx]-minkowski(&x[i],&x[j],3.0)).abs()<1e-12);
-            assert!((se[idx]-seuclidean(&x[i],&x[j],&v)).abs()<1e-12);
-            idx+=1;
-        }}
+        let x = vec![
+            vec![0.0, 1.0, 2.0],
+            vec![3.0, -1.0, 0.5],
+            vec![-2.0, 2.0, 1.0],
+            vec![1.0, 0.0, -1.0],
+        ];
+        let v = vec![0.5, 2.0, 1.5];
+        let m = pdist_minkowski(&x, 3.0).unwrap();
+        let se = pdist_seuclidean(&x, &v).unwrap();
+        let mut idx = 0;
+        for i in 0..x.len() {
+            for j in (i + 1)..x.len() {
+                assert!((m[idx] - minkowski(&x[i], &x[j], 3.0)).abs() < 1e-12);
+                assert!((se[idx] - seuclidean(&x[i], &x[j], &v)).abs() < 1e-12);
+                idx += 1;
+            }
+        }
     }
 }
-
-
-
-
-
-

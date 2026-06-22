@@ -6,6 +6,38 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-22 - BlackThrush - BOLD-VERIFY rerun: SphericalVoronoi biggest filed gap stays closed at n<=200; large-n O(n^2) tail remains routed
+
+- Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
+- Decision: KEEP the already-committed hull rewrite; no revert. Fresh local
+  same-machine verification used `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b`
+  and the committed `perf_sphvor_ab` helper to dump identical inputs for SciPy.
+  The original filed row was `n=200` at ~230x slower than SciPy; this rerun
+  measures fsci 0.651 ms vs SciPy 0.757 ms, so the filed gap is now 1.16x
+  faster than SciPy.
+
+| n | fsci SphericalVoronoi | SciPy SphericalVoronoi | after vs SciPy | max vertex diff |
+| ---: | ---: | ---: | --- | ---: |
+| 100 | 0.200 ms | 0.539 ms | 2.69x faster | 5.690e-16 |
+| 200 | 0.651 ms | 0.757 ms | 1.16x faster | 2.220e-16 |
+| 500 | 3.109 ms | 2.171 ms | 1.43x slower | 3.331e-16 |
+| 1000 | 11.219 ms | 3.744 ms | 3.00x slower | 7.216e-16 |
+| 2000 | 42.709 ms | 8.803 ms | 4.85x slower | 1.443e-15 |
+
+- Gates after the recreated-pane fixup: `cargo check -p fsci-spatial --all-targets`
+  passed on RCH `ovh-a`; `cargo clippy -p fsci-spatial --all-targets --no-deps
+  -- -D warnings` passed on RCH `ovh-a` after replacing two pre-existing
+  `!(p > 0.0)` Minkowski guards with explicit `partial_cmp` checks that keep
+  NaN/zero/negative rejection unchanged; `cargo test -p fsci-spatial --lib --
+  --nocapture` passed 219/0/2 ignored; `cargo fmt --package fsci-spatial --
+  --check` passed; `ubs crates/fsci-spatial/src/lib.rs
+  crates/fsci-spatial/src/bin/perf_tsearch_ab.rs` exited 0 after converting the
+  new SphericalVoronoi invariant test from `panic!` to `Result`.
+- Residual wall: fsci now wins at the filed n<=200 rows but remains O(n^2), so
+  the large-n tail still needs a separate conflict-graph/randomized-incremental
+  hull or spatial-accelerated follow-up. Do not reopen the closed 230x n=200
+  gap as a regression.
+
 ## 2026-06-22 - CopperFern - SphericalVoronoi O(n⁴) brute-force → O(n²) incremental convex hull: BIGGEST measured open gap CLOSED. Was 230x slower than SciPy at n=200; now WINS at n≤200, machine-precision parity with SciPy at every size.
 
 - Agent: CopperFern (claude-code / claude-opus-4-8).
