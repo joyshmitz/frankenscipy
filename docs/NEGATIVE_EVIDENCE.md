@@ -4753,3 +4753,24 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   of the gather pass is a contiguous shifted-slice axpy — vectorize it, boundary stays on the plan.
   (Distinct from the 2-D DENSE nd_filter SIMD-across-pixels that was memory-bound at 1.025x — the
   separable column pass at ~17 taps with an L1-resident scratch row is compute-bound, so it vectorizes.)
+
+## 2026-06-22 - WIN: correlate1d_along_axis interior axpy + routing — 4.15x scipy LOSS → 1.8-3.1x FASTER (both axes)
+- Agent: cc / BlackThrush. Same separable-axpy lever as gaussian (e767313d), applied to the GENERAL
+  correlate1d path. Measured losses vs scipy (this box): correlate1d len=15 axis=0 256² fsci 3530us vs
+  scipy 850us = **4.15x slower**; axis=1 3x slower.
+- TWO fixes (both byte-identical, XOR-checksum of full output matched golden across n=256/512, both axes):
+  1. correlate1d_along_axis interior [lo,hi) (boundary-free) → contiguous shifted-slice axpy:
+     vectorizes over `inner` (non-last axis) or over `a` itself (last axis, inner==1); boundary
+     positions keep the per-pixel val_at path. `os` zero-init + same k-order ⇒ bitwise-identical.
+  2. correlate1d_with_origin routing: the old gate sent the outermost axis (outer<nthreads, e.g. axis=0
+     single-slab) to the per-pixel fill_pixels_parallel fallback. The vectorized axpy line-walk beats it
+     even SERIAL (11.5x @256² axis=0), so always route to correlate1d_along_axis.
+- MEASURED head-to-head (fsci after vs scipy.ndimage.correlate1d, len=15):
+  | n    | axis | fsci before | fsci after | scipy | after vs scipy |
+  |------|------|------------|-----------|-------|----------------|
+  | 256  | 0    | 3530us     | 275us     | 850us  | **3.1x FASTER** (was 4.15x slower) |
+  | 512  | 0    | 6059us     | 1043us    | 2665us | **2.6x FASTER** |
+  | 2048 | 0    | (per-pixel)| 44657us   | 80423us| **1.8x FASTER** (serial axpy still wins at 4M elts) |
+  | 256  | 1    | 2551us     | 325us     | 850us  | **2.6x FASTER** (was 3x slower) |
+  fsci-ndimage GREEN 246/0 (251 #[test], byte-identical). Generalizes [[perf_ndimage_separable_filter_axpy_colpass]]
+  to the N-D separable correlate1d (backs correlate1d/uniform_filter/non-fast-path gaussian).

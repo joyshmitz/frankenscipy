@@ -1814,30 +1814,15 @@ pub fn correlate1d_with_origin(
         return Err(NdimageError::EmptyInput);
     }
     validate_filter_origin(weights.len(), origin)?;
-    // The line walk parallelizes across outer slabs; on the outermost axis (few/one slab) the
-    // per-pixel `fill_pixels_parallel` path parallelizes better, so keep it there. Both are
-    // byte-identical — only the per-pixel index overhead differs. Gate on having enough slabs
-    // to feed the threads.
-    let outer: usize = input.shape[..axis].iter().product();
-    let nthreads = ndimage_filter_thread_count(input.size(), weights.len());
-    if outer >= nthreads {
-        return Ok(correlate1d_along_axis(
-            input, weights, axis, origin, mode, cval,
-        ));
-    }
-    let offset = weights.len() as i64 / 2;
-    let mut output = NdArray::zeros(input.shape.clone());
-    fill_pixels_parallel(&mut output, weights.len(), |flat_out, _scratch| {
-        let out_idx = input.unravel(flat_out);
-        let mut in_idx: Vec<i64> = out_idx.iter().map(|&i| i as i64).collect();
-        let mut sum = 0.0;
-        for (k, &weight) in weights.iter().enumerate() {
-            in_idx[axis] = out_idx[axis] as i64 + k as i64 - offset - origin;
-            sum += weight * input.get_boundary(&in_idx, mode, cval);
-        }
-        sum
-    });
-    Ok(output)
+    // The line walk's interior is a contiguous shifted-slice axpy (vectorized + cache-
+    // friendly); it beats the per-pixel `fill_pixels_parallel` path even SERIAL — measured
+    // 11.5x faster at 256² axis=0 (the outermost-axis, single-slab case the old gate routed
+    // to fill_pixels_parallel). Both byte-identical, so always use the line walk; it
+    // parallelizes across outer slabs when there are enough, and runs the vectorized serial
+    // pass otherwise.
+    Ok(correlate1d_along_axis(
+        input, weights, axis, origin, mode, cval,
+    ))
 }
 
 /// Reference per-pixel correlate1d path (pre line-walk), retained for the same-process A/B
@@ -1890,6 +1875,15 @@ fn correlate1d_along_axis(
     let slab = mid * inner;
     let offset = weights.len() as i64 / 2;
     let mut out = NdArray::zeros(arr.shape.clone());
+    // Interior positions [lo, hi) along the axis are boundary-free (every tap lands
+    // in-bounds), so the per-pixel/per-tap gather becomes a contiguous shifted-slice
+    // axpy: vectorizes over `inner` (non-last axis) or over `a` itself (last axis,
+    // inner==1). Boundary positions keep the per-pixel `val_at` path. BYTE-IDENTICAL:
+    // `os` is zero-initialised and each output accumulates k=0..len in the same order
+    // as the register sum. Mirrors the gaussian-2D column-pass axpy (e767313d).
+    let klen = weights.len() as i64;
+    let lo = (offset + origin).max(0);
+    let hi = ((mid as i64) - klen + offset + origin + 1).clamp(0, mid as i64);
     let do_slab = |is: &[f64], os: &mut [f64]| {
         let val_at = |i: usize, a: i64| -> f64 {
             match boundary_index_1d(a, mid as i64, mode) {
@@ -1897,13 +1891,46 @@ fn correlate1d_along_axis(
                 None => cval,
             }
         };
-        for i in 0..inner {
-            for a in 0..mid as i64 {
+        let per_pixel = |os: &mut [f64], a: i64| {
+            for i in 0..inner {
                 let mut sum = 0.0;
                 for (k, &w) in weights.iter().enumerate() {
                     sum += w * val_at(i, a + k as i64 - offset - origin);
                 }
                 os[i + (a as usize) * inner] = sum;
+            }
+        };
+        if lo >= hi {
+            for a in 0..mid as i64 {
+                per_pixel(os, a);
+            }
+            return;
+        }
+        for a in (0..lo).chain(hi..mid as i64) {
+            per_pixel(os, a);
+        }
+        if inner == 1 {
+            // `a` is the contiguous dimension; axpy os[lo..hi] += w·is[lo+shift..hi+shift].
+            for (k, &w) in weights.iter().enumerate() {
+                let shift = k as i64 - offset - origin;
+                let dst = &mut os[lo as usize..hi as usize];
+                let src = &is[(lo + shift) as usize..(hi + shift) as usize];
+                for (d, &s) in dst.iter_mut().zip(src) {
+                    *d += w * s;
+                }
+            }
+        } else {
+            // `inner` is the contiguous dimension; axpy each interior output row.
+            for a in lo..hi {
+                let ob = (a as usize) * inner;
+                for (k, &w) in weights.iter().enumerate() {
+                    let ib = ((a + k as i64 - offset - origin) as usize) * inner;
+                    let dst = &mut os[ob..ob + inner];
+                    let src = &is[ib..ib + inner];
+                    for (d, &s) in dst.iter_mut().zip(src) {
+                        *d += w * s;
+                    }
+                }
             }
         }
     };
