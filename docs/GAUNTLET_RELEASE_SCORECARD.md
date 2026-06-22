@@ -255,12 +255,16 @@ vs-SciPy parity number.
 | `gaussian_filter` 2-D parallel gate `1<<18`→`1<<21` | `scipy.ndimage.gaussian_filter(sigma=2)` 256² Reflect | serial **1.82x** faster than 64-thread path (128² 6.98x, 512² 0.65x, 1024² 0.21x) | narrows the documented 2.83x loss substantially | keep — GREEN 246/0 |
 | `uniform_filter` gate on PIXEL COUNT `>=1<<20` (running-sum is window-size independent) | `scipy.ndimage.uniform_filter` 256²/512² | serial **3.78x** / **1.48x** (1024² parity) | self-speedup closes parallel-overhead waste | keep — GREEN 246/0 |
 | `correlate1d`/`convolve1d` along-axis gate `>=1<<20` (also general gaussian path) | `scipy.ndimage.correlate1d` 256² w5 | serial **2.61x** (512² parallel wins 1.23x) | self-speedup closes parallel-overhead waste | keep — GREEN 246/0 |
+| `interpolate` `par_query_map`/`par_query_try_map` gate `1<<18`→`1<<23` (backs ALL `*_many` evaluators: cubic/pchip/RBF/griddata/RGI) | `CubicSplineStandalone::eval_many` n=1024 knots, m=16384/32768/65536/131072 | serial **18.52x / 10.48x / 5.89x / 3.12x** faster | flips catastrophic over-parallelization (cheap eval + per-thread Vec alloc + flat_map = ~4.8ms fixed overhead) | keep — GREEN 173/0; biggest gate payout |
 
 Negatives this session (reverted, in `docs/NEGATIVE_EVIDENCE.md`): gaussian col-pass interior axpy
 0.755x (gather cache-bound); nd_filter_apply 2-D incremental-index 0.945x (per-pixel divide is not
-the bottleneck — the 25-tap scalar gather is). Next bold lever (scoped, not yet done): portable
-`std::simd` across 8 interior output pixels in `nd_filter_apply` (byte-identical, no unsafe) to flip
-the correlate ~1.18x scalar-kernel residual.
+the bottleneck — the 25-tap scalar gather is); nd_filter_apply 2-D `std::simd`-across-pixels 1.025x
+(correlate is MEMORY-BANDWIDTH-bound — each of 25 taps hits a different cache-line, so SIMD cuts
+instructions not memory traffic; byte-identical but useless — the correlate/gaussian 1.1-1.2x
+residuals are a bandwidth wall, NOT a vectorization gap). Follow-up (scoped): rewrite
+`par_query_map` to in-place `chunks_mut` (like stats `evaluate_many`) to lower its parallel
+break-even and speed genuinely-huge batches.
 
 ## Pending Gauntlet Backlog
 
