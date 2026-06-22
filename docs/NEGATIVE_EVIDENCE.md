@@ -4118,3 +4118,14 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   not shippable). FIX paths (filed): (a) identify the failing test + verify the relation meets its
   tolerance or update it if it enshrined Rybicki output; (b) tighten erfi_scalar; (c) port the Cephes
   dawsn rational (machine-accurate AND fast, SciPy's method).
+
+## 2026-06-22 - dawsn byte-identical 1.82x: Rybicki NMAX 58→16 (closes most of the 3.5x SciPy gap, zero risk)
+- Agent: cod-a / BlackThrush. After the erfi-relation dawsn fix was reverted (broke an internal test,
+  bead 13e1r), found a ZERO-RISK partial: the Rybicki folded-sum term carries e^{-((2i-1)·0.25)²}, which
+  underflows the f64 ULP of the O(1) sum by i≈14 — so NMAX=58 summed ~44 terms that are exactly 0 at
+  double precision. Reduced NMAX 58→16. BITWISE identical to the old code (Python: 0/4000 sample points
+  in [0.025,6.25] differ; the convenience lib suite — which the erfi-relation reddened — is GREEN).
+- Same-worker hz1, dawsn 500k: **47.8 ms → 26.3 ms (1.82x faster)**; vs SciPy 13.7 ms the gap closes from
+  3.5x → 1.92x. Still a residual loss (per-call exp/setup overhead caps the byte-identical path); the
+  full WIN still needs the erfi-relation (with a tighter erfi_scalar) or the Cephes dawsn rational
+  (machine-accurate AND fast) — bead 13e1r. This partial is the safe, no-regression increment.
