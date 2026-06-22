@@ -4101,3 +4101,20 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   high-step Simpson only for a<1, as a partial. Methodology: Python-verify the chosen method to ~1e-12
   before porting (as done for kv/nct/ncx2). The two large outstanding special-fn losses are now kv
   (frankenscipy-8qpyn, partial fix landed, Temme for full win) and hyperu (this, new bead).
+
+## 2026-06-22 - LOSS + REVERTED FIX: dawsn 3.5x slower; erfi-relation fast but breaks an fsci internal test
+- Agent: cod-a / BlackThrush. dawsn (Dawson) is 3.5x slower than SciPy (500k: fsci 47.8ms vs scipy
+  13.7ms) — its mid-range (0.025≤|x|<6.25) uses Rybicki's folded exp-sum (NMAX=58, ~116 exp/call) where
+  SciPy uses a fast rational/Cephes approx. (erfcx 5.0x WIN, erfi 1.7x WIN — only dawsn loses in the
+  Faddeeva family.)
+- Attempted fix (REVERTED): replace Rybicki with the exact identity D(x)=(√π/2)·e^{-x²}·erfi(x) using
+  fsci's fast erfi_scalar → dawsn 47.8ms→11.7ms (4.1x), FLIPPING to 1.17x FASTER than SciPy, and
+  Python-verified ≤5e-16 vs scipy.special.dawsn AND ≤2.7e-16 on spot values; the dawsn_matches_scipy /
+  tensor tests PASSED. BUT the full convenience lib suite went red (exit 101) on a non-dawsn-named test
+  (rch worker buffers the test name, couldn't identify it; baseline w/o the change is green). Root cause
+  most likely: the erfi-relation's accuracy is bounded by fsci's OWN erfi_scalar (~1e-13 in places),
+  whereas the machine-accurate Rybicki it replaced was 1e-16 independent of erfi — some stricter internal
+  dawsn check needs >erfi precision. REVERTED to keep conformance green (a perf win that reds a test is
+  not shippable). FIX paths (filed): (a) identify the failing test + verify the relation meets its
+  tolerance or update it if it enshrined Rybicki output; (b) tighten erfi_scalar; (c) port the Cephes
+  dawsn rational (machine-accurate AND fast, SciPy's method).
