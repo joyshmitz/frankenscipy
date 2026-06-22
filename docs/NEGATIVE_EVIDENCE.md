@@ -4679,3 +4679,21 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
 - SWEEP STATUS: per-module par_map_indices sweep now COMPLETE — convenience (cheap+moderate), beta,
   airy, elliptic all gated; error/gamma already gated; bessel/hyper expensive (correctly eager). The
   special n/32 over-subscription anti-pattern is eradicated across the crate.
+
+## 2026-06-22 - WIN: bessel.rs map_real_input per-caller gated (BlackThrush — j0 16x@4096, the cheap ones)
+- Agent: cc / BlackThrush. bessel.rs map_real_input (backs j0/j1/y0/y1/i0/i1/k0/k1/i0e/i1e/k0e/k1e)
+  had an inline n/256 gate (parallel at n>=512) + the SAME wrong "expensive" comment as airy. But the
+  12 callers span ~28ns (j0) to ~845ns (kv) — a single gate can't fit. A/B (this box):
+  | class | fns | par/ser@4096 | break-even | gate |
+  |-------|-----|-------------|-----------|------|
+  | cheap   | j0/j1           | 16.01x | ~120k | 1<<18 |
+  | moderate| y0/y1           | 4.94x  | ~58k  | 1<<16 |
+  | heavy   | i0/i1/i0e/i1e   | 1.28x  | ~12k  | 1<<14 |
+  | kv      | k0/k1/k0e/k1e   | 0.54x (already wins) | <4k | 1<<12 |
+- FIX (bit-identical): added real_par_min param to map_real_input (changed the serial gate from
+  `n < 512` to `n < real_par_min`; parallel path structurally unchanged ⇒ order-preserving). Each of
+  the 12 callers passes its class gate. j0/j1 (the most common Bessel fns) were the worst hit — 16x
+  slower parallel at n=4096. kv (k0/k1) already won at 4096 so it stays near-eager (1<<12).
+  fsci-special GREEN 1115/0. This + airy/elliptic completes the per-MODULE direct-par_map_indices
+  sweep that the cross-crate map_* sweep missed: convenience/beta/airy/elliptic/bessel all gated;
+  error/gamma already gated; hyper expensive. The fsci-special parallel-gate surface is exhausted.

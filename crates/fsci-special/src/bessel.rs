@@ -218,11 +218,11 @@ const BESSEL_ZERO_BRACKET_TOL: f64 = 1.0e-12;
 const BESSEL_ZERO_MAX_REFINE_ITERS: usize = 80;
 
 pub fn j0(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_input("j0", z, mode, |x| Ok(j0_core(x)))
+    map_real_input("j0", z, mode, 1 << 18, |x| Ok(j0_core(x)))
 }
 
 pub fn j1(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_input("j1", z, mode, |x| Ok(j1_core(x)))
+    map_real_input("j1", z, mode, 1 << 18, |x| Ok(j1_core(x)))
 }
 
 pub fn jn(n: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
@@ -230,11 +230,11 @@ pub fn jn(n: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> SpecialRes
 }
 
 pub fn y0(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_input("y0", z, mode, |x| y0_scalar(x, mode))
+    map_real_input("y0", z, mode, 1 << 16, |x| y0_scalar(x, mode))
 }
 
 pub fn y1(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_input("y1", z, mode, |x| y1_scalar(x, mode))
+    map_real_input("y1", z, mode, 1 << 16, |x| y1_scalar(x, mode))
 }
 
 pub fn yn(n: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
@@ -287,14 +287,14 @@ pub fn iv(v: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> SpecialRes
 ///
 /// Convenience wrapper for iv(0, z). Matches `scipy.special.i0(z)`.
 pub fn i0(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_input("i0", z, mode, |x| Ok(iv_scalar(0.0, x)))
+    map_real_input("i0", z, mode, 1 << 14, |x| Ok(iv_scalar(0.0, x)))
 }
 
 /// Modified Bessel function of the first kind of order 1: I_1(z).
 ///
 /// Convenience wrapper for iv(1, z). Matches `scipy.special.i1(z)`.
 pub fn i1(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_input("i1", z, mode, |x| Ok(iv_scalar(1.0, x)))
+    map_real_input("i1", z, mode, 1 << 14, |x| Ok(iv_scalar(1.0, x)))
 }
 
 /// Scalar convenience function for I_0(x).
@@ -321,14 +321,14 @@ pub fn kv(v: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> SpecialRes
 ///
 /// Convenience wrapper for kv(0, z). Matches `scipy.special.k0(z)`.
 pub fn k0(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_input("k0", z, mode, |x| kv_scalar(0.0, x, mode))
+    map_real_input("k0", z, mode, 1 << 12, |x| kv_scalar(0.0, x, mode))
 }
 
 /// Modified Bessel function of the second kind of order 1: K_1(z).
 ///
 /// Convenience wrapper for kv(1, z). Matches `scipy.special.k1(z)`.
 pub fn k1(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_input("k1", z, mode, |x| kv_scalar(1.0, x, mode))
+    map_real_input("k1", z, mode, 1 << 12, |x| kv_scalar(1.0, x, mode))
 }
 
 /// Modified Bessel function of the second kind for integer order n: K_n(z).
@@ -370,14 +370,14 @@ pub fn kn_scalar(n: i32, x: f64) -> f64 {
 ///
 /// Matches `scipy.special.i0e(x)`.
 pub fn i0e(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_input("i0e", z, mode, |x| Ok(i0e_scalar(x)))
+    map_real_input("i0e", z, mode, 1 << 14, |x| Ok(i0e_scalar(x)))
 }
 
 /// Exponentially scaled modified Bessel function I_1: i1e(x) = I_1(x) * exp(-|x|).
 ///
 /// Matches `scipy.special.i1e(x)`.
 pub fn i1e(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_input("i1e", z, mode, |x| Ok(i1e_scalar(x)))
+    map_real_input("i1e", z, mode, 1 << 14, |x| Ok(i1e_scalar(x)))
 }
 
 /// Exponentially scaled modified Bessel function I_v: ive(v, x) = I_v(x) * exp(-|x|).
@@ -391,14 +391,14 @@ pub fn ive(v: &SpecialTensor, z: &SpecialTensor, mode: RuntimeMode) -> SpecialRe
 ///
 /// Matches `scipy.special.k0e(x)`.
 pub fn k0e(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_input("k0e", z, mode, |x| Ok(k0e_scalar(x)))
+    map_real_input("k0e", z, mode, 1 << 12, |x| Ok(k0e_scalar(x)))
 }
 
 /// Exponentially scaled modified Bessel function K_1: k1e(x) = K_1(x) * exp(x).
 ///
 /// Matches `scipy.special.k1e(x)`.
 pub fn k1e(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_input("k1e", z, mode, |x| Ok(k1e_scalar(x)))
+    map_real_input("k1e", z, mode, 1 << 12, |x| Ok(k1e_scalar(x)))
 }
 
 /// Exponentially scaled modified Bessel function K_v: kve(v, x) = K_v(x) * exp(x).
@@ -2647,6 +2647,7 @@ fn map_real_input<F>(
     function: &'static str,
     input: &SpecialTensor,
     mode: RuntimeMode,
+    real_par_min: usize,
     kernel: F,
 ) -> SpecialResult
 where
@@ -2655,13 +2656,15 @@ where
     match input {
         SpecialTensor::RealScalar(x) => kernel(*x).map(SpecialTensor::RealScalar),
         SpecialTensor::RealVec(values) => {
-            // Each element is an independent (and, for Bessel kernels, expensive) scalar
-            // evaluation written to its own output slot, so a large array fans out across
-            // cores. Chunks are concatenated in element order and the first failing chunk's
-            // error is returned in element order, so the result (value and first error) is
+            // Each element is an independent scalar evaluation written to its own output
+            // slot, so large arrays fan out across cores ABOVE a per-caller work gate
+            // (real_par_min — Bessel kernels span ~28ns j0 to ~845ns kv, so the n/256 gate
+            // over-subscribed the cheap ones 4-16x at n<=16k; BlackThrush A/B 2026-06-22).
+            // Chunks are concatenated in element order and the first failing chunk's error
+            // is returned in element order, so the result (value and first error) is
             // bit-identical to the sequential `values.iter().map(kernel).collect()`.
             let n = values.len();
-            let nthreads = if n < 512 {
+            let nthreads = if n < real_par_min {
                 1
             } else {
                 std::thread::available_parallelism()
