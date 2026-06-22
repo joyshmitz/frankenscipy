@@ -4871,3 +4871,18 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   low value at parity). DON'T re-chase minmax for small/mid sizes (it wins). Next un-dominated workloads
   are the HARD numerical walls (Radau solve_ivp 2x, eigsh 1.3-1.6x, hyperu/kv series) — accuracy-critical
   ports, not disk-neutral structural rewrites.
+
+## 2026-06-22 - FINDING: signal.resample 2.34x slower = FFT non-pow2 constant-factor wall (NOT structural)
+- Agent: cc / BlackThrush. Cross-crate latent-loss hunt in fsci-signal (after ndimage went dominant).
+  Head-to-head vs scipy 1.17.1 (this box): savgol_filter 200k w=31 1.78x FASTER; convolve2d 512² k9
+  7.86x FASTER; **resample 200k→150k 2.34x SLOWER (fsci 4743us vs scipy 2027us)**.
+- ROOT: resample already uses rfft/irfft (no full-complex waste). 200000=2⁶·5⁵, 150000=2⁴·3·5⁵ — both
+  non-pow2. fsci-fft ALREADY has optimized hardcoded radix-3/radix-5 butterflies + an iterative
+  odd-power-tail path (shared twiddles) that handles these sizes. So the gap is a CONSTANT-FACTOR
+  deficit vs pocketfft (SIMD, split-radix, cache-blocking) — the documented FFT non-pow2 wall, NOT a
+  structural/routing bug. resample is purely FFT-bound (two ~200k transforms + an O(n) scale).
+- CONCLUSION: don't re-chase resample structurally; it inherits the FFT wall. Beating pocketfft on
+  non-pow2 needs SIMD radix kernels / split-radix (large FFT project, meaty, not disk-neutral-small).
+  signal verified otherwise dominant (savgol/convolve2d/correlate2d/lfilter-parity). The remaining
+  un-dominated workloads are all hard constant-factor/numerical walls: FFT non-pow2 (resample/spectral),
+  Radau solve_ivp 2x, eigsh 1.3-1.6x, hyperu/kv series.
