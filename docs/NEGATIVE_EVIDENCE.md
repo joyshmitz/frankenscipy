@@ -6,6 +6,32 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-22 - CopperFern - Delaunay `tsearch` was an O(nq·S) linear scan — route to grid-accelerated find_simplex_many: 286x self-speedup, FLIPS 57x-SLOWER → 1.9-5.0x FASTER than SciPy
+
+- Agent: CopperFern (claude-code / claude-opus-4-8).
+- Decision: KEEP. `tsearch` called `Delaunay::find_simplex` (a full
+  O(num_simplices) per-point linear scan) for every query — O(nq·S) total —
+  while `Delaunay::find_simplex_many` already had a uniform-grid accelerator
+  documented bit-for-bit identical (same lowest-index simplex + barycentric).
+  One-line route of tsearch through the batch locator. Byte-identical, huge win.
+- BIGGEST gap this cycle: before the fix `tsearch` was ~57x SLOWER than scipy.
+
+| n (pts) | nq | fsci before | fsci after | SciPy find_simplex | after vs SciPy | self |
+| ---: | ---: | ---: | ---: | ---: | --- | --- |
+| 3000 | 200000 | 13.337 s | 46.6 ms | 231.6 ms | 4.97x faster | 286x |
+| 10000 | 200000 | (worse) | 259.0 ms | 492.2 ms | 1.90x faster | — |
+
+- Equal-hardware, identical points/queries dumped to /tmp; fsci best-of bin,
+  scipy `Delaunay.find_simplex(X)` best-of-6.
+- Gates: 218 `fsci-spatial --lib` tests pass incl.
+  `tsearch_matches_find_simplex_and_marks_outside` and
+  `delaunay_find_simplex_many_matches_per_point` (byte-identity of the grid path)
+  and `delaunay_triangulation_matches_scipy_reference_values`. `git diff --check`
+  clean. The `perf_tsearch_ab` harness was committed concurrently by another
+  agent (b5d9b5ab); kept as-is, fix applied to the `tsearch` fn only.
+- Note: this was a genuine algorithmic loss (missing batch acceleration), NOT a
+  measurement artifact like label_mean/linkage/minmax_filter1d below.
+
 ## 2026-06-22 - CopperFern - KDTree build flat-coords lever — FLIPS a REAL ~2x build loss to a ~1.9x WIN (3.69x self-speedup at n=400k); query already dominates 6.8-9.6x
 
 - Agent: CopperFern (claude-code / claude-opus-4-8).

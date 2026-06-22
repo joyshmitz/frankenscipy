@@ -3552,8 +3552,14 @@ fn clamp_delaunay_grid_cell(scaled: f64, dim: usize) -> usize {
 /// Bowyer-Watson triangulation ordering rather than qhull's.
 #[must_use]
 pub fn tsearch(tri: &Delaunay, xi: &[(f64, f64)]) -> Vec<i64> {
-    xi.iter()
-        .map(|&point| match tri.find_simplex(point) {
+    // Route through the grid-accelerated batch locator instead of an
+    // O(nq·num_simplices) per-point linear scan. `find_simplex_many` is
+    // documented bit-for-bit identical to calling `find_simplex` per point
+    // (same lowest-index containing simplex), so the result is unchanged while
+    // the cost drops from O(nq·S) to roughly O(nq) for well-distributed inputs.
+    tri.find_simplex_many(xi)
+        .into_iter()
+        .map(|hit| match hit {
             Some((idx, _, _, _)) => idx as i64,
             None => -1,
         })
