@@ -4230,7 +4230,10 @@ impl GammaDist {
     pub fn pdf_many(&self, xs: &[f64]) -> Vec<f64> {
         let a_scale_ln = self.a * self.scale.ln();
         let lg = ln_gamma(self.a);
-        par_continuous_map(xs, |x| {
+        // Cheap kernel (1 ln + 1 exp): the hoisted `lg`/`a_scale_ln` are the real
+        // win vs scipy; thread-spawn does not amortise until the array is large,
+        // so use a high parallel gate (small/medium arrays stay serial+hoisted).
+        par_continuous_map_min(xs, 65536, |x| {
                 if x < 0.0 {
                     return 0.0;
                 }
@@ -30528,11 +30531,35 @@ where
     // Parallel map for an array of costly per-point special functions (gammainc/betainc). Threads
     // are gated on WORK: at least ~2048 elements per thread, so small arrays stay serial (avoids the
     // spawn-overhead regression seen over-threading a cheap/small array).
+    par_continuous_map_min(xs, 2048, f)
+}
+
+/// `par_continuous_map` with an explicit minimum elements-per-thread gate.
+///
+/// The default `par_continuous_map` (2048/thread) is tuned for COSTLY kernels
+/// (gammainc/betainc in cdf/sf/ppf). A CHEAP kernel — e.g. a pdf that is one
+/// `ln` + one `exp` — does too little work per element to amortise the thread
+/// spawn at 2048/thread (measured: gamma `pdf_many` at n=4096 spawned 2 threads
+/// and ran 1.9x SLOWER than the serial map, ~275µs vs ~144µs, also losing to
+/// scipy's ~148µs). Such callers pass a much larger `min_per_thread` so small/
+/// medium arrays stay serial (keeping the hoisted-normalizer win) and only
+/// genuinely large arrays parallelise. Order-preserving ⇒ byte-identical.
+fn par_continuous_map_min<F>(xs: &[f64], min_per_thread: usize, f: F) -> Vec<f64>
+where
+    F: Fn(f64) -> f64 + Sync,
+{
     let n = xs.len();
+    // Fast serial path: if the array can't even fill two threads at the gate, go
+    // serial WITHOUT the `available_parallelism()` syscall (which is surprisingly
+    // costly — ~tens of µs — relative to a cheap per-element kernel, and was paid
+    // on every small/medium call). Byte-identical to the old `nthreads<=1` branch.
+    if n < 2 * min_per_thread.max(1) {
+        return xs.iter().map(|&x| f(x)).collect();
+    }
     let avail = std::thread::available_parallelism()
         .map(std::num::NonZero::get)
         .unwrap_or(1);
-    let nthreads = (n / 2048).clamp(1, avail);
+    let nthreads = (n / min_per_thread.max(1)).clamp(1, avail);
     if nthreads <= 1 {
         return xs.iter().map(|&x| f(x)).collect();
     }

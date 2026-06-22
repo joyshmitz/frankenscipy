@@ -4239,3 +4239,25 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   (the shared `.beads/issues.jsonl` is mid-edit by another agent — closing would collide). Future
   agents: these open [perf] beads are stale; verify against code before re-investigating. The
   campaign is at genuine closeout — remaining gaps are documented C-SIMD/kernel walls.
+
+## 2026-06-22 - WIN (loss FLIPPED): gamma pdf_many cheap-kernel parallel pessimization → ~3x win vs scipy
+- Agent: cc / CopperFern. Same-machine A/B (rch worker) exposed that `GammaDist::pdf_many` (n=4096,
+  shape 2.7) ran its PARALLEL path SLOWER than scipy AND slower than a serial map: par_continuous_map
+  gates at 2048 elts/thread (tuned for COSTLY cdf/sf kernels gammainc/betainc), but the gamma pdf
+  kernel is CHEAP (1 ln + 1 exp). At n=4096 it spawned 2 threads whose overhead dwarfed the work:
+  measured pdf_many(parallel) ~219-383 µs vs serial-hoist ~54 µs vs scipy ~148 µs — a self-inflicted
+  1.5-2.6x loss.
+- FIX (byte-identical, order-preserving): (1) parameterized the gate as `par_continuous_map_min`;
+  routed gamma pdf_many through a high gate (65536 elts/thread) so small/medium arrays stay
+  serial+hoisted and only huge arrays parallelize. (2) Added a fast serial-out that skips the
+  `available_parallelism()` syscall when n can't fill 2 threads — that syscall was ~tens of µs/call
+  and paid on EVERY small/medium `*_many` call (the 121µs→50µs drop). Broadly benefits all
+  continuous-dist cdf_many/sf_many/ppf_many/pdf_many on small arrays.
+- RESULT (same-process A/B, release, rch): gamma pdf_many n=4096 **50.2 µs** (NEW gated) vs **219-383 µs**
+  (OLD parallel) vs scipy **~148 µs** → flips a ~1.5-2.6x LOSS to a **~3x WIN**, matching the pure
+  serial-hoist (53.6 µs). fsci-stats lib GREEN 1980/0; gamma tests 56/0; byte-identical by
+  construction (serial vs parallel chunks are both order-preserving, same f64 ops).
+- SAME-CLASS CANDIDATES (not changed — would need their own bench, see [[gauntlet_measured_headtohead_scipy]]):
+  beta/normal/student_t/chi/chi2/f pdf_many also use the 2048 gate with cheap elementary kernels and
+  likely pessimize identically at n≈4096+ (the syscall-skip already helps them below 4096). NOT
+  VonMises/Nakagami/GenGamma pdf (bessel/heavier kernels — leave parallel).
