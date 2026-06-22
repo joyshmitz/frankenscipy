@@ -111,11 +111,12 @@ pub fn airy(x: &SpecialTensor, mode: RuntimeMode) -> Result<Vec<SpecialTensor>, 
             ])
         }
         SpecialTensor::RealVec(values) => {
-            // Each element is an independent (and expensive: series/asymptotic) Airy evaluation;
-            // fan out across cores then unzip the four outputs in element order. par_map_indices
+            // Each element is an independent series/asymptotic Airy evaluation (~50ns); fan out
+            // across cores (gated — the kernel is too cheap for the raw n/32 gate, see
+            // AIRY_REAL_PAR_MIN) then unzip the four outputs in element order. par_map_indices
             // preserves order and returns the first failing index's error, so the result is
             // bit-identical to the sequential push loop.
-            let results = par_map_indices(values.len(), |i| airy_scalar(values[i], mode))?;
+            let results = par_map_indices_gated(values.len(), |i| airy_scalar(values[i], mode))?;
             let mut ai_vec = Vec::with_capacity(results.len());
             let mut aip_vec = Vec::with_capacity(results.len());
             let mut bi_vec = Vec::with_capacity(results.len());
@@ -189,7 +190,7 @@ pub fn airye(x: &SpecialTensor, mode: RuntimeMode) -> Result<Vec<SpecialTensor>,
             let mut aip_vec = Vec::with_capacity(values.len());
             let mut bi_vec = Vec::with_capacity(values.len());
             let mut bip_vec = Vec::with_capacity(values.len());
-            let results = par_map_indices(values.len(), |i| airye_scalar(values[i], mode))?;
+            let results = par_map_indices_gated(values.len(), |i| airye_scalar(values[i], mode))?;
             for result in &results {
                 ai_vec.push(result.ai);
                 aip_vec.push(result.aip);
@@ -888,6 +889,24 @@ where
         out.extend(cr?);
     }
     Ok(out)
+}
+
+/// Airy real kernels (airy/airye, ~50ns/elt: Ai/Aip/Bi/Bip via series/asymptotic)
+/// over-subscribe the raw n/32 par_map_indices gate (~16 threads onto a sub-µs
+/// kernel), measured 4-9x SLOWER than serial at n<=16k (BlackThrush A/B 2026-06-22;
+/// break-even ~68k). Stay serial below the gate. Order-preserving => bit-identical.
+const AIRY_REAL_PAR_MIN: usize = 1 << 17; // airy 1.05x@65536→win@131072; airye wins 0.89x@65536
+
+fn par_map_indices_gated<T, H>(n: usize, f: H) -> Result<Vec<T>, SpecialError>
+where
+    T: Send,
+    H: Fn(usize) -> Result<T, SpecialError> + Sync,
+{
+    if n >= AIRY_REAL_PAR_MIN {
+        par_map_indices(n, f)
+    } else {
+        (0..n).map(f).collect()
+    }
 }
 
 fn map_airy_component<F, G>(

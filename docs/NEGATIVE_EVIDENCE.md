@@ -4644,3 +4644,18 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   parallelizes (no regression). fsci-special lib GREEN 1115/0. The special par_map_indices gate-vein is
   now FULLY closed end-to-end: convenience cheap-binary (b4db5727, CopperFern), convenience
   map_real_or_complex moderate (b346eda1, BlackThrush), beta.rs map_real_binary (this commit).
+
+## 2026-06-22 - WIN: airy/airye real path gated (BlackThrush — n/32 over-subscription on a moderate kernel)
+- Agent: cc / BlackThrush. After closing the map_* dispatchers, swept the per-MODULE par_map_indices.
+  airy.rs's airy()/airye() called par_map_indices DIRECTLY on the real path (ungated n/32). The inline
+  comment even claimed the kernel was "expensive" — but A/B proved it's only ~50ns/elt (Ai/Aip/Bi/Bip
+  series/asymptotic), so n/32 over-subscribes ~16 threads and pessimizes hugely.
+- A/B (this box, release --test-threads=1): airy par/ser 9.18x@4096, 9.03x@8192, 4.45x@16384,
+  2.39x@32768, 1.05x@65536; airye 6.20x@4096, 2.13x@32768, 0.89x@65536(win). Break-even ~68k.
+- FIX (bit-identical): par_map_indices_gated + const AIRY_REAL_PAR_MIN=1<<17 (131072 — safe for both;
+  airy still loses 1.05x@65536 so needs 131072 for a clear win, airye wins by 65536). Routed both
+  real-path calls; complex paths (Bessel-based, heavier) left eager. Corrected the misleading comment.
+- GAIN: airy/airye at common n≤16k flip 4-9x; large arrays still parallelize. fsci-special GREEN 1115/0.
+  Per-module sweep status: error/elliptic ellipk-ellipe already 1<<20-gated; bessel/hyper expensive
+  (correctly eager); airy NOW gated. Remaining to check: elliptic.rs's ungated map_real_or_complex /
+  map_real_binary helpers (incomplete-elliptic ellipkinc/ellipeinc — moderate Carlson) — next.
