@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use fsci_runtime::RuntimeMode;
-use fsci_special::{SpecialTensor, ellipeinc, ellipkinc, erf, erfc, hyperu, kv};
+use fsci_special::{SpecialTensor, dawsn, ellipeinc, ellipkinc, erf, erfc, hyperu, kv};
 use std::error::Error;
 use std::f64::consts::PI;
 use std::hint::black_box;
@@ -35,11 +35,12 @@ fn main() -> GoldenResult {
         Some("bench-hyperu") => print_hyperu_benchmark(),
         Some("bench-hyperu-generic") => print_hyperu_generic_benchmark(),
         Some("bench-hyperu-a1-gamma") => print_hyperu_a1_gamma_benchmark(),
+        Some("bench-dawsn") => print_dawsn_benchmark(),
         Some("bench-kv") => print_kv_benchmark(),
         _ => Err(IoError::new(
             ErrorKind::InvalidInput,
             format!(
-                "usage: {program} <golden-error|golden-elliptic|bench-hyperu|bench-hyperu-generic|bench-hyperu-a1-gamma|bench-kv>"
+                "usage: {program} <golden-error|golden-elliptic|bench-hyperu|bench-hyperu-generic|bench-hyperu-a1-gamma|bench-dawsn|bench-kv>"
             ),
         )
         .into()),
@@ -187,6 +188,37 @@ fn print_hyperu_a1_gamma_benchmark() -> GoldenResult {
     let scipy_ms = per_iter_ms(scipy_elapsed, ITERS);
     println!(
         "hyperu_a1_b1.25_n{N}_iters{ITERS} rust_ms_per_iter={rust_ms:.6} scipy_ms_per_iter={scipy_ms:.6} ratio={:.6} checksum={checksum:.17e}",
+        rust_ms / scipy_ms
+    );
+    Ok(())
+}
+
+fn print_dawsn_benchmark() -> GoldenResult {
+    const N: usize = 500_000;
+    const ITERS: usize = 5;
+    let denom = (N - 1) as f64;
+    let x_values: Vec<f64> = (0..N).map(|i| -8.5 + 17.0 * (i as f64) / denom).collect();
+    let x = SpecialTensor::RealVec(x_values);
+
+    let warm = dawsn(&x, RuntimeMode::Strict)?;
+    black_box(vector_checksum(warm, "dawsn")?);
+
+    let start = Instant::now();
+    let mut checksum = 0.0;
+    for _ in 0..ITERS {
+        let out = dawsn(black_box(&x), RuntimeMode::Strict)?;
+        checksum += vector_checksum(out, "dawsn")?;
+    }
+    let rust_elapsed = start.elapsed();
+    if !checksum.is_finite() {
+        return Err(IoError::new(ErrorKind::InvalidData, "non-finite dawsn checksum").into());
+    }
+
+    let scipy_elapsed = scipy_dawsn_duration(N, ITERS)?;
+    let rust_ms = per_iter_ms(rust_elapsed, ITERS);
+    let scipy_ms = per_iter_ms(scipy_elapsed, ITERS);
+    println!(
+        "dawsn_n{N}_iters{ITERS} rust_ms_per_iter={rust_ms:.6} scipy_ms_per_iter={scipy_ms:.6} ratio={:.6} checksum={checksum:.17e}",
         rust_ms / scipy_ms
     );
     Ok(())
@@ -389,6 +421,51 @@ print(f"{elapsed:.17f}")
     if !output.status.success() {
         return Err(IoError::other(format!(
             "scipy hyperu a1 gamma oracle failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ))
+        .into());
+    }
+    let stdout = String::from_utf8(output.stdout)?;
+    let seconds = stdout.trim().parse::<f64>()?;
+    Ok(Duration::from_secs_f64(seconds))
+}
+
+fn scipy_dawsn_duration(n: usize, iters: usize) -> GoldenResult<Duration> {
+    let script = r#"
+import sys
+import time
+import numpy as np
+import scipy.special as sc
+
+n = int(sys.argv[1])
+iters = int(sys.argv[2])
+x = np.linspace(-8.5, 8.5, n, dtype=np.float64)
+sc.dawsn(x)
+start = time.perf_counter()
+checksum = 0.0
+for _ in range(iters):
+    out = sc.dawsn(x)
+    checksum += float(out[0] + out[n // 2] + out[-1])
+elapsed = time.perf_counter() - start
+if not np.isfinite(checksum):
+    raise SystemExit("non-finite checksum")
+print(f"{elapsed:.17f}")
+"#;
+    let mut child = Command::new("python3")
+        .args(["-", &n.to_string(), &iters.to_string()])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    child
+        .stdin
+        .as_mut()
+        .ok_or_else(|| IoError::new(ErrorKind::BrokenPipe, "missing scipy stdin"))?
+        .write_all(script.as_bytes())?;
+    let output = child.wait_with_output()?;
+    if !output.status.success() {
+        return Err(IoError::other(format!(
+            "scipy dawsn oracle failed: {}",
             String::from_utf8_lossy(&output.stderr)
         ))
         .into());

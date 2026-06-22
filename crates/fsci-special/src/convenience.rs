@@ -1056,9 +1056,12 @@ fn cephes_fresnl(x: f64) -> (f64, f64) {
 
 /// Dawson function D(x) = exp(-x²) ∫₀ˣ exp(t²) dt.
 ///
-/// Related to the imaginary error function: D(x) = √π/2 * exp(-x²) * erfi(x)
+/// Related to the imaginary error function: D(x) = √π/2 * exp(-x²) * erfi(x).
 ///
-/// Uses Rybicki's algorithm with a Gaussian kernel series for efficiency.
+/// Uses the Cephes rational approximations that SciPy carried before the XSF
+/// Faddeeva rewrite: one branch for [0, 3.25), one for [3.25, 6.25), and one
+/// for the tail. This keeps machine-precision parity while avoiding the
+/// per-call exponentials in the former Rybicki summation.
 fn dawsn_impl(x: f64) -> f64 {
     if x.is_nan() {
         return f64::NAN;
@@ -1070,84 +1073,116 @@ fn dawsn_impl(x: f64) -> f64 {
     let sign = x.signum();
     let ax = x.abs();
 
-    // For very small x, the Taylor series D(x) ≈ x - 2x³/3 + 4x⁵/15 - ... is
-    // exact to machine precision; Rybicki covers everything above it.
-    if ax < 0.025 {
+    if ax < 3.25 {
         let x2 = ax * ax;
-        let result = ax
-            * (1.0 - 2.0 * x2 / 3.0 + 4.0 * x2 * x2 / 15.0 - 8.0 * x2 * x2 * x2 / 105.0
-                + 16.0 * x2.powi(4) / 945.0);
-        return sign * result;
+        return sign * ax * dawsn_polevl(x2, &DAWSN_AN) / dawsn_polevl(x2, &DAWSN_AD);
     }
 
-    // Mid-range via Rybicki's method (machine-accurate); large x via the
-    // asymptotic series. The previous fixed-step Simpson quadrature was only
-    // ~1e-7. frankenscipy-p43m1.
-    if ax < 6.25 {
-        return sign * dawsn_mid(ax);
+    if ax > 1.0e9 {
+        return sign * 0.5 / ax;
     }
 
-    // Asymptotic: D(x) ≈ 1/(2x) + 1/(4x³) + 3/(8x⁵) + ...
-    sign * dawsn_asymptotic(ax)
+    let inv_x2 = 1.0 / (ax * ax);
+    let correction = if ax < 6.25 {
+        dawsn_polevl(inv_x2, &DAWSN_BN) / dawsn_p1evl(inv_x2, &DAWSN_BD)
+    } else {
+        dawsn_polevl(inv_x2, &DAWSN_CN) / dawsn_p1evl(inv_x2, &DAWSN_CD)
+    };
+
+    sign * 0.5 * (1.0 / ax + inv_x2 * correction / ax)
 }
 
-/// Dawson function for moderate |x| via Rybicki's method (Numerical Recipes
-/// §6.10): D(x) = (1/√π) Σ_{n odd} e^{-(x-nh)²}/n, evaluated with the standard
-/// folded summation around the nearest even node n₀. Machine-accurate for
-/// 0.025 ≤ x < 6.25 (the Rybicki truncation error is ~exp(-(π/2H)²), negligible
-/// at H = 0.25), replacing the ~1e-7 fixed-step Simpson quadrature.
-fn dawsn_mid(x: f64) -> f64 {
-    const H: f64 = 0.25;
-    // The Rybicki term carries the factor e^{-((2i-1)H)²}, which underflows the f64 ULP of the
-    // O(1) sum by i≈14 (e^{-((27)·0.25)²}=e^{-46}); NMAX=58 summed ~44 terms that are exactly 0
-    // at double precision. NMAX=16 is BITWISE identical to the old NMAX=58 across [0.025, 6.25]
-    // (verified 0/4000 sample points differ) and ~3.6x fewer iterations, closing most of dawsn's
-    // 3.5x SciPy gap (≈48ms→14ms/500k) with zero numerical change. frankenscipy-13e1r
-    const NMAX: usize = 16;
-
-    let n0 = 2 * (0.5 * x / H + 0.5) as i64;
-    let xp = x - n0 as f64 * H;
-    let mut e1 = (2.0 * xp * H).exp();
-    let e2 = e1 * e1;
-    let mut d1 = (n0 + 1) as f64;
-    let mut d2 = d1 - 2.0;
-    let mut sum = 0.0;
-
-    for i in 1..=NMAX {
-        let arg = (2 * i - 1) as f64 * H;
-        let c = (-arg * arg).exp();
-        sum += c * (e1 / d1 + 1.0 / (d2 * e1));
-        d1 += 2.0;
-        d2 -= 2.0;
-        e1 *= e2;
+fn dawsn_polevl(x: f64, coef: &[f64]) -> f64 {
+    let mut acc = coef[0];
+    for &c in &coef[1..] {
+        acc = acc * x + c;
     }
-
-    (-xp * xp).exp() * sum / std::f64::consts::PI.sqrt()
+    acc
 }
 
-/// Dawson function asymptotic expansion for large arguments.
-fn dawsn_asymptotic(x: f64) -> f64 {
-    let x2 = x * x;
-    let inv_2x2 = 0.5 / x2;
-    let mut term = 1.0;
-    let mut sum = 1.0;
-    let mut prev_abs = 1.0;
-
-    for n in 1..60 {
-        term *= (2 * n - 1) as f64 * inv_2x2;
-        // Divergent asymptotic series — stop at the smallest term.
-        if term.abs() > prev_abs {
-            break;
-        }
-        sum += term;
-        prev_abs = term.abs();
-        if term.abs() < 1e-16 * sum.abs() {
-            break;
-        }
+fn dawsn_p1evl(x: f64, coef: &[f64]) -> f64 {
+    let mut acc = x + coef[0];
+    for &c in &coef[1..] {
+        acc = acc * x + c;
     }
-
-    sum / (2.0 * x)
+    acc
 }
+
+#[allow(clippy::excessive_precision)] // Cephes dawsn.c coefficients.
+const DAWSN_AN: [f64; 10] = [
+    1.13681498971755972054e-11,
+    8.49262267667473811108e-10,
+    1.94434204175553054283e-8,
+    9.53151741254484363489e-7,
+    3.07828309874913200438e-6,
+    3.52513368520288738649e-4,
+    -8.50149846724410912031e-4,
+    4.22618223005546594270e-2,
+    -9.17480371773452345351e-2,
+    9.99999999999999994612e-1,
+];
+
+#[allow(clippy::excessive_precision)] // Cephes dawsn.c coefficients.
+const DAWSN_AD: [f64; 11] = [
+    2.40372073066762605484e-11,
+    1.48864681368493396752e-9,
+    5.21265281010541664570e-8,
+    1.27258478273186970203e-6,
+    2.32490249820789513991e-5,
+    3.25524741826057911661e-4,
+    3.48805814657162590916e-3,
+    2.79448531198828973716e-2,
+    1.58874241960120565368e-1,
+    5.74918629489320327824e-1,
+    1.00000000000000000539,
+];
+
+#[allow(clippy::excessive_precision)] // Cephes dawsn.c coefficients.
+const DAWSN_BN: [f64; 11] = [
+    5.08955156417900903354e-1,
+    -2.44754418142697847934e-1,
+    9.41512335303534411857e-2,
+    -2.18711255142039025206e-2,
+    3.66207612329569181322e-3,
+    -4.23209114460388756528e-4,
+    3.59641304793896631888e-5,
+    -2.14640351719968974225e-6,
+    9.10010780076391431042e-8,
+    -2.40274520828250956942e-9,
+    3.59233385440928410398e-11,
+];
+
+#[allow(clippy::excessive_precision)] // Cephes dawsn.c coefficients.
+const DAWSN_BD: [f64; 10] = [
+    -6.31839869873368190192e-1,
+    2.36706788228248691528e-1,
+    -5.31806367003223277662e-2,
+    8.48041718586295374409e-3,
+    -9.47996768486665330168e-4,
+    7.81025592944552338085e-5,
+    -4.55875153252442634831e-6,
+    1.89100358111421846170e-7,
+    -4.91324691331920606875e-9,
+    7.18466403235734541950e-11,
+];
+
+#[allow(clippy::excessive_precision)] // Cephes dawsn.c coefficients.
+const DAWSN_CN: [f64; 5] = [
+    -5.90592860534773254987e-1,
+    6.29235242724368800674e-1,
+    -1.72858975380388136411e-1,
+    1.64837047825189632310e-2,
+    -4.86827613020462700845e-4,
+];
+
+#[allow(clippy::excessive_precision)] // Cephes dawsn.c coefficients.
+const DAWSN_CD: [f64; 5] = [
+    -2.69820057197544900361,
+    1.73270799045947845857,
+    -3.93708582281939493482e-1,
+    3.44278924041233391079e-2,
+    -9.73655226040941223894e-4,
+];
 
 // ══════════════════════════════════════════════════════════════════════
 // Sine and Cosine Integrals

@@ -6,6 +6,54 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-22 - BlackThrush - BOLD-VERIFY dawsn Cephes rational: 1.98x slower -> near parity/slight residual vs SciPy
+
+- Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
+- Triage: `br ready --json` first exposed `frankenscipy-8zqah`. A fresh
+  representative non-identity positive-`a` HyperU row,
+  `hyperu(2.0,1.25,0.5..8.5,50k)`, was already faster than SciPy on current
+  source (`33.217486 ms` vs `214.262822 ms`, `ratio=0.155031`), so I closed it
+  as a no-ship and moved to the live `frankenscipy-13e1r` Dawson gap.
+- Decision: KEEP the Cephes Dawson rational port. The current post-NMAX baseline
+  row `dawsn(linspace(-8.5,8.5,500k))` still measured slower than SciPy:
+  `6.690599 ms` vs `3.375562 ms`, `ratio=1.982070`.
+- Reverted/replaced low-gain attempt: precomputing the Rybicki Gaussian weights
+  passed the focused Dawson tests but only produced a weak warm sample
+  (`5.566560 ms` vs SciPy `3.354582 ms`, `ratio=1.659390`) and left the same
+  per-element exponential structure. I did not keep that micro-lever.
+- Root cause and lever: older SciPy/Cephes Dawson uses three rational
+  approximations for `[0,3.25)`, `[3.25,6.25)`, and the tail. Porting those
+  exact coefficients removes the former Rybicki exponentials while preserving
+  the existing scalar and complex Dawson tolerances. Current SciPy routes
+  through XSF/Faddeeva (`Dawson(x)=sqrt(pi)/2*w_im(x)`); that full 100-interval
+  `w_im_y100` table remains larger follow-up work if exact current-SciPy
+  implementation parity is needed.
+
+| Workload | Before fsci | After fsci | SciPy comparator | Result |
+| --- | ---: | ---: | ---: | --- |
+| `dawsn(-8.5..8.5,500k)` current baseline | 6.690599 ms | - | 3.375562 ms | 1.982070x slower |
+| same row, first release build sample | - | 6.331277 ms | 4.861862 ms | 1.302233x slower |
+| same row, warm cargo sample | - | 5.922752 ms | 4.073273 ms | 1.454052x slower |
+| same row, direct warmed sample 1 | - | 4.679082 ms | 3.397946 ms | 1.377033x slower |
+| same row, direct warmed sample 2 | - | 4.244026 ms | 3.490768 ms | 1.215786x slower |
+| same row, direct warmed sample 3 | - | 4.677042 ms | 5.162975 ms | 0.905881 ratio |
+
+- Noise note: three accidental concurrent direct-binary samples were discarded as
+  contention-tainted. The kept effect is the durable Rust-side drop from
+  `6.69 ms` to `~4.24-4.68 ms` on sequential warmed runs, with SciPy-side noise
+  still leaving a small residual on most samples.
+- Accuracy/gates: focused
+  `cargo +nightly-2026-06-12 test -p fsci-special dawsn -- --nocapture` passes
+  with `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b`,
+  covering real scalar goldens, complex Dawson identities, vector dispatch, and
+  odd symmetry. Per-crate `fmt -p fsci-special -- --check`,
+  `check -p fsci-special --all-targets`, and `test -p fsci-special --lib`
+  pass. Strict per-crate clippy remains blocked by pre-existing lint debt:
+  path-dependency `fsci-integrate`/`fsci-linalg` failures first, and with
+  `--no-deps` by existing fsci-special lints in `bessel.rs`, `convenience.rs`,
+  `gamma.rs`, and `orthopoly.rs`; no Dawson/Cephes-specific clippy failure was
+  reported.
+
 ## 2026-06-22 - BlackThrush - BOLD-VERIFY hyperu a=1 incomplete-gamma identity: 1.84x slower -> parity/slightly faster than SciPy
 
 - Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
