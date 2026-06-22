@@ -1694,6 +1694,56 @@ fn kv_asymptotic_scaled(v: f64, z: f64) -> f64 {
 /// of a spike. The integrand's saddle sits at t* = asinh(v/z) (0 for v = 0); we
 /// split the interval there and extend the upper limit until the exponent has
 /// fallen ~50 below the peak.
+/// Cached 48-node Gauss–Legendre rule on [−1, 1] (standard `gauleg` Newton iteration).
+/// The scaled K_v integrand is smooth and single-peaked, so a fixed 48-point rule per
+/// sub-interval resolves it to ~5e-14 — replacing the ~1500-evaluation adaptive Simpson
+/// that made `kv`/`kve`/`kn` ~95x slower than SciPy (per-element quadrature). frankenscipy-8qpyn
+fn gauss_legendre_48() -> &'static ([f64; 48], [f64; 48]) {
+    static GL48: std::sync::OnceLock<([f64; 48], [f64; 48])> = std::sync::OnceLock::new();
+    GL48.get_or_init(|| {
+        const N: usize = 48;
+        let mut x = [0.0f64; N];
+        let mut w = [0.0f64; N];
+        let m = N.div_ceil(2);
+        for i in 0..m {
+            let mut zr = (std::f64::consts::PI * (i as f64 + 0.75) / (N as f64 + 0.5)).cos();
+            let mut pp;
+            loop {
+                let mut p1 = 1.0f64;
+                let mut p2 = 0.0f64;
+                for j in 0..N {
+                    let p3 = p2;
+                    p2 = p1;
+                    p1 = ((2.0 * j as f64 + 1.0) * zr * p2 - j as f64 * p3) / (j as f64 + 1.0);
+                }
+                pp = N as f64 * (zr * p1 - p2) / (zr * zr - 1.0);
+                let dz = p1 / pp;
+                zr -= dz;
+                if dz.abs() < 1.0e-15 {
+                    break;
+                }
+            }
+            x[i] = -zr;
+            x[N - 1 - i] = zr;
+            w[i] = 2.0 / ((1.0 - zr * zr) * pp * pp);
+            w[N - 1 - i] = w[i];
+        }
+        (x, w)
+    })
+}
+
+/// Fixed 48-node Gauss–Legendre quadrature of `f` over `[a, b]`.
+fn gauss48_integrate(f: &impl Fn(f64) -> f64, a: f64, b: f64) -> f64 {
+    let (x, w) = gauss_legendre_48();
+    let c1 = 0.5 * (b - a);
+    let c2 = 0.5 * (b + a);
+    let mut s = 0.0;
+    for k in 0..48 {
+        s += w[k] * f(c1 * x[k] + c2);
+    }
+    c1 * s
+}
+
 fn kv_integral_scaled(v: f64, z: f64) -> f64 {
     let t_star = (v / z).asinh();
     // Exponent φ(t) = z(cosh t − 1) − v t; integrand ≈ e^{−(φ(t)−φ(t*))} near peak.
@@ -1705,10 +1755,9 @@ fn kv_integral_scaled(v: f64, z: f64) -> f64 {
     }
     let integrand = |t: f64| (-z * (t.cosh() - 1.0)).exp() * (v * t).cosh();
     if t_star > 1.0e-9 && t_star < upper {
-        adaptive_simpson(&integrand, 0.0, t_star, 1.0e-13, 24)
-            + adaptive_simpson(&integrand, t_star, upper, 1.0e-13, 24)
+        gauss48_integrate(&integrand, 0.0, t_star) + gauss48_integrate(&integrand, t_star, upper)
     } else {
-        adaptive_simpson(&integrand, 0.0, upper, 1.0e-13, 24)
+        gauss48_integrate(&integrand, 0.0, upper)
     }
 }
 

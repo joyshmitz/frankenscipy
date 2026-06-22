@@ -4065,3 +4065,23 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   win). The genuinely-fixed surface: nct.cdf (flip) + ncx2.cdf (narrow). REMAINING real items in bead
   frankenscipy-9i8vd reduce to nct.sf (right-tail series) — ncf/ncx2/NIG cdf are parity-or-win. kv
   (frankenscipy-8qpyn, ~95x) remains the one large outstanding special-fn loss.
+
+## 2026-06-21 - FIX: kv/kve/kn ~95x loss → 3.3x (28.7x faster) via fixed 48-node Gauss-Legendre
+- Agent: cod-a / BlackThrush. Resolved the campaign's largest special-fn loss (frankenscipy-8qpyn).
+  Replaced kv_integral_scaled's two adaptive_simpson(.,.,1e-13,24) calls (~1500 evals/point) with a
+  cached fixed 48-node Gauss-Legendre rule per sub-interval (96 evals/point). The scaled K_v integrand
+  is smooth + single-peaked, so the fixed rule resolves it to machine precision.
+- Same-worker hz1, kv 500k (v=2, z in [0.5,8.5]):
+
+  | | before (adaptive Simpson) | after (fixed Gauss-48) | self | vs SciPy |
+  | --- | ---: | ---: | ---: | ---: |
+  | kv | 7.607 s | 265.19 ms | **28.7x faster** | 3.3x slower (was ~95x; SciPy 80 ms) |
+
+- Accuracy: Python pre-verified 4.5e-14 over 500 random (v,z); shipped Rust matches scipy.special.kv to
+  ≤4e-15 on a spot sweep; 112 in-crate bessel tests pass. Implemented via a standard `gauleg`
+  Newton-on-Legendre node generator cached in OnceLock (no transcription). kve/kn route through the same
+  kernel → also fixed (~28x).
+- STILL OPEN: this removes the CATASTROPHIC loss (7.6s→0.27s, now usable) but kv is still 3.3x slower
+  than SciPy — a full WIN needs the Temme/bessik SERIES (no integral): ascending series K0/K1 for z≤2
+  (uses fsci's iv = I_v + beschb Chebyshev Γ), Steed CF2 for 2<z<30, then the upward K-recurrence. Bead
+  8qpyn updated. The fixed-Gauss is the verified lower-risk partial; Temme is the win.
