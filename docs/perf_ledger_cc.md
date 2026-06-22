@@ -918,3 +918,20 @@ is now 307→149ns = **~2.06× total** (the slowest special kernel halved). Conf
 pre-existing failures, NO new (machine-accurate vs scipy). Provable lever: audit iterative
 convergence tolerances vs the order of the final correction — an over-tight ERRTOL wastes
 iterations at no accuracy benefit. Free file, refreshed-first.
+
+### ✅ lfilter biquad unrolled scalar fast path — FLIPS 1.53× loss → parity/slight win (signal)
+The OPEN lfilter biquad loss (4096 biquad: fsci 37.4 µs vs scipy 24.5 µs = 1.53× SLOWER).
+Root cause: the general `lfilter_with_state` ran the DF2T delay-line update as a branchy
+inner loop over a HEAP `Vec d` (`for j in 0..nfilt-1` with a `j+1 < nfilt-1` boundary branch
++ bounds-checked `b_norm[j+1]`/`a_norm[j+1]`/`d[j+1]` indexing every sample) — whereas
+`sosfilt` already used the optimal fully-unrolled scalar-register biquad form (d1/d2 in
+registers, no indexing/branch). Added byte-identical unrolled fast paths for nfilt==2 (order 1)
+and nfilt==3 (order 2 / biquad) that keep the whole delay line in scalar registers — same float
+ops in the same order as the general recurrence (verified: d[0] reads OLD d[1] before write).
+**MEASURED filtering/lfilter/4096_biquad: 37.4 µs → 24.2 µs = 1.54× self-speedup (criterion
+change −35.9%); now ≈ scipy 24.5 µs (parity, marginally faster).** Conformance: fsci-signal
+GREEN 648/0 (+59 metamorphic), incl. lfilter_with_state_matches_scipy_reference_vectors and
+lfilter_fir_iir_match_scipy. Byte-identical by construction. Lever: when a general N-tap kernel
+serves a hot low-order case, peel a register-unrolled specialization for the common orders
+(1/2) — the heap delay line + per-iter bounds/branch was the entire gap, exactly as sosfilt
+already demonstrated. (filtfilt/lfilter_axis_2d route through the same core → inherit the win.)
