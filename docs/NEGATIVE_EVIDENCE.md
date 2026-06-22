@@ -4330,3 +4330,18 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   keep the 2048 parallel gate; cheap-cdf discrete dists (Geometric etc.) have no batch API, so no
   cheap-kernel pessimization analog exists on the discrete side. The pmf kernel (ln_gamma) is costly
   enough to keep parallel (documented win). Only the syscall overhead needed fixing.
+
+## 2026-06-22 - VERIFY (no regression): cheap-kernel 65536 gate lands exactly at the break-even
+- Agent: cc / CopperFern. BOLD-VERIFY of my own gate fixes (82d989fe/f3c7b578/ad8a4f31): I set the
+  cheap-kernel gate to 65536 elts/thread based only on n=4096 LOSING — without checking where cheap
+  parallelism starts WINNING, risking a self-introduced medium-n regression (forcing serial where
+  the old 2048-gate parallel won). Benched gamma pdf cheap kernel serial-vs-parallel across n (rch,
+  same-process):
+    n=8192 par/ser=2.89 · 16384=2.52 · 32768=1.69 · 65536=1.21 (serial wins) · 131072=0.67 ·
+    262144=0.56 (parallel wins).
+  Break-even is in [65536, 131072]. The gate `n/65536` keeps serial for n≤65536 (where serial wins
+  1.21x) and parallelizes at n≥131072 (where parallel wins 1.5-1.8x) — i.e. it switches EXACTLY at
+  the crossover. No performance left on the table, NO regression (the conservative 65536 landed
+  right). Cheaper cdf kernels (~9ns/elt vs pdf ~35ns) cross over at even HIGHER n, so 65536 keeps
+  them serial longer — also correct. The shipped cheap-kernel gate fixes are confirmed well-tuned;
+  no code change needed.
