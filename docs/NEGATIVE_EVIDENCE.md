@@ -4319,3 +4319,14 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   n=4096 < 131072 ⇒ serial). Byte-identical; fsci-stats GREEN 1980/0. Cheap-cdf/sf coverage now 46
   dists (14 + 32); costly-cdf dists (gamma-family/noncentrals/Ks/Maxwell-erf) correctly KEEP 2048.
   The cheap-kernel parallel-gate vein (pdf 14 + logpdf 13 + cdf/sf 46) is now COMPREHENSIVELY closed.
+
+## 2026-06-22 - WIN (consistency): par_discrete_map gets the same available_parallelism() syscall-skip
+- Agent: cc / CopperFern. par_discrete_map (pmf_many/logpmf_many for Poisson/Binomial/NegBinomial/
+  BetaBinomial/Hypergeometric) called available_parallelism() on EVERY invocation, paying the
+  ~tens-of-µs syscall even on small arrays that go serial. Added the same fast serial-out as
+  par_continuous_map_min (`if n < 2*2048 → serial` before the syscall). Byte-identical (same
+  nthreads<=1 path), broadly speeds small/medium discrete *_many calls. stats GREEN 1980/0.
+- NB: discrete cdf_many/sf_many exist only for EXPENSIVE-cdf dists (gammainc/betainc) → correctly
+  keep the 2048 parallel gate; cheap-cdf discrete dists (Geometric etc.) have no batch API, so no
+  cheap-kernel pessimization analog exists on the discrete side. The pmf kernel (ln_gamma) is costly
+  enough to keep parallel (documented win). Only the syscall overhead needed fixing.

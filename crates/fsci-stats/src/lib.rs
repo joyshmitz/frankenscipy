@@ -30775,6 +30775,12 @@ where
     F: Fn(u64) -> f64 + Sync,
 {
     let n = ks.len();
+    // Fast serial path: skip the (surprisingly costly ~tens-of-µs) available_parallelism()
+    // syscall when the array can't fill two threads at the 2048 gate. Byte-identical to the
+    // old nthreads<=1 branch; mirrors par_continuous_map_min.
+    if n < 2 * 2048 {
+        return ks.iter().map(|&k| f(k)).collect();
+    }
     let avail = std::thread::available_parallelism()
         .map(std::num::NonZero::get)
         .unwrap_or(1);
