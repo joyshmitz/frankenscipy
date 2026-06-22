@@ -3949,3 +3949,29 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
 - ACTIONABLE: the real lever for ndimage geometric transforms is a SIMD/cache-blocked `sample_interpolated`
   (vectorize the order-(k+1)^ndim spline-weight gather + weighted sum), not more threads. Until then,
   affine/zoom/shift are honest parity/losses, not domination wins. Filed as the family's measured ceiling.
+
+## 2026-06-21 - MAJOR LOSS FOUND: special kv/kve/kn ~95x SLOWER than SciPy (per-element quadrature) + hyp1f1/hyp2f1 wins
+- Agent: cod-a / BlackThrush. Applied the "parallel != winning" lesson (from the ndimage shift/affine
+  measured losses) to special: spot-measured parallel special functions that had never been perf-verified
+  vs SciPy. Found a glaring loss.
+- Same-worker hz1, 500k array (z in [0,0.8]); SciPy = scipy.special:
+
+  | fn | fsci | SciPy | ratio |
+  | --- | ---: | ---: | ---: |
+  | hyp1f1 | 10.53 ms | 38.23 ms | **3.6x faster** (WIN) |
+  | hyp2f1 | 15.28 ms | 71.88 ms | **4.7x faster** (WIN) |
+  | **kv** | **7.607 s** | 79.99 ms | **~95x SLOWER (15 us/elem!)** |
+
+- ROOT CAUSE (bessel.rs `kv_scaled_value` → `kv_integral_scaled`): for small/moderate z (z<30, the
+  COMMON case), K_v is computed by a PER-ELEMENT adaptive-Simpson quadrature of
+  ∫ e^{-z(cosh t-1)} cosh(vt) dt — ~1500 cosh/exp evals per element. Integer order does 2 such integrals
+  + recurrence. SciPy/Amos use a Temme series for K_0/K_1 (~tens of ops) + the K-recurrence — no per-point
+  integration. The large-z path (DLMF 10.40.2 asymptotic, `kv_asymptotic_scaled`) is already fast; only
+  the small-z integral path is pathological. **kve and kn route through the same kernel → also ~95x slow.**
+- FIX (high-priority, filed): replace `kv_integral_scaled` (small z) with the Temme/Numerical-Recipes
+  `bessik` algorithm — ascending series for K_0,K_1 at z<=2, Steed CF2 at z>2, then the upward
+  K-recurrence (already present). NOT byte-identical (new algorithm) → must verify accuracy vs SciPy
+  (Python cross-check of the series + conformance) before shipping. Expected: ~95x loss → likely a WIN
+  (Temme series is faster than SciPy's per the gamma/erf pattern). Deferred from this session: an
+  accuracy-critical special-function kernel rewrite should not be rushed at extreme context depth where a
+  correctness regression is worse than slow-but-correct. hyp1f1/hyp2f1 wins recorded above (no action).
