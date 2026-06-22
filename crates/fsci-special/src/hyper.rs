@@ -245,7 +245,12 @@ const HYPER_UNSUPPORTED_CHAIN: &[HypergeometricBranch] =
     &[HypergeometricBranch::UnsupportedAnalyticContinuation];
 const HYP2F1_DIVERGENT_CHAIN: &[HypergeometricBranch] =
     &[HypergeometricBranch::DivergentAtUnitArgument];
-const HYPERU_QUADRATURE_STEPS: usize = 4096;
+// The log-space integrand's accuracy plateaus at ~3.2e-8 vs SciPy for STEPS>=512 (256 degrades to
+// 8.5e-4) — the 4096 steps were ~8x over-resolved with no accuracy gain. 768 keeps the identical
+// 3.2e-8 floor with a comfortable margin over the 512 plateau-start, cutting ~5.3x of the per-point
+// quadrature cost (the dominant term in hyperu's SciPy gap). A true WIN still needs the Kummer series
+// (no integral); this is the verified no-accuracy-loss partial. frankenscipy-tkd3v
+const HYPERU_QUADRATURE_STEPS: usize = 768;
 const HYPERU_LOG_UNDERFLOW: f64 = -745.0;
 const HYPERU_LOG_OVERFLOW: f64 = 709.0;
 

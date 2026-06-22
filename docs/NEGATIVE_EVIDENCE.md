@@ -4129,3 +4129,16 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   3.5x → 1.92x. Still a residual loss (per-call exp/setup overhead caps the byte-identical path); the
   full WIN still needs the erfi-relation (with a tighter erfi_scalar) or the Cephes dawsn rational
   (machine-accurate AND fast) — bead 13e1r. This partial is the safe, no-regression increment.
+
+## 2026-06-22 - hyperu 6.8x partial: quadrature steps 4096→768 (157x→23x, same accuracy, conformance GREEN)
+- Agent: cod-a / BlackThrush. The hyperu per-element log-space Simpson used 4096 steps, but its accuracy
+  vs SciPy PLATEAUS at ~3.2e-8 for STEPS≥512 (256 degrades to 8.5e-4; 512=1024=2048=4096 all 3.2e-8,
+  Python-verified) — 4096 was ~8x over-resolved with zero accuracy gain. Reduced to 768 (margin over the
+  512 plateau-start).
+- Same-worker hz1, hyperu 50k (a=1.5,b=2.5): **1115 ms → 162.9 ms (6.8x faster)**; vs SciPy 7.08 ms the
+  gap closes from ~157x → ~23x slower. Accuracy unchanged (3.2e-8 vs scipy at both step counts); hyper
+  lib tests GREEN incl. hyperu_matches_scipy_reference_points.
+- Still a large residual loss (23x) — the integrand's own 3.2e-8 floor and the per-point quadrature mean
+  a true WIN needs the Kummer/asymptotic SERIES (no integral, machine-accurate AND fast). This is the
+  verified no-accuracy-loss partial; bead tkd3v stays open for the series. Same pattern as the dawsn
+  NMAX reduction (over-conservative fixed loop bound).
