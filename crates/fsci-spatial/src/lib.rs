@@ -2023,7 +2023,14 @@ impl KDTree {
 
         let mut indices: Vec<usize> = (0..data.len()).collect();
         let mut nodes = Vec::with_capacity(data.len());
-        build_kdtree(data, &mut indices, 0, &mut nodes, dim);
+        // Flatten points into one contiguous row-major buffer up front: the
+        // O(n log n) build partitions read `coords[idx*dim + split_dim]` instead
+        // of chasing a scattered per-point `Vec<f64>` pointer on every compare
+        // (the median `select_nth_unstable_by` did ~n·log n such chases), and
+        // each node's point is cloned from this contiguous slab. Same f64 values
+        // and same comparator => byte-identical tree.
+        let coords: Vec<f64> = data.iter().flatten().copied().collect();
+        build_kdtree(&coords, &mut indices, 0, &mut nodes, dim);
 
         Ok(Self { nodes, dim })
     }
@@ -2665,7 +2672,7 @@ fn ball_search_count(nodes: &[KDNode], node_idx: usize, query: &[f64], r_sq: f64
 }
 
 fn build_kdtree(
-    data: &[Vec<f64>],
+    coords: &[f64],
     indices: &mut [usize],
     depth: usize,
     nodes: &mut Vec<KDNode>,
@@ -2681,14 +2688,14 @@ fn build_kdtree(
 
     // Partition by the split dimension to find the median in O(N) time
     indices.select_nth_unstable_by(median, |&a, &b| {
-        data[a][split_dim].total_cmp(&data[b][split_dim])
+        coords[a * dim + split_dim].total_cmp(&coords[b * dim + split_dim])
     });
 
     let node_idx = nodes.len();
     let point_idx = indices[median];
 
     nodes.push(KDNode {
-        point: data[point_idx].clone(),
+        point: coords[point_idx * dim..][..dim].to_vec(),
         index: point_idx,
         left: None,
         right: None,
@@ -2698,8 +2705,8 @@ fn build_kdtree(
     let (left_indices, right_part) = indices.split_at_mut(median);
     let right_indices = &mut right_part[1..]; // skip median
 
-    let left = build_kdtree(data, left_indices, depth + 1, nodes, dim);
-    let right = build_kdtree(data, right_indices, depth + 1, nodes, dim);
+    let left = build_kdtree(coords, left_indices, depth + 1, nodes, dim);
+    let right = build_kdtree(coords, right_indices, depth + 1, nodes, dim);
 
     nodes[node_idx].left = left;
     nodes[node_idx].right = right;

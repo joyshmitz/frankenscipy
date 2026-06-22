@@ -6,6 +6,51 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-22 - CopperFern - KDTree build flat-coords lever — FLIPS a REAL ~2x build loss to a ~1.9x WIN (3.69x self-speedup at n=400k); query already dominates 6.8-9.6x
+
+- Agent: CopperFern (claude-code / claude-opus-4-8).
+- Decision: KEEP. `KDTree::new` built over `&[Vec<f64>]` and the O(n log n)
+  median `select_nth_unstable_by` compared `data[a][split_dim]` — a scattered
+  per-point `Vec<f64>` pointer chase on every one of ~n·log n comparisons —
+  then cloned each node's point from the scattered source (n small allocs).
+  scipy's cKDTree builds on a flat contiguous coordinate array. Fix: flatten to
+  one row-major `coords: Vec<f64>` up front; partition reads
+  `coords[idx*dim + split_dim]`, node points clone from the contiguous slab.
+  Same f64 values, same comparator => byte-identical tree (queries untouched).
+- GENUINE equal-hardware gap (both sides on the SAME box, IDENTICAL points/queries
+  dumped to /tmp; fsci best-of bin, scipy `cKDTree` best-of). d=3, nq=20000.
+
+KDTree BUILD (ms):
+
+| n | fsci before | fsci after | SciPy cKDTree | before vs SciPy | after vs SciPy | self |
+| ---: | ---: | ---: | ---: | --- | --- | --- |
+| 20000 | 3.762 | 2.548 | 4.734 | 1.26x faster | 1.86x faster | 1.48x |
+| 100000 | 30.051 | 14.863 | 28.192 | 1.07x slower | 1.90x faster | 2.02x |
+| 400000 | 261.844 | 71.006 | 132.898 | 1.97x SLOWER | 1.87x faster | 3.69x |
+
+KDTree QUERY (already dominant — `query_many`/`query_k_many` are rayon-parallel
+across queries; scipy default `workers=1` is serial; unchanged by this patch):
+
+| n | fsci k=1 | SciPy k=1 | k=1 | fsci k=8 | SciPy k=8 | k=8 |
+| ---: | ---: | ---: | --- | ---: | ---: | --- |
+| 20000 | 1.67 ms | 12.95 ms | 7.7x faster | 4.21 ms | 33.83 ms | 8.0x faster |
+| 100000 | 1.94 ms | 15.76 ms | 8.1x faster | 4.88 ms | 37.34 ms | 7.7x faster |
+| 400000 | 3.37 ms | 27.11 ms | 8.0x faster | 8.21 ms | 67.01 ms | 8.2x faster |
+
+- Gates: 218 `fsci-spatial --lib` tests pass incl. `kdtree_query_match_scipy`,
+  `kdtree_query_matches_scipy_reference_values`,
+  `nearest_neighbors_kdtree_matches_brute_force_bitwise`,
+  `k_nearest_neighbors_kdtree_matches_brute_force_bitwise`,
+  `kdtree_query_{many,k_many,ball_point_many}_matches_per_query`. clippy on the
+  touched build region clean (2 pre-existing `neg_cmp_op_on_partial_ord` warnings
+  at lines 551/1330 in pdist/cdist, not this patch). `git diff --check` clean.
+  Whole-file `cargo fmt` has pre-existing violations in pdist/cdist code (out of
+  scope, shared tree) — the changed build region is fmt-correct.
+- Extend: same flat-coords lever fits the per-node `point: Vec<f64>` still kept
+  on KDNode (dual-tree query reads chase it); a full coords-by-index refactor
+  could shave query traversal further, but query already wins ~8x so it is not
+  the bottleneck. The build was the only un-dominated KDTree row.
+
 ## 2026-06-22 - CopperFern - linear_sum_assignment flat-buffer cache-locality lever — FLIPS a REAL equal-hardware loss to a WIN (1.62x self-speedup, now 1.05-1.06x faster than SciPy)
 
 - Agent: CopperFern (claude-code / claude-opus-4-8).
