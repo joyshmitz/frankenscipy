@@ -6,6 +6,47 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-22 - CopperFern - linear_sum_assignment flat-buffer cache-locality lever — FLIPS a REAL equal-hardware loss to a WIN (1.62x self-speedup, now 1.05-1.06x faster than SciPy)
+
+- Agent: CopperFern (claude-code / claude-opus-4-8).
+- Decision: KEEP. `shortest_augmenting_path_rectangular` took `&[Vec<f64>]` and
+  read `cost_matrix[row][col]` through per-row `Vec` indirection — each row a
+  separate heap allocation scattered across memory, so the O(n) inner
+  reduced-cost scans miss cache more as n grows. SciPy's LAPJVsp solves on a
+  flat contiguous C array. Fix: flatten to one row-major `Vec<f64>` once at
+  entry (one O(n²) copy, cheap vs the O(n³) augmenting-path work) and read
+  contiguous row slices `&flat[row*cols..][..cols]`. Same values, same access
+  order, same algorithm => byte-identical output.
+- This is a GENUINE gap (unlike the label-mean/linkage artifacts below): both
+  sides measured on the SAME local box on IDENTICAL cost matrices.
+
+| n | fsci before | fsci after | SciPy | before vs SciPy | after vs SciPy | self |
+| ---: | ---: | ---: | ---: | --- | --- | --- |
+| 256 | 1.784 ms | 1.567 ms | 1.638 ms | 1.09x slower | 1.05x faster | 1.14x |
+| 512 | 11.682 ms | 7.775 ms | 8.211 ms | 1.42x slower | 1.06x faster | 1.50x |
+| 1000 | 61.201 ms | 37.823 ms | 39.673 ms | 1.54x slower | 1.05x faster | 1.62x |
+
+- Probe: throwaway `perf_lsap_ab` bin (since removed) dumped the LCG cost matrix
+  to `/tmp`, best-of-20 (best-of-8 at n=1000) `Instant` timing of
+  `linear_sum_assignment`; the IDENTICAL bytes fed to
+  `scipy.optimize.linear_sum_assignment`, same best-of. Warm
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cc`, disk-neutral.
+- Gates: 313 `fsci-opt --lib` tests pass incl. `linear_sum_assignment_match_scipy`,
+  `linear_sum_assignment_matches_scipy_reference_values`,
+  `linear_sum_assignment_cost_matches_brute_force` (optimality vs brute force),
+  and metamorphic `mr_linear_sum_assignment_validity`; `cargo clippy
+  -p fsci-opt --lib --no-deps` clean; `cargo fmt --check -p fsci-opt` clean;
+  `git diff --check` clean. Local scipy-oracle conformance
+  (`diff_opt_linear_sum_assignment`) compiled+ran on rch worker `hz2` but the
+  worker lacks the `scipy` Python module (known INFRA gap); local build blocked
+  only by warm-dir toolchain churn (cache built by a newer nightly). The lib
+  scipy-reference tests cover the same surface. Byte-identical-by-construction
+  layout change => no numerical risk.
+- Retry/extend: the same `&[Vec<f64>]`→flat-buffer lever applies to any other
+  dense O(n²)/O(n³) inner-loop kernel that still chases per-row `Vec`
+  indirection (transpose path here already builds a `Vec<Vec<f64>>`; it gets
+  flattened inside, so the rows>cols branch wins too).
+
 ## 2026-06-22 - CopperFern - ndimage label `mean` AND cluster `linkage` recorded "losses" are RCH-worker-vs-local-SciPy ARTIFACTS — both already DOMINATE on equal hardware
 
 - Agent: CopperFern (claude-code / claude-opus-4-8).

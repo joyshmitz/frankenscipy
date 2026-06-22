@@ -814,6 +814,16 @@ pub fn quadratic_assignment(
 fn shortest_augmenting_path_rectangular(cost_matrix: &[Vec<f64>]) -> Vec<usize> {
     let row_count = cost_matrix.len();
     let col_count = cost_matrix[0].len();
+    // Flatten to one contiguous row-major buffer. scipy's LAPJVsp solves on a
+    // flat C array; the per-row `Vec<f64>` indirection here scatters each row
+    // across the heap, so the O(n) inner reduced-cost scans miss cache more as
+    // n grows (measured 1.09x→1.54x slower than scipy from n=256→1000). A single
+    // O(n²) copy up front (cheap vs the O(n³) augmenting-path work) restores
+    // contiguous, cache-friendly row access while staying byte-identical.
+    let mut flat = Vec::with_capacity(row_count * col_count);
+    for row in cost_matrix {
+        flat.extend_from_slice(row);
+    }
     let mut u = vec![0.0; row_count];
     let mut v = vec![0.0; col_count];
     let mut col4row = vec![UNASSIGNED; row_count];
@@ -822,7 +832,7 @@ fn shortest_augmenting_path_rectangular(cost_matrix: &[Vec<f64>]) -> Vec<usize> 
 
     for cur_row in 0..row_count {
         let (sink, min_val) =
-            scratch.shortest_augmenting_path(cost_matrix, &u, &v, &row4col, cur_row);
+            scratch.shortest_augmenting_path(&flat, col_count, &u, &v, &row4col, cur_row);
 
         u[cur_row] += min_val;
         for row in 0..row_count {
@@ -879,7 +889,8 @@ impl ShortestAugmentingPathScratch {
     #[inline(always)]
     fn shortest_augmenting_path(
         &mut self,
-        cost_matrix: &[Vec<f64>],
+        cost: &[f64],
+        cost_cols: usize,
         u: &[f64],
         v: &[f64],
         row4col: &[usize],
@@ -898,7 +909,7 @@ impl ShortestAugmentingPathScratch {
 
         let mut lowest = f64::INFINITY;
         let mut best_remaining_index = 0usize;
-        let cost_row = &cost_matrix[row];
+        let cost_row = &cost[row * cost_cols..][..cost_cols];
         let row_dual = u[row];
         self.sr[row] = true;
 
@@ -926,7 +937,7 @@ impl ShortestAugmentingPathScratch {
         loop {
             let mut lowest = f64::INFINITY;
             let mut best_remaining_index = 0usize;
-            let cost_row = &cost_matrix[row];
+            let cost_row = &cost[row * cost_cols..][..cost_cols];
             let row_dual = u[row];
             self.sr[row] = true;
 
