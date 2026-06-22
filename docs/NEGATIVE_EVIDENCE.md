@@ -4455,3 +4455,13 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
 - RESULT: Exponential ppf_many n=4096 32.8µs (was 351µs) = 10.7x flip; fsci-stats GREEN 1981/0;
   byte-identical (order-preserving). Completes the stats batch-method gate vein: pdf/logpdf/cdf/sf
   (cdf_sf_is_cheap) + ppf/isf (ppf_isf_is_cheap), independently classified.
+
+## 2026-06-22 - WIN: par_discrete_map gate 2048→8192 (discrete pmf_many ~2.1x@4096 pessimization)
+- Agent: cc / CopperFern. par_discrete_map serves ONLY moderate ln_gamma/ln_beta pmf_many/logpmf_many
+  (Poisson/Binomial/NegBinomial/BetaBinomial/Hypergeometric, ~50-90ns/elt) — all same class. Its uniform
+  2048 gate pessimized at n=4096: Binomial pmf_many par/ser 2.10@4096, 0.95@16384 (break-even ~16k),
+  0.51@65536. Raised the gate to 8192 (single constant; serial below ~16k where serial wins, parallel
+  beyond where it wins). Byte-identical (order-preserving). fsci-stats GREEN 1980/0.
+- Unlike continuous (mixed cheap-pdf + expensive-cdf needing per-caller flags), par_discrete_map's
+  callers are ALL one moderate class, so a single gate constant is correct for all. This is the discrete
+  analog of the beta/betaln break-even (~20k). The discrete batch-method gate is now tuned too.

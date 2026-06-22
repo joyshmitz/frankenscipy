@@ -30944,16 +30944,18 @@ where
     F: Fn(u64) -> f64 + Sync,
 {
     let n = ks.len();
-    // Fast serial path: skip the (surprisingly costly ~tens-of-µs) available_parallelism()
-    // syscall when the array can't fill two threads at the 2048 gate. Byte-identical to the
-    // old nthreads<=1 branch; mirrors par_continuous_map_min.
-    if n < 2 * 2048 {
+    // Gate at 8192 elts/thread: every caller is a MODERATE ln_gamma/ln_beta pmf/logpmf
+    // (Poisson/Binomial/NegBinomial/BetaBinomial/Hypergeometric, ~50-90ns/elt). At the old
+    // 2048 gate, n=4096 spawned 2 threads and ran ~2.1x SLOWER than serial (measured,
+    // Binomial); break-even is ~16k — so stay serial below that (also skips the
+    // ~tens-of-µs available_parallelism() syscall). Byte-identical (order-preserving).
+    if n < 2 * 8192 {
         return ks.iter().map(|&k| f(k)).collect();
     }
     let avail = std::thread::available_parallelism()
         .map(std::num::NonZero::get)
         .unwrap_or(1);
-    let nthreads = (n / 2048).clamp(1, avail);
+    let nthreads = (n / 8192).clamp(1, avail);
     if nthreads <= 1 {
         return ks.iter().map(|&k| f(k)).collect();
     }
