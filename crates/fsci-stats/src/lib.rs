@@ -181,13 +181,21 @@ pub trait ContinuousDistribution {
     /// byte-identical to mapping it. Wins for dists with a costly special-function cdf; the gate
     /// is raised for cheap closed-form cdfs (see [`cdf_sf_is_cheap`](Self::cdf_sf_is_cheap)) so the
     /// thread spawn does not pessimise them. Default for all continuous dists.
+    /// Parallel gate (min elts/thread) for `cdf_many`/`sf_many`. Default derives from
+    /// [`cdf_sf_is_cheap`](Self::cdf_sf_is_cheap) (65536 cheap-elementary, else 2048 costly
+    /// gammainc/betainc). Erf/lgamma-class cdfs with an INTERMEDIATE per-elt cost (~25-50ns,
+    /// break-even ~50k — e.g. Normal/erfc) override this to ~32768 directly, since they are
+    /// neither elementary-cheap nor costly. Higher = stays serial longer.
+    fn cdf_sf_par_min(&self) -> usize {
+        if self.cdf_sf_is_cheap() { 65536 } else { 2048 }
+    }
+
     #[must_use]
     fn cdf_many(&self, xs: &[f64]) -> Vec<f64>
     where
         Self: Sync,
     {
-        let gate = if self.cdf_sf_is_cheap() { 65536 } else { 2048 };
-        par_continuous_map_min(xs, gate, |x| self.cdf(x))
+        par_continuous_map_min(xs, self.cdf_sf_par_min(), |x| self.cdf(x))
     }
 
     /// Survival function at many points — work-gated parallel map of the per-point `sf`.
@@ -196,8 +204,7 @@ pub trait ContinuousDistribution {
     where
         Self: Sync,
     {
-        let gate = if self.cdf_sf_is_cheap() { 65536 } else { 2048 };
-        par_continuous_map_min(xs, gate, |x| self.sf(x))
+        par_continuous_map_min(xs, self.cdf_sf_par_min(), |x| self.sf(x))
     }
 
     /// Whether `ppf`/`isf` are CHEAP closed forms (analytic quantile, e.g. one
@@ -210,6 +217,13 @@ pub trait ContinuousDistribution {
         false
     }
 
+    /// Parallel gate (min elts/thread) for `ppf_many`/`isf_many`. Default derives from
+    /// [`ppf_isf_is_cheap`](Self::ppf_isf_is_cheap). Erf-inverse-class quantiles (ndtri,
+    /// ~50ns, break-even ~90k — e.g. Normal) override directly.
+    fn ppf_isf_par_min(&self) -> usize {
+        if self.ppf_isf_is_cheap() { 65536 } else { 2048 }
+    }
+
     /// Inverse cdf at many probabilities — work-gated parallel map of the per-point `ppf`.
     /// Gate raised for cheap closed-form quantiles (see [`ppf_isf_is_cheap`](Self::ppf_isf_is_cheap)).
     #[must_use]
@@ -217,8 +231,7 @@ pub trait ContinuousDistribution {
     where
         Self: Sync,
     {
-        let gate = if self.ppf_isf_is_cheap() { 65536 } else { 2048 };
-        par_continuous_map_min(qs, gate, |q| self.ppf(q))
+        par_continuous_map_min(qs, self.ppf_isf_par_min(), |q| self.ppf(q))
     }
 
     /// Inverse survival at many probabilities — work-gated parallel map of the per-point `isf`.
@@ -227,8 +240,7 @@ pub trait ContinuousDistribution {
     where
         Self: Sync,
     {
-        let gate = if self.ppf_isf_is_cheap() { 65536 } else { 2048 };
-        par_continuous_map_min(qs, gate, |q| self.isf(q))
+        par_continuous_map_min(qs, self.ppf_isf_par_min(), |q| self.isf(q))
     }
     /// Log cumulative distribution function.
     fn logcdf(&self, x: f64) -> f64 {
@@ -984,6 +996,17 @@ impl Normal {
 }
 
 impl ContinuousDistribution for Normal {
+    // erfc cdf/ndtri ppf are intermediate-cost (~25-50ns): pessimized ~4x@n=4096 under the
+    // default 2048 gate; measured break-even ~55k (cdf) / ~90k (ppf). Gate them to the
+    // moderate tier (cdf 32768 → parallel@65k; ppf 65536 → parallel@131k) so small/medium
+    // arrays stay serial. Byte-identical (order-preserving). Normal is the most common dist.
+    fn cdf_sf_par_min(&self) -> usize {
+        32768
+    }
+    fn ppf_isf_par_min(&self) -> usize {
+        65536
+    }
+
     fn pdf(&self, x: f64) -> f64 {
         let z = (x - self.loc) / self.scale;
         (-0.5 * z * z).exp() / (self.scale * (2.0 * PI).sqrt())

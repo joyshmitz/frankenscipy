@@ -4465,3 +4465,18 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
 - Unlike continuous (mixed cheap-pdf + expensive-cdf needing per-caller flags), par_discrete_map's
   callers are ALL one moderate class, so a single gate constant is correct for all. This is the discrete
   analog of the beta/betaln break-even (~20k). The discrete batch-method gate is now tuned too.
+
+## 2026-06-22 - WIN: Normal cdf_many/ppf_many moderate-gate (most common dist; 5.9x/6.2x flip@4096)
+- Agent: cc / CopperFern. Normal uses the TRAIT-default cdf_many/sf_many/ppf_many/isf_many; its erfc cdf
+  (~25-50ns) and ndtri ppf (~50ns) are INTERMEDIATE cost — neither elementary-cheap (so not flagged
+  cdf_sf_is_cheap) nor costly. Under the default 2048 gate they pessimized: cdf par/ser 4.08@4096,
+  0.91@65536 (break-even ~55k); ppf 3.44@4096, 1.06@65536 (~90k). The cheap-flag 65536 gate would
+  mildly mis-fit (different cdf vs ppf break-evens), so refactored the binary flag into a gate-VALUE
+  method (cdf_sf_par_min / ppf_isf_par_min; default derives from the existing is_cheap bools — zero
+  churn to the 46+40 existing flags). Normal overrides cdf_sf_par_min→32768 (parallel@65k), ppf_isf_par_min
+  →65536 (parallel@131k).
+- RESULT: Normal cdf_many 369→62.8µs (5.9x), ppf_many 400→64.7µs (6.2x) at n=4096; byte-identical
+  (order-preserving); fsci-stats GREEN 1981/0. HIGH value — Normal is the most common distribution.
+  The gate-value method now enables precise per-(dist,method) tuning; other erf-class stats dists
+  (HalfNormal/FoldedNormal/TruncNorm/Maxwell/Moyal/Levy/SkewNorm) are the same intermediate class —
+  FOLLOW-UP (bench each, override to ~32768).
