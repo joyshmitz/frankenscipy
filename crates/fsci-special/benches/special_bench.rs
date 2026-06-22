@@ -248,9 +248,7 @@ fn bench_special_erfinv_array(c: &mut Criterion) {
 
     let n = 100_000usize;
     let denom = (n - 1) as f64;
-    let y: Vec<f64> = (0..n)
-        .map(|i| -0.95 + 1.9 * (i as f64) / denom)
-        .collect();
+    let y: Vec<f64> = (0..n).map(|i| -0.95 + 1.9 * (i as f64) / denom).collect();
     let input = real_vec(&y);
 
     group.bench_function("rust_current_n100000", |b| {
@@ -619,7 +617,9 @@ print(f"{elapsed:.17f}")
         .expect("open scipy zeta oracle stdin")
         .write_all(script.as_bytes())
         .expect("write scipy zeta oracle script");
-    let output = child.wait_with_output().expect("wait for scipy zeta oracle");
+    let output = child
+        .wait_with_output()
+        .expect("wait for scipy zeta oracle");
     if !output.status.success() {
         eprintln!(
             "scipy zeta oracle failed: {}",
@@ -643,18 +643,12 @@ fn bench_special_zeta_array(c: &mut Criterion) {
 
     let n = 100_000usize;
     let denom = (n - 1).max(1) as f64;
-    let values: Vec<f64> = (0..n)
-        .map(|i| 1.1 + 8.9 * (i as f64) / denom)
-        .collect();
+    let values: Vec<f64> = (0..n).map(|i| 1.1 + 8.9 * (i as f64) / denom).collect();
     let input = real_vec(&values);
 
     group.bench_function("rust_scalar_loop_n100000", |b| {
         b.iter(|| {
-            let out: Vec<f64> = values
-                .iter()
-                .copied()
-                .map(zeta_scalar)
-                .collect();
+            let out: Vec<f64> = values.iter().copied().map(zeta_scalar).collect();
             black_box(out);
         });
     });

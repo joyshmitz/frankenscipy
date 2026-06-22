@@ -4503,6 +4503,23 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   verified no-accuracy-loss partial; bead tkd3v stays open for the series. Same pattern as the dawsn
   NMAX reduction (over-conservative fixed loop bound).
 
+## 2026-06-22 - REJECTED: hyperu integer-shift identity did not produce a vector win
+- Agent: cod-b / BlackThrush. The live `hyperu` BOLD probe was the earlier
+  `(a=1.5,b=2.5,x in [0.5,8.5])` case. It sits on `b = a + 1`, where the confluent integral
+  mathematically collapses to `U(a,a+1,x)=x^-a`; more generally `b = a + m + 1` is a finite
+  moment polynomial. I tested this as a narrow exact fast path before the positive-a Simpson
+  integral, then tightened the `a=1.5` case from `powf(-a)` to `1/(x*sqrt(x))`.
+- Same-machine thinkstation1, warmed `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b`,
+  50k points × 5 iterations via `perf_special bench-hyperu`: current shipped Simpson path measured
+  **32.65 ms/iter** vs SciPy **7.53 ms/iter** = **4.34x slower**. The rebuilt integer-shift branch
+  did not hold a stable win under the same host contention; the final no-LTO check of the tightened
+  half-integer branch measured **291.10 ms/iter** vs SciPy **10.49 ms/iter** = **27.75x slower**.
+- Decision: **REVERTED** the hyperu code lever and tests. The scalar identity is correct, but this
+  branch is not a credible keep as implemented; it adds branch complexity without a measured vector
+  win. The reusable `bench-hyperu` helper remains so future Kummer/asymptotic work can measure the
+  same SciPy ratio directly. `frankenscipy-tkd3v` still needs a real series/asymptotic kernel, not
+  a special-case polynomial shortcut.
+
 ## 2026-06-22 - WIN (loss FLIPPED): nct sf 2.1x LOSS → 2.34x WIN via direct complementary Lenth series
 - Agent: cc / CopperFern. The nct **cdf** was already a fast Lenth series (854baffc, 6x→1.4x win)
   but **sf** still ran a 2000-panel Simpson per call (~2000 erfc evals/pt) — a residual loss.

@@ -372,11 +372,7 @@ pub fn erfc_scalar(x: f64) -> f64 {
         )
     };
     let y = z * p / q;
-    if x < 0.0 {
-        2.0 - y
-    } else {
-        y
-    }
+    if x < 0.0 { 2.0 - y } else { y }
 }
 
 /// Lentz continued fraction kernel for erfc/erfcx (x ≥ ~1):
@@ -407,7 +403,6 @@ fn erfc_cf_h(x: f64) -> f64 {
     }
     h
 }
-
 
 /// Scaled complementary error function erfcx(x) = e^{x²}·erfc(x) for x ≥ ~1,
 /// from the continued fraction (no overflow of the intermediate e^{x²}). Used by
@@ -457,7 +452,6 @@ fn erf_complex_series(z: Complex64) -> Complex64 {
 
     sum * TWO_INV_SQRT_PI
 }
-
 
 // Superseded by the Faddeeva (wofz) relation in erf/erfc_complex_scalar, which
 // has no asymptotic-floor gap near |z| ≈ 4. Kept as a reference implementation.

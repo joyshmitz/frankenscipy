@@ -299,11 +299,11 @@ pub use orthopoly::{
     mathieu_modsem1, mathieu_modsem2, mathieu_odd_coef, mathieu_sem, obl_ang1, obl_ang1_cv, obl_cv,
     obl_cv_seq, obl_rad1, obl_rad1_cv, obl_rad2, obl_rad2_cv, p_roots, pro_ang1, pro_ang1_cv,
     pro_cv, pro_cv_seq, pro_rad1, pro_rad1_cv, pro_rad2, pro_rad2_cv, ps_roots, roots_chebyc,
-    roots_chebys, roots_chebyt, roots_chebyu,
-    roots_gegenbauer, roots_genlaguerre, roots_hermite, roots_hermitenorm, roots_jacobi,
-    roots_laguerre, roots_legendre, roots_sh_chebyt, roots_sh_chebyu, roots_sh_jacobi,
-    roots_sh_legendre, s_roots, sh_chebyt, sh_chebyu, sh_jacobi, sh_legendre, sph_harm, sph_harm_y,
-    sph_harm_y_all, sph_legendre_p, sph_legendre_p_all, t_roots, ts_roots, u_roots, us_roots,
+    roots_chebys, roots_chebyt, roots_chebyu, roots_gegenbauer, roots_genlaguerre, roots_hermite,
+    roots_hermitenorm, roots_jacobi, roots_laguerre, roots_legendre, roots_sh_chebyt,
+    roots_sh_chebyu, roots_sh_jacobi, roots_sh_legendre, s_roots, sh_chebyt, sh_chebyu, sh_jacobi,
+    sh_legendre, sph_harm, sph_harm_y, sph_harm_y_all, sph_legendre_p, sph_legendre_p_all, t_roots,
+    ts_roots, u_roots, us_roots,
 };
 pub use types::{
     Complex64, DispatchPlan, DispatchStep, KernelRegime, SpecialError, SpecialErrorKind,

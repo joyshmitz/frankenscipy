@@ -2542,11 +2542,7 @@ where
 /// overhead. The established break-even for this helper is ~1<<20 even for ~25-30ns
 /// kernels (see GAMMA_FAMILY_PAR_MIN and the error.rs erf/erfc gate). Order-preserving
 /// ⇒ byte-identical to the ungated call either way.
-fn par_map_indices_gated<T, H>(
-    n: usize,
-    real_par_min: usize,
-    f: H,
-) -> Result<Vec<T>, SpecialError>
+fn par_map_indices_gated<T, H>(n: usize, real_par_min: usize, f: H) -> Result<Vec<T>, SpecialError>
 where
     T: Send,
     H: Fn(usize) -> Result<T, SpecialError> + Sync,
@@ -7595,38 +7591,69 @@ mod tests {
     #[test]
     fn expi_match_scipy() {
         // scipy.special.expi (exponential integral Ei).
-        assert!((expi_scalar(1.0) - 1.895_117_816_355_937).abs() < 1e-13, "expi(1)");
-        assert!((expi_scalar(2.0) - 4.954_234_356_001_891).abs() < 1e-12, "expi(2)");
-        assert!((expi_scalar(0.5) - 0.454_219_904_863_173_54).abs() < 1e-13, "expi(0.5)");
-        assert!((expi_scalar(-1.0) - -0.219_383_934_395_520_5).abs() < 1e-13, "expi(-1)=-E1(1)");
+        assert!(
+            (expi_scalar(1.0) - 1.895_117_816_355_937).abs() < 1e-13,
+            "expi(1)"
+        );
+        assert!(
+            (expi_scalar(2.0) - 4.954_234_356_001_891).abs() < 1e-12,
+            "expi(2)"
+        );
+        assert!(
+            (expi_scalar(0.5) - 0.454_219_904_863_173_54).abs() < 1e-13,
+            "expi(0.5)"
+        );
+        assert!(
+            (expi_scalar(-1.0) - -0.219_383_934_395_520_5).abs() < 1e-13,
+            "expi(-1)=-E1(1)"
+        );
     }
 
     #[test]
     fn debye_erfc_exp2_iterated_match_analytic() {
         // Previously-untested helpers. debye(1,0)=1; debye(1,1)=int_0^1 t/(e^t-1) dt.
         assert!((debye(1, 0.0) - 1.0).abs() < 1e-12, "debye(1,0)");
-        assert!((debye(1, 1.0) - 0.777_504_634_112_248_5).abs() < 1e-7, "debye(1,1)");
+        assert!(
+            (debye(1, 1.0) - 0.777_504_634_112_248_5).abs() < 1e-7,
+            "debye(1,1)"
+        );
         // erfc_conv = erfc.
-        assert!((erfc_conv(1.0) - 0.157_299_207_050_285_16).abs() < 1e-12, "erfc_conv(1)");
+        assert!(
+            (erfc_conv(1.0) - 0.157_299_207_050_285_16).abs() < 1e-12,
+            "erfc_conv(1)"
+        );
         // exp2_iterated(x) = exp(exp(x)).
-        assert!((exp2_iterated(0.0) - std::f64::consts::E).abs() < 1e-12, "exp2_iterated(0)=e");
+        assert!(
+            (exp2_iterated(0.0) - std::f64::consts::E).abs() < 1e-12,
+            "exp2_iterated(0)=e"
+        );
     }
 
     #[test]
     fn numerical_diff_helpers_match_analytic() {
         // Numerical-diff helpers, exact (within FD roundoff) for low-degree polys.
         // f=x^2: f''(2)=2.
-        assert!((central_diff2(|x: f64| x * x, 2.0, 0.01) - 2.0).abs() < 1e-6, "central_diff2");
+        assert!(
+            (central_diff2(|x: f64| x * x, 2.0, 0.01) - 2.0).abs() < 1e-6,
+            "central_diff2"
+        );
         // f=x0^2+x1^2: grad at [1,2]=[2,4]; Hessian diag 2, off-diag 0.
         let g = gradient_approx(|x: &[f64]| x[0] * x[0] + x[1] * x[1], &[1.0, 2.0], 0.001);
-        assert!((g[0] - 2.0).abs() < 1e-5 && (g[1] - 4.0).abs() < 1e-5, "gradient_approx");
+        assert!(
+            (g[0] - 2.0).abs() < 1e-5 && (g[1] - 4.0).abs() < 1e-5,
+            "gradient_approx"
+        );
         let h = hessian_approx(|x: &[f64]| x[0] * x[0] + x[1] * x[1], &[1.0, 2.0], 0.01);
         assert!(
             (h[0][0] - 2.0).abs() < 1e-4 && (h[1][1] - 2.0).abs() < 1e-4 && h[0][1].abs() < 1e-4,
             "hessian_approx"
         );
         // f(x)=[x0*x1, x0+x1] at [2,3]: Jacobian [[3,2],[1,1]].
-        let j = jacobian_approx(|x: &[f64]| vec![x[0] * x[1], x[0] + x[1]], &[2.0, 3.0], 0.001);
+        let j = jacobian_approx(
+            |x: &[f64]| vec![x[0] * x[1], x[0] + x[1]],
+            &[2.0, 3.0],
+            0.001,
+        );
         assert!(
             (j[0][0] - 3.0).abs() < 1e-5
                 && (j[0][1] - 2.0).abs() < 1e-5
@@ -7639,9 +7666,18 @@ mod tests {
     #[test]
     fn special_scalar_helpers_match_analytic() {
         // Previously-untested scalar helpers vs analytic/numpy values.
-        assert!((arcsinh(1.0) - (1.0 + 2.0_f64.sqrt()).ln()).abs() < 1e-12, "arcsinh(1)");
-        assert!((arctanh(0.5) - 0.549_306_144_334_054_9).abs() < 1e-12, "arctanh(0.5)");
-        assert!((log_comb(5.0, 2.0) - 10.0_f64.ln()).abs() < 1e-12, "log C(5,2)=ln10");
+        assert!(
+            (arcsinh(1.0) - (1.0 + 2.0_f64.sqrt()).ln()).abs() < 1e-12,
+            "arcsinh(1)"
+        );
+        assert!(
+            (arctanh(0.5) - 0.549_306_144_334_054_9).abs() < 1e-12,
+            "arctanh(0.5)"
+        );
+        assert!(
+            (log_comb(5.0, 2.0) - 10.0_f64.ln()).abs() < 1e-12,
+            "log C(5,2)=ln10"
+        );
         assert!((sinc_squared(0.0) - 1.0).abs() < 1e-12, "sinc^2(0)=1");
         // central_diff of x^2 at x=2 is exactly 2x=4 (quadratic -> O(h^2) error vanishes).
         assert!(
@@ -7653,8 +7689,14 @@ mod tests {
     #[test]
     fn struve_match_scipy() {
         // scipy.special.struve (Struve function H_v(x)).
-        assert!((struve(0.0, 1.0) - 0.568_656_627_048_288_1).abs() < 1e-13, "struve(0,1)");
-        assert!((struve(1.0, 2.0) - 0.646_763_728_283_562_2).abs() < 1e-13, "struve(1,2)");
+        assert!(
+            (struve(0.0, 1.0) - 0.568_656_627_048_288_1).abs() < 1e-13,
+            "struve(0,1)"
+        );
+        assert!(
+            (struve(1.0, 2.0) - 0.646_763_728_283_562_2).abs() < 1e-13,
+            "struve(1,2)"
+        );
     }
 
     #[test]
@@ -7723,9 +7765,18 @@ mod tests {
     fn gdtr_pdtr_match_scipy() {
         // scipy.special gamma CDF (gdtr) and Poisson CDF/inverse (pdtr/pdtri).
         use crate::gamma::{gdtr, pdtr, pdtri};
-        assert!((gdtr(1.0, 2.0, 3.0) - 0.800_851_726_528_544_2).abs() < 1e-13, "gdtr(1,2,3)");
-        assert!((pdtr(2.0, 3.0) - 0.423_190_081_126_843_64).abs() < 1e-13, "pdtr(2,3)");
-        assert!((pdtri(2.0, 0.4) - 3.105_378_597_263_35).abs() < 1e-11, "pdtri(2,0.4)");
+        assert!(
+            (gdtr(1.0, 2.0, 3.0) - 0.800_851_726_528_544_2).abs() < 1e-13,
+            "gdtr(1,2,3)"
+        );
+        assert!(
+            (pdtr(2.0, 3.0) - 0.423_190_081_126_843_64).abs() < 1e-13,
+            "pdtr(2,3)"
+        );
+        assert!(
+            (pdtri(2.0, 0.4) - 3.105_378_597_263_35).abs() < 1e-11,
+            "pdtri(2,0.4)"
+        );
     }
 
     #[test]
@@ -7733,17 +7784,32 @@ mod tests {
         // scipy.special chi-square CDF/inverse and F CDF.
         use crate::beta::fdtr;
         use crate::gamma::{chdtr, chdtri};
-        assert!((chdtr(5.0, 3.0) - 0.300_014_164_121_372_4).abs() < 1e-13, "chdtr(5,3)");
-        assert!((chdtri(5.0, 0.3) - 6.064_429_984_154_905).abs() < 1e-11, "chdtri(5,0.3)");
-        assert!((fdtr(5.0, 10.0, 2.0) - 0.835_805_049_100_261_1).abs() < 1e-13, "fdtr(5,10,2)");
+        assert!(
+            (chdtr(5.0, 3.0) - 0.300_014_164_121_372_4).abs() < 1e-13,
+            "chdtr(5,3)"
+        );
+        assert!(
+            (chdtri(5.0, 0.3) - 6.064_429_984_154_905).abs() < 1e-11,
+            "chdtri(5,0.3)"
+        );
+        assert!(
+            (fdtr(5.0, 10.0, 2.0) - 0.835_805_049_100_261_1).abs() < 1e-13,
+            "fdtr(5,10,2)"
+        );
     }
 
     #[test]
     fn stdtr_stdtrit_match_scipy() {
         // scipy.special.stdtr (Student's t CDF) and stdtrit (its inverse).
         use crate::beta::{stdtr, stdtrit};
-        assert!((stdtr(5.0, 1.0) - 0.818_391_266_175_438_6).abs() < 1e-13, "stdtr(5,1)");
-        assert!((stdtr(10.0, 2.0) - 0.963_305_982_614_629_9).abs() < 1e-13, "stdtr(10,2)");
+        assert!(
+            (stdtr(5.0, 1.0) - 0.818_391_266_175_438_6).abs() < 1e-13,
+            "stdtr(5,1)"
+        );
+        assert!(
+            (stdtr(10.0, 2.0) - 0.963_305_982_614_629_9).abs() < 1e-13,
+            "stdtr(10,2)"
+        );
         assert!(
             (stdtrit(5.0, 0.95) - 2.015_048_373_333_023_3).abs() < 1e-11,
             "stdtrit(5,0.95)"
@@ -7757,7 +7823,10 @@ mod tests {
         assert_eq!(factorial(5), 120.0);
         assert_eq!(factorial(0), 1.0);
         assert_eq!(factorial(10), 3_628_800.0);
-        assert!((factorial2(7) - 105.0).abs() < 1e-10, "factorial2(7)=7*5*3*1");
+        assert!(
+            (factorial2(7) - 105.0).abs() < 1e-10,
+            "factorial2(7)=7*5*3*1"
+        );
         assert_eq!(factorial2(8), 384.0, "factorial2(8)=8*6*4*2");
     }
 
@@ -7789,9 +7858,18 @@ mod tests {
     fn zeta_zetac_match_scipy() {
         // scipy.special.zeta/zetac (Riemann zeta) at integer arguments.
         use crate::gamma::{zeta_scalar, zetac_scalar};
-        assert!((zeta_scalar(2.0) - 1.644_934_066_848_226_4).abs() < 1e-13, "zeta(2)=pi^2/6");
-        assert!((zeta_scalar(3.0) - 1.202_056_903_159_594_2).abs() < 1e-13, "zeta(3) Apery");
-        assert!((zeta_scalar(4.0) - 1.082_323_233_711_138_1).abs() < 1e-13, "zeta(4)=pi^4/90");
+        assert!(
+            (zeta_scalar(2.0) - 1.644_934_066_848_226_4).abs() < 1e-13,
+            "zeta(2)=pi^2/6"
+        );
+        assert!(
+            (zeta_scalar(3.0) - 1.202_056_903_159_594_2).abs() < 1e-13,
+            "zeta(3) Apery"
+        );
+        assert!(
+            (zeta_scalar(4.0) - 1.082_323_233_711_138_1).abs() < 1e-13,
+            "zeta(4)=pi^4/90"
+        );
         assert!(
             (zetac_scalar(2.0) - 0.644_934_066_848_226_4).abs() < 1e-13,
             "zetac(2)=zeta(2)-1"
@@ -7824,26 +7902,38 @@ mod tests {
         assert!((poch(2.0, 3.0) - 24.0).abs() < 1e-12, "poch(2,3)");
         assert!((poch(0.5, 2.0) - 0.75).abs() < 1e-13, "poch(0.5,2)");
         assert!((poch(3.0, 0.0) - 1.0).abs() < 1e-14, "poch(3,0)");
-        assert!((poch(2.5, 1.5) - 4.513_516_668_382_049).abs() < 1e-12, "poch(2.5,1.5)");
+        assert!(
+            (poch(2.5, 1.5) - 4.513_516_668_382_049).abs() < 1e-12,
+            "poch(2.5,1.5)"
+        );
     }
 
     #[test]
     fn erfcx_scalar_match_scipy() {
         // scipy.special.erfcx = exp(x^2)*erfc(x) (scaled to avoid erfc underflow).
         assert!((erfcx_scalar(0.0) - 1.0).abs() < 1e-14, "erfcx(0)");
-        assert!((erfcx_scalar(1.0) - 0.427_583_576_155_807).abs() < 1e-13, "erfcx(1)");
+        assert!(
+            (erfcx_scalar(1.0) - 0.427_583_576_155_807).abs() < 1e-13,
+            "erfcx(1)"
+        );
         assert!(
             (erfcx_scalar(10.0) - 0.056_140_992_743_822_59).abs() < 1e-15,
             "erfcx(10)"
         );
-        assert!((erfcx_scalar(-1.0) - 5.008_980_080_762_283).abs() < 1e-12, "erfcx(-1)");
+        assert!(
+            (erfcx_scalar(-1.0) - 5.008_980_080_762_283).abs() < 1e-12,
+            "erfcx(-1)"
+        );
     }
 
     #[test]
     fn log_ndtr_scalar_tail_match_scipy() {
         // scipy.special.log_ndtr = log(Phi(x)), stable in BOTH tails. The left tail
         // is the key: Phi(-50)=0 underflows but log_ndtr stays finite (-1254.83).
-        assert!((log_ndtr_scalar(0.0) - -0.693_147_180_559_945_3).abs() < 1e-13, "log_ndtr(0)");
+        assert!(
+            (log_ndtr_scalar(0.0) - -0.693_147_180_559_945_3).abs() < 1e-13,
+            "log_ndtr(0)"
+        );
         assert!(
             (log_ndtr_scalar(2.0) - -0.023_012_909_328_963_476).abs() < 1e-13,
             "log_ndtr(2)"
@@ -7862,8 +7952,14 @@ mod tests {
         assert_eq!(cbrt(-8.0), -2.0);
         assert_eq!(cbrt(27.0), 3.0);
         assert_eq!(cbrt(0.0), 0.0);
-        assert!((cbrt(2.0) - 1.259_921_049_894_873_2).abs() < 1e-15, "cbrt(2)");
-        assert!((cbrt(-2.0) + 1.259_921_049_894_873_2).abs() < 1e-15, "cbrt(-2)");
+        assert!(
+            (cbrt(2.0) - 1.259_921_049_894_873_2).abs() < 1e-15,
+            "cbrt(2)"
+        );
+        assert!(
+            (cbrt(-2.0) + 1.259_921_049_894_873_2).abs() < 1e-15,
+            "cbrt(-2)"
+        );
     }
 
     #[test]
@@ -7996,7 +8092,10 @@ mod tests {
         assert_eq!(perm(10, 3), 720.0);
         // Large values use the log-gamma branch; compare with relative tolerance.
         let rel = |g: f64, e: f64| (g - e).abs() / e < 1e-10;
-        assert!(rel(comb(100, 50), 1.008_913_445_455_641_5e29), "comb(100,50)");
+        assert!(
+            rel(comb(100, 50), 1.008_913_445_455_641_5e29),
+            "comb(100,50)"
+        );
         assert!(rel(perm(50, 30), 1.250_115_832_840_612_2e46), "perm(50,30)");
     }
 
@@ -8095,11 +8194,31 @@ mod tests {
         let close = |got: f64, want: f64, name: &str| {
             assert!((got - want).abs() < 1e-12, "{name}: {got} != {want}");
         };
-        close(crate::error::erf_scalar(0.5), 0.520_499_877_813_046_5, "erf(0.5)");
-        close(crate::error::erfc_scalar(0.5), 0.479_500_122_186_953_5, "erfc(0.5)");
-        close(crate::gamma::zeta_scalar(2.0), 1.644_934_066_848_226_4, "zeta(2)");
-        close(crate::bessel::i0_scalar(1.0), 1.266_065_877_752_008_2, "i0(1)");
-        close(crate::bessel::k0_scalar(1.0), 0.421_024_438_240_708_23, "k0(1)");
+        close(
+            crate::error::erf_scalar(0.5),
+            0.520_499_877_813_046_5,
+            "erf(0.5)",
+        );
+        close(
+            crate::error::erfc_scalar(0.5),
+            0.479_500_122_186_953_5,
+            "erfc(0.5)",
+        );
+        close(
+            crate::gamma::zeta_scalar(2.0),
+            1.644_934_066_848_226_4,
+            "zeta(2)",
+        );
+        close(
+            crate::bessel::i0_scalar(1.0),
+            1.266_065_877_752_008_2,
+            "i0(1)",
+        );
+        close(
+            crate::bessel::k0_scalar(1.0),
+            0.421_024_438_240_708_23,
+            "k0(1)",
+        );
         close(ndtr_scalar(1.0), 0.841_344_746_068_542_9, "ndtr(1)");
         close(ndtri_scalar(0.975), 1.959_963_984_540_054, "ndtri(0.975)");
     }

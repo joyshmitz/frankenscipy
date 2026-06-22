@@ -180,7 +180,13 @@ pub fn gammaln(x: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
 }
 
 pub fn gammasgn(x: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real_input_rp("gammasgn", x, mode, |value| gammasgn_scalar(value, mode), usize::MAX)
+    map_real_input_rp(
+        "gammasgn",
+        x,
+        mode,
+        |value| gammasgn_scalar(value, mode),
+        usize::MAX,
+    )
 }
 
 pub fn loggamma(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
@@ -253,7 +259,10 @@ fn gamma_dispatch(function: &'static str, z: &SpecialTensor, mode: RuntimeMode) 
                 par_map_indices(values.len(), |i| gamma_scalar(values[i], mode))
                     .map(SpecialTensor::RealVec)
             } else {
-                values.iter().map(|&x| gamma_scalar(x, mode)).collect::<Result<Vec<_>, _>>()
+                values
+                    .iter()
+                    .map(|&x| gamma_scalar(x, mode))
+                    .collect::<Result<Vec<_>, _>>()
                     .map(SpecialTensor::RealVec)
             }
         }
@@ -281,7 +290,10 @@ fn gammaln_dispatch(function: &'static str, z: &SpecialTensor, mode: RuntimeMode
                 par_map_indices(values.len(), |i| gammaln_scalar(values[i], mode))
                     .map(SpecialTensor::RealVec)
             } else {
-                values.iter().map(|&x| gammaln_scalar(x, mode)).collect::<Result<Vec<_>, _>>()
+                values
+                    .iter()
+                    .map(|&x| gammaln_scalar(x, mode))
+                    .collect::<Result<Vec<_>, _>>()
                     .map(SpecialTensor::RealVec)
             }
         }
@@ -354,7 +366,10 @@ fn digamma_dispatch(function: &'static str, z: &SpecialTensor, mode: RuntimeMode
                 par_map_indices(values.len(), |i| digamma_scalar(values[i], mode))
                     .map(SpecialTensor::RealVec)
             } else {
-                values.iter().map(|&x| digamma_scalar(x, mode)).collect::<Result<Vec<_>, _>>()
+                values
+                    .iter()
+                    .map(|&x| digamma_scalar(x, mode))
+                    .collect::<Result<Vec<_>, _>>()
                     .map(SpecialTensor::RealVec)
             }
         }
@@ -705,7 +720,13 @@ pub fn multigammaln(a: &SpecialTensor, d: f64, mode: RuntimeMode) -> SpecialResu
         });
     }
 
-    map_real_input_rp("multigammaln", a, mode, |x| multigammaln_scalar(x, d, mode), 1 << 17) // be ~68k
+    map_real_input_rp(
+        "multigammaln",
+        a,
+        mode,
+        |x| multigammaln_scalar(x, d, mode),
+        1 << 17,
+    ) // be ~68k
 }
 
 /// Gamma distribution CDF with rate `a` and shape `b`.
@@ -3337,9 +3358,18 @@ mod tests {
             Ok(SpecialTensor::RealScalar(v)) => v,
             other => panic!("expected scalar, got {other:?}"),
         };
-        assert!((pg(1, 1.0) - 1.644_934_066_848_226_6).abs() < 1e-13, "polygamma(1,1)=pi^2/6");
-        assert!((pg(1, 2.0) - 0.644_934_066_848_226_6).abs() < 1e-13, "polygamma(1,2)");
-        assert!((pg(2, 1.0) - -2.404_113_806_319_188).abs() < 1e-12, "polygamma(2,1)=-2 zeta(3)");
+        assert!(
+            (pg(1, 1.0) - 1.644_934_066_848_226_6).abs() < 1e-13,
+            "polygamma(1,1)=pi^2/6"
+        );
+        assert!(
+            (pg(1, 2.0) - 0.644_934_066_848_226_6).abs() < 1e-13,
+            "polygamma(1,2)"
+        );
+        assert!(
+            (pg(2, 1.0) - -2.404_113_806_319_188).abs() < 1e-12,
+            "polygamma(2,1)=-2 zeta(3)"
+        );
     }
 
     #[test]

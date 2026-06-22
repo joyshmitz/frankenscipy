@@ -6,8 +6,8 @@ use fsci_runtime::RuntimeMode;
 
 use crate::gamma::gamma_scalar;
 use crate::types::{
-    not_yet_implemented, record_special_trace, Complex64, DispatchPlan, DispatchStep, KernelRegime,
-    SpecialError, SpecialErrorKind, SpecialResult, SpecialTensor,
+    Complex64, DispatchPlan, DispatchStep, KernelRegime, SpecialError, SpecialErrorKind,
+    SpecialResult, SpecialTensor, not_yet_implemented, record_special_trace,
 };
 
 pub const BESSEL_DISPATCH_PLAN: &[DispatchPlan] = &[
@@ -207,8 +207,7 @@ pub const BESSEL_DISPATCH_PLAN: &[DispatchPlan] = &[
                 when: "large-a windows collapse to early terms through log-gamma damping",
             },
         ],
-        notes:
-            "SciPy only exposes the nonnegative real domain; strict mode returns NaN outside it.",
+        notes: "SciPy only exposes the nonnegative real domain; strict mode returns NaN outside it.",
     },
 ];
 
@@ -1253,11 +1252,7 @@ fn gamma_sign_fn(x: f64) -> f64 {
         // Pole — caller is responsible for guarding before reaching here.
         return 0.0;
     }
-    if (PI * x).sin() >= 0.0 {
-        1.0
-    } else {
-        -1.0
-    }
+    if (PI * x).sin() >= 0.0 { 1.0 } else { -1.0 }
 }
 
 /// Asymptotic expansion for J_v(z) for large |z|.
@@ -1496,11 +1491,7 @@ pub(crate) fn iv_scalar(v: f64, z: f64) -> f64 {
             0.0
         } else if v.fract() == 0.0 {
             // I_{-n}(0) = I_n(0)
-            if v.abs() == 0.0 {
-                1.0
-            } else {
-                0.0
-            }
+            if v.abs() == 0.0 { 1.0 } else { 0.0 }
         } else {
             f64::INFINITY
         };

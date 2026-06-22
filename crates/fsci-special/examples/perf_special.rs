@@ -1,12 +1,16 @@
 #![forbid(unsafe_code)]
 
 use fsci_runtime::RuntimeMode;
-use fsci_special::{SpecialTensor, ellipeinc, ellipkinc, erf, erfc};
+use fsci_special::{SpecialTensor, ellipeinc, ellipkinc, erf, erfc, hyperu};
 use std::error::Error;
 use std::f64::consts::PI;
+use std::hint::black_box;
+use std::io::Write;
 use std::io::{Error as IoError, ErrorKind};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
-type GoldenResult = Result<(), Box<dyn Error>>;
+type GoldenResult<T = ()> = Result<T, Box<dyn Error>>;
 
 const ERROR_INPUTS: &[f64] = &[
     f64::NEG_INFINITY,
@@ -28,12 +32,122 @@ fn main() -> GoldenResult {
     match args.next().as_deref() {
         Some("golden-error") => print_error_golden(),
         Some("golden-elliptic") => print_elliptic_golden(),
+        Some("bench-hyperu") => print_hyperu_benchmark(),
         _ => Err(IoError::new(
             ErrorKind::InvalidInput,
-            format!("usage: {program} <golden-error|golden-elliptic>"),
+            format!("usage: {program} <golden-error|golden-elliptic|bench-hyperu>"),
         )
         .into()),
     }
+}
+
+fn print_hyperu_benchmark() -> GoldenResult {
+    const N: usize = 50_000;
+    const ITERS: usize = 5;
+    let denom = (N - 1) as f64;
+    let x_values: Vec<f64> = (0..N).map(|i| 0.5 + 8.0 * (i as f64) / denom).collect();
+    let a = SpecialTensor::RealScalar(1.5);
+    let b = SpecialTensor::RealScalar(2.5);
+    let x = SpecialTensor::RealVec(x_values);
+
+    let warm = hyperu(&a, &b, &x, RuntimeMode::Strict)?;
+    black_box(hyperu_checksum(warm)?);
+
+    let start = Instant::now();
+    let mut checksum = 0.0;
+    for _ in 0..ITERS {
+        let out = hyperu(
+            black_box(&a),
+            black_box(&b),
+            black_box(&x),
+            RuntimeMode::Strict,
+        )?;
+        checksum += hyperu_checksum(out)?;
+    }
+    let rust_elapsed = start.elapsed();
+    if !checksum.is_finite() {
+        return Err(IoError::new(ErrorKind::InvalidData, "non-finite hyperu checksum").into());
+    }
+
+    let scipy_elapsed = scipy_hyperu_duration(N, ITERS)?;
+    let rust_ms = per_iter_ms(rust_elapsed, ITERS);
+    let scipy_ms = per_iter_ms(scipy_elapsed, ITERS);
+    println!(
+        "hyperu_a1.5_b2.5_n{N}_iters{ITERS} rust_ms_per_iter={rust_ms:.6} scipy_ms_per_iter={scipy_ms:.6} ratio={:.6} checksum={checksum:.17e}",
+        rust_ms / scipy_ms
+    );
+    Ok(())
+}
+
+fn hyperu_checksum(output: SpecialTensor) -> GoldenResult<f64> {
+    match output {
+        SpecialTensor::RealVec(values) => {
+            let mid = values.len() / 2;
+            let first = values
+                .first()
+                .copied()
+                .ok_or_else(|| IoError::new(ErrorKind::InvalidData, "empty hyperu output"))?;
+            let middle = values
+                .get(mid)
+                .copied()
+                .ok_or_else(|| IoError::new(ErrorKind::InvalidData, "missing hyperu midpoint"))?;
+            let last = values
+                .last()
+                .copied()
+                .ok_or_else(|| IoError::new(ErrorKind::InvalidData, "empty hyperu output"))?;
+            Ok(first + middle + last)
+        }
+        other => Err(unexpected_tensor("RealVec", other)),
+    }
+}
+
+fn scipy_hyperu_duration(n: usize, iters: usize) -> GoldenResult<Duration> {
+    let script = r#"
+import sys
+import time
+import numpy as np
+import scipy.special as sc
+
+n = int(sys.argv[1])
+iters = int(sys.argv[2])
+x = np.linspace(0.5, 8.5, n, dtype=np.float64)
+sc.hyperu(1.5, 2.5, x)
+start = time.perf_counter()
+checksum = 0.0
+for _ in range(iters):
+    out = sc.hyperu(1.5, 2.5, x)
+    checksum += float(out[0] + out[n // 2] + out[-1])
+elapsed = time.perf_counter() - start
+if not np.isfinite(checksum):
+    raise SystemExit("non-finite checksum")
+print(f"{elapsed:.17f}")
+"#;
+    let mut child = Command::new("python3")
+        .args(["-", &n.to_string(), &iters.to_string()])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    child
+        .stdin
+        .as_mut()
+        .ok_or_else(|| IoError::new(ErrorKind::BrokenPipe, "missing scipy stdin"))?
+        .write_all(script.as_bytes())?;
+    let output = child.wait_with_output()?;
+    if !output.status.success() {
+        return Err(IoError::other(format!(
+            "scipy hyperu oracle failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ))
+        .into());
+    }
+    let stdout = String::from_utf8(output.stdout)?;
+    let seconds = stdout.trim().parse::<f64>()?;
+    Ok(Duration::from_secs_f64(seconds))
+}
+
+fn per_iter_ms(duration: Duration, iters: usize) -> f64 {
+    duration.as_secs_f64() * 1_000.0 / iters as f64
 }
 
 fn print_error_golden() -> GoldenResult {

@@ -3043,8 +3043,8 @@ fn lpmns_arr(m: i64, nbig: i64, x: f64) -> (Vec<f64>, Vec<f64>) {
         pm[(m + 1) as usize] = pm1;
     }
     for k in (m + 2)..=(nn as i64) {
-        let pm2 = ((2.0 * k as f64 - 1.0) * x * pm1 - (k as f64 + m as f64 - 1.0) * pmk)
-            / (k - m) as f64;
+        let pm2 =
+            ((2.0 * k as f64 - 1.0) * x * pm1 - (k as f64 + m as f64 - 1.0) * pmk) / (k - m) as f64;
         pm[k as usize] = pm2;
         pmk = pm1;
         pm1 = pm2;
@@ -3422,7 +3422,9 @@ fn kmn_coef(m: i64, n: i64, c: f64, cv: f64, kd: i64, df: &[f64]) -> (Vec<f64>, 
     let dnp = if m == 0 { df[1] } else { dn[m as usize] };
     let sgn_ip = if ip % 2 == 0 { 1.0 } else { -1.0 };
     dn[(m + 1) as usize] = sgn_ip * dnp * cs
-        / ((2.0 * m as f64 - 1.0) * (2.0 * m as f64 + 1.0 - 4.0 * ip as f64) * tp[(m + 1) as usize]);
+        / ((2.0 * m as f64 - 1.0)
+            * (2.0 * m as f64 + 1.0 - 4.0 * ip as f64)
+            * tp[(m + 1) as usize]);
     for k in (m + 2)..=nn {
         dn[k as usize] = rk[k as usize] * dn[(k - 1) as usize];
     }
@@ -3619,12 +3621,15 @@ fn rmn2sp_eval(m: i64, n: i64, c: f64, x: f64, cv: f64, df: &[f64], kd: i64) -> 
         let mut r3 = 1.0_f64;
         let mut sf = 1.0_f64;
         for l1 in 1..=j {
-            r3 = 0.5 * r3 * (-j + l1 - 1) as f64 * (j + l1) as f64
-                / ((m + l1) as f64 * l1 as f64)
+            r3 = 0.5 * r3 * (-j + l1 - 1) as f64 * (j + l1) as f64 / ((m + l1) as f64 * l1 as f64)
                 * (1.0 - x);
             sf += r3;
         }
-        let gb = if m - j >= 2 { (m - j - 1) as f64 * r2 } else { 1.0 };
+        let gb = if m - j >= 2 {
+            (m - j - 1) as f64 * r2
+        } else {
+            1.0
+        };
         let spl = r1 * ga * gb * sf;
         let sgn = if (j + m) % 2 == 0 { 1.0 } else { -1.0 };
         su1 += sgn * dn[k as usize] * spl;
@@ -3964,7 +3969,14 @@ mod rad2_tests {
     #[test]
     fn obl_rad2_matches_scipy_clean_cases() {
         let cases = [
-            (0u32, 0u32, 1.0, 1.5, 0.07333899023344355, 0.48168787555779563),
+            (
+                0u32,
+                0u32,
+                1.0,
+                1.5,
+                0.07333899023344355,
+                0.48168787555779563,
+            ),
             (1, 2, 1.5, 2.0, -0.2007277794317659, 0.42235369638112114),
             (1, 1, 0.5, 5.0, -0.09559169029903253, 0.197579744721507),
             (3, 5, 1.0, 2.0, -12.403073666800394, 29.191869622608543),
