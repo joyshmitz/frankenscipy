@@ -6,6 +6,70 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-22 - BlackThrush - BOLD-VERIFY FFT 5-smooth mixed-radix plan cache: KEEP, residual near parity
+
+- Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
+- Bead: `frankenscipy-qba0l` (`[perf][fft] close 5-smooth mixed-radix
+  SciPy gap`).
+- Decision: KEEP. The lever caches the iterative `{3,5}*2^k` mixed-radix
+  odd-tail plan, including the odd factors, power-of-two tail, and leaf gather
+  bases. This removes per-call factorization plus per-leaf mixed-radix digit
+  decoding while leaving FFT arithmetic, twiddle sequence, normalization, and
+  public behavior unchanged.
+- Fresh baseline: `perf_mixed_radix` still showed the remaining local SciPy
+  gap concentrated in larger 5-smooth rows after the prior odd-factor keep:
+  `1500/1920/3000/5000/10000` measured `1.24x` to `1.62x` slower than local
+  SciPy on the warmed cod-b target binary.
+- Same-host direct-binary timing against local SciPy 1.17.1 / NumPy 2.4.3.
+  Parent and candidate Rust rows are direct runs of
+  `/data/projects/.rch-targets/frankenscipy-cod-b/release/perf_mixed_radix`;
+  SciPy rows are medians from the same deterministic LCG complex128 signal
+  used by the Rust harness. Candidate columns show two consecutive local runs
+  after the RCH-built artifact was retrieved:
+
+| n | Parent Rust | Candidate A | Candidate B | SciPy median | Candidate vs parent | Candidate vs SciPy |
+| ---: | ---: | ---: | ---: | ---: | --- | --- |
+| 720 | 6.614 us | 6.185 us | 5.328 us | 10.769 us | 1.07-1.24x faster | 1.74-2.02x faster |
+| 1000 | 7.823 us | 8.587 us | 6.651 us | 8.360 us | 0.91x slower to 1.18x faster | 1.03x slower to 1.26x faster |
+| 1080 | 9.338 us | 9.706 us | 9.238 us | 10.809 us | 0.96x slower to 1.01x faster | 1.11-1.17x faster |
+| 1500 | 15.660 us | 11.300 us | 13.987 us | 11.807 us | 1.12-1.39x faster | 1.04x faster to 1.18x slower |
+| 1920 | 16.430 us | 16.596 us | 16.287 us | 13.305 us | neutral | 1.22-1.25x slower |
+| 3000 | 33.103 us | 28.715 us | 22.454 us | 24.892 us | 1.15-1.47x faster | 1.15x slower to 1.11x faster |
+| 5000 | 48.412 us | 39.246 us | 42.941 us | 35.228 us | 1.13-1.23x faster | 1.11-1.22x slower |
+| 10000 | 128.505 us | 83.867 us | 83.794 us | 79.240 us | 1.53x faster | 1.06x slower |
+
+- RCH benchmark proof: `AGENT_NAME=BlackThrush
+  CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec --
+  cargo run --release -p fsci-fft --bin perf_mixed_radix` passed on
+  `vmi1149989`; in-process current-vs-legacy speedups were `3.10x / 2.76x /
+  2.80x / 2.56x / 2.50x / 2.86x / 2.46x / 2.93x` for
+  `n=720..10000`. Golden correctness worst max error stayed `3.394e-14` versus
+  tolerance `1e-9`.
+- Local SciPy oracle rows measured medians of `10.769 / 8.360 / 10.809 /
+  11.807 / 13.305 / 24.892 / 35.228 / 79.240 us` for `n=720..10000`.
+- Gates:
+  - PASS: `git diff --check -- crates/fsci-fft/src/transforms.rs
+    .beads/issues.jsonl`.
+  - PASS: `rustfmt --edition 2024 --check crates/fsci-fft/src/transforms.rs`.
+  - BLOCKED: `cargo fmt -p fsci-fft --check` still reports pre-existing
+    formatting drift in untouched `perf_fft_vs_scipy.rs`, `helpers.rs`, and
+    `lib.rs`; the touched file is rustfmt-clean.
+  - PASS: RCH `cargo check -p fsci-fft --all-targets` on `ovh-b`.
+  - PASS: RCH `cargo test --release -p fsci-fft --lib -- --nocapture` on
+    `vmi1149989`, `177 passed / 0 failed`. An earlier local fallback failed
+    with `E0514` because default `nightly` was older than the warmed target
+    artifacts; no target cleanup was run.
+  - PASS: RCH `cargo clippy -p fsci-fft --all-targets -- -D warnings` on
+    `ovh-a`.
+  - PASS: `ubs crates/fsci-fft/src/transforms.rs` exited 0; it reported only
+    existing warning inventory and no critical issues.
+  - PASS: explicit local matching-toolchain conformance gate
+    `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b cargo
+    +nightly-2026-06-12 test --release -p fsci-conformance --test diff_fft
+    --test e2e_fft -- --nocapture`: `diff_fft` `34/0`, `e2e_fft` `12/0`.
+    Two prior RCH attempts for this exact conformance command were canceled
+    after stale progress on worker `vmi1153651`.
+
 ## 2026-06-22 - BlackThrush - BOLD-VERIFY dawsn residual follow-up: no small safe lever retained
 
 - Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.

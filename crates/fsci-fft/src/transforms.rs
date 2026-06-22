@@ -167,6 +167,67 @@ fn get_or_compute_twiddles(n: usize, inverse: bool) -> TwiddleTable {
     table
 }
 
+#[derive(Debug)]
+struct OddPowerTailPlan {
+    factors: Box<[usize]>,
+    tail: usize,
+    leaf_bases: Box<[usize]>,
+}
+
+type OddPowerTailPlanRef = Arc<OddPowerTailPlan>;
+static ODD_POWER_TAIL_PLAN_CACHE: OnceLock<RwLock<HashMap<usize, OddPowerTailPlanRef>>> =
+    OnceLock::new();
+
+fn get_odd_power_tail_plan_cache() -> &'static RwLock<HashMap<usize, OddPowerTailPlanRef>> {
+    ODD_POWER_TAIL_PLAN_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+thread_local! {
+    static LOCAL_ODD_POWER_TAIL_PLAN_CACHE: std::cell::RefCell<HashMap<usize, OddPowerTailPlanRef>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
+fn get_or_compute_odd_power_tail_plan(n: usize) -> Option<OddPowerTailPlanRef> {
+    if n <= 1 || n.is_power_of_two() {
+        return None;
+    }
+
+    if let Some(plan) =
+        LOCAL_ODD_POWER_TAIL_PLAN_CACHE.with(|cache| cache.borrow().get(&n).cloned())
+    {
+        return Some(plan);
+    }
+
+    let cache = get_odd_power_tail_plan_cache();
+    if let Some(plan) = cache.read().ok().and_then(|guard| guard.get(&n).cloned()) {
+        LOCAL_ODD_POWER_TAIL_PLAN_CACHE.with(|local| {
+            local.borrow_mut().insert(n, Arc::clone(&plan));
+        });
+        return Some(plan);
+    }
+
+    let (factors, tail) = odd_power_tail_factorization(n)?;
+    let odd_len = n / tail;
+    let leaf_bases = (0..odd_len)
+        .map(|leaf| mixed_radix_leaf_base(leaf, &factors))
+        .collect::<Vec<_>>()
+        .into_boxed_slice();
+    let plan = Arc::new(OddPowerTailPlan {
+        factors: factors.into_boxed_slice(),
+        tail,
+        leaf_bases,
+    });
+
+    if let Ok(mut guard) = cache.write() {
+        guard.insert(n, Arc::clone(&plan));
+    }
+    LOCAL_ODD_POWER_TAIL_PLAN_CACHE.with(|local| {
+        local.borrow_mut().insert(n, Arc::clone(&plan));
+    });
+
+    Some(plan)
+}
+
 type BluesteinKey = (usize, bool);
 #[derive(Clone)]
 struct BluesteinPlan {
@@ -624,21 +685,24 @@ fn mixed_radix_iterative_odd_power_tail(
     if n <= 1 || n.is_power_of_two() {
         return false;
     }
-    let Some((factors, tail)) = odd_power_tail_factorization(n) else {
+    let Some(plan) = get_or_compute_odd_power_tail_plan(n) else {
         return false;
     };
 
-    let odd_len = n / tail;
-    debug_assert_eq!(factors.iter().product::<usize>(), odd_len);
+    let tail = plan.tail;
+    debug_assert_eq!(plan.leaf_bases.len(), n / tail);
+    debug_assert_eq!(
+        plan.factors.iter().product::<usize>(),
+        plan.leaf_bases.len()
+    );
 
     // Leaf phase: gather each strided 2^k tail once, then run the existing
     // power-of-two kernel on a contiguous block. This is the same DIT factor
     // order as the recursive route; only scheduling/twiddle reuse changes.
-    for leaf in 0..odd_len {
-        let base = mixed_radix_leaf_base(leaf, &factors);
+    for (leaf, &base) in plan.leaf_bases.iter().enumerate() {
         let block = &mut out[leaf * tail..(leaf + 1) * tail];
         for (s, slot) in block.iter_mut().enumerate() {
-            *slot = src[base + s * odd_len];
+            *slot = src[base + s * plan.leaf_bases.len()];
         }
         if tail <= 16 {
             mixed_radix_small_power_tail(block, inverse);
@@ -651,7 +715,7 @@ fn mixed_radix_iterative_odd_power_tail(
     // Combine from the innermost odd factor outwards. All groups at a stage
     // share the same twiddle table, avoiding recursive per-group cache lookups.
     let mut m = tail;
-    for &p in factors.iter().rev() {
+    for &p in plan.factors.iter().rev() {
         let stage_len = p * m;
         let twn = get_or_compute_twiddles(stage_len, inverse);
         for group in out.chunks_exact_mut(stage_len) {
