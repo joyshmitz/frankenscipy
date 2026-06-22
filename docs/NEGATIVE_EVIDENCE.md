@@ -3929,3 +3929,23 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   parallel. The complex arm's heavy ~876ns/pt kernel gives a 6.1x self-speedup. Gates: airy tests 33/0;
   byte-identical. With the earlier airy-real win, the entire airy/airye family (8 dispatch arms) is now
   parallel — completes the special-fn parallelization sweep beyond the gamma/erf/elliptic/convenience set.
+
+## 2026-06-21 - MEASURED CEILING: ndimage affine_transform/zoom (already parallel) LOSE to SciPy — confirms kernel-bound family
+- Agent: cod-a / BlackThrush. Follow-up empirical confirmation of the shift-revert inference: measured the
+  ALREADY-PARALLEL affine_transform and zoom (panes' fill_pixels_parallel work) head-to-head vs SciPy on a
+  clean tree. They do NOT beat SciPy — confirming the whole ndimage geometric-transform family is
+  kernel-bound (fsci's `sample_interpolated` spline kernel is the ceiling, not parallelism).
+- Same-worker hz1, 1500x1500 order-3 Reflect; SciPy = scipy.ndimage:
+
+  | op | fsci (parallel) | SciPy | ratio |
+  | --- | ---: | ---: | ---: |
+  | affine_transform 1500² | 201.14 ms | 183.95 ms | 0.91x (1.09x SLOWER) |
+  | zoom 1500²→2250² | 386.77 ms | 307.09 ms | 0.79x (1.26x SLOWER) |
+
+- So affine/zoom (parallel) sit at parity-to-loss vs SciPy, and shift (also parallel) at 0.57x — the
+  entire geometric family is capped by the per-pixel spline-weight kernel (~8x slower than SciPy's C).
+  Parallelism narrows but cannot close the gap. geometric_transform is the ONLY family member that "wins",
+  and only because SciPy pays a Python mapping callback there (callback lever, apples-to-oranges).
+- ACTIONABLE: the real lever for ndimage geometric transforms is a SIMD/cache-blocked `sample_interpolated`
+  (vectorize the order-(k+1)^ndim spline-weight gather + weighted sum), not more threads. Until then,
+  affine/zoom/shift are honest parity/losses, not domination wins. Filed as the family's measured ceiling.
