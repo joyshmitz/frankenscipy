@@ -4854,3 +4854,20 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   SLOWER); 512² 6363→2202us (2.89x), scipy 4383 → **1.99x FASTER** (was 1.45x slower). The vectorize-the-
   per-column-scan-over-inner lever (uniform_filter c79ab6c3) extends to a recursive IIR. ndimage filter
   family (gaussian/correlate1d/convolve1d/uniform_filter/spline) now ALL dominate scipy.
+
+## 2026-06-22 - VERIFICATION SWEEP: ndimage filter/geometric/rank family now DOMINATES scipy (BlackThrush)
+- Agent: cc / BlackThrush. After the 6 filter flips (gaussian/correlate1d/convolve1d/uniform/spline ×2),
+  benched the rest of the ndimage hot surface head-to-head vs scipy 1.17.1 (this box, 256² unless noted):
+  | op | fsci | scipy | ratio |
+  |----|------|-------|-------|
+  | maximum_filter size=9 | 865us | 1584us | 1.83x FASTER |
+  | maximum_filter 1024² | 27652us | 26880us | 1.03x (PARITY — superlinear deque scaling erodes the win) |
+  | zoom 2x order=3 | 10770us | 13847us | 1.29x FASTER (helped by the spline_filter flip) |
+  | rank_filter r5 size=7 | 3767us | 30325us | 8.05x FASTER |
+- CONCLUSION: ndimage filter/geometric/rank/morphology is now dominant or at-parity vs scipy at common
+  sizes. The one residual is minmax at LARGE sizes (1024² parity, eroding to a marginal loss beyond) —
+  its monotonic VecDeque (data-dependent per column) does NOT vectorize over `inner` like the running-sum
+  (uniform) / IIR (spline) did; a flip would need a van Herk block-prefix/suffix rewrite (meaty, deferred,
+  low value at parity). DON'T re-chase minmax for small/mid sizes (it wins). Next un-dominated workloads
+  are the HARD numerical walls (Radau solve_ivp 2x, eigsh 1.3-1.6x, hyperu/kv series) — accuracy-critical
+  ports, not disk-neutral structural rewrites.
