@@ -62,10 +62,15 @@ ledger above so the project has one source of truth.
 | cdt chessboard 512² | 17.0 ms | 7.4 ms | 5.6 ms | 3.02x slower | 1.32x slower |
 | cdt chessboard 1024² | 67.1 ms | 38.5 ms | 20.8 ms | 3.23x slower | 1.85x slower |
 
-- taxicab now at PARITY (3x self-speedup); chessboard narrowed 3x→1.3-1.85x via
-  the background-build fix (#3) alone — its raster sweep still does `unravel_into`
-  + per-offset `in_bounds` per cell (next lever: incremental coords, avoid the
-  per-cell divide). distance_transform_edt already wins 1.58x (FH path).
+- taxicab now at PARITY (3x self-speedup); distance_transform_edt already wins
+  1.58x (FH path).
+- FOLLOW-UP (commit 4c024b82): the chessboard "next lever" is now DONE —
+  incremental row-major coords (avoid per-cell `unravel_into` ndim-divisions) +
+  interior fast-path (skip per-offset `in_bounds` when no coordinate is on a
+  boundary; identical verdict). Byte-identical, 246 tests pass. chessboard
+  512² 17.0→5.2 ms (3.02x slower → 1.08x FASTER; 3.3x self); 1024² 67.1→30.0 ms
+  (3.23x slower → 1.44x slower; 2.2x self, residual is cache-bound cross-row
+  neighbour access at stride=1024).
 - Gates: 246 `fsci-ndimage --lib` tests pass incl.
   `distance_transform_cdt_matches_scipy_metric_fixtures` and
   `distance_transform_bf_and_cdt_match_all_foreground_sentinels` (validates the
