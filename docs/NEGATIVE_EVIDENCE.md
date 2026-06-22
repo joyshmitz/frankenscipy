@@ -3994,3 +3994,25 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   Bessel, confluent/Gauss hypergeometric) DOMINATES scipy (3.6-47x), because those use fast
   series/recurrence (Amos-style) rather than per-point integration. The K-Bessel Temme-series fix
   (frankenscipy-8qpyn) is the one remaining special-fn domination gap.
+
+## 2026-06-21 - LOSS CLASS: noncentral distributions (ncx2/nct/ncf/norminvgauss) cdf via per-element integration — 3-6x slower
+- Agent: cod-a / BlackThrush. Same per-element-integration anti-pattern as the kv loss, found by the
+  "parallel != winning" sweep applied to stats. These distributions' cdf/sf integrate the pdf per point
+  via simpson_integrate_adaptive (lib.rs:1873/2338/2945/3537/5807); cdf_many parallelizes the points but
+  each point still runs an adaptive Simpson, while SciPy uses fast series.
+- Same-worker hz1, 100k cdf_many vs scipy.stats:
+
+  | dist | fsci (parallel cdf_many) | SciPy | ratio |
+  | --- | ---: | ---: | ---: |
+  | ncx2 (NoncentralChiSquared) | 72.40 ms | 22.75 ms | 3.2x SLOWER |
+  | nct (NoncentralT) | 615.84 ms | 102.17 ms | 6.0x SLOWER |
+
+  (NoncentralF and NormInvGauss use the same integrate-per-point path → likely similar losses.)
+- These are CORRECT but slow (the integration is accurate; only perf loses). FIX: implement the standard
+  series — ncx2 cdf = Poisson(nc/2)-weighted sum of central chi-square cdfs (regularized lower-incomplete
+  gamma); nct cdf via its series in the incomplete beta; ncf similarly. Accuracy-critical (not byte-id)
+  → verify vs scipy before shipping. Less catastrophic than kv (~95x) but real 3-6x losses. Filed.
+- BROADER PATTERN (both loss classes): "array-dispatch function whose scalar KERNEL integrates per
+  element, where SciPy uses a series/special-fn." Parallelism (par_map/cdf_many) does NOT rescue it. The
+  fix is always the series, not more threads. Suspects share the simpson_integrate_adaptive / kv_integral
+  call sites. This is the productive remaining frontier — algorithmic kernel replacement, accuracy-gated.
