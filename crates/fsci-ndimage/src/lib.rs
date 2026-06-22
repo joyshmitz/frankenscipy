@@ -880,6 +880,73 @@ fn bspline_reflect_poles(order: usize) -> Vec<f64> {
 /// pass preserves the reflect symmetry so the same exact init is correct for
 /// the second pole. Also serves as the per-line prefilter for `nearest` once
 /// the input has been edge-padded.
+/// In-place column-vectorized `bspline_reflect_coefficients` over a whole axis (layout
+/// [outer][n][inner]): the IIR runs along `n` but is independent across `inner` columns,
+/// so sweep row-by-row with CONTIGUOUS inner-wide reads (cache-friendly + vectorizing).
+/// BYTE-IDENTICAL: each column runs the same scalar op sequence in the same order, and
+/// `sum*z/denom` is kept as `(sum*z)/denom`.
+fn bspline_reflect_axis_inplace(
+    data: &mut [f64],
+    outer: usize,
+    n: usize,
+    inner: usize,
+    order: usize,
+) {
+    if n <= 1 {
+        return;
+    }
+    let poles = bspline_reflect_poles(order);
+    let mut gain = 1.0;
+    for &z in &poles {
+        gain *= (1.0 - z) * (1.0 - 1.0 / z);
+    }
+    let mut sum = vec![0.0f64; inner];
+    for slab in 0..outer {
+        let base = slab * n * inner;
+        for v in &mut data[base..base + n * inner] {
+            *v *= gain;
+        }
+        for &z in &poles {
+            let z_n = z.powi(n as i32);
+            let denom = 1.0 - z_n * z_n;
+            let last = base + (n - 1) * inner;
+            for j in 0..inner {
+                sum[j] = data[base + j] + z_n * data[last + j];
+            }
+            let mut z_i = z;
+            for i in 1..n {
+                let ci = base + i * inner;
+                let cm = base + (n - 1 - i) * inner;
+                for j in 0..inner {
+                    sum[j] += z_i * (data[ci + j] + z_n * data[cm + j]);
+                }
+                z_i *= z;
+            }
+            for j in 0..inner {
+                data[base + j] += sum[j] * z / denom;
+            }
+            for i in 1..n {
+                let ci = base + i * inner;
+                let cp = base + (i - 1) * inner;
+                for j in 0..inner {
+                    data[ci + j] += z * data[cp + j];
+                }
+            }
+            let fz = z / (z - 1.0);
+            for j in 0..inner {
+                data[last + j] *= fz;
+            }
+            for i in (0..n - 1).rev() {
+                let ci = base + i * inner;
+                let cp = base + (i + 1) * inner;
+                for j in 0..inner {
+                    data[ci + j] = z * (data[cp + j] - data[ci + j]);
+                }
+            }
+        }
+    }
+}
+
 fn bspline_reflect_coefficients(line: &[f64], order: usize) -> Vec<f64> {
     let n = line.len();
     if n <= 1 {
@@ -1046,6 +1113,16 @@ fn prefilter_spline_coefficients(
         // (same line elements, same coefficient kernel, same target slots).
         let stride: usize = current.shape[axis + 1..].iter().product();
         let outer: usize = current.shape[..axis].iter().product();
+        // Whole-axis vectorized fast path for the bspline-reflect kernel (Reflect-exact or
+        // Nearest-bspline both call bspline_reflect_coefficients): when inner=stride>1 the
+        // per-column strided gather is cache-hostile; sweep the IIR in-place vectorized over
+        // the contiguous inner dim instead. Byte-identical; other kernels keep the per-line walk.
+        let reflect_kernel = (exact_reflect && mode == BoundaryMode::Reflect)
+            || (bspline_reflect && mode == BoundaryMode::Nearest);
+        if reflect_kernel && stride > 1 {
+            bspline_reflect_axis_inplace(&mut current.data, outer, axis_len, stride, order);
+            continue;
+        }
         let line_count = outer * stride;
         let mut line = Vec::with_capacity(axis_len);
         for line_flat in 0..line_count {

@@ -4839,3 +4839,18 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
 - NEXT to flip: vectorize the IIR over the contiguous `inner` dim (operate in-place on the array, sweep
   causal/anticausal row-by-row with vectorized inner loops + per-column initial-condition reduction) —
   same lever as uniform_filter (c79ab6c3). Meaty (byte-identity in the recursion), staged separately.
+
+## 2026-06-22 - WIN (flip): spline_filter IIR vectorized over inner — 1.45-1.63x LOSS → 1.65-1.99x FASTER, byte-identical
+- Agent: cc / BlackThrush. Completes the spline_filter flip (partial 6e2db19c got it to ~1.13x slower).
+  Added bspline_reflect_axis_inplace: the recursive B-spline IIR runs along the axis but is independent
+  across the contiguous `inner` columns, so sweep it row-by-row IN PLACE with vectorized inner-wide loops
+  (cache-friendly), instead of the strided per-column gather. Used for the bspline-reflect kernel
+  (Reflect-exact + Nearest-bspline) when stride>1; other kernels (mirror/de-Boor/cubic) keep per-line.
+- BYTE-IDENTICAL (XOR-checksum matched golden exactly, order=3 Reflect n=256/512): each column runs the
+  identical scalar op sequence (gain, causal-init, causal sweep, anticausal-init, anticausal sweep) in
+  the same order. CRITICAL detail: kept `sum*z/denom` as `(sum*z)/denom` (NOT folded `z/denom`) to match
+  IEEE rounding. fsci-ndimage GREEN 246/0 (Nearest/order-5/mirror/de-Boor all pass vs scipy).
+- MEASURED: spline_filter order=3: 256² 1370→508us (2.70x total), scipy 840 → **1.65x FASTER** (was 1.63x
+  SLOWER); 512² 6363→2202us (2.89x), scipy 4383 → **1.99x FASTER** (was 1.45x slower). The vectorize-the-
+  per-column-scan-over-inner lever (uniform_filter c79ab6c3) extends to a recursive IIR. ndimage filter
+  family (gaussian/correlate1d/convolve1d/uniform_filter/spline) now ALL dominate scipy.
