@@ -3912,3 +3912,20 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   parallel stacks cleanly to 10x. The modest 1.5x self-speedup is capped by the Vec<AiryResult>
   intermediate + unzip copy (64-128MB); a direct 4-output-slice chunked parallel could push it higher
   but the simple par_map_indices route is the low-risk byte-identical ship. Gates: airy tests 33/0.
+
+## 2026-06-21 - WIN: airye (real+complex) + airy (complex) parallel dispatch — 20-63x vs SciPy
+- Agent: cod-a / BlackThrush. Extends the airy win to the remaining 3 serial 4-output dispatchers in
+  airy.rs (airye real, airye complex, airy complex) — all were `for &val in values { *_scalar(val)?;
+  push×4 }` loops over heavy Amos kernels. Routed each through par_map_indices + ordered unzip.
+  Byte-identical (acc unchanged serial vs parallel).
+- Same-worker hz1 (serial via forced par_map serial); SciPy = scipy.special.airye/airy:
+
+  | fn | n | serial | parallel | self | SciPy | vs SciPy |
+  | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+  | airye real | 2M | 169.76 ms | 63.20 ms | 2.69x | 3992.91 ms | 63x faster |
+  | airy complex | 2M | 1.752 s | 286.72 ms | 6.10x | 5836.93 ms | 20x faster |
+
+- SciPy's scaled/complex Airy (Amos) is extremely slow (~2-3 us/pt); fsci's kernel is far faster AND
+  parallel. The complex arm's heavy ~876ns/pt kernel gives a 6.1x self-speedup. Gates: airy tests 33/0;
+  byte-identical. With the earlier airy-real win, the entire airy/airye family (8 dispatch arms) is now
+  parallel — completes the special-fn parallelization sweep beyond the gamma/erf/elliptic/convenience set.

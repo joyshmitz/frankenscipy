@@ -147,8 +147,8 @@ pub fn airy(x: &SpecialTensor, mode: RuntimeMode) -> Result<Vec<SpecialTensor>, 
             let mut aip_vec = Vec::with_capacity(values.len());
             let mut bi_vec = Vec::with_capacity(values.len());
             let mut bip_vec = Vec::with_capacity(values.len());
-            for &val in values {
-                let result = airy_complex_scalar(val, mode)?;
+            let results = par_map_indices(values.len(), |i| airy_complex_scalar(values[i], mode))?;
+            for result in &results {
                 ai_vec.push(result.ai);
                 aip_vec.push(result.aip);
                 bi_vec.push(result.bi);
@@ -189,8 +189,8 @@ pub fn airye(x: &SpecialTensor, mode: RuntimeMode) -> Result<Vec<SpecialTensor>,
             let mut aip_vec = Vec::with_capacity(values.len());
             let mut bi_vec = Vec::with_capacity(values.len());
             let mut bip_vec = Vec::with_capacity(values.len());
-            for &val in values {
-                let result = airye_scalar(val, mode)?;
+            let results = par_map_indices(values.len(), |i| airye_scalar(values[i], mode))?;
+            for result in &results {
                 ai_vec.push(result.ai);
                 aip_vec.push(result.aip);
                 bi_vec.push(result.bi);
@@ -217,8 +217,8 @@ pub fn airye(x: &SpecialTensor, mode: RuntimeMode) -> Result<Vec<SpecialTensor>,
             let mut aip_vec = Vec::with_capacity(values.len());
             let mut bi_vec = Vec::with_capacity(values.len());
             let mut bip_vec = Vec::with_capacity(values.len());
-            for &val in values {
-                let result = airye_complex_scalar(val, mode)?;
+            let results = par_map_indices(values.len(), |i| airye_complex_scalar(values[i], mode))?;
+            for result in &results {
                 ai_vec.push(result.ai);
                 aip_vec.push(result.aip);
                 bi_vec.push(result.bi);
