@@ -5053,16 +5053,14 @@ impl BPoly {
             return f64::NAN;
         }
         let seg = self.segment(xval);
-        let coeffs = &self.c[seg];
-        let k = coeffs.len() - 1;
-        let d = self.x[seg + 1] - self.x[seg];
-        let s = (xval - self.x[seg]) / d;
-        let s1 = 1.0 - s;
-        let mut value = 0.0;
-        for (a, &ca) in coeffs.iter().enumerate() {
-            value += ca * binom(k, a) * s.powi(a as i32) * s1.powi((k - a) as i32);
+        let coeff_len = self.c[seg].len();
+        if let Some(bn) = self.binoms.get(seg).filter(|bn| bn.len() == coeff_len) {
+            return self.evaluate_segment_with_binoms(xval, seg, bn);
         }
-        value
+
+        let k = coeff_len - 1;
+        let local_binoms: Vec<f64> = (0..=k).map(|a| binom(k, a)).collect();
+        self.evaluate_segment_with_binoms(xval, seg, &local_binoms)
     }
 
     /// Evaluate at multiple points.
@@ -5120,10 +5118,21 @@ impl BPoly {
 
     fn evaluate_segment_with_binoms(&self, xval: f64, seg: usize, bn: &[f64]) -> f64 {
         let coeffs = &self.c[seg];
-        let k = coeffs.len() - 1;
         let d = self.x[seg + 1] - self.x[seg];
         let s = (xval - self.x[seg]) / d;
         let s1 = 1.0 - s;
+        if coeffs.len() == 4 {
+            let s2 = s * s;
+            let s3 = s2 * s;
+            let s1_2 = s1 * s1;
+            let s1_3 = s1_2 * s1;
+            return coeffs[0] * s1_3
+                + coeffs[1] * 3.0 * s * s1_2
+                + coeffs[2] * 3.0 * s2 * s1
+                + coeffs[3] * s3;
+        }
+
+        let k = coeffs.len() - 1;
         let mut value = 0.0;
         for (a, &ca) in coeffs.iter().enumerate() {
             value += ca * bn[a] * s.powi(a as i32) * s1.powi((k - a) as i32);

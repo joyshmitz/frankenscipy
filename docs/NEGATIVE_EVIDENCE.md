@@ -6,6 +6,64 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-23 - BlackThrush - BOLD-VERIFY BPoly cubic Bernstein arithmetic: KEEP, Rust now beats SciPy
+
+- Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
+- Bead: `frankenscipy-il3a7` (`[perf][interpolate] BPoly::evaluate_many
+  residual after sorted cursor; specialize cubic Bernstein arithmetic`).
+- Decision: KEEP. Degree-3 `BPoly` evaluation now uses direct cubic Bernstein
+  arithmetic instead of per-term `powi`. Scalar `evaluate` routes through the
+  same segment helper as `evaluate_many`, so the changed arithmetic path still
+  preserves the existing `evaluate_many == evaluate` invariant; generic
+  non-cubic fallback arithmetic remains unchanged.
+- Rust baseline benchmark: `AGENT_NAME=BlackThrush
+  RCH_WORKER=vmi1149989
+  CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec --
+  cargo bench -p fsci-interpolate --bench interpolate_bench --
+  batch_eval/bpoly/evaluate_many --sample-size 10 --warm-up-time 1
+  --measurement-time 1 --noplot`. RCH selected worker `vmi1152480`; median
+  `103.40 us` (`[100.38 us, 108.15 us]`).
+- Rust candidate benchmark: same command pinned to the same selected worker via
+  `RCH_WORKER=vmi1152480`, median `30.020 us`
+  (`[28.423 us, 31.879 us]`), reported by Criterion as a `70.386%`
+  improvement.
+- SciPy comparator: local SciPy 1.17.1 / NumPy 2.4.3,
+  `scipy.interpolate.BPoly(c, x, extrapolate=True)(qs)` on the identical
+  deterministic `interpolate_bench.rs` workload (`4096` sorted queries,
+  `200` pieces, degree `3`, interval coefficients `[i, i+1, 0.5, 1.5]`):
+  median `57.233 us`, best `56.707 us`, mean `59.049 us` over 80 repetitions,
+  checksum100 `1.763593190908e+02`.
+
+| Workload | Parent Rust median | Candidate Rust median | SciPy median | Candidate vs parent | Candidate vs SciPy |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `batch_eval/bpoly/evaluate_many` | 103.40 us | 30.020 us | 57.233 us | 3.44x faster | Rust 1.91x faster |
+
+- Residual route: none for this workload. Reopen only from a fresh
+  current-source BPoly workload that is still slower than SciPy after this
+  cubic arithmetic specialization.
+- Gates:
+  - PASS: same-worker RCH `cargo bench -p fsci-interpolate --bench
+    interpolate_bench -- batch_eval/bpoly/evaluate_many --sample-size 10
+    --warm-up-time 1 --measurement-time 1 --noplot` on `vmi1152480`.
+  - PASS: RCH `cargo test -p fsci-interpolate bpoly --lib --
+    --nocapture` on `ovh-a` (`bpoly_matches_scipy`,
+    `bpoly_evaluate_many_sorted_cursor_matches_scalar`).
+  - PASS: RCH `cargo check -p fsci-interpolate --all-targets` on `ovh-a`.
+  - BLOCKED: `cargo fmt -p fsci-interpolate --check` reports broad
+    pre-existing rustfmt drift across `fsci-interpolate` benches, helper bins,
+    FITPACK, sphere, and tests; this perf commit does not normalize unrelated
+    formatting churn.
+  - PASS: `git diff --check -- crates/fsci-interpolate/src/lib.rs
+    docs/NEGATIVE_EVIDENCE.md .beads/issues.jsonl`.
+  - PASS: `ubs crates/fsci-interpolate/src/lib.rs docs/NEGATIVE_EVIDENCE.md
+    .beads/issues.jsonl` exited 0 with no critical findings; it reported the
+    existing broad Rust warning inventory.
+  - Existing warnings remain in `fsci-interpolate` (`surfit.rs`, `sphere.rs`,
+    `sphere_grid.rs`, `solve_dense_system`, and unused interpolate fields).
+- Retry predicate: do not repeat cubic Bernstein arithmetic work. Continue only
+  from a fresh current-source benchmark showing a different BPoly workload, or a
+  deeper interpolation primitive, still trails SciPy.
+
 ## 2026-06-23 - BlackThrush - BOLD-VERIFY BPoly sorted-query cursor: KEEP, residual SciPy gap filed
 
 - Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
