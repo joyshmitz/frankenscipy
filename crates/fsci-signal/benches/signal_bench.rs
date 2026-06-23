@@ -1,8 +1,8 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use fsci_signal::{
-    ConvolveMode, DetrendType, FindPeaksCwtOptions, FirWindow, SosSection, coherence, csd, cwt, fftconvolve,
-    filtfilt, find_peaks_cwt, firls, firwin, freqz, lfilter, medfilt, mfcc, order_filter, remez,
-    detrend, hilbert, ricker, sosfilt, welch,
+    ConvolveMode, DetrendType, FindPeaksCwtOptions, FirWindow, SosSection, coherence, csd, cwt,
+    detrend, fftconvolve, filtfilt, find_peaks_cwt, firls, firwin, freqz, hilbert, lfilter,
+    medfilt, mfcc, order_filter, remez, resample, ricker, sosfilt, welch,
 };
 use std::hint::black_box;
 use std::io::Write;
@@ -415,6 +415,13 @@ fn bench_detrend_hilbert(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_resample(c: &mut Criterion) {
+    let x = deterministic_signal(200_000);
+    c.bench_function("resample/200000_to_150000", |b| {
+        b.iter(|| resample(black_box(&x), black_box(150_000)).expect("resample"))
+    });
+}
+
 fn bench_find_peaks_cwt(c: &mut Criterion) {
     let mut group = c.benchmark_group("find_peaks_cwt");
     let n = 5000usize;
@@ -434,6 +441,7 @@ fn bench_find_peaks_cwt(c: &mut Criterion) {
 
 criterion_group!(
     benches,
+    bench_resample,
     bench_detrend_hilbert,
     bench_find_peaks_cwt,
     bench_mfcc,

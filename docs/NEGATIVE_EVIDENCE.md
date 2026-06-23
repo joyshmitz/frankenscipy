@@ -6,6 +6,62 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-23 - BlackThrush - BOLD-VERIFY signal.resample residual: no structural lever retained
+
+- Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
+- Bead: `frankenscipy-5dxx5` (`[perf][signal] BOLD-VERIFY
+  signal.resample FFT non-pow2 SciPy wall`).
+- Decision: NO SOURCE LEVER / CLOSE AS WALL. The prior ledger row called
+  `signal.resample(200k -> 150k)` a 2.34x loss and identified the root as the
+  non-power-of-two `fsci-fft` constant-factor wall. Current source already uses
+  the right structural route for this workload: `resample` validates inputs,
+  calls `rfft`, copies/truncates the one-sided spectrum, handles the Nyquist bin
+  like SciPy, calls `irfft`, then applies the `num / n` scale. There is no
+  extra full-complex transform or avoidable routing layer left to remove.
+- I added a focused Criterion row,
+  `resample/200000_to_150000`, to `crates/fsci-signal/benches/signal_bench.rs`
+  so future agents can re-run the exact workload without a one-off harness.
+- Rust benchmark: RCH
+  `cargo bench -p fsci-signal --bench signal_bench --
+  resample/200000_to_150000 --sample-size 10 --warm-up-time 1
+  --measurement-time 1 --noplot`, worker `vmi1149989`, median `4.7933 ms`
+  (`[4.2959 ms, 5.3928 ms]`). The worker could not import `scipy.signal`, so
+  SciPy timing remains local.
+- SciPy comparator: local SciPy 1.17.1 / NumPy 2.4.3,
+  `scipy.signal.resample(x, 150000)` on the identical deterministic
+  `deterministic_signal(200000)` formula used by `signal_bench.rs`, median
+  `4.342879 ms`, best `2.206862 ms`, mean `4.077749 ms` over 80 repetitions,
+  checksum `-1.236819890506e+00`.
+
+| Workload | Rust median | SciPy median | Ratio |
+| --- | ---: | ---: | ---: |
+| `resample/200000_to_150000` | 4.7933 ms | 4.342879 ms | Rust 1.103715x slower |
+
+- Interpretation: the fresh row does not reproduce the older 2.34x loss; it is
+  near parity, and the RCH Rust interval spans roughly `0.99x` to `1.24x` of
+  the local SciPy median. That is not a credible target for a small structural
+  rewrite. Closing this bead as a no-ship evidence pass; the real residual, if
+  it matters, belongs in `fsci-fft` mixed-radix/SIMD work, not `fsci-signal`
+  resample routing.
+- Gates:
+  - PASS: RCH `cargo bench -p fsci-signal --bench signal_bench --
+    resample/200000_to_150000 --sample-size 10 --warm-up-time 1
+    --measurement-time 1 --noplot` on `vmi1149989`.
+  - SciPy comparator PASS locally with SciPy 1.17.1 / NumPy 2.4.3.
+  - PASS: `rustfmt --edition 2024 --check
+    crates/fsci-signal/benches/signal_bench.rs`.
+  - BLOCKED (pre-existing): `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b
+    cargo fmt -p fsci-signal -- --check` still fails on untouched
+    `fsci-signal` files and probe bins, so I did not format unrelated files.
+  - PASS: RCH `cargo test -p fsci-signal resample --lib -- --nocapture` on
+    `ovh-a` (`16` passed, `632` filtered).
+  - PASS: RCH `cargo check -p fsci-signal --all-targets` on `ovh-a`.
+  - PASS: `git diff --check -- crates/fsci-signal/benches/signal_bench.rs
+    docs/NEGATIVE_EVIDENCE.md .beads/issues.jsonl`.
+  - PASS: `ubs crates/fsci-signal/benches/signal_bench.rs
+    docs/NEGATIVE_EVIDENCE.md .beads/issues.jsonl` exited `0`; findings were
+    the existing bench-file warning inventory, with no criticals.
+
 ## 2026-06-23 - BlackThrush - BOLD-VERIFY PPoly sorted batch cursor: KEEP, Rust now beats SciPy
 
 - Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
