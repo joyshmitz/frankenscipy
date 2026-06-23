@@ -4367,6 +4367,7 @@ fn convex_hull_3d_facets(points: &[[f64; 3]], _center: [f64; 3]) -> Option<Vec<[
         make_face(p0, p2, p3),
         make_face(p1, p2, p3),
     ];
+    let mut face_normals: Vec<[f64; 3]> = faces.iter().map(face_normal).collect();
     let mut in_hull = vec![false; n];
     for &s in &[p0, p1, p2, p3] {
         in_hull[s] = true;
@@ -4386,12 +4387,13 @@ fn convex_hull_3d_facets(points: &[[f64; 3]], _center: [f64; 3]) -> Option<Vec<[
         }
         let pp = points[p];
         visible.clear();
-        visible.extend(
-            faces
-                .iter()
-                .map(|f| dot3(face_normal(f), sub3(pp, points[f[0]])) > tol),
-        );
-        if !visible.iter().any(|&v| v) {
+        let mut any_visible = false;
+        visible.extend(faces.iter().zip(&face_normals).map(|(f, &normal)| {
+            let is_visible = dot3(normal, sub3(pp, points[f[0]])) > tol;
+            any_visible |= is_visible;
+            is_visible
+        }));
+        if !any_visible {
             continue; // strictly inside the current hull (shouldn't happen on a sphere)
         }
         // Directed edges of all visible faces; a directed edge whose twin is not
@@ -4421,12 +4423,16 @@ fn convex_hull_3d_facets(points: &[[f64; 3]], _center: [f64; 3]) -> Option<Vec<[
         for r in 0..faces.len() {
             if !visible[r] {
                 faces[w] = faces[r];
+                face_normals[w] = face_normals[r];
                 w += 1;
             }
         }
         faces.truncate(w);
+        face_normals.truncate(w);
         for &(u, v) in &horizon {
-            faces.push(make_face(u, v, p));
+            let face = make_face(u, v, p);
+            face_normals.push(face_normal(&face));
+            faces.push(face);
         }
         in_hull[p] = true;
     }
