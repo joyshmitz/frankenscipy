@@ -6,6 +6,65 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-23 - BlackThrush - BOLD-VERIFY SphericalVoronoi large-n tail: visible-face list keep
+
+- Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
+- Bead: `frankenscipy-0foww` (`[perf][spatial] robust
+  SphericalVoronoi conflict graph after duplicate-grid keep`).
+- Decision: KEEP the visible-face index/stamp lever; REJECT the attempted
+  conflict-list graph. The failed graph compiled but `perf_sphvor_ab` returned
+  non-coplanar-generator errors for every row; a tightened propagation variant
+  still failed the deterministic rows and was interrupted/reverted before any
+  commit. The kept lever preserves the full face visibility scan for
+  correctness, but records visible face indices plus a stamp so horizon
+  collection and survivor compaction no longer rescan every face.
+- Harness: local per-crate
+  `AGENT_NAME=BlackThrush
+  CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b cargo
+  +nightly-2026-06-10 run --release -p fsci-spatial --bin perf_sphvor_ab`.
+  The explicit nightly matches the warmed cod-b target artifacts; no workspace
+  build and no target cleanup were run.
+- SciPy comparator: local SciPy `SphericalVoronoi` on the identical point dumps
+  emitted by the kept candidate run; sorted vertex-set max absolute differences
+  remain machine precision.
+
+| n | Baseline Rust | Candidate Rust | Internal ratio | SciPy comparator | Candidate vs SciPy | Max vertex diff |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 100 | 270.202 us | 349.693 us | 0.773x slower | 0.434093 ms | Rust 1.241x faster | 5.690e-16 |
+| 200 | 686.591 us | 868.656 us | 0.790x slower | 0.756714 ms | Rust 1.148x slower | 2.220e-16 |
+| 500 | 2.446 ms | 2.090 ms | 1.170x faster | 1.723456 ms | Rust 1.213x slower | 3.331e-16 |
+| 1000 | 8.556 ms | 5.872 ms | 1.457x faster | 4.513882 ms | Rust 1.301x slower | 7.216e-16 |
+| 2000 | 25.959 ms | 18.627 ms | 1.394x faster | 7.330187 ms | Rust 2.541x slower | 1.443e-15 |
+
+- Tail repeat: the first post-compile candidate run measured `19.163 ms` at
+  `n=2000`; the repeat measured `18.627 ms`. Small `n=100/200` rows are noisy
+  and can regress, but the tracked large-n residual improves from `3.542x`
+  slower than this SciPy comparator to `2.541x` slower.
+- Interpretation: this removes bookkeeping overhead inside the same
+  all-face-scan hull loop, but it does not solve the remaining algorithmic
+  residual. Follow-up `frankenscipy-ld9st` is filed for a true adjacency-complete
+  conflict graph or randomized incremental hull; do not retry visible-face
+  stamps, duplicate-grid thresholds, cached normals, tolerance scans, or horizon
+  container micro-levers without a fresh profile.
+- Gates:
+  - PASS: local per-crate Rust benchmark command above.
+  - PASS: `cargo +nightly-2026-06-10 run --release -p fsci-spatial --bin
+    perf_spherical_voronoi` (`n=8/16/30` golden payloads and `64/200/320`
+    timing rows completed).
+  - PASS: local SciPy comparator on the identical `/tmp/sv_{n}.f64` and
+    `/tmp/sv_{n}_verts.f64` dumps.
+  - PASS: `rustfmt +nightly-2026-06-10 --edition 2024 --check
+    crates/fsci-spatial/src/lib.rs`.
+  - PASS: `cargo +nightly-2026-06-10 test -p fsci-spatial
+    spherical_voronoi --lib -- --nocapture` (`5` passed, `216` filtered).
+  - PASS: `cargo +nightly-2026-06-10 check -p fsci-spatial --all-targets`.
+  - PASS: `cargo +nightly-2026-06-10 clippy -p fsci-spatial --all-targets
+    --no-deps -- -D warnings`.
+  - PASS: `git diff --check -- crates/fsci-spatial/src/lib.rs
+    docs/NEGATIVE_EVIDENCE.md .beads/issues.jsonl`.
+  - PASS: `ubs crates/fsci-spatial/src/lib.rs` exited `0`; it reported no
+    critical issues in the touched file.
+
 ## 2026-06-23 - BlackThrush - BOLD-VERIFY SphericalVoronoi large-n tail: duplicate-grid keep
 
 - Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.

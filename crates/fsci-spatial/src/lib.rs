@@ -4376,7 +4376,9 @@ fn convex_hull_3d_facets(points: &[[f64; 3]], _center: [f64; 3]) -> Option<Vec<[
     // Reused scratch buffers — the insertion loop is O(n) iterations and each
     // touches O(faces) work, so allocating these fresh per point dominated the
     // wall time (gap-grows-with-n alloc tell). Clear-and-refill instead.
-    let mut visible: Vec<bool> = Vec::new();
+    let mut visible_faces: Vec<usize> = Vec::new();
+    let mut visible_marks: Vec<usize> = Vec::new();
+    let mut visible_stamp = 0usize;
     let mut visible_edges: std::collections::HashSet<(usize, usize)> =
         std::collections::HashSet::new();
     let mut horizon: Vec<(usize, usize)> = Vec::new();
@@ -4386,31 +4388,32 @@ fn convex_hull_3d_facets(points: &[[f64; 3]], _center: [f64; 3]) -> Option<Vec<[
             continue;
         }
         let pp = points[p];
-        visible.clear();
-        let mut any_visible = false;
-        visible.extend(faces.iter().zip(&face_normals).map(|(f, &normal)| {
-            let is_visible = dot3(normal, sub3(pp, points[f[0]])) > tol;
-            any_visible |= is_visible;
-            is_visible
-        }));
-        if !any_visible {
+        visible_faces.clear();
+        visible_stamp += 1;
+        if visible_marks.len() < faces.len() {
+            visible_marks.resize(faces.len(), 0);
+        }
+        for (fi, (f, &normal)) in faces.iter().zip(&face_normals).enumerate() {
+            if dot3(normal, sub3(pp, points[f[0]])) > tol {
+                visible_faces.push(fi);
+                visible_marks[fi] = visible_stamp;
+            }
+        }
+        if visible_faces.is_empty() {
             continue; // strictly inside the current hull (shouldn't happen on a sphere)
         }
         // Directed edges of all visible faces; a directed edge whose twin is not
         // itself in a visible face lies on the horizon.
         visible_edges.clear();
-        for (fi, f) in faces.iter().enumerate() {
-            if visible[fi] {
-                visible_edges.insert((f[0], f[1]));
-                visible_edges.insert((f[1], f[2]));
-                visible_edges.insert((f[2], f[0]));
-            }
+        for &fi in &visible_faces {
+            let f = faces[fi];
+            visible_edges.insert((f[0], f[1]));
+            visible_edges.insert((f[1], f[2]));
+            visible_edges.insert((f[2], f[0]));
         }
         horizon.clear();
-        for (fi, f) in faces.iter().enumerate() {
-            if !visible[fi] {
-                continue;
-            }
+        for &fi in &visible_faces {
+            let f = faces[fi];
             for &(u, v) in &[(f[0], f[1]), (f[1], f[2]), (f[2], f[0])] {
                 if !visible_edges.contains(&(v, u)) {
                     horizon.push((u, v));
@@ -4421,7 +4424,7 @@ fn convex_hull_3d_facets(points: &[[f64; 3]], _center: [f64; 3]) -> Option<Vec<[
         // allocation), then cone the horizon to the new apex.
         let mut w = 0;
         for r in 0..faces.len() {
-            if !visible[r] {
+            if visible_marks[r] != visible_stamp {
                 faces[w] = faces[r];
                 face_normals[w] = face_normals[r];
                 w += 1;
