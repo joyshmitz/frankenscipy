@@ -266,18 +266,31 @@ fn bench_rbf_and_rect(c: &mut Criterion) {
 /// loop-invariant hoist: evaluate_many computes the point-independent setup
 /// (Bernstein binomials / tensor strides + per-dim orders + scratch) ONCE.
 fn bench_batch_eval(c: &mut Criterion) {
-    use fsci_interpolate::{BPoly, NdPPoly};
+    use fsci_interpolate::{BPoly, NdPPoly, PPoly};
     let m = 4096usize;
     let mut group = c.benchmark_group("batch_eval");
 
-    // BPoly: per-segment Bernstein binomials hoisted in evaluate_many.
+    // PPoly: interval lookup is binary search over sorted breakpoints.
     let n_pieces = 200usize;
+    let px: Vec<f64> = (0..=n_pieces).map(|i| i as f64).collect();
+    let pc: Vec<Vec<f64>> = (0..n_pieces)
+        .map(|i| vec![0.125, -0.5, i as f64, 1.0])
+        .collect();
+    let pp = PPoly::new(pc, px).expect("ppoly");
+    let qs: Vec<f64> = (0..m)
+        .map(|i| (i as f64) * n_pieces as f64 / m as f64)
+        .collect();
+    group.bench_function("ppoly/evaluate_many", |b| b.iter(|| pp.evaluate_many(&qs)));
+    group.bench_function("ppoly/map_evaluate", |b| {
+        b.iter(|| qs.iter().map(|&x| pp.evaluate(x)).collect::<Vec<_>>())
+    });
+
+    // BPoly: per-segment Bernstein binomials hoisted in evaluate_many.
     let bx: Vec<f64> = (0..=n_pieces).map(|i| i as f64).collect();
     let bc: Vec<Vec<f64>> = (0..n_pieces)
         .map(|i| vec![i as f64, (i + 1) as f64, 0.5, 1.5])
         .collect();
     let bp = BPoly::new(bc, bx).expect("bpoly");
-    let qs: Vec<f64> = (0..m).map(|i| (i as f64) * n_pieces as f64 / m as f64).collect();
     group.bench_function("bpoly/evaluate_many", |b| b.iter(|| bp.evaluate_many(&qs)));
     group.bench_function("bpoly/map_evaluate", |b| {
         b.iter(|| qs.iter().map(|&x| bp.evaluate(x)).collect::<Vec<_>>())

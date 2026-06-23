@@ -4970,24 +4970,49 @@ impl PPoly {
         if xval.is_nan() {
             return f64::NAN;
         }
+        let seg = self.segment(xval);
+        self.evaluate_segment(xval, seg)
+    }
+
+    fn segment(&self, xval: f64) -> usize {
         // Find interval: largest i in 1..n with x[i] <= xval, else 0. Binary search
         // over the sorted breakpoints — byte-identical to the former O(n) linear
         // scan (`partition_point` counts the leading run of x[i] <= xval), O(log n)
         // per point. frankenscipy-2jmet.
         let n = self.x.len() - 1;
-        let seg = if n == 0 {
+        if n == 0 {
             0
         } else {
             self.x[1..n].partition_point(|&xi| xval >= xi)
-        };
+        }
+    }
 
-        // Evaluate polynomial in local coordinates
+    fn evaluate_segment(&self, xval: f64, seg: usize) -> f64 {
+        // Evaluate polynomial in local coordinates.
         let dx = xval - self.x[seg];
         polyval(&self.c[seg], dx)
     }
 
     /// Evaluate at multiple points.
     pub fn evaluate_many(&self, xs: &[f64]) -> Vec<f64> {
+        let sorted_non_nan =
+            !xs.iter().any(|x| x.is_nan()) && xs.windows(2).all(|w| w[0] <= w[1]);
+        if sorted_non_nan {
+            let n = self.x.len() - 1;
+            let mut seg = 0usize;
+            return xs
+                .iter()
+                .map(|&xval| {
+                    if n > 0 {
+                        while seg + 1 < n && xval >= self.x[seg + 1] {
+                            seg += 1;
+                        }
+                    }
+                    self.evaluate_segment(xval, seg)
+                })
+                .collect();
+        }
+
         xs.iter().map(|&x| self.evaluate(x)).collect()
     }
 }
@@ -8813,6 +8838,20 @@ mod tests {
         let batch = p.evaluate_many(&xs);
         for (&x, b) in xs.iter().zip(batch.iter()) {
             assert_eq!(*b, p.evaluate(x), "evaluate_many != evaluate at {x}");
+        }
+    }
+
+    #[test]
+    fn ppoly_evaluate_many_sorted_cursor_matches_scalar() {
+        let p = PPoly::new(
+            vec![vec![10.0], vec![20.0], vec![30.0]],
+            vec![0.0, 1.0, 2.0, 3.0],
+        )
+        .unwrap();
+        let xs = [-1.0, 0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 5.0];
+        let batch = p.evaluate_many(&xs);
+        for (&x, b) in xs.iter().zip(batch.iter()) {
+            assert_eq!(*b, p.evaluate(x), "sorted evaluate_many != evaluate at {x}");
         }
     }
 

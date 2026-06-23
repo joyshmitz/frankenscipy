@@ -6,6 +6,105 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-23 - BlackThrush - BOLD-VERIFY PPoly sorted batch cursor: KEEP, Rust now beats SciPy
+
+- Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
+- Bead: `frankenscipy-2jmet` (`[perf][interpolate] PPoly::evaluate finds
+  the interval by O(n) linear scan; binary search over sorted breakpoints`).
+- Decision: KEEP. Current scalar `PPoly::evaluate` already used
+  `partition_point` binary search, but `evaluate_many` still mapped scalar
+  evaluation and paid a segment lookup per query. The kept lever mirrors the
+  existing `BPoly` sorted-batch cursor: sorted, non-NaN query batches advance a
+  single segment index; unsorted input and NaNs keep the previous scalar map
+  behavior.
+- Rust routing baseline: RCH
+  `cargo bench -p fsci-interpolate --bench interpolate_bench --
+  batch_eval/ppoly/evaluate_many --sample-size 10 --warm-up-time 1
+  --measurement-time 1 --noplot`, worker `vmi1149989`, current pre-lever
+  median `132.75 us` (`[116.28 us, 148.74 us]`). This was routing evidence
+  only because the keep proof below uses a same-worker scalar-map row.
+- Rust candidate benchmark: same command after the sorted cursor, worker
+  `ovh-a`, median `15.025 us` (`[14.984 us, 15.056 us]`).
+- Same-worker scalar-map comparator: `RCH_WORKER=ovh-a` RCH
+  `cargo bench -p fsci-interpolate --bench interpolate_bench --
+  batch_eval/ppoly/map_evaluate --sample-size 10 --warm-up-time 1
+  --measurement-time 1 --noplot`, median `55.215 us`
+  (`[55.047 us, 55.367 us]`).
+- SciPy comparator: local SciPy 1.17.1 / NumPy 2.4.3,
+  `scipy.interpolate.PPoly(c, x, extrapolate=True)(qs)` on the identical
+  deterministic `interpolate_bench.rs` workload (`4096` sorted queries,
+  `200` pieces, degree `3`, interval coefficients `[0.125, -0.5, i, 1.0]`):
+  median `35.442 us`, best `35.057 us`, mean `37.169 us` over 80 repetitions,
+  checksum100 `1.774072036780e+02`.
+
+| Workload | Scalar-map Rust median | Candidate Rust median | SciPy median | Candidate vs scalar-map | Candidate vs SciPy |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `batch_eval/ppoly/evaluate_many` | 55.215 us | 15.025 us | 35.442 us | 3.68x faster | Rust 2.36x faster |
+
+- Gates:
+  - PASS: RCH `cargo test -p fsci-interpolate ppoly --lib --
+    --nocapture` on `vmi1149989` (`ppoly_interval_selection`,
+    `ppoly_evaluate_many_sorted_cursor_matches_scalar`, plus filtered
+    NdPPoly tests).
+  - PASS: RCH `cargo bench -p fsci-interpolate --bench interpolate_bench --
+    batch_eval/ppoly/evaluate_many --sample-size 10 --warm-up-time 1
+    --measurement-time 1 --noplot` on `ovh-a`.
+  - PASS: RCH `cargo bench -p fsci-interpolate --bench interpolate_bench --
+    batch_eval/ppoly/map_evaluate --sample-size 10 --warm-up-time 1
+    --measurement-time 1 --noplot` on `ovh-a`.
+  - PASS: RCH `cargo check -p fsci-interpolate --all-targets` on `ovh-a`.
+  - BLOCKED: `cargo fmt -p fsci-interpolate --check` reports broad
+    pre-existing rustfmt drift across `fsci-interpolate` benches, helper bins,
+    FITPACK, sphere, and tests; this perf commit does not normalize unrelated
+    formatting churn.
+  - PASS: `git diff --check -- crates/fsci-interpolate/src/lib.rs
+    crates/fsci-interpolate/benches/interpolate_bench.rs
+    docs/NEGATIVE_EVIDENCE.md .beads/issues.jsonl`.
+  - PASS: `ubs crates/fsci-interpolate/src/lib.rs
+    crates/fsci-interpolate/benches/interpolate_bench.rs
+    docs/NEGATIVE_EVIDENCE.md .beads/issues.jsonl` exited 0 with no critical
+    findings; it reported the existing broad Rust warning inventory.
+  - Existing warnings remain in `fsci-interpolate` (`surfit.rs`, `sphere.rs`,
+    `sphere_grid.rs`, `solve_dense_system`, and unused interpolate fields).
+- Retry predicate: do not repeat scalar `PPoly` binary-search work or the
+  sorted-batch cursor. Continue only from a fresh current-source PPoly workload
+  that still trails SciPy, likely unsorted queries or deeper polynomial
+  arithmetic rather than interval lookup.
+
+## 2026-06-23 - BlackThrush - BOLD-VERIFY GMM E-step parallelism: stale bead, current Rust wins
+
+- Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
+- Bead: `frankenscipy-yw7ts` (`[perf][cluster] parallelize GMM EM E-step
+  across data points (ordered slots, byte-identical); per-point logp/lse
+  independent`).
+- Decision: NO SOURCE CHANGE / CLOSE STALE. Current `origin/main` already has
+  the ordered-slot parallel E-step in `fsci_cluster::gaussian_mixture` and
+  `gaussian_mixture_full`: per-point responsibilities and log-likelihood slots
+  are written independently, then reduced in point order before the serial
+  M-step.
+- Rust benchmark: `AGENT_NAME=BlackThrush
+  CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec --
+  cargo bench -p fsci-cluster --bench cluster_bench -- gmm/diag --sample-size
+  10 --warm-up-time 1 --measurement-time 1 --noplot`, worker `ovh-a`.
+  The GMM rows completed, then the bench binary exited 101 in unrelated
+  `va60h_gauntlet_linkage` setup (`assert_linkage_bits_eq` one-bit delta);
+  treat that harness issue separately from these measured GMM rows.
+- Comparator: local scikit-learn 1.9.0
+  `sklearn.mixture.GaussianMixture(covariance_type="diag")` on the identical
+  deterministic `cluster_bench.rs` `blobs(n, d)` datasets. SciPy itself does
+  not expose a Gaussian-mixture estimator, so this is a sklearn-compatible
+  cluster surface rather than a SciPy surface.
+
+| Workload | Rust Criterion median | sklearn median | Ratio |
+| --- | ---: | ---: | ---: |
+| `gmm/diag/n1000_d3_k3` | 589.45 us | 5.034 ms | Rust 8.54x faster |
+| `gmm/diag/n5000_d8_k5` | 3.8659 ms | 43.442 ms | Rust 11.24x faster |
+| `gmm/diag/n20000_d16_k8` | 38.812 ms | 637.001 ms | Rust 16.41x faster |
+
+- Retry predicate: do not re-implement E-step parallelism. Reopen only if a
+  fresh current-source GMM row regresses, or if a separate full-covariance GMM
+  benchmark shows a measured external-comparator loss.
+
 ## 2026-06-23 - BlackThrush - BOLD-VERIFY BPoly cubic Bernstein arithmetic: KEEP, Rust now beats SciPy
 
 - Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
