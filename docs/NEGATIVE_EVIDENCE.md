@@ -6,6 +6,42 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-23 - BlackThrush - BOLD-VERIFY cophenet member-list move: stale bead, current Rust wins
+
+- Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
+- Bead: `frankenscipy-jphzn` (`[perf][cluster] cophenet clones the growing
+  membership list at each merge; mem::take to move it instead`).
+- Decision: NO SOURCE CHANGE / CLOSE STALE. Current `origin/main` already has
+  the requested move-instead-of-clone lever in `fsci_cluster::cophenet`:
+  `std::mem::take(&mut membership[ci])` moves the consumed left membership
+  list, then appends the right list in the same order.
+- Rust benchmark: `AGENT_NAME=BlackThrush
+  CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec --
+  cargo bench -p fsci-cluster --bench cluster_bench -- hierarchical/cophenet
+  --sample-size 10 --warm-up-time 1 --measurement-time 1 --noplot`, worker
+  `ovh-a`, emitted target row `hierarchical/cophenet/n400` median `145.11 us`.
+  The bench process later exited 101 from unrelated `va60h_gauntlet_linkage`
+  setup (`assert_linkage_bits_eq` one-bit delta) after the cophenet row was
+  measured; treat that harness issue as separate from this stale bead.
+- SciPy comparator: local SciPy 1.17.1 / NumPy 2.4.3,
+  `scipy.cluster.hierarchy.linkage(..., method="average")` on the same
+  deterministic `cluster_bench.rs` `blobs(400, 4)` data, timing only
+  `scipy.cluster.hierarchy.cophenet(z)` over 80 repetitions: median `312.246
+  us`, best `305.308 us`.
+
+| Workload | Rust median | SciPy median | Ratio |
+| --- | ---: | ---: | ---: |
+| `hierarchical/cophenet/n400` | 145.11 us | 312.246 us | Rust 2.15x faster |
+
+- Gate notes: `AGENT_NAME=BlackThrush
+  CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec --
+  cargo test -p fsci-cluster cophenet --lib -- --nocapture` passed on
+  `vmi1149989` (`cophenet_basic`, `cophenet_matches_scipy_reference_values`).
+  Existing `fsci-cluster` warnings remain outside this closeout.
+- Retry predicate: reopen only with a fresh current-source same-workload
+  cophenet loss to SciPy or a cophenet-specific regression. Do not re-implement
+  the already-present `mem::take` member-list move.
+
 ## 2026-06-23 - BlackThrush - BOLD-VERIFY MultivariateNormal batch log/pdf: stale bead, current Rust wins
 
 - Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
