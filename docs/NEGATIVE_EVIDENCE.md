@@ -6,6 +6,66 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-23 - BlackThrush - BOLD-VERIFY SphericalVoronoi large-n tail: duplicate-grid keep
+
+- Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
+- Bead: `frankenscipy-u34ye` (`[perf][spatial] SphericalVoronoi conflict
+  graph for large-n hull tail`).
+- Decision: KEEP the duplicate-grid lever; REJECT the attempted conflict graph
+  and horizon-vector micro-lever. The attempted point/face conflict graph
+  failed correctness on larger deterministic sphere sets (`perf_sphvor_ab`
+  returned non-coplanar-generator errors for all rows, and
+  `perf_spherical_voronoi` failed at `n=30`), so it was reverted. Replacing the
+  horizon `HashSet` with a small vector was tail-neutral (`29.545 ms` to
+  `29.542 ms` at `n=2000`) and was also reverted. The kept lever replaces the
+  post-hull duplicate Voronoi-vertex O(V^2) scan with a tolerance-preserving
+  3-D cell grid for large accepted facet sets; every candidate still checks the
+  exact squared-distance predicate against vertices in neighboring cells.
+- Harness: local per-crate
+  `AGENT_NAME=BlackThrush
+  CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b cargo
+  +nightly-2026-06-10 run --release -p fsci-spatial --bin perf_sphvor_ab`.
+  The explicit nightly matches the warmed cod-b target artifacts; no target
+  cleanup was run.
+- SciPy comparator: local SciPy `SphericalVoronoi` on the identical point dumps
+  emitted by `perf_sphvor_ab`; sorted vertex-set max absolute differences
+  remain machine precision.
+
+| n | Baseline Rust | Candidate Rust | Internal ratio | SciPy comparator | Candidate vs SciPy | Max vertex diff |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 100 | 175.893 us | 277.375 us | 0.634x slower | 0.506790 ms | Rust 1.827x faster | 5.690e-16 |
+| 200 | 520.276 us | 677.614 us | 0.768x slower | 0.784487 ms | Rust 1.158x faster | 2.220e-16 |
+| 500 | 2.306 ms | 2.473 ms | 0.932x slower | 1.812162 ms | Rust 1.365x slower | 3.331e-16 |
+| 1000 | 7.839 ms | 7.468 ms | 1.050x faster | 3.677187 ms | Rust 2.031x slower | 7.216e-16 |
+| 2000 | 29.545 ms | 24.399 ms | 1.211x faster | 8.520782 ms | Rust 2.863x slower | 1.443e-15 |
+
+- Tail repeat: the first post-compile duplicate-grid candidate run measured
+  `26.686 ms` at `n=2000`; the repeat measured `24.399 ms`. The small rows
+  regress from hash overhead, so this is a large-n-tail keep only.
+- Interpretation: the residual tail improves from about `3.47x` slower than
+  the refreshed SciPy comparator to `2.86x` slower on the tracked `n=2000`
+  row. The remaining loss is still the all-face incremental hull scan; retry
+  only with a robust conflict graph or randomized-incremental hull that proves
+  the full deterministic sphere harness before benchmarking.
+- Gates:
+  - PASS: local per-crate Rust benchmark command above.
+  - PASS: `cargo +nightly-2026-06-10 run --release -p fsci-spatial --bin
+    perf_spherical_voronoi` (`n=8/16/30` golden payloads and `64/200/320`
+    timing rows completed).
+  - PASS: local SciPy comparator on the identical `/tmp/sv_{n}.f64` and
+    `/tmp/sv_{n}_verts.f64` dumps.
+  - PASS: `rustfmt +nightly-2026-06-10 --edition 2024 --check
+    crates/fsci-spatial/src/lib.rs`.
+  - PASS: `cargo +nightly-2026-06-10 test -p fsci-spatial
+    spherical_voronoi --lib -- --nocapture` (`5` passed, `216` filtered).
+  - PASS: `cargo +nightly-2026-06-10 check -p fsci-spatial --all-targets`.
+  - PASS: `cargo +nightly-2026-06-10 clippy -p fsci-spatial --all-targets
+    --no-deps -- -D warnings`.
+  - PASS: `git diff --check -- crates/fsci-spatial/src/lib.rs
+    docs/NEGATIVE_EVIDENCE.md .beads/issues.jsonl`.
+  - PASS: `ubs crates/fsci-spatial/src/lib.rs` exited `0`; it reported the
+    existing broad warning inventory and no critical issues.
+
 ## 2026-06-23 - BlackThrush - BOLD-VERIFY SphericalVoronoi large-n tail: cached face normals keep
 
 - Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.

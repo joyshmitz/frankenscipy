@@ -4509,19 +4509,59 @@ impl SphericalVoronoi {
             })
             .collect();
 
-        let mut vertices = Vec::new();
-        let mut face_indices = Vec::new();
-        for ((i, j, k), vertex) in accepted {
-            if vertices
-                .iter()
-                .any(|&existing| norm3_squared(sub3(existing, vertex)) <= radius_tol_sq)
-            {
-                return Err(SpatialError::InvalidArgument(
-                    "spherical voronoi requires non-coplanar generators on the sphere".to_string(),
-                ));
+        let mut vertices = Vec::with_capacity(accepted.len());
+        let mut face_indices = Vec::with_capacity(accepted.len());
+        if accepted.len() > 128 {
+            let cell_width = radius_tol;
+            let cell_key = |vertex: [f64; 3]| -> (i64, i64, i64) {
+                (
+                    (vertex[0] / cell_width).floor() as i64,
+                    (vertex[1] / cell_width).floor() as i64,
+                    (vertex[2] / cell_width).floor() as i64,
+                )
+            };
+            let mut duplicate_grid: std::collections::HashMap<(i64, i64, i64), Vec<usize>> =
+                std::collections::HashMap::with_capacity(accepted.len() * 2);
+            for ((i, j, k), vertex) in accepted {
+                let key = cell_key(vertex);
+                for dx in -1..=1 {
+                    for dy in -1..=1 {
+                        for dz in -1..=1 {
+                            if duplicate_grid
+                                .get(&(key.0 + dx, key.1 + dy, key.2 + dz))
+                                .is_some_and(|candidates| {
+                                    candidates.iter().any(|&idx| {
+                                        norm3_squared(sub3(vertices[idx], vertex)) <= radius_tol_sq
+                                    })
+                                })
+                            {
+                                return Err(SpatialError::InvalidArgument(
+                                    "spherical voronoi requires non-coplanar generators on the sphere"
+                                        .to_string(),
+                                ));
+                            }
+                        }
+                    }
+                }
+                let vertex_idx = vertices.len();
+                duplicate_grid.entry(key).or_default().push(vertex_idx);
+                vertices.push(vertex);
+                face_indices.push((i, j, k));
             }
-            vertices.push(vertex);
-            face_indices.push((i, j, k));
+        } else {
+            for ((i, j, k), vertex) in accepted {
+                if vertices
+                    .iter()
+                    .any(|&existing| norm3_squared(sub3(existing, vertex)) <= radius_tol_sq)
+                {
+                    return Err(SpatialError::InvalidArgument(
+                        "spherical voronoi requires non-coplanar generators on the sphere"
+                            .to_string(),
+                    ));
+                }
+                vertices.push(vertex);
+                face_indices.push((i, j, k));
+            }
         }
 
         if vertices.len() < 4 {
