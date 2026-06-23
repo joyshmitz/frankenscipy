@@ -4463,9 +4463,11 @@ impl SphericalVoronoi {
                 )));
             }
         }
+        let radius_tol = tol * radius.max(1.0);
+        let radius_tol_sq = radius_tol * radius_tol;
         for i in 0..points.len() {
             for j in (i + 1)..points.len() {
-                if norm3(sub3(points[i], points[j])) <= tol * radius.max(1.0) {
+                if norm3_squared(sub3(points[i], points[j])) <= radius_tol_sq {
                     return Err(SpatialError::InvalidArgument(
                         "spherical voronoi requires distinct points".to_string(),
                     ));
@@ -4506,7 +4508,7 @@ impl SphericalVoronoi {
         for ((i, j, k), vertex) in accepted {
             if vertices
                 .iter()
-                .any(|&existing| norm3(sub3(existing, vertex)) <= tol * radius.max(1.0))
+                .any(|&existing| norm3_squared(sub3(existing, vertex)) <= radius_tol_sq)
             {
                 return Err(SpatialError::InvalidArgument(
                     "spherical voronoi requires non-coplanar generators on the sphere".to_string(),
@@ -4573,8 +4575,12 @@ fn dot3(a: [f64; 3], b: [f64; 3]) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
+fn norm3_squared(a: [f64; 3]) -> f64 {
+    dot3(a, a)
+}
+
 fn norm3(a: [f64; 3]) -> f64 {
-    dot3(a, a).sqrt()
+    norm3_squared(a).sqrt()
 }
 
 fn add3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {

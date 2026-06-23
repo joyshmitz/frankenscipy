@@ -6,6 +6,53 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-23 - BlackThrush - BOLD-VERIFY SphericalVoronoi large-n tail: squared-distance keep
+
+- Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
+- Bead: `frankenscipy-3gzcw` (`[perf][spatial] BOLD-VERIFY
+  SphericalVoronoi large-n O(n^2) tail`).
+- Decision: KEEP. Fresh same-host BOLD-VERIFY confirmed the post-hull-rewrite
+  large-n residual is still real: current source was `48.572 ms` at `n=2000`
+  versus SciPy `7.618536 ms`, a `6.376x` loss, with vertex-set parity still at
+  `1.443e-15`. The kept lever removes `sqrt` from the two quadratic tolerance
+  scans in `SphericalVoronoi::new` by comparing squared distances against the
+  squared tolerance. This is behavior-equivalent for nonnegative distances and
+  leaves the hull, face ordering, vertices, and region construction unchanged.
+- Harness: local per-crate
+  `cargo +nightly-2026-06-10 run --release -p fsci-spatial --bin
+  perf_sphvor_ab` with
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b`. The
+  explicit nightly was required because the warm target dir contained artifacts
+  built by rustc `beae78130`; the default `nightly` selected `f20a92ec0` and
+  produced E0514 incompatible-artifact errors. I did not clean the shared target.
+- SciPy comparator: local SciPy `SphericalVoronoi` on the identical point dumps
+  emitted by `perf_sphvor_ab`; sorted vertex-set max absolute differences are
+  unchanged from the previous proof and remain machine precision.
+
+| n | Rust before | Rust after | Internal ratio | SciPy comparator | After vs SciPy | Max vertex diff |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 100 | 243.731 us | 233.934 us | 1.0419x faster | 0.449381 ms | Rust 1.9209x faster | 5.690e-16 |
+| 200 | 714.905 us | 573.217 us | 1.2472x faster | 0.753197 ms | Rust 1.3140x faster | 2.220e-16 |
+| 500 | 3.514 ms | 2.556 ms | 1.3748x faster | 1.751819 ms | Rust 1.4591x slower | 3.331e-16 |
+| 1000 | 14.087 ms | 9.874 ms | 1.4267x faster | 3.584683 ms | Rust 2.7545x slower | 7.216e-16 |
+| 2000 | 48.572 ms | 36.275 ms | 1.3390x faster | 7.396777 ms | Rust 4.9042x slower | 1.443e-15 |
+
+- Interpretation: this is a real bounded constant-factor keep, not a full
+  closeout. The large-n tail drops from about `6.38x` slower to `4.90x` slower
+  on the `n=2000` row. The remaining loss is still the incremental hull's
+  O(n^2) all-face visibility scan; closing it needs a conflict-graph or
+  randomized-incremental hull, not more local tolerance-check cleanup.
+- Gates:
+  - PASS: local per-crate Rust benchmark command above.
+  - PASS: local SciPy comparator on the identical `/tmp/sv_{n}.f64` dumps.
+  - PASS: `rustfmt +nightly-2026-06-10 --edition 2024 --check
+    crates/fsci-spatial/src/lib.rs`.
+  - PASS: `cargo +nightly-2026-06-10 test -p fsci-spatial
+    spherical_voronoi --lib -- --nocapture` (`5` passed, `216` filtered).
+  - PASS: `cargo +nightly-2026-06-10 check -p fsci-spatial --all-targets`.
+  - PASS: `cargo +nightly-2026-06-10 clippy -p fsci-spatial --all-targets
+    --no-deps -- -D warnings`.
+
 ## 2026-06-23 - BlackThrush - BOLD-VERIFY NdPPoly batch eval: stale bead, current Rust wins
 
 - Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
