@@ -6,6 +6,40 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-23 - BlackThrush - BOLD-VERIFY MultivariateNormal batch log/pdf: stale bead, current Rust wins
+
+- Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
+- Bead: `frankenscipy-t3bhy` (`[perf][stats] MultivariateNormal.logpdf
+  reallocates centered+solved & recomputes the dim*ln(2pi)+log_det constant per
+  call; add logpdf_many/pdf_many`).
+- Decision: NO SOURCE CHANGE / CLOSE STALE. Current `origin/main` already has
+  `MultivariateNormal::logpdf_many` and `pdf_many`, with the constant hoisted,
+  centered/solved scratch buffers reused, and a dimension/work gate for the
+  parallel path. Inline tests already cover batch-vs-scalar bit identity.
+- Rust benchmark: `AGENT_NAME=BlackThrush
+  CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec --
+  cargo bench -p fsci-stats --bench stats_bench -- multivariate_normal_pdf
+  --sample-size 10 --warm-up-time 1 --measurement-time 1 --noplot`, worker
+  `vmi1149989`, benchmark `multivariate_normal_pdf/pdf_many/{3,5,8,10}` with
+  100k deterministic points.
+- SciPy comparator: local SciPy 1.17.1 / NumPy 2.4.3 on the identical mean,
+  covariance, and query arrays from `stats_bench.rs`, using
+  `scipy.stats.multivariate_normal(...).pdf(q)` medians over 8 repetitions.
+
+| dimension | Rust Criterion median | SciPy median | Ratio |
+| ---: | ---: | ---: | ---: |
+| 3 | 2.8001 ms | 5.669 ms | Rust 2.02x faster |
+| 5 | 2.7348 ms | 6.646 ms | Rust 2.43x faster |
+| 8 | 4.3350 ms | 10.293 ms | Rust 2.37x faster |
+| 10 | 4.6183 ms | 13.122 ms | Rust 2.84x faster |
+
+- Gate notes: the per-crate bench completed successfully. The compile emitted
+  existing warnings in unrelated `fsci-special` helpers and two existing
+  `fsci-stats` bins (`probe_disc`, `diff_wilcox`), not in the MVN path.
+- Retry predicate: reopen only with a fresh same-machine workload where current
+  `logpdf_many`/`pdf_many` loses to SciPy. Do not re-implement the already
+  present scratch-reuse/constant-hoist batch API.
+
 ## 2026-06-22 - BlackThrush - BOLD-VERIFY FFT 5-smooth mixed-radix plan cache: KEEP, residual near parity
 
 - Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
