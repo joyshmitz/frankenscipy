@@ -5007,6 +5007,9 @@ pub struct BPoly {
     pub c: Vec<Vec<f64>>,
     /// Breakpoints (`n+1` values for `n` intervals).
     pub x: Vec<f64>,
+    /// Per-interval Bernstein binomial coefficients, cached for repeated batch
+    /// evaluation. Only the coefficient degree matters, not coefficient values.
+    binoms: Vec<Vec<f64>>,
 }
 
 impl BPoly {
@@ -5028,7 +5031,8 @@ impl BPoly {
                 ),
             });
         }
-        Ok(Self { c, x })
+        let binoms = bpoly_binoms(&c);
+        Ok(Self { c, x, binoms })
     }
 
     fn segment(&self, xval: f64) -> usize {
@@ -5068,14 +5072,19 @@ impl BPoly {
     /// not on the query point) are computed ONCE up front instead of recomputed —
     /// `O(k)` per term — on every point.
     pub fn evaluate_many(&self, xs: &[f64]) -> Vec<f64> {
-        let binoms: Vec<Vec<f64>> = self
-            .c
-            .iter()
-            .map(|coeffs| {
-                let k = coeffs.len() - 1;
-                (0..=k).map(|a| binom(k, a)).collect()
-            })
-            .collect();
+        let cached_binoms_match = self.binoms.len() == self.c.len()
+            && self
+                .binoms
+                .iter()
+                .zip(&self.c)
+                .all(|(bn, coeffs)| bn.len() == coeffs.len());
+        let local_binoms;
+        let binoms = if cached_binoms_match {
+            &self.binoms
+        } else {
+            local_binoms = bpoly_binoms(&self.c);
+            &local_binoms
+        };
         // Per-query segment lookup + Bernstein sum, reading the hoisted `binoms`.
         // (Parallelizing this with par_query_map MEASURED as a regression — the
         // per-query work is only ~k flops, so thread-spawn overhead dominates;
@@ -5119,9 +5128,11 @@ impl BPoly {
                     .collect()
             })
             .collect();
+        let binoms = bpoly_binoms(&dc);
         BPoly {
             c: dc,
             x: self.x.clone(),
+            binoms,
         }
     }
 }
@@ -5138,6 +5149,15 @@ fn binom(n: usize, k: usize) -> f64 {
         result = result * (n - i) as f64 / (i + 1) as f64;
     }
     result
+}
+
+fn bpoly_binoms(c: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    c.iter()
+        .map(|coeffs| {
+            let k = coeffs.len() - 1;
+            (0..=k).map(|a| binom(k, a)).collect()
+        })
+        .collect()
 }
 
 /// N-D tensor-product B-spline, matching `scipy.interpolate.NdBSpline`.
@@ -12018,7 +12038,5 @@ mod tests {
         );
     }
 }
-
-
 
 

@@ -6,6 +6,64 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-23 - BlackThrush - BOLD-VERIFY BPoly binomial cache: KEEP, residual SciPy gap filed
+
+- Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
+- Bead: `frankenscipy-id36o` (`[perf][interpolate] BPoly::evaluate_many
+  recomputes Bernstein binomials per point; precompute per-segment table once`).
+- Decision: KEEP. Current source already hoisted Bernstein binomial coefficients
+  out of the per-query loop, but still allocated and recomputed the per-segment
+  table once per `evaluate_many` call. `BPoly::new` and `derivative` now cache
+  the table on the `BPoly` instance, while `evaluate_many` retains a shape
+  validation fallback for public coefficient-shape mutation.
+- Rust baseline benchmark: `AGENT_NAME=BlackThrush
+  CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec --
+  cargo bench -p fsci-interpolate --bench interpolate_bench --
+  batch_eval/bpoly/evaluate_many --sample-size 10 --warm-up-time 1
+  --measurement-time 1 --noplot`, worker `vmi1152480`, median `194.15 us`
+  (`[180.97 us, 212.51 us]`).
+- Rust candidate benchmark: same command, worker `vmi1149989`, median `144.06
+  us` (`[138.67 us, 148.88 us]`). RCH selected a different worker, so treat
+  the exact speedup as cross-worker evidence; the measured direction is large
+  enough to keep and the removed allocation/recompute is directly in the hot
+  path.
+- SciPy comparator: local SciPy 1.17.1 / NumPy 2.4.3,
+  `scipy.interpolate.BPoly(c, x, extrapolate=True)(qs)` on the identical
+  deterministic `interpolate_bench.rs` workload (`4096` sorted queries,
+  `200` pieces, degree `3`, interval coefficients `[i, i+1, 0.5, 1.5]`):
+  median `57.239 us`, best `56.767 us`, mean `61.069 us` over 80 repetitions.
+
+| Workload | Parent Rust median | Candidate Rust median | SciPy median | Candidate vs parent | Candidate vs SciPy |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `batch_eval/bpoly/evaluate_many` | 194.15 us | 144.06 us | 57.239 us | 1.35x faster | Rust 2.52x slower |
+
+- Residual route: filed `frankenscipy-rcg39` for the remaining SciPy gap after
+  this keep. Candidate next levers are a sorted-query segment cursor and a
+  degree-3 Bernstein evaluation specialization that avoids per-term `powi`
+  overhead while preserving `BPoly::evaluate_many == evaluate`
+  behavior/tolerances.
+- Gates:
+  - PASS: RCH `cargo bench -p fsci-interpolate --bench interpolate_bench --
+    batch_eval/bpoly/evaluate_many --sample-size 10 --warm-up-time 1
+    --measurement-time 1 --noplot`.
+  - PASS: RCH `cargo test -p fsci-interpolate bpoly_matches_scipy --lib --
+    --nocapture` on `ovh-a`.
+  - PASS: RCH `cargo check -p fsci-interpolate --all-targets` on `ovh-a`.
+  - BLOCKED: `cargo fmt -p fsci-interpolate --check` reports broad
+    pre-existing rustfmt drift across `fsci-interpolate` benches, helper bins,
+    FITPACK, sphere, and tests; this perf commit does not normalize unrelated
+    formatting churn.
+  - PASS: `git diff --check -- crates/fsci-interpolate/src/lib.rs
+    docs/NEGATIVE_EVIDENCE.md .beads/issues.jsonl`.
+  - PASS: `ubs crates/fsci-interpolate/src/lib.rs docs/NEGATIVE_EVIDENCE.md
+    .beads/issues.jsonl` exited 0 with no critical findings; it reported the
+    existing broad Rust warning inventory.
+  - Existing warnings remain in `fsci-interpolate` (`surfit.rs`, `sphere.rs`,
+    `sphere_grid.rs`, `solve_dense_system`, and unused interpolate fields).
+- Retry predicate: do not repeat per-call/per-point binomial table hoisting.
+  Continue only from a fresh current-source benchmark against `frankenscipy-rcg39`
+  or a new BPoly workload that still loses to SciPy.
+
 ## 2026-06-23 - BlackThrush - BOLD-VERIFY cophenet member-list move: stale bead, current Rust wins
 
 - Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
