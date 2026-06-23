@@ -5085,6 +5085,24 @@ impl BPoly {
             local_binoms = bpoly_binoms(&self.c);
             &local_binoms
         };
+        let sorted_non_nan =
+            !xs.iter().any(|x| x.is_nan()) && xs.windows(2).all(|w| w[0] <= w[1]);
+        if sorted_non_nan {
+            let n = self.x.len() - 1;
+            let mut seg = 0usize;
+            return xs
+                .iter()
+                .map(|&xval| {
+                    if n > 0 {
+                        while seg + 1 < n && xval >= self.x[seg + 1] {
+                            seg += 1;
+                        }
+                    }
+                    self.evaluate_segment_with_binoms(xval, seg, &binoms[seg])
+                })
+                .collect();
+        }
+
         // Per-query segment lookup + Bernstein sum, reading the hoisted `binoms`.
         // (Parallelizing this with par_query_map MEASURED as a regression — the
         // per-query work is only ~k flops, so thread-spawn overhead dominates;
@@ -5095,19 +5113,22 @@ impl BPoly {
                     return f64::NAN;
                 }
                 let seg = self.segment(xval);
-                let coeffs = &self.c[seg];
-                let k = coeffs.len() - 1;
-                let d = self.x[seg + 1] - self.x[seg];
-                let s = (xval - self.x[seg]) / d;
-                let s1 = 1.0 - s;
-                let bn = &binoms[seg];
-                let mut value = 0.0;
-                for (a, &ca) in coeffs.iter().enumerate() {
-                    value += ca * bn[a] * s.powi(a as i32) * s1.powi((k - a) as i32);
-                }
-                value
+                self.evaluate_segment_with_binoms(xval, seg, &binoms[seg])
             })
             .collect()
+    }
+
+    fn evaluate_segment_with_binoms(&self, xval: f64, seg: usize, bn: &[f64]) -> f64 {
+        let coeffs = &self.c[seg];
+        let k = coeffs.len() - 1;
+        let d = self.x[seg + 1] - self.x[seg];
+        let s = (xval - self.x[seg]) / d;
+        let s1 = 1.0 - s;
+        let mut value = 0.0;
+        for (a, &ca) in coeffs.iter().enumerate() {
+            value += ca * bn[a] * s.powi(a as i32) * s1.powi((k - a) as i32);
+        }
+        value
     }
 
     /// The first derivative as a degree `k-1` Bernstein polynomial; the
@@ -8862,6 +8883,18 @@ mod tests {
     }
 
     #[test]
+    fn bpoly_evaluate_many_sorted_cursor_matches_scalar() {
+        let c = vec![vec![1.0, 2.0, 0.0, 1.5], vec![0.5, 1.0, 2.5, 2.0]];
+        let x = vec![0.0, 0.5, 1.0];
+        let bp = BPoly::new(c, x).unwrap();
+        let pts = [-0.1, 0.0, 0.25, 0.5, 0.75, 1.0, 1.1];
+        let batch = bp.evaluate_many(&pts);
+        for (&p, b) in pts.iter().zip(batch.iter()) {
+            assert_eq!(*b, bp.evaluate(p), "sorted evaluate_many != evaluate at {p}");
+        }
+    }
+
+    #[test]
     fn make_smoothing_spline_lam_matches_scipy() {
         // scipy.interpolate.make_smoothing_spline(x, y, lam=0.5).
         let x = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
@@ -12038,5 +12071,3 @@ mod tests {
         );
     }
 }
-
-
