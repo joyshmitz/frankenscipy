@@ -6,6 +6,52 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-23 - BlackThrush - BOLD-VERIFY SphericalVoronoi conflict graph: full-rebuild reject
+
+- Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
+- Bead: `frankenscipy-ld9st` (`[perf][spatial] true SphericalVoronoi conflict
+  graph after visible-face keep`).
+- Decision: REJECT and REVERT the full remaining-point conflict-list rebuild.
+  The candidate used per-face/per-point conflict lists to choose visible faces
+  and rebuilt every newly coned face's conflicts against all remaining points,
+  fixing the incomplete-propagation correctness failure from the prior attempt.
+  It preserved deterministic harness invariants and SciPy vertex parity, but it
+  spent too much time rebuilding conflicts and regressed the decisive large-n
+  row.
+- Harness: local per-crate
+  `AGENT_NAME=BlackThrush
+  CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b cargo
+  +nightly-2026-06-10 run --release -p fsci-spatial --bin perf_sphvor_ab`.
+  The explicit nightly matches the warmed cod-b target artifacts; no workspace
+  build and no target cleanup were run.
+- SciPy comparator: local SciPy `SphericalVoronoi` on the identical point dumps
+  emitted by the candidate run; sorted vertex-set max absolute differences
+  remain machine precision.
+
+| n | Parent Rust | Candidate Rust | Candidate vs parent | SciPy comparator | Candidate vs SciPy | Max vertex diff |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 100 | 309.566 us | 361.244 us | 0.857x slower | 0.435063 ms | Rust 1.204x faster | 5.690e-16 |
+| 200 | 859.056 us | 968.323 us | 0.887x slower | 0.744449 ms | Rust 1.301x slower | 2.220e-16 |
+| 500 | 2.261 ms | 3.372 ms | 0.671x slower | 1.731047 ms | Rust 1.948x slower | 3.331e-16 |
+| 1000 | 5.703 ms | 10.549 ms | 0.541x slower | 3.764196 ms | Rust 2.803x slower | 7.216e-16 |
+| 2000 | 18.611 ms | 39.349 ms | 0.473x slower | 7.818721 ms | Rust 5.033x slower | 1.443e-15 |
+
+- Interpretation: the conflict graph is not worth shipping when new-face
+  conflicts are rebuilt against every remaining point. The current kept source
+  remains the visible-face list/stamp implementation from `d6703911`; the
+  candidate source hunk was fully reverted. Follow-up `frankenscipy-4k7cg` is
+  filed for a genuinely sublinear adjacency-maintained visible-patch traversal
+  or randomized incremental hull. Do not retry full remaining-point conflict
+  rebuilding, visible-face stamps, duplicate-grid thresholds, cached normals,
+  tolerance scans, or horizon container micro-levers without a fresh profile.
+- Gates:
+  - PASS: candidate local per-crate Rust benchmark command above completed with
+    all `2n-4` vertex counts, region checks, and on-sphere checks true.
+  - PASS: local SciPy comparator on the identical `/tmp/sv_{n}.f64` and
+    `/tmp/sv_{n}_verts.f64` dumps.
+  - PASS: source diff restored to the parent implementation before commit; this
+    is an evidence-only closeout.
+
 ## 2026-06-23 - BlackThrush - BOLD-VERIFY SphericalVoronoi large-n tail: visible-face list keep
 
 - Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
