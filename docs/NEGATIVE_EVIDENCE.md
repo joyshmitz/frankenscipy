@@ -6,6 +6,55 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-23 - BlackThrush - BOLD-VERIFY SphericalVoronoi randomized insertion-order reject
+
+- Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
+- Bead: `frankenscipy-4k7cg` (`[perf][spatial] SphericalVoronoi randomized
+  hull or adjacency conflict graph`).
+- Decision: REJECT and REVERT the deterministic Fisher-Yates insertion order
+  for non-seed hull points. The candidate changed observable small-payload
+  ordering and regressed the decisive same-worker large-n row, so it is not a
+  valid perf lever even though a noisy local direct-binary run looked slightly
+  faster.
+- Harness: per-crate only,
+  `AGENT_NAME=BlackThrush
+  CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec --
+  cargo +nightly-2026-06-10 run --release -p fsci-spatial --bin
+  perf_sphvor_ab`, on worker `ovh-a`. No workspace cargo command and no target
+  cleanup were run.
+- SciPy comparator: local SciPy `SphericalVoronoi` on the identical point dumps
+  emitted by the direct local candidate binary. This is ratio evidence only;
+  the keep/reject decision used the same-worker `ovh-a` Rust parent/candidate
+  rows plus the golden checksum gate.
+
+| n | Parent Rust ovh-a | Candidate Rust ovh-a | Candidate vs parent | Candidate local | SciPy comparator | Candidate vs SciPy | Max vertex diff |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 2000 | 16.595 ms | 17.328 ms | 0.958x slower | 18.278 ms | 7.415445 ms | Rust 2.465x slower | 1.443e-15 |
+
+Small golden payloads changed, so observable ordering was not preserved:
+
+| Payload | Parent checksum | Candidate checksum |
+| --- | --- | --- |
+| n=8 seed=1 | d1b734e17e3fa6e2 | 0d095aa34a68716c |
+| n=16 seed=2 | 37cacbe3d8ce9aff | 7c006f762ed99248 |
+| n=30 seed=3 | 6fab1fe54c810688 | 24b24af39d4ff9ed |
+
+- Interpretation: randomized insertion order alone is not shippable for
+  `SphericalVoronoi`; it loses determinism and does not beat the current
+  visible-face list/stamp source on the same worker. The source was manually
+  restored to the parent implementation before commit. Follow-up
+  `frankenscipy-33ez3` is filed for an adjacency-maintained visible-patch
+  traversal that preserves output ordering while avoiding full face scans.
+- Gates:
+  - PASS: candidate per-crate `perf_sphvor_ab` completed with all `2n-4`
+    vertex counts, region checks, and on-sphere checks true.
+  - FAIL: candidate same-worker n=2000 row regressed from 16.595 ms to
+    17.328 ms.
+  - FAIL: candidate `perf_spherical_voronoi` golden checksums changed for all
+    three payloads.
+  - PASS: source diff restored to the parent implementation before commit;
+    this is an evidence-only closeout.
+
 ## 2026-06-23 - BlackThrush - BOLD-VERIFY SphericalVoronoi conflict graph: full-rebuild reject
 
 - Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
