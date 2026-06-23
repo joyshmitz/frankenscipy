@@ -6,6 +6,67 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-23 - BlackThrush - BOLD-VERIFY NdPPoly batch eval: stale bead, current Rust wins
+
+- Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
+- Bead: `frankenscipy-vojte` (`[perf][interpolate] NdPPoly has no batch eval;
+  single-point evaluate recomputes stride/orders per call. Add evaluate_many`).
+- Related stale evidence bead: `frankenscipy-b3oxo` (`[perf][interpolate] add
+  criterion bench quantifying BPoly/NdPPoly evaluate_many batch hoist vs
+  map-evaluate`).
+- Decision: NO SOURCE LEVER / CLOSE STALE. Current source already has
+  `NdPPoly::evaluate_many`, and `interpolate_bench.rs` already has both
+  `batch_eval/ndppoly/evaluate_many` and `batch_eval/ndppoly/map_evaluate`.
+  Fresh SciPy head-to-head timing shows no remaining loss on this bead's
+  existing workload.
+- Rust benchmark: RCH
+  `cargo bench -p fsci-interpolate --bench interpolate_bench --
+  batch_eval/ndppoly/evaluate_many --sample-size 10 --warm-up-time 1
+  --measurement-time 1 --noplot`, worker `ovh-a`, median `197.57 us`
+  (`[197.20 us, 197.97 us]`).
+- SciPy comparator: local SciPy 1.17.1 / NumPy 2.4.3,
+  `scipy.interpolate.NdPPoly(c, x, extrapolate=True)(pts)` on the identical
+  deterministic `interpolate_bench.rs` workload (`4096` points, coefficient
+  tensor `1..=36` reshaped as `[3, 2, 2, 3]`, breakpoints
+  `[[0,1,2],[0,1,2,3]]`), median `384.664500 us`, best `374.280000 us`,
+  mean `419.885100 us`, checksum100 `3.238638882915e+03`.
+- Large-row sanity: RCH
+  `cargo bench -p fsci-interpolate --bench interpolate_bench --
+  batch_eval_large/ndppoly/200k --sample-size 10 --warm-up-time 1
+  --measurement-time 1 --noplot`, worker `vmi1149989`, median `18.672 ms`
+  (`[16.716 ms, 20.735 ms]`). Local SciPy on the identical `200000`-point
+  vector measured median `18.980941 ms`, best `18.275624 ms`, mean
+  `19.270360 ms`, checksum100 `3.102797620164e+03`.
+
+| Workload | Rust median | SciPy median | Ratio |
+| --- | ---: | ---: | ---: |
+| `batch_eval/ndppoly/evaluate_many` | 197.57 us | 384.664500 us | Rust 1.946978x faster |
+| `batch_eval_large/ndppoly/200k` | 18.672 ms | 18.980941 ms | Rust 1.016546x faster |
+
+- Interpretation: the open bead was stale, not a current SciPy gap. The small
+  row is a solid Rust win and the 200k row is effectively parity with Rust
+  slightly ahead despite cross-host Rust-vs-local-SciPy timing. Do not
+  re-implement `NdPPoly::evaluate_many` or the existing batch-eval benchmark.
+  Reopen only from a fresh current-source NdPPoly workload that actually trails
+  SciPy.
+- Gates:
+  - PASS: RCH `cargo bench -p fsci-interpolate --bench interpolate_bench --
+    batch_eval/ndppoly/evaluate_many --sample-size 10 --warm-up-time 1
+    --measurement-time 1 --noplot` on `ovh-a`.
+  - PASS: RCH `cargo bench -p fsci-interpolate --bench interpolate_bench --
+    batch_eval_large/ndppoly/200k --sample-size 10 --warm-up-time 1
+    --measurement-time 1 --noplot` on `vmi1149989`.
+  - SciPy comparator PASS locally with SciPy 1.17.1 / NumPy 2.4.3.
+  - PASS: RCH `cargo test -p fsci-interpolate ndppoly --lib --
+    --nocapture` on `vmi1149989` (`2` passed, `175` filtered).
+  - PASS: RCH `cargo check -p fsci-interpolate --all-targets` on
+    `vmi1149989` with the existing `fsci-interpolate` warning inventory.
+  - PASS: `git diff --check -- docs/NEGATIVE_EVIDENCE.md
+    .beads/issues.jsonl`.
+  - N/A: `ubs docs/NEGATIVE_EVIDENCE.md .beads/issues.jsonl` exited `0` but
+    reported no supported code languages, so no scanner was run for this
+    docs/beads-only closeout.
+
 ## 2026-06-23 - BlackThrush - BOLD-VERIFY signal.resample residual: no structural lever retained
 
 - Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
