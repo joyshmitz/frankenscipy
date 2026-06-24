@@ -6,6 +6,47 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-24 - BlackThrush - BOLD-VERIFY FFT radix-3/5 split-at + radix-5 twiddle-cache reject
+
+- Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
+- Decision: REJECT. The candidate specialized the iterative odd-tail radix-3
+  and radix-5 combine stages with split slices and a precomputed radix-5
+  stage-twiddle table. It improved some 5-smooth rows but regressed five of
+  eight rows against a clean current-baseline worktree and worsened the public
+  SciPy score from `5/3/0` to `4/4/0`. It is not a keep.
+- Scope: `fsci-fft` only. No workspace cargo command and no target cleanup were
+  run. Both Rust timing runs used
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b` through
+  `rch exec -- cargo run --release -p fsci-fft --bin perf_mixed_radix`; RCH
+  fell back locally because no worker was admissible.
+- Baseline: clean worktree
+  `/data/projects/.scratch/frankenscipy-cod-b-33ez3-baseline-20260624T1720`
+  at `78dcd93a`, which has the same `fsci-fft` source as current `main`.
+- Correctness: both baseline and candidate `perf_mixed_radix` runs matched the
+  naive DFT payload with worst max error `3.394e-14` under the `1e-9` parity
+  tolerance.
+
+| n | Clean baseline Rust | Candidate Rust | Candidate vs baseline | SciPy comparator | Candidate vs SciPy |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 720 | 8.988 us | 5.383 us | 1.67x faster | 11.748 us | Rust 2.18x faster |
+| 1000 | 7.848 us | 8.058 us | 1.03x slower | 14.433 us | Rust 1.79x faster |
+| 1080 | 12.046 us | 8.057 us | 1.49x faster | 14.995 us | Rust 1.86x faster |
+| 1500 | 17.120 us | 19.842 us | 1.16x slower | 19.561 us | Rust 1.01x slower |
+| 1920 | 24.384 us | 26.391 us | 1.08x slower | 23.358 us | Rust 1.13x slower |
+| 3000 | 24.403 us | 25.354 us | 1.04x slower | 36.559 us | Rust 1.44x faster |
+| 5000 | 62.690 us | 52.711 us | 1.19x faster | 40.470 us | Rust 1.30x slower |
+| 10000 | 104.850 us | 113.379 us | 1.08x slower | 79.134 us | Rust 1.43x slower |
+
+- Interpretation: the precomputed radix-5 twiddle table does reduce overhead
+  at 720/1080/5000, but larger mixed 3/5 rows pay for extra cache traffic and
+  code shape. Baseline remains the better public route. Do not land this
+  split-at/radix-5-cache lever without a different stage-blocking design that
+  improves the 1500/1920/3000/10000 rows.
+- Revert/landing status: this source candidate was not staged or committed to
+  `main`. The local dirty `transforms.rs` was left untouched because Agent Mail
+  reported an active exclusive reservation by `agent_132`; `main` and this
+  commit retain the clean baseline source and record the rejection only.
+
 ## 2026-06-24 - BlackThrush - BOLD-VERIFY SphericalVoronoi adjacency-visible-patch reject
 
 - Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
