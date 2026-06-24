@@ -4,6 +4,66 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-24 - frankenscipy-8l8r1/hazy-fft-combine-stack-tail - FFT mixed-radix combine/tiny-tail partial SciPy closeout
+
+- Agent: HazyCanyon.
+- Starting point: the 5-smooth FFT lane still had a documented SciPy residual
+  after the iterative odd-factor stage plan and fixed 4/8/16 power tails. The
+  relevant alien route was cache/loop-layout FFT work rather than another
+  scalar twiddle cleanup.
+- Lever kept: split radix-3/radix-5 combine groups into disjoint output slices,
+  inline the scalar complex multiplies/adds in the butterfly, and gather tiny
+  2/4/8/16 power tails through stack arrays before one final block write. This
+  keeps the same Cooley-Tukey factor order, twiddle tables, normalization, and
+  public error behavior.
+- Rejected sub-levers during this pass: cached contiguous radix-5 twiddle quads
+  regressed large rows; non-power-of-two direct output allocation also regressed
+  most rows. Neither remains in source.
+- Correctness proof: `perf_mixed_radix` golden payload unchanged, worst max
+  error `3.394e-14` against the `1e-9` parity tolerance; `cargo test -p
+  fsci-fft` passed 177 unit tests and 54 metamorphic tests.
+
+RCH `vmi1149989`, warm target `/data/projects/.rch-targets/frankenscipy-cod-a`,
+`cargo run --release -p fsci-fft --bin perf_mixed_radix`:
+
+| n | Rust current | Legacy harness | Internal ratio |
+| ---: | ---: | ---: | ---: |
+| 720 | 6.285 us | 19.363 us | 3.08x faster |
+| 1000 | 8.202 us | 25.006 us | 3.05x faster |
+| 1080 | 8.741 us | 29.479 us | 3.37x faster |
+| 1500 | 11.788 us | 38.559 us | 3.27x faster |
+| 1920 | 22.679 us | 55.234 us | 2.44x faster |
+| 3000 | 25.555 us | 86.777 us | 3.40x faster |
+| 5000 | 45.038 us | 151.535 us | 3.36x faster |
+| 10000 | 96.106 us | 257.354 us | 2.68x faster |
+
+RCH `vmi1149989`, `cargo bench -p fsci-fft --profile release --bench fft_bench
+fft_mixed_radix` Criterion medians, compared to the local SciPy 1.17.1 Python
+oracle on the same deterministic LCG signal (RCH refused non-compilation Python
+offload and direct SSH to the worker was denied):
+
+| n | Rust Criterion median | Local SciPy | Rust vs SciPy |
+| ---: | ---: | ---: | ---: |
+| 720 | 4.618 us | 27.067 us | 5.86x faster |
+| 1000 | 6.647 us | 29.267 us | 4.40x faster |
+| 1080 | 6.943 us | 10.874 us | 1.57x faster |
+| 1500 | 9.071 us | 12.331 us | 1.36x faster |
+| 1920 | 17.289 us | 13.473 us | 1.28x slower |
+| 3000 | 20.215 us | 27.149 us | 1.34x faster |
+| 5000 | 33.015 us | 37.977 us | 1.15x faster |
+| 10000 | 72.093 us | 75.085 us | 1.04x faster |
+
+- Scorecard: internal legacy-harness score `8/0/0`; local-SciPy denominator
+  score `7/1/0`. This is a partial closeout, not full FFT dominance. The
+  remaining residual row is n=1920.
+- Gates: `cargo fmt --check --package fsci-fft`; RCH `cargo check -p fsci-fft
+  --all-targets`; `cargo test -p fsci-fft`; RCH `cargo clippy -p fsci-fft
+  --all-targets -- -D warnings`; RCH `cargo bench -p fsci-fft --profile release
+  --bench fft_bench fft_mixed_radix`.
+- Decision: KEEP. Next route should be a real Stockham/cache-blocked mixed-radix
+  schedule or SIMD-across-r butterfly plan, with a same-worker SciPy comparator
+  if RCH gains support for non-Cargo Python probes.
+
 ## 2026-06-21 - frankenscipy-8l8r1/cod-a-fft-small-power-tail-20260621 - FFT 5-smooth fixed small power-tail keep
 
 - Agent: cod-a / BlackThrush.

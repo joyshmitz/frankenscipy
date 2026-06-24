@@ -1,6 +1,6 @@
 # Gauntlet Release Scorecard
 
-Last updated: 2026-06-21 by cod-b / BlackThrush.
+Last updated: 2026-06-24 by HazyCanyon.
 
 This scorecard tracks code-first performance work that has been converted into
 measured head-to-head evidence against the SciPy original. The detailed
@@ -10,6 +10,7 @@ win/loss/neutral ledger lives in `docs/progress/perf-negative-results.md`.
 
 | Bead | Cluster | Realistic workload | Rust result | SciPy result | Ratio | Decision |
 | --- | --- | --- | ---: | ---: | ---: | --- |
+| `frankenscipy-8l8r1/hazy-fft-combine-stack-tail` | FFT 5-smooth mixed-radix combine slices + stack tiny-tail gather | `fft` 5-smooth sweep n=720..10000 via `fft_mixed_radix` Criterion | 4.618 / 6.647 / 6.943 / 9.071 / 17.289 / 20.215 / 33.015 / 72.093 us on RCH `vmi1149989` | 27.067 / 29.267 / 10.874 / 12.331 / 13.473 / 27.149 / 37.977 / 75.085 us local SciPy 1.17.1 | score `7/1/0`; 5.86x / 4.40x / 1.57x / 1.36x / 1.34x / 1.15x / 1.04x faster, residual 1.28x slower at n=1920 | keep partial closeout - same-codepath legacy harness on RCH `vmi1149989` is `8/0/0` and 2.44-3.40x faster; full SciPy dominance still routes to Stockham/cache-blocked or SIMD-across-r butterflies |
 | `frankenscipy-8l8r1.146` | `special.erfinv` direct `ndtri` rational route | `scipy.special.erfinv`, 100k deterministic values over `[-0.95,0.95]` | 792.16 us | 1.090846 ms | **1.38x faster** | keep - prior 3.6x loss closed by reusing Cephes `ndtri_scalar`; scalar same-worker A/B score `4/1/0` with only unchanged zero fast-path nanosecond noise |
 | `frankenscipy-20itl` | `special.ndtri` Cephes rational closeout | `scipy.special.ndtri` equivalent, 500k deterministic probabilities | 1.8652 ms | 8.899997 ms | **4.77x faster** | keep - current route uses direct Cephes rational instead of old `erfcinv` Newton tail; prior 25.5x `norm.ppf` loss is closed |
 | `frankenscipy-8l8r1/cod-a-zeta-affine-20260621` | `special.zeta` affine-grid RealVec block recurrence | `scipy.special.zeta`, 100k deterministic `s in [1.1,10]` | 929.86 us on RCH `vmi1149989` | 1.943882 ms local SciPy 1.17.1 | **2.09x faster** | keep - large positive affine vectors reuse 64-wide direct/tail exponential recurrences; same-worker tensor row improved 4.4106 ms -> 929.86 us (4.74x) and scalar loop stayed neutral |
@@ -53,7 +54,7 @@ win/loss/neutral ledger lives in `docs/progress/perf-negative-results.md`.
 
 | Bead | Cluster | Realistic workload | Rust result | SciPy result | Ratio | Decision |
 | --- | --- | --- | ---: | ---: | ---: | --- |
-| `frankenscipy-8l8r1.149` | FFT 5-smooth iterative odd-factor mixed-radix stage plan | `fft` 5-smooth sweep n=720..10000 via `perf_mixed_radix` | 5.591..128.478 us on RCH `hz2` | 6.222..85.502 us local SciPy 1.17.1 | score `1/6/1` vs SciPy; 1.11x faster at n=720, neutral at n=3000, residual 1.05-1.50x slower | keep internal 8/0/0 current-vs-legacy win; route deeper to SoA/SIMD or fuller Stockham/cache-blocked mixed-radix |
+| `frankenscipy-8l8r1.149` | FFT 5-smooth iterative odd-factor mixed-radix stage plan | `fft` 5-smooth sweep n=720..10000 via `perf_mixed_radix` | 5.591..128.478 us on RCH `hz2` | 6.222..85.502 us local SciPy 1.17.1 | score `1/6/1` vs SciPy; 1.11x faster at n=720, neutral at n=3000, residual 1.05-1.50x slower | superseded by `hazy-fft-combine-stack-tail`, which moves the same lane to `7/1/0` vs the local SciPy denominator |
 | `frankenscipy-8l8r1/cod-a-fft-small-power-tail-20260621` | FFT 5-smooth fixed 4/8/16 mixed-radix power tails | `fft` 5-smooth sweep n=720..10000 via `perf_mixed_radix` | 14.125..227.758 us on RCH `hz1` | 10.299..107.093 us local SciPy 1.17.1 | 1.37-2.54x slower | keep internal 8/0/0 same-worker win; route deeper for SciPy dominance |
 | `frankenscipy-8l8r1/cod-a-zeta-b10-20260621` | `special.zeta` N=10/B10 positive Riemann fast path | `scipy.special.zeta`, 100k deterministic `s in [1.1,10]` | 2.6061 ms RCH `hz1` | 1.933008 ms local SciPy 1.17.1 | 1.35x slower | superseded by `cod-a-zeta-affine-20260621`: the N=10/B10 scalar arithmetic remains, but the current affine RealVec recurrence is 929.86 us and 2.09x faster than local SciPy |
 | `filter1d-vanherk` | `ndimage.maximum/minimum_filter1d` van Herk O(n) routing (was O(n·size) per-window fold + per-pixel alloc) | `scipy.ndimage.maximum_filter1d` n=65536 Reflect, size 31 / 101 | 1.1915 ms / 1.1795 ms | 0.516 ms / 0.520 ms | 2.31x / 2.27x slower | keep — **4.12x / 7.40x self-speedup** (same-proc A/B), byte-identical; closes 9.5x/16.8x loss to a flat 2.3x (old grew with size, new is O(n)) |

@@ -701,12 +701,12 @@ fn mixed_radix_iterative_odd_power_tail(
     // order as the recursive route; only scheduling/twiddle reuse changes.
     for (leaf, &base) in plan.leaf_bases.iter().enumerate() {
         let block = &mut out[leaf * tail..(leaf + 1) * tail];
-        for (s, slot) in block.iter_mut().enumerate() {
-            *slot = src[base + s * plan.leaf_bases.len()];
-        }
         if tail <= 16 {
-            mixed_radix_small_power_tail(block, inverse);
+            mixed_radix_gather_small_power_tail(src, base, plan.leaf_bases.len(), block, inverse);
         } else {
+            for (s, slot) in block.iter_mut().enumerate() {
+                *slot = src[base + s * plan.leaf_bases.len()];
+            }
             let twiddles = get_or_compute_twiddles(tail, inverse);
             cooley_tukey_radix4_inplace_with_twiddles(block, &twiddles);
         }
@@ -724,6 +724,71 @@ fn mixed_radix_iterative_odd_power_tail(
         m = stage_len;
     }
     true
+}
+
+fn mixed_radix_gather_small_power_tail(
+    src: &[Complex64],
+    base: usize,
+    stride: usize,
+    block: &mut [Complex64],
+    inverse: bool,
+) {
+    match block.len() {
+        0 => {}
+        1 => block[0] = src[base],
+        2 => {
+            let mut tmp = [src[base], src[base + stride]];
+            mixed_radix_small_power_tail(&mut tmp, inverse);
+            block.copy_from_slice(&tmp);
+        }
+        4 => {
+            let mut tmp = [
+                src[base],
+                src[base + stride],
+                src[base + 2 * stride],
+                src[base + 3 * stride],
+            ];
+            fft4_kernel(&mut tmp, inverse);
+            block.copy_from_slice(&tmp);
+        }
+        8 => {
+            let mut tmp = [
+                src[base],
+                src[base + stride],
+                src[base + 2 * stride],
+                src[base + 3 * stride],
+                src[base + 4 * stride],
+                src[base + 5 * stride],
+                src[base + 6 * stride],
+                src[base + 7 * stride],
+            ];
+            fft8_kernel(&mut tmp, inverse);
+            block.copy_from_slice(&tmp);
+        }
+        16 => {
+            let mut tmp = [
+                src[base],
+                src[base + stride],
+                src[base + 2 * stride],
+                src[base + 3 * stride],
+                src[base + 4 * stride],
+                src[base + 5 * stride],
+                src[base + 6 * stride],
+                src[base + 7 * stride],
+                src[base + 8 * stride],
+                src[base + 9 * stride],
+                src[base + 10 * stride],
+                src[base + 11 * stride],
+                src[base + 12 * stride],
+                src[base + 13 * stride],
+                src[base + 14 * stride],
+                src[base + 15 * stride],
+            ];
+            fft16_kernel(&mut tmp, inverse);
+            block.copy_from_slice(&tmp);
+        }
+        _ => unreachable!("small power tail only supports powers of two up to 16"),
+    }
 }
 
 fn odd_power_tail_factorization(mut n: usize) -> Option<(Vec<usize>, usize)> {
@@ -768,16 +833,22 @@ fn mixed_radix_combine_stage(
     if p == 3 {
         const S3: f64 = 0.866_025_403_784_438_6;
         let s = if inverse { -S3 } else { S3 };
+        let (out0, tail) = out.split_at_mut(m);
+        let (out1, out2) = tail.split_at_mut(m);
         for r in 0..m {
-            let t0 = out[r];
-            let t1 = complex_mul(out[m + r], twn[r]);
-            let t2 = complex_mul(out[2 * m + r], twn[2 * r]);
-            let psum = complex_add(t1, t2);
-            let pdif = complex_sub(t1, t2);
+            let t0 = out0[r];
+            let (x1r, x1i) = out1[r];
+            let (w1r, w1i) = twn[r];
+            let t1 = (x1r * w1r - x1i * w1i, x1r * w1i + x1i * w1r);
+            let (x2r, x2i) = out2[r];
+            let (w2r, w2i) = twn[2 * r];
+            let t2 = (x2r * w2r - x2i * w2i, x2r * w2i + x2i * w2r);
+            let psum = (t1.0 + t2.0, t1.1 + t2.1);
+            let pdif = (t1.0 - t2.0, t1.1 - t2.1);
             let a = (t0.0 - 0.5 * psum.0, t0.1 - 0.5 * psum.1);
-            out[r] = complex_add(t0, psum);
-            out[m + r] = (a.0 + s * pdif.1, a.1 - s * pdif.0);
-            out[2 * m + r] = (a.0 - s * pdif.1, a.1 + s * pdif.0);
+            out0[r] = (t0.0 + psum.0, t0.1 + psum.1);
+            out1[r] = (a.0 + s * pdif.1, a.1 - s * pdif.0);
+            out2[r] = (a.0 - s * pdif.1, a.1 + s * pdif.0);
         }
     } else if p == 5 {
         const C1: f64 = 0.309_016_994_374_947_45;
@@ -785,16 +856,28 @@ fn mixed_radix_combine_stage(
         const S1: f64 = 0.951_056_516_295_153_6;
         const S2: f64 = 0.587_785_252_292_473_1;
         let (s1, s2) = if inverse { (-S1, -S2) } else { (S1, S2) };
+        let (out0, tail) = out.split_at_mut(m);
+        let (out1, tail) = tail.split_at_mut(m);
+        let (out2, tail) = tail.split_at_mut(m);
+        let (out3, out4) = tail.split_at_mut(m);
         for r in 0..m {
-            let t0 = out[r];
-            let t1 = complex_mul(out[m + r], twn[r]);
-            let t2 = complex_mul(out[2 * m + r], twn[2 * r]);
-            let t3 = complex_mul(out[3 * m + r], twn[3 * r]);
-            let t4 = complex_mul(out[4 * m + r], twn[4 * r]);
-            let t1p4 = complex_add(t1, t4);
-            let t1m4 = complex_sub(t1, t4);
-            let t2p3 = complex_add(t2, t3);
-            let t2m3 = complex_sub(t2, t3);
+            let t0 = out0[r];
+            let (x1r, x1i) = out1[r];
+            let (w1r, w1i) = twn[r];
+            let t1 = (x1r * w1r - x1i * w1i, x1r * w1i + x1i * w1r);
+            let (x2r, x2i) = out2[r];
+            let (w2r, w2i) = twn[2 * r];
+            let t2 = (x2r * w2r - x2i * w2i, x2r * w2i + x2i * w2r);
+            let (x3r, x3i) = out3[r];
+            let (w3r, w3i) = twn[3 * r];
+            let t3 = (x3r * w3r - x3i * w3i, x3r * w3i + x3i * w3r);
+            let (x4r, x4i) = out4[r];
+            let (w4r, w4i) = twn[4 * r];
+            let t4 = (x4r * w4r - x4i * w4i, x4r * w4i + x4i * w4r);
+            let t1p4 = (t1.0 + t4.0, t1.1 + t4.1);
+            let t1m4 = (t1.0 - t4.0, t1.1 - t4.1);
+            let t2p3 = (t2.0 + t3.0, t2.1 + t3.1);
+            let t2m3 = (t2.0 - t3.0, t2.1 - t3.1);
             let a1 = (
                 t0.0 + C1 * t1p4.0 + C2 * t2p3.0,
                 t0.1 + C1 * t1p4.1 + C2 * t2p3.1,
@@ -805,11 +888,11 @@ fn mixed_radix_combine_stage(
             );
             let b1 = (s1 * t1m4.0 + s2 * t2m3.0, s1 * t1m4.1 + s2 * t2m3.1);
             let b2 = (s2 * t1m4.0 - s1 * t2m3.0, s2 * t1m4.1 - s1 * t2m3.1);
-            out[r] = (t0.0 + t1p4.0 + t2p3.0, t0.1 + t1p4.1 + t2p3.1);
-            out[m + r] = (a1.0 + b1.1, a1.1 - b1.0);
-            out[2 * m + r] = (a2.0 + b2.1, a2.1 - b2.0);
-            out[3 * m + r] = (a2.0 - b2.1, a2.1 + b2.0);
-            out[4 * m + r] = (a1.0 - b1.1, a1.1 + b1.0);
+            out0[r] = (t0.0 + t1p4.0 + t2p3.0, t0.1 + t1p4.1 + t2p3.1);
+            out1[r] = (a1.0 + b1.1, a1.1 - b1.0);
+            out2[r] = (a2.0 + b2.1, a2.1 - b2.0);
+            out3[r] = (a2.0 - b2.1, a2.1 + b2.0);
+            out4[r] = (a1.0 - b1.1, a1.1 + b1.0);
         }
     } else {
         unreachable!("iterative odd-tail FFT supports only radix 3/5 stages")

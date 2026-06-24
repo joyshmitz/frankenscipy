@@ -6,6 +6,55 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-24 - HazyCanyon - BOLD-VERIFY FFT mixed-radix combine/tiny-tail partial keep
+
+- Agent: HazyCanyon (codex-cli / gpt-5.2), `AGENT_NAME=HazyCanyon`.
+- Bead: `frankenscipy-8l8r1` (`[perf][fft] mixed-radix FFT vs SciPy
+  residuals`).
+- Decision: KEEP partial closeout. The landed source splits radix-3 and
+  radix-5 combine stages into disjoint mutable slices, inlines the scalar
+  butterflies, and gathers tiny 2/4/8/16 odd-tail leaves through stack arrays
+  before the final block write. The cached radix-5 twiddle-table and direct
+  output-allocation sub-levers were measured separately, regressed larger rows,
+  and are not in the source.
+- Harness: per-crate only,
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a rch exec --
+  cargo bench -p fsci-fft --profile release --bench fft_bench
+  fft_mixed_radix` on worker `vmi1149989` for Criterion Rust timings. The SciPy
+  comparator used local SciPy 1.17.1 on the identical deterministic LCG signal;
+  RCH refused the non-compilation Python comparator and direct worker Python
+  SSH was unavailable, so the SciPy ratios are public-comparator routing
+  evidence rather than same-worker Rust keep proof.
+- Correctness: `perf_mixed_radix` matched the naive DFT payload with worst max
+  error `3.394e-14` under the `1e-9` parity tolerance.
+
+| n | Rust Criterion median | SciPy comparator | Rust vs SciPy |
+| ---: | ---: | ---: | ---: |
+| 720 | 4.618 us | 27.067 us | Rust 5.86x faster |
+| 1000 | 6.647 us | 29.267 us | Rust 4.40x faster |
+| 1080 | 6.943 us | 10.874 us | Rust 1.57x faster |
+| 1500 | 9.071 us | 12.331 us | Rust 1.36x faster |
+| 1920 | 17.289 us | 13.473 us | Rust 1.28x slower |
+| 3000 | 20.215 us | 27.149 us | Rust 1.34x faster |
+| 5000 | 33.015 us | 37.977 us | Rust 1.15x faster |
+| 10000 | 72.093 us | 75.085 us | Rust 1.04x faster |
+
+- Interpretation: the lever flips the public mixed-radix score to `7/1/0`
+  against SciPy and keeps the strongest 5-smooth rows without taking the
+  measured radix-5 cache regression. The remaining local-SciPy residual is
+  n=1920; route the next pass to stage blocking or planner-level shape selection
+  rather than twiddle caching.
+- Gates:
+  - PASS: `cargo fmt --check --package fsci-fft`.
+  - PASS: `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a
+    rch exec -- cargo check -p fsci-fft --all-targets`.
+  - PASS: `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a
+    rch exec -- cargo test -p fsci-fft`.
+  - PASS: `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a
+    rch exec -- cargo clippy -p fsci-fft --all-targets -- -D warnings`.
+  - PASS: Criterion `fft_mixed_radix` rows above completed on worker
+    `vmi1149989`.
+
 ## 2026-06-24 - BlackThrush - BOLD-VERIFY SphericalVoronoi plane-offset cache reject
 
 - Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.

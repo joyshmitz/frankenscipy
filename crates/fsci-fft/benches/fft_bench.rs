@@ -5,6 +5,7 @@ use std::hint::black_box;
 type Complex64 = (f64, f64);
 
 const SIZES_1D: &[usize] = &[16, 64, 256, 1024];
+const MIXED_RADIX_1D: &[usize] = &[720, 1000, 1080, 1500, 1920, 3000, 5000, 10000];
 const SIZES_2D: &[(usize, usize)] = &[(8, 8), (16, 16), (32, 32)];
 const CSD_SIZES: &[usize] = &[4096, 65536];
 
@@ -60,6 +61,24 @@ fn bench_fft(c: &mut Criterion) {
             let opts = default_opts();
             b.iter(|| {
                 let out = fft(black_box(input), black_box(&opts)).expect("fft");
+                black_box(out.len());
+            });
+        });
+    }
+
+    group.finish();
+}
+
+fn bench_mixed_radix_fft(c: &mut Criterion) {
+    let mut group = c.benchmark_group("fft_mixed_radix");
+    group.sample_size(50);
+
+    for &n in MIXED_RADIX_1D {
+        let input = make_complex_input(n);
+        group.bench_with_input(BenchmarkId::new("fft", n), &input, |b, input| {
+            let opts = default_opts();
+            b.iter(|| {
+                let out = fft(black_box(input), black_box(&opts)).expect("mixed-radix fft");
                 black_box(out.len());
             });
         });
@@ -242,6 +261,7 @@ fn bench_baseline_fft2(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_fft,
+    bench_mixed_radix_fft,
     bench_ifft,
     bench_rfft,
     bench_irfft,
