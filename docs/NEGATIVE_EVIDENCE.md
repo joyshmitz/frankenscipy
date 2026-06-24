@@ -6,6 +6,62 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-24 - BlackThrush - BOLD-VERIFY SphericalVoronoi adjacency-visible-patch reject
+
+- Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
+- Bead: `frankenscipy-33ez3` (`[perf][spatial] SphericalVoronoi
+  adjacency-maintained visible patch`).
+- Decision: REJECT and REVERT the facet-neighbor/visible-patch DFS candidate.
+  The first DFS horizon order changed golden payload checksums; the
+  order-preserving variants restored checksums but lost decisively on the
+  same-worker large-n row.
+- Harness: per-crate only,
+  `AGENT_NAME=BlackThrush
+  CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec --
+  cargo +nightly-2026-06-10 run --release -p fsci-spatial --bin
+  perf_sphvor_ab`. Candidate and parent baseline below both ran on worker
+  `ovh-a`; no workspace cargo command and no target cleanup were run.
+- SciPy comparator: local SciPy `SphericalVoronoi` on the identical
+  deterministic point generator from the harness. This is ratio evidence only;
+  the keep/reject decision used the same-worker `ovh-a` Rust parent/candidate
+  rows plus golden checksum parity.
+
+| n | Parent Rust ovh-a | Candidate Rust ovh-a | Candidate vs parent | SciPy comparator | Candidate vs SciPy |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 100 | 238.478 us | 260.368 us | 0.916x slower | 0.500398 ms | Rust 1.922x faster |
+| 200 | 562.926 us | 637.166 us | 0.884x slower | 0.766282 ms | Rust 1.203x faster |
+| 500 | 1.947 ms | 2.330 ms | 0.836x slower | 1.797175 ms | Rust 1.296x slower |
+| 1000 | 5.270 ms | 7.296 ms | 0.722x slower | 3.537432 ms | Rust 2.063x slower |
+| 2000 | 16.672 ms | 24.207 ms | 0.689x slower | 7.660785 ms | Rust 3.160x slower |
+
+Golden payload gate:
+
+| Payload | Required checksum | First DFS candidate | Order-preserving candidate |
+| --- | --- | --- | --- |
+| n=8 seed=1 | d1b734e17e3fa6e2 | d1b734e17e3fa6e2 | d1b734e17e3fa6e2 |
+| n=16 seed=2 | 37cacbe3d8ce9aff | d29cdb8fa2865c05 | 37cacbe3d8ce9aff |
+| n=30 seed=3 | 6fab1fe54c810688 | 3af7e3b0cb643814 | 6fab1fe54c810688 |
+
+- Interpretation: adjacency state maintenance is not enough on this hull path
+  unless the visible patch can be traversed and emitted in the legacy order
+  without extra survivor-neighbor remapping cost. The checksum-safe candidate
+  was 3.160x slower than SciPy at n=2000 and 0.689x the parent speed on the
+  same worker, so it is a hard no-ship. The Rust source was manually restored
+  to the parent implementation before commit.
+- Gates:
+  - PASS: `perf_spherical_voronoi` restored the required golden checksums after
+    the ordering fix.
+  - PASS: candidate `perf_sphvor_ab` completed with all `2n-4` vertex counts,
+    region checks, and on-sphere checks true.
+  - PASS: `cargo +nightly-2026-06-10 bench -p fsci-spatial --bench
+    spatial_bench -- --quiet` completed on worker `vmi1149989`; the initially
+    requested `cargo bench --release` form was rejected by Cargo as an
+    unexpected argument, so the valid crate-scoped bench form was used.
+  - FAIL: candidate same-worker n=2000 row regressed from 16.672 ms to
+    24.207 ms.
+  - PASS: source diff restored to the parent implementation before commit;
+    this is an evidence-only closeout.
+
 ## 2026-06-23 - BlackThrush - BOLD-VERIFY SphericalVoronoi randomized insertion-order reject
 
 - Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
