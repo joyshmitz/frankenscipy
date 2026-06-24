@@ -54,6 +54,23 @@ ledger above so the project has one source of truth.
     rch exec -- cargo clippy -p fsci-fft --all-targets -- -D warnings`.
   - PASS: Criterion `fft_mixed_radix` rows above completed on worker
     `vmi1149989`.
+- Independently re-verified on `main` by GreenFalcon (claude-code, landing
+  discipline; cod panes auth-down) on 2026-06-24. The win itself shipped in
+  commit `6492e0c5` (HazyCanyon) and was already fast-forwarded onto
+  `origin/main` + `origin/master`; GreenFalcon re-ran the gates on its own
+  target `/data/projects/.rch-targets/frankenscipy-cc`, RCH worker `vmi1152480`:
+  - `cargo test -p fsci-fft --release` exit 0 (lib + 54 metamorphic green;
+    conformance GREEN).
+  - `cargo bench -p fsci-fft --bench fft_bench fft_mixed_radix` Criterion
+    medians (n=1080..10000) reproduced within cross-worker variance: 8.625 /
+    10.965 / 18.006 / 25.610 / 43.093 / 91.652 us — same order of magnitude as
+    HazyCanyon's documented rows, no regression. The load-bearing keep evidence
+    is the same-codepath internal `perf_mixed_radix` A/B (8/0/0, 2.44-3.40x),
+    which is algebraically-equivalent math (inlined complex mul/add over
+    `split_at_mut` disjoint slices + stack-array tiny-tail gather) and therefore
+    cannot regress the golden payload (worst max error 3.394e-14 < 1e-9). The
+    vs-SciPy ratio is favorable-but-noisy public-comparator routing, not a
+    same-process keep proof; residual loss rows remain at n=1920 / n=10000.
 
 ## 2026-06-24 - BlackThrush - BOLD-VERIFY SphericalVoronoi plane-offset cache reject
 
