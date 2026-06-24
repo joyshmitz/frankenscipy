@@ -6,6 +6,41 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-24 - BlackThrush - BOLD-VERIFY SphericalVoronoi plane-offset cache reject
+
+- Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
+- Bead context: `frankenscipy-rg49x` follow-up after the adjacency-visible-patch
+  reject. Candidate cached each hull face plane offset so the visibility scan
+  used `dot(normal, point) - offset > tol` instead of recomputing
+  `dot(normal, point - anchor)` for every inserted point.
+- Decision: REJECT and REVERT. The small golden payload gate stayed stable, but
+  the same-worker large-row timing regressed decisively. The source was restored
+  before this ledger-only commit.
+- Harness: per-crate only,
+  `AGENT_NAME=BlackThrush RCH_WORKER=vmi1152480
+  CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec --
+  cargo +nightly-2026-06-10 run --release -p fsci-spatial --bin
+  perf_sphvor_ab`. Baseline and candidate both ran on worker `vmi1152480`.
+  No workspace cargo command and no target cleanup were run.
+- Golden gate: candidate
+  `perf_spherical_voronoi` preserved the required payload checksums
+  `d1b734e17e3fa6e2`, `37cacbe3d8ce9aff`, and `6fab1fe54c810688`.
+
+| n | Parent Rust `vmi1152480` | Plane-offset candidate | Candidate vs parent | Local SciPy comparator | Candidate vs SciPy |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 100 | 236.122 us | 358.465 us | 1.518x slower | 0.538820 ms | Rust 1.503x faster |
+| 200 | 569.880 us | 836.938 us | 1.469x slower | 0.745733 ms | Rust 1.122x slower |
+| 500 | 2.255 ms | 2.874 ms | 1.274x slower | 1.758671 ms | Rust 1.634x slower |
+| 1000 | 5.801 ms | 8.361 ms | 1.441x slower | 3.492195 ms | Rust 2.394x slower |
+| 2000 | 18.039 ms | 24.700 ms | 1.369x slower | 7.324374 ms | Rust 3.373x slower |
+
+- Interpretation: the cached-offset arithmetic removes three subtractions from
+  each visibility probe, but the extra offset vector traffic and changed
+  arithmetic shape lose to the current cached-normal scan. Do not retry
+  face-plane offset caching as a SphericalVoronoi tail lever; the remaining gap
+  still needs a true stable-face arena/conflict traversal that avoids scanning
+  most faces without survivor-neighbor remapping overhead.
+
 ## 2026-06-24 - BlackThrush - BOLD-VERIFY FFT radix-3/5 split-at + radix-5 twiddle-cache reject
 
 - Agent: BlackThrush (codex-cli / gpt-5), `AGENT_NAME=BlackThrush`.
