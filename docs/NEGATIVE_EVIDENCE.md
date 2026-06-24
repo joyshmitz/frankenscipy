@@ -6,6 +6,44 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-24 - GreenFalcon - REJECT: Delaunay find_simplex_many barycentric-invariant precompute (cache-footprint regression)
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`.
+- Lever tried: in `Delaunay::find_simplex_many`, fuse the query-invariant
+  barycentric setup (anchor `a`, edge vectors `b-a`/`c-a`, the Gram entries
+  `d00/d01/d11`, and `denom = d00*d11 - d01*d01`) into the existing per-simplex
+  padded-bbox precompute, then evaluate each candidate inline against the stored
+  invariants instead of recomputing them in `barycentric_2d` on every
+  (query, candidate) pair. The intent was the proven "precompute the
+  loop-invariant part of an expensive per-element predicate" lever.
+- Byte-identity: the inline used the SAME expressions and operand order and
+  divided by the stored `denom` (never reciprocal-multiplied), so it is
+  bit-for-bit identical to `barycentric_2d` (would have been guarded by the
+  existing `delaunay_find_simplex_many_matches_per_point` test). Correctness was
+  never the issue.
+- Measured (per-crate `cargo bench -p fsci-spatial --bench spatial_bench
+  find_simplex/many`, `CARGO_TARGET_DIR=.rch-targets/frankenscipy-cc`):
+  - baseline HEAD: many/2000 = 2.197 ms, many/5000 = 3.556 ms.
+  - precompute: many/2000 = 3.241 ms, many/5000 = 5.709 ms (~1.5-1.6x slower).
+  - CAVEAT: the two runs landed on different RCH workers, so the exact ratio is
+    cross-worker-noisy and NOT an authoritative same-worker A/B. The decisive,
+    worker-independent reason below stands regardless.
+- Root cause (worker-independent): the fused per-simplex cell grows the hot-loop
+  working set from a 32-byte bbox to a 112-byte struct, and that data is UNIQUE
+  per simplex (no reuse). For ns ~= 2*npts (≈4k-10k simplices) that is ~0.45-1.1
+  MB streamed through the grid-candidate scan — larger than L2. The original
+  path instead reads the compact 32-byte bbox plus the SHARED `points` array,
+  where each point is reused across ~6 incident triangles and stays hot. The
+  grid-accelerated `find_simplex_many` is already memory-bound (it is a 14.7-16.4x
+  marquee win over SciPy), so adding unique per-simplex precompute data trades
+  good shared-array locality for a larger unique-data footprint and loses.
+- Decision: REVERT (source restored to HEAD, `git diff` clean). Do NOT re-chase
+  barycentric precompute for this batch locator; the predicate-precompute lever
+  does not apply once the candidate scan is memory-bound. If revisited, the only
+  viable angle is shrinking the streamed per-candidate footprint (e.g. an SoA
+  split so the bbox-reject pass touches only 32 B and the barycentric arrays are
+  read only on the rare in-bbox hit), not fattening the per-simplex record.
+
 ## 2026-06-24 - HazyCanyon - BOLD-VERIFY FFT mixed-radix combine/tiny-tail partial keep
 
 - Agent: HazyCanyon (codex-cli / gpt-5.2), `AGENT_NAME=HazyCanyon`.
