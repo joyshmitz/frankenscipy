@@ -7989,13 +7989,34 @@ impl MatrixNormal {
         let a: Vec<Vec<f64>> = (0..n)
             .map(|i| (0..p).map(|j| x[i][j] - self.mean[i][j]).collect())
             .collect();
-        // Y = L_U⁻¹ A (solve each column against the row-Cholesky).
+        // Y = L_U⁻¹ A via ONE multi-RHS forward substitution over all p columns
+        // instead of p separate single-RHS solves. `acc[j] = Σ_{k<i} L[i][k]·Y[k][j]`
+        // accumulates k in 0..i order — the same left-fold (from 0.0) as the
+        // per-column `(0..i).map(..).sum()` — so Y is BYTE-IDENTICAL, while the
+        // contiguous inner j-loops vectorize (axpy across RHS) and the per-column
+        // gather/alloc/scatter is gone.
         let mut y = vec![vec![0.0_f64; p]; n];
-        for j in 0..p {
-            let col: Vec<f64> = (0..n).map(|i| a[i][j]).collect();
-            let yc = solve_lower_triangular(&self.chol_u, &col)?;
-            for i in 0..n {
-                y[i][j] = yc[i];
+        let mut acc = vec![0.0_f64; p];
+        for i in 0..n {
+            let lii = self.chol_u[i][i];
+            if lii == 0.0 {
+                return Err(StatsError::InvalidArgument(
+                    "singular lower-triangular system".to_string(),
+                ));
+            }
+            for av in acc.iter_mut() {
+                *av = 0.0;
+            }
+            for k in 0..i {
+                let lik = self.chol_u[i][k];
+                let yk = &y[k];
+                for (av, &ykj) in acc.iter_mut().zip(yk.iter()) {
+                    *av += lik * ykj;
+                }
+            }
+            let yi = &mut y[i];
+            for j in 0..p {
+                yi[j] = (a[i][j] - acc[j]) / lii;
             }
         }
         // W = Y L_V⁻ᵀ (solve each row against the col-Cholesky); maha = ‖W‖_F².

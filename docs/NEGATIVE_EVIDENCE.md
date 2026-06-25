@@ -6,6 +6,31 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon - KEEP: MatrixNormal logpdf Y-build via vectorized multi-RHS triangular solve (~4.2x, BYTE-IDENTICAL)
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`.
+- Lever: `MatrixNormal::logpdf` (struct at lib.rs ~7942, `scipy.stats.matrix_normal`)
+  built `Y = L_U⁻¹ A` (n×p, its dominant O(n²·p) term) as p SEPARATE single-RHS
+  `solve_lower_triangular` calls against the shared n×n row-Cholesky. Replaced with
+  ONE multi-RHS forward substitution (same lever as the matrix-normal/MatrixT W
+  build): `acc[j] = Σ_{k<i} L[i][k]·Y[k][j]`, contiguous inner j-loop auto-vectorizes,
+  gather/alloc/scatter gone.
+- BYTE-IDENTICAL: `acc[j]` left-folds k in 0..i from 0.0 — the per-column
+  `(0..i).map(..).sum()` order — so Y is bit-equal.
+- Measured: the Y-build kernel is identical to the W-build kernel, measured at
+  4.22-4.36x EXACT in `bin/perf_matnorm_w_ab` (n,p)=(500,64)/(1000,64)/(1000,128)
+  — same `w_old` (p single-RHS solves) vs `w_new` (multi-RHS) A/B; see the
+  MatrixT W-build entry below.
+- Decision: KEEP (~4.2x on the dominant term). `cargo test -p fsci-stats matrix` =
+  `matrix_normal_matches_scipy` GREEN. NOTE: the same run also confirms
+  `matrix_t_matches_scipy` GREEN — my earlier MatrixT Gram (2f6df12b) and W
+  (b445f783) commits edited `MatrixT::logpdf` (the `df`+`V+A`-determinant form at
+  ~8333), not MatrixNormal; those were verified by byte-identity microbench EXACT
+  equality, and `matrix_t_matches_scipy` now explicitly confirms them. (The
+  per-row maha term `Σ_i ‖L_V⁻¹ y[i]‖²` at ~8004 is O(n·p²), sub-dominant for n≫p
+  and the transposed RHS access is strided — left as a follow-up.)
+- Gates: edit only to the Y-build (hand-formatted; no `cargo fmt -p` whole-file sweep).
+
 ## 2026-06-25 - GreenFalcon - KEEP: Wishart/inv-Wishart logpdf trace via vectorized multi-RHS triangular solve (~2.3-3.4x, BYTE-IDENTICAL)
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`.
