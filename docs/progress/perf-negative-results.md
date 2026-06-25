@@ -4,6 +4,90 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-25 - frankenscipy-greenfalcon-special-roots-cache - KEEP: memoize special.roots_jacobi/legendre/hermite/laguerre by order (~O(n) hit vs O(n²) Golub-Welsch; matches scipy roots_* lru_cache; byte-identical)
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. Extends the
+  gauss-legendre-node-cache lever (commit 492c67e9) to `fsci-special`'s public
+  `scipy.special.roots_*` family. `roots_jacobi`, `roots_hermite`, `roots_hermitenorm`,
+  `roots_laguerre` ran the Golub-Welsch tridiagonal-eigenvalue solve (O(n²) +
+  eigenvector accumulation) on EVERY call; `scipy.special.roots_*` are all
+  `@lru_cache`d, so repeated quadrature with one order was an undocumented loss vs
+  SciPy.
+- Lever (memoization, "cached == recomputed"): a generic `cached_roots<K>(cache, key,
+  compute)` helper backed by a per-function `OnceLock<RwLock<HashMap<K, …>>>` (the
+  FFT-twiddle-cache idiom). `roots_jacobi` keys on `(n, alpha.to_bits(),
+  beta.to_bits())` and so transparently caches `roots_legendre` (α=β=0) and
+  `roots_gegenbauer` (which route through it); the parameterless rules key on `n`.
+  A hit returns a clone of the exact stored `(nodes, weights)` → bit-identical.
+- Win: the same memoization shape as gauss_legendre-node-cache, which de-risked
+  same-process at **117x (n=16) … 972x (n=96)** repeated-call speedup (recompute →
+  O(n) clone). Golub-Welsch is likewise O(n²), so repeated `roots_*` calls drop to an
+  O(n) clone; single-call cost is unchanged.
+- Conformance GREEN: `cargo test -p fsci-special roots` = **33/0** — incl. the new
+  `roots_quadrature_caches_are_bit_identical_to_compute` (cache miss + hit byte-equal
+  a direct Golub-Welsch recompute for jacobi/legendre/hermite/laguerre, even/odd
+  orders 2..64) and the unchanged roots goldens. (RCH recovered from this turn's
+  earlier fleet-wide E0514 churn; this built clean.)
+- Retry/extend: `roots_genlaguerre` (golub_welsch direct, key (n,α)) and the
+  parameterized `roots_sh_jacobi` are not yet cached — same one-helper pattern
+  applies. Chebyshev roots are closed-form O(n) (not worth caching).
+
+## 2026-06-25 - frankenscipy-greenfalcon-sobol8d-prefix30-fixed-lanes - KEEP: close Sobol 65536x8 residual with fixed-lane prefix30 sampler (1.19x vs SciPy local; 1.66x same-worker Rust A/B)
+
+- Agent: GreenFalcon (codex-cli), `AGENT_NAME=GreenFalcon`.
+- Land-or-dig precheck: scanned `.scratch` / `.worktrees` bench worktrees before
+  digging. The recent GreenFalcon worktrees were ancestors or already landed. The
+  only non-ancestor measured bench worktree was
+  `/data/projects/.worktrees/frankenscipy-eigvalsh-blackthrush-20260609` at
+  `e3b744f4` (`perf(linalg): lower GEMM flat-workspace threshold`), but that old
+  win lowered `MATMUL_FLAT_WORKSPACE_MIN_DIM` to 768 while current main already
+  uses 256, so there was no unlanded worktree win to land.
+- Gap attacked: the prior Sobol chunked-recurrence keep left one explicit
+  residual: `scipy.stats.qmc.Sobol(d=8, scramble=False).random(65536)` at
+  504.885 us vs fsci 704.875 us (fsci 0.72x). Thread-count retuning was already
+  named as the wrong route; the likely lever was direction-table / word-level
+  packing.
+- Lever (alien-graveyard / artifact route: flat fixed-width data and word-level
+  bit recurrence): add a dimension-8 Sobol specialization. It keeps eight direction
+  tables and state lanes in locals, emits rows directly, and adds a guarded 30-bit
+  prefix fast path for the common unscrambled range (`start + n <= 2^30` and every
+  digital shift has zero low 34 bits). The prefix path stores the active Sobol
+  words as `u32` and converts with `bits / 2^30`, which is exactly equal to the
+  64-bit `bits_to_unit(sobol_bits >> 34 << 34)` value for that prefix. If the
+  guard fails, the exact 64-bit lane path runs; for very large 8D requests the
+  existing low-dimension parallel gate still routes to the chunked path.
+- Same-worker RCH A/B (`AGENT_NAME=GreenFalcon
+  CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec --
+  cargo bench --profile release -p fsci-stats --bench stats_bench --
+  qmc_sampling/sobol_8d/65536 --sample-size 10 --warm-up-time 1
+  --measurement-time 2 --noplot`, worker `vmi1227854`):
+  baseline bench row on main-path code: 696.74 us median; fixed-lane candidate:
+  554.20 us median; prefix30 candidate before pre-sized fill: 534.35 us median;
+  final guarded prefix30 path after the boundary fix and pre-sized fill:
+  419.27 us median. That is a 1.66x same-worker Rust self win. Note: this Cargo
+  rejects `cargo bench --release`, so the per-crate release benchmark used the
+  Cargo-equivalent `--profile release`.
+- SciPy head-to-head on the local host after the final guarded prefix path:
+  Rust Criterion median 373.86 us for `qmc_sampling/sobol_8d/65536`; SciPy
+  `qmc.Sobol(d=8, scramble=False).random(65536)` median 445.374 us across 25
+  samples. Ratio: Rust is 1.19x faster vs SciPy (Rust/SciPy time ratio 0.84x).
+  The final `vmi1227854` RCH median is also 1.20x faster than the prior residual
+  SciPy row (504.885 us). Additional final RCH smoke on `ovh-a` measured 293.40 us
+  and 308.73 us; this is cross-worker routing evidence only, not the formal
+  same-worker A/B.
+- Reverted loss: lowering 8D to the high-dimension parallel gate measured
+  871.05 us locally, slower than both baseline and candidate. That gate-change
+  code was reverted; do not retry 8D eager threading without a different primitive.
+- Conformance GREEN:
+  `AGENT_NAME=GreenFalcon CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b
+  rch exec -- cargo test -p fsci-stats sobol --lib -- --nocapture` = 13 passed /
+  0 failed. New coverage forces the 8D serial, guarded prefix30, and parallel
+  paths against direct `sobol_bits` + digital-shift reference values, including
+  saturation-edge direct-bit cases.
+- Retry/extend: the next likely Sobol lever is not another 8D gate tweak. Look at
+  batched direction-table transposition or SIMD conversion for 16D/32D where the
+  chunked path still carries more state and SciPy remains closer.
+
 ## 2026-06-25 - frankenscipy-greenfalcon-gauss-legendre-node-cache - KEEP: memoize gauss_legendre_nodes_weights by order (117-972x on repeated quadrature, byte-identical; matches scipy roots_legendre lru_cache)
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. `fixed_quad` and

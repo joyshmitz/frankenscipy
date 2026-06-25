@@ -6,6 +6,48 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon (claude-code) - KEEP: memoize special.roots_jacobi/legendre/hermite/laguerre by order (~O(n) hit vs O(n²) Golub-Welsch; byte-identical)
+
+- Agent: GreenFalcon (claude-code). Extends the gauss_legendre-node-cache lever
+  (492c67e9) to fsci-special's public scipy.special.roots_* family. roots_jacobi /
+  roots_hermite / roots_hermitenorm / roots_laguerre ran the O(n²) Golub-Welsch eigen
+  solve every call; scipy roots_* are all lru_cached. Added a generic cached_roots<K>
+  helper + per-function OnceLock<RwLock<HashMap>>: roots_jacobi keys on (n,α.bits,
+  β.bits) so it transparently caches roots_legendre (α=β=0) and roots_gegenbauer;
+  parameterless rules key on n. Hit returns a clone of the exact stored value →
+  bit-identical. Same memoization shape as gauss_legendre (de-risked 117-972x repeated).
+  New test roots_quadrature_caches_are_bit_identical_to_compute; `cargo test
+  -p fsci-special roots` = 33/0. Detail in canonical ledger.
+
+## 2026-06-25 - GreenFalcon (codex-cli) - KEEP: Sobol 8D prefix30 fixed-lane sampler (1.19x vs SciPy local; 1.66x self A/B)
+
+- Agent: GreenFalcon (codex-cli), `AGENT_NAME=GreenFalcon`.
+- Land-or-dig check: the only non-ancestor bench worktree found was
+  `/data/projects/.worktrees/frankenscipy-eigvalsh-blackthrush-20260609`
+  (`e3b744f4`, lowered GEMM flat-workspace threshold to 768), but main already
+  has the threshold at 256, so that old measured win is superseded rather than
+  landable.
+- Lever: specialized `SobolSampler::sample` for dimension 8 with fixed lanes and
+  a guarded prefix30 fast path for the common unscrambled / upper-only shifted
+  range. Exact 64-bit fallback and the existing low-dimension parallel gate stay
+  in place for shifted or large-index cases.
+- Evidence: same-worker RCH A/B on `vmi1227854` for
+  `qmc_sampling/sobol_8d/65536` narrowed Rust from 696.74 us baseline to
+  419.27 us final candidate (1.66x self). Final same-host comparator: Rust
+  Criterion median 373.86 us vs local SciPy `scipy.stats.qmc.Sobol(d=8,
+  scramble=False).random(65536)` median 445.374 us, Rust 1.19x faster vs SciPy.
+  The final RCH median is also 1.20x faster than the prior SciPy residual row
+  (504.885 us). Cross-worker final smoke on `ovh-a` measured 293.40 us and
+  308.73 us.
+- Reverted loss: forcing the 8D path into the lower high-dimension parallel gate
+  measured 871.05 us locally, so that zero/negative-gain gate change was backed
+  out.
+- Conformance GREEN: `AGENT_NAME=GreenFalcon
+  CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec --
+  cargo test -p fsci-stats sobol --lib -- --nocapture` = 13 passed / 0 failed.
+  `cargo bench --release` is not accepted by this Cargo; the per-crate RCH
+  equivalent used `cargo bench --profile release -p fsci-stats ...`.
+
 ## 2026-06-25 - GreenFalcon (claude-code) - KEEP: memoize gauss_legendre_nodes_weights by order (117-972x on repeated quadrature, byte-identical)
 
 - Agent: GreenFalcon (claude-code). `fixed_quad`/`gauss_legendre` recomputed the

@@ -1419,6 +1419,26 @@ pub fn eval_sh_jacobi(n: u32, p: f64, q: f64, x: f64) -> f64 {
     eval_jacobi(n, p - q, q - 1.0, 2.0 * x - 1.0) / norm
 }
 
+/// Memoize a Gauss-quadrature node/weight table keyed by `key`. The Golub-Welsch
+/// solve is O(n²); `scipy.special.roots_*` are `@lru_cache`d for the same reason —
+/// repeated quadrature with one order/parameter then costs an O(n) clone instead of
+/// a full recompute. The stored value is the exact `compute()` result, so callers
+/// stay bit-identical. (Parameterless rules key on `n`; parameterized ones on
+/// `(n, alpha.to_bits(), ...)`.)
+fn cached_roots<K: std::hash::Hash + Eq>(
+    cache: &'static std::sync::OnceLock<std::sync::RwLock<std::collections::HashMap<K, (Vec<f64>, Vec<f64>)>>>,
+    key: K,
+    compute: impl FnOnce() -> (Vec<f64>, Vec<f64>),
+) -> (Vec<f64>, Vec<f64>) {
+    let map = cache.get_or_init(|| std::sync::RwLock::new(std::collections::HashMap::new()));
+    if let Some(hit) = map.read().unwrap().get(&key) {
+        return hit.clone();
+    }
+    let computed = compute();
+    map.write().unwrap().insert(key, computed.clone());
+    computed
+}
+
 /// Compute Gauss-Legendre quadrature nodes and weights on [-1, 1].
 #[must_use]
 pub fn roots_legendre(n: usize) -> (Vec<f64>, Vec<f64>) {
@@ -1604,7 +1624,12 @@ fn shift_unit_to_zero_one(
 /// The weight function is `exp(-x^2)`.
 #[must_use]
 pub fn roots_hermite(n: usize) -> (Vec<f64>, Vec<f64>) {
-    golub_welsch(n, PI.sqrt(), |_k| 0.0, |k| ((k as f64) / 2.0).sqrt(), true)
+    static CACHE: std::sync::OnceLock<
+        std::sync::RwLock<std::collections::HashMap<usize, (Vec<f64>, Vec<f64>)>>,
+    > = std::sync::OnceLock::new();
+    cached_roots(&CACHE, n, || {
+        golub_welsch(n, PI.sqrt(), |_k| 0.0, |k| ((k as f64) / 2.0).sqrt(), true)
+    })
 }
 
 /// Compute Gauss-Hermite quadrature nodes and weights for probabilist's Hermite polynomials.
@@ -1620,11 +1645,16 @@ pub fn roots_hermite(n: usize) -> (Vec<f64>, Vec<f64>) {
 /// Tuple of (nodes, weights) for the quadrature rule
 #[must_use]
 pub fn roots_hermitenorm(n: usize) -> (Vec<f64>, Vec<f64>) {
-    // mu0 = integral of exp(-x²/2) from -∞ to ∞ = sqrt(2π)
-    let mu0 = (2.0 * PI).sqrt();
-    // Probabilist's recurrence: He_{n+1}(x) = x * He_n(x) - n * He_{n-1}(x)
-    // So b_k = sqrt(k)
-    golub_welsch(n, mu0, |_k| 0.0, |k| (k as f64).sqrt(), true)
+    static CACHE: std::sync::OnceLock<
+        std::sync::RwLock<std::collections::HashMap<usize, (Vec<f64>, Vec<f64>)>>,
+    > = std::sync::OnceLock::new();
+    cached_roots(&CACHE, n, || {
+        // mu0 = integral of exp(-x²/2) from -∞ to ∞ = sqrt(2π)
+        let mu0 = (2.0 * PI).sqrt();
+        // Probabilist's recurrence: He_{n+1}(x) = x * He_n(x) - n * He_{n-1}(x)
+        // So b_k = sqrt(k)
+        golub_welsch(n, mu0, |_k| 0.0, |k| (k as f64).sqrt(), true)
+    })
 }
 
 /// Compute Gauss-Laguerre quadrature nodes and weights on `[0, ∞)`.
@@ -1632,7 +1662,12 @@ pub fn roots_hermitenorm(n: usize) -> (Vec<f64>, Vec<f64>) {
 /// The weight function is `exp(-x)`.
 #[must_use]
 pub fn roots_laguerre(n: usize) -> (Vec<f64>, Vec<f64>) {
-    golub_welsch(n, 1.0, |k| 2.0 * k as f64 + 1.0, |k| k as f64, false)
+    static CACHE: std::sync::OnceLock<
+        std::sync::RwLock<std::collections::HashMap<usize, (Vec<f64>, Vec<f64>)>>,
+    > = std::sync::OnceLock::new();
+    cached_roots(&CACHE, n, || {
+        golub_welsch(n, 1.0, |k| 2.0 * k as f64 + 1.0, |k| k as f64, false)
+    })
 }
 
 /// Compute generalized Gauss-Laguerre quadrature nodes and weights on `[0, ∞)`.
@@ -1696,6 +1731,17 @@ pub fn roots_gegenbauer(n: usize, alpha: f64) -> (Vec<f64>, Vec<f64>) {
 /// The weight function is `(1 - x)^alpha (1 + x)^beta`.
 #[must_use]
 pub fn roots_jacobi(n: usize, alpha: f64, beta: f64) -> (Vec<f64>, Vec<f64>) {
+    static CACHE: std::sync::OnceLock<
+        std::sync::RwLock<std::collections::HashMap<(usize, u64, u64), (Vec<f64>, Vec<f64>)>>,
+    > = std::sync::OnceLock::new();
+    // Keyed by the order and the exact bit patterns of the parameters; covers
+    // roots_legendre (α=β=0) and roots_gegenbauer, which route through here.
+    cached_roots(&CACHE, (n, alpha.to_bits(), beta.to_bits()), || {
+        roots_jacobi_compute(n, alpha, beta)
+    })
+}
+
+fn roots_jacobi_compute(n: usize, alpha: f64, beta: f64) -> (Vec<f64>, Vec<f64>) {
     if !alpha.is_finite() || !beta.is_finite() || alpha <= -1.0 || beta <= -1.0 {
         return invalid_quadrature(n);
     }
@@ -4037,6 +4083,31 @@ mod rad2_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn roots_quadrature_caches_are_bit_identical_to_compute() {
+        // The by-order/parameter memoization must return exactly the Golub-Welsch
+        // result, so every quadrature value is unchanged. Verify the cache miss and
+        // hit paths both byte-equal a direct recompute, for jacobi (covers legendre
+        // and gegenbauer), hermite, and laguerre, across even and odd orders.
+        for n in [2usize, 5, 16, 33, 64] {
+            let jac_direct = roots_jacobi_compute(n, 0.3, -0.2);
+            assert_eq!(roots_jacobi(n, 0.3, -0.2), jac_direct, "jacobi miss n={n}");
+            assert_eq!(roots_jacobi(n, 0.3, -0.2), jac_direct, "jacobi hit n={n}");
+
+            // roots_legendre routes through the now-cached roots_jacobi.
+            assert_eq!(roots_legendre(n), roots_jacobi_compute(n, 0.0, 0.0), "legendre n={n}");
+            assert_eq!(roots_legendre(n), roots_legendre(n), "legendre repeat n={n}");
+
+            let her = golub_welsch(n, PI.sqrt(), |_k| 0.0, |k| ((k as f64) / 2.0).sqrt(), true);
+            assert_eq!(roots_hermite(n), her, "hermite n={n}");
+            assert_eq!(roots_hermite(n), roots_hermite(n), "hermite repeat n={n}");
+
+            let lag = golub_welsch(n, 1.0, |k| 2.0 * k as f64 + 1.0, |k| k as f64, false);
+            assert_eq!(roots_laguerre(n), lag, "laguerre n={n}");
+            assert_eq!(roots_laguerre(n), roots_laguerre(n), "laguerre repeat n={n}");
+        }
+    }
 
     #[test]
     fn orthopoly_eval_match_scipy() {
