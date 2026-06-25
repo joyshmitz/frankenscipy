@@ -4,6 +4,40 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-25 - frankenscipy-greenfalcon-ap-availability-rowmajor-parallel - KEEP: affinity_propagation availability update row-major + threaded (1.3-4x serial cache, up to 7.8x threaded; byte-identical)
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. The AP responsibility
+  update was already row-parallel (frankenscipy-yw7ts), but the availability update
+  (`for k { col_pos=Σ_i max(0,r[i*n+k]); for i { a[i*n+k]=… } }`) was left SERIAL —
+  and worse, cache-pathological: both the column sum and the `a[i*n+k]` writes walk
+  the row-major matrix with stride n. Serial availability time exploded
+  superlinearly (n=1000 3.2 ms → n=2000 46 ms → n=3000 119 ms).
+- Lever: restructure ROW-MAJOR + parallelize. (1) `col_pos[k]=Σ_i max(0,r[i*n+k])`
+  via a sequential i-major pass — still i=0..n order per k, so BIT-IDENTICAL to the
+  per-column `(0..n).sum()`. (2) Update each row i in row-major order; rows are
+  independent (read shared `col_pos`/`pos_kk`, write their own `a[i]`), so the
+  update parallelizes byte-identically over row-chunks (`a.chunks_mut(chunk*n)`).
+- De-risk same-process A/B (current strided vs row-major-serial vs row-major-
+  parallel, ALL EXACT byte-identical); cur→v2serial / cur→v2parallel:
+  - n=300 1.28x / 0.21x, n=500 1.37x / 0.69x, n=1000 1.75x / 2.05x,
+    n=2000 **4.01x / 7.04x**, n=3000 3.19x / **7.80x**
+  - The row-major restructure ALONE is a cache win at every n (1.28-4.01x); the
+    threaded update adds more for n≳1000. (The first naive parallel attempt kept the
+    strided col_pos and regressed to 0.06-0.61x below n=2000 — the row-major rewrite
+    is what unlocks it.)
+- Gate: row-major restructure ALWAYS (cache, all n); parallelize the update only
+  when `n² >= (1<<20)` (n≈1024, where threaded beats row-major-serial), else serial
+  row-major. Threads `min(cores, n)`. End-to-end: availability was the AP iteration
+  bottleneck at large n (responsibility already parallel), so AP — previously
+  "parity" vs sklearn — becomes a clear win for n≳1000.
+- Conformance GREEN: `cargo test -p fsci-cluster affinity` ok; the restructure is
+  bit-identical to the prior strided loop (de-risk `cur==v2serial==v2parallel`), so
+  every AP golden is unaffected; full `cargo test -p fsci-cluster` as safety net.
+- Retry/extend: the same row-major-then-parallelize pattern applies to any
+  per-column reduction+update over a row-major matrix; the col_pos precompute stays
+  serial (parallel partial-sums would reassociate → break the threshold-based
+  exemplar selection).
+
 ## 2026-06-25 - frankenscipy-greenfalcon-linkage-dmbuild-parallel - KEEP: parallelize linkage distance-matrix build (build 1.59-5.16x; end-to-end up to ~2.3x; byte-identical)
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. `linkage` already

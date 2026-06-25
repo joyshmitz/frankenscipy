@@ -6,6 +6,20 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon (claude-code) - KEEP: affinity_propagation availability update row-major + threaded (1.3-4x serial cache, up to 7.8x threaded; byte-identical)
+
+- Agent: GreenFalcon (claude-code). AP's responsibility update was already
+  row-parallel but the availability update was serial AND cache-pathological
+  (stride-n column walk; serial time exploded n=1000 3.2ms → n=3000 119ms).
+  Restructured ROW-MAJOR: col_pos[k] via a sequential i-major pass (bit-identical to
+  the per-column (0..n).sum()), then a row-major update parallelized over
+  row-chunks (rows independent). De-risk A/B (cur vs v2-serial vs v2-parallel, ALL
+  EXACT): row-major restructure alone 1.28-4.01x (cache, every n); +threaded up to
+  **7.80x** (n=3000). Gate: row-major always; parallelize update at n²>=(1<<20).
+  AP was "parity" vs sklearn → now a clear win for n≳1000. `cargo test
+  -p fsci-cluster affinity` ok; bit-identical to the prior loop. Detail in canonical
+  ledger.
+
 ## 2026-06-25 - GreenFalcon (claude-code) - KEEP: parallelize linkage distance-matrix build (build 1.59-5.16x; end-to-end up to ~2.3x; byte-identical)
 
 - Agent: GreenFalcon (claude-code). `linkage` already uses O(n²) algorithms

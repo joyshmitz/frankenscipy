@@ -346,18 +346,60 @@ pub fn affinity_propagation(
             });
         }
         // Availabilities: a(i,k)=min(0, r(k,k)+Σ_{i'∉{i,k}}max(0,r(i',k))); a(k,k)=Σ_{i'≠k}max(0,·).
-        for k in 0..n {
-            let col_pos: f64 = (0..n).map(|i| r[i * n + k].max(0.0)).sum();
-            let rkk = r[k * n + k];
-            let pos_kk = rkk.max(0.0);
-            for i in 0..n {
-                let upd = if i == k {
-                    col_pos - pos_kk
-                } else {
-                    (rkk + col_pos - r[i * n + k].max(0.0) - pos_kk).min(0.0)
-                };
-                a[i * n + k] = damping * a[i * n + k] + (1.0 - damping) * upd;
+        // Restructured ROW-MAJOR to avoid the cache-pathological stride-n column
+        // walk the naive `for k { for i {…} }` loop performs (both the col sum and
+        // the a[i*n+k] writes are stride-n). col_pos[k]=Σ_i max(0,r[i*n+k]) is
+        // accumulated in a sequential i-major pass — still i=0..n order per k, so
+        // BIT-IDENTICAL to the per-column `(0..n).sum()` — then each row i is
+        // updated in row-major order. Rows are independent (read shared col_pos,
+        // write their own a[i]), so the update parallelizes byte-identically.
+        // frankenscipy-ap-avail: ~1.3-4x serial (cache) + up to ~7.8x threaded at
+        // large n vs the strided loop (de-risk perf_ap_avail_ab, EXACT).
+        let mut col_pos = vec![0.0_f64; n];
+        for i in 0..n {
+            let ri = &r[i * n..i * n + n];
+            for (k, cp) in col_pos.iter_mut().enumerate() {
+                *cp += ri[k].max(0.0);
             }
+        }
+        let pos_kk: Vec<f64> = (0..n).map(|k| r[k * n + k].max(0.0)).collect();
+        let update_avail_row = |i: usize, a_row: &mut [f64]| {
+            for (k, aik) in a_row.iter_mut().enumerate() {
+                let rkk = r[k * n + k];
+                let cp = col_pos[k];
+                let upd = if i == k {
+                    cp - pos_kk[k]
+                } else {
+                    (rkk + cp - r[i * n + k].max(0.0) - pos_kk[k]).min(0.0)
+                };
+                *aik = damping * *aik + (1.0 - damping) * upd;
+            }
+        };
+        let nthreads_a = if n.saturating_mul(n) < (1 << 20) || n < 2 {
+            1
+        } else {
+            std::thread::available_parallelism()
+                .map(|c| c.get())
+                .unwrap_or(1)
+                .min(n)
+        };
+        if nthreads_a <= 1 {
+            for (i, a_row) in a.chunks_mut(n).enumerate() {
+                update_avail_row(i, a_row);
+            }
+        } else {
+            let chunk_rows = n.div_ceil(nthreads_a);
+            let update_avail_row = &update_avail_row;
+            std::thread::scope(|scope| {
+                for (t, a_block) in a.chunks_mut(chunk_rows * n).enumerate() {
+                    let base = t * chunk_rows;
+                    scope.spawn(move || {
+                        for (li, a_row) in a_block.chunks_mut(n).enumerate() {
+                            update_avail_row(base + li, a_row);
+                        }
+                    });
+                }
+            });
         }
         // Exemplars: points with r(k,k)+a(k,k) > 0.
         let exemplars: Vec<usize> = (0..n).filter(|&k| r[k * n + k] + a[k * n + k] > 0.0).collect();
