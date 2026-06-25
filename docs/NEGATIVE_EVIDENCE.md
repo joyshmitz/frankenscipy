@@ -6,6 +6,28 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon - NO-SHIP: adaptive FFT CSD rfft threshold still loses to SciPy
+
+- Agent: GreenFalcon (codex-cli), `AGENT_NAME=GreenFalcon`.
+- Lever tested and reverted: retry the prior rejected CSD real-spectrum route
+  only for large real inputs (`n >= 16384`), leaving small inputs on the
+  existing full-complex FFT path. This was the narrowest safe retry suggested by
+  the earlier `.116` negative evidence.
+- SciPy oracle: local SciPy 1.17.1 / NumPy 2.4.3,
+  `python3 docs/perf_oracle_fft_csd.py --reps 60 --warmups 5`, one-sided rfft
+  formula medians `74.887 us` (`n=4096`) and `1.8200725 ms` (`n=65536`).
+- Candidate bench: RCH `vmi1264463`,
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec -- cargo bench -p fsci-fft --bench fft_bench -- fft_helpers/cross_spectral_density --noplot`
+  medians `205.64 us` (`n=4096`) and `2.7650 ms` (`n=65536`).
+- Ratio vs SciPy: candidate Rust was `2.75x slower` at `4096` and `1.52x
+  slower` at `65536`. The large row improved only against a cross-worker
+  full-complex routing baseline, which is not keep-grade proof.
+- Proof: focused candidate equivalence test passed before revert:
+  `cargo test -p fsci-fft cross_spectral_density -- --nocapture` (3/3 green).
+- Decision: REJECT/REVERT. Do not retry thresholding the existing `rfft` wrapper
+  for CSD. Next valid route must either make `rfft` itself beat the SciPy oracle
+  or fuse the real FFT/cross-spectrum path and prove a same-host SciPy win.
+
 ## 2026-06-25 - GreenFalcon - KEEP: wide pinv Cholesky TRSM + diagonal rcond gate vs SciPy (34.34x fresh, 39.51x archived)
 
 - Agent: GreenFalcon (codex-cli), `AGENT_NAME=GreenFalcon`.

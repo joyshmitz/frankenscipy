@@ -4,6 +4,50 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-25 - frankenscipy-8l8r1/greenfalcon-csd-adaptive-rfft-threshold - FFT CSD thresholded rfft retry rejected
+
+- Agent: GreenFalcon.
+- Starting point: `.116` had already rejected an unconditional
+  `cross_spectral_density` rfft route because it regressed the 4096-sample row
+  and still lost to SciPy on the 65536-sample one-sided formula. The only
+  defensible retry was an adaptive threshold: keep small inputs on the
+  full-complex path and route `n >= 16384` through `rfft`.
+- Lever tested and reverted: `cross_spectral_density` dispatched to the
+  existing `rfft` helper for `n >= 16384`, then formed `X * conj(Y)` over the
+  one-sided spectra. The candidate also added a private route equivalence test
+  against the full-complex formula on deterministic odd/even sizes; that test
+  passed before the source was restored.
+- SciPy oracle: local SciPy 1.17.1 / NumPy 2.4.3,
+  `python3 docs/perf_oracle_fft_csd.py --reps 60 --warmups 5`, one-sided rfft
+  formula medians:
+
+  | n | SciPy rfft formula median |
+  | ---: | ---: |
+  | 4096 | 74.887 us |
+  | 65536 | 1.8200725 ms |
+
+- Candidate Criterion: RCH `vmi1264463`, warm target
+  `/data/projects/.rch-targets/frankenscipy-cod-b`,
+  `cargo bench -p fsci-fft --bench fft_bench -- fft_helpers/cross_spectral_density --noplot`:
+
+  | n | Candidate median | Rust vs SciPy |
+  | ---: | ---: | ---: |
+  | 4096 | 205.64 us | 2.75x slower |
+  | 65536 | 2.7650 ms | 1.52x slower |
+
+- Routing context, not keep proof: a prior full-complex baseline on a different
+  RCH worker (`vmi1152480`) measured `89.662 us` at 4096 and `3.5478 ms` at
+  65536. The adaptive candidate's large row is a plausible internal improvement,
+  but the worker mismatch and continued SciPy loss make it insufficient.
+- Gates run before revert: RCH
+  `cargo test -p fsci-fft cross_spectral_density -- --nocapture` passed the
+  invalid-sampling-rate guard, full-complex public contract guard, and temporary
+  rfft/full-route equivalence guard (3/3 green). Source was then restored.
+- Decision: REJECT and restore source. Do not retry a threshold around the
+  current `rfft` wrapper. Next valid route must either make `rfft` itself beat
+  the SciPy oracle or fuse the real FFT/cross-spectrum path with same-host
+  SciPy proof and no 4096 regression.
+
 ## 2026-06-24 - frankenscipy-8l8r1/hazy-fft-combine-stack-tail - FFT mixed-radix combine/tiny-tail partial SciPy closeout
 
 - Agent: HazyCanyon.
