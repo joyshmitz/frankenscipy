@@ -6,6 +6,39 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon - KEEP: MatrixNormal logpdf maha term via multi-RHS triangular solve (~1.5-3.1x, BYTE-IDENTICAL)
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`.
+- Lever: `MatrixNormal::logpdf`'s second solve loop, `maha = Σ_i ‖L_V⁻¹·y[i]‖²`
+  (the O(n·p²) term, dominant for square n≈p), did n separate single-RHS solves
+  (one per Y row) against the shared p×p col-Cholesky. Replaced with one
+  multi-RHS forward substitution: transpose Y (n×p) so the n RHS columns (= Y
+  rows) are contiguous, solve all at once (`acc[i] = Σ_{k<r} L[r][k]·W[k][i]`,
+  contiguous inner i-loop auto-vectorizes), then sum ‖·‖² i-outer/r-inner.
+  Completes the MatrixNormal logpdf optimization (Y-build done in `dbf52da9`).
+- BYTE-IDENTICAL: `acc[i]` left-folds k in 0..r from 0.0 (the per-row
+  `(0..r).map(..).sum()` order) and the ‖·‖² is summed i-outer/r-inner to match
+  the per-row `Σ_r wi[r]²` loop term-for-term. The O(n·p) transpose is the only
+  added work.
+- Measured: same-process same-worker A/B microbench (RCH,
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cc cargo run
+  --release -p fsci-stats --bin perf_matnorm_maha_ab`; `maha_old` n single-RHS
+  solves vs `maha_new` multi-RHS):
+
+  | n | p | old | new | speedup | maha |
+  | ---: | ---: | ---: | ---: | ---: | --- |
+  | 512 | 64 | 579.83 us | 383.71 us | 1.51x | EXACT |
+  | 512 | 128 | 2404.56 us | 1140.72 us | 2.11x | EXACT |
+  | 256 | 256 | 5245.36 us | 1711.23 us | 3.07x | EXACT |
+
+- Decision: KEEP (grows with p; matters for square-ish matrix-normals — the
+  Y-build dominates only when n≫p). `cargo test -p fsci-stats matrix_normal` =
+  `matrix_normal_matches_scipy` GREEN (byte-identical, exact maha equality).
+- Gates: edit only to the maha loop + new microbench bin (hand-formatted; no
+  `cargo fmt -p fsci-stats` whole-file sweep). The matrix-variate logpdf
+  triangular-solve sweep (MatrixNormal Y+maha, MatrixT Gram+W, Wishart/inv-Wishart
+  trace) is now COMPLETE.
+
 ## 2026-06-25 - GreenFalcon - KEEP: MatrixNormal logpdf Y-build via vectorized multi-RHS triangular solve (~4.2x, BYTE-IDENTICAL)
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`.

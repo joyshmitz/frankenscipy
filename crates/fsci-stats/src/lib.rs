@@ -8019,11 +8019,45 @@ impl MatrixNormal {
                 yi[j] = (a[i][j] - acc[j]) / lii;
             }
         }
-        // W = Y L_V⁻ᵀ (solve each row against the col-Cholesky); maha = ‖W‖_F².
+        // maha = ‖Y L_V⁻ᵀ‖_F² = Σ_i ‖L_V⁻¹·y[i]‖² via ONE multi-RHS forward
+        // substitution: transpose Y (n×p) so the n RHS columns (= y rows) are
+        // contiguous, solve all at once (acc[i] left-folds k in 0..r — the same
+        // order as the per-row `(0..r).map(..).sum()`), then accumulate ‖·‖²
+        // i-outer/r-inner to match the per-row ‖wi‖² loop term-for-term.
+        // BYTE-IDENTICAL, with the contiguous inner i-loops vectorizing.
+        let mut yt = vec![vec![0.0_f64; n]; p];
+        for (i, yi) in y.iter().enumerate() {
+            for (r, &v) in yi.iter().enumerate() {
+                yt[r][i] = v;
+            }
+        }
+        let mut wmat = vec![vec![0.0_f64; n]; p];
+        let mut acc2 = vec![0.0_f64; n];
+        for r in 0..p {
+            let lrr = self.chol_v[r][r];
+            if lrr == 0.0 {
+                return Err(StatsError::InvalidArgument(
+                    "singular lower-triangular system".to_string(),
+                ));
+            }
+            for av in acc2.iter_mut() {
+                *av = 0.0;
+            }
+            for k in 0..r {
+                let lrk = self.chol_v[r][k];
+                let wk = &wmat[k];
+                for (av, &wki) in acc2.iter_mut().zip(wk.iter()) {
+                    *av += lrk * wki;
+                }
+            }
+            let wr = &mut wmat[r];
+            for i in 0..n {
+                wr[i] = (yt[r][i] - acc2[i]) / lrr;
+            }
+        }
         let mut maha = 0.0_f64;
-        for yi in &y {
-            let wi = solve_lower_triangular(&self.chol_v, yi)?;
-            maha += wi.iter().map(|&v| v * v).sum::<f64>();
+        for i in 0..n {
+            maha += (0..p).map(|r| wmat[r][i] * wmat[r][i]).sum::<f64>();
         }
         let (nf, pf) = (n as f64, p as f64);
         let two_pi = 2.0 * std::f64::consts::PI;
