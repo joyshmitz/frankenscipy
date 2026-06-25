@@ -3386,6 +3386,39 @@ pub fn qr(a: &[Vec<f64>], options: DecompOptions) -> Result<QrResult, LinalgErro
     })
 }
 
+/// QR decomposition returning only the upper-trapezoidal factor `R`, skipping the
+/// `O(n³)` accumulation of the explicit `Q` matrix.
+///
+/// Matches `scipy.linalg.qr(a, mode='r')` (which returns just `R`). The Householder
+/// factorization is the same as [`qr`]; `R` is extracted directly from it and does
+/// not depend on materializing `Q`, so this returns a value BIT-IDENTICAL to
+/// [`qr`]'s `.r` while avoiding the back-transform — roughly 2x faster when the
+/// orthogonal factor is not needed (rank, least-squares residual norm, R-only
+/// updates).
+pub fn qr_r(a: &[Vec<f64>], options: DecompOptions) -> Result<Vec<Vec<f64>>, LinalgError> {
+    let (rows, cols) = matrix_shape(a)?;
+    hardened_dimension_check(options.mode, rows, cols)?;
+    validate_finite_matrix(a, options.mode, options.check_finite)?;
+
+    if rows == 0 || cols == 0 {
+        return Ok(Vec::new());
+    }
+
+    let matrix = dmatrix_from_rows(a)?;
+    let r_mat = matrix.qr().r();
+
+    emit_trace(LinalgTrace {
+        operation: "qr_r",
+        matrix_size: (rows, cols),
+        mode: options.mode,
+        rcond: None,
+        warning: None,
+        error: None,
+    });
+
+    Ok(rows_from_dmatrix(&r_mat))
+}
+
 /// RQ decomposition: factor `A = R·Q` with `R` upper-trapezoidal (m×n) and `Q`
 /// orthogonal (n×n).
 ///
@@ -18326,6 +18359,27 @@ mod tests {
                 let vvt: f64 = (0..n).map(|k| r.vt[i][k] * r.vt[j][k]).sum();
                 assert!((vvt - want).abs() < 1e-9, "VVt[{i}][{j}]");
             }
+        }
+    }
+
+    #[test]
+    fn qr_r_is_bit_identical_to_full_qr_r() {
+        // scipy.linalg.qr(mode='r'): the R-only path must return exactly the R of
+        // the full QR (R is independent of materializing Q), across square, tall,
+        // and wide shapes — so it is a drop-in ~2x-faster substitute when Q is
+        // unneeded.
+        let mut s: u64 = 0x9e37_79b9_7f4a_7c15;
+        let mut rng = || {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (s >> 11) as f64 / (1u64 << 53) as f64 - 0.5
+        };
+        for &(m, n) in &[(5usize, 5usize), (8, 3), (3, 8), (16, 16), (20, 7)] {
+            let a: Vec<Vec<f64>> = (0..m).map(|_| (0..n).map(|_| rng()).collect()).collect();
+            let full = qr(&a, DecompOptions::default()).unwrap();
+            let r_only = qr_r(&a, DecompOptions::default()).unwrap();
+            assert_eq!(r_only, full.r, "qr_r vs full qr.r for {m}x{n}");
         }
     }
 

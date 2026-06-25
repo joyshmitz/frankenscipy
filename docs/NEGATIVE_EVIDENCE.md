@@ -6,6 +6,17 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon (claude-code) - KEEP: add qr_r (scipy.linalg.qr mode='r'), skips O(n³) Q accumulation (1.76-2.22x, byte-identical R)
+
+- Agent: GreenFalcon (claude-code). Lazy-eval lever: fsci's `qr` always materialized
+  the explicit Q (O(n³) back-transform) even when only R is needed; scipy.linalg.qr
+  (mode='r') skips it. Added `qr_r` (same factorization, `matrix.qr().r()` only, no
+  `.q()`) — R is independent of materializing Q, so byte-identical to qr().r;
+  additive (qr unchanged). De-risk A/B (R EXACT every shape): n=64 1.76x, n=256
+  **2.22x**, n=800 2.11x. New test qr_r_is_bit_identical_to_full_qr_r (square/tall/
+  wide); `cargo test -p fsci-linalg qr_` = 18/0. svdvals/eigvalsh already values-only.
+  Detail in canonical ledger.
+
 ## 2026-06-25 - GreenFalcon (claude-code) - KEEP: memoize special.roots_jacobi/legendre/hermite/laguerre by order (~O(n) hit vs O(n²) Golub-Welsch; byte-identical)
 
 - Agent: GreenFalcon (claude-code). Extends the gauss_legendre-node-cache lever

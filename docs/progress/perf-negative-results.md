@@ -4,6 +4,27 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-25 - frankenscipy-greenfalcon-qr-r-mode - KEEP: add qr_r (scipy.linalg.qr mode='r') skipping the O(n³) Q accumulation (1.76-2.22x, byte-identical R)
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. Lever (skill:
+  lazy-eval — "skip maybe-unused values"). fsci's `qr` always materialized the
+  explicit `Q` (`qr_decomp.q()`, an O(n³) back-transform of the Householder
+  reflectors) even when callers only need `R`; `scipy.linalg.qr(a, mode='r')`
+  returns just `R` and skips it. fsci had no R-only mode, so R-only use (rank,
+  least-squares residual norm, R-updates) was an undocumented ~2x loss vs SciPy.
+- Added `qr_r(a, options) -> Vec<Vec<f64>>`: same Householder factorization, then
+  `matrix.qr().r()` only (no `.q()`). `R` is extracted directly from the
+  factorization and does not depend on materializing `Q`, so it is BIT-IDENTICAL to
+  `qr().r` — a drop-in faster substitute. Purely additive (existing `qr` unchanged).
+- De-risk same-process A/B (full `qr` Q+R vs `qr_r`, R byte-identical EXACT every
+  shape): n=64 **1.76x**, n=128 1.88x, n=256 **2.22x**, n=512 2.13x, n=800 2.11x.
+- Conformance GREEN: new `qr_r_is_bit_identical_to_full_qr_r` (square/tall/wide,
+  `assert_eq!` qr_r == full qr.r) + unchanged qr property/golden tests; `cargo test
+  -p fsci-linalg qr_` = **18/0**.
+- Retry/extend: `scipy.linalg.qr(mode='economic')` (reduced m×k Q for tall A) is
+  also unsupported — same lazy/reduced-materialization lever. `svd(compute_uv=False)`
+  → `svdvals` and `eigvalsh` already use nalgebra's values-only paths (checked).
+
 ## 2026-06-25 - frankenscipy-greenfalcon-special-roots-cache - KEEP: memoize special.roots_jacobi/legendre/hermite/laguerre by order (~O(n) hit vs O(n²) Golub-Welsch; matches scipy roots_* lru_cache; byte-identical)
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. Extends the
