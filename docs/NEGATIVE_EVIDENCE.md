@@ -46,45 +46,49 @@ ledger above so the project has one source of truth.
   `..._logpdf_many_matches_logpdf` and `..._logpdf_many_parallel_is_bit_identical`.
   Follow-up: same lever for `MultivariateT::logpdf_many`.
 
-## 2026-06-25 - GreenFalcon (codex-cli) - KEEP: fuse low-order lfilter validation into DF2T pass (1.08x lfilter, 2.48x filtfilt vs SciPy)
+## 2026-06-25 - GreenFalcon (codex-cli) - KEEP: fuse low-order lfilter validation into DF2T pass (1.08x lfilter, 2.46x filtfilt vs SciPy)
 
 - Agent: GreenFalcon (codex-cli), `AGENT_NAME=GreenFalcon`.
 - Lever: `signal::lfilter` already had scalar-register fast paths for nfilt
-  `1..=3`, but still scanned the full input once for finite validation before
-  the actual Direct Form II transposed pass. The low-order path now validates
-  samples inside the filtering loop, eliminating one O(n) pass and the temporary
-  padded coefficient/delay vectors while preserving the generic higher-order
-  path.
+  `2..=3`, but still scanned the full input once for finite validation and
+  allocated padded coefficient/delay vectors before the Direct Form II
+  transposed pass. The low-order route now handles nfilt `1..=3` in one loop,
+  validating samples inside the recurrence and preserving the generic
+  higher-order path.
 - Artifact mapping: alien-graveyard §A1 numeric-kernel locality plus the
   certified-rewrite artifact from alien-artifact-coding: a semantics-preserving
   pass fusion with the same finite-input failure class and unchanged recurrence
   order.
-- Behavior proof: coefficients are still normalized once by `a0`; missing
+- Behavior proof: coefficients are still normalized by the same `a0`; missing
   padded coefficients remain exact `0.0`; each output sample uses the same
   `yi = b0*x + d` and delay-state recurrence in the same floating-point order.
-  Invalid `zi` still checks `x` first before returning the `zi` error, matching
-  the previous error precedence for combined-bad inputs.
-- Fresh baseline before edit: warm local Criterion
-  `cargo bench -p fsci-signal --bench signal_bench
-  'filtering|medfilt/8192|design/firls' -- --noplot --sample-size 10
-  --measurement-time 1 --warm-up-time 1` measured `lfilter` `31.574 us` and
-  `filtfilt` `83.110 us` medians.
-- Measured after edit: warm local Criterion
-  `cargo bench -p fsci-signal --bench signal_bench
-  'filtering/lfilter/4096_biquad|filtering/filtfilt/4096_biquad' -- --noplot
-  --sample-size 10 --measurement-time 1 --warm-up-time 1` measured `lfilter`
-  `22.562 us` (`-28.656%`) and `filtfilt` `50.765 us` (`-42.766%`).
+  Invalid `zi` length or non-finite `zi` still checks `x` first before returning
+  the `zi` error, preserving previous error precedence for combined-bad inputs.
 - Fresh SciPy oracle: `python3 docs/perf_oracle_signal.py` measured
-  `scipy lfilter 4096: 24.4 us` and `scipy filtfilt 4096: 126.0 us`, so current
-  Rust is `24.4 / 22.562 = 1.08x` faster for `lfilter` and
-  `126.0 / 50.765 = 2.48x` faster for `filtfilt`.
-- Proof: `cargo test -p fsci-signal lfilter --lib -- --nocapture` GREEN (17
-  passed); `cargo test -p fsci-signal filtfilt --lib -- --nocapture` GREEN (10
-  passed); live SciPy oracle `FSCI_REQUIRE_SCIPY_ORACLE=1 cargo test -p
-  fsci-conformance --test diff_signal_lfilter -- --nocapture` GREEN.
-- Gates: `cargo check -p fsci-signal --all-targets` GREEN. Strict whole-crate
-  fmt/clippy/UBS are still known to have unrelated pre-existing repository
-  inventory; this hunk is narrow to `lfilter_with_state` and its helper.
+  `scipy lfilter 4096: 24.4 us` and `scipy filtfilt 4096: 123.1 us`.
+- Fresh Rust timing: `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a
+  cargo bench -p fsci-signal --bench signal_bench
+  'filtering/lfilter/4096_biquad|filtering/filtfilt/4096_biquad' -- --noplot
+  --sample-size 10 --measurement-time 1 --warm-up-time 1` measured Criterion
+  medians `22.576 us` for `lfilter` and `50.052 us` for `filtfilt`.
+- Ratio vs SciPy: Rust is `24.4 / 22.576 = 1.08x` faster for `lfilter` and
+  `123.1 / 50.052 = 2.46x` faster for `filtfilt`.
+- Proof: RCH same-worker focused tests with
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a` passed:
+  `cargo test -p fsci-signal lfilter --lib -- --nocapture` (17 passed) and
+  `cargo test -p fsci-signal filtfilt --lib -- --nocapture` (10 passed). Live
+  SciPy oracle conformance passed:
+  `FSCI_REQUIRE_SCIPY_ORACLE=1 CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a
+  cargo test -p fsci-conformance --test diff_signal_lfilter -- --nocapture`
+  (1 passed).
+- Gates: `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a cargo
+  check -p fsci-signal --all-targets` GREEN. Strict `cargo clippy -p
+  fsci-signal --all-targets -- -D warnings` is blocked before this hunk by
+  pre-existing `fsci-linalg` dependency lint debt; `cargo clippy -p fsci-signal
+  --lib --no-deps -- -D warnings` is blocked by an unrelated pre-existing
+  `collapsible_if` at `crates/fsci-signal/src/lib.rs:15499`; `cargo fmt
+  --check --package fsci-signal` and `ubs crates/fsci-signal/src/lib.rs` remain
+  blocked by broad pre-existing file inventory outside this lever.
 - Decision: KEEP. This is a measured head-to-head SciPy win from one
   semantics-preserving validation/filter pass fusion.
 

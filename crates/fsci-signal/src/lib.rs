@@ -7547,41 +7547,6 @@ pub fn lfilter_with_state(
         vec![0.0; nfilt]
     };
 
-    // Specialized unrolled fast paths for the common low-order cases (order 1
-    // and order 2 / biquad): keep the whole delay line in scalar registers so
-    // the hot loop has no heap indexing, bounds checks, or per-iter branch —
-    // matching the optimal sosfilt biquad form. Byte-identical to the general
-    // DF2T recurrence below (same float ops in the same order).
-    match nfilt {
-        2 => {
-            let b1 = b_norm[1];
-            let a1 = a_norm[1];
-            let mut d0 = d[0];
-            for &xi in x {
-                let yi = b0 * xi + d0;
-                y.push(yi);
-                d0 = b1 * xi - a1 * yi;
-            }
-            return Ok((y, vec![d0]));
-        }
-        3 => {
-            let b1 = b_norm[1];
-            let b2 = b_norm[2];
-            let a1 = a_norm[1];
-            let a2 = a_norm[2];
-            let mut d0 = d[0];
-            let mut d1 = d[1];
-            for &xi in x {
-                let yi = b0 * xi + d0;
-                y.push(yi);
-                d0 = b1 * xi - a1 * yi + d1;
-                d1 = b2 * xi - a2 * yi;
-            }
-            return Ok((y, vec![d0, d1]));
-        }
-        _ => {}
-    }
-
     for &xi in x {
         let yi = b0 * xi + d[0];
         y.push(yi);
@@ -29684,8 +29649,6 @@ mod tests {
         }
     }
 }
-
-
 
 
 
