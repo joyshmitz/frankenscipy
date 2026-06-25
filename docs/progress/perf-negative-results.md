@@ -4,6 +4,67 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-25 - frankenscipy-greenfalcon-rfft-samebox - REJECT/WALL: rfft large-N 1.37-2.61x slower than scipy.fft.rfft is GENUINE same-box; pack-trick at its ~2x ceiling, no bounded lever (needs native real split-radix FFT, multi-turn)
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. Dug the marquee
+  remaining FFT real-transform gap. This turn's "land" check found NO unlanded
+  worktree win (all greenfalcon worktrees are ancestors of main), so this is a
+  DIG. Unlike labeled-mean (cross-box artifact), the rfft gap is GENUINE
+  same-box — verified before claiming a wall.
+
+### Same-box measurement (fsci local isolated target vs SciPy 1.17.1 local)
+
+`perf_fft_vs_scipy` (e=18/20/22) + a throwaway crossover bin (e=10/12/14/16),
+power-of-2 real input, best-of-N:
+
+| 2^e  | fsci rfft | scipy rfft | ratio        |
+|------|-----------|------------|--------------|
+| 10   | 0.0056 ms | 0.0057 ms  | 1.02x FASTER |
+| 12   | 0.0244 ms | 0.0165 ms  | 1.48x slower |
+| 14   | 0.1246 ms | 0.0655 ms  | 1.90x slower |
+| 16   | 0.5912 ms | 0.6184 ms  | 1.05x FASTER (L2->L3 knee, noisy) |
+| 18   | 2.79 ms   | 1.36 ms    | 2.05x slower |
+| 20   | 17.73 ms  | 6.80 ms    | 2.61x slower |
+| 22   | 145.81 ms | 106.71 ms  | 1.37x slower |
+
+Complex `fft` for context (same-box): 2^18/20/22 = 1.44x / 1.51x / 1.33x slower.
+fsci is competitive at the smallest sizes and ~2^16; loses 1.4-2.6x in the
+mid/large band. (The small-N 5-smooth mixed-radix surface already WINS per the
+scorecard `hazy-fft-combine-stack-tail` 7/1/0 — this entry is the power-of-2
+large-N real path specifically.)
+
+### Root cause — two stacked walls, neither a bounded lever
+
+1. **Pack-trick is at its ceiling.** fsci rfft already uses `real_fft_specialized`
+   (transforms.rs:1014): pack N reals into N/2 complex, ONE N/2 complex FFT, then
+   an O(N) unpack with twiddles. That structurally caps at ~2x over a full
+   complex FFT. pocketfft's NATIVE real FFT (real-valued butterflies throughout)
+   reaches ~3x over its own complex FFT (scipy fft 2^18 = 4.07 ms vs scipy rfft
+   1.36 ms = 0.33x). fsci rfft is 0.48x of fsci fft — already at the pack ceiling,
+   structurally above native-real cost.
+2. **The N/2 complex FFT inherits the large-N backend gap.** fsci's Cooley-Tukey
+   backend is 1.33-1.51x slower than pocketfft at large N (cache-blocking /
+   SIMD-across-radix wall). The radix-2² fusion (memory `perf_fft_radix4_stage_fusion`)
+   already closed the SMALL-N complex gap to ~1.08x but it reopens once the
+   working set exceeds L2/L3.
+
+### Rejected bounded sub-levers (zero-flip ROI)
+
+- Vectorize the scalar unpack loop (transforms.rs ~1030-1050): measured <6% of
+  rfft time at 2^20 (the N/2 FFT dominates). std::simd on interleaved complex is
+  fiddly and cannot flip a 1.4-2.6x loss. Declined.
+- Parallelize pack/unpack: same <6% ceiling. Declined.
+
+### Outcome
+
+No code written; nothing to revert. The only real fix is a native real
+split-radix FFT plus a large-N cache-blocked complex engine — a multi-turn
+rewrite with high parity risk against the scipy-golden rfft/irfft/hfft/hfftn
+conformance suite. SURFACED as a WALL. Retry condition: a dedicated FFT-engine
+campaign that first lands a real-transform-family property-test scaffold (à la
+the Delaunay empty-circumcircle property test) so the rewrite can be verified
+without byte-identity.
+
 ## 2026-06-25 - frankenscipy-greenfalcon-labelmean-samebox - CLOSURE + REJECT: ndimage.mean(labels,index) loss is a cross-box+dtype artifact (same-box fsci wins 16-23x f64 / 1.05-1.18x int32); lean-cast decode rejected (1.23-1.53x slower)
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. Target: the
