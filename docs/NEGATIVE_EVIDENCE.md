@@ -7509,3 +7509,26 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
 - CONCLUSION: keep. The win is concentrated in small dimensions, where the old scalar scratch path avoided
   threading and paid per-point allocation/fill overhead; larger dimensions were already dominated by the
   triangular solve arithmetic and remain at parity with main while still beating SciPy.
+
+## 2026-06-25 - REJECT: jnjnp_zeros cutoff-clamped frontier/cache lever regresses current path
+- Agent: codex / GreenFalcon. BOLD-VERIFY worktree audit found no measured scratch/worktree win absent
+  from `origin/main`: GreenFalcon/Hazy bench worktree commits checked during this pass were already
+  contained in `origin/main`, and the only dirty medfilt2d evidence worktree matched the landed
+  2026-06-24 rejection above. Dug the stale `special.jnjnp_zeros` residual and tested one frontier lever:
+  clamp the all-order sweep to `floor(cutoff)`, pre-size candidate storage, and reuse the order-1
+  `J_n` zeros already computed for `J_0'`.
+- MEASURED baseline/current with `AGENT_NAME=GreenFalcon`,
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a`, per-crate command
+  `rch exec -- cargo bench -p fsci-special --profile release --bench special_bench
+  acoco_gauntlet_jnjnp_zeros -- --noplot --sample-size 10 --measurement-time 2 --warm-up-time 1`:
+  current Rust on `ovh-a` was `nt=64` 302.63 us and `nt=128` 639.14 us. The `ovh-a` worker lacked
+  `scipy.special`, so SciPy rows were captured on the local SciPy 1.17.1 comparator path.
+- MEASURED candidate on the same per-crate Criterion gauntlet after `rch` admitted the run locally:
+  `nt=64` 325.57 us, a statistically significant +7.86% regression vs current; `nt=128` 644.50 us,
+  no material improvement (+4.36% mean, p=0.05). SciPy comparator rows in that run were `nt=64`
+  446.66 us and `nt=128` 943.89 us, so the rejected candidate was still 1.37x/1.46x faster than
+  SciPy, but it lost to the existing FrankenSciPy path. The candidate code was reverted completely.
+- CONCLUSION: do not re-chase cutoff clamping or order-1 row caching for `jnjnp_zeros`; the existing
+  frontier shape is already small enough that the extra branch/cache plumbing and changed search envelope
+  do not pay. Remaining special-function hard walls should stay on the documented `hyperu`/`kv` numerical
+  series routes rather than this already-dominant zero frontier.
