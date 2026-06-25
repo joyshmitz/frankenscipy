@@ -6,6 +6,32 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon (claude-code) - REJECT: parallelize numerical_jacobian (contract permits stateful closures, blocks Sync)
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. (NOTE: a separate
+  GreenFalcon on codex-cli is also writing this ledger — distinct agent.)
+- Lever tried: `opt::numerical_jacobian` (simple forward-difference Jacobian) is
+  SERIAL over its n independent per-parameter evaluations, while the project's
+  adaptive `jacobian` (lib.rs ~4605), `gradient`, and `hessian` are all parallel
+  (`F: Fn + Sync` + `thread::scope`). Parallelized the columns the same way
+  (per-thread `xp` clone, assemble in column order).
+- MEASURED (same-process A/B, RCH `hz2`, moderately-expensive model, m=500):
+  byte-identical (EXACT) with strong scaling — n=8 1.41x, n=16 2.92x, n=32 5.73x,
+  n=64 6.39x.
+- WHY REJECTED (not ~0-gain — a hard contract incompatibility): parallelizing
+  needs `+ Sync` on `F`, which fails to compile a test passing a closure that
+  captures `Cell<usize>` (an eval counter): "`Cell<usize>` cannot be shared
+  between threads safely". `numerical_jacobian`'s contract permits STATEFUL /
+  side-effecting closures (eval counting), incompatible with `Sync` + parallel
+  evaluation (it would also race the counter). The adaptive `jacobian` already
+  imposes `Sync` and is the parallel path for pure objectives;
+  `numerical_jacobian` is deliberately the permissive serial one.
+- Decision: REVERT (source restored to HEAD, bin removed, `git diff` clean). Do
+  NOT re-chase — the serial-ness is a contract choice, not a missed optimization.
+- Toolchain note: the cc target hit stale-hash `cc`/`cfg-if` breaking
+  `blake3`/`chacha20`; recovered with `cargo clean -p blake3 -p chacha20 -p cc
+  -p cfg-if`, NOT a cold rebuild.
+
 ## 2026-06-25 - GreenFalcon - NO-SHIP: adaptive FFT CSD rfft threshold still loses to SciPy
 
 - Agent: GreenFalcon (codex-cli), `AGENT_NAME=GreenFalcon`.
