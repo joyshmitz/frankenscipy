@@ -6,6 +6,23 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon (codex-cli) - KEEP: binned_statistic_dd 3D accumulator fast path (1.32-1.41x self, 3.10-3.24x vs SciPy)
+
+- Agent: GreenFalcon (codex-cli). `AGENT_NAME=GreenFalcon`. `binned_statistic_dd`
+  materialized generic N-dimensional bin coordinates and re-walked dimensions in
+  the hot accumulation loop. Added a 3D accumulator path for `count`, `sum`,
+  `mean`, `min`, and `max`: compute min/max/edges in fixed dimension form and
+  update row-major flat bins directly. `median` and `std` keep the generic
+  materialized path, and non-3D calls are unchanged.
+- Same target dir, crate-scoped Criterion baseline vs clean-worktree candidate:
+  `d3_mean/20` 8.2846 ms -> 5.8957 ms (**1.41x**), `d3_mean/30` 9.0710 ms ->
+  6.8663 ms (**1.32x**). Head-to-head SciPy comparator on the same deterministic
+  200k-point fixture: SciPy `d3_mean/20` 19.1037 ms and `d3_mean/30` 21.2518 ms,
+  so fsci candidate is **3.24x** and **3.10x** faster respectively.
+- Conformance proof: `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a
+  cargo test -p fsci-stats binned_statistic --lib -- --nocapture` passed 6/6
+  binned-statistic tests. Decision: KEEP.
+
 ## 2026-06-25 - GreenFalcon (claude-code) - KEEP: parallelize HaltonSampler::sample point generation (2.79-11.64x for large n, byte-identical)
 
 - Agent: GreenFalcon (claude-code). `HaltonSampler::sample` (= scipy.stats.qmc

@@ -45637,6 +45637,9 @@ pub fn binned_statistic_dd(
     }
 
     let ndim = sample[0].len();
+    if ndim == 3 && !matches!(statistic, "median" | "std") {
+        return binned_statistic_dd_3d_accumulator(sample, values, bins, statistic);
+    }
 
     let nan_min = |it: &dyn Fn(usize) -> f64, n: usize| {
         (0..n).map(it).fold(f64::INFINITY, |a: f64, b: f64| {
@@ -45779,6 +45782,119 @@ pub fn binned_statistic_dd(
     };
 
     let stats: Vec<f64> = bin_values.iter().map(|bv| cell_stat(bv)).collect();
+    (stats, edges)
+}
+
+fn binned_statistic_dd_3d_accumulator(
+    sample: &[Vec<f64>],
+    values: &[f64],
+    bins: usize,
+    statistic: &str,
+) -> (Vec<f64>, Vec<Vec<f64>>) {
+    let mut min0 = f64::INFINITY;
+    let mut min1 = f64::INFINITY;
+    let mut min2 = f64::INFINITY;
+    let mut max0 = f64::NEG_INFINITY;
+    let mut max1 = f64::NEG_INFINITY;
+    let mut max2 = f64::NEG_INFINITY;
+    for point in sample {
+        let x0 = point[0];
+        let x1 = point[1];
+        let x2 = point[2];
+        if x0 < min0 {
+            min0 = x0;
+        }
+        if x1 < min1 {
+            min1 = x1;
+        }
+        if x2 < min2 {
+            min2 = x2;
+        }
+        if x0 > max0 {
+            max0 = x0;
+        }
+        if x1 > max1 {
+            max1 = x1;
+        }
+        if x2 > max2 {
+            max2 = x2;
+        }
+    }
+
+    let bw0 = if max0 > min0 {
+        (max0 - min0) / bins as f64
+    } else {
+        1.0
+    };
+    let bw1 = if max1 > min1 {
+        (max1 - min1) / bins as f64
+    } else {
+        1.0
+    };
+    let bw2 = if max2 > min2 {
+        (max2 - min2) / bins as f64
+    } else {
+        1.0
+    };
+    let edges = vec![
+        (0..=bins).map(|i| min0 + i as f64 * bw0).collect(),
+        (0..=bins).map(|i| min1 + i as f64 * bw1).collect(),
+        (0..=bins).map(|i| min2 + i as f64 * bw2).collect(),
+    ];
+
+    let bins2 = bins * bins;
+    let total = bins2 * bins;
+    let mut count = vec![0.0f64; total];
+    let mut sum = vec![0.0f64; total];
+    let mut bmin = vec![f64::INFINITY; total];
+    let mut bmax = vec![f64::NEG_INFINITY; total];
+    let mut has_nan = vec![false; total];
+
+    for (point, &v) in sample.iter().zip(values.iter()) {
+        let b0 = (((point[0] - min0) / bw0).floor() as usize).min(bins - 1);
+        let b1 = (((point[1] - min1) / bw1).floor() as usize).min(bins - 1);
+        let b2 = (((point[2] - min2) / bw2).floor() as usize).min(bins - 1);
+        let flat = b0 * bins2 + b1 * bins + b2;
+        count[flat] += 1.0;
+        sum[flat] += v;
+        if v.is_nan() {
+            has_nan[flat] = true;
+        } else {
+            if v < bmin[flat] {
+                bmin[flat] = v;
+            }
+            if v > bmax[flat] {
+                bmax[flat] = v;
+            }
+        }
+    }
+
+    let stats: Vec<f64> = (0..total)
+        .map(|b| {
+            let c = count[b];
+            match statistic {
+                "count" => c,
+                "sum" => sum[b],
+                _ if c == 0.0 => f64::NAN,
+                "mean" => sum[b] / c,
+                "min" => {
+                    if has_nan[b] {
+                        f64::NAN
+                    } else {
+                        bmin[b]
+                    }
+                }
+                "max" => {
+                    if has_nan[b] {
+                        f64::NAN
+                    } else {
+                        bmax[b]
+                    }
+                }
+                _ => sum[b] / c,
+            }
+        })
+        .collect();
     (stats, edges)
 }
 
