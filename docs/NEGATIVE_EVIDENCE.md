@@ -6,6 +6,27 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon - KEEP: symmetry-fold the four *_iterative discrepancy variants (~1.93x, completes family)
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`.
+- Lever: the upper-triangle symmetry lever applied to the four iterative
+  discrepancy fns (`centered/mixture/l2_star/wraparound_discrepancy_iterative`,
+  `scipy.stats.qmc.discrepancy(iterative=True)`). Their O(n²) double loops are
+  character-identical to the non-iterative kernels (only the final `(n+1)`
+  normalization differs), so the same diagonal-once + off-diagonal-×2 fold
+  applies. This closes the entire QMC discrepancy double-sum surface.
+- Measured: same-process same-worker A/B (RCH,
+  `bin/perf_discrepancy_ab.rs`, `cd_iter` row = `centered_discrepancy_iterative`
+  vs full-n² reference, general d=4): n=512 **1.93x**, n=1024 **1.93x**,
+  \|Δvalue\| 2.4e-14. (Identical kernel ⇒ identical speedup as the non-iterative
+  rows: centered 1.92x, mixture 1.87-1.93x, l2_star 1.87-1.89x, wrap 1.91-2.02x.)
+- Decision: KEEP. `cargo test -p fsci-stats discrepancy` 11/11 GREEN, incl.
+  `iterative_discrepancy_and_update_match_scipy` (validates the iterative variants
+  to 1e-10 vs scipy) — the ~1e-14 reassociation is far inside it.
+- Gates: edits only to the four `*_iterative` kernels + the A/B bin
+  (hand-formatted; no `cargo fmt -p` whole-file sweep). The `geometric_discrepancy`
+  Prim's-MST double loop is NOT a pair-symmetric sum and is correctly untouched.
+
 ## 2026-06-25 - GreenFalcon - KEEP: extend discrepancy symmetry to mixture/l2_star/wraparound (~1.84-1.94x each)
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`.

@@ -5,9 +5,38 @@
 // difference is the symmetry. Same process / same worker => no cross-worker
 // noise; values must agree to ~1e-9 (sum reassociation only).
 use fsci_stats::{
-    centered_discrepancy, l2_star_discrepancy, mixture_discrepancy, wraparound_discrepancy,
+    centered_discrepancy, centered_discrepancy_iterative, l2_star_discrepancy, mixture_discrepancy,
+    wraparound_discrepancy,
 };
 use std::time::Instant;
+
+fn old_full_iter_centered(s: &[f64], d: usize) -> f64 {
+    // Same kernel as old_full_centered but with the iterative (n+1) normalization.
+    let n = s.len() / d;
+    let leading = (13.0_f64 / 12.0).powi(d as i32);
+    let mut single = 0.0;
+    for i in 0..n {
+        let mut p = 1.0;
+        for k in 0..d {
+            let c = s[i * d + k] - 0.5;
+            p *= 1.0 + 0.5 * c.abs() - 0.5 * c * c;
+        }
+        single += p;
+    }
+    let mut double = 0.0;
+    for i in 0..n {
+        for j in 0..n {
+            let mut p = 1.0;
+            for k in 0..d {
+                let (xi, xj) = (s[i * d + k], s[j * d + k]);
+                p *= 1.0 + 0.5 * (xi - 0.5).abs() + 0.5 * (xj - 0.5).abs() - 0.5 * (xi - xj).abs();
+            }
+            double += p;
+        }
+    }
+    let m = (n + 1) as f64;
+    leading - 2.0 / m * single + double / (m * m)
+}
 
 fn old_full_centered(s: &[f64], d: usize) -> f64 {
     let n = s.len() / d;
@@ -139,11 +168,12 @@ fn best_of(reps: usize, mut f: impl FnMut() -> f64) -> (std::time::Duration, f64
 fn main() {
     type OldFn = fn(&[f64], usize) -> f64;
     type NewFn = fn(&[f64], usize) -> Result<f64, fsci_stats::StatsError>;
-    let methods: [(&str, OldFn, NewFn); 4] = [
+    let methods: [(&str, OldFn, NewFn); 5] = [
         ("centered", old_full_centered, centered_discrepancy),
         ("mixture", old_full_mixture, mixture_discrepancy),
         ("l2_star", old_full_l2_star, l2_star_discrepancy),
         ("wrap", old_full_wraparound, wraparound_discrepancy),
+        ("cd_iter", old_full_iter_centered, centered_discrepancy_iterative),
     ];
     println!(
         "{:>8} {:>6} {:>3} {:>11} {:>11} {:>8}  {:>9}",

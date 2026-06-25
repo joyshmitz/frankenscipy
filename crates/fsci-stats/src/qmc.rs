@@ -1150,9 +1150,17 @@ pub fn centered_discrepancy_iterative(
         }
         single += prod;
     }
+    // Upper-triangle symmetry (see centered_discrepancy): diagonal once + each
+    // off-diagonal pair twice (~2x fewer products; ~1e-14 reassociation).
     let mut double = 0.0_f64;
     for i in 0..n {
-        for j in 0..n {
+        let mut diag = 1.0_f64;
+        for k in 0..dimension {
+            let c = 0.5 * (sample[i * dimension + k] - 0.5).abs();
+            diag *= 1.0 + c + c;
+        }
+        double += diag;
+        for j in (i + 1)..n {
             let mut prod = 1.0_f64;
             for k in 0..dimension {
                 let xi = sample[i * dimension + k];
@@ -1160,7 +1168,7 @@ pub fn centered_discrepancy_iterative(
                 prod *=
                     1.0 + 0.5 * (xi - 0.5).abs() + 0.5 * (xj - 0.5).abs() - 0.5 * (xi - xj).abs();
             }
-            double += prod;
+            double += 2.0 * prod;
         }
     }
     let m = (n + 1) as f64;
@@ -1273,15 +1281,22 @@ pub fn wraparound_discrepancy_iterative(
         return Ok(-(4.0_f64 / 3.0).powi(dimension as i32));
     }
     let leading = -(4.0_f64 / 3.0).powi(dimension as i32);
+    // Upper-triangle symmetry: diagonal (d=0 → factor 1.5) once + each
+    // off-diagonal pair twice (~2x fewer products; ~1e-14 reassociation).
     let mut double = 0.0_f64;
     for i in 0..n {
-        for j in 0..n {
+        let mut diag = 1.0_f64;
+        for _ in 0..dimension {
+            diag *= 1.5;
+        }
+        double += diag;
+        for j in (i + 1)..n {
             let mut prod = 1.0_f64;
             for k in 0..dimension {
                 let d = (sample[i * dimension + k] - sample[j * dimension + k]).abs();
                 prod *= 1.5 - d * (1.0 - d);
             }
-            double += prod;
+            double += 2.0 * prod;
         }
     }
     let m = (n + 1) as f64;
@@ -1309,9 +1324,17 @@ pub fn mixture_discrepancy_iterative(
         }
         single += prod;
     }
+    // Upper-triangle symmetry: diagonal once + each off-diagonal pair twice
+    // (~2x fewer products; ~1e-14 reassociation).
     let mut double = 0.0_f64;
     for i in 0..n {
-        for j in 0..n {
+        let mut diag = 1.0_f64;
+        for k in 0..dimension {
+            let c = 0.25 * (sample[i * dimension + k] - 0.5).abs();
+            diag *= 15.0 / 8.0 - c - c;
+        }
+        double += diag;
+        for j in (i + 1)..n {
             let mut prod = 1.0_f64;
             for k in 0..dimension {
                 let xi = sample[i * dimension + k];
@@ -1320,7 +1343,7 @@ pub fn mixture_discrepancy_iterative(
                 prod *= 15.0 / 8.0 - 0.25 * (xi - 0.5).abs() - 0.25 * (xj - 0.5).abs() - 0.75 * d
                     + 0.5 * (xi - xj).powi(2);
             }
-            double += prod;
+            double += 2.0 * prod;
         }
     }
     let m = (n + 1) as f64;
@@ -1349,16 +1372,23 @@ pub fn l2_star_discrepancy_iterative(
         }
         single += prod;
     }
+    // `max` symmetric → upper-triangle: diagonal once + each off-diagonal pair
+    // twice (~2x fewer products; ~1e-14 reassociation).
     let mut double = 0.0_f64;
     for i in 0..n {
-        for j in 0..n {
+        let mut diag = 1.0_f64;
+        for k in 0..dimension {
+            diag *= 1.0 - sample[i * dimension + k];
+        }
+        double += diag;
+        for j in (i + 1)..n {
             let mut prod = 1.0_f64;
             for k in 0..dimension {
                 let xi = sample[i * dimension + k];
                 let xj = sample[j * dimension + k];
                 prod *= 1.0 - xi.max(xj);
             }
-            double += prod;
+            double += 2.0 * prod;
         }
     }
     let m = (n + 1) as f64;
