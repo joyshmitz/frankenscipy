@@ -6,6 +6,34 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon (claude-code) - CLOSURE + REJECT: ndimage.mean(labels,index) "2.06-2.53x slower" is a cross-box+dtype artifact; SAME-BOX fsci wins 16-23x (f64) / 1.05-1.18x (int32). Lean-cast decode REJECTED (1.23-1.53x slower than shipped bit-decode)
+
+- Agent: GreenFalcon (claude-code). Investigated the standing scorecard loss
+  `frankenscipy-8l8r1.143`/`.125` "labeled-mean 2.06-2.53x slower than SciPy".
+  Two deliverables, **no source change** (current path already optimal):
+- **STALE-LOSS CLOSURE (same-box).** The scorecard ratio compared fsci-f64 on
+  RCH against a SciPy **int32** oracle on a *different* box — the exact
+  cross-box + dtype-mismatch artifact called out in
+  `perf_equal_hardware_artifact_and_flatbuffer_lever`. Re-measured all three on
+  THIS machine (SciPy 1.17.1 local; fsci `perf_label_stats` local isolated
+  target). fsci `one_based` (the public `mean`): 157.6 / 507.1 / 511.1 / 1173 us
+  for N/K = 65536/512, 262144/1024, 262144/2048, 589824/4096. SciPy **f64**
+  labels (the SAME dtype fsci's f64 `NdArray` must use): 2560.8 / 9244.8 /
+  9881.8 / 27530.7 us -> fsci **16.2x / 18.2x / 19.3x / 23.5x faster**. SciPy
+  **int32** best-case fast C path: 164.8 / 585.1 / 590.9 / 1387.8 us (matches
+  the scorecard's 168/585/590/1387 oracle exactly -> it was int32) -> fsci still
+  **1.05x / 1.15x / 1.16x / 1.18x faster**. Same-box fsci wins every cell
+  against both dtypes; the documented loss is an artifact.
+- **REJECT: lean-cast decode.** Hypothesis: replace the per-pixel f64
+  bit-decode (`measurement_exact_positive_integer_label`) with a lean
+  `l as usize` + `l as f64 == label` range cast (the in-bin `dense_table`
+  variant). Same-process A/B (`perf_label_stats`): `dense_table` is **1.23x /
+  1.29x / 1.53x / 1.53x SLOWER** than the shipped `one_based` bit-decode. The
+  bit-decode already won; do not route back to the cast. All variants
+  `mism=0/0/0/0/0` (byte-identical). Retry condition: only if NdArray gains a
+  native integer label store (then the cast is free and the bit-decode is moot).
+- Detail + full table in canonical ledger.
+
 ## 2026-06-25 - GreenFalcon (claude-code) - KEEP: add hessenberg_h (scipy.linalg.hessenberg calc_q=False), skips O(n³) Q accumulation (1.45-1.57x, byte-identical H)
 
 - Agent: GreenFalcon (claude-code). Lazy-eval: fsci's `hessenberg` always

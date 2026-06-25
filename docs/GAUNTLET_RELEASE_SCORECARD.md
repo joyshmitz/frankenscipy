@@ -268,6 +268,30 @@ residuals are a bandwidth wall, NOT a vectorization gap). Follow-up (scoped): re
 `par_query_map` to in-place `chunks_mut` (like stats `evaluate_many`) to lower its parallel
 break-even and speed genuinely-huge batches.
 
+## 2026-06-25 — GreenFalcon: ndimage.mean(labels,index) stale-loss CLOSURE (same-box) + lean-cast REJECT
+
+The standing loss `frankenscipy-8l8r1.143`/`.125` ("labeled-mean 2.06-2.53x slower
+than SciPy") is a **cross-box + dtype artifact**, not a real regression. fsci's
+`NdArray` is f64-only, so a labeled-mean caller must pass f64 labels; the scorecard
+oracle (168/585/590/1387 us) was measured with **int32** labels (SciPy's fast C
+path) on a *different* box. Re-measured all three on ONE local machine (SciPy
+1.17.1; fsci `perf_label_stats` local isolated target):
+
+| N / K | fsci `one_based` (public `mean`) | SciPy **f64** (same dtype) | SciPy **int32** (fast path) | fsci vs f64 | fsci vs int32 |
+| --- | --- | --- | --- | --- | --- |
+| 65536 / 512 | 157.6 us | 2560.8 us | 164.8 us | **16.2x faster** | **1.05x faster** |
+| 262144 / 1024 | 507.1 us | 9244.8 us | 585.1 us | **18.2x faster** | **1.15x faster** |
+| 262144 / 2048 | 511.1 us | 9881.8 us | 590.9 us | **19.3x faster** | **1.16x faster** |
+| 589824 / 4096 | 1173 us | 27530.7 us | 1387.8 us | **23.5x faster** | **1.18x faster** |
+
+Same-box, fsci wins every cell against BOTH dtypes — 16-23x vs the same-dtype
+(f64) call, and still 1.05-1.18x vs SciPy's best-case int32 C path. No source
+change: the shipped bit-decode `one_based` path is already the measured optimum.
+The proposed lean-cast decode (`dense_table`: `l as usize` + `l as f64 == label`)
+was **REJECTED** — same-process A/B shows it 1.23/1.29/1.53/1.53x SLOWER than the
+bit-decode (RCH hz2 corroborates 1.25/1.24/1.51/1.42x), all `mism=0` byte-identical.
+Detail in `docs/progress/perf-negative-results.md`.
+
 ## Pending Gauntlet Backlog
 
 Continue converting `pending batch-test` entries in the negative-evidence ledger

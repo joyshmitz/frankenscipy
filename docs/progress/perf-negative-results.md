@@ -4,6 +4,71 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-25 - frankenscipy-greenfalcon-labelmean-samebox - CLOSURE + REJECT: ndimage.mean(labels,index) loss is a cross-box+dtype artifact (same-box fsci wins 16-23x f64 / 1.05-1.18x int32); lean-cast decode rejected (1.23-1.53x slower)
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. Target: the
+  biggest *open* scorecard algorithmic loss, `frankenscipy-8l8r1.143`
+  ("ndimage.mean(labels,index) exact bit-decoded one-based labels, 2.06-2.53x
+  slower than SciPy") and its parent `.125`. No source change shipped — the
+  current path is already optimal and the "loss" is a measurement artifact.
+
+### Why the documented loss is wrong (dtype + cross-box)
+
+- fsci's `NdArray` stores **f64 only**, so a fsci labeled-mean caller MUST pass
+  f64 labels. The scorecard's SciPy oracle (168/585/590/1387 us) was measured
+  with **int32** labels (SciPy's optimized C fast path) on a *different* box,
+  then divided into fsci's f64-input time on RCH. Apples-to-oranges on two axes
+  (dtype + hardware) — exactly the artifact class in memory
+  `perf_equal_hardware_artifact_and_flatbuffer_lever` and the f64-label refresh
+  row `cod-b-label-mean-f64-refresh`.
+
+### Same-box re-measurement (all three on THIS machine)
+
+Workloads: N/K = 65536/512, 262144/1024, 262144/2048, 589824/4096; labels
+uniform 1..=K (LCG), index = 1..=K. fsci via `cargo run --release -p
+fsci-ndimage --bin perf_label_stats` (local isolated `CARGO_TARGET_DIR`); SciPy
+1.17.1 `ndimage.mean` on matching arrays.
+
+| N / K          | fsci `one_based` | SciPy f64  | SciPy int32 | fsci vs f64 | fsci vs int32 |
+|----------------|------------------|------------|-------------|-------------|---------------|
+| 65536 / 512    | 157.6 us         | 2560.8 us  | 164.8 us    | 16.2x       | 1.05x         |
+| 262144 / 1024  | 507.1 us         | 9244.8 us  | 585.1 us    | 18.2x       | 1.15x         |
+| 262144 / 2048  | 511.1 us         | 9881.8 us  | 590.9 us    | 19.3x       | 1.16x         |
+| 589824 / 4096  | 1173 us          | 27530.7 us | 1387.8 us   | 23.5x       | 1.18x         |
+
+SciPy int32 (164.8/585.1/590.9/1387.8 us) reproduces the scorecard oracle
+almost exactly, confirming that oracle was int32. Same-box, fsci wins EVERY
+cell against BOTH dtypes — 16-23x vs the same-dtype (f64) call, and still
+1.05-1.18x vs SciPy's best-case int32 C path. The `.143`/`.125` loss is closed.
+
+### REJECT: lean-cast decode (do not re-attempt)
+
+- Hypothesis: the per-pixel f64 bit-decode `measurement_exact_positive_integer_label`
+  (exponent/significand extraction, fractional-mask, conditional shifts) is the
+  hotspot; replace with a lean `t = l as usize; t>=1 && t<=K && t as f64 == l`
+  cast (byte-identical for the contiguous one-based case — integers map
+  identically; fractional/NaN/inf/neg/out-of-range all reject the same).
+- Measured (`perf_label_stats`, same-process A/B vs the public `mean`): the lean
+  cast = the in-bin `dense_table` variant ran **1.23x / 1.29x / 1.53x / 1.53x
+  SLOWER** than the shipped `one_based` bit-decode (RCH hz2 corroborates:
+  1.25/1.24/1.51/1.42x). The bit-decode already extracts the integer without a
+  round-trip f64->int->f64 equality check and avoids the trailing `as f64`
+  re-materialization, which the optimizer cannot elide. All variants
+  `mism=0/0/0/0/0` byte-identical.
+- Retry condition: only if `NdArray` ever gains a native integer label backing
+  store (then the cast is free and both decodes collapse). Until then the
+  bit-decode is the measured optimum — do not route labeled-mean back to the
+  cast.
+
+### Parallel sharded reduction — not pursued
+
+- The remaining theoretical lever (shard pixels across threads, per-thread
+  K-sized sum/count, merge) would change FP summation order (not byte-identical;
+  needs a tolerance property test) for at best a small multicore gain on top of
+  a path that ALREADY beats SciPy same-box by 1.05-23x. Marginal value, real
+  regression risk — declined. Retry condition: a measured same-box loss
+  reappears at much larger N where memory bandwidth dominates the scatter.
+
 ## 2026-06-25 - frankenscipy-greenfalcon-hessenberg-h-only - KEEP: add hessenberg_h (scipy.linalg.hessenberg calc_q=False) skipping the O(n³) Q accumulation (1.45-1.57x, byte-identical H)
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. Lazy-eval lever
