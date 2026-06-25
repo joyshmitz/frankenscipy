@@ -13625,12 +13625,20 @@ pub fn dft(n: usize, scale: Option<&str>) -> Result<Vec<Vec<Complex<f64>>>, Lina
     };
     let mut result = vec![vec![Complex::new(0.0, 0.0); n]; n];
     let base = -2.0 * std::f64::consts::PI / n as f64;
+    // The angle index `m = j·k mod n` takes only n distinct values, so precompute
+    // the n scaled roots of unity once (n cos/sin) and index them, instead of
+    // recomputing cos/sin in every one of the n² cells. BYTE-IDENTICAL: each
+    // entry is the same `Complex(cos(base·m)·factor, sin(base·m)·factor)` keyed on
+    // the same reduced `m`.
+    let roots: Vec<Complex<f64>> = (0..n)
+        .map(|m| {
+            let theta = base * m as f64;
+            Complex::new(theta.cos() * factor, theta.sin() * factor)
+        })
+        .collect();
     for (j, row) in result.iter_mut().enumerate() {
         for (k, entry) in row.iter_mut().enumerate() {
-            // Reduce j·k mod n before scaling the angle to limit round-off.
-            let m = (j * k) % n;
-            let theta = base * m as f64;
-            *entry = Complex::new(theta.cos() * factor, theta.sin() * factor);
+            *entry = roots[(j * k) % n];
         }
     }
     Ok(result)

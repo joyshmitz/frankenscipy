@@ -6,6 +6,37 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon (claude-code) - KEEP: dft matrix precompute n roots of unity (~4-5.3x, BYTE-IDENTICAL)
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`.
+- Lever: `linalg::dft` (`scipy.linalg.dft`) built the n×n matrix by calling
+  `cos`/`sin` in EVERY one of the n² cells (`theta = base·((j·k) mod n)`). Since
+  the reduced index `m = (j·k) mod n` takes only n distinct values, precompute
+  the n scaled roots of unity once (n cos/sin) and index them — n² cos/sin → n
+  cos/sin + n² table lookups.
+- BYTE-IDENTICAL: `dft` already reduces `m = (j·k) mod n` before the angle, so
+  `roots[m] = Complex(cos(base·m)·factor, sin(base·m)·factor)` equals the
+  original cell bit-for-bit. (The separate `dft_matrix` helper uses the
+  UN-reduced `j·k` angle, so the same precompute is NOT bit-exact there — left
+  alone.)
+- Measured: same-process same-worker A/B microbench (RCH `hz2`,
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cc cargo run
+  --release -p fsci-linalg --bin perf_dft_ab`):
+
+  | n | old (per-cell) | new (precompute) | speedup | matrices |
+  | ---: | ---: | ---: | ---: | --- |
+  | 256 | 835.96 us | 159.30 us | 5.25x | EXACT |
+  | 512 | 4126.31 us | 772.78 us | 5.34x | EXACT |
+  | 1024 | 15941.35 us | 3811.82 us | 4.18x | EXACT |
+  | 2048 | 62697.59 us | 15795.37 us | 3.97x | EXACT |
+
+- Decision: KEEP. `cargo test -p fsci-linalg dft` GREEN (`dft_matches_scipy`,
+  `dft_matrix_unitary`, `mr_dft_matrix_shape`). The "precompute the loop-invariant
+  transcendental over its distinct argument range" lever (cf. firls) applied to a
+  roots-of-unity matrix build.
+- Gates: edit only to `dft` + new microbench bin (hand-formatted; no `cargo fmt
+  -p fsci-linalg` whole-file sweep).
+
 ## 2026-06-25 - GreenFalcon (claude-code) - REJECT: parallelize numerical_jacobian (contract permits stateful closures, blocks Sync)
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. (NOTE: a separate
