@@ -7432,7 +7432,11 @@ impl MultivariateNormal {
 
     /// Density at many points (`exp` of [`logpdf_many`](Self::logpdf_many)).
     pub fn pdf_many(&self, xs: &[Vec<f64>]) -> Result<Vec<f64>, StatsError> {
-        Ok(self.logpdf_many(xs)?.into_iter().map(f64::exp).collect())
+        let mut values = self.logpdf_many(xs)?;
+        for value in &mut values {
+            *value = value.exp();
+        }
+        Ok(values)
     }
 
     pub fn rvs(&self, n: usize, rng: &mut impl Rng) -> Vec<Vec<f64>> {
@@ -7967,7 +7971,11 @@ impl MultivariateT {
 
     /// Density at many points (`exp` of [`logpdf_many`](Self::logpdf_many)).
     pub fn pdf_many(&self, xs: &[Vec<f64>]) -> Result<Vec<f64>, StatsError> {
-        Ok(self.logpdf_many(xs)?.into_iter().map(f64::exp).collect())
+        let mut values = self.logpdf_many(xs)?;
+        for value in &mut values {
+            *value = value.exp();
+        }
+        Ok(values)
     }
 
     /// Mean vector (defined as `loc` for `df > 1`).

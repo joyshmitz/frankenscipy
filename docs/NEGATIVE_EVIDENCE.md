@@ -6,6 +6,37 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon (codex-cli) - KEEP: multivariate pdf_many in-place exp buffer reuse (up to 1.54x self, 1.73-4.74x vs SciPy)
+
+- Agent: GreenFalcon (codex-cli), `AGENT_NAME=GreenFalcon`.
+- Lever: `MultivariateNormal::pdf_many` and `MultivariateT::pdf_many` previously
+  called `logpdf_many(xs)?.into_iter().map(f64::exp).collect()`, allocating a
+  second `Vec` for the exponentiated density values. Reuse the `logpdf_many`
+  output buffer instead and exponentiate each slot in place. Semantics are
+  unchanged: the same `logpdf_many` values are produced first, then `exp` is
+  applied exactly once per element in the same element order.
+- MEASURED with `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b`
+  and per-crate Criterion command
+  `cargo bench -p fsci-stats --bench stats_bench 'multivariate_(normal|t)_pdf' -- --noplot --sample-size 10 --measurement-time 1 --warm-up-time 1`.
+  Same-turn baseline -> candidate medians:
+  MVN d=3 `1.4531 ms -> 1.2483 ms` (1.16x, significant), d=5
+  `3.2164 ms -> 3.2461 ms` (noise), d=8 `3.5650 ms -> 3.0237 ms`
+  (1.18x, significant), d=10 `3.3666 ms -> 3.3457 ms` (noise);
+  MVT d=3 `3.5440 ms -> 2.3038 ms` (1.54x, significant), d=10
+  `3.9428 ms -> 3.5190 ms` (1.12x, significant).
+- BOLD-VERIFY vs SciPy on the same 100k-query workload:
+  `scipy.stats.multivariate_normal.pdf` medians were d=3 `5.499 ms`,
+  d=5 `7.374 ms`, d=8 `9.727 ms`, d=10 `13.292 ms`; candidate Rust ratios are
+  4.40x, 2.27x, 3.22x, and 3.97x faster. `scipy.stats.multivariate_t.pdf`
+  medians were d=3 `3.986 ms`, d=10 `16.672 ms`; candidate Rust ratios are
+  1.73x and 4.74x faster.
+- Proof/conformance: `cargo test -p fsci-stats multivariate --lib -- --nocapture`
+  passed 11/11, including SciPy reference checks and the multivariate
+  `logpdf_many` parallel bit-identity tests.
+- Decision: KEEP. This is a narrow allocation/memory-traffic removal on top of
+  the already-landed multi-RHS Mahalanobis kernels; it does not change numeric
+  ordering or tolerance contracts.
+
 ## 2026-06-25 - GreenFalcon (claude-code) - REJECT(de-risk): multi-RHS batch maha for GMM full E-step regresses at typical d
 
 - Agent: GreenFalcon (claude-code). The multi-RHS-batch-Mahalanobis lever that
