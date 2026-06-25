@@ -6,6 +6,39 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon (claude-code) - REJECT(de-risk) + CORRECTION: ndimage.mean(labels) f64→index lookup is NOT the loss; the current bit-decode is already the FASTEST realistic option and ~competitive with SciPy
+
+- Agent: GreenFalcon (claude-code). This OVERTURNS the "REDIRECT" in the entry
+  immediately below (which claimed the per-pixel f64→index lookup was the ~16x
+  loss, citing a 413 us "direct-u32" run). That 413 us figure was UNREALISTIC: it
+  indexed a pre-built `usize` buffer, skipping the f64→index conversion that is
+  inherent because fsci stores labels as f64. When the conversion is included, all
+  realistic options land at ~1.2-2 ms.
+- De-risk microbench (3 byte-identical lookup strategies, same-process A/B, EXACT
+  (sums,counts) across all three):
+  - `bit_decode_pp` (CURRENT — full f64 mantissa/exponent decode per pixel,
+    `measurement_exact_positive_integer_label`)
+  - `simple_pp` (`as usize` cast + `as f64` round-trip check per pixel, like the
+    dense path)
+  - `bulk_direct` (one bulk pass f64→u32 pos buffer w/ sentinel, then tight scatter)
+  - Results (worst-case shapes):
+    - N=589824,K=512:  bitdec **1157 us** / simple 1363 us (0.85x) / bulk 1899 us (0.61x)
+    - N=589824,K=4096: bitdec **1237 us** / simple 1506 us (0.82x) / bulk 1983 us (0.62x)
+    - N=262144,K=2048: bitdec 1301 us / simple 1263 us (1.03x) / bulk **830 us** (1.57x)
+  - The CURRENT bit-decode is the FASTEST at the large-N worst cases; `simple_pp`
+    and `bulk_direct` both REGRESS there (the simple cast's saturating-float
+    conversion + round-trip is no cheaper than the bit ops; bulk adds a second
+    full data pass + a u32 buffer that thrashes for large N).
+- KEY: the bit-decode hot loop is **~1.24 ms** at (N=589824,K=4096) — already
+  competitive with SciPy's 1.688 ms for that shape. So the hot loop is NOT 4.67x
+  off; the scorecard's 6.951 ms predates the .125/.143 lookup-path commits and is
+  STALE for the inner loop. Any residual full-`mean()` gap is NdArray/wrapper
+  overhead, not the scatter or the label decode.
+- Decision: do NOT change `measurement_one_based_label_pos` (the current bit-decode
+  is optimal of the three); do NOT chase this loss at the hot-loop level (de-risk
+  only, bin removed). Re-measure the full `mean()` vs SciPy same-box before
+  trusting the scorecard's 4.67x for this row.
+
 ## 2026-06-25 - GreenFalcon (claude-code) - REJECT(de-risk): sharded/cache-tiled reduction for ndimage.mean(labels) regresses
 
 - Agent: GreenFalcon (claude-code). The scorecard's "route to sharded/cache-tiled
