@@ -4,6 +4,40 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-25 - frankenscipy-greenfalcon-sobol-chunked-recurrence - KEEP: chunk Sobol recurrence for large high-dimensional samples (2.19x at 65k×16; 1.37x vs SciPy)
+
+- Agent: GreenFalcon (codex-cli), `AGENT_NAME=GreenFalcon`. `SobolSampler::sample`
+  (= `scipy.stats.qmc.Sobol(..., scramble=False).random(n)`) already used the
+  incremental Gray-code recurrence, so naive per-point direct indexing was not a
+  valid lever. The parallelizable seam is coarser: split the requested point range
+  into chunks, seed each chunk with exact `sobol_bits(chunk_start, dim)`, then run
+  the same recurrence inside the chunk. Output order, digital shifts, and
+  `u64::MAX` saturation are unchanged.
+- Lever: dimension-sensitive gates plus a 4-thread cap. `d >= 16` chunks once
+  `n*d >= 200_000`; lower dimensions keep the serial recurrence until
+  `n*d >= 1_000_000`, because 2D/8D recurrence work is too cheap for eager thread
+  fanout. Added `sobol_2d_parallel_path_matches_direct_bits` and
+  `sobol_general_parallel_path_matches_direct_bits` (d=16) to force the threaded
+  path and compare every emitted value with direct `sobol_bits` + digital shifts.
+- Same-tree A/B (`cargo run --release -p fsci-stats --bin perf_sobol`,
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b`; medians):
+  4096×2 9.588µs → 8.987µs (1.07x), 65536×2 153.961µs → 142.710µs (1.08x),
+  262144×2 630.633µs → 583.905µs (1.08x), 65536×8 1.006ms → 704.875µs (1.43x),
+  65536×16 1.869ms → 852.154µs (2.19x), 65536×32 3.305ms → 2.710ms (1.22x).
+- Fresh SciPy head-to-head on this host (`scipy 1.17.1`, `numpy 2.4.3`):
+  4096×2 18.384µs vs fsci 8.987µs (fsci 2.05x), 65536×2 212.452µs vs 142.710µs
+  (1.49x), 262144×2 892.980µs vs 583.905µs (1.53x), 65536×16 1.171ms vs
+  852.154µs (1.37x), 65536×32 2.797ms vs 2.710ms (1.03x). Negative residual:
+  65536×8 remains SciPy-faster (504.885µs vs fsci 704.875µs, fsci 0.72x); do not
+  retune thread count for 8D without a different lever (likely direction-table/SIMD
+  packing rather than more threads).
+- Conformance GREEN: `cargo test -p fsci-stats sobol --lib -- --nocapture` = 10/0,
+  including the new forced-threaded-path direct-bit tests. Existing Criterion QMC
+  smoke after the gate: `cargo bench -p fsci-stats --bench stats_bench qmc_sampling
+  -- --noplot --sample-size 10 --measurement-time 1 --warm-up-time 1` reports
+  sobol_2d/1024 3.14µs and sobol_2d/4096 10.89µs, so the low-dimension path remains
+  serial/healthy.
+
 ## 2026-06-25 - frankenscipy-greenfalcon-halton-parallel - KEEP: parallelize HaltonSampler::sample point generation (2.79-11.64x for large n, byte-identical)
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. `HaltonSampler::sample`

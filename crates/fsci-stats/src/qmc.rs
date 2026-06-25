@@ -57,7 +57,11 @@ const HALTON_PAR_WORK_GATE: usize = 200_000;
 /// `std::thread::scope` threads (each owns a disjoint block of whole points) — the
 /// result is BYTE-IDENTICAL to the serial loop (same per-index values, same point
 /// order). scipy's Halton is single-threaded.
-fn halton_fill_points<F: Fn(usize, &mut [f64]) + Sync>(n: usize, d: usize, fill_point: F) -> Vec<f64> {
+fn halton_fill_points<F: Fn(usize, &mut [f64]) + Sync>(
+    n: usize,
+    d: usize,
+    fill_point: F,
+) -> Vec<f64> {
     let mut out = vec![0.0_f64; n.saturating_mul(d)];
     if n.saturating_mul(d) < HALTON_PAR_WORK_GATE || n < 2 {
         for (p, slot) in out.chunks_mut(d).enumerate() {
@@ -286,6 +290,33 @@ pub struct SobolSampler {
     digital_shift: Vec<u64>,
 }
 
+/// Minimum total coordinate count (`n · d`) above which high-dimensional Sobol
+/// point generation is distributed across threads. Each chunk seeds its own
+/// Gray-code recurrence from `sobol_bits(chunk_start, dim)`, then performs the
+/// same one-direction-word flip per point as the serial walk. Below the gate, the
+/// serial recurrence wins.
+const SOBOL_HIGH_DIM_PAR_WORK_GATE: usize = 200_000;
+
+/// Lower-dimensional Sobol recurrence is so cheap that thread overhead only wins
+/// for very large point counts; keep moderate 2D/8D QMC requests serial.
+const SOBOL_LOW_DIM_PAR_WORK_GATE: usize = 1_000_000;
+
+fn sobol_parallel_work_gate(dimension: usize) -> usize {
+    if dimension >= 16 {
+        SOBOL_HIGH_DIM_PAR_WORK_GATE
+    } else {
+        SOBOL_LOW_DIM_PAR_WORK_GATE
+    }
+}
+
+fn sobol_parallel_thread_count(n: usize) -> usize {
+    std::thread::available_parallelism()
+        .map_or(1, std::num::NonZeroUsize::get)
+        .min(4)
+        .min(n)
+        .max(1)
+}
+
 impl SobolSampler {
     /// Construct an unscrambled Sobol sampler.
     pub fn new(dimension: usize) -> Result<Self, StatsError> {
@@ -339,44 +370,80 @@ impl SobolSampler {
             return self.sample_2d(n);
         }
 
-        // Incremental Gray-code recurrence (as in sample_2d), generalised to any
-        // dimension. Instead of recomputing sobol_bits(idx, dim) from scratch for
-        // every (sample, dim) — an O(64²) Gray-loop-times-sobol_direction cost
-        // since sobol_direction itself recomputes the direction number per call —
-        // carry a running `bits[dim]` and flip a single direction word per step.
-        // Byte-identical: the direction words sobol_bits uses for dimension `dim`
-        // are exactly `direction_table(dim)` (dims 0,1 have their own tables; dims
-        // 2.. use the scipy `_sv` direction numbers), and gray(idx+1) differs from
-        // gray(idx) in exactly the `trailing_zeros(idx+1)`-th bit, so the carried
-        // value equals sobol_bits(idx, dim) bit-for-bit at every step.
+        let start = self.next_index;
+        self.next_index = self.next_index.saturating_add(n as u64);
+        if n.saturating_mul(self.dimension) >= sobol_parallel_work_gate(self.dimension) && n >= 2 {
+            self.sample_general_parallel(start, n)
+        } else {
+            self.sample_general_serial(start, n)
+        }
+    }
+
+    fn sample_general_serial(&self, start: u64, n: usize) -> Vec<f64> {
         let d = self.dimension;
         let dir = |dim: usize| -> &'static [u64; 64] { direction_table(dim) };
         let mut out = Vec::with_capacity(n.saturating_mul(d));
-        let mut idx = self.next_index;
+        let mut idx = start;
         let mut bits: Vec<u64> = (0..d).map(|dim| sobol_bits(idx, dim)).collect();
-        // `dim` indexes bits / digital_shift / the per-dim direction table in
-        // lockstep, so a range loop reads clearest.
-        #[allow(clippy::needless_range_loop)]
         for _ in 0..n {
-            for dim in 0..d {
-                out.push(bits_to_unit(bits[dim] ^ self.digital_shift[dim]));
+            for (&bits, &shift) in bits.iter().zip(&self.digital_shift) {
+                out.push(bits_to_unit(bits ^ shift));
             }
             let next_idx = idx.saturating_add(1);
             if next_idx != idx {
                 let bit = next_idx.trailing_zeros() as usize;
-                for dim in 0..d {
-                    bits[dim] ^= dir(dim)[bit];
+                for (dim, bits) in bits.iter_mut().enumerate() {
+                    *bits ^= dir(dim)[bit];
                 }
             }
             idx = next_idx;
         }
-        self.next_index = idx;
+        out
+    }
+
+    fn sample_general_parallel(&self, start: u64, n: usize) -> Vec<f64> {
+        let d = self.dimension;
+        let shifts = &self.digital_shift;
+        let mut out = vec![0.0_f64; n.saturating_mul(d)];
+        let nthreads = sobol_parallel_thread_count(n);
+        let chunk = n.div_ceil(nthreads);
+        std::thread::scope(|scope| {
+            for (t, block) in out.chunks_mut(chunk * d).enumerate() {
+                let p0 = t * chunk;
+                scope.spawn(move || {
+                    let mut idx = start.saturating_add(p0 as u64);
+                    let mut bits: Vec<u64> = (0..d).map(|dim| sobol_bits(idx, dim)).collect();
+                    for slot in block.chunks_mut(d) {
+                        for (dim, coord) in slot.iter_mut().enumerate() {
+                            *coord = bits_to_unit(bits[dim] ^ shifts[dim]);
+                        }
+                        let next_idx = idx.saturating_add(1);
+                        if next_idx != idx {
+                            let bit = next_idx.trailing_zeros() as usize;
+                            for (dim, bits) in bits.iter_mut().enumerate() {
+                                *bits ^= direction_table(dim)[bit];
+                            }
+                        }
+                        idx = next_idx;
+                    }
+                });
+            }
+        });
         out
     }
 
     fn sample_2d(&mut self, n: usize) -> Vec<f64> {
+        let start = self.next_index;
+        self.next_index = self.next_index.saturating_add(n as u64);
+        if n.saturating_mul(2) >= sobol_parallel_work_gate(2) && n >= 2 {
+            return self.sample_2d_parallel(start, n);
+        }
+        self.sample_2d_serial(start, n)
+    }
+
+    fn sample_2d_serial(&self, start: u64, n: usize) -> Vec<f64> {
         let mut out = Vec::with_capacity(n.saturating_mul(2));
-        let mut idx = self.next_index;
+        let mut idx = start;
         let mut bits0 = sobol_bits(idx, 0);
         let mut bits1 = sobol_bits(idx, 1);
         let shift0 = self.digital_shift[0];
@@ -395,7 +462,37 @@ impl SobolSampler {
             idx = next_idx;
         }
 
-        self.next_index = idx;
+        out
+    }
+
+    fn sample_2d_parallel(&self, start: u64, n: usize) -> Vec<f64> {
+        let shift0 = self.digital_shift[0];
+        let shift1 = self.digital_shift[1];
+        let mut out = vec![0.0_f64; n.saturating_mul(2)];
+        let nthreads = sobol_parallel_thread_count(n);
+        let chunk = n.div_ceil(nthreads);
+        std::thread::scope(|scope| {
+            for (t, block) in out.chunks_mut(chunk * 2).enumerate() {
+                let p0 = t * chunk;
+                scope.spawn(move || {
+                    let mut idx = start.saturating_add(p0 as u64);
+                    let mut bits0 = sobol_bits(idx, 0);
+                    let mut bits1 = sobol_bits(idx, 1);
+                    for slot in block.chunks_mut(2) {
+                        slot[0] = bits_to_unit(bits0 ^ shift0);
+                        slot[1] = bits_to_unit(bits1 ^ shift1);
+
+                        let next_idx = idx.saturating_add(1);
+                        if next_idx != idx {
+                            let bit = next_idx.trailing_zeros() as usize;
+                            bits0 ^= SOBOL_DIRECTION_TABLES[0][bit];
+                            bits1 ^= SOBOL_DIRECTION_TABLES[1][bit];
+                        }
+                        idx = next_idx;
+                    }
+                });
+            }
+        });
         out
     }
 }
@@ -1219,10 +1316,7 @@ pub fn centered_discrepancy(sample: &[f64], dimension: usize) -> Result<f64, Sta
 /// Identical to [`centered_discrepancy`] except the sums are normalized by
 /// `n + 1` instead of `n` (anticipating one more point will be added). The
 /// result is the value to pass as `initial_disc` to [`update_discrepancy`].
-pub fn centered_discrepancy_iterative(
-    sample: &[f64],
-    dimension: usize,
-) -> Result<f64, StatsError> {
+pub fn centered_discrepancy_iterative(sample: &[f64], dimension: usize) -> Result<f64, StatsError> {
     if dimension == 0 {
         return Err(StatsError::InvalidArgument(
             "centered_discrepancy_iterative: dimension must be ≥ 1".to_string(),
@@ -1408,10 +1502,7 @@ pub fn wraparound_discrepancy_iterative(
 /// Mixture discrepancy "as if we had `n + 1` samples" — the
 /// [`mixture_discrepancy`] formula with `(n + 1)` normalization. Matches
 /// `scipy.stats.qmc.discrepancy(method="MD", iterative=True)`.
-pub fn mixture_discrepancy_iterative(
-    sample: &[f64],
-    dimension: usize,
-) -> Result<f64, StatsError> {
+pub fn mixture_discrepancy_iterative(sample: &[f64], dimension: usize) -> Result<f64, StatsError> {
     let n = validate_discrepancy_sample(sample, dimension, "mixture_discrepancy_iterative")?;
     if n == 0 {
         return Ok((19.0_f64 / 12.0).powi(dimension as i32));
@@ -1455,10 +1546,7 @@ pub fn mixture_discrepancy_iterative(
 /// L2-star discrepancy "as if we had `n + 1` samples" — the
 /// [`l2_star_discrepancy`] formula with `(n + 1)` normalization. Matches
 /// `scipy.stats.qmc.discrepancy(method="L2-star", iterative=True)`.
-pub fn l2_star_discrepancy_iterative(
-    sample: &[f64],
-    dimension: usize,
-) -> Result<f64, StatsError> {
+pub fn l2_star_discrepancy_iterative(sample: &[f64], dimension: usize) -> Result<f64, StatsError> {
     let n = validate_discrepancy_sample(sample, dimension, "l2_star_discrepancy_iterative")?;
     if n == 0 {
         return Ok((1.0_f64 / 3.0).powi(dimension as i32).sqrt());
@@ -2570,6 +2658,55 @@ mod tests {
     }
 
     #[test]
+    fn sobol_2d_parallel_path_matches_direct_bits() {
+        let n = sobol_parallel_work_gate(2) / 2 + 17;
+        let start = 4_095_u64;
+        let shift0 = splitmix64(0x51f7_u64);
+        let shift1 = splitmix64(0x51f8_u64);
+        let shifts = [shift0, shift1];
+        let mut sampler = SobolSampler::with_shift_words(2, shifts.to_vec()).unwrap();
+        sampler.skip(start);
+
+        let sample = sampler.sample(n);
+        let mut expected = Vec::with_capacity(n.saturating_mul(2));
+        let mut idx = start;
+        for _ in 0..n {
+            for (dimension, &shift) in shifts.iter().enumerate() {
+                expected.push(bits_to_unit(sobol_bits(idx, dimension) ^ shift));
+            }
+            idx = idx.saturating_add(1);
+        }
+
+        assert_eq!(sample, expected);
+        assert_eq!(sampler.next_index(), idx);
+    }
+
+    #[test]
+    fn sobol_general_parallel_path_matches_direct_bits() {
+        let d = 16usize;
+        let n = sobol_parallel_work_gate(d) / d + 17;
+        let start = 16_383_u64;
+        let shifts: Vec<u64> = (0..d)
+            .map(|dimension| splitmix64(0x5eed_c0de_u64.wrapping_add(dimension as u64)))
+            .collect();
+        let mut sampler = SobolSampler::with_shift_words(d, shifts.clone()).unwrap();
+        sampler.skip(start);
+
+        let sample = sampler.sample(n);
+        let mut expected = Vec::with_capacity(n.saturating_mul(d));
+        let mut idx = start;
+        for _ in 0..n {
+            for (dimension, &shift) in shifts.iter().enumerate() {
+                expected.push(bits_to_unit(sobol_bits(idx, dimension) ^ shift));
+            }
+            idx = idx.saturating_add(1);
+        }
+
+        assert_eq!(sample, expected);
+        assert_eq!(sampler.next_index(), idx);
+    }
+
+    #[test]
     fn sobol_metamorphic_skip_equivalent_to_consume() {
         let mut a = SobolSampler::new(2).unwrap();
         let mut b = SobolSampler::new(2).unwrap();
@@ -2850,7 +2987,10 @@ mod tests {
         // centered discrepancy of the augmented (n+1)-point design.
         let s = [0.1, 0.3, 0.6, 0.2, 0.4, 0.8, 0.55, 0.45];
         let di = centered_discrepancy_iterative(&s, 2).unwrap();
-        assert!((di - 0.088_665_486_111_111).abs() < 1e-12, "disc_iter = {di}");
+        assert!(
+            (di - 0.088_665_486_111_111).abs() < 1e-12,
+            "disc_iter = {di}"
+        );
         let updated = update_discrepancy(&[0.7, 0.15], &s, 2, di).unwrap();
         assert!(
             (updated - 0.050_925_486_111_111).abs() < 1e-12,
@@ -2860,14 +3000,23 @@ mod tests {
         let mut full = s.to_vec();
         full.extend_from_slice(&[0.7, 0.15]);
         let recompute = centered_discrepancy(&full, 2).unwrap();
-        assert!((updated - recompute).abs() < 1e-12, "{updated} vs {recompute}");
+        assert!(
+            (updated - recompute).abs() < 1e-12,
+            "{updated} vs {recompute}"
+        );
 
         // 3-D oracle.
         let s3 = [0.1, 0.3, 0.5, 0.6, 0.2, 0.9, 0.4, 0.8, 0.1];
         let di3 = centered_discrepancy_iterative(&s3, 3).unwrap();
-        assert!((di3 - 0.141_070_037_037_037).abs() < 1e-12, "3d disc_iter = {di3}");
+        assert!(
+            (di3 - 0.141_070_037_037_037).abs() < 1e-12,
+            "3d disc_iter = {di3}"
+        );
         let up3 = update_discrepancy(&[0.7, 0.15, 0.6], &s3, 3, di3).unwrap();
-        assert!((up3 - 0.095_580_912_037_037).abs() < 1e-12, "3d update = {up3}");
+        assert!(
+            (up3 - 0.095_580_912_037_037).abs() < 1e-12,
+            "3d update = {up3}"
+        );
     }
 
     #[test]
@@ -3209,12 +3358,32 @@ mod tests {
             vec![-0.5, 0.2, 1.5],
         ];
         let expected: [[f64; 3]; 6] = [
-            [-8.145_649_917_089_85, -9.691_617_315_163_89, -6.394_987_329_865_302],
+            [
+                -8.145_649_917_089_85,
+                -9.691_617_315_163_89,
+                -6.394_987_329_865_302,
+            ],
             [1.0, -2.0, 0.5],
-            [1.953_872_552_297_681_4, -2.516_058_164_684_654_5, -0.696_069_330_882_207_9],
-            [0.046_127_447_702_318_58, -1.483_941_835_315_345_7, 1.696_069_330_882_207_9],
-            [0.549_375_890_022_262_7, -2.378_981_071_695_993_2, 0.885_708_515_392_510_1],
-            [2.626_839_694_937_612_3, -0.631_805_450_677_065_6, -0.892_481_914_798_102_5],
+            [
+                1.953_872_552_297_681_4,
+                -2.516_058_164_684_654_5,
+                -0.696_069_330_882_207_9,
+            ],
+            [
+                0.046_127_447_702_318_58,
+                -1.483_941_835_315_345_7,
+                1.696_069_330_882_207_9,
+            ],
+            [
+                0.549_375_890_022_262_7,
+                -2.378_981_071_695_993_2,
+                0.885_708_515_392_510_1,
+            ],
+            [
+                2.626_839_694_937_612_3,
+                -0.631_805_450_677_065_6,
+                -0.892_481_914_798_102_5,
+            ],
         ];
         let mut dist = MultivariateNormalQmc::new(&mean, &cov).unwrap();
         let got = dist.sample(6);
@@ -3278,7 +3447,11 @@ mod tests {
             vec![-0.5, 0.2, 1.5],
         ];
         let expected: [[f64; 3]; 3] = [
-            [-0.665_109_222_315_396, -2.249_766_383_347_31, -0.424_012_290_339_737],
+            [
+                -0.665_109_222_315_396,
+                -2.249_766_383_347_31,
+                -0.424_012_290_339_737,
+            ],
             [1.0, -1.258_735_702_746_38, 0.713_453_069_889_786],
             [1.0, -3.627_213_025_310_14, 0.031_430_804_230_063_2],
         ];

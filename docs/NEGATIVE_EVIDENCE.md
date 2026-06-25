@@ -23,6 +23,21 @@ ledger above so the project has one source of truth.
   cargo test -p fsci-stats binned_statistic --lib -- --nocapture` passed 6/6
   binned-statistic tests. Decision: KEEP.
 
+## 2026-06-25 - GreenFalcon (codex-cli) - KEEP: chunk Sobol recurrence for large high-dimensional samples (2.19x at 65k×16; 1.37x vs SciPy)
+
+- Agent: GreenFalcon (codex-cli), `AGENT_NAME=GreenFalcon`. `SobolSampler::sample`
+  (= `scipy.stats.qmc.Sobol(..., scramble=False).random(n)`) now splits large
+  point ranges into chunks: each chunk seeds exact `sobol_bits(chunk_start, dim)`,
+  then uses the identical Gray-code recurrence inside the block. Gates keep cheap
+  low-dimensional calls serial (`d<16`: n*d < 1_000_000); high-dimensional calls
+  chunk at n*d >= 200_000 with a 4-thread cap.
+- Same-tree A/B medians: 65536×16 1.869ms → 852.154µs (2.19x), 65536×32 3.305ms
+  → 2.710ms (1.22x); smaller serial-gated cases stayed healthy. Fresh SciPy
+  1.17.1 / numpy 2.4.3 ratios: 65536×16 fsci 1.37x faster, 65536×32 fsci 1.03x
+  faster, 65536×8 still SciPy-faster (fsci 0.72x) and is recorded as the residual.
+- Conformance: `cargo test -p fsci-stats sobol --lib -- --nocapture` = 10/0,
+  including forced threaded-path direct-bit tests. Detail in canonical ledger.
+
 ## 2026-06-25 - GreenFalcon (claude-code) - KEEP: parallelize HaltonSampler::sample point generation (2.79-11.64x for large n, byte-identical)
 
 - Agent: GreenFalcon (claude-code). `HaltonSampler::sample` (= scipy.stats.qmc

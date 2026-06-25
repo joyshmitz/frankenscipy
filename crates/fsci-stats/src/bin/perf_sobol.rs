@@ -8,7 +8,7 @@
 #![allow(clippy::needless_range_loop)]
 
 use fsci_stats::qmc::SobolSampler;
-use std::time::Instant;
+use std::{hint::black_box, time::Instant};
 
 /// Verbatim copy of the original direction-number computation.
 fn old_sobol_direction(dimension: usize, bit: usize) -> u64 {
@@ -58,15 +58,36 @@ fn vec_eq(a: &[f64], b: &[f64]) -> bool {
     a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits())
 }
 
+fn digest_sample(sample: &[f64]) -> u64 {
+    sample.iter().fold(1469598103934665603u64, |h, v| {
+        (h ^ v.to_bits()).wrapping_mul(1099511628211)
+    })
+}
+
+fn time_current_sample(d: usize, n: usize, repeats: usize) -> (f64, u64) {
+    let mut times = Vec::with_capacity(repeats);
+    let mut digest = 1469598103934665603u64;
+    for _ in 0..repeats {
+        let mut sampler = SobolSampler::new(d).unwrap();
+        let t0 = Instant::now();
+        let sample = sampler.sample(black_box(n));
+        let elapsed = t0.elapsed().as_secs_f64();
+        digest ^= digest_sample(black_box(&sample));
+        times.push(elapsed);
+    }
+    times.sort_by(f64::total_cmp);
+    (times[times.len() / 2], digest)
+}
+
 fn main() {
     let mut total = 0usize;
     let mut mismatches = 0usize;
     let mut payload = String::new();
 
-    // Cover several dimensions (excluding 2, which routes to sample_2d) and both
-    // a fresh start (next_index=0) and a continued start (two-call sequencing).
-    // Constructor caps Sobol at dims 1..=2; d=1 exercises the (changed) general
-    // path, d=2 the (unchanged) sample_2d. Both must match the from-scratch path.
+    // Cover the legacy direction-formula dimensions and both a fresh start
+    // (next_index=0) and a continued start (two-call sequencing). d=1 exercises
+    // the general path; d=2 exercises the sample_2d specialization. Both must
+    // match the from-scratch path bit-for-bit.
     for &d in &[1usize, 2] {
         for &(a, b) in &[(0usize, 64usize), (1, 100), (7, 250), (300, 200), (0, 5000)] {
             let mut s = SobolSampler::new(d).unwrap();
@@ -124,4 +145,18 @@ fn main() {
             new_t / 3
         );
     }
+
+    println!("===CURRENT_SAMPLE_TIMING_BEGIN===");
+    for &(d, n, repeats) in &[
+        (2usize, 4_096usize, 11usize),
+        (2, 65_536, 9),
+        (2, 262_144, 7),
+        (8, 65_536, 7),
+        (16, 65_536, 5),
+        (32, 65_536, 5),
+    ] {
+        let (seconds, digest) = time_current_sample(d, n, repeats);
+        println!("current d={d:>2} n={n:>7} median={seconds:.9}s digest={digest:016x}");
+    }
+    println!("===CURRENT_SAMPLE_TIMING_END===");
 }
