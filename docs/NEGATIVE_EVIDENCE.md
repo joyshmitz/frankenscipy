@@ -6,6 +6,22 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon (claude-code) - KEEP: QMC discrepancy O(n²) double-sum threaded for large n (2.38-13.22x; matches scipy workers=-1)
+
+- Agent: GreenFalcon (claude-code). scipy.stats.qmc.discrepancy parallelises its
+  O(n²) double sum via `workers=-1`; fsci's four discrepancy kernels (qmc.rs) were
+  serial. Added a shared `discrepancy_double_sum` helper that runs the already
+  pair-symmetry-folded sum serially below a work gate and across thread::scope
+  threads (interleaved i%T for load balance) above it; all four kernels
+  (centered/mixture/l2-star/wraparound) route through it.
+- De-risk A/B (centered, d=8): n=1024 2.38x, n=4096 13.20x, n=16384 **13.22x**
+  (1.50s→114ms); reldiff vs serial ≤4.5e-13 (within the discrepancy tolerance
+  gates — fold already non-byte-identical). Gate `n²·dim >= 8_000_000` keeps small
+  QMC samples serial (bit-identical order). New test
+  `discrepancy_parallel_double_sum_matches_serial` (forces threaded path) vs in-test
+  serial reference < 1e-9; `cargo test -p fsci-stats discrepancy` = 12/0. Detail in
+  canonical ledger.
+
 ## 2026-06-25 - GreenFalcon (claude-code) - KEEP: matmul_toeplitz FFT parallel-over-columns for large multi-RHS (1.85-2.93x over serial FFT, byte-identical)
 
 - Agent: GreenFalcon (claude-code). Follow-up to the matmul_toeplitz FFT win: the

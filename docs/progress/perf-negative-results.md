@@ -4,6 +4,37 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-25 - frankenscipy-greenfalcon-discrepancy-parallel-doublesum - KEEP: QMC discrepancy O(n²) double-sum threaded for large n (2.38-13.22x; matches scipy workers=-1)
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. `scipy.stats.qmc
+  .discrepancy` exposes `workers=-1` to parallelise its O(n²) double sum; fsci's
+  four discrepancy kernels (centered/mixture/l2-star/wraparound, `qmc.rs`) were
+  serial. The double sum `Σ_i [diag(i) + Σ_{j>i} 2·pair(i,j)]` (already
+  pair-symmetry-folded) is embarrassingly parallel over the outer index.
+- Lever: a shared `discrepancy_double_sum(n, dimension, diag, pair)` helper runs
+  the fold serially below a work gate and across `std::thread::scope` threads
+  above it. The threaded path INTERLEAVES the outer index (`i % T`) for load
+  balance — work per `i` is `n−i−1` pairs, so contiguous ranges would be lopsided
+  — and sums per-thread partials. All four kernels pass their `diag`/`pair`
+  closures to it. Below the gate the sum order is bit-identical to the prior
+  serial fold; above it the partials reassociate (~1e-13, within the existing
+  discrepancy tolerance gates — the fold was already non-byte-identical).
+- De-risk same-process A/B (centered kernel, serial vs parallel, d=8, RCH `hz2`):
+  n=1024 **2.38x**, n=2048 **4.39x**, n=4096 **13.20x**, n=8192 10.75x, n=16384
+  **13.22x**; reldiff vs serial 4.9e-15..4.5e-13. Absolute: n=16384 serial 1.50 s
+  → parallel 114 ms. Gate `n²·dimension >= DISCREPANCY_PAR_WORK_GATE (8_000_000)`
+  captures the 2.38x+ wins (n=1024/d=8 = 8.4e6) and keeps small QMC samples (the
+  typical n ≤ a few hundred) serial; threads `min(16, cores, n)`.
+- Conformance GREEN: `cargo test -p fsci-stats discrepancy` = 12/0 incl. the new
+  `discrepancy_parallel_double_sum_matches_serial` (n=1500,d=4 → threaded path,
+  matched an independent in-test serial reference of the full formula to < 1e-9)
+  and the unchanged dispatcher/scipy-golden tests; full `cargo test -p fsci-stats`
+  as safety net. The `_2d` (d==2) specialisations and the four `_iterative`
+  variants are unchanged (different access patterns; left serial).
+- Retry/extend: the `_2d` paths and `geometric_discrepancy` (Prim's MST) are not
+  covered; per-thread blocked-pair tiling could cut the parallel reassociation
+  spread, unproven.
+
 ## 2026-06-25 - frankenscipy-greenfalcon-matmul-toeplitz-fft-cols - KEEP: matmul_toeplitz FFT parallel-over-columns for large multi-RHS (1.85-2.93x over the serial FFT, byte-identical)
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. Follow-up to the

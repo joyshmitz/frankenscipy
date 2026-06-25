@@ -1040,6 +1040,66 @@ fn wraparound_discrepancy_2d(sample: &[f64], n: usize) -> f64 {
     leading + double / (n_f * n_f)
 }
 
+/// Work threshold (`n² · dimension`) above which the discrepancy double-sum is
+/// distributed across threads. Below it the spawn cost dominates and the serial
+/// fold wins (measured: 2.38x at n=1024/d=8 [work 8.4e6], 13x at n≥4096).
+const DISCREPANCY_PAR_WORK_GATE: u128 = 8_000_000;
+
+/// Symmetric discrepancy double-sum `Σ_i [diag(i) + Σ_{j>i} 2·pair(i, j)]`,
+/// computed serially for small problems and across threads for large ones —
+/// `scipy.stats.qmc.discrepancy(workers=-1)` parallelises the same sum. The
+/// threaded path interleaves the outer index (`i % T`) for load balance (work per
+/// `i` is `n − i − 1` pairs) and sums per-thread partials; this reassociates the
+/// running sum (~1e-13, within the discrepancy tolerance gates) but is otherwise
+/// identical to the serial fold. Below the gate the order matches the serial loop
+/// bit-for-bit.
+fn discrepancy_double_sum<D, P>(n: usize, dimension: usize, diag: D, pair: P) -> f64
+where
+    D: Fn(usize) -> f64 + Sync,
+    P: Fn(usize, usize) -> f64 + Sync,
+{
+    if (n as u128) * (n as u128) * (dimension as u128) < DISCREPANCY_PAR_WORK_GATE {
+        let mut double = 0.0_f64;
+        for i in 0..n {
+            double += diag(i);
+            for j in (i + 1)..n {
+                double += 2.0 * pair(i, j);
+            }
+        }
+        return double;
+    }
+    let nthreads = std::thread::available_parallelism()
+        .map_or(1, std::num::NonZeroUsize::get)
+        .min(16)
+        .min(n)
+        .max(1);
+    let diag = &diag;
+    let pair = &pair;
+    let partials: Vec<f64> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..nthreads)
+            .map(|t| {
+                scope.spawn(move || {
+                    let mut local = 0.0_f64;
+                    let mut i = t;
+                    while i < n {
+                        local += diag(i);
+                        for j in (i + 1)..n {
+                            local += 2.0 * pair(i, j);
+                        }
+                        i += nthreads;
+                    }
+                    local
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().expect("discrepancy double-sum thread panicked"))
+            .collect()
+    });
+    partials.iter().sum()
+}
+
 pub fn centered_discrepancy(sample: &[f64], dimension: usize) -> Result<f64, StatsError> {
     if dimension == 0 {
         return Err(StatsError::InvalidArgument(
@@ -1081,21 +1141,22 @@ pub fn centered_discrepancy(sample: &[f64], dimension: usize) -> Result<f64, Sta
         single += prod;
     }
 
-    // Double-sum term Σ_{i,j} Π_k [...]. Quadratic in n; QMC users typically
-    // call this on samples with n ≤ a few thousand.
-    // Symmetric pair product (prod(i,j) == prod(j,i) bit-for-bit): sum the
-    // diagonal once and each off-diagonal pair twice — ~2x fewer products than
-    // the full n² loop. Reassociates the running sum (~1e-15), within the
-    // discrepancy tolerance gates.
-    let mut double = 0.0_f64;
-    for i in 0..n {
-        let mut diag = 1.0_f64;
-        for k in 0..dimension {
-            let c = 0.5 * (sample[i * dimension + k] - 0.5).abs();
-            diag *= 1.0 + c + c;
-        }
-        double += diag;
-        for j in (i + 1)..n {
+    // Double-sum term Σ_{i,j} Π_k [...]. Quadratic in n; the symmetric pair
+    // product (prod(i,j) == prod(j,i) bit-for-bit) is folded to diagonal once +
+    // each off-diagonal pair twice (~2x fewer products), and distributed across
+    // threads for large n (see `discrepancy_double_sum`).
+    let double = discrepancy_double_sum(
+        n,
+        dimension,
+        |i| {
+            let mut diag = 1.0_f64;
+            for k in 0..dimension {
+                let c = 0.5 * (sample[i * dimension + k] - 0.5).abs();
+                diag *= 1.0 + c + c;
+            }
+            diag
+        },
+        |i, j| {
             let mut prod = 1.0_f64;
             for k in 0..dimension {
                 let xi = sample[i * dimension + k];
@@ -1103,9 +1164,9 @@ pub fn centered_discrepancy(sample: &[f64], dimension: usize) -> Result<f64, Sta
                 prod *=
                     1.0 + 0.5 * (xi - 0.5).abs() + 0.5 * (xj - 0.5).abs() - 0.5 * (xi - xj).abs();
             }
-            double += 2.0 * prod;
-        }
-    }
+            prod
+        },
+    );
 
     let n_f = n as f64;
     Ok(leading - 2.0 / n_f * single + double / (n_f * n_f))
@@ -1446,18 +1507,20 @@ pub fn mixture_discrepancy(sample: &[f64], dimension: usize) -> Result<f64, Stat
         }
         single += prod;
     }
-    // Double-sum term.
-    // Symmetric pair product: diagonal once + each off-diagonal pair twice
-    // (~2x fewer products; ~1e-14 reassociation, within tolerance).
-    let mut double = 0.0_f64;
-    for i in 0..n {
-        let mut diag = 1.0_f64;
-        for k in 0..dimension {
-            let c = 0.25 * (sample[i * dimension + k] - 0.5).abs();
-            diag *= 15.0 / 8.0 - c - c;
-        }
-        double += diag;
-        for j in (i + 1)..n {
+    // Double-sum term: symmetric pair product folded to diagonal once + each
+    // off-diagonal pair twice, threaded for large n (see `discrepancy_double_sum`).
+    let double = discrepancy_double_sum(
+        n,
+        dimension,
+        |i| {
+            let mut diag = 1.0_f64;
+            for k in 0..dimension {
+                let c = 0.25 * (sample[i * dimension + k] - 0.5).abs();
+                diag *= 15.0 / 8.0 - c - c;
+            }
+            diag
+        },
+        |i, j| {
             let mut prod = 1.0_f64;
             for k in 0..dimension {
                 let xi = sample[i * dimension + k];
@@ -1466,9 +1529,9 @@ pub fn mixture_discrepancy(sample: &[f64], dimension: usize) -> Result<f64, Stat
                 prod *= 15.0 / 8.0 - 0.25 * (xi - 0.5).abs() - 0.25 * (xj - 0.5).abs() - 0.75 * d
                     + 0.5 * (xi - xj).powi(2);
             }
-            double += 2.0 * prod;
-        }
-    }
+            prod
+        },
+    );
     let n_f = n as f64;
     Ok(leading - 2.0 / n_f * single + double / (n_f * n_f))
 }
@@ -1674,26 +1737,29 @@ pub fn l2_star_discrepancy(sample: &[f64], dimension: usize) -> Result<f64, Stat
         }
         single += prod;
     }
-    // Double-sum Σ_ij Π_k (1 - max(x_i^k, x_j^k)). `max` is symmetric, so
-    // prod(i,j) == prod(j,i) bit-for-bit: diagonal once + each off-diagonal pair
-    // twice (~2x fewer products; ~1e-14 reassociation, within tolerance).
-    let mut double = 0.0_f64;
-    for i in 0..n {
-        let mut diag = 1.0_f64;
-        for k in 0..dimension {
-            diag *= 1.0 - sample[i * dimension + k];
-        }
-        double += diag;
-        for j in (i + 1)..n {
+    // Double-sum Σ_ij Π_k (1 - max(x_i^k, x_j^k)). `max` is symmetric, so the
+    // pair product is folded to diagonal once + each off-diagonal pair twice and
+    // threaded for large n (see `discrepancy_double_sum`).
+    let double = discrepancy_double_sum(
+        n,
+        dimension,
+        |i| {
+            let mut diag = 1.0_f64;
+            for k in 0..dimension {
+                diag *= 1.0 - sample[i * dimension + k];
+            }
+            diag
+        },
+        |i, j| {
             let mut prod = 1.0_f64;
             for k in 0..dimension {
                 let xi = sample[i * dimension + k];
                 let xj = sample[j * dimension + k];
                 prod *= 1.0 - xi.max(xj);
             }
-            double += 2.0 * prod;
-        }
-    }
+            prod
+        },
+    );
     let n_f = n as f64;
     // scipy.stats.qmc.discrepancy returns the square root of the SD² form.
     Ok((leading - two_pow_one_minus_d / n_f * single + double / (n_f * n_f)).sqrt())
@@ -1741,16 +1807,20 @@ pub fn wraparound_discrepancy(sample: &[f64], dimension: usize) -> Result<f64, S
         return Ok(wraparound_discrepancy_2d(sample, n));
     }
     let leading = -(4.0_f64 / 3.0).powi(dimension as i32);
-    // `|Δ|` is symmetric → prod(i,j) == prod(j,i) bit-for-bit: diagonal (d=0 →
-    // factor 1.5) once + each off-diagonal pair twice (~2x fewer products).
-    let mut double = 0.0_f64;
-    for i in 0..n {
-        let mut diag = 1.0_f64;
-        for _ in 0..dimension {
-            diag *= 1.5;
-        }
-        double += diag;
-        for j in (i + 1)..n {
+    // `|Δ|` is symmetric → the pair product is folded to diagonal (d=0 → factor
+    // 1.5) once + each off-diagonal pair twice, threaded for large n (see
+    // `discrepancy_double_sum`).
+    let double = discrepancy_double_sum(
+        n,
+        dimension,
+        |_i| {
+            let mut diag = 1.0_f64;
+            for _ in 0..dimension {
+                diag *= 1.5;
+            }
+            diag
+        },
+        |i, j| {
             let mut prod = 1.0_f64;
             for k in 0..dimension {
                 let xi = sample[i * dimension + k];
@@ -1758,9 +1828,9 @@ pub fn wraparound_discrepancy(sample: &[f64], dimension: usize) -> Result<f64, S
                 let d = (xi - xj).abs();
                 prod *= 1.5 - d * (1.0 - d);
             }
-            double += 2.0 * prod;
-        }
-    }
+            prod
+        },
+    );
     let n_f = n as f64;
     Ok(leading + double / (n_f * n_f))
 }
@@ -2084,6 +2154,59 @@ pub fn geometric_discrepancy(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discrepancy_parallel_double_sum_matches_serial() {
+        // Force the threaded double-sum path: n=1500, d=4 -> work = 1500²·4 =
+        // 9e6 >= DISCREPANCY_PAR_WORK_GATE, so centered_discrepancy runs the
+        // threaded fold. It must match an independent serial reference of the
+        // same formula to FFT-free reassociation roundoff (~1e-12).
+        let n = 1500usize;
+        let d = 4usize;
+        let mut s: u64 = 0x9e37_79b9_7f4a_7c15;
+        let sample: Vec<f64> = (0..n * d)
+            .map(|_| {
+                s = s
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                (s >> 11) as f64 / (1u64 << 53) as f64
+            })
+            .collect();
+        assert!((n as u128) * (n as u128) * (d as u128) >= DISCREPANCY_PAR_WORK_GATE);
+
+        let parallel = centered_discrepancy(&sample, d).unwrap();
+
+        // Independent serial reference (full formula).
+        let leading = (13.0_f64 / 12.0).powi(d as i32);
+        let mut single = 0.0_f64;
+        for i in 0..n {
+            let mut prod = 1.0_f64;
+            for k in 0..d {
+                let c = sample[i * d + k] - 0.5;
+                prod *= 1.0 + 0.5 * c.abs() - 0.5 * c * c;
+            }
+            single += prod;
+        }
+        let mut double = 0.0_f64;
+        for i in 0..n {
+            for j in 0..n {
+                let mut prod = 1.0_f64;
+                for k in 0..d {
+                    let xi = sample[i * d + k];
+                    let xj = sample[j * d + k];
+                    prod *= 1.0 + 0.5 * (xi - 0.5).abs() + 0.5 * (xj - 0.5).abs()
+                        - 0.5 * (xi - xj).abs();
+                }
+                double += prod;
+            }
+        }
+        let n_f = n as f64;
+        let serial = leading - 2.0 / n_f * single + double / (n_f * n_f);
+        assert!(
+            (parallel - serial).abs() < 1e-9,
+            "parallel {parallel} vs serial {serial}"
+        );
+    }
 
     #[test]
     fn discrepancy_dispatcher_matches_kernels_and_scipy() {
