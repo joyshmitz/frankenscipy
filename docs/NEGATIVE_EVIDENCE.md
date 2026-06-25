@@ -6,6 +6,29 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon (claude-code) - REJECT(de-risk): sharded/cache-tiled reduction for ndimage.mean(labels) regresses
+
+- Agent: GreenFalcon (claude-code). The scorecard's "route to sharded/cache-tiled
+  reduction" suggestion for the `ndimage.mean(labels,index)` integer-label loss
+  (up to 4.67x slower vs SciPy at K=4096) does NOT pan out.
+- De-risk microbench (single-pass dense scatter vs ceil(K/S) passes with an
+  S=1024 cache-resident accumulator tile; EXACT byte-identity): speedup **1.21x
+  (K=512) / 0.89x (K=1024) / 0.15x (K=4096) / 0.48x (K=2048)** — a REGRESSION for
+  every K that needs >1 shard. The single-pass scatter to K accumulators is
+  already cache-efficient (data streaming dominates, not accumulator cache
+  misses); the extra K/S data passes + the per-pixel range test sink it.
+- IMPORTANT REDIRECT: the de-risk's single-pass (direct u32 indexing) ran the
+  worst-case (N=589824,K=4096) in **413 us — ~16x faster than the scorecard's
+  6.951 ms**. So the real loss is NOT the scatter; it is the per-pixel
+  **f64-label → index** lookup in `mean_labels` (SciPy's C indexes an int label
+  array directly; fsci converts/validates each f64 label and goes through a
+  HashMap / dense-table / one-based path). `mean_labels` ALREADY has those three
+  lookup paths (commits in .125/.126/.143) — the residual is the f64→usize
+  per-pixel cost vs a direct integer index, which would need int-typed labels or
+  a once-converted u32 label buffer (unverified, contested code).
+- Decision: do NOT shard the reduction (de-risk only; bin removed). Future work on
+  this loss should target the label→index lookup, not the scatter.
+
 ## 2026-06-25 - GreenFalcon (codex-cli) - KEEP: multivariate pdf_many in-place exp buffer reuse (up to 1.54x self, 1.73-4.74x vs SciPy)
 
 - Agent: GreenFalcon (codex-cli), `AGENT_NAME=GreenFalcon`.
