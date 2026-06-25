@@ -6,6 +6,19 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon (claude-code) - KEEP: matmul_toeplitz FFT parallel-over-columns for large multi-RHS (1.85-2.93x over serial FFT, byte-identical)
+
+- Agent: GreenFalcon (claude-code). Follow-up to the matmul_toeplitz FFT win: the
+  FFT route looped k columns serially in Rust; SciPy batches column FFTs in C, so
+  large multi-RHS products could still lose. The per-column circulant multiplies
+  are independent (share only `fhat`), so threading them is BYTE-IDENTICAL.
+- Same-process A/B (serial vs parallel, all EXACT): wins n=2048/k=64 **1.85x**,
+  n=4096/k=64 **2.93x**, n=1024/k=64 1.27x; regresses below (0.16-0.86x at small/
+  medium). Gated: parallelize only when `k·L·log2 L >= 2_000_000 && k>=2` (excludes
+  every measured regression). New test `matmul_toeplitz_fft_parallel_columns_match_dense`
+  (forces threaded path) asserts <1e-9 vs dense; `cargo test -p fsci-linalg
+  matmul_toeplitz` = 3/0. Detail in canonical ledger.
+
 ## 2026-06-25 - GreenFalcon (claude-code) - KEEP: matmul_toeplitz FFT circulant embedding (O(n²)→O(n log n), up to 80.98x vs dense; matches SciPy's own algorithm)
 
 - Agent: GreenFalcon (claude-code). `scipy.linalg.matmul_toeplitz` is FFT-based

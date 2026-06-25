@@ -4,6 +4,35 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-25 - frankenscipy-greenfalcon-matmul-toeplitz-fft-cols - KEEP: matmul_toeplitz FFT parallel-over-columns for large multi-RHS (1.85-2.93x over the serial FFT, byte-identical)
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. Follow-up to the
+  matmul_toeplitz FFT win below: the FFT route looped the `k` columns serially in
+  Rust, calling `fft`/`ifft` per column. For large multi-RHS products SciPy
+  batches its column FFTs in C (one transform over the whole axis), so fsci's
+  per-column Rust loop can still lose there despite the O(n log n) algorithm.
+- Lever: the per-column circulant multiplies share only `fhat = fft(emb)` and are
+  otherwise independent, so distributing columns across `std::thread::scope`
+  threads (each computing a column range via the shared `toeplitz_fft_column`
+  helper, then scatter into the row-major output) is BYTE-IDENTICAL to the serial
+  sweep (same per-column arithmetic). De-risk same-process A/B (serial vs parallel,
+  all `EXACT`):
+  - regression zone: n=512/k=4 0.16x, n=512/k=16 0.54x, n=1024/k=32 0.86x,
+    n=2048/k=16 0.64x (thread spawn dominates) — MUST stay serial
+  - win zone: n=1024/k=64 1.27x, **n=2048/k=64 1.85x, n=4096/k=64 2.93x**
+- Gate: parallelize only when `k · L · log2 L >= TOEPLITZ_FFT_PAR_WORK_GATE
+  (2_000_000)` and `k >= 2` — this captures the robust 1.85-2.93x wins and excludes
+  every measured regression (the largest regressing case, n=2048/k=16, is work
+  786_432 << 2e6). Threads capped at `min(16, cores, k)`. Below the gate the serial
+  sweep is unchanged. New test `matmul_toeplitz_fft_parallel_columns_match_dense`
+  (m=200,n=256,k=512 → work 2.36e6 → threaded path) asserts `< 1e-9` vs dense;
+  conformance GREEN (`cargo test -p fsci-linalg matmul_toeplitz` = 3/0, full suite
+  as safety net). fsci-fft `fft`/`ifft` are thread-safe (Bluestein/twiddle caches
+  behind locks); the de-risk ran them concurrently with EXACT results, no panics.
+- Retry/extend condition: the 1.27x at n=1024/k=64 is left on the table (below the
+  conservative gate); a per-thread reused `xpad`/`prod` scratch buffer could cut
+  the parallel path's allocation and lower the crossover, unproven.
+
 ## 2026-06-25 - frankenscipy-greenfalcon-matmul-toeplitz-fft - KEEP: matmul_toeplitz FFT circulant embedding (O(n²)→O(n log n), up to 80.98x vs the dense route, ~SciPy's own algorithm)
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`.

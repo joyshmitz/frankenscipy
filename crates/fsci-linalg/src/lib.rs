@@ -13546,6 +13546,12 @@ pub fn rsf2csf(
 /// the dense product. Keeps tiny inputs bit-for-bit equal to `toeplitz · x`.
 const TOEPLITZ_FFT_MIN_EMBED: usize = 64;
 
+/// Minimum per-column FFT work (`k · L · log2 L`) for `matmul_toeplitz_fft` to
+/// distribute the independent columns across threads. Below this the spawn cost
+/// dominates and the serial sweep wins (measured: parallel regresses to 0.16-0.86x
+/// for small/medium products, wins 1.85-2.93x only at large k AND large L).
+const TOEPLITZ_FFT_PAR_WORK_GATE: u128 = 2_000_000;
+
 /// Multiply a Toeplitz matrix by a matrix: `T · x`.
 ///
 /// Matches `scipy.linalg.matmul_toeplitz`. `T` is the Toeplitz matrix with first
@@ -13619,26 +13625,84 @@ fn matmul_toeplitz_fft(
     }
     let fhat = fsci_fft::fft(&emb, &opts).ok()?;
 
+    // The per-column circulant multiplies share only `fhat` and are otherwise
+    // independent, so the serial and threaded sweeps below produce bit-identical
+    // columns. Distribute across threads only when the total transform work
+    // (`k · L · log2 L`) clearly amortises thread spawn; otherwise stay serial.
+    let work = (k as u128) * (l as u128) * (l.trailing_zeros() as u128);
+    let cols: Vec<Vec<f64>> = if work >= TOEPLITZ_FFT_PAR_WORK_GATE && k >= 2 {
+        let nthreads = std::thread::available_parallelism()
+            .map_or(1, std::num::NonZeroUsize::get)
+            .min(16)
+            .min(k)
+            .max(1);
+        let chunk = k.div_ceil(nthreads);
+        let fhat_ref = &fhat;
+        let mut acc: Vec<(usize, Vec<f64>)> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..nthreads)
+                .map(|t| {
+                    let start = t * chunk;
+                    let end = ((t + 1) * chunk).min(k);
+                    scope.spawn(move || -> Option<Vec<(usize, Vec<f64>)>> {
+                        (start..end)
+                            .map(|col| {
+                                toeplitz_fft_column(fhat_ref, x, col, m, n, l).map(|v| (col, v))
+                            })
+                            .collect()
+                    })
+                })
+                .collect();
+            let mut out = Vec::with_capacity(k);
+            for h in handles {
+                out.extend(h.join().expect("toeplitz column thread panicked")?);
+            }
+            Some(out)
+        })?;
+        acc.sort_by_key(|(col, _)| *col);
+        acc.into_iter().map(|(_, v)| v).collect()
+    } else {
+        let mut cols = Vec::with_capacity(k);
+        for col in 0..k {
+            cols.push(toeplitz_fft_column(&fhat, x, col, m, n, l)?);
+        }
+        cols
+    };
+
+    // Scatter the column-major results into the row-major output y[i][col].
     let mut y = vec![vec![0.0_f64; k]; m];
-    let mut xpad = vec![(0.0_f64, 0.0_f64); l];
-    for col in 0..k {
-        for slot in xpad.iter_mut() {
-            *slot = (0.0, 0.0);
-        }
-        for (i, slot) in xpad.iter_mut().enumerate().take(n) {
-            *slot = (x[i][col], 0.0);
-        }
-        let xhat = fsci_fft::fft(&xpad, &opts).ok()?;
-        let mut prod = Vec::with_capacity(l);
-        for (&(fr, fi), &(xr, xi)) in fhat.iter().zip(xhat.iter()) {
-            prod.push((fr * xr - fi * xi, fr * xi + fi * xr));
-        }
-        let yfull = fsci_fft::ifft(&prod, &opts).ok()?;
+    for (col, colvec) in cols.iter().enumerate() {
         for (i, yrow) in y.iter_mut().enumerate().take(m) {
-            yrow[col] = yfull[i].0;
+            yrow[col] = colvec[i];
         }
     }
     Some(y)
+}
+
+/// One column of the circulant-embedding Toeplitz product: zero-pad column `col`
+/// of `x` to length `l`, multiply by the precomputed `fhat = fft(generator)` in
+/// the frequency domain, inverse-transform, and take the leading `m` real parts.
+/// Independent of every other column (reads only `fhat` and `x`), so callers may
+/// evaluate columns serially or across threads with bit-identical results.
+fn toeplitz_fft_column(
+    fhat: &[(f64, f64)],
+    x: &[Vec<f64>],
+    col: usize,
+    m: usize,
+    n: usize,
+    l: usize,
+) -> Option<Vec<f64>> {
+    let opts = fsci_fft::FftOptions::default();
+    let mut xpad = vec![(0.0_f64, 0.0_f64); l];
+    for (i, slot) in xpad.iter_mut().enumerate().take(n) {
+        *slot = (x[i][col], 0.0);
+    }
+    let xhat = fsci_fft::fft(&xpad, &opts).ok()?;
+    let mut prod = Vec::with_capacity(l);
+    for (&(fr, fi), &(xr, xi)) in fhat.iter().zip(xhat.iter()) {
+        prod.push((fr * xr - fi * xi, fr * xi + fi * xr));
+    }
+    let yfull = fsci_fft::ifft(&prod, &opts).ok()?;
+    Some((0..m).map(|i| yfull[i].0).collect())
 }
 
 pub fn toeplitz(c: &[f64], r: Option<&[f64]>) -> Vec<Vec<f64>> {
@@ -26385,6 +26449,41 @@ mod tests {
         let y_thin = matmul_toeplitz(&cc, Some(&rr), &xx).unwrap();
         let dense_thin = matmul(&toeplitz(&cc, Some(&rr)), &xx).unwrap();
         assert_eq!(y_thin, dense_thin);
+    }
+
+    #[test]
+    fn matmul_toeplitz_fft_parallel_columns_match_dense() {
+        // Force the multi-column threaded FFT path: m=200, n=256 -> L=512,
+        // log2 L=9; k=512 -> work = 512*512*9 = 2_359_296 >=
+        // TOEPLITZ_FFT_PAR_WORK_GATE, so columns are distributed across threads.
+        // The result must still equal the dense product to FFT roundoff (the
+        // per-column arithmetic is identical to the serial sweep).
+        let m = 200usize;
+        let n = 256usize;
+        let k = 512usize;
+        let mut s: u64 = 0x0f0f_a5a5_1234_9e77;
+        let mut u = || {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (s >> 11) as f64 / (1u64 << 53) as f64 - 0.5
+        };
+        let c: Vec<f64> = (0..m).map(|_| u()).collect();
+        let mut row: Vec<f64> = (0..n).map(|_| u()).collect();
+        row[0] = c[0];
+        let x: Vec<Vec<f64>> = (0..n).map(|_| (0..k).map(|_| u()).collect()).collect();
+
+        let y_par = matmul_toeplitz(&c, Some(&row), &x).unwrap();
+        let dense = matmul(&toeplitz(&c, Some(&row)), &x).unwrap();
+        assert_eq!(y_par.len(), m);
+        let mut max_err = 0.0_f64;
+        for i in 0..m {
+            assert_eq!(y_par[i].len(), k);
+            for j in 0..k {
+                max_err = max_err.max((y_par[i][j] - dense[i][j]).abs());
+            }
+        }
+        assert!(max_err < 1e-9, "parallel FFT vs dense max err {max_err:e}");
     }
 
     #[test]
