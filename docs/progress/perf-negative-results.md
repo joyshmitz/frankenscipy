@@ -4,6 +4,65 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-25 - frankenscipy-greenfalcon-sosfilt-samplemajor - KEEP (BOLD WIN, byte-identical): signal.sosfilt general N-section loop-interchange section-major -> sample-major; 3.8-3.9x self-speedup flips a ~4x scipy loss to ~parity
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. DIG (no unlanded
+  worktree win this turn). Found a genuine, previously-unrecorded ~4x SciPy loss
+  in `scipy.signal.sosfilt` and closed it to parity, byte-identical.
+
+### The lever (loop interchange for cache locality)
+
+- fsci's general `sosfilt` path (>=3 sections; the 2-section case is hand-fused
+  in `sosfilt_two_sections`) was SECTION-MAJOR: `for section { for sample {...} }`
+  — each biquad does a FULL pass over the whole signal. An n_sections-section
+  filter therefore re-streams the entire signal through DRAM n_sections times.
+  For a large signal that exceeds cache, the cost is ~n_sections× the memory
+  traffic of a single pass.
+- scipy's `_sosfilt` is SAMPLE-MAJOR: `for sample { for section {...} }` — each
+  sample is pushed through every section while held in a register (`cur`); the
+  per-section state `[[f64;2]; n_sections]` is tiny and stays in L1. The signal
+  streams through memory exactly ONCE.
+- FIX: loop-interchange the general path to sample-major (precompute normalized
+  coeffs once via `normalize_sos_section`, keep a `state: Vec<[f64;2]>`, single
+  pass cascading `cur`). Mirrors the existing 2-section fused fast path,
+  generalized to N.
+
+### Byte-identity argument (no oracle needed)
+
+Section s's output stream depends only on the ordered sequence of its inputs
+(section s-1's output stream) and its own DF2T recurrence. Section-major and
+sample-major feed section s the IDENTICAL input values in the IDENTICAL sample
+order, and apply the same `b0*cur+d1; d1=b1*cur-a1*y+d2; d2=b2*cur-a2*y` FMA
+order. Only the loop NESTING differs, not any arithmetic or its order -> the
+output is bit-for-bit identical. Verified two ways: same-process A/B mism=0 at
+n=65536/262144/1048576, and a new regression test
+`sosfilt_sample_major_matches_section_major_reference_bits` (4-section filter,
+`to_bits()` equality vs an inline section-major reference).
+
+### Measurement (same-box: fsci local isolated target vs SciPy 1.17.1)
+
+12th-order Butterworth low-pass -> 6 SOS sections, random signal, best-of-N:
+
+| n        | section-major (old) | sample-major (new) | self-speedup | scipy     | old vs scipy | new vs scipy |
+|----------|---------------------|--------------------|--------------|-----------|--------------|--------------|
+| 65536    | 1.8073 ms           | 0.4781 ms          | 3.78x        | 0.4687 ms | 3.85x slower | 1.02x (parity) |
+| 262144   | 7.6454 ms           | 2.0263 ms          | 3.77x        | 1.8304 ms | 4.18x slower | 1.11x slower |
+| 1048576  | 31.2814 ms          | 7.9934 ms          | 3.91x        | 7.4806 ms | 4.18x slower | 1.07x slower |
+
+Old fsci was ~4x slower than scipy; new is parity-to-1.11x. The residual ~1.1x
+is the safe-Rust-vs-C constant factor (both now single-pass sample-major).
+
+### Conformance + generality
+
+`cargo test --release -p fsci-signal sosfilt` = 10 passed / 0 failed / 1 ignored
+(timing), including `sosfilt_matches_lfilter_low_order`,
+`sosfilt_zi_and_sosfiltfilt_match_scipy`, `sosfilt_high_order_stable`, and both
+fusion bit-identity tests. The 2-section fast path is untouched. Generalizable
+lever: any "chain of sequentially-dependent stateful passes, one full array pass
+each" -> interchange to element-major when each pass's state is cache-resident.
+Retry/extend candidates: `sosfiltfilt` (forward+backward — check it routes
+through the new path), and any other multi-section IIR cascade.
+
 ## 2026-06-25 - frankenscipy-greenfalcon-filter1d-samebox - CLOSURE: ndimage.max/min_filter1d "2.3x slower" (filter1d-vanherk) is a cross-box artifact; same-box fsci is 1.08-1.17x FASTER at both window sizes
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. Land-or-dig: no

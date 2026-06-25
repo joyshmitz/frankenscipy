@@ -6,6 +6,38 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon (claude-code) - KEEP (BOLD WIN, byte-identical): signal.sosfilt general N-section path loop-interchanged section-major -> sample-major, 3.8-3.9x self-speedup, flips a ~4x SciPy loss to ~parity
+
+- Agent: GreenFalcon (claude-code). A DIG (no unlanded worktree win). fsci's
+  general (>=3 section) `sosfilt` was SECTION-MAJOR: each biquad section did a
+  full pass over the whole signal, so an n_sections-section filter re-streamed
+  the signal through DRAM n_sections times (memory-bound). scipy's `_sosfilt`
+  is SAMPLE-MAJOR: each sample cascades through all sections while held in a
+  register, streaming the signal ONCE. (The 2-section case was already
+  hand-fused in `sosfilt_two_sections`; the N-section path was not.)
+- FIX (crates/fsci-signal/src/lib.rs, `sosfilt` general path): loop-interchange
+  to sample-major — precompute all sections' normalized coeffs, keep a
+  `[[f64;2]; n_sections]` state array, single pass over the signal cascading
+  `cur` through every section. BYTE-IDENTICAL: section s sees the identical
+  input stream (section s-1's output) in the same sample order with the same
+  per-sample DF2T FMA order; only the loop nesting swaps.
+- MEASURED same-box (12th-order Butterworth = 6 sections; fsci local isolated
+  target vs SciPy 1.17.1 `scipy.signal.sosfilt`):
+  - n=65536:   old 1.8073 ms -> new 0.4781 ms = **3.78x self**; scipy 0.4687 ms
+    -> new is **1.02x (parity)**, old was 3.85x slower.
+  - n=262144:  old 7.6454 ms -> new 2.0263 ms = **3.77x self**; scipy 1.8304 ms
+    -> new **1.11x**, old 4.18x slower.
+  - n=1048576: old 31.2814 ms -> new 7.9934 ms = **3.91x self**; scipy 7.4806 ms
+    -> new **1.07x**, old 4.18x slower.
+  Same-process A/B asserted bit-identity (mism=0) at every size; new regression
+  test `sosfilt_sample_major_matches_section_major_reference_bits` (4-section
+  filter, to_bits equality vs the section-major reference). `cargo test -p
+  fsci-signal sosfilt` = 10/0 (incl. scipy-match + lfilter-equivalence tests).
+- This is a previously-UNRECORDED ~4x scipy loss, closed to parity. Lever
+  generalizes: any "apply a chain of stateful passes, one full array pass each"
+  kernel -> interchange to element-major if each pass's state is small (cache-
+  resident) and the passes are sequentially dependent. Detail in canonical ledger.
+
 ## 2026-06-25 - GreenFalcon (claude-code) - CLOSURE (same-box): ndimage.maximum/minimum_filter1d "2.31x/2.27x slower" (filter1d-vanherk) is a cross-box artifact; SAME-BOX fsci is 1.08-1.17x FASTER than scipy at both window sizes
 
 - Agent: GreenFalcon (claude-code). Third same-box artifact closure this session

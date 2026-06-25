@@ -7905,38 +7905,36 @@ pub fn sosfilt(sos: &[SosSection], x: &[f64]) -> Result<Vec<f64>, SignalError> {
         return sosfilt_two_sections(first, second, x);
     }
 
+    // General N-section path: SAMPLE-MAJOR cascade (loop-interchange of the
+    // historical section-major form). Each sample is pushed through every
+    // section while held in `cur`, so the signal streams through memory ONCE
+    // instead of once per section — matching scipy's `_sosfilt` inner loop and
+    // cutting DRAM traffic ~n_sections× on large signals (measured 3.8-3.9x for
+    // a 6-section filter, flipping a ~4x scipy loss to ~parity). BIT-IDENTICAL
+    // to the section-major form: section s sees the identical input stream
+    // (section s-1's output) in the same sample order, with the same per-sample
+    // DF2T FMA order; only the loop nesting is swapped. (The 2-section case is
+    // the hand-fused `sosfilt_two_sections` above.)
+    let mut coeffs: Vec<[f64; 5]> = Vec::with_capacity(sos.len());
+    for section in sos {
+        // `normalize_sos_section` enforces a0 != 0 (same check/message as the
+        // historical per-section guard) and returns [b0, b1, b2, a1n, a2n].
+        coeffs.push(normalize_sos_section(section)?);
+    }
+    let mut state = vec![[0.0f64; 2]; sos.len()];
     let mut signal = x.to_vec();
 
-    for section in sos {
-        let b = [section[0], section[1], section[2]];
-        let a0 = section[3];
-        let a1 = section[4];
-        let a2 = section[5];
-
-        if a0.abs() < 1e-30 {
-            return Err(SignalError::InvalidArgument(
-                "SOS section a[0] must not be zero".to_string(),
-            ));
+    for sample in &mut signal {
+        let mut cur = *sample;
+        for (c, st) in coeffs.iter().zip(state.iter_mut()) {
+            let [b0, b1, b2, a1n, a2n] = *c;
+            // Direct Form II transposed for this biquad section.
+            let yi = b0 * cur + st[0];
+            st[0] = b1 * cur - a1n * yi + st[1];
+            st[1] = b2 * cur - a2n * yi;
+            cur = yi;
         }
-
-        // Normalize by a0
-        let b0 = b[0] / a0;
-        let b1 = b[1] / a0;
-        let b2 = b[2] / a0;
-        let a1n = a1 / a0;
-        let a2n = a2 / a0;
-
-        // Direct Form II transposed for this biquad section
-        let mut d1 = 0.0;
-        let mut d2 = 0.0;
-
-        for sample in &mut signal {
-            let xi = *sample;
-            let yi = b0 * xi + d1;
-            d1 = b1 * xi - a1n * yi + d2;
-            d2 = b2 * xi - a2n * yi;
-            *sample = yi;
-        }
+        *sample = cur;
     }
 
     Ok(signal)
@@ -22447,6 +22445,61 @@ mod tests {
                 got.to_bits(),
                 want.to_bits(),
                 "two-section fusion changed sample {i}"
+            );
+        }
+    }
+
+    #[test]
+    fn sosfilt_sample_major_matches_section_major_reference_bits() {
+        // 4 sections exercise the general N-section path (not the 2-section
+        // fused fast path). The sample-major cascade must be BIT-IDENTICAL to
+        // the historical section-major reference (one full pass per section).
+        let one: SosSection = [
+            0.067_455_27,
+            0.134_910_55,
+            0.067_455_27,
+            1.0,
+            -1.142_980_5,
+            0.412_801_6,
+        ];
+        let two: SosSection = [
+            0.031_239_1,
+            0.062_478_2,
+            0.031_239_1,
+            1.0,
+            -1.482_611_0,
+            0.555_854_5,
+        ];
+        let sos: Vec<SosSection> = vec![one, two, one, two];
+        let x: Vec<f64> = (0..1031)
+            .map(|i| {
+                (37.0 * i as f64 / 257.0).sin()
+                    + 0.35 * (91.0 * i as f64 / 257.0).cos()
+                    + 0.1 * ((i * 17 % 29) as f64 - 14.0)
+            })
+            .collect();
+
+        let got = sosfilt(&sos, &x).expect("sosfilt");
+        let mut want = x;
+        for section in &sos {
+            let [b0, b1, b2, a1, a2] = normalize_sos_section(section).expect("valid section");
+            let mut d1 = 0.0;
+            let mut d2 = 0.0;
+            for sample in &mut want {
+                let xi = *sample;
+                let yi = b0 * xi + d1;
+                d1 = b1 * xi - a1 * yi + d2;
+                d2 = b2 * xi - a2 * yi;
+                *sample = yi;
+            }
+        }
+
+        assert_eq!(got.len(), want.len());
+        for (i, (g, w)) in got.iter().zip(want.iter()).enumerate() {
+            assert_eq!(
+                g.to_bits(),
+                w.to_bits(),
+                "sample-major cascade changed sample {i}"
             );
         }
     }
