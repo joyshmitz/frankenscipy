@@ -6,6 +6,48 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon (codex-cli) - KEEP: fuse two-section sosfilt cascade (1.60x vs SciPy)
+
+- Agent: GreenFalcon (codex-cli), `AGENT_NAME=GreenFalcon`.
+- Lever: `signal::sosfilt` previously materialized a full intermediate vector
+  after the first SOS section, then scanned that vector through the second
+  section. The common two-section cascade now fuses both transposed-direct-form
+  II sections into one pass with four scalar delay registers, preserving the
+  existing generic multi-section path for other lengths.
+- Bit identity: the fused path uses the same normalized coefficients and update
+  order as two sequential SOS passes. Focused test
+  `sosfilt_two_section_fusion_matches_unfused_reference_bits` compares every
+  output sample by `to_bits()`.
+- Measured internal A/B: local warm release test with
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b cargo test
+  -p fsci-signal sosfilt_two_section_fusion_ab_timing --release --lib --
+  --ignored --nocapture` measured old two-pass `38.954 us`, fused `29.948 us`,
+  speedup `1.301x`, exact outputs.
+- Public Criterion vs prior Rust baseline: local warm
+  `cargo bench -p fsci-signal --bench signal_bench
+  'filtering/sosfilt/4096_two_sections' -- --noplot --sample-size 10
+  --measurement-time 1 --warm-up-time 1` measured `35.555 us` median with
+  Criterion reporting `-12.815%` vs its saved baseline.
+- Fresh SciPy oracle: `python3 docs/perf_oracle_signal.py` measured
+  `scipy sosfilt 4096x2: 57.0 us`, so current Rust is `57.0 / 35.555 = 1.60x`
+  faster on the same host. Earlier same-session SciPy oracle was `52.6 us`;
+  even that lower oracle gives `1.48x` vs current Rust.
+- RCH note: pre-edit RCH baseline on `vmi1149989` was `34.836 us` median for
+  the public Criterion row. A post-edit RCH rerun requested the same worker, but
+  RCH selected `vmi1264463` and measured `40.805 us`; this is routing evidence
+  only, not same-worker keep proof. It still clears the earlier local SciPy
+  oracle at `1.29x`.
+- Proof: RCH focused bit-identity test GREEN; local `cargo test -p fsci-signal
+  sosfilt --lib -- --nocapture` GREEN (9 passed, 1 ignored); live SciPy oracle
+  conformance `FSCI_REQUIRE_SCIPY_ORACLE=1 cargo test -p fsci-conformance --test
+  diff_signal_sosfilt -- --nocapture` GREEN.
+- Gates: `cargo check -p fsci-signal --all-targets` GREEN. Strict `cargo fmt
+  -p fsci-signal --check`, `cargo clippy -p fsci-signal --all-targets -- -D
+  warnings`, and `ubs crates/fsci-signal/src/lib.rs` remain blocked by
+  pre-existing unrelated formatting/lint/UBS inventory outside this lever.
+- Decision: KEEP. This is a measured head-to-head SciPy win plus bit-identical
+  internal proof for the common two-section cascade.
+
 ## 2026-06-25 - GreenFalcon (claude-code) - KEEP: dft matrix precompute n roots of unity (~4-5.3x, BYTE-IDENTICAL)
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`.

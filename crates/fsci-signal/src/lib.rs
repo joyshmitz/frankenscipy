@@ -7847,6 +7847,10 @@ pub fn sosfilt(sos: &[SosSection], x: &[f64]) -> Result<Vec<f64>, SignalError> {
     validate_sos_coefficients_finite(sos, "sosfilt")?;
     validate_real_values_finite(x, "sosfilt input samples must be finite")?;
 
+    if let [first, second] = sos {
+        return sosfilt_two_sections(first, second, x);
+    }
+
     let mut signal = x.to_vec();
 
     for section in sos {
@@ -7882,6 +7886,50 @@ pub fn sosfilt(sos: &[SosSection], x: &[f64]) -> Result<Vec<f64>, SignalError> {
     }
 
     Ok(signal)
+}
+
+fn sosfilt_two_sections(
+    first: &SosSection,
+    second: &SosSection,
+    x: &[f64],
+) -> Result<Vec<f64>, SignalError> {
+    let [b00, b01, b02, a01, a02] = normalize_sos_section(first)?;
+    let [b10, b11, b12, a11, a12] = normalize_sos_section(second)?;
+
+    let mut y = Vec::with_capacity(x.len());
+    let mut d01 = 0.0;
+    let mut d02 = 0.0;
+    let mut d11 = 0.0;
+    let mut d12 = 0.0;
+
+    for &xi in x {
+        let y0 = b00 * xi + d01;
+        d01 = b01 * xi - a01 * y0 + d02;
+        d02 = b02 * xi - a02 * y0;
+
+        let y1 = b10 * y0 + d11;
+        d11 = b11 * y0 - a11 * y1 + d12;
+        d12 = b12 * y0 - a12 * y1;
+        y.push(y1);
+    }
+
+    Ok(y)
+}
+
+fn normalize_sos_section(section: &SosSection) -> Result<[f64; 5], SignalError> {
+    let a0 = section[3];
+    if a0.abs() < 1e-30 {
+        return Err(SignalError::InvalidArgument(
+            "SOS section a[0] must not be zero".to_string(),
+        ));
+    }
+    Ok([
+        section[0] / a0,
+        section[1] / a0,
+        section[2] / a0,
+        section[4] / a0,
+        section[5] / a0,
+    ])
 }
 
 /// Apply SOS filter forward and backward for zero-phase filtering.
@@ -22297,6 +22345,134 @@ mod tests {
     }
 
     #[test]
+    fn sosfilt_two_section_fusion_matches_unfused_reference_bits() {
+        let sos: Vec<SosSection> = vec![
+            [
+                0.067_455_27,
+                0.134_910_55,
+                0.067_455_27,
+                1.0,
+                -1.142_980_5,
+                0.412_801_6,
+            ],
+            [
+                0.067_455_27,
+                0.134_910_55,
+                0.067_455_27,
+                1.0,
+                -1.142_980_5,
+                0.412_801_6,
+            ],
+        ];
+        let x: Vec<f64> = (0..257)
+            .map(|i| {
+                (37.0 * i as f64 / 257.0).sin()
+                    + 0.35 * (91.0 * i as f64 / 257.0).cos()
+                    + 0.1 * ((i * 17 % 29) as f64 - 14.0)
+            })
+            .collect();
+
+        let fused = sosfilt(&sos, &x).expect("fused sosfilt");
+        let mut unfused = x;
+        for section in &sos {
+            let [b0, b1, b2, a1, a2] = normalize_sos_section(section).expect("valid section");
+            let mut d1 = 0.0;
+            let mut d2 = 0.0;
+            for sample in &mut unfused {
+                let xi = *sample;
+                let yi = b0 * xi + d1;
+                d1 = b1 * xi - a1 * yi + d2;
+                d2 = b2 * xi - a2 * yi;
+                *sample = yi;
+            }
+        }
+
+        assert_eq!(fused.len(), unfused.len());
+        for (i, (got, want)) in fused.iter().zip(unfused.iter()).enumerate() {
+            assert_eq!(
+                got.to_bits(),
+                want.to_bits(),
+                "two-section fusion changed sample {i}"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn sosfilt_two_section_fusion_ab_timing() {
+        fn unfused_reference(sos: &[SosSection], x: &[f64]) -> Vec<f64> {
+            let mut signal = x.to_vec();
+            for section in sos {
+                let [b0, b1, b2, a1, a2] =
+                    normalize_sos_section(section).expect("valid section");
+                let mut d1 = 0.0;
+                let mut d2 = 0.0;
+                for sample in &mut signal {
+                    let xi = *sample;
+                    let yi = b0 * xi + d1;
+                    d1 = b1 * xi - a1 * yi + d2;
+                    d2 = b2 * xi - a2 * yi;
+                    *sample = yi;
+                }
+            }
+            signal
+        }
+
+        let sos: Vec<SosSection> = vec![
+            [
+                0.067_455_27,
+                0.134_910_55,
+                0.067_455_27,
+                1.0,
+                -1.142_980_5,
+                0.412_801_6,
+            ],
+            [
+                0.067_455_27,
+                0.134_910_55,
+                0.067_455_27,
+                1.0,
+                -1.142_980_5,
+                0.412_801_6,
+            ],
+        ];
+        let x: Vec<f64> = (0..4096)
+            .map(|i| {
+                (37.0 * i as f64 / 4096.0).sin()
+                    + 0.35 * (91.0 * i as f64 / 4096.0).cos()
+                    + 0.1 * ((i * 17 % 29) as f64 - 14.0)
+            })
+            .collect();
+
+        let fused = sosfilt(&sos, &x).expect("fused sosfilt");
+        let unfused = unfused_reference(&sos, &x);
+        for (got, want) in fused.iter().zip(unfused.iter()) {
+            assert_eq!(got.to_bits(), want.to_bits());
+        }
+
+        let reps = 800;
+        let mut acc = 0.0;
+        let t0 = std::time::Instant::now();
+        for _ in 0..reps {
+            let y = std::hint::black_box(unfused_reference(&sos, std::hint::black_box(&x)));
+            acc += y[0];
+        }
+        let unfused = t0.elapsed();
+        let t1 = std::time::Instant::now();
+        for _ in 0..reps {
+            let y = std::hint::black_box(sosfilt(&sos, std::hint::black_box(&x)).unwrap());
+            acc += y[0];
+        }
+        let fused = t1.elapsed();
+        let unfused_us = unfused.as_secs_f64() * 1.0e6 / reps as f64;
+        let fused_us = fused.as_secs_f64() * 1.0e6 / reps as f64;
+        println!(
+            "sosfilt_two_section_ab unfused={unfused_us:.3}us fused={fused_us:.3}us speedup={:.3}x acc={acc:.6}",
+            unfused_us / fused_us
+        );
+    }
+
+    #[test]
     fn sosfilt_identity_passthrough() {
         // SOS with unity gain sections: output = input
         let sos = vec![[1.0, 0.0, 0.0, 1.0, 0.0, 0.0]];
@@ -29419,10 +29595,6 @@ mod tests {
         }
     }
 }
-
-
-
-
 
 
 
