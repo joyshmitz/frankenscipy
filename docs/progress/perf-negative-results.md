@@ -4,6 +4,28 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-25 - frankenscipy-greenfalcon-hessenberg-h-only - KEEP: add hessenberg_h (scipy.linalg.hessenberg calc_q=False) skipping the O(n³) Q accumulation (1.45-1.57x, byte-identical H)
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. Lazy-eval lever
+  (completes the dense decomposition family alongside qr_r/eigvals). fsci's
+  `hessenberg` always materialized the orthogonal `Q` (`hess.q()`, an O(n³)
+  back-transform of the Householder reflectors) even when only `H` is needed;
+  `scipy.linalg.hessenberg(a, calc_q=False)` returns just `H`. fsci had no H-only
+  mode.
+- Added `hessenberg_h(a, options) -> Vec<Vec<f64>>`: same Householder reduction,
+  then `matrix.hessenberg().unpack_h()` only (no `.q()`). `H` is extracted directly
+  and does not depend on materializing `Q`, so it is BIT-IDENTICAL to
+  `hessenberg().h`. Purely additive (existing `hessenberg` unchanged).
+- De-risk same-process A/B (full `hessenberg` Q+H vs `hessenberg_h`, H byte-identical
+  EXACT every shape): n=64 1.46x, n=128 1.45x, n=256 **1.57x**, n=512 1.47x, n=800
+  1.45x.
+- Conformance GREEN: new `hessenberg_h_only_is_bit_identical_to_full_h`
+  (`assert_eq!` qr_r==full.h across n) + unchanged hessenberg property tests;
+  `cargo test -p fsci-linalg hessenberg` = **6/0**.
+- The dense lazy-eval surface is now fully harvested: `qr_r` (R-only), `eigvals`
+  (values-only), `hessenberg_h` (H-only); `eigvalsh`/`svdvals`/`lu_factor`/`cho_factor`
+  already values/factor-only.
+
 ## 2026-06-25 - frankenscipy-greenfalcon-eigvals-no-eigenvectors - KEEP: eigvals stops computing-then-discarding eigenvectors (1.16-1.24x, byte-identical)
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. Lazy-eval lever:

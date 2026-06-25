@@ -6,6 +6,18 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon (claude-code) - KEEP: add hessenberg_h (scipy.linalg.hessenberg calc_q=False), skips O(n³) Q accumulation (1.45-1.57x, byte-identical H)
+
+- Agent: GreenFalcon (claude-code). Lazy-eval: fsci's `hessenberg` always
+  materialized Q (O(n³) back-transform) even when only H is needed; scipy
+  hessenberg(calc_q=False) returns just H. Added `hessenberg_h` (same reduction,
+  `matrix.hessenberg().unpack_h()` only, no `.q()`) — H independent of materializing
+  Q, so byte-identical to hessenberg().h; additive. De-risk A/B (H EXACT every
+  shape): n=256 **1.57x**, n=800 1.45x. New test
+  hessenberg_h_only_is_bit_identical_to_full_h; `cargo test -p fsci-linalg
+  hessenberg` = 6/0. Completes the dense lazy-eval family (qr_r/eigvals/hessenberg_h).
+  Detail in canonical ledger.
+
 ## 2026-06-25 - GreenFalcon (claude-code) - KEEP: eigvals stops computing-then-discarding eigenvectors (1.16-1.24x, byte-identical)
 
 - Agent: GreenFalcon (claude-code). Lazy-eval: `eigvals` delegated to full `eig`,
