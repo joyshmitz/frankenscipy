@@ -14695,11 +14695,49 @@ pub fn istft(
     let mut output = vec![0.0; output_len];
     let mut window_sum = vec![0.0; output_len];
 
-    for (seg_idx, spectrum) in stft_result.zxx.iter().enumerate() {
-        // Inverse rfft.
-        let segment = fsci_fft::irfft(spectrum, Some(nperseg), &opts)
-            .map_err(|e| SignalError::InvalidArgument(format!("IFFT failed: {e}")))?;
-
+    // Each segment's inverse rfft is independent and dominant, so compute them
+    // across threads; the overlap-add (cheap, order-sensitive) stays serial in
+    // segment order. BYTE-IDENTICAL: deterministic per-segment irfft + unchanged
+    // accumulation order.
+    let compute_seg = |spectrum: &Vec<(f64, f64)>| -> Result<Vec<f64>, SignalError> {
+        fsci_fft::irfft(spectrum, Some(nperseg), &opts)
+            .map_err(|e| SignalError::InvalidArgument(format!("IFFT failed: {e}")))
+    };
+    let nthreads = stft_frame_thread_count(n_segments, nperseg);
+    let segments: Vec<Vec<f64>> = if nthreads <= 1 {
+        stft_result
+            .zxx
+            .iter()
+            .map(&compute_seg)
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        let chunk = n_segments.div_ceil(nthreads);
+        let cs = &compute_seg;
+        let zxx = &stft_result.zxx;
+        type SegChunk = Result<Vec<Vec<f64>>, SignalError>;
+        let chunk_results: Vec<SegChunk> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..nthreads)
+                .filter_map(|t| {
+                    let c0 = t * chunk;
+                    if c0 >= n_segments {
+                        return None;
+                    }
+                    let c1 = (c0 + chunk).min(n_segments);
+                    Some(scope.spawn(move || zxx[c0..c1].iter().map(cs).collect::<Result<Vec<_>, _>>()))
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().expect("istft worker panicked"))
+                .collect()
+        });
+        let mut segments = Vec::with_capacity(n_segments);
+        for cr in chunk_results {
+            segments.extend(cr?);
+        }
+        segments
+    };
+    for (seg_idx, segment) in segments.iter().enumerate() {
         let start = seg_idx * step;
         for (j, (&s, &w)) in segment.iter().zip(&window).enumerate() {
             output[start + j] += s * w;

@@ -6,6 +6,29 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon - KEEP: parallelize the free istft over segments (~2.6-3.2x, BYTE-IDENTICAL)
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`.
+- Lever: the free `istft` function (`scipy.signal.istft`, distinct from the
+  `ShortTimeFft::istft` method) ran the per-segment inverse rfft + overlap-add
+  SERIALLY. The per-segment `fsci_fft::irfft` is independent and dominant, so it
+  is now computed across threads (chunked `thread::scope`, collected in segment
+  order); the overlap-add into `output`/`window_sum` (cheap, order-sensitive)
+  stays serial. Identical lever/structure to the `ShortTimeFft::istft` method
+  (`2ac2a5c6`) and the forward `stft` (`2230436c`).
+- BYTE-IDENTICAL: deterministic per-segment irfft + unchanged overlap-add order
+  (no reduction reordering).
+- Measured: the per-segment-transform-parallel + serial-OLA structure is the
+  SAME kernel measured in `bin/perf_istft_frames_ab` (RCH `hz2`, nthreads=16):
+  3.18x / 2.62x at (frames,m,hop)=(2000,512,256)/(7800,256,128), outputs EXACT.
+  The free `istft` uses the same pattern (irfft instead of the fft proxy), so the
+  speedup transfers.
+- Decision: KEEP. `cargo test -p fsci-signal stft_istft_roundtrip` 1/1 GREEN
+  (the round-trip directly reconstructs via the free `istft`).
+- Gates: edit only to the free `istft` body (hand-formatted; no `cargo fmt -p
+  fsci-signal` whole-file sweep). The STFT forward+inverse parallelization is now
+  complete across both the `ShortTimeFft` methods and the free functions.
+
 ## 2026-06-25 - GreenFalcon - KEEP: parallelize ShortTimeFFT::istft per-frame inverse FFT (~2.6-3.2x, BYTE-IDENTICAL)
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`.
