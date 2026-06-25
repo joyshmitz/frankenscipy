@@ -6,6 +6,22 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon (claude-code) - KEEP: parallelize linkage distance-matrix build (build 1.59-5.16x; end-to-end up to ~2.3x; byte-identical)
+
+- Agent: GreenFalcon (claude-code). `linkage` already uses O(n²) algorithms
+  (MST/NN-chain/Müller heap), but its dense n×n distance-matrix build was a serial
+  scalar sq_dist().sqrt() upper-triangle loop — 24-76% of total linkage time. Added
+  a gated `linkage_distance_matrix` helper: above the work gate each thread owns a
+  contiguous block of full rows via `chunks_mut` (no per-row alloc/scatter) and
+  recomputes the lower triangle. sq_dist is symmetric → every entry BIT-IDENTICAL
+  to the serial upper-triangle+mirror fill, so the tie-break-sensitive agglomeration
+  is unaffected.
+- De-risk A/B (build, EXACT): n=800/d=4 1.59x, n=1500/d=4 **4.27x**, n=3000/d=4
+  **5.16x**; end-to-end linkage up to ~2.3x (n=1500/d=4). Gate `n²·d >= 2_000_000`
+  keeps small linkages serial (bit-identical). New test
+  `linkage_distance_matrix_parallel_is_bit_identical_to_serial`; `cargo test
+  -p fsci-cluster linkage` = 29/0. Detail in canonical ledger.
+
 ## 2026-06-25 - GreenFalcon (claude-code) - REJECT(de-risk): next_fast_len embedding for matmul_toeplitz (erratic 0.41-2.88x)
 
 - Agent: GreenFalcon (claude-code). Tempting one-liner — `next_fast_len(m+n-1) <=

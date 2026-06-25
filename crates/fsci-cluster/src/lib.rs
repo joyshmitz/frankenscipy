@@ -3804,7 +3804,6 @@ pub fn linkage(data: &[Vec<f64>], method: LinkageMethod) -> Result<Vec<[f64; 4]>
         ));
     }
     let flat = flatten_points(data, d);
-    let row = |idx: usize| -> &[f64] { &flat[idx * d..idx * d + d] };
 
     // br-6m7l: scipy uses fast_linkage (heap-based "Generic Clustering
     // Algorithm" from Mullner 2011) for Centroid/Median; fsci's simpler
@@ -3813,15 +3812,59 @@ pub fn linkage(data: &[Vec<f64>], method: LinkageMethod) -> Result<Vec<[f64; 4]>
     // resulting linkage matrix matches scipy element-for-element.
     // Build the full n×n distance matrix once and route every method through the shared
     // O(n²) dm-based path (single→MST, reducible→NN-chain, centroid/median→Müller heap).
-    let mut dm = vec![0.0_f64; n * n];
-    for i in 0..n {
-        for j in i + 1..n {
-            let dist = sq_dist(row(i), row(j)).sqrt();
-            dm[i * n + j] = dist;
-            dm[j * n + i] = dist;
-        }
-    }
+    let dm = linkage_distance_matrix(&flat, n, d);
     Ok(linkage_from_dm(n, dm, method))
+}
+
+/// Minimum build work (`n² · dimension`) above which the dense distance-matrix
+/// build is parallelized. Below it the serial upper-triangle loop wins (thread
+/// spawn dominates); measured crossover well under n=800/d=4.
+const LINKAGE_DM_PAR_WORK_GATE: u128 = 2_000_000;
+
+/// Build the dense symmetric `n×n` distance matrix used by `linkage`, from
+/// row-major `flat` (`d` coords per row). Serial below the work gate; above it
+/// each thread owns a contiguous block of full rows (disjoint `chunks_mut`, no
+/// per-row allocation, no scatter) and recomputes the lower triangle. Because
+/// `sq_dist` is symmetric (`Σ(a−b)² == Σ(b−a)²` term-for-term), every entry is
+/// bit-identical to the serial upper-triangle-plus-mirror fill, so the downstream
+/// tie-break-sensitive agglomeration is unaffected. The diagonal stays `0.0`.
+fn linkage_distance_matrix(flat: &[f64], n: usize, d: usize) -> Vec<f64> {
+    let row = |idx: usize| -> &[f64] { &flat[idx * d..idx * d + d] };
+    let mut dm = vec![0.0_f64; n * n];
+    if (n as u128) * (n as u128) * (d.max(1) as u128) < LINKAGE_DM_PAR_WORK_GATE {
+        for i in 0..n {
+            for j in i + 1..n {
+                let dist = sq_dist(row(i), row(j)).sqrt();
+                dm[i * n + j] = dist;
+                dm[j * n + i] = dist;
+            }
+        }
+        return dm;
+    }
+    let nthreads = std::thread::available_parallelism()
+        .map_or(1, std::num::NonZeroUsize::get)
+        .min(16)
+        .min(n)
+        .max(1);
+    let chunk = n.div_ceil(nthreads);
+    let row = &row;
+    std::thread::scope(|scope| {
+        for (blk, rows) in dm.chunks_mut(chunk * n).enumerate() {
+            let i0 = blk * chunk;
+            scope.spawn(move || {
+                for (roff, dst) in rows.chunks_mut(n).enumerate() {
+                    let i = i0 + roff;
+                    let ri = row(i);
+                    for (j, slot) in dst.iter_mut().enumerate() {
+                        if i != j {
+                            *slot = sq_dist(ri, row(j)).sqrt();
+                        }
+                    }
+                }
+            });
+        }
+    });
+    dm
 }
 
 /// Shared O(n²) agglomeration over a full n×n distance matrix `dm`, used by BOTH
@@ -6636,6 +6679,39 @@ pub fn kmedoids(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn linkage_distance_matrix_parallel_is_bit_identical_to_serial() {
+        // n=800, d=4 -> n²·d = 2.56e6 >= LINKAGE_DM_PAR_WORK_GATE, so
+        // linkage_distance_matrix takes the threaded full-row path. It must be
+        // bit-for-bit equal to the serial upper-triangle-plus-mirror build.
+        let n = 800usize;
+        let d = 4usize;
+        let mut s: u64 = 0x0123_4567_89ab_cdef;
+        let flat: Vec<f64> = (0..n * d)
+            .map(|_| {
+                s = s
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                (s >> 11) as f64 / (1u64 << 53) as f64
+            })
+            .collect();
+        assert!((n as u128) * (n as u128) * (d as u128) >= LINKAGE_DM_PAR_WORK_GATE);
+
+        let parallel = linkage_distance_matrix(&flat, n, d);
+
+        // Inline serial reference (the pre-change build).
+        let row = |idx: usize| -> &[f64] { &flat[idx * d..idx * d + d] };
+        let mut serial = vec![0.0_f64; n * n];
+        for i in 0..n {
+            for j in i + 1..n {
+                let dist = sq_dist(row(i), row(j)).sqrt();
+                serial[i * n + j] = dist;
+                serial[j * n + i] = dist;
+            }
+        }
+        assert_eq!(parallel, serial, "parallel dm build diverged from serial");
+    }
 
     #[test]
     fn pca_matches_full_svd_on_low_rank() {

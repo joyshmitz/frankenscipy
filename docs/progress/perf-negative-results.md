@@ -4,6 +4,39 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-25 - frankenscipy-greenfalcon-linkage-dmbuild-parallel - KEEP: parallelize linkage distance-matrix build (build 1.59-5.16x; end-to-end up to ~2.3x; byte-identical)
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. `linkage` already
+  routes every method through the O(n²) algorithms (single→MST, ward/complete/
+  average/weighted→NN-chain, centroid/median→Müller heap) — algorithmically matched
+  to scipy. But the dense `n×n` distance matrix it builds first was a SERIAL scalar
+  `sq_dist(row(i),row(j)).sqrt()` upper-triangle loop, and that build is 24-76% of
+  total `linkage` time (sqrt-dominated; largest fraction at low d).
+- Lever: a gated `linkage_distance_matrix` helper. Above the work gate each thread
+  owns a CONTIGUOUS block of full rows via `dm.chunks_mut(chunk*n)` (disjoint &mut,
+  no per-row alloc, no scatter) and recomputes the lower triangle. `sq_dist` is
+  symmetric (`Σ(a−b)² == Σ(b−a)²` term-for-term, same k-order), so every entry is
+  BIT-IDENTICAL to the serial upper-triangle+mirror fill — the tie-break-sensitive
+  agglomeration downstream is unaffected. (First de-risk used per-row `Vec` +
+  scatter and was erratic 0.63-1.88x; the direct-`chunks_mut`-write rewrite is
+  uniformly faster.)
+- De-risk same-process A/B (serial vs parallel build, all EXACT), build speedup /
+  build-fraction-of-linkage:
+  - n=800/d=4 1.59x (24%), n=800/d=10 1.99x (35%), n=1500/d=4 **4.27x** (75%),
+    n=1500/d=10 2.18x (41%), n=3000/d=4 **5.16x** (43%)
+  - End-to-end linkage impact (build% × build speedup): n=1500/d=4 ~**2.3x** faster,
+    n=3000/d=4 ~1.5x, n=800/d=4 ~1.1x. Bigger at low d (sqrt-heavy build dominates).
+- Gate `n²·d >= LINKAGE_DM_PAR_WORK_GATE (2_000_000)` keeps small linkages on the
+  serial upper-triangle loop (bit-identical to the prior code); threads
+  `min(16, cores, n)`. Conformance GREEN: `cargo test -p fsci-cluster linkage` =
+  29/0 incl. the new `linkage_distance_matrix_parallel_is_bit_identical_to_serial`
+  (n=800/d=4 forces the threaded path, asserts `assert_eq!` vs an inline serial
+  reference); full `cargo test -p fsci-cluster` as safety net.
+- Retry/extend: the O(n²) agglomeration itself (NN-chain/heap) stays serial — it is
+  inherently sequential (each merge depends on the prior); the build was the only
+  embarrassingly-parallel phase. SIMD-ing the build would change the dm bits (breaks
+  scipy tie-break parity), so keep the scalar `sq_dist`.
+
 ## 2026-06-25 - frankenscipy-greenfalcon-matmul-toeplitz-nextfastlen - REJECT(de-risk): next_fast_len embedding length regresses matmul_toeplitz (erratic 0.41-2.88x)
 
 - Agent: GreenFalcon (claude-code). `matmul_toeplitz` embeds in a circulant of
