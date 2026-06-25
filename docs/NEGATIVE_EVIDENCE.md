@@ -6,6 +6,25 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon (claude-code) - REJECT(de-risk): multi-RHS batch maha for GMM full E-step regresses at typical d
+
+- Agent: GreenFalcon (claude-code). The multi-RHS-batch-Mahalanobis lever that
+  WON for MultivariateNormal/MultivariateT logpdf_many (1.65-2.35x, commits
+  `79b5ac49`/`2066c579`) does NOT transfer to `gaussian_mixture_full`'s E-step.
+- De-risk microbench (per-point running-subtraction forward-sub `s -= L[r][q]·y[q]`
+  + interleaved `maha += y²`, exactly as the E-step, vs the batch-over-points
+  form): EXACT byte-identity but speedup = **0.51x (n=50k,d=4) / 0.71x (d=8) /
+  1.54x (n=20k,d=16) / 0.95x (d=32)** — a REGRESSION for the common low/mid d.
+- WHY (boundary of the lever): the GMM E-step's per-point kernel keeps a tiny
+  `y[d]` scratch cache-hot and the inner `for q<r` is a short hot dot product;
+  the batch form streams a `d×b` working set (e.g. 1.6 MB at d=4, b=50000) plus a
+  `b`-length `maha` it writes every r, which is cache-hostile when d is small.
+  (MVN/MVT won because their kernel + measurement favored the wide inner loop;
+  GMM's interleaved maha store + small-d footprint flip it.)
+- Decision: do NOT batch the GMM E-step (de-risk only; no library change, bin
+  removed). A cache-tiled sub-batch *might* recover small-d but is unproven and
+  more complex — not worth it. Don't re-chase the simple batch.
+
 ## 2026-06-25 - GreenFalcon (claude-code) - KEEP: MultivariateT logpdf_many multi-RHS batch Mahalanobis (~1.7-2.4x, BYTE-IDENTICAL)
 
 - Agent: GreenFalcon (claude-code) — commit `8d777c5e`. Same lever as the
