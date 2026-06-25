@@ -1687,22 +1687,26 @@ pub fn roots_genlaguerre(n: usize, alpha: f64) -> (Vec<f64>, Vec<f64>) {
     if !alpha.is_finite() || alpha <= -1.0 {
         return invalid_quadrature(n);
     }
+    static CACHE: std::sync::OnceLock<
+        std::sync::RwLock<std::collections::HashMap<(usize, u64), (Vec<f64>, Vec<f64>)>>,
+    > = std::sync::OnceLock::new();
+    cached_roots(&CACHE, (n, alpha.to_bits()), || {
+        // mu0 = integral of x^alpha * exp(-x) from 0 to infinity = Gamma(alpha + 1)
+        let mu0 = gamma_half_integer_or_lanczos(alpha + 1.0);
 
-    // mu0 = integral of x^alpha * exp(-x) from 0 to infinity = Gamma(alpha + 1)
-    let mu0 = gamma_half_integer_or_lanczos(alpha + 1.0);
-
-    golub_welsch(
-        n,
-        mu0,
-        // Diagonal elements: a_k = 2k + alpha + 1
-        |k| 2.0 * k as f64 + alpha + 1.0,
-        // Off-diagonal elements: b_k = sqrt(k * (k + alpha))
-        |k| {
-            let kf = k as f64;
-            (kf * (kf + alpha)).sqrt()
-        },
-        false,
-    )
+        golub_welsch(
+            n,
+            mu0,
+            // Diagonal elements: a_k = 2k + alpha + 1
+            |k| 2.0 * k as f64 + alpha + 1.0,
+            // Off-diagonal elements: b_k = sqrt(k * (k + alpha))
+            |k| {
+                let kf = k as f64;
+                (kf * (kf + alpha)).sqrt()
+            },
+            false,
+        )
+    })
 }
 
 /// Compute Gauss-Gegenbauer (ultraspherical) quadrature nodes and weights on `[-1, 1]`.
@@ -4106,6 +4110,23 @@ mod tests {
             let lag = golub_welsch(n, 1.0, |k| 2.0 * k as f64 + 1.0, |k| k as f64, false);
             assert_eq!(roots_laguerre(n), lag, "laguerre n={n}");
             assert_eq!(roots_laguerre(n), roots_laguerre(n), "laguerre repeat n={n}");
+
+            let glag = golub_welsch(
+                n,
+                gamma_half_integer_or_lanczos(0.7 + 1.0),
+                |k| 2.0 * k as f64 + 0.7 + 1.0,
+                |k| {
+                    let kf = k as f64;
+                    (kf * (kf + 0.7)).sqrt()
+                },
+                false,
+            );
+            assert_eq!(roots_genlaguerre(n, 0.7), glag, "genlaguerre n={n}");
+            assert_eq!(
+                roots_genlaguerre(n, 0.7),
+                roots_genlaguerre(n, 0.7),
+                "genlaguerre repeat n={n}"
+            );
         }
     }
 

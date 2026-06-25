@@ -28,9 +28,11 @@ condition so dead ends are not repeated casually.
   a direct Golub-Welsch recompute for jacobi/legendre/hermite/laguerre, even/odd
   orders 2..64) and the unchanged roots goldens. (RCH recovered from this turn's
   earlier fleet-wide E0514 churn; this built clean.)
-- Retry/extend: `roots_genlaguerre` (golub_welsch direct, key (n,α)) and the
-  parameterized `roots_sh_jacobi` are not yet cached — same one-helper pattern
-  applies. Chebyshev roots are closed-form O(n) (not worth caching).
+- Follow-up: `roots_genlaguerre` now cached too (key `(n, alpha.to_bits())`, same
+  helper) — test extended, still 33/0 (1 test, more asserts). `roots_sh_jacobi`
+  routes through the cached `roots_jacobi` so it is already covered. Chebyshev roots
+  are closed-form O(n) (not worth caching). NEXT (separate crate): `lebedev_rule`
+  re-expands its orbit table per call (O(degree), modest ~2-5x cache win).
 
 ## 2026-06-25 - frankenscipy-greenfalcon-sobol8d-prefix30-fixed-lanes - KEEP: close Sobol 65536x8 residual with fixed-lane prefix30 sampler (1.19x vs SciPy local; 1.66x same-worker Rust A/B)
 
