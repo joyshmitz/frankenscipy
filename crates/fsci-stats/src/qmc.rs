@@ -46,6 +46,45 @@ pub struct HaltonSampler {
     next_index: u64,
 }
 
+/// Minimum total coordinate count (`n · d`) above which Halton point generation is
+/// distributed across threads. Below it the serial loop wins (thread spawn
+/// dominates; measured crossover ≈ n=10k at d=10).
+const HALTON_PAR_WORK_GATE: usize = 200_000;
+
+/// Generate `n` Halton points of dimension `d` row-major, filling each point `p`
+/// with `fill_point(p, &mut out[p*d..p*d+d])`. Each point is a pure function of its
+/// index, so the points are independent: for large `n·d` they are produced across
+/// `std::thread::scope` threads (each owns a disjoint block of whole points) — the
+/// result is BYTE-IDENTICAL to the serial loop (same per-index values, same point
+/// order). scipy's Halton is single-threaded.
+fn halton_fill_points<F: Fn(usize, &mut [f64]) + Sync>(n: usize, d: usize, fill_point: F) -> Vec<f64> {
+    let mut out = vec![0.0_f64; n.saturating_mul(d)];
+    if n.saturating_mul(d) < HALTON_PAR_WORK_GATE || n < 2 {
+        for (p, slot) in out.chunks_mut(d).enumerate() {
+            fill_point(p, slot);
+        }
+        return out;
+    }
+    let nthreads = std::thread::available_parallelism()
+        .map_or(1, std::num::NonZeroUsize::get)
+        .min(16)
+        .min(n)
+        .max(1);
+    let chunk = n.div_ceil(nthreads);
+    let fill_point = &fill_point;
+    std::thread::scope(|scope| {
+        for (t, block) in out.chunks_mut(chunk * d).enumerate() {
+            let p0 = t * chunk;
+            scope.spawn(move || {
+                for (off, slot) in block.chunks_mut(d).enumerate() {
+                    fill_point(p0 + off, slot);
+                }
+            });
+        }
+    });
+    out
+}
+
 impl HaltonSampler {
     /// Construct a Halton sampler for the given dimension.
     ///
@@ -101,28 +140,30 @@ impl HaltonSampler {
         }
 
         let d = self.primes.len();
-        let mut out = Vec::with_capacity(n.saturating_mul(d));
-        for _ in 0..n {
-            let idx = self.next_index;
-            for &prime in &self.primes {
-                out.push(radical_inverse_fast(idx, prime));
+        let start = self.next_index;
+        self.next_index = self.next_index.saturating_add(n as u64);
+        // Point p uses idx = start.saturating_add(p), exactly the value the serial
+        // per-point `saturating_add(1)` walk produced; coordinates pushed in prime
+        // order. Independent per point → parallelized for large n·d.
+        let primes = &self.primes;
+        halton_fill_points(n, d, move |p, slot| {
+            let idx = start.saturating_add(p as u64);
+            for (s, &prime) in slot.iter_mut().zip(primes.iter()) {
+                *s = radical_inverse_fast(idx, prime);
             }
-            self.next_index = self.next_index.saturating_add(1);
-        }
-        out
+        })
     }
 
     fn sample_4d(&mut self, n: usize) -> Vec<f64> {
-        let mut out = Vec::with_capacity(n.saturating_mul(4));
-        for _ in 0..n {
-            let idx = self.next_index;
-            out.push(radical_inverse_const::<2>(idx));
-            out.push(radical_inverse_const::<3>(idx));
-            out.push(radical_inverse_const::<5>(idx));
-            out.push(radical_inverse_const::<7>(idx));
-            self.next_index = self.next_index.saturating_add(1);
-        }
-        out
+        let start = self.next_index;
+        self.next_index = self.next_index.saturating_add(n as u64);
+        halton_fill_points(n, 4, move |p, slot| {
+            let idx = start.saturating_add(p as u64);
+            slot[0] = radical_inverse_const::<2>(idx);
+            slot[1] = radical_inverse_const::<3>(idx);
+            slot[2] = radical_inverse_const::<5>(idx);
+            slot[3] = radical_inverse_const::<7>(idx);
+        })
     }
 }
 
@@ -2334,6 +2375,28 @@ mod tests {
         assert_eq!(h.next_index(), 0);
         let _ = h.sample(3);
         assert_eq!(h.next_index(), 3);
+    }
+
+    #[test]
+    fn halton_parallel_path_matches_serial_one_at_a_time() {
+        // d=10, n=25_000 -> n*d = 250_000 >= HALTON_PAR_WORK_GATE, so sample()
+        // runs the threaded point fill. It must byte-match generating the same
+        // points one at a time (each sample(1) is n*d=10 < gate -> serial path).
+        let d = 10usize;
+        let n = 25_000usize;
+        assert!(n * d >= HALTON_PAR_WORK_GATE);
+
+        let mut par = HaltonSampler::new(d).unwrap();
+        let parallel = par.sample(n);
+
+        let mut ser = HaltonSampler::new(d).unwrap();
+        let mut serial = Vec::with_capacity(n * d);
+        for _ in 0..n {
+            serial.extend(ser.sample(1));
+        }
+        assert_eq!(parallel.len(), n * d);
+        assert_eq!(parallel, serial, "parallel Halton diverged from serial");
+        assert_eq!(par.next_index(), ser.next_index());
     }
 
     #[test]

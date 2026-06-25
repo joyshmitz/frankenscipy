@@ -4,6 +4,34 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-25 - frankenscipy-greenfalcon-halton-parallel - KEEP: parallelize HaltonSampler::sample point generation (2.79-11.64x for large n, byte-identical)
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. `HaltonSampler::sample`
+  (= `scipy.stats.qmc.Halton().random(n)`) generated points in a serial loop, but
+  each point `idx` is a PURE function of its index (`radical_inverse` per prime) —
+  independent of all other points. scipy's Halton is single-threaded; fsci was too.
+- Lever: a shared `halton_fill_points(n, d, fill_point)` helper. Above the work gate
+  each thread owns a disjoint block of whole points (`out.chunks_mut(chunk*d)`) and
+  fills `out[p*d..]` via `fill_point(p, slot)`. Point `p` uses `idx =
+  start.saturating_add(p)` — exactly the value the serial per-point
+  `saturating_add(1)` walk produced (incl. the `u64::MAX` saturation edge) — and the
+  coordinates go in prime order, so the result is BYTE-IDENTICAL to the serial loop.
+  Applied to both `sample` (general d) and the `sample_4d` [2,3,5,7] specialization.
+- De-risk same-process A/B (serial vs parallel point fill, d=10, ALL EXACT):
+  n=1000 0.21x, n=5000 0.93x, n=20000 **2.79x**, n=100000 **7.39x**, n=500000
+  **11.64x**. Gate `n·d >= HALTON_PAR_WORK_GATE (200_000)` keeps small samples
+  serial (bit-identical order); threads `min(16, cores, n)`. QMC sampling at
+  n≳20k is a real workload (high-accuracy QMC integration), and the per-point
+  `radical_inverse` digit extraction is compute-bound, so it scales well.
+- Conformance GREEN: `cargo test -p fsci-stats halton` = 17/0 — incl. the new
+  `halton_parallel_path_matches_serial_one_at_a_time` (n=25000 → threaded path;
+  byte-equals 25000× `sample(1)` serial + matching `next_index`) and the unchanged
+  `halton_4d_specialization_matches_generic_reference_bits` (saturation edges); full
+  `cargo test -p fsci-stats` as safety net.
+- Retry/extend: Sobol point generation may also parallelize IF fsci uses the
+  direct (index→bits) method rather than the sequential Gray-code recurrence —
+  unverified, needs inspection (the incremental form is NOT embarrassingly parallel).
+
 ## 2026-06-25 - frankenscipy-greenfalcon-ktseasonal-knight - KEEP: kendalltau_seasonal O(n²)→O(n log n) Knight pair-counts (1.91x at the gate, ~9x at n=2048, byte-identical)
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. `kendalltau_seasonal`

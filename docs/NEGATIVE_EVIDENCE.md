@@ -6,6 +6,20 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon (claude-code) - KEEP: parallelize HaltonSampler::sample point generation (2.79-11.64x for large n, byte-identical)
+
+- Agent: GreenFalcon (claude-code). `HaltonSampler::sample` (= scipy.stats.qmc
+  .Halton().random(n)) generated points serially, but each point is a pure function
+  of its index (radical_inverse per prime) — independent. scipy's Halton is
+  single-threaded. Added a shared `halton_fill_points` helper: above the work gate
+  each thread fills a disjoint block of whole points; point p uses idx =
+  start.saturating_add(p), exactly the serial per-point walk value (incl. u64::MAX
+  saturation), so BYTE-IDENTICAL. Applied to sample (general d) + sample_4d.
+- De-risk A/B (d=10, EXACT): n=20000 2.79x, n=100000 7.39x, n=500000 **11.64x**;
+  regresses below ~5000 (gate n·d >= 200_000 keeps small samples serial). New test
+  halton_parallel_path_matches_serial_one_at_a_time (n=25000 byte-equals 25000×
+  sample(1)); `cargo test -p fsci-stats halton` = 17/0. Detail in canonical ledger.
+
 ## 2026-06-25 - GreenFalcon (claude-code) - KEEP: kendalltau_seasonal O(n²)→O(n log n) Knight pair-counts (1.91x at the gate, ~9x at n=2048, byte-identical)
 
 - Agent: GreenFalcon (claude-code). `kendalltau_seasonal` (= scipy.stats.mstats
