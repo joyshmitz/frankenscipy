@@ -6,6 +6,32 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon - KEEP: extend discrepancy symmetry to mixture/l2_star/wraparound (~1.84-1.94x each)
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`.
+- Lever: the upper-triangle symmetry lever (see the centered entry below)
+  applied to the remaining three pair-symmetric QMC discrepancy kernels —
+  `mixture_discrepancy`, `l2_star_discrepancy` (`max` symmetric → bit-exact
+  pairs), `wraparound_discrepancy` (`|Δ|` symmetric → bit-exact pairs), each in
+  BOTH the d==2 fast path and the general kernel. Diagonal once + each
+  off-diagonal pair twice → n²/2 products. Completes the discrepancy family
+  (centered done in the entry below).
+- Measured: same-process same-worker A/B (RCH,
+  `bin/perf_discrepancy_ab.rs`, general path d=4; LCG sample):
+
+  | method | n=512 | n=1024 | \|Δvalue\| |
+  | --- | ---: | ---: | ---: |
+  | centered | 1.90x | 1.90x | ~2-5e-14 |
+  | mixture | 1.94x | 1.94x | ~4e-14-1e-13 |
+  | l2_star | 1.87x | 1.84x | ~6-8e-14 |
+  | wraparound | 1.84x | 1.87x | ~5e-14-1.4e-13 |
+
+- Decision: KEEP. `cargo test -p fsci-stats discrepancy` 11/11 GREEN, incl.
+  `discrepancy_dispatcher_matches_kernels_and_scipy` which checks all four
+  methods' values to 1e-10 vs scipy — the ~1e-14 reassociation is far inside it.
+- Gates: edits only to the six discrepancy kernels (3 methods × {2d, general})
+  + the A/B bin (hand-formatted; no `cargo fmt -p` whole-file sweep).
+
 ## 2026-06-25 - GreenFalcon - KEEP: centered discrepancy upper-triangle symmetry (~2.1x, ~1e-14 reassoc)
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`.

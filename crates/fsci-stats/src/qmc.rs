@@ -954,9 +954,16 @@ fn mixture_discrepancy_2d(sample: &[f64], n: usize) -> f64 {
         single += prod;
     }
 
+    // Symmetric pair product (Δ-based terms are |·|/squared; the abs sums commute
+    // to ~1e-16): diagonal once + each off-diagonal pair twice. ~2x fewer
+    // products; ~1e-14 reassociation, within the discrepancy tolerance gates.
     let mut double = 0.0_f64;
-    for point_i in &points {
-        for point_j in &points {
+    for (i, point_i) in points.iter().enumerate() {
+        let mut diag = 1.0_f64;
+        diag *= 15.0 / 8.0 - 0.25 * point_i.abs0 - 0.25 * point_i.abs0;
+        diag *= 15.0 / 8.0 - 0.25 * point_i.abs1 - 0.25 * point_i.abs1;
+        double += diag;
+        for point_j in &points[i + 1..] {
             let delta0 = point_i.x0 - point_j.x0;
             let d0 = delta0.abs();
             let delta1 = point_i.x1 - point_j.x1;
@@ -966,7 +973,7 @@ fn mixture_discrepancy_2d(sample: &[f64], n: usize) -> f64 {
                 + 0.5 * delta0.powi(2);
             prod *= 15.0 / 8.0 - 0.25 * point_i.abs1 - 0.25 * point_j.abs1 - 0.75 * d1
                 + 0.5 * delta1.powi(2);
-            double += prod;
+            double += 2.0 * prod;
         }
     }
 
@@ -987,13 +994,19 @@ fn l2_star_discrepancy_2d(sample: &[f64], n: usize) -> f64 {
         single += prod;
     }
 
+    // `max` is symmetric, so prod(i,j) == prod(j,i) bit-for-bit: diagonal once +
+    // each off-diagonal pair twice. ~2x fewer products; ~1e-14 reassociation.
     let mut double = 0.0_f64;
-    for point_i in &points {
-        for point_j in &points {
+    for (i, point_i) in points.iter().enumerate() {
+        let mut diag = 1.0_f64;
+        diag *= 1.0 - point_i.x0;
+        diag *= 1.0 - point_i.x1;
+        double += diag;
+        for point_j in &points[i + 1..] {
             let mut prod = 1.0_f64;
             prod *= 1.0 - point_i.x0.max(point_j.x0);
             prod *= 1.0 - point_i.x1.max(point_j.x1);
-            double += prod;
+            double += 2.0 * prod;
         }
     }
 
@@ -1005,15 +1018,21 @@ fn wraparound_discrepancy_2d(sample: &[f64], n: usize) -> f64 {
     let points = discrepancy_points_2d(sample, n);
     let leading = -(4.0_f64 / 3.0).powi(2);
 
+    // `|Δ|` is symmetric, so prod(i,j) == prod(j,i) bit-for-bit: diagonal (d=0 →
+    // factor 1.5) once + each off-diagonal pair twice. ~2x fewer products.
     let mut double = 0.0_f64;
-    for point_i in &points {
-        for point_j in &points {
+    for (i, point_i) in points.iter().enumerate() {
+        let mut diag = 1.0_f64;
+        diag *= 1.5;
+        diag *= 1.5;
+        double += diag;
+        for point_j in &points[i + 1..] {
             let d0 = (point_i.x0 - point_j.x0).abs();
             let d1 = (point_i.x1 - point_j.x1).abs();
             let mut prod = 1.0_f64;
             prod *= 1.5 - d0 * (1.0 - d0);
             prod *= 1.5 - d1 * (1.0 - d1);
-            double += prod;
+            double += 2.0 * prod;
         }
     }
 
@@ -1398,9 +1417,17 @@ pub fn mixture_discrepancy(sample: &[f64], dimension: usize) -> Result<f64, Stat
         single += prod;
     }
     // Double-sum term.
+    // Symmetric pair product: diagonal once + each off-diagonal pair twice
+    // (~2x fewer products; ~1e-14 reassociation, within tolerance).
     let mut double = 0.0_f64;
     for i in 0..n {
-        for j in 0..n {
+        let mut diag = 1.0_f64;
+        for k in 0..dimension {
+            let c = 0.25 * (sample[i * dimension + k] - 0.5).abs();
+            diag *= 15.0 / 8.0 - c - c;
+        }
+        double += diag;
+        for j in (i + 1)..n {
             let mut prod = 1.0_f64;
             for k in 0..dimension {
                 let xi = sample[i * dimension + k];
@@ -1409,7 +1436,7 @@ pub fn mixture_discrepancy(sample: &[f64], dimension: usize) -> Result<f64, Stat
                 prod *= 15.0 / 8.0 - 0.25 * (xi - 0.5).abs() - 0.25 * (xj - 0.5).abs() - 0.75 * d
                     + 0.5 * (xi - xj).powi(2);
             }
-            double += prod;
+            double += 2.0 * prod;
         }
     }
     let n_f = n as f64;
@@ -1617,17 +1644,24 @@ pub fn l2_star_discrepancy(sample: &[f64], dimension: usize) -> Result<f64, Stat
         }
         single += prod;
     }
-    // Double-sum Σ_ij Π_k (1 - max(x_i^k, x_j^k)).
+    // Double-sum Σ_ij Π_k (1 - max(x_i^k, x_j^k)). `max` is symmetric, so
+    // prod(i,j) == prod(j,i) bit-for-bit: diagonal once + each off-diagonal pair
+    // twice (~2x fewer products; ~1e-14 reassociation, within tolerance).
     let mut double = 0.0_f64;
     for i in 0..n {
-        for j in 0..n {
+        let mut diag = 1.0_f64;
+        for k in 0..dimension {
+            diag *= 1.0 - sample[i * dimension + k];
+        }
+        double += diag;
+        for j in (i + 1)..n {
             let mut prod = 1.0_f64;
             for k in 0..dimension {
                 let xi = sample[i * dimension + k];
                 let xj = sample[j * dimension + k];
                 prod *= 1.0 - xi.max(xj);
             }
-            double += prod;
+            double += 2.0 * prod;
         }
     }
     let n_f = n as f64;
@@ -1677,9 +1711,16 @@ pub fn wraparound_discrepancy(sample: &[f64], dimension: usize) -> Result<f64, S
         return Ok(wraparound_discrepancy_2d(sample, n));
     }
     let leading = -(4.0_f64 / 3.0).powi(dimension as i32);
+    // `|Δ|` is symmetric → prod(i,j) == prod(j,i) bit-for-bit: diagonal (d=0 →
+    // factor 1.5) once + each off-diagonal pair twice (~2x fewer products).
     let mut double = 0.0_f64;
     for i in 0..n {
-        for j in 0..n {
+        let mut diag = 1.0_f64;
+        for _ in 0..dimension {
+            diag *= 1.5;
+        }
+        double += diag;
+        for j in (i + 1)..n {
             let mut prod = 1.0_f64;
             for k in 0..dimension {
                 let xi = sample[i * dimension + k];
@@ -1687,7 +1728,7 @@ pub fn wraparound_discrepancy(sample: &[f64], dimension: usize) -> Result<f64, S
                 let d = (xi - xj).abs();
                 prod *= 1.5 - d * (1.0 - d);
             }
-            double += prod;
+            double += 2.0 * prod;
         }
     }
     let n_f = n as f64;
