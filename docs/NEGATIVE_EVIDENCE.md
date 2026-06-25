@@ -6,6 +6,43 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-24 - GreenFalcon - KEEP: Affinity Propagation `Vec<Vec<f64>>` -> flat row-major buffer (1.41-2.29x, byte-identical)
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`.
+- Lever: `cluster::affinity_propagation` stored its responsibility `r` and
+  availability `a` matrices as `Vec<Vec<f64>>` (n separately-allocated heap
+  rows). The availability update walks them by COLUMN (fixed k, varying i) and
+  the exemplar/diagonal checks read `r[k][k]`/`a[k][k]`, so every column pass
+  chased n scattered row pointers (two loads per element, unpredictable
+  addresses). Replaced both with flat row-major `Vec<f64>` indexed `r[i*n+k]`:
+  one allocation, a constant stride-n column walk the hardware prefetcher
+  follows. Pure storage change — identical arithmetic and order.
+- Mapping: AP is `sklearn.cluster.AffinityPropagation` (scipy.cluster has no AP),
+  so the recorded ratio is the same-process self-speedup (the load-bearing
+  evidence), not a SciPy oracle.
+- Measured: same-process, same-worker A/B on RCH `vmi1152480`,
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cc cargo run
+  --release -p fsci-cluster --bin perf_ap_ab` (negative-squared-Euclidean blob
+  similarity, median preference, damping 0.9, max_iter 200, best-of-3). Labels
+  BYTE-IDENTICAL at every n (the bin asserts `lab_vecvec == lab_flat`):
+
+  | n | `Vec<Vec>` | flat | self-speedup |
+  | ---: | ---: | ---: | ---: |
+  | 400 | 79.389 ms | 34.639 ms | 2.29x |
+  | 800 | 607.937 ms | 332.062 ms | 1.83x |
+  | 1200 | 1185.946 ms | 839.883 ms | 1.41x |
+
+- Decision: KEEP. Byte-identical (same op order; the A/B bin proves identical
+  labels). Conformance `cargo test -p fsci-cluster` GREEN (exit 0).
+- Gates: my commit touches only the `affinity_propagation` body + the new
+  `bin/perf_ap_ab.rs` (both rustfmt-clean); the crate has pre-existing whole-file
+  fmt drift that was deliberately NOT swept into this commit.
+- Generalizable: the proven `Vec<Vec<f64>>` -> flat row-major lever applies to
+  any dense kernel with column/diagonal access (cf. `linear_sum_assignment`).
+  The win is largest at small n where AP runs fully serial (the column-access
+  availability pass dominates) and tapers as the responsibility pass goes
+  parallel for n^2 >= 2^18.
+
 ## 2026-06-24 - GreenFalcon - REJECT: Delaunay find_simplex_many barycentric-invariant precompute (cache-footprint regression)
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`.

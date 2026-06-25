@@ -281,8 +281,15 @@ pub fn affinity_propagation(
         }
     }
 
-    let mut r = vec![vec![0.0f64; n]; n]; // responsibilities
-    let mut a = vec![vec![0.0f64; n]; n]; // availabilities
+    // Responsibilities `r` and availabilities `a` as flat row-major `n*n`
+    // buffers (`r[i*n+k]`) instead of `Vec<Vec<f64>>`. The availability update
+    // below walks them by COLUMN (fixed k, varying i); with per-row `Vec`s that
+    // chases n scattered heap rows per column, whereas the flat layout is one
+    // allocation with a predictable stride-n walk the prefetcher follows. Pure
+    // storage change — arithmetic and order are unchanged, so output is
+    // bit-for-bit identical (see bin/perf_ap_ab.rs A/B which asserts it).
+    let mut r = vec![0.0f64; n * n]; // responsibilities, row-major
+    let mut a = vec![0.0f64; n * n]; // availabilities, row-major
     let mut last_exemplars: Vec<usize> = Vec::new();
     let mut stable = 0usize;
     let mut iters = 0;
@@ -297,7 +304,7 @@ pub fn affinity_propagation(
             // Largest and second-largest of (a+s) across k', with argmax.
             let (mut max1, mut max1_idx, mut max2) = (f64::NEG_INFINITY, 0usize, f64::NEG_INFINITY);
             for k in 0..n {
-                let v = a[i][k] + s[i][k];
+                let v = a[i * n + k] + s[i][k];
                 if v > max1 {
                     max2 = max1;
                     max1 = v;
@@ -321,17 +328,17 @@ pub fn affinity_propagation(
                 .min(n)
         };
         if nthreads_r <= 1 {
-            for (i, r_row) in r.iter_mut().enumerate() {
+            for (i, r_row) in r.chunks_mut(n).enumerate() {
                 update_resp_row(i, r_row);
             }
         } else {
-            let chunk = n.div_ceil(nthreads_r);
+            let chunk_rows = n.div_ceil(nthreads_r);
             let update_resp_row = &update_resp_row;
             std::thread::scope(|scope| {
-                for (t, r_chunk) in r.chunks_mut(chunk).enumerate() {
-                    let base = t * chunk;
+                for (t, r_block) in r.chunks_mut(chunk_rows * n).enumerate() {
+                    let base = t * chunk_rows;
                     scope.spawn(move || {
-                        for (li, r_row) in r_chunk.iter_mut().enumerate() {
+                        for (li, r_row) in r_block.chunks_mut(n).enumerate() {
                             update_resp_row(base + li, r_row);
                         }
                     });
@@ -340,20 +347,20 @@ pub fn affinity_propagation(
         }
         // Availabilities: a(i,k)=min(0, r(k,k)+Σ_{i'∉{i,k}}max(0,r(i',k))); a(k,k)=Σ_{i'≠k}max(0,·).
         for k in 0..n {
-            let col_pos: f64 = (0..n).map(|i| r[i][k].max(0.0)).sum();
-            let rkk = r[k][k];
+            let col_pos: f64 = (0..n).map(|i| r[i * n + k].max(0.0)).sum();
+            let rkk = r[k * n + k];
             let pos_kk = rkk.max(0.0);
             for i in 0..n {
                 let upd = if i == k {
                     col_pos - pos_kk
                 } else {
-                    (rkk + col_pos - r[i][k].max(0.0) - pos_kk).min(0.0)
+                    (rkk + col_pos - r[i * n + k].max(0.0) - pos_kk).min(0.0)
                 };
-                a[i][k] = damping * a[i][k] + (1.0 - damping) * upd;
+                a[i * n + k] = damping * a[i * n + k] + (1.0 - damping) * upd;
             }
         }
         // Exemplars: points with r(k,k)+a(k,k) > 0.
-        let exemplars: Vec<usize> = (0..n).filter(|&k| r[k][k] + a[k][k] > 0.0).collect();
+        let exemplars: Vec<usize> = (0..n).filter(|&k| r[k * n + k] + a[k * n + k] > 0.0).collect();
         if !exemplars.is_empty() && exemplars == last_exemplars {
             stable += 1;
             if stable >= convergence_iter {
@@ -366,10 +373,10 @@ pub fn affinity_propagation(
     }
 
     // Final exemplars; fall back to the highest-criterion point if none emerged.
-    let mut exemplars: Vec<usize> = (0..n).filter(|&k| r[k][k] + a[k][k] > 0.0).collect();
+    let mut exemplars: Vec<usize> = (0..n).filter(|&k| r[k * n + k] + a[k * n + k] > 0.0).collect();
     if exemplars.is_empty() {
         let best = (0..n)
-            .max_by(|&p, &q| (r[p][p] + a[p][p]).total_cmp(&(r[q][q] + a[q][q])))
+            .max_by(|&p, &q| (r[p * n + p] + a[p * n + p]).total_cmp(&(r[q * n + q] + a[q * n + q])))
             .unwrap_or(0);
         exemplars.push(best);
     }
