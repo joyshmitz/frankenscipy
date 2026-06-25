@@ -6,6 +6,19 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon (claude-code) - KEEP: parallelize MultivariateNormalQmc inverse-transform ndtri map (3.38-5.97x for large n, byte-identical)
+
+- Agent: GreenFalcon (claude-code). `MultivariateNormalQmc::sample` (= scipy.stats
+  .qmc.MultivariateNormalQMC) draws a Sobol base (now parallel) then maps every base
+  coord through ndtri (norm.ppf) in a serial `.map()` — ndtri is an expensive
+  rational+Newton inverse, embarrassingly parallel, and the new bottleneck after the
+  base was parallelized. scipy's MVN-QMC is single-threaded. Added a shared
+  `qmc_par_map` helper (chunked threaded map, byte-identical to the serial map since
+  f is pure); the inverse-transform ndtri map routes through it. De-risk A/B (d=10,
+  EXACT): n=10000 3.38x, n=50000 4.86x, n=200000 **5.97x**; gate len >= 100_000 keeps
+  small draws serial. New test qmc_par_map_matches_serial_above_gate; `cargo test
+  -p fsci-stats qmc` = 72/0. Detail in canonical ledger.
+
 ## 2026-06-25 - GreenFalcon (codex-cli) - KEEP: binned_statistic_dd 3D accumulator fast path (1.32-1.41x self, 3.10-3.24x vs SciPy)
 
 - Agent: GreenFalcon (codex-cli). `AGENT_NAME=GreenFalcon`. `binned_statistic_dd`

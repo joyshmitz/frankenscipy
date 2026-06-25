@@ -4,6 +4,37 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-25 - frankenscipy-greenfalcon-mvnqmc-ndtri-parallel - KEEP: parallelize MultivariateNormalQmc inverse-transform ndtri map (3.38-5.97x for large n, byte-identical)
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`.
+  `MultivariateNormalQmc::sample` (= `scipy.stats.qmc.MultivariateNormalQMC`) draws
+  a Sobol base (now parallel via codex's sobol-chunked-recurrence) and maps every
+  base coordinate through `ndtri` (norm.ppf) in a SERIAL `.map()`. `ndtri` is an
+  expensive rational+Newton inverse and the map is embarrassingly parallel (each
+  coordinate independent), so once the base was parallelized this serial transform
+  became the bottleneck. scipy's MultivariateNormalQMC is single-threaded.
+- Lever: a shared `qmc_par_map(input, f)` helper — above the work gate it splits
+  `input` into disjoint chunks across `std::thread::scope` threads, each writing
+  `f(input[i])` in order. `f` is pure, so the result is BYTE-IDENTICAL to
+  `input.iter().map(f).collect()`. The inverse-transform branch of
+  `standard_normal_samples` routes its `ndtri` map through it.
+- De-risk same-process A/B (serial vs parallel ndtri map, d=10, ALL EXACT):
+  n=500 0.26x, n=2000 0.99x, n=10000 **3.38x**, n=50000 **4.86x**, n=200000
+  **5.97x**. Gate `len >= MVN_QMC_PAR_WORK_GATE (100_000)` (≈ n·d=1e5 at d=10) keeps
+  small draws serial (bit-identical order); threads `min(16, cores, len)`.
+- Conformance GREEN: `cargo test -p fsci-stats qmc` = 72/0 — incl. the new
+  `qmc_par_map_matches_serial_above_gate` (len=150_000 → threaded path, byte-equals
+  the serial map) and the unchanged `mvn_qmc_matches_scipy_*` goldens (small n →
+  serial path). The Cholesky correlation step and the Box–Muller branch stay serial
+  (smaller / non-default); `ndtri` dominates for typical d.
+- Shared-tree note: fsci-stats is co-edited by GreenFalcon (codex-cli); committed
+  after codex landed its Sobol/binned-statistic work, touching only the disjoint
+  MVN-QMC region of qmc.rs. RCH dev-dep toolchain churn (E0514) is flaky across the
+  worker pool — RETRY until a healthy worker builds.
+- Retry/extend: the per-point Cholesky transform (O(n·d²)) parallelizes the same
+  way for large d; the Box–Muller branch (inv_transform=false) is also independent
+  per row — both left serial here (ndtri is the dominant default cost).
+
 ## 2026-06-25 - frankenscipy-greenfalcon-sobol-chunked-recurrence - KEEP: chunk Sobol recurrence for large high-dimensional samples (2.19x at 65k×16; 1.37x vs SciPy)
 
 - Agent: GreenFalcon (codex-cli), `AGENT_NAME=GreenFalcon`. `SobolSampler::sample`

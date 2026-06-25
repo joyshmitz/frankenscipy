@@ -567,6 +567,39 @@ pub struct MultivariateNormalQmc {
     d: usize,
 }
 
+/// Parallel element-wise map of a pure function `f` over `input`, for large arrays
+/// whose per-element cost (e.g. `ndtri`) dominates thread spawn. Each output is
+/// `f(input[i])` written in order across disjoint chunks, so the result is
+/// BYTE-IDENTICAL to `input.iter().map(f).collect()`. Serial below the gate.
+fn qmc_par_map<F: Fn(f64) -> f64 + Sync>(input: &[f64], f: F) -> Vec<f64> {
+    let len = input.len();
+    if len < MVN_QMC_PAR_WORK_GATE {
+        return input.iter().map(|&u| f(u)).collect();
+    }
+    let nthreads = std::thread::available_parallelism()
+        .map_or(1, std::num::NonZeroUsize::get)
+        .min(16)
+        .min(len)
+        .max(1);
+    let mut out = vec![0.0_f64; len];
+    let chunk = len.div_ceil(nthreads);
+    let f = &f;
+    std::thread::scope(|scope| {
+        for (inb, outb) in input.chunks(chunk).zip(out.chunks_mut(chunk)) {
+            scope.spawn(move || {
+                for (o, &u) in outb.iter_mut().zip(inb.iter()) {
+                    *o = f(u);
+                }
+            });
+        }
+    });
+    out
+}
+
+/// Minimum coordinate count above which `MultivariateNormalQmc`'s inverse-transform
+/// `ndtri` map is parallelized (measured crossover ≈ n·d = 1e5 at d=10).
+const MVN_QMC_PAR_WORK_GATE: usize = 100_000;
+
 impl MultivariateNormalQmc {
     /// Construct `N(mean, cov)`; `cov` must be symmetric positive-definite
     /// (the Cholesky path, matching SciPy's default for a provided `cov`).
@@ -672,10 +705,13 @@ impl MultivariateNormalQmc {
         let base = self.engine.sample(n);
         if self.inv_transform {
             // norm.ppf(0.5 + (1 - 1e-10) * (u - 0.5)); the squeeze keeps the
-            // origin sample (u == 0) finite, exactly as SciPy does.
-            base.iter()
-                .map(|&u| fsci_special::ndtri_scalar(0.5 + (1.0 - 1e-10) * (u - 0.5)))
-                .collect()
+            // origin sample (u == 0) finite, exactly as SciPy does. `ndtri` is an
+            // expensive rational+Newton inverse and the map is embarrassingly
+            // parallel (each coordinate independent), so it is distributed across
+            // threads for large arrays — byte-identical to the serial map.
+            qmc_par_map(&base, |u| {
+                fsci_special::ndtri_scalar(0.5 + (1.0 - 1e-10) * (u - 0.5))
+            })
         } else {
             // Box–Muller on consecutive dimension pairs, then take the first d.
             let mut out = vec![0.0; n * self.d];
@@ -3345,6 +3381,22 @@ mod tests {
             cd_lhs < cd_cluster,
             "LHS CD²={cd_lhs} should beat clustered CD²={cd_cluster}"
         );
+    }
+
+    #[test]
+    fn qmc_par_map_matches_serial_above_gate() {
+        // len >= MVN_QMC_PAR_WORK_GATE forces qmc_par_map's threaded path (used by
+        // MultivariateNormalQmc's inverse-transform ndtri map). It must byte-equal
+        // the serial map — f is pure and chunks preserve order.
+        let len = 150_000usize;
+        assert!(len >= MVN_QMC_PAR_WORK_GATE);
+        let input: Vec<f64> = (0..len)
+            .map(|i| (i as f64) / (len as f64)) // base QMC points in [0,1)
+            .collect();
+        let f = |u: f64| fsci_special::ndtri_scalar(0.5 + (1.0 - 1e-10) * (u - 0.5));
+        let parallel = qmc_par_map(&input, f);
+        let serial: Vec<f64> = input.iter().map(|&u| f(u)).collect();
+        assert_eq!(parallel, serial, "parallel ndtri map diverged from serial");
     }
 
     #[test]
