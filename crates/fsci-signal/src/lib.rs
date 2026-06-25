@@ -14610,11 +14610,51 @@ impl ShortTimeFft {
             None => calc_dual_canonical_window(&self.win, self.hop)?,
         };
         let mut x = vec![0.0_f64; n_pts.max(0) as usize];
-        for q_ in q0..q1 {
-            // gather column (all f_pts frequency bins) for slice index q_-p_min
+        // Each slice's inverse FFT is independent and dominant, so compute them
+        // in parallel; the overlap-add (cheap, and order-sensitive because
+        // overlapping slices accumulate into the same samples) stays serial in
+        // q order. BYTE-IDENTICAL: per-slice ifft is deterministic and the
+        // accumulation order is unchanged.
+        let q_count = (q1 - q0).max(0) as usize;
+        let compute_seg = |qi: usize| -> Result<Vec<f64>, SignalError> {
+            let q_ = q0 + qi as i64;
             let pi = (q_ - p_min) as usize;
             let col: Vec<(f64, f64)> = (0..f_pts).map(|f| s[f][pi]).collect();
-            let xs_full = self.ifft_func_onesided(&col)?;
+            self.ifft_func_onesided(&col)
+        };
+        let nthreads = stft_frame_thread_count(q_count, m_num as usize);
+        let segs: Vec<Vec<f64>> = if nthreads <= 1 {
+            (0..q_count)
+                .map(&compute_seg)
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            let chunk = q_count.div_ceil(nthreads);
+            let cs = &compute_seg;
+            type SegChunk = Result<Vec<Vec<f64>>, SignalError>;
+            let chunk_results: Vec<SegChunk> = std::thread::scope(|scope| {
+                let handles: Vec<_> = (0..nthreads)
+                    .filter_map(|t| {
+                        let c0 = t * chunk;
+                        if c0 >= q_count {
+                            return None;
+                        }
+                        let c1 = (c0 + chunk).min(q_count);
+                        Some(scope.spawn(move || (c0..c1).map(cs).collect::<Result<Vec<_>, _>>()))
+                    })
+                    .collect();
+                handles
+                    .into_iter()
+                    .map(|h| h.join().expect("istft worker panicked"))
+                    .collect()
+            });
+            let mut segs = Vec::with_capacity(q_count);
+            for cr in chunk_results {
+                segs.extend(cr?);
+            }
+            segs
+        };
+        for (qi, xs_full) in segs.iter().enumerate() {
+            let q_ = q0 + qi as i64;
             let mut i0 = q_ * hop - mid;
             let i1 = (i0 + m_num).min(n_pts + k0);
             let mut j0 = 0i64;

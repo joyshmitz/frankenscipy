@@ -6,6 +6,35 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon - KEEP: parallelize ShortTimeFFT::istft per-frame inverse FFT (~2.6-3.2x, BYTE-IDENTICAL)
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`.
+- Lever: `ShortTimeFft::istft` (`scipy.signal.ShortTimeFFT.istft`) ran the
+  per-slice inverse FFT + overlap-add SERIALLY. The per-slice inverse FFT
+  (`ifft_func_onesided`) is independent and dominant, so it is now computed
+  across threads (chunked `thread::scope`, collected in q order); the overlap-add
+  — cheap but order-sensitive (overlapping slices accumulate into the same output
+  samples) — stays serial in q order. Same lever as the forward `stft`
+  (`2230436c`); completes the class's forward+inverse parallelization.
+- BYTE-IDENTICAL: per-slice ifft is deterministic and the OLA accumulation order
+  (q0..q1) is unchanged — the parallel phase only reorders the *independent* ifft
+  work, never the reduction.
+- Measured: same-process same-worker A/B (RCH `hz2`, nthreads=16,
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cc cargo run
+  --release -p fsci-signal --bin perf_istft_frames_ab`; serial transform+OLA vs
+  parallel-transform+serial-OLA, public `fsci_fft::fft` as the inverse proxy):
+
+  | frames | m | hop | serial | parallel | speedup | output |
+  | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+  | 2000 | 512 | 256 | 9.69 ms | 3.05 ms | 3.18x | EXACT |
+  | 7800 | 256 | 128 | 20.85 ms | 7.97 ms | 2.62x | EXACT |
+
+  (Lower than the forward `stft` ~5x because the serial overlap-add is a larger
+  Amdahl fraction of istft.)
+- Decision: KEEP. `cargo test -p fsci-signal stft_istft_roundtrip` 1/1 GREEN.
+- Gates: edit only to `ShortTimeFft::istft` + new microbench bin (hand-formatted;
+  no `cargo fmt -p fsci-signal` whole-file sweep).
+
 ## 2026-06-25 - GreenFalcon - KEEP: parallelize ShortTimeFFT::stft over frames (~4.6-5.5x, BYTE-IDENTICAL)
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`.
