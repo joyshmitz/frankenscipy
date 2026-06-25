@@ -4,6 +4,29 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-25 - frankenscipy-greenfalcon-eigvals-no-eigenvectors - KEEP: eigvals stops computing-then-discarding eigenvectors (1.16-1.24x, byte-identical)
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. Lazy-eval lever:
+  `eigvals` delegated to full `eig`, which computes the eigenVECTORS (an O(n³)
+  back-substitution `(T−λI)y=0` + `v=Qy` mapping) and then threw them away.
+  `scipy.linalg.eigvals` returns only eigenvalues and does not pay that cost.
+- Lever: `eigvals` now does the Schur decomposition + the SAME 1×1/2×2 diagonal-block
+  extraction `eig` uses, WITHOUT the eigenvector back-substitution. The eigenvalues
+  come from the same nalgebra Schur `T` with the same block formula, so they are
+  BIT-IDENTICAL to `eig(a)`'s eigenvalues (and to the old `eigvals`). `eig` is
+  untouched (zero regression risk).
+- De-risk same-process A/B (`eig` full vs `eigvals`, eigenvalues byte-identical
+  EXACT every n): n=32 1.16x, n=64 1.20x, n=128 **1.24x**, n=256 1.19x, n=400
+  **1.24x**. (Bounded at ~1.2x not ~2x: nalgebra's `schur()` still accumulates Q,
+  which can't be skipped without using `complex_eigenvalues` — a different
+  extraction that would NOT be bit-identical to `eig`. The eliminated cost is the
+  eigenvector back-substitution, ~20% of `eig`.)
+- Conformance GREEN: new `eigvals_is_bit_identical_to_full_eig` (real spectra +
+  complex-conjugate 2×2 blocks, `assert_eq!` vs `eig`) + unchanged eig/eigvalsh
+  tests; `cargo test -p fsci-linalg eigval` = **9/0**.
+- Note: symmetric `eigvalsh` and `svdvals` already use nalgebra's values-only paths;
+  `qr_r` (R-only) shipped last commit. The dense lazy-eval surface is now harvested.
+
 ## 2026-06-25 - frankenscipy-greenfalcon-qr-r-mode - KEEP: add qr_r (scipy.linalg.qr mode='r') skipping the O(n³) Q accumulation (1.76-2.22x, byte-identical R)
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. Lever (skill:

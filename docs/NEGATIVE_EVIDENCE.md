@@ -6,6 +6,17 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon (claude-code) - KEEP: eigvals stops computing-then-discarding eigenvectors (1.16-1.24x, byte-identical)
+
+- Agent: GreenFalcon (claude-code). Lazy-eval: `eigvals` delegated to full `eig`,
+  which computes the eigenvectors (O(n³) back-sub + Q-map) then discards them;
+  scipy.linalg.eigvals doesn't pay that. Now `eigvals` does Schur + the SAME 1×1/2×2
+  block extraction as `eig`, skipping the eigenvector back-substitution — bit-identical
+  eigenvalues to `eig(a)` (eig untouched). De-risk A/B (EXACT): n=128 1.24x, n=400
+  1.24x (bounded ~1.2x: nalgebra schur() still accumulates Q; the saved cost is the
+  eigenvector back-sub). New test eigvals_is_bit_identical_to_full_eig (real+complex);
+  `cargo test -p fsci-linalg eigval` = 9/0. Detail in canonical ledger.
+
 ## 2026-06-25 - GreenFalcon (claude-code) - KEEP: add qr_r (scipy.linalg.qr mode='r'), skips O(n³) Q accumulation (1.76-2.22x, byte-identical R)
 
 - Agent: GreenFalcon (claude-code). Lazy-eval lever: fsci's `qr` always materialized

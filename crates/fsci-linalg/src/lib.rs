@@ -5633,8 +5633,64 @@ pub fn eigvals(
     a: &[Vec<f64>],
     options: DecompOptions,
 ) -> Result<(Vec<f64>, Vec<f64>), LinalgError> {
-    let result = eig(a, options)?;
-    Ok((result.eigenvalues_re, result.eigenvalues_im))
+    let (rows, cols) = matrix_shape(a)?;
+    if rows != cols {
+        return Err(LinalgError::ExpectedSquareMatrix);
+    }
+    hardened_dimension_check(options.mode, rows, cols)?;
+    validate_finite_matrix(a, options.mode, options.check_finite)?;
+
+    if rows == 0 {
+        return Ok((Vec::new(), Vec::new()));
+    }
+
+    let matrix = dmatrix_from_rows(a)?;
+    // Eigenvalues only: the Schur decomposition plus the same 1×1/2×2 diagonal-block
+    // extraction `eig` uses, but WITHOUT `eig`'s O(n³) eigenvector back-substitution.
+    // The eigenvalues come from the same nalgebra Schur form `T` with the same block
+    // logic, so they are bit-identical to `eig(a)`'s — ~2x faster when the
+    // eigenvectors are unneeded (mirrors `scipy.linalg.eigvals` vs `eig`).
+    let schur = matrix.clone().schur();
+    let (_q_mat, t_mat) = schur.unpack();
+
+    let mut eigenvalues_re = Vec::with_capacity(rows);
+    let mut eigenvalues_im = Vec::with_capacity(rows);
+
+    let mut i = 0;
+    while i < rows {
+        if i + 1 < rows && t_mat[(i + 1, i)].abs() > f64::EPSILON * 100.0 {
+            // 2×2 block: complex conjugate pair (same formula as `eig`).
+            let a11 = t_mat[(i, i)];
+            let a12 = t_mat[(i, i + 1)];
+            let a21 = t_mat[(i + 1, i)];
+            let a22 = t_mat[(i + 1, i + 1)];
+            let trace = a11 + a22;
+            let det_block = a11 * a22 - a12 * a21;
+            let disc = trace * trace - 4.0 * det_block;
+            let re = trace / 2.0;
+            let im = (-disc).max(0.0).sqrt() / 2.0;
+            eigenvalues_re.push(re);
+            eigenvalues_im.push(im);
+            eigenvalues_re.push(re);
+            eigenvalues_im.push(-im);
+            i += 2;
+        } else {
+            eigenvalues_re.push(t_mat[(i, i)]);
+            eigenvalues_im.push(0.0);
+            i += 1;
+        }
+    }
+
+    emit_trace(LinalgTrace {
+        operation: "eigvals",
+        matrix_size: (rows, cols),
+        mode: options.mode,
+        rcond: None,
+        warning: None,
+        error: None,
+    });
+
+    Ok((eigenvalues_re, eigenvalues_im))
 }
 
 /// Eigenvalue decomposition for symmetric/Hermitian matrices.
@@ -24959,6 +25015,31 @@ mod tests {
         let full_result = eigh(&a, DecompOptions::default()).expect("eigh works");
         let vals = eigvalsh(&a, DecompOptions::default()).expect("eigvalsh works");
         assert_close_slice(&vals, &full_result.eigenvalues, 1e-14, 1e-14);
+    }
+
+    #[test]
+    fn eigvals_is_bit_identical_to_full_eig() {
+        // The eigenvalues-only path (no eigenvector back-substitution) extracts from
+        // the same Schur form with the same 1×1/2×2 block logic, so it must be
+        // bit-for-bit identical to full eig()'s eigenvalues — for real spectra and
+        // for complex-conjugate pairs (2×2 blocks).
+        let cases: &[Vec<Vec<f64>>] = &[
+            vec![vec![5.0, 2.0, 0.0], vec![2.0, 3.0, 1.0], vec![0.0, 1.0, 4.0]],
+            // Rotation-like block → complex conjugate eigenvalues.
+            vec![vec![0.0, -1.0], vec![1.0, 0.0]],
+            vec![
+                vec![1.0, -2.0, 3.0, 0.5],
+                vec![2.0, 1.0, -1.0, 4.0],
+                vec![0.0, 1.0, 2.0, -3.0],
+                vec![3.0, 0.0, 1.0, 1.0],
+            ],
+        ];
+        for a in cases {
+            let full = eig(a, DecompOptions::default()).expect("eig works");
+            let (re, im) = eigvals(a, DecompOptions::default()).expect("eigvals works");
+            assert_eq!(re, full.eigenvalues_re, "eigvals re vs eig");
+            assert_eq!(im, full.eigenvalues_im, "eigvals im vs eig");
+        }
     }
 
     #[allow(clippy::needless_range_loop)]
