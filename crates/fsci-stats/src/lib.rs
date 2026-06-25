@@ -8060,13 +8060,9 @@ impl Wishart {
         }
         let chol_x = cholesky_decompose(x)?;
         let ln_det_x = 2.0 * (0..p).map(|i| chol_x[i][i].ln()).sum::<f64>();
-        // tr(V⁻¹X) = ‖L_V⁻¹ · chol(X)‖_F² (X = chol_x·chol_xᵀ).
-        let mut tr = 0.0_f64;
-        for j in 0..p {
-            let col: Vec<f64> = (0..p).map(|i| chol_x[i][j]).collect();
-            let w = solve_lower_triangular(&self.chol_v, &col)?;
-            tr += w.iter().map(|&v| v * v).sum::<f64>();
-        }
+        // tr(V⁻¹X) = ‖L_V⁻¹ · chol(X)‖_F² (X = chol_x·chol_xᵀ), via one multi-RHS
+        // solve (byte-identical to the per-column ‖solve(L_V, col_j)‖² loop).
+        let tr = frob_sq_inv_chol_cols(&self.chol_v, &chol_x, p)?;
         let (n, pf) = (self.df, p as f64);
         Ok((n - pf - 1.0) / 2.0 * ln_det_x
             - 0.5 * tr
@@ -8120,13 +8116,9 @@ impl InvWishart {
         }
         let chol_x = cholesky_decompose(x)?;
         let ln_det_x = 2.0 * (0..p).map(|i| chol_x[i][i].ln()).sum::<f64>();
-        // tr(V·X⁻¹) = ‖L_X⁻¹ · chol(V)‖_F² (V = chol_v·chol_vᵀ).
-        let mut tr = 0.0_f64;
-        for j in 0..p {
-            let col: Vec<f64> = (0..p).map(|i| self.chol_v[i][j]).collect();
-            let w = solve_lower_triangular(&chol_x, &col)?;
-            tr += w.iter().map(|&v| v * v).sum::<f64>();
-        }
+        // tr(V·X⁻¹) = ‖L_X⁻¹ · chol(V)‖_F² (V = chol_v·chol_vᵀ), via one multi-RHS
+        // solve (byte-identical to the per-column ‖solve(L_X, col_j)‖² loop).
+        let tr = frob_sq_inv_chol_cols(&chol_x, &self.chol_v, p)?;
         let (n, pf) = (self.df, p as f64);
         Ok(n / 2.0 * self.ln_det_v
             - n * pf / 2.0 * 2.0_f64.ln()
@@ -12115,6 +12107,47 @@ fn solve_lower_triangular(lower: &[Vec<f64>], rhs: &[f64]) -> Result<Vec<f64>, S
         solution[i] = (rhs[i] - sum) / lower[i][i];
     }
     Ok(solution)
+}
+
+/// Frobenius² of `L⁻¹ · rhs` (both p×p, `L` lower-triangular), i.e.
+/// `Σ_{i,j} (L⁻¹ rhs)[i][j]²`. Solves all p columns at once via a single
+/// multi-RHS forward substitution (`acc[j] = Σ_{k<i} L[i][k]·W[k][j]`,
+/// contiguous inner j-loop = axpy across RHS, auto-vectorized) instead of p
+/// separate `solve_lower_triangular` calls. BYTE-IDENTICAL to the per-column
+/// loop: `acc[j]` left-folds k in 0..i from 0.0 (same as `(0..i).map(..).sum()`),
+/// and the trace is accumulated column-major to match `Σ_j ‖solve(L, col_j)‖²`
+/// term-for-term. Replaces the gather/alloc/solve/‖·‖² loop used by the
+/// Wishart / inverse-Wishart logpdf trace terms.
+fn frob_sq_inv_chol_cols(l: &[Vec<f64>], rhs: &[Vec<f64>], p: usize) -> Result<f64, StatsError> {
+    let mut w = vec![vec![0.0_f64; p]; p];
+    let mut acc = vec![0.0_f64; p];
+    for i in 0..p {
+        let lii = l[i][i];
+        if lii == 0.0 {
+            return Err(StatsError::InvalidArgument(
+                "singular lower-triangular system".to_string(),
+            ));
+        }
+        for a in acc.iter_mut() {
+            *a = 0.0;
+        }
+        for k in 0..i {
+            let lik = l[i][k];
+            let wk = &w[k];
+            for (a, &wkj) in acc.iter_mut().zip(wk.iter()) {
+                *a += lik * wkj;
+            }
+        }
+        let wi = &mut w[i];
+        for j in 0..p {
+            wi[j] = (rhs[i][j] - acc[j]) / lii;
+        }
+    }
+    let mut tr = 0.0_f64;
+    for j in 0..p {
+        tr += (0..p).map(|i| w[i][j] * w[i][j]).sum::<f64>();
+    }
+    Ok(tr)
 }
 
 fn sample_standard_normals(n: usize, rng: &mut impl Rng) -> Vec<f64> {

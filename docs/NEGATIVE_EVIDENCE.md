@@ -6,6 +6,39 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon - KEEP: Wishart/inv-Wishart logpdf trace via vectorized multi-RHS triangular solve (~2.3-3.4x, BYTE-IDENTICAL)
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`.
+- Lever: `Wishart::logpdf` (`tr(V⁻¹X) = ‖L_V⁻¹·chol(X)‖²`) and `InvWishart::logpdf`
+  (`tr(V·X⁻¹) = ‖L_X⁻¹·chol(V)‖²`) computed the trace as p SEPARATE single-RHS
+  `solve_lower_triangular` calls (gather column, alloc, solve, ‖·‖²) against a
+  shared p×p Cholesky factor. Factored into one helper `frob_sq_inv_chol_cols`
+  that solves all p columns via a single multi-RHS forward substitution (the same
+  proven lever as the matrix-normal W build below): `acc[j] = Σ_{k<i}
+  L[i][k]·W[k][j]` with the contiguous inner j-loop auto-vectorizing, then a
+  column-major ‖·‖² sum.
+- BYTE-IDENTICAL: `acc[j]` left-folds k in 0..i from 0.0 (same as the per-column
+  `(0..i).map(..).sum()`), and the trace is summed column-major to match
+  `Σ_j ‖solve(L,col_j)‖²` term-for-term.
+- Measured: same-process same-worker A/B microbench (RCH,
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cc cargo run
+  --release -p fsci-stats --bin perf_wishart_tr_ab`; `tr_old` p single-RHS solves
+  vs `tr_new` multi-RHS):
+
+  | p | old | new | speedup | traces |
+  | ---: | ---: | ---: | ---: | --- |
+  | 32 | 12.903 us | 5.526 us | 2.33x | EXACT |
+  | 64 | 90.442 us | 31.622 us | 2.86x | EXACT |
+  | 128 | 745.044 us | 218.706 us | 3.41x | EXACT |
+  | 200 | 3017.738 us | 882.911 us | 3.42x | EXACT |
+
+- Decision: KEEP (grows with p). `cargo test -p fsci-stats wishart` =
+  `wishart_matches_scipy` + `invwishart_matches_scipy` both GREEN (byte-identical).
+- Gates: one new helper + two call-site swaps + new microbench bin
+  (hand-formatted; no `cargo fmt -p fsci-stats` whole-file sweep). The same
+  `for j { solve(L, col) }`-with-shared-L pattern remains in the matrix-normal
+  Mahalanobis Y-build (logpdf at ~7993) — a candidate follow-up.
+
 ## 2026-06-25 - GreenFalcon - KEEP: matrix-normal logpdf W build via vectorized multi-RHS triangular solve (~4.3x, BYTE-IDENTICAL)
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`.
