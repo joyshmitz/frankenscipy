@@ -6,6 +6,48 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon (codex-cli) - KEEP: fuse low-order lfilter validation into DF2T pass (1.08x lfilter, 2.48x filtfilt vs SciPy)
+
+- Agent: GreenFalcon (codex-cli), `AGENT_NAME=GreenFalcon`.
+- Lever: `signal::lfilter` already had scalar-register fast paths for nfilt
+  `1..=3`, but still scanned the full input once for finite validation before
+  the actual Direct Form II transposed pass. The low-order path now validates
+  samples inside the filtering loop, eliminating one O(n) pass and the temporary
+  padded coefficient/delay vectors while preserving the generic higher-order
+  path.
+- Artifact mapping: alien-graveyard §A1 numeric-kernel locality plus the
+  certified-rewrite artifact from alien-artifact-coding: a semantics-preserving
+  pass fusion with the same finite-input failure class and unchanged recurrence
+  order.
+- Behavior proof: coefficients are still normalized once by `a0`; missing
+  padded coefficients remain exact `0.0`; each output sample uses the same
+  `yi = b0*x + d` and delay-state recurrence in the same floating-point order.
+  Invalid `zi` still checks `x` first before returning the `zi` error, matching
+  the previous error precedence for combined-bad inputs.
+- Fresh baseline before edit: warm local Criterion
+  `cargo bench -p fsci-signal --bench signal_bench
+  'filtering|medfilt/8192|design/firls' -- --noplot --sample-size 10
+  --measurement-time 1 --warm-up-time 1` measured `lfilter` `31.574 us` and
+  `filtfilt` `83.110 us` medians.
+- Measured after edit: warm local Criterion
+  `cargo bench -p fsci-signal --bench signal_bench
+  'filtering/lfilter/4096_biquad|filtering/filtfilt/4096_biquad' -- --noplot
+  --sample-size 10 --measurement-time 1 --warm-up-time 1` measured `lfilter`
+  `22.562 us` (`-28.656%`) and `filtfilt` `50.765 us` (`-42.766%`).
+- Fresh SciPy oracle: `python3 docs/perf_oracle_signal.py` measured
+  `scipy lfilter 4096: 24.4 us` and `scipy filtfilt 4096: 126.0 us`, so current
+  Rust is `24.4 / 22.562 = 1.08x` faster for `lfilter` and
+  `126.0 / 50.765 = 2.48x` faster for `filtfilt`.
+- Proof: `cargo test -p fsci-signal lfilter --lib -- --nocapture` GREEN (17
+  passed); `cargo test -p fsci-signal filtfilt --lib -- --nocapture` GREEN (10
+  passed); live SciPy oracle `FSCI_REQUIRE_SCIPY_ORACLE=1 cargo test -p
+  fsci-conformance --test diff_signal_lfilter -- --nocapture` GREEN.
+- Gates: `cargo check -p fsci-signal --all-targets` GREEN. Strict whole-crate
+  fmt/clippy/UBS are still known to have unrelated pre-existing repository
+  inventory; this hunk is narrow to `lfilter_with_state` and its helper.
+- Decision: KEEP. This is a measured head-to-head SciPy win from one
+  semantics-preserving validation/filter pass fusion.
+
 ## 2026-06-25 - GreenFalcon (codex-cli) - KEEP: fuse two-section sosfilt cascade (1.60x vs SciPy)
 
 - Agent: GreenFalcon (codex-cli), `AGENT_NAME=GreenFalcon`.

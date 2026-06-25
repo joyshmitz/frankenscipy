@@ -7508,12 +7508,17 @@ pub fn lfilter_with_state(
         ));
     }
     validate_ba_coefficients_finite(b, a, "lfilter")?;
-    validate_real_values_finite(x, "lfilter input samples must be finite")?;
 
     let a0 = a[0];
     let nb = b.len();
     let na = a.len();
     let nfilt = nb.max(na);
+
+    if nfilt <= 3 {
+        return lfilter_low_order_with_state(b, a, a0, x, zi, nfilt);
+    }
+
+    validate_real_values_finite(x, "lfilter input samples must be finite")?;
 
     // Resolves [frankenscipy-rvwvw]: pad b_norm/a_norm to length
     // nfilt and hoist b0 so the inner loop is N · nfilt straight
@@ -7594,6 +7599,90 @@ pub fn lfilter_with_state(
 
     let zf = d[..nfilt - 1].to_vec();
     Ok((y, zf))
+}
+
+fn lfilter_low_order_with_state(
+    b: &[f64],
+    a: &[f64],
+    a0: f64,
+    x: &[f64],
+    zi: Option<&[f64]>,
+    nfilt: usize,
+) -> Result<(Vec<f64>, Vec<f64>), SignalError> {
+    let expected_zi = nfilt - 1;
+    let mut d0 = 0.0;
+    let mut d1 = 0.0;
+    if let Some(initial) = zi {
+        if initial.len() != expected_zi {
+            validate_real_values_finite(x, "lfilter input samples must be finite")?;
+            return Err(SignalError::InvalidArgument(format!(
+                "zi length ({}) must be nfilt-1 ({})",
+                initial.len(),
+                expected_zi
+            )));
+        }
+        if initial.iter().any(|value| !value.is_finite()) {
+            validate_real_values_finite(x, "lfilter input samples must be finite")?;
+            return Err(SignalError::NonFiniteInput {
+                detail: "lfilter initial conditions must be finite".to_string(),
+            });
+        }
+        if expected_zi > 0 {
+            d0 = initial[0];
+        }
+        if expected_zi > 1 {
+            d1 = initial[1];
+        }
+    }
+
+    let b0 = b[0] / a0;
+    let b1 = if b.len() > 1 { b[1] / a0 } else { 0.0 };
+    let b2 = if b.len() > 2 { b[2] / a0 } else { 0.0 };
+    let a1 = if a.len() > 1 { a[1] / a0 } else { 0.0 };
+    let a2 = if a.len() > 2 { a[2] / a0 } else { 0.0 };
+
+    let mut y = Vec::with_capacity(x.len());
+    match nfilt {
+        1 => {
+            for &xi in x {
+                if !xi.is_finite() {
+                    return Err(SignalError::NonFiniteInput {
+                        detail: "lfilter input samples must be finite".to_string(),
+                    });
+                }
+                y.push(b0 * xi);
+            }
+            Ok((y, Vec::new()))
+        }
+        2 => {
+            for &xi in x {
+                if !xi.is_finite() {
+                    return Err(SignalError::NonFiniteInput {
+                        detail: "lfilter input samples must be finite".to_string(),
+                    });
+                }
+                let yi = b0 * xi + d0;
+                y.push(yi);
+                d0 = b1 * xi - a1 * yi;
+            }
+            Ok((y, vec![d0]))
+        }
+        3 => {
+            for &xi in x {
+                if !xi.is_finite() {
+                    return Err(SignalError::NonFiniteInput {
+                        detail: "lfilter input samples must be finite".to_string(),
+                    });
+                }
+                let yi = b0 * xi + d0;
+                y.push(yi);
+                d0 = b1 * xi - a1 * yi + d1;
+                d1 = b2 * xi - a2 * yi;
+            }
+            Ok((y, vec![d0, d1]))
+        }
+        _ => unreachable!("low-order lfilter only handles nfilt <= 3"),
+    }
 }
 
 /// Apply `lfilter` across one axis of a rectangular 2-D input.
@@ -29595,7 +29684,6 @@ mod tests {
         }
     }
 }
-
 
 
 
