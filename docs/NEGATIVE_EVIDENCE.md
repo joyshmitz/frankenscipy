@@ -7034,3 +7034,23 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   signal verified otherwise dominant (savgol/convolve2d/correlate2d/lfilter-parity). The remaining
   un-dominated workloads are all hard constant-factor/numerical walls: FFT non-pow2 (resample/spectral),
   Radau solve_ivp 2x, eigsh 1.3-1.6x, hyperu/kv series.
+
+## 2026-06-24 - REJECT: signal.medfilt2d sortable-key window select regresses 1.51x; current path 1.19x faster than SciPy
+- Agent: codex / HazyCanyon. Tested porting the proven 1-D `medfilt` sortable-`u64` selection trick to
+  2-D `medfilt2d` by keying each 7x7 window and using integer `select_nth_unstable` instead of
+  `select_nth_unstable_by(..., f64::total_cmp)`.
+- MEASURED on `ovh-b`, `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-p2`, crate-scoped
+  `cargo bench -p fsci-signal --bench signal_bench -- medfilt2d_gauntlet_scipy --noplot`: baseline/current
+  Rust 20.919 ms; key-select candidate 31.537 ms, Criterion +51.821% regression (0.66x baseline speed).
+  Candidate is also 0.79x SciPy speed using the same-machine SciPy timing below, so the lever was reverted.
+- BOLD-VERIFY vs SciPy after revert: worker-local SciPy venv (`numpy 2.5.0`, `scipy 1.18.0`) on the same
+  `ovh-b` worker; current Rust 20.902 ms vs SciPy `signal.medfilt2d` 24.782 ms = 1.19x faster than SciPy.
+  Focused conformance stayed green: `cargo test -p fsci-signal medfilt2d --lib -- --nocapture` passed 3/3.
+- GreenFalcon re-verified before landing with `AGENT_NAME=GreenFalcon`,
+  `RUSTUP_TOOLCHAIN=nightly-2026-06-10`, and
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a`: local SciPy comparator row was
+  Rust 14.763 ms vs SciPy 19.421 ms = 1.32x faster than SciPy. RCH focused conformance passed 3/3 on
+  worker `vmi1149989`.
+- CONCLUSION: do not retry `medfilt2d` full-window key conversion. The conversion cost dominates for 2-D
+  windows; the existing `f64::total_cmp` selection path already beats SciPy on this probe. Evidence:
+  `tests/artifacts/perf/2026-06-24-hazycanyon-signal-medfilt2d-keyselect/EVIDENCE.md`.

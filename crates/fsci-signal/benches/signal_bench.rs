@@ -1,8 +1,8 @@
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{criterion_group, criterion_main, Criterion};
 use fsci_signal::{
-    ConvolveMode, DetrendType, FindPeaksCwtOptions, FirWindow, SosSection, coherence, csd, cwt,
-    detrend, fftconvolve, filtfilt, find_peaks_cwt, firls, firwin, freqz, hilbert, lfilter,
-    medfilt, mfcc, order_filter, remez, resample, ricker, sosfilt, welch,
+    coherence, csd, cwt, detrend, fftconvolve, filtfilt, find_peaks_cwt, firls, firwin, freqz,
+    hilbert, lfilter, medfilt, medfilt2d, mfcc, order_filter, remez, resample, ricker, sosfilt,
+    welch, ConvolveMode, DetrendType, FindPeaksCwtOptions, FirWindow, SosSection,
 };
 use std::hint::black_box;
 use std::io::Write;
@@ -248,6 +248,92 @@ fn scipy_signal_available() -> bool {
     child.wait().map(|status| status.success()).unwrap_or(false)
 }
 
+fn deterministic_image(rows: usize, cols: usize) -> Vec<f64> {
+    (0..rows * cols)
+        .map(|idx| {
+            let r = idx / cols;
+            let c = idx % cols;
+            let t = idx as f64 / (rows * cols) as f64;
+            (19.0 * t).sin()
+                + 0.25 * (r as f64 * 0.17).cos()
+                + 0.15 * (c as f64 * 0.11).sin()
+                + 0.01 * ((idx * 37 % 23) as f64 - 11.0)
+        })
+        .collect()
+}
+
+fn scipy_medfilt2d_duration(
+    rows: usize,
+    cols: usize,
+    kernel: usize,
+    iters: u64,
+) -> Option<Duration> {
+    let script = r#"
+import sys
+import time
+import numpy as np
+import scipy.signal as sig
+
+rows = int(sys.argv[1])
+cols = int(sys.argv[2])
+kernel = int(sys.argv[3])
+iters = int(sys.argv[4])
+idx = np.arange(rows * cols, dtype=np.float64)
+r = np.floor_divide(idx.astype(np.int64), cols).astype(np.float64)
+c = np.mod(idx.astype(np.int64), cols).astype(np.float64)
+t = idx / float(rows * cols)
+image = (np.sin(19.0 * t)
+         + 0.25 * np.cos(r * 0.17)
+         + 0.15 * np.sin(c * 0.11)
+         + 0.01 * (np.mod(idx * 37.0, 23.0) - 11.0)).reshape(rows, cols)
+sig.medfilt2d(image, kernel_size=kernel)
+start = time.perf_counter()
+checksum = 0.0
+for _ in range(iters):
+    out = sig.medfilt2d(image, kernel_size=kernel)
+    checksum += float(out[rows // 2, cols // 2])
+elapsed = time.perf_counter() - start
+if not np.isfinite(checksum):
+    raise SystemExit("non-finite checksum")
+print(f"{elapsed:.17f}")
+"#;
+    let mut child = Command::new("python3")
+        .args([
+            "-",
+            &rows.to_string(),
+            &cols.to_string(),
+            &kernel.to_string(),
+            &iters.to_string(),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn scipy medfilt2d oracle");
+    child
+        .stdin
+        .as_mut()
+        .expect("open scipy medfilt2d oracle stdin")
+        .write_all(script.as_bytes())
+        .expect("write scipy medfilt2d oracle script");
+    let output = child
+        .wait_with_output()
+        .expect("wait for scipy medfilt2d oracle");
+    if !output.status.success() {
+        eprintln!(
+            "scipy medfilt2d oracle failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return None;
+    }
+    let stdout = String::from_utf8(output.stdout).expect("utf8 scipy medfilt2d timing");
+    let seconds: f64 = stdout
+        .trim()
+        .parse()
+        .expect("parse scipy medfilt2d timing seconds");
+    Some(Duration::from_secs_f64(seconds))
+}
+
 fn bench_coherence_gauntlet_scipy(c: &mut Criterion) {
     let mut group = c.benchmark_group("coherence_gauntlet_scipy");
     group.sample_size(10);
@@ -368,6 +454,38 @@ fn bench_medfilt(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_medfilt2d_gauntlet_scipy(c: &mut Criterion) {
+    const ROWS: usize = 256;
+    const COLS: usize = 256;
+    const KERNEL: usize = 7;
+    let image = deterministic_image(ROWS, COLS);
+    let mut group = c.benchmark_group("medfilt2d_gauntlet_scipy");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(2));
+    group.bench_function("256x256_k7_rust", |b| {
+        b.iter(|| {
+            medfilt2d(
+                black_box(&image),
+                black_box((ROWS, COLS)),
+                black_box((KERNEL, KERNEL)),
+            )
+            .expect("medfilt2d")
+        })
+    });
+    if scipy_signal_available() {
+        group.bench_function("256x256_k7_scipy", |b| {
+            b.iter_custom(|iters| {
+                scipy_medfilt2d_duration(ROWS, COLS, KERNEL, iters)
+                    .expect("scipy medfilt2d oracle should run after availability check")
+            })
+        });
+    } else {
+        eprintln!("skipping 256x256_k7_scipy: python3 cannot import scipy.signal");
+    }
+    group.finish();
+}
+
 fn bench_order_filter(c: &mut Criterion) {
     let signal = deterministic_signal(8192);
     let mut group = c.benchmark_group("order_filter");
@@ -453,6 +571,7 @@ criterion_group!(
     bench_wavelets,
     bench_design,
     bench_medfilt,
+    bench_medfilt2d_gauntlet_scipy,
     bench_order_filter
 );
 criterion_main!(benches);
