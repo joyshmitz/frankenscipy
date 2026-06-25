@@ -8339,13 +8339,34 @@ impl MatrixT {
         let c: Vec<Vec<f64>> = (0..m)
             .map(|i| (0..n).map(|j| x[i][j] - self.mean[i][j]).collect())
             .collect();
-        // W = L_U⁻¹ C (m×n); A = WᵀW = Cᵀ U⁻¹ C (n×n).
+        // W = L_U⁻¹ C (m×n), solved as ONE multi-RHS forward substitution over all
+        // n columns instead of n separate single-RHS solves. For each row i,
+        // `acc[j] = Σ_{k<i} L[i][k]·w[k][j]` accumulates k in 0..i order — the same
+        // left-fold (from 0.0) as the per-column `(0..i).map(..).sum()` — so the
+        // result is BYTE-IDENTICAL, while the contiguous inner j-loops vectorize
+        // (axpy across RHS) and the per-column gather/alloc/scatter is gone.
         let mut w = vec![vec![0.0_f64; n]; m];
-        for j in 0..n {
-            let col: Vec<f64> = (0..m).map(|i| c[i][j]).collect();
-            let wc = solve_lower_triangular(&self.chol_u, &col)?;
-            for i in 0..m {
-                w[i][j] = wc[i];
+        let mut acc = vec![0.0_f64; n];
+        for i in 0..m {
+            let lii = self.chol_u[i][i];
+            if lii == 0.0 {
+                return Err(StatsError::InvalidArgument(
+                    "singular lower-triangular system".to_string(),
+                ));
+            }
+            for a in acc.iter_mut() {
+                *a = 0.0;
+            }
+            for k in 0..i {
+                let lik = self.chol_u[i][k];
+                let wk = &w[k];
+                for (a, &wkj) in acc.iter_mut().zip(wk.iter()) {
+                    *a += lik * wkj;
+                }
+            }
+            let wi = &mut w[i];
+            for j in 0..n {
+                wi[j] = (c[i][j] - acc[j]) / lii;
             }
         }
         // V + A (n×n), then ln det via Cholesky; ln|I + CᵀU⁻¹C·V⁻¹| = ln|V+A| - ln|V|.

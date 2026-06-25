@@ -6,6 +6,38 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon - KEEP: matrix-normal logpdf W build via vectorized multi-RHS triangular solve (~4.3x, BYTE-IDENTICAL)
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`.
+- Lever: `MatrixNormal::logpdf` built `W = L_U⁻¹ C` (m×n) as n SEPARATE single-RHS
+  lower-triangular solves — per column: gather c[*][j], `solve_lower_triangular`
+  (alloc a solution Vec), scatter into w[*][j]. Replaced with ONE multi-RHS
+  forward substitution over all n columns: for each row i,
+  `acc[j] = Σ_{k<i} L[i][k]·w[k][j]` (contiguous inner j-loop = axpy across RHS,
+  auto-vectorized), then `w[i][j] = (c[i][j] - acc[j]) / L[i][i]`. This is the
+  proven "vectorize the triangular solve across multiple RHS" lever (cf. the
+  `inv` 2.72x TRSM). It also drops the n per-column gather/alloc/scatter.
+- BYTE-IDENTICAL: `acc[j]` accumulates k in 0..i order from 0.0 — the same
+  left-fold as the per-column `(0..i).map(|k| L[i][k]·sol[k]).sum()` — so each
+  `w[i][j]` is bit-equal to the per-column solve.
+- Measured: same-process same-worker A/B microbench (RCH,
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cc cargo run
+  --release -p fsci-stats --bin perf_matnorm_w_ab`; `w_old` n single-RHS solves
+  vs `w_new` multi-RHS, random well-conditioned L):
+
+  | m | n | old | new | speedup | matrices |
+  | ---: | ---: | ---: | ---: | ---: | --- |
+  | 500 | 64 | 5.233 ms | 1.200 ms | 4.36x | EXACT |
+  | 1000 | 64 | 21.030 ms | 4.981 ms | 4.22x | EXACT |
+  | 1000 | 128 | 42.845 ms | 9.861 ms | 4.35x | EXACT |
+
+- Decision: KEEP. ~4.3x, exact bitwise equality of the W matrices.
+  `cargo test -p fsci-stats matrix_normal` = `matrix_normal_matches_scipy` GREEN.
+  Together with the Gram-symmetry entry below, both dominant O(·) terms of the
+  tall (m≫n) matrix-normal logpdf are now addressed.
+- Gates: edit only to the W build + new microbench bin (hand-formatted; no
+  `cargo fmt -p fsci-stats` whole-file sweep).
+
 ## 2026-06-25 - GreenFalcon - KEEP: matrix-normal logpdf Gram upper-triangle symmetry (~2x, BYTE-IDENTICAL)
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`.
