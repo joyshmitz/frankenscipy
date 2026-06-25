@@ -7907,16 +7907,40 @@ impl MultivariateT {
         let const_part = ln_gamma(0.5 * (df + p)) - ln_gamma(0.5 * df)
             - 0.5 * p * (df.ln() + pi.ln())
             - 0.5 * self.log_det;
-        let eval = |x: &[f64], centered: &mut [f64], solved: &mut [f64]| -> f64 {
+        // Batch Mahalanobis via ONE multi-RHS forward substitution per chunk
+        // (acc[p] = Σ_{k<i} L[i][k]·w[k][p]; w[i][p] = (xₚ[i] − loc[i] − acc[p]) /
+        // L[i][i]), inner per-point loops contiguous so they vectorize across
+        // points. BYTE-IDENTICAL to the per-point forward-sub (acc[p] left-folds k
+        // in 0..i like the per-point `.sum()`; maha = Σ_i w[i][p]²) — same kernel
+        // measured 1.65-2.35x in `bin/perf_mvn_maha_ab.rs` (MVN sibling).
+        let eval_batch = |xs_chunk: &[Vec<f64>]| -> Vec<f64> {
+            let b = xs_chunk.len();
+            let mut w = vec![vec![0.0_f64; b]; n];
+            let mut acc = vec![0.0_f64; b];
             for i in 0..n {
-                centered[i] = x[i] - self.loc[i];
+                let lii = self.chol[i][i];
+                for a in acc.iter_mut() {
+                    *a = 0.0;
+                }
+                for k in 0..i {
+                    let lik = self.chol[i][k];
+                    let wk = &w[k];
+                    for (a, &wkp) in acc.iter_mut().zip(wk.iter()) {
+                        *a += lik * wkp;
+                    }
+                }
+                let loc_i = self.loc[i];
+                let wi = &mut w[i];
+                for (pp, x) in xs_chunk.iter().enumerate() {
+                    wi[pp] = (x[i] - loc_i - acc[pp]) / lii;
+                }
             }
-            for i in 0..n {
-                let sum = (0..i).map(|j| self.chol[i][j] * solved[j]).sum::<f64>();
-                solved[i] = (centered[i] - sum) / self.chol[i][i];
-            }
-            let maha: f64 = solved.iter().map(|v| v * v).sum();
-            const_part - 0.5 * (df + p) * (1.0 + maha / df).ln()
+            (0..b)
+                .map(|pp| {
+                    let maha: f64 = (0..n).map(|i| w[i][pp] * w[i][pp]).sum();
+                    const_part - 0.5 * (df + p) * (1.0 + maha / df).ln()
+                })
+                .collect()
         };
 
         let m = xs.len();
@@ -7926,20 +7950,15 @@ impl MultivariateT {
             .unwrap_or(1)
             .min(m);
         if n < 5 || work < 1 << 18 || threads <= 1 || m < 4 {
-            let mut centered = vec![0.0; n];
-            let mut solved = vec![0.0; n];
-            return Ok(xs.iter().map(|x| eval(x, &mut centered, &mut solved)).collect());
+            return Ok(eval_batch(xs));
         }
         let mut out = vec![0.0f64; m];
         let chunk = m.div_ceil(threads);
+        let eval_batch = &eval_batch;
         std::thread::scope(|scope| {
             for (xchunk, ochunk) in xs.chunks(chunk).zip(out.chunks_mut(chunk)) {
                 scope.spawn(move || {
-                    let mut centered = vec![0.0; n];
-                    let mut solved = vec![0.0; n];
-                    for (x, slot) in xchunk.iter().zip(ochunk) {
-                        *slot = eval(x, &mut centered, &mut solved);
-                    }
+                    ochunk.copy_from_slice(&eval_batch(xchunk));
                 });
             }
         });

@@ -6,6 +6,27 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon (claude-code) - KEEP: MultivariateT logpdf_many multi-RHS batch Mahalanobis (~1.7-2.4x, BYTE-IDENTICAL)
+
+- Agent: GreenFalcon (claude-code) — commit `8d777c5e`. Same lever as the
+  MultivariateNormal entry below (`79b5ac49`), applied to
+  `scipy.stats.multivariate_t`.
+- Lever: `MultivariateT::logpdf_many` solved each point's whitening `L⁻¹(xₚ−loc)`
+  as a SEPARATE single-RHS forward substitution (already parallelized over
+  points). Replaced with ONE multi-RHS batch per chunk (`acc[p] = Σ_{k<i}
+  L[i][k]·w[k][p]`, `w[i][p] = (xₚ[i] − loc[i] − acc[p]) / L[i][i]`), inner
+  per-point loops contiguous → vectorize ACROSS points; the t-density formula
+  `const_part − ½(df+p)·ln(1 + maha/df)` is applied per point after the batched
+  maha.
+- BYTE-IDENTICAL: `acc[p]` left-folds k in 0..i like the per-point `.sum()`;
+  `maha = Σ_i w[i][p]²`. The maha solve kernel is identical to MVN's (measured
+  1.65-2.35x in `bin/perf_mvn_maha_ab.rs`); the t-formula is O(1) per point.
+- Decision: KEEP. `cargo test -p fsci-stats multivariate_t` 3/3 GREEN, incl.
+  `multivariate_t_logpdf_many_parallel_is_bit_identical` and
+  `multivariate_t_pdf_many_matches_scipy_and_scalar`.
+- Gates: edit only to `MultivariateT::logpdf_many` (hand-formatted; no `cargo fmt
+  -p fsci-stats` whole-file sweep). Completes the multivariate (Normal + t) family.
+
 ## 2026-06-25 - GreenFalcon (claude-code) - KEEP: MultivariateNormal logpdf_many multi-RHS batch Mahalanobis (~1.7-2.4x, BYTE-IDENTICAL)
 
 - Agent: GreenFalcon (claude-code) — commit `e0556295`. (Distinct from the
