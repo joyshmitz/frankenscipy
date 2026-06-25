@@ -13542,6 +13542,10 @@ pub fn rsf2csf(
     Ok((tc, zc))
 }
 
+/// Minimum circulant-embedding length below which `matmul_toeplitz` always uses
+/// the dense product. Keeps tiny inputs bit-for-bit equal to `toeplitz · x`.
+const TOEPLITZ_FFT_MIN_EMBED: usize = 64;
+
 /// Multiply a Toeplitz matrix by a matrix: `T · x`.
 ///
 /// Matches `scipy.linalg.matmul_toeplitz`. `T` is the Toeplitz matrix with first
@@ -13549,16 +13553,92 @@ pub fn rsf2csf(
 /// row `c`, as in [`toeplitz`]); `x` has one inner `Vec` per row (`len(r)` rows,
 /// or `len(c)` when `r` is `None`). Returns the `len(c) × cols(x)` product.
 ///
-/// scipy performs this via an FFT/circulant embedding for speed; this forms the
-/// dense Toeplitz matrix and applies it directly, which is numerically identical
-/// to the true `T · x` (and matches scipy to rounding).
+/// scipy performs this via an FFT/circulant embedding for speed. For inputs large
+/// enough that the embedding is a clear win over the dense product, this routes
+/// through the same `O((k+1)·L log L)` circulant FFT (reproducing the dense
+/// `T · x` to FFT roundoff, ~1e-13, and matching scipy); smaller or thin/non-finite
+/// inputs use the dense `O(m·n·k)` product, which is bit-for-bit `toeplitz · x`.
 pub fn matmul_toeplitz(
     c: &[f64],
     r: Option<&[f64]>,
     x: &[Vec<f64>],
 ) -> Result<Vec<Vec<f64>>, LinalgError> {
+    let m = c.len();
+    let row = r.unwrap_or(c);
+    let n = row.len();
+    let k = x.first().map(Vec::len).unwrap_or(0);
+    // Only switch to the FFT route when it is clearly cheaper than the dense
+    // product (robust to thin matrices, where the embedding length L ~ 2·max(m,n)
+    // makes FFT lose) and the inputs are well-formed and finite. The dense
+    // fallback below preserves all original shape-error semantics.
+    let well_formed =
+        m > 0 && n > 0 && k > 0 && x.len() == n && x.iter().all(|col| col.len() == k);
+    if well_formed {
+        let l = (m + n - 1).next_power_of_two();
+        let dense_cost = (m as u128) * (n as u128) * (k as u128);
+        let fft_cost = (k as u128 + 1) * (l as u128) * (l.trailing_zeros() as u128);
+        if l >= TOEPLITZ_FFT_MIN_EMBED
+            && dense_cost >= 2 * fft_cost
+            && c.iter().all(|v| v.is_finite())
+            && row.iter().all(|v| v.is_finite())
+            && x.iter().flat_map(|col| col.iter()).all(|v| v.is_finite())
+        {
+            if let Some(y) = matmul_toeplitz_fft(c, row, x, m, n, k, l) {
+                return Ok(y);
+            }
+        }
+    }
     let t = toeplitz(c, r);
     matmul(&t, x)
+}
+
+/// FFT circulant-embedding Toeplitz·matrix product. Embeds the `m × n` Toeplitz
+/// matrix in a circulant of length `l` (a power of two `>= m + n - 1`) and applies
+/// it to each zero-padded column via `ifft(fft(emb) ⊙ fft(xpad))`. Returns `None`
+/// if any FFT fails (caller falls back to the dense product).
+fn matmul_toeplitz_fft(
+    c: &[f64],
+    row: &[f64],
+    x: &[Vec<f64>],
+    m: usize,
+    n: usize,
+    k: usize,
+    l: usize,
+) -> Option<Vec<Vec<f64>>> {
+    let opts = fsci_fft::FftOptions::default();
+    // Circulant generator (first column), length L:
+    //   [c[0..m], zeros, row[n-1], row[n-2], ..., row[1]]
+    // whose leading m×n block is exactly T[i][j] = c[i-j] (i>=j) else row[j-i].
+    // row[0] is ignored, matching `toeplitz`.
+    let mut emb = vec![(0.0_f64, 0.0_f64); l];
+    for (i, slot) in emb.iter_mut().enumerate().take(m) {
+        *slot = (c[i], 0.0);
+    }
+    for s in 0..n - 1 {
+        emb[l - (n - 1) + s] = (row[n - 1 - s], 0.0);
+    }
+    let fhat = fsci_fft::fft(&emb, &opts).ok()?;
+
+    let mut y = vec![vec![0.0_f64; k]; m];
+    let mut xpad = vec![(0.0_f64, 0.0_f64); l];
+    for col in 0..k {
+        for slot in xpad.iter_mut() {
+            *slot = (0.0, 0.0);
+        }
+        for (i, slot) in xpad.iter_mut().enumerate().take(n) {
+            *slot = (x[i][col], 0.0);
+        }
+        let xhat = fsci_fft::fft(&xpad, &opts).ok()?;
+        let mut prod = Vec::with_capacity(l);
+        for (&(fr, fi), &(xr, xi)) in fhat.iter().zip(xhat.iter()) {
+            prod.push((fr * xr - fi * xi, fr * xi + fi * xr));
+        }
+        let yfull = fsci_fft::ifft(&prod, &opts).ok()?;
+        for (i, yrow) in y.iter_mut().enumerate().take(m) {
+            yrow[col] = yfull[i].0;
+        }
+    }
+    Some(y)
 }
 
 pub fn toeplitz(c: &[f64], r: Option<&[f64]>) -> Vec<Vec<f64>> {
@@ -26260,6 +26340,51 @@ mod tests {
         // Equivalent to the dense toeplitz · x.
         let dense = matmul(&toeplitz(&c, Some(&r)), &x).unwrap();
         assert_eq!(y, dense);
+    }
+
+    #[test]
+    fn matmul_toeplitz_fft_path_matches_dense() {
+        // Above the embedding gate, matmul_toeplitz routes through the FFT
+        // circulant embedding (O((k+1)·L log L)); it must reproduce the dense
+        // O(m·n·k) product to FFT roundoff (~1e-13). m=160, n=192 -> m+n-1=351,
+        // L=512 >= TOEPLITZ_FFT_MIN_EMBED, dense_cost(160*192*3=92160) >=
+        // 2*fft_cost(4*512*9=18432) -> the FFT route is exercised.
+        let m = 160usize;
+        let n = 192usize;
+        let k = 3usize;
+        let mut s: u64 = 0xabcd_1234_5678_9f01;
+        let mut u = || {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (s >> 11) as f64 / (1u64 << 53) as f64 - 0.5
+        };
+        let c: Vec<f64> = (0..m).map(|_| u()).collect();
+        let mut row: Vec<f64> = (0..n).map(|_| u()).collect();
+        row[0] = c[0];
+        let x: Vec<Vec<f64>> = (0..n).map(|_| (0..k).map(|_| u()).collect()).collect();
+
+        let y_fft = matmul_toeplitz(&c, Some(&row), &x).unwrap();
+        let dense = matmul(&toeplitz(&c, Some(&row)), &x).unwrap();
+        assert_eq!(y_fft.len(), m);
+        let mut max_err = 0.0_f64;
+        for i in 0..m {
+            assert_eq!(y_fft[i].len(), k);
+            for j in 0..k {
+                max_err = max_err.max((y_fft[i][j] - dense[i][j]).abs());
+            }
+        }
+        assert!(max_err < 1e-9, "FFT vs dense max err {max_err:e}");
+
+        // Thin/rectangular shape that should NOT take the FFT route (FFT would
+        // lose): n=2, m large -> dense_cost < 2*fft_cost -> dense path, so the
+        // result stays bit-for-bit equal to toeplitz · x.
+        let cc: Vec<f64> = (0..400).map(|_| u()).collect();
+        let rr = vec![cc[0], u()];
+        let xx: Vec<Vec<f64>> = (0..2).map(|_| vec![u()]).collect();
+        let y_thin = matmul_toeplitz(&cc, Some(&rr), &xx).unwrap();
+        let dense_thin = matmul(&toeplitz(&cc, Some(&rr)), &xx).unwrap();
+        assert_eq!(y_thin, dense_thin);
     }
 
     #[test]

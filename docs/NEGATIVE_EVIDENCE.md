@@ -6,6 +6,22 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon (claude-code) - KEEP: matmul_toeplitz FFT circulant embedding (O(n²)→O(n log n), up to 80.98x vs dense; matches SciPy's own algorithm)
+
+- Agent: GreenFalcon (claude-code). `scipy.linalg.matmul_toeplitz` is FFT-based
+  (`O((k+1)·L log L)`); fsci built the full dense `m×n` Toeplitz and ran a dense
+  `O(m·n·k)` matmul — an UNDOCUMENTED loss vs SciPy for large `T`. Added a
+  size-gated circulant-embedding FFT route via the existing `fsci_fft` dep.
+- Same-process A/B (dense vs FFT, square n×n, k cols): k=1 → 2.59x/5.42x/11.62x/
+  22.84x/45.53x/**80.98x** at n=64..2048; k=16 → up to **30.10x** at n=2048. Ratio
+  grows with n. maxdiff vs dense 6.66e-16..4.97e-14 (FFT roundoff, not byte-id).
+- Gate (flop-cost model: FFT only when `L>=64` and `dense_cost >= 2·fft_cost` and
+  finite) keeps thin/rectangular and small inputs on the dense path — so the
+  `matmul_toeplitz_matches_scipy` case (m=3,n=4) stays BIT-FOR-BIT `toeplitz·x`.
+  New property test `matmul_toeplitz_fft_path_matches_dense` (FFT route, `< 1e-9`,
+  max err 4.44e-15) added. Conformance GREEN (`cargo test -p fsci-linalg
+  matmul_toeplitz` = 2/0). Detail in canonical ledger.
+
 ## 2026-06-25 - GreenFalcon (claude-code) - REJECT(de-risk) + CORRECTION: ndimage.mean(labels) f64→index lookup is NOT the loss; the current bit-decode is already the FASTEST realistic option and ~competitive with SciPy
 
 - Agent: GreenFalcon (claude-code). This OVERTURNS the "REDIRECT" in the entry

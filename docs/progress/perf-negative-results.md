@@ -4,6 +4,43 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-25 - frankenscipy-greenfalcon-matmul-toeplitz-fft - KEEP: matmul_toeplitz FFT circulant embedding (O(n²)→O(n log n), up to 80.98x vs the dense route, ~SciPy's own algorithm)
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`.
+- Lever: `scipy.linalg.matmul_toeplitz` computes `T·x` via an FFT/circulant
+  embedding (`O((k+1)·L log L)`); fsci's `matmul_toeplitz` instead built the full
+  dense `m×n` Toeplitz matrix and ran a dense `O(m·n·k)` matmul — an UNDOCUMENTED
+  algorithmic loss vs SciPy for large `T`. Added a size-gated FFT route
+  (`matmul_toeplitz_fft`): embed `T` in a circulant of length `L = next_pow2(m+n-1)`
+  with generator `[c[0..m], zeros, row[n-1..1]]`, and apply it to each zero-padded
+  column via `ifft(fft(emb) ⊙ fft(xpad))`, reusing `fft(emb)` across all `k`
+  columns. Uses the existing `fsci_fft` dep (already in fsci-linalg; no cycle).
+- Gating: a flop-cost model picks FFT only when `L >= 64` AND
+  `dense_cost (m·n·k) >= 2·fft_cost ((k+1)·L·log2 L)` AND all inputs finite. This
+  is robust to thin/rectangular shapes (small `n`, large `m`) where `L ~ 2·max(m,n)`
+  would make the FFT LOSE — those correctly stay dense. Small inputs (incl. the
+  `matmul_toeplitz_matches_scipy` conformance case, `m=3,n=4`, `L=8`) stay on the
+  dense path and remain BIT-FOR-BIT equal to `toeplitz · x`.
+- Accuracy: the FFT route is NOT byte-identical to dense (FFT roundoff). Verified
+  it reproduces the dense product to ~1e-13: same-process A/B `maxdiff` was
+  6.66e-16..4.97e-14 across all measured shapes; the new in-crate property test
+  `matmul_toeplitz_fft_path_matches_dense` (m=160,n=192,k=3 → FFT route;
+  plus a thin n=2,m=400 case that must stay dense/byte-identical) asserts `< 1e-9`
+  and passes, max err 4.44e-15. Conformance GREEN: `cargo test -p fsci-linalg
+  matmul_toeplitz` = `2 passed; 0 failed` (existing + new); full `cargo test
+  -p fsci-linalg` run as a safety net.
+- Measured speedup (same-process A/B, dense vs FFT, CARGO_TARGET_DIR
+  frankenscipy-cc on RCH `hz2`), square Toeplitz n×n, k columns:
+  - k=1:  n=64 2.59x / n=128 5.42x / n=256 11.62x / n=512 22.84x / n=1024 45.53x / n=2048 **80.98x**
+  - k=16: n=256 4.88x / n=512 9.30x / n=1024 17.83x / n=2048 **30.10x**
+  The ratio grows with n (O(n²) vs O(n log n)); below the gate the dense path is
+  unchanged. This closes an undocumented loss vs SciPy (which is FFT-based) and is
+  the same algorithm SciPy uses, so it also tracks SciPy's numerics more closely.
+- Retry/extend condition: the per-column FFTs are independent — a parallel sweep
+  over columns (work-gated) is a candidate for very large `k`; and `next_fast_len`
+  (mixed-radix) instead of `next_pow2` could shrink `L` for non-power-of-two
+  `m+n-1`. Both unproven; current pow2 route is already a large win.
+
 ## 2026-06-25 - frankenscipy-8l8r1/greenfalcon-csd-adaptive-rfft-threshold - FFT CSD thresholded rfft retry rejected
 
 - Agent: GreenFalcon.
