@@ -6,6 +6,65 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - cod-a - KEEP: SphericalVoronoi sorted horizon edge list, partial large-n close
+
+- Agent: cod-a (codex-cli / gpt-5.2), `AGENT_NAME=cod-a`.
+- Decision: KEEP, partial only. The still-open `SphericalVoronoi` large-n gap is
+  the incremental hull's all-face visibility scan. This lever leaves that scan
+  unchanged but replaces the per-insertion horizon `HashSet<(usize, usize)>`
+  with a reusable directed-edge vector plus sorted scratch list. Horizon emission
+  still iterates the original edge order, so face emission/golden checksums stay
+  stable; only reverse-edge membership changes from hash lookup to cache-local
+  binary search.
+- Harness: per-crate only, requested warm target
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a` via
+  `rch exec`. RCH had no admissible worker slots (`insufficient_slots=4`,
+  `hard_preflight=1`, `active_project_exclusion=1`) and fell back locally.
+  Baseline and candidate therefore ran on the same local host/target dir with
+  `cargo run --profile release -p fsci-spatial --bin perf_sphvor_ab`.
+- SciPy comparator: local SciPy `SphericalVoronoi` on the identical deterministic
+  point dumps emitted by the candidate run. Sorted vertex-set parity stayed at
+  about `1.0e-14` after rounding to 14 decimals.
+
+| n | Baseline Rust | Candidate A | Candidate B | SciPy comparator | Best candidate vs baseline | Best candidate vs SciPy |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 100 | 325.207 us | 306.531 us | 287.014 us | 0.439683 ms | 1.13x faster | Rust 1.53x faster |
+| 200 | 674.128 us | 684.016 us | 711.989 us | 0.778485 ms | 1.01x slower | Rust 1.09x faster |
+| 500 | 2.048 ms | 2.066 ms | 1.933 ms | 1.850076 ms | 1.06x faster | Rust 1.04x slower |
+| 1000 | 7.045 ms | 5.927 ms | 5.455 ms | 3.870103 ms | 1.29x faster | Rust 1.41x slower |
+| 2000 | 20.088 ms | 19.119 ms | 17.891 ms | 7.720488 ms | 1.12x faster | Rust 2.32x slower |
+
+- Interpretation: this is not a dominance closeout. It is a small but measured
+  large-row reduction (`n=2000` local row narrows from about `2.60x` slower than
+  SciPy to `2.32x` slower) while preserving the golden output order. The
+  remaining loss is still the O(n^2) visibility scan; the next real route is an
+  adjacency-complete conflict graph or cache-blocked visibility primitive, not
+  another tolerance or duplicate-grid cleanup.
+- Gates:
+  - PASS: `rustfmt --edition 2024 --check crates/fsci-spatial/src/lib.rs`.
+  - PASS: `AGENT_NAME=cod-a CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a
+    rch exec -- cargo test -p fsci-spatial spherical_voronoi --lib -- --nocapture`
+    (`5` passed, `216` filtered).
+  - PASS: `AGENT_NAME=cod-a CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a
+    rch exec -- cargo check -p fsci-spatial --all-targets`.
+  - PASS: `AGENT_NAME=cod-a CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a
+    rch exec -- cargo test -p fsci-conformance --test e2e_spatial -- --nocapture`
+    (`16` passed).
+  - PASS: `AGENT_NAME=cod-a CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a
+    rch exec -- cargo bench -p fsci-spatial --profile release --bench spatial_bench --
+    --sample-size 10 --warm-up-time 1 --measurement-time 1 --noplot`.
+  - PASS: `AGENT_NAME=cod-a CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a
+    rch exec -- cargo run --profile release -p fsci-spatial --bin perf_spherical_voronoi`
+    preserved required checksums `d1b734e17e3fa6e2`, `37cacbe3d8ce9aff`,
+    and `6fab1fe54c810688`.
+  - PASS: `ubs crates/fsci-spatial/src/lib.rs docs/NEGATIVE_EVIDENCE.md`
+    found `0` critical issues on the changed source file; existing warning
+    inventory remains.
+  - BLOCKED: `AGENT_NAME=cod-a CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a
+    rch exec -- cargo clippy -p fsci-spatial --all-targets -- -D warnings`
+    stops in pre-existing `fsci-linalg` dependency warnings before reaching this
+    changed crate.
+
 ## 2026-06-25 - GreenFalcon (claude-code) - KEEP: parallelize MultivariateNormalQmc inverse-transform ndtri map (3.38-5.97x for large n, byte-identical)
 
 - Agent: GreenFalcon (claude-code). `MultivariateNormalQmc::sample` (= scipy.stats

@@ -4379,8 +4379,8 @@ fn convex_hull_3d_facets(points: &[[f64; 3]], _center: [f64; 3]) -> Option<Vec<[
     let mut visible_faces: Vec<usize> = Vec::new();
     let mut visible_marks: Vec<usize> = Vec::new();
     let mut visible_stamp = 0usize;
-    let mut visible_edges: std::collections::HashSet<(usize, usize)> =
-        std::collections::HashSet::new();
+    let mut visible_edges: Vec<(usize, usize)> = Vec::new();
+    let mut sorted_visible_edges: Vec<(usize, usize)> = Vec::new();
     let mut horizon: Vec<(usize, usize)> = Vec::new();
 
     for p in 0..n {
@@ -4403,21 +4403,23 @@ fn convex_hull_3d_facets(points: &[[f64; 3]], _center: [f64; 3]) -> Option<Vec<[
             continue; // strictly inside the current hull (shouldn't happen on a sphere)
         }
         // Directed edges of all visible faces; a directed edge whose twin is not
-        // itself in a visible face lies on the horizon.
+        // itself in a visible face lies on the horizon. Keep the original scan
+        // order for deterministic face emission, but use a sorted scratch list
+        // for cache-local membership checks instead of hashing every edge.
         visible_edges.clear();
         for &fi in &visible_faces {
             let f = faces[fi];
-            visible_edges.insert((f[0], f[1]));
-            visible_edges.insert((f[1], f[2]));
-            visible_edges.insert((f[2], f[0]));
+            visible_edges.push((f[0], f[1]));
+            visible_edges.push((f[1], f[2]));
+            visible_edges.push((f[2], f[0]));
         }
+        sorted_visible_edges.clear();
+        sorted_visible_edges.extend_from_slice(&visible_edges);
+        sorted_visible_edges.sort_unstable();
         horizon.clear();
-        for &fi in &visible_faces {
-            let f = faces[fi];
-            for &(u, v) in &[(f[0], f[1]), (f[1], f[2]), (f[2], f[0])] {
-                if !visible_edges.contains(&(v, u)) {
-                    horizon.push((u, v));
-                }
+        for &(u, v) in &visible_edges {
+            if sorted_visible_edges.binary_search(&(v, u)).is_err() {
+                horizon.push((u, v));
             }
         }
         // Drop the visible faces by compacting the survivors in place (no new
