@@ -31035,16 +31035,31 @@ pub fn kendalltau_seasonal(data: &[Vec<f64>]) -> KendallSeasonalResult {
     let m = if n == 0 { 0 } else { data[0].len() };
     let nf = n as f64;
 
+    // Season columns extracted once (cols[j] is season j over the n cycles).
+    let cols: Vec<Vec<f64>> = (0..m).map(|j| (0..n).map(|i| data[i][j]).collect()).collect();
+    // For large untied series the O(n²) sign sums collapse to O(n log n) Knight
+    // pair-counts. Both quantities are EXACT INTEGERS, so every downstream
+    // tau/z/p is unchanged: per-season S = tot − tied − 2·inversions, and the
+    // cross-season covariance term Σ_{i<r} sign(Δx_j·Δx_k) = concordant(j,k) −
+    // discordant(j,k). NaN inputs (kt_sign→0, not modelled by the identity) and
+    // small n keep the original double loop. frankenscipy-ktseasonal-knight.
+    let use_fast = n >= 256 && !data.iter().flatten().any(|v| v.is_nan());
+    let tot = (n * (n - 1) / 2) as i64;
+
     // Per-season Kendall S: sum over i<r of sign(x[r,j] - x[i,j]).
     let mut s_szn = vec![0.0_f64; m];
-    for j in 0..m {
-        let mut s = 0.0;
-        for i in 0..n {
-            for r in (i + 1)..n {
-                s += kt_sign(data[r][j] - data[i][j]);
+    for (j, col) in cols.iter().enumerate() {
+        s_szn[j] = if use_fast {
+            (tot - kendall_tie_pairs(col) - 2 * kendall_strict_inversions(col)) as f64
+        } else {
+            let mut s = 0.0;
+            for i in 0..n {
+                for r in (i + 1)..n {
+                    s += kt_sign(col[r] - col[i]);
+                }
             }
-        }
-        s_szn[j] = s;
+            s
+        };
     }
     let s_tot: f64 = s_szn.iter().sum();
 
@@ -31069,15 +31084,22 @@ pub fn kendalltau_seasonal(data: &[Vec<f64>]) -> KendallSeasonalResult {
     let mut covmat = vec![vec![0.0_f64; m]; m];
     let mut denom_szn = vec![0.0_f64; m];
     for j in 0..m {
-        let col_j: Vec<f64> = (0..n).map(|i| data[i][j]).collect();
-        let corr_j = ties_correction(&col_j);
+        let col_j = &cols[j];
+        let corr_j = ties_correction(col_j);
         for k in j..m {
-            let mut kk = 0.0_f64;
-            for i in 0..n {
-                for r in (i + 1)..n {
-                    kk += kt_sign((data[r][j] - data[i][j]) * (data[r][k] - data[i][k]));
+            let col_k = &cols[k];
+            let kk = if use_fast {
+                let (con, dis, _, _) = kendall_pair_counts_knight(col_j, col_k);
+                (con - dis) as f64
+            } else {
+                let mut kk = 0.0_f64;
+                for i in 0..n {
+                    for r in (i + 1)..n {
+                        kk += kt_sign((col_j[r] - col_j[i]) * (col_k[r] - col_k[i]));
+                    }
                 }
-            }
+                kk
+            };
             let rr: f64 = (0..n).map(|i| ranks[i][j] * ranks[i][k]).sum();
             let cov = (kk + 4.0 * rr - nf * (nf + 1.0) * (nf + 1.0)) / 3.0;
             covmat[j][k] = cov;
@@ -50444,6 +50466,55 @@ mod tests {
         assert!((r.global_p_value_dep - 0.20527648966735135).abs() <= 1e-12);
         assert!((r.chi2_total - 5.311224489795918).abs() <= 1e-12);
         assert!((r.chi2_trend - 0.8622448979591835).abs() <= 1e-12);
+    }
+
+    #[test]
+    fn kendalltau_seasonal_knight_blocks_match_naive() {
+        // n=300 (>=256) triggers the O(n log n) Knight path inside
+        // kendalltau_seasonal. Verify the two building blocks it replaces — the
+        // per-season Kendall S and the cross-season covariance term
+        // Σ_{i<r} sign(Δx_j·Δx_k) — are bit-for-bit equal to the naive O(n²) sign
+        // sums (exact integers), so the full result is unchanged.
+        let n = 300usize;
+        let m = 3usize;
+        let mut s: u64 = 0xc0ff_ee15_dead_beef;
+        let data: Vec<Vec<f64>> = (0..n)
+            .map(|_| {
+                (0..m)
+                    .map(|_| {
+                        s = s
+                            .wrapping_mul(6364136223846793005)
+                            .wrapping_add(1442695040888963407);
+                        (s >> 11) as f64 / (1u64 << 53) as f64
+                    })
+                    .collect()
+            })
+            .collect();
+        let cols: Vec<Vec<f64>> = (0..m).map(|j| (0..n).map(|i| data[i][j]).collect()).collect();
+        let tot = (n * (n - 1) / 2) as i64;
+        for j in 0..m {
+            let col_j = &cols[j];
+            let mut s_naive = 0.0_f64;
+            for i in 0..n {
+                for r in (i + 1)..n {
+                    s_naive += kt_sign(col_j[r] - col_j[i]);
+                }
+            }
+            let s_fast =
+                (tot - kendall_tie_pairs(col_j) - 2 * kendall_strict_inversions(col_j)) as f64;
+            assert_eq!(s_naive, s_fast, "per-season S season {j}");
+            for k in j..m {
+                let col_k = &cols[k];
+                let mut kk_naive = 0.0_f64;
+                for i in 0..n {
+                    for r in (i + 1)..n {
+                        kk_naive += kt_sign((col_j[r] - col_j[i]) * (col_k[r] - col_k[i]));
+                    }
+                }
+                let (con, dis, _, _) = kendall_pair_counts_knight(col_j, col_k);
+                assert_eq!(kk_naive, (con - dis) as f64, "covariance term ({j},{k})");
+            }
+        }
     }
 
     #[test]

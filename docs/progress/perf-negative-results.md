@@ -4,6 +4,36 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-25 - frankenscipy-greenfalcon-ktseasonal-knight - KEEP: kendalltau_seasonal O(n²)→O(n log n) Knight pair-counts (1.91x at the gate, ~9x at n=2048, byte-identical)
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. `kendalltau_seasonal`
+  (= `scipy.stats.mstats.kendalltau_seasonal`, Hirsch-Slack seasonal Mann-Kendall)
+  computed its per-season Kendall S (O(m·n²)) AND its cross-season covariance terms
+  `kk = Σ_{i<r} sign(Δx_j·Δx_k)` (O(m²·n²), the dominant cost) with naive double
+  loops — even though `mannkendall`/`kendalltau` in the same crate already route the
+  identical sign-sums through Knight's O(n log n) pair-counts.
+- Lever: extract the season columns once, then for n≥256 untied series:
+  - per-season `S = tot − tied_pairs − 2·strict_inversions` (`kendall_tie_pairs` +
+    `kendall_strict_inversions`, merge-sort O(n log n))
+  - cross-season `kk = concordant(j,k) − discordant(j,k)` via
+    `kendall_pair_counts_knight(col_j, col_k)` (the sign-of-product sum is exactly
+    con−dis; ties in either season contribute 0 in both forms)
+  Both are EXACT INTEGERS, so the result is bit-identical; NaN/small-n keep the
+  naive loops (gate `n≥256 && no NaN`, matching mannkendall/kendalltau).
+- De-risk (public `kendalltau_seasonal`, m=6, RCH `hz2`), timing across the gate:
+  n=255 naive **935 µs** → n=256 Knight **488 µs** = 1.91x faster DESPITE the larger
+  n. Knight scales O(n log n) (~2.2-2.6x per n-doubling: 512 1.27ms / 1024 3.06ms /
+  2048 6.77ms) vs naive O(n²) (~4x); extrapolated naive at n=2048 ≈ 60 ms → ~9x, and
+  the gap grows unboundedly with n.
+- Conformance GREEN: `cargo test -p fsci-stats kendalltau_seasonal` = 2/0 — the
+  existing `kendalltau_seasonal_matches_scipy` golden (n=8, naive path, unchanged)
+  plus the new `kendalltau_seasonal_knight_blocks_match_naive` (n=300 → Knight path;
+  asserts `assert_eq!` of per-season S and every cross-season covariance term vs the
+  naive sign sums); full `cargo test -p fsci-stats` as safety net.
+- Retry/extend: same Knight identity applies to any remaining naive Kendall S /
+  concordance double-loops (grep `kt_sign(.*-.*)` in nested i<r loops); `sen_seasonal_slopes`
+  uses pairwise-slope medians (different structure, not a sign-count).
+
 ## 2026-06-25 - frankenscipy-greenfalcon-ap-availability-rowmajor-parallel - KEEP: affinity_propagation availability update row-major + threaded (1.3-4x serial cache, up to 7.8x threaded; byte-identical)
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. The AP responsibility

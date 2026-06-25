@@ -6,6 +6,20 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon (claude-code) - KEEP: kendalltau_seasonal O(n²)→O(n log n) Knight pair-counts (1.91x at the gate, ~9x at n=2048, byte-identical)
+
+- Agent: GreenFalcon (claude-code). `kendalltau_seasonal` (= scipy.stats.mstats
+  .kendalltau_seasonal) computed its per-season Kendall S and its O(m²·n²)
+  cross-season covariance `Σ sign(Δx_j·Δx_k)` with naive O(n²) sign loops, while
+  mannkendall/kendalltau in the same crate already use Knight O(n log n). Routed both
+  through the existing helpers (S = tot−tied−2·inversions; covariance = concordant−
+  discordant via kendall_pair_counts_knight) — exact integers, so bit-identical;
+  gate n≥256 && no NaN. De-risk across the gate: n=255 naive 935µs → n=256 Knight
+  488µs (1.91x despite larger n); Knight scales O(n log n) vs naive O(n²) → ~9x at
+  n=2048, gap grows. New test kendalltau_seasonal_knight_blocks_match_naive (n=300,
+  assert_eq! S + covariance vs naive); `cargo test -p fsci-stats kendalltau_seasonal`
+  = 2/0. Detail in canonical ledger.
+
 ## 2026-06-25 - GreenFalcon (claude-code) - KEEP: affinity_propagation availability update row-major + threaded (1.3-4x serial cache, up to 7.8x threaded; byte-identical)
 
 - Agent: GreenFalcon (claude-code). AP's responsibility update was already
