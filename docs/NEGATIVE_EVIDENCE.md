@@ -6,6 +6,38 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon - KEEP: matrix-normal logpdf Gram upper-triangle symmetry (~2x, BYTE-IDENTICAL)
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`.
+- Lever: `MatrixNormal::logpdf` built `V + A` (n×n, where `A = WᵀW = Cᵀ U⁻¹ C`)
+  by computing all n² entries — `va[i][j] = Σ_r w[r][i]·w[r][j] +
+  col_spread_entry(i,j)`, an O(m·n²) double loop. Both `A` and the
+  `col_spread`-reconstructed `V` are symmetric, so now compute the upper
+  triangle once and mirror `va[j][i] = va[i][j]`. BYTE-IDENTICAL: products
+  commute and are summed in the same r-order, and `col_spread_entry(i,j) ==
+  col_spread_entry(j,i)` bit-for-bit, so the mirrored entry equals the
+  full-build entry exactly. Halves the dominant Gram cost for tall (m≫n)
+  matrix-normals.
+- Measured: same-process same-worker A/B microbench (RCH,
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cc cargo run
+  --release -p fsci-stats --bin perf_matnorm_gram_ab`; `gram_full` full-n² vs
+  `gram_sym` upper-triangle+mirror on the `WᵀW` Gram, the dominant term):
+
+  | m | n | full | sym | speedup | matrices |
+  | ---: | ---: | ---: | ---: | ---: | --- |
+  | 2000 | 64 | 10.733 ms | 5.423 ms | 1.98x | EXACT |
+  | 2000 | 128 | 43.744 ms | 22.086 ms | 1.98x | EXACT |
+  | 4000 | 150 | 130.030 ms | 64.825 ms | 2.01x | EXACT |
+
+- Decision: KEEP. ~2x, exact bitwise equality of the two matrices.
+  `cargo test -p fsci-stats matrix_normal` = `matrix_normal_matches_scipy` GREEN
+  (byte-identical ⇒ scipy match preserved).
+- Gates: edit only to the `va` build + new microbench bin (hand-formatted; no
+  `cargo fmt -p fsci-stats` whole-file sweep). The symmetric-matrix-build lever:
+  any full-n² build of a symmetric kernel/Gram/covariance can be halved
+  byte-identically (vs the discrepancy pair-symmetry, which only reaches
+  ~1e-14 reassociation).
+
 ## 2026-06-25 - GreenFalcon - KEEP: symmetry-fold the four *_iterative discrepancy variants (~1.93x, completes family)
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`.

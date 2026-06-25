@@ -8349,14 +8349,21 @@ impl MatrixT {
             }
         }
         // V + A (n×n), then ln det via Cholesky; ln|I + CᵀU⁻¹C·V⁻¹| = ln|V+A| - ln|V|.
+        // V + A is symmetric (A = WᵀW; col_spread reconstructs V = L_V·L_Vᵀ),
+        // so compute the upper triangle once and mirror it — halves the
+        // O(m·n²) Gram sums. Each entry is bit-identical to the full build
+        // (products commute, summed in the same r-order), so va[j][i] = va[i][j]
+        // exactly.
         let mut va = vec![vec![0.0_f64; n]; n];
         for i in 0..n {
-            for j in 0..n {
+            for j in i..n {
                 let a_ij: f64 = (0..m).map(|r| w[r][i] * w[r][j]).sum();
-                va[i][j] = a_ij;
+                va[i][j] = a_ij + self.col_spread_entry(i, j);
             }
-            for j in 0..n {
-                va[i][j] += self.col_spread_entry(i, j);
+        }
+        for i in 0..n {
+            for j in 0..i {
+                va[i][j] = va[j][i];
             }
         }
         let chol_va = cholesky_decompose(&va)?;
