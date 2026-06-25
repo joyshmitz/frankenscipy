@@ -7220,3 +7220,24 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
 - CONCLUSION: do not retry `medfilt2d` full-window key conversion. The conversion cost dominates for 2-D
   windows; the existing `f64::total_cmp` selection path already beats SciPy on this probe. Evidence:
   `tests/artifacts/perf/2026-06-24-hazycanyon-signal-medfilt2d-keyselect/EVIDENCE.md`.
+
+## 2026-06-25 - BOLD-VERIFY: multivariate_t pdf_many batch Mahalanobis - 1.61x vs main, 3.06x faster than SciPy
+- Agent: codex / GreenFalcon. Verified landed commit `2066c579`
+  (`MultivariateT::logpdf_many` multi-RHS batch Mahalanobis) against clean `origin/main` baseline
+  `79b5ac49` and SciPy. The code solves all query points in each chunk as one multi-RHS
+  lower-triangular forward substitution, accumulating contiguous per-point lanes and then reducing each
+  point's squared norm. This removes the per-point `centered` and `solved` scratch path for
+  `pdf_many`/`logpdf_many` batches while preserving the same left-folded order for each point's
+  triangular solve and Mahalanobis reduction.
+- MEASURED with `AGENT_NAME=GreenFalcon`, `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b`,
+  per-crate Criterion command `cargo bench -p fsci-stats --bench stats_bench 'multivariate_t_pdf' -- --noplot
+  --sample-size 10 --measurement-time 1 --warm-up-time 1`. Clean `origin/main` baseline at 79b5ac49:
+  d=3 median 3.6045 ms; candidate 2.2410 ms = 1.61x faster than main. d=10 median 3.4909 ms; candidate
+  3.4842 ms = no material change.
+- BOLD-VERIFY vs SciPy on the same local probe (`scipy.stats.multivariate_t.pdf`, 1000 query points):
+  SciPy d=3 6.853 ms vs candidate 2.2410 ms = 3.06x faster; SciPy d=10 16.147 ms vs candidate 3.4842 ms
+  = 4.63x faster. Focused conformance stayed green:
+  `cargo test -p fsci-stats multivariate_t --lib -- --nocapture` passed 3/3.
+- CONCLUSION: keep. The win is concentrated in small dimensions, where the old scalar scratch path avoided
+  threading and paid per-point allocation/fill overhead; larger dimensions were already dominated by the
+  triangular solve arithmetic and remain at parity with main while still beating SciPy.
