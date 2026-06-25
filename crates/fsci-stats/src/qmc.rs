@@ -917,15 +917,24 @@ fn centered_discrepancy_2d(sample: &[f64], n: usize) -> f64 {
         single += prod;
     }
 
+    // The pair product is symmetric in (i, j): `0.5·abs_i + 0.5·abs_j`
+    // commutes and `(x_i − x_j).abs() == (x_j − x_i).abs()`, so prod(i,j) and
+    // prod(j,i) are bit-identical. Sum the diagonal once and each off-diagonal
+    // pair twice — ~2x fewer products than the full n² loop. The running sum is
+    // reassociated (~1e-15), well within the discrepancy tolerance gates.
     let mut double = 0.0_f64;
-    for point_i in &points {
-        for point_j in &points {
+    for (i, point_i) in points.iter().enumerate() {
+        let mut diag = 1.0_f64;
+        diag *= 1.0 + 0.5 * point_i.abs0 + 0.5 * point_i.abs0;
+        diag *= 1.0 + 0.5 * point_i.abs1 + 0.5 * point_i.abs1;
+        double += diag;
+        for point_j in &points[i + 1..] {
             let mut prod = 1.0_f64;
             prod *= 1.0 + 0.5 * point_i.abs0 + 0.5 * point_j.abs0
                 - 0.5 * (point_i.x0 - point_j.x0).abs();
             prod *= 1.0 + 0.5 * point_i.abs1 + 0.5 * point_j.abs1
                 - 0.5 * (point_i.x1 - point_j.x1).abs();
-            double += prod;
+            double += 2.0 * prod;
         }
     }
 
@@ -1055,9 +1064,19 @@ pub fn centered_discrepancy(sample: &[f64], dimension: usize) -> Result<f64, Sta
 
     // Double-sum term Σ_{i,j} Π_k [...]. Quadratic in n; QMC users typically
     // call this on samples with n ≤ a few thousand.
+    // Symmetric pair product (prod(i,j) == prod(j,i) bit-for-bit): sum the
+    // diagonal once and each off-diagonal pair twice — ~2x fewer products than
+    // the full n² loop. Reassociates the running sum (~1e-15), within the
+    // discrepancy tolerance gates.
     let mut double = 0.0_f64;
     for i in 0..n {
-        for j in 0..n {
+        let mut diag = 1.0_f64;
+        for k in 0..dimension {
+            let c = 0.5 * (sample[i * dimension + k] - 0.5).abs();
+            diag *= 1.0 + c + c;
+        }
+        double += diag;
+        for j in (i + 1)..n {
             let mut prod = 1.0_f64;
             for k in 0..dimension {
                 let xi = sample[i * dimension + k];
@@ -1065,7 +1084,7 @@ pub fn centered_discrepancy(sample: &[f64], dimension: usize) -> Result<f64, Sta
                 prod *=
                     1.0 + 0.5 * (xi - 0.5).abs() + 0.5 * (xj - 0.5).abs() - 0.5 * (xi - xj).abs();
             }
-            double += prod;
+            double += 2.0 * prod;
         }
     }
 

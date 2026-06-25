@@ -6,6 +6,42 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon - KEEP: centered discrepancy upper-triangle symmetry (~2.1x, ~1e-14 reassoc)
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`.
+- Lever: `scipy.stats.qmc.discrepancy(method='CD')` / fsci `centered_discrepancy`
+  compute `double = Σ_{i,j} Π_k [1 + 0.5|x_ik-0.5| + 0.5|x_jk-0.5| -
+  0.5|x_ik-x_jk|]` over ALL n² pairs. The pair product is bit-symmetric in
+  (i,j) (`0.5·a_i + 0.5·a_j` commutes; `(x_i-x_j).abs() == (x_j-x_i).abs()`), so
+  fsci now sums the diagonal once + each off-diagonal pair twice — n²/2 products
+  instead of n². Applied to BOTH `centered_discrepancy_2d` (the d==2 fast path,
+  benched as `centered/512x2`) and the general-dimension kernel.
+- Mapping: scipy's `discrepancy` defaults to `workers=1` (serial Cython over the
+  full n²); fsci's half-work serial form is the win source.
+- Measured: same-process, same-worker A/B (RCH `hz2`,
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cc cargo run
+  --release -p fsci-stats --bin perf_discrepancy_ab`; general path d>=3 so the
+  ONLY difference is the symmetry; LCG sample):
+
+  | n | d | old full-n² | new symmetric | speedup | \|Δvalue\| |
+  | ---: | ---: | ---: | ---: | ---: | ---: |
+  | 512 | 3 | 1101.83 us | 511.97 us | 2.15x | 6.5e-14 |
+  | 512 | 6 | 2149.74 us | 1006.79 us | 2.14x | 3.2e-14 |
+  | 1024 | 4 | 5741.27 us | 2714.80 us | 2.11x | 4.6e-14 |
+  | 2048 | 4 | 23042.44 us | 10956.01 us | 2.10x | 7.6e-14 |
+
+- Decision: KEEP. ~2.1x; value reassociated to ~1e-14 (sum grouped as diagonal
+  + 2·upper-triangle), far inside the conformance tolerance. NOT byte-identical.
+  Conformance: `cargo test -p fsci-stats discrepancy` = 11/11 GREEN, incl.
+  `discrepancy_dispatcher_matches_kernels_and_scipy` (exact dispatcher ==
+  standalone + 1e-10 scipy-value), `iterative_discrepancy_and_update_match_scipy`,
+  `discrepancy_metamorphic_halton_beats_uniform_grid_2d`.
+- Gates: edits only to `centered_discrepancy`/`_2d` + new `bin/perf_discrepancy_ab.rs`
+  (hand-formatted; did NOT `cargo fmt -p fsci-stats` — the crate has pre-existing
+  whole-file drift that must not enter this commit).
+- Extend: the `wraparound`/`mixture`/`l2_star` discrepancy kernels are also
+  pair-symmetric — the same ~2x is available there (not yet applied).
+
 ## 2026-06-24 - GreenFalcon - KEEP: Affinity Propagation `Vec<Vec<f64>>` -> flat row-major buffer (1.41-2.29x, byte-identical)
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`.
