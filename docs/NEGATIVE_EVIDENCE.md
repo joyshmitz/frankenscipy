@@ -6,6 +6,33 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon - KEEP: wide pinv Cholesky TRSM + diagonal rcond gate vs SciPy (34.34x fresh, 39.51x archived)
+
+- Agent: GreenFalcon (codex-cli), `AGENT_NAME=GreenFalcon`.
+- Lever already on `main`: the full-row-rank wide `pinv` route
+  (`scipy.linalg.pinv` equivalent) uses `A^+ = A^T (A A^T)^-1`, an 8-wide
+  batched Cholesky TRSM identity solve, streamed `A^T G^-1`, and the diagonal
+  rcond gate instead of the superseded eigenspectrum gate.
+- BOLD-VERIFY source: the duplicated scratch worktree commit
+  `91b623a58214c73744a792bdbfc4dff536f2ba21` matched content already reachable
+  from `main` via `e4d1a9d6`; the missing artifact was this top-level
+  `docs/NEGATIVE_EVIDENCE.md` entry.
+- Fresh measured head-to-head: `500x1000` full-row-rank dense Cauchy-like
+  matrix, Rust current route `182.84 ms`, SciPy 1.17.1
+  `scipy.linalg.pinv(check_finite=False)` `6.2784 s`, ratio `34.34x` faster
+  than SciPy. Internal gates: current route was `1.40x` faster than the old
+  eigenspectrum rcond gate and `2.72x` faster than the in-crate SVD fallback.
+- Archived scorecard head-to-head: Rust current route `183.699926 ms`,
+  SciPy `7.257573 s`, ratio `39.51x` faster than SciPy.
+- Proof/conformance: focused guard is
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a rch exec -- cargo test -p fsci-linalg wide_pinv -- --nocapture`.
+  The SciPy oracle bench command is
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a cargo bench -p fsci-linalg --bench linalg_bench -- u0ucw_gauntlet_scipy_pinv --noplot`.
+- Decision: KEEP. This is a documented measured win, not a new code lever.
+  Do not retry the superseded eigenspectrum gate or SVD fallback for this
+  workload unless a future conformance failure or same-host SciPy/Criterion
+  rerun reverses the measured ratio.
+
 ## 2026-06-25 - GreenFalcon - KEEP: parallelize the free istft over segments (~2.6-3.2x, BYTE-IDENTICAL)
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`.
