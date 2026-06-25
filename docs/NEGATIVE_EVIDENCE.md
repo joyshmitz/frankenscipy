@@ -6,6 +6,29 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon (claude-code) - CLOSURE (same-box): ndimage.maximum/minimum_filter1d "2.31x/2.27x slower" (filter1d-vanherk) is a cross-box artifact; SAME-BOX fsci is 1.08-1.17x FASTER than scipy at both window sizes
+
+- Agent: GreenFalcon (claude-code). Third same-box artifact closure this session
+  (cf. labeled-mean below). The scorecard `filter1d-vanherk` row records
+  `ndimage.maximum/minimum_filter1d` n=65536 Reflect size 31/101 at 1.19/1.18 ms
+  (fsci on RCH) vs 0.516/0.520 ms (SciPy local) = "2.31x/2.27x slower" — a
+  cross-box comparison. The same-day note `perf_gauntlet_7crate_domination`
+  already claimed van Herk closed it "to parity" via same-process A/B; this
+  confirms it directly against SciPy on ONE machine.
+- Same-box re-measurement (fsci `perf_filter1d_tmp` throwaway bin, local isolated
+  target; SciPy 1.17.1 `ndimage.maximum/minimum_filter1d`, same n=65536 random
+  line, Reflect):
+  - size=31: fsci max **0.7595 ms** vs scipy 0.8894 ms (**1.17x faster**); fsci
+    min **0.8141 ms** vs scipy 0.8798 ms (**1.08x faster**).
+  - size=101: fsci max **0.8270 ms** vs scipy 0.9064 ms (**1.10x faster**); fsci
+    min **0.8060 ms** vs scipy 0.8965 ms (**1.11x faster**).
+  fsci is faster in ALL FOUR cells and window-size-independent (O(n) monotonic
+  queue / van Herk), confirming the documented 2.3x loss is a hardware artifact,
+  not an algorithmic gap. No source change — the current
+  `minmax_filter1d_reflect_contiguous_queue` fast path already wins.
+- Retry condition: none; this surface is a same-box win. Re-open only if a fresh
+  same-box measurement regresses.
+
 ## 2026-06-25 - GreenFalcon (claude-code) - REJECT/WALL (same-box CONFIRMED genuine): rfft large-N 1.37-2.61x slower than scipy.fft.rfft. Pack-trick already optimal (~2x cap); deficit is complex-backend large-N cache/SIMD + pack-vs-native-real ceiling. No bounded lever — native real split-radix FFT (multi-turn) is the only fix
 
 - Agent: GreenFalcon (claude-code). Dug the marquee remaining FFT gap (memory

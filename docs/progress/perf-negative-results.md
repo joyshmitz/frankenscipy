@@ -4,6 +4,35 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-25 - frankenscipy-greenfalcon-filter1d-samebox - CLOSURE: ndimage.max/min_filter1d "2.3x slower" (filter1d-vanherk) is a cross-box artifact; same-box fsci is 1.08-1.17x FASTER at both window sizes
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. Land-or-dig: no
+  unlanded worktree win (all greenfalcon worktrees ancestors of main), so a DIG.
+  Target: the scorecard `filter1d-vanherk` loss
+  (`ndimage.maximum/minimum_filter1d` "2.31x/2.27x slower than SciPy").
+- The recorded ratio is fsci on RCH (1.19/1.18 ms) vs SciPy on a local box
+  (0.516/0.520 ms) — cross-box, the same artifact class that made labeled-mean
+  look 2x slow when it is in fact 16-23x faster same-box. Re-measured on ONE
+  machine (fsci `perf_filter1d_tmp` throwaway bin local isolated target; SciPy
+  1.17.1), n=65536 random line, Reflect, best-of-200:
+
+  | size | fsci max | scipy max | fsci min | scipy min | max ratio | min ratio |
+  |------|----------|-----------|----------|-----------|-----------|-----------|
+  | 31   | 0.7595ms | 0.8894ms  | 0.8141ms | 0.8798ms  | 1.17x     | 1.08x     |
+  | 101  | 0.8270ms | 0.9064ms  | 0.8060ms | 0.8965ms  | 1.10x     | 1.11x     |
+
+- fsci wins ALL FOUR cells and is window-size-independent (the O(n) monotonic
+  index queue / van Herk fast path `minmax_filter1d_reflect_contiguous_queue`,
+  reached for Reflect + origin 0 + contiguous). SciPy's `maximum_filter1d` uses
+  the same monotonic-wedge algorithm in C; same-box the safe-Rust queue matches
+  and slightly beats it. The documented 2.3x is purely the RCH-vs-local hardware
+  delta. No source change; current path already optimal.
+- Retry condition: none — same-box win. Re-open only on a fresh same-box regression.
+- METHOD NOTE (pattern now 3x-confirmed this session): the scorecard "Measured
+  Losses" section is riddled with cross-box artifacts (labeled-mean, filter1d
+  both flipped to wins; rfft is the rare GENUINE one). Before digging a lever on
+  any recorded loss, RE-MEASURE same-box first — it is often already a win.
+
 ## 2026-06-25 - frankenscipy-greenfalcon-rfft-samebox - REJECT/WALL: rfft large-N 1.37-2.61x slower than scipy.fft.rfft is GENUINE same-box; pack-trick at its ~2x ceiling, no bounded lever (needs native real split-radix FFT, multi-turn)
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. Dug the marquee

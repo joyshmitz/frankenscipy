@@ -292,6 +292,25 @@ was **REJECTED** — same-process A/B shows it 1.23/1.29/1.53/1.53x SLOWER than 
 bit-decode (RCH hz2 corroborates 1.25/1.24/1.51/1.42x), all `mism=0` byte-identical.
 Detail in `docs/progress/perf-negative-results.md`.
 
+## 2026-06-25 — GreenFalcon: ndimage.max/min_filter1d stale-loss CLOSURE (same-box)
+
+The `filter1d-vanherk` loss (`ndimage.maximum/minimum_filter1d` "2.31x/2.27x
+slower than SciPy") is a **cross-box artifact** — fsci timed on RCH (1.19/1.18 ms)
+vs SciPy on a local box (0.516/0.520 ms). Re-measured on ONE machine (SciPy 1.17.1;
+fsci local isolated target), n=65536 Reflect:
+
+| size | fsci max | SciPy max | fsci min | SciPy min | max | min |
+| --- | --- | --- | --- | --- | --- | --- |
+| 31 | 0.7595 ms | 0.8894 ms | 0.8141 ms | 0.8798 ms | **1.17x faster** | **1.08x faster** |
+| 101 | 0.8270 ms | 0.9064 ms | 0.8060 ms | 0.8965 ms | **1.10x faster** | **1.11x faster** |
+
+fsci wins all four cells and is window-size-independent (O(n) monotonic queue /
+van Herk `minmax_filter1d_reflect_contiguous_queue`). No source change. Detail in
+`docs/progress/perf-negative-results.md`. (Pattern: same-session same-box
+re-measurement has now flipped labeled-mean AND filter1d from recorded "losses"
+to wins; rfft was the one genuine wall. Re-measure same-box before chasing any
+scorecard loss.)
+
 ## Pending Gauntlet Backlog
 
 Continue converting `pending batch-test` entries in the negative-evidence ledger
