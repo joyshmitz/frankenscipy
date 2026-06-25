@@ -300,6 +300,8 @@ const SOBOL_HIGH_DIM_PAR_WORK_GATE: usize = 200_000;
 /// Lower-dimensional Sobol recurrence is so cheap that thread overhead only wins
 /// for very large point counts; keep moderate 2D/8D QMC requests serial.
 const SOBOL_LOW_DIM_PAR_WORK_GATE: usize = 1_000_000;
+const SOBOL_PREFIX30_LIMIT: u64 = 1_u64 << 30;
+const SOBOL_PREFIX30_LOW_MASK: u64 = (1_u64 << 34) - 1;
 
 fn sobol_parallel_work_gate(dimension: usize) -> usize {
     if dimension >= 16 {
@@ -368,6 +370,9 @@ impl SobolSampler {
     pub fn sample(&mut self, n: usize) -> Vec<f64> {
         if self.dimension == 2 {
             return self.sample_2d(n);
+        }
+        if self.dimension == 8 {
+            return self.sample_8d(n);
         }
 
         let start = self.next_index;
@@ -487,6 +492,207 @@ impl SobolSampler {
                             let bit = next_idx.trailing_zeros() as usize;
                             bits0 ^= SOBOL_DIRECTION_TABLES[0][bit];
                             bits1 ^= SOBOL_DIRECTION_TABLES[1][bit];
+                        }
+                        idx = next_idx;
+                    }
+                });
+            }
+        });
+        out
+    }
+
+    fn sample_8d(&mut self, n: usize) -> Vec<f64> {
+        let start = self.next_index;
+        self.next_index = self.next_index.saturating_add(n as u64);
+        if n.saturating_mul(8) >= sobol_parallel_work_gate(8) && n >= 2 {
+            return self.sample_8d_parallel(start, n);
+        }
+        self.sample_8d_serial(start, n)
+    }
+
+    fn sample_8d_serial(&self, start: u64, n: usize) -> Vec<f64> {
+        let n64 = n as u64;
+        if n64 <= SOBOL_PREFIX30_LIMIT
+            && start <= SOBOL_PREFIX30_LIMIT - n64
+            && self
+                .digital_shift
+                .iter()
+                .all(|&shift| shift & SOBOL_PREFIX30_LOW_MASK == 0)
+        {
+            return self.sample_8d_prefix30_serial(start, n);
+        }
+
+        let d0 = direction_table(0);
+        let d1 = direction_table(1);
+        let d2 = direction_table(2);
+        let d3 = direction_table(3);
+        let d4 = direction_table(4);
+        let d5 = direction_table(5);
+        let d6 = direction_table(6);
+        let d7 = direction_table(7);
+        let s0 = self.digital_shift[0];
+        let s1 = self.digital_shift[1];
+        let s2 = self.digital_shift[2];
+        let s3 = self.digital_shift[3];
+        let s4 = self.digital_shift[4];
+        let s5 = self.digital_shift[5];
+        let s6 = self.digital_shift[6];
+        let s7 = self.digital_shift[7];
+        let mut out = Vec::with_capacity(n.saturating_mul(8));
+        let mut idx = start;
+        let mut b0 = sobol_bits(idx, 0);
+        let mut b1 = sobol_bits(idx, 1);
+        let mut b2 = sobol_bits(idx, 2);
+        let mut b3 = sobol_bits(idx, 3);
+        let mut b4 = sobol_bits(idx, 4);
+        let mut b5 = sobol_bits(idx, 5);
+        let mut b6 = sobol_bits(idx, 6);
+        let mut b7 = sobol_bits(idx, 7);
+
+        for _ in 0..n {
+            out.push(bits_to_unit(b0 ^ s0));
+            out.push(bits_to_unit(b1 ^ s1));
+            out.push(bits_to_unit(b2 ^ s2));
+            out.push(bits_to_unit(b3 ^ s3));
+            out.push(bits_to_unit(b4 ^ s4));
+            out.push(bits_to_unit(b5 ^ s5));
+            out.push(bits_to_unit(b6 ^ s6));
+            out.push(bits_to_unit(b7 ^ s7));
+
+            let next_idx = idx.saturating_add(1);
+            if next_idx != idx {
+                let bit = next_idx.trailing_zeros() as usize;
+                b0 ^= d0[bit];
+                b1 ^= d1[bit];
+                b2 ^= d2[bit];
+                b3 ^= d3[bit];
+                b4 ^= d4[bit];
+                b5 ^= d5[bit];
+                b6 ^= d6[bit];
+                b7 ^= d7[bit];
+            }
+            idx = next_idx;
+        }
+
+        out
+    }
+
+    fn sample_8d_prefix30_serial(&self, start: u64, n: usize) -> Vec<f64> {
+        let d0 = sobol_direction_table_u30(0);
+        let d1 = sobol_direction_table_u30(1);
+        let d2 = sobol_direction_table_u30(2);
+        let d3 = sobol_direction_table_u30(3);
+        let d4 = sobol_direction_table_u30(4);
+        let d5 = sobol_direction_table_u30(5);
+        let d6 = sobol_direction_table_u30(6);
+        let d7 = sobol_direction_table_u30(7);
+        let s0 = (self.digital_shift[0] >> 34) as u32;
+        let s1 = (self.digital_shift[1] >> 34) as u32;
+        let s2 = (self.digital_shift[2] >> 34) as u32;
+        let s3 = (self.digital_shift[3] >> 34) as u32;
+        let s4 = (self.digital_shift[4] >> 34) as u32;
+        let s5 = (self.digital_shift[5] >> 34) as u32;
+        let s6 = (self.digital_shift[6] >> 34) as u32;
+        let s7 = (self.digital_shift[7] >> 34) as u32;
+        let mut out = vec![0.0_f64; n.saturating_mul(8)];
+        let mut idx = start;
+        let mut b0 = sobol_bits_u30(idx, 0);
+        let mut b1 = sobol_bits_u30(idx, 1);
+        let mut b2 = sobol_bits_u30(idx, 2);
+        let mut b3 = sobol_bits_u30(idx, 3);
+        let mut b4 = sobol_bits_u30(idx, 4);
+        let mut b5 = sobol_bits_u30(idx, 5);
+        let mut b6 = sobol_bits_u30(idx, 6);
+        let mut b7 = sobol_bits_u30(idx, 7);
+
+        for (row, slot) in out.chunks_mut(8).enumerate() {
+            slot[0] = unit_interval_from_u30(b0 ^ s0);
+            slot[1] = unit_interval_from_u30(b1 ^ s1);
+            slot[2] = unit_interval_from_u30(b2 ^ s2);
+            slot[3] = unit_interval_from_u30(b3 ^ s3);
+            slot[4] = unit_interval_from_u30(b4 ^ s4);
+            slot[5] = unit_interval_from_u30(b5 ^ s5);
+            slot[6] = unit_interval_from_u30(b6 ^ s6);
+            slot[7] = unit_interval_from_u30(b7 ^ s7);
+
+            let next_idx = idx.saturating_add(1);
+            if row + 1 < n {
+                let bit = next_idx.trailing_zeros() as usize;
+                b0 ^= d0[bit];
+                b1 ^= d1[bit];
+                b2 ^= d2[bit];
+                b3 ^= d3[bit];
+                b4 ^= d4[bit];
+                b5 ^= d5[bit];
+                b6 ^= d6[bit];
+                b7 ^= d7[bit];
+            }
+            idx = next_idx;
+        }
+
+        out
+    }
+
+    fn sample_8d_parallel(&self, start: u64, n: usize) -> Vec<f64> {
+        let dirs = [
+            direction_table(0),
+            direction_table(1),
+            direction_table(2),
+            direction_table(3),
+            direction_table(4),
+            direction_table(5),
+            direction_table(6),
+            direction_table(7),
+        ];
+        let shifts = [
+            self.digital_shift[0],
+            self.digital_shift[1],
+            self.digital_shift[2],
+            self.digital_shift[3],
+            self.digital_shift[4],
+            self.digital_shift[5],
+            self.digital_shift[6],
+            self.digital_shift[7],
+        ];
+        let mut out = vec![0.0_f64; n.saturating_mul(8)];
+        let nthreads = sobol_parallel_thread_count(n);
+        let chunk = n.div_ceil(nthreads);
+        std::thread::scope(|scope| {
+            for (t, block) in out.chunks_mut(chunk * 8).enumerate() {
+                let p0 = t * chunk;
+                scope.spawn(move || {
+                    let mut idx = start.saturating_add(p0 as u64);
+                    let mut bits = [
+                        sobol_bits(idx, 0),
+                        sobol_bits(idx, 1),
+                        sobol_bits(idx, 2),
+                        sobol_bits(idx, 3),
+                        sobol_bits(idx, 4),
+                        sobol_bits(idx, 5),
+                        sobol_bits(idx, 6),
+                        sobol_bits(idx, 7),
+                    ];
+                    for slot in block.chunks_mut(8) {
+                        slot[0] = bits_to_unit(bits[0] ^ shifts[0]);
+                        slot[1] = bits_to_unit(bits[1] ^ shifts[1]);
+                        slot[2] = bits_to_unit(bits[2] ^ shifts[2]);
+                        slot[3] = bits_to_unit(bits[3] ^ shifts[3]);
+                        slot[4] = bits_to_unit(bits[4] ^ shifts[4]);
+                        slot[5] = bits_to_unit(bits[5] ^ shifts[5]);
+                        slot[6] = bits_to_unit(bits[6] ^ shifts[6]);
+                        slot[7] = bits_to_unit(bits[7] ^ shifts[7]);
+
+                        let next_idx = idx.saturating_add(1);
+                        if next_idx != idx {
+                            let bit = next_idx.trailing_zeros() as usize;
+                            bits[0] ^= dirs[0][bit];
+                            bits[1] ^= dirs[1][bit];
+                            bits[2] ^= dirs[2][bit];
+                            bits[3] ^= dirs[3][bit];
+                            bits[4] ^= dirs[4][bit];
+                            bits[5] ^= dirs[5][bit];
+                            bits[6] ^= dirs[6][bit];
+                            bits[7] ^= dirs[7][bit];
                         }
                         idx = next_idx;
                     }
@@ -1028,6 +1234,19 @@ fn sobol_direction(dimension: usize, bit: usize) -> u64 {
 
 fn bits_to_unit(bits: u64) -> f64 {
     unit_interval_from_u64(bits)
+}
+
+fn sobol_direction_table_u30(dimension: usize) -> [u32; 30] {
+    let directions = direction_table(dimension);
+    let mut table = [0_u32; 30];
+    for (bit, word) in table.iter_mut().enumerate() {
+        *word = (directions[bit] >> 34) as u32;
+    }
+    table
+}
+
+fn sobol_bits_u30(index: u64, dimension: usize) -> u32 {
+    (sobol_bits(index, dimension) >> 34) as u32
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -2184,6 +2403,10 @@ fn unit_interval_from_u64(bits: u64) -> f64 {
     (bits >> 11) as f64 * (1.0_f64 / (1u64 << 53) as f64)
 }
 
+fn unit_interval_from_u30(bits: u32) -> f64 {
+    bits as f64 * (1.0_f64 / (1u64 << 30) as f64)
+}
+
 fn splitmix64(mut z: u64) -> u64 {
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
     z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
@@ -2705,6 +2928,78 @@ mod tests {
 
         let sample = sampler.sample(n);
         let mut expected = Vec::with_capacity(n.saturating_mul(2));
+        let mut idx = start;
+        for _ in 0..n {
+            for (dimension, &shift) in shifts.iter().enumerate() {
+                expected.push(bits_to_unit(sobol_bits(idx, dimension) ^ shift));
+            }
+            idx = idx.saturating_add(1);
+        }
+
+        assert_eq!(sample, expected);
+        assert_eq!(sampler.next_index(), idx);
+    }
+
+    #[test]
+    fn sobol_8d_incremental_matches_direct_bits() {
+        for (start, n) in [(0_u64, 16_usize), (1, 16), (16_383, 17), (u64::MAX - 2, 5)] {
+            let shifts: Vec<u64> = (0..8)
+                .map(|dimension| splitmix64(0x8eed_u64.wrapping_add(dimension as u64)))
+                .collect();
+            let mut sampler = SobolSampler::with_shift_words(8, shifts.clone()).unwrap();
+            sampler.skip(start);
+
+            let sample = sampler.sample(n);
+            let mut expected = Vec::with_capacity(n.saturating_mul(8));
+            let mut idx = start;
+            for _ in 0..n {
+                for (dimension, &shift) in shifts.iter().enumerate() {
+                    expected.push(bits_to_unit(sobol_bits(idx, dimension) ^ shift));
+                }
+                idx = idx.saturating_add(1);
+            }
+
+            assert_eq!(sample, expected);
+            assert_eq!(sampler.next_index(), idx);
+        }
+    }
+
+    #[test]
+    fn sobol_8d_prefix30_matches_direct_bits() {
+        let d = 8usize;
+        let n = 1_025usize;
+        let start = 32_767_u64;
+        let shifts = vec![0_u64; d];
+        let mut sampler = SobolSampler::with_shift_words(d, shifts).unwrap();
+        sampler.skip(start);
+
+        let sample = sampler.sample(n);
+        let mut expected = Vec::with_capacity(n.saturating_mul(d));
+        let mut idx = start;
+        for _ in 0..n {
+            for dimension in 0..d {
+                expected.push(bits_to_unit(sobol_bits(idx, dimension)));
+            }
+            idx = idx.saturating_add(1);
+        }
+
+        assert_eq!(sample, expected);
+        assert_eq!(sampler.next_index(), idx);
+    }
+
+    #[test]
+    fn sobol_8d_parallel_path_matches_direct_bits() {
+        let d = 8usize;
+        let n = sobol_parallel_work_gate(d) / d + 17;
+        let start = 16_383_u64;
+        let shifts: Vec<u64> = (0..d)
+            .map(|dimension| splitmix64(0x8eed_c0de_u64.wrapping_add(dimension as u64)))
+            .collect();
+        let mut sampler = SobolSampler::with_shift_words(d, shifts.clone()).unwrap();
+        sampler.skip(start);
+
+        let sample = sampler.sample(n);
+        let mut expected = Vec::with_capacity(n.saturating_mul(d));
         let mut idx = start;
         for _ in 0..n {
             for (dimension, &shift) in shifts.iter().enumerate() {

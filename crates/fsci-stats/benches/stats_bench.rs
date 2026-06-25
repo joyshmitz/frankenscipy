@@ -55,6 +55,9 @@ fn bench_qmc_sampling(c: &mut Criterion) {
             b.iter(|| qmc_sobol_sample(n, 2))
         });
     }
+    group.bench_function(BenchmarkId::new("sobol_8d", 65_536usize), |b| {
+        b.iter(|| qmc_sobol_sample(65_536, 8))
+    });
     group.finish();
 }
 

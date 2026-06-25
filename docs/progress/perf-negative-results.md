@@ -86,6 +86,14 @@ condition so dead ends are not repeated casually.
   0 failed. New coverage forces the 8D serial, guarded prefix30, and parallel
   paths against direct `sobol_bits` + digital-shift reference values, including
   saturation-edge direct-bit cases.
+- Full conformance blocker (unrelated to this stats/Sobol path):
+  `AGENT_NAME=GreenFalcon CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b
+  rch exec -- cargo test -p fsci-conformance -- --nocapture` fails current-main
+  cluster packet expectations (`linkage_complete_5pt` mismatch plus cluster quota
+  / fixture assertions) and the worker reports `ModuleNotFoundError: No module
+  named 'scipy'`; after those visible failures the run stopped producing output
+  and the remote wait was interrupted. Treat this as a separate conformance
+  blocker, not Sobol evidence.
 - Retry/extend: the next likely Sobol lever is not another 8D gate tweak. Look at
   batched direction-table transposition or SIMD conversion for 16D/32D where the
   chunked path still carries more state and SciPy remains closer.

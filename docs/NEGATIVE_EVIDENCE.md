@@ -47,6 +47,11 @@ ledger above so the project has one source of truth.
   cargo test -p fsci-stats sobol --lib -- --nocapture` = 13 passed / 0 failed.
   `cargo bench --release` is not accepted by this Cargo; the per-crate RCH
   equivalent used `cargo bench --profile release -p fsci-stats ...`.
+- Full `fsci-conformance` was attempted per-crate and is not green on current
+  main: it fails unrelated cluster packet cases (`linkage_complete_5pt`,
+  cluster quota / fixture) and reports missing SciPy on the worker, then hung
+  after the visible test list; the hung wait was interrupted after the failures
+  were captured.
 
 ## 2026-06-25 - GreenFalcon (claude-code) - KEEP: memoize gauss_legendre_nodes_weights by order (117-972x on repeated quadrature, byte-identical)
 
