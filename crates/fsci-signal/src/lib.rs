@@ -14377,10 +14377,16 @@ impl ShortTimeFft {
         let p_max = self.post_padding(n).1;
         let f_pts = self.f_pts();
         let p_num = (p_max - p_min).max(0) as usize;
-        let mut s = vec![vec![(0.0_f64, 0.0_f64); p_num]; f_pts];
-        let mut seg = vec![0.0_f64; m_num];
-        for (pi, p) in (p_min..p_max).enumerate() {
+
+        // Each frame is an independent windowed FFT writing one column, so the
+        // frames are computed in parallel and reassembled into the freq-major
+        // output in frame order. BYTE-IDENTICAL to the serial loop: every column
+        // is the same deterministic `fft_func(seg)` and the assembly order is
+        // unchanged (no reduction). Cheap small STFTs stay serial via the gate.
+        let compute_col = |pi: usize| -> Result<Vec<(f64, f64)>, SignalError> {
+            let p = p_min + pi as i64;
             let k0 = p * hop - mid;
+            let mut seg = vec![0.0_f64; m_num];
             for (j, slot) in seg.iter_mut().enumerate() {
                 let idx = k0 + j as i64;
                 *slot = if idx >= 0 && (idx as usize) < n {
@@ -14390,7 +14396,44 @@ impl ShortTimeFft {
                 };
             }
             let col = self.fft_func(&seg)?;
-            for (fi, &c) in col.iter().enumerate().take(f_pts) {
+            Ok(col.into_iter().take(f_pts).collect())
+        };
+
+        let nthreads = stft_frame_thread_count(p_num, m_num);
+        let cols: Vec<Vec<(f64, f64)>> = if nthreads <= 1 {
+            (0..p_num)
+                .map(&compute_col)
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            let chunk = p_num.div_ceil(nthreads);
+            let cc = &compute_col;
+            type ColChunk = Result<Vec<Vec<(f64, f64)>>, SignalError>;
+            let chunk_results: Vec<ColChunk> = std::thread::scope(|scope| {
+                let handles: Vec<_> = (0..nthreads)
+                    .filter_map(|t| {
+                        let c0 = t * chunk;
+                        if c0 >= p_num {
+                            return None;
+                        }
+                        let c1 = (c0 + chunk).min(p_num);
+                        Some(scope.spawn(move || (c0..c1).map(cc).collect::<Result<Vec<_>, _>>()))
+                    })
+                    .collect();
+                handles
+                    .into_iter()
+                    .map(|h| h.join().expect("stft worker panicked"))
+                    .collect()
+            });
+            let mut cols = Vec::with_capacity(p_num);
+            for cr in chunk_results {
+                cols.extend(cr?);
+            }
+            cols
+        };
+
+        let mut s = vec![vec![(0.0_f64, 0.0_f64); p_num]; f_pts];
+        for (pi, col) in cols.iter().enumerate() {
+            for (fi, &c) in col.iter().enumerate() {
                 s[fi][pi] = c;
             }
         }

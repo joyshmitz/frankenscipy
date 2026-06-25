@@ -6,6 +6,36 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon - KEEP: parallelize ShortTimeFFT::stft over frames (~4.6-5.5x, BYTE-IDENTICAL)
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`.
+- Lever: `ShortTimeFft::stft` / `::spectrogram` (`scipy.signal.ShortTimeFFT`) ran
+  the per-frame windowed FFT loop SERIALLY, even though the free `stft` function
+  in the same crate was already frame-parallel. Each frame is an independent
+  windowed `fft_func(seg)` writing one output column, so the frames are now
+  computed across threads (chunked `thread::scope`, mirroring the free `stft`)
+  and reassembled into the freq-major output in frame order. Gated by the
+  existing `stft_frame_thread_count` (cheap small STFTs stay serial).
+- BYTE-IDENTICAL: distinct output columns, deterministic per-frame FFT, and the
+  assembly order is unchanged — NO reduction/reassociation. `fft_func` is a pure
+  `&self` method and `ShortTimeFft` has no interior mutability (`Sync`).
+- Measured: same-process same-worker A/B (RCH `hz2`, nthreads=16,
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cc cargo run
+  --release -p fsci-signal --bin perf_stft_frames_ab`; serial vs parallel frame
+  loop using the public `fsci_fft::fft` as a faithful `fft_func` proxy):
+
+  | n | m | frames | hop | serial | parallel | speedup | columns |
+  | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+  | 500000 | 512 | 1952 | 256 | 6.52 ms | 1.43 ms | 4.57x | EXACT |
+  | 1000000 | 256 | 7811 | 128 | 24.16 ms | 4.40 ms | 5.49x | EXACT |
+
+- Decision: KEEP. `cargo test -p fsci-signal stft spectrogram` exit 0 (incl.
+  `stft_parallel_is_bit_identical` 1/1, `stft_istft_roundtrip`,
+  `stft_frequency_bins`, `spectrogram_dimensions`, `spectrogram_chirp_energy`).
+- Gates: edit only to the `ShortTimeFft::stft` method + new microbench bin
+  (hand-formatted; no `cargo fmt -p fsci-signal` whole-file sweep). NOTE: rch
+  truncates fsci-signal's lib test stdout — confirm individual tests by name.
+
 ## 2026-06-25 - GreenFalcon - KEEP: MatrixNormal logpdf maha term via multi-RHS triangular solve (~1.5-3.1x, BYTE-IDENTICAL)
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`.
