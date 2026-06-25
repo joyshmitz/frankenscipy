@@ -8054,23 +8054,39 @@ pub fn sosfiltfilt(sos: &[SosSection], x: &[f64]) -> Result<Vec<f64>, SignalErro
 
 /// Internal helper for in-place SOS filtering with initial conditions.
 fn sosfilt_in_place(sos: &[SosSection], x: &mut [f64], zi: &[[f64; 2]]) -> Result<(), SignalError> {
+    // SAMPLE-MAJOR cascade (loop-interchange of the section-major form): each
+    // sample is pushed through every section while held in `cur`, so the signal
+    // streams through memory ONCE instead of once per section. Same lever as the
+    // public `sosfilt` general path; `sosfiltfilt` calls this twice (forward +
+    // backward) on the padded signal, so the win compounds. BIT-IDENTICAL:
+    // section s starts from its initial condition zi[s] and consumes section
+    // s-1's output stream in the same sample order with the same DF2T FMA order;
+    // only the loop nesting swaps (a0 is already validated non-zero by the
+    // `sosfilt_zi` call in `sosfiltfilt`, so the coeff divisions match exactly).
+    let mut coeffs: Vec<[f64; 5]> = Vec::with_capacity(sos.len());
+    let mut state: Vec<[f64; 2]> = Vec::with_capacity(sos.len());
     for (i, section) in sos.iter().enumerate() {
-        let b0 = section[0] / section[3];
-        let b1 = section[1] / section[3];
-        let b2 = section[2] / section[3];
-        let a1 = section[4] / section[3];
-        let a2 = section[5] / section[3];
+        let a0 = section[3];
+        coeffs.push([
+            section[0] / a0,
+            section[1] / a0,
+            section[2] / a0,
+            section[4] / a0,
+            section[5] / a0,
+        ]);
+        state.push([zi[i][0], zi[i][1]]);
+    }
 
-        let mut d1 = zi[i][0];
-        let mut d2 = zi[i][1];
-
-        for sample in x.iter_mut() {
-            let xi = *sample;
-            let yi = b0 * xi + d1;
-            d1 = b1 * xi - a1 * yi + d2;
-            d2 = b2 * xi - a2 * yi;
-            *sample = yi;
+    for sample in x.iter_mut() {
+        let mut cur = *sample;
+        for (c, st) in coeffs.iter().zip(state.iter_mut()) {
+            let [b0, b1, b2, a1, a2] = *c;
+            let yi = b0 * cur + st[0];
+            st[0] = b1 * cur - a1 * yi + st[1];
+            st[1] = b2 * cur - a2 * yi;
+            cur = yi;
         }
+        *sample = cur;
     }
     Ok(())
 }

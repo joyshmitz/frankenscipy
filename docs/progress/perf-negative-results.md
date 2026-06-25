@@ -4,6 +4,63 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-25 - frankenscipy-greenfalcon-sosfiltfilt-samplemajor - KEEP (byte-identical): signal.sosfiltfilt kernel (sosfilt_in_place) loop-interchange section-major -> sample-major; 3.4-3.6x kernel self-speedup, flips a ~2.5-3x scipy loss to parity-to-faster
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. DIG follow-on to
+  the sosfilt sample-major win below (memory flagged sosfiltfilt as the next
+  loop-interchange candidate). No unlanded worktree win this turn.
+
+### Target
+
+`sosfiltfilt` (zero-phase: pad → forward SOS → reverse → backward SOS → reverse
+→ unpad) applies the private `sosfilt_in_place` kernel TWICE on the padded
+signal (length n + 2·padlen). That kernel was still SECTION-MAJOR (a full pass
+over the whole padded signal per biquad), re-streaming it n_sections× per
+direction. It differs from plain sosfilt only in carrying per-section initial
+conditions zi[i].
+
+### Fix + byte-identity
+
+Loop-interchanged `sosfilt_in_place` to SAMPLE-MAJOR (precompute normalized
+coeffs `[s0/a0,s1/a0,s2/a0,s4/a0,s5/a0]`, init `state[i]=zi[i]`, single pass
+cascading `cur`). BIT-IDENTICAL: section s starts from zi[s] and consumes
+section s-1's output stream in the same sample order with the same DF2T FMA
+order; only loop nesting swaps. a0 is already validated non-zero by the
+`sosfilt_zi` call inside sosfiltfilt, so the coeff divisions are unchanged.
+
+### Measurement (same-box: fsci local isolated target vs SciPy 1.17.1)
+
+12th-order Butterworth = 6 sections, best-of-N. Kernel A/B copies the exact old
+section-major loop vs the new sample-major loop with a realistic zi from
+`sosfilt_zi`:
+
+| n        | kernel section-major | kernel sample-major | kernel self | mism |
+|----------|----------------------|---------------------|-------------|------|
+| 65536    | 1.8379 ms            | 0.5063 ms           | 3.63x       | 0    |
+| 262144   | 7.7865 ms            | 2.1810 ms           | 3.57x       | 0    |
+| 1048576  | 30.6353 ms           | 8.9357 ms           | 3.43x       | 0    |
+
+Public `sosfiltfilt` (new) vs `scipy.signal.sosfiltfilt`:
+
+| n        | fsci new   | scipy      | ratio          |
+|----------|------------|------------|----------------|
+| 65536    | 1.4546 ms  | 1.3062 ms  | 1.11x slower   |
+| 262144   | 5.8491 ms  | 6.5593 ms  | 1.12x FASTER   |
+| 1048576  | 24.8489 ms | 26.8974 ms | 1.08x FASTER   |
+
+The two dominant kernel passes carry the speedup; the old section-major
+sosfiltfilt was ~2.5-3.1x slower than scipy, now parity-to-faster.
+
+### Conformance + retry
+
+`cargo test --release -p fsci-signal sosfilt` = 10 passed / 0 failed / 1 ignored,
+incl. `sosfilt_zi_and_sosfiltfilt_match_scipy` (end-to-end scipy tolerance match
+through the changed kernel) and `sosfiltfilt_zero_phase`. Same variant-H lever
+(loop-interchange for chained stateful passes) as the sosfilt KEEP below.
+Remaining cascade candidates exhausted in signal: plain `sosfilt` (done) +
+`sosfilt_in_place`/`sosfiltfilt` (this) cover the SOS family; `lfilter` biquad
+is single-section (CopperFern register-unrolled). Retry: none for sosfiltfilt.
+
 ## 2026-06-25 - frankenscipy-greenfalcon-sosfilt-samplemajor - KEEP (BOLD WIN, byte-identical): signal.sosfilt general N-section loop-interchange section-major -> sample-major; 3.8-3.9x self-speedup flips a ~4x scipy loss to ~parity
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. DIG (no unlanded

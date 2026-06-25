@@ -6,6 +6,35 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon (claude-code) - KEEP (byte-identical): signal.sosfiltfilt (sosfilt_in_place kernel) loop-interchanged section-major -> sample-major, 3.4-3.6x kernel self-speedup, flips a ~2.5-3x SciPy loss to parity-to-faster
+
+- Agent: GreenFalcon (claude-code). DIG follow-on to the sosfilt win below —
+  the memory note flagged `sosfiltfilt` as the next loop-interchange candidate.
+  `sosfiltfilt` (zero-phase forward+backward SOS) calls the private
+  `sosfilt_in_place` kernel TWICE on the padded signal, and that kernel was
+  still SECTION-MAJOR (full pass per biquad → signal re-streamed n_sections×).
+  Unlike plain sosfilt it carries per-section initial conditions zi[i].
+- FIX (crates/fsci-signal/src/lib.rs, `sosfilt_in_place`): loop-interchange to
+  SAMPLE-MAJOR — precompute normalized coeffs, init `state[i]=zi[i]`, single
+  pass cascading `cur` through all sections. BYTE-IDENTICAL: section s starts
+  from zi[s] and consumes section s-1's output stream in the same sample order
+  with the same DF2T FMA order; only loop nesting swaps. (a0 is already
+  validated non-zero by the `sosfilt_zi` call in sosfiltfilt, so coeff divisions
+  match exactly — no behavior change.)
+- MEASURED same-box (12th-order Butterworth = 6 sections; fsci local isolated
+  target vs SciPy 1.17.1):
+  - KERNEL A/B (`sosfilt_in_place`, the dominant cost): section-major →
+    sample-major = **3.63x / 3.57x / 3.43x** self-speedup at n=65536/262144/
+    1048576, mism=0 (bit-identical).
+  - PUBLIC `sosfiltfilt` vs `scipy.signal.sosfiltfilt`: new 1.4546 / 5.8491 /
+    24.8489 ms vs scipy 1.3062 / 6.5593 / 26.8974 ms = **1.11x slower (parity) /
+    1.12x FASTER / 1.08x FASTER**. The section-major path made sosfiltfilt
+    ~2.5-3.1x slower than scipy (2 kernel passes dominate); now parity-to-faster.
+- Conformance GREEN: `cargo test -p fsci-signal sosfilt` = 10/0 incl.
+  `sosfilt_zi_and_sosfiltfilt_match_scipy` (end-to-end scipy match through the
+  changed kernel) and `sosfiltfilt_zero_phase`. Same variant-H lever as the
+  sosfilt KEEP below. Detail in canonical ledger.
+
 ## 2026-06-25 - GreenFalcon (claude-code) - KEEP (BOLD WIN, byte-identical): signal.sosfilt general N-section path loop-interchanged section-major -> sample-major, 3.8-3.9x self-speedup, flips a ~4x SciPy loss to ~parity
 
 - Agent: GreenFalcon (claude-code). A DIG (no unlanded worktree win). fsci's
