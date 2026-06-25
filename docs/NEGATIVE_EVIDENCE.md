@@ -6,6 +6,16 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon (claude-code) - REJECT(de-risk): next_fast_len embedding for matmul_toeplitz (erratic 0.41-2.88x)
+
+- Agent: GreenFalcon (claude-code). Tempting one-liner — `next_fast_len(m+n-1) <=
+  next_pow2(m+n-1)` always, so a smaller circulant embedding for upper-bracket
+  sizes. De-risk A/B (pow2 L vs fastlen L, per-column FFT round-trip): WINS at some
+  sizes (L0=5000 2.88x, 6000 1.80x) but REGRESSIONS at others (L0=2050 0.41x, 4100
+  0.53x, 1100 0.63x). fsci's mixed-radix FFT is erratic by factorization (5-powers
+  fast, 7-heavy slow — the non-pow2 wall). Would regress ~half of sizes
+  unpredictably; keep next_pow2. No source change. Detail in canonical ledger.
+
 ## 2026-06-25 - GreenFalcon (claude-code) - KEEP: QMC discrepancy O(n²) double-sum threaded for large n (2.38-13.22x; matches scipy workers=-1)
 
 - Agent: GreenFalcon (claude-code). scipy.stats.qmc.discrepancy parallelises its

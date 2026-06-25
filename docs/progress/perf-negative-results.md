@@ -4,6 +4,26 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-25 - frankenscipy-greenfalcon-matmul-toeplitz-nextfastlen - REJECT(de-risk): next_fast_len embedding length regresses matmul_toeplitz (erratic 0.41-2.88x)
+
+- Agent: GreenFalcon (claude-code). `matmul_toeplitz` embeds in a circulant of
+  length `L`; it currently uses `L = next_pow2(m+n-1)`. Since `next_fast_len(L0) <=
+  next_pow2(L0)` always (a power of 2 is 5-smooth), a 5-smooth `L` is up to ~1.8x
+  smaller for embedding lengths in the upper half of a pow2 bracket — tempting.
+- De-risk same-process A/B (per-column fft(emb)+fft(xpad)+ifft round-trip, pow2 L
+  vs next_fast_len L, RCH worker), speedup pow2→fastlen:
+  - WINS: L0=1500 1.15x, 3000 1.39x, 5000 (=2³·5⁴) **2.88x**, 6000 1.80x, 12000 1.17x
+  - REGRESSIONS: L0=520 0.83x, 1050 0.74x, 1100 0.63x, 2050 (=2·3·7³) **0.41x**,
+    2100 0.91x, 4100 0.53x, 8200 0.68x
+- Verdict: fsci's mixed-radix FFT is ERRATIC by factorization (high powers of 5
+  fast; 7-heavy factors slow — the same non-pow2 wall the `fft` 5-smooth scorecard
+  rows document). Choosing `next_fast_len` would regress ~half of all embedding
+  sizes unpredictably; safely exploiting it would need a per-factorization cost
+  model of the mixed-radix kernel (fragile). Keep `next_pow2` (predictable,
+  routes through the fast radix-4 path). Bin removed; no source change.
+- Retry condition: only if fsci-fft's non-pow2 mixed-radix gains Stockham/SIMD
+  butterflies that make 5-smooth sizes uniformly competitive with radix-4.
+
 ## 2026-06-25 - frankenscipy-greenfalcon-discrepancy-parallel-doublesum - KEEP: QMC discrepancy O(n²) double-sum threaded for large n (2.38-13.22x; matches scipy workers=-1)
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. `scipy.stats.qmc
