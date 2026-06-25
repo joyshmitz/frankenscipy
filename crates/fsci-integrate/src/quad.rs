@@ -1947,6 +1947,19 @@ fn widest_region_dimension(region: &CubatureRegion) -> usize {
 ///
 /// Uses Newton's method to find roots of the Legendre polynomial P_n(x),
 /// then computes weights via the Christoffel-Darboux formula.
+/// Cache of Gauss-Legendre nodes/weights keyed by order `n`. The Newton-method
+/// node solve is O(n²·iterations); `scipy.special.roots_legendre` is lru_cached for
+/// the same reason — repeated `fixed_quad` / `gauss_legendre` calls with one order
+/// then cost an O(n) clone instead of a full recompute.
+static GAUSS_LEGENDRE_CACHE: std::sync::OnceLock<
+    std::sync::RwLock<std::collections::HashMap<usize, (Vec<f64>, Vec<f64>)>>,
+> = std::sync::OnceLock::new();
+
+fn gauss_legendre_node_cache()
+-> &'static std::sync::RwLock<std::collections::HashMap<usize, (Vec<f64>, Vec<f64>)>> {
+    GAUSS_LEGENDRE_CACHE.get_or_init(|| std::sync::RwLock::new(std::collections::HashMap::new()))
+}
+
 fn gauss_legendre_nodes_weights(n: usize) -> (Vec<f64>, Vec<f64>) {
     if n == 0 {
         return (Vec::new(), Vec::new());
@@ -1954,7 +1967,21 @@ fn gauss_legendre_nodes_weights(n: usize) -> (Vec<f64>, Vec<f64>) {
     if n == 1 {
         return (vec![0.0], vec![2.0]);
     }
+    let cache = gauss_legendre_node_cache();
+    if let Some(hit) = cache.read().unwrap().get(&n) {
+        return hit.clone();
+    }
+    // Computed outside the write lock; the result is deterministic, so a concurrent
+    // insert of the same `n` is harmless (identical value).
+    let computed = compute_gauss_legendre_nodes_weights(n);
+    cache.write().unwrap().insert(n, computed.clone());
+    computed
+}
 
+/// Compute Gauss-Legendre nodes/weights for order `n >= 2` via Newton's method on
+/// the Legendre roots. Memoized by [`gauss_legendre_nodes_weights`]; the cached
+/// value is this exact result, so callers stay bit-identical.
+fn compute_gauss_legendre_nodes_weights(n: usize) -> (Vec<f64>, Vec<f64>) {
     let nf = n as f64;
     let mut nodes = Vec::with_capacity(n);
     let mut weights = Vec::with_capacity(n);
@@ -3543,6 +3570,21 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gauss_legendre_node_cache_is_bit_identical_to_compute() {
+        // The by-order cache must return exactly the Newton-method result, so every
+        // fixed_quad / gauss_legendre value is unchanged. Verify the first
+        // (miss → compute+store) and second (cache hit) calls both byte-equal a
+        // direct recompute, across even and odd orders.
+        for n in [2usize, 5, 16, 33, 64, 100] {
+            let direct = compute_gauss_legendre_nodes_weights(n);
+            let first = gauss_legendre_nodes_weights(n);
+            let second = gauss_legendre_nodes_weights(n);
+            assert_eq!(first, direct, "cache miss path vs compute, n={n}");
+            assert_eq!(second, direct, "cache hit path vs compute, n={n}");
+        }
+    }
 
     #[test]
     fn gauss_legendre_exact_for_high_n_polynomials() {

@@ -4,6 +4,34 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-25 - frankenscipy-greenfalcon-gauss-legendre-node-cache - KEEP: memoize gauss_legendre_nodes_weights by order (117-972x on repeated quadrature, byte-identical; matches scipy roots_legendre lru_cache)
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. `fixed_quad` and
+  `gauss_legendre` recomputed the Gauss-Legendre nodes/weights via Newton's method
+  on the Legendre roots — `O(n²·iterations)` — on EVERY call. `scipy.special
+  .roots_legendre` is `@lru_cache`d for exactly this reason, so repeated quadrature
+  with one order (a common loop pattern: many integrands, or one integrand over many
+  intervals) was an undocumented loss vs SciPy.
+- Lever (skill: memoization — "cached == recomputed"): cache the `(nodes, weights)`
+  by order `n` in a `OnceLock<RwLock<HashMap<usize, (Vec<f64>,Vec<f64>)>>>` (the same
+  idiom as fsci-fft's twiddle caches). The wrapper returns a clone of the stored
+  vectors on a hit (`O(n)`) instead of a full recompute; the stored value is the
+  exact `compute_gauss_legendre_nodes_weights` result, so every quadrature value is
+  BIT-IDENTICAL to before.
+- De-risk same-process A/B (uncached recompute vs cached, K repeated same-order
+  calls, ALL EXACT byte-identical): n=16/K5000 **117x**, n=48/K5000 **565x**,
+  n=96/K2000 **972x**, n=200/K1000 **863x**. (Single-call cost is unchanged — the
+  win is purely the eliminated recompute on repeats.)
+- Conformance GREEN: new `gauss_legendre_node_cache_is_bit_identical_to_compute`
+  (cache miss + hit both byte-equal a direct recompute, even/odd orders 2..100) plus
+  the unchanged exactness goldens — `cargo test -p fsci-integrate gauss` = **7/0**
+  (run LOCALLY: the RCH worker pool hit a fleet-wide dev-dep toolchain churn (E0514)
+  this turn, blocking ~17 `rch exec` builds; verified via an isolated local
+  `CARGO_TARGET_DIR` check + test, lib compiles in 9.6s).
+- Retry/extend: same lru_cache lever applies to any other recomputed quadrature
+  node table (Gauss-Hermite/Laguerre/Chebyshev roots, Lebedev grids) if fsci
+  recomputes them per call.
+
 ## 2026-06-25 - frankenscipy-greenfalcon-mvnqmc-ndtri-parallel - KEEP: parallelize MultivariateNormalQmc inverse-transform ndtri map (3.38-5.97x for large n, byte-identical)
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`.

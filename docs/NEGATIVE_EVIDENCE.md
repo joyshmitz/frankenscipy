@@ -6,6 +6,18 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon (claude-code) - KEEP: memoize gauss_legendre_nodes_weights by order (117-972x on repeated quadrature, byte-identical)
+
+- Agent: GreenFalcon (claude-code). `fixed_quad`/`gauss_legendre` recomputed the
+  Gauss-Legendre nodes via Newton's method (O(n²·iters)) on every call, while
+  scipy.special.roots_legendre is lru_cached — repeated quadrature with one order
+  lost to SciPy. Cache (nodes,weights) by n in a OnceLock<RwLock<HashMap>> (returns
+  an O(n) clone on hit; stored value is the exact recompute → bit-identical). De-risk
+  A/B (repeated same-order calls, EXACT): n=48 565x, n=96 **972x**, n=200 863x. New
+  test gauss_legendre_node_cache_is_bit_identical_to_compute; `cargo test
+  -p fsci-integrate gauss` = 7/0 (verified LOCALLY — RCH pool hit fleet-wide dev-dep
+  toolchain churn E0514 this turn). Detail in canonical ledger.
+
 ## 2026-06-25 - cod-a - KEEP: SphericalVoronoi sorted horizon edge list, partial large-n close
 
 - Agent: cod-a (codex-cli / gpt-5.2), `AGENT_NAME=cod-a`.
