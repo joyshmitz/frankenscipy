@@ -76,6 +76,17 @@ ledger above so the project has one source of truth.
   `dft_matrix_unitary`, `mr_dft_matrix_shape`). The "precompute the loop-invariant
   transcendental over its distinct argument range" lever (cf. firls) applied to a
   roots-of-unity matrix build.
+- BOLD-VERIFY vs SciPy, GreenFalcon codex-cli, `AGENT_NAME=GreenFalcon`,
+  `RUSTUP_TOOLCHAIN=nightly-2026-06-10`,
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a`: added
+  `dft_gauntlet_scipy` Criterion rows to `crates/fsci-linalg/benches/linalg_bench.rs`.
+  Current Rust `dft(n, None)` medians were `536.50 us / 2.4323 ms / 10.831 ms`
+  for `n=256/512/1024`; local SciPy 1.17.1 `scipy.linalg.dft` medians were
+  `8.2442 ms / 40.323 ms / 175.06 ms`, so Rust is `15.37x / 16.58x / 16.16x`
+  faster than SciPy on the reusable comparator rows. A direct best-of-5 `n=2048`
+  spot check measured Rust `20.23661 ms` vs SciPy `695.60084 ms` = `34.37x`
+  faster. Evidence:
+  `tests/artifacts/perf/2026-06-25-greenfalcon-linalg-dft-scipy/EVIDENCE.md`.
 - Gates: edit only to `dft` + new microbench bin (hand-formatted; no `cargo fmt
   -p fsci-linalg` whole-file sweep).
 

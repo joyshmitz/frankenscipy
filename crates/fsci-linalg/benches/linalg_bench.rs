@@ -5,11 +5,11 @@ use std::{
     time::Duration,
 };
 
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{criterion_group, criterion_main, Criterion};
 use fsci_linalg::{
-    DecompOptions, InvOptions, LstsqOptions, MatrixAssumption, PinvOptions, SolveOptions,
-    TriangularSolveOptions, det, eigh, inv, lstsq, matmul, pinv, randomized_eigh, solve,
-    solve_banded, solve_triangular,
+    det, dft, eigh, inv, lstsq, matmul, pinv, randomized_eigh, solve, solve_banded,
+    solve_triangular, DecompOptions, InvOptions, LstsqOptions, MatrixAssumption, PinvOptions,
+    SolveOptions, TriangularSolveOptions,
 };
 use fsci_runtime::RuntimeMode;
 
@@ -20,6 +20,7 @@ const BASELINE_SIZES: &[usize] = &[100, 500, 1000, 2000, 4000];
 const MATMUL_SIZES: &[usize] = &[256, 512, 768, 1024];
 const EIGH_SIZES: &[usize] = &[256, 512];
 const RANDOMIZED_EIGH_CASES: &[(usize, usize)] = &[(256, 16), (512, 24)];
+const DFT_GAUNTLET_SIZES: &[usize] = &[256, 512, 1024];
 
 /// Diagonally-dominant matrix: guaranteed non-singular, well-conditioned.
 fn make_diag_dominant(n: usize) -> Vec<Vec<f64>> {
@@ -639,6 +640,55 @@ print(f"{elapsed:.17f}")
     Some(Duration::from_secs_f64(seconds))
 }
 
+fn scipy_dft_duration(n: usize, iters: u64) -> Option<Duration> {
+    let script = r#"
+import sys
+import time
+import numpy as np
+import scipy.linalg as la
+
+n = int(sys.argv[1])
+iters = int(sys.argv[2])
+la.dft(n)
+start = time.perf_counter()
+checksum = 0.0
+for _ in range(iters):
+    m = la.dft(n)
+    checksum += float(np.real(m[1, 1])) + float(np.imag(m[1, 1]))
+elapsed = time.perf_counter() - start
+if not np.isfinite(checksum):
+    raise SystemExit("non-finite checksum")
+print(f"{elapsed:.17f}")
+"#;
+    let mut child = Command::new("python3")
+        .args(["-", &n.to_string(), &iters.to_string()])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn scipy dft oracle");
+    child
+        .stdin
+        .as_mut()
+        .expect("open scipy dft oracle stdin")
+        .write_all(script.as_bytes())
+        .expect("write scipy dft oracle script");
+    let output = child.wait_with_output().expect("wait for scipy dft oracle");
+    if !output.status.success() {
+        eprintln!(
+            "scipy dft oracle failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return None;
+    }
+    let stdout = String::from_utf8(output.stdout).expect("utf8 scipy dft timing");
+    let seconds: f64 = stdout
+        .trim()
+        .parse()
+        .expect("parse scipy dft timing seconds");
+    Some(Duration::from_secs_f64(seconds))
+}
+
 fn bench_u0ucw_gauntlet_scipy_pinv(c: &mut Criterion) {
     use std::sync::atomic::Ordering::Relaxed;
 
@@ -742,6 +792,29 @@ fn bench_randomized_eigh_gauntlet_scipy(c: &mut Criterion) {
             eprintln!(
                 "skipping {n}x{n}_k{k}_scipy_subset_eigh: python3 cannot import scipy.linalg"
             );
+        }
+    }
+    group.finish();
+}
+
+fn bench_dft_gauntlet_scipy(c: &mut Criterion) {
+    let mut group = c.benchmark_group("dft_gauntlet_scipy");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(3));
+    for &n in DFT_GAUNTLET_SIZES {
+        group.bench_function(format!("{n}_rust_dft"), |bencher| {
+            bencher.iter(|| black_box(dft(black_box(n), black_box(Option::<&str>::None)).unwrap()));
+        });
+        if scipy_pinv_available() {
+            group.bench_function(format!("{n}_scipy_dft"), |bencher| {
+                bencher.iter_custom(|iters| {
+                    scipy_dft_duration(n, iters)
+                        .expect("scipy dft oracle should run after availability check")
+                });
+            });
+        } else {
+            eprintln!("skipping {n}_scipy_dft: python3 cannot import scipy.linalg");
         }
     }
     group.finish();
@@ -854,6 +927,7 @@ criterion_group!(
     bench_u0ucw_gauntlet_scipy_pinv,
     bench_u0ucw_gauntlet_scipy_lstsq,
     bench_randomized_eigh_gauntlet_scipy,
+    bench_dft_gauntlet_scipy,
     bench_baseline_pinv
 );
 
