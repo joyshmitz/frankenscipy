@@ -7367,16 +7367,42 @@ impl MultivariateNormal {
         // Pure per-point log-density (forward-substitution Mahalanobis). Identical
         // arithmetic and order regardless of the owning thread, so the parallel
         // path is bit-identical to the sequential map.
-        let eval = |x: &[f64], centered: &mut [f64], solved: &mut [f64]| -> f64 {
+        // Batch Mahalanobis log-density for a slice of points via ONE multi-RHS
+        // forward substitution instead of a per-point single-RHS solve. For each
+        // coordinate i, `acc[p] = Σ_{k<i} L[i][k]·w[k][p]` then `w[i][p] =
+        // (x_p[i] - mean[i] - acc[p]) / L[i][i]`, with the inner per-point loops
+        // contiguous so they vectorize across the points. BYTE-IDENTICAL to the
+        // per-point forward-sub: `acc[p]` left-folds k in 0..i exactly like the
+        // per-point `(0..i).map(..).sum()`, and `maha = Σ_i w[i][p]²` — verified
+        // EXACT (and 1.65-2.35x faster) in `bin/perf_mvn_maha_ab.rs`.
+        let eval_batch = |xs_chunk: &[Vec<f64>]| -> Vec<f64> {
+            let b = xs_chunk.len();
+            let mut w = vec![vec![0.0_f64; b]; n];
+            let mut acc = vec![0.0_f64; b];
             for i in 0..n {
-                centered[i] = x[i] - self.mean[i];
+                let lii = self.chol[i][i];
+                for a in acc.iter_mut() {
+                    *a = 0.0;
+                }
+                for k in 0..i {
+                    let lik = self.chol[i][k];
+                    let wk = &w[k];
+                    for (a, &wkp) in acc.iter_mut().zip(wk.iter()) {
+                        *a += lik * wkp;
+                    }
+                }
+                let mean_i = self.mean[i];
+                let wi = &mut w[i];
+                for (p, x) in xs_chunk.iter().enumerate() {
+                    wi[p] = (x[i] - mean_i - acc[p]) / lii;
+                }
             }
-            for i in 0..n {
-                let sum = (0..i).map(|j| self.chol[i][j] * solved[j]).sum::<f64>();
-                solved[i] = (centered[i] - sum) / self.chol[i][i];
-            }
-            let mahalanobis = solved.iter().map(|value| value * value).sum::<f64>();
-            -0.5 * (const_term + mahalanobis)
+            (0..b)
+                .map(|p| {
+                    let maha: f64 = (0..n).map(|i| w[i][p] * w[i][p]).sum();
+                    -0.5 * (const_term + maha)
+                })
+                .collect()
         };
 
         let m = xs.len();
@@ -7385,25 +7411,19 @@ impl MultivariateNormal {
             .map(|c| c.get())
             .unwrap_or(1)
             .min(m);
-        // Parallelize only for dimension n >= 5: at low n the O(n²) per-point solve
-        // is too cheap (memory-bound), so thread overhead regresses it (measured:
-        // n=3 0.85x, n=5 1.41x, n=8 2.16x, n=10 2.50x at m=100k). Common 2-D/3-D
-        // data stays on the already-scipy-beating sequential path.
+        // Parallelize only for dimension n >= 5: at low n the batch solve is cheap
+        // (memory-bound), so thread overhead regresses it. Common 2-D/3-D data
+        // stays on the already-scipy-beating sequential (single-batch) path.
         if n < 5 || work < 1 << 18 || threads <= 1 || m < 4 {
-            let mut centered = vec![0.0; n];
-            let mut solved = vec![0.0; n];
-            return Ok(xs.iter().map(|x| eval(x, &mut centered, &mut solved)).collect());
+            return Ok(eval_batch(xs));
         }
         let mut out = vec![0.0f64; m];
         let chunk = m.div_ceil(threads);
+        let eval_batch = &eval_batch;
         std::thread::scope(|scope| {
             for (xchunk, ochunk) in xs.chunks(chunk).zip(out.chunks_mut(chunk)) {
                 scope.spawn(move || {
-                    let mut centered = vec![0.0; n];
-                    let mut solved = vec![0.0; n];
-                    for (x, slot) in xchunk.iter().zip(ochunk) {
-                        *slot = eval(x, &mut centered, &mut solved);
-                    }
+                    ochunk.copy_from_slice(&eval_batch(xchunk));
                 });
             }
         });

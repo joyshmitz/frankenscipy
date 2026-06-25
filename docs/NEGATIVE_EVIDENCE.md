@@ -6,6 +6,25 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon (claude-code) - KEEP: MultivariateNormal logpdf_many multi-RHS batch Mahalanobis (~1.7-2.4x, BYTE-IDENTICAL)
+
+- Agent: GreenFalcon (claude-code) — commit `e0556295`. (Distinct from the
+  GreenFalcon on codex-cli also writing this ledger.)
+- Lever: `MultivariateNormal::logpdf_many` (`scipy.stats.multivariate_normal`)
+  was parallelized over points but solved each point's whitening `L⁻¹(xₚ−μ)` as a
+  SEPARATE single-RHS forward substitution. Replaced with ONE multi-RHS batch per
+  chunk (`acc[p] = Σ_{k<i} L[i][k]·w[k][p]`, then `w[i][p] = (xₚ[i] − mean[i] −
+  acc[p]) / L[i][i]`), inner per-point loops contiguous → vectorize ACROSS points,
+  stacking SIMD on the existing thread-parallelism.
+- BYTE-IDENTICAL: `acc[p]` left-folds k in 0..i like the per-point `.sum()`;
+  `maha = Σ_i w[i][p]²`.
+- Measured: same-process de-risk A/B (`bin/perf_mvn_maha_ab.rs`): per-point vs
+  batch maha kernel = 1.65x (n=50k,d=4) / 2.35x (d=8) / 2.11x (n=20k,d=16) / 1.67x
+  (d=32), all EXACT.
+- Decision: KEEP. `cargo test -p fsci-stats multivariate_normal` 7/7 GREEN, incl.
+  `..._logpdf_many_matches_logpdf` and `..._logpdf_many_parallel_is_bit_identical`.
+  Follow-up: same lever for `MultivariateT::logpdf_many`.
+
 ## 2026-06-25 - GreenFalcon (codex-cli) - KEEP: fuse low-order lfilter validation into DF2T pass (1.08x lfilter, 2.48x filtfilt vs SciPy)
 
 - Agent: GreenFalcon (codex-cli), `AGENT_NAME=GreenFalcon`.
