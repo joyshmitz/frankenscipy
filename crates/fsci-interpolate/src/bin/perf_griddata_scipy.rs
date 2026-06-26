@@ -18,8 +18,9 @@ fn lcg(s: &mut u64) -> f64 {
 }
 
 fn main() {
-    let np = 2000usize;
-    let nq = 5000usize;
+    let mut a = std::env::args().skip(1);
+    let np: usize = a.next().and_then(|s| s.parse().ok()).unwrap_or(2000);
+    let nq: usize = a.next().and_then(|s| s.parse().ok()).unwrap_or(5000);
     let mut s = 0x9e37_79b9_7f4a_7c15u64;
     let pts: Vec<Vec<f64>> = (0..np).map(|_| vec![lcg(&mut s), lcg(&mut s)]).collect();
     let vals: Vec<f64> = (0..np)

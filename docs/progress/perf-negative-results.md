@@ -4,6 +4,39 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-griddata-delaunay-circle-grid - KEEP (BOLD WIN, large-n): interpolate.griddata Delaunay2D grid-accelerated BUILD
+
+Took the RETRY filed in the circumcircle-precompute entry below: the
+`Delaunay2D::new` Bowyer-Watson build was still naive **O(n²)** — it scanned
+EVERY live triangle's circumcircle per insertion — so SciPy's Qhull (O(n log n))
+overtook it at large n (griddata cubic was **1.26x SLOWER at n=10000**, the
+gap growing with n). Ported the proven spatial-crate build
+(`delaunay_triangulate_circle_grid`, frankenscipy-9l5oo): a uniform grid
+(`DelaunayCircleGrid`, dim=√n clamped 16..128) bins each triangle by the cells
+its circumcircle bbox overlaps; an insertion's bad-triangle search reads only
+the NEW POINT'S cell, which is a SUPERSET of every triangle whose circumcircle
+contains the point (an empty cell falls back to a full active scan). Dead
+triangles are MASKED (`active` bitmap) not swap-removed, so triangle indices
+stay stable for the grid's lifetime. Gated at n ≥ 4096; below that the existing
+linear path runs unchanged. Refactored the linear loop into
+`delaunay_triangulate_linear` (now reuses `bad`/`boundary` scratch — saves 2n
+Vec allocs, still byte-identical: n=2000 acc unchanged −4702.5161, 5.11 → 3.89 ms).
+
+MEASURED same-box (perf_griddata_scipy.rs, local isolated target vs SciPy 1.17.1,
+nq=5000, best-of-5):
+- n=5000:  linear 17.93 ms vs scipy 41.09 = **2.29x FASTER** (was 1.68x); cubic 25.69 vs 45.66 = **1.78x** (was 1.59x)
+- n=10000: linear 40.46 ms vs scipy 77.43 = **1.91x FASTER** (was 1.17x); cubic 69.37 vs 88.48 = **1.28x FASTER — FLIPS the 1.26x LOSS**
+- n=20000: linear 87.25 ms vs scipy 156.7 = **1.80x FASTER**; cubic 215.7 vs 176.0 = 1.22x slower (now the **CloughTocher per-simplex gradient/patch** cost, NOT the build — linear shares the build and WINS 1.80x)
+- n=2000 (linear path, unchanged): linear 3.89 ms vs 18.15 = 4.7x faster (byte-identical to last turn)
+
+Valid Delaunay verified: `delaunay_empty_circumcircle_property` extended to
+n=4096 + n=5000 (grid path); 176/0 lib + 56/0 metamorphic GREEN. Grid finds the
+SAME bad set as the linear scan (proven superset), so it yields the SAME
+triangulation (different simplex order only — value-identical for griddata).
+NEXT (filed): cubic n≥20k residual is `estimate_clough_tocher_gradients` +
+`clough_tocher_patch` (O(n) per-simplex, ~128 ms of the 215 ms at n=20k) — a
+SEPARATE lever (parallelize the per-simplex patch/gradient build).
+
 ## 2026-06-26 - frankenscipy-greenfalcon-griddata-circumcircle-precompute - KEEP (BOLD WIN, valid-Delaunay not byte-identical): interpolate.griddata Linear/Cubic Delaunay2D build
 
 `Delaunay2D::new` (the Bowyer-Watson incremental triangulation behind griddata

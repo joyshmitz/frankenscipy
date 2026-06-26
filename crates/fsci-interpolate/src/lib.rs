@@ -3762,62 +3762,23 @@ impl Delaunay2D {
         all_points.push((min_x - margin * dx, min_y - margin * dy));
         all_points.push((max_x + margin * dx, min_y - margin * dy));
         all_points.push(((min_x + max_x) / 2.0, max_y + margin * dy));
-        let mut triangles = vec![(n, n + 1, n + 2)];
-        // Precompute each triangle's circumcircle (center + radius²) once at
-        // creation time so the Bowyer-Watson point-in-circumcircle test becomes
-        // a cheap `dist²(p, center) < r²` compare (~6 flops) instead of
-        // re-evaluating the full incircle determinant (~20 flops) for every
-        // (point, triangle) pair — the dominant O(n²) inner loop of the build.
-        // The strict `dist² < r²` test agrees with the determinant predicate
-        // everywhere except float-rounding on cocircular boundaries, so the
-        // result is still a valid Delaunay triangulation (verified by the
-        // `delaunay_empty_circumcircle_property` test). `circ` is kept exactly
-        // parallel to `triangles` through every swap_remove/push.
-        let mut circ = vec![circumcircle(
-            all_points[n],
-            all_points[n + 1],
-            all_points[n + 2],
-        )];
-        for p_idx in 0..n {
-            let p = all_points[p_idx];
-            let mut bad = Vec::new();
-            for (t_idx, &(ccx, ccy, r2)) in circ.iter().enumerate() {
-                let (dx, dy) = (p.0 - ccx, p.1 - ccy);
-                if dx * dx + dy * dy < r2 {
-                    bad.push(t_idx);
-                }
-            }
-            let mut boundary = Vec::new();
-            for &t_idx in &bad {
-                let (a, b, c) = triangles[t_idx];
-                for &(e0, e1) in &[(a, b), (b, c), (c, a)] {
-                    if !bad.iter().any(|&o| {
-                        o != t_idx
-                            && triangle_has_edge(
-                                triangles[o].0,
-                                triangles[o].1,
-                                triangles[o].2,
-                                e0,
-                                e1,
-                            )
-                    }) {
-                        boundary.push((e0, e1));
-                    }
-                }
-            }
-            bad.sort_unstable();
-            for &idx in bad.iter().rev() {
-                triangles.swap_remove(idx);
-                circ.swap_remove(idx);
-            }
-            for &(e0, e1) in &boundary {
-                triangles.push((p_idx, e0, e1));
-                circ.push(circumcircle(p, all_points[e0], all_points[e1]));
-            }
-        }
+        // Bowyer-Watson incremental triangulation. Both paths precompute each
+        // triangle's circumcircle once (see `circumcircle`) so the incircle test
+        // is a cheap `dist²(p, center) < r²` compare. Below
+        // `DELAUNAY_GRID_THRESHOLD` the plain O(n²) "scan every active triangle
+        // per insertion" loop is fastest; above it that scan dominates, so a
+        // uniform grid over the triangles' circumcircle bounding boxes restricts
+        // each insertion's candidate set to the new point's cell (a superset of
+        // every triangle whose circumcircle could contain it). Both yield a
+        // valid Delaunay triangulation (verified by the
+        // `delaunay_empty_circumcircle_property` test).
+        let triangles = if n >= DELAUNAY_GRID_THRESHOLD {
+            delaunay_triangulate_circle_grid(&all_points, n, min_x, min_y, dx, dy)
+        } else {
+            delaunay_triangulate_linear(&all_points, n)
+        };
         let simplices = triangles
             .into_iter()
-            .filter(|&(a, b, c)| a < n && b < n && c < n)
             .map(|triangle| orient_triangle_ccw(points, triangle))
             .collect::<Vec<_>>();
         let simplex_bounds: Vec<SimplexBounds> = simplices
@@ -3927,6 +3888,234 @@ fn circumcircle(a: (f64, f64), b: (f64, f64), c: (f64, f64)) -> (f64, f64, f64) 
     let uy = (a2 * (cx - bx) + b2 * (ax - cx) + c2 * (bx - ax)) / d;
     let (rx, ry) = (ax - ux, ay - uy);
     (ux, uy, rx * rx + ry * ry)
+}
+
+/// Past this point count `Delaunay2D::new` switches from the plain O(n²)
+/// circumcircle scan to the grid-accelerated build (matches the spatial crate's
+/// `DELAUNAY_CIRCLE_GRID_THRESHOLD`).
+const DELAUNAY_GRID_THRESHOLD: usize = 4096;
+
+/// Bowyer-Watson with the plain "scan every triangle per insertion" loop; the
+/// dead triangles are swap-removed so the live set stays compact. Returns the
+/// interior triangles (super-triangle simplices dropped). Fastest below
+/// `DELAUNAY_GRID_THRESHOLD`. Byte-identical to the historical inline loop.
+fn delaunay_triangulate_linear(all_points: &[(f64, f64)], n: usize) -> Vec<(usize, usize, usize)> {
+    let mut triangles = vec![(n, n + 1, n + 2)];
+    let mut circ = vec![circumcircle(all_points[n], all_points[n + 1], all_points[n + 2])];
+    let mut bad: Vec<usize> = Vec::new();
+    let mut boundary: Vec<(usize, usize)> = Vec::new();
+    for p_idx in 0..n {
+        let p = all_points[p_idx];
+        bad.clear();
+        for (t_idx, &(ccx, ccy, r2)) in circ.iter().enumerate() {
+            let (dx, dy) = (p.0 - ccx, p.1 - ccy);
+            if dx * dx + dy * dy < r2 {
+                bad.push(t_idx);
+            }
+        }
+        boundary.clear();
+        delaunay_collect_boundary(&triangles, &bad, &mut boundary);
+        bad.sort_unstable();
+        for &idx in bad.iter().rev() {
+            triangles.swap_remove(idx);
+            circ.swap_remove(idx);
+        }
+        for &(e0, e1) in &boundary {
+            triangles.push((p_idx, e0, e1));
+            circ.push(circumcircle(p, all_points[e0], all_points[e1]));
+        }
+    }
+    triangles
+        .into_iter()
+        .filter(|&(a, b, c)| a < n && b < n && c < n)
+        .collect()
+}
+
+/// Bowyer-Watson where a uniform grid over each triangle's circumcircle bbox
+/// restricts the per-insertion candidate set to the new point's cell instead of
+/// scanning all live triangles (the O(n²) bottleneck). Dead triangles are
+/// MASKED via `active` rather than swap-removed, so a triangle's index stays
+/// stable for the grid's whole lifetime. The point's cell list is a superset of
+/// every triangle whose circumcircle contains the point, so the bad set — hence
+/// the triangulation — is the same as the linear path (a rare empty cell falls
+/// back to the full active scan for robustness).
+fn delaunay_triangulate_circle_grid(
+    all_points: &[(f64, f64)],
+    n: usize,
+    min_x: f64,
+    min_y: f64,
+    dx: f64,
+    dy: f64,
+) -> Vec<(usize, usize, usize)> {
+    let mut triangles = vec![(n, n + 1, n + 2)];
+    let mut circ = vec![circumcircle(all_points[n], all_points[n + 1], all_points[n + 2])];
+    let mut active = vec![true];
+    let mut grid = DelaunayCircleGrid::new(n, min_x, min_y, dx, dy);
+    grid.insert_circle(circ[0], 0);
+
+    let mut bad: Vec<usize> = Vec::new();
+    let mut boundary: Vec<(usize, usize)> = Vec::new();
+    for p_idx in 0..n {
+        let point = all_points[p_idx];
+        bad.clear();
+        grid.bad_triangles(point, &circ, &active, &mut bad);
+        if bad.is_empty() {
+            delaunay_scan_active_bad_triangles(point, &circ, &active, &mut bad);
+        }
+        bad.sort_unstable();
+        bad.dedup();
+
+        boundary.clear();
+        delaunay_collect_boundary(&triangles, &bad, &mut boundary);
+
+        for &idx in &bad {
+            active[idx] = false;
+        }
+        for &(e0, e1) in &boundary {
+            let triangle_idx = triangles.len();
+            let circle = circumcircle(all_points[p_idx], all_points[e0], all_points[e1]);
+            triangles.push((p_idx, e0, e1));
+            circ.push(circle);
+            active.push(true);
+            grid.insert_circle(circle, triangle_idx);
+        }
+    }
+
+    triangles
+        .into_iter()
+        .enumerate()
+        .filter_map(|(idx, (a, b, c))| {
+            (active[idx] && a < n && b < n && c < n).then_some((a, b, c))
+        })
+        .collect()
+}
+
+fn delaunay_scan_active_bad_triangles(
+    point: (f64, f64),
+    circ: &[(f64, f64, f64)],
+    active: &[bool],
+    bad: &mut Vec<usize>,
+) {
+    for (t_idx, &(cx, cy, r2)) in circ.iter().enumerate() {
+        if !active[t_idx] {
+            continue;
+        }
+        let ddx = point.0 - cx;
+        let ddy = point.1 - cy;
+        if ddx * ddx + ddy * ddy < r2 {
+            bad.push(t_idx);
+        }
+    }
+}
+
+fn delaunay_collect_boundary(
+    triangles: &[(usize, usize, usize)],
+    bad: &[usize],
+    boundary: &mut Vec<(usize, usize)>,
+) {
+    for &t_idx in bad {
+        let (a, b, c) = triangles[t_idx];
+        for &(e0, e1) in &[(a, b), (b, c), (c, a)] {
+            if !bad.iter().any(|&other_idx| {
+                other_idx != t_idx
+                    && triangle_has_edge(
+                        triangles[other_idx].0,
+                        triangles[other_idx].1,
+                        triangles[other_idx].2,
+                        e0,
+                        e1,
+                    )
+            }) {
+                boundary.push((e0, e1));
+            }
+        }
+    }
+}
+
+/// Uniform grid binning each triangle's circumcircle by the cells its bbox
+/// overlaps, so the Bowyer-Watson bad-triangle search reads one cell.
+struct DelaunayCircleGrid {
+    min_x: f64,
+    min_y: f64,
+    inv_dx: f64,
+    inv_dy: f64,
+    dim: usize,
+    cells: Vec<Vec<usize>>,
+}
+
+impl DelaunayCircleGrid {
+    fn new(n: usize, min_x: f64, min_y: f64, dx: f64, dy: f64) -> Self {
+        let dim = ((n as f64).sqrt() as usize).clamp(16, 128);
+        Self {
+            min_x,
+            min_y,
+            inv_dx: dim as f64 / dx.max(1e-10),
+            inv_dy: dim as f64 / dy.max(1e-10),
+            dim,
+            cells: vec![Vec::new(); dim * dim],
+        }
+    }
+
+    fn insert_circle(&mut self, circle: (f64, f64, f64), triangle_idx: usize) {
+        let (cx, cy, r2) = circle;
+        if !cx.is_finite() || !cy.is_finite() || !r2.is_finite() || r2 < 0.0 {
+            return;
+        }
+        let r = r2.sqrt();
+        let x0 = self.cell_x(cx - r);
+        let x1 = self.cell_x(cx + r);
+        let y0 = self.cell_y(cy - r);
+        let y1 = self.cell_y(cy + r);
+        for y in y0..=y1 {
+            let row = y * self.dim;
+            for x in x0..=x1 {
+                self.cells[row + x].push(triangle_idx);
+            }
+        }
+    }
+
+    fn bad_triangles(
+        &self,
+        point: (f64, f64),
+        circ: &[(f64, f64, f64)],
+        active: &[bool],
+        bad: &mut Vec<usize>,
+    ) {
+        let cell = self.point_cell(point);
+        for &t_idx in &self.cells[cell] {
+            if !active[t_idx] {
+                continue;
+            }
+            let (cx, cy, r2) = circ[t_idx];
+            let ddx = point.0 - cx;
+            let ddy = point.1 - cy;
+            if ddx * ddx + ddy * ddy < r2 {
+                bad.push(t_idx);
+            }
+        }
+    }
+
+    fn point_cell(&self, point: (f64, f64)) -> usize {
+        self.cell_y(point.1) * self.dim + self.cell_x(point.0)
+    }
+
+    fn cell_x(&self, x: f64) -> usize {
+        clamp_delaunay_grid_cell((x - self.min_x) * self.inv_dx, self.dim)
+    }
+
+    fn cell_y(&self, y: f64) -> usize {
+        clamp_delaunay_grid_cell((y - self.min_y) * self.inv_dy, self.dim)
+    }
+}
+
+fn clamp_delaunay_grid_cell(scaled: f64, dim: usize) -> usize {
+    if scaled <= 0.0 {
+        0
+    } else if scaled >= dim as f64 {
+        dim - 1
+    } else {
+        scaled as usize
+    }
 }
 
 fn triangle_has_edge(a: usize, b: usize, c: usize, e0: usize, e1: usize) -> bool {
@@ -9220,13 +9409,7 @@ mod tests {
                 .wrapping_add(1442695040888963407);
             (state >> 11) as f64 / (1u64 << 53) as f64
         };
-        for trial in 0..50usize {
-            let n = 8 + trial % 60;
-            let pts: Vec<(f64, f64)> = (0..n).map(|_| (next() * 12.0, next() * 9.0)).collect();
-            let tri = match Delaunay2D::new(&pts) {
-                Ok(t) => t,
-                Err(_) => continue,
-            };
+        let check = |label: &str, pts: &[(f64, f64)], tri: &Delaunay2D| {
             for &(a, b, c) in &tri.simplices {
                 let (cx, cy, r2) = circumcircle(pts[a], pts[b], pts[c]);
                 // Relative FP slack scaled by the circumradius so we only flag a
@@ -9240,11 +9423,28 @@ mod tests {
                     let d2 = dx * dx + dy * dy;
                     assert!(
                         d2 >= r2 - slack,
-                        "trial {trial}: vertex {i} inside circumcircle of \
+                        "{label}: vertex {i} inside circumcircle of \
                          simplex ({a},{b},{c}): d2={d2} r2={r2}"
                     );
                 }
             }
+        };
+        // Small clouds — the plain O(n²) build path.
+        for trial in 0..50usize {
+            let n = 8 + trial % 60;
+            let pts: Vec<(f64, f64)> = (0..n).map(|_| (next() * 12.0, next() * 9.0)).collect();
+            let tri = match Delaunay2D::new(&pts) {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            check(&format!("trial {trial}"), &pts, &tri);
+        }
+        // Large clouds ABOVE DELAUNAY_GRID_THRESHOLD — the grid-accelerated
+        // build path must satisfy the SAME empty-circumcircle invariant.
+        for &n in &[DELAUNAY_GRID_THRESHOLD, 5000] {
+            let pts: Vec<(f64, f64)> = (0..n).map(|_| (next() * 60.0, next() * 45.0)).collect();
+            let tri = Delaunay2D::new(&pts).expect("grid-path delaunay");
+            check(&format!("grid n={n}"), &pts, &tri);
         }
     }
 
