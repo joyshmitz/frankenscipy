@@ -3763,11 +3763,27 @@ impl Delaunay2D {
         all_points.push((max_x + margin * dx, min_y - margin * dy));
         all_points.push(((min_x + max_x) / 2.0, max_y + margin * dy));
         let mut triangles = vec![(n, n + 1, n + 2)];
+        // Precompute each triangle's circumcircle (center + radius²) once at
+        // creation time so the Bowyer-Watson point-in-circumcircle test becomes
+        // a cheap `dist²(p, center) < r²` compare (~6 flops) instead of
+        // re-evaluating the full incircle determinant (~20 flops) for every
+        // (point, triangle) pair — the dominant O(n²) inner loop of the build.
+        // The strict `dist² < r²` test agrees with the determinant predicate
+        // everywhere except float-rounding on cocircular boundaries, so the
+        // result is still a valid Delaunay triangulation (verified by the
+        // `delaunay_empty_circumcircle_property` test). `circ` is kept exactly
+        // parallel to `triangles` through every swap_remove/push.
+        let mut circ = vec![circumcircle(
+            all_points[n],
+            all_points[n + 1],
+            all_points[n + 2],
+        )];
         for p_idx in 0..n {
             let p = all_points[p_idx];
             let mut bad = Vec::new();
-            for (t_idx, &(a, b, c)) in triangles.iter().enumerate() {
-                if in_circumcircle(all_points[a], all_points[b], all_points[c], p) {
+            for (t_idx, &(ccx, ccy, r2)) in circ.iter().enumerate() {
+                let (dx, dy) = (p.0 - ccx, p.1 - ccy);
+                if dx * dx + dy * dy < r2 {
                     bad.push(t_idx);
                 }
             }
@@ -3792,9 +3808,11 @@ impl Delaunay2D {
             bad.sort_unstable();
             for &idx in bad.iter().rev() {
                 triangles.swap_remove(idx);
+                circ.swap_remove(idx);
             }
             for &(e0, e1) in &boundary {
                 triangles.push((p_idx, e0, e1));
+                circ.push(circumcircle(p, all_points[e0], all_points[e1]));
             }
         }
         let simplices = triangles
@@ -3893,20 +3911,22 @@ fn compute_simplex_neighbors(simplices: &[(usize, usize, usize)]) -> Vec<[Option
     neighbors
 }
 
-fn in_circumcircle(a: (f64, f64), b: (f64, f64), c: (f64, f64), d: (f64, f64)) -> bool {
-    let (ax, ay, bx, by, cx, cy) = (
-        a.0 - d.0,
-        a.1 - d.1,
-        b.0 - d.0,
-        b.1 - d.1,
-        c.0 - d.0,
-        c.1 - d.1,
-    );
-    let det = ax * (by * (cx * cx + cy * cy) - cy * (bx * bx + by * by))
-        - ay * (bx * (cx * cx + cy * cy) - cx * (bx * bx + by * by))
-        + (ax * ax + ay * ay) * (bx * cy - by * cx);
-    let orient = (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0);
-    if orient > 0.0 { det > 0.0 } else { det < 0.0 }
+/// Circumcircle of triangle `a,b,c` as `(center_x, center_y, radius²)`,
+/// precomputed once per triangle so the Bowyer-Watson incircle test reduces to
+/// a `dist²(p, center) < r²` compare. The center is the intersection of the
+/// perpendicular bisectors; `d` is twice the signed area and is non-zero for
+/// any non-degenerate triangle (degenerate slivers give a huge radius and are
+/// harmlessly reclaimed on the next insertion).
+fn circumcircle(a: (f64, f64), b: (f64, f64), c: (f64, f64)) -> (f64, f64, f64) {
+    let ((ax, ay), (bx, by), (cx, cy)) = (a, b, c);
+    let d = 2.0 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
+    let a2 = ax * ax + ay * ay;
+    let b2 = bx * bx + by * by;
+    let c2 = cx * cx + cy * cy;
+    let ux = (a2 * (by - cy) + b2 * (cy - ay) + c2 * (ay - by)) / d;
+    let uy = (a2 * (cx - bx) + b2 * (ax - cx) + c2 * (bx - ax)) / d;
+    let (rx, ry) = (ax - ux, ay - uy);
+    (ux, uy, rx * rx + ry * ry)
 }
 
 fn triangle_has_edge(a: usize, b: usize, c: usize, e0: usize, e1: usize) -> bool {
@@ -9179,6 +9199,50 @@ mod tests {
                             "npts={npts} q={q:?}: match disagreement"
                         );
                     }
+                }
+            }
+        }
+    }
+
+    /// Property proof for the circumcircle-precompute Bowyer-Watson [perf]: the
+    /// precomputed `dist² < r²` incircle test is NOT bit-identical to the
+    /// incircle determinant (it can pick the other diagonal on cocircular
+    /// inputs), so we instead verify the defining DELAUNAY invariant — no input
+    /// vertex lies strictly inside any output simplex's circumcircle. If the
+    /// precompute corrupted the triangulation, an empty-circumcircle violation
+    /// would appear here. Deterministic LCG clouds across a range of sizes.
+    #[test]
+    fn delaunay_empty_circumcircle_property() {
+        let mut state: u64 = 0x1234_5678_9abc_def1;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (state >> 11) as f64 / (1u64 << 53) as f64
+        };
+        for trial in 0..50usize {
+            let n = 8 + trial % 60;
+            let pts: Vec<(f64, f64)> = (0..n).map(|_| (next() * 12.0, next() * 9.0)).collect();
+            let tri = match Delaunay2D::new(&pts) {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            for &(a, b, c) in &tri.simplices {
+                let (cx, cy, r2) = circumcircle(pts[a], pts[b], pts[c]);
+                // Relative FP slack scaled by the circumradius so we only flag a
+                // genuine non-Delaunay edge, not a vertex sitting on the circle.
+                let slack = 1e-9 * (1.0 + r2);
+                for (i, &(px, py)) in pts.iter().enumerate() {
+                    if i == a || i == b || i == c {
+                        continue;
+                    }
+                    let (dx, dy) = (px - cx, py - cy);
+                    let d2 = dx * dx + dy * dy;
+                    assert!(
+                        d2 >= r2 - slack,
+                        "trial {trial}: vertex {i} inside circumcircle of \
+                         simplex ({a},{b},{c}): d2={d2} r2={r2}"
+                    );
                 }
             }
         }

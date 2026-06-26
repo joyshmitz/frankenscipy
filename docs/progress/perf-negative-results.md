@@ -4,6 +4,43 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-griddata-circumcircle-precompute - KEEP (BOLD WIN, valid-Delaunay not byte-identical): interpolate.griddata Linear/Cubic Delaunay2D build
+
+`Delaunay2D::new` (the Bowyer-Watson incremental triangulation behind griddata
+Linear / Cubic and LinearND/CloughTocher2D) recomputed the **incircle
+determinant** `in_circumcircle(a,b,c,p)` (~24 flops: 6 subs + the 3x3
+paraboloid-lift determinant + the orientation correction) for EVERY
+(insertion-point, triangle) pair — the dominant O(n²) inner loop of the build.
+Replaced with the proven spatial-crate lever (95c08d05): **precompute each
+triangle's circumcircle `(center_x, center_y, radius²)` ONCE when the triangle
+is created** (`circumcircle()` = perp-bisector intersection), kept in a `circ`
+Vec exactly parallel to `triangles` through every swap_remove/push, so the
+incircle test collapses to a `dist²(p,center) < r²` compare (~5 flops).
+
+MEASURED same-box (perf_griddata_scipy.rs, local isolated target vs SciPy
+1.17.1), np=2000 scattered / nq=5000 queries, best-of-5:
+- **linear  5.11 ms vs scipy 18.15 ms = 3.55x FASTER** (was ~22.7 ms = 1.34x SLOWER)
+- **cubic   6.83 ms vs scipy 24.46 ms = 3.58x FASTER** (was ~24.7 ms = 1.27x SLOWER)
+- nearest 1.41 ms vs scipy 2.08 ms = 1.47x faster (NearestND, untouched by lever)
+fsci dropped 22.7 → 5.11 ms = **4.45x self-speedup** (matches the ~24→~5 flop
+ratio on the O(n²) test loop); scipy held stable (~17→18 ms) confirming the box.
+Output reconciles with scipy (nearest EXACT; linear/cubic within 0.05% — a
+handful of borderline out-of-hull queries classified differently).
+
+**NOT byte-identical**: `dist² < r²` agrees with the determinant predicate
+everywhere except float-rounding on cocircular boundaries, where it can pick the
+OTHER diagonal of a degenerate quad. SAFE because (a) the result is still a valid
+Delaunay triangulation — verified by the new `delaunay_empty_circumcircle_property`
+test (50 LCG clouds, no vertex strictly inside any simplex circumcircle), and (b)
+ALL griddata/CloughTocher conformance tests are triangulation-INVARIANT
+(exact-at-data-points, affine-surface reproduction, FD-vs-stored-gradient
+self-consistency, bit-for-bit griddata↔CloughTocher delegation, f=x+y linear
+exactness) — 176/0 lib + 56/0 metamorphic GREEN. Generic (non-cocircular) inputs
+triangulate identically anyway. RETRY/EXTEND: the build is still naive O(n²)
+(scans all triangles per insert); the spatial crate's grid candidate index
+(near-O(n log n)) would compound this for large n — interpolate's Delaunay2D
+already has a find_simplex grid but the BUILD lacks one.
+
 ## 2026-06-26 - frankenscipy-greenfalcon-structural-rank-hopcroft-karp - KEEP (BOLD WIN, byte-identical rank): csgraph.structural_rank greedy-Kuhn's → HOPCROFT-KARP; FLIPS the 102x scipy loss to 1.18x FASTER (parity-plus)
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. Took the logged
