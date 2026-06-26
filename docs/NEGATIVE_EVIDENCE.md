@@ -6,6 +6,59 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - cod-a - REJECT: SphericalVoronoi scalarized visibility loop regressed decisive large-n row
+
+- Agent: cod-a (codex-cli / gpt-5.2), `AGENT_NAME=cod-a`.
+- Land-or-dig audit: scanned registered `.scratch` / `.worktrees` heads against
+  `origin/main`. The only non-ancestor measured bench worktree was still
+  `/data/projects/.worktrees/frankenscipy-eigvalsh-blackthrush-20260609` at
+  `e3b744f4` (`perf(linalg): lower GEMM flat-workspace threshold`), but current
+  main already has the stronger `MATMUL_FLAT_WORKSPACE_MIN_DIM = 256` route, so
+  that old 768-threshold worktree is superseded rather than landable.
+- Gap attacked: the still-open `SphericalVoronoi` large-n tail after the sorted
+  horizon-edge keep. The live same-host baseline remains SciPy-slower at large n
+  (`n=2000` current Rust 19.073 ms vs SciPy 8.103921 ms = 2.35x slower).
+- Lever tested and reverted: replace the hot visibility loop's iterator zip and
+  `dot3(normal, sub3(pp, points[f[0]]))` helper calls with an index loop and
+  inline scalar arithmetic. This preserves face scan order, tolerance, and the
+  multiply/subtract order, but reduces only local iterator/temporary overhead.
+  Source was restored completely after measurement; `git diff --
+  crates/fsci-spatial/src/lib.rs` is empty.
+- Harness: per-crate only with requested warm target,
+  `AGENT_NAME=cod-a CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a
+  rch exec -- cargo run --profile release -p fsci-spatial --bin perf_sphvor_ab`.
+  RCH fell back locally for the same-host baseline/candidate rows because no
+  worker was admissible.
+
+| n | Current Rust | Candidate Rust | Candidate vs current | SciPy comparator | Candidate vs SciPy |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 100 | 297.965 us | 231.909 us | 1.28x faster | 0.429794 ms | Rust 1.85x faster |
+| 200 | 619.614 us | 628.060 us | 1.01x slower | 0.740433 ms | Rust 1.18x faster |
+| 500 | 1.984 ms | 2.207 ms | 1.11x slower | 1.722202 ms | Rust 1.28x slower |
+| 1000 | 6.951 ms | 6.359 ms | 1.09x faster | 3.514548 ms | Rust 1.81x slower |
+| 2000 | 19.073 ms | 20.190 ms | 1.06x slower | 8.103921 ms | Rust 2.49x slower |
+
+- Decision: REJECT and REVERT. The small rows are mixed, and the decisive
+  large-n SciPy gap worsens (`2.35x` slower current -> `2.49x` slower
+  candidate). This is another local visibility-scan micro-lever, not the needed
+  adjacency-complete conflict traversal/cache-blocked visibility primitive.
+- Non-decisive remote context: one confirmation run selected fresh worker
+  `vmi1264463` and populated a cold worker-scoped target despite the requested
+  warm target; it also showed poor candidate timings (`n=2000` 32.525 ms), but
+  it was not used as the same-host A/B denominator.
+- Gates on restored source:
+  - PASS: `AGENT_NAME=cod-a CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a
+    rch exec -- cargo test -p fsci-conformance --test e2e_spatial -- --nocapture`
+    (`16` passed / `0` failed).
+  - PASS: `AGENT_NAME=cod-a CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a
+    rch exec -- cargo bench -p fsci-spatial --profile release --bench spatial_bench --
+    --sample-size 10 --warm-up-time 1 --measurement-time 1 --noplot` completed
+    on worker `hz2`.
+  - NOTE: restored-source `perf_spherical_voronoi` rerun with the shared warm
+    target hit pre-existing RCH local target-pool rustc skew (`E0514`, crates
+    compiled by rustc 2026-06-09 vs active 2026-06-07). No target cleanup was
+    run per the no-destructive-filesystem rule.
+
 ## 2026-06-25 - GreenFalcon (claude-code) - KEEP (BOLD WIN, ~1e-12 tolerance): signal.wiener local mean/var O(n*mysize) per-window fold -> O(n) prefix sums; 1.9-24x self-speedup, flips a 2.42x SciPy loss to 5.6-11.5x FASTER
 
 - Agent: GreenFalcon (claude-code). DIG. fsci's `wiener` computed the local mean
