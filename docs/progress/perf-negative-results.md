@@ -4,6 +4,32 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-addcsc-merge - KEEP (BOLD WIN, byte-identical): sparse.add_csc/sub_csc O(nnz) column merge (reuse the CSR row-merge via CSC≡CSR structural identity); 13.4x self-speedup, flips a 47x scipy loss to 3.5x
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. `add_csc`/`sub_csc`
+  fell through to `combine_coo(lhs.to_coo, rhs.to_coo, scale).to_csc()` — concat
+  two COOs then SORT O(nnz log nnz). `add_csr`/`sub_csr` already had a canonical
+  O(nnz) row-merge fast path (`combine_csr_rows_directly`); CSC had none.
+- MEASURED GAP (same-box, 2000² density-0.01 CSC, ~80k-nnz result; fsci local
+  isolated target vs SciPy 1.17.1 `csc + csc`): fsci 18.29 ms vs scipy 0.39 ms =
+  **47x slower**. The sort dominated.
+- FIX (crates/fsci-sparse/src/ops.rs): a CSC(m,n) is structurally a CSR(n,m) over
+  its `(colptr, row-index, data)` arrays, so merging its "rows" IS merging its
+  columns. The merge primitives `combine_rows_serial`/`combine_rows_parallel` are
+  already SLICE-based, so `combine_csc_cols_directly` calls them on the CSC slices
+  (ZERO copies) with `cols` as the unit count and wraps the merged
+  `(data, row-index, colptr)` back as CSC. Gated on both inputs canonical
+  (`csc_col_combine_mode`, mirrors the CSR gate); non-canonical falls back to the
+  old combine_coo path.
+- BYTE-IDENTICAL: same primitive the canonical CSR add already uses; A/B confirmed
+  mism=0 vs `add_csr(as-csr).to_csc()` (the canonical CSC of the same matrix is
+  unique). new add_csc **1.37 ms = 13.4x self-speedup** (was 18.29). vs scipy
+  0.39 ms: 47x slower → **3.5x slower** (residual is the safe-Rust-vs-C merge
+  constant; the canonical CSR add has the same factor).
+- Conformance: `cargo test -p fsci-sparse` = **346 passed / 0 failed** (new
+  `add_sub_csc_canonical_merge_matches_csr_reference` cross-checks add+sub vs the
+  CSR reference). Verified locally (RCH E0514 churn). sub_csc inherits the win.
+
 ## 2026-06-26 - frankenscipy-greenfalcon-sparse-rowminmax-fullrow - CONFORMANCE FIX (scipy-parity): sparse_row_min/max wrongly folded an implicit 0 into FULL rows; closes the RED `sparse_zeros_submatrix_rowmin` flagged the prior 2 turns
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. Not a perf lever —
