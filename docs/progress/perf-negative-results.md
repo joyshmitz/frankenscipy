@@ -4,6 +4,31 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-cholesky-simd-partial - KEEP (modest 1.36x self) + SURFACE the blocked-GEMM lever (biggest open dense-linalg gap)
+
+Dug `linalg.cholesky`. Measured a BIG gap: **4.86x slower at n=500, 11.9x at
+n=1000, 15.2x at n=2000** (n=2000: fsci 325 ms vs scipy 21 ms) — fsci ~5.8 Gflop/s
+vs LAPACK ~125. Root cause: `cholesky()` DELEGATED to nalgebra's scalar,
+unblocked `Cholesky::new`. Replaced with a flat-storage Cholesky-Banachiewicz
+using a SIMD inner product (`chol_dot`, two contiguous rows). **n=1000 57 → 42 ms
+= 1.36x self** (narrows the gap 11.9x → ~8x), byte-tolerant (Cholesky factor is
+unique; 1e-10 tests), 14/14 cholesky + 493/0 linalg lib GREEN. Removes the
+nalgebra dependency for the common `cholesky()` path.
+
+WHY ONLY 1.36x — and the REAL lever (filed): the unblocked algorithm is
+CACHE-BOUND (each `L[i][j]` dot re-reads rows 0..j, sweeping the whole growing
+factor), so the gap GROWS with n. Implemented a right-looking BLOCKED Cholesky
+(B=48, diagonal-factor + panel-TRSM + trailing-SYRK) **and** packed the trailing
+panel into a contiguous L2 buffer — BOTH were ~0-gain (43/301 ms ≈ unblocked) and
+were REVERTED. The remaining bottleneck is `chol_dot`'s per-element HORIZONTAL
+reduce on the short rank-`nb` SYRK dots: parity needs a register-TILED SYRK
+micro-kernel (compute a 4×4/8×8 output tile with vector accumulators, no per-pair
+horizontal reduce) — i.e. run the trailing update through the crate's existing
+blocked GEMM micro-kernel (lib.rs ~15441). That is BLAS-level work (multi-turn,
+bigger than this window). DON'T re-attempt naive blocking (proven ~0-gain here);
+the lever is GEMM-based SYRK. Same wall applies to `cho_factor` (still nalgebra)
+and likely `qr`/`lu` large-n. cdist-class register-tiling is the model.
+
 ## 2026-06-26 - frankenscipy-greenfalcon-solve-toeplitz-levinson-vectorize - KEEP (BOLD WIN, byte-identical 1.7-2.24x self): linalg.solve_toeplitz Levinson inner loops
 
 Dug `linalg.solve_toeplitz` (Levinson-Durbin O(n²)). Measured: **2.7-3.1x SLOWER
