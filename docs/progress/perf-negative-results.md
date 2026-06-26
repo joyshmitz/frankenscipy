@@ -4,6 +4,33 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-bmat-sorted-emit - KEEP (BOLD WIN, byte-identical): sparse.bmat/block_array emit row-major across blocks → COO→CSR fast path skips the sort; 7.45x self, flips a 6.26x scipy loss to 1.19x FASTER
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. Extended the
+  variant-K lever (kron, 435f16c7) to its next logged candidate.
+- `bmat` (assemble a 2-D block grid; `block_array` delegates to it) emitted
+  triplets BLOCK-BY-BLOCK: for each block-row i it walked blocks j=0,1,… and
+  emitted each block's full rows, so every output row in block-row i was emitted
+  ONCE PER BLOCK COLUMN (rows repeat, non-monotonic) → `CooMatrix::to_csr` had to
+  sort all nnz triplets O(nnz log nnz).
+- FIX (crates/fsci-sparse/src/construct.rs): emit ROW-BY-ROW across the blocks of
+  each block-row — `for i { for r in 0..row_heights[i] { for j { emit block(i,j)
+  row r }}}`. Output row `row_offset+r` is constant per (i,r) and monotonic; cols
+  `col_offset + idx` strictly increase. Sorted+unique triplets fire the O(nnz)
+  `sorted_unique_coo_to_csr` fast path (no sort). Preallocated the triplet vecs.
+  BYTE-IDENTICAL (same entries, same canonical CSR).
+- MEASURED same-box (3×3 grid of 1500² density-0.01 blocks → ~203k nnz; fsci
+  local isolated target vs SciPy 1.17.1 `scipy.sparse.bmat`): current 16.34 ms →
+  reordered **2.19 ms = 7.45x self**, mism=0. vs scipy 2.61 ms: current was
+  **6.26x slower**, reordered is **1.19x FASTER**. `block_array` inherits it.
+- Conformance: `cargo test -p fsci-sparse bmat` → all 5 bmat tests + block_diag
+  scipy-reference GREEN (verified locally; RCH E0514 churn). NOTE: a PRE-EXISTING
+  unrelated failure exists on main — `linalg::tests::sparse_zeros_submatrix_rowmin`
+  (linalg.rs:5228, tests `sparse_row_min`/`sparse_submatrix` on explicit zeros;
+  clean linalg.rs, does not use bmat). My change is byte-identical so it cannot
+  affect that test — it fails on pristine main too. FLAGGED, not fixed (not my file).
+- Extend-candidates remaining: vstack/hstack, eye_rectangular (line 69).
+
 ## 2026-06-25 - frankenscipy-greenfalcon-kron-sorted-emit - KEEP (BOLD WIN, byte-identical): sparse.kron loop reorder emits row/col-sorted triplets → COO→CSR fast path skips the O(nnz log nnz) sort; 3.65x self, flips 4.09x scipy loss to ~parity
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. DIG into the
