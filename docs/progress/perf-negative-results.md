@@ -56,6 +56,39 @@ future work should attack exponential throughput / vectorized batching or a
 larger algorithmic batch path. Production source edits were restored completely;
 this commit keeps only the ledger evidence.
 
+## 2026-06-26 - frankenscipy-greenfalcon-cdist-euclidean-smalld-soa - KEEP (BOLD WIN, byte-identical): spatial.cdist/distance_matrix euclidean small-d SoA SIMD
+
+`cdist_metric(Euclidean)` (and `distance_matrix`, which delegates to it) had a
+SoA-across-pairs SIMD fast path gated `dim == 4` ONLY; every other dimension fell
+to the generic per-pair arm `metric_distance(xa[i], xb[j])`, which pointer-chases
+both points through the `Vec<Vec>` and dispatches per pair. At LOW d the per-pair
+overhead dominates (fsci was ~constant 5 ms regardless of d while scipy scales),
+so **d=3 (the common 3-D point-cloud case) was 2.44x SLOWER than scipy**
+(fsci 5.28 ms vs scipy 2.16 ms at 1000×800); d≥16 already won (compute amortizes
+the overhead). Generalized the d=4 kernel to a `cdist_row_euclidean_soa` for any
+`dim < 8`: lay xb in SoA (coordinate columns contiguous), SIMD across xb columns
+(lanes = different j), per-lane `Σ_k (ai[k]-b[k][lane])²` then `sqrt`.
+
+BIT-IDENTICAL to the scalar `euclidean`: for `d < 8` `sqeuclidean` is a pure
+scalar left-fold (its 2×8-wide SIMD chunk needs d≥8), and the per-lane reduction
+is the same left-fold over k starting from 0.0 — verified by the new
+`cdist_euclidean_small_d_soa_matches_scalar_bitwise` test (d∈{1,2,3,5,6,7},
+serial + parallel, SIMD-chunk + tail) and `cdist_euclidean_matches_scipy_reference_values`;
+220/0 spatial lib GREEN. Gated `dim < 8` so d≥8 keeps the generic (winning) arm
+and the tuned `dim == 4` path is untouched.
+
+MEASURED same-box (local isolated target vs SciPy 1.17.1, 1000×800, best-of-12
+back-to-back to control for shared-box load):
+- **d=3: 0.95 ms vs scipy 1.73 ms = 1.82x FASTER** (was 5.28 ms = 2.44x SLOWER; ~5.5x self)
+- d=5: 0.86 ms vs scipy 2.03 ms = **2.37x FASTER**
+- d=7: 0.96 ms vs scipy 2.33 ms = **2.43x FASTER**
+Corner values match scipy EXACTLY (acc identical). LESSON: a SIMD fast path
+gated to ONE dimension leaves every neighbouring small dim on the slow generic
+arm — generalize the kernel across the whole regime where the reduction stays
+bit-identical (here d<8, the scalar-left-fold band). RETRY/EXTEND: SqEuclidean
+small-d (same lever, skip sqrt); Cityblock/Chebyshev small-d; the d=2 cold-start
+artifact is allocator warmup, not a real loss.
+
 ## 2026-06-26 - frankenscipy-greenfalcon-kde-whiten - KEEP (BOLD WIN, algorithmic O(d²)→O(d)): stats.gaussian_kde (GaussianKdeNd) whiten-once
 
 `GaussianKdeNd::evaluate` re-solved the `d×d` lower-triangular system

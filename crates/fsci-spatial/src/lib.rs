@@ -1460,6 +1460,19 @@ pub fn cdist_metric(
                 cdist_row_euclidean4(&xa4[i], &b_soa, nb)
             })
         }
+        // Generalize the d=4 SoA-across-pairs SIMD to any small d (d<8). For d<8
+        // `sqeuclidean` is a scalar left-fold (its SIMD chunk needs d>=8), so the
+        // per-lane left-fold reduction `Σ_k (ai[k]-b[k][lane])²` is BIT-identical
+        // to the generic per-pair arm — this flips the common d=2/d=3 point-cloud
+        // cdist loss, where the generic arm pointer-chases xa[i]/xb[j] through the
+        // Vec<Vec> and loses to SciPy's tight contiguous loop at low d.
+        // Bandwidth-bound like d=4 ⇒ cap workers at 16.
+        DistanceMetric::Euclidean if dim < 8 => {
+            let b_soa = cdist_soa(xb, dim);
+            cdist_fill_rows(na, nthreads.min(16), |i| {
+                cdist_row_euclidean_soa(&xa[i], &b_soa, nb)
+            })
+        }
         DistanceMetric::Cosine if dim == 4 => {
             let na_norm: Vec<f64> = xa.iter().map(|v| simd_sqsum(v).sqrt()).collect();
             let nb_norm: Vec<f64> = xb.iter().map(|v| simd_sqsum(v).sqrt()).collect();
@@ -1621,6 +1634,51 @@ fn cdist_row_euclidean4(ai: &[f64; 4], b: &[Vec<f64>; 4], nb: usize) -> Vec<f64>
     while j < nb {
         let bj = [b0[j], b1[j], b2[j], b3[j]];
         row[j] = sqeuclidean4(ai, &bj).sqrt();
+        j += 1;
+    }
+    row
+}
+
+/// Structure-of-arrays layout of `x`: `out[k][j]` is coordinate `k` of point `j`,
+/// so the SoA SIMD kernels read each coordinate column contiguously.
+fn cdist_soa(x: &[Vec<f64>], dim: usize) -> Vec<Vec<f64>> {
+    let n = x.len();
+    let mut soa = vec![vec![0.0_f64; n]; dim];
+    for (j, row) in x.iter().enumerate() {
+        for (k, col) in soa.iter_mut().enumerate() {
+            col[j] = row[k];
+        }
+    }
+    soa
+}
+
+/// One Euclidean cdist output row for small `d` (`d < 8`) via SoA-across-pairs
+/// SIMD: lane `l` holds column `j+l` of xb, so the dependent per-pair `sqrt`
+/// pipelines across lanes. The per-lane reduction `Σ_k (ai[k]-b[k][lane])²` is a
+/// left-fold over the dimensions — BIT-identical to `sqeuclidean` (itself a
+/// scalar left-fold for `d < 8`), hence to the generic per-pair arm.
+fn cdist_row_euclidean_soa(ai: &[f64], b: &[Vec<f64>], nb: usize) -> Vec<f64> {
+    use std::simd::{Simd, StdFloat};
+    const L: usize = 8;
+    let d = ai.len();
+    let mut row = vec![0.0_f64; nb];
+    let mut j = 0usize;
+    while j + L <= nb {
+        let mut sq = Simd::<f64, L>::splat(0.0);
+        for k in 0..d {
+            let dk = Simd::<f64, L>::splat(ai[k]) - Simd::<f64, L>::from_slice(&b[k][j..j + L]);
+            sq += dk * dk;
+        }
+        sq.sqrt().copy_to_slice(&mut row[j..j + L]);
+        j += L;
+    }
+    while j < nb {
+        let mut s = 0.0_f64;
+        for k in 0..d {
+            let dk = ai[k] - b[k][j];
+            s += dk * dk;
+        }
+        row[j] = s.sqrt();
         j += 1;
     }
     row
@@ -8006,6 +8064,41 @@ mod tests {
                             g.to_bits(),
                             w.to_bits(),
                             "dim4 cdist mismatch at ({i},{j}) {metric:?} na={na} nb={nb}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cdist_euclidean_small_d_soa_matches_scalar_bitwise() {
+        // The SoA-across-pairs Euclidean kernel (dim<8) must be BIT-identical to
+        // the scalar per-pair `euclidean` for every small dimension — verifying
+        // the lane left-fold reduction matches `sqeuclidean`'s scalar left-fold.
+        let mut s: u64 = 0xABCD_1234_5678_9001;
+        let mut rng = || {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (s >> 11) as f64 / (1u64 << 53) as f64
+        };
+        for d in [1usize, 2, 3, 5, 6, 7] {
+            // nb=41 = 5·8 + 1 exercises both the SIMD-chunk and the scalar tail;
+            // (40,41) stays serial, (600,300) crosses the work gate -> parallel.
+            for &(na, nb) in &[(40usize, 41usize), (600, 300)] {
+                let xa: Vec<Vec<f64>> =
+                    (0..na).map(|_| (0..d).map(|_| rng() * 4.0 - 2.0).collect()).collect();
+                let xb: Vec<Vec<f64>> =
+                    (0..nb).map(|_| (0..d).map(|_| rng() * 4.0 - 2.0).collect()).collect();
+                let got = cdist_metric(&xa, &xb, DistanceMetric::Euclidean).expect("cdist");
+                for (i, gr) in got.iter().enumerate() {
+                    for (j, &g) in gr.iter().enumerate() {
+                        let want = euclidean(&xa[i], &xb[j]);
+                        assert_eq!(
+                            g.to_bits(),
+                            want.to_bits(),
+                            "soa cdist mismatch at ({i},{j}) d={d} na={na} nb={nb}"
                         );
                     }
                 }
