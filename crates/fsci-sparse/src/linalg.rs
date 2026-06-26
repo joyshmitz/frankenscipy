@@ -4920,6 +4920,7 @@ pub fn sparse_col_sums(a: &CsrMatrix) -> Vec<f64> {
 /// Compute the row-wise maximum of a CSR matrix.
 pub fn sparse_row_max(a: &CsrMatrix) -> Vec<f64> {
     let n = a.shape().rows;
+    let ncols = a.shape().cols;
     (0..n)
         .map(|i| {
             let start = a.indptr()[i];
@@ -4927,17 +4928,26 @@ pub fn sparse_row_max(a: &CsrMatrix) -> Vec<f64> {
             if start == end {
                 0.0 // empty row, implicit zero
             } else {
-                a.data()[start..end]
-                    .iter()
-                    .cloned()
-                    .fold(f64::NEG_INFINITY, |a: f64, b: f64| {
-                        if a.is_nan() || b.is_nan() {
-                            f64::NAN
-                        } else {
-                            a.max(b)
-                        }
-                    })
-                    .max(0.0) // account for implicit zeros
+                let row_max =
+                    a.data()[start..end]
+                        .iter()
+                        .cloned()
+                        .fold(f64::NEG_INFINITY, |a: f64, b: f64| {
+                            if a.is_nan() || b.is_nan() {
+                                f64::NAN
+                            } else {
+                                a.max(b)
+                            }
+                        });
+                // Only fold in an implicit zero when the row actually HAS one
+                // (fewer stored entries than columns). A full row — including one
+                // whose stored entries are an explicit zero — has no implicit zero,
+                // so its max/min is over the stored values alone (matches SciPy).
+                if end - start < ncols {
+                    row_max.max(0.0)
+                } else {
+                    row_max
+                }
             }
         })
         .collect()
@@ -4946,6 +4956,7 @@ pub fn sparse_row_max(a: &CsrMatrix) -> Vec<f64> {
 /// Compute the row-wise minimum of a CSR matrix.
 pub fn sparse_row_min(a: &CsrMatrix) -> Vec<f64> {
     let n = a.shape().rows;
+    let ncols = a.shape().cols;
     (0..n)
         .map(|i| {
             let start = a.indptr()[i];
@@ -4966,8 +4977,13 @@ pub fn sparse_row_min(a: &CsrMatrix) -> Vec<f64> {
                         });
                 if row_min.is_nan() {
                     f64::NAN
-                } else {
+                } else if end - start < ncols {
+                    // Implicit zero present only when the row isn't full (matches
+                    // SciPy). A full row — even one storing an explicit zero — has
+                    // no implicit zero, so the min is over the stored values alone.
                     row_min.min(0.0)
+                } else {
+                    row_min
                 }
             }
         })
@@ -5232,6 +5248,40 @@ mod tests {
         // submatrix rows [1,2) cols [0,2) -> [[3,4]] -> sum 7.
         let sub = sparse_submatrix(&a, 1, 2, 0, 2);
         assert!((sparse_sum(&sub) - 7.0).abs() < 1e-12, "submatrix row 1");
+    }
+
+    #[test]
+    fn sparse_row_min_max_full_row_has_no_implicit_zero() {
+        use crate::{CsrMatrix, Shape2D};
+        // FULL rows (nnz == ncols) have NO implicit zero, so min/max are over the
+        // stored values alone — even when every stored value shares a sign — to
+        // match SciPy. Regression for the `.min(0.0)`/`.max(0.0)` that was applied
+        // unconditionally (row [3,4] wrongly reported min 0; the symmetric max bug
+        // would report a full all-negative row's max as 0).
+        let full = CsrMatrix::from_components(
+            Shape2D::new(2, 2),
+            vec![3.0, 4.0, -5.0, -2.0],
+            vec![0, 1, 0, 1],
+            vec![0, 2, 4],
+            false,
+        )
+        .unwrap();
+        assert_eq!(sparse_row_min(&full), vec![3.0, -5.0]);
+        assert_eq!(sparse_row_max(&full), vec![4.0, -2.0]);
+
+        // A NON-full row keeps its implicit zero: one stored entry over two cols.
+        let sparse_row = CsrMatrix::from_components(
+            Shape2D::new(2, 2),
+            vec![7.0, -1.0],
+            vec![1, 0],
+            vec![0, 1, 2],
+            false,
+        )
+        .unwrap();
+        // row 0 = [_, 7] -> implicit 0 at col 0 -> min 0, max 7.
+        // row 1 = [-1, _] -> implicit 0 at col 1 -> min -1, max 0.
+        assert_eq!(sparse_row_min(&sparse_row), vec![0.0, -1.0]);
+        assert_eq!(sparse_row_max(&sparse_row), vec![7.0, 0.0]);
     }
 
     #[test]

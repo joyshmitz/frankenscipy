@@ -4,6 +4,26 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-sparse-rowminmax-fullrow - CONFORMANCE FIX (scipy-parity): sparse_row_min/max wrongly folded an implicit 0 into FULL rows; closes the RED `sparse_zeros_submatrix_rowmin` flagged the prior 2 turns
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. Not a perf lever —
+  a correctness fix restoring conformance GREEN (the directive requires it; this
+  RED had persisted on main across the bmat/hstack turns, nobody owning linalg).
+- BUG (crates/fsci-sparse/src/linalg.rs): `sparse_row_min`/`sparse_row_max`
+  applied `.min(0.0)`/`.max(0.0)` UNCONDITIONALLY to every non-empty row, i.e.
+  assumed every row has an implicit zero. A FULL row (stored-entry count ==
+  ncols) has NO implicit zero, so its min/max must be over the stored values
+  alone (SciPy/NumPy semantics). The new test `sparse_zeros_submatrix_rowmin`
+  caught it: row [3,4] reported min 0.0 instead of 3.0.
+- FIX: capture the fold result and fold in 0 only when `end - start < ncols`.
+  Preserves empty-row (0.0) and NaN handling. Symmetric fix to row_max (latent:
+  a full all-negative row would have reported max 0.0).
+- VERIFIED: `cargo test -p fsci-sparse` → **344 passed / 0 failed / 4 ignored**
+  (was 1 failed). New regression test `sparse_row_min_max_full_row_has_no_implicit_zero`
+  locks both full-row (min 3/-5, max 4/-2) and non-full-row (implicit-zero
+  present) cases. Verified locally (RCH E0514 churn). Closes the pre-existing RED
+  noted in the bmat/hstack ledger entries — fsci-sparse conformance is GREEN again.
+
 ## 2026-06-26 - frankenscipy-greenfalcon-hstack-sorted-emit - KEEP (BOLD WIN, byte-identical): sparse.hstack emit row-major across blocks → COO→CSR fast path skips the sort; 10.64x self, flips an 11.1x scipy loss to ~parity
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. Variant-K lever,
