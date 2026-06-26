@@ -4,6 +4,31 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-structural-rank-greedy - KEEP (BOLD WIN, byte-identical rank): csgraph.structural_rank greedy-init matching + generation-stamp; 7.5x self, closes a 102x scipy loss to 13.6x (+ first test for a previously-untested fn)
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. Measured the rest of
+  the csgraph family same-box (n=3000, ~48k nnz): reverse_cuthill_mckee **3.6x
+  FASTER**, bellman_ford **388x FASTER**, depth_first_order 2.1x slower (tiny abs).
+  But `structural_rank` was fsci 52.3 ms vs scipy 0.51 ms = **102x SLOWER**.
+- BUG (crates/fsci-sparse/src/linalg.rs `structural_rank`): naive Kuhn's bipartite
+  matching — for EVERY row it allocated a fresh `vec![false; m]` and ran an
+  augmenting DFS (O(n·E) with n large allocs).
+- FIX: (1) GREEDY initial matching — match each row to its first free column in
+  O(nnz); only the few conflicting rows then need augmenting. (2) generation-STAMP
+  `seen: Vec<u32>` reused across rows (one `stamp += 1` instead of a per-row
+  `vec![false; m]` alloc+clear). The structural rank = size of the MAXIMUM matching
+  (UNIQUE), so greedy+Kuhn's yields the identical rank.
+- VERIFIED byte-identical: a throwaway harness compared the new rank to the
+  original Kuhn's-from-scratch over **200 random graphs** (varied n/degree/symmetry)
+  → 0 mismatches. Added the FIRST regression test for this fn
+  (`structural_rank_full_deficient_and_augmenting`, covering full / row-deficient /
+  over-constrained-augmenting). Full `fsci-sparse` suite 347/0.
+- MEASURED: 52.3 ms → **6.96 ms = 7.5x self-speedup**; vs scipy 0.51 ms: 102x →
+  **13.6x slower**. Verified locally (RCH E0514 churn). RETRY for parity: the
+  residual is the O(n·E) augmenting vs scipy's HOPCROFT-KARP O(E·√V) (BFS layers +
+  multi-path DFS) — same rank output, multi-turn but well-defined. The greedy-init
+  already kills the dominant cost.
+
 ## 2026-06-26 - frankenscipy-greenfalcon-cluster-survey - SURVEY (2 wins / 2 API-walls) + REJECT (whiten flatten regressed): cluster vq/whiten gaps are the Vec<Vec> input/output representation vs scipy contiguous arrays
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. Measured fsci-cluster
