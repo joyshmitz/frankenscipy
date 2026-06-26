@@ -3435,8 +3435,13 @@ impl RegularGridInterpolator {
         // Compute the spline basis values for each dimension, then sum over
         // all combinations.
 
-        // For cubic spline, we use 4 points per dimension (local cubic).
-        // This is the "not-a-knot" style local cubic that scipy uses.
+        // For cubic spline, we use 4 points per dimension: a LOCAL cubic
+        // (Catmull-Rom, C1) tensor product. NOTE: this is NOT identical to
+        // scipy.interpolate.RegularGridInterpolator(method="cubic"), which fits
+        // a GLOBAL C2 tensor spline over the whole grid (hence ~264x slower at
+        // 300^2/50k queries; fsci 5.98 ms vs scipy 1582 ms). Values agree to
+        // ~0.06% but are not bit-parity — a deliberate speed/locality choice.
+        // (interpn `linear` IS bit-parity with scipy and 1.73x faster.)
 
         self.eval_spline_tensor_product(xi)
     }

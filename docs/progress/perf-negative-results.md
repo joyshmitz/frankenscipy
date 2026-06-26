@@ -4,6 +4,25 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-interpn-survey - SURVEY (interpn already dominates; cubic NOT scipy-parity)
+
+Measured `interpn`/`RegularGridInterpolator` same-box vs SciPy 1.17.1
+(perf_interpn_scipy.rs, 2D grid glen=300 ⇒ 90k nodes, nq=50000, best-of-5):
+- **linear: fsci 3.96 ms vs scipy 6.86 ms = 1.73x FASTER, BIT-PARITY** (nansum
+  acc EXACT: 249349.79 == 249349.787). Already parallelized eval; no new lever.
+- cubic: fsci 5.98 ms vs scipy **1581.8 ms** (264x). But NOT a parity comparison:
+  fsci's cubic RGI is a LOCAL Catmull-Rom (C1) tensor product
+  (`eval_spline_tensor_product`), while scipy's `method="cubic"` fits a GLOBAL C2
+  tensor spline over the whole grid (why it's 1.5 s). Values agree to ~0.06% but
+  are NOT bit-identical (systematic method difference, not rounding/boundary).
+  A misleading comment claimed fsci's local cubic "is the style scipy uses" —
+  CORRECTED to state the divergence.
+DECISION: no code lever — interpn linear is an existing parity win (documented to
+scorecard); interpn cubic is a deliberate speed/locality choice. DO NOT "fix"
+cubic to scipy's global spline (that would be a ~264x perf REGRESSION for
+bit-parity on a method users rarely need exactly). RETRY only if a scipy-parity
+cubic-RGI mode is explicitly requested (add as an opt-in, keep Catmull-Rom default).
+
 ## 2026-06-26 - frankenscipy-greenfalcon-clough-tocher-dup-check-on2 - KEEP (BOLD WIN, byte-identical): interpolate.griddata Cubic O(n²) duplicate-point validation → O(n) hash
 
 PROFILED the n≥20k griddata Cubic residual loss filed below. Surprise: the
