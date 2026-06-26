@@ -4,6 +4,61 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-25 - frankenscipy-greenfalcon-kron-sorted-emit - KEEP (BOLD WIN, byte-identical): sparse.kron loop reorder emits row/col-sorted triplets → COO→CSR fast path skips the O(nnz log nnz) sort; 3.65x self, flips 4.09x scipy loss to ~parity
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. DIG into the
+  uncontended fsci-sparse crate.
+
+### The waste
+
+`kron(A, B)` (Kronecker product) builds the full nnz_a·nnz_b triplet list then
+`CooMatrix::to_csr()`. `to_csr` tries `sorted_unique_coo_to_csr` (an O(nnz)
+count+prefix fast path that fires iff the triplets are strictly increasing in
+(row,col)), else falls back to sorting all nnz triplets — O(nnz log nnz). The old
+loop nesting `for ai { for a_col(aj) { for bi { for b_col(bj) }}}` emitted output
+rows `ai*mb + bi` in NON-monotonic order (for fixed ai, the row cycles 0..mb-1
+per aj, then resets) → fast-path check failed → full sort of nnz_a·nnz_b entries.
+
+### Fix (byte-identical)
+
+Swap the nesting to `for ai { for bi { for a_col { for b_col }}}`. Now the output
+row `ai*mb+bi` is constant within (ai,bi) and strictly increases across them, and
+within each row the columns `aj*nb+bj` strictly increase (A's row sorted by aj in
+the outer scan, B's row sorted by bj inner, bj<nb ⇒ aj*nb+bj monotonic). The
+emitted triplets are strictly (row,col)-sorted and unique (kron has no duplicate
+positions), so `sorted_unique_coo_to_csr` fires and skips the sort. Also
+preallocated the triplet vecs to nnz_a·nnz_b. The final CSR is identical to what
+the sort would have produced (same entries, same canonical order) → byte-identical
+(mism=0 over indptr/indices/data in same-process A/B).
+
+### Measurement (same-box: fsci local isolated target vs SciPy 1.17.1)
+
+A = 400×400 density 0.02 (~3200 nnz), B = 120×120 density 0.05 (~720 nnz),
+kron ≈ 2.2-2.3M nnz:
+
+| variant            | time      | vs scipy      |
+|--------------------|-----------|---------------|
+| fsci current (sort)| 248.73 ms | 4.09x slower  |
+| fsci reordered     | 68.15 ms  | ~1.12x (parity)|
+| scipy.sparse.kron  | 60.79 ms  | —             |
+
+3.65x self-speedup; flips a 4.09x SciPy loss to near-parity. The residual ~1.12x
+is the COO intermediate + the fast-path's sortedness scan (scipy also builds COO);
+a fully-direct CSR construction (skip COO, build indptr by row-nnz, use
+`from_components_unchecked` + set CanonicalMeta) could close it — deferred.
+
+### Conformance + lever
+
+`cargo test --release -p fsci-sparse kron` = 10 passed / 0 failed, incl.
+`kron_matches_scipy_reference_values`, `kron_known_result`, and the kronsum
+scipy-reference tests (kronsum calls kron twice → also faster). RCH in E0514
+toolchain churn; verified locally with a fresh isolated CARGO_TARGET_DIR.
+GENERAL LEVER: when a builder emits COO/triplets that a downstream `to_csr`/
+`to_csc` re-sorts, reorder the EMISSION to be (row,col)-sorted so the no-sort
+fast path fires — free, byte-identical. Extend-candidates (also COO→CSR builders
+in construct.rs): `bmat` (324), `vstack`/`hstack` (420), `diags`/`spdiags` — check
+their emission order. Retry to parity: direct-CSR kron (skip COO).
+
 ## 2026-06-25 - frankenscipy-greenfalcon-upfirdn-up-gt-1 - MEASURED LOSS + REJECT (zero-gain): resample_poly/upfirdn up>1 fractional is 1.4-2.46x slower than scipy; byte-identical sub-filter (contiguous polyphase h) is a WASH; gap is the single-accumulator reduction (near-wall for safe Rust)
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. Followed the shipped

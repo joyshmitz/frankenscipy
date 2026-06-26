@@ -6,6 +6,35 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon (claude-code) - KEEP (BOLD WIN, byte-identical): sparse.kron loop reorder emits sorted triplets → skips the O(nnz log nnz) sort; 3.65x self-speedup flips a 4.09x SciPy loss to ~parity
+
+- Agent: GreenFalcon (claude-code). DIG into fsci-sparse. `kron` (Kronecker
+  product) built the full nnz_a·nnz_b COO triplet list then `to_csr`, which had
+  to SORT all of them. But the loop nesting was `for ai { for a_col { for bi {
+  for b_col }}}`, emitting rows `ai*mb+bi` in NON-monotonic order (bi inner-ish,
+  a_col outer) → forced the slow O(nnz log nnz) sort path.
+- FIX (crates/fsci-sparse/src/construct.rs): nest the block row `bi` OUTSIDE A's
+  column scan → `for ai { for bi { for a_col { for b_col }}}`. Output row
+  `ai*mb+bi` is then constant per (ai,bi) and monotonic across them, and within a
+  row the columns `aj*nb+bj` increase (A row sorted by aj outer, B row by bj
+  inner, bj<nb). Strictly-sorted+unique triplets trigger `CooMatrix::to_csr`'s
+  O(nnz) `sorted_unique_coo_to_csr` fast path (count+prefix, no sort). Also
+  preallocate the triplet vecs to nnz_a·nnz_b. BYTE-IDENTICAL: same entries, same
+  canonical CSR the sort would have produced.
+- MEASURED same-box (A 400² density 0.02 ⊗ B 120² density 0.05 → ~2.2M nnz; fsci
+  local isolated target vs SciPy 1.17.1 `scipy.sparse.kron`):
+  - self-speedup: current 248.73 ms → reordered 68.15 ms = **3.65x**, mism=0.
+  - vs scipy: scipy 60.79 ms; current fsci was **4.09x slower**, reordered is
+    **~1.12x (near-parity)**. The residual is the COO intermediate + fast-path
+    scan (scipy also builds COO).
+- Conformance GREEN: `cargo test -p fsci-sparse kron` 10/0 incl.
+  `kron_matches_scipy_reference_values` + `kronsum_two_by_two_matches_scipy_reference`
+  (kronsum calls kron). RCH in E0514 churn; verified locally (isolated target).
+  Lever: when a builder emits COO/triplets that a downstream `to_csr` re-sorts,
+  reorder the emission to be row/col-sorted so the no-sort fast path triggers.
+  Retry/extend: bmat/vstack/hstack/diags (also build COO then to_csr — check if
+  their emission order is sorted). Detail in canonical ledger.
+
 ## 2026-06-25 - cod-a - REJECT: SphericalVoronoi scalarized visibility loop regressed decisive large-n row
 
 - Agent: cod-a (codex-cli / gpt-5.2), `AGENT_NAME=cod-a`.
