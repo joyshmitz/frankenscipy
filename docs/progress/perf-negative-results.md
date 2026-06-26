@@ -4,6 +4,34 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-label-bfs-noalloc - KEEP (BOLD WIN, byte-identical): ndimage.label BFS precomputes flat neighbor offsets (kills the per-neighbor Vec alloc + unravel + strides dot product); 2.25x self, flips a 7.97x scipy loss to 3.5x
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. Pivoted to
+  fsci-ndimage. MEASURED GAP (same-box, 512² binary blobs ~23k components; fsci
+  local isolated target vs SciPy 1.17.1 `ndimage.label`): fsci 14.25 ms vs scipy
+  1.79 ms = **7.97x slower**.
+- BUG: the BFS flood-fill inner loop, per NEIGHBOR, allocated a `Vec` for the
+  neighbor coordinate (`Vec::with_capacity(ndim)`), and per CELL called
+  `input.unravel` (another alloc) + recomputed `neighbor_flat` via a strides dot
+  product — ~460k allocs on a 512² image.
+- FIX (crates/fsci-ndimage/src/lib.rs `label_with_structure`): precompute each
+  structure offset's FLAT delta `Σ δ·stride` ONCE; the BFS reaches a neighbor with
+  `current_flat + flat_offset[oi]` (no alloc, no dot product), unraveling each
+  cell into a REUSED buffer via the existing `unravel_into`, and bounds-checking
+  per axis without allocating. BYTE-IDENTICAL: every component cell still gets
+  `current_label`, the raster seed-scan order is unchanged, and
+  `current_flat + Σδ·stride == Σ(coord+δ)·stride`, so the labelling is identical
+  regardless of neighbour visit order.
+- MEASURED: 14.25 ms → **6.33 ms = 2.25x self-speedup**, num_features unchanged
+  (22992). vs scipy 1.79 ms: 7.97x slower → **3.5x slower**. Conformance GREEN:
+  `cargo test -p fsci-ndimage label` = 13/0 incl. `label_matches_scipy_reference_values`
+  + `label_connected_components_match_scipy` (verified locally; RCH E0514 churn).
+- RETRY to reach parity: the residual 3.5x is the BFS flood-fill itself (queue
+  ops + random-access cache misses on `labels`); scipy uses a raster-scan
+  two-pass union-find (cache-friendly + equivalence resolution). A union-find
+  rewrite must reproduce scipy's first-appearance raster labelling EXACTLY (the
+  scipy-reference tests pin it) — bigger, non-byte-identical, multi-turn.
+
 ## 2026-06-26 - frankenscipy-greenfalcon-laplacian-normed-structural - KEEP (modest, byte-identical) + SURFACE API gap: csgraph.laplacian normed scaling O(n²)→O(n+nnz) (1.21x); the function's DENSE Vec<Vec<f64>> return is the real O(n²) wall vs scipy's sparse Laplacian
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. `laplacian(graph,
