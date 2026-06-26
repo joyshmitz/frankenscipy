@@ -6,6 +6,47 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-26 - GreenFalcon (codex-cli) - REJECT: stats.GaussianKde scalar-hoist does not improve 1-D KDE and regresses the 5k row
+
+- Agent: GreenFalcon (codex-cli), `AGENT_NAME=GreenFalcon`. Land-or-dig audit:
+  the only live non-ancestor `.scratch/.worktrees` candidate was
+  `/data/projects/.worktrees/frankenscipy-eigvalsh-blackthrush-20260609`
+  (`e3b744f4`, GEMM flat-workspace threshold 768), but current `main` already has
+  the stronger `MATMUL_FLAT_WORKSPACE_MIN_DIM = 256`, so no worktree win was
+  landable.
+- Gap attacked: follow-up to the kept `GaussianKdeNd` whiten-once lever. The
+  canonical ledger explicitly named the separate 1-D `GaussianKde` as a retry
+  target, so this tested whether the scalar setup inside `evaluate` was still a
+  meaningful per-query tax.
+- Lever tested and reverted: cache `inv_bandwidth` and the Gaussian
+  normalization in `GaussianKde` at construction time, leaving the per-sample
+  kernel expression and summation order unchanged. This removes repeated scalar
+  setup per query but leaves the dominant `n * points` exponentials intact.
+- Requested `cargo bench --release` was captured and rejected by this Cargo
+  (`unexpected argument '--release'`), so the equivalent per-crate command used
+  `--profile release` with
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b`.
+- MEASURED same-host A/B using
+  `AGENT_NAME=GreenFalcon CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b
+  rch exec -- cargo bench --profile release -p fsci-stats --bench stats_bench --
+  gaussian_kde --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`
+  (RCH local fallback with warm target):
+  - `evaluate_many/1000`: current Rust `4.8523 ms`, candidate `4.6482 ms`,
+    Criterion `change: [-9.1053%, +17.051%, +45.386%]`, `p = 0.27`, no
+    significant change.
+  - `evaluate_many/5000`: current Rust `8.4824 ms`, candidate `16.153 ms`,
+    Criterion `change: [+45.498%, +65.727%, +95.101%]`, `p = 0.00`, significant
+    regression; self ratio `8.4824 / 16.153 = 0.53x` baseline speed.
+- Ratio vs SciPy 1.17.1 on the exact deterministic 1-D workload:
+  - n=1000 SciPy median `22.896285 ms`; current Rust is `4.72x` faster and the
+    candidate is `4.93x` faster, but the self delta was statistically neutral.
+  - n=5000 SciPy median `236.703249 ms`; current Rust is `27.90x` faster and the
+    candidate falls to `14.65x` faster.
+- Decision: REJECT and REVERT. The scalar setup is not the active bottleneck for
+  1-D KDE; any retry needs to attack the exponential throughput / vectorization
+  or a SciPy-compatible batching strategy rather than caching constants. Source
+  edits were fully reverted; this commit records the negative evidence only.
+
 ## 2026-06-26 - GreenFalcon (codex-cli) - REJECT: ndimage.watershed_ift bounded-u8 bucket frontier is zero-gain when preserving heap tie order
 
 - Agent: GreenFalcon (codex-cli), `AGENT_NAME=GreenFalcon`. Land-or-dig audit:

@@ -4,6 +4,58 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-kde1d-constant-hoist - REJECT (significant 5k regression): stats.GaussianKde cached scalar constants are not the bottleneck
+
+LAND-OR-DIG audit first: the only live `.scratch/.worktrees` head not reachable
+from `origin/main` was
+`/data/projects/.worktrees/frankenscipy-eigvalsh-blackthrush-20260609`
+(`e3b744f4`, `perf(linalg): lower GEMM flat-workspace threshold`). Current main
+already has the stronger GEMM threshold (`MATMUL_FLAT_WORKSPACE_MIN_DIM = 256`),
+so that old threshold-768 worktree is superseded, not landable.
+
+Targeted the explicit follow-up from the kept `GaussianKdeNd` whiten-once entry:
+the separate 1-D `GaussianKde` still recomputed `1 / bandwidth` and the
+normalization constant inside every scalar `evaluate` call. `/alien-graveyard`
+maps this to loop-invariant-code-motion / strength-reduction: hoist scalar work
+out of an inner query loop before looking for deeper vector or algorithmic
+changes.
+
+Lever tested and reverted: cache `inv_bandwidth` and `norm` in `GaussianKde`
+during `new()` / `with_bandwidth()`, then reuse those fields in `evaluate`.
+The per-sample expression remained `(x - xi) * inv_bandwidth` and the summation
+order was unchanged, so this was a narrow constant-hoist only.
+
+Bench harness: existing Criterion rows `gaussian_kde/evaluate_many/{1000,5000}`
+in `crates/fsci-stats/benches/stats_bench.rs`, using the deterministic data
+`sin(i*0.017)*3 + cos(i*0.0031)` and evenly spaced query points. Requested
+`cargo bench --release` was captured and rejected by this Cargo
+(`unexpected argument '--release'`); equivalent per-crate command used
+`--profile release` with
+`AGENT_NAME=GreenFalcon CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b
+rch exec -- cargo bench --profile release -p fsci-stats --bench stats_bench --
+gaussian_kde --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`.
+RCH had no admissible workers and fell back locally with the requested warm
+target dir.
+
+MEASURED same-host A/B:
+- `evaluate_many/1000`: current Rust `4.8523 ms`, candidate `4.6482 ms`,
+  Criterion `change: [-9.1053%, +17.051%, +45.386%]`, `p = 0.27`, no
+  significant change.
+- `evaluate_many/5000`: current Rust `8.4824 ms`, candidate `16.153 ms`,
+  Criterion `change: [+45.498%, +65.727%, +95.101%]`, `p = 0.00`, significant
+  regression. Self ratio: `8.4824 / 16.153 = 0.53x` baseline speed.
+
+Ratio vs SciPy 1.17.1 on the same deterministic 1-D workload:
+- n=1000 SciPy median `22.896285 ms`; current Rust is `4.72x` faster, candidate
+  `4.93x` faster, but the candidate self delta is statistically neutral.
+- n=5000 SciPy median `236.703249 ms`; current Rust is `27.90x` faster,
+  candidate falls to `14.65x` faster.
+
+Decision: REJECT and REVERT. Scalar setup is not the active 1-D KDE bottleneck;
+future work should attack exponential throughput / vectorized batching or a
+larger algorithmic batch path. Production source edits were restored completely;
+this commit keeps only the ledger evidence.
+
 ## 2026-06-26 - frankenscipy-greenfalcon-kde-whiten - KEEP (BOLD WIN, algorithmic O(d²)→O(d)): stats.gaussian_kde (GaussianKdeNd) whiten-once
 
 `GaussianKdeNd::evaluate` re-solved the `d×d` lower-triangular system
