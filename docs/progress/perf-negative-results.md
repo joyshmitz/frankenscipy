@@ -4,6 +4,34 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-25 - frankenscipy-greenfalcon-upfirdn-up-gt-1 - MEASURED LOSS + REJECT (zero-gain): resample_poly/upfirdn up>1 fractional is 1.4-2.46x slower than scipy; byte-identical sub-filter (contiguous polyphase h) is a WASH; gap is the single-accumulator reduction (near-wall for safe Rust)
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. Followed the shipped
+  upfirdn polyphase win (f725beb4) downstream into `resample_poly`.
+- MEASURED LOSS (same-box, n=2^18, fsci local vs SciPy 1.17.1 `resample_poly`):
+  up/down = 1/10 1.08x slower, **2/5 2.46x slower**, **3/7 1.82x slower**, 1/4
+  1.39x slower, 4/3 1.47x slower. Pure decimation (up=1, big down) is ~parity;
+  the gap is the up>1 FRACTIONAL cases. Root cause: fsci's byte-identical poly
+  path does the same MAC count as scipy (~n·len(h)/down) but each output is a
+  SINGLE-ACCUMULATOR reduction `acc += x[i]*h[p-i*up]` (loop-carried dependency)
+  whereas scipy's C does a vectorized per-phase AXPY. For up>1 the h gather is
+  also strided by `up`.
+- REJECTED LEVER (byte-identical, zero-gain): precompute contiguous polyphase
+  sub-filters h_φ[s]=h[φ+s·up] and access those instead of strided h[p-i·up]
+  (same values, same increasing-i order → mism=0). Same-process A/B: 1.08x (up=1
+  d10) / **0.98x (up=2 d5)** / **0.93x (up=3 d7)** / 0.98x (up=1 d4) / 1.10x
+  (up=4 d5). WASH-to-slight-loss: the per-output `p%up`/`p/up` div overhead
+  offsets the contiguous-access benefit, AND h is already L1-resident (the stride
+  was never the bottleneck — the dependency chain is). Reverted (zero-gain).
+- CONCLUSION: the up>1 upfirdn gap is a NEAR-WALL for byte-identical safe Rust.
+  Reaching scipy parity needs a NON-byte-identical multi-accumulator / per-phase
+  AXPY that breaks the reduction dependency chain (reorders the summation →
+  tolerance test required), and even then may not beat scipy's hand-tuned C
+  polyphase. Retry: only as a dedicated non-byte-identical polyphase-AXPY effort
+  with a tolerance conformance test; low confidence of clearing the C constant
+  factor. The shipped byte-identical poly (down≥4) already narrowed the gap and
+  stands.
+
 ## 2026-06-25 - frankenscipy-greenfalcon-saturation-sweep - DIG LOG (no new lever): signal/interpolate/cluster hot paths verified ALREADY OPTIMIZED; uncontended clean-win frontier saturated; RCH E0514 churn ongoing
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. After landing 4
