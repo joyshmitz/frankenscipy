@@ -12655,28 +12655,72 @@ pub fn medfilt2d(
     let half_c = (kc / 2) as i64;
     let mid = kernel_area / 2;
     let mut result = vec![0.0_f64; output_len];
-    let mut window = vec![0.0_f64; kernel_area];
+    let (ri64, ci64) = (rows as i64, cols as i64);
 
-    for i in 0..rows {
-        for j in 0..cols {
+    // Precompute each window tap's FLAT offset from the centre pixel; for INTERIOR
+    // pixels the whole window is a branch-free gather `input[p + tap_flat[w]]`
+    // (the old loop did a 4-way bounds check on every element of every pixel).
+    let tap_flat: Vec<i64> = (0..kr)
+        .flat_map(|di| (0..kc).map(move |dj| (di as i64 - half_r) * ci64 + (dj as i64 - half_c)))
+        .collect();
+    let (lo_r, hi_r, lo_c, hi_c) = (half_r, ri64 - half_r, half_c, ci64 - half_c);
+
+    // Each output pixel is an independent window median, so compute the output in
+    // parallel over contiguous chunks (each worker owns a window scratch).
+    // Byte-identical to the serial double loop: the interior gather visits exactly
+    // the in-bounds taps the bounds-checked path would, and the value depends only
+    // on `input`, not the thread.
+    let eval = |p: usize, window: &mut [f64]| -> f64 {
+        let i = (p / cols) as i64;
+        let j = (p % cols) as i64;
+        if i >= lo_r && i < hi_r && j >= lo_c && j < hi_c {
+            for (w, slot) in window.iter_mut().enumerate() {
+                *slot = input[(p as i64 + tap_flat[w]) as usize];
+            }
+        } else {
             let mut w = 0;
             for di in 0..kr {
-                let ri = i as i64 + di as i64 - half_r;
+                let r = i + di as i64 - half_r;
                 for dj in 0..kc {
-                    let cj = j as i64 + dj as i64 - half_c;
-                    window[w] = if ri >= 0 && ri < rows as i64 && cj >= 0 && cj < cols as i64 {
-                        input[ri as usize * cols + cj as usize]
+                    let c = j + dj as i64 - half_c;
+                    window[w] = if r >= 0 && r < ri64 && c >= 0 && c < ci64 {
+                        input[r as usize * cols + c as usize]
                     } else {
                         0.0
                     };
                     w += 1;
                 }
             }
-            let (_, &mut m, _) = window.select_nth_unstable_by(mid, f64::total_cmp);
-            result[i * cols + j] = m;
         }
-    }
+        let (_, &mut m, _) = window.select_nth_unstable_by(mid, f64::total_cmp);
+        m
+    };
 
+    let work = (output_len as u64).saturating_mul(kernel_area as u64);
+    let threads = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(output_len);
+    if work < (1 << 16) || threads <= 1 || output_len < 4 {
+        let mut window = vec![0.0_f64; kernel_area];
+        for (p, slot) in result.iter_mut().enumerate() {
+            *slot = eval(p, &mut window);
+        }
+        return Ok(result);
+    }
+    let chunk = output_len.div_ceil(threads);
+    let eval = &eval;
+    std::thread::scope(|scope| {
+        for (t, out_chunk) in result.chunks_mut(chunk).enumerate() {
+            scope.spawn(move || {
+                let lo = t * chunk;
+                let mut window = vec![0.0_f64; kernel_area];
+                for (local, slot) in out_chunk.iter_mut().enumerate() {
+                    *slot = eval(lo + local, &mut window);
+                }
+            });
+        }
+    });
     Ok(result)
 }
 

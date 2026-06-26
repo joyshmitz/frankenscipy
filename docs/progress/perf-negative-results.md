@@ -4,6 +4,28 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-medfilt2d-parallel-fastpath - KEEP (BOLD WIN, byte-identical): signal.medfilt2d parallel + interior fast-path, 5.4-37x FASTER
+
+`signal.medfilt2d` already beat scipy modestly (1.16-2.48x) but was **7x slower
+than fsci's OWN `ndimage.rank_filter`** for the same 2-D median — because it was
+(a) SERIAL (`for i in rows { for j in cols }`) and (b) did a 4-way bounds check on
+EVERY window element of EVERY pixel (no interior fast-path). Applied two
+byte-identical levers: precompute each window tap's FLAT offset once so interior
+pixels gather branch-free `input[p + tap_flat[w]]`, and parallelize the
+independent per-pixel medians across output chunks (each worker owns a window
+scratch). 3/3 medfilt2d + 652/0 signal lib GREEN (byte-identical: interior gather
+visits exactly the in-bounds taps; value independent of thread).
+
+MEASURED same-box (512², vs SciPy 1.17.1, best-of-4):
+- k=3:  19.84 → 4.22 ms = **4.7x self; 1.16x → 5.44x FASTER**
+- k=7:  59.46 → 4.92 ms = **12.1x self; 2.34x → 28.3x FASTER**
+- k=11: 126.69 → 8.48 ms = **14.9x self; 2.48x → 37.1x FASTER**
+THIRD flip from the parallel-window lever this campaign (medfilt → order_filter →
+medfilt2d) + the flavor-9 interior-fast-path lever stacked on top. scipy's
+medfilt2d is O(area) per pixel serial in C; fsci is now parallel + branch-free
+interior. REMAINING: `ndimage.percentile_filter` (delegates to the already-fast
+rank_filter — likely already a win, verify before chasing).
+
 ## 2026-06-26 - frankenscipy-greenfalcon-order-filter-parallel - KEEP (BOLD WIN, byte-identical): signal.order_filter flips 5.3-7.9x SLOWER → 2.1-2.4x FASTER
 
 Applied the medfilt parallel lever to the filed candidate `signal.order_filter`
