@@ -4,6 +4,33 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-cluster-survey - SURVEY (2 wins / 2 API-walls) + REJECT (whiten flatten regressed): cluster vq/whiten gaps are the Vec<Vec> input/output representation vs scipy contiguous arrays
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. Measured fsci-cluster
+  same-box vs SciPy 1.17.1:
+  - `linkage(800, ward)`: 4.86 ms vs scipy 7.41 ms = **1.53x FASTER** (win).
+  - `fcluster`: 0.020 ms vs scipy 0.160 ms = **8x FASTER** (win).
+  - `whiten(20k×8)`: 1.81 ms vs scipy 0.97 ms = 1.86x slower.
+  - `vq(20k, k=16, d=8)`: 2.10 ms vs scipy 1.02 ms = 2.07x slower.
+- REJECT (reverted, measured REGRESSION): flattening whiten's scattered `Vec<Vec>`
+  rows into a contiguous buffer before the 3 per-feature passes — measured 1.81 →
+  **2.62 ms = 0.69x (SLOWER)**. For d=8 each row is one cache line, so the
+  scattered input read is NOT the bottleneck and the flatten copy is pure overhead.
+  The real whiten cost is the `Vec<Vec<f64>>` OUTPUT allocation (n small Vecs,
+  ~1 ms of the 1.81 ms) — API-limited, can't change the return type. Reverted.
+- WALL (not fixed): both `whiten` and `vq` gaps are the public-API REPRESENTATION
+  — `&[Vec<f64>]` scattered per-point Vecs in / `Vec<Vec<f64>>` out vs scipy's
+  contiguous ndarrays, plus scipy's SIMD-vectorized C distance/std. vq is already
+  parallel + centroid-flattened; it reads each point once (single pass, so
+  flattening can't help) and is memory-bound on the scattered points. Closing these
+  to parity needs flat-buffer public APIs (big surface change) or std::simd
+  distance — not a clean byte-identical lever. Don't re-chase whiten/vq flatten.
+- Checked + NOT targets: csgraph `depth_first_order`/`reverse_cuthill_mckee`/MST use
+  CSR directly (no Vec<Vec>); `minimum_degree_ordering` Vec<Vec> is an spsolve
+  ordering internal (LU wall); `betweenness_centrality` predecessors Vec<Vec> has
+  no scipy comparison; interpolate `interpn`/find_simplex `cells` grid is an
+  already-won structure.
+
 ## 2026-06-26 - frankenscipy-greenfalcon-cc-flat-adjacency - KEEP (BOLD WIN, byte-identical): csgraph.connected_components Vec<Vec<usize>> adjacency → flat CSR-style buffer; 2.84x self, flips a 3.4x scipy loss to 1.19x (near-parity)
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. Measured the sparse
