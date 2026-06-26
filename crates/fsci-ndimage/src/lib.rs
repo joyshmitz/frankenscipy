@@ -5527,18 +5527,35 @@ pub fn binary_fill_holes_with_structure(
     // Flood-fill from edges with complement, then invert
     // Start with all 1s, set boundary-connected background pixels to 0
     let mut filled = NdArray::zeros(input.shape.clone());
-    for i in 0..filled.data.len() {
-        filled.data[i] = 1.0;
-    }
+    filled.data.fill(1.0);
 
     // BFS from all border pixels that are background (0) in input
     let ndim = input.ndim();
     let mut queue = std::collections::VecDeque::new();
 
+    // Precompute each offset's FLAT delta (Σ δ·stride) and reuse a coord buffer,
+    // killing the per-pixel `unravel` alloc in the border scan and the
+    // per-neighbor `Vec` alloc + strides dot product in the BFS (same flat-offset
+    // lever as `label`). BYTE-IDENTICAL: the flat-order border scan and the BFS
+    // dequeue/enqueue order are unchanged, and `flat + Σδ·stride` equals the old
+    // `Σ(coord+δ)·stride`.
+    let signed_strides: Vec<i64> = input.strides.iter().map(|&s| s as i64).collect();
+    let flat_offsets: Vec<i64> = offsets
+        .iter()
+        .map(|off| {
+            off.iter()
+                .zip(&signed_strides)
+                .map(|(&delta, &stride)| delta * stride)
+                .sum()
+        })
+        .collect();
+    let signed_shape: Vec<i64> = input.shape.iter().map(|&s| s as i64).collect();
+    let mut coord = vec![0usize; ndim];
+
     // Find border pixels
     for flat in 0..input.size() {
-        let idx = input.unravel(flat);
-        let is_border = idx
+        unravel_into(flat, &input.strides, &mut coord);
+        let is_border = coord
             .iter()
             .zip(input.shape.iter())
             .any(|(&i, &s)| i == 0 || i == s - 1);
@@ -5550,26 +5567,20 @@ pub fn binary_fill_holes_with_structure(
 
     // BFS: spread background through connected 0-pixels
     while let Some(flat) = queue.pop_front() {
-        let idx = input.unravel(flat);
-        for offset in &offsets {
-            let mut neighbor_idx = Vec::with_capacity(ndim);
+        unravel_into(flat, &input.strides, &mut coord);
+        for (oi, offset) in offsets.iter().enumerate() {
             let mut in_bounds = true;
             for axis in 0..ndim {
-                let coord = idx[axis] as i64 + offset[axis];
-                if coord < 0 || coord >= input.shape[axis] as i64 {
+                let neighbor_coord = coord[axis] as i64 + offset[axis];
+                if neighbor_coord < 0 || neighbor_coord >= signed_shape[axis] {
                     in_bounds = false;
                     break;
                 }
-                neighbor_idx.push(coord as usize);
             }
             if !in_bounds {
                 continue;
             }
-            let nflat = neighbor_idx
-                .iter()
-                .zip(input.strides.iter())
-                .map(|(i, s)| i * s)
-                .sum::<usize>();
+            let nflat = (flat as i64 + flat_offsets[oi]) as usize;
             if input.data[nflat] == 0.0 && filled.data[nflat] == 1.0 {
                 filled.data[nflat] = 0.0;
                 queue.push_back(nflat);

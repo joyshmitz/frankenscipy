@@ -4,6 +4,32 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-fillholes-flatoffset - KEEP (BOLD WIN, byte-identical): ndimage.binary_fill_holes flat-offset BFS + no per-pixel border unravel; 3.24x self, flips a 3.17x scipy loss to 1.02x FASTER (parity)
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. Extend-candidate
+  from the label win (flavor-9 N-D-stencil lever). MEASURED GAP (same-box, 512²
+  with 120 rings/holes; fsci local isolated target vs SciPy 1.17.1
+  `ndimage.binary_fill_holes`): fsci 18.56 ms vs scipy 5.86 ms = **3.17x slower**.
+- TWO bugs, same flat-offset lever as `label`: (1) the BORDER scan called
+  `input.unravel(flat)` for EVERY pixel (262k allocs on 512²) just to test border
+  membership; (2) the BFS allocated a `Vec` per neighbor + recomputed `nflat` via
+  a strides dot product.
+- FIX (crates/fsci-ndimage/src/lib.rs `binary_fill_holes_with_structure`):
+  precompute each offset's flat delta `Σ δ·stride` once; unravel each cell into a
+  REUSED buffer via `unravel_into`; reach a neighbor with `flat + flat_offset[oi]`
+  (no alloc, no dot product); bounds-check per axis without allocating;
+  `filled.data.fill(1.0)` for the init. BYTE-IDENTICAL: flat-order border scan +
+  BFS dequeue/enqueue order unchanged, `flat + Σδ·stride == Σ(coord+δ)·stride`.
+- MEASURED: 18.56 ms → **5.73 ms = 3.24x self-speedup**. vs scipy 5.86 ms: 3.17x
+  slower → **1.02x FASTER (parity)**. Conformance GREEN: `cargo test -p
+  fsci-ndimage fill_hole` = 3/0 (incl. structure/diagonal-connectivity tests);
+  verified locally (RCH E0514 churn).
+- NOTE: `binary_dilation_once`'s per-neighbor `Vec` loop (lib.rs ~5071) is the
+  NON-default-origin path — the default takes `binary_dilate_separable`, so that
+  alloc loop is COLD (optimizing it would be zero-gain; skipped). Remaining
+  flavor-9 candidates: `binary_propagation`, `watershed_ift`, `grey_*` generic
+  paths, `distance_transform` feature walks.
+
 ## 2026-06-26 - frankenscipy-greenfalcon-label-bfs-noalloc - KEEP (BOLD WIN, byte-identical): ndimage.label BFS precomputes flat neighbor offsets (kills the per-neighbor Vec alloc + unravel + strides dot product); 2.25x self, flips a 7.97x scipy loss to 3.5x
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. Pivoted to
