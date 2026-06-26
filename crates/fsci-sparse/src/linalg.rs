@@ -10252,9 +10252,28 @@ pub fn laplacian(graph: &CsrMatrix, normed: bool) -> SparseResult<Vec<Vec<f64>>>
                 0.0
             };
         }
-        for i in 0..n {
-            for j in 0..n {
-                lapl[i][j] *= d_inv_sqrt[i] * d_inv_sqrt[j];
+        // L is structurally nonzero only on the diagonal and at the graph's edge
+        // positions; every other entry is already 0.0 and `0.0 * (finite scale)`
+        // stays 0.0. For a DEDUPLICATED graph (each (i,j) stored once) scale only
+        // those O(n + nnz) positions instead of the full O(n²) dense matrix —
+        // byte-identical (the `j != i` guard scales the diagonal exactly once,
+        // even with a self-loop edge). A non-deduplicated graph could revisit a
+        // position, so it keeps the dense scan.
+        if graph.canonical_meta().deduplicated {
+            for i in 0..n {
+                lapl[i][i] *= d_inv_sqrt[i] * d_inv_sqrt[i];
+                for idx in indptr[i]..indptr[i + 1] {
+                    let j = indices[idx];
+                    if j != i {
+                        lapl[i][j] *= d_inv_sqrt[i] * d_inv_sqrt[j];
+                    }
+                }
+            }
+        } else {
+            for i in 0..n {
+                for j in 0..n {
+                    lapl[i][j] *= d_inv_sqrt[i] * d_inv_sqrt[j];
+                }
             }
         }
     }

@@ -4,6 +4,30 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-laplacian-normed-structural - KEEP (modest, byte-identical) + SURFACE API gap: csgraph.laplacian normed scaling O(n²)→O(n+nnz) (1.21x); the function's DENSE Vec<Vec<f64>> return is the real O(n²) wall vs scipy's sparse Laplacian
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. `laplacian(graph,
+  normed=true)`'s symmetric-normalize step scaled the FULL dense n×n matrix
+  (`for i { for j { lapl[i][j] *= dis[i]*dis[j] }}`) — O(n²). But L is structurally
+  nonzero only on the diagonal + the graph's edges; every other entry is already
+  0.0 and `0.0 * (finite scale)` stays 0.0.
+- FIX (crates/fsci-sparse/src/linalg.rs): for a DEDUPLICATED graph, scale only the
+  diagonal + edge positions (O(n + nnz)); the `j != i` guard scales the diagonal
+  exactly once even with a self-loop edge. Non-deduplicated graphs keep the dense
+  scan (a repeated (i,j) would be over-scaled otherwise — gate is for CORRECTNESS,
+  not just perf). BYTE-IDENTICAL (mism=0 A/B; `laplacian_normed_diagonal_ones` +
+  4/4 laplacian tests GREEN, full suite 346/0).
+- MEASURED (n=2500 sym graph deg-10, ~50k nnz, normed=true; local isolated):
+  35.25 ms → 29.04 ms = **1.21x**. Modest because the O(n²) DENSE ALLOC + dense
+  D−A build remain — the function returns `Vec<Vec<f64>>` (dense), so it is
+  inherently O(n²) regardless.
+- SURFACED GAP (not fixed — API change): scipy.sparse.csgraph.laplacian returns
+  a SPARSE Laplacian for sparse input (O(nnz)); fsci's returns dense n×n always,
+  so for large sparse graphs fsci is O(n²) time+memory vs scipy O(nnz). A
+  sparse-returning `laplacian` (CsrMatrix out: diagonal degree + negated edges,
+  built directly canonical) would be a BIG win but changes the public return type
+  / adds a variant — deferred as a deliberate API decision, not a unilateral one.
+
 ## 2026-06-26 - frankenscipy-greenfalcon-addcsc-merge - KEEP (BOLD WIN, byte-identical): sparse.add_csc/sub_csc O(nnz) column merge (reuse the CSR row-merge via CSC≡CSR structural identity); 13.4x self-speedup, flips a 47x scipy loss to 3.5x
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. `add_csc`/`sub_csc`
