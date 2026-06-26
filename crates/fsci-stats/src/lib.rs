@@ -36469,14 +36469,34 @@ impl GaussianKde {
 /// `(q-x_i)ᵀ C⁻¹ (q-x_i) = ‖L⁻¹(q-x_i)‖²` and `|C|^(1/2) = Π L_ii`), exactly as
 /// scipy's `gaussian_kde` does with `cho_factor`.
 pub struct GaussianKdeNd {
-    /// Data points: `n` rows of `d` coordinates.
-    dataset: Vec<Vec<f64>>,
+    /// Pre-whitened data points: `n` rows of `L⁻¹ xᵢ` (`d` coords each). Whitening
+    /// each point ONCE (in `new`) turns a query's Mahalanobis quadratic form
+    /// `‖L⁻¹(q-xᵢ)‖²` into a plain squared distance `‖L⁻¹q - wᵢ‖²` (O(d) per
+    /// point) instead of re-solving the `d×d` triangular system per
+    /// (query, point) pair (O(d²)). frankenscipy-greenfalcon-kde-whiten.
+    whitened: Vec<Vec<f64>>,
     /// Dimensionality.
     d: usize,
-    /// Lower-triangular Cholesky factor of the kernel covariance (`d×d`).
+    /// Lower-triangular Cholesky factor of the kernel covariance (`d×d`); kept
+    /// so each query can be whitened once via forward-substitution.
     chol: Vec<Vec<f64>>,
     /// `(2π)^(-d/2) / Π L_ii / n` — the per-kernel normalizer times `1/n`.
     norm: f64,
+}
+
+/// Forward-substitution solve `L w = x` for lower-triangular `L` (`d×d`), i.e.
+/// `w = L⁻¹ x`. Used to whiten both the dataset (once, in `new`) and each query.
+fn kde_whiten_lower(chol: &[Vec<f64>], x: &[f64], d: usize) -> Vec<f64> {
+    let mut w = vec![0.0f64; d];
+    for i in 0..d {
+        let mut s = x[i];
+        let row = &chol[i];
+        for k in 0..i {
+            s -= row[k] * w[k];
+        }
+        w[i] = s / row[i];
+    }
+    w
 }
 
 impl GaussianKdeNd {
@@ -36547,8 +36567,14 @@ impl GaussianKdeNd {
         }
         let norm = (2.0 * std::f64::consts::PI).powf(-(d as f64) / 2.0) / prod_diag / nf;
 
+        // Whiten every data point once: wᵢ = L⁻¹ xᵢ.
+        let whitened: Vec<Vec<f64>> = dataset
+            .iter()
+            .map(|x| kde_whiten_lower(&chol, x, d))
+            .collect();
+
         Some(Self {
-            dataset: dataset.to_vec(),
+            whitened,
             d,
             chol,
             norm,
@@ -36564,20 +36590,18 @@ impl GaussianKdeNd {
     pub fn evaluate(&self, q: &[f64]) -> f64 {
         debug_assert_eq!(q.len(), self.d);
         let d = self.d;
-        let mut y = vec![0.0f64; d];
+        // Whiten the query ONCE (wq = L⁻¹q); then ‖L⁻¹(q-xᵢ)‖² = ‖wq - wᵢ‖² is a
+        // plain squared distance to each pre-whitened point — O(d) per point and
+        // a flat, vectorizable inner loop (vs the per-point dependent triangular
+        // solve). Mathematically identical to the forward-sub form; differs only
+        // by floating-point reassociation (~1e-13, well within KDE tolerance).
+        let wq = kde_whiten_lower(&self.chol, q, d);
         let mut acc = 0.0f64;
-        for x in &self.dataset {
-            // Forward-substitution solve L y = (q - x); quad = ‖y‖².
+        for wx in &self.whitened {
             let mut quad = 0.0f64;
             for i in 0..d {
-                let mut s = q[i] - x[i];
-                let row = &self.chol[i];
-                for k in 0..i {
-                    s -= row[k] * y[k];
-                }
-                let yi = s / row[i];
-                y[i] = yi;
-                quad += yi * yi;
+                let diff = wq[i] - wx[i];
+                quad += diff * diff;
             }
             acc += (-0.5 * quad).exp();
         }
@@ -36591,7 +36615,7 @@ impl GaussianKdeNd {
     pub fn evaluate_many(&self, points: &[Vec<f64>]) -> Vec<f64> {
         let m = points.len();
         let work = (m as u64)
-            .saturating_mul(self.dataset.len() as u64)
+            .saturating_mul(self.whitened.len() as u64)
             .saturating_mul(self.d as u64);
         let threads = std::thread::available_parallelism()
             .map(|c| c.get())

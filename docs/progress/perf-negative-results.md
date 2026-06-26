@@ -4,6 +4,35 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-kde-whiten - KEEP (BOLD WIN, algorithmic O(d²)→O(d)): stats.gaussian_kde (GaussianKdeNd) whiten-once
+
+`GaussianKdeNd::evaluate` re-solved the `d×d` lower-triangular system
+`L y = (q - xᵢ)` by forward-substitution for EVERY (query, dataset-point) pair —
+O(n·d²) per query. Precompute the **whitened dataset** `wᵢ = L⁻¹ xᵢ` ONCE in
+`new()`; then a query's Mahalanobis form `‖L⁻¹(q-xᵢ)‖²` = `‖L⁻¹q - wᵢ‖²` is a
+plain squared distance to each pre-whitened point — **O(d) per point** (whiten
+the query once, O(d²)), and a flat vectorizable inner loop instead of the
+per-point dependent triangular solve. This is asymptotically better than BOTH
+fsci-before AND scipy (scipy keeps the full `inv_cov` product = O(n·d²)).
+
+MEASURED same-box (perf_kde_scipy.rs vs SciPy 1.17.1, n_train=2000, n_query=2000,
+best-of-5):
+- d=3:  4.94 → 2.96 ms = 1.67x self; **18.1x → 30.2x FASTER** than scipy
+- d=6:  7.39 → 3.99 ms = 1.85x self; **11.0x → 20.4x FASTER**
+- d=12: 14.92 → 4.03 ms = 3.70x self; **5.9x → 21.8x FASTER**
+- d=20: 38.06 → 5.13 ms = **7.42x self**; **2.8x → 20.8x FASTER**
+Rescues the high-d regime where fsci's margin was collapsing (scipy's BLAS
+inv_cov scaled better than fsci's scalar forward-sub) — now uniformly ~20-30x at
+every d. NOT byte-identical (reassociation: query/point whitened separately then
+subtracted, vs (q-x) first — ~1e-13), but the per-query SUM is UNCHANGED at 6 dp
+(24.325040 / 0.241099 / …) and `gaussian_kde_nd_matches_scipy_reference_values`
++ parallel-bit-identical + 1989/0 full stats lib GREEN. LESSON: any per-element
+Mahalanobis / triangular-solve inside a double loop over (query × points) →
+precompute the whitened/solved operand ONCE per point, reduce the inner test to a
+squared distance (O(d²)→O(d)). Same precompute-the-loop-invariant lever as the
+Delaunay circumcircle. RETRY/EXTEND: the 1-D `GaussianKde` (separate struct) and
+any other Mahalanobis-distance batch path (mahalanobis cdist, GMM responsibilities).
+
 ## 2026-06-26 - frankenscipy-greenfalcon-interpn-survey - SURVEY (interpn already dominates; cubic NOT scipy-parity)
 
 Measured `interpn`/`RegularGridInterpolator` same-box vs SciPy 1.17.1
