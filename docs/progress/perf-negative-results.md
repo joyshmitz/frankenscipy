@@ -4,6 +4,74 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-25 - frankenscipy-greenfalcon-upfirdn-polyphase - KEEP (byte-identical, GATED): signal.upfirdn polyphase fast path for down>=4 computes only kept outputs; 1.19-3.33x self-speedup narrows scipy gap from 1.56-3.97x to 1.32-1.71x slower
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. DIG (no unlanded
+  worktree win). `upfirdn` is the polyphase-FIR core behind `resample_poly` and
+  `decimate`.
+
+### The waste
+
+fsci's `upfirdn` was the NAIVE form:
+```
+output = vec![0.0; full_len];           // full_len ≈ n*up
+for i in x { for tap in h { output[i*up + tap] += x[i]*h[tap]; } }   // n*len(h) MACs
+output.into_iter().step_by(down).collect()   // KEEP every down-th, DISCARD the rest
+```
+The scatter does n*len(h) MACs regardless of down, but `step_by(down)` throws
+away (down-1)/down of the outputs — so the MACs landing on discarded positions
+(~(down-1)/down of them) are pure waste. scipy's `_upfirdn_apply` (C) is
+polyphase: it computes ONLY the kept outputs, ~n*len(h)/down MACs.
+
+### Fix (byte-identical) + gate
+
+Polyphase fast path: for each kept output k (position p=k*down), sum its
+contributing input samples directly — i in [i_min, i_max] with tap = p - i*up in
+[0, len(h)). BYTE-IDENTICAL because it accumulates in INCREASING-i order, the
+same order the naive scatter accumulates output[p] (its outer loop is over i,
+each i contributing once to p). One n_out buffer; no full_len buffer, no step_by
+collect.
+
+GATED at `down >= 4`. The polyphase inner loop is a single-accumulator REDUCTION
+(`acc += x[i]*h[p-i*up]`, loop-carried dependency, strided h) ~3.3x costlier
+per-MAC than the naive's AXPY scatter (`output[base..]+=x[i]*h`, vectorizes), so
+the down× MAC saving only nets a win once down>=4:
+
+| up/down | naive | poly | self-speedup | mism |
+|---------|-------|------|--------------|------|
+| 1/10    | 6.9183 ms | 2.0791 ms | **3.33x** | 0 |
+| 1/4     | 6.7977 ms | 5.71 ms   | **1.19x** | 0 |
+| 7/4     | 9.0851 ms | 7.45 ms   | **1.22x** | 0 |
+| 2/3     | 6.2042 ms | 6.5657 ms | 0.94x (LOSS → gated to naive) | 0 |
+| 3/2     | 7.3184 ms | 11.08 ms  | 0.66x (LOSS → gated to naive) | 0 |
+
+(len(h)=120, n=2^18, local isolated target.) down<=3 keeps the faster AXPY.
+
+### vs scipy (same-box, len(h)=120, n=2^18)
+
+| up/down | fsci new   | scipy     | new vs scipy | naive was   |
+|---------|------------|-----------|--------------|-------------|
+| 1/4     | 5.7823 ms  | 4.3543 ms | 1.33x slower | 1.56x slower |
+| 1/8     | 2.8594 ms  | 2.1681 ms | 1.32x slower | —            |
+| 1/10    | 2.5064 ms  | 1.7392 ms | 1.44x slower | 3.97x slower |
+| 1/16    | 1.5905 ms  | 1.0937 ms | 1.45x slower | —            |
+| 7/4     | 6.0017 ms  | 3.5164 ms | 1.71x slower | 2.59x slower |
+| 3/8     | 2.8250 ms  | 1.8680 ms | 1.51x slower | —            |
+
+The naive was 1.56-3.97x slower; polyphase narrows it to 1.32-1.71x. Does NOT
+reach parity — scipy's C polyphase has a vectorized inner loop, while the
+byte-identity constraint forces a single-accumulator reduction here. A parity
+push would need a multi-accumulator / per-phase AXPY reorganization that changes
+the summation order (non-byte-identical, needs a tolerance test) — deferred.
+
+### Conformance + retry
+
+`cargo test --release -p fsci-signal upfirdn` 9/0 (new
+`upfirdn_polyphase_matches_naive_scatter_bits` covering up/down ∈ {1/4,1/7,1/10,
+3/5,7/4,2/9} + scipy-example tests); `resample_poly` 9/0 (scipy-reference);
+`decimate` 6/0. Retry to reach parity: per-phase AXPY reorganization with a
+tolerance conformance test (the single-accumulator byte-identity is the ceiling).
+
 ## 2026-06-25 - frankenscipy-greenfalcon-sosfiltfilt-samplemajor - KEEP (byte-identical): signal.sosfiltfilt kernel (sosfilt_in_place) loop-interchange section-major -> sample-major; 3.4-3.6x kernel self-speedup, flips a ~2.5-3x scipy loss to parity-to-faster
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. DIG follow-on to

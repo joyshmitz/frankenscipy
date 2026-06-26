@@ -6,6 +6,36 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon (claude-code) - KEEP (byte-identical): signal.upfirdn polyphase fast path for down>=4 (compute only kept outputs, not full-then-discard); 1.19-3.33x self-speedup narrows scipy gap from 1.56-3.97x to 1.32-1.71x
+
+- Agent: GreenFalcon (claude-code). DIG. fsci's `upfirdn` (the polyphase FIR
+  core behind `resample_poly`/`decimate`) was the NAIVE form: scatter every
+  input sample × every tap into a `full_len ≈ n*up` buffer (n*len(h) MACs), then
+  `step_by(down)` DISCARDS (down-1)/down of the outputs. scipy's `_upfirdn_apply`
+  is polyphase — it computes ONLY the kept outputs (~n*len(h)/down MACs). So
+  fsci did ~down× too much work for any down>1.
+- FIX (crates/fsci-signal/src/lib.rs `upfirdn`): added a polyphase fast path —
+  for each kept output position p=k*down, sum its contributing input samples
+  directly (i in [i_min,i_max], tap=p-i*up). BYTE-IDENTICAL: accumulates in
+  increasing-i order, exactly how the naive scatter accumulates that position
+  (its outer loop is over i). One n_out buffer instead of full_len + a step_by
+  collect.
+- GATED at down>=4. The polyphase inner loop is a single-accumulator REDUCTION
+  (dependency-chained, ~3.3x costlier per-MAC) vs the naive's vectorizable AXPY
+  scatter, so the down× MAC saving only nets a win once down>=4. Measured
+  self-speedup (byte-identical, mism=0): down=4 **1.19x** (up=1) / 1.22x (up=7),
+  down=10 **3.33x**; down<=3 LOSES (0.66-0.94x) so it keeps the naive AXPY.
+- MEASURED same-box (len(h)=120, n=2^18; fsci local isolated target vs SciPy
+  1.17.1 `scipy.signal.upfirdn`): new vs scipy 1.33x (d4) / 1.32x (d8) / **1.44x
+  (d10)** / 1.45x (d16) / 1.71x (u7d4) / 1.51x (u3d8) slower — narrowed from the
+  naive's 1.56x (d4) / 2.59x (u7d4) / **3.97x (d10)** slower. Doesn't reach
+  parity (scipy's C polyphase has a vectorized inner loop; my byte-identical
+  single-accumulator reduction can't match per-MAC), but closes most of the gap.
+- Conformance GREEN: `cargo test -p fsci-signal upfirdn` 9/0 (new
+  `upfirdn_polyphase_matches_naive_scatter_bits` + scipy-example tests),
+  `resample_poly` 9/0 (scipy-reference), `decimate` 6/0. Self-speedup framing
+  same as the kept van Herk filter1d. Detail in canonical ledger.
+
 ## 2026-06-25 - GreenFalcon (claude-code) - KEEP (byte-identical): signal.sosfiltfilt (sosfilt_in_place kernel) loop-interchanged section-major -> sample-major, 3.4-3.6x kernel self-speedup, flips a ~2.5-3x SciPy loss to parity-to-faster
 
 - Agent: GreenFalcon (claude-code). DIG follow-on to the sosfilt win below —
