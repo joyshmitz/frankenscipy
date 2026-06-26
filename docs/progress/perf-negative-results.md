@@ -4,6 +4,46 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-ndimage-measurement-sweep - SURVEY (4 already-WINS, don't re-chase) + SURFACED gap: grey/binary morphology cache-hostile strided column pass (2.18x), lever = cache-blocked transpose
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. DIG turn: measured 7
+  ndimage ops same-box (512², fsci local isolated target vs SciPy 1.17.1) to find
+  the next gap. Most are ALREADY fsci-WINS — recorded so they are NOT re-chased:
+  - `center_of_mass`: 5.65 ms vs scipy 14.69 ms = **2.6x FASTER**.
+  - `minimum_position`: 8.25 ms vs scipy 24.36 ms = **2.95x FASTER**.
+  - `extrema`: 10.26 ms vs scipy 37.91 ms = **3.70x FASTER**. (SciPy's per-index
+    label loop is slow; fsci's single materialize-then-scan beats it even though
+    it allocs `Vec<Vec<(f64,usize)>>` groups — so DON'T "optimize" the group
+    materialization, it's already faster.)
+  - `distance_transform_edt`: common case uses the Felzenszwalb fast path (win,
+    scorecard `8l8r1.138`); the `background_coordinates` brute-force fallback
+    (lib.rs ~6684) is a COLD edge-case path (all-foreground / non-positive
+    sampling / neither-distances-nor-indices) — not worth optimizing.
+- SURFACED GAP (the real remaining ndimage perf target): SEPARABLE MIN/MAX FILTER
+  strided axis. `grey_erosion(size=15)` → `minimum_filter` → `separable_minmax_filter`:
+  6.21 ms vs scipy 2.85 ms = **2.18x slower** at 512², and the gap GROWS with image
+  size (~1.15x at 256² per scorecard `5smr3` → 2.18x at 512²) — the classic
+  cache-miss tell. The queue algorithm is already O(n); the cost is the STRIDED
+  per-column gather/scatter for the non-contiguous (d=0) axis (each column read at
+  stride=ncols → a cache miss per element; fits L2 at 256², thrashes at 512²).
+  `binary_erosion(3)`/`binary_dilation(3)` are 1.53x slower (smaller, separable
+  constant-factor on the same strided axis).
+- LEVER ATTEMPTED + REJECTED (reverted, zero-net-gain): cache-blocked transpose
+  for the strided axis in `separable_minmax_filter` — for the 2D d=0 pass,
+  blocked-transpose (32×32 tiles) → filter along the now-contiguous axis →
+  blocked-transpose back. Implemented + BYTE-IDENTICAL (maximum_filter/grey_erosion/
+  grey_dilation tests GREEN, min/max storage-order-independent). But measured only
+  **1.17x** (grey_erosion 6.21→5.30 ms): the TWO full transposes + two n-sized
+  allocs eat most of the cache saving because the min/max kernel is CHEAP per
+  element (unlike gaussian's heavier FIR, where `8l8r1.132`'s tile-scratch
+  amortised). WORSE: for ≤256² images (which fit L2 — the strided gather is NOT a
+  cache problem there, only ~1.15x) the transpose overhead would REGRESS them, so
+  it'd need a size gate too. Marginal win + regression risk + complexity → REVERTED
+  per REVERT-zero-gain. The 2.18x large-image min/max gap is a genuine
+  C-SIMD/cache wall for safe Rust; parity would need a native SoA/SIMD minmax or a
+  tiled gather that filters in-place without the double transpose — multi-turn,
+  low confidence. Don't re-attempt the plain blocked-transpose.
+
 ## 2026-06-26 - frankenscipy-greenfalcon-findobjects-unravel-into - KEEP (byte-identical): ndimage.find_objects unravels each labeled cell into a REUSED buffer (was a fresh Vec/cell); 1.43x self, flips a 1.42x scipy loss to 1.01x FASTER (parity)
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. Same alloc-kill vein.
