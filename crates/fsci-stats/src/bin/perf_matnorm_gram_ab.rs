@@ -49,7 +49,10 @@ fn build_w(m: usize, n: usize) -> Vec<Vec<f64>> {
         .collect()
 }
 
-fn best_of(reps: usize, mut f: impl FnMut() -> Vec<Vec<f64>>) -> (std::time::Duration, Vec<Vec<f64>>) {
+fn best_of(
+    reps: usize,
+    mut f: impl FnMut() -> Vec<Vec<f64>>,
+) -> (std::time::Duration, Vec<Vec<f64>>) {
     let mut best = std::time::Duration::MAX;
     let mut out = Vec::new();
     for _ in 0..reps {

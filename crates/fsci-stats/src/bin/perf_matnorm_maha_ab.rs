@@ -76,7 +76,9 @@ fn build(n: usize, p: usize) -> (Vec<Vec<f64>>, Vec<Vec<f64>>) {
                 .collect()
         })
         .collect();
-    let y: Vec<Vec<f64>> = (0..n).map(|_| (0..p).map(|_| u() - 0.5).collect()).collect();
+    let y: Vec<Vec<f64>> = (0..n)
+        .map(|_| (0..p).map(|_| u() - 0.5).collect())
+        .collect();
     (l, y)
 }
 

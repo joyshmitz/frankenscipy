@@ -173,7 +173,11 @@ fn main() {
         ("mixture", old_full_mixture, mixture_discrepancy),
         ("l2_star", old_full_l2_star, l2_star_discrepancy),
         ("wrap", old_full_wraparound, wraparound_discrepancy),
-        ("cd_iter", old_full_iter_centered, centered_discrepancy_iterative),
+        (
+            "cd_iter",
+            old_full_iter_centered,
+            centered_discrepancy_iterative,
+        ),
     ];
     println!(
         "{:>8} {:>6} {:>3} {:>11} {:>11} {:>8}  {:>9}",

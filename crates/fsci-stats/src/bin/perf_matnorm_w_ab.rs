@@ -70,11 +70,16 @@ fn build(m: usize, n: usize) -> (Vec<Vec<f64>>, Vec<Vec<f64>>) {
                 .collect()
         })
         .collect();
-    let c: Vec<Vec<f64>> = (0..m).map(|_| (0..n).map(|_| u() - 0.5).collect()).collect();
+    let c: Vec<Vec<f64>> = (0..m)
+        .map(|_| (0..n).map(|_| u() - 0.5).collect())
+        .collect();
     (l, c)
 }
 
-fn best_of(reps: usize, mut f: impl FnMut() -> Vec<Vec<f64>>) -> (std::time::Duration, Vec<Vec<f64>>) {
+fn best_of(
+    reps: usize,
+    mut f: impl FnMut() -> Vec<Vec<f64>>,
+) -> (std::time::Duration, Vec<Vec<f64>>) {
     let mut best = std::time::Duration::MAX;
     let mut out = Vec::new();
     for _ in 0..reps {
