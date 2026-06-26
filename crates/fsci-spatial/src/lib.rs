@@ -1473,6 +1473,22 @@ pub fn cdist_metric(
                 cdist_row_euclidean_soa(&xa[i], &b_soa, nb)
             })
         }
+        // Same SoA-across-pairs lever for SqEuclidean (drop the sqrt) and
+        // Cityblock (sum of |Δ|) at small d. `sqeuclidean`/`cityblock` are both
+        // scalar left-folds for d<8, so the per-lane reduction is BIT-identical
+        // to the generic arm. Flips the d=3 cdist losses (8.4x / 4.6x slower).
+        DistanceMetric::SqEuclidean if dim < 8 => {
+            let b_soa = cdist_soa(xb, dim);
+            cdist_fill_rows(na, nthreads.min(16), |i| {
+                cdist_row_sqeuclidean_soa(&xa[i], &b_soa, nb)
+            })
+        }
+        DistanceMetric::Cityblock if dim < 8 => {
+            let b_soa = cdist_soa(xb, dim);
+            cdist_fill_rows(na, nthreads.min(16), |i| {
+                cdist_row_cityblock_soa(&xa[i], &b_soa, nb)
+            })
+        }
         DistanceMetric::Cosine if dim == 4 => {
             let na_norm: Vec<f64> = xa.iter().map(|v| simd_sqsum(v).sqrt()).collect();
             let nb_norm: Vec<f64> = xb.iter().map(|v| simd_sqsum(v).sqrt()).collect();
@@ -1679,6 +1695,64 @@ fn cdist_row_euclidean_soa(ai: &[f64], b: &[Vec<f64>], nb: usize) -> Vec<f64> {
             s += dk * dk;
         }
         row[j] = s.sqrt();
+        j += 1;
+    }
+    row
+}
+
+/// SoA-across-pairs SqEuclidean cdist row (small `d`) — `cdist_row_euclidean_soa`
+/// minus the final `sqrt`. Bit-identical to scalar `sqeuclidean` for `d < 8`.
+fn cdist_row_sqeuclidean_soa(ai: &[f64], b: &[Vec<f64>], nb: usize) -> Vec<f64> {
+    use std::simd::Simd;
+    const L: usize = 8;
+    let d = ai.len();
+    let mut row = vec![0.0_f64; nb];
+    let mut j = 0usize;
+    while j + L <= nb {
+        let mut sq = Simd::<f64, L>::splat(0.0);
+        for k in 0..d {
+            let dk = Simd::<f64, L>::splat(ai[k]) - Simd::<f64, L>::from_slice(&b[k][j..j + L]);
+            sq += dk * dk;
+        }
+        sq.copy_to_slice(&mut row[j..j + L]);
+        j += L;
+    }
+    while j < nb {
+        let mut s = 0.0_f64;
+        for k in 0..d {
+            let dk = ai[k] - b[k][j];
+            s += dk * dk;
+        }
+        row[j] = s;
+        j += 1;
+    }
+    row
+}
+
+/// SoA-across-pairs Cityblock (Manhattan) cdist row (small `d`): per-lane
+/// `Σ_k |ai[k]-b[k][lane]|`, a left-fold of absolute differences — bit-identical
+/// to scalar `cityblock` for `d < 8`.
+fn cdist_row_cityblock_soa(ai: &[f64], b: &[Vec<f64>], nb: usize) -> Vec<f64> {
+    use std::simd::{Simd, num::SimdFloat};
+    const L: usize = 8;
+    let d = ai.len();
+    let mut row = vec![0.0_f64; nb];
+    let mut j = 0usize;
+    while j + L <= nb {
+        let mut acc = Simd::<f64, L>::splat(0.0);
+        for k in 0..d {
+            let dk = Simd::<f64, L>::splat(ai[k]) - Simd::<f64, L>::from_slice(&b[k][j..j + L]);
+            acc += dk.abs();
+        }
+        acc.copy_to_slice(&mut row[j..j + L]);
+        j += L;
+    }
+    while j < nb {
+        let mut s = 0.0_f64;
+        for k in 0..d {
+            s += (ai[k] - b[k][j]).abs();
+        }
+        row[j] = s;
         j += 1;
     }
     row
@@ -8091,15 +8165,21 @@ mod tests {
                     (0..na).map(|_| (0..d).map(|_| rng() * 4.0 - 2.0).collect()).collect();
                 let xb: Vec<Vec<f64>> =
                     (0..nb).map(|_| (0..d).map(|_| rng() * 4.0 - 2.0).collect()).collect();
-                let got = cdist_metric(&xa, &xb, DistanceMetric::Euclidean).expect("cdist");
-                for (i, gr) in got.iter().enumerate() {
-                    for (j, &g) in gr.iter().enumerate() {
-                        let want = euclidean(&xa[i], &xb[j]);
-                        assert_eq!(
-                            g.to_bits(),
-                            want.to_bits(),
-                            "soa cdist mismatch at ({i},{j}) d={d} na={na} nb={nb}"
-                        );
+                for metric in [
+                    DistanceMetric::Euclidean,
+                    DistanceMetric::SqEuclidean,
+                    DistanceMetric::Cityblock,
+                ] {
+                    let got = cdist_metric(&xa, &xb, metric).expect("cdist");
+                    for (i, gr) in got.iter().enumerate() {
+                        for (j, &g) in gr.iter().enumerate() {
+                            let want = metric_distance(&xa[i], &xb[j], metric);
+                            assert_eq!(
+                                g.to_bits(),
+                                want.to_bits(),
+                                "soa cdist mismatch at ({i},{j}) {metric:?} d={d} na={na} nb={nb}"
+                            );
+                        }
                     }
                 }
             }

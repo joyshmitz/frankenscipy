@@ -4,6 +4,29 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-cdist-sqeuclidean-cityblock-smalld-soa - KEEP (BOLD WIN, byte-identical): spatial.cdist SqEuclidean+Cityblock small-d SoA SIMD
+
+Direct follow-up to the cdist-euclidean-smalld-soa entry: the same `dim < 8`
+generic-arm loss hit SqEuclidean and Cityblock (no fast path at ALL, even d=4).
+Measured d=3 (1000×800) BEFORE: **SqEuclidean 9.35 ms = 8.4x SLOWER than scipy**
+(1.11 ms); **Cityblock 5.04 ms = 4.6x SLOWER** (1.10 ms). Added
+`cdist_row_sqeuclidean_soa` (euclidean kernel minus the final sqrt) and
+`cdist_row_cityblock_soa` (per-lane `Σ_k |ai[k]-b[k][lane]|`), routed for
+`dim < 8`. BIT-IDENTICAL: `sqeuclidean`/`cityblock` are both scalar left-folds
+for d<8 (their 2×8 SIMD chunk needs d≥8), matching the per-lane left-fold —
+verified by extending `cdist_euclidean_small_d_soa_matches_scalar_bitwise` to all
+three metrics (to_bits, serial+parallel, SIMD-chunk+tail); 220/0 spatial lib GREEN.
+
+MEASURED same-box (local isolated vs SciPy 1.17.1, 1000×800 d=3, best-of-12
+back-to-back):
+- **SqEuclidean: 0.998 ms vs scipy 1.054 ms = 1.06x FASTER** (was 8.4x SLOWER; ~8.5x self)
+- **Cityblock:  0.980 ms vs scipy 1.090 ms = 1.11x FASTER** (was 4.6x SLOWER; ~5x self)
+acc unchanged (5.561533 / 7.861218, == scipy). DEFERRED: Chebyshev small-d
+(still 6x slower) needs NaN-propagating SIMD max-fold (`f64::max` doesn't
+propagate NaN; the scalar helper forces it) — fiddly select replication, same as
+the deferred pdist-d4-chebyshev. EXTEND: pdist condensed small-d for these metrics
+if still generic.
+
 ## 2026-06-26 - frankenscipy-greenfalcon-kde1d-constant-hoist - REJECT (significant 5k regression): stats.GaussianKde cached scalar constants are not the bottleneck
 
 LAND-OR-DIG audit first: the only live `.scratch/.worktrees` head not reachable
