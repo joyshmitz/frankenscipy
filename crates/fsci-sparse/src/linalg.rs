@@ -3755,74 +3755,112 @@ pub fn structural_rank(graph: &CsrMatrix) -> usize {
         return 0;
     }
 
-    // Maximum bipartite matching (the structural rank = size of the maximum
-    // matching of the sparsity pattern, which is UNIQUE — so any correct matching
-    // algorithm yields the same rank).
+    // Maximum bipartite matching via HOPCROFT-KARP — O(E·√V): repeated phases,
+    // each a BFS that layers the unmatched rows by shortest-augmenting-path
+    // distance, then a DFS that augments along vertex-disjoint shortest paths.
+    // The structural rank = size of the maximum matching of the sparsity pattern,
+    // which is UNIQUE, so this yields the identical rank to the old O(n·E)
+    // per-row augmenting (which was 102x slower than SciPy). A greedy initial
+    // matching seeds it to cut the phase count.
+    const NIL: usize = usize::MAX;
     let indptr = graph.indptr();
     let indices = graph.indices();
-    let mut match_col = vec![usize::MAX; m]; // match_col[j] = row matched to column j
-    let mut row_matched = vec![false; n];
-    let mut rank = 0;
+    let mut pair_u = vec![NIL; n]; // row -> matched column
+    let mut pair_v = vec![NIL; m]; // column -> matched row
+    let mut dist = vec![0usize; n];
 
-    // GREEDY initial matching: match each row to its first free column. On a graph
-    // with a good matching (the common case) this matches most rows in O(nnz),
-    // leaving only the few conflicting rows for the augmenting-path search — the
-    // old code ran an augmenting DFS (and a fresh `vec![false; m]` alloc) for
-    // EVERY row, which is O(n·E) with n large allocs (102x slower than SciPy here).
-    for row in 0..n {
-        for idx in indptr[row]..indptr[row + 1] {
-            let col = indices[idx];
-            if col < m && match_col[col] == usize::MAX {
-                match_col[col] = row;
-                row_matched[row] = true;
-                rank += 1;
+    // Greedy initial matching: each row grabs its first free column.
+    for u in 0..n {
+        for idx in indptr[u]..indptr[u + 1] {
+            let v = indices[idx];
+            if v < m && pair_v[v] == NIL {
+                pair_u[u] = v;
+                pair_v[v] = u;
                 break;
             }
         }
     }
 
-    // Kuhn's augmenting paths for the still-unmatched rows. A monotonically
-    // increasing stamp in `seen` replaces the per-row `vec![false; m]`
-    // alloc+clear (one O(1) increment per row instead of an O(m) reset).
-    let mut seen = vec![0u32; m];
-    let mut stamp = 0u32;
-    for row in 0..n {
-        if row_matched[row] {
-            continue;
+    let mut queue: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
+    loop {
+        // BFS: layer the free rows; `dist_nil` = shortest distance to a free col.
+        queue.clear();
+        for u in 0..n {
+            if pair_u[u] == NIL {
+                dist[u] = 0;
+                queue.push_back(u);
+            } else {
+                dist[u] = NIL; // INF
+            }
         }
-        stamp += 1;
-        if augment_stamped(graph, row, &mut match_col, &mut seen, stamp) {
-            rank += 1;
+        let mut dist_nil = NIL; // INF
+        while let Some(u) = queue.pop_front() {
+            if dist[u] < dist_nil {
+                for idx in indptr[u]..indptr[u + 1] {
+                    let v = indices[idx];
+                    if v >= m {
+                        continue;
+                    }
+                    let w = pair_v[v];
+                    if w == NIL {
+                        if dist_nil == NIL {
+                            dist_nil = dist[u] + 1;
+                        }
+                    } else if dist[w] == NIL {
+                        dist[w] = dist[u] + 1;
+                        queue.push_back(w);
+                    }
+                }
+            }
         }
-    }
-
-    rank
-}
-
-/// Try to find an augmenting path from `row`, using a `gen` stamp in `seen`
-/// instead of a fresh boolean visited array per call.
-fn augment_stamped(
-    graph: &CsrMatrix,
-    row: usize,
-    match_col: &mut [usize],
-    seen: &mut [u32],
-    stamp: u32,
-) -> bool {
-    let row_start = graph.indptr()[row];
-    let row_end = graph.indptr()[row + 1];
-
-    for idx in row_start..row_end {
-        let col = graph.indices()[idx];
-        if col < seen.len() && seen[col] != stamp {
-            seen[col] = stamp;
-            if match_col[col] == usize::MAX
-                || augment_stamped(graph, match_col[col], match_col, seen, stamp)
-            {
-                match_col[col] = row;
-                return true;
+        if dist_nil == NIL {
+            break; // no augmenting path remains
+        }
+        // DFS-augment along the layered shortest paths from every free row.
+        for u in 0..n {
+            if pair_u[u] == NIL {
+                hopcroft_karp_dfs(
+                    u, indptr, indices, m, &mut pair_u, &mut pair_v, &mut dist, dist_nil,
+                );
             }
         }
     }
+
+    pair_u.iter().filter(|&&v| v != NIL).count()
+}
+
+/// DFS that augments along a layered shortest path from row `u` (Hopcroft-Karp).
+#[allow(clippy::too_many_arguments)]
+fn hopcroft_karp_dfs(
+    u: usize,
+    indptr: &[usize],
+    indices: &[usize],
+    m: usize,
+    pair_u: &mut [usize],
+    pair_v: &mut [usize],
+    dist: &mut [usize],
+    dist_nil: usize,
+) -> bool {
+    const NIL: usize = usize::MAX;
+    for idx in indptr[u]..indptr[u + 1] {
+        let v = indices[idx];
+        if v >= m {
+            continue;
+        }
+        let w = pair_v[v];
+        let advances = if w == NIL {
+            dist[u] + 1 == dist_nil
+        } else {
+            dist[w] == dist[u] + 1
+                && hopcroft_karp_dfs(w, indptr, indices, m, pair_u, pair_v, dist, dist_nil)
+        };
+        if advances {
+            pair_v[v] = u;
+            pair_u[u] = v;
+            return true;
+        }
+    }
+    dist[u] = NIL; // dead end this phase
     false
 }
 

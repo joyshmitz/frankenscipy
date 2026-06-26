@@ -4,7 +4,24 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
-## 2026-06-26 - frankenscipy-greenfalcon-structural-rank-greedy - KEEP (BOLD WIN, byte-identical rank): csgraph.structural_rank greedy-init matching + generation-stamp; 7.5x self, closes a 102x scipy loss to 13.6x (+ first test for a previously-untested fn)
+## 2026-06-26 - frankenscipy-greenfalcon-structural-rank-hopcroft-karp - KEEP (BOLD WIN, byte-identical rank): csgraph.structural_rank greedy-Kuhn's → HOPCROFT-KARP; FLIPS the 102x scipy loss to 1.18x FASTER (parity-plus)
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. Took the logged
+  retry from the greedy-init entry below. Replaced the per-row Kuhn's augmenting
+  (O(n·E)) with HOPCROFT-KARP O(E·√V): each phase BFS-layers the unmatched rows by
+  shortest-augmenting-path distance (with a `dist_nil` free-column sentinel), then
+  a DFS augments along vertex-disjoint shortest paths; greedy initial matching
+  seeds it to cut the phase count.
+- BYTE-IDENTICAL rank (the max matching size is unique): the throwaway harness
+  re-confirmed new == naive Kuhn's-from-scratch over **200 random graphs**
+  (varied n/degree/symmetry) → 0 mismatches; `structural_rank_full_deficient_and_augmenting`
+  + full `fsci-sparse` suite 347/0.
+- MEASURED (n=3000, ~48k nnz): 52.3 ms (original) → 6.96 ms (greedy-Kuhn's, below)
+  → **0.43 ms (Hopcroft-Karp) = 120x vs the original**; vs scipy 0.51 ms: 102x
+  slower → **1.18x FASTER**. The 102x loss is now a WIN. Verified locally (RCH
+  E0514 churn). Vein DONE — structural_rank matches scipy's algorithm class.
+
+## 2026-06-26 - frankenscipy-greenfalcon-structural-rank-greedy - KEEP (superseded by Hopcroft-Karp above): csgraph.structural_rank greedy-init matching + generation-stamp; 7.5x self, closed a 102x scipy loss to 13.6x (+ first test for a previously-untested fn)
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. Measured the rest of
   the csgraph family same-box (n=3000, ~48k nnz): reverse_cuthill_mckee **3.6x
