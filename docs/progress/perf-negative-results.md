@@ -4,6 +4,36 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-hstack-sorted-emit - KEEP (BOLD WIN, byte-identical): sparse.hstack emit row-major across blocks → COO→CSR fast path skips the sort; 10.64x self, flips an 11.1x scipy loss to ~parity
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. Variant-K lever,
+  next candidate after kron (435f16c7) and bmat (0a875a03).
+- `hstack` (via `stack_sparse_blocks`, Cols axis) appended each block's entries
+  block-by-block. hstack's blocks SHARE the row range and occupy disjoint COLUMN
+  ranges, so each output row 0..R was re-emitted once per block (non-monotonic
+  rows) → `CooMatrix::to_csr` sorted all nnz triplets O(nnz log nnz). (`vstack`/
+  Rows axis is fine: disjoint, monotonically-increasing row ranges → already
+  sorted, left untouched.)
+- FIX (crates/fsci-sparse/src/construct.rs `stack_sparse_blocks`): a Cols-axis
+  fast path that converts the blocks to CSR and emits ROW-BY-ROW across them —
+  `for r in 0..R { for block { emit block row r at col_offset }}`. Row monotonic;
+  cols strictly increase (col_offset grows across blocks, each block row sorted)
+  → sorted+unique → `sorted_unique_coo_to_csr` O(nnz) fast path (no sort).
+  Preallocated triplet vecs. Same hstack row-count validation/error as before.
+  BYTE-IDENTICAL (same canonical CSR).
+- MEASURED same-box (5 blocks of 2000×1500 density-0.01 → ~150k nnz; fsci local
+  isolated target vs SciPy 1.17.1 `scipy.sparse.hstack`): current 13.87 ms →
+  rowmajor **1.30 ms = 10.64x self**, mism=0. vs scipy 1.24 ms: current was
+  **11.1x slower**, rowmajor is **1.05x (near-parity)**.
+- Conformance: `cargo test -p fsci-sparse stack` 8/0 incl.
+  `hstack_rejects_mismatched_row_counts`, `hstack_accepts_mixed_sparse_formats`,
+  `hstack_with_format_supports_all_sparse_output_kinds`, vstack tests (verified
+  locally; RCH E0514 churn). (The pre-existing unrelated
+  `linalg::sparse_zeros_submatrix_rowmin` RED on main is still open — not mine,
+  byte-identical change can't touch it.)
+- Variant-K now paid out 3× (kron, bmat, hstack). Remaining: `eye_rectangular`
+  (line 69) builds COO — likely already trivial/sorted; check if worth it.
+
 ## 2026-06-26 - frankenscipy-greenfalcon-bmat-sorted-emit - KEEP (BOLD WIN, byte-identical): sparse.bmat/block_array emit row-major across blocks → COO→CSR fast path skips the sort; 7.45x self, flips a 6.26x scipy loss to 1.19x FASTER
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. Extended the
