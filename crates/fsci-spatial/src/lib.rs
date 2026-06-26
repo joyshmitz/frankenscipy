@@ -1794,8 +1794,8 @@ fn cdist_row_chebyshev_soa(ai: &[f64], b: &[Vec<f64>], nb: usize) -> Vec<f64> {
         let mut vmax = Simd::<f64, L>::splat(0.0);
         let mut nan = vmax.simd_ne(vmax); // all-false mask
         for k in 0..d {
-            let dk = (Simd::<f64, L>::splat(ai[k]) - Simd::<f64, L>::from_slice(&b[k][j..j + L]))
-                .abs();
+            let dk =
+                (Simd::<f64, L>::splat(ai[k]) - Simd::<f64, L>::from_slice(&b[k][j..j + L])).abs();
             nan |= dk.simd_ne(dk);
             vmax = vmax.simd_gt(dk).select(vmax, dk);
         }
@@ -8272,10 +8272,12 @@ mod tests {
             // nb=41 = 5·8 + 1 exercises both the SIMD-chunk and the scalar tail;
             // (40,41) stays serial, (600,300) crosses the work gate -> parallel.
             for &(na, nb) in &[(40usize, 41usize), (600, 300)] {
-                let xa: Vec<Vec<f64>> =
-                    (0..na).map(|_| (0..d).map(|_| rng() * 4.0 - 2.0).collect()).collect();
-                let xb: Vec<Vec<f64>> =
-                    (0..nb).map(|_| (0..d).map(|_| rng() * 4.0 - 2.0).collect()).collect();
+                let xa: Vec<Vec<f64>> = (0..na)
+                    .map(|_| (0..d).map(|_| rng() * 4.0 - 2.0).collect())
+                    .collect();
+                let xb: Vec<Vec<f64>> = (0..nb)
+                    .map(|_| (0..d).map(|_| rng() * 4.0 - 2.0).collect())
+                    .collect();
                 for metric in [
                     DistanceMetric::Euclidean,
                     DistanceMetric::SqEuclidean,
@@ -8302,8 +8304,7 @@ mod tests {
         // scalar tail. Chebyshev is the sharp case (its running max would drop a
         // NaN without the explicit mask).
         for d in [2usize, 3, 5, 7] {
-            let mut xa: Vec<Vec<f64>> =
-                (0..10).map(|_| (0..d).map(|_| rng()).collect()).collect();
+            let mut xa: Vec<Vec<f64>> = (0..10).map(|_| (0..d).map(|_| rng()).collect()).collect();
             xa[4][d - 1] = f64::NAN;
             xa[3] = vec![0.0; d]; // zero norm -> cosine denom==0 -> NaN path
             let xb: Vec<Vec<f64>> = (0..20).map(|_| (0..d).map(|_| rng()).collect()).collect();

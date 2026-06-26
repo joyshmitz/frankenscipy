@@ -45,6 +45,45 @@ ledger above so the project has one source of truth.
   a 4x5 fixture, and non-integral or out-of-range f64 inputs retain the previous
   heap implementation.
 
+## 2026-06-26 - GreenFalcon (codex-cli) - KEEP: spatial.cdist SqEuclidean+Cityblock small-d SoA flips d=3 vs SciPy
+
+- Agent: GreenFalcon (codex-cli), `AGENT_NAME=GreenFalcon`. Land-or-dig audit:
+  the only live non-ancestor `.scratch/.worktrees` candidate was
+  `/data/projects/.worktrees/frankenscipy-eigvalsh-blackthrush-20260609`
+  (`e3b744f4`, GEMM flat-workspace threshold 768), but current `main` already has
+  the stronger `MATMUL_FLAT_WORKSPACE_MIN_DIM = 256`, so no worktree win was
+  landable.
+- Gap attacked: direct follow-up to the kept `cdist` Euclidean small-d SoA
+  lever. SqEuclidean and Cityblock were still on the generic per-pair cdist arm
+  for small dimensions.
+- Lever kept on current `main`: route `DistanceMetric::SqEuclidean` and
+  `DistanceMetric::Cityblock` with `dim < 8` through structure-of-arrays row
+  kernels. SqEuclidean is the Euclidean small-d kernel without the final square
+  root; Cityblock is the same across-pair lane shape with a per-dimension
+  absolute-difference left fold. Both are bit-identical to the scalar generic
+  arms for `d < 8`.
+- Ratio vs SciPy 1.17.1 from the canonical same-box ledger entry
+  (`1000 x 800`, d=3, best-of-12 back-to-back):
+  - SqEuclidean: Rust `0.998 ms` vs SciPy `1.054 ms` = `1.06x` faster; before,
+    Rust was `9.35 ms` = `8.4x` slower.
+  - Cityblock: Rust `0.980 ms` vs SciPy `1.090 ms` = `1.11x` faster; before,
+    Rust was `5.04 ms` = `4.6x` slower.
+- Conformance/proof: upstream canonical ledger records the combined bitwise test
+  extension over Euclidean, SqEuclidean, and Cityblock, serial and parallel
+  sizes, SIMD chunk plus scalar tail, with spatial lib GREEN (220/0). Final
+  post-rebase proof: `cargo test -p fsci-spatial cdist --lib -- --nocapture`
+  passed 15/15, `cargo check -p fsci-spatial --all-targets` passed, `cargo
+  clippy --no-deps -p fsci-spatial --all-targets -- -D warnings` passed, `cargo
+  fmt --package fsci-spatial --check` passed, `git diff --check` passed, and UBS
+  reported no critical findings.
+- Focused release harness poll on RCH `ovh-a` after rebase:
+  `cargo bench --profile release -p fsci-spatial --bench spatial_bench --
+  'cdist_small_metrics/(SqEuclidean|Cityblock)/d3' --sample-size 10
+  --warm-up-time 1 --measurement-time 2 --noplot` measured SqEuclidean d3
+  `1.1437 ms` mean and Cityblock d3 `426.25 us` mean. This run validates the new
+  bench harness; the admitted vs-SciPy ratios above remain the same-box canonical
+  ledger ratios.
+
 ## 2026-06-26 - GreenFalcon (codex-cli) - REJECT: stats.GaussianKde scalar-hoist does not improve 1-D KDE and regresses the 5k row
 
 - Agent: GreenFalcon (codex-cli), `AGENT_NAME=GreenFalcon`. Land-or-dig audit:

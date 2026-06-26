@@ -70,6 +70,40 @@ fn bench_pdist(c: &mut Criterion) {
     group.finish();
 }
 
+/// Rectangular all-pairs distances for the small-d metrics that share the
+/// `cdist_metric` generic path unless a metric-specific row kernel is present.
+fn bench_cdist_small_metrics(c: &mut Criterion) {
+    use fsci_spatial::{DistanceMetric, cdist_metric};
+    let mut group = c.benchmark_group("cdist_small_metrics");
+    for &d in &[3usize, 5, 7] {
+        let xa: Vec<Vec<f64>> = (0..1000usize)
+            .map(|i| {
+                (0..d)
+                    .map(|k| ((i * 97 + k * 51) as f64 * 0.017 + 0.3).sin())
+                    .collect()
+            })
+            .collect();
+        let xb: Vec<Vec<f64>> = (0..800usize)
+            .map(|i| {
+                (0..d)
+                    .map(|k| ((i * 89 + k * 43) as f64 * 0.019 + 1.1).cos())
+                    .collect()
+            })
+            .collect();
+        for metric in [
+            DistanceMetric::SqEuclidean,
+            DistanceMetric::Cityblock,
+            DistanceMetric::Chebyshev,
+        ] {
+            group.bench_function(
+                BenchmarkId::new(format!("{metric:?}"), format!("d{d}")),
+                |b| b.iter(|| cdist_metric(&xa, &xb, metric)),
+            );
+        }
+    }
+    group.finish();
+}
+
 /// KDTree build (O(n) median via select_nth) and nearest-neighbour query sweep.
 fn bench_kdtree(c: &mut Criterion) {
     use fsci_spatial::KDTree;
@@ -234,6 +268,7 @@ criterion_group!(
     benches,
     bench_transform_batch,
     bench_pdist,
+    bench_cdist_small_metrics,
     bench_pdist_highdim,
     bench_kdtree,
     bench_delaunay,
