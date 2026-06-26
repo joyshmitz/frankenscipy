@@ -1489,6 +1489,15 @@ pub fn cdist_metric(
                 cdist_row_cityblock_soa(&xa[i], &b_soa, nb)
             })
         }
+        // Chebyshev = max_k |Δ_k| with NaN-propagation. Mirrors the scalar
+        // `chebyshev` helper (a separate per-lane NaN mask, since the running max
+        // would otherwise overwrite a NaN). Bit-identical for d<8.
+        DistanceMetric::Chebyshev if dim < 8 => {
+            let b_soa = cdist_soa(xb, dim);
+            cdist_fill_rows(na, nthreads.min(16), |i| {
+                cdist_row_chebyshev_soa(&xa[i], &b_soa, nb)
+            })
+        }
         DistanceMetric::Cosine if dim == 4 => {
             let na_norm: Vec<f64> = xa.iter().map(|v| simd_sqsum(v).sqrt()).collect();
             let nb_norm: Vec<f64> = xb.iter().map(|v| simd_sqsum(v).sqrt()).collect();
@@ -1751,6 +1760,46 @@ fn cdist_row_cityblock_soa(ai: &[f64], b: &[Vec<f64>], nb: usize) -> Vec<f64> {
         let mut s = 0.0_f64;
         for k in 0..d {
             s += (ai[k] - b[k][j]).abs();
+        }
+        row[j] = s;
+        j += 1;
+    }
+    row
+}
+
+/// SoA-across-pairs Chebyshev (L∞) cdist row (small `d`): per-lane running max of
+/// `|ai[k]-b[k][lane]|` with a separate NaN mask (a NaN diff would otherwise be
+/// overwritten by a later max), exactly mirroring the scalar `chebyshev` helper.
+/// Bit-identical for `d < 8` (the helper's max starts from 0.0 = `reduce_max` of
+/// the zeroed accumulator).
+fn cdist_row_chebyshev_soa(ai: &[f64], b: &[Vec<f64>], nb: usize) -> Vec<f64> {
+    use std::simd::{Select, Simd, cmp::SimdPartialEq, cmp::SimdPartialOrd, num::SimdFloat};
+    const L: usize = 8;
+    let d = ai.len();
+    let mut row = vec![0.0_f64; nb];
+    let mut j = 0usize;
+    while j + L <= nb {
+        let mut vmax = Simd::<f64, L>::splat(0.0);
+        let mut nan = vmax.simd_ne(vmax); // all-false mask
+        for k in 0..d {
+            let dk = (Simd::<f64, L>::splat(ai[k]) - Simd::<f64, L>::from_slice(&b[k][j..j + L]))
+                .abs();
+            nan |= dk.simd_ne(dk);
+            vmax = vmax.simd_gt(dk).select(vmax, dk);
+        }
+        nan.select(Simd::<f64, L>::splat(f64::NAN), vmax)
+            .copy_to_slice(&mut row[j..j + L]);
+        j += L;
+    }
+    while j < nb {
+        let mut s = 0.0_f64;
+        for k in 0..d {
+            let dk = (ai[k] - b[k][j]).abs();
+            if dk.is_nan() {
+                s = f64::NAN;
+                break;
+            }
+            s = s.max(dk);
         }
         row[j] = s;
         j += 1;
@@ -8169,6 +8218,7 @@ mod tests {
                     DistanceMetric::Euclidean,
                     DistanceMetric::SqEuclidean,
                     DistanceMetric::Cityblock,
+                    DistanceMetric::Chebyshev,
                 ] {
                     let got = cdist_metric(&xa, &xb, metric).expect("cdist");
                     for (i, gr) in got.iter().enumerate() {
@@ -8180,6 +8230,34 @@ mod tests {
                                 "soa cdist mismatch at ({i},{j}) {metric:?} d={d} na={na} nb={nb}"
                             );
                         }
+                    }
+                }
+            }
+        }
+        // NaN-propagation: a NaN coordinate must make every distance involving it
+        // NaN (matching the scalar helpers), for both the SIMD-chunk lanes and the
+        // scalar tail. Chebyshev is the sharp case (its running max would drop a
+        // NaN without the explicit mask).
+        for d in [2usize, 3, 5, 7] {
+            let mut xa: Vec<Vec<f64>> =
+                (0..10).map(|_| (0..d).map(|_| rng()).collect()).collect();
+            xa[4][d - 1] = f64::NAN;
+            let xb: Vec<Vec<f64>> = (0..20).map(|_| (0..d).map(|_| rng()).collect()).collect();
+            for metric in [
+                DistanceMetric::Euclidean,
+                DistanceMetric::SqEuclidean,
+                DistanceMetric::Cityblock,
+                DistanceMetric::Chebyshev,
+            ] {
+                let got = cdist_metric(&xa, &xb, metric).expect("cdist nan");
+                for (i, gr) in got.iter().enumerate() {
+                    for (j, &g) in gr.iter().enumerate() {
+                        let want = metric_distance(&xa[i], &xb[j], metric);
+                        assert_eq!(
+                            g.to_bits(),
+                            want.to_bits(),
+                            "nan cdist mismatch at ({i},{j}) {metric:?} d={d}"
+                        );
                     }
                 }
             }

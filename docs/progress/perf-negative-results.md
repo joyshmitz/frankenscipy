@@ -4,6 +4,32 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-cdist-chebyshev-smalld-soa - KEEP (closes 6x loss to parity, byte-identical incl NaN) + pdist small-d SURVEY (parity, don't chase)
+
+Completes the cdist small-d distance family (euclidean/sqeuclidean/cityblock
+shipped prior). Chebyshev d=3 was the last clear loss: **6.0x SLOWER than scipy**
+(5.92 ms vs 0.99 ms @1000×800). Added `cdist_row_chebyshev_soa` for `dim < 8`:
+per-lane running max of `|Δ_k|` via `simd_gt().select()` PLUS a separate per-lane
+NaN mask (the running max would silently drop a NaN — exactly why this was
+deferred), selecting `f64::NAN` where the mask is set. Mirrors the scalar
+`chebyshev` helper line-for-line, BIT-identical for d<8 (the helper's max starts
+from `reduce_max(splat 0.0)` = 0.0). Verified by extending the small-d bit-identity
+test to Chebyshev AND adding a **NaN-injected case** (a NaN coordinate must make
+every involving distance NaN, SIMD-chunk + tail, all 4 metrics) — 220/0 spatial
+lib GREEN. MEASURED (best-of-12 back-to-back vs SciPy 1.17.1, d=3): **0.972 ms vs
+scipy 0.895 ms = 1.09x slower = PARITY (was 6.0x slower; ~6x self)**, acc exact
+(5.523114). Lands at parity not a win — scipy's chebyshev max-reduce is very fast
+in C and the NaN-mask adds a little overhead vs the sum kernels — but closing a 6x
+loss to parity byte-identically is a clear KEEP.
+
+PDIST SMALL-D SURVEY (not a loss): measured `pdist` d=3 n=2000 — euclidean 2.59 ms
+vs scipy 4.41 ms = **1.70x FASTER already**; sqeuclidean 2.86 / cityblock 2.85 ms
+vs scipy 2.47 / 2.68 ms ≈ PARITY (within the loaded-box noise; fsci sqeuclidean
+measuring SLOWER than its own euclidean confirms the noise). pdist's condensed
+per-pair path is already competitive at small d (unlike cdist's double-Vec<Vec>
+arm), so DON'T port the SoA lever to the condensed pdist — marginal/parity, not
+worth the triangular-fill complexity. The cdist small-d family is now CLOSED.
+
 ## 2026-06-26 - frankenscipy-greenfalcon-cdist-sqeuclidean-cityblock-smalld-soa - KEEP (BOLD WIN, byte-identical): spatial.cdist SqEuclidean+Cityblock small-d SoA SIMD
 
 Direct follow-up to the cdist-euclidean-smalld-soa entry: the same `dim < 8`
