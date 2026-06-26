@@ -10026,32 +10026,45 @@ pub fn watershed_ift(
         }
     }
 
+    // Precompute each structure offset's FLAT delta (Σ δ·stride) and reuse a coord
+    // buffer (same flat-offset lever as label/fill_holes), killing the per-pop
+    // `unravel` alloc and the per-neighbor `Vec` alloc + strides dot product.
+    // BYTE-IDENTICAL: the heap `(cost_scaled, idx)` evolution is unchanged —
+    // each neighbour's flat index `idx + Σδ·stride` equals the old
+    // `Σ(coord+δ)·stride`, and offsets are processed in the same order.
+    let signed_strides: Vec<i64> = input.strides.iter().map(|&s| s as i64).collect();
+    let flat_offsets: Vec<i64> = struct_offsets
+        .iter()
+        .map(|off| {
+            off.iter()
+                .zip(&signed_strides)
+                .map(|(&delta, &stride)| delta * stride)
+                .sum()
+        })
+        .collect();
+    let signed_shape: Vec<i64> = input.shape.iter().map(|&s| s as i64).collect();
+    let mut coord = vec![0usize; ndim];
+
     while let Some(std::cmp::Reverse((cost_scaled, idx))) = queue.pop() {
         let current_cost = cost_scaled as f64 / 1000.0;
         if current_cost > costs[idx] {
             continue;
         }
 
-        let coords = input.unravel(idx);
-        for offset in &struct_offsets {
-            let mut neighbor_coords = Vec::with_capacity(ndim);
+        unravel_into(idx, &input.strides, &mut coord);
+        for (oi, offset) in struct_offsets.iter().enumerate() {
             let mut in_bounds = true;
             for axis in 0..ndim {
-                let coord = coords[axis] as i64 + offset[axis];
-                if coord < 0 || coord >= input.shape[axis] as i64 {
+                let neighbor_coord = coord[axis] as i64 + offset[axis];
+                if neighbor_coord < 0 || neighbor_coord >= signed_shape[axis] {
                     in_bounds = false;
                     break;
                 }
-                neighbor_coords.push(coord as usize);
             }
             if !in_bounds {
                 continue;
             }
-            let neighbor_idx = neighbor_coords
-                .iter()
-                .zip(input.strides.iter())
-                .map(|(&coord, &stride)| coord * stride)
-                .sum::<usize>();
+            let neighbor_idx = (idx as i64 + flat_offsets[oi]) as usize;
 
             let new_cost = current_cost.max(input.data[neighbor_idx]);
             if new_cost < costs[neighbor_idx] {

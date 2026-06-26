@@ -4,6 +4,30 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-watershed-flatoffset - KEEP (byte-identical) + retry surfaced: ndimage.watershed_ift flat-offset neighbor loop; 1.52x self, flips 6.37x scipy loss to 4.2x; residual = the O(log n) heap vs scipy's O(1) bucket queue (uint8 costs)
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. Third flavor-9
+  flat-offset ship this run. MEASURED GAP (same-box, 512² uint8-range cost image +
+  50 markers; fsci local isolated target vs SciPy 1.17.1 `ndimage.watershed_ift`):
+  fsci 66.79 ms vs scipy 10.48 ms = **6.37x slower**.
+- FIX (crates/fsci-ndimage/src/lib.rs `watershed_ift`): the IFT inner loop
+  unraveled per pop + allocated a `Vec` per neighbor + recomputed the flat index
+  via a strides dot product (~1.3M allocs). Precompute each struct offset's flat
+  delta `Σ δ·stride` once; unravel each popped cell into a REUSED buffer; reach a
+  neighbor with `idx + flat_offset[oi]`. BYTE-IDENTICAL: the `(cost_scaled, idx)`
+  heap evolution is unchanged (same neighbour flat indices, same offset order).
+- MEASURED: 66.79 ms → **44.05 ms = 1.52x self-speedup**. vs scipy 10.48 ms:
+  6.37x slower → **4.2x slower**. Conformance GREEN: `cargo test -p fsci-ndimage
+  watershed` = 2/0 (incl. `watershed_ift_does_not_wrap_row_edges`); verified
+  locally (RCH E0514 churn).
+- WHY ONLY 1.52x + RETRY: the BinaryHeap push/pop (O(log n), each cell pushed
+  multiple times) now dominates. scipy requires uint8 input → costs in [0,255] →
+  it uses an O(1) BUCKET / hierarchical queue. fsci accepts f64 (scaled to i64),
+  forcing the comparison heap. RETRY for parity: when the cost image is
+  integer-valued in a bounded range, route through a bucket queue (256+ buckets,
+  FIFO within a bucket to match scipy's tie order) — gated on integer costs,
+  NON-byte-identical tie-breaking risk, needs an oracle test. Bigger, deferred.
+
 ## 2026-06-26 - frankenscipy-greenfalcon-fillholes-flatoffset - KEEP (BOLD WIN, byte-identical): ndimage.binary_fill_holes flat-offset BFS + no per-pixel border unravel; 3.24x self, flips a 3.17x scipy loss to 1.02x FASTER (parity)
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. Extend-candidate
