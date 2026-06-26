@@ -4738,11 +4738,12 @@ fn chol_dot(l: &[f64], off_a: usize, off_b: usize, len: usize) -> f64 {
 /// Cholesky-Banachiewicz factorization with a SIMD inner product, returning the
 /// lower factor `L` in a flat row-major `n×n` buffer (strict upper triangle is
 /// zero). `None` if a diagonal pivot is ≤ 0 / non-finite (not positive definite).
-/// Replaces nalgebra's scalar Cholesky (1.38x faster at n=1000). NOTE: still
-/// unblocked, so cache-bound at large n (n=2000 ~15x slower than LAPACK) — the
-/// path to parity is a register-tiled SYRK trailing update on top of the crate's
-/// blocked GEMM micro-kernel; a plain blocked+packed variant was ~0-gain because
-/// `chol_dot`'s per-element horizontal reduce dominates short rank-nb dots.
+/// Replaces nalgebra's scalar Cholesky (1.36x faster at n=1000). NOTE: still
+/// unblocked, so cache-bound at large n (n=2000 ~15x slower than LAPACK). Path to
+/// parity = a register-tiled SYRK trailing update; a blocked variant routing the
+/// SYRK through the PUBLIC `matmul` (Vec<Vec>) was 2.5x SLOWER (per-block
+/// Vec<Vec>↔flat conversion + full-product waste) — needs the internal FLAT GEMM
+/// AND a GEMM-level panel TRSM (BLAS-level, multi-turn). See ledger reject.
 fn cholesky_lower_simd(a: &[Vec<f64>], n: usize) -> Option<Vec<f64>> {
     let mut l = vec![0.0f64; n * n];
     for i in 0..n {

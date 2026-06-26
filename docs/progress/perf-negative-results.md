@@ -4,6 +4,32 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-cholesky-matmul-syrk - REJECT (2.5x REGRESSION): blocked Cholesky routing the trailing SYRK through the PUBLIC matmul
+
+Took the filed lever (close cholesky's 8-15x gap via a GEMM-based trailing SYRK).
+fsci's `matmul` IS register-tiled and fast STANDALONE (measured 80.1 Gflop/s at
+n=1000, BEATS numpy 73.9) — confirming a fast GEMM exists. Implemented a
+right-looking blocked Cholesky (nb=64): diagonal factor + panel TRSM on `chol_dot`,
+trailing `T -= L_panel·L_panelᵀ` via `matmul(lp, lpt)` then subtract the lower
+triangle. BYTE-TOLERANT, 14/14 cholesky GREEN — but **2.0-2.5x SLOWER**: n=500
+6.5→16.4 ms, n=1000 42→104.9 ms, n=2000 391→885 ms. REVERTED to the unblocked SIMD
+version (kept on main).
+
+WHY it regressed (so it isn't re-tried this way): the PUBLIC `matmul(&[Vec<f64>],
+&[Vec<f64>])` is built for ONE big call — per BLOCK I pay (a) extracting `lp`/`lpt`
+as fresh Vec<Vec>, (b) matmul re-converting them to its FLAT workspace internally,
+(c) matmul allocating+returning a trail×trail Vec<Vec> `g` (≤7 MB/block churn),
+(d) computing the FULL product when SYRK needs only the lower triangle (2x flops).
+The 80 Gflop/s never materializes across many small per-block calls. Bigger nb just
+shifts the cost onto the `chol_dot`-based panel TRSM (O(n²·nb), ~9 Gflop/s) which
+then dominates. THE REAL PATH (multi-turn, BLAS-level): call the INTERNAL flat GEMM
+(`matmul_flat_compute_rows`/`matmul_flat_workspace`, lib.rs ~15467) directly on
+packed flat panel buffers (no Vec<Vec>, no full-product, lower-triangle only) AND
+add a GEMM-level (flat) panel TRSM. Both the SYRK and the TRSM must be flat-GEMM
+speed; either alone leaves the other as the bottleneck. The internal flat GEMM has
+a packed-B / row-range calling convention coupled to matmul's orchestration, so
+reusing it is real plumbing, not a one-liner.
+
 ## 2026-06-26 - frankenscipy-greenfalcon-cholesky-simd-partial - KEEP (modest 1.36x self) + SURFACE the blocked-GEMM lever (biggest open dense-linalg gap)
 
 Dug `linalg.cholesky`. Measured a BIG gap: **4.86x slower at n=500, 11.9x at
