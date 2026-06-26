@@ -8,7 +8,9 @@ use std::hint::black_box;
 use std::io::Write;
 use std::time::Instant;
 
-use fsci_interpolate::{GriddataMethod, griddata};
+use fsci_interpolate::{
+    CloughTocher2DInterpolator, GriddataMethod, LinearNDInterpolator, griddata,
+};
 
 fn lcg(s: &mut u64) -> f64 {
     *s = s
@@ -40,6 +42,28 @@ fn main() {
         }
         (bt, acc)
     };
+    if std::env::var("CT_PROFILE").is_ok() {
+        let lin_build = {
+            let t = Instant::now();
+            let it = LinearNDInterpolator::new(&pts, &vals).unwrap();
+            let b = t.elapsed();
+            let t = Instant::now();
+            let _ = black_box(it.eval_many(&xi).unwrap());
+            (b, t.elapsed())
+        };
+        let cub_build = {
+            let t = Instant::now();
+            let it = CloughTocher2DInterpolator::new(&pts, &vals).unwrap();
+            let b = t.elapsed();
+            let t = Instant::now();
+            let _ = black_box(it.eval_many(&xi).unwrap());
+            (b, t.elapsed())
+        };
+        eprintln!(
+            "PHASE linear: build {:?} eval {:?} | cubic: build {:?} eval {:?}",
+            lin_build.0, lin_build.1, cub_build.0, cub_build.1
+        );
+    }
     let (lin, la) = best(GriddataMethod::Linear);
     let (cub, ca) = best(GriddataMethod::Cubic);
     let (near, na) = best(GriddataMethod::Nearest);

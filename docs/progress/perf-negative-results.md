@@ -4,6 +4,31 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-clough-tocher-dup-check-on2 - KEEP (BOLD WIN, byte-identical): interpolate.griddata Cubic O(n²) duplicate-point validation → O(n) hash
+
+PROFILED the n≥20k griddata Cubic residual loss filed below. Surprise: the
+CloughTocher patch+gradient BUILD is only ~7 ms and eval ~1 ms — NOT the
+bottleneck. Per-phase split (CT_PROFILE in perf_griddata_scipy.rs) showed
+`CloughTocher2DInterpolator::new` 190 ms vs `LinearNDInterpolator::new` 119 ms on
+the SAME points/Delaunay; the ~80 ms gap was an **O(n²) all-pairs duplicate-point
+check** in `validate_clough_tocher_inputs` (`for i { for j in i+1.. } if
+points[i]==points[j]`) — 200M comparisons at n=20k. LinearND has no such check
+(Qhull/Delaunay tolerate dups); scipy's CloughTocher doesn't pre-scan either.
+Replaced with an **O(n) HashSet of `(bits, bits)`**, normalizing signed zero via
+`x + 0.0` (-0.0→+0.0) so it is BYTE-IDENTICAL to the `==` scan for the
+all-finite points guaranteed by the earlier finite-check.
+
+MEASURED same-box (perf_griddata_scipy.rs vs SciPy 1.17.1, nq=5000, best-of-5):
+- n=20000 cubic **215.7 → 84.3 ms (removed 131 ms) = FLIPS 1.22x SLOWER → 2.12x FASTER** vs scipy 178.6 ms
+- n=10000 cubic 69.4 → 54.0 ms (removed ~15 ms) = 1.28x → **1.64x FASTER** vs scipy 88.6 ms
+- cubic now ≈ linear (84 vs 80 ms at n=20k) — the O(n²) validation was the entire gap; CT-specific build is ~9 ms total
+Byte-identical: change is a pure validation gate (same Ok/Err outcome), output
+untouched (acc unchanged); 176/0 lib (incl. `clough_tocher_rejects_invalid_inputs`
+duplicate-rejection) + 56/0 metamorphic GREEN. LESSON: profile the WHOLE `::new`,
+not just the visibly-hot loop — an O(n²) *validation* hid behind the patch build.
+GREP other interpolators/validators for `for i { for j in i+1.. }` all-pairs
+duplicate/collinearity scans (cheap O(n) hash replacement, byte-identical).
+
 ## 2026-06-26 - frankenscipy-greenfalcon-griddata-delaunay-circle-grid - KEEP (BOLD WIN, large-n): interpolate.griddata Delaunay2D grid-accelerated BUILD
 
 Took the RETRY filed in the circumcircle-precompute entry below: the
