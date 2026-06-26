@@ -4,6 +4,36 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-25 - frankenscipy-greenfalcon-saturation-sweep - DIG LOG (no new lever): signal/interpolate/cluster hot paths verified ALREADY OPTIMIZED; uncontended clean-win frontier saturated; RCH E0514 churn ongoing
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. After landing 4
+  signal wins this session (sosfilt/sosfiltfilt/upfirdn/wiener), swept the
+  remaining uncontended compute-heavy paths for a new lever. ALL already optimal
+  — recorded so they aren't re-dug:
+  - **signal**: `convolve`/`correlate` auto-route to FFT via a cost model
+    (`fft_conv_is_faster`); `cwt` is FFT-based with a cached data-FFT across
+    scales; `detrend` is O(n) closed-form regression; `welch`/`csd`/`periodogram`
+    parallelize over independent segments (`stft_frame_thread_count` gate);
+    `medfilt`/`order_filter` use a sliding ordered-multiset (O(n log k)) above a
+    threshold + reusable buffer below; `lfilter` biquad register-unrolled
+    (CopperFern); the SOS family is now sample-major (this session).
+  - **interpolate**: `interp1d_linear`/`CubicSplineStandalone` use binary-search
+    intervals + `par_query_map`; `barycentric`/`krogh` `eval_many` fan out over
+    query points (`par_query_map`); RBF build is solve-dominated (prior REJECT).
+  - **cluster**: `cophenet` is the efficient O(n²) cross-subtree-pair assignment
+    with buffer reuse; `kmeans2` fused-SIMD Lloyd; `linkage` nn_chain;
+    `optimal_leaf_ordering` exact (prior ships).
+- BLOCKER surfaced: (1) the remaining MEASURED gaps are in CONTENDED crates —
+  spatial `SphericalVoronoi` O(n⁴) (the top spatial target, but other agents are
+  actively committing spherical-voronoi work per the log) and `fsci-stats`
+  (codex) — or known WALLS (FFT large-N, confirmed genuine same-box this session;
+  Qhull/HiGHS/LAPACK). (2) RCH fleet is in E0514 toolchain churn (shared target
+  dir crates compiled by an incompatible rustc); worked around all session via a
+  fresh isolated local CARGO_TARGET_DIR (self-consistent rustc) — NOT cleaned the
+  shared dir (would disrupt other agents). Retry: re-sweep contended crates once
+  uncontended, or take on the SphericalVoronoi hull rewrite (multi-turn, parity
+  risk) if it frees up.
+
 ## 2026-06-25 - frankenscipy-greenfalcon-wiener-prefixsum - KEEP (BOLD WIN, ~1e-12 tolerance): signal.wiener local mean/var O(n*mysize) fold -> O(n) prefix sums; 1.9-24x self-speedup, flips a 2.42x scipy loss to 5.6-11.5x FASTER
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. DIG. Continued the
