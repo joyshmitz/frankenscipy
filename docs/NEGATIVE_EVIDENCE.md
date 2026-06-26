@@ -6,6 +6,41 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-26 - GreenFalcon (codex-cli) - REJECT: ndimage.watershed_ift bounded-u8 bucket frontier is zero-gain when preserving heap tie order
+
+- Agent: GreenFalcon (codex-cli), `AGENT_NAME=GreenFalcon`. Land-or-dig audit:
+  `.scratch/.worktrees` contained one live non-ancestor candidate,
+  `/data/projects/.worktrees/frankenscipy-eigvalsh-blackthrush-20260609`
+  (`e3b744f4`, GEMM flat-workspace threshold 768), but current `main` already has
+  the stronger `MATMUL_FLAT_WORKSPACE_MIN_DIM = 256`, so no worktree win was
+  landable.
+- Gap attacked: `ndimage.watershed_ift` 512x512 bounded integer-cost workload
+  with 50 markers. Prior ledger route was `O(log n)` heap overhead vs SciPy's
+  bounded-cost frontier. The `/alien-graveyard` match was the Dijkstra note that
+  radix/bucket queues beat comparison heaps for bounded integer weights.
+- Lever tested and reverted: gate exact `0..=255` integer costs through 256
+  buckets while preserving the existing heap's `(cost, idx)` pop order with a
+  per-bucket min-heap. Fractional or out-of-range costs fell back to the current
+  BinaryHeap path. This kept the byte-identical proof path but did not remove
+  enough heap work.
+- Requested `cargo bench --release` was captured and rejected by this Cargo
+  (`unexpected argument '--release'`), so the equivalent per-crate command used
+  `--profile release` with
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b`.
+- MEASURED same-host A/B using a temporary focused Criterion row:
+  - current Rust baseline: `49.015 ms`
+  - bounded-u8 bucket candidate: `50.516 ms`, Criterion
+    `change: [-6.3033%, +3.3812%, +13.722%]`, `p = 0.53`, no significant change
+  - self ratio: `0.97x` baseline speed, so this is zero-gain / slight loss.
+- Ratio vs SciPy 1.17.1 on the same deterministic workload: SciPy median
+  `13.040831 ms`; current Rust is `3.76x` slower, candidate is `3.87x` slower.
+  A non-denominator RCH `ovh-a` candidate run reported `13.786 ms`, but no same
+  worker baseline could be admitted, so it was not used for keep/reject.
+- Decision: REJECT and REVERT. The cost-bucket idea only becomes worth retrying
+  if it drops the per-bucket index heap too, which changes tie order and needs a
+  SciPy oracle/tie-policy proof first. Source and temporary bench edits were
+  fully reverted; this commit records the negative evidence only.
+
 ## 2026-06-25 - cod-a - REJECT: SphericalVoronoi `u32` visibility stamps regress the decisive large-n row
 
 - Agent: cod-a (codex-cli / gpt-5.2), `AGENT_NAME=cod-a`.

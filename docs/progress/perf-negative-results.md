@@ -33,6 +33,55 @@ squared distance (O(d²)→O(d)). Same precompute-the-loop-invariant lever as th
 Delaunay circumcircle. RETRY/EXTEND: the 1-D `GaussianKde` (separate struct) and
 any other Mahalanobis-distance batch path (mahalanobis cdist, GMM responsibilities).
 
+## 2026-06-26 - frankenscipy-greenfalcon-watershed-u8-bucket - REJECT (zero-gain): bounded integer bucket queue preserves current tie order but does not beat BinaryHeap
+
+LAND-OR-DIG audit first: the only live `.scratch/.worktrees` head not reachable
+from `origin/main` was
+`/data/projects/.worktrees/frankenscipy-eigvalsh-blackthrush-20260609`
+(`e3b744f4`, `perf(linalg): lower GEMM flat-workspace threshold`). Current main
+already has the stronger GEMM threshold (`MATMUL_FLAT_WORKSPACE_MIN_DIM = 256`),
+so that old threshold-768 worktree is superseded, not landable.
+
+Targeted the logged `ndimage.watershed_ift` residual: after the flat-offset keep,
+the remaining gap was the comparison heap frontier (`O(log n)`) versus SciPy's
+bounded-cost image-forest frontier. `/alien-graveyard` maps this directly to the
+Dijkstra bounded-integer note: radix/bucket queues often beat comparison heaps
+when weights are bounded integers.
+
+Lever tested and reverted: for exactly integral `0..=255` input costs, route
+through 256 cost buckets. To preserve current FrankenSciPy behavior exactly, each
+bucket used a min-heap of indices, maintaining the old global heap's `(cost, idx)`
+pop order; fractional/out-of-range costs fell back to the existing BinaryHeap.
+This is byte-identical by construction but fails to remove enough heap work.
+
+Bench harness: a temporary focused Criterion row,
+`watershed_ift/u8_512x512/50`, deterministic 512x512 uint8-range costs and 50
+markers. Requested `cargo bench --release` was captured and rejected by this
+Cargo (`unexpected argument '--release'`); equivalent per-crate command used
+`--profile release` with
+`AGENT_NAME=GreenFalcon CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b
+rch exec -- cargo bench --profile release -p fsci-ndimage --bench ndimage_bench
+-- watershed_ift --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`.
+
+MEASURED same-host A/B (RCH local fallback, same warm target):
+- current Rust baseline: `49.015 ms`
+- bounded-u8 bucket candidate: `50.516 ms`
+- Criterion: `change: [-6.3033%, +3.3812%, +13.722%]`, `p = 0.53`, no
+  significant change
+- self ratio: `49.015 / 50.516 = 0.97x` baseline speed, zero-gain/slight loss
+
+Ratio vs SciPy 1.17.1 on the same deterministic workload: SciPy median
+`13.040831 ms`; current Rust is `3.76x` slower, candidate is `3.87x` slower.
+There was one non-denominator remote candidate run on `ovh-a` at `13.786 ms`, but
+RCH would not admit a same-worker baseline afterward, so that run is routing
+evidence only.
+
+Decision: REJECT and REVERT. Production source and temporary bench edits were
+restored completely; the commit keeps only this ledger evidence. Retry condition:
+only try the true O(1) FIFO/hierarchical queue if paired with a SciPy oracle
+proof for tie policy, because dropping index-order tie preservation is the likely
+speed lever and a behavior-risk surface.
+
 ## 2026-06-26 - frankenscipy-greenfalcon-interpn-survey - SURVEY (interpn already dominates; cubic NOT scipy-parity)
 
 Measured `interpn`/`RegularGridInterpolator` same-box vs SciPy 1.17.1
