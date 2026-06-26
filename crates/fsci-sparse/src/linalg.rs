@@ -9923,13 +9923,32 @@ pub fn connected_components(graph: &CsrMatrix) -> SparseResult<ConnectedComponen
     let indptr = graph.indptr();
     let indices = graph.indices();
 
-    // Build symmetric adjacency list so both edge directions are traversed,
-    // even if the input matrix isn't perfectly symmetric.
-    let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
+    // Build a symmetric adjacency in a single FLAT CSR-style buffer (degree
+    // counts → prefix-sum offsets → scatter), so both edge directions are
+    // traversed even if the input isn't perfectly symmetric. The old
+    // `Vec<Vec<usize>>` allocated n scattered, repeatedly-reallocated row vectors
+    // (cache-hostile); the flat layout is one alloc each for offsets/neighbors.
+    // BYTE-IDENTICAL: `labels` depends only on connectivity and the
+    // first-unvisited-in-0..n component numbering — the per-node neighbour ORDER
+    // does not affect which component a node lands in.
+    let mut adj_offsets = vec![0usize; n + 1];
     for i in 0..n {
-        for &j in indices.iter().take(indptr[i + 1]).skip(indptr[i]) {
-            adj[i].push(j);
-            adj[j].push(i); // reverse edge for undirected
+        for &j in &indices[indptr[i]..indptr[i + 1]] {
+            adj_offsets[i + 1] += 1; // forward edge i -> j
+            adj_offsets[j + 1] += 1; // reverse edge j -> i
+        }
+    }
+    for i in 0..n {
+        adj_offsets[i + 1] += adj_offsets[i];
+    }
+    let mut adj_neighbors = vec![0usize; adj_offsets[n]];
+    let mut cursor: Vec<usize> = adj_offsets[..n].to_vec();
+    for i in 0..n {
+        for &j in &indices[indptr[i]..indptr[i + 1]] {
+            adj_neighbors[cursor[i]] = j;
+            cursor[i] += 1;
+            adj_neighbors[cursor[j]] = i;
+            cursor[j] += 1;
         }
     }
 
@@ -9947,7 +9966,7 @@ pub fn connected_components(graph: &CsrMatrix) -> SparseResult<ConnectedComponen
         labels[start] = component;
 
         while let Some(node) = queue.pop_front() {
-            for &neighbor in &adj[node] {
+            for &neighbor in &adj_neighbors[adj_offsets[node]..adj_offsets[node + 1]] {
                 if labels[neighbor] == usize::MAX {
                     labels[neighbor] = component;
                     queue.push_back(neighbor);

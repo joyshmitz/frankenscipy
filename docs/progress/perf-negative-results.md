@@ -4,6 +4,29 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-cc-flat-adjacency - KEEP (BOLD WIN, byte-identical): csgraph.connected_components Vec<Vec<usize>> adjacency → flat CSR-style buffer; 2.84x self, flips a 3.4x scipy loss to 1.19x (near-parity)
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. Measured the sparse
+  csgraph family same-box (n=3000, ~48k nnz). Most are WINS: MST **4.7x FASTER**
+  (0.54 vs 2.54 ms), dijkstra **1.6x FASTER** (0.58 vs 0.92 ms), breadth_first_order
+  parity. But `connected_components` was fsci 1.26 ms vs scipy 0.37 ms = **3.4x
+  SLOWER**.
+- BUG (crates/fsci-sparse/src/linalg.rs `connected_components`): it built a
+  symmetric adjacency as `Vec<Vec<usize>>` — n scattered, repeatedly-reallocated
+  row vectors (cache-hostile, the gap-grows tell) — then BFS'd it.
+- FIX: build the symmetric adjacency in a single FLAT CSR-style buffer (degree
+  count → prefix-sum offsets → scatter forward+reverse edges), BFS over the flat
+  slices. BYTE-IDENTICAL: `labels` depend only on connectivity + the
+  first-unvisited-in-0..n component numbering — the per-node neighbour ORDER does
+  not change which component a node lands in.
+- MEASURED: 1.26 ms → **0.44 ms = 2.84x self-speedup**; vs scipy 0.37 ms: 3.4x
+  slower → **1.19x (near-parity)**. Conformance GREEN: `cargo test -p fsci-sparse
+  connected_components` = 4/0 incl. `connected_components_matches_scipy_reference_values`
+  (verified locally; RCH E0514 churn). This is the proven `Vec<Vec<_>>`→flat-buffer
+  cache lever (see `perf_equal_hardware_artifact_and_flatbuffer_lever`) applied to
+  a graph adjacency. EXTEND: grep other csgraph/graph builders still using
+  `Vec<Vec<_>>` adjacency.
+
 ## 2026-06-26 - frankenscipy-greenfalcon-ndimage-measurement-sweep - SURVEY (4 already-WINS, don't re-chase) + SURFACED gap: grey/binary morphology cache-hostile strided column pass (2.18x), lever = cache-blocked transpose
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. DIG turn: measured 7
