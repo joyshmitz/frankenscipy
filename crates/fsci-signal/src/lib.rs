@@ -15695,18 +15695,38 @@ pub fn upfirdn(h: &[f64], x: &[f64], up: usize, down: usize) -> Result<Vec<f64>,
     let full_len = upsampled_len.checked_add(h.len() - 1).ok_or_else(|| {
         SignalError::InvalidArgument("upfirdn output length overflows usize".to_string())
     })?;
-    // Polyphase fast path for decimation-heavy cases (down >= 4): compute ONLY
-    // the kept (every down-th) outputs directly, instead of filling the full
-    // upsampled-convolution buffer and discarding (down-1)/down of it via
-    // `step_by(down)`. Does ~n*len(h)/down multiply-adds vs the naive scatter's
-    // n*len(h), and allocates one n_out buffer instead of full_len + a second
-    // `step_by` collect. BYTE-IDENTICAL: each kept output position p = k*down
-    // sums its contributing input samples in INCREASING-i order — exactly the
-    // order the naive scatter below accumulates that position (its outer loop is
-    // over i). Gated at down >= 4 because the per-output reduction is ~3.3x
-    // costlier per multiply-add than the naive's vectorizable AXPY scatter, so
-    // the down× work saving only nets a speedup once down >= 4 (measured 1.19x
-    // at down=4 up to 3.33x at down=10; down <= 3 keeps the faster AXPY).
+    // Kept-output sparse scatter for the down=4 hot path: keep the naive outer
+    // input-sample order, but visit only taps whose `i * up + tap_idx` lands on
+    // a retained output. Higher down factors keep the per-output reducer below;
+    // measured high-down rows are faster there.
+    if down == 4 {
+        let lh = h.len();
+        let n_out = full_len.div_ceil(down);
+        let mut output = vec![0.0; n_out];
+        for (i, &sample) in x.iter().enumerate() {
+            let base = i * up;
+            let rem = base % down;
+            let mut tap_idx = if rem == 0 {
+                0
+            } else {
+                down - rem
+            };
+            if tap_idx >= lh {
+                continue;
+            }
+            let mut out_idx = (base + tap_idx) / down;
+            while tap_idx < lh {
+                output[out_idx] += sample * h[tap_idx];
+                tap_idx += down;
+                out_idx += 1;
+            }
+        }
+        return Ok(output);
+    }
+
+    // Polyphase fast path for decimation-heavy cases (down >= 4): compute only
+    // kept outputs directly, preserving the naive scatter's increasing-input
+    // accumulation order without allocating the full convolution.
     if down >= 4 {
         let lh = h.len();
         let n = x.len();
@@ -26400,8 +26420,6 @@ mod tests {
     }
 
     #[test]
-
-    #[test]
     fn upfirdn_rejects_invalid_arguments() {
         assert!(upfirdn(&[], &[1.0, 2.0], 1, 1).is_err());
         assert!(upfirdn(&[1.0], &[1.0, 2.0], 0, 1).is_err());
@@ -29859,9 +29877,6 @@ mod tests {
         }
     }
 }
-
-
-
 
 
 

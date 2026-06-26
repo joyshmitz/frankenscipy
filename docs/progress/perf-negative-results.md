@@ -166,6 +166,74 @@ churn this turn; verified locally with a fresh isolated CARGO_TARGET_DIR
 fixed-window reduction (box mean/var/sum, moving average, local energy) →
 O(n) prefix sums; ~1e-12 reassociation is within tolerance. Candidates to grep:
 other local-statistic filters that fold a window per output element. Retry: none.
+## 2026-06-26 - frankenscipy-greenfalcon-upfirdn-down4-sparse-scatter - KEEP (byte-identical, GATED): signal.upfirdn down=4 sparse kept-output scatter; 2.37-2.50x self-speedup and 1.38-1.83x faster than SciPy on measured down=4 rows
+
+- Agent: GreenFalcon (codex-cli), `AGENT_NAME=GreenFalcon`. LAND-OR-DIG:
+  scanned `.scratch/.worktrees`; the only non-ancestor candidate was
+  `/data/projects/.worktrees/frankenscipy-eigvalsh-blackthrush-20260609`
+  (`perf(linalg): lower GEMM flat-workspace threshold`), but `main` already has
+  the more aggressive `MATMUL_FLAT_WORKSPACE_MIN_DIM = 256` and the ledger entry
+  recording it. No unlanded measured worktree win to land, so this turn dug
+  `signal.upfirdn`, the core primitive behind `resample_poly` and `decimate`.
+
+### New lever
+
+The existing `down >= 4` path computes each retained output with a
+single-accumulator reduction. That removed discarded-output work, but it also
+lost the vectorizable AXPY shape of the original full scatter. For `down == 4`,
+the retained taps for each input sample still form a dense-enough sequence of
+output slots, so we can invert the loop again without doing discarded work:
+
+```
+for i in x:
+    tap_idx = first tap where (i*up + tap_idx) % 4 == 0
+    while tap_idx < h.len():
+        output[(i*up + tap_idx)/4] += x[i] * h[tap_idx]
+        tap_idx += 4
+```
+
+This is byte-identical to the naive full scatter for retained outputs because it
+keeps the outer input-sample order and each input contributes at most once to a
+given retained output. `down > 4` keeps the previous per-output reducer: the
+sparse scatter was measured and rejected there because its output writes are too
+sparse to beat the reducer.
+
+### Measurement
+
+Per-crate only, warm target dir:
+
+```
+AGENT_NAME=GreenFalcon \
+CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b \
+rch exec -- cargo bench --profile release -p fsci-signal --bench signal_bench -- \
+  upfirdn --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot
+```
+
+`rch` fell back locally for the final narrowed proof (`no admissible workers:
+insufficient_slots=5,hard_preflight=1`), so the before/after is same-host.
+
+| up/down | before | after | self | SciPy 1.17.1 | fsci/SciPy |
+|---------|--------|-------|------|--------------|------------|
+| 1/4     | 6.2881 ms | 2.5140 ms | **2.50x** | 4.5986 ms | **0.55x / 1.83x faster** |
+| 7/4     | 6.6105 ms | 2.7913 ms | **2.37x** | 3.8488 ms | **0.73x / 1.38x faster** |
+
+Residual rows are not claimed by this lever and remain routed for future work:
+
+| up/down | final fsci | SciPy 1.17.1 | ratio |
+|---------|------------|--------------|-------|
+| 1/10    | 2.3751 ms | 1.8259 ms | 1.30x slower |
+| 3/8     | 3.0127 ms | 2.0437 ms | 1.47x slower |
+
+### Conformance + retry
+
+`AGENT_NAME=GreenFalcon CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b
+rch exec -- cargo test -p fsci-signal upfirdn --lib -- --nocapture` passed 8/0,
+including `upfirdn_polyphase_matches_naive_scatter_bits` across mixed
+`up/down` cases. Full `fsci-conformance` was attempted and blocked by unrelated
+existing contract-table/cluster/oracle-environment failures; the signal packet
+itself passed during that run. Retry for the residual rows: a high-down
+phase-blocked scatter or SIMD gather that keeps increasing-input accumulation
+order; do not reapply the simple sparse scatter to `down > 4`.
 
 ## 2026-06-25 - frankenscipy-greenfalcon-upfirdn-polyphase - KEEP (byte-identical, GATED): signal.upfirdn polyphase fast path for down>=4 computes only kept outputs; 1.19-3.33x self-speedup narrows scipy gap from 1.56-3.97x to 1.32-1.71x slower
 

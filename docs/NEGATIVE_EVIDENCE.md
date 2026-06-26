@@ -116,6 +116,37 @@ ledger above so the project has one source of truth.
   CARGO_TARGET_DIR (self-consistent rustc). Lever: any sliding box-window
   reduction (mean/var/sum over a fixed window) → O(n) prefix sums. Detail in
   canonical ledger.
+## 2026-06-26 - GreenFalcon (codex-cli) - KEEP (byte-identical): signal.upfirdn down=4 sparse kept-output scatter; 2.37-2.50x self-speedup, now 1.38-1.83x faster than SciPy on down=4 rows
+
+- Agent: GreenFalcon (codex-cli), `AGENT_NAME=GreenFalcon`. LAND-OR-DIG:
+  scanned `.scratch/.worktrees`; the only non-ancestor candidate was the older
+  linalg GEMM-threshold worktree, already superseded on `main` and recorded in
+  this ledger, so this turn dug a new `signal.upfirdn` lever.
+- FIX (crates/fsci-signal/src/lib.rs `upfirdn`): for `down == 4`, replaced the
+  single-accumulator per-output reducer with a sparse kept-output scatter. It
+  iterates input samples in the same order as the naive full scatter, but visits
+  only taps whose `i * up + tap_idx` lands on a retained output. This preserves
+  bit identity while recovering an AXPY-shaped inner loop over consecutive
+  output slots. `down > 4` deliberately stays on the prior per-output reducer
+  because the sparse scatter regressed high-down rows in measurement.
+- MEASURED same-host, per-crate (`CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b`;
+  `rch exec -- cargo bench --profile release -p fsci-signal --bench signal_bench
+  -- upfirdn --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`,
+  local fallback): before -> after medians for the kept rows were `u1_d4`
+  6.2881 ms -> 2.5140 ms (**2.50x self**) and `u7_d4` 6.6105 ms -> 2.7913 ms
+  (**2.37x self**).
+- RATIO VS SCIPY (SciPy 1.17.1, same deterministic `n=262144`, `len(h)=120`
+  input, local Python comparator): `u1_d4` fsci 2.5140 ms vs SciPy 4.5986 ms =
+  **0.55x SciPy time / 1.83x faster**; `u7_d4` fsci 2.7913 ms vs SciPy 3.8488
+  ms = **0.73x SciPy time / 1.38x faster**. Residual, not claimed: `u1_d10`
+  remains 2.3751 ms vs SciPy 1.8259 ms (**1.30x slower**) and `u3_d8` remains
+  3.0127 ms vs SciPy 2.0437 ms (**1.47x slower**).
+- Targeted conformance GREEN: `AGENT_NAME=GreenFalcon CARGO_TARGET_DIR=... rch
+  exec -- cargo test -p fsci-signal upfirdn --lib -- --nocapture` = 8/0,
+  including the bit-for-bit naive scatter oracle across mixed `up/down` values.
+  Full `fsci-conformance` was attempted separately and blocked by unrelated
+  existing contract-table/cluster/oracle-environment failures; detailed record
+  in `docs/progress/perf-negative-results.md`.
 
 ## 2026-06-25 - GreenFalcon (claude-code) - KEEP (byte-identical): signal.upfirdn polyphase fast path for down>=4 (compute only kept outputs, not full-then-discard); 1.19-3.33x self-speedup narrows scipy gap from 1.56-3.97x to 1.32-1.71x
 

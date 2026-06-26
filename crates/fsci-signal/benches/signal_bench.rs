@@ -2,7 +2,7 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use fsci_signal::{
     coherence, csd, cwt, detrend, fftconvolve, filtfilt, find_peaks_cwt, firls, firwin, freqz,
     hilbert, lfilter, medfilt, medfilt2d, mfcc, order_filter, remez, resample, ricker, sosfilt,
-    welch, ConvolveMode, DetrendType, FindPeaksCwtOptions, FirWindow, SosSection,
+    upfirdn, welch, ConvolveMode, DetrendType, FindPeaksCwtOptions, FirWindow, SosSection,
 };
 use std::hint::black_box;
 use std::io::Write;
@@ -540,6 +540,28 @@ fn bench_resample(c: &mut Criterion) {
     });
 }
 
+fn bench_upfirdn(c: &mut Criterion) {
+    use criterion::BenchmarkId;
+
+    let x = deterministic_signal(262_144);
+    let h = deterministic_signal(120);
+    let mut group = c.benchmark_group("upfirdn");
+    for &(up, down) in &[(1usize, 4usize), (1, 10), (7, 4), (3, 8)] {
+        group.bench_function(BenchmarkId::new(format!("u{up}_d{down}"), x.len()), |b| {
+            b.iter(|| {
+                upfirdn(
+                    black_box(&h),
+                    black_box(&x),
+                    black_box(up),
+                    black_box(down),
+                )
+                .expect("upfirdn")
+            })
+        });
+    }
+    group.finish();
+}
+
 fn bench_find_peaks_cwt(c: &mut Criterion) {
     let mut group = c.benchmark_group("find_peaks_cwt");
     let n = 5000usize;
@@ -560,6 +582,7 @@ fn bench_find_peaks_cwt(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_resample,
+    bench_upfirdn,
     bench_detrend_hilbert,
     bench_find_peaks_cwt,
     bench_mfcc,
