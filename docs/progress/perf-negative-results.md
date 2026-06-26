@@ -4,6 +4,28 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-cdist-cosine-smalld-soa - KEEP (BOLD WIN, byte-identical): spatial.cdist Cosine small-d SoA SIMD
+
+Last metric in the cdist small-d sweep. Cosine had a tuned `dim==4` SoA path and
+a general per-pair arm for everything else; at LOW d that general arm
+(`simd_dot(xa[i],xb[j])` per pair + Vec<Vec> chase) was overhead-bound. Measured
+(800×800): **cosine d=3 = 3.51x SLOWER than scipy** (4.93 ms vs 1.40 ms); d=50
+2.0x / d=100 4.27x FASTER (compute amortizes). Generalized `cdist_row_cosine4` to
+`cdist_row_cosine_soa` for `dim < 8`: precompute norms (`simd_sqsum(v).sqrt()`,
+same as the generic arm), per-lane `1 - dot/(ni·nj)` with the `denom==0 ⇒ NaN`
+select; `simd_dot`/`simd_sqsum` are scalar left-folds for d<8 so it is
+BIT-identical to the scalar `cosine`. Extended the small-d bit-identity test to
+Cosine + a **zero-norm row** (denom==0 → NaN path) + the existing NaN-injected
+case; 220/0 spatial lib GREEN.
+
+MEASURED same-box (best-of-10/12 back-to-back vs SciPy 1.17.1, 800×800):
+- **cosine d=3: 0.998 ms vs scipy 1.363 ms = 1.37x FASTER** (was 3.51x SLOWER; ~4.9x self)
+- d=50 3.31 ms vs 9.03 ms = 2.72x; d=100 3.04 ms vs 17.90 ms = 5.89x (general arm, untouched)
+acc exact (2.541799). **cdist small-d distance family fully CLOSED** — euclidean
+1.82x / sqeuclidean 1.06x / cityblock 1.11x / cosine 1.37x faster / chebyshev
+parity, all byte-identical, were 2.4-8.4x slower. Only Correlation small-d remains
+generic (even more niche than cosine d<8; not chased).
+
 ## 2026-06-26 - frankenscipy-greenfalcon-cdist-chebyshev-smalld-soa - KEEP (closes 6x loss to parity, byte-identical incl NaN) + pdist small-d SURVEY (parity, don't chase)
 
 Completes the cdist small-d distance family (euclidean/sqeuclidean/cityblock

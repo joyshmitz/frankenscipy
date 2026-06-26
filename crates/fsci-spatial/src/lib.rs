@@ -1509,6 +1509,18 @@ pub fn cdist_metric(
                 cdist_row_cosine4(&xa4[i], na_norm[i], &b_soa, &nb_norm, nb)
             })
         }
+        // Generalize the d=4 Cosine SoA to small d (d<8): same precomputed norms
+        // + per-lane `1 - dot/(ni·nj)` with the denom==0⇒NaN select. `simd_dot`
+        // is a scalar left-fold for d<8, so this is BIT-identical to the generic
+        // `cosine` arm. Flips the d=3 cosine loss (3.5x slower).
+        DistanceMetric::Cosine if dim < 8 => {
+            let na_norm: Vec<f64> = xa.iter().map(|v| simd_sqsum(v).sqrt()).collect();
+            let nb_norm: Vec<f64> = xb.iter().map(|v| simd_sqsum(v).sqrt()).collect();
+            let b_soa = cdist_soa(xb, dim);
+            cdist_fill_rows(na, nthreads.min(16), |i| {
+                cdist_row_cosine_soa(&xa[i], na_norm[i], &b_soa, &nb_norm, nb)
+            })
+        }
         DistanceMetric::Cosine => {
             let na_norm: Vec<f64> = xa.iter().map(|v| simd_sqsum(v).sqrt()).collect();
             let nb_norm: Vec<f64> = xb.iter().map(|v| simd_sqsum(v).sqrt()).collect();
@@ -1802,6 +1814,56 @@ fn cdist_row_chebyshev_soa(ai: &[f64], b: &[Vec<f64>], nb: usize) -> Vec<f64> {
             s = s.max(dk);
         }
         row[j] = s;
+        j += 1;
+    }
+    row
+}
+
+/// SoA-across-pairs Cosine cdist row (small `d`) with precomputed norms (`ni` for
+/// `ai`, `nb_norm` for xb): per-lane `1 - dot/(ni·nj)` with the denom==0⇒NaN
+/// guard, the dot a left-fold over dimensions. Bit-identical to the scalar
+/// `cosine` (`simd_dot`/`simd_sqsum` are scalar left-folds for `d < 8`).
+fn cdist_row_cosine_soa(
+    ai: &[f64],
+    ni: f64,
+    b: &[Vec<f64>],
+    nb_norm: &[f64],
+    nb: usize,
+) -> Vec<f64> {
+    use std::simd::{Select, Simd, cmp::SimdPartialEq};
+    const L: usize = 8;
+    let d = ai.len();
+    let niv = Simd::<f64, L>::splat(ni);
+    let one = Simd::<f64, L>::splat(1.0);
+    let zero = Simd::<f64, L>::splat(0.0);
+    let nan = Simd::<f64, L>::splat(f64::NAN);
+    let mut row = vec![0.0_f64; nb];
+    let mut j = 0usize;
+    while j + L <= nb {
+        let mut dot = Simd::<f64, L>::splat(0.0);
+        for k in 0..d {
+            dot += Simd::<f64, L>::splat(ai[k]) * Simd::<f64, L>::from_slice(&b[k][j..j + L]);
+        }
+        let njv = Simd::<f64, L>::from_slice(&nb_norm[j..j + L]);
+        let denom = niv * njv;
+        let val = one - dot / denom;
+        denom
+            .simd_eq(zero)
+            .select(nan, val)
+            .copy_to_slice(&mut row[j..j + L]);
+        j += L;
+    }
+    while j < nb {
+        let denom = ni * nb_norm[j];
+        row[j] = if denom == 0.0 {
+            f64::NAN
+        } else {
+            let mut dot = 0.0_f64;
+            for k in 0..d {
+                dot += ai[k] * b[k][j];
+            }
+            1.0 - dot / denom
+        };
         j += 1;
     }
     row
@@ -8219,6 +8281,7 @@ mod tests {
                     DistanceMetric::SqEuclidean,
                     DistanceMetric::Cityblock,
                     DistanceMetric::Chebyshev,
+                    DistanceMetric::Cosine,
                 ] {
                     let got = cdist_metric(&xa, &xb, metric).expect("cdist");
                     for (i, gr) in got.iter().enumerate() {
@@ -8242,12 +8305,14 @@ mod tests {
             let mut xa: Vec<Vec<f64>> =
                 (0..10).map(|_| (0..d).map(|_| rng()).collect()).collect();
             xa[4][d - 1] = f64::NAN;
+            xa[3] = vec![0.0; d]; // zero norm -> cosine denom==0 -> NaN path
             let xb: Vec<Vec<f64>> = (0..20).map(|_| (0..d).map(|_| rng()).collect()).collect();
             for metric in [
                 DistanceMetric::Euclidean,
                 DistanceMetric::SqEuclidean,
                 DistanceMetric::Cityblock,
                 DistanceMetric::Chebyshev,
+                DistanceMetric::Cosine,
             ] {
                 let got = cdist_metric(&xa, &xb, metric).expect("cdist nan");
                 for (i, gr) in got.iter().enumerate() {
