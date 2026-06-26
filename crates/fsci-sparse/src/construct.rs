@@ -123,7 +123,7 @@ pub fn diags(
     let mut data = Vec::with_capacity(capacity);
     let mut indices = Vec::with_capacity(capacity);
     let mut indptr = Vec::with_capacity(shape.rows + 1);
-    indptr.push(0);
+    indptr.push(0usize);
 
     for row in 0..shape.rows {
         for &(offset, diag) in &diagonal_order {
@@ -543,6 +543,95 @@ pub fn kron(a: &CsrMatrix, b: &CsrMatrix) -> SparseResult<CsrMatrix> {
             })?;
     let shape = Shape2D::new(out_rows, out_cols);
 
+    if let Some(csr) = kron_canonical_csr(a, b, shape)? {
+        return Ok(csr);
+    }
+
+    kron_via_coo(a, b, shape)
+}
+
+fn kron_canonical_csr(
+    a: &CsrMatrix,
+    b: &CsrMatrix,
+    shape: Shape2D,
+) -> SparseResult<Option<CsrMatrix>> {
+    let a_meta = a.canonical_meta();
+    let b_meta = b.canonical_meta();
+    if !a_meta.sorted_indices
+        || !a_meta.deduplicated
+        || !b_meta.sorted_indices
+        || !b_meta.deduplicated
+    {
+        return Ok(None);
+    }
+
+    let a_indptr = a.indptr();
+    let a_indices = a.indices();
+    let a_data = a.data();
+    let b_indptr = b.indptr();
+    let b_indices = b.indices();
+    let b_data = b.data();
+    let b_shape = b.shape();
+    let total_nnz = a
+        .nnz()
+        .checked_mul(b.nnz())
+        .ok_or_else(|| SparseError::IndexOverflow {
+            message: "kron output nnz overflow".to_string(),
+        })?;
+
+    let mut indptr = Vec::with_capacity(shape.rows + 1);
+    indptr.push(0usize);
+    for ai in 0..a.shape().rows {
+        let a_row_nnz = a_indptr[ai + 1] - a_indptr[ai];
+        for bi in 0..b_shape.rows {
+            let b_row_nnz = b_indptr[bi + 1] - b_indptr[bi];
+            let row_nnz =
+                a_row_nnz
+                    .checked_mul(b_row_nnz)
+                    .ok_or_else(|| SparseError::IndexOverflow {
+                        message: "kron output row nnz overflow".to_string(),
+                    })?;
+            let next = indptr
+                .last()
+                .copied()
+                .expect("kron indptr starts at zero")
+                .checked_add(row_nnz)
+                .ok_or_else(|| SparseError::IndexOverflow {
+                    message: "kron output nnz overflow".to_string(),
+                })?;
+            indptr.push(next);
+        }
+    }
+
+    let mut indices = Vec::with_capacity(total_nnz);
+    let mut data = Vec::with_capacity(total_nnz);
+
+    for ai in 0..a.shape().rows {
+        for bi in 0..b_shape.rows {
+            for a_idx in a_indptr[ai]..a_indptr[ai + 1] {
+                let aj = a_indices[a_idx];
+                let a_val = a_data[a_idx];
+                let col_base =
+                    aj.checked_mul(b_shape.cols)
+                        .ok_or_else(|| SparseError::IndexOverflow {
+                            message: "kron output col index overflow".to_string(),
+                        })?;
+                for b_idx in b_indptr[bi]..b_indptr[bi + 1] {
+                    indices.push(col_base + b_indices[b_idx]);
+                    data.push(a_val * b_data[b_idx]);
+                }
+            }
+        }
+    }
+
+    Ok(Some(CsrMatrix::from_components(
+        shape, data, indices, indptr, true,
+    )?))
+}
+
+fn kron_via_coo(a: &CsrMatrix, b: &CsrMatrix, shape: Shape2D) -> SparseResult<CsrMatrix> {
+    let a_shape = a.shape();
+    let b_shape = b.shape();
     let a_indptr = a.indptr();
     let a_indices = a.indices();
     let a_data = a.data();
@@ -1430,6 +1519,9 @@ mod tests {
         .expect("csr");
         let result = kron(&a, &b).expect("kron");
         assert_eq!(result.shape(), Shape2D::new(4, 4));
+        let meta = result.canonical_meta();
+        assert!(meta.sorted_indices);
+        assert!(meta.deduplicated);
         let dense = dense_from_csr(&result);
         // Expected: [[0, 5, 0, 10], [6, 7, 12, 14], [0, 15, 0, 20], [18, 21, 24, 28]]
         let expected = [
@@ -1446,6 +1538,28 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn kron_preserves_duplicate_csr_semantics_on_fallback() {
+        let a = CsrMatrix::from_components(
+            Shape2D::new(1, 2),
+            vec![2.0, 3.0],
+            vec![1, 1],
+            vec![0, 2],
+            false,
+        )
+        .expect("duplicate csr");
+        assert!(!a.canonical_meta().deduplicated);
+
+        let b = eye(2).expect("eye");
+        let result = kron(&a, &b).expect("kron");
+        assert_eq!(result.shape(), Shape2D::new(2, 4));
+        assert_eq!(result.nnz(), 2);
+        assert_eq!(
+            dense_from_csr(&result),
+            vec![vec![0.0, 0.0, 5.0, 0.0], vec![0.0, 0.0, 0.0, 5.0]]
+        );
     }
 
     #[test]

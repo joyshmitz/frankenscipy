@@ -37,6 +37,42 @@ ledger above so the project has one source of truth.
 - Source restored completely after measurement; `git diff --
   crates/fsci-spatial/src/lib.rs` is empty. No code kept.
 
+## 2026-06-26 - GreenFalcon (codex-cli) - KEEP (BOLD WIN, canonical CSR): sparse.kron direct CSR skips the COO intermediate; 2.14x self-speedup, now 0.62x SciPy time
+
+- Agent: GreenFalcon (codex-cli), `AGENT_NAME=GreenFalcon`. Land-or-dig audit:
+  the only live ahead worktree found was
+  `/data/projects/.worktrees/frankenscipy-eigvalsh-blackthrush-20260609`
+  (`e3b744f4`, GEMM flat-workspace threshold 768), already superseded by
+  `origin/main`'s stronger threshold 256 and by existing ledger evidence. No
+  worktree win was landable, so this dug the current `sparse.kron` residual.
+- FIX (crates/fsci-sparse/src/construct.rs): when both inputs are sorted,
+  deduplicated CSR, build the Kronecker product's `indptr`, `indices`, and
+  `data` directly. Algebraic invariant: for output row `ai*mb+bi`, A's sorted
+  columns form disjoint blocks `aj*nb..aj*nb+nb`, and B's sorted row order keeps
+  each block sorted, so the result is already canonical CSR. Noncanonical or
+  duplicate CSR inputs fall back to the old COO normalization path; new test
+  `kron_preserves_duplicate_csr_semantics_on_fallback` locks that behavior.
+- MEASURED same-box workload: A 400x400 density 0.02 (3200 nnz) and B 120x120
+  density 0.05 (720 nnz), output bound 2,304,000 nnz. Requested
+  `cargo bench --release` is rejected by this Cargo (`unexpected argument
+  '--release'`), so the equivalent per-crate command used `--profile release`:
+  `AGENT_NAME=GreenFalcon CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b
+  rch exec -- cargo bench --profile release -p fsci-sparse --bench sparse_bench
+  -- sparse_kron --sample-size 10 --warm-up-time 1 --measurement-time 3`.
+  RCH had no admissible workers for the Criterion runs and fell back locally with
+  the requested warm target dir.
+  - self: COO fast path mean 67.090 ms -> direct CSR mean 31.352 ms =
+    **2.14x faster** (`change: -53.933%`, p=0.00).
+  - vs SciPy: `scipy.sparse.kron(..., format="csr")` median 50.775 ms on the
+    same cardinality workload; fsci direct CSR is **0.617x SciPy time** =
+    **1.62x faster**.
+- Conformance GREEN: `AGENT_NAME=GreenFalcon CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b
+  rch exec -- cargo test -p fsci-sparse kron -- --nocapture` on RCH worker
+  `ovh-a`: 9 focused unit tests passed plus 4 metamorphic `kron`/`kronsum`
+  tests passed. `cargo test -p fsci-conformance --test e2e_sparse -- --nocapture`
+  on RCH worker `hz2`: 24/24 passed (helper oracle path skipped because SciPy
+  is not installed on that worker). Detail in canonical ledger.
+
 ## 2026-06-25 - GreenFalcon (claude-code) - KEEP (BOLD WIN, byte-identical): sparse.kron loop reorder emits sorted triplets → skips the O(nnz log nnz) sort; 3.65x self-speedup flips a 4.09x SciPy loss to ~parity
 
 - Agent: GreenFalcon (claude-code). DIG into fsci-sparse. `kron` (Kronecker

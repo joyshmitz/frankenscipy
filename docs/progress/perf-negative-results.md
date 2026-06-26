@@ -61,6 +61,92 @@ condition so dead ends are not repeated casually.
   affect that test — it fails on pristine main too. FLAGGED, not fixed (not my file).
 - Extend-candidates remaining: vstack/hstack, eye_rectangular (line 69).
 
+## 2026-06-26 - frankenscipy-greenfalcon-kron-direct-csr - KEEP (BOLD WIN, canonical CSR): sparse.kron direct CSR construction skips COO materialization; 2.14x self, 1.62x faster than SciPy
+
+- Agent: GreenFalcon (codex-cli), `AGENT_NAME=GreenFalcon`. BOLD-VERIFY
+  land-or-dig audit scanned live `.scratch`/`.worktrees` heads against
+  `origin/main`; the only ahead clean worktree was
+  `/data/projects/.worktrees/frankenscipy-eigvalsh-blackthrush-20260609` at
+  `e3b744f4` (`perf(linalg): lower GEMM flat-workspace threshold`), already
+  superseded by current main's stronger `MATMUL_FLAT_WORKSPACE_MIN_DIM = 256`.
+  No measured worktree win was landable, so this resumed the documented
+  `sparse.kron` residual from the previous sorted-triplet keep.
+
+### The waste
+
+The prior keep reordered `kron` triplet emission so `CooMatrix::to_csr()` could
+take its O(nnz) sorted+unique fast path instead of sorting nnz_a*nnz_b triplets.
+That made fsci near SciPy parity, but it still allocated and filled three COO
+vectors (`rows`, `cols`, `data`), then scanned them again to build CSR row
+pointers and copy columns/data into final CSR storage.
+
+### Fix (canonical-only direct path + exact fallback)
+
+For sorted, deduplicated CSR inputs, build the output CSR directly:
+
+1. compute each output row length as `nnz(A[ai, :]) * nnz(B[bi, :])` and prefix
+   it into `indptr`;
+2. emit columns/data in row order with `col = aj * B.cols + bj`;
+3. construct the result as canonical CSR.
+
+Correctness invariant: for fixed output row `ai*B.rows+bi`, A's row columns are
+sorted and deduplicated, B's row columns are sorted and deduplicated, and every
+A column `aj` maps to a disjoint B-width column block. Therefore
+`aj*B.cols+bj` is sorted and unique without COO canonicalization. If either
+input is not sorted/deduplicated, `kron` falls back to the old COO path so
+duplicate summing and unsorted normalization remain unchanged. New regression
+test: `kron_preserves_duplicate_csr_semantics_on_fallback`.
+
+### Measurement
+
+Workload: A = 400x400 density 0.02 (3200 nnz), B = 120x120 density 0.05
+(720 nnz), output bound = 2,304,000 nnz.
+
+The requested `cargo bench --release` form was tried first and Cargo rejected it
+with `unexpected argument '--release'`; the accepted equivalent was used:
+
+```
+AGENT_NAME=GreenFalcon \
+CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b \
+rch exec -- cargo bench --profile release -p fsci-sparse --bench sparse_bench -- \
+  sparse_kron --sample-size 10 --warm-up-time 1 --measurement-time 3
+```
+
+RCH had no admissible workers for the Criterion runs (`insufficient_slots` /
+`hard_preflight`) and fell back locally, still using the requested warm target
+dir.
+
+| variant | time | ratio |
+| --- | ---: | ---: |
+| fsci sorted-COO fast path baseline | 67.090 ms mean | 1.00x |
+| fsci direct CSR | 31.352 ms mean | 2.14x faster |
+| scipy.sparse.kron(format="csr") | 50.775 ms median | fsci is 0.617x SciPy time |
+
+Criterion reported `change: [-56.279% -53.933% -51.243%] (p = 0.00 < 0.05)`.
+SciPy comparator script used the same dimensions, densities, and nnz counts:
+`a_nnz=3200 b_nnz=720 product_nnz_bound=2304000`; SciPy median 50.775 ms, min
+32.666 ms, p95 63.876 ms. The new fsci path is **1.62x faster than SciPy** on
+this cardinality workload.
+
+### Conformance + lever
+
+`AGENT_NAME=GreenFalcon CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b
+rch exec -- cargo test -p fsci-sparse kron -- --nocapture` ran on RCH worker
+`ovh-a`: 9 focused unit tests passed (`kron_known_result`,
+`kron_matches_scipy_reference_values`, duplicate-CSR fallback, and kronsum
+callers) plus 4 metamorphic `kron`/`kronsum` tests passed.
+
+`AGENT_NAME=GreenFalcon CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b
+rch exec -- cargo test -p fsci-conformance --test e2e_sparse -- --nocapture`
+ran on RCH worker `hz2`: 24/24 passed. The helper oracle scenario reported
+SciPy/NumPy unavailable on that worker and skipped that subprocess path, but the
+test suite returned success.
+
+GENERAL LEVER: when a sparse operation's output row sizes are algebraically
+known from canonical CSR inputs, skip intermediary COO entirely and build final
+CSR directly. Fallback must remain the canonicalization path for noncanonical
+inputs.
+
 ## 2026-06-25 - frankenscipy-greenfalcon-kron-sorted-emit - KEEP (BOLD WIN, byte-identical): sparse.kron loop reorder emits row/col-sorted triplets → COO→CSR fast path skips the O(nnz log nnz) sort; 3.65x self, flips 4.09x scipy loss to ~parity
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. DIG into the

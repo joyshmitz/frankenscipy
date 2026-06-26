@@ -1,7 +1,7 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_sparse::{
     CooMatrix, CscMatrix, CsrMatrix, FormatConvertible, IluOptions, Shape2D, add_csr, diags, eye,
-    random, scale_csr, spilu, spmm, spmv_csr,
+    kron, random, scale_csr, spilu, spmm, spmv_csr,
 };
 use std::hint::black_box;
 use std::time::Duration;
@@ -12,15 +12,19 @@ const CONFIGS: &[(usize, f64)] = &[
     (1_000, 0.01),   // 1000×1000, 1%
     (10_000, 0.001), // 10000×10000, 0.1%
 ];
-const TINY_DENSITY_CASES: &[(usize, f64)] = &[
-    (1_000_000_000, 1e-19),
-    (2_000_000_000, 1e-20),
-];
+const TINY_DENSITY_CASES: &[(usize, f64)] = &[(1_000_000_000, 1e-19), (2_000_000_000, 1e-20)];
 
 const SEED: u64 = 0xBEEF_CAFE;
 
 fn make_random_csr(n: usize, density: f64) -> CsrMatrix {
     random(Shape2D::new(n, n), density, SEED)
+        .expect("random coo")
+        .to_csr()
+        .expect("coo->csr")
+}
+
+fn make_random_rect_csr(rows: usize, cols: usize, density: f64, seed: u64) -> CsrMatrix {
+    random(Shape2D::new(rows, cols), density, seed)
         .expect("random coo")
         .to_csr()
         .expect("coo->csr")
@@ -202,6 +206,29 @@ fn bench_spmm(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_kron(c: &mut Criterion) {
+    let mut group = c.benchmark_group("sparse_kron");
+    group.sample_size(10);
+    group.measurement_time(Duration::from_secs(3));
+
+    let a = make_random_rect_csr(400, 400, 0.02, SEED);
+    let b = make_random_rect_csr(120, 120, 0.05, SEED ^ 0x5C1F);
+    let label = format!("400x400d2_120x120d5_nnz{}_{}", a.nnz(), b.nnz());
+
+    group.bench_with_input(
+        BenchmarkId::new(label, a.nnz() * b.nnz()),
+        &(a, b),
+        |bi, (a, b)| {
+            bi.iter(|| {
+                let product = kron(black_box(a), black_box(b)).expect("kron");
+                black_box(product.nnz());
+            });
+        },
+    );
+
+    group.finish();
+}
+
 fn make_spilu_banded_csc(n: usize, half_bandwidth: usize) -> CscMatrix {
     let entries_per_row = half_bandwidth.saturating_mul(2).saturating_add(1);
     let mut data = Vec::with_capacity(n.saturating_mul(entries_per_row));
@@ -281,6 +308,7 @@ criterion_group!(
     bench_eye,
     bench_diags,
     bench_spmm,
+    bench_kron,
     bench_spilu,
     bench_random_tiny_density
 );
