@@ -4,6 +4,34 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-medfilt-parallel - KEEP (BOLD WIN, byte-identical): signal.medfilt flips 4.3x SLOWER → 2-3x FASTER via parallel windows
+
+Dug `signal.medfilt`. Measured a big gap: **4.3x SLOWER than scipy** at k=21/101
+(n=2¹⁸: k=21 38 ms vs 8.75, k=101 47 ms vs 11) — a constant-factor loss in both
+paths (per-window `select_nth` for k<64; the `SlidingRankWindow` ordered-multiset
+for k≥64) vs scipy's tight C quickselect. RADICAL LEVER: each output's median is
+an INDEPENDENT window selection, but fsci (like scipy's C) computed them SERIALLY.
+Parallelized across contiguous output chunks (each worker owns its window scratch;
+the sliding path rebuilds its chunk-start window then slides) — multicore flips the
+constant-factor loss to a WIN. Also precompute the sortable keys ONCE (was
+recomputed k× per output) and `copy_from_slice` the interior window.
+
+BYTE-IDENTICAL: the per-output result is a function of `keys`/the window MULTISET,
+not the thread or the slide history — `medfilt_sliding_matches_naive_loop`
+isomorphism test + 9/9 medfilt + 652/0 signal lib GREEN. MEASURED same-box (n=2¹⁸
+vs SciPy 1.17.1, best-of-6):
+- k=5: 5.86 → 2.93 ms = **2.14x FASTER** (was 1.07x)
+- k=21: 38.1 → 4.41 ms = **1.98x FASTER (~8.6x self)** (was 4.3x SLOWER)
+- k=51: → 4.33 ms = **2.29x FASTER**
+- k=101: 47 → 4.32 ms = **2.46x FASTER (~11x self)** (was 4.3x SLOWER)
+- k=301: → 4.18 ms = **2.99x FASTER**
+fsci medfilt is now ~flat (~4.3 ms) across k (parallel + sliding O(log k)) while
+scipy GROWS with k → the win widens with kernel size. Gated by n·log(k) work so
+tiny inputs stay serial. LEVER GENERALIZES: any embarrassingly-parallel
+per-window/per-output reduction that fsci computes serially while scipy's C is
+also serial — parallelism alone flips a constant-factor loss (cf. order_filter,
+percentile_filter, rank_filter; gaussian/uniform already parallel).
+
 ## 2026-06-26 - frankenscipy-greenfalcon-cholesky-matmul-syrk - REJECT (2.5x REGRESSION): blocked Cholesky routing the trailing SYRK through the PUBLIC matmul
 
 Took the filed lever (close cholesky's 8-15x gap via a GEMM-based trailing SYRK).
