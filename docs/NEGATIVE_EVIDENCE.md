@@ -6,6 +6,45 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-26 - cod-a (codex-cli) - KEEP: ndimage.watershed_ift SciPy-style bounded bucket queue flips the bounded uint8 case to parity/win
+
+- Agent: cod-a (codex-cli / gpt-5.2), `AGENT_NAME=cod-a`.
+- Land-or-dig audit: non-ancestor `.scratch/.worktrees` heads were checked before
+  digging. The wide-`pinv` gauntlet commit was already represented on `main`;
+  the old eigvalsh GEMM threshold was superseded by the lower threshold already
+  on `main`; the remaining bench worktrees were unmeasured pending batches. No
+  measured worktree win was landable.
+- Gap attacked: `ndimage.watershed_ift` 512x512 bounded integer-cost workload
+  with 50 markers. A prior bucket attempt preserved the existing heap tie order
+  and measured zero-gain. The new lever instead follows SciPy's bounded frontier
+  shape: costs are `max(previous_cost, abs(input[neighbor] - input[current]))`,
+  positive labels push to the front of a cost bucket, negative labels push to the
+  back, and finite integral inputs outside the bucket range fall back to the old
+  heap path.
+- MEASURED same-worker Rust A/B via
+  `AGENT_NAME=cod-a RCH_REQUIRE_REMOTE=1 RCH_BUILD_SLOTS=1
+  CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a rch exec --
+  cargo bench -j 1 -p fsci-ndimage --bench ndimage_bench --profile release --
+  watershed_ift --sample-size 10 --warm-up-time 1 --measurement-time 1
+  --noplot`:
+  - baseline heap on RCH `vmi1264463`: `81.448 ms` mean.
+  - bucket candidate on RCH `vmi1264463`: `27.435 ms` mean, Criterion
+    `change: [-70.434%, -63.544%, -55.169%]`.
+  - self ratio: `81.448 / 27.435 = 2.97x` faster.
+- Ratio vs SciPy 1.17.1 on the same deterministic fixture: local SciPy median
+  `16.5039869 ms`; local Rust candidate mean `15.651 ms`, so Rust is
+  `16.5039869 / 15.651 = 1.05x` faster (`0.948x` SciPy time). RCH worker
+  `hz2` also measured the candidate at `9.6770 ms`, but the RCH workers did not
+  have SciPy installed, so the admitted vs-SciPy ratio is the same-host local
+  measurement.
+- Correctness / conformance GREEN: targeted RCH
+  `cargo test -p fsci-ndimage watershed_ift --lib -- --nocapture` passed 3/3;
+  full RCH `cargo test -p fsci-ndimage --lib -- --nocapture` passed 247/0 with
+  5 ignored; RCH `cargo test -p fsci-conformance --test e2e_ndimage --
+  --nocapture` passed 9/9. The new SciPy golden locks the bucket tie behavior on
+  a 4x5 fixture, and non-integral or out-of-range f64 inputs retain the previous
+  heap implementation.
+
 ## 2026-06-26 - GreenFalcon (codex-cli) - REJECT: stats.GaussianKde scalar-hoist does not improve 1-D KDE and regresses the 5k row
 
 - Agent: GreenFalcon (codex-cli), `AGENT_NAME=GreenFalcon`. Land-or-dig audit:

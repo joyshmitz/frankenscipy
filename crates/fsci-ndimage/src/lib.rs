@@ -10019,6 +10019,148 @@ pub fn watershed_ift(
 
     let struct_offsets = compute_structure_offsets(&struct_arr.shape, &struct_arr.data);
 
+    // Precompute each structure offset's FLAT delta (Σ δ·stride) and reuse a coord
+    // buffer (same flat-offset lever as label/fill_holes), killing the per-pop
+    // `unravel` alloc and the per-neighbor `Vec` alloc + strides dot product.
+    let signed_strides: Vec<i64> = input.strides.iter().map(|&s| s as i64).collect();
+    let flat_offsets: Vec<i64> = struct_offsets
+        .iter()
+        .map(|off| {
+            off.iter()
+                .zip(&signed_strides)
+                .map(|(&delta, &stride)| delta * stride)
+                .sum()
+        })
+        .collect();
+    let signed_shape: Vec<i64> = input.shape.iter().map(|&s| s as i64).collect();
+
+    let output = if let Some(max_cost) = watershed_bucket_max(input, markers) {
+        watershed_ift_bucketed_output(
+            input,
+            markers,
+            &struct_offsets,
+            &flat_offsets,
+            &signed_shape,
+            max_cost,
+        )
+    } else {
+        watershed_ift_heap_output(
+            input,
+            markers,
+            &struct_offsets,
+            &flat_offsets,
+            &signed_shape,
+        )
+    };
+
+    Ok(NdArray::new(output, input.shape.clone()).unwrap())
+}
+
+const WATERSHED_BUCKET_MAX_COST: usize = u16::MAX as usize;
+
+fn watershed_bucket_max(input: &NdArray, markers: &NdArray) -> Option<usize> {
+    for &marker in &markers.data {
+        if marker != 0.0 && (!marker.is_finite() || marker.fract() != 0.0) {
+            return None;
+        }
+    }
+
+    let mut max_cost = 0usize;
+    for &value in &input.data {
+        if !value.is_finite()
+            || value < 0.0
+            || value > WATERSHED_BUCKET_MAX_COST as f64
+            || value.fract() != 0.0
+        {
+            return None;
+        }
+        max_cost = max_cost.max(value as usize);
+    }
+    Some(max_cost)
+}
+
+fn watershed_ift_bucketed_output(
+    input: &NdArray,
+    markers: &NdArray,
+    struct_offsets: &[Vec<i64>],
+    flat_offsets: &[i64],
+    signed_shape: &[i64],
+    max_cost: usize,
+) -> Vec<f64> {
+    let ndim = input.ndim();
+    let mut output = markers.data.clone();
+    let queued_cost = max_cost + 1;
+    let mut costs = vec![queued_cost; input.size()];
+    let mut done = vec![false; input.size()];
+    let mut buckets = (0..=max_cost)
+        .map(|_| std::collections::VecDeque::new())
+        .collect::<Vec<_>>();
+
+    for (idx, &marker) in markers.data.iter().enumerate() {
+        if marker != 0.0 {
+            costs[idx] = 0;
+            if marker < 0.0 {
+                buckets[0].push_back(idx);
+            } else {
+                buckets[0].push_front(idx);
+            }
+        }
+    }
+
+    let mut coord = vec![0usize; ndim];
+
+    for cost in 0..=max_cost {
+        while let Some(idx) = buckets[cost].pop_front() {
+            if done[idx] || costs[idx] != cost {
+                continue;
+            }
+            done[idx] = true;
+
+            unravel_into(idx, &input.strides, &mut coord);
+            for (oi, offset) in struct_offsets.iter().enumerate() {
+                let mut in_bounds = true;
+                for axis in 0..ndim {
+                    let neighbor_coord = coord[axis] as i64 + offset[axis];
+                    if neighbor_coord < 0 || neighbor_coord >= signed_shape[axis] {
+                        in_bounds = false;
+                        break;
+                    }
+                }
+                if !in_bounds {
+                    continue;
+                }
+
+                let neighbor_idx = (idx as i64 + flat_offsets[oi]) as usize;
+                if done[neighbor_idx] {
+                    continue;
+                }
+
+                let edge_cost = (input.data[neighbor_idx] - input.data[idx]).abs() as usize;
+                let new_cost = cost.max(edge_cost);
+                if new_cost < costs[neighbor_idx] {
+                    costs[neighbor_idx] = new_cost;
+                    output[neighbor_idx] = output[idx];
+                    if output[idx] < 0.0 {
+                        buckets[new_cost].push_back(neighbor_idx);
+                    } else {
+                        buckets[new_cost].push_front(neighbor_idx);
+                    }
+                }
+            }
+        }
+    }
+
+    output
+}
+
+fn watershed_ift_heap_output(
+    input: &NdArray,
+    markers: &NdArray,
+    struct_offsets: &[Vec<i64>],
+    flat_offsets: &[i64],
+    signed_shape: &[i64],
+) -> Vec<f64> {
+    let ndim = input.ndim();
     let mut output = markers.data.clone();
     let mut costs: Vec<f64> = vec![f64::INFINITY; input.size()];
     let mut queue: std::collections::BinaryHeap<std::cmp::Reverse<(i64, usize)>> =
@@ -10031,23 +10173,6 @@ pub fn watershed_ift(
         }
     }
 
-    // Precompute each structure offset's FLAT delta (Σ δ·stride) and reuse a coord
-    // buffer (same flat-offset lever as label/fill_holes), killing the per-pop
-    // `unravel` alloc and the per-neighbor `Vec` alloc + strides dot product.
-    // BYTE-IDENTICAL: the heap `(cost_scaled, idx)` evolution is unchanged —
-    // each neighbour's flat index `idx + Σδ·stride` equals the old
-    // `Σ(coord+δ)·stride`, and offsets are processed in the same order.
-    let signed_strides: Vec<i64> = input.strides.iter().map(|&s| s as i64).collect();
-    let flat_offsets: Vec<i64> = struct_offsets
-        .iter()
-        .map(|off| {
-            off.iter()
-                .zip(&signed_strides)
-                .map(|(&delta, &stride)| delta * stride)
-                .sum()
-        })
-        .collect();
-    let signed_shape: Vec<i64> = input.shape.iter().map(|&s| s as i64).collect();
     let mut coord = vec![0usize; ndim];
 
     while let Some(std::cmp::Reverse((cost_scaled, idx))) = queue.pop() {
@@ -10083,7 +10208,7 @@ pub fn watershed_ift(
         }
     }
 
-    Ok(NdArray::new(output, input.shape.clone()).unwrap())
+    output
 }
 
 fn compute_structure_offsets(struct_shape: &[usize], struct_data: &[f64]) -> Vec<Vec<i64>> {
@@ -15203,6 +15328,33 @@ mod tests {
         let bad_structure = NdArray::new(vec![1.0, 1.0, 1.0], vec![3]).unwrap();
 
         assert!(watershed_ift(&input, &markers, Some(&bad_structure)).is_err());
+    }
+
+    #[test]
+    fn watershed_ift_integer_bucket_matches_scipy_tie_order() {
+        #[rustfmt::skip]
+        let input = NdArray::new(vec![
+            1.0, 2.0, 3.0, 3.0, 3.0,
+            3.0, 0.0, 2.0, 0.0, 3.0,
+            3.0, 2.0, 3.0, 2.0, 0.0,
+            1.0, 2.0, 3.0, 3.0, 1.0,
+        ], vec![4, 5]).unwrap();
+        #[rustfmt::skip]
+        let markers = NdArray::new(vec![
+            3.0, 2.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0, 1.0,
+        ], vec![4, 5]).unwrap();
+
+        // scipy.ndimage.watershed_ift on the same uint8/int32 arrays.
+        assert_eq!(
+            watershed_ift(&input, &markers, None).unwrap().data,
+            vec![
+                3.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 1.0, 2.0,
+                2.0, 2.0, 2.0, 1.0,
+            ]
+        );
     }
 
     #[test]

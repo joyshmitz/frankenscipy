@@ -2,7 +2,7 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_ndimage::{
     BoundaryMode, NdArray, binary_closing, binary_dilation, binary_erosion, binary_opening,
     maximum_filter, maximum_filter1d, mean, median_filter, minimum_filter, minimum_filter1d,
-    rank_filter,
+    rank_filter, watershed_ift,
 };
 use std::hint::black_box;
 
@@ -163,6 +163,39 @@ fn bench_label_mean(c: &mut Criterion) {
     group.finish();
 }
 
+fn watershed_case(side: usize, marker_count: usize) -> (NdArray, NdArray) {
+    let n = side * side;
+    let costs: Vec<f64> = (0..n)
+        .map(|idx| {
+            let row = idx / side;
+            let col = idx % side;
+            ((row.wrapping_mul(17) + col.wrapping_mul(31) + idx.wrapping_mul(7)) & 255) as f64
+        })
+        .collect();
+    let mut markers = vec![0.0; n];
+    let mut state = 0x9E37_79B9usize;
+    for label in 1..=marker_count {
+        state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let mut idx = state % n;
+        while markers[idx] != 0.0 {
+            idx = (idx + 1) % n;
+        }
+        markers[idx] = label as f64;
+    }
+    (
+        NdArray::new(costs, vec![side, side]).expect("watershed input"),
+        NdArray::new(markers, vec![side, side]).expect("watershed markers"),
+    )
+}
+
+fn bench_watershed_ift(c: &mut Criterion) {
+    let (input, markers) = watershed_case(512, 50);
+    c.benchmark_group("watershed_ift")
+        .bench_function("uint8_512x512_m50", |b| {
+            b.iter(|| watershed_ift(black_box(&input), black_box(&markers), None).expect("ift"))
+        });
+}
+
 criterion_group!(
     benches,
     bench_minmax_filter,
@@ -171,6 +204,7 @@ criterion_group!(
     bench_rank_filter,
     bench_correlate_gaussian,
     bench_label_mean,
+    bench_watershed_ift,
     bench_zoom,
     bench_rotate
 );
