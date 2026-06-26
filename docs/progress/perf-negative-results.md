@@ -4,6 +4,33 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-label-unionfind-fgmask - KEEP (modest byte-identical) + REATTRIBUTES the residual gap (f64 bandwidth, NOT the algorithm)
+
+Attacked the documented `ndimage.label` 3.5x loss (scorecard attributed it to
+"BFS vs scipy's union-find"). Rewrote the BFS flood-fill as scipy's algorithm
+class — a two-pass union-find: pass 1 single raster scan unioning each foreground
+cell with its already-visited ("backward", negative flat-delta) foreground
+neighbours (no queue, only HALF the offsets, coord advanced incrementally with
+O(1) carry instead of per-cell `unravel` division); pass 2 consecutive relabel.
+Union by MIN flat index ⇒ each component rooted at its lowest-flat cell ⇒
+relabel counts up in first-raster-cell order = the BFS/scipy numbering.
+BYTE-IDENTICAL: 13/13 label tests incl. `label_matches_scipy_reference_values`
++ diagonal-connectivity + 247/0 ndimage lib GREEN; num_features matches scipy
+(22827 on the 512² p=0.45 fixture).
+
+KEY FINDING — the union-find swap ALONE was LATERAL (6.33 → 6.05 ms, within
+noise): the BFS-vs-union-find was NOT the bottleneck, correcting the scorecard.
+The real lever is **memory bandwidth**: the loops re-read the 8-byte/cell f64
+`input.data` ~4× across passes/neighbours, while scipy works on int8/int32.
+Compacting the input into a 1-byte/cell `fg: Vec<u8>` mask ONCE (L2-resident)
++ a `u32` (not usize) parent array gave **6.05 → 4.96 ms = 1.22x self** (net
+~1.28x over the recorded BFS 6.33 ms); MEASURED 4.96 ms vs scipy 1.85 ms = **3.5x
+→ 2.68x slower** (512² best-of-8, same-box SciPy 1.17.1). The residual 2.68x is
+the f64 NdArray REPRESENTATION wall — the labels OUTPUT must be a 2 MB f64 array
+(scipy's int32 is 4×/2× smaller) and the input is f64 — NOT something the
+algorithm can fix. RETRY ONLY if NdArray gains a native integer store; do NOT
+re-chase the labeling algorithm (union-find already matches scipy's class).
+
 ## 2026-06-26 - frankenscipy-greenfalcon-cdist-cosine-smalld-soa - KEEP (BOLD WIN, byte-identical): spatial.cdist Cosine small-d SoA SIMD
 
 Last metric in the cdist small-d sweep. Cosine had a tuned `dim==4` SoA path and

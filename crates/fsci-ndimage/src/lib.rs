@@ -5663,66 +5663,118 @@ pub fn label_with_structure(
         .filter(|offset| offset.iter().any(|&delta| delta != 0))
         .collect::<Vec<_>>();
 
-    let mut labels = NdArray::zeros(input.shape.clone());
-    let mut current_label = 0usize;
     let ndim = input.ndim();
-    let mut queue = std::collections::VecDeque::new();
+    let n = input.size();
 
-    // Precompute, ONCE, each structure offset's FLAT delta (Σ offset[axis]·stride[axis])
-    // plus the per-axis deltas for the boundary test. The BFS then reaches a
-    // neighbor with `current_flat + flat_offset` — no per-neighbor `Vec` alloc, no
-    // `unravel`, no strides dot product. (The old inner loop allocated a `Vec` and
-    // recomputed the dot product for EVERY neighbor — ~460k allocs on a 512²
-    // image, the dominant cost.) BYTE-IDENTICAL: every cell in a component still
-    // receives `current_label`, the seed scan order is unchanged, and
-    // `current_flat + Σδ·stride` equals the old `Σ(coord+δ)·stride`, so the
-    // labelling is identical regardless of neighbour visit order.
+    // Two-pass union-find (scipy's algorithm class), replacing the BFS flood
+    // fill. Pass 1 is a SINGLE raster scan that, for each foreground cell, unions
+    // it with its already-visited ("backward", i.e. negative flat-delta) foreground
+    // neighbours — no queue, no per-cell `unravel` (the coord is advanced
+    // incrementally with O(1) amortized carry, not recomputed by division), and
+    // only HALF the structure offsets are tested. Pass 2 assigns consecutive
+    // labels in raster order. BYTE-IDENTICAL to the BFS: union roots are the
+    // lowest-flat cell of each component, so components are numbered in order of
+    // their first raster cell — exactly the BFS seed-scan order (and scipy's).
     let signed_strides: Vec<i64> = input.strides.iter().map(|&s| s as i64).collect();
-    let flat_offsets: Vec<i64> = offsets
+    let signed_shape: Vec<i64> = input.shape.iter().map(|&s| s as i64).collect();
+    // Backward offsets only: those reaching an earlier (already-processed) flat
+    // index. Each carries its per-axis deltas (for the bounds test) and flat delta.
+    let backward: Vec<(Vec<i64>, i64)> = offsets
         .iter()
-        .map(|off| {
-            off.iter()
+        .filter_map(|off| {
+            let flat_delta: i64 = off
+                .iter()
                 .zip(&signed_strides)
                 .map(|(&delta, &stride)| delta * stride)
-                .sum()
+                .sum();
+            (flat_delta < 0).then(|| (off.clone(), flat_delta))
         })
         .collect();
-    let signed_shape: Vec<i64> = input.shape.iter().map(|&s| s as i64).collect();
+
+    // Compact the f64 input into a 1-byte/cell foreground mask ONCE. The
+    // union-find then re-reads this 256 KiB-class (L2-resident) mask on every
+    // neighbour test and both passes, instead of streaming the 8×-larger f64
+    // `input.data` ~4 times — the dominant cost is memory bandwidth (scipy works
+    // on int8/int32), so this is the real lever, not the algorithm.
+    let fg: Vec<u8> = input.data.iter().map(|&v| u8::from(v != 0.0)).collect();
+
+    let mut parent = vec![0u32; n];
     let mut coord = vec![0usize; ndim];
-
-    for flat in 0..input.size() {
-        if input.data[flat] == 0.0 || labels.data[flat] != 0.0 {
-            continue;
-        }
-
-        current_label += 1;
-        labels.data[flat] = current_label as f64;
-        queue.push_back(flat);
-
-        while let Some(current_flat) = queue.pop_front() {
-            unravel_into(current_flat, &input.strides, &mut coord);
-            for (oi, offset) in offsets.iter().enumerate() {
+    for flat in 0..n {
+        if fg[flat] != 0 {
+            parent[flat] = flat as u32; // make-set
+            for (off, flat_delta) in &backward {
                 let mut in_bounds = true;
                 for axis in 0..ndim {
-                    let neighbor_coord = coord[axis] as i64 + offset[axis];
-                    if neighbor_coord < 0 || neighbor_coord >= signed_shape[axis] {
+                    let nc = coord[axis] as i64 + off[axis];
+                    if nc < 0 || nc >= signed_shape[axis] {
                         in_bounds = false;
                         break;
                     }
                 }
-                if !in_bounds {
-                    continue;
-                }
-                let neighbor_flat = (current_flat as i64 + flat_offsets[oi]) as usize;
-                if input.data[neighbor_flat] != 0.0 && labels.data[neighbor_flat] == 0.0 {
-                    labels.data[neighbor_flat] = current_label as f64;
-                    queue.push_back(neighbor_flat);
+                if in_bounds {
+                    let nf = (flat as i64 + flat_delta) as usize;
+                    if fg[nf] != 0 {
+                        label_union(&mut parent, flat as u32, nf as u32);
+                    }
                 }
             }
         }
+        // Advance the N-D coordinate one raster step (O(1) amortized).
+        let mut axis = ndim;
+        while axis > 0 {
+            axis -= 1;
+            coord[axis] += 1;
+            if coord[axis] < input.shape[axis] {
+                break;
+            }
+            coord[axis] = 0;
+        }
     }
 
-    Ok((labels, current_label))
+    // Pass 2: consecutive relabel. Each component's root is its lowest-flat cell,
+    // reached first in this raster scan, so labels count up in first-cell order.
+    let mut labels = NdArray::zeros(input.shape.clone());
+    let mut comp_label = vec![0u32; n];
+    let mut current_label = 0u32;
+    for flat in 0..n {
+        if fg[flat] == 0 {
+            continue;
+        }
+        let root = label_find(&mut parent, flat as u32) as usize;
+        if root == flat {
+            current_label += 1;
+            comp_label[flat] = current_label;
+        }
+        labels.data[flat] = comp_label[root] as f64;
+    }
+
+    Ok((labels, current_label as usize))
+}
+
+/// Union-find `find` with path halving; the root is the lowest flat index in the
+/// set (see `label_union`), so it identifies a component by its first raster cell.
+fn label_find(parent: &mut [u32], mut x: u32) -> u32 {
+    while parent[x as usize] != x {
+        parent[x as usize] = parent[parent[x as usize] as usize];
+        x = parent[x as usize];
+    }
+    x
+}
+
+/// Union by MIN flat index: the smaller index becomes the root. Keeps every
+/// component rooted at its lowest-flat (first-in-raster) cell, which makes the
+/// consecutive relabel match the BFS/scipy first-appearance numbering.
+fn label_union(parent: &mut [u32], a: u32, b: u32) {
+    let ra = label_find(parent, a);
+    let rb = label_find(parent, b);
+    if ra != rb {
+        if ra < rb {
+            parent[rb as usize] = ra;
+        } else {
+            parent[ra as usize] = rb;
+        }
+    }
 }
 
 fn measurement_label_groups(
