@@ -4,6 +4,23 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-findobjects-unravel-into - KEEP (byte-identical): ndimage.find_objects unravels each labeled cell into a REUSED buffer (was a fresh Vec/cell); 1.43x self, flips a 1.42x scipy loss to 1.01x FASTER (parity)
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. Same alloc-kill vein.
+  MEASURED (same-box, 512² half-foreground → ~17.5k labels; fsci local isolated
+  target vs SciPy 1.17.1): `find_objects` fsci 5.96 ms vs scipy 4.20 ms = 1.42x
+  slower; `center_of_mass` fsci 5.65 ms vs scipy 14.69 ms = already **2.6x FASTER**
+  (NOT a gap — left alone).
+- FIX (crates/fsci-ndimage/src/lib.rs `find_objects`): the bbox scan called
+  `labels.unravel(flat)` per labeled pixel (~131k `Vec` allocs); replaced with
+  `unravel_into` into a reused `coord` buffer. BYTE-IDENTICAL (same coordinate).
+- MEASURED: 5.96 ms → **4.16 ms = 1.43x self**; vs scipy 4.20 ms: 1.42x slower →
+  **1.01x FASTER (parity)**. Conformance GREEN: `cargo test -p fsci-ndimage
+  find_objects` = 1/0 (`find_objects_bounding_boxes`); verified locally (RCH
+  E0514 churn).
+- ndimage alloc-kill vein this run: label 2.25x, binary_fill_holes 3.24x→parity,
+  watershed_ift 1.52x, find_objects 1.43x→parity — all byte-identical.
+
 ## 2026-06-26 - frankenscipy-greenfalcon-watershed-flatoffset - KEEP (byte-identical) + retry surfaced: ndimage.watershed_ift flat-offset neighbor loop; 1.52x self, flips 6.37x scipy loss to 4.2x; residual = the O(log n) heap vs scipy's O(1) bucket queue (uint8 costs)
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. Third flavor-9

@@ -6462,14 +6462,19 @@ pub fn find_objects(labels: &NdArray, num_labels: usize) -> Vec<Option<(Vec<usiz
     let mut maxs: Vec<Vec<usize>> = vec![vec![0; ndim]; num_labels + 1];
     let mut found = vec![false; num_labels + 1];
 
+    // Unravel each labeled cell into a REUSED buffer instead of allocating a
+    // fresh `Vec` per cell (the old `labels.unravel(flat)` allocated once per
+    // labeled pixel — ~131k allocs on a half-foreground 512² label image).
+    // Byte-identical: `unravel_into` produces the same coordinate.
+    let mut coord = vec![0usize; ndim];
     for flat in 0..labels.size() {
         let lbl = labels.data[flat] as usize;
         if lbl > 0 && lbl <= num_labels {
             found[lbl] = true;
-            let idx = labels.unravel(flat);
+            unravel_into(flat, &labels.strides, &mut coord);
             for d in 0..ndim {
-                mins[lbl][d] = mins[lbl][d].min(idx[d]);
-                maxs[lbl][d] = maxs[lbl][d].max(idx[d]);
+                mins[lbl][d] = mins[lbl][d].min(coord[d]);
+                maxs[lbl][d] = maxs[lbl][d].max(coord[d]);
             }
         }
     }
