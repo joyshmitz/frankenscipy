@@ -4,6 +4,56 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-25 - frankenscipy-greenfalcon-wiener-prefixsum - KEEP (BOLD WIN, ~1e-12 tolerance): signal.wiener local mean/var O(n*mysize) fold -> O(n) prefix sums; 1.9-24x self-speedup, flips a 2.42x scipy loss to 5.6-11.5x FASTER
+
+- Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. DIG. Continued the
+  fsci-signal sweep (sosfilt/sosfiltfilt/upfirdn already shipped this session).
+
+### The waste
+
+`wiener` denoising needs a local mean and local variance over a sliding box
+window. fsci did the NAIVE fold:
+```
+for i in 0..n { for offset in 0..mysize { sum += pad(data, i+offset-half); sumsq += ...² } }
+```
+= O(n*mysize). scipy's `wiener` uses `correlate(im, ones(mysize), 'same')` /
+prod(size) for the mean (and on im² for the variance); scipy's correlate routes
+a box kernel through an FFT (O(n log n)) for large windows. BOTH are suboptimal
+— a sliding box reduction is O(n) via PREFIX SUMS, independent of window size.
+
+### Fix (tolerance, not byte-identical)
+
+Build cum[k]=Σ_{j<k}data[j] and cumsq[k]=Σ_{j<k}data[j]² once (O(n)); each output
+window [i-half, i+half] clamped to [0,n) (out-of-range counted 0 — the SAME
+window the old zero-padded fold used) is a single difference cum[hi]-cum[lo].
+Reassociates the sum (prefix subtraction), so NOT byte-identical — but the shared
+low prefix cancels exactly, keeping window sums accurate. maxdiff vs the naive
+fold at n=262144: 6.56e-12 (mysize=11), 2.99e-12 (51), 1.24e-12 (201). New test
+`wiener_prefix_sum_matches_naive_window_fold` locks <1e-9 across mysize
+{3,11,51,201} on a non-zero-mean signal.
+
+### Measurement (same-box: fsci local isolated target vs SciPy 1.17.1, n=2^18)
+
+| mysize | naive (old) | prefix (new) | self-speedup | maxdiff | scipy     | new vs scipy   |
+|--------|-------------|--------------|--------------|---------|-----------|----------------|
+| 11     | 2.7291 ms   | 1.4285 ms    | 1.91x        | 6.6e-12 | 8.0542 ms | 5.6x FASTER    |
+| 51     | 9.6250 ms   | 1.4446 ms    | 6.66x        | 3.0e-12 | 12.714 ms | 8.8x FASTER    |
+| 201    | 39.944 ms   | 1.6534 ms    | 24.16x       | 1.2e-12 | 18.941 ms | 11.5x FASTER   |
+
+The prefix path is FLAT (~1.4-1.65 ms) — O(n) independent of window. fsci was
+2.42x SLOWER than scipy at mysize=201 (naive 45.84 ms in the first sweep); now
+11.5x FASTER. The win grows with window size.
+
+### Conformance + lever
+
+`cargo test --release -p fsci-signal wiener` = 6 passed / 0 failed (new tolerance
+test + impulse/constant/noise-fallback property tests). RCH hit E0514 toolchain
+churn this turn; verified locally with a fresh isolated CARGO_TARGET_DIR
+(self-consistent rustc — the recovery recipe). GENERAL LEVER: any sliding
+fixed-window reduction (box mean/var/sum, moving average, local energy) →
+O(n) prefix sums; ~1e-12 reassociation is within tolerance. Candidates to grep:
+other local-statistic filters that fold a window per output element. Retry: none.
+
 ## 2026-06-25 - frankenscipy-greenfalcon-upfirdn-polyphase - KEEP (byte-identical, GATED): signal.upfirdn polyphase fast path for down>=4 computes only kept outputs; 1.19-3.33x self-speedup narrows scipy gap from 1.56-3.97x to 1.32-1.71x slower
 
 - Agent: GreenFalcon (claude-code), `AGENT_NAME=GreenFalcon`. DIG (no unlanded

@@ -6,6 +6,35 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - GreenFalcon (claude-code) - KEEP (BOLD WIN, ~1e-12 tolerance): signal.wiener local mean/var O(n*mysize) per-window fold -> O(n) prefix sums; 1.9-24x self-speedup, flips a 2.42x SciPy loss to 5.6-11.5x FASTER
+
+- Agent: GreenFalcon (claude-code). DIG. fsci's `wiener` computed the local mean
+  and local variance with a NAIVE per-element window fold: `for i in 0..n { for
+  offset in 0..mysize {...} }` = O(n*mysize). scipy's `wiener` uses
+  `correlate(im, ones(mysize), 'same')` which routes the box correlate through an
+  FFT (O(n log n)) for large windows. Both are suboptimal — a sliding box
+  mean/variance is O(n) via PREFIX SUMS regardless of window size.
+- FIX (crates/fsci-signal/src/lib.rs `wiener`): build cum[k]=Σ_{j<k}data[j] and
+  cumsq[k]=Σ_{j<k}data[j]² once (O(n)); each output window [i-half,i+half] clamped
+  to [0,n) (out-of-range=0, identical window to the old zero-padded fold) is a
+  single prefix-sum difference cum[hi]-cum[lo]. NOT byte-identical (prefix
+  subtraction reassociates the sum) but the shared low prefix cancels, so window
+  sums stay accurate: maxdiff vs the naive fold **1.2e-12 to 6.6e-12** at
+  n=262144 (within tolerance; new test `wiener_prefix_sum_matches_naive_window_fold`
+  locks <1e-9 across mysize 3/11/51/201).
+- MEASURED same-box (n=2^18; fsci local isolated target vs SciPy 1.17.1):
+  - SELF-speedup (naive→prefix): mysize=11 **1.91x**, 51 **6.66x**, 201 **24.16x**
+    (prefix is flat ~1.4-1.65 ms; naive grows with mysize). maxdiff ~1e-12.
+  - vs `scipy.signal.wiener`: mysize=11 1.43 vs 8.05 ms = **5.6x FASTER**; 51 1.44
+    vs 12.71 ms = **8.8x FASTER**; 201 1.65 vs 18.94 ms = **11.5x FASTER**. fsci
+    was 2.42x SLOWER at mysize=201 (naive 45.84 ms); now 11.5x faster.
+- Conformance GREEN: `cargo test -p fsci-signal wiener` 6/0 (incl. the new
+  tolerance test + the impulse/constant/fallback property tests). RCH had E0514
+  toolchain churn this turn; verified locally with a fresh isolated
+  CARGO_TARGET_DIR (self-consistent rustc). Lever: any sliding box-window
+  reduction (mean/var/sum over a fixed window) → O(n) prefix sums. Detail in
+  canonical ledger.
+
 ## 2026-06-25 - GreenFalcon (claude-code) - KEEP (byte-identical): signal.upfirdn polyphase fast path for down>=4 (compute only kept outputs, not full-then-discard); 1.19-3.33x self-speedup narrows scipy gap from 1.56-3.97x to 1.32-1.71x
 
 - Agent: GreenFalcon (claude-code). DIG. fsci's `upfirdn` (the polyphase FIR
