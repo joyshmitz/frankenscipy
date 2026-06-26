@@ -4,6 +4,29 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-solve-toeplitz-levinson-vectorize - KEEP (BOLD WIN, byte-identical 1.7-2.24x self): linalg.solve_toeplitz Levinson inner loops
+
+Dug `linalg.solve_toeplitz` (Levinson-Durbin O(n²)). Measured: **2.7-3.1x SLOWER
+than scipy** (n=4000: 58.8 ms vs 19.0 ms), gap growing with n — a constant-factor
+loss in the O(n²) inner loops despite both using Levinson. Two causes: (1) every
+inner-loop band access went through a `diag(k)` CLOSURE with a `k>=0 ? c[k] :
+row[-k]` branch, even though `k`'s sign is CONSTANT in each loop — the branch was
+pure overhead AND blocked auto-vectorization of the ε_f/ε_b/ε_x dot products;
+(2) the predictor update allocated TWO fresh `Vec`s per step (~2n allocations).
+Fix: index the band directly (`c[m-j]` since m-j≥1, `row[j+1]` since -j-1<0) and
+DOUBLE-BUFFER the predictor update (`std::mem::swap` two pre-sized buffers).
+BYTE-IDENTICAL: `diag(m-j)==c[m-j]`, `diag(-j-1)==row[j+1]`, recurrences and
+summation orders unchanged — `solve_toeplitz_match_scipy` +
+`solve_toeplitz_matches_scipy_doc_example` + proptest + 493/0 linalg lib GREEN.
+
+MEASURED same-box (vs SciPy 1.17.1, best-of-4):
+- n=1000: 4.53 → 2.02 ms = **2.24x self** (was 2.74x → 1.23x slower)
+- n=2000: 13.87 → 8.14 ms = **1.70x self** (was 2.68x → 1.57x slower)
+- n=4000: 58.84 → 32.31 ms = **1.82x self** (was 3.09x → 1.70x slower)
+Residual 1.2-1.7x: the ε_f/ε_x dot products read `c[m-j]` (REVERSED band access)
+which vectorizes worse than the forward ε_b dot, + scipy's C Levinson. RETRY: a
+reversed-c scratch per step (O(m) copy) to make ε_f a forward dot — uncertain ROI.
+
 ## 2026-06-26 - frankenscipy-greenfalcon-convolve-direct-axpy - KEEP (byte-tolerant ~1.5x self): signal.convolve/correlate direct path vectorized
 
 Dug `signal.convolve` (and `correlate`, which delegates to it). Measured n=2¹⁸:

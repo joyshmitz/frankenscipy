@@ -7871,12 +7871,22 @@ pub fn solve_toeplitz(c: &[f64], r: Option<&[f64]>, b: &[f64]) -> Result<Vec<f64
         return Err(LinalgError::SingularMatrix);
     }
 
-    let mut f = Vec::with_capacity(n); // forward predictor
-    let mut bk = Vec::with_capacity(n); // backward predictor
-    let mut x = Vec::with_capacity(n);
-    f.push(1.0 / t0);
-    bk.push(1.0 / t0);
-    x.push(b[0] / t0);
+    let _ = diag; // superseded by direct band indexing below (sign is constant in each loop)
+    // Pre-size the predictor/solution buffers and DOUBLE-BUFFER the predictor
+    // update so the O(n²) recursion does no per-step allocation, and index the
+    // band directly (`c[m-j]`/`row[j+1]`) instead of through the `diag` closure —
+    // in each inner loop the argument's sign is constant, so the closure's branch
+    // was pure overhead that also blocked auto-vectorization of these dot products.
+    // BYTE-IDENTICAL: `diag(m-j)==c[m-j]` (m-j≥1) and `diag(-j-1)==row[j+1]`, and
+    // the f/bk/x recurrences and summation orders are unchanged.
+    let mut f = vec![0.0f64; n]; // forward predictor
+    let mut bk = vec![0.0f64; n]; // backward predictor
+    let mut x = vec![0.0f64; n];
+    let mut f_tmp = vec![0.0f64; n];
+    let mut b_tmp = vec![0.0f64; n];
+    f[0] = 1.0 / t0;
+    bk[0] = 1.0 / t0;
+    x[0] = b[0] / t0;
 
     for (m, &bm) in b.iter().enumerate().take(n).skip(1) {
         // Forward error ε_f = Σ_j T[m][j] f_j and backward error
@@ -7884,8 +7894,8 @@ pub fn solve_toeplitz(c: &[f64], r: Option<&[f64]>, b: &[f64]) -> Result<Vec<f64
         let mut ef = 0.0;
         let mut eb = 0.0;
         for j in 0..m {
-            ef += diag(m as isize - j as isize) * f[j];
-            eb += diag(-(j as isize) - 1) * bk[j];
+            ef += c[m - j] * f[j];
+            eb += row[j + 1] * bk[j];
         }
         let denom = 1.0 - ef * eb;
         if denom == 0.0 {
@@ -7893,29 +7903,27 @@ pub fn solve_toeplitz(c: &[f64], r: Option<&[f64]>, b: &[f64]) -> Result<Vec<f64
         }
 
         // F = ([f;0] - ε_f[0;bk]) / denom ; B = ([0;bk] - ε_b[f;0]) / denom.
-        let mut f_new = Vec::with_capacity(m + 1);
-        let mut b_new = Vec::with_capacity(m + 1);
         for i in 0..=m {
             let fi = if i < m { f[i] } else { 0.0 };
             let bi = if i == 0 { 0.0 } else { bk[i - 1] };
-            f_new.push((fi - ef * bi) / denom);
-            b_new.push((bi - eb * fi) / denom);
+            f_tmp[i] = (fi - ef * bi) / denom;
+            b_tmp[i] = (bi - eb * fi) / denom;
         }
-        f = f_new;
-        bk = b_new;
+        std::mem::swap(&mut f, &mut f_tmp);
+        std::mem::swap(&mut bk, &mut b_tmp);
 
         // θ = b[m] - Σ_j T[m][j] x_j ; x ← [x;0] + θ·bk (with the new bk).
         let mut ex = 0.0;
-        for (j, &xj) in x.iter().enumerate().take(m) {
-            ex += diag(m as isize - j as isize) * xj;
+        for j in 0..m {
+            ex += c[m - j] * x[j];
         }
         let theta = bm - ex;
-        x.push(0.0);
         for i in 0..=m {
             x[i] += theta * bk[i];
         }
     }
 
+    x.truncate(n);
     Ok(x)
 }
 
