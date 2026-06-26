@@ -6,6 +6,37 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-25 - cod-a - REJECT: SphericalVoronoi `u32` visibility stamps regress the decisive large-n row
+
+- Agent: cod-a (codex-cli / gpt-5.2), `AGENT_NAME=cod-a`.
+- Land-or-dig audit: no measured `.scratch` / `.worktrees` bench win was
+  landable on `main`; the only non-ancestor bench worktree remained the old
+  eigvalsh `e3b744f4` threshold experiment, superseded by current main's lower
+  GEMM flat-workspace threshold.
+- Gap attacked: `SphericalVoronoi` large-n tail versus SciPy after the sorted
+  horizon-edge keep. RCH local fallback first hit the known stale target-pool
+  E0514 rustc-skew, so proof was rerun fail-closed remote with
+  `RCH_REQUIRE_REMOTE=1`, per-crate `cargo run -j 1 --profile release -p
+  fsci-spatial --bin perf_sphvor_ab`, and
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a`.
+- Lever tested and reverted: shrink `visible_marks` / `visible_stamp` from
+  `usize` to `u32` in `convex_hull_3d_facets`, with an explicit wrap guard.
+  Intent was lower memory traffic in the survivor-compaction mark array without
+  changing face order, horizon order, tolerance, or arithmetic.
+- Measured same-worker on `vmi1264463` against the same deterministic fixtures:
+  `u32` candidate vs restored main was faster on small rows but lost the
+  decisive large row:
+  - n=100: 503.677 us candidate vs 525.183 us main (1.04x faster)
+  - n=200: 1.175 ms candidate vs 1.237 ms main (1.05x faster)
+  - n=500: 4.050 ms candidate vs 4.306 ms main (1.06x faster)
+  - n=1000: 12.234 ms candidate vs 12.494 ms main (1.02x faster)
+  - n=2000: 42.361 ms candidate vs 40.526 ms main (**0.96x**, 4.5% slower)
+- Ratio vs SciPy oracle on the same n=2000 fixture: SciPy `SphericalVoronoi`
+  best-of-3 = 7.623 ms; restored main = 5.32x slower; candidate = 5.56x slower.
+  Reject: the largest row is the active gap and the candidate worsens it.
+- Source restored completely after measurement; `git diff --
+  crates/fsci-spatial/src/lib.rs` is empty. No code kept.
+
 ## 2026-06-25 - GreenFalcon (claude-code) - KEEP (BOLD WIN, byte-identical): sparse.kron loop reorder emits sorted triplets → skips the O(nnz log nnz) sort; 3.65x self-speedup flips a 4.09x SciPy loss to ~parity
 
 - Agent: GreenFalcon (claude-code). DIG into fsci-sparse. `kron` (Kronecker
