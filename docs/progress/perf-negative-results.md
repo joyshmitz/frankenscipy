@@ -4,6 +4,29 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-lfilter-df2t-branchless - KEEP (byte-identical 1.28x self): signal.lfilter inner-loop branch removal
+
+Dug a DIFFERENT primitive: `signal.lfilter` (Direct-Form-II-transposed IIR, one
+of the most-used signal functions). Measured (n=2²⁰, order-8): fsci 9.55 ms vs
+scipy 6.18 ms = **1.54x SLOWER**. fsci already used DF2T like scipy, but the inner
+tap-update loop carried a per-iteration `if j+1 < nfilt-1 { d[j+1] } else { 0.0 }`
+branch (the last tap has no `+next_d`), which defeated unroll/vectorization of the
+tap update; plus `y.push` did a capacity check every sample. Fix: HOIST the final
+tap out of the loop (`d[m-1] = bt[m-1]·xi - at[m-1]·yi`, no branch) and pre-size
+`y` + index it; operate on `&mut d[..m]` slices so tap reads are bounds-check-free.
+BYTE-IDENTICAL (`+ 0.0` on the last tap is a no-op for finite f64; same DF2T
+arithmetic/order) — `lfilter_optimized_loop_matches_naive_logic` +
+`lfilter_*_match_scipy*` + 652/0 signal lib GREEN.
+
+MEASURED same-box (n=2²⁰ order-8 vs SciPy 1.17.1, best-of-6): **9.55 → 7.45 ms =
+1.28x self-speedup; closes 1.54x → 1.20x slower**. Residual 1.20x is the inherent
+sequential recurrence critical path (d[0]→yi→next d[0], latency-bound) + the state
+living in memory (scipy's C unrolls it into registers). RETRY: a const-order
+fast-path with the state in a stack `[f64; N]` (register-kept, no alias) could
+reach parity, but the slice abstraction loses it — needs real unrolling.
+SURVEYED same batch: `signal.resample` 6.93 ms vs scipy 4.65 ms = 1.49x slower
+(FFT-based, the rfft length wall — separate, harder).
+
 ## 2026-06-26 - frankenscipy-greenfalcon-label-unionfind-fgmask - KEEP (modest byte-identical) + REATTRIBUTES the residual gap (f64 bandwidth, NOT the algorithm)
 
 Attacked the documented `ndimage.label` 3.5x loss (scorecard attributed it to

@@ -7529,40 +7529,41 @@ pub fn lfilter_with_state(
     a_norm.resize(nfilt, 0.0);
     let b0 = b_norm[0];
 
-    // Direct Form II transposed
-    let mut y = Vec::with_capacity(x.len());
+    // Direct Form II transposed. The state has `m = nfilt-1` taps; work on a
+    // slice of exactly that length so every `d[..]` access is bounds-check-free,
+    // and HOIST the final tap (`next_d == 0`) out of the inner loop — the old
+    // per-iteration `if j+1 < nfilt-1` branch defeated unrolling/vectorization of
+    // the tap update. Pre-size `y` and index it (no per-sample push capacity
+    // check). Byte-identical: `+ 0.0` on the last tap is a no-op for finite f64.
+    let m = nfilt - 1;
     let mut d = if let Some(initial) = zi {
-        if initial.len() != nfilt - 1 {
+        if initial.len() != m {
             return Err(SignalError::InvalidArgument(format!(
                 "zi length ({}) must be nfilt-1 ({})",
                 initial.len(),
-                nfilt - 1
+                m
             )));
         }
         validate_real_values_finite(initial, "lfilter initial conditions must be finite")?;
-        let mut d_init = vec![0.0; nfilt];
-        d_init[..nfilt - 1].copy_from_slice(initial);
-        d_init
+        initial.to_vec()
     } else {
-        vec![0.0; nfilt]
+        vec![0.0; m]
     };
+    let d = &mut d[..m];
+    let bt = &b_norm[1..=m];
+    let at = &a_norm[1..=m];
 
-    for &xi in x {
+    let mut y = vec![0.0f64; x.len()];
+    for (yi_slot, &xi) in y.iter_mut().zip(x) {
         let yi = b0 * xi + d[0];
-        y.push(yi);
-
-        // Update delay line — b_norm/a_norm padded to nfilt, so j+1
-        // is always in range and the boundary `j+1 < nfilt-1` check
-        // collapses to a single tail-handling step after the loop.
-        for j in 0..nfilt - 1 {
-            let bj = b_norm[j + 1];
-            let aj = a_norm[j + 1];
-            let next_d = if j + 1 < nfilt - 1 { d[j + 1] } else { 0.0 };
-            d[j] = bj * xi - aj * yi + next_d;
+        *yi_slot = yi;
+        for j in 0..m - 1 {
+            d[j] = bt[j] * xi - at[j] * yi + d[j + 1];
         }
+        d[m - 1] = bt[m - 1] * xi - at[m - 1] * yi;
     }
 
-    let zf = d[..nfilt - 1].to_vec();
+    let zf = d.to_vec();
     Ok((y, zf))
 }
 
