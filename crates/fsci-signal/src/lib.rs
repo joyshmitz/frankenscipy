@@ -3801,22 +3801,50 @@ pub fn order_filter(x: &[f64], window_size: usize, rank: usize) -> Vec<f64> {
         return order_filter_sliding(x, window_size, rank);
     }
     let half = window_size / 2;
-    let mut result = Vec::with_capacity(x.len());
+    let n = x.len();
 
-    // Resolves [frankenscipy-6feia]: hoist the per-window Vec
-    // allocation to a single reusable buffer. Previously this
-    // allocated N Vecs for an N-sample input.
-    let mut window: Vec<f64> = Vec::with_capacity(window_size);
-    for i in 0..x.len() {
+    // Each output is an independent rank query over its (boundary-truncated)
+    // window. (a) select_nth_unstable_by(rank) replaces the full sort — only the
+    // rank-th element is needed, O(k) not O(k·log k), same value for ties; (b) the
+    // outputs are computed in parallel over contiguous chunks (each worker owns a
+    // reusable `window` buffer). Byte-identical: the per-output value depends only
+    // on `x`, not the thread.
+    let eval = |i: usize, window: &mut Vec<f64>| -> f64 {
         let start = i.saturating_sub(half);
-        let end = (i + half + 1).min(x.len());
+        let end = (i + half + 1).min(n);
         window.clear();
         window.extend_from_slice(&x[start..end]);
-        window.sort_unstable_by(|a, b| a.total_cmp(b));
         let idx = rank.min(window.len() - 1);
-        result.push(window[idx]);
-    }
+        let (_, &mut v, _) = window.select_nth_unstable_by(idx, |a, b| a.total_cmp(b));
+        v
+    };
 
+    let mut result = vec![0.0f64; n];
+    let work = (n as u64).saturating_mul(window_size as u64);
+    let threads = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(n);
+    if work < (1 << 16) || threads <= 1 || n < 4 {
+        let mut window: Vec<f64> = Vec::with_capacity(window_size);
+        for (i, slot) in result.iter_mut().enumerate() {
+            *slot = eval(i, &mut window);
+        }
+        return result;
+    }
+    let chunk = n.div_ceil(threads);
+    let eval = &eval;
+    std::thread::scope(|scope| {
+        for (t, out_chunk) in result.chunks_mut(chunk).enumerate() {
+            scope.spawn(move || {
+                let lo = t * chunk;
+                let mut window: Vec<f64> = Vec::with_capacity(window_size);
+                for (local, slot) in out_chunk.iter_mut().enumerate() {
+                    *slot = eval(lo + local, &mut window);
+                }
+            });
+        }
+    });
     result
 }
 
@@ -12838,23 +12866,50 @@ const ORDER_FILTER_SLIDING_THRESHOLD: usize = 32;
 fn order_filter_sliding(x: &[f64], window_size: usize, rank: usize) -> Vec<f64> {
     let n = x.len();
     let half = window_size / 2;
-    let mut window = SlidingRankWindow::new(rank);
-    let mut cur_start = 0usize;
-    let mut cur_end = 0usize;
-    let mut result = Vec::with_capacity(n);
-    for i in 0..n {
-        let start = i.saturating_sub(half);
-        let end = (i + half + 1).min(n);
-        while cur_start < start {
-            window.remove(x[cur_start]);
-            cur_start += 1;
+    // Each worker computes a contiguous output chunk: build the chunk-start window
+    // from scratch (O(k)) then slide. `SlidingRankWindow::value()` is a function of
+    // the window MULTISET, so this is byte-identical to one sequential slide.
+    let compute_chunk = |lo: usize, out: &mut [f64]| {
+        let mut window = SlidingRankWindow::new(rank);
+        let mut cur_start = lo.saturating_sub(half);
+        let mut cur_end = (lo + half + 1).min(n);
+        for &v in &x[cur_start..cur_end] {
+            window.insert(v);
         }
-        while cur_end < end {
-            window.insert(x[cur_end]);
-            cur_end += 1;
+        out[0] = window.value();
+        for (local, slot) in out.iter_mut().enumerate().skip(1) {
+            let i = lo + local;
+            let start = i.saturating_sub(half);
+            let end = (i + half + 1).min(n);
+            while cur_start < start {
+                window.remove(x[cur_start]);
+                cur_start += 1;
+            }
+            while cur_end < end {
+                window.insert(x[cur_end]);
+                cur_end += 1;
+            }
+            *slot = window.value();
         }
-        result.push(window.value());
+    };
+
+    let mut result = vec![0.0f64; n];
+    let threads = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(n);
+    let work = (n as u64).saturating_mul(64 - (window_size as u64).leading_zeros() as u64);
+    if n < 4 || threads <= 1 || work < (1 << 14) {
+        compute_chunk(0, &mut result);
+        return result;
     }
+    let chunk = n.div_ceil(threads);
+    let cc = &compute_chunk;
+    std::thread::scope(|scope| {
+        for (t, out_chunk) in result.chunks_mut(chunk).enumerate() {
+            scope.spawn(move || cc(t * chunk, out_chunk));
+        }
+    });
     result
 }
 

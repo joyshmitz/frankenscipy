@@ -4,6 +4,29 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-order-filter-parallel - KEEP (BOLD WIN, byte-identical): signal.order_filter flips 5.3-7.9x SLOWER → 2.1-2.4x FASTER
+
+Applied the medfilt parallel lever to the filed candidate `signal.order_filter`
+(the general rank filter). Measured: **5.3-7.9x SLOWER than scipy** (n=2¹⁸: k=15
+36.8 ms vs 6.9, k=21 58.7 ms vs 7.4, k=101 49 ms vs 9.3). Two byte-identical fixes:
+(1) the per-window path did a FULL `sort_unstable_by` (O(k·log k)) then indexed —
+replaced with `select_nth_unstable_by(rank)` (O(k); the rank-th element by total_cmp
+is the same value, ties included); (2) parallelize BOTH paths across contiguous
+output chunks (each worker owns its window buffer; the sliding path rebuilds its
+chunk-start window then slides — `SlidingRankWindow::value()` is a function of the
+window MULTISET).
+
+MEASURED same-box (n=2¹⁸ vs SciPy 1.17.1, best-of-5):
+- k=15: 36.8 → 3.25 ms = **11.3x self; 2.13x FASTER** (was 5.33x SLOWER)
+- k=21: 58.7 → 3.36 ms = **17.5x self; 2.21x FASTER** (was 7.92x SLOWER)
+- k=101: 49 → 3.94 ms = **12.4x self; 2.36x FASTER** (was 5.28x SLOWER)
+4/4 order_filter + 652/0 signal lib GREEN (byte-identical: per-output value depends
+only on `x`, not the thread/slide history). SAME lever as medfilt; the
+parallelism-flips-a-serial-constant-loss pattern is paying out across the
+rank-filter family. REMAINING candidates: ndimage `rank_filter`/`percentile_filter`
+(2-D; the direct-compute path is serial — note the 2-D float median column-slide was
+a separate dead-end, but PARALLELISM is orthogonal and should flip it).
+
 ## 2026-06-26 - frankenscipy-greenfalcon-medfilt-parallel - KEEP (BOLD WIN, byte-identical): signal.medfilt flips 4.3x SLOWER → 2-3x FASTER via parallel windows
 
 Dug `signal.medfilt`. Measured a big gap: **4.3x SLOWER than scipy** at k=21/101
