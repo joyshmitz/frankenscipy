@@ -886,11 +886,20 @@ pub fn convolve(a: &[f64], b: &[f64], mode: ConvolveMode) -> Result<Vec<f64>, Si
     }
 
     let full_len = na + nb - 1;
-    // Compute full convolution
+    // Direct convolution as a vectorizable axpy. Convolution is commutative, so
+    // put the LONGER sequence on the outer loop: the inner loop is then
+    // `full[i..i+short_len] += outer[i]·short`, a contiguous fixed-stride axpy the
+    // compiler auto-vectorizes (the old `full[i+j] += a[i]·b[j]` scatter compiled
+    // to scalar address-compute + read-modify-write per op). The write window is
+    // `short_len` (cache-resident); choosing outer=longer keeps that window small.
+    // Reassociates the per-output sum (~1e-15) — within the 1e-10 tolerance the
+    // convolve tests assert against scipy.
     let mut full = vec![0.0; full_len];
-    for (i, &ai) in a.iter().enumerate() {
-        for (j, &bj) in b.iter().enumerate() {
-            full[i + j] += ai * bj;
+    let (outer, inner) = if na >= nb { (a, b) } else { (b, a) };
+    let inner_len = inner.len();
+    for (i, &oi) in outer.iter().enumerate() {
+        for (d, &iv) in full[i..i + inner_len].iter_mut().zip(inner.iter()) {
+            *d += oi * iv;
         }
     }
 

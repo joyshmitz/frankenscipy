@@ -4,6 +4,34 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-convolve-direct-axpy - KEEP (byte-tolerant ~1.5x self): signal.convolve/correlate direct path vectorized
+
+Dug `signal.convolve` (and `correlate`, which delegates to it). Measured n=2¹⁸:
+k=64 fsci 3.88 vs scipy 2.90 ms = 1.22x SLOWER; k=512 2.7x slower. The direct
+path was a scalar `for i { for j { full[i+j] += a[i]·b[j] } }` scatter — the
+`full[i+j]` indexing compiled to per-op address-compute + read-modify-write
+(26.5 ms / 134M ops = 5 ns/op, NOT vectorized). Rewrote as a vectorizable axpy:
+convolution is commutative, so put the LONGER sequence on the OUTER loop and the
+inner loop becomes `full[i..i+short]·+= outer[i]·short` — a contiguous
+fixed-stride axpy the compiler auto-vectorizes, with a cache-resident `short_len`
+write window. Reassociates the per-output sum (~1e-15), within the **1e-10
+tolerance** the convolve tests assert (NOT byte-identical — verified the tests are
+tolerance-based first).
+
+MEASURED same-box (n=2¹⁸ vs SciPy 1.17.1, best-of-8 back-to-back):
+- **k=64: 3.88 → 2.62 ms = 1.55x self; FLIPS 1.22x SLOWER → 1.11x FASTER**
+- k=128: 4.99 ms ≈ parity (1.10x slower, was worse); k=256 9.63 ms (1.23x slower, improved)
+- k≥512 still lose (direct O(n·k) grows; fsci can't switch to a fast FFT — its FFT
+  is the pocketfft constant-factor wall, 35 ms, SLOWER than direct, so the cost
+  model correctly stays direct). 21/21 convolve + 652/0 signal lib GREEN.
+WHY only small-k wins: the FFT route is a wall (fsci fftconvolve ~27-35 ms regardless
+of k vs scipy ~10 ms), so for k≥~256 both fsci paths lose; the axpy makes the direct
+path strictly faster (no regression) and flips the common small-FIR-kernel case.
+DID NOT re-tune `fft_conv_is_faster` (the now-faster direct shifts the crossover up,
+but fsci-FFT being slow means it's ~unchanged). REVERTED a first attempt that put
+outer=SHORTER (streamed the 2 MB `full` array min(na,nb)× = cache-hostile, regressed
+k=512 to 33 ms) — the outer MUST be the longer array to keep the write window small.
+
 ## 2026-06-26 - frankenscipy-greenfalcon-lfilter-df2t-branchless - KEEP (byte-identical 1.28x self): signal.lfilter inner-loop branch removal
 
 Dug a DIFFERENT primitive: `signal.lfilter` (Direct-Form-II-transposed IIR, one
