@@ -4,6 +4,21 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-gmean-parallel-logsum - KEEP (byte-tolerant 3.48x self): stats.gmean parallel + capped threads
+
+`stats.gmean` (= `exp(Σ ln(xᵢ)/n)`) ran the `Σ ln(xᵢ)` as a SERIAL scalar fold —
+compute-bound on the per-element `ln` (n=1M ≈ 4.18 ms; already 1.3x faster than
+scipy 5.42 ms). Each `ln` is independent, so parallelize the reduction (4
+independent accumulators per chunk + threads). KEY TUNING: the first parallel
+version was ~0-gain (1.27x) — `available_parallelism()=64` over-split the light
+per-element work so the thread spawn dominated each 15k-element chunk. CAPPED to
+`min(cores, n/65536, 16)` so each worker owns ≥64k elements; **4.18 → 1.20 ms =
+3.48x self; flips 1.3x → 4.51x FASTER** than scipy. Byte-tolerant (~1e-15 reassoc;
+1989/0 stats lib GREEN incl. gmean scipy-ref). LEVER: parallelizing a LIGHT
+per-element reduction (ln/recip/abs) needs a thread CAP keyed to elements-per-
+worker (≥~64k), unlike heavy per-output work (medfilt select) where 64-way is fine.
+EXTEND: hmean (Σ 1/x), entropy (Σ p·ln p), other ln/exp-per-element reductions.
+
 ## 2026-06-26 - frankenscipy-greenfalcon-detrend-constant-simd-sum - KEEP (byte-tolerant 2.25x self) + linear detrend is a 35x WIN
 
 Measured `signal.detrend` (n=1M). LINEAR is a huge fsci WIN already (1.74 ms vs

@@ -24601,8 +24601,50 @@ pub fn gmean(data: &[f64]) -> f64 {
         return f64::NAN;
     }
     let n = data.len() as f64;
-    let log_sum: f64 = data.iter().map(|&x| x.ln()).sum();
-    (log_sum / n).exp()
+    (gmean_log_sum(data) / n).exp()
+}
+
+/// `Σ ln(xᵢ)` with four independent accumulators (break the fold's latency chain
+/// so the `ln`-bound loop pipelines) and, for large inputs, split across threads —
+/// each output is an independent `ln` then a reduction. ~1e-15 reassociation vs
+/// the serial fold (the same order as the geometric mean's float rounding).
+fn gmean_log_sum(data: &[f64]) -> f64 {
+    let chunk_sum = |chunk: &[f64]| -> f64 {
+        let mut a = [0.0f64; 4];
+        let mut i = 0;
+        while i + 4 <= chunk.len() {
+            a[0] += chunk[i].ln();
+            a[1] += chunk[i + 1].ln();
+            a[2] += chunk[i + 2].ln();
+            a[3] += chunk[i + 3].ln();
+            i += 4;
+        }
+        let mut s = (a[0] + a[1]) + (a[2] + a[3]);
+        while i < chunk.len() {
+            s += chunk[i].ln();
+            i += 1;
+        }
+        s
+    };
+    let n = data.len();
+    // Cap workers so each owns >=64k elements: the per-element `ln` is light, so a
+    // 64-way split has too little work per chunk to amortize the thread spawn.
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let threads = cores.min((n / (1 << 16)).max(1)).min(16);
+    if n < (1 << 16) || threads <= 1 {
+        return chunk_sum(data);
+    }
+    let chunk = n.div_ceil(threads);
+    let parts: Vec<f64> = std::thread::scope(|scope| {
+        let handles: Vec<_> = data
+            .chunks(chunk)
+            .map(|c| scope.spawn(move || chunk_sum(c)))
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    parts.iter().sum()
 }
 
 /// Weighted arithmetic mean.
