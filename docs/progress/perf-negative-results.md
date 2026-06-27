@@ -4,6 +4,29 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-linprog-slack-basis-phase1 - KEEP (conformance-exact 28-85x self): opt.linprog eliminate the unneeded Phase I
+
+Re-probed linprog at nv=200 (the filed retry): still a 26.8x gap (617 vs scipy 23
+ms) AFTER the Dantzig pivot fix, and the gap GREW with size (16.6x slower for a 2x
+problem). Root cause was the Phase I setup: `n_art = total_constraints` added one
+artificial variable PER constraint and initialised the basis to all artificials,
+then drove them all out — even though a ≤ or finite-upper-bound row with b≥0
+already carries a +1 unit SLACK column that is a basic FEASIBLE variable. So for
+an all-≤, feasible-at-origin LP the entire Phase I (and the n_art extra tableau
+columns) was pure waste. FIX: seed the basis from the natural slack columns and
+add an artificial ONLY for equality rows and rows the b≥0 normalisation
+sign-flipped (slack became −1); when `n_art == 0` Phase I is a no-op. **nv=50:
+3.51 → 0.124 ms = 28x; nv=100: 37.2 → 0.617 ms = 60x; nv=200: 617 → 7.25 ms = 85x
+self; flips 1.4x/5.2x/26.8x SLOWER → 20x/11.6x/3.2x FASTER than scipy.**
+CONFORMANCE-EXACT: oracle diff matches scipy `fun` to 10 digits on ≤ LPs AND a
+feasible equality-constrained LP (exercises the remaining artificial path), and
+agrees on infeasibility; 313/0 opt lib GREEN. The dense-tableau wall (Phase II
+O(rows·cols) pivots) still bounds the residual at large nv with many equalities,
+but for the common ≤-dominated LP linprog now BEATS HiGHS. Combined with the
+Dantzig pivot rule this took linprog from a 6-29x loss to a 3-20x win. RETRY:
+eq-heavy / large-equality LPs still pay Phase I; a crash-start / bounded-variable
+revised simplex is the remaining lever.
+
 ## 2026-06-26 - frankenscipy-greenfalcon-linprog-dantzig-pivot - KEEP (conformance-exact 4.2-4.5x self): opt.linprog simplex Dantzig pivot rule
 
 `opt.linprog` was a 6-29x gap vs scipy's HiGHS (nv=50 nc=80: 14.63 vs 2.49 ms;

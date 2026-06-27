@@ -1363,9 +1363,12 @@ pub fn linprog(
         b_std[row] = bound_diff;
     }
 
-    // Ensure all b_std >= 0 (multiply negative rows by -1).
+    // Ensure all b_std >= 0 (multiply negative rows by -1); record which rows were
+    // flipped — their slack column becomes -1 and can no longer seed the basis.
+    let mut flipped = vec![false; total_constraints];
     for i in 0..total_constraints {
         if b_std[i] < 0.0 {
+            flipped[i] = true;
             b_std[i] = -b_std[i];
             for val in &mut a_std[i] {
                 *val = -*val;
@@ -1373,42 +1376,73 @@ pub fn linprog(
         }
     }
 
-    // Phase I: find a basic feasible solution using artificial variables.
-    let n_art = total_constraints;
+    // Phase I: find a basic feasible solution. Seed the basis from the natural
+    // slack columns — a ≤ or finite-upper-bound row that was NOT sign-flipped
+    // already carries a +1 unit slack, a basic FEASIBLE variable (value
+    // b_std[i] ≥ 0), so it needs NO artificial. Only equality rows and sign-flipped
+    // rows (slack became −1) get one. This shrinks Phase I and ELIMINATES it for an
+    // all-≤, b≥0 LP (origin feasible), where the old code added one artificial per
+    // constraint and pivoted them all out.
+    let obj_row = total_constraints;
+    let mut basis: Vec<usize> = vec![0; total_constraints];
+    let mut art_of_row = vec![usize::MAX; total_constraints];
+    let mut n_art = 0usize;
+    for (i, row_basis) in basis.iter_mut().enumerate() {
+        let slack = if flipped[i] {
+            None
+        } else if i < m_ub {
+            Some(decision_var_count + i)
+        } else if i >= m_ub + m_eq {
+            Some(decision_var_count + m_ub + (i - m_ub - m_eq))
+        } else {
+            None // equality row — no slack
+        };
+        match slack {
+            Some(col) => *row_basis = col,
+            None => {
+                art_of_row[i] = n_art;
+                n_art += 1;
+            }
+        }
+    }
+
     let phase1_vars = total_vars + n_art;
     let mut tableau = vec![vec![0.0; phase1_vars + 1]; total_constraints + 1];
 
-    // Fill constraint rows.
+    // Fill constraint rows; an artificial column only where the row needs one.
     for i in 0..total_constraints {
-        for j in 0..total_vars {
-            tableau[i][j] = a_std[i][j];
+        tableau[i][..total_vars].copy_from_slice(&a_std[i][..total_vars]);
+        if art_of_row[i] != usize::MAX {
+            let acol = total_vars + art_of_row[i];
+            tableau[i][acol] = 1.0;
+            basis[i] = acol;
         }
-        tableau[i][total_vars + i] = 1.0; // artificial variable
         tableau[i][phase1_vars] = b_std[i]; // RHS
     }
 
-    // Phase I objective: minimize sum of artificial variables.
-    // Start with +1 coefficient for each artificial, then subtract constraint
-    // rows to eliminate basic (artificial) variables from the objective.
-    let obj_row = total_constraints;
+    // Phase I objective: minimize the sum of the artificials actually present,
+    // then eliminate each (basic) artificial from the objective by subtracting its
+    // row. With no artificials the objective row is already zero (Phase I no-op).
     for i in 0..total_constraints {
-        tableau[obj_row][total_vars + i] = 1.0; // coefficient for artificial i
-    }
-    for i in 0..total_constraints {
-        let (tableau_i, tableau_obj) = {
-            let (left, right) = tableau.split_at_mut(obj_row);
-            (&left[i], &mut right[0])
-        };
-        for (obj_val, &i_val) in tableau_obj
-            .iter_mut()
-            .zip(tableau_i.iter())
-            .take(phase1_vars + 1)
-        {
-            *obj_val -= i_val;
+        if art_of_row[i] != usize::MAX {
+            tableau[obj_row][total_vars + art_of_row[i]] = 1.0;
         }
     }
-
-    let mut basis: Vec<usize> = (total_vars..total_vars + n_art).collect();
+    for i in 0..total_constraints {
+        if art_of_row[i] != usize::MAX {
+            let (tableau_i, tableau_obj) = {
+                let (left, right) = tableau.split_at_mut(obj_row);
+                (&left[i], &mut right[0])
+            };
+            for (obj_val, &i_val) in tableau_obj
+                .iter_mut()
+                .zip(tableau_i.iter())
+                .take(phase1_vars + 1)
+            {
+                *obj_val -= i_val;
+            }
+        }
+    }
     let maxiter = maxiter.unwrap_or(10_000);
 
     // Simplex iterations for Phase I.
