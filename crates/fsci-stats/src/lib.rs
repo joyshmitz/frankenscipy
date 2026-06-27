@@ -47350,24 +47350,27 @@ struct TheilIntervalSlopes {
     slopes: Vec<f64>,
 }
 
-fn collect_theil_slopes_in_interval(
+/// Scan a strided slice of the outer pair index (`i = start, start+stride, …`)
+/// and classify each pair's slope: `below` counts slopes `<= lower_open`,
+/// `slopes` collects those in `(lower_open, upper_closed]`. `None` on a
+/// non-finite slope or when the local in-interval count alone exceeds `limit`
+/// (the total can only be larger, so the caller would reject anyway). `start=0,
+/// stride=1` reproduces the original serial scan exactly.
+fn collect_theil_interval_range(
     x: &[f64],
     y: &[f64],
     lower_open: f64,
     upper_closed: f64,
     limit: usize,
-) -> Option<TheilIntervalSlopes> {
-    if !matches!(
-        lower_open.partial_cmp(&upper_closed),
-        Some(std::cmp::Ordering::Less)
-    ) {
-        return None;
-    }
-
+    start: usize,
+    stride: usize,
+) -> Option<(usize, Vec<f64>)> {
+    let n = x.len();
     let mut below = 0usize;
     let mut slopes = Vec::new();
-    for i in 0..x.len() {
-        for j in (i + 1)..x.len() {
+    let mut i = start;
+    while i < n {
+        for j in (i + 1)..n {
             let dx = x[i] - x[j];
             if dx.abs() <= THEIL_SLOPE_MIN_X_GAP {
                 continue;
@@ -47384,6 +47387,68 @@ fn collect_theil_slopes_in_interval(
                     return None;
                 }
             }
+        }
+        i += stride;
+    }
+    Some((below, slopes))
+}
+
+fn collect_theil_slopes_in_interval(
+    x: &[f64],
+    y: &[f64],
+    lower_open: f64,
+    upper_closed: f64,
+    limit: usize,
+) -> Option<TheilIntervalSlopes> {
+    if !matches!(
+        lower_open.partial_cmp(&upper_closed),
+        Some(std::cmp::Ordering::Less)
+    ) {
+        return None;
+    }
+
+    let n = x.len();
+    // The full O(n²) pair scan dominates `theilslopes` for large n; each pair is
+    // independent and the collected multiset feeds an order-invariant select, so
+    // split the outer index round-robin across threads (round-robin balances the
+    // triangular loop, where low `i` does the most inner work). The merged `below`
+    // (a pure sum) and the concatenated in-interval slopes are identical to the
+    // serial scan; `select_nth` later picks the same value at each rank regardless
+    // of collection order. Serial below the spawn-amortization threshold.
+    let work = (n as u64).saturating_mul(n.saturating_sub(1) as u64) / 2;
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let threads = if work >= (1 << 18) {
+        cores.min(16)
+    } else {
+        1
+    };
+    if threads <= 1 {
+        let (below, slopes) =
+            collect_theil_interval_range(x, y, lower_open, upper_closed, limit, 0, 1)?;
+        return Some(TheilIntervalSlopes { below, slopes });
+    }
+
+    let parts: Vec<Option<(usize, Vec<f64>)>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..threads)
+            .map(|t| {
+                scope.spawn(move || {
+                    collect_theil_interval_range(x, y, lower_open, upper_closed, limit, t, threads)
+                })
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+
+    let mut below = 0usize;
+    let mut slopes = Vec::new();
+    for part in parts {
+        let (b, s) = part?;
+        below += b;
+        slopes.extend(s);
+        if slopes.len() > limit {
+            return None;
         }
     }
 

@@ -4,6 +4,32 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-theilslopes-parallel-collect - KEEP (byte-identical 4.51x self): stats.theilslopes parallel O(n²) interval collect
+
+`stats.theilslopes` already BEAT scipy (n=5000: 128 ms vs 589 ms = 4.6x), but a
+profile of the fast path (sampling-bracketed quantile selection) showed the whole
+cost is one O(n²) pair scan in `collect_theil_slopes_in_interval` — it computes
+all n(n-1)/2 pairwise slopes and classifies each as below / in-interval / above
+the bracket. (NOTE: the other "candidate" redundancies were red herrings —
+`theil_total_clean_slopes` is only O(n log n) (a sorted adjacent-gap check, not a
+pair scan) despite being called twice; `count_le` is O(n log n) merge-inversion;
+`sample_theil_slopes` is O(sample).) Each pair is independent and the collected
+multiset feeds an order-invariant `select_nth`, so the scan parallelizes cleanly:
+split the outer index round-robin across `min(cores,16)` threads (round-robin
+balances the triangular loop — low `i` does the most inner work), each worker
+returns its own `below` count (summed) and in-interval slope vec (concatenated).
+The `below` sum and slope multiset are identical to the serial scan; `select_nth`
+picks the same value at each rank regardless of order; the non-finite and
+`len > limit` → `None` guards are preserved (a thread's local count ≤ total, so
+local-overflow ⇒ total-overflow). **n=5000: 128.47 → 28.51 ms = 4.51x self
+(widens 4.6x → 20.6x FASTER than scipy); n=2000: 12.97 → 5.97 ms = 2.17x (6.4x →
+14.0x)**. BYTE-IDENTICAL: oracle diff matches scipy's slope/intercept/lo/hi to 17
+sig digits; 1989/0 stats lib GREEN incl. the fast-vs-materialized byte-identity
+test. Gated serial below n(n-1)/2 < 2¹⁸ (spawn not amortized). RETRY: the
+materialized fallback path (`theilslopes_materialized`, n<256 or sampling miss)
+still builds + selects the full O(n²) slope vector serially — same parallel lever
+applies if a workload hits it; theil_sen median likewise.
+
 ## 2026-06-26 - frankenscipy-greenfalcon-kendalltau-sort-dedup - KEEP (byte-identical 1.90x self): stats.kendalltau collapse 5 sorts to 2
 
 `stats.kendalltau` large-n (n≥256, no-NaN) Knight path was **1.50x SLOWER** than
