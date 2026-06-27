@@ -595,6 +595,27 @@ fn bench_betabinom_cdf(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_discrete_moments(c: &mut Criterion) {
+    use criterion::BenchmarkId;
+    use fsci_stats::{BetaBinomial, DiscreteDistribution, NegHypergeometric};
+    let mut group = c.benchmark_group("discrete_moments");
+    // skewness/kurtosis summed central moments over the support at ~6 ln_gamma/pmf;
+    // the pmf-ratio recurrence (mode-anchored) makes each term pure mults. Scales w/ n.
+    for &n in &[200_u64, 1000] {
+        let d = BetaBinomial::new(n, 2.0, 3.0);
+        group.bench_function(BenchmarkId::new("betabinom_kurt", n), |b| {
+            b.iter(|| black_box(d.kurtosis()))
+        });
+    }
+    for &n in &[200_u64, 400] {
+        let d = NegHypergeometric::new(2 * n + 100, n, n + 50);
+        group.bench_function(BenchmarkId::new("neghypergeom_kurt", n), |b| {
+            b.iter(|| black_box(d.kurtosis()))
+        });
+    }
+    group.finish();
+}
+
 fn bench_discrete_entropy(c: &mut Criterion) {
     use criterion::BenchmarkId;
     use fsci_stats::{BetaBinomial, DiscreteDistribution, NegHypergeometric};
@@ -648,6 +669,7 @@ fn bench_betanbinom_cdf(c: &mut Criterion) {
 
 criterion_group!(
     benches,
+    bench_discrete_moments,
     bench_discrete_entropy,
     bench_neghypergeom_cdf,
     bench_betanbinom_cdf,

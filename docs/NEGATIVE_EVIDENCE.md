@@ -8919,3 +8919,30 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   self-speedup; the vs-SciPy ratio is inflated by scipy's interpreter overhead.
 - Gate: `cargo test -p fsci-stats --lib discrete_entropy_recurrence` 1/1 + betabinom/neg_hyper
   suites still green.
+
+## 2026-06-27 - WIN: discrete moments (kurtosis/skewness) pmf-ratio recurrence — 32-34x self; flips a genuine 1.31x betabinom LOSS to 24.5x FASTER
+
+- Agent: cc (Claude Code / Opus), `AGENT_NAME=cc`.
+- Extends the pmf-ratio lever to the central-moment loops (skewness `m3/m2^1.5`, kurtosis
+  `m4/m2²−3`) that summed `Σ pmf·(k−μ)^j` over the support with a fresh-lgamma pmf per term.
+  These need NO transcendental (pure mults), so the recurrence is even cheaper than entropy:
+  mode-anchored `pk *= ratio`, accumulate `m2/m3/m4` — one ln_gamma pmf at the mode + O(n)
+  multiply/adds. NegHypergeometric got a shared `central_moments(mu)` helper (skew+kurt);
+  BetaBinomial.kurtosis got the m4 sum recurrence (keeps closed-form `var()` for m2).
+- CORRECTNESS: the recurrence reproduces the OLD fresh-pmf central-moment sums to ≤2e-11 (loop
+  reassociation only — verified in Python: rec-vs-direct rel 2e-11; the ~5e-5 residual vs SciPy
+  on kurtosis at large n is PRE-EXISTING, shared identically by the old direct sum, from
+  `m4/m2²−3` cancellation — NOT introduced here). Gate: full `cargo test -p fsci-stats --lib`
+  = 1993 passed / 0 failed (betabinom_excess_kurtosis_matches_scipy + nhypergeom moment tests
+  pin the values and stay green).
+- MEASURED same-box A/B (`cargo bench -p fsci-stats -- discrete_moments`, stash lib.rs to toggle):
+
+  | Workload | OLD fresh-lgamma loop | NEW recurrence | self | SciPy | vs SciPy |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | betabinom(1000,2,3).kurtosis      | 118.39 µs | 3.68 µs  | 32x   | 90.1 µs  | 1.31x SLOWER → **24.5x FASTER** |
+  | neghypergeom(900,400,450).kurtosis| 52.71 µs  | 1.567 µs | 33.6x | 3456 µs  | 65x → **2205x FASTER** |
+
+  NOTE: betabinom is a GENUINE flipped loss — SciPy's betabinom moment path is fast (90 µs C),
+  so fsci's old fresh-lgamma loop (118 µs) actually LOST 1.31x; the recurrence flips it to 24.5x
+  faster. NegHypergeometric was already ahead (SciPy's nhypergeom moments hit the slow
+  expect() path); there the recurrence widens the lead (self-speedup 33.6x is the honest number).
