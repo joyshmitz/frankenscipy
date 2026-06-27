@@ -809,8 +809,26 @@ fn bench_array(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_ncfdtr(c: &mut Criterion) {
+    let mut group = c.benchmark_group("ncfdtr");
+    // cost scales with nc: the Poisson(nc/2) mixture spans ~O(√nc) incomplete-beta
+    // terms. Evaluate a batch of f for each (dfn, dfd, nc).
+    let fs: Vec<f64> = (0..256).map(|i| 0.05 + (i as f64) * 0.02).collect();
+    for &(dfn, dfd, nc) in &[(10.0_f64, 10.0_f64, 2.0_f64), (20.0, 30.0, 200.0), (50.0, 50.0, 2000.0)] {
+        group.bench_function(BenchmarkId::new("cdf", format!("dfn{dfn}_dfd{dfd}_nc{nc}")), |b| {
+            b.iter(|| {
+                fs.iter()
+                    .map(|&f| fsci_special::ncfdtr(black_box(dfn), black_box(dfd), black_box(nc), black_box(f)))
+                    .sum::<f64>()
+            })
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
+    bench_ncfdtr,
     bench_array,
     bench_gamma,
     bench_gammaln,
