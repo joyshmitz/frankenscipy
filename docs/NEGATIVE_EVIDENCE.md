@@ -6,6 +6,46 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-27 - CobaltCove (claude-code) - BLOCKER (harvest-floor survey): no tractable byte-identical gap-close left in a free crate within a 60-min window; remaining gaps are multi-turn hard walls
+
+Exhaustive cross-crate survey this cycle (after shipping logsumexp_axis_2d, EDT-indices, EDT-distances
+parallelizations). The byte-identical parallel / alloc-elimination / algorithmic veins are at their floor;
+the remaining measured gaps vs SciPy need multi-turn engineering or are contested. Recorded so the next
+cycle does not re-derive.
+
+CHECKED THIS CYCLE (all already optimized / not a free gap):
+- fft: N-D / dct / dst transforms ALREADY parallel over axis lines (WorkerPolicy + thread::scope in
+  apply_axis_transform / apply_axis0_transpose_transform / apply_dct_along_axis). The 1-D core ALREADY
+  has hardcoded radix-3 AND radix-5 butterfly kernels (mixed_radix_combine_stage, not a generic O(p²)
+  DFT) + radix-2²/4 + Bluestein plan cache. So the 5-smooth 1-D gap (1.37-2.54x vs pocketfft) is NOT a
+  missing-kernel/fallback issue — it is pure SIMD. fft is forbid(unsafe) AND idle (0 commits/40).
+- integrate: ENTIRELY serial (0 thread::scope) BUT every heavy public fn is callback-driven
+  (quad/dblquad/tplquad/nquad/solve_ivp/odeint/quad_vec/monte_carlo/qmc_quad) where fsci's inline-Rust f
+  ALREADY beats SciPy's Python callback — parallelizing them is gilding, not a gap-close. The pure-array
+  integrators (simpson/trapezoid/cumulative_*/romb) are cheap memory-bound reductions (near-parity, no
+  win from threading).
+- sparse: actively worked by cod-b (recent spsolve commits) — avoid.
+- GreenFalcon scorecard (docs/GAUNTLET_RELEASE_SCORECARD.md): spatial/special/opt/cluster/stats/signal/
+  linalg/csgraph/interpolate/ndimage all harvested to wins or near-parity; residual losses are contested
+  hard walls.
+
+REMAINING TRACTABLE-BUT-MULTI-TURN LEVERS (each needs a full window; pick one and commit a whole cycle):
+1. fft 1-D core 5-smooth (BIGGEST free gap, ~1.37-2.54x, idle+free): two routes, both byte-IDENTICAL
+   (each butterfly output cell is an independent identical expression — no cross-element reduction):
+   (a) parallelize-over-butterflies within each Cooley-Tukey stage (cooley_tukey_radix4_inplace +
+   mixed_radix_combine_stage `for r in 0..m`), with a thread::scope barrier per stage, gated to large m
+   so recursion does not oversubscribe; forbid(unsafe) ⇒ use per-block split_at_mut chunking (the p
+   blocks out0..out_{p-1} are already split, chunk each by r-range and zip). (b) SIMD-across-butterflies
+   (std::simd, complex deinterleave) — byte-tolerant, harder. Route (a) is the cleaner first attempt.
+2. linalg.cholesky (~8x, GreenFalcon's filed lever): register-tiled GEMM-based SYRK (naive blocking was
+   ~0-gain/reverted) — contested.
+3. ndimage.label residual 2.68x: native integer label store (output is f64 NdArray = the wall) —
+   architectural, GreenFalcon's.
+
+CONCLUSION: shipped 0 this cycle (no ~0-gain revert needed — nothing was started). The honest state is
+that 60-min byte-identical wins are exhausted in the free/uncontested crates; the next real gap-close is
+the fft parallel-over-butterflies lever (route 1a above), which warrants a dedicated cycle.
+
 ## 2026-06-27 - CobaltCove (claude-code) - KEEP (byte-identical 1.5-2.3x self, widens an existing lead): ndimage.distance_transform_edt distances-only path parallel (general N-D)
 
 - Agent CobaltCove. Companion to the return_indices EDT commit: the DISTANCES-ONLY path
