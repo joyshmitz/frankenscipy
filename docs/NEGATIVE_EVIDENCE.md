@@ -6,6 +6,73 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-27 - GreenFalcon (codex-cli) - KEEP: linalg.cho_factor reuses the blocked Cholesky factor at large n
+
+- Agent: GreenFalcon (codex-cli / gpt-5.2), `AGENT_NAME=GreenFalcon`.
+- Land-or-dig audit: checked live `.scratch/.worktrees` before digging. The only
+  ahead bench worktree was still
+  `/data/projects/.worktrees/frankenscipy-eigvalsh-blackthrush-20260609`
+  (`e3b744f4`, GEMM flat-workspace threshold 768), and current `main` already
+  has the stronger threshold 256, so no measured worktree win was landable.
+- Gap attacked: dense `cho_factor`/Cholesky remained materially behind SciPy
+  after the flat-factor reuse. The sparse `spsolve` Laplacian route was being
+  closed by the concurrent spectral-stencil work, so this digs the next current
+  dense-linalg gap instead of retrying another sparse band-storage lever.
+- Lever kept: public `cholesky`/`cho_factor` now use a factor-only variant of
+  the existing right-looking blocked Cholesky kernel for `n >=
+  FLAT_LU_SOLVE_MIN_DIM`. This reuses the already-proven symmetric rank-k
+  trailing update instead of the unblocked dot-product factorization, then emits
+  the same flat lower factor consumed by `cho_solve`. On invalid/rounding-drift
+  pivots the route falls back to the old unblocked factorization before returning
+  the public positive-definite error.
+- The required literal bench form is still not accepted by Cargo:
+  `AGENT_NAME=GreenFalcon CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b
+  rch exec -- cargo bench --release -p fsci-linalg --bench linalg_bench --
+  cho_factor_gauntlet_scipy ...` failed with `unexpected argument '--release'`.
+  The accepted per-crate release-profile bench was:
+  `AGENT_NAME=GreenFalcon CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b
+  rch exec -- cargo bench -p fsci-linalg --profile release --bench
+  linalg_bench -- cho_factor_gauntlet_scipy --sample-size 10 --warm-up-time 1
+  --measurement-time 2 --noplot`. RCH admitted the before/after bench locally
+  because no worker slots were available, so same-target Criterion data is the
+  keep proof.
+- MEASURED same-target delta on the routed row:
+  | Workload | Baseline Rust | Blocked-factor Rust | Internal ratio |
+  | --- | ---: | ---: | ---: |
+  | 1000x1000 `cho_factor` | 117.68 ms | 54.554 ms | 2.16x faster |
+  | 1000x1000 `cho_factor+cho_solve` | 59.915 ms | 54.916 ms | 1.09x, not significant (`p=0.13`) |
+- Ratio vs SciPy from the same candidate bench run:
+  | Workload | Rust after | SciPy oracle | Ratio vs SciPy |
+  | --- | ---: | ---: | ---: |
+  | 1000x1000 `cho_factor` | 54.554 ms | 10.614 ms | 5.14x slower |
+  | 1000x1000 `cho_factor+cho_solve` | 54.916 ms | 16.847 ms | 3.26x slower |
+  The route is a real factorization win, but the remaining SciPy gap is still
+  LAPACK's deeper blocked/panel Cholesky constant factor.
+- Correctness / conformance GREEN: `cargo check -p fsci-linalg --all-targets`
+  passed via RCH/local with only the pre-existing `perf_control.rs` unused-mut
+  warning; `cargo test -p fsci-linalg cholesky --lib -- --nocapture` passed
+  15/15; focused private proof
+  `cholesky_lower_blocked_matches_unblocked_factorization` passed after the final
+  guard cleanup; SciPy-backed conformance
+  `cargo test -p fsci-conformance --test diff_linalg_inv_pinv_cholesky -- --nocapture`
+  passed; `cargo test -p fsci-conformance --test diff_linalg_structured_solvers
+  -- --nocapture` passed; `cargo test -p fsci-conformance --test e2e_linalg --
+  --nocapture` passed 21/21 on RCH `ovh-a`.
+- Gate blockers not folded into this perf commit: `cargo fmt --check -p
+  fsci-linalg` remains blocked by pre-existing bin/probe formatting drift
+  (`perf_are.rs`, `perf_control.rs`, `perf_eig.rs`, `perf_toeplitz_cols_ab.rs`,
+  probe bins, and the untracked `perf_eig_tmp.rs`). `cargo clippy -p
+  fsci-linalg --lib --benches --tests -- -D warnings` remains blocked after the
+  local positivity-guard lint fix by pre-existing lints in unrelated linalg code
+  (`int_plus_one` at `lib.rs:30090`, `needless_range_loop` near `lib.rs:4324`,
+  `collapsible_if` near `lib.rs:13890`, existing Cholesky RHS helper
+  `needless_borrow`/range-loop lint, cossin excessive-precision fixtures, and
+  older test `useless_vec`).
+- CONCLUSION: keep this large-`cho_factor` blocked-factor route. Next dense
+  Cholesky work should move below this factorization surface to panel/TRSM and
+  cache-blocked packed updates rather than another public `Vec<Vec>` wrapper
+  rearrangement.
+
 ## 2026-06-27 - cod-a (codex-cli) - KEEP: sparse.spsolve square-grid spectral route flips the Laplacian fixture vs SciPy
 
 - Agent: cod-a (codex-cli / gpt-5.2), `AGENT_NAME=cod-a`.

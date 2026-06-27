@@ -4753,12 +4753,94 @@ fn cholesky_lower_simd(a: &[Vec<f64>], n: usize) -> Option<Vec<f64>> {
             l[irow + j] = (a[i][j] - d) / l[j * n + j];
         }
         let diag = a[i][i] - chol_dot(&l, irow, irow, i);
-        if !(diag > 0.0) || !diag.is_finite() {
+        if diag <= 0.0 || !diag.is_finite() {
             return None;
         }
         l[irow + i] = diag.sqrt();
     }
     Some(l)
+}
+
+#[allow(clippy::needless_range_loop)]
+fn cholesky_lower_blocked(a_in: &[Vec<f64>], n: usize) -> Option<Vec<f64>> {
+    const NB: usize = 128;
+    let mut lower = a_in.to_vec();
+
+    let mut k = 0;
+    while k < n {
+        let kb = (k + NB).min(n);
+        for j in k..kb {
+            let mut d = lower[j][j];
+            for p in k..j {
+                d -= lower[j][p] * lower[j][p];
+            }
+            if d <= 0.0 || !d.is_finite() {
+                return None;
+            }
+            let ljj = d.sqrt();
+            lower[j][j] = ljj;
+            for i in (j + 1)..kb {
+                let mut s = lower[i][j];
+                for p in k..j {
+                    s -= lower[i][p] * lower[j][p];
+                }
+                lower[i][j] = s / ljj;
+                if !lower[i][j].is_finite() {
+                    return None;
+                }
+            }
+        }
+        for i in kb..n {
+            for j in k..kb {
+                let mut s = lower[i][j];
+                for p in k..j {
+                    s -= lower[i][p] * lower[j][p];
+                }
+                lower[i][j] = s / lower[j][j];
+                if !lower[i][j].is_finite() {
+                    return None;
+                }
+            }
+        }
+        if kb < n {
+            let m2 = n - kb;
+            let nb = kb - k;
+            let mut l21 = vec![0.0f64; m2 * nb];
+            for (ii, row) in lower.iter().take(n).skip(kb).enumerate() {
+                l21[ii * nb..ii * nb + nb].copy_from_slice(&row[k..kb]);
+            }
+            let l21_ref = &l21;
+            let nthreads = matmul_thread_count(m2, nb, m2);
+            let (_, trailing) = lower.split_at_mut(kb);
+            if nthreads <= 1 {
+                cholesky_syrk_rows(trailing, 0, l21_ref, nb, kb);
+            } else {
+                let chunk = m2.div_ceil(nthreads);
+                std::thread::scope(|scope| {
+                    for (t, rows) in trailing.chunks_mut(chunk).enumerate() {
+                        let row_offset = t * chunk;
+                        scope.spawn(move || cholesky_syrk_rows(rows, row_offset, l21_ref, nb, kb));
+                    }
+                });
+            }
+        }
+        k = kb;
+    }
+
+    let mut l_flat = vec![0.0f64; n * n];
+    for i in 0..n {
+        l_flat[i * n..i * n + i + 1].copy_from_slice(&lower[i][..i + 1]);
+    }
+    Some(l_flat)
+}
+
+fn cholesky_lower_factor(a: &[Vec<f64>], n: usize) -> Option<Vec<f64>> {
+    if n >= FLAT_LU_SOLVE_MIN_DIM
+        && let Some(l_flat) = cholesky_lower_blocked(a, n)
+    {
+        return Some(l_flat);
+    }
+    cholesky_lower_simd(a, n)
 }
 
 /// Cholesky decomposition for symmetric positive-definite matrices: A = LLᵀ.
@@ -4782,7 +4864,7 @@ pub fn cholesky(
         return Ok(CholeskyResult { factor: Vec::new() });
     }
 
-    let l_flat = cholesky_lower_simd(a, rows).ok_or(LinalgError::InvalidArgument {
+    let l_flat = cholesky_lower_factor(a, rows).ok_or(LinalgError::InvalidArgument {
         detail: "matrix is not positive definite".into(),
     })?;
 
@@ -4823,7 +4905,7 @@ pub fn cho_factor(a: &[Vec<f64>], options: DecompOptions) -> Result<ChoFactorRes
     hardened_dimension_check(options.mode, rows, cols)?;
     validate_finite_matrix(a, options.mode, options.check_finite)?;
 
-    let l_flat = cholesky_lower_simd(a, rows).ok_or(LinalgError::InvalidArgument {
+    let l_flat = cholesky_lower_factor(a, rows).ok_or(LinalgError::InvalidArgument {
         detail: "matrix is not positive definite".into(),
     })?;
 
@@ -17688,6 +17770,70 @@ mod tests {
         // Non-PD matrix must be rejected (None) so the caller can fall back.
         let not_pd = vec![vec![1.0, 2.0], vec![2.0, 1.0]]; // eigenvalues 3, -1
         assert!(cholesky_solve_blocked(&not_pd, &[1.0, 1.0]).is_none());
+    }
+
+    #[test]
+    #[allow(clippy::needless_range_loop)]
+    fn cholesky_lower_blocked_matches_unblocked_factorization() {
+        let spd = |n: usize, seed: u64| -> Vec<Vec<f64>> {
+            let m: Vec<Vec<f64>> = (0..n)
+                .map(|i| {
+                    (0..n)
+                        .map(|j| {
+                            (seed
+                                .wrapping_mul(i as u64 + 13)
+                                .wrapping_add(j as u64 * 29 + 17)
+                                % 7919) as f64
+                                / 3959.0
+                                - 1.0
+                        })
+                        .collect()
+                })
+                .collect();
+            let mut a = vec![vec![0.0; n]; n];
+            for i in 0..n {
+                for j in 0..n {
+                    let mut t = 0.0;
+                    for k in 0..n {
+                        t += m[k][i] * m[k][j];
+                    }
+                    a[i][j] = t + if i == j { n as f64 } else { 0.0 };
+                }
+            }
+            a
+        };
+
+        for &(n, seed) in &[(16usize, 101u64), (130, 103), (270, 107)] {
+            let a = spd(n, seed);
+            let blocked = cholesky_lower_blocked(&a, n).expect("blocked factor");
+            let reference = cholesky_lower_simd(&a, n).expect("unblocked factor");
+
+            let mut max_diff = 0.0_f64;
+            for i in 0..n {
+                for j in 0..=i {
+                    max_diff = max_diff.max((blocked[i * n + j] - reference[i * n + j]).abs());
+                }
+            }
+            assert!(
+                max_diff < 1e-8,
+                "blocked Cholesky factor drifted from unblocked n={n}: {max_diff:e}"
+            );
+
+            let mut max_recon = 0.0_f64;
+            for i in 0..n {
+                for j in 0..=i {
+                    let mut lij = 0.0_f64;
+                    for k in 0..=i.min(j) {
+                        lij += blocked[i * n + k] * blocked[j * n + k];
+                    }
+                    max_recon = max_recon.max((lij - a[i][j]).abs());
+                }
+            }
+            assert!(
+                max_recon < 1e-7,
+                "blocked Cholesky reconstruction too large n={n}: {max_recon:e}"
+            );
+        }
     }
 
     #[test]
