@@ -8660,3 +8660,37 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   gammainc evals — vs scipy's Cephes `chndtr` (Marcum-Q / continued-fraction). The next
   lever is `fsci_special::gamma::chndtr` itself, which would lift skellam AND ncx2 AND
   every chndtr caller. Filed as the follow-on gap; this commit shrinks the gap 32x first.
+
+## 2026-06-27 - WIN (follow-on landed): chndtr (noncentral-χ² CDF) incomplete-gamma recurrence — 66-127x self, flips skellam from 82x SLOWER to 1.5-2.2x FASTER than SciPy; lifts ncx2 + every chndtr caller
+
+- Agent: cc (Claude Code / Opus), `AGENT_NAME=cc`.
+- Land-or-dig: landed the follow-on lever filed in the entry above. `fsci_special::gamma::chndtr`
+  summed the Poisson(nc/2)-weighted central-χ² mixture `Σ_j w_j · chdtr(df+2j, x)` but
+  recomputed `chdtr(df+2j,x) = gammainc(df/2+j, x/2)` FRESH per term — O(√nc) full incomplete-
+  gamma evaluations (≈380 at nc=2000). The central-χ² CDF terms satisfy the standard
+  incomplete-gamma recurrence, so anchor at the Poisson mode and walk it in O(1)/term:
+    P(a+1,y) = P(a,y) − t(a),  t(a)=y^a e^{−y}/Γ(a+1),  t(a+1)=t(a)·y/(a+1)   (up)
+    P(a−1,y) = P(a,y) + t(a−1),                          t(a−1)=t(a)·a/y       (down)
+  with a=df/2+j, y=x/2. ONE `gammainc` at the mode + O(√nc) multiply/adds. The downward
+  branch (P growing toward 1 by ADDING positive t) is the stable direction and carries the
+  dominant mass; the upward subtraction only adds tiny above-mode corrections (term clamped
+  to [0,1]).
+- Accuracy: replicated the exact recurrence in Python and diffed vs `scipy.special.chndtr`
+  across a wide grid (nc up to 4000, deep tails to 1e-24): MAX rel err 1.55e-12 — 600x
+  inside the 1e-10 test tolerance.
+- MEASURED (`cargo bench -p fsci-stats -- skellam_cdf`, which calls chndtr; 256-k batch):
+
+  | Workload | prev (fresh-gammainc chndtr) | NEW (recurrence chndtr) | self-speedup | vs SciPy |
+  | --- | ---: | ---: | ---: | ---: |
+  | skellam cdf μ=100,100 | 11.66 ms | 175.7 µs | 66x faster | scipy 386 µs → 2.2x FASTER |
+  | skellam cdf μ=1000,1000 | 54.74 ms | 432.0 µs | 127x faster | scipy 660 µs → 1.5x FASTER |
+
+  End-to-end vs the original Bessel-window sum (1749 ms at μ=1000): ~4050x. Skellam is now
+  FASTER than SciPy. The win generalizes to `ncx2` (NoncentralChiSquared) and every other
+  chndtr/chndtrix/chndtridf/chndtrinc caller.
+- Gates: `cargo test -p fsci-special --lib chndtr` 3/3 (incl. deep-tail 2e-19, large-nc
+  50,10,40 goldens); `cargo test -p fsci-stats --lib skellam` 3/3; `cargo test -p fsci-stats
+  --lib ncx2` 5/5. All green — recurrence matches scipy at the locked tolerances.
+- CONCLUSION: the prior "82x slower" skellam residual is CLOSED — it was entirely fsci's
+  naive chndtr. The noncentral-χ² family now matches scipy's algorithmic class (O(√nc) cheap
+  terms) and edges ahead on these inputs.
