@@ -212,11 +212,21 @@ const SPSOLVE_DENSE_MAX_N: usize = 32_768;
 const SPSOLVE_SPD_BANDED_CHOLESKY_MIN_N: usize = 256;
 const SPSOLVE_SPD_BANDED_CHOLESKY_MAX_NNZ_PER_ROW: usize = 8;
 const SPSOLVE_SPD_BANDED_CHOLESKY_ACCEPT_RESIDUAL: f64 = 1.0e-8;
+const SPSOLVE_SQUARE_GRID_DIRICHLET_MIN_SIDE: usize = 16;
+const SPSOLVE_SQUARE_GRID_DIRICHLET_ACCEPT_RESIDUAL: f64 = 1.0e-8;
 const SPSOLVE_SPD_CG_MIN_N: usize = 4_096;
 const SPSOLVE_SPD_CG_MAX_NNZ_PER_ROW: usize = 6;
 const SPSOLVE_SPD_CG_MIN_DIAGONAL: f64 = 1.0e-12;
 const SPSOLVE_SPD_CG_TOL: f64 = 1.0e-8;
 const SPSOLVE_SPD_CG_ACCEPT_RESIDUAL: f64 = 1.0e-8;
+
+#[derive(Debug, Clone, Copy)]
+struct SquareGridDirichletPattern {
+    side: usize,
+    diagonal: f64,
+    horizontal: f64,
+    vertical: f64,
+}
 
 fn is_sparse_zero_pivot(value: f64) -> bool {
     value == 0.0
@@ -716,6 +726,23 @@ pub fn spsolve(a: &CsrMatrix, b: &[f64], options: SolveOptions) -> SparseResult<
         n >= 256 && (a.nnz() <= n.saturating_mul(16) || bandwidth.saturating_mul(32) <= n);
     if over_dense_guard || genuinely_sparse {
         if sparse_banded_direct_candidate(n, bandwidth) {
+            if let Some(pattern) = spsolve_square_grid_dirichlet_pattern(a, options, bandwidth)
+                && let Ok(solution) = spsolve_square_grid_dirichlet_direct(a, b, pattern)
+            {
+                let warnings = if over_dense_guard {
+                    vec![format!(
+                        "native sparse direct solve used for n={n}; dense fallback guard is {SPSOLVE_DENSE_MAX_N}"
+                    )]
+                } else {
+                    Vec::new()
+                };
+                return Ok(SolveResult {
+                    solution,
+                    backend_used: SparseBackend::NativeSparseLu,
+                    ordering_used: options.ordering,
+                    warnings,
+                });
+            }
             if spsolve_spd_banded_candidate(a, options, bandwidth)
                 && let Ok(solution) = spsolve_spd_banded_direct(a, b, options, bandwidth)
             {
@@ -3425,6 +3452,202 @@ fn spsolve_spd_banded_candidate(
     half_bandwidth: usize,
 ) -> bool {
     half_bandwidth <= 128 && spsolve_spd_banded_cholesky_candidate(a, options)
+}
+
+fn set_or_check_stencil_value(reference: &mut Option<f64>, value: f64) -> bool {
+    if !value.is_finite() {
+        return false;
+    }
+    match reference {
+        Some(existing) => {
+            let scale = existing.abs().max(value.abs()).max(1.0);
+            (value - *existing).abs() <= 1.0e-12 * scale
+        }
+        None => {
+            *reference = Some(value);
+            true
+        }
+    }
+}
+
+fn square_side(n: usize) -> Option<usize> {
+    let root = (n as f64).sqrt() as usize;
+    (root.saturating_sub(1)..=root.saturating_add(1))
+        .find(|&side| side.saturating_mul(side) == n)
+}
+
+fn spsolve_square_grid_dirichlet_pattern(
+    a: &CsrMatrix,
+    options: SolveOptions,
+    bandwidth: usize,
+) -> Option<SquareGridDirichletPattern> {
+    if options.backend != SparseBackend::Auto || options.ordering != PermutationOrdering::Colamd {
+        return None;
+    }
+    let n = a.shape().rows;
+    let side = square_side(n)?;
+    if side < SPSOLVE_SQUARE_GRID_DIRICHLET_MIN_SIDE || bandwidth != side {
+        return None;
+    }
+    let expected_nnz = n
+        + 4usize
+            .saturating_mul(side)
+            .saturating_mul(side.saturating_sub(1));
+    if a.nnz() != expected_nnz {
+        return None;
+    }
+
+    let mut diagonal = None;
+    let mut horizontal = None;
+    let mut vertical = None;
+    for row in 0..n {
+        let grid_r = row / side;
+        let grid_c = row % side;
+        let mut seen_diag = false;
+        let mut seen_left = grid_c == 0;
+        let mut seen_right = grid_c + 1 == side;
+        let mut seen_up = grid_r == 0;
+        let mut seen_down = grid_r + 1 == side;
+
+        for idx in a.indptr()[row]..a.indptr()[row + 1] {
+            let col = a.indices()[idx];
+            let value = a.data()[idx];
+            if col == row {
+                if seen_diag || !set_or_check_stencil_value(&mut diagonal, value) {
+                    return None;
+                }
+                seen_diag = true;
+            } else if grid_c > 0 && col == row - 1 {
+                if seen_left || !set_or_check_stencil_value(&mut horizontal, value) {
+                    return None;
+                }
+                seen_left = true;
+            } else if grid_c + 1 < side && col == row + 1 {
+                if seen_right || !set_or_check_stencil_value(&mut horizontal, value) {
+                    return None;
+                }
+                seen_right = true;
+            } else if grid_r > 0 && col == row - side {
+                if seen_up || !set_or_check_stencil_value(&mut vertical, value) {
+                    return None;
+                }
+                seen_up = true;
+            } else if grid_r + 1 < side && col == row + side {
+                if seen_down || !set_or_check_stencil_value(&mut vertical, value) {
+                    return None;
+                }
+                seen_down = true;
+            } else {
+                return None;
+            }
+        }
+
+        if !(seen_diag && seen_left && seen_right && seen_up && seen_down) {
+            return None;
+        }
+    }
+
+    let diagonal = diagonal?;
+    let horizontal = horizontal?;
+    let vertical = vertical?;
+    if diagonal <= 0.0 || horizontal >= 0.0 || vertical >= 0.0 {
+        return None;
+    }
+    if diagonal <= 2.0 * horizontal.abs() + 2.0 * vertical.abs() {
+        return None;
+    }
+
+    Some(SquareGridDirichletPattern {
+        side,
+        diagonal,
+        horizontal,
+        vertical,
+    })
+}
+
+fn spsolve_square_grid_dirichlet_direct(
+    a: &CsrMatrix,
+    b: &[f64],
+    pattern: SquareGridDirichletPattern,
+) -> SparseResult<Vec<f64>> {
+    let side = pattern.side;
+    let n = side * side;
+    let theta = std::f64::consts::PI / (side + 1) as f64;
+    let mut sine = vec![0.0; side * side];
+    let mut cosines = vec![0.0; side];
+    for mode in 0..side {
+        let mode_angle = (mode + 1) as f64 * theta;
+        cosines[mode] = mode_angle.cos();
+        for pos in 0..side {
+            sine[mode * side + pos] = ((pos + 1) as f64 * mode_angle).sin();
+        }
+    }
+
+    // DST-I diagonalizes the Kronecker-sum grid operator:
+    // A = dI + h(T_x) + v(T_y), with Dirichlet boundaries.
+    let mut row_transformed = vec![0.0; n];
+    for mode_r in 0..side {
+        let sine_r = &sine[mode_r * side..(mode_r + 1) * side];
+        for col in 0..side {
+            let mut sum = 0.0;
+            for row in 0..side {
+                sum += sine_r[row] * b[row * side + col];
+            }
+            row_transformed[mode_r * side + col] = sum;
+        }
+    }
+
+    let mut spectral = vec![0.0; n];
+    for mode_r in 0..side {
+        for mode_c in 0..side {
+            let sine_c = &sine[mode_c * side..(mode_c + 1) * side];
+            let mut sum = 0.0;
+            for col in 0..side {
+                sum += row_transformed[mode_r * side + col] * sine_c[col];
+            }
+            let lambda = pattern.diagonal
+                + 2.0 * pattern.vertical * cosines[mode_r]
+                + 2.0 * pattern.horizontal * cosines[mode_c];
+            if lambda.abs() <= f64::EPSILON || !lambda.is_finite() {
+                return Err(SparseError::SingularMatrix {
+                    message: "square-grid Dirichlet spectral eigenvalue is singular".to_string(),
+                });
+            }
+            spectral[mode_r * side + mode_c] = sum / lambda;
+        }
+    }
+
+    let mut inverse_rows = vec![0.0; n];
+    for row in 0..side {
+        for mode_c in 0..side {
+            let mut sum = 0.0;
+            for mode_r in 0..side {
+                sum += sine[mode_r * side + row] * spectral[mode_r * side + mode_c];
+            }
+            inverse_rows[row * side + mode_c] = sum;
+        }
+    }
+
+    let scale = (2.0 / (side + 1) as f64).powi(2);
+    let mut x = vec![0.0; n];
+    for row in 0..side {
+        for col in 0..side {
+            let mut sum = 0.0;
+            for mode_c in 0..side {
+                sum += inverse_rows[row * side + mode_c] * sine[mode_c * side + col];
+            }
+            x[row * side + col] = scale * sum;
+        }
+    }
+
+    let residual = spsolve_relative_residual(a, b, &x);
+    if residual <= SPSOLVE_SQUARE_GRID_DIRICHLET_ACCEPT_RESIDUAL {
+        Ok(x)
+    } else {
+        Err(SparseError::SingularMatrix {
+            message: format!("square-grid Dirichlet spectral residual too large: {residual:.3e}"),
+        })
+    }
 }
 
 fn csr_to_banded_storage(a: &CsrMatrix, half_bandwidth: usize) -> Vec<Vec<f64>> {
@@ -6212,15 +6435,15 @@ mod tests {
     }
 
     #[test]
-    fn spsolve_laplacian_prefers_banded_direct_over_spd_cg() {
+    fn spsolve_laplacian_prefers_square_grid_direct_over_spd_cg() {
         let a = laplacian_2d_for_mmd(20);
         let n = a.shape().rows;
         let b: Vec<f64> = (0..n).map(|i| 1.0 + (i % 13) as f64 * 0.5).collect();
 
         let bandwidth = csr_bandwidth(&a);
         assert!(
-            spsolve_spd_banded_candidate(&a, SolveOptions::default(), bandwidth),
-            "strict SPD banded guard should accept the Laplacian fixture"
+            spsolve_square_grid_dirichlet_pattern(&a, SolveOptions::default(), bandwidth).is_some(),
+            "square-grid Dirichlet guard should accept the Laplacian fixture"
         );
         let result = spsolve(&a, &b, SolveOptions::default()).expect("spsolve");
 

@@ -6,6 +6,54 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-27 - cod-a (codex-cli) - KEEP: sparse.spsolve square-grid spectral route flips the Laplacian fixture vs SciPy
+
+- Agent: cod-a (codex-cli / gpt-5.2), `AGENT_NAME=cod-a`.
+- Land-or-dig audit: no measured bench-worktree win was landable before digging.
+  The only non-ancestor candidate found was
+  `/data/projects/.worktrees/frankenscipy-eigvalsh-blackthrush-20260609`
+  (`e3b744f4`, GEMM flat-workspace threshold 768), and current `main` already
+  has the stronger threshold 256.
+- Gap attacked: `sparse.spsolve` on the 2-D 5-point Dirichlet Laplacian. The
+  previous guarded SPD/banded route reduced the native sparse-LU wall but still
+  left the deterministic Laplacian fixture slower than SciPy.
+- Lever kept: detect the exact square-grid CSR stencil under the default
+  `Auto`/`Colamd` options and solve it by DST-I sine-basis diagonalization of
+  the Kronecker-sum operator. The route is fail-closed: it accepts only finite,
+  strictly diagonally dominant constant stencils and then verifies the true
+  sparse residual is `<= 1e-8`; otherwise it falls back to the existing banded
+  direct/native sparse paths.
+- MEASURED via
+  `AGENT_NAME=cod-a CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a
+  rch exec -- cargo bench -p fsci-sparse --bench sparse_bench --profile release
+  -- sparse_spsolve_laplacian --sample-size 10 --warm-up-time 1
+  --measurement-time 2 --noplot`. The literal requested
+  `cargo bench --release` form is rejected by this Cargo (`unexpected argument
+  '--release'`), so the equivalent release-profile form above was used.
+  - n=1600: old Rust `4.7959 ms`; new Rust `267.10 us`, `17.95x` faster
+    self-ratio, Criterion mean `-95.114%`, `p = 0.00`.
+  - n=4900: old Rust `44.040 ms`; new Rust `1.1653 ms`, `37.79x` faster
+    self-ratio, Criterion mean `-97.421%`, `p = 0.00`.
+- Ratio vs SciPy 1.17.1 on the same deterministic matrix/RHS:
+  - n=1600: SciPy median `3.116855 ms`; new Rust `267.10 us`, so Rust is
+    `11.67x` faster (`0.0857x` SciPy time). The old Rust baseline was `1.54x`
+    slower than SciPy.
+  - n=4900: SciPy median `11.947596 ms`; new Rust `1.1653 ms`, so Rust is
+    `10.25x` faster (`0.0975x` SciPy time). The old Rust baseline was `3.69x`
+    slower than SciPy.
+- Correctness / conformance GREEN for the touched sparse surface: RCH `hz2`
+  `cargo test -p fsci-sparse spsolve --lib -- --nocapture` passed 17/17 focused
+  solve tests; the post-lint focused square-grid route test passed 1/1; RCH
+  `hz2` `cargo check -p fsci-sparse --all-targets` passed; sparse conformance
+  passed locally with SciPy 1.17.1 for both `cargo test -p fsci-conformance
+  --test e2e_sparse -- --nocapture` (24/24) and `cargo test -p fsci-conformance
+  --test diff_sparse -- --nocapture` (34/34). `git diff --check` passed. UBS
+  reported no critical findings on the touched Rust file. `cargo fmt --check
+  --package fsci-sparse` remains blocked by pre-existing formatting drift in
+  untouched sparse files/sections, and clippy remains blocked by pre-existing
+  `fsci-linalg` plus unrelated sparse `needless_range_loop` lints after the new
+  helper was corrected.
+
 ## 2026-06-27 - cod-a (codex-cli) - KEEP: sparse.spsolve SPD-CG gate tuned to avoid failed-iteration fallback
 
 - Agent: cod-a (codex-cli / gpt-5.2), `AGENT_NAME=cod-a`.
