@@ -595,6 +595,22 @@ fn bench_betabinom_cdf(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_neghypergeom_cdf(c: &mut Criterion) {
+    use criterion::BenchmarkId;
+    use fsci_stats::{DiscreteDistribution, NegHypergeometric};
+    let mut group = c.benchmark_group("neghypergeom_cdf");
+    // cdf summed pmf(0..=k) at 3 ln_comb (~6 ln_gamma)/pmf; the pmf-ratio recurrence
+    // (mode-anchored) makes each term one multiply. Cost scales with n (support [0,n]).
+    for &n in &[50_u64, 200, 400] {
+        let d = NegHypergeometric::new(2 * n + 100, n, n + 50);
+        let ks: Vec<u64> = (0..=n).collect();
+        group.bench_function(BenchmarkId::new("cdf", n), |b| {
+            b.iter(|| ks.iter().map(|&k| d.cdf(black_box(k))).sum::<f64>())
+        });
+    }
+    group.finish();
+}
+
 fn bench_betanbinom_cdf(c: &mut Criterion) {
     use criterion::BenchmarkId;
     use fsci_stats::{BetaNegativeBinomial, DiscreteDistribution};
@@ -613,6 +629,7 @@ fn bench_betanbinom_cdf(c: &mut Criterion) {
 
 criterion_group!(
     benches,
+    bench_neghypergeom_cdf,
     bench_betanbinom_cdf,
     bench_betabinom_cdf,
     bench_skellam_cdf,

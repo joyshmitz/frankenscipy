@@ -8861,3 +8861,35 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   recurrence flips that to 71x faster (and 93x self at kmax=2000). Lifts NoncentralBinomial-tail
   callers and the default sf = 1 − cdf.
 - Gate: `cargo test -p fsci-stats --lib` betanbinom + beta_negative_binomial = 3/3 green.
+
+## 2026-06-27 - WIN: NegHypergeometric.cdf pmf-ratio recurrence — 31x self, 103-266x FASTER than SciPy
+
+- Agent: cc (Claude Code / Opus), `AGENT_NAME=cc`.
+- NegHypergeometric (nhypergeom) had a cdf override but it was a FRESH-pmf sum
+  (`for i in 0..=k { sum += self.pmf(i) }`), each pmf = 3 ln_comb (~6 ln_gamma). The pmf has
+  a closed ratio: `pmf(i+1)/pmf(i) = (i+r)(n−i) / ((i+1)(M−r−i))`. Anchored at the mode
+  (`floor((r(n+1)−M)/(M−n−1))` clamped [0,n], in f64 to let the numerator go negative; an
+  off-by-one vs the true argmax is harmless since the anchor pmf is still ~max) and sweep
+  outward, summing [0,k]. One ln_gamma-based pmf at the mode + O(n) multiply/adds. The
+  constructor asserts r ≤ M−n, so every denominator M−r−i ≥ 1 — no division by zero.
+- Verified vs scipy.stats.nhypergeom.cdf to ≤8.3e-13 (Python, incl. a 2.6e-29 tail and the
+  full-support→1.0 case) BEFORE coding; locked with a NEW golden test
+  `neghypergeom_cdf_recurrence_matches_scipy` (n=10/50/400, deep tail). The pre-existing
+  `neg_hypergeometric_pmf_cdf_match_scipy` (pins cdf(5) at n=7) still passes unchanged.
+- MEASURED same-box A/B (`cargo bench -p fsci-stats -- neghypergeom_cdf`, stash lib.rs to
+  toggle override vs fresh-sum, full k=0..=n array). SciPy timed at the IDENTICAL params:
+
+  | Workload (M, n, r) | OLD fresh-pmf sum | NEW recurrence | self | SciPy | vs SciPy |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | (200, 50, 75)   | — | 12.70 µs | — | 3373 µs | 266x FASTER |
+  | (500, 200, 250) | — | 96.18 µs | — | 15325 µs | 159x FASTER |
+  | (900, 400, 450) | 11.055 ms | 353.94 µs | 31x | 36648 µs | 103x FASTER |
+
+  Bigger ratios than betabinom because the nhypergeom pmf carries 3 ln_comb. The OLD fresh-sum
+  was already ~3x faster than scipy at n=400 (11.06ms vs 36.6ms); the recurrence widens that to
+  103x. Lifts the default sf = 1 − cdf too.
+- Gate: `cargo test -p fsci-stats --lib` neg_hyper (3/3) + neghypergeom_cdf_recurrence (1/1) green.
+- PROCESS: first golden test run FAILED on `assert_eq!(cdf(400), 1.0)` — the recurrence sums to
+  0.99999999999976 (2.4e-13 off 1.0), which is correct parity but not bit-exact 1.0; loosened to
+  a 1e-9 tolerance. The MATH was right (rel ≤8.3e-13 vs scipy); only the test assertion was too
+  strict. Don't `assert_eq!` a summed cdf against exactly 1.0.

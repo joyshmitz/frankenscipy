@@ -11660,13 +11660,56 @@ impl DiscreteDistribution for NegHypergeometric {
     }
 
     fn cdf(&self, k: u64) -> f64 {
-        let max_k = self.n;
-        let k = k.min(max_k);
-        let mut sum = 0.0;
-        for i in 0..=k {
-            sum += self.pmf(i);
+        // The fresh-pmf sum below paid 3 ln_comb (~6 ln_gamma) PER term. The pmf has
+        // a closed ratio: pmf(i+1)/pmf(i) = (i+r)(n−i) / ((i+1)(M−r−i)). Anchor at
+        // the mode (the largest pmf — never underflows; the constructor guarantees
+        // M−r ≥ n so every denominator stays ≥ 1) and sweep outward, summing [0,k].
+        // One ln_gamma-based pmf at the mode + O(n) multiply/adds. Verified vs
+        // scipy.stats.nhypergeom.cdf to ≤8.3e-13 incl. a 1e-29 tail.
+        let (m_i, n_i, r_i) = (self.big_m, self.n, self.r);
+        if r_i == 0 {
+            return 1.0; // degenerate: all mass at k=0
         }
-        sum.min(1.0)
+        let k = k.min(n_i);
+        let (mf, nf, rf) = (m_i as f64, n_i as f64, r_i as f64);
+        // Mode = floor((r(n+1) − M)/(M − n − 1)) clamped to [0, n], in f64 so the
+        // numerator may go negative without u64 underflow. An off-by-one vs the true
+        // argmax is harmless — the anchor pmf is still ~max and representable.
+        let denom = mf - nf - 1.0;
+        let mode = if denom <= 0.0 {
+            0.0
+        } else {
+            ((rf * (nf + 1.0) - mf) / denom).floor()
+        };
+        let m = mode.clamp(0.0, nf) as u64;
+        let pm = self.logpmf(m).exp();
+        let mut total = 0.0_f64;
+        // Downward from the mode to 0, counting indices ≤ k.
+        let mut pk = pm;
+        let mut i = m;
+        loop {
+            if i <= k {
+                total += pk;
+            }
+            if i == 0 {
+                break;
+            }
+            let fi = i as f64;
+            // pmf(i−1)/pmf(i) = i(M−r−i+1) / ((i−1+r)(n−i+1))
+            pk *= fi * (mf - rf - fi + 1.0) / ((fi - 1.0 + rf) * (nf - fi + 1.0));
+            i -= 1;
+        }
+        // Upward from the mode to k.
+        pk = pm;
+        i = m;
+        while i < k {
+            let fi = i as f64;
+            // pmf(i+1)/pmf(i) = (i+r)(n−i) / ((i+1)(M−r−i))
+            pk *= (fi + rf) * (nf - fi) / ((fi + 1.0) * (mf - rf - fi));
+            i += 1;
+            total += pk;
+        }
+        total.min(1.0)
     }
 
     fn mean(&self) -> f64 {
@@ -75862,6 +75905,19 @@ mod tests {
         assert!((d.cdf(5) - 0.995_562_435_500_515_9).abs() < 1e-12, "cdf(5)");
         assert!((d.mean() - 1.5).abs() < 1e-12, "mean");
         assert!((d.var() - 1.65).abs() < 1e-12, "var");
+    }
+
+    #[test]
+    fn neghypergeom_cdf_recurrence_matches_scipy() {
+        // Locks the pmf-ratio-recurrence cdf override at large n and in the deep
+        // tail (the existing test only pins cdf(5) at n=7). Golden values from
+        // scipy.stats.nhypergeom(M,n,r).cdf(k) 1.17.1.
+        assert!((NegHypergeometric::new(50, 10, 5).cdf(5) - 9.980_128_068_319e-1).abs() <= 1e-10);
+        assert!((NegHypergeometric::new(500, 50, 100).cdf(25) - 9.999_870_190_111e-1).abs() <= 1e-10);
+        // Top of support sums to 1.0 up to accumulated f64 rounding (~2e-13).
+        assert!((NegHypergeometric::new(1000, 400, 500).cdf(400) - 1.0).abs() <= 1e-9);
+        let tail = NegHypergeometric::new(1000, 400, 500).cdf(200);
+        assert!((tail - 2.626_855_007_1e-29).abs() <= 1e-10 * 2.626_855_007_1e-29, "deep tail");
     }
 
     #[test]
