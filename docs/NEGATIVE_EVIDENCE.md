@@ -6,6 +6,48 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-27 - cod-a (codex-cli) - NO-SHIP: Cholesky SYRK 8-dot register tile regresses the current 4-dot row update
+
+- Land-or-dig audit: all live `.scratch` / `.worktrees` FrankenSciPy bench
+  worktrees were already ancestors of `origin/main` except the stale
+  `/data/projects/.worktrees/frankenscipy-eigvalsh-blackthrush-20260609`
+  `e3b744f4` GEMM threshold patch, which is still superseded by current main's
+  lower flat-workspace threshold. No measured unlanded worktree win was available.
+- Gap attacked: the largest current measured public residual remains dense
+  `fsci-linalg` Cholesky / `cho_factor` on the 1000x1000 SPD gauntlet matrix.
+  The prior entry below shows current ORIG at 49.945 ms factor-only and 44.734 ms
+  factor+solve under local `rch` fallback, versus SciPy 1.17.1 at 4.895 ms and
+  5.870 ms respectively.
+- New lever tested and reverted: widen `cholesky_syrk_rows` from the current
+  four simultaneous shared-left dot products (`simd_dot4`) to an eight-output
+  register tile (`simd_dot8`). This targets the actual triangular SYRK update,
+  not the already-rejected representation swap, panel-size retune, or panel-dot
+  micro-levers.
+- Per-crate bench command used via rch release-profile form:
+  `AGENT_NAME=cod-a CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a rch exec -- cargo bench -p fsci-linalg --bench linalg_bench --profile release -- 1000x1000_rust_cho_factor --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`.
+  The exact `cargo bench --release` spelling remains a Cargo CLI parser failure
+  in this repo, so the accepted equivalent is `--profile release`.
+- Candidate local-fallback Criterion result:
+  - `1000x1000_rust_cho_factor`: 65.838 ms and Criterion reported
+    `+51.052%` regression. Against the local ORIG row recorded below
+    (49.945 ms), candidate-vs-ORIG speed ratio is 0.76x.
+  - `1000x1000_rust_cho_factor_solve`: 65.766 ms and Criterion reported
+    `+109.25%` regression. Against the local ORIG row recorded below
+    (44.734 ms), candidate-vs-ORIG speed ratio is 0.68x.
+- Additional restored-source sanity rows after revert: current `origin/main`
+  measured 56.762 ms / 49.724 ms on `hz2`, and 37.410 ms / 32.434 ms on
+  `ovh-a`. These are cross-worker routing evidence only, not a candidate A/B.
+- Current local SciPy 1.17.1 oracle for the same matrix measured after revert:
+  `cho_factor` 6.086 ms, `cho_factor+cho_solve` 7.197 ms. The rejected candidate
+  would be 10.82x and 9.14x slower than today's local SciPy oracle, while the
+  local ORIG row below is 8.21x and 6.22x slower by the same denominator.
+- Conformance guard during the experiment:
+  `cargo test -p fsci-linalg cholesky_lower_blocked_matches_unblocked_factorization
+  --lib -- --nocapture` passed 1/1 under the requested target dir before reject.
+  Final source was reverted to `origin/main`; this commit is evidence-only.
+  Next Cholesky work should skip wider dot tiles and move to a true blocked
+  GEMM/SYRK layout with packed panels or a vendor-equivalent algorithmic boundary.
+
 ## 2026-06-27 - cod-a (codex-cli) - NO-SHIP: flat row-major blocked Cholesky factor buffer improved factor-only but regressed factor+solve
 
 - Land-or-dig audit: found one stale non-ancestor bench worktree,
