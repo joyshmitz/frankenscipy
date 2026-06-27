@@ -8893,3 +8893,29 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   0.99999999999976 (2.4e-13 off 1.0), which is correct parity but not bit-exact 1.0; loosened to
   a 1e-9 tolerance. The MATH was right (rel ≤8.3e-13 vs scipy); only the test assertion was too
   strict. Don't `assert_eq!` a summed cdf against exactly 1.0.
+
+## 2026-06-27 - WIN: discrete entropy pmf-ratio recurrence (BetaBinomial + NegHypergeometric) — 12.7-14.3x self, 465-1528x vs SciPy
+
+- Agent: cc (Claude Code / Opus), `AGENT_NAME=cc`.
+- Extends the pmf-ratio lever from cdf to ENTROPY. H = −Σ pmf·ln(pmf) over the support was a
+  fresh-pmf loop paying ~6 ln_gamma PER term. Instead track pmf AND ln(pmf) JOINTLY by the
+  pmf-ratio recurrence: anchor at the mode (pmf never underflows), then per step
+  `pk *= ratio; lpk += ratio.ln()`, accumulating `h -= pk·lpk`. One ln_gamma-based pmf at the
+  mode + O(n) with a SINGLE ln per term (vs 6 ln_gamma). Ratios reused from the cdf overrides:
+  betabinom `(n−i)(i+a)/((i+1)(n−i−1+b))`, nhypergeom `(i+r)(n−i)/((i+1)(M−r−i))`.
+- Verified vs scipy.stats.{betabinom,nhypergeom}.entropy to ≤5.7e-13 BEFORE coding; locked with
+  a NEW golden test `discrete_entropy_recurrence_matches_scipy` (n up to 1000, a=b=0.5 edge).
+- MEASURED same-box A/B (`cargo bench -p fsci-stats -- discrete_entropy`, stash lib.rs to toggle):
+
+  | Workload | OLD fresh-lgamma loop | NEW recurrence | self | SciPy | vs SciPy |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | betabinom(1000,2,3).entropy   | 111.37 µs | 8.75 µs | 12.7x | 4070 µs | 465x FASTER |
+  | neghypergeom(900,400,450).entropy | 47.98 µs | 3.35 µs | 14.3x | 5120 µs | 1528x FASTER |
+  | betabinom(200,2,3).entropy    | — | 1.96 µs | — | 1449 µs | 739x FASTER |
+
+  NOTE: fsci ALREADY beat scipy on entropy (scipy's rv_discrete.entropy carries heavy Python/
+  object-dtype `expect()` overhead — it even warns "sum did not converge"); this is a 12.7-14.3x
+  SELF-speedup that widens the lead, not a flipped loss. The honest engineering number is the
+  self-speedup; the vs-SciPy ratio is inflated by scipy's interpreter overhead.
+- Gate: `cargo test -p fsci-stats --lib discrete_entropy_recurrence` 1/1 + betabinom/neg_hyper
+  suites still green.

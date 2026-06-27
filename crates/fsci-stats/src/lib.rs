@@ -10057,11 +10057,46 @@ impl DiscreteDistribution for BetaBinomial {
     }
 
     fn entropy(&self) -> f64 {
-        let mut h = 0.0_f64;
-        for k in 0..=self.n {
-            let p = self.pmf(k);
-            if p > 0.0 {
-                h -= p * p.ln();
+        // H = −Σ pmf·ln(pmf) over [0,n]. The fresh-pmf loop paid ~6 ln_gamma PER
+        // term; instead track pmf and ln(pmf) jointly via the pmf-ratio recurrence
+        // (pmf(i+1)/pmf(i) = (n−i)(i+a)/((i+1)(n−i−1+b))), anchored at the mode so
+        // the pmf never underflows. One ln_gamma-based pmf at the mode + O(n) (one
+        // ln per term). Verified vs scipy.stats.betabinom.entropy to ≤5.7e-13.
+        let n = self.n;
+        let nf = n as f64;
+        let (a, b) = (self.a, self.b);
+        let m = (self.mode() as u64).min(n);
+        let lp_m = self.logpmf(m);
+        let pm = lp_m.exp();
+        let mut h = if pm > 0.0 { -pm * lp_m } else { 0.0 };
+        // Downward from the mode to 0.
+        let mut pk = pm;
+        let mut lpk = lp_m;
+        let mut i = m;
+        while i > 0 {
+            let fi = i as f64;
+            // pmf(i−1)/pmf(i) = i(n−i+b) / ((n−i+1)(i−1+a))
+            let r = fi * (nf - fi + b) / ((nf - fi + 1.0) * (fi - 1.0 + a));
+            pk *= r;
+            lpk += r.ln();
+            i -= 1;
+            if pk > 0.0 {
+                h -= pk * lpk;
+            }
+        }
+        // Upward from the mode to n.
+        pk = pm;
+        lpk = lp_m;
+        i = m;
+        while i < n {
+            let fi = i as f64;
+            // pmf(i+1)/pmf(i) = (n−i)(i+a) / ((i+1)(n−i−1+b))
+            let r = (nf - fi) * (fi + a) / ((fi + 1.0) * (nf - fi - 1.0 + b));
+            pk *= r;
+            lpk += r.ln();
+            i += 1;
+            if pk > 0.0 {
+                h -= pk * lpk;
             }
         }
         h
@@ -11761,12 +11796,54 @@ impl DiscreteDistribution for NegHypergeometric {
     }
 
     fn entropy(&self) -> f64 {
-        let max_k = self.n;
-        let mut h = 0.0_f64;
-        for k in 0..=max_k {
-            let p = self.pmf(k);
-            if p > 0.0 {
-                h -= p * p.ln();
+        // H = −Σ pmf·ln(pmf) over [0,n]. Same lever as the cdf: track pmf and ln(pmf)
+        // jointly via the pmf-ratio recurrence (pmf(i+1)/pmf(i)=(i+r)(n−i)/((i+1)(M−r−i))),
+        // anchored at the mode so the pmf never underflows (and r≤M−n ⇒ denominators ≥ 1).
+        // One ln_gamma-based pmf at the mode + O(n) (one ln per term). Verified vs
+        // scipy.stats.nhypergeom.entropy to ≤4.2e-13.
+        let (m_i, n_i, r_i) = (self.big_m, self.n, self.r);
+        if r_i == 0 {
+            return 0.0; // degenerate: all mass at k=0, H=0
+        }
+        let (mf, nf, rf) = (m_i as f64, n_i as f64, r_i as f64);
+        let denom = mf - nf - 1.0;
+        let mode = if denom <= 0.0 {
+            0.0
+        } else {
+            ((rf * (nf + 1.0) - mf) / denom).floor()
+        };
+        let m = mode.clamp(0.0, nf) as u64;
+        let lp_m = self.logpmf(m);
+        let pm = lp_m.exp();
+        let mut h = if pm > 0.0 { -pm * lp_m } else { 0.0 };
+        // Downward from the mode to 0.
+        let mut pk = pm;
+        let mut lpk = lp_m;
+        let mut i = m;
+        while i > 0 {
+            let fi = i as f64;
+            // pmf(i−1)/pmf(i) = i(M−r−i+1) / ((i−1+r)(n−i+1))
+            let r = fi * (mf - rf - fi + 1.0) / ((fi - 1.0 + rf) * (nf - fi + 1.0));
+            pk *= r;
+            lpk += r.ln();
+            i -= 1;
+            if pk > 0.0 {
+                h -= pk * lpk;
+            }
+        }
+        // Upward from the mode to n.
+        pk = pm;
+        lpk = lp_m;
+        i = m;
+        while i < n_i {
+            let fi = i as f64;
+            // pmf(i+1)/pmf(i) = (i+r)(n−i) / ((i+1)(M−r−i))
+            let r = (fi + rf) * (nf - fi) / ((fi + 1.0) * (mf - rf - fi));
+            pk *= r;
+            lpk += r.ln();
+            i += 1;
+            if pk > 0.0 {
+                h -= pk * lpk;
             }
         }
         h
@@ -75117,6 +75194,18 @@ mod tests {
         let tail = BetaBinomial::new(1000, 50.0, 1.0);
         let g = tail.cdf(100);
         assert!((g - 1.746_855_178_992e-46).abs() <= 1e-9 * 1.746_855_178_992e-46, "deep tail cdf(100)");
+    }
+
+    #[test]
+    fn discrete_entropy_recurrence_matches_scipy() {
+        // Locks the pmf-ratio entropy override for BetaBinomial + NegHypergeometric.
+        // Golden H values from scipy.stats.<dist>.entropy() 1.17.1.
+        assert!((BetaBinomial::new(20, 2.0, 3.0).entropy() - 2.867_278_018_798).abs() <= 1e-10);
+        assert!((BetaBinomial::new(1000, 2.0, 3.0).entropy() - 6.675_336_036_505).abs() <= 1e-9);
+        assert!((BetaBinomial::new(50, 0.5, 0.5).entropy() - 3.770_493_035_160).abs() <= 1e-10);
+        assert!((NegHypergeometric::new(20, 7, 3).entropy() - 1.571_080_643_983).abs() <= 1e-10);
+        assert!((NegHypergeometric::new(900, 400, 450).entropy() - 3.505_555_116_320).abs() <= 1e-9);
+        assert!((NegHypergeometric::new(200, 50, 75).entropy() - 2.821_387_090_436).abs() <= 1e-10);
     }
 
     #[test]
