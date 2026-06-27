@@ -4,6 +4,25 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-detrend-constant-simd-sum - KEEP (byte-tolerant 2.25x self) + linear detrend is a 35x WIN
+
+Measured `signal.detrend` (n=1M). LINEAR is a huge fsci WIN already (1.74 ms vs
+scipy 61.3 ms = **35.2x FASTER** — scipy routes linear detrend through `lstsq`;
+fsci closed-forms the slope/intercept). CONSTANT was a loss: **2.89x SLOWER**
+(1.80 ms vs 0.625 ms) — subtract-the-mean ran THREE serial passes
+(`validate_real_values_finite` scan + scalar `.sum()` dependency chain + the
+subtract) where scipy does ~2 bandwidth-bound passes. Fused the finite-check into
+a 4-independent-accumulator sum (breaks the fold's latency chain → the loop
+auto-vectorizes; `&` of per-lane `is_finite` rejects non-finite exactly as the old
+validate), dropping to 2 passes. **1.80 → 0.802 ms = 2.25x self; closes 2.89x →
+1.28x slower.** Byte-tolerant (~1e-15 reassoc vs the scalar fold, same order as
+scipy's pairwise `np.mean`); 10/10 detrend + 652/0 signal lib GREEN. Residual
+1.28x is the output `Vec<f64>` alloc+write (8 MB, API-mandated). NOTE: portable_simd
+is NOT enabled in fsci-signal — used a SCALAR multi-accumulator (the compiler
+vectorizes independent accumulators), not `std::simd`. LEVER: grep other reductions
+that run a separate `validate_*_finite` pass + a scalar `.sum()`/`.fold()` over the
+same array — fuse + multi-accumulate.
+
 ## 2026-06-26 - frankenscipy-greenfalcon-medfilt2d-parallel-fastpath - KEEP (BOLD WIN, byte-identical): signal.medfilt2d parallel + interior fast-path, 5.4-37x FASTER
 
 `signal.medfilt2d` already beat scipy modestly (1.16-2.48x) but was **7x slower

@@ -11636,13 +11636,48 @@ pub fn detrend(data: &[f64], dtype: DetrendType) -> Result<Vec<f64>, SignalError
             )),
         };
     }
-    validate_real_values_finite(data, "detrend input samples must be finite")?;
     match dtype {
         DetrendType::Constant => {
-            let mean = data.iter().sum::<f64>() / data.len() as f64;
+            // Subtract the mean. FUSE the finite-check into the sum (the old path
+            // ran a separate `validate_real_values_finite` scan PLUS a scalar
+            // `.sum()` — two serial passes, the fold a non-vectorized dependency
+            // chain). Four independent accumulators break that chain so the loop
+            // auto-vectorizes; the `&` of per-lane `is_finite` rejects non-finite
+            // input exactly as the old validate. ~1e-15 reassociation vs the scalar
+            // fold — the same order as SciPy's pairwise `np.mean`.
+            let n = data.len();
+            let mut acc = [0.0f64; 4];
+            let mut ok = true;
+            let mut i = 0;
+            while i + 4 <= n {
+                let v = [data[i], data[i + 1], data[i + 2], data[i + 3]];
+                acc[0] += v[0];
+                acc[1] += v[1];
+                acc[2] += v[2];
+                acc[3] += v[3];
+                ok &= v[0].is_finite()
+                    & v[1].is_finite()
+                    & v[2].is_finite()
+                    & v[3].is_finite();
+                i += 4;
+            }
+            let mut sum = (acc[0] + acc[1]) + (acc[2] + acc[3]);
+            while i < n {
+                let v = data[i];
+                ok &= v.is_finite();
+                sum += v;
+                i += 1;
+            }
+            if !ok {
+                return Err(SignalError::InvalidArgument(
+                    "detrend input samples must be finite".to_string(),
+                ));
+            }
+            let mean = sum / n as f64;
             Ok(data.iter().map(|&v| v - mean).collect())
         }
         DetrendType::Linear => {
+            validate_real_values_finite(data, "detrend input samples must be finite")?;
             let n = data.len();
             let n_f = n as f64;
             if n < 2 {
