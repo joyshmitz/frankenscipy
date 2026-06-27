@@ -597,11 +597,14 @@ pub fn ncfdtr(dfn: f64, dfd: f64, nc: f64, f: f64) -> f64 {
     while steps < 100_000 {
         total += w * p.clamp(0.0, 1.0);
         p -= u;
+        if p <= 0.0 {
+            break;
+        }
         j += 1.0;
         u *= y * (a + b) / (a + 1.0);
         a += 1.0;
         w *= lam / j;
-        if w < 1e-300 || (w < 1e-17 * total.max(1e-300) && j > lam) {
+        if w < 1e-300 || (w < 1e-14 * total.max(1e-300) && j > lam) {
             break;
         }
         steps += 1;
@@ -619,7 +622,7 @@ pub fn ncfdtr(dfn: f64, dfd: f64, nc: f64, f: f64) -> f64 {
         j -= 1.0;
         a -= 1.0;
         total += w * p.clamp(0.0, 1.0);
-        if w < 1e-17 * total.max(1e-300) {
+        if w < 1e-14 * total.max(1e-300) {
             break;
         }
     }

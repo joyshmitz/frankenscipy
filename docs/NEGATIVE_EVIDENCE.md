@@ -57,6 +57,62 @@ ledger above so the project has one source of truth.
   simple block-size constant; the next valid lever still needs a deeper panel
   solve / packed update rewrite or direct LAPACK-class kernel work.
 
+## 2026-06-27 - cod-a (codex-cli) - KEEP: special.ncfdtr stops the upward beta-recurrence branch after zero contribution
+
+- Agent: cod-a (codex-cli / gpt-5.2), `AGENT_NAME=cod-a`.
+- Land-or-dig audit: no non-ancestor measured bench-worktree win was landable on
+  current `main`; the old eigvalsh GEMM-threshold worktree is already
+  superseded by `main`. I dug the current SciPy gaps instead. Cholesky
+  `cho_factor` remained the largest dense-linalg residual, but two fresh
+  one-lever attempts were measured and reverted: a four-dot SYRK update was
+  neutral/worse (`1000x1000 cho_factor` 52.341 ms -> 54.074 ms), and a flat
+  factor workspace regressed badly (52.341 ms -> 66.832 ms). The stale
+  `jnjnp_zeros` gap is closed on current `main` (Rust 0.387/0.818 ms vs SciPy
+  0.481/0.905 ms for nt=64/128), so the active fresh special residual was
+  `ncfdtr`.
+- Lever kept: in `fsci_special::ncfdtr`, the upward recurrence walks
+  `I_y(a+j,b)` toward zero and every term is already contributed as
+  `p.clamp(0, 1)`. Once the recurrence reaches `p <= 0`, later larger-shape
+  terms would also be clamped to zero, so the loop now stops. The Poisson tail
+  cutoff was also relaxed from `1e-17` to `1e-14`, still well inside the
+  existing `1e-10` SciPy-golden tolerance.
+- MEASURED via
+  `AGENT_NAME=cod-a CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a
+  rch exec -- cargo bench -p fsci-special --bench special_bench --profile
+  release -- ncfdtr --sample-size 10 --warm-up-time 1 --measurement-time 2
+  --noplot`. RCH had no admissible worker for the bench and fell back locally.
+  The requested `cargo bench --release` form is not accepted by this Cargo; the
+  per-crate release-profile form above was used.
+
+  | Workload | Baseline Rust | New Rust | Self ratio |
+  | --- | ---: | ---: | ---: |
+  | `ncfdtr` dfn=10 dfd=10 nc=2, 256 f values | 97.074 us | 99.517 us | no significant change |
+  | `ncfdtr` dfn=20 dfd=30 nc=200, 256 f values | 261.37 us | 206.46 us | 1.27x faster |
+  | `ncfdtr` dfn=50 dfd=50 nc=2000, 256 f values | 2.1463 ms | 1.1472 ms | 1.87x faster |
+
+- Ratio vs local SciPy 1.17.1 / Python 3.13.7 on the same 256-value batch:
+
+  | Workload | New Rust | SciPy median | Ratio vs SciPy |
+  | --- | ---: | ---: | ---: |
+  | dfn=10 dfd=10 nc=2 | 99.517 us | 55.876 us | 1.78x slower |
+  | dfn=20 dfd=30 nc=200 | 206.46 us | 178.924 us | 1.15x slower |
+  | dfn=50 dfd=50 nc=2000 | 1.1472 ms | 625.246 us | 1.84x slower |
+
+- Correctness / conformance GREEN: `cargo test -p fsci-special --lib ncfdtr --
+  --nocapture`, `cargo test -p fsci-special --lib nc_inverse_param_matches_scipy
+  -- --nocapture`, and `cargo test -p fsci-special --lib
+  noncentral_quantile_inverses_match_scipy -- --nocapture` passed. SciPy-backed
+  conformance neighbors `cargo test -p fsci-conformance --test diff_special_fdtr
+  -- --nocapture` and `cargo test -p fsci-conformance --test
+  diff_special_stdtr_btdtr -- --nocapture` passed. `git diff --check` and
+  `rustfmt --edition 2024 --check crates/fsci-special/src/beta.rs` passed.
+  Builds still report pre-existing warnings in unrelated `fsci-special`,
+  `fsci-cluster`, and `fsci-interpolate` code.
+- CONCLUSION: keep the `ncfdtr` upward zero-contribution stop. It is a small
+  branch-only change, preserves the existing clamped contribution semantics, and
+  narrows the large noncentral-F residual from roughly the prior multi-x SciPy
+  loss class to under 2x on the current bench.
+
 ## 2026-06-27 - GreenFalcon (codex-cli) - KEEP: linalg.cho_factor reuses the blocked Cholesky factor at large n
 
 - Agent: GreenFalcon (codex-cli / gpt-5.2), `AGENT_NAME=GreenFalcon`.
