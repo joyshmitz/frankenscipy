@@ -4,6 +4,27 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-27 - frankenscipy-greenfalcon-moderate-kernel-workcap - KEEP (byte-identical 2-3x faster than scipy): special MODERATE kernels middle work cap
+
+Probed heavier special kernels (retry note). jv/yv REAL Bessel are already 18x
+FASTER than scipy's amos (3.9 vs 71 ms; 6.4 vs 113 ms at n=100k — don't touch).
+But `dawsn` was 1.3-2.5x SLOWER at small-moderate n with a FLAT ~2.8-3.3 ms time
+across n=50k-500k — the loose-cap (`min(cores, n/128)` = 64 threads) spawn floor
+again, but for a MODERATE kernel (~50-300ns) the existing `par_map_light`
+(`n/32768`) cap is too TIGHT (only ~3 threads at 100k → under-parallelized).
+Added `par_map_moderate` (`n/8192` — middle ground: ~12 threads at 100k, enough
+to amortize the spawn of a heavier kernel without the 64-thread floor) and routed
+`map_real_or_complex`'s gated real path to it. This covers ALL the moderate real
+kernels (dawsn/erfcx/erfi/spence/wrightomega) at once. **dawsn n=50k 2.6 → 0.50
+ms (2.47x SLOWER → 2.12x FASTER); n=100k 2.83x; n=500k 3.13x; erfcx 2.44x @500k.**
+BYTE-IDENTICAL (0/300k bit-mismatch vs scalar for dawsn/erfcx/erfi/spence; 1120/0
+special lib GREEN). The serial sub-gate paths are untouched (only the parallel
+branch changed). LESSON: the work cap is not one-size — CHEAP kernels (~8-30ns)
+want `n/32768`, MODERATE (~50-300ns) want `n/8192`; the loose `n/128` over-spawns
+both. The special parallel-cap vein is now thoroughly harvested across cheap +
+moderate kernels; complex/heavy arms (jv/yv/bessel) already win big. Biggest open
+gap stays sparse `spsolve` (BTreeMap-LU, Gilbert-Peierls rewrite — multi-turn).
+
 ## 2026-06-27 - frankenscipy-greenfalcon-silu-logexpit-light-par - KEEP (byte-identical 2.5-4.7x self): convenience silu + log_expit work-capped parallel
 
 Followed the retry note (route the COMPUTE-bound convenience O(1) kernels to the

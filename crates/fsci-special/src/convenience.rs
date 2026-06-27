@@ -2487,6 +2487,54 @@ where
     Ok(out)
 }
 
+/// Work-capped parallel map for MODERATE real kernels (~50-300 ns/elt:
+/// erfcx/dawsn/erfi/spence/wrightomega). Caps workers at `min(cores, n/8192)` —
+/// fewer elements/worker than [`par_map_light`] (these kernels are heavier so a
+/// smaller chunk still amortizes the spawn) but far fewer threads than the loose
+/// `n/128` of [`par_map_indices`], which over-subscribes ~64 OS threads onto a
+/// sub-µs kernel and leaves a flat ~3 ms spawn floor (measured on `dawsn`:
+/// constant ~2.8-3.3 ms across n=50k-500k). Order-preserving → byte-identical.
+fn par_map_moderate<T, H>(n: usize, f: H) -> Result<Vec<T>, SpecialError>
+where
+    T: Send,
+    H: Fn(usize) -> Result<T, SpecialError> + Sync,
+{
+    let nthreads = if n < 256 {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n / 8192)
+            .max(1)
+    };
+    if nthreads <= 1 {
+        return (0..n).map(&f).collect();
+    }
+    let chunk = n.div_ceil(nthreads);
+    let f = &f;
+    let chunk_results: Vec<Result<Vec<T>, SpecialError>> = std::thread::scope(|scope| {
+        (0..nthreads)
+            .filter_map(|t| {
+                let i0 = t * chunk;
+                if i0 >= n {
+                    return None;
+                }
+                let i1 = (i0 + chunk).min(n);
+                Some(scope.spawn(move || (i0..i1).map(f).collect::<Result<Vec<T>, _>>()))
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("convenience moderate worker panicked"))
+            .collect()
+    });
+    let mut out = Vec::with_capacity(n);
+    for cr in chunk_results {
+        out.extend(cr?);
+    }
+    Ok(out)
+}
+
 /// Like [`map_real`] but parallelizes a real array of length ≥ [`LIGHT_KERNEL_PAR_MIN`]
 /// through the work-capped [`par_map_light`]. For COMPUTE-bound cheap kernels only.
 fn map_real_light<F>(
@@ -2659,7 +2707,7 @@ where
     H: Fn(usize) -> Result<T, SpecialError> + Sync,
 {
     if n >= real_par_min {
-        par_map_indices(n, f)
+        par_map_moderate(n, f)
     } else {
         (0..n).map(f).collect()
     }
