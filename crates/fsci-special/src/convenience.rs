@@ -7285,7 +7285,9 @@ pub fn threshold_scalar(x: f64, thresh: f64, value: f64) -> f64 {
 ///
 /// Also known as swish-1.
 pub fn silu(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real("silu", x_tensor, mode, |x| Ok(silu_scalar(x)))
+    // silu(x) = x·expit(x) — compute-bound (exp + reciprocal); parallelize large
+    // arrays via the work-capped light path (was serial, ~1.7x slower than numpy).
+    map_real_light("silu", x_tensor, mode, |x| Ok(silu_scalar(x)))
 }
 
 #[must_use]
@@ -7299,7 +7301,9 @@ pub fn silu_scalar(x: f64) -> f64 {
 ///
 /// Numerically stable computation of log(expit(x)).
 pub fn log_expit(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real("log_expit", x_tensor, mode, |x| Ok(log_expit_scalar(x)))
+    // log_expit(x) = -log(1 + exp(-x)) — compute-bound (exp + log); parallelize
+    // large arrays via the work-capped light path (was serial, ~1.2x slower).
+    map_real_light("log_expit", x_tensor, mode, |x| Ok(log_expit_scalar(x)))
 }
 
 #[must_use]

@@ -4,6 +4,24 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-27 - frankenscipy-greenfalcon-silu-logexpit-light-par - KEEP (byte-identical 2.5-4.7x self): convenience silu + log_expit work-capped parallel
+
+Followed the retry note (route the COMPUTE-bound convenience O(1) kernels to the
+light path). Measured exprel/cosm1/log_expit/softplus/silu/sinc at n=500k:
+exprel (1.16x) / cosm1 (1.67x) / sinc (1.81x) already WIN serial, softplus is
+parity, but `silu` (x·expit, exp+recip) was **1.70x SLOWER** (4.34 vs numpy
+2.56 ms) and `log_expit` (−log1p(exp(−x)), exp+log) **1.22x SLOWER** (8.29 vs
+6.81 ms) — both serial via `map_real`. Routed both to the work-capped
+`map_real_light` (gate 1<<18, the expit machinery). **silu n=500k 4.34 → 1.72 ms
+= 2.52x self (1.70x SLOWER → 1.51x FASTER); log_expit n=500k 8.29 → 1.78 ms =
+4.66x self (1.22x SLOWER → 3.86x FASTER — scipy's log_expit is notably slow).**
+Both win from the 1<<18 gate (~300k) up; below stays serial (cheap-kernel wall).
+BYTE-IDENTICAL (0/400k bit-mismatch vs scalar; 1120/0 special lib GREEN). The
+cheap-real-kernel vein is now largely harvested: gamma family + rgamma + expit +
+silu + log_expit all flipped; exprel/cosm1/sinc/logit already won; erf/erfc/
+erfinv/ndtr/softplus parity. Likely DONE — re-probe only genuinely new heavy
+kernels (orthopoly array evals, real bessel jv/yv) if a fresh gap is wanted.
+
 ## 2026-06-26 - frankenscipy-greenfalcon-rgamma-expit-light-par - KEEP (byte-identical): extend work-capped light parallel to rgamma + expit
 
 Followed the prior entry's generalizable note (re-probe other cheap real special
