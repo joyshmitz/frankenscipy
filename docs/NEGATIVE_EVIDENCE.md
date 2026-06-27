@@ -6,6 +6,42 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-27 - cod-a (codex-cli) - NO-SHIP: flat row-major blocked Cholesky factor buffer improved factor-only but regressed factor+solve
+
+- Land-or-dig audit: found one stale non-ancestor bench worktree,
+  `/data/projects/.worktrees/frankenscipy-eigvalsh-blackthrush-20260609`
+  at `e3b744f4` (`perf(linalg): lower GEMM flat-workspace threshold`), but current
+  `origin/main` already supersedes that knob (`MATMUL_FLAT_WORKSPACE_MIN_DIM = 256`;
+  the stale patch only lowered 1024 -> 768). No measured worktree win was landable.
+- Biggest available measured gap attacked: `fsci-linalg` dense `cho_factor` /
+  `cho_factor+cho_solve` on the 1000x1000 SPD gauntlet matrix, still roughly
+  8-10x slower than SciPy/ORIG on this host.
+- New lever tested and reverted: convert `cholesky_lower_blocked`'s working matrix from
+  `Vec<Vec<f64>>` to a flat row-major `Vec<f64>` and add a flat SYRK row updater. This
+  avoids the final row-copy into the returned factor and streams the trailing update
+  through contiguous rows, but also changes cache behavior for the following solve path.
+- Per-crate bench command used via rch release profile fallback:
+  `AGENT_NAME=cod-a CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a rch exec -- cargo bench -p fsci-linalg --bench linalg_bench --profile release -- 1000x1000_rust_cho_factor --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`.
+  Cargo rejects `cargo bench --release`, so this uses Cargo's accepted release-profile
+  form instead of re-verifying that covered CLI parser failure.
+- Same-worktree local-fallback Criterion comparison:
+  - ORIG `1000x1000_rust_cho_factor`: 49.945 ms; candidate: 44.272 ms;
+    candidate-vs-ORIG speed ratio 1.13x faster.
+  - ORIG `1000x1000_rust_cho_factor_solve`: 44.734 ms; candidate: 46.342 ms;
+    candidate-vs-ORIG speed ratio 0.97x, a regression on the combined public workflow.
+- Current SciPy 1.17.1 ORIG for the same matrix, measured locally after the reject:
+  `cho_factor` median 4.895 ms, `cho_factor+cho_solve` median 5.870 ms. That puts ORIG
+  at 10.20x slower than SciPy for factor-only and 7.62x slower for factor+solve; the
+  rejected candidate would have been 9.04x and 7.90x slower respectively.
+- Conformance guard during the experiment: `cargo test -p fsci-linalg
+  cholesky_lower_blocked_matches_unblocked_factorization --lib -- --nocapture` passed
+  under the requested target dir before reject; after revert,
+  `cargo test -p fsci-conformance --test diff_linalg_structured_solvers
+  diff_linalg_structured_solvers -- --nocapture` passed 1/1. Final code was reverted to
+  `origin/main`; this commit is evidence-only. Route deeper next time: a real
+  LAPACK-class Cholesky lever needs register-tiled GEMM/SYRK or vendor-equivalent
+  blocking, not another representation-only reshuffle.
+
 ## 2026-06-27 - CobaltCove (claude-code) - KEEP (byte-identical 1.4-2.1x self, flips/narrows the marquee FFT gap): fft 1-D 5-smooth iterative odd-power-tail parallel over leaves + combine groups
 
 - Agent CobaltCove. CLOSES the lever I filed in the prior blocker (fac71529). The 1-D
