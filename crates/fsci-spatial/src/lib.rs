@@ -1406,6 +1406,16 @@ pub fn cdist_seuclidean(
     }
     let (na, nb) = (xa.len(), xb.len());
     let nthreads = cdist_thread_count(na, nb, dim);
+    // Small d: the per-pair `seuclidean(&xa[i],&xb[j],v)` pointer-chases the Vec<Vec>
+    // and loses to SciPy's contiguous loop (same loss the Euclidean/Canberra SoA paths
+    // flipped). For d<8 `seuclidean` is a scalar left-fold ⇒ the per-lane SoA reduction
+    // is bit-identical. Bandwidth-bound ⇒ cap workers at 16.
+    if dim < 8 {
+        let b_soa = cdist_soa(xb, dim);
+        return Ok(cdist_fill_rows(na, nthreads.min(16), |i| {
+            cdist_row_seuclidean_soa(&xa[i], &b_soa, v, nb)
+        }));
+    }
     Ok(cdist_fill(na, nb, nthreads, |i, j| {
         seuclidean(&xa[i], &xb[j], v)
     }))
@@ -1917,6 +1927,45 @@ fn cdist_row_braycurtis_soa(ai: &[f64], b: &[Vec<f64>], nb: usize) -> Vec<f64> {
             den += (ai[k] + b[k][j]).abs();
         }
         row[j] = if den == 0.0 { 0.0 } else { num / den };
+        j += 1;
+    }
+    row
+}
+
+/// SoA-across-pairs standardized-Euclidean cdist row (small `d`) with variance
+/// vector `v`: per-lane `sqrt(Σ_k (ai[k]-b[k][lane])²/v[k])` with the `v[k]<=0 ⇒ NaN`
+/// mask. Bit-identical to the scalar `seuclidean` for `d < 8` (whose per-dim SIMD
+/// needs d≥8, so it left-folds `k=0..d`; `dk*dk == dk.powi(2)`, the `v<=0` branch
+/// becomes a lane select on a uniformly-true/false mask since `v[k]` is a splat).
+fn cdist_row_seuclidean_soa(ai: &[f64], b: &[Vec<f64>], v: &[f64], nb: usize) -> Vec<f64> {
+    use std::simd::{Select, Simd, StdFloat, cmp::SimdPartialOrd, num::SimdFloat};
+    const L: usize = 8;
+    let d = ai.len();
+    let zero = Simd::<f64, L>::splat(0.0);
+    let nan_v = Simd::<f64, L>::splat(f64::NAN);
+    let mut row = vec![0.0_f64; nb];
+    let mut j = 0usize;
+    while j + L <= nb {
+        let mut acc = Simd::<f64, L>::splat(0.0);
+        for k in 0..d {
+            let dk = Simd::<f64, L>::splat(ai[k]) - Simd::<f64, L>::from_slice(&b[k][j..j + L]);
+            let vv = Simd::<f64, L>::splat(v[k]);
+            acc += vv.simd_le(zero).select(nan_v, (dk * dk) / vv);
+        }
+        acc.sqrt().copy_to_slice(&mut row[j..j + L]);
+        j += L;
+    }
+    while j < nb {
+        let mut s = 0.0_f64;
+        for k in 0..d {
+            let vi = v[k];
+            s += if vi <= 0.0 {
+                f64::NAN
+            } else {
+                (ai[k] - b[k][j]).powi(2) / vi
+            };
+        }
+        row[j] = s.sqrt();
         j += 1;
     }
     row
@@ -11363,6 +11412,61 @@ mod cdist_seuclidean_tests {
         for i in 0..xa.len() {
             for j in 0..xb.len() {
                 assert!((m[i][j] - seuclidean(&xa[i], &xb[j], &v)).abs() < 1e-12);
+            }
+        }
+    }
+
+    #[test]
+    fn cdist_seuclidean_small_d_soa_matches_scalar_bitwise() {
+        // The SoA-across-pairs seuclidean kernel (dim<8) must be BIT-identical to the
+        // scalar per-pair `seuclidean` for every small dimension — including the v<=0⇒NaN
+        // mask — across the SIMD-chunk lanes and the scalar tail.
+        let mut s: u64 = 0x1357_9BDF_2468_ACE0;
+        let mut rng = || {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (s >> 11) as f64 / (1u64 << 53) as f64
+        };
+        for d in [1usize, 2, 3, 5, 6, 7] {
+            // nb=41 = 5·8+1 exercises both the SIMD chunk and the scalar tail; (600,300)
+            // crosses the work gate into the parallel fill.
+            for &(na, nb) in &[(40usize, 41usize), (600, 300)] {
+                let xa: Vec<Vec<f64>> = (0..na)
+                    .map(|_| (0..d).map(|_| rng() * 4.0 - 2.0).collect())
+                    .collect();
+                let xb: Vec<Vec<f64>> = (0..nb)
+                    .map(|_| (0..d).map(|_| rng() * 4.0 - 2.0).collect())
+                    .collect();
+                // All-positive variances: every finite distance must be bit-exact.
+                let v: Vec<f64> = (0..d).map(|_| rng() * 3.0 + 0.1).collect();
+                let got = cdist_seuclidean(&xa, &xb, &v).unwrap();
+                for (i, gr) in got.iter().enumerate() {
+                    for (j, &g) in gr.iter().enumerate() {
+                        let want = seuclidean(&xa[i], &xb[j], &v);
+                        assert_eq!(
+                            g.to_bits(),
+                            want.to_bits(),
+                            "soa seuclidean mismatch at ({i},{j}) d={d} na={na} nb={nb}"
+                        );
+                    }
+                }
+                // A zero/negative variance entry must make every distance NaN (the v<=0
+                // mask), matching the scalar helper — verify the mask fires on both the
+                // SIMD-chunk lanes and the scalar tail.
+                if d >= 2 {
+                    let mut vneg = v.clone();
+                    vneg[d / 2] = 0.0;
+                    let got_n = cdist_seuclidean(&xa, &xb, &vneg).unwrap();
+                    for (i, gr) in got_n.iter().enumerate() {
+                        for (j, &g) in gr.iter().enumerate() {
+                            assert!(
+                                g.is_nan() && seuclidean(&xa[i], &xb[j], &vneg).is_nan(),
+                                "seuclidean v<=0 NaN mask failed at ({i},{j}) d={d}"
+                            );
+                        }
+                    }
+                }
             }
         }
     }

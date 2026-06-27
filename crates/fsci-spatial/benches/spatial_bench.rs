@@ -102,6 +102,11 @@ fn bench_cdist_small_metrics(c: &mut Criterion) {
                 |b| b.iter(|| cdist_metric(&xa, &xb, metric)),
             );
         }
+        // seuclidean has its own signature (variance vector V); benched here too.
+        let vvar: Vec<f64> = (0..d).map(|k| 0.5 + (k as f64) * 0.3).collect();
+        group.bench_function(BenchmarkId::new("Seuclidean", format!("d{d}")), |b| {
+            b.iter(|| fsci_spatial::cdist_seuclidean(&xa, &xb, &vvar))
+        });
     }
     group.finish();
 }

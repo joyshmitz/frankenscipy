@@ -9035,3 +9035,30 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   self-speedup that widens the lead. Completes the cdist small-d SoA family (eucl/sqeucl/cityblock/
   chebyshev/cosine/canberra/braycurtis). Minkowski left to the generic arm — SciPy's own minkowski
   is ~17x SLOWER (37 ms, per-element powf), so fsci already dominates there; no action.
+
+## 2026-06-27 - WIN: cdist standardized-Euclidean (seuclidean) SoA-across-pairs (small d) — 1.33x self, 3.78x vs SciPy
+
+- Agent: cc (Claude Code / Opus), `AGENT_NAME=cc`.
+- `cdist_seuclidean(XA, XB, V)` filled the matrix via the generic per-pair arm
+  (`cdist_fill(... seuclidean(&xa[i], &xb[j], v))`), pointer-chasing the `Vec<Vec>` — the same
+  small-d loss the Euclidean/Canberra/Bray-Curtis SoA kernels already flipped. seuclidean
+  (`sqrt(Σ_k (a_k−b_k)²/v_k)`, `v_k≤0 ⇒ NaN`) is its own function (takes a variance vector), so it
+  was never covered by the enum-metric dispatch. Added `cdist_row_seuclidean_soa(ai, b, v, nb)`
+  (dim<8): vectorize a whole output row across xb columns (SoA, lane = a different pair),
+  per-lane `Σ_k (ai[k]−b[k][lane])²/v[k]` with the `v[k]≤0 ⇒ NaN` lane mask, then `sqrt`.
+- BIT-IDENTICAL: for d<8 the scalar `seuclidean` helper's per-dim SIMD never engages, so it left-
+  folds `k=0..d`; `dk*dk == dk.powi(2)` and the `v≤0` branch becomes a `simd_le(0).select(NaN,·)`
+  on a uniformly-true/false mask (v[k] is a per-dim splat). Locked by a new strict test
+  `cdist_seuclidean_small_d_soa_matches_scalar_bitwise` — bitwise `to_bits()` equality for finite
+  distances across d∈{1,2,3,5,6,7} (SIMD chunk nb=41=5·8+1 + tail, serial & parallel fills) PLUS a
+  `v≤0 ⇒ NaN` propagation case. 4/4 seuclidean tests green.
+- MEASURED same-window A/B (`cargo bench -p fsci-spatial -- cdist_small_metrics/Seuclidean/d3`,
+  1000×800 d=3, stash to toggle SoA vs generic; non-overlapping criterion intervals). SciPy timed
+  at the same shape (`V=A.var(axis=0,ddof=1)`).
+
+  | seuclidean (1000×800, d=3) | OLD generic arm | NEW SoA | self | SciPy | vs SciPy |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | time | 1.436 ms | 1.083 ms | 1.33x | 4.092 ms | 2.85x → 3.78x FASTER |
+
+  Byte-identical self-speedup that widens the existing SciPy lead (SciPy's seuclidean is slow — a
+  per-element V-broadcast divide). Extends the cdist small-d SoA family to the weighted metric.
