@@ -4,6 +4,21 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-nnls-triangle-syrk - KEEP (byte-identical 1.3-1.6x self): opt.nnls symmetric SYRK halves the Gram work (→ ≈parity)
+
+The filed nnls retry (triangle-only SYRK). The rank-1 Gram update computed the
+FULL `AᵀA`; since it is symmetric, accumulate only the upper triangle (`j2 ≥ j1`)
+and mirror once at the end, halving the dominant O(n²·m) work. **m=500: 1.73 →
+1.35 ms = 1.28x; m=1000: 10.08 → 6.40 ms = 1.57x self; 1.59x/1.73x → 1.23x/1.10x
+slower — essentially parity with scipy at m=1000.** BYTE-IDENTICAL: the mirrored
+`gram[j2][j1] = gram[j1][j2]` equals the full `Σ a_i[j2]·a_i[j1]` exactly (f64
+multiply commutes; same `i` order), upper/diagonal summed in the original order;
+oracle diff matches scipy x/res/nnz to 12 digits, 313/0 opt lib GREEN. The nnls
+arc (Cholesky solve → SYRK Gram → triangular SYRK) closed the original 16-19x gap
+to ~parity. Remaining residual (1.1-1.23x) is the O(n²·m) Gram floor that scipy's
+QR-on-active-columns avoids entirely — only a non-Gram (QR-updating) nnls would
+beat it, a full algorithm swap not worth it at parity.
+
 ## 2026-06-26 - frankenscipy-greenfalcon-linprog-slack-basis-phase1 - KEEP (conformance-exact 28-85x self): opt.linprog eliminate the unneeded Phase I
 
 Re-probed linprog at nv=200 (the filed retry): still a 26.8x gap (617 vs scipy 23

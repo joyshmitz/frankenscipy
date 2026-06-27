@@ -3909,19 +3909,30 @@ pub fn nnls(a: &[Vec<f64>], b: &[f64]) -> Result<(Vec<f64>, f64), OptError> {
     // contiguous AXPY the compiler vectorizes, and `atb += b_i · a_i` likewise.
     // BYTE-IDENTICAL: the same `a_i[j1]·a_i[j2]` (resp. `a_i[j]·b_i`) products
     // accumulate in the same `i = 0..m` order as the original sums.
+    // `AᵀA` is symmetric, so accumulate only the upper triangle (`j2 ≥ j1`) per
+    // rank-1 update and mirror it once — halving the dominant O(n²·m) work.
+    // BYTE-IDENTICAL: `gram[j2][j1] = Σ a_i[j2]·a_i[j1]` equals the mirrored
+    // `gram[j1][j2] = Σ a_i[j1]·a_i[j2]` exactly (f64 multiply is commutative and
+    // the `i` order is unchanged), and the diagonal/upper terms are summed in the
+    // same order as the full sweep.
     let a_flat: Vec<f64> = a.iter().flat_map(|row| row.iter().copied()).collect();
     let mut gram = vec![vec![0.0; n]; n];
     let mut atb = vec![0.0; n];
     for (i, &bi) in b.iter().enumerate() {
         let ai = &a_flat[i * n..i * n + n];
         for (j1, &v1) in ai.iter().enumerate() {
-            let grow = &mut gram[j1];
-            for (g, &v2) in grow.iter_mut().zip(ai.iter()) {
+            let grow = &mut gram[j1][j1..];
+            for (g, &v2) in grow.iter_mut().zip(ai[j1..].iter()) {
                 *g += v1 * v2;
             }
         }
         for (atbj, &v) in atb.iter_mut().zip(ai.iter()) {
             *atbj += v * bi;
+        }
+    }
+    for j1 in 0..n {
+        for j2 in (j1 + 1)..n {
+            gram[j2][j1] = gram[j1][j2];
         }
     }
 
