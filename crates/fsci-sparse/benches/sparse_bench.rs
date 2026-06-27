@@ -1,7 +1,7 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fsci_sparse::{
-    CooMatrix, CscMatrix, CsrMatrix, FormatConvertible, IluOptions, Shape2D, add_csr, diags, eye,
-    kron, random, scale_csr, spilu, spmm, spmv_csr,
+    CooMatrix, CscMatrix, CsrMatrix, FormatConvertible, IluOptions, Shape2D, SolveOptions, add_csr,
+    diags, eye, kron, random, scale_csr, spilu, spmm, spmv_csr, spsolve,
 };
 use std::hint::black_box;
 use std::time::Duration;
@@ -255,6 +255,35 @@ fn make_spilu_banded_csc(n: usize, half_bandwidth: usize) -> CscMatrix {
         .expect("spilu banded csc")
 }
 
+fn make_laplacian_2d(k: usize) -> CsrMatrix {
+    let n = k * k;
+    let mut rows = Vec::with_capacity(n * 5);
+    let mut cols = Vec::with_capacity(n * 5);
+    let mut data = Vec::with_capacity(n * 5);
+    let idx = |r: usize, c: usize| r * k + c;
+    for r in 0..k {
+        for c in 0..k {
+            let i = idx(r, c);
+            rows.push(i);
+            cols.push(i);
+            data.push(4.001);
+            for (dr, dc) in [(-1i64, 0i64), (1, 0), (0, -1), (0, 1)] {
+                let nr = r as i64 + dr;
+                let nc = c as i64 + dc;
+                if nr >= 0 && nr < k as i64 && nc >= 0 && nc < k as i64 {
+                    rows.push(i);
+                    cols.push(idx(nr as usize, nc as usize));
+                    data.push(-1.0);
+                }
+            }
+        }
+    }
+    CooMatrix::from_triplets(Shape2D::new(n, n), data, rows, cols, false)
+        .expect("laplacian coo")
+        .to_csr()
+        .expect("laplacian csr")
+}
+
 fn bench_spilu(c: &mut Criterion) {
     let mut group = c.benchmark_group("sparse_spilu");
     group.sample_size(10);
@@ -269,6 +298,31 @@ fn bench_spilu(c: &mut Criterion) {
                 b.iter(|| {
                     let ilu = spilu(black_box(matrix), IluOptions::default()).expect("spilu");
                     black_box(ilu.shape);
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
+fn bench_spsolve_laplacian(c: &mut Criterion) {
+    let mut group = c.benchmark_group("sparse_spsolve_laplacian");
+    group.sample_size(10);
+    group.measurement_time(Duration::from_secs(3));
+
+    for &side in &[40usize, 70] {
+        let matrix = make_laplacian_2d(side);
+        let n = side * side;
+        let rhs: Vec<f64> = (0..n).map(|i| 1.0 + (i % 13) as f64 * 0.5).collect();
+        group.bench_with_input(
+            BenchmarkId::new("spsolve", n),
+            &(matrix, rhs),
+            |b, (a, rhs)| {
+                b.iter(|| {
+                    let result = spsolve(black_box(a), black_box(rhs), SolveOptions::default())
+                        .expect("spsolve laplacian");
+                    black_box(result.solution.len());
                 });
             },
         );
@@ -310,6 +364,7 @@ criterion_group!(
     bench_spmm,
     bench_kron,
     bench_spilu,
+    bench_spsolve_laplacian,
     bench_random_tiny_density
 );
 criterion_main!(benches);

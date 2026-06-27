@@ -1,6 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use fsci_linalg::{DecompOptions, LinalgError, expm as dense_expm};
+use fsci_linalg::{
+    DecompOptions, LinalgError, SolveOptions as DenseSolveOptions, expm as dense_expm,
+    solve_banded as dense_solve_banded,
+};
 use fsci_runtime::RuntimeMode;
 use nalgebra::{DMatrix, DVector, Dyn, LU};
 
@@ -206,6 +209,11 @@ impl SparseIluFactorization {
 /// identity, diagonal, banded, and moderate-fill systems scale with
 /// stored nonzeros and generated fill-in instead of n² dense storage.
 const SPSOLVE_DENSE_MAX_N: usize = 32_768;
+const SPSOLVE_SPD_CG_MIN_N: usize = 1_024;
+const SPSOLVE_SPD_CG_MAX_NNZ_PER_ROW: usize = 6;
+const SPSOLVE_SPD_CG_MIN_DIAGONAL: f64 = 1.0e-12;
+const SPSOLVE_SPD_CG_TOL: f64 = 1.0e-10;
+const SPSOLVE_SPD_CG_ACCEPT_RESIDUAL: f64 = 1.0e-8;
 
 fn is_sparse_zero_pivot(value: f64) -> bool {
     value == 0.0
@@ -543,6 +551,102 @@ fn add_sparse_entry(
     }
 }
 
+fn spsolve_spd_cg_candidate(a: &CsrMatrix, options: SolveOptions) -> bool {
+    let shape = a.shape();
+    let n = shape.rows;
+    if options.backend != SparseBackend::Auto
+        || options.ordering != PermutationOrdering::Colamd
+        || n < SPSOLVE_SPD_CG_MIN_N
+        || a.nnz() > n.saturating_mul(SPSOLVE_SPD_CG_MAX_NNZ_PER_ROW)
+    {
+        return false;
+    }
+
+    let data = a.data();
+    let indices = a.indices();
+    let indptr = a.indptr();
+
+    for row in 0..n {
+        let start = indptr[row];
+        let end = indptr[row + 1];
+        if start == end {
+            return false;
+        }
+
+        let mut diagonal = None;
+        let mut off_diagonal_abs_sum = 0.0;
+        let mut previous_col = None;
+
+        for idx in start..end {
+            let col = indices[idx];
+            let value = data[idx];
+            if !value.is_finite()
+                || col >= n
+                || previous_col.is_some_and(|previous| previous >= col)
+            {
+                return false;
+            }
+            previous_col = Some(col);
+
+            if col == row {
+                diagonal = Some(value);
+                continue;
+            }
+
+            if value > 0.0 {
+                return false;
+            }
+            off_diagonal_abs_sum += value.abs();
+
+            let mirror = find_value_in_row(data, indices, indptr, col, row);
+            let tol = 1.0e-12 * (1.0 + value.abs().max(mirror.abs()));
+            if (mirror - value).abs() > tol {
+                return false;
+            }
+        }
+
+        let Some(diagonal) = diagonal else {
+            return false;
+        };
+        if diagonal <= SPSOLVE_SPD_CG_MIN_DIAGONAL
+            || diagonal <= off_diagonal_abs_sum + SPSOLVE_SPD_CG_MIN_DIAGONAL
+        {
+            return false;
+        }
+    }
+
+    true
+}
+
+fn try_spsolve_spd_cg(
+    a: &CsrMatrix,
+    b: &[f64],
+    options: SolveOptions,
+) -> SparseResult<Option<IterativeSolveResult>> {
+    if !spsolve_spd_cg_candidate(a, options) {
+        return Ok(None);
+    }
+
+    let max_iter = a.shape().rows.clamp(64, 4_096);
+    let result = cg(
+        a,
+        b,
+        None,
+        IterativeSolveOptions {
+            mode: options.mode,
+            check_finite: false,
+            tol: SPSOLVE_SPD_CG_TOL,
+            max_iter: Some(max_iter),
+        },
+    )?;
+
+    if result.converged && result.residual_norm <= SPSOLVE_SPD_CG_ACCEPT_RESIDUAL {
+        Ok(Some(result))
+    } else {
+        Ok(None)
+    }
+}
+
 pub fn spsolve(a: &CsrMatrix, b: &[f64], options: SolveOptions) -> SparseResult<SolveResult> {
     let shape = a.shape();
     if !shape.is_square() {
@@ -578,12 +682,42 @@ pub fn spsolve(a: &CsrMatrix, b: &[f64], options: SolveOptions) -> SparseResult<
     // the dense path to rounding. Small or dense-pattern A keeps the cache-friendly
     // dense LU, where the sparse factor's per-entry map overhead would lose.
     let over_dense_guard = n > SPSOLVE_DENSE_MAX_N;
+    let bandwidth = csr_bandwidth(a);
     // Sparse by row density, OR narrowly banded (bw·32 ≤ n ⇒ fill ≤ O(n·bw), factor
     // O(n·bw²) ≪ O(n³)) — banded systems with >16 nnz/row would otherwise densify to
     // an O(n³) dense LU even though their sparse factor is tiny and fill-bounded.
     let genuinely_sparse =
-        n >= 256 && (a.nnz() <= n.saturating_mul(16) || csr_bandwidth(a).saturating_mul(32) <= n);
+        n >= 256 && (a.nnz() <= n.saturating_mul(16) || bandwidth.saturating_mul(32) <= n);
     if over_dense_guard || genuinely_sparse {
+        if sparse_banded_direct_candidate(n, bandwidth) {
+            let solution = spsolve_banded_direct(a, b, options, bandwidth)?;
+            let warnings = if over_dense_guard {
+                vec![format!(
+                    "native sparse direct solve used for n={n}; dense fallback guard is {SPSOLVE_DENSE_MAX_N}"
+                )]
+            } else {
+                Vec::new()
+            };
+            return Ok(SolveResult {
+                solution,
+                backend_used: SparseBackend::NativeSparseLu,
+                ordering_used: options.ordering,
+                warnings,
+            });
+        }
+
+        if let Some(iterative) = try_spsolve_spd_cg(a, b, options)? {
+            return Ok(SolveResult {
+                solution: iterative.solution,
+                backend_used: SparseBackend::NativeSparseLu,
+                ordering_used: options.ordering,
+                warnings: vec![format!(
+                    "native sparse direct solve bypassed by SPD CG fast path; iterations={}, residual={:.3e}",
+                    iterative.iterations, iterative.residual_norm
+                )],
+            });
+        }
+
         let lu = NativeSparseLu::factorize_csr(a, 1.0, options.ordering)?;
         let solution = lu.solve(b)?;
         let warnings = if over_dense_guard {
@@ -3236,6 +3370,48 @@ fn csc_bandwidth(a: &CscMatrix) -> usize {
         }
     }
     bw
+}
+
+fn sparse_banded_direct_candidate(n: usize, half_bandwidth: usize) -> bool {
+    n >= 256 && half_bandwidth <= 128 && half_bandwidth.saturating_mul(16) <= n
+}
+
+fn csr_to_banded_storage(a: &CsrMatrix, half_bandwidth: usize) -> Vec<Vec<f64>> {
+    let n = a.shape().rows;
+    let mut banded = vec![vec![0.0; n]; half_bandwidth.saturating_mul(2).saturating_add(1)];
+    for row in 0..n {
+        for idx in a.indptr()[row]..a.indptr()[row + 1] {
+            let col = a.indices()[idx];
+            let band_row = if row >= col {
+                half_bandwidth + (row - col)
+            } else {
+                half_bandwidth - (col - row)
+            };
+            banded[band_row][col] += a.data()[idx];
+        }
+    }
+    banded
+}
+
+fn spsolve_banded_direct(
+    a: &CsrMatrix,
+    b: &[f64],
+    options: SolveOptions,
+    half_bandwidth: usize,
+) -> SparseResult<Vec<f64>> {
+    let banded = csr_to_banded_storage(a, half_bandwidth);
+    dense_solve_banded(
+        (half_bandwidth, half_bandwidth),
+        &banded,
+        b,
+        DenseSolveOptions {
+            mode: options.mode,
+            check_finite: options.check_finite,
+            ..DenseSolveOptions::default()
+        },
+    )
+    .map(|result| result.x)
+    .map_err(map_linalg_error)
 }
 
 fn csr_to_dense(a: &CsrMatrix) -> Vec<f64> {
@@ -5924,6 +6100,34 @@ mod tests {
             max_res = max_res.max((ax - b[i]).abs());
         }
         assert!(max_res < 1e-9, "residual too large: {max_res}");
+    }
+
+    #[test]
+    fn spsolve_laplacian_prefers_banded_direct_over_spd_cg() {
+        let a = laplacian_2d_for_mmd(20);
+        let n = a.shape().rows;
+        let b: Vec<f64> = (0..n).map(|i| 1.0 + (i % 13) as f64 * 0.5).collect();
+
+        let result = spsolve(&a, &b, SolveOptions::default()).expect("spsolve");
+
+        assert_eq!(result.backend_used, SparseBackend::NativeSparseLu);
+        assert!(
+            !result
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("SPD CG fast path")),
+            "narrow banded direct solve should bypass iterative path: {:?}",
+            result.warnings
+        );
+        let mut max_res = 0.0_f64;
+        for row in 0..n {
+            let mut ax = 0.0;
+            for idx in a.indptr()[row]..a.indptr()[row + 1] {
+                ax += a.data()[idx] * result.solution[a.indices()[idx]];
+            }
+            max_res = max_res.max((ax - b[row]).abs());
+        }
+        assert!(max_res < 1e-8, "residual too large: {max_res}");
     }
 
     #[test]
