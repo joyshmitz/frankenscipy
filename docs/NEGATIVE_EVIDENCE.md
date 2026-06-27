@@ -108,7 +108,82 @@ ledger above so the project has one source of truth.
   LAPACK-class panel/TRSM and packed update depth; future work should move
   toward flat end-to-end blocked Cholesky or a register-tiled triangular panel
   solve rather than more public wrapper reshaping.
+## 2026-06-27 - cod-a (codex-cli) - NO-SHIP: Cholesky panel SIMD dots are neutral after the SYRK four-dot keep
 
+- Agent: cod-a (codex-cli / gpt-5.2), `AGENT_NAME=cod-a`.
+- Land-or-dig audit: checked non-ancestor worktrees before digging. The
+  remaining ahead worktrees were stale, already represented on current `main`,
+  or explicitly code-first/pending validation; the old eigvalsh threshold
+  worktree is still superseded by current `main`. No measured bench worktree win
+  was landable as-is, so this pass dug the current dense Cholesky residual.
+- Gap attacked: `fsci-linalg` dense `cho_factor` at 1000x1000 remains one of
+  the largest documented ratios versus SciPy. The next routed primitive from
+  the ledger was below the public wrapper: panel solve / packed update work
+  rather than another `Vec<Vec>` wrapper.
+- Lever tested and REVERTED: both blocked Cholesky kernels used the existing
+  8-wide `simd_dot` helper for diagonal-block and panel-solve dot products. This
+  preserved panel order, pivot checks, fallback behavior, and storage layout,
+  but removed the repeated scalar `p` loops inside the panel.
+- The required literal bench form still fails after RCH dispatch:
+  `AGENT_NAME=cod-a CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a
+  rch exec -- cargo bench --release -p fsci-linalg --bench linalg_bench --
+  cho_factor_gauntlet_scipy ...` failed with `unexpected argument '--release'`.
+  The accepted per-crate release-profile bench was:
+  `AGENT_NAME=cod-a CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a
+  rch exec -- cargo bench -p fsci-linalg --bench linalg_bench --profile release
+  -- cho_factor_gauntlet_scipy --sample-size 10 --warm-up-time 1
+  --measurement-time 2 --noplot`.
+- Initial MEASURED result before rebase: RCH remote `hz2` current-main baseline
+  without SciPy oracle gave
+  `1000x1000_rust_cho_factor` 60.030 ms and
+  `1000x1000_rust_cho_factor_solve` 63.047 ms. RCH then had no admissible
+  worker for the dirty candidate, so the before/after was rerun
+  same-host through RCH local fallback using a clean `origin/main` baseline
+  worktree and the candidate worktree, filtered to the same 1000-row benchmark.
+  That stale base showed a win:
+
+  | Workload | Current main Rust | Candidate Rust | Self ratio |
+  | --- | ---: | ---: | ---: |
+  | `1000x1000_rust_cho_factor` | 69.442 ms | 37.451 ms | 1.85x faster |
+  | `1000x1000_rust_cho_factor_solve` | 57.997 ms | 43.973 ms | 1.32x faster |
+
+- Rebase invalidated that keep: `origin/main` advanced to include
+  GreenFalcon's Cholesky SYRK four-dot row update. Re-running the same focused
+  per-crate bench after rebase, under the same
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a` through
+  `rch exec` local fallback, showed no usable gain:
+
+  | Workload | Rebases current main | Panel-dot candidate | Result |
+  | --- | ---: | ---: | --- |
+  | `1000x1000_rust_cho_factor` | 52.322 ms | 54.756 ms | 0.96x, regression/no-change |
+  | `1000x1000_rust_cho_factor_solve` | 45.503 ms | 44.864 ms | 1.01x, no-change |
+
+- Ratio vs local SciPy 1.17.1 on the exact same 1000x1000 gauntlet matrix after
+  the rebase:
+
+  | Workload | Panel-dot candidate | SciPy median | Ratio vs SciPy |
+  | --- | ---: | ---: | ---: |
+  | `cho_factor` | 54.756 ms | 4.731 ms | 11.57x slower |
+  | `cho_factor+cho_solve` | 44.864 ms | 5.363 ms | 8.37x slower |
+
+  Current main without the panel-dot change is 11.06x/8.48x slower by the same
+  SciPy medians, so the panel-dot lever does not materially narrow the remaining
+  LAPACK gap once the four-dot SYRK keep is present.
+- Correctness / conformance: before the rebase rejection, `cargo test -p fsci-linalg
+  cholesky_lower_blocked_matches_unblocked_factorization --lib -- --nocapture`
+  passed; `cargo test -p fsci-linalg cholesky --lib -- --nocapture` passed
+  15/15 on RCH `vmi1264463`; local SciPy-backed
+  `cargo test -p fsci-conformance --test diff_linalg_inv_pinv_cholesky --
+  --nocapture` passed; `cargo check -p fsci-linalg --all-targets` passed on RCH
+  `hz2` with only the pre-existing `perf_control.rs` unused-mut warning.
+  The code change was then reverted after the post-rebase no-change result, so
+  the final tree carries only this negative-evidence note. `git diff --check`
+  passed. Whole-file `rustfmt --edition 2024 --check crates/fsci-linalg/src/lib.rs`
+  remains blocked by pre-existing `cossin.rs` formatting drift pulled through
+  the module tree; this pass did not touch that file.
+- CONCLUSION: do not ship or retry the panel-dot SIMD lever on top of the SYRK
+  four-dot keep. The next Cholesky lever still needs deeper packed trailing
+  update, flat end-to-end blocking, or LAPACK-class panel/TRSM work.
 ## 2026-06-27 - GreenFalcon (codex-cli) - NO-SHIP: Cholesky NB=64 panel retune is zero-gain on the biggest current cho_factor row
 
 - Agent: GreenFalcon (codex-cli / gpt-5.2), `AGENT_NAME=GreenFalcon`.
