@@ -7380,25 +7380,97 @@ fn edt_2d_felzenszwalb_with_indices(
     if rows > 1 {
         let scale = sampling[0];
         let scale2 = scale * scale;
-        line.resize(rows, 0.0);
-        d.resize(rows, 0.0);
-        v.resize(rows, 0);
-        z.resize(rows + 1, 0.0);
-        w.resize(rows, 0);
-
-        for_each_axis_line_start(n, rows, cols, |base| {
-            for t in 0..rows {
-                line[t] = f[base + t * cols];
-            }
-            edt_1d_squared(&line, scale, scale2, &mut d, &mut v, &mut z, Some(&mut w));
-            for t in 0..rows {
-                let flat = base + t * cols;
-                f[flat] = d[t];
-                if d[t].is_finite() {
-                    feature_row[flat] = w[t];
+        let nthreads = ndimage_filter_thread_count(rows * cols, 1).min(cols).max(1);
+        if nthreads <= 1 {
+            line.resize(rows, 0.0);
+            d.resize(rows, 0.0);
+            v.resize(rows, 0);
+            z.resize(rows + 1, 0.0);
+            w.resize(rows, 0);
+            for_each_axis_line_start(n, rows, cols, |base| {
+                for t in 0..rows {
+                    line[t] = f[base + t * cols];
                 }
+                edt_1d_squared(&line, scale, scale2, &mut d, &mut v, &mut z, Some(&mut w));
+                for t in 0..rows {
+                    let flat = base + t * cols;
+                    f[flat] = d[t];
+                    if d[t].is_finite() {
+                        feature_row[flat] = w[t];
+                    }
+                }
+            });
+        } else {
+            // Each column is an INDEPENDENT 1-D transform, but row-major `f` interleaves
+            // columns so threads cannot write `f` disjointly under forbid(unsafe). Each
+            // thread (owning a contiguous COLUMN range) writes into its own contiguous
+            // COLUMN-MAJOR slab, then a parallel transpose copies col-major -> row-major.
+            // BIT-IDENTICAL: same per-column edt math + same (flat,value) mapping; infinite
+            // cells keep feature index 0 (the init), matching the serial conditional write.
+            let mut fcm = vec![0.0f64; n];
+            let mut featcm = vec![0usize; n];
+            let cols_per = cols.div_ceil(nthreads);
+            {
+                let f_ref = &f;
+                let do_cols =
+                    |col_start: usize, fcm_slab: &mut [f64], featcm_slab: &mut [usize]| {
+                        let ncols_local = fcm_slab.len() / rows;
+                        let mut line = vec![0.0f64; rows];
+                        let mut d = vec![0.0f64; rows];
+                        let mut v = vec![0usize; rows];
+                        let mut z = vec![0.0f64; rows + 1];
+                        let mut w = vec![0usize; rows];
+                        for lc in 0..ncols_local {
+                            let col = col_start + lc;
+                            for t in 0..rows {
+                                line[t] = f_ref[col + t * cols];
+                            }
+                            edt_1d_squared(&line, scale, scale2, &mut d, &mut v, &mut z, Some(&mut w));
+                            let off = lc * rows;
+                            for t in 0..rows {
+                                fcm_slab[off + t] = d[t];
+                                if d[t].is_finite() {
+                                    featcm_slab[off + t] = w[t];
+                                }
+                            }
+                        }
+                    };
+                let do_cols = &do_cols;
+                std::thread::scope(|scope| {
+                    for ((fc, ftc), tt) in fcm
+                        .chunks_mut(cols_per * rows)
+                        .zip(featcm.chunks_mut(cols_per * rows))
+                        .zip(0usize..)
+                    {
+                        let col_start = tt * cols_per;
+                        scope.spawn(move || do_cols(col_start, fc, ftc));
+                    }
+                });
             }
-        });
+            let fcm_ref = &fcm;
+            let featcm_ref = &featcm;
+            let rows_per = rows.div_ceil(nthreads);
+            std::thread::scope(|scope| {
+                for ((frow, ftrow), rr) in f
+                    .chunks_mut(rows_per * cols)
+                    .zip(feature_row.chunks_mut(rows_per * cols))
+                    .zip(0usize..)
+                {
+                    let row_start = rr * rows_per;
+                    scope.spawn(move || {
+                        let nrl = frow.len() / cols;
+                        for lr in 0..nrl {
+                            let t = row_start + lr;
+                            let ob = lr * cols;
+                            for col in 0..cols {
+                                frow[ob + col] = fcm_ref[col * rows + t];
+                                ftrow[ob + col] = featcm_ref[col * rows + t];
+                            }
+                        }
+                    });
+                }
+            });
+        }
     }
 
     let mut distances = return_distances.then(|| NdArray::zeros(input.shape.clone()));
@@ -7412,31 +7484,80 @@ fn edt_2d_felzenszwalb_with_indices(
     if cols > 1 {
         let scale = sampling[1];
         let scale2 = scale * scale;
-        line.resize(cols, 0.0);
-        d.resize(cols, 0.0);
-        v.resize(cols, 0);
-        z.resize(cols + 1, 0.0);
-        w.resize(cols, 0);
 
-        for row in 0..rows {
-            let base = row * cols;
-            line[..cols].copy_from_slice(&f[base..base + cols]);
-            edt_1d_squared(&line, scale, scale2, &mut d, &mut v, &mut z, Some(&mut w));
-            for t in 0..cols {
-                let flat = base + t;
-                let is_background = input.data[flat] == 0.0;
-                if let Some(output) = distances.as_mut() {
-                    output.data[flat] = if is_background { 0.0 } else { d[t].sqrt() };
-                }
-                if is_background {
-                    rows_out[flat] = row as f64;
-                    cols_out[flat] = t as f64;
-                } else {
-                    let source_col = w[t];
-                    rows_out[flat] = feature_row[base + source_col] as f64;
-                    cols_out[flat] = source_col as f64;
+        // Each row-line is an INDEPENDENT 1-D feature transform: it reads only the
+        // now-final `f`/`feature_row`/`input` (all immutable here) and writes the
+        // contiguous `[base, base+cols)` block of the three outputs. So fan the rows
+        // across cores via chunks_mut — BIT-IDENTICAL (per-row math unchanged; each
+        // thread owns its scratch and disjoint contiguous output rows). scipy's
+        // feature transform is single-threaded C, so this is a pure domination lever.
+        let f_ref = &f;
+        let feat_ref = &feature_row;
+        let in_ref = &input.data;
+        let fill_rows = |row_start: usize,
+                         mut dist_slab: Option<&mut [f64]>,
+                         rows_slab: &mut [f64],
+                         cols_slab: &mut [f64]| {
+            let nrows_local = rows_slab.len() / cols;
+            let mut line = vec![0.0f64; cols];
+            let mut d = vec![0.0f64; cols];
+            let mut v = vec![0usize; cols];
+            let mut z = vec![0.0f64; cols + 1];
+            let mut w = vec![0usize; cols];
+            for lr in 0..nrows_local {
+                let row = row_start + lr;
+                let base = row * cols;
+                line.copy_from_slice(&f_ref[base..base + cols]);
+                edt_1d_squared(&line, scale, scale2, &mut d, &mut v, &mut z, Some(&mut w));
+                let off = lr * cols;
+                for t in 0..cols {
+                    let is_background = in_ref[base + t] == 0.0;
+                    if let Some(ds) = dist_slab.as_deref_mut() {
+                        ds[off + t] = if is_background { 0.0 } else { d[t].sqrt() };
+                    }
+                    if is_background {
+                        rows_slab[off + t] = row as f64;
+                        cols_slab[off + t] = t as f64;
+                    } else {
+                        let source_col = w[t];
+                        rows_slab[off + t] = feat_ref[base + source_col] as f64;
+                        cols_slab[off + t] = source_col as f64;
+                    }
                 }
             }
+        };
+
+        let nthreads = ndimage_filter_thread_count(rows * cols, 1).min(rows).max(1);
+        let dist_data: Option<&mut [f64]> = distances.as_mut().map(|nd| nd.data.as_mut_slice());
+        if nthreads <= 1 {
+            fill_rows(0, dist_data, rows_out, cols_out);
+        } else {
+            let chunk_rows = rows.div_ceil(nthreads);
+            let chunk = chunk_rows * cols;
+            let fill_rows = &fill_rows;
+            std::thread::scope(|scope| match dist_data {
+                Some(dd) => {
+                    for (((rs, cs), ds), t) in rows_out
+                        .chunks_mut(chunk)
+                        .zip(cols_out.chunks_mut(chunk))
+                        .zip(dd.chunks_mut(chunk))
+                        .zip(0usize..)
+                    {
+                        let row_start = t * chunk_rows;
+                        scope.spawn(move || fill_rows(row_start, Some(ds), rs, cs));
+                    }
+                }
+                None => {
+                    for ((rs, cs), t) in rows_out
+                        .chunks_mut(chunk)
+                        .zip(cols_out.chunks_mut(chunk))
+                        .zip(0usize..)
+                    {
+                        let row_start = t * chunk_rows;
+                        scope.spawn(move || fill_rows(row_start, None, rs, cs));
+                    }
+                }
+            });
         }
     } else {
         for row in 0..rows {

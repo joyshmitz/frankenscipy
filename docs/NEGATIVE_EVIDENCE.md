@@ -6,6 +6,37 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-27 - CobaltCove (claude-code) - KEEP (byte-identical 2-3.7x self, flips a SciPy loss): ndimage.distance_transform_edt feature transform parallel over both separable passes
+
+- Agent CobaltCove (claude-opus-4-8). `crates/fsci-ndimage/src/lib.rs`
+  `edt_2d_felzenszwalb_with_indices` (the return_indices Felzenszwalb–Huttenlocher
+  feature transform) ran BOTH separable axis passes SERIALLY. Each line is an
+  independent 1-D EDT, so parallelized both:
+  - axis-1 (rows pass): each row writes a contiguous output block → fan rows across
+    cores via `chunks_mut` (per-thread scratch), trivially safe.
+  - axis-0 (column pass): row-major `f` interleaves columns, so under
+    `#![forbid(unsafe_code)]` threads can't write `f` disjointly. Each thread (owning a
+    contiguous COLUMN range) writes a contiguous COLUMN-MAJOR scratch slab, then a
+    parallel transpose copies col-major → row-major. BIT-IDENTICAL: same per-column edt
+    math + same (flat,value) mapping; infinite cells keep feature index 0 (the init),
+    matching the serial conditional write. Gate: serial below 512² (256² already wins).
+- Same-box A/B (deterministic 50%-fg images, return_indices, min-of-N, clean
+  back-to-back; dist + BOTH index arrays bit-for-bit identical via FNV digest
+  BEFORE==AFTER: 256 d=46d08b4c56c8870e, 512 d=d9ed48b24d1b088f, 1024 d=be685ad3fa651f08):
+  - 256x256:  serial 2184.8 us (kept serial)        — already 1.40x faster than SciPy
+  - 512x512:  15844.5 -> 7822.6 us = **2.03x self**  — FLIPS 1.20x SLOWER -> **1.73x FASTER** than SciPy (13559 us)
+  - 1024x1024: 63906.9 -> 17483.8 us = **3.66x self** — 1.03x -> **3.79x FASTER** than SciPy (66269 us)
+- This is a genuine GAP-CLOSE vs ORIG: SciPy's feature transform is single-threaded C;
+  the old scorecard had fsci 1.4-1.8x slower. fsci serial had since narrowed to
+  near-parity; the both-pass parallelization turns it into a clear win at every size.
+- Conformance GREEN: diff_ndimage_distance_transform_edt 1/0 (FSCI_REQUIRE_SCIPY_ORACLE=1,
+  local scipy 1.17.1), 18 distance_transform unit tests (incl scipy-pinned
+  `_indices_match_scipy` 1D/3D fixtures) 0 fail, perf_edt isomorphism 0/10876 cells.
+- LEVER: separable transforms (EDT, and any per-line filter) parallelize over the line
+  axis byte-identically; when the output layout interleaves the line axis under
+  forbid(unsafe), use a contiguous-per-thread transposed scratch + a transpose pass
+  instead of unsafe disjoint scatter.
+
 ## 2026-06-27 - CobaltCove (claude-code) - KEEP (byte-identical 4-12x self): special.logsumexp_axis_2d parallel over the reduced axis
 
 - Agent CobaltCove (claude-opus-4-8). `crates/fsci-special/src/convenience.rs`
