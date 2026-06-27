@@ -6,6 +6,36 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-27 - CobaltCove (claude-code) - KEEP (byte-identical 1.4-2.1x self, flips/narrows the marquee FFT gap): fft 1-D 5-smooth iterative odd-power-tail parallel over leaves + combine groups
+
+- Agent CobaltCove. CLOSES the lever I filed in the prior blocker (fac71529). The 1-D
+  non-pow2 {3,5}·2^k FFT (`mixed_radix_iterative_odd_power_tail` in fsci-fft/transforms.rs)
+  was fully serial. Both phases write DISJOINT CONTIGUOUS `out` blocks, so parallelized them
+  across cores:
+  - leaf phase: each leaf gathers a strided 2^k tail → contiguous block + power-of-2 kernel;
+    fan leaves over threads (chunks_mut, hoisted tail twiddle Arc). Factored `leaf_tail_fft`.
+  - combine phase: each odd-factor stage's groups (`chunks_exact_mut(stage_len)`) are
+    independent → fan groups over threads. Added gate `fft_iter_par_threads` (serial below
+    1<<16 work or <2 blocks; else min(cores, nblocks)).
+- BIT-IDENTICAL: per-leaf/per-group transform is deterministic on disjoint blocks; only the
+  owning core changes. Verified by FNV digest of the full complex output BEFORE(serial)==
+  AFTER(parallel) for all probe sizes (e.g. n=1572864 d=e70e93d99c92c3ff, 983040
+  d=60538fa3c476ae1c, 1474560 d=775b8fd79a4f46d7).
+- Same-box A/B (complex fft, min-of-20, clean back-to-back):
+  - n=3·2^19=1572864:  49894 -> 34965 us = 1.43x self; ~1.21x SLOWER -> ~1.13x FASTER vs SciPy
+  - n=5·2^18=1310720:  39041 -> 24890 us = 1.57x self; 1.69x -> ~1.10x slower (narrowed)
+  - n=15·2^16=983040:  25091 -> 17692 us = 1.42x self; 1.68x SLOWER -> ~1.03x FASTER
+  - n=45·2^15=1474560: 40598 -> 23078 us = 1.76x self; 2.10x SLOWER -> ~parity
+  - n=9·2^17=1179648:  35546 -> 16516 us = 2.15x self; 1.80x -> ~1.11x slower (narrowed)
+  Flips 3/5 measured 5-smooth sizes to ≥parity vs SciPy, narrows the low-odd-factor cases
+  (3/5/9 leaves = less leaf parallelism; 1-D FFT is memory-bandwidth-bound so gains are
+  sub-linear in cores). SciPy 1-D FFT (pocketfft) is single-threaded.
+- Conformance GREEN: fsci-fft 54/0 lib; diff_fft scipy-diff suite. (Byte-identical ⇒ inherits
+  the serial path's parity.)
+- FOLLOW-ON (filed): the outermost combine stage is always 1 group ⇒ serial; parallelizing
+  its `for r in 0..m` butterfly (p-way split_at_mut of out0..out_{p-1}) would help the
+  low-leaf-count sizes, but it is also bandwidth-bound so likely marginal.
+
 ## 2026-06-27 - CobaltCove (claude-code) - BLOCKER (harvest-floor survey): no tractable byte-identical gap-close left in a free crate within a 60-min window; remaining gaps are multi-turn hard walls
 
 Exhaustive cross-crate survey this cycle (after shipping logsumexp_axis_2d, EDT-indices, EDT-distances

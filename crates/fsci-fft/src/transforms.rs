@@ -699,31 +699,107 @@ fn mixed_radix_iterative_odd_power_tail(
     // Leaf phase: gather each strided 2^k tail once, then run the existing
     // power-of-two kernel on a contiguous block. This is the same DIT factor
     // order as the recursive route; only scheduling/twiddle reuse changes.
-    for (leaf, &base) in plan.leaf_bases.iter().enumerate() {
-        let block = &mut out[leaf * tail..(leaf + 1) * tail];
-        if tail <= 16 {
-            mixed_radix_gather_small_power_tail(src, base, plan.leaf_bases.len(), block, inverse);
-        } else {
-            for (s, slot) in block.iter_mut().enumerate() {
-                *slot = src[base + s * plan.leaf_bases.len()];
-            }
-            let twiddles = get_or_compute_twiddles(tail, inverse);
-            cooley_tukey_radix4_inplace_with_twiddles(block, &twiddles);
+    // Each leaf writes a DISJOINT contiguous `out` block from read-only `src`, so
+    // fan the leaves across cores — BIT-IDENTICAL (per-leaf FFT is deterministic;
+    // only which core owns a leaf changes). SciPy's 1-D FFT is single-threaded.
+    let nleaves = plan.leaf_bases.len();
+    let leaf_threads = fft_iter_par_threads(n, nleaves);
+    if leaf_threads <= 1 {
+        for (leaf, &base) in plan.leaf_bases.iter().enumerate() {
+            let block = &mut out[leaf * tail..(leaf + 1) * tail];
+            leaf_tail_fft(src, base, nleaves, tail, block, inverse, None);
         }
+    } else {
+        let tail_tw = (tail > 16).then(|| get_or_compute_twiddles(tail, inverse));
+        let tail_tw_ref: Option<&[Complex64]> = tail_tw.as_deref();
+        let leaves_per = nleaves.div_ceil(leaf_threads);
+        std::thread::scope(|scope| {
+            for (out_chunk, bases_chunk) in out
+                .chunks_mut(leaves_per * tail)
+                .zip(plan.leaf_bases.chunks(leaves_per))
+            {
+                scope.spawn(move || {
+                    for (li, &base) in bases_chunk.iter().enumerate() {
+                        let block = &mut out_chunk[li * tail..(li + 1) * tail];
+                        leaf_tail_fft(src, base, nleaves, tail, block, inverse, tail_tw_ref);
+                    }
+                });
+            }
+        });
     }
 
     // Combine from the innermost odd factor outwards. All groups at a stage
     // share the same twiddle table, avoiding recursive per-group cache lookups.
+    // Groups within a stage are DISJOINT contiguous blocks → fan across cores,
+    // BIT-IDENTICAL (each group's combine is independent and deterministic).
     let mut m = tail;
     for &p in plan.factors.iter().rev() {
         let stage_len = p * m;
         let twn = get_or_compute_twiddles(stage_len, inverse);
-        for group in out.chunks_exact_mut(stage_len) {
-            mixed_radix_combine_stage(group, p, m, &twn, inverse);
+        let ngroups = n / stage_len;
+        let stage_threads = fft_iter_par_threads(n, ngroups);
+        if stage_threads <= 1 {
+            for group in out.chunks_exact_mut(stage_len) {
+                mixed_radix_combine_stage(group, p, m, &twn, inverse);
+            }
+        } else {
+            let twn_ref: &[Complex64] = &twn;
+            let groups_per = ngroups.div_ceil(stage_threads);
+            std::thread::scope(|scope| {
+                for out_chunk in out.chunks_mut(groups_per * stage_len) {
+                    scope.spawn(move || {
+                        for group in out_chunk.chunks_exact_mut(stage_len) {
+                            mixed_radix_combine_stage(group, p, m, twn_ref, inverse);
+                        }
+                    });
+                }
+            });
         }
         m = stage_len;
     }
     true
+}
+
+/// One leaf of the iterative odd-power tail: gather the strided 2^k sub-sequence
+/// at `base` (stride `nleaves`) into `block` and run the power-of-two kernel.
+/// `tail_tw` is the precomputed `tail` twiddle table (for `tail > 16`); pass
+/// `None` to look it up on demand (serial path).
+#[inline]
+fn leaf_tail_fft(
+    src: &[Complex64],
+    base: usize,
+    nleaves: usize,
+    tail: usize,
+    block: &mut [Complex64],
+    inverse: bool,
+    tail_tw: Option<&[Complex64]>,
+) {
+    if tail <= 16 {
+        mixed_radix_gather_small_power_tail(src, base, nleaves, block, inverse);
+    } else {
+        for (s, slot) in block.iter_mut().enumerate() {
+            *slot = src[base + s * nleaves];
+        }
+        match tail_tw {
+            Some(tw) => cooley_tukey_radix4_inplace_with_twiddles(block, tw),
+            None => {
+                let twiddles = get_or_compute_twiddles(tail, inverse);
+                cooley_tukey_radix4_inplace_with_twiddles(block, &twiddles);
+            }
+        }
+    }
+}
+
+/// Worker count for the iterative odd-power-tail phases: serial below 1<<16 work
+/// or fewer than 2 independent blocks; otherwise `min(cores, nblocks)`.
+fn fft_iter_par_threads(n: usize, nblocks: usize) -> usize {
+    if n < (1 << 16) || nblocks < 2 {
+        return 1;
+    }
+    std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(nblocks)
 }
 
 fn mixed_radix_gather_small_power_tail(
