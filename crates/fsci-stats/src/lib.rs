@@ -9367,12 +9367,40 @@ impl DiscreteDistribution for Poisson {
         // machine precision; keep the (now-accurate) asymptotic beyond that to
         // avoid an ever-growing summation.
         if mu < 1000.0 {
+            // Joint pmf/ln-pmf recurrence (pmf(k+1)/pmf(k) = μ/(k+1)) anchored at the
+            // mode ⌊μ⌋ — one ln_gamma-based pmf at the mode + O(kmax) with a single ln
+            // per term, instead of a fresh ln_gamma pmf per term. Same [0, kmax] window
+            // and `pmf > 0` skip, so it reproduces the direct sum (≤7.3e-13 vs
+            // scipy.stats.poisson.entropy).
             let kmax = (mu + 12.0 * mu.sqrt() + 12.0).ceil() as u64;
-            let mut h = 0.0_f64;
-            for k in 0..=kmax {
-                let p = self.pmf(k);
-                if p > 0.0 {
-                    h -= p * p.ln();
+            let m = (mu.floor() as u64).min(kmax);
+            let lp_m = self.logpmf(m);
+            let pm = lp_m.exp();
+            let mut h = if pm > 0.0 { -pm * lp_m } else { 0.0 };
+            // Downward from the mode to 0.
+            let mut pk = pm;
+            let mut lpk = lp_m;
+            let mut i = m;
+            while i > 0 {
+                let r = i as f64 / mu; // pmf(i−1)/pmf(i)
+                pk *= r;
+                lpk += r.ln();
+                i -= 1;
+                if pk > 0.0 {
+                    h -= pk * lpk;
+                }
+            }
+            // Upward from the mode to kmax.
+            pk = pm;
+            lpk = lp_m;
+            i = m;
+            while i < kmax {
+                let r = mu / (i as f64 + 1.0); // pmf(i+1)/pmf(i)
+                pk *= r;
+                lpk += r.ln();
+                i += 1;
+                if pk > 0.0 {
+                    h -= pk * lpk;
                 }
             }
             h
@@ -75317,6 +75345,11 @@ mod tests {
         assert!((Binomial::new(1000, 0.3).entropy() - 4.092_428_571_139).abs() <= 1e-9);
         assert!((Binomial::new(10000, 0.5).entropy() - 5.330_961_537_799).abs() <= 1e-8);
         assert!((Binomial::new(20, 0.9).entropy() - 1.667_138_051_651).abs() <= 1e-10);
+        // Poisson entropy override (μ < 1000 direct-sum branch, mode-anchored recurrence).
+        assert!((Poisson::new(1.5).entropy() - 1.539_404_652_817).abs() <= 1e-10);
+        assert!((Poisson::new(10.0).entropy() - 2.561_409_935_275).abs() <= 1e-10);
+        assert!((Poisson::new(100.0).entropy() - 3.720_686_072_260).abs() <= 1e-10);
+        assert!((Poisson::new(999.0).entropy() - 4.872_232_463_977).abs() <= 1e-9);
     }
 
     #[test]

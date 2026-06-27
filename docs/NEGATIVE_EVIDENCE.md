@@ -8979,3 +8979,31 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   vs SciPy 1.688 ms (1.42x faster). The `GAUNTLET_RELEASE_SCORECARD.md` "1.5-4.7x slower" LOSS
   rows (beads 8l8r1.125/.143/fa62u) are STALE — they predate the one-based-contiguous fast path.
   Don't re-chase label-mean as a loss.
+
+## 2026-06-27 - WIN: Poisson.entropy pmf-ratio recurrence — 4.1-4.3x self, 49-161x vs SciPy; + nctdtr re-assessed (not a recurrence target)
+
+- Agent: cc (Claude Code / Opus), `AGENT_NAME=cc`.
+- WIN — Poisson.entropy (μ < 1000 direct-sum branch): the fresh-pmf loop over [0, kmax]
+  (kmax = ⌈μ+12√μ+12⌉) paid an ln_gamma per term. Replaced with the joint pmf/ln-pmf
+  recurrence — anchor at the mode ⌊μ⌋, per step `pk *= μ/(k+1); lpk += (μ/(k+1)).ln()`,
+  accumulate `h -= pk·lpk`. Same window and `pmf > 0` skip, so it reproduces the direct sum.
+  The μ ≥ 1000 asymptotic-series branch is untouched. Verified vs scipy.stats.poisson.entropy
+  to ≤7.3e-13 (incl. μ=999 boundary); golden cases added to
+  `discrete_entropy_recurrence_matches_scipy`. Gate: that test 1/1 + 20/20 poisson lib tests.
+
+  | Workload | OLD fresh-lgamma loop | NEW recurrence | self | SciPy | vs SciPy |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | poisson(100).entropy | 7.22 µs  | 1.66 µs | 4.3x | 267.7 µs | 161x FASTER |
+  | poisson(900).entropy | 39.50 µs | 9.58 µs | 4.1x | 470.7 µs | 49x FASTER |
+
+  Smaller self-speedup than binom (Poisson pmf carries only 1 ln_gamma vs binom's 3). Honest
+  framing: fsci already beat SciPy (~12-37x); the recurrence widens it. Self-speedup is the number.
+
+- nctdtr RE-ASSESSED (NOT pursued, no code): the noncentral-t CDF (Lenth AS243) already anchors
+  its Poisson weights p/q at the mode in LOG space (no underflow) and only the `btdtr` (incomplete
+  beta) is fresh per term. A pmf-ratio recurrence does NOT cleanly apply: (a) the significant terms
+  sit BELOW the Poisson mode (I_x decreases with j), so the current from-mode early-termination
+  already skips the dead high-j range — a from-j=0 I_x recurrence would FORFEIT that skip and
+  iterate the full O(λ) range; (b) the mode-anchored I_x recurrence underflows `u0 = x^a0` for small
+  x (small t) + large nc (the deep-tail failure from the earlier abandon). Net: no clear speedup and
+  real fragility. Leave nctdtr as-is.

@@ -618,7 +618,7 @@ fn bench_discrete_moments(c: &mut Criterion) {
 
 fn bench_discrete_entropy(c: &mut Criterion) {
     use criterion::BenchmarkId;
-    use fsci_stats::{BetaBinomial, Binomial, DiscreteDistribution, NegHypergeometric};
+    use fsci_stats::{BetaBinomial, Binomial, DiscreteDistribution, NegHypergeometric, Poisson};
     let mut group = c.benchmark_group("discrete_entropy");
     // entropy summed −Σ pmf·ln(pmf) over the support at ~6 ln_gamma/pmf; the
     // pmf-ratio recurrence (mode-anchored) makes each term one ln. Scales with n.
@@ -629,6 +629,12 @@ fn bench_discrete_entropy(c: &mut Criterion) {
     for &n in &[1000_u64, 10000] {
         let d = Binomial::new(n, 0.5);
         group.bench_function(BenchmarkId::new("binomial", n), |b| b.iter(|| black_box(d.entropy())));
+    }
+    for &mu in &[100.0_f64, 900.0] {
+        let d = Poisson::new(mu);
+        group.bench_function(BenchmarkId::new("poisson", mu as u64), |b| {
+            b.iter(|| black_box(d.entropy()))
+        });
     }
     for &n in &[200_u64, 400] {
         let d = NegHypergeometric::new(2 * n + 100, n, n + 50);
