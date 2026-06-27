@@ -1790,15 +1790,35 @@ fn simplex_iterate(
     let m = basis.len(); // number of constraints
     let obj_row = m;
     let rhs_col = n_vars;
+    let tol = 1e-12;
+
+    // Entering-variable rule: Dantzig (most-negative reduced cost) converges in far
+    // fewer pivots than Bland's "first-negative", but can cycle on degenerate LPs.
+    // Count consecutive degenerate pivots (objective unchanged) and fall back to
+    // Bland's anti-cycling rule once they pile up, then resume Dantzig on progress.
+    // Same optimum either way (the simplex is exact); only the pivot path changes.
+    let bland_after = m + 16;
+    let mut degenerate_run = 0usize;
+    let mut last_obj = tableau[obj_row][rhs_col];
 
     for iteration in 0..maxiter {
-        // Find entering variable using Bland's rule: smallest index with negative reduced cost.
         let mut pivot_col = None;
-        let tol = 1e-12;
-        for (j, &cost) in tableau[obj_row].iter().enumerate().take(n_vars) {
-            if cost < -tol {
-                pivot_col = Some(j);
-                break;
+        if degenerate_run >= bland_after {
+            // Bland's rule: smallest index with negative reduced cost.
+            for (j, &cost) in tableau[obj_row].iter().enumerate().take(n_vars) {
+                if cost < -tol {
+                    pivot_col = Some(j);
+                    break;
+                }
+            }
+        } else {
+            // Dantzig's rule: most negative reduced cost.
+            let mut best = -tol;
+            for (j, &cost) in tableau[obj_row].iter().enumerate().take(n_vars) {
+                if cost < best {
+                    best = cost;
+                    pivot_col = Some(j);
+                }
             }
         }
 
@@ -1850,6 +1870,16 @@ fn simplex_iterate(
             }
         }
         basis[pivot_row] = pivot_col;
+
+        // A pivot that leaves the objective unchanged is degenerate (the cycling
+        // risk for Dantzig); track the run length to trigger the Bland fallback.
+        let obj = tableau[obj_row][rhs_col];
+        if (obj - last_obj).abs() > tol {
+            degenerate_run = 0;
+        } else {
+            degenerate_run += 1;
+        }
+        last_obj = obj;
     }
 
     Err(1) // Iteration limit

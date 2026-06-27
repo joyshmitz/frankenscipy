@@ -4,6 +4,27 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-linprog-dantzig-pivot - KEEP (conformance-exact 4.2-4.5x self): opt.linprog simplex Dantzig pivot rule
+
+`opt.linprog` was a 6-29x gap vs scipy's HiGHS (nv=50 nc=80: 14.63 vs 2.49 ms;
+nv=100 nc=150: 165.6 vs 7.17 ms) with bad scaling (13x slower for a 2x problem).
+fsci uses a dense two-phase tableau simplex; the pivot itself is already a
+contiguous vectorizable row-AXPY, so the cost was the ITERATION COUNT — the
+entering-variable rule was Bland's ("first index with negative reduced cost"),
+which is anti-cycling but takes far more pivots than Dantzig's "most-negative
+reduced cost". Switched to Dantzig's rule with a Bland fallback that engages after
+a run of `m+16` consecutive DEGENERATE pivots (objective unchanged = the only
+cycling risk) and disengages on progress. **nv=50: 14.63 → 3.51 ms = 4.17x;
+nv=100: 165.6 → 37.2 ms = 4.45x self; 5.9x/23x → 1.41x/5.2x slower.**
+CONFORMANCE-EXACT: the simplex is still exact so it reaches the same optimum —
+oracle diff (non-trivial mixed-sign objective) matches scipy `fun` to 10 digits;
+313/0 opt lib GREEN. Only the leaving-variable rule (first min-ratio by row index)
+was left unchanged — it already passes conformance and the Bland-entering fallback
+breaks cycles in practice. RESIDUAL gap (still 5.2x at nv=100) is the DENSE
+tableau (O(rows·cols) full pivot every step) vs HiGHS's revised/sparse simplex
+with a factored basis — an algorithmic wall; a revised-simplex rewrite is the
+multi-turn close. Bigger gaps may remain in linprog at larger nv; re-probe.
+
 ## 2026-06-26 - frankenscipy-greenfalcon-nnls-syrk-gram - KEEP (byte-identical 3.5-5.4x self): opt.nnls Gram precompute is the real bottleneck (rank-1 AXPY SYRK)
 
 Continuation of the nnls gap close. FIRST tried the filed follow-up — incremental
