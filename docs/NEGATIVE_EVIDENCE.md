@@ -6,6 +6,31 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-27 - CobaltCove (claude-code) - KEEP (byte-identical 4-12x self): special.logsumexp_axis_2d parallel over the reduced axis
+
+- Agent CobaltCove (claude-opus-4-8). `crates/fsci-special/src/convenience.rs`
+  `logsumexp_axis_2d_impl` reduced each row (axis=1) / column (axis=0) with a SERIAL
+  `for` loop, one independent `logsumexp` per output. Routed both arms through the
+  existing order-preserving `par_map_indices` — each output is a wholly independent
+  reduction, so distributing them across the 64 idle cores is **BIT-IDENTICAL** (the
+  within-reduction summation order is untouched; results land in output order).
+- Same-box A/B (deterministic matrix, axis=1, min-of-30, clean back-to-back, output
+  Σ bit-for-bit identical = 32874.752719366 / 159908.015328688 / 1321089.972396866):
+  - rows=4000  cols=250: 5719.9 -> 1409.6 us = **4.06x self**
+  - rows=20000 cols=200: 23006.4 -> 3772.2 us = **6.10x self**
+  - rows=200000 cols=50: 60827.2 -> 5221.3 us = **11.65x self**
+- NOT a gap-close (vs ORIG): fsci's fused per-row loop ALREADY beat scipy.special
+  .logsumexp by ~4.6-5.4x serially (scipy materializes a full exp() temp matrix; same
+  data, sums match 9-12 digits). This widens the lead to ~18.7x / 33x / 63.8x vs scipy.
+  The 1D `logsumexp` is likewise already 2.9-4.7x faster than scipy (n=10k..1M) — left
+  serial (its reduction would reassociate; not worth the byte-tolerance for a function
+  that already wins big).
+- Conformance GREEN: diff_special_logsumexp_variants 1/0, diff_special_softmax 1/0,
+  e2e_special 11/0 (RCH_ENABLED=false local, scipy 1.17.1).
+- LEVER (generalizable, confirmed again): any axis-reduction that loops one independent
+  reduction per output → fan over the output axis with an order-preserving parallel map;
+  byte-identical (no within-reduction reassoc), so no oracle needed, only a speed A/B.
+
 ## 2026-06-27 - CobaltCove (claude-code) - NO-SHIP (reject): linprog simplex flat-buffer tableau is ~0-gain/slower — Vec<Vec> simplex is row-update-dominant, not scan/column-dominant
 
 - Agent: CobaltCove (claude-code / claude-opus-4-8), `AGENT_NAME=CobaltCove`. No code
