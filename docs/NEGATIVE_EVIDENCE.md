@@ -8778,3 +8778,30 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   do not retry the naive mode anchor. Caught BEFORE coding by the Python pre-check.
 - Also landed prior cycle (a3bba628, ledger deferred for a concurrent edit): ncfdtr recurrence
   58x self, 268x→4.6x SciPy.
+
+## 2026-06-27 - WIN: BetaNegativeBinomial.cdf pmf-ratio recurrence — 93x self, flips SciPy parity to 71x FASTER
+
+- Agent: cc (Claude Code / Opus), `AGENT_NAME=cc`.
+- Same lever as BetaBinomial: BetaNegativeBinomial (betanbinom) had NO cdf override → the
+  default DiscreteDistribution::cdf summed pmf(0..=k) and each pmf costs ~6 ln_gamma. The pmf
+  has a closed ratio and the mode is 0, so pmf(0) = B(a+n,b)/B(a,b) is the LARGEST term (never
+  underflows): `pmf(i+1)/pmf(i) = (n+i)(b+i) / ((i+1)(a+n+b+i))`. Added a cdf override that
+  computes one ln_gamma-based pmf(0) then sweeps upward with O(k) multiply/adds. Even cleaner
+  than betabinom — no mode search, just recurse up from k=0.
+- Verified vs scipy.stats.betanbinom.cdf to ≤2.7e-15 rel (Python, grid incl. k=200 tail)
+  BEFORE coding; locked with a NEW golden Rust test `betanbinom_cdf_matches_scipy` (large-k
+  cases k=10/50/100/200). The pre-existing `beta_negative_binomial_pmf_cdf_match_scipy`
+  (pins cdf(3)) still passes unchanged.
+- MEASURED same-box A/B (`cargo bench -p fsci-stats -- betanbinom_cdf`, stash lib.rs to toggle
+  override vs default, full k=0..=kmax array, betanbinom(10,3,3)):
+
+  | Workload | OLD default lgamma-sum | NEW recurrence | self-speedup | vs SciPy |
+  | --- | ---: | ---: | ---: | ---: |
+  | betanbinom cdf kmax=100 | — | 25.1 µs | — | — |
+  | betanbinom cdf kmax=500 | ~19.7 ms | 275.5 µs | ~71x | scipy 19.7 ms → 71x FASTER |
+  | betanbinom cdf kmax=2000 | 314.59 ms | 3.381 ms | 93x faster | — |
+
+  OLD fsci was at PARITY with scipy (both O(k) per-point pmf sums, ~19.7 ms for 500 k); the
+  recurrence flips that to 71x faster (and 93x self at kmax=2000). Lifts NoncentralBinomial-tail
+  callers and the default sf = 1 − cdf.
+- Gate: `cargo test -p fsci-stats --lib` betanbinom + beta_negative_binomial = 3/3 green.

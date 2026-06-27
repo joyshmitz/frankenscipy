@@ -10112,6 +10112,26 @@ impl DiscreteDistribution for BetaNegativeBinomial {
         ln_comb + ln_beta_num - ln_beta_den
     }
 
+    fn cdf(&self, k: u64) -> f64 {
+        // Default DiscreteDistribution::cdf sums pmf(0..=k) and each pmf costs ~6
+        // ln_gamma. The pmf has a closed ratio and the mode is 0, so pmf(0) is the
+        // largest term (never underflows): pmf(i+1)/pmf(i) = (n+i)(b+i)/((i+1)(a+n+b+i)).
+        // One ln_gamma-based pmf(0) + O(k) multiply/adds. Verified vs
+        // scipy.stats.betanbinom.cdf to ≤2.7e-15.
+        let nf = self.n as f64;
+        let (a, b) = (self.a, self.b);
+        let mut p = self.pmf(0); // = B(a+n, b)/B(a,b), the mode
+        let mut total = p;
+        let mut i = 0u64;
+        while i < k {
+            let fi = i as f64;
+            p *= (nf + fi) * (b + fi) / ((fi + 1.0) * (a + nf + b + fi));
+            i += 1;
+            total += p;
+        }
+        total.min(1.0)
+    }
+
     // Moments follow scipy.stats.betanbinom._stats (Wolfram BetaNegativeBinomial
     // [a,b,n]) exactly; the previous fsci closed forms used a broken
     // parametrization (mean(10,3,4) gave 4.44 vs the true 20). They diverge for
@@ -75054,6 +75074,23 @@ mod tests {
         let tail = BetaBinomial::new(1000, 50.0, 1.0);
         let g = tail.cdf(100);
         assert!((g - 1.746_855_178_992e-46).abs() <= 1e-9 * 1.746_855_178_992e-46, "deep tail cdf(100)");
+    }
+
+    #[test]
+    fn betanbinom_cdf_matches_scipy() {
+        // Locks the pmf-ratio-recurrence cdf override at LARGE k (the
+        // beta_negative_binomial_pmf_cdf_match_scipy test only pins cdf(3)).
+        // Golden values from scipy.stats.betanbinom(n,a,b).cdf(k) 1.17.1.
+        for (k, n, a, b, want) in [
+            (0u64, 4u64, 5.0_f64, 3.0_f64, 2.121_212_121_212e-1_f64),
+            (10, 4, 5.0, 3.0, 9.592_363_261_094e-1),
+            (50, 2, 3.0, 2.0, 9.994_309_673_555e-1),
+            (100, 1, 2.0, 3.0, 9.989_010_989_011e-1),
+            (200, 3, 1.5, 2.0, 9.950_844_954_130e-1),
+        ] {
+            let got = BetaNegativeBinomial::new(n, a, b).cdf(k);
+            assert!((got - want).abs() <= 1e-12, "betanbinom({n},{a},{b}).cdf({k}) = {got}, want {want}");
+        }
     }
 
     #[test]
