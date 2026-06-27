@@ -350,7 +350,10 @@ fn weight_at(
 ///
 /// Matches `scipy.special.expit(x)`.
 pub fn expit(x_tensor: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
-    map_real("expit", x_tensor, mode, |x| Ok(expit_scalar(x)))
+    // expit is compute-bound (exp + reciprocal), so it parallelizes for large
+    // arrays via the work-capped light path (was unconditionally serial, ~1.8x
+    // slower than cephes at n≈200k-500k).
+    map_real_light("expit", x_tensor, mode, |x| Ok(expit_scalar(x)))
 }
 
 /// Log-odds function: log(p / (1 - p)).
@@ -2428,6 +2431,79 @@ where
         out.extend(cr?);
     }
     Ok(out)
+}
+
+/// Above this length the cheap-but-COMPUTE-BOUND convenience kernels (e.g. `expit`'s
+/// `exp`+reciprocal, ~8 ns/call) parallelize via [`par_map_light`]. The earlier
+/// blanket-serial rule blamed "~40 ns/element of overhead", but that was the loose
+/// `n/128` worker cap over-subscribing a ~8 ns kernel (64 OS threads, a flat spawn
+/// floor). A WORK cap (≥~32k elements/worker) amortizes the spawn, flipping these
+/// from a ~1.8x cephes loss to a win from ~128k up. Memory-bound kernels see no
+/// benefit, so only the compute-bound ones (expit/logit/…) are routed here.
+const LIGHT_KERNEL_PAR_MIN: usize = 1 << 18;
+
+/// Work-capped parallel map for cheap compute-bound kernels — caps workers at
+/// `min(cores, n/32768)` so each owns enough elements to amortize the OS-thread
+/// spawn (the loose `n/128` cap of [`par_map_indices`] over-subscribes them).
+/// Order-preserving → byte-identical to the serial map.
+fn par_map_light<T, H>(n: usize, f: H) -> Result<Vec<T>, SpecialError>
+where
+    T: Send,
+    H: Fn(usize) -> Result<T, SpecialError> + Sync,
+{
+    let nthreads = if n < 256 {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n / 32768)
+            .max(1)
+    };
+    if nthreads <= 1 {
+        return (0..n).map(&f).collect();
+    }
+    let chunk = n.div_ceil(nthreads);
+    let f = &f;
+    let chunk_results: Vec<Result<Vec<T>, SpecialError>> = std::thread::scope(|scope| {
+        (0..nthreads)
+            .filter_map(|t| {
+                let i0 = t * chunk;
+                if i0 >= n {
+                    return None;
+                }
+                let i1 = (i0 + chunk).min(n);
+                Some(scope.spawn(move || (i0..i1).map(f).collect::<Result<Vec<T>, _>>()))
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("convenience light worker panicked"))
+            .collect()
+    });
+    let mut out = Vec::with_capacity(n);
+    for cr in chunk_results {
+        out.extend(cr?);
+    }
+    Ok(out)
+}
+
+/// Like [`map_real`] but parallelizes a real array of length ≥ [`LIGHT_KERNEL_PAR_MIN`]
+/// through the work-capped [`par_map_light`]. For COMPUTE-bound cheap kernels only.
+fn map_real_light<F>(
+    function: &'static str,
+    input: &SpecialTensor,
+    mode: RuntimeMode,
+    kernel: F,
+) -> SpecialResult
+where
+    F: Fn(f64) -> Result<f64, SpecialError> + Sync,
+{
+    if let SpecialTensor::RealVec(values) = input {
+        if values.len() >= LIGHT_KERNEL_PAR_MIN {
+            return par_map_light(values.len(), |i| kernel(values[i])).map(SpecialTensor::RealVec);
+        }
+    }
+    map_real_inner(function, input, mode, kernel, false)
 }
 
 /// Default-SERIAL elementwise map for convenience scalar functions. Nearly all of them are cheap

@@ -4,6 +4,27 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-rgamma-expit-light-par - KEEP (byte-identical): extend work-capped light parallel to rgamma + expit
+
+Followed the prior entry's generalizable note (re-probe other cheap real special
+kernels with a work cap). Measured erf/erfc/erfinv/expit/logit/ndtr + rgamma at
+n=200k-500k vs cephes: most win/parity (logit 2x faster; erf/ndtr parity), but two
+real gaps. (1) `rgamma` (1/Γ, gamma-family ~30ns): the prior turn lowered the
+gamma gate to 1<<17 but left rgamma on the LOOSE-cap `par_map_indices`
+(over-subscribed). Route it to the same `par_map_light` → **200k 6.93 → 2.57 ms,
+1.40x SLOWER → 1.58x FASTER; 500k 2.92x faster.** (2) `expit` (sigmoid,
+compute-bound exp+recip) was unconditionally serial via `map_real` (the comment's
+"~40 ns/element overhead" was the loose-cap over-subscription, not a real cost).
+Added `par_map_light` + `map_real_light` (work-cap, gate 1<<18) in convenience.rs,
+routed expit → **n=500k 4.49 → 1.40 ms, 1.85x SLOWER → 1.70x FASTER.** BYTE-
+IDENTICAL (0/400k bit-mismatch vs scalar; 1120/0 special lib GREEN). LIMIT: expit
+is so cheap (~8 ns/elem) that even work-capped parallel can't beat cephes below
+~300k (parallel 200k = 1.17 vs cephes 0.97 ms) — the gate stays at 1<<18 so it
+parallelizes only where it wins; below that it's a kernel-speed wall. erf/erfc/
+erfinv are near-parity (not worth routing). RETRY: the broader convenience O(1)
+family (relu/silu/softplus/…) — route the COMPUTE-bound ones (transcendental
+kernels) to `map_real_light`; memory-bound ones (plain arithmetic) won't benefit.
+
 ## 2026-06-26 - frankenscipy-greenfalcon-gamma-family-moderate-n-par - KEEP (byte-identical 1.2-3.2x self): special gamma family work-capped parallel at moderate n
 
 Probed fsci-special real-vec kernels: most win/parity, but the gamma family

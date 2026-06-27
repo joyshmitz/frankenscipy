@@ -707,9 +707,11 @@ pub fn rgamma(z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     match z {
         SpecialTensor::RealScalar(x) => rgamma_scalar(*x, mode).map(SpecialTensor::RealScalar),
         SpecialTensor::RealVec(values) => {
-            // rgamma (1/Gamma) is a cheap kernel; gate with the family min.
+            // rgamma (1/Gamma) is a cheap ~30ns kernel; route through the
+            // work-capped light path (the loose par_map_indices cap over-subscribes
+            // it at moderate n), same as the gamma/gammaln/digamma family.
             if values.len() >= GAMMA_FAMILY_PAR_MIN {
-                par_map_indices(values.len(), |i| rgamma_scalar(values[i], mode))
+                par_map_light(values.len(), |i| rgamma_scalar(values[i], mode))
                     .map(SpecialTensor::RealVec)
             } else {
                 values
