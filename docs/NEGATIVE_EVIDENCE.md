@@ -8946,3 +8946,36 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   so fsci's old fresh-lgamma loop (118 µs) actually LOST 1.31x; the recurrence flips it to 24.5x
   faster. NegHypergeometric was already ahead (SciPy's nhypergeom moments hit the slow
   expect() path); there the recurrence widens the lead (self-speedup 33.6x is the honest number).
+
+## 2026-06-27 - WIN: Binomial.entropy pmf-ratio recurrence — 9.5-11.3x self, 24.8-35x vs SciPy; + DEAD-END: ndimage.mean(labels,index) sum/count interleave (REVERTED)
+
+- Agent: cc (Claude Code / Opus), `AGENT_NAME=cc`.
+- WIN — Binomial.entropy (the most common discrete dist): the fresh-pmf loop over [0,n] paid
+  ~3 ln_gamma per term. Replaced with the joint pmf/ln-pmf recurrence — anchor at the mode
+  `floor((n+1)p)`, per step `pk *= ratio; lpk += ratio.ln()` with
+  `pmf(k+1)/pmf(k) = (n−k)/(k+1)·p/(1−p)`, accumulate `h -= pk·lpk`. Verified vs
+  scipy.stats.binom.entropy to ≤1.2e-11 BEFORE coding; golden cases added to
+  `discrete_entropy_recurrence_matches_scipy` (n up to 10000). Gate: that test 1/1 + full
+  fsci-stats suite green.
+
+  | Workload | OLD fresh-lgamma loop | NEW recurrence | self | SciPy | vs SciPy |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | binom(1000,0.5).entropy  | 68.89 µs  | 6.11 µs  | 11.3x | 213.8 µs  | 35x FASTER |
+  | binom(10000,0.5).entropy | 657.73 µs | 69.42 µs | 9.5x  | 1724.8 µs | 24.8x FASTER |
+
+  (Self-speedup is the honest number — fsci's old loop already beat SciPy 2.6-3.1x; the
+  recurrence widens the lead.)
+
+- DEAD-END (REVERTED, ~0-gain → negative evidence) — `ndimage.mean(labels,index)`
+  `measurement_label_mean`: hypothesised that accumulating (sum,count) INTERLEAVED in one
+  `Vec<(f64,usize)>` instead of two parallel `sums`/`counts` arrays would halve cache-line
+  touches per pixel at large K. MEASURED same-box A/B (`cargo bench -p fsci-ndimage -- label_mean`,
+  one_based path): NEUTRAL-TO-WORSE everywhere — k512 117.5 µs → 136.5 µs (0.86x), k1024
+  466 → 541 µs (0.86x), k2048 485 → 498 µs, k4096 1.185 → 1.204 ms. The two-array layout
+  already pipelines the independent f64/usize stores fine; interleaving only adds 16-byte-stride
+  overhead. REVERTED (no commit).
+  CORRECTION to the stale scorecard: those same OLD numbers show `ndimage.mean(labels,index)`
+  ALREADY BEATS SciPy now — k512 fsci 117.5 µs vs SciPy 189 µs (1.6x faster), k4096 fsci 1.185 ms
+  vs SciPy 1.688 ms (1.42x faster). The `GAUNTLET_RELEASE_SCORECARD.md` "1.5-4.7x slower" LOSS
+  rows (beads 8l8r1.125/.143/fa62u) are STALE — they predate the one-based-contiguous fast path.
+  Don't re-chase label-mean as a loss.

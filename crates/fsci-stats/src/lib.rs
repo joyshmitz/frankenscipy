@@ -9859,16 +9859,50 @@ impl DiscreteDistribution for Binomial {
     }
 
     fn entropy(&self) -> f64 {
-        // Binomial entropy: -∑_{k=0}^{n} pmf(k) · ln pmf(k). Finite support
-        // (n+1 atoms), so a direct sum is exact up to f64 round-off.
+        // Binomial entropy −∑ pmf·ln pmf over [0,n]. The fresh-pmf loop paid ~3
+        // ln_gamma PER term; instead track pmf and ln(pmf) jointly via the pmf-ratio
+        // recurrence (pmf(k+1)/pmf(k) = (n−k)/(k+1) · p/(1−p)), anchored at the mode
+        // so the pmf never underflows. One ln_gamma-based pmf at the mode + O(n)
+        // (one ln per term). Verified vs scipy.stats.binom.entropy to ≤1.2e-11.
         if self.p == 0.0 || self.p == 1.0 {
             return 0.0;
         }
-        let mut h = 0.0_f64;
-        for k in 0..=self.n {
-            let p = self.pmf(k);
-            if p > 0.0 {
-                h -= p * p.ln();
+        let n = self.n;
+        let nf = n as f64;
+        let p = self.p;
+        let odds = p / (1.0 - p);
+        let m = (((nf + 1.0) * p).floor() as u64).min(n);
+        let lp_m = self.logpmf(m);
+        let pm = lp_m.exp();
+        let mut h = if pm > 0.0 { -pm * lp_m } else { 0.0 };
+        // Downward from the mode to 0.
+        let mut pk = pm;
+        let mut lpk = lp_m;
+        let mut i = m;
+        while i > 0 {
+            let fi = i as f64;
+            // pmf(i−1)/pmf(i) = i/(n−i+1) · (1−p)/p
+            let r = fi / ((nf - fi + 1.0) * odds);
+            pk *= r;
+            lpk += r.ln();
+            i -= 1;
+            if pk > 0.0 {
+                h -= pk * lpk;
+            }
+        }
+        // Upward from the mode to n.
+        pk = pm;
+        lpk = lp_m;
+        i = m;
+        while i < n {
+            let fi = i as f64;
+            // pmf(i+1)/pmf(i) = (n−i)/(i+1) · p/(1−p)
+            let r = (nf - fi) / (fi + 1.0) * odds;
+            pk *= r;
+            lpk += r.ln();
+            i += 1;
+            if pk > 0.0 {
+                h -= pk * lpk;
             }
         }
         h
@@ -75278,6 +75312,11 @@ mod tests {
         assert!((NegHypergeometric::new(20, 7, 3).entropy() - 1.571_080_643_983).abs() <= 1e-10);
         assert!((NegHypergeometric::new(900, 400, 450).entropy() - 3.505_555_116_320).abs() <= 1e-9);
         assert!((NegHypergeometric::new(200, 50, 75).entropy() - 2.821_387_090_436).abs() <= 1e-10);
+        // Binomial entropy override (mode-anchored joint pmf/ln-pmf recurrence).
+        assert!((Binomial::new(100, 0.5).entropy() - 3.028_367_940_137).abs() <= 1e-10);
+        assert!((Binomial::new(1000, 0.3).entropy() - 4.092_428_571_139).abs() <= 1e-9);
+        assert!((Binomial::new(10000, 0.5).entropy() - 5.330_961_537_799).abs() <= 1e-8);
+        assert!((Binomial::new(20, 0.9).entropy() - 1.667_138_051_651).abs() <= 1e-10);
     }
 
     #[test]
