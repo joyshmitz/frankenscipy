@@ -36702,18 +36702,60 @@ pub fn entropy(pk: &[f64], base: Option<f64>) -> f64 {
         return f64::NAN;
     }
 
-    let h: f64 = pk
-        .iter()
-        .map(|&p| {
-            let prob = p / total;
-            if prob > 0.0 { -prob * prob.ln() } else { 0.0 }
-        })
-        .sum();
+    let h = entropy_h_sum(pk, total);
 
     match base {
         Some(b) => h / b.ln(),
         None => h,
     }
+}
+
+/// `Σ -prob·ln(prob)` with `prob = pₖ/total`, using four independent accumulators
+/// (break the fold's latency chain so the `ln`-bound loop pipelines) and, for large
+/// inputs, split across threads — each term is an independent `ln` then a reduction.
+/// ~1e-15 reassociation vs the serial fold (same per-element formula and `0·ln 0 = 0`
+/// convention; only the summation order is regrouped).
+fn entropy_h_sum(pk: &[f64], total: f64) -> f64 {
+    let chunk_sum = |chunk: &[f64]| -> f64 {
+        let term = |p: f64| -> f64 {
+            let prob = p / total;
+            if prob > 0.0 { -prob * prob.ln() } else { 0.0 }
+        };
+        let mut a = [0.0f64; 4];
+        let mut i = 0;
+        while i + 4 <= chunk.len() {
+            a[0] += term(chunk[i]);
+            a[1] += term(chunk[i + 1]);
+            a[2] += term(chunk[i + 2]);
+            a[3] += term(chunk[i + 3]);
+            i += 4;
+        }
+        let mut s = (a[0] + a[1]) + (a[2] + a[3]);
+        while i < chunk.len() {
+            s += term(chunk[i]);
+            i += 1;
+        }
+        s
+    };
+    let n = pk.len();
+    // Cap workers so each owns >=64k elements: the per-element `ln` is light, so a
+    // 64-way split has too little work per chunk to amortize the thread spawn.
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let threads = cores.min((n / (1 << 16)).max(1)).min(16);
+    if n < (1 << 16) || threads <= 1 {
+        return chunk_sum(pk);
+    }
+    let chunk = n.div_ceil(threads);
+    let parts: Vec<f64> = std::thread::scope(|scope| {
+        let handles: Vec<_> = pk
+            .chunks(chunk)
+            .map(|c| scope.spawn(move || chunk_sum(c)))
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    parts.iter().sum()
 }
 
 /// Compute the Kullback-Leibler divergence (relative entropy) D_KL(P || Q).

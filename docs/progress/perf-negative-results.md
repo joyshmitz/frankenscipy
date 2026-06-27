@@ -4,6 +4,23 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-entropy-parallel-hsum - KEEP (byte-tolerant 4.30x self): stats.entropy parallel h-sum + capped threads
+
+`stats.entropy` (= `Σ -prob·ln(prob)`, `prob = pₖ/total`) ran the `ln`-per-element
+h pass as a SERIAL scalar fold — compute-bound (n=1M ≈ 9.93 ms, **1.10x SLOWER**
+than scipy's vectorized `scipy.special.entr` at 9.05 ms; the only stat reduction
+that was actually losing). Each term is an independent `ln` then a reduction, so
+applied the gmean lever verbatim: 4 independent accumulators per chunk + threads
+capped to `min(cores, n/65536, 16)` (≥64k elements/worker so the light per-`ln`
+work amortizes the spawn). Kept the per-element formula and `0·ln 0 = 0`
+convention byte-for-byte; only the summation order regroups. **9.93 → 2.31 ms =
+4.30x self; flips 1.10x SLOWER → 3.92x FASTER** than scipy. Byte-tolerant
+(~1e-15 reassoc; 71/0 entropy scipy-ref tests GREEN). `total` and the negativity
+short-circuit scan stay serial (cheap add-reduction / early-exit). RETRY: the
+same cap applies to any remaining light ln/exp/recip per-element reduction; hmean
+(Σ 1/x, n=1M ≈ 1.40 ms vs scipy 1.20 ms) is a smaller/cheaper gap — recip is too
+light to clear the spawn at this n, leave serial.
+
 ## 2026-06-26 - frankenscipy-greenfalcon-gmean-parallel-logsum - KEEP (byte-tolerant 3.48x self): stats.gmean parallel + capped threads
 
 `stats.gmean` (= `exp(Σ ln(xᵢ)/n)`) ran the `Σ ln(xᵢ)` as a SERIAL scalar fold —
