@@ -4,6 +4,31 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-27 - frankenscipy-cod-a-spsolve-spd-cg-guard - KEEP (modest, prevents failed-CG fallback): sparse spsolve SPD-CG threshold/tolerance tune
+
+Main advanced during the session to `9a1523f0`, which landed the broader guarded
+SPD-CG `spsolve` fast path and the `sparse_spsolve_laplacian` bench. Follow-up
+measurement found the broad guard was too eager on the local fallback host:
+direct-LU-disabled baseline was n=1600 `10.888 ms`, n=4900 `134.04 ms`, but the
+pre-tune route measured n=1600 `18.145 ms`, n=4900 `521.25 ms` because tight
+`1e-10` CG could spend iterations and still fall back to native sparse LU. Tuned
+the guard to `n >= 4096`, `tol = 1e-8` (same scale as the residual acceptance),
+and `max_iter <= 1024`. After-tune local RCH-fallback bench:
+`sparse_spsolve_laplacian/spsolve/4900` `120.27 ms`, about `1.11x` faster than
+direct LU; n=1600 is below threshold and Criterion reported no significant
+change. SciPy oracle on the same fixture/RHS: n=4900 mean `12.158018 ms`, so Rust
+still remains `9.89x` slower. This is a partial guard keep, not the real SuperLU
+closeout; the still-open lever remains a Gilbert-Peierls/supernodal rewrite of
+`NativeSparseLu::factorize_csr` and probably a better fill-reducing ordering.
+Sparse solve tests GREEN (17/17), sparse conformance filter GREEN
+(`cargo test -p fsci-conformance sparse -- --nocapture`), and RCH
+`cargo check -p fsci-sparse --all-targets` GREEN. Full conformance remains
+blocked by unrelated cluster failure (`linkage_complete_5pt`); clippy remains
+blocked by unrelated lints in `fsci-linalg` and existing sparse graph routines;
+`cargo fmt --check --package fsci-sparse` is blocked by pre-existing unrelated
+format drift in `fsci-sparse/src/lib.rs` and older `fsci-sparse/src/linalg.rs`
+sections.
+
 ## 2026-06-27 - frankenscipy-greenfalcon-olo-parallel-dp - KEEP (byte-identical 14x self): cluster optimal_leaf_ordering parallel DP flips 10.5x loss to win
 
 Probed cluster hierarchy fns (cophenet/fcluster/inconsistent/maxdists all

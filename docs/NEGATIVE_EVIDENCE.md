@@ -6,6 +6,56 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-27 - cod-a (codex-cli) - KEEP: sparse.spsolve SPD-CG gate tuned to avoid failed-iteration fallback
+
+- Agent: cod-a (codex-cli / gpt-5.2), `AGENT_NAME=cod-a`.
+- Land-or-dig audit: no measured bench-worktree win was landable before digging;
+  while this session was running, `main` advanced to `9a1523f0`, which landed the
+  broader guarded SPD-CG `spsolve` fast path and the `sparse_spsolve_laplacian`
+  Criterion bench. This entry records the follow-up guard tuning on top of that
+  commit, not the original fast path.
+- Gap attacked: `sparse.spsolve` on the 2-D 5-point Laplacian remains the biggest
+  measured sparse gap. The broad route could win on a remote worker, but local
+  fallback evidence showed the too-small threshold and too-tight `1e-10` CG
+  tolerance could spend CG work and then pay the native sparse LU anyway.
+- Lever kept: raise the SPD-CG route threshold from `n >= 1024` to `n >= 4096`,
+  align the CG tolerance with the existing `1e-8` residual acceptance gate, and
+  cap the tentative CG budget at 1024 iterations. This keeps smaller systems and
+  non-converging candidates on the exact native sparse-LU path sooner.
+- MEASURED via
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a rch exec --
+  cargo bench -p fsci-sparse --bench sparse_bench --profile release --
+  sparse_spsolve_laplacian --sample-size 10 --warm-up-time 1 --measurement-time
+  2 --noplot`. `cargo bench --release` is not accepted by this Cargo, so the
+  release profile form above was used.
+  - Temporary direct-LU baseline with the SPD-CG route disabled, local fallback:
+    n=1600 `10.888 ms`, n=4900 `134.04 ms`.
+  - Broader pre-tune route on the same local fallback: n=1600 `18.145 ms`,
+    n=4900 `521.25 ms` (failed-CG/fallback pathology; rejected by this tune).
+  - Tuned route after: n=1600 below threshold, Criterion reported no significant
+    change; n=4900 `120.27 ms`, about `1.11x` faster than the direct-LU baseline.
+  - Additional remote routing evidence for the broader route on `vmi1227854`:
+    n=1600 `5.4713 ms`, n=4900 `54.092 ms`, but the same-worker direct baseline
+    could not be captured there because RCH worker admission changed.
+- Ratio vs SciPy on the local SciPy oracle fixture with the same RHS:
+  SciPy n=1600 mean `3.967802 ms`, SciPy n=4900 mean `12.158018 ms`. The tuned
+  Rust n=4900 mean `120.27 ms`, so the gap remains `9.89x` slower than SciPy
+  after this partial keep. This is not the SuperLU-closeout; the BTreeMap sparse
+  LU wall still needs the deeper Gilbert-Peierls/supernodal rewrite.
+- Correctness / conformance: `cargo test -p fsci-sparse spsolve --lib --
+  --nocapture` passed 17/17 focused sparse solve tests. `cargo check -p
+  fsci-sparse --all-targets` passed on RCH `vmi1264463`. Sparse conformance GREEN:
+  local `cargo test -p fsci-conformance sparse -- --nocapture` passed the sparse
+  packet, sparse fixture sentinel test, sparse E2E filters, and sparse golden
+  journey filters. Full `cargo test -p fsci-conformance -- --nocapture` is not
+  green due to unrelated cluster failures (`linkage_complete_5pt`) and was
+  interrupted after it sat in a long linalg metamorphic test. `cargo fmt
+  --check --package fsci-sparse` is blocked by pre-existing unrelated formatting
+  drift in `fsci-sparse/src/lib.rs` and older `fsci-sparse/src/linalg.rs`
+  sections. Clippy remains blocked by pre-existing unrelated lints: first in
+  `fsci-linalg`, and with `--no-deps`, in unrelated sparse graph routines at
+  `linalg.rs:3950`, `linalg.rs:3975`, and `linalg.rs:10622`.
+
 ## 2026-06-27 - GreenFalcon (codex-cli) - KEEP: linalg.cho_factor reuses the flat Cholesky factor
 
 - Agent: GreenFalcon (codex-cli / gpt-5.2), `AGENT_NAME=GreenFalcon`.

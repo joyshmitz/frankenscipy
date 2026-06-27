@@ -209,10 +209,10 @@ impl SparseIluFactorization {
 /// identity, diagonal, banded, and moderate-fill systems scale with
 /// stored nonzeros and generated fill-in instead of n² dense storage.
 const SPSOLVE_DENSE_MAX_N: usize = 32_768;
-const SPSOLVE_SPD_CG_MIN_N: usize = 1_024;
+const SPSOLVE_SPD_CG_MIN_N: usize = 4_096;
 const SPSOLVE_SPD_CG_MAX_NNZ_PER_ROW: usize = 6;
 const SPSOLVE_SPD_CG_MIN_DIAGONAL: f64 = 1.0e-12;
-const SPSOLVE_SPD_CG_TOL: f64 = 1.0e-10;
+const SPSOLVE_SPD_CG_TOL: f64 = 1.0e-8;
 const SPSOLVE_SPD_CG_ACCEPT_RESIDUAL: f64 = 1.0e-8;
 
 fn is_sparse_zero_pivot(value: f64) -> bool {
@@ -627,7 +627,7 @@ fn try_spsolve_spd_cg(
         return Ok(None);
     }
 
-    let max_iter = a.shape().rows.clamp(64, 4_096);
+    let max_iter = a.shape().rows.clamp(64, 1_024);
     let result = cg(
         a,
         b,
@@ -6120,12 +6120,12 @@ mod tests {
             result.warnings
         );
         let mut max_res = 0.0_f64;
-        for row in 0..n {
+        for (row, &rhs) in b.iter().enumerate().take(n) {
             let mut ax = 0.0;
             for idx in a.indptr()[row]..a.indptr()[row + 1] {
                 ax += a.data()[idx] * result.solution[a.indices()[idx]];
             }
-            max_res = max_res.max((ax - b[row]).abs());
+            max_res = max_res.max((ax - rhs).abs());
         }
         assert!(max_res < 1e-8, "residual too large: {max_res}");
     }
