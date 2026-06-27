@@ -41,6 +41,34 @@ ledger above so the project has one source of truth.
   `origin/main`; this commit is evidence-only. Route deeper next time: a real
   LAPACK-class Cholesky lever needs register-tiled GEMM/SYRK or vendor-equivalent
   blocking, not another representation-only reshuffle.
+## 2026-06-27 - CobaltCove (claude-code) - KEEP (byte-identical 1.3-1.5x self, flips the LARGE POW2 FFT loss): single 1-D pow2 FFT radix-4 parallel over per-stage groups
+
+- Agent CobaltCove. Measured a real free gap: large pow2 COMPLEX 1-D fft was 1.41-1.65x
+  SLOWER than SciPy's single-threaded pocketfft (2^20 45294 vs 27402; 2^21 128924 vs 84619;
+  2^22 243908 vs 172970 us) — the most common FFT case (also backs pow2 rfft's packed FFT).
+- Lever: in cooley_tukey_radix4_inplace, within each fused radix-4 stage the size-`4l` groups
+  are DISJOINT CONTIGUOUS blocks (twiddle index depends only on the in-group butterfly k, not
+  the group base). Extracted radix4_stage_run (single source of truth for the butterfly) +
+  radix4_prologue; refactored the serial kernel to use them (byte-identical refactor) and added
+  cooley_tukey_radix4_inplace_with_twiddles_par that fans each stage's groups across cores via
+  chunks_mut with a thread::scope barrier per stage. Routed ONLY the top-level single pow2
+  transform to it (the non-pow2 leaf phase stays serial-per-leaf to avoid nesting). forbid(unsafe)-safe.
+- BIT-IDENTICAL: same butterfly math + per-group order; only which core owns a group changes.
+  Verified by FNV digest parallel==original-serial: 2^20 d=7aa0d58a638bc422, 2^21
+  d=89735946209d25da, 2^22 d=6c42522416159bec.
+- Gate fft_radix4_par_threads: n>=1<<20 and CAP 16 workers — the sweep re-spawns per stage
+  (~log4 n barriers) and a single 1-D FFT is memory-bandwidth-bound, so 64 threads oversubscribe
+  (cap 64 REGRESSED 2^20 to ~33ms; cap 16 fixed it to ~21ms). Below the gate the serial sweep
+  is already ~SciPy parity.
+- Same-box A/B (complex fft, min-of-20, clean back-to-back):
+  - n=2^20=1048576:  29719 -> 22217 us = 1.34x self; 1.65x SLOWER -> ~1.23x FASTER vs SciPy
+  - n=2^21=2097152: 100077 -> 65786 us = 1.52x self; 1.52x SLOWER -> ~1.29x FASTER vs SciPy
+  - n=2^22=4194304: 200012 -> 128745 us = 1.55x self; 1.41x SLOWER -> ~1.34x FASTER vs SciPy
+  Flips ALL measured large pow2 sizes from a loss to a win. Gains sub-linear in cores
+  (bandwidth-bound + serial bit-reverse/last-stage); cap-16 is the bandwidth knee.
+- Conformance GREEN: fsci-fft 54/0 lib; diff_fft scipy-diff 34/0 (byte-identical => parity).
+- NOTE rfft non-pow2 (probed 1.5-1.7x slower) is the SAME low-leaf non-pow2 complex FFT residual
+  (recombination is negligible — the packed FFT is ~all the time); not separately addressed here.
 
 ## 2026-06-27 - CobaltCove (claude-code) - KEEP (byte-identical 1.4-2.1x self, flips/narrows the marquee FFT gap): fft 1-D 5-smooth iterative odd-power-tail parallel over leaves + combine groups
 

@@ -93,9 +93,11 @@ impl FftBackend for CooleyTukeyBackend {
         if n.is_power_of_two() {
             // Radix-2² (fused-radix-4) sweep: halves the number of full passes
             // over `data` vs the flat radix-2 kernel (the memory-bandwidth
-            // bottleneck at large n) while staying bit-identical to it.
+            // bottleneck at large n) while staying bit-identical to it. The
+            // top-level single transform fans each stage's disjoint groups across
+            // cores (byte-identical; SciPy's 1-D FFT is single-threaded).
             let twiddles = get_or_compute_twiddles(n, inverse);
-            cooley_tukey_radix4_inplace_with_twiddles(data, &twiddles);
+            cooley_tukey_radix4_inplace_with_twiddles_par(data, &twiddles);
         } else {
             // Non-power-of-2: the hot {3,5}*2^k family uses an iterative
             // stage plan so each stage reuses one twiddle table across all
@@ -328,64 +330,119 @@ fn cooley_tukey_radix2_inplace_with_twiddles(data: &mut [Complex64], twiddles: &
 /// radix-2 stages would use, and the adds/mults run in the same order, so the
 /// result is **bit-identical** to [`cooley_tukey_radix2_inplace_with_twiddles`].
 /// An odd `log2(n)` is handled with one leading radix-2 stage.
-fn cooley_tukey_radix4_inplace_with_twiddles(data: &mut [Complex64], twiddles: &[Complex64]) {
-    let n = data.len();
-    debug_assert!(n.is_power_of_two());
-    debug_assert!(twiddles.len() >= n);
-    let log_n = n.trailing_zeros() as usize;
+/// One fused radix-4 stage applied to `block`, which holds a whole number of
+/// size-`4l` groups laid out contiguously (group `g` at `g*4l`). The twiddle
+/// index pattern depends only on the in-group butterfly index `k` (not the group
+/// base), so this is correct whether `block` is the full array or one parallel
+/// sub-run of groups. Single source of truth for the butterfly → serial and
+/// parallel kernels are byte-identical by construction.
+#[inline]
+fn radix4_stage_run(
+    block: &mut [Complex64],
+    l: usize,
+    stride2: usize,
+    stride4: usize,
+    quarter: usize,
+    twiddles: &[Complex64],
+) {
+    let mut base = 0;
+    while base < block.len() {
+        for k in 0..l {
+            let a = base + k;
+            let b = a + l;
+            let c = b + l;
+            let d = c + l;
+            let wa = twiddles[k * stride2];
+            let wb1 = twiddles[k * stride4];
+            let wb2 = twiddles[k * stride4 + quarter];
 
+            // Inner radix-2 stage (size 2l) on (a,b) and (c,d).
+            let tb = complex_mul(block[b], wa);
+            let a1 = complex_add(block[a], tb);
+            let b1 = complex_sub(block[a], tb);
+            let td = complex_mul(block[d], wa);
+            let c1 = complex_add(block[c], td);
+            let d1 = complex_sub(block[c], td);
+
+            // Outer radix-2 stage (size 4l) on (a1,c1) and (b1,d1).
+            let tc = complex_mul(c1, wb1);
+            block[a] = complex_add(a1, tc);
+            block[c] = complex_sub(a1, tc);
+            let td2 = complex_mul(d1, wb2);
+            block[b] = complex_add(b1, td2);
+            block[d] = complex_sub(b1, td2);
+        }
+        base += 4 * l;
+    }
+}
+
+/// Bit-reverse + leading-radix-2 (odd stage count) prologue shared by the serial
+/// and parallel radix-4 sweeps. Returns the starting `l`.
+#[inline]
+fn radix4_prologue(data: &mut [Complex64], log_n: usize) -> usize {
     apply_bit_reverse_permutation_incremental(data);
-
-    // `l` = size of already-combined sub-transforms.
-    let mut l = 1usize;
-
-    // Odd number of stages: one leading radix-2 stage (stage_len = 2).
     if log_n % 2 == 1 {
         let mut base = 0;
+        let n = data.len();
         while base < n {
             let even = data[base];
-            // k == 0 only (half == 1), twiddle == twiddles[0] == 1.
             let odd = data[base + 1];
             data[base] = complex_add(even, odd);
             data[base + 1] = complex_sub(even, odd);
             base += 2;
         }
-        l = 2;
+        2
+    } else {
+        1
     }
+}
 
+fn cooley_tukey_radix4_inplace_with_twiddles(data: &mut [Complex64], twiddles: &[Complex64]) {
+    let n = data.len();
+    debug_assert!(n.is_power_of_two());
+    debug_assert!(twiddles.len() >= n);
+    let log_n = n.trailing_zeros() as usize;
+    let mut l = radix4_prologue(data, log_n);
     let quarter = n / 4;
     // Radix-4 fused stages: combine four size-`l` blocks into one size-`4l`.
     while l < n {
-        let stride2 = n / (2 * l); // twiddle stride for the inner (2l) stage
-        let stride4 = n / (4 * l); // twiddle stride for the outer (4l) stage
-        let mut base = 0;
-        while base < n {
-            for k in 0..l {
-                let a = base + k;
-                let b = a + l;
-                let c = b + l;
-                let d = c + l;
-                let wa = twiddles[k * stride2];
-                let wb1 = twiddles[k * stride4];
-                let wb2 = twiddles[k * stride4 + quarter];
+        let stride2 = n / (2 * l);
+        let stride4 = n / (4 * l);
+        radix4_stage_run(data, l, stride2, stride4, quarter, twiddles);
+        l *= 4;
+    }
+}
 
-                // Inner radix-2 stage (size 2l) on (a,b) and (c,d).
-                let tb = complex_mul(data[b], wa);
-                let a1 = complex_add(data[a], tb);
-                let b1 = complex_sub(data[a], tb);
-                let td = complex_mul(data[d], wa);
-                let c1 = complex_add(data[c], td);
-                let d1 = complex_sub(data[c], td);
-
-                // Outer radix-2 stage (size 4l) on (a1,c1) and (b1,d1).
-                let tc = complex_mul(c1, wb1);
-                data[a] = complex_add(a1, tc);
-                data[c] = complex_sub(a1, tc);
-                let td2 = complex_mul(d1, wb2);
-                data[b] = complex_add(b1, td2);
-                data[d] = complex_sub(b1, td2);
-            }
-            base += 4 * l;
+/// Parallel single-FFT radix-4 sweep: within each stage the size-`4l` groups are
+/// DISJOINT CONTIGUOUS blocks, so fan them across cores (chunks_mut, one barrier
+/// per stage via thread::scope). BIT-IDENTICAL to the serial sweep — same
+/// `radix4_stage_run` math, same per-group order; only which core owns a group
+/// changes. Used ONLY by the top-level single pow2 transform (never nested under
+/// the already-parallel non-pow2 leaf phase). SciPy's 1-D FFT is single-threaded.
+fn cooley_tukey_radix4_inplace_with_twiddles_par(data: &mut [Complex64], twiddles: &[Complex64]) {
+    let n = data.len();
+    debug_assert!(n.is_power_of_two());
+    debug_assert!(twiddles.len() >= n);
+    let log_n = n.trailing_zeros() as usize;
+    let mut l = radix4_prologue(data, log_n);
+    let quarter = n / 4;
+    while l < n {
+        let stride2 = n / (2 * l);
+        let stride4 = n / (4 * l);
+        let group_len = 4 * l;
+        let ngroups = n / group_len;
+        let nthreads = fft_radix4_par_threads(n, ngroups);
+        if nthreads <= 1 {
+            radix4_stage_run(data, l, stride2, stride4, quarter, twiddles);
+        } else {
+            let groups_per = ngroups.div_ceil(nthreads);
+            std::thread::scope(|scope| {
+                for chunk in data.chunks_mut(groups_per * group_len) {
+                    scope.spawn(move || {
+                        radix4_stage_run(chunk, l, stride2, stride4, quarter, twiddles);
+                    });
+                }
+            });
         }
         l *= 4;
     }
@@ -800,6 +857,23 @@ fn fft_iter_par_threads(n: usize, nblocks: usize) -> usize {
         .map(std::num::NonZero::get)
         .unwrap_or(1)
         .min(nblocks)
+}
+
+/// Worker count for the single-FFT radix-4 sweep. The sweep re-spawns workers
+/// once PER STAGE (~log4(n) barriers), so the per-stage work must amortize the
+/// spawn cost: gate at n ≥ 1<<20 and cap at 16 workers (a single 1-D FFT is
+/// memory-bandwidth-bound — more cores oversubscribe without scaling, and fewer
+/// spawns/stage keeps the overhead small). Below the gate the serial sweep is
+/// already ≈ SciPy parity, so staying serial avoids a small-size regression.
+fn fft_radix4_par_threads(n: usize, ngroups: usize) -> usize {
+    if n < (1 << 20) || ngroups < 2 {
+        return 1;
+    }
+    std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(ngroups)
+        .min(16)
 }
 
 fn mixed_radix_gather_small_power_tail(
