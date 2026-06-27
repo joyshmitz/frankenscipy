@@ -8745,3 +8745,36 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
 - CONCLUSION: the prior "82x slower" skellam residual is CLOSED — it was entirely fsci's
   naive chndtr. The noncentral-χ² family now matches scipy's algorithmic class (O(√nc) cheap
   terms) and edges ahead on these inputs.
+
+## 2026-06-27 - WIN: BetaBinomial.cdf pmf-ratio recurrence — 41x self, flips 1.18x SciPy loss to 35-72x FASTER; + ncfdtr recurrence (prior commit a3bba628) and nctdtr ABANDONED (underflow)
+
+- Agent: cc (Claude Code / Opus), `AGENT_NAME=cc`.
+- BetaBinomial had NO cdf override → used the default DiscreteDistribution::cdf which sums
+  pmf(0..=k), and each pmf costs ~6 ln_gamma — O(k) lgamma per cdf point. Added a cdf
+  override walking the pmf RATIO recurrence (each consecutive pmf is one multiply):
+  `pmf(i+1)/pmf(i) = (n−i)(i+a)/((i+1)(n−i−1+b))`. Anchored at the MODE (the largest pmf,
+  ≥ 1/(n+1), so it never underflows — robust by construction) and sweep outward, summing the
+  [0,k] window. One ln_gamma-based pmf at the mode + O(n) multiply/adds.
+- Verified vs scipy.stats.betabinom.cdf to ≤6.7e-13 rel (Python, incl. boundaries, n=1000,
+  and a 1e-46 deep tail) BEFORE coding; locked with a NEW golden Rust test
+  `betabinom_cdf_matches_scipy` (4 boundary/body cases + n=1000 + the 1e-46 tail).
+- MEASURED same-box A/B (`cargo bench -p fsci-stats -- betabinom_cdf`, stash lib.rs to
+  toggle override vs default, full k=0..=n array):
+
+  | Workload | OLD default lgamma-sum | NEW recurrence | self-speedup | vs SciPy |
+  | --- | ---: | ---: | ---: | ---: |
+  | betabinom cdf n=50 (51 k) | — | 11.82 µs | — | scipy 857 µs → 72x FASTER |
+  | betabinom cdf n=200 (201 k) | — | 77.7 µs | — | scipy 4090 µs → 53x FASTER |
+  | betabinom cdf n=1000 (1001 k) | 52.31 ms | 1.264 ms | 41x faster | scipy 44.49 ms → 35x FASTER |
+
+  Flips a 1.18x SciPy loss (n=1000) to 35x faster; scipy's own betabinom.cdf is an O(k)
+  per-point pmf sum (no closed form), so the recurrence wins big.
+- Gate: `cargo test -p fsci-stats --lib betabinom` = 4/4 green (incl. the new golden cdf test).
+- ABANDONED nctdtr (noncentral-t CDF): same Poisson-mixture shape but TWO incomplete-beta
+  series per term (Lenth AS 243). The mode-anchored recurrence FAILS in 3 deep-tail+large-nc
+  cases (verified in Python: rel=1.0, off by 50+ orders) because λ=½nc² puts the mode where
+  `u0 = x^{a0}` underflows to 0 (small x = t²/(t²+df), large a0), so the recurrence can't
+  bootstrap. Unlike chndtr/ncfdtr (well-conditioned modes), nctdtr is UNSAFE for this lever —
+  do not retry the naive mode anchor. Caught BEFORE coding by the Python pre-check.
+- Also landed prior cycle (a3bba628, ledger deferred for a concurrent edit): ncfdtr recurrence
+  58x self, 268x→4.6x SciPy.

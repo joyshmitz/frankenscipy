@@ -579,8 +579,25 @@ fn bench_skellam_cdf(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_betabinom_cdf(c: &mut Criterion) {
+    use criterion::BenchmarkId;
+    use fsci_stats::{BetaBinomial, DiscreteDistribution};
+    let mut group = c.benchmark_group("betabinom_cdf");
+    // Default cdf sums pmf(0..=k) at ~6 ln_gamma/pmf — O(k) lgamma; the pmf-ratio
+    // recurrence makes each term one multiply. Cost scales with n.
+    for &n in &[50_u64, 200, 1000] {
+        let d = BetaBinomial::new(n, 2.0, 3.0);
+        let ks: Vec<u64> = (0..=n).collect();
+        group.bench_function(BenchmarkId::new("cdf", n), |b| {
+            b.iter(|| ks.iter().map(|&k| d.cdf(black_box(k))).sum::<f64>())
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
+    bench_betabinom_cdf,
     bench_skellam_cdf,
     bench_robust_slopes,
     bench_binned_statistic_2d,

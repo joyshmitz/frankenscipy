@@ -9965,6 +9965,52 @@ impl DiscreteDistribution for BetaBinomial {
         ln_comb + ln_beta_num - ln_beta_den
     }
 
+    fn cdf(&self, k: u64) -> f64 {
+        // Default DiscreteDistribution::cdf sums pmf(0..=k) and each BetaBinomial
+        // pmf costs ~6 ln_gamma calls — O(k) lgamma. Instead walk the pmf RATIO
+        // recurrence (each consecutive pmf is one multiply):
+        //   pmf(i+1)/pmf(i) = (n−i)(i+a) / ((i+1)(n−i−1+b)).
+        // Anchor at the mode (the largest pmf, ≥ 1/(n+1), so never underflows) and
+        // sweep outward, summing the [0, k] window. One ln_gamma-based pmf at the
+        // mode + O(n) multiply/adds. Verified vs scipy.stats.betabinom.cdf to
+        // ≤6.7e-13 rel incl. deep tails to 1e-46.
+        let n = self.n;
+        if k >= n {
+            return 1.0;
+        }
+        let nf = n as f64;
+        let (a, b) = (self.a, self.b);
+        let m = (self.mode() as u64).min(n);
+        let pm = self.logpmf(m).exp();
+        let mut total = 0.0_f64;
+        // Downward from the mode to 0, counting indices ≤ k.
+        let mut pk = pm;
+        let mut i = m;
+        loop {
+            if i <= k {
+                total += pk;
+            }
+            if i == 0 {
+                break;
+            }
+            let fi = i as f64;
+            // pmf(i−1)/pmf(i) = i(n−i+b) / ((n−i+1)(i−1+a))
+            pk *= fi * (nf - fi + b) / ((nf - fi + 1.0) * (fi - 1.0 + a));
+            i -= 1;
+        }
+        // Upward from the mode to k (only when k > mode).
+        pk = pm;
+        i = m;
+        while i < k {
+            let fi = i as f64;
+            // pmf(i+1)/pmf(i) = (n−i)(i+a) / ((i+1)(n−i−1+b))
+            pk *= (nf - fi) * (fi + a) / ((fi + 1.0) * (nf - fi - 1.0 + b));
+            i += 1;
+            total += pk;
+        }
+        total.clamp(0.0, 1.0)
+    }
+
     fn mean(&self) -> f64 {
         self.n as f64 * self.a / (self.a + self.b)
     }
@@ -74984,6 +75030,30 @@ mod tests {
         assert!(bb.var() > 0.0);
         assert!(bb.skewness().is_finite());
         assert!(bb.kurtosis().is_finite());
+    }
+
+    #[test]
+    fn betabinom_cdf_matches_scipy() {
+        // Locks the pmf-ratio-recurrence cdf override. Golden values from
+        // scipy.stats.betabinom(n, a, b).cdf(k) 1.17.1, incl. boundaries, a large
+        // n, and a deep tail — exactly where the recurrence must stay accurate.
+        let bb = BetaBinomial::new(20, 2.0, 3.0);
+        for (k, want) in [
+            (0u64, 2.173_913_043_478e-2_f64),
+            (2, 1.149_068_322_981e-1),
+            (10, 7.049_689_440_994e-1),
+            (19, 9.980_237_154_150e-1),
+        ] {
+            let got = bb.cdf(k);
+            assert!((got - want).abs() <= 1e-12, "betabinom(20,2,3).cdf({k}) = {got}, want {want}");
+        }
+        // k ≥ n ⇒ 1.0; large n; deep left tail.
+        assert_eq!(BetaBinomial::new(20, 2.0, 3.0).cdf(20), 1.0);
+        let big = BetaBinomial::new(1000, 2.0, 3.0);
+        assert!((big.cdf(500) - 6.878_744_386_230e-1).abs() <= 1e-9, "betabinom(1000,2,3).cdf(500)");
+        let tail = BetaBinomial::new(1000, 50.0, 1.0);
+        let g = tail.cdf(100);
+        assert!((g - 1.746_855_178_992e-46).abs() <= 1e-9 * 1.746_855_178_992e-46, "deep tail cdf(100)");
     }
 
     #[test]
