@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use fsci_linalg::{
     DecompOptions, LinalgError, SolveOptions as DenseSolveOptions, expm as dense_expm,
-    solve_banded as dense_solve_banded,
+    solve_banded as dense_solve_banded, solveh_banded as dense_solveh_banded,
 };
 use fsci_runtime::RuntimeMode;
 use nalgebra::{DMatrix, DVector, Dyn, LU};
@@ -209,6 +209,9 @@ impl SparseIluFactorization {
 /// identity, diagonal, banded, and moderate-fill systems scale with
 /// stored nonzeros and generated fill-in instead of n² dense storage.
 const SPSOLVE_DENSE_MAX_N: usize = 32_768;
+const SPSOLVE_SPD_BANDED_CHOLESKY_MIN_N: usize = 256;
+const SPSOLVE_SPD_BANDED_CHOLESKY_MAX_NNZ_PER_ROW: usize = 8;
+const SPSOLVE_SPD_BANDED_CHOLESKY_ACCEPT_RESIDUAL: f64 = 1.0e-8;
 const SPSOLVE_SPD_CG_MIN_N: usize = 4_096;
 const SPSOLVE_SPD_CG_MAX_NNZ_PER_ROW: usize = 6;
 const SPSOLVE_SPD_CG_MIN_DIAGONAL: f64 = 1.0e-12;
@@ -551,13 +554,18 @@ fn add_sparse_entry(
     }
 }
 
-fn spsolve_spd_cg_candidate(a: &CsrMatrix, options: SolveOptions) -> bool {
+fn spsolve_spd_m_matrix_candidate(
+    a: &CsrMatrix,
+    options: SolveOptions,
+    min_n: usize,
+    max_nnz_per_row: usize,
+) -> bool {
     let shape = a.shape();
     let n = shape.rows;
     if options.backend != SparseBackend::Auto
         || options.ordering != PermutationOrdering::Colamd
-        || n < SPSOLVE_SPD_CG_MIN_N
-        || a.nnz() > n.saturating_mul(SPSOLVE_SPD_CG_MAX_NNZ_PER_ROW)
+        || n < min_n
+        || a.nnz() > n.saturating_mul(max_nnz_per_row)
     {
         return false;
     }
@@ -616,6 +624,24 @@ fn spsolve_spd_cg_candidate(a: &CsrMatrix, options: SolveOptions) -> bool {
     }
 
     true
+}
+
+fn spsolve_spd_banded_cholesky_candidate(a: &CsrMatrix, options: SolveOptions) -> bool {
+    spsolve_spd_m_matrix_candidate(
+        a,
+        options,
+        SPSOLVE_SPD_BANDED_CHOLESKY_MIN_N,
+        SPSOLVE_SPD_BANDED_CHOLESKY_MAX_NNZ_PER_ROW,
+    )
+}
+
+fn spsolve_spd_cg_candidate(a: &CsrMatrix, options: SolveOptions) -> bool {
+    spsolve_spd_m_matrix_candidate(
+        a,
+        options,
+        SPSOLVE_SPD_CG_MIN_N,
+        SPSOLVE_SPD_CG_MAX_NNZ_PER_ROW,
+    )
 }
 
 fn try_spsolve_spd_cg(
@@ -690,6 +716,23 @@ pub fn spsolve(a: &CsrMatrix, b: &[f64], options: SolveOptions) -> SparseResult<
         n >= 256 && (a.nnz() <= n.saturating_mul(16) || bandwidth.saturating_mul(32) <= n);
     if over_dense_guard || genuinely_sparse {
         if sparse_banded_direct_candidate(n, bandwidth) {
+            if spsolve_spd_banded_candidate(a, options, bandwidth)
+                && let Ok(solution) = spsolve_spd_banded_direct(a, b, options, bandwidth)
+            {
+                let warnings = if over_dense_guard {
+                    vec![format!(
+                        "native sparse direct solve used for n={n}; dense fallback guard is {SPSOLVE_DENSE_MAX_N}"
+                    )]
+                } else {
+                    Vec::new()
+                };
+                return Ok(SolveResult {
+                    solution,
+                    backend_used: SparseBackend::NativeSparseLu,
+                    ordering_used: options.ordering,
+                    warnings,
+                });
+            }
             let solution = spsolve_banded_direct(a, b, options, bandwidth)?;
             let warnings = if over_dense_guard {
                 vec![format!(
@@ -3376,6 +3419,14 @@ fn sparse_banded_direct_candidate(n: usize, half_bandwidth: usize) -> bool {
     n >= 256 && half_bandwidth <= 128 && half_bandwidth.saturating_mul(16) <= n
 }
 
+fn spsolve_spd_banded_candidate(
+    a: &CsrMatrix,
+    options: SolveOptions,
+    half_bandwidth: usize,
+) -> bool {
+    half_bandwidth <= 128 && spsolve_spd_banded_cholesky_candidate(a, options)
+}
+
 fn csr_to_banded_storage(a: &CsrMatrix, half_bandwidth: usize) -> Vec<Vec<f64>> {
     let n = a.shape().rows;
     let mut banded = vec![vec![0.0; n]; half_bandwidth.saturating_mul(2).saturating_add(1)];
@@ -3391,6 +3442,64 @@ fn csr_to_banded_storage(a: &CsrMatrix, half_bandwidth: usize) -> Vec<Vec<f64>> 
         }
     }
     banded
+}
+
+fn csr_to_lower_banded_storage(a: &CsrMatrix, half_bandwidth: usize) -> Vec<Vec<f64>> {
+    let n = a.shape().rows;
+    let mut banded = vec![vec![0.0; n]; half_bandwidth.saturating_add(1)];
+    for row in 0..n {
+        for idx in a.indptr()[row]..a.indptr()[row + 1] {
+            let col = a.indices()[idx];
+            if row >= col {
+                let band_row = row - col;
+                if band_row <= half_bandwidth {
+                    banded[band_row][col] += a.data()[idx];
+                }
+            }
+        }
+    }
+    banded
+}
+
+fn spsolve_relative_residual(a: &CsrMatrix, b: &[f64], x: &[f64]) -> f64 {
+    let mut residual_sq = 0.0_f64;
+    let mut rhs_sq = 0.0_f64;
+    for (row, &rhs) in b.iter().enumerate().take(a.shape().rows) {
+        let mut ax = 0.0_f64;
+        for idx in a.indptr()[row]..a.indptr()[row + 1] {
+            ax += a.data()[idx] * x[a.indices()[idx]];
+        }
+        let residual = ax - rhs;
+        residual_sq += residual * residual;
+        rhs_sq += rhs * rhs;
+    }
+    if !residual_sq.is_finite() || !rhs_sq.is_finite() {
+        return f64::INFINITY;
+    }
+    let residual_norm = residual_sq.sqrt();
+    if rhs_sq <= f64::EPSILON {
+        residual_norm
+    } else {
+        residual_norm / rhs_sq.sqrt()
+    }
+}
+
+fn spsolve_spd_banded_direct(
+    a: &CsrMatrix,
+    b: &[f64],
+    _options: SolveOptions,
+    half_bandwidth: usize,
+) -> SparseResult<Vec<f64>> {
+    let banded = csr_to_lower_banded_storage(a, half_bandwidth);
+    let result = dense_solveh_banded(&banded, b, true).map_err(map_linalg_error)?;
+    let residual = spsolve_relative_residual(a, b, &result.x);
+    if residual <= SPSOLVE_SPD_BANDED_CHOLESKY_ACCEPT_RESIDUAL {
+        Ok(result.x)
+    } else {
+        Err(SparseError::SingularMatrix {
+            message: format!("SPD banded Cholesky residual too large: {residual:.3e}"),
+        })
+    }
 }
 
 fn spsolve_banded_direct(
@@ -6108,6 +6217,11 @@ mod tests {
         let n = a.shape().rows;
         let b: Vec<f64> = (0..n).map(|i| 1.0 + (i % 13) as f64 * 0.5).collect();
 
+        let bandwidth = csr_bandwidth(&a);
+        assert!(
+            spsolve_spd_banded_candidate(&a, SolveOptions::default(), bandwidth),
+            "strict SPD banded guard should accept the Laplacian fixture"
+        );
         let result = spsolve(&a, &b, SolveOptions::default()).expect("spsolve");
 
         assert_eq!(result.backend_used, SparseBackend::NativeSparseLu);

@@ -8363,6 +8363,47 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
   true sparse scatter/Gilbert-Peierls factorization or a specialized SPD band Cholesky, not more ordering
   knob work.
 
+## 2026-06-27 - KEEP: sparse `spsolve` SPD banded Cholesky trims the remaining Laplacian gap
+- Agent: codex / GreenFalcon. Land-or-dig audit found one live worktree ahead of `origin/main`
+  (`/data/projects/.worktrees/frankenscipy-eigvalsh-blackthrush-20260609`, commit `e3b744f4`), but it
+  only lowered the dense GEMM flat-workspace threshold from 1024 to 768. Current `main` already has the
+  stronger `MATMUL_FLAT_WORKSPACE_MIN_DIM = 256`, so that stale measured worktree was not landed.
+- Dug the biggest current measured ratio in this ledger: sparse 2-D Laplacian `spsolve`, previously
+  1.91x/8.23x slower than SciPy after the general banded-LU route. The new lever recognizes strictly
+  diagonally-dominant symmetric M-matrix CSR systems, converts only the lower band, and tries existing
+  `fsci_linalg::solveh_banded` before the general banded LU. The path is fail-closed: it falls back unless
+  the Cholesky solve succeeds and the true sparse relative residual is at most `1e-8`.
+- Cargo rejected the requested literal bench form again:
+  `AGENT_NAME=GreenFalcon CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a rch exec --
+  cargo bench --release -p fsci-sparse --bench sparse_bench -- sparse_spsolve_laplacian ...` failed with
+  `unexpected argument '--release'`. The accepted equivalent used `--profile release`:
+  `AGENT_NAME=GreenFalcon CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-a rch exec --
+  cargo bench -p fsci-sparse --profile release --bench sparse_bench -- sparse_spsolve_laplacian
+  --sample-size 10 --warm-up-time 1 --measurement-time 2 --noplot`. RCH admitted the Criterion runs
+  locally because no worker slots were available.
+- MEASURED internal delta on current `main` baseline:
+  | Workload | Baseline Rust | SPD-banded Cholesky Rust | Internal ratio |
+  | --- | ---: | ---: | ---: |
+  | 2-D Laplacian `spsolve`, n=1600 | 6.8834 ms | 4.6493 ms | 1.48x faster |
+  | 2-D Laplacian `spsolve`, n=4900 | 88.441 ms | 50.847 ms | 1.74x faster |
+- Local SciPy comparator (`python3`, SciPy sparse `spsolve`, same matrix/RHS, 8 reps):
+  | Workload | Rust after | SciPy median | Ratio vs SciPy |
+  | --- | ---: | ---: | ---: |
+  | n=1600 | 4.6493 ms | 3.235032 ms | 1.44x slower |
+  | n=4900 | 50.847 ms | 12.647216 ms | 4.02x slower |
+  Versus the same-session current baseline, the SciPy ratios improved from 2.13x/6.99x slower to
+  1.44x/4.02x slower.
+- Gates: `cargo check -p fsci-sparse --all-targets` passed via RCH worker `hz2`; focused
+  `cargo test -p fsci-sparse spsolve --lib -- --nocapture` passed 17/17; sparse conformance
+  `cargo test -p fsci-conformance --test e2e_sparse -- --nocapture` passed 24/24; `git diff --check`
+  for `crates/fsci-sparse/src/linalg.rs` passed. Full `cargo fmt --check` remains blocked by pre-existing
+  formatting drift across unrelated crates and untracked perf bins. Clippy remains blocked by pre-existing
+  `fsci-linalg` and sparse lint debt outside this route.
+- CONCLUSION: keep the SPD banded-Cholesky route. It is the next documented lever after the generic banded
+  LU keep, gives a same-session measured win, and narrows but does not close the SuperLU gap. Remaining
+  work should move to true sparse scatter/Gilbert-Peierls or supernodal factorization rather than another
+  band-storage micro-tune.
+
 ## 2026-06-27 - FINDING (measurement artifact): dense `eigh`/`svd` "27-65x slower" is OpenBLAS thread-oversubscription, NOT the real gap; true single-thread ratio is the ~3x LAPACK divide-and-conquer wall
 
 - Agent: cc (Claude Code / Opus), `AGENT_NAME=cc`.
