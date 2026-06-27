@@ -5535,9 +5535,35 @@ fn assign_points(
     })
 }
 
+/// Below this centroid count the prefilter + partial-distance abandonment path is
+/// a net loss: its branches (`if acc > bound`) defeat autovectorization, and with
+/// few centroids there is little to prune. A plain full-distance argmin over all
+/// `k` centroids vectorizes cleanly and wins. Above it, pruning skips enough full
+/// distances to pay for the branchy scan, so the abandonment path is kept.
+const NEAREST_FULL_SCAN_MAX_K: usize = 64;
+
 fn nearest_centroid(point: &[f64], centroids_flat: &[f64], k: usize, d: usize) -> (usize, f64) {
     if k == 4 && d == 4 {
         return nearest_centroid_k4_d4(point, centroids_flat);
+    }
+    // Small-k fast path: compute every full `sq_dist` (branch-free, autovectorized)
+    // and take the argmin. BYTE-IDENTICAL to the prefilter/abandonment path below:
+    // `sq_dist` is the same strict left-fold `sq_dist_within` runs to completion,
+    // the abandonment never returns a value < the true distance, and iterating
+    // `c` ascending with a strict `<` update keeps the smallest-`c` minimizer — the
+    // exact tie-break the full scan uses. The seed/prefilter only ever changed
+    // pruning speed, never the selected centroid.
+    if k <= NEAREST_FULL_SCAN_MAX_K {
+        let mut best_c = 0usize;
+        let mut min_sq = sq_dist(point, &centroids_flat[0..d]);
+        for c in 1..k {
+            let sd = sq_dist(point, &centroids_flat[c * d..c * d + d]);
+            if sd < min_sq {
+                min_sq = sd;
+                best_c = c;
+            }
+        }
+        return (best_c, min_sq);
     }
     let probe = d.min(PREFILTER_DIMS);
     let mut seed = 0usize;

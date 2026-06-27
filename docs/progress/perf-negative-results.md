@@ -4,6 +4,31 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-nearest-centroid-smallk-fullscan - KEEP (byte-identical 2.64x self): cluster nearest_centroid small-k full-scan flips kmeans2 to a WIN
+
+The deeper kmeans2 lever (filed last two entries as "residual = nearest_centroid
+per-op cost"). `nearest_centroid` used a two-stage scheme for ALL k: a prefilter
+over the leading `PREFILTER_DIMS=8` coordinates to seed an incumbent bound, then a
+full scan with partial-distance abandonment (`sq_dist_within` returns early once
+`acc > bound`). That pays off when k is large (pruning skips many full distances),
+but for SMALL k it is a net loss: the `if acc > bound` branch per coordinate
+defeats autovectorization, and there is little to prune. Added a `k ≤ 64` fast
+path that just computes every full `sq_dist` (a clean branch-free `map().sum()`
+the compiler packs SIMD-wide) and takes the argmin. **kmeans2 n=20k k=32 d=16
+iter=20: 81.2 → 30.8 ms = 2.64x self; flips 2.78x SLOWER → 1.25x FASTER than
+scipy** (clean same-session best-of-7 A/B). Small-k `vq` also gains (k=32:
+8.10 → 5.86 ms = 1.38x); `vq` at k=256 stays on the pruning path (gate), unchanged.
+BYTE-IDENTICAL: `sq_dist` (`(p-c)²` summed via `Iterator::sum`, a strict
+left-fold) is the exact value `sq_dist_within` returns when it runs to completion;
+abandonment only ever returns values `>` the incumbent (never `<` the true
+distance, so it never hides a smaller one), and iterating `c` ascending with a
+strict `<` update keeps the smallest-`c` minimizer — the same tie-break. The
+prefilter/seed only ever changed pruning speed, never the selected centroid.
+142/0 cluster lib GREEN (golden vq/kmeans/kmeans2 tests all pass). This + the
+thread-cap + flat-recompute fully closes the kmeans2 gap (2.78x slower → 1.25x
+faster). RETRY: tune `NEAREST_FULL_SCAN_MAX_K` (64) per d if a mid-k workload
+appears; a SIMD-across-centroids full scan could extend the win to larger k.
+
 ## 2026-06-26 - frankenscipy-greenfalcon-kmeans2-flat-recompute - KEEP (byte-identical 1.09x self): cluster.kmeans2 centroid recompute from flat buffer
 
 Follow-up to the kmeans2 thread-cap. The Lloyd centroid recompute accumulated
