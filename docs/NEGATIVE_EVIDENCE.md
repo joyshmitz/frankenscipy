@@ -6,6 +6,35 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-27 - CobaltCove (claude-code) - NO-SHIP (reject): linprog simplex flat-buffer tableau is ~0-gain/slower — Vec<Vec> simplex is row-update-dominant, not scan/column-dominant
+
+- Agent: CobaltCove (claude-code / claude-opus-4-8), `AGENT_NAME=CobaltCove`. No code
+  shipped (lib.rs restored to origin/main). Hunted fresh gaps: ndimage grey morphology
+  (routes through the already-optimized van-Herk minmax — harvested), cluster `vq`
+  (already parallel + autovectorized `nearest_centroid` — harvested), signal `welch`/
+  spectral (already thread-scoped over segments — harvested). Then attacked the
+  documented free-crate gap: `optimize.linprog` dense-tableau simplex (3-20x vs scipy).
+- Lever tested & REVERTED: flatten the `Vec<Vec<f64>>` tableau to a contiguous
+  row-major buffer INSIDE `simplex_iterate` (flatten on entry, write back on exit),
+  applying the proven flat-buffer cache lever (LSAP/AP/connected_components wins). Two
+  attempts, both same-machine local A/B (deterministic LP, maximize Σx s.t. A_ub x<=b,
+  0<=x<=10; nv/nc = 60/90, 100/150, 140/200; min-of-15; fun/nit IDENTICAL = correct):
+  - v1 (indexed `flat[i*ncols+j]`): **3.4-3.6x SLOWER** — lost the LLVM autovectorization
+    the original got from `split_at_mut` + slice-zip on each contiguous row.
+  - v2 (contiguous row sub-slices `&mut flat[base..base+rhs_col+1]`, restored SIMD):
+    back-to-back clean re-run still **1.06-1.42x SLOWER** (nv=60 716 vs 505, nv=100
+    2576 vs 2240, nv=140 6429 vs 6045 us). An earlier noisy run's "1.33x faster" did
+    not reproduce.
+- WHY it fails (lesson): the flat-buffer cache lever wins when the hot access is a
+  COLUMN/DIAGONAL SCAN of a matrix held as scattered per-row Vecs (LSAP cost lookups,
+  AP availability column walk, csgraph adjacency BFS). The simplex pivot is
+  ROW-UPDATE-dominant: the O(m*n) rank-1 elimination already touches each row
+  contiguously and vectorizes regardless of Vec<Vec> vs flat; the column accesses
+  (ratio test, factor) are only O(m) per pivot — too small to matter. Flattening just
+  adds `i*ncols` index math + a per-call flatten/writeback for no locality benefit.
+  DO NOT re-attempt flat-buffer on linprog; the real lever remains revised-simplex
+  (factored basis), an algorithmic rewrite, not a memory-layout change.
+
 ## 2026-06-27 - CobaltCove (claude-code) - NO-SHIP (2 rejects): uniform-finder vein EXHAUSTED — cubic-family ~0-gain; interp1d sorted prescan-skip REGRESSES
 
 - Agent: CobaltCove (claude-code / claude-opus-4-8), `AGENT_NAME=CobaltCove`. No code
