@@ -551,8 +551,37 @@ fn bench_binned_statistic_2d(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_skellam_cdf(c: &mut Criterion) {
+    use criterion::BenchmarkId;
+    use fsci_stats::{DiscreteDistribution, Skellam};
+    let mut group = c.benchmark_group("skellam_cdf");
+    // cdf/sf cost scales with μ: the prior Bessel-`ive` window sum spanned ~24σ+80
+    // points, so large μ exercised hundreds of Bessel evals per call. Evaluate a
+    // batch of k across the central body for each μ.
+    for &(mu1, mu2) in &[(5.0_f64, 3.0_f64), (100.0, 100.0), (1000.0, 1000.0)] {
+        let sk = Skellam::new(mu1, mu2);
+        let mean = mu1 - mu2;
+        let std = (mu1 + mu2).sqrt();
+        let ks: Vec<u64> = (0..256)
+            .map(|i| (mean + (i as f64 - 128.0) / 256.0 * 6.0 * std).max(0.0) as u64)
+            .collect();
+        group.bench_function(BenchmarkId::new("cdf", format!("mu{mu1}_{mu2}")), |b| {
+            b.iter(|| {
+                ks.iter()
+                    .map(|&k| sk.cdf(black_box(k)))
+                    .sum::<f64>()
+            })
+        });
+        group.bench_function(BenchmarkId::new("sf", format!("mu{mu1}_{mu2}")), |b| {
+            b.iter(|| ks.iter().map(|&k| sk.sf(black_box(k))).sum::<f64>())
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
+    bench_skellam_cdf,
     bench_robust_slopes,
     bench_binned_statistic_2d,
     bench_distribution_distances,

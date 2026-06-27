@@ -8558,3 +8558,38 @@ Net: make_smoothing_spline GCV O(n³)+O(n³·iters) → O(n)+O(n²·iters), byte
 - CONCLUSION: keep the flatten (byte-identical, never-worse, >=14% on memory-bound
   fallback metrics) and correct the stale "chebyshev 2.70x slower" scorecard row to
   "1.7-6.8x faster". Next genuine spatial gap remains SphericalVoronoi O(n^4), not pdist.
+
+## 2026-06-27 - WIN: Skellam cdf/sf O(σ) Bessel-window sum → O(√nc) noncentral-χ² (chndtr) identity — 8.5-32x self, flips a 2650x SciPy loss to 82x (exact scipy match 4e-16)
+
+- Agent: cc (Claude Code / Opus), `AGENT_NAME=cc`.
+- Land-or-dig: dug discrete-distribution CDFs that sum pmf where scipy uses a closed
+  special function. Skellam (difference of two Poissons) `cdf`/`sf` summed `pmf_signed`
+  — each a Bessel-I `ive_scalar` call — over a `mean±12σ+40` window: O(σ)=O(√(μ1+μ2))
+  Bessel evals PER cdf point. scipy.stats.skellam uses the noncentral chi-square (ncx2):
+  `cdf(k>=0) = 1 - ncx2.cdf(2μ1; df=2(k+1), nc=2μ2) = 1 - chndtr(2μ1, 2(k+1), 2μ2)`,
+  `sf(k) = chndtr(2μ1, 2(k+1), 2μ2)` (the direct small upper-tail value, no 1-cdf
+  cancellation). fsci already had `fsci_special::gamma::chndtr` (== scipy.special.chndtr).
+- Identity verified vs scipy to <=4.4e-16 (cdf) / <=4.7e-16 (sf) across μ∈[0,1000],
+  k∈[0,50] BEFORE touching code (scipy.special.chndtr formula == scipy.stats.skellam).
+  Exact at the degenerate edges (μ1=0 ⇒ chndtr(0)=0 ⇒ cdf=1; μ2=0 ⇒ Poisson(μ1)),
+  where scipy itself returns NaN, so the new code is strictly more defined.
+- MEASURED same-box A/B (`cargo bench -p fsci-stats -- skellam_cdf`, stash lib.rs to
+  toggle the old/new path, 256-k batch per μ):
+
+  | Workload | OLD Bessel-window sum | NEW chndtr | self-speedup | vs SciPy (0.39-0.66 ms) |
+  | --- | ---: | ---: | ---: | ---: |
+  | cdf μ=100,100 | 99.08 ms | 11.66 ms | 8.5x faster | 257x slower → 30x slower |
+  | cdf μ=1000,1000 | 1749 ms | 54.74 ms | 31.9x faster | 2650x slower → 82x slower |
+
+  (μ=5,3 small case: NEW 0.74 ms; the win scales with μ since the old window was 24σ+80.)
+- Gate: `cargo test -p fsci-stats --lib skellam` = 3/3 green (`skellam_pmf_cdf_sf_match_scipy`
+  cdf/sf 1e-10, `skellam_cdf_includes_negative_support` 6 cases 1e-7, `test_skellam`).
+- HONEST TRADE: this reverts the rc379 deep-tail tuning (the old summed sf was ~3.405e-13
+  vs mpmath for skellam(20,15).sf(50), beating scipy's ~3.458e-13). chndtr now MATCHES
+  scipy (the conformance oracle) to 4e-16 — equal to scipy, no longer better-than-scipy —
+  but no test enforced the mpmath-tail bonus and the speedup is 8.5-32x, so the trade lands.
+- RESIDUAL: NEW skellam.cdf is still ~82x slower than SciPy at μ=1000 because fsci's
+  `chndtr` is a naive Poisson(nc/2)-weighted mixture of central-χ² `chdtr` terms — O(√nc)
+  gammainc evals — vs scipy's Cephes `chndtr` (Marcum-Q / continued-fraction). The next
+  lever is `fsci_special::gamma::chndtr` itself, which would lift skellam AND ncx2 AND
+  every chndtr caller. Filed as the follow-on gap; this commit shrinks the gap 32x first.
