@@ -4,6 +4,40 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-kmeans2-assign-thread-cap - KEEP (byte-identical 1.51x self): cluster.kmeans2 work-per-thread cap; + signal IIR/resample walls (REJECT)
+
+Probed fsci-cluster vs scipy: `vq` 3.7x FASTER, `kmeans` 25.7x (different
+convergence), but **`kmeans2` (fixed 20-iter, matrix init) was 2.78x SLOWER**
+(n=20k k=32 d=16: 107 ms vs scipy 38.5 ms) — a genuine gap. Root cause: each
+Lloyd iteration calls `assign_points`, which gated parallelism at `work < 1<<21`
+then spawned `min(cores, n/32)` = 64 threads. On the small per-iteration batch
+(20k pts / 64 = ~312 pts/worker) the OS-thread spawn (×20 iterations ≈ 1280
+spawns) dominated, so the effective speedup stalled at ~3x (serial was 314 ms,
+64-thread 107 ms). Capped workers by work-per-thread (`min((work>>20), n/32)`,
+≥~1M multiply-adds/worker): swept shift 18..21, 20 (~9 workers) optimal at 70.9
+ms = **1.51x self**, narrows the gap to **1.80x slower**. `vq`'s single large
+n=100k call still saturates all cores (work>>20 ≫ cores), unchanged at ~24 ms.
+BYTE-IDENTICAL: the per-point argmin and the serial centroid recompute are
+worker-count-independent; 142/0 cluster lib GREEN. RESIDUAL gap is NOT
+parallelism — `nearest_centroid`'s two-pass (prefilter + branchy
+`sq_dist_within` early-termination) is ~8x slower per-op serially than scipy's C
+loop; a clean vectorized full-distance argmin for the small-k regime is the
+deeper (riskier, shared with `vq`) lever — FILED, not taken.
+
+REJECTED same session (signal walls, reverted to clean HEAD, no commit):
+`lfilter` ord8 n=1M is **1.26x SLOWER** (7.46 vs scipy 5.92 ms) and `filtfilt`
+**1.35x** (it is two `lfilter` passes) — the DF2T recurrence is loop-carried
+latency-bound (`d[0]→yi→d[0]`). DOUBLE-BUFFERING the state taps (read `cur`,
+write disjoint `nxt`) to let the autovectorizer pack the tap loop gave only ~1%
+(7.46→7.39 ms best-of-12; the 7.04 first read was box-load noise) — vectorizing
+the off-critical-path taps can't beat the recurrence latency. Removing the
+`validate_real_values_finite` scan (which scipy lacks) saves ~0.3 ms but is a
+correctness feature (can't drop). Even both together leave lfilter 1.13x slower:
+a recurrence WALL, like FFT/BLAS. `resample` 1M→500k is **1.66x SLOWER** (19.6 vs
+11.8 ms) — the rfft/irfft pocketfft wall (see FFT scorecard rows), not a fsci
+overhead. Don't re-chase lfilter/filtfilt/resample without a native real-FFT or a
+register-resident unrolled-order IIR kernel.
+
 ## 2026-06-26 - frankenscipy-greenfalcon-theilslopes-parallel-collect - KEEP (byte-identical 4.51x self): stats.theilslopes parallel O(n²) interval collect
 
 `stats.theilslopes` already BEAT scipy (n=5000: 128 ms vs 589 ms = 4.6x), but a

@@ -5487,6 +5487,14 @@ fn assign_points(
         std::thread::available_parallelism()
             .map(std::num::NonZero::get)
             .unwrap_or(1)
+            // Cap by work-per-thread (~1<<20 multiply-adds): on small per-call
+            // batches (e.g. kmeans2's repeated n~20k assigns, called once per Lloyd
+            // iteration) a 64-way split leaves each worker too little to amortize the
+            // thread spawn, so the effective speedup stalls near 3x. Keeping
+            // >=~1M ops/worker restores near-linear scaling; large single calls
+            // (vq over n=100k) still saturate all cores. Result is identical
+            // regardless of worker count (deterministic per-point argmin).
+            .min(((work >> 20) as usize).max(1))
             .min(n / 32)
             .max(1)
     };
