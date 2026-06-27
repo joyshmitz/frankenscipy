@@ -7244,6 +7244,101 @@ fn nearest_edt_background(
 /// envelope intersections only *select* parabolas; each emitted value is
 /// recomputed as `Δ² + f[source]`, so rounding in the boundaries never perturbs
 /// the assigned squared distance.
+/// Run one separable squared-EDT pass along an axis (`len`, slab `inner = stride`,
+/// `outer` slabs) over `f` IN PLACE, across `nthreads` cores. Each line is an
+/// independent 1-D transform, so the result is BIT-IDENTICAL to the serial line walk
+/// (the per-line edt math and the (cell→value) mapping are unchanged; only which core
+/// owns a line changes). forbid(unsafe)-safe:
+///   - `outer >= 2`: slabs are contiguous → each thread owns a disjoint `chunks_mut`
+///     range and processes its slabs' `inner` interleaved lines in place.
+///   - `outer == 1` (the leading axis): `f` is a `[len][inner]` row-major matrix whose
+///     lines are columns; threads write a contiguous COLUMN-MAJOR scratch (disjoint
+///     `chunks_mut`), then a parallel transpose copies it back to row-major `f`.
+fn edt_axis_pass_parallel(
+    f: &mut [f64],
+    len: usize,
+    inner: usize,
+    outer: usize,
+    scale: f64,
+    scale2: f64,
+    nthreads: usize,
+) {
+    let slab = len * inner;
+    if outer >= 2 {
+        let slabs_per = outer.div_ceil(nthreads);
+        std::thread::scope(|scope| {
+            for chunk in f.chunks_mut(slab * slabs_per) {
+                scope.spawn(move || {
+                    let mut line = vec![0.0f64; len];
+                    let mut d = vec![0.0f64; len];
+                    let mut v = vec![0usize; len];
+                    let mut z = vec![0.0f64; len + 1];
+                    let nslabs_local = chunk.len() / slab;
+                    for s in 0..nslabs_local {
+                        let sb = s * slab;
+                        for i in 0..inner {
+                            for t in 0..len {
+                                line[t] = chunk[sb + i + t * inner];
+                            }
+                            edt_1d_squared(&line, scale, scale2, &mut d, &mut v, &mut z, None);
+                            for t in 0..len {
+                                chunk[sb + i + t * inner] = d[t];
+                            }
+                        }
+                    }
+                });
+            }
+        });
+    } else {
+        // outer == 1: f is [len][inner] row-major; lines are the `inner` columns.
+        let mut fcm = vec![0.0f64; len * inner];
+        let cols_per = inner.div_ceil(nthreads);
+        {
+            let f_ref: &[f64] = f;
+            std::thread::scope(|scope| {
+                for (fc, tt) in fcm.chunks_mut(cols_per * len).zip(0usize..) {
+                    let col_start = tt * cols_per;
+                    scope.spawn(move || {
+                        let mut line = vec![0.0f64; len];
+                        let mut d = vec![0.0f64; len];
+                        let mut v = vec![0usize; len];
+                        let mut z = vec![0.0f64; len + 1];
+                        let ncols_local = fc.len() / len;
+                        for lc in 0..ncols_local {
+                            let col = col_start + lc;
+                            for t in 0..len {
+                                line[t] = f_ref[col + t * inner];
+                            }
+                            edt_1d_squared(&line, scale, scale2, &mut d, &mut v, &mut z, None);
+                            let off = lc * len;
+                            for t in 0..len {
+                                fc[off + t] = d[t];
+                            }
+                        }
+                    });
+                }
+            });
+        }
+        let rows_per = len.div_ceil(nthreads);
+        let fcm_ref: &[f64] = &fcm;
+        std::thread::scope(|scope| {
+            for (frow, rr) in f.chunks_mut(rows_per * inner).zip(0usize..) {
+                let row_start = rr * rows_per;
+                scope.spawn(move || {
+                    let nrl = frow.len() / inner;
+                    for lr in 0..nrl {
+                        let t = row_start + lr;
+                        let ob = lr * inner;
+                        for col in 0..inner {
+                            frow[ob + col] = fcm_ref[col * len + t];
+                        }
+                    }
+                });
+            }
+        });
+    }
+}
+
 fn edt_squared_felzenszwalb(input: &NdArray, sampling: &[f64]) -> Vec<f64> {
     let n = input.data.len();
     let mut f: Vec<f64> = input
@@ -7268,20 +7363,26 @@ fn edt_squared_felzenszwalb(input: &NdArray, sampling: &[f64]) -> Vec<f64> {
         let stride = input.strides[axis];
         let scale = sampling[axis];
         let scale2 = scale * scale;
-        line.resize(len, 0.0);
-        d.resize(len, 0.0);
-        v.resize(len, 0);
-        z.resize(len + 1, 0.0);
-
-        for_each_axis_line_start(n, len, stride, |base| {
-            for t in 0..len {
-                line[t] = f[base + t * stride];
-            }
-            edt_1d_squared(&line, scale, scale2, &mut d, &mut v, &mut z, None);
-            for t in 0..len {
-                f[base + t * stride] = d[t];
-            }
-        });
+        let inner = stride;
+        let outer = n / (len * inner);
+        let nthreads = ndimage_filter_thread_count(n, 1);
+        if nthreads <= 1 {
+            line.resize(len, 0.0);
+            d.resize(len, 0.0);
+            v.resize(len, 0);
+            z.resize(len + 1, 0.0);
+            for_each_axis_line_start(n, len, stride, |base| {
+                for t in 0..len {
+                    line[t] = f[base + t * stride];
+                }
+                edt_1d_squared(&line, scale, scale2, &mut d, &mut v, &mut z, None);
+                for t in 0..len {
+                    f[base + t * stride] = d[t];
+                }
+            });
+        } else {
+            edt_axis_pass_parallel(&mut f, len, inner, outer, scale, scale2, nthreads);
+        }
     }
     f
 }

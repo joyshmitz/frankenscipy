@@ -6,6 +6,29 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-27 - CobaltCove (claude-code) - KEEP (byte-identical 1.5-2.3x self, widens an existing lead): ndimage.distance_transform_edt distances-only path parallel (general N-D)
+
+- Agent CobaltCove. Companion to the return_indices EDT commit: the DISTANCES-ONLY path
+  (`distance_transform_edt` without indices → `edt_squared_felzenszwalb`) was still serial
+  over lines. Added a general N-D helper `edt_axis_pass_parallel` that runs one separable
+  squared-EDT axis pass across cores: `outer >= 2` axes use disjoint `chunks_mut` slab
+  parallelism (each thread processes its slabs' interleaved `inner` lines in place);
+  `outer == 1` (the leading axis) uses the column-major scratch + parallel transpose
+  trick (f is `[len][inner]`, lines are columns) — all forbid(unsafe)-safe. BIT-IDENTICAL:
+  per-line edt math + (cell→value) mapping unchanged; verified by FNV digest of the
+  distance output BEFORE(serial)==AFTER(parallel): 256 d=46d08b4c56c8870e, 512
+  d=d9ed48b24d1b088f, 1024 d=be685ad3fa651f08.
+- Same-box A/B (50%-fg, distances-only, min-of-N, clean back-to-back):
+  - 256x256:  2090 us (kept serial)        — already 1.49x faster than SciPy
+  - 512x512:  11337 -> 7698 us = **1.47x self**  — 1.19x -> **1.70x FASTER** than SciPy (13124 us)
+  - 1024x1024: 47351 -> 20201 us = **2.34x self** — 1.38x -> **3.20x FASTER** than SciPy (64750 us)
+- NOTE: NOT a gap-close — fsci's serial separable distances-only EDT ALREADY beat
+  scipy.ndimage.distance_transform_edt 1.19-1.49x; this widens the lead (and lifts the
+  N-D path too, byte-identically). The 457ms 512² first reading was transient shared-box
+  contention; the min-of-N back-to-back re-run normalized it.
+- Conformance GREEN: distance_transform unit tests (incl scipy-pinned 1D/3D fixtures),
+  diff_ndimage_distance_transform_edt 1/0, perf_edt isomorphism 0/10876.
+
 ## 2026-06-27 - CobaltCove (claude-code) - KEEP (byte-identical 2-3.7x self, flips a SciPy loss): ndimage.distance_transform_edt feature transform parallel over both separable passes
 
 - Agent CobaltCove (claude-opus-4-8). `crates/fsci-ndimage/src/lib.rs`
