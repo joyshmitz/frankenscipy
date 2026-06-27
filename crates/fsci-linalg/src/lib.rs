@@ -16524,6 +16524,47 @@ fn simd_dot(x: &[f64], y: &[f64]) -> f64 {
     s
 }
 
+/// Four 8-wide dot products sharing the same left-hand vector load. The per-dot
+/// lane accumulation and final reduction match `simd_dot`, but a SYRK row no
+/// longer reloads its fixed left panel once per target column.
+#[inline]
+fn simd_dot4(lhs: &[f64], rhs0: &[f64], rhs1: &[f64], rhs2: &[f64], rhs3: &[f64]) -> [f64; 4] {
+    debug_assert_eq!(lhs.len(), rhs0.len());
+    debug_assert_eq!(lhs.len(), rhs1.len());
+    debug_assert_eq!(lhs.len(), rhs2.len());
+    debug_assert_eq!(lhs.len(), rhs3.len());
+
+    let mut acc0 = Simd::<f64, 8>::splat(0.0);
+    let mut acc1 = Simd::<f64, 8>::splat(0.0);
+    let mut acc2 = Simd::<f64, 8>::splat(0.0);
+    let mut acc3 = Simd::<f64, 8>::splat(0.0);
+    let mut p = 0;
+    while p + 8 <= lhs.len() {
+        let left = Simd::<f64, 8>::from_slice(&lhs[p..p + 8]);
+        acc0 += left * Simd::<f64, 8>::from_slice(&rhs0[p..p + 8]);
+        acc1 += left * Simd::<f64, 8>::from_slice(&rhs1[p..p + 8]);
+        acc2 += left * Simd::<f64, 8>::from_slice(&rhs2[p..p + 8]);
+        acc3 += left * Simd::<f64, 8>::from_slice(&rhs3[p..p + 8]);
+        p += 8;
+    }
+
+    let mut sums = [
+        acc0.to_array().iter().sum::<f64>(),
+        acc1.to_array().iter().sum::<f64>(),
+        acc2.to_array().iter().sum::<f64>(),
+        acc3.to_array().iter().sum::<f64>(),
+    ];
+    while p < lhs.len() {
+        let left = lhs[p];
+        sums[0] += left * rhs0[p];
+        sums[1] += left * rhs1[p];
+        sums[2] += left * rhs2[p];
+        sums[3] += left * rhs3[p];
+        p += 1;
+    }
+    sums
+}
+
 /// Compute `A^T A` directly from nalgebra's contiguous column-major storage.
 ///
 /// The full-rank tall `pinv`/`lstsq` routes only need the symmetric Gram
@@ -16684,9 +16725,23 @@ fn cholesky_syrk_rows(rows: &mut [Vec<f64>], row_offset: usize, l21: &[f64], nb:
     for (local_i, row) in rows.iter_mut().enumerate() {
         let ii = row_offset + local_i;
         let lhs = &l21[ii * nb..ii * nb + nb];
-        for (jj, aij) in row[kb..=kb + ii].iter_mut().enumerate() {
+        let mut jj = 0;
+        while jj + 4 <= ii + 1 {
+            let rhs0 = &l21[jj * nb..jj * nb + nb];
+            let rhs1 = &l21[(jj + 1) * nb..(jj + 1) * nb + nb];
+            let rhs2 = &l21[(jj + 2) * nb..(jj + 2) * nb + nb];
+            let rhs3 = &l21[(jj + 3) * nb..(jj + 3) * nb + nb];
+            let dots = simd_dot4(lhs, rhs0, rhs1, rhs2, rhs3);
+            row[kb + jj] -= dots[0];
+            row[kb + jj + 1] -= dots[1];
+            row[kb + jj + 2] -= dots[2];
+            row[kb + jj + 3] -= dots[3];
+            jj += 4;
+        }
+        while jj <= ii {
             let rhs = &l21[jj * nb..jj * nb + nb];
-            *aij -= simd_dot(lhs, rhs);
+            row[kb + jj] -= simd_dot(lhs, rhs);
+            jj += 1;
         }
     }
 }

@@ -6,6 +6,65 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-27 - GreenFalcon (codex-cli) - KEEP: linalg Cholesky SYRK four-dot row update cuts the remaining cho_factor tail
+
+- Agent: GreenFalcon (codex-cli / gpt-5.2), `AGENT_NAME=GreenFalcon`.
+- Land-or-dig audit: before digging, `main` was even with `origin/main`. The
+  only known ahead bench worktree remained
+  `/data/projects/.worktrees/frankenscipy-eigvalsh-blackthrush-20260609`
+  (`e3b744f4`, older GEMM flat-workspace threshold 768), which current `main`
+  already supersedes with threshold 256; no measured worktree win was landable.
+- Gap attacked: after the blocked-factor keep and the NB=64 no-ship, dense
+  `cho_factor` at 1000x1000 was still the largest current same-box measured
+  Cholesky loss versus SciPy.
+- Lever kept: `cholesky_syrk_rows` now computes four trailing-update dot
+  products per fixed left panel row. The new `simd_dot4` shares the loaded
+  left-hand vector across four RHS rows while preserving each dot's 8-wide
+  lane accumulation and scalar tail order. This is a bounded kernel-level
+  cache/load-reuse lever, not another block-size constant.
+- The required literal bench form is still rejected by Cargo:
+  `RCH_WORKER=vmi1264463 AGENT_NAME=GreenFalcon
+  CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec --
+  cargo bench --release -p fsci-linalg --bench linalg_bench --
+  cho_factor_gauntlet_scipy/1000x1000 ...` failed with `unexpected argument
+  '--release'`.
+- Accepted per-crate release-profile benches used the requested target dir:
+  `... rch exec -- cargo bench -p fsci-linalg --profile release --bench
+  linalg_bench -- cho_factor_gauntlet_scipy/1000x1000 --sample-size 10
+  --warm-up-time 1 --measurement-time 2 --noplot`. A remote baseline on
+  `vmi1264463` ran but lacked SciPy; the decisive keep proof is same-machine
+  local via `rch exec` fallback / `RCH_ENABLED=false` under the same cod-b
+  target dir.
+- MEASURED same-target local delta:
+  | Workload | Current Rust | Candidate Rust | Internal ratio |
+  | --- | ---: | ---: | ---: |
+  | 1000x1000 `cho_factor` | 77.098 ms | 53.093 ms | 1.45x faster |
+  | 1000x1000 `cho_factor+cho_solve` | 54.291 ms | 47.377 ms | 1.15x faster |
+- Ratio vs local SciPy oracle from the same candidate bench run:
+  | Workload | Rust after | SciPy oracle | Ratio vs SciPy |
+  | --- | ---: | ---: | ---: |
+  | 1000x1000 `cho_factor` | 53.093 ms | 7.4561 ms | 7.12x slower |
+  | 1000x1000 `cho_factor+cho_solve` | 47.377 ms | 11.754 ms | 4.03x slower |
+- Correctness / conformance GREEN: focused private proof
+  `cargo test -p fsci-linalg
+  cholesky_lower_blocked_matches_unblocked_factorization --lib --
+  --nocapture` passed through `rch exec`; SciPy-backed conformance
+  `RCH_ENABLED=false AGENT_NAME=GreenFalcon
+  CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec --
+  cargo test -p fsci-conformance --test diff_linalg_inv_pinv_cholesky --
+  --nocapture` passed 1/1 locally with SciPy available. `rustfmt --edition
+  2024 crates/fsci-linalg/src/lib.rs && git diff --check --
+  crates/fsci-linalg/src/lib.rs` passed. `cargo check -p fsci-linalg
+  --all-targets` passed on RCH `hz2`, with only the pre-existing
+  `perf_control.rs` unused-mut warning. `cargo fmt --check -p fsci-linalg`
+  remains blocked by pre-existing probe/bin formatting drift outside this
+  change. Remote workers used for bench routing still skip SciPy oracle rows
+  when `scipy.linalg` is unavailable.
+- CONCLUSION: keep the four-dot SYRK row update. The remaining gap is still
+  LAPACK-class panel/TRSM and packed update depth; future work should move
+  toward flat end-to-end blocked Cholesky or a register-tiled triangular panel
+  solve rather than more public wrapper reshaping.
+
 ## 2026-06-27 - GreenFalcon (codex-cli) - NO-SHIP: Cholesky NB=64 panel retune is zero-gain on the biggest current cho_factor row
 
 - Agent: GreenFalcon (codex-cli / gpt-5.2), `AGENT_NAME=GreenFalcon`.
