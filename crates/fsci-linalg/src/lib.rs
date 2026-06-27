@@ -542,8 +542,8 @@ pub struct LdlResult {
 /// Compact Cholesky factorization for use with `cho_solve`.
 #[derive(Debug, Clone)]
 pub struct ChoFactorResult {
-    /// The internal nalgebra Cholesky object.
-    chol_internal: Cholesky<f64, Dyn>,
+    /// Lower triangular factor in row-major storage.
+    l_flat: Vec<f64>,
     /// Matrix dimension.
     n: usize,
 }
@@ -4823,8 +4823,7 @@ pub fn cho_factor(a: &[Vec<f64>], options: DecompOptions) -> Result<ChoFactorRes
     hardened_dimension_check(options.mode, rows, cols)?;
     validate_finite_matrix(a, options.mode, options.check_finite)?;
 
-    let matrix = dmatrix_from_rows(a)?;
-    let chol = Cholesky::new(matrix).ok_or(LinalgError::InvalidArgument {
+    let l_flat = cholesky_lower_simd(a, rows).ok_or(LinalgError::InvalidArgument {
         detail: "matrix is not positive definite".into(),
     })?;
 
@@ -4838,9 +4837,44 @@ pub fn cho_factor(a: &[Vec<f64>], options: DecompOptions) -> Result<ChoFactorRes
     });
 
     Ok(ChoFactorResult {
-        chol_internal: chol,
+        l_flat,
         n: rows,
     })
+}
+
+#[allow(clippy::needless_range_loop)]
+fn cho_solve_lower_flat(l_flat: &[f64], n: usize, b: &[f64]) -> Option<Vec<f64>> {
+    if b.len() != n || l_flat.len() != n.checked_mul(n)? {
+        return None;
+    }
+
+    let mut x = b.to_vec();
+    for i in 0..n {
+        let row = i * n;
+        let mut sum = x[i];
+        for j in 0..i {
+            sum -= l_flat[row + j] * x[j];
+        }
+        let d = l_flat[row + i];
+        if d == 0.0 || !d.is_finite() {
+            return None;
+        }
+        x[i] = sum / d;
+    }
+
+    for i in (0..n).rev() {
+        let mut sum = x[i];
+        for j in (i + 1)..n {
+            sum -= l_flat[j * n + i] * x[j];
+        }
+        let d = l_flat[i * n + i];
+        if d == 0.0 || !d.is_finite() {
+            return None;
+        }
+        x[i] = sum / d;
+    }
+
+    Some(x)
 }
 
 /// Solve a linear system using a precomputed Cholesky factorization.
@@ -4854,8 +4888,9 @@ pub fn cho_solve(cho: &ChoFactorResult, b: &[f64]) -> Result<SolveResult, Linalg
         });
     }
 
-    let rhs = DVector::from_column_slice(b);
-    let x = cho.chol_internal.solve(&rhs);
+    let x = cho_solve_lower_flat(&cho.l_flat, cho.n, b).ok_or(LinalgError::InvalidArgument {
+        detail: "invalid Cholesky factor".into(),
+    })?;
 
     emit_trace(LinalgTrace {
         operation: "cho_solve",
@@ -4867,7 +4902,7 @@ pub fn cho_solve(cho: &ChoFactorResult, b: &[f64]) -> Result<SolveResult, Linalg
     });
 
     Ok(SolveResult {
-        x: x.iter().copied().collect(),
+        x,
         warning: None,
         backward_error: None,
         certificate: None,

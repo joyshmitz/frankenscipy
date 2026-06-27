@@ -6,6 +6,58 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-27 - GreenFalcon (codex-cli) - KEEP: linalg.cho_factor reuses the flat Cholesky factor
+
+- Agent: GreenFalcon (codex-cli / gpt-5.2), `AGENT_NAME=GreenFalcon`.
+- Land-or-dig audit: live `.scratch/.worktrees` bench trees were checked before
+  digging. The only non-ancestor measured candidate was
+  `/data/projects/.worktrees/frankenscipy-eigvalsh-blackthrush-20260609`
+  (`e3b744f4`, `MATMUL_FLAT_WORKSPACE_MIN_DIM = 768`), but current `main`
+  already has the stronger threshold `256`; the rest of the live bench trees were
+  ancestors of `main` or unmeasured. No worktree win was landable.
+- Gap attacked: the recorded dense-linalg Cholesky gap remains large
+  (`cholesky` still 4.86x/11.9x/15.2x slower than SciPy at n=500/1000/2000),
+  and the same ledger note called out `cho_factor` as still using nalgebra.
+- Lever kept: `cho_factor` now stores the same row-major flat lower factor used
+  by the faster `cholesky_lower_simd` path, and `cho_solve` uses direct
+  lower/transpose triangular substitution over that compact factor. This removes
+  nalgebra `DMatrix` conversion/factorization from the compact Cholesky path
+  without retrying the already-rejected public-`matmul` blocked-SYRK route.
+- MEASURED before/after and vs SciPy via
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec --
+  cargo bench -p fsci-linalg --profile release --bench linalg_bench --
+  cho_factor_gauntlet_scipy`. `cargo bench --release` is not accepted by this
+  Cargo; `--profile release` was used for the release-profile bench. `rch`
+  failed open to local for both bench passes because workers had no admissible
+  slots, so the before/after and SciPy oracle ran on the same host.
+  - 500x500 `cho_factor`: old Rust `5.5441 ms`; new Rust `4.9316 ms`
+    (Criterion mean `-14.799%`, `p=0.00`); after-run SciPy `1.7174 ms`, so
+    Rust remains `2.87x` slower than SciPy.
+  - 500x500 `cho_factor+cho_solve`: old Rust `5.9209 ms`; new Rust `5.2683 ms`
+    (Criterion mean `-6.6338%`, `p=0.03`); after-run SciPy `1.8756 ms`, so
+    Rust remains `2.81x` slower than SciPy.
+  - 1000x1000 `cho_factor`: old Rust `46.539 ms`; new Rust `37.142 ms`
+    (Criterion mean `-20.014%`, `p=0.00`); after-run SciPy `6.2494 ms`, so
+    Rust remains `5.94x` slower than SciPy.
+  - 1000x1000 `cho_factor+cho_solve`: old Rust `46.531 ms`; new Rust
+    `40.912 ms` (Criterion mean `-15.685%`, `p=0.00`); after-run SciPy
+    `9.4794 ms`, so Rust remains `4.32x` slower than SciPy.
+- Correctness / conformance GREEN: `rustfmt --edition 2024` on the two touched
+  Rust files plus `git diff --check` passed; RCH `cargo check -p fsci-linalg
+  --all-targets` passed with only the existing `perf_control` bin `unused_mut`
+  warning; RCH `cargo test -p fsci-linalg --lib --tests cho -- --nocapture`
+  passed 20 matching lib/proptest cases plus the metamorphic
+  `mr_cho_factor_solve_small_residual`; local SciPy 1.17.1 `cargo test -p
+  fsci-conformance --test diff_linalg_structured_solvers -- --nocapture` passed;
+  local SciPy 1.17.1 `cargo test -p fsci-conformance --test
+  diff_linalg_inv_pinv_cholesky -- --nocapture` passed. UBS on the four touched
+  files exited 0 with no critical findings. The same structured-solver
+  conformance test failed on remote `ovh-a` only because that worker lacked SciPy
+  (`ModuleNotFoundError: No module named 'scipy'`). RCH clippy
+  `cargo clippy -p fsci-linalg --lib --benches --tests -- -D warnings` remains
+  blocked by pre-existing lint debt in unrelated linalg/cossin/test sections, so
+  no clippy cleanup was folded into this perf commit.
+
 ## 2026-06-26 - cod-a (codex-cli) - KEEP: ndimage.watershed_ift SciPy-style bounded bucket queue flips the bounded uint8 case to parity/win
 
 - Agent: cod-a (codex-cli / gpt-5.2), `AGENT_NAME=cod-a`.

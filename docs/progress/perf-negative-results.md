@@ -23,6 +23,48 @@ vectorizes independent accumulators), not `std::simd`. LEVER: grep other reducti
 that run a separate `validate_*_finite` pass + a scalar `.sum()`/`.fold()` over the
 same array — fuse + multi-accumulate.
 
+## 2026-06-27 - frankenscipy-greenfalcon-cho-factor-flat - KEEP (15-20% self): linalg.cho_factor stops using nalgebra, still 4.3-5.9x slower than SciPy at n=1000
+
+Dug the biggest open dense-linalg gap left by the Cholesky run. The blocked-SYRK
+route is still a multi-turn BLAS-level job and the public-`matmul` retry is a
+recorded 2.5x regression, but the same note called out `cho_factor` as still
+delegating to nalgebra. Swapped the compact factorization to reuse the existing
+row-major flat `cholesky_lower_simd` factor, and changed `cho_solve` to solve
+directly through that lower factor. This is a representation-removal lever, not a
+new blocked Cholesky attempt.
+
+MEASURED before/after with the new `cho_factor_gauntlet_scipy` Criterion group:
+`CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cod-b rch exec --
+cargo bench -p fsci-linalg --profile release --bench linalg_bench --
+cho_factor_gauntlet_scipy`. `cargo bench --release` is rejected by this Cargo, so
+the equivalent release-profile flag was used. RCH had no admissible workers for
+the bench pass and failed open to local; both before/after and SciPy 1.17.1 oracle
+therefore ran on the same host.
+
+- 500x500 `cho_factor`: 5.5441 -> 4.9316 ms, Criterion mean -14.799%; SciPy
+  after-run 1.7174 ms, so Rust remains 2.87x slower.
+- 500x500 `cho_factor+cho_solve`: 5.9209 -> 5.2683 ms, Criterion mean -6.6338%;
+  SciPy after-run 1.8756 ms, so Rust remains 2.81x slower.
+- 1000x1000 `cho_factor`: 46.539 -> 37.142 ms, Criterion mean -20.014%; SciPy
+  after-run 6.2494 ms, so Rust remains 5.94x slower.
+- 1000x1000 `cho_factor+cho_solve`: 46.531 -> 40.912 ms, Criterion mean
+  -15.685%; SciPy after-run 9.4794 ms, so Rust remains 4.32x slower.
+
+Correctness/conformance: rustfmt on touched Rust files + `git diff --check` green;
+RCH `cargo check -p fsci-linalg --all-targets` green with only the existing
+`perf_control` bin `unused_mut` warning; RCH `cargo test -p fsci-linalg --lib
+--tests cho -- --nocapture` green (20 matching lib/proptest cases and the
+metamorphic cho residual test); local SciPy 1.17.1 `cargo test -p fsci-conformance
+--test diff_linalg_structured_solvers -- --nocapture` green; local SciPy 1.17.1
+`cargo test -p fsci-conformance --test diff_linalg_inv_pinv_cholesky --
+--nocapture` green. UBS on the four touched files exited 0 with no critical
+findings. Remote conformance on `ovh-a` failed only because SciPy is not installed
+there. RCH clippy `cargo clippy -p fsci-linalg --lib --benches --tests -- -D
+warnings` is blocked by pre-existing lint debt in unrelated linalg/cossin/test
+sections; no lint cleanup was folded into this perf commit. RETRY CONDITION: the
+remaining Cholesky gap is still the flat internal SYRK/TRSM micro-kernel, not
+another `cho_factor` wrapper or public-`matmul` blocked Cholesky attempt.
+
 ## 2026-06-26 - frankenscipy-greenfalcon-medfilt2d-parallel-fastpath - KEEP (BOLD WIN, byte-identical): signal.medfilt2d parallel + interior fast-path, 5.4-37x FASTER
 
 `signal.medfilt2d` already beat scipy modestly (1.16-2.48x) but was **7x slower

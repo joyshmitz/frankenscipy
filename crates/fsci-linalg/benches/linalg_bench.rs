@@ -5,11 +5,11 @@ use std::{
     time::Duration,
 };
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use fsci_linalg::{
-    det, dft, eigh, inv, lstsq, matmul, pinv, randomized_eigh, solve, solve_banded,
-    solve_triangular, DecompOptions, InvOptions, LstsqOptions, MatrixAssumption, PinvOptions,
-    SolveOptions, TriangularSolveOptions,
+    DecompOptions, InvOptions, LstsqOptions, MatrixAssumption, PinvOptions, SolveOptions,
+    TriangularSolveOptions, cho_factor, cho_solve, det, dft, eigh, inv, lstsq, matmul, pinv,
+    randomized_eigh, solve, solve_banded, solve_triangular,
 };
 use fsci_runtime::RuntimeMode;
 
@@ -21,6 +21,7 @@ const MATMUL_SIZES: &[usize] = &[256, 512, 768, 1024];
 const EIGH_SIZES: &[usize] = &[256, 512];
 const RANDOMIZED_EIGH_CASES: &[(usize, usize)] = &[(256, 16), (512, 24)];
 const DFT_GAUNTLET_SIZES: &[usize] = &[256, 512, 1024];
+const CHO_FACTOR_GAUNTLET_SIZES: &[usize] = &[500, 1000];
 
 /// Diagonally-dominant matrix: guaranteed non-singular, well-conditioned.
 fn make_diag_dominant(n: usize) -> Vec<Vec<f64>> {
@@ -689,6 +690,117 @@ print(f"{elapsed:.17f}")
     Some(Duration::from_secs_f64(seconds))
 }
 
+fn scipy_cho_factor_duration(n: usize, iters: u64) -> Option<Duration> {
+    let script = r#"
+import sys
+import time
+import numpy as np
+import scipy.linalg as la
+
+n = int(sys.argv[1])
+iters = int(sys.argv[2])
+i = np.arange(n, dtype=np.float64)
+a = 1.0 / (np.abs(i[:, None] - i[None, :]) + 1.0)
+a[np.arange(n), np.arange(n)] = n * 3.0 + i * 0.01
+la.cho_factor(a, lower=True, check_finite=False)
+start = time.perf_counter()
+checksum = 0.0
+for _ in range(iters):
+    c, lower = la.cho_factor(a, lower=True, check_finite=False)
+    checksum += float(c[0, 0]) + float(c[-1, -1]) + float(lower)
+elapsed = time.perf_counter() - start
+if not np.isfinite(checksum):
+    raise SystemExit("non-finite checksum")
+print(f"{elapsed:.17f}")
+"#;
+    let mut child = Command::new("python3")
+        .args(["-", &n.to_string(), &iters.to_string()])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn scipy cho_factor oracle");
+    child
+        .stdin
+        .as_mut()
+        .expect("open scipy cho_factor oracle stdin")
+        .write_all(script.as_bytes())
+        .expect("write scipy cho_factor oracle script");
+    let output = child
+        .wait_with_output()
+        .expect("wait for scipy cho_factor oracle");
+    if !output.status.success() {
+        eprintln!(
+            "scipy cho_factor oracle failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return None;
+    }
+    let stdout = String::from_utf8(output.stdout).expect("utf8 scipy cho_factor timing");
+    let seconds: f64 = stdout
+        .trim()
+        .parse()
+        .expect("parse scipy cho_factor timing seconds");
+    Some(Duration::from_secs_f64(seconds))
+}
+
+fn scipy_cho_factor_solve_duration(n: usize, iters: u64) -> Option<Duration> {
+    let script = r#"
+import sys
+import time
+import numpy as np
+import scipy.linalg as la
+
+n = int(sys.argv[1])
+iters = int(sys.argv[2])
+i = np.arange(n, dtype=np.float64)
+a = 1.0 / (np.abs(i[:, None] - i[None, :]) + 1.0)
+a[np.arange(n), np.arange(n)] = n * 3.0 + i * 0.01
+b = np.arange(1, n + 1, dtype=np.float64)
+factor = la.cho_factor(a, lower=True, check_finite=False)
+la.cho_solve(factor, b, check_finite=False)
+start = time.perf_counter()
+checksum = 0.0
+for _ in range(iters):
+    factor = la.cho_factor(a, lower=True, check_finite=False)
+    x = la.cho_solve(factor, b, check_finite=False)
+    checksum += float(x[0]) + float(x[-1])
+elapsed = time.perf_counter() - start
+if not np.isfinite(checksum):
+    raise SystemExit("non-finite checksum")
+print(f"{elapsed:.17f}")
+"#;
+    let mut child = Command::new("python3")
+        .args(["-", &n.to_string(), &iters.to_string()])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn scipy cho_factor+cho_solve oracle");
+    child
+        .stdin
+        .as_mut()
+        .expect("open scipy cho_factor+cho_solve oracle stdin")
+        .write_all(script.as_bytes())
+        .expect("write scipy cho_factor+cho_solve oracle script");
+    let output = child
+        .wait_with_output()
+        .expect("wait for scipy cho_factor+cho_solve oracle");
+    if !output.status.success() {
+        eprintln!(
+            "scipy cho_factor+cho_solve oracle failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return None;
+    }
+    let stdout = String::from_utf8(output.stdout).expect("utf8 scipy cho_factor+cho_solve timing");
+    let seconds: f64 = stdout
+        .trim()
+        .parse()
+        .expect("parse scipy cho_factor+cho_solve timing seconds");
+    Some(Duration::from_secs_f64(seconds))
+}
+
 fn bench_u0ucw_gauntlet_scipy_pinv(c: &mut Criterion) {
     use std::sync::atomic::Ordering::Relaxed;
 
@@ -820,6 +932,45 @@ fn bench_dft_gauntlet_scipy(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_cho_factor_gauntlet_scipy(c: &mut Criterion) {
+    let mut group = c.benchmark_group("cho_factor_gauntlet_scipy");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(3));
+    for &n in CHO_FACTOR_GAUNTLET_SIZES {
+        let a = make_symmetric_eigh_matrix(n);
+        let b = make_rhs(n);
+        group.bench_function(format!("{n}x{n}_rust_cho_factor"), |bencher| {
+            bencher
+                .iter(|| black_box(cho_factor(black_box(&a), DecompOptions::default()).unwrap()));
+        });
+        group.bench_function(format!("{n}x{n}_rust_cho_factor_solve"), |bencher| {
+            bencher.iter(|| {
+                let factor = cho_factor(black_box(&a), DecompOptions::default()).unwrap();
+                black_box(cho_solve(black_box(&factor), black_box(&b)).unwrap())
+            });
+        });
+        if scipy_pinv_available() {
+            group.bench_function(format!("{n}x{n}_scipy_cho_factor"), |bencher| {
+                bencher.iter_custom(|iters| {
+                    scipy_cho_factor_duration(n, iters)
+                        .expect("scipy cho_factor oracle should run after availability check")
+                });
+            });
+            group.bench_function(format!("{n}x{n}_scipy_cho_factor_solve"), |bencher| {
+                bencher.iter_custom(|iters| {
+                    scipy_cho_factor_solve_duration(n, iters).expect(
+                        "scipy cho_factor+cho_solve oracle should run after availability check",
+                    )
+                });
+            });
+        } else {
+            eprintln!("skipping {n}x{n}_scipy_cho_factor: python3 cannot import scipy.linalg");
+        }
+    }
+    group.finish();
+}
+
 fn bench_baseline_pinv(c: &mut Criterion) {
     use std::sync::atomic::Ordering::Relaxed;
     let mut group = c.benchmark_group("baseline_pinv");
@@ -928,6 +1079,7 @@ criterion_group!(
     bench_u0ucw_gauntlet_scipy_lstsq,
     bench_randomized_eigh_gauntlet_scipy,
     bench_dft_gauntlet_scipy,
+    bench_cho_factor_gauntlet_scipy,
     bench_baseline_pinv
 );
 
