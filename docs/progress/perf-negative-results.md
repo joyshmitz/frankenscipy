@@ -4,6 +4,31 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-gamma-family-moderate-n-par - KEEP (byte-identical 1.2-3.2x self): special gamma family work-capped parallel at moderate n
+
+Probed fsci-special real-vec kernels: most win/parity, but the gamma family
+(gamma/gammaln/digamma/loggamma) LOST 1.4-2x at n=200k (gamma 6.88 vs scipy 3.45
+ms) — they were SERIAL below a conservative `GAMMA_FAMILY_PAR_MIN = 1<<20` (~1M)
+gate, so the 131k-1M range competed serially with cephes (the Rust Lanczos kernel
+is ~2x slower per element). The prior sweeps measured 100k (parallel
+over-subscribed) then jumped to 1M, leaving 131k-1M unexplored. Two findings: (1)
+just lowering the gate was overhead-bound — the shared `par_map_indices` caps
+workers at `min(cores, n/128)`, which for a ~30ns kernel spawns 64 OS threads to
+do microseconds each, a flat ~4 ms spawn FLOOR (fsci was 4.27 ms at BOTH 200k and
+500k). (2) The fix is the proven entropy/gmean lever — cap by WORK. Added
+`par_map_light` (`min(cores, n/32768)`, ≥~32k elements/worker), routed the 4 cheap
+real arms to it, dropped the gate to 1<<17. **gamma n=200k 6.88 → 2.17 ms = 3.2x
+self (1.99x SLOWER → 1.60x FASTER); n=500k 2.45x faster; gammaln/digamma 1.2-2.5x
+faster across 200k-1M.** BYTE-IDENTICAL: par_map_light is order-preserving over
+the same scalar kernel — 0/300k bit-mismatch vs the per-element scalar path; 1120/0
+special lib GREEN. Heavy/complex arms (complex gammaln, incomplete gamma) KEEP the
+looser `par_map_indices` cap — they want more threads. LEVER (generalizable): the
+special crate's other cheap real kernels (erf/erfc/expit/etc.) likely have the
+same loose-cap-over-subscription at moderate n — re-probe with a work cap. Note:
+at the very bottom of the range (n≈131k) gammaln/digamma are still ~1.2x slower
+than cephes (parallel break-even), but ~3x faster than the old serial — the
+residual there is the scalar Lanczos kernel speed, a separate (harder) lever.
+
 ## 2026-06-26 - frankenscipy-greenfalcon-spsolve-ordering - REJECT (~0-gain) + BLOCKER: sparse spsolve factor is a BTreeMap-LU wall
 
 `sparse.spsolve` is a real 10-35x same-box gap vs scipy's SuperLU (2-D Laplacian

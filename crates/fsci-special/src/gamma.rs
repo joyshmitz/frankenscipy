@@ -213,6 +213,44 @@ where
             .min(n / 128)
             .max(1)
     };
+    par_map_indices_with_threads(n, nthreads, f)
+}
+
+/// Light-kernel parallel map: the gamma-family scalar kernels (gamma/gammaln/
+/// digamma/loggamma, ~30 ns Lanczos each) are so cheap that the loose `n/128`
+/// worker cap of [`par_map_indices`] over-subscribes at moderate `n` — 64 OS
+/// threads spawned to do microseconds of work each, leaving a flat ~4 ms spawn
+/// floor that loses to SciPy's serial cephes. Cap by WORK instead (≥~32k elements
+/// per worker) so each thread amortizes its spawn; this flips the moderate-`n`
+/// (≈128k–1M) gamma family from a 1.4–2x loss to a 1.2–2.75x win. Heavy kernels
+/// (complex arms, incomplete gamma) keep the looser cap. Order-preserving, so the
+/// output stays byte-identical to the serial map.
+fn par_map_light<T, H>(n: usize, f: H) -> Result<Vec<T>, SpecialError>
+where
+    T: Send,
+    H: Fn(usize) -> Result<T, SpecialError> + Sync,
+{
+    let nthreads = if n < 256 {
+        1
+    } else {
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(1)
+            .min(n / 32768)
+            .max(1)
+    };
+    par_map_indices_with_threads(n, nthreads, f)
+}
+
+fn par_map_indices_with_threads<T, H>(
+    n: usize,
+    nthreads: usize,
+    f: H,
+) -> Result<Vec<T>, SpecialError>
+where
+    T: Send,
+    H: Fn(usize) -> Result<T, SpecialError> + Sync,
+{
     if nthreads <= 1 {
         return (0..n).map(&f).collect();
     }
@@ -249,14 +287,14 @@ where
 /// arrays at n=100k). Order-preserving, so the output is byte-identical to the
 /// serial map either way. Verified break-even is well under 1M for these
 /// kernels; the threshold is set conservatively so only large arrays parallelize.
-const GAMMA_FAMILY_PAR_MIN: usize = 1 << 20;
+const GAMMA_FAMILY_PAR_MIN: usize = 1 << 17; // work-capped par_map_light wins from here
 
 fn gamma_dispatch(function: &'static str, z: &SpecialTensor, mode: RuntimeMode) -> SpecialResult {
     match z {
         SpecialTensor::RealScalar(x) => gamma_scalar(*x, mode).map(SpecialTensor::RealScalar),
         SpecialTensor::RealVec(values) => {
             if values.len() >= GAMMA_FAMILY_PAR_MIN {
-                par_map_indices(values.len(), |i| gamma_scalar(values[i], mode))
+                par_map_light(values.len(), |i| gamma_scalar(values[i], mode))
                     .map(SpecialTensor::RealVec)
             } else {
                 values
@@ -287,7 +325,7 @@ fn gammaln_dispatch(function: &'static str, z: &SpecialTensor, mode: RuntimeMode
         SpecialTensor::RealScalar(x) => gammaln_scalar(*x, mode).map(SpecialTensor::RealScalar),
         SpecialTensor::RealVec(values) => {
             if values.len() >= GAMMA_FAMILY_PAR_MIN {
-                par_map_indices(values.len(), |i| gammaln_scalar(values[i], mode))
+                par_map_light(values.len(), |i| gammaln_scalar(values[i], mode))
                     .map(SpecialTensor::RealVec)
             } else {
                 values
@@ -324,7 +362,7 @@ fn loggamma_dispatch(
             // loggamma(real) == gammaln (cheap ~30ns); gate with the family min so the
             // n/256-class over-subscription that pessimizes small arrays is avoided.
             if values.len() >= GAMMA_FAMILY_PAR_MIN {
-                par_map_indices(values.len(), |i| loggamma_scalar(values[i], mode))
+                par_map_light(values.len(), |i| loggamma_scalar(values[i], mode))
                     .map(SpecialTensor::RealVec)
             } else {
                 values
@@ -363,7 +401,7 @@ fn digamma_dispatch(function: &'static str, z: &SpecialTensor, mode: RuntimeMode
         SpecialTensor::RealScalar(x) => digamma_scalar(*x, mode).map(SpecialTensor::RealScalar),
         SpecialTensor::RealVec(values) => {
             if values.len() >= GAMMA_FAMILY_PAR_MIN {
-                par_map_indices(values.len(), |i| digamma_scalar(values[i], mode))
+                par_map_light(values.len(), |i| digamma_scalar(values[i], mode))
                     .map(SpecialTensor::RealVec)
             } else {
                 values
