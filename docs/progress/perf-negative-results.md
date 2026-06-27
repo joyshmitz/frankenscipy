@@ -4,6 +4,28 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-27 - frankenscipy-greenfalcon-olo-parallel-dp - KEEP (byte-identical 14x self): cluster optimal_leaf_ordering parallel DP flips 10.5x loss to win
+
+Probed cluster hierarchy fns (cophenet/fcluster/inconsistent/maxdists all
+win/parity), but `optimal_leaf_ordering` was a **10.5x gap** (n=2000: 142660 vs
+scipy 13576 ms — both slow, it is the O(n³)-ish Bar-Joseph DP). fsci's port runs
+the naive 4-nested `(u,w,mp,kp)` loop = O(n⁴), dominated by the top tree nodes
+(the root alone is ~(n/4)⁴). scipy uses the O(n³) factoring. Rather than risk the
+exact-tie-break O(n³) rewrite, PARALLELIZED: within each node the `(u,w)` endpoint
+cells are INDEPENDENT — `M[u,w] = min_{mp,kp}(M[u,mp]+M[w,kp]+D[mp,kp])` reads only
+already-finalized CHILD cells (mp,kp are child ranges), never the node's own
+output. So for a work-heavy block (`work ≥ 1<<20`) split the `u` rows across
+≤16 threads (each reads `mm` read-only, returns its cells), then write the results
+to `mm`/`sw0`/`sw1` serially. **n=2000: 142660 → 10131 ms = 14.1x self; flips
+10.5x SLOWER → 1.34x FASTER than scipy.** Self-speedup grows with n (6.0x@600,
+8.4x@1000, 13.6x@1500) as the parallelizable top nodes dominate. BYTE-IDENTICAL:
+the min value is comparison-order-independent (and `sw0/sw1` record the constant
+`sl/sr`, not which mp/kp won) — identical FNV hash of the reordered Z for
+parallel-vs-serial at n=1000 (parallel path active); 142/0 cluster lib GREEN.
+RETRY (bigger, riskier): the true O(n⁴)→O(n³) factoring (precompute
+`h[w,mp]=min_kp(M[w,kp]+D[mp,kp])` then `min_mp(M[u,mp]+h[w,mp])`) would beat
+scipy at all n, but must reproduce scipy's exact tie-break — defer.
+
 ## 2026-06-27 - frankenscipy-greenfalcon-moderate-kernel-workcap - KEEP (byte-identical 2-3x faster than scipy): special MODERATE kernels middle work cap
 
 Probed heavier special kernels (retry note). jv/yv REAL Bessel are already 18x

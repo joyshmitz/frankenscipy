@@ -4385,20 +4385,79 @@ pub fn optimal_leaf_ordering(z: &[[f64; 4]], y: &[f64]) -> Result<Vec<[f64; 4]>,
                 let wmax = crmax[wcl[sr]];
                 let kmin = crmin[kcl[sr]];
                 let kmax = crmax[kcl[sr]];
-                for u in umin..umax {
-                    for w in wmin..wmax {
-                        let mut cur = big;
-                        for mp in mmin..mmax {
-                            for kp in kmin..kmax {
-                                // SciPy: float M + float M (f32) + double D, stored f32.
-                                let cand = ((mm[u * n + mp] + mm[w * n + kp]) as f64
-                                    + sd[mp * n + kp])
-                                    as f32;
-                                if cand < cur {
-                                    cur = cand;
-                                }
+                // Per-endpoint-pair cost min_{mp,kp}(M[u,mp] + M[w,kp] + D[mp,kp]).
+                // Reads ONLY already-finalized child cells (mp∈M, kp∈K are child
+                // ranges), so every (u,w) is independent and may be computed in
+                // parallel; the min value is comparison-order-independent ⇒ identical.
+                let cell = |u: usize, w: usize, mm: &[f32]| -> f32 {
+                    let mut cur = big;
+                    for mp in mmin..mmax {
+                        for kp in kmin..kmax {
+                            // SciPy: float M + float M (f32) + double D, stored f32.
+                            let cand =
+                                ((mm[u * n + mp] + mm[w * n + kp]) as f64 + sd[mp * n + kp]) as f32;
+                            if cand < cur {
+                                cur = cand;
                             }
                         }
+                    }
+                    cur
+                };
+                let nu = umax - umin;
+                let nw = wmax - wmin;
+                let work = (nu as u64)
+                    .saturating_mul(nw as u64)
+                    .saturating_mul((mmax - mmin) as u64)
+                    .saturating_mul((kmax - kmin) as u64);
+                // The DP is O(n⁴) and dominated by the top tree nodes; parallelize
+                // those over the independent `u` rows (each thread reads `mm`
+                // read-only, results written serially below). Small blocks stay
+                // serial (thread spawn isn't worth it). Byte-identical either way.
+                let cores = std::thread::available_parallelism()
+                    .map(std::num::NonZero::get)
+                    .unwrap_or(1);
+                let nthreads = if work >= (1 << 20) {
+                    cores.min(nu).min(16).max(1)
+                } else {
+                    1
+                };
+                let curs: Vec<f32> = if nthreads <= 1 {
+                    let mm_ro: &[f32] = &mm;
+                    (umin..umax)
+                        .flat_map(|u| (wmin..wmax).map(move |w| cell(u, w, mm_ro)))
+                        .collect()
+                } else {
+                    let mm_ro: &[f32] = &mm;
+                    let cell = &cell;
+                    let chunk = nu.div_ceil(nthreads);
+                    std::thread::scope(|scope| {
+                        let handles: Vec<_> = (0..nthreads)
+                            .filter_map(|t| {
+                                let u0 = umin + t * chunk;
+                                if u0 >= umax {
+                                    return None;
+                                }
+                                let u1 = (u0 + chunk).min(umax);
+                                Some(scope.spawn(move || {
+                                    (u0..u1)
+                                        .flat_map(|u| {
+                                            (wmin..wmax).map(move |w| cell(u, w, mm_ro))
+                                        })
+                                        .collect::<Vec<f32>>()
+                                }))
+                            })
+                            .collect();
+                        handles
+                            .into_iter()
+                            .flat_map(|h| h.join().expect("olo worker panicked"))
+                            .collect()
+                    })
+                };
+                let mut ci = 0usize;
+                for u in umin..umax {
+                    for w in wmin..wmax {
+                        let cur = curs[ci];
+                        ci += 1;
                         mm[u * n + w] = cur;
                         mm[w * n + u] = cur;
                         sw0[u * n + w] = sl as u8;
