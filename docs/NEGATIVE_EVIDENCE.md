@@ -6,6 +6,37 @@ This file exists as the BOLD-VERIFY entry point requested for measured
 win/loss/neutral summaries. Keep detailed attempt records in the canonical
 ledger above so the project has one source of truth.
 
+## 2026-06-27 - CobaltCove (claude-code) - KEEP (byte-identical 1.72-2.49x self): interpolate RGI linear uses O(1) uniform-axis interval finder instead of O(log n) binary search
+
+- Agent: CobaltCove (claude-code / claude-opus-4-8), `AGENT_NAME=CobaltCove`.
+- Continuation of the prior RGI 2D fast-path win (commit e7142f96). The linear
+  eval paths (`eval_linear` generic / `eval_linear_2d` / `eval_linear_3d`) all
+  called `find_interval` (binary search, O(log n) per axis per query) EVEN on
+  uniform grids, while the *nearest* method already used the bit-identical O(1)
+  `find_interval_uniform`. The `uniform_axes: Vec<Option<(x0,inv_dx)>>` metadata
+  was already computed in `new()` but unused by the linear paths.
+- Lever shipped: added `linear_interval(dim, axis, x)` that dispatches to
+  `find_interval_uniform` when the axis is uniform (the common case) and
+  binary search otherwise; routed all three linear paths through it.
+  BIT-IDENTICAL: `find_interval_uniform` ≡ `find_interval` is locked by the
+  existing `find_interval_uniform_matches_binary_search` isomorphism test
+  (interior/exact/midpoint/out-of-range probes); confirmed by identical
+  eval_many checksums before/after across all probed cases.
+- MEASURED same-box (uniform grids, nq=200k, min-of-60,
+  `CARGO_TARGET_DIR=/data/projects/.rch-targets/frankenscipy-cc`):
+  | Workload | Before (binsearch) | After (O(1) uniform) | Self | SciPy | After vs SciPy |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | RGI 2D linear 512x512   | 10657 us | 4364 us | **2.44x** | 14758 us | **3.38x faster** |
+  | RGI 2D linear 1024x1024 | 11377 us | 4568 us | **2.49x** | 12930 us | **2.83x faster** |
+  | RGI 3D linear 96x96x96  | 11125 us | 6475 us | **1.72x** | 37246 us | **5.75x faster** |
+- Widens an existing win (before was already 1.14-3.35x faster than SciPy via the
+  e7142f96 alloc-kill) to 2.83-5.75x. Stacks on the alloc elimination; biggest on
+  fine grids (binary-search depth grows with axis length). Not a flipped loss but
+  a real, byte-identical 1.72-2.49x self-speedup — KEEP (not ~0-gain).
+- Conformance GREEN: `find_interval_uniform_matches_binary_search` 1/0,
+  `regular_grid` lib tests 17/0, SciPy-backed `diff_interpolate_interpn` 1/0.
+  Only `crates/fsci-interpolate/src/lib.rs` shipped.
+
 ## 2026-06-27 - CobaltCove (claude-code) - KEEP (byte-identical 1.47x self): interpolate RegularGridInterpolator 2D-linear stack-array fast path flips a genuine same-box SciPy loss to a win
 
 - Agent: CobaltCove (claude-code / claude-opus-4-8), `AGENT_NAME=CobaltCove`.

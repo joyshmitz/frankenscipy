@@ -3316,6 +3316,20 @@ impl RegularGridInterpolator {
         self.values[flat_idx]
     }
 
+    /// Bracketing interval along axis `dim` for `x`: the O(1) direct-address path
+    /// when the axis is evenly spaced, else binary search. `find_interval_uniform`
+    /// is bit-identical to `find_interval` (asserted by
+    /// `find_interval_uniform_matches_binary_search`), so every linear
+    /// interpolation result is unchanged — this only removes the per-axis
+    /// O(log n) search on uniform grids (the overwhelmingly common case).
+    #[inline]
+    fn linear_interval(&self, dim: usize, axis: &[f64], x: f64) -> usize {
+        match self.uniform_axes[dim] {
+            Some(meta) => Self::find_interval_uniform(meta, axis, x),
+            None => Self::find_interval(axis, x),
+        }
+    }
+
     fn eval_linear(&self, xi: &[f64]) -> Result<f64, InterpError> {
         let ndim = self.ndim();
         if ndim == 2 {
@@ -3327,8 +3341,8 @@ impl RegularGridInterpolator {
 
         let mut indices = Vec::with_capacity(ndim);
         let mut fracs = Vec::with_capacity(ndim);
-        for (axis, &x) in self.points.iter().zip(xi) {
-            let i = Self::find_interval(axis, x);
+        for (dim, (axis, &x)) in self.points.iter().zip(xi).enumerate() {
+            let i = self.linear_interval(dim, axis, x);
             let denom = axis[i + 1] - axis[i];
             indices.push(i);
             fracs.push(if denom == 0.0 {
@@ -3368,7 +3382,7 @@ impl RegularGridInterpolator {
         for dim in 0..2 {
             let axis = &self.points[dim];
             let x = xi[dim];
-            let i = Self::find_interval(axis, x);
+            let i = self.linear_interval(dim, axis, x);
             let denom = axis[i + 1] - axis[i];
             indices[dim] = i;
             fracs[dim] = if denom == 0.0 {
@@ -3404,7 +3418,7 @@ impl RegularGridInterpolator {
         for dim in 0..3 {
             let axis = &self.points[dim];
             let x = xi[dim];
-            let i = Self::find_interval(axis, x);
+            let i = self.linear_interval(dim, axis, x);
             let denom = axis[i + 1] - axis[i];
             indices[dim] = i;
             fracs[dim] = if denom == 0.0 {
