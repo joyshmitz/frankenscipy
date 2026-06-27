@@ -3837,23 +3837,28 @@ pub fn nnls(a: &[Vec<f64>], b: &[f64]) -> Result<(Vec<f64>, f64), OptError> {
     // gather bit-identical to recomputing, while removing the O(p²·m) rebuild
     // from each inner iteration (the precompute is the same O(n²·m) order as the
     // gradient pass already run each outer step, so it adds no dominant term).
+    // Gram = AᵀA and Aᵀb dominate `nnls` for tall A (O(n²·m)): the old code
+    // accumulated each `gram[j1][j2]` with the row loop INNERMOST, striding column
+    // `j1`/`j2` through the `Vec<Vec>` heap rows (a cache miss per element). Stream
+    // A once into a contiguous row-major buffer and accumulate by RANK-1 UPDATE —
+    // for each observation `i`, `gram[j1][.] += a_i[j1] · a_i[.]` runs as a
+    // contiguous AXPY the compiler vectorizes, and `atb += b_i · a_i` likewise.
+    // BYTE-IDENTICAL: the same `a_i[j1]·a_i[j2]` (resp. `a_i[j]·b_i`) products
+    // accumulate in the same `i = 0..m` order as the original sums.
+    let a_flat: Vec<f64> = a.iter().flat_map(|row| row.iter().copied()).collect();
     let mut gram = vec![vec![0.0; n]; n];
-    for j1 in 0..n {
-        for j2 in 0..n {
-            let mut acc = 0.0;
-            for row in a.iter() {
-                acc += row[j1] * row[j2];
-            }
-            gram[j1][j2] = acc;
-        }
-    }
     let mut atb = vec![0.0; n];
-    for j in 0..n {
-        let mut acc = 0.0;
-        for (row, &bi) in a.iter().zip(b.iter()) {
-            acc += row[j] * bi;
+    for (i, &bi) in b.iter().enumerate() {
+        let ai = &a_flat[i * n..i * n + n];
+        for (j1, &v1) in ai.iter().enumerate() {
+            let grow = &mut gram[j1];
+            for (g, &v2) in grow.iter_mut().zip(ai.iter()) {
+                *g += v1 * v2;
+            }
         }
-        atb[j] = acc;
+        for (atbj, &v) in atb.iter_mut().zip(ai.iter()) {
+            *atbj += v * bi;
+        }
     }
 
     for _ in 0..3 * n {

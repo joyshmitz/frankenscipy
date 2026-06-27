@@ -4,6 +4,32 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-nnls-syrk-gram - KEEP (byte-identical 3.5-5.4x self): opt.nnls Gram precompute is the real bottleneck (rank-1 AXPY SYRK)
+
+Continuation of the nnls gap close. FIRST tried the filed follow-up — incremental
+Cholesky of the passive Gram (insertion-order `passive_order` + append-update in
+O(p²), re-factor on removal). It was **~0-gain** (random b: m=500 7.30 vs HEAD
+6.10 ms SLOWER, m=1000 51.1 vs 54.2; planted sparse b: only 1.09-1.13x). WHY:
+profiling the dimensions showed the inner SOLVE is NOT the bottleneck — for a
+solution with `nz` nonzeros the passive set caps at `p≈nz≪n`, so Σp³ is tiny next
+to the **O(n²·m) Gram precompute** (`AᵀA`), which dominates. scipy's Lawson-Hanson
+avoids forming `AᵀA` at all (QR on active columns). REVERTED the incremental
+Cholesky (kept last turn's from-scratch Cholesky).
+
+The actual lever: the Gram loop had the row sum INNERMOST
+(`for j1 for j2 for i: gram[j1][j2]+=a[i][j1]*a[i][j2]`), striding columns `j1,j2`
+through the `Vec<Vec>` heap rows — a cache miss per element. Flatten A to a
+contiguous row-major buffer and accumulate by RANK-1 UPDATE (for each obs `i`,
+`gram[j1][.] += a_i[j1]·a_i[.]` is a contiguous AXPY the compiler vectorizes; same
+for `atb`). **m=500: 6.10 → 1.73 ms = 3.5x; m=1000: 54.2 → 10.08 ms = 5.4x self
+this turn (10-11x vs the original); 16.6x/19.5x SLOWER → 1.59x/1.73x slower.**
+BYTE-IDENTICAL (same `a_i[j1]·a_i[j2]` products in the same `i=0..m` order) —
+oracle diff matches scipy x/res/nnz to 12 digits, 313/0 opt lib GREEN. LESSON:
+profile the DIMENSIONS before optimizing — the obvious O(n⁴) solve was a red
+herring; the O(n²·m) precompute dominated. RETRY: only-the-triangle SYRK (halve
+the flops, exploit symmetry) and a flat (not `Vec<Vec>`) gram for the downstream
+gather could shave the residual 1.6-1.7x.
+
 ## 2026-06-26 - frankenscipy-greenfalcon-nnls-cholesky-gram-gradient - KEEP (2-3x self, conformance-exact): opt.nnls Cholesky inner solve + gram gradient
 
 Probed fsci-opt: `lsq_linear` WINS (2.75-7.9x) but **`nnls` was a 16-19x GAP**
