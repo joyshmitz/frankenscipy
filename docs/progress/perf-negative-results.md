@@ -4,6 +4,33 @@ This ledger records every code-first performance attempt, including attempts tha
 are still awaiting the batch benchmark wave. Entries must name the retry
 condition so dead ends are not repeated casually.
 
+## 2026-06-26 - frankenscipy-greenfalcon-spsolve-ordering - REJECT (~0-gain) + BLOCKER: sparse spsolve factor is a BTreeMap-LU wall
+
+`sparse.spsolve` is a real 10-35x same-box gap vs scipy's SuperLU (2-D Laplacian
+5-pt stencil: N=1600 31.4 vs 2.99 ms = 10.5x; N=4900 368 vs 10.4 ms = 35x), and
+it scales ~O(N^2.2) where SuperLU scales ~O(N^1.5). HYPOTHESIS (wrong): the default
+`Colamd` ordering routes to `reverse_cuthill_mckee` (a BANDWIDTH minimizer, O(N²)
+band fill on a stencil) instead of the fill-minimizing `minimum_degree_ordering`
+the code already has — re-route Colamd → min-degree. RESULT: **~0-gain** (spsolve
+347 vs 368 ms, within noise), and on the full-pivot `splu` path it was a 2.4x
+REGRESSION (factor 3143 vs 1302 ms for Natural). DIAGNOSIS (splu factor/solve
+split, N=4900): the FACTOR dominates (Natural 1302 ms, solve only ~2 ms), and
+min-degree makes it WORSE because (a) `minimum_degree_ordering` is itself
+pathologically slow (~1800 ms of pure ordering for N=4900 — an O(V²) selection
+with a bad constant) and (b) the BTreeMap-based sparse-LU
+(`NativeSparseLu::factorize_csr`: `Vec<BTreeMap>` rows + `Vec<BTreeSet>` column
+membership, O(log n) per fill update with heavy pointer-chasing) constant factor
+dominates, so reducing fill doesn't move wall-time. REVERTED.
+
+BLOCKER / real lever (multi-turn): the factorization data structure, not the
+ordering, is the wall. SuperLU uses array-based column-supernodal elimination with
+a DENSE SCATTER workspace (Gilbert-Peierls: depth-first symbolic + dense numeric
+into a length-n work array, then gather). Replacing the BTreeMap rows with a
+Gilbert-Peierls scatter/gather (and separately fixing `minimum_degree_ordering`'s
+O(V²) constant via a quotient-graph/mass-elimination implementation) is the path
+to closing spsolve. Do NOT re-chase the ordering knob — the BTreeMap factor caps
+the win. (Solve is already fast; only `factorize_csr` needs the rewrite.)
+
 ## 2026-06-26 - frankenscipy-greenfalcon-nnls-triangle-syrk - KEEP (byte-identical 1.3-1.6x self): opt.nnls symmetric SYRK halves the Gram work (→ ≈parity)
 
 The filed nnls retry (triangle-only SYRK). The rank-1 Gram update computed the
